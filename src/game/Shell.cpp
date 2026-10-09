@@ -1122,7 +1122,39 @@ void Shell::BootInitGame(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", BootInitGame__5Shell);
 #endif
+extern int g_noScripts;
+extern int NonStandardNameSelected;
+extern "C" int strcmp(const char *, const char *);
+extern "C" int atoi(const char *);
+#ifdef NON_MATCHING
+/* untuned: 32/93 words (retail duplicates the "false" tail for argc < 2 and for a level already picked);
+ * tools/difftest.py 300/300 */
+/* Command line: `<level name> [level number]` loads that level (whichLevel) instead of GameLevelNames[m_levelNum], and
+ * `noscripts` turns the level scripts off. Only read when no level was picked yet (m_levelNum 0). */
+void ResolveCommandLineArguments(int argc, char **argv)
+{
+    if (argc >= 2 && shell->m_levelNum == 0) {
+        if (strcmp(argv[1], "noscripts") == 0) {
+            printf("No scripts.\n");
+            g_noScripts = 1;
+            return;
+        }
+        UseCommandLineLevel = 1;
+        printf("UseCommandLineLevel set to true\n");
+        NonStandardNameSelected = 1;
+        sprintf(whichLevel, D_006F81A8, argv[1]);
+        if (argc == 3)
+            shell->m_levelNum = atoi(argv[2]);
+        return;
+    }
+    UseCommandLineLevel = 0;
+    printf("UseCommandLineLevel set to false\n");
+    if (NonStandardNameSelected == 0)
+        sprintf(whichLevel, D_006F81A8, GameLevelNames_006EF748[shell->m_levelNum]);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", ResolveCommandLineArguments__FiPPc);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Shell", InitGS__5Shells);
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintTexture__5Shell);
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintTexture1__5Shell);
