@@ -15,7 +15,9 @@ struct PadEntry {
     unsigned short block;   /* 0x34: block button held (StateBlock) */
     char pad36[0x3E - 0x36];
     short f3E;
-    char pad40[0x5C - 0x40];
+    char pad40[0x46 - 0x40];
+    unsigned short counter; /* 0x46: counter button pressed (StateCounter) */
+    char pad48[0x5C - 0x48];
     signed char f5C; /* retail reads it with lb */
     char pad5D;
 };

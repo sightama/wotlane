@@ -3,6 +3,7 @@
 #include "game/monster_state.h"
 #include "game/hit_event.h"
 #include "game/pickup.h"
+#include "game/level_pickups.h"
 
 /* States embedded in Monster (offsets from Monster's constructor). */
 #define STATE_AT(m, off) ((MonsterState *)((char *)(m) + (off)))
@@ -24,10 +25,39 @@ public:
     void updateTurn(bool b);
     void updateMove(bool b);
 };
+/* Counter attack (Monster+0x7DD8), entered from StateBlock. The counter animation is 0x40; counterSuccess (VU0, still
+ * asm) marks `landed` when it connects. */
 class StateCounter : public MonsterState {
 public:
+    char pad14[0x24 - 0x14];
+    float blendTime;     /* 0x24: blend back into the block pose */
+    char pad28[0x34 - 0x28];
+    Monster *victim;     /* 0x34 */
+    int anim;            /* 0x38: MonsterAnim playing (0x40 while countering) */
+    int counterStart;    /* 0x3C */
+    int counterEnd;      /* 0x40 */
+    int landed;          /* 0x44: the counter hit `victim` */
+    int landedHandled;   /* 0x48: the effects of the hit were applied */
+    int stealsPickup;    /* 0x4C: the counter takes the victim's pickup */
+    char pad50[0x58 - 0x50];
+
     int transitionOK(void);
+    int transitionFeasible(void);
+    void update(void);
+    int acceptHit(HitEvent &e);
+    void handleCollis(_hdResult &r);
+    void handlePreemption(MonsterState *next);
 };
+typedef char _size_StateCounter[sizeof(StateCounter) == 0x58 ? 1 : -1];
+class MonsterSound {
+public:
+    void playCounterAttackSound(void);
+};
+#define ST_COUNTERED 0x11114
+#define ST_BLOCK 0x7DA0
+#define VCALL_INT(st, slot) \
+    (((int (*)(void *))*(void **)((char *)(st)->vptr + (slot) + 4))((char *)(st) + *(short *)((char *)(st)->vptr + (slot))))
+#define VT_TRANSITION_FEASIBLE 0x28
 class StatePunch : public MonsterState {
 public:
     int transitionOK(void);
@@ -231,14 +261,100 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StateCatch)
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__10StateCatch);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__10StateCatchP12MonsterState);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __12StateCounter);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__12StateCounter);
+/* A counter needs the counter button and stamina that is not exhausted. */
+int StateCounter::transitionOK(void)
+{
+    int ok;
+
+    if (owner->m_stamina.exhausted != 0)
+        return 0;
+    ok = 0;
+    if (owner->m_padFlags[0]->counter != 0)
+        ok = VCALL_INT(this, VT_TRANSITION_FEASIBLE) != 0;
+    return ok;
+}
+/* Not while locked on a target, only with the counter animation, and not holding a two-handed pickup. */
+#ifdef NON_MATCHING
+/* untuned: 3/21 words (retail has three hazard nops after the first branch); tools/difftest.py 200/200 */
+int StateCounter::transitionFeasible(void)
+{
+    Monster *m = owner;
+
+    if (m->m_target != 0 || m->m_anims[0x40].a == 0)
+        return 0;
+    if (m->m_pickup == 0)
+        return 1;
+    return !(((*(Pickup **)m->m_pickup)->bits >> 1) & 1);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionFeasible__12StateCounter);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__12StateCounter);
+/* Once the counter lands: the victim is countered (and loses its pickup to us if stealsPickup and our hands are free),
+ * HUD message 6 and the counter sound. When the counter animation ends without landing, back to the block pose (or
+ * animation 0x5A); after a landed counter or any other animation, back to Block or Idle by the block button. */
+#ifdef NON_MATCHING
+/* untuned: 57/153 words; tools/difftest.py 200/200 */
+void StateCounter::update(void)
+{
+    MonsterState::update();
+    if (owner->m_unk1E8 < 0.0f)
+        owner->m_unk1B8 = 1.5f;
+    if (landed != 0 && landedHandled == 0 && victim != 0) {
+        if (stealsPickup != 0) {
+            int held = victim->m_pickup;
+
+            if (held != 0) {
+                if (owner->m_pickup != 0) {
+                    victim->dropPickup();
+                } else {
+                    victim->dropPickup();
+                    owner->m_pickup = held;
+                    LevelPickups::grabPickup(*(PickupIter *)&held, owner->m_id);
+                }
+            }
+        }
+        victim->enterNewState(STATE_AT(victim, ST_COUNTERED));
+        game->m_huds[owner->m_cameraView].addMessage(6, 0);
+        ((MonsterSound *)((char *)owner + 0x1A7C))->playCounterAttackSound();
+        landedHandled = 1;
+    }
+    if (anim == 0x40) {
+        if (!animationIsRunning(owner->m_anims[0x40])) {
+            if (landed == 0) {
+                int pose = 0x5A;
+
+                if (owner->m_padFlags[0]->block != 0)
+                    pose = ((StateBlock *)STATE_AT(owner, ST_BLOCK))->chooseBlock();
+                anim = pose;
+                animationTransitionInto(owner->m_anims[pose], blendTime, 1, 1);
+            } else {
+                owner->enterNewState(STATE_AT(owner, owner->m_padFlags[0]->block != 0 ? ST_BLOCK : ST_IDLE));
+            }
+        }
+    } else if (!animationIsTransitioning(owner->m_anims[anim])) {
+        owner->enterNewState(STATE_AT(owner, owner->m_padFlags[0]->block != 0 ? ST_BLOCK : ST_IDLE));
+    }
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(true);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__12StateCounter);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", acceptHit__12StateCounterR8HitEvent);
+#endif
+/* A counter can't be refused. */
+int StateCounter::acceptHit(HitEvent &e)
+{
+    return 1;
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", counterSuccess__12StateCounterR7MonsterR8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handleCollis__12StateCounterR9_hdResult);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__12StateCounterP12MonsterState);
+void StateCounter::handleCollis(_hdResult &r)
+{
+    ((StateStunned *)STATE_AT(owner, ST_STUNNED))->handleCollis(r);
+}
+void StateCounter::handlePreemption(MonsterState *next)
+{
+    owner->m_unk1B8 = 1.0f;
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __14StateCountered);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__14StateCountered);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__14StateCountered);
