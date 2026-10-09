@@ -1,4 +1,71 @@
 #include "common.h"
+#include "game/game.h"
+#include "game/monster_state.h"
+#include "game/hit_event.h"
+#include "game/pickup.h"
+
+/* States embedded in Monster (offsets from Monster's constructor). */
+#define STATE_AT(m, off) ((MonsterState *)((char *)(m) + (off)))
+#define ST_IDLE 0x7984
+#define ST_COUNTER 0x7DD8
+#define ST_RECOIL 0x7E30
+#define ST_PUNCH 0x8470
+#define ST_GRAPPLE 0xDCE0
+#define ST_STUNNED 0x10714
+#define STATE_ID_RECOIL 0x1C
+/* virtual call through the retail vtable (entries are {this delta, 0, function}) */
+#define VCALL_VOID(st, slot) \
+    (((void (*)(void *))*(void **)((char *)(st)->vptr + (slot) + 4))((char *)(st) + *(short *)((char *)(st)->vptr + (slot))))
+#define VT_TRANSITION_INTO 0x10
+
+struct _hdResult;
+class MonsterDynamics {
+public:
+    void updateTurn(bool b);
+    void updateMove(bool b);
+};
+class StateCounter : public MonsterState {
+public:
+    int transitionOK(void);
+};
+class StatePunch : public MonsterState {
+public:
+    int transitionOK(void);
+};
+class StateGrapple : public MonsterState {
+public:
+    int transitionOK(void);
+};
+class StateStunned : public MonsterState {
+public:
+    void handleCollis(_hdResult &r);
+};
+
+/* Blocking (Monster+0x7DA0). The block pose depends on what the monster holds: animations 0x3C (bare), 0x3D (one-handed
+ * pickup), 0x3E (two-handed pickup, or a locked target), 0x3F (pickup type 0x10), each only if the monster has it. While
+ * blocking the damage taken is scaled by damageScale (damageScaleArmed when holding something or locked on). */
+class StateBlock : public MonsterState {
+public:
+    float autoBlockRange;   /* 0x14: autoBlock looks for an attacking monster this close */
+    float blendTime;        /* 0x18: animation blend into the block pose */
+    float runFrames;        /* 0x1C: length of the block animation */
+    float damageScale;      /* 0x20 */
+    float damageScaleArmed; /* 0x24 */
+    int unk28;
+    unsigned raiseFrames;   /* 0x2C: frames with the button held before the block counts */
+    int blocking;           /* 0x30: hits are being blocked (isBlocking) */
+    int anim;               /* 0x34: MonsterAnim of the current pose */
+
+    int transitionOK(void);
+    void transitionInto(void);
+    int chooseBlock(void);
+    void update(void);
+    void handleCollis(_hdResult &r);
+    void handlePreemption(MonsterState *next);
+    int autoBlock(void);
+    int isBlockable(HitEvent &e);
+};
+typedef char _size_StateBlock[sizeof(StateBlock) == 0x38 ? 1 : -1];
 
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", collisTestCloseRangeAttack__20PunchSwipeConfigBaseiP7MonsterR10HitHistoryi);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __12MonsterStateQ212MonsterState2IdUi);
@@ -22,14 +89,141 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handleCollis__13StateBatSwipe
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__13StateBatSwipeP12MonsterState);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", acceptHit__13StateBatSwipeR8HitEvent);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateBlock);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateBlock);
+/* Blocking needs the bare block animation, attacks enabled, the feet on something and the block button held. */
+int StateBlock::transitionOK(void)
+{
+    Monster *m = owner;
+
+    if (m->m_anims[0x3C].a == 0 || m->m_attacksEnabled == 0 || m->m_freeFalling != 0)
+        return 0;
+    return m->m_padFlags[0]->block != 0;
+}
+/* Coming out of a recoil (state 0x1C) the block is up at once, and recoil animation 0x4D blends in slowly. */
+#ifdef NON_MATCHING
+/* untuned: 23/56 words; tools/difftest.py 200/200 */
+void StateBlock::transitionInto(void)
+{
+    float blend;
+
+    frames = 0;
+    anim = chooseBlock();
+    blocking = 0;
+    blend = blendTime;
+    if (owner->m_prevState[0] == STATE_ID_RECOIL) {
+        if (*(int *)((char *)STATE_AT(owner, ST_RECOIL) + 0x64) != 0)
+            blocking = 1;
+        if (*(int *)((char *)STATE_AT(owner, ST_RECOIL) + 0x38) == 0x4D)
+            blend = 140.0f;
+    }
+    animationSetTotalRunFrames(owner->m_anims[anim], runFrames);
+    animationTransitionInto(owner->m_anims[anim], blend, 0, 1);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StateBlock);
+#endif
+/* Picks the block pose and sets the damage scale for it. */
+#ifdef NON_MATCHING
+/* untuned: 8/39 words (movn vs branches); tools/difftest.py 200/200 */
+int StateBlock::chooseBlock(void)
+{
+    Monster *m = owner;
+    int pose = 0x3C;
+
+    if (m->m_pickup != 0) {
+        Pickup *p = *(Pickup **)m->m_pickup;
+
+        if ((p->bits >> 1) & 1) {
+            if (m->m_anims[0x3E].a != 0)
+                pose = 0x3E;
+        } else if (p->pickupType == 0x10) {
+            if (m->m_anims[0x3F].a != 0)
+                pose = 0x3F;
+        } else if (m->m_anims[0x3D].a != 0) {
+            pose = 0x3D;
+        }
+        m->m_damageModifier = damageScaleArmed;
+    } else if (m->m_target != 0) {
+        m->m_damageModifier = damageScaleArmed;
+        if (m->m_anims[0x3E].a != 0)
+            pose = 0x3E;
+    } else {
+        m->m_damageModifier = damageScale;
+    }
+    return pose;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", chooseBlock__10StateBlock);
+#endif
+/* Holding the button keeps blocking (after raiseFrames) and allows a counter; letting go punches, grapples or idles. */
+#ifdef NON_MATCHING
+/* untuned: 68/90 words; tools/difftest.py 200/200 */
+void StateBlock::update(void)
+{
+    MonsterState::update();
+    if (owner->m_unk1E8 < 0.0f)
+        owner->m_unk1B8 = 1.5f;
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(true);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    owner->updateLock((MonsterReticleState)1);
+    if (owner->m_padFlags[0]->block != 0) {
+        if (frames >= raiseFrames)
+            blocking = 1;
+        if (((StateCounter *)STATE_AT(owner, ST_COUNTER))->transitionOK())
+            owner->enterNewState(STATE_AT(owner, ST_COUNTER));
+    } else if (((StatePunch *)STATE_AT(owner, ST_PUNCH))->transitionOK()) {
+        owner->enterNewState(STATE_AT(owner, ST_PUNCH));
+    } else if (((StateGrapple *)STATE_AT(owner, ST_GRAPPLE))->transitionOK()) {
+        owner->enterNewState(STATE_AT(owner, ST_GRAPPLE));
+    } else {
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    }
+    /* lost both the target and the pickup while in the armed pose: start over with a new pose */
+    if (owner->m_target == 0 && owner->m_pickup == 0 && anim == 0x3E)
+        VCALL_VOID(this, VT_TRANSITION_INTO);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__10StateBlock);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handleCollis__10StateBlockR9_hdResult);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__10StateBlockP12MonsterState);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", autoBlock__10StateBlock);
+#endif
+void StateBlock::handleCollis(_hdResult &r)
+{
+    ((StateStunned *)STATE_AT(owner, ST_STUNNED))->handleCollis(r);
+}
+void StateBlock::handlePreemption(MonsterState *next)
+{
+    owner->m_unk1B8 = 1.0f;
+}
+/* Used by the AI: block if the closest monster in range is in one of the attack states (3, 0x1A, 0x28, 0x29). */
+int StateBlock::autoBlock(void)
+{
+    Monster *m = owner->getClosestMonster(autoBlockRange);
+
+    if (m == 0)
+        return 0;
+    switch (m->m_state[0]) {
+    case 3:
+    case 0x1A:
+    case 0x28:
+    case 0x29:
+        return 1;
+    }
+    return 0;
+}
+/* Sources 6 and 0x14 can't be blocked, nor source 5 with detail 0x40. */
+#ifdef NON_MATCHING
+/* untuned: 8/17 words; tools/difftest.py 200/200 */
+int StateBlock::isBlockable(HitEvent &e)
+{
+    if (e.source == 6 || e.source == 0x14)
+        return 0;
+    if (e.source != 5)
+        return 1;
+    if (e.sourceArg == 0x40)
+        return 0;
+    return 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", isBlockable__10StateBlockR8HitEvent);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateCatch);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateCatch);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionFeasible__10StateCatch);

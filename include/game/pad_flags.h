@@ -12,7 +12,8 @@ struct PadEntry {
     short f22, f24, f26, f28;
     char pad2A[0x32 - 0x2A];
     unsigned short f32;
-    char pad34[0x3E - 0x34];
+    unsigned short block;   /* 0x34: block button held (StateBlock) */
+    char pad36[0x3E - 0x36];
     short f3E;
     char pad40[0x5C - 0x40];
     signed char f5C; /* retail reads it with lb */
