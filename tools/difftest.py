@@ -277,6 +277,7 @@ class Run:
         uc.mem_write(ARENA, words.tobytes())
         self.rnd = rnd
         self.rets = None
+        self.nargs = None
         if INIT:
             uc.mem_write(STUB, struct.pack('<II', 0x03E00008, 0))
             env = {'THIS': ARENA + 0x20000, 'ARENA': ARENA, 'STUB': STUB, 'uc': uc,
@@ -286,6 +287,8 @@ class Run:
             exec(INIT, env)
             # optional RETS(name, n, args) -> $v0 for the n-th intercepted call (None keeps the default pointer)
             self.rets = env.get('RETS')
+            # optional NARGS {callee: number of integer args to compare} (default: from the mangled name, else 1)
+            self.nargs = env.get('NARGS')
         for ra_, aa_, sz_ in self.alias:       # variables the TU defines itself start from the retail values
             uc.mem_write(aa_, bytes(uc.mem_read(ra_, sz_)))
         for r in range(32):
@@ -312,6 +315,8 @@ class Run:
                 val = rnd.randrange(0, 9)
             elif t == 'b':
                 val = rnd.randrange(0, 2)
+            elif t.startswith('='):                # fixed integer, e.g. =2
+                val = int(t[1:], 0)
             elif t == 'f':
                 fv = rnd.uniform(-10, 10)
                 if nf >= len(freg):
@@ -376,6 +381,8 @@ class Run:
             else:
                 ni = min(8, sum(1 for t in cs if t != 'f'))
                 nf = min(2, sum(1 for t in cs if t == 'f'))
+            if self.nargs and name in self.nargs:  # e.g. varargs C functions: up to 8 integer args ($a0-$a3, $t0-$t3)
+                ni = min(8, self.nargs[name])
             a = tuple(self.norm(uc.reg_read(UC_MIPS_REG_4 + i) & 0xFFFFFFFF) for i in range(ni))
             f12 = uc.reg_read(UC_MIPS_REG_F12) & 0xFFFFFFFF if nf >= 1 else 0
             f13 = uc.reg_read(UC_MIPS_REG_F13) & 0xFFFFFFFF if nf >= 2 else 0

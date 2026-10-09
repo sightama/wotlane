@@ -9,7 +9,9 @@ class Shell {
 public:
     char pad0[0x2938];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
-    char pad2958[0x2A44 - 0x2958];
+    char pad2958[0x2A24 - 0x2958];
+    int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
+    char pad2A30[0x2A44 - 0x2A30];
     int m_killTarget;     /* 0x2A44: wins needed to take the match (0 = no target, rounds just restart) */
     char pad2A48[0x2B40 - 0x2A48];
     int m_continues[2];   /* 0x2B40: rounds each player can still lose in a two-player match (from m_elimination) */
@@ -69,6 +71,8 @@ public:
     int MonsterIsLocked(int i);
     void SelectAI(void);
     void RandomlySelectAI(void);
+    void SetMenuItemFlag(int menu, int item, int on);
+    void EnableMonsterSelection(int sel);
     void ResetLevel(void);
     void InitialMemCardScreen(void);
     void LoadLevelDB(void);
@@ -84,6 +88,7 @@ public:
 extern Shell *shell;
 
 #define SHELL_AT(f, off) typedef char _shell_at_##f[(unsigned)&((Shell *)0)->f == (off) ? 1 : -1]
+SHELL_AT(m_monsterFlags, 0x2A24);
 SHELL_AT(m_killTarget, 0x2A44);
 SHELL_AT(m_continues, 0x2B40);
 SHELL_AT(m_battleMode, 0x2B54);

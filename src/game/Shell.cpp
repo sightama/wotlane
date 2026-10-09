@@ -1375,10 +1375,55 @@ void Shell::LoadMonstersDB(void)
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadMonstersDB__5Shell);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Shell", AddEpNode__5ShelliP9_hierhead);
+#ifdef NON_MATCHING
+/* untuned: 5/68 words; tools/difftest.py 300/300 (all three file types) */
+/* Disc path of a level file (\LVL\name.ext) or of a monster model (\MON\name.ext). AI models get a 0/1 suffix so that
+ * an AI using the same monster as player 1 loads the other skin; with that clash and player 1 on a costume other
+ * than 0 nothing is written. D_006F81E0 is the disc root prefix (empty in the retail build). */
+void Shell::formatFilename(char *dst, const char *name, const char *ext, _shFileType type)
+{
+    if (type == SH_FILE_PLAYER) {
+        sprintf(dst, "%s\\MON\\%s.%s", D_006F81E0, name, ext);
+    } else if (type == SH_FILE_AI) {
+        if ((m_mode == 1 || m_mode == 0) && m_levelNum == 3) {
+            sprintf(dst, "%s\\MON\\%s1.%s", D_006F81E0, name, ext);
+        } else if (m_mode != 1) {
+            sprintf(dst, "%s\\MON\\%s0.%s", D_006F81E0, name, ext);
+        } else if (m_monsterSel[0] == m_monsterSel[4] || m_monsterSel[0] == m_monsterSel[5]) {
+            if (m_costume[0] == 0)
+                sprintf(dst, "%s\\MON\\%s1.%s", D_006F81E0, name, ext);
+        } else {
+            sprintf(dst, "%s\\MON\\%s0.%s", D_006F81E0, name, ext);
+        }
+    } else {
+        sprintf(dst, "%s\\LVL\\%s.%s", D_006F81E0, name, ext);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", formatFilename__5ShellPcPCcT2Q25Shell11_shFileType);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Shell", D_006EF598);
+#ifdef NON_MATCHING
+/* untuned: 1/38 words (the retail AI branch reads m_mode/m_levelNum but every path uses the same format);
+ * tools/difftest.py 300/300, MON paths 150/150 each with all six sprintf args */
+/* Like formatFilename, with the costume number in the monster file name (\MON\name<costume>.ext). */
+void Shell::formatFilename1(char *dst, const char *name, int costume, const char *ext, _shFileType type)
+{
+    if (type == SH_FILE_PLAYER || type == SH_FILE_AI)
+        sprintf(dst, "%s\\MON\\%s%d.%s", D_006F81E0, name, costume, ext);
+    else
+        sprintf(dst, "%s\\LVL\\%s.%s", D_006F81E0, name, ext);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", formatFilename1__5ShellPcPCciT2Q25Shell11_shFileType);
-INCLUDE_ASM("asm/nonmatchings/game/Shell", formatFilename__5ShellPcPCcN22);
+#endif
+/* Host path "dir/name.ext" (the point tools' files). */
+void Shell::formatFilename(char *dst, const char *dir, const char *name, const char *ext)
+{
+    char fmt[32] = "%s/%s.%s";
+
+    sprintf(dst, fmt, dir, name, ext);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Shell", getVramAddr__5Shell);
 int Shell::Use30HzMode(void)
 {
@@ -1388,23 +1433,56 @@ char *Shell::GetLevelName(void)
 {
     return whichLevel;
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", SetMenuItemFlag__5Shelliii);
-INCLUDE_ASM("asm/nonmatchings/game/Shell", EnableMonsterSelection__5Shelli);
+extern int offBitMonsters[] __asm__("off_bit"); /* ~onBitMonsters, one entry per bit */
+/* Sets (on) or clears bit item >> 5 of one of the monster flag words (0 available, 1 locked, 2 chosen). */
+void Shell::SetMenuItemFlag(int menu, int item, int on)
+{
+    switch (menu) {
+    case 0:
+        if (on)
+            m_monsterFlags[0] |= onBitMonsters[item >> 5];
+        else
+            m_monsterFlags[0] &= offBitMonsters[item >> 5];
+        break;
+    case 1:
+        if (on)
+            m_monsterFlags[1] |= onBitMonsters[item >> 5];
+        else
+            m_monsterFlags[1] &= offBitMonsters[item >> 5];
+        break;
+    case 2:
+        if (on)
+            m_monsterFlags[2] |= onBitMonsters[item >> 5];
+        else
+            m_monsterFlags[2] &= offBitMonsters[item >> 5];
+        break;
+    default:
+        printf("Trying to set bit flag %i, it does not exist!!\n", menu);
+        break;
+    }
+}
+/* Makes a monster selectable: available on, locked off. Retail quirk: it passes sel >> 5 and SetMenuItemFlag shifts
+ * again, so for every monster id below 0x400 this touches the bit of monster index 0. */
+void Shell::EnableMonsterSelection(int sel)
+{
+    SetMenuItemFlag(0, sel >> 5, 1);
+    SetMenuItemFlag(1, sel >> 5, 0);
+}
 
-/* Monster ids are (index << 5) | variant; shell+0x2A2C holds one bit per monster index that is already picked. */
+/* Monster ids are (index << 5) | variant; m_monsterFlags[2] holds one bit per monster index that is already picked. */
 int Shell::MonsterIsChosen(int i)
 {
-    return (SHI(0x2A2C) & onBitMonsters[i >> 5]) != 0;
+    return (m_monsterFlags[2] & onBitMonsters[i >> 5]) != 0;
 }
 int Shell::MonsterExists(int i)
 {
     return 0;
 }
 INCLUDE_ASM("asm/nonmatchings/game/Shell", DisplayLoadBackground__5Shellb);
-/* shell+0x2A28 holds one bit per monster index that is still locked. */
+/* m_monsterFlags[1] holds one bit per monster index that is still locked. */
 int Shell::MonsterIsLocked(int i)
 {
-    return (SHI(0x2A28) & onBitMonsters[i >> 5]) != 0;
+    return (m_monsterFlags[1] & onBitMonsters[i >> 5]) != 0;
 }
 INCLUDE_ASM("asm/nonmatchings/game/Shell", init__7TagList);
 #ifdef NON_MATCHING
