@@ -1,6 +1,7 @@
 #include "common.h"
 #include "memory_stack.h"
 #include "game/shell.h"
+#include "game/monster_select.h"
 
 extern "C" int printf(const char *, ...);
 extern "C" int sprintf(char *, const char *, ...);
@@ -325,7 +326,31 @@ void Shell::SelectAI(void)
 {
 }
 INCLUDE_ASM("asm/nonmatchings/game/Shell", D_006EF180);
+#ifdef NON_MATCHING
+extern int randomAiPick __asm__("temp.2832"); /* last monster drawn (a function-local static in the original) */
+
+/* untuned: 8/87 words (register allocation); tools/difftest.py 260/260 with mathfRand draws injected */
+/* Gives every AI slot a distinct random monster among those still selectable, as (monster << 5) codes. */
+void Shell::RandomlySelectAI(void)
+{
+    int aiMonsters[10] = {9 << 5, 3 << 5, 5 << 5, 1 << 5, 2 << 5, 10 << 5, 4 << 5, 8 << 5, 7 << 5, 11 << 5};
+    SelectSlot *s;
+    int i = 0;
+
+    while (i < m_numAIs) {
+        randomAiPick = mathfRand(0, 9);
+        s = &monsterSelectMode[randomAiPick * 4];
+        if (s->state == 1 && s->taken == 1) {
+            s->taken = 0;
+            m_monsterSel[4 + i] = aiMonsters[randomAiPick];
+            printf("Assigning Monster %i Model %i to AI Slot #%i\n", aiMonsters[randomAiPick], m_costume[2 + randomAiPick], i);
+            i++;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", RandomlySelectAI__5Shell);
+#endif
 #ifdef NON_MATCHING
 struct SeenType {
     int type;
@@ -506,7 +531,7 @@ void Shell::InitBeforeUiDbLoad(void)
     SHI(0x2C14) = 0x2710;
     SHI(0x2C18) = 0;
     SHI(0x2BB4) = 0;
-    SHI(0x2BDC) = 0;
+    m_roundsDecided = 0;
     hierInit();
     viewInit();
     viewSetNumViews(1);
@@ -679,14 +704,14 @@ void Shell::EvaluateOnePlayerStoryStatus(int r)
                 r = numDeadHeads > 2 ? 0 : 1;
         }
         if (r == 1) {
-            if (--SHI(0x2BBC) > 0) {
+            if (--m_lives[0] > 0) {
                 SLOT(GM(0x1203E8))->playerInit();
                 if (gUseUnifiedView != 0)
                     Cameras::LeaveUnifiedView(0xC);
                 m_inSession = 1;
-                if (SHI(0x2BBC) == 1)
+                if (m_lives[0] == 1)
                     ((Hud *)game)->addMessage(0x26, 0);
-                else if (SHI(0x2BBC) == 2)
+                else if (m_lives[0] == 2)
                     ((Hud *)game)->addMessage(0x25, 0);
             } else {
                 displayDialog(1);
@@ -753,7 +778,7 @@ static void reinitSlot(int idx)
         SLOT(idx)->aiInit();
 }
 
-/* Challenge mode: shell+0x2A44 is the kill target (0 = none, the round just restarts). `deadIdx` is the last dead slot found, `killer` the monster
+/* Challenge mode: m_killTarget is the kill target (0 = none, the round just restarts). `deadIdx` is the last dead slot found, `killer` the monster
    number of a living monster that killed one; reaching the target (or, for target 1, any win) ends the match with the winners dialog (5). */
 void Shell::EvaluateOnePlayerChallengeStatus(int r)
 {
@@ -767,7 +792,7 @@ void Shell::EvaluateOnePlayerChallengeStatus(int r)
         m_inSession = 0;
         return;
     }
-    target = SHI(0x2A44);
+    target = m_killTarget;
     for (i = 0; i < GM(0x1203D4); i++) {
         char *slot = (char *)SLOT(i);
         char *by;
@@ -818,7 +843,123 @@ INCLUDE_ASM("asm/nonmatchings/game/Shell", EvaluateOnePlayerChallengeStatus__5Sh
 void Shell::EvaluateTwoPlayerCoopStatus(int r)
 {
 }
+#ifdef NON_MATCHING
+/* TheGame and Monster fields by offset (this TU has its own partial TheGame; names as in game/game.h). */
+#define GAME_MONSTER(i) (*(Monster **)((char *)game + 0x120380 + (i) * 4)) /* TheGame::m_monsters */
+#define VIEW_SLOT(i) GM(0x1203E8 + (i) * 4)                                /* TheGame::m_viewSlot */
+#define GAME_MODE GM(0x1203C8)                                             /* TheGame::m_gameMode */
+#define ROUND_WINNER GM(0x12043C)                                          /* TheGame::m_won[0] */
+#define ROUND_LOSER GM(0x120440)                                           /* TheGame::m_won[1]: the player who respawns */
+#define WINS(m) (*(int *)((char *)(m) + 0x3C))                             /* Monster::m_winsThisGame */
+#define KILLER(m) (*(Monster **)((char *)(m) + 0x846C))                    /* Monster::m_killer */
+
+/* untuned: 18/364 words (game reloads and scheduling); tools/difftest.py 300/300 on a two-player state */
+/* Two-player battle without AIs, called when a round ends (`r` 1) or the players quit (`r` 3).
+ * Each player whose monster died loses a life; with exactly one monster standing:
+ *   mode 6 (elimination): the winner scores if the loser was killed by someone, and the loser comes back with the same
+ *          monster while it has continues left; with none left the match is over (dialog 0xB, m_survivor = winner).
+ *   mode 3: first to m_killTarget wins (dialog 5), otherwise the loser comes back.
+ * With both monsters down, both come back (game mode 6 spends a continue each; out of continues ends the match). */
+void Shell::EvaluateMultiPlayerBattleStatusNoAI(int r)
+{
+    int winner = 0;
+    int alive = 0;
+    int i;
+
+    if (r == 1) {
+        for (i = 0; i < shell->m_numPlayers; i++) {
+            if (HEALTH(SLOT(VIEW_SLOT(i))) <= 0.0f && m_lives[i] > 0)
+                m_lives[i]--;
+            if (HEALTH(SLOT(VIEW_SLOT(i))) > 0.0f) {
+                winner = i;
+                alive++;
+                ROUND_LOSER = winner == 0;
+            }
+        }
+        m_roundsPlayed++;
+        if (alive == 1) {
+            m_roundsDecided++;
+            if (m_mode == 6) {
+                if (KILLER(GAME_MONSTER(ROUND_LOSER)) != 0) {
+                    if (winner != 0)
+                        m_wins[1]++;
+                    else
+                        m_wins[0]++;
+                    WINS(GAME_MONSTER(0)) = m_wins[0];
+                    WINS(GAME_MONSTER(1)) = m_wins[1];
+                }
+                if (ROUND_LOSER == 0 && m_continues[0] == 0) {
+                    m_survivor = 1;
+                    displayDialog(0xB);
+                } else if (ROUND_LOSER == 1 && m_continues[1] == 0) {
+                    m_survivor = 0;
+                    displayDialog(0xB);
+                } else {
+                    displayDialog(8);
+                    if (ROUND_LOSER == 0)
+                        m_continues[0]--;
+                    else
+                        m_continues[1]--;
+                    i = ROUND_LOSER;
+                    game->SetPlayerMonster(i, m_monsterSel[i], 0, i, i != 0 ? m_costume[1] : m_costume[0]);
+                    GAME_MONSTER(ROUND_LOSER)->playerInit();
+                    WINS(GAME_MONSTER(0)) = m_wins[0];
+                    WINS(GAME_MONSTER(1)) = m_wins[1];
+                }
+                GM(0x120460) = 1;
+                GM(0x120458) = 0;
+            } else if (m_mode == 3) {
+                ROUND_WINNER = winner;
+                if (m_killTarget != 0 && WINS(GAME_MONSTER(winner)) >= m_killTarget) {
+                    displayDialog(5);
+                    return;
+                }
+                GAME_MONSTER(ROUND_LOSER)->playerInit();
+                m_inSession = 1;
+                m_inMenus = 1;
+            }
+        } else if (alive == 0) {
+            if (GAME_MODE == 6) {
+                if (m_continues[0] == 0 || m_continues[1] == 0) {
+                    if (m_continues[0] == 0 && m_continues[1] == 0) {
+                        displayDialog(6);
+                    } else {
+                        m_survivor = m_continues[0] == 0;
+                        displayDialog(0xB);
+                    }
+                    return;
+                }
+                ROUND_LOSER = 0;
+                displayDialog(8);
+                m_continues[0]--;
+                game->SetPlayerMonster(0, m_monsterSel[0], 0, 0, m_costume[0]);
+                GAME_MONSTER(0)->playerInit();
+                WINS(GAME_MONSTER(0)) = m_wins[0];
+                if (shell->m_inSession == 0)
+                    return;
+                ROUND_LOSER = 1;
+                displayDialog(8);
+                m_continues[1]--;
+                game->SetPlayerMonster(1, m_monsterSel[1], 0, 1, m_costume[1]);
+                GAME_MONSTER(1)->playerInit();
+                WINS(GAME_MONSTER(1)) = m_wins[1];
+            } else if (GAME_MODE == 3) {
+                GAME_MONSTER(0)->playerInit();
+                GAME_MONSTER(1)->playerInit();
+                if (gUseUnifiedView != 0)
+                    Cameras::LeaveUnifiedView(0x11);
+                m_inSession = 1;
+                m_inMenus = 1;
+            }
+        }
+    } else if (r == 3) {
+        m_inMenus = 0;
+        m_inSession = 0;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", EvaluateMultiPlayerBattleStatusNoAI__5Shelli);
+#endif
 #ifdef NON_MATCHING
 /* Brings every slot with no health left back: slots 0 and 1 are players, the rest AIs. */
 static void respawnDead(void)
@@ -838,7 +979,7 @@ static void respawnDead(void)
 }
 
 /* Free-for-all with AIs, called when a round ends. `r` 3 = quit. Otherwise find who is still alive and whether a living monster killed a dead one:
-   with a kill target in shell+0x2A44 the first monster to reach it wins (m_won[0], dialog 5), else everyone dead comes back and the round restarts. */
+   with a kill target in m_killTarget the first monster to reach it wins (m_won[0], dialog 5), else everyone dead comes back and the round restarts. */
 void Shell::EvaluateMultiPlayerBattleStatusAI(int r)
 {
     int killer = -1;
@@ -863,7 +1004,7 @@ void Shell::EvaluateMultiPlayerBattleStatusAI(int r)
         }
     }
     if (alive != 0 || killer != -1) {
-        int target = *(int *)((char *)this + 0x2A44);
+        int target = m_killTarget;
 
         if (target == 0 || killer == -1) {
             respawnDead();
@@ -939,11 +1080,11 @@ void Shell::EvaluateOnlineBattleStatus(int r)
 {
 }
 
-/* Every player starts with the lives of the current game mode (NUM_LIVES[mode]) at shell+0x2BBC. */
+/* Every player starts with the lives of the current game mode (NUM_LIVES[mode]) in m_lives. */
 void Shell::InitPlayerLives(void)
 {
     int i;
-    int *p = (int *)((char *)this + 0x2BBC);
+    int *p = m_lives;
 
     for (i = 3; i >= 0; i--)
         *p++ = NUM_LIVES[m_mode];
