@@ -10,7 +10,9 @@ struct PadEntry {
     char data[0x16];
     unsigned short f16, f18, f1A, f1C, f1E, f20;
     short f22, f24, f26, f28;
-    char pad2A[0x32 - 0x2A];
+    char pad2A[0x2E - 0x2A];
+    unsigned short action;  /* 0x2E: grab/throw button (StateThrow; StateClimb starts on a fresh press too) */
+    char pad30[0x32 - 0x30];
     unsigned short f32;
     unsigned short block;   /* 0x34: block button held (StateBlock) */
     char pad36[0x3E - 0x36];

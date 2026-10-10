@@ -52,7 +52,37 @@ typedef char _size_StateCounter[sizeof(StateCounter) == 0x58 ? 1 : -1];
 class MonsterSound {
 public:
     void playCounterAttackSound(void);
+    void playObjectThrowSound(void);
 };
+/* Animation overlay blend (layout still unknown; `active` is the byte cancelOverride checks). */
+class AnimBlend {
+public:
+    char pad0[0xC];
+    unsigned char active; /* 0x0C */
+
+    void rampOut(float time);
+};
+
+/* Throwing the held pickup (Monster+0xEF40), animation 0x34. */
+class StateThrow : public MonsterState {
+public:
+    char pad14[0x1C - 0x14];
+    char blend[0x88 - 0x1C]; /* 0x1C: AnimBlend of the throw overlay */
+    float rampOutTime;       /* 0x88: blend-out time of that overlay */
+    char pad8C[0x90 - 0x8C];
+    float blendTime;         /* 0x90: transition into the throw animation */
+    float runFrames;         /* 0x94: length of the throw animation */
+    float releasePercent;    /* 0x98: animation fraction at which the pickup leaves the hand */
+    char pad9C[0xA0 - 0x9C];
+
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+    void handlePreemption(MonsterState *next);
+    void cancelOverride(void);
+};
+typedef char _size_StateThrow[sizeof(StateThrow) == 0xA0 ? 1 : -1];
+#define THROW_BLEND(st) ((AnimBlend *)(st)->blend)
 #define ST_COUNTERED 0x11114
 #define ST_BLOCK 0x7DA0
 #define VCALL_INT(st, slot) \
@@ -425,11 +455,89 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateTaunt);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StateTaunt);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__10StateTaunt);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateThrow);
+/* Throwing needs the throw animation, a pickup that is neither type 7 nor two-handed, attacks enabled and a fresh press
+ * of the action button (plays the throw sound). */
+#ifdef NON_MATCHING
+/* untuned: 14/51 words; tools/difftest.py 200/200 */
+int StateThrow::transitionOK(void)
+{
+    Monster *m = owner;
+    int cant;
+
+    if (m->m_anims[0x34].a == 0)
+        return 0;
+    cant = 0;
+    if (m->m_pickup == 0) {
+        cant = 1;
+    } else {
+        Pickup *p = *(Pickup **)m->m_pickup;
+
+        if (p->pickupType == 7 || ((p->bits >> 1) & 1))
+            cant = 1;
+    }
+    if (cant)
+        return 0;
+    if (owner->m_attacksEnabled == 0 || owner->m_padFlags[0]->action == 0)
+        return 0;
+    if (owner->m_padFlags[1]->action != 0)
+        return 0;
+    ((MonsterSound *)((char *)owner + 0x1A7C))->playObjectThrowSound();
+    return 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateThrow);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StateThrow);
+#endif
+/* Blends out the carry overlay (if the monster has animation 0x32) and starts the throw. */
+void StateThrow::transitionInto(void)
+{
+    frames = 0;
+    if (owner->m_anims[0x32].a != 0)
+        THROW_BLEND(this)->rampOut(rampOutTime);
+    animationSetTotalRunFrames(owner->m_anims[0x34], runFrames);
+    animationTransitionInto(owner->m_anims[0x34], blendTime, 1, 7);
+    owner->m_unk49 = 1;
+}
+/* The pickup is released (throwPickup 0x80A) once the animation passes releasePercent; at the end back to Idle, or to
+ * the state m_stateRef points at when falling. */
+#ifdef NON_MATCHING
+/* untuned: 45/67 words; tools/difftest.py 200/200 */
+void StateThrow::update(void)
+{
+    float pct;
+
+    MonsterState::update();
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(true);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    owner->updateLock((MonsterReticleState)1);
+    pct = animationGetCurrentPercent(owner->m_anims[0x34]);
+    if (pct >= 1.0f) {
+        if (owner->m_freeFalling != 0)
+            owner->enterNewState((MonsterState *)owner->m_stateRef);
+        else
+            owner->enterNewState(STATE_AT(owner, ST_IDLE));
+        return;
+    }
+    if (owner->m_pickup != 0 && releasePercent <= pct) {
+        owner->m_attacksEnabled = 1;
+        owner->throwPickup(0x80A, 0.0f);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__10StateThrow);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__10StateThrowP12MonsterState);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", cancelOverride__10StateThrow);
+#endif
+void StateThrow::handlePreemption(MonsterState *next)
+{
+    cancelOverride();
+}
+void StateThrow::cancelOverride(void)
+{
+    AnimBlend *b = THROW_BLEND(this);
+
+    if (b->active) {
+        b->rampOut(rampOutTime);
+        owner->m_attacksEnabled = 1;
+    }
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __19StateTwoHandedThrow);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__19StateTwoHandedThrow);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionFeasible__19StateTwoHandedThrow);

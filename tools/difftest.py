@@ -392,7 +392,9 @@ class Run:
             uc.reg_write(UC_MIPS_REG_F0, 0)
             if self.rets:
                 v = self.rets(name, n, a)
-                if v is not None:
+                if isinstance(v, float):        # float results go to $f0
+                    uc.reg_write(UC_MIPS_REG_F0, struct.unpack('<I', struct.pack('<f', v))[0])
+                elif v is not None:
                     uc.reg_write(UC_MIPS_REG_2, v & 0xFFFFFFFF)
 
     def snapshot(self, segs):
