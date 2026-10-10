@@ -338,7 +338,7 @@ public:
     char padF4[0xF5 - 0xF4];
     signed char m_unkF5;   /* 0xF5 */
     signed char m_unkF6;   /* 0xF6 */
-    signed char m_unkF7;   /* 0xF7 */
+    signed char m_unkF7;   /* 0xF7: victory shown (StateVictory sets it at 85% of the celebration; blocks another one) */
     char padF8[0xF9 - 0xF8];
     unsigned char m_unkF9;   /* 0xF9 */
     char padFA[0x1B8 - 0xFA];
@@ -584,6 +584,7 @@ public:
     static void Update(void);
     static void SetCameraToFollowMonster(int view, Monster *m);
     static void SetCameraPOV(int view, Camera::CameraPOV pov);
+    static void SetCameraMonster(int view, Monster *m);
     static void TogglePOV(int view);
     static float GetUnifiedTime(void);
 };

@@ -4,6 +4,10 @@
 #include "game/hit_event.h"
 #include "game/pickup.h"
 #include "game/level_pickups.h"
+#include "game/shell.h"
+
+int mathfRand(int lo, int hi);
+extern int gUseUnifiedView;
 
 /* States embedded in Monster (offsets from Monster's constructor). */
 #define STATE_AT(m, off) ((MonsterState *)((char *)(m) + (off)))
@@ -55,6 +59,7 @@ public:
     void playObjectThrowSound(void);
     void playTauntSound(void);
     void playShockedSound(void);
+    void playVictorySound(int anim);
 };
 /* Animation overlay blend (layout still unknown; `active` is the byte cancelOverride checks). */
 class AnimBlend {
@@ -172,6 +177,34 @@ public:
     void update(void);
 };
 typedef char _size_StateJavelin[sizeof(StateJavelin) == 0x24 ? 1 : -1];
+
+class FireBreath {
+public:
+    void ApplyMint(void); /* puts out the burning effect */
+};
+class MotionBlurAA {
+public:
+    static void setAlpha(float alpha, int view);
+    static void setEnable(bool on);
+};
+extern char bigShotLevel[] __asm__("_12BigShotLevel$instance");
+#define BIGSHOT_E8 (*(int *)(bigShotLevel + 0xE8))
+/* Victory celebration (Monster+0x10E70): one of animations 0x82..0x84 (0x5C when missing), the camera on the
+ * winner, invulnerable until it ends. */
+class StateVictory : public MonsterState {
+public:
+    int anim;    /* 0x14: getVictoryAnim */
+    float alpha; /* 0x18: motion blur fade */
+    char pad1C[4];
+
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+    int fade(void);
+    int acceptHit(HitEvent &e);
+    static int fade(void *self);
+};
+typedef char _size_StateVictory[sizeof(StateVictory) == 0x20 ? 1 : -1];
 #define ST_COUNTERED 0x11114
 #define ST_BLOCK 0x7DA0
 #define VCALL_INT(st, slot) \
@@ -838,10 +871,125 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionFeasible__17StateSh
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__17StateShieldAttack);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__17StateShieldAttack);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __12StateVictory);
+/* When a monster may celebrate. Never in game mode 4; in modes 2 and 3 only once its wins reach the shell's kill
+ * target; in mode 6 only when the other player has no continues left. Not twice, not in the air, not in the middle of
+ * a reaction (other than its sub-state 4). Starting it also puts out a fire on the monster. */
+#ifdef NON_MATCHING
+/* untuned: 12/92 words; tools/difftest.py 200/200 */
+int StateVictory::transitionOK(void)
+{
+    Monster *m;
+    int mode = game->m_gameMode;
+    int notYet;
+
+    if (mode == 4)
+        return 0;
+    if (mode == 3 || mode == 2) {
+        if (shell->m_killTarget == 0)
+            return 0;
+        m = owner;
+        notYet = game->m_slots[m->m_monsterNum].m_winsThisGame < shell->m_killTarget;
+        if (notYet)
+            return 0;
+    } else {
+        m = owner;
+        if (mode == 6) {
+            notYet = m->m_index != 0 ? shell->m_continues[0] : shell->m_continues[1];
+            if (notYet)
+                return 0;
+        }
+    }
+    if (m->m_unkF7 != 0)
+        return 0;
+    if (m->m_onFireCount > 0.0f)
+        m->m_onFireCount = 0.0f;
+    if (*(int *)((char *)owner + 0x68C0) != 0)
+        ((FireBreath *)((char *)owner + 0x68C0))->ApplyMint();
+    m = owner;
+    if ((((MonsterState *)m->m_state)->flags & 0x10) && *(int *)((char *)m->m_state + 0x260) != 4)
+        return 0;
+    if (m->m_state[0] == 0x1F) {
+        m->enterNewState((MonsterState *)m->m_stateRef);
+        return 0;
+    }
+    if (m->m_freeFalling != 0)
+        return 0;
+    return m->m_anims[0x5C].a != 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__12StateVictory);
+#endif
+#ifdef NON_MATCHING
+/* untuned: 89/91 words (two registers swapped); tools/difftest.py 200/200 */
+void StateVictory::transitionInto(void)
+{
+    int drop;
+    int mode;
+
+    frames = 0;
+    anim = mathfRand(0, 2) + 0x82;
+    if (owner->m_anims[anim].a == 0)
+        anim = 0x5C;
+    animationTransitionInto(owner->m_anims[anim], 100.0f, 1, 1);
+    drop = 0;
+    if (owner->m_pickup != 0)
+        drop = game->m_gameMode != 7;
+    if (drop) {
+        *((char *)(*(Pickup **)owner->m_pickup)->cs + 0xC) = 1; /* cs->drawMe */
+        owner->dropPickup();
+    }
+    mode = game->m_gameMode;
+    if (mode == 9 || (mode == 8 && BIGSHOT_E8 == 0)) {
+        Cameras::SetCameraMonster(0, owner);
+        Cameras::SetCameraPOV(0, (Camera::CameraPOV)7);
+    } else {
+        gUseUnifiedView = 1;
+        Cameras::SetCameraMonster(2, owner);
+        Cameras::SetCameraPOV(2, (Camera::CameraPOV)7);
+        owner->m_unkF9 = 1;
+    }
+    *((char *)owner->m_cs + 0xC) = 1; /* cs->drawMe */
+    ((MonsterSound *)((char *)owner + 0x1A7C))->playVictorySound(anim);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__12StateVictory);
+#endif
+/* At 85% the victory counts as shown; at the end back to Idle (and the camera back to normal in modes 8/9). */
+#ifdef NON_MATCHING
+/* untuned: 14/69 words; tools/difftest.py 200/200 */
+void StateVictory::update(void)
+{
+    float pct;
+    int mode;
+
+    MonsterState::update();
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(false);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    pct = animationGetCurrentPercent(owner->m_anims[anim]);
+    if (pct >= 0.85f)
+        owner->m_unkF7 = 1;
+    if (pct >= 1.0f) {
+        mode = game->m_gameMode;
+        if (mode == 9 || (mode == 8 && BIGSHOT_E8 == 1))
+            Cameras::SetCameraPOV(0, (Camera::CameraPOV)0);
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__12StateVictory);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", fade__12StateVictory);
+#endif
+/* Fades the motion blur out by 4 per call; returns whether it is still visible. */
+int StateVictory::fade(void)
+{
+    MotionBlurAA::setAlpha(alpha, owner->m_index);
+    alpha = alpha - 4.0f;
+    if (alpha > 0.0f) {
+        MotionBlurAA::setEnable(true);
+        return 1;
+    }
+    MotionBlurAA::setEnable(false);
+    return 0;
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __15StateBigTakeHit);
 int StateBigTakeHit::transitionOK(void)
 {
@@ -1156,11 +1304,19 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", launchProjectile__16StateTaze
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __tf17StateShieldAttack);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __tf15StateBigTakeHit);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __tf12StateVictory);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", acceptHit__12StateVictoryR8HitEvent);
+/* Invulnerable while celebrating. */
+int StateVictory::acceptHit(HitEvent &e)
+{
+    return 0;
+}
 int getVictoryAnim__12StateVictory(void *self) __asm__("getVictoryAnim__12StateVictory");
 int getVictoryAnim__12StateVictory(void *self)
 {
     return *(int *)((char *)self + 0x14);
 }
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", fade__12StateVictoryPv);
+/* Callback form of fade. */
+int StateVictory::fade(void *self)
+{
+    return ((StateVictory *)self)->fade();
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __tf20PunchSwipeConfigBase);
