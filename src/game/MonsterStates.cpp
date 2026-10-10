@@ -160,6 +160,18 @@ public:
     void handlePreemption(MonsterState *next);
 };
 typedef char _size_StateShocked[sizeof(StateShocked) == 0x50 ? 1 : -1];
+/* Throwing a type 7 pickup (javelin-like) (Monster+0xFE38), animation 0x36. */
+class StateJavelin : public MonsterState {
+public:
+    char pad14[0x1C - 0x14];
+    float blendTime;      /* 0x1C */
+    float releasePercent; /* 0x20 */
+
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+};
+typedef char _size_StateJavelin[sizeof(StateJavelin) == 0x24 ? 1 : -1];
 #define ST_COUNTERED 0x11114
 #define ST_BLOCK 0x7DA0
 #define VCALL_INT(st, slot) \
@@ -511,9 +523,63 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__12StateImpaled);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handleCollis__12StateImpaledR9_hdResult);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__12StateImpaledP12MonsterState);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __12StateJavelin);
+/* Attacks enabled, the javelin animation, a fresh press of the action button and a type 7 pickup in hand. */
+#ifdef NON_MATCHING
+/* untuned: 17/37 words; tools/difftest.py 200/200 */
+int StateJavelin::transitionOK(void)
+{
+    Monster *m = owner;
+    int isJavelin;
+
+    if (m->m_attacksEnabled == 0)
+        return 0;
+    if (m->m_anims[0x36].a == 0 || m->m_padFlags[0]->action == 0)
+        return 0;
+    if (owner->m_padFlags[1]->action != 0)
+        return 0;
+    isJavelin = 0;
+    if (owner->m_pickup != 0)
+        isJavelin = (*(Pickup **)owner->m_pickup)->pickupType == 7;
+    if (isJavelin)
+        return 1;
+    return 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__12StateJavelin);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__12StateJavelin);
+#endif
+void StateJavelin::transitionInto(void)
+{
+    frames = 0;
+    animationTransitionInto(owner->m_anims[0x36], blendTime, 1, 1);
+    owner->m_unk49 = 1;
+    ((MonsterSound *)((char *)owner + 0x1A7C))->playObjectThrowSound();
+}
+/* The pickup leaves the hand (throwPickup 0x80A) once the animation passes releasePercent; at the end back to Idle, or
+ * to the state m_stateRef points at when falling. */
+#ifdef NON_MATCHING
+/* untuned: 33/65 words; tools/difftest.py 200/200 */
+void StateJavelin::update(void)
+{
+    float pct;
+
+    MonsterState::update();
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(true);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    owner->updateLock((MonsterReticleState)1);
+    pct = animationGetCurrentPercent(owner->m_anims[0x36]);
+    if (pct >= 1.0f) {
+        if (owner->m_freeFalling != 0)
+            owner->enterNewState((MonsterState *)owner->m_stateRef);
+        else
+            owner->enterNewState(STATE_AT(owner, ST_IDLE));
+        return;
+    }
+    if (owner->m_pickup != 0 && releasePercent <= pct)
+        owner->throwPickup(0x80A, 0.0f);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__12StateJavelin);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StatePunch);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StatePunch);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StatePunch);
