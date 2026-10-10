@@ -53,6 +53,7 @@ class MonsterSound {
 public:
     void playCounterAttackSound(void);
     void playObjectThrowSound(void);
+    void playTauntSound(void);
 };
 /* Animation overlay blend (layout still unknown; `active` is the byte cancelOverride checks). */
 class AnimBlend {
@@ -83,6 +84,28 @@ public:
 };
 typedef char _size_StateThrow[sizeof(StateThrow) == 0xA0 ? 1 : -1];
 #define THROW_BLEND(st) ((AnimBlend *)(st)->blend)
+
+/* Taunting (Monster+0xFE20). Animation 0x5C, or 0x5D for the assault boss in its boss state 8. */
+#define MONSTER_TYPE_ASSBOSS 0x1A0 /* (13 << 5): assboss in MonsterLongNames */
+#define AI_OF(m) ((Ai *)((char *)(m) + 0x4E0))
+#define GAME_STREAMING_SOUND ((StreamingSoundManager *)((char *)game + 0x1204C0)) /* TheGame member past game.h's layout */
+class Ai {
+public:
+    int getAssBossState(void);
+};
+class StreamingSoundManager {
+public:
+    void updateTauntLocation(int monsterType, _fvector *pos);
+};
+class StateTaunt : public MonsterState {
+public:
+    float blendTime; /* 0x14 */
+
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+};
+typedef char _size_StateTaunt[sizeof(StateTaunt) == 0x18 ? 1 : -1];
 #define ST_COUNTERED 0x11114
 #define ST_BLOCK 0x7DA0
 #define VCALL_INT(st, slot) \
@@ -451,9 +474,58 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handleCollis__12StateStunnedR
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", setStarsCs__12StateStunnedP3_cs);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", updateStars__12StateStunned);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateTaunt);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateTaunt);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StateTaunt);
+/* A taunt starts when one was requested (m_wantsTaunt) and the monster has the taunt animation; plays the taunt sound. */
+int StateTaunt::transitionOK(void)
+{
+    if (owner->m_anims[0x5C].a == 0 || owner->m_wantsTaunt != 1)
+        return 0;
+    ((MonsterSound *)((char *)owner + 0x1A7C))->playTauntSound();
+    owner->m_wantsTaunt = 0;
+    return 1;
+}
+void StateTaunt::transitionInto(void)
+{
+    frames = 0;
+    if (owner->m_typeBits == MONSTER_TYPE_ASSBOSS) {
+        if (AI_OF(owner)->getAssBossState() == 8)
+            animationTransitionInto(owner->m_anims[0x5D], blendTime, 1, 1);
+        else
+            animationTransitionInto(owner->m_anims[0x5C], blendTime, 1, 1);
+    } else {
+        animationTransitionInto(owner->m_anims[0x5C], blendTime, 1, 1);
+    }
+}
+/* The boss keeps turning towards its target while taunting; everyone else stands. Back to Idle when the animation ends;
+ * the taunt sound follows the monster. */
+#ifdef NON_MATCHING
+/* untuned: 53/101 words; tools/difftest.py 200/200 (which handle goes to animationGetCurrentPercent is not visible to it: checked in the asm) */
+void StateTaunt::update(void)
+{
+    float pct;
+
+    MonsterState::update();
+    if (owner->m_typeBits == MONSTER_TYPE_ASSBOSS) {
+        ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(true);
+        owner->updateLock((MonsterReticleState)1);
+    } else {
+        ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(false);
+    }
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    if (owner->m_typeBits == MONSTER_TYPE_ASSBOSS) {
+        if (AI_OF(owner)->getAssBossState() == 8)
+            pct = animationGetCurrentPercent(owner->m_anims[0x5D]);
+        else
+            pct = animationGetCurrentPercent(owner->m_anims[0x5C]);
+        if (pct >= 1.0f)
+            owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    } else if (animationGetCurrentPercent(owner->m_anims[0x5C]) >= 1.0f) {
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    }
+    GAME_STREAMING_SOUND->updateTauntLocation(owner->m_typeBits, (_fvector *)((char *)owner->m_cs + 0x10));
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__10StateTaunt);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateThrow);
 /* Throwing needs the throw animation, a pickup that is neither type 7 nor two-handed, attacks enabled and a fresh press
  * of the action button (plays the throw sound). */

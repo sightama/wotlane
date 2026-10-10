@@ -331,7 +331,7 @@ public:
     unsigned char m_unkEC;   /* 0xEC */
     char padED[0xEF - 0xED];
     signed char m_cloaked;   /* 0xEF */
-    char padF0[0xF1 - 0xF0];
+    signed char m_wantsTaunt;   /* 0xF0: a taunt was requested; StateTaunt::transitionOK consumes it */
     signed char m_turning;   /* 0xF1 */
     char padF2[0xF3 - 0xF2];
     unsigned char m_specialWeapon;   /* 0xF3 */
