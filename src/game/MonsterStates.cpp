@@ -54,6 +54,7 @@ public:
     void playCounterAttackSound(void);
     void playObjectThrowSound(void);
     void playTauntSound(void);
+    void playShockedSound(void);
 };
 /* Animation overlay blend (layout still unknown; `active` is the byte cancelOverride checks). */
 class AnimBlend {
@@ -127,6 +128,38 @@ public:
     void update(void);
 };
 typedef char _size_StateBigTakeHit[sizeof(StateBigTakeHit) == 0x14 ? 1 : -1];
+
+class StateGrappled : public MonsterState {
+public:
+    void detach(void);
+};
+#define ST_THROW 0xEF40
+#define ST_GRAPPLED 0xDDCC
+#define ST_SHOCKED 0x10BA0
+#define ST_KNOCKBACK 0x7EA0
+#define STATE_ID_SHOCKED 0x38
+/* Monster's own vtable sits at +0x10 like the states'; slot 0x20 is getVel */
+#define MONSTER_VEL(m) \
+    ((float *)((void *(*)(void *))*(void **)(*(char **)((char *)(m) + 0x10) + 0x24))((char *)(m) + *(short *)(*(char **)((char *)(m) + 0x10) + 0x20)))
+/* Electrocuted (Monster+0x10BA0): animation 0x4A looping, the monster frozen in place; a grapple partner is shocked
+ * too and both let go. After `duration` frames it is knocked back. */
+class StateShocked : public MonsterState {
+public:
+    unsigned duration;  /* 0x14: frames */
+    int bigKnock;       /* 0x18: use the second (stronger) knockback once */
+    float blendTime;    /* 0x1C */
+    _fvector knockDir;  /* 0x20 */
+    float knock[2];     /* 0x30: knockBack strengths */
+    float bigKnockF[2]; /* 0x38: strengths when bigKnock */
+    float damage;       /* 0x40: setDamage */
+    char pad44[0x50 - 0x44];
+
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+    void handlePreemption(MonsterState *next);
+};
+typedef char _size_StateShocked[sizeof(StateShocked) == 0x50 ? 1 : -1];
 #define ST_COUNTERED 0x11114
 #define ST_BLOCK 0x7DA0
 #define VCALL_INT(st, slot) \
@@ -139,6 +172,7 @@ public:
 class StateGrapple : public MonsterState {
 public:
     int transitionOK(void);
+    void detach(void);
 };
 class StateStunned : public MonsterState {
 public:
@@ -660,10 +694,67 @@ void handlePreemption__19StateTwoHandedThrowP12MonsterState(void *self)
 {
 }
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __12StateShocked);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__12StateShocked);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__12StateShocked);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__12StateShocked);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__12StateShockedP12MonsterState);
+/* Needs the shocked animation, not already shocked, and m_unk49 set. */
+int StateShocked::transitionOK(void)
+{
+    Monster *m = owner;
+
+    if (m->m_anims[0x4A].a == 0)
+        return 0;
+    if (m->m_state[0] == STATE_ID_SHOCKED)
+        return 0;
+    return m->m_unk49 != 0;
+}
+void StateShocked::transitionInto(void)
+{
+    Monster *other;
+
+    frames = 0;
+    ((StateThrow *)STATE_AT(owner, ST_THROW))->cancelOverride();
+    owner->m_attacksEnabled = 0;
+    animationLoop(owner->m_anims[0x4A], true);
+    animationTransitionInto(owner->m_anims[0x4A], blendTime, 1, 1);
+    damage = 0.0f;
+    other = (Monster *)owner->m_target;
+    if (other != 0) {
+        /* we were grappling: the victim is shocked too */
+        ((StateGrappled *)STATE_AT(other, ST_GRAPPLED))->detach();
+        other->enterNewState(STATE_AT(other, ST_SHOCKED));
+        ((StateGrapple *)STATE_AT(owner, ST_GRAPPLE))->detach();
+    } else if ((other = owner->m_grappler) != 0) {
+        /* we were being grappled: so is the grappler */
+        ((StateGrappled *)STATE_AT(owner, ST_GRAPPLED))->detach();
+        ((StateGrapple *)STATE_AT(other, ST_GRAPPLE))->detach();
+        other->enterNewState(STATE_AT(other, ST_SHOCKED));
+    }
+    ((MonsterSound *)((char *)owner + 0x1A7C))->playShockedSound();
+}
+void StateShocked::update(void)
+{
+    MonsterState::update();
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(false);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    MONSTER_VEL(owner)[0] = 0.0f;
+    MONSTER_VEL(owner)[1] = 0.0f;
+    MONSTER_VEL(owner)[2] = 0.0f;
+    owner->m_unk1B8 = 0.5f;
+    if (frames > duration) {
+        owner->m_unk1B8 = 1.0f;
+        if ((char *)owner->m_state == (char *)STATE_AT(owner, ST_KNOCKBACK))
+            return;
+        if (bigKnock != 0) {
+            bigKnock = 0;
+            owner->knockBack(knockDir, bigKnockF[0], bigKnockF[1]);
+        } else {
+            owner->knockBack(knockDir, knock[0], knock[1]);
+        }
+    }
+}
+void StateShocked::handlePreemption(MonsterState *next)
+{
+    owner->m_attacksEnabled = 1;
+    owner->m_unk1B8 = 1.0f;
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __16StateStompAttack);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__16StateStompAttack);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionFeasible__16StateStompAttack);
