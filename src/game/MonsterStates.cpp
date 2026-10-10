@@ -106,6 +106,27 @@ public:
     void update(void);
 };
 typedef char _size_StateTaunt[sizeof(StateTaunt) == 0x18 ? 1 : -1];
+
+/* On the receiving end of a counter (Monster+0x11114): animation 0x4C, attacks off while it plays. */
+class StateCountered : public MonsterState {
+public:
+    float blendTime; /* 0x14 */
+    float speed;     /* 0x18: playback speed of animation 0x4C */
+
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+    void handlePreemption(MonsterState *next);
+};
+typedef char _size_StateCountered[sizeof(StateCountered) == 0x1C ? 1 : -1];
+/* Big hit reaction (Monster+0x11100): animation 0x4B. */
+class StateBigTakeHit : public MonsterState {
+public:
+    int transitionOK(void);
+    void transitionInto(void);
+    void update(void);
+};
+typedef char _size_StateBigTakeHit[sizeof(StateBigTakeHit) == 0x14 ? 1 : -1];
 #define ST_COUNTERED 0x11114
 #define ST_BLOCK 0x7DA0
 #define VCALL_INT(st, slot) \
@@ -409,10 +430,29 @@ void StateCounter::handlePreemption(MonsterState *next)
     owner->m_unk1B8 = 1.0f;
 }
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __14StateCountered);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__14StateCountered);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__14StateCountered);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__14StateCountered);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", handlePreemption__14StateCounteredP12MonsterState);
+int StateCountered::transitionOK(void)
+{
+    return owner->m_anims[0x4C].a != 0;
+}
+void StateCountered::transitionInto(void)
+{
+    frames = 0;
+    animationSetSpeed(owner->m_anims[0x4C], speed);
+    animationTransitionInto(owner->m_anims[0x4C], blendTime, 1, 1);
+    owner->m_attacksEnabled = 0;
+}
+void StateCountered::update(void)
+{
+    MonsterState::update();
+    if (animationGetCurrentPercent(owner->m_anims[0x4C]) >= 1.0f)
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(false);
+}
+void StateCountered::handlePreemption(MonsterState *next)
+{
+    owner->m_attacksEnabled = 1;
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateDeath);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateDeath);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__10StateDeath);
@@ -646,9 +686,28 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__12StateVictor
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__12StateVictory);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", fade__12StateVictory);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __15StateBigTakeHit);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__15StateBigTakeHit);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__15StateBigTakeHit);
-INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", update__15StateBigTakeHit);
+int StateBigTakeHit::transitionOK(void)
+{
+    return owner->m_anims[0x4B].a != 0;
+}
+/* Retail quirk: the transition is started on a copy of the handle, not on the monster's own one. */
+void StateBigTakeHit::transitionInto(void)
+{
+    _animHandle h;
+
+    frames = 0;
+    h = owner->m_anims[0x4B];
+    animationTransitionInto(h, 5.0f, 1, 1);
+}
+/* Back to Idle at 99% of the animation. */
+void StateBigTakeHit::update(void)
+{
+    MonsterState::update();
+    if (animationGetCurrentPercent(owner->m_anims[0x4B]) >= 0.99f)
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateTurn(false);
+    ((MonsterDynamics *)((char *)owner + 0x100))->updateMove(false);
+}
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", damageToPickup__20PunchSwipeConfigBase);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", damageCaused__20PunchSwipeConfigBase);
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __tf12MonsterState);
