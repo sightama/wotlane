@@ -1487,6 +1487,24 @@ public:
             // olho muda so a profundidade, nao a posicao na tela: resolve o z-fighting de camadas coplanares.
             const float fz = ram.f32(it.node + 0x28);
             const bool fudge = !wire && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
+            {   // diagnostico: WOTM_SKINBOX=1 imprime a caixa (mundo) dos vertices skinned de cada no, por osso x
+                static const bool sb = std::getenv("WOTM_SKINBOX") != nullptr;
+                if (sb && pm && md->skinned && !wire) {
+                    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f}, rlo[3] = {1e30f, 1e30f, 1e30f}, rhi[3] = {-1e30f, -1e30f, -1e30f};
+                    for (const Vtx &v : t) {
+                        float p[3];
+                        skinVertexPM(pm, skinM, v, p);
+                        const float r[3] = {v.x, v.y, v.z};
+                        for (int c = 0; c < 3; ++c) { lo[c] = std::min(lo[c], p[c]); hi[c] = std::max(hi[c], p[c]); rlo[c] = std::min(rlo[c], r[c]); rhi[c] = std::max(rhi[c], r[c]); }
+                    }
+                    for (int s = 0; s < 31; ++s) {   // maior |elemento| de cada matriz da paleta (detecta lixo/NaN)
+                        float mx = 0.f; bool bad = false;
+                        for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) { const float e = pm[s].m[r][c]; if (!(e == e) || std::fabs(e) > 1e6f) bad = true; mx = std::max(mx, std::fabs(e)); }
+                        if (bad || mx > 500.f) std::fprintf(stderr, "[skinbox]   osso %d: max|e| %.3g%s\n", s, double(mx), bad ? " (LIXO)" : "");
+                    }
+                    std::fprintf(stderr, "[skinbox] node %x mundo x[%.1f %.1f] y[%.1f %.1f] z[%.1f %.1f] | cru x[%.1f %.1f] y[%.1f %.1f] z[%.1f %.1f]\n", it.node, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], rlo[0], rhi[0], rlo[1], rhi[1], rlo[2], rhi[2]);
+                }
+            }
             for (size_t k = 0; k + 2 < t.size(); k += 3) {
                 if (multi && t[k].slot != slot) continue;   // so as secoes deste slot
                 { static const int onlySub = std::getenv("WOTM_SUBPKT") ? std::atoi(std::getenv("WOTM_SUBPKT")) : -1; if (onlySub >= 0 && md->skinned && t[k].sub != onlySub) continue; }
