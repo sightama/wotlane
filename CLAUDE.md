@@ -22,6 +22,7 @@ Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe d
 - Scripts `.sh` precisam de LF. Gravar com Python no Windows deixa CRLF e o `sh` do WSL quebra (`sed -i 's/\r$//'` conserta).
 - Só o dono ativa o hook (`git config core.hooksPath .githooks`). Ele regenera o bloco de progresso do README e `docs/progress.svg` a partir de `config/status.csv` (o dono roda `python3 tools/progress.py` antes de commitar). **Colaboradores não ativam o hook e não commitam esses três arquivos**, para não gerar conflito em todo PR.
 - Ao escrever arquivos com regex ou `\n`, use as ferramentas Edit/Write. Heredoc de Python transforma `\n` em quebra de linha real.
+- **Nunca rode Python inline** (`python3 - <<EOF`, `python -c "...\..."`): caminhos do Windows (`C:\Users\...`) e `\n` quebram. Um hook (`.claude/hooks/block_python_heredoc.py`, ligado em `.claude/settings.json`) recusa esses comandos. Grave o script com Write (pasta de rascunho) e rode `python arquivo.py`; use Edit/Write para alterar arquivos do repo.
 
 ## Fluxo por função
 1. Ler `asm/nonmatchings/<tu>/<função>.s`. Para mais de ~30 instruções, `sh tools/m2c.sh <tu> <função>` dá um rascunho. Nunca confie nele sem ler o asm (os argumentos que ele mostra são ruído de registradores). Troque `unkNNN` por campos nomeados dos headers.
