@@ -1748,6 +1748,7 @@ private:
             break;
         }
         case 23: { const uint32_t c = ram.u32(node + 4); if (ram.ok(c)) walk(ram, c, m, depth + 1); break; } // ACTION_DATA
+        case 35: kids(ram, node + 0xC, ram.u32(node + 4), m, depth); break;                 // contêiner de ANIM_XFORM (partes rigidas do monstro: maos, cabeca...): contagem em +4, filhos em +0xC (dbsWalk caso 35)
         case 25: {                                                                          // CHAR_INSTANCE
             // As partes do corpo sao nos ANIM_XFORM (hierarquia rigida, sem skinning). O proprio jogo calcula a matriz local de
             // cada no a cada quadro (hierAnimTransNode) em animOutput.atMat[matrixIdx]; basta le-la.
