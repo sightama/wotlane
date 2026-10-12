@@ -40,11 +40,11 @@ Estado verificado em 2026-10-09; o que ainda não foi feito está marcado.
 | # | Marco | Estado |
 |---|---|---|
 | 0 | Jogo inteiro recompilado, compila e roda no runtime até o menu | feito |
-| 1 | Filme de fundo do menu (FFmpeg) | tentado, sem imagem; não investigar o decodificador |
+| 1 | Filme de fundo do menu (FFmpeg) | nativo: `native/wotm_fmv.hpp` troca `CMovie`/`playMpegMovieWithDB` e toca o `.PSS` (`PS2X_FMV=1`); testado fora do jogo, falta conferir no runtime |
 | 2 | Travessia nativa da hierarquia de cena (`world`, céu, listas de `Cs`) | leitura funciona; o menu não usa a hierarquia 3D; precisa de uma fase para ter conteúdo |
 | 3 | Chegar a uma fase (entrada por roteiro) e desenhar objetos e modelos nativos | em andamento |
 | 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | |
-| 5 | Controle completo, som, FMVs | |
+| 5 | Controle completo, som, FMVs | FMVs: ver o marco 1 |
 | 6 | Mods de exemplo com verificação pelo oracle | |
 
 ## Armadilhas já pagas

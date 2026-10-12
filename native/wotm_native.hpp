@@ -680,7 +680,12 @@ public:
         return (from >= 0 && int(slot) == from) ? uint32_t(to) : slot;
     }
 
+    unsigned (*movieTexture)() = nullptr;   // textura do filme (texId 999); 0 = sem quadro. Quem toca o filme preenche (wotm_live.inc)
+
     unsigned textureId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
+        // filme do menu: moviesSetScreenObject poe texId 999 no objeto (wotm_fmv.hpp); a textura vem do tocador, quadro a quadro
+        if (movieTexture && objectTexId(ram, node, slot) == 999)
+            if (const unsigned id = movieTexture()) return id;
         const uint64_t key = texKey(ram, node, slot);
         if (!key) return 0;
         auto it = tex_.find(key);

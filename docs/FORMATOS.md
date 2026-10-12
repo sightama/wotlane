@@ -24,6 +24,13 @@ Quirk do retail: para o 3º e o 4º jogador o caminho do arquivo usa o monstro d
 O `LoadLevelFiles` procura `<raiz>\LVL\<fase>.NGP;1` e `.TEX;1` no CD (`fileCdSearchFile`) para saber os tamanhos (barra de progresso) e
 carrega, nesta ordem: nível (`.ngp`), monstros, texturas de recurso, texturas; depois `dbsRelocateFileZero` e `dbInitDb`.
 
+## Filmes `.PSS` (2026-10-11)
+`disc/MOV/*.PSS` (52 arquivos). MPEG-2 program stream em pacotes de 2048 bytes (cabeçalho de pacote `00 00 01 BA` de MPEG-2, um cabeçalho de sistema `BB`), conferido com `tools/pss.py` e o `ffprobe`:
+- **Vídeo:** fluxo `E0`, MPEG-2 MP@ML a 29,97 quadros/s. Tela cheia em 640x368 com proporção 16:9: `INTRO_M`, `INTRO_S`, `INT_MAIN`, `INT_ACT1..3`, `INT_TRAN`, `<monstro>_G` (finais), `<monstro>_P`, `CREDITS`. Os outros são pequenos e sem áudio: 256x128 (`SHELDEMO`, o filme do menu, com 173 s; nomes de monstro e de fase como `ALIEN`, `CENTRAL`, `TOKYO`: prévias, provavelmente), 254x128 (`3-MILE`, `AIRPORT`, `ISLAND`) e 256x160 (`MANTIS`, `ROBOT`).
+- **Com áudio** (nos primeiros 4 MB): `INTRO_M`, `INT_MAIN`, `CREDITS` e os `_G`/`_P`, menos `ALIEN_G` e `DRAGON_G`. `INT_ACT1..3` não têm (o `playMovie` os chama com `comAudio` = 0; ele também cita um `int_act4.pss` que não existe no disco); `INTRO_S` e `INT_TRAN` também não, e não aparecem no `playMovie`.
+- **Áudio:** fluxo privado `BD`, subfluxo `FF`, 4 bytes de cabeçalho por PES. Começa com `"SShd"`, tamanho (0x18), tipo (1 = PCM 16 bits little-endian), taxa (48000), canais (2), intercalação (0x200) e dois `-1`; depois `"SSbd"`, tamanho dos dados e os dados: blocos de 512 bytes alternando canal esquerdo e direito (256 amostras cada). O FFmpeg não reconhece esse áudio (só vê o vídeo).
+- **No jogo:** o retail toca por `sceMpegDemuxPssRing` + IPU; o nativo (`native/wotm_fmv.hpp`) lê o arquivo direto. O filme do menu vira a textura de um objeto do menu 3D: `moviesSetScreenObject` troca o texId por 999 (o último de `texInfo[1000]`, reservado) e o TEX0 por CT32 em 0x3BA0, largura 320 (`VramAddrForMovies` 0xEE800 palavras / 64, `VramWidthForMovies` 0x140), com `TW`/`TH` = 8/7.
+
 ## Imagem `.NGP`
 Pré-ligada para o endereço **0xA00000** (a de nível é descompactada lá). Palavra 0 = N (número de nós-raiz), palavras 1..N = ponteiros
 para os nós-raiz da hierarquia (`_hierhead`; opcode nos 6 bits baixos da primeira palavra, id do objeto nos 14 bits altos).

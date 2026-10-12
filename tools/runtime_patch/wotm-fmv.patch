@@ -1,0 +1,116 @@
+diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
+index e7e2eeb..e77d011 100644
+--- a/ps2xRuntime/src/lib/ps2_runtime.cpp
++++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
+@@ -2464,6 +2464,9 @@ void PS2Runtime::run()
+             ++s_frame;
+             if (std::getenv("PS2X_SCENE"))
+                 wotmDrawScene(m_memory.getRDRAM());
++            static const bool s_fmv = std::getenv("PS2X_FMV") != nullptr; // filmes nativos (wotm_fmv.hpp): por cima de tudo
++            if (s_fmv)
++                wotmFmvPresent(m_memory.getGSVRAM());
+             if (std::getenv("PS2X_PROF")) // amostrador de PC: histograma por palavra, gravado em prof.<frame>
+             {
+                 static std::unordered_map<uint32_t, uint32_t> s_hist;
+diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
+index 16dd2bc..23acf47 100644
+--- a/ps2xRuntime/src/lib/wotm_live.inc
++++ b/ps2xRuntime/src/lib/wotm_live.inc
+@@ -1,5 +1,66 @@
+ // wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
+ // Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
++// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
++// Substitui CMovie::Play/Update/End e playMpegMovieWithDB/updateMpegMovieDecoding (o decodificador do jogo espera a IPU, que o
++// runtime nao emula) e toca o .PSS do disco (pasta cdRoot ou a ISO de PS2X_CD_IMAGE) com o FFmpeg. Sem o header ou sem o FFmpeg,
++// PS2X_FMV so avisa.
++#if __has_include("wotm_fmv.hpp") && __has_include(<libavcodec/avcodec.h>)
++#include "wotm_fmv.hpp"
++#define WOTM_HAVE_FMV 1
++namespace wotm_fmv_hooks
++{
++inline void playWithDB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::playMpegMovieWithDB(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5))));
++}
++inline void updateDecoding(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::updateMpegMovieDecoding(rdram, getRegU32(ctx, 4))));
++}
++inline void cmoviePlay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmoviePlay(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6))));
++}
++inline void cmovieUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmovieUpdate(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5))));
++}
++inline void cmovieEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmovieEnd(rdram, getRegU32(ctx, 4))));
++}
++} // namespace wotm_fmv_hooks
++
++void wotmFmvInstall(PS2Runtime &runtime)
++{
++    const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
++    wotm::fmv::Player &p = wotm::fmv::Player::get();
++    p.discRoot = io.cdRoot;
++    p.isoPath = io.cdImage;
++    runtime.registerFunction(0x0020F4B0u, wotm_fmv_hooks::playWithDB);     // playMpegMovieWithDB
++    runtime.registerFunction(0x0020F540u, wotm_fmv_hooks::updateDecoding); // updateMpegMovieDecoding
++    runtime.registerFunction(0x00210090u, wotm_fmv_hooks::cmoviePlay);     // CMovie::Play
++    runtime.registerFunction(0x00210360u, wotm_fmv_hooks::cmovieEnd);      // CMovie::End
++    runtime.registerFunction(0x00210408u, wotm_fmv_hooks::cmovieUpdate);   // CMovie::Update
++    std::fprintf(stderr, "[fmv] filmes nativos ligados (disco: %s, iso: %s)\n", io.cdRoot.string().c_str(), io.cdImage.string().c_str());
++}
++
++// Uma vez por apresentacao (thread da janela, dentro do BeginDrawing): avanca os filmes, copia o do menu para a VRAM do GS e
++// desenha o de tela cheia por cima.
++static void wotmFmvPresent(uint8_t *gsVram)
++{
++    wotm::fmv::Player &p = wotm::fmv::Player::get();
++    p.pump(gsVram, PS2_GS_VRAM_SIZE);
++    p.drawFullscreen();
++}
++#else
++void wotmFmvInstall(PS2Runtime &)
++{
++    std::fprintf(stderr, "[fmv] PS2X_FMV ignorado: falta native/wotm_fmv.hpp (WOTM_NATIVE_DIR) ou o FFmpeg (PS2X_ENABLE_FFMPEG)\n");
++}
++static void wotmFmvPresent(uint8_t *) {}
++#endif
++
+ #if __has_include("wotm_native.hpp")
+ #include "wotm_native.hpp"
+ #include <filesystem>
+@@ -61,6 +122,9 @@ inline uint32_t levelSignature(const wotm::Ram &ram)
+ static bool wotmDrawNative(const uint8_t *rdram)
+ {
+     static wotm_live::State S;
++#ifdef WOTM_HAVE_FMV
++    S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
++#endif
+     static bool filterInstalled = false;
+     if (!filterInstalled)
+     {
+diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
+index c8a0915..3c0cd51 100644
+--- a/ps2xRuntime/src/main.cpp
++++ b/ps2xRuntime/src/main.cpp
+@@ -177,6 +177,7 @@ static void hook_skipMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
+ // Corte na fronteira da engine (sem VU1/GS emulado): o VU1 do runtime executa microcodigo invalido e o DMA do VIF1
+ // nunca conclui. rtWaitForVu1 esperava objsInPacket|objsInAlphaPacket zerarem (quem zerava era hierDmaHandler).
+ static void hook_noop(uint8_t *, R5900Context *, PS2Runtime *) {}
++void wotmFmvInstall(PS2Runtime &runtime); // wotm_live.inc (PS2X_FMV)
+ static void hook_ret1(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); } // CMovie::Update: "terminou"
+ static void hook_flushObjQ(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+ {
+@@ -266,6 +267,8 @@ int main(int argc, char *argv[])
+             runtime.registerFunction(0x00210408u, hook_ret1); // CMovie::Update
+             std::cout << "[hook] CMovie::Play/Update pulados" << std::endl;
+         }
++        if (std::getenv("PS2X_FMV")) // filmes nativos (native/wotm_fmv.hpp, em wotm_live.inc): substitui os hooks de pular filme acima
++            wotmFmvInstall(runtime);
+ 
+         if (const char *noop = std::getenv("PS2X_NOOP")) // lista de enderecos hex separados por virgula: funcoes viram no-op
+         {
