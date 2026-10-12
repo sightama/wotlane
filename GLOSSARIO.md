@@ -29,7 +29,7 @@ O **índice** é o do jogo (`MonsterLongNames`/`MonsterNewNames`). O **nome inte
 Nomes em minúsculas no código (`"robo-47"`, `"ultra-v"`); a capitalização da coluna "Nome do jogo" é nossa.
 
 ### Pendências
-- Existe um **boss planta** no meio do jogo que não aparece na lista acima (informado pelo dono); nome e arquivo ainda não identificados. Candidatos a investigar: `JELLY` e `FINAL` (nomes desconhecidos), ou um modelo carregado por outro caminho.
+- Existe um **boss planta** no meio do jogo que não sabemos qual da lista é; nome e arquivo ainda não identificados. Candidatos a investigar: `JELLY` e `FINAL` (nomes desconhecidos), ou um modelo carregado por outro caminho.
 - Descobrir quem são `JELLY` e `FINAL` e como as 3 fases do boss final são carregadas.
 
 ## Fases
