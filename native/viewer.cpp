@@ -269,6 +269,8 @@ int main(int argc, char **argv) {
         BeginMode3D(c3);
         scene.draw(ram, wire);
         EndMode3D();
+        scene.updateText(ram);
+        scene.drawText(ram, float(GetScreenWidth()), float(GetScreenHeight()));
         DrawText(TextFormat("itens %zu  lod %d  %s  cam %.0f %.0f %.0f", scene.items.size(), lod, wire ? "arame" : "solido", cam.pos[0], cam.pos[1], cam.pos[2]), 10, 10, 18, WHITE);
         EndDrawing();
         ++frame;

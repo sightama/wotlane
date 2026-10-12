@@ -53,6 +53,7 @@ constexpr uint32_t csHPActiveList = 0x0043A2E0;   // CsPool::m_HPActiveList
 constexpr uint32_t tempVramTexAddr = 0x006F8818;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
 constexpr uint32_t fileStatus = 0x00445390;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C
 constexpr uint32_t texInfo = 0x0050F100;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
+constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
 }
 
 // ---------------------------------------------------------------- matrizes (vetores-linha)
@@ -420,6 +421,14 @@ struct Sprite {
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
 };
 
+// Glifo do texto do jogo (fontSpritePrint*): um sprite do GS. UV em texels do atlas, XY em pixels da tela do jogo (640 x 224, campo).
+struct TextQuad {
+    float u0, v0, u1, v1;
+    float x0, y0, x1, y1;
+    uint8_t r, g, b, a;   // RGBAQ do GS: 0x80 = 1,0 (a cor modula a textura)
+    uint64_t tex0;        // TEX0 em vigor (atlas T8H 512x512 do .RTX da fase + paleta CBP)
+};
+
 // Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada) para interpolar entre dois quadros.
 struct Snapshot {
     std::vector<Sprite> sprites;
@@ -455,6 +464,7 @@ public:
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
+    std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
     uint32_t visited = 0;
     uint32_t byOp[64] = {};
 
@@ -565,6 +575,8 @@ public:
         cache_.clear();
         for (auto &kv : tex_) if (kv.second.id) UnloadTexture(kv.second);
         tex_.clear();
+        for (auto &kv : fontTex_) if (kv.second.id) UnloadTexture(kv.second);
+        fontTex_.clear();
     }
 
     // TEX0 do objeto (gsTexCtx[0]); 0 quando o objeto nao tem textura
@@ -1561,7 +1573,107 @@ public:
         rlEnableBackfaceCulling();
     }
 
+    // Texto do jogo (menu de pausa, HUD): o jogo monta o quadro em `fontPacket` (um pacote GIF para o GS: cabecalho A+D com o TEX0 do atlas,
+    // depois corridas de sprites [UV, XYZ3, UV, XYZ2] x n separadas por [PRIM, RGBAQ] que trocam a cor) e o despacha em fontDmaFontData, que
+    // zera o contador (D_006F8D30 volta a D_006F8D44 = tamanho do cabecalho) e deixa o pacote na RAM. Contador != cabecalho = o jogo esta
+    // montando o quadro: mantem o texto anterior. Num quadro sem texto o terminador (EOP) cai logo depois do cabecalho e o texto some.
+    void updateText(const Ram &ram) {
+        if (ram.u32(0x006F8D30) != ram.u32(0x006F8D44)) return;
+        std::vector<TextQuad> q;
+        uint32_t p = addr::fontPacket;
+        uint64_t tex0 = 0;
+        uint8_t col[4] = {0x80, 0x80, 0x80, 0x80};
+        auto u64 = [&](uint32_t a) { return uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32); };
+        for (int guard = 0; guard < 4096 && ram.ok(p, 16); ++guard) {
+            const uint64_t tag = u64(p), regs = u64(p + 8);
+            const uint32_t nloop = uint32_t(tag & 0x7FFF), flg = uint32_t(tag >> 58) & 3, nreg = (uint32_t(tag >> 60) & 15) ? (uint32_t(tag >> 60) & 15) : 16;
+            p += 16;
+            if (flg == 0 && regs == 0xE) {   // A+D: endereco do registrador em hi, dado em lo
+                for (uint32_t i = 0; i < nloop && ram.ok(p, 16); ++i, p += 16)
+                    if ((u64(p + 8) & 0xFF) == 0x06) tex0 = u64(p);   // TEX0_1
+            } else if (flg == 1 && nreg == 2 && (regs & 0xFF) == 0x10) {   // [PRIM, RGBAQ]: cor da proxima corrida
+                for (uint32_t i = 0; i < nloop && ram.ok(p, 16); ++i, p += 16) {
+                    const uint32_t c = ram.u32(p + 8);
+                    col[0] = uint8_t(c); col[1] = uint8_t(c >> 8); col[2] = uint8_t(c >> 16); col[3] = uint8_t(c >> 24);
+                }
+            } else if (flg == 1 && nreg == 4 && (regs & 0xFFFF) == 0x53D3) {   // sprites: UV, XYZ3, UV, XYZ2 (12.4, centro do GS em 2048)
+                for (uint32_t i = 0; i < nloop && ram.ok(p, 32); ++i, p += 32) {
+                    constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;   // viewport cheio: 640 x 224 (campo), centro 2048
+                    TextQuad t{};
+                    t.u0 = float(ram.u16(p) & 0x3FFF) / 16.f; t.v0 = float(ram.u16(p + 2) & 0x3FFF) / 16.f;
+                    t.x0 = float(ram.u16(p + 8)) / 16.f - kOx; t.y0 = float(ram.u16(p + 10)) / 16.f - kOy;
+                    t.u1 = float(ram.u16(p + 16) & 0x3FFF) / 16.f; t.v1 = float(ram.u16(p + 18) & 0x3FFF) / 16.f;
+                    t.x1 = float(ram.u16(p + 24)) / 16.f - kOx; t.y1 = float(ram.u16(p + 26)) / 16.f - kOy;
+                    t.r = col[0]; t.g = col[1]; t.b = col[2]; t.a = col[3];
+                    t.tex0 = tex0;
+                    q.push_back(t);
+                }
+            } else {
+                break;   // terminador (EOP, A+D de FBA) ou lixo
+            }
+            if (tag & 0x8000) break;   // EOP
+        }
+        text.swap(q);
+    }
+
+    // Desenha o texto em coordenadas da tela do jogo (640 x 224) escaladas para `rw` x `rh` (fora do modo 3D, por cima da cena).
+    void drawText(const Ram &ram, float rw, float rh) {
+        if (text.empty()) return;
+        if (!textShaderTried_) {
+            // O GS faz textura * cor / 0x80 (0x80 = 1,0) e satura em 1,0: cores acima de 0x80 clareiam o glifo. O raylib so multiplica por
+            // <= 1; o shader dobra o RGB (a cor do vertice entra como r/255, ou seja r/0x80 = 2 * r/255).
+            textShaderTried_ = true;
+            static const char *fs =
+                "#version 330\n"
+                "in vec2 fragTexCoord; in vec4 fragColor;\n"
+                "uniform sampler2D texture0; uniform vec4 colDiffuse; out vec4 finalColor;\n"
+                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; finalColor = vec4(min(t.rgb * 2.0, 1.0), t.a); }\n";
+            textShader_ = LoadShaderFromMemory(nullptr, fs);
+        }
+        const float sx = rw / 640.f, sy = rh / 224.f;
+        if (textShader_.id > 0) BeginShaderMode(textShader_);
+        for (const TextQuad &t : text) {
+            const Texture2D tex = fontTexture(ram, t.tex0);
+            if (!tex.id) continue;
+            const bool gain = textShader_.id > 0;   // sem o shader a cor fica em <= 1,0 (dobra aqui)
+            const int k = gain ? 1 : 2;
+            const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
+            DrawTexturePro(tex, Rectangle{t.u0, t.v0, t.u1 - t.u0, t.v1 - t.v0},
+                           Rectangle{t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
+        }
+        if (textShader_.id > 0) EndShaderMode();
+    }
+
 private:
+    std::unordered_map<uint64_t, Texture2D> fontTex_;   // atlas de fonte por TEX0 (id 0 = nao decodificado)
+    Shader textShader_{};
+    bool textShaderTried_ = false;
+
+    // Atlas da fonte: PSMT8H 512x512 do .RTX da fase (entrada com DBP == TBP0) + paleta CT32 em CBP, como as telas do menu em decodeTex.
+    Texture2D fontTexture(const Ram &, uint64_t tex0) {
+        const auto it = fontTex_.find(tex0);
+        if (it != fontTex_.end()) return it->second;
+        Texture2D t{};
+        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
+        const auto pal0 = rtxPal.find(t0.cbp);
+        const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
+        std::vector<uint32_t> px;
+        uint32_t pal[256] = {};
+        if (t0.psm == gs::T8H && pal0 != rtxPal.end() && im != rtxImg.end()) {
+            fillPal(pal, pal0->second, true);
+            const uint32_t w = 1u << t0.tw, h = 1u << t0.th;
+            if (gs::decodeUpload(im->second.data(), im->second.size(), w, h, gs::T8, t0.csa, pal, px)) {
+                Image img{};
+                img.data = px.data(); img.width = int(w); img.height = int(h); img.mipmaps = 1;
+                img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+                t = LoadTextureFromImage(img);
+                if (t.id) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
+            }
+        }
+        fontTex_[tex0] = t;
+        return t;
+    }
+
     std::unordered_map<uint32_t, std::shared_ptr<MeshData>> cache_;
     std::unordered_map<uint64_t, Texture2D> tex_;
     std::vector<uint32_t> seen_;   // nos ja visitados neste quadro (ciclos / DAG)

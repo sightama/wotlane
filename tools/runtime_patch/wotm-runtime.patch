@@ -32,10 +32,18 @@ index e5f63a9..2a93dcf 100644
          m_impl->eeCycleCarry = total % 8u;
          if (iopCycles)
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..03a094e 100644
+index 589d768..c466baa 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
-@@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
+@@ -377,6 +377,7 @@ endfunction()
+ 
+ add_library(ps2_runtime STATIC
+     src/lib/game_overrides.cpp
++    src/lib/wotm_overrides.cpp
+     src/lib/gs/ps2_gif_arbiter.cpp
+     src/lib/ps2_audio.cpp
+     src/lib/ps2_audio_vag.cpp
+@@ -393,6 +394,7 @@ add_library(ps2_runtime STATIC
      src/lib/vu/ps2_vu1_core.cpp
      src/lib/vu/ps2_vu1_upper.cpp
      src/lib/vu/ps2_vu1_lower.cpp
@@ -43,7 +51,7 @@ index 589d768..03a094e 100644
      src/lib/games_database.cpp
  )
  
-@@ -608,3 +609,9 @@ endif()
+@@ -608,3 +610,9 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -558,7 +566,7 @@ index 8590f14..68ebd78 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..cffb1ac 100644
+index 45cb9d2..8ad97fa 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -567,7 +575,18 @@ index 45cb9d2..cffb1ac 100644
  #include "ps2_runtime.h"
  #include "ps2_log.h"
  #include "ps2_stubs.h"
-@@ -1342,6 +1344,11 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1008,6 +1010,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+                                       m_cpuContext.pc,
+                                       elfCrc32,
+                                       elfCrc32Valid);
++    {
++        extern void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath);
++        wotmInstallOverrides(*this, elfPath);   // correcoes especificas do WotM (wotm_overrides.cpp)
++    }
+ 
+     RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
+     return true;
+@@ -1342,6 +1348,11 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -579,7 +598,7 @@ index 45cb9d2..cffb1ac 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,7 +1358,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,7 +1362,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -590,7 +609,7 @@ index 45cb9d2..cffb1ac 100644
  
      // Every inter-function transfer is also a deterministic EE safe point.
      // Backward edges inside generated functions use eeCheckpointDue(), while
-@@ -1423,9 +1433,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1437,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -622,7 +641,7 @@ index 45cb9d2..cffb1ac 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1469,86 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1473,86 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -709,7 +728,7 @@ index 45cb9d2..cffb1ac 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2422,7 +2527,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2531,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -721,7 +740,7 @@ index 45cb9d2..cffb1ac 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2553,174 @@ void PS2Runtime::run()
+@@ -2444,7 +2557,174 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -1067,10 +1086,10 @@ index bd75bba..68b4ada 100644
  void VU1Interpreter::progressXgkick()
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..9850324
+index 0000000..565a327
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,199 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +#if __has_include("wotm_native.hpp")
@@ -1116,6 +1135,8 @@ index 0000000..9850324
 +    bool rtxChosen = false;
 +    std::string rtxPath;
 +    long frame = 0;
++    wotm::Snapshot A, B;   // quadros do jogo anterior e atual (interpolacao: o jogo anda a 30/s, a tela desenha a 60)
++    bool interp = true;    // F4 liga/desliga a interpolacao
 +};
 +
 +inline uint32_t levelSignature(const wotm::Ram &ram)
@@ -1149,24 +1170,48 @@ index 0000000..9850324
 +        S.scene.invalidate();
 +        S.levelSig = sig;
 +        S.rtxChosen = false;
++        S.A = wotm::Snapshot{};
++        S.B = wotm::Snapshot{};
 +    }
-+    wotm_live::g_stage = "collect";
-+    S.scene.collect(ram);
-+    if (S.scene.items.size() < 20)
-+        return false;
++    // Quadro novo do jogo (g_frame em 0x6F7E38 mudou): le a cena da RAM e guarda como instantaneo B (o anterior vira A). Nos desenhos
++    // seguintes so mistura A e B: o jogo termina o quadro e espera o pacing, entao a RAM e consistente logo depois do g_frame++.
++    const uint32_t gNow = ram.u32(0x6F7E38);
++    const double tNow = GetTime();
++    if (!S.B.valid || gNow != S.B.g)
 +    {
-+        // nivel + monstros: nomes e bases das paletas vem de fileStatus (idempotente; refaz so quando mudam)
-+        std::string log;
-+        wotm_live::g_stage = "loadResources";
-+        S.rtxChosen = S.scene.loadResources(ram, "", &log);
-+        if (!log.empty() && log != S.rtxPath)
++        wotm_live::g_stage = "collect";
++        S.scene.collect(ram);
++        if (S.scene.items.size() < 20)
++            return false;
 +        {
-+            S.rtxPath = log;
-+            std::fprintf(stderr, "[native] recursos: %s\n", log.c_str());
++            // nivel + monstros: nomes e bases das paletas vem de fileStatus (idempotente; refaz so quando mudam)
++            std::string log;
++            wotm_live::g_stage = "loadResources";
++            S.rtxChosen = S.scene.loadResources(ram, "", &log);
++            if (!log.empty() && log != S.rtxPath)
++            {
++                S.rtxPath = log;
++                std::fprintf(stderr, "[native] recursos: %s\n", log.c_str());
++            }
 +        }
++        wotm_live::g_stage = "snapshot";
++        wotm::Snapshot sn = S.scene.takeSnapshot(ram, tNow, gNow);
++        if (!sn.cam.ok)
++            return false;
++        S.A = S.B.valid ? std::move(S.B) : sn;
++        S.B = std::move(sn);
 +    }
-+
-+    const wotm::GameCamera gc = wotm::readGameCamera(ram, 0);
++    if (!S.B.valid)
++        return false;
++    if (IsKeyPressed(KEY_F4))
++        S.interp = !S.interp;
++    float alpha = 1.f;
++    {
++        const double span = S.B.t - S.A.t;   // duracao do quadro anterior do jogo; o atual deve durar parecido
++        if (S.interp && span > 0.004 && span < 0.25)
++            alpha = static_cast<float>((tNow - S.B.t) / span);
++    }
++    const wotm::GameCamera gc = S.scene.blend(S.A, S.B, alpha);
 +    if (!gc.ok)
 +        return false;
 +
@@ -1188,6 +1233,8 @@ index 0000000..9850324
 +    S.scene.draw(ram, false);
 +    wotm_live::g_stage = "idle";
 +    EndMode3D();
++    S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
++    S.scene.drawText(ram, static_cast<float>(RW), static_cast<float>(RH));
 +    EndTextureMode();
 +
 +    // letterbox 4:3 na janela
@@ -1197,6 +1244,43 @@ index 0000000..9850324
 +    const Rectangle dst{(sw - RW * k) * 0.5f, (sh - RH * k) * 0.5f, RW * k, RH * k};
 +    DrawTexturePro(S.rt.texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
 +
++    {   // contador de FPS (F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
++        static bool show = true;
++        static uint32_t lastG = 0;
++        static double lastT = 0.0;
++        static int drawn = 0;
++        static float gameFps = 0.f, screenFps = 0.f;
++        if (IsKeyPressed(KEY_F3))
++            show = !show;
++        ++drawn;
++        const double now = GetTime();
++        static const bool camLog = std::getenv("WOTM_CAMLOG") != nullptr;   // diagnostico: serie temporal da camera lida (um [cam] por desenho)
++        if (camLog)
++            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f\n", now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0],
++                         gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2]);
++        if (lastT == 0.0)
++        {
++            lastT = now;
++            lastG = ram.u32(0x6F7E38);
++        }
++        else if (now - lastT >= 0.5)
++        {
++            const uint32_t g = ram.u32(0x6F7E38);
++            gameFps = static_cast<float>(g - lastG) / static_cast<float>(now - lastT);
++            screenFps = static_cast<float>(drawn) / static_cast<float>(now - lastT);
++            lastG = g;
++            drawn = 0;
++            lastT = now;
++        }
++        if (show)
++        {
++            char line[128];
++            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps | fov %.1f | interp %s (F4)", gameFps, screenFps, gc.fovy, S.interp ? "ligada" : "desligada");
++            DrawText(line, 11, 11, 20, BLACK);
++            DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
++        }
++    }
++
 +    if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
 +        std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu nos=%u rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),
 +                     S.scene.visited, S.rtxPath.c_str());
@@ -1205,6 +1289,84 @@ index 0000000..9850324
 +#else
 +static bool wotmDrawNative(const uint8_t *) { return false; }
 +#endif
+diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
+new file mode 100644
+index 0000000..fd73aeb
+--- /dev/null
++++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
+@@ -0,0 +1,72 @@
++// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
++//
++// Pelo do Congar (e de outros monstros): `BoneSpring::update` (0x11B5C0) integra uma mola por Euler com
++// `dt = 1 / timerGetUpdateRate()` (D_006F8DB8). No retail o updateRate e 60 (ou 30); neste runtime o jogo roda a ~22 fps
++// logicos e o valor chega a 8-15 quando o host atrasa, ou seja, `dt` ate 7x maior que o previsto. Com esse dt a mola e
++// instavel: o deslocamento cresce a cada quadro ate explodir (vertices do pelo esticados por toda a cena).
++// A correcao limita so o dt da mola a no maximo 1/30 s. Nada muda quando o updateRate ja e >= 30 (retail).
++//
++// Dentro de BoneSpring::update `timerGetUpdateRate` e chamada duas vezes: a primeira escala a velocidade da ancora
++// (precisa do rate real) e a segunda define o dt (`1 / rate`): so a segunda e limitada.
++//
++// WOTM_SPRINGMIN=<n>: minimo do rate usado no dt (padrao 30; 0 desliga a correcao).
++#include "ps2_runtime.h"
++#include "ps2_runtime_macros.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++
++namespace
++{
++    constexpr uint32_t kBoneSpringUpdate = 0x11B5C0u;
++    constexpr uint32_t kTimerGetUpdateRate = 0x2236D8u;
++    constexpr uint32_t kUpdateRateVar = 0x6F8DB8u;   // D_006F8DB8, lido pelo gp
++
++    PS2Runtime::RecompiledFunction g_origBoneSpringUpdate = nullptr;
++    int g_springMinRate = 30;
++    thread_local int t_timerCallsInSpring = -1;   // -1: fora de BoneSpring::update
++    unsigned long long g_clamped = 0;
++
++    void boneSpringUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        t_timerCallsInSpring = 0;
++        g_origBoneSpringUpdate(rdram, ctx, runtime);
++        t_timerCallsInSpring = -1;
++    }
++
++    // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite do dt acima.
++    void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        int32_t rate = static_cast<int32_t>(READ32(kUpdateRateVar));
++        if (t_timerCallsInSpring >= 0 && ++t_timerCallsInSpring == 2 && rate > 0 && rate < g_springMinRate)
++        {
++            rate = g_springMinRate;
++            if ((++g_clamped % 20000ull) == 0 && std::getenv("PS2X_STATS"))
++                std::fprintf(stderr, "[wotm] mola do pelo: dt limitado a 1/%d em %llu atualizacoes\n", g_springMinRate, g_clamped);
++        }
++        SET_GPR_S32(ctx, 2, rate);
++        ctx->pc = GPR_U32(ctx, 31);
++    }
++}
++
++void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
++{
++    const size_t slash = elfPath.find_last_of("/\\");
++    const std::string name = slash == std::string::npos ? elfPath : elfPath.substr(slash + 1);
++    if (name.find("SCUS_971.97") == std::string::npos)
++        return;
++
++    if (const char *e = std::getenv("WOTM_SPRINGMIN"))
++        g_springMinRate = std::atoi(e);
++    if (g_springMinRate <= 0)
++        return;
++
++    g_origBoneSpringUpdate = runtime.lookupFunction(kBoneSpringUpdate);
++    if (!g_origBoneSpringUpdate)
++        return;
++    runtime.registerFunction(kBoneSpringUpdate, &boneSpringUpdate);
++    runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
++    std::fprintf(stderr, "[wotm] correcao da mola do pelo ativa (dt <= 1/%d)\n", g_springMinRate);
++}
 diff --git a/ps2xRuntime/src/lib/wotm_scene.inc b/ps2xRuntime/src/lib/wotm_scene.inc
 new file mode 100644
 index 0000000..cda24a7
