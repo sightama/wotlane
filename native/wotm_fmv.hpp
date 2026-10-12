@@ -548,6 +548,7 @@ public:
         r.stop = false;
         done_[s].store(false);
         active_[s].store(true);
+        if (s == Full) skip_.store(false);
         std::fprintf(stderr, "[fmv] %s: %s -> %s @%llu\n", s == Full ? "tela cheia" : "textura", gameName.c_str(), src.ok() ? src.path.c_str() : "(nao achado)",
                      (unsigned long long)src.offset);
     }
@@ -560,6 +561,8 @@ public:
     bool finished(Slot s) const { return done_[s].load(); }
     bool active(Slot s) const { return active_[s].load(); }
     bool hasFrame(Slot s) const { return shown_[s].load(); }
+    // O jogador apertou confirmar (X/Espaco, Start/Enter) no filme de tela cheia; o hook de update trata como "pulou"
+    bool skipRequested() const { return skip_.load(); }
 
     // ---- thread da janela (antes de desenhar): abre/fecha e avanca os filmes. Com `vram`, o quadro do filme do menu tambem vai
     // para a VRAM do GS onde o retail o poe (0x3BA0, largura 320: VramAddrForMovies/VramWidthForMovies), para o menu desenhado
@@ -606,6 +609,10 @@ public:
     bool drawFullscreen() {
         Movie &m = mov_[Full];
         if (!m.isOpen() && !active_[Full].load()) return false;
+        // O retail so pula com Start (o uiMain le o botao de mascara 8); aqui X/Espaco tambem pula, como o resto do menu confirma.
+        if (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) ||
+            (IsGamepadAvailable(0) && (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT))))
+            skip_.store(true);
         const float sw = float(GetScreenWidth()), sh = float(GetScreenHeight());
         DrawRectangle(0, 0, int(sw), int(sh), BLACK);
         if (!m.hasFrame || !m.tex.id) return true;
@@ -627,7 +634,7 @@ private:
     struct Req { Source src; std::string name; bool audio = false, open = false, stop = false; };
     std::mutex m_;
     Req req_[2];
-    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{};
+    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{};
     std::atomic<uint32_t> screenW_{256}, screenH_{128};
     long lastFrame_[2] = {-1, -1};
     Movie mov_[2];
@@ -711,7 +718,9 @@ inline void termAll(uint8_t *ram) {
 inline uint32_t updateMpegMovieDecoding(uint8_t *ram, uint32_t keepGoing) {
     Player &p = Player::get();
     const bool started = rd(ram, ga::isStarted) != 0;
+    if (p.skipRequested()) keepGoing = 0;
     if (p.finished(Player::Full) || !p.active(Player::Full) || ((keepGoing & 0xFF) == 0 && started)) {
+        std::fprintf(stderr, "[fmv] tela cheia encerrada (%s)\n", p.finished(Player::Full) ? "fim" : "pulo");
         wr(ram, ga::isStarted, 0);
         termAll(ram);
         return 0;
