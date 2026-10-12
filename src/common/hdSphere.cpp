@@ -33,24 +33,28 @@ int hdSphereTest(_fvector *p, float r, _hdResult *res, unsigned skipId2, int max
 /* Sphere of radius r swept a -> b; skips the hulls of the cs whose ep id2 is skipId2. Returns the number of contacts. */
 int hdSphereTest(_fvector *a, _fvector *b, float r, _hdResult *res, unsigned skipId2, int max)
 {
-    HdItGridBox it;
     int n = 0;
 
     if (!max)
         return 0;
-    it.skipSelf = 1;
-    it.skipId2 = skipId2;
-    it.reset(*a, *b, r);
-    while (it.cur < it.end) {
-        _hdResult *r0 = &res[n];
-        int k = hdTestNode(it.hull, a, b, r, (float (*)[4][4])it.mat, r0, max - n);
+    /* the iterator is constructed only past the early return, as in retail */
+    {
+        HdItGridBox it;
 
-        if (k)
-            setHatIds(r0, k, it);
-        n += k;
-        if (!(n < max))
-            break;
-        it.next();
+        it.skipSelf = 1;
+        it.skipId2 = skipId2;
+        it.reset(*a, *b, r);
+        while (it.cur < it.end) {
+            _hdResult *r0 = &res[n];
+            int k = hdTestNode(it.hull, a, b, r, (float (*)[4][4])it.mat, r0, max - n);
+
+            if (k)
+                setHatIds(r0, k, it);
+            n += k;
+            if (!(n < max))
+                break;
+            it.next();
+        }
     }
     if (!n)
         res->hit = 0;
