@@ -58,11 +58,15 @@ public:
    hdCsTest reads are named. */
 class HdItGridBox {
 public:
-    unsigned char pad0[0x30];
+    unsigned char pad0[0x24];
+    int option;             // 0x24 hdHatTest's bool
+    unsigned char pad28[8];
     int end;                // 0x30
     int pad34;              // 0x34
     int cur;                // 0x38
-    unsigned char pad3C[0x10];
+    unsigned char pad3C[8];
+    void **cellObj;         // 0x44 current object; cellObj[1] -> its bbox (min xyz, max xyz) or 0
+    int pad48;              // 0x48
     unsigned skipId2;       // 0x4C node id2 of the tested cs (its own hulls are skipped)
     int skipSelf;           // 0x50
     int pad54;              // 0x54
@@ -77,5 +81,28 @@ public:
     void next(void);
 } __attribute__((aligned(16)));
 typedef char _size_HdItGridBox[sizeof(HdItGridBox) == 0x70 ? 1 : -1];
+
+/* The same along a line (hdLosTest). */
+class HdItGridLine {
+public:
+    unsigned char pad0[0x24];
+    int option;             // 0x24
+    unsigned char pad28[8];
+    float bestT;            // 0x30 nearer hits than this end the walk early
+    unsigned char pad34[0x30];
+    int csId;               // 0x64 only this cs (when filterCs)
+    int filterCs;           // 0x68
+    int pad6C;              // 0x6C
+    _hierhead *hull;        // 0x70
+    float (*mat)[4];        // 0x74
+    unsigned short hatId1;  // 0x78
+    unsigned short hatId2;  // 0x7A
+    unsigned char pad7C[0x64];
+
+    HdItGridLine();
+    void reset(_fvector &from, _fvector &to, float r);
+    void next(void);
+    int isDone(void) const;
+} __attribute__((aligned(16)));
 
 #endif
