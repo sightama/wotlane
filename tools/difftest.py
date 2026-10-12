@@ -84,9 +84,9 @@ def build_alt(tu, workdir):
     for u in und:
         m = re.search(r'_([0-9A-Fa-f]{8})$', u)
         if u in sym:
-            cmd.append(f'--defsym={u}={sym[u]:#x}')
+            cmd.append(f'--defsym="{u}"={sym[u]:#x}')    # quoted: ld's script lexer misreads some names (fx)
         elif m:                                  # splat data label: the address is part of the name
-            cmd.append(f'--defsym={u}={int(m.group(1), 16):#x}')
+            cmd.append(f'--defsym="{u}"={int(m.group(1), 16):#x}')
         else:
             missing.append(u)
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -191,6 +191,11 @@ def parse_params(rest):
             continue
         return None
     return toks
+
+
+# Unmangled C callees: (integer args, float args) to log. Without this a0 (noise for a float-only call) would be compared.
+C_ARGS = {'cosf': (0, 1), 'sinf': (0, 1), 'tanf': (0, 1), 'acosf': (0, 1), 'asinf': (0, 1), 'atanf': (0, 1), 'sqrtf': (0, 1),
+          'fabsf': (0, 1), 'atan2f': (0, 2), 'powf': (0, 2), 'fmodf': (0, 2), 'rand': (0, 0), '__fixsfdi': (0, 1)}
 
 
 def spec_from_mangled(sym):
@@ -354,7 +359,9 @@ class Run:
         if addr in self.entries and not (self.fn_range[0] <= addr < self.fn_range[1]):
             name = self.entries[addr]
             cs = spec_from_mangled(name)
-            if cs is None:
+            if name in C_ARGS:
+                ni, nf = C_ARGS[name]
+            elif cs is None:
                 ni, nf = 1, 0
             else:
                 ni = min(4, sum(1 for t in cs if t != 'f'))

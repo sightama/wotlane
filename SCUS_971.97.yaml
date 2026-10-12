@@ -207,22 +207,22 @@ segments:
       - [0x0F74D0, cpp, common/CsPool]  # c++, 7 funcs, name: guess
       - [0x0F78C0, cpp, common/dbs]  # c++, 5 funcs, name: guess
       - [0x0F8A58, asm, common/disp]  # c++, 15 funcs, name: manual
-      - [0x0F9290, asm, common/electric]  # c++, 5 funcs, name: guess
+      - [0x0F9290, cpp, common/electric]  # c++, 5 funcs, name: guess
       - [0x0FA228, cpp, common/file]  # c++, 44 funcs, name: guess
       - [0x0FBBD8, cpp, common/fog]  # c++, 16 funcs, name: guess
       - [0x0FC3D0, cpp, common/font]  # c++, 30 funcs, name: guess
       - [0x0FD650, cpp, common/GsPkt]  # c++, 4 funcs, name: guess
-      - [0x0FD7F8, asm, common/hd]  # c++, 16 funcs, name: guess
+      - [0x0FD7F8, cpp, common/hd]  # c++, 16 funcs, name: guess
       - [0x0FE980, cpp, common/hdHat]  # c++, 3 funcs, name: manual
       - [0x0FEB30, asm, common/HdIterator]  # c++, 13 funcs, name: manual
       - [0x0FF5F8, cpp, common/hdLos]  # c++, 2 funcs, name: manual
-      - [0x0FF7F0, asm, common/hdPoly]  # c++, 5 funcs, name: manual
+      - [0x0FF7F0, cpp, common/hdPoly]  # c++, 5 funcs, name: manual
       - [0x100970, asm, common/hdPrim]  # c++, 14 funcs, name: manual
       - [0x1017B0, cpp, common/hdSphere]  # c++, 3 funcs, name: manual
       - [0x101D60, asm, common/hdTraverse]  # c++, 4 funcs, name: manual
       - [0x102910, cpp, common/hier]  # c++, 51 funcs, name: guess
       - [0x1052A0, cpp, common/texm]  # c++, 30 funcs, name: guess
-      - [0x108A20, asm, common/ps]  # c++, 37 funcs, name: guess
+      - [0x108A20, cpp, common/ps]  # c++, 37 funcs, name: guess
       - [0x109D88, cpp, common/hieri]  # c++, 3 funcs, name: manual
       - [0x109EB8, cpp, common/hoser]  # c++, 10 funcs, name: guess
       - [0x10A480, asm, common/IncognitoEntertainmentGS]  # c++, 11 funcs, name: guess
@@ -234,7 +234,7 @@ segments:
       - [0x10F440, asm, common/MpegMovie]  # c++, 17 funcs, name: manual
       - [0x110090, asm, common/movies]  # c++, 10 funcs, name: manual
       - [0x110938, asm, common/partdraw]  # c++, 39 funcs, name: manual
-      - [0x114B38, asm, common/particle]  # c++, 49 funcs, name: guess
+      - [0x114B38, cpp, common/particle]  # c++, 49 funcs, name: guess
       - [0x11B9F0, cpp, common/peds]  # c++, 5 funcs, name: guess
       - [0x11C0D8, asm, common/pkt]  # c++, 10 funcs, name: guess
       - [0x11CBB0, cpp, common/plight]  # c++, 12 funcs, name: guess
@@ -244,7 +244,7 @@ segments:
       - [0x11E090, cpp, common/videocb]  # c++, 3 funcs, name: manual
       - [0x11E3C0, cpp, common/readbuf]  # c++, 6 funcs, name: manual
       - [0x11E4D0, cpp, common/resetcom]  # c++, 18 funcs, name: guess
-      - [0x11EF08, asm, common/RigidBody]  # c++, 37 funcs, name: guess
+      - [0x11EF08, cpp, common/RigidBody]  # c++, 37 funcs, name: guess
       - [0x120510, asm, common/ScreenPolys]  # c++, 19 funcs, name: guess
       - [0x121090, cpp, common/ShiftJIS]  # c++, 7 funcs, name: guess
       - [0x121418, cpp, common/smooth]  # c++, 8 funcs, name: guess
@@ -601,13 +601,13 @@ segments:
       - [0x5F3E30, .rodata, common/hdSphere]
       - [0x5F3E50, rodata, common/hdTraverse]
       - [0x5F3FA0, .rodata, common/texm]
-      - [0x5F4058, rodata, common/ps]
+      - [0x5F4058, .rodata, common/ps]
       - [0x5F40B0, .rodata, common/hoser]
       - [0x5F40D0, .rodata, common/input]
       - [0x5F4420, .rodata, common/mathf]
       - [0x5F4480, rodata, common/MpegMovie]
       - [0x5F44E0, rodata, common/partdraw]
-      - [0x5F4620, rodata, common/particle]
+      - [0x5F4620, .rodata, common/particle]
       - [0x5F4720, .rodata, common/PointToolKit]
       - [0x5F4810, .rodata, common/videocb]
       - [0x5F4830, .rodata, common/resetcom]

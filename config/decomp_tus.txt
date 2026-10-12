@@ -131,3 +131,9 @@ common/animation
 common/texm
 common/view
 common/tod
+common/particle
+common/RigidBody
+common/ps
+common/hd
+common/hdPoly
+common/electric

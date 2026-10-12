@@ -47,3 +47,7 @@ hierTraverseAsm
 hierCacheForAsm
 pktAddVu1ObjAsm
 pktLinkAlphaObjAsm
+# particle draw: the VIF1 DMA kick of the particle packets, the lens-flare GS packet and its z-buffer readback (sceGsExecStoreImage)
+particleDraw__Fi
+particleLensFlareRender__FP6QwDataiPPUi
+particleLensFlareTestZbuffer__Fi

@@ -1543,10 +1543,9 @@ int AnimPlayer_IsBlendInActiveList(AnimPlayer *self, AnimBlendNode *b)
     AnimBlendNode *n, *prev = 0;
     for (n = (AnimBlendNode *)self->activeList; n;) {
         AnimBlendNode *next;
-        if (!n->prev) {
+        if (!n->prev && n != (AnimBlendNode *)self->activeList) {
             n->prev = prev;
-            if (n != (AnimBlendNode *)self->activeList)
-                printf("STOP HERE(2)\n");
+            printf("STOP HERE(2)\n");
         }
         if (n == b)
             return 1;
