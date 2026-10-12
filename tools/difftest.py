@@ -295,8 +295,8 @@ class Run:
 
     def setup_args(self, spec, rnd):
         uc = self.uc
-        ireg = [UC_MIPS_REG_4, UC_MIPS_REG_5, UC_MIPS_REG_6, UC_MIPS_REG_7]
-        freg = [UC_MIPS_REG_F12, UC_MIPS_REG_F13]
+        ireg = [UC_MIPS_REG_4 + i for i in range(8)]   # EE EABI: a0-a3, t0-t3
+        freg = [UC_MIPS_REG_F12 + i for i in range(8)]  # f12-f19
         ni = nf = 0
         for t in spec:
             if t == 'this':
@@ -310,18 +310,20 @@ class Run:
             elif t == 'f':
                 fv = rnd.uniform(-10, 10)
                 if nf >= len(freg):
-                    raise SystemExit('more than 2 float arguments')
+                    raise SystemExit('more than 8 float arguments')
                 uc.reg_write(freg[nf], struct.unpack('<I', struct.pack('<f', fv))[0])
                 nf += 1
                 continue
             else:
                 raise SystemExit(f'bad arg spec {t}')
-            if ni >= 4:
-                raise SystemExit('more than 4 integer arguments (stack arguments are not supported)')
+            if ni >= len(ireg):
+                raise SystemExit('more than 8 integer arguments (stack arguments are not supported)')
             uc.reg_write(ireg[ni], val)
             ni += 1
 
     def norm(self, v):
+        if STACK_TOP - STACK_SIZE <= v < STACK_TOP:
+            return 'stack'                    # frame layouts differ: a pointer into the caller's frame is not comparable
         if v in self.entries and v != 0:
             return 'fn:' + self.entries[v]
         """Pointers into static data that point at a C string are compared by their text (the string lives at a different
@@ -367,7 +369,7 @@ class Run:
             elif cs is None:
                 ni, nf = 1, 0
             else:
-                ni = min(4, sum(1 for t in cs if t != 'f'))
+                ni = min(8, sum(1 for t in cs if t != 'f'))
                 nf = min(2, sum(1 for t in cs if t == 'f'))
             a = tuple(self.norm(uc.reg_read(UC_MIPS_REG_4 + i) & 0xFFFFFFFF) for i in range(ni))
             f12 = uc.reg_read(UC_MIPS_REG_F12) & 0xFFFFFFFF if nf >= 1 else 0

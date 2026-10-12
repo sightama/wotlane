@@ -70,3 +70,16 @@ psDrawFilterSprite__FP6QwDataiiiiiiiii
 psInitBorderPkt__Fv
 psDrawBorderSprite__FP6QwDataiiii
 psFovTestAsm__FP8_fvectorP11_hierobject
+# video (IPU/DMA buffer of the movie player), GS texture/blit/overlay passes, the sprite font packets
+tu:common/vi
+tu:common/tex
+tu:common/blit
+tu:common/MotionBlurAA
+tu:common/movies
+fontInit__F10_vramAddrsi
+fontDmaFontData__Fv
+fontSetColorGifTag__Fi
+fontSpritePrint__FiPc
+fontBuildPrim__FicP6QwData
+fontInitPacket__FP6QwData10_vramAddrs
+fontSetTexId__FP9_hierhead
