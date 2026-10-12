@@ -432,7 +432,7 @@ struct TextQuad {
 // Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada) para interpolar entre dois quadros.
 struct Snapshot {
     std::vector<Sprite> sprites;
-    std::vector<DrawItem> items, sky;
+    std::vector<DrawItem> items, sky, overlay;
     GameCamera cam;
     double t = 0.0;     // relogio da apresentacao no momento da captura (segundos)
     uint32_t g = 0;     // contador de quadros do jogo
@@ -463,6 +463,7 @@ class Scene {
 public:
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
+    std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
     uint32_t visited = 0;
@@ -738,6 +739,7 @@ public:
     void collect(const Ram &ram, int maxLod = -1) {
         items.clear();
         sky.clear();
+        overlay.clear();
         sprites.clear();
         atMat_ = 0;
         animVal_ = 0;
@@ -781,6 +783,7 @@ public:
         Snapshot sn;
         sn.items = items;
         sn.sky = sky;
+        sn.overlay = overlay;
         sn.sprites = sprites;
         sn.cam = readGameCamera(ram, 0);
         sn.t = now;
@@ -841,6 +844,7 @@ public:
         };
         mix(A.items, B.items, items);
         mix(A.sky, B.sky, sky);
+        mix(A.overlay, B.overlay, overlay);
         {   // particulas: mesma (fx, indice) nos dois quadros -> posicao, tamanho e rotacao misturados
             std::unordered_map<uint32_t, const Sprite *> am;
             am.reserve(A.sprites.size() * 2);
@@ -1337,6 +1341,11 @@ public:
             rlEnableDepthMask();
         }
         if (!wire) drawSprites(ram);   // particulas (destroços, poeira) por cima do mundo
+        rlDrawRenderBatchActive();
+        rlDisableDepthTest();   // icones de botao por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
+        drawList(ram, overlay, wire);
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
         if (useShader) EndShaderMode();
     }
 
@@ -1976,13 +1985,18 @@ private:
         }
     }
 
+    // Icones de botao (X, O, quadrado, triangulo) de `McButtons`: ids que `McButtons::initButton` aceita (0x1F51..0x1F54 e 0x240E..0x2411).
+    // `drawButtonsForString` liga o `drawMe` e posiciona cada um com `AlignCsWithView` (alguns passos a frente da camera, orientado como ela),
+    // entao nao sao HUD de espaco de tela. Ficam em z perto de 0 (podem cair abaixo do chao do cenario): o jogo os desenha por cima.
+    static bool isButtonId(uint32_t id) { return (id >= 0x1F51 && id <= 0x1F54) || (id >= 0x240E && id <= 0x2411); }
+
     // Um `_cs` (instancia com matriz e posicao proprias): epNode em +0, drawMe +0xC, trans +0x10, mat +0x20, scaleMe +0xF, scale +0x80
     void drawCs(const Ram &ram, uint32_t cs, bool needDrawMe, const float *at = nullptr) {
         if (!ram.ok(cs, 0xB0) || (needDrawMe && !ram.u8(cs + 0xC))) return;
         const uint32_t ep = ram.u32(cs);
         if (!ram.ok(ep)) return;
         const uint32_t id = ram.u32(ep) >> 18;   // id do objeto (14 bits altos); 0x1C20..0x2133 = elementos de HUD (espaco de tela)
-        if (needDrawMe && id >= 0x1C20 && id <= 0x2133) return;
+        if (needDrawMe && id >= 0x1C20 && id <= 0x2133 && !isButtonId(id)) return;
         M4 m = readM4(ram, cs + 0x20);
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
@@ -1991,7 +2005,12 @@ private:
             const float sx = ram.f32(cs + 0x80), sy = ram.f32(cs + 0x84), sz = ram.f32(cs + 0x88);
             m = mul(scaleM(sx, sy, sz), m);
         }
+        const size_t before = items.size();
         walk(ram, ep, m, 0);
+        if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
+            overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
+            items.resize(before);
+        }
     }
 };
 
