@@ -51,3 +51,22 @@ pktLinkAlphaObjAsm
 particleDraw__Fi
 particleLensFlareRender__FP6QwDataiPPUi
 particleLensFlareTestZbuffer__Fi
+# common/ps: the shadow pass packets (DMA chains, VU1 matrices, GS sprites) and its VU0 culling
+psObjectCull
+psGetMatrix__FP6QwData
+psFovTestResAsm__Fv
+psBldBlkRObjs
+psFindActiveBlockers__FP8_fvectori
+psInitBlockerDMA__Fv
+psBldBlockerPkt__FP8_fvectorii
+psEndBlkObjs__Fi
+psEndBlkDma__Fv
+psGetBlkPktStart__Fv
+psAttachDmaToAlpha__FP9Vu1DmaPkt
+psAttachDmaToMain__FP9Vu1DmaPkt
+psSetVU1ShadowMat__FPA3_fP6QwData
+psInitFilterTexPkt__Fv
+psDrawFilterSprite__FP6QwDataiiiiiiiii
+psInitBorderPkt__Fv
+psDrawBorderSprite__FP6QwDataiiii
+psFovTestAsm__FP8_fvectorP11_hierobject

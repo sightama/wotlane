@@ -132,8 +132,9 @@ def patch_code(buf, base=0, rec=None):
 BASIC = {'i': 'i', 'b': 'b', 'f': 'f', 'c': 'i', 's': 'i', 'l': 'i', 'U': None}
 
 
-def parse_params(rest):
-    """gcc 2.x mangled parameter list -> list of difftest arg tokens, or None when unsupported."""
+def parse_params(rest, off=0):
+    """gcc 2.x mangled parameter list -> list of difftest arg tokens, or None when unsupported.
+    off: index of the first listed parameter in T/N back-references (1 for methods, where 0 is `this`)."""
     if rest == 'v':
         return []
     toks = []
@@ -175,8 +176,8 @@ def parse_params(rest):
             continue
         if c == 'T':
             m = re.match(r'T(\d+)', rest[i:])
-            idx = int(m.group(1))
-            if idx >= len(toks):
+            idx = int(m.group(1)) - off
+            if not 0 <= idx < len(toks):
                 return None
             toks.append(toks[idx])
             i += len(m.group(0))
@@ -185,8 +186,10 @@ def parse_params(rest):
             m = re.match(r'N(\d)(\d)', rest[i:])
             if not m:
                 return None
+            if not 0 <= int(m.group(2)) - off < len(toks):
+                return None
             for _ in range(int(m.group(1))):
-                toks.append(toks[int(m.group(2))])
+                toks.append(toks[int(m.group(2)) - off])
             i += 3
             continue
         return None
@@ -204,7 +207,7 @@ def spec_from_mangled(sym):
         cls_len = int(m.group(3))
         body = m.group(4)
         rest = body[cls_len:]
-        params = parse_params(rest)
+        params = parse_params(rest, 1)
         return None if params is None else ['this'] + params
     m = re.match(r'^(\w+?)__F(\w*)$', sym)
     if m:
