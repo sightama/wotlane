@@ -24,3 +24,26 @@ hierDmaHandler__Fi
 tu:common/partdraw
 # game/Sound and game/StreamingSoundManager are NOT listed: they hold gameplay-level sound decisions (what plays when, pan/volume).
 # The port can stub the audio backend first and implement them later, so they are low priority but not hardware code.
+# VU0 state, microprogram calls, VIF waits and direct DMA (kept as asm by the 2026-10 common pass)
+hier__Fii
+hierStartRotMatPRH
+hierGetRotMatPRH
+hierCheckVifComplete__Fv
+hierWaitForVif1__Fv
+vu0HierRotateAsm__FPA3_A3_fi
+hierGetRotatesAsm__Fi
+vu0FovTestResAsm__Fv
+vu0MulEoForObj__FPA3_f
+vu0LoadEoAsm__FP6QwData
+vu0GetEoAsm__FP6QwData
+mathfRotMatrixRPH__FPA3_fP8_fvector
+mathfRotMatrixRPHNoTrans__FPA3_fP8_fvector
+mathfVectorMinMaxGetMac__FP8_fvectorT0
+viewStoreNorms1InVu0__Fv
+viewStoreNorms2InVu0__Fv
+texmActivateBitBlitTexture__FiP6QwData
+# hand-written assembly that builds the VU1/GS draw packets (the native layer draws instead)
+hierTraverseAsm
+hierCacheForAsm
+pktAddVu1ObjAsm
+pktLinkAlphaObjAsm
