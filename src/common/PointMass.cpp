@@ -31,6 +31,7 @@ public:
 };
 
 #ifdef NON_MATCHING
+/* equivalent (untuned): 2/14 words, size 0x30 vs 0x38 */
 /* 2/14 words: retail zeroes vel/force through derived pointers in a different order */
 void PointMass::init(float mass, _fvector *p)
 {
@@ -60,8 +61,20 @@ void PointMass::applyDampeningForce(float d)
     vecScale(&tmp, &vel, -d);
     vecAdd(&force, &force, &tmp);
 }
-INCLUDE_ASM("asm/nonmatchings/common/PointMass", clampForce__9PointMassf);
 #ifdef NON_MATCHING
+/* equivalent (untuned): 10/38 words, size 0x98 vs 0x98 */
+void PointMass::clampForce(float maxForce)
+{
+    float l2 = force.x * force.x + force.y * force.y + force.z * force.z;
+
+    if (maxForce * maxForce < l2)
+        vecScale(&force, &force, maxForce / sqrtf(l2));
+}
+#else
+INCLUDE_ASM("asm/nonmatchings/common/PointMass", clampForce__9PointMassf);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 18/26 words, size 0x68 vs 0x68 */
 /* 18/26 words: pointer temporaries for &force/&vel get swapped registers */
 void PointMass::resolveForcesEuler(float dt)
 {
@@ -83,4 +96,24 @@ void Spring::init(float rest, float k, float damp)
     b = 0;
     a = 0;
 }
+#ifdef NON_MATCHING
+/* equivalent (untuned): 10/65 words, size 0x104 vs 0xf4 */
+/* Hooke spring with damping along the axis: pushes a and b apart/together by stiffness * stretch + damping * closing speed. */
+void Spring::applyForces(void)
+{
+    FVECTOR d, dv;
+    float len, inv, f;
+
+    vecSub(&d, a->pos, b->pos);
+    len = eeSqrtf(d.x * d.x + d.y * d.y + d.z * d.z);
+    f = stiffness * (len - restLength);
+    vecSub(&dv, &a->vel, &b->vel);
+    inv = 1.0f / len;
+    f = (f + damping * (dv.x * d.x + dv.y * d.y + dv.z * d.z) * inv) * inv;
+    vecScale(&d, &d, f);
+    vecAdd(&b->force, &b->force, &d);
+    vecSub(&a->force, &a->force, &d);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/PointMass", applyForces__6Spring);
+#endif
