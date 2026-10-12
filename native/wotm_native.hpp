@@ -302,6 +302,7 @@ struct DrawItem {
     uint32_t animPkt = 0;   // CHAR_INSTANCE::animPktPtr (paleta de matrizes dos objetos skinned)
     int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
+    uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd*(1-As)
 };
 
 struct Camera {
@@ -727,6 +728,8 @@ public:
         sky.clear();
         sprites.clear();
         atMat_ = 0;
+        animVal_ = 0;
+        blend_ = 0;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
         std::memset(byOp, 0, sizeof byOp);
@@ -1243,6 +1246,14 @@ public:
 
     // Diagnostico: lista os itens skinned (no, triangulos, posicao no mundo, paleta achada?).
     void dumpSkinned(const Ram &ram) {
+        if (std::getenv("WOTM_LISTRIGID")) {   // diagnostico: partes rigidas dos personagens (itens nao skinned com animPkt): no, textura, raio, posicao no mundo, blend
+            for (const DrawItem &it : items) {
+                const MeshData *md = mesh(ram, it.node);
+                if (!it.animPkt || (md && md->skinned)) continue;
+                std::fprintf(stderr, "[rigid] pkt %x node %x tex %u tris %zu raio %.1f pos %.1f %.1f %.1f blend %d f30 %08x %08x\n", it.animPkt, it.node, unsigned(ram.u16(it.node + 0x50)),
+                             md ? md->tris.size() / 3 : size_t(0), ram.f32(it.node + 8), it.m.m[3][0], it.m.m[3][1], it.m.m[3][2], int(it.blend), ram.u32(it.node + 0x30), ram.u32(it.node + 0x34));
+            }
+        }
         for (const DrawItem &it : items) {
             const MeshData *md = mesh(ram, it.node);
             if (!md || !md->skinned) continue;
@@ -1254,6 +1265,12 @@ public:
                 for (const Vtx &v : md->tris) { u0 = std::min(u0, v.u); u1 = std::max(u1, v.u); v0 = std::min(v0, v.v); v1 = std::max(v1, v.v); }
                 std::fprintf(stderr, "   uv u[%.2f %.2f] v[%.2f %.2f] abe=%d\n", u0, u1, v0, v1, int(md->abe));
                 std::fprintf(stderr, "   lowAlpha=%d abe=%d (lowAlpha manda o objeto para o passe translucido, sem profundidade)\n", int(md->lowAlpha), int(md->abe));
+                {   // histograma do alfa de vertice (a*4 efetivo) e media da cor: distingue camada opaca de camada de brilho/aditiva
+                    unsigned h[8] = {0}; double sr = 0, sg = 0, sb = 0;
+                    for (const Vtx &v : md->tris) { ++h[std::min(7, v.a * 4 / 32)]; sr += v.r; sg += v.g; sb += v.b; }
+                    const double n = md->tris.empty() ? 1.0 : double(md->tris.size());
+                    std::fprintf(stderr, "   alfa vtx (a*4 em oitavos de 256): %u %u %u %u %u %u %u %u | cor media rgb %.0f %.0f %.0f\n", h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], sr / n, sg / n, sb / n);
+                }
                 std::fprintf(stderr, "   indices: %u total, %u fora de pos; descartados: %u por ADC, %u degenerados; emitidos %zu; posicoes %u, usadas %u\n", md->totIdx, md->oobIdx, md->dropAdc, md->dropDegen, md->tris.size() / 3, md->posTot, md->posUsed);
             }
             const uint64_t t0v = objectTex0(ram, it.node);
@@ -1315,6 +1332,7 @@ public:
     bool translucent(const Ram &ram, const DrawItem &it) {
         const MeshData *md = mesh(ram, it.node);
         if (md && md->lowAlpha) return true;
+        if (md && md->abe && it.blend) return true;   // mistura aditiva/escurecedora precisa do passe translucido
         for (uint32_t sl = 0; sl < 5; ++sl) {
             if (md && md->slotMask && !(md->slotMask & (1u << sl))) continue;
             const uint64_t k = texKey(ram, it.node, sl);
@@ -1408,6 +1426,14 @@ public:
         const unsigned white = rlGetTextureIdDefault();
         uint64_t cur = ~0ull;
         bool open = false;
+        int curBlend = 0;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
+        auto setBlend = [&](int b) {
+            if (b == curBlend) return;
+            curBlend = b;
+            if (b == 1) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_ADD); rlSetBlendMode(RL_BLEND_CUSTOM); }          // Cs*As + Cd
+            else if (b == 2) { rlSetBlendFactors(RL_ZERO, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD); rlSetBlendMode(RL_BLEND_CUSTOM); }   // Cd*(1-As)
+            else rlSetBlendMode(RL_BLEND_ALPHA);
+        };
         for (const auto &o : order) {
             const DrawItem &it = list[o.item];
             const MeshData *md = mesh(ram, it.node);
@@ -1454,6 +1480,7 @@ public:
             const bool multi = md->slotMask & (md->slotMask - 1);   // mais de um slot usado
             if (o.key != cur || !open || far2near) {
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
+                if (!wire && md->abe) setBlend(it.blend); else if (!wire) setBlend(0);
                 cur = o.key;
                 const unsigned id = wire ? 0 : textureId(ram, it.node, texRemap(slot));
                 rlBegin(wire ? RL_LINES : RL_TRIANGLES);   // rlBegin com outro modo reseta a textura do lote: setar depois
@@ -1529,6 +1556,7 @@ public:
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+        setBlend(0);
         rlSetTexture(0);
         rlEnableBackfaceCulling();
     }
@@ -1548,7 +1576,21 @@ private:
     float eye_[3] = {0, 0, 0};
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
+    uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
+    uint8_t blend_ = 0;    // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
+
+    // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D com ALPHA_1 (data em +0x20, endereco 0x42 em +0x28), TEST_1 e ZBUF_1.
+    // Traduz o ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7) para DrawItem::blend; -1 = ctx sem ALPHA_1 (herda o do pai).
+    static int groupBlend(const Ram &ram, uint32_t ctx) {
+        if (!ctx || !ram.ok(ctx, 0x30) || ram.u32(ctx + 0x14) != 0x10000000 || ram.u32(ctx + 0x18) != 0xE || ram.u32(ctx + 0x28) != 0x42) return -1;
+        switch (ram.u32(ctx + 0x20) & 0xFF) {
+        case 0x44: return 0;   // (Cs-Cd)*As+Cd
+        case 0x48: return 1;   // (Cs-0)*As+Cd: brilho aditivo (Kineticlops)
+        case 0x42: return 2;   // (0-Cd)*As+Cd: escurece o fundo
+        default: return 0;
+        }
+    }
 
     // Paleta de matrizes de um objeto skinned: animPktPtr[lod] e uma cadeia DMA (tag ref 0x3000007d) cujo endereco aponta o
     // bloco de 125 qwords (31 matrizes de 4 qwords a partir de +0x10). Devolve 0 se nao achar.
@@ -1699,8 +1741,15 @@ private:
         const uint32_t op = ram.u32(node) & 0x3F;
         ++byOp[op];
         switch (op) {
-        case 0: items.push_back({m, node, animPkt_, lodIdx_}); break;                                           // OBJECT
-        case 1: kids(ram, node + 0x20, ram.u16(node + 8), m, depth); break;                  // GROUP
+        case 0: items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_}); break;                          // OBJECT
+        case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
+            const uint8_t saved = blend_;
+            const int b = groupBlend(ram, ram.u32(node + 4) & 0x0FFFFFFF);
+            if (b >= 0) blend_ = uint8_t(b);
+            kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
+            blend_ = saved;
+            break;
+        }
         case 2: {                                                                           // LOD
             const uint32_t n = ram.u32(node + 4);
             if (n > 0 && n < 16) {
@@ -1752,12 +1801,14 @@ private:
         case 25: {                                                                          // CHAR_INSTANCE
             // As partes do corpo sao nos ANIM_XFORM (hierarquia rigida, sem skinning). O proprio jogo calcula a matriz local de
             // cada no a cada quadro (hierAnimTransNode) em animOutput.atMat[matrixIdx]; basta le-la.
-            const uint32_t saved = atMat_, savedPkt = animPkt_;
+            const uint32_t saved = atMat_, savedPkt = animPkt_, savedVal = animVal_;
             atMat_ = ram.u32(node + 0xC);
             animPkt_ = ram.u32(node + 0x18);
+            animVal_ = ram.u32(node + 4);
             kids(ram, node + 0x2C, ram.u32(node + 0x28), m, depth);
             atMat_ = saved;
             animPkt_ = savedPkt;
+            animVal_ = savedVal;
             break;
         }
         case 17: {                                                                          // ANIM_XFORM
@@ -1770,7 +1821,11 @@ private:
             break;
         }
         case 38: {                                                                          // ANIM_SCALE: escala e depois translacao
-            if (ram.f32(node + 0xC) == 0.f) break;
+            {   // hierAnimScaleNode nao grava +0xC: a visibilidade e o canal val[vidx] da saida de animacao do CHAR_INSTANCE (-1 = sempre visivel)
+                const int vidx = int16_t(ram.u16(node + 0x10));
+                const float vis = (vidx >= 0 && animVal_ && vidx < 4096) ? ram.f32(animVal_ + 4 * uint32_t(vidx)) : (vidx >= 0 ? ram.f32(node + 0xC) : 1.f);
+                if (vis == 0.f) break;
+            }
             float sx = ram.f32(node + 0x20), sy = ram.f32(node + 0x24), sz = ram.f32(node + 0x28);
             if (sx == 0.f && sy == 0.f && sz == 0.f) sx = sy = sz = 1.f;
             kids(ram, node + 0x60, ram.u32(node + 4),
