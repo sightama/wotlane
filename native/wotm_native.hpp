@@ -54,7 +54,18 @@ constexpr uint32_t tempVramTexAddr = 0x006F8818;  // fim dos recursos (.RTX) na 
 constexpr uint32_t fileStatus = 0x00445390;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C
 constexpr uint32_t texInfo = 0x0050F100;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
 constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
+constexpr uint32_t psBlkLst = 0x0051C600;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
+constexpr uint32_t psLitDirWs = 0x0054CC90;      // direcao da luz das sombras (da cena para a luz), mundo
+constexpr uint32_t psShadowIntens = 0x006F8820;  // float, 80 = 0,625 (escala do GS)
+constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 }
+
+}  // namespace wotm
+
+// Particulas e efeitos: precisa de Ram (acima); a Scene os desenha depois dos translucidos
+#include "wotm_fx.hpp"
+
+namespace wotm {
 
 // ---------------------------------------------------------------- matrizes (vetores-linha)
 
@@ -634,12 +645,25 @@ public:
                 return gs::decodeUpload(im->second.data(), im->second.size(), w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
             return gs::decodeUpload(ram.p + ptr, ram.size - ptr, w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
         }
+        return decodeUploadTex(ram, ptr, t0, px, w, h);
+    }
+
+    // Pixels do pacote de upload em `ptr` (= texInfo[texId]; descritor em +0x24 largura, +0x26 altura, +0x2B PSM, pixels lineares
+    // a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
+    bool decodeUploadTex(const Ram &ram, uint32_t ptr, const gs::Tex0 &t0, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h,
+                         bool grayFallback = false) const {
+        if (!ram.ok(ptr + 0x80)) return false;
+        uint32_t pal[256] = {};
         const uint32_t psm = ram.u8(ptr + 0x2B);
         if (psm == gs::T8 || psm == gs::T4) {
             // A paleta vem do .RTX carregado (loadRtx); sem ela a textura cai para a cor de vertice.
             const auto it = rtxPal.find(t0.cbp);
-            if (it == rtxPal.end()) return false;
-            fillPal(pal, it->second, psm == gs::T8);
+            if (it != rtxPal.end()) fillPal(pal, it->second, psm == gs::T8);
+            else if (grayFallback) {
+                // Particulas: muitas texturas sao mascaras de luminancia/alfa; sem a paleta, rampa cinza com alfa = indice
+                const uint32_t n = psm == gs::T8 ? 256 : 16;
+                for (uint32_t i = 0; i < n; ++i) { const uint32_t v = i * 255 / (n - 1); pal[i] = v | (v << 8) | (v << 16) | (v << 24); }
+            } else return false;
         }
         w = ram.u16(ptr + 0x24); h = ram.u16(ptr + 0x26);
         static const bool t4swz = std::getenv("WOTM_T4SWZ") != nullptr;   // diagnostico: pixels T4 do pacote como memoria do GS (nibbles embaralhados)
@@ -655,6 +679,218 @@ public:
             return true;
         }
         return gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px);
+    }
+
+    // Textura de particula: texId (indice do texInfo global) + TEX0 da tabela de particulas (psm/CBP). 0 = nao decodificou.
+    // WOTM_FXNOGRAY=1: sem a rampa cinza quando a paleta nao esta nos .RTX carregados (diagnostico).
+    unsigned particleTexture(const Ram &ram, uint32_t texId, uint64_t tex0) {
+        if (!texId || texId >= 1000) return 0;
+        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
+        const uint64_t key = (uint64_t(texId) << 40) | (uint64_t(t0.cbp) << 12) | (uint64_t(t0.csa) << 4) | t0.cpsm | (1ull << 61);
+        const auto it = tex_.find(key);
+        if (it != tex_.end()) return it->second.id;
+        static const bool gray = std::getenv("WOTM_FXNOGRAY") == nullptr;
+        const uint32_t ptr = ram.u32(addr::texInfo + 16 * texId) & 0x0FFFFFFF;
+        std::vector<uint32_t> px;
+        uint32_t w = 0, h = 0;
+        Texture2D t{};
+        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray) && w && h && px.size() >= size_t(w) * h) {
+            Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            t = LoadTextureFromImage(img);
+            if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
+        }
+        tex_[key] = t;
+        return t.id;
+    }
+
+    Particles fx;   // sistemas de particulas do quadro (collect junto com a cena, draw depois dos translucidos)
+
+    // ------------------------------------------------------------ sombras projetadas (common/ps)
+    // No retail, cada bloqueador ativo (ate 10 em psBlkLst: monstros e afins, registrados por psBlockerAdd) e desenhado de uma camera
+    // posta na direcao da luz (vista 4, a `radius * fator` da origem) para uma textura pequena, filtrada e reprojetada sobre os objetos
+    // proximos (psBldBlkRObjs). Aqui: a silhueta e rasterizada na CPU num quadro ortografico no espaco da luz (sem trocar de
+    // framebuffer dentro do BeginMode3D, o que quebraria o render texture do runtime) e os triangulos dos objetos proximos sao
+    // redesenhados com essa textura projetada. docs/passos/NATIVO.md ("Sombras").
+    struct ShadowBlocker {
+        int index = 0;               // entrada de psBlkLst
+        float origin[3] = {0, 0, 0}; // cs->trans
+        float extent = 0;            // meio lado do quadro de luz (raio do no * 1,1)
+        std::vector<DrawItem> casters;
+        std::vector<uint32_t> casterNodes;
+    };
+    std::vector<ShadowBlocker> shadows;
+
+    // Bloqueadores ativos, como psFindActiveBlockers: sombras ligadas (psSetShadowOnOff), entrada em uso, cs desenhavel e visivel na vista 0
+    void collectShadows(const Ram &ram) {
+        shadows.clear();
+        static const bool off = std::getenv("WOTM_NOSHADOW") != nullptr;
+        if (off || !ram.u32(addr::psShadowOn)) return;
+        for (int i = 0; i < 10; ++i) {
+            const uint32_t e = addr::psBlkLst + 0x30 * uint32_t(i);
+            const uint32_t cs = ram.u32(e + 0x10);
+            if (ram.u16(e + 0x2E) != 1 || !ram.ok(cs, 0xB0) || !ram.u8(cs + 0xC) || !(ram.u8(cs + 0xE) & 1)) continue;
+            ShadowBlocker b;
+            b.index = i;
+            for (int c = 0; c < 3; ++c) b.origin[c] = ram.f32(cs + 0x10 + 4 * c);
+            const uint32_t rp = ram.u32(e + 0x20);   // &raio da esfera do no raiz (GROUP) do cs; 0 se o no nao e GROUP
+            const float r = rp ? ram.f32(rp) : 0.f;
+            b.extent = (r > 1.f && r < 5000.f ? r : 80.f) * 1.1f;
+            std::vector<DrawItem> keep;
+            keep.swap(items);
+            drawCs(ram, cs, false);
+            const uint32_t cs2 = ram.u32(e + 0x18);   // segundo cs (psBlockerSet2ndCs: o que o monstro segura, por exemplo)
+            if (ram.ok(cs2, 0xB0) && ram.u8(cs2 + 0xC)) drawCs(ram, cs2, false);
+            b.casters.swap(items);
+            items.swap(keep);
+            for (const DrawItem &it : b.casters) b.casterNodes.push_back(it.node);
+            std::sort(b.casterNodes.begin(), b.casterNodes.end());
+            if (!b.casters.empty()) shadows.push_back(std::move(b));
+        }
+    }
+
+    // Desenha as sombras sobre os objetos ja desenhados (depois dos opacos, antes dos translucidos).
+    void drawShadows(const Ram &ram) {
+        if (shadows.empty()) return;
+        float L[3] = {ram.f32(addr::psLitDirWs), ram.f32(addr::psLitDirWs + 4), ram.f32(addr::psLitDirWs + 8)};   // da cena para a luz
+        const float ll = std::sqrt(L[0] * L[0] + L[1] * L[1] + L[2] * L[2]);
+        if (!(ll > 1e-3f)) return;
+        for (float &c : L) c /= ll;
+        // base ortonormal do quadro de luz
+        const float hint[3] = {std::fabs(L[2]) < 0.9f ? 0.f : 1.f, 0.f, std::fabs(L[2]) < 0.9f ? 1.f : 0.f};
+        float R[3] = {hint[1] * L[2] - hint[2] * L[1], hint[2] * L[0] - hint[0] * L[2], hint[0] * L[1] - hint[1] * L[0]};
+        const float rl = std::sqrt(R[0] * R[0] + R[1] * R[1] + R[2] * R[2]);
+        for (float &c : R) c /= rl;
+        const float U[3] = {L[1] * R[2] - L[2] * R[1], L[2] * R[0] - L[0] * R[2], L[0] * R[1] - L[1] * R[0]};
+        float inten = ram.f32(addr::psShadowIntens);   // 80 no psVarInit (escala do GS: 0x80 = 1,0)
+        inten = (inten > 0.f && inten < 1000.f) ? std::min(1.f, inten / 128.f) : 0.625f;
+
+        rlDrawRenderBatchActive();
+        rlDisableDepthMask();
+        rlDisableBackfaceCulling();
+        rlSetBlendMode(BLEND_ALPHA);
+        for (size_t k = 0; k < shadows.size(); ++k) {
+            const ShadowBlocker &b = shadows[k];
+            const unsigned tex = shadowTexture(ram, k, b, R, U);
+            if (!tex) continue;
+            const float E = b.extent;
+            auto lightUV = [&](const float p[3], float &u, float &v, float &h) {
+                const float d[3] = {p[0] - b.origin[0], p[1] - b.origin[1], p[2] - b.origin[2]};
+                u = (d[0] * R[0] + d[1] * R[1] + d[2] * R[2]) / E;
+                v = (d[0] * U[0] + d[1] * U[1] + d[2] * U[2]) / E;
+                h = (d[0] * L[0] + d[1] * L[1] + d[2] * L[2]) / E;   // > 0: entre o bloqueador e a luz
+            };
+            rlBegin(RL_TRIANGLES);
+            rlSetTexture(tex);
+            auto receive = [&](const std::vector<DrawItem> &list) {
+                for (const DrawItem &it : list) {
+                    if (std::binary_search(b.casterNodes.begin(), b.casterNodes.end(), it.node)) continue;
+                    // esfera do objeto (+0x10 centro, +0x1C raio) contra o cilindro de sombra
+                    float c[3];
+                    xform(it.m, ram.f32(it.node + 0x10), ram.f32(it.node + 0x14), ram.f32(it.node + 0x18), c);
+                    const float rad = std::fabs(ram.f32(it.node + 0x1C));
+                    float u, v, h;
+                    lightUV(c, u, v, h);
+                    const float rr = rad / E;
+                    if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
+                    forEachTri(ram, it, [&](const float p[3][3]) {
+                        float tu[3], tv[3], th[3];
+                        for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
+                        if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
+                            (tv[0] < -1 && tv[1] < -1 && tv[2] < -1) || (tv[0] > 1 && tv[1] > 1 && tv[2] > 1) ||
+                            (th[0] > 0.5f && th[1] > 0.5f && th[2] > 0.5f))
+                            return;
+                        for (int i = 0; i < 3; ++i) {
+                            // some acima do bloqueador (lado da luz); puxa o vertice para o olho para nao brigar com a superficie
+                            const float fade = th[i] < 0.15f ? 1.f : std::max(0.f, 1.f - (th[i] - 0.15f) / 0.35f);
+                            float q[3] = {p[i][0], p[i][1], p[i][2]};
+                            if (eyeOk_) {
+                                const float dx = eye_[0] - q[0], dy = eye_[1] - q[1], dz = eye_[2] - q[2];
+                                const float dl = std::sqrt(dx * dx + dy * dy + dz * dz);
+                                if (dl > 1e-3f) { const float s = std::min(2.f, dl * 0.002f) / dl; q[0] += dx * s; q[1] += dy * s; q[2] += dz * s; }
+                            }
+                            rlColor4ub(255, 255, 255, uint8_t(255.f * inten * fade));
+                            rlTexCoord2f(tu[i] * 0.5f + 0.5f, tv[i] * 0.5f + 0.5f);
+                            rlVertex3f(q[0], q[1], q[2]);
+                        }
+                    });
+                }
+            };
+            receive(items);
+            rlEnd();
+            rlDrawRenderBatchActive();
+        }
+        rlSetTexture(0);
+        rlEnableDepthMask();
+        rlEnableBackfaceCulling();
+    }
+
+    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots
+    template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
+        const MeshData *md = mesh(ram, it.node);
+        if (!md || !md->valid) return;
+        const uint32_t pal = md->skinned ? palette(ram, it) : 0;
+        const auto &t = md->tris;
+        float p[3][3];
+        for (size_t k = 0; k + 2 < t.size(); k += 3) {
+            for (int c = 0; c < 3; ++c) {
+                if (pal) skinVertex(ram, pal, it.m, t[k + c], p[c]);
+                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+            }
+            f(p);
+        }
+    }
+
+    // Silhueta do bloqueador no quadro de luz: rasterizada na CPU (kShadowRes^2), borrada (o retail filtra com sprites) e enviada
+    // como textura preta com alfa = cobertura. Uma textura por posicao em `shadows`, reaproveitada entre quadros.
+    unsigned shadowTexture(const Ram &ram, size_t slot, const ShadowBlocker &b, const float R[3], const float U[3]) {
+        constexpr int N = kShadowRes;
+        std::vector<float> cov(size_t(N * N), 0.f);
+        const float E = b.extent;
+        for (const DrawItem &it : b.casters) {
+            forEachTri(ram, it, [&](const float p[3][3]) {
+                float x[3], y[3];
+                for (int i = 0; i < 3; ++i) {
+                    const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
+                    x[i] = ((d[0] * R[0] + d[1] * R[1] + d[2] * R[2]) / E * 0.5f + 0.5f) * N;
+                    y[i] = ((d[0] * U[0] + d[1] * U[1] + d[2] * U[2]) / E * 0.5f + 0.5f) * N;
+                }
+                const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+                if (!(std::fabs(area) > 1e-6f)) return;
+                const int x0 = std::max(1, int(std::floor(std::min({x[0], x[1], x[2]})))), x1 = std::min(N - 2, int(std::ceil(std::max({x[0], x[1], x[2]}))));
+                const int y0 = std::max(1, int(std::floor(std::min({y[0], y[1], y[2]})))), y1 = std::min(N - 2, int(std::ceil(std::max({y[0], y[1], y[2]}))));
+                for (int py = y0; py <= y1; ++py)
+                    for (int px = x0; px <= x1; ++px) {
+                        const float cx = px + 0.5f, cy = py + 0.5f;
+                        const float w0 = (x[1] - cx) * (y[2] - cy) - (x[2] - cx) * (y[1] - cy);
+                        const float w1 = (x[2] - cx) * (y[0] - cy) - (x[0] - cx) * (y[2] - cy);
+                        const float w2 = (x[0] - cx) * (y[1] - cy) - (x[1] - cx) * (y[0] - cy);
+                        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) cov[size_t(py * N + px)] = 1.f;
+                    }
+            });
+        }
+        for (int pass = 0; pass < 2; ++pass) {   // caixa 3x3 duas vezes; a borda fica em 0 (CLAMP nao estende sombra)
+            std::vector<float> o(cov.size(), 0.f);
+            for (int y = 1; y < N - 1; ++y)
+                for (int x = 1; x < N - 1; ++x) {
+                    float s = 0;
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx) s += cov[size_t((y + dy) * N + x + dx)];
+                    o[size_t(y * N + x)] = s / 9.f;
+                }
+            cov.swap(o);
+        }
+        std::vector<uint32_t> px(cov.size());
+        for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
+        if (shadowTex_.size() <= slot) shadowTex_.resize(slot + 1);
+        Texture2D &t = shadowTex_[slot];
+        if (!t.id) {
+            Image img{px.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            t = LoadTextureFromImage(img);
+            if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
+        } else {
+            UpdateTexture(t, px.data());
+        }
+        return t.id;
     }
 
     // Textura de efeito (particulas): `texInfo[id]` guarda o pacote (como nos objetos) e o TEX0 do efeito (fx[i].TEX0ptr) traz psm e CBP da paleta.
@@ -775,6 +1011,8 @@ public:
         }
         csList(ram, addr::csActiveList);
         csList(ram, addr::csHPActiveList);
+        fx.collect(ram);          // particulas com cor/textura/mistura do retail (wotm_fx.hpp); destroços (13) ficam com collectParticles
+        collectShadows(ram);
         collectParticles(ram);
         static const bool ds = std::getenv("WOTM_DESTRSTAT") != nullptr;
         if (ds) { std::fprintf(stderr, "[destr] estados:"); for (int i = 0; i < 8; ++i) std::fprintf(stderr, " %u", destrHist_[i]); std::fprintf(stderr, "\n"); }
@@ -888,7 +1126,7 @@ public:
             const uint32_t b = kFx + i * kStride;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t type = ram.u32(b + 0x2E90) & 0xFF;
-            if (!np || np > 1024 || (type != 13 && type != 3 && type != 4 && type != 15)) continue;
+            if (!np || np > 1024 || type != 13) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));
@@ -1334,6 +1572,7 @@ public:
         rlEnableDepthTest();
         static const bool onePass = std::getenv("WOTM_ONEPASS") != nullptr;   // diagnostico: tudo num passe so (sem separar translucidos)
         drawList(ram, items, wire, (wire || onePass) ? -1 : 0);
+        if (!wire) drawShadows(ram);   // sobre os opacos, antes dos translucidos
         if (!wire && !onePass) {
             rlDrawRenderBatchActive();
             rlDisableDepthMask();   // translucidos testam profundidade mas nao a escrevem
@@ -1341,7 +1580,9 @@ public:
             rlDrawRenderBatchActive();
             rlEnableDepthMask();
         }
-        if (!wire) drawSprites(ram);   // particulas (destroços, poeira) por cima do mundo
+        // particulas por ultimo (testam profundidade, nao escrevem): destroços interpolados (drawSprites), depois os demais tipos na ordem de particleDraw
+        if (!wire) drawSprites(ram);
+        if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
         if (useShader) EndShaderMode();
     }
 
@@ -1687,6 +1928,8 @@ private:
     Shader alphaShader_{};
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
+    std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
+    static constexpr int kShadowRes = 128;
     uint32_t resSig_ = 0;   // assinatura dos recursos em fileStatus ja carregados (loadResources)
     GameCamera cam_;   // camera do ultimo collect/blend (eixos para os sprites)
     bool eyeOk_ = false;

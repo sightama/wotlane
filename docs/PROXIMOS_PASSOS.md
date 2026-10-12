@@ -45,7 +45,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 
 ## Índice dos detalhes (`docs/passos/`)
 - [RUNTIME.md](passos/RUNTIME.md): jogo recompilado no Windows, variáveis `PS2X_*`, roteiro de pad, build rápido sem LTCG, teclado, próximos passos do runtime.
-- [NATIVO.md](passos/NATIVO.md): `native/` (raylib), texturas/paletas, desenho ao vivo, monstros skinned, LOD, investigação dos buracos nos monstros.
+- [NATIVO.md](passos/NATIVO.md): `native/` (raylib), texturas/paletas, desenho ao vivo, monstros skinned, LOD, investigação dos buracos nos monstros, partículas/efeitos e sombras projetadas.
 - [FERRAMENTAS.md](passos/FERRAMENTAS.md): `tools/`, headers compartilhados (`include/`), trabalho em TheGame, difftest.
 - [ARMADILHAS.md](passos/ARMADILHAS.md): bugs/pegadinhas já vistos (gcc 2.95, gp, rodata, `sqrtf`, `__asm__("sym")`, build NM).
 - [TESTE_PCSX2.md](passos/TESTE_PCSX2.md): ELF halfcpp, layout `gen_nm_ld.py`, heap, bugs de comportamento achados jogando.
