@@ -18,18 +18,11 @@ Ao contribuir, você concorda que sua contribuição seja distribuída sob a [GP
 
 ## Fluxo
 1. Fork do repo (ou branch, se você tem acesso de escrita) a partir da `master` atualizada: `git switch -c <tu>-<assunto>`.
-2. Um PR por TU ou por pequeno grupo de funções relacionadas. PRs pequenos são revisados rápido.
+2. Um PR por TU ou por pequeno grupo de funções relacionadas.
 3. Antes de cada commit: `sh tools/wsl/gate.sh` tem que terminar em `ROM OK`.
 4. **Não commite** `config/status.csv`, o bloco de progresso do README nem `docs/progress.svg`: são gerados e causam conflito em todo PR. O dono regenera depois do merge. Por isso **não ative** o hook `.githooks/pre-commit` (ele reescreve e dá `git add` nesses arquivos) e evite `git commit -a`.
-5. Abra o PR contra `master` preenchendo o template. Não há CI (não dá para buildar sem a ROM), então a saída do `gate.sh` no PR é a prova.
+5. Abra o PR contra `master` preenchendo o template. Não há CI (não dá para buildar sem a ROM), então a saída do `gate.sh` no PR é a prova. O merge na `master` é feito só pelo dono e por `LostTwilightG`.
 6. Mantenha o branch atualizado com `git rebase origin/master`.
 
-## O que revisamos
-- A ROM bate (SHA1) com o build padrão.
-- Funções que não batem estão em `#ifdef NON_MATCHING` com nota de pontuação (`tools/nm_wrap.py`).
-- Para código equivalente: retorno usado pelos chamadores, sequência de chamadas, strides/tamanhos de struct e delay slots foram conferidos (lista de armadilhas no `CLAUDE.md`).
-- Funções na ordem de endereço original; sem helpers `static` fora de `NON_MATCHING`.
-- Nada de código de hardware; nada de mudança de comportamento disfarçada.
-
 ## Usando Claude Code
-Ok e incentivado. O `CLAUDE.md` já carrega as regras. Lembre o seu Claude de **não dar push direto na `master`** e de rodar o gate antes de cada commit.
+Ok e incentivado. O `CLAUDE.md` já carrega as regras. Lembre o seu Claude de rodar o gate antes de cada commit.
