@@ -22,6 +22,7 @@ from elftools.elf.elffile import ELFFile
 ROOT = Path(__file__).resolve().parent.parent
 INCLUDE_ASM = re.compile(r'INCLUDE_ASM\(\s*"[^"]*"\s*,\s*([^)\s]+)\s*\)')
 EQUIV = re.compile(r'#ifdef NON_MATCHING\b.*?#else\s*\n\s*INCLUDE_ASM\(\s*"[^"]*"\s*,\s*([^)\s]+)\s*\)', re.S)
+EQUIV_BLOCK = re.compile(r'#ifdef NON_MATCHING\b(?:(?!#ifdef NON_MATCHING|#endif).)*?#else\s*\n((?:\s*INCLUDE_ASM\([^)]*\);\s*\n)+)#endif', re.S)
 STATES = ('matched', 'equivalent', 'hw', 'asm')
 
 
@@ -56,6 +57,9 @@ def main():
         text = src.read_text() if src else ''
         all_asm = set(INCLUDE_ASM.findall(text)) if src else None
         equiv = set(EQUIV.findall(text))
+        # a NON_MATCHING block may stand for several functions (e.g. template instances): every INCLUDE_ASM of its #else
+        for blk in EQUIV_BLOCK.findall(text):
+            equiv |= set(INCLUDE_ASM.findall(blk))
 
         def listed(fname, names):
             return any(fname == n or n.startswith(fname + '_') for n in names)
