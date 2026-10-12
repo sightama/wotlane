@@ -156,9 +156,15 @@ def parse_params(rest):
                 n = int(m.group(1))
                 i += len(m.group(1)) + n
             elif i < len(rest) and rest[i] == 'A':
-                m = re.match(r'A\d+_', rest[i:])
-                i += len(m.group(0))
-                continue
+                # pointer to array (PA3_f = float (*)[4], PA3_A3_f = float (*)[4][4]): one pointer argument
+                while i < len(rest) and rest[i] == 'A':
+                    m = re.match(r'A\d+_', rest[i:])
+                    i += len(m.group(0))
+                if i < len(rest) and rest[i].isdigit():
+                    m = re.match(r'(\d+)', rest[i:])
+                    i += len(m.group(1)) + int(m.group(1))
+                else:
+                    i += 2 if rest[i] == 'U' else 1
             else:
                 i += 1
             toks.append('p')

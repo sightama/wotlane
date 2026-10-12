@@ -1309,7 +1309,7 @@ INCLUDE_ASM("asm/nonmatchings/common/animation", animationAddToActiveTree__FG11_
 void animationUpdate(_animation *anim, _animCharInstance *ci)
 {
     AnimControlNode *c = &ci->animCtx[anim->animIdx];
-    c->animOutput.atMat = ci->animOutput.atMat;
+    c->animOutput = ci->animOutput;
     animationUpdateFromControlNode(c, ci);
 }
 #else
