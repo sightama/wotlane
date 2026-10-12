@@ -1343,7 +1343,7 @@ public:
         if (!wire) drawSprites(ram);   // particulas (destroços, poeira) por cima do mundo
         rlDrawRenderBatchActive();
         rlDisableDepthTest();   // icones de botao por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
-        drawList(ram, overlay, wire);
+        drawList(ram, overlay, wire, -1, true);
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
@@ -1366,7 +1366,8 @@ public:
     }
 
     // pass: -1 tudo; 0 so opacos/recortados; 1 so translucidos (ordenados do mais longe ao mais perto)
-    void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1) {
+    // fadeByNode: multiplica o alfa pelo float em +0x4C do objeto (fade dos botoes: screenSetButtonAlpha grava `targetAlpha` ali)
+    void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1, bool fadeByNode = false) {
         rlDisableBackfaceCulling();
         {   // diagnostico: WOTM_CMP=1 compara, por triangulo, as arestas de dois itens skinned com a mesma malha (ex.: jogador x inimigo)
             static const bool cmp = std::getenv("WOTM_CMP") != nullptr;
@@ -1514,6 +1515,7 @@ public:
             const auto &t = md->tris;
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
+            const float fade = fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f;
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
             static const uint32_t palOverride = std::getenv("WOTM_PALBLOCK") ? uint32_t(std::strtoul(std::getenv("WOTM_PALBLOCK"), nullptr, 16)) : 0;   // diagnostico
@@ -1569,7 +1571,7 @@ public:
                         if (idcMode) { const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
                         else if (v.isAdc) rlColor4ub(255, 0, 0, 255);   // WOTM_SHOWADC
                         else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
-                        else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255, v.a * 4)));
+                        else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
                         if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
