@@ -88,3 +88,5 @@ bspInterp__FP8_fvector
 # texm: hand-written VU0 hierarchy update
 hierCsUpdateAsm
 hierCacheWorldMatsAsm
+# peds: the stamped-sprite packet of the crowd
+stampPacketInit__FP13_ParticleType
