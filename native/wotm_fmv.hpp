@@ -233,6 +233,7 @@ public:
         demux_.close();
         frames_.clear();
         pcm_.clear();
+        blk_.clear();   // senao o resto de um par L/R do filme anterior desloca o PCM do proximo (chiado)
         audioHdr_.clear();
         audioState_ = 0;
         demuxEnd_ = flushed_ = false;
@@ -643,7 +644,7 @@ private:
             Image img{canvas_.data(), W, H, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             screenTex_ = LoadTextureFromImage(img);
             SetTextureFilter(screenTex_, TEXTURE_FILTER_BILINEAR);
-            SetTextureWrap(screenTex_, TEXTURE_WRAP_CLAMP);
+            SetTextureWrap(screenTex_, TEXTURE_WRAP_REPEAT);   // o mesh do telao tem UV fora de 0..1 (o GS do jogo repete)
         } else {
             UpdateTexture(screenTex_, canvas_.data());
         }
