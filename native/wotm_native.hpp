@@ -443,7 +443,7 @@ struct TextQuad {
 // Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada) para interpolar entre dois quadros.
 struct Snapshot {
     std::vector<Sprite> sprites;
-    std::vector<DrawItem> items, sky;
+    std::vector<DrawItem> items, sky, overlay;
     GameCamera cam;
     double t = 0.0;     // relogio da apresentacao no momento da captura (segundos)
     uint32_t g = 0;     // contador de quadros do jogo
@@ -474,6 +474,7 @@ class Scene {
 public:
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
+    std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
     uint32_t visited = 0;
@@ -979,6 +980,7 @@ public:
     void collect(const Ram &ram, int maxLod = -1) {
         items.clear();
         sky.clear();
+        overlay.clear();
         sprites.clear();
         atMat_ = 0;
         animVal_ = 0;
@@ -1024,6 +1026,7 @@ public:
         Snapshot sn;
         sn.items = items;
         sn.sky = sky;
+        sn.overlay = overlay;
         sn.sprites = sprites;
         sn.cam = readGameCamera(ram, 0);
         sn.t = now;
@@ -1084,6 +1087,7 @@ public:
         };
         mix(A.items, B.items, items);
         mix(A.sky, B.sky, sky);
+        mix(A.overlay, B.overlay, overlay);
         {   // particulas: mesma (fx, indice) nos dois quadros -> posicao, tamanho e rotacao misturados
             std::unordered_map<uint32_t, const Sprite *> am;
             am.reserve(A.sprites.size() * 2);
@@ -1583,6 +1587,11 @@ public:
         // particulas por ultimo (testam profundidade, nao escrevem): destroços interpolados (drawSprites), depois os demais tipos na ordem de particleDraw
         if (!wire) drawSprites(ram);
         if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+        rlDrawRenderBatchActive();
+        rlDisableDepthTest();   // icones de botao por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
+        drawList(ram, overlay, wire, -1, true);
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
         if (useShader) EndShaderMode();
     }
 
@@ -1603,7 +1612,8 @@ public:
     }
 
     // pass: -1 tudo; 0 so opacos/recortados; 1 so translucidos (ordenados do mais longe ao mais perto)
-    void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1) {
+    // fadeByNode: multiplica o alfa pelo float em +0x4C do objeto (fade dos botoes: screenSetButtonAlpha grava `targetAlpha` ali)
+    void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1, bool fadeByNode = false) {
         rlDisableBackfaceCulling();
         {   // diagnostico: WOTM_CMP=1 compara, por triangulo, as arestas de dois itens skinned com a mesma malha (ex.: jogador x inimigo)
             static const bool cmp = std::getenv("WOTM_CMP") != nullptr;
@@ -1751,6 +1761,7 @@ public:
             const auto &t = md->tris;
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
+            const float fade = fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f;
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
             static const uint32_t palOverride = std::getenv("WOTM_PALBLOCK") ? uint32_t(std::strtoul(std::getenv("WOTM_PALBLOCK"), nullptr, 16)) : 0;   // diagnostico
@@ -1806,7 +1817,7 @@ public:
                         if (idcMode) { const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
                         else if (v.isAdc) rlColor4ub(255, 0, 0, 255);   // WOTM_SHOWADC
                         else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
-                        else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255, v.a * 4)));
+                        else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
                         if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
@@ -2224,13 +2235,18 @@ private:
         }
     }
 
+    // Icones de botao (X, O, quadrado, triangulo) de `McButtons`: ids que `McButtons::initButton` aceita (0x1F51..0x1F54 e 0x240E..0x2411).
+    // `drawButtonsForString` liga o `drawMe` e posiciona cada um com `AlignCsWithView` (alguns passos a frente da camera, orientado como ela),
+    // entao nao sao HUD de espaco de tela. Ficam em z perto de 0 (podem cair abaixo do chao do cenario): o jogo os desenha por cima.
+    static bool isButtonId(uint32_t id) { return (id >= 0x1F51 && id <= 0x1F54) || (id >= 0x240E && id <= 0x2411); }
+
     // Um `_cs` (instancia com matriz e posicao proprias): epNode em +0, drawMe +0xC, trans +0x10, mat +0x20, scaleMe +0xF, scale +0x80
     void drawCs(const Ram &ram, uint32_t cs, bool needDrawMe, const float *at = nullptr) {
         if (!ram.ok(cs, 0xB0) || (needDrawMe && !ram.u8(cs + 0xC))) return;
         const uint32_t ep = ram.u32(cs);
         if (!ram.ok(ep)) return;
         const uint32_t id = ram.u32(ep) >> 18;   // id do objeto (14 bits altos); 0x1C20..0x2133 = elementos de HUD (espaco de tela)
-        if (needDrawMe && id >= 0x1C20 && id <= 0x2133) return;
+        if (needDrawMe && id >= 0x1C20 && id <= 0x2133 && !isButtonId(id)) return;
         M4 m = readM4(ram, cs + 0x20);
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
@@ -2239,7 +2255,12 @@ private:
             const float sx = ram.f32(cs + 0x80), sy = ram.f32(cs + 0x84), sz = ram.f32(cs + 0x88);
             m = mul(scaleM(sx, sy, sz), m);
         }
+        const size_t before = items.size();
         walk(ram, ep, m, 0);
+        if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
+            overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
+            items.resize(before);
+        }
     }
 };
 
