@@ -83,3 +83,8 @@ fontSpritePrint__FiPc
 fontBuildPrim__FicP6QwData
 fontInitPacket__FP6QwData10_vramAddrs
 fontSetTexId__FP9_hierhead
+# bsp: interpolation from the VU0 registers bspPlaneTest2Vec leaves behind (unused)
+bspInterp__FP8_fvector
+# texm: hand-written VU0 hierarchy update
+hierCsUpdateAsm
+hierCacheWorldMatsAsm

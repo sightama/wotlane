@@ -69,7 +69,7 @@ public:
     int pad48;              // 0x48
     unsigned skipId2;       // 0x4C node id2 of the tested cs (its own hulls are skipped)
     int skipSelf;           // 0x50
-    int pad54;              // 0x54
+    int triggers;           // 0x54 walk the trigger nodes instead of the hulls (tdTest)
     _hierhead *hull;        // 0x58 current hull node
     float (*mat)[4];        // 0x5C its world matrix
     unsigned short hatId1;  // 0x60 ids of the cs the hull belongs to
