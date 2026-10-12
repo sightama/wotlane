@@ -90,3 +90,6 @@ hierCsUpdateAsm
 hierCacheWorldMatsAsm
 # peds: the stamped-sprite packet of the crowd
 stampPacketInit__FP13_ParticleType
+# input: IOP module loading and the libpad state machine
+inputInit__Fv
+inputUpdateState__Fii
