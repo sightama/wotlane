@@ -26,6 +26,20 @@ public:
         low = (char *)(q + 1);
         *q = old;
     }
+    /* Releases everything allocated since the last pushMark. */
+    void popMark(void)
+    {
+        low = (char *)mark;
+        mark = *(int *)mark;
+    }
+    /* 16-byte aligned allocation from the low end. */
+    void *alloc16(unsigned size)
+    {
+        char *p = (char *)(((int)low + 15) & ~15);
+
+        low = p + size;
+        return p;
+    }
 };
 
 #endif

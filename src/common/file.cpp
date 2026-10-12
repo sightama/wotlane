@@ -1,4 +1,5 @@
 #include "common.h"
+#include "sce_cdvd.h"
 
 #define FILE_MAX_SLOTS 14
 
@@ -23,9 +24,6 @@ struct sceCdRMode {
 };
 extern sceCdRMode cdReadMode;
 
-struct sceCdCLOCK {
-    unsigned char stat, second, minute, hour, pad, day, month, year;
-};
 
 struct sceCdlFILE {
     unsigned int lsn;
@@ -90,7 +88,6 @@ char *strcpy(char *dst, const char *src);
 unsigned int sceCdGetReadPos(void);
 int sceCdRead(unsigned int lsn, unsigned int sectors, void *buf, sceCdRMode *mode);
 int sceCdSync(int mode);
-int sceCdReadClock(sceCdCLOCK *clock);
 int sceOpen(const char *name, int flags, ...);
 int sceWrite(int fd, const void *buf, int size);
 int sceClose(int fd);

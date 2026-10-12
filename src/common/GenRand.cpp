@@ -1,15 +1,6 @@
 #include "common.h"
 
-class GenRand {
-public:
-    unsigned mt[624];
-    int mti;
-
-    GenRand();
-    GenRand(unsigned s);
-    void seed(unsigned s);
-    unsigned rand(void);
-};
+#include "gen_rand.h"
 
 GenRand::GenRand()
 {

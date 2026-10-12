@@ -125,3 +125,9 @@ game/GrappleOHAttack
 game/GrappleThrow
 game/FinalBoss
 game/PlantBoss
+common/AnimCurve
+common/mathf
+common/animation
+common/texm
+common/view
+common/tod

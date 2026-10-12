@@ -7,8 +7,13 @@
 #include "hieri_types.h"
 
 /* ---- animation ---- */
+/* Names one animation of one character instance (common/animation). Passed by value almost everywhere. */
 struct _animHandle {
-    int a, b, c, d;
+    _animCharInstance *ci;   // 0x0 character instance (null = invalid handle)
+    _animControlNode *ctl;   // 0x4 &ci->animCtx[animIdx]
+    _animprocnode *proc;     // 0x8 procedural node, for animationAddProcBlend
+    short animIdx;           // 0xC index in ci->character->animations (-1 = none)
+    short pad;               // 0xE
 };
 void animationGetHandle(_animHandle *h, unsigned a, unsigned b, unsigned c);
 void animationStart(_animHandle h, bool loop);

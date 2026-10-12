@@ -1,0 +1,27 @@
+#include "common.h"
+
+INCLUDE_ASM("asm/nonmatchings/common/tod", todBoundAngle__FPf);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todCalculateValue__Fiff);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todInit__Fv);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todInitStats__Fv);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todUpdate__Fi);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todActive__Fv);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todGetTOD__FPiPfP10_todInfo14);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todSetTOD__FifPvf);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todGetCurrentTOD__Fv);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todGetAmbient__FPfN20);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todSetSkyEntry__FP9_hierhead);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todSetSkyObjects__Fiffffff);
+INCLUDE_ASM("asm/nonmatchings/common/tod", todSetPlightsActive__Fii);
+INCLUDE_ASM("asm/nonmatchings/common/tod", __12CTODLinkList);
+INCLUDE_ASM("asm/nonmatchings/common/tod", _$_12CTODLinkList);
+INCLUDE_ASM("asm/nonmatchings/common/tod", AddEntry__12CTODLinkList);
+INCLUDE_ASM("asm/nonmatchings/common/tod", DeleteEntry__12CTODLinkListi);
+INCLUDE_ASM("asm/nonmatchings/common/tod", GetNumEntries__12CTODLinkList);
+INCLUDE_ASM("asm/nonmatchings/common/tod", FindNodeByTime__12CTODLinkListf);
+INCLUDE_ASM("asm/nonmatchings/common/tod", FindFreeNode__12CTODLinkList);
+INCLUDE_ASM("asm/nonmatchings/common/tod", SortList__12CTODLinkList);
+INCLUDE_ASM("asm/nonmatchings/common/tod", ClearNode__12CTODLinkListP9_LinkNode);
+INCLUDE_ASM("asm/nonmatchings/common/tod", __static_initialization_and_destruction_0_00225688);
+INCLUDE_ASM("asm/nonmatchings/common/tod", _GLOBAL_$I$todLink);
+INCLUDE_ASM("asm/nonmatchings/common/tod", _GLOBAL_$D$todLink);
