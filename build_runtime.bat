@@ -42,12 +42,12 @@ if not exist "%FOUND%\%BAT%" (
 )
 
 echo Runtime: %FOUND%
-echo Compilando com %BAT% ^(pode levar alguns minutos; log em %LOG%^)...
-set "RT=%FOUND%"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$d=$env:RT; (Get-Item \"$d\PS2Recomp\ps2xRuntime\src\lib\ps2_runtime.cpp\").LastWriteTime = Get-Date; cmd /c \"`\"$d\$env:BAT`\"\"; Get-Content \"$d\$env:LOG\" -Tail 2"
+echo Compilando com %BAT% ^(log em %FOUND%\%LOG%^)...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%REPO%\tools\build_runtime.ps1" "%FOUND%" "%BAT%" "%LOG%"
+set "RC=%errorlevel%"
 echo.
-echo Se a ultima linha for ninja_exit=0, o executavel esta atualizado.
-exit /b %errorlevel%
+if "%RC%"=="0" (echo Executavel atualizado.) else (echo Build falhou ^(codigo %RC%^); veja %FOUND%\%LOG%.)
+exit /b %RC%
 
 :check
 rem %1 = pasta candidata; define FOUND se tiver run_live.ps1
