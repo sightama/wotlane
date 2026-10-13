@@ -2561,7 +2561,92 @@ void MonsterSound::playPunchSound(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playPunchSound__12MonsterSound);
 #endif
+/* One of three victory cries (anim 0x82-0x84) per type; at full volume 0x400 on level 26. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 63/368 words, size 0x5c0 vs 0x4a4 (retail shares one call for all cases) */
+void MonsterSound::playVictorySound(int anim)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (game->m_levelId == 26)
+        vol = 0x400;
+    switch (m_monster->m_typeBits) {
+    case 0x20:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 0xA, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 0xB, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 0xC, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x40:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x17, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x18, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x19, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x60:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 0xA, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 0xB, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 0xC, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x80:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0x10, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0x11, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0x12, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0xA0:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0x14, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0x15, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0x16, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0xE0:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0x12, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0x13, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0x14, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x100:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0xF, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0x10, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0x11, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x120:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0xE, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0xF, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0x10, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x140:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x11, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x12, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x13, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x160:
+        switch (anim) {
+        case 0x82: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0x12, vol, pan, 0, 0); break;
+        case 0x83: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0x13, vol, pan, 0, 0); break;
+        case 0x84: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0x14, vol, pan, 0, 0); break;
+        }
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playVictorySound__12MonsterSoundi);
+#endif
 void MonsterSound::playTakeBatHitSound(void)
 {
     int vol = 0;
@@ -3203,7 +3288,110 @@ void MonsterSound::playJumpSound(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playJumpSound__12MonsterSound);
 #endif
+/* One of three death cries (anim 0x78-0x7A) per type; on level 3 in game mode 1, player slot 2 of type 0xA0 uses the level
+   bank's version of the first. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 78/414 words, size 0x678 vs 0x560 (retail shares one call for all cases) */
+void MonsterSound::playDeathSound(int anim)
+{
+    int vol = 0;
+    int pan = 0;
+    switch (m_monster->m_typeBits) {
+    case 0x1A0:
+    case 0x1E0:
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+        break;
+    default:
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+        break;
+    }
+    Monster *m = m_monster;
+    switch (m->m_typeBits) {
+    case 0x20:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 1, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 0xD, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 0xE, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x40:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0xB, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x1A, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x1B, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x60:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 1, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 0xE, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 0xF, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x80:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 3, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0x13, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0x14, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0xA0:
+        if (shell->m_levelNum == 3 && m->m_playerNum == 2 && game->m_gameMode == 1) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 3, vol, pan, 0, 0);
+            break;
+        }
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0x17, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0x18, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0xE0:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 2, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0x16, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0x17, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x100:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 2, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0x12, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0x13, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x120:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 2, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0x12, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0x13, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x140:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 2, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x14, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x15, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x160:
+        switch (anim) {
+        case 0x78: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 2, vol, pan, 0, 0); break;
+        case 0x79: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0x15, vol, pan, 0, 0); break;
+        case 0x7A: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0x16, vol, pan, 0, 0); break;
+        }
+        break;
+    case 0x1A0:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 1, vol, pan, 0, 0);
+        break;
+    case 0x1E0:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0x16, vol, pan, 0, 0);
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playDeathSound__12MonsterSoundi);
+#endif
 void MonsterSound::playSonicRoarSound(void)
 {
     int vol = 0;
