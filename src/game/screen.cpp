@@ -704,7 +704,104 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE2F0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenSelect1AI__Fv);
+#ifdef NON_MATCHING
+extern int numSelectables2853 __asm__("numSelectables.2853");
+extern int PlayerConfig;
+__asm__("#SNFIX_SMALL PlayerConfig");
+/* Controller configuration: left/right (codes 3/4) pick one of the configurations (m_menuItemSw[4][0] shows it), confirm stores it
+   in m_ctlrCfg[PlayerConfig] (the player whose pad is being set up) and goes back. While configuring player 2 (PlayerConfig == 1)
+   pad 2 drives the screen as well. NON_MATCHING: 3/297 words differ, 0x448 bytes vs 0x4A4 (untuned). */
+void screenCtlrCfg(void)
+{
+    int sel;
+
+    if (screenFirstPass != 0)
+        screenFirstPass = 0;
+    switch (screenGetInput(1) & 0xFFFF) {
+    case 3:
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2853;
+        hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 4:
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel < numSelectables2853 ? sel + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        switch (currentSelection[currScreen]) {
+        case 1:
+            if (PlayerConfig == 0)
+                shell->m_ctlrCfg[0] = 1;
+            else
+                shell->m_ctlrCfg[1] = 1;
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            break;
+        case 2:
+            if (PlayerConfig == 0)
+                shell->m_ctlrCfg[0] = 2;
+            else
+                shell->m_ctlrCfg[1] = 2;
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            break;
+        case 3:
+            if (PlayerConfig == 0)
+                shell->m_ctlrCfg[0] = 3;
+            else
+                shell->m_ctlrCfg[1] = 3;
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            break;
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        changeScreen(4, prevScreen, -1, 0xB, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        break;
+    }
+    if (PlayerConfig == 1) {
+        switch (screenGetInput(2) & 0xFFFF) {
+        case 3:
+            sel = currentSelection[currScreen];
+            currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2853;
+            hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+            break;
+        case 4:
+            sel = currentSelection[currScreen];
+            currentSelection[currScreen] = sel < numSelectables2853 ? sel + 1 : 1;
+            hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+            break;
+        case 6:
+            switch (currentSelection[currScreen]) {
+            case 1:
+                shell->m_ctlrCfg[1] = 1;
+                changeScreen(4, prevScreen, -1, 0xB, true);
+                break;
+            case 2:
+                shell->m_ctlrCfg[1] = 2;
+                changeScreen(4, prevScreen, -1, 0xB, true);
+                break;
+            case 3:
+                shell->m_ctlrCfg[1] = 3;
+                changeScreen(4, prevScreen, -1, 0xB, true);
+                break;
+            }
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+            break;
+        case 5:
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+            break;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCtlrCfg__Fv);
+#endif
 #ifdef NON_MATCHING
 /* Two-player game modes: 1 = free for all (mode 3, level list PO_MPFreeForAll), 2 = elimination (mode 6, PO_MPElimination), 3 = minigames.
    Here the cursor moves with codes 1/2 (up/down) instead of 3/4. */
