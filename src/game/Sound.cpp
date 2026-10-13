@@ -7,6 +7,8 @@
 #include "game/pickup.h"
 
 extern char mechBankName[] __asm__("D_006EFFB0");   /* "Mech_s.bnk" */
+__asm__("#SNFIX_SMALL gInnerPed");
+__asm__("#SNFIX_SMALL gOutterPed");
 
 /* Only the fields the sounds read. */
 class TankPickup : public Pickup {
@@ -1582,18 +1584,138 @@ void HudSound::initHudSound(void)
 void HudSound::updateHudSound(void)
 {
 }
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initGenericSound__12GenericSoundiiii);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateGenericSound__12GenericSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateGenericSound__12GenericSoundP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initPedSound__8PedSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminatePedSound__8PedSound);
+void GenericSound::initGenericSound(int bank, int sound, int minDist, int maxDist)
+{
+    m_maxDist = maxDist;
+    m_bank = bank;
+    m_sound = sound;
+    m_minDist = minDist;
+    m_handle = 0;
+}
+void GenericSound::terminateGenericSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+void GenericSound::updateGenericSound(_fvector *pos)
+{
+    int vol;
+    int pan;
+    calcDualMonoMixVolPan(pos, m_minDist, m_maxDist, vol, pan, 0);
+    if (vol > 0) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[m_bank], m_sound, vol, pan, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 0xD, vol, pan, 0, 0);
+        }
+    } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+void PedSound::initPedSound(void)
+{
+    m_handle = 0;
+}
+void PedSound::terminatePedSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 12/65 words, size 0x104 vs 0x104 */
+void PedSound::updatePedSound(_fvector *pos, int count)
+{
+    int vol;
+    int pan;
+    if (count < 16) {
+        gLoopManager.terminateLoop(&m_handle);
+        return;
+    }
+    calcDualMonoMixVolPan(pos, gInnerPed, gOutterPed, vol, pan, 0);
+    if (vol > 0) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x14, vol, pan, 0, 0, soundPlayCB, this);
+            f4 = 0x14;
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, vol, pan, 0, 0);
+        }
+    } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updatePedSound__8PedSoundP8_fvectori);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initFireSound__9FireSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateFireSound__9FireSound);
+#endif
+void FireSound::initFireSound(void)
+{
+    m_handle = 0;
+}
+void FireSound::terminateFireSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 63/66 words, size 0x108 vs 0x108 */
+void FireSound::updateFireSound(_fvector *pos)
+{
+    int vol;
+    int pan;
+    calcDualMonoMixVolPan(pos, 500, 1500, vol, pan, 0);
+    if (vol > 0) {
+        if (m_handle == 0) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x1F, vol, pan, 0, 0);
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 5, vol, pan, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 0xD, vol, pan, 0, 0);
+        }
+    } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateFireSound__9FireSoundP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initPlaneSound__10PlaneSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminatePlaneSound__10PlaneSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updatePlaneSound__10PlaneSoundP8_fvectorif);
+#endif
+void PlaneSound::initPlaneSound(void)
+{
+    m_engineHandle = 0;
+    m_handle4 = 0;
+}
+void PlaneSound::terminatePlaneSound(void)
+{
+    gLoopManager.terminateLoop(&m_engineHandle);
+}
+void PlaneSound::updatePlaneSound(_fvector *pos, int state, float t)
+{
+    int vol;
+    int pan;
+    calcDualMonoMixVolPan(pos, 270, 1800, vol, pan, 0);
+    if (vol > 0) {
+        if (m_engineHandle == 0) {
+            m_engineHandle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 2, vol, pan, 0, 0, soundPlayCB, this);
+        } else if (m_engineHandle != SOUND_PENDING && m_engineHandle != 0) {
+            snd_SetSoundParams_A(m_engineHandle, 0xD, vol, pan, 0, 0);
+        }
+    } else if (m_engineHandle != SOUND_PENDING && m_engineHandle != 0) {
+        gLoopManager.terminateLoop(&m_engineHandle);
+        gLoopManager.terminateLoop(&m_handle4);
+    }
+    if (state == 1 && t < 485.0f && m_handle4 == 0) {
+        m_handle4 = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 0, vol, pan, 0, 0, soundPlayCB, &m_handle4);
+    } else if (m_handle4 != SOUND_PENDING && m_handle4 != 0) {
+        snd_SetSoundParams_A(m_handle4, 0xD, vol, pan, 0, 0);
+        snd_SoundIsStillPlaying_CB(m_handle4, soundPlayCB, &m_handle4);
+    }
+    if (state == 6 && t < 1170.0f && m_handle8 == 0) {
+        m_handle8 = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 3, vol, pan, 0, 0, soundPlayCB, &m_handle8);
+    } else if (m_handle8 != SOUND_PENDING && m_handle8 != 0) {
+        snd_SetSoundParams_A(m_handle8, 0xD, vol, pan, 0, 0);
+        snd_SoundIsStillPlaying_CB(m_handle8, soundPlayCB, &m_handle8);
+    }
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initWeaponSound__11WeaponSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateWeaponSound__11WeaponSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateWeaponSound__11WeaponSoundP6Weapon);

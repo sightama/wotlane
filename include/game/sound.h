@@ -522,4 +522,49 @@ public:
     void updateHudSound(void);
 };
 
+/* A positioned loop from any bank. */
+class GenericSound {
+public:
+    unsigned m_handle;          // 0x0
+    int m_bank;                 // 0x4 gSoundBanks index
+    int m_sound;                // 0x8
+    int m_minDist;              // 0xC
+    int m_maxDist;              // 0x10
+    void initGenericSound(int bank, int sound, int minDist, int maxDist);
+    void terminateGenericSound(void);
+    void updateGenericSound(_fvector *pos);
+};
+
+/* Crowd loop of a pedestrian group (only groups of 16 or more). */
+class PedSound {
+public:
+    unsigned m_handle;          // 0x0
+    int f4;                     // 0x4: set to 0x14 when the loop starts
+    void initPedSound(void);
+    void terminatePedSound(void);
+    void updatePedSound(_fvector *pos, int count);
+};
+extern int gInnerPed;           /* crowd sound distances */
+extern int gOutterPed;
+
+/* A burning monster: ignition one-shot, then the fire loop. */
+class FireSound {
+public:
+    unsigned m_handle;          // 0x0
+    void initFireSound(void);
+    void terminateFireSound(void);
+    void updateFireSound(_fvector *pos);
+};
+
+/* Airport plane: engine loop, plus a loop in state 1 (before t 485) and one in state 6 (before t 1170). */
+class PlaneSound {
+public:
+    unsigned m_engineHandle;    // 0x0
+    unsigned m_handle4;         // 0x4
+    unsigned m_handle8;         // 0x8
+    void initPlaneSound(void);
+    void terminatePlaneSound(void);
+    void updatePlaneSound(_fvector *pos, int state, float t);
+};
+
 #endif
