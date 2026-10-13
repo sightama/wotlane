@@ -274,7 +274,9 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED40);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED50);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED68);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EED80);
+#ifndef NON_MATCHING /* the C++ showButtons builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEDD0);
+#endif
 #ifndef NON_MATCHING /* the C++ levelUnlocked builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEE30);
 #endif
