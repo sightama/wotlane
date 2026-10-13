@@ -93,7 +93,7 @@ typedef char _size_StateThrow[sizeof(StateThrow) == 0xA0 ? 1 : -1];
 
 /* Taunting (Monster+0xFE20). Animation 0x5C, or 0x5D for the assault boss in its boss state 8. */
 #define MONSTER_TYPE_ASSBOSS 0x1A0 /* (13 << 5): assboss in MonsterLongNames */
-#define AI_OF(m) ((Ai *)((char *)(m) + 0x4E0))
+#define AI_OF(m) ((Ai *)(m)->m_ai)
 #define GAME_STREAMING_SOUND ((StreamingSoundManager *)((char *)game + 0x1204C0)) /* TheGame member past game.h's layout */
 class Ai {
 public:
@@ -469,7 +469,7 @@ void StateCounter::update(void)
         }
         victim->enterNewState(STATE_AT(victim, ST_COUNTERED));
         game->m_huds[owner->m_cameraView].addMessage(6, 0);
-        ((MonsterSound *)((char *)owner + 0x1A7C))->playCounterAttackSound();
+        ((MonsterSound *)owner->m_sound)->playCounterAttackSound();
         landedHandled = 1;
     }
     if (anim == 0x40) {
@@ -585,7 +585,7 @@ void StateJavelin::transitionInto(void)
     frames = 0;
     animationTransitionInto(owner->m_anims[0x36], blendTime, 1, 1);
     owner->m_unk49 = 1;
-    ((MonsterSound *)((char *)owner + 0x1A7C))->playObjectThrowSound();
+    ((MonsterSound *)owner->m_sound)->playObjectThrowSound();
 }
 /* The pickup leaves the hand (throwPickup 0x80A) once the animation passes releasePercent; at the end back to Idle, or
  * to the state m_stateRef points at when falling. */
@@ -652,7 +652,7 @@ int StateTaunt::transitionOK(void)
 {
     if (owner->m_anims[0x5C].ci == 0 || owner->m_wantsTaunt != 1)
         return 0;
-    ((MonsterSound *)((char *)owner + 0x1A7C))->playTauntSound();
+    ((MonsterSound *)owner->m_sound)->playTauntSound();
     owner->m_wantsTaunt = 0;
     return 1;
 }
@@ -726,7 +726,7 @@ int StateThrow::transitionOK(void)
         return 0;
     if (owner->m_padFlags[1]->action != 0)
         return 0;
-    ((MonsterSound *)((char *)owner + 0x1A7C))->playObjectThrowSound();
+    ((MonsterSound *)owner->m_sound)->playObjectThrowSound();
     return 1;
 }
 #else
@@ -826,7 +826,7 @@ void StateShocked::transitionInto(void)
         ((StateGrapple *)STATE_AT(other, ST_GRAPPLE))->detach();
         other->enterNewState(STATE_AT(other, ST_SHOCKED));
     }
-    ((MonsterSound *)((char *)owner + 0x1A7C))->playShockedSound();
+    ((MonsterSound *)owner->m_sound)->playShockedSound();
 }
 void StateShocked::update(void)
 {
@@ -903,8 +903,8 @@ int StateVictory::transitionOK(void)
         return 0;
     if (m->m_onFireCount > 0.0f)
         m->m_onFireCount = 0.0f;
-    if (*(int *)((char *)owner + 0x68C0) != 0)
-        ((FireBreath *)((char *)owner + 0x68C0))->ApplyMint();
+    if (*(int *)owner->m_fireBreath != 0)
+        ((FireBreath *)owner->m_fireBreath)->ApplyMint();
     m = owner;
     if ((((MonsterState *)m->m_state)->flags & 0x10) && *(int *)((char *)m->m_state + 0x260) != 4)
         return 0;
@@ -949,7 +949,7 @@ void StateVictory::transitionInto(void)
         owner->m_unkF9 = 1;
     }
     *((char *)owner->m_cs + 0xC) = 1; /* cs->drawMe */
-    ((MonsterSound *)((char *)owner + 0x1A7C))->playVictorySound(anim);
+    ((MonsterSound *)owner->m_sound)->playVictorySound(anim);
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionInto__12StateVictory);

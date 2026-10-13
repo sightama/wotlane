@@ -94,7 +94,7 @@ Um nó `OBJECT` (`_hierobject`, 0xA0 bytes) aponta com `polyPkt` (+4) para uma s
 - Uma nova `UNPACK V3-32 @0xB5` troca a tabela de posições (objetos grandes têm vários lotes de até 190 vértices).
 - `_hierobject.bits.numVerts` (13 bits) é o total de vértices do objeto; `texId[5]`/`numTextures` e `gsTexCtx[i]` (+0x70, 0x30 bytes cada: `TEX0`, `TEX1`, `MIP`) descrevem as texturas. Esfera de colisão/visibilidade em +0x10 (centro) e +0x1C (raio); `sphereRadiusSqrd` em +8.
 - Convenções do mundo: vetores-linha (`p' = p * M`), **Z para cima**; matrizes de `ROTATE` em +0x10 (4x4), `TRANSLATE` soma `trans` (+0x10), `SCALE` aplica `scale` (+0x20) depois `trans` (+0x10).
-- Nós percorridos pelo port: `GROUP` (filhos em +0x20, contagem u16 em +8), `LOD` (lista de `{fade, switchOutDis, child, pad}` em +0x20; o 0 é o mais detalhado), `SWITCH` (filho `whichChild` em +0xC), `CONTROL` (`child1` em +4), `ACTION_DATA` (filho em +4), `CHAR_INSTANCE` (filhos em +0x2C, contagem em +0x28), `INTERACTIVE` (filho em +0xC), `DESTRUCTIBLE` (estados em +0xC, 12 bytes cada; o 0 é o intacto).
+- Nós percorridos pelo port: `GROUP` (filhos em +0x20, contagem u16 em +8), `LOD` (lista de `{fade, switchOutDis, child, pad}` em +0x20; o 0 é o mais grosseiro e o último o mais detalhado; o jogo escolhe o maior índice cujo `switchOutDis`, uma distância ao quadrado, é maior que a distância ao centro do LOD), `SWITCH` (filho `whichChild` em +0xC), `CONTROL` (`child1` em +4), `ACTION_DATA` (filho em +4), `CHAR_INSTANCE` (filhos em +0x2C, contagem em +0x28), `INTERACTIVE` (filho em +0xC), `DESTRUCTIBLE` (estados em +0xC, 12 bytes cada; o 0 é o intacto).
 
 ## Texturas e a VRAM do GS (em andamento)
 O `TEX0` de cada objeto (`gsTexCtx[0].tex0`) usa o formato do GS (`TBP0` bits 0..13, `TBW` 14..19, `PSM` 20..25, `TW` 26..29, `TH` 30..33, `CBP` 37..50, `CPSM` 51..54, `CSM` 55, `CSA` 56..60). Os pixels chegam à VRAM por uploads GIF `IMAGE` do `.TEX` (e o `.RTX`).
@@ -113,3 +113,72 @@ O layout de `_ParticleType` (12000 bytes), `EmitterType`, `FieldInfoType`, `Part
 - **Mistura**: `vis.alphaContext` é o registrador `ALPHA` do GS escrito no contexto do pacote: `0x44` = `(Cs - Cd) * As + Cd` (normal), `0x48` = `Cs * As + Cd` (aditivo: fogo, faíscas, clarões).
 - **Textura**: `TextureInfo[vis.texInfoIndex]` (`0x5B9E80`, 8 bytes: `numTextures`, `texIndex`, `du`, `dv`; preenchida em tempo de execução por `particleParseTexture`). `texId[texIndex]` (`0x6DFAB0`, `u16`) é o índice no `texInfo` global (pixels do pacote de upload, como nos objetos) e `TEX0[texIndex]` (`0x6DF6B0`, `u64`) é o registrador `TEX0` (psm, CBP). O `texSprite` escolhe um quadro por partícula: `info.attribs & 1` aleatório, `& 2` `uvI[i] >> 2`, senão `(age * info.mapsPerFrame) >> 12`, travado no último com `& 4` ou em módulo `vis.texMask`.
 - **Microcódigo de partículas do VU1**: não é o microcódigo dos objetos (`0x257C10`); a `displayList` das partículas chama um pacote próprio em `0x253060` (954 qwords: 1884 instruções por `MPG` e, no fim, o contexto padrão em `0x256B90`, 8 qwords: matriz mundo→tela, constantes e `vf27` = focos 320/160). Cada `*PacketBuild` termina com `MSCAL` no seu programa (`D_58` linha, `D_2C8` sprite, `D_800` dustTrail, `D_A88` strite, `D_F18` texSprite, `D_1180` frag, `D_13A0` kite, `D_1708` stripe, `D_19F8` arco elétrico, `D_1D00` corrente, `D_2770` sprine, `D_2B20` lens flare, `D_3318` sweepTrail, `D_3470` wake; endereços em bytes, `MSCAL` usa /8). Lido: no **sprite**, o meio-lado na tela é `pos.w * foco / profundidade`, limitado a `foco / 2` (então `pos.w` é o meio-lado em unidades de mundo e não passa de metade da profundidade); os bits baixos de `pos.w` indexam os 4 conjuntos de UV do `spritePacketInit` (3 normal, 1 espelha U, 2 espelha V, 0 os dois; com `0x2000`, 16 conjuntos); a cor vem da tabela pela idade. Na **linha**, a cauda é `pos - vel`, projetada com a matriz do quadro anterior (o contexto leva as duas: borrão de movimento da câmera). No **strite**, cabeça `pos` e cauda `pos - vel` projetadas e esticadas 2x para cada lado (de `pos + 2*vel` a `pos - 3*vel`), largura por `pos.w`. O `sprine` é uma spline cúbica por 4 partículas consecutivas, subdividida no VU1 por diferenças progressivas (com um desvio aleatório semeado por `pos.w`); o port liga as partículas com segmentos retos. Ainda não lidos: `stripe`, `sweepTrail`, `kite`, `wake`, `frag`, `dustTrail` (o port os aproxima: faixas ligando partículas consecutivas, o resto como sprites).
+
+## Animação (curvas no `.NGP` e o mixer em tempo de execução)
+Fonte: `src/common/AnimCurve.cpp` e `src/common/animation.cpp` (TU inteiro em C++; as equivalentes ainda não passaram por difftest/oracle, então o que depende só delas está marcado (?)).
+Os nomes de struct e de campo vêm de `include/hieri_types.h` (gerado dos stabs); aqui está o que os valores significam.
+
+**Dados (no `.NGP`):** `CHARACTER_INSTANCE` (`_animCharInstance`) -> `character` (+0x20, `_animCharacter`: `numAnims`, `numChannels`, `animations[]`) -> cada `_animation` (`startTime`/`endTime` em quadros da
+animação, `numChannels` curvas em `channels[]`). Cada curva escreve um **canal** (`AnimCurveHeader.dataIdx`): um float no vetor `animOutput.val` da instância, que os nós `ANIM_TRANSFORM`
+(`rXidx`..`tZidx`, `visidx`) leem para montar as matrizes. `AnimChannelIdMap` (ordenado por `id`, busca binária) leva um id de canal ao índice. `angularChannelBits` marca os canais que são ângulo
+(normalizados por `boundEulerAngle` antes de misturar): com até 16 canais os bits ficam nos 2 bytes do próprio campo; acima disso o campo é um offset a partir do `_animCharacter`.
+
+**Curva** (`AnimCurveHeader`, 4 bytes): `curveType` (`kHermite` 0, `kBroken` 1, `kPwl` 2 = linear com chaves igualmente espaçadas, `kStatic` 3, `kSmooth` 4, `kStepped` 5), `dataType`
+(`kFloat` 0, `k16bit` 1, `k8bit` 2), `preInfinity`/`postInfinity` (`kConstant` 0, `kLinear` 1, `kCycle` 2, `kCyclePlusOffset` 3, `kOscillate` 4), `dataIdx`. Depois do cabeçalho: `u16 numKeys` e as chaves.
+- `kStatic`: um float logo depois do cabeçalho, sem chaves.
+- Chaves por tipo (`T` = float, u16 ou u8; `S` = float ou código de 16 bits): `kPwl` `{T value}` (o tempo da chave `i` é `baseTime + i*deltaTime`); `kStepped` `{T time, T value}`;
+  `kSmooth` `{T time, T value, S tangent}`; `kBroken` `{T time, T value, S tangent[2]}` (tangentes de saída/entrada do segmento); `kHermite` `{T time, T value, S coef[3]}` (coeficientes cúbico, quadrático e linear do segmento; só existe com float).
+- **Quantizadas** (`k16bit`/`k8bit`): as 16 bytes **antes** do cabeçalho são um `AnimNormData` `{baseTime, deltaTime, baseVal, deltaVal}`; tempo = `base + q*delta`, valor idem.
+- **Código de tangente** (s16): `s >> 14` = 0 ou -1 -> `s / 16384`; 1 -> `16384 / (32768 - s)`; -2 -> `16384 / (-32768 - s)` (as duas últimas cobrem inclinações íngremes).
+- Fora do intervalo das chaves: `kConstant` repete o valor da ponta; `kCycle` repete a curva; `kCyclePlusOffset` repete somando a diferença entre as pontas a cada volta; `kOscillate` vai e volta;
+  `kLinear` **devolve 0** no nosso C++ (as instâncias de `animCurveEval` são equivalentes, não idênticas) (?).
+- A busca da chave começa no índice guardado em `AnimControlNode::prevKey[canal]` (cache por canal).
+
+**Tempo:** a unidade de tempo do jogo é o **field** (`timerGetFieldCount`, 60 por segundo). Um `_animControlNode` (opcode 0x21, um por animação, em `animCtx[i]` da instância) tem
+`tempo = startTime + deltaTime * (fieldAtual - startField)` enquanto `active`; pausado, `startField` guarda os fields já decorridos. `deltaTime` é quadros de animação por field (negativo = de trás para
+frente; `animationSetTotalRunFrames(h, n)` faz durar `n` fields). Ao passar do fim: com `loop`, volta ao começo e incrementa `iterations`; sem `loop`, para no fim (e pausa se for a árvore principal).
+
+**Mixer por instância** (`activeTree` +0x24 aponta um `AnimPlayer` de 0x18 bytes):
+- `mainTree`: a animação principal, um `_animControlNode` ou um `_animBlendNode` (opcode 0x22) de transição entre a anterior (`blendFrom`) e a nova (`blendTo`). Uma transição durante outra
+  encadeia: a antiga fica como `blendFrom` da nova e o tempo dela cai para 40%.
+- `activeList`: blends extras em lista duplamente ligada, ordenada por `priority` crescente, aplicados **depois** da principal, por cima do resultado dela. `mainTreePureOut` guarda a saída da principal
+  sem eles. Nós de procedimento (opcode 0x2B, `_animprocnode`) chamam `procCallback(nó, instância)`.
+- `blendType` (`AnimBlendTypes`): `TRANSITION` 1 (interpola de `blendFrom` para `blendTo`; terminado, o nó é recolhido e devolvido ao pool), `FREEZETRANS` 7 (transição que põe o destino na
+  porcentagem atual dele e, no fim, devolve o `deltaTime` guardado e o reativa) (?), `STATIC` 2 (mistura o destino sobre o que já está no canal com peso `weight`), `OVERRIDE` 3 (**escreve `destino * peso`** no canal, sem misturar) (?),
+  `ADDITIVE` 4 (soma `peso * curva`), `PROCEEDURAL` 6 (função vazia no retail), `SUBTRACTIVE` 5 e `NONE` 0 zeram o peso.
+- Peso no tempo: `r = (ms desde blendStartField) / blendTime` (`blendTime` em **milissegundos**, field = 16,667 ms), passado pela curva global `s_blendCurve` (0 linear, 1 cosseno, 2 `r²`, 3 `r(2-r)`).
+- Os blends vêm de um pool global de **128** `_animBlendNode` com pilha de índices livres; os buffers temporários de cada mistura saem da pilha da scratchpad (`0x70000000`, 16 KB).
+- Busca de animação: `animationGetHandle(id1, id2, animId)` percorre os gerenciadores de animação de cada `.NGP` carregado (`ANIMATION_MGR`, `charInstance[]`), acha a instância pelos ids do
+  `HierHead` e a animação cujo `head.id1 == animId`. O handle (`ci`, `ctrl`, `proc`, `animIdx`) é o que o código de jogo guarda (os monstros têm uma tabela deles, ver `Monster::m_anims` em `include/game/game.h`).
+
+## Destrutíveis (`INTERACTIVE_STATE` + `DESTRUCTIBLE`)
+Fonte: `game/Destructible` (`Destructibles::AddDestruct`, `Destructible::takeHit`, `GenericTakeHit`, `ChangeState`, `SwitchState`; o TU ainda está em asm, lido à mão) e a travessia `hierTraverseAsm`
+(asm manuscrito, em `asm/common/texm.s`). A estrutura dos nós foi conferida nas 19 fases de `LVL/` (script fora do repo).
+
+**No disco:** todo `DESTRUCTIBLE` (op 0x1F) é filho único de um `INTERACTIVE_STATE` (op 0x27): `_interactivestate.child` (+0xC) aponta para ele (1566 de 1566 nas fases). O `DESTRUCTIBLE` tem
+`hitPointClass` (+4), `hitPoints` (+6), `hpThreshold` (+8), `numKids` (+0xA) e `numKids` estados de 12 bytes a partir de +0xC: `{child, actions, damageThreshold (u16), behaviorType (u16)}`.
+O estado 0 é o intacto. `behaviorType` vale 0 em todos os 3426 estados das fases (não usado). `whichChild` do `INTERACTIVE_STATE` vale 0 no disco.
+
+**O que desenhar (o que o nativo lê da RAM):** a travessia guarda o `INTERACTIVE_STATE` ao passar por ele e, no `DESTRUCTIBLE` logo abaixo, desce só para
+`child[whichChild].child`, isto é, `u32(destr + 0xC + 12 * u32(istate + 4))`. O estado atual é **`_interactivestate.whichChild` (+4) do pai**, escrito pelo jogo em tempo de execução.
+
+**Vida** (`Destructibles::AddDestruct`, um objeto `Destructible` de 0xA0 bytes por destrutível, até 1500): pelo `hitPointClass` do nó:
+| `hitPointClass` | vida (`+0x14` e máxima em `+0x18`) | dano mínimo (`+0x1C`) |
+|---|---|---|
+| 0 | `hitPoints` do nó | `hpThreshold` do nó |
+| 1 | 10 | 0 (e limpa o bit 3 das flags em `+4`) |
+| 2, 3, 4, 5 | 50, 100, 150, 250 | 5 |
+| 6 ou mais | 3000 | 5 |
+Nas fases aparecem as classes 0 (349), 1 (1041), 2 (109), 3 (28) e 4 (39). O `Destructible` guarda ainda o nó (`+0x24`), o `INTERACTIVE_STATE` (`+0x28`), o índice em `Interactives` (`+0x2C`,
+também gravado nos bits 7..17 da primeira palavra do `INTERACTIVE_STATE`), `hitPointClass` (`+0x30`), a posição (`+0x40`), a matriz (`+0x50`) e o estado pedido (`+0x90`).
+
+**Regra de troca** (`takeHit` -> `GenericTakeHit` -> `ChangeState`):
+1. Um golpe só tira vida se o dano for **maior** que o dano mínimo (ou se o `HitEvent::s_takeHitInfo` tiver `source` 5 e `subtype` 15 ou 16). Exceções por id: 0x1A90..0x1B57 não perdem vida; na fase 6 (`TheGame::m_levelId`, Three Mile), os ids
+   0x2712 e 0x2715..0x2718 (respiradouro e chaminés) só aceitam dano de monstro do jogador (?); na fase 7 (San Francisco), o id 0x2762 só aceita dano exatamente 100.
+2. `q = (int)vida * 65535 / (int)vidaMáxima` (fração da vida em 1/65535). O novo estado é o **primeiro** `i` com `damageThreshold[i] < q`, mas o laço para em `numKids - 1` e em
+   `estadoAtual + 1`: **um golpe avança no máximo um estado**. Nas fases os limiares típicos são `62258` (95%), `49151` (75%), `32767` (50%) e `0`; `65534` faz o estado mudar no primeiro dano.
+3. Se `i` passou do atual: grava `+0x90 = i`, executa as `actions` do estado `i`, derruba os monstros que estavam em cima (`shedMonsters`), dá 50 tokens ("Destructibles") ao monstro que bateu e
+   agenda `SwitchState` no `TaskManager` (atraso 2), que copia `+0x90` para `whichChild`. Ou seja, **o desenho muda alguns quadros depois do golpe** (?).
+4. Voltar para um estado menor grava `whichChild` direto: é o que `rebuildCanyon2Pillars`/`rebuildCapitolPillars` fazem com `ChangeState(0, 1, 0)` (reconstroem os pilares).
+5. Com o terceiro argumento de `ChangeState` ligado, o jogo também põe em 1 o `whichChild` de um `SWITCH` no começo do novo estado (o próprio `child` ou o primeiro filho de um `GROUP`), e
+   a vida vai para `damageThreshold[i] * vidaMáxima / 65535 - 0,001`.

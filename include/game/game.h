@@ -373,7 +373,8 @@ public:
     int m_specialGlow[3];   /* 0x4C8 */
     char pad4D4[0x4D8 - 0x4D4];
     PlayerDat * m_playerInfo;   /* 0x4D8 */
-    char pad4DC[0x1A10 - 0x4DC];
+    char pad4DC[0x4E0 - 0x4DC];
+    char m_ai[0x1A10 - 0x4E0];   /* 0x4E0: the embedded Ai (ai.h) that drives an AI monster's inputs; its exact size is not known, this runs up to the next named field */
     AiPath * m_closestPath;   /* 0x1A10 */
     char pad1A14[0x1A3C - 0x1A14];
     _cs * m_shadow;   /* 0x1A3C */
@@ -381,11 +382,16 @@ public:
     int m_shadowOff;   /* 0x1A70 */
     char * m_shadowCs;   /* 0x1A74 */
     int m_shadowSaved;   /* 0x1A78 */
-    char pad1A7C[0x1CF0 - 0x1A7C];
+    char m_sound[0x1CF0 - 0x1A7C];   /* 0x1A7C: the embedded MonsterSound (fire_breath.h); FireSound calls use the same address */
     _animHandle m_anims[0x12C];   /* 0x1CF0: one handle per MonsterAnim (getAnim); a = 0 when the monster has no such animation */
-    char pad2FB0[0x3120 - 0x2FB0];
+    char m_animPappy[0x2FE0 - 0x2FB0];   /* 0x2FB0: AnimPappy; updateCinema reads the float pointer at +0x28 (0x2FD8) */
+    char m_cinemaBlendA[0x3048 - 0x2FE0];   /* 0x2FE0: AnimBlend set to 50% by startCinema */
+    char m_cinemaBlendB[0x30B4 - 0x3048];   /* 0x3048: AnimBlend set to 50% by startCinema */
+    char m_cinemaBlendC[0x311C - 0x30B4];   /* 0x30B4: AnimBlend that startCinema ramps out when m_cinemaBlendCOn is set */
+    int m_cinemaBlendCOn;   /* 0x311C */
     _fvector * m_lookAtOverride;   /* 0x3120 */
-    char pad3124[0x5040 - 0x3124];
+    char pad3124[0x5024 - 0x3124];
+    char m_gamePad[0x5040 - 0x5024];   /* 0x5024: the embedded GamePad (loadPadInputs / clearInputs) that m_padFlags interprets */
     PadFlags m_padFlags;   /* 0x5040 */
     char pad6854[0x6868 - 0x6854];
     int m_hudTexture;   /* 0x6868 */
@@ -400,7 +406,7 @@ public:
     void * m_target;   /* 0x68B4 */
     Monster * m_grappleAttempt;   /* 0x68B8 */
     Monster * m_beamVictim;   /* 0x68BC */
-    char pad68C0[0x697C - 0x68C0];
+    char m_fireBreath[0x697C - 0x68C0];   /* 0x68C0: the embedded FireBreath (fire_breath.h); its first word (state) is nonzero while breathing */
     int m_launchDelay;   /* 0x697C */
     int m_launchCounter;   /* 0x6980 */
     char pad6984[0x69A0 - 0x6984];
@@ -421,7 +427,7 @@ public:
     float m_puSpeedMod[28];   /* 0x6B88 */
     _cs * m_reticleCS;   /* 0x6BF8 */
     _cs * m_stickyReticleCS;   /* 0x6BFC */
-    char pad6C00[0x6C04 - 0x6C00];
+    int m_stickyReticleOn;   /* 0x6C00: draw m_stickyReticleCS too */
     int m_pinTarget;   /* 0x6C04 */
     float m_pinTime;   /* 0x6C08 */
     char pad6C0C[0x6C14 - 0x6C0C];
@@ -436,7 +442,13 @@ public:
     int m_aimHeadingEnabled;   /* 0x6C3C */
     float m_aimHeading;   /* 0x6C40 */
     float m_aimPitch;   /* 0x6C44 */
-    char pad6C48[0x6CB4 - 0x6C48];
+    char pad6C48[0x6C80 - 0x6C48];
+    int m_wakeFx;   /* 0x6C80: water wake particle fx (WaterWake), -1 when off (updateWaterWake) */
+    int m_splashFx;   /* 0x6C84: water splash particle fx (WaterSplash), -1 when off */
+    char pad6C88[0x6C90 - 0x6C88];
+    float m_wakePos[4];   /* 0x6C90: where both fx are attached; [3] gets the y argument of updateWaterWake + 2 */
+    float m_wakeX6CA0[4];   /* 0x6CA0: copied from this + 0x270 together with m_wakePos (meaning unknown) */
+    char pad6CB0[0x6CB4 - 0x6CB0];
     int m_fireFx;   /* 0x6CB4 */
     float m_onFireCount;   /* 0x6CB8 */
     float m_onFireDamage;   /* 0x6CBC */
@@ -472,6 +484,20 @@ public:
     char pad10E71[0x11190 - 0x10E71];
 };
 typedef char _size_Monster[sizeof(Monster) == 0x11190 ? 1 : -1];
+#define MONSTER_AT(f, off) typedef char _monster_at_##f[(unsigned)&((Monster *)0)->f == (off) ? 1 : -1]
+MONSTER_AT(m_ai, 0x4E0);
+MONSTER_AT(m_sound, 0x1A7C);
+MONSTER_AT(m_animPappy, 0x2FB0);
+MONSTER_AT(m_cinemaBlendA, 0x2FE0);
+MONSTER_AT(m_cinemaBlendB, 0x3048);
+MONSTER_AT(m_cinemaBlendC, 0x30B4);
+MONSTER_AT(m_cinemaBlendCOn, 0x311C);
+MONSTER_AT(m_gamePad, 0x5024);
+MONSTER_AT(m_fireBreath, 0x68C0);
+MONSTER_AT(m_stickyReticleOn, 0x6C00);
+MONSTER_AT(m_wakeFx, 0x6C80);
+MONSTER_AT(m_wakePos, 0x6C90);
+MONSTER_AT(m_wakeX6CA0, 0x6CA0);
 
 class TheGame {
 public:
