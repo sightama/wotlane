@@ -203,7 +203,7 @@ segments:
       - [0x0F6180, cpp, common/AnimQueue]  # c++, 8 funcs, name: guess
       - [0x0F6678, cpp, common/bound]  # c++, 3 funcs, name: guess
       - [0x0F67C0, cpp, common/chain]  # c++, 3 funcs, name: guess
-      - [0x0F6960, asm, common/SoundBank]  # c++, 15 funcs, name: manual
+      - [0x0F6960, cpp, common/SoundBank]  # c++, 15 funcs, name: manual
       - [0x0F74D0, cpp, common/CsPool]  # c++, 7 funcs, name: guess
       - [0x0F78C0, cpp, common/dbs]  # c++, 5 funcs, name: guess
       - [0x0F8A58, asm, common/disp]  # c++, 15 funcs, name: manual
@@ -593,7 +593,7 @@ segments:
       - [0x5F3150, .rodata, common/animation]
       - [0x5F32E0, .rodata, common/AnimCurve]
       - [0x5F3620, .rodata, common/AnimQueue]
-      - [0x5F36A0, rodata, common/SoundBank]
+      - [0x5F36A0, .rodata, common/SoundBank]
       - [0x5F37D0, .rodata, common/CsPool]
       - [0x5F3870, .rodata, common/dbs]
       - [0x5F3B30, .rodata, common/file]

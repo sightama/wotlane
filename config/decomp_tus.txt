@@ -141,3 +141,4 @@ common/hdPrim
 common/hdTraverse
 common/HdIterator
 common/ScreenPolys
+common/SoundBank
