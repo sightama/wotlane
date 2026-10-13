@@ -5,11 +5,13 @@
 #include "memory_stack.h"
 #include "game/military_pickup.h"
 #include "game/military_formation.h"
+#include "game/hud.h"
 
 __asm__("#SNFIX_SMALL game");
 
 void hdReparentCsGrid(_cs *cs, _fvector *pos, float f);
 void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);
+void mathfRotationFromVector(_fvector *rot, _fvector *v);
 class Weapon {
 public:
     void GetVel(_fvector &v);
@@ -55,6 +57,8 @@ void *operator new(unsigned, void *);
 int hdCsCollect2D(_fvector *pos, float radius, unsigned a, unsigned b, _cs **out, int c);
 int hdCsCollect(_fvector *pos, float radius, unsigned a, unsigned b, _cs **out, int c);
 extern int moviePlaying;
+/* FLT_MAX, the retail literal in Pickup's sdata */
+extern float noPickupDist __asm__("D_006F7DD8");
 /* highlight color pulse: green goes up and down by colorInc between 128 and 255 */
 extern unsigned short highlightGreen __asm__("_12LevelPickups$s_green");
 extern unsigned short highlightColor __asm__("_12LevelPickups$s_color");
@@ -65,6 +69,8 @@ extern int militaryStillAlive __asm__("_12LevelPickups$s_militaryStillAlive");
 class RigidPickup {
 public:
     void huck(_fvector &dir, DbInteractive *target);
+    void throwToTarget(_fvector &target, DbInteractive *by);
+    void throwInDir(_fvector &dir, DbInteractive *by);
 };
 class StatePickUp {
 public:
@@ -133,8 +139,63 @@ void Pickup::takeUseDamage(float dmg)
 {
     health -= dmg;
 }
+/* False when an active AI monster stands in the throw lane: nearer than `target` along the pickup's forward axis (cs row 1) and
+   within 75 units of that axis. The positions come from each interactive's virtual getPos (vtable 0x10). */
+#ifdef NON_MATCHING
+/* 0/105 words: register allocation and dot-product order */
+bool Pickup::isTargetClear(DbInteractive *target)
+{
+    char *vt = *(char **)((char *)target + 0x10);
+    _fvector *pos = ((_fvector *(*)(void *))*(void **)(vt + 0x14))((char *)target + *(short *)(vt + 0x10));
+    float *fwd = cs->mat[1];
+    _fvector d;
+    float range;
+    int i;
+
+    vecSub(&d, pos, &cs->trans);
+    range = d.x * fwd[0] + d.y * fwd[1] + d.z * fwd[2];
+    for (i = 0; i < game->m_numAIs; i++) {
+        Monster *m = game->m_monsters[4 + i];
+        float along;
+
+        if (*(int *)((char *)m + 0x18) == 0)
+            continue;
+        vt = *(char **)((char *)m + 0x10);
+        pos = ((_fvector *(*)(void *))*(void **)(vt + 0x14))((char *)m + *(short *)(vt + 0x10));
+        vecSub(&d, pos, &cs->trans);
+        along = d.w = d.x * fwd[0] + d.y * fwd[1] + d.z * fwd[2];
+        if (along < range && d.x * d.x + d.y * d.y + d.z * d.z - along * along < 75.0f * 75.0f)
+            return false;
+    }
+    return true;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", isTargetClear__6PickupP13DbInteractive);
+#endif
+/* Grabbed by interactive i: held visual state, the type's held health (if any), out of the collision grid. In game mode 1 on
+   Central, hud 0 shows text box 27 when an interactive whose word 0x18 is 1 grabs a type-14 pickup; dodgeball restarts its countdown. */
+#ifdef NON_MATCHING
+/* 33/70 words: register allocation of the game pointer */
+void Pickup::grab(int i)
+{
+    DbInteractive *who = Interactives::getInteractive(i);
+    float h;
+
+    heldState = i;
+    setVisualState(2);
+    h = LevelPickups::s_info[pickupType].heldHealth;
+    if (1e-10f < h)
+        health = h;
+    flags &= ~2;
+    hdRemoveCsFromGrid(cs);
+    if (game->m_gameMode == 1 && game->m_levelId == 1 && *(int *)((char *)who + 0x18) == 1 && pickupType == 14)
+        gameHud(0)->addTextBoxMessage(27);
+    if (game->m_gameMode == 7)
+        ((DodgeBallLevel *)dodgeBallInst)->ResetCountdown();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", grab__6Pickupi);
+#endif
 void Pickup::drop(void)
 {
     hatCheck();
@@ -171,8 +232,37 @@ void Pickup::setVisualState(int s)
 }
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", hatCheck__6Pickup);
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initLocators__6PickupP9_hierhead);
+#ifdef NON_MATCHING
+/* 26/29 words: instruction order */
+/* The grab handle is the negated translation of the node; its range is the db id of the node's child. */
+void Pickup::initHandle(_hiertranslate *t)
+{
+    handle[0] = -t->trans.x;
+    handle[1] = -t->trans.y;
+    handle[2] = -t->trans.z;
+    handleRange = (unsigned)((*(unsigned *)t->child[0] >> 7) & 0x7FF);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initHandle__6PickupP14_hiertranslate);
+#endif
+#ifdef NON_MATCHING
+/* 43/50 words: loop shape of the transpose */
+/* Same from a rotate node: the handle rotation is the node's 3x3 transposed, the offset its negated translation row. */
+void Pickup::initHandle(_hierrotate *r)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < 3; i++) {
+        for (j = 0; j < 3; j++)
+            handleMat[i][j] = r->mat[j][i];
+    }
+    vecScale((_fvector *)handle, (_fvector *)r->mat[3], -1.0f);
+    handleRange = (unsigned)((*(unsigned *)r->child[0] >> 7) & 0x7FF);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initHandle__6PickupP11_hierrotate);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initCollisSpheres__6PickupP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", swipeTrailEffect__6Pickup);
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", collisTestBatAttack__6PickupfUi11MonsterAnimR10HitHistoryfff);
@@ -771,7 +861,45 @@ void LevelPickups::dropPickup(PickupIter it)
     vt = *(char **)(p + 0x10);
     ((void (*)(void *))*(void **)(vt + 0x4C))(p + *(short *)(vt + 0x48));
 }
+/* A held pickup is thrown at the point `at`: its node moves to the in-flight list, nobody holds it, flying visual state. A rigid body
+   flies by physics; anything else becomes a static weapon aimed along at - position, which remembers the thrower (0xE4). */
+#ifdef NON_MATCHING
+/* 68/87 words: register allocation */
+void LevelPickups::throwPickup(PickupIter it, _fvector &at, DbInteractive *by, DbInteractive *target)
+{
+    ListNode *n = (ListNode *)it.cur;
+    Pickup *p = (Pickup *)n->data;
+    _fvector rot;
+    _fvector d;
+    int byId;
+    int targetId;
+
+    if (n->prev != 0)
+        n->prev->next = n->next;
+    if (n->next != 0)
+        n->next->prev = n->prev;
+    n->next = 0;
+    n->prev = &inFlightList;
+    n->next = inFlightList.next;
+    inFlightList.next = n;
+    if (n->next != 0)
+        n->next->prev = n;
+    p->heldState = 0;
+    p->setVisualState(1);
+    if ((int)(p->bits >> 2) & 1) {
+        ((RigidPickup *)p)->throwToTarget(at, by);
+        return;
+    }
+    vecSub(&d, &at, &p->cs->trans);
+    mathfRotationFromVector(&rot, &d);
+    byId = by ? (*(unsigned *)(*(_cs **)((char *)by + 0xC))->epNode >> 7) & 0x7FF : 0;
+    targetId = target ? (*(unsigned *)(*(_cs **)((char *)target + 0xC))->epNode >> 7) & 0x7FF : 0;
+    p->weapIdx = gameWeapons()->CreateStaticWeapon(it, byId, targetId, &rot);
+    *(DbInteractive **)((char *)p + 0xE4) = by;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", throwPickup__12LevelPickupsGQ2t10LinkedList1ZP6Pickup8IteratorR8_fvectorP13DbInteractiveT3);
+#endif
 /* A rigid-body pickup is thrown: its node moves to the in-flight list, nobody holds it, flying visual state, and the body is hucked. */
 void LevelPickups::throwRBPickup(PickupIter it, _fvector &dir, DbInteractive *target)
 {
@@ -794,7 +922,41 @@ void LevelPickups::throwRBPickup(PickupIter it, _fvector &dir, DbInteractive *ta
         ((RigidPickup *)p)->huck(dir, target);
     }
 }
+/* A thrown pickup is batted away by `by`: towards `target` if there is one, else along `dir`. A rigid body is rethrown; anything
+   else gets a new static weapon (the old one is killed). */
+#ifdef NON_MATCHING
+/* 57/90 words: register allocation */
+void LevelPickups::deflectThrownPickup(PickupIter it, _fvector &dir, DbInteractive *by, DbInteractive *target)
+{
+    Pickup *p = (Pickup *)((ListNode *)it.cur)->data;
+    _fvector rot;
+    _fvector d;
+    int byId;
+    int targetId;
+
+    if ((int)(p->bits >> 2) & 1) {
+        if (target != 0)
+            ((RigidPickup *)p)->throwToTarget((*(_cs **)((char *)target + 0xC))->trans, by);
+        else
+            ((RigidPickup *)p)->throwInDir(dir, by);
+        return;
+    }
+    if (target != 0) {
+        vecSub(&d, &(*(_cs **)((char *)target + 0xC))->trans, &p->cs->trans);
+        mathfRotationFromVector(&rot, &d);
+    } else {
+        mathfRotationFromVector(&rot, &dir);
+    }
+    byId = by ? (*(unsigned *)(*(_cs **)((char *)by + 0xC))->epNode >> 7) & 0x7FF : 0;
+    targetId = target ? (*(unsigned *)(*(_cs **)((char *)target + 0xC))->epNode >> 7) & 0x7FF : 0;
+    if (p->weapIdx >= 0)
+        ((Weapon *)((char *)gameWeapons() + p->weapIdx * 0x170 + 0xC00))->KillWeapon();
+    p->weapIdx = gameWeapons()->CreateStaticWeapon(it, byId, targetId, &rot);
+    *(DbInteractive **)((char *)p + 0xE4) = by;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", deflectThrownPickup__12LevelPickupsGQ2t10LinkedList1ZP6Pickup8IteratorR8_fvectorP13DbInteractiveT3);
+#endif
 #ifdef NON_MATCHING
 /* A thrown pickup is caught by slot `i`: back to the in-use list, held visual state, its weapon (if any, unless bit 1 of `bits`) is killed;
    dodgeball restarts its countdown. */
@@ -921,7 +1083,7 @@ void *LevelPickups::getClosestPickup(_fvector &a, _fvector &b)
     int n = hdCsCollect(&a, a.w + 100.0f, 5000, 5099, list, 10);
     int i;
 
-    bestDist = 3.402823466e+38f;
+    bestDist = noPickupDist;
     for (i = 0; i < n; i++) {
         _cs *cs = list[i];
         unsigned h;

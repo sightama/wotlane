@@ -21,8 +21,10 @@ public:
     float health;             /* 0x48 */
     int regenTimer;           /* 0x4C */
     unsigned long long bits;  /* 0x50: bit 0 regenable (cs is shared and must not be deactivated), 1 two-handed, 2 rigid body, 5 dragon head */
-    char pad58[0x9C - 0x58];
-    float handleRange;        /* 0x9C */
+    char pad58[0x60 - 0x58];
+    float handleMat[3][4];    /* 0x60: rotation of the grab handle (transposed from its hier node) */
+    float handle[3];          /* 0x90: grab handle offset (negated node translation) */
+    float handleRange;        /* 0x9C: radius of the handle sphere, from the node's db id */
     int pickupType;           /* 0xA0 */
     char padA4[0xB4 - 0xA4];
     float swipeFar;           /* 0xB4 */
@@ -41,6 +43,9 @@ public:
     void drop(void);
     void regen(void);
     void initAfterDbLoad(void);
+    bool isTargetClear(DbInteractive *target);
+    void initHandle(_hiertranslate *t);
+    void initHandle(_hierrotate *r);
     bool update(void);
     bool regenUpdate(void);
     void initConfig(void);

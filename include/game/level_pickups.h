@@ -18,7 +18,8 @@ typedef LinkedList<Pickup *>::Iterator PickupIter;
 class LevelPickups {
 public:
     static void dropPickup(PickupIter it);
-    static void throwPickup(PickupIter it, _fvector &dir, DbInteractive *by, DbInteractive *target);
+    static void throwPickup(PickupIter it, _fvector &at, DbInteractive *by, DbInteractive *target);
+    static void deflectThrownPickup(PickupIter it, _fvector &dir, DbInteractive *by, DbInteractive *target);
     static void killPickup(PickupIter it, int how);
     static void impalePickup(PickupIter it);
     static bool inFlight(PickupIter it);
@@ -27,7 +28,8 @@ public:
     static void prunePickup(PickupIter it);
     struct Info {
         float health;        /* 0x00: initial health of the pickup type */
-        char pad4[0x2C];
+        float heldHealth;    /* 0x04: health while held, if non-zero */
+        char pad8[0x28];
         float staminaGain;   /* 0x30 */
         char pad34[0x20];
     };
