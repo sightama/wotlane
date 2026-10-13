@@ -1,6 +1,8 @@
 #ifndef SHELL_H
 #define SHELL_H
 
+#include "engine.h"
+
 struct _hierhead;
 struct _cs;
 struct _hierswitch;
@@ -10,7 +12,8 @@ enum _vramAddrs { VRAM_ADDRS_DUMMY };
 class Shell {
 public:
     _cs *m_menuCs;        /* 0x0: root cs of the front-end menus (hidden by screenWaitForStart) */
-    char pad4[0x60 - 0x4];
+    char pad4[0x5C - 0x4];
+    _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on */
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
     char pad70[0x168 - 0x70];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
@@ -18,7 +21,13 @@ public:
     _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
     char pad5CC[0x5D4 - 0x5CC];
     _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1) */
-    char pad5D8[0x2938 - 0x5D8];
+    char pad5D8[0x61C - 0x5D8];
+    _animHandle m_screenAnim[12]; /* 0x61C: menu transition animations 1..11 (anim 0x270E of the shell db); changeScreen plays one */
+    char pad6DC[0x25D4 - 0x6DC];
+    _animHandle m_reelSpinAnim[2]; /* 0x25D4: one per select reel (anims 0x2585 + reel) */
+    char pad25F4[0x2644 - 0x25F4];
+    _animHandle m_reelAnim[2][10]; /* 0x2644: per reel, the animation of each of its 10 positions (anims 0x259E + reel * 10 + i); changeReel */
+    char pad2784[0x2938 - 0x2784];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
     char pad2958[0x2A24 - 0x2958];
     int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
@@ -111,6 +120,9 @@ extern Shell *shell;
 SHELL_AT(m_selectSw, 0x168);
 SHELL_AT(m_menuItemSw, 0x25C);
 SHELL_AT(m_screenSw, 0x5D4);
+SHELL_AT(m_screenAnim, 0x61C);
+SHELL_AT(m_reelSpinAnim, 0x25D4);
+SHELL_AT(m_reelAnim, 0x2644);
 SHELL_AT(m_ctlrCfg, 0x2B8C);
 SHELL_AT(m_selLast, 0x2BA0);
 SHELL_AT(m_monsterFlags, 0x2A24);

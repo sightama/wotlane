@@ -109,10 +109,8 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", setReelSwitches__FiiP13_SaveGameData
 /* Queues the animation of reel `reel`: `from` is stopped, `to` started. Each reel owns 0xA0 bytes of animation handles in the shell. */
 void changeReel(int reel, int from, int to)
 {
-    char *base = (char *)shell + reel * 0xA0 + 0x2644;
-
-    animq->Push((_animHandle *)(base + from * 0x10), 0, 0, 0);
-    animq->Push((_animHandle *)(base + to * 0x10), 1, 1, 1);
+    animq->Push(&shell->m_reelAnim[reel][from], 0, 0, 0);
+    animq->Push(&shell->m_reelAnim[reel][to], 1, 1, 1);
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeReel__Fiii);
@@ -725,7 +723,7 @@ extern char D_006EED08[];
 /* Leaves screen `from` for screen `to`. dir 1 goes forward (when `track`, `from` becomes prevScreen and the old prevScreen is pushed
    on the 16-deep oldScreens stack), dir -1 goes back (pops prevScreen from the stack); anything else just prints a warning.
    A nonzero `anim` plays transition animation `anim` of the shell, forward for dir 1, reversed otherwise. */
-/* 50/100 palavras; ordem dos testes de dir/track e cópia do _animHandle */
+/* 79/100 palavras; ordem dos testes de dir/track */
 void changeScreen(int from, int to, int dir, int anim, bool track)
 {
     int i;
@@ -749,12 +747,10 @@ void changeScreen(int from, int to, int dir, int anim, bool track)
         printf(D_006EED08);
     }
     if (anim) {
-        _animHandle *h = (_animHandle *)((char *)shell + 0x61C + anim * 0x10);
-
         if (dir == 1)
-            animationStart(*h, true);
+            animationStart(shell->m_screenAnim[anim], true);
         else
-            animationStartReverse(*h, true);
+            animationStartReverse(shell->m_screenAnim[anim], true);
         currAnimationIndex = anim;
     }
     currScreen = to;
