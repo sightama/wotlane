@@ -52,8 +52,16 @@ public:
     void enterState(State s);
 };
 void *operator new(unsigned, void *);
+int hdCsCollect2D(_fvector *pos, float radius, unsigned a, unsigned b, _cs **out, int c);
+int hdCsCollect(_fvector *pos, float radius, unsigned a, unsigned b, _cs **out, int c);
+extern int moviePlaying;
+/* highlight color pulse: green goes up and down by colorInc between 128 and 255 */
+extern unsigned short highlightGreen __asm__("_12LevelPickups$s_green");
+extern unsigned short highlightColor __asm__("_12LevelPickups$s_color");
+extern signed char highlightColorInc __asm__("_12LevelPickups$s_colorInc");
 extern ListNode deadList __asm__("_12LevelPickups$s_deadList");
 extern ListNode regenList __asm__("_12LevelPickups$s_regenList");
+extern int militaryStillAlive __asm__("_12LevelPickups$s_militaryStillAlive");
 class RigidPickup {
 public:
     void huck(_fvector &dir, DbInteractive *target);
@@ -178,7 +186,7 @@ float Pickup::getCollisSphereRadius(int i)
 }
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", updateGenerator__6Pickup);
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", init__12LevelPickups);
-/* Prunes every active vehicle pickup (types 1-16, 23-24 and 26-27; 25 too unless the game mode is 1 with sub-mode 6). */
+/* Prunes every active vehicle pickup (types 1-16, 23-24 and 26-27; 25 too unless the game mode is 1 on Three Mile Island). */
 #ifdef NON_MATCHING
 /* 21/49 words: switch layout */
 void LevelPickups::turnOffAllVehicles(void)
@@ -188,7 +196,7 @@ void LevelPickups::turnOffAllVehicles(void)
     while (n != &activeList) {
         switch (((Pickup *)n->data)->pickupType) {
         case 25:
-            if (*(int *)((char *)game + 0x1203C8) == 1 && *(int *)((char *)game + 0x1203D0) == 6)
+            if (game->m_gameMode == 1 && game->m_levelId == 6)
                 break;
         case 1: case 2: case 3: case 4: case 5: case 6: case 7: case 8:
         case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16:
@@ -499,9 +507,139 @@ void LevelPickups::endCinema(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", endCinema__12LevelPickups);
 #endif
+/* Per-frame update. Active pickups run update() (virtual) and are killed (to the regen list if regenable) when it returns false; held
+   and thrown pickups update their sound and, for rigid bodies, their physics; regenerating pickups whose timer ran out go back to the
+   active list and regen(). */
+#ifdef NON_MATCHING
+/* 4/127 words: register allocation and branch layout */
+void LevelPickups::update(void)
+{
+    ListNode *n;
+    ListNode *next;
+    char *p;
+    char *vt;
+
+    militaryStillAlive = 0;
+    n = activeList.next;
+    while (n != &activeList) {
+        p = (char *)n->data;
+        vt = *(char **)(p + 0x10);
+        if (((bool (*)(void *))*(void **)(vt + 0x64))(p + *(short *)(vt + 0x60))) {
+            n = n->next;
+        } else {
+            PickupIter it;
+
+            next = n->next;
+            it.cur = (Pickup *)n;
+            killPickup(it, 1);
+            n = next;
+        }
+    }
+    for (n = inUseList.next; n != &inUseList; n = next) {
+        p = (char *)n->data;
+        next = n->next;
+        if ((int)(((Pickup *)p)->bits >> 2) & 1) {
+            vt = *(char **)(p + 0x10);
+            ((bool (*)(void *))*(void **)(vt + 0x64))(p + *(short *)(vt + 0x60));
+        }
+        ((PickupSound *)((char *)n->data + 0x100))->updatePickupSound();
+    }
+    for (n = inFlightList.next; n != &inFlightList; n = next) {
+        p = (char *)n->data;
+        next = n->next;
+        if ((int)(((Pickup *)p)->bits >> 2) & 1) {
+            vt = *(char **)(p + 0x10);
+            ((bool (*)(void *))*(void **)(vt + 0x64))(p + *(short *)(vt + 0x60));
+        }
+        if (((Pickup *)n->data)->pickupType != 27)
+            ((PickupSound *)((char *)n->data + 0x100))->updatePickupSound();
+    }
+    n = regenList.next;
+    while (n != &regenList) {
+        if (((Pickup *)n->data)->regenUpdate()) {
+            next = n->next;
+            if (n->prev != 0)
+                n->prev->next = n->next;
+            if (n->next != 0)
+                n->next->prev = n->prev;
+            n->next = 0;
+            n->prev = &activeList;
+            n->next = activeList.next;
+            activeList.next = n;
+            if (n->next != 0)
+                n->next->prev = n;
+            p = (char *)n->data;
+            n = next;
+            vt = *(char **)(p + 0x10);
+            ((void (*)(void *))*(void **)(vt + 0x3C))(p + *(short *)(vt + 0x38));
+        } else {
+            n = n->next;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", update__12LevelPickups);
+#endif
+/* Pickups whose cs lies within sqrt(r2) of `p` (helicopters excluded) redo their hat check: a rigid body is flagged to do it in its own
+   update, a hidden pickup waiting for a delayed hat (bit 3 of `bits`) is shown again first. */
+#ifdef NON_MATCHING
+/* 53/75 words: eeSqrtf moves (retail sqrt.s reads $f12) and register allocation */
+void LevelPickups::hatCheck(_fvector *p, float r2)
+{
+    _cs *list[100];
+    int n = hdCsCollect2D(p, eeSqrtf(r2), 5000, 5099, list, 100);
+    int i;
+
+    for (i = 0; i < n; i++) {
+        Pickup *pk = (Pickup *)Interactives::getInteractive((*(unsigned *)list[i]->epNode >> 7) & 0x7FF);
+        int t = pk->pickupType;
+
+        if (t >= 11 && (t < 13 || t == 23))
+            continue;
+        if (pk->cs->drawMe) {
+            if ((int)(pk->bits >> 2) & 1) {
+                *(int *)((char *)pk + 0x170) = 0;
+                *(unsigned long long *)((char *)pk + 0x4A0) |= 1;
+            } else {
+                pk->hatCheck();
+            }
+        } else if (pk->bits & 8) {
+            pk->cs->drawMe = 1;
+            pk->bits &= ~8;
+            pk->hatCheck();
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", hatCheck__12LevelPickupsP8_fvectorf);
+#endif
+/* Hides the pickups near `p` until their hat check runs (bit 3 of `bits`); rigid bodies are flagged instead. Helicopters are left alone. */
+#ifdef NON_MATCHING
+/* 1/64 words: eeSqrtf moves and the loop counter register */
+void LevelPickups::turnOffForDelayedHat(_fvector *p, float r2)
+{
+    _cs *list[100];
+    int n = hdCsCollect2D(p, eeSqrtf(r2), 5000, 5099, list, 100);
+    int i;
+
+    for (i = 0; i < n; i++) {
+        Pickup *pk = (Pickup *)Interactives::getInteractive((*(unsigned *)list[i]->epNode >> 7) & 0x7FF);
+        int t = pk->pickupType;
+
+        if (t >= 11 && (t < 13 || t == 23))
+            continue;
+        if ((int)(pk->bits >> 2) & 1) {
+            *(int *)((char *)pk + 0x170) = 0;
+            *(unsigned long long *)((char *)pk + 0x4A0) |= 1;
+        } else {
+            pk->cs->drawMe = 0;
+            pk->bits |= 8;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", turnOffForDelayedHat__12LevelPickupsP8_fvectorf);
+#endif
 /* Restores the color of the monster's current highlighted pickup and picks the closest one in its attach region. */
 #ifdef NON_MATCHING
 /* 3/52 words: register allocation of the slot pointer */
@@ -523,7 +661,58 @@ void LevelPickups::computeHighlight(Monster &m)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", computeHighlight__12LevelPickupsR7Monster);
 #endif
+/* Places player i's highlight on its highlighted pickup and pulses the pickup's color (green between 128 and 255, red/blue fading
+   to at most 128). With two or more players in split view, the other player's highlight is hidden and its pickup's color restored,
+   unless both highlight the same one. */
+#ifdef NON_MATCHING
+/* 5/184 words: the retail duplicates the other-player block for i == 0 and i != 0 */
+void LevelPickups::enableHighlights(int i)
+{
+    _cs *hl = highlightCs[i];
+    ListNode *h;
+    ListNode *other;
+    int o;
+    int k;
+
+    if (hl == 0 || moviePlaying)
+        return;
+    h = highlightList[*(int *)((char *)game->m_monsters[i] + 0x28)];
+    if (h == 0) {
+        hl->drawMe = 0;
+    } else {
+        hl->trans = ((Pickup *)h->data)->cs->trans;
+        highlightCs[i]->trans.y -= *(float *)((char *)h->data + 0xD4);
+        highlightCs[i]->drawMe = 1;
+        *((unsigned char *)highlightCs[i]->epNode + 8) = 0;
+        highlightGreen += highlightColorInc;
+        if (highlightColor >= 6 || highlightColorInc < 0)
+            highlightColor -= highlightColorInc;
+        if (highlightGreen >= 255) {
+            highlightGreen = 255;
+            highlightColorInc = -highlightColorInc;
+        } else if (highlightGreen <= 128) {
+            highlightGreen = 128;
+            highlightColorInc = -highlightColorInc;
+        }
+        if (highlightColor > 128)
+            highlightColor = 128;
+        ((Pickup *)h->data)->cs->colorQuad.fVec[1] = highlightGreen * (1.0f / 128.0f);
+        ((Pickup *)h->data)->cs->colorQuad.fVec[0] = highlightColor * (1.0f / 128.0f);
+        ((Pickup *)h->data)->cs->colorQuad.fVec[2] = highlightColor * (1.0f / 128.0f);
+    }
+    if (gUseUnifiedView || game->m_numMonsters < 2)
+        return;
+    o = (i == 0) ? 1 : 0;
+    highlightCs[o]->drawMe = 0;
+    other = highlightList[*(int *)((char *)game->m_monsters[o] + 0x28)];
+    if (other != 0 && other != h) {
+        for (k = 0; k < 3; k++)
+            ((Pickup *)other->data)->cs->colorQuad.fVec[k] = 1.0f;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", enableHighlights__12LevelPickupsi);
+#endif
 /* Moves the pickup's list node to the head of the in-use list. */
 void LevelPickups::impalePickup(PickupIter it)
 {
@@ -719,7 +908,61 @@ bool LevelPickups::inFlight(PickupIter it)
     }
     return false;
 }
+/* Node of the free pickup a monster can grab: among the drawn pickups whose handle sphere (handleRange) touches the attach sphere `a`
+   (w = radius), not held and not in flight, the one closest to `b` (distance to the handle sphere when it has a radius). 0 if none. */
+#ifdef NON_MATCHING
+/* 42/137 words: eeSqrtf moves and register allocation */
+void *LevelPickups::getClosestPickup(_fvector &a, _fvector &b)
+{
+    _cs *list[10];
+    _fvector d;
+    Pickup *best = 0;
+    float bestDist;
+    int n = hdCsCollect(&a, a.w + 100.0f, 5000, 5099, list, 10);
+    int i;
+
+    bestDist = 3.402823466e+38f;
+    for (i = 0; i < n; i++) {
+        _cs *cs = list[i];
+        unsigned h;
+        Pickup *p;
+        float hr;
+        float dist;
+        float r;
+
+        if (!cs->drawMe)
+            continue;
+        h = *(unsigned *)cs->epNode;
+        if ((h & 0xFFFC0000) == 0x4E6C0000)
+            continue;
+        p = (Pickup *)Interactives::getInteractive((h >> 7) & 0x7FF);
+        if (p->heldState != 0)
+            continue;
+        hr = p->handleRange;
+        vecSub(&d, &p->cs->trans, &a);
+        dist = vecLenSq(&d);
+        r = a.w + hr;
+        if (r * r < dist)
+            continue;
+        if (1e-10f < hr) {
+            vecSub(&d, &p->cs->trans, &b);
+            dist = eeSqrtf(vecLenSq(&d)) - hr;
+            dist = dist > 0.0f ? dist : 0.0f;
+            dist = dist * dist;
+        } else {
+            vecSub(&d, &p->cs->trans, &b);
+            dist = vecLenSq(&d);
+        }
+        if (dist < bestDist && !inFlight(p->ref)) {
+            bestDist = dist;
+            best = p;
+        }
+    }
+    return best ? (void *)best->ref.cur : 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", getClosestPickup__12LevelPickupsR8_fvectorT1);
+#endif
 /* Node of the thrown pickup closest to `p` within `r`, or 0. */
 #ifdef NON_MATCHING
 /* 31/34 words: register allocation */

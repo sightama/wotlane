@@ -40,6 +40,9 @@ public:
     static void turnOffAllVehicles(void);
     static void turnOnMilitary(void);
     static void initMilitaryForVegas(void);
+    static void hatCheck(_fvector *p, float r2);
+    static void turnOffForDelayedHat(_fvector *p, float r2);
+    static void enableHighlights(int i);
     static void createPickupHighlight(struct _hierhead *ep);
     static void startCinema(void);
     static void endCinema(void);
