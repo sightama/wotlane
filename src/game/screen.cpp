@@ -2684,7 +2684,211 @@ void screenTransition(bool b)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenTransition__Fb);
 #endif
+#ifdef NON_MATCHING
+extern int UnlockTitle;
+extern int g_monsterToUnlock;
+extern int g_skinToUnlock;
+extern char D_006EEA48[]; /* "TOKENS #    ": the token count is printed into it */
+extern char D_006EEA58[]; /* message line, overwritten by the messages below */
+extern char D_006EEA88[]; /* "UNLOCKED" */
+extern char D_006F80B8[]; /* "FREEBIE" */
+extern char D_006F80C0[]; /* "SPECIAL" */
+extern char D_006EEAF0[]; /* " BATTLE TOKENS!" */
+extern int visibleStart2986 __asm__("visibleStart.2986");
+extern int visibleEndInit2988 __asm__("_$tmp_1.2988");
+extern int visibleEnd __asm__("D_006F8C98");
+extern int unlockMenuSel __asm__("currentMenuSelection.2985");
+extern int unlockGroup __asm__("m.2989");
+extern int unlockCursor __asm__("s.2990");
+extern int unlockFade __asm__("fade.2991");
+extern int unlockItems __asm__("items.2992");
+extern int msgAlpha __asm__("loop.2993");
+extern int msgFrames __asm__("loop2.2994");
+extern int msgFadingIn __asm__("fadingin.2995");
+void fontSetCharSizesInSubPixels(int font, int w, int h, int spaceX, int spaceY);
+void fontSetColor(int font, int r, int g, int b, int a);
+void fontSetSize(int font, int size);
+void fontSpritePrintCenteredXY(int font, int x, int y, char *str);
+void showButtons(int screen);
+void saveUnlocks(void);
+extern "C" int sprintf(char *, const char *, ...);
+#define UL_TOKENS (*(int *)((char *)shell + 0x2B24))
+/* Prints one entry: the highlighted one big and red on font 0, the others small on font 1. */
+#define UL_PRINT(x, y, str, highlighted)                                     \
+    if (highlighted) {                                                      \
+        fontSetCharSizesInSubPixels(0, 0xFF, 0x96, -0x13, -0x15);           \
+        fontSetColor(0, 0xFF, 0x3C, 0x3C, unlockFade);                      \
+        fontSpritePrintCenteredXY(0, (x), (y), (str));                      \
+        fontSetColor(0, 0xC8, 0xC8, 0xC8, 0x20);                            \
+    } else {                                                                \
+        fontSetCharSizesInSubPixels(0, 0xBE, 0x78, -0x13, -0x15);           \
+        fontSpritePrintCenteredXY(1, (x), (y), (str));                      \
+    }
+/* Starts showing `fmt` on the message line (fades in, then out after 0x97 frames). */
+#define UL_MESSAGE(args...)                                                   \
+    fontSetCharSizesInSubPixels(0, 0x109, 0x8C, -0xC, -0x15);               \
+    sprintf(D_006EEA58, args);                                              \
+    msgFadingIn = 1;                                                        \
+    msgAlpha = 0;                                                           \
+    msgFrames = 0
+/* Unlock screen (21): left/right pick the group (unlockGroup 0..9 the monsters, 10 the levels, 11 the minigames; UnlockTitle
+   follows it), up/down the entry (four per group, three for the levels and minigames). Each entry shows its name and, while
+   locked, its cost text (SelectSlot::costText); unlocked ones show "UNLOCKED", or "FREEBIE" for the first two costumes of monsters
+   1..8. Confirm (6) spends battle tokens (Shell+0x2B24) on a locked entry through saveUnlocks, or explains why it can't: not
+   enough tokens, the monster itself (entry 0) has to be unlocked first, or entry 3 of monster 5 (only unlocked elsewhere).
+   NON_MATCHING: 12/867 words differ, 0xAB4 bytes vs 0xD8C (untuned; the retail repeats the print and message code in every
+   branch, here it is shared, so there are fewer call sites but each path makes the same calls). */
+void screenUnlocker(void)
+{
+    int i, sel;
+
+    if (visibleEndInit2988 == 0) {
+        visibleEndInit2988 = 1;
+        visibleEnd = visibleStart2986 + 4;
+    }
+    if (screenFirstPass != 0) {
+        fontSetSize(0, 0x14);
+        fontSetSize(1, 0xF);
+        unlockFade = 0;
+        screenFirstPass = 0;
+    }
+    unlockItems = unlockGroup >= 11 ? 3 : 4;
+    if (unlockFade < 0x80) {
+        fontSetColor(0, 0xC8, 0xC8, 0xC8, unlockFade);
+        fontSetColor(1, 0xC8, 0xC8, 0xC8, 0x20);
+    } else {
+        fontSetColor(0, 0x1E, 0x1E, 0x1E, unlockFade);
+    }
+    for (i = 0; i < unlockItems; i++) {
+        int y = 0x52 + i * 11;
+        SelectSlot *s = &monsterSelectMode[unlockGroup * 4 + i];
+
+        /* the entry's name */
+        if (i == unlockMenuSel) {
+            fontSetCharSizesInSubPixels(0, 0xFF, 0x96, -0x13, -0x15);
+            fontSetColor(0, 0xFF, 0x3C, 0x3C, unlockFade);
+            fontSpritePrintCenteredXY(0, 0xE6, y, s->name);
+            fontSetColor(0, 0xC8, 0xC8, 0xC8, unlockFade > 0x20 ? 0x20 : unlockFade);
+        } else {
+            fontSetCharSizesInSubPixels(0, 0xBE, 0x78, -0x13, -0x15);
+            fontSetColor(1, 0xC8, 0xC8, 0xC8, 0x20);
+            fontSpritePrintCenteredXY(1, 0xE6, y, s->name);
+        }
+        /* its state */
+        if (unlockGroup == 5 && i == 3 && monsterSelectMode[5 * 4 + 3].state == 0) {
+            UL_PRINT(0x1C2, y, D_006F80C0, i == unlockMenuSel);
+        } else if (s->state == 0) {
+            UL_PRINT(0x1C2, y, s->costText, i == unlockMenuSel);
+        } else if (s->state == 1) {
+            if ((unsigned int)(unlockGroup - 1) < 8 && (i == 0 || i == 1)) {
+                UL_PRINT(0x1C2, y, D_006F80B8, i == unlockMenuSel);
+            } else {
+                UL_PRINT(0x1C2, y, D_006EEA88, i == unlockMenuSel);
+            }
+        }
+    }
+    sprintf(D_006EEA48, "%i", UL_TOKENS);
+    fontSetColor(0, 0x1E, 0x1E, 0x1E, unlockFade);
+    fontSetCharSizesInSubPixels(0, 0xFF, 0x96, -0x13, -0x15);
+    fontSetColor(0, 0xAA, 0x55, 0, 0x80);
+    fontSetCharSizesInSubPixels(0, 0x109, 0x8C, -0xC, -0x15);
+    fontSpritePrintCenteredXY(0, 0x140, 0x8C, D_006EEAF0);
+    fontSetCharSizesInSubPixels(0, 0x2BC, 0x190, -0x82, -0x15);
+    fontSpritePrintCenteredXY(0, 0x140, 0x93, D_006EEA48);
+    fontSetDefaultSize(0);
+    fontSetColor(0, 0x1E, 0x1E, 0x1E, unlockFade);
+    fontSetSize(0, 0xF);
+    fontSetCharSizesInSubPixels(0, 0x109, 0x8C, -0xC, -0x15);
+    fontSetColor(0, 0xC8, 0, 0, msgAlpha);
+    fontSpritePrintCenteredXY(0, 0x140, 0x3C, D_006EEA58);
+    fontSetColor(0, 0x1E, 0x1E, 0x1E, unlockFade);
+    fontSetDefaultSize(0);
+    if (msgAlpha >= 0x80 && msgFrames >= 0x97)
+        msgFadingIn = 0;
+    unlockMenuSel = unlockCursor;
+    if (unlockFade < 0x80)
+        unlockFade += 4;
+    switch (screenGetInput(1) & 0xFFFF) {
+    case 3:
+        unlockCursor = 0;
+        unlockGroup--;
+        unlockGroup = unlockGroup > -1 ? unlockGroup : 11;
+        unlockGroup = unlockGroup > 11 ? 0 : unlockGroup;
+        UnlockTitle = unlockGroup;
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(5);
+        break;
+    case 4:
+        unlockCursor = 0;
+        unlockGroup++;
+        unlockGroup = unlockGroup > -1 ? unlockGroup : 11;
+        unlockGroup = unlockGroup > 11 ? 0 : unlockGroup;
+        UnlockTitle = unlockGroup;
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(3);
+        break;
+    case 1:
+        unlockCursor--;
+        if (unlockGroup >= 11) {
+            unlockCursor = unlockCursor > -1 ? unlockCursor : 2;
+            unlockCursor = unlockCursor > 2 ? 0 : unlockCursor;
+        } else {
+            unlockCursor = unlockCursor > -1 ? unlockCursor : 3;
+        }
+        unlockCursor = unlockCursor > 3 ? 0 : unlockCursor;
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 2:
+        unlockCursor++;
+        if (unlockGroup >= 11) {
+            unlockCursor = unlockCursor > -1 ? unlockCursor : 2;
+            unlockCursor = unlockCursor > 2 ? 0 : unlockCursor;
+        } else {
+            unlockCursor = unlockCursor > -1 ? unlockCursor : 3;
+        }
+        unlockCursor = unlockCursor > 3 ? 0 : unlockCursor;
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        sel = unlockMenuSel;
+        if (sel >= 0 && sel <= 3) {
+            SelectSlot *s = &monsterSelectMode[unlockGroup * 4 + sel];
+
+            if (sel == 3 && unlockGroup == 5 && unlockCursor == sel && monsterSelectMode[5 * 4 + 3].state == 0) {
+                UL_MESSAGE("CANNOT UNLOCK THIS ITEM HERE!");
+            } else if (UL_TOKENS < s->cost && s->state == 0) {
+                UL_MESSAGE("MORE TOKENS NEEDED!");
+            } else if (sel != 0 && (unsigned int)unlockGroup < 10 && monsterSelectMode[unlockGroup * 4].state == 0) {
+                UL_MESSAGE("UNLOCK %s FIRST!", monsterSelectMode[unlockGroup * 4].name);
+            } else if (!(UL_TOKENS < s->cost) && s->state == 0) {
+                g_monsterToUnlock = unlockGroup;
+                g_skinToUnlock = sel;
+                saveUnlocks();
+                showButtons(currScreen);
+                g_skinToUnlock = -1;
+                g_monsterToUnlock = -1;
+            }
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        sprintf(D_006EEA58, D_006F7EB8);
+        changeScreen(0x15, prevScreen, -1, 0xA, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        break;
+    }
+    if (msgFadingIn != 0) {
+        if (msgAlpha < 0x80)
+            msgAlpha += 4;
+    } else if (msgAlpha > 0) {
+        msgAlpha -= 4;
+    }
+    msgFrames++;
+}
+#undef UL_TOKENS
+#undef UL_PRINT
+#undef UL_MESSAGE
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenUnlocker__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect4P__Fv);
 #ifdef NON_MATCHING
 /* Title screen ("press start"): on the first pass hides the menus, selects item 1 of every screen for the four pads, gives both
