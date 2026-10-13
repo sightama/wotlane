@@ -19,7 +19,9 @@ public:
     _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
     char pad164[0x168 - 0x164];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
-    char pad190[0x25C - 0x190];
+    char pad190[0x194 - 0x190];
+    _hierswitch *m_selectSwMG[10]; /* 0x194: m_selectSw of the minigame monster select */
+    char pad1BC[0x25C - 0x1BC];
     _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
     char pad5CC[0x5D4 - 0x5CC];
     _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1) */
@@ -83,14 +85,19 @@ public:
     int MonsterIsChosen(int i);
     void BootInitUi(void);
     void BootInitUserint(void);
+    void BootInitUserint1(void);
     void BootInitGame(void);
     void InitBeforeUiDbLoad(void);
     void InitBeforeUserintDbLoad(void);
     void LoadUserintDB(void);
+    void LoadUserintDB1(void);
     void LoadUserintTexture(void);
+    void LoadUserintTexture1(void);
     void InitRTState(void);
     void FinishLoadBar(void);
     void FadeScreen(int a, bool b, unsigned char c, unsigned char d, unsigned char e, unsigned char f, unsigned char g, unsigned char h);
+    void FadeScreen(int a, bool b, unsigned int &t0, unsigned int &t1, unsigned char c, unsigned char d, unsigned char e, unsigned char f,
+                    unsigned char g, unsigned char h);
     void InitPlayers(void);
     void InitPlayerLives(void);
     void EvaluateGameStatus(int r);

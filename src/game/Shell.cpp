@@ -1711,7 +1711,18 @@ void Shell::GenesisMovie(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", GenesisMovie__5Shell);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/Shell", FadeScreen__5ShellibUcUcUcUcUcUc);
+extern "C" int sceGsSyncV(int mode);
+/* Runs a whole fade from its first frame: waits for an even field and calls the stepping FadeScreen with fresh counters. */
+void Shell::FadeScreen(int a, bool b, unsigned char c, unsigned char d, unsigned char e, unsigned char f, unsigned char g,
+                       unsigned char h)
+{
+    unsigned int t0 = 0;
+    unsigned int t1 = 0;
+
+    while (sceGsSyncV(0) != 0)
+        ;
+    FadeScreen(a, b, t0, t1, c, d, e, f, g, h);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Shell", FadeScreen__5ShellibRUiT3UcUcUcUcUcUc);
 #ifdef NON_MATCHING
 enum CREATOR_KEY { CREATOR_KEY_0, CREATOR_KEY_1, CREATOR_KEY_2 };
