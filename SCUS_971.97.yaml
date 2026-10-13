@@ -214,12 +214,12 @@ segments:
       - [0x0FD650, cpp, common/GsPkt]  # c++, 4 funcs, name: guess
       - [0x0FD7F8, cpp, common/hd]  # c++, 16 funcs, name: guess
       - [0x0FE980, cpp, common/hdHat]  # c++, 3 funcs, name: manual
-      - [0x0FEB30, asm, common/HdIterator]  # c++, 13 funcs, name: manual
+      - [0x0FEB30, cpp, common/HdIterator]  # c++, 13 funcs, name: manual
       - [0x0FF5F8, cpp, common/hdLos]  # c++, 2 funcs, name: manual
       - [0x0FF7F0, cpp, common/hdPoly]  # c++, 5 funcs, name: manual
-      - [0x100970, asm, common/hdPrim]  # c++, 14 funcs, name: manual
+      - [0x100970, cpp, common/hdPrim]  # c++, 14 funcs, name: manual
       - [0x1017B0, cpp, common/hdSphere]  # c++, 3 funcs, name: manual
-      - [0x101D60, asm, common/hdTraverse]  # c++, 4 funcs, name: manual
+      - [0x101D60, cpp, common/hdTraverse]  # c++, 4 funcs, name: manual
       - [0x102910, cpp, common/hier]  # c++, 51 funcs, name: guess
       - [0x1052A0, cpp, common/texm]  # c++, 30 funcs, name: guess
       - [0x108A20, cpp, common/ps]  # c++, 37 funcs, name: guess
@@ -245,7 +245,7 @@ segments:
       - [0x11E3C0, cpp, common/readbuf]  # c++, 6 funcs, name: manual
       - [0x11E4D0, cpp, common/resetcom]  # c++, 18 funcs, name: guess
       - [0x11EF08, cpp, common/RigidBody]  # c++, 37 funcs, name: guess
-      - [0x120510, asm, common/ScreenPolys]  # c++, 19 funcs, name: guess
+      - [0x120510, cpp, common/ScreenPolys]  # c++, 19 funcs, name: guess
       - [0x121090, cpp, common/ShiftJIS]  # c++, 7 funcs, name: guess
       - [0x121418, cpp, common/smooth]  # c++, 8 funcs, name: guess
       - [0x121BB0, cpp, common/str]  # c++, 4 funcs, name: guess
@@ -599,7 +599,7 @@ segments:
       - [0x5F3B30, .rodata, common/file]
       - [0x5F3D80, .rodata, common/font]
       - [0x5F3E30, .rodata, common/hdSphere]
-      - [0x5F3E50, rodata, common/hdTraverse]
+      - [0x5F3E50, .rodata, common/hdTraverse]
       - [0x5F3FA0, .rodata, common/texm]
       - [0x5F4058, .rodata, common/ps]
       - [0x5F40B0, .rodata, common/hoser]

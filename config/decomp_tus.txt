@@ -137,3 +137,7 @@ common/ps
 common/hd
 common/hdPoly
 common/electric
+common/hdPrim
+common/hdTraverse
+common/HdIterator
+common/ScreenPolys

@@ -1,0 +1,21 @@
+#include "common.h"
+
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", clearSources__11ScreenPolysv);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", initSourceObject__11ScreenPolysP11_hierobjecti);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", dmaData__11ScreenPolysv);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", setColor__11ScreenPolysiiiii);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", getColor__11ScreenPolysiRiN32);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", setDefaultColor__11ScreenPolysi);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", dimColor__11ScreenPolysi);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", setHilightColor__11ScreenPolysi);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", setSourceFX__11ScreenPolysiUs);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", addPoly__11ScreenPolysiiiRQ211ScreenPolys8PolyData);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", addFractionalPoly__11ScreenPolysffiiiRQ211ScreenPolys8PolyData);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", polyBuildPrim__FiiiRQ211ScreenPolys8PolyDataP6QwData);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", resolveFX__FiiiRQ211ScreenPolys8PolyDataT3);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", polyInitPacket__FP11_hierobjectP9SourceObjP6QwData);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", __15SpriteAnimation);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", clear__15SpriteAnimation);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", addFrame__15SpriteAnimationRQ211ScreenPolys8PolyData);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", draw__15SpriteAnimationiib);
+INCLUDE_ASM("asm/nonmatchings/common/ScreenPolys", crossfadeGraphics__15SpriteAnimationbii);
