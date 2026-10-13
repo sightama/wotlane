@@ -34,6 +34,26 @@ extern float targetAlpha;
 extern int betweenScreens;
 extern int on_bit[] __asm__("on_bit_006EEE78");
 extern "C" int printf(const char *, ...);
+class ShellRtLoop {
+public:
+    char pad0[0x24];
+
+    void startField(bool b);
+    void endField(bool skipDraw);
+    void onEnd(void);
+};
+class MonsterMc {
+public:
+    int pad0;
+    int m_done; /* 0x4: the memory card operation started by the last update* call finished */
+
+    void updateBootLoad(void);
+    void updateUnlockSave(void);
+    void updateSettingsSave(void);
+    void updateSettingsLoad(void);
+    void updateStoryModeLoad(void);
+    static MonsterMc global;
+};
 int inputGetInput(int mask, int pad);
 float screenGetFontAlpha(void);
 void hierSetCsDrawMe(_cs *cs, unsigned char on);
@@ -332,7 +352,30 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEE30);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", on_bit_006EEE78);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenLevelSelect__Fv);
+void moviesReleaseScreenObject(void);
+extern int levelMonsters[][12];
+extern int levelMonsterModels[][4];
+/* Story mode "load game": stops the menu movie, loads the save from the memory card and takes the AI monsters and costumes of the
+   saved level from the level tables (0x29E0: number of AIs per level). */
+#ifdef NON_MATCHING
+/* 10/50 palavras; o retail relê m_levelNum a cada volta e anda com um ponteiro em m_costume */
+void screenLoadSave(void)
+{
+    int i;
+
+    moviesReleaseScreenObject();
+    continueDecoding = 0;
+    MonsterMc::global.updateStoryModeLoad();
+    Shell *sh = shell;
+    int *numAIs = (int *)((char *)sh + 0x29E0);
+    for (i = 0; i < numAIs[sh->m_levelNum]; i++) {
+        sh->m_monsterSel[4 + i] = levelMonsters[sh->m_levelNum][i];
+        sh->m_costume[2 + i] = levelMonsterModels[sh->m_levelNum][i];
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenLoadSave__Fv);
+#endif
 #ifdef NON_MATCHING
 /* Moves the knob of slider `which` (0 or 1) along its bar; `v` is clamped to 0..1. */
 void setSlider(int which, float v)
@@ -621,21 +664,6 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", screenMGSelect__Fv);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenBestOf__Fv);
 #ifdef NON_MATCHING
-class ShellRtLoop {
-public:
-    char pad0[0x24];
-
-    void startField(bool b);
-    void endField(bool skipDraw);
-};
-class MonsterMc {
-public:
-    int pad0;
-    int m_bootLoaded; /* 0x4: the boot-time memory card load finished */
-
-    void updateBootLoad(void);
-    static MonsterMc global;
-};
 extern int clearBeforeFontDMA;
 extern "C" void snd_SetMasterVolume(int which, int vol);
 class TheGame {
@@ -656,7 +684,7 @@ void screenMemoryCardInit(void)
     do {
         loop.startField(true);
         MonsterMc::global.updateBootLoad();
-        if (MonsterMc::global.m_bootLoaded) {
+        if (MonsterMc::global.m_done) {
             done = 1;
             clearBeforeFontDMA = 0;
             *(int *)((char *)shell + 0x292C) = 1;
@@ -1205,9 +1233,45 @@ void killButtons(void)
     hierSetCsDrawMe(b3, 0);
     hierSetCsDrawMe(b1, 0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/screen", saveUnlocks__Fv);
-INCLUDE_ASM("asm/nonmatchings/game/screen", saveSettings__Fv);
-INCLUDE_ASM("asm/nonmatchings/game/screen", loadSettings__Fv);
+void setButtonAlpha(float a);
+void showButtons(int screen);
+/* Runs frames until the unlocks are written to the memory card, then shows the menu buttons again. */
+void saveUnlocks(void)
+{
+    ShellRtLoop loop;
+
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateUnlockSave();
+        loop.endField(true);
+    } while (!MonsterMc::global.m_done);
+    setButtonAlpha(1.0f);
+}
+/* Runs frames until the options are written to the memory card. */
+void saveSettings(void)
+{
+    ShellRtLoop loop;
+
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateSettingsSave();
+        loop.endField(true);
+    } while (!MonsterMc::global.m_done);
+    showButtons(currScreen);
+}
+/* Runs frames until the options are read back from the memory card. */
+void loadSettings(void)
+{
+    ShellRtLoop loop;
+
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateSettingsLoad();
+        loop.endField(true);
+    } while (!MonsterMc::global.m_done);
+    loop.onEnd();
+    showButtons(currScreen);
+}
 #ifdef NON_MATCHING
 /* 7/19 words: address math scheduling */
 int isSlotOpen(int group, int slot)
