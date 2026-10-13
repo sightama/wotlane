@@ -492,8 +492,7 @@ void TheGame::gameResolveLifeAndDeath(void)
         if (m->m_unkF6 != 0) {
             int oldType = m->m_typeBits;
 
-            printf("We just noticed that an AI died in Endurance mode!!, We'll clean him up and provide a new one.
-");
+            printf("We just noticed that an AI died in Endurance mode!!, We'll clean him up and provide a new one.\n");
             ais[SHN(0x2A70)]->m_playerNum = 0;
             hierSetCsDrawMe(ais[SHN(0x2A70)]->m_cs, 0);
             SHN(0x2A70)++;
@@ -612,12 +611,10 @@ void TheGame::gameResolveLifeAndDeath(void)
         break;
     case 0x3F:
     case 0x40:
-        printf("Something is really screwed up if we think we're in the shell here.
-");
+        printf("Something is really screwed up if we think we're in the shell here.\n");
         break;
     default:
-        printf("ERROR - TheGame::gameResolveLifeAndDeath doesn't recognize %i as a valid game mode
-", m_gameMode);
+        printf("ERROR - TheGame::gameResolveLifeAndDeath doesn't recognize %i as a valid game mode\n", m_gameMode);
         break;
     }
 }

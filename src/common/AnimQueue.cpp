@@ -84,13 +84,11 @@ void AnimQueue::Reset(void)
 void AnimQueue::Push(_animHandle *h, int a, int b, int c)
 {
     if (count >= 12) {
-        printf("Animation Queue is full, we need more than %i animhandles
-", 12);
+        printf("Animation Queue is full, we need more than %i animhandles\n", 12);
         return;
     }
     if (h->a == 0) {
-        printf("Animation at %p is not valid!  I am not pushing its handle.
-", h);
+        printf("Animation at %p is not valid!  I am not pushing its handle.\n", h);
         return;
     }
     if (count)

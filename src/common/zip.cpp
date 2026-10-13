@@ -117,8 +117,7 @@ int zipCheckHeader(void)
         ret = size[0] + (size[1] << 8) + (size[2] << 16) + (size[3] << 24);
         zipFileBuf = (unsigned char *)nameLen + (*nameLen + 4);
     } else {
-        printf("File signature = 0x%X, should be 0x04034549 (\"IE..\")
-", sig);
+        printf("File signature = 0x%X, should be 0x04034549 (\"IE..\")\n", sig);
         ret = 0;
     }
     return ret;
@@ -439,8 +438,7 @@ int zipInflateBlockStored(void)
     DUMPBITS(16)
     NEEDBITS(16)
     if (n != (unsigned)((~b) & 0xffff)) {
-        printf("Error in compressed data, stored block.
-");
+        printf("Error in compressed data, stored block.\n");
         return 1;
     }
     DUMPBITS(16)
@@ -553,8 +551,7 @@ int zipInflateBlockDynamic(void)
     if (i) {
         if (i == 1)
             zipFreeHuffmanTable(tl);
-        printf("!! Problems in building huffman tables. Error %i
-", i);
+        printf("!! Problems in building huffman tables. Error %i\n", i);
     }
 
     /* read in literal and distance code lengths */
@@ -679,18 +676,15 @@ int zipInflateAll(char *name, void *dest)
     whichHalfMeg = 0;
     outFileBuf = (unsigned char *)dest;
     outFileWindow = (unsigned char *)dest;
-    printf("ZIP:- I received a request to unzip %s to %p.
-", name, dest);
+    printf("ZIP:- I received a request to unzip %s to %p.\n", name, dest);
 
     if (!fileReads(name, ZIP_BUF, whichHalfMeg++)) {
-        printf("Couldn't read the file, \"%s\" into 0x%p
-", name, ZIP_BUF);
+        printf("Couldn't read the file, \"%s\" into 0x%p\n", name, ZIP_BUF);
         return 0;
     }
     size = zipCheckHeader();
     if (size == 0) {
-        printf("Header was screwed up, not a valid zip file.
-");
+        printf("Header was screwed up, not a valid zip file.\n");
         return 0;
     }
     howManyBlocks = 0;

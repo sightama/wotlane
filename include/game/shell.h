@@ -15,13 +15,17 @@ public:
     char pad4[0x5C - 0x4];
     _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on */
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
-    char pad70[0x160 - 0x70];
+    _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one */
+    char pad7C[0x160 - 0x7C];
     _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
     char pad164[0x168 - 0x164];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
-    char pad190[0x25C - 0x190];
+    char pad190[0x194 - 0x190];
+    _hierswitch *m_selectSwMG[10]; /* 0x194: m_selectSw of the minigame monster select */
+    char pad1BC[0x25C - 0x1BC];
     _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
-    char pad5CC[0x5D4 - 0x5CC];
+    _hierswitch *m_sw5CC; /* 0x5CC: set to 0 when a two-player mode is picked */
+    _hierswitch *m_sw5D0; /* 0x5D0: 0 on the main and mode menus; the level select sets it to the first level of the list */
     _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1) */
     char pad5D8[0x5DC - 0x5D8];
     /* options screen (10) */
@@ -31,20 +35,26 @@ public:
     _hierswitch *m_monoSw;    /* 0x5FC */
     char pad600[0x604 - 0x600];
     _cs *m_sliderCs[2];      /* 0x604: knobs of the sfx and music volume bars (setSlider moves them) */
-    char pad60C[0x61C - 0x60C];
+    char pad60C[0x614 - 0x60C];
+    _hierswitch *m_lockedSw; /* 0x614: 1 while the level highlighted in the level select is still locked */
+    char pad618[0x61C - 0x618];
     _animHandle m_screenAnim[12]; /* 0x61C: menu transition animations 1..11 (anim 0x270E of the shell db); changeScreen plays one */
     char *m_menuObj[22][90]; /* 0x6DC: [screen][i] objects drawn on each menu screen (TagList::m_entries); +0x4C is their alpha, faded by screenTransition */
-    char pad25CC[0x25D4 - 0x25CC];
+    _hierswitch *m_sw25CC; /* 0x25CC: set to 1 (with m_sw25D0) when the main menu opens screen 9 */
+    _hierswitch *m_sw25D0; /* 0x25D0 */
     _animHandle m_reelSpinAnim[2]; /* 0x25D4: one per select reel (anims 0x2585 + reel) */
     char pad25F4[0x2644 - 0x25F4];
     _animHandle m_reelAnim[2][10]; /* 0x2644: per reel, the animation of each of its 10 positions (anims 0x259E + reel * 10 + i); changeReel */
     char pad2784[0x2938 - 0x2784];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
-    char pad2958[0x2A24 - 0x2958];
+    char pad2958[0x29E0 - 0x2958];
+    int m_levelNumAIs[17]; /* 0x29E0: per m_levelNum, the AIs of game mode 1 (first item of the one-player modes menu) on that level */
     int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
     int m_sfxVolume;      /* 0x2A30: options sfx volume (0..0x400), master volume groups 0/3/4/5 */
     int m_musicVolume;    /* 0x2A34: options music volume, group 1 */
-    char pad2A38[0x2A44 - 0x2A38];
+    int m_sfxVolumeSaved;   /* 0x2A38: m_sfxVolume when the options screen was opened */
+    int m_musicVolumeSaved; /* 0x2A3C: m_musicVolume when the options screen was opened */
+    char pad2A40[0x2A44 - 0x2A40];
     int m_killTarget;     /* 0x2A44: wins needed to take the match (0 = no target, rounds just restart) */
     char pad2A48[0x2B40 - 0x2A48];
     int m_continues[2];   /* 0x2B40: rounds each player can still lose in a two-player match (from m_elimination) */
@@ -83,14 +93,19 @@ public:
     int MonsterIsChosen(int i);
     void BootInitUi(void);
     void BootInitUserint(void);
+    void BootInitUserint1(void);
     void BootInitGame(void);
     void InitBeforeUiDbLoad(void);
     void InitBeforeUserintDbLoad(void);
     void LoadUserintDB(void);
+    void LoadUserintDB1(void);
     void LoadUserintTexture(void);
+    void LoadUserintTexture1(void);
     void InitRTState(void);
     void FinishLoadBar(void);
     void FadeScreen(int a, bool b, unsigned char c, unsigned char d, unsigned char e, unsigned char f, unsigned char g, unsigned char h);
+    void FadeScreen(int a, bool b, unsigned int &t0, unsigned int &t1, unsigned char c, unsigned char d, unsigned char e, unsigned char f,
+                    unsigned char g, unsigned char h);
     void InitPlayers(void);
     void InitPlayerLives(void);
     void EvaluateGameStatus(int r);
@@ -148,6 +163,12 @@ SHELL_AT(m_lives, 0x2BBC);
 SHELL_AT(m_inSession, 0x2BCC);
 SHELL_AT(m_roundsDecided, 0x2BDC);
 SHELL_AT(m_mode, 0x2C10);
+SHELL_AT(m_lockedSw, 0x614);
+SHELL_AT(m_levelNumAIs, 0x29E0);
+SHELL_AT(pad7C, 0x7C);
+SHELL_AT(m_sw5D0, 0x5D0);
+SHELL_AT(m_sw25D0, 0x25D0);
+SHELL_AT(m_musicVolumeSaved, 0x2A3C);
 #undef SHELL_AT
 
 #endif

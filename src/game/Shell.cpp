@@ -56,6 +56,7 @@ public:
 extern "C" void sceGsResetGraph(short mode, short inter, short omode, short ffmode);
 extern "C" void sceGsResetPath(void);
 extern char D_006F81B0[]; /* "shell" */
+extern char D_006F81B8[]; /* "load" */
 struct Camera {
     enum CameraPOV { POV_0, POV_1, POV_2, POV_3 };
 };
@@ -652,8 +653,7 @@ void Shell::EvaluateGameStatus(int r)
             EvaluateOnlineBattleStatus(r);
             break;
         default:
-            printf("ERROR - Shell::EvaluateGameStatus does not recognize %i as a Game Mode!!!!
-", m_mode);
+            printf("ERROR - Shell::EvaluateGameStatus does not recognize %i as a Game Mode!!!!\n", m_mode);
             break;
         }
     }
@@ -1056,8 +1056,7 @@ void Shell::EvaluateOnePlayerEnduranceStatus(int r)
         *(int *)((char *)game + 0xBBC) = 0;
         return;
     }
-    printf("An endurance mode game ended for reasons other than player dying or quitting!! AAAhhh
-");
+    printf("An endurance mode game ended for reasons other than player dying or quitting!! AAAhhh\n");
     m_inSession = 0;
     m_inMenus = 0;
 }
@@ -1120,7 +1119,18 @@ void Shell::BootInitUserint(void)
     doTweaks = 0;
     hierSetTraversalCallback(0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", BootInitUserint1__5Shell);
+/* BootInitUserint for the loading screen: inflates LOAD.RTX instead of SHELL.RTX and leaves the font alone. */
+void Shell::BootInitUserint1(void)
+{
+    snd_StreamSafeCdSync(0);
+    sceCdSync(0);
+    sceCdDiskReady(0);
+    zipInflateAll("\\SHELL\\LOAD.RTX;1", (void *)0x01B7FFF0);
+    InitGS(1);
+    timerInit(0x3C);
+    doTweaks = 0;
+    hierSetTraversalCallback(0);
+}
 #ifdef NON_MATCHING
 void Shell::BootInitGame(void)
 {
@@ -1184,14 +1194,31 @@ void Shell::LoadUserintTexture(void)
     texmInit(getVramAddr());
     fontInit(getVramAddr(), 1);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintTexture1__5Shell);
+/* LoadUserintTexture for the loading screen (load.rtx, load.tex) */
+void Shell::LoadUserintTexture1(void)
+{
+    int size;
+
+    size = zipInflateAll("shell/load.rtx", getNextNgpLoadAddr());
+    fileOnlyResFile(getNextNgpLoadAddr(), size);
+    texmResInit(getVramAddr(), (QwData *)getNextNgpLoadAddr());
+    size = zipInflateAll("shell/load.tex", getNextNgpLoadAddr());
+    fileOnlyTexFile(getNextNgpLoadAddr(), size);
+    texmInit(getVramAddr());
+    fontInit(getVramAddr(), 1);
+}
 /* shell.ngp (the menus' database) is inflated at 0xA00000 and becomes the only NGP file, named "shell" */
 void Shell::LoadUserintDB(void)
 {
     fileOnlyNgpFile((char *)0xA00000, zipInflateAll("shell/shell.ngp", (void *)0xA00000));
     fileAddName(D_006F81B0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintDB1__5Shell);
+/* LoadUserintDB for the loading screen: load.ngp at 0xA00000, named "load" */
+void Shell::LoadUserintDB1(void)
+{
+    fileOnlyNgpFile((char *)0xA00000, zipInflateAll("shell/load.ngp", (void *)0xA00000));
+    fileAddName(D_006F81B8);
+}
 #ifdef NON_MATCHING
 /* 97/279 words: untuned, from the m2c draft + asm */
 void Shell::LoadResTexture(void)
@@ -1584,32 +1611,27 @@ void Shell::LoadLevelFiles(void)
     fileCdSearchFile(&f, name);
     initProgressBar(m_numAIs + m_numPlayers, ngpSize, f.size);
     informProgressBar(0.0f);
-    printf(" =+= Starting     time = %s
-", fileGetTimeString());
+    printf(" =+= Starting     time = %s\n", fileGetTimeString());
     LoadLevelDB();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= Levels Done  time = %s
-", fileGetTimeString());
+    printf(" =+= Levels Done  time = %s\n", fileGetTimeString());
     LoadMonstersDB();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= Monsters Done    time = %s
-", fileGetTimeString());
+    printf(" =+= Monsters Done    time = %s\n", fileGetTimeString());
     LoadResTexture();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= ResTex Done  time = %s
-", fileGetTimeString());
+    printf(" =+= ResTex Done  time = %s\n", fileGetTimeString());
     LoadTexture();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= Texture Done time = %s
-", fileGetTimeString());
+    printf(" =+= Texture Done time = %s\n", fileGetTimeString());
     dbsRelocateFileZero(getVramAddr(), UseCommandLineLevel);
     dbInitDb((_dbheader *)0xA00000, getVramAddr());
 }
@@ -1622,8 +1644,7 @@ void Shell::FinishLoadBar(void)
     gWhichMacroSection++;
     gWhichMicroSection = 0;
     informProgressBar(0.0f);
-    printf(" =+= Finished     time = %s
-", fileGetTimeString());
+    printf(" =+= Finished     time = %s\n", fileGetTimeString());
     gOkToDrawProgressBar = 0;
     viewSetNumViews(1);
     viewCreate((_viewports)0, 0);
@@ -1682,7 +1703,18 @@ void Shell::GenesisMovie(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", GenesisMovie__5Shell);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/Shell", FadeScreen__5ShellibUcUcUcUcUcUc);
+extern "C" int sceGsSyncV(int mode);
+/* Runs a whole fade from its first frame: waits for an even field and calls the stepping FadeScreen with fresh counters. */
+void Shell::FadeScreen(int a, bool b, unsigned char c, unsigned char d, unsigned char e, unsigned char f, unsigned char g,
+                       unsigned char h)
+{
+    unsigned int t0 = 0;
+    unsigned int t1 = 0;
+
+    while (sceGsSyncV(0) != 0)
+        ;
+    FadeScreen(a, b, t0, t1, c, d, e, f, g, h);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Shell", FadeScreen__5ShellibRUiT3UcUcUcUcUcUc);
 #ifdef NON_MATCHING
 enum CREATOR_KEY { CREATOR_KEY_0, CREATOR_KEY_1, CREATOR_KEY_2 };

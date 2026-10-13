@@ -55,8 +55,7 @@ DbInteractive *Interactives::getInteractive(int i)
 {
     if (i > 0 && i < s_numInteractives)
         return s_dbInteractive[i];
-    printf("interact Error:  Bad index passed to GetInteractive %d numInteractives %d
-", i, s_numInteractives);
+    printf("interact Error:  Bad index passed to GetInteractive %d numInteractives %d\n", i, s_numInteractives);
     return s_dbInteractive[0];
 }
 #ifdef NON_MATCHING

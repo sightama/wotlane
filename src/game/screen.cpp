@@ -34,6 +34,26 @@ extern float targetAlpha;
 extern int betweenScreens;
 extern int on_bit[] __asm__("on_bit_006EEE78");
 extern "C" int printf(const char *, ...);
+class ShellRtLoop {
+public:
+    char pad0[0x24];
+
+    void startField(bool b);
+    void endField(bool skipDraw);
+    void onEnd(void);
+};
+class MonsterMc {
+public:
+    int pad0;
+    int m_done; /* 0x4: the memory card operation started by the last update* call finished */
+
+    void updateBootLoad(void);
+    void updateUnlockSave(void);
+    void updateSettingsSave(void);
+    void updateSettingsLoad(void);
+    void updateStoryModeLoad(void);
+    static MonsterMc global;
+};
 int inputGetInput(int mask, int pad);
 float screenGetFontAlpha(void);
 void hierSetCsDrawMe(_cs *cs, unsigned char on);
@@ -57,6 +77,7 @@ int screenPrepareDefault(int a, int b);
 class ShellSound {
 public:
     void playShellSFXSound(int id);
+    void terminateShellSound(void);
 };
 extern int prevScreen;
 #ifdef NON_MATCHING
@@ -121,12 +142,388 @@ void changeReel(int reel, int from, int to)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeReel__Fiii);
 #endif
+#ifdef NON_MATCHING
+extern int numSelectables2784 __asm__("numSelectables.2784");
+void fontSetDefaultSize(int font);
+void resetSelectables(void);
+int inputIsCtlAvailable(int pad);
+/* Main menu: 1 = one player (screen 2), 2 = two players (screen 5, needs pad 2), 3 = options (screen 10; the volumes are saved first so
+   the screen can restore them), 4 = screen 9, 5 = screen 21. Up/down (codes 1/2) move the highlight with wraparound.
+   NON_MATCHING: 25/262 words differ, 0x3EC bytes vs 0x418 (untuned; same call sequence). */
+void screenMain(void)
+{
+    int input, sel;
+
+    if (screenFirstPass != 0) {
+        numSelectables2784 = screenPrepareDefault(1, currentSelection[currScreen]);
+        screenFirstPass = 0;
+        resetSelectables();
+        shell->m_numAIs = 0;
+        shell->m_numPlayers = 1;
+        fontSetDefaultSize(0);
+        fontSetDefaultSize(1);
+        hierSetSwitch(shell->m_sw5D0, 0);
+        moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+        myMovie.Play(false, MainMovie);
+        continueDecoding = 1;
+    }
+    myMovie.Play(false, MainMovie);
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 1:
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2784;
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 2:
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel < numSelectables2784 ? sel + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        switch (currentSelection[currScreen]) {
+        case 1:
+            shell->m_numPlayers = currentSelection[currScreen];
+            changeScreen(1, 2, 1, 0, true);
+            break;
+        case 2:
+            if (inputIsCtlAvailable(1)) {
+                shell->m_numPlayers = currentSelection[currScreen];
+                changeScreen(1, 5, 1, 0, true);
+            }
+            break;
+        case 3:
+            shell->m_sfxVolumeSaved = shell->m_sfxVolume;
+            shell->m_musicVolumeSaved = shell->m_musicVolume;
+            changeScreen(1, 0xA, 1, 5, true);
+            break;
+        case 4:
+            hierSetSwitch(shell->m_sw25CC, 1);
+            hierSetSwitch(shell->m_sw25D0, 1);
+            changeScreen(1, 9, 1, 9, true);
+            break;
+        case 5:
+            changeScreen(1, 0x15, 1, 0xA, true);
+            break;
+        default:
+            printf("Main Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+            break;
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMain__Fv);
+#endif
+#ifdef NON_MATCHING
+/* Two-player monster select: same unlocked range as initSelectSwitches, then each column shows who is on it. cursor1/cursor2 are the
+   1-based columns of the players; frame 1 = player 1 only, 2 = player 2 only, 3 = both; flag1/flag2 (player done choosing?) turn the
+   player's highlight off (frame 0). */
+extern int first2788 __asm__("first.2788");
+extern int last2789 __asm__("last.2789");
+__asm__("#SNFIX_SMALL first.2788");
+__asm__("#SNFIX_SMALL last.2789");
+#define first first2788
+#define last last2789
+/* 8/144 palavras; o retail repete o carregamento de shell (gp e lui) em cada ramo do laço */
+void updateSelectSwitches(int cursor1, int cursor2, int flag1, int flag2)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (i == cursor1 - 1) {
+            if (i == cursor2 - 1) {
+                if (flag1)
+                    frame = flag2 ? 0 : 2;
+                else
+                    frame = flag2 ? 1 : 3;
+            } else {
+                frame = flag1 == 0;
+            }
+        } else if (i == cursor2 - 1) {
+            frame = flag2 ? 0 : 2;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSw[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches__Fiiii);
+#endif
+#ifdef NON_MATCHING
+/* Three players: the two-player frames while player 1 or 2 is still choosing; once both are done, player 3's column shows 5 until
+   flag3 is set. */
+extern int first2793 __asm__("first.2793");
+extern int last2794 __asm__("last.2794");
+__asm__("#SNFIX_SMALL first.2793");
+__asm__("#SNFIX_SMALL last.2794");
+#define first first2793
+#define last last2794
+/* 11/161 palavras; mesma causa da versão 2P */
+void updateSelectSwitches3P(int cursor1, int cursor2, int cursor3, int flag1, int flag2, int flag3)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (!flag1 || !flag2) {
+            if (i == cursor1 - 1) {
+                if (i == cursor2 - 1) {
+                    if (flag1)
+                        frame = flag2 ? 0 : 2;
+                    else
+                        frame = flag2 ? 1 : 3;
+                } else {
+                    frame = flag1 == 0;
+                }
+            } else if (i == cursor2 - 1) {
+                frame = flag2 ? 0 : 2;
+            } else {
+                frame = 0;
+            }
+        } else if (flag3) {
+            frame = 0;
+        } else if (i == cursor3 - 1) {
+            frame = 5;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSw[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches3P__Fiiiiii);
+#endif
+#ifdef NON_MATCHING
+/* Four players: the two-player frames while player 1 or 2 is still choosing; then the same for players 3 and 4 with frames 5 (player 3),
+   6 (player 4) and 7 (both). In shell mode 2 player 4 only shows once player 3 is done. */
+extern int first2798 __asm__("first.2798");
+extern int last2799 __asm__("last.2799");
+__asm__("#SNFIX_SMALL first.2798");
+__asm__("#SNFIX_SMALL last.2799");
+#define first first2798
+#define last last2799
+/* 63/233 palavras; o retail guarda (flag4 ? 0 : 6) na pilha antes do laço e repete o carregamento de shell */
+void updateSelectSwitches4P(int cursor1, int cursor2, int cursor3, int cursor4, int flag1, int flag2, int flag3, int flag4)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (!flag1 || !flag2) {
+            if (i == cursor1 - 1) {
+                if (i == cursor2 - 1) {
+                    if (flag1)
+                        frame = flag2 ? 0 : 2;
+                    else
+                        frame = flag2 ? 1 : 3;
+                } else {
+                    frame = flag1 == 0;
+                }
+            } else if (i == cursor2 - 1) {
+                frame = flag2 ? 0 : 2;
+            } else {
+                frame = 0;
+            }
+        } else if (flag3 && flag4) {
+            frame = 0;
+        } else if (i == cursor3 - 1) {
+            if (i == cursor4 - 1) {
+                if (flag3)
+                    frame = flag4 ? 0 : 6;
+                else
+                    frame = flag4 ? 5 : 7;
+            } else {
+                frame = flag3 ? 0 : 5;
+            }
+        } else if (shell->m_mode == 2) {
+            if (i == cursor4 - 1 && !flag3)
+                frame = flag4 ? 0 : 6;
+            else
+                frame = 0;
+        } else if (i == cursor4 - 1) {
+            frame = flag4 ? 0 : 6;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSw[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches4P__Fiiiiiiii);
+#endif
+#ifdef NON_MATCHING
+/* updateSelectSwitches for the minigame monster select (m_selectSwMG). */
+extern int first2803 __asm__("first.2803");
+extern int last2804 __asm__("last.2804");
+__asm__("#SNFIX_SMALL first.2803");
+__asm__("#SNFIX_SMALL last.2804");
+#define first first2803
+#define last last2804
+/* 8/144 palavras; mesma causa da versão 2P */
+void updateSelectSwitchesMG(int cursor1, int cursor2, int flag1, int flag2)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSwMG[0], 4);
+        hierSetSwitch(shell->m_selectSwMG[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSwMG[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSwMG[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (i == cursor1 - 1) {
+            if (i == cursor2 - 1) {
+                if (flag1)
+                    frame = flag2 ? 0 : 2;
+                else
+                    frame = flag2 ? 1 : 3;
+            } else {
+                frame = flag1 == 0;
+            }
+        } else if (i == cursor2 - 1) {
+            frame = flag2 ? 0 : 2;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSwMG[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesMG__Fiiii);
+#endif
+#ifdef NON_MATCHING
+/* Picking the monster of AI `ai` (1..3): its column shows 5, 6 or 8; any other value leaves that column as it is. */
+extern int first2808 __asm__("first.2808");
+extern int last2809 __asm__("last.2809");
+__asm__("#SNFIX_SMALL first.2808");
+__asm__("#SNFIX_SMALL last.2809");
+#define first first2808
+#define last last2809
+/* 126/129 palavras; ordem dos carregamentos de shell */
+void updateSelectSwitchesAI(int cursor, int ai)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        if (i == cursor - 1) {
+            if (ai == 1)
+                hierSetSwitch(shell->m_selectSw[i], 5);
+            else if (ai == 2)
+                hierSetSwitch(shell->m_selectSw[i], 6);
+            else if (ai == 3)
+                hierSetSwitch(shell->m_selectSw[i], 8);
+        } else {
+            hierSetSwitch(shell->m_selectSw[i], 0);
+        }
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesAI__Fii);
+#endif
 #ifdef NON_MATCHING
 /* Narrows the monster-select columns to the unlocked monsters: the first (monsterSelectMode[0]) and the last (monsterSelectMode[36],
    the first slot of monster 9) can still be locked, in which case their column shows 4 and the range [m_selFirst, m_selLast) skips it.
@@ -169,12 +566,242 @@ void initSelectSwitches(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitches__Fv);
 #endif
+#ifdef NON_MATCHING
+/* initSelectSwitches for the minigame select: same narrowing of the columns, with its own range and without storing it in the shell. */
+extern int first2818 __asm__("first.2818");
+extern int last2819 __asm__("last.2819");
+__asm__("#SNFIX_SMALL first.2818");
+__asm__("#SNFIX_SMALL last.2819");
+#define first first2818
+#define last last2819
+/* 83/88 palavras; o retail relê first por gp no fim de cada ramo */
+void initSelectSwitchesMG(void)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++)
+        hierSetSwitch(shell->m_selectSw[i], 0);
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitchesMG__Fv);
+#endif
+#ifdef NON_MATCHING
+extern int numSelectables2823 __asm__("numSelectables.2823");
+extern int UseCommandLineLevel;
+extern char PO_1PFreeForAll[];
+extern char PO_1PEndurance[];
+void resetModels(void);
+/* One-player game modes: 1 = mode 1 (level 1 unless one came from the command line, its AI count from m_levelNumAIs; screen 3),
+   2 = free for all (mode 2, level list PO_1PFreeForAll; screen 12), 3 = endurance (mode 4, 5 AIs, no kill target, PO_1PEndurance;
+   screen 3). First pass puts the select cursor (currentSelection[3]) back in the unlocked range.
+   NON_MATCHING: 18/378 words differ, 0x580 bytes vs 0x5E8 (untuned). */
+void screenGameModes1P(void)
+{
+    int input, sel, i;
+
+    if (screenFirstPass != 0) {
+        screenPrepareDefault(2, currentSelection[currScreen]);
+        numSelectables2823 = 3;
+        shell->m_numAIs = 0;
+        if ((shell->m_selFirst == 0 && shell->m_selLast == 0) || (shell->m_selFirst == 1 && shell->m_selLast == 1)) {
+            initSelectSwitches();
+            if (!(shell->m_selFirst < currentSelection[3] && currentSelection[3] < shell->m_selLast))
+                currentSelection[3] = shell->m_selFirst + 1;
+        } else if ((unsigned int)currentSelection[3] < 2) {
+            initSelectSwitches();
+            if (!(shell->m_selFirst < currentSelection[3] && currentSelection[3] < shell->m_selLast))
+                currentSelection[3] = shell->m_selFirst + 1;
+        }
+        hierSetSwitch(shell->m_sw5CC, currentSelection[3]);
+        for (i = 9; i >= 0; i--)
+            *(float *)(shell->m_menuObj[3][i] + 0x4C) = 0.0f;
+        hierSetSwitch(shell->m_sw70[0], 1);
+        hierSetSwitch(shell->m_sw70[1], 1);
+        hierSetSwitch(shell->m_sw70[2], 1);
+        moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+        myMovie.Play(false, MainMovie);
+        continueDecoding = 1;
+        hierSetSwitch(shell->m_sw5D0, 0);
+        resetModels();
+        updateSelectSwitches(currentSelection[3], 0, 0, 1);
+        screenFirstPass = 0;
+        currentSelection[6] = shell->m_selFirst + 1;
+        currentSelection[18] = shell->m_selFirst + 1;
+        currentSelection[19] = shell->m_selFirst + 1;
+    }
+    myMovie.Play(false, MainMovie);
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 1:
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2823;
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 2:
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel < numSelectables2823 ? sel + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        sel = currentSelection[currScreen];
+        if (sel == 1) {
+            shell->m_mode = sel;
+            if (UseCommandLineLevel == 0)
+                shell->m_levelNum = sel;
+            shell->m_numAIs = shell->m_levelNumAIs[shell->m_levelNum];
+            changeScreen(2, 3, 1, 2, true);
+            updateSelectSwitches(currentSelection[currScreen], 0, 0, 1);
+        } else if (sel == 2) {
+            shell->m_mode = sel;
+            g_levelList = PO_1PFreeForAll;
+            hierSetSwitch(shell->m_menuItemSw[12][0], currentSelection[12]);
+            changeScreen(2, 0xC, 1, 2, true);
+        } else if (sel == 3) {
+            shell->m_numAIs = 5;
+            shell->m_mode = 4;
+            shell->m_killTarget = 0;
+            g_levelList = PO_1PEndurance;
+            changeScreen(2, 3, 1, 2, true);
+        } else {
+            printf("1 Player Game Modes Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+        }
+        updateSelectSwitches4P(0, 0, 0, 0, 1, 1, 1, 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        changeScreen(2, 1, -1, 0, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        shell->m_numPlayers = 0;
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes1P__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE2F0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenSelect1AI__Fv);
+#ifdef NON_MATCHING
+extern int numSelectables2853 __asm__("numSelectables.2853");
+extern int PlayerConfig;
+__asm__("#SNFIX_SMALL PlayerConfig");
+/* Controller configuration: left/right (codes 3/4) pick one of the configurations (m_menuItemSw[4][0] shows it), confirm stores it
+   in m_ctlrCfg[PlayerConfig] (the player whose pad is being set up) and goes back. While configuring player 2 (PlayerConfig == 1)
+   pad 2 drives the screen as well. NON_MATCHING: 3/297 words differ, 0x448 bytes vs 0x4A4 (untuned). */
+void screenCtlrCfg(void)
+{
+    int sel;
+
+    if (screenFirstPass != 0)
+        screenFirstPass = 0;
+    switch (screenGetInput(1) & 0xFFFF) {
+    case 3:
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2853;
+        hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 4:
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel < numSelectables2853 ? sel + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        switch (currentSelection[currScreen]) {
+        case 1:
+            if (PlayerConfig == 0)
+                shell->m_ctlrCfg[0] = 1;
+            else
+                shell->m_ctlrCfg[1] = 1;
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            break;
+        case 2:
+            if (PlayerConfig == 0)
+                shell->m_ctlrCfg[0] = 2;
+            else
+                shell->m_ctlrCfg[1] = 2;
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            break;
+        case 3:
+            if (PlayerConfig == 0)
+                shell->m_ctlrCfg[0] = 3;
+            else
+                shell->m_ctlrCfg[1] = 3;
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            break;
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        changeScreen(4, prevScreen, -1, 0xB, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        break;
+    }
+    if (PlayerConfig == 1) {
+        switch (screenGetInput(2) & 0xFFFF) {
+        case 3:
+            sel = currentSelection[currScreen];
+            currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2853;
+            hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+            break;
+        case 4:
+            sel = currentSelection[currScreen];
+            currentSelection[currScreen] = sel < numSelectables2853 ? sel + 1 : 1;
+            hierSetSwitch(shell->m_menuItemSw[4][0], currentSelection[currScreen]);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+            break;
+        case 6:
+            switch (currentSelection[currScreen]) {
+            case 1:
+                shell->m_ctlrCfg[1] = 1;
+                changeScreen(4, prevScreen, -1, 0xB, true);
+                break;
+            case 2:
+                shell->m_ctlrCfg[1] = 2;
+                changeScreen(4, prevScreen, -1, 0xB, true);
+                break;
+            case 3:
+                shell->m_ctlrCfg[1] = 3;
+                changeScreen(4, prevScreen, -1, 0xB, true);
+                break;
+            }
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+            break;
+        case 5:
+            changeScreen(4, prevScreen, -1, 0xB, true);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+            break;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCtlrCfg__Fv);
+#endif
 #ifdef NON_MATCHING
 /* Two-player game modes: 1 = free for all (mode 3, level list PO_MPFreeForAll), 2 = elimination (mode 6, PO_MPElimination), 3 = minigames.
    Here the cursor moves with codes 1/2 (up/down) instead of 3/4. */
@@ -246,8 +873,7 @@ void screenGameModes2P(void)
             hierSetSwitch(*(_hierswitch **)((char *)shell + 0x48C), currentSelection[14]);
             shell->m_killTarget = 0;
         } else {
-            printf("Two Player Game Modes Screen has screwed up item indexing! - We think we selected #%i
-", sel);
+            printf("Two Player Game Modes Screen has screwed up item indexing! - We think we selected #%i\n", sel);
         }
         ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
         return;
@@ -331,8 +957,202 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEDD0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEE30);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", on_bit_006EEE78);
+#ifdef NON_MATCHING
+/* A level list of the select screen (PO_1PFreeForAll, PO_MPFreeForAll, ...): the cursor runs from `first` and wraps at `count`;
+   levels[cursor] is the level number (GameLevelLongNames, Shell::m_levelNum). */
+struct LevelList {
+    int first;
+    int count;
+    int *levels;
+};
+/* Display name of each level number, shown by screenWriteInstructions through charSelectStringOne. */
+static const char GameLevelLongNames[28][18] = {
+    "Default",       "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City",       "Century Airfield", "Atomic Island",
+    "Baytown",       "Club Caldera", "Tsunopolis",     "UFO",            "Capitol",          "Training",         "Lake Powell",
+    "Mini Baytown",  "Volcano",      "Tokyo Deathmatch", "Dylan",        "David",            "Lars",             "Jenn",
+    "Yeon",          "Jacob",        "Steve",          "Pierre",         "Dodge Ball",       "Big Shot",         "Crush",
+};
+extern int numSelectables2924 __asm__("numSelectables.2924");
+extern int beginning2925 __asm__("beginning.2925");
+extern int ending2926 __asm__("ending.2926");
+extern int stoppedMovie2927 __asm__("stoppedMovie.2927");
+extern int showTexCounter2928 __asm__("showTexCounter.2928");
+extern char D_006F7EB8[];
+void moviesReleaseScreenObject(void);
+/* Monster cursors of the select screens, kept while the level select is open: 3P (screen 18), 4P (screen 19), 2P (screen 6). */
+extern int savedSel3P[2] __asm__("D_007314E8");
+extern int savedSel4P[4] __asm__("D_007314F0");
+extern int savedSel2P[24] __asm__("D_00731488");
+#define LL ((LevelList *)g_levelList)
+/* Left/right (codes 3/4) walk the level list with wraparound; with two or more AIs in mode 2, or any AI in mode 3, the fourth entry
+   (index 3) is skipped. A locked level shows m_lockedSw; after 0x2E frames idle on an unlocked one the preview movie is let go.
+   Confirm (6) on an unlocked level stores it in m_levelNum and starts loading (screen 99); back (5) restores the monster select it
+   came from. NON_MATCHING: 12/587 words differ, 0x92C bytes vs 0x8EC (untuned). */
+void screenLevelSelect(void)
+{
+    int input, cur, count;
+
+    if (screenFirstPass != 0) {
+        currentSelection[currScreen] = LL->first;
+        ending2926 = LL->count - 1;
+        numSelectables2924 = LL->count;
+        beginning2925 = LL->first;
+        continueDecoding = 0;
+        moviesReleaseScreenObject();
+        hierSetSwitch(shell->m_sw5D0, LL->levels[currentSelection[currScreen]]);
+        stoppedMovie2927 = 1;
+        screenFirstPass = 0;
+        charSelectStringOne = (char *)GameLevelLongNames[LL->levels[currentSelection[currScreen]]];
+    }
+    hierSetSwitch(shell->m_lockedSw, 0);
+    cur = levelUnlocked(LL->levels[currentSelection[currScreen]]);
+    if (cur == 1) {
+        if (showTexCounter2928 >= 0x2E && (screenGetInput(1) & 0xFFFF) == 0) {
+            continueDecoding = 0;
+            moviesReleaseScreenObject();
+            stoppedMovie2927 = cur;
+            showTexCounter2928 = 0;
+        }
+    } else {
+        continueDecoding = 0;
+        moviesReleaseScreenObject();
+        hierSetSwitch(shell->m_lockedSw, 1);
+    }
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 3:
+        if (beginning2925 < currentSelection[currScreen]) {
+            if ((shell->m_mode == 2 && shell->m_numAIs >= 2) || (shell->m_mode == 3 && shell->m_numAIs > 0)) {
+                cur = currentSelection[currScreen];
+                count = LL->count;
+                if (cur == 4)
+                    currentSelection[currScreen] = (count + 2) % count;
+                else
+                    currentSelection[currScreen] = (cur + (count - 1)) % count;
+            } else {
+                count = LL->count;
+                currentSelection[currScreen] = (currentSelection[currScreen] + (count - 1)) % count;
+            }
+        } else {
+            currentSelection[currScreen] = ending2926;
+        }
+        hierSetSwitch(shell->m_sw5D0, LL->levels[currentSelection[currScreen]]);
+        stoppedMovie2927 = 1;
+        continueDecoding = 0;
+        charSelectStringOne = (char *)GameLevelLongNames[LL->levels[currentSelection[currScreen]]];
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        showTexCounter2928 = 0;
+        break;
+    case 4:
+        if (currentSelection[currScreen] < ending2926) {
+            if ((shell->m_mode == 2 && shell->m_numAIs >= 2) || (shell->m_mode == 3 && shell->m_numAIs > 0)) {
+                cur = currentSelection[currScreen];
+                count = LL->count;
+                if (cur == 2)
+                    currentSelection[currScreen] = (count + 4) % count;
+                else
+                    currentSelection[currScreen] = (cur + (count + 1)) % count;
+            } else {
+                count = LL->count;
+                currentSelection[currScreen] = (currentSelection[currScreen] + 1) % count;
+            }
+        } else {
+            currentSelection[currScreen] = beginning2925;
+        }
+        hierSetSwitch(shell->m_sw5D0, LL->levels[currentSelection[currScreen]]);
+        stoppedMovie2927 = 1;
+        continueDecoding = 0;
+        charSelectStringOne = (char *)GameLevelLongNames[LL->levels[currentSelection[currScreen]]];
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        showTexCounter2928 = 0;
+        break;
+    case 6:
+        cur = levelUnlocked(LL->levels[currentSelection[currScreen]]);
+        if (cur == 1) {
+            shell->m_levelNum = LL->levels[currentSelection[currScreen]];
+            stoppedMovie2927 = cur;
+            continueDecoding = 0;
+            moviesReleaseScreenObject();
+            charSelectStringOne = D_006F7EB8;
+            hierSetSwitch(shell->m_lockedSw, 0);
+            changeScreen(8, 99, 1, 4, true);
+            ((ShellSound *)((char *)shell + 0x2918))->terminateShellSound();
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(1);
+        }
+        break;
+    case 5:
+        charSelectStringOne = D_006F7EB8;
+        *(int *)((char *)shell + 0x2948) = 0;
+        if (prevScreen == 3) {
+            hierSetSwitch(shell->m_sw5CC, currentSelection[3]);
+            *(float *)(shell->m_menuObj[3][1] + 0x4C) = 0.0f;
+            updateSelectSwitches(0, 0, 1, 1);
+        } else if (prevScreen == 0x12 && shell->m_mode == 3) {
+            currentSelection[18] = savedSel3P[0];
+            currentSelection[40] = savedSel3P[1];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C0), savedSel3P[0]);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C4), savedSel3P[1]);
+            updateSelectSwitches3P(0, 0, 0, 1, 1, 1);
+        } else if (prevScreen == 0x13 && shell->m_mode == 3) {
+            currentSelection[19] = savedSel4P[0];
+            currentSelection[41] = savedSel4P[1];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1CC), savedSel4P[0]);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D0), savedSel4P[1]);
+            updateSelectSwitches4P(0, 0, 0, 0, 1, 1, 1, 1);
+        } else if (prevScreen == 0x13 && shell->m_mode == 2) {
+            currentSelection[19] = savedSel4P[0];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1CC), savedSel4P[0]);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D0), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D4), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D8), 0);
+            updateSelectSwitches4P(0, 0, 0, 0, 1, 1, 1, 1);
+        } else if (prevScreen == 0x12 && shell->m_mode == 2) {
+            currentSelection[18] = savedSel3P[0];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C4), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C8), 0);
+            updateSelectSwitches3P(0, 0, 0, 1, 1, 1);
+        } else if (prevScreen == 6 && shell->m_mode == 2) {
+            currentSelection[6] = savedSel2P[0];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1E0), 0);
+            updateSelectSwitches(0, 0, 1, 1);
+        }
+        hierSetSwitch(shell->m_lockedSw, 0);
+        moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+        myMovie.Play(false, MainMovie);
+        continueDecoding = 1;
+        changeScreen(8, prevScreen, -1, 3, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        break;
+    }
+}
+#undef LL
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenLevelSelect__Fv);
+#endif
+void moviesReleaseScreenObject(void);
+extern int levelMonsters[][12];
+extern int levelMonsterModels[][4];
+/* Story mode "load game": stops the menu movie, loads the save from the memory card and takes the AI monsters and costumes of the
+   saved level from the level tables (0x29E0: number of AIs per level). */
+#ifdef NON_MATCHING
+/* 10/50 palavras; o retail relê m_levelNum a cada volta e anda com um ponteiro em m_costume */
+void screenLoadSave(void)
+{
+    int i;
+
+    moviesReleaseScreenObject();
+    continueDecoding = 0;
+    MonsterMc::global.updateStoryModeLoad();
+    Shell *sh = shell;
+    int *numAIs = (int *)((char *)sh + 0x29E0);
+    for (i = 0; i < numAIs[sh->m_levelNum]; i++) {
+        sh->m_monsterSel[4 + i] = levelMonsters[sh->m_levelNum][i];
+        sh->m_costume[2 + i] = levelMonsterModels[sh->m_levelNum][i];
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenLoadSave__Fv);
+#endif
 #ifdef NON_MATCHING
 /* Moves the knob of slider `which` (0 or 1) along its bar; `v` is clamped to 0..1. */
 void setSlider(int which, float v)
@@ -409,17 +1229,14 @@ void screenFreeForAllOptions1P(void)
         sel = currentSelection[currScreen];
         if (sel == 0) {
             shell->m_numAIs = 0;
-            printf("Number of AI set to %i
-", 0);
+            printf("Number of AI set to %i\n", 0);
             changeScreen(0xC, 3, 1, 0, true);
         } else if (sel >= 1 && sel <= 3) {
             shell->m_numAIs = sel;
-            printf("Number of AI set to %i
-", sel);
+            printf("Number of AI set to %i\n", sel);
             changeScreen(0xC, 0xF, 1, 0, true);
         } else {
-            printf("One Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i
-", sel);
+            printf("One Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i\n", sel);
         }
         ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
         return;
@@ -477,8 +1294,7 @@ void screenFreeForAllOptions2P(void)
             shell->m_numAIs = sel;
             changeScreen(0xD, 0xF, 1, 0, true);
         } else {
-            printf("Two Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i
-", sel);
+            printf("Two Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i\n", sel);
         }
         ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
         return;
@@ -621,21 +1437,6 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", screenMGSelect__Fv);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenBestOf__Fv);
 #ifdef NON_MATCHING
-class ShellRtLoop {
-public:
-    char pad0[0x24];
-
-    void startField(bool b);
-    void endField(bool skipDraw);
-};
-class MonsterMc {
-public:
-    int pad0;
-    int m_bootLoaded; /* 0x4: the boot-time memory card load finished */
-
-    void updateBootLoad(void);
-    static MonsterMc global;
-};
 extern int clearBeforeFontDMA;
 extern "C" void snd_SetMasterVolume(int which, int vol);
 class TheGame {
@@ -656,7 +1457,7 @@ void screenMemoryCardInit(void)
     do {
         loop.startField(true);
         MonsterMc::global.updateBootLoad();
-        if (MonsterMc::global.m_bootLoaded) {
+        if (MonsterMc::global.m_done) {
             done = 1;
             clearBeforeFontDMA = 0;
             *(int *)((char *)shell + 0x292C) = 1;
@@ -1205,9 +2006,45 @@ void killButtons(void)
     hierSetCsDrawMe(b3, 0);
     hierSetCsDrawMe(b1, 0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/screen", saveUnlocks__Fv);
-INCLUDE_ASM("asm/nonmatchings/game/screen", saveSettings__Fv);
-INCLUDE_ASM("asm/nonmatchings/game/screen", loadSettings__Fv);
+void setButtonAlpha(float a);
+void showButtons(int screen);
+/* Runs frames until the unlocks are written to the memory card, then shows the menu buttons again. */
+void saveUnlocks(void)
+{
+    ShellRtLoop loop;
+
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateUnlockSave();
+        loop.endField(true);
+    } while (!MonsterMc::global.m_done);
+    setButtonAlpha(1.0f);
+}
+/* Runs frames until the options are written to the memory card. */
+void saveSettings(void)
+{
+    ShellRtLoop loop;
+
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateSettingsSave();
+        loop.endField(true);
+    } while (!MonsterMc::global.m_done);
+    showButtons(currScreen);
+}
+/* Runs frames until the options are read back from the memory card. */
+void loadSettings(void)
+{
+    ShellRtLoop loop;
+
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateSettingsLoad();
+        loop.endField(true);
+    } while (!MonsterMc::global.m_done);
+    loop.onEnd();
+    showButtons(currScreen);
+}
 #ifdef NON_MATCHING
 /* 7/19 words: address math scheduling */
 int isSlotOpen(int group, int slot)

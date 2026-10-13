@@ -455,11 +455,9 @@ void dbsRelocateViaPtrListFile(int idx, _vramAddrs vram)
     sprintf(name, "mon/%s.ptr", getGenericName(idx));
     size = fileReadf(name, file);
     if (size < 0)
-        printf("Could not read pointer file \"%s\"!!
-", name);
+        printf("Could not read pointer file \"%s\"!!\n", name);
     if (size > 0x30D40)
-        printf("Pointer file too big.  Prepare for crash...
-");
+        printf("Pointer file too big.  Prepare for crash...\n");
     img = getNgpAddr(idx);
     n1 = *(int *)img;
     for (k = 1; k <= n1; k++)
@@ -467,8 +465,7 @@ void dbsRelocateViaPtrListFile(int idx, _vramAddrs vram)
     n1 = file[0];
     for (k = 0; k < n1; k++)
         *(int *)(img + file[1 + k]) += base;
-    printf("Finished ptrs
-");
+    printf("Finished ptrs\n");
     n2 = file[1 + n1];
     for (k = 0; k < n2; k++) {
         int off = file[2 + n1 + k];
@@ -477,8 +474,7 @@ void dbsRelocateViaPtrListFile(int idx, _vramAddrs vram)
         if (off != 0 && *id != 0)
             *id += getMaxTexId(idx - 1);
     }
-    printf("Finished texIds
-");
+    printf("Finished texIds\n");
     n3 = file[2 + n1 + n2];
     for (k = 0; k < n3; k++) {
         int off = file[3 + n1 + n2 + k];
@@ -526,8 +522,7 @@ void dbsRelocateFileZero(_vramAddrs vram, bool b)
     else
         sprintf(name, "lvl/%s.PTR", getGenericName(0));
     if (fileReadf(name, list) < 0)
-        printf("dbsRelocateFileZero::Could not read pointer file (%s)!!
-", name);
+        printf("dbsRelocateFileZero::Could not read pointer file (%s)!!\n", name);
     p = list + list[0] + 1;
     p = p + p[0] + 1;
     n = p[0];
