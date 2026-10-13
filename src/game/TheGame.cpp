@@ -880,7 +880,15 @@ INCLUDE_ASM("asm/nonmatchings/game/TheGame", fadeOutAndIn__7TheGamei);
 INCLUDE_ASM("asm/nonmatchings/game/TheGame", updateFadeOutAndIn__7TheGame);
 INCLUDE_ASM("asm/nonmatchings/game/TheGame", fadeOut__7TheGamei);
 INCLUDE_ASM("asm/nonmatchings/game/TheGame", updateFadeOut__7TheGame);
-INCLUDE_ASM("asm/nonmatchings/game/TheGame", SetVibration__7TheGameib);
+/* turns pad's rumble on or off and reapplies the flags of all eight pads */
+void TheGame::SetVibration(int pad, bool on)
+{
+    int i;
+
+    m_actuator[pad] = on;
+    for (i = 0; i < 8; i++)
+        inputUseActuator(i, m_actuator[i]);
+}
 INCLUDE_ASM("asm/nonmatchings/game/TheGame", AddCrushMessage__7TheGamei);
 INCLUDE_ASM("asm/nonmatchings/game/TheGame", __static_initialization_and_destruction_0_00139F00);
 INCLUDE_ASM("asm/nonmatchings/game/TheGame", func_00139F78);

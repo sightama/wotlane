@@ -508,7 +508,8 @@ public:
     TokenManager m_tokens[2];        /* 0x11C370 */
     char pad11E378[0x120380 - 0x11E378];
     Monster *m_monsters[8];          /* 0x120380: indexed up to m_numMonsters; vegas also reads [4] and [5] */
-    char pad1203A0[0x1203C4 - 0x1203A0];
+    char pad1203A0[0x1203C0 - 0x1203A0];
+    float m_defaultHeight;           /* 0x1203C0: hat default height (tweak key 0xBBA, hdSetDefaultHeight) */
     float m_gravity;                 /* 0x1203C4 */
     int m_gameMode;                  /* 0x1203C8: 1 = the mode AiScript3Mile/central set up special levels for */
     int m_matchMode;                 /* 0x1203CC: 0 or 1 selects the two-player-style AI in AiGrappleAttack */
@@ -574,6 +575,7 @@ public:
     static void updateFadeOutAndIn(void *p);
     static void updateFadeOut(void *p);
     void UpdatePadTweaks(void);
+    void SetVibration(int pad, bool on);
     static void traversalCallback(_cs *cs, unsigned a, unsigned b, float (&m)[4][4], _fvector *eo);
     static void genericEventHandler(unsigned event);
 
