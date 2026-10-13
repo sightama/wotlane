@@ -1,0 +1,83 @@
+# Chamado por build_runtime.bat: roda o build do runtime e mostra uma barra de progresso.
+# Ninja so da poucos passos ([1/4] compila o ps2_runtime.cpp, que leva quase todo o tempo), entao a barra
+# combina os passos do log com o tempo do ultimo build (guardado em <runtime>\.wotm_build_secs_<bat>).
+# Uso: build_runtime.ps1 <pasta do runtime> <bat> <log>
+param([string]$Dir, [string]$Bat, [string]$Log)
+
+$ErrorActionPreference = 'Stop'
+$logPath  = Join-Path $Dir $Log
+$timeFile = Join-Path $Dir (".wotm_build_secs_" + [IO.Path]::GetFileNameWithoutExtension($Bat))
+
+$expected = if ($Bat -eq 'build.bat') { 300.0 } else { 90.0 }
+try { if (Test-Path $timeFile) { $expected = [double](Get-Content $timeFile -TotalCount 1) } } catch {}
+if ($expected -lt 5) { $expected = 5 }
+
+(Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\lib\ps2_runtime.cpp").LastWriteTime = Get-Date
+if (Test-Path $logPath) { Remove-Item $logPath -Force }
+
+# a saida do proprio .bat (vcvars etc.) vai para arquivo para nao quebrar a linha da barra; so aparece se falhar
+$outFile = Join-Path $env:TEMP 'wotm_build_runtime.out'
+$errFile = Join-Path $env:TEMP 'wotm_build_runtime.err'
+$proc = Start-Process -FilePath $env:ComSpec -ArgumentList "/c `"`"$Dir\$Bat`"`"" -NoNewWindow -PassThru `
+    -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+$null = $proc.Handle  # sem pegar o handle cedo, ExitCode volta vazio no PS 5.1
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$full = [char]0x2588; $empty = [char]0x2591
+
+function Read-Log {
+    # o cmake ainda esta escrevendo: abre com compartilhamento para nao brigar pelo arquivo
+    try {
+        $fs = [IO.File]::Open($logPath, 'Open', 'Read', 'ReadWrite')
+        try { return (New-Object IO.StreamReader($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { return '' }
+}
+
+function Fmt([double]$s) { '{0}:{1:00}' -f [int][math]::Floor($s / 60), [int]($s % 60) }
+
+function Draw([double]$frac, [string]$what) {
+    $width = 30
+    $n = [int][math]::Floor($frac * $width)
+    $bar = ([string]$full * $n) + ([string]$empty * ($width - $n))
+    $t = $sw.Elapsed.TotalSeconds
+    $line = '  {0} {1,3}%  {2} / ~{3}  {4}' -f $bar, [int]($frac * 100), (Fmt $t), (Fmt ([math]::Max($expected, $t))), $what
+    $max = 79
+    try { $max = [Console]::WindowWidth - 1 } catch {}
+    if ($line.Length -gt $max) { $line = $line.Substring(0, $max) }
+    [Console]::Write("`r" + $line.PadRight($max))
+}
+
+$frac = 0.0; $what = 'preparando...'
+while (-not $proc.HasExited) {
+    $steps = [regex]::Matches((Read-Log), '(?m)^\[(\d+)/(\d+)\]\s*(.*)$')
+    if ($steps.Count -gt 0) {
+        $m = $steps[$steps.Count - 1]
+        $done = [int]$m.Groups[1].Value; $total = [int]$m.Groups[2].Value
+        $what = '[' + $done + '/' + $total + '] ' + ($m.Groups[3].Value -replace '^(Building|Linking) CXX (object|static library|executable) ', '')
+        $what = $what -replace '^(\[\d+/\d+\] ).*[\\/]', '$1'
+        # o ninja so escreve "[1/4] ... ps2_runtime.cpp.obj" quando a compilacao acaba
+        if ($done -eq 0) { $what = 'compilando ps2_runtime.cpp' }
+        $floor = if ($total -gt 0 -and $what -match 'ps2EntryRunner') { 0.95 } elseif ($total -gt 0 -and $what -match '\.lib') { 0.9 } else { 0 }
+    } else { $floor = 0 }
+    # tempo vs. ultimo build, sem chegar a 100% antes de terminar
+    $t = [math]::Min($sw.Elapsed.TotalSeconds / $expected, 0.99)
+    $frac = [math]::Max([math]::Max($frac, $t), $floor)
+    Draw $frac $what
+    Start-Sleep -Milliseconds 250
+}
+$proc.WaitForExit()
+$rc = $proc.ExitCode
+$secs = $sw.Elapsed.TotalSeconds
+
+if ($rc -eq 0) {
+    Draw 1.0 'pronto'
+    [Console]::WriteLine()
+    try { Set-Content -Path $timeFile -Value ([int][math]::Ceiling($secs)) -Encoding ascii } catch {}
+} else {
+    Draw $frac 'FALHOU'
+    [Console]::WriteLine()
+    foreach ($f in $outFile, $errFile) { if (Test-Path $f) { Get-Content $f | Where-Object { $_ -ne '' } } }
+    # mostra os erros do compilador/linker em vez de so a ultima linha
+    $errs = (Read-Log) -split "`r?`n" | Where-Object { $_ -match 'error|FAILED' } | Select-Object -First 20
+    $errs | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+}
+exit $rc

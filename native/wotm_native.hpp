@@ -496,7 +496,7 @@ public:
 
     // Carrega o nivel e os monstros do jogo atual a partir do disco extraido (`root` contem LVL/ e MON/). Idempotente: so refaz quando
     // os nomes/bases em fileStatus mudam. Devolve verdadeiro se achou ao menos o arquivo do nivel.
-    bool loadResources(const Ram &ram, const std::string &root, std::string *log = nullptr) {
+    bool loadResources(const Ram &ram, const std::string &rootArg, std::string *log = nullptr) {
         const uint32_t fs = addr::fileStatus;
         const int n = ram.u8(fs + 0xB0);
         if (n < 1 || n > 14) return false;
@@ -514,6 +514,10 @@ public:
         }
         if (resSig_ == sig && !rtxPal.empty()) return true;
         if (names[0].empty()) return false;
+        // Sem raiz explicita: WOTM_DISC (como em wotm_fmv.hpp), senao o diretorio atual.
+        std::string root = rootArg;
+        if (root.empty())
+            if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
         rtxPal.clear(); rtxImg.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;

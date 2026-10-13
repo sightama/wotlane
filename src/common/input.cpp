@@ -51,6 +51,10 @@ extern int inputButtonsMapped[INPUT_MAX_PADS] __asm__("D_0077A040");
 extern int inputPlayerPad[INPUT_MAX_PADS] __asm__("D_0077A060");
 extern int inputActuatorOn[INPUT_MAX_PADS] __asm__("D_0077A0C0");
 extern int inputCtlAvailable[INPUT_MAX_PADS] __asm__("D_0077A0E0");
+extern int inputPadIndex[2][4] __asm__("D_00779E00"); /* pad number of each port/slot */
+extern int inputPortOpen[INPUT_MAX_PADS] __asm__("D_0077A0A0");
+void inputUpdateState(int port, int slot);
+int inputAnyKey(int pad);
 
 INCLUDE_ASM("asm/nonmatchings/common/input", inputInit__Fv);
 void inputClearInputs(int pad)
@@ -63,7 +67,62 @@ void inputClearInputs(int pad)
     d->status = status;
     d->type = type;
 }
+#ifdef NON_MATCHING
+/* equivalent (untuned): 42/152 words, size 0x254 vs 0x260 */
+/* Per frame: reads every open pad, runs the rumble requests (start delay, duration, level decay per frame) and the
+   "any key" auto-repeat counters used by the shell. */
+void inputUpdate(void)
+{
+    int port, slot, pad, m, changed, i;
+
+    for (port = 0; port < 2; port++) {
+        for (slot = 0; slot < 4; slot++) {
+            pad = inputPadIndex[port][slot];
+            if (!inputPortOpen[pad])
+                continue;
+            inputUpdateState(port, slot);
+            if (!inputActuatorOn[pad])
+                continue;
+            changed = 0;
+            for (m = 0; m < 2; m++) {
+                ActuatorMotor *a = &inputActState[pad].motor[m];
+
+                if (--a->stopped > 0)
+                    continue;
+                if (a->time <= 0)
+                    continue;
+                a->time--;
+                if (!(a->level < a->unk8))
+                    a->level -= (unsigned char)a->unk8;
+                if (a->time <= 0) {
+                    inputActData[pad][m] = 0;
+                    changed = 1;
+                    a->level = 0;
+                } else if (a->unk8 || !a->stopped) {
+                    changed = 1;
+                    inputActData[pad][m] = a->level;
+                }
+            }
+            if (changed)
+                scePadSetActDirect(port, slot, inputActData[pad]);
+        }
+    }
+    if (inputMode)
+        return;
+    for (i = 0; i < 8; i++) {
+        if (!inputAnyKey(i)) {
+            inputAnyLatched[i] = 0;
+        } else if (!inputAnyLatched[i]) {
+            D_00779EE0[i] = 0;
+        } else if (D_00779EC0[i] < ++D_00779EE0[i]) {
+            D_00779EE0[i] = 0;
+            D_00779EC0[i] = 300;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/input", inputUpdate__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/common/input", inputUpdateState__Fii);
 void inputSetActuator(int pad, ActuatorData *a)
 {
@@ -198,6 +257,7 @@ int inputGetAnyInput(int pad)
     return 1;
 }
 #ifdef NON_MATCHING
+/* equivalent (untuned): 52/140 words, size 0x230 vs 0x230 */
 /* 52/140 words, same size: two instructions scheduled differently (the result register zeroing and the remap loop setup) */
 int inputGetInput(int mask, int pad)
 {

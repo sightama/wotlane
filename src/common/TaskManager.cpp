@@ -1,5 +1,6 @@
 #include "common.h"
 #include "task_manager.h"
+#include "memory_stack.h"
 
 unsigned timerGetFieldCount(void);
 
@@ -24,8 +25,45 @@ static inline void bidirInsertAfter(BidirLink *head, BidirLink *l)
         l->next->prev = l;
 }
 
+#ifdef NON_MATCHING
+/* equivalent (untuned): 1/19 words, size 0x40 vs 0x4c */
+/* The first two words are a BidirLink too (the active list head). */
+TaskManager::TaskManager()
+{
+    ((BidirLink *)this)->init();
+    freeList.init();
+    head = 0;
+    unk0 = 0;
+    freeList.next = 0;
+    freeList.prev = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/TaskManager", __11TaskManager);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 24/62 words, size 0xf8 vs 0xf8 */
+void *operator new[](unsigned size, void *p);
+/* n task slots from the global MemoryStack, all on the free list. */
+void TaskManager::init(unsigned n)
+{
+    TaskConfig *t;
+    unsigned i;
+
+    head = 0;
+    unk0 = 0;
+    freeList.next = 0;
+    freeList.prev = 0;
+    t = (TaskConfig *)operator new[](n * sizeof(TaskConfig), MemoryStack::global.alloc16((unsigned short)(n * sizeof(TaskConfig))));
+    for (i = 0; i < n; i++)
+        ((BidirLink *)&t[i])->init();
+    for (i = 0; i < n; i++) {
+        t[i].next = 0;
+        bidirInsertAfter(&freeList, (BidirLink *)&t[i]);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/TaskManager", init__11TaskManagerUi);
+#endif
 TaskManager::TaskConfig *TaskManager::add(unsigned (*f)(void *), void *arg, int delay)
 {
     TaskConfig *t = createTask();
@@ -60,6 +98,7 @@ void TaskManager::remove(void *&handle)
     }
 }
 #ifdef NON_MATCHING
+/* equivalent (untuned): 24/47 words, size 0xbc vs 0xbc */
 /* 24/47 words: retail block layout of the run/skip branches differs */
 int TaskManager::update(void)
 {
@@ -91,6 +130,7 @@ int TaskManager::update(void)
 INCLUDE_ASM("asm/nonmatchings/common/TaskManager", update__11TaskManager);
 #endif
 #ifdef NON_MATCHING
+/* equivalent (untuned): 19/32 words, size 0x80 vs 0x80 */
 /* 19/32 words: task/next pointers get swapped callee-saved registers */
 void TaskManager::executeAndDeleteAll(void)
 {

@@ -84,9 +84,9 @@ def build_alt(tu, workdir):
     for u in und:
         m = re.search(r'_([0-9A-Fa-f]{8})$', u)
         if u in sym:
-            cmd.append(f'--defsym={u}={sym[u]:#x}')
+            cmd.append(f'--defsym="{u}"={sym[u]:#x}')    # quoted: ld's script lexer misreads some names (fx)
         elif m:                                  # splat data label: the address is part of the name
-            cmd.append(f'--defsym={u}={int(m.group(1), 16):#x}')
+            cmd.append(f'--defsym="{u}"={int(m.group(1), 16):#x}')
         else:
             missing.append(u)
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -132,8 +132,9 @@ def patch_code(buf, base=0, rec=None):
 BASIC = {'i': 'i', 'b': 'b', 'f': 'f', 'c': 'i', 's': 'i', 'l': 'i', 'U': None}
 
 
-def parse_params(rest):
-    """gcc 2.x mangled parameter list -> list of difftest arg tokens, or None when unsupported."""
+def parse_params(rest, off=0):
+    """gcc 2.x mangled parameter list -> list of difftest arg tokens, or None when unsupported.
+    off: index of the first listed parameter in T/N back-references (1 for methods, where 0 is `this`)."""
     if rest == 'v':
         return []
     toks = []
@@ -156,9 +157,15 @@ def parse_params(rest):
                 n = int(m.group(1))
                 i += len(m.group(1)) + n
             elif i < len(rest) and rest[i] == 'A':
-                m = re.match(r'A\d+_', rest[i:])
-                i += len(m.group(0))
-                continue
+                # pointer to array (PA3_f = float (*)[4], PA3_A3_f = float (*)[4][4]): one pointer argument
+                while i < len(rest) and rest[i] == 'A':
+                    m = re.match(r'A\d+_', rest[i:])
+                    i += len(m.group(0))
+                if i < len(rest) and rest[i].isdigit():
+                    m = re.match(r'(\d+)', rest[i:])
+                    i += len(m.group(1)) + int(m.group(1))
+                else:
+                    i += 2 if rest[i] == 'U' else 1
             else:
                 i += 1
             toks.append('p')
@@ -169,8 +176,8 @@ def parse_params(rest):
             continue
         if c == 'T':
             m = re.match(r'T(\d+)', rest[i:])
-            idx = int(m.group(1))
-            if idx >= len(toks):
+            idx = int(m.group(1)) - off
+            if not 0 <= idx < len(toks):
                 return None
             toks.append(toks[idx])
             i += len(m.group(0))
@@ -179,12 +186,19 @@ def parse_params(rest):
             m = re.match(r'N(\d)(\d)', rest[i:])
             if not m:
                 return None
+            if not 0 <= int(m.group(2)) - off < len(toks):
+                return None
             for _ in range(int(m.group(1))):
-                toks.append(toks[int(m.group(2))])
+                toks.append(toks[int(m.group(2)) - off])
             i += 3
             continue
         return None
     return toks
+
+
+# Unmangled C callees: (integer args, float args) to log. Without this a0 (noise for a float-only call) would be compared.
+C_ARGS = {'cosf': (0, 1), 'sinf': (0, 1), 'tanf': (0, 1), 'acosf': (0, 1), 'asinf': (0, 1), 'atanf': (0, 1), 'sqrtf': (0, 1),
+          'fabsf': (0, 1), 'atan2f': (0, 2), 'powf': (0, 2), 'fmodf': (0, 2), 'rand': (0, 0), '__fixsfdi': (0, 1)}
 
 
 def spec_from_mangled(sym):
@@ -193,7 +207,7 @@ def spec_from_mangled(sym):
         cls_len = int(m.group(3))
         body = m.group(4)
         rest = body[cls_len:]
-        params = parse_params(rest)
+        params = parse_params(rest, 1)
         return None if params is None else ['this'] + params
     m = re.match(r'^(\w+?)__F(\w*)$', sym)
     if m:
@@ -281,8 +295,8 @@ class Run:
 
     def setup_args(self, spec, rnd):
         uc = self.uc
-        ireg = [UC_MIPS_REG_4, UC_MIPS_REG_5, UC_MIPS_REG_6, UC_MIPS_REG_7]
-        freg = [UC_MIPS_REG_F12, UC_MIPS_REG_F13]
+        ireg = [UC_MIPS_REG_4 + i for i in range(8)]   # EE EABI: a0-a3, t0-t3
+        freg = [UC_MIPS_REG_F12 + i for i in range(8)]  # f12-f19
         ni = nf = 0
         for t in spec:
             if t == 'this':
@@ -296,18 +310,20 @@ class Run:
             elif t == 'f':
                 fv = rnd.uniform(-10, 10)
                 if nf >= len(freg):
-                    raise SystemExit('more than 2 float arguments')
+                    raise SystemExit('more than 8 float arguments')
                 uc.reg_write(freg[nf], struct.unpack('<I', struct.pack('<f', fv))[0])
                 nf += 1
                 continue
             else:
                 raise SystemExit(f'bad arg spec {t}')
-            if ni >= 4:
-                raise SystemExit('more than 4 integer arguments (stack arguments are not supported)')
+            if ni >= len(ireg):
+                raise SystemExit('more than 8 integer arguments (stack arguments are not supported)')
             uc.reg_write(ireg[ni], val)
             ni += 1
 
     def norm(self, v):
+        if STACK_TOP - STACK_SIZE <= v < STACK_TOP:
+            return 'stack'                    # frame layouts differ: a pointer into the caller's frame is not comparable
         if v in self.entries and v != 0:
             return 'fn:' + self.entries[v]
         """Pointers into static data that point at a C string are compared by their text (the string lives at a different
@@ -348,10 +364,12 @@ class Run:
         if addr in self.entries and not (self.fn_range[0] <= addr < self.fn_range[1]):
             name = self.entries[addr]
             cs = spec_from_mangled(name)
-            if cs is None:
+            if name in C_ARGS:
+                ni, nf = C_ARGS[name]
+            elif cs is None:
                 ni, nf = 1, 0
             else:
-                ni = min(4, sum(1 for t in cs if t != 'f'))
+                ni = min(8, sum(1 for t in cs if t != 'f'))
                 nf = min(2, sum(1 for t in cs if t == 'f'))
             a = tuple(self.norm(uc.reg_read(UC_MIPS_REG_4 + i) & 0xFFFFFFFF) for i in range(ni))
             f12 = uc.reg_read(UC_MIPS_REG_F12) & 0xFFFFFFFF if nf >= 1 else 0

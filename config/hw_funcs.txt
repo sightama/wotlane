@@ -24,3 +24,76 @@ hierDmaHandler__Fi
 tu:common/partdraw
 # game/Sound and game/StreamingSoundManager are NOT listed: they hold gameplay-level sound decisions (what plays when, pan/volume).
 # The port can stub the audio backend first and implement them later, so they are low priority but not hardware code.
+# VU0 state, microprogram calls, VIF waits and direct DMA (kept as asm by the 2026-10 common pass)
+hier__Fii
+hierStartRotMatPRH
+hierGetRotMatPRH
+hierCheckVifComplete__Fv
+hierWaitForVif1__Fv
+vu0HierRotateAsm__FPA3_A3_fi
+hierGetRotatesAsm__Fi
+vu0FovTestResAsm__Fv
+vu0MulEoForObj__FPA3_f
+vu0LoadEoAsm__FP6QwData
+vu0GetEoAsm__FP6QwData
+mathfRotMatrixRPH__FPA3_fP8_fvector
+mathfRotMatrixRPHNoTrans__FPA3_fP8_fvector
+mathfVectorMinMaxGetMac__FP8_fvectorT0
+viewStoreNorms1InVu0__Fv
+viewStoreNorms2InVu0__Fv
+texmActivateBitBlitTexture__FiP6QwData
+# hand-written assembly that builds the VU1/GS draw packets (the native layer draws instead)
+hierTraverseAsm
+hierCacheForAsm
+pktAddVu1ObjAsm
+pktLinkAlphaObjAsm
+# particle draw: the VIF1 DMA kick of the particle packets, the lens-flare GS packet and its z-buffer readback (sceGsExecStoreImage)
+particleDraw__Fi
+particleLensFlareRender__FP6QwDataiPPUi
+particleLensFlareTestZbuffer__Fi
+# common/ps: the shadow pass packets (DMA chains, VU1 matrices, GS sprites) and its VU0 culling
+psObjectCull
+psGetMatrix__FP6QwData
+psFovTestResAsm__Fv
+psBldBlkRObjs
+psFindActiveBlockers__FP8_fvectori
+psInitBlockerDMA__Fv
+psBldBlockerPkt__FP8_fvectorii
+psEndBlkObjs__Fi
+psEndBlkDma__Fv
+psGetBlkPktStart__Fv
+psAttachDmaToAlpha__FP9Vu1DmaPkt
+psAttachDmaToMain__FP9Vu1DmaPkt
+psSetVU1ShadowMat__FPA3_fP6QwData
+psInitFilterTexPkt__Fv
+psDrawFilterSprite__FP6QwDataiiiiiiiii
+psInitBorderPkt__Fv
+psDrawBorderSprite__FP6QwDataiiii
+psFovTestAsm__FP8_fvectorP11_hierobject
+# video (IPU/DMA buffer of the movie player), GS texture/blit/overlay passes, the sprite font packets
+tu:common/vi
+tu:common/tex
+tu:common/blit
+tu:common/MotionBlurAA
+tu:common/movies
+fontInit__F10_vramAddrsi
+fontDmaFontData__Fv
+fontSetColorGifTag__Fi
+fontSpritePrint__FiPc
+fontBuildPrim__FicP6QwData
+fontInitPacket__FP6QwData10_vramAddrs
+fontSetTexId__FP9_hierhead
+# bsp: interpolation from the VU0 registers bspPlaneTest2Vec leaves behind (unused)
+bspInterp__FP8_fvector
+# texm: hand-written VU0 hierarchy update
+hierCsUpdateAsm
+hierCacheWorldMatsAsm
+# peds: the stamped-sprite packet of the crowd
+stampPacketInit__FP13_ParticleType
+# input: IOP module loading and the libpad state machine
+inputInit__Fv
+inputUpdateState__Fii
+# ScreenPolys: the HUD quads' GS packet (header, sprite qwords) and its DMA kick
+dmaData__11ScreenPolysv
+polyBuildPrim__FiiiRQ211ScreenPolys8PolyDataP6QwData
+polyInitPacket__FP11_hierobjectP9SourceObjP6QwData

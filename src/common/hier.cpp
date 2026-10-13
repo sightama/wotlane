@@ -249,7 +249,26 @@ void hierCsUpdate(_cs *cs, _worldctx *wc, _lightenv *le, _fvector *out)
     vu0MulMatrix3x3(fovNorms1, (float (*)[4])&cs->mat, (float (*)[4])wc->fovNorms[1]);
     vu0MulMatrix3x3_1(lightDir, (float (*)[4])&cs->mat, plightGetParaLight());
 }
+#ifdef NON_MATCHING
+/* rows 0-2: dst[r] = a[r].x * b[0] + a[r].y * b[1] + a[r].z * b[2] (all 4 lanes); row 3 = (0, 0, 0, 1) */
+void vu0MulMatrix3x3_1(float (*dst)[4], float (*a)[4], float (*b)[4])
+{
+    float r[3][4];
+    int i, j;
+    for (i = 0; i < 3; i++)
+        for (j = 0; j < 4; j++)
+            r[i][j] = b[0][j] * a[i][0] + b[1][j] * a[i][1] + b[2][j] * a[i][2];
+    for (i = 0; i < 3; i++)
+        for (j = 0; j < 4; j++)
+            dst[i][j] = r[i][j];
+    dst[3][0] = 0.0f;
+    dst[3][1] = 0.0f;
+    dst[3][2] = 0.0f;
+    dst[3][3] = 1.0f;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/hier", vu0MulMatrix3x3_1__FPA3_fN20);
+#endif
 #ifdef NON_MATCHING
 /* 45/59 words: $s register order and store order differ */
 void hierPush(_hierhead **pp, int a, unsigned b, unsigned c, unsigned *d, float f, _animCharInstance *anim, int e, int g)
@@ -308,7 +327,90 @@ extern "C" void hierRotateSkel(short *depth, short *matIdx, _animCharInstance *a
         mathfMulMatrix((float (*)[4])anim->animMatrixPtr[root->skelOutputMatIdx], (float (*)[4])&root->restPoseInv, m.m);
     --*depth;
 }
+extern "C" void hierStartRotMatPRH(FVECTOR4 *rot);
+extern "C" void hierGetRotMatPRH(float (*m)[4]);
+#ifdef NON_MATCHING
+/* Are any of the node's channels dirty: (dirty bits from firstIdx) & dirty.animating (hand-written helper in texm's
+ * assembly, func_0020803C). Its unaligned read is an lwr: only the bytes up to the word boundary are loaded, the
+ * upper bytes keep the value firstIdx had in the register. */
+static inline int xfChannelsDirty(AnimationOutputBlock *out, _animtransform *xf)
+{
+    int first = xf->firstIdx;
+    unsigned char *p;
+    unsigned w;
+    int b, n;
+    if (first < 0)
+        return 0;
+    p = out->dirty + ((unsigned)first >> 3);
+    w = first;
+    n = 4 - ((unsigned)p & 3);
+    for (b = 0; b < n; b++)
+        w = (w & ~(0xFFu << (8 * b))) | ((unsigned)p[b] << (8 * b));
+    return (w >> (first & 7)) & (signed char)xf->dirty.animating;
+}
+/* Animated transform node: takes its rotate/translate channels when they changed, builds the node matrix (VU0
+ * rotation from the angles, optional pre/post rotation, translation) in the instance's matrix slot and, inside a
+ * skeleton, the bone matrix. Returns the matrix (null and *visible = 0 when hidden). */
+extern "C" float (*hierAnimTransNode(_animtransform *xf, _hierstack *st, int *visible))[4]
+{
+    _animCharInstance *ci = st->animCharInst;
+    AnimationOutputBlock *out = &ci->animOutput;
+    float (*m)[4];
+    if (xf->visidx >= 0 && ((out->dirty[xf->visidx / 8] >> (xf->visidx - xf->visidx / 8 * 8)) & 1))
+        xf->visible = out->val[xf->visidx];
+    if (xf->visible == 0.0f || !out) {
+        *visible = 0;
+        return 0;
+    }
+    m = (float (*)[4])((char *)ci->animOutput.atMat + xf->matrixIdx * 64);
+    if (xfChannelsDirty(out, xf)) {
+        float *val = out->val;
+        if (xf->rXidx >= 0)
+            xf->rotate.x = -val[xf->rXidx];
+        if (xf->rYidx >= 0)
+            xf->rotate.y = -val[xf->rYidx];
+        if (xf->rZidx >= 0)
+            xf->rotate.z = -val[xf->rZidx];
+        hierStartRotMatPRH(&xf->rotate);
+        if (xf->tXidx >= 0)
+            xf->translate.x = val[xf->tXidx];
+        if (xf->tYidx >= 0)
+            xf->translate.y = val[xf->tYidx];
+        if (xf->tZidx >= 0)
+            xf->translate.z = val[xf->tZidx];
+        hierGetRotMatPRH(m);
+        if (xf->bits.applyPreRot) {
+            if (xf->bits.applyPostRot) {
+                Mat4 tmp;
+                mathfMulMatrix(tmp.m, (float (*)[4])xf->preRot, m);
+                mathfMulMatrix(m, tmp.m, (float (*)[4])xf->postRot);
+            } else {
+                mathfMulMatrix(m, (float (*)[4])xf->preRot, m);
+            }
+        } else if (xf->bits.applyPostRot) {
+            mathfMulMatrix(m, m, (float (*)[4])xf->postRot);
+        }
+        m[3][0] += xf->translate.x;
+        m[3][1] += xf->translate.y;
+        m[3][2] += xf->translate.z;
+        m[3][3] = 1.0f;
+    }
+    if (st->skelIndex >= 0) {
+        float (*dst)[4] = (float (*)[4])skelMatStack[st->skelMatIndex + 1];
+        _hierSkelBone *root = skelGetRoot(st->skelIndex);
+        mathfMulMatrix(dst, m, (float (*)[4])skelGetSkelMat(st->skelMatIndex));
+        st->skelMatIndex++;
+        if (root->skelOutputMatIdx >= 0)
+            mathfMulMatrix((float (*)[4])ci->animMatrixPtr[root->skelOutputMatIdx], (float (*)[4])&root->restPoseInv, dst);
+        st->skelIndex--;
+    }
+    *visible = 1;
+    return m;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierAnimTransNode);
+#endif
+/* start/collect a rotation by the VU0 microprogram at 0x4D0: hardware, stay asm */
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierStartRotMatPRH);
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierGetRotMatPRH);
 __asm__("#SNFIX_SMALL gTraversalCallback");
@@ -439,7 +541,65 @@ extern "C" void hierScaleNode(_hierscale *sc, int idx)
 #else
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierScaleNode);
 #endif
+#ifdef NON_MATCHING
+/* Animated scale node: scale/translate channels, eye offset moved into the scaled space, and the next depth of the
+ * matrix, frustum normal and light direction stacks (renormalized unless the scale is uniform). 0 when hidden. */
+extern "C" int hierAnimScaleNode(_animscale *s, int depth, _animCharInstance *ci)
+{
+    AnimationOutputBlock *out = ci ? &ci->animOutput : 0;
+    float vis = s->vidx == -1 ? 1.0f : out->val[s->vidx];
+    Mat4 m;
+    QwData eo;
+    float *e = (float *)&eo;
+    if (vis == 0.0f || !out || !s->numKids)
+        return 0;
+    if (s->sXidx >= 0)
+        s->scale.x = out->val[s->sXidx];
+    if (s->sYidx >= 0)
+        s->scale.y = out->val[s->sYidx];
+    if (s->sZidx >= 0)
+        s->scale.z = out->val[s->sZidx];
+    if (s->tXidx >= 0)
+        s->translate.x = out->val[s->tXidx];
+    if (s->tYidx >= 0)
+        s->translate.y = out->val[s->tYidx];
+    if (s->tZidx >= 0)
+        s->translate.z = out->val[s->tZidx];
+    mathfUnitMatrix(m.m);
+    m.m[0][0] = s->scale.x;
+    m.m[1][1] = s->scale.y;
+    m.m[2][2] = s->scale.z;
+    vu0GetEoAsm(&eo);
+    e[0] = (e[0] + (s->translate.x + s->postScale.x)) / s->scale.x + s->preScale.x;
+    e[1] = (e[1] + (s->translate.y + s->postScale.y)) / s->scale.y + s->preScale.y;
+    e[2] = (e[2] + (s->translate.z + s->postScale.z)) / s->scale.z + s->preScale.z;
+    vu0LoadEoAsm(&eo);
+    mathfMulMatrix3x3(matStack + (depth + 1) * 4, m.m, matStack + depth * 4);
+    {
+        float dxy = s->scale.x - s->scale.y;
+        float dxz = s->scale.x - s->scale.z;
+        if ((dxy < 0.0f ? -dxy : dxy) < 0.001f && (dxz < 0.0f ? -dxz : dxz) < 0.001f) {
+            *(Mat4 *)(fovNorms + (depth + 1) * 4) = *(Mat4 *)(fovNorms + depth * 4);
+            *(Mat4 *)(fovNorms1 + (depth + 1) * 4) = *(Mat4 *)(fovNorms1 + depth * 4);
+            *(Mat4 *)(lightDir + (depth + 1) * 4) = *(Mat4 *)(lightDir + depth * 4);
+            return 1;
+        }
+    }
+    mathfMulMatrix3x3(fovNorms + (depth + 1) * 4, m.m, fovNorms + depth * 4);
+    mathfMulMatrix3x3(fovNorms1 + (depth + 1) * 4, m.m, fovNorms1 + depth * 4);
+    m.m[2][2] = 1.0f / s->scale.z;
+    m.m[0][0] = 1.0f / s->scale.x;
+    m.m[1][1] = 1.0f / s->scale.y;
+    mathfMulMatrix3x3(lightDir + (depth + 1) * 4, m.m, lightDir + depth * 4);
+    mathfNormalizeColumns(fovNorms + (depth + 1) * 4);
+    mathfNormalizeColumns(fovNorms1 + (depth + 1) * 4);
+    mathfNormalizeColumns(lightDir + (depth + 1) * 4);
+    mathfScaleMatrix3x3(lightDir + (depth + 1) * 4, lightDir + (depth + 1) * 4, 32.0f);
+    return 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierAnimScaleNode);
+#endif
 extern "C" void hierSkelBoneNode(_hierSkelBone *bone, unsigned short *boneIdx, short *matIdx)
 {
     Mat4 m;
@@ -756,7 +916,72 @@ int hierLod(_hierlod *lod, float dist, _hierhead **out, _hierstack *stk)
 #else
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierLod__FP8_hierlodfPP9_hierheadP10_hierstack);
 #endif
+#ifdef NON_MATCHING
+struct _bspresult;
+int bspVecTest(_hierbsp *b, _fvector *a, _fvector *c, _bspresult *r);
+int bspPointTest(_hierbsp *b, _fvector *pt);
+extern _fvector *g_CameraLos;    // this view's camera line-of-sight segments (g_cameraLosPoints[view])
+extern int g_CameraLosPerView;
+/* CONTROL node: child1 while the camera is clear of the node's volumes, child2 when it is inside one (volType 0) or
+ * when a line of sight from the camera (to the monsters) crosses one (volType != 0): buildings that would hide the
+ * fight swap to their cut-away version. */
+extern "C" void hierCtrlNode(_hierctrl *c, _hierhead **out, int matIdx)
+{
+    QwData eoq;
+    _fvector *eo = (_fvector *)&eoq;
+    FVECTOR cam, toCenter, d;
+    char res[0x30];
+    int clear = 1;
+    int i;
+    unsigned k;
+    HierHead *pick;
+
+    vu0GetEoAsm(&eoq);
+    cam.x = -eo->x;
+    cam.y = -eo->y;
+    cam.z = -eo->z;
+    if (c->volType) {
+        float r2 = c->sphere.w * c->sphere.w;
+        toCenter.x = eo->x + c->sphere.x;
+        toCenter.y = eo->y + c->sphere.y;
+        toCenter.z = eo->z + c->sphere.z;
+        for (i = 0; i < g_CameraLosPerView && clear; i++) {
+            float dot, cc;
+            mathfMulVec(matStack + matIdx * 4, &g_CameraLos[i], &d);
+            dot = toCenter.x * d.x + toCenter.y * d.y + toCenter.z * d.z;
+            cc = toCenter.x * toCenter.x + toCenter.y * toCenter.y + toCenter.z * toCenter.z;
+            if (g_CameraLos[i].w < dot - c->sphere.w)
+                continue;  /* sphere beyond the end of the segment */
+            if (r2 < cc - dot * dot)
+                continue;  /* the line misses the sphere */
+            if (dot < 0.0f && r2 < cc)
+                continue;  /* sphere behind the camera */
+            d.x = cam.x + d.x * g_CameraLos[i].w;
+            d.y = cam.y + d.y * g_CameraLos[i].w;
+            d.z = cam.z + d.z * g_CameraLos[i].w;
+            for (k = 0; k < c->numVolumes; k = (unsigned char)(k + 1)) {
+                bspVecTest(c->bspNodes[k], &cam, &d, (_bspresult *)res);
+                if (!(*(unsigned short *)(res + 0x28) == 0 && *(unsigned short *)(res + 0x2C) == 2)) {
+                    clear = 0;
+                    break;
+                }
+            }
+        }
+    } else {
+        for (k = 0; k < c->numVolumes; k = (unsigned char)(k + 1)) {
+            if (bspPointTest(c->bspNodes[k], &cam) != 0x200) {
+                clear = 0;
+                break;
+            }
+        }
+    }
+    pick = clear ? c->child1 : c->child2;
+    if (pick)
+        *out = pick;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/common/hier", hierCtrlNode);
+#endif
 #ifdef NON_MATCHING
 /* 35/124 words: retail keeps the scratchpad base 0x70000000 in $s0 across calls; constant folding here does not */
 void hierInit(void)
