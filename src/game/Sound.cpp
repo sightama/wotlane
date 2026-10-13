@@ -3,6 +3,7 @@
 #include "game/shell.h"
 #include "game/streaming_sound.h"
 #include "game/sound.h"
+#include "vecmath.h"
 
 extern char mechBankName[] __asm__("D_006EFFB0");   /* "Mech_s.bnk" */
 
@@ -359,14 +360,329 @@ void SoundManager::loadShellSoundBanks(void)
     m_banks.loadSoundBank(&gSoundBanks[BANK_SHELL], "Shell_s.bnk", 0);
     snd_ResolveBankXREFS();
 }
+#ifdef NON_MATCHING
+/* matches with NON_MATCHING enabled; kept out of the retail build because the switch jump table must come from the retail rodata */
+void LevelObjectSoundManager::initLevelObjectSoundManager(void)
+{
+    m_startTime = timerGetFieldCount();
+    m_lastCreak = timerGetFieldCount();
+    m_creakDelay = mathfRandf(0.2f, 0.6f);
+    switch (shell->m_levelNum) {
+    case 12: m_military.initMilitaryLevelSound(); break;
+    case 10: m_ufo.initUFOLevelSound(); break;
+    case 3: m_canyon2.initCanyon2LevelSound(); break;
+    case 8: m_island.initIslandLevelSound(); break;
+    case 13: m_canyon.initCanyonLevelSound(); break;
+    case 6: m_threeMile.initThreeMileLevelSound(); break;
+    case 2: m_vegas.initVegasLevelSound(); break;
+    case 7: m_sanFran.initSanFranLevelSound(); break;
+    case 5: m_airport.initAirportLevelSound(); break;
+    case 15: m_volcano.initVolcanoLevelSound(); break;
+    case 9:
+    case 16: m_tokyo.initTokyoLevelSound(); break;
+    case 1:
+    case 4: m_metro.initMetroLevelSound(); break;
+    case 26: m_bigToss.initBigTossLevelSound(); break;
+    case 11: m_final.initFinalLevelSound(); break;
+    }
+    for (int i = 0; i < 20; i++) {
+        m_destruct[i].handle = 0;
+        m_destruct[i].handle2 = 0;
+    }
+    m_trigger.initTriggerVolumeSound(0x157D, 0x51, 200, 440);
+    for (int i = 0; i < 100; i++)
+        m_fireHandles[i] = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initLevelObjectSoundManager__23LevelObjectSoundManager);
+#endif
+/* The level's ambience, the collapse loops, and a loop for every active fire once any player came within 570 units (x/y) of
+   one. The "near" flag is not reset between fires (in retail too), so after the first near fire all following ones play. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 7/225 words, size 0x37c vs 0x384 */
+void LevelObjectSoundManager::updateLevelObjectSoundManager(void)
+{
+    _fvector *fires;
+    int vol = 0;
+    int pan = 0;
+    if (!STREAMING_SOUND()->m_enabled)
+        return;
+    switch (game->m_levelId) {
+    case 12: m_military.updateMilitaryLevelSound(); break;
+    case 10: m_ufo.updateUFOLevelSound(); break;
+    case 13: m_canyon.updateCanyonLevelSound(); break;
+    case 3: m_canyon2.updateCanyon2LevelSound(); break;
+    case 8: m_island.updateIslandLevelSound(); break;
+    case 15: m_volcano.updateVolcanoLevelSound(); break;
+    case 6: m_threeMile.updateThreeMileLevelSound(); break;
+    case 2: m_vegas.updateVegasLevelSound(); break;
+    case 7: m_sanFran.updateSanFranLevelSound(); break;
+    case 5: m_airport.updateAirportLevelSound(); break;
+    case 9:
+    case 16: m_tokyo.updateTokyoLevelSound(); break;
+    case 1:
+    case 4: m_metro.updateMetroLevelSound(); break;
+    case 26: m_bigToss.updateBigTossLevelSound(); break;
+    case 11: m_final.updateFinalLevelSound(); break;
+    }
+    int near = 0;
+    updateDestructLoops();
+    m_trigger.updateTriggerVolumeSound();
+    int numFires = particleActiveFires(&fires);
+    int i;
+    for (i = 0; i < numFires; i++) {
+        for (int p = 0; p < game->m_numMonsters; p++) {
+            _fvector d;
+            vecSub(&d, &game->m_monsters[p]->m_cs->trans, &fires[i]);
+            if (d.x * d.x + d.y * d.y < 324900.0f) {
+                near = 1;
+                break;
+            }
+        }
+        if (near) {
+            calcDualMonoMixVolPan(&fires[i], 150, 570, vol, pan, 0);
+            if (vol > 0) {
+                if (m_fireHandles[i] == 0) {
+                    m_fireHandles[i] = SOUND_PENDING;
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 5, vol, pan, 0, 0, soundPlayCB, &m_fireHandles[i]);
+                } else if (m_fireHandles[i] != SOUND_PENDING && m_fireHandles[i] != 0) {
+                    snd_SetSoundParams_A(m_fireHandles[i], 5, vol, pan, 0, 0);
+                }
+            } else {
+                gLoopManager.terminateLoop(&m_fireHandles[i]);
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_fireHandles[i]);
+        }
+    }
+    for (i = numFires; i < 100; i++)
+        gLoopManager.terminateLoop(&m_fireHandles[i]);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateLevelObjectSoundManager__23LevelObjectSoundManager);
+#endif
+/* After `delay` seconds the loops fade out linearly over `fade` seconds; the late one-shot plays when the fade starts. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 22/141 words, size 0x228 vs 0x234 */
+void LevelObjectSoundManager::updateDestructLoops(void)
+{
+    int vol = 0x400;
+    int pan = 0;
+    for (int i = 0; i < 20; i++) {
+        DestructLoop *d = &m_destruct[i];
+        int elapsed = timerGetFieldCount() - d->start;
+        if ((d->handle != SOUND_PENDING && d->handle != 0) || (d->handle2 != SOUND_PENDING && d->handle2 != 0)) {
+            float t = (float)elapsed;
+            if (t < (d->delay + d->fade) * 60.0f) {
+                calcDualMonoMixVolPan(&d->pos, d->minDist, d->maxDist, vol, pan, 0);
+                if (d->delay * 60.0f < t) {
+                    vol -= (int)((t - d->delay * 60.0f) / (d->fade * 60.0f) * (float)vol);
+                    if (d->hasSecond) {
+                        calcDualMonoMixVolPan(&d->pos2, d->minDist, d->maxDist, vol, pan, 0);
+                        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x10, vol, pan, 0, 0);
+                        d->hasSecond = 0;
+                    }
+                }
+                snd_SetSoundParams_A(d->handle, 5, vol, pan, 0, 0);
+                snd_SetSoundParams_A(d->handle2, 5, vol, pan, 0, 0);
+            } else {
+                gLoopManager.terminateLoop(&m_destruct[i].handle);
+                gLoopManager.terminateLoop(&m_destruct[i].handle2);
+            }
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateDestructLoops__23LevelObjectSoundManager);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 6/99 words, size 0x17c vs 0x18c */
+void LevelObjectSoundManager::triggerLevelDestructSound(_fvector *pos, int minDist, int maxDist, float delay, float fade, int sound,
+                                                        ActPlaySound *act)
+{
+    int vol = 0x400;
+    int pan = 0;
+    int slot = findAvailableDestructHandle();
+    if (slot == -1)
+        return;
+    calcDualMonoMixVolPan(pos, minDist, maxDist, vol, pan, 0);
+    DestructLoop *d = &m_destruct[slot];
+    d->minDist = minDist;
+    d->maxDist = maxDist;
+    d->delay = delay;
+    d->fade = fade;
+    d->pos = *pos;
+    d->start = timerGetFieldCount();
+    d->handle = SOUND_PENDING;
+    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], sound, vol, pan, 0, 0, soundPlayCB, &m_destruct[slot].handle);
+    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x29, vol, pan, 0, 0, soundPlayCB, &m_destruct[slot].handle2);
+    if (act) {
+        _fvector p;
+        vecAdd(&p, pos, &act->m_offset);
+        d->hasSecond = 1;
+        d->pos2 = p;
+    } else {
+        d->hasSecond = 0;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", triggerLevelDestructSound__23LevelObjectSoundManagerP8_fvectoriiffiP12ActPlaySound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playDebrisImpactSound__23LevelObjectSoundManagerP8_fvectori);
+#endif
+void LevelObjectSoundManager::playDebrisImpactSound(_fvector *pos, int type)
+{
+    int vol = 0x400;
+    int pan = 0;
+    if ((float)(timerGetFieldCount() - m_startTime) > 24.0f) {
+        calcDualMonoMixVolPan(pos, 200, 400, vol, pan, 0);
+        if (vol > 0) {
+            if ((unsigned)(type - 6) < 2)
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x34, vol, pan, 0, 0);
+            else
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x2E, vol, pan, 0, 0);
+        }
+    }
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 17/53 words, size 0xd0 vs 0xd4 */
+void LevelObjectSoundManager::playTimedBuildingDestructibleSound(ActPlaySound *act, _fvector *pos)
+{
+    int vol = 0x400;
+    int pan = 0;
+    triggerLevelDestructSound(pos, 1500, 3500, (float)(act->m_time / 60), 0.5f, 15, act);
+    calcDualMonoMixVolPan(pos, 1000, 2400, vol, pan, 0);
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xB, vol, pan, 0, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTimedBuildingDestructibleSound__23LevelObjectSoundManagerP12ActPlaySoundP8_fvector);
+#endif
+/* One-shot (and for the buildings, collapse loop) sound of a destructible, by its sound id. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 136/374 words, size 0x5d8 vs 0x5d4 */
+void LevelObjectSoundManager::playDestructibleSound(unsigned id, _fvector *pos)
+{
+    int vol = 0x400;
+    int pan = 0;
+    switch (id) {
+    case 1:
+    case 0x78:
+    case 0x79:
+    case 0x7A:
+        calcDualMonoMixVolPan(pos, 400, 1500, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], mathfRand(0, 2) + 0x4C, vol, pan, 0, 0);
+        break;
+    case 2:
+        triggerLevelDestructSound(pos, 400, 1000, 1.0f, 0.6f, 15, 0);
+        calcDualMonoMixVolPan(pos, 400, 1000, vol, pan, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xB, vol, pan, 0, 0);
+        break;
+    case 3:
+        triggerLevelDestructSound(pos, 1000, 2400, 1.75f, 0.9f, 15, 0);
+        calcDualMonoMixVolPan(pos, 1000, 2400, vol, pan, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xB, vol, pan, 0, 0);
+        break;
+    case 4:
+        triggerLevelDestructSound(pos, 1500, 3500, 2.5f, 1.2f, 15, 0);
+        calcDualMonoMixVolPan(pos, 1500, 3500, vol, pan, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xB, vol, pan, 0, 0);
+        break;
+    case 5:
+        calcDualMonoMixVolPan(pos, 1800, 5000, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 4, vol, pan, 0, 0);
+        break;
+    case 0x64:
+        calcDualMonoMixVolPan(pos, 400, 1000, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0, vol, pan, 0, 0);
+        break;
+    case 0x65:
+        calcDualMonoMixVolPan(pos, 1000, 2400, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 2, vol, pan, 0, 0);
+        break;
+    case 0x66:
+        calcDualMonoMixVolPan(pos, 1500, 3500, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 3, vol, pan, 0, 0);
+        break;
+    case 0x85:
+        calcDualMonoMixVolPan(pos, 1500, 3500, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 3, vol, pan, 0, 0);
+        break;
+    case 0x86:
+        calcDualMonoMixVolPan(pos, 1500, 3500, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 6, vol, pan, 0, 0);
+        break;
+    case 0x67:
+        calcDualMonoMixVolPan(pos, 1000, 2400, vol, pan, 0);
+        if (vol > 0) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 6, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x22, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0, vol, pan, 0, 0);
+        }
+        break;
+    case 0x7E:
+        /* creaks, at most one every m_creakDelay seconds */
+        if (m_creakDelay * 60.0f < (float)(timerGetFieldCount() - m_lastCreak)) {
+            calcDualMonoMixVolPan(pos, 400, 1000, vol, pan, 0);
+            if (vol > 0) {
+                m_lastCreak = timerGetFieldCount();
+                m_creakDelay = mathfRandf(0.2f, 0.6f);
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x2D, vol, pan, 0, 0);
+            }
+        }
+        break;
+    case 0x7F:
+        calcDualMonoMixVolPan(pos, 400, 1000, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x21, vol, pan, 0, 0);
+        break;
+    case 0x81:
+        calcDualMonoMixVolPan(pos, 900, 1700, vol, pan, 0);
+        if (vol > 0) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], mathfRand(0, 1) + 0xD, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xC, vol, pan, 0, 0);
+        }
+        break;
+    case 0x87:
+        calcDualMonoMixVolPan(pos, 700, 2500, vol, pan, 0);
+        if (vol > 0) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 8, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 2, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0xC, vol, pan, 0, 0);
+        }
+        break;
+    case 0x7B:
+    case 0x7C:
+    case 0x7D:
+    case 0x80:
+    case 0x83:
+    case 0x84:
+        calcDualMonoMixVolPan(pos, 900, 1700, vol, pan, 0);
+        if (vol > 0) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xD, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xC, vol, pan, 0, 0);
+        }
+        break;
+    default:
+        printf("Invalid Sound ID for Destructible!!\n");
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playDestructibleSound__23LevelObjectSoundManagerUiP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", findAvailableDestructHandle__23LevelObjectSoundManager);
+#endif
+int LevelObjectSoundManager::findAvailableDestructHandle(void)
+{
+    for (int i = 0; i < 20; i++) {
+        if (m_destruct[i].handle == 0)
+            return i;
+    }
+    return -1;
+}
 void CanyonLevelSound::initCanyonLevelSound(void)
 {
     m_ambient.initLevelObjectSound(BANK_LEVEL, 0, 300, 1300, 1600, 0, 11);

@@ -164,6 +164,7 @@ public:
     void updateLevelObjectSound(void);
 };
 typedef char _size_LevelObjectSound[sizeof(LevelObjectSound) == 0x30 ? 1 : -1];
+/* _fvector members make these classes 16-byte aligned (sizes round up to 16). */
 
 /* Level bank, centred pan. */
 class NoPanLevelObjectSound : public LevelObjectSound {
@@ -382,5 +383,71 @@ public:
     void updateCanyon2LevelSound(void);
     void playDamDestroyedSound(void);
 };
+
+/* Sound action of an interactive (the timed building collapse). */
+class ActPlaySound {
+public:
+    char pad0[0xC];
+    unsigned m_time;                // 0xC: fields
+    _fvector m_offset;              // 0x10: where the second (late) sound plays, relative to the first
+};
+
+/* Level ambience, destruction sounds and fire loops; embedded in TheGame at 0x121570. */
+class LevelObjectSoundManager {
+public:
+    /* A collapse: two loops that fade out over `fade` seconds after `delay`, plus an optional one-shot at pos2. */
+    struct DestructLoop {
+        unsigned handle;            // 0x0
+        unsigned handle2;           // 0x4
+        int start;                  // 0x8 timerGetFieldCount at the trigger
+        int minDist;                // 0xC
+        int maxDist;                // 0x10
+        float delay;                // 0x14 seconds
+        float fade;                 // 0x18 seconds
+        char pad1C[4];
+        _fvector pos;               // 0x20
+        int hasSecond;              // 0x30
+        char pad34[0xC];
+        _fvector pos2;              // 0x40
+    };
+
+    CanyonLevelSound m_canyon;      // 0x0
+    Canyon2LevelSound m_canyon2;    // 0x30
+    IslandLevelSound m_island;      // 0xA0
+    VegasLevelSound m_vegas;        // 0x1A0
+    SanFranLevelSound m_sanFran;    // 0x250
+    ThreeMileLevelSound m_threeMile; // 0x500
+    TokyoLevelSound m_tokyo;        // 0x760
+    AirportLevelSound m_airport;    // 0x810
+    char pad838[8];
+    VolcanoLevelSound m_volcano;    // 0x840
+    char pad890[0x40];
+    UFOLevelSound m_ufo;            // 0x8D0
+    char pad950[0x20];
+    MilitaryLevelSound m_military;  // 0x970
+    char pad971[3];
+    MetroLevelSound m_metro;        // 0x974
+    BigTossLevelSound m_bigToss;    // 0x978
+    char pad98C[4];
+    FinalLevelSound m_final;        // 0x990
+    RangedTriggerVolumeSound m_trigger; // 0x9C0: trigger 0x157D
+    DestructLoop m_destruct[20];    // 0xA50
+    int m_startTime;                // 0x1090: no debris sounds in the first 24 fields
+    int m_lastCreak;                // 0x1094
+    float m_creakDelay;             // 0x1098: seconds, random 0.2..0.6
+    unsigned m_fireHandles[100];    // 0x109C: one loop per active fire
+
+    void initLevelObjectSoundManager(void);
+    void updateLevelObjectSoundManager(void);
+    void updateDestructLoops(void);
+    void triggerLevelDestructSound(_fvector *pos, int minDist, int maxDist, float delay, float fade, int sound, ActPlaySound *act);
+    void playDebrisImpactSound(_fvector *pos, int type);
+    void playTimedBuildingDestructibleSound(ActPlaySound *act, _fvector *pos);
+    void playDestructibleSound(unsigned id, _fvector *pos);
+    int findAvailableDestructHandle(void);
+};
+typedef char _size_LevelObjectSoundManager[sizeof(LevelObjectSoundManager) == 0x1230 ? 1 : -1];
+int particleActiveFires(_fvector **fires);
+float mathfRandf(float lo, float hi);
 
 #endif
