@@ -577,8 +577,8 @@ public:
     Monster *m_monster;         // 0xC
     unsigned m_evilEyeHandle;   // 0x10
     unsigned m_assBossSpinHandle; // 0x14
-    int f18;                    // 0x18
-    int f1C;                    // 0x1C
+    unsigned m_rotorHandle;     // 0x18: ass boss rotor
+    unsigned m_rotorHandle2;    // 0x1C
     int f20;                    // 0x20
     unsigned m_grappleHandle;   // 0x24
     int f28;                    // 0x28
@@ -598,7 +598,7 @@ public:
     int f60;                    // 0x60
     int f64;                    // 0x64
     int f68;                    // 0x68
-    int f6C;                    // 0x6C
+    unsigned m_shogunHandle;    // 0x6C
     int f70;                    // 0x70
     int f74;                    // 0x74
     unsigned m_magnoHandle;     // 0x78
@@ -607,10 +607,10 @@ public:
     unsigned m_alienSpecialHandle; // 0x84
     unsigned m_jellyTazerHandle; // 0x88
     unsigned m_mechLaserImpactHandle; // 0x8C
-    int f90;                    // 0x90
+    unsigned m_mantisHandle;    // 0x90: wing loop
     int m_knockedBack;          // 0x94
     int m_knockBackTime;        // 0x98: field count
-    int f9C;                    // 0x9C: field count
+    int m_squishTime;           // 0x9C: field count
     char padA0[0x1D8 - 0xA0];
     int f1D8;                   // 0x1D8: field count
     int f1DC;                   // 0x1DC: field count
@@ -619,7 +619,7 @@ public:
     int m_inhaleTime;           // 0x1E8: field count
     int f1EC;                   // 0x1EC
     int f1F0;                   // 0x1F0: field count
-    int f1F4;                   // 0x1F4: field count
+    int m_bodyImpactTime;       // 0x1F4: field count
     int f1F8;                   // 0x1F8
     int f1FC;                   // 0x1FC: field count
     unsigned m_inhaleHandle;    // 0x200
