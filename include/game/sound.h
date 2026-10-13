@@ -450,4 +450,76 @@ typedef char _size_LevelObjectSoundManager[sizeof(LevelObjectSoundManager) == 0x
 int particleActiveFires(_fvector **fires);
 float mathfRandf(float lo, float hi);
 
+/* ---- vehicles, pickups, shell ---- */
+extern "C" int snd_GetDopplerPitchMod(int speed);
+extern int assBossActive;
+class TankPickup;
+class HeliPickup;
+class CarPickup;
+
+class TankSound {
+public:
+    int f0;                     // 0x0
+    unsigned m_handle;          // 0x4: engine
+    void initTankSound(void);
+    void updateTankSound(TankPickup *tank, int moving);
+    void terminateTankSound(void);
+    void playTankFireSound(_fvector *pos);
+};
+
+class HeliSound {
+public:
+    unsigned m_crashHandle;     // 0x0: while the helicopter is in state 4
+    unsigned m_rotorHandle;     // 0x4
+    unsigned m_gunHandle;       // 0x8: type 12 in state 2
+    float m_prevDist;           // 0xC: for the doppler pitch
+    void initHeliSound(void);
+    void updateHeliSound(HeliPickup *heli);
+    void terminateHeliSound(void);
+};
+
+class CarSound {
+public:
+    float m_prevDist;           // 0x0: for the doppler pitch
+    CarPickup *m_car;           // 0x4
+    unsigned m_handle;          // 0x8: engine
+    void initCarSound(CarPickup *car);
+    void updateCarSound(void);
+    void playHornSound(void);
+    void terminateCarSound(void);
+};
+
+#include "game/pickup_sound.h"
+
+/* Front-end music, token counter and options slider loops. */
+class ShellSound {
+public:
+    unsigned m_musicHandle;     // 0x0
+    unsigned m_tokenHandle;     // 0x4
+    char pad8[8];
+    int m_musicStopped;         // 0x10
+    int m_musicOn;              // 0x14
+    int f18;                    // 0x18: nonzero keeps the music off
+    unsigned m_sliderHandle;    // 0x1C
+
+    ShellSound();
+    void resetShellSoundFlags(void);
+    void updateShellSound(void);
+    void updateTokenSound(void);
+    void playTokenCountFinishedSound(void);
+    void stopTokenSound(void);
+    void updateSFXSliderSound(void);
+    void stopSFXSliderSound(void);
+    void terminateShellSound(void);
+    void playShellSFXSound(int sound);
+    void playSweetUnlockedSound(void);
+    void playPauseMenuSound(int sound);
+};
+
+class HudSound {
+public:
+    void initHudSound(void);
+    void updateHudSound(void);
+};
+
 #endif

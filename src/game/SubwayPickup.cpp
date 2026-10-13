@@ -7,7 +7,7 @@ class SubwayPickup : public Pickup {
 public:
     char padE0[0x100 - 0xE0];
     PickupSound sound;  /* 0x100 */
-    char pad101[0x230 - 0x101];
+    char pad110[0x230 - 0x110];
     _fvector vel;       /* 0x230 */
     char pad240[4];
     int f244;

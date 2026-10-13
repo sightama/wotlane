@@ -11,7 +11,7 @@ public:
 
     char padE0[0x100 - 0xE0];
     PickupSound sound; /* 0x100 */
-    char pad101[0x1B8 - 0x101];
+    char pad110[0x1B8 - 0x110];
     int state;         /* 0x1B8 */
 
     int getState(void);

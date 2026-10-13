@@ -4,8 +4,23 @@
 #include "game/streaming_sound.h"
 #include "game/sound.h"
 #include "vecmath.h"
+#include "game/pickup.h"
 
 extern char mechBankName[] __asm__("D_006EFFB0");   /* "Mech_s.bnk" */
+
+/* Only the fields the sounds read. */
+class TankPickup : public Pickup {
+};
+class HeliPickup : public Pickup {
+public:
+    char padE0[0x174 - 0xE0];
+    int m_state;                /* 0x174: 2 firing (type 12), 4 crashing */
+};
+class CarPickup : public Pickup {
+public:
+    char padE0[0x1A8 - 0xE0];
+    float m_maxSpeed;           /* 0x1A8 */
+};
 
 SoundManager::SoundManager()
 {
@@ -1164,38 +1179,409 @@ void InvertedLevelObjectSound::updateLevelObjectSound(void)
         gLoopManager.terminateLoop(&m_handle);
     }
 }
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initTankSound__9TankSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTankSound__9TankSoundP10TankPickupi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateTankSound__9TankSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playTankFireSound__9TankSoundP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initHeliSound__9HeliSound);
+void TankSound::initTankSound(void)
+{
+    m_handle = 0;
+    f0 = 0;
+}
+/* Engine loop while the tank is alive, moving (or `moving`), flagged 0x10 this frame and not held. */
+void TankSound::updateTankSound(TankPickup *tank, int moving)
+{
+    int vol = 0;
+    int pan = 0;
+    if (tank->health > 0.0f && (tank->speed > 0.0f || moving) && (tank->flags & 0x10) && tank->heldState == 0) {
+        calcDualMonoMixVolPan(&tank->cs->trans, 170, 700, vol, pan, 0);
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 0, vol, pan, 0, 0, soundPlayCB, &m_handle);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, vol, pan, 0, 0);
+        }
+        tank->flags &= ~0x10;
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+void TankSound::terminateTankSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+void TankSound::playTankFireSound(_fvector *pos)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(pos, 150, 700, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x2A, vol, pan, 0, 0);
+}
+void HeliSound::initHeliSound(void)
+{
+    m_rotorHandle = 0;
+    m_gunHandle = 0;
+    m_crashHandle = 0;
+}
+/* Rotor loop with doppler pitch (single player only), the gun loop of type 12 in state 2, and the crash loop in state 4. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 20/200 words, size 0x31c vs 0x320 */
+void HeliSound::updateHeliSound(HeliPickup *heli)
+{
+    int vol = 0;
+    int pan = 0;
+    int speed;
+    int pitch = 0;
+    if (heli->health > 0.0f && STREAMING_SOUND()->m_enabled == 1) {
+        calcDualMonoMixVolPan(&heli->cs->trans, 100, 1200, vol, pan, 0);
+        if (vol > 0) {
+            if (shell->m_numPlayers == 1) {
+                findApproachingSpeed(&heli->cs->trans, &speed, &m_prevDist);
+                if (m_rotorHandle == 0)
+                    speed = 0;
+                pitch = snd_GetDopplerPitchMod(speed);
+            }
+            if (m_rotorHandle == 0) {
+                m_rotorHandle = SOUND_PENDING;
+                snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x1A, vol, pan, 0, 0, soundPlayCB, &m_rotorHandle);
+            } else if (m_rotorHandle != SOUND_PENDING && m_rotorHandle != 0) {
+                snd_SetSoundParams_A(m_rotorHandle, 0xD, vol, pan, pitch, 0);
+            }
+            if (heli->m_state == 2 && heli->pickupType == 0xC) {
+                if (m_gunHandle == 0) {
+                    m_gunHandle = SOUND_PENDING;
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x54, vol, pan, 0, 0, soundPlayCB, &m_gunHandle);
+                } else if (m_gunHandle != SOUND_PENDING && m_gunHandle != 0) {
+                    snd_SetSoundParams_A(m_gunHandle, 5, vol, pan, 0, 0);
+                }
+            } else {
+                gLoopManager.terminateLoop(&m_gunHandle);
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_rotorHandle);
+            gLoopManager.terminateLoop(&m_gunHandle);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_rotorHandle);
+        gLoopManager.terminateLoop(&m_gunHandle);
+    }
+    if (heli->m_state == 4) {
+        calcDualMonoMixVolPan(&heli->cs->trans, 100, 1200, vol, pan, 0);
+        if (vol > 0) {
+            if (m_crashHandle == 0) {
+                m_crashHandle = SOUND_PENDING;
+                snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x5C, vol, pan, 0, 0, soundPlayCB, &m_crashHandle);
+            } else if (m_crashHandle != SOUND_PENDING && m_crashHandle != 0) {
+                snd_SetSoundParams_A(m_crashHandle, 5, vol, pan, 0, 0);
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_crashHandle);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_crashHandle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateHeliSound__9HeliSoundP10HeliPickup);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateHeliSound__9HeliSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initCarSound__8CarSoundP9CarPickup);
+#endif
+void HeliSound::terminateHeliSound(void)
+{
+    gLoopManager.terminateLoop(&m_rotorHandle);
+    gLoopManager.terminateLoop(&m_gunHandle);
+    gLoopManager.terminateLoop(&m_crashHandle);
+}
+void CarSound::initCarSound(CarPickup *car)
+{
+    m_car = car;
+    m_handle = 0;
+}
+/* Engine loop of a live car whose flags are exactly 0x10 this frame (not on Three Mile once the crater switched): the level's
+   car engine for type 15 on the levels that have one, the generic one for types 2 and 9. Pitch follows doppler and speed. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 55/175 words, size 0x2b0 vs 0x2bc */
+void CarSound::updateCarSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    int speed;
+    int pitch = 0;
+    if (m_car->health > 0.0f && m_car->flags == 0x10 && (game->m_levelId != 6 || !craterSwitched)) {
+        calcDualMonoMixVolPan(&m_car->cs->trans, 60, 700, vol, pan, 0);
+        if (vol > 0) {
+            if (shell->m_numPlayers == 1) {
+                findApproachingSpeed(&m_car->cs->trans, &speed, &m_prevDist);
+                if (m_handle == 0)
+                    speed = 0;
+                pitch = snd_GetDopplerPitchMod(speed);
+            }
+            if (m_handle == 0) {
+                if (m_car->pickupType == 0xF) {
+                    int level = shell->m_levelNum;
+                    if (level == 4 || level == 1 || level == 2 || level == 6) {
+                        m_handle = SOUND_PENDING;
+                        if (shell->m_levelNum == 6)
+                            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 4, vol, pan, 0, 0, soundPlayCB, &m_handle);
+                        else if (shell->m_levelNum == 2)
+                            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 5, vol, pan, 0, 0, soundPlayCB, &m_handle);
+                        else
+                            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 4, vol, pan, 0, 0, soundPlayCB, &m_handle);
+                    }
+                } else if (m_car->pickupType == 2 || m_car->pickupType == 9) {
+                    m_handle = SOUND_PENDING;
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x1B, vol, pan, 0, 0, soundPlayCB, &m_handle);
+                }
+            } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+                snd_SetSoundParams_A(m_handle, 0x1D, vol, pan, pitch, (int)(m_car->speed / m_car->m_maxSpeed * 32767.0f));
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_handle);
+        }
+        m_car->flags &= ~0x10;
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateCarSound__8CarSound);
+#endif
+/* One chance in 31 per call, on the city levels (1, 2, 4). */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 33/97 words, size 0x16c vs 0x184 */
+void CarSound::playHornSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (mathfRand(0, 30) != 0)
+        return;
+    calcDualMonoMixVolPan(&m_car->cs->trans, 60, 700, vol, pan, 0);
+    if (vol <= 0)
+        return;
+    int level = shell->m_levelNum;
+    if (level != 4 && level != 1 && level != 2)
+        return;
+    int type = m_car->pickupType;
+    if (type == 0xF || type == 0x1A) {
+        if (shell->m_levelNum == 2)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], mathfRand(0, 1) + 1, vol, pan, 0, 0);
+        else
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], mathfRand(0, 1), vol, pan, 0, 0);
+    } else if (type == 2 || type == 3) {
+        if (shell->m_levelNum == 2)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], mathfRand(0, 1) + 3, vol, pan, 0, 0);
+        else
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], mathfRand(0, 1) + 2, vol, pan, 0, 0);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playHornSound__8CarSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateCarSound__8CarSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initPickupSound__11PickupSoundP6Pickup);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playBatImpactSound__11PickupSound);
+#endif
+void CarSound::terminateCarSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+void PickupSound::initPickupSound(Pickup *p)
+{
+    m_handle = 0;
+    m_turretHandle = 0;
+    m_pickup = p;
+}
+void PickupSound::playBatImpactSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_pickup->cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xE, vol, pan, 0, 0);
+}
+/* Engine loop of the drivable pickups (types 2, 9, 27 and the dragon heads): while alive and flagged 0x10 this frame; type 27
+   also while lying free, the others also while held. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 16/139 words, size 0x22c vs 0x21c */
+void PickupSound::updatePickupSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    int type = m_pickup->pickupType;
+    if (type != 2 && type != 9 && type != 0x1B && !((m_pickup->bits >> 5) & 1))
+        return;
+    if (m_pickup->health > 0.0f &&
+        (m_pickup->flags == 0x10 || (m_pickup->heldState ? m_pickup->pickupType != 0x1B : m_pickup->pickupType == 0x1B))) {
+        if (m_pickup->pickupType == 0x1B)
+            calcDualMonoMixVolPan(&m_pickup->cs->trans, 350, 1200, vol, pan, 0);
+        else
+            calcDualMonoMixVolPan(&m_pickup->cs->trans, 60, 700, vol, pan, 0);
+        if (vol > 0) {
+            if (m_handle == 0) {
+                m_handle = SOUND_PENDING;
+                if (m_pickup->pickupType == 0x1B)
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 8, vol, pan, 0, 0, soundPlayCB, &m_handle);
+                else if ((m_pickup->bits >> 5) & 1)
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 7, vol, pan, 0, 0, soundPlayCB, &m_handle);
+                else
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x1B, vol, pan, 0, 0, soundPlayCB, &m_handle);
+            } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+                snd_SetSoundParams_A(m_handle, 5, vol, pan, 0, 0);
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_handle);
+        }
+        m_pickup->flags &= ~0x10;
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updatePickupSound__11PickupSound);
+#endif
+/* Turret rotation loop while either rate is at least 0.09. Type 1 is heard only while the first player is above z 460, type 0
+   only below; type 2 (the boss turret) always. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 132/134 words, size 0x218 vs 0x218 */
+void PickupSound::updateTurretSound(int type, float a, float b)
+{
+    int vol = 0;
+    int pan = 0;
+    if (type == 2 || (type == 1 ? game->m_monsters[0]->m_cs->trans.z > 460.0f : game->m_monsters[0]->m_cs->trans.z < 460.0f))
+        calcDualMonoMixVolPan(&m_pickup->cs->trans, 250, 750, vol, pan, 0);
+    else
+        vol = 0;
+    if (vol > 0) {
+        if (a < 0.09f && b < 0.09f) {
+            gLoopManager.terminateLoop(&m_turretHandle);
+        } else if (m_turretHandle == 0) {
+            m_turretHandle = SOUND_PENDING;
+            if (type == 2) {
+                if (assBossActive)
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_MECH], 0xC, vol, pan, 0, 0, soundPlayCB, &m_turretHandle);
+                else
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 5, vol, pan, 0, 0, soundPlayCB, &m_turretHandle);
+            } else {
+                snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 1, vol, pan, 0, 0, soundPlayCB, &m_turretHandle);
+            }
+        } else if (m_turretHandle != SOUND_PENDING && m_turretHandle != 0) {
+            snd_SetSoundParams_A(m_turretHandle, 5, vol, pan, 0, 0);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_turretHandle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTurretSound__11PickupSoundiff);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateTurretSound__11PickupSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminatePickupSound__11PickupSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playTurretPickupFireSound__11PickupSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", __10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", resetShellSoundFlags__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateShellSound__10ShellSound);
+#endif
+void PickupSound::terminateTurretSound(void)
+{
+    gLoopManager.terminateLoop(&m_turretHandle);
+}
+void PickupSound::terminatePickupSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+void PickupSound::playTurretPickupFireSound(int type)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_pickup->cs->trans, 350, 1000, vol, pan, 0);
+    if (vol > 0) {
+        if (type == 2) {
+            if (assBossActive)
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 0xD, vol, pan, 0, 0);
+            else
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 4, vol, pan, 0, 0);
+        } else {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x1D, vol, pan, 0, 0);
+        }
+    }
+}
+ShellSound::ShellSound()
+{
+    m_sliderHandle = 0;
+    m_musicHandle = 0;
+    m_musicStopped = 0;
+    m_musicOn = 0;
+}
+void ShellSound::resetShellSoundFlags(void)
+{
+    m_musicOn = 1;
+    m_musicStopped = 0;
+    m_musicHandle = 0;
+    m_tokenHandle = 0;
+    f18 = 0;
+}
+void ShellSound::updateShellSound(void)
+{
+    snd_FlushSoundCommands();
+    if (m_musicStopped == 0 && f18 == 0 && m_musicOn == 1) {
+        if (m_musicHandle == 0) {
+            m_musicHandle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_SHELLMUS], 0, 0x400, 0, 0, 0, soundPlayCB, this);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_musicHandle);
+    }
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 21/28 words, size 0x6c vs 0x70 */
+void ShellSound::updateTokenSound(void)
+{
+    if (m_tokenHandle == 0) {
+        m_tokenHandle = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x5D, 0x400, 0, 0, 0, soundPlayCB, &m_tokenHandle);
+        STREAMING_SOUND()->f18 = 0;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTokenSound__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playTokenCountFinishedSound__10ShellSound);
+#endif
+void ShellSound::playTokenCountFinishedSound(void)
+{
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x5F, 0x400, 0, 0, 0);
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 6/16 words, size 0x3c vs 0x40 */
+void ShellSound::stopTokenSound(void)
+{
+    gLoopManager.terminateLoop(&m_tokenHandle);
+    STREAMING_SOUND()->f18 = 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", stopTokenSound__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateSFXSliderSound__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", stopSFXSliderSound__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateShellSound__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playShellSFXSound__10ShellSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playSweetUnlockedSound__10ShellSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playPauseMenuSound__10ShellSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initHudSound__8HudSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateHudSound__8HudSound);
+#endif
+void ShellSound::updateSFXSliderSound(void)
+{
+    if (m_sliderHandle == 0) {
+        m_sliderHandle = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_SHELL], 0xA, 0x400, 0, 0, 0, soundPlayCB, &m_sliderHandle);
+    }
+}
+void ShellSound::stopSFXSliderSound(void)
+{
+    gLoopManager.terminateLoop(&m_sliderHandle);
+}
+void ShellSound::terminateShellSound(void)
+{
+    gLoopManager.terminateLoop(&m_musicHandle);
+    m_musicStopped = 1;
+}
+/* Sound 1 also stops the menu music. */
+void ShellSound::playShellSFXSound(int sound)
+{
+    if (sound == 1) {
+        m_musicStopped = sound;
+        gLoopManager.terminateLoop(&m_musicHandle);
+    }
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_SHELL], sound, 0x400, 0, 0, 0);
+}
+void ShellSound::playSweetUnlockedSound(void)
+{
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_SHELL], 0xB, 0x400, 0, 0, 0);
+}
+void ShellSound::playPauseMenuSound(int sound)
+{
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], sound, 0x400, 0, 0, 0);
+}
+void HudSound::initHudSound(void)
+{
+}
+void HudSound::updateHudSound(void)
+{
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initGenericSound__12GenericSoundiiii);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateGenericSound__12GenericSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateGenericSound__12GenericSoundP8_fvector);
