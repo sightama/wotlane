@@ -575,18 +575,18 @@ public:
     int f4;                     // 0x4
     int f8;                     // 0x8
     Monster *m_monster;         // 0xC
-    unsigned m_evilEyeHandle;   // 0x10
+    unsigned m_breathHandle;    // 0x10: fire breath (types 0x60, 0x120)
     unsigned m_assBossSpinHandle; // 0x14
     unsigned m_rotorHandle;     // 0x18: ass boss rotor
     unsigned m_rotorHandle2;    // 0x1C
-    int f20;                    // 0x20
+    unsigned f20;               // 0x20
     unsigned m_grappleHandle;   // 0x24
-    int f28;                    // 0x28
-    int f2C;                    // 0x2C
+    unsigned f28;               // 0x28
+    unsigned f2C;               // 0x2C
     unsigned m_zapHandle2;      // 0x30
     unsigned m_dashHandle2;     // 0x34
     unsigned m_dashHandle;      // 0x38
-    int f3C;                    // 0x3C
+    unsigned f3C;               // 0x3C
     unsigned m_reticleHandle;   // 0x40
     int f44;                    // 0x44: field count
     int f48;                    // 0x48: field count
@@ -595,19 +595,19 @@ public:
     int m_enabled;              // 0x54: 0 skips updateMonsterSound
     unsigned m_zapHandle;       // 0x58
     unsigned m_shogunSpecialHandle; // 0x5C
-    int f60;                    // 0x60
+    unsigned f60;               // 0x60
     int f64;                    // 0x64
     int f68;                    // 0x68
-    unsigned m_shogunHandle;    // 0x6C
+    unsigned m_runHandle;       // 0x6C: run loop (state 4)
     int f70;                    // 0x70
-    int f74;                    // 0x74
+    unsigned f74;               // 0x74
     unsigned m_magnoHandle;     // 0x78
     unsigned m_pickupHandle;    // 0x7C
     unsigned m_glideHandle;     // 0x80
     unsigned m_alienSpecialHandle; // 0x84
     unsigned m_jellyTazerHandle; // 0x88
     unsigned m_mechLaserImpactHandle; // 0x8C
-    unsigned m_mantisHandle;    // 0x90: wing loop
+    unsigned m_flyHandle;       // 0x90: flight loop (state 1)
     int m_knockedBack;          // 0x94
     int m_knockBackTime;        // 0x98: field count
     int m_squishTime;           // 0x9C: field count
@@ -625,17 +625,14 @@ public:
     unsigned m_inhaleHandle;    // 0x200
     int f204;                   // 0x204
     int f208;                   // 0x208
-    int f20C;                   // 0x20C
-    int f210;                   // 0x210
+    unsigned f20C;              // 0x20C
+    unsigned f210;              // 0x210
     unsigned m_shockHandle;     // 0x214
     int f218;                   // 0x218
-    int f21C;                   // 0x21C
-    int f220;                   // 0x220
+    unsigned f21C;              // 0x21C
+    unsigned f220;              // 0x220
     _animHandle m_anims[4];     // 0x224: animations 0xCF, 0xD0, 0x82, 0xCE of the monster
-    int f264;                   // 0x264
-    int f268;                   // 0x268
-    int f26C;                   // 0x26C
-    int f270;                   // 0x270
+    int m_cinemaPlayed[4];      // 0x264: cinema animation sounds already played
 
     MonsterSound();
     void initMonsterSound(Monster *m);
