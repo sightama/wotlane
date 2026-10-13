@@ -2,12 +2,15 @@
 #define SHELL_H
 
 struct _hierhead;
+struct _cs;
 enum _vramAddrs { VRAM_ADDRS_DUMMY };
 
 /* Front-end shell: level names and file name formatting used by the point tools. */
 class Shell {
 public:
-    char pad0[0x2938];
+    char pad0[0x60];
+    _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
+    char pad70[0x2938 - 0x70];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
     char pad2958[0x2A24 - 0x2958];
     int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
