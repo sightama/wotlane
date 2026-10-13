@@ -142,3 +142,4 @@ common/hdTraverse
 common/HdIterator
 common/ScreenPolys
 common/SoundBank
+game/Sound
