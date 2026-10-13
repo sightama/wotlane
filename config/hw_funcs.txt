@@ -93,3 +93,7 @@ stampPacketInit__FP13_ParticleType
 # input: IOP module loading and the libpad state machine
 inputInit__Fv
 inputUpdateState__Fii
+# ScreenPolys: the HUD quads' GS packet (header, sprite qwords) and its DMA kick
+dmaData__11ScreenPolysv
+polyBuildPrim__FiiiRQ211ScreenPolys8PolyDataP6QwData
+polyInitPacket__FP11_hierobjectP9SourceObjP6QwData
