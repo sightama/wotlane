@@ -1194,7 +1194,7 @@ int StateStompAttack::transitionFeasible(void)
         bad = (*(Pickup **)m->m_pickup)->pickupType != 6;
     if (bad)
         return 0;
-    if (m->m_anims[0xF0].a == 0)
+    if (m->m_anims[0xF0].ci == 0)
         return 0;
     if (!m->m_stamina.hasEnough(staminaCost))
         return 0;
@@ -1364,7 +1364,7 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__17StateShieldAt
 /* Needs the shield bash animation (0xF5). */
 int StateShieldAttack::transitionFeasible(void)
 {
-    return owner->m_anims[0xF5].a != 0;
+    return owner->m_anims[0xF5].ci != 0;
 }
 void StateShieldAttack::transitionInto(void)
 {
