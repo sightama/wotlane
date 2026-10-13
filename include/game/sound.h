@@ -591,7 +591,7 @@ public:
     int f44;                    // 0x44: field count
     int f48;                    // 0x48: field count
     int f4C;                    // 0x4C
-    int f50;                    // 0x50
+    int m_landed;               // 0x50: set by playLandingSound
     int m_enabled;              // 0x54: 0 skips updateMonsterSound
     unsigned m_zapHandle;       // 0x58
     unsigned m_shogunSpecialHandle; // 0x5C
@@ -618,7 +618,7 @@ public:
     int f1E4;                   // 0x1E4: field count
     int m_inhaleTime;           // 0x1E8: field count
     int f1EC;                   // 0x1EC
-    int f1F0;                   // 0x1F0: field count
+    int m_footstepTime;         // 0x1F0: field count
     int m_bodyImpactTime;       // 0x1F4: field count
     int f1F8;                   // 0x1F8
     int f1FC;                   // 0x1FC: field count

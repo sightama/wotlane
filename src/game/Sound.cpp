@@ -2003,7 +2003,7 @@ void MonsterSound::initMonsterSound(Monster *m)
     m_knockBackTime = timerGetFieldCount();
     f48 = timerGetFieldCount();
     f1DC = timerGetFieldCount();
-    f1F0 = timerGetFieldCount();
+    m_footstepTime = timerGetFieldCount();
     m_fire.initFireSound();
     animationGetHandle(&m_anims[0], m_monster->m_typeBits, m_monster->m_dupId, 0xCF);
     animationGetHandle(&m_anims[1], m_monster->m_typeBits, m_monster->m_dupId, 0xD0);
@@ -2485,9 +2485,102 @@ void MonsterSound::updateFlightGlideSound(int state)
         gLoopManager.terminateLoop(&m_glideHandle);
     }
 }
+#ifdef NON_MATCHING
+/* equivalent (untuned): 123/166 words, size 0x298 vs 0x298 */
+void MonsterSound::playButtSlamSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x20: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x47, vol, pan, 0, 0); break;
+    case 0x40:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0xE, vol, pan, 0, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0);
+        break;
+    case 0x60:
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0); break;
+    case 0x80: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0xE, vol, pan, 0, 0); break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 4, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 8, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 6, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 7, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 5, vol, pan, 0, 0); break;
+    }
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 800, 3000, vol, pan, 0);
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x42, vol, pan, 0, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playButtSlamSound__12MonsterSound);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 80/152 words, size 0x24c vs 0x260 */
+void MonsterSound::playLandingSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (!m_enabled)
+        return;
+    if (m_monster->m_typeBits == 0x1C0)
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x20: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x47, vol, pan, 0, 0); break;
+    case 0x40:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0xE, vol, pan, 0, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0);
+        break;
+    case 0x60:
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0); break;
+    case 0x80: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0xE, vol, pan, 0, 0); break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 4, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 8, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 6, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 7, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 5, vol, pan, 0, 0); break;
+    case 0x1C0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0x10, vol, pan, 0, 0); break;
+    }
+    m_landed = 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playLandingSound__12MonsterSound);
+#endif
+/* Type 0xA0 (the flyer) steps at most every 12 fields; ground of type 10 under the foot adds sound 0x53. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 75/162 words, size 0x284 vs 0x288 */
+void MonsterSound::playFootstepSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    int dt = timerGetFieldCount() - m_footstepTime;
+    int type = m_monster->m_typeBits;
+    if (type == 0xA0 && (float)dt < 12.0f)
+        return;
+    if (type == 0x1A0 || type == 0x1C0)
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x20:
+    case 0x60: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x3F, vol, pan, 0, 0); break;
+    case 0x40: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x15, vol, pan, 0, 0); break;
+    case 0x80: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 0xB, vol, pan, 0, 0); break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 6, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0xD, vol, pan, 0, 0); break;
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0xD, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x3E, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 5, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0xB, vol, pan, 0, 0); break;
+    case 0x1A0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 0, vol, pan, 0, 0); break;
+    }
+    m_footstepTime = timerGetFieldCount();
+    if (((unsigned char *)m_monster->getFootHDResult())[2] == 10)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x53, vol, pan, 0, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playFootstepSound__12MonsterSound);
+#endif
 #ifdef NON_MATCHING
 /* equivalent (untuned): 54/57 words, size 0xe4 vs 0xe4 */
 void MonsterSound::playScrape(void)
@@ -2547,8 +2640,64 @@ void MonsterSound::playBodyImpactSound(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playBodyImpactSound__12MonsterSound);
 #endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 65/136 words, size 0x21c vs 0x220 */
+void MonsterSound::playGrappleAttackSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (m_monster->m_typeBits != 0x1A0)
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x20:
+    case 0x60:
+    case 0x80:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x37, vol, pan, 0, 0);
+        break;
+    case 0x40:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 2, vol, pan, 0, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x16, vol, pan, 0, 0);
+        break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0x11, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0xE, vol, pan, 0, 0); break;
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 7, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0xC, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x10, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 7, vol, pan, 0, 0); break;
+    case 0x1A0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 4, vol, pan, 0, 0); break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playGrappleAttackSound__12MonsterSound);
+#endif
+/* Same sounds as playObjectThrowSound. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 35/144 words, size 0x20c vs 0x240 */
+void MonsterSound::playStompAttackSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (m_monster->m_typeBits != 0x1A0)
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x40: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 9, vol, pan, 0, 0); break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 7, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0xE, vol, pan, 0, 0); break;
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 7, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0xC, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x10, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 7, vol, pan, 0, 0); break;
+    case 0x1A0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 5, vol, pan, 0, 0); break;
+    }
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x4B, vol, pan, 0, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playStompAttackSound__12MonsterSound);
+#endif
 void MonsterSound::terminateGrappleSound(void)
 {
     gLoopManager.terminateLoop(&m_grappleHandle);
@@ -2571,7 +2720,31 @@ void MonsterSound::playBatWhooshSound(void)
     if (vol > 0)
         snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x36, vol, pan, 0, 0);
 }
+#ifdef NON_MATCHING
+/* equivalent (untuned): 35/144 words, size 0x20c vs 0x240 */
+void MonsterSound::playObjectThrowSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (m_monster->m_typeBits != 0x1A0)
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x40: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 9, vol, pan, 0, 0); break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 7, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0xE, vol, pan, 0, 0); break;
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 7, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0xC, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0x10, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 7, vol, pan, 0, 0); break;
+    case 0x1A0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 5, vol, pan, 0, 0); break;
+    }
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x4B, vol, pan, 0, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playObjectThrowSound__12MonsterSound);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playCrowdControlSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", play206Sound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTauntSound__12MonsterSound);
@@ -2653,7 +2826,32 @@ void MonsterSound::playGrappleSwing(int n)
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playGrappleSwing__12MonsterSoundi);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playSwing__12MonsterSoundii);
+#ifdef NON_MATCHING
+/* equivalent (untuned): 117/129 words, size 0x204 vs 0x204 */
+void MonsterSound::playJumpSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (m_monster->m_typeBits == 0x1C0)
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0x20: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 3, vol, pan, 0, 0); break;
+    case 0x60: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 4, vol, pan, 0, 0); break;
+    case 0xA0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 3, vol, pan, 0, 0); break;
+    case 0xE0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 6, vol, pan, 0, 0); break;
+    case 0x100: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0, vol, pan, 0, 0); break;
+    case 0x120: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 0, vol, pan, 0, 0); break;
+    case 0x140: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 4, vol, pan, 0, 0); break;
+    case 0x160: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 4, vol, pan, 0, 0); break;
+    case 0x1C0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0xF, vol, pan, 0, 0); break;
+    case 0x1E0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0x14, vol, pan, 0, 0); break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playJumpSound__12MonsterSound);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playDeathSound__12MonsterSoundi);
 void MonsterSound::playSonicRoarSound(void)
 {
