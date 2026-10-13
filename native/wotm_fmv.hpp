@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -233,6 +234,7 @@ public:
         demux_.close();
         frames_.clear();
         pcm_.clear();
+        blk_.clear();   // senao o resto de um par L/R do filme anterior desloca o PCM do proximo (chiado)
         audioHdr_.clear();
         audioState_ = 0;
         demuxEnd_ = flushed_ = false;
@@ -547,6 +549,10 @@ public:
         r.stop = false;
         done_[s].store(false);
         active_[s].store(true);
+        if (s == Full) {
+            skip_.store(false);
+            startedAt_.store(std::chrono::steady_clock::now().time_since_epoch().count());
+        }
         std::fprintf(stderr, "[fmv] %s: %s -> %s @%llu\n", s == Full ? "tela cheia" : "textura", gameName.c_str(), src.ok() ? src.path.c_str() : "(nao achado)",
                      (unsigned long long)src.offset);
     }
@@ -559,6 +565,13 @@ public:
     bool finished(Slot s) const { return done_[s].load(); }
     bool active(Slot s) const { return active_[s].load(); }
     bool hasFrame(Slot s) const { return shown_[s].load(); }
+    // O jogador apertou confirmar (X/Espaco, Start/Enter) no filme de tela cheia; o hook de update trata como "pulou"
+    bool skipRequested() const { return skip_.load(); }
+    // Pulo so vale 100 ms depois do inicio do filme: um toque longo que pulou o anterior nao pula o seguinte junto
+    bool skipAllowed() const {
+        const auto t0 = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(startedAt_.load()));
+        return std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(100);
+    }
 
     // ---- thread da janela (antes de desenhar): abre/fecha e avanca os filmes. Com `vram`, o quadro do filme do menu tambem vai
     // para a VRAM do GS onde o retail o poe (0x3BA0, largura 320: VramAddrForMovies/VramWidthForMovies), para o menu desenhado
@@ -605,6 +618,10 @@ public:
     bool drawFullscreen() {
         Movie &m = mov_[Full];
         if (!m.isOpen() && !active_[Full].load()) return false;
+        // O retail so pula com Start (o uiMain le o botao de mascara 8); aqui X/Espaco tambem pula, como o resto do menu confirma.
+        if (IsKeyPressed(KEY_SPACE) || IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) ||
+            (IsGamepadAvailable(0) && (IsGamepadButtonPressed(0, GAMEPAD_BUTTON_RIGHT_FACE_DOWN) || IsGamepadButtonPressed(0, GAMEPAD_BUTTON_MIDDLE_RIGHT))))
+            if (skipAllowed()) skip_.store(true);
         const float sw = float(GetScreenWidth()), sh = float(GetScreenHeight());
         DrawRectangle(0, 0, int(sw), int(sh), BLACK);
         if (!m.hasFrame || !m.tex.id) return true;
@@ -626,7 +643,8 @@ private:
     struct Req { Source src; std::string name; bool audio = false, open = false, stop = false; };
     std::mutex m_;
     Req req_[2];
-    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{};
+    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{};
+    std::atomic<std::chrono::steady_clock::rep> startedAt_{};
     std::atomic<uint32_t> screenW_{256}, screenH_{128};
     long lastFrame_[2] = {-1, -1};
     Movie mov_[2];
@@ -643,7 +661,7 @@ private:
             Image img{canvas_.data(), W, H, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             screenTex_ = LoadTextureFromImage(img);
             SetTextureFilter(screenTex_, TEXTURE_FILTER_BILINEAR);
-            SetTextureWrap(screenTex_, TEXTURE_WRAP_CLAMP);
+            SetTextureWrap(screenTex_, TEXTURE_WRAP_REPEAT);   // o mesh do telao tem UV fora de 0..1 (o GS do jogo repete)
         } else {
             UpdateTexture(screenTex_, canvas_.data());
         }
@@ -710,7 +728,10 @@ inline void termAll(uint8_t *ram) {
 inline uint32_t updateMpegMovieDecoding(uint8_t *ram, uint32_t keepGoing) {
     Player &p = Player::get();
     const bool started = rd(ram, ga::isStarted) != 0;
+    if (!p.skipAllowed()) keepGoing = 1;   // ignora tambem o Start lido pelo jogo (por nivel) nos primeiros 100 ms
+    else if (p.skipRequested()) keepGoing = 0;
     if (p.finished(Player::Full) || !p.active(Player::Full) || ((keepGoing & 0xFF) == 0 && started)) {
+        std::fprintf(stderr, "[fmv] tela cheia encerrada (%s)\n", p.finished(Player::Full) ? "fim" : "pulo");
         wr(ram, ga::isStarted, 0);
         termAll(ram);
         return 0;

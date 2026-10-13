@@ -47,10 +47,10 @@ Veja [docs/ANALYSIS.md](docs/ANALYSIS.md) para o que já se sabe sobre o execut�
 | Área | Feitas | Total | % | Bytes |
 |---|---:|---:|---:|---|
 | `game` | 932 | 3181 | 29,3% | 107,9 KB de 909,0 KB (11,9%) |
-| `common` / engine | 243 | 1144 | 21,2% | 33,9 KB de 252,4 KB (13,4%) |
+| `common` / engine | 836 | 1144 | 73,1% | 179,4 KB de 252,4 KB (71,1%) |
 
 "Feita" = função `matched` (byte a byte igual ao original) ou `equivalent` (C++ equivalente, ainda sem bater).
-Ignoradas: **1212** funções, sendo 1056 de bibliotecas/SDK (`libs`: gcc, newlib, sce, lib989snd, crt0) e 156 de código de hardware do PS2 (`hw`) que o port substitui.
+Ignoradas: **1338** funções, sendo 1056 de bibliotecas/SDK (`libs`: gcc, newlib, sce, lib989snd, crt0) e 282 de código de hardware do PS2 (`hw`) que o port substitui.
 Gerado por `tools/update_readme.py` a partir de `config/status.csv` (veja `tools/progress.py`); total de 5381 funções.
 <!-- PROGRESS:END -->
 

@@ -202,6 +202,8 @@ def pad_short_loops(lines):
         if lm:
             labels[lm.group(1)] = count
         m = INSN.match(line) if not stripped.startswith('.') and not lm else None
+        if not m and stripped == 'nop':  # operand-less nops (hazard nops added above) are part of the loop too
+            count += 1
         if m:
             op, args = m.group(2), m.group(3)
             target = args.split(',')[-1].strip() if args else ''
@@ -305,7 +307,8 @@ def fix_mfc1_hazard(out):
             while j < len(out) and out[j].strip().startswith('#'):
                 j += 1
             n = INSN.match(out[j]) if j < len(out) and not out[j].strip().startswith(('.', '#')) and not LABEL.match(out[j]) else None
-            if n and n.group(2) not in JUMPS:
+            # a cvt.w.s is emitted as .word (see above): GNU as cannot see what it reads and pads it too
+            if (n and n.group(2) not in JUMPS) or (j < len(out) and out[j].strip().startswith('.word')):
                 res += ['	.set	noreorder', line, out[j], '	.set	reorder']
                 i = j + 1
                 continue
