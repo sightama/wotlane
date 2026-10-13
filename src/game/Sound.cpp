@@ -4116,12 +4116,102 @@ void RigidPickupSound::terminateRollyBallSound(void)
     gLoopManager.terminateLoop(&m_rollHandle);
 }
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playRigidPickupSound__16RigidPickupSoundP8_fvectorfi);
+#ifdef NON_MATCHING
+/* equivalent (untuned): 73/88 words, size 0x160 vs 0x160 */
+void WindSound::initWindSound(int a, int b, float periodA0, float periodA1, float periodB0, float periodB1, int bendA0,
+                              int bendA1, int volA0, int volA1, int bendB0, int bendB1, int volB0, int volB1)
+{
+    f74 = a;
+    f78 = b;
+    m_handle = 0;
+    m_bendRateA = 0;
+    m_bendRateB = 0;
+    m_volRateA = 0;
+    m_volRateB = 0;
+    m_upB = 1;
+    m_upA = 1;
+    m_timeB = timerGetFieldCount();
+    m_timeA = timerGetFieldCount();
+    m_periodRangeA[0] = periodA0;
+    m_periodRangeA[1] = periodA1;
+    m_periodRangeB[0] = periodB0;
+    m_periodRangeB[1] = periodB1;
+    m_bendRangeA[0] = bendA0;
+    m_bendRangeA[1] = bendA1;
+    m_volRangeA[0] = volA0;
+    m_volRangeA[1] = volA1;
+    m_bendRangeB[0] = bendB0;
+    m_bendRangeB[1] = bendB1;
+    m_volRangeB[0] = volB0;
+    m_volRangeB[1] = volB1;
+    m_bendHigh = 0x7FFF;
+    m_bend = 32767.0f;
+    m_volume = 950.0f;
+    m_minVol = 0x307;
+    m_maxVol = 0x400;
+    m_bendLow = 0x5FFF;
+    m_periodB = 0;
+    m_periodA = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initWindSound__9WindSoundiiffffiiiiiiii);
+#endif
 void WindSound::terminateWindSound(void)
 {
     gLoopManager.terminateLoop(&m_handle);
 }
+#ifdef NON_MATCHING
+/* equivalent (untuned): 1/188 words, size 0x2e8 vs 0x2f0 (retail clears three unused stack words) */
+void WindSound::updateWindSound(void)
+{
+    if ((float)(timerGetFieldCount() - m_timeA) > m_periodA * 60.0f) {
+        if (m_upA == 1)
+            m_upA = 0;
+        else
+            m_upA = 1;
+        m_periodA = mathfRandf(m_periodRangeA[0], m_periodRangeA[1]);
+        m_timeA = timerGetFieldCount();
+        m_bendDeltaA = mathfRand(m_bendRangeA[0], m_bendRangeA[1]);
+        if (m_upA == 0)
+            m_bendDeltaA = -m_bendDeltaA;
+        m_bendRateA = m_bendDeltaA / (m_periodA * 60.0f);
+        m_volDeltaA = mathfRand(m_volRangeA[0], m_volRangeA[1]);
+        if (m_upA == 0)
+            m_volDeltaA = -m_volDeltaA;
+        m_volRateA = m_volDeltaA / (m_periodA * 60.0f);
+    }
+    if ((float)(timerGetFieldCount() - m_timeB) > m_periodB * 60.0f) {
+        if (m_upB == 1)
+            m_upB = 0;
+        else
+            m_upB = 1;
+        m_periodB = mathfRandf(m_periodRangeB[0], m_periodRangeB[1]);
+        m_timeB = timerGetFieldCount();
+        m_bendDeltaB = mathfRand(m_bendRangeB[0], m_bendRangeB[1]);
+        if (m_upB == 0)
+            m_bendDeltaB = -m_bendDeltaB;
+        m_bendRateB = m_bendDeltaB / (m_periodB * 60.0f);
+        m_volDeltaB = mathfRand(m_volRangeB[0], m_volRangeB[1]);
+        if (m_upB == 0)
+            m_volDeltaB = -m_volDeltaB;
+        m_volRateB = m_volDeltaB / (m_periodB * 60.0f);
+    }
+    m_volume += m_volRateA + m_volRateB;
+    if (m_volume > m_maxVol)
+        m_volume = m_maxVol;
+    else if (m_volume < m_minVol)
+        m_volume = m_minVol;
+    m_bend += m_bendRateA + m_bendRateB;
+    if (m_bend > 32767.0f)
+        m_bend = m_bendHigh;
+    else if (m_bend < 0.0f)
+        m_bend = m_bendLow;
+    if (m_handle != 0 && m_handle != SOUND_PENDING && m_handle != 0)
+        snd_SetSoundParams_A(m_handle, 0x15, (int)m_volume, 0, 0, (int)m_bend);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateWindSound__9WindSound);
+#endif
 void LavaInhale::rampWindVolumeAndPitchUp(int a, float b, int c)
 {
 }
@@ -4132,8 +4222,24 @@ void MantisGlide::updateWindSound(void)
 {
     WindSound::updateWindSound();
 }
-INCLUDE_ASM("asm/nonmatchings/game/Sound", rampWindVolumeDown__11MantisGlide);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", rampWindVolumeUp__11MantisGlide);
+/* Over 30 fields from m_rampFrom to m_maxVol. */
+void MantisGlide::rampWindVolumeDown(void)
+{
+    m_volume = (int)(m_rampFrom - (m_rampFrom - m_maxVol) * ((timerGetFieldCount() - m_rampTime) / 30.0f));
+    if (m_handle != SOUND_PENDING && m_handle != 0)
+        snd_SetSoundParams_A(m_handle, 0x15, (int)m_volume, 0, 0, (int)m_bend);
+    if (m_volume <= m_maxVol)
+        m_state = 3;
+}
+/* Over 72 fields from m_rampFrom to m_minVol. */
+void MantisGlide::rampWindVolumeUp(void)
+{
+    m_volume = (int)(m_rampFrom + (m_minVol - m_rampFrom) * ((timerGetFieldCount() - m_rampTime) / 72.0f));
+    if (m_handle != SOUND_PENDING && m_handle != 0)
+        snd_SetSoundParams_A(m_handle, 0x15, (int)m_volume, 0, 0, (int)m_bend);
+    if (m_minVol <= m_volume)
+        m_state = 2;
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", calcDualMonoMixVolPan__FP8_fvectoriiRiT3Pi);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", calcCheapDualMonoMixPan__Fi);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", findApproachingSpeed__FP8_fvectorPiPf);

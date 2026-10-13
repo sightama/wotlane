@@ -814,12 +814,46 @@ public:
     void playRigidPickupSound(_fvector *pos, float speed, int a);
 };
 
-/* A wind loop with volume and pitch ramps (lava inhale, mantis glide). */
+/* A wind loop whose volume and pitch bend drift randomly. Two independent drifts (A and B) each run for a random period
+   (seconds), then flip direction and pick new random bend and volume changes for the next period; both add up. The volume
+   stays within [m_minVol, m_maxVol]; a bend leaving [0, 32767] jumps to m_bendHigh or m_bendLow. LavaInhale and MantisGlide
+   add ramps on top. */
 class WindSound {
 public:
     unsigned m_handle;          // 0x0
-    void initWindSound(int a, int b, float c, float d, float e, float f, int g, int h, int i, int j, int k, int l, int m,
-                       int n);
+    int m_upA;                  // 0x4: direction of drift A (1 up, 0 down)
+    int m_upB;                  // 0x8
+    int m_timeA;                // 0xC: field count at the start of the period
+    int m_timeB;                // 0x10
+    int m_bendRangeA[2];        // 0x14: random range of the bend change per period
+    int m_volRangeA[2];         // 0x1C: random range of the volume change per period
+    int m_bendRangeB[2];        // 0x24
+    int m_volRangeB[2];         // 0x2C
+    int m_volDeltaB;            // 0x34
+    int m_volDeltaA;            // 0x38
+    int m_bendDeltaB;           // 0x3C
+    int m_bendDeltaA;           // 0x40
+    float m_bendRateA;          // 0x44: per field
+    float m_bendRateB;          // 0x48
+    float m_volRateA;           // 0x4C
+    float m_volRateB;           // 0x50
+    float m_bend;               // 0x54
+    float m_volume;             // 0x58
+    float m_periodRangeA[2];    // 0x5C: seconds
+    float m_periodRangeB[2];    // 0x64
+    float m_periodB;            // 0x6C: seconds
+    float m_periodA;            // 0x70
+    int f74;                    // 0x74: first init argument
+    int f78;                    // 0x78: second init argument
+    int m_state;                // 0x7C: MantisGlide: 2 ramped up, 3 ramped down
+    int m_minVol;               // 0x80
+    int m_maxVol;               // 0x84
+    int m_bendLow;              // 0x88: bend after dropping below 0
+    int m_bendHigh;             // 0x8C: bend after passing 32767
+    int m_rampTime;             // 0x90: MantisGlide: field count at the start of the ramp
+    int m_rampFrom;             // 0x94: MantisGlide: volume at the start of the ramp
+    void initWindSound(int a, int b, float periodA0, float periodA1, float periodB0, float periodB1, int bendA0, int bendA1,
+                       int volA0, int volA1, int bendB0, int bendB1, int volB0, int volB1);
     void terminateWindSound(void);
     void updateWindSound(void);
 };
