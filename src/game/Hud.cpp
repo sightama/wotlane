@@ -68,12 +68,24 @@ void Hud::parseHudElements(_hierhead *h)
         game->m_huds[0].m_node1F55 = h;
         break;
     case 0x1F51:
+        McPageMgr::global.initButton(h);
+        game->m_huds[0].m_mcButtonCs[0] = CsPool::csHPActivate();
+        hierSetCsEpNode(game->m_huds[0].m_mcButtonCs[0], h);
+        break;
     case 0x1F52:
+        McPageMgr::global.initButton(h);
+        game->m_huds[0].m_mcButtonCs[1] = CsPool::csHPActivate();
+        hierSetCsEpNode(game->m_huds[0].m_mcButtonCs[1], h);
+        break;
     case 0x1F53:
+        McPageMgr::global.initButton(h);
+        game->m_huds[0].m_mcButtonCs[2] = CsPool::csHPActivate();
+        hierSetCsEpNode(game->m_huds[0].m_mcButtonCs[2], h);
+        break;
     case 0x1F54:
         McPageMgr::global.initButton(h);
-        game->m_huds[0].m_mcButtonCs[h->id1 - 0x1F51] = CsPool::csHPActivate();
-        hierSetCsEpNode(game->m_huds[0].m_mcButtonCs[h->id1 - 0x1F51], h);
+        game->m_huds[0].m_mcButtonCs[3] = CsPool::csHPActivate();
+        hierSetCsEpNode(game->m_huds[0].m_mcButtonCs[3], h);
         break;
     }
 }
