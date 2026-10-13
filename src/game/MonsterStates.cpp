@@ -622,7 +622,7 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __14StateGunAttack);
 /* Needs the gun animation (0xF4). */
 int StateGunAttack::transitionOK(void)
 {
-    return owner->m_anims[0xF4].a != 0;
+    return owner->m_anims[0xF4].ci != 0;
 }
 void StateGunAttack::transitionInto(void)
 {
@@ -988,7 +988,7 @@ int StateTwoHandedThrow::transitionFeasible(void)
     Monster *m = owner;
     unsigned long long bits;
 
-    if (!m->m_attacksEnabled || m->m_anims[0x37].a == 0 || m->m_pickup == 0)
+    if (!m->m_attacksEnabled || m->m_anims[0x37].ci == 0 || m->m_pickup == 0)
         return 0;
     bits = (*(Pickup **)m->m_pickup)->bits;
     if (!((bits >> 1) & 1))
@@ -1099,7 +1099,7 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __16StateTazerAttack);
 /* Needs the attack animation (0xF4). */
 int StateTazerAttack::transitionOK(void)
 {
-    return owner->m_anims[0xF4].a != 0;
+    return owner->m_anims[0xF4].ci != 0;
 }
 void StateTazerAttack::transitionInto(void)
 {
