@@ -1943,98 +1943,461 @@ void WeaponSound::playRockSpecialImpact(_fvector *pos)
     if (vol)
         snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0xC, vol, pan, 0, 0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Sound", __12MonsterSound);
+MonsterSound::MonsterSound()
+{
+    m_anims[0].proc = 0;
+    m_anims[1].proc = 0;
+    m_anims[2].proc = 0;
+    m_anims[3].proc = 0;
+    m_monster = 0;
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 87/104 words, size 0x1a0 vs 0x1a0 */
+void MonsterSound::initMonsterSound(Monster *m)
+{
+    f1E0 = timerGetFieldCount();
+    m_inhaleTime = timerGetFieldCount();
+    f1F4 = timerGetFieldCount();
+    f9C = timerGetFieldCount();
+    f1FC = timerGetFieldCount();
+    f1D8 = timerGetFieldCount();
+    m_monster = m;
+    f1F8 = 0;
+    m_zapHandle2 = 0;
+    m_inhaleHandle = 0;
+    m_mechLaserImpactHandle = 0;
+    f204 = 0;
+    m_evilEyeHandle = 0;
+    f18 = 0;
+    m_assBossSpinHandle = 0;
+    f1C = 0;
+    m_grappleHandle = 0;
+    m_jellyTazerHandle = 0;
+    m_dashHandle2 = 0;
+    m_dashHandle = 0;
+    f3C = 0;
+    m_reticleHandle = 0;
+    m_zapHandle = 0;
+    m_shogunSpecialHandle = 0;
+    f90 = 0;
+    f60 = 0;
+    f64 = 0;
+    f68 = 0;
+    f220 = 0;
+    f21C = 0;
+    f2C = 0;
+    f28 = 0;
+    f6C = 0;
+    f70 = 0;
+    f74 = 0;
+    m_pickupHandle = 0;
+    f1EC = 1000;
+    m_enabled = 1;
+    f44 = timerGetFieldCount();
+    m_knockedBack = 0;
+    f1E4 = timerGetFieldCount() - 6000;
+    f218 = 0;
+    f4 = 0;
+    f8 = 0;
+    m_knockBackTime = timerGetFieldCount();
+    f48 = timerGetFieldCount();
+    f1DC = timerGetFieldCount();
+    f1F0 = timerGetFieldCount();
+    m_fire.initFireSound();
+    animationGetHandle(&m_anims[0], m_monster->m_typeBits, m_monster->m_dupId, 0xCF);
+    animationGetHandle(&m_anims[1], m_monster->m_typeBits, m_monster->m_dupId, 0xD0);
+    animationGetHandle(&m_anims[2], m_monster->m_typeBits, m_monster->m_dupId, 0x82);
+    animationGetHandle(&m_anims[3], m_monster->m_typeBits, m_monster->m_dupId, 0xCE);
+    f270 = 0;
+    f264 = 0;
+    f268 = 0;
+    f26C = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initMonsterSound__12MonsterSoundP7Monster);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMonsterSound__12MonsterSound);
+#endif
+void MonsterSound::updateMonsterSound(void)
+{
+    snd_FlushSoundCommands();
+    if (!m_enabled)
+        return;
+    int type = m_monster->m_typeBits;
+    if (type == 0x40)
+        updateRobotSound();
+    else if (type == 0x180)
+        updateOgreSound();
+    else if (type == 0x160)
+        updateAlienSound();
+    else if (type == 0x100)
+        updateLavaSound();
+    else if (type == 0x80)
+        updateShogunSound();
+    else if (type == 0xA0)
+        updateMantisSound();
+    updateGeneralMonsterSounds();
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMonsterCinemaSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateGeneralMonsterSounds__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playSoundFromAnimation__12MonsterSoundf);
+/* Animation sound events: frames below 10 are footsteps, the rest landings. */
+void MonsterSound::playSoundFromAnimation(float frame)
+{
+    if (frame < 10.0f)
+        playFootstepSound();
+    else
+        playLandingSound();
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playSignatureSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTakeHitSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playCloakingSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playEnterCounterBlockSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playGeneratorTazerSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playJellyTazerOneShot__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playShockedSound__12MonsterSound);
+void MonsterSound::playCloakingSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x28, vol, pan, 0, 0);
+}
+void MonsterSound::playEnterCounterBlockSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    if (m_monster->m_typeBits == 0x60) {
+        calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+        if (vol > 0)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 0x11, vol, pan, 0, 0);
+    }
+}
+void MonsterSound::playGeneratorTazerSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 9, vol, pan, 0, 0);
+}
+void MonsterSound::playJellyTazerOneShot(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 9, vol, pan, 0, 0);
+}
+void MonsterSound::playShockedSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xA, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playPedSquishSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRockmanSpecialLaunch__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRockmanSpecialBounce__12MonsterSoundP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playCounterAttackSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRockmanSpecialExplode__12MonsterSoundP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateClimbingSound__12MonsterSound11MonsterAnim);
+void MonsterSound::playRockmanSpecialLaunch(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 350, 1000, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0xA, vol, pan, 0, 0);
+}
+/* pos is unused: the sound plays at the monster. */
+void MonsterSound::playRockmanSpecialBounce(_fvector *pos)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 350, 1000, vol, pan, 0);
+    if (vol > 0) {
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0);
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xD, vol, pan, 0, 0);
+    }
+}
+void MonsterSound::playCounterAttackSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x33, vol, pan, 0, 0);
+}
+void MonsterSound::playRockmanSpecialExplode(_fvector *pos)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(pos, 350, 1000, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0xC, vol, pan, 0, 0);
+}
+void MonsterSound::updateClimbingSound(MonsterAnim anim)
+{
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateJellyTazer__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateJellyTazer__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateDashSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRamSound__12MonsterSound);
+void MonsterSound::terminateJellyTazer(void)
+{
+    gLoopManager.terminateLoop(&m_jellyTazerHandle);
+}
+void MonsterSound::terminateDashSound(void)
+{
+    gLoopManager.terminateLoop(&m_dashHandle);
+    gLoopManager.terminateLoop(&m_dashHandle2);
+}
+void MonsterSound::playRamSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x38, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateDashSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateOgreSound__12MonsterSound);
+void MonsterSound::updateOgreSound(void)
+{
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateRobotSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMantisSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateShogunSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateLavaSpecialInhaleChargeup__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateLavaSpecialInhaleChargeup__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateLavaSound__12MonsterSound);
+void MonsterSound::terminateLavaSpecialInhaleChargeup(void)
+{
+    gLoopManager.terminateLoop(&m_inhaleHandle);
+}
+void MonsterSound::updateLavaSound(void)
+{
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateAlienSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateFireBreath__12MonsterSound);
+/* Computes the volume but plays nothing (the per-type cases are empty in retail). */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 2/26 words, size 0x40 vs 0x68; retail keeps the compares of the empty switch */
+void MonsterSound::playPunchSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 250, 800, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0xC0:
+        break;
+    case 0x120:
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playPunchSound__12MonsterSound);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playVictorySound__12MonsterSoundi);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTakeBatHitSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTakeHit__12MonsterSoundP7Monster);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playKnockBackSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateFlightGlideSound__12MonsterSound);
+void MonsterSound::playKnockBackSound(void)
+{
+    m_knockedBack = 1;
+    m_knockBackTime = timerGetFieldCount();
+}
+void MonsterSound::terminateFlightGlideSound(void)
+{
+    gLoopManager.terminateLoop(&m_glideHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateFlightGlideSound__12MonsterSoundi);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playButtSlamSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playLandingSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playFootstepSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playScrape__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRobotHeadSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRoboJetOneShot__12MonsterSound);
+void MonsterSound::playRobotHeadSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 2, vol, pan, 0, 0);
+}
+void MonsterSound::playRoboJetOneShot(void)
+{
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playBodyImpactSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playGrappleAttackSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playStompAttackSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateGrappleSound__12MonsterSound);
+void MonsterSound::terminateGrappleSound(void)
+{
+    gLoopManager.terminateLoop(&m_grappleHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playGrappleThrowSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playBatWhooshSound__12MonsterSound);
+void MonsterSound::playBatWhooshSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x36, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playObjectThrowSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playCrowdControlSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", play206Sound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTauntSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playPickupSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playGrapplePickupSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", stopPickupSound__12MonsterSound);
+void MonsterSound::stopPickupSound(void)
+{
+    gLoopManager.terminateLoop(&m_pickupHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playWingFlap__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playImpalerRemoveSound__12MonsterSound);
+void MonsterSound::playImpalerRemoveSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x30, vol, pan, 0, 0);
+}
+/* Computes the volume but plays nothing (the per-type cases are empty in retail). */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 2/24 words, size 0x40 vs 0x60; retail keeps the compare of the empty switch */
+void MonsterSound::playGrappleSwing(int n)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    switch (m_monster->m_typeBits) {
+    case 0xC0:
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playGrappleSwing__12MonsterSoundi);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playSwing__12MonsterSoundii);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playJumpSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playDeathSound__12MonsterSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playSonicRoarSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playWaterSplashSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playWaterFootstepSound__12MonsterSound);
+void MonsterSound::playSonicRoarSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 100, 1200, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 7, vol, pan, 0, 0);
+}
+void MonsterSound::playWaterSplashSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x45, vol, pan, 0, 0);
+}
+void MonsterSound::playWaterFootstepSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x41, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateAssBossRotorSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateAssBossRotorSound__12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateAssBossSpinSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateAssBossSpinSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playAssBossWeaponDrawSound__12MonsterSound);
+void MonsterSound::terminateAssBossSpinSound(void)
+{
+    gLoopManager.terminateLoop(&m_assBossSpinHandle);
+}
+void MonsterSound::playAssBossWeaponDrawSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 2500, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 2, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateRobotReticleSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateRobotReticleSound__12MonsterSound);
+void MonsterSound::terminateRobotReticleSound(void)
+{
+    gLoopManager.terminateLoop(&m_reticleHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateElectricShockSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateElectricShockSound__12MonsterSound);
+void MonsterSound::terminateElectricShockSound(void)
+{
+    gLoopManager.terminateLoop(&m_shockHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateAlienSpecial__12MonsterSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateAlienSpecial__12MonsterSound);
+void MonsterSound::terminateAlienSpecial(void)
+{
+    gLoopManager.terminateLoop(&m_alienSpecialHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateZapAttackSound__12MonsterSoundiP7Monster);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateZapAttackSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playShogunSpecialImpactSound__12MonsterSound);
+void MonsterSound::terminateZapAttackSound(void)
+{
+    gLoopManager.terminateLoop(&m_zapHandle);
+    gLoopManager.terminateLoop(&m_zapHandle2);
+}
+void MonsterSound::playShogunSpecialImpactSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 9, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateShogunSpecialSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateShogunSpecialSound__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateEvilEye__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateEvilEye__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateSpiderMagnoSpecial__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateSpiderMagnoSpecial__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playLavaSpecialInhale__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playSuckerBugLaunch__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playShogunSpecialOneShot__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playAlienRaygunDrawSound__12MonsterSound);
+void MonsterSound::terminateShogunSpecialSound(void)
+{
+    gLoopManager.terminateLoop(&m_shogunSpecialHandle);
+}
+void MonsterSound::terminateEvilEye(void)
+{
+    gLoopManager.terminateLoop(&m_evilEyeHandle);
+}
+void MonsterSound::updateEvilEye(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 100, 1200, vol, pan, 0);
+    if (m_evilEyeHandle == 0) {
+    } else if (m_evilEyeHandle != SOUND_PENDING && m_evilEyeHandle != 0) {
+        snd_SetSoundParams_A(m_evilEyeHandle, 5, vol, pan, 0, 0);
+    }
+}
+void MonsterSound::updateSpiderMagnoSpecial(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+    if (m_magnoHandle == 0) {
+    } else if (m_magnoHandle != SOUND_PENDING && m_magnoHandle != 0) {
+        snd_SetSoundParams_A(m_magnoHandle, 5, vol, pan, 0, 0);
+    }
+}
+void MonsterSound::terminateSpiderMagnoSpecial(void)
+{
+    gLoopManager.terminateLoop(&m_magnoHandle);
+}
+void MonsterSound::playLavaSpecialInhale(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 350, 1000, vol, pan, 0);
+    m_inhaleTime = timerGetFieldCount();
+    if (vol) {
+        m_inhaleHandle = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[7], 0xC, vol, pan, 0, 0, soundPlayCB, &m_inhaleHandle);
+    }
+}
+void MonsterSound::playSuckerBugLaunch(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 350, 1000, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0xC, vol, pan, 0, 0);
+}
+void MonsterSound::playShogunSpecialOneShot(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 350, 1000, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 8, vol, pan, 0, 0);
+}
+/* Computes the volume but plays nothing. */
+void MonsterSound::playAlienRaygunDrawSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_monster->m_cs->trans, 700, 1500, vol, pan, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initSuckerBugSound__14SuckerBugSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateSuckerBugSound__14SuckerBugSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateSuckerBugSound__14SuckerBugSoundP8_fvectori);
@@ -2166,7 +2529,10 @@ INCLUDE_ASM("asm/nonmatchings/game/Sound", playMechaPowerDownSound__14FinalBossS
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTakeHitSound__14FinalBossSoundP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMechLaser__14FinalBossSoundP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateMechLaser__14FinalBossSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", stopMechaLaserImpactSound__12MonsterSound);
+void MonsterSound::stopMechaLaserImpactSound(void)
+{
+    gLoopManager.terminateLoop(&m_mechLaserImpactHandle);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initPlantBossSound__14PlantBossSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updatePlantBossSound__14PlantBossSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playPlantBossHideSound__14PlantBossSound);

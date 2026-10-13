@@ -567,6 +567,173 @@ public:
     void updatePlaneSound(_fvector *pos, int state, float t);
 };
 
+/* The sounds of one monster (embedded in Monster at 0x1A7C): one-shots for its moves and hits, the loops of its specials, and
+   one update per monster type. Handles follow the looping-sound convention above. */
+class MonsterSound {
+public:
+    FireSound m_fire;           // 0x0
+    int f4;                     // 0x4
+    int f8;                     // 0x8
+    Monster *m_monster;         // 0xC
+    unsigned m_evilEyeHandle;   // 0x10
+    unsigned m_assBossSpinHandle; // 0x14
+    int f18;                    // 0x18
+    int f1C;                    // 0x1C
+    int f20;                    // 0x20
+    unsigned m_grappleHandle;   // 0x24
+    int f28;                    // 0x28
+    int f2C;                    // 0x2C
+    unsigned m_zapHandle2;      // 0x30
+    unsigned m_dashHandle2;     // 0x34
+    unsigned m_dashHandle;      // 0x38
+    int f3C;                    // 0x3C
+    unsigned m_reticleHandle;   // 0x40
+    int f44;                    // 0x44: field count
+    int f48;                    // 0x48: field count
+    int f4C;                    // 0x4C
+    int f50;                    // 0x50
+    int m_enabled;              // 0x54: 0 skips updateMonsterSound
+    unsigned m_zapHandle;       // 0x58
+    unsigned m_shogunSpecialHandle; // 0x5C
+    int f60;                    // 0x60
+    int f64;                    // 0x64
+    int f68;                    // 0x68
+    int f6C;                    // 0x6C
+    int f70;                    // 0x70
+    int f74;                    // 0x74
+    unsigned m_magnoHandle;     // 0x78
+    unsigned m_pickupHandle;    // 0x7C
+    unsigned m_glideHandle;     // 0x80
+    unsigned m_alienSpecialHandle; // 0x84
+    unsigned m_jellyTazerHandle; // 0x88
+    unsigned m_mechLaserImpactHandle; // 0x8C
+    int f90;                    // 0x90
+    int m_knockedBack;          // 0x94
+    int m_knockBackTime;        // 0x98: field count
+    int f9C;                    // 0x9C: field count
+    char padA0[0x1D8 - 0xA0];
+    int f1D8;                   // 0x1D8: field count
+    int f1DC;                   // 0x1DC: field count
+    int f1E0;                   // 0x1E0: field count
+    int f1E4;                   // 0x1E4: field count
+    int m_inhaleTime;           // 0x1E8: field count
+    int f1EC;                   // 0x1EC
+    int f1F0;                   // 0x1F0: field count
+    int f1F4;                   // 0x1F4: field count
+    int f1F8;                   // 0x1F8
+    int f1FC;                   // 0x1FC: field count
+    unsigned m_inhaleHandle;    // 0x200
+    int f204;                   // 0x204
+    int f208;                   // 0x208
+    int f20C;                   // 0x20C
+    int f210;                   // 0x210
+    unsigned m_shockHandle;     // 0x214
+    int f218;                   // 0x218
+    int f21C;                   // 0x21C
+    int f220;                   // 0x220
+    _animHandle m_anims[4];     // 0x224: animations 0xCF, 0xD0, 0x82, 0xCE of the monster
+    int f264;                   // 0x264
+    int f268;                   // 0x268
+    int f26C;                   // 0x26C
+    int f270;                   // 0x270
+
+    MonsterSound();
+    void initMonsterSound(Monster *m);
+    void updateMonsterSound(void);
+    void updateMonsterCinemaSound(void);
+    void updateGeneralMonsterSounds(void);
+    void playSoundFromAnimation(float frame);
+    void playSignatureSound(void);
+    void playTakeHitSound(void);
+    void playCloakingSound(void);
+    void playEnterCounterBlockSound(void);
+    void playGeneratorTazerSound(void);
+    void playJellyTazerOneShot(void);
+    void playShockedSound(void);
+    void playPedSquishSound(void);
+    void playRockmanSpecialLaunch(void);
+    void playRockmanSpecialBounce(_fvector *pos);
+    void playCounterAttackSound(void);
+    void playRockmanSpecialExplode(_fvector *pos);
+    void updateClimbingSound(MonsterAnim anim);
+    void updateJellyTazer(void);
+    void terminateJellyTazer(void);
+    void terminateDashSound(void);
+    void playRamSound(void);
+    void updateDashSound(void);
+    void updateOgreSound(void);
+    void updateRobotSound(void);
+    void updateMantisSound(void);
+    void updateShogunSound(void);
+    void updateLavaSpecialInhaleChargeup(void);
+    void terminateLavaSpecialInhaleChargeup(void);
+    void updateLavaSound(void);
+    void updateAlienSound(void);
+    void updateFireBreath(void);
+    void playPunchSound(void);
+    void playVictorySound(int n);
+    void playTakeBatHitSound(void);
+    void playTakeHit(Monster *attacker);
+    void playKnockBackSound(void);
+    void terminateFlightGlideSound(void);
+    void updateFlightGlideSound(int on);
+    void playButtSlamSound(void);
+    void playLandingSound(void);
+    void playFootstepSound(void);
+    void playScrape(void);
+    void playRobotHeadSound(void);
+    void playRoboJetOneShot(void);
+    void playBodyImpactSound(void);
+    void playGrappleAttackSound(void);
+    void playStompAttackSound(void);
+    void terminateGrappleSound(void);
+    void playGrappleThrowSound(void);
+    void playBatWhooshSound(void);
+    void playObjectThrowSound(void);
+    void playCrowdControlSound(void);
+    void play206Sound(void);
+    void playTauntSound(void);
+    void playPickupSound(void);
+    void playGrapplePickupSound(void);
+    void stopPickupSound(void);
+    void playWingFlap(void);
+    void playImpalerRemoveSound(void);
+    void playGrappleSwing(int n);
+    void playSwing(int a, int b);
+    void playJumpSound(void);
+    void playDeathSound(int n);
+    void playSonicRoarSound(void);
+    void playWaterSplashSound(void);
+    void playWaterFootstepSound(void);
+    void updateAssBossRotorSound(void);
+    void terminateAssBossRotorSound(void);
+    void updateAssBossSpinSound(void);
+    void terminateAssBossSpinSound(void);
+    void playAssBossWeaponDrawSound(void);
+    void updateRobotReticleSound(void);
+    void terminateRobotReticleSound(void);
+    void updateElectricShockSound(void);
+    void terminateElectricShockSound(void);
+    void updateAlienSpecial(int on);
+    void terminateAlienSpecial(void);
+    void updateZapAttackSound(int on, Monster *target);
+    void terminateZapAttackSound(void);
+    void playShogunSpecialImpactSound(void);
+    void updateShogunSpecialSound(void);
+    void terminateShogunSpecialSound(void);
+    void terminateEvilEye(void);
+    void updateEvilEye(void);
+    void updateSpiderMagnoSpecial(void);
+    void terminateSpiderMagnoSpecial(void);
+    void playLavaSpecialInhale(void);
+    void playSuckerBugLaunch(void);
+    void playShogunSpecialOneShot(void);
+    void playAlienRaygunDrawSound(void);
+    void stopAllMonsterSounds(void);
+    void stopMechaLaserImpactSound(void);
+};
+typedef char _size_MonsterSound[sizeof(MonsterSound) == 0x274 ? 1 : -1];
+
 /* A projectile in flight: the flight loop of the weapon types that have one (with the doppler pitch in one-player games),
    plus the launch and explosion one-shots by weapon type. */
 class Weapon;
