@@ -142,11 +142,308 @@ void changeReel(int reel, int from, int to)
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeReel__Fiii);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMain__Fv);
+#ifdef NON_MATCHING
+/* Two-player monster select: same unlocked range as initSelectSwitches, then each column shows who is on it. cursor1/cursor2 are the
+   1-based columns of the players; frame 1 = player 1 only, 2 = player 2 only, 3 = both; flag1/flag2 (player done choosing?) turn the
+   player's highlight off (frame 0). */
+extern int first2788 __asm__("first.2788");
+extern int last2789 __asm__("last.2789");
+__asm__("#SNFIX_SMALL first.2788");
+__asm__("#SNFIX_SMALL last.2789");
+#define first first2788
+#define last last2789
+/* 8/144 palavras; o retail repete o carregamento de shell (gp e lui) em cada ramo do laço */
+void updateSelectSwitches(int cursor1, int cursor2, int flag1, int flag2)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (i == cursor1 - 1) {
+            if (i == cursor2 - 1) {
+                if (flag1)
+                    frame = flag2 ? 0 : 2;
+                else
+                    frame = flag2 ? 1 : 3;
+            } else {
+                frame = flag1 == 0;
+            }
+        } else if (i == cursor2 - 1) {
+            frame = flag2 ? 0 : 2;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSw[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches__Fiiii);
+#endif
+#ifdef NON_MATCHING
+/* Three players: the two-player frames while player 1 or 2 is still choosing; once both are done, player 3's column shows 5 until
+   flag3 is set. */
+extern int first2793 __asm__("first.2793");
+extern int last2794 __asm__("last.2794");
+__asm__("#SNFIX_SMALL first.2793");
+__asm__("#SNFIX_SMALL last.2794");
+#define first first2793
+#define last last2794
+/* 11/161 palavras; mesma causa da versão 2P */
+void updateSelectSwitches3P(int cursor1, int cursor2, int cursor3, int flag1, int flag2, int flag3)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (!flag1 || !flag2) {
+            if (i == cursor1 - 1) {
+                if (i == cursor2 - 1) {
+                    if (flag1)
+                        frame = flag2 ? 0 : 2;
+                    else
+                        frame = flag2 ? 1 : 3;
+                } else {
+                    frame = flag1 == 0;
+                }
+            } else if (i == cursor2 - 1) {
+                frame = flag2 ? 0 : 2;
+            } else {
+                frame = 0;
+            }
+        } else if (flag3) {
+            frame = 0;
+        } else if (i == cursor3 - 1) {
+            frame = 5;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSw[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches3P__Fiiiiii);
+#endif
+#ifdef NON_MATCHING
+/* Four players: the two-player frames while player 1 or 2 is still choosing; then the same for players 3 and 4 with frames 5 (player 3),
+   6 (player 4) and 7 (both). In shell mode 2 player 4 only shows once player 3 is done. */
+extern int first2798 __asm__("first.2798");
+extern int last2799 __asm__("last.2799");
+__asm__("#SNFIX_SMALL first.2798");
+__asm__("#SNFIX_SMALL last.2799");
+#define first first2798
+#define last last2799
+/* 63/233 palavras; o retail guarda (flag4 ? 0 : 6) na pilha antes do laço e repete o carregamento de shell */
+void updateSelectSwitches4P(int cursor1, int cursor2, int cursor3, int cursor4, int flag1, int flag2, int flag3, int flag4)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (!flag1 || !flag2) {
+            if (i == cursor1 - 1) {
+                if (i == cursor2 - 1) {
+                    if (flag1)
+                        frame = flag2 ? 0 : 2;
+                    else
+                        frame = flag2 ? 1 : 3;
+                } else {
+                    frame = flag1 == 0;
+                }
+            } else if (i == cursor2 - 1) {
+                frame = flag2 ? 0 : 2;
+            } else {
+                frame = 0;
+            }
+        } else if (flag3 && flag4) {
+            frame = 0;
+        } else if (i == cursor3 - 1) {
+            if (i == cursor4 - 1) {
+                if (flag3)
+                    frame = flag4 ? 0 : 6;
+                else
+                    frame = flag4 ? 5 : 7;
+            } else {
+                frame = flag3 ? 0 : 5;
+            }
+        } else if (shell->m_mode == 2) {
+            if (i == cursor4 - 1 && !flag3)
+                frame = flag4 ? 0 : 6;
+            else
+                frame = 0;
+        } else if (i == cursor4 - 1) {
+            frame = flag4 ? 0 : 6;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSw[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches4P__Fiiiiiiii);
+#endif
+#ifdef NON_MATCHING
+/* updateSelectSwitches for the minigame monster select (m_selectSwMG). */
+extern int first2803 __asm__("first.2803");
+extern int last2804 __asm__("last.2804");
+__asm__("#SNFIX_SMALL first.2803");
+__asm__("#SNFIX_SMALL last.2804");
+#define first first2803
+#define last last2804
+/* 8/144 palavras; mesma causa da versão 2P */
+void updateSelectSwitchesMG(int cursor1, int cursor2, int flag1, int flag2)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSwMG[0], 4);
+        hierSetSwitch(shell->m_selectSwMG[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSwMG[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSwMG[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        int frame;
+
+        if (i == cursor1 - 1) {
+            if (i == cursor2 - 1) {
+                if (flag1)
+                    frame = flag2 ? 0 : 2;
+                else
+                    frame = flag2 ? 1 : 3;
+            } else {
+                frame = flag1 == 0;
+            }
+        } else if (i == cursor2 - 1) {
+            frame = flag2 ? 0 : 2;
+        } else {
+            frame = 0;
+        }
+        hierSetSwitch(shell->m_selectSwMG[i], frame);
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesMG__Fiiii);
+#endif
+#ifdef NON_MATCHING
+/* Picking the monster of AI `ai` (1..3): its column shows 5, 6 or 8; any other value leaves that column as it is. */
+extern int first2808 __asm__("first.2808");
+extern int last2809 __asm__("last.2809");
+__asm__("#SNFIX_SMALL first.2808");
+__asm__("#SNFIX_SMALL last.2809");
+#define first first2808
+#define last last2809
+/* 126/129 palavras; ordem dos carregamentos de shell */
+void updateSelectSwitchesAI(int cursor, int ai)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++) {
+        if (i == cursor - 1) {
+            if (ai == 1)
+                hierSetSwitch(shell->m_selectSw[i], 5);
+            else if (ai == 2)
+                hierSetSwitch(shell->m_selectSw[i], 6);
+            else if (ai == 3)
+                hierSetSwitch(shell->m_selectSw[i], 8);
+        } else {
+            hierSetSwitch(shell->m_selectSw[i], 0);
+        }
+    }
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesAI__Fii);
+#endif
 #ifdef NON_MATCHING
 /* Narrows the monster-select columns to the unlocked monsters: the first (monsterSelectMode[0]) and the last (monsterSelectMode[36],
    the first slot of monster 9) can still be locked, in which case their column shows 4 and the range [m_selFirst, m_selLast) skips it.
@@ -189,7 +486,44 @@ void initSelectSwitches(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitches__Fv);
 #endif
+#ifdef NON_MATCHING
+/* initSelectSwitches for the minigame select: same narrowing of the columns, with its own range and without storing it in the shell. */
+extern int first2818 __asm__("first.2818");
+extern int last2819 __asm__("last.2819");
+__asm__("#SNFIX_SMALL first.2818");
+__asm__("#SNFIX_SMALL last.2819");
+#define first first2818
+#define last last2819
+/* 83/88 palavras; o retail relê first por gp no fim de cada ramo */
+void initSelectSwitchesMG(void)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    for (i = first; i < last; i++)
+        hierSetSwitch(shell->m_selectSw[i], 0);
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitchesMG__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE2F0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect1P__Fv);

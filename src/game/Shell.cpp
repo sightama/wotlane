@@ -56,6 +56,7 @@ public:
 extern "C" void sceGsResetGraph(short mode, short inter, short omode, short ffmode);
 extern "C" void sceGsResetPath(void);
 extern char D_006F81B0[]; /* "shell" */
+extern char D_006F81B8[]; /* "load" */
 struct Camera {
     enum CameraPOV { POV_0, POV_1, POV_2, POV_3 };
 };
@@ -1120,7 +1121,18 @@ void Shell::BootInitUserint(void)
     doTweaks = 0;
     hierSetTraversalCallback(0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", BootInitUserint1__5Shell);
+/* BootInitUserint for the loading screen: inflates LOAD.RTX instead of SHELL.RTX and leaves the font alone. */
+void Shell::BootInitUserint1(void)
+{
+    snd_StreamSafeCdSync(0);
+    sceCdSync(0);
+    sceCdDiskReady(0);
+    zipInflateAll("\\SHELL\\LOAD.RTX;1", (void *)0x01B7FFF0);
+    InitGS(1);
+    timerInit(0x3C);
+    doTweaks = 0;
+    hierSetTraversalCallback(0);
+}
 #ifdef NON_MATCHING
 void Shell::BootInitGame(void)
 {
@@ -1184,14 +1196,31 @@ void Shell::LoadUserintTexture(void)
     texmInit(getVramAddr());
     fontInit(getVramAddr(), 1);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintTexture1__5Shell);
+/* LoadUserintTexture for the loading screen (load.rtx, load.tex) */
+void Shell::LoadUserintTexture1(void)
+{
+    int size;
+
+    size = zipInflateAll("shell/load.rtx", getNextNgpLoadAddr());
+    fileOnlyResFile(getNextNgpLoadAddr(), size);
+    texmResInit(getVramAddr(), (QwData *)getNextNgpLoadAddr());
+    size = zipInflateAll("shell/load.tex", getNextNgpLoadAddr());
+    fileOnlyTexFile(getNextNgpLoadAddr(), size);
+    texmInit(getVramAddr());
+    fontInit(getVramAddr(), 1);
+}
 /* shell.ngp (the menus' database) is inflated at 0xA00000 and becomes the only NGP file, named "shell" */
 void Shell::LoadUserintDB(void)
 {
     fileOnlyNgpFile((char *)0xA00000, zipInflateAll("shell/shell.ngp", (void *)0xA00000));
     fileAddName(D_006F81B0);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintDB1__5Shell);
+/* LoadUserintDB for the loading screen: load.ngp at 0xA00000, named "load" */
+void Shell::LoadUserintDB1(void)
+{
+    fileOnlyNgpFile((char *)0xA00000, zipInflateAll("shell/load.ngp", (void *)0xA00000));
+    fileAddName(D_006F81B8);
+}
 #ifdef NON_MATCHING
 /* 97/279 words: untuned, from the m2c draft + asm */
 void Shell::LoadResTexture(void)
