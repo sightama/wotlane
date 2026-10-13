@@ -59,6 +59,12 @@ public:
     void playShellSFXSound(int id);
 };
 extern int prevScreen;
+#ifdef NON_MATCHING
+extern int lastScreen;
+extern int oldScreens[16];
+extern int currAnimationIndex;
+__asm__("#SNFIX_SMALL currAnimationIndex");
+#endif
 int levelUnlocked(int level);
 int screenGetInput(int padMask);
 extern int screenFirstPass;
@@ -285,7 +291,9 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE960);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE978);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE9D0);
+#ifndef NON_MATCHING /* the C++ screenTransition builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE9F0);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EEA48);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EEA58);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EEA88);
@@ -351,8 +359,7 @@ void setSlider(int which, float v)
         break;
     }
     default:
-        printf("Trying to set a slider on a bar that doesn't exist!!
-");
+        printf("Trying to set a slider on a bar that doesn't exist!!\n");
         break;
     }
 }
@@ -667,7 +674,206 @@ void screenMemoryCardInit(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMemoryCardInit__Fv);
 #endif
+#ifdef NON_MATCHING
+extern int stNeedUpdate __asm__("needUpdate.2972");
+extern int stWaitingForAnimation __asm__("waitingForAnimation.2977");
+extern int stWaitingForAlphaFade __asm__("waitingForAlphaFade.2978");
+extern int stFadingIn __asm__("fadingIn.2979");
+extern int stFadingOut __asm__("fadingOut.2980");
+extern int stHalfWayMark __asm__("halfWayMark.2981");
+extern int stAnimDir __asm__("D_006F8C88");        /* direction of the running transition animation */
+extern int stAnimFrames __asm__("D_006F8C8C");     /* its total run frames */
+extern int stAnimLastFrame __asm__("D_006F8C90");  /* its last frame */
+extern int stFadeInFrame __asm__("D_006F8C94");    /* frame past which the new screen fades in (20 frames from the end) */
+__asm__("#SNFIX_SMALL needUpdate.2972");
+__asm__("#SNFIX_SMALL waitingForAnimation.2977");
+__asm__("#SNFIX_SMALL waitingForAlphaFade.2978");
+__asm__("#SNFIX_SMALL fadingIn.2979");
+__asm__("#SNFIX_SMALL fadingOut.2980");
+__asm__("#SNFIX_SMALL halfWayMark.2981");
+__asm__("#SNFIX_SMALL D_006F8C88");
+__asm__("#SNFIX_SMALL D_006F8C8C");
+__asm__("#SNFIX_SMALL D_006F8C90");
+__asm__("#SNFIX_SMALL D_006F8C94");
+extern int g_fadeFrameOffset;
+extern int AINumLeft;
+extern int mSelectWins;
+__asm__("#SNFIX_SMALL g_fadeFrameOffset");
+__asm__("#SNFIX_SMALL AINumLeft");
+__asm__("#SNFIX_SMALL mSelectWins");
+void moviesReleaseScreenObject(void);
+int animationGetDirection(_animHandle h);
+float animationGetCurrentFrame(_animHandle h);
+float animationGetLastFrame(_animHandle h);
+float animationGetTotalRunFrames(_animHandle h);
+void killButtons(void);
+void showButtons(int screen);
+void setSlider(int which, float v);
+void screenWriteInstructions(int screen, float alpha);
+/* Sets every object of menu `screen` to `alpha`; on screen 17 while AIs are still being picked the objects of screen 3 are forced
+   opaque instead. */
+#define ST_SET_SCREEN_ALPHA(screen, alpha)                                       \
+    for (i = 0; i < 90; i++) {                                                   \
+        if (currScreen == 17 && AINumLeft) {                                     \
+            if (shell->m_menuObj[3][i])                                          \
+                *(float *)(shell->m_menuObj[3][i] + 0x4C) = 1.0f;                \
+        } else if (shell->m_menuObj[screen][i])                                  \
+            *(float *)(shell->m_menuObj[screen][i] + 0x4C) = (alpha);            \
+    }
+/* 15/648 palavras; não afinada (o retail desenrola os laços de alpha e testa AINumLeft fora deles) */
+/* Runs every frame while the menus move from lastScreen to currScreen (changeScreen started transition animation
+   currAnimationIndex). On the first pass it measures the animation and sets up the new screen (options switches and sliders,
+   background movie); halfway through the animation the old buttons go away; then the old screen fades out (alpha -0.05 per frame),
+   the new one is prepared (panel, highlighted item) and fades in once the animation is 20 frames from its end. When both the
+   animation and the fade are over, the transition ends (betweenScreens = 0). Screen 0x63 is a pseudo screen with no fade. */
+void screenTransition(bool b)
+{
+    float pct;
+    int i, ready;
+
+    if (screenFirstPass) {
+        if (currScreen == 20)
+            g_fadeFrameOffset = 0;
+        targetAlpha = 1.0f;
+        stNeedUpdate = 1;
+        stFadingOut = 1;
+        stFadingIn = 0;
+        stHalfWayMark = 0;
+        screenFirstPass = 0;
+        stAnimDir = animationGetDirection(shell->m_screenAnim[currAnimationIndex]);
+        stAnimFrames = (int)animationGetTotalRunFrames(shell->m_screenAnim[currAnimationIndex]);
+        stAnimLastFrame = (int)animationGetLastFrame(shell->m_screenAnim[currAnimationIndex]);
+        if (stAnimDir)
+            stFadeInFrame = stAnimLastFrame - 20;
+        else
+            stFadeInFrame = stAnimLastFrame + stAnimFrames + 20;
+        if (currScreen == 10) {
+            hierSetCsDrawMe(shell->m_sliderCs[0], 1);
+            hierSetCsDrawMe(shell->m_sliderCs[1], 1);
+            for (i = 0; i < 3; i++)
+                hierSetSwitch(shell->m_difficultySw[i], *(int *)((char *)game + 0x1203CC) == i);
+            hierSetSwitch(shell->m_stereoSw, shell->m_mono ^ 1);
+            hierSetSwitch(shell->m_monoSw, shell->m_mono);
+            hierSetSwitch(shell->m_vibrationSw[0][0], *(int *)((char *)game + 0x120498));
+            hierSetSwitch(shell->m_vibrationSw[0][1], *(int *)((char *)game + 0x120498) ^ 1);
+            hierSetSwitch(shell->m_vibrationSw[1][0], *(int *)((char *)game + 0x12049C));
+            hierSetSwitch(shell->m_vibrationSw[1][1], *(int *)((char *)game + 0x12049C) ^ 1);
+            setSlider(0, (float)shell->m_sfxVolume * (1.0f / 1024.0f));
+            setSlider(1, (float)shell->m_musicVolume / 830.0f);
+        } else if (currScreen == 0x63) {
+            stFadingOut = 0;
+            screenFirstPass = 1;
+            stFadingIn = 0;
+            betweenScreens = 0;
+            stHalfWayMark = 0;
+        }
+        if (currScreen > 0 && (currScreen < 3 || currScreen == 5)) {
+            moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+            myMovie.Play(false, MainMovie);
+            continueDecoding = 1;
+        }
+    }
+    if (currScreen == 8)
+        hierSetSwitch(*(_hierswitch **)((char *)shell + 0x5D0), **(int **)((char *)g_levelList + 8));
+    if (currScreen == 15) {
+        if (currentSelection[15] == 2) {
+            hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+        } else
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+    }
+    pct = animationGetCurrentPercent(shell->m_screenAnim[currAnimationIndex]);
+    if (stAnimDir ? pct > 0.6f : pct < 0.4f) {
+        stHalfWayMark = 1;
+        killButtons();
+        stNeedUpdate = 1;
+    }
+    if (stHalfWayMark) {
+        screenWriteInstructions(currScreen, 0.0f);
+        switch (currScreen) {
+        case 1:
+        case 3:
+        case 6:
+            moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+            myMovie.Play(false, MainMovie);
+            continueDecoding = 1;
+            break;
+        case 18:
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C8), 0);
+            break;
+        case 19:
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D4), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D8), 0);
+            break;
+        case 21:
+            moviesReleaseScreenObject();
+            break;
+        }
+    }
+    if (pct > 0.001f && pct < 0.999f)
+        stWaitingForAnimation = 1;
+    else
+        stWaitingForAnimation = 0;
+    if (stFadingOut) {
+        targetAlpha -= 0.05f;
+        stWaitingForAlphaFade = 1;
+        screenWriteInstructions(lastScreen, targetAlpha);
+        ST_SET_SCREEN_ALPHA(lastScreen, targetAlpha);
+        if (targetAlpha <= 0.0f) {
+            targetAlpha = 0.0f;
+            stFadingIn = 1;
+            stFadingOut = 0;
+            for (i = 0; i < 90; i++) {
+                if (currScreen == 17 && AINumLeft) {
+                    if (shell->m_menuObj[3][i])
+                        *(float *)(shell->m_menuObj[3][i] + 0x4C) = targetAlpha;
+                } else if (shell->m_menuObj[currScreen][i]) {
+                    *(float *)(shell->m_menuObj[currScreen][i] + 0x4C) = targetAlpha;
+                    screenWriteInstructions(currScreen, targetAlpha);
+                    killButtons();
+                }
+            }
+            hierSetSwitch(shell->m_screenSw, currScreen - 1);
+            if (lastScreen == 20 && currScreen == 1)
+                hierSetCsDrawMe(shell->m_menuCs, 1);
+            screenPrepareDefault(currScreen, currentSelection[currScreen]);
+        }
+        if (currScreen != 0x63) {
+            showButtons(lastScreen);
+            stNeedUpdate = 0;
+        }
+    } else if (stFadingIn) {
+        ready = 0;
+        if ((stAnimDir && stFadeInFrame < (int)animationGetCurrentFrame(shell->m_screenAnim[currAnimationIndex]))
+            || (!stAnimDir && (int)animationGetCurrentFrame(shell->m_screenAnim[currAnimationIndex]) < stFadeInFrame))
+            ready = 1;
+        if (ready) {
+            targetAlpha += 0.05f;
+            stWaitingForAlphaFade = 1;
+            if (currScreen != 20)
+                screenWriteInstructions(currScreen, targetAlpha);
+            ST_SET_SCREEN_ALPHA(currScreen, targetAlpha);
+            if (targetAlpha >= 1.0f) {
+                stFadingIn = 0;
+                stWaitingForAlphaFade = 0;
+            }
+        }
+        if (currScreen != 0x63) {
+            showButtons(currScreen);
+            stNeedUpdate = 0;
+        }
+    } else
+        stWaitingForAlphaFade = 0;
+    if (!stWaitingForAnimation && !stWaitingForAlphaFade) {
+        currAnimationIndex = 0;
+        screenFirstPass = 1;
+        betweenScreens = 0;
+    }
+}
+#undef ST_SET_SCREEN_ALPHA
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenTransition__Fb);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenUnlocker__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect4P__Fv);
 #ifdef NON_MATCHING
@@ -715,10 +921,6 @@ void screenWaitForStart(void)
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenWaitForStart__Fv);
 #endif
 #ifdef NON_MATCHING
-extern int lastScreen;
-extern int oldScreens[16];
-extern int currAnimationIndex;
-__asm__("#SNFIX_SMALL currAnimationIndex");
 extern char D_006EED08[];
 /* Leaves screen `from` for screen `to`. dir 1 goes forward (when `track`, `from` becomes prevScreen and the old prevScreen is pushed
    on the 16-deep oldScreens stack), dir -1 goes back (pops prevScreen from the stack); anything else just prints a warning.

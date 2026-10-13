@@ -15,15 +15,26 @@ public:
     char pad4[0x5C - 0x4];
     _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on */
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
-    char pad70[0x168 - 0x70];
+    char pad70[0x160 - 0x70];
+    _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
+    char pad164[0x168 - 0x164];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
     char pad190[0x25C - 0x190];
     _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
     char pad5CC[0x5D4 - 0x5CC];
     _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1) */
-    char pad5D8[0x61C - 0x5D8];
+    char pad5D8[0x5DC - 0x5D8];
+    /* options screen (10) */
+    _hierswitch *m_difficultySw[3]; /* 0x5DC: one lit per value of TheGame+0x1203CC */
+    _hierswitch *m_vibrationSw[2][2]; /* 0x5E8: per pad, [0] lit when vibration is on, [1] when off */
+    _hierswitch *m_stereoSw;  /* 0x5F8: lit when m_mono is 0 */
+    _hierswitch *m_monoSw;    /* 0x5FC */
+    char pad600[0x604 - 0x600];
+    _cs *m_sliderCs[2];      /* 0x604: knobs of the sfx and music volume bars (setSlider moves them) */
+    char pad60C[0x61C - 0x60C];
     _animHandle m_screenAnim[12]; /* 0x61C: menu transition animations 1..11 (anim 0x270E of the shell db); changeScreen plays one */
-    char pad6DC[0x25D4 - 0x6DC];
+    char *m_menuObj[22][90]; /* 0x6DC: [screen][i] objects drawn on each menu screen (TagList::m_entries); +0x4C is their alpha, faded by screenTransition */
+    char pad25CC[0x25D4 - 0x25CC];
     _animHandle m_reelSpinAnim[2]; /* 0x25D4: one per select reel (anims 0x2585 + reel) */
     char pad25F4[0x2644 - 0x25F4];
     _animHandle m_reelAnim[2][10]; /* 0x2644: per reel, the animation of each of its 10 positions (anims 0x259E + reel * 10 + i); changeReel */
@@ -120,7 +131,11 @@ extern Shell *shell;
 SHELL_AT(m_selectSw, 0x168);
 SHELL_AT(m_menuItemSw, 0x25C);
 SHELL_AT(m_screenSw, 0x5D4);
+SHELL_AT(m_monoSw, 0x5FC);
+SHELL_AT(m_sliderCs, 0x604);
+SHELL_AT(m_movieScreen, 0x160);
 SHELL_AT(m_screenAnim, 0x61C);
+SHELL_AT(m_menuObj, 0x6DC);
 SHELL_AT(m_reelSpinAnim, 0x25D4);
 SHELL_AT(m_reelAnim, 0x2644);
 SHELL_AT(m_ctlrCfg, 0x2B8C);
