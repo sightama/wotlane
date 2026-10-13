@@ -35,6 +35,16 @@ extern int on_bit[] __asm__("on_bit_006EEE78");
 extern "C" int printf(const char *, ...);
 int inputGetInput(int mask, int pad);
 float screenGetFontAlpha(void);
+void hierSetCsDrawMe(_cs *cs, unsigned char on);
+void uiAlignItemWithCamera(_cs *cs, float z, float x, float y);
+extern float val1_x __asm__("val1_x.3061");
+extern float val_y __asm__("val_y.3062");
+extern float val_z __asm__("val_z.3063");
+extern float val2_x __asm__("val2_x.3064");
+__asm__("#SNFIX_SMALL val1_x.3061");
+__asm__("#SNFIX_SMALL val_y.3062");
+__asm__("#SNFIX_SMALL val_z.3063");
+__asm__("#SNFIX_SMALL val2_x.3064");
 void screenSetButtonAlpha(void);
 void changeScreen(int to, int from, int dir, int sfx, bool b);
 void updateSelectSwitches(int a, int b, int c, int d);
@@ -264,7 +274,9 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED40);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED50);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED68);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EED80);
+#ifndef NON_MATCHING /* the C++ showButtons builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEDD0);
+#endif
 #ifndef NON_MATCHING /* the C++ levelUnlocked builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEE30);
 #endif
@@ -614,9 +626,83 @@ void setButtonAlpha(float a)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", setButtonAlpha__Ff);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/screen", screenSetButtonAlpha__Fv);
+/* the fade alpha of the menu text goes to the material (+0x4C) of each button prompt's object */
+void screenSetButtonAlpha(void)
+{
+    char *o;
+
+    o = *(char **)(*(char **)shell->m_buttonCs[0] + 0x20);
+    if (o)
+        *(float *)(o + 0x4C) = screenGetFontAlpha();
+    o = *(char **)(*(char **)shell->m_buttonCs[2] + 0x20);
+    if (o)
+        *(float *)(o + 0x4C) = screenGetFontAlpha();
+    o = *(char **)(*(char **)shell->m_buttonCs[1] + 0x20);
+    if (o)
+        *(float *)(o + 0x4C) = screenGetFontAlpha();
+    o = *(char **)(*(char **)shell->m_buttonCs[3] + 0x20);
+    if (o)
+        *(float *)(o + 0x4C) = screenGetFontAlpha();
+}
+#ifdef NON_MATCHING
+/* 105/108 palavras; a tabela de saltos do switch vai para o .rodata deste TU (a do retail, jtbl_006EEDD0, fica em asm) */
+/* lays out the button prompts for screen `screen`: one centred prompt (screen 1), two (screen 21, wider apart), two
+   on most screens (7 only when monster select slot 44 is set), none on screens 9, 16 and 20 */
+void showButtons(int screen)
+{
+    _cs *b3 = shell->m_buttonCs[3];
+    _cs *b2 = shell->m_buttonCs[2];
+    _cs *b1 = shell->m_buttonCs[1];
+    _cs *b0 = shell->m_buttonCs[0];
+
+    switch (screen) {
+    case 1:
+        val1_x = -0.14f;
+        uiAlignItemWithCamera(b3, val_z, -0.14f, val_y);
+        hierSetCsDrawMe(b3, 1);
+        hierSetCsDrawMe(b1, 0);
+        hierSetCsDrawMe(b0, 0);
+        hierSetCsDrawMe(b2, 0);
+        break;
+    case 2: case 3: case 4: case 5: case 6: case 7: case 8:
+    case 10: case 11: case 12: case 13: case 14: case 15:
+    case 17: case 18: case 19:
+        if (screen == 7 && monsterSelectMode[44].state == 0)
+            break;
+        val2_x = 0.12f;
+        val1_x = -0.31f;
+        uiAlignItemWithCamera(b3, val_z, -0.31f, val_y);
+        hierSetCsDrawMe(b3, 1);
+        uiAlignItemWithCamera(b1, val_z, val2_x, val_y);
+        hierSetCsDrawMe(b1, 1);
+        hierSetCsDrawMe(b0, 0);
+        hierSetCsDrawMe(b2, 0);
+        break;
+    case 21:
+        val2_x = 0.28f;
+        val1_x = -0.47f;
+        uiAlignItemWithCamera(b3, val_z, -0.47f, val_y);
+        hierSetCsDrawMe(b3, 1);
+        uiAlignItemWithCamera(b1, val_z, val2_x, val_y);
+        hierSetCsDrawMe(b1, 1);
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", showButtons__Fi);
-INCLUDE_ASM("asm/nonmatchings/game/screen", killButtons__Fv);
+#endif
+void killButtons(void)
+{
+    _cs *b0 = shell->m_buttonCs[0];
+    _cs *b2 = shell->m_buttonCs[2];
+    _cs *b3 = shell->m_buttonCs[3];
+    _cs *b1 = shell->m_buttonCs[1];
+
+    hierSetCsDrawMe(b2, 0);
+    hierSetCsDrawMe(b0, 0);
+    hierSetCsDrawMe(b3, 0);
+    hierSetCsDrawMe(b1, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/screen", saveUnlocks__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", saveSettings__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", loadSettings__Fv);

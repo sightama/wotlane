@@ -1,6 +1,28 @@
 #include "common.h"
 
-INCLUDE_ASM("asm/nonmatchings/game/Weapon", __Q26Weapon8Dynamics);
+class Weapon {
+public:
+    /* flight limits of a thrown or fired weapon (only the constructor is in C so far) */
+    class Dynamics {
+    public:
+        float f0;           /* 0x00: 128 */
+        float f4;           /* 0x04: 128 */
+        float f8;           /* 0x08: 128 */
+        int iC;             /* 0x0C: 0 */
+        char pad10[0x2C - 0x10];
+        float angle2C;      /* 0x2C: pi/4 */
+        float angle30;      /* 0x30: 75 degrees */
+
+        Dynamics(void);
+    };
+};
+Weapon::Dynamics::Dynamics(void)
+{
+    f8 = f4 = f0 = 128.0f;
+    angle2C = 0.7853982f;
+    angle30 = 1.3089969f;
+    iC = 0;
+}
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", InitWeaponsBefore__7Weapons);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", InitWeaponsAfter__7Weapons);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateWeapons__7Weapons);
