@@ -35,7 +35,9 @@ public:
     _hierswitch *m_monoSw;    /* 0x5FC */
     char pad600[0x604 - 0x600];
     _cs *m_sliderCs[2];      /* 0x604: knobs of the sfx and music volume bars (setSlider moves them) */
-    char pad60C[0x61C - 0x60C];
+    char pad60C[0x614 - 0x60C];
+    _hierswitch *m_lockedSw; /* 0x614: 1 while the level highlighted in the level select is still locked */
+    char pad618[0x61C - 0x618];
     _animHandle m_screenAnim[12]; /* 0x61C: menu transition animations 1..11 (anim 0x270E of the shell db); changeScreen plays one */
     char *m_menuObj[22][90]; /* 0x6DC: [screen][i] objects drawn on each menu screen (TagList::m_entries); +0x4C is their alpha, faded by screenTransition */
     _hierswitch *m_sw25CC; /* 0x25CC: set to 1 (with m_sw25D0) when the main menu opens screen 9 */
@@ -161,6 +163,7 @@ SHELL_AT(m_lives, 0x2BBC);
 SHELL_AT(m_inSession, 0x2BCC);
 SHELL_AT(m_roundsDecided, 0x2BDC);
 SHELL_AT(m_mode, 0x2C10);
+SHELL_AT(m_lockedSw, 0x614);
 SHELL_AT(m_levelNumAIs, 0x29E0);
 SHELL_AT(pad7C, 0x7C);
 SHELL_AT(m_sw5D0, 0x5D0);

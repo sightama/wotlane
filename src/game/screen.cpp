@@ -77,6 +77,7 @@ int screenPrepareDefault(int a, int b);
 class ShellSound {
 public:
     void playShellSFXSound(int id);
+    void terminateShellSound(void);
 };
 extern int prevScreen;
 #ifdef NON_MATCHING
@@ -859,7 +860,178 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEDD0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEE30);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", on_bit_006EEE78);
+#ifdef NON_MATCHING
+/* A level list of the select screen (PO_1PFreeForAll, PO_MPFreeForAll, ...): the cursor runs from `first` and wraps at `count`;
+   levels[cursor] is the level number (GameLevelLongNames, Shell::m_levelNum). */
+struct LevelList {
+    int first;
+    int count;
+    int *levels;
+};
+/* Display name of each level number, shown by screenWriteInstructions through charSelectStringOne. */
+static const char GameLevelLongNames[28][18] = {
+    "Default",       "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City",       "Century Airfield", "Atomic Island",
+    "Baytown",       "Club Caldera", "Tsunopolis",     "UFO",            "Capitol",          "Training",         "Lake Powell",
+    "Mini Baytown",  "Volcano",      "Tokyo Deathmatch", "Dylan",        "David",            "Lars",             "Jenn",
+    "Yeon",          "Jacob",        "Steve",          "Pierre",         "Dodge Ball",       "Big Shot",         "Crush",
+};
+extern int numSelectables2924 __asm__("numSelectables.2924");
+extern int beginning2925 __asm__("beginning.2925");
+extern int ending2926 __asm__("ending.2926");
+extern int stoppedMovie2927 __asm__("stoppedMovie.2927");
+extern int showTexCounter2928 __asm__("showTexCounter.2928");
+extern char D_006F7EB8[];
+void moviesReleaseScreenObject(void);
+/* Monster cursors of the select screens, kept while the level select is open: 3P (screen 18), 4P (screen 19), 2P (screen 6). */
+extern int savedSel3P[2] __asm__("D_007314E8");
+extern int savedSel4P[4] __asm__("D_007314F0");
+extern int savedSel2P[24] __asm__("D_00731488");
+#define LL ((LevelList *)g_levelList)
+/* Left/right (codes 3/4) walk the level list with wraparound; with two or more AIs in mode 2, or any AI in mode 3, the fourth entry
+   (index 3) is skipped. A locked level shows m_lockedSw; after 0x2E frames idle on an unlocked one the preview movie is let go.
+   Confirm (6) on an unlocked level stores it in m_levelNum and starts loading (screen 99); back (5) restores the monster select it
+   came from. NON_MATCHING: 12/587 words differ, 0x92C bytes vs 0x8EC (untuned). */
+void screenLevelSelect(void)
+{
+    int input, cur, count;
+
+    if (screenFirstPass != 0) {
+        currentSelection[currScreen] = LL->first;
+        ending2926 = LL->count - 1;
+        numSelectables2924 = LL->count;
+        beginning2925 = LL->first;
+        continueDecoding = 0;
+        moviesReleaseScreenObject();
+        hierSetSwitch(shell->m_sw5D0, LL->levels[currentSelection[currScreen]]);
+        stoppedMovie2927 = 1;
+        screenFirstPass = 0;
+        charSelectStringOne = (char *)GameLevelLongNames[LL->levels[currentSelection[currScreen]]];
+    }
+    hierSetSwitch(shell->m_lockedSw, 0);
+    cur = levelUnlocked(LL->levels[currentSelection[currScreen]]);
+    if (cur == 1) {
+        if (showTexCounter2928 >= 0x2E && (screenGetInput(1) & 0xFFFF) == 0) {
+            continueDecoding = 0;
+            moviesReleaseScreenObject();
+            stoppedMovie2927 = cur;
+            showTexCounter2928 = 0;
+        }
+    } else {
+        continueDecoding = 0;
+        moviesReleaseScreenObject();
+        hierSetSwitch(shell->m_lockedSw, 1);
+    }
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 3:
+        if (beginning2925 < currentSelection[currScreen]) {
+            if ((shell->m_mode == 2 && shell->m_numAIs >= 2) || (shell->m_mode == 3 && shell->m_numAIs > 0)) {
+                cur = currentSelection[currScreen];
+                count = LL->count;
+                if (cur == 4)
+                    currentSelection[currScreen] = (count + 2) % count;
+                else
+                    currentSelection[currScreen] = (cur + (count - 1)) % count;
+            } else {
+                count = LL->count;
+                currentSelection[currScreen] = (currentSelection[currScreen] + (count - 1)) % count;
+            }
+        } else {
+            currentSelection[currScreen] = ending2926;
+        }
+        hierSetSwitch(shell->m_sw5D0, LL->levels[currentSelection[currScreen]]);
+        stoppedMovie2927 = 1;
+        continueDecoding = 0;
+        charSelectStringOne = (char *)GameLevelLongNames[LL->levels[currentSelection[currScreen]]];
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        showTexCounter2928 = 0;
+        break;
+    case 4:
+        if (currentSelection[currScreen] < ending2926) {
+            if ((shell->m_mode == 2 && shell->m_numAIs >= 2) || (shell->m_mode == 3 && shell->m_numAIs > 0)) {
+                cur = currentSelection[currScreen];
+                count = LL->count;
+                if (cur == 2)
+                    currentSelection[currScreen] = (count + 4) % count;
+                else
+                    currentSelection[currScreen] = (cur + (count + 1)) % count;
+            } else {
+                count = LL->count;
+                currentSelection[currScreen] = (currentSelection[currScreen] + 1) % count;
+            }
+        } else {
+            currentSelection[currScreen] = beginning2925;
+        }
+        hierSetSwitch(shell->m_sw5D0, LL->levels[currentSelection[currScreen]]);
+        stoppedMovie2927 = 1;
+        continueDecoding = 0;
+        charSelectStringOne = (char *)GameLevelLongNames[LL->levels[currentSelection[currScreen]]];
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        showTexCounter2928 = 0;
+        break;
+    case 6:
+        cur = levelUnlocked(LL->levels[currentSelection[currScreen]]);
+        if (cur == 1) {
+            shell->m_levelNum = LL->levels[currentSelection[currScreen]];
+            stoppedMovie2927 = cur;
+            continueDecoding = 0;
+            moviesReleaseScreenObject();
+            charSelectStringOne = D_006F7EB8;
+            hierSetSwitch(shell->m_lockedSw, 0);
+            changeScreen(8, 99, 1, 4, true);
+            ((ShellSound *)((char *)shell + 0x2918))->terminateShellSound();
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(1);
+        }
+        break;
+    case 5:
+        charSelectStringOne = D_006F7EB8;
+        *(int *)((char *)shell + 0x2948) = 0;
+        if (prevScreen == 3) {
+            hierSetSwitch(shell->m_sw5CC, currentSelection[3]);
+            *(float *)(shell->m_menuObj[3][1] + 0x4C) = 0.0f;
+            updateSelectSwitches(0, 0, 1, 1);
+        } else if (prevScreen == 0x12 && shell->m_mode == 3) {
+            currentSelection[18] = savedSel3P[0];
+            currentSelection[40] = savedSel3P[1];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C0), savedSel3P[0]);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C4), savedSel3P[1]);
+            updateSelectSwitches3P(0, 0, 0, 1, 1, 1);
+        } else if (prevScreen == 0x13 && shell->m_mode == 3) {
+            currentSelection[19] = savedSel4P[0];
+            currentSelection[41] = savedSel4P[1];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1CC), savedSel4P[0]);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D0), savedSel4P[1]);
+            updateSelectSwitches4P(0, 0, 0, 0, 1, 1, 1, 1);
+        } else if (prevScreen == 0x13 && shell->m_mode == 2) {
+            currentSelection[19] = savedSel4P[0];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1CC), savedSel4P[0]);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D0), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D4), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D8), 0);
+            updateSelectSwitches4P(0, 0, 0, 0, 1, 1, 1, 1);
+        } else if (prevScreen == 0x12 && shell->m_mode == 2) {
+            currentSelection[18] = savedSel3P[0];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C4), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C8), 0);
+            updateSelectSwitches3P(0, 0, 0, 1, 1, 1);
+        } else if (prevScreen == 6 && shell->m_mode == 2) {
+            currentSelection[6] = savedSel2P[0];
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1E0), 0);
+            updateSelectSwitches(0, 0, 1, 1);
+        }
+        hierSetSwitch(shell->m_lockedSw, 0);
+        moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+        myMovie.Play(false, MainMovie);
+        continueDecoding = 1;
+        changeScreen(8, prevScreen, -1, 3, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        break;
+    }
+}
+#undef LL
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenLevelSelect__Fv);
+#endif
 void moviesReleaseScreenObject(void);
 extern int levelMonsters[][12];
 extern int levelMonsterModels[][4];
