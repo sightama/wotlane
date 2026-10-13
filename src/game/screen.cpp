@@ -2305,7 +2305,152 @@ void screenMGSelect(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMGSelect__Fv);
 #endif
+#ifdef NON_MATCHING
+extern int mSelectWins;
+extern int numSelectables2964 __asm__("numSelectables.2964");
+extern int numWins2965 __asm__("numWins.2965");
+#define BO_SW(off) (*(_hierswitch **)((char *)shell + (off)))
+/* Keeps a monster cursor pair of a select screen (player 1 at [screen], player 2 at [22 + screen]) inside the unlocked columns. */
+#define BO_CLAMP_SEL(screen)                                                                                  \
+    if (!(shell->m_selFirst < currentSelection[screen] && currentSelection[22 + (screen)] < shell->m_selLast)) { \
+        currentSelection[screen] = shell->m_selFirst + 1;                                                     \
+        currentSelection[22 + (screen)] = shell->m_selLast + 1;                                               \
+    }
+/* Goes on to the monster select for the number of monsters, m_numAIs plus the players (one in mode 2, otherwise two): up to two
+   -> screen 6, three -> 18, four or more -> 19. */
+#define BO_NEXT_SCREEN()                                                                \
+    switch (shell->m_numAIs) {                                                          \
+    case 0:                                                                             \
+        changeScreen(0xF, 6, 1, 0, true);                                               \
+        break;                                                                          \
+    case 1:                                                                             \
+        changeScreen(0xF, shell->m_mode == 2 ? 6 : 0x12, 1, 0, true);                   \
+        break;                                                                          \
+    case 2:                                                                             \
+        changeScreen(0xF, shell->m_mode == 2 ? 0x12 : 0x13, 1, 0, true);                \
+        break;                                                                          \
+    case 3:                                                                             \
+        changeScreen(0xF, 0x13, 1, 0, true);                                            \
+        break;                                                                          \
+    }
+/* "First to" screen (15) of the multiplayer modes: item 1 = first to one win (Shell::m_killTarget 1), 2 = first to
+   mSelectWins + 2 (left/right change it, 0..numWins), 3 = no target. Confirm (6) goes on to the monster select. The first pass
+   puts the monster cursors of the 2P/3P/4P selects back in range when the select columns were never set up. NON_MATCHING:
+   11/574 words differ, 0x8F8 bytes vs 0x898 (untuned; same calls). */
+void screenBestOf(void)
+{
+    if (screenFirstPass != 0) {
+        if (shell->m_selFirst == 0 && shell->m_selLast == 0) {
+            initSelectSwitches();
+            BO_CLAMP_SEL(6);
+            BO_CLAMP_SEL(18);
+            BO_CLAMP_SEL(19);
+        }
+        numSelectables2964 = screenPrepareDefault(0xF, currentSelection[currScreen]);
+        if (shell->m_mode == 2) {
+            hierSetSwitch(BO_SW(0x1DC), currentSelection[6]);
+            hierSetSwitch(BO_SW(0x1E0), 0);
+            hierSetSwitch(BO_SW(0x1C0), currentSelection[18]);
+            hierSetSwitch(BO_SW(0x1C4), 0);
+            hierSetSwitch(BO_SW(0x1C8), 0);
+            hierSetSwitch(BO_SW(0x1CC), currentSelection[19]);
+            hierSetSwitch(BO_SW(0x1D0), 0);
+            hierSetSwitch(BO_SW(0x1D4), 0);
+            hierSetSwitch(BO_SW(0x1D8), 0);
+        } else {
+            hierSetSwitch(BO_SW(0x1DC), currentSelection[6]);
+            hierSetSwitch(BO_SW(0x1E0), currentSelection[28]);
+            hierSetSwitch(BO_SW(0x1C0), currentSelection[18]);
+            hierSetSwitch(BO_SW(0x1C4), currentSelection[40]);
+            hierSetSwitch(BO_SW(0x1C8), 0);
+            hierSetSwitch(BO_SW(0x1CC), currentSelection[19]);
+            hierSetSwitch(BO_SW(0x1D0), currentSelection[41]);
+            hierSetSwitch(BO_SW(0x1D4), 0);
+            hierSetSwitch(BO_SW(0x1D8), 0);
+        }
+        screenFirstPass = 0;
+        numSelectables2964 = 3;
+    }
+    hierSetSwitch(shell->m_sw5CC, 0);
+    if (currentSelection[currScreen] == 2) {
+        hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+        hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+    } else {
+        hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+    }
+    myMovie.Play(false, MainMovie);
+    switch (screenGetInput(1) & 0xFFFF) {
+    case 1:
+        hierSetSwitch(shell->m_menuItemSw[15][currentSelection[currScreen]], 0);
+        currentSelection[currScreen] = currentSelection[currScreen] < 2 ? numSelectables2964 : currentSelection[currScreen] - 1;
+        hierSetSwitch(shell->m_menuItemSw[15][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 2:
+        hierSetSwitch(shell->m_menuItemSw[15][currentSelection[currScreen]], 0);
+        currentSelection[currScreen] = currentSelection[currScreen] < numSelectables2964 ? currentSelection[currScreen] + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[15][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 3:
+        if (currentSelection[currScreen] == 2) {
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+            hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+            mSelectWins = mSelectWins > 0 ? mSelectWins - 1 : numWins2965;
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+            hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(5);
+        }
+        break;
+    case 4:
+        if (currentSelection[currScreen] == 2) {
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+            hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+            if (mSelectWins < numWins2965)
+                mSelectWins++;
+            else
+                mSelectWins = 0;
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+            hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(3);
+        }
+        break;
+    case 6:
+        resetSelectables();
+        switch (currentSelection[currScreen]) {
+        case 1:
+            shell->m_killTarget = 1;
+            BO_NEXT_SCREEN();
+            break;
+        case 2:
+            shell->m_killTarget = mSelectWins + 2;
+            BO_NEXT_SCREEN();
+            break;
+        case 3:
+            shell->m_killTarget = 0;
+            BO_NEXT_SCREEN();
+            break;
+        default:
+            printf("'First To' Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+            break;
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        if (shell->m_mode == 2)
+            changeScreen(0xF, 0xC, -1, 0, true);
+        else
+            changeScreen(0xF, 0xD, -1, 0, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        break;
+    }
+}
+#undef BO_SW
+#undef BO_CLAMP_SEL
+#undef BO_NEXT_SCREEN
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenBestOf__Fv);
+#endif
 #ifdef NON_MATCHING
 extern int clearBeforeFontDMA;
 void fontSetDefaultSize(int font);
