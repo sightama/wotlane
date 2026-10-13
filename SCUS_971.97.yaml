@@ -159,7 +159,7 @@ segments:
       - [0x0AC3E0, asm, game/ShellFinished]  # c++, 24 funcs, name: manual
       - [0x0B0418, cpp, game/ShellRtLoop]  # c++, 4 funcs, name: guess
       - [0x0B06D8, asm, game/ShockWave]  # c++, 7 funcs, name: guess
-      - [0x0B1840, asm, game/Sound]  # c++, 268 funcs, name: manual
+      - [0x0B1840, cpp, game/Sound]  # c++, 268 funcs, name: manual
       - [0x0C17A8, asm, game/StreamingSoundManager]  # c++, 44 funcs, name: guess
       - [0x0C4A38, cpp, game/SpecialStates]  # c++, 148 funcs, name: manual
       - [0x0CE4A0, cpp, game/SpecFxAnim]  # c++, 14 funcs, name: guess
@@ -566,7 +566,7 @@ segments:
       - [0x5EE230, .rodata, game/screen]
       - [0x5EF0F0, .rodata, game/Shell]
       - [0x5EF9F0, rodata, game/ShellFinished]
-      - [0x5EFFA0, rodata, game/Sound]
+      - [0x5EFFA0, .rodata, game/Sound]
       - [0x5F0930, rodata, game/StreamingSoundManager]
       - [0x5F0D70, .rodata, game/SpecialStates]
       - [0x5F1450, .rodata, game/SpecFxAnim]

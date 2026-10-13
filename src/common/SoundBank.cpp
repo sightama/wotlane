@@ -101,19 +101,23 @@ INCLUDE_ASM("asm/nonmatchings/common/SoundBank", __16SoundBankManager);
 #endif
 
 #ifdef NON_MATCHING
+/* the retail strings in SoundBank's sdata (a literal would land in an sdata the NM link drops); the retail inlines the strcpy of
+   the literal, here it is a call */
+extern char sndDir[] __asm__("D_006F85D8");      /* the "\SND\" directory */
+extern char isoVersion[] __asm__("D_006F85E0");  /* ";1" */
 /* \SND\<NAME>;1, the name uppercased in place (retail tests islower() through newlib's _ctype_; same for ASCII names) */
 static inline void bankPath(char *path, char *name)
 {
     int n = strlen(name);
     int i;
 
-    strcpy(path, "\\SND\\");
+    strcpy(path, sndDir);
     for (i = 0; i < n; i++) {
         if (name[i] >= 'a' && name[i] <= 'z')
             name[i] -= 0x20;
     }
     strcat(path, name);
-    strcat(path, ";1");
+    strcat(path, isoVersion);
 }
 #endif
 

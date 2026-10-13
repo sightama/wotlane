@@ -3,7 +3,7 @@
 
 #include "game/pickup.h"
 
-struct MilitaryFormation;
+class MilitaryFormation;
 
 /* Pickup that moves in formation (tanks, missile trucks derive from it). */
 class MilitaryPickup : public Pickup {

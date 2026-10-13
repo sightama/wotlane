@@ -11,7 +11,9 @@ public:
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
     char pad2958[0x2A24 - 0x2958];
     int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
-    char pad2A30[0x2A44 - 0x2A30];
+    int m_sfxVolume;      /* 0x2A30: options sfx volume (0..0x400), master volume groups 0/3/4/5 */
+    int m_musicVolume;    /* 0x2A34: options music volume, group 1 */
+    char pad2A38[0x2A44 - 0x2A38];
     int m_killTarget;     /* 0x2A44: wins needed to take the match (0 = no target, rounds just restart) */
     char pad2A48[0x2B40 - 0x2A48];
     int m_continues[2];   /* 0x2B40: rounds each player can still lose in a two-player match (from m_elimination) */
@@ -34,6 +36,8 @@ public:
     int m_costume[8];     /* 0x2BE0: costume number of the first two players, then of the AIs */
     char pad2C00[0x2C10 - 0x2C00];
     int m_mode; /* 0x2C10: 1 = normal play, 8 = bigshot, 9 = crush */
+    char pad2C14[0x2C20 - 0x2C14];
+    int m_mono;           /* 0x2C20: nonzero selects snd_SetPlaybackMode(1) */
 
     enum _shFileType { SH_FILE_0, SH_FILE_PLAYER, SH_FILE_AI };
 
