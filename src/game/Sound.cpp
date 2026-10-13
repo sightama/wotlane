@@ -48,15 +48,15 @@ void SoundManager::updatePauseAllSounds(void)
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updatePauseAllSounds__12SoundManager);
 #endif
 
-/* Records a sound a player's monster made this frame (up to four per player). */
+/* Records a sound event at a player's monster this frame (up to four per player); the trigger volume sounds read them. */
 #ifdef NON_MATCHING
 /* equivalent (untuned): 20/33 words, size 0x84 vs 0x84 */
-void SoundManager::setSoundVolumeInfo(Monster *m, int vol, _fvector *pos)
+void SoundManager::setSoundVolumeInfo(Monster *m, int id, _fvector *pos)
 {
     if (m->m_playerNum == 1) {
-        m_volInfo[m->m_index][m_volCount[m->m_index]].vol = vol;
-        m_volInfo[m->m_index][m_volCount[m->m_index]].pos = *pos;
-        m_volCount[m->m_index]++;
+        m_events[m->m_index][m_eventCount[m->m_index]].id = id;
+        m_events[m->m_index][m_eventCount[m->m_index]].pos = *pos;
+        m_eventCount[m->m_index]++;
     }
 }
 #else
@@ -121,9 +121,9 @@ void SoundManager::initSoundManager(void)
     snd_SetMasterVolume(6, 0x271);
     for (int i = 0; i < 4; i++)
         for (int j = 0; j < 4; j++)
-            m_volInfo[i][j].vol = 0;
+            m_events[i][j].id = 0;
     for (int i = 0; i < 4; i++)
-        m_volCount[i] = 0;
+        m_eventCount[i] = 0;
     f574 = 0;
     m_loadPlantBank = 0;
     m_loadMechBank = 0;
@@ -164,9 +164,9 @@ void SoundManager::updateSoundManager(void)
     }
     for (int i = 0; i < 4; i++)
         for (int j = 0; j < 4; j++)
-            m_volInfo[i][j].vol = 0;
+            m_events[i][j].id = 0;
     for (int i = 0; i < 4; i++)
-        m_volCount[i] = 0;
+        m_eventCount[i] = 0;
     if (STREAMING_SOUND()->m_paused == 1 && snd_GetMasterVolume(1) == shell->m_musicVolume &&
         snd_GetMasterVolume(0) == shell->m_sfxVolume) {
         STREAMING_SOUND()->m_paused = 0;
@@ -367,49 +367,487 @@ INCLUDE_ASM("asm/nonmatchings/game/Sound", playDebrisImpactSound__23LevelObjectS
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playTimedBuildingDestructibleSound__23LevelObjectSoundManagerP12ActPlaySoundP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playDestructibleSound__23LevelObjectSoundManagerUiP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", findAvailableDestructHandle__23LevelObjectSoundManager);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initCanyonLevelSound__16CanyonLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateCanyonLevelSound__16CanyonLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initVegasLevelSound__15VegasLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateVegasLevelSound__15VegasLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initFinalLevelSound__15FinalLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateFinalLevelSound__15FinalLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initAirportLevelSound__17AirportLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateAirportLevelSound__17AirportLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initSanFranLevelSound__17SanFranLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateSanFranLevelSound__17SanFranLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playPlaneLandingSound__17AirportLevelSoundP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", startQuakeSound__17SanFranLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initTokyoLevelSound__15TokyoLevelSound);
+void CanyonLevelSound::initCanyonLevelSound(void)
+{
+    m_ambient.initLevelObjectSound(BANK_LEVEL, 0, 300, 1300, 1600, 0, 11);
+}
+void CanyonLevelSound::updateCanyonLevelSound(void)
+{
+    m_ambient.updateLevelObjectSound();
+}
+void VegasLevelSound::initVegasLevelSound(void)
+{
+    m_trigger.initTriggerVolumeSound(0x157F, 7, 400, 600);
+    animationGetHandle(&m_anim, 0x27D8, 0, 0);
+    f0 = 0;
+}
+void VegasLevelSound::updateVegasLevelSound(void)
+{
+    float pct = animationGetCurrentPercent(m_anim);
+    if (f0 == 0 && pct < 0.5f)
+        m_trigger.updateTriggerVolumeSound();
+    else
+        m_trigger.terminateTriggerVolumeSound();
+}
+void FinalLevelSound::initFinalLevelSound(void)
+{
+    m_ambient.initLevelObjectSound(BANK_AMBIENT, 0x56, 1450, 3050, 0, -3215, -32);
+}
+void FinalLevelSound::updateFinalLevelSound(void)
+{
+    m_ambient.updateLevelObjectSound();
+}
+void AirportLevelSound::initAirportLevelSound(void)
+{
+    m_trigger.initTriggerVolumeSound(0x157E, 4);
+    m_wind.initHeightBasedSound(5, 700, -80);
+}
+void AirportLevelSound::updateAirportLevelSound(void)
+{
+    m_trigger.updateTriggerVolumeSound();
+    m_wind.updateHeightBasedSound();
+}
+void SanFranLevelSound::initSanFranLevelSound(void)
+{
+    m_quaking = 0;
+    m_quake.initLevelObjectSound(BANK_LEVEL, 0, 10000, 11000, -393, 2034, -514);
+    m_ambient[0].initLevelObjectSound(BANK_AMBIENT, 5, 1950, 4100, -3300, 1273, 2000);
+    m_ambient[1].initLevelObjectSound(BANK_AMBIENT, 5, 8500, 11650, -3710, 11155, 1908);
+    m_ambient[2].initLevelObjectSound(BANK_AMBIENT, 5, 8050, 11350, 7500, 7700, 3317);
+    m_trigger.initTriggerVolumeSound(0x157E, 1);
+    m_wind.initHeightBasedSound(2, 600, 1);
+    m_fires[0].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, 921, 775, -369);
+    m_fires[1].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, 132, 669, -380);
+    m_fires[2].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, -1355, 639, 978);
+    m_fires[3].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, -1258, 271, 978);
+    m_fires[4].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, -1683, 2519, 497);
+    m_fires[5].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, -717, 3525, 858);
+    m_fires[6].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, 297, 3204, 345);
+    m_fires[7].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, 20, 1984, 532);
+    m_fires[8].initLevelObjectSound(BANK_LEVEL, 3, 300, 1000, 576, 1984, 532);
+    m_firesOn = 0;
+}
+/* The quake rumble lasts 1164 fields after startQuakeSound. */
+void SanFranLevelSound::updateSanFranLevelSound(void)
+{
+    if (m_quaking) {
+        if ((float)(timerGetFieldCount() - m_quakeStart) < 1164.0f)
+            m_quake.updateLevelObjectSound();
+        else
+            m_quaking = 0;
+    } else {
+        m_quake.stopLevelObjectSound();
+    }
+    m_trigger.updateTriggerVolumeSound();
+    m_wind.updateHeightBasedSound();
+    if (m_firesOn) {
+        for (int i = 0; i < 9; i++)
+            m_fires[i].updateLevelObjectSound();
+    } else {
+        for (int i = 0; i < 9; i++)
+            m_fires[i].stopLevelObjectSound();
+    }
+}
+/* Computes the volume and pan but plays nothing (in retail too). */
+void AirportLevelSound::playPlaneLandingSound(_fvector *pos)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(pos, 270, 1800, vol, pan, 0);
+}
+void SanFranLevelSound::startQuakeSound(void)
+{
+    m_quaking = 1;
+    m_quakeStart = timerGetFieldCount();
+}
+void TokyoLevelSound::initTokyoLevelSound(void)
+{
+    m_movingOn = 0;
+    m_moving.initLevelObjectSound(BANK_LEVEL, 0, 5000, 6000, 0, 0, 0);
+    m_trigger.initTriggerVolumeSound(0x157E, 2);
+    m_wind.initHeightBasedSound(3, 700, -11);
+    animationGetHandle(&m_moveAnim, 0x2744, 0, 0);
+    animationGetHandle(&m_anim, 0x2745, 0, 0);
+    m_animSound.initLevelObjectSound(BANK_LEVEL, 5, 2000, 4000, 721, -1982, 700);
+}
+/* m_moving travels along y with m_moveAnim and stops at 85%. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 12/82 words, size 0x148 vs 0x144 */
+void TokyoLevelSound::updateTokyoLevelSound(void)
+{
+    _fvector pos;
+    pos.x = 938.0f;
+    pos.y = -4770.0f;
+    pos.z = 0.0f;
+    if (m_movingOn) {
+        float pct = animationGetCurrentPercent(m_moveAnim);
+        pos.y += pct * 8070.0f;
+        m_moving.m_pos = pos;
+        m_moving.updateLevelObjectSound();
+        if (pct > 0.85f)
+            m_movingOn = 0;
+    } else {
+        m_moving.stopLevelObjectSound();
+    }
+    m_trigger.updateTriggerVolumeSound();
+    m_wind.updateHeightBasedSound();
+    if (animationIsRunning(m_anim))
+        m_animSound.updateLevelObjectSound();
+    else
+        m_animSound.stopLevelObjectSound();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTokyoLevelSound__15TokyoLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initBigTossLevelSound__17BigTossLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateBigTossLevelSound__17BigTossLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initThreeMileLevelSound__19ThreeMileLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", setAllStacksDestroyed__19ThreeMileLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", resetReactorSoundInfo__19ThreeMileLevelSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateThreeMileLevelSound__19ThreeMileLevelSound);
+#endif
+void BigTossLevelSound::initBigTossLevelSound(void)
+{
+    m_handle = 0;
+    animationGetHandle(&m_anim, 0x27C3, 0, 0);
+}
+/* Loop 0 from frame 30 of the animation; when it ends, one-shot 1 at the same volume. */
+void BigTossLevelSound::updateBigTossLevelSound(void)
+{
+    _fvector pos;
+    int vol;
+    int pan;
+    pos.x = -40.0f;
+    pos.y = 0.0f;
+    pos.z = 0.0f;
+    calcDualMonoMixVolPan(&pos, 400, 900, vol, pan, 0);
+    float frame = animationGetCurrentFrame(m_anim);
+    if (vol > 0 && frame > 30.0f) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 0, vol, pan, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 0xD, vol, pan, 0, 0);
+        }
+    } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 1, vol, pan, 0, 0);
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+void ThreeMileLevelSound::initThreeMileLevelSound(void)
+{
+    m_countdownHandle = 0;
+    f224 = 0;
+    f218 = 0;
+    f21C = 0;
+    f220 = 0;
+    m_30.initLevelObjectSound(BANK_LEVEL, 0, 950, 3400, 200, 1000, 25);
+    m_1E0.initLevelObjectSound(BANK_LEVEL, 2, 500, 1200, -231, 0, 67);
+    m_stacks[0].initLevelObjectSound(BANK_LEVEL, 3, 175, 900, -1054, -510, 130);
+    m_stacks[1].initLevelObjectSound(BANK_LEVEL, 3, 175, 900, -1288, 18, 130);
+    m_stacks[2].initLevelObjectSound(BANK_LEVEL, 3, 175, 900, 640, 543, 130);
+    m_stacks[3].initLevelObjectSound(BANK_LEVEL, 3, 175, 900, 612, -578, 130);
+    m_stacksDown[0].initLevelObjectSound(BANK_AMBIENT, 0x56, 175, 900, -1054, -510, 130);
+    m_stacksDown[1].initLevelObjectSound(BANK_AMBIENT, 0x56, 175, 900, -1288, 18, 130);
+    m_stacksDown[2].initLevelObjectSound(BANK_AMBIENT, 0x56, 175, 900, 640, 543, 130);
+    m_stacksDown[3].initLevelObjectSound(BANK_AMBIENT, 0x56, 175, 900, 612, -578, 130);
+    m_ambient.initLevelObjectSound(BANK_LEVEL, 5, 1100, 1900, -231, 320, 0);
+    m_craterHandle = 0;
+    m_trigger.initTriggerVolumeSound(0x157E, 6);
+    m_wind.initHeightBasedSound(7, 800, -43);
+    for (int i = 0; i < 4; i++)
+        gStackDestroyed[i] = 0;
+}
+void ThreeMileLevelSound::setAllStacksDestroyed(void)
+{
+    for (int i = 0; i < 4; i++)
+        gStackDestroyed[i] = 2;
+}
+void ThreeMileLevelSound::resetReactorSoundInfo(int i)
+{
+    if (i == 0)
+        m_stacks[0].stopLevelObjectSound();
+    else if (i == 1)
+        m_stacks[1].stopLevelObjectSound();
+    else if (i == 2)
+        m_stacks[2].stopLevelObjectSound();
+    else if (i == 3)
+        m_stacks[3].stopLevelObjectSound();
+}
+/* An intact stack keeps its sound, a destroyed one (1) gets the other loop; 2 silences the destroyed loop. Note that the intact
+   loop is not stopped when the stack goes down (resetReactorSoundInfo does that). */
+void ThreeMileLevelSound::updateThreeMileLevelSound(void)
+{
+    if (f218)
+        m_30.updateLevelObjectSound();
+    else
+        m_30.stopLevelObjectSound();
+    if (f220)
+        m_1E0.updateLevelObjectSound();
+    else
+        m_1E0.stopLevelObjectSound();
+    if (gStackDestroyed[0] == 0)
+        m_stacks[0].updateLevelObjectSound();
+    else if (gStackDestroyed[0] == 1)
+        m_stacksDown[0].updateLevelObjectSound();
+    else
+        m_stacksDown[0].stopLevelObjectSound();
+    if (gStackDestroyed[1] == 0)
+        m_stacks[1].updateLevelObjectSound();
+    else if (gStackDestroyed[1] == 1)
+        m_stacksDown[1].updateLevelObjectSound();
+    else
+        m_stacksDown[1].stopLevelObjectSound();
+    if (gStackDestroyed[2] == 0)
+        m_stacks[2].updateLevelObjectSound();
+    else if (gStackDestroyed[2] == 1)
+        m_stacksDown[2].updateLevelObjectSound();
+    else
+        m_stacksDown[2].stopLevelObjectSound();
+    if (gStackDestroyed[3] == 0)
+        m_stacks[3].updateLevelObjectSound();
+    else if (gStackDestroyed[3] == 1)
+        m_stacksDown[3].updateLevelObjectSound();
+    else
+        m_stacksDown[3].stopLevelObjectSound();
+    if (f21C)
+        m_ambient.updateLevelObjectSound();
+    else
+        m_ambient.stopLevelObjectSound();
+    m_trigger.updateTriggerVolumeSound();
+    m_wind.updateHeightBasedSound();
+    if (craterSwitched && m_craterHandle == 0) {
+        m_craterHandle = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x56, 0x226, 0, 0, 0, soundPlayCB, &m_craterHandle);
+    }
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 13/19 words, size 0x48 vs 0x4c */
+void ThreeMileLevelSound::playWickedBigExplosion(void)
+{
+    snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 4, 0x400, 0, 0, 0);
+    STREAMING_SOUND()->m_enabled = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playWickedBigExplosion__19ThreeMileLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playShockSound__19ThreeMileLevelSoundP8_fvector);
+#endif
+void ThreeMileLevelSound::playShockSound(_fvector *pos)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(pos, 300, 1250, vol, pan, 0);
+    if (vol > 0)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 8, vol, pan, 0, 0);
+}
+/* Spoken countdown from Count_s.bnk: 10, 5..2 are one-shots, 1 is kept in m_countdownHandle; anything else is the level
+   bank's sound 1. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 59/61 words, size 0xf4 vs 0xf4 */
+void ThreeMileLevelSound::playThreeMileCountdown(int n)
+{
+    if (n == 10)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL2], 6, 0x400, 0, 0, 0);
+    else if (n == 5)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL2], 5, 0x400, 0, 0, 0);
+    else if (n == 4)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL2], 4, 0x400, 0, 0, 0);
+    else if (n == 3)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL2], 3, 0x400, 0, 0, 0);
+    else if (n == 2)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL2], 2, 0x400, 0, 0, 0);
+    else if (n == 1)
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL2], 1, 0x400, 0, 0, 0, soundPlayCB, &m_countdownHandle);
+    else
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 1, 0x400, 0, 0, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playThreeMileCountdown__19ThreeMileLevelSoundi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initVolcanoLevelSound__17VolcanoLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateVolcanoLevelSound__17VolcanoLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initUFOLevelSound__13UFOLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateUFOLevelSound__13UFOLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initMetroLevelSound__15MetroLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMetroLevelSound__15MetroLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initMilitaryLevelSound__18MilitaryLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMilitaryLevelSound__18MilitaryLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initIslandLevelSound__16IslandLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateIslandLevelSound__16IslandLevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initCanyon2LevelSound__17Canyon2LevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateCanyon2LevelSound__17Canyon2LevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playDamDestroyedSound__17Canyon2LevelSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initHeightBasedSound__16HeightBasedSoundiii);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateHeightBasedSound__16HeightBasedSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initLevelObjectSound__16LevelObjectSoundiiiiiii);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", stopLevelObjectSound__16LevelObjectSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateLevelObjectSound__16LevelObjectSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateLevelObjectSound__21NoPanLevelObjectSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", updateLevelObjectSound__24InvertedLevelObjectSound);
+#endif
+void VolcanoLevelSound::initVolcanoLevelSound(void)
+{
+    m_lava.initLevelObjectSound(BANK_LEVEL, 1, 900, 1650, 34, 2000, 300);
+    m_wind.initHeightBasedSound(5, 600, 250);
+    m_trigger.initTriggerVolumeSound(0x157E, 0);
+}
+void VolcanoLevelSound::updateVolcanoLevelSound(void)
+{
+    m_lava.updateLevelObjectSound();
+    m_trigger.updateTriggerVolumeSound();
+    m_wind.updateHeightBasedSound();
+}
+void UFOLevelSound::initUFOLevelSound(void)
+{
+    m_handle = 0;
+    animationGetHandle(&m_anim, 1, 0, 0);
+    m_left.initLevelObjectSound(BANK_LEVEL, 6, 350, 1000, 0, 833, 25);
+    m_right.initLevelObjectSound(BANK_LEVEL, 6, 350, 1000, 0, -833, 25);
+}
+/* A constant loop, plus the two side sounds during two windows of the animation. */
+void UFOLevelSound::updateUFOLevelSound(void)
+{
+    float pct = animationGetCurrentPercent(m_anim);
+    if (m_handle == 0) {
+        m_handle = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 5, 0x400, 0, 0, 0, soundPlayCB, this);
+    } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+        snd_SoundIsStillPlaying_CB(m_handle, soundPlayCB, this);
+    }
+    if ((pct > 0.01f && pct < 0.36f) || (pct > 0.48f && pct < 0.86f)) {
+        m_left.updateLevelObjectSound();
+        m_right.updateLevelObjectSound();
+    } else {
+        m_left.stopLevelObjectSound();
+        m_right.stopLevelObjectSound();
+    }
+}
+void MetroLevelSound::initMetroLevelSound(void)
+{
+    m_handle = 0;
+}
+void MetroLevelSound::updateMetroLevelSound(void)
+{
+    if (m_handle == 0) {
+        m_handle = SOUND_PENDING;
+        snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 5, 0x400, 0, 0, 0, soundPlayCB, this);
+    }
+}
+void MilitaryLevelSound::initMilitaryLevelSound(void)
+{
+}
+void MilitaryLevelSound::updateMilitaryLevelSound(void)
+{
+}
+void IslandLevelSound::initIslandLevelSound(void)
+{
+    m_surf.initLevelObjectSound(BANK_LEVEL, 1, 900, 1650, -155, 1434, 350);
+    m_ambient.initLevelObjectSound(BANK_LEVEL, 1, 275, 650, -1425, 500, 320);
+    m_wind.initHeightBasedSound(5, 600, -60);
+    m_trigger.initTriggerVolumeSound(0x157E, 0);
+    fF0 = 0;
+}
+/* The wind is updated twice (in retail too). */
+void IslandLevelSound::updateIslandLevelSound(void)
+{
+    m_surf.updateLevelObjectSound();
+    m_wind.updateHeightBasedSound();
+    m_ambient.updateLevelObjectSound();
+    m_wind.updateHeightBasedSound();
+    m_trigger.updateTriggerVolumeSound();
+}
+void Canyon2LevelSound::initCanyon2LevelSound(void)
+{
+    m_damDestroyed = 0;
+    f68 = 0;
+    f6C = 0;
+}
+void Canyon2LevelSound::updateCanyon2LevelSound(void)
+{
+}
+/* Stops both loops; the volume and pan for the dam are computed but nothing is played (in retail too). */
+void Canyon2LevelSound::playDamDestroyedSound(void)
+{
+    _fvector pos;
+    int vol;
+    int pan;
+    m_damDestroyed = 1;
+    vol = 0;
+    pan = 0;
+    m_0.stopLevelObjectSound();
+    m_30.stopLevelObjectSound();
+    pos.x = 1150.0f;
+    pos.y = -1100.0f;
+    pos.z = 11.0f;
+    calcDualMonoMixVolPan(&pos, 1000, 2000, vol, pan, 0);
+}
+void HeightBasedSound::initHeightBasedSound(int sound, int top, int bottom)
+{
+    m_bottom = bottom;
+    m_sound = sound;
+    m_top = top;
+    m_handle = 0;
+}
+void HeightBasedSound::updateHeightBasedSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    int mute[4];
+    for (int i = 0; i < 4; i++)
+        mute[i] = 0;
+    for (int i = 0; i < 4; i++) {
+        if (SOUND_MANAGER()->m_events[i][0].id == 0x157C)
+            mute[i] = 1;
+    }
+    calcDualMonoMixHeightBasedSoundVol((float)m_top, (float)m_bottom, vol, pan, mute);
+    if (vol > 0) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], m_sound, vol, pan, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, vol, pan, 0, 0);
+            snd_SoundIsStillPlaying_CB(m_handle, soundPlayCB, this);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+void LevelObjectSound::initLevelObjectSound(int bank, int sound, int minDist, int maxDist, int x, int y, int z)
+{
+    m_maxDist = maxDist;
+    m_bank = bank;
+    m_sound = sound;
+    m_pos.x = x;
+    m_pos.y = y;
+    m_pos.z = z;
+    m_minDist = minDist;
+    m_handle = 0;
+}
+void LevelObjectSound::stopLevelObjectSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+void LevelObjectSound::updateLevelObjectSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_pos, m_minDist, m_maxDist, vol, pan, 0);
+    if (vol > 0) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[m_bank], m_sound, vol, pan, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, vol, pan, 0, 0);
+            snd_SoundIsStillPlaying_CB(m_handle, soundPlayCB, this);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+void NoPanLevelObjectSound::updateLevelObjectSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_pos, m_minDist, m_maxDist, vol, pan, 0);
+    if (vol > 0) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], m_sound, vol, 0, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, vol, 0, 0, 0);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+void InvertedLevelObjectSound::updateLevelObjectSound(void)
+{
+    int vol = 0;
+    int pan = 0;
+    calcDualMonoMixVolPan(&m_pos, m_minDist, m_maxDist, vol, pan, 0);
+    vol = 0x400 - vol;
+    if (vol > 0) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], m_sound, vol, 0, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, vol, 0, 0, 0);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initTankSound__9TankSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTankSound__9TankSoundP10TankPickupi);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateTankSound__9TankSound);
@@ -556,12 +994,119 @@ INCLUDE_ASM("asm/nonmatchings/game/Sound", initSuckerBugSound__14SuckerBugSound)
 INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateSuckerBugSound__14SuckerBugSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateSuckerBugSound__14SuckerBugSoundP8_fvectori);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", stopAllMonsterSounds__12MonsterSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initTriggerVolumeSound__18TriggerVolumeSoundiUi);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateTriggerVolumeSound__18TriggerVolumeSound);
+void TriggerVolumeSound::initTriggerVolumeSound(int trigger, unsigned sound)
+{
+    m_sound = sound;
+    m_trigger = trigger;
+    m_handle = 0;
+}
+void TriggerVolumeSound::terminateTriggerVolumeSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+/* Only each player's first event of the frame is looked at. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 48/61 words, size 0xf4 vs 0xf4 */
+void TriggerVolumeSound::updateTriggerVolumeSound(void)
+{
+    int found = 0;
+    for (int i = 0; i < game->m_numMonsters; i++) {
+        if (SOUND_MANAGER()->m_events[i][0].id == m_trigger)
+            found = 1;
+    }
+    if (found) {
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], m_sound, 0x400, 0, 0, 0, soundPlayCB, this);
+        } else if (m_handle != SOUND_PENDING && m_handle != 0) {
+            snd_SetSoundParams_A(m_handle, 5, 0x400, 0, 0, 0);
+        }
+    } else {
+        gLoopManager.terminateLoop(&m_handle);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTriggerVolumeSound__18TriggerVolumeSound);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 10/14 words, size 0x38 vs 0x38 */
+void RangedTriggerVolumeSound::initTriggerVolumeSound(int trigger, unsigned sound, int minDist, int maxDist)
+{
+    for (int i = 0; i < 4; i++) {
+        m_slots[i].handle = 0;
+        m_slots[i].active = 0;
+    }
+    m_maxDist = maxDist;
+    m_trigger = trigger;
+    m_sound = sound;
+    m_minDist = minDist;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initTriggerVolumeSound__24RangedTriggerVolumeSoundiUiii);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateTriggerVolumeSound__24RangedTriggerVolumeSound);
+#endif
+void RangedTriggerVolumeSound::terminateTriggerVolumeSound(void)
+{
+    for (int i = 0; i < 4; i++)
+        gLoopManager.terminateLoop(&m_slots[i].handle);
+}
+/* Every m_trigger event of the frame keeps the slot already playing at exactly that position, or takes a free slot. Slots
+   without an event this frame stop. Trigger 0x157F uses the level bank, the others the ambience bank. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 26/218 words, size 0x368 vs 0x340 */
+void RangedTriggerVolumeSound::updateTriggerVolumeSound(void)
+{
+    int vol = 0x400;
+    int pan = 0;
+    for (int i = 0; i < 4; i++)
+        m_slots[i].active = 0;
+    for (int p = 0; p < game->m_numMonsters; p++) {
+        for (int e = 0; e < SOUND_MANAGER()->m_eventCount[p]; e++) {
+            if (SOUND_MANAGER()->m_events[p][e].id != m_trigger)
+                continue;
+            int found = 0;
+            for (int s = 0; s < 4; s++) {
+                unsigned h = m_slots[s].handle;
+                if (h != SOUND_PENDING && h != 0) {
+                    _fvector *pos = &SOUND_MANAGER()->m_events[p][e].pos;
+                    if (pos->x == m_slots[s].pos.x && pos->y == m_slots[s].pos.y && pos->z == m_slots[s].pos.z) {
+                        found = 1;
+                        m_slots[s].active = 1;
+                    }
+                }
+            }
+            if (!found) {
+                for (int s = 0; s < 4; s++) {
+                    if (m_slots[s].handle == 0) {
+                        m_slots[s].active = 1;
+                        m_slots[s].pos = SOUND_MANAGER()->m_events[p][e].pos;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    for (int s = 0; s < 4; s++) {
+        Slot *slot = &m_slots[s];
+        if (slot->active == 1) {
+            calcDualMonoMixVolPan(&slot->pos, m_minDist, m_maxDist, vol, pan, 0);
+            if (slot->handle == 0) {
+                slot->handle = SOUND_PENDING;
+                if (m_trigger == 0x157F)
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], m_sound, vol, pan, 0, 0, soundPlayCB, slot);
+                else
+                    snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], m_sound, vol, pan, 0, 0, soundPlayCB, slot);
+            } else if (slot->handle != SOUND_PENDING && slot->handle != 0) {
+                snd_SetSoundParams_A(slot->handle, 5, vol, pan, 0, 0);
+            }
+        } else {
+            slot->active = 0;
+            gLoopManager.terminateLoop(&slot->handle);
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTriggerVolumeSound__24RangedTriggerVolumeSound);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", soundPlayPowerUpSound__FiiiP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playLowStaminaSound__Fi);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initPlantBossRootSound__18PlantBossRootSound);
