@@ -15,7 +15,8 @@ public:
     char pad4[0x5C - 0x4];
     _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on */
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
-    char pad70[0x160 - 0x70];
+    _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one */
+    char pad7C[0x160 - 0x7C];
     _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
     char pad164[0x168 - 0x164];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
@@ -44,7 +45,8 @@ public:
     _animHandle m_reelAnim[2][10]; /* 0x2644: per reel, the animation of each of its 10 positions (anims 0x259E + reel * 10 + i); changeReel */
     char pad2784[0x2938 - 0x2784];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
-    char pad2958[0x2A24 - 0x2958];
+    char pad2958[0x29E0 - 0x2958];
+    int m_levelNumAIs[17]; /* 0x29E0: per m_levelNum, the AIs of game mode 1 (first item of the one-player modes menu) on that level */
     int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
     int m_sfxVolume;      /* 0x2A30: options sfx volume (0..0x400), master volume groups 0/3/4/5 */
     int m_musicVolume;    /* 0x2A34: options music volume, group 1 */
@@ -159,6 +161,8 @@ SHELL_AT(m_lives, 0x2BBC);
 SHELL_AT(m_inSession, 0x2BCC);
 SHELL_AT(m_roundsDecided, 0x2BDC);
 SHELL_AT(m_mode, 0x2C10);
+SHELL_AT(m_levelNumAIs, 0x29E0);
+SHELL_AT(pad7C, 0x7C);
 SHELL_AT(m_sw5D0, 0x5D0);
 SHELL_AT(m_sw25D0, 0x25D0);
 SHELL_AT(m_musicVolumeSaved, 0x2A3C);

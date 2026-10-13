@@ -603,7 +603,103 @@ void initSelectSwitchesMG(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitchesMG__Fv);
 #endif
+#ifdef NON_MATCHING
+extern int numSelectables2823 __asm__("numSelectables.2823");
+extern int UseCommandLineLevel;
+extern char PO_1PFreeForAll[];
+extern char PO_1PEndurance[];
+void resetModels(void);
+/* One-player game modes: 1 = mode 1 (level 1 unless one came from the command line, its AI count from m_levelNumAIs; screen 3),
+   2 = free for all (mode 2, level list PO_1PFreeForAll; screen 12), 3 = endurance (mode 4, 5 AIs, no kill target, PO_1PEndurance;
+   screen 3). First pass puts the select cursor (currentSelection[3]) back in the unlocked range.
+   NON_MATCHING: 18/378 words differ, 0x580 bytes vs 0x5E8 (untuned). */
+void screenGameModes1P(void)
+{
+    int input, sel, i;
+
+    if (screenFirstPass != 0) {
+        screenPrepareDefault(2, currentSelection[currScreen]);
+        numSelectables2823 = 3;
+        shell->m_numAIs = 0;
+        if ((shell->m_selFirst == 0 && shell->m_selLast == 0) || (shell->m_selFirst == 1 && shell->m_selLast == 1)) {
+            initSelectSwitches();
+            if (!(shell->m_selFirst < currentSelection[3] && currentSelection[3] < shell->m_selLast))
+                currentSelection[3] = shell->m_selFirst + 1;
+        } else if ((unsigned int)currentSelection[3] < 2) {
+            initSelectSwitches();
+            if (!(shell->m_selFirst < currentSelection[3] && currentSelection[3] < shell->m_selLast))
+                currentSelection[3] = shell->m_selFirst + 1;
+        }
+        hierSetSwitch(shell->m_sw5CC, currentSelection[3]);
+        for (i = 9; i >= 0; i--)
+            *(float *)(shell->m_menuObj[3][i] + 0x4C) = 0.0f;
+        hierSetSwitch(shell->m_sw70[0], 1);
+        hierSetSwitch(shell->m_sw70[1], 1);
+        hierSetSwitch(shell->m_sw70[2], 1);
+        moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+        myMovie.Play(false, MainMovie);
+        continueDecoding = 1;
+        hierSetSwitch(shell->m_sw5D0, 0);
+        resetModels();
+        updateSelectSwitches(currentSelection[3], 0, 0, 1);
+        screenFirstPass = 0;
+        currentSelection[6] = shell->m_selFirst + 1;
+        currentSelection[18] = shell->m_selFirst + 1;
+        currentSelection[19] = shell->m_selFirst + 1;
+    }
+    myMovie.Play(false, MainMovie);
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 1:
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2823;
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 2:
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel < numSelectables2823 ? sel + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[2][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        sel = currentSelection[currScreen];
+        if (sel == 1) {
+            shell->m_mode = sel;
+            if (UseCommandLineLevel == 0)
+                shell->m_levelNum = sel;
+            shell->m_numAIs = shell->m_levelNumAIs[shell->m_levelNum];
+            changeScreen(2, 3, 1, 2, true);
+            updateSelectSwitches(currentSelection[currScreen], 0, 0, 1);
+        } else if (sel == 2) {
+            shell->m_mode = sel;
+            g_levelList = PO_1PFreeForAll;
+            hierSetSwitch(shell->m_menuItemSw[12][0], currentSelection[12]);
+            changeScreen(2, 0xC, 1, 2, true);
+        } else if (sel == 3) {
+            shell->m_numAIs = 5;
+            shell->m_mode = 4;
+            shell->m_killTarget = 0;
+            g_levelList = PO_1PEndurance;
+            changeScreen(2, 3, 1, 2, true);
+        } else {
+            printf("1 Player Game Modes Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+        }
+        updateSelectSwitches4P(0, 0, 0, 0, 1, 1, 1, 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        changeScreen(2, 1, -1, 0, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        shell->m_numPlayers = 0;
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes1P__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE2F0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenSelect1AI__Fv);
