@@ -9,6 +9,9 @@
 - `shell` é gp-relativo em alguns TUs (PowerUpTool, PathTool, AiPathTool) e não em outros (StartPointTool): `__asm__("#SNFIX_SMALL shell")` só onde o retail usa gp.
   Dentro de um delay slot (`.set nomacro`) o acesso a global é sempre gp, sem precisar do pragma (tokyo).
 - gas insere 2 `nop` extras num `.p2align 3` logo depois de uma sequência `li.s` (StickShaker::DefaultSetup); o retail não tem. Sem causa achada: marcar como equivalente.
+- `_fvector` tem alinhamento 16 no ee-gcc: uma classe com membro `_fvector` fica alinhada a 16 e o `sizeof` arredonda para
+  múltiplo de 16 (ex.: `IslandLevelSound` 0xF4 vira 0x100). Ao embutir essas classes numa maior, não ponha padding manual entre
+  elas; confira com `typedef char x[sizeof(T) == n ? 1 : -1]` (game/Sound).
 - `(x & 1) == 0` em vez de `!(x & 1)` muda `lw`/`xori` para `ld`/`andi` com campo de 64 bits (MilitaryPickup::kill).
 - Cópia de `_fvector` por `lq/sq` com `jr` seguido de `nop` indica `asm volatile` com `lq/sq` no retail (setFormationPos, setTrans); registrador `$2` fixado com `register int t __asm__("$2")`.
 - Chamada de função dentro dos argumentos da chamada final (operador vírgula) muda o agendamento do prólogo e fez `loadPoints` bater (PathTool/AiPathTool).
