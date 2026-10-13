@@ -46,8 +46,16 @@ void viewSetNumViews(int n);
 void psBlockerInit(void);
 class TagList {
 public:
+    char pad0[0x25C];
+    int m_tags[22][10];      /* 0x25C */
+    char pad5CC[0x6DC - 0x5CC];
+    int m_entries[22][90];   /* 0x6DC */
+
     void init(void);
 };
+extern "C" void sceGsResetGraph(short mode, short inter, short omode, short ffmode);
+extern "C" void sceGsResetPath(void);
+extern char D_006F81B0[]; /* "shell" */
 struct Camera {
     enum CameraPOV { POV_0, POV_1, POV_2, POV_3 };
 };
@@ -1155,10 +1163,33 @@ void ResolveCommandLineArguments(int argc, char **argv)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", ResolveCommandLineArguments__FiPPc);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/Shell", InitGS__5Shells);
-INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintTexture__5Shell);
+/* the GS for the shell: sceGsResetGraph(0, interlace, field, mode) */
+void Shell::InitGS(short mode)
+{
+    sceGsResetGraph(0, 1, 2, mode);
+    sceGsResetPath();
+}
+/* shell.rtx (resources) and shell.tex (textures) go to the next NGP load address, then the VRAM layout of the
+   current mode is set up for them and for the font */
+void Shell::LoadUserintTexture(void)
+{
+    int size;
+
+    size = zipInflateAll("shell/shell.rtx", getNextNgpLoadAddr());
+    fileOnlyResFile(getNextNgpLoadAddr(), size);
+    texmResInit(getVramAddr(), (QwData *)getNextNgpLoadAddr());
+    size = zipInflateAll("shell/shell.tex", getNextNgpLoadAddr());
+    fileOnlyTexFile(getNextNgpLoadAddr(), size);
+    texmInit(getVramAddr());
+    fontInit(getVramAddr(), 1);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintTexture1__5Shell);
-INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintDB__5Shell);
+/* shell.ngp (the menus' database) is inflated at 0xA00000 and becomes the only NGP file, named "shell" */
+void Shell::LoadUserintDB(void)
+{
+    fileOnlyNgpFile((char *)0xA00000, zipInflateAll("shell/shell.ngp", (void *)0xA00000));
+    fileAddName(D_006F81B0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadUserintDB1__5Shell);
 #ifdef NON_MATCHING
 /* 97/279 words: untuned, from the m2c draft + asm */
@@ -1456,7 +1487,15 @@ void Shell::formatFilename(char *dst, const char *dir, const char *name, const c
 
     sprintf(dst, fmt, dir, name, ext);
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", getVramAddr__5Shell);
+/* VRAM layout (_vramAddrs) for the current mode: 30 Hz split screen (3+ players), mode 0x3F, mode 0x40, everything else */
+_vramAddrs Shell::getVramAddr(void)
+{
+    if (Use30HzMode())
+        return (_vramAddrs)0xA8840;
+    if (m_mode != 0x3F)
+        return m_mode != 0x40 ? (_vramAddrs)0x69840 : (_vramAddrs)0x69880;
+    return (_vramAddrs)0x78840;
+}
 int Shell::Use30HzMode(void)
 {
     return m_numPlayers >= 3;
@@ -1516,7 +1555,17 @@ int Shell::MonsterIsLocked(int i)
 {
     return (m_monsterFlags[1] & onBitMonsters[i >> 5]) != 0;
 }
-INCLUDE_ASM("asm/nonmatchings/game/Shell", init__7TagList);
+void TagList::init(void)
+{
+    int i, j;
+
+    for (i = 0; i < 22; i++) {
+        for (j = 0; j < 10; j++)
+            m_tags[i][j] = 0;
+        for (j = 0; j < 90; j++)
+            m_entries[i][j] = 0;
+    }
+}
 #ifdef NON_MATCHING
 /* 118/148 words: untuned */
 void Shell::LoadLevelFiles(void)
