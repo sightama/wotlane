@@ -141,7 +141,7 @@ void snd_SoundIsStillPlaying_CB(unsigned handle, SoundCB cb, void *user);
    player i. With one player the pan comes from the camera heading; with two, players 0 and 1 are the left and right channels. */
 void calcDualMonoMixVolPan(_fvector *pos, int minDist, int maxDist, int &vol, int &pan, int *mute);
 int calcCheapDualMonoMixPan(int player);
-float findApproachingSpeed(_fvector *pos, int *speed, float *prevDist);
+void findApproachingSpeed(_fvector *pos, int *speed, float *prevDist);
 /* Volume by the cameras' height between bottom and top. */
 void calcDualMonoMixHeightBasedSoundVol(float top, float bottom, int &vol, int &pan, int *mute);
 int timerGetFieldCount(void);

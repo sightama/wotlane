@@ -8,6 +8,14 @@
 
 extern char mechBankName[] __asm__("D_006EFFB0");   /* "Mech_s.bnk" */
 #define MI(m, o) (*(int *)((char *)(m) + (o)))
+/* Cameras::m_cameras holds one 0xEB0-byte block per view: the camera's _cs at 0xCF0 and the monster it follows at 0xCF4. */
+#define CAMERA_CS(i) (*(_cs **)((char *)&Cameras::m_cameras + 0xCF0 + (i) * 0xEB0))
+#define CAMERA_MONSTER(i) (*(Monster **)((char *)&Cameras::m_cameras + 0xCF4 + (i) * 0xEB0))
+extern int gUseEarsOnMonster;   /* 1: the listener is the followed monster instead of the camera */
+__asm__("#SNFIX_SMALL gUseEarsOnMonster");
+extern char bigShotInst[] __asm__("_12BigShotLevel$instance");
+int calculateRangedVolume(_fvector *a, _fvector *b, int nearDist, int farDist);
+int calculatePanAngle(float heading, _fvector *listener, _fvector *src);
 __asm__("#SNFIX_SMALL gInnerPed");
 __asm__("#SNFIX_SMALL gOutterPed");
 
@@ -4371,9 +4379,170 @@ void MantisGlide::rampWindVolumeUp(void)
     if (m_minVol <= m_volume)
         m_state = 2;
 }
+#ifdef NON_MATCHING
+/* equivalent (untuned): 16/200 words, size 0x318 vs 0x320 */
+void calcDualMonoMixVolPan(_fvector *pos, int minDist, int maxDist, int &vol, int &pan, int *mute)
+{
+    int left = 0;
+    int right = 0;
+    int audible = 0;
+    int first = 1;
+    int vols[4];
+    if (!STREAMING_SOUND()->m_enabled) {
+        vol = 0;
+        pan = 0;
+        return;
+    }
+    for (int i = 3; i >= 0; i--)
+        vols[i] = 0;
+    for (int p = 0; p < game->m_numMonsters; p++) {
+        if (mute && mute[p] == 1) {
+            vols[p] = 0;
+        } else {
+            if (!gUseEarsOnMonster) {
+                if (CAMERA_CS(p))
+                    vols[p] = calculateRangedVolume(&CAMERA_CS(p)->trans, pos, minDist, maxDist);
+            } else if (CAMERA_MONSTER(p)) {
+                vols[p] = calculateRangedVolume(&CAMERA_MONSTER(p)->m_cs->trans, pos, minDist, maxDist);
+            }
+            if (vols[p] >= 1)
+                audible = 1;
+        }
+        if (first && left < vols[p])
+            left = vols[p];
+        else if (right < vols[p])
+            right = vols[p];
+        first = 0;
+    }
+    if (!audible) {
+        vol = 0;
+        pan = 0;
+    } else if (game->m_numMonsters == 1) {
+        vol = vols[0];
+        _cs *cs = CAMERA_MONSTER(0)->m_cs;
+        pan = calculatePanAngle(cs->rot.z, &cs->trans, pos);
+    } else if (shell->m_levelNum == 26) {
+        /* Big Shot: the active player's ears (the position is player 0's in retail) */
+        int p = *(int *)(bigShotInst + 0x94);
+        vol = vols[p];
+        pan = calculatePanAngle(CAMERA_MONSTER(p)->m_cs->rot.z, &CAMERA_MONSTER(0)->m_cs->trans, pos);
+    } else if (left == 0) {
+        vol = right;
+        pan = 90;
+    } else if (right == 0) {
+        vol = left;
+        pan = 270;
+    } else if (right < left) {
+        vol = left;
+        pan = right * 90 / left + 270;
+    } else {
+        vol = right;
+        pan = 90 - left * 90 / right;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", calcDualMonoMixVolPan__FP8_fvectoriiRiT3Pi);
+#endif
+/* With two players, player 0 is the left channel (270) and player 1 the right (90). */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 12/15 words, size 0x3c vs 0x3c */
+int calcCheapDualMonoMixPan(int player)
+{
+    if (game->m_numMonsters == 1)
+        return 0;
+    if (player & 1)
+        return 90;
+    return 270;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", calcCheapDualMonoMixPan__Fi);
+#endif
+/* Doppler speed (-100..100) from how much the distance to camera 0 shrank since the last call. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 9/38 words, size 0x98 vs 0x94 */
+void findApproachingSpeed(_fvector *pos, int *speed, float *prevDist)
+{
+    _fvector d;
+    vecSub(&d, &CAMERA_CS(0)->trans, pos);
+    float dist = eeSqrtf(d.x * d.x + d.y * d.y + d.z * d.z);
+    *speed = (int)((*prevDist - dist) * 20.909091f);
+    if (*speed > 100)
+        *speed = 100;
+    if (*speed < -100)
+        *speed = -100;
+    *prevDist = dist;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", findApproachingSpeed__FP8_fvectorPiPf);
+#endif
+/* Like calcDualMonoMixVolPan, but each player's volume comes from the height of the monster its camera follows: full (0x400) below
+   bottom, silent above top, linear in between. With a negative top the retail formula measures from top instead of bottom. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 24/168 words, size 0x268 vs 0x2a0 */
+void calcDualMonoMixHeightBasedSoundVol(float top, float bottom, int &vol, int &pan, int *mute)
+{
+    int left = 0;
+    int right = 0;
+    int audible = 0;
+    int first = 1;
+    int vols[4];
+    if (!STREAMING_SOUND()->m_enabled) {
+        vol = 0;
+        pan = 0;
+        return;
+    }
+    for (int i = 3; i >= 0; i--)
+        vols[i] = 0;
+    for (int p = 0; p < game->m_numMonsters; p++) {
+        if (mute && mute[p] == 1) {
+            vols[p] = 0;
+        } else {
+            Monster *m = CAMERA_MONSTER(p);
+            if (m) {
+                float h = m->m_cs->trans.y;
+                if (h > top) {
+                    vols[p] = 0;
+                } else if (h < bottom) {
+                    vols[p] = 0x400;
+                } else if (top >= 0.0f) {
+                    vols[p] = (int)(1024.0f - (h - bottom) / (top - bottom) * 1024.0f);
+                } else if (top <= 0.0f && bottom <= 0.0f) {
+                    vols[p] = (int)(1024.0f - (h - top) / (top - bottom) * 1024.0f);
+                } else {
+                    vols[p] = 0;
+                }
+            }
+            if (vols[p] >= 1)
+                audible = 1;
+        }
+        if (first && left < vols[p])
+            left = vols[p];
+        else if (right < vols[p])
+            right = vols[p];
+        first = 0;
+    }
+    if (!audible) {
+        vol = 0;
+        pan = 0;
+    } else if (game->m_numMonsters == 1) {
+        vol = vols[0];
+        pan = 0;
+    } else if (left == 0) {
+        vol = right;
+        pan = 90;
+    } else if (right == 0) {
+        vol = left;
+        pan = 270;
+    } else if (right < left) {
+        vol = left;
+        pan = right * 90 / left + 270;
+    } else {
+        vol = right;
+        pan = 90 - left * 90 / right;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", calcDualMonoMixHeightBasedSoundVol__FffRiT2Pi);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Sound", __static_initialization_and_destruction_0_001C1758);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", _GLOBAL_$I$gIntroMoviesHavePlayed);
