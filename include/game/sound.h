@@ -624,9 +624,9 @@ public:
     int f1FC;                   // 0x1FC: field count
     unsigned m_inhaleHandle;    // 0x200
     int f204;                   // 0x204
-    int f208;                   // 0x208
-    unsigned f20C;              // 0x20C
-    unsigned f210;              // 0x210
+    unsigned m_hitHandle;       // 0x208: pain cry
+    unsigned m_tauntHandle;     // 0x20C: taunt and play206Sound
+    unsigned m_crowdHandle;     // 0x210
     unsigned m_shockHandle;     // 0x214
     int f218;                   // 0x218
     unsigned f21C;              // 0x21C
