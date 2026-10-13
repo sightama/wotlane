@@ -1,4 +1,5 @@
 #include "common.h"
+#include "engine.h"
 #include "game/shell.h"
 #include "game/monster_select.h"
 extern int numModsLeft;
@@ -122,7 +123,48 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches3P__Fiiiiii);
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches4P__Fiiiiiiii);
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesMG__Fiiii);
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesAI__Fii);
+#ifdef NON_MATCHING
+/* Narrows the monster-select columns to the unlocked monsters: the first (monsterSelectMode[0]) and the last (monsterSelectMode[36],
+   the first slot of monster 9) can still be locked, in which case their column shows 4 and the range [m_selFirst, m_selLast) skips it.
+   The other columns are reset to 0. */
+extern int first2813 __asm__("first.2813");
+extern int last2814 __asm__("last.2814");
+__asm__("#SNFIX_SMALL first.2813");
+__asm__("#SNFIX_SMALL last.2814");
+#define first first2813
+#define last last2814
+/* 84/98 palavras; o retail relê first/last por gp entre os ramos */
+void initSelectSwitches(void)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    shell->m_selLast = last;
+    shell->m_selFirst = first;
+    for (i = first; i < last; i++)
+        hierSetSwitch(shell->m_selectSw[i], 0);
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitches__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitchesMG__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE2F0);
@@ -571,12 +613,155 @@ void screenMGSelect(void)
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMGSelect__Fv);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenBestOf__Fv);
+#ifdef NON_MATCHING
+class ShellRtLoop {
+public:
+    char pad0[0x24];
+
+    void startField(bool b);
+    void endField(bool skipDraw);
+};
+class MonsterMc {
+public:
+    int pad0;
+    int m_bootLoaded; /* 0x4: the boot-time memory card load finished */
+
+    void updateBootLoad(void);
+    static MonsterMc global;
+};
+extern int clearBeforeFontDMA;
+extern "C" void snd_SetMasterVolume(int which, int vol);
+class TheGame {
+public:
+    void SetVibration(int pad, bool on);
+};
+extern TheGame *game;
+void fontSetDefaultSize(int font);
+/* Runs frames until the boot-time memory card load is over, then applies the loaded options: mono flag, music and sfx volumes,
+   vibration of both pads, default font sizes. The retail leaves the loop object uninitialised (startField reads its `started`). */
+/* 20/67 palavras; alocação de registradores do laço */
+void screenMemoryCardInit(void)
+{
+    ShellRtLoop loop;
+    int done = 0;
+
+    clearBeforeFontDMA = 1;
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateBootLoad();
+        if (MonsterMc::global.m_bootLoaded) {
+            done = 1;
+            clearBeforeFontDMA = 0;
+            *(int *)((char *)shell + 0x292C) = 1;
+            shell->m_mono = shell->m_mono != 0;
+            snd_SetMasterVolume(1, shell->m_musicVolume);
+            snd_SetMasterVolume(0, shell->m_sfxVolume);
+            game->SetVibration(0, shell->m_vibration[0]);
+            game->SetVibration(1, shell->m_vibration[1]);
+            fontSetDefaultSize(0);
+            fontSetDefaultSize(1);
+        }
+        loop.endField(true);
+    } while (!done);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMemoryCardInit__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenTransition__Fb);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenUnlocker__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect4P__Fv);
+#ifdef NON_MATCHING
+/* Title screen ("press start"): on the first pass hides the menus, selects item 1 of every screen for the four pads, gives both
+   players a controller configuration, sets up the select columns and the default selections; then keeps the main movie playing
+   until pad 1 presses start (action 0x10), which moves on to screen 1. */
+/* 43/108 palavras; o retail desenrola diferente o laço das seleções */
+void screenWaitForStart(void)
+{
+    int p, s, i;
+
+    if (screenFirstPass) {
+        hierSetCsDrawMe(shell->m_menuCs, 0);
+        for (p = 0; p < 4; p++)
+            for (s = 21; s >= 0; s--)
+                currentSelection[p * 22 + s] = 1;
+        for (i = 0; i < 2; i++)
+            if (shell->m_ctlrCfg[i] == 0)
+                shell->m_ctlrCfg[i] = 1;
+        currentSelection[12] = 0;
+        currentSelection[13] = 0;
+        initSelectSwitches();
+        currentSelection[6] = shell->m_selFirst + 1;
+        currentSelection[22 + 6] = shell->m_selLast;
+        currentSelection[7] = shell->m_selFirst + 1;
+        currentSelection[22 + 7] = shell->m_selLast;
+        currentSelection[18] = shell->m_selFirst + 1;
+        currentSelection[22 + 18] = shell->m_selLast;
+        currentSelection[19] = shell->m_selFirst + 1;
+        currentSelection[22 + 19] = shell->m_selLast;
+        currentSelection[12] = 1;
+        currentSelection[10] = 0;
+        currentSelection[4] = 1;
+        currentSelection[11] = 0;
+        currentSelection[14] = 1;
+        screenFirstPass = 0;
+    }
+    myMovie.Play(false, MainMovie);
+    if ((screenGetInput(1) & 0xFFFF) == 0x10) {
+        changeScreen(0x14, 1, 1, 0, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenWaitForStart__Fv);
+#endif
+#ifdef NON_MATCHING
+extern int lastScreen;
+extern int oldScreens[16];
+extern int currAnimationIndex;
+__asm__("#SNFIX_SMALL currAnimationIndex");
+extern char D_006EED08[];
+/* Leaves screen `from` for screen `to`. dir 1 goes forward (when `track`, `from` becomes prevScreen and the old prevScreen is pushed
+   on the 16-deep oldScreens stack), dir -1 goes back (pops prevScreen from the stack); anything else just prints a warning.
+   A nonzero `anim` plays transition animation `anim` of the shell, forward for dir 1, reversed otherwise. */
+/* 50/100 palavras; ordem dos testes de dir/track e cópia do _animHandle */
+void changeScreen(int from, int to, int dir, int anim, bool track)
+{
+    int i;
+
+    lastScreen = from;
+    if (dir == 1) {
+        if (track) {
+            for (i = 15; i > 0; i--)
+                oldScreens[i] = oldScreens[i - 1];
+            oldScreens[0] = prevScreen;
+            prevScreen = from;
+        }
+    } else if (dir == -1) {
+        if (track) {
+            prevScreen = oldScreens[0];
+            for (i = 0; i < 15; i++)
+                oldScreens[i] = oldScreens[i + 1];
+            oldScreens[15] = 0;
+        }
+    } else {
+        printf(D_006EED08);
+    }
+    if (anim) {
+        _animHandle *h = (_animHandle *)((char *)shell + 0x61C + anim * 0x10);
+
+        if (dir == 1)
+            animationStart(*h, true);
+        else
+            animationStartReverse(*h, true);
+        currAnimationIndex = anim;
+    }
+    currScreen = to;
+    screenFirstPass = 1;
+    betweenScreens = 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeScreen__Fiiiib);
+#endif
 #ifdef NON_MATCHING
 /* Polls the pads allowed by `padMask` (on_bit[pad]) and returns (pad << 16) | action, 0 when nothing is pressed or a screen change is running.
    The 16 pad masks are tried in the order of `map`, each giving its action code 1..0x10. */
@@ -607,7 +792,27 @@ int screenGetInput(int padMask)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGetInput__Fi);
 #endif
+#ifdef NON_MATCHING
+/* Shows the panel of menu `screen` and lights item `sel` among its items (the others off). Items are counted from 1, except on
+   screen 10, whose list starts at 0; the list ends at the first null switch or after 10. Returns the index of the last item. */
+/* 6/75 palavras; o retail relê shell a cada volta e mantém dois índices */
+int screenPrepareDefault(int screen, int sel)
+{
+    int i;
+
+    hierSetSwitch(shell->m_screenSw, screen - 1);
+    if (screen == 10) {
+        for (i = 0; i < 10 && shell->m_menuItemSw[10][i]; i++)
+            hierSetSwitch(shell->m_menuItemSw[10][i], i == sel);
+    } else {
+        for (i = 1; i < 10 && shell->m_menuItemSw[screen][i]; i++)
+            hierSetSwitch(shell->m_menuItemSw[screen][i], i == sel);
+    }
+    return i - 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenPrepareDefault__Fii);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenWriteInstructions__Fif);
 #ifdef NON_MATCHING
 float screenGetFontAlpha(void)

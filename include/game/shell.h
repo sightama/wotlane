@@ -3,14 +3,22 @@
 
 struct _hierhead;
 struct _cs;
+struct _hierswitch;
 enum _vramAddrs { VRAM_ADDRS_DUMMY };
 
 /* Front-end shell: level names and file name formatting used by the point tools. */
 class Shell {
 public:
-    char pad0[0x60];
+    _cs *m_menuCs;        /* 0x0: root cs of the front-end menus (hidden by screenWaitForStart) */
+    char pad4[0x60 - 0x4];
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
-    char pad70[0x2938 - 0x70];
+    char pad70[0x168 - 0x70];
+    _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
+    char pad190[0x25C - 0x190];
+    _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
+    char pad5CC[0x5D4 - 0x5CC];
+    _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1) */
+    char pad5D8[0x2938 - 0x5D8];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
     char pad2958[0x2A24 - 0x2958];
     int m_monsterFlags[3]; /* 0x2A24: one bit per monster index (onBitMonsters): [0] available, [1] locked, [2] chosen */
@@ -25,7 +33,12 @@ public:
     int m_battleMode;     /* 0x2B54: battle type picked in the menu (3, 6, ...) */
     int m_survivor;       /* 0x2B58: player left standing when the other ran out of continues */
     int m_roundsPlayed;   /* 0x2B5C */
-    char pad2B60[0x2BA8 - 0x2B60];
+    char pad2B60[0x2B8C - 0x2B60];
+    int m_ctlrCfg[2];     /* 0x2B8C: controller configuration of each player, 1-based (0 = not set yet; Monster+0x672C gets it minus one) */
+    int m_vibration[2];   /* 0x2B94: vibration option of each player (TheGame::SetVibration) */
+    int m_selFirst;       /* 0x2B9C: first selectable monster column of the select screen (1 while the first monster is locked) */
+    int m_selLast;        /* 0x2BA0: one past the last selectable column (9 while the last monster is locked) */
+    char pad2BA4[0x2BA8 - 0x2BA4];
     int m_restart;        /* 0x2BA8: 1 = the level is being restarted (ResetLevel, not UnpauseLevel) and needs the loading background */
     char pad2BAC[0x2BB0 - 0x2BAC];
     int m_levelNum;       /* 0x2BB0: index into GameLevelNames (0 = the level named on the command line) */
@@ -95,6 +108,11 @@ public:
 extern Shell *shell;
 
 #define SHELL_AT(f, off) typedef char _shell_at_##f[(unsigned)&((Shell *)0)->f == (off) ? 1 : -1]
+SHELL_AT(m_selectSw, 0x168);
+SHELL_AT(m_menuItemSw, 0x25C);
+SHELL_AT(m_screenSw, 0x5D4);
+SHELL_AT(m_ctlrCfg, 0x2B8C);
+SHELL_AT(m_selLast, 0x2BA0);
 SHELL_AT(m_monsterFlags, 0x2A24);
 SHELL_AT(m_killTarget, 0x2A44);
 SHELL_AT(m_continues, 0x2B40);
