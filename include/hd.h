@@ -54,55 +54,87 @@ public:
     void removeCs(_cs *cs);
 };
 
-/* Walks the hull nodes of the collision grid cells a moving sphere touches (common/HdIterator, asm). Only the fields
-   hdCsTest reads are named. */
+/* Where the hull walk of one path or cs hierarchy stands (common/hdTraverse): the hull node it stopped at. */
+struct hdTraverseState {
+    _hierhead *hull;        // 0x0 current hull node
+    float (*mat)[4];        // 0x4 its world matrix
+    unsigned short hatId1;  // 0x8 ids of the cs the hull belongs to
+    unsigned short hatId2;  // 0xA
+    unsigned char padC[0xC];
+};
+typedef char _size_hdTraverseState[sizeof(hdTraverseState) == 0x18 ? 1 : -1];
+
+/* The objects of one collision grid cell: its static paths, then (withCs) the cs objects registered in it. Each object is
+   handed out once per walk: it is stamped with this walk's traceId. */
+class HdItCell {
+public:
+    unsigned traceId;           // 0x0 from g_traceId, a new one per walk
+    _HierListNode *path;        // 0x4 current path node (path->val: its bbox first), 0 when the paths are done
+    ColGridCsListNode *csNode;  // 0x8 current cs node
+    unsigned skipId2;           // 0xC node id2 of a cs to leave out (the tested cs itself)
+    int withCs;                 // 0x10 walk the cs list too
+    int triggers;               // 0x14 take the trigger paths instead of the solid ones (tdTest)
+
+    HdItCell();
+    void reset(int col, int row);
+    void next(void);
+    int isDone(void) { return !path && !csNode; }
+};
+typedef char _size_HdItCell[sizeof(HdItCell) == 0x18 ? 1 : -1];
+
+/* Walks the hull nodes of the collision grid cells a moving sphere's bounding box touches, row by row. */
 class HdItGridBox {
 public:
-    unsigned char pad0[0x24];
-    int option;             // 0x24 hdHatTest's bool
-    unsigned char pad28[8];
-    int end;                // 0x30
-    int pad34;              // 0x34
-    int cur;                // 0x38
-    unsigned char pad3C[8];
-    void **cellObj;         // 0x44 current object; cellObj[1] -> its bbox (min xyz, max xyz) or 0
-    int pad48;              // 0x48
-    unsigned skipId2;       // 0x4C node id2 of the tested cs (its own hulls are skipped)
-    int skipSelf;           // 0x50
-    int triggers;           // 0x54 walk the trigger nodes instead of the hulls (tdTest)
-    _hierhead *hull;        // 0x58 current hull node
-    float (*mat)[4];        // 0x5C its world matrix
-    unsigned short hatId1;  // 0x60 ids of the cs the hull belongs to
-    unsigned short hatId2;  // 0x62
-    unsigned char pad64[0xC];
+    FVECTOR min;            // 0x0 box of the sweep, grown by the radius
+    FVECTOR max;            // 0x10
+    int pad20;              // 0x20
+    int option;             // 0x24 passed to the hull walk
+    int minRow;             // 0x28
+    int minCol;             // 0x2C
+    int maxRow;             // 0x30 exclusive
+    int maxCol;             // 0x34 exclusive
+    int row;                // 0x38
+    int col;                // 0x3C
+    HdItCell cell;          // 0x40
+    hdTraverseState state;  // 0x58
 
     HdItGridBox();
     void reset(_fvector &from, _fvector &to, float r);
+    int incrementPath(void);
     void next(void);
 } __attribute__((aligned(16)));
 typedef char _size_HdItGridBox[sizeof(HdItGridBox) == 0x70 ? 1 : -1];
 
-/* The same along a line (hdLosTest). */
+/* The same along a line (hdLosTest): the cells are visited in the order the segment crosses them (a grid DDA). */
 class HdItGridLine {
 public:
-    unsigned char pad0[0x24];
+    FVECTOR from;           // 0x0
+    FVECTOR to;             // 0x10
+    float r;                // 0x20
     int option;             // 0x24
-    unsigned char pad28[8];
-    float bestT;            // 0x30 nearer hits than this end the walk early
-    unsigned char pad34[0x30];
-    int csId;               // 0x64 only this cs (when filterCs)
-    int filterCs;           // 0x68
-    int pad6C;              // 0x6C
-    _hierhead *hull;        // 0x70
-    float (*mat)[4];        // 0x74
-    unsigned short hatId1;  // 0x78
-    unsigned short hatId2;  // 0x7A
-    unsigned char pad7C[0x64];
+    int pad28;              // 0x28
+    float tEnter;           // 0x2C where the segment enters the grid
+    float tExit;            // 0x30 where it leaves it; nearer hits than this end the walk early
+    float tMaxX;            // 0x34 t of the next column boundary
+    float tMaxY;            // 0x38 t of the next row boundary
+    float tDeltaX;          // 0x3C t across one column
+    float tDeltaY;          // 0x40
+    float t;                // 0x44 t of the current cell
+    int col;                // 0x48
+    int row;                // 0x4C
+    int stepX;              // 0x50 +-1
+    int stepY;              // 0x54
+    HdItCell cell;          // 0x58
+    hdTraverseState state;  // 0x70
+    unsigned char pad88[0x58];
 
     HdItGridLine();
     void reset(_fvector &from, _fvector &to, float r);
+    int incrementPath(void);
     void next(void);
     int isDone(void) const;
+    void drawGrid(void);
 } __attribute__((aligned(16)));
+typedef char _size_HdItGridLine[sizeof(HdItGridLine) == 0xE0 ? 1 : -1];
 
 #endif

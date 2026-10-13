@@ -33,13 +33,13 @@ int hdLosTest(_fvector *from, _fvector *to, _hdResult *res, bool option)
     if (res)
         res->hit = 0;
     if (hdLosFilterCs) {
-        it.filterCs = 1;
-        it.csId = hdLosCsId;
+        it.cell.withCs = 1;
+        it.cell.skipId2 = hdLosCsId;
     }
     it.option = option;
     it.reset(*from, *to, 0.0f);
     while (!it.isDone()) {
-        n = hdTestNode(it.hull, from, to, 0.0f, (float (*)[4][4])it.mat, tmp, 16);
+        n = hdTestNode(it.state.hull, from, to, 0.0f, (float (*)[4][4])it.state.mat, tmp, 16);
         if (n && !res)
             return 0;
         for (i = 0; i < n; i++) {
@@ -47,9 +47,9 @@ int hdLosTest(_fvector *from, _fvector *to, _hdResult *res, bool option)
                 continue;
             *res = tmp[i];
             if (!(res->ids & (0x3FFF << 11)))
-                HD_RESULT_SET_IDS(res, it.hatId1, it.hatId2);
+                HD_RESULT_SET_IDS(res, it.state.hatId1, it.state.hatId2);
             best = res->point.w;
-            it.bestT = best;
+            it.tExit = best;
         }
         it.next();
     }

@@ -43,13 +43,13 @@ int tdTest(_fvector *p, _tdResult *res, int max)
     HdItGridBox it;
     int n = 0;
 
-    it.triggers = 1;
+    it.cell.triggers = 1;
     it.reset(*p, *p, 0.0f);
-    while (it.cur < it.end) {
-        if (tdColTriggerNode((HierCollisionTrigger *)it.hull, p, (float (*)[4][4])it.mat, res)) {
+    while (it.row < it.maxRow) {
+        if (tdColTriggerNode((HierCollisionTrigger *)it.state.hull, p, (float (*)[4][4])it.state.mat, res)) {
             n++;
-            res->hatId1 = it.hatId1;
-            res->hatId2 = it.hatId2;
+            res->hatId1 = it.state.hatId1;
+            res->hatId2 = it.state.hatId2;
             res++;
             if (!(n < max))
                 break;

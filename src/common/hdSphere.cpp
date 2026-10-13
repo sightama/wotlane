@@ -19,7 +19,7 @@ static inline void setHatIds(_hdResult *res, int n, HdItGridBox &it)
     if (res[0].ids & (0x3FFF << 11))
         return;
     for (j = 0; j < n; j++)
-        HD_RESULT_SET_IDS(&res[j], it.hatId1, it.hatId2);
+        HD_RESULT_SET_IDS(&res[j], it.state.hatId1, it.state.hatId2);
 }
 #endif
 
@@ -41,12 +41,12 @@ int hdSphereTest(_fvector *a, _fvector *b, float r, _hdResult *res, unsigned ski
     {
         HdItGridBox it;
 
-        it.skipSelf = 1;
-        it.skipId2 = skipId2;
+        it.cell.withCs = 1;
+        it.cell.skipId2 = skipId2;
         it.reset(*a, *b, r);
-        while (it.cur < it.end) {
+        while (it.row < it.maxRow) {
             _hdResult *r0 = &res[n];
-            int k = hdTestNode(it.hull, a, b, r, (float (*)[4][4])it.mat, r0, max - n);
+            int k = hdTestNode(it.state.hull, a, b, r, (float (*)[4][4])it.state.mat, r0, max - n);
 
             if (k)
                 setHatIds(r0, k, it);
@@ -110,10 +110,10 @@ int hdBundledSphereTest(_hdSphereBundleTest *tests, int n, int skipId2)
         }
         t[i].numResults = 0;
     }
-    it.skipId2 = skipId2;
-    it.skipSelf = 1;
+    it.cell.skipId2 = skipId2;
+    it.cell.withCs = 1;
     it.reset(all[0], all[1], 0.0f);
-    while (it.cur < it.end) {
+    while (it.row < it.maxRow) {
         for (i = 0; i < n; i++) {
             float *hb;
             _hdResult *r0;
@@ -121,11 +121,11 @@ int hdBundledSphereTest(_hdSphereBundleTest *tests, int n, int skipId2)
 
             if (t[i].numResults == t[i].maxRes)
                 continue;
-            hb = it.cellObj ? (float *)it.cellObj[1] : 0;
+            hb = it.cell.path ? (float *)it.cell.path->val : 0;
             if (hb && !hdAABBVsAABB(boxes[i].min, boxes[i].max, hb, hb + 3))
                 continue;
             r0 = &t[i].results[t[i].numResults];
-            got = hdTestNode(it.hull, t[i].a, t[i].b, t[i].r, (float (*)[4][4])it.mat, r0, t[i].maxRes - t[i].numResults);
+            got = hdTestNode(it.state.hull, t[i].a, t[i].b, t[i].r, (float (*)[4][4])it.state.mat, r0, t[i].maxRes - t[i].numResults);
             if (got)
                 setHatIds(r0, got, it);
             total += got;

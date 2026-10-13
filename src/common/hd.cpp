@@ -148,12 +148,12 @@ void hdCsTest(_hdCsTestPts *pts, _fvector *pos, float (*m)[4][4], _hdResult *res
     r = 300.0f;
     if (cs->epNode && (cs->epNode->opcode == 2 || cs->epNode->opcode == 1))
         r = ((_hiergroup *)cs->epNode)->sphereRadius;
-    it.skipSelf = 1;
-    it.skipId2 = pts->cs->epNode->id2;
+    it.cell.withCs = 1;
+    it.cell.skipId2 = pts->cs->epNode->id2;
     it.reset(*pos, cs->trans, r);
-    while (it.cur < it.end) {
+    while (it.row < it.maxRow) {
         for (i = 0; i < pts->numPts; i++) {
-            float (*M)[4] = it.mat;
+            float (*M)[4] = it.state.mat;
             HdHullNode *h;
             FVECTOR p, a, b;
             ContactInfo ci;
@@ -169,7 +169,7 @@ void hdCsTest(_hdCsTestPts *pts, _fvector *pos, float (*m)[4][4], _hdResult *res
             vecAdd(&p, &cs->trans, &p);
             mathfMulVec(M, &p, &b);
             vecAdd(&b, &b, (_fvector *)M[3]);
-            h = (HdHullNode *)it.hull;
+            h = (HdHullNode *)it.state.hull;
             if (!hdSphereVsHull(&a, &b, 0.0f, h->planes, h->numPlanes, &ci, 0, 0))
                 continue;
             rr = &res[i];
@@ -182,7 +182,7 @@ void hdCsTest(_hdCsTestPts *pts, _fvector *pos, float (*m)[4][4], _hdResult *res
             if (h->head.id1)
                 HD_RESULT_SET_IDS(rr, h->head.id1, h->head.id2);
             else
-                HD_RESULT_SET_IDS(rr, it.hatId1, it.hatId2);
+                HD_RESULT_SET_IDS(rr, it.state.hatId1, it.state.hatId2);
             rr->hit = 1;
             rr->surface = h->surface;
         }

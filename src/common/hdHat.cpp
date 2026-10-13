@@ -35,10 +35,10 @@ float hdHatTest(_fvector *pos, _fvector *normal, float up, bool option, float do
     top.z += up;
     it.option = option;
     it.reset(top, bottom, 0.0f);
-    while (it.cur < it.end) {
-        n += hdTestNode(it.hull, &top, &bottom, 0.0f, (float (*)[4][4])it.mat, &res[n], 16 - n);
+    while (it.row < it.maxRow) {
+        n += hdTestNode(it.state.hull, &top, &bottom, 0.0f, (float (*)[4][4])it.state.mat, &res[n], 16 - n);
         it.next();
-        if (!(it.cur < it.end) || n >= 16)
+        if (!(it.row < it.maxRow) || n >= 16)
             break;
     }
     if (!n) {
