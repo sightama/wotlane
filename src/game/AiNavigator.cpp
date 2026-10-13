@@ -349,7 +349,14 @@ AiPath *AiNavigator::getFleePath(_fvector &p)
 INCLUDE_ASM("asm/nonmatchings/game/AiNavigator", inPathTransition__11AiNavigatorRQ211AiNavigator8PathInfoR8_fvectorb);
 INCLUDE_ASM("asm/nonmatchings/game/AiNavigator", getMaxJumpHeight__11AiNavigatorb);
 INCLUDE_ASM("asm/nonmatchings/game/AiNavigator", getMaxStandingJumpHeight__11AiNavigatorb);
-INCLUDE_ASM("asm/nonmatchings/game/AiNavigator", __Q211AiNavigator14ObstacleSensorR11AiNavigator);
+AiNavigator::ObstacleSensor::ObstacleSensor(AiNavigator &n)
+{
+    nav = &n;
+    param120 = 35.0f;
+    param124 = 0.32f;
+    param128 = 45.0f;
+    param12C = 100.0f;
+}
 void AiNavigator::ObstacleSensor::init(void)
 {
     obstacleHit = 0;
