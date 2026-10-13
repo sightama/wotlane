@@ -78,6 +78,8 @@ class ShellSound {
 public:
     void playShellSFXSound(int id);
     void terminateShellSound(void);
+    void updateSFXSliderSound(void);
+    void stopSFXSliderSound(void);
 };
 extern int prevScreen;
 #ifdef NON_MATCHING
@@ -1749,7 +1751,312 @@ void setSlider(int which, float v)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", setSlider__Fif);
 #endif
+#ifdef NON_MATCHING
+extern "C" void snd_SetMasterVolume(int which, int vol);
+class TheGame {
+public:
+    void SetVibration(int pad, bool on);
+};
+extern TheGame *game;
+void inputSetInputMode(int mode);
+void saveSettings(void);
+void loadSettings(void);
+extern char mcPageMgrGlobal[] __asm__("_9McPageMgr$global");
+extern int numSelectables2938 __asm__("numSelectables.2938");
+/* options as they were when the screen was opened, put back by back (5) */
+extern int savedDifficulty __asm__("Difficulty.2939");
+extern int savedMono __asm__("audio.2940");
+extern int savedSfxVolume __asm__("fxVol.2941");
+extern int savedMusicVolume __asm__("musVol.2942");
+extern int savedVibration0 __asm__("vib.2943");
+extern int savedVibration1 __asm__("vib2.2944");
+#define GAME_DIFFICULTY (*(int *)((char *)game + 0x1203CC))
+#define GAME_VIBRATION(pad) (*(int *)((char *)game + 0x120498 + (pad) * 4))
+/* Lights the difficulty switch of the current difficulty (0..2). */
+#define OPT_SHOW_DIFFICULTY()                                    \
+    for (i = 0; i < 3; i++) {                                    \
+        if (GAME_DIFFICULTY == i) {                              \
+            hierSetSwitch(shell->m_difficultySw[i], 1);          \
+            GAME_DIFFICULTY = i;                                 \
+        } else {                                                 \
+            hierSetSwitch(shell->m_difficultySw[i], 0);          \
+        }                                                        \
+    }
+/* Toggles the vibration of `pad` and shows it. */
+#define OPT_TOGGLE_VIBRATION(pad, sfx)                                              \
+    game->SetVibration((pad), GAME_VIBRATION(pad) ^ 1);                             \
+    hierSetSwitch(shell->m_vibrationSw[pad][0], GAME_VIBRATION(pad));               \
+    hierSetSwitch(shell->m_vibrationSw[pad][1], GAME_VIBRATION(pad) ^ 1);           \
+    shell->m_vibration[pad] = GAME_VIBRATION(pad);                                  \
+    ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(sfx)
+/* Opens the controller configuration (screen 4) for `player`. */
+#define OPT_CTLR_CFG(player)                                                        \
+    currentSelection[4] = shell->m_ctlrCfg[player];                                 \
+    hierSetSwitch(shell->m_menuItemSw[4][0], shell->m_ctlrCfg[player]);             \
+    PlayerConfig = (player);                                                        \
+    changeScreen(0xA, 4, 1, 0xB, true);                                             \
+    ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8)
+/* Options screen (10). Items: 0 difficulty, 1/2 controller configuration of player 1/2 (opened with input code 7), 3 stereo/mono,
+   4 sfx volume (0..0x400, step 0x33; the slider sound plays while it is highlighted), 5 music volume (0..0x33E, step 0x29), 6/7
+   vibration of pad 1/2, 8 load settings, 9 save settings. Left/right (3/4) change the highlighted item, confirm (6) on 0..7 leaves,
+   back (5) restores what the options were when the screen was opened. Pad 2 can also toggle its own vibration (left/right on 7)
+   and open its controller configuration (code 7 on item 2). NON_MATCHING: 56/997 words differ, 0xF78 bytes vs 0xF94 (untuned; same
+   calls in the same order). */
+void screenOptions(void)
+{
+    int i;
+
+    if (screenFirstPass != 0) {
+        numSelectables2938 = screenPrepareDefault(0xA, currentSelection[currScreen]);
+        moviesReleaseScreenObject();
+        continueDecoding = 0;
+        savedDifficulty = GAME_DIFFICULTY;
+        savedMono = shell->m_mono;
+        savedSfxVolume = shell->m_sfxVolume;
+        savedMusicVolume = shell->m_musicVolume;
+        savedVibration0 = GAME_VIBRATION(0);
+        savedVibration1 = GAME_VIBRATION(1);
+        screenFirstPass = 0;
+    }
+    if (currentSelection[currScreen] == 4)
+        ((ShellSound *)((char *)shell + 0x2918))->updateSFXSliderSound();
+    switch (screenGetInput(1) & 0xFFFF) {
+    case 1:
+        hierSetSwitch(shell->m_menuItemSw[10][currentSelection[currScreen]], 0);
+        currentSelection[currScreen] = currentSelection[currScreen] > 0 ? currentSelection[currScreen] - 1 : numSelectables2938;
+        hierSetSwitch(shell->m_menuItemSw[10][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        ((ShellSound *)((char *)shell + 0x2918))->stopSFXSliderSound();
+        break;
+    case 2:
+        hierSetSwitch(shell->m_menuItemSw[10][currentSelection[currScreen]], 0);
+        if (currentSelection[currScreen] < numSelectables2938)
+            currentSelection[currScreen]++;
+        else
+            currentSelection[currScreen] = 0;
+        hierSetSwitch(shell->m_menuItemSw[10][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        ((ShellSound *)((char *)shell + 0x2918))->stopSFXSliderSound();
+        break;
+    case 3:
+        switch (currentSelection[currScreen]) {
+        case 0:
+            if (GAME_DIFFICULTY > 0) {
+                GAME_DIFFICULTY--;
+                OPT_SHOW_DIFFICULTY();
+                ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(5);
+            } else {
+                hierSetSwitch(shell->m_difficultySw[2], 1);
+                hierSetSwitch(shell->m_difficultySw[0], 0);
+                ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(5);
+                GAME_DIFFICULTY = 2;
+            }
+            break;
+        case 1:
+        case 2:
+        case 8:
+        case 9:
+            break;
+        case 3:
+            shell->m_mono = shell->m_mono != 1;
+            hierSetSwitch(shell->m_stereoSw, shell->m_mono ^ 1);
+            hierSetSwitch(shell->m_monoSw, shell->m_mono);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(5);
+            break;
+        case 4:
+            inputSetInputMode(1);
+            shell->m_sfxVolume -= 0x33;
+            if (shell->m_sfxVolume < 0)
+                shell->m_sfxVolume = 0;
+            snd_SetMasterVolume(0, shell->m_sfxVolume);
+            setSlider(0, (float)shell->m_sfxVolume * (1.0f / 1024.0f));
+            inputSetInputMode(0);
+            break;
+        case 5:
+            inputSetInputMode(1);
+            shell->m_musicVolume -= 0x29;
+            if (shell->m_musicVolume < 0)
+                shell->m_musicVolume = 0;
+            snd_SetMasterVolume(1, shell->m_musicVolume);
+            setSlider(1, (float)shell->m_musicVolume / 830.0f);
+            inputSetInputMode(0);
+            break;
+        case 6:
+            OPT_TOGGLE_VIBRATION(0, 5);
+            break;
+        case 7:
+            OPT_TOGGLE_VIBRATION(1, 5);
+            break;
+        default:
+            printf("Options Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+            break;
+        }
+        break;
+    case 4:
+        switch (currentSelection[currScreen]) {
+        case 0:
+            if (GAME_DIFFICULTY < 2) {
+                GAME_DIFFICULTY++;
+                OPT_SHOW_DIFFICULTY();
+                ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(3);
+            } else {
+                hierSetSwitch(shell->m_difficultySw[0], 1);
+                hierSetSwitch(shell->m_difficultySw[2], 0);
+                ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(3);
+                GAME_DIFFICULTY = 0;
+            }
+            break;
+        case 1:
+        case 2:
+        case 8:
+        case 9:
+            break;
+        case 3:
+            shell->m_mono = shell->m_mono != 1;
+            hierSetSwitch(shell->m_stereoSw, shell->m_mono ^ 1);
+            hierSetSwitch(shell->m_monoSw, shell->m_mono);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(3);
+            break;
+        case 4:
+            inputSetInputMode(1);
+            shell->m_sfxVolume += 0x33;
+            if (shell->m_sfxVolume > 0x400)
+                shell->m_sfxVolume = 0x400;
+            snd_SetMasterVolume(0, shell->m_sfxVolume);
+            setSlider(0, (float)shell->m_sfxVolume * (1.0f / 1024.0f));
+            inputSetInputMode(0);
+            break;
+        case 5:
+            inputSetInputMode(1);
+            shell->m_musicVolume += 0x29;
+            if (shell->m_musicVolume > 0x33E)
+                shell->m_musicVolume = 0x33E;
+            snd_SetMasterVolume(1, shell->m_musicVolume);
+            setSlider(1, (float)shell->m_musicVolume / 830.0f);
+            inputSetInputMode(0);
+            break;
+        case 6:
+            OPT_TOGGLE_VIBRATION(0, 3);
+            break;
+        case 7:
+            OPT_TOGGLE_VIBRATION(1, 3);
+            break;
+        default:
+            printf("Options Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+            break;
+        }
+        break;
+    case 7:
+        switch (currentSelection[currScreen]) {
+        case 1:
+            OPT_CTLR_CFG(0);
+            break;
+        case 2:
+            OPT_CTLR_CFG(1);
+            break;
+        }
+        break;
+    case 6:
+        switch (currentSelection[currScreen]) {
+        case 0:
+        case 1:
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+            changeScreen(0xA, prevScreen, -1, 5, true);
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+            ((ShellSound *)((char *)shell + 0x2918))->stopSFXSliderSound();
+            break;
+        case 8:
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+            loadSettings();
+            OPT_SHOW_DIFFICULTY();
+            if (shell->m_mono == 1) {
+                hierSetSwitch(shell->m_stereoSw, 0);
+                hierSetSwitch(shell->m_monoSw, 1);
+            } else {
+                hierSetSwitch(shell->m_stereoSw, 1);
+                hierSetSwitch(shell->m_monoSw, 0);
+            }
+            setSlider(0, (float)shell->m_sfxVolume * (1.0f / 1024.0f));
+            snd_SetMasterVolume(0, shell->m_sfxVolume);
+            setSlider(1, (float)shell->m_musicVolume / 830.0f);
+            snd_SetMasterVolume(1, shell->m_musicVolume);
+            game->SetVibration(0, shell->m_vibration[0]);
+            game->SetVibration(1, shell->m_vibration[1]);
+            hierSetSwitch(shell->m_vibrationSw[0][0], GAME_VIBRATION(0));
+            hierSetSwitch(shell->m_vibrationSw[0][1], GAME_VIBRATION(0) ^ 1);
+            hierSetSwitch(shell->m_vibrationSw[1][0], GAME_VIBRATION(1));
+            hierSetSwitch(shell->m_vibrationSw[1][1], GAME_VIBRATION(1) ^ 1);
+            break;
+        case 9:
+            ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+            saveSettings();
+            if (*(int *)(mcPageMgrGlobal + 0x130) != 0) {
+                changeScreen(0xA, prevScreen, -1, 5, true);
+                ((ShellSound *)((char *)shell + 0x2918))->stopSFXSliderSound();
+            }
+            break;
+        default:
+            printf("Options Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+            break;
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->stopSFXSliderSound();
+        break;
+    case 5:
+        GAME_DIFFICULTY = savedDifficulty;
+        shell->m_sfxVolume = savedSfxVolume;
+        shell->m_musicVolume = savedMusicVolume;
+        shell->m_mono = savedMono != 0;
+        game->SetVibration(0, savedVibration0 != 0);
+        game->SetVibration(1, savedVibration1 != 0);
+        shell->m_vibration[1] = savedVibration1 != 0;
+        shell->m_vibration[0] = savedVibration0 != 0;
+        changeScreen(0xA, prevScreen, -1, 5, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(6);
+        ((ShellSound *)((char *)shell + 0x2918))->stopSFXSliderSound();
+        shell->m_sfxVolume = shell->m_sfxVolumeSaved;
+        shell->m_musicVolume = shell->m_musicVolumeSaved;
+        snd_SetMasterVolume(0, shell->m_sfxVolumeSaved);
+        snd_SetMasterVolume(1, shell->m_musicVolumeSaved);
+        break;
+    }
+    /* the second pad */
+    switch (screenGetInput(2) & 0xFFFF) {
+    case 3:
+        switch (currentSelection[currScreen]) {
+        case 7:
+            OPT_TOGGLE_VIBRATION(1, 3);
+            break;
+        }
+        break;
+    case 4:
+        switch (currentSelection[currScreen]) {
+        case 7:
+            OPT_TOGGLE_VIBRATION(1, 3);
+            break;
+        }
+        break;
+    case 7:
+        switch (currentSelection[currScreen]) {
+        case 2:
+            OPT_CTLR_CFG(1);
+            break;
+        }
+        break;
+    }
+}
+#undef GAME_DIFFICULTY
+#undef GAME_VIBRATION
+#undef OPT_SHOW_DIFFICULTY
+#undef OPT_TOGGLE_VIBRATION
+#undef OPT_CTLR_CFG
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenOptions__Fv);
+#endif
 #ifdef NON_MATCHING
 /* One-player free-for-all options: how many AIs (1..3) fight the player. */
 void screenFreeForAllOptions1P(void)
@@ -2001,12 +2308,6 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", screenMGSelect__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenBestOf__Fv);
 #ifdef NON_MATCHING
 extern int clearBeforeFontDMA;
-extern "C" void snd_SetMasterVolume(int which, int vol);
-class TheGame {
-public:
-    void SetVibration(int pad, bool on);
-};
-extern TheGame *game;
 void fontSetDefaultSize(int font);
 /* Runs frames until the boot-time memory card load is over, then applies the loaded options: mono flag, music and sfx volumes,
    vibration of both pads, default font sizes. The retail leaves the loop object uninitialised (startField reads its `started`). */
