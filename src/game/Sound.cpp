@@ -3851,7 +3851,45 @@ void RangedTriggerVolumeSound::updateTriggerVolumeSound(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateTriggerVolumeSound__24RangedTriggerVolumeSound);
 #endif
+/* Power-up pickup chime by type: positioned at pos, or full volume panned to the player's side. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 2/96 words, size 0x128 vs 0x180; the switch jump table must come from the retail rodata */
+void soundPlayPowerUpSound(int player, int type, int positional, _fvector *pos)
+{
+    int vol = 0x400;
+    int pan = 0;
+    if (!STREAMING_SOUND()->m_enabled)
+        return;
+    if (positional)
+        calcDualMonoMixVolPan(pos, 100, 1000, vol, pan, 0);
+    else
+        pan = calcCheapDualMonoMixPan(player);
+    switch (type) {
+    case -1:
+    case 4:
+    case 5:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x25, vol, pan, 0, 0);
+        break;
+    case 0:
+    case 6:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x24, vol, pan, 0, 0);
+        break;
+    case 1:
+    case 2:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x23, vol, pan, 0, 0);
+        break;
+    case 3:
+    case 7:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x26, vol, pan, 0, 0);
+        break;
+    case 8:
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x27, vol, pan, 0, 0);
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", soundPlayPowerUpSound__FiiiP8_fvector);
+#endif
 void playLowStaminaSound(int player)
 {
     int pan = calcCheapDualMonoMixPan(player);
@@ -4105,17 +4143,110 @@ void PlantBossHeadSound::terminateChompSound(void)
 }
 void RigidPickupSound::initRigidPickupSound(void)
 {
-    f4 = timerGetFieldCount();
-    f0 = timerGetFieldCount();
+    m_lastImpactTime = timerGetFieldCount();
+    m_lastHitTime = timerGetFieldCount();
     m_rollHandle = 0;
-    fC = 0;
+    m_type9Handle = 0;
 }
+/* Rolling loop for types 2 and 5 (only within 12 fields of an impact and faster than 50), and type 9's loop. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 1/125 words, size 0x1dc vs 0x1f4 */
+void RigidPickupSound::updateRigidPickupSound(_fvector *pos, float speed, int type)
+{
+    int vol = 0;
+    int pan = 0;
+    switch (type) {
+    case 2:
+    case 5:
+        if ((float)(timerGetFieldCount() - m_lastHitTime) < 12.0f && speed > 50.0f
+            && (calcDualMonoMixVolPan(pos, 500, 1250, vol, pan, 0), vol > 0)) {
+            if (m_rollHandle == 0) {
+                m_rollHandle = SOUND_PENDING;
+                snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 6, vol, pan, 0, 0, soundPlayCB, &m_rollHandle);
+            } else if (m_rollHandle != SOUND_PENDING && m_rollHandle != 0) {
+                snd_SetSoundParams_A(m_rollHandle, 5, vol, pan, 0, 0);
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_rollHandle);
+        }
+        break;
+    case 9:
+        calcDualMonoMixVolPan(pos, 500, 1250, vol, pan, 0);
+        if (vol > 0) {
+            if (m_type9Handle == 0) {
+                m_type9Handle = SOUND_PENDING;
+                snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 7, vol, pan, 0, 0, soundPlayCB, &m_type9Handle);
+            } else if (m_type9Handle != SOUND_PENDING && m_type9Handle != 0) {
+                snd_SetSoundParams_A(m_type9Handle, 5, vol, pan, 0, 0);
+            }
+        } else {
+            gLoopManager.terminateLoop(&m_type9Handle);
+        }
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateRigidPickupSound__16RigidPickupSoundP8_fvectorfi);
+#endif
 void RigidPickupSound::terminateRollyBallSound(void)
 {
     gLoopManager.terminateLoop(&m_rollHandle);
 }
+/* Impact by pickup type, at most every 18 fields and only above speed 70; quieter below speed 350. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 70/174 words, size 0x294 vs 0x2b8 */
+void RigidPickupSound::playRigidPickupSound(_fvector *pos, float speed, int type)
+{
+    int vol;
+    int pan;
+    m_lastHitTime = timerGetFieldCount();
+    if ((float)(timerGetFieldCount() - m_lastImpactTime) > 18.0f && speed > 70.0f) {
+        calcDualMonoMixVolPan(pos, 500, 1250, vol, pan, 0);
+        if (speed < 350.0f)
+            vol = (int)(vol * ((speed - 70.0f) / 280.0f));
+        switch (type) {
+        case 1:
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x3D, vol, pan, 0, 0);
+            break;
+        case 4:
+            if (speed > 240.0f) {
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0);
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xD, vol, pan, 0, 0);
+            } else {
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 8, vol, pan, 0, 0);
+            }
+            break;
+        case 2:
+        case 5:
+            if (m_rollHandle == 0) {
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0);
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xD, vol, pan, 0, 0);
+            }
+            break;
+        case 3:
+        case 9:
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x46, vol, pan, 0, 0);
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xD, vol, pan, 0, 0);
+            break;
+        case 6:
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 4, vol, pan, 0, 0);
+            break;
+        case 7:
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 7, vol, pan, 0, 0);
+            break;
+        case 8:
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0x1A, vol, pan, 0, 0);
+            break;
+        default:
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0xD, vol, pan, 0, 0);
+            break;
+        }
+        m_lastImpactTime = timerGetFieldCount();
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playRigidPickupSound__16RigidPickupSoundP8_fvectorfi);
+#endif
 #ifdef NON_MATCHING
 /* equivalent (untuned): 73/88 words, size 0x160 vs 0x160 */
 void WindSound::initWindSound(int a, int b, float periodA0, float periodA1, float periodB0, float periodB1, int bendA0,

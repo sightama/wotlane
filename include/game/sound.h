@@ -804,10 +804,10 @@ public:
 /* A rigid pickup (rolling ball and the like): impact one-shots and the rolling loop. */
 class RigidPickupSound {
 public:
-    int f0;                     // 0x0: field count
-    int f4;                     // 0x4: field count
+    int m_lastHitTime;          // 0x0: field count of the last playRigidPickupSound call
+    int m_lastImpactTime;       // 0x4: field count of the last impact sound
     unsigned m_rollHandle;      // 0x8
-    int fC;                     // 0xC
+    unsigned m_type9Handle;     // 0xC: loop of type 9
     void initRigidPickupSound(void);
     void updateRigidPickupSound(_fvector *pos, float speed, int a);
     void terminateRollyBallSound(void);
