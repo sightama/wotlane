@@ -34,6 +34,15 @@ public:
     static Info s_info[];
 
     static void *getClosestThrownPickup(_fvector &p, float r);
+    static void *getClosestPickup(_fvector &a, _fvector &b);
+    static void throwRBPickup(PickupIter it, _fvector &dir, DbInteractive *target);
+    static void turnOff2Handeds(void);
+    static void turnOffAllVehicles(void);
+    static void turnOnMilitary(void);
+    static void initMilitaryForVegas(void);
+    static void createPickupHighlight(struct _hierhead *ep);
+    static void startCinema(void);
+    static void endCinema(void);
     static void update(void);
     static void computeHighlight(Monster &m);
     static void initAfterDbLoad(void);
