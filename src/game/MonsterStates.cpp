@@ -277,7 +277,7 @@ int StateBlock::transitionOK(void)
 {
     Monster *m = owner;
 
-    if (m->m_anims[0x3C].a == 0 || m->m_attacksEnabled == 0 || m->m_freeFalling != 0)
+    if (m->m_anims[0x3C].ci == 0 || m->m_attacksEnabled == 0 || m->m_freeFalling != 0)
         return 0;
     return m->m_padFlags[0]->block != 0;
 }
@@ -316,18 +316,18 @@ int StateBlock::chooseBlock(void)
         Pickup *p = *(Pickup **)m->m_pickup;
 
         if ((p->bits >> 1) & 1) {
-            if (m->m_anims[0x3E].a != 0)
+            if (m->m_anims[0x3E].ci != 0)
                 pose = 0x3E;
         } else if (p->pickupType == 0x10) {
-            if (m->m_anims[0x3F].a != 0)
+            if (m->m_anims[0x3F].ci != 0)
                 pose = 0x3F;
-        } else if (m->m_anims[0x3D].a != 0) {
+        } else if (m->m_anims[0x3D].ci != 0) {
             pose = 0x3D;
         }
         m->m_damageModifier = damageScaleArmed;
     } else if (m->m_target != 0) {
         m->m_damageModifier = damageScaleArmed;
-        if (m->m_anims[0x3E].a != 0)
+        if (m->m_anims[0x3E].ci != 0)
             pose = 0x3E;
     } else {
         m->m_damageModifier = damageScale;
@@ -433,7 +433,7 @@ int StateCounter::transitionFeasible(void)
 {
     Monster *m = owner;
 
-    if (m->m_target != 0 || m->m_anims[0x40].a == 0)
+    if (m->m_target != 0 || m->m_anims[0x40].ci == 0)
         return 0;
     if (m->m_pickup == 0)
         return 1;
@@ -511,7 +511,7 @@ void StateCounter::handlePreemption(MonsterState *next)
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __14StateCountered);
 int StateCountered::transitionOK(void)
 {
-    return owner->m_anims[0x4C].a != 0;
+    return owner->m_anims[0x4C].ci != 0;
 }
 void StateCountered::transitionInto(void)
 {
@@ -566,7 +566,7 @@ int StateJavelin::transitionOK(void)
 
     if (m->m_attacksEnabled == 0)
         return 0;
-    if (m->m_anims[0x36].a == 0 || m->m_padFlags[0]->action == 0)
+    if (m->m_anims[0x36].ci == 0 || m->m_padFlags[0]->action == 0)
         return 0;
     if (owner->m_padFlags[1]->action != 0)
         return 0;
@@ -650,7 +650,7 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __10StateTaunt);
 /* A taunt starts when one was requested (m_wantsTaunt) and the monster has the taunt animation; plays the taunt sound. */
 int StateTaunt::transitionOK(void)
 {
-    if (owner->m_anims[0x5C].a == 0 || owner->m_wantsTaunt != 1)
+    if (owner->m_anims[0x5C].ci == 0 || owner->m_wantsTaunt != 1)
         return 0;
     ((MonsterSound *)((char *)owner + 0x1A7C))->playTauntSound();
     owner->m_wantsTaunt = 0;
@@ -709,7 +709,7 @@ int StateThrow::transitionOK(void)
     Monster *m = owner;
     int cant;
 
-    if (m->m_anims[0x34].a == 0)
+    if (m->m_anims[0x34].ci == 0)
         return 0;
     cant = 0;
     if (m->m_pickup == 0) {
@@ -736,7 +736,7 @@ INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__10StateThrow);
 void StateThrow::transitionInto(void)
 {
     frames = 0;
-    if (owner->m_anims[0x32].a != 0)
+    if (owner->m_anims[0x32].ci != 0)
         THROW_BLEND(this)->rampOut(rampOutTime);
     animationSetTotalRunFrames(owner->m_anims[0x34], runFrames);
     animationTransitionInto(owner->m_anims[0x34], blendTime, 1, 7);
@@ -798,7 +798,7 @@ int StateShocked::transitionOK(void)
 {
     Monster *m = owner;
 
-    if (m->m_anims[0x4A].a == 0)
+    if (m->m_anims[0x4A].ci == 0)
         return 0;
     if (m->m_state[0] == STATE_ID_SHOCKED)
         return 0;
@@ -914,7 +914,7 @@ int StateVictory::transitionOK(void)
     }
     if (m->m_freeFalling != 0)
         return 0;
-    return m->m_anims[0x5C].a != 0;
+    return m->m_anims[0x5C].ci != 0;
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", transitionOK__12StateVictory);
@@ -928,7 +928,7 @@ void StateVictory::transitionInto(void)
 
     frames = 0;
     anim = mathfRand(0, 2) + 0x82;
-    if (owner->m_anims[anim].a == 0)
+    if (owner->m_anims[anim].ci == 0)
         anim = 0x5C;
     animationTransitionInto(owner->m_anims[anim], 100.0f, 1, 1);
     drop = 0;
@@ -993,7 +993,7 @@ int StateVictory::fade(void)
 INCLUDE_ASM("asm/nonmatchings/game/MonsterStates", __15StateBigTakeHit);
 int StateBigTakeHit::transitionOK(void)
 {
-    return owner->m_anims[0x4B].a != 0;
+    return owner->m_anims[0x4B].ci != 0;
 }
 /* Retail quirk: the transition is started on a copy of the handle, not on the monster's own one. */
 void StateBigTakeHit::transitionInto(void)
