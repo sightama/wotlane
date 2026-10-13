@@ -92,7 +92,6 @@ void fileAddResFile(char *addr, int size);
 void fileAddTexFile(char *addr, int size);
 void fileOnlyResFile(char *dest, int size);
 void fileOnlyTexFile(char *dest, int size);
-struct QwData;
 void texmResInit(_vramAddrs v, QwData *q);
 void texmInit(_vramAddrs v);
 extern int UseCommandLineLevel;
@@ -156,6 +155,8 @@ public:
 class resetcom {
 public:
     void setFileName(char *name, bool b);
+    void init(void);
+    void forceRead(void);
 };
 class BigShotLevel {
 public:
@@ -1683,7 +1684,54 @@ INCLUDE_ASM("asm/nonmatchings/game/Shell", GenesisMovie__5Shell);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Shell", FadeScreen__5ShellibUcUcUcUcUcUc);
 INCLUDE_ASM("asm/nonmatchings/game/Shell", FadeScreen__5ShellibRUiT3UcUcUcUcUcUc);
+#ifdef NON_MATCHING
+enum CREATOR_KEY { CREATOR_KEY_0, CREATOR_KEY_1, CREATOR_KEY_2 };
+class reset : public resetcom {
+public:
+    char pad[0xC0C0];
+
+    reset(CREATOR_KEY key);
+};
+struct _cs;
+_cs *viewGetViewCs(int view);
+void uiInitScreens(_cs *cs);
+void timerSetFrameStart(void);
+void screenMemoryCardInit(void);
+/* 94/96 palavras; só as strings, que no retail ficam no .rodata do próprio asm da função */
+/* Boot screen shown while the memory card is read: loads the small "preshell" database (ngp at 0xA00000, its resources and
+   textures), sets up the font, reads the shell's tweak file and the menu screens, then runs screenMemoryCardInit until the
+   card's options are in. */
+void Shell::InitialMemCardScreen(void)
+{
+    int size;
+
+    shell->BootInitUserint();
+    shell->InitBeforeUserintDbLoad();
+    fileOnlyNgpFile((char *)0xA00000, zipInflateAll("shell/preshell.ngp", (void *)0xA00000));
+    fileAddName("preshell");
+    size = zipInflateAll("shell/preshell.rtx", getNextNgpLoadAddr());
+    fileOnlyResFile(getNextNgpLoadAddr(), size);
+    texmResInit(getVramAddr(), (QwData *)getNextNgpLoadAddr());
+    size = zipInflateAll("shell/preshell.tex", getNextNgpLoadAddr());
+    fileOnlyTexFile(getNextNgpLoadAddr(), size);
+    texmInit(getVramAddr());
+    fontInit(getVramAddr(), 1);
+    dbsRelocateFileZero(shell->getVramAddr(), false);
+    dbInitDb((_dbheader *)0xA00000, shell->getVramAddr());
+    {
+        reset r(CREATOR_KEY_2);
+
+        r.setFileName(D_006F81B0, false);
+        r.init();
+        r.forceRead();
+    }
+    uiInitScreens(viewGetViewCs(0));
+    timerSetFrameStart();
+    screenMemoryCardInit();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", InitialMemCardScreen__5Shell);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Shell", __3Hud);
 INCLUDE_ASM("asm/nonmatchings/game/Shell", __7TheGame);
 INCLUDE_ASM("asm/nonmatchings/game/Shell", __static_initialization_and_destruction_0_001AC240);

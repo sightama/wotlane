@@ -74,7 +74,41 @@ int userintTimeToReturnToShell(void)
 INCLUDE_ASM("asm/nonmatchings/game/ui", userintTimeToReturnToShell__Fv);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/ui", uiFadeScreen__FUi);
+#ifdef NON_MATCHING
+void hierSetCsDrawMe(_cs *cs, unsigned char on);
+/* 71/146 palavras; alocação dos índices dos laços */
+/* Binds the menu animations of the shell (screen transitions 1..11, the two select reels and their ten positions each) and pauses
+   them, clears the monster flags and makes the six starting monsters selectable. `cs` is not used. */
+void uiInitScreens(_cs *cs)
+{
+    int i, r;
+
+    for (i = 1; i < 12; i++) {
+        animationGetHandle(&shell->m_screenAnim[i], 0x270E, 0, i);
+        animationPause(shell->m_screenAnim[i]);
+    }
+    for (r = 0; r < 2; r++) {
+        animationGetHandle(&shell->m_reelSpinAnim[r], 0x2585 + r, 0, 0);
+        animationPause(shell->m_reelSpinAnim[r]);
+        for (i = 0; i < 10; i++) {
+            animationGetHandle(&shell->m_reelAnim[r][i], 0x259E + r * 10 + i, 0, 0);
+            animationPause(shell->m_reelAnim[r][i]);
+        }
+    }
+    shell->m_monsterFlags[0] = 0;
+    shell->m_monsterFlags[2] = 0;
+    shell->m_monsterFlags[1] = 0;
+    shell->EnableMonsterSelection(0xA0);
+    shell->EnableMonsterSelection(0x40);
+    shell->EnableMonsterSelection(0x60);
+    shell->EnableMonsterSelection(0x140);
+    shell->EnableMonsterSelection(0x20);
+    shell->EnableMonsterSelection(0x120);
+    hierSetCsDrawMe(shell->m_cs5C, 1);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/ui", uiInitScreens__FP3_cs);
+#endif
 #ifdef NON_MATCHING
 /* 7/36 words: branch layout */
 void uiIntro(void)

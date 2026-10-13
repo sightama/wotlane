@@ -1,4 +1,5 @@
 #include "common.h"
+#include "engine.h"
 #include "game/shell.h"
 #include "game/monster_select.h"
 extern int numModsLeft;
@@ -58,6 +59,12 @@ public:
     void playShellSFXSound(int id);
 };
 extern int prevScreen;
+#ifdef NON_MATCHING
+extern int lastScreen;
+extern int oldScreens[16];
+extern int currAnimationIndex;
+__asm__("#SNFIX_SMALL currAnimationIndex");
+#endif
 int levelUnlocked(int level);
 int screenGetInput(int padMask);
 extern int screenFirstPass;
@@ -108,10 +115,8 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", setReelSwitches__FiiP13_SaveGameData
 /* Queues the animation of reel `reel`: `from` is stopped, `to` started. Each reel owns 0xA0 bytes of animation handles in the shell. */
 void changeReel(int reel, int from, int to)
 {
-    char *base = (char *)shell + reel * 0xA0 + 0x2644;
-
-    animq->Push((_animHandle *)(base + from * 0x10), 0, 0, 0);
-    animq->Push((_animHandle *)(base + to * 0x10), 1, 1, 1);
+    animq->Push(&shell->m_reelAnim[reel][from], 0, 0, 0);
+    animq->Push(&shell->m_reelAnim[reel][to], 1, 1, 1);
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeReel__Fiii);
@@ -122,7 +127,48 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches3P__Fiiiiii);
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitches4P__Fiiiiiiii);
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesMG__Fiiii);
 INCLUDE_ASM("asm/nonmatchings/game/screen", updateSelectSwitchesAI__Fii);
+#ifdef NON_MATCHING
+/* Narrows the monster-select columns to the unlocked monsters: the first (monsterSelectMode[0]) and the last (monsterSelectMode[36],
+   the first slot of monster 9) can still be locked, in which case their column shows 4 and the range [m_selFirst, m_selLast) skips it.
+   The other columns are reset to 0. */
+extern int first2813 __asm__("first.2813");
+extern int last2814 __asm__("last.2814");
+__asm__("#SNFIX_SMALL first.2813");
+__asm__("#SNFIX_SMALL last.2814");
+#define first first2813
+#define last last2814
+/* 84/98 palavras; o retail relê first/last por gp entre os ramos */
+void initSelectSwitches(void)
+{
+    int i;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        first = 1;
+        last = 9;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        last = 9;
+        first = 0;
+        hierSetSwitch(shell->m_selectSw[0], 4);
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        first = 1;
+        last = 10;
+        hierSetSwitch(shell->m_selectSw[9], 4);
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        first = 0;
+        last = 10;
+    }
+    shell->m_selLast = last;
+    shell->m_selFirst = first;
+    for (i = first; i < last; i++)
+        hierSetSwitch(shell->m_selectSw[i], 0);
+}
+#undef first
+#undef last
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitches__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", initSelectSwitchesMG__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes1P__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE2F0);
@@ -245,7 +291,9 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE960);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE978);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE9D0);
+#ifndef NON_MATCHING /* the C++ screenTransition builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE9F0);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EEA48);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EEA58);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EEA88);
@@ -273,7 +321,9 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED30);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED40);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED50);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED68);
+#ifndef NON_MATCHING /* the C++ screenWriteInstructions builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EED80);
+#endif
 #ifndef NON_MATCHING /* the C++ showButtons builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEDD0);
 #endif
@@ -309,8 +359,7 @@ void setSlider(int which, float v)
         break;
     }
     default:
-        printf("Trying to set a slider on a bar that doesn't exist!!
-");
+        printf("Trying to set a slider on a bar that doesn't exist!!\n");
         break;
     }
 }
@@ -571,12 +620,348 @@ void screenMGSelect(void)
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMGSelect__Fv);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenBestOf__Fv);
+#ifdef NON_MATCHING
+class ShellRtLoop {
+public:
+    char pad0[0x24];
+
+    void startField(bool b);
+    void endField(bool skipDraw);
+};
+class MonsterMc {
+public:
+    int pad0;
+    int m_bootLoaded; /* 0x4: the boot-time memory card load finished */
+
+    void updateBootLoad(void);
+    static MonsterMc global;
+};
+extern int clearBeforeFontDMA;
+extern "C" void snd_SetMasterVolume(int which, int vol);
+class TheGame {
+public:
+    void SetVibration(int pad, bool on);
+};
+extern TheGame *game;
+void fontSetDefaultSize(int font);
+/* Runs frames until the boot-time memory card load is over, then applies the loaded options: mono flag, music and sfx volumes,
+   vibration of both pads, default font sizes. The retail leaves the loop object uninitialised (startField reads its `started`). */
+/* 20/67 palavras; alocação de registradores do laço */
+void screenMemoryCardInit(void)
+{
+    ShellRtLoop loop;
+    int done = 0;
+
+    clearBeforeFontDMA = 1;
+    do {
+        loop.startField(true);
+        MonsterMc::global.updateBootLoad();
+        if (MonsterMc::global.m_bootLoaded) {
+            done = 1;
+            clearBeforeFontDMA = 0;
+            *(int *)((char *)shell + 0x292C) = 1;
+            shell->m_mono = shell->m_mono != 0;
+            snd_SetMasterVolume(1, shell->m_musicVolume);
+            snd_SetMasterVolume(0, shell->m_sfxVolume);
+            game->SetVibration(0, shell->m_vibration[0]);
+            game->SetVibration(1, shell->m_vibration[1]);
+            fontSetDefaultSize(0);
+            fontSetDefaultSize(1);
+        }
+        loop.endField(true);
+    } while (!done);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMemoryCardInit__Fv);
+#endif
+#ifdef NON_MATCHING
+extern int stNeedUpdate __asm__("needUpdate.2972");
+extern int stWaitingForAnimation __asm__("waitingForAnimation.2977");
+extern int stWaitingForAlphaFade __asm__("waitingForAlphaFade.2978");
+extern int stFadingIn __asm__("fadingIn.2979");
+extern int stFadingOut __asm__("fadingOut.2980");
+extern int stHalfWayMark __asm__("halfWayMark.2981");
+extern int stAnimDir __asm__("D_006F8C88");        /* direction of the running transition animation */
+extern int stAnimFrames __asm__("D_006F8C8C");     /* its total run frames */
+extern int stAnimLastFrame __asm__("D_006F8C90");  /* its last frame */
+extern int stFadeInFrame __asm__("D_006F8C94");    /* frame past which the new screen fades in (20 frames from the end) */
+__asm__("#SNFIX_SMALL needUpdate.2972");
+__asm__("#SNFIX_SMALL waitingForAnimation.2977");
+__asm__("#SNFIX_SMALL waitingForAlphaFade.2978");
+__asm__("#SNFIX_SMALL fadingIn.2979");
+__asm__("#SNFIX_SMALL fadingOut.2980");
+__asm__("#SNFIX_SMALL halfWayMark.2981");
+__asm__("#SNFIX_SMALL D_006F8C88");
+__asm__("#SNFIX_SMALL D_006F8C8C");
+__asm__("#SNFIX_SMALL D_006F8C90");
+__asm__("#SNFIX_SMALL D_006F8C94");
+extern int g_fadeFrameOffset;
+extern int AINumLeft;
+extern int mSelectWins;
+__asm__("#SNFIX_SMALL g_fadeFrameOffset");
+__asm__("#SNFIX_SMALL AINumLeft");
+__asm__("#SNFIX_SMALL mSelectWins");
+void moviesReleaseScreenObject(void);
+int animationGetDirection(_animHandle h);
+float animationGetCurrentFrame(_animHandle h);
+float animationGetLastFrame(_animHandle h);
+float animationGetTotalRunFrames(_animHandle h);
+void killButtons(void);
+void showButtons(int screen);
+void setSlider(int which, float v);
+void screenWriteInstructions(int screen, float alpha);
+/* Sets every object of menu `screen` to `alpha`; on screen 17 while AIs are still being picked the objects of screen 3 are forced
+   opaque instead. */
+#define ST_SET_SCREEN_ALPHA(screen, alpha)                                       \
+    for (i = 0; i < 90; i++) {                                                   \
+        if (currScreen == 17 && AINumLeft) {                                     \
+            if (shell->m_menuObj[3][i])                                          \
+                *(float *)(shell->m_menuObj[3][i] + 0x4C) = 1.0f;                \
+        } else if (shell->m_menuObj[screen][i])                                  \
+            *(float *)(shell->m_menuObj[screen][i] + 0x4C) = (alpha);            \
+    }
+/* 15/648 palavras; não afinada (o retail desenrola os laços de alpha e testa AINumLeft fora deles) */
+/* Runs every frame while the menus move from lastScreen to currScreen (changeScreen started transition animation
+   currAnimationIndex). On the first pass it measures the animation and sets up the new screen (options switches and sliders,
+   background movie); halfway through the animation the old buttons go away; then the old screen fades out (alpha -0.05 per frame),
+   the new one is prepared (panel, highlighted item) and fades in once the animation is 20 frames from its end. When both the
+   animation and the fade are over, the transition ends (betweenScreens = 0). Screen 0x63 is a pseudo screen with no fade. */
+void screenTransition(bool b)
+{
+    float pct;
+    int i, ready;
+
+    if (screenFirstPass) {
+        if (currScreen == 20)
+            g_fadeFrameOffset = 0;
+        targetAlpha = 1.0f;
+        stNeedUpdate = 1;
+        stFadingOut = 1;
+        stFadingIn = 0;
+        stHalfWayMark = 0;
+        screenFirstPass = 0;
+        stAnimDir = animationGetDirection(shell->m_screenAnim[currAnimationIndex]);
+        stAnimFrames = (int)animationGetTotalRunFrames(shell->m_screenAnim[currAnimationIndex]);
+        stAnimLastFrame = (int)animationGetLastFrame(shell->m_screenAnim[currAnimationIndex]);
+        if (stAnimDir)
+            stFadeInFrame = stAnimLastFrame - 20;
+        else
+            stFadeInFrame = stAnimLastFrame + stAnimFrames + 20;
+        if (currScreen == 10) {
+            hierSetCsDrawMe(shell->m_sliderCs[0], 1);
+            hierSetCsDrawMe(shell->m_sliderCs[1], 1);
+            for (i = 0; i < 3; i++)
+                hierSetSwitch(shell->m_difficultySw[i], *(int *)((char *)game + 0x1203CC) == i);
+            hierSetSwitch(shell->m_stereoSw, shell->m_mono ^ 1);
+            hierSetSwitch(shell->m_monoSw, shell->m_mono);
+            hierSetSwitch(shell->m_vibrationSw[0][0], *(int *)((char *)game + 0x120498));
+            hierSetSwitch(shell->m_vibrationSw[0][1], *(int *)((char *)game + 0x120498) ^ 1);
+            hierSetSwitch(shell->m_vibrationSw[1][0], *(int *)((char *)game + 0x12049C));
+            hierSetSwitch(shell->m_vibrationSw[1][1], *(int *)((char *)game + 0x12049C) ^ 1);
+            setSlider(0, (float)shell->m_sfxVolume * (1.0f / 1024.0f));
+            setSlider(1, (float)shell->m_musicVolume / 830.0f);
+        } else if (currScreen == 0x63) {
+            stFadingOut = 0;
+            screenFirstPass = 1;
+            stFadingIn = 0;
+            betweenScreens = 0;
+            stHalfWayMark = 0;
+        }
+        if (currScreen > 0 && (currScreen < 3 || currScreen == 5)) {
+            moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+            myMovie.Play(false, MainMovie);
+            continueDecoding = 1;
+        }
+    }
+    if (currScreen == 8)
+        hierSetSwitch(*(_hierswitch **)((char *)shell + 0x5D0), **(int **)((char *)g_levelList + 8));
+    if (currScreen == 15) {
+        if (currentSelection[15] == 2) {
+            hierSetSwitch(shell->m_menuItemSw[15][5], mSelectWins);
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+        } else
+            hierSetSwitch(shell->m_menuItemSw[15][4], mSelectWins);
+    }
+    pct = animationGetCurrentPercent(shell->m_screenAnim[currAnimationIndex]);
+    if (stAnimDir ? pct > 0.6f : pct < 0.4f) {
+        stHalfWayMark = 1;
+        killButtons();
+        stNeedUpdate = 1;
+    }
+    if (stHalfWayMark) {
+        screenWriteInstructions(currScreen, 0.0f);
+        switch (currScreen) {
+        case 1:
+        case 3:
+        case 6:
+            moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+            myMovie.Play(false, MainMovie);
+            continueDecoding = 1;
+            break;
+        case 18:
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1C8), 0);
+            break;
+        case 19:
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D4), 0);
+            hierSetSwitch(*(_hierswitch **)((char *)shell + 0x1D8), 0);
+            break;
+        case 21:
+            moviesReleaseScreenObject();
+            break;
+        }
+    }
+    if (pct > 0.001f && pct < 0.999f)
+        stWaitingForAnimation = 1;
+    else
+        stWaitingForAnimation = 0;
+    if (stFadingOut) {
+        targetAlpha -= 0.05f;
+        stWaitingForAlphaFade = 1;
+        screenWriteInstructions(lastScreen, targetAlpha);
+        ST_SET_SCREEN_ALPHA(lastScreen, targetAlpha);
+        if (targetAlpha <= 0.0f) {
+            targetAlpha = 0.0f;
+            stFadingIn = 1;
+            stFadingOut = 0;
+            for (i = 0; i < 90; i++) {
+                if (currScreen == 17 && AINumLeft) {
+                    if (shell->m_menuObj[3][i])
+                        *(float *)(shell->m_menuObj[3][i] + 0x4C) = targetAlpha;
+                } else if (shell->m_menuObj[currScreen][i]) {
+                    *(float *)(shell->m_menuObj[currScreen][i] + 0x4C) = targetAlpha;
+                    screenWriteInstructions(currScreen, targetAlpha);
+                    killButtons();
+                }
+            }
+            hierSetSwitch(shell->m_screenSw, currScreen - 1);
+            if (lastScreen == 20 && currScreen == 1)
+                hierSetCsDrawMe(shell->m_menuCs, 1);
+            screenPrepareDefault(currScreen, currentSelection[currScreen]);
+        }
+        if (currScreen != 0x63) {
+            showButtons(lastScreen);
+            stNeedUpdate = 0;
+        }
+    } else if (stFadingIn) {
+        ready = 0;
+        if ((stAnimDir && stFadeInFrame < (int)animationGetCurrentFrame(shell->m_screenAnim[currAnimationIndex]))
+            || (!stAnimDir && (int)animationGetCurrentFrame(shell->m_screenAnim[currAnimationIndex]) < stFadeInFrame))
+            ready = 1;
+        if (ready) {
+            targetAlpha += 0.05f;
+            stWaitingForAlphaFade = 1;
+            if (currScreen != 20)
+                screenWriteInstructions(currScreen, targetAlpha);
+            ST_SET_SCREEN_ALPHA(currScreen, targetAlpha);
+            if (targetAlpha >= 1.0f) {
+                stFadingIn = 0;
+                stWaitingForAlphaFade = 0;
+            }
+        }
+        if (currScreen != 0x63) {
+            showButtons(currScreen);
+            stNeedUpdate = 0;
+        }
+    } else
+        stWaitingForAlphaFade = 0;
+    if (!stWaitingForAnimation && !stWaitingForAlphaFade) {
+        currAnimationIndex = 0;
+        screenFirstPass = 1;
+        betweenScreens = 0;
+    }
+}
+#undef ST_SET_SCREEN_ALPHA
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenTransition__Fb);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenUnlocker__Fv);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect4P__Fv);
+#ifdef NON_MATCHING
+/* Title screen ("press start"): on the first pass hides the menus, selects item 1 of every screen for the four pads, gives both
+   players a controller configuration, sets up the select columns and the default selections; then keeps the main movie playing
+   until pad 1 presses start (action 0x10), which moves on to screen 1. */
+/* 43/108 palavras; o retail desenrola diferente o laço das seleções */
+void screenWaitForStart(void)
+{
+    int p, s, i;
+
+    if (screenFirstPass) {
+        hierSetCsDrawMe(shell->m_menuCs, 0);
+        for (p = 0; p < 4; p++)
+            for (s = 21; s >= 0; s--)
+                currentSelection[p * 22 + s] = 1;
+        for (i = 0; i < 2; i++)
+            if (shell->m_ctlrCfg[i] == 0)
+                shell->m_ctlrCfg[i] = 1;
+        currentSelection[12] = 0;
+        currentSelection[13] = 0;
+        initSelectSwitches();
+        currentSelection[6] = shell->m_selFirst + 1;
+        currentSelection[22 + 6] = shell->m_selLast;
+        currentSelection[7] = shell->m_selFirst + 1;
+        currentSelection[22 + 7] = shell->m_selLast;
+        currentSelection[18] = shell->m_selFirst + 1;
+        currentSelection[22 + 18] = shell->m_selLast;
+        currentSelection[19] = shell->m_selFirst + 1;
+        currentSelection[22 + 19] = shell->m_selLast;
+        currentSelection[12] = 1;
+        currentSelection[10] = 0;
+        currentSelection[4] = 1;
+        currentSelection[11] = 0;
+        currentSelection[14] = 1;
+        screenFirstPass = 0;
+    }
+    myMovie.Play(false, MainMovie);
+    if ((screenGetInput(1) & 0xFFFF) == 0x10) {
+        changeScreen(0x14, 1, 1, 0, true);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenWaitForStart__Fv);
+#endif
+#ifdef NON_MATCHING
+extern char D_006EED08[];
+/* Leaves screen `from` for screen `to`. dir 1 goes forward (when `track`, `from` becomes prevScreen and the old prevScreen is pushed
+   on the 16-deep oldScreens stack), dir -1 goes back (pops prevScreen from the stack); anything else just prints a warning.
+   A nonzero `anim` plays transition animation `anim` of the shell, forward for dir 1, reversed otherwise. */
+/* 79/100 palavras; ordem dos testes de dir/track */
+void changeScreen(int from, int to, int dir, int anim, bool track)
+{
+    int i;
+
+    lastScreen = from;
+    if (dir == 1) {
+        if (track) {
+            for (i = 15; i > 0; i--)
+                oldScreens[i] = oldScreens[i - 1];
+            oldScreens[0] = prevScreen;
+            prevScreen = from;
+        }
+    } else if (dir == -1) {
+        if (track) {
+            prevScreen = oldScreens[0];
+            for (i = 0; i < 15; i++)
+                oldScreens[i] = oldScreens[i + 1];
+            oldScreens[15] = 0;
+        }
+    } else {
+        printf(D_006EED08);
+    }
+    if (anim) {
+        if (dir == 1)
+            animationStart(shell->m_screenAnim[anim], true);
+        else
+            animationStartReverse(shell->m_screenAnim[anim], true);
+        currAnimationIndex = anim;
+    }
+    currScreen = to;
+    screenFirstPass = 1;
+    betweenScreens = 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeScreen__Fiiiib);
+#endif
 #ifdef NON_MATCHING
 /* Polls the pads allowed by `padMask` (on_bit[pad]) and returns (pad << 16) | action, 0 when nothing is pressed or a screen change is running.
    The 16 pad masks are tried in the order of `map`, each giving its action code 1..0x10. */
@@ -607,8 +992,125 @@ int screenGetInput(int padMask)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGetInput__Fi);
 #endif
+#ifdef NON_MATCHING
+/* Shows the panel of menu `screen` and lights item `sel` among its items (the others off). Items are counted from 1, except on
+   screen 10, whose list starts at 0; the list ends at the first null switch or after 10. Returns the index of the last item. */
+/* 6/75 palavras; o retail relê shell a cada volta e mantém dois índices */
+int screenPrepareDefault(int screen, int sel)
+{
+    int i;
+
+    hierSetSwitch(shell->m_screenSw, screen - 1);
+    if (screen == 10) {
+        for (i = 0; i < 10 && shell->m_menuItemSw[10][i]; i++)
+            hierSetSwitch(shell->m_menuItemSw[10][i], i == sel);
+    } else {
+        for (i = 1; i < 10 && shell->m_menuItemSw[screen][i]; i++)
+            hierSetSwitch(shell->m_menuItemSw[screen][i], i == sel);
+    }
+    return i - 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenPrepareDefault__Fii);
+#endif
+#ifdef NON_MATCHING
+extern int wiLoop __asm__("loop.3044");
+extern int wiHigh __asm__("high.3045");
+extern int wiLow __asm__("low.3046");
+extern int wiAlpha __asm__("alpha.3047");
+extern int wiFadingIn __asm__("fadingIn.3048");
+__asm__("#SNFIX_SMALL loop.3044");
+__asm__("#SNFIX_SMALL high.3045");
+__asm__("#SNFIX_SMALL low.3046");
+__asm__("#SNFIX_SMALL alpha.3047");
+__asm__("#SNFIX_SMALL fadingIn.3048");
+extern int PlayerConfig;
+extern int UnlockTitle;
+__asm__("#SNFIX_SMALL PlayerConfig");
+__asm__("#SNFIX_SMALL UnlockTitle");
+extern char *screenTitles[];
+extern char *screenInstructions[];
+extern char D_006EED30[]; /* "PLAYER 1 SELECT" */
+extern char D_006EED40[]; /* "PLAYER 2 SELECT" */
+extern char D_006EED50[]; /* "   LOAD       CANCEL" */
+extern char D_006EED68[]; /* "   SAVE       CANCEL" */
+extern char D_006EEA98[]; /* "MONSTER UNLOCKS" */
+extern char D_006EEAA8[]; /* "LEVEL UNLOCKS" */
+extern char D_006EEAD8[]; /* "MINIGAME UNLOCKS" */
+void fontSetColor(int font, int r, int g, int b, int a);
+void fontSetSize(int font, int size);
+void fontSetSpacing(int font, int spacing);
+void fontSpritePrintCenteredXY(int font, int x, int y, char *str);
+/* 14/167 palavras; o retail repete a impressão do charSelectStringOne em dois casos */
+/* Draws the title (y 10) and the instruction line (y 205) of menu `screen` with the fade `alpha` (0..1, font alpha 0..128).
+   The title screen (20) instead pulses the text between low and high; screen 16 draws nothing but the character-select prompt.
+   Screen 4 names the player configuring the pad, 21 the kind of unlock, and 10 (load/save) picks its own instruction line. */
+void screenWriteInstructions(int screen, float alpha)
+{
+    if (screen >= 22)
+        screen = 0;
+    if (screen != 16) {
+        if (screen == 20) {
+            if (wiFadingIn == 1) {
+                if (wiLoop < wiHigh)
+                    wiLoop++;
+                else
+                    wiFadingIn = 0;
+            } else {
+                if (wiLow < wiLoop)
+                    wiLoop--;
+                else
+                    wiFadingIn = 1;
+            }
+            fontSetColor(0, 0x1E, 0x1E, 0x1E, wiLoop);
+        } else {
+            wiAlpha = (int)(alpha * 128.0f);
+            fontSetColor(0, 0x1E, 0x1E, 0x1E, wiAlpha);
+        }
+        fontSetSize(0, 0xF);
+        fontSetSpacing(0, 2);
+        if (screen == 4)
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, PlayerConfig ? D_006EED40 : D_006EED30);
+        else if (screen == 21) {
+            char *title;
+
+            if (UnlockTitle == 10)
+                title = D_006EEAA8;
+            else if (UnlockTitle == 11)
+                title = D_006EEAD8;
+            else
+                title = D_006EEA98;
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, title);
+        } else
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, screenTitles[screen]);
+        fontSetSize(0, 0xF);
+        fontSetSpacing(0, 1);
+        if (screen != 10)
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, screenInstructions[screen]);
+        else if (currentSelection[10] == 8)
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, D_006EED50);
+        else if (currentSelection[10] == 9)
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, D_006EED68);
+        else
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, screenInstructions[10]);
+    }
+    switch (screen) {
+    case 3:
+    case 6:
+    case 7:
+    case 8:
+    case 14:
+    case 17:
+    case 18:
+    case 19:
+        if (charSelectStringOne)
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, charSelectStringOne);
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenWriteInstructions__Fif);
+#endif
 #ifdef NON_MATCHING
 float screenGetFontAlpha(void)
 {
