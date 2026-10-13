@@ -315,7 +315,9 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED30);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED40);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED50);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EED68);
+#ifndef NON_MATCHING /* the C++ screenWriteInstructions builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EED80);
+#endif
 #ifndef NON_MATCHING /* the C++ showButtons builds its own table */
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EEDD0);
 #endif
@@ -813,7 +815,104 @@ int screenPrepareDefault(int screen, int sel)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenPrepareDefault__Fii);
 #endif
+#ifdef NON_MATCHING
+extern int wiLoop __asm__("loop.3044");
+extern int wiHigh __asm__("high.3045");
+extern int wiLow __asm__("low.3046");
+extern int wiAlpha __asm__("alpha.3047");
+extern int wiFadingIn __asm__("fadingIn.3048");
+__asm__("#SNFIX_SMALL loop.3044");
+__asm__("#SNFIX_SMALL high.3045");
+__asm__("#SNFIX_SMALL low.3046");
+__asm__("#SNFIX_SMALL alpha.3047");
+__asm__("#SNFIX_SMALL fadingIn.3048");
+extern int PlayerConfig;
+extern int UnlockTitle;
+__asm__("#SNFIX_SMALL PlayerConfig");
+__asm__("#SNFIX_SMALL UnlockTitle");
+extern char *screenTitles[];
+extern char *screenInstructions[];
+extern char D_006EED30[]; /* "PLAYER 1 SELECT" */
+extern char D_006EED40[]; /* "PLAYER 2 SELECT" */
+extern char D_006EED50[]; /* "   LOAD       CANCEL" */
+extern char D_006EED68[]; /* "   SAVE       CANCEL" */
+extern char D_006EEA98[]; /* "MONSTER UNLOCKS" */
+extern char D_006EEAA8[]; /* "LEVEL UNLOCKS" */
+extern char D_006EEAD8[]; /* "MINIGAME UNLOCKS" */
+void fontSetColor(int font, int r, int g, int b, int a);
+void fontSetSize(int font, int size);
+void fontSetSpacing(int font, int spacing);
+void fontSpritePrintCenteredXY(int font, int x, int y, char *str);
+/* 14/167 palavras; o retail repete a impressão do charSelectStringOne em dois casos */
+/* Draws the title (y 10) and the instruction line (y 205) of menu `screen` with the fade `alpha` (0..1, font alpha 0..128).
+   The title screen (20) instead pulses the text between low and high; screen 16 draws nothing but the character-select prompt.
+   Screen 4 names the player configuring the pad, 21 the kind of unlock, and 10 (load/save) picks its own instruction line. */
+void screenWriteInstructions(int screen, float alpha)
+{
+    if (screen >= 22)
+        screen = 0;
+    if (screen != 16) {
+        if (screen == 20) {
+            if (wiFadingIn == 1) {
+                if (wiLoop < wiHigh)
+                    wiLoop++;
+                else
+                    wiFadingIn = 0;
+            } else {
+                if (wiLow < wiLoop)
+                    wiLoop--;
+                else
+                    wiFadingIn = 1;
+            }
+            fontSetColor(0, 0x1E, 0x1E, 0x1E, wiLoop);
+        } else {
+            wiAlpha = (int)(alpha * 128.0f);
+            fontSetColor(0, 0x1E, 0x1E, 0x1E, wiAlpha);
+        }
+        fontSetSize(0, 0xF);
+        fontSetSpacing(0, 2);
+        if (screen == 4)
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, PlayerConfig ? D_006EED40 : D_006EED30);
+        else if (screen == 21) {
+            char *title;
+
+            if (UnlockTitle == 10)
+                title = D_006EEAA8;
+            else if (UnlockTitle == 11)
+                title = D_006EEAD8;
+            else
+                title = D_006EEA98;
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, title);
+        } else
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, screenTitles[screen]);
+        fontSetSize(0, 0xF);
+        fontSetSpacing(0, 1);
+        if (screen != 10)
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, screenInstructions[screen]);
+        else if (currentSelection[10] == 8)
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, D_006EED50);
+        else if (currentSelection[10] == 9)
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, D_006EED68);
+        else
+            fontSpritePrintCenteredXY(0, 0x140, 0xCD, screenInstructions[10]);
+    }
+    switch (screen) {
+    case 3:
+    case 6:
+    case 7:
+    case 8:
+    case 14:
+    case 17:
+    case 18:
+    case 19:
+        if (charSelectStringOne)
+            fontSpritePrintCenteredXY(0, 0x140, 0xA, charSelectStringOne);
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenWriteInstructions__Fif);
+#endif
 #ifdef NON_MATCHING
 float screenGetFontAlpha(void)
 {
