@@ -577,7 +577,7 @@ int StateImpaled::transitionOK(void)
 {
     Monster *m = owner;
 
-    if (m->m_anims[0x8E].a == 0 || m->m_anims[0x8F].a == 0 || m->m_anims[0x90].a == 0)
+    if (m->m_anims[0x8E].ci == 0 || m->m_anims[0x8F].ci == 0 || m->m_anims[0x90].ci == 0)
         return 0;
     return 1;
 }
