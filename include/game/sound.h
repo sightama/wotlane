@@ -731,6 +731,110 @@ public:
 };
 typedef char _size_MonsterSound[sizeof(MonsterSound) == 0x274 ? 1 : -1];
 
+/* The sucker bug (type 0xA0's projectile): one loop in state 3 and another in state 4. */
+class SuckerBugSound {
+public:
+    unsigned m_handle;          // 0x0: state 3
+    unsigned m_handle2;         // 0x4: state 4
+    void initSuckerBugSound(void);
+    void terminateSuckerBugSound(void);
+    void updateSuckerBugSound(_fvector *pos, int state);
+};
+
+void soundPlayPowerUpSound(int a, int b, int c, _fvector *pos);
+void playLowStaminaSound(int player);
+
+/* Plant boss pieces: the roots' loop, the heads' one-shots and chomp loop, and the body's hide/emerge sounds. */
+class PlantBossRootSound {
+public:
+    unsigned m_handle;          // 0x0
+    void initPlantBossRootSound(void);
+    void updatePlantBossRootSound(_fvector *pos);
+    void terminatePlantBossRootSound(void);
+};
+
+class PlantBossHeadSound {
+public:
+    unsigned m_chompHandle;     // 0x0
+    void playPlantBossDeathSound(_fvector *pos);
+    void playPlantBossChompSound(_fvector *pos);
+    void playPlantBossHeadDeadSound(_fvector *pos);
+    void playPlantBossMissChompSound(_fvector *pos);
+    void playPlantBossGrowlSound(_fvector *pos);
+    void playPlantBossHissSound(_fvector *pos);
+    void playPlantBossSpitSound(_fvector *pos);
+    void playPlantBossSporeLaunchSound(_fvector *pos);
+    void updateChompSound(_fvector *pos);
+    void terminateChompSound(void);
+};
+
+/* The sounds play at the object itself: its first words are taken as the position (the three words cleared by init). */
+class PlantBossSound {
+public:
+    int f0;                     // 0x0
+    int f4;                     // 0x4
+    int f8;                     // 0x8
+    void initPlantBossSound(void);
+    void updatePlantBossSound(void);
+    void playPlantBossHideSound(void);
+    void playPlantBossEmergeSound(void);
+    void playPlantBossCabbageSmack(void);
+};
+
+class FinalBoss;
+extern int mTimeOfLastFinalBossStep;
+/* Final boss: footfalls of legs 2-5, the mech laser loop, shield and power-down one-shots. */
+class FinalBossSound {
+public:
+    int f0;                     // 0x0
+    unsigned m_laserHandle;     // 0x4
+    unsigned m_hitHandle;       // 0x8
+    FinalBoss *m_boss;          // 0xC
+    void initFinalBossSound(FinalBoss *boss);
+    void updateFinalBossSound(_fvector *pos, int a, _animHandle *anim);
+    void playGetReadyToFireSound(_fvector *pos);
+    void playShieldPowerUpSound(_fvector *pos);
+    void playShieldPowerDownSound(_fvector *pos);
+    void playMechaPowerDownSound(_fvector *pos);
+    void playTakeHitSound(_fvector *pos);
+    void updateMechLaser(_fvector *pos);
+    void terminateMechLaser(void);
+};
+
+/* A rigid pickup (rolling ball and the like): impact one-shots and the rolling loop. */
+class RigidPickupSound {
+public:
+    int f0;                     // 0x0: field count
+    int f4;                     // 0x4: field count
+    unsigned m_rollHandle;      // 0x8
+    int fC;                     // 0xC
+    void initRigidPickupSound(void);
+    void updateRigidPickupSound(_fvector *pos, float speed, int a);
+    void terminateRollyBallSound(void);
+    void playRigidPickupSound(_fvector *pos, float speed, int a);
+};
+
+/* A wind loop with volume and pitch ramps (lava inhale, mantis glide). */
+class WindSound {
+public:
+    unsigned m_handle;          // 0x0
+    void initWindSound(int a, int b, float c, float d, float e, float f, int g, int h, int i, int j, int k, int l, int m,
+                       int n);
+    void terminateWindSound(void);
+    void updateWindSound(void);
+};
+class LavaInhale : public WindSound {
+public:
+    void rampWindVolumeAndPitchUp(int a, float b, int c);
+    void updateWindSound(void);
+};
+class MantisGlide : public WindSound {
+public:
+    void updateWindSound(void);
+    void rampWindVolumeDown(void);
+    void rampWindVolumeUp(void);
+};
+
 /* A projectile in flight: the flight loop of the weapon types that have one (with the doppler pitch in one-player games),
    plus the launch and explosion one-shots by weapon type. */
 class Weapon;
