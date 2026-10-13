@@ -23,6 +23,15 @@ public:
     char padE0[0x1A8 - 0xE0];
     float m_maxSpeed;           /* 0x1A8 */
 };
+class Weapon {
+public:
+    char pad0[0x40];
+    int m_active;               /* 0x40 */
+    char pad44[0x4C - 0x44];
+    int m_type;                 /* 0x4C: Weapon::WeaponType */
+    char pad50[0x150 - 0x50];
+    _cs *m_cs;                  /* 0x150 */
+};
 
 SoundManager::SoundManager()
 {
@@ -1716,12 +1725,224 @@ void PlaneSound::updatePlaneSound(_fvector *pos, int state, float t)
         snd_SoundIsStillPlaying_CB(m_handle8, soundPlayCB, &m_handle8);
     }
 }
-INCLUDE_ASM("asm/nonmatchings/game/Sound", initWeaponSound__11WeaponSound);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", terminateWeaponSound__11WeaponSound);
+void WeaponSound::initWeaponSound(void)
+{
+    m_handle = 0;
+}
+void WeaponSound::terminateWeaponSound(void)
+{
+    gLoopManager.terminateLoop(&m_handle);
+}
+#ifdef NON_MATCHING
+/* equivalent (untuned): 48/192 words, size 0x2e8 vs 0x300; the switch jump table must come from the retail rodata */
+void WeaponSound::updateWeaponSound(Weapon *w)
+{
+    int vol = 0;
+    int pan = 0;
+    int pitch = 0;
+    if (!w->m_active) {
+        gLoopManager.terminateLoop(&m_handle);
+        return;
+    }
+    int type = w->m_type;
+    if (type == 26 || type == 27 || type == 33 || type == 35)
+        calcDualMonoMixVolPan(&w->m_cs->trans, 170, 700, vol, pan, 0);
+    else if (type == 40 || type == 41)
+        calcDualMonoMixVolPan(&w->m_cs->trans, 450, 1500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(&w->m_cs->trans, 350, 1000, vol, pan, 0);
+    if (vol == 0) {
+        gLoopManager.terminateLoop(&m_handle);
+        return;
+    }
+    if (shell->m_numPlayers == 1) {
+        int speed;
+        findApproachingSpeed(&w->m_cs->trans, &speed, &m_prevDist);
+        if (m_handle == 0)
+            speed = 0;
+        pitch = snd_GetDopplerPitchMod(speed);
+    }
+    switch (w->m_type) {
+    case 5:
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[8], 8, vol, pan, 0, 0, soundPlayCB, this);
+        }
+        break;
+    case 1:
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[1], 0x11, vol, pan, 0, 0, soundPlayCB, this);
+        }
+        break;
+    case 13:
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[1], 7, vol, pan, 0, 0, soundPlayCB, this);
+        }
+        break;
+    case 26:
+    case 27:
+    case 33:
+    case 35:
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_AMBIENT], 0x1E, vol, pan, 0, 0, soundPlayCB, this);
+        }
+        pitch = (int)(pitch * 0.6f);
+        break;
+    case 39:
+    case 40:
+    case 41:
+        if (m_handle == 0) {
+            m_handle = SOUND_PENDING;
+            snd_PlaySoundVolPanPMPB_CB(gSoundBanks[BANK_LEVEL], 2, vol, pan, 0, 0, soundPlayCB, this);
+        }
+        break;
+    }
+    if (m_handle != SOUND_PENDING && m_handle != 0)
+        snd_SetSoundParams_A(m_handle, 0xD, vol, pan, pitch, 0);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateWeaponSound__11WeaponSoundP6Weapon);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 117/183 words, size 0x2dc vs 0x2dc; the switch jump table must come from the retail rodata */
+void WeaponSound::playWeaponLaunchSound(_fvector *pos, int type)
+{
+    int vol = 0;
+    int pan = 0;
+    if (type == 26 || type == 27 || type == 33 || type == 35)
+        calcDualMonoMixVolPan(pos, 225, 800, vol, pan, 0);
+    else if (type == 30 || type == 31)
+        calcDualMonoMixVolPan(pos, 150, 700, vol, pan, 0);
+    else if (type == 10 || type == 7)
+        calcDualMonoMixVolPan(pos, 700, 2500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(pos, 350, 1000, vol, pan, 0);
+    if (vol == 0)
+        return;
+    switch (type) {
+    case 0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 5, vol, pan, 0, 0); break;
+    case 1: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0xF, vol, pan, 0, 0); break;
+    case 2: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0xA, vol, pan, 0, 0); break;
+    case 3: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 5, vol, pan, 0, 0); break;
+    case 4: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 9, vol, pan, 0, 0); break;
+    case 5: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 9, vol, pan, 0, 0); break;
+    case 6: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 5, vol, pan, 0, 0); break;
+    case 7: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0x17, vol, pan, 0, 0); break;
+    case 8: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 5, vol, pan, 0, 0); break;
+    case 9: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 3, vol, pan, 0, 0); break;
+    case 10: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 3, vol, pan, 0, 0); break;
+    case 11: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 0, vol, pan, 0, 0); break;
+    case 13: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 6, vol, pan, 0, 0); break;
+    case 21: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 9, vol, pan, 0, 0); break;
+    case 22: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0xE, vol, pan, 0, 0); break;
+    case 26:
+    case 27:
+    case 33:
+    case 35: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x1C, vol, pan, 0, 0); break;
+    case 29:
+        /* level 3: the ass boss's own sound when he is out, else the level's; level 10: the ambience one */
+        if (shell->m_levelNum == 3) {
+            if (assBossActive)
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_MECH], 0xD, vol, pan, 0, 0);
+            else
+                snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 4, vol, pan, 0, 0);
+        } else if (shell->m_levelNum == 10) {
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x1D, vol, pan, 0, 0);
+        }
+        break;
+    case 30:
+    case 31: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x2A, vol, pan, 0, 0); break;
+    case 32:
+    case 34: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x55, vol, pan, 0, 0); break;
+    case 36:
+    case 37:
+    case 38: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x1D, vol, pan, 0, 0); break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playWeaponLaunchSound__11WeaponSoundP8_fvectori);
+#endif
+#ifdef NON_MATCHING
+/* equivalent (untuned): 85/203 words, size 0x32c vs 0x314 (retail shares one call for all cases); the switch jump table must come from the retail rodata */
+void WeaponSound::playWeaponExplosion(_fvector *pos, int type, int hit)
+{
+    int vol = 0;
+    int pan = 0;
+    if (type == 21 || type == 22 || type == 39 || type == 40 || type == 41)
+        calcDualMonoMixVolPan(pos, 350, 1600, vol, pan, 0);
+    else if (type == 13)
+        calcDualMonoMixVolPan(pos, 850, 2500, vol, pan, 0);
+    else
+        calcDualMonoMixVolPan(pos, 375, 1500, vol, pan, 0);
+    if (vol == 0)
+        return;
+    switch (type) {
+    case 0: snd_PlaySoundVolPanPMPB_A(gSoundBanks[0], 6, vol, pan, 0, 0); break;
+    case 1:
+    case 24: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 0x10, vol, pan, 0, 0); break;
+    case 2: snd_PlaySoundVolPanPMPB_A(gSoundBanks[4], 0xB, vol, pan, 0, 0); break;
+    case 3: snd_PlaySoundVolPanPMPB_A(gSoundBanks[2], 6, vol, pan, 0, 0); break;
+    case 4: snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 8, vol, pan, 0, 0); break;
+    case 5: snd_PlaySoundVolPanPMPB_A(gSoundBanks[8], 7, vol, pan, 0, 0); break;
+    case 6: snd_PlaySoundVolPanPMPB_A(gSoundBanks[3], 6, vol, pan, 0, 0); break;
+    case 7: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_FINAL], 0x18, vol, pan, 0, 0); break;
+    case 8: snd_PlaySoundVolPanPMPB_A(gSoundBanks[6], 0x10, vol, pan, 0, 0); break;
+    case 9: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 4, vol, pan, 0, 0); break;
+    case 10: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0, vol, pan, 0, 0); break;
+    case 11: snd_PlaySoundVolPanPMPB_A(gSoundBanks[10], 9, vol, pan, 0, 0); break;
+    case 13: snd_PlaySoundVolPanPMPB_A(gSoundBanks[1], 5, vol, pan, 0, 0); break;
+    case 21:
+    case 22: snd_PlaySoundVolPanPMPB_A(gSoundBanks[7], 0xA, vol, pan, 0, 0); break;
+    case 23:
+        if (hit)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0x2F, vol, pan, 0, 0);
+        break;
+    case 26:
+    case 27: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 0, vol, pan, 0, 0); break;
+    case 28:
+    case 29:
+        if (shell->m_levelNum == 3)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 1, vol, pan, 0, 0);
+        else if (shell->m_levelNum == 10)
+            snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 7, vol, pan, 0, 0);
+        break;
+    case 30:
+    case 31:
+    case 32: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 1, vol, pan, 0, 0); break;
+    case 33:
+    case 34:
+    case 35: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 1, vol, pan, 0, 0); break;
+    case 36:
+    case 37:
+    case 38:
+        switch (shell->m_levelNum) {
+        case 9:
+        case 16: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 4, vol, pan, 0, 0); break;
+        case 10: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_LEVEL], 7, vol, pan, 0, 0); break;
+        }
+        break;
+    case 39:
+    case 40:
+    case 41: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_AMBIENT], 3, vol, pan, 0, 0); break;
+    case 42:
+    case 44: snd_PlaySoundVolPanPMPB_A(gSoundBanks[BANK_PLANT], 0xA, vol, pan, 0, 0); break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Sound", playWeaponExplosion__11WeaponSoundP8_fvectorii);
-INCLUDE_ASM("asm/nonmatchings/game/Sound", playRockSpecialImpact__11WeaponSoundP8_fvector);
+#endif
+void WeaponSound::playRockSpecialImpact(_fvector *pos)
+{
+    int vol = 0;
+    int pan = 0;
+    gLoopManager.terminateLoop(&m_handle);
+    calcDualMonoMixVolPan(pos, 375, 1500, vol, pan, 0);
+    if (vol)
+        snd_PlaySoundVolPanPMPB_A(gSoundBanks[9], 0xC, vol, pan, 0, 0);
+}
 INCLUDE_ASM("asm/nonmatchings/game/Sound", __12MonsterSound);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", initMonsterSound__12MonsterSoundP7Monster);
 INCLUDE_ASM("asm/nonmatchings/game/Sound", updateMonsterSound__12MonsterSound);

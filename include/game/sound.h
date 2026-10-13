@@ -567,4 +567,19 @@ public:
     void updatePlaneSound(_fvector *pos, int state, float t);
 };
 
+/* A projectile in flight: the flight loop of the weapon types that have one (with the doppler pitch in one-player games),
+   plus the launch and explosion one-shots by weapon type. */
+class Weapon;
+class WeaponSound {
+public:
+    unsigned m_handle;          // 0x0: flight loop
+    float m_prevDist;           // 0x4: for the doppler pitch
+    void initWeaponSound(void);
+    void terminateWeaponSound(void);
+    void updateWeaponSound(Weapon *w);
+    void playWeaponLaunchSound(_fvector *pos, int type);
+    void playWeaponExplosion(_fvector *pos, int type, int hit);
+    void playRockSpecialImpact(_fvector *pos);
+};
+
 #endif
