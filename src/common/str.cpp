@@ -53,8 +53,7 @@ int strFileRead(StrFile *f, void *buf, int bytes)
             nextSector += n;
             n <<= 11;
         } else {
-            printf("Streaming Error!!!!!!!, snd_StreamSafeCdRead returned 0
-");
+            printf("Streaming Error!!!!!!!, snd_StreamSafeCdRead returned 0\n");
         }
     } else {
         n = sceCdStRead(bytes >> 11, buf, 1, &D_006F8DB0) << 11;

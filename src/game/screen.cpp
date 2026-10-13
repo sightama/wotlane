@@ -141,7 +141,86 @@ void changeReel(int reel, int from, int to)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", changeReel__Fiii);
 #endif
+#ifdef NON_MATCHING
+extern int numSelectables2784 __asm__("numSelectables.2784");
+void fontSetDefaultSize(int font);
+void resetSelectables(void);
+int inputIsCtlAvailable(int pad);
+/* Main menu: 1 = one player (screen 2), 2 = two players (screen 5, needs pad 2), 3 = options (screen 10; the volumes are saved first so
+   the screen can restore them), 4 = screen 9, 5 = screen 21. Up/down (codes 1/2) move the highlight with wraparound.
+   NON_MATCHING: 25/262 words differ, 0x3EC bytes vs 0x418 (untuned; same call sequence). */
+void screenMain(void)
+{
+    int input, sel;
+
+    if (screenFirstPass != 0) {
+        numSelectables2784 = screenPrepareDefault(1, currentSelection[currScreen]);
+        screenFirstPass = 0;
+        resetSelectables();
+        shell->m_numAIs = 0;
+        shell->m_numPlayers = 1;
+        fontSetDefaultSize(0);
+        fontSetDefaultSize(1);
+        hierSetSwitch(shell->m_sw5D0, 0);
+        moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+        myMovie.Play(false, MainMovie);
+        continueDecoding = 1;
+    }
+    myMovie.Play(false, MainMovie);
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 1:
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel >= 2 ? sel - 1 : numSelectables2784;
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(2);
+        break;
+    case 2:
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 0);
+        sel = currentSelection[currScreen];
+        currentSelection[currScreen] = sel < numSelectables2784 ? sel + 1 : 1;
+        hierSetSwitch(shell->m_menuItemSw[1][currentSelection[currScreen]], 1);
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(4);
+        break;
+    case 6:
+        switch (currentSelection[currScreen]) {
+        case 1:
+            shell->m_numPlayers = currentSelection[currScreen];
+            changeScreen(1, 2, 1, 0, true);
+            break;
+        case 2:
+            if (inputIsCtlAvailable(1)) {
+                shell->m_numPlayers = currentSelection[currScreen];
+                changeScreen(1, 5, 1, 0, true);
+            }
+            break;
+        case 3:
+            shell->m_sfxVolumeSaved = shell->m_sfxVolume;
+            shell->m_musicVolumeSaved = shell->m_musicVolume;
+            changeScreen(1, 0xA, 1, 5, true);
+            break;
+        case 4:
+            hierSetSwitch(shell->m_sw25CC, 1);
+            hierSetSwitch(shell->m_sw25D0, 1);
+            changeScreen(1, 9, 1, 9, true);
+            break;
+        case 5:
+            changeScreen(1, 0x15, 1, 0xA, true);
+            break;
+        default:
+            printf("Main Screen has screwed up item indexing! - We think we selected #%i\n", currentSelection[currScreen]);
+            break;
+        }
+        ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
+        break;
+    case 5:
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMain__Fv);
+#endif
 #ifdef NON_MATCHING
 /* Two-player monster select: same unlocked range as initSelectSwitches, then each column shows who is on it. cursor1/cursor2 are the
    1-based columns of the players; frame 1 = player 1 only, 2 = player 2 only, 3 = both; flag1/flag2 (player done choosing?) turn the
@@ -600,8 +679,7 @@ void screenGameModes2P(void)
             hierSetSwitch(*(_hierswitch **)((char *)shell + 0x48C), currentSelection[14]);
             shell->m_killTarget = 0;
         } else {
-            printf("Two Player Game Modes Screen has screwed up item indexing! - We think we selected #%i
-", sel);
+            printf("Two Player Game Modes Screen has screwed up item indexing! - We think we selected #%i\n", sel);
         }
         ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
         return;
@@ -786,17 +864,14 @@ void screenFreeForAllOptions1P(void)
         sel = currentSelection[currScreen];
         if (sel == 0) {
             shell->m_numAIs = 0;
-            printf("Number of AI set to %i
-", 0);
+            printf("Number of AI set to %i\n", 0);
             changeScreen(0xC, 3, 1, 0, true);
         } else if (sel >= 1 && sel <= 3) {
             shell->m_numAIs = sel;
-            printf("Number of AI set to %i
-", sel);
+            printf("Number of AI set to %i\n", sel);
             changeScreen(0xC, 0xF, 1, 0, true);
         } else {
-            printf("One Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i
-", sel);
+            printf("One Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i\n", sel);
         }
         ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
         return;
@@ -854,8 +929,7 @@ void screenFreeForAllOptions2P(void)
             shell->m_numAIs = sel;
             changeScreen(0xD, 0xF, 1, 0, true);
         } else {
-            printf("Two Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i
-", sel);
+            printf("Two Player Free for All Options Screen has screwed up item indexing! - We think we selected #%i\n", sel);
         }
         ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(8);
         return;

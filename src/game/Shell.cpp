@@ -653,8 +653,7 @@ void Shell::EvaluateGameStatus(int r)
             EvaluateOnlineBattleStatus(r);
             break;
         default:
-            printf("ERROR - Shell::EvaluateGameStatus does not recognize %i as a Game Mode!!!!
-", m_mode);
+            printf("ERROR - Shell::EvaluateGameStatus does not recognize %i as a Game Mode!!!!\n", m_mode);
             break;
         }
     }
@@ -1057,8 +1056,7 @@ void Shell::EvaluateOnePlayerEnduranceStatus(int r)
         *(int *)((char *)game + 0xBBC) = 0;
         return;
     }
-    printf("An endurance mode game ended for reasons other than player dying or quitting!! AAAhhh
-");
+    printf("An endurance mode game ended for reasons other than player dying or quitting!! AAAhhh\n");
     m_inSession = 0;
     m_inMenus = 0;
 }
@@ -1613,32 +1611,27 @@ void Shell::LoadLevelFiles(void)
     fileCdSearchFile(&f, name);
     initProgressBar(m_numAIs + m_numPlayers, ngpSize, f.size);
     informProgressBar(0.0f);
-    printf(" =+= Starting     time = %s
-", fileGetTimeString());
+    printf(" =+= Starting     time = %s\n", fileGetTimeString());
     LoadLevelDB();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= Levels Done  time = %s
-", fileGetTimeString());
+    printf(" =+= Levels Done  time = %s\n", fileGetTimeString());
     LoadMonstersDB();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= Monsters Done    time = %s
-", fileGetTimeString());
+    printf(" =+= Monsters Done    time = %s\n", fileGetTimeString());
     LoadResTexture();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= ResTex Done  time = %s
-", fileGetTimeString());
+    printf(" =+= ResTex Done  time = %s\n", fileGetTimeString());
     LoadTexture();
     gWhichMicroSection = 0;
     gWhichMacroSection++;
     informProgressBar(0.0f);
-    printf(" =+= Texture Done time = %s
-", fileGetTimeString());
+    printf(" =+= Texture Done time = %s\n", fileGetTimeString());
     dbsRelocateFileZero(getVramAddr(), UseCommandLineLevel);
     dbInitDb((_dbheader *)0xA00000, getVramAddr());
 }
@@ -1651,8 +1644,7 @@ void Shell::FinishLoadBar(void)
     gWhichMacroSection++;
     gWhichMicroSection = 0;
     informProgressBar(0.0f);
-    printf(" =+= Finished     time = %s
-", fileGetTimeString());
+    printf(" =+= Finished     time = %s\n", fileGetTimeString());
     gOkToDrawProgressBar = 0;
     viewSetNumViews(1);
     viewCreate((_viewports)0, 0);
