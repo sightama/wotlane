@@ -2358,10 +2358,10 @@ index 0000000..d45e2fc
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..e47374e
+index 0000000..36aeb5a
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,240 @@
+@@ -0,0 +1,351 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
 +// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
@@ -2428,6 +2428,96 @@ index 0000000..e47374e
 +        }
 +    }
 +
++
++    // Partida direta, WOTM_MATCH="<monstro do jogador>,<monstro da IA>,<fase>" (indices de MonsterLongNames e GameLevelNames;
++    // "3,1,1" = lizard contra monkey em central): userintMain (0x1D9868) nao abre o menu e devolve 0 (comecar a sessao) com o shell
++    // como o menu o deixa em "1 jogador contra a CPU" (medido com dumps no fim do menu do roteiro -Auto): desafio (m_mode 2),
++    // 1 jogador + 1 IA, 3 vidas, figurino 1 na IA quando os monstros sao iguais. A diferenca e m_killTarget 0 (o menu poe 1): sem
++    // meta de vitorias, EvaluateOnePlayerChallengeStatus so reergue o monstro derrubado e a luta segue, sem o dialogo "PLAY AGAIN"
++    // que esperaria o pad. O filme de abertura (uiMain, 0x1D93D8) vira no-op. Cada fim de rodada (entrada de
++    // Shell::EvaluateGameStatus, 0x1A7960) sai no log como [partida] com a vida e as vitorias dos dois monstros.
++    constexpr uint32_t kUserintMain = 0x1D9868u, kUiMain = 0x1D93D8u, kEvaluateGameStatus = 0x1A7960u;
++    PS2Runtime::RecompiledFunction g_origEvaluate = nullptr;
++    unsigned g_rounds = 0;
++    constexpr uint32_t kShell = 0x414D80u, kGame = 0x2B35A0u;   // shellInfo, shellGame
++    int g_match[3] = {-1, -1, -1};
++    unsigned g_matchCount = 0;
++    bool g_aiVsAi = false;
++
++    void userintMainDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const int player = g_match[0], ai = g_match[1], level = g_match[2];
++        WRITE32(kShell + 0x2938, static_cast<uint32_t>(player << 5));   // m_monsterSel[0]: (monstro << 5) | variante
++        WRITE32(kShell + 0x2948, static_cast<uint32_t>(ai << 5));       // m_monsterSel[4]: a primeira IA
++        for (uint32_t i = 0; i < 8; ++i)
++            WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume
++        WRITE32(kShell + 0x2BE8, player == ai ? 1u : 0u);                 // m_costume[2]: a IA
++        WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
++        WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(level));          // m_levelNum
++        WRITE32(kShell + 0x2BB4, 1);                                      // m_numPlayers
++        WRITE32(kShell + 0x2BB8, 1);                                      // m_numAIs
++        for (uint32_t i = 0; i < 4; ++i)
++            WRITE32(kShell + 0x2BBC + 4 * i, 3);                         // m_lives
++        WRITE32(kShell + 0x2C10, 2);                                      // m_mode: free for all
++        WRITE32(kGame + 0x1203C8, 2);                                     // TheGame::m_gameMode
++        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s) contra %d (IA), fase %d\n", ++g_matchCount, player,
++                     g_aiVsAi ? " sob IA" : "", ai, level);
++        SET_GPR_S32(ctx, 2, 0);
++        ctx->pc = GPR_U32(ctx, 31);
++    }
++
++    void uiMainSkipped(uint8_t *, R5900Context *ctx, PS2Runtime *) { ctx->pc = GPR_U32(ctx, 31); }
++
++    void evaluateGameStatusLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        if (ctx->pc == kEvaluateGameStatus)
++        {
++            std::fprintf(stderr, "[partida] rodada %u terminou (rtMain devolveu %d):", ++g_rounds, static_cast<int32_t>(GPR_U32(ctx, 5)));
++            for (uint32_t slot : {0u, 4u})   // m_monsters[0] (jogador) e m_monsters[4] (primeira IA)
++            {
++                const uint32_t m = READ32(kGame + 0x120380 + 4 * slot);
++                if (!m)
++                    continue;
++                const uint32_t hw = READ32(m + 0x44C);   // m_health
++                float health;
++                std::memcpy(&health, &hw, 4);
++                std::fprintf(stderr, " monstro %u vida %.0f vitorias %d;", READ32(m + 0x14) >> 5, health, static_cast<int32_t>(READ32(m + 0x3C)));
++            }
++            std::fprintf(stderr, "\n");
++        }
++        g_origEvaluate(rdram, ctx, runtime);
++    }
++
++    // WOTM_AIVSAI=1: o jogador tambem e controlado pela IA do jogo. Monster::playerInit (0x165F10) salta para Monster::aiInit
++    // (0x166038) com os mesmos registradores, como um `j`: m_playerNum fica 2 e Monster::update le as entradas de Ai::updateInputs.
++    // Camera e HUD seguem no jogador (SetPlayerMonster). Retomada no meio cai direto no aiInit (o salto nao volta para ca).
++    // TheGame::SetAIMonster (0x137B10) recalcula m_numAIs (0x1203E0) contando os slots com m_playerNum 2, o que agora inclui o
++    // jogador; m_monsters[4 + i] seria lido alem da ultima IA (bancos de som, pickups). Depois dele, tira da conta os jogadores.
++    constexpr uint32_t kPlayerInit = 0x165F10u, kAiInit = 0x166038u, kSetAIMonster = 0x137B10u;
++    PS2Runtime::RecompiledFunction g_aiInit = nullptr, g_origSetAIMonster = nullptr;
++
++    void playerInitAsAi(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        ctx->pc = kAiInit;
++        g_aiInit(rdram, ctx, runtime);
++    }
++
++    void setAIMonsterCounted(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const bool entry = ctx->pc == kSetAIMonster;
++        g_origSetAIMonster(rdram, ctx, runtime);
++        if (!entry)
++            return;
++        const int32_t players = static_cast<int32_t>(READ32(kShell + 0x2BB4));
++        int32_t n = static_cast<int32_t>(READ32(kGame + 0x1203E0));
++        for (int32_t i = 0; i < players && i < 4; ++i)
++        {
++            const uint32_t m = READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
++            if (m && READ32(m + 0x18) == 2u)                       // m_playerNum
++                --n;
++        }
++        WRITE32(kGame + 0x1203E0, static_cast<uint32_t>(n < 0 ? 0 : n));
++    }
 +
 +    // WOTM_TURNLOG: uma linha [turn] por MonsterDynamics::updatePosition (cada monstro, cada quadro do jogo):
 +    // quadro (g_frame), monstro, rate, acelRot (+0x110, zerada pela funcao), velRot (+0x100) antes/depois e os angulos
@@ -2596,6 +2686,27 @@ index 0000000..e47374e
 +    {
 +        runtime.registerFunction(kTimerWaitForMinUpdateRate, &waitMinRateByVblanks);
 +        runtime.registerFunction(kTimerGetCurTics, &getCurTicsMarked);
++    }
++    if (const char *e = std::getenv("WOTM_MATCH"))
++    {
++        if (std::sscanf(e, "%d,%d,%d", &g_match[0], &g_match[1], &g_match[2]) == 3)
++        {
++            runtime.registerFunction(kUserintMain, &userintMainDirect);
++            runtime.registerFunction(kUiMain, &uiMainSkipped);
++            if ((g_origEvaluate = runtime.lookupFunction(kEvaluateGameStatus)))
++                runtime.registerFunction(kEvaluateGameStatus, &evaluateGameStatusLogged);
++            std::fprintf(stderr, "[wotm] partida direta: monstro %d contra %d, fase %d (WOTM_MATCH)\n", g_match[0], g_match[1], g_match[2]);
++        }
++        else
++            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>,<monstro>,<fase>)\n", e);
++    }
++    if (std::getenv("WOTM_AIVSAI") && (g_aiInit = runtime.lookupFunction(kAiInit)) &&
++        (g_origSetAIMonster = runtime.lookupFunction(kSetAIMonster)))
++    {
++        g_aiVsAi = true;
++        runtime.registerFunction(kPlayerInit, &playerInitAsAi);
++        runtime.registerFunction(kSetAIMonster, &setAIMonsterCounted);
++        std::fprintf(stderr, "[wotm] jogador controlado pela IA (WOTM_AIVSAI)\n");
 +    }
 +    if (g_minRate > 0)
 +        std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
