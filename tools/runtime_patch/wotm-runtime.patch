@@ -1595,10 +1595,10 @@ index 0000000..96232d5
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..029bcaa
+index 0000000..b9f26c7
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,185 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
 +// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
@@ -1672,6 +1672,17 @@ index 0000000..029bcaa
 +    // os ciclos virtuais do EE gastos (em fields: total, saltados no ocio e os 3 pcs de checkpoint que mais gastaram) e o
 +    // tempo real (total, ocioso esperando evento e esperando o relogio de parede para soltar um prazo).
 +    bool g_fieldLog = false;
++    // Chamadas a sceGsSyncV no quadro (cada uma espera 1 vsync) e o $ra das 4 primeiras: mostra quem gasta os fields.
++    constexpr uint32_t kSceGsSyncV = 0x231450u;
++    PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
++    uint32_t g_syncVCalls = 0, g_syncVRa[4];
++    void syncVLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        if (g_syncVCalls < 4)
++            g_syncVRa[g_syncVCalls] = GPR_U32(ctx, 31);
++        ++g_syncVCalls;
++        g_origSyncV(rdram, ctx, runtime);
++    }
 +    uint32_t g_lastFieldStart = 0;
 +    uint64_t g_lastCycle = 0, g_lastIdleUs = 0, g_lastPaceUs = 0;
 +    std::chrono::steady_clock::time_point g_lastHost;
@@ -1712,6 +1723,10 @@ index 0000000..029bcaa
 +        for (int k = 0; k < 3; ++k)
 +            if (top[k] >= 0)
 +                std::fprintf(stderr, " %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
++        std::fprintf(stderr, " syncv=%u", g_syncVCalls);
++        for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
++            std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
++        g_syncVCalls = 0;
 +        std::fprintf(stderr, "\n");
 +        std::memset(g_wotmProfPc, 0, sizeof(g_wotmProfPc));
 +        std::memset(g_wotmProfCyc, 0, sizeof(g_wotmProfCyc));
@@ -1758,6 +1773,8 @@ index 0000000..029bcaa
 +    {
 +        g_fieldLog = g_wotmCycleProf = true;
 +        g_lastHost = std::chrono::steady_clock::now();
++        if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
++            runtime.registerFunction(kSceGsSyncV, &syncVLogged);
 +        std::fprintf(stderr, "[wotm] log de fields por quadro ligado (WOTM_FIELDLOG)\n");
 +    }
 +    if (g_minRate > 0 || g_fieldLog)
