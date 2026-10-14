@@ -8,6 +8,7 @@
 #include "game/monster_state.h"
 #include "game/anim_blend.h"
 #include "game/crush_level.h"
+#include "game/levels.h"
 #include "vecmath.h"
 
 class GamePad {
@@ -76,6 +77,8 @@ extern int stackCountDownActive;
 extern "C" int printf(const char *, ...);
 /* DodgeBallLevel::instance starts with the hit count of each player (indexed by Monster::m_index) */
 extern int dodgeBallHits[2] __asm__("_14DodgeBallLevel$instance");
+int infoInFov(EnemyInfo::Info *info, float cosAngle) __asm__("inFov__9EnemyInfof");
+int infoInLos(EnemyInfo::Info *info) __asm__("inLos__9EnemyInfo");
 class DbInteractive;
 class ActionDispatch {
 public:
@@ -1221,7 +1224,41 @@ Monster *Monster::getClosestTargetable(unsigned short a, bool b, float x, float 
     return getClosestTargetable(a, b, x, x, y);
 }
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestTargetable__7MonsterUsbfff);
+/* The monster the head turns to (updateLookAt): the sticky reticle target when there is one, else the nearest other
+   active monster (m_flags bits 1 and 2 both set, not m_target) that is in the 75-degree field of view and in line of
+   sight; each hit narrows the cone to that monster's facing. */
+#ifdef NON_MATCHING
+/* 3/107 words, untuned: register allocation and the row select (retail madd + movn) differ */
+Monster *Monster::getLookAtTarget(void)
+{
+    Monster *best = 0;
+    float c;
+    float bestDist;
+    int j;
+
+    /* retail returns the word at 0x6C00 itself, so it holds the sticky target rather than a plain flag */
+    if (m_stickyReticleOn != 0)
+        return (Monster *)m_stickyReticleOn;
+    c = cosf(1.3089969f);
+    bestDist = 3.402823466e+38f;
+    for (j = 0; j < game->m_numSlots; j++) {
+        Monster *m = &game->m_slots[j];
+
+        if (m->m_playerNum != 0 && m != this && m != m_target && (m->m_flags & 6) == 6) {
+            EnemyInfo::Info *info = EnemyInfo::info(m_monsterNum, j);
+
+            if (infoInFov(info, c) && infoInLos(info) && info->dist < bestDist) {
+                c = info->dot;
+                bestDist = info->dist;
+                best = m;
+            }
+        }
+    }
+    return best;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getLookAtTarget__7Monster);
+#endif
 /* The destructible under the reticle, if the reticle probe (64-bit hit word at 0x6C50, interactive index in bits 32..42)
    hit one and it is closer than sqrt(maxDistSq) on the ground plane; 0 otherwise. */
 #ifdef NON_MATCHING
@@ -1275,7 +1312,49 @@ void Monster::dropPickupImpaler(void)
     }
 }
 INCLUDE_ASM("asm/nonmatchings/game/Monster", handleLocator__7MonsterUiRA3_A3_fP8_fvector);
+/* Switches to the embedded state `s`: exits the current one (vtable +0x40, gets `s`), enters `s` (vtable +0x10) and
+   remembers the old one in m_prevState. Dodgeball (mode 7) and big shot before its match starts (mode 8, state 0)
+   only allow a fixed set of states and skip the fire breath check; otherwise an active fire breath gets its mint
+   applied unless the new state is 0x1E, 1, 0x1C or m_stateRef. */
+#ifdef NON_MATCHING
+/* 2/147 words, untuned: retail duplicates the exit/enter sequence in the limited and normal paths */
+#define ES_ST(off) ((MonsterState *)((char *)this + (off)))
+void Monster::enterNewState(MonsterState *s)
+{
+    MonsterState *cur;
+    bool limited = false;
+
+    if (game->m_gameMode == 7) {
+        /* idle, run, dash, ram attack, jump, recoil, knock back, death, pick up, throw, climb, fly, taunt, stunned,
+           two-handed throw, catch, shocked, victory */
+        if (s != ES_ST(0x7984) && s != ES_ST(0x79AC) && s != ES_ST(0x7A90) && s != ES_ST(0xFD40) && s != ES_ST(0x7AD4) &&
+            s != ES_ST(0x7E30) && s != ES_ST(0x7EA0) && s != ES_ST(0x8450) && s != ES_ST(0xDC70) && s != ES_ST(0xEF40) &&
+            s != ES_ST(0xEFE0) && s != ES_ST(0xF0B0) && s != ES_ST(0xFE20) && s != ES_ST(0x10714) &&
+            s != ES_ST(0x1074C) && s != ES_ST(0x10BF0) && s != ES_ST(0x10BA0) && s != ES_ST(0x10E70))
+            return;
+        limited = true;
+    } else if (game->m_gameMode == 8 && BigShotLevel::instance.m_state == 0) {
+        /* idle, run, dash, ram attack, block, fly, jump, victory, knock back */
+        if (s != ES_ST(0x7984) && s != ES_ST(0x79AC) && s != ES_ST(0x7A90) && s != ES_ST(0xFD40) && s != ES_ST(0x7DA0) &&
+            s != ES_ST(0xF0B0) && s != ES_ST(0x7AD4) && s != ES_ST(0x10E70) && s != ES_ST(0x7EA0))
+            return;
+        limited = true;
+    }
+    cur = (MonsterState *)m_state;
+    m_prevState = m_state;
+    if (cur != 0)
+        ((void (*)(void *, MonsterState *))*(void **)((char *)cur->vptr + 0x44))((char *)cur + *(short *)((char *)cur->vptr + 0x40), s);
+    ((void (*)(void *))*(void **)((char *)s->vptr + 0x14))((char *)s + *(short *)((char *)s->vptr + 0x10));
+    m_state = (int *)s;
+    if (limited)
+        return;
+    if (*(int *)m_fireBreath != 0 && s->id != 0x1E && s->id != 1 && s->id != 0x1C && (int *)s != m_stateRef)
+        ((FireBreath *)m_fireBreath)->ApplyMint();
+}
+#undef ES_ST
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", enterNewState__7MonsterP12MonsterState);
+#endif
 void Monster::landingShake(void)
 {
 }

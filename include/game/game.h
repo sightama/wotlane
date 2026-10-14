@@ -100,6 +100,7 @@ public:
     void setMat(float (&m)[4][4]);
     Monster *getClosestTargetable(unsigned short a, bool b, float x, float y);
     Monster *getClosestTargetable(unsigned short a, bool b, float x, float y, float z);
+    Monster *getLookAtTarget(void);
     void blowUpMonster(Monster *killer);
     bool isHoldingLarge(void);
     void cleanUpForMovie(void);
