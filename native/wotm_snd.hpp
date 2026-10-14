@@ -531,25 +531,7 @@ struct BlockSound : Sound {
         appVol = vol; appPan = pan; appPb = pb; appPm = pm;
         if (sfx->grains.empty()) { done = true; return; }
         countdown = sfx->grains[0].delay;
-        runDue();
-    }
-
-    // Executa os grains vencidos. Um laco sem atraso (LOOP/GOTO/BRANCH sem grain com delay, ou WAIT_ALL_VOICES sem voz)
-    // giraria para sempre segurando o mutex do Engine e travaria o jogo inteiro (as threads do EE chamam o som): depois de
-    // kMaxGrainsPerTick grains no mesmo tick o som e encerrado e o log mostra qual foi.
-    void runDue() {
-        static constexpr int kMaxGrainsPerTick = 1024;
-        for (int n = 0; countdown <= 0 && !done; ++n) {
-            if (n == kMaxGrainsPerTick) {
-                std::string seq;
-                for (const Grain &g : sfx->grains) seq += std::to_string(g.type) + "/" + std::to_string(g.delay) + " ";
-                Engine::log("[snd] banco %s som %d: %d grains sem atraso no mesmo tick (grain %d); som encerrado. tipo/atraso: %s\n",
-                            bk.id.c_str(), int(sfx - bk.sounds.data()), n, nextGrain, seq.c_str());
-                stop();
-                return;
-            }
-            doGrain();
-        }
+        while (countdown <= 0 && !done) doGrain();
     }
 
     void cleanVoices() { voices.erase(std::remove_if(voices.begin(), voices.end(), [](const V &v) { return v.v->dead; }), voices.end()); }
@@ -561,7 +543,7 @@ struct BlockSound : Sound {
         if (done && children.empty()) return voices.empty();
         if (paused) return false;
         --countdown;
-        runDue();
+        while (countdown <= 0 && !done) doGrain();
         return false;
     }
     void stop() override {
