@@ -57,6 +57,37 @@ static inline void vecScale(_fvector *dst, _fvector *a, float s)
                      : "=m"(*dst), "=r"(t) : "r"(a), "f"(s));
 }
 
+/* a . b (xyz) on the FPU accumulator, registers left to the compiler (vecLenSq pins them). Volatile like retail's: HomingBug::findTarget
+   computes one and never reads it. */
+static inline float vecDot(_fvector *a, _fvector *b)
+{
+    float *p = (float *)a, *q = (float *)b;
+    float r;
+
+    __asm__ volatile("mula.s %1, %4\n\t"
+                     "madda.s %2, %5\n\t"
+                     "madd.s %0, %3, %6"
+                     : "=f"(r) : "f"(p[0]), "f"(p[1]), "f"(p[2]), "f"(q[0]), "f"(q[1]), "f"(q[2]));
+    return r;
+}
+/* a / sqrt(b) in one rsqrt.s */
+static inline float eeRsqrtf(float a, float b)
+{
+    float r;
+
+    __asm__("rsqrt.s %0, %1, %2" : "=f"(r) : "f"(a), "f"(b));
+    return r;
+}
+/* *dst = *src with one lq/sq through $2 */
+static inline void vecCopy(_fvector *dst, _fvector *src)
+{
+    register int t __asm__("$2");
+
+    __asm__ volatile("lq %1, 0(%2)\n\t"
+                     "sq %1, %0"
+                     : "=m"(*dst), "=r"(t) : "r"(src));
+}
+
 /* dst = a x b */
 static inline void vecCross(_fvector *dst, _fvector *a, _fvector *b)
 {
