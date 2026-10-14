@@ -386,9 +386,10 @@ inline M4 lerpM4(const M4 &a, const M4 &b, float t) {
     return r;
 }
 
-// Camera do jogo para uma vista: o `_cs` de viewInfo[view] (posicao em +0x10, matriz em +0x20: as linhas sao os eixos do
-// olho em coordenadas de mundo = direita, FRENTE, cima). worldToScreenMat tem foco 384 sobre 640 px (HFOV ~79,6 graus) e,
-// em 4:3, o VFOV e ~63,7 graus (o eixo de profundidade do olho e o Y).
+// Camera do jogo para uma vista: o que o viewUpdate gravou (worldToScreenMat e worldCtx[view].eo). Sem matriz valida (menus), o
+// `_cs` de viewInfo[view] (posicao em +0x10, matriz em +0x20: as linhas sao os eixos do olho em coordenadas de mundo = direita,
+// FRENTE, cima). worldToScreenMat tem foco 384 sobre 640 px (HFOV ~79,6 graus) e, em 4:3, o VFOV e ~63,7 graus (o eixo de
+// profundidade do olho e o Y).
 struct GameCamera {
     bool ok = false;
     float pos[3] = {0, 0, 0};
@@ -419,7 +420,21 @@ inline GameCamera readGameCamera(const Ram &ram, int view = 0) {
         for (int i = 0; i < 3; ++i) { const float p = r1[i] - d13 / n3 * r3[i]; fv += p * p; }
         fv = std::sqrt(fv);
     }
-    if (f0 > 0.5f && fv > 1.f) c.fovy = 2.f * std::atan(224.f / (2.f * fv)) * 180.f / 3.14159265f;
+    if (f0 > 0.5f && fv > 1.f) {
+        c.fovy = 2.f * std::atan(224.f / (2.f * fv)) * 180.f / 3.14159265f;
+        // Olho e eixos do que o viewUpdate gravou junto com a matriz (worldCtx[view].eo = -cs->trans, em +0x20), nao do _cs: na
+        // introducao da luta o jogo poe outra camera nesse _cs por um instante no meio do quadro, e a leitura pegava esse instante
+        // (inteiro ou pela metade: a tela cortava por um quadro para outro canto do mapa).
+        const uint32_t eo = addr::worldCtx + 0x1F0 * view + 0x20;
+        float un = 0.f;
+        for (int i = 0; i < 3; ++i) {
+            c.pos[i] = -ram.f32(eo + 4 * i);
+            c.fwd[i] = r3[i] / std::sqrt(n3);
+            c.up[i] = -(r1[i] - d13 / n3 * r3[i]);   // linha 1 = -180,48*cima + 2048*frente
+            un += c.up[i] * c.up[i];
+        }
+        for (int i = 0; i < 3; ++i) c.up[i] /= std::sqrt(un);
+    }
     c.ok = std::isfinite(c.pos[0]) && std::isfinite(c.fwd[0]) && (std::fabs(c.fwd[0]) + std::fabs(c.fwd[1]) + std::fabs(c.fwd[2])) > 0.1f;
     return c;
 }

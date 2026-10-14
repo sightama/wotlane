@@ -2368,10 +2368,10 @@ index 0000000..481f867
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..eb33013
+index 0000000..2ae5d94
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,404 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
@@ -2732,8 +2732,19 @@ index 0000000..eb33013
 +        const double now = GetTime();
 +        static const bool camLog = std::getenv("WOTM_CAMLOG") != nullptr;   // diagnostico: serie temporal da camera lida (um [cam] por desenho)
 +        if (camLog)
-+            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f\n", now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0],
-+                         gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2]);
++        {
++            // _cs das vistas 0 e 1 (ponteiros) e a frente da worldToScreenMat (linha 3), lidos agora: separam troca de camera de leitura rasgada
++            const uint32_t wm = wotm::addr::worldToScreenMat;
++            const uint32_t cs = ram.u32(wotm::addr::viewInfo);
++            float csp[3] = {0, 0, 0}, csu[3] = {0, 0, 0};
++            if (ram.ok(cs, 0x60))
++                for (int i = 0; i < 3; ++i) { csp[i] = ram.f32(cs + 0x10 + 4 * i); csu[i] = ram.f32(cs + 0x40 + 4 * i); }
++            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f cs=%x,%x wm3=%.4f,%.4f,%.4f a=%.2f csp=%.2f,%.2f,%.2f "
++                                 "up=%.4f,%.4f,%.4f csu=%.4f,%.4f,%.4f\n",
++                         now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0], gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2], cs,
++                         ram.u32(wotm::addr::viewInfo + 0x14), ram.f32(wm + 0x30), ram.f32(wm + 0x34), ram.f32(wm + 0x38), alpha, csp[0], csp[1], csp[2],
++                         gc.up[0], gc.up[1], gc.up[2], csu[0], csu[1], csu[2]);
++        }
 +        if (lastT == 0.0)
 +        {
 +            lastT = now;
