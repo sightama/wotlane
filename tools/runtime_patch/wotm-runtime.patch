@@ -2199,10 +2199,10 @@ index 0000000..481f867
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..f994854
+index 0000000..eb33013
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,379 @@
+@@ -0,0 +1,393 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
@@ -2280,6 +2280,18 @@ index 0000000..f994854
 +inline std::atomic<bool> done{false}, presenting{false};
 +inline std::thread::id mainThread;
 +inline double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
++// Consolas do Windows (carregada na thread da janela, na primeira vez); sem o arquivo, a fonte padrao do raylib
++inline Font font()
++{
++    static Font f = [] {
++        Font r = LoadFontEx("C:/Windows/Fonts/consola.ttf", 40, nullptr, 0);
++        if (r.texture.id == 0)
++            return GetFontDefault();
++        SetTextureFilter(r.texture, TEXTURE_FILTER_BILINEAR);
++        return r;
++    }();
++    return f;
++}
 +inline void drawOverlay()
 +{
 +    std::string s;
@@ -2290,8 +2302,10 @@ index 0000000..f994854
 +        at = stepAt;
 +    }
 +    const double t = now();
-+    DrawText(TextFormat("Carregando... %.1f s", t), 16, GetScreenHeight() - 52, 20, LIGHTGRAY);
-+    DrawText(TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s nesta etapa)", t - at) : ""), 16, GetScreenHeight() - 28, 16, GRAY);
++    const float h = static_cast<float>(GetScreenHeight());
++    DrawTextEx(font(), TextFormat("Carregando... %.1f s", t), Vector2{16.0f, h - 54.0f}, 20.0f, 0.0f, LIGHTGRAY);
++    DrawTextEx(font(), TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s nesta etapa)", t - at) : ""), Vector2{16.0f, h - 28.0f},
++               16.0f, 0.0f, GRAY);
 +}
 +} // namespace wotm_boot
 +
