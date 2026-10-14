@@ -21,8 +21,8 @@ O **índice** é o do jogo (`MonsterLongNames`/`MonsterNewNames`). O **nome inte
 | 11 | Zorgulon | `ALIEN` | ALIEN0–3 | |
 | 12 | Ogre | `OGRE` | nenhum | cortado; restos abaixo |
 | 13 | Goliath Prime | `ASSBOSS` | ASSBOSS0–1 | nome informado pelo dono; o código o chama de `assboss` |
-| 14 | ? | `JELLY` | JELLY0 | boss final, 1ª forma: a água-viva (`FinalBoss::updateJelly`) |
-| 15 | ? | `FINAL` | FINAL0 | boss final, 2ª forma: o mecha (`FinalBoss::updateMecha`) |
+| 14 | ? | `JELLY` | JELLY0 | boss final, 2ª fase: o robô com jeito de água-viva que sai do robô grande (`FinalBoss::updateJelly`) |
+| 15 | ? | `FINAL` | FINAL0 | boss final, 3ª fase: o alien em forma crua, ataca com garras |
 | 16 | — | `temp16` | — | só o nome; o carregador recusa índice >= 16 |
 
 São 17 nomes (0 a 16): `MonsterNewNames` tem 0xCC bytes (17 × 12) e `MonsterLongNames` 0x88 (17 × 8). O `default` que aparece logo antes no binário é `GameLevelNames[0]` (fase 0), não um monstro.
@@ -41,12 +41,18 @@ Tudo lido do ELF (strings, stabs, símbolos) e do disco; o que é dedução est�
   - A classe `OgreMace` (TU `game/OgreMace`: bola com corrente, ep de nível 0x11FC em `dbProcInteractive`) é usada pela `StateGrappleHook` em `Monster+0x10600`, que `initDynamics` liga ao **Ultra V** (0x80). Dedução: a maça com corrente foi escrita para o Ogre e reaproveitada como o gancho do Ultra V.
 - **Restos no enum de efeitos (`FxId`, stabs):** `SpiderHit` (91), `SpiderSpecialHit` (103), `SpiderFlashBang` (114), `OgreSpecialHit` (99), e também `WomanSpecialHit` (98), `ErnieHit` (87) e `ErnieSpecialHit` (100), de monstros que nem aparecem na lista de nomes (outros cortes ou nomes antigos; não identificados). Nenhuma chamada a `particleCreateFx` com esses ids foi achada; `JellyfishSplash` (86) é usado em `updateJelly`.
 - **Spider no som:** `MonsterSound::updateSpiderMagnoSpecial`/`terminateSpiderMagnoSpecial` existem mas ninguém as chama, e a primeira nunca dispara o som (só ajusta um handle que nunca é criado). Indica que o especial do spider era algo chamado "magno".
-- **Jelly e Final (boss da `capitol`).** Na `capitol`, `levelMonsters` dá como IAs `jelly` e `final`. `TheGame::SetAIMonster` conta os dois como IA, desliga (`disableMonster`) e guarda em `finalBoss+0x74` (jelly) e `+0x78` (final). `FinalBoss::update` chama `updateJelly` (água-viva na água: `StateUltraTazer`, `electricArc`, `playJellyTazerOneShot`, `playWaterSplashSound`, `JellyfishSplash`) ou `updateMecha` (mecha com laser e escudo: `FinalBossSound::updateMechLaser`, `playShieldPowerUp/DownSound`, `playMechaPowerDownSound`, `mechaShadowRadius`). A fase fica em `finalBoss+0x1C`: 0 = luta inicial com pilares (`rebuildCapitolPillars`), 1 = jelly, 2 = final; `Shell::InitPlayers` restaura a vida do boss da fase ao reiniciar. Som: `Final_s.bnk`, `JELLYD.VPK`, `JELLYBT.VPK`, `MECHADT.VPK`. As IAs têm `CAPITOL/JELLY0–2.AIC` e `FINAL0–2.AIC`.
+- **Boss final (`capitol`).** Fases, segundo o dono: (1) robô grande que atira laser com dano alto, e o jogador se esconde atrás dos pilares ou de outra geometria; (2) depois de dano suficiente, sai de dentro dele um robô parecido com uma água-viva (não fica na água); (3) o alien em forma crua, atacando com garras; (4) derrotado, uma cutscene mostra o cérebro explodindo e uma quarta criatura, pequena, saindo da cabeça. No código:
+  - A fase fica em `finalBoss+0x1C`: 0 = robô grande, 1 = jelly, 2 = final. `Shell::InitPlayers` restaura a vida da fase ao reiniciar (na fase 0 reconstrói os pilares com `rebuildCapitolPillars`).
+  - O robô grande é o próprio objeto `FinalBoss` (`FinalBoss::updateMecha`: laser `FinalBossSound::updateMechLaser`, escudo `playShieldPowerUp/DownSound`, `playMechaPowerDownSound`, `mechaShadowRadius`, e um teste de linha de visão `hdLosCSTest`, que deve ser o que torna os pilares abrigo). Não é um monstro da lista; como o `FinalBoss` nasce de um ep do nível (`addEpNode`, `initAfter`), o modelo deve estar no `CAPITOL.NGP` (dedução).
+  - `jelly` e `final` são as IAs da `capitol` em `levelMonsters`. `TheGame::SetAIMonster` conta os dois como IA, desliga com `disableMonster` e guarda em `finalBoss+0x74` (jelly) e `+0x78` (final) até a fase deles. `FinalBoss::updateJelly` cuida da jelly: `StateUltraTazer`, `electricArc`, `playJellyTazerOneShot`. Também chama `playWaterSplashSound` e cria o efeito `JellyfishSplash`; como a jelly não luta na água, esses dois devem ser de algum momento específico (a conferir).
+  - Som: `Final_s.bnk`, `JELLYD.VPK`, `JELLYBT.VPK`, `MECHADT.VPK`. As IAs têm `CAPITOL/JELLY0–2.AIC` e `FINAL0–2.AIC`.
+- **Vídeos de monstro antigos.** `MOV/` tem um `.PSS` simples de 32 KB por monstro, de nov/2001 a jan/2002, incluindo `OGRE.PSS` (cópia exata de `SHOGUN.PSS`) e `SPIDER.PSS` (cópia exata de `ENERGY.PSS`). O executável não referencia nenhum deles; só usa `mov/<monstro>_p.pss` e `_g.pss`, e só para os 10 monstros jogáveis. Mostra que o ogre e o spider ainda estavam no elenco no início de 2002.
 - **Boss planta (`3-Mile`)** não é monstro da lista: são as classes `PlantBoss`/`PlantBossHead`/`PlantBossRoot`/`PlantBossBase` (`plantBoss`, 0x10B0 bytes), com `Plant_s.bnk` e `PLANTD.VPK`; as IAs da fase são 4 Kineticlops (`3-MILE/ENERGY0–2.AIC`).
 - **temp16:** só existe nas duas tabelas de nomes. `Shell::LoadResTexture` recusa `sel >> 5 >= 0x10` com "Unknown monster (%d) for player %d.  Nothing will be loaded!".
 
 ### Pendências
 - Nomes que o jogo mostra para o jelly e o final.
+- Onde está a cutscene final (cérebro explodindo, criatura pequena): não há `.PSS` do boss em `MOV/`, então deve ser cinema em tempo real.
 - Quem são `Woman` e `Ernie` do `FxId`.
 - Dá para pôr o spider/ogre na seleção (ampliar o `last` de `initSelectSwitches`), mas sem `MON/SPIDER0.*`/`OGRE0.*` o `fileReadf` não acha arquivo; precisaria de um modelo substituto.
 
@@ -67,7 +73,7 @@ O **índice** é o do jogo (`GameLevelNames`, 0x6EF748: 28 nomes de 10 bytes) e 
 | 8 | Club Caldera | `island` | `ISLAND` | |
 | 9 | Tsunopolis | `tokyo` | `TOKYO` | |
 | 10 | UFO | `ufo` | `UFO` | |
-| 11 | Capitol | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`, monstros `JELLY`/`FINAL`, 0x1C0/0x1E0) |
+| 11 | Capitol | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`: robô grande, depois os monstros `JELLY`/`FINAL`, 0x1C0/0x1E0) |
 | 12 | Training | `training` | `TRAINING` | treino |
 | 13 | Lake Powell | `canyon1` | `CANYON1` | |
 | 14 | Mini Baytown | `minisf` | `MINISF` | |
