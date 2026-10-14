@@ -6,6 +6,10 @@
 #include "game/military_pickup.h"
 #include "game/military_formation.h"
 #include "game/hud.h"
+#include "game/pickup_fx.h"
+#include "hd.h"
+#include "game/hit_event.h"
+#include "game/hit_history.h"
 
 __asm__("#SNFIX_SMALL game");
 
@@ -39,6 +43,7 @@ class Interactives {
 public:
     static int addInteractive(DbInteractive *p);
     static DbInteractive *getInteractive(int i);
+    static void dispatchHit(_fvector *dir, float dmg, int attackerId, int targetId);
 };
 class TankPickup : public MilitaryPickup {
 public:
@@ -79,14 +84,138 @@ public:
 class CsPool {
 public:
     static _cs *csActivate(void);
+    static void csDeactivate(_cs *cs);
 };
 void hierSetCsEpNode(_cs *cs, _hierhead *ep);
+void mathfMulMatrix(float (*d)[4], float (*a)[4], float (*b)[4]);
+void particleSweepTrail(_fvector *a, _fvector *b, unsigned id);
+int electricArc(_fvector *from, _fvector *to, unsigned c0, unsigned c1, float jitter, float size, float spread, float scale, int segs,
+                unsigned seed, unsigned dur);
+extern "C" int rand(void);
+int hdSphereTest(_fvector *a, _fvector *b, float r, _hdResult *res, unsigned skipId2, int max);
+_hdResult *hdGetNextCollis(_hdResult *r, int n, _hdResult *prev);
+void mathfUnitMatrix(float (*m)[4]);
+void mathfTransposeMatrix(float (*dst)[4], float (*src)[4]);
+void mathfRPHFromMatrix(float (*m)[4], _fvector *rph);
+extern "C" int printf(const char *fmt, ...);
+int hdSphereTest(_fvector *p, float r, _hdResult *res, unsigned skipId2, int max);
+class MonsterSound {
+public:
+    void playTakeBatHitSound(void);
+};
+class StateCounter {
+public:
+    int counterSuccess(Monster &by, _fvector &at);
+};
+/* constructors of the pickups createPickup builds (they return `this`) */
+void *pickupCtor(void *p) __asm__("__6Pickup");
+void *missileTruckPickupCtor(void *p) __asm__("__18MissileTruckPickup");
+void *tankPickupCtor(void *p) __asm__("__10TankPickup");
+void *heliPickupCtor(void *p, bool military) __asm__("__10HeliPickupb");
+void *turretPickupCtor(void *p) __asm__("__12TurretPickup");
+void *ufoPickupCtor(void *p) __asm__("__9UfoPickup");
+void *carPickupCtor(void *p) __asm__("__9CarPickup");
+void *subwayPickupCtor(void *p) __asm__("__12SubwayPickup");
+void *rigidBodyCtor(void *p) __asm__("__9RigidBody");
+void *hitHistoryCtor(void *p) __asm__("__10HitHistory");
+extern char rigidPickupVtbl[] __asm__("_vt$11RigidPickup");
+/* LevelPickups::tankerShock, the ExpandingRing<ShockWaveConfig> the tanker's explosion hands to ShockWave::Activate (by value, so by
+   address). Only what init writes is laid out: the ring count, six rings (stride 0x1C from 0x20, four floats at +4) and seven more floats. */
+struct ShockRing {
+    char pad0[4];
+    float f[4];
+    char pad14[8];
+};
+typedef char _size_ShockRing[sizeof(ShockRing) == 0x1C ? 1 : -1];
+struct TankerShock {
+    int numRings;
+    char pad4[0x1C];
+    ShockRing ring[6];
+    char padC8[0x250 - 0xC8];
+    float f250[6];
+    char pad268[0x2A0 - 0x268];
+    float f2A0;
+};
+extern TankerShock tankerShock __asm__("_12LevelPickups$tankerShock");
+void *shockWaveActivate(_fvector *pos, TankerShock *cfg, int cause, int id, void *anim)
+    __asm__("Activate__9ShockWaveP8_fvectorGt13ExpandingRing1Z15ShockWaveConfigQ28HitEvent11DamageCauseiP10SpecFxAnim");
 /* the two cs that draw the highlight around the pickup a monster can grab */
 extern _cs *highlightCs[2] __asm__("_12LevelPickups$s_highlight");
 
 
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", __6Pickup);
+/* Resets the pickup, takes a cs placed at `pos` with rotation m (transposed), and reads the pickup group `ep`: its radius, its visual
+   switch reset to child 0, and the locators of its second child (or of that child's first child group); the extra children are dropped.
+   bit 0 = regen, 4 = !ep id2 bit 1, 5 = ep id2 bit 2. 0 when out of cs or `ep` is not a group. */
+#ifdef NON_MATCHING
+/* equivalent: 99/166 words; bitfield update order and scheduling */
+int Pickup::init(_hierhead *ep, _fvector &pos, float (*m)[4], bool regen, ePickupType type)
+{
+    QMat t;
+    HierGroup *g = (HierGroup *)ep;
+    HierHead *k;
+
+    weapIdx = -1;
+    regenTimer = 0xA8C;
+    *(float *)((char *)this + 0x11C) = 10.0f;
+    heldState = 0;
+    *(short *)((char *)this + 0xDC) = 0;
+    *(int *)((char *)this + 0xE4) = 0;
+    *(int *)((char *)this + 0xE0) = 0;
+    *(int *)((char *)this + 0xD4) = 0;
+    *(int *)&speed = 0;
+    bits = (bits & ~1ULL) | (regen & 1);
+    bits &= ~4ULL;
+    bits &= ~2ULL;
+    bits &= ~8ULL;
+    *(short *)((char *)this + 0xDE) = (int)((float *)&LevelPickups::s_info[type])[20];
+    bits = (bits & ~0x10ULL) | ((unsigned long long)(~(*(unsigned *)ep >> 8) & 1) << 4);
+    bits = (bits & ~0x20ULL) | ((unsigned long long)((*(unsigned *)ep >> 9) & 1) << 5);
+    bits &= ~0x40ULL;
+    mathfUnitMatrix((float (*)[4])handleMat);
+    pickupType = type;
+    *(int *)&handleRange = 0;
+    *(int *)((char *)this + 0x160) = 0;
+    ((PickupSound *)((char *)this + 0x100))->initPickupSound(this);
+    cs = CsPool::csActivate();
+    if (cs == 0) {
+        printf("Pickup::Init - No more CSs available.\n");
+        return 0;
+    }
+    mathfTransposeMatrix(t.m, m);
+    vecCopy((_fvector *)((char *)this + 0x20), &pos);
+    mathfRPHFromMatrix(t.m, (_fvector *)((char *)this + 0x30));
+    vecCopy((_fvector *)&cs->trans, &pos);
+    vecCopy((_fvector *)&cs->rot, (_fvector *)((char *)this + 0x30));
+    matCopy(cs->mat, t.m);
+    if (g->head.opcode != 1) {
+        printf("Pickup::Init - Found a PickupId on something other than a GroupNode (%d)\n", g->head.opcode);
+        return 0;
+    }
+    *(float *)((char *)this + 0x11C) = g->sphereRadius;
+    hierSetCsEpNode(cs, ep);
+    k = g->child[0];
+    if (k->opcode == 6)
+        ((_hierswitch *)k)->whichChild = 0;
+    if (g->numKids >= 2) {
+        HierGroup *k1 = (HierGroup *)g->child[1];
+
+        if (k1->head.opcode == 1) {
+            if (k1->child[0]->opcode == 1)
+                initLocators(k1->child[0]);
+            else
+                initLocators((_hierhead *)k1);
+        }
+        g->numKids = 1;
+    }
+    cs->drawMe = 1;
+    cs->testCollision = 0;
+    initConfig();
+    return 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", init__6PickupP9_hierheadR8_fvectorPA3_fb11ePickupType);
+#endif
 void Pickup::initAfterDbLoad(void)
 {
     int id = Interactives::addInteractive((DbInteractive *)this);
@@ -203,12 +332,79 @@ void Pickup::drop(void)
     setVisualState(0);
     hdReparentCsGrid(cs, (_fvector *)((char *)cs + 0x10), 0.0f);
 }
+/* Explosion of a destroyed pickup by type, then the cs goes back to the pool (unless shared) and the engine sound stops. Type 3 (tanker)
+   fires the tanker shock wave and, with bit 4, a fire, both credited to the db id of 0xE4's node; 4 only plays sound 0x81. */
+#ifdef NON_MATCHING
+/* equivalent: 18/161 words; retail reads game via lui in some cases and gp in others (file is SNFIX_SMALL) */
+void Pickup::kill(void)
+{
+    flags &= 0xFFFD;
+    switch (pickupType) {
+    case 4:
+        PICKUP_SOUNDS()->playDestructibleSound(0x81, &cs->trans);
+        break;
+    case 1:
+    default:
+        particleCreateFx(&cs->trans, 0x20, 5.0f, 0, 0.0f);
+        PICKUP_SOUNDS()->playDestructibleSound(0x65, &cs->trans);
+        break;
+    case 3: {
+        char *by = *(char **)((char *)this + 0xE4);
+        char *sw = (char *)shockWaveActivate(&cs->trans, &tankerShock, 14, by ? (int)(*(_cs **)(by + 0xC))->epNode->id2 : 0, 0);
+
+        if (sw != 0)
+            *(int *)(sw + 0x24) = 1;
+        if (bits & 0x10) {
+            by = *(char **)((char *)this + 0xE4);
+            gameWeapons()->CreateFire(&cs->trans, 100.0f, by ? (int)(*(_cs **)(by + 0xC))->epNode->id2 : 0);
+        }
+        particleCreateFx(&cs->trans, 9, 20.0f, 0, 0.0f);
+        particleCreateFx(&cs->trans, 0x1F, 10.0f, 0, 0.0f);
+        PICKUP_SOUNDS()->playDestructibleSound(0x65, &cs->trans);
+        break;
+    }
+    case 2:
+    case 11:
+    case 12:
+    case 15:
+    case 23:
+    case 24:
+    case 26:
+        particleCreateFx(&cs->trans, 9, 5.0f, 0, 0.0f);
+        PICKUP_SOUNDS()->playDestructibleSound(0x67, &cs->trans);
+        break;
+    case 14:
+    case 27:
+        particleCreateFx(&cs->trans, 0x20, 5.0f, 0, 0.0f);
+        PICKUP_SOUNDS()->playDestructibleSound(0x65, &cs->trans);
+        break;
+    }
+    if ((bits & 1) == 0) {
+        CsPool::csDeactivate(cs);
+        cs = 0;
+    }
+    ((PickupSound *)((char *)this + 0x100))->terminatePickupSound();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", kill__6Pickup);
+#endif
 void Pickup::initConfig(void)
 {
     health = maxHealth = LevelPickups::s_info[pickupType].health;
 }
-INCLUDE_ASM("asm/nonmatchings/game/Pickup", updateCS__6PickupP8_fvectorRA3_A3_fb);
+/* Places the cs from the grabber's hand: rotation = hand * handle rotation (two rows negated when flipped), position = hand + rotated handle. */
+void Pickup::updateCS(_fvector *pos, float (&m)[4][4], bool flip)
+{
+    _fvector t;
+
+    mathfMulMatrix(cs->mat, handleMat, m);
+    if (flip) {
+        vecScale((_fvector *)cs->mat[0], (_fvector *)cs->mat[0], -1.0f);
+        vecScale((_fvector *)cs->mat[1], (_fvector *)cs->mat[1], -1.0f);
+    }
+    vecApplyRows(&t, cs->mat, (_fvector *)handle);
+    vecAdd((_fvector *)&cs->trans, pos, &t);
+}
 void Pickup::getVel(_fvector &v)
 {
     if (weapIdx >= 0)
@@ -230,8 +426,124 @@ void Pickup::setVisualState(int s)
     if (sw->head.opcode == 6)
         sw->whichChild = (s < sw->numKids) ? s : sw->numKids - 1;
 }
+/* Drops the pickup onto the ground below it (from its holder's position when held): sweeps a point from 25 above down to 25 below
+   (bit 6, cleared here) or 4096 below, skipping hat id1 0x2744 and live interactives. On a hit the cs sits at the hit height + 0xD4
+   with its up axis on the hit normal; surface 6 while 0x1203D0 is 10, or no hit at all, leaves it at the bottom of the sweep with
+   health 0. */
+#ifdef NON_MATCHING
+/* equivalent: 0/166 words; loop layout (retail keeps the masks in s-registers and tests the result as one doubleword) */
+void Pickup::hatCheck(void)
+{
+    _fvector a;
+    _fvector b;
+    _hdResult res[16];
+    _hdResult *r;
+    int n;
+
+    if (heldState != 0) {
+        _cs *c = cs;
+        char *g = (char *)Interactives::getInteractive(heldState);
+        char *vt = *(char **)(g + 0x10);
+
+        vecCopy((_fvector *)&c->trans, (*(_fvector *(**)(void *))(vt + 0x14))(g + *(short *)(vt + 0x10)));
+    }
+    vecCopy(&a, (_fvector *)&cs->trans);
+    b = a;
+    a.z += 25.0f;
+    if (bits & 0x40)
+        b.z -= 25.0f;
+    else
+        b.z -= 4096.0f;
+    n = hdSphereTest(&a, &b, 0.0f, res, cs->epNode->id2, 0x10);
+    bits &= ~0x40;
+    for (r = hdGetNextCollis(res, n, 0); r != 0; r = hdGetNextCollis(res, n, r)) {
+        if (((r->ids >> 11) & 0x3FFF) == 0x2744)
+            continue;
+        if ((r->ids & 0x7FF) != 0 && *(int *)((char *)Interactives::getInteractive(r->ids & 0x7FF) + 0xC) != 0)
+            continue;
+        if (((unsigned char *)r)[3] == 6 && *(int *)((char *)game + 0x1203D0) == 10)
+            break;
+        {
+            _cs *c = cs;
+            float *x = (float *)c->mat[0];
+            float k;
+
+            c->trans.z = r->point.z + *(float *)((char *)this + 0xD4);
+            vecCopy((_fvector *)c->mat[2], (_fvector *)&r->normal);
+            ((int *)c->mat[2])[3] = 0;
+            vecCross((_fvector *)c->mat[0], (_fvector *)c->mat[1], (_fvector *)c->mat[2]);
+            k = eeRsqrtf(1.0f, vecDot((_fvector *)x, (_fvector *)x));
+            x[0] *= k;
+            x[2] *= k;
+            x[1] *= k;
+            vecCross((_fvector *)c->mat[1], (_fvector *)c->mat[2], (_fvector *)c->mat[0]);
+            return;
+        }
+    }
+    cs->trans.z = b.z;
+    health = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", hatCheck__6Pickup);
+#endif
+/* Scans the pickup's group for translate/rotate nodes whose child is a locator (opcode 0x28) and reads them by locator id: 0x7E4 grab
+   handle, 0x7E5 swipe far point (collision spheres), 0x7E6 the negated z goes to 0xD4. */
+#ifdef NON_MATCHING
+/* equivalent: 93/99 words; load order of the locator translation */
+void Pickup::initLocators(_hierhead *ep)
+{
+    HierGroup *g = (HierGroup *)ep;
+    int i;
+
+    for (i = 0; i < g->numKids; i++) {
+        HierHead *k = g->child[i];
+
+        switch (k->opcode) {
+        case 3: {
+            _hiertranslate *t = (_hiertranslate *)k;
+            unsigned c = *(unsigned *)t->child[0];
+
+            if ((c & 0x3F) == 0x28) {
+                c &= 0xFFFC0000;
+                if (c == 0x1F900000) {
+                    initHandle(t);
+                } else if (c == 0x1F940000) {
+                    _fvector v;
+
+                    float z = t->trans.z;
+                    float x = t->trans.x;
+
+                    v.x = x;
+                    v.y = t->trans.y;
+                    v.z = z;
+                    initCollisSpheres(&v);
+                } else if (c == 0x1F980000) {
+                    *(float *)((char *)this + 0xD4) = -t->trans.z;
+                }
+            }
+            break;
+        }
+        case 4: {
+            _hierrotate *r = (_hierrotate *)k;
+            unsigned c = *(unsigned *)r->child[0];
+
+            if ((c & 0x3F) == 0x28) {
+                c &= 0xFFFC0000;
+                if (c == 0x1F900000)
+                    initHandle(r);
+                else if (c == 0x1F940000)
+                    initCollisSpheres((_fvector *)r->mat[3]);
+                else if (c == 0x1F980000)
+                    *(float *)((char *)this + 0xD4) = -r->mat[3][2];
+            }
+            break;
+        }
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initLocators__6PickupP9_hierhead);
+#endif
 #ifdef NON_MATCHING
 /* 26/29 words: instruction order */
 /* The grab handle is the negated translation of the node; its range is the db id of the node's child. */
@@ -263,9 +575,141 @@ void Pickup::initHandle(_hierrotate *r)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initHandle__6PickupP11_hierrotate);
 #endif
+/* The swipe segment runs from the far point p (0xB0) to the negated handle (0xC0). Type 7 gets one sphere of radius 10 at p (count left
+   as is); type 6 gets five spheres stepping a quarter of the segment from the near end, radius = quarter length. */
+#ifdef NON_MATCHING
+/* equivalent: 2/70 words; this kept in a2 in retail (register allocation) */
+void Pickup::initCollisSpheres(_fvector *p)
+{
+    _fvector d;
+    float *s;
+    int i;
+
+    vecCopy((_fvector *)((char *)this + 0xB0), p);
+    vecScale((_fvector *)((char *)this + 0xC0), (_fvector *)handle, -1.0f);
+    vecSub(&d, p, (_fvector *)((char *)this + 0xC0));
+    vecScale(&d, &d, 0.25f);
+    if (pickupType == 7) {
+        vecCopy((_fvector *)((char *)this + 0x110), p);
+        *(float *)((char *)this + 0x11C) = 10.0f;
+    } else if (pickupType == 6) {
+        s = (float *)((char *)this + 0x110);
+        for (i = 0; i < 5; i++, s += 4) {
+            float f = i;
+            float *dd = (float *)&d;
+            float *n = &((float *)this)[0x30];
+            float x = n[0] + dd[0] * f;
+            float y = n[1] + dd[1] * f;
+            float z = n[2] + dd[2] * f;
+            register float r __asm__("$f1") = vecDot(&d, &d);
+
+            __asm__(".word 0x46010044" : "+f"(r)); /* sqrt.s $f1, $f1 (R5900 form, see eeSqrtf) */
+            s[0] = x;
+            s[1] = y;
+            s[2] = z;
+            s[3] = r;
+        }
+        *(int *)((char *)this + 0x160) = 5;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initCollisSpheres__6PickupP8_fvector);
-INCLUDE_ASM("asm/nonmatchings/game/Pickup", swipeTrailEffect__6Pickup);
+#endif
+/* Sweeps the particle trail between the world positions of the two ends of the swipe segment. */
+void Pickup::swipeTrailEffect(void)
+{
+    _fvector a;
+    _fvector b;
+
+    vecApplyRows(&a, cs->mat, (_fvector *)((char *)this + 0xC0));
+    vecAdd(&a, (_fvector *)&cs->trans, &a);
+    vecApplyRows(&b, cs->mat, (_fvector *)((char *)this + 0xB0));
+    vecAdd(&b, (_fvector *)&cs->trans, &b);
+    particleSweepTrail(&a, &b, (unsigned)this);
+}
+/* Bat swing with this pickup: each collision sphere (placed by the cs) collects up to 16 hits in total. Every new target other than
+   the attacker `byId` gets a hit event (type 2 with b/c when either is set, else 7 when d > 100, else 1) and is dispatched damage
+   a * a factor: monsters (kind 1, who also hear the bat) and hat ids 0x27A6/0x271B/0x271C take s_info[6]'s 0x10, kind 3 its 0x14,
+   anything else 100. A monster in its counter state (0x37) that counters the swing ends the test with 0. Returns 1 if anything was hit. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 46/242 words, size 0x394 vs 0x3c8 */
+int Pickup::collisTestBatAttack(float a, unsigned byId, MonsterAnim anim, HitHistory &hist, float b, float c, float d)
+{
+    _hdResult res[16];
+    _fvector p;
+    _fvector dir;
+    int n = 0;
+    int i;
+    int hit;
+    float *sphere = (float *)((char *)this + 0x110);
+    float *info = (float *)&LevelPickups::s_info[6];
+
+    for (i = 0; i < *(int *)((char *)this + 0x160); i++, sphere += 4) {
+        vecApplyRows(&p, cs->mat, (_fvector *)sphere);
+        vecAdd(&p, &p, (_fvector *)&cs->trans);
+        n += hdSphereTest(&p, sphere[3], &res[n], cs->epNode->id2, 16 - n);
+    }
+    hit = 0;
+    for (i = 0; i < n; i++) {
+        _hdResult *r = &res[i];
+        unsigned id = r->ids & 0x7FF;
+        HitEvent *e;
+        int *mon;
+        float dmg;
+
+        if (id == byId || hist.newHit(id, false) == 0)
+            continue;
+        e = HitEvent::create();
+        hit = 1;
+        *(_hdResult **)((char *)e + 0x4) = r;
+        e->source = 4;
+        e->pos = (_fvector *)&r->point;
+        *(unsigned *)((char *)e + 0x24) = byId;
+        if (b != 0.0f || c != 0.0f) {
+            e->type = 2;
+            *(float *)((char *)e + 0x38) = c;
+            *(float *)((char *)e + 0x34) = b;
+        } else {
+            e->type = d > 100.0f ? 7 : hit;
+        }
+        mon = (int *)Interactives::getInteractive(r->ids & 0x7FF);
+        if (*mon == 1)
+            ((MonsterSound *)((char *)mon + 0x1A7C))->playTakeBatHitSound();
+        if (*mon == 1) {
+            dmg = a * info[4];
+            if (byId != 0) {
+                Monster *att = (Monster *)Interactives::getInteractive(byId);
+
+                if (**(int **)((char *)mon + 0x34) == 0x37 &&
+                    ((StateCounter *)((char *)mon + 0x7DD8))->counterSuccess(*att, *(_fvector *)&r->point) != 0)
+                    return 0;
+                att->registerComboHit((Monster *)mon);
+            }
+        } else if (*mon == 3) {
+            dmg = a * info[5];
+        } else {
+            unsigned id1 = (r->ids >> 11) & 0x3FFF;
+
+            if (id1 == 0x27A6 || id1 == 0x271B || id1 == 0x271C)
+                dmg = a * info[4];
+            else
+                dmg = a * 100.0f;
+        }
+        if (byId != 0) {
+            Interactives::dispatchHit((_fvector *)(*(_cs **)((char *)Interactives::getInteractive(byId) + 0xC))->mat[1], dmg, byId,
+                                      r->ids & 0x7FF);
+        } else {
+            vecScale(&dir, (_fvector *)&r->normal, -1.0f);
+            Interactives::dispatchHit(&dir, dmg, byId, r->ids & 0x7FF);
+        }
+        particleCreateFx((_fvector *)&r->point, 0x20, 5.0f, 0, 0.0f);
+        ((PickupSound *)((char *)this + 0x100))->playBatImpactSound();
+    }
+    return hit;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", collisTestBatAttack__6PickupfUi11MonsterAnimR10HitHistoryfff);
+#endif
 _fvector *Pickup::getCollisSphereTrans(int i)
 {
     return (_fvector *)((char *)this + 0x110) + i;
@@ -274,8 +718,140 @@ float Pickup::getCollisSphereRadius(int i)
 {
     return *(float *)((char *)this + (i << 4) + 0x11C);
 }
+/* Generator pickup (0xDC frame counter, 0xE0 victim monster, 0xE4 source). For 40 frames it arcs electricity from the victim (or 0xF0
+   when none) upward with sparks; on frame 41 it knocks the victim away from the source and, if the source is a kind-1 object, stores
+   it in the victim's knock-back state. Returns 1 while still arcing. */
+#ifdef NON_MATCHING
+/* equivalent: 10/131 words; register allocation and the 0x7EA0 + 0x524 offset folded */
+int Pickup::updateGenerator(void)
+{
+    short *count = (short *)((char *)this + 0xDC);
+    char *victim;
+    _fvector a;
+    _fvector b;
+
+    if (++*count > 40) {
+        int *src;
+
+        victim = *(char **)((char *)this + 0xE0);
+        if (victim == 0)
+            return 0;
+        src = *(int **)((char *)this + 0xE4);
+        vecSub(&a, (_fvector *)(*(char **)((char *)src + 0xC) + 0x10), (_fvector *)(*(char **)(victim + 0xC) + 0x10));
+        {
+            float k = eeRsqrtf(1.0f, vecDot(&a, &a));
+
+            a.z *= k;
+            a.x *= k;
+            a.y *= k;
+        }
+        ((Monster *)victim)->knockBack(a, 550.0f, 250.0f);
+        src = *(int **)((char *)this + 0xE4);
+        if (src != 0 && *src == 1)
+            *(int **)(*(char **)((char *)this + 0xE0) + 0x7EA0 + 0x524) = src;
+        return 0;
+    }
+    victim = *(char **)((char *)this + 0xE0);
+    vecCopy(&a, victim != 0 ? (_fvector *)(victim + 0x3E30) : (_fvector *)((char *)this + 0xF0));
+    b = a;
+    b.z += mathfRandf(200.0f, 300.0f);
+    electricArc(&a, &b, 0x40FFC864, 0x02FFFF80, 0.0f, 15.0f, 0.75f, 0.8f, *count > 29 ? 1 : 3, rand(), 2);
+    if (mathfRand(0, 10) == 0) {
+        particleCreateFx(&a, 0x20, 7.5f, 0, 0.0f);
+        particleCreateFx(&a, 0x18, 15.0f, 0, 0.0f);
+    }
+    return 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", updateGenerator__6Pickup);
+#endif
+/* Resets the highlight pulse, the 16 highlighted pickups, the five lists and the highlight cs, then the per-type tuning of all 28 types
+   (word 1, heldHealth, is left alone) and the tanker explosion's shock wave. */
+#ifdef NON_MATCHING
+/* equivalent: 19/178 words; store scheduling of the table init (retail compares the loop pointer signed) */
+void LevelPickups::init(void)
+{
+    LevelPickups::Info *p;
+    int i;
+
+    highlightColorInc = 5;
+    highlightColor = 0x80;
+    highlightGreen = 0x80;
+    for (i = 15; i >= 0; i--)
+        highlightList[i] = 0;
+    activeList.next = &activeList;
+    inUseList.next = &inUseList;
+    inFlightList.next = &inFlightList;
+    regenList.next = &regenList;
+    deadList.next = &deadList;
+    highlightCs[0] = 0;
+    highlightCs[1] = 0;
+    activeList.prev = &activeList;
+    inUseList.prev = &inUseList;
+    inFlightList.prev = &inFlightList;
+    regenList.prev = &regenList;
+    deadList.prev = &deadList;
+    for (p = s_info; p < s_info + 28; p++) {
+        float *f = (float *)p;
+
+        f[0] = 10.0f;
+        f[2] = 8.0f;
+        f[3] = 10.0f;
+        f[4] = 8.0f;
+        f[5] = 8.0f;
+        f[6] = 2.0f;
+        f[7] = 100.0f;
+        f[8] = 200.0f;
+        f[9] = 200.0f;
+        f[10] = 8.0f;
+        f[11] = 10.0f;
+        f[12] = 2.0f;
+        f[13] = 800.0f;
+        f[14] = -640.0f;
+        f[15] = 1000.0f;
+        ((int *)f)[16] = 0;
+        ((int *)f)[17] = 0;
+        f[20] = 4.0f;
+        f[18] = 0.7853982f;
+        f[19] = 0.7853982f;
+    }
+    ((float *)&s_info[7])[14] = -160.0f;
+    tankerShock.numRings = 6;
+    tankerShock.ring[0].f[3] = 440.0f;
+    tankerShock.ring[1].f[3] = 490.0f;
+    tankerShock.ring[2].f[3] = 420.0f;
+    tankerShock.ring[3].f[3] = 350.0f;
+    tankerShock.ring[4].f[3] = 90.0f;
+    tankerShock.f250[0] = 20.0f;
+    tankerShock.ring[0].f[0] = 10.0f;
+    tankerShock.ring[0].f[2] = 540.0f;
+    tankerShock.f250[1] = 70.0f;
+    tankerShock.ring[1].f[0] = 9.0f;
+    tankerShock.f250[2] = 100.0f;
+    tankerShock.ring[2].f[0] = 8.0f;
+    tankerShock.ring[2].f[2] = 360.0f;
+    tankerShock.f250[3] = 140.0f;
+    tankerShock.f250[4] = 170.0f;
+    tankerShock.ring[4].f[0] = 7.0f;
+    tankerShock.f250[5] = 200.0f;
+    tankerShock.ring[5].f[0] = 6.0f;
+    tankerShock.ring[5].f[1] = 44.0f;
+    *(int *)&tankerShock.ring[5].f[3] = 0;
+    tankerShock.f2A0 = 10.0f;
+    tankerShock.ring[0].f[1] = 44.0f;
+    tankerShock.ring[1].f[1] = 44.0f;
+    tankerShock.ring[1].f[2] = 420.0f;
+    tankerShock.ring[2].f[1] = 44.0f;
+    tankerShock.ring[3].f[0] = 7.0f;
+    tankerShock.ring[3].f[1] = 44.0f;
+    tankerShock.ring[3].f[2] = 350.0f;
+    tankerShock.ring[4].f[1] = 44.0f;
+    tankerShock.ring[4].f[2] = 90.0f;
+    *(int *)&tankerShock.ring[5].f[2] = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", init__12LevelPickups);
+#endif
 /* Prunes every active vehicle pickup (types 1-16, 23-24 and 26-27; 25 too unless the game mode is 1 on Three Mile Island). */
 #ifdef NON_MATCHING
 /* 21/49 words: switch layout */
@@ -506,7 +1082,126 @@ void LevelPickups::initMilitaryForVegas(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", initMilitaryForVegas__12LevelPickups);
 #endif
+/* Builds the pickup for hat node `ep` on the global memory stack. The type comes from the node's id1 (minus 5000) unless given, in
+   which case it is written back into id1. In game mode 1 the military ones (missile truck, tank, helicopters, turret) and the UFO are
+   built; outside it only a UFO whose id2 bit 0 is set. Then the other ids: helicopter (not military), rigid pickups, cars (id2 bit 0,
+   else plain), subway, plain for any other id; ids already handled above, and 0x138D, give nothing. After the virtual init succeeds,
+   the pickup gets a node at the head of the active list (and the virtual at 0x30 when 0x120468 is set; the dodge ball level keeps the
+   node of id1 0x139D). Returns the node, or 0. */
+#ifdef NON_MATCHING
+/* equivalent (untuned): 4/308 words; switch ranges and game read via gp */
+void *LevelPickups::createPickup(_hierhead *ep, _fvector &pos, float (*m)[4], bool regen, ePickupType type)
+{
+    unsigned *w = (unsigned *)ep;
+    char *p = 0;
+    ListNode *n;
+
+    if (type == 0)
+        type = (ePickupType)((*w >> 18) - 0x1388);
+    else
+        *w = (*w & 0x3FFFF) | ((type + 0x1388) << 18);
+    if (*(int *)((char *)game + 0x1203C8) == 1) {
+        switch (*w >> 18) {
+        case 0x1391:
+            p = (char *)missileTruckPickupCtor(operator new(0x2A0, MemoryStack::global.alloc16(0x2A0)));
+            break;
+        case 0x1392:
+            p = (char *)tankPickupCtor(operator new(0x2B0, MemoryStack::global.alloc16(0x2B0)));
+            break;
+        case 0x1394:
+            p = (char *)heliPickupCtor(operator new(0x300, MemoryStack::global.alloc16(0x300)), true);
+            break;
+        case 0x139F:
+            p = (char *)heliPickupCtor(operator new(0x300, MemoryStack::global.alloc16(0x300)), true);
+            break;
+        case 0x13A0:
+            p = (char *)turretPickupCtor(operator new(0x1D0, MemoryStack::global.alloc16(0x1D0)));
+            break;
+        case 0x13A1:
+            p = (char *)ufoPickupCtor(operator new(0x230, MemoryStack::global.alloc16(0x230)));
+            break;
+        }
+    } else if ((*w & 0xFFFFFF80) == 0x4E840080) {
+        p = (char *)ufoPickupCtor(operator new(0x230, MemoryStack::global.alloc16(0x230)));
+    }
+    switch (*w >> 18) {
+    case 0x1393:
+        p = (char *)heliPickupCtor(operator new(0x300, MemoryStack::global.alloc16(0x300)), false);
+        break;
+    case 0x1395:
+    case 0x1399:
+    case 0x139A:
+    case 0x139B:
+    case 0x139C:
+    case 0x139D:
+    case 0x139E: {
+        char *r = (char *)operator new(0x4C0, MemoryStack::global.alloc16(0x4C0));
+
+        p = r;
+        pickupCtor(r);
+        *(void **)(r + 0x10) = rigidPickupVtbl;
+        rigidBodyCtor(r + 0x190);
+        hitHistoryCtor(r + 0x458);
+        break;
+    }
+    case 0x138A:
+    case 0x138B:
+    case 0x1397:
+    case 0x13A2:
+        if ((*w >> 7) & 1) {
+            p = (char *)carPickupCtor(operator new(0x270, MemoryStack::global.alloc16(0x270)));
+            break;
+        }
+        /* fall through */
+    default:
+        p = (char *)pickupCtor(operator new(0x170, MemoryStack::global.alloc16(0x170)));
+        break;
+    case 0x13A3:
+        p = (char *)subwayPickupCtor(operator new(0x250, MemoryStack::global.alloc16(0x250)));
+        break;
+    case 0x138D:
+    case 0x1391:
+    case 0x1392:
+    case 0x1394:
+    case 0x139F:
+    case 0x13A0:
+    case 0x13A1:
+        break;
+    }
+    if (p == 0)
+        return 0;
+    {
+        char *vt = *(char **)(p + 0x10);
+
+        if ((*(int (**)(void *, _hierhead *, _fvector &, float (*)[4], bool, ePickupType))(vt + 0x5C))(p + *(short *)(vt + 0x58), ep, pos, m,
+                                                                                                      regen, type) == 0)
+            return 0;
+    }
+    n = (ListNode *)operator new(0xC, MemoryStack::global.alloc16(0xC));
+    *(ListNode **)(p + 0x14) = n;
+    n->data = p;
+    {
+        ListNode *first = activeList.next;
+
+        activeList.next = n;
+        n->prev = &activeList;
+        n->next = first;
+        if (first != 0)
+            first->prev = n;
+    }
+    if (*(int *)((char *)game + 0x120468) != 0) {
+        char *d = (char *)n->data;
+        char *vt = *(char **)(d + 0x10);
+
+        (*(void (**)(void *))(vt + 0x34))(d + *(short *)(vt + 0x30));
+    }
+    if (*(int *)((char *)game + 0x1203C8) == 7 && (*w & 0xFFFC0000) == 0x4E740000)
+        *(ListNode **)(dodgeBallInst + 0xC) = n;
+    return n;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Pickup", createPickup__12LevelPickupsP9_hierheadR8_fvectorPA3_fb11ePickupType);
+#endif
 /* Calls initAfterDbLoad() (virtual) on every active pickup. */
 #ifdef NON_MATCHING
 /* 3/25 words: the list head lands in s1 later */
@@ -1219,9 +1914,9 @@ void Pickup::setWeapIdx(int i)
 {
     weapIdx = i;
 }
-void Pickup::updateGenerator(void *p)
+int Pickup::updateGenerator(void *p)
 {
-    updateGenerator();
+    return updateGenerator();
 }
 void Pickup::resetHealth(void)
 {

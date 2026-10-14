@@ -2,6 +2,8 @@
 #define LEVEL_PICKUPS_H
 
 /* Per-level pickup spawning; everything is static. */
+#include "game/pickup_type.h"
+
 class Monster;
 class Pickup;
 class DbInteractive;
@@ -53,6 +55,8 @@ public:
     static void initAfterDbLoad(void);
     static void turnOffMilitary(void);
     static void initMilitaryForCentral(void);
+    static void init(void);
+    static void *createPickup(struct _hierhead *ep, _fvector &pos, float (*m)[4], bool regen, ePickupType type);
 };
 
 #endif

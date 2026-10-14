@@ -18,9 +18,9 @@ class PlayerDat;
 class _fvector;
 class ActAiNavigation;
 class DbInteractive;
-enum MonsterAnim { MonsterAnim_dummy };
+#include "game/monster_anim.h"
 enum MonsterReticleState { MonsterReticleState_dummy };
-enum ePickupType { PICKUP_TYPE_0 };
+#include "game/pickup_type.h"
 
 class Camera {
 public:
