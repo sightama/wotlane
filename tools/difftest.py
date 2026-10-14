@@ -317,6 +317,9 @@ class Run:
                 val = rnd.randrange(0, 2)
             elif t.startswith('='):                # fixed integer, e.g. =2
                 val = int(t[1:], 0)
+            elif t.startswith('r'):                # random integer in [lo, hi], e.g. r0:1000
+                lo, hi = (int(x, 0) for x in t[1:].split(':'))
+                val = rnd.randint(lo, hi) & 0xFFFFFFFF
             elif t == 'f':
                 fv = rnd.uniform(-10, 10)
                 if nf >= len(freg):

@@ -1453,16 +1453,7 @@ void screenGameModes2P(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenGameModes2P__Fv);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE460);
-INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE488);
-INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect3P__Fv);
-INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE4D8);
-INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE508);
-INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE530);
-INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE558);
-INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE590);
-INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE5B0);
-#ifdef NON_MATCHING /* helpers of the C++ two-player selects (screenCharSelect2P, screenMinigames2P) */
+#ifdef NON_MATCHING /* helpers of the C++ multi-player selects (screenCharSelect3P, screenCharSelect2P, screenMinigames2P) */
 extern int monsterNametomonsterId[];
 int isSlotOpen(int group, int slot);
 void updateSelectSwitchesMG(int cursor1, int cursor2, int flag1, int flag2);
@@ -1562,6 +1553,690 @@ void findAvailableMonster(int dir, int player, int screen);
     } else {                                                                                             \
         MG_SEL(p) = (wrap);                                                                              \
     }
+/* [screen][p]: monster column of player p (one, or two in the three-player select) when it confirmed, restored by back */
+extern int c2PickedSel[][2] __asm__("D_00731458");
+#endif
+INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE460);
+INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE488);
+#ifdef NON_MATCHING
+extern int AINum;
+extern int AINumLeft;
+extern int c3First2861 __asm__("beginning.2861");
+extern int c3Last2862 __asm__("ending.2862");
+extern int c3TextBoxAlpha2863 __asm__("m_textBoxAlpha.2863");
+extern int c3TextBoxAlpha2864 __asm__("m_textBoxAlpha2.2864");
+extern int c3TextBoxAlpha2865 __asm__("m_textBoxAlpha3.2865");
+extern int c3NumSelOne2866 __asm__("numSelectablesOne.2866");
+extern int c3NumSelTwo2867 __asm__("numSelectablesTwo.2867");
+extern int c3Costume2868 __asm__("curCostume1.2868");
+extern int c3Costume2869 __asm__("curCostume2.2869");
+extern int c3Costume2870 __asm__("curCostume3.2870");
+extern int c3OneDone2871 __asm__("playerOneIsDone.2871");
+extern int c3TwoDone2872 __asm__("playerTwoIsDone.2872");
+extern int c3AiOneDone2873 __asm__("aiOneIsDone.2873");
+extern int c3AiTwoDone2874 __asm__("aiTwoIsDone.2874");
+extern int c3AINum2875 __asm__("AINum.2875");
+extern int c3Watch2876 __asm__("watchForASecond.2876");
+extern int c3NumAvail2877 __asm__("numAvail1.2877");
+extern int c3NumAvail2878 __asm__("numAvail2.2878");
+extern int c3NumAvail2879 __asm__("numAvail3.2879");
+extern int c3Num2880 __asm__("num1.2880");
+extern int c3Num2881 __asm__("num2.2881");
+extern int c3Num2882 __asm__("num3.2882");
+extern int c3AiOneMon2883 __asm__("aiOneMon.2883");
+extern int c3AiOneCost2884 __asm__("aiOneCost.2884");
+#define C3_CURSOR(n) shell->m_monsterCursorSw[n]
+#define C3_ALPHA(cs) (*(float *)((char *)(cs) + 0x7C))
+/* Lights on[i] for each open costume of column sel and clears off[i] for the others (on and off differ in one place of the retail). */
+#define C3_SHOW(sel, on, off)                                                                            \
+    for (i = 0; i < 4; i++) {                                                                            \
+        SelectSlot *s = &CS_SLOT((sel), i);                                                              \
+                                                                                                         \
+        if (s->state == 1 && s->taken == 1)                                                              \
+            hierSetSwitch((on)[i], 1);                                                                   \
+        else                                                                                             \
+            hierSetSwitch((off)[i], 0);                                                                  \
+    }
+#define C3_COUNT(sel, num, avail)                                                                        \
+    (num) = 0;                                                                                           \
+    for (i = 0; i < 4; i++) {                                                                            \
+        SelectSlot *s = &CS_SLOT((sel), i);                                                              \
+                                                                                                         \
+        if (s->state == 1 && s->taken == 1)                                                              \
+            (num)++;                                                                                     \
+    }                                                                                                    \
+    (avail) = (num);
+/* Moves the costume cursor forward to an open costume of column sel; with none left (`none`), findAvailableMonster moves player p's
+   column instead. */
+#define C3_FIND(sel, found, cur, none, p)                                                                \
+    while (!(found)) {                                                                                   \
+        if (isSlotOpen((sel) - 1, (cur)))                                                                \
+            (found) = 1;                                                                                 \
+        else if (none)                                                                                   \
+            findAvailableMonster(1, (p), currScreen);                                                    \
+        else                                                                                             \
+            (cur)++;                                                                                     \
+        CS_WRAP((cur));                                                                                  \
+    }
+/* Up/down: unlights sw[cur] (by the state of costume `chk`, which the retail does not always take from cur) and moves the cursor
+   cur of column sel by `step` to the next open costume. */
+#define C3_STEP(sel, chk, cur, sw, step)                                                                 \
+    {                                                                                                    \
+        SelectSlot *s = &CS_SLOT((sel), (chk));                                                          \
+                                                                                                         \
+        found = 0;                                                                                       \
+        if (s->state == 1 && s->taken == 1)                                                              \
+            hierSetSwitch((sw)[(cur)], 1);                                                               \
+        else                                                                                             \
+            hierSetSwitch((sw)[(cur)], 0);                                                               \
+        (cur) += (step);                                                                                 \
+        CS_WRAP((cur));                                                                                  \
+        while (!found) {                                                                                 \
+            if (isSlotOpen((sel) - 1, (cur)))                                                            \
+                found = 1;                                                                               \
+            else                                                                                         \
+                (cur) += (step);                                                                         \
+            CS_WRAP((cur));                                                                              \
+        }                                                                                                \
+        hierSetSwitch((sw)[(cur)], 2);                                                                   \
+    }
+/* Left/right of pad one: moves column one (findAvailableMonster), resets cur when costume 0 of the new column is taken, prints
+   `shown` and moves monster cursor n. */
+#define C3_MOVE(dir, cur, shown, fmt, sfx, n)                                                            \
+    findAvailableMonster((dir), 0, currScreen);                                                          \
+    if (CS_SLOT(MG_SEL(0), 0).taken == 1)                                                                \
+        (cur) = 0;                                                                                       \
+    printf((fmt), MG_SEL(0), (shown));                                                                   \
+    MG_SFX(sfx);                                                                                         \
+    hierSetSwitch(C3_CURSOR(n), MG_SEL(0));
+#define C3_P2_LEFT                                                                                       \
+    if (c3TwoDone2872 == 0) {                                                                            \
+        findAvailableMonster(-1, 1, currScreen);                                                         \
+        if (CS_SLOT(MG_SEL(1), 0).taken == 1)                                                            \
+            c3Costume2869 = 0;                                                                           \
+        hierSetSwitch(C3_CURSOR(1), MG_SEL(1));                                                          \
+        MG_SFX(5);                                                                                       \
+    }                                                                                                    \
+    c3Costume2869 = 0;
+#define C3_P2_RIGHT                                                                                      \
+    if (c3TwoDone2872 == 0) {                                                                            \
+        findAvailableMonster(1, 1, currScreen);                                                          \
+        c3Costume2869 = 0;                                                                               \
+        MG_SFX(3);                                                                                       \
+        hierSetSwitch(C3_CURSOR(1), MG_SEL(1));                                                          \
+    }
+#define C3_SWITCHES() updateSelectSwitches3P(MG_SEL(0), MG_SEL(1), MG_SEL(0), c3OneDone2871, c3TwoDone2872, c3AiOneDone2873)
+/* Three-player monster select (screen 18). Normal modes: pads one and two pick their monster column (left/right, codes 3/4,
+   findAvailableMonster) and costume (up/down, 1/2) and confirm (6) into m_monsterSel[p]/m_costume[p], each with its own costume panel
+   (m_costumeBoxCs, m_costumeBoxCs2) and monster cursor (m_monsterCursorSw[0], [1]); once both are done pad one also picks the AI
+   (m_monsterSel[4], m_costume[2]) on the third panel (m_cs7C[2], cursor [2]). Once the three are picked it waits ten frames and
+   goes to the level select (8). Mode 2 (one player and two AIs): pad two is not read; pad one picks its monster, then the first AI
+   (third panel, m_monsterSel[4], m_costume[2]), then the second (second panel, m_monsterSel[5], m_costume[3]), all on its own column.
+   Back (5) undoes the last pick of that pad, or restarts the menu movie and returns to the previous screen (pad two: screen 15).
+   Kept from the retail: in mode 6 pad two's up/down act as left/right; the third panel fades with the second panel's alpha; a few
+   costume steps light one panel or costume and clear another (C3_SHOW, C3_STEP); pad two's confirm with both players done goes to
+   screen 6's level select (changeScreen(6, ...)); in mode 2 right on the first AI resets its costume but prints the second AI's.
+   NON_MATCHING: untuned rewrite of a 0x4A00-byte function (the macros above stand for code that the retail repeats inline). */
+void screenCharSelect3P(void)
+{
+    int i, input;
+    int found;
+    int found1 = 0, found2 = 0, found3 = 0;
+
+    AINumLeft = shell->m_numAIs;
+    AINum = 0;
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        c3First2861 = 2;
+        c3Last2862 = 9;
+        c3NumSelOne2866 = 9;
+        c3NumSelTwo2867 = 9;
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        c3First2861 = 1;
+        c3Last2862 = 9;
+        c3NumSelOne2866 = 9;
+        c3NumSelTwo2867 = 9;
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        c3NumSelTwo2867 = 9;
+        c3First2861 = 2;
+        c3Last2862 = 10;
+        c3NumSelOne2866 = 9;
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        c3First2861 = 1;
+        c3Last2862 = 10;
+        c3NumSelOne2866 = 10;
+        c3NumSelTwo2867 = 10;
+    }
+    if (screenFirstPass != 0) {
+        C3_ALPHA(shell->m_costumeBoxCs) = 0;
+        C3_ALPHA(shell->m_costumeBoxCs2) = 0;
+        C3_ALPHA(shell->m_cs7C[2]) = 0;
+        c3TextBoxAlpha2863 = 0;
+        c3TextBoxAlpha2864 = 0;
+        c3TextBoxAlpha2865 = 0;
+        c3AINum2875 = 0;
+        C3_SHOW(MG_SEL(0), shell->m_costumeSw, shell->m_costumeSw);
+        C3_SHOW(MG_SEL(1), shell->m_costumeSw2, shell->m_costumeSw2);
+        hierSetSwitch(shell->m_costumeSw[c3Costume2868], 2);
+        hierSetSwitch(shell->m_costumeSw2[c3Costume2869], 2);
+        c3OneDone2871 = 0;
+        c3TwoDone2872 = 0;
+        c3AiOneDone2873 = 0;
+        c3AiTwoDone2874 = 0;
+        resetSelectables();
+        moviesReleaseScreenObject();
+        continueDecoding = 0;
+        hierSetSwitch(C3_CURSOR(0), MG_SEL(0));
+        if (shell->m_mode != 2)
+            hierSetSwitch(C3_CURSOR(1), MG_SEL(1));
+        else
+            hierSetSwitch(C3_CURSOR(1), 0);
+        hierSetSwitch(C3_CURSOR(2), 0);
+        hierSetSwitch(shell->m_sw5D0, 0);
+        screenFirstPass = 0;
+        c3Watch2876 = 10;
+    }
+    /* fade the costume panel of whoever is picking in */
+    if (shell->m_mode != 2) {
+        if (c3OneDone2871 == 0 && c3TwoDone2872 == 0) {
+            float a;
+
+            hierSetCsDrawMe(shell->m_costumeBoxCs, 1);
+            hierSetCsDrawMe(shell->m_costumeBoxCs2, 1);
+            hierSetCsDrawMe(shell->m_cs7C[2], 0);
+            c3TextBoxAlpha2863 += 2;
+            if (c3TextBoxAlpha2863 > 0x80)
+                c3TextBoxAlpha2863 = 0x80;
+            a = 2.0f * (float)c3TextBoxAlpha2863 * 0.0078125f;
+            C3_ALPHA(shell->m_costumeBoxCs) = a;
+            C3_ALPHA(shell->m_costumeBoxCs2) = a;
+        } else if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 == 0) {
+            hierSetCsDrawMe(shell->m_cs7C[2], 1);
+            c3TextBoxAlpha2864 += 2;
+            if (c3TextBoxAlpha2864 > 0x80)
+                c3TextBoxAlpha2864 = 0x80;
+            C3_ALPHA(shell->m_cs7C[2]) = 2.0f * (float)c3TextBoxAlpha2864 * 0.0078125f;
+        } else {
+            hierSetCsDrawMe(shell->m_cs7C[2], 0);
+        }
+    } else if (c3OneDone2871 == 0 && c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+        hierSetCsDrawMe(shell->m_costumeBoxCs, 1);
+        c3TextBoxAlpha2863 += 2;
+        if (c3TextBoxAlpha2863 > 0x80)
+            c3TextBoxAlpha2863 = 0x80;
+        C3_ALPHA(shell->m_costumeBoxCs) = 2.0f * (float)c3TextBoxAlpha2863 * 0.0078125f;
+    } else if (c3OneDone2871 != 0 && c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+        hierSetCsDrawMe(shell->m_cs7C[2], 1);
+        c3TextBoxAlpha2864 += 2;
+        if (c3TextBoxAlpha2864 > 0x80)
+            c3TextBoxAlpha2864 = 0x80;
+        C3_ALPHA(shell->m_cs7C[2]) = 2.0f * (float)c3TextBoxAlpha2864 * 0.0078125f;
+    } else if (c3OneDone2871 != 0 && c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0) {
+        hierSetCsDrawMe(shell->m_costumeBoxCs2, 1);
+        c3TextBoxAlpha2865 += 2;
+        if (c3TextBoxAlpha2865 > 0x80)
+            c3TextBoxAlpha2865 = 0x80;
+        C3_ALPHA(shell->m_costumeBoxCs2) = 2.0f * (float)c3TextBoxAlpha2864 * 0.0078125f; /* sic: alpha of the third panel */
+    } else {
+        hierSetCsDrawMe(shell->m_cs7C[2], 0);
+        hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+    }
+    if (shell->m_mode == 2) {
+        if (c3OneDone2871 == 0) {
+            updateSelectSwitches(MG_SEL(0), MG_SEL(1), 0, 1);
+        } else if (c3AiOneDone2873 == 0) {
+            if (c3AiTwoDone2874 == 0)
+                updateSelectSwitchesAI(MG_SEL(0), 1);
+        } else if (c3AiTwoDone2874 == 0) {
+            updateSelectSwitchesAI(MG_SEL(0), 2);
+        }
+    } else {
+        C3_SWITCHES();
+    }
+    /* light the open costumes of each panel and keep the cursors on open ones */
+    C3_SHOW(MG_SEL(0), shell->m_costumeSw, shell->m_costumeSw);
+    hierSetSwitch(shell->m_costumeSw[c3Costume2868], 2);
+    if (shell->m_mode != 2) {
+        C3_SHOW(MG_SEL(1), shell->m_costumeSw2, shell->m_costumeSw2);
+        hierSetSwitch(shell->m_costumeSw2[c3Costume2869], 2);
+    } else if (c3OneDone2871 != 0) {
+        if (c3AiOneDone2873 == 0) {
+            if (c3AiTwoDone2874 == 0) {
+                C3_SHOW(MG_SEL(0), shell->m_costumeSw2, shell->m_swD8[2]);
+                hierSetSwitch(shell->m_swD8[2][c3Costume2869], 2);
+            }
+        } else if (c3AiTwoDone2874 == 0) {
+            C3_SHOW(MG_SEL(0), shell->m_costumeSw2, shell->m_costumeSw2);
+            hierSetSwitch(shell->m_costumeSw2[c3Costume2870], 2);
+        }
+    }
+    if (shell->m_mode != 2) {
+        if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 == 0) {
+            C3_SHOW(MG_SEL(0), shell->m_swD8[2], shell->m_swD8[2]);
+            hierSetSwitch(shell->m_swD8[2][c3Costume2870], 2);
+        }
+    } else if (c3OneDone2871 != 0) {
+        if (c3AiOneDone2873 == 0) {
+            if (c3AiTwoDone2874 == 0) {
+                C3_SHOW(MG_SEL(0), shell->m_swD8[2], shell->m_swD8[2]);
+                hierSetSwitch(shell->m_swD8[2][c3Costume2869], 2);
+            }
+        } else if (c3AiTwoDone2874 == 0) {
+            C3_SHOW(MG_SEL(0), shell->m_costumeSw2, shell->m_costumeSw2);
+            hierSetSwitch(shell->m_costumeSw2[c3Costume2870], 2);
+        }
+    }
+    C3_COUNT(MG_SEL(0), c3Num2880, c3NumAvail2877);
+    if (shell->m_mode != 2) {
+        C3_COUNT(MG_SEL(1), c3Num2881, c3NumAvail2878);
+    } else if (c3OneDone2871 != 0 && c3AiOneDone2873 == 0) {
+        C3_COUNT(MG_SEL(0), c3Num2881, c3NumAvail2878);
+    }
+    if (shell->m_mode != 2) {
+        if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 == 0) {
+            C3_COUNT(MG_SEL(0), c3Num2882, c3NumAvail2879);
+        }
+    } else if (c3OneDone2871 != 0 && c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0) {
+        C3_COUNT(MG_SEL(0), c3Num2882, c3NumAvail2879);
+    }
+    if (c3OneDone2871 == 0) {
+        C3_FIND(MG_SEL(0), found1, c3Costume2868, c3NumAvail2877 == 0, 0);
+        hierSetSwitch(shell->m_costumeSw[c3Costume2868], 2);
+    }
+    if (shell->m_mode != 2) {
+        if (c3TwoDone2872 == 0) {
+            C3_FIND(MG_SEL(1), found2, c3Costume2869, modelsLeft(MG_SEL(1)) == 0, 1);
+            hierSetSwitch(shell->m_costumeSw2[c3Costume2869], 2);
+        }
+    } else if (c3OneDone2871 != 0) {
+        if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+            C3_FIND(MG_SEL(0), found2, c3Costume2869, modelsLeft(MG_SEL(0)) == 0, 0);
+            hierSetSwitch(shell->m_costumeSw2[c3Costume2869], 2);
+        }
+        if (c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0) {
+            C3_FIND(MG_SEL(0), found3, c3Costume2870, modelsLeft(MG_SEL(0)) == 0, 0);
+            hierSetSwitch(shell->m_swD8[2][c3Costume2870], 2);
+        }
+    }
+    if (shell->m_mode != 2 && c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 == 0) {
+        C3_FIND(MG_SEL(0), found3, c3Costume2870, modelsLeft(MG_SEL(0)) == 0, 0);
+        hierSetSwitch(shell->m_swD8[2][c3Costume2870], 2);
+    }
+    /* monster cursors */
+    if (shell->m_mode != 2) {
+        if (c3OneDone2871 == 0 || c3TwoDone2872 == 0) {
+            hierSetSwitch(C3_CURSOR(0), MG_SEL(0));
+            hierSetSwitch(C3_CURSOR(1), MG_SEL(1));
+            hierSetSwitch(C3_CURSOR(2), 0);
+        }
+        if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 == 0)
+            hierSetSwitch(C3_CURSOR(2), MG_SEL(0));
+    } else {
+        if (c3OneDone2871 == 0 && c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0)
+            hierSetSwitch(C3_CURSOR(0), MG_SEL(0));
+        if (c3OneDone2871 != 0 && c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0)
+            hierSetSwitch(C3_CURSOR(2), MG_SEL(0));
+        if (c3OneDone2871 != 0 && c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0)
+            hierSetSwitch(C3_CURSOR(1), MG_SEL(0));
+    }
+
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 2:
+        if (shell->m_mode != 2) {
+            if (c3OneDone2871 == 0) {
+                if (c3NumAvail2877 != 1) {
+                    C3_STEP(MG_SEL(0), c3Costume2868, c3Costume2868, shell->m_costumeSw, 1);
+                    MG_SFX(4);
+                    printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), c3Costume2868);
+                }
+            } else if (c3TwoDone2872 != 0 && c3AiOneDone2873 == 0 && c3NumAvail2879 != 1) {
+                C3_STEP(MG_SEL(0), c3Costume2870, c3Costume2870, shell->m_swD8[2], 1);
+                MG_SFX(4);
+                printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0), c3Costume2870);
+            }
+        } else if (c3OneDone2871 == 0) {
+            if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0 && c3NumAvail2877 != 1) {
+                C3_STEP(MG_SEL(0), c3Costume2868, c3Costume2868, shell->m_costumeSw, 1);
+                MG_SFX(4);
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), c3Costume2868);
+            }
+        } else if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+            if (c3NumAvail2878 != 1) {
+                C3_STEP(MG_SEL(0), c3Costume2870, c3Costume2869, shell->m_swD8[2], 1);
+                MG_SFX(4);
+                printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0), c3Costume2869);
+            }
+        } else if (c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0 && c3NumAvail2879 != 1) {
+            C3_STEP(MG_SEL(0), c3Costume2870, c3Costume2870, shell->m_costumeSw2, 1);
+            MG_SFX(4);
+            printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0), c3Costume2870);
+        }
+        break;
+    case 3:
+        if (shell->m_mode != 2) {
+            if (c3OneDone2871 == 0) {
+                C3_MOVE(-1, c3Costume2868, c3Costume2868, "Player 1 is on Monster %i, model %i\n", 5, 0);
+            }
+            if (CS_SLOT(MG_SEL(0), 0).taken == 1)
+                c3Costume2868 = 0;
+            if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 == 0) {
+                C3_MOVE(-1, c3Costume2870, c3Costume2870, "Player 1 is on AI Monster %i, model %i\n", 5, 2);
+            }
+        } else {
+            if (c3OneDone2871 == 0) {
+                C3_MOVE(-1, c3Costume2868, c3Costume2868, "Player 1 is on Monster %i, model %i\n", 5, 0);
+            }
+            if (CS_SLOT(MG_SEL(0), 0).taken == 1)
+                c3Costume2868 = 0;
+            if (c3OneDone2871 != 0) {
+                if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+                    C3_MOVE(-1, c3Costume2869, c3Costume2869, "AI 1 is on AI Monster %i, model %i\n", 5, 2);
+                }
+                if (c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0) {
+                    C3_MOVE(-1, c3Costume2870, c3Costume2870, "AI 2 is on AI Monster %i, model %i\n", 5, 1);
+                }
+            }
+        }
+        break;
+    case 1:
+        if (shell->m_mode != 2) {
+            if (c3OneDone2871 == 0) {
+                if (c3NumAvail2877 != 1) {
+                    C3_STEP(MG_SEL(0), c3Costume2868, c3Costume2868, shell->m_costumeSw, -1);
+                    MG_SFX(2);
+                    printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0) - 1, c3Costume2868);
+                }
+            } else if (c3TwoDone2872 != 0 && c3AiOneDone2873 == 0 && c3NumAvail2879 != 1) {
+                C3_STEP(MG_SEL(0), c3Costume2870, c3Costume2870, shell->m_swD8[2], -1);
+                MG_SFX(2);
+                printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0) - 1, c3Costume2870);
+            }
+        } else if (c3OneDone2871 == 0) {
+            if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0 && c3NumAvail2877 != 1) {
+                C3_STEP(MG_SEL(0), c3Costume2868, c3Costume2868, shell->m_costumeSw, -1);
+                MG_SFX(2);
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0) - 1, c3Costume2868);
+            }
+        } else if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+            if (c3NumAvail2878 != 1) {
+                C3_STEP(MG_SEL(0), c3Costume2869, c3Costume2869, shell->m_swD8[2], -1);
+                MG_SFX(2);
+                printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0) - 1, c3Costume2869);
+            }
+        } else if (c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0 && c3NumAvail2879 != 1) {
+            C3_STEP(MG_SEL(0), c3Costume2870, c3Costume2870, shell->m_costumeSw2, -1);
+            MG_SFX(2);
+            printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0) - 1, c3Costume2870);
+        }
+        break;
+    case 4:
+        if (shell->m_mode != 2) {
+            if (c3OneDone2871 == 0) {
+                C3_MOVE(1, c3Costume2868, c3Costume2868, "Player 1 is on Monster %i, model %i\n", 3, 0);
+            } else if (c3TwoDone2872 != 0 && c3AiOneDone2873 == 0) {
+                C3_MOVE(1, c3Costume2870, c3Costume2870, "Player 1 is on AI Monster %i, model %i\n", 3, 2);
+            }
+        } else if (c3OneDone2871 == 0) {
+            if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+                C3_MOVE(1, c3Costume2868, c3Costume2868, "Player 1 is on Monster %i, model %i\n", 3, 0);
+            }
+        } else if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+            C3_MOVE(1, c3Costume2869, c3Costume2870, "Player 1 is on AI Monster %i, model %i\n", 3, 2);
+        } else if (c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0) {
+            C3_MOVE(1, c3Costume2870, c3Costume2870, "Player 1 is on AI Monster %i, model %i\n", 3, 1);
+        }
+        break;
+    case 6:
+        c3TextBoxAlpha2863 = 0x80;
+        C3_ALPHA(shell->m_costumeBoxCs) = 2.0f;
+        C3_ALPHA(shell->m_costumeBoxCs2) = 2.0f;
+        if (shell->m_mode != 2) {
+            if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 != 0) {
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                hierSetCsDrawMe(shell->m_cs7C[2], 0);
+                CS_SLOT(MG_SEL(0), c3Costume2868).taken = 0;
+                C3_SWITCHES();
+                MG_SFX(8);
+                changeScreen(18, 8, 1, 3, true);
+                break;
+            }
+            if (c3OneDone2871 != 0 && c3AiOneDone2873 != 0) {
+                printf("Player one hit X and he's already done.\n");
+                break;
+            }
+            if (c3OneDone2871 != 0) {
+                SelectSlot *s;
+
+                if (c3TwoDone2872 == 0 || c3AiOneDone2873 != 0)
+                    break;
+                s = &CS_SLOT(MG_SEL(0), c3Costume2870);
+                if (s->state == 1 && s->taken == 1) {
+                    hierSetSwitch(C3_CURSOR(2), MG_SEL(0));
+                    shell->m_costume[2] = c3Costume2870;
+                    shell->m_monsterSel[4] = monsterNametomonsterId[MG_SEL(0) - 1];
+                    CS_SLOT(MG_SEL(0), c3Costume2870).taken = 0;
+                    printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c3Costume2870);
+                    hierSetCsDrawMe(shell->m_cs7C[2], 0);
+                    c3AiOneDone2873 = 1;
+                    MG_SFX(8);
+                    C3_SWITCHES();
+                }
+                break;
+            }
+            if (c3AiOneDone2873 != 0)
+                break;
+        } else if (c3OneDone2871 == 0) {
+            if (c3AiOneDone2873 != 0 || c3AiTwoDone2874 != 0)
+                break;
+        } else {
+            SelectSlot *s;
+
+            if (c3AiOneDone2873 == 0 && c3AiTwoDone2874 == 0) {
+                s = &CS_SLOT(MG_SEL(0), c3Costume2869);
+                if (s->state == 1 && s->taken == 1) {
+                    hierSetSwitch(C3_CURSOR(1), MG_SEL(0));
+                    shell->m_costume[2] = c3Costume2869;
+                    shell->m_monsterSel[4] = monsterNametomonsterId[MG_SEL(0) - 1];
+                    CS_SLOT(MG_SEL(0), c3Costume2869).taken = 0;
+                    printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c3Costume2869);
+                    hierSetCsDrawMe(shell->m_cs7C[2], 0);
+                    c3AiOneCost2884 = c3Costume2869;
+                    c3AiOneDone2873 = 1;
+                    c3AiOneMon2883 = MG_SEL(0) - 1;
+                    MG_SFX(8);
+                }
+            } else if (c3AiOneDone2873 != 0 && c3AiTwoDone2874 == 0) {
+                s = &CS_SLOT(MG_SEL(0), c3Costume2870);
+                if (s->state == 1 && s->taken == 1) {
+                    hierSetSwitch(C3_CURSOR(1), MG_SEL(0));
+                    shell->m_costume[3] = c3Costume2870;
+                    shell->m_monsterSel[5] = monsterNametomonsterId[MG_SEL(0) - 1];
+                    CS_SLOT(MG_SEL(0), c3Costume2870).taken = 0;
+                    printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c3Costume2870);
+                    hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                    c3AiTwoDone2874 = 1;
+                    MG_SFX(8);
+                }
+            }
+            break;
+        }
+        /* player one picks (both modes) */
+        {
+            SelectSlot *s = &CS_SLOT(MG_SEL(0), c3Costume2868);
+
+            if (s->state == 1 && s->taken == 1) {
+                shell->m_costume[0] = c3Costume2868;
+                shell->m_monsterSel[0] = monsterNametomonsterId[MG_SEL(0) - 1];
+                CS_SLOT(MG_SEL(0), c3Costume2868).taken = 0;
+                printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c3Costume2868);
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetSwitch(C3_CURSOR(0), MG_SEL(0));
+                c3OneDone2871 = 1;
+                c2PickedSel[currScreen][0] = MG_SEL(0);
+                MG_SFX(8);
+            }
+        }
+        break;
+    case 5:
+        if (c3OneDone2871 != 0) {
+            if (c3AiOneDone2873 != 0) {
+                MG_SEL(0) = c3AiOneMon2883 + 1;
+                CS_SLOT(c3AiOneMon2883 + 1, c3AiOneCost2884).taken = 1;
+                c3AiOneDone2873 = 0;
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                hierSetSwitch(C3_CURSOR(1), 0);
+            } else {
+                CS_SLOT(MG_SEL(0), c3Costume2868).taken = 1;
+                MG_SEL(0) = c2PickedSel[currScreen][0];
+                c3OneDone2871 = 0;
+                c3TwoDone2872 = 0;
+                c3AiOneDone2873 = 0;
+                c3AiTwoDone2874 = 0;
+                if (shell->m_mode == 2) {
+                    hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                    hierSetCsDrawMe(shell->m_cs7C[2], 0);
+                    hierSetSwitch(C3_CURSOR(1), 0);
+                    hierSetSwitch(C3_CURSOR(2), 0);
+                }
+                resetSelectables();
+                if (shell->m_mode != 6)
+                    hierSetCsDrawMe(shell->m_costumeBoxCs, 1);
+            }
+        } else {
+            hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+            hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+            hierSetCsDrawMe(shell->m_cs7C[2], 0);
+            moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+            myMovie.Play(false, MainMovie);
+            CS_SLOT(MG_SEL(0), c3Costume2868).taken = 1;
+            CS_SLOT(MG_SEL(1), c3Costume2869).taken = 1;
+            continueDecoding = 1;
+            updateSelectSwitches3P(0, 0, 0, 1, 1, 1);
+            changeScreen(18, prevScreen, -1, 0, true);
+            MG_SFX(6);
+        }
+        break;
+    }
+
+    if (shell->m_mode != 2) {
+        input = screenGetInput(2) & 0xFFFF;
+        switch (input) {
+        case 1:
+            if (shell->m_mode == 6) {
+                C3_P2_LEFT;
+                break;
+            }
+            if (c3TwoDone2872 == 0) {
+                if (c3NumAvail2878 == 1)
+                    break;
+                C3_STEP(MG_SEL(1), c3Costume2869, c3Costume2869, shell->m_costumeSw2, -1);
+                MG_SFX(2);
+            }
+            printf("Player 2 is on Monster %i, model %i\n", MG_SEL(1) - 1, c3Costume2869);
+            break;
+        case 2:
+            if (shell->m_mode == 6) {
+                C3_P2_RIGHT;
+                break;
+            }
+            if (c3TwoDone2872 == 0) {
+                if (c3NumAvail2878 == 1)
+                    break;
+                C3_STEP(MG_SEL(1), c3Costume2869, c3Costume2869, shell->m_costumeSw2, 1);
+                MG_SFX(4);
+            }
+            printf("Player 2 is on Monster %i, model %i\n", MG_SEL(1) - 1, c3Costume2869);
+            break;
+        case 3:
+            C3_P2_LEFT;
+            break;
+        case 4:
+            C3_P2_RIGHT;
+            break;
+        case 6: {
+            SelectSlot *s;
+
+            c3TextBoxAlpha2863 = 0x80;
+            C3_ALPHA(shell->m_costumeBoxCs) = 2.0f;
+            C3_ALPHA(shell->m_costumeBoxCs2) = 2.0f;
+            s = &CS_SLOT(MG_SEL(1), c3Costume2869);
+            if (s->state != 1 || s->taken != 1)
+                break;
+            if (c3OneDone2871 != 0 && c3TwoDone2872 != 0) {
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                CS_SLOT(MG_SEL(1), c3Costume2869).taken = 0;
+                C3_SWITCHES();
+                MG_SFX(8);
+                changeScreen(6, 8, 1, 3, true);
+            } else if (c3OneDone2871 == 0 && c3TwoDone2872 != 0) {
+                printf("Player two hit X and he's already done.\n");
+            } else {
+                shell->m_costume[1] = c3Costume2869;
+                shell->m_monsterSel[1] = monsterNametomonsterId[MG_SEL(1) - 1];
+                c2PickedSel[currScreen][1] = MG_SEL(1);
+                CS_SLOT(MG_SEL(1), c3Costume2869).taken = 0;
+                printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(1) - 1], c3Costume2869);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                hierSetSwitch(C3_CURSOR(1), MG_SEL(1));
+                c3TwoDone2872 = 1;
+                MG_SFX(8);
+            }
+            C3_SWITCHES();
+            break;
+        }
+        case 5:
+            if (c3TwoDone2872 != 0) {
+                c3OneDone2871 = 0;
+                MG_SEL(0) = c2PickedSel[currScreen][0];
+                c3TwoDone2872 = 0;
+                c3AiOneDone2873 = 0;
+                resetSelectables();
+                CS_SLOT(MG_SEL(1), c3Costume2869).taken = 1;
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 1);
+            } else {
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                hierSetCsDrawMe(shell->m_cs7C[2], 0);
+                moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+                myMovie.Play(false, MainMovie);
+                CS_SLOT(MG_SEL(0), c3Costume2868).taken = 1;
+                CS_SLOT(MG_SEL(1), c3Costume2869).taken = 1;
+                continueDecoding = 1;
+                updateSelectSwitches3P(0, 0, 0, 1, 1, 1);
+                changeScreen(18, 15, -1, 0, true);
+                MG_SFX(6);
+            }
+            break;
+        }
+    }
+
+    /* all three picked: keep the models taken and go on to the level select after ten frames */
+    if (shell->m_mode != 2) {
+        if (c3OneDone2871 != 0 && c3TwoDone2872 != 0 && c3AiOneDone2873 != 0) {
+            CS_SLOT(MG_SEL(1), c3Costume2869).taken = 0;
+            CS_SLOT(MG_SEL(0), c3Costume2868).taken = 0;
+            C3_SWITCHES();
+            if (--c3Watch2876 < 0)
+                changeScreen(18, 8, 1, 3, true);
+        }
+    } else if (c3OneDone2871 != 0 && c3AiOneDone2873 != 0 && c3AiTwoDone2874 != 0) {
+        updateSelectSwitches3P(MG_SEL(0), MG_SEL(1), MG_SEL(0), 1, 1, 1);
+        if (--c3Watch2876 < 0)
+            changeScreen(18, 8, 1, 3, true);
+    }
+}
+#else
+INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect3P__Fv);
+#endif
+INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE4D8);
+INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE508);
+INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE530);
+INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE558);
+#ifndef NON_MATCHING /* the C++ screenCharSelect3P builds its own tables */
+INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE590);
+INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE5B0);
 #endif
 #ifdef NON_MATCHING
 extern int c2First2888 __asm__("beginning.2888");
@@ -1581,7 +2256,6 @@ extern int c2NumAvail2901 __asm__("numAvail2.2901");
 extern int c2Num2902 __asm__("num1.2902");
 extern int c2Num2903 __asm__("num2.2903");
 extern int c2AiLeft2904 __asm__("AiLeft.2904");
-extern int c2PickedSel[][2] __asm__("D_00731458"); /* [screen][0]: player one's column when it confirmed, restored by back */
 /* Two-player monster select (screen 6). Normal modes: each pad picks its monster column (left/right, codes 3/4, findAvailableMonster)
    and costume (up/down, 1/2) and confirms (6) into m_monsterSel[p]/m_costume[p]; once both are done it waits ten frames and goes
    to the level select (8). Mode 2 (one player and an AI): pad one picks its own monster, then the AI's (m_monsterSel[4],
