@@ -194,10 +194,10 @@ index 67c8184..bd412c6 100644
      ScalarPipelineEntry m_fdiv{};
      std::array<ScalarPipelineEntry, 2> m_efu{};
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..6521665 100644
+index c5e31c4..3c6ad3a 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-@@ -4,10 +4,26 @@
+@@ -4,10 +4,56 @@
  #include "ps2_runtime_macros.h"
  
  #include <algorithm>
@@ -208,6 +208,36 @@ index c5e31c4..6521665 100644
  #include <limits>
  #include <stdexcept>
 +extern std::atomic<unsigned long long> g_wotmIdleUs, g_wotmIdleCalls, g_wotmPaceUs, g_wotmPaceCalls;
++// WOTM_FIELDLOG (wotm_overrides.cpp): o relogio do EE e virtual (32 ciclos por volta de laco, 8 por chamada, salto ate o
++// prazo quando ocioso) e o timer 1, que o jogo usa para medir o quadro, anda por ele. Aqui se acumulam os ciclos por pc de
++// checkpoint (cabeca de laco ou alvo de chamada) e os ciclos saltados no ocio; o override le e zera a cada quadro do jogo.
++bool g_wotmCycleProf = false;
++uint32_t g_wotmFreeSpinPc = 0;   // main.cpp (PS2X_NO_VU1): voltas de laco neste pc nao contam ciclos
++static const bool g_wotmFreeSpinIop = std::getenv("WOTM_FREESPIN_NOIOP") == nullptr;
++static uint32_t g_wotmTrackN = 0;
++static uint64_t g_wotmAnchorCycle = 0;   // ciclo e instante do ultimo VBlankStart (relogio virtual x de parede)
++static std::chrono::steady_clock::time_point g_wotmAnchorHost;
++// Ultimas 64 retomadas do escalonador (pc, ra, sp, profundidade de invocacao, thread), impressas se ele for retomar um
++// pc que nao e codigo (diagnostico do congelamento com WOTM_FREESPIN).
++struct WotmResume { uint32_t pc, ra, sp, depth; int tid; };
++static WotmResume g_wotmResumes[64];
++static uint32_t g_wotmResumeNext = 0;
++uint64_t g_wotmEeCycle = 0, g_wotmIdleCycles = 0;
++uint32_t g_wotmProfPc[4096];
++uint64_t g_wotmProfCyc[4096];
++static void wotmProfAdd(uint32_t pc, uint64_t cycles)
++{
++    uint32_t i = ((pc >> 2) * 2654435761u) >> 20;
++    for (int n = 0; n < 4096; ++n, i = (i + 1) & 4095u)
++    {
++        if (g_wotmProfPc[i] == pc || g_wotmProfCyc[i] == 0)
++        {
++            g_wotmProfPc[i] = pc;
++            g_wotmProfCyc[i] += cycles;
++            return;
++        }
++    }
++}
 +namespace {
 +struct WotmUsTimer
 +{
@@ -224,7 +254,72 @@ index c5e31c4..6521665 100644
  
  namespace
  {
-@@ -1800,6 +1816,8 @@ void EeScheduler::processDueDeadlines()
+@@ -274,6 +320,13 @@ void EeScheduler::run()
+             }
+             else
+             {
++                std::fprintf(stderr, "[resume] ultimas retomadas antes do pc invalido 0x%x (pc ra sp prof tid):\n", context.pc);
++                for (uint32_t i = 0; i < 64u; ++i)
++                {
++                    const WotmResume &r = g_wotmResumes[(g_wotmResumeNext + i) & 63u];
++                    if (r.pc)
++                        std::fprintf(stderr, "[resume]   %06x %08x %08x %u %d\n", r.pc, r.ra, r.sp, r.depth, r.tid);
++                }
+                 m_runtime.reportMissingFunction(m_rdram,
+                                                 &context,
+                                                 context.pc,
+@@ -286,6 +339,8 @@ void EeScheduler::run()
+             continue;
+         }
+         PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
++        g_wotmResumes[g_wotmResumeNext++ & 63u] = WotmResume{context.pc, getRegU32(&context, 31), getRegU32(&context, 29),
++                                                             static_cast<uint32_t>(running->invocations.size()), running->id};
+ 
+         if (checkpointDue(kGuestDispatchCycles))
+         {
+@@ -356,7 +411,32 @@ void EeScheduler::postEvent(EeEvent event)
+ 
+ bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
+ {
+-    accountCycles(cycles);
++    const R5900Context *wotmCtx = (g_wotmFreeSpinPc || g_wotmCycleProf) ? currentContext() : nullptr;
++    if (!(wotmCtx && wotmCtx->pc == g_wotmFreeSpinPc))   // espera ativa por hardware ausente: nao e tempo do EE
++        accountCycles(cycles);
++    else if (g_wotmFreeSpinIop)   // ...mas o IOP (CD, SIF, som) anda por esses ciclos e continua com eles
++        m_runtime.advanceIopEeCycles(std::max<uint64_t>(1u, cycles));
++    if (g_wotmFreeSpinPc != 0u && wotmCtx && (++g_wotmTrackN & 63u) == 0u)
++    {
++        // Relogio virtual acompanha o de parede enquanto a logica roda: o jogo mede a duracao da logica pelo timer 1
++        // (do fim da espera do vsync ate timer1Handler), e o codigo gerado quase nao gasta ciclos (32 por volta de laco).
++        // Ancora no ultimo vsync; o tempo na espera pelo VU1 ausente nao conta (reancora).
++        const auto now = std::chrono::steady_clock::now();
++        if (wotmCtx->pc == g_wotmFreeSpinPc)
++        {
++            g_wotmAnchorCycle = m_eeCycle;
++            g_wotmAnchorHost = now;
++        }
++        else
++        {
++            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(now - g_wotmAnchorHost).count();
++            const uint64_t target = g_wotmAnchorCycle + microsecondsToEeCycles(static_cast<uint64_t>(std::clamp<long long>(us, 0, 100000)));
++            if (target > m_eeCycle)
++                accountCycles(static_cast<uint32_t>(std::min<uint64_t>(target - m_eeCycle, 0xFFFFFFFFu)));
++        }
++    }
++    if (g_wotmCycleProf && wotmCtx)
++        wotmProfAdd(wotmCtx->pc, std::max<uint64_t>(1u, cycles));
+ 
+     if (m_checkpointPending.load(std::memory_order_acquire) ||
+         m_stopRequested.load(std::memory_order_acquire))
+@@ -392,6 +472,7 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+ {
+     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
+     m_eeCycle += elapsed;
++    g_wotmEeCycle = m_eeCycle;
+     m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
+     m_runtime.advanceIopEeCycles(elapsed);
+     if (m_pendingEeTimerInterrupts != 0u)
+@@ -1800,6 +1881,8 @@ void EeScheduler::processDueDeadlines()
  
              if (now < pacingDeadline)
              {
@@ -233,7 +328,16 @@ index c5e31c4..6521665 100644
                  m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                       { return !m_events.empty() ||
                                                m_stopRequested.load(std::memory_order_acquire); });
-@@ -1994,8 +2012,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1867,6 +1950,8 @@ void EeScheduler::processEvent(const EeEvent &event)
+         requestStop();
+         break;
+     case EeEventType::VBlankStart:
++        g_wotmAnchorCycle = m_eeCycle;
++        g_wotmAnchorHost = std::chrono::steady_clock::now();
+         ++m_vsyncTick;
+         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
+         if ((m_vsyncTick & 1u) != 0u)
+@@ -1994,8 +2079,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
@@ -245,6 +349,29 @@ index c5e31c4..6521665 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
+@@ -2041,9 +2129,21 @@ void EeScheduler::waitForEvent()
+                                                         m_stopRequested.load(std::memory_order_acquire); });
+     if (!signaled)
+     {
+-        const uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
++        uint64_t elapsed = deadlineCycle > m_eeCycle ? deadlineCycle - m_eeCycle : 0u;
++        if (g_wotmFreeSpinPc != 0u)
++        {
++            // Com a espera pelo VU1 sem custo o relogio virtual so anda pelo codigo (quase nada) e pelos saltos ate o
++            // proximo prazo, e ficava atras do relogio de parede (1 field por quadro em quadros de ~37 ms: camera lenta).
++            // Quando o prazo ja passou no relogio de parede, avanca tambem o atraso (ate 100 ms), como o PS2 real: os
++            // vsyncs perdidos vencem juntos e o timer 1 os conta.
++            const auto late = std::chrono::steady_clock::now() - hostDeadline;
++            const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(late).count();
++            if (lateUs > 0)
++                elapsed += microsecondsToEeCycles(static_cast<uint64_t>(std::min<long long>(lateUs, 100000)));
++        }
+         lock.unlock();
+         uint64_t remaining = elapsed;
++        g_wotmIdleCycles += elapsed;
+         while (remaining > 0u)
+         {
+             const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 index 5658928..d8b3573 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
@@ -623,7 +750,7 @@ index 8590f14..addb826 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..30fa432 100644
+index 45cb9d2..9b8556c 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -652,7 +779,7 @@ index 45cb9d2..30fa432 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1348,11 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1348,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -661,10 +788,12 @@ index 45cb9d2..30fa432 100644
 +static std::vector<uint32_t> g_wotmCov(0x1000000u >> 2, 0);
 +
 +std::atomic<R5900Context *> g_wotmLiveCtx{nullptr};
++// Quantas vezes um checkpoint mandou o codigo gerado desenrolar ate o escalonador (so a thread executora do EE mexe).
++static uint64_t g_eeUnwindSeq = 0;
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,7 +1362,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1364,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -675,7 +804,34 @@ index 45cb9d2..30fa432 100644
  
      // Every inter-function transfer is also a deterministic EE safe point.
      // Backward edges inside generated functions use eeCheckpointDue(), while
-@@ -1423,9 +1437,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+     // this charge bounds straight-line call chains that have no local loop.
+     if (m_eeScheduler && m_eeScheduler->checkpointDue(EeScheduler::kGuestDispatchCycles))
+     {
++        ++g_eeUnwindSeq;
+         return false;
+     }
+ 
+@@ -1396,6 +1413,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+ 
+     RecompiledFunction targetFn = lookupFunction(targetPc);
+     const uint32_t entryPc = ctx->pc;
++    const uint64_t unwindSeq = g_eeUnwindSeq;
+     targetFn(rdram, ctx, this);
+ 
+     if (isStopRequested() || ctx->pc == 0u)
+@@ -1403,7 +1421,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+         return false;
+     }
+ 
+-    if (ctx->pc == entryPc)
++    // Stub de host que nao definiu o pc: segue no retorno. So vale se nenhum checkpoint mandou desenrolar durante a
++    // chamada: numa funcao recursiva pausada na propria chamada recursiva o pc tambem e a entrada, e tratar isso como
++    // retorno fazia o chamador seguir com o sp do quadro de dentro (ra lixo; o jogo morria na arvore de animacao).
++    if (ctx->pc == entryPc && g_eeUnwindSeq == unwindSeq)
+     {
+         ctx->pc = fallthroughPc;
+     }
+@@ -1423,9 +1444,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -707,7 +863,7 @@ index 45cb9d2..30fa432 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1473,86 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1480,86 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -794,7 +950,19 @@ index 45cb9d2..30fa432 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2422,7 +2531,11 @@ void PS2Runtime::run()
+@@ -2211,7 +2327,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+ 
+ bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
+ {
+-    return m_eeScheduler->checkpointDue(cycles);
++    if (!m_eeScheduler->checkpointDue(cycles))
++        return false;
++    ++g_eeUnwindSeq;
++    return true;
+ }
+ 
+ [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
+@@ -2422,7 +2541,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -806,7 +974,7 @@ index 45cb9d2..30fa432 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2557,177 @@ void PS2Runtime::run()
+@@ -2444,7 +2567,177 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -1427,10 +1595,10 @@ index 0000000..96232d5
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..a25fc66
+index 0000000..029bcaa
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,168 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
 +// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
@@ -1446,11 +1614,19 @@ index 0000000..a25fc66
 +#include "ps2_runtime.h"
 +#include "ps2_runtime_macros.h"
 +
++#include <atomic>
++#include <chrono>
 +#include <cstdint>
 +#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
 +#include <string>
++
++extern std::atomic<unsigned long long> g_wotmIdleUs, g_wotmPaceUs;
++extern bool g_wotmCycleProf;
++extern uint64_t g_wotmEeCycle, g_wotmIdleCycles;
++extern uint32_t g_wotmProfPc[4096];
++extern uint64_t g_wotmProfCyc[4096];
 +
 +namespace
 +{
@@ -1491,9 +1667,67 @@ index 0000000..a25fc66
 +                     readF(rdram, dyn + 0x108), readF(rdram, cs + 0x60), readF(rdram, cs + 0x64), readF(rdram, cs + 0x68));
 +    }
 +
++    // WOTM_FIELDLOG: uma linha [field] por quadro do jogo, detectado quando timerWaitForMinUpdateRate atualiza
++    // D_006F8DC0 (contagem de fields no inicio do quadro). Mostra os fields que o jogo mediu pelo timer 1 (D_006F8DB4),
++    // os ciclos virtuais do EE gastos (em fields: total, saltados no ocio e os 3 pcs de checkpoint que mais gastaram) e o
++    // tempo real (total, ocioso esperando evento e esperando o relogio de parede para soltar um prazo).
++    bool g_fieldLog = false;
++    uint32_t g_lastFieldStart = 0;
++    uint64_t g_lastCycle = 0, g_lastIdleUs = 0, g_lastPaceUs = 0;
++    std::chrono::steady_clock::time_point g_lastHost;
++
++    void fieldLogFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const uint32_t start = READ32(0x6F8DC0u);
++        if (start == g_lastFieldStart)
++            return;
++        g_lastFieldStart = start;
++        const auto now = std::chrono::steady_clock::now();
++        const uint64_t idleUs = g_wotmIdleUs.load(std::memory_order_relaxed), paceUs = g_wotmPaceUs.load(std::memory_order_relaxed);
++        int top[3] = {-1, -1, -1};
++        for (int i = 0; i < 4096; ++i)
++        {
++            if (!g_wotmProfCyc[i])
++                continue;
++            for (int k = 0; k < 3; ++k)
++            {
++                if (top[k] < 0 || g_wotmProfCyc[i] > g_wotmProfCyc[top[k]])
++                {
++                    for (int m = 2; m > k; --m)
++                        top[m] = top[m - 1];
++                    top[k] = i;
++                    break;
++                }
++            }
++        }
++        const double field = 294912000.0 / 59.94;
++        static uint32_t lastTics = 0;   // D_006F8DC4: ticks do timer 1 que o jogo acumulou (9619 por field)
++        const uint32_t tics = READ32(0x6F8DC4u);
++        std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms ritmo=%.1fms top",
++                     READ32(0x6F7E38u), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
++                     (tics - lastTics) / 9619.0,
++                     (g_wotmEeCycle - g_lastCycle) / field, g_wotmIdleCycles / field,
++                     std::chrono::duration<double, std::milli>(now - g_lastHost).count(), (idleUs - g_lastIdleUs) / 1000.0,
++                     (paceUs - g_lastPaceUs) / 1000.0);
++        for (int k = 0; k < 3; ++k)
++            if (top[k] >= 0)
++                std::fprintf(stderr, " %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
++        std::fprintf(stderr, "\n");
++        std::memset(g_wotmProfPc, 0, sizeof(g_wotmProfPc));
++        std::memset(g_wotmProfCyc, 0, sizeof(g_wotmProfCyc));
++        g_wotmIdleCycles = 0;
++        g_lastCycle = g_wotmEeCycle;
++        g_lastHost = now;
++        g_lastIdleUs = idleUs;
++        g_lastPaceUs = paceUs;
++        lastTics = tics;
++    }
++
 +    // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
 +    void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +    {
++        if (g_fieldLog)
++            fieldLogFrame(rdram, ctx, runtime);
 +        int32_t rate = static_cast<int32_t>(READ32(kUpdateRateVar));
 +        if (rate > 0 && rate < g_minRate)
 +        {
@@ -1520,11 +1754,16 @@ index 0000000..a25fc66
 +        runtime.registerFunction(kMonsterDynamicsUpdatePosition, &updatePositionLogged);
 +        std::fprintf(stderr, "[wotm] log da rotacao dos monstros ligado (WOTM_TURNLOG)\n");
 +    }
-+    if (g_minRate > 0)
++    if (std::getenv("WOTM_FIELDLOG"))
 +    {
-+        runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
-+        std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
++        g_fieldLog = g_wotmCycleProf = true;
++        g_lastHost = std::chrono::steady_clock::now();
++        std::fprintf(stderr, "[wotm] log de fields por quadro ligado (WOTM_FIELDLOG)\n");
 +    }
++    if (g_minRate > 0 || g_fieldLog)
++        runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
++    if (g_minRate > 0)
++        std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
 +    else
 +        std::fprintf(stderr, "[wotm] updateRate sem limite (WOTM_RATEMIN=0)\n");
 +}
@@ -1812,10 +2051,10 @@ index 0000000..848368e
 +}
 +#endif
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..5341732 100644
+index 563bcbd..0881987 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,6 +164,28 @@ namespace
+@@ -164,6 +164,44 @@ namespace
      }
  }
  
@@ -1840,11 +2079,27 @@ index 563bcbd..5341732 100644
 +    WRITE32(0x006F87A0u, 0u); // objsInPacket
 +    WRITE32(0x006F87A4u, 0u); // objsInAlphaPacket
 +}
++// Relogio do jogo. O jogo mede a duracao da logica de cada quadro pelo timer 1 (fields = ticks / 9619; updateRate =
++// 60 / fields; a fisica integra com dt = 1 / updateRate). O timer anda pelo relogio virtual do EE, e o particleDraw tem
++// um laco (0x21B8A0) que espera objsInPacket | objsInAlphaPacket zerarem (conclusao do VU1). Sem VU1 quem os zerava era
++// a apresentacao (60 Hz): o laco girava queimando 32 ciclos virtuais por volta e o jogo media 2 a 4 fields por quadro
++// aleatoriamente (updateRate 15/20/60 alternando; giro do monstro e mola do pelo instaveis).
++// Agora: os contadores sao zerados na entrada do particleDraw (sem VU1 nao ha o que esperar), as voltas no laco nao
++// contam ciclos, e o relogio virtual acompanha o de parede enquanto a logica roda (EeScheduler::checkpointDue): o jogo
++// mede a duracao real da logica, como no PS2 (2 fields, rate 30, na luta). WOTM_OLDCLOCK=1 volta ao comportamento antigo.
++extern uint32_t g_wotmFreeSpinPc;
++static PS2Runtime::RecompiledFunction g_particleDraw = nullptr;
++static void hook_particleDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++{
++    WRITE32(0x006F87A0u, 0u);
++    WRITE32(0x006F87A4u, 0u);
++    g_particleDraw(rdram, ctx, runtime);
++}
 +
  int main(int argc, char *argv[])
  {
  #if defined(__ANDROID__)
-@@ -220,12 +242,63 @@ int main(int argc, char *argv[])
+@@ -220,12 +258,72 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -1901,8 +2156,17 @@ index 563bcbd..5341732 100644
 +        {
 +            runtime.registerFunction(0x00188FD8u, hostLeaf<hook_noop>);        // rtWaitForVu1
 +            if (nv[0] != '2') // PS2X_NO_VU1=2: o DMA do quadro segue (PS2X_VIF1_UPLOADS leva as texturas/CLUTs ao GS) sem esperar o VU1
++            {
 +                runtime.registerFunction(0x00209D88u, hostLeaf<hook_flushObjQ>);   // hierFlushObjQ (nao dispara o DMA do VIF1)
-+            std::cout << "[hook] VU1/DMA do VIF1 cortados (rtWaitForVu1, hierFlushObjQ)" << std::endl;
++                if (!std::getenv("WOTM_OLDCLOCK"))   // relogio do jogo (comentario acima)
++                {
++                    g_wotmFreeSpinPc = 0x0021B8A0u;
++                    if ((g_particleDraw = runtime.lookupFunction(0x0021B378u)))
++                        runtime.registerFunction(0x0021B378u, hook_particleDraw);
++                }
++            }
++            std::cout << "[hook] VU1/DMA do VIF1 cortados (rtWaitForVu1, hierFlushObjQ"
++                      << (g_wotmFreeSpinPc ? "; sem espera em particleDraw, relogio do EE pelo de parede)" : ")") << std::endl;
 +        }
 +
          runtime.run();

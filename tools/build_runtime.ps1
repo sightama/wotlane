@@ -13,6 +13,15 @@ try { if (Test-Path $timeFile) { $expected = [double](Get-Content $timeFile -Tot
 if ($expected -lt 5) { $expected = 5 }
 
 (Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\lib\ps2_runtime.cpp").LastWriteTime = Get-Date
+# unity build: o ninja nao recompila o lote que inclui o main.cpp quando so ele muda; apaga o .obj desse lote se ficou velho
+$main = Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\main.cpp"
+$unity = Join-Path $Dir ([IO.Path]::GetFileNameWithoutExtension($Bat)) | Join-Path -ChildPath 'ps2xRuntime\CMakeFiles\ps2EntryRunner.dir\Unity'
+if (Test-Path $unity) {
+    Get-ChildItem $unity -Filter '*.cxx' | Where-Object { Select-String -Path $_.FullName -Pattern 'src[\\/]main\.cpp' -Quiet } | ForEach-Object {
+        $obj = "$($_.FullName).obj"
+        if ((Test-Path $obj) -and (Get-Item $obj).LastWriteTime -lt $main.LastWriteTime) { Remove-Item $obj -Force }
+    }
+}
 if (Test-Path $logPath) { Remove-Item $logPath -Force }
 
 # a saida do proprio .bat (vcvars etc.) vai para arquivo para nao quebrar a linha da barra; so aparece se falhar
