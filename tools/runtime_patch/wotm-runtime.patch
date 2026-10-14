@@ -201,10 +201,10 @@ index 0f19c9f..cbe7866 100644
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..f7bfabe 100644
+index ea86a9c..ed1880e 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
-@@ -23,6 +23,15 @@
+@@ -23,6 +23,16 @@
  
  class GS;
  
@@ -216,11 +216,12 @@ index ea86a9c..f7bfabe 100644
 +extern void (*g_wotmGifTap)(uint32_t src, const uint8_t *packet, uint32_t bytes);
 +extern uint32_t (*g_wotmMscalTap)(const uint32_t *srcs, uint32_t n);   // origens dos trechos ate o MSCAL -> id (g_wotmVu1Src)
 +extern void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *segs, size_t n);   // inicio de cada cadeia do VIF1 com o tap ligado (trechos: deslocamento, origem)
++extern uint32_t g_wotmVif1Bad;   // codigos VIF1 invalidos desde o boot (fluxo fora de passo); a checagem VU1 x nativo o mostra
 +
  constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
  constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
-@@ -417,7 +426,9 @@ public:
+@@ -417,7 +427,9 @@ public:
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
@@ -771,10 +772,10 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..9821fd3 100644
+index 37b6a4d..6360643 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
-@@ -10,6 +10,13 @@
+@@ -10,6 +10,14 @@
  #include <string>
  #include <vector>
  
@@ -784,11 +785,12 @@ index 37b6a4d..9821fd3 100644
 +void (*g_wotmGifTap)(uint32_t, const uint8_t *, uint32_t) = nullptr;
 +uint32_t (*g_wotmMscalTap)(const uint32_t *, uint32_t) = nullptr;
 +void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *, size_t) = nullptr;
++uint32_t g_wotmVif1Bad = 0;
 +
  namespace
  {
      inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
-@@ -1346,9 +1353,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1346,9 +1354,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                      const bool tieEnabled = (chcr & (1u << 7)) != 0u;
                      const int kMaxChainTags = 4096;
                      std::vector<uint8_t> chainBuf;
@@ -802,7 +804,7 @@ index 37b6a4d..9821fd3 100644
                          const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                          uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                          const bool scratch = isScratchpad(srcAddr);
-@@ -1395,6 +1406,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1395,6 +1407,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
  
                          // CHCR.TTE sends the DMAtag's upper 64 bits to the channel before
                          // the tag payload. VIF chains use those bytes for two VIFcodes.
@@ -811,7 +813,7 @@ index 37b6a4d..9821fd3 100644
                          chainBuf.insert(chainBuf.end(), localBase + tagPhys + 8u, localBase + tagPhys + 16u);
                      };
  
-@@ -1535,6 +1548,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1535,6 +1549,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          pt.srcAddr = 0;
                          pt.qwc = 0;
                          pt.chainData = std::move(chainBuf);
@@ -819,7 +821,7 @@ index 37b6a4d..9821fd3 100644
                          if (channelBase == 0x1000A000)
                          {
                              m_pendingGifTransfers.push_back(std::move(pt));
-@@ -1802,11 +1816,19 @@ void PS2Memory::processPendingTransfers()
+@@ -1802,11 +1817,19 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -1535,7 +1537,7 @@ index 45cb9d2..31fbce5 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..228d145 100644
+index b02c7ca..9f20ba7 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,9 @@
@@ -1548,7 +1550,30 @@ index b02c7ca..228d145 100644
  
  enum VIFCmd : uint8_t
  {
-@@ -301,6 +304,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -30,6 +33,22 @@ namespace
+ {
+     constexpr uint8_t kGifFmtImage = 2u;
+ 
++    // Codigos do VIF1 (opcode sem o bit de interrupcao). UNPACK: 0x60..0x7F, menos V1/V2/V3 com VL 3 (so existe V4-5).
++    bool isValidVif1Opcode(uint8_t op)
++    {
++        if ((op & 0x60u) == 0x60u)
++            return (op & 0x3u) != 0x3u || ((op >> 2) & 0x3u) == 0x3u;
++        switch (op)
++        {
++        case 0x00: case 0x01: case 0x02: case 0x03: case 0x04: case 0x05: case 0x06: case 0x07:
++        case 0x10: case 0x11: case 0x13: case 0x14: case 0x15: case 0x17:
++        case 0x20: case 0x30: case 0x31: case 0x4A: case 0x50: case 0x51:
++            return true;
++        default:
++            return false;
++        }
++    }
++
+     uint32_t pendingGifImageQwc(const uint8_t *data, uint32_t sizeBytes)
+     {
+         if (!data || sizeBytes < 16u)
+@@ -301,42 +320,41 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
          return;
  
      uint32_t pos = 0;
@@ -1556,20 +1581,46 @@ index b02c7ca..228d145 100644
  
      while (pos + 4 <= sizeBytes)
      {
-@@ -320,7 +324,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
-                 (static_cast<uint64_t>(kGifFmtImage) << 58);
-             std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
-             std::memcpy(imagePacket.data() + 16u, data + pos, static_cast<size_t>(chunkQw) * 16u);
+-        if (m_vif1PendingPath2ImageQwc != 0u)
+-        {
+-            const uint32_t availableQw = (sizeBytes - pos) / 16u;
+-            if (availableQw == 0u)
+-            {
+-                break;
+-            }
+-
+-            const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, availableQw);
+-            std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
+-            const uint64_t imageTag =
+-                static_cast<uint64_t>(chunkQw & 0x7FFFu) |
+-                ((m_vif1PendingPath2ImageQwc == chunkQw) ? (1ull << 15) : 0ull) |
+-                (static_cast<uint64_t>(kGifFmtImage) << 58);
+-            std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
+-            std::memcpy(imagePacket.data() + 16u, data + pos, static_cast<size_t>(chunkQw) * 16u);
 -            submitGifPacket(GifPathId::Path2, imagePacket.data(), static_cast<uint32_t>(imagePacket.size()), true, m_vif1PendingPath2DirectHl);
-+            if (!g_wotmVu1Tap && !g_wotmVif1Keep)
-+                submitGifPacket(GifPathId::Path2, imagePacket.data(), static_cast<uint32_t>(imagePacket.size()), true, m_vif1PendingPath2DirectHl);
- 
-             pos += chunkQw * 16u;
-             m_vif1PendingPath2ImageQwc -= chunkQw;
-@@ -337,6 +342,24 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+-
+-            pos += chunkQw * 16u;
+-            m_vif1PendingPath2ImageQwc -= chunkQw;
+-            if (m_vif1PendingPath2ImageQwc == 0u)
+-            {
+-                m_vif1PendingPath2DirectHl = false;
+-            }
+-            continue;
+-        }
+-
+         uint32_t cmd;
+         memcpy(&cmd, data + pos, 4);
+         pos += 4;
  
          uint8_t opcode = (cmd >> 24) & 0x7F;
          uint16_t imm = cmd & 0xFFFF;
++        if (!isValidVif1Opcode(opcode))
++        {
++            // WotM: codigo VIF invalido = o fluxo saiu de passo e o VIF1 esta lendo dados como comandos (ex.: STROW/STMOD falsos
++            // corrompiam ROW/MODE e o VU1 punha ADC em todo vertice; pista 5). A checagem VU1 x nativo mostra a contagem.
++            if (g_wotmVif1Bad++ == 0u)
++                std::fprintf(stderr, "[vif1] comando invalido %08x no deslocamento %x de %u bytes: o VIF1 saiu de passo\n", cmd, pos - 4u, sizeBytes);
++        }
 +        if (m_vif1ChainSrc && g_wotmMscalTap && (opcode == VIF_MSCAL || opcode == VIF_MSCALF || opcode == VIF_MSCNT))
 +        {
 +            // WotM (g_wotmVu1Tap): origens na RAM dos trechos da cadeia desde o MSCAL anterior ate este (a ultima e o endereco
@@ -1591,7 +1642,7 @@ index b02c7ca..228d145 100644
          uint8_t num = (cmd >> 16) & 0xFF;
          const bool irq = (cmd & 0x80000000u) != 0u;
  
-@@ -416,7 +439,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -416,7 +434,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                  vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
@@ -1601,7 +1652,7 @@ index b02c7ca..228d145 100644
                  m_vu1MscalCallback(startPC, runTop, runItop);
              continue;
          }
-@@ -434,7 +458,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -434,7 +453,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                  vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
@@ -1611,16 +1662,50 @@ index b02c7ca..228d145 100644
                  m_vu1MscntCallback(runTop, runItop);
              continue;
          }
-@@ -498,7 +523,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
-             if (qwCount > 0)
+@@ -495,12 +515,39 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+             if (qwCount > availableQw)
+                 qwCount = availableQw;
+ 
+-            if (qwCount > 0)
++            // O VIF obedece ao tamanho do DIRECT; uma imagem GIF (IMAGE) maior que ele continua no DIRECT seguinte, cujos
++            // primeiros quadwords sao pixels e nao uma tag GIF. Antes os quadwords que vinham depois do DIRECT no fluxo do VIF eram
++            // consumidos como imagem: o VIF saia de passo e executava pixels como codigos (STROW/STMOD/STMASK/UNPACK falsos).
++            uint32_t directPos = pos;
++            uint32_t directQw = qwCount;
++            const bool directHl = (opcode == VIF_DIRECTHL);
++            if (m_vif1PendingPath2ImageQwc != 0u && directQw > 0u)
++            {
++                const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, directQw);
++                if (!g_wotmVu1Tap && !g_wotmVif1Keep)
++                {
++                    std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
++                    const uint64_t imageTag =
++                        static_cast<uint64_t>(chunkQw & 0x7FFFu) |
++                        ((m_vif1PendingPath2ImageQwc == chunkQw) ? (1ull << 15) : 0ull) |
++                        (static_cast<uint64_t>(kGifFmtImage) << 58);
++                    std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
++                    std::memcpy(imagePacket.data() + 16u, data + directPos, static_cast<size_t>(chunkQw) * 16u);
++                    submitGifPacket(GifPathId::Path2, imagePacket.data(), static_cast<uint32_t>(imagePacket.size()), true, m_vif1PendingPath2DirectHl);
++                }
++                directPos += chunkQw * 16u;
++                directQw -= chunkQw;
++                m_vif1PendingPath2ImageQwc -= chunkQw;
++                if (m_vif1PendingPath2ImageQwc == 0u)
++                    m_vif1PendingPath2DirectHl = false;
++            }
++
++            if (directQw > 0)
              {
-                 const bool directHl = (opcode == VIF_DIRECTHL);
+-                const bool directHl = (opcode == VIF_DIRECTHL);
 -                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
 +                if (!g_wotmVu1Tap && !g_wotmVif1Keep)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa)
-+                    submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
++                    submitGifPacket(GifPathId::Path2, data + directPos, directQw * 16, true, directHl);
  
-                 const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
+-                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
++                const uint32_t pendingImageQw = pendingGifImageQwc(data + directPos, directQw * 16u);
                  if (pendingImageQw != 0u)
+                 {
+                     m_vif1PendingPath2ImageQwc = pendingImageQw;
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 index bd75bba..6388088 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
@@ -2368,10 +2453,10 @@ index 0000000..481f867
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..eb33013
+index 0000000..2ae5d94
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,393 @@
+@@ -0,0 +1,404 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
@@ -2732,8 +2817,19 @@ index 0000000..eb33013
 +        const double now = GetTime();
 +        static const bool camLog = std::getenv("WOTM_CAMLOG") != nullptr;   // diagnostico: serie temporal da camera lida (um [cam] por desenho)
 +        if (camLog)
-+            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f\n", now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0],
-+                         gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2]);
++        {
++            // _cs das vistas 0 e 1 (ponteiros) e a frente da worldToScreenMat (linha 3), lidos agora: separam troca de camera de leitura rasgada
++            const uint32_t wm = wotm::addr::worldToScreenMat;
++            const uint32_t cs = ram.u32(wotm::addr::viewInfo);
++            float csp[3] = {0, 0, 0}, csu[3] = {0, 0, 0};
++            if (ram.ok(cs, 0x60))
++                for (int i = 0; i < 3; ++i) { csp[i] = ram.f32(cs + 0x10 + 4 * i); csu[i] = ram.f32(cs + 0x40 + 4 * i); }
++            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f cs=%x,%x wm3=%.4f,%.4f,%.4f a=%.2f csp=%.2f,%.2f,%.2f "
++                                 "up=%.4f,%.4f,%.4f csu=%.4f,%.4f,%.4f\n",
++                         now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0], gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2], cs,
++                         ram.u32(wotm::addr::viewInfo + 0x14), ram.f32(wm + 0x30), ram.f32(wm + 0x34), ram.f32(wm + 0x38), alpha, csp[0], csp[1], csp[2],
++                         gc.up[0], gc.up[1], gc.up[2], csu[0], csu[1], csu[2]);
++        }
 +        if (lastT == 0.0)
 +        {
 +            lastT = now;
@@ -3484,10 +3580,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..1fc8d10
+index 0000000..0b9d58d
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,764 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -3507,16 +3603,25 @@ index 0000000..1fc8d10
 +//    entrada de cada passe (worldToScreenMat da vista 0 e a posicao do _cs) e vale a que casar mais.
 +// So entram triangulos inteiros dentro da tela; degenerados (emendas de tira) ficam de fora dos dois lados. O microcodigo descarta
 +// faces de costas; as do nativo que sobram nesses objetos saem como "costas", nao como diferenca.
++// Textura: cada par casado compara o TEX0 em vigor no GS quando o VU1 desenhou (contexto do PRIM) com o do slot da secao que o nativo
++// usa (texKey/objectTex0), nos campos que escolhem os texels.
 +// Saida: linhas [vu1check] no stderr (totais e os objetos com mais diferenca). WOTM_VU1CHECK_DUMP=<prefixo> grava os triangulos de
 +// cada checagem em <prefixo>_<g_frame>.csv.
 +#ifdef WOTM_HAVE_NATIVE
++#include <array>
 +#include <map>
++#include <tuple>
 +
 +namespace wotm_vu1check
 +{
-+struct Tri { uint32_t prog; float x[3], y[3]; };
++// Textura de um triangulo: os campos do TEX0 que escolhem os texels (TBP0, TBW, PSM, TW, TH, CBP, CPSM, CSM, CSA; fora TCC/TFX/CLD).
++// 0 = sem textura (PRIM.TME 0 no VU1; objeto sem texKey no nativo); kTexUnknown = o VU1 desenhou sem TEX0 visto no quadro.
++constexpr uint64_t kTexMask = 0x3FFFFFFFFull | (0x1FFFFFFull << 37);
++constexpr uint64_t kTexUnknown = ~0ull;
 +
-+struct WTri { float p[3][3]; };   // triangulo nativo em coordenadas de mundo
++struct Tri { uint32_t prog; float x[3], y[3]; uint64_t tex = 0; uint8_t slot = 0; };   // slot: so no nativo
++
++struct WTri { float p[3][3]; uint64_t tex; uint8_t slot; };   // triangulo nativo em coordenadas de mundo
 +
 +struct NatObj {
 +    uint32_t node = 0, span = 0;
@@ -3529,6 +3634,20 @@ index 0000000..1fc8d10
 +using NatMap = std::map<uint32_t, NatObj>;   // por polyPkt
 +struct Cam { float W[4][4]; float eye[3]; };
 +
++// Particulas: o pacote de cada sistema fica dentro do proprio fx[i] (pkt em +0), entao a origem do trecho da cadeia diz o sistema.
++// O VU1 manda cada particula como dois triangulos (quadrado) ou como um SPRITE do GS (retangulo); o nativo monta os mesmos quadrados
++// (Particles::forEachQuad, e Scene::spriteCorners nos destroços) e eles sao projetados na tela (collectFx).
++constexpr uint32_t kFx0 = wotm::fxaddr::fx, kFxEnd = wotm::fxaddr::fx + wotm::fxaddr::count * wotm::fxaddr::stride;
++struct Quad { float x[4], y[4]; uint8_t n; };   // n = 4 (quadrado) ou 3 (triangulo sem par, so no VU1)
++constexpr int kFxCams = 3;   // camera do instante da cadeia, da entrada do passe 0 e do passe 1
++struct FxNat {
++    uint32_t type = 0, preset = 0;
++    int n = 0;
++    bool built = false;               // info.attribs & 0x400 (pacote montado neste quadro)
++    std::vector<Quad> quads[kFxCams];   // por camera
++};
++using FxMap = std::map<uint32_t, FxNat>;   // por indice em fx[]
++
 +int g_period = 0;   // segundos entre checagens
 +std::chrono::steady_clock::time_point g_next;
 +bool g_armed = false;
@@ -3536,9 +3655,15 @@ index 0000000..1fc8d10
 +uint32_t g_frame = 0, g_pass = 0;
 +Cam g_cam[2];                                   // camera na entrada de hier(0, 0) e hier(0, 1)
 +std::vector<NatMap> g_nats;                     // coleta nativa no inicio de cada cadeia do VIF1
++std::vector<FxMap> g_fxNats;                    // particulas nativas por cadeia (so a 1a e as que referenciam fx[])
++std::vector<char> g_fxChain;                    // cadeia com particulas coletadas
 +std::vector<std::vector<uint32_t>> g_progs;     // id - 1 -> origens dos trechos da cadeia ate o MSCAL
 +std::vector<uint32_t> g_progChain;              // id - 1 -> cadeia (indice em g_nats)
 +std::vector<Tri> g_vu;                          // triangulos do VU1 (Tri::prog = id do programa)
++uint32_t g_vuKicked = 0, g_vuOff = 0;             // triangulos do XGKICK no quadro / fora da tela (parcial ou inteiro)
++uint32_t g_vuPrimVerts[8] = {};                 // vertices em primitivos que a checagem nao compara (ponto, linha, leque), por PRIM.PRIM
++std::vector<std::pair<uint32_t, Quad>> g_vuRects;   // SPRITE do GS inteiros na tela (programa, retangulo)
++uint32_t g_vuRectsKicked = 0;
 +wotm::Scene *g_scene = nullptr;
 +FILE *g_dump = nullptr;
 +
@@ -3563,23 +3688,99 @@ index 0000000..1fc8d10
 +}
 +
 +// Projecao como o VU1: d = p - olho, X = l0.d, Y = l1.d, W = l3.d (worldToScreenMat: linhas 0 e 1 = foco * eixo + 2048 * frente,
-+// linha 3 = frente). So os triangulos inteiros na tela, na frente da camera e nao degenerados.
++// linha 3 = frente). Falso atras da camera.
++inline bool projectPt(const Cam &cam, const float p[3], float &x, float &y)
++{
++    const float d[3] = {p[0] - cam.eye[0], p[1] - cam.eye[1], p[2] - cam.eye[2]};
++    const float q = cam.W[3][0] * d[0] + cam.W[3][1] * d[1] + cam.W[3][2] * d[2] + cam.W[3][3];
++    x = (cam.W[0][0] * d[0] + cam.W[0][1] * d[1] + cam.W[0][2] * d[2] + cam.W[0][3]) / q;
++    y = (cam.W[1][0] * d[0] + cam.W[1][1] * d[1] + cam.W[1][2] * d[2] + cam.W[1][3]) / q;
++    return q > 1e-3f;
++}
++
++// So os triangulos inteiros na tela, na frente da camera e nao degenerados.
 +std::vector<Tri> project(const std::vector<WTri> &in, const Cam &cam, uint32_t key)
 +{
 +    std::vector<Tri> out;
 +    for (const WTri &w : in) {
-+        Tri t{key, {}, {}};
++        Tri t{key, {}, {}, w.tex, w.slot};
 +        bool ok = true;
-+        for (int c = 0; c < 3 && ok; ++c) {
-+            const float d[3] = {w.p[c][0] - cam.eye[0], w.p[c][1] - cam.eye[1], w.p[c][2] - cam.eye[2]};
-+            const float q = cam.W[3][0] * d[0] + cam.W[3][1] * d[1] + cam.W[3][2] * d[2] + cam.W[3][3];
-+            ok = q > 1e-3f;
-+            t.x[c] = (cam.W[0][0] * d[0] + cam.W[0][1] * d[1] + cam.W[0][2] * d[2] + cam.W[0][3]) / q;
-+            t.y[c] = (cam.W[1][0] * d[0] + cam.W[1][1] * d[1] + cam.W[1][2] * d[2] + cam.W[1][3]) / q;
-+        }
++        for (int c = 0; c < 3 && ok; ++c) ok = projectPt(cam, w.p[c], t.x[c], t.y[c]);
 +        if (ok && inScreen(t) && !degenerate(t)) out.push_back(t);
 +    }
 +    return out;
++}
++
++// Eixos da tela tirados da matriz: linha 3 = frente; linhas 0 e 1 menos 2048 * frente = foco * direita / baixo.
++wotm::FxView fxView(const Cam &cam)
++{
++    wotm::FxView v{};
++    float f[3], fl = 0.f, rl = 0.f, ul = 0.f;
++    for (int a = 0; a < 3; ++a) {
++        f[a] = cam.W[3][a];
++        v.right[a] = cam.W[0][a] - 2048.f * f[a];
++        v.up[a] = cam.W[1][a] - 2048.f * f[a];
++        fl += f[a] * f[a]; rl += v.right[a] * v.right[a]; ul += v.up[a] * v.up[a];
++    }
++    fl = std::sqrt(fl); rl = std::sqrt(rl); ul = std::sqrt(ul);
++    v.depth[3] = cam.W[3][3] / fl;
++    for (int a = 0; a < 3; ++a) {
++        v.right[a] /= rl; v.up[a] /= ul;
++        v.back[a] = -f[a] / fl;
++        v.depth[a] = f[a] / fl;
++        v.depth[3] -= v.depth[a] * cam.eye[a];
++    }
++    return v;
++}
++
++// Particulas nativas da RAM de agora (depois de Scene::collect), quadrados inteiros na tela, por sistema. Como nos objetos, a camera
++// que o pacote leva nao e conhecida: os quadrados saem com a camera de agora e com as das entradas dos passes 0 e 1 (se ja houve), e
++// na comparacao vale a que casar mais.
++void collectFx(const uint8_t *rdram, FxMap &out)
++{
++    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
++    const Cam cams[kFxCams] = {readCam(rdram), g_cam[0], g_cam[1]};
++    const int nCams = g_pass == 1 ? 3 : 2;
++    for (int ci = 0; ci < nCams; ++ci) {
++        const Cam &cam = cams[ci];
++        const wotm::FxView view = fxView(cam);
++        auto add = [&](FxNat &s, const float c[4][3]) {
++            Quad q{{}, {}, 4};
++            for (int k = 0; k < 4; ++k)
++                if (!projectPt(cam, c[k], q.x[k], q.y[k]) || !(q.x[k] >= kX0 && q.x[k] < kX1 && q.y[k] >= kY0 && q.y[k] < kY1)) return;
++            s.quads[ci].push_back(q);
++        };
++        for (const wotm::FxSystem &sys : g_scene->fx.systems) {
++            FxNat &s = out[sys.index];
++            s.type = sys.type;
++            s.n = sys.n;
++            s.preset = ram.u32(sys.base + wotm::fxoff::fxId);
++            s.built = true;   // Particles::collect so aceita sistema com pacote montado
++            wotm::Particles::forEachQuad(ram, sys, view, [&](int, const float c[4][3], const float[4][2]) { add(s, c); });
++        }
++        for (const wotm::Sprite &sp : g_scene->sprites) {   // destroços (frag): Scene::collectParticles, key = fx * 4096 + particula
++            FxNat &s = out[sp.key >> 12];
++            if (!ci) {
++                const uint32_t b = kFx0 + (sp.key >> 12) * wotm::fxaddr::stride;
++                s.type = wotm::FX_FRAG;
++                s.preset = ram.u32(b + wotm::fxoff::fxId);
++                s.built = (ram.u32(b + wotm::fxoff::infoAttribs) & 0x400) != 0;
++                ++s.n;
++            }
++            float c[4][3];
++            wotm::Scene::spriteCorners(sp, view.right, view.up, c);
++            add(s, c);
++        }
++    }
++}
++
++// Sistema de particulas (indice em fx[]) do programa: a ultima origem dentro de fx[]; -1 = nenhum.
++int fxOf(uint32_t prog)
++{
++    int sys = -1;
++    for (uint32_t a : g_progs[prog - 1])
++        if (a >= kFx0 && a < kFxEnd) sys = int((a - kFx0) / wotm::fxaddr::stride);
++    return sys;
 +}
 +
 +double g_walkMs = 0.0, g_projMs = 0.0;   // tempo das coletas nativas no quadro amostrado (descida na hierarquia / triangulos)
@@ -3614,8 +3815,14 @@ index 0000000..1fc8d10
 +            o.skip = o.skip || skip;
 +            ++o.items;
 +            if (skip) continue;
-+            g_scene->forEachTri(ram, it, [&](const float p[3][3]) {
++            uint64_t tex[32] = {};   // por slot: a textura com que o nativo desenha (Scene::textureId -> texKey/objectTex0)
++            for (uint32_t s = 0; s < 32; ++s)
++                if (md->slotMask & (1u << s))
++                    tex[s] = wotm::Scene::texKey(ram, it.node, s) ? wotm::Scene::objectTex0(ram, it.node, s) & kTexMask : 0;
++            g_scene->forEachTri(ram, it, [&](const float p[3][3], uint8_t slot) {
 +                WTri w;
++                w.slot = slot;
++                w.tex = tex[slot & 31];
 +                bool ok = true;
 +                for (int c = 0; c < 3; ++c)
 +                    for (int a = 0; a < 3; ++a) {
@@ -3645,6 +3852,10 @@ index 0000000..1fc8d10
 +    std::sort(only.begin(), only.end());
 +    g_nats.emplace_back();
 +    collectNative(g_rdram, g_nats.back(), g_nats.size() == 1 ? nullptr : &only);
++    const bool fx = g_nats.size() == 1 || std::any_of(only.begin(), only.end(), [](uint32_t a) { return a >= kFx0 && a < kFxEnd; });
++    g_fxNats.emplace_back();
++    g_fxChain.push_back(fx);
++    if (fx) collectFx(g_rdram, g_fxNats.back());
 +}
 +
 +uint32_t mscalTap(const uint32_t *srcs, uint32_t n)
@@ -3656,6 +3867,8 @@ index 0000000..1fc8d10
 +
 +// Pacote do XGKICK: tags GIF; PACKED com XYZ2/XYZF2 (desenham, salvo ADC) e XYZ3/XYZF3 (so empilham); PRIM no tag ou por A+D.
 +// Triangulo impar da tira com os dois primeiros trocados, como o nativo (orientacao igual nos dois lados).
++// TEX0_1/TEX0_2 (PACKED 0x6/0x7 ou A+D) valem ate a proxima troca, entre pacotes: cada triangulo leva o do contexto do PRIM.
++uint64_t g_tex0[2] = {kTexUnknown, kTexUnknown};
 +void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
 +{
 +    uint32_t prim = 4, nv = 0;
@@ -3668,9 +3881,20 @@ index 0000000..1fc8d10
 +        const uint32_t type = prim & 7;
 +        if (kick && nv >= 3 && (type == 4 || (type == 3 && nv % 3 == 0))) {
 +            const int a = (type == 4 && ((nv - 1) & 1)) ? 1 : 0;
-+            const Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}};
-+            if (inScreen(t) && !degenerate(t)) g_vu.push_back(t);
-+        }
++            const uint64_t t0 = g_tex0[(prim >> 9) & 1];
++            const uint64_t tex = !((prim >> 4) & 1) ? 0 : t0 == kTexUnknown ? kTexUnknown : t0 & kTexMask;
++            const Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}, tex};
++            ++g_vuKicked;
++            if (!inScreen(t)) ++g_vuOff;
++            else if (!degenerate(t)) g_vu.push_back(t);
++        } else if (kick && type == 6) {   // SPRITE: retangulo entre os dois ultimos vertices (particulas)
++            if (nv % 2) return;
++            const Quad q{{vx[1], vx[2], vx[2], vx[1]}, {vy[1], vy[1], vy[2], vy[2]}, 4};
++            bool in = true;
++            for (int k = 0; k < 4; ++k) in = in && q.x[k] >= kX0 && q.x[k] < kX1 && q.y[k] >= kY0 && q.y[k] < kY1;
++            ++g_vuRectsKicked;
++            if (in) g_vuRects.push_back({prog, q});
++        } else if (kick && type != 3 && type != 4) ++g_vuPrimVerts[type];
 +    };
 +    for (uint32_t pos = 0; pos + 16 <= bytes;) {
 +        uint64_t lo, hi;
@@ -3690,6 +3914,9 @@ index 0000000..1fc8d10
 +                        const bool adc = (w[3] >> 15) & 1;
 +                        vertex((w[0] & 0xFFFF) / 16.f, (w[1] & 0xFFFF) / 16.f, (reg == 0x4 || reg == 0x5) && !adc);
 +                    } else if (reg == 0x0 || (reg == 0xE && (w[2] & 0xFF) == 0x00)) { prim = w[0] & 0x7FF; nv = 0; }
++                    else if (reg == 0x6 || reg == 0x7) g_tex0[reg - 0x6] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
++                    else if (reg == 0xE && ((w[2] & 0xFF) == 0x06 || (w[2] & 0xFF) == 0x07))
++                        g_tex0[(w[2] & 0xFF) - 0x06] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
 +                }
 +        } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
 +        else pos += nloop * 16;
@@ -3710,15 +3937,15 @@ index 0000000..1fc8d10
 +}
 +
 +// Para cada triangulo do VU1, o nativo ainda livre de menor soma de distancias entre vertices (em qualquer ordem), com cada vertice
-+// a ate 1 px (grade de 4 px pelo centroide). vuHit/natHit marcam os casados.
-+uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vector<char> &vuHit, std::vector<char> &natHit)
++// a ate 1 px (grade de 4 px pelo centroide). vuPair = indice do nativo casado (-1 = nenhum); natHit marca os nativos casados.
++uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vector<int> &vuPair, std::vector<char> &natHit)
 +{
 +    constexpr float kTol = 1.f;
 +    auto cell = [](float x, float y) { return (uint64_t(uint32_t(int32_t(std::floor(x / 4.f)))) << 32) | uint32_t(int32_t(std::floor(y / 4.f))); };
 +    std::unordered_multimap<uint64_t, uint32_t> grid;
 +    for (uint32_t i = 0; i < nat.size(); ++i)
 +        grid.emplace(cell((nat[i].x[0] + nat[i].x[1] + nat[i].x[2]) / 3.f, (nat[i].y[0] + nat[i].y[1] + nat[i].y[2]) / 3.f), i);
-+    vuHit.assign(vu.size(), 0);
++    vuPair.assign(vu.size(), -1);
 +    natHit.assign(nat.size(), 0);
 +    uint32_t matched = 0;
 +    for (size_t i = 0; i < vu.size(); ++i) {
@@ -3743,9 +3970,162 @@ index 0000000..1fc8d10
 +                    if (all && cost < bestCost) { bestCost = cost; best = int(g->second); }
 +                }
 +            }
-+        if (best >= 0) { natHit[size_t(best)] = 1; vuHit[i] = 1; ++matched; }
++        if (best >= 0) { natHit[size_t(best)] = 1; vuPair[i] = best; ++matched; }
 +    }
 +    return matched;
++}
++
++// Particulas do VU1 de um sistema (na ordem do XGKICK) -> quadrados: dois triangulos seguidos do mesmo programa com dois vertices em
++// comum viram um quadrado; o que sobra fica como triangulo (n = 3; o par saiu da tela ou e degenerado).
++std::vector<Quad> vuQuads(const std::vector<Tri> &tris)
++{
++    std::vector<Quad> out;
++    auto same = [](float ax, float ay, float bx, float by) { return std::fabs(ax - bx) < 0.01f && std::fabs(ay - by) < 0.01f; };
++    for (size_t i = 0; i < tris.size(); ++i) {
++        const Tri &a = tris[i];
++        Quad q{{a.x[0], a.x[1], a.x[2]}, {a.y[0], a.y[1], a.y[2]}, 3};
++        if (i + 1 < tris.size() && tris[i + 1].prog == a.prog) {
++            const Tri &b = tris[i + 1];
++            int shared = 0, extra = -1;
++            for (int k = 0; k < 3; ++k) {
++                bool in = false;
++                for (int j = 0; j < 3; ++j) in = in || same(b.x[k], b.y[k], a.x[j], a.y[j]);
++                if (in) ++shared;
++                else extra = k;
++            }
++            if (shared == 2) { q.x[3] = b.x[extra]; q.y[3] = b.y[extra]; q.n = 4; ++i; }
++        }
++        out.push_back(q);
++    }
++    return out;
++}
++
++// Casa cada quadrado do VU1 com o nativo livre mais proximo: todo vertice de um a ate 1 px de algum do outro (nos dois sentidos para
++// os quadrados; triangulos soltos so no sentido VU1 -> nativo). Devolve quantos casaram.
++uint32_t matchQuads(const std::vector<Quad> &vu, const std::vector<Quad> &nat)
++{
++    constexpr float kTol = 1.f;
++    auto cell = [](float x, float y) { return (uint64_t(uint32_t(int32_t(std::floor(x / 4.f)))) << 32) | uint32_t(int32_t(std::floor(y / 4.f))); };
++    auto cover = [](const Quad &a, const Quad &b, float &cost) {   // todo vertice de a perto de algum de b
++        for (int i = 0; i < a.n; ++i) {
++            float d = 1e30f;
++            for (int j = 0; j < b.n; ++j) d = std::min(d, std::max(std::fabs(a.x[i] - b.x[j]), std::fabs(a.y[i] - b.y[j])));
++            if (d > kTol) return false;
++            cost += d;
++        }
++        return true;
++    };
++    std::unordered_multimap<uint64_t, uint32_t> grid;
++    for (uint32_t i = 0; i < nat.size(); ++i) grid.emplace(cell(nat[i].x[0], nat[i].y[0]), i);
++    std::vector<char> hit(nat.size(), 0);
++    uint32_t matched = 0;
++    for (const Quad &q : vu) {
++        int best = -1;
++        float bestCost = 1e30f;
++        std::vector<uint32_t> cand;
++        for (int k = 0; k < q.n; ++k)   // o canto 0 do nativo esta perto de algum canto do VU1
++            for (int dx = -1; dx <= 1; ++dx)
++                for (int dy = -1; dy <= 1; ++dy) {
++                    auto range = grid.equal_range(cell(q.x[k] + 4.f * dx, q.y[k] + 4.f * dy));
++                    for (auto g = range.first; g != range.second; ++g) cand.push_back(g->second);
++                }
++        for (uint32_t c : cand) {
++            if (hit[c]) continue;
++            float cost = 0.f;
++            if (!cover(q, nat[c], cost) || (q.n == 4 && !cover(nat[c], q, cost))) continue;
++            if (cost < bestCost) { bestCost = cost; best = int(c); }
++        }
++        if (best >= 0) { hit[size_t(best)] = 1; ++matched; }
++    }
++    return matched;
++}
++
++// O que o VU1 desenhou de um sistema numa cadeia: triangulos (viram quadrados aos pares) e SPRITE do GS (ja retangulos).
++struct FxVu { std::vector<Tri> tris; std::vector<Quad> rects; };
++using FxVuMap = std::map<uint32_t, std::map<uint32_t, FxVu>>;   // sistema -> cadeia
++
++// Linha [vu1check] particulas e os sistemas com mais diferenca. rectsOrphan: SPRITE do GS fora de fx[].
++void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
++{
++    int lastFx = -1;   // cadeia de referencia de quem o VU1 nao desenhou: a ultima com particulas coletadas
++    for (size_t c = 0; c < g_fxChain.size(); ++c)
++        if (g_fxChain[c]) lastFx = int(c);
++    if (lastFx < 0) return;
++    std::vector<uint32_t> keys;
++    for (const auto &kv : fxVu) keys.push_back(kv.first);
++    for (const auto &kv : g_fxNats[size_t(lastFx)]) keys.push_back(kv.first);
++    std::sort(keys.begin(), keys.end());
++    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
++    struct Row { uint32_t sys; const FxNat *s; uint32_t vu, nat, m, soltos; };
++    std::vector<Row> rows;
++    uint32_t sysVu = 0, sysNat = 0, sysBoth = 0, totVu = 0, totNat = 0, totM = 0, totSoltos = 0;
++    static const FxNat kNone;
++    for (uint32_t sys : keys) {
++        uint32_t chain = uint32_t(lastFx);
++        std::vector<Quad> vq, whole;
++        const auto vit = fxVu.find(sys);
++        if (vit != fxVu.end()) {
++            size_t most = 0;
++            for (const auto &kv : vit->second) {
++                const std::vector<Quad> q = vuQuads(kv.second.tris);
++                vq.insert(vq.end(), q.begin(), q.end());
++                vq.insert(vq.end(), kv.second.rects.begin(), kv.second.rects.end());
++                if (q.size() + kv.second.rects.size() > most) { most = q.size() + kv.second.rects.size(); chain = kv.first; }
++            }
++        }
++        const auto nit = g_fxNats[chain].find(sys);
++        const FxNat &s = nit != g_fxNats[chain].end() ? nit->second : kNone;
++        uint32_t soltos = 0;
++        for (const Quad &q : vq) (q.n == 4 ? (whole.push_back(q), 0u) : ++soltos);
++        int cam = 0;   // a camera que casar mais
++        uint32_t m = matchQuads(whole, s.quads[0]);
++        for (int ci = 1; ci < kFxCams && m < whole.size(); ++ci)
++            if (!s.quads[ci].empty())
++                if (const uint32_t mc = matchQuads(whole, s.quads[ci]); mc > m) { m = mc; cam = ci; }
++        const std::vector<Quad> &nq = s.quads[cam];
++        const uint32_t nVu = uint32_t(whole.size()), nNat = uint32_t(nq.size());
++        if (!nVu && !nNat) continue;
++        sysVu += nVu > 0; sysNat += nNat > 0; sysBoth += nVu && nNat;
++        totVu += nVu; totNat += nNat; totM += m; totSoltos += soltos;
++        rows.push_back({sys, &s, nVu, nNat, m, soltos});
++        if (g_dump) {
++            for (const Quad &q : vq)
++                std::fprintf(g_dump, "fx%u,vuq,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", sys, q.n, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2],
++                             q.n == 4 ? q.x[3] : 0.f, q.n == 4 ? q.y[3] : 0.f);
++            for (const Quad &q : nq)
++                std::fprintf(g_dump, "fx%u,natq,4,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", sys, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2], q.x[3], q.y[3]);
++            std::fprintf(g_dump, "fxsys,%u,%u,%u,%u,%d,%d\n", sys, chain, s.preset, s.type, s.n, cam);
++        }
++    }
++    const double pct = totVu ? 100.0 * totM / totVu : 0.0;
++    std::fprintf(stderr, "[vu1check] g=%u particulas: sistemas vu %u nativo %u ambos %u | quadrados vu %u nativo %u casados %.1f%% faltam %u sobram %u | "
++                         "triangulos soltos no vu %u | SPRITE do GS %u (%u na tela, %u fora de fx[]) | vertices do VU1 nao comparados: ponto %u linha %u "
++                         "tira de linhas %u leque %u\n",
++                 g_frame, sysVu, sysNat, sysBoth, totVu, totNat, pct, totVu - totM, totNat - totM, totSoltos, g_vuRectsKicked, uint32_t(g_vuRects.size()),
++                 rectsOrphan, g_vuPrimVerts[0], g_vuPrimVerts[1], g_vuPrimVerts[2], g_vuPrimVerts[5]);
++    // por tipo (vis.attribs; 0 = sistema que o nativo nao tem): casados / quadrados do VU1 / quadrados nativos
++    std::map<uint32_t, std::array<uint32_t, 3>> byType;
++    for (const Row &r : rows) {
++        auto &t = byType[r.s->n ? r.s->type : 0u];
++        t[0] += r.m; t[1] += r.vu; t[2] += r.nat;
++    }
++    if (!byType.empty()) {
++        std::string line;
++        char part[96];
++        for (const auto &kv : byType) {
++            std::snprintf(part, sizeof part, " %u %s %u/%u/%u", kv.first, kv.first ? wotm::fxTypeName(kv.first) : "-", kv.second[0], kv.second[1], kv.second[2]);
++            line += part;
++        }
++        std::fprintf(stderr, "[vu1check]   particulas por tipo (casados/vu/nativo):%s\n", line.c_str());
++    }
++    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.vu + a.nat - 2 * a.m > b.vu + b.nat - 2 * b.m; });
++    for (size_t i = 0; i < rows.size() && i < 8; ++i) {
++        const Row &r = rows[i];
++        const uint32_t diff = r.vu + r.nat - 2 * r.m;
++        if (diff < 2 || 10 * diff < std::max(r.vu, r.nat)) continue;
++        std::fprintf(stderr, "[vu1check]   fx %u preset %u tipo %u %s n=%d%s: vu %u nativo %u casados %u (soltos %u)\n", r.sys, r.s->preset, r.s->type,
++                     r.s->n ? wotm::fxTypeName(r.s->type) : "-", r.s->n, r.s->n && !r.s->built ? " sem pacote" : "", r.vu, r.nat, r.m, r.soltos);
++    }
 +}
 +
 +void compare()
@@ -3757,11 +4137,22 @@ index 0000000..1fc8d10
 +    // triangulos do VU1 por (objeto, cadeia); os sem objeto nativo ficam por origem do MSCAL
 +    std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> vuBy;
 +    std::map<uint32_t, uint32_t> orphan;
++    FxVuMap fxVu;   // particulas: por sistema (fx[]) e cadeia
++    uint32_t fxTris = 0, rectsOrphan = 0;
++    for (const auto &r : g_vuRects) {
++        if (const int sys = fxOf(r.first); sys >= 0) fxVu[uint32_t(sys)][g_progChain[r.first - 1]].rects.push_back(r.second);
++        else ++rectsOrphan;
++    }
 +    for (const Tri &t : g_vu) {
 +        const uint32_t chain = g_progChain[t.prog - 1];
 +        const uint32_t key = objectOf(g_nats[chain], t.prog);
 +        if (key) {
 +            if (!g_nats[chain].at(key).skip) vuBy[key][chain].push_back(t);
++            continue;
++        }
++        if (const int sys = fxOf(t.prog); sys >= 0) {
++            fxVu[uint32_t(sys)][chain].tris.push_back(t);
++            ++fxTris;
 +            continue;
 +        }
 +        ++orphan[g_progs[t.prog - 1].empty() ? 0u : g_progs[t.prog - 1].back() & ~0xFFu];
@@ -3773,9 +4164,11 @@ index 0000000..1fc8d10
 +            for (uint32_t a : g_progs[i]) std::fprintf(g_dump, ",%x", a);
 +            std::fprintf(g_dump, "\n");
 +        }
-+    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas; };
++    // texDifere: casados com textura diferente; vuTex/natTex/natSlot: o par diferente mais comum do objeto
++    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas, texDifere; uint64_t vuTex, natTex; uint8_t natSlot; };
 +    std::vector<Row> rows;
 +    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
++    uint32_t totTexDifere = 0, totTexUnknown = 0;
 +    std::vector<uint32_t> keys;   // objetos da 1a coleta e os que o VU1 desenhou
 +    for (const auto &kv : g_nats[0]) keys.push_back(kv.first);
 +    for (const auto &kv : vuBy) keys.push_back(kv.first);
@@ -3800,13 +4193,28 @@ index 0000000..1fc8d10
 +        // camera: a do hier que montou o pacote (copiada nele); uma cadeia do passe 0 pode sair pela interrupcao ja dentro do passe 1,
 +        // entao vale a que casar mais
 +        std::vector<Tri> nat = project(o.tris, g_cam[0], key);
-+        std::vector<char> vuHit, natHit, vuHit1, natHit1;
-+        uint32_t m = match(vu, nat, vuHit, natHit);
++        std::vector<int> vuPair, vuPair1;
++        std::vector<char> natHit, natHit1;
++        uint32_t m = match(vu, nat, vuPair, natHit);
 +        if (m < vu.size()) {
 +            std::vector<Tri> nat1 = project(o.tris, g_cam[1], key);
-+            const uint32_t m1 = match(vu, nat1, vuHit1, natHit1);
-+            if (m1 > m) { m = m1; nat.swap(nat1); vuHit.swap(vuHit1); natHit.swap(natHit1); }
++            const uint32_t m1 = match(vu, nat1, vuPair1, natHit1);
++            if (m1 > m) { m = m1; nat.swap(nat1); vuPair.swap(vuPair1); natHit.swap(natHit1); }
 +        }
++        // textura dos casados: a do GS no XGKICK contra a que o nativo escolheu para o slot da secao
++        uint32_t texDifere = 0;
++        std::map<std::tuple<uint64_t, uint64_t, uint8_t>, uint32_t> texPairs;
++        for (size_t i = 0; i < vu.size(); ++i) {
++            if (vuPair[i] < 0) continue;
++            const Tri &n = nat[size_t(vuPair[i])];
++            if (vu[i].tex == kTexUnknown) ++totTexUnknown;
++            else if (vu[i].tex != n.tex) { ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}]; }
++        }
++        std::tuple<uint64_t, uint64_t, uint8_t> texWorst{};
++        uint32_t texWorstN = 0;
++        for (const auto &kv : texPairs)
++            if (kv.second > texWorstN) { texWorstN = kv.second; texWorst = kv.first; }
++        totTexDifere += texDifere;
 +        if (vu.empty() && nat.empty()) continue;
 +        uint32_t vuBack = 0, costas = 0, sobra = 0;
 +        for (const Tri &t : vu) vuBack += area2(t) > 0.f;
@@ -3816,12 +4224,13 @@ index 0000000..1fc8d10
 +        const uint32_t nVu = uint32_t(vu.size()), nNat = uint32_t(nat.size()) - costas, falta = nVu - m;
 +        objVu += nVu > 0; objNat += nNat > 0; objBoth += nVu && nNat;
 +        totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas;
-+        rows.push_back({key, &o, nVu, nNat, falta, sobra, costas});
++        rows.push_back({key, &o, nVu, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst)});
 +        if (g_dump) {
 +            auto row = [&](const char *side, int hit, const Tri &t) {
-+                std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2]);
++                std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llx\n", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2],
++                             t.y[2], (unsigned long long)t.tex);
 +            };
-+            for (size_t i = 0; i < vu.size(); ++i) row("vu", vuHit[i], vu[i]);
++            for (size_t i = 0; i < vu.size(); ++i) row("vu", vuPair[i] >= 0, vu[i]);
 +            for (size_t i = 0; i < nat.size(); ++i) row("nat", natHit[i], nat[i]);
 +            std::fprintf(g_dump, "obj,%u,%x,%x,%u,%d,%d,%x\n", chain, key, o.node, unsigned(o.tex), o.skinned, o.items, o.span);
 +        }
@@ -3830,9 +4239,10 @@ index 0000000..1fc8d10
 +    for (const auto &kv : orphan) orphanTris += kv.second;
 +    const double pct = totVu ? 100.0 * (totVu - totFalta) / totVu : 0.0;
 +    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u nativo %u casados %.1f%% faltam %u sobram %u "
-+                         "(costas %u) | sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, vertices nao finitos %u\n",
-+                 g_frame, objVu, objNat, objBoth, totVu, totNat, pct, totFalta, totSobra, totCostas, orphanTris, g_chains, g_walkMs, g_projMs,
-+                 g_progs.size(), bad);
++                         "(costas %u) | textura difere %u, sem TEX0 %u | XGKICK %u tris, %u fora da tela | particulas %u tris, sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
++                         "vertices nao finitos %u, VIF1 fora de passo %u\n",
++                 g_frame, objVu, objNat, objBoth, totVu, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, g_vuKicked, g_vuOff, fxTris, orphanTris, g_chains,
++                 g_walkMs, g_projMs, g_progs.size(), bad, g_wotmVif1Bad);
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.falta + a.sobra > b.falta + b.sobra; });
 +    int shown = 0;
 +    for (const Row &r : rows) {
@@ -3841,10 +4251,25 @@ index 0000000..1fc8d10
 +        std::fprintf(stderr, "[vu1check]   pkt %x no %x tex %u%s itens %d: vu %u nativo %u faltam %u sobram %u (costas %u)\n", r.pp,
 +                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.o->items, r.vu, r.nat, r.falta, r.sobra, r.costas);
 +    }
++    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.texDifere > b.texDifere; });
++    auto texStr = [](uint64_t v, char *s, size_t n) {
++        if (!v) { std::snprintf(s, n, "sem textura"); return; }
++        const wotm::gs::Tex0 t = wotm::gs::Tex0::decode(v);
++        std::snprintf(s, n, "tbp %x psm %u %ux%u cbp %x csa %u", t.tbp0, t.psm, 1u << t.tw, 1u << t.th, t.cbp, t.csa);
++    };
++    for (size_t i = 0; i < rows.size() && i < 8 && rows[i].texDifere; ++i) {
++        const Row &r = rows[i];
++        char a[96], b[96];
++        texStr(r.vuTex, a, sizeof a);
++        texStr(r.natTex, b, sizeof b);
++        std::fprintf(stderr, "[vu1check]   textura pkt %x no %x tex %u%s: %u de %u casados; mais comum: vu (%s) nativo slot %u (%s)\n", r.pp,
++                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.texDifere, r.vu - r.falta, a, unsigned(r.natSlot), b);
++    }
 +    std::vector<std::pair<uint32_t, uint32_t>> orph(orphan.begin(), orphan.end());
 +    std::sort(orph.begin(), orph.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
 +    for (size_t i = 0; i < orph.size() && i < 3; ++i)
 +        if (orph[i].second >= 8) std::fprintf(stderr, "[vu1check]   so no VU1: MSCAL em %x, %u tris\n", orph[i].first, orph[i].second);
++    compareFx(fxVu, rectsOrphan);
 +}
 +
 +// Entrada de hier (0x2029B0): a0 = vista, a1 = passe, ra = de onde veio (rtMain: 0x188750 passe 0, 0x18891C passe 1).
@@ -3876,9 +4301,16 @@ index 0000000..1fc8d10
 +        g_pass = 0;
 +        g_cam[0] = readCam(rdram);
 +        g_nats.clear();
++        g_fxNats.clear();
++        g_fxChain.clear();
 +        g_progs.clear();
 +        g_progChain.clear();
 +        g_vu.clear();
++        g_vuKicked = g_vuOff = 0;
++        std::memset(g_vuPrimVerts, 0, sizeof g_vuPrimVerts);
++        g_vuRects.clear();
++        g_vuRectsKicked = 0;
++        g_tex0[0] = g_tex0[1] = kTexUnknown;
 +        g_chains = 0;
 +        g_walkMs = g_projMs = 0.0;
 +        g_armed = true;

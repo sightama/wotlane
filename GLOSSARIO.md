@@ -13,52 +13,82 @@ O **índice** é o do jogo (`MonsterLongNames`/`MonsterNewNames`). O **nome inte
 | 3 | Togera | `LIZARD` | LIZARD0–3 | |
 | 4 | Ultra V | `SHOGUN` | SHOGUN0–3 | |
 | 5 | Preytor | `MANTIS` | MANTIS0–3 | |
-| 6 | Spider | `SPIDER` | nenhum | sem arquivos em `MON/` |
+| 6 | Spider | `SPIDER` | nenhum | cortado; restos abaixo |
 | 7 | Kineticlops | `ENERGY` | ENERGY0–3 | |
 | 8 | Magmo | `LAVA` | LAVA0–3 | |
 | 9 | Raptros | `DRAGON` | DRAGON0–3 | |
 | 10 | Agamo | `ROCK` | ROCK0–3 | |
 | 11 | Zorgulon | `ALIEN` | ALIEN0–3 | |
-| 12 | Ogre | `OGRE` | nenhum | placeholder não usado (informado pelo dono) |
+| 12 | Ogre | `OGRE` | nenhum | cortado; restos abaixo |
 | 13 | Goliath Prime | `ASSBOSS` | ASSBOSS0–1 | nome informado pelo dono; o código o chama de `assboss` |
-| 14 | ? | `JELLY` | JELLY0 | nome do jogo desconhecido |
-| 15 | ? | `FINAL` | FINAL0 | nome desconhecido; o boss final tem 3 fases (informado pelo dono) |
-| 16 | — | `temp16` | — | slot temporário |
-| 17 | — | `default` | — | padrão |
+| 14 | Alienígena final | `JELLY` | JELLY0 | boss final, 2ª fase: o robô com jeito de água-viva que sai do robô grande (`FinalBoss::updateJelly`) (a primeira fase não conta como monstro, mas sim é carregado pelo cenário) |
+| 15 | Alienígena final | `FINAL` | FINAL0 | boss final, 3ª fase: o alien em forma crua, ataca com garras |
+| 16 | — | `temp16` | — | só o nome; o carregador recusa índice >= 16 |
+
+São 17 nomes (0 a 16): `MonsterNewNames` tem 0xCC bytes (17 × 12) e `MonsterLongNames` 0x88 (17 × 8). O `default` que aparece logo antes no binário é `GameLevelNames[0]` (fase 0), não um monstro.
 
 Nomes em minúsculas no código (`"robo-47"`, `"ultra-v"`); a capitalização da coluna "Nome do jogo" é nossa.
 
+### Monstros cortados e slots especiais (levantamento de 2026-10-14)
+Tudo lido do ELF (strings, stabs, símbolos) e do disco; o que é dedução está marcado.
+
+- **Nenhum dos dois tem arquivos.** Não há `SPIDER*`/`OGRE*` em `MON/`, nem `.AIC`, nem banco de som (`loadMonsterBank` só conhece 10 bancos, `Ape_s.bnk`..`Alien_s.bnk`; os slots 5 e 11 de `gSoundBanks` ficam vazios), nem VPK de música de introdução.
+- **Fora da seleção de monstros.** `monsterNametomonsterId` (0x2A1A40, ordem das colunas) é `dragon, lizard, mantis, monkey, robot, rock, shogun, lava, energy, alien, spider, ogre, assboss, jelly, final`; a tela só anda pelas 10 primeiras colunas (`initSelectSwitches`: `[first, last)` com `last` <= 10). Spider e ogre estão logo depois do Zorgulon, prontos para virar coluna.
+- **Excluídos de propósito.** O modo demo (`EvaluateGameStatus`, `m_mode` 0) sorteia `mathfRand(1, 12)` e troca 0xC0 (spider) e 0x180 (ogre) pelo Congar; o modo 6 carrega 1..5 e 7..11 (pula o spider; o ogre fica fora do intervalo); `aiMonsters[10]` em `Shell.cpp` também não tem os dois.
+- **Restos de código do Ogre:**
+  - `MonsterSound::updateMonsterSound` ainda despacha 0x180 para `updateOgreSound`, que é vazia.
+  - `Monster::updatePowerUpGlow` tem um `case 0x180` próprio (pulso com mínimo 0x20 e base 0x80, diferente dos outros); o spider (0xC0) divide o caso do Kineticlops (0xE0).
+  - A classe `OgreMace` (TU `game/OgreMace`: bola com corrente, ep de nível 0x11FC em `dbProcInteractive`) é usada pela `StateGrappleHook` em `Monster+0x10600`, que `initDynamics` liga ao **Ultra V** (0x80). Dedução: a maça com corrente foi escrita para o Ogre e reaproveitada como o gancho do Ultra V.
+- **Restos no enum de efeitos (`FxId`, stabs):** `SpiderHit` (91), `SpiderSpecialHit` (103), `SpiderFlashBang` (114), `OgreSpecialHit` (99), e também `WomanSpecialHit` (98), `ErnieHit` (87) e `ErnieSpecialHit` (100), de monstros que nem aparecem na lista de nomes (outros cortes ou nomes antigos; não identificados). Nenhuma chamada a `particleCreateFx` com esses ids foi achada; `JellyfishSplash` (86) é usado em `updateJelly`.
+- **Spider no som:** `MonsterSound::updateSpiderMagnoSpecial`/`terminateSpiderMagnoSpecial` existem mas ninguém as chama, e a primeira nunca dispara o som (só ajusta um handle que nunca é criado). Indica que o especial do spider era algo chamado "magno".
+- **Boss final (`capitol`).** Fases, segundo o dono: (1) robô grande que atira laser com dano alto, e o jogador se esconde atrás dos pilares ou de outra geometria; (2) depois de dano suficiente, sai de dentro dele um robô parecido com uma água-viva (não fica na água); (3) o alien em forma crua, atacando com garras; (4) derrotado, uma cutscene mostra o cérebro explodindo e uma quarta criatura, pequena, saindo da cabeça. No código:
+  - A fase fica em `finalBoss+0x1C`: 0 = robô grande, 1 = jelly, 2 = final. `Shell::InitPlayers` restaura a vida da fase ao reiniciar (na fase 0 reconstrói os pilares com `rebuildCapitolPillars`).
+  - O robô grande é o próprio objeto `FinalBoss` (`FinalBoss::updateMecha`: laser `FinalBossSound::updateMechLaser`, escudo `playShieldPowerUp/DownSound`, `playMechaPowerDownSound`, `mechaShadowRadius`, e um teste de linha de visão `hdLosCSTest`, que deve ser o que torna os pilares abrigo). Não é um monstro da lista: o modelo está no `CAPITOL.NGP` (conferido com `tools/ngp.py`). `FinalBoss::addEpNode` guarda os eps 0x27A6..0x27A9, 0x27AB e 0x27AD, e `initAfter` liga o `_cs` do boss ao ep 0x27A6 (`finalBoss+0x364`, `hierSetCsEpNode`). No nível, 0x27A6 é um CHAR_INSTANCE com 9 objetos e ~8.500 vértices, 43 SKEL_BONE, 52 ANIM_XFORM e 16 ATTACHPT, com extensão local de ~810 × 285 × 400: é o robô grande. Os outros (0x27A7: 2 objetos, ~283 de diâmetro; 0x27A8: disco chato de ~146; 0x27A9: 4 peças pequenas) são acessórios ainda não identificados. Os 6 pilares são os destrutíveis 0x27AE..0x27B3 do mesmo intervalo de ids.
+  - `jelly` e `final` são as IAs da `capitol` em `levelMonsters`. `TheGame::SetAIMonster` conta os dois como IA, desliga com `disableMonster` e guarda em `finalBoss+0x74` (jelly) e `+0x78` (final) até a fase deles. `FinalBoss::updateJelly` cuida da jelly: `StateUltraTazer`, `electricArc`, `playJellyTazerOneShot`. Também chama `playWaterSplashSound` e cria o efeito `JellyfishSplash`; como a jelly não luta na água, esses dois devem ser de algum momento específico (a conferir).
+  - Som: `Final_s.bnk`, `JELLYD.VPK`, `JELLYBT.VPK`, `MECHADT.VPK`. As IAs têm `CAPITOL/JELLY0–2.AIC` e `FINAL0–2.AIC`.
+- **Vídeos de monstro antigos.** `MOV/` tem um `.PSS` simples de 32 KB por monstro, de nov/2001 a jan/2002, incluindo `OGRE.PSS` (cópia exata de `SHOGUN.PSS`) e `SPIDER.PSS` (cópia exata de `ENERGY.PSS`). O executável não referencia nenhum deles; só usa `mov/<monstro>_p.pss` e `_g.pss`, e só para os 10 monstros jogáveis. Mostra que o ogre e o spider ainda estavam no elenco no início de 2002.
+- **Goliath Prime (`ASSBOSS`, `canyon2`).** Luta segundo um wiki de fãs trazido pelo dono: primeiro as Mutant Ants; depois o Goliath arremessa bombas-relógio de cima do bunker (verde, amarelo, vermelho) que o jogador devolve até acertar 8 vezes; no chão, agarra e faz uma investida com as hélices dos ombros, que bate nos pilares; na última parte, alterna um giro em pose de "T" com salvas de mísseis teleguiados. Uma pedra grande na fase interrompe os ataques. No código:
+  - As Mutant Ants são o Preytor no traje 1: `levelMonsters[3]` = 3 × `mantis` + `assboss`, todos com `levelMonsterModels` 1 (`MANTIS1`), e `CANYON2/MANTIS0–2.AIC`.
+  - `canyon2LevelProgression` (0, 3, 6) e `Ai::updateAssBossPatternZero/One/Two` batem com as três partes; `assBossTier1Health`/`assBossTier2Health` são os limiares de vida entre elas, e `Shell::InitPlayers` restaura a vida e reconstrói os pilares (`rebuildCanyon2Pillars`) ao reiniciar.
+  - As hélices e o giro aparecem no som: `MonsterSound::updateAssBossRotorSound`, `m_assBossSpinHandle`.
+  - Os dois trajes: `ASSBOSS0` (mar/2002, 91 KB de textura) é a versão prateada antiga e `ASSBOSS1` (set/2002, 836 KB) a final. Com o `MonsterLongNames`, o carregador aceita o índice 13 como jogador (é menor que 16), o que explica dar para jogar com ele por código de GameShark.
+  - O nome `assboss`: o banco de som carregado por `SoundManager::loadMechBossSoundBank` é `"Assemb_s.bnk"` (`D_006EFFB0`), o que sugere "assembly boss"; nada no código confirma, e o wiki também não fala em montagem. Ainda não achei quem liga `m_loadMechBank`.
+- **Boss planta (`3-Mile`)** não é monstro da lista: são as classes `PlantBoss`/`PlantBossHead`/`PlantBossRoot`/`PlantBossBase` (`plantBoss`, 0x10B0 bytes), com `Plant_s.bnk` e `PLANTD.VPK`; as IAs da fase são 4 Kineticlops (`3-MILE/ENERGY0–2.AIC`).
+- **temp16:** só existe nas duas tabelas de nomes. `Shell::LoadResTexture` recusa `sel >> 5 >= 0x10` com "Unknown monster (%d) for player %d.  Nothing will be loaded!".
+
 ### Pendências
-- Existe um **boss planta** no meio do jogo que não sabemos qual da lista é; nome e arquivo ainda não identificados. Ele aparece em `3-Mile` no modo história (`plantBoss`, 3 cabeças de 0x250 bytes; veja Fases). Candidatos a investigar: `JELLY` e `FINAL` (nomes desconhecidos), ou um modelo carregado por outro caminho.
-- Descobrir quem são `JELLY` e `FINAL` e como as 3 fases do boss final são carregadas.
+- Nomes que o jogo mostra para o jelly e o final.
+- Onde está a cutscene final (cérebro explodindo, criatura pequena): não há `.PSS` do boss em `MOV/`, então deve ser cinema em tempo real.
+- Quem são `Woman` e `Ernie` do `FxId`.
+- Dá para pôr o spider/ogre na seleção (ampliar o `last` de `initSelectSwitches`), mas sem `MON/SPIDER0.*`/`OGRE0.*` o `fileReadf` não acha arquivo; precisaria de um modelo substituto.
 
 ## Fases
 
-O **índice** é o do jogo (`GameLevelNames`, 0x6EF748: 28 nomes de 10 bytes) e é o que fica em `Shell::m_levelNum`. O **nome interno** é o dos arquivos `disc/LVL/<NOME>.NGP/.TEX/.RTX/.PTR`. As fases jogáveis também têm `MOV/<NOME>.PSS`, `PTS/<NOME>.AIP/.FOP/.PED/.PUP/.SPT` e `RST/<NOME>.MRS`. `disc/LEVELS.TXT` lista as 15 com `.ngp`. Os nomes que aparecem no jogo ainda não foram levantados.
+O **índice** é o do jogo (`GameLevelNames`, 0x6EF748: 28 nomes de 10 bytes) e é o que fica em `Shell::m_levelNum`. O **nome interno** é o dos arquivos `disc/LVL/<NOME>.NGP/.TEX/.RTX/.PTR`. As fases jogáveis também têm `MOV/<NOME>.PSS`, `PTS/<NOME>.AIP/.FOP/.PED/.PUP/.SPT` e `RST/<NOME>.MRS`. `disc/LEVELS.TXT` lista as 15 com `.ngp`. O **nome do jogo** é o que aparece para o jogador, tirado de `GameLevelLongNames` (0x6ED120, mesmo índice; confirmado pelo dono).
 
 | # | Nome do jogo | Nome interno | Arquivos no disco | Observação |
 |---|---|---|---|---|
-| 0 | — | `default` | — | fase da linha de comando (`whichLevel`, `UseCommandLineLevel`) |
-| 1 | ? | `central` | `CENTRAL` | a fase a que o roteiro `-Auto` chega |
-| 2 | ? | `vegas` | `VEGAS` | |
-| 3 | ? | `canyon2` | `CANYON2` | no modo história, luta contra o Goliath Prime (`assBoss`, `canyon2LevelProgression` em `Shell::InitPlayers`) |
-| 4 | ? | `metro` | `METRO` | |
-| 5 | ? | `airport` | `AIRPORT` | |
-| 6 | ? | `3-Mile` | `3-MILE` | no modo história, luta contra o boss planta (`plantBoss`, `craterSwitched`, `threeMileInitAi`) |
-| 7 | ? | `sanfran` | `SANFRAN` | |
-| 8 | ? | `island` | `ISLAND` | |
-| 9 | ? | `tokyo` | `TOKYO` | |
-| 10 | ? | `ufo` | `UFO` | |
-| 11 | ? | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`, monstros `FINAL`/0x1C0/0x1E0) |
-| 12 | ? | `training` | `TRAINING` | treino |
-| 13 | ? | `canyon1` | `CANYON1` | |
-| 14 | ? | `minisf` | `MINISF` | |
-| 15 | ? | `volcano` | `VOLCANO` | |
-| 16 | ? | `tokyodm` | `TOKYODM` | |
-| 17–24 | — | `dylan`, `david`, `lars`, `jenn`, `yeon`, `jacob`, `steve`, `pierre` | nenhum | nomes de pessoas: provavelmente fases de teste da equipe, sem arquivos |
-| 25 | — | `dball` | `DBALL` | minijogo dodgeball (`m_mode` 7) |
-| 26 | — | `bigshot` | `BIGSHOT` | minijogo bigshot (`m_mode` 8) |
-| 27 | — | `crush` | `CRUSH` | minijogo crush (`m_mode` 9) |
+| 0 | Default | `default` | — | fase da linha de comando (`whichLevel`, `UseCommandLineLevel`) |
+| 1 | Midtown Park | `central` | `CENTRAL` | a fase a que o roteiro `-Auto` chega |
+| 2 | Gamblers Gulch | `vegas` | `VEGAS` | |
+| 3 | Rosdale Canyon | `canyon2` | `CANYON2` | no modo história, luta contra o Goliath Prime (`assBoss`, `canyon2LevelProgression` em `Shell::InitPlayers`) |
+| 4 | Metro City | `metro` | `METRO` | |
+| 5 | Century Airfield | `airport` | `AIRPORT` | |
+| 6 | Atomic Island | `3-Mile` | `3-MILE` | no modo história, luta contra o boss planta (`plantBoss`, `craterSwitched`, `threeMileInitAi`) |
+| 7 | Baytown | `sanfran` | `SANFRAN` | |
+| 8 | Club Caldera | `island` | `ISLAND` | |
+| 9 | Tsunopolis | `tokyo` | `TOKYO` | |
+| 10 | UFO | `ufo` | `UFO` | |
+| 11 | Capitol | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`: robô grande, depois os monstros `JELLY`/`FINAL`, 0x1C0/0x1E0) |
+| 12 | Training | `training` | `TRAINING` | treino |
+| 13 | Lake Powell | `canyon1` | `CANYON1` | |
+| 14 | Mini Baytown | `minisf` | `MINISF` | |
+| 15 | Volcano | `volcano` | `VOLCANO` | |
+| 16 | Tokyo Deathmatch | `tokyodm` | `TOKYODM` | |
+| 17–24 | Dylan, David, Lars, Jenn, Yeon, Jacob, Steve, Pierre | `dylan`, `david`, `lars`, `jenn`, `yeon`, `jacob`, `steve`, `pierre` | nenhum | nomes de pessoas: provavelmente fases de teste da equipe, sem arquivos |
+| 25 | Dodge Ball | `dball` | `DBALL` | minijogo dodgeball (`m_mode` 7) |
+| 26 | Big Shot | `bigshot` | `BIGSHOT` | minijogo bigshot (`m_mode` 8) |
+| 27 | Crush | `crush` | `CRUSH` | minijogo crush (`m_mode` 9; o texto do jogo também diz "Crush-o-Rama") |
 
 O caminho de `Shell::LoadResTexture` mostra que índices acima de 0x1C caem em `host0:monster.rtx`.
 

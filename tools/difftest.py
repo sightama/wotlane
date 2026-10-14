@@ -41,7 +41,7 @@ STACK_SIZE = 0x40000
 ALT_TEXT = 0x08000000
 ALT_DATA = 0x08400000
 RET_ADDR = 0x00001000
-INIT = ''   # --init: python snippet run after the random fill (W(addr, word), W16, W8, THIS, ARENA, STUB), to build structured state
+INIT = ''   # --init: python snippet run after the random fill (W(addr, word), W16, W8, THIS, ARENA, STUB, VAR, uc), to build structured state
 STUB = ARENA + 0x1F0000   # a `jr ra; nop` anywhere
 
 
@@ -280,7 +280,9 @@ class Run:
         self.nargs = None
         if INIT:
             uc.mem_write(STUB, struct.pack('<II', 0x03E00008, 0))
+            # VAR(retail address): where this run keeps a variable the TU defines (the alt run has its own copy), e.g. to end a loop from RETS
             env = {'THIS': ARENA + 0x20000, 'ARENA': ARENA, 'STUB': STUB, 'uc': uc,
+                   'VAR': lambda a: next((aa_ for ra_, aa_, _ in alias if ra_ == a), a),
                    'W': lambda a, v: uc.mem_write(a, struct.pack('<I', v & 0xFFFFFFFF)),
                    'W16': lambda a, v: uc.mem_write(a, struct.pack('<H', v & 0xFFFF)),
                    'W8': lambda a, v: uc.mem_write(a, struct.pack('<B', v & 0xFF))}
@@ -317,6 +319,9 @@ class Run:
                 val = rnd.randrange(0, 2)
             elif t.startswith('='):                # fixed integer, e.g. =2
                 val = int(t[1:], 0)
+            elif t.startswith('r'):                # random integer in [lo, hi], e.g. r0:1000
+                lo, hi = (int(x, 0) for x in t[1:].split(':'))
+                val = rnd.randint(lo, hi) & 0xFFFFFFFF
             elif t == 'f':
                 fv = rnd.uniform(-10, 10)
                 if nf >= len(freg):

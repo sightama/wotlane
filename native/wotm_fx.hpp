@@ -21,8 +21,9 @@
 //   - ordem: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec (+0x2CA0) + vis.priority; opacos (alpha 0) antes
 // Lido no microcodigo de particulas do VU1 (pacote de carga em 0x253060, contexto padrao em 0x256B90; sprite chama 0x59, linha 0x0B,
 // strite 0x151):
-//   - sprite: meio-lado na tela = pos.w * foco / profundidade (foco = o mesmo da matriz de projecao), limitado a foco / 2; ou seja,
-//     pos.w e o meio-lado em unidades de mundo e nunca passa de metade da profundidade. Os bits baixos de pos.w indexam os cantos de
+//   - sprite: o VU1 manda um SPRITE do GS (retangulo alinhado a tela) de meio-lado = pos.w / 2 * foco / profundidade, limitado a
+//     foco / 2 (medido pela checagem VU1 x nativo em sprite e texSprite: a leitura antiga, pos.w inteiro, dava o dobro); ou seja,
+//     pos.w e o lado em unidades de mundo e o meio-lado nunca passa de metade da profundidade. Os bits baixos de pos.w indexam os cantos de
 //     UV (3 normal, 1 espelha U, 2 espelha V, 0 os dois); a cor sai da tabela pela idade, como no loadColors
 //   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
 //   - strite: cabeca pos e cauda pos - vel, esticada 2x para cada lado (de pos + 2*vel a pos - 3*vel), largura por pos.w
@@ -98,6 +99,8 @@ inline const char *fxTypeName(uint32_t t) {
     case FX_FRAG: return "frag";
     case FX_DUSTTRAIL: return "dustTrail";
     case FX_WAKE: return "wake";
+    case 7: return "tipo7";
+    case 14: return "pedestre";
     default: return "?";
     }
 }
@@ -110,6 +113,9 @@ struct FxSystem {
     int n = 0;             // numParticles
     float key = 0;         // ordem de desenho (maior = mais longe = antes)
 };
+
+// Eixos da camera para montar os quadrados: right/up no plano da tela, back = -frente, profundidade(p) = depth . (p, 1)
+struct FxView { float right[3], up[3], back[3], depth[4]; };
 
 class Particles {
 public:
@@ -161,7 +167,7 @@ public:
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;
         if (off || systems.empty()) return;
         const Matrix mv = rlGetMatrixModelview();
-        const float right[3] = {mv.m0, mv.m4, mv.m8}, up[3] = {mv.m1, mv.m5, mv.m9}, back[3] = {mv.m2, mv.m6, mv.m10};
+        const FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14}};
         // particleDraw: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec + vis.priority; opacos (alpha 0) antes
         for (FxSystem &s : systems) {
             if (ram.u32(s.base + fxoff::alphaContext) == 0) { s.key = 50000.f + ram.f32(s.base + fxoff::priority); continue; }
@@ -172,7 +178,7 @@ public:
         rlDrawRenderBatchActive();
         rlDisableDepthMask();
         rlDisableBackfaceCulling();
-        for (const FxSystem &s : systems) drawSystem(ram, s, texture, mv, right, up, back);
+        for (const FxSystem &s : systems) drawSystem(ram, s, texture, view);
         rlDrawRenderBatchActive();
         rlSetBlendMode(BLEND_ALPHA);
         rlEnableDepthMask();
@@ -195,6 +201,84 @@ public:
             out |= uint32_t((a + (((z - a) * int(f)) >> 12)) & 255) << sh;
         }
         return out;
+    }
+
+
+    static bool isStrip(uint32_t type) { return type == FX_SPRINE || type == FX_STRIPE || type == FX_SWEEPTRAIL; }
+
+    // Geometria do sistema em coordenadas de mundo, um quadrado por vez: f(i, cantos[4][3], uv[4][2]), i = particula (nas faixas,
+    // a ponta de i a i + 1; cantos 0 e 1 em i, 2 e 3 em i + 1). Linhas (FX_LINE) nao passam por aqui. Serve ao draw e a checagem VU1.
+    template <class F> static void forEachQuad(const Ram &ram, const FxSystem &s, const FxView &view, F &&f) {
+        const uint32_t b = s.base;
+        const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel);
+        const bool haveVel = ram.ok(vel, 16 * uint32_t(s.n));
+        const float *back = view.back;
+        auto P = [&](int i, float out[4]) { for (int c = 0; c < 4; ++c) out[c] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(c)); };
+        auto V = [&](int i, float out[3]) { for (int c = 0; c < 3; ++c) out[c] = haveVel ? ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(c)) : 0.f; };
+        float c[4][3], uv[4][2];
+        if (s.type == FX_LINE) return;
+        if (isStrip(s.type)) {
+            // Faixa ligando particulas consecutivas, de largura 2*pos.w, virada para a camera
+            for (int i = 0; i + 1 < s.n; ++i) {
+                float p0[4], p1[4];
+                P(i, p0); P(i + 1, p1);
+                if (!std::isfinite(p0[0]) || !std::isfinite(p1[0])) continue;
+                float d[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
+                float w[3] = {d[1] * back[2] - d[2] * back[1], d[2] * back[0] - d[0] * back[2], d[0] * back[1] - d[1] * back[0]};
+                const float l = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+                if (l < 1e-6f) continue;
+                const float r0 = std::fabs(p0[3]) / l, r1 = std::fabs(p1[3]) / l;
+                const float u0 = float(i) / float(s.n - 1), u1 = float(i + 1) / float(s.n - 1);
+                for (int a = 0; a < 3; ++a) {
+                    c[0][a] = p0[a] - w[a] * r0; c[1][a] = p0[a] + w[a] * r0;
+                    c[2][a] = p1[a] + w[a] * r1; c[3][a] = p1[a] - w[a] * r1;
+                }
+                uv[0][0] = u0; uv[0][1] = 0.f; uv[1][0] = u0; uv[1][1] = 1.f;
+                uv[2][0] = u1; uv[2][1] = 1.f; uv[3][0] = u1; uv[3][1] = 0.f;
+                f(i, c, uv);
+            }
+            return;
+        }
+        // Sprites (sprite, texSprite, dustTrail, frag, kite, wake, strite): um quad por particula
+        for (int i = 0; i < s.n; ++i) {
+            float p[4];
+            P(i, p);
+            if (!std::isfinite(p[0]) || !std::isfinite(p[3])) continue;
+            // microcodigo de sprites: meio-lado na tela = pos.w / 2 * foco / profundidade, limitado a foco / 2 (pos.w e o lado em mundo;
+            // medido em sprite e texSprite). Os outros tipos que caem aqui continuam com pos.w inteiro (nao conferidos).
+            const float depth = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
+            const float half = (s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]);
+            const float r = depth > 0.f ? std::min(half, 0.5f * depth) : half;
+            float ax[3] = {view.right[0] * r, view.right[1] * r, view.right[2] * r}, ay[3] = {view.up[0] * r, view.up[1] * r, view.up[2] * r};
+            float cpos[3] = {p[0], p[1], p[2]};
+            if (s.type == FX_STRITE) {
+                // microcodigo do strite: cabeca pos e cauda pos - vel projetadas, e a faixa esticada 2x para cada lado
+                // (de pos + 2*vel a pos - 3*vel); a largura sai de pos.w. Aqui no plano da tela, centrada em pos - vel/2.
+                float v[3];
+                V(i, v);
+                const float vd = v[0] * back[0] + v[1] * back[1] + v[2] * back[2];
+                float vs[3] = {v[0] - back[0] * vd, v[1] - back[1] * vd, v[2] - back[2] * vd};
+                const float vl = std::sqrt(vs[0] * vs[0] + vs[1] * vs[1] + vs[2] * vs[2]);
+                if (vl > 1e-4f) {
+                    for (int a = 0; a < 3; ++a) vs[a] /= vl;
+                    const float side[3] = {vs[1] * back[2] - vs[2] * back[1], vs[2] * back[0] - vs[0] * back[2], vs[0] * back[1] - vs[1] * back[0]};
+                    const float len = 2.5f * vl + r * 0.5f;
+                    for (int a = 0; a < 3; ++a) { ax[a] = vs[a] * len; ay[a] = side[a] * r * 0.5f; cpos[a] = p[a] - 0.5f * v[a]; }
+                }
+            }
+            // conjunto de UV: os bits baixos de pos.w indexam os cantos que o spritePacketInit sobe (VU 0x168): 3 normal, 1 espelha U,
+            // 2 espelha V, 0 os dois. Com info.attribs & 0x2000 sao 16 conjuntos (giros tambem); aqui so os 4 espelhamentos.
+            uint32_t wbits;
+            std::memcpy(&wbits, &p[3], 4);
+            const bool fu = (wbits & 2) == 0, fv = (wbits & 1) == 0;
+            const float u0 = fu ? 1.f : 0.f, u1 = fu ? 0.f : 1.f, v0 = fv ? 1.f : 0.f, v1 = fv ? 0.f : 1.f;
+            const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
+            for (int k = 0; k < 4; ++k)
+                for (int a = 0; a < 3; ++a) c[k][a] = cpos[a] + ax[a] * sx[k] + ay[a] * sy[k];
+            uv[0][0] = u0; uv[0][1] = v1; uv[1][0] = u1; uv[1][1] = v1;
+            uv[2][0] = u1; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
+            f(i, c, uv);
+        }
     }
 
 private:
@@ -242,7 +326,7 @@ private:
         return f % frames;
     }
 
-    void drawSystem(const Ram &ram, const FxSystem &s, const TexFn &texture, const Matrix &mv, const float right[3], const float up[3], const float back[3]) {
+    void drawSystem(const Ram &ram, const FxSystem &s, const TexFn &texture, const FxView &view) {
         const uint32_t b = s.base;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age);
         const uint32_t ti = ram.u32(b + fxoff::texInfoIndex) & 127;
@@ -262,17 +346,17 @@ private:
 
         rlDrawRenderBatchActive();
         rlSetBlendMode(blendFor(ram.u32(b + fxoff::alphaContext)));
-
-        auto P = [&](int i, float out[4]) { for (int c = 0; c < 4; ++c) out[c] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(c)); };
-        auto V = [&](int i, float out[3]) { for (int c = 0; c < 3; ++c) out[c] = haveVel ? ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(c)) : 0.f; };
         auto A = [&](int i) { return haveAge ? int(ram.s16(age + 2 * uint32_t(i))) : 0; };
 
         if (s.type == FX_LINE) {
             rlSetTexture(0);
             rlBegin(RL_LINES);
             for (int i = 0; i < s.n; ++i) {
-                float p[4], v[3];
-                P(i, p); V(i, v);
+                float p[3], v[3];
+                for (int c = 0; c < 3; ++c) {
+                    p[c] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(c));
+                    v[c] = haveVel ? ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(c)) : 0.f;
+                }
                 if (!std::isfinite(p[0])) continue;
                 const uint32_t c = colorAt(ram, b, A(i));
                 vcolor(c);
@@ -284,42 +368,14 @@ private:
             return;
         }
 
-        if (s.type == FX_SPRINE || s.type == FX_STRIPE || s.type == FX_SWEEPTRAIL) {
-            // Faixa ligando particulas consecutivas, de largura 2*pos.w, virada para a camera
-            const unsigned tex = texFor(0);
-            rlSetTexture(tex);
-            rlBegin(RL_QUADS);
-            for (int i = 0; i + 1 < s.n; ++i) {
-                float p0[4], p1[4];
-                P(i, p0); P(i + 1, p1);
-                if (!std::isfinite(p0[0]) || !std::isfinite(p1[0])) continue;
-                float d[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
-                float w[3] = {d[1] * back[2] - d[2] * back[1], d[2] * back[0] - d[0] * back[2], d[0] * back[1] - d[1] * back[0]};
-                const float l = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
-                if (l < 1e-6f) continue;
-                const float r0 = std::fabs(p0[3]) / l, r1 = std::fabs(p1[3]) / l;
-                const float u0 = float(i) / float(s.n - 1), u1 = float(i + 1) / float(s.n - 1);
-                const uint32_t c0 = colorAt(ram, b, A(i)), c1 = colorAt(ram, b, A(i + 1));
-                vcolor(c0); rlTexCoord2f(u0, 0.f); rlVertex3f(p0[0] - w[0] * r0, p0[1] - w[1] * r0, p0[2] - w[2] * r0);
-                vcolor(c0); rlTexCoord2f(u0, 1.f); rlVertex3f(p0[0] + w[0] * r0, p0[1] + w[1] * r0, p0[2] + w[2] * r0);
-                vcolor(c1); rlTexCoord2f(u1, 1.f); rlVertex3f(p1[0] + w[0] * r1, p1[1] + w[1] * r1, p1[2] + w[2] * r1);
-                vcolor(c1); rlTexCoord2f(u1, 0.f); rlVertex3f(p1[0] - w[0] * r1, p1[1] - w[1] * r1, p1[2] - w[2] * r1);
-            }
-            rlEnd();
-            rlSetTexture(0);
-            return;
-        }
-
-        // Sprites (sprite, texSprite, dustTrail, frag, kite, wake, strite): um quad por particula
-        const bool perFrame = s.type == FX_TEXSPRITE;
+        // faixas: uma textura e a cor de cada ponta; sprites: textura (quadro do texSprite) e cor por particula
+        const bool strip = isStrip(s.type), perFrame = s.type == FX_TEXSPRITE;
+        const unsigned stripTex = strip ? texFor(0) : 0;
         unsigned cur = ~0u;
         bool open = false;
-        for (int i = 0; i < s.n; ++i) {
-            float p[4];
-            P(i, p);
-            if (!std::isfinite(p[0]) || !std::isfinite(p[3])) continue;
+        forEachQuad(ram, s, view, [&](int i, const float c[4][3], const float uv[4][2]) {
             const int ag = A(i);
-            const unsigned tex = texFor(perFrame ? texFrame(ram, b, i, ag) : 0);
+            const unsigned tex = strip ? stripTex : texFor(perFrame ? texFrame(ram, b, i, ag) : 0);
             if (tex != cur || !open) {
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }
                 rlBegin(RL_QUADS);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
@@ -327,38 +383,13 @@ private:
                 cur = tex;
                 open = true;
             }
-            // microcodigo de sprites: meio-lado na tela = pos.w * foco / profundidade, limitado a foco / 2 (pos.w e o raio em mundo)
-            const float depth = -(mv.m2 * p[0] + mv.m6 * p[1] + mv.m10 * p[2] + mv.m14);
-            const float r = depth > 0.f ? std::min(std::fabs(p[3]), 0.5f * depth) : std::fabs(p[3]);
-            float ax[3] = {right[0] * r, right[1] * r, right[2] * r}, ay[3] = {up[0] * r, up[1] * r, up[2] * r};
-            float cpos[3] = {p[0], p[1], p[2]};
-            if (s.type == FX_STRITE) {
-                // microcodigo do strite: cabeca pos e cauda pos - vel projetadas, e a faixa esticada 2x para cada lado
-                // (de pos + 2*vel a pos - 3*vel); a largura sai de pos.w. Aqui no plano da tela, centrada em pos - vel/2.
-                float v[3];
-                V(i, v);
-                const float vd = v[0] * back[0] + v[1] * back[1] + v[2] * back[2];
-                float vs[3] = {v[0] - back[0] * vd, v[1] - back[1] * vd, v[2] - back[2] * vd};
-                const float vl = std::sqrt(vs[0] * vs[0] + vs[1] * vs[1] + vs[2] * vs[2]);
-                if (vl > 1e-4f) {
-                    for (int c = 0; c < 3; ++c) vs[c] /= vl;
-                    const float side[3] = {vs[1] * back[2] - vs[2] * back[1], vs[2] * back[0] - vs[0] * back[2], vs[0] * back[1] - vs[1] * back[0]};
-                    const float len = 2.5f * vl + r * 0.5f;
-                    for (int c = 0; c < 3; ++c) { ax[c] = vs[c] * len; ay[c] = side[c] * r * 0.5f; cpos[c] = p[c] - 0.5f * v[c]; }
-                }
+            const uint32_t c0 = colorAt(ram, b, ag), c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
+            for (int k = 0; k < 4; ++k) {
+                vcolor(k < 2 ? c0 : c1);
+                rlTexCoord2f(uv[k][0], uv[k][1]);
+                rlVertex3f(c[k][0], c[k][1], c[k][2]);
             }
-            // conjunto de UV: os bits baixos de pos.w indexam os cantos que o spritePacketInit sobe (VU 0x168): 3 normal, 1 espelha U,
-            // 2 espelha V, 0 os dois. Com info.attribs & 0x2000 sao 16 conjuntos (giros tambem); aqui so os 4 espelhamentos.
-            uint32_t wbits;
-            std::memcpy(&wbits, &p[3], 4);
-            const bool fu = (wbits & 2) == 0, fv = (wbits & 1) == 0;
-            const float u0 = fu ? 1.f : 0.f, u1 = fu ? 0.f : 1.f, v0 = fv ? 1.f : 0.f, v1 = fv ? 0.f : 1.f;
-            vcolor(colorAt(ram, b, ag));
-            rlTexCoord2f(u0, v1); rlVertex3f(cpos[0] - ax[0] - ay[0], cpos[1] - ax[1] - ay[1], cpos[2] - ax[2] - ay[2]);
-            rlTexCoord2f(u1, v1); rlVertex3f(cpos[0] + ax[0] - ay[0], cpos[1] + ax[1] - ay[1], cpos[2] + ax[2] - ay[2]);
-            rlTexCoord2f(u1, v0); rlVertex3f(cpos[0] + ax[0] + ay[0], cpos[1] + ax[1] + ay[1], cpos[2] + ax[2] + ay[2]);
-            rlTexCoord2f(u0, v0); rlVertex3f(cpos[0] - ax[0] + ay[0], cpos[1] - ax[1] + ay[1], cpos[2] - ax[2] + ay[2]);
-        }
+        });
         if (open) rlEnd();
         rlSetTexture(0);
     }

@@ -39,7 +39,7 @@ $out = Join-Path $runtime ("lote\" + (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
 New-Item -ItemType Directory -Force $out | Out-Null
 $disc = "$runtime\discroot"
 $summary = Join-Path $out 'resumo.csv'
-'jogador,ias,fase,segundos,rodadas,vitorias,congelou,lento,crash,saiu_antes,checagens,casados_pior,objetos_divergentes' | Set-Content $summary -Encoding ASCII
+'jogador,ias,fase,segundos,rodadas,vitorias,congelou,lento,crash,saiu_antes,checagens,casados_pior,objetos_divergentes,textura_difere_pior,objetos_textura,fx_casados_pior,fx_tipos_divergentes,vif1_fora_de_passo' | Set-Content $summary -Encoding ASCII
 
 # Cada combinacao: @(jogador, ia1, [ia2, [ia3,]] fase)
 $rng = New-Object System.Random $Seed
@@ -97,11 +97,22 @@ foreach ($c in $combos) {
     $slow = @($lines | Where-Object { $_ -match 'LENTO' }).Count
     $crash = @($lines | Where-Object { $_ -match '\[CRASH\]' }).Count
     # comparacao VU1 x nativo: quantas checagens, o pior % de triangulos do VU1 casados e quantos objetos (polyPkt) apareceram com diferenca
-    $checks = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ .* casados ([\d.]+)%') { [double]$Matches[1] } })
+    $checks = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objetos .* casados ([\d.]+)%') { [double]$Matches[1] } })
     $worst = if ($checks.Count) { ($checks | Measure-Object -Minimum).Minimum.ToString([cultureinfo]::InvariantCulture) } else { '' }   # ponto decimal (CSV)
     $diverging = @($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+pkt ([0-9a-f]+)') { $Matches[1] } } | Sort-Object -Unique).Count
-    '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash,
-        [int]$early, $checks.Count, $worst, $diverging | Add-Content $summary -Encoding ASCII
+    # textura: o pior numero de triangulos casados com TEX0 diferente do nativo num quadro e quantos objetos tiveram textura diferente
+    $texDiff = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ .* textura difere (\d+)') { [int]$Matches[1] } })
+    $texWorst = if ($texDiff.Count) { ($texDiff | Measure-Object -Maximum).Maximum } else { '' }
+    $texObjs = @($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+textura pkt ([0-9a-f]+)') { $Matches[1] } } | Sort-Object -Unique).Count
+    # particulas: o pior % de quadrados do VU1 casados num quadro (so quadros com particulas) e os tipos de sistema que divergiram
+    $fx = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ particulas: .* quadrados vu (\d+) .* casados ([\d.]+)%') { if ([int]$Matches[1] -gt 0) { [double]$Matches[2] } } })
+    $fxWorst = if ($fx.Count) { ($fx | Measure-Object -Minimum).Minimum.ToString([cultureinfo]::InvariantCulture) } else { '' }
+    $fxTypes = (@($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+fx \d+ preset \d+ tipo (\d+)') { $Matches[1] } } | Sort-Object { [int]$_ } -Unique) -join '/')
+    # codigos VIF1 invalidos desde o boot (o VIF1 saiu de passo e leu dados como comandos; pista 5 do VU1CHECK.md): a maior contagem vista
+    $vifBad = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objetos .* VIF1 fora de passo (\d+)') { [int]$Matches[1] } })
+    $vifBadMax = if ($vifBad.Count) { ($vifBad | Measure-Object -Maximum).Maximum } else { '' }
+    '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash,
+        [int]$early, $checks.Count, $worst, $diverging, $texWorst, $texObjs, $fxWorst, $fxTypes, $vifBadMax | Add-Content $summary -Encoding ASCII
     if ($frozen -or $crash -or $early) { Write-Host ("   PROBLEMA: congelou={0} crash={1} saiu_antes={2}" -f $frozen, $crash, [int]$early) -ForegroundColor Red }
     else { Write-Host ("   ok: {0} rodadas, lento={1}" -f $rounds.Count, $slow) }
 }
