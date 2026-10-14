@@ -46,8 +46,6 @@ extern int D_006F8D08;
 extern int movieHasStarted_2745 __asm__("movieHasStarted.2745");
 extern int movieHasStarted_2749 __asm__("movieHasStarted.2749");
 
-INCLUDE_ASM("asm/nonmatchings/game/ui", uiMain__Fi);
-INCLUDE_ASM("asm/nonmatchings/game/ui", D_006F1C90);
 #ifdef NON_MATCHING
 #define SYM(n) __asm__(n)
 struct _cs;
@@ -141,6 +139,127 @@ extern char taskManagerGlobal[] SYM("_11TaskManager$global");
 extern char D_006F84D8[];             /* file name of the userint reset object */
 extern char D_006F1C90[];             /* message shown while a needed controller is missing */
 extern char GameLevelNames_006F2208[][10];
+extern unsigned g_shellOddEven;
+extern int D_00731840;                /* bss word cleared when the movie loop starts; no other reader */
+
+struct _fvector;
+void viewSetBgColor(unsigned long r, unsigned long g, unsigned long b, unsigned long a);
+void viewSetAmbient(float r, float g, float b);
+void viewGetCenter(int view, int *x, int *y);
+void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);
+int inputGetInput(int mask, int pad);
+void uiIntro(void);
+void uiOutro(void);
+void playMovie(void);
+void updateMpegMovieDecoding(bool decode);
+enum PMODESetting { PMODE_SETTING_DUMMY };
+void setPMODE(PMODESetting mode);
+extern "C" void sceGsSetHalfOffset(void *draw, short centerX, short centerY, short halfOff);
+extern "C" void sceGsSetHalfOffset2(void *draw, short centerX, short centerY, short halfOff);
+
+/* untuned: 21/297 words (the retail clears the packet with por/sq; register allocation); tools/difftest.py 60/60 (modes 0..2, 1..80
+ * frames; the stack packet and the DMA registers are not compared, checked by hand) */
+/* Movie loop of the front end: mode 0 plays the intro movies (uiIntro), mode 1 the outro ones (uiOutro), until one of them sets
+ * exitUi. Each frame it lets pad 0 skip the playing movie (button mask 8; the fourth movie only after 600 frames), clears the screen
+ * with a one-register GIF packet that also flips SCANMSK between 2 and 3 (odd and even lines), feeds the MPEG decoder and blinks the
+ * missing-controller message from frame 61 on. Always returns 1. */
+int uiMain(int mode)
+{
+    unsigned long pkt[6] __attribute__((aligned(16)));
+    int skip = 0;
+    int scanMask;
+    char *viewCs;
+    char *db;
+    int cx, cy;
+
+    startTime = timerGetFieldCount();
+    whichPlayerIsPicking = 0;
+    viewCs = (char *)viewGetViewCs(0);
+    exitUi = 0;
+    viewSetBgColor(0, 0, 0, 0);
+    viewSetAmbient(0.0f, 0.0f, 0.0f);
+    movieEnable = 1;
+    currScreen = 0;
+    select = 0;
+    gIntroMoviesHavePlayed = 0;
+    mathfRotMatrixRPH((float (*)[4])(viewCs + 0x20), (_fvector *)(viewCs + 0x60));
+    uiInitScreens((_cs *)viewCs);
+    D_00731840 = 0;
+    g_frame = 0;
+    g_fadeFrameOffset = 0;
+    g_shellOddEven = sceGsSyncV(0) == 0;
+    scanMask = g_shellOddEven ? 2 : 3;
+    db = (char *)viewGetDb(0);
+    FlushCache(0);
+    sceGsSyncPath(0, 0);
+    ieGsPutDrawEnv(db, 0, 1);
+    ieGsPutDrawEnv(db, 1, 1);
+    sceGsSyncPath(0, 0);
+    pkt[0] = 0x70000002;          /* DMA tag: end, two quadwords */
+    pkt[1] = 0;
+    pkt[2] = 0x1000000000008001;  /* GIF tag: NLOOP 1, EOP, NREG 1 */
+    pkt[3] = 0xE;                 /* A+D */
+    pkt[4] = scanMask;
+    pkt[5] = 0x22;                /* SCANMSK */
+    while (exitUi == 0) {
+        if (select == 1) {
+            currScreen = nextScreen;
+            nextScreen = -1;
+            select = 0;
+        }
+        inputUpdate();
+        if (movieRequested != 0 && (nextMovie != 4 || (float)g_frame > 600.0f))
+            skip = inputGetInput(8, 0) != 0;
+        if (mode == 0)
+            uiIntro();
+        else if (mode == 1)
+            uiOutro();
+        else
+            printf("We're pretty screwed up in uiMain here.\n");
+        db = (char *)viewGetDb(0);
+        *(unsigned char *)&pkt[4] = scanMask;
+        FlushCache(0);
+        sceGsSyncPath(0, 0);
+        *(volatile unsigned *)0x1000A020 = 0;                               /* GIF channel QWC */
+        *(volatile unsigned *)0x1000A030 = (unsigned)pkt & 0x7FFFFFFF;    /* TADR */
+        *(volatile unsigned *)0x1000E010 = 4;                               /* D_STAT: clear channel 2 */
+        *(volatile unsigned *)0x1000A000 = 0x145;                           /* CHCR: chain, start */
+        sceGsSyncPath(0, 0);
+        pMode = 1;
+        playMovie();
+        if (movieRequested != 0) {
+            updateMpegMovieDecoding(!skip);
+            skip = 0;
+        }
+        FlushCache(0);
+        sceGsSyncPath(0, 0);
+        setPMODE((PMODESetting)pMode);
+        ieGsPutDrawEnv(db, 0, 1);
+        sceGsSyncPath(0, 0);
+        viewUpdate(0);
+        if (g_frame >= 0x3D && !inputIsCtlAvailable(0) && (g_frame & 0x7F) < 0x60) {
+            fontSetSize(0, 18);
+            fontSetColor(0, 0xFF, 0x3C, 0x3C, 0x80);
+            fontSpritePrintCenteredXY(0, 320, 40, D_006F1C90);
+        }
+        fontDmaFontData();
+        sceGsSyncPath(0, 0);
+        timerEndOfRealTimeProcessing();
+        viewGetCenter(0, &cx, &cy);
+        sceGsSetHalfOffset((g_frame & 1) ? db + 0x200 : db + 0x90, cx, cy, g_shellOddEven);
+        sceGsSetHalfOffset2((g_frame & 1) ? db + 0x280 : db + 0x110, cx, cy, g_shellOddEven);
+        scanMask = scanMask == 2 ? 3 : 2;
+        g_frame++;
+        timer1Handler(&g_shellOddEven);
+    }
+    sceGsSyncPath(0, 0);
+    return 1;
+}
+#else
+INCLUDE_ASM("asm/nonmatchings/game/ui", uiMain__Fi);
+#endif
+INCLUDE_ASM("asm/nonmatchings/game/ui", D_006F1C90);
+#ifdef NON_MATCHING
 
 /* untuned: 167/475 words (register allocation and branch layout); tools/difftest.py 60/60 (1..3 frames, every screen) */
 /* Main loop of the front-end menus: each frame runs the screen in currScreen (or the transition between two screens), draws
@@ -409,7 +528,171 @@ void uiOutro(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/ui", uiOutro__Fv);
 #endif
+#ifdef NON_MATCHING
+extern int needIntro;
+extern int needOutro;
+void playMpegMovieWithDB(char *name, bool b);
+/* untuned: 1/254 words, 0x3F8 bytes vs 0x3E8 (the retail shares the tail of cases 4 and 20); tools/difftest.py 296/300 (nextMovie
+ * 0..35, random flags; the 4 skipped seeds fault only in the retail run, cases 21 and 29 with needOutro clear, while 24 and 28 on the
+ * same path agree) */
+/* Starts the movie nextMovie names, once per movieEnable, and moves nextMovie along its chain: 3 the intro (then 4, the main intro),
+ * 5..8 the four act intros, 21..30 each monster's "_p" movie (then 9..18, its "_g" one, then 19, the credits); 20 is the main intro
+ * again, under needOutro. 3..8 need needIntro, the others needOutro; when the flag is clear the chain still advances. Any other
+ * value only resets nextMovie to 0. */
+void playMovie(void)
+{
+    if (movieEnable != 1)
+        return;
+    switch (nextMovie) {
+    case 3:
+        if (needIntro)
+            playMpegMovieWithDB("mov/intro_m.pss", true);
+        nextMovie = 4;
+        break;
+    case 4:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_main.pss", true);
+        nextMovie = 0;
+        break;
+    case 5:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act1.pss", false);
+        nextMovie = 0;
+        break;
+    case 6:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act2.pss", false);
+        nextMovie = 0;
+        break;
+    case 7:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act3.pss", false);
+        nextMovie = 0;
+        break;
+    case 8:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act4.pss", false);
+        nextMovie = 0;
+        break;
+    case 21:
+        if (needOutro)
+            playMpegMovieWithDB("mov/monkey_p.pss", true);
+        nextMovie = 9;
+        break;
+    case 22:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lizard_p.pss", true);
+        nextMovie = 10;
+        break;
+    case 23:
+        if (needOutro)
+            playMpegMovieWithDB("mov/mantis_p.pss", true);
+        nextMovie = 11;
+        break;
+    case 24:
+        if (needOutro)
+            playMpegMovieWithDB("mov/dragon_p.pss", true);
+        nextMovie = 12;
+        break;
+    case 25:
+        if (needOutro)
+            playMpegMovieWithDB("mov/robot_p.pss", true);
+        nextMovie = 13;
+        break;
+    case 26:
+        if (needOutro)
+            playMpegMovieWithDB("mov/rock_p.pss", true);
+        nextMovie = 14;
+        break;
+    case 27:
+        if (needOutro)
+            playMpegMovieWithDB("mov/shogun_p.pss", true);
+        nextMovie = 15;
+        break;
+    case 28:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lava_p.pss", true);
+        nextMovie = 16;
+        break;
+    case 29:
+        if (needOutro)
+            playMpegMovieWithDB("mov/alien_p.pss", true);
+        nextMovie = 17;
+        break;
+    case 30:
+        if (needOutro)
+            playMpegMovieWithDB("mov/energy_p.pss", true);
+        nextMovie = 18;
+        break;
+    case 9:
+        if (needOutro)
+            playMpegMovieWithDB("mov/monkey_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 10:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lizard_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 11:
+        if (needOutro)
+            playMpegMovieWithDB("mov/mantis_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 12:
+        if (needOutro)
+            playMpegMovieWithDB("mov/dragon_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 13:
+        if (needOutro)
+            playMpegMovieWithDB("mov/robot_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 14:
+        if (needOutro)
+            playMpegMovieWithDB("mov/rock_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 15:
+        if (needOutro)
+            playMpegMovieWithDB("mov/shogun_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 16:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lava_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 17:
+        if (needOutro)
+            playMpegMovieWithDB("mov/alien_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 18:
+        if (needOutro)
+            playMpegMovieWithDB("mov/energy_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 19:
+        if (needOutro)
+            playMpegMovieWithDB("mov/credits.pss", true);
+        nextMovie = 0;
+        break;
+    case 20:
+        if (needOutro)
+            playMpegMovieWithDB("mov/int_main.pss", true);
+        nextMovie = 0;
+        break;
+    default:
+        nextMovie = 0;
+        break;
+    }
+    movieEnable = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/ui", playMovie__Fv);
+#endif
 /* Moves currentMonster (wrapping 0..15) by `step` until it names a monster that exists and nobody has chosen yet. */
 #ifdef NON_MATCHING
 /* 14/56 words: loop shape */
