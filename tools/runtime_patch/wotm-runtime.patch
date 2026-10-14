@@ -32,7 +32,7 @@ index e5f63a9..2a93dcf 100644
          m_impl->eeCycleCarry = total % 8u;
          if (iopCycles)
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..c466baa 100644
+index 589d768..fa43fda 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -377,6 +377,7 @@ endfunction()
@@ -43,15 +43,36 @@ index 589d768..c466baa 100644
      src/lib/gs/ps2_gif_arbiter.cpp
      src/lib/ps2_audio.cpp
      src/lib/ps2_audio_vag.cpp
-@@ -393,6 +394,7 @@ add_library(ps2_runtime STATIC
+@@ -393,6 +394,8 @@ add_library(ps2_runtime STATIC
      src/lib/vu/ps2_vu1_core.cpp
      src/lib/vu/ps2_vu1_upper.cpp
      src/lib/vu/ps2_vu1_lower.cpp
++    src/lib/vu/wotm_vu0_native.cpp
 +    src/lib/ps2_hostprof.cpp
      src/lib/games_database.cpp
  )
  
-@@ -608,3 +610,9 @@ endif()
+@@ -506,6 +509,19 @@ target_include_directories(ps2_runtime PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
+ )
+ 
++# VU0 nativo: a aritmetica do VU (madd com dois arredondamentos, para zero) nao sobrevive a /fp:fast (contracao em FMA)
++if(MSVC)
++    set_source_files_properties(src/lib/vu/wotm_vu0_native.cpp PROPERTIES
++        SKIP_UNITY_BUILD_INCLUSION TRUE
++        COMPILE_OPTIONS "/fp:precise"
++    )
++else()
++    set_source_files_properties(src/lib/vu/wotm_vu0_native.cpp PROPERTIES
++        SKIP_UNITY_BUILD_INCLUSION TRUE
++        COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math"
++    )
++endif()
++
+ target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+ target_link_libraries(ps2EntryRunner
+     PRIVATE
+@@ -608,3 +624,9 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -806,7 +827,7 @@ index 8590f14..addb826 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..9b8556c 100644
+index 45cb9d2..2e834b2 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -815,7 +836,15 @@ index 45cb9d2..9b8556c 100644
  #include "ps2_runtime.h"
  #include "ps2_log.h"
  #include "ps2_stubs.h"
-@@ -414,7 +416,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -13,6 +15,7 @@
+ #include "ps2_host_backend.h"
+ #include "ps2_iop_host.h"
+ #include "ps2x/iop/iop_subsystem.h"
++#include "vu/wotm_vu0_native.h"
+ 
+ #include <iostream>
+ #include <stdexcept>
+@@ -414,7 +417,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                     &sourceFbp,
                                                     &usedPreferredDisplaySource))
      {
@@ -824,7 +853,7 @@ index 45cb9d2..9b8556c 100644
          UpdateTexture(tex, blank.data);
          UnloadImage(blank);
          outWidth = FB_WIDTH;
-@@ -1008,6 +1010,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -1008,6 +1011,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,
                                        elfCrc32Valid);
@@ -835,7 +864,7 @@ index 45cb9d2..9b8556c 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1348,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1349,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -849,7 +878,7 @@ index 45cb9d2..9b8556c 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1364,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1365,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -867,7 +896,7 @@ index 45cb9d2..9b8556c 100644
          return false;
      }
  
-@@ -1396,6 +1413,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1414,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -875,7 +904,7 @@ index 45cb9d2..9b8556c 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1421,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1422,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -887,7 +916,7 @@ index 45cb9d2..9b8556c 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1444,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1445,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -919,7 +948,7 @@ index 45cb9d2..9b8556c 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1480,86 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1481,100 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -937,6 +966,20 @@ index 45cb9d2..9b8556c 100644
 +        g_wotmVuNoSkip = true;
 +        s_vu0Ref.execute(vu0Code, PS2_VU0_CODE_SIZE, s_refData, PS2_VU0_DATA_SIZE, m_gs, &m_memory, startPC, 0u, ctx->vu0_itop, 4096);
 +        g_wotmVuNoSkip = false;
++    }
++    // Microprograma em C++ (wotm_vu0_native, gerado por tools/vu0native.py do repo WoTM) quando existe e o codigo bate. Fora da
++    // verificacao e do dump, que sao do interpretador.
++    static const bool nativeAllowed = !verifyVu0 && std::getenv("PS2X_DUMP_VU0") == nullptr;
++    if (nativeAllowed)
++    {
++        if (WotmVu0Fn fn = wotmVu0NativeLookup(vu0Code, PS2_VU0_CODE_SIZE, m_memory.getVU0CodeGeneration(), startPC))
++        {
++            VU1State &state = m_vu0.state();
++            copyVu0ContextToState(ctx, state);   // zera o resto do estado como o execute (top 0, sem bit E/desvio pendente)
++            wotmVu0NativeRun(fn, state, vu0Data);
++            copyVu0StateToContext(state, ctx);
++            return;
++        }
 +    }
 +    const auto ph0 = std::chrono::steady_clock::now();
      m_vu0.reset();
@@ -1006,7 +1049,7 @@ index 45cb9d2..9b8556c 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2211,7 +2327,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2342,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -1018,7 +1061,7 @@ index 45cb9d2..9b8556c 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2422,7 +2541,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2556,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -1030,7 +1073,7 @@ index 45cb9d2..9b8556c 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2567,177 @@ void PS2Runtime::run()
+@@ -2444,7 +2582,177 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -1674,6 +1717,197 @@ index bd75bba..da985ad 100644
          if (decoded.upperUsage.reserved || decoded.lowerUsage.reserved)
          {
              reportReservedInstruction(decoded.upperUsage.reserved, decoded.upperUsage.reserved ? decoded.upper : decoded.lower);
+diff --git a/ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp b/ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp
+new file mode 100644
+index 0000000..3bd60b2
+--- /dev/null
++++ b/ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp
+@@ -0,0 +1,153 @@
++// Microprogramas do VU0 do WotM em C++ nativo, no lugar do interpretador (VU1Interpreter, modelo de pipeline exato).
++// O corpo de cada programa e gerado por tools/vu0native.py (repo WoTM) a partir do microcodigo no ELF e incluido abaixo;
++// sem o .inc a tabela fica vazia e tudo segue no interpretador. Resultado identico bit a bit ao do interpretador
++// (mesma aritmetica: operandos normalizados, arredondamento para zero, resultado classificado pelo valor em double, flags
++// MAC/status no ciclo em que o pipeline as publicaria); a bancada vu0bench confere contra amostras reais e entradas
++// perturbadas. Cada programa so roda se o hash dos seus bytes na memoria de codigo do VU0 bater com o do gerador.
++#include "wotm_vu0_native.h"
++
++#include <cfloat>
++#include <cmath>
++#include <cstdlib>
++#include <cstring>
++#include <xmmintrin.h>
++
++// sem contracao em FMA nem reassociacao, mesmo se o arquivo cair num build com /fp:fast (o CMake ja pede /fp:precise)
++#ifdef _MSC_VER
++#pragma float_control(precise, on)
++#pragma fp_contract(off)
++#endif
++
++namespace
++{
++    inline float N(float value)
++    {
++        uint32_t bits;
++        std::memcpy(&bits, &value, 4);
++        const uint32_t exponent = (bits >> 23) & 0xFFu;
++        if (exponent == 0u)
++            bits &= 0x80000000u;
++        else if (exponent == 0xFFu)
++            bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
++        std::memcpy(&value, &bits, 4);
++        return value;
++    }
++
++    inline float B(uint32_t bits)
++    {
++        float value;
++        std::memcpy(&value, &bits, 4);
++        return value;
++    }
++
++    // Flags de uma operacao FMAC: mac (ZSUO por lane), cur (ZSUO juntas), ext (sticky extra do produto em madd/msub)
++    struct Fm
++    {
++        uint32_t mac = 0, cur = 0, ext = 0;
++    };
++
++    // Z=1 S=2 U=4 O=8 do valor exato; resultado como VU1Interpreter::normalizeFmacExactResult
++    inline uint32_t classify(double exact, uint32_t &bits)
++    {
++        uint32_t flags = std::signbit(exact) ? 2u : 0u;
++        const double magnitude = std::fabs(exact);
++        bits = flags ? 0x80000000u : 0u;
++        if (magnitude == 0.0)
++            return flags | 1u;
++        if (magnitude > (double)FLT_MAX)
++        {
++            bits |= 0x7F7FFFFFu;
++            return flags | 8u;
++        }
++        if (magnitude < (double)FLT_MIN)
++            return flags | 5u;
++        return flags | 0x10u;   // normal: fica o resultado em float
++    }
++
++    // lane = 8 (x), 4 (y), 2 (z), 1 (w)
++    inline float L(float result, double exact, uint32_t lane, Fm &f)
++    {
++        uint32_t bits;
++        uint32_t flags = classify(exact, bits);
++        if (!(flags & 0x10u))
++            std::memcpy(&result, &bits, 4);
++        flags &= 0xFu;
++        f.cur |= flags;
++        f.mac |= (flags & 1u ? lane : 0u) | (flags & 2u ? lane << 4 : 0u) | (flags & 4u ? lane << 8 : 0u) | (flags & 8u ? lane << 12 : 0u);
++        return result;
++    }
++
++    // sticky do produto (calculateFmacProductSticky)
++    inline void P(float a, float b, Fm &f)
++    {
++        uint32_t bits;
++        f.ext |= classify((double)a * (double)b, bits) & 0xFu;
++    }
++
++    inline void commit(VU1State &s, const Fm &f)
++    {
++        s.mac = f.mac;
++        s.status = (s.status & 0xFF0u) | f.cur | ((f.cur | f.ext) << 6);
++    }
++
++    inline uint32_t addr16(int32_t vi, int32_t imm) { return ((uint32_t)(vi + imm) * 16u) & 0xFFFu; }
++
++    inline void finish(VU1State &s, uint32_t pc, uint64_t cycles)
++    {
++        s.vf[0][0] = 0.0f;
++        s.vf[0][1] = 0.0f;
++        s.vf[0][2] = 0.0f;
++        s.vf[0][3] = 1.0f;
++        s.vi[0] = 0;
++        s.pc = pc;
++        s.cycles = cycles;
++    }
++}
++
++#if __has_include("wotm_vu0_native.gen.inc")
++#include "wotm_vu0_native.gen.inc"
++#else
++static const WotmVu0Program kPrograms[] = {{0, 0, 0, nullptr}};
++static constexpr size_t kProgramCount = 0;
++#endif
++
++namespace
++{
++    uint64_t fnv1a(const uint8_t *p, uint32_t n)
++    {
++        uint64_t h = 0xcbf29ce484222325ull;
++        for (uint32_t k = 0; k < n; ++k)
++            h = (h ^ p[k]) * 0x100000001b3ull;
++        return h;
++    }
++}
++
++WotmVu0Fn wotmVu0NativeLookup(const uint8_t *vu0Code, uint32_t codeSize, uint64_t generation, uint32_t pc)
++{
++    static WotmVu0Fn s_byPc[512];
++    static uint64_t s_generation = ~0ull;
++    static const bool s_disabled = std::getenv("WOTM_VU0_INTERP") != nullptr;
++    if (s_disabled || pc >= codeSize)
++        return nullptr;
++    if (generation != s_generation)
++    {
++        s_generation = generation;
++        std::memset(s_byPc, 0, sizeof(s_byPc));
++        for (size_t k = 0; k < kProgramCount; ++k)
++        {
++            const WotmVu0Program &p = kPrograms[k];
++            if (p.start + p.length <= codeSize && fnv1a(vu0Code + p.start, p.length) == p.hash)
++                s_byPc[(p.start >> 3) & 511u] = p.fn;
++        }
++    }
++    return s_byPc[(pc >> 3) & 511u];
++}
++
++void wotmVu0NativeRun(WotmVu0Fn fn, VU1State &state, uint8_t *vu0Data)
++{
++    // arredondamento para zero, como o VU (e como VU1Interpreter::run): so o MXCSR, a conta e toda em SSE
++    const unsigned int csr = _mm_getcsr();
++    _mm_setcsr((csr & ~0x6000u) | 0x6000u);
++    fn(state, vu0Data);
++    _mm_setcsr(csr);
++}
+diff --git a/ps2xRuntime/src/lib/vu/wotm_vu0_native.h b/ps2xRuntime/src/lib/vu/wotm_vu0_native.h
+new file mode 100644
+index 0000000..99bb38a
+--- /dev/null
++++ b/ps2xRuntime/src/lib/vu/wotm_vu0_native.h
+@@ -0,0 +1,26 @@
++#ifndef WOTM_VU0_NATIVE_H
++#define WOTM_VU0_NATIVE_H
++
++#include "runtime/ps2_vu1.h"
++
++#include <cstddef>
++#include <cstdint>
++
++// Microprograma do VU0 em C++ (gerado por tools/vu0native.py): recebe o estado ja copiado do contexto do EE e a memoria de
++// dados do VU0, e deixa estado e memoria como o interpretador deixaria ao fim do programa (inclusive pc, ciclos e flags).
++using WotmVu0Fn = void (*)(VU1State &state, uint8_t *vu0Data);
++
++struct WotmVu0Program
++{
++    uint32_t start;    // pc de entrada (bytes)
++    uint32_t length;   // bytes do programa conferidos pelo hash (ate o par seguinte ao bit E, inclusive)
++    uint64_t hash;     // FNV-1a 64 desses bytes
++    WotmVu0Fn fn;
++};
++
++// Versao nativa do programa em pc, ou nullptr (sem versao nativa, codigo diferente do esperado, ou WOTM_VU0_INTERP definido).
++WotmVu0Fn wotmVu0NativeLookup(const uint8_t *vu0Code, uint32_t codeSize, uint64_t generation, uint32_t pc);
++// Roda com o arredondamento do VU (para zero).
++void wotmVu0NativeRun(WotmVu0Fn fn, VU1State &state, uint8_t *vu0Data);
++
++#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
 index 0000000..96232d5

@@ -13,6 +13,14 @@ try { if (Test-Path $timeFile) { $expected = [double](Get-Content $timeFile -Tot
 if ($expected -lt 5) { $expected = 5 }
 
 (Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\lib\ps2_runtime.cpp").LastWriteTime = Get-Date
+# microprogramas do VU0 em C++ (gerados do ELF; sem o .inc o runtime usa so o interpretador)
+$gen = Join-Path $PSScriptRoot 'vu0native.py'
+$inc = "$Dir\PS2Recomp\ps2xRuntime\src\lib\vu\wotm_vu0_native.gen.inc"
+$elf = Join-Path $PSScriptRoot '..\disc\SCUS_971.97'
+if ((Test-Path $elf) -and (-not (Test-Path $inc) -or (Get-Item $inc).LastWriteTime -lt (Get-Item $gen).LastWriteTime)) {
+    & python $gen $elf $inc | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Host 'vu0native.py falhou: VU0 fica no interpretador' -ForegroundColor Yellow }
+}
 # unity build: o ninja nao recompila o lote que inclui o main.cpp quando so ele muda; apaga o .obj desse lote se ficou velho
 $main = Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\main.cpp"
 $unity = Join-Path $Dir ([IO.Path]::GetFileNameWithoutExtension($Bat)) | Join-Path -ChildPath 'ps2xRuntime\CMakeFiles\ps2EntryRunner.dir\Unity'

@@ -28,6 +28,7 @@ class Launcher : Form
         new Flag("Execucao", "WOTM_RATEMIN=0", false, "Diagnostico: tirar o limite do updateRate (dt livre)", "Por padrao o runtime devolve updateRate >= 30 ao jogo (dt <= 1/30): sem isso, nos quadros lentos a fisica integra com dt grande e diverge (pelo do Congar esticado, monstro girando sozinho)."),
         new Flag("Execucao", "WOTM_FIELDLOG", false, "Log de fields por quadro (live.err.log)", "Uma linha [field] por quadro do jogo: fields, updateRate, ciclos do EE, tempo de host e os lacos que mais gastam."),
         new Flag("Execucao", "WOTM_OLDCLOCK", false, "Diagnostico: relogio antigo do EE", "Volta a espera pelo VU1 no particleDraw contando ciclos e o relogio virtual solto do de parede (ritmo irregular: rate 15/20/60 alternando)."),
+        new Flag("Execucao", "WOTM_VU0_INTERP", false, "Diagnostico: VU0 so no interpretador", "Desliga os microprogramas do VU0 em C++ (gerados do ELF por tools/vu0native.py) e roda todos no interpretador, como antes (logica bem mais lenta)."),
 
         new Flag("Controle", "PS2X_PADLOG", false, "Log do gamepad (nome e eixos no live.err.log)", "Linhas [pad]: nome do gamepad 0 e cada mudanca dos analogicos, com o horario."),
         new Flag("Controle", "PS2X_PAD_DEADZONE=0.25", false, "Zona morta de 0,25 nos analogicos", "Sem ela o runtime repassa qualquer desvio do eixo ao jogo."),
