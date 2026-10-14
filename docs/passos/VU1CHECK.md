@@ -34,12 +34,10 @@
 1. **Objetos que o nativo desenha e o jogo não** (`vu 0` na saída): estão inteiros na tela e de frente.
    - Exemplos em central: tex 276 (até 545 triângulos), 234, 247 e 307.
    - Suspeita: escolhas de visibilidade (CONTROL/prédio fantasma, DESTRUCTIBLE, LOD). É a pista mais ligada aos bugs já reportados.
-2. **Monstros com 20% a 28% a mais de triângulos no VU1, só com 3 IAs** (`WOTM_MATCH=1,3,2,2,1`).
-   - Os vértices são os mesmos (0,04 px), mas ligados de outro jeito, e a diferença cresce no fim de cada sub-pacote.
-   - No 1 contra 1 os monstros casam inteiros.
-   - Causa possível: a regra de ADC do nativo ou dado velho na memória do VU1 emulado. Precisa de referência do PCSX2 para decidir.
-   - Medido antes da correção do VIF1 fora de passo, que também punha ADC errado: refazer a medição antes de investigar.
+2. **Resolvida:** monstros com 20% a 28% a mais de triângulos no VU1, só com 3 IAs (`WOTM_MATCH=1,3,2,2,1`). Era o mesmo ADC errado do VIF1 fora de passo.
+   - Remedido depois da correção (central, 90 s, checagem a cada 5 s, 17 checagens, `VIF1 fora de passo 0`): os quatro monstros casam de 99,0% a 100% em todas, com o mesmo número de triângulos no VU1 e no nativo (diferença de até 6).
 3. **Objetos com tex 66 e várias instâncias** às vezes não casam.
+   - Na mesma remedição, a pior checagem (`g=1880`, 84,5% contra 97,5% a 99,9% nas outras) foi só isso: oito objetos tex 66 (6 a 9 itens) com o mesmo número de triângulos no VU1 e no nativo e quase nenhum casado (ex.: 448/448 com 444 faltando). Cara de instâncias trocadas ou deslocadas, não de geometria diferente.
 4. **Resto da textura (1 a 11 triângulos por quadro):** o VU1 usa a textura de outro objeto ou o slot vizinho do mesmo objeto.
    - Exemplo: `tbp 27a5 128x128 cbp 1bd2` aparece no VU1 em objetos sem relação entre si (tex 110, 155, 225, 236). Também aparecem pares trocados de slot (tbp 23a9 e 23b1 nos tex 231 e 233).
    - Hipótese: seção com seletor 0 herda o TEX0 que o GS tinha, que pode ser do objeto desenhado antes. O nativo herda só dentro do próprio objeto e começa no slot 0.
@@ -68,7 +66,7 @@ Resumo: pega objeto ou partícula que falta, sobra, está fora do lugar ou com o
 ## Próximos passos (do mais barato ao mais caro)
 1. **HUD pelo caminho direto ao GS:** pôr um tap também nos pacotes GIF que vão direto ao GS (PATH3/PATH2, fora do VU1) e comparar com o que o nativo desenha por cima da cena (texto, ícones). Antes, confirmar por onde o HUD sai e de onde vêm os ~340 SPRITE do GS fora de `fx[]`.
 2. **Cor de vértice e ALPHA por triângulo:** o XGKICK traz o RGBAQ de cada vértice e o registrador ALPHA; daria para estender a comparação de textura para cor e mistura (alcança a explosão opaca) e para as partículas.
-3. **Investigar as pistas 1, 2, 3, 4 e 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
+3. **Investigar as pistas 1, 3, 4 e 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
 
 ## Problema antigo encontrado no caminho
 O caminho emulado inteiro (sem `PS2X_NO_VU1`) está quebrado. A luta trava no primeiro quadro (laço do `particleDraw`) e, contornado isso, cai em `GS::consumeLocalToHostBytes` (leitura de VRAM do `sceGsExecStoreImage`, chamado a cada quadro de 0x2153FC). A checagem não depende desse caminho. O método para localizar um `[CRASH] exe+0x…` está em `NATIVO.md`.
