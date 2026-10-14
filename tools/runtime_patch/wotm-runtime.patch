@@ -2006,10 +2006,10 @@ index 0000000..481f867
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..96232d5
+index 0000000..d45e2fc
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,266 @@
+@@ -0,0 +1,270 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
@@ -2123,11 +2123,15 @@ index 0000000..96232d5
 +    bool interp = std::getenv("WOTM_NOINTERP") == nullptr;   // F4 liga/desliga a interpolacao (WOTM_NOINTERP: comeca desligada)
 +};
 +
++// Fase carregada: so o cabecalho da imagem do nivel em 0xA00000 (N e os N ponteiros dos nos-raiz, docs/FORMATOS.md) e o endereco
++// das texturas. Os nos logo depois sao estado vivo (o menu reescreve matrizes ali a cada quadro nas transicoes de tela, o que
++// invalidava a cena inteira por quadro: tela a ~16/s).
 +inline uint32_t levelSignature(const wotm::Ram &ram)
 +{
 +    uint32_t h = ram.u32(wotm::addr::tempVramTexAddr) * 2654435761u;
-+    for (uint32_t a = 0xA00000; a < 0xA00400; a += 4)
-+        h = (h ^ ram.u32(a)) * 16777619u;
++    const uint32_t n = std::min<uint32_t>(ram.u32(0xA00000), 255u);
++    for (uint32_t k = 0; k <= n; ++k)
++        h = (h ^ ram.u32(0xA00000 + 4 * k)) * 16777619u;
 +    return h;
 +}
 +
