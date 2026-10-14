@@ -37,10 +37,17 @@
   - Depois da correção, os tex 66 casam em 1528 de 1532 triângulos (29 objetos, 3 IAs em central), e o lote em central, 2, METRO, 5, 7 e 8 (1 contra 1, 60 s) fica com pior caso de 99,0% a 99,6% por fase, fora o `g=30` de central (95%).
   - Hipótese descartada com teste: coleta nativa na hora errada (com a coleta da entrada do `hier`, nada mudava; o `trans` do `_cs` não muda durante o quadro).
 
+- **OT de alfa fora da checagem** (era a pista 1, bug do runtime só no quadro amostrado). Sintoma: objetos que "só o nativo desenha" (`vu 0`), inteiros na tela e de frente: em central, tex 276 (até 545 triângulos), 302, 304, 234, 307, 326 e outros, de 15 a 25 objetos por checagem.
+  - Não era visibilidade. Com um diagnóstico do caminho de nós até cada objeto, todos tinham a flag `0x8000` no OBJECT (`+0xC`), ou `0x4000` durante o fade de LOD, e nenhum objeto sem essas flags faltava. A travessia (`hierTraverseAsm`) monta o pacote desses objetos à parte, guarda-os na `hierAlpList` (0x50B118) e os liga a uma OT de profundidade (`pktLinkAlphaObjAsm`). O fim do `hier` engata a OT no último pacote (`pktAttachAlphaOT`), que sai pelo `hierFlushObjQ` da interrupção do DMA do VIF1 (`hierDmaHandler`) e só se `objsInPacket`/`objsInAlphaPacket` não forem 0.
+  - Causa: o `hook_particleDraw` do `main.cpp` zera esses contadores (sem VU1 não há o que esperar), e no runtime a interrupção pode chegar depois dele. Nenhuma cadeia do VIF1 passava pelos pacotes de alfa (0x4CE700 em diante), então os objetos nunca chegavam ao VU1. No PS2 eles saem: o nativo estava certo em desenhá-los.
+  - Correção (runtime): no quadro amostrado, o `hook_particleDraw` chama o `hierFlushObjQ` original antes de zerar, se algum contador não for 0. Disparar "depois do `hier`" não funciona: o runtime devolve o controle antes do fim real do `hier`, e os contadores só ganham valor depois.
+  - Com a OT vieram as passadas da sombra projetada: cada objeto que recebe sombra (flags sem `0x200` e sem `0x60`: `psObjectCull`) é redesenhado na OT uma vez por monstro (`psAttachDmaToAlpha`; 1 contra 1 dá 3x). A checagem casa o que sobra contra os nativos já casados e conta como `repetidos` (na linha de resumo, `tris vu N (repetidos R)`), fora de `faltam`, do % e da textura.
+  - Também: o TEX0 de referência dos objetos de alfa sai com TBP 0 (o `texmGetTextureAddrs` do fim do `hier` preenche o TBP só na cópia do pacote de alfa). A comparação de textura ignora o TBP quando o do nativo é 0. A linha de cada objeto passou a mostrar as `flags` do OBJECT.
+  - Hipóteses descartadas no caminho, com teste: teste de esfera contra o frustum da travessia (6 planos: `fovNorms`, `fovNorms1` e o plano de longe com `fogGetFarClipRange`; reproduzido no nativo, não mudava nada e as esferas tinham folga positiva), fade de LOD (só parte dos casos), clipping e ADC (o jogo não rodava nenhum programa do VU1 para esses objetos) e corte da cadeia de DMA em 4096 tags.
+  - Depois da correção (central, 1 contra 1, 75 s, 14 checagens): `objetos vu` e `nativo` quase iguais em toda checagem, de 99,1% a 100% casados, fora do início da luta (`g=30`, 96,8%) e de três checagens com 95,9% a 97,1% (pista 7). Lote 1 contra 1, fases 1 e 4, 60 s: pior caso 96,8% e 96,1% (ambos `g=30`), `vif1_fora_de_passo` 0.
+
 ## Pistas encontradas (nenhuma confirmada como bug; nada corrigido)
-1. **Objetos que o nativo desenha e o jogo não** (`vu 0` na saída): estão inteiros na tela e de frente.
-   - Exemplos em central: tex 276 (até 545 triângulos), 234, 247 e 307.
-   - Suspeita: escolhas de visibilidade (CONTROL/prédio fantasma, DESTRUCTIBLE, LOD). É a pista mais ligada aos bugs já reportados.
+1. **Resolvida:** objetos que só o nativo desenhava. Era a OT de alfa fora da checagem; ver "Corrigido com a checagem".
 2. **Resolvida:** monstros com 20% a 28% a mais de triângulos no VU1, só com 3 IAs (`WOTM_MATCH=1,3,2,2,1`). Era o mesmo ADC errado do VIF1 fora de passo.
    - Remedido depois da correção (central, 90 s, checagem a cada 5 s, 17 checagens, `VIF1 fora de passo 0`): os quatro monstros casam de 99,0% a 100% em todas, com o mesmo número de triângulos no VU1 e no nativo (diferença de até 6).
 3. **Resolvida:** objetos com tex 66 e várias instâncias às vezes não casavam. Ver "Corrigido com a checagem" (posição dos `_cs` com matriz não ortonormal).
@@ -58,12 +65,16 @@
    - **stripe (5):** mesma contagem; largura de 0,8 a 1,2 vez a do nativo e deslocamento de até 2 px.
    - **Sistemas que só o VU1 tem** (tipo `0 -` na linha por tipo): de 2 a 19 quadrados por checagem, de sistemas que o `Particles::collect` não aceita.
    - **SPRITE do GS fora de `fx[]`:** de 320 a 350 retângulos por quadro, quase constantes, de origens fora dos sistemas de partícula. Não identificados (HUD ou ícones?).
+7. **Objetos com a mesma contagem e nenhum triângulo casado** (vistos agora que a OT de alfa chega à checagem): em central, tex 330 (nós `12ba5d0`/`12bb3e0`, flags `0x8a01`) e tex 0 (nó `12b9250`, flags `0x311`, fora da OT de alfa). A posição ou a orientação diferem. São eles que derrubam três checagens para 95,9% a 97,1%. Os dois têm o bit 0 (sem teste de esfera); o tex 330 tem também `0x0800`, que a travessia não testa (talvez o `pktAddVu1ObjAsm` escolha outro microprograma: billboard?). Não conferido.
+8. **Objeto com textura do tamanho da tela na METRO:** tex 0, nó `a1c560`, 92 triângulos, sem textura no nativo; no VU1 sai com `tbp 1180 psm 1 1024x256` (parece o próprio framebuffer: reflexo ou vidro). Não conferido.
+9. **Passada da sombra antes da base:** em poucos triângulos por quadro, o casamento guloso pega a passada da sombra (`tbp 3e60 psm 0 128x128`) no lugar da passada base, e a textura conta como diferente (a METRO chegou a 9 numa checagem).
 
 ## O que a checagem não cobre hoje
 Ela compara a geometria dos objetos (triângulos na tela) e das partículas (quadrados na tela) e a textura dos objetos (TEX0). Cor de vértice, mistura e alfa ficam de fora.
 - **Textura certa decodificada errada:** não pega. A checagem compara qual textura (endereço, formato e paleta), não os texels que o nativo gerou a partir dela.
 - **Textura e cor das partículas:** não compara (só a forma).
 - **Linhas e leques do VU1:** só conta os vértices (`line` das partículas sai assim).
+- **Passadas repetidas** (sombra projetada sobre os objetos): só contadas (`repetidos`). Não são comparadas com as sombras do nativo.
 - **HUD:** muito provavelmente não passa pelo VU1. O jogo manda o texto direto ao GS, como as fontes (`fontPacket`); o resto do HUD não foi conferido. A checagem não vê nada disso.
 - **Mistura e alfa** (por exemplo, a explosão opaca): fora do alcance.
 
@@ -72,7 +83,7 @@ Resumo: pega objeto ou partícula que falta, sobra, está fora do lugar ou com o
 ## Próximos passos (do mais barato ao mais caro)
 1. **HUD pelo caminho direto ao GS:** pôr um tap também nos pacotes GIF que vão direto ao GS (PATH3/PATH2, fora do VU1) e comparar com o que o nativo desenha por cima da cena (texto, ícones). Antes, confirmar por onde o HUD sai e de onde vêm os ~340 SPRITE do GS fora de `fx[]`.
 2. **Cor de vértice e ALPHA por triângulo:** o XGKICK traz o RGBAQ de cada vértice e o registrador ALPHA; daria para estender a comparação de textura para cor e mistura (alcança a explosão opaca) e para as partículas.
-3. **Investigar as pistas 1, 4 e 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
+3. **Investigar as pistas 4, 6, 7 e 8 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
 
 ## Problema antigo encontrado no caminho
 O caminho emulado inteiro (sem `PS2X_NO_VU1`) está quebrado. A luta trava no primeiro quadro (laço do `particleDraw`) e, contornado isso, cai em `GS::consumeLocalToHostBytes` (leitura de VRAM do `sceGsExecStoreImage`, chamado a cada quadro de 0x2153FC). A checagem não depende desse caminho. O método para localizar um `[CRASH] exe+0x…` está em `NATIVO.md`.

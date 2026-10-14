@@ -3580,10 +3580,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..0b9d58d
+index 0000000..ea21f7a
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,764 @@
+@@ -0,0 +1,782 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -4167,7 +4167,7 @@ index 0000000..0b9d58d
 +    // texDifere: casados com textura diferente; vuTex/natTex/natSlot: o par diferente mais comum do objeto
 +    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas, texDifere; uint64_t vuTex, natTex; uint8_t natSlot; };
 +    std::vector<Row> rows;
-+    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
++    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, totRep = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
 +    uint32_t totTexDifere = 0, totTexUnknown = 0;
 +    std::vector<uint32_t> keys;   // objetos da 1a coleta e os que o VU1 desenhou
 +    for (const auto &kv : g_nats[0]) keys.push_back(kv.first);
@@ -4201,14 +4201,31 @@ index 0000000..0b9d58d
 +            const uint32_t m1 = match(vu, nat1, vuPair1, natHit1);
 +            if (m1 > m) { m = m1; nat.swap(nat1); vuPair.swap(vuPair1); natHit.swap(natHit1); }
 +        }
++        // Passadas repetidas: o VU1 redesenha o mesmo triangulo (a sombra projetada repassa cada objeto que a recebe, uma vez por
++        // monstro, na OT de alfa: psAttachDmaToAlpha). O que sobra e casa com um nativo ja casado conta como repetido, nao como falta.
++        uint32_t rep = 0;
++        for (int round = 0; round < 4 && m + rep < vu.size(); ++round) {
++            std::vector<size_t> idx;
++            std::vector<Tri> rest;
++            for (size_t i = 0; i < vu.size(); ++i)
++                if (vuPair[i] == -1) { idx.push_back(i); rest.push_back(vu[i]); }
++            std::vector<int> pair2;
++            std::vector<char> hit2;
++            if (!match(rest, nat, pair2, hit2)) break;
++            for (size_t j = 0; j < rest.size(); ++j)
++                if (pair2[j] >= 0) { vuPair[idx[j]] = -2; ++rep; }   // -2 = repetido (fora da comparacao de textura)
++        }
 +        // textura dos casados: a do GS no XGKICK contra a que o nativo escolheu para o slot da secao
 +        uint32_t texDifere = 0;
 +        std::map<std::tuple<uint64_t, uint64_t, uint8_t>, uint32_t> texPairs;
 +        for (size_t i = 0; i < vu.size(); ++i) {
 +            if (vuPair[i] < 0) continue;
 +            const Tri &n = nat[size_t(vuPair[i])];
++            // TBP 0 no nativo: objeto da OT de alfa; o texmGetTextureAddrs do fim do hier preenche o TBP so na copia do pacote de
++            // alfa, nao no polyPkt de onde sai o TEX0 de referencia (o nativo desenha pela textura do texInfo, sem esse TBP)
++            const bool noTbp = n.tex && !(n.tex & 0x3FFFu);
 +            if (vu[i].tex == kTexUnknown) ++totTexUnknown;
-+            else if (vu[i].tex != n.tex) { ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}]; }
++            else if (noTbp ? (vu[i].tex & ~0x3FFFull) != n.tex : vu[i].tex != n.tex) { ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}]; }
 +        }
 +        std::tuple<uint64_t, uint64_t, uint8_t> texWorst{};
 +        uint32_t texWorstN = 0;
@@ -4221,10 +4238,10 @@ index 0000000..0b9d58d
 +        const bool culled = vuBack * 50 <= vu.size();
 +        for (size_t i = 0; i < nat.size(); ++i)
 +            if (!natHit[i]) ++((culled && area2(nat[i]) > 0.f) ? costas : sobra);
-+        const uint32_t nVu = uint32_t(vu.size()), nNat = uint32_t(nat.size()) - costas, falta = nVu - m;
++        const uint32_t nVu = uint32_t(vu.size()), nNat = uint32_t(nat.size()) - costas, falta = nVu - m - rep;
 +        objVu += nVu > 0; objNat += nNat > 0; objBoth += nVu && nNat;
-+        totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas;
-+        rows.push_back({key, &o, nVu, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst)});
++        totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas; totRep += rep;
++        rows.push_back({key, &o, nVu - rep, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst)});
 +        if (g_dump) {
 +            auto row = [&](const char *side, int hit, const Tri &t) {
 +                std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llx\n", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2],
@@ -4237,19 +4254,20 @@ index 0000000..0b9d58d
 +    }
 +    uint32_t orphanTris = 0;
 +    for (const auto &kv : orphan) orphanTris += kv.second;
-+    const double pct = totVu ? 100.0 * (totVu - totFalta) / totVu : 0.0;
-+    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u nativo %u casados %.1f%% faltam %u sobram %u "
++    const double pct = totVu ? 100.0 * (totVu - totRep - totFalta) / (totVu - totRep) : 0.0;
++    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u (repetidos %u) nativo %u casados %.1f%% faltam %u sobram %u "
 +                         "(costas %u) | textura difere %u, sem TEX0 %u | XGKICK %u tris, %u fora da tela | particulas %u tris, sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
 +                         "vertices nao finitos %u, VIF1 fora de passo %u\n",
-+                 g_frame, objVu, objNat, objBoth, totVu, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, g_vuKicked, g_vuOff, fxTris, orphanTris, g_chains,
++                 g_frame, objVu, objNat, objBoth, totVu, totRep, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, g_vuKicked, g_vuOff, fxTris, orphanTris, g_chains,
 +                 g_walkMs, g_projMs, g_progs.size(), bad, g_wotmVif1Bad);
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.falta + a.sobra > b.falta + b.sobra; });
 +    int shown = 0;
 +    for (const Row &r : rows) {
 +        if (shown >= 8 || r.falta + r.sobra < 4 || 10 * (r.falta + r.sobra) < std::max(r.vu, r.nat)) continue;
 +        ++shown;
-+        std::fprintf(stderr, "[vu1check]   pkt %x no %x tex %u%s itens %d: vu %u nativo %u faltam %u sobram %u (costas %u)\n", r.pp,
-+                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.o->items, r.vu, r.nat, r.falta, r.sobra, r.costas);
++        std::fprintf(stderr, "[vu1check]   pkt %x no %x tex %u%s itens %d: vu %u nativo %u faltam %u sobram %u (costas %u) flags %x\n", r.pp,
++                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.o->items, r.vu, r.nat, r.falta, r.sobra, r.costas,
++                     unsigned(g_rdram[r.o->node + 0xC] | (g_rdram[r.o->node + 0xD] << 8)));   // flags do OBJECT (0x8000 = OT de alfa)
 +    }
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.texDifere > b.texDifere; });
 +    auto texStr = [](uint64_t v, char *s, size_t n) {
@@ -4349,10 +4367,10 @@ index 0000000..0b9d58d
 +void wotmVu1CheckInstall(PS2Runtime &) {}
 +#endif
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..0119198 100644
+index 563bcbd..42decd7 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,12 +164,59 @@ namespace
+@@ -164,12 +164,67 @@ namespace
      }
  }
  
@@ -4397,6 +4415,14 @@ index 563bcbd..0119198 100644
 +static PS2Runtime::RecompiledFunction g_particleDraw = nullptr;
 +static void hook_particleDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
++    // Quadro amostrado pela checagem VU1 x nativo: o fim do hier deixa o ultimo pacote (a OT de alfa com os objetos que a travessia
++    // guarda na hierAlpList: OBJECT 0x8000, e 0x4000 durante o fade de LOD) para o hierFlushObjQ da interrupcao do DMA do VIF1, que
++    // no PS2 chega antes daqui. Zerar os contadores sem disparar perdia a OT, e esses objetos saiam como "so o nativo desenha".
++    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(0x006F87A0u) || READ32(0x006F87A4u)))
++    {
++        R5900Context temp = *ctx;
++        g_origFlushObjQ(rdram, &temp, runtime);
++    }
 +    WRITE32(0x006F87A0u, 0u);
 +    WRITE32(0x006F87A4u, 0u);
 +    g_particleDraw(rdram, ctx, runtime);
@@ -4412,7 +4438,7 @@ index 563bcbd..0119198 100644
  
      try
      {
-@@ -220,12 +267,77 @@ int main(int argc, char *argv[])
+@@ -220,12 +275,77 @@ int main(int argc, char *argv[])
              return 1;
          }
  
