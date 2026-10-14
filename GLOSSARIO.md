@@ -29,11 +29,38 @@ O **índice** é o do jogo (`MonsterLongNames`/`MonsterNewNames`). O **nome inte
 Nomes em minúsculas no código (`"robo-47"`, `"ultra-v"`); a capitalização da coluna "Nome do jogo" é nossa.
 
 ### Pendências
-- Existe um **boss planta** no meio do jogo que não sabemos qual da lista é; nome e arquivo ainda não identificados. Candidatos a investigar: `JELLY` e `FINAL` (nomes desconhecidos), ou um modelo carregado por outro caminho.
+- Existe um **boss planta** no meio do jogo que não sabemos qual da lista é; nome e arquivo ainda não identificados. Ele aparece em `3-Mile` no modo história (`plantBoss`, 3 cabeças de 0x250 bytes; veja Fases). Candidatos a investigar: `JELLY` e `FINAL` (nomes desconhecidos), ou um modelo carregado por outro caminho.
 - Descobrir quem são `JELLY` e `FINAL` e como as 3 fases do boss final são carregadas.
 
 ## Fases
-(a preencher)
+
+O **índice** é o do jogo (`GameLevelNames`, 0x6EF748: 28 nomes de 10 bytes) e é o que fica em `Shell::m_levelNum`. O **nome interno** é o dos arquivos `disc/LVL/<NOME>.NGP/.TEX/.RTX/.PTR`. As fases jogáveis também têm `MOV/<NOME>.PSS`, `PTS/<NOME>.AIP/.FOP/.PED/.PUP/.SPT` e `RST/<NOME>.MRS`. `disc/LEVELS.TXT` lista as 15 com `.ngp`. Os nomes que aparecem no jogo ainda não foram levantados.
+
+| # | Nome do jogo | Nome interno | Arquivos no disco | Observação |
+|---|---|---|---|---|
+| 0 | — | `default` | — | fase da linha de comando (`whichLevel`, `UseCommandLineLevel`) |
+| 1 | ? | `central` | `CENTRAL` | a fase a que o roteiro `-Auto` chega |
+| 2 | ? | `vegas` | `VEGAS` | |
+| 3 | ? | `canyon2` | `CANYON2` | no modo história, luta contra o Goliath Prime (`assBoss`, `canyon2LevelProgression` em `Shell::InitPlayers`) |
+| 4 | ? | `metro` | `METRO` | |
+| 5 | ? | `airport` | `AIRPORT` | |
+| 6 | ? | `3-Mile` | `3-MILE` | no modo história, luta contra o boss planta (`plantBoss`, `craterSwitched`, `threeMileInitAi`) |
+| 7 | ? | `sanfran` | `SANFRAN` | |
+| 8 | ? | `island` | `ISLAND` | |
+| 9 | ? | `tokyo` | `TOKYO` | |
+| 10 | ? | `ufo` | `UFO` | |
+| 11 | ? | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`, monstros `FINAL`/0x1C0/0x1E0) |
+| 12 | ? | `training` | `TRAINING` | treino |
+| 13 | ? | `canyon1` | `CANYON1` | |
+| 14 | ? | `minisf` | `MINISF` | |
+| 15 | ? | `volcano` | `VOLCANO` | |
+| 16 | ? | `tokyodm` | `TOKYODM` | |
+| 17–24 | — | `dylan`, `david`, `lars`, `jenn`, `yeon`, `jacob`, `steve`, `pierre` | nenhum | nomes de pessoas: provavelmente fases de teste da equipe, sem arquivos |
+| 25 | — | `dball` | `DBALL` | minijogo dodgeball (`m_mode` 7) |
+| 26 | — | `bigshot` | `BIGSHOT` | minijogo bigshot (`m_mode` 8) |
+| 27 | — | `crush` | `CRUSH` | minijogo crush (`m_mode` 9) |
+
+O caminho de `Shell::LoadResTexture` mostra que índices acima de 0x1C caem em `host0:monster.rtx`.
 
 ## Outros termos
 (a preencher)
