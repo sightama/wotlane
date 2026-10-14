@@ -1462,25 +1462,15 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE530);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE558);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE590);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE5B0);
-INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect2P__Fv);
-#ifdef NON_MATCHING
-extern int mgFirst2908 __asm__("beginning.2908");
-extern int mgLast2909 __asm__("ending.2909");
-extern int mgNumSelOne2910 __asm__("numSelectablesOne.2910");
-extern int mgNumSelTwo2911 __asm__("numSelectablesTwo.2911");
-extern int mgCostume2912 __asm__("curCostume1.2912");
-extern int mgCostume2913 __asm__("curCostume2.2913");
-extern int mgOneDone2914 __asm__("playerOneIsDone.2914");
-extern int mgTwoDone2915 __asm__("playerTwoIsDone.2915");
-extern int mgWatch2916 __asm__("watchForASecond.2916");
-extern int mgNumAvail2917 __asm__("numAvail1.2917");
-extern int mgNumAvail2918 __asm__("numAvail2.2918");
-extern int mgNum2919 __asm__("num1.2919");
-extern int mgNum2920 __asm__("num2.2920");
+#ifdef NON_MATCHING /* helpers of the C++ two-player selects (screenCharSelect2P, screenMinigames2P) */
 extern int monsterNametomonsterId[];
 int isSlotOpen(int group, int slot);
 void updateSelectSwitchesMG(int cursor1, int cursor2, int flag1, int flag2);
+void updateSelectSwitchesAI(int cursor, int ai);
 void killButtons(void);
+void resetSelectables(void);
+void moviesReleaseScreenObject(void);
+void findAvailableMonster(int dir, int player, int screen);
 #define CS_WRAP(c) ((c) = (c) > -1 ? (c) : 3, (c) = (c) > 3 ? 0 : (c))
 #define CS_SLOT(sel, c) monsterSelectMode[((sel) - 1) * 4 + (c)]
 /* Monster column of player p (0 or 1): currentSelection holds player one's per screen, then player two's from index 22. */
@@ -1527,30 +1517,584 @@ void killButtons(void);
     }
 /* Up/down: unless the player is done, moves the costume cursor by `step` to the next open costume (nothing when only one is open);
    then prints the position and plays `sfx`, also when the player is done. */
+/* Unlights the costume under the cursor `cur` of column p and moves it by `step` to the next open costume. */
+#define MG_STEP_COSTUME(p, found, cur, sw, step)                                                         \
+    {                                                                                                    \
+        SelectSlot *s = &CS_SLOT(MG_SEL(p), (cur));                                                      \
+                                                                                                         \
+        (found) = 0;                                                                                     \
+        if (s->state == 1 && s->taken == 1)                                                              \
+            hierSetSwitch((sw)[(cur)], 1);                                                               \
+        else                                                                                             \
+            hierSetSwitch((sw)[(cur)], 0);                                                               \
+        (cur) += (step);                                                                                 \
+        CS_WRAP((cur));                                                                                  \
+        while (!(found)) {                                                                               \
+            if (isSlotOpen(MG_SEL(p) - 1, (cur)))                                                        \
+                (found) = 1;                                                                             \
+            else                                                                                         \
+                (cur) += (step);                                                                         \
+            CS_WRAP((cur));                                                                              \
+        }                                                                                                \
+        hierSetSwitch((sw)[(cur)], 2);                                                                   \
+    }
 #define MG_MOVE_COSTUME(p, done, found, cur, avail, sw, step, shown, fmt, sfx)                           \
     if ((done) || (avail) != 1) {                                                                        \
-        if (!(done)) {                                                                                   \
-            SelectSlot *s = &CS_SLOT(MG_SEL(p), (cur));                                                  \
-                                                                                                         \
-            (found) = 0;                                                                                 \
-            if (s->state == 1 && s->taken == 1)                                                          \
-                hierSetSwitch((sw)[(cur)], 1);                                                           \
-            else                                                                                         \
-                hierSetSwitch((sw)[(cur)], 0);                                                           \
-            (cur) += (step);                                                                             \
-            CS_WRAP((cur));                                                                              \
-            while (!(found)) {                                                                           \
-                if (isSlotOpen(MG_SEL(p) - 1, (cur)))                                                    \
-                    (found) = 1;                                                                         \
-                else                                                                                     \
-                    (cur) += (step);                                                                     \
-                CS_WRAP((cur));                                                                          \
-            }                                                                                            \
-            hierSetSwitch((sw)[(cur)], 2);                                                               \
-        }                                                                                                \
+        if (!(done))                                                                                     \
+            MG_STEP_COSTUME(p, found, cur, sw, step);                                                    \
         printf((fmt), (shown), (cur));                                                                   \
         MG_SFX(sfx);                                                                                     \
     }
+/* Keeps a monster column inside first..last (below first goes to last, past last to first). */
+#define MG_CLAMP(x, first, last) ((x) = (x) >= (first) ? (x) : (last), (x) = (last) < (x) ? (first) : (x))
+/* Mode 6 left/right of column p: findAvailableMonster(dir) unless the column is at the end (or, with no model left, one past
+   it), where it wraps to `wrap`. */
+#define MG_STEP_MONSTER(p, end, wrap, dir, cmp)                                                          \
+    if (cmp) {                                                                                           \
+        if (modelsLeft(MG_SEL(p)) == 0) {                                                                \
+            if (MG_SEL(p) - 1 == (end))                                                                  \
+                MG_SEL(p) = (wrap);                                                                      \
+            else                                                                                         \
+                findAvailableMonster((dir), (p), currScreen);                                            \
+        } else {                                                                                         \
+            findAvailableMonster((dir), (p), currScreen);                                                \
+        }                                                                                                \
+    } else {                                                                                             \
+        MG_SEL(p) = (wrap);                                                                              \
+    }
+#endif
+#ifdef NON_MATCHING
+extern int c2First2888 __asm__("beginning.2888");
+extern int c2Last2889 __asm__("ending.2889");
+extern int c2TextBoxAlpha2890 __asm__("m_textBoxAlpha.2890");
+extern int c2TextBoxAlpha2891 __asm__("m_textBoxAlpha2.2891");
+extern int c2NumSelOne2892 __asm__("numSelectablesOne.2892");
+extern int c2NumSelTwo2893 __asm__("numSelectablesTwo.2893");
+extern int c2Costume2894 __asm__("curCostume1.2894");
+extern int c2Costume2895 __asm__("curCostume2.2895");
+extern int c2OneDone2896 __asm__("playerOneIsDone.2896");
+extern int c2TwoDone2897 __asm__("playerTwoIsDone.2897");
+extern int c2AIDone2898 __asm__("AIplayerIsDone.2898");
+extern int c2Watch2899 __asm__("watchForASecond.2899");
+extern int c2NumAvail2900 __asm__("numAvail1.2900");
+extern int c2NumAvail2901 __asm__("numAvail2.2901");
+extern int c2Num2902 __asm__("num1.2902");
+extern int c2Num2903 __asm__("num2.2903");
+extern int c2AiLeft2904 __asm__("AiLeft.2904");
+extern int c2PickedSel[][2] __asm__("D_00731458"); /* [screen][0]: player one's column when it confirmed, restored by back */
+/* Two-player monster select (screen 6). Normal modes: each pad picks its monster column (left/right, codes 3/4, findAvailableMonster)
+   and costume (up/down, 1/2) and confirms (6) into m_monsterSel[p]/m_costume[p]; once both are done it waits ten frames and goes
+   to the level select (8). Mode 2 (one player and an AI): pad one picks its own monster, then the AI's (m_monsterSel[4],
+   m_costume[2]) on the same column, with the second costume panel. Mode 6: the costume is always 0, the columns skip monsters
+   with no model left (modelsLeft) and the two players cannot share one (findAvailableMonster), and the picks are copied to
+   Shell+0x2B84/+0x2B88. Back (5) undoes the pick of that pad, or restarts the menu movie and returns to the previous screen.
+   NON_MATCHING: 44/3238 words differ, 0x3298 bytes vs 0x31F0 (untuned; the retail repeats the code that is shared here: player
+   two's left and right in mode 6, player one's right in the normal modes and mode 2, and the final check of each mode). */
+void screenCharSelect2P(void)
+{
+    int i, input;
+    int found;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        c2First2888 = 2;
+        c2Last2889 = 9;
+        c2NumSelOne2892 = 9;
+        c2NumSelTwo2893 = 9;
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        c2First2888 = 1;
+        c2Last2889 = 9;
+        c2NumSelOne2892 = 9;
+        c2NumSelTwo2893 = 9;
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        c2NumSelTwo2893 = 9;
+        c2First2888 = 2;
+        c2Last2889 = 10;
+        c2NumSelOne2892 = 9;
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        c2First2888 = 1;
+        c2Last2889 = 10;
+        c2NumSelOne2892 = 10;
+        c2NumSelTwo2893 = 10;
+    }
+    if (shell->m_mode == 6) {
+        c2Costume2895 = 0;
+        c2Costume2894 = 0;
+    }
+    if (screenFirstPass != 0) {
+        *(float *)((char *)shell->m_costumeBoxCs + 0x7C) = 0;
+        *(float *)((char *)shell->m_costumeBoxCs2 + 0x7C) = 0;
+        if (shell->m_mode != 6) {
+            MG_SHOW_COSTUMES(0, shell->m_costumeSw);
+            MG_SHOW_COSTUMES(1, shell->m_costumeSw2);
+            hierSetSwitch(shell->m_costumeSw[c2Costume2894], 2);
+            hierSetSwitch(shell->m_costumeSw2[c2Costume2895], 2);
+        }
+        c2AiLeft2904 = shell->m_numAIs;
+        resetSelectables();
+        shell->m_costume[1] = 0;
+        shell->m_costume[0] = 0;
+        moviesReleaseScreenObject();
+        continueDecoding = 0;
+        c2OneDone2896 = 0;
+        c2TwoDone2897 = 0;
+        c2AIDone2898 = 0;
+        hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+        if (shell->m_mode != 2)
+            hierSetSwitch(MG_SW(0x1E0), MG_SEL(1));
+        hierSetSwitch(shell->m_sw5D0, 0);
+        initSelectSwitches();
+        c2TextBoxAlpha2890 = 0;
+        c2Watch2899 = 10;
+        c2TextBoxAlpha2891 = 0;
+        screenFirstPass = 0;
+    }
+    /* fade the costume panels in */
+    if (shell->m_mode != 2 && shell->m_mode != 6) {
+        if (c2OneDone2896 == 0 && c2TwoDone2897 == 0) {
+            float a;
+
+            hierSetCsDrawMe(shell->m_costumeBoxCs, 1);
+            hierSetCsDrawMe(shell->m_costumeBoxCs2, 1);
+            c2TextBoxAlpha2890 += 2;
+            if (c2TextBoxAlpha2890 > 0x80)
+                c2TextBoxAlpha2890 = 0x80;
+            a = 2.0f * (float)c2TextBoxAlpha2890 * 0.0078125f;
+            *(float *)((char *)shell->m_costumeBoxCs + 0x7C) = a;
+            *(float *)((char *)shell->m_costumeBoxCs2 + 0x7C) = a;
+        }
+    } else if (shell->m_mode != 6) {
+        if (c2OneDone2896 == 0) {
+            hierSetCsDrawMe(shell->m_costumeBoxCs, 1);
+            c2TextBoxAlpha2890 += 2;
+            if (c2TextBoxAlpha2890 > 0x80)
+                c2TextBoxAlpha2890 = 0x80;
+            *(float *)((char *)shell->m_costumeBoxCs + 0x7C) = 2.0f * (float)c2TextBoxAlpha2890 * 0.0078125f;
+        } else if (c2AIDone2898 == 0) {
+            hierSetCsDrawMe(shell->m_costumeBoxCs2, 1);
+            c2TextBoxAlpha2891 += 2;
+            if (c2TextBoxAlpha2891 > 0x80)
+                c2TextBoxAlpha2891 = 0x80;
+            *(float *)((char *)shell->m_costumeBoxCs2 + 0x7C) = 2.0f * (float)c2TextBoxAlpha2891 * 0.0078125f;
+        }
+    }
+    hierSetSwitch(shell->m_sw5CC, 0);
+    if (shell->m_mode == 2) {
+        if (c2OneDone2896 == 0)
+            updateSelectSwitches(MG_SEL(0), MG_SEL(1), 0, 1);
+        else if (c2AIDone2898 == 0)
+            updateSelectSwitchesAI(MG_SEL(0), 1);
+    } else {
+        updateSelectSwitches(MG_SEL(0), MG_SEL(1), c2OneDone2896, c2TwoDone2897);
+    }
+    /* light the open costumes and keep the cursors on open ones (in mode 2 the second set shows the AI's, on player one's
+       column) */
+    if (shell->m_mode != 6) {
+        MG_SHOW_COSTUMES(0, shell->m_costumeSw);
+        if (shell->m_mode != 2) {
+            MG_SHOW_COSTUMES(1, shell->m_costumeSw2);
+        } else if (c2OneDone2896 != 0) {
+            MG_SHOW_COSTUMES(0, shell->m_costumeSw2);
+        }
+        hierSetSwitch(shell->m_costumeSw[c2Costume2894], 2);
+        hierSetSwitch(shell->m_costumeSw2[c2Costume2895], 2);
+        MG_COUNT_COSTUMES(0, c2Num2902, c2NumAvail2900);
+        if (shell->m_mode != 2) {
+            MG_COUNT_COSTUMES(1, c2Num2903, c2NumAvail2901);
+        } else {
+            MG_COUNT_COSTUMES(0, c2Num2903, c2NumAvail2901);
+        }
+        if (c2OneDone2896 == 0) {
+            found = 0;
+            MG_FIND_COSTUME(0, found, c2Costume2894, c2NumAvail2900, 1);
+            hierSetSwitch(shell->m_costumeSw[c2Costume2894], 2);
+        }
+        if (shell->m_mode != 2 && c2TwoDone2897 == 0) {
+            found = 0;
+            MG_FIND_COSTUME(1, found, c2Costume2895, c2NumAvail2901, 1);
+            hierSetSwitch(shell->m_costumeSw2[c2Costume2895], 2);
+        }
+        if (shell->m_mode == 2 && c2OneDone2896 != 0 && c2AIDone2898 == 0) {
+            found = 0;
+            MG_FIND_COSTUME(0, found, c2Costume2895, c2NumAvail2901, 1);
+            hierSetSwitch(shell->m_costumeSw2[c2Costume2895], 2);
+        }
+    }
+    if (shell->m_mode == 2) {
+        if (c2OneDone2896 == 0) {
+            if (c2AIDone2898 == 0)
+                hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+        } else if (c2AIDone2898 == 0) {
+            hierSetSwitch(MG_SW(0x1E0), MG_SEL(0));
+        }
+    } else {
+        hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+        hierSetSwitch(MG_SW(0x1E0), MG_SEL(1));
+    }
+    /* mode 6: the players cannot stay on the same monster */
+    if (shell->m_mode == 6) {
+        if (c2OneDone2896 != 0) {
+            if (MG_SEL(1) == MG_SEL(0))
+                findAvailableMonster(1, 1, currScreen);
+        } else if (c2TwoDone2897 != 0 && MG_SEL(0) == MG_SEL(1)) {
+            findAvailableMonster(1, 0, currScreen);
+        }
+    }
+
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 1:
+        if (shell->m_mode == 6)
+            break;
+        if (shell->m_mode != 2) {
+            if (c2OneDone2896 == 0 && c2NumAvail2900 != 1) {
+                MG_STEP_COSTUME(0, found, c2Costume2894, shell->m_costumeSw, -1);
+                MG_SFX(2);
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0) - 1, c2Costume2894);
+            }
+        } else if (c2OneDone2896 == 0) {
+            if (c2AIDone2898 == 0 && c2NumAvail2900 != 1) {
+                MG_STEP_COSTUME(0, found, c2Costume2894, shell->m_costumeSw, -1);
+                MG_SFX(2);
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0) - 1, c2Costume2894);
+            }
+        } else if (c2AIDone2898 == 0 && c2NumAvail2901 != 1) {
+            MG_STEP_COSTUME(0, found, c2Costume2895, shell->m_costumeSw2, -1);
+            MG_SFX(2);
+            printf("Player AI1 is on Monster %i, model %i\n", MG_SEL(0) - 1, c2Costume2895);
+        }
+        break;
+    case 2:
+        if (shell->m_mode == 6)
+            break;
+        if (shell->m_mode != 2) {
+            if (c2OneDone2896 == 0 && c2NumAvail2900 != 1) {
+                MG_STEP_COSTUME(0, found, c2Costume2894, shell->m_costumeSw, 1);
+                MG_SFX(4);
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), c2Costume2894);
+            }
+        } else if (c2OneDone2896 == 0) {
+            if (c2NumAvail2900 != 1) {
+                MG_STEP_COSTUME(0, found, c2Costume2894, shell->m_costumeSw, 1);
+                MG_SFX(4);
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), c2Costume2894);
+            }
+        } else if (c2AIDone2898 == 0 && c2NumAvail2901 != 1) {
+            MG_STEP_COSTUME(0, found, c2Costume2895, shell->m_costumeSw2, 1);
+            MG_SFX(4);
+            printf("Player AI1 is on Monster %i, model %i\n", MG_SEL(0), c2Costume2895);
+        }
+        break;
+    case 3:
+        if (shell->m_mode == 6) {
+            if (c2OneDone2896 == 0) {
+                MG_STEP_MONSTER(0, c2First2888, c2Last2889, -1, c2First2888 < MG_SEL(0));
+                found = 0;
+                while (!found) {
+                    if (isSlotOpen(MG_SEL(0) - 1, c2Costume2894))
+                        found = 1;
+                    else
+                        MG_SEL(0)--;
+                    MG_CLAMP(MG_SEL(0), c2First2888, c2Last2889);
+                    printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), c2Costume2894);
+                    MG_SFX(5);
+                    hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+                }
+            }
+            break;
+        }
+        if (c2OneDone2896 == 0) {
+            findAvailableMonster(-1, 0, currScreen);
+            c2Costume2894 = 0;
+            printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), 0);
+            MG_SFX(5);
+            hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+        }
+        if (CS_SLOT(MG_SEL(0), 0).taken == 1)
+            c2Costume2894 = 0;
+        if (shell->m_mode == 2 && c2OneDone2896 != 0 && c2AIDone2898 == 0) {
+            findAvailableMonster(-1, 0, currScreen);
+            c2Costume2895 = 0;
+            printf("AI 1 is on AI Monster %i, model %i\n", MG_SEL(0), 0);
+            MG_SFX(5);
+            hierSetSwitch(MG_SW(0x1E0), MG_SEL(0));
+        }
+        break;
+    case 4:
+        if (shell->m_mode == 6) {
+            if (c2OneDone2896 == 0) {
+                findAvailableMonster(1, 0, currScreen);
+                found = 0;
+                c2Costume2894 = 0;
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), 0);
+                MG_SFX(3);
+                hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+                while (!found) {
+                    if (isSlotOpen(MG_SEL(0) - 1, c2Costume2894))
+                        found = 1;
+                    else
+                        MG_SEL(0)++;
+                    MG_CLAMP(MG_SEL(0), c2First2888, c2Last2889);
+                    printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), c2Costume2894);
+                    MG_SFX(3);
+                    hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+                }
+            }
+        } else if (shell->m_mode != 2 || c2OneDone2896 == 0) {
+            if (c2OneDone2896 == 0 && (shell->m_mode != 2 || c2AIDone2898 == 0)) {
+                findAvailableMonster(1, 0, currScreen);
+                c2Costume2894 = 0;
+                printf("Player 1 is on Monster %i, model %i\n", MG_SEL(0), 0);
+                MG_SFX(3);
+                hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+            }
+        } else if (c2AIDone2898 == 0) {
+            findAvailableMonster(1, 0, currScreen);
+            c2Costume2895 = 0;
+            printf("Player 1 is on AI Monster %i, model %i\n", MG_SEL(0), 0);
+            MG_SFX(3);
+            hierSetSwitch(MG_SW(0x1E0), MG_SEL(0));
+        }
+        break;
+    case 6:
+        c2TextBoxAlpha2890 = 0x80;
+        *(float *)((char *)shell->m_costumeBoxCs + 0x7C) = 2.0f;
+        *(float *)((char *)shell->m_costumeBoxCs2 + 0x7C) = 2.0f;
+        if (shell->m_mode != 2) {
+            if (c2OneDone2896 != 0) {
+                if (c2TwoDone2897 != 0) {
+                    CS_SLOT(MG_SEL(0), c2Costume2894).taken = 0;
+                    hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                    hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                    updateSelectSwitches(MG_SEL(0), MG_SEL(1), c2OneDone2896, c2TwoDone2897);
+                    changeScreen(6, 8, 1, 3, true);
+                } else {
+                    printf("Player one hit X and he's already done.\n");
+                }
+            } else {
+                SelectSlot *s;
+
+                if (shell->m_mode == 6)
+                    c2Costume2894 = 0;
+                s = &CS_SLOT(MG_SEL(0), c2Costume2894);
+                if (s->state == 1 && s->taken == 1) {
+                    c2PickedSel[currScreen][0] = MG_SEL(0);
+                    shell->m_monsterSel[0] = monsterNametomonsterId[MG_SEL(0) - 1];
+                    shell->m_costume[0] = c2Costume2894;
+                    CS_SLOT(MG_SEL(0), c2Costume2894).taken = 0;
+                    printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c2Costume2894);
+                    hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+                    hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                    if (shell->m_mode == 6)
+                        *(int *)((char *)shell + 0x2B84) = shell->m_monsterSel[0];
+                    c2OneDone2896 = 1;
+                    MG_SFX(8);
+                }
+            }
+        } else if (c2OneDone2896 != 0) {
+            if (c2AIDone2898 != 0) {
+                CS_SLOT(MG_SEL(0), c2Costume2894).taken = 0;
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                updateSelectSwitches(MG_SEL(0), MG_SEL(1), c2OneDone2896, c2AIDone2898);
+                changeScreen(6, 8, 1, 3, true);
+            } else {
+                SelectSlot *s = &CS_SLOT(MG_SEL(0), c2Costume2895);
+
+                if (s->state == 1 && s->taken == 1) {
+                    shell->m_costume[2] = c2Costume2895;
+                    shell->m_monsterSel[4] = monsterNametomonsterId[MG_SEL(0) - 1];
+                    CS_SLOT(MG_SEL(0), c2Costume2895).taken = 0;
+                    printf("AI Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c2Costume2895);
+                    hierSetSwitch(MG_SW(0x1E0), MG_SEL(0));
+                    hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                    c2AIDone2898 = 1;
+                    MG_SFX(8);
+                }
+            }
+        } else if (c2AIDone2898 == 0) {
+            SelectSlot *s = &CS_SLOT(MG_SEL(0), c2Costume2894);
+
+            if (s->state == 1 && s->taken == 1) {
+                shell->m_costume[0] = c2Costume2894;
+                shell->m_monsterSel[0] = monsterNametomonsterId[MG_SEL(0) - 1];
+                c2PickedSel[currScreen][0] = MG_SEL(0);
+                CS_SLOT(MG_SEL(0), c2Costume2894).taken = 0;
+                printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], c2Costume2894);
+                hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                c2OneDone2896 = 1;
+                MG_SFX(8);
+            }
+        }
+        if (shell->m_mode != 2)
+            updateSelectSwitches(MG_SEL(0), MG_SEL(1), c2OneDone2896, c2TwoDone2897);
+        else
+            updateSelectSwitches(MG_SEL(0), MG_SEL(0), c2OneDone2896, c2AIDone2898);
+        break;
+    case 5:
+        if (c2OneDone2896 != 0) {
+            c2OneDone2896 = 0;
+            MG_SEL(0) = c2PickedSel[currScreen][0];
+            resetSelectables();
+            if (shell->m_mode == 2) {
+                c2AIDone2898 = 0;
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+            }
+            CS_SLOT(MG_SEL(0), c2Costume2894).taken = 1;
+            if (shell->m_mode != 6)
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 1);
+        } else {
+            hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+            hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+            CS_SLOT(MG_SEL(0), c2Costume2894).taken = 1;
+            CS_SLOT(MG_SEL(1), c2Costume2895).taken = 1;
+            moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+            myMovie.Play(false, MainMovie);
+            continueDecoding = 1;
+            updateSelectSwitches(0, 0, 1, 1);
+            changeScreen(6, prevScreen, -1, 0, true);
+            MG_SFX(6);
+        }
+        break;
+    }
+
+    if (shell->m_mode != 2) {
+        input = screenGetInput(2) & 0xFFFF;
+        switch (input) {
+        case 1:
+            if (shell->m_mode == 6)
+                break;
+            if (c2TwoDone2897 == 0) {
+                if (c2NumAvail2901 != 1) {
+                    MG_STEP_COSTUME(1, found, c2Costume2895, shell->m_costumeSw2, -1);
+                    MG_SFX(2);
+                    printf("Player 2 is on Monster %i, model %i\n", MG_SEL(1) - 1, c2Costume2895);
+                }
+            } else {
+                printf("Player 2 is on Monster %i, model %i\n", MG_SEL(1) - 1, c2Costume2895);
+            }
+            break;
+        case 2:
+            if (shell->m_mode != 6 && c2TwoDone2897 == 0 && c2NumAvail2901 != 1) {
+                MG_STEP_COSTUME(1, found, c2Costume2895, shell->m_costumeSw2, 1);
+                printf("Player 2 is on Monster %i, model %i\n", MG_SEL(1) - 1, c2Costume2895);
+                MG_SFX(4);
+            }
+            break;
+        case 3:
+        case 4:
+            if (c2TwoDone2897 != 0)
+                break;
+            if (shell->m_mode == 6) {
+                if (input == 3) {
+                    MG_STEP_MONSTER(1, c2First2888, c2Last2889, -1, c2First2888 < MG_SEL(1));
+                } else {
+                    MG_STEP_MONSTER(1, c2Last2889, c2First2888, 1, MG_SEL(1) < c2Last2889);
+                }
+                found = 0;
+                while (!found) {
+                    if (isSlotOpen(MG_SEL(1) - 1, c2Costume2895))
+                        found = 1;
+                    else
+                        MG_SEL(1) += input == 3 ? -1 : 1;
+                    MG_CLAMP(MG_SEL(1), c2First2888, c2Last2889);
+                    hierSetSwitch(MG_SW(0x1E0), MG_SEL(1));
+                    MG_SFX(5);
+                }
+            } else {
+                findAvailableMonster(input == 3 ? -1 : 1, 1, currScreen);
+                if (CS_SLOT(MG_SEL(1), 0).taken == 1)
+                    c2Costume2895 = 0;
+                hierSetSwitch(MG_SW(0x1E0), MG_SEL(1));
+                MG_SFX(5);
+            }
+            break;
+        case 6: {
+            SelectSlot *s;
+
+            c2TextBoxAlpha2890 = 0x80;
+            *(float *)((char *)shell->m_costumeBoxCs + 0x7C) = 2.0f;
+            *(float *)((char *)shell->m_costumeBoxCs2 + 0x7C) = 2.0f;
+            s = &CS_SLOT(MG_SEL(1), c2Costume2895);
+            if (s->state != 1 || s->taken != 1)
+                break;
+            if (shell->m_mode == 6)
+                c2Costume2895 = 0;
+            if (c2OneDone2896 != 0 && c2TwoDone2897 != 0) {
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                CS_SLOT(MG_SEL(1), c2Costume2895).taken = 0;
+                updateSelectSwitches(MG_SEL(0), MG_SEL(1), c2OneDone2896, c2TwoDone2897);
+                MG_SFX(8);
+                changeScreen(6, 8, 1, 3, true);
+            } else if (c2OneDone2896 == 0 && c2TwoDone2897 != 0) {
+                printf("Player two hit X and he's already done.\n");
+            } else {
+                shell->m_costume[1] = c2Costume2895;
+                shell->m_monsterSel[1] = monsterNametomonsterId[MG_SEL(1) - 1];
+                CS_SLOT(MG_SEL(1), c2Costume2895).taken = 0;
+                printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(1) - 1], c2Costume2895);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                hierSetSwitch(MG_SW(0x1E0), MG_SEL(1));
+                c2TwoDone2897 = 1;
+                if (shell->m_mode == 6)
+                    *(int *)((char *)shell + 0x2B88) = shell->m_monsterSel[1];
+                MG_SFX(8);
+            }
+            updateSelectSwitches(MG_SEL(0), MG_SEL(1), c2OneDone2896, shell->m_mode != 2 ? c2TwoDone2897 : c2AIDone2898);
+            break;
+        }
+        case 5:
+            if (c2TwoDone2897 != 0) {
+                c2TwoDone2897 = 0;
+                resetSelectables();
+                CS_SLOT(MG_SEL(1), c2Costume2895).taken = 1;
+                if (shell->m_mode != 6)
+                    hierSetCsDrawMe(shell->m_costumeBoxCs2, 1);
+            } else {
+                hierSetCsDrawMe(shell->m_costumeBoxCs, 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCs2, 0);
+                CS_SLOT(MG_SEL(0), c2Costume2894).taken = 1;
+                CS_SLOT(MG_SEL(1), c2Costume2895).taken = 1;
+                moviesReadyScreenObject(shell->m_movieScreen, 8, 7);
+                myMovie.Play(false, MainMovie);
+                continueDecoding = 1;
+                updateSelectSwitches(0, 0, 1, 1);
+                changeScreen(6, prevScreen, -1, 0, true);
+                MG_SFX(6);
+            }
+            break;
+        }
+    }
+
+    /* both picked: release the movie, keep the two models taken and go on to the level select after ten frames */
+    if (c2OneDone2896 != 0 && (shell->m_mode != 2 ? c2TwoDone2897 : c2AIDone2898) != 0) {
+        continueDecoding = 0;
+        moviesReleaseScreenObject();
+        c2Watch2899--;
+        CS_SLOT(MG_SEL(1), c2Costume2895).taken = 0;
+        CS_SLOT(MG_SEL(0), c2Costume2894).taken = 0;
+        if (c2Watch2899 < 0)
+            changeScreen(6, 8, 1, 3, true);
+    }
+}
+#else
+INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect2P__Fv);
+#endif
+#ifdef NON_MATCHING
+extern int mgFirst2908 __asm__("beginning.2908");
+extern int mgLast2909 __asm__("ending.2909");
+extern int mgNumSelOne2910 __asm__("numSelectablesOne.2910");
+extern int mgNumSelTwo2911 __asm__("numSelectablesTwo.2911");
+extern int mgCostume2912 __asm__("curCostume1.2912");
+extern int mgCostume2913 __asm__("curCostume2.2913");
+extern int mgOneDone2914 __asm__("playerOneIsDone.2914");
+extern int mgTwoDone2915 __asm__("playerTwoIsDone.2915");
+extern int mgWatch2916 __asm__("watchForASecond.2916");
+extern int mgNumAvail2917 __asm__("numAvail1.2917");
+extern int mgNumAvail2918 __asm__("numAvail2.2918");
+extern int mgNum2919 __asm__("num1.2919");
+extern int mgNum2920 __asm__("num2.2920");
 /* Left: the previous monster column, skipping one with no model left (modelsLeft), wrapping from the first to the last. */
 #define MG_PREV_MONSTER(p)                                                                               \
     if (mgFirst2908 < MG_SEL(p)) {                                                                       \
@@ -1802,6 +2346,9 @@ void screenMinigames2P(void)
         changeScreen(7, 0x63, 1, 0, true);
     }
 }
+#else
+INCLUDE_ASM("asm/nonmatchings/game/screen", screenMinigames2P__Fv);
+#endif
 #undef MG_SEL
 #undef MG_SW
 #undef MG_SFX
@@ -1810,11 +2357,11 @@ void screenMinigames2P(void)
 #undef MG_FIND_COSTUME
 #undef MG_MOVE_COSTUME
 #undef MG_PREV_MONSTER
+#undef MG_STEP_COSTUME
+#undef MG_CLAMP
+#undef MG_STEP_MONSTER
 #undef CS_WRAP
 #undef CS_SLOT
-#else
-INCLUDE_ASM("asm/nonmatchings/game/screen", screenMinigames2P__Fv);
-#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE698);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE6D0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE720);

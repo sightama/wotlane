@@ -18,7 +18,7 @@ public:
     _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one */
     char pad7C[0x88 - 0x7C];
     _cs *m_costumeBoxCs;  /* 0x88: costume panel of the monster select (+0x7C is its alpha, faded in by screenCharSelect1P) */
-    char pad8C[0x90 - 0x8C];
+    _cs *m_costumeBoxCs2; /* 0x8C: m_costumeBoxCs of player two (or the AI) in the two-player select */
     _hierswitch *m_costumeSw[4]; /* 0x90: one per costume of the highlighted monster: 0 unavailable, 1 available, 2 cursor */
     _hierswitch *m_costumeSw2[4]; /* 0xA0: m_costumeSw of player two in the two-player selects */
     _cs *m_costumeBoxCsMG[2];     /* 0xB0: costume panel of each player in the two-player minigame select */
@@ -175,6 +175,7 @@ SHELL_AT(m_levelNumAIs, 0x29E0);
 SHELL_AT(pad7C, 0x7C);
 SHELL_AT(m_costumeBoxCs, 0x88);
 SHELL_AT(m_costumeSw, 0x90);
+SHELL_AT(m_costumeBoxCs2, 0x8C);
 SHELL_AT(m_costumeSw2, 0xA0);
 SHELL_AT(m_costumeBoxCsMG, 0xB0);
 SHELL_AT(m_costumeSwMG, 0xB8);
