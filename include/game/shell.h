@@ -8,51 +8,68 @@ struct _cs;
 struct _hierswitch;
 enum _vramAddrs { VRAM_ADDRS_DUMMY };
 
-/* Front-end shell: level names and file name formatting used by the point tools. */
+/* Front-end shell: level names and file name formatting used by the point tools.
+ * Every pointer below that comes from the shell database is filled by AddEpNode; the "ep N" in the comments is the entry point id
+ * (database id minus 0x2328) that lands there. Fields named only by offset have no reader decompiled yet. */
 class Shell {
 public:
-    _cs *m_menuCs;        /* 0x0: root cs of the front-end menus (hidden by screenWaitForStart) */
-    char pad4[0x5C - 0x4];
-    _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on */
-    _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
-    _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one */
-    char pad7C[0x88 - 0x7C];
-    _cs *m_costumeBoxCs;  /* 0x88: costume panel of the monster select (+0x7C is its alpha, faded in by screenCharSelect1P) */
-    _cs *m_costumeBoxCs2; /* 0x8C: m_costumeBoxCs of player two (or the AI) in the two-player select */
-    _hierswitch *m_costumeSw[4]; /* 0x90: one per costume of the highlighted monster: 0 unavailable, 1 available, 2 cursor */
-    _hierswitch *m_costumeSw2[4]; /* 0xA0: m_costumeSw of player two in the two-player selects */
-    _cs *m_costumeBoxCsMG[2];     /* 0xB0: costume panel of each player in the two-player minigame select */
-    _hierswitch *m_costumeSwMG[2][4]; /* 0xB8: m_costumeSw of each player in the two-player minigame select */
-    char padD8[0x160 - 0xD8];
-    _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
-    char pad164[0x168 - 0x164];
-    _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
-    char pad190[0x194 - 0x190];
-    _hierswitch *m_selectSwMG[10]; /* 0x194: m_selectSw of the minigame monster select */
-    char pad1BC[0x25C - 0x1BC];
-    _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
-    _hierswitch *m_sw5CC; /* 0x5CC: set to 0 when a two-player mode is picked */
-    _hierswitch *m_sw5D0; /* 0x5D0: 0 on the main and mode menus; the level select sets it to the first level of the list */
-    _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1) */
+    _cs *m_menuCs;        /* 0x0: root cs of the front-end menus (hidden by screenWaitForStart); ep 0 */
+    _cs *m_cs4[11];       /* 0x4: ep 500..510 */
+    _cs *m_cs30[11];      /* 0x30: ep 550..560 */
+    _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on; ep 999 */
+    _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons); ep 232, 230, 233, 231 */
+    _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one; ep 234..236 */
+    _cs *m_cs7C[3];       /* 0x7C: ep 237..239 */
+    _cs *m_costumeBoxCs;  /* 0x88: costume panel of the monster select (+0x7C is its alpha, faded in by screenCharSelect1P); ep 240 */
+    _cs *m_costumeBoxCs2; /* 0x8C: m_costumeBoxCs of player two (or the AI) in the two-player select; ep 241 */
+    _hierswitch *m_costumeSw[4]; /* 0x90: one per costume of the highlighted monster: 0 unavailable, 1 available, 2 cursor; ep 242..245 */
+    _hierswitch *m_costumeSw2[4]; /* 0xA0: m_costumeSw of player two in the two-player selects; ep 246..249 */
+    _cs *m_costumeBoxCsMG[2];     /* 0xB0: costume panel of each player in the two-player minigame select; ep 350, 355 */
+    _hierswitch *m_costumeSwMG[2][4]; /* 0xB8: m_costumeSw of each player in the two-player minigame select; ep 351..354, 356..359 */
+    _hierswitch *m_swD8[3][4]; /* 0xD8: ep 360..363, 364..367, 368..371 */
+    _cs *m_cs108[20];     /* 0x108: ep 330..349 */
+    _hierhead *m_ep158;   /* 0x158: ep 301 */
+    _hierhead *m_ep15C;   /* 0x15C: ep 251 */
+    _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject); ep 310 */
+    _hierhead *m_ep164;   /* 0x164: ep 400 */
+    _hierswitch *m_selectSw[11]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked; ep 700..710 with id2 0 */
+    _hierswitch *m_selectSwMG[11]; /* 0x194: m_selectSw of the minigame monster select; ep 700..710 with id2 1 */
+    _hierhead *m_ep1C0[3]; /* 0x1C0: ep 740..742 */
+    _hierhead *m_ep1CC[4]; /* 0x1CC: ep 743..746 */
+    _hierhead *m_ep1DC[2][4]; /* 0x1DC: [id2][ep - 571], ep 571 and 572 */
+    _hierhead *m_ep1FC;   /* 0x1FC: ep 573 */
+    _hierhead *m_ep200;   /* 0x200: ep 574 */
+    char pad204[0x22C - 0x204];
+    _hierhead *m_ep22C;   /* 0x22C: ep 580 */
+    _hierhead *m_ep230;   /* 0x230: ep 581 */
+    char pad234[0x25C - 0x234];
+    _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags; ep 10 * screen + item */
+    _hierswitch *m_sw5CC; /* 0x5CC: set to 0 when a two-player mode is picked; ep 720 */
+    _hierswitch *m_sw5D0; /* 0x5D0: 0 on the main and mode menus; the level select sets it to the first level of the list; ep 721 */
+    _hierswitch *m_screenSw; /* 0x5D4: picks the panel of the current menu screen (screen - 1); ep 1 */
     char pad5D8[0x5DC - 0x5D8];
     /* options screen (10) */
-    _hierswitch *m_difficultySw[3]; /* 0x5DC: one lit per value of TheGame+0x1203CC */
-    _hierswitch *m_vibrationSw[2][2]; /* 0x5E8: per pad, [0] lit when vibration is on, [1] when off */
-    _hierswitch *m_stereoSw;  /* 0x5F8: lit when m_mono is 0 */
-    _hierswitch *m_monoSw;    /* 0x5FC */
-    char pad600[0x604 - 0x600];
-    _cs *m_sliderCs[2];      /* 0x604: knobs of the sfx and music volume bars (setSlider moves them) */
-    char pad60C[0x614 - 0x60C];
-    _hierswitch *m_lockedSw; /* 0x614: 1 while the level highlighted in the level select is still locked */
-    char pad618[0x61C - 0x618];
+    _hierswitch *m_difficultySw[3]; /* 0x5DC: one lit per value of TheGame+0x1203CC; ep 730..732 */
+    _hierswitch *m_vibrationSw[2][2]; /* 0x5E8: per pad, [0] lit when vibration is on, [1] when off; ep 722..725 */
+    _hierswitch *m_stereoSw;  /* 0x5F8: lit when m_mono is 0; ep 734 */
+    _hierswitch *m_monoSw;    /* 0x5FC: ep 735 */
+    _hierhead *m_ep600;      /* 0x600: ep 736 */
+    _cs *m_sliderCs[2];      /* 0x604: knobs of the sfx and music volume bars (setSlider moves them); ep 737, 738 */
+    _cs *m_cs60C;            /* 0x60C: ep 739 */
+    _cs *m_cs610;            /* 0x610: high-priority cs of ep 770 */
+    _hierswitch *m_lockedSw; /* 0x614: 1 while the level highlighted in the level select is still locked; ep 771 */
+    int m_ep770Word20;       /* 0x618: word 0x20 of the ep 770 node, copied when it is added */
     _animHandle m_screenAnim[12]; /* 0x61C: menu transition animations 1..11 (anim 0x270E of the shell db); changeScreen plays one */
-    char *m_menuObj[22][90]; /* 0x6DC: [screen][i] objects drawn on each menu screen (TagList::m_entries); +0x4C is their alpha, faded by screenTransition */
-    _hierswitch *m_sw25CC; /* 0x25CC: set to 1 (with m_sw25D0) when the main menu opens screen 9 */
-    _hierswitch *m_sw25D0; /* 0x25D0 */
+    char *m_menuObj[22][90]; /* 0x6DC: [screen][i] objects drawn on each menu screen (TagList::m_entries); +0x4C is their alpha, faded by screenTransition; ep 200 + screen, appended */
+    _hierswitch *m_sw25CC; /* 0x25CC: set to 1 (with m_sw25D0) when the main menu opens screen 9; ep 600 */
+    _hierswitch *m_sw25D0; /* 0x25D0: ep 601 */
     _animHandle m_reelSpinAnim[2]; /* 0x25D4: one per select reel (anims 0x2585 + reel) */
-    char pad25F4[0x2644 - 0x25F4];
+    _hierhead *m_ep25F4[2][10]; /* 0x25F4: ep 610..619, 620..629 */
     _animHandle m_reelAnim[2][10]; /* 0x2644: per reel, the animation of each of its 10 positions (anims 0x259E + reel * 10 + i); changeReel */
-    char pad2784[0x2938 - 0x2784];
+    _hierhead *m_ep2784[2][10]; /* 0x2784: ep 650..669 */
+    _hierhead *m_ep27D4[2][10]; /* 0x27D4: ep 670..689 */
+    _cs *m_cs2824[13];    /* 0x2824: ep 801..813 (AddEpNode also takes ep 800 and writes it one slot before) */
+    char pad2858[0x2938 - 0x2858];
     int m_monsterSel[8];  /* 0x2938: per slot (players first, then AIs): (monster << 5) | variant; monster indexes MonsterLongNames */
     char pad2958[0x29E0 - 0x2958];
     int m_levelNumAIs[17]; /* 0x29E0: per m_levelNum, the AIs of game mode 1 (first item of the one-player modes menu) on that level */
@@ -172,7 +189,16 @@ SHELL_AT(m_roundsDecided, 0x2BDC);
 SHELL_AT(m_mode, 0x2C10);
 SHELL_AT(m_lockedSw, 0x614);
 SHELL_AT(m_levelNumAIs, 0x29E0);
-SHELL_AT(pad7C, 0x7C);
+SHELL_AT(m_cs7C, 0x7C);
+SHELL_AT(m_cs30, 0x30);
+SHELL_AT(m_swD8, 0xD8);
+SHELL_AT(m_ep164, 0x164);
+SHELL_AT(m_ep1DC, 0x1DC);
+SHELL_AT(m_ep230, 0x230);
+SHELL_AT(m_ep770Word20, 0x618);
+SHELL_AT(m_ep25F4, 0x25F4);
+SHELL_AT(m_cs2824, 0x2824);
+SHELL_AT(m_monsterSel, 0x2938);
 SHELL_AT(m_costumeBoxCs, 0x88);
 SHELL_AT(m_costumeSw, 0x90);
 SHELL_AT(m_costumeBoxCs2, 0x8C);

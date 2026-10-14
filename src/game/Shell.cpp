@@ -2,6 +2,7 @@
 #include "memory_stack.h"
 #include "game/shell.h"
 #include "game/monster_select.h"
+#include "cs_pool.h"
 
 extern "C" int printf(const char *, ...);
 extern "C" int sprintf(char *, const char *, ...);
@@ -44,6 +45,11 @@ void hierInit(void);
 void viewInit(void);
 void viewSetNumViews(int n);
 void psBlockerInit(void);
+class McPageMgr {
+public:
+    static McPageMgr global;
+    void initButton(_hierhead *h);
+};
 class TagList {
 public:
     char pad0[0x25C];
@@ -183,10 +189,6 @@ public:
     void SetPlayerMonster(int pIdx, int type, int dup, int view, int skin);
     void SetAIMonster(int aiIdx, int type, int dup, int skin);
     int GetNumAIsAlive(void);
-};
-class CsPool {
-public:
-    static void init(void);
 };
 void ResolveCommandLineArguments(int argc, char **argv);
 void fileInitializeCd(void);
@@ -1465,7 +1467,239 @@ void Shell::LoadMonstersDB(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadMonstersDB__5Shell);
 #endif
+#ifdef NON_MATCHING
+/* Hooks entry point id of the shell database (dbProcInteractive passes the database id minus 0x2328) to the field of the
+ * shell that the menus use. Nodes that become a cs get one from the pool and are attached to it; the rest are stored as is.
+ * Ids not listed go by tens: 10 * screen + item for the menu item switches, then cs tables and node tables. */
+void Shell::AddEpNode(int id, _hierhead *ep)
+{
+    int group = id / 10;
+    int item = id % 10;
+    _cs *cs;
+    int i;
+
+    switch (id) {
+    case 0:
+        m_menuCs = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 1:
+        m_screenSw = (_hierswitch *)ep;
+        break;
+    case 200 ... 220:
+        for (i = 0; i < 90; i++) {
+            if (m_menuObj[id - 200][i] == 0) {
+                m_menuObj[id - 200][i] = (char *)ep;
+                break;
+            }
+        }
+        break;
+    case 230:
+        m_buttonCs[1] = cs = CsPool::csHPActivate();
+        hierSetCsEpNode(cs, ep);
+        McPageMgr::global.initButton(ep);
+        break;
+    case 231:
+        m_buttonCs[3] = cs = CsPool::csHPActivate();
+        hierSetCsEpNode(cs, ep);
+        McPageMgr::global.initButton(ep);
+        break;
+    case 232:
+        m_buttonCs[0] = cs = CsPool::csHPActivate();
+        hierSetCsEpNode(cs, ep);
+        McPageMgr::global.initButton(ep);
+        break;
+    case 233:
+        m_buttonCs[2] = cs = CsPool::csHPActivate();
+        hierSetCsEpNode(cs, ep);
+        McPageMgr::global.initButton(ep);
+        break;
+    case 234 ... 236:
+        m_sw70[id - 234] = (_hierswitch *)ep;
+        break;
+    case 237 ... 239:
+        m_cs7C[id - 237] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 240:
+        m_costumeBoxCs = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 241:
+        m_costumeBoxCs2 = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 242 ... 245:
+        m_costumeSw[id - 242] = (_hierswitch *)ep;
+        break;
+    case 246 ... 249:
+        m_costumeSw2[id - 246] = (_hierswitch *)ep;
+        break;
+    case 251:
+        m_ep15C = ep;
+        break;
+    case 301:
+        m_ep158 = ep;
+        break;
+    case 310:
+        m_movieScreen = (_hierobject *)ep;
+        break;
+    case 330 ... 349:
+        m_cs108[id - 330] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 350:
+        m_costumeBoxCsMG[0] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 351 ... 354:
+        m_costumeSwMG[0][id - 351] = (_hierswitch *)ep;
+        break;
+    case 355:
+        m_costumeBoxCsMG[1] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 356 ... 359:
+        m_costumeSwMG[1][id - 356] = (_hierswitch *)ep;
+        break;
+    case 360 ... 363:
+        m_swD8[0][id - 360] = (_hierswitch *)ep;
+        break;
+    case 364 ... 367:
+        m_swD8[1][id - 364] = (_hierswitch *)ep;
+        break;
+    case 368 ... 371:
+        m_swD8[2][id - 368] = (_hierswitch *)ep;
+        break;
+    case 400:
+        m_ep164 = ep;
+        break;
+    case 571:
+    case 572:
+        switch (ep->id2) {
+        case 0:
+            m_ep1DC[0][id - 571] = ep;
+            break;
+        case 1:
+            m_ep1DC[1][id - 571] = ep;
+            break;
+        }
+        break;
+    case 573:
+        m_ep1FC = ep;
+        break;
+    case 574:
+        m_ep200 = ep;
+        break;
+    case 580:
+        m_ep22C = ep;
+        break;
+    case 581:
+        m_ep230 = ep;
+        break;
+    case 600:
+        m_sw25CC = (_hierswitch *)ep;
+        break;
+    case 601:
+        m_sw25D0 = (_hierswitch *)ep;
+        break;
+    case 700 ... 710:
+        switch (ep->id2) {
+        case 0:
+            m_selectSw[id - 700] = (_hierswitch *)ep;
+            break;
+        case 1:
+            m_selectSwMG[id - 700] = (_hierswitch *)ep;
+            break;
+        }
+        break;
+    case 720:
+        m_sw5CC = (_hierswitch *)ep;
+        break;
+    case 721:
+        m_sw5D0 = (_hierswitch *)ep;
+        break;
+    case 722 ... 723:
+        m_vibrationSw[0][id - 722] = (_hierswitch *)ep;
+        break;
+    case 724 ... 725:
+        m_vibrationSw[1][id - 724] = (_hierswitch *)ep;
+        break;
+    case 730 ... 732:
+        m_difficultySw[id - 730] = (_hierswitch *)ep;
+        break;
+    case 734:
+        m_stereoSw = (_hierswitch *)ep;
+        break;
+    case 735:
+        m_monoSw = (_hierswitch *)ep;
+        break;
+    case 736:
+        m_ep600 = ep;
+        break;
+    case 737:
+        m_sliderCs[0] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 738:
+        m_sliderCs[1] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 739:
+        m_cs60C = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 740 ... 742:
+        m_ep1C0[id - 740] = ep;
+        break;
+    case 743 ... 746:
+        m_ep1CC[id - 743] = ep;
+        break;
+    case 770:
+        m_cs610 = cs = CsPool::csHPActivate();
+        hierSetCsEpNode(cs, ep);
+        m_ep770Word20 = *(int *)((char *)ep + 0x20);
+        break;
+    case 771:
+        m_lockedSw = (_hierswitch *)ep;
+        break;
+    case 800 ... 813: /* the retail range starts at 800 but indexes from 801: ep 800 lands on m_ep27D4[1][9] */
+        m_cs2824[id - 801] = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    case 960:
+        break;
+    case 999:
+        m_cs5C = cs = CsPool::csActivate();
+        hierSetCsEpNode(cs, ep);
+        break;
+    default:
+        if (group < 22) {
+            m_menuItemSw[group][item] = (_hierswitch *)ep;
+        } else if (group < 52) {
+            m_cs4[id - 500] = cs = CsPool::csActivate();
+            hierSetCsEpNode(cs, ep);
+        } else if (group < 57) {
+            m_cs30[id - 550] = cs = CsPool::csActivate();
+            hierSetCsEpNode(cs, ep);
+        } else if (group < 63) {
+            m_ep25F4[group - 61][item] = ep;
+        } else if (group < 65) {
+        } else if (group < 67) {
+            m_ep2784[group - 65][item] = ep;
+        } else if (group < 69) {
+            m_ep27D4[group - 67][item] = ep;
+        } else if (group == 90) {
+            printf(" Just Ignored Camera Animation #%i (%i)\n", item, id);
+        } else {
+            printf(" Unspecified Entry Point %p id1=%i to shell\n", ep, ep->id1);
+        }
+        break;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Shell", AddEpNode__5ShelliP9_hierhead);
+#endif
 #ifdef NON_MATCHING
 /* untuned: 5/68 words; tools/difftest.py 300/300 (all three file types) */
 /* Disc path of a level file (\LVL\name.ext) or of a monster model (\MON\name.ext). AI models get a 0/1 suffix so that
