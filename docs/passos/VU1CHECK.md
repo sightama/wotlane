@@ -8,7 +8,7 @@
   - **Textura por triângulo** (08a4df2): cada par casado compara o TEX0 em vigor no GS quando o VU1 desenhou com o do slot que o nativo usa. A linha de resumo ganha `textura difere N, sem TEX0 K` e a lista ganha linhas `textura pkt … mais comum: vu (…) nativo slot S (…)`.
   - **Partículas por sistema:** os triângulos e os SPRITE do GS que vêm do `pkt` de um `fx[i]` vão para esse sistema e são comparados, quadrado a quadrado, com os que o nativo monta para ele. Saem as linhas `particulas:` (totais), `particulas por tipo (casados/vu/nativo)` e os sistemas com mais diferença.
   - A linha de resumo mostra `XGKICK N tris, M fora da tela` (todos os triângulos do VU1, antes do filtro de tela) e separa `particulas N tris` de `sem objeto`.
-  - No `tools/lote.ps1` fica ligado por padrão com `-Check 10`. O `resumo.csv` traz `checagens`, `casados_pior`, `objetos_divergentes`, `textura_difere_pior`, `objetos_textura`, `fx_casados_pior` (pior % de quadrados do VU1 casados num quadro com partículas) e `fx_tipos_divergentes` (tipos de sistema listados com diferença).
+  - No `tools/lote.ps1` fica ligado por padrão com `-Check 10`. O `resumo.csv` traz `checagens`, `casados_pior`, `objetos_divergentes`, `textura_difere_pior`, `objetos_textura`, `fx_casados_pior` (pior % de quadrados do VU1 casados num quadro com partículas), `fx_tipos_divergentes` (tipos de sistema listados com diferença) e `vif1_fora_de_passo` (códigos VIF1 inválidos desde o boot; deve ser 0).
   - `WOTM_VU1CHECK_DUMP=<prefixo>` grava os triângulos de cada checagem num CSV para análise offline. A última coluna dos triângulos é o TEX0 (0 = sem textura). As partículas saem como `fx<i>,vuq|natq,<n>,x0,y0,…` e `fxsys,<i>,<cadeia>,<preset>,<tipo>,<n>,<câmera>`.
 - **Medido:**
   - Geometria: em central, 1 contra 1, de 98,2% a 99,9% dos triângulos do VU1 casam por quadro, contando os monstros.
@@ -22,6 +22,13 @@
 - **Tamanho de sprite e texSprite** (partículas): o nativo desenhava cada partícula com o dobro do tamanho. O meio-lado na tela é `pos.w / 2 * foco / profundidade`, não `pos.w * …` (a razão VU1/nativo era 0,50 em x e em y, com o centro no lugar, em todos os sistemas desses dois tipos).
   - Depois da correção, os sprites casam inteiros (12/12, 22/22 quadrados). A explosão (texSprite, preset 9) casa pela metade (10 de 19), com o sistema deslocado de 1 a 3 px.
   - A geometria das partículas saiu do `drawSystem` para `Particles::forEachQuad` (e `Scene::spriteCorners` nos destroços), que servem ao desenho e à checagem.
+- **VIF1 fora de passo** (era a pista 5; bug do runtime, não do nativo). Sintoma: de um certo quadro em diante o VU1 não mandava nenhum triângulo de objeto. Na METRO (fase 4 do lote) isso acontecia desde a carga, sempre; em central, às vezes, no meio da luta.
+  - Os XGKICK dos objetos saíam cheios, mas com o bit ADC (bit 111 do XYZF2, "não desenhe") ligado em todo vértice. O microcódigo soma ao fog, já limitado a `maxVal`, o `.w` do quadword de ST da entrada (`ITOF12`). Esse `.w` vem do registrador ROW do VIF (UNPACK V2-16 com máscara `0x50505050`: z e w do ROW). O ROW tinha floats sem sentido, então fog + w passava de 2048 e ligava o ADC.
+  - Quem gravou o ROW: STROW e STMOD falsos (STMOD com imm `0x1501`) logo após a carga da fase. Eram pixels de textura lidos como códigos VIF.
+  - Causa: o tratamento do DIRECT no `ps2_vif1_interpreter.cpp`. Quando a tag GIF IMAGE dentro do DIRECT tinha NLOOP maior que o DIRECT (o jogo divide uma textura em vários DIRECT), o runtime consumia os quadwords seguintes **do fluxo do VIF** como imagem, incluindo os próximos códigos. No hardware o VIF obedece ao tamanho do DIRECT, e o resto da imagem chega no DIRECT seguinte. Agora a imagem pendente só é completada pelo próximo DIRECT.
+  - Depois da correção, a METRO casa de 94% a 99,8% por checagem (antes, 0%). O jogo nunca regrava ROW/MODE depois do boot (só os 4 STROW `0 0 0x1000 0`), por isso o estrago era permanente.
+  - Guarda: o VIF1 conta códigos inválidos (`g_wotmVif1Bad`; a primeira ocorrência sai como `[vif1] comando invalido … saiu de passo`). A linha de resumo da checagem traz `VIF1 fora de passo N`, e o `resumo.csv`, a coluna `vif1_fora_de_passo`. Um valor diferente de 0 é outra causa de desalinhamento a investigar.
+  - Hipóteses descartadas no caminho, com teste: mandar o DMA dos objetos ao VIF1 em todo quadro e executar o VU1 em todo quadro (nenhuma das duas mudou nada). O UNPACK V2/V3 do runtime mantém a memória antiga nos campos que faltam, enquanto o PCSX2 preenche do fluxo (V2: z = x, w = y; V3: w = valor seguinte). Isso não era a causa e não foi mudado.
 
 ## Pistas encontradas (nenhuma confirmada como bug; nada corrigido)
 1. **Objetos que o nativo desenha e o jogo não** (`vu 0` na saída): estão inteiros na tela e de frente.
@@ -31,14 +38,13 @@
    - Os vértices são os mesmos (0,04 px), mas ligados de outro jeito, e a diferença cresce no fim de cada sub-pacote.
    - No 1 contra 1 os monstros casam inteiros.
    - Causa possível: a regra de ADC do nativo ou dado velho na memória do VU1 emulado. Precisa de referência do PCSX2 para decidir.
+   - Medido antes da correção do VIF1 fora de passo, que também punha ADC errado: refazer a medição antes de investigar.
 3. **Objetos com tex 66 e várias instâncias** às vezes não casam.
 4. **Resto da textura (1 a 11 triângulos por quadro):** o VU1 usa a textura de outro objeto ou o slot vizinho do mesmo objeto.
    - Exemplo: `tbp 27a5 128x128 cbp 1bd2` aparece no VU1 em objetos sem relação entre si (tex 110, 155, 225, 236). Também aparecem pares trocados de slot (tbp 23a9 e 23b1 nos tex 231 e 233).
    - Hipótese: seção com seletor 0 herda o TEX0 que o GS tinha, que pode ser do objeto desenhado antes. O nativo herda só dentro do próprio objeto e começa no slot 0.
    - Não conferido. Seria um detalhe do jogo, não necessariamente algo a imitar.
-5. **Checagens com o VU1 sem nenhum objeto:** de um certo quadro em diante, todas as checagens dão `objetos vu 0` e `XGKICK 0 tris` (ou só partículas), enquanto o nativo desenha normalmente.
-   - Visto uma vez na fase 2 (do quadro 2529 ao fim) e depois em 2 de 6 execuções de 60 s (central desde o quadro 757; fase 4 desde o 143). Outras execuções na mesma fase não tiveram.
-   - O lado do VU1 não depende da coleta nativa, então não deve vir das mudanças da checagem, mas isso não foi provado. `casados_pior` 0 no `resumo.csv` marca a execução.
+5. **Resolvida:** VU1 sem nenhum objeto. Era o VIF1 fora de passo; ver "Corrigido com a checagem".
 6. **Formas de partícula que o nativo não imita** (por tipo; a contagem de quadrados por sistema bate):
    - **Pedestres (14):** o VU1 desenha cada um como um quadradinho inclinado (85 ou 100 por sistema, de 2 a 3 px). O nativo desenha sprites voltados para a câmera com o tamanho de `pos.w`: cerca de 12% saem com tamanho zero, e os outros têm em mediana metade do tamanho do VU1. O tamanho e a orientação devem vir de outro campo.
    - **Tipo 7 (arcos?):** o VU1 faz de 2 a 3 quadrados por partícula; o nativo, um de tamanho zero.
@@ -62,7 +68,7 @@ Resumo: pega objeto ou partícula que falta, sobra, está fora do lugar ou com o
 ## Próximos passos (do mais barato ao mais caro)
 1. **HUD pelo caminho direto ao GS:** pôr um tap também nos pacotes GIF que vão direto ao GS (PATH3/PATH2, fora do VU1) e comparar com o que o nativo desenha por cima da cena (texto, ícones). Antes, confirmar por onde o HUD sai e de onde vêm os ~340 SPRITE do GS fora de `fx[]`.
 2. **Cor de vértice e ALPHA por triângulo:** o XGKICK traz o RGBAQ de cada vértice e o registrador ALPHA; daria para estender a comparação de textura para cor e mistura (alcança a explosão opaca) e para as partículas.
-3. **Investigar as pistas 1 a 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
+3. **Investigar as pistas 1, 2, 3, 4 e 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
 
 ## Problema antigo encontrado no caminho
 O caminho emulado inteiro (sem `PS2X_NO_VU1`) está quebrado. A luta trava no primeiro quadro (laço do `particleDraw`) e, contornado isso, cai em `GS::consumeLocalToHostBytes` (leitura de VRAM do `sceGsExecStoreImage`, chamado a cada quadro de 0x2153FC). A checagem não depende desse caminho. O método para localizar um `[CRASH] exe+0x…` está em `NATIVO.md`.
