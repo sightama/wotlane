@@ -2292,6 +2292,15 @@ private:
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
         if (at) { m.m[3][0] = at[0]; m.m[3][1] = at[1]; m.m[3][2] = at[2]; }
+        else if (eyeOk_) {
+            // O hier leva o olho ao espaco do objeto com a propria mat (hierCsUpdate: mat * (eo + trans)) e volta com ela, nao com a
+            // inversa: o VU1 desenha em olho + (trans - olho) * R^T * R (R = 3x3 da mat). Com R ortonormal nao muda nada; nos destrocos
+            // que encolhem (linhas com norma < 1) o objeto sai puxado para a camera (ate ~37 unidades; checagem VU1, pista 3).
+            float a[3];
+            for (int i = 0; i < 3; ++i)
+                a[i] = (m.m[3][0] - eye_[0]) * m.m[i][0] + (m.m[3][1] - eye_[1]) * m.m[i][1] + (m.m[3][2] - eye_[2]) * m.m[i][2];
+            for (int k = 0; k < 3; ++k) m.m[3][k] = eye_[k] + a[0] * m.m[0][k] + a[1] * m.m[1][k] + a[2] * m.m[2][k];
+        }
         if (ram.u8(cs + 0xF)) {   // scaleMe
             const float sx = ram.f32(cs + 0x80), sy = ram.f32(cs + 0x84), sz = ram.f32(cs + 0x88);
             m = mul(scaleM(sx, sy, sz), m);

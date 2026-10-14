@@ -83,9 +83,9 @@ Compara, por objeto e em números, o que o microcódigo do VU1 mandaria ao GS co
 - **Medido (2026-10-14, central, Congar contra Robo-47, 17 checagens):** de 98,2% a 99,9% dos triângulos do VU1 casados por quadro, contando os monstros. O quadro `g=30` (início da luta) dá 95%.
 - **Pistas em aberto, sem decisão (não são bugs confirmados):**
   - Objetos que o nativo desenha e o jogo não (`vu 0`, inteiros na tela e de frente). Exemplos em central: tex 276 (até 545 triângulos), 234, 247, 307. É a família de escolhas de visibilidade (CONTROL/fantasma, DESTRUCTIBLE, LOD).
-  - Objetos com tex 66 e várias instâncias às vezes não casam.
   - Textura: de 0 a 11 triângulos por quadro ainda diferem (textura de outro objeto ou do slot vizinho). Detalhes em `VU1CHECK.md`.
 - **Resolvida pela correção do VIF1 fora de passo:** com 3 IAs o VU1 desenhava nos monstros de 20% a 28% a mais de triângulos que o nativo (ADC errado). Remedido: casam de 99% a 100% (`VU1CHECK.md`, pista 2).
+- **Corrigido pela checagem (posição dos `_cs`):** o `hier` desenha um `_cs` em `olho + (trans − olho)·RᵀR` (R = 3x3 da `mat`), não em `trans`. Só muda com matriz não ortonormal, como nos destroços que encolhem (tex 66 em central, até 37 unidades). O `Scene::drawCs` aplica a mesma fórmula (`VU1CHECK.md`, pista 3).
 - **Corrigido pela checagem de textura:** o nativo ignorava o `PRIM.TME` da tag GIF de cada seção. Seções que o jogo desenha sem textura (o tex 75 de central, cerca de 1/3 do objeto) saíam com a do slot 0. Agora viram o slot `kSlotNoTex` (31).
 - **Corrigido pela checagem de partículas:** sprite e texSprite saíam com o dobro do tamanho (o meio-lado é `pos.w / 2`, não `pos.w`). Depois disso casam inteiros, salvo a explosão (texSprite preset 9), que casa pela metade.
 - **Partículas, diferenças de forma ainda abertas** (a contagem por sistema bate; detalhes em `VU1CHECK.md`): pedestres (14), tipo 7, destroços (13), `dustTrail` (15), `sprine` (8) e `stripe` (5).

@@ -30,14 +30,20 @@
   - Guarda: o VIF1 conta códigos inválidos (`g_wotmVif1Bad`; a primeira ocorrência sai como `[vif1] comando invalido … saiu de passo`). A linha de resumo da checagem traz `VIF1 fora de passo N`, e o `resumo.csv`, a coluna `vif1_fora_de_passo`. Um valor diferente de 0 é outra causa de desalinhamento a investigar.
   - Hipóteses descartadas no caminho, com teste: mandar o DMA dos objetos ao VIF1 em todo quadro e executar o VU1 em todo quadro (nenhuma das duas mudou nada). O UNPACK V2/V3 do runtime mantém a memória antiga nos campos que faltam, enquanto o PCSX2 preenche do fluxo (V2: z = x, w = y; V3: w = valor seguinte). Isso não era a causa e não foi mudado.
 
+- **Posição dos `_cs` com matriz não ortonormal** (era a pista 3, bug do nativo). Sintoma: os tex 66 de central (pelo jeito, destroços: um `_cs` por pedaço, girado e encolhendo, 1 a 12 por `polyPkt`) saíam com o mesmo número de triângulos dos dois lados, mas deslocados de 1 a 25 px, e derrubavam a checagem (84,5% em `g=1880` com 3 IAs).
+  - Cada instância sai numa cadeia própria, com um cabeçalho em `hierObjPkt` (0x446700, as duas metades de 0x44000) antes do `polyPkt`. A rotação do cabeçalho é a `mat` do `_cs`, igual à do nativo, mas a translação (relativa ao olho) não é `trans − olho`.
+  - Causa: o `hierCsUpdate` leva o olho ao espaço do objeto com a própria `mat` (`mat · (eo + trans)`), e a travessia volta com a mesma `mat`, não com a inversa. O VU1 desenha em `olho + (trans − olho)·RᵀR` (R = 3x3 da `mat`). Medido em 76 cadeias: erro máximo de 0,0001 com essa fórmula, contra até 37 unidades com `trans` cru. Com R ortonormal nada muda. Os destroços que encolhem têm linhas com norma < 1, e o jogo os desenha puxados para a câmera.
+  - Correção: `Scene::drawCs` aplica a mesma fórmula (com o `eye_` da vista 0). Não confere o caminho com `scaleMe` (o `hier` grava `1/scale.x` no scratchpad, nenhum destroço medido o usava).
+  - Depois da correção, os tex 66 casam em 1528 de 1532 triângulos (29 objetos, 3 IAs em central), e o lote em central, 2, METRO, 5, 7 e 8 (1 contra 1, 60 s) fica com pior caso de 99,0% a 99,6% por fase, fora o `g=30` de central (95%).
+  - Hipótese descartada com teste: coleta nativa na hora errada (com a coleta da entrada do `hier`, nada mudava; o `trans` do `_cs` não muda durante o quadro).
+
 ## Pistas encontradas (nenhuma confirmada como bug; nada corrigido)
 1. **Objetos que o nativo desenha e o jogo não** (`vu 0` na saída): estão inteiros na tela e de frente.
    - Exemplos em central: tex 276 (até 545 triângulos), 234, 247 e 307.
    - Suspeita: escolhas de visibilidade (CONTROL/prédio fantasma, DESTRUCTIBLE, LOD). É a pista mais ligada aos bugs já reportados.
 2. **Resolvida:** monstros com 20% a 28% a mais de triângulos no VU1, só com 3 IAs (`WOTM_MATCH=1,3,2,2,1`). Era o mesmo ADC errado do VIF1 fora de passo.
    - Remedido depois da correção (central, 90 s, checagem a cada 5 s, 17 checagens, `VIF1 fora de passo 0`): os quatro monstros casam de 99,0% a 100% em todas, com o mesmo número de triângulos no VU1 e no nativo (diferença de até 6).
-3. **Objetos com tex 66 e várias instâncias** às vezes não casam.
-   - Na mesma remedição, a pior checagem (`g=1880`, 84,5% contra 97,5% a 99,9% nas outras) foi só isso: oito objetos tex 66 (6 a 9 itens) com o mesmo número de triângulos no VU1 e no nativo e quase nenhum casado (ex.: 448/448 com 444 faltando). Cara de instâncias trocadas ou deslocadas, não de geometria diferente.
+3. **Resolvida:** objetos com tex 66 e várias instâncias às vezes não casavam. Ver "Corrigido com a checagem" (posição dos `_cs` com matriz não ortonormal).
 4. **Resto da textura (1 a 11 triângulos por quadro):** o VU1 usa a textura de outro objeto ou o slot vizinho do mesmo objeto.
    - Exemplo: `tbp 27a5 128x128 cbp 1bd2` aparece no VU1 em objetos sem relação entre si (tex 110, 155, 225, 236). Também aparecem pares trocados de slot (tbp 23a9 e 23b1 nos tex 231 e 233).
    - Hipótese: seção com seletor 0 herda o TEX0 que o GS tinha, que pode ser do objeto desenhado antes. O nativo herda só dentro do próprio objeto e começa no slot 0.
@@ -66,7 +72,7 @@ Resumo: pega objeto ou partícula que falta, sobra, está fora do lugar ou com o
 ## Próximos passos (do mais barato ao mais caro)
 1. **HUD pelo caminho direto ao GS:** pôr um tap também nos pacotes GIF que vão direto ao GS (PATH3/PATH2, fora do VU1) e comparar com o que o nativo desenha por cima da cena (texto, ícones). Antes, confirmar por onde o HUD sai e de onde vêm os ~340 SPRITE do GS fora de `fx[]`.
 2. **Cor de vértice e ALPHA por triângulo:** o XGKICK traz o RGBAQ de cada vértice e o registrador ALPHA; daria para estender a comparação de textura para cor e mistura (alcança a explosão opaca) e para as partículas.
-3. **Investigar as pistas 1, 3, 4 e 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
+3. **Investigar as pistas 1, 4 e 6 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
 
 ## Problema antigo encontrado no caminho
 O caminho emulado inteiro (sem `PS2X_NO_VU1`) está quebrado. A luta trava no primeiro quadro (laço do `particleDraw`) e, contornado isso, cai em `GS::consumeLocalToHostBytes` (leitura de VRAM do `sceGsExecStoreImage`, chamado a cada quadro de 0x2153FC). A checagem não depende desse caminho. O método para localizar um `[CRASH] exe+0x…` está em `NATIVO.md`.
