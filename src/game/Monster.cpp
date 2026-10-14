@@ -6,6 +6,7 @@
 #include "game/level_pickups.h"
 #include "game/enemy_info.h"
 #include "game/monster_state.h"
+#include "game/anim_blend.h"
 #include "vecmath.h"
 
 class GamePad {
@@ -29,11 +30,6 @@ struct Q16 {
 extern "C" float cosf(float);
 extern float UpMatrix[4][4];
 void *particleGetParticle(int h);
-class AnimBlend {
-public:
-    void setPercent(float p);
-    void rampOut(float t);
-};
 void animationTransitionInto(_animHandle &h, float t, int a, int b);
 class StateDeath {
 public:
@@ -42,6 +38,16 @@ public:
 };
 void mathfCopyMatrixNotAligned(float (*dst)[4], float (*src)[4]);
 void mathfRPHFromMatrix(float (*m)[4], _fvector *out);
+void mathfMulMatrix(float (*d)[4], float (*a)[4], float (*b)[4]);
+void mathfMulMatrixTP(float (*dst)[4], float (*a)[4], float (*b)[4]);
+void mathfMulVec(float (*m)[4], _fvector *v, _fvector *out);
+void mathfOrthonormalize(float (*m)[4]);
+class StateGrappled {
+public:
+    enum SubState { SUB_0, SUB_1, SUB_2 };
+    void enterSubState(SubState s);
+    bool isOverhead(void);
+};
 int viewInFOV(int view, _fvector *a, _fvector *b);
 class AiPath;
 class AiPathNet {
@@ -60,14 +66,11 @@ public:
     void updateMove(bool b);
     void updateTurn(bool b);
     void allStop(void);
+    void updatePosition(void);
 };
 extern int moviePlaying;
 extern int movieAborted;
 class DbInteractive;
-class AnimPappy {
-public:
-    void update(DbInteractive &d);
-};
 class ActionDispatch {
 public:
     static unsigned stopAllActiveActions(void) __asm__("stopAllActiveActions__14ActionDispatchv");
@@ -486,7 +489,47 @@ INCLUDE_ASM("asm/nonmatchings/game/Monster", dropPickup__7Monster);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", launchDefaultProjectile__7Monsteri);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateDefaultProjectile__7Monster);
+/* Moves the monster for this frame (unless it is being grappled) and drags the monster it holds along: an overhead
+   victim keeps its grip pose relative to the holder (matrix at 0x3280 of the victim and 0x32C0 of the holder, grip
+   points at victim+0x3E00 and holder+0x3E10); any other victim is kept 100 units along the holder's y axis. */
+#ifdef NON_MATCHING
+/* 14/102 words: retail keeps m_target in v0 (reloading it for every use) and computes 0x32C0 later */
+void Monster::updatePosition(void)
+{
+    if (m_grappler == 0) {
+        ((MonsterDynamics *)((char *)this + 0x100))->updatePosition();
+        if (m_target != 0) {
+            Monster *t = (Monster *)m_target;
+
+            if (((StateGrappled *)((char *)t + 0xDDCC))->isOverhead()) {
+                float (*hold)[4] = (float (*)[4])((char *)this + 0x32C0);
+                float rel[4][4] __attribute__((aligned(16)));
+                FVECTOR d;
+                FVECTOR local;
+
+                mathfMulMatrixTP(rel, t->m_cs->mat, (float (*)[4])((char *)t + 0x3280));
+                mathfMulMatrix(((Monster *)m_target)->m_cs->mat, rel, hold);
+                mathfOrthonormalize(((Monster *)m_target)->m_cs->mat);
+                mathfRPHFromMatrix(((Monster *)m_target)->m_cs->mat, &((Monster *)m_target)->m_cs->rot);
+                t = (Monster *)m_target;
+                vecSub(&d, &t->m_cs->trans, (_fvector *)((char *)t + 0x3E00));
+                mathfMulVec((float (*)[4])((char *)t + 0x3280), &d, &local);
+                vecApplyRows(&d, hold, &local);
+                vecAdd(&((Monster *)m_target)->m_cs->trans, (_fvector *)((char *)this + 0x3E10), &d);
+            } else {
+                FVECTOR up;
+
+                vecScale(&up, (_fvector *)m_cs->mat[1], 100.0f);
+                ((Monster *)m_target)->m_cs->trans.x = m_cs->trans.x + up.x;
+                ((Monster *)m_target)->m_cs->trans.y = m_cs->trans.y + up.y;
+            }
+        }
+    }
+    updateDefaultProjectile();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updatePosition__7Monster);
+#endif
 #ifdef NON_MATCHING
 class HitEvent;
 class StateRecoil {
@@ -504,12 +547,6 @@ public:
 class StateBlock {
 public:
     int isBlockable(HitEvent &e);
-};
-class StateGrappled {
-public:
-    enum SubState { SUB_0, SUB_1, SUB_2 };
-    void enterSubState(SubState s);
-    bool isOverhead(void);
 };
 class LevelObjectSoundManager {
 public:
@@ -899,7 +936,34 @@ dmg:
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeHit__7MonsterP8_fvectorfi);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeDamage__7MonsterfbP7Monster);
+/* Plays a one-shot additive recoil of the given weight from the side `dir` comes from: animation 0x96/0x97 when dir
+   lies mostly along the cs x axis (positive/negative), 0x98/0x99 when mostly along y. */
+#ifdef NON_MATCHING
+/* 8/93 words: retail computes the two dot products with mula.s/madda.s/madd.s */
+void Monster::takeAdditiveRecoil(_fvector &dir, float weight)
+{
+    float (*m)[4] = m_cs->mat;
+    float dx = dir.x * m[0][0] + dir.y * m[0][1] + dir.z * m[0][2];
+    float dy = dir.x * m[1][0] + dir.y * m[1][1] + dir.z * m[1][2];
+    int anim;
+    AnimBlend *b;
+
+    if (fabsf(dy) < fabsf(dx))
+        anim = dx >= 0.0f ? 0x96 : 0x97;
+    else
+        anim = dy >= 0.0f ? 0x98 : 0x99;
+    b = AnimBlendPool::alloc();
+    if (b != 0) {
+        b->init(m_anims[anim]);
+        b->m_weight = weight;
+        b->m_node.blendType = BLEND_ADDITIVE;
+        b->m_node.priority = 999;
+        b->runAndDealloc(0.0f, 0.0f);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeAdditiveRecoil__7MonsterR8_fvectorf);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", knockBack__7MonsterR8_fvectorff);
 void Monster::blowUpMonster(Monster *killer)
 {
@@ -1060,7 +1124,44 @@ Monster *Monster::getClosestMonsterToOrientation(float angle, float maxDist)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToOrientation__7Monsterff);
 #endif
+/* The monster whose locator locB lies within maxDist of this monster's locator locA and closest to the y axis of
+   locA's matrix, inside a cone of `angle` radians; 0 if none. */
+#ifdef NON_MATCHING
+/* untuned (0x1B8 vs 0x194 bytes): retail walks the slots with a running offset and uses mula.s/madda.s for the dot product */
+Monster *Monster::getClosestMonsterToOrientation(int locA, int locB, float angle, float maxDist)
+{
+    _fvector *fwd = (_fvector *)((char *)getLocatorMat(locA) + 0x10);
+    _fvector *pa = (_fvector *)getLocatorTrans(locA);
+    Monster *best = 0;
+    float c = cosf(angle * 0.5f);
+    float bestSq = maxDist * maxDist;
+    int j;
+
+    for (j = 0; j < game->m_numSlots; j++) {
+        Monster *m = &game->m_slots[j];
+
+        if (m->m_playerNum != 0 && m != this && m != m_target) {
+            FVECTOR d;
+            float sq;
+            float dot;
+
+            vecSub(&d, (_fvector *)m->getLocatorTrans(locB), pa);
+            sq = vecLenSq(&d);
+            if (sq < bestSq) {
+                dot = (fwd->x * d.x + fwd->y * d.y + fwd->z * d.z) / eeSqrtf(sq);
+                if (c < dot) {
+                    c = dot;
+                    bestSq = sq;
+                    best = m;
+                }
+            }
+        }
+    }
+    return best;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToOrientation__7Monsteriiff);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToPunch__7Monsterfff);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterInFOV__7MonsterR8_fvectorfT1fRf);
 Monster *Monster::getClosestTargetable(unsigned short a, bool b, float x, float y)

@@ -5,6 +5,7 @@
 #include "hieri_types.h"
 
 class DbInteractive;
+void *operator new(unsigned, void *);
 
 /* A monster's extra animation layer (game/MonsterAnimBlend): one _animBlendNode laid over the main tree of the
    animation `*m_handle` (common/animation, animationAddBlend). Ramping in adds the blend with weight m_weight;
@@ -43,6 +44,24 @@ public:
     unsigned char m_top;           /* 0x13B0 */
 
     static AnimBlendPool s_pool;
+
+    /* inlined by the retail wherever a temporary blend is taken: a fresh static blend of priority 10, or 0 when all 48 are in use */
+    static AnimBlend *alloc(void)
+    {
+        AnimBlendPool *pool = &s_pool;
+        unsigned char top = pool->m_top;
+        AnimBlend *b;
+
+        if (top < 48) {
+            pool->m_top = top + 1;
+            b = &pool->m_blends[pool->m_free[top]];
+        } else {
+            b = 0;
+        }
+        if (b != 0)
+            new (b) AnimBlend(BLEND_STATIC, 10);
+        return b;
+    }
 
     /* inlined by the retail wherever a blend goes back to the pool; an index already free is left alone */
     static void dealloc(AnimBlend *b)
