@@ -436,12 +436,14 @@ index 37b6a4d..3f2567f 100644
          {
              processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..68ebd78 100644
+index 8590f14..addb826 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
-@@ -1,6 +1,10 @@
+@@ -1,6 +1,12 @@
  #include "runtime/ps2_pad.h"
  #include "ps2_host_backend.h"
++#include <algorithm>
++#include <cmath>
  #include <cstring>
 +#include <cstdio>
 +#include <cstdlib>
@@ -450,7 +452,39 @@ index 8590f14..68ebd78 100644
  
  namespace
  {
-@@ -87,36 +91,101 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+@@ -82,41 +88,133 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+         float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
+         float rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
+         float ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
++        // PS2X_PADLOG: nome do gamepad e cada mudanca dos eixos (>= 0,05) no stderr, com o horario.
++        // PS2X_PAD_DEADZONE=<0..1>: zera o eixo com |valor| abaixo do limite (padrao 0 = sem zona morta, como antes).
++        static const bool padLog = std::getenv("PS2X_PADLOG") != nullptr;
++        static const float deadzone = std::getenv("PS2X_PAD_DEADZONE") ? static_cast<float>(std::atof(std::getenv("PS2X_PAD_DEADZONE"))) : 0.f;
++        if (padLog)
++        {
++            static bool named = false;
++            static float last[4] = {0, 0, 0, 0};
++            if (!named)
++            {
++                named = true;
++                std::fprintf(stderr, "[pad] gamepad 0: %s (eixos: %d)\n", GetGamepadName(kGamepad), GetGamepadAxisCount(kGamepad));
++            }
++            const float cur[4] = {lx, ly, rx, ry};
++            bool changed = false;
++            for (int i = 0; i < 4; ++i)
++                changed |= std::fabs(cur[i] - last[i]) >= 0.05f;
++            if (changed)
++            {
++                std::fprintf(stderr, "[pad] t=%.3f esq=%+.2f,%+.2f dir=%+.2f,%+.2f\n", GetTime(), lx, ly, rx, ry);
++                std::copy(cur, cur + 4, last);
++            }
++        }
++        if (deadzone > 0.f)
++            for (float *a : {&lx, &ly, &rx, &ry})
++                if (std::fabs(*a) < deadzone)
++                    *a = 0.f;
+         data[6] = static_cast<uint8_t>(128 + lx * 127);
+         data[7] = static_cast<uint8_t>(128 + ly * 127);
          data[4] = static_cast<uint8_t>(128 + rx * 127);
          data[5] = static_cast<uint8_t>(128 + ry * 127);
      }
@@ -566,7 +600,7 @@ index 8590f14..68ebd78 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..8ad97fa 100644
+index 45cb9d2..30fa432 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -749,7 +783,7 @@ index 45cb9d2..8ad97fa 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2557,174 @@ void PS2Runtime::run()
+@@ -2444,7 +2557,177 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -759,6 +793,9 @@ index 45cb9d2..8ad97fa 100644
 +            ++s_frame;
 +            if (std::getenv("PS2X_SCENE"))
 +                wotmDrawScene(m_memory.getRDRAM());
++            static const bool s_fmv = std::getenv("PS2X_FMV") != nullptr; // filmes nativos (wotm_fmv.hpp): por cima de tudo
++            if (s_fmv)
++                wotmFmvPresent(m_memory.getGSVRAM());
 +            if (std::getenv("PS2X_PROF")) // amostrador de PC: histograma por palavra, gravado em prof.<frame>
 +            {
 +                static std::unordered_map<uint32_t, uint32_t> s_hist;
@@ -1095,12 +1132,76 @@ index bd75bba..68b4ada 100644
  void VU1Interpreter::progressXgkick()
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..565a327
+index 0000000..3059e74
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,266 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
++// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
++// Substitui CMovie::Play/Update/End e playMpegMovieWithDB/updateMpegMovieDecoding (o decodificador do jogo espera a IPU, que o
++// runtime nao emula) e toca o .PSS do disco (pasta cdRoot ou a ISO de PS2X_CD_IMAGE) com o FFmpeg. Sem o header ou sem o FFmpeg,
++// PS2X_FMV so avisa.
++#if __has_include("wotm_fmv.hpp") && __has_include(<libavcodec/avcodec.h>)
++#include "wotm_fmv.hpp"
++#define WOTM_HAVE_FMV 1
++namespace wotm_fmv_hooks
++{
++inline void playWithDB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::playMpegMovieWithDB(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5))));
++}
++inline void updateDecoding(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::updateMpegMovieDecoding(rdram, getRegU32(ctx, 4))));
++}
++inline void cmoviePlay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmoviePlay(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6))));
++}
++inline void cmovieUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmovieUpdate(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5))));
++}
++inline void cmovieEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
++{
++    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmovieEnd(rdram, getRegU32(ctx, 4))));
++}
++} // namespace wotm_fmv_hooks
++
++void wotmFmvInstall(PS2Runtime &runtime)
++{
++    const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
++    wotm::fmv::Player &p = wotm::fmv::Player::get();
++    p.discRoot = io.cdRoot;
++    p.isoPath = io.cdImage;
++    runtime.registerFunction(0x0020F4B0u, wotm_fmv_hooks::playWithDB);     // playMpegMovieWithDB
++    runtime.registerFunction(0x0020F540u, wotm_fmv_hooks::updateDecoding); // updateMpegMovieDecoding
++    runtime.registerFunction(0x00210090u, wotm_fmv_hooks::cmoviePlay);     // CMovie::Play
++    runtime.registerFunction(0x00210360u, wotm_fmv_hooks::cmovieEnd);      // CMovie::End
++    runtime.registerFunction(0x00210408u, wotm_fmv_hooks::cmovieUpdate);   // CMovie::Update
++    std::fprintf(stderr, "[fmv] filmes nativos ligados (disco: %s, iso: %s)\n", io.cdRoot.string().c_str(), io.cdImage.string().c_str());
++}
++
++// Uma vez por apresentacao (thread da janela, dentro do BeginDrawing): avanca os filmes, copia o do menu para a VRAM do GS e
++// desenha o de tela cheia por cima.
++static void wotmFmvPresent(uint8_t *gsVram)
++{
++    wotm::fmv::Player &p = wotm::fmv::Player::get();
++    p.pump(gsVram, PS2_GS_VRAM_SIZE);
++    p.drawFullscreen();
++}
++#else
++void wotmFmvInstall(PS2Runtime &)
++{
++    std::fprintf(stderr, "[fmv] PS2X_FMV ignorado: falta native/wotm_fmv.hpp (WOTM_NATIVE_DIR) ou o FFmpeg (PS2X_ENABLE_FFMPEG)\n");
++}
++static void wotmFmvPresent(uint8_t *) {}
++#endif
++
++// Som nativo (native/wotm_snd.hpp), ligado com PS2X_SND=1 (wotmSndInstall, chamado do main.cpp)
++#include "wotm_snd.inc"
++
 +#if __has_include("wotm_native.hpp")
 +#include "wotm_native.hpp"
 +#include <filesystem>
@@ -1162,6 +1263,9 @@ index 0000000..565a327
 +static bool wotmDrawNative(const uint8_t *rdram)
 +{
 +    static wotm_live::State S;
++#ifdef WOTM_HAVE_FMV
++    S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
++#endif
 +    static bool filterInstalled = false;
 +    if (!filterInstalled)
 +    {
@@ -1300,57 +1404,79 @@ index 0000000..565a327
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..fd73aeb
+index 0000000..a25fc66
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,97 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
-+// Pelo do Congar (e de outros monstros): `BoneSpring::update` (0x11B5C0) integra uma mola por Euler com
-+// `dt = 1 / timerGetUpdateRate()` (D_006F8DB8). No retail o updateRate e 60 (ou 30); neste runtime o jogo roda a ~22 fps
-+// logicos e o valor chega a 8-15 quando o host atrasa, ou seja, `dt` ate 7x maior que o previsto. Com esse dt a mola e
-+// instavel: o deslocamento cresce a cada quadro ate explodir (vertices do pelo esticados por toda a cena).
-+// A correcao limita so o dt da mola a no maximo 1/30 s. Nada muda quando o updateRate ja e >= 30 (retail).
-+//
-+// Dentro de BoneSpring::update `timerGetUpdateRate` e chamada duas vezes: a primeira escala a velocidade da ancora
-+// (precisa do rate real) e a segunda define o dt (`1 / rate`): so a segunda e limitada.
-+//
-+// WOTM_SPRINGMIN=<n>: minimo do rate usado no dt (padrao 30; 0 desliga a correcao).
++// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
++// do jogo "valeu" (60 = 1 vsync). A fisica integra por Euler com `dt = 1 / rate` (mola do pelo em BoneSpring::update,
++// giro dos monstros em MonsterDynamics::updatePosition, veiculos, detritos...). No retail o rate e 60 ou 30; neste
++// runtime o jogo roda a ~20 quadros logicos/s e o rate oscila quadro a quadro entre 60 e 8, ou seja, dt ate 7x maior
++// que o previsto. Com esse dt os integradores ficam instaveis: o pelo do Congar estica pela cena toda e o controle de giro
++// (amortecimento ~ -40.5 * velRot, estavel so com dt < 2/40.5, rate >= 21) inverte e amplifica a velocidade a cada quadro
++// (monstro girando sozinho, a camera atras dele gira junto).
++// A correcao devolve no minimo WOTM_RATEMIN (padrao 30; 0 desliga) para o jogo inteiro: nos quadros lentos o jogo anda
++// um pouco mais devagar em vez de pular, e todo integrador fica na margem para a qual foi feito. Nada muda quando o rate
++// ja e >= 30 (retail). Substitui os limites pontuais anteriores (WOTM_SPRINGMIN na mola, WOTM_TURNMIN no giro).
 +#include "ps2_runtime.h"
 +#include "ps2_runtime_macros.h"
 +
 +#include <cstdint>
 +#include <cstdio>
 +#include <cstdlib>
++#include <cstring>
 +#include <string>
 +
 +namespace
 +{
-+    constexpr uint32_t kBoneSpringUpdate = 0x11B5C0u;
 +    constexpr uint32_t kTimerGetUpdateRate = 0x2236D8u;
 +    constexpr uint32_t kUpdateRateVar = 0x6F8DB8u;   // D_006F8DB8, lido pelo gp
 +
-+    PS2Runtime::RecompiledFunction g_origBoneSpringUpdate = nullptr;
-+    int g_springMinRate = 30;
-+    thread_local int t_timerCallsInSpring = -1;   // -1: fora de BoneSpring::update
++    int g_minRate = 30;
 +    unsigned long long g_clamped = 0;
 +
-+    void boneSpringUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    // WOTM_TURNLOG: uma linha [turn] por MonsterDynamics::updatePosition (cada monstro, cada quadro do jogo):
++    // quadro (g_frame), monstro, rate, acelRot (+0x110, zerada pela funcao), velRot (+0x100) antes/depois e os angulos
++    // (Monster+0xC -> +0x60, em radianos) depois da integracao. O rate mostrado e o da variavel (sem o limite).
++    constexpr uint32_t kMonsterDynamicsUpdatePosition = 0x165100u;
++    PS2Runtime::RecompiledFunction g_origUpdatePosition = nullptr;
++
++    void updatePositionLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +    {
-+        t_timerCallsInSpring = 0;
-+        g_origBoneSpringUpdate(rdram, ctx, runtime);
-+        t_timerCallsInSpring = -1;
++        auto readF = [&](uint8_t *, uint32_t addr)
++        {
++            const uint32_t w = READ32(addr);
++            float f;
++            std::memcpy(&f, &w, 4);
++            return f;
++        };
++        const uint32_t dyn = GPR_U32(ctx, 4);
++        float acc[3], v0[3];
++        for (int i = 0; i < 3; ++i)
++        {
++            acc[i] = readF(rdram, dyn + 0x110 + 4 * i);
++            v0[i] = readF(rdram, dyn + 0x100 + 4 * i);
++        }
++        const int32_t rate = static_cast<int32_t>(READ32(kUpdateRateVar));
++        g_origUpdatePosition(rdram, ctx, runtime);
++        const uint32_t mon = READ32(dyn);
++        const uint32_t cs = READ32(mon + 0xC);
++        std::fprintf(stderr, "[turn] g=%u mon=%06x rate=%d acc=%+.3f,%+.3f,%+.3f vel=%+.3f,%+.3f,%+.3f -> %+.3f,%+.3f,%+.3f ang=%+.3f,%+.3f,%+.3f\n",
++                     READ32(0x6F7E38u), mon, rate, acc[0], acc[1], acc[2], v0[0], v0[1], v0[2], readF(rdram, dyn + 0x100), readF(rdram, dyn + 0x104),
++                     readF(rdram, dyn + 0x108), readF(rdram, cs + 0x60), readF(rdram, cs + 0x64), readF(rdram, cs + 0x68));
 +    }
 +
-+    // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite do dt acima.
++    // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
 +    void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +    {
 +        int32_t rate = static_cast<int32_t>(READ32(kUpdateRateVar));
-+        if (t_timerCallsInSpring >= 0 && ++t_timerCallsInSpring == 2 && rate > 0 && rate < g_springMinRate)
++        if (rate > 0 && rate < g_minRate)
 +        {
-+            rate = g_springMinRate;
++            rate = g_minRate;
 +            if ((++g_clamped % 20000ull) == 0 && std::getenv("PS2X_STATS"))
-+                std::fprintf(stderr, "[wotm] mola do pelo: dt limitado a 1/%d em %llu atualizacoes\n", g_springMinRate, g_clamped);
++                std::fprintf(stderr, "[wotm] updateRate limitado a %d em %llu chamadas\n", g_minRate, g_clamped);
 +        }
 +        SET_GPR_S32(ctx, 2, rate);
 +        ctx->pc = GPR_U32(ctx, 31);
@@ -1364,17 +1490,20 @@ index 0000000..fd73aeb
 +    if (name.find("SCUS_971.97") == std::string::npos)
 +        return;
 +
-+    if (const char *e = std::getenv("WOTM_SPRINGMIN"))
-+        g_springMinRate = std::atoi(e);
-+    if (g_springMinRate <= 0)
-+        return;
-+
-+    g_origBoneSpringUpdate = runtime.lookupFunction(kBoneSpringUpdate);
-+    if (!g_origBoneSpringUpdate)
-+        return;
-+    runtime.registerFunction(kBoneSpringUpdate, &boneSpringUpdate);
-+    runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
-+    std::fprintf(stderr, "[wotm] correcao da mola do pelo ativa (dt <= 1/%d)\n", g_springMinRate);
++    if (const char *e = std::getenv("WOTM_RATEMIN"))
++        g_minRate = std::atoi(e);
++    if (std::getenv("WOTM_TURNLOG") && (g_origUpdatePosition = runtime.lookupFunction(kMonsterDynamicsUpdatePosition)))
++    {
++        runtime.registerFunction(kMonsterDynamicsUpdatePosition, &updatePositionLogged);
++        std::fprintf(stderr, "[wotm] log da rotacao dos monstros ligado (WOTM_TURNLOG)\n");
++    }
++    if (g_minRate > 0)
++    {
++        runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
++        std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
++    }
++    else
++        std::fprintf(stderr, "[wotm] updateRate sem limite (WOTM_RATEMIN=0)\n");
 +}
 diff --git a/ps2xRuntime/src/lib/wotm_scene.inc b/ps2xRuntime/src/lib/wotm_scene.inc
 new file mode 100644
@@ -1402,10 +1531,10 @@ index 0000000..c8ef7a8
 +    wotmDrawNative(rdram); // camada nativa (native/wotm_native.hpp): fase lida da RAM, sem VU1/GS; sem fase, o quadro do GS fica como esta
 +}
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..c8a0915 100644
+index 563bcbd..4b42d9f 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,6 +164,26 @@ namespace
+@@ -164,6 +164,28 @@ namespace
      }
  }
  
@@ -1422,6 +1551,8 @@ index 563bcbd..c8a0915 100644
 +// Corte na fronteira da engine (sem VU1/GS emulado): o VU1 do runtime executa microcodigo invalido e o DMA do VIF1
 +// nunca conclui. rtWaitForVu1 esperava objsInPacket|objsInAlphaPacket zerarem (quem zerava era hierDmaHandler).
 +static void hook_noop(uint8_t *, R5900Context *, PS2Runtime *) {}
++void wotmFmvInstall(PS2Runtime &runtime); // wotm_live.inc (PS2X_FMV)
++void wotmSndInstall(PS2Runtime &runtime); // wotm_snd.inc (PS2X_SND)
 +static void hook_ret1(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); } // CMovie::Update: "terminou"
 +static void hook_flushObjQ(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
@@ -1432,7 +1563,7 @@ index 563bcbd..c8a0915 100644
  int main(int argc, char *argv[])
  {
  #if defined(__ANDROID__)
-@@ -220,12 +240,57 @@ int main(int argc, char *argv[])
+@@ -220,12 +242,63 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -1462,6 +1593,12 @@ index 563bcbd..c8a0915 100644
 +            runtime.registerFunction(0x00210408u, hook_ret1); // CMovie::Update
 +            std::cout << "[hook] CMovie::Play/Update pulados" << std::endl;
 +        }
++        if (std::getenv("PS2X_FMV")) // filmes nativos (native/wotm_fmv.hpp, em wotm_live.inc): substitui os hooks de pular filme acima
++            wotmFmvInstall(runtime);
++        // som nativo (native/wotm_snd.hpp, em wotm_snd.inc), ligado por padrao: o 989snd nao sobe no IOP emulado.
++        // PS2X_SND=0 volta ao 989snd no IOP emulado (sem SPU2: mudo).
++        if (const char *snd = std::getenv("PS2X_SND"); !snd || std::strcmp(snd, "0") != 0)
++            wotmSndInstall(runtime);
 +
 +        if (const char *noop = std::getenv("PS2X_NOOP")) // lista de enderecos hex separados por virgula: funcoes viram no-op
 +        {

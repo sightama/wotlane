@@ -66,6 +66,8 @@ while (-not $proc.HasExited) {
 }
 $proc.WaitForExit()
 $rc = $proc.ExitCode
+# o build_dev.bat nao repassa a falha do ninja (sai com 0 e o .exe antigo fica): confere o log tambem
+if ($rc -eq 0 -and (Read-Log) -match '(?m)^FAILED:|error C\d{4}|error LNK\d{4}') { $rc = 1 }
 $secs = $sw.Elapsed.TotalSeconds
 
 if ($rc -eq 0) {

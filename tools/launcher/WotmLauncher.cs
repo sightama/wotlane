@@ -25,8 +25,13 @@ class Launcher : Form
         new Flag("Execucao", ":Auto", true, "Roteiro automatico ate a fase", "-Auto 1: o pad do roteiro joga ate uma fase (~50 s). Desmarcado: voce joga com o teclado."),
         new Flag("Execucao", ":Stats", false, "Estatisticas no log (PS2X_STATS)", "-Stats 1: [native]/[ui]/[time] em live.err.log."),
         new Flag("Execucao", ":LTCG", false, "Usar o build com LTCG (pasta build)", "-Build build em vez de build_dev. So vale se voce compilou com build_runtime.bat build."),
+        new Flag("Execucao", "WOTM_RATEMIN=0", false, "Diagnostico: tirar o limite do updateRate (dt livre)", "Por padrao o runtime devolve updateRate >= 30 ao jogo (dt <= 1/30): sem isso, nos quadros lentos a fisica integra com dt grande e diverge (pelo do Congar esticado, monstro girando sozinho)."),
+
+        new Flag("Controle", "PS2X_PADLOG", false, "Log do gamepad (nome e eixos no live.err.log)", "Linhas [pad]: nome do gamepad 0 e cada mudanca dos analogicos, com o horario."),
+        new Flag("Controle", "PS2X_PAD_DEADZONE=0.25", false, "Zona morta de 0,25 nos analogicos", "Sem ela o runtime repassa qualquer desvio do eixo ao jogo."),
 
         new Flag("Camera", "WOTM_NOINTERP", false, "Comecar com a interpolacao 30->60 desligada", "O jogo anda a 30 quadros/s; a interpolacao mistura dois quadros para desenhar a 60. F4 alterna durante o jogo."),
+        new Flag("Camera", "WOTM_TURNLOG", false, "Log da rotacao dos monstros (live.err.log)", "Uma linha [turn] por monstro por quadro do jogo: rate, aceleracao e velocidade de giro, angulos."),
         new Flag("Camera", "WOTM_CAMLOG", false, "Gravar a camera a cada desenho (live.err.log)", "Uma linha [cam] por desenho: t, g_frame, fov, posicao e direcao."),
 
         new Flag("Desenho", "WOTM_NOFX", false, "Sem particulas/efeitos", "Desliga as particulas de fx[] e os efeitos de wotm_fx."),
