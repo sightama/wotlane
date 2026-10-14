@@ -1145,7 +1145,7 @@ index 0000000..565a327
 +    std::string rtxPath;
 +    long frame = 0;
 +    wotm::Snapshot A, B;   // quadros do jogo anterior e atual (interpolacao: o jogo anda a 30/s, a tela desenha a 60)
-+    bool interp = true;    // F4 liga/desliga a interpolacao
++    bool interp = std::getenv("WOTM_NOINTERP") == nullptr;   // F4 liga/desliga a interpolacao (WOTM_NOINTERP: comeca desligada)
 +};
 +
 +inline uint32_t levelSignature(const wotm::Ram &ram)
