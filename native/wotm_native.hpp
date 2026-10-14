@@ -1211,6 +1211,17 @@ public:
     }
 
     // Sprites ordenados do mais longe ao mais perto, sem escrever profundidade; um lote por textura.
+    // Cantos (esq-baixo, dir-baixo, dir-cima, esq-cima) do destroço virado para a camera (R/U: eixos da tela), girado por s.rot.
+    // Serve ao drawSprites e a checagem VU1.
+    static void spriteCorners(const Sprite &s, const float R[3], const float U[3], float c[4][3]) {
+        const float cs = std::cos(s.rot), sn = std::sin(s.rot), hs = s.size * 0.5f;
+        const float cx[4] = {-1, 1, 1, -1}, cy[4] = {-1, -1, 1, 1};
+        for (int a = 0; a < 3; ++a) {
+            const float ax = (R[a] * cs + U[a] * sn) * hs, ay = (-R[a] * sn + U[a] * cs) * hs;   // eixos "direita" e "cima" girados
+            for (int k = 0; k < 4; ++k) c[k][a] = s.pos[a] + ax * cx[k] + ay * cy[k];
+        }
+    }
+
     void drawSprites(const Ram &ram) {
         if (sprites.empty() || !cam_.ok) return;
         float R[3] = {cam_.fwd[1] * cam_.up[2] - cam_.fwd[2] * cam_.up[1], cam_.fwd[2] * cam_.up[0] - cam_.fwd[0] * cam_.up[2], cam_.fwd[0] * cam_.up[1] - cam_.fwd[1] * cam_.up[0]};
@@ -1248,18 +1259,16 @@ public:
                 u0 = float(c % cols) * 8.f / float(tw); u1 = u0 + 8.f / float(tw);
                 v0 = float(c / cols) * 8.f / float(th); v1 = v0 + 8.f / float(th);
             }
-            const float cs = std::cos(s.rot), sn = std::sin(s.rot), hs = s.size * 0.5f;
-            const float ax[3] = {(R[0] * cs + U[0] * sn) * hs, (R[1] * cs + U[1] * sn) * hs, (R[2] * cs + U[2] * sn) * hs};   // eixo "direita" girado
-            const float ay[3] = {(-R[0] * sn + U[0] * cs) * hs, (-R[1] * sn + U[1] * cs) * hs, (-R[2] * sn + U[2] * cs) * hs};   // eixo "cima" girado
             const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(255.f * std::max(0.f, std::min(1.f, s.rgba[3])));
-            const float cx[4] = {-1, 1, 1, -1}, cy[4] = {-1, -1, 1, 1};   // cantos (esq-baixo, dir-baixo, dir-cima, esq-cima)
+            float c[4][3];
+            spriteCorners(s, R, U, c);
             const float cu[4] = {u0, u1, u1, u0}, cv[4] = {v1, v1, v0, v0};
             const int tri[6] = {0, 1, 2, 0, 2, 3};
             for (int q = 0; q < 6; ++q) {
                 const int k = tri[q];
                 rlColor4ub(cr, cg, cb, ca);
                 rlTexCoord2f(cu[k], cv[k]);
-                rlVertex3f(s.pos[0] + ax[0] * cx[k] + ay[0] * cy[k], s.pos[1] + ax[1] * cx[k] + ay[1] * cy[k], s.pos[2] + ax[2] * cx[k] + ay[2] * cy[k]);
+                rlVertex3f(c[k][0], c[k][1], c[k][2]);
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }
