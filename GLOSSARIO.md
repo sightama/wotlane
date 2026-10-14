@@ -52,31 +52,31 @@ Tudo lido do ELF (strings, stabs, símbolos) e do disco; o que é dedução est�
 
 ## Fases
 
-O **índice** é o do jogo (`GameLevelNames`, 0x6EF748: 28 nomes de 10 bytes) e é o que fica em `Shell::m_levelNum`. O **nome interno** é o dos arquivos `disc/LVL/<NOME>.NGP/.TEX/.RTX/.PTR`. As fases jogáveis também têm `MOV/<NOME>.PSS`, `PTS/<NOME>.AIP/.FOP/.PED/.PUP/.SPT` e `RST/<NOME>.MRS`. `disc/LEVELS.TXT` lista as 15 com `.ngp`. Os nomes longos internos estão em `GameLevelLongNames` (0x6ED120): `Default, Midtown Park, Gamblers Gulch, Rosdale Canyon, Metro City, Century Airfield, Atomic Island, Baytown, Club Caldera, Tsunopolis, UFO, Capitol, Training, Lake Powell, Mini Baytown, Volcano, Tokyo Deathmatch, Dylan, David, Lars, Jenn, Yeon, Jacob, Steve, Pierre, Dodge Ball, Big Shot, Crush` (índice = fase; ainda falta conferir se são os nomes mostrados no jogo).
+O **índice** é o do jogo (`GameLevelNames`, 0x6EF748: 28 nomes de 10 bytes) e é o que fica em `Shell::m_levelNum`. O **nome interno** é o dos arquivos `disc/LVL/<NOME>.NGP/.TEX/.RTX/.PTR`. As fases jogáveis também têm `MOV/<NOME>.PSS`, `PTS/<NOME>.AIP/.FOP/.PED/.PUP/.SPT` e `RST/<NOME>.MRS`. `disc/LEVELS.TXT` lista as 15 com `.ngp`. O **nome do jogo** é o que aparece para o jogador, tirado de `GameLevelLongNames` (0x6ED120, mesmo índice; confirmado pelo dono).
 
 | # | Nome do jogo | Nome interno | Arquivos no disco | Observação |
 |---|---|---|---|---|
-| 0 | — | `default` | — | fase da linha de comando (`whichLevel`, `UseCommandLineLevel`) |
-| 1 | ? | `central` | `CENTRAL` | a fase a que o roteiro `-Auto` chega |
-| 2 | ? | `vegas` | `VEGAS` | |
-| 3 | ? | `canyon2` | `CANYON2` | no modo história, luta contra o Goliath Prime (`assBoss`, `canyon2LevelProgression` em `Shell::InitPlayers`) |
-| 4 | ? | `metro` | `METRO` | |
-| 5 | ? | `airport` | `AIRPORT` | |
-| 6 | ? | `3-Mile` | `3-MILE` | no modo história, luta contra o boss planta (`plantBoss`, `craterSwitched`, `threeMileInitAi`) |
-| 7 | ? | `sanfran` | `SANFRAN` | |
-| 8 | ? | `island` | `ISLAND` | |
-| 9 | ? | `tokyo` | `TOKYO` | |
-| 10 | ? | `ufo` | `UFO` | |
-| 11 | ? | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`, monstros `FINAL`/0x1C0/0x1E0) |
-| 12 | ? | `training` | `TRAINING` | treino |
-| 13 | ? | `canyon1` | `CANYON1` | |
-| 14 | ? | `minisf` | `MINISF` | |
-| 15 | ? | `volcano` | `VOLCANO` | |
-| 16 | ? | `tokyodm` | `TOKYODM` | |
-| 17–24 | — | `dylan`, `david`, `lars`, `jenn`, `yeon`, `jacob`, `steve`, `pierre` | nenhum | nomes de pessoas: provavelmente fases de teste da equipe, sem arquivos |
-| 25 | — | `dball` | `DBALL` | minijogo dodgeball (`m_mode` 7) |
-| 26 | — | `bigshot` | `BIGSHOT` | minijogo bigshot (`m_mode` 8) |
-| 27 | — | `crush` | `CRUSH` | minijogo crush (`m_mode` 9) |
+| 0 | Default | `default` | — | fase da linha de comando (`whichLevel`, `UseCommandLineLevel`) |
+| 1 | Midtown Park | `central` | `CENTRAL` | a fase a que o roteiro `-Auto` chega |
+| 2 | Gamblers Gulch | `vegas` | `VEGAS` | |
+| 3 | Rosdale Canyon | `canyon2` | `CANYON2` | no modo história, luta contra o Goliath Prime (`assBoss`, `canyon2LevelProgression` em `Shell::InitPlayers`) |
+| 4 | Metro City | `metro` | `METRO` | |
+| 5 | Century Airfield | `airport` | `AIRPORT` | |
+| 6 | Atomic Island | `3-Mile` | `3-MILE` | no modo história, luta contra o boss planta (`plantBoss`, `craterSwitched`, `threeMileInitAi`) |
+| 7 | Baytown | `sanfran` | `SANFRAN` | |
+| 8 | Club Caldera | `island` | `ISLAND` | |
+| 9 | Tsunopolis | `tokyo` | `TOKYO` | |
+| 10 | UFO | `ufo` | `UFO` | |
+| 11 | Capitol | `capitol` | `CAPITOL` | no modo história, luta contra o boss final (`finalBoss`, monstros `JELLY`/`FINAL`, 0x1C0/0x1E0) |
+| 12 | Training | `training` | `TRAINING` | treino |
+| 13 | Lake Powell | `canyon1` | `CANYON1` | |
+| 14 | Mini Baytown | `minisf` | `MINISF` | |
+| 15 | Volcano | `volcano` | `VOLCANO` | |
+| 16 | Tokyo Deathmatch | `tokyodm` | `TOKYODM` | |
+| 17–24 | Dylan, David, Lars, Jenn, Yeon, Jacob, Steve, Pierre | `dylan`, `david`, `lars`, `jenn`, `yeon`, `jacob`, `steve`, `pierre` | nenhum | nomes de pessoas: provavelmente fases de teste da equipe, sem arquivos |
+| 25 | Dodge Ball | `dball` | `DBALL` | minijogo dodgeball (`m_mode` 7) |
+| 26 | Big Shot | `bigshot` | `BIGSHOT` | minijogo bigshot (`m_mode` 8) |
+| 27 | Crush | `crush` | `CRUSH` | minijogo crush (`m_mode` 9; o texto do jogo também diz "Crush-o-Rama") |
 
 O caminho de `Shell::LoadResTexture` mostra que índices acima de 0x1C caem em `host0:monster.rtx`.
 
