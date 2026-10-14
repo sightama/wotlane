@@ -12,6 +12,7 @@ public:
     /* weapon slot that carries a thrown non-rigid pickup; ids are the thrower's and the target's interactive ids (0 if none) */
     int CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector *rot);
     void CreateLavaBall(_fvector *pos, _fvector *dir, _fvector *target, int a, int b);
+    void CreateFire(_fvector *pos, float r, int id);
 };
 
 #endif
