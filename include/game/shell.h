@@ -16,20 +16,25 @@ public:
     _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on */
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons) */
     _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one */
-    char pad7C[0x88 - 0x7C];
+    char pad7C[0x84 - 0x7C];
+    _cs *m_costumeBoxCs3; /* 0x84: third costume panel of the three-player select (screenCharSelect3P: the AI, or in mode 2 the first AI) */
     _cs *m_costumeBoxCs;  /* 0x88: costume panel of the monster select (+0x7C is its alpha, faded in by screenCharSelect1P) */
     _cs *m_costumeBoxCs2; /* 0x8C: m_costumeBoxCs of player two (or the AI) in the two-player select */
     _hierswitch *m_costumeSw[4]; /* 0x90: one per costume of the highlighted monster: 0 unavailable, 1 available, 2 cursor */
     _hierswitch *m_costumeSw2[4]; /* 0xA0: m_costumeSw of player two in the two-player selects */
     _cs *m_costumeBoxCsMG[2];     /* 0xB0: costume panel of each player in the two-player minigame select */
     _hierswitch *m_costumeSwMG[2][4]; /* 0xB8: m_costumeSw of each player in the two-player minigame select */
-    char padD8[0x160 - 0xD8];
+    char padD8[0xF8 - 0xD8];
+    _hierswitch *m_costumeSw3[4]; /* 0xF8: m_costumeSw of the third panel (m_costumeBoxCs3) */
+    char pad108[0x160 - 0x108];
     _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
     char pad164[0x168 - 0x164];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
     char pad190[0x194 - 0x190];
     _hierswitch *m_selectSwMG[10]; /* 0x194: m_selectSw of the minigame monster select */
-    char pad1BC[0x25C - 0x1BC];
+    char pad1BC[0x1C0 - 0x1BC];
+    _hierswitch *m_monsterCursorSw[3]; /* 0x1C0: monster column under each cursor of the multi-player selects (player one, player two or second AI, AI) */
+    char pad1CC[0x25C - 0x1CC];
     _hierswitch *m_menuItemSw[22][10]; /* 0x25C: [screen][item] highlight switch of each menu item (null ends the list); TagList::m_tags */
     _hierswitch *m_sw5CC; /* 0x5CC: set to 0 when a two-player mode is picked */
     _hierswitch *m_sw5D0; /* 0x5D0: 0 on the main and mode menus; the level select sets it to the first level of the list */
@@ -179,6 +184,9 @@ SHELL_AT(m_costumeBoxCs2, 0x8C);
 SHELL_AT(m_costumeSw2, 0xA0);
 SHELL_AT(m_costumeBoxCsMG, 0xB0);
 SHELL_AT(m_costumeSwMG, 0xB8);
+SHELL_AT(m_costumeBoxCs3, 0x84);
+SHELL_AT(m_costumeSw3, 0xF8);
+SHELL_AT(m_monsterCursorSw, 0x1C0);
 SHELL_AT(m_sw5D0, 0x5D0);
 SHELL_AT(m_sw25D0, 0x25D0);
 SHELL_AT(m_musicVolumeSaved, 0x2A3C);
