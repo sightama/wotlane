@@ -7,6 +7,7 @@
 #include "game/enemy_info.h"
 #include "game/monster_state.h"
 #include "game/anim_blend.h"
+#include "game/crush_level.h"
 #include "vecmath.h"
 
 class GamePad {
@@ -18,6 +19,7 @@ class HealthMeter {
 public:
     void creditFull(void);
     void credit(float amount);
+    void drain(float amount);
 };
 class Ai {
 public:
@@ -70,6 +72,10 @@ public:
 };
 extern int moviePlaying;
 extern int movieAborted;
+extern int stackCountDownActive;
+extern "C" int printf(const char *, ...);
+/* DodgeBallLevel::instance starts with the hit count of each player (indexed by Monster::m_index) */
+extern int dodgeBallHits[2] __asm__("_14DodgeBallLevel$instance");
 class DbInteractive;
 class ActionDispatch {
 public:
@@ -935,7 +941,53 @@ dmg:
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeHit__7MonsterP8_fvectorfi);
 #endif
+/* Drains `damage` from the health meter and blows the monster up when it runs out. Ignored in crush mode before
+   sudden death, while game->f120464 is set, from a dead source, in state 0x40, without `force` while m_unk49 is
+   clear, while god mode (or 0xEA) is on, and for player 1 during a movie or the stack countdown. In dodgeball
+   (mode 7) only the third hit from the same source counts, as 1000 damage. An AI source (m_playerNum 2) scales the
+   damage by its difficulty factor (Ai+0x152C, set by Ai::init). */
+#ifdef NON_MATCHING
+/* 11/133 words, untuned: retail tests the flag bytes 0xE9 and 0xEA with one ld + mask; scheduling differs */
+void Monster::takeDamage(float damage, bool force, Monster *source)
+{
+    if (game->m_gameMode == 9 && CrushLevel::instance.m_suddenDeath == 0)
+        return;
+    if (game->f120464 != 0)
+        return;
+    if (source != 0 && source->m_dead != 0)
+        return;
+    if (*m_state == 0x40)
+        return;
+    if (!force && m_unk49 == 0)
+        return;
+    if (m_godMode != 0 || m_unkEA != 0)
+        return;
+    if ((moviePlaying != 0 || stackCountDownActive != 0) && m_playerNum == 1)
+        return;
+    if (game->m_gameMode == 7) {
+        if (source == 0) {
+            damage = 0.0f;
+            printf("No source in Dodgeball hit\n");
+        } else {
+            damage = 0.0f;
+            dodgeBallHits[source->m_index]++;
+            if (dodgeBallHits[source->m_index] == 3)
+                damage = 1000.0f;
+        }
+    }
+    if (damage > 0.0f) {
+        if (source != 0 && source->m_playerNum == 2)
+            damage *= *(float *)(source->m_ai + 0x152C);
+        ((HealthMeter *)((char *)this + 0x448))->drain(damage);
+        if (damage >= 0.01f && m_hitFlash < -10)
+            m_hitFlash = 3;
+        if (m_health <= 0.0f)
+            blowUpMonster(source);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeDamage__7MonsterfbP7Monster);
+#endif
 /* Plays a one-shot additive recoil of the given weight from the side `dir` comes from: animation 0x96/0x97 when dir
    lies mostly along the cs x axis (positive/negative), 0x98/0x99 when mostly along y. */
 #ifdef NON_MATCHING

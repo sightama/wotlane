@@ -375,7 +375,7 @@ public:
     int m_healthGlow[3];   /* 0x4B0 */
     int m_staminaGlow[3];   /* 0x4BC */
     int m_specialGlow[3];   /* 0x4C8 */
-    char pad4D4[0x4D8 - 0x4D4];
+    int m_hitFlash;   /* 0x4D4: set to 3 by takeDamage once it is below -10; updatePowerUpGlow counts it down */
     PlayerDat * m_playerInfo;   /* 0x4D8 */
     char pad4DC[0x4E0 - 0x4DC];
     char m_ai[0x1A10 - 0x4E0];   /* 0x4E0: the embedded Ai (ai.h) that drives an AI monster's inputs; its exact size is not known, this runs up to the next named field */
@@ -531,7 +531,7 @@ public:
     char pad12044C[4];
     int f120450, f120454, f120458, f12045C; /* zeroed by InitAfterDbLoad */
     int f120460;                     /* set to 1 by InitAfterDbLoad */
-    char pad120464[4];
+    int f120464;                     /* 0x120464: takeDamage ignores all damage while set */
     int f120468;                     /* set to 1 by InitAfterDbLoad */
     struct PadTweaks {               /* 0x12046C: copied into every monster's PadFlags by UpdatePadTweaks */
         int t16C4;
