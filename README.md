@@ -57,6 +57,8 @@ Gerado por `tools/update_readme.py` a partir de `config/status.csv` (veja `tools
 <details>
   <summary>Ver mídia sobre o progresso</summary>
 
+Veja mais imagens em docs/screenshots
+
 <img width="1024" height="768" alt="image" src="https://github.com/user-attachments/assets/c374d9bd-b484-45e7-88f3-e50b50bb1985" />
 
 https://github.com/user-attachments/assets/758f6b00-cc1d-4ac8-87dd-0591663a8dcf
