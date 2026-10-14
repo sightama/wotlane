@@ -1,4 +1,5 @@
-"""ramdump.py <elf> <out.bin>: dump the 32 MB of EE RAM of the running PCSX2 (found by matching the ELF's code at 0x100100)."""
+"""ramdump.py <elf> <out.bin> [process]: dump the 32 MB of EE RAM of the running PCSX2 (found by matching the ELF's code at 0x100100).
+process defaults to pcsx2-qt; pass ps2EntryRunner for the recompiled runtime."""
 import ctypes, ctypes.wintypes as wt, subprocess, sys
 from elftools.elf.elffile import ELFFile
 
@@ -6,7 +7,7 @@ elf = ELFFile(open(sys.argv[1], 'rb'))
 seg0 = [s for s in elf.iter_segments() if s['p_type'] == 'PT_LOAD'][0]
 anchor = seg0.data()[0x100:0x100 + 48]
 k = ctypes.WinDLL('kernel32', use_last_error=True)
-pid = int(subprocess.check_output(['powershell', '-NoProfile', '-Command', '(Get-Process pcsx2-qt).Id']).split()[0])
+pid = int(subprocess.check_output(['powershell', '-NoProfile', '-Command', '(Get-Process %s).Id' % (sys.argv[3] if len(sys.argv) > 3 else 'pcsx2-qt')]).split()[0])
 h = k.OpenProcess(0x0410, False, pid)
 
 

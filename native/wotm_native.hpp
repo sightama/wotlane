@@ -1677,6 +1677,12 @@ public:
                 }
             }
             const MeshData *mdi = mesh(ram, list[i].node);
+            {   // diagnostico: WOTM_LISTITEMS=1 lista os itens de cada passe (no, texId, zBufferFudge, translucido, posicao, triangulos)
+                static const bool li = std::getenv("WOTM_LISTITEMS") != nullptr;
+                if (li && !wire)
+                    std::fprintf(stderr, "[item] pass %d no %x tex %u fz %.4f tris %zu pos %.1f %.1f %.1f\n", pass, list[i].node, unsigned(ram.u16(list[i].node + 0x50)),
+                                 ram.f32(list[i].node + 0x28), mdi ? mdi->tris.size() / 3 : size_t(0), list[i].m.m[3][0], list[i].m.m[3][1], list[i].m.m[3][2]);
+            }
             const uint32_t smask = (mdi && mdi->slotMask) ? mdi->slotMask : 1u;
             for (uint32_t sl = 0; sl < 5; ++sl) {
             if (!(smask & (1u << sl))) continue;
@@ -1787,6 +1793,8 @@ public:
             // olho muda so a profundidade, nao a posicao na tela: resolve o z-fighting de camadas coplanares.
             const float fz = ram.f32(it.node + 0x28);
             const bool fudge = !wire && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
+            static const bool fzOld = std::getenv("WOTM_FUDGEOLD") != nullptr;   // diagnostico: direcao antiga (>1 = mais longe)
+            const float fzScale = fzOld ? fz : 1.f / fz;
             {   // diagnostico: WOTM_SKINBOX=1 imprime a caixa (mundo) dos vertices skinned de cada no, por osso x
                 static const bool sb = std::getenv("WOTM_SKINBOX") != nullptr;
                 if (sb && pm && md->skinned && !wire) {
@@ -1812,7 +1820,7 @@ public:
                 for (int c = 0; c < 3; ++c) {
                     if (pm) skinVertexPM(pm, skinM, t[k + c], p[c]);
                     else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
-                    if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fz;
+                    if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fzScale;
                 }
                 for (int c = 0; c < 3; ++c) {
                     const int cs[2] = {c, (c + 1) % 3};
