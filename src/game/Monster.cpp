@@ -5,6 +5,8 @@
 #include "task_manager.h"
 #include "game/level_pickups.h"
 #include "game/enemy_info.h"
+#include "game/monster_state.h"
+#include "game/anim_blend.h"
 #include "vecmath.h"
 
 class GamePad {
@@ -28,11 +30,6 @@ struct Q16 {
 extern "C" float cosf(float);
 extern float UpMatrix[4][4];
 void *particleGetParticle(int h);
-class AnimBlend {
-public:
-    void setPercent(float p);
-    void rampOut(float t);
-};
 void animationTransitionInto(_animHandle &h, float t, int a, int b);
 class StateDeath {
 public:
@@ -41,6 +38,16 @@ public:
 };
 void mathfCopyMatrixNotAligned(float (*dst)[4], float (*src)[4]);
 void mathfRPHFromMatrix(float (*m)[4], _fvector *out);
+void mathfMulMatrix(float (*d)[4], float (*a)[4], float (*b)[4]);
+void mathfMulMatrixTP(float (*dst)[4], float (*a)[4], float (*b)[4]);
+void mathfMulVec(float (*m)[4], _fvector *v, _fvector *out);
+void mathfOrthonormalize(float (*m)[4]);
+class StateGrappled {
+public:
+    enum SubState { SUB_0, SUB_1, SUB_2 };
+    void enterSubState(SubState s);
+    bool isOverhead(void);
+};
 int viewInFOV(int view, _fvector *a, _fvector *b);
 class AiPath;
 class AiPathNet {
@@ -58,14 +65,12 @@ class MonsterDynamics {
 public:
     void updateMove(bool b);
     void updateTurn(bool b);
+    void allStop(void);
+    void updatePosition(void);
 };
 extern int moviePlaying;
 extern int movieAborted;
 class DbInteractive;
-class AnimPappy {
-public:
-    void update(DbInteractive &d);
-};
 class ActionDispatch {
 public:
     static unsigned stopAllActiveActions(void) __asm__("stopAllActiveActions__14ActionDispatchv");
@@ -317,7 +322,25 @@ void Monster::setReticles(int view)
         }
     }
 }
+/* Teleports the monster: moves the cs, the shadow and the foot probe to p and stops all motion. */
+#ifdef NON_MATCHING
+/* 8/32 words: retail reloads p into v0 for every copy and stores before the getFootHDResult call */
+void Monster::setTrans(_fvector &p)
+{
+    m_cs->trans = p;
+    *(FVECTOR *)((char *)this + 0x90) = p;
+    m_shadow->trans = p;
+    *(FVECTOR *)((char *)this + 0x1A50) = p;
+    *(FVECTOR *)((char *)getFootHDResult() + 0x10) = p;
+    ((MonsterDynamics *)((char *)this + 0x100))->allStop();
+    vecStoreUnitW((_fvector *)((char *)this + 0x1E0));
+    vecStoreUnitW((_fvector *)((char *)this + 0x260));
+    m_fallTime = 0;
+    m_freeFalling = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", setTrans__7MonsterR8_fvector);
+#endif
 void Monster::setRot(float a, float b, float c)
 {
     char *src;
@@ -396,7 +419,33 @@ float Monster::getStaminaGain(void)
     type = *(int *)(*(char **)m_pickup + 0xA0);
     return m_puStaminaGainMod[type] * LevelPickups::s_info[type].staminaGain;
 }
+/* Where the monster is aiming and at what: the pinned target, else the sticky target, else nothing (aim at the reticle).
+   With `lead`, the target position gets the lead offset at 0x6990 added (the pinned one only when the auto-lead has not
+   already moved the reticle). */
+#ifdef NON_MATCHING
+/* 4/46 words: retail copies the trans through a separate pointer (addiu +0x10, lq 0) and lays the returns out apart */
+DbInteractive *Monster::getTarget(_fvector &v, bool lead)
+{
+    if (m_pinTarget != 0) {
+        if (m_autoLeadMovesReticle != 0 || !lead)
+            *(FVECTOR *)&v = m_reticleCS->trans;
+        else
+            vecAdd(&v, &m_reticleCS->trans, (_fvector *)((char *)this + 0x6990));
+        return (DbInteractive *)m_pinTarget;
+    }
+    if (m_stickyReticleOn != 0) {
+        if (!lead)
+            *(FVECTOR *)&v = m_stickyReticleCS->trans;
+        else
+            vecAdd(&v, &m_stickyReticleCS->trans, (_fvector *)((char *)this + 0x6990));
+        return (DbInteractive *)m_stickyReticleOn;
+    }
+    *(FVECTOR *)&v = m_reticleCS->trans;
+    return 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getTarget__7MonsterR8_fvectorb);
+#endif
 void Monster::throwPickup(int a, float b)
 {
     _fvector dir;
@@ -410,10 +459,77 @@ void Monster::throwPickup(int a, float b)
         d[12] = 0;
     m_pickup = 0;
 }
+/* Lets go of the held pickup. If the current state is one that carries it (flag 2, or state 0x1E), the state is preempted
+   and re-entered so the monster drops the carrying pose. */
+#ifdef NON_MATCHING
+/* 11/45 words: retail tests the flag with a 64-bit bitfield load (ld/dsll/dsra32) */
+void Monster::dropPickup(void)
+{
+    char **it = (char **)m_pickup;
+    MonsterState *st;
+
+    if (it == 0)
+        return;
+    LevelPickups::dropPickup(*(PickupIter *)&m_pickup);
+    m_pickup = 0;
+    if ((*(unsigned char *)(*it + 0x50) >> 1) & 1) {
+        st = (MonsterState *)m_state;
+        if ((st->flags & 2) || st->id == 0x1E) {
+            ((void (*)(void *, MonsterState *))*(void **)((char *)st->vptr + 0x44))((char *)st + *(short *)((char *)st->vptr + 0x40), st);
+            *(int *)((char *)this + 0x130) = 0;
+            st = (MonsterState *)m_state;
+            ((void (*)(void *))*(void **)((char *)st->vptr + 0x14))((char *)st + *(short *)((char *)st->vptr + 0x10));
+        } else {
+            *(int *)((char *)this + 0x130) = 0;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", dropPickup__7Monster);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", launchDefaultProjectile__7Monsteri);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateDefaultProjectile__7Monster);
+/* Moves the monster for this frame (unless it is being grappled) and drags the monster it holds along: an overhead
+   victim keeps its grip pose relative to the holder (matrix at 0x3280 of the victim and 0x32C0 of the holder, grip
+   points at victim+0x3E00 and holder+0x3E10); any other victim is kept 100 units along the holder's y axis. */
+#ifdef NON_MATCHING
+/* 14/102 words: retail keeps m_target in v0 (reloading it for every use) and computes 0x32C0 later */
+void Monster::updatePosition(void)
+{
+    if (m_grappler == 0) {
+        ((MonsterDynamics *)((char *)this + 0x100))->updatePosition();
+        if (m_target != 0) {
+            Monster *t = (Monster *)m_target;
+
+            if (((StateGrappled *)((char *)t + 0xDDCC))->isOverhead()) {
+                float (*hold)[4] = (float (*)[4])((char *)this + 0x32C0);
+                float rel[4][4] __attribute__((aligned(16)));
+                FVECTOR d;
+                FVECTOR local;
+
+                mathfMulMatrixTP(rel, t->m_cs->mat, (float (*)[4])((char *)t + 0x3280));
+                mathfMulMatrix(((Monster *)m_target)->m_cs->mat, rel, hold);
+                mathfOrthonormalize(((Monster *)m_target)->m_cs->mat);
+                mathfRPHFromMatrix(((Monster *)m_target)->m_cs->mat, &((Monster *)m_target)->m_cs->rot);
+                t = (Monster *)m_target;
+                vecSub(&d, &t->m_cs->trans, (_fvector *)((char *)t + 0x3E00));
+                mathfMulVec((float (*)[4])((char *)t + 0x3280), &d, &local);
+                vecApplyRows(&d, hold, &local);
+                vecAdd(&((Monster *)m_target)->m_cs->trans, (_fvector *)((char *)this + 0x3E10), &d);
+            } else {
+                FVECTOR up;
+
+                vecScale(&up, (_fvector *)m_cs->mat[1], 100.0f);
+                ((Monster *)m_target)->m_cs->trans.x = m_cs->trans.x + up.x;
+                ((Monster *)m_target)->m_cs->trans.y = m_cs->trans.y + up.y;
+            }
+        }
+    }
+    updateDefaultProjectile();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updatePosition__7Monster);
+#endif
 #ifdef NON_MATCHING
 class HitEvent;
 class StateRecoil {
@@ -431,11 +547,6 @@ public:
 class StateBlock {
 public:
     int isBlockable(HitEvent &e);
-};
-class StateGrappled {
-public:
-    enum SubState { SUB_0, SUB_1, SUB_2 };
-    void enterSubState(SubState s);
 };
 class LevelObjectSoundManager {
 public:
@@ -825,7 +936,34 @@ dmg:
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeHit__7MonsterP8_fvectorfi);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeDamage__7MonsterfbP7Monster);
+/* Plays a one-shot additive recoil of the given weight from the side `dir` comes from: animation 0x96/0x97 when dir
+   lies mostly along the cs x axis (positive/negative), 0x98/0x99 when mostly along y. */
+#ifdef NON_MATCHING
+/* 8/93 words: retail computes the two dot products with mula.s/madda.s/madd.s */
+void Monster::takeAdditiveRecoil(_fvector &dir, float weight)
+{
+    float (*m)[4] = m_cs->mat;
+    float dx = dir.x * m[0][0] + dir.y * m[0][1] + dir.z * m[0][2];
+    float dy = dir.x * m[1][0] + dir.y * m[1][1] + dir.z * m[1][2];
+    int anim;
+    AnimBlend *b;
+
+    if (fabsf(dy) < fabsf(dx))
+        anim = dx >= 0.0f ? 0x96 : 0x97;
+    else
+        anim = dy >= 0.0f ? 0x98 : 0x99;
+    b = AnimBlendPool::alloc();
+    if (b != 0) {
+        b->init(m_anims[anim]);
+        b->m_weight = weight;
+        b->m_node.blendType = BLEND_ADDITIVE;
+        b->m_node.priority = 999;
+        b->runAndDealloc(0.0f, 0.0f);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeAdditiveRecoil__7MonsterR8_fvectorf);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", knockBack__7MonsterR8_fvectorff);
 void Monster::blowUpMonster(Monster *killer)
 {
@@ -986,7 +1124,44 @@ Monster *Monster::getClosestMonsterToOrientation(float angle, float maxDist)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToOrientation__7Monsterff);
 #endif
+/* The monster whose locator locB lies within maxDist of this monster's locator locA and closest to the y axis of
+   locA's matrix, inside a cone of `angle` radians; 0 if none. */
+#ifdef NON_MATCHING
+/* untuned (0x1B8 vs 0x194 bytes): retail walks the slots with a running offset and uses mula.s/madda.s for the dot product */
+Monster *Monster::getClosestMonsterToOrientation(int locA, int locB, float angle, float maxDist)
+{
+    _fvector *fwd = (_fvector *)((char *)getLocatorMat(locA) + 0x10);
+    _fvector *pa = (_fvector *)getLocatorTrans(locA);
+    Monster *best = 0;
+    float c = cosf(angle * 0.5f);
+    float bestSq = maxDist * maxDist;
+    int j;
+
+    for (j = 0; j < game->m_numSlots; j++) {
+        Monster *m = &game->m_slots[j];
+
+        if (m->m_playerNum != 0 && m != this && m != m_target) {
+            FVECTOR d;
+            float sq;
+            float dot;
+
+            vecSub(&d, (_fvector *)m->getLocatorTrans(locB), pa);
+            sq = vecLenSq(&d);
+            if (sq < bestSq) {
+                dot = (fwd->x * d.x + fwd->y * d.y + fwd->z * d.z) / eeSqrtf(sq);
+                if (c < dot) {
+                    c = dot;
+                    bestSq = sq;
+                    best = m;
+                }
+            }
+        }
+    }
+    return best;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToOrientation__7Monsteriiff);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToPunch__7Monsterfff);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterInFOV__7MonsterR8_fvectorfT1fRf);
 Monster *Monster::getClosestTargetable(unsigned short a, bool b, float x, float y)
@@ -995,7 +1170,29 @@ Monster *Monster::getClosestTargetable(unsigned short a, bool b, float x, float 
 }
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestTargetable__7MonsterUsbfff);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getLookAtTarget__7Monster);
+/* The destructible under the reticle, if the reticle probe (64-bit hit word at 0x6C50, interactive index in bits 32..42)
+   hit one and it is closer than sqrt(maxDistSq) on the ground plane; 0 otherwise. */
+#ifdef NON_MATCHING
+/* 31/43 words: retail squares with mula.s/madd.s and keeps the result in a0 */
+DbInteractive *Monster::getDestructibleFromReticle(float maxDistSq)
+{
+    unsigned long long hit = *(unsigned long long *)((char *)this + 0x6C50);
+    int *d;
+    FVECTOR v;
+
+    if (hit & 0x7FF00000000ULL) {
+        d = Interactives::getInteractive((int)(hit >> 32) & 0x7FF);
+        if (d != 0 && *d == 3) {
+            vecSub(&v, &m_reticleCS->trans, &m_cs->trans);
+            if (v.x * v.x + v.y * v.y < maxDistSq)
+                return (DbInteractive *)d;
+        }
+    }
+    return 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getDestructibleFromReticle__7Monsterf);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", addAttachment__7MonsterP9_hierhead);
 void Monster::handleAction(ActAiNavigation *a)
 {
@@ -1183,7 +1380,34 @@ unsigned Monster::updateClosestPath(void)
         m_closestPath = AiPathNet::monster.getClosestPath(*(_fvector *)((char *)m_cs + 0x10), 0xFF);
     return 0x1E;
 }
+/* The reticle is hidden in state 0x40, while a sticky target is shown, while the reticle is on a dead monster, while
+   being grappled, and while holding a grappled monster that is not overhead. */
+#ifdef NON_MATCHING
+/* 10/51 words: retail places the early returns and the isOverhead result in a different block order */
+int Monster::okToDrawReticle(void)
+{
+    char *self = (char *)this;
+    unsigned long long hit;
+
+    if (((MonsterState *)m_state)->id == 0x40)
+        return 0;
+    if (m_stickyReticleOn != 0)
+        return 0;
+    if (*(signed char *)(self + 0x6C50) != 0) {
+        hit = *(unsigned long long *)(self + 0x6C50);
+        if ((hit & 0x7FF00000000ULL) && *Interactives::getInteractive((int)(hit >> 32) & 0x7FF) == 1
+            && ((Monster *)Interactives::getInteractive(*(int *)(self + 0x6C54) & 0x7FF))->m_dead != 0)
+            return 0;
+    }
+    if (m_grappler != 0)
+        return 0;
+    if (m_target != 0)
+        return ((StateGrappled *)((char *)m_target + 0xDDCC))->isOverhead() != 0;
+    return 1;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", okToDrawReticle__7Monster);
+#endif
 void Monster::setCloakOn(void)
 {
     if (m_cloaked == 0) {

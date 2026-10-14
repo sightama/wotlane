@@ -86,6 +86,7 @@ public:
     int okToDrawReticle(void);
     void updateWaterWake(float y, bool on);
     Monster *getClosestMonsterToOrientation(float angle, float maxDist);
+    Monster *getClosestMonsterToOrientation(int locA, int locB, float angle, float maxDist);
     void creditStamina(float amount, bool baseOnly);
     void startCinema(void);
     Monster *getClosestMonster(float maxDist);
@@ -115,6 +116,7 @@ public:
     void creditHealth(float amount);
     void setRot(float a, float b, float c);
     void setTrans(_fvector &p);
+    DbInteractive *getDestructibleFromReticle(float maxDistSq);
     void *getLocatorTrans(int i);
     void *getLocatorMat(int i);
     void *getAnim(MonsterAnim a);
@@ -159,6 +161,7 @@ public:
     void update(void);
     void updateCinema(void);
     void updatePosition(void);
+    void updateDefaultProjectile(void);
     _cs * getShadow(void);
     float getAimHeading(void) const;
     float getAimPitch(void) const;
