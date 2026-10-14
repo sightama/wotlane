@@ -118,7 +118,7 @@ segments:
       - [0x03E928, cpp, game/HeliPickup]  # c++, 12 funcs, name: guess
       - [0x03F6A0, cpp, game/HeliVehicle]  # c++, 10 funcs, name: guess
       - [0x03FD40, asm, game/HeliVehicleNav]  # c++, 25 funcs, name: guess
-      - [0x041608, asm, game/HomingBug]  # c++, 25 funcs, name: guess
+      - [0x041608, cpp, game/HomingBug]  # c++, 25 funcs, name: guess
       - [0x043038, cpp, game/Hud]  # c++, 26 funcs, name: guess
       - [0x047160, cpp, game/Interactives]  # c++, 10 funcs, name: guess
       - [0x047450, cpp, game/island]  # c++, 7 funcs, name: guess
@@ -541,7 +541,7 @@ segments:
       - [0x5E9750, .rodata, game/GrappleThrow]
       - [0x5E98C0, .rodata, game/HeliPickup]
       - [0x5E9980, rodata, game/HeliVehicleNav]
-      - [0x5E99A0, rodata, game/HomingBug]
+      - [0x5E99A0, .rodata, game/HomingBug]
       - [0x5EA8F0, .rodata, game/Hud]
       - [0x5EAB50, .rodata, game/Interactives]
       - [0x5EABA0, rodata, game/McFile]

@@ -144,3 +144,4 @@ common/ScreenPolys
 common/SoundBank
 game/Sound
 game/ActionDispatch
+game/HomingBug
