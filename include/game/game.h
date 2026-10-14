@@ -115,6 +115,7 @@ public:
     void creditHealth(float amount);
     void setRot(float a, float b, float c);
     void setTrans(_fvector &p);
+    DbInteractive *getDestructibleFromReticle(float maxDistSq);
     void *getLocatorTrans(int i);
     void *getLocatorMat(int i);
     void *getAnim(MonsterAnim a);
