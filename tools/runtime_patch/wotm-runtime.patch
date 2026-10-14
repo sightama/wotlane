@@ -449,6 +449,77 @@ index c5e31c4..6cf1b45 100644
          while (remaining > 0u)
          {
              const uint32_t step = static_cast<uint32_t>(std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
+index 56a978e..0869e07 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
+@@ -3,6 +3,8 @@
+ #include "MPEG.h"
+ #include "runtime/ee_scheduler.h"
+ 
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
++
+ namespace ps2_stubs
+ {
+     namespace
+@@ -601,6 +603,7 @@ namespace ps2_stubs
+ 
+         CdFileEntry entry;
+         bool found = registerCdFile(path, entry);
++        wotmBoot("disco: %s%s", sanitizeForLog(path).c_str(), found ? "" : " (NAO ENCONTRADO)");
+         CdFileEntry resolvedEntry = entry;
+         std::string resolvedPath;
+ 
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+index b1bb6d8..5905052 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
+@@ -1,5 +1,8 @@
+ #include <algorithm>
+ #include <cctype>
++#include <chrono>
++
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
+ 
+ namespace
+ {
+@@ -432,7 +435,20 @@ namespace
+         return true;
+     }
+ 
++    bool readCdSectorsImpl(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount, const char *&from);
++
++    // rastro do boot: cada leitura com a origem (arquivo de discroot ou ISO) e o tempo que levou
+     bool readCdSectors(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount)
++    {
++        const char *from = "?";
++        const auto t0 = std::chrono::steady_clock::now();
++        const bool ok = readCdSectorsImpl(lbn, sectors, dst, byteCount, from);
++        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
++        wotmBoot("disco: LSN %u, %u setores (%s) em %.1f ms%s", lbn, sectors, from, ms, ok ? "" : " FALHOU");
++        return ok;
++    }
++
++    bool readCdSectorsImpl(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount, const char *&from)
+     {
+         for (const auto &[key, entry] : g_cdFilesByKey)
+         {
+@@ -444,6 +460,7 @@ namespace
+ 
+             const uint64_t relativeLbn = static_cast<uint64_t>(lbn - entry.baseLbn);
+             const uint64_t offset = relativeLbn * kCdSectorSize;
++            from = "discroot";
+             return readHostRange(entry.hostPath, offset, dst, byteCount);
+         }
+ 
+@@ -463,6 +480,7 @@ namespace
+             }
+ 
+             const uint64_t offset = static_cast<uint64_t>(lbn) * kCdSectorSize;
++            from = "ISO";
+             return readHostRange(cdImage, offset, dst, byteCount);
+         }
+ 
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 index 5658928..d8b3573 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
@@ -645,6 +716,22 @@ index 0000000..9d839e4
 +#else
 +void wotmHostProfInit() {}
 +#endif
+diff --git a/ps2xRuntime/src/lib/ps2_iop_host.cpp b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+index 8d46e03..15595a9 100644
+--- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
++++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
+@@ -517,8 +517,11 @@ bool PS2IopHostAdapter::sendSifCommand(uint32_t commandId,
+                                          packetSize);
+ }
+ 
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
++
+ void PS2IopHostAdapter::log(ps2x::iop::LogLevel level, std::string_view message)
+ {
++    wotmBoot("IOP: %.*s", static_cast<int>(std::min<size_t>(message.size(), 160)), message.data());
+     const char *prefix = "[ps2xIOP]";
+     if (level == ps2x::iop::LogLevel::Warning)
+     {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
 index 37b6a4d..3f2567f 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
@@ -827,7 +914,7 @@ index 8590f14..addb826 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..02338cf 100644
+index 45cb9d2..31fbce5 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -844,7 +931,15 @@ index 45cb9d2..02338cf 100644
  
  #include <iostream>
  #include <stdexcept>
-@@ -414,7 +417,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -31,6 +34,7 @@ namespace ps2_stubs
+ {
+     void resetSifState();
+ }
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
+ 
+ #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
+ #define ET_EXEC 2            // Executable file
+@@ -414,7 +418,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                     &sourceFbp,
                                                     &usedPreferredDisplaySource))
      {
@@ -853,7 +948,17 @@ index 45cb9d2..02338cf 100644
          UpdateTexture(tex, blank.data);
          UnloadImage(blank);
          outWidth = FB_WIDTH;
-@@ -1008,6 +1011,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -732,7 +736,9 @@ bool PS2Runtime::initialize(const char *title)
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
+ #else
+         SetConfigFlags(FLAG_WINDOW_RESIZABLE);
++        wotmBoot("abrindo a janela (OpenGL)");
+         InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
++        wotmBoot("abrindo o audio");
+         InitAudioDevice();
+         m_audioBackend.setAudioReady(IsAudioDeviceReady());
+ #endif
+@@ -1008,6 +1014,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,
                                        elfCrc32Valid);
@@ -864,7 +969,7 @@ index 45cb9d2..02338cf 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1349,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1352,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -878,7 +983,7 @@ index 45cb9d2..02338cf 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1365,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1368,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -896,7 +1001,7 @@ index 45cb9d2..02338cf 100644
          return false;
      }
  
-@@ -1396,6 +1414,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1417,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -904,7 +1009,7 @@ index 45cb9d2..02338cf 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1422,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1425,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -916,7 +1021,7 @@ index 45cb9d2..02338cf 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1445,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1448,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -948,7 +1053,7 @@ index 45cb9d2..02338cf 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1481,100 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1484,100 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -1049,7 +1154,7 @@ index 45cb9d2..02338cf 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2211,7 +2342,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2345,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -1061,7 +1166,15 @@ index 45cb9d2..02338cf 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2422,7 +2556,11 @@ void PS2Runtime::run()
+@@ -2356,6 +2493,7 @@ void PS2Runtime::run()
+     m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
+ 
+     RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
++    wotmBoot("boot do jogo (EE e IOP)");
+ 
+     // A blank image to use as a framebuffer
+     Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
+@@ -2422,7 +2560,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -1073,7 +1186,7 @@ index 45cb9d2..02338cf 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2582,253 @@ void PS2Runtime::run()
+@@ -2444,7 +2586,257 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -1086,6 +1199,10 @@ index 45cb9d2..02338cf 100644
 +            static const bool s_fmv = std::getenv("PS2X_FMV") != nullptr; // filmes nativos (wotm_fmv.hpp): por cima de tudo
 +            if (s_fmv)
 +                wotmFmvPresent(m_memory.getGSVRAM());
++            {
++                const R5900Context *lc = g_wotmLiveCtx.load(std::memory_order_relaxed);
++                wotmBootPresent(lc ? lc->pc : 0u, m_eeScheduler ? m_eeScheduler->currentVSyncTick() : 0u);
++            }
 +            if (std::getenv("PS2X_PROF")) // amostrador de PC: histograma por palavra, gravado em prof.<frame>
 +            {
 +                static std::unordered_map<uint32_t, uint32_t> s_hist;
@@ -2082,10 +2199,10 @@ index 0000000..481f867
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..d45e2fc
+index 0000000..f994854
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,379 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
@@ -2148,6 +2265,114 @@ index 0000000..d45e2fc
 +}
 +static void wotmFmvPresent(uint8_t *) {}
 +#endif
++
++// Rastro do boot: da abertura do processo ao primeiro filme ou quadro do jogo, cada etapa vai ao stderr com o tempo desde o inicio
++// ("[boot]  3.21 s  disco: ...") e aparece escrita na tela preta. Etapa parada ha mais de 3 s repete no log com o PC do EE, para
++// achar o gargalo em maquinas onde a tela preta demora. Chamado do main.cpp, de initialize/run, do sceCdSearchFile e do log do IOP.
++#include <cstdarg>
++#include <mutex>
++namespace wotm_boot
++{
++inline const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
++inline std::mutex mx;
++inline std::string step = "iniciando";
++inline double stepAt = 0.0;
++inline std::atomic<bool> done{false}, presenting{false};
++inline std::thread::id mainThread;
++inline double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
++inline void drawOverlay()
++{
++    std::string s;
++    double at;
++    {
++        std::lock_guard<std::mutex> lk(mx);
++        s = step;
++        at = stepAt;
++    }
++    const double t = now();
++    DrawText(TextFormat("Carregando... %.1f s", t), 16, GetScreenHeight() - 52, 20, LIGHTGRAY);
++    DrawText(TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s nesta etapa)", t - at) : ""), 16, GetScreenHeight() - 28, 16, GRAY);
++}
++} // namespace wotm_boot
++
++void wotmBoot(const char *fmt, ...)
++{
++    if (wotm_boot::done.load(std::memory_order_relaxed))
++        return;
++    char buf[256];
++    va_list ap;
++    va_start(ap, fmt);
++    std::vsnprintf(buf, sizeof(buf), fmt, ap);
++    va_end(ap);
++    for (size_t n = std::strlen(buf); n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' '); --n)
++        buf[n - 1] = '\0';   // o printf do IOP vem com quebra de linha
++    const double t = wotm_boot::now();
++    {
++        std::lock_guard<std::mutex> lk(wotm_boot::mx);
++        if (wotm_boot::mainThread == std::thread::id())
++            wotm_boot::mainThread = std::this_thread::get_id();
++        wotm_boot::step = buf;
++        wotm_boot::stepAt = t;
++    }
++    std::fprintf(stderr, "[boot] %6.2f s  %s\n", t, buf);
++    std::fflush(stderr);
++    // antes do laco de apresentacao (ELF, hooks) ninguem desenha: a thread principal desenha um quadro com a etapa
++    if (!wotm_boot::presenting.load(std::memory_order_relaxed) && IsWindowReady() && std::this_thread::get_id() == wotm_boot::mainThread)
++    {
++        BeginDrawing();
++        ClearBackground(BLACK);
++        wotm_boot::drawOverlay();
++        EndDrawing();
++    }
++}
++
++// Uma vez por apresentacao, enquanto o boot nao termina: escreve a etapa na tela, repete no log a etapa parada (com o PC do EE) e
++// encerra o rastro no primeiro filme; sem filme (WOTM_MATCH pula a abertura), quando a camada nativa carrega a fase (wotmBootDone).
++// g_frame e world nao servem: os dois ja estao preenchidos antes da abertura.
++static void wotmBootDone(const char *what)
++{
++    if (wotm_boot::done.load(std::memory_order_relaxed))
++        return;
++    wotmBoot("pronto: %s", what);
++    wotm_boot::done.store(true, std::memory_order_relaxed);
++}
++// O vsync por segundo no aviso mostra se a espera e o relogio virtual andando devagar (o boot espera vsyncs).
++static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
++{
++    if (wotm_boot::done.load(std::memory_order_relaxed))
++        return;
++    wotm_boot::presenting.store(true, std::memory_order_relaxed);
++#ifdef WOTM_HAVE_FMV
++    const wotm::fmv::Player &fp = wotm::fmv::Player::get();
++    if (fp.active(wotm::fmv::Player::Full) || fp.active(wotm::fmv::Player::Screen))
++        return wotmBootDone("primeiro filme");
++#endif
++    static double s_lastBeat = 0.0;
++    static uint64_t s_lastVsync = 0;
++    const double t = wotm_boot::now();
++    if (s_lastBeat == 0.0)
++    {
++        s_lastBeat = t;
++        s_lastVsync = vsync;
++    }
++    std::string s;
++    double at;
++    {
++        std::lock_guard<std::mutex> lk(wotm_boot::mx);
++        s = wotm_boot::step;
++        at = wotm_boot::stepAt;
++    }
++    if (t - at >= 2.0 && t - s_lastBeat >= 2.0)
++    {
++        const double rate = double(vsync - s_lastVsync) / (t - s_lastBeat);
++        std::fprintf(stderr, "[boot] %6.2f s  ... ainda em \"%s\" ha %.1f s (PC do EE 0x%06x, vsync %llu, %.0f/s)\n", t, s.c_str(), t - at,
++                     eePc, (unsigned long long)vsync, rate);
++        std::fflush(stderr);
++        s_lastBeat = t;
++        s_lastVsync = vsync;
++    }
++    wotm_boot::drawOverlay();
++}
 +
 +// Som nativo (native/wotm_snd.hpp), ligado com PS2X_SND=1 (wotmSndInstall, chamado do main.cpp)
 +#include "wotm_snd.inc"
@@ -2259,6 +2484,7 @@ index 0000000..d45e2fc
 +            {
 +                S.rtxPath = log;
 +                std::fprintf(stderr, "[native] recursos: %s\n", log.c_str());
++                wotmBootDone("fase na tela");
 +            }
 +        }
 +        wotm_live::g_stage = "snapshot";
@@ -2803,10 +3029,10 @@ index 0000000..c8ef7a8
 +}
 diff --git a/ps2xRuntime/src/lib/wotm_snd.inc b/ps2xRuntime/src/lib/wotm_snd.inc
 new file mode 100644
-index 0000000..848368e
+index 0000000..ff4e723
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_snd.inc
-@@ -0,0 +1,252 @@
+@@ -0,0 +1,263 @@
 +// wotm_snd.inc: som nativo (incluido por wotm_live.inc, no escopo global de ps2_runtime.cpp). Ligado com PS2X_SND=1.
 +// Troca as funcoes snd_* da lib989snd do EE (que mandam comandos por RPC ao 989snd no IOP) pelo motor de native/wotm_snd.hpp
 +// (repo WoTM): bancos lidos do disco, sons e streams mixados no host. Com isso os IRX de som (LIBSD, 989SND, 989ERR) nao
@@ -2855,8 +3081,9 @@ index 0000000..848368e
 +}
 +
 +// LSN -> bytes: arquivos soltos (cdRoot, LBNs do runtime) ou a ISO de PS2X_CD_IMAGE
-+inline bool readLsn(uint32_t lsn, uint32_t sectors, uint8_t *dst)
++inline bool readLsnRaw(uint32_t lsn, uint32_t sectors, uint8_t *dst, const char *&from)
 +{
++    from = "discroot";
 +    const size_t bytes = size_t(sectors) * 2048;
 +    std::memset(dst, 0, bytes);
 +    const ps2_stubs::CdDebugSnapshot snap = ps2_stubs::getCdDebugSnapshot();
@@ -2875,12 +3102,22 @@ index 0000000..848368e
 +            return false;
 +        path = snap.cdImage;
 +        offset = uint64_t(lsn) * 2048;
++        from = "ISO";
 +    }
 +    std::ifstream in(path, std::ios::binary);
 +    if (!in.seekg(static_cast<std::streamoff>(offset)))
 +        return false;
 +    in.read(reinterpret_cast<char *>(dst), static_cast<std::streamsize>(bytes));
 +    return in.gcount() > 0;
++}
++inline bool readLsn(uint32_t lsn, uint32_t sectors, uint8_t *dst)
++{
++    const char *from = "?";
++    const auto t0 = std::chrono::steady_clock::now();
++    const bool ok = readLsnRaw(lsn, sectors, dst, from);
++    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
++    wotmBoot("som: LSN %u, %u setores (%s) em %.1f ms%s", lsn, sectors, from, ms, ok ? "" : " FALHOU");
++    return ok;
 +}
 +
 +#define SND_LOG(...) do { if (g_log) std::fprintf(stderr, "[snd] " __VA_ARGS__); } while (0)
@@ -3060,10 +3297,10 @@ index 0000000..848368e
 +}
 +#endif
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..51cbdcd 100644
+index 563bcbd..1c7c13b 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,6 +164,44 @@ namespace
+@@ -164,12 +164,52 @@ namespace
      }
  }
  
@@ -3082,6 +3319,7 @@ index 563bcbd..51cbdcd 100644
 +static void hook_noop(uint8_t *, R5900Context *, PS2Runtime *) {}
 +void wotmFmvInstall(PS2Runtime &runtime); // wotm_live.inc (PS2X_FMV)
 +void wotmSndInstall(PS2Runtime &runtime); // wotm_snd.inc (PS2X_SND)
++void wotmBoot(const char *fmt, ...);       // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
 +static void hook_ret1(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); } // CMovie::Update: "terminou"
 +static void hook_flushObjQ(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
@@ -3108,7 +3346,14 @@ index 563bcbd..51cbdcd 100644
  int main(int argc, char *argv[])
  {
  #if defined(__ANDROID__)
-@@ -220,12 +258,74 @@ int main(int argc, char *argv[])
+     redirectStdioToLogcat();
+ #endif
+     setupTerminateLogger();
++    wotmBoot("iniciando o runtime");
+ 
+     try
+     {
+@@ -220,12 +260,76 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -3119,12 +3364,14 @@ index 563bcbd..51cbdcd 100644
 +            runtime.setIoPaths(io);
 +        }
 +
++        wotmBoot("carregando o ELF %s", elfName.c_str());
          if (!runtime.loadELF(filePathStr))
          {
              std::cerr << "Failed to load ELF file: " << filePathStr << std::endl;
              return 1;
          }
  
++        wotmBoot("instalando hooks (filmes, som nativo)");
 +        if (std::getenv("PS2X_SKIP_MOVIES"))
 +        {
 +            runtime.registerFunction(0x0020F4B0u, hostLeaf<hook_skipMovie>); // playMpegMovieWithDB
