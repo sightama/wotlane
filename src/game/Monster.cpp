@@ -527,7 +527,50 @@ INCLUDE_ASM("asm/nonmatchings/game/Monster", updateBoostAndRage__7Monster);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateLock__7Monster19MonsterReticleState);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateLookAt__7Monster);
+/* Leg pose while airborne, on the blend at 0x30B4 (m_cinemaBlendC, on while m_cinemaBlendCOn). Free falling (outside states flagged 0x12
+   and state 0x22) the height above the shadow, as a 0..1 fraction of 100 units and squared, is the target weight: the blend ramps in over
+   200 ms, then eases towards half that weight; at zero it ramps out over 100 ms. While active, its percent eases towards 1 when the
+   monster's forward axis points along the vector at 0x3300, else towards 0. */
+#ifdef NON_MATCHING
+/* 1/128 words: the retail clamps with min.s/max.s, which shifts the whole body */
+void Monster::updateAirLegOverride(void)
+{
+    AnimBlend *b;
+    float h = 0.0f;
+
+    if (m_freeFalling && !(m_state[1] & 0x12) && m_state[0] != 0x22) {
+        h = (m_cs->trans.z - m_shadow->trans.z) / 100.0f;
+        h = h < 1.0f ? h : 1.0f;
+        h = h > 0.0f ? h : 0.0f;
+        h = h * h;
+    }
+    if (h > 1e-10f) {
+        b = (AnimBlend *)m_cinemaBlendC;
+        if (m_cinemaBlendCOn != 1) {
+            b->rampIn(200.0f);
+            b->setSpeed(0.0f);
+            m_cinemaBlendCOn = 1;
+        } else {
+            b->m_node.weight = smoothEasyInTC(b->getWeight(), h * 0.5f, 0.1f, 0.01f);
+        }
+    } else {
+        b = (AnimBlend *)m_cinemaBlendC;
+        if (m_cinemaBlendCOn != 0) {
+            b->rampOut(100.0f);
+            m_cinemaBlendCOn = 0;
+        }
+    }
+    if (b->m_node.active) {
+        float *f = (float *)((char *)m_cs + 0x30);
+        float *v = (float *)((char *)this + 0x3300);
+        float t = f[0] * v[0] + f[1] * v[1] + f[2] * v[2] > 0.0f ? 1.0f : 0.0f;
+
+        b->setPercent(smoothEasyInTC(b->getPercent(), t, 0.01f, 0.001f));
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateAirLegOverride__7Monster);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateAnimContacts__7Monsterb);
 float Monster::getStaminaGain(void)
 {
@@ -1563,7 +1606,76 @@ Monster *Monster::getClosestMonsterToOrientation(int locA, int locB, float angle
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToOrientation__7Monsteriiff);
 #endif
+/* The monster a punch (or the default projectile check) would hit. None while standing more than 100 units above the boss (assBoss).
+   A living monster under the reticle closer than `reach` wins outright; otherwise the nearest other visible, living, uncloaked
+   monster (not m_target; AI player 2 is skipped by AI player 2 unless Ai::s_attackOtherAi) inside the `angle` cone, in line of sight
+   and within `reach`; failing that, with the unified view, the nearest such monster within `maxDist` whatever its direction. With a
+   pinned target only that one counts. */
+#ifdef NON_MATCHING
+extern int assBossActive;
+extern Monster *assBoss;
+extern int attackOtherAi __asm__("_2Ai$s_attackOtherAi");
+/* 39/246 words: retail re-reads the hit word as 64 bits (lwu + sign extension) and allocates the loop registers differently */
+Monster *Monster::getClosestMonsterToPunch(float maxDist, float angle, float reach)
+{
+    float c = cosf(angle * 0.5f);
+    unsigned long long hit;
+    int skipAi;
+    Monster *best;
+    Monster *pin;
+    int j;
+
+    if (assBossActive && m_cs->trans.z - assBoss->m_cs->trans.z > 100.0f)
+        return 0;
+    hit = *(unsigned long long *)((char *)this + 0x6C50);
+    if (*(signed char *)((char *)this + 0x6C50) != 0 && (hit & 0x7FF00000000ULL)
+        && *Interactives::getInteractive((int)(hit >> 32) & 0x7FF) == 1
+        && !((Monster *)Interactives::getInteractive(*(int *)((char *)this + 0x6C54) & 0x7FF))->m_dead) {
+        FVECTOR d;
+
+        vecSub(&d, &m_cs->trans, (_fvector *)((char *)this + 0x6C60));
+        if (vecLenSq(&d) < reach * reach)
+            return (Monster *)Interactives::getInteractive(*(int *)((char *)this + 0x6C54) & 0x7FF);
+    }
+    skipAi = 0;
+    if (m_playerNum == 2)
+        skipAi = attackOtherAi == 0;
+    best = 0;
+    for (j = 0; j < game->m_numSlots; j++) {
+        Monster *m = &game->m_slots[j];
+
+        if (m->m_playerNum != 0 && m != this && !m->m_dead && !m->m_cloaked && m != m_target && !(skipAi && m->m_playerNum == 2)) {
+            EnemyInfo::Info *info = EnemyInfo::info(m_monsterNum, j);
+
+            if (infoInFov(info, c) && infoInLos(info) && info->dist < reach) {
+                reach = info->dist;
+                best = m;
+            }
+        }
+    }
+    pin = (Monster *)m_pinTarget;
+    if (best == 0 && gUseUnifiedView) {
+        for (j = 0; j < game->m_numSlots; j++) {
+            Monster *m = &game->m_slots[j];
+
+            if (m->m_playerNum != 0 && m != this && !m->m_dead && !m->m_cloaked && m != m_target
+                && !(skipAi && m->m_playerNum == 2)) {
+                EnemyInfo::Info *info = EnemyInfo::info(m_monsterNum, j);
+
+                if (info->dist < maxDist) {
+                    maxDist = info->dist;
+                    best = m;
+                }
+            }
+        }
+    }
+    if (pin != 0 && best != pin)
+        return 0;
+    return best;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToPunch__7Monsterfff);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterInFOV__7MonsterR8_fvectorfT1fRf);
 Monster *Monster::getClosestTargetable(unsigned short a, bool b, float x, float y)
 {
