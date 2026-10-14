@@ -64,6 +64,16 @@ public:
     static int *getInteractive(int i);
 };
 void mathfRotMatrixRPH(float (*m)[4], _fvector *v);
+class PointLight {
+public:
+    void SetPos(_fvector *p);
+};
+extern char pointLights[];
+extern unsigned arcCLUT[];
+int electricArcOnSphere(_fvector *c, float r, float size, float jag, unsigned *clut, unsigned seed, int numColors, int dur, int level,
+                        _fvector *out);
+extern "C" int rand(void);
+int particleCreateFx(_fvector *pos, int id, float scale, float (*m)[4], float strength);
 class MonsterDynamics {
 public:
     void updateMove(bool b);
@@ -398,7 +408,54 @@ void Monster::clearEnvMapping(void)
     m_cs->cloakWeight = 16.0f;
     m_flags |= 2;
 }
+/* Lays the shadow on the ground under the feet: when the foot probe (0x1A40: hit flag in the low byte, interactive index in bits 32..42)
+   hit something and the shadow is not switched off, the shadow sits 0.1 above the hit point (0x1A50) with its up axis on the ground normal
+   (0x1A60) and its x axis across the monster's heading; it is hidden over another monster (interactive kind 1). Then the monster's point
+   light (index at 0x6974) follows the pin point, and is turned off once the monster is dead. */
+#ifdef NON_MATCHING
+/* 10/104 words: retail copies the probe vectors through address registers and schedules the m_shadow reloads differently */
+void Monster::updateShadow(void)
+{
+    if (m_shadow != 0) {
+        if (*(signed char *)((char *)this + 0x1A40) != 0 && m_shadowOff == 0) {
+            unsigned long long hit;
+            float *x, a, b, c;
+            float len2;
+            register float inv;
+
+            m_shadow->trans = *(FVECTOR *)((char *)this + 0x1A50);
+            m_shadow->trans.z += 0.1f;
+            *(FVECTOR *)((char *)m_shadow + 0x40) = *(FVECTOR *)((char *)this + 0x1A60);
+            *(float *)((char *)m_shadow + 0x4C) = 0.0f;
+            vecCross((_fvector *)((char *)m_shadow + 0x20), (_fvector *)((char *)m_cs + 0x30), (_fvector *)((char *)m_shadow + 0x40));
+            x = (float *)((char *)m_shadow + 0x20);
+            a = x[0];
+            b = x[1];
+            c = x[2];
+            __asm__("mula.s %1, %1\n\tmadda.s %2, %2\n\tmadd.s %0, %3, %3" : "=f"(len2) : "f"(a), "f"(b), "f"(c));
+            __asm__("rsqrt.s %0, %1, %2" : "=f"(inv) : "f"(1.0f), "f"(len2));
+            x[0] = a * inv;
+            x[2] = c * inv;
+            x[1] = b * inv;
+            vecCross((_fvector *)((char *)m_shadow + 0x30), (_fvector *)((char *)m_shadow + 0x40), (_fvector *)((char *)m_shadow + 0x20));
+            hit = *(unsigned long long *)((char *)this + 0x1A40);
+            if (hit & 0x7FF00000000ULL)
+                m_shadow->drawMe = *Interactives::getInteractive((int)(hit >> 32) & 0x7FF) != 1;
+            else
+                m_shadow->drawMe = 1;
+        } else {
+            m_shadow->drawMe = 0;
+        }
+    }
+    if (*(int *)((char *)this + 0x6974) >= 0) {
+        ((PointLight *)(pointLights + (*(int *)((char *)this + 0x6974) << 6)))->SetPos((_fvector *)((char *)this + 0x3E30));
+        if (m_dead)
+            *(int *)(pointLights + (*(int *)((char *)this + 0x6974) << 6) + 0x38) = 0;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateShadow__7Monster);
+#endif
 signed char calcGlowIntensity(int a, int b, int c)
 {
     if (c * 3 < b * 4) {
@@ -414,7 +471,60 @@ signed char calcGlowIntensity(int a, int b, int c)
     }
 }
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updatePowerUpGlow__7Monster);
+/* Rage (not for monster types 0x1A0 / 0x1C0). The stamina above the meter's base (max) fills the rage gauge up to maxLevel: once it is full
+   0xF4 is raised (and, the first time, 0xF3 too, flashing the followed player's HUD); it drops when the gauge empties. In the rage state
+   (0x2A), once its animation (0x5C) is 95% through, the rage starts (0xF5): two fx (0x6E) on the cs, and the gauge drains over the
+   duration at 0x494 seconds (20 when 0). It ends when the gauge is empty or the monster dies. */
+#ifdef NON_MATCHING
+/* 15/178 words: retail keeps the gauge in another FPR and reads 0xF3 signed (lb) */
+void Monster::updateBoostAndRage(void)
+{
+    StaminaMeter *s;
+    float above, full;
+
+    if (m_typeBits == 0x1A0 || m_typeBits == 0x1C0)
+        return;
+    s = &m_stamina;
+    above = s->cur - s->max;
+    full = above > 0.0f ? above : 0.0f;
+    full = full / (s->maxLevel - s->max);
+    if (full >= 1.0f && !*(signed char *)((char *)this + 0xF4)) {
+        *(signed char *)((char *)this + 0xF4) = 1;
+        if (!m_specialWeapon) {
+            m_specialWeapon = 1;
+            if (m_cameraFollows) {
+                animationStart(gameHud(m_cameraView)->h180, true);
+                gameHud(m_cameraView)->fAC = 0;
+            }
+        }
+    } else if (full <= 0.0f) {
+        *(signed char *)((char *)this + 0xF4) = 0;
+    }
+    if (*(signed char *)((char *)this + 0xF4) && *m_state == 0x2A && !m_unkF5
+        && animationGetCurrentPercent(m_anims[0x5C]) >= 0.95f) {
+        float dur = 20.0f;
+
+        if (*(float *)((char *)this + 0x494) != 0.0f)
+            dur = *(float *)((char *)this + 0x494);
+        m_unkF5 = 1;
+        *(float *)((char *)this + 0x498) = (s->maxLevel - s->max) / (dur * 60.0f);
+        *(int *)((char *)this + 0x4A4) = particleCreateFx((_fvector *)((char *)this + 0x3DC0), m_cs->mat, 0x6E, 1.0f, 0, 0, false, 0.0f);
+        *(int *)((char *)this + 0x4A8) = particleCreateFx((_fvector *)((char *)this + 0x3DD0), m_cs->mat, 0x6E, 1.0f, 0, 0, false, 0.0f);
+    }
+    if (m_unkF5) {
+        s->drain(*(float *)((char *)this + 0x498), false, true);
+        above = s->cur - s->max;
+        full = above > 0.0f ? above : 0.0f;
+        if (full == 0.0f || m_dead) {
+            m_unkF5 = 0;
+            particleKillFx(*(int *)((char *)this + 0x4A4));
+            particleKillFx(*(int *)((char *)this + 0x4A8));
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateBoostAndRage__7Monster);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateLock__7Monster19MonsterReticleState);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateLookAt__7Monster);
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateAirLegOverride__7Monster);
@@ -496,8 +606,159 @@ void Monster::dropPickup(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", dropPickup__7Monster);
 #endif
+/* Launches the default projectile from locator `loc`. A held pickup with ammo fires instead (one round less): the tazer (kind 0xE) through
+   StateTazerAttack, anything else through StateGunAttack. Otherwise the projectile (weapon type at 0x6878) is aimed at the sticky reticle
+   target, then at the pinned target (unless 0x69A4 is set), then, with 0xF5 or 0xED set, at the closest monster within 30 degrees and
+   4000 units; failing all that along the reticle, or along the monster's facing when there is no reticle. Every shot but the tazer plays
+   the recoil layer (animation 0x8C, additive, priority 999). */
+#ifdef NON_MATCHING
+class StateTazerAttack {
+public:
+    int transitionOK(void);
+};
+class StateGunAttack {
+public:
+    int transitionOK(void);
+};
+void mathfRotationFromVector(_fvector *rot, _fvector *v);
+int weaponsCreateStaticWeapon(Weapons *w, int type, int byId, int targetId, _fvector *pos, _fvector *rot, _hierhead *h)
+    __asm__("CreateStaticWeapon__7WeaponsQ26Weapon10WeaponTypeiiP8_fvectorT4P9_hierhead");
+/* 26/171 words: retail lays the aim-at-target block out before the closest-monster fallback */
+void Monster::launchDefaultProjectile(int loc)
+{
+    int targetId = 0;
+    int recoil = 1;
+    _fvector *pos = (_fvector *)((char *)this + loc * 16 - 0x4260);
+    FVECTOR rot, d;
+    char *t;
+
+    if (m_reticleCS != 0) {
+        vecSub(&d, &m_reticleCS->trans, pos);
+        mathfRotationFromVector(&rot, &d);
+    } else {
+        rot = *(FVECTOR *)((char *)m_cs + 0x60);
+    }
+    if (m_pickup != 0 && *(short *)(*(char **)m_pickup + 0xDE) > 0) {
+        (*(short *)(*(char **)m_pickup + 0xDE))--;
+        if (*(int *)(*(char **)m_pickup + 0xA0) == 0xE) {
+            if (((StateTazerAttack *)((char *)this + 0x10D50))->transitionOK())
+                enterNewState((MonsterState *)((char *)this + 0x10D50));
+            recoil = 0;
+        } else if (((StateGunAttack *)((char *)this + 0x10E90))->transitionOK()) {
+            enterNewState((MonsterState *)((char *)this + 0x10E90));
+        }
+    } else {
+        t = (char *)m_stickyReticleOn;
+        if (t == 0) {
+            t = (char *)m_pinTarget;
+            if (t == 0) {
+                if (m_unkF5 || *(signed char *)((char *)this + 0xED)) {
+                    Monster *m = getClosestMonsterToOrientation(0.5235988f, 4000.0f);
+
+                    if (m != 0) {
+                        targetId = m->m_id;
+                        vecSub(&d, (_fvector *)((char *)m + 0x3E30), pos);
+                        mathfRotationFromVector(&rot, &d);
+                    }
+                }
+                goto launch;
+            }
+            if (*(int *)((char *)this + 0x69A4) != 0)
+                goto launch;
+        }
+        {
+            char *vt = *(char **)(t + 0x10);
+
+            targetId = (**(unsigned **)*(char **)(t + 0xC) >> 7) & 0x7FF;
+            vecSub(&d, ((_fvector * (*)(void *))*(void **)(vt + 0x14))(t + *(short *)(vt + 0x10)), pos);
+            mathfRotationFromVector(&rot, &d);
+        }
+    launch:
+        weaponsCreateStaticWeapon(gameWeapons(), *(int *)((char *)this + 0x6878), m_id, targetId, pos, &rot, 0);
+    }
+    if (recoil) {
+        AnimBlend *b = AnimBlendPool::alloc();
+
+        if (b != 0) {
+            b->init(m_anims[0x8C]);
+            b->m_node.blendType = BLEND_ADDITIVE;
+            b->m_node.priority = 999;
+            b->runAndDealloc(0.0f, 0.0f);
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", launchDefaultProjectile__7Monsteri);
+#endif
+/* Fires the default projectile (not in dodgeball/big shot). m_launchCounter counts frames since the last shot. With auto-fire (0xFC) a
+   held fire button (pad entry +0x30) shoots every m_launchDelay frames (9 for monster types other than 0x100); otherwise a pending shot
+   request (0x6754) is consumed once the delay ran out. Not while attacks are off, while targeting a monster (m_target) or holding a pickup
+   of kind 0x10; a held pickup with ammo (short at +0xDE) fires for free, otherwise the shot costs the stamina at 0x6978. The monster must be
+   in one of the free states (0x1E, 1, 2, 4, 0x20) and have nothing to punch or smash in front of it; then it launches from bone 0x80B. */
+#ifdef NON_MATCHING
+/* 5/157 words: retail tests the mode with two compares and lays the two fire paths out with their own tails */
+void Monster::updateDefaultProjectile(void)
+{
+    int mode;
+    int noAmmo;
+    int fire;
+    int pickup;
+    int state;
+
+    m_launchCounter += m_frameTime;
+    mode = game->m_gameMode;
+    if (mode == 7 || mode == 8)
+        return;
+    noAmmo = 0;
+    pickup = m_pickup;
+    if (pickup == 0 || *(short *)(*(char **)pickup + 0xDE) <= 0)
+        noAmmo = 1;
+    if (*(signed char *)((char *)this + 0xFC)) {
+        int delay = 9;
+
+        if (m_typeBits == 0x100)
+            delay = m_launchDelay;
+        fire = 0;
+        if (*(unsigned short *)((char *)m_padFlags[0] + 0x30) != 0 && m_attacksEnabled && m_target == 0
+            && (m_pickup == 0 || *(int *)(*(char **)m_pickup + 0xA0) != 0x10)) {
+            if (noAmmo) {
+                if (*(float *)((char *)this + 0x6978) <= m_stamina.cur)
+                    fire = delay < m_launchCounter;
+            } else if (0.0f <= m_stamina.cur) {
+                fire = delay < m_launchCounter;
+            }
+        }
+    } else {
+        fire = 0;
+        if (*(int *)((char *)this + 0x6754) == 0 && m_attacksEnabled && m_target == 0
+            && (pickup == 0 || *(int *)(*(char **)pickup + 0xA0) != 0x10)) {
+            if (noAmmo) {
+                if (*(float *)((char *)this + 0x6978) <= m_stamina.cur)
+                    fire = m_launchDelay < m_launchCounter;
+            } else if (0.0f <= m_stamina.cur) {
+                fire = m_launchDelay < m_launchCounter;
+            }
+        }
+    }
+    if (!fire)
+        return;
+    state = *m_state;
+    if (state == 0x1E || state == 1 || state == 2 || state == 4 || state == 0x20) {
+        char *t = (char *)this + 0x8000;
+        Monster *m = getClosestMonsterToPunch(*(float *)(t + 0x2DEC), *(float *)(t + 0x2DE4), *(float *)(t + 0x2DE8));
+        DbInteractive *d = getDestructibleFromReticle(*(float *)(t + 0x2DE8));
+
+        if (m == 0 && d == 0) {
+            launchDefaultProjectile(0x80B);
+            if (noAmmo)
+                m_stamina.drain(*(float *)((char *)this + 0x6978), true, false);
+            m_launchCounter = 0;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", updateDefaultProjectile__7Monster);
+#endif
 /* Moves the monster for this frame (unless it is being grappled) and drags the monster it holds along: an overhead
    victim keeps its grip pose relative to the holder (matrix at 0x3280 of the victim and 0x32C0 of the holder, grip
    points at victim+0x3E00 and holder+0x3E10); any other victim is kept 100 units along the holder's y axis. */
@@ -1019,7 +1280,92 @@ void Monster::takeAdditiveRecoil(_fvector &dir, float weight)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", takeAdditiveRecoil__7MonsterR8_fvectorf);
 #endif
+/* Knocks the monster back along dir. Each monster type reacts its own way: 0x1A0 takes a big hit, 0x1C0 recoils, 0x1E0 recoils harder (and
+   not when dead); the others are thrown back (if they can be hit at all): dir, flattened by half in z and scaled to `speed`, plus `lift` in z,
+   replaces the horizontal velocity, the vertical one keeps a quarter, and the result is clamped to s_maxVel. A blocking monster shrugs it off. */
+#ifdef NON_MATCHING
+class StateBigTakeHit {
+public:
+    int transitionOK(void);
+};
+class StateThrowBack {
+public:
+    int transitionOK(void);
+};
+extern float s_maxVel __asm__("s_maxVel.2799");
+__asm__("#SNFIX_SMALL s_maxVel.2799");
+/* 53/157 words: retail loads the three dir components before storing them and gives the 0x1E0 case its own enterNewState call */
+void Monster::knockBack(_fvector &dir, float lift, float speed)
+{
+    char *st;
+
+    if (m_typeBits == 0x1A0) {
+        if (isBlocking())
+            return;
+        st = (char *)this + 0x11100;
+        if (!((StateBigTakeHit *)st)->transitionOK())
+            return;
+    } else if (m_typeBits == 0x1C0) {
+        if (isBlocking())
+            return;
+        st = (char *)this + 0x7E30;
+        if (!((StateRecoil *)st)->transitionOK())
+            return;
+        SF(this, 0x7E70) = dir.x;
+        SF(this, 0x7E78) = dir.z;
+        SF(this, 0x7E74) = dir.y;
+        SF(st, 0x4C) = 0.0f;
+        SI(st, 0x30) = 0;
+        *(FVECTOR *)((char *)this + 0x7E80) = dir;
+    } else if (m_typeBits == 0x1E0) {
+        if (isBlocking())
+            return;
+        if (m_dead)
+            return;
+        st = (char *)this + 0x7E30;
+        if (!((StateRecoil *)st)->transitionOK())
+            return;
+        SF(this, 0x7E70) = dir.x;
+        SF(this, 0x7E78) = dir.z;
+        SF(this, 0x7E74) = dir.y;
+        SF(st, 0x4C) = 8.0f;
+        SF(st, 0x1C) = 85.0f;
+        SI(st, 0x30) = 0;
+        *(FVECTOR *)((char *)this + 0x7E80) = dir;
+        SI(st, 0x34) = 2;
+    } else {
+        FVECTOR v;
+        FVECTOR *vel;
+        float len2;
+        register float inv;
+
+        if (!m_unk49)
+            return;
+        st = (char *)this + 0x7EA0;
+        if (!((StateThrowBack *)st)->transitionOK())
+            return;
+        vel = (FVECTOR *)((char *)this + 0x1E0);
+        v = dir;
+        v.z *= 0.5f;
+        len2 = vecLenSq(&v);
+        __asm__("rsqrt.s %0, %1, %2" : "=f"(inv) : "f"(speed), "f"(len2));
+        vecScale(&v, &v, inv);
+        v.z += lift;
+        vel->x = 0.0f;
+        vel->y = 0.0f;
+        vel->z *= 0.25f;
+        vecAdd(vel, vel, &v);
+        vel->w = vecLenSq(vel);
+        if (s_maxVel * s_maxVel < vel->w) {
+            __asm__("rsqrt.s %0, %1, %2" : "=f"(inv) : "f"(s_maxVel), "f"(vel->w));
+            vecScale(vel, vel, inv);
+        }
+    }
+    enterNewState((MonsterState *)st);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", knockBack__7MonsterR8_fvectorff);
+#endif
 void Monster::blowUpMonster(Monster *killer)
 {
     if (m_dead)
@@ -1442,7 +1788,47 @@ void Monster::startShocking(float a, float b)
     m_beingShockedCount = a;
     m_beingShockedDamage = b;
 }
-INCLUDE_ASM("asm/nonmatchings/game/Monster", updateBeingShocked__7Monster);
+/* While the shock counter runs (and the monster lives): counts it down, drains m_beingShockedDamage per second, draws an arc around the
+   pin point, spawns sparks one frame in ten (larger for player 2) and flashes the monster white three frames in ten; the shock sound
+   follows. Once it runs out the sound stops. */
+void Monster::updateBeingShocked(void)
+{
+    if (m_beingShockedCount > 0.0f && !m_dead) {
+        _fvector *pin = (_fvector *)((char *)this + 0x3E30);
+        FVECTOR pt;
+
+        m_beingShockedCount = m_beingShockedCount - (float)timerGetFieldsLastFrame();
+        takeDamage(m_beingShockedDamage / (float)(timerGetFieldsLastFrame() * 60), true, 0);
+        electricArcOnSphere(pin, 60.0f, 7.5f, 0.4f, arcCLUT, rand(), 4, 4, 1, &pt);
+        if (mathfRand(0, 10) == 0) {
+            if (m_playerNum == 1) {
+                particleCreateFx(&pt, 0x20, 1.0f, 0, 0.0f);
+                particleCreateFx(&pt, 0x17, 15.0f, 0, 0.0f);
+            } else {
+                particleCreateFx(&pt, 0x20, 8.0f, 0, 0.0f);
+                particleCreateFx(&pt, 0x17, 15.0f, 0, 0.0f);
+            }
+        }
+        if (mathfRand(0, 10) < 3) {
+            m_cs->color.chan.r = 0xFF;
+            m_cs->color.chan.g = 0xFF;
+            m_cs->color.chan.b = 0xFF;
+            m_cs->colorQuad.fVec[0] = m_cs->color.chan.r * 0.0078125f;
+            m_cs->colorQuad.fVec[1] = m_cs->color.chan.g * 0.0078125f;
+            m_cs->colorQuad.fVec[2] = m_cs->color.chan.b * 0.0078125f;
+        } else {
+            m_cs->color.chan.r = 0;
+            m_cs->color.chan.g = 0;
+            m_cs->color.chan.b = 0;
+            m_cs->colorQuad.fVec[0] = 0.0f;
+            m_cs->colorQuad.fVec[1] = 0.0f;
+            m_cs->colorQuad.fVec[2] = 0.0f;
+        }
+        ((MonsterSound *)m_sound)->updateElectricShockSound();
+    } else {
+        ((MonsterSound *)m_sound)->terminateElectricShockSound();
+    }
+}
 void Monster::startBeingImpaled(float a, float b)
 {
 }

@@ -19,14 +19,17 @@ public:
     char pad5C[0x98 - 0x5C];
     _cs *m_cs1F43;              /* 0x98: cs of HUD element 0x1F43 (hidden) */
     _cs *m_mcButtonCs[4];       /* 0x9C: cs of the memory card buttons 0x1F51..0x1F54 */
-    char padAC[0xD0 - 0xAC];
+    int fAC;                    /* 0xAC: zeroed when the rage flash (h180) starts */
+    char padB0[0xD0 - 0xB0];
     int f0D0;
     char pad0D4[0xE4 - 0xD4];
     _hierhead *m_node1F47;      /* 0xE4: HUD node 0x1F47 (hud 1 gets the one with a nonzero id2) */
     char padE8[0xEC - 0xE8];
     _hierhead *m_node1F4D;      /* 0xEC: HUD node 0x1F4D (same split) */
     _hierhead *m_node1F55;      /* 0xF0: HUD node 0x1F55 (hud 0 only) */
-    char padF4[0x1D0 - 0xF4];
+    char padF4[0x180 - 0xF4];
+    _animHandle h180;           /* 0x180: rage meter flash, started when the stamina reaches the rage level */
+    char pad190[0x1D0 - 0x190];
     _animHandle h1D0;
     char pad1E0[0x2E0 - 0x1E0];
 

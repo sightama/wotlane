@@ -162,6 +162,8 @@ public:
     void update(void);
     void updateCinema(void);
     void updatePosition(void);
+    void updateShadow(void);
+    void launchDefaultProjectile(int bone);
     void updateDefaultProjectile(void);
     _cs * getShadow(void);
     float getAimHeading(void) const;
