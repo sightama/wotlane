@@ -1,5 +1,7 @@
 #include "common.h"
 #include "game/shell.h"
+#include "hieri_types.h"
+#include "vecmath.h"
 
 extern "C" int printf(const char *, ...);
 extern "C" void snd_StopAllSounds(void);
@@ -720,7 +722,29 @@ void uiValidateMonster(int step)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/ui", uiValidateMonster__Fi);
 #endif
+/* Puts cs in front of view 0's camera, oriented like it: `dist` ahead, x across (scaled by dist / 1.5) and z up (scaled by
+   dist / 2). The offset and its rotated copy live in two bss vectors instead of the stack. */
+#ifdef NON_MATCHING
+/* 34/58 words: retail materializes the two bss vectors and view->mat in other registers */
+extern FVECTOR D_00731820;
+extern FVECTOR D_00731830;
+void uiAlignItemWithCamera(_cs *cs, float dist, float x, float z)
+{
+    if (cs != 0) {
+        _cs *view = viewGetViewCs(0);
+
+        D_00731820.y = dist;
+        D_00731820.w = 0.0f;
+        D_00731820.z = dist * 0.5f * z;
+        D_00731820.x = dist / 1.5f * x;
+        matCopy(cs->mat, view->mat);
+        vecApplyRows(&D_00731830, view->mat, &D_00731820);
+        vecAdd(&cs->trans, &D_00731830, &view->trans);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/ui", uiAlignItemWithCamera__FP3_csfff);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/ui", letterboxDmaData__Ff);
 INCLUDE_ASM("asm/nonmatchings/game/ui", blackenScreen__Fv);
 #ifdef NON_MATCHING
