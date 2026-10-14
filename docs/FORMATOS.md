@@ -17,7 +17,7 @@ Tudo abaixo foi lido do código; o que está marcado (?) ainda é suposição.
 | `host0:monster.ngp/.tex/.rtx` | caminho de desenvolvimento (PC host), usado quando o índice da fase é >= 0x1D |
 
 Nomes dos monstros (`MonsterLongNames`, 8 bytes por entrada, índice = monstro): `null, monkey, robot, lizard, shogun, mantis, spider,
-energy, lava, dragon, rock, alien, ogre, assboss, jelly, final, temp16, default`. A seleção de cada vaga é `(monstro << 5) | variante`
+energy, lava, dragon, rock, alien, ogre, assboss, jelly, final, temp16` (17 entradas; o `default` logo antes no binário é a fase 0). A seleção de cada vaga é `(monstro << 5) | variante`
 em `Shell::m_monsterSel[]` (4 jogadores, depois IAs); o traje fica em `m_costume[]`. No modo 6 (mini-games?) carrega os monstros 1..5 e 7..11.
 Quirk do retail: para o 3º e o 4º jogador o caminho do arquivo usa o monstro do jogador 2.
 
