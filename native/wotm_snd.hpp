@@ -826,13 +826,15 @@ struct Stream : Sound {
     }
     void refreshVolume() override { applyVolume(); }
 
-    // " KPV": u32 bytes por canal, u32 inicio dos dados, u32 intercalacao, u32 Hz, u32 canais, {u16 vol, u16 pan} por canal.
+    // " KPV": u32 bytes por canal, u32 inicio dos dados, u32 tamanho do par de blocos (todos os canais), u32 Hz, u32 canais,
+    // {u16 vol, u16 pan} por canal.
     // "VAGp" (big-endian): mono, dados a partir de 0x30. Os canais intercalados sao separados aqui (sem flags de fim nos blocos).
     bool open() {
         u32 perCh, start, inter, rate, nch;
         if (file.size() >= 0x30 && std::memcmp(file.data(), " KPV", 4) == 0) {
             perCh = rd32(&file[4]); start = rd32(&file[8]); inter = rd32(&file[12]); rate = rd32(&file[16]); nch = rd32(&file[20]);
-            if (nch < 1 || nch > 2 || inter == 0 || inter % 16) return false;
+            if (nch < 1 || nch > 2 || inter == 0 || inter % (16 * nch)) return false;
+            inter /= nch;   // o campo e o tamanho do par esquerdo+direito (0xA000): cada canal tem blocos de 0x5000
         } else if (file.size() >= 0x30 && std::memcmp(file.data(), "VAGp", 4) == 0) {
             auto be = [&](size_t o) { return (u32(file[o]) << 24) | (u32(file[o + 1]) << 16) | (u32(file[o + 2]) << 8) | file[o + 3]; };
             start = 0x30; nch = 1; rate = be(0x10);

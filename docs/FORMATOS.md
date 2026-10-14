@@ -63,7 +63,7 @@ Lido com `tools/snd989.py` (bancos, estatísticas, exportação WAV) e reproduzi
 - Nomes: `<MONSTRO>_S` (efeitos do monstro) e `<MONSTRO>_LS` (versão de menor qualidade, `loadLoResMonsterBank`); `<FASE>_S`; `GENAMB_S`/`GENAM_LS` (ambiente comum), `GENMON_S`, `SHELL_S` (menu), `COUNT_S`, `FINAL_S` etc.
 - **`SHELLMUS.BNK` (1,7 MB) não é sequência MIDI:** 1 som com laço, 2 grains `TONE` (pan 270 e 90 = canal esquerdo e direito) e 2 amostras longas a 44 058 Hz. É a música do menu, sampleada.
 
-**`.VPK` (`disc/VAG`, 51 arquivos).** `" KPV"`, `u32 bytes por canal`, `u32 início dos dados` (0x800), `u32 intercalação` (0xA000), `u32 Hz`, `u32 canais` (2 em todos), e `{u16 vol, u16 pan}` por canal (127/270 e 127/90). Os dados alternam blocos de 0xA000 bytes de cada canal, em ADPCM do SPU2 sem flags de fim nem de laço. `*AMB`/`*BAT` (música das fases, ~2 min a 44,1 kHz); os outros (falas, cinemas, `*I` de introdução, `*D`, `*T`) a 48 kHz.
+**`.VPK` (`disc/VAG`, 51 arquivos).** `" KPV"`, `u32 bytes por canal`, `u32 início dos dados` (0x800), `u32 tamanho do par de blocos` (0xA000), `u32 Hz`, `u32 canais` (2 em todos), e `{u16 vol, u16 pan}` por canal (127/270 e 127/90). Os dados alternam blocos de **0x5000** bytes de cada canal (o campo é o par esquerdo+direito: os meio-blocos 0 e 1 têm correlação ~0,6 entre si e ~0 com o seguinte, conferido em CITYAMB, TOKYOBAT e CONGAI), em ADPCM do SPU2 sem flags de fim nem de laço. `*AMB`/`*BAT` (música das fases, ~2 min a 44,1 kHz); os outros (falas, cinemas, `*I` de introdução, `*D`, `*T`) a 48 kHz.
 
 **`.VAG`** (`DEFEAT`, `VICTORY`, 2 KB cada): `"VAGp"` big-endian com 0x30 bytes de cabeçalho; praticamente vazios.
 

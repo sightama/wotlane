@@ -105,10 +105,12 @@ def write_wav(path, rate, channels):
 
 
 def read_vpk(path):
-    """' KPV': u32 bytes por canal, u32 início dos dados, u32 intercalação, u32 Hz, u32 canais."""
+    """' KPV': u32 bytes por canal, u32 início dos dados, u32 tamanho do par de blocos (0xA000 = 0x5000 por canal), u32 Hz,
+    u32 canais."""
     d = open(path, "rb").read()
     if d[:4] == b" KPV":
         per_ch, start, inter, rate, nch = struct.unpack_from("<5I", d, 4)
+        inter //= nch
         chans = [[] for _ in range(nch)]
         hist = [(0, 0)] * nch
         o = start
