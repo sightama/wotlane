@@ -1468,6 +1468,7 @@ void Shell::LoadMonstersDB(void)
 INCLUDE_ASM("asm/nonmatchings/game/Shell", LoadMonstersDB__5Shell);
 #endif
 #ifdef NON_MATCHING
+/* untuned: 50/559 words (switch laid out differently); tools/difftest.py 480/480 (ids 0..1000 and 795..815) */
 /* Hooks entry point id of the shell database (dbProcInteractive passes the database id minus 0x2328) to the field of the
  * shell that the menus use. Nodes that become a cs get one from the pool and are attached to it; the rest are stored as is.
  * Ids not listed go by tens: 10 * screen + item for the menu item switches, then cs tables and node tables. */
