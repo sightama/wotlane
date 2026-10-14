@@ -3,6 +3,8 @@
 #include "game/sound.h"
 #include "game/hit_event.h"
 #include "game/anim_blend.h"
+#include "game/ai_support.h"
+#include "game/monster_state.h"
 #include "game/streaming_sound.h"
 #include "cs_pool.h"
 #include "vecmath.h"
@@ -46,6 +48,43 @@ void animationInitModifierBlends(_animCharInstance *ci);
 void animationResetCharacter(_animHandle &h);
 void rtReturnToShell(int a, int b);
 void mathfRotMatrixRPH(float (*m)[4], _fvector *rot);
+float mathfManhatDist2D(_fvector *a, _fvector *b);
+void hierSetSwitch(_hierswitch *sw, int which);
+int particleCreateFx(_fvector *pos, int id, float scale, float (*m)[4], float strength);
+void electricArc(_fvector *from, _fvector *to, unsigned colorA, unsigned colorB, float a, float b, float c, float d, int n,
+                 unsigned seed, unsigned e);
+extern "C" int rand(void);
+
+/* A live projectile (game/Weapons); only what the jelly's tazer field reads. */
+class Weapon {
+public:
+    char pad0[0x44];
+    int m_44;                 /* 0x44: >= 7 is zapped at any distance */
+    char pad48[0x4C - 0x48];
+    int m_type;               /* 0x4C: 0x17 = a thrown pickup (killed with it) */
+    char pad50[0x150 - 0x50];
+    _cs *m_cs;                /* 0x150 */
+    PickupIter m_pickup;      /* 0x154 */
+
+    void KillWeapon(void);
+};
+
+class StateUltraTazer {
+public:
+    int transitionOK(void);
+};
+
+/* Monster parts the boss drives that game.h does not name yet */
+#define MONSTER_NAV(m) ((AiNavigator *)((char *)(m) + 0x560))        /* the Ai's navigator (m_ai + 0x80) */
+#define MONSTER_AI_7C4(m) (*(int *)((char *)(m) + 0x7C4))             /* m_ai + 0x2E4 */
+#define MONSTER_SOUND(m) ((MonsterSound *)(m)->m_sound)
+#define MONSTER_ULTRA_TAZER(m) ((MonsterState *)((char *)(m) + 0x11130))
+#define MONSTER_IDLE(m) ((MonsterState *)((char *)(m) + 0x7984))
+#define MONSTER_SPECIAL(m) (*(signed char *)((char *)(m) + 0xF3))     /* m_specialWeapon, written as a flag here */
+/* locator `id` of a monster (0x800 + n; the feet are 0x804, 0x805, 0x816, 0x817, the tazer tip 0x809) */
+#define MONSTER_LOCATOR(m, id) ((_fvector *)((char *)(m) + (id) * 16 - 0x4260))
+/* vtable entry 0x28 of a MonsterState: transition feasible (vptr at 0x10, entries {delta, 0, fn}) */
+#define STATE_FEASIBLE(st) (((int (*)(void *))*(void **)((char *)(st)->vptr + 0x2C))((char *)(st) + *(short *)((char *)(st)->vptr + 0x28)))
 
 class FinalBoss : public DbInteractive {
 public:
@@ -55,7 +94,7 @@ public:
     int m_state;              /* 0x20: state inside the phase (7 = takes hits, 9 = dying) */
     int m_state2;             /* 0x24 */
     int m_timer;              /* 0x28: fields */
-    char pad2C[4];
+    int m_attract;            /* 0x2C: jelly phase: attractPts index of the pool the jelly heads for */
     int m_flashFields;        /* 0x30: hit flash (red) while > 0 */
     char pad34[0x40 - 0x34];
     FinalBossSound m_sound;   /* 0x40 */
@@ -77,7 +116,7 @@ public:
     char pad374[0x380 - 0x374];
     FVECTOR m_loc27AAPos;     /* 0x380: setLocator 0x27AA */
     FMATRIX_16 m_loc27AAMat;  /* 0x390 */
-    char pad3D0[0x3E0 - 0x3D0];
+    int m_splashTimer[4];     /* 0x3D0: jelly phase: fields until the next splash of each foot (locators 0x804, 0x805, 0x816, 0x817) */
     FVECTOR m_loc804;         /* 0x3E0 */
     FVECTOR m_loc805;         /* 0x3F0 */
     FVECTOR m_loc816;         /* 0x400 */
@@ -285,7 +324,229 @@ INCLUDE_ASM("asm/nonmatchings/game/FinalBoss", update__9FinalBoss);
 
 INCLUDE_ASM("asm/nonmatchings/game/FinalBoss", updateMecha__9FinalBoss);
 INCLUDE_ASM("asm/nonmatchings/game/FinalBoss", D_006E9008);
+/* Phase 1: the player's jelly (m_monster74) fights m_monster7C, a tazer field zaps nearby projectiles and the jelly walks to
+ * one of the two pools (attractPts) to refill. States: 1 approach, 2 ultra tazer, 3 back to the pool, 4 rest, 5 dying (ending
+ * cinema 0x226C, then phase 2 with m_monster78). */
+#ifdef NON_MATCHING
+/* 35/673 words: this lands in s1 instead of s2 (every load shifts) and the splash loop is strength-reduced (timer pointer, -10.0f hoisted); same blocks and calls */
+void FinalBoss::updateJelly(void)
+{
+    Weapon *w;
+    int sw;
+    int i;
+
+    {
+        float r = m_monster74->m_health / m_monster74->m_maxHealth;
+
+        if (r > 0.8f)
+            sw = 0;
+        else if (r > 0.6f)
+            sw = 1;
+        else if (r > 0.4f)
+            sw = 2;
+        else if (r > 0.2f)
+            sw = 3;
+        else
+            sw = 4;
+    }
+    hierSetSwitch((_hierswitch *)m_ep27AD, sw);
+
+    if (gameWeapons()->WeaponInRadius(&m_monster74->m_cs->trans, 600.0f, &w)
+        && (w->m_44 >= 7 || mathfManhatDist2D(&m_monster74->m_cs->trans, &w->m_cs->trans) < 200.0f)) {
+        FVECTOR from;
+
+        vecCopy(&from, MONSTER_LOCATOR(m_monster74, 0x809));
+        from.z -= 60.0f;
+        electricArc(&from, &w->m_cs->trans, 0x800000FF, 0x800000FF, 0.0f, 3.0f, 0.0f, 0.6f, 1, rand(), 30);
+        particleCreateFx(&w->m_cs->trans, 0x1A, 1.0f, 0, 0.0f);
+        MONSTER_SOUND(m_monster74)->playJellyTazerOneShot();
+        if (w->m_type == 0x17)
+            LevelPickups::killPickup(w->m_pickup, 1);
+        w->KillWeapon();
+    }
+
+    if (m_monster74->m_dead && m_state != 5) {
+        m_timer = 0x708;
+        m_state = 5;
+        game->fadeOutAndIn(4);
+        s_endingCinema = 0;
+    }
+
+    switch (m_state) {
+    case 1:
+        if (mathfManhatDist2D(&m_monster74->m_cs->trans, &m_monster7C->m_cs->trans) < 200.0f
+            && !m_monster74->m_freeFalling && !m_monster7C->m_dead) {
+            MONSTER_SPECIAL(m_monster74) = 1;
+            if (((StateUltraTazer *)MONSTER_ULTRA_TAZER(m_monster74))->transitionOK()) {
+                m_monster74->enterNewState(MONSTER_ULTRA_TAZER(m_monster74));
+                m_state = 2;
+            }
+        }
+        {
+            AiNavigator *nav = MONSTER_NAV(m_monster74);
+
+            if (nav->mode == 2) {
+                nav->seek(*(DbInteractive *)m_monster7C, 0.0f);
+                MONSTER_AI_7C4(m_monster74) = 1;
+            }
+        }
+        break;
+    case 2:
+        if (m_monster7C->m_dead) {
+            m_state = 3;
+            *(short *)((char *)m_monster74->m_padFlags[0] + 0x2A) = 1;
+            m_monster74->enterNewState((MonsterState *)m_monster74->m_stateRef);
+            MONSTER_AI_7C4(m_monster74) = 1;
+            break;
+        }
+        MONSTER_NAV(m_monster74)->target(m_monster7C->m_cs->trans, 0.01f);
+        {
+            float d0 = mathfManhatDist2D(&m_monster7C->m_cs->trans, &attractPts[0]);
+
+            if (mathfManhatDist2D(&m_monster7C->m_cs->trans, &attractPts[1]) < d0)
+                m_attract = 0;
+            else
+                m_attract = 1;
+        }
+        {
+            float charge = *(float *)((char *)m_monster74 + 0x1115C); /* the ultra tazer's remaining charge */
+
+            if (charge > 0.0f) {
+                if (m_monster74->m_state != (int *)MONSTER_ULTRA_TAZER(m_monster74)) {
+                    MONSTER_SPECIAL(m_monster74) = 1;
+                    if (((StateUltraTazer *)MONSTER_ULTRA_TAZER(m_monster74))->transitionOK()) {
+                        m_monster74->enterNewState(MONSTER_ULTRA_TAZER(m_monster74));
+                        m_state = 2;
+                    }
+                }
+            } else if (m_monster74->m_state != (int *)MONSTER_ULTRA_TAZER(m_monster74) && charge <= 0.0f) {
+                MONSTER_SPECIAL(m_monster74) = 0;
+                if (mathfManhatDist2D(&m_monster74->m_cs->trans, &attractPts[m_attract]) < 150.0f) {
+                    m_state = 4;
+                    m_monster74->enterNewState(MONSTER_IDLE(m_monster74));
+                    m_timer = 300;
+                } else {
+                    m_state = 3;
+                    *(short *)((char *)m_monster74->m_padFlags[0] + 0x2A) = 1;
+                    m_monster74->enterNewState((MonsterState *)m_monster74->m_stateRef);
+                    MONSTER_AI_7C4(m_monster74) = 1;
+                }
+            }
+        }
+        MONSTER_SOUND(m_monster74)->updateJellyTazer();
+        break;
+    case 3: {
+        float d = mathfManhatDist2D(&m_monster74->m_cs->trans, &attractPts[m_attract]);
+
+        if (m_monster74->m_cs->trans.z < 200.0f && d > 50.0f) {
+            m_monster74->m_stamina.cur = m_monster74->m_stamina.max;
+            MONSTER_AI_7C4(m_monster74) = 1;
+        }
+        if (m_monster74->m_freeFalling) {
+            _cs *cs;
+
+            cs = m_monster74->m_cs;
+            cs->trans.x = smoothEasyIn(cs->trans.x, attractPts[m_attract].x, 0.02f, 0.001f);
+            cs = m_monster74->m_cs;
+            cs->trans.y = smoothEasyIn(cs->trans.y, attractPts[m_attract].y, 0.02f, 0.001f);
+        }
+        if (!m_monster74->m_freeFalling && *m_monster74->m_state != 4) {
+            if (d <= 300.0f) {
+                MonsterState *idle = MONSTER_IDLE(m_monster74);
+
+                if (STATE_FEASIBLE(idle)) {
+                    m_monster74->enterNewState(MONSTER_IDLE(m_monster74));
+                    m_state = 4;
+                    m_timer = 480;
+                }
+            } else {
+                MONSTER_NAV(m_monster74)->tag(attractPts[m_attract], 300.0f);
+            }
+        }
+        break;
+    }
+    case 4:
+        MONSTER_NAV(m_monster74)->target(m_monster7C->m_cs->trans, 0.05f);
+        if (m_timer > 0) {
+            if (--m_timer <= 0) {
+                m_state = 1;
+                MONSTER_NAV(m_monster74)->seek(*(DbInteractive *)m_monster7C, 0.0f);
+            }
+            MONSTER_SPECIAL(m_monster74) = 0;
+        }
+        if (mathfManhatDist2D(&m_monster74->m_cs->trans, &m_monster7C->m_cs->trans) < 200.0f && !m_monster7C->m_dead) {
+            MONSTER_SPECIAL(m_monster74) = 1;
+            if (((StateUltraTazer *)MONSTER_ULTRA_TAZER(m_monster74))->transitionOK()) {
+                m_monster74->enterNewState(MONSTER_ULTRA_TAZER(m_monster74));
+                m_timer = 0;
+                m_state = 2;
+            }
+        }
+        break;
+    case 5:
+        m_timer -= timerGetFieldsLastFrame();
+        if (m_timer <= 0) {
+            _fvector *v;
+
+            m_monster74->m_cs->drawMe = 0;
+            m_monster74->m_playerNum = 0;
+            v = &m_monster78->m_cs->rot;
+            v->x = 0.0f;
+            v->y = 0.0f;
+            v->z = 0.0f;
+            m_state = 0;
+            m_phase = 2;
+            m_monster7C->dropPickup();
+            LevelPickups::turnOff2Handeds();
+        }
+        if (m_timer == 45)
+            game->fadeOutAndIn(2);
+        if (m_timer < 0x6EB && !s_endingCinema) {
+            m_monster78->aiInit();
+            m_monster78->m_cs->drawMe = 1;
+            m_monster78->m_playerNum = 2;
+            animationResetCharacter(m_monster74->m_anims[2]);
+            s_endingCinema = 1;
+            ActionDispatch::callScriptFromId(0x226C, 0, 1);
+            STREAMING_SOUND()->startCinemaMusicFromId(0x226C);
+        }
+        game->m_monsters[0]->cleanUpForMovie();
+        break;
+    }
+
+    if (m_state != 2)
+        MONSTER_SOUND(m_monster74)->terminateJellyTazer();
+
+    /* splashes under the jelly's feet while it wades in the pool area */
+    {
+        int locs[4] = { 0x804, 0x805, 0x816, 0x817 };
+
+        for (i = 0; i < 4; i++) {
+            if (m_state == 1 || m_state == 3) {
+                _cs *cs = m_monster74->m_cs;
+
+                if (cs->trans.x >= -200.0f && cs->trans.x <= 200.0f && cs->trans.y >= -150.0f && cs->trans.y <= 1050.0f) {
+                    _fvector *foot;
+
+                    m_splashTimer[i]--;
+                    foot = MONSTER_LOCATOR(m_monster74, locs[i]);
+                    if (foot->z <= -10.0f && m_splashTimer[i] <= 0) {
+                        FVECTOR pos;
+
+                        vecCopy(&pos, foot);
+                        pos.z = 0.0f;
+                        particleCreateFx(&pos, 0x56, 1.0f, 0, 0.0f);
+                        MONSTER_SOUND(m_monster74)->playWaterSplashSound();
+                        m_splashTimer[i] = 30;
+                    }
+                }
+            }
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/FinalBoss", updateJelly__9FinalBoss);
+#endif
 
 void FinalBoss::takeHit(_fvector *dir, float dmg, int attackerId)
 {
