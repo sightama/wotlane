@@ -1,6 +1,6 @@
-# Arquivos do jogo: NUNCA commitar
-ISO/
-disc/
+# Arquivos do jogo: NUNCA commitar (sem barra final: os worktrees de tools/new_worktree.sh os têm como symlink)
+/ISO
+/disc
 *.iso
 *.rom
 *.elf
@@ -20,7 +20,7 @@ __pycache__/
 .vscode/
 build.ninja
 .ninja_*
-tools/cc/
+/tools/cc
 
 startup_command.bat
 tools/pcsx2_auto/*.png
