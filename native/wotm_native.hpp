@@ -123,13 +123,15 @@ inline void xform(const M4 &m, float x, float y, float z, float out[3]) {
 //   por secao de strip (terminada por MSCNT): tag GIF em H (V4-32, NLOOP = n vertices), depois 3 qwords por vertice
 //   (ST, RGBAQ, XYZF): S-8 @H+1 indice da posicao, V4-8 @H+2 RGBA (0x80 = 1.0), V2-16 @H+3 UV (4096 = 1.0).
 //   STMASK 0xBFBFBFBF + S-8 @H+3+3k marca ADC (nao desenha) no vertice k: reinicia o strip.
+constexpr uint8_t kSlotNoTex = 31;   // Vtx::slot de secao com PRIM.TME 0 na tag GIF: o GS desenha so a cor de vertice
+
 struct Vtx {
     float x, y, z;
     float u, v;
     uint8_t r, g, b, a;
     float w = 1.f;                    // peso do osso de x (so objetos skinned)
     uint8_t cx = 0, cy = 0, cz = 0;   // codigos de osso (endereco de qword no VU1: slot = (codigo & 0x7F) / 4)
-    uint8_t slot = 0;                 // indice do gsTexCtx/texId da secao (palavra 3 da tag GIF = 1 + 3*slot; 0 = slot 0)
+    uint8_t slot = 0;                 // indice do gsTexCtx/texId da secao (palavra 3 da tag GIF = 1 + 3*slot; 0 = slot 0); kSlotNoTex = sem textura
     uint8_t sub = 0;                  // indice do sub-pacote da cadeia (diagnostico)
     uint8_t isAdc = 0;                // triangulo normalmente descartado pelo ADC (so com WOTM_SHOWADC)
 };
@@ -146,6 +148,7 @@ struct MeshData {
     uint32_t slotMask = 0;   // slots de textura usados pelas secoes (bit i = gsTexCtx[i])
     uint8_t curSub = 0;   // sub-pacote em decodificacao (diagnostico)
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
+    uint8_t curTme = 1;   // PRIM.TME em vigor (tag GIF com PRE; sem PRE o GS mantem o PRIM anterior)
     uint32_t posTot = 0, posUsed = 0;   // posicoes carregadas / usadas por algum indice (diagnostico)
     uint32_t dropAdc = 0, dropDegen = 0;   // triangulos descartados por ADC / degenerados (diagnostico)
     uint32_t secTot = 0, secBad = 0, secBadEx = 0;   // secoes de tira / com nloop != indices (diagnostico)
@@ -222,7 +225,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                 v.x = p.x; v.y = p.y; v.z = p.z; v.w = p.w; v.cx = p.cx; v.cy = p.cy; v.cz = p.cz;
                 const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: flag (os predios usam 0x8001, 0x8004...)
                 if (sel >= 1 && sel <= 13) md.curSlot = uint8_t((sel - 1) / 3);   // 0 = mantem a textura anterior
-                v.slot = md.curSlot;
+                v.slot = md.curTme ? md.curSlot : kSlotNoTex;
                 v.sub = md.curSub;
                 md.slotMask |= 1u << v.slot;
                 if (k < rgba.size()) { v.r = rgba[k][0]; v.g = rgba[k][1]; v.b = rgba[k][2]; v.a = rgba[k][3]; }
@@ -259,6 +262,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
             } else if (vn == 3 && vl == 0 && n == 1) {                        // V4-32: tag GIF
                 hdrAddr = addr; nloop = ram.u32(a) & 0x7FFF; haveHdr = true;
                 hdrSel = ram.u32(a + 12);   // palavra alta de REGS: o jogo a usa como seletor de textura (1 + 3*slot)
+                if ((ram.u32(a + 4) >> 14) & 1) md.curTme = uint8_t((ram.u32(a + 4) >> 19) & 1);   // PRE: PRIM nos bits 47-57 (TME = bit 4)
                 if (((ram.u32(a + 4) >> 15) >> 6) & 1) md.abe = true;
             } else if (haveHdr && vn == 0 && vl == 2 && (mask & 0xFF) == 0xBF) {   // S-8 sob mascara: ADC
                 for (uint32_t k = 0; k < n; ++k) {
@@ -595,15 +599,16 @@ public:
         fontTex_.clear();
     }
 
-    // TEX0 do objeto (gsTexCtx[0]); 0 quando o objeto nao tem textura
+    // TEX0 do objeto (gsTexCtx[slot]); 0 quando o objeto nao tem textura ou a secao e kSlotNoTex
     static uint64_t objectTex0(const Ram &ram, uint32_t node, uint32_t slot = 0) {
-        const uint32_t n = ram.u16(node + 0x5A);
+        const uint32_t n = slot == kSlotNoTex ? 0 : ram.u16(node + 0x5A);
         if (n == 0) return 0;
         if (slot >= n || slot >= 5) slot = 0;
         return uint64_t(ram.u32(node + 0x70 + 0x30 * slot)) | (uint64_t(ram.u32(node + 0x74 + 0x30 * slot)) << 32);
     }
-    // texId do slot (texId[5] em +0x50); slot invalido cai no 0
+    // texId do slot (texId[5] em +0x50); slot invalido cai no 0; kSlotNoTex = 0
     static uint32_t objectTexId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
+        if (slot == kSlotNoTex) return 0;
         if (slot >= ram.u16(node + 0x5A) || slot >= 5) slot = 0;
         return ram.u16(node + 0x50 + 2 * slot);
     }
@@ -797,7 +802,7 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
-                    forEachTri(ram, it, [&](const float p[3][3]) {
+                    forEachTri(ram, it, [&](const float p[3][3], uint8_t) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -829,7 +834,7 @@ public:
         rlEnableBackfaceCulling();
     }
 
-    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots
+    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, slot de textura da secao)
     template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
         const MeshData *md = mesh(ram, it.node);
         if (!md || !md->valid) return;
@@ -841,7 +846,7 @@ public:
                 if (pal) skinVertex(ram, pal, it.m, t[k + c], p[c]);
                 else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
             }
-            f(p);
+            f(p, t[k].slot);
         }
     }
 
@@ -852,7 +857,7 @@ public:
         std::vector<float> cov(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3]) {
+            forEachTri(ram, it, [&](const float p[3][3], uint8_t) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -1684,7 +1689,7 @@ public:
                                  ram.f32(list[i].node + 0x28), mdi ? mdi->tris.size() / 3 : size_t(0), list[i].m.m[3][0], list[i].m.m[3][1], list[i].m.m[3][2]);
             }
             const uint32_t smask = (mdi && mdi->slotMask) ? mdi->slotMask : 1u;
-            for (uint32_t sl = 0; sl < 5; ++sl) {
+            for (uint32_t sl = 0; sl < 32; ++sl) {   // slots 0-4 e kSlotNoTex
             if (!(smask & (1u << sl))) continue;
             { static const int onlySl = std::getenv("WOTM_ONLYSLOT") ? std::atoi(std::getenv("WOTM_ONLYSLOT")) : -1; if (onlySl >= 0 && int(sl) != onlySl) continue; }   // diagnostico: so este slot de textura
             uint64_t key = wire ? 0 : texKey(ram, list[i].node, texRemap(sl));

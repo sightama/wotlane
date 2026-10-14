@@ -3484,10 +3484,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..1fc8d10
+index 0000000..39c36aa
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,428 @@
+@@ -0,0 +1,487 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -3507,16 +3507,24 @@ index 0000000..1fc8d10
 +//    entrada de cada passe (worldToScreenMat da vista 0 e a posicao do _cs) e vale a que casar mais.
 +// So entram triangulos inteiros dentro da tela; degenerados (emendas de tira) ficam de fora dos dois lados. O microcodigo descarta
 +// faces de costas; as do nativo que sobram nesses objetos saem como "costas", nao como diferenca.
++// Textura: cada par casado compara o TEX0 em vigor no GS quando o VU1 desenhou (contexto do PRIM) com o do slot da secao que o nativo
++// usa (texKey/objectTex0), nos campos que escolhem os texels.
 +// Saida: linhas [vu1check] no stderr (totais e os objetos com mais diferenca). WOTM_VU1CHECK_DUMP=<prefixo> grava os triangulos de
 +// cada checagem em <prefixo>_<g_frame>.csv.
 +#ifdef WOTM_HAVE_NATIVE
 +#include <map>
++#include <tuple>
 +
 +namespace wotm_vu1check
 +{
-+struct Tri { uint32_t prog; float x[3], y[3]; };
++// Textura de um triangulo: os campos do TEX0 que escolhem os texels (TBP0, TBW, PSM, TW, TH, CBP, CPSM, CSM, CSA; fora TCC/TFX/CLD).
++// 0 = sem textura (PRIM.TME 0 no VU1; objeto sem texKey no nativo); kTexUnknown = o VU1 desenhou sem TEX0 visto no quadro.
++constexpr uint64_t kTexMask = 0x3FFFFFFFFull | (0x1FFFFFFull << 37);
++constexpr uint64_t kTexUnknown = ~0ull;
 +
-+struct WTri { float p[3][3]; };   // triangulo nativo em coordenadas de mundo
++struct Tri { uint32_t prog; float x[3], y[3]; uint64_t tex = 0; uint8_t slot = 0; };   // slot: so no nativo
++
++struct WTri { float p[3][3]; uint64_t tex; uint8_t slot; };   // triangulo nativo em coordenadas de mundo
 +
 +struct NatObj {
 +    uint32_t node = 0, span = 0;
@@ -3539,6 +3547,7 @@ index 0000000..1fc8d10
 +std::vector<std::vector<uint32_t>> g_progs;     // id - 1 -> origens dos trechos da cadeia ate o MSCAL
 +std::vector<uint32_t> g_progChain;              // id - 1 -> cadeia (indice em g_nats)
 +std::vector<Tri> g_vu;                          // triangulos do VU1 (Tri::prog = id do programa)
++uint32_t g_vuKicked = 0, g_vuOff = 0;             // triangulos do XGKICK no quadro / fora da tela (parcial ou inteiro)
 +wotm::Scene *g_scene = nullptr;
 +FILE *g_dump = nullptr;
 +
@@ -3568,7 +3577,7 @@ index 0000000..1fc8d10
 +{
 +    std::vector<Tri> out;
 +    for (const WTri &w : in) {
-+        Tri t{key, {}, {}};
++        Tri t{key, {}, {}, w.tex, w.slot};
 +        bool ok = true;
 +        for (int c = 0; c < 3 && ok; ++c) {
 +            const float d[3] = {w.p[c][0] - cam.eye[0], w.p[c][1] - cam.eye[1], w.p[c][2] - cam.eye[2]};
@@ -3614,8 +3623,14 @@ index 0000000..1fc8d10
 +            o.skip = o.skip || skip;
 +            ++o.items;
 +            if (skip) continue;
-+            g_scene->forEachTri(ram, it, [&](const float p[3][3]) {
++            uint64_t tex[32] = {};   // por slot: a textura com que o nativo desenha (Scene::textureId -> texKey/objectTex0)
++            for (uint32_t s = 0; s < 32; ++s)
++                if (md->slotMask & (1u << s))
++                    tex[s] = wotm::Scene::texKey(ram, it.node, s) ? wotm::Scene::objectTex0(ram, it.node, s) & kTexMask : 0;
++            g_scene->forEachTri(ram, it, [&](const float p[3][3], uint8_t slot) {
 +                WTri w;
++                w.slot = slot;
++                w.tex = tex[slot & 31];
 +                bool ok = true;
 +                for (int c = 0; c < 3; ++c)
 +                    for (int a = 0; a < 3; ++a) {
@@ -3656,6 +3671,8 @@ index 0000000..1fc8d10
 +
 +// Pacote do XGKICK: tags GIF; PACKED com XYZ2/XYZF2 (desenham, salvo ADC) e XYZ3/XYZF3 (so empilham); PRIM no tag ou por A+D.
 +// Triangulo impar da tira com os dois primeiros trocados, como o nativo (orientacao igual nos dois lados).
++// TEX0_1/TEX0_2 (PACKED 0x6/0x7 ou A+D) valem ate a proxima troca, entre pacotes: cada triangulo leva o do contexto do PRIM.
++uint64_t g_tex0[2] = {kTexUnknown, kTexUnknown};
 +void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
 +{
 +    uint32_t prim = 4, nv = 0;
@@ -3668,8 +3685,12 @@ index 0000000..1fc8d10
 +        const uint32_t type = prim & 7;
 +        if (kick && nv >= 3 && (type == 4 || (type == 3 && nv % 3 == 0))) {
 +            const int a = (type == 4 && ((nv - 1) & 1)) ? 1 : 0;
-+            const Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}};
-+            if (inScreen(t) && !degenerate(t)) g_vu.push_back(t);
++            const uint64_t t0 = g_tex0[(prim >> 9) & 1];
++            const uint64_t tex = !((prim >> 4) & 1) ? 0 : t0 == kTexUnknown ? kTexUnknown : t0 & kTexMask;
++            const Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}, tex};
++            ++g_vuKicked;
++            if (!inScreen(t)) ++g_vuOff;
++            else if (!degenerate(t)) g_vu.push_back(t);
 +        }
 +    };
 +    for (uint32_t pos = 0; pos + 16 <= bytes;) {
@@ -3690,6 +3711,9 @@ index 0000000..1fc8d10
 +                        const bool adc = (w[3] >> 15) & 1;
 +                        vertex((w[0] & 0xFFFF) / 16.f, (w[1] & 0xFFFF) / 16.f, (reg == 0x4 || reg == 0x5) && !adc);
 +                    } else if (reg == 0x0 || (reg == 0xE && (w[2] & 0xFF) == 0x00)) { prim = w[0] & 0x7FF; nv = 0; }
++                    else if (reg == 0x6 || reg == 0x7) g_tex0[reg - 0x6] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
++                    else if (reg == 0xE && ((w[2] & 0xFF) == 0x06 || (w[2] & 0xFF) == 0x07))
++                        g_tex0[(w[2] & 0xFF) - 0x06] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
 +                }
 +        } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
 +        else pos += nloop * 16;
@@ -3710,15 +3734,15 @@ index 0000000..1fc8d10
 +}
 +
 +// Para cada triangulo do VU1, o nativo ainda livre de menor soma de distancias entre vertices (em qualquer ordem), com cada vertice
-+// a ate 1 px (grade de 4 px pelo centroide). vuHit/natHit marcam os casados.
-+uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vector<char> &vuHit, std::vector<char> &natHit)
++// a ate 1 px (grade de 4 px pelo centroide). vuPair = indice do nativo casado (-1 = nenhum); natHit marca os nativos casados.
++uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vector<int> &vuPair, std::vector<char> &natHit)
 +{
 +    constexpr float kTol = 1.f;
 +    auto cell = [](float x, float y) { return (uint64_t(uint32_t(int32_t(std::floor(x / 4.f)))) << 32) | uint32_t(int32_t(std::floor(y / 4.f))); };
 +    std::unordered_multimap<uint64_t, uint32_t> grid;
 +    for (uint32_t i = 0; i < nat.size(); ++i)
 +        grid.emplace(cell((nat[i].x[0] + nat[i].x[1] + nat[i].x[2]) / 3.f, (nat[i].y[0] + nat[i].y[1] + nat[i].y[2]) / 3.f), i);
-+    vuHit.assign(vu.size(), 0);
++    vuPair.assign(vu.size(), -1);
 +    natHit.assign(nat.size(), 0);
 +    uint32_t matched = 0;
 +    for (size_t i = 0; i < vu.size(); ++i) {
@@ -3743,7 +3767,7 @@ index 0000000..1fc8d10
 +                    if (all && cost < bestCost) { bestCost = cost; best = int(g->second); }
 +                }
 +            }
-+        if (best >= 0) { natHit[size_t(best)] = 1; vuHit[i] = 1; ++matched; }
++        if (best >= 0) { natHit[size_t(best)] = 1; vuPair[i] = best; ++matched; }
 +    }
 +    return matched;
 +}
@@ -3773,9 +3797,11 @@ index 0000000..1fc8d10
 +            for (uint32_t a : g_progs[i]) std::fprintf(g_dump, ",%x", a);
 +            std::fprintf(g_dump, "\n");
 +        }
-+    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas; };
++    // texDifere: casados com textura diferente; vuTex/natTex/natSlot: o par diferente mais comum do objeto
++    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas, texDifere; uint64_t vuTex, natTex; uint8_t natSlot; };
 +    std::vector<Row> rows;
 +    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
++    uint32_t totTexDifere = 0, totTexUnknown = 0;
 +    std::vector<uint32_t> keys;   // objetos da 1a coleta e os que o VU1 desenhou
 +    for (const auto &kv : g_nats[0]) keys.push_back(kv.first);
 +    for (const auto &kv : vuBy) keys.push_back(kv.first);
@@ -3800,13 +3826,28 @@ index 0000000..1fc8d10
 +        // camera: a do hier que montou o pacote (copiada nele); uma cadeia do passe 0 pode sair pela interrupcao ja dentro do passe 1,
 +        // entao vale a que casar mais
 +        std::vector<Tri> nat = project(o.tris, g_cam[0], key);
-+        std::vector<char> vuHit, natHit, vuHit1, natHit1;
-+        uint32_t m = match(vu, nat, vuHit, natHit);
++        std::vector<int> vuPair, vuPair1;
++        std::vector<char> natHit, natHit1;
++        uint32_t m = match(vu, nat, vuPair, natHit);
 +        if (m < vu.size()) {
 +            std::vector<Tri> nat1 = project(o.tris, g_cam[1], key);
-+            const uint32_t m1 = match(vu, nat1, vuHit1, natHit1);
-+            if (m1 > m) { m = m1; nat.swap(nat1); vuHit.swap(vuHit1); natHit.swap(natHit1); }
++            const uint32_t m1 = match(vu, nat1, vuPair1, natHit1);
++            if (m1 > m) { m = m1; nat.swap(nat1); vuPair.swap(vuPair1); natHit.swap(natHit1); }
 +        }
++        // textura dos casados: a do GS no XGKICK contra a que o nativo escolheu para o slot da secao
++        uint32_t texDifere = 0;
++        std::map<std::tuple<uint64_t, uint64_t, uint8_t>, uint32_t> texPairs;
++        for (size_t i = 0; i < vu.size(); ++i) {
++            if (vuPair[i] < 0) continue;
++            const Tri &n = nat[size_t(vuPair[i])];
++            if (vu[i].tex == kTexUnknown) ++totTexUnknown;
++            else if (vu[i].tex != n.tex) { ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}]; }
++        }
++        std::tuple<uint64_t, uint64_t, uint8_t> texWorst{};
++        uint32_t texWorstN = 0;
++        for (const auto &kv : texPairs)
++            if (kv.second > texWorstN) { texWorstN = kv.second; texWorst = kv.first; }
++        totTexDifere += texDifere;
 +        if (vu.empty() && nat.empty()) continue;
 +        uint32_t vuBack = 0, costas = 0, sobra = 0;
 +        for (const Tri &t : vu) vuBack += area2(t) > 0.f;
@@ -3816,12 +3857,13 @@ index 0000000..1fc8d10
 +        const uint32_t nVu = uint32_t(vu.size()), nNat = uint32_t(nat.size()) - costas, falta = nVu - m;
 +        objVu += nVu > 0; objNat += nNat > 0; objBoth += nVu && nNat;
 +        totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas;
-+        rows.push_back({key, &o, nVu, nNat, falta, sobra, costas});
++        rows.push_back({key, &o, nVu, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst)});
 +        if (g_dump) {
 +            auto row = [&](const char *side, int hit, const Tri &t) {
-+                std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2]);
++                std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llx\n", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2],
++                             t.y[2], (unsigned long long)t.tex);
 +            };
-+            for (size_t i = 0; i < vu.size(); ++i) row("vu", vuHit[i], vu[i]);
++            for (size_t i = 0; i < vu.size(); ++i) row("vu", vuPair[i] >= 0, vu[i]);
 +            for (size_t i = 0; i < nat.size(); ++i) row("nat", natHit[i], nat[i]);
 +            std::fprintf(g_dump, "obj,%u,%x,%x,%u,%d,%d,%x\n", chain, key, o.node, unsigned(o.tex), o.skinned, o.items, o.span);
 +        }
@@ -3830,9 +3872,10 @@ index 0000000..1fc8d10
 +    for (const auto &kv : orphan) orphanTris += kv.second;
 +    const double pct = totVu ? 100.0 * (totVu - totFalta) / totVu : 0.0;
 +    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u nativo %u casados %.1f%% faltam %u sobram %u "
-+                         "(costas %u) | sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, vertices nao finitos %u\n",
-+                 g_frame, objVu, objNat, objBoth, totVu, totNat, pct, totFalta, totSobra, totCostas, orphanTris, g_chains, g_walkMs, g_projMs,
-+                 g_progs.size(), bad);
++                         "(costas %u) | textura difere %u, sem TEX0 %u | XGKICK %u tris, %u fora da tela | sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
++                         "vertices nao finitos %u\n",
++                 g_frame, objVu, objNat, objBoth, totVu, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, g_vuKicked, g_vuOff, orphanTris, g_chains,
++                 g_walkMs, g_projMs, g_progs.size(), bad);
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.falta + a.sobra > b.falta + b.sobra; });
 +    int shown = 0;
 +    for (const Row &r : rows) {
@@ -3840,6 +3883,20 @@ index 0000000..1fc8d10
 +        ++shown;
 +        std::fprintf(stderr, "[vu1check]   pkt %x no %x tex %u%s itens %d: vu %u nativo %u faltam %u sobram %u (costas %u)\n", r.pp,
 +                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.o->items, r.vu, r.nat, r.falta, r.sobra, r.costas);
++    }
++    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.texDifere > b.texDifere; });
++    auto texStr = [](uint64_t v, char *s, size_t n) {
++        if (!v) { std::snprintf(s, n, "sem textura"); return; }
++        const wotm::gs::Tex0 t = wotm::gs::Tex0::decode(v);
++        std::snprintf(s, n, "tbp %x psm %u %ux%u cbp %x csa %u", t.tbp0, t.psm, 1u << t.tw, 1u << t.th, t.cbp, t.csa);
++    };
++    for (size_t i = 0; i < rows.size() && i < 8 && rows[i].texDifere; ++i) {
++        const Row &r = rows[i];
++        char a[96], b[96];
++        texStr(r.vuTex, a, sizeof a);
++        texStr(r.natTex, b, sizeof b);
++        std::fprintf(stderr, "[vu1check]   textura pkt %x no %x tex %u%s: %u de %u casados; mais comum: vu (%s) nativo slot %u (%s)\n", r.pp,
++                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.texDifere, r.vu - r.falta, a, unsigned(r.natSlot), b);
 +    }
 +    std::vector<std::pair<uint32_t, uint32_t>> orph(orphan.begin(), orphan.end());
 +    std::sort(orph.begin(), orph.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
@@ -3879,6 +3936,8 @@ index 0000000..1fc8d10
 +        g_progs.clear();
 +        g_progChain.clear();
 +        g_vu.clear();
++        g_vuKicked = g_vuOff = 0;
++        g_tex0[0] = g_tex0[1] = kTexUnknown;
 +        g_chains = 0;
 +        g_walkMs = g_projMs = 0.0;
 +        g_armed = true;
