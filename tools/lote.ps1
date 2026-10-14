@@ -4,12 +4,14 @@
 # lote (combinacao n usa o elemento n mod tamanho); as IAs alem da primeira sao sorteadas de -Opponents com a semente -Seed, entao o
 # mesmo comando repete o mesmo lote. O vigia do runtime grava [vigia] CONGELOU (com ram_/vram_vigia_*.bin) e [vigia] LENTO; uma
 # queda sai como [CRASH] ou como o processo terminando antes da hora.
-# Saida em <runtime>\lote\<data_hora>\: <jogador>_<ias com +>_<fase>.log (linhas [partida]/[vigia]/[CRASH] e a fase/monstros
+# A cada -Check segundos o runtime compara, num quadro, o que o microcodigo do VU1 desenharia com o que a camada nativa desenha,
+# por objeto e em numeros (WOTM_VU1CHECK, linhas [vu1check]; ver docs/passos/NATIVO.md).
+# Saida em <runtime>\lote\<data_hora>\: <jogador>_<ias com +>_<fase>.log (linhas [partida]/[vigia]/[CRASH]/[vu1check] e a fase/monstros
 # carregados), .png (a tela ~12 s antes do fim), os dumps do vigia e resumo.csv.
 #
-# Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0]
+# Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0] [-Check 10]
 #   Indices: monstros e fases como no GLOSSARIO.md (MonsterLongNames, GameLevelNames). Sem -Opponents, usa a mesma lista de -Monsters.
-#   -AIs: quantidades de IAs (1 a 3) que se alternam. -Max N para depois de N combinacoes (0 = todas).
+#   -AIs: quantidades de IAs (1 a 3) que se alternam. -Max N para depois de N combinacoes (0 = todas). -Check 0 desliga a comparacao.
 #   As listas sao texto separado por virgula (com -File o PowerShell nao converte "1,2" em lista).
 param(
     [string]$Monsters = '1,2,3,4,5,7,8,9,10,11',
@@ -18,7 +20,8 @@ param(
     [string]$AIs = '1,2,3',
     [int]$Seed = 1,
     [int]$Secs = 180,
-    [int]$Max = 0
+    [int]$Max = 0,
+    [int]$Check = 10
 )
 $ErrorActionPreference = 'Stop'
 function Split-Ints([string]$s) { @($s -split ',' | Where-Object { $_.Trim() } | ForEach-Object { [int]$_.Trim() }) }
@@ -36,7 +39,7 @@ $out = Join-Path $runtime ("lote\" + (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
 New-Item -ItemType Directory -Force $out | Out-Null
 $disc = "$runtime\discroot"
 $summary = Join-Path $out 'resumo.csv'
-'jogador,ias,fase,segundos,rodadas,vitorias,congelou,lento,crash,saiu_antes' | Set-Content $summary -Encoding ASCII
+'jogador,ias,fase,segundos,rodadas,vitorias,congelou,lento,crash,saiu_antes,checagens,casados_pior,objetos_divergentes' | Set-Content $summary -Encoding ASCII
 
 # Cada combinacao: @(jogador, ia1, [ia2, [ia3,]] fase)
 $rng = New-Object System.Random $Seed
@@ -57,6 +60,7 @@ Write-Host "Lote: $total combinacoes de $Secs s (~$([math]::Ceiling($total * ($S
 
 $env:WOTM_REPO = $repo
 $env:WOTM_AIVSAI = '1'
+if ($Check -gt 0) { $env:WOTM_VU1CHECK = [string]$Check } else { Remove-Item Env:WOTM_VU1CHECK -ErrorAction SilentlyContinue }
 $n = 0
 foreach ($c in $combos) {
     $n++
@@ -81,7 +85,7 @@ foreach ($c in $combos) {
     Get-Process ps2EntryRunner -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
 
-    $lines = @(Select-String -Path "$runtime\live.err.log" -Pattern '\[partida\]|\[vigia\]|\[CRASH\]|\[native\] recursos' | ForEach-Object { $_.Line })
+    $lines = @(Select-String -Path "$runtime\live.err.log" -Pattern '\[partida\]|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]' | ForEach-Object { $_.Line })
     $lines | Set-Content (Join-Path $out "$tag.log") -Encoding UTF8
     Get-ChildItem $disc -Filter '*_vigia_*.bin' -ErrorAction SilentlyContinue | ForEach-Object { Move-Item $_.FullName (Join-Path $out ("{0}_{1}" -f $tag, $_.Name)) -Force }
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Move-Item $_.FullName (Join-Path $out "$tag.png") -Force }
@@ -92,10 +96,14 @@ foreach ($c in $combos) {
     $frozen = @($lines | Where-Object { $_ -match 'CONGELOU' }).Count
     $slow = @($lines | Where-Object { $_ -match 'LENTO' }).Count
     $crash = @($lines | Where-Object { $_ -match '\[CRASH\]' }).Count
-    '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash, [int]$early |
-        Add-Content $summary -Encoding ASCII
+    # comparacao VU1 x nativo: quantas checagens, o pior % de triangulos do VU1 casados e quantos objetos (polyPkt) apareceram com diferenca
+    $checks = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ .* casados ([\d.]+)%') { [double]$Matches[1] } })
+    $worst = if ($checks.Count) { ($checks | Measure-Object -Minimum).Minimum.ToString([cultureinfo]::InvariantCulture) } else { '' }   # ponto decimal (CSV)
+    $diverging = @($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+pkt ([0-9a-f]+)') { $Matches[1] } } | Sort-Object -Unique).Count
+    '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash,
+        [int]$early, $checks.Count, $worst, $diverging | Add-Content $summary -Encoding ASCII
     if ($frozen -or $crash -or $early) { Write-Host ("   PROBLEMA: congelou={0} crash={1} saiu_antes={2}" -f $frozen, $crash, [int]$early) -ForegroundColor Red }
     else { Write-Host ("   ok: {0} rodadas, lento={1}" -f $rounds.Count, $slow) }
 }
-Remove-Item Env:WOTM_MATCH, Env:WOTM_AIVSAI, Env:PS2X_SHOT_FRAMES -ErrorAction SilentlyContinue
+Remove-Item Env:WOTM_MATCH, Env:WOTM_AIVSAI, Env:WOTM_VU1CHECK, Env:PS2X_SHOT_FRAMES -ErrorAction SilentlyContinue
 Write-Host "Resumo: $summary"
