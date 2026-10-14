@@ -2358,10 +2358,10 @@ index 0000000..d45e2fc
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..36aeb5a
+index 0000000..bd69cdc
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,384 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
 +// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
@@ -2518,6 +2518,35 @@ index 0000000..36aeb5a
 +        }
 +        WRITE32(kGame + 0x1203E0, static_cast<uint32_t>(n < 0 ? 0 : n));
 +    }
++
++    // Fora do controle, o jogo ainda trata os slots de jogador como humanos onde o m_playerNum decide algo que nao e entrada:
++    // TheGame::gameGetStartPoint (0x138D68; com m_playerNum 2 o jogador nascia num ponto da IA e a IA no do jogador) e
++    // Cameras::Update (0x11C770; so chama Camera::checkCollision, que monta os pontos de visada dos predios "fantasma", para
++    // camera de monstro com m_playerNum 1). Durante essas duas funcoes os jogadores voltam a 1. Nenhuma das duas espera.
++    constexpr uint32_t kGameGetStartPoint = 0x138D68u, kCamerasUpdate = 0x11C770u;
++    PS2Runtime::RecompiledFunction g_origStartPoint = nullptr, g_origCamerasUpdate = nullptr;
++
++    void callAsHumans(PS2Runtime::RecompiledFunction orig, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        uint32_t flipped[4];
++        int n = 0;
++        const int32_t players = static_cast<int32_t>(READ32(kShell + 0x2BB4));
++        for (int32_t i = 0; i < players && i < 4; ++i)
++        {
++            const uint32_t m = READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
++            if (m && READ32(m + 0x18) == 2u)
++            {
++                WRITE32(m + 0x18, 1u);
++                flipped[n++] = m;
++            }
++        }
++        orig(rdram, ctx, runtime);
++        while (n > 0)
++            WRITE32(flipped[--n] + 0x18, 2u);
++    }
++
++    void startPointAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origStartPoint, rdram, ctx, runtime); }
++    void camerasUpdateAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origCamerasUpdate, rdram, ctx, runtime); }
 +
 +    // WOTM_TURNLOG: uma linha [turn] por MonsterDynamics::updatePosition (cada monstro, cada quadro do jogo):
 +    // quadro (g_frame), monstro, rate, acelRot (+0x110, zerada pela funcao), velRot (+0x100) antes/depois e os angulos
@@ -2706,6 +2735,10 @@ index 0000000..36aeb5a
 +        g_aiVsAi = true;
 +        runtime.registerFunction(kPlayerInit, &playerInitAsAi);
 +        runtime.registerFunction(kSetAIMonster, &setAIMonsterCounted);
++        if ((g_origStartPoint = runtime.lookupFunction(kGameGetStartPoint)))
++            runtime.registerFunction(kGameGetStartPoint, &startPointAsHumans);
++        if ((g_origCamerasUpdate = runtime.lookupFunction(kCamerasUpdate)))
++            runtime.registerFunction(kCamerasUpdate, &camerasUpdateAsHumans);
 +        std::fprintf(stderr, "[wotm] jogador controlado pela IA (WOTM_AIVSAI)\n");
 +    }
 +    if (g_minRate > 0)
