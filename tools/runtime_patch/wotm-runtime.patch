@@ -2358,10 +2358,10 @@ index 0000000..d45e2fc
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..bd69cdc
+index 0000000..f0f7af5
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,414 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
 +// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
@@ -2429,10 +2429,11 @@ index 0000000..bd69cdc
 +    }
 +
 +
-+    // Partida direta, WOTM_MATCH="<monstro do jogador>,<monstro da IA>,<fase>" (indices de MonsterLongNames e GameLevelNames;
-+    // "3,1,1" = lizard contra monkey em central): userintMain (0x1D9868) nao abre o menu e devolve 0 (comecar a sessao) com o shell
-+    // como o menu o deixa em "1 jogador contra a CPU" (medido com dumps no fim do menu do roteiro -Auto): desafio (m_mode 2),
-+    // 1 jogador + 1 IA, 3 vidas, figurino 1 na IA quando os monstros sao iguais. A diferenca e m_killTarget 0 (o menu poe 1): sem
++    // Partida direta, WOTM_MATCH="<monstro do jogador>,<IA>[,<IA>[,<IA>]],<fase>" (indices de MonsterLongNames e GameLevelNames;
++    // "3,1,1" = lizard contra monkey em central; "3,1,2,5,1" = lizard contra monkey, robot e mantis): userintMain (0x1D9868) nao abre
++    // o menu e devolve 0 (comecar a sessao) com o shell como o menu o deixa em "1 jogador contra a CPU" (medido com dumps no fim do
++    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 1 a 3 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas; monstro
++    // repetido ganha o proximo figurino (o menu nao deixa dois iguais no mesmo figurino). A diferenca e m_killTarget 0 (o menu poe 1): sem
 +    // meta de vitorias, EvaluateOnePlayerChallengeStatus so reergue o monstro derrubado e a luta segue, sem o dialogo "PLAY AGAIN"
 +    // que esperaria o pad. O filme de abertura (uiMain, 0x1D93D8) vira no-op. Cada fim de rodada (entrada de
 +    // Shell::EvaluateGameStatus, 0x1A7960) sai no log como [partida] com a vida e as vitorias dos dois monstros.
@@ -2440,28 +2441,39 @@ index 0000000..bd69cdc
 +    PS2Runtime::RecompiledFunction g_origEvaluate = nullptr;
 +    unsigned g_rounds = 0;
 +    constexpr uint32_t kShell = 0x414D80u, kGame = 0x2B35A0u;   // shellInfo, shellGame
-+    int g_match[3] = {-1, -1, -1};
++    int g_matchMonsters[4] = {-1, -1, -1, -1};   // jogador, depois as IAs
++    int g_matchAIs = 0, g_matchLevel = -1;
 +    unsigned g_matchCount = 0;
 +    bool g_aiVsAi = false;
 +
 +    void userintMainDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +    {
-+        const int player = g_match[0], ai = g_match[1], level = g_match[2];
-+        WRITE32(kShell + 0x2938, static_cast<uint32_t>(player << 5));   // m_monsterSel[0]: (monstro << 5) | variante
-+        WRITE32(kShell + 0x2948, static_cast<uint32_t>(ai << 5));       // m_monsterSel[4]: a primeira IA
 +        for (uint32_t i = 0; i < 8; ++i)
++        {
++            WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel
 +            WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume
-+        WRITE32(kShell + 0x2BE8, player == ai ? 1u : 0u);                 // m_costume[2]: a IA
++        }
++        for (int i = 0; i <= g_matchAIs; ++i)
++        {
++            uint32_t costume = 0;
++            for (int j = 0; j < i; ++j)
++                costume += g_matchMonsters[j] == g_matchMonsters[i];
++            const uint32_t slot = i ? 4u + (i - 1) : 0u, costumeSlot = i ? 2u + (i - 1) : 0u;
++            WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
++            WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
++        }
 +        WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
-+        WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(level));          // m_levelNum
++        WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
 +        WRITE32(kShell + 0x2BB4, 1);                                      // m_numPlayers
-+        WRITE32(kShell + 0x2BB8, 1);                                      // m_numAIs
++        WRITE32(kShell + 0x2BB8, static_cast<uint32_t>(g_matchAIs));     // m_numAIs
 +        for (uint32_t i = 0; i < 4; ++i)
 +            WRITE32(kShell + 0x2BBC + 4 * i, 3);                         // m_lives
 +        WRITE32(kShell + 0x2C10, 2);                                      // m_mode: free for all
 +        WRITE32(kGame + 0x1203C8, 2);                                     // TheGame::m_gameMode
-+        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s) contra %d (IA), fase %d\n", ++g_matchCount, player,
-+                     g_aiVsAi ? " sob IA" : "", ai, level);
++        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s) contra", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
++        for (int i = 1; i <= g_matchAIs; ++i)
++            std::fprintf(stderr, " %d", g_matchMonsters[i]);
++        std::fprintf(stderr, " (IA), fase %d\n", g_matchLevel);
 +        SET_GPR_S32(ctx, 2, 0);
 +        ctx->pc = GPR_U32(ctx, 31);
 +    }
@@ -2473,7 +2485,7 @@ index 0000000..bd69cdc
 +        if (ctx->pc == kEvaluateGameStatus)
 +        {
 +            std::fprintf(stderr, "[partida] rodada %u terminou (rtMain devolveu %d):", ++g_rounds, static_cast<int32_t>(GPR_U32(ctx, 5)));
-+            for (uint32_t slot : {0u, 4u})   // m_monsters[0] (jogador) e m_monsters[4] (primeira IA)
++            for (uint32_t slot : {0u, 4u, 5u, 6u})   // m_monsters[0] (jogador) e m_monsters[4..] (IAs)
 +            {
 +                const uint32_t m = READ32(kGame + 0x120380 + 4 * slot);
 +                if (!m)
@@ -2718,16 +2730,34 @@ index 0000000..bd69cdc
 +    }
 +    if (const char *e = std::getenv("WOTM_MATCH"))
 +    {
-+        if (std::sscanf(e, "%d,%d,%d", &g_match[0], &g_match[1], &g_match[2]) == 3)
++        int v[5], n = 0;
++        const char *p = e;
++        for (char *end; n < 5; p = end + 1)
++        {
++            v[n++] = static_cast<int>(std::strtol(p, &end, 10));
++            if (end == p || *end != ',')
++            {
++                p = end == p ? nullptr : end;
++                break;
++            }
++        }
++        if (p && *p == '\0' && n >= 3)
++        {
++            g_matchAIs = n - 2;
++            for (int i = 0; i <= g_matchAIs; ++i)
++                g_matchMonsters[i] = v[i];
++            g_matchLevel = v[n - 1];
++        }
++        if (g_matchAIs > 0)
 +        {
 +            runtime.registerFunction(kUserintMain, &userintMainDirect);
 +            runtime.registerFunction(kUiMain, &uiMainSkipped);
 +            if ((g_origEvaluate = runtime.lookupFunction(kEvaluateGameStatus)))
 +                runtime.registerFunction(kEvaluateGameStatus, &evaluateGameStatusLogged);
-+            std::fprintf(stderr, "[wotm] partida direta: monstro %d contra %d, fase %d (WOTM_MATCH)\n", g_match[0], g_match[1], g_match[2]);
++            std::fprintf(stderr, "[wotm] partida direta: monstro %d contra %d IA(s), fase %d (WOTM_MATCH)\n", g_matchMonsters[0], g_matchAIs, g_matchLevel);
 +        }
 +        else
-+            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>,<monstro>,<fase>)\n", e);
++            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>,<IA>[,<IA>[,<IA>]],<fase>)\n", e);
 +    }
 +    if (std::getenv("WOTM_AIVSAI") && (g_aiInit = runtime.lookupFunction(kAiInit)) &&
 +        (g_origSetAIMonster = runtime.lookupFunction(kSetAIMonster)))
