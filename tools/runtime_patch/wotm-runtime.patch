@@ -827,7 +827,7 @@ index 8590f14..addb826 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..2e834b2 100644
+index 45cb9d2..02338cf 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -1073,7 +1073,7 @@ index 45cb9d2..2e834b2 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2582,177 @@ void PS2Runtime::run()
+@@ -2444,7 +2582,253 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -1192,27 +1192,103 @@ index 45cb9d2..2e834b2 100644
 +                    TakeScreenshot(("shot_" + std::to_string(s_frame) + ".png").c_str());
 +                }
 +            }
-+            if (const char *df = std::getenv("PS2X_DUMP_RAM")) // "600,900": grava a RAM do EE em ram_<frame>.bin (cwd), para o visualizador nativo
++            // grava a RAM do EE em ram_<tag>.bin e a VRAM do GS (texturas enviadas por upload) em vram_<tag>.bin (cwd)
++            const auto dumpRam = [this](const std::string &tag) {
++                if (FILE *rf = std::fopen(("ram_" + tag + ".bin").c_str(), "wb"))
++                {
++                    std::fwrite(m_memory.getRDRAM(), 1, PS2_RAM_SIZE, rf);
++                    std::fclose(rf);
++                }
++                m_gs.refreshDisplaySnapshot();
++                uint32_t vramSize = 0;
++                if (const uint8_t *vram = m_gs.lockDisplaySnapshot(vramSize))
++                {
++                    if (FILE *vf = std::fopen(("vram_" + tag + ".bin").c_str(), "wb"))
++                    {
++                        std::fwrite(vram, 1, vramSize, vf);
++                        std::fclose(vf);
++                    }
++                }
++                m_gs.unlockDisplaySnapshot();
++            };
++            if (const char *df = std::getenv("PS2X_DUMP_RAM")) // "600,900": ram_<frame>.bin e vram_<frame>.bin, para o visualizador nativo
 +            {
 +                const std::string dl = std::string(",") + df + ",";
 +                if (dl.find("," + std::to_string(s_frame) + ",") != std::string::npos)
++                    dumpRam(std::to_string(s_frame));
++            }
++            {
++                // Vigia: g_frame (0x6F7E38) sobe em todo quadro da luta (rtMain) e do menu (ShellRtLoop::endField); parado por
++                // WOTM_WATCHDOG segundos (padrao 8; 0 desliga) com a apresentacao viva = logica congelada. Filme (movieIsPlaying,
++                // 0x6F8650) nao conta. Uma vez por parada: threads do EE no log e ram_/vram_vigia_<g_frame>.bin.
++                // Desempenho: janelas de 2 s com o jogo andando abaixo de WOTM_MINFPS quadros/s (padrao 25) viram aviso no log, sem dump.
++                // Janela com um intervalo acima de 1 s entre quadros e carga, nao lentidao, e fica de fora.
++                static const double s_limit = [] { const char *e = std::getenv("WOTM_WATCHDOG"); return e ? std::atof(e) : 8.0; }();
++                static const double s_minFps = [] { const char *e = std::getenv("WOTM_MINFPS"); return e ? std::atof(e) : 25.0; }();
++                static uint32_t s_lastG = 0, s_winG = 0;
++                static double s_lastChange = 0.0, s_winT = 0.0, s_maxGap = 0.0, s_slowSince = 0.0, s_slowMin = 0.0;
++                static bool s_fired = false;
++                const uint8_t *ram = m_memory.getRDRAM();
++                uint32_t g = 0, movie = 0;
++                std::memcpy(&g, ram + 0x6F7E38u, 4);
++                std::memcpy(&movie, ram + 0x6F8650u, 4);
++                const double now = GetTime();
++                if (s_lastChange == 0.0 || g != s_lastG || movie != 0)
 +                {
-+                    if (FILE *rf = std::fopen(("ram_" + std::to_string(s_frame) + ".bin").c_str(), "wb"))
++                    if (s_fired)
++                        std::fprintf(stderr, "[vigia] g_frame voltou a andar (%u -> %u) depois de %.1f s parado\n", s_lastG, g, now - s_lastChange);
++                    if (g != s_lastG && s_lastChange != 0.0)
++                        s_maxGap = std::max(s_maxGap, now - s_lastChange);
++                    s_lastG = g;
++                    s_lastChange = now;
++                    s_fired = false;
++                }
++                else if (s_limit > 0.0 && !s_fired && g != 0 && now - s_lastChange >= s_limit)
++                {
++                    s_fired = true;
++                    std::fprintf(stderr, "[vigia] CONGELOU: g_frame=%u parado ha %.1f s (apresentacao no quadro %ld)\n", g, now - s_lastChange, s_frame);
++                    if (m_eeScheduler)
 +                    {
-+                        std::fwrite(m_memory.getRDRAM(), 1, PS2_RAM_SIZE, rf);
-+                        std::fclose(rf);
++                        const EeKernelSnapshot ks = m_eeScheduler->snapshot();
++                        std::fprintf(stderr, "[vigia]  running=%d cycle=%llu\n", ks.runningThreadId, (unsigned long long)ks.eeCycle);
++                        for (const auto &t : ks.threads)
++                            std::fprintf(stderr, "[vigia]  thr %d st=%d wait=%d wid=%d prio=%d pc=%06x ra=%06x entry=%06x inv=%u\n", t.id,
++                                         (int)t.status, (int)t.waitReason, t.waitId, t.currentPriority, t.pc, t.ra, t.entry, t.invocationDepth);
++                        for (const auto &s : ks.semaphores)
++                            std::fprintf(stderr, "[vigia]  sema %d count=%d max=%d waiters=%u\n", s.id, s.count, s.maxCount, s.waiters);
 +                    }
-+                    m_gs.refreshDisplaySnapshot(); // VRAM do GS (texturas enviadas por upload): vram_<frame>.bin
-+                    uint32_t vramSize = 0;
-+                    if (const uint8_t *vram = m_gs.lockDisplaySnapshot(vramSize))
++                    const std::string tag = "vigia_" + std::to_string(g);
++                    dumpRam(tag);
++                    std::fprintf(stderr, "[vigia]  dump: ram_%s.bin, vram_%s.bin\n", tag.c_str(), tag.c_str());
++                    std::fflush(stderr);
++                }
++                if (s_winT == 0.0)
++                {
++                    s_winT = now;
++                    s_winG = g;
++                }
++                else if (now - s_winT >= 2.0)
++                {
++                    const double fps = static_cast<double>(g - s_winG) / (now - s_winT);
++                    const bool counted = g != s_winG && movie == 0 && s_maxGap <= 1.0;
++                    if (counted && fps < s_minFps)
 +                    {
-+                        if (FILE *vf = std::fopen(("vram_" + std::to_string(s_frame) + ".bin").c_str(), "wb"))
++                        if (s_slowSince == 0.0)
 +                        {
-+                            std::fwrite(vram, 1, vramSize, vf);
-+                            std::fclose(vf);
++                            s_slowSince = s_winT;
++                            s_slowMin = fps;
++                            std::fprintf(stderr, "[vigia] LENTO: %.1f quadros/s do jogo (g_frame=%u)\n", fps, g);
 +                        }
++                        s_slowMin = std::min(s_slowMin, fps);
 +                    }
-+                    m_gs.unlockDisplaySnapshot();
++                    else if (counted && s_slowSince != 0.0)
++                    {
++                        std::fprintf(stderr, "[vigia] ritmo normal de novo (%.1f quadros/s): lento por %.1f s, minimo %.1f\n", fps, now - s_slowSince, s_slowMin);
++                        s_slowSince = 0.0;
++                    }
++                    s_winT = now;
++                    s_winG = g;
++                    s_maxGap = 0.0;
 +                }
 +            }
 +        }
