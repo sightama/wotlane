@@ -21,8 +21,8 @@ O **índice** é o do jogo (`MonsterLongNames`/`MonsterNewNames`). O **nome inte
 | 11 | Zorgulon | `ALIEN` | ALIEN0–3 | |
 | 12 | Ogre | `OGRE` | nenhum | cortado; restos abaixo |
 | 13 | Goliath Prime | `ASSBOSS` | ASSBOSS0–1 | nome informado pelo dono; o código o chama de `assboss` |
-| 14 | ? | `JELLY` | JELLY0 | boss final, 2ª fase: o robô com jeito de água-viva que sai do robô grande (`FinalBoss::updateJelly`) |
-| 15 | ? | `FINAL` | FINAL0 | boss final, 3ª fase: o alien em forma crua, ataca com garras |
+| 14 | Alienígena final | `JELLY` | JELLY0 | boss final, 2ª fase: o robô com jeito de água-viva que sai do robô grande (`FinalBoss::updateJelly`) (a primeira fase não conta como monstro, mas sim é carregado pelo cenário) |
+| 15 | Alienígena final | `FINAL` | FINAL0 | boss final, 3ª fase: o alien em forma crua, ataca com garras |
 | 16 | — | `temp16` | — | só o nome; o carregador recusa índice >= 16 |
 
 São 17 nomes (0 a 16): `MonsterNewNames` tem 0xCC bytes (17 × 12) e `MonsterLongNames` 0x88 (17 × 8). O `default` que aparece logo antes no binário é `GameLevelNames[0]` (fase 0), não um monstro.
@@ -47,6 +47,12 @@ Tudo lido do ELF (strings, stabs, símbolos) e do disco; o que é dedução est�
   - `jelly` e `final` são as IAs da `capitol` em `levelMonsters`. `TheGame::SetAIMonster` conta os dois como IA, desliga com `disableMonster` e guarda em `finalBoss+0x74` (jelly) e `+0x78` (final) até a fase deles. `FinalBoss::updateJelly` cuida da jelly: `StateUltraTazer`, `electricArc`, `playJellyTazerOneShot`. Também chama `playWaterSplashSound` e cria o efeito `JellyfishSplash`; como a jelly não luta na água, esses dois devem ser de algum momento específico (a conferir).
   - Som: `Final_s.bnk`, `JELLYD.VPK`, `JELLYBT.VPK`, `MECHADT.VPK`. As IAs têm `CAPITOL/JELLY0–2.AIC` e `FINAL0–2.AIC`.
 - **Vídeos de monstro antigos.** `MOV/` tem um `.PSS` simples de 32 KB por monstro, de nov/2001 a jan/2002, incluindo `OGRE.PSS` (cópia exata de `SHOGUN.PSS`) e `SPIDER.PSS` (cópia exata de `ENERGY.PSS`). O executável não referencia nenhum deles; só usa `mov/<monstro>_p.pss` e `_g.pss`, e só para os 10 monstros jogáveis. Mostra que o ogre e o spider ainda estavam no elenco no início de 2002.
+- **Goliath Prime (`ASSBOSS`, `canyon2`).** Luta segundo um wiki de fãs trazido pelo dono: primeiro as Mutant Ants; depois o Goliath arremessa bombas-relógio de cima do bunker (verde, amarelo, vermelho) que o jogador devolve até acertar 8 vezes; no chão, agarra e faz uma investida com as hélices dos ombros, que bate nos pilares; na última parte, alterna um giro em pose de "T" com salvas de mísseis teleguiados. Uma pedra grande na fase interrompe os ataques. No código:
+  - As Mutant Ants são o Preytor no traje 1: `levelMonsters[3]` = 3 × `mantis` + `assboss`, todos com `levelMonsterModels` 1 (`MANTIS1`), e `CANYON2/MANTIS0–2.AIC`.
+  - `canyon2LevelProgression` (0, 3, 6) e `Ai::updateAssBossPatternZero/One/Two` batem com as três partes; `assBossTier1Health`/`assBossTier2Health` são os limiares de vida entre elas, e `Shell::InitPlayers` restaura a vida e reconstrói os pilares (`rebuildCanyon2Pillars`) ao reiniciar.
+  - As hélices e o giro aparecem no som: `MonsterSound::updateAssBossRotorSound`, `m_assBossSpinHandle`.
+  - Os dois trajes: `ASSBOSS0` (mar/2002, 91 KB de textura) é a versão prateada antiga e `ASSBOSS1` (set/2002, 836 KB) a final. Com o `MonsterLongNames`, o carregador aceita o índice 13 como jogador (é menor que 16), o que explica dar para jogar com ele por código de GameShark.
+  - O nome `assboss`: o banco de som carregado por `SoundManager::loadMechBossSoundBank` é `"Assemb_s.bnk"` (`D_006EFFB0`), o que sugere "assembly boss"; nada no código confirma, e o wiki também não fala em montagem. Ainda não achei quem liga `m_loadMechBank`.
 - **Boss planta (`3-Mile`)** não é monstro da lista: são as classes `PlantBoss`/`PlantBossHead`/`PlantBossRoot`/`PlantBossBase` (`plantBoss`, 0x10B0 bytes), com `Plant_s.bnk` e `PLANTD.VPK`; as IAs da fase são 4 Kineticlops (`3-MILE/ENERGY0–2.AIC`).
 - **temp16:** só existe nas duas tabelas de nomes. `Shell::LoadResTexture` recusa `sel >> 5 >= 0x10` com "Unknown monster (%d) for player %d.  Nothing will be loaded!".
 
