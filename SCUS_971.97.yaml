@@ -72,7 +72,7 @@ segments:
     subsegments:
       # BEGIN text TUs (tools/apply_tus.py)
       - [0x000000, asm, crt0]  # asm, 3 funcs, name: manual
-      - [0x000100, asm, game/ActionDispatch]  # c++, 31 funcs, name: manual
+      - [0x000100, cpp, game/ActionDispatch]  # c++, 31 funcs, name: manual
       - [0x0012A0, cpp, game/Ai]  # c++, 46 funcs, name: guess
       - [0x002BB8, cpp, game/AiAction]  # c++, 30 funcs, name: manual
       - [0x003760, asm, game/Ai_2]  # c++, 7 funcs, name: guess
@@ -511,8 +511,7 @@ segments:
       - [0x5E65A8, data, sce/libkernl/libosd]
       - [0x5E6D68, data, sce/libkernl/tlbfunc]
       - [0x5E7484, data, newlib/libc/machine/r5900/memcmp]
-      - [0x5E7500, rodata, crt0]
-      - [0x5E7540, rodata, game/ActionDispatch]
+      - [0x5E7500, .rodata, game/ActionDispatch]
       - [0x5E7598, .rodata, game/AiAction]
       - [0x5E7720, rodata, game/Ai_2]
       - [0x5E7A10, .rodata, game/AiBrain]

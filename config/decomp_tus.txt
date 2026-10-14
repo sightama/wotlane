@@ -143,3 +143,4 @@ common/HdIterator
 common/ScreenPolys
 common/SoundBank
 game/Sound
+game/ActionDispatch
