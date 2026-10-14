@@ -180,24 +180,71 @@ index 0f19c9f..cbe7866 100644
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
 diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
-index 67c8184..bd412c6 100644
+index 67c8184..f47a7ae 100644
 --- a/ps2xRuntime/include/runtime/ps2_vu1.h
 +++ b/ps2xRuntime/include/runtime/ps2_vu1.h
-@@ -209,6 +209,9 @@ private:
+@@ -3,6 +3,7 @@
+ 
+ #include <array>
+ #include <cstdint>
++#include <cstring>
+ 
+ class GS;
+ class PS2Memory;
+@@ -209,6 +210,10 @@ private:
      uint64_t m_cachedCodeGeneration = 0;
      bool m_decodedCodeCacheValid = false;
  
 +    // Menor readyCycle entre as entradas validas dos pipelines (~0 = nenhuma): commitReadyPipelines nao varre nada antes disso.
 +    uint64_t m_earliestPending = ~0ull;
-+    void recomputeEarliestPending();
++    // o mesmo por fila (flags, stores, VF, VI, ACC): limite inferior, so baixa ao enfileirar e e recalculado no commit
++    std::array<uint64_t, 5> m_pendMin{~0ull, ~0ull, ~0ull, ~0ull, ~0ull};
      std::array<FlagPipelineEntry, kMaxFlagEntries> m_flagPipeline{};
      ScalarPipelineEntry m_fdiv{};
      std::array<ScalarPipelineEntry, 2> m_efu{};
+@@ -250,7 +255,8 @@ private:
+     static void addVfWrite(InstructionUsage &usage, uint8_t reg, uint8_t lanes);
+     static uint8_t vfReadLanes(const InstructionUsage &usage, uint8_t reg);
+     DecodedInstructionPair decodeInstructionPair(const uint8_t *vuCode, uint32_t pc) const;
+-    DecodedInstructionPair getDecodedInstructionPairForPc(const uint8_t *vuCode, uint32_t codeSize, PS2Memory *memory, uint32_t pc);
++    const DecodedInstructionPair &getDecodedInstructionPairForPc(const uint8_t *vuCode, uint32_t codeSize, PS2Memory *memory, uint32_t pc);
++    DecodedInstructionPair m_decodeScratch{};
+     void rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t codeSize, const PS2Memory *memory, uint64_t generation);
+ 
+     void execUpper(uint32_t instr);
+@@ -287,13 +293,25 @@ private:
+     void markPairWrites(const DecodedInstructionPair &decoded);
+     bool pipelinesPending() const;
+ 
+-    float normalizeOperand(float value) const;
++    // inline no header: chamadas de ps2_vu1_upper/lower.cpp (outro TU) nao eram inlinadas sem LTCG
++    float normalizeOperand(float value) const
++    {
++        uint32_t bits = 0;
++        std::memcpy(&bits, &value, sizeof(bits));
++        const uint32_t exponent = (bits >> 23) & 0xFFu;
++        if (exponent == 0u)
++            bits &= 0x80000000u;
++        else if (exponent == 0xFFu)
++            bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
++        std::memcpy(&value, &bits, sizeof(value));
++        return value;
++    }
+     float normalizeResult(float value, uint32_t &laneFlags) const;
+     uint32_t microAddressMask() const;
+     int32_t readBranchVi(uint8_t reg) const;
+     void recordViWriteForBranch(uint8_t reg, int32_t oldValue);
+     void reportReservedInstruction(bool upper, uint32_t instruction);
+-    float broadcast(const float *vf, uint8_t bc);
++    float broadcast(const float *vf, uint8_t bc) { return normalizeOperand(vf[bc & 3u]); }
+ };
+ 
+ #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..3c6ad3a 100644
+index c5e31c4..6cf1b45 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-@@ -4,10 +4,56 @@
+@@ -4,10 +4,57 @@
  #include "ps2_runtime_macros.h"
  
  #include <algorithm>
@@ -213,6 +260,7 @@ index c5e31c4..3c6ad3a 100644
 +// checkpoint (cabeca de laco ou alvo de chamada) e os ciclos saltados no ocio; o override le e zera a cada quadro do jogo.
 +bool g_wotmCycleProf = false;
 +uint32_t g_wotmFreeSpinPc = 0;   // main.cpp (PS2X_NO_VU1): voltas de laco neste pc nao contam ciclos
++uint32_t g_wotmFreeSpinZero[2] = {0, 0};   // ...e estas palavras da RDRAM (a condicao da espera) sao zeradas ali
 +static const bool g_wotmFreeSpinIop = std::getenv("WOTM_FREESPIN_NOIOP") == nullptr;
 +static uint32_t g_wotmTrackN = 0;
 +static uint64_t g_wotmAnchorCycle = 0;   // ciclo e instante do ultimo VBlankStart (relogio virtual x de parede)
@@ -254,7 +302,7 @@ index c5e31c4..3c6ad3a 100644
  
  namespace
  {
-@@ -274,6 +320,13 @@ void EeScheduler::run()
+@@ -274,6 +321,13 @@ void EeScheduler::run()
              }
              else
              {
@@ -268,7 +316,7 @@ index c5e31c4..3c6ad3a 100644
                  m_runtime.reportMissingFunction(m_rdram,
                                                  &context,
                                                  context.pc,
-@@ -286,6 +339,8 @@ void EeScheduler::run()
+@@ -286,6 +340,8 @@ void EeScheduler::run()
              continue;
          }
          PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
@@ -277,7 +325,7 @@ index c5e31c4..3c6ad3a 100644
  
          if (checkpointDue(kGuestDispatchCycles))
          {
-@@ -356,7 +411,32 @@ void EeScheduler::postEvent(EeEvent event)
+@@ -356,7 +412,40 @@ void EeScheduler::postEvent(EeEvent event)
  
  bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
  {
@@ -285,8 +333,16 @@ index c5e31c4..3c6ad3a 100644
 +    const R5900Context *wotmCtx = (g_wotmFreeSpinPc || g_wotmCycleProf) ? currentContext() : nullptr;
 +    if (!(wotmCtx && wotmCtx->pc == g_wotmFreeSpinPc))   // espera ativa por hardware ausente: nao e tempo do EE
 +        accountCycles(cycles);
-+    else if (g_wotmFreeSpinIop)   // ...mas o IOP (CD, SIF, som) anda por esses ciclos e continua com eles
-+        m_runtime.advanceIopEeCycles(std::max<uint64_t>(1u, cycles));
++    else
++    {
++        if (g_wotmFreeSpinIop)   // ...mas o IOP (CD, SIF, som) anda por esses ciclos e continua com eles
++            m_runtime.advanceIopEeCycles(std::max<uint64_t>(1u, cycles));
++        // o hardware esperado (VU1) nao existe: a espera termina ja. Os contadores tambem podem subir dentro do proprio
++        // particleDraw, e zerar so na entrada deixava o laco girando (CPU de host) ate a apresentacao do vsync seguinte
++        for (const uint32_t addr : g_wotmFreeSpinZero)
++            if (addr && m_rdram)
++                std::memset(m_rdram + (addr & 0x1FFFFFFFu), 0, 4);
++    }
 +    if (g_wotmFreeSpinPc != 0u && wotmCtx && (++g_wotmTrackN & 63u) == 0u)
 +    {
 +        // Relogio virtual acompanha o de parede enquanto a logica roda: o jogo mede a duracao da logica pelo timer 1
@@ -311,7 +367,7 @@ index c5e31c4..3c6ad3a 100644
  
      if (m_checkpointPending.load(std::memory_order_acquire) ||
          m_stopRequested.load(std::memory_order_acquire))
-@@ -392,6 +472,7 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+@@ -392,6 +481,7 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
  {
      const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
      m_eeCycle += elapsed;
@@ -319,7 +375,7 @@ index c5e31c4..3c6ad3a 100644
      m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
      m_runtime.advanceIopEeCycles(elapsed);
      if (m_pendingEeTimerInterrupts != 0u)
-@@ -1800,6 +1881,8 @@ void EeScheduler::processDueDeadlines()
+@@ -1800,6 +1890,8 @@ void EeScheduler::processDueDeadlines()
  
              if (now < pacingDeadline)
              {
@@ -328,7 +384,7 @@ index c5e31c4..3c6ad3a 100644
                  m_eventCv.wait_until(lock, pacingDeadline, [this]()
                                       { return !m_events.empty() ||
                                                m_stopRequested.load(std::memory_order_acquire); });
-@@ -1867,6 +1950,8 @@ void EeScheduler::processEvent(const EeEvent &event)
+@@ -1867,6 +1959,8 @@ void EeScheduler::processEvent(const EeEvent &event)
          requestStop();
          break;
      case EeEventType::VBlankStart:
@@ -337,7 +393,7 @@ index c5e31c4..3c6ad3a 100644
          ++m_vsyncTick;
          m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
          if ((m_vsyncTick & 1u) != 0u)
-@@ -1994,8 +2079,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1994,8 +2088,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
@@ -349,7 +405,7 @@ index c5e31c4..3c6ad3a 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
-@@ -2041,9 +2129,21 @@ void EeScheduler::waitForEvent()
+@@ -2041,9 +2138,21 @@ void EeScheduler::waitForEvent()
                                                          m_stopRequested.load(std::memory_order_acquire); });
      if (!signaled)
      {
@@ -1183,50 +1239,103 @@ index b02c7ca..e56cb12 100644
              continue;
          }
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-index bd75bba..68b4ada 100644
+index bd75bba..da985ad 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 +++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-@@ -81,6 +81,7 @@ void VU1Interpreter::resetScheduler()
+@@ -5,6 +5,7 @@
+ #include "ps2_vu1_detail.h"
+ 
+ #include <algorithm>
++#include <bit>
+ #include <cfenv>
+ #include <cmath>
+ #include <cstdio>
+@@ -73,7 +74,10 @@ void VU1Interpreter::resetScheduler()
+     m_vfWritePipeline = {};
+     m_viWritePipeline = {};
+     m_accWritePipeline = {};
+-    m_xgkick = {};
++    // sem zerar o buffer de 64 KB do pacote (so e lido ate copiedBytes)
++    m_xgkick.sourceAddress = m_xgkick.totalBytes = m_xgkick.copiedBytes = m_xgkick.currentTagEnd = m_xgkick.cycleCredit = 0;
++    m_xgkick.issueCycle = 0;
++    m_xgkick.active = m_xgkick.currentTagEop = false;
+     m_vfReady = {};
+     m_viReady = {};
+     m_accReady = {};
+@@ -81,6 +85,8 @@ void VU1Interpreter::resetScheduler()
      m_viLatestWrite = {};
      m_accLatestWrite = {};
      m_nextWriteSequence = 0;
 +    m_earliestPending = ~0ull;
++    m_pendMin.fill(~0ull);
      m_efuResourceReady = 0;
      m_workingClip = m_state.clip;
      m_viBranchBackupValue = 0;
-@@ -533,6 +534,7 @@ void VU1Interpreter::updateFmacFlags(const uint8_t laneFlags[4], uint8_t dest,
+@@ -101,27 +107,6 @@ void VU1Interpreter::reset()
+     resetScheduler();
+ }
+ 
+-float VU1Interpreter::broadcast(const float *vf, uint8_t bc)
+-{
+-    return normalizeOperand(vf[bc & 3u]);
+-}
+-
+-float VU1Interpreter::normalizeOperand(float value) const
+-{
+-    uint32_t bits = 0;
+-    std::memcpy(&bits, &value, sizeof(bits));
+-    const uint32_t exponent = (bits >> 23) & 0xFFu;
+-    if (exponent == 0u)
+-    {
+-        bits &= 0x80000000u;
+-    }
+-    else if (exponent == 0xFFu)
+-    {
+-        bits = (bits & 0x80000000u) | 0x7F7FFFFFu;
+-    }
+-    std::memcpy(&value, &bits, sizeof(value));
+-    return value;
+-}
+ 
+ float VU1Interpreter::normalizeResult(float value, uint32_t &laneFlags) const
+ {
+@@ -533,6 +518,8 @@ void VU1Interpreter::updateFmacFlags(const uint8_t laneFlags[4], uint8_t dest,
      entry->valid = true;
      entry->issueCycle = m_cycle;
      entry->readyCycle = m_cycle + kFmacLatency;
 +    m_earliestPending = std::min(m_earliestPending, entry->readyCycle);
++    m_pendMin[0] = std::min(m_pendMin[0], entry->readyCycle);
      entry->mac = mac;
      entry->status = status;
      entry->extraSticky = extraSticky;
-@@ -572,6 +574,7 @@ void VU1Interpreter::queueFsset(uint16_t immediate)
+@@ -572,6 +559,8 @@ void VU1Interpreter::queueFsset(uint16_t immediate)
              entry.valid = true;
              entry.issueCycle = m_cycle;
              entry.readyCycle = m_cycle + kFmacLatency;
 +            m_earliestPending = std::min(m_earliestPending, entry.readyCycle);
++            m_pendMin[0] = std::min(m_pendMin[0], entry.readyCycle);
              entry.status = static_cast<uint32_t>(immediate) & 0xFC0u;
              entry.writesSticky = true;
              return;
-@@ -591,6 +594,7 @@ void VU1Interpreter::queueClip(uint32_t clip)
+@@ -591,6 +580,8 @@ void VU1Interpreter::queueClip(uint32_t clip)
              entry.valid = true;
              entry.issueCycle = m_cycle;
              entry.readyCycle = m_cycle + kFmacLatency;
 +            m_earliestPending = std::min(m_earliestPending, entry.readyCycle);
++            m_pendMin[0] = std::min(m_pendMin[0], entry.readyCycle);
              entry.clip = m_workingClip;
              entry.writesClip = true;
              return;
-@@ -615,6 +619,7 @@ void VU1Interpreter::queueFcset(uint32_t clip)
+@@ -615,6 +606,8 @@ void VU1Interpreter::queueFcset(uint32_t clip)
              entry.valid = true;
              entry.issueCycle = m_cycle;
              entry.readyCycle = m_cycle + kFmacLatency;
 +            m_earliestPending = std::min(m_earliestPending, entry.readyCycle);
++            m_pendMin[0] = std::min(m_pendMin[0], entry.readyCycle);
              entry.clip = m_workingClip;
              entry.writesClip = true;
              return;
-@@ -629,6 +634,7 @@ void VU1Interpreter::queueQ(float value, uint32_t latency, uint32_t statusDi)
+@@ -629,6 +622,7 @@ void VU1Interpreter::queueQ(float value, uint32_t latency, uint32_t statusDi)
      value = normalizeResult(value, ignoredFlags);
      m_fdiv.valid = true;
      m_fdiv.readyCycle = m_cycle + latency;
@@ -1234,7 +1343,7 @@ index bd75bba..68b4ada 100644
      m_fdiv.value = value;
      m_fdiv.statusDi = statusDi & 0x30u;
  }
-@@ -643,6 +649,7 @@ void VU1Interpreter::queueP(float value, uint32_t latency)
+@@ -643,6 +637,7 @@ void VU1Interpreter::queueP(float value, uint32_t latency)
          {
              entry.valid = true;
              entry.readyCycle = m_cycle + latency;
@@ -1242,39 +1351,43 @@ index bd75bba..68b4ada 100644
              entry.value = value;
              // EFU throughput is one cycle shorter than result visibility.
              m_efuResourceReady = m_cycle + (latency > 0u ? latency - 1u : 0u);
-@@ -660,6 +667,7 @@ void VU1Interpreter::queueStore(uint32_t address, const uint32_t words[4], uint8
+@@ -660,6 +655,8 @@ void VU1Interpreter::queueStore(uint32_t address, const uint32_t words[4], uint8
          {
              store.valid = true;
              store.readyCycle = m_cycle + 1u;
 +            m_earliestPending = std::min(m_earliestPending, store.readyCycle);
++            m_pendMin[1] = std::min(m_pendMin[1], store.readyCycle);
              store.address = address;
              store.laneMask = laneMask;
              std::copy(words, words + 4, store.words.begin());
-@@ -681,6 +689,7 @@ void VU1Interpreter::queueVfWrite(uint8_t reg, uint8_t laneMask,
+@@ -681,6 +678,8 @@ void VU1Interpreter::queueVfWrite(uint8_t reg, uint8_t laneMask,
              write = {};
              write.valid = true;
              write.readyCycle = m_cycle + latency;
 +            m_earliestPending = std::min(m_earliestPending, write.readyCycle);
++            m_pendMin[2] = std::min(m_pendMin[2], write.readyCycle);
              write.sequence = ++m_nextWriteSequence;
              write.reg = reg;
              write.laneMask = laneMask;
-@@ -707,6 +716,7 @@ void VU1Interpreter::queueViWrite(uint8_t reg, int32_t value, uint32_t latency)
+@@ -707,6 +706,8 @@ void VU1Interpreter::queueViWrite(uint8_t reg, int32_t value, uint32_t latency)
              write = {};
              write.valid = true;
              write.readyCycle = m_cycle + latency;
 +            m_earliestPending = std::min(m_earliestPending, write.readyCycle);
++            m_pendMin[3] = std::min(m_pendMin[3], write.readyCycle);
              write.sequence = ++m_nextWriteSequence;
              write.reg = reg;
              write.value = value;
-@@ -728,6 +738,7 @@ void VU1Interpreter::queueAccWrite(uint8_t laneMask, const float value[4], uint3
+@@ -728,6 +729,8 @@ void VU1Interpreter::queueAccWrite(uint8_t laneMask, const float value[4], uint3
              write = {};
              write.valid = true;
              write.readyCycle = m_cycle + latency;
 +            m_earliestPending = std::min(m_earliestPending, write.readyCycle);
++            m_pendMin[4] = std::min(m_pendMin[4], write.readyCycle);
              write.sequence = ++m_nextWriteSequence;
              write.laneMask = laneMask;
              std::copy(value, value + 4, write.value.begin());
-@@ -742,8 +753,12 @@ void VU1Interpreter::queueAccWrite(uint8_t laneMask, const float value[4], uint3
+@@ -742,28 +745,48 @@ void VU1Interpreter::queueAccWrite(uint8_t laneMask, const float value[4], uint3
      reportReservedInstruction(true, 0xFFFFFFF5u);
  }
  
@@ -1282,45 +1395,285 @@ index bd75bba..68b4ada 100644
 +
  void VU1Interpreter::commitReadyPipelines()
  {
+-    for (FlagPipelineEntry &entry : m_flagPipeline)
 +    if (!g_wotmVuNoSkip && m_cycle < m_earliestPending)
 +        return;
-     for (FlagPipelineEntry &entry : m_flagPipeline)
-     {
-         if (!entry.valid || entry.readyCycle > m_cycle)
-@@ -838,6 +853,33 @@ void VU1Interpreter::commitReadyPipelines()
-         }
-         write = {};
-     }
-+    recomputeEarliestPending();
-+}
-+
-+void VU1Interpreter::recomputeEarliestPending()
-+{
++    // A mesma passada que aplica as entradas prontas acha o menor readyCycle das que ficam (antes recomputeEarliestPending
++    // varria tudo de novo a cada ciclo), e uma fila cujo minimo (m_pendMin, limite inferior) ainda nao chegou nem e varrida.
++    // A ordem de aplicacao entre as filas e a mesma de antes.
++    const bool scanAll = g_wotmVuNoSkip;
 +    uint64_t e = ~0ull;
-+    for (const FlagPipelineEntry &x : m_flagPipeline)
-+        if (x.valid && x.readyCycle < e)
-+            e = x.readyCycle;
-+    if (m_fdiv.valid && m_fdiv.readyCycle < e)
-+        e = m_fdiv.readyCycle;
-+    for (const ScalarPipelineEntry &x : m_efu)
-+        if (x.valid && x.readyCycle < e)
-+            e = x.readyCycle;
-+    for (const PendingStore &x : m_storePipeline)
-+        if (x.valid && x.readyCycle < e)
-+            e = x.readyCycle;
-+    for (const PendingVfWrite &x : m_vfWritePipeline)
-+        if (x.valid && x.readyCycle < e)
-+            e = x.readyCycle;
-+    for (const PendingViWrite &x : m_viWritePipeline)
-+        if (x.valid && x.readyCycle < e)
-+            e = x.readyCycle;
-+    for (const PendingAccWrite &x : m_accWritePipeline)
-+        if (x.valid && x.readyCycle < e)
-+            e = x.readyCycle;
++    if (scanAll || m_cycle >= m_pendMin[0])
+     {
+-        if (!entry.valid || entry.readyCycle > m_cycle)
+-            continue;
+-
+-        if (entry.writesMac)
+-            m_state.mac = entry.mac;
+-        if (entry.writesStatus)
+-        {
+-            const uint32_t current = entry.status & 0xFu;
+-            m_state.status = (m_state.status & 0xFF0u) | current | ((current | entry.extraSticky) << 6);
+-        }
+-        if (entry.writesSticky)
++        uint64_t m = ~0ull;
++        for (FlagPipelineEntry &entry : m_flagPipeline)
+         {
+-            m_state.status = (m_state.status & 0x03Fu) | (entry.status & 0xFC0u);
++            if (!entry.valid)
++                continue;
++            if (entry.readyCycle > m_cycle)
++            {
++                m = std::min(m, entry.readyCycle);
++                continue;
++            }
++
++            if (entry.writesMac)
++                m_state.mac = entry.mac;
++            if (entry.writesStatus)
++            {
++                const uint32_t current = entry.status & 0xFu;
++                m_state.status = (m_state.status & 0xFF0u) | current | ((current | entry.extraSticky) << 6);
++            }
++            if (entry.writesSticky)
++            {
++                m_state.status = (m_state.status & 0x03Fu) | (entry.status & 0xFC0u);
++            }
++            if (entry.writesClip)
++                m_state.clip = entry.clip;
++            entry = {};
+         }
+-        if (entry.writesClip)
+-            m_state.clip = entry.clip;
+-        entry = {};
++        m_pendMin[0] = m;
+     }
++    e = std::min(e, m_pendMin[0]);
+ 
+     if (m_fdiv.valid && m_fdiv.readyCycle <= m_cycle)
+     {
+@@ -772,6 +795,8 @@ void VU1Interpreter::commitReadyPipelines()
+         m_state.status = (m_state.status & 0xFCFu) | currentDi | (currentDi << 6);
+         m_fdiv = {};
+     }
++    else if (m_fdiv.valid)
++        e = std::min(e, m_fdiv.readyCycle);
+ 
+     for (ScalarPipelineEntry &entry : m_efu)
+     {
+@@ -780,64 +805,111 @@ void VU1Interpreter::commitReadyPipelines()
+             m_state.p = entry.value;
+             entry = {};
+         }
++        else if (entry.valid)
++            e = std::min(e, entry.readyCycle);
+     }
+ 
+-    for (PendingStore &store : m_storePipeline)
++    if (scanAll || m_cycle >= m_pendMin[1])
+     {
+-        if (!store.valid || store.readyCycle > m_cycle)
+-            continue;
+-        if (m_activeVuData && store.address + 16u <= m_activeVuDataSize)
++        uint64_t m = ~0ull;
++        for (PendingStore &store : m_storePipeline)
+         {
+-            uint32_t oldWords[4]{};
+-            std::memcpy(oldWords, m_activeVuData + store.address, sizeof(oldWords));
+-            for (uint32_t component = 0; component < 4u; ++component)
++            if (!store.valid)
++                continue;
++            if (store.readyCycle > m_cycle)
++            {
++                m = std::min(m, store.readyCycle);
++                continue;
++            }
++            if (m_activeVuData && store.address + 16u <= m_activeVuDataSize)
+             {
+-                if ((store.laneMask & laneForComponent(component)) != 0u)
+-                    oldWords[component] = store.words[component];
++                uint32_t oldWords[4]{};
++                std::memcpy(oldWords, m_activeVuData + store.address, sizeof(oldWords));
++                for (uint32_t component = 0; component < 4u; ++component)
++                {
++                    if ((store.laneMask & laneForComponent(component)) != 0u)
++                        oldWords[component] = store.words[component];
++                }
++                std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
+             }
+-            std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
++            store = {};
+         }
+-        store = {};
++        m_pendMin[1] = m;
+     }
++    e = std::min(e, m_pendMin[1]);
+ 
+-    for (PendingVfWrite &write : m_vfWritePipeline)
++    if (scanAll || m_cycle >= m_pendMin[2])
+     {
+-        if (!write.valid || write.readyCycle > m_cycle)
+-            continue;
+-        for (uint32_t component = 0; component < 4u; ++component)
++        uint64_t m = ~0ull;
++        for (PendingVfWrite &write : m_vfWritePipeline)
+         {
+-            if ((write.laneMask & laneForComponent(component)) != 0u &&
+-                m_vfLatestWrite[write.reg][component] == write.sequence)
++            if (!write.valid)
++                continue;
++            if (write.readyCycle > m_cycle)
+             {
+-                m_state.vf[write.reg][component] = write.value[component];
++                m = std::min(m, write.readyCycle);
++                continue;
+             }
++            for (uint32_t component = 0; component < 4u; ++component)
++            {
++                if ((write.laneMask & laneForComponent(component)) != 0u &&
++                    m_vfLatestWrite[write.reg][component] == write.sequence)
++                {
++                    m_state.vf[write.reg][component] = write.value[component];
++                }
++            }
++            write.valid = false;   // queueVfWrite zera a entrada inteira ao reusar
+         }
+-        write = {};
++        m_pendMin[2] = m;
+     }
++    e = std::min(e, m_pendMin[2]);
+ 
+-    for (PendingViWrite &write : m_viWritePipeline)
++    if (scanAll || m_cycle >= m_pendMin[3])
+     {
+-        if (!write.valid || write.readyCycle > m_cycle)
+-            continue;
+-        if (m_viLatestWrite[write.reg] == write.sequence)
+-            m_state.vi[write.reg] = static_cast<int16_t>(write.value);
+-        write = {};
++        uint64_t m = ~0ull;
++        for (PendingViWrite &write : m_viWritePipeline)
++        {
++            if (!write.valid)
++                continue;
++            if (write.readyCycle > m_cycle)
++            {
++                m = std::min(m, write.readyCycle);
++                continue;
++            }
++            if (m_viLatestWrite[write.reg] == write.sequence)
++                m_state.vi[write.reg] = static_cast<int16_t>(write.value);
++            write.valid = false;
++        }
++        m_pendMin[3] = m;
+     }
++    e = std::min(e, m_pendMin[3]);
+ 
+-    for (PendingAccWrite &write : m_accWritePipeline)
++    if (scanAll || m_cycle >= m_pendMin[4])
+     {
+-        if (!write.valid || write.readyCycle > m_cycle)
+-            continue;
+-        for (uint32_t component = 0; component < 4u; ++component)
++        uint64_t m = ~0ull;
++        for (PendingAccWrite &write : m_accWritePipeline)
+         {
+-            if ((write.laneMask & laneForComponent(component)) != 0u &&
+-                m_accLatestWrite[component] == write.sequence)
++            if (!write.valid)
++                continue;
++            if (write.readyCycle > m_cycle)
+             {
+-                m_state.acc[component] = write.value[component];
++                m = std::min(m, write.readyCycle);
++                continue;
+             }
++            for (uint32_t component = 0; component < 4u; ++component)
++            {
++                if ((write.laneMask & laneForComponent(component)) != 0u &&
++                    m_accLatestWrite[component] == write.sequence)
++                {
++                    m_state.acc[component] = write.value[component];
++                }
++            }
++            write.valid = false;
+         }
+-        write = {};
++        m_pendMin[4] = m;
+     }
++    e = std::min(e, m_pendMin[4]);
 +    m_earliestPending = e;
  }
  
  void VU1Interpreter::progressXgkick()
+@@ -1005,11 +1077,8 @@ uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &d
+                     ready = std::max(ready, m_vfReady[access.reg][component]);
+             }
+         }
+-        for (uint32_t reg = 1; reg < m_viReady.size(); ++reg)
+-        {
+-            if ((usage->viRead & (1u << reg)) != 0u)
+-                ready = std::max(ready, m_viReady[reg]);
+-        }
++        for (uint32_t bits = usage->viRead & 0xFFFEu; bits != 0u; bits &= bits - 1u)
++            ready = std::max(ready, m_viReady[std::countr_zero(bits)]);
+         for (uint32_t component = 0; component < 4u; ++component)
+         {
+             if ((usage->accRead & laneForComponent(component)) != 0u)
+@@ -1063,11 +1132,8 @@ void VU1Interpreter::markPairWrites(const DecodedInstructionPair &decoded)
+         }
+     }
+ 
+-    for (uint32_t reg = 1; reg < m_viReady.size(); ++reg)
+-    {
+-        if ((decoded.lowerUsage.viWrite & (1u << reg)) != 0u)
+-            m_viReady[reg] = m_cycle + (decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency : decoded.lowerUsage.latency);
+-    }
++    for (uint32_t bits = decoded.lowerUsage.viWrite & 0xFFFEu; bits != 0u; bits &= bits - 1u)
++        m_viReady[std::countr_zero(bits)] = m_cycle + (decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency : decoded.lowerUsage.latency);
+     for (uint32_t component = 0; component < 4u; ++component)
+     {
+         if ((decoded.upperUsage.accWrite & laneForComponent(component)) != 0u)
+@@ -1545,17 +1611,18 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
+     m_decodedCodeCacheValid = true;
+ }
+ 
+-VU1Interpreter::DecodedInstructionPair VU1Interpreter::getDecodedInstructionPairForPc(
++// Devolve referencia (ao cache ou a m_decodeScratch): copiar o par por valor a cada ciclo pesava no laco do run.
++const VU1Interpreter::DecodedInstructionPair &VU1Interpreter::getDecodedInstructionPairForPc(
+     const uint8_t *vuCode, uint32_t codeSize, PS2Memory *memory, uint32_t pc)
+ {
+     if ((pc & 7u) != 0u)
+-        return decodeInstructionPair(vuCode, pc);
++        return m_decodeScratch = decodeInstructionPair(vuCode, pc);
+ 
+     const bool trackedVu1Code = memory != nullptr &&
+                                 ((m_unit == Unit::VU1 && vuCode == memory->getVU1Code()) ||
+                                  (m_unit == Unit::VU0 && vuCode == memory->getVU0Code()));
+     if (!trackedVu1Code)
+-        return decodeInstructionPair(vuCode, pc);
++        return m_decodeScratch = decodeInstructionPair(vuCode, pc);
+ 
+     const uint64_t generation = m_unit == Unit::VU1 ? memory->getVU1CodeGeneration() : memory->getVU0CodeGeneration();
+     if (!m_decodedCodeCacheValid ||
+@@ -1568,7 +1635,7 @@ VU1Interpreter::DecodedInstructionPair VU1Interpreter::getDecodedInstructionPair
+     }
+     const uint32_t pairIndex = pc / 8u;
+     if (pairIndex >= kMaxDecodedPairs)
+-        return decodeInstructionPair(vuCode, pc);
++        return m_decodeScratch = decodeInstructionPair(vuCode, pc);
+     return m_decodedCodeCache[pairIndex];
+ }
+ 
+@@ -1639,7 +1706,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+         if (m_state.pc + 8u > codeSize)
+             break;
+ 
+-        const DecodedInstructionPair decoded = getDecodedInstructionPairForPc(vuCode, codeSize, memory, m_state.pc);
++        const DecodedInstructionPair &decoded = getDecodedInstructionPairForPc(vuCode, codeSize, memory, m_state.pc);
+         if (decoded.upperUsage.reserved || decoded.lowerUsage.reserved)
+         {
+             reportReservedInstruction(decoded.upperUsage.reserved, decoded.upperUsage.reserved ? decoded.upper : decoded.lower);
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
 index 0000000..96232d5
@@ -1595,10 +1948,10 @@ index 0000000..96232d5
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_overrides.cpp b/ps2xRuntime/src/lib/wotm_overrides.cpp
 new file mode 100644
-index 0000000..b9f26c7
+index 0000000..e47374e
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_overrides.cpp
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,240 @@
 +// Correcoes especificas de War of the Monsters (SCUS_971.97) aplicadas por substituicao de funcoes do codigo recompilado.
 +//
 +// Limite do updateRate: `timerGetUpdateRate` (0x2236D8) devolve D_006F8DB8, quantos quadros por segundo o ultimo quadro
@@ -1613,6 +1966,7 @@ index 0000000..b9f26c7
 +// ja e >= 30 (retail). Substitui os limites pontuais anteriores (WOTM_SPRINGMIN na mola, WOTM_TURNMIN no giro).
 +#include "ps2_runtime.h"
 +#include "ps2_runtime_macros.h"
++#include "runtime/ee_scheduler.h"
 +
 +#include <atomic>
 +#include <chrono>
@@ -1627,6 +1981,7 @@ index 0000000..b9f26c7
 +extern uint64_t g_wotmEeCycle, g_wotmIdleCycles;
 +extern uint32_t g_wotmProfPc[4096];
 +extern uint64_t g_wotmProfCyc[4096];
++extern uint32_t g_wotmFreeSpinPc;
 +
 +namespace
 +{
@@ -1635,6 +1990,34 @@ index 0000000..b9f26c7
 +
 +    int g_minRate = 30;
 +    unsigned long long g_clamped = 0;
++
++    // Fields do quadro = vblanks que passaram desde o inicio dele (relogio do WotM, g_wotmFreeSpinPc != 0).
++    // O jogo mede o quadro pelo timer 1: timer1Handler soma ceil(T1 / 9619) ao contador de fields (D_006F8DBC) e espera o
++    // vsync; timerWaitForMinUpdateRate tira fields = D_006F8DBC - D_006F8DC0 e updateRate = 60 / fields. No PS2 o quadro
++    // comeca logo apos um vblank, entao "a logica cruzou n vblanks" e "T1 >= n fields" sao a mesma coisa. Aqui o timer anda
++    // pelo relogio virtual e o quadro comeca alguns ms (de host) depois do vblank: a logica cruza um vblank com T1 < 1 field,
++    // o jogo conta 1 field num quadro de 2 vsyncs e anda mais devagar que o relogio (18% dos quadros, ~11% de lentidao
++    // na luta). A correcao: na entrada de timerWaitForMinUpdateRate o contador passa a ser no minimo os vblanks desde o
++    // inicio do quadro (marcado pelo timerGetCurTics no fim de timerWaitForMinUpdateRate / em timerSetFrameStart).
++    constexpr uint32_t kTimerWaitForMinUpdateRate = 0x223568u;
++    constexpr uint32_t kTimerGetCurTics = 0x2236B8u;
++    constexpr uint32_t kFrameStartRa[2] = {0x22369Cu, 0x223480u};   // retorno do jal em timerWaitForMinUpdateRate / timerSetFrameStart
++    constexpr uint32_t kFieldCounter = 0x6F8DBCu, kFieldCounterAtStart = 0x6F8DC0u;
++    PS2Runtime::RecompiledFunction g_origWaitMinRate = nullptr, g_origGetCurTics = nullptr;
++    uint64_t g_frameStartVsync = 0;
++    bool g_frameStartValid = false;
++
++    void getCurTicsMarked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        const uint32_t ra = GPR_U32(ctx, 31);
++        g_origGetCurTics(rdram, ctx, runtime);
++        if (ra == kFrameStartRa[0] || ra == kFrameStartRa[1])
++        {
++            g_frameStartVsync = runtime->eeScheduler().currentVSyncTick();
++            g_frameStartValid = true;
++        }
++    }
++
 +
 +    // WOTM_TURNLOG: uma linha [turn] por MonsterDynamics::updatePosition (cada monstro, cada quadro do jogo):
 +    // quadro (g_frame), monstro, rate, acelRot (+0x110, zerada pela funcao), velRot (+0x100) antes/depois e os angulos
@@ -1738,11 +2121,30 @@ index 0000000..b9f26c7
 +        lastTics = tics;
 +    }
 +
++    void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        // so na entrada: retomada no meio (depois de um sceGsSyncV do laco) ja tem D_006F8DC0 atualizado
++        if (ctx->pc == kTimerWaitForMinUpdateRate)
++        {
++            // [field] do quadro anterior: aqui roda em todo quadro (timerGetUpdateRate nao: no menu e no inicio da fase
++            // ha quadros sem chamada, e a linha somava dois quadros)
++            if (g_fieldLog)
++                fieldLogFrame(rdram, ctx, runtime);
++            if (g_wotmFreeSpinPc != 0u && g_frameStartValid)
++            {
++                const uint64_t vblanks = runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync;
++                const int32_t start = static_cast<int32_t>(READ32(kFieldCounterAtStart));
++                const int32_t measured = static_cast<int32_t>(READ32(kFieldCounter)) - start;
++                if (vblanks > 0u && vblanks < 16u && static_cast<int32_t>(vblanks) > measured)
++                    WRITE32(kFieldCounter, static_cast<uint32_t>(start + static_cast<int32_t>(vblanks)));
++            }
++        }
++        g_origWaitMinRate(rdram, ctx, runtime);
++    }
++
 +    // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
 +    void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +    {
-+        if (g_fieldLog)
-+            fieldLogFrame(rdram, ctx, runtime);
 +        int32_t rate = static_cast<int32_t>(READ32(kUpdateRateVar));
 +        if (rate > 0 && rate < g_minRate)
 +        {
@@ -1779,6 +2181,12 @@ index 0000000..b9f26c7
 +    }
 +    if (g_minRate > 0 || g_fieldLog)
 +        runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
++    if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
++        (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)))
++    {
++        runtime.registerFunction(kTimerWaitForMinUpdateRate, &waitMinRateByVblanks);
++        runtime.registerFunction(kTimerGetCurTics, &getCurTicsMarked);
++    }
 +    if (g_minRate > 0)
 +        std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
 +    else
@@ -2068,7 +2476,7 @@ index 0000000..848368e
 +}
 +#endif
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..0881987 100644
+index 563bcbd..51cbdcd 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
 @@ -164,6 +164,44 @@ namespace
@@ -2104,7 +2512,7 @@ index 563bcbd..0881987 100644
 +// Agora: os contadores sao zerados na entrada do particleDraw (sem VU1 nao ha o que esperar), as voltas no laco nao
 +// contam ciclos, e o relogio virtual acompanha o de parede enquanto a logica roda (EeScheduler::checkpointDue): o jogo
 +// mede a duracao real da logica, como no PS2 (2 fields, rate 30, na luta). WOTM_OLDCLOCK=1 volta ao comportamento antigo.
-+extern uint32_t g_wotmFreeSpinPc;
++extern uint32_t g_wotmFreeSpinPc, g_wotmFreeSpinZero[2];
 +static PS2Runtime::RecompiledFunction g_particleDraw = nullptr;
 +static void hook_particleDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
@@ -2116,7 +2524,7 @@ index 563bcbd..0881987 100644
  int main(int argc, char *argv[])
  {
  #if defined(__ANDROID__)
-@@ -220,12 +258,72 @@ int main(int argc, char *argv[])
+@@ -220,12 +258,74 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -2178,6 +2586,8 @@ index 563bcbd..0881987 100644
 +                if (!std::getenv("WOTM_OLDCLOCK"))   // relogio do jogo (comentario acima)
 +                {
 +                    g_wotmFreeSpinPc = 0x0021B8A0u;
++                    g_wotmFreeSpinZero[0] = 0x006F87A0u;   // objsInPacket
++                    g_wotmFreeSpinZero[1] = 0x006F87A4u;   // objsInAlphaPacket
 +                    if ((g_particleDraw = runtime.lookupFunction(0x0021B378u)))
 +                        runtime.registerFunction(0x0021B378u, hook_particleDraw);
 +                }
