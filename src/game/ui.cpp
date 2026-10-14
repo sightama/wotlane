@@ -528,7 +528,171 @@ void uiOutro(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/ui", uiOutro__Fv);
 #endif
+#ifdef NON_MATCHING
+extern int needIntro;
+extern int needOutro;
+void playMpegMovieWithDB(char *name, bool b);
+/* untuned: 1/254 words, 0x3F8 bytes vs 0x3E8 (the retail shares the tail of cases 4 and 20); tools/difftest.py 296/300 (nextMovie
+ * 0..35, random flags; the 4 skipped seeds fault only in the retail run, cases 21 and 29 with needOutro clear, while 24 and 28 on the
+ * same path agree) */
+/* Starts the movie nextMovie names, once per movieEnable, and moves nextMovie along its chain: 3 the intro (then 4, the main intro),
+ * 5..8 the four act intros, 21..30 each monster's "_p" movie (then 9..18, its "_g" one, then 19, the credits); 20 is the main intro
+ * again, under needOutro. 3..8 need needIntro, the others needOutro; when the flag is clear the chain still advances. Any other
+ * value only resets nextMovie to 0. */
+void playMovie(void)
+{
+    if (movieEnable != 1)
+        return;
+    switch (nextMovie) {
+    case 3:
+        if (needIntro)
+            playMpegMovieWithDB("mov/intro_m.pss", true);
+        nextMovie = 4;
+        break;
+    case 4:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_main.pss", true);
+        nextMovie = 0;
+        break;
+    case 5:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act1.pss", false);
+        nextMovie = 0;
+        break;
+    case 6:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act2.pss", false);
+        nextMovie = 0;
+        break;
+    case 7:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act3.pss", false);
+        nextMovie = 0;
+        break;
+    case 8:
+        if (needIntro)
+            playMpegMovieWithDB("mov/int_act4.pss", false);
+        nextMovie = 0;
+        break;
+    case 21:
+        if (needOutro)
+            playMpegMovieWithDB("mov/monkey_p.pss", true);
+        nextMovie = 9;
+        break;
+    case 22:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lizard_p.pss", true);
+        nextMovie = 10;
+        break;
+    case 23:
+        if (needOutro)
+            playMpegMovieWithDB("mov/mantis_p.pss", true);
+        nextMovie = 11;
+        break;
+    case 24:
+        if (needOutro)
+            playMpegMovieWithDB("mov/dragon_p.pss", true);
+        nextMovie = 12;
+        break;
+    case 25:
+        if (needOutro)
+            playMpegMovieWithDB("mov/robot_p.pss", true);
+        nextMovie = 13;
+        break;
+    case 26:
+        if (needOutro)
+            playMpegMovieWithDB("mov/rock_p.pss", true);
+        nextMovie = 14;
+        break;
+    case 27:
+        if (needOutro)
+            playMpegMovieWithDB("mov/shogun_p.pss", true);
+        nextMovie = 15;
+        break;
+    case 28:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lava_p.pss", true);
+        nextMovie = 16;
+        break;
+    case 29:
+        if (needOutro)
+            playMpegMovieWithDB("mov/alien_p.pss", true);
+        nextMovie = 17;
+        break;
+    case 30:
+        if (needOutro)
+            playMpegMovieWithDB("mov/energy_p.pss", true);
+        nextMovie = 18;
+        break;
+    case 9:
+        if (needOutro)
+            playMpegMovieWithDB("mov/monkey_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 10:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lizard_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 11:
+        if (needOutro)
+            playMpegMovieWithDB("mov/mantis_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 12:
+        if (needOutro)
+            playMpegMovieWithDB("mov/dragon_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 13:
+        if (needOutro)
+            playMpegMovieWithDB("mov/robot_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 14:
+        if (needOutro)
+            playMpegMovieWithDB("mov/rock_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 15:
+        if (needOutro)
+            playMpegMovieWithDB("mov/shogun_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 16:
+        if (needOutro)
+            playMpegMovieWithDB("mov/lava_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 17:
+        if (needOutro)
+            playMpegMovieWithDB("mov/alien_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 18:
+        if (needOutro)
+            playMpegMovieWithDB("mov/energy_g.pss", true);
+        nextMovie = 19;
+        break;
+    case 19:
+        if (needOutro)
+            playMpegMovieWithDB("mov/credits.pss", true);
+        nextMovie = 0;
+        break;
+    case 20:
+        if (needOutro)
+            playMpegMovieWithDB("mov/int_main.pss", true);
+        nextMovie = 0;
+        break;
+    default:
+        nextMovie = 0;
+        break;
+    }
+    movieEnable = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/ui", playMovie__Fv);
+#endif
 /* Moves currentMonster (wrapping 0..15) by `step` until it names a monster that exists and nobody has chosen yet. */
 #ifdef NON_MATCHING
 /* 14/56 words: loop shape */
