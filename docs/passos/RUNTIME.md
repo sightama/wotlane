@@ -53,3 +53,10 @@ O build de release do PS2Recomp liga `/GL` + `/LTCG` + IPO (`ps2xRuntime/cmake/R
 - Teclado (definido pelo dono; backend em `ps2_pad.cpp`, que antes so lia o teclado sem gamepad e agora soma): **setas = analogico esquerdo**, **I/J/K/L = D-pad** (cima/esq./baixo/dir.), **Espaco = X**, **Z = quadrado**, **X = triangulo**, **S = bola**, **Enter = Start**, **Backspace = Select**, **Q = L1**, **W = R1**, **Shift = L1+R1**, **A = L2**, **C = R2**.
 
 
+
+## Rastro do boot (tela preta antes do filme) — 2026-10-14
+Da abertura do processo ao primeiro filme (ou, sem filme, à fase carregada pela camada nativa), o runtime escreve cada etapa no stderr (`live.err.log`) com o tempo desde o início e mostra a etapa na tela preta ("Carregando... 3.2 s", `docs/screenshots/2026-10-14_boot_carregando.png`). Sempre ligado; para de logar quando o boot termina.
+- Etapas: janela (OpenGL), áudio, ELF, hooks, boot do EE/IOP, cada módulo/printf do IOP, cada leitura de disco (`disco:` via `readCdSectors`, `som:` via `readLsn` do som nativo) com a origem (`discroot`/`ISO`) e o tempo em ms.
+- Etapa parada há mais de 2 s repete a cada 2 s como `... ainda em "<etapa>" ha N s (PC do EE 0x..., vsync N, R/s)`. Mapeie o PC com `config/status.csv`.
+- Medido na máquina do dono: janela 0,6 s; módulos do IOP em 0,8 s; depois o jogo fica ~3,5 s ocioso (PC em `timer1Handler`) contando vsync a 60/s; bancos de som em ~2 ms; filme em 4,4 s. A espera é do próprio jogo e é medida em vsync: com vsync abaixo de 60/s ela cresce na mesma proporção. Numa máquina onde a tela preta demora, o `vsync R/s` do aviso diz se o gargalo é esse ou outra etapa (leitura lenta da ISO, janela, áudio).
+- Código: `wotmBoot`/`wotmBootPresent`/`wotmBootDone` em `wotm_live.inc`; chamadas em `main.cpp`, `PS2Runtime::initialize/run`, `Support.h`, `CD.cpp`, `ps2_iop_host.cpp` e `wotm_snd.inc`. Clone já com o patch anterior: dentro dele, `git -C <WoTM> show 7038942:tools/runtime_patch/wotm-runtime.patch | git apply -R` e depois `git apply --whitespace=nowarn <WoTM>/tools/runtime_patch/wotm-runtime.patch` (o `register_functions.cpp` gerado fica intocado).

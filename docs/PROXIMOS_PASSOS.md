@@ -51,3 +51,4 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - [TESTE_PCSX2.md](passos/TESTE_PCSX2.md): ELF halfcpp, layout `gen_nm_ld.py`, heap, bugs de comportamento achados jogando.
 - [ESPINHA.md](passos/ESPINHA.md): cadeia `main` -> monstro no mapa, menu, `rtMain`, roteiro de blocos pendentes.
 - [IA.md](passos/IA.md): estrutura de AiAction/AiSeek e onde parei.
+- [VU1CHECK.md](passos/VU1CHECK.md): checagem VU1 x nativo (2026-10-14): onde parou, pistas abertas, o que não cobre (textura, partículas/pedestres, HUD) e próximos passos.
