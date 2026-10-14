@@ -19,14 +19,14 @@ public:
     _cs *m_cs5C;          /* 0x5C: drawn from uiInitScreens on; ep 999 */
     _cs *m_buttonCs[4];   /* 0x60: cs of the four button prompts drawn at the bottom of the menus (screen.cpp showButtons); ep 232, 230, 233, 231 */
     _hierswitch *m_sw70[3]; /* 0x70: all three set to 1 by the one-player modes menu, 0 by the two-player one; ep 234..236 */
-    _cs *m_cs7C[3];       /* 0x7C: ep 237..239 */
+    _cs *m_cs7C[3];       /* 0x7C: ep 237..239; [2] is the third costume panel of the three-player select (screenCharSelect3P: the AI, or in mode 2 the first AI) */
     _cs *m_costumeBoxCs;  /* 0x88: costume panel of the monster select (+0x7C is its alpha, faded in by screenCharSelect1P); ep 240 */
     _cs *m_costumeBoxCs2; /* 0x8C: m_costumeBoxCs of player two (or the AI) in the two-player select; ep 241 */
     _hierswitch *m_costumeSw[4]; /* 0x90: one per costume of the highlighted monster: 0 unavailable, 1 available, 2 cursor; ep 242..245 */
     _hierswitch *m_costumeSw2[4]; /* 0xA0: m_costumeSw of player two in the two-player selects; ep 246..249 */
     _cs *m_costumeBoxCsMG[2];     /* 0xB0: costume panel of each player in the two-player minigame select; ep 350, 355 */
     _hierswitch *m_costumeSwMG[2][4]; /* 0xB8: m_costumeSw of each player in the two-player minigame select; ep 351..354, 356..359 */
-    _hierswitch *m_swD8[3][4]; /* 0xD8: ep 360..363, 364..367, 368..371 */
+    _hierswitch *m_swD8[3][4]; /* 0xD8: ep 360..363, 364..367, 368..371; [2] is m_costumeSw of the third panel (m_cs7C[2]) */
     _cs *m_cs108[20];     /* 0x108: ep 330..349 */
     _hierhead *m_ep158;   /* 0x158: ep 301 */
     _hierhead *m_ep15C;   /* 0x15C: ep 251 */
@@ -34,7 +34,7 @@ public:
     _hierhead *m_ep164;   /* 0x164: ep 400 */
     _hierswitch *m_selectSw[11]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked; ep 700..710 with id2 0 */
     _hierswitch *m_selectSwMG[11]; /* 0x194: m_selectSw of the minigame monster select; ep 700..710 with id2 1 */
-    _hierhead *m_ep1C0[3]; /* 0x1C0: ep 740..742 */
+    _hierswitch *m_monsterCursorSw[3]; /* 0x1C0: monster column under each cursor of the multi-player selects (player one, player two or second AI, AI); ep 740..742 */
     _hierhead *m_ep1CC[4]; /* 0x1CC: ep 743..746 */
     _hierhead *m_ep1DC[2][4]; /* 0x1DC: [id2][ep - 571], ep 571 and 572 */
     _hierhead *m_ep1FC;   /* 0x1FC: ep 573 */

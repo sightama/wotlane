@@ -1651,7 +1651,7 @@ void Shell::AddEpNode(int id, _hierhead *ep)
         hierSetCsEpNode(cs, ep);
         break;
     case 740 ... 742:
-        m_ep1C0[id - 740] = ep;
+        m_monsterCursorSw[id - 740] = (_hierswitch *)ep;
         break;
     case 743 ... 746:
         m_ep1CC[id - 743] = ep;
