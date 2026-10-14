@@ -20,7 +20,10 @@ public:
     _cs *m_costumeBoxCs;  /* 0x88: costume panel of the monster select (+0x7C is its alpha, faded in by screenCharSelect1P) */
     char pad8C[0x90 - 0x8C];
     _hierswitch *m_costumeSw[4]; /* 0x90: one per costume of the highlighted monster: 0 unavailable, 1 available, 2 cursor */
-    char padA0[0x160 - 0xA0];
+    _hierswitch *m_costumeSw2[4]; /* 0xA0: m_costumeSw of player two in the two-player selects */
+    _cs *m_costumeBoxCsMG[2];     /* 0xB0: costume panel of each player in the two-player minigame select */
+    _hierswitch *m_costumeSwMG[2][4]; /* 0xB8: m_costumeSw of each player in the two-player minigame select */
+    char padD8[0x160 - 0xD8];
     _hierobject *m_movieScreen; /* 0x160: object the menu background movie is played on (moviesReadyScreenObject) */
     char pad164[0x168 - 0x164];
     _hierswitch *m_selectSw[10]; /* 0x168: one per monster of the select screen; [0] and [9] show 4 (hidden) while that monster is locked */
@@ -172,6 +175,9 @@ SHELL_AT(m_levelNumAIs, 0x29E0);
 SHELL_AT(pad7C, 0x7C);
 SHELL_AT(m_costumeBoxCs, 0x88);
 SHELL_AT(m_costumeSw, 0x90);
+SHELL_AT(m_costumeSw2, 0xA0);
+SHELL_AT(m_costumeBoxCsMG, 0xB0);
+SHELL_AT(m_costumeSwMG, 0xB8);
 SHELL_AT(m_sw5D0, 0x5D0);
 SHELL_AT(m_sw25D0, 0x25D0);
 SHELL_AT(m_musicVolumeSaved, 0x2A3C);

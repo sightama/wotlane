@@ -1463,7 +1463,358 @@ INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE558);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE590);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE5B0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenCharSelect2P__Fv);
+#ifdef NON_MATCHING
+extern int mgFirst2908 __asm__("beginning.2908");
+extern int mgLast2909 __asm__("ending.2909");
+extern int mgNumSelOne2910 __asm__("numSelectablesOne.2910");
+extern int mgNumSelTwo2911 __asm__("numSelectablesTwo.2911");
+extern int mgCostume2912 __asm__("curCostume1.2912");
+extern int mgCostume2913 __asm__("curCostume2.2913");
+extern int mgOneDone2914 __asm__("playerOneIsDone.2914");
+extern int mgTwoDone2915 __asm__("playerTwoIsDone.2915");
+extern int mgWatch2916 __asm__("watchForASecond.2916");
+extern int mgNumAvail2917 __asm__("numAvail1.2917");
+extern int mgNumAvail2918 __asm__("numAvail2.2918");
+extern int mgNum2919 __asm__("num1.2919");
+extern int mgNum2920 __asm__("num2.2920");
+extern int monsterNametomonsterId[];
+int isSlotOpen(int group, int slot);
+void updateSelectSwitchesMG(int cursor1, int cursor2, int flag1, int flag2);
+void killButtons(void);
+#define CS_WRAP(c) ((c) = (c) > -1 ? (c) : 3, (c) = (c) > 3 ? 0 : (c))
+#define CS_SLOT(sel, c) monsterSelectMode[((sel) - 1) * 4 + (c)]
+/* Monster column of player p (0 or 1): currentSelection holds player one's per screen, then player two's from index 22. */
+#define MG_SEL(p) currentSelection[(p) * 22 + currScreen]
+#define MG_SW(off) (*(_hierswitch **)((char *)shell + (off)))
+#define MG_SFX(n) ((ShellSound *)((char *)shell + 0x2918))->playShellSFXSound(n)
+/* Lights sw[i] for each open costume (state 1, still taken) of player p's monster. */
+#define MG_SHOW_COSTUMES(p, sw)                                                                          \
+    for (i = 0; i < 4; i++) {                                                                            \
+        SelectSlot *s = &CS_SLOT(MG_SEL(p), i);                                                          \
+                                                                                                         \
+        if (s->state == 1 && s->taken == 1)                                                              \
+            hierSetSwitch((sw)[i], 1);                                                                   \
+        else                                                                                             \
+            hierSetSwitch((sw)[i], 0);                                                                   \
+    }
+#define MG_COUNT_COSTUMES(p, num, avail)                                                                 \
+    (num) = 0;                                                                                           \
+    for (i = 0; i < 4; i++) {                                                                            \
+        SelectSlot *s = &CS_SLOT(MG_SEL(p), i);                                                          \
+                                                                                                         \
+        if (s->state == 1 && s->taken == 1)                                                              \
+            (num)++;                                                                                     \
+    }                                                                                                    \
+    (avail) = (num);
+/* Moves the costume cursor forward to an open costume; with no open costume, to the next monster column (and to costume 0 when
+   `reset`). */
+#define MG_FIND_COSTUME(p, found, cur, avail, reset)                                                     \
+    while (!(found)) {                                                                                   \
+        if (isSlotOpen(MG_SEL(p) - 1, (cur))) {                                                          \
+            (found) = 1;                                                                                 \
+        } else if ((avail) == 0) {                                                                       \
+            if (MG_SEL(p) != 10) {                                                                       \
+                if (reset)                                                                               \
+                    (cur) = 0;                                                                           \
+                MG_SEL(p)++;                                                                             \
+            } else {                                                                                     \
+                MG_SEL(p) = 0;                                                                           \
+            }                                                                                            \
+        } else {                                                                                         \
+            (cur)++;                                                                                     \
+        }                                                                                                \
+        CS_WRAP((cur));                                                                                  \
+    }
+/* Up/down: unless the player is done, moves the costume cursor by `step` to the next open costume (nothing when only one is open);
+   then prints the position and plays `sfx`, also when the player is done. */
+#define MG_MOVE_COSTUME(p, done, found, cur, avail, sw, step, shown, fmt, sfx)                           \
+    if ((done) || (avail) != 1) {                                                                        \
+        if (!(done)) {                                                                                   \
+            SelectSlot *s = &CS_SLOT(MG_SEL(p), (cur));                                                  \
+                                                                                                         \
+            (found) = 0;                                                                                 \
+            if (s->state == 1 && s->taken == 1)                                                          \
+                hierSetSwitch((sw)[(cur)], 1);                                                           \
+            else                                                                                         \
+                hierSetSwitch((sw)[(cur)], 0);                                                           \
+            (cur) += (step);                                                                             \
+            CS_WRAP((cur));                                                                              \
+            while (!(found)) {                                                                           \
+                if (isSlotOpen(MG_SEL(p) - 1, (cur)))                                                    \
+                    (found) = 1;                                                                         \
+                else                                                                                     \
+                    (cur) += (step);                                                                     \
+                CS_WRAP((cur));                                                                          \
+            }                                                                                            \
+            hierSetSwitch((sw)[(cur)], 2);                                                               \
+        }                                                                                                \
+        printf((fmt), (shown), (cur));                                                                   \
+        MG_SFX(sfx);                                                                                     \
+    }
+/* Left: the previous monster column, skipping one with no model left (modelsLeft), wrapping from the first to the last. */
+#define MG_PREV_MONSTER(p)                                                                               \
+    if (mgFirst2908 < MG_SEL(p)) {                                                                       \
+        if (modelsLeft(MG_SEL(p)) == 0) {                                                                \
+            if (MG_SEL(p) - 1 == mgFirst2908)                                                            \
+                MG_SEL(p) = mgLast2909;                                                                  \
+            else                                                                                         \
+                MG_SEL(p) = MG_SEL(p) - 2;                                                               \
+        } else {                                                                                         \
+            MG_SEL(p)--;                                                                                 \
+        }                                                                                                \
+    } else {                                                                                             \
+        MG_SEL(p) = mgLast2909;                                                                          \
+    }
+/* Two-player minigame monster select (screen 7): each pad moves its own monster column (left/right, codes 3/4) and costume (up/down,
+   1/2) and confirms (6) into m_monsterSel[p]/m_costume[p], hiding its costume panel (m_costumeBoxCsMG). Once both are done it
+   goes on to loading (screen 99) and hides the buttons after ten frames; back (5) undoes the pick of that pad, or returns to the previous
+   screen when it had none. The retail confirm of player one sets the switch at Shell+0x1DC (the one-player minigame select's),
+   not its own at +0x1EC; kept. NON_MATCHING: 35/1989 words differ, 0x1F14 bytes vs 0x1D50 (untuned; the retail shares the
+   sound/switch tail of left and right and lays the cases out in another order). */
+void screenMinigames2P(void)
+{
+    int i, input;
+    int found1 = 0;
+    int found2 = 0;
+
+    if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 0) {
+        mgFirst2908 = 2;
+        mgLast2909 = 9;
+        mgNumSelOne2910 = 9;
+        mgNumSelTwo2911 = 9;
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 0) {
+        mgFirst2908 = 1;
+        mgLast2909 = 9;
+        mgNumSelOne2910 = 9;
+        mgNumSelTwo2911 = 9;
+    } else if (monsterSelectMode[0].state == 0 && monsterSelectMode[36].state == 1) {
+        mgNumSelTwo2911 = 9;
+        mgFirst2908 = 2;
+        mgLast2909 = 10;
+        mgNumSelOne2910 = 9;
+    } else if (monsterSelectMode[0].state == 1 && monsterSelectMode[36].state == 1) {
+        mgFirst2908 = 1;
+        mgLast2909 = 10;
+        mgNumSelOne2910 = 10;
+        mgNumSelTwo2911 = 10;
+    }
+    if (screenFirstPass != 0) {
+        hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 1);
+        hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 1);
+        MG_SHOW_COSTUMES(0, shell->m_costumeSw);
+        MG_SHOW_COSTUMES(1, shell->m_costumeSw2);
+        hierSetSwitch(shell->m_costumeSw[mgCostume2912], 2);
+        hierSetSwitch(shell->m_costumeSw2[mgCostume2913], 2);
+        shell->m_costume[0] = 0;
+        shell->m_costume[1] = 0;
+        mgOneDone2914 = 0;
+        mgTwoDone2915 = 0;
+        hierSetSwitch(MG_SW(0x1EC), MG_SEL(0));
+        hierSetSwitch(MG_SW(0x1F0), MG_SEL(1));
+        continueDecoding = 0;
+        mgWatch2916 = 10;
+        screenFirstPass = 0;
+    }
+    MG_SHOW_COSTUMES(0, shell->m_costumeSwMG[0]);
+    MG_SHOW_COSTUMES(1, shell->m_costumeSwMG[1]);
+    hierSetSwitch(shell->m_costumeSwMG[0][mgCostume2912], 2);
+    hierSetSwitch(shell->m_costumeSwMG[1][mgCostume2913], 2);
+    MG_COUNT_COSTUMES(0, mgNum2919, mgNumAvail2917);
+    MG_COUNT_COSTUMES(1, mgNum2920, mgNumAvail2918);
+    if (mgOneDone2914 == 0) {
+        MG_FIND_COSTUME(0, found1, mgCostume2912, mgNumAvail2917, 0);
+        hierSetSwitch(shell->m_costumeSwMG[0][mgCostume2912], 2);
+    }
+    if (mgTwoDone2915 == 0) {
+        MG_FIND_COSTUME(1, found2, mgCostume2913, mgNumAvail2918, 0);
+        hierSetSwitch(shell->m_costumeSwMG[1][mgCostume2913], 2);
+    }
+    MG_SHOW_COSTUMES(0, shell->m_costumeSwMG[0]);
+    MG_SHOW_COSTUMES(1, shell->m_costumeSwMG[1]);
+    hierSetSwitch(shell->m_costumeSwMG[0][mgCostume2912], 2);
+    hierSetSwitch(shell->m_costumeSwMG[1][mgCostume2913], 2);
+    MG_COUNT_COSTUMES(0, mgNum2919, mgNumAvail2917);
+    MG_COUNT_COSTUMES(1, mgNum2920, mgNumAvail2918);
+    if (mgOneDone2914 == 0) {
+        found1 = 0;
+        MG_FIND_COSTUME(0, found1, mgCostume2912, mgNumAvail2917, 1);
+        hierSetSwitch(shell->m_costumeSwMG[0][mgCostume2912], 2);
+    }
+    if (mgTwoDone2915 == 0) {
+        found2 = 0;
+        MG_FIND_COSTUME(1, found2, mgCostume2913, mgNumAvail2918, 1);
+        hierSetSwitch(shell->m_costumeSwMG[1][mgCostume2913], 2);
+    }
+    updateSelectSwitchesMG(MG_SEL(0), MG_SEL(1), mgOneDone2914, mgTwoDone2915);
+    MG_SHOW_COSTUMES(0, shell->m_costumeSw);
+    MG_SHOW_COSTUMES(1, shell->m_costumeSw2);
+    hierSetSwitch(shell->m_costumeSw[mgCostume2912], 2);
+    hierSetSwitch(shell->m_costumeSw2[mgCostume2913], 2);
+
+    input = screenGetInput(1) & 0xFFFF;
+    switch (input) {
+    case 1:
+        MG_MOVE_COSTUME(0, mgOneDone2914, found1, mgCostume2912, mgNumAvail2917, shell->m_costumeSwMG[0], -1, MG_SEL(0) - 1,
+                        "Player 1 is on Monster %i, model %i\n", 2);
+        break;
+    case 2:
+        MG_MOVE_COSTUME(0, mgOneDone2914, found1, mgCostume2912, mgNumAvail2917, shell->m_costumeSwMG[0], 1, MG_SEL(0),
+                        "Player 1 is on Monster %i, model %i\n", 4);
+        break;
+    case 3:
+        if (mgOneDone2914 == 0) {
+            MG_PREV_MONSTER(0);
+            mgCostume2912 = 0;
+            MG_SFX(5);
+            hierSetSwitch(MG_SW(0x1EC), MG_SEL(0));
+        }
+        break;
+    case 4:
+        if (mgOneDone2914 == 0) {
+            MG_SEL(0) = MG_SEL(0) >= mgLast2909 ? mgFirst2908 : MG_SEL(0) + 1;
+            mgCostume2912 = 0;
+            MG_SFX(3);
+            hierSetSwitch(MG_SW(0x1EC), MG_SEL(0));
+        }
+        break;
+    case 6: {
+        SelectSlot *s = &CS_SLOT(MG_SEL(0), mgCostume2912);
+
+        if (s->state != 1 || s->taken != 1)
+            break;
+        if (mgOneDone2914 != 0) {
+            if (mgTwoDone2915 != 0) {
+                changeScreen(7, 0x63, 1, 0, true);
+                continueDecoding = 0;
+                CS_SLOT(MG_SEL(0), mgCostume2912).taken = 0;
+                hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 0);
+                ((ShellSound *)((char *)shell + 0x2918))->terminateShellSound();
+                MG_SFX(1);
+            } else {
+                printf("Player one hit X and he's already done.\n");
+            }
+        } else {
+            shell->m_costume[0] = mgCostume2912;
+            shell->m_monsterSel[0] = monsterNametomonsterId[MG_SEL(0) - 1];
+            CS_SLOT(MG_SEL(0), mgCostume2912).taken = 0;
+            printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(0) - 1], mgCostume2912);
+            hierSetSwitch(MG_SW(0x1DC), MG_SEL(0));
+            hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 0);
+            mgOneDone2914 = 1;
+            MG_SFX(8);
+        }
+        break;
+    }
+    case 5:
+        if (mgOneDone2914 != 0) {
+            mgOneDone2914 = 0;
+            CS_SLOT(MG_SEL(0), mgCostume2912).taken = 1;
+            if (shell->m_mode != 6)
+                hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 1);
+        } else {
+            hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 0);
+            hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 0);
+            CS_SLOT(MG_SEL(0), mgCostume2912).taken = 1;
+            CS_SLOT(MG_SEL(1), mgCostume2913).taken = 1;
+            changeScreen(7, prevScreen, -1, 0, true);
+            MG_SFX(6);
+        }
+        break;
+    }
+
+    input = screenGetInput(2) & 0xFFFF;
+    switch (input) {
+    case 1:
+        MG_MOVE_COSTUME(1, mgTwoDone2915, found2, mgCostume2913, mgNumAvail2918, shell->m_costumeSwMG[1], -1, MG_SEL(1) - 1,
+                        "Player 2 is on Monster %i, model %i\n", 2);
+        break;
+    case 2:
+        MG_MOVE_COSTUME(1, mgTwoDone2915, found2, mgCostume2913, mgNumAvail2918, shell->m_costumeSwMG[1], 1, MG_SEL(1) - 1,
+                        "Player 2 is on Monster %i, model %i\n", 4);
+        break;
+    case 3:
+        if (mgTwoDone2915 == 0) {
+            MG_PREV_MONSTER(1);
+            mgCostume2913 = 0;
+            MG_SFX(5);
+            hierSetSwitch(MG_SW(0x1F0), MG_SEL(1));
+        }
+        break;
+    case 4:
+        if (mgTwoDone2915 == 0) {
+            MG_SEL(1) = MG_SEL(1) >= mgLast2909 ? mgFirst2908 : MG_SEL(1) + 1;
+            mgCostume2913 = 0;
+            MG_SFX(3);
+            hierSetSwitch(MG_SW(0x1F0), MG_SEL(1));
+        }
+        break;
+    case 6: {
+        SelectSlot *s = &CS_SLOT(MG_SEL(1), mgCostume2913);
+
+        if (s->state != 1 || s->taken != 1)
+            break;
+        if (mgTwoDone2915 != 0) {
+            if (mgOneDone2914 != 0) {
+                hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 0);
+                hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 0);
+                continueDecoding = 0;
+                CS_SLOT(MG_SEL(1), mgCostume2913).taken = 0;
+                changeScreen(7, 0x63, 1, 0, true);
+                ((ShellSound *)((char *)shell + 0x2918))->terminateShellSound();
+                MG_SFX(1);
+            } else {
+                printf("Player two hit X and he's already done.\n");
+            }
+        } else {
+            shell->m_costume[1] = mgCostume2913;
+            shell->m_monsterSel[1] = monsterNametomonsterId[MG_SEL(1) - 1];
+            CS_SLOT(MG_SEL(1), mgCostume2913).taken = 0;
+            printf("Monster number %i model %i selected\n", monsterNametomonsterId[MG_SEL(1) - 1], mgCostume2913);
+            hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 0);
+            hierSetSwitch(MG_SW(0x1F0), MG_SEL(1));
+            mgTwoDone2915 = 1;
+            MG_SFX(8);
+        }
+        break;
+    }
+    case 5:
+        if (mgTwoDone2915 != 0) {
+            mgTwoDone2915 = 0;
+            CS_SLOT(MG_SEL(1), mgCostume2913).taken = 1;
+            if (shell->m_mode != 6)
+                hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 1);
+        } else {
+            hierSetCsDrawMe(shell->m_costumeBoxCsMG[0], 0);
+            hierSetCsDrawMe(shell->m_costumeBoxCsMG[1], 0);
+            CS_SLOT(MG_SEL(0), mgCostume2912).taken = 1;
+            CS_SLOT(MG_SEL(1), mgCostume2913).taken = 1;
+            changeScreen(7, prevScreen, -1, 0, true);
+            MG_SFX(6);
+        }
+        break;
+    }
+
+    if (mgOneDone2914 != 0 && mgTwoDone2915 != 0) {
+        if (--mgWatch2916 < 0)
+            killButtons();
+        continueDecoding = 0;
+        changeScreen(7, 0x63, 1, 0, true);
+    }
+}
+#undef MG_SEL
+#undef MG_SW
+#undef MG_SFX
+#undef MG_SHOW_COSTUMES
+#undef MG_COUNT_COSTUMES
+#undef MG_FIND_COSTUME
+#undef MG_MOVE_COSTUME
+#undef MG_PREV_MONSTER
+#undef CS_WRAP
+#undef CS_SLOT
+#else
 INCLUDE_ASM("asm/nonmatchings/game/screen", screenMinigames2P__Fv);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE698);
 INCLUDE_ASM("asm/nonmatchings/game/screen", D_006EE6D0);
 INCLUDE_ASM("asm/nonmatchings/game/screen", jtbl_006EE720);
