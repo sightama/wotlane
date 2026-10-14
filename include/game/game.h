@@ -93,6 +93,7 @@ public:
     void updateLock(MonsterReticleState state);
     Monster *getClosestMonster2D(float maxDist);
     Monster *getClosestMonsterWithLos(float maxDist);
+    Monster *getClosestMonsterInFOV(_fvector &from, float maxDist, _fvector &eye, float cosAngle, float &distSq);
     Monster *getClosestMonsterToPunch(float maxDist, float angle, float reach);
     Monster *getClosestMonster(int locA, int locB, float radius);
     bool isIdle(unsigned t);

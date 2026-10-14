@@ -1676,7 +1676,51 @@ Monster *Monster::getClosestMonsterToPunch(float maxDist, float angle, float rea
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterToPunch__7Monsterfff);
 #endif
+/* The nearest other living monster (not m_target) whose aim point is within maxDist of `from` and inside the cone around this monster's
+   facing seen from `eye` (cos of the half angle in cosAngle). The aim point is this monster's local offset at 0x3F0 placed in the other
+   monster's frame, at the height of its pin point (0x3E38). distSq gets the squared distance of the winner (maxDist squared if none). */
+#ifdef NON_MATCHING
+/* 1/150 words: eeSqrtf stands for the retail inline sqrt.s (whose NaN fallback calls sqrtf), so this one is a leaf and the registers all differ */
+Monster *Monster::getClosestMonsterInFOV(_fvector &from, float maxDist, _fvector &eye, float cosAngle, float &distSq)
+{
+    float bestSq = maxDist * maxDist;
+    Monster *best = 0;
+    int j;
+
+    for (j = 0; j < game->m_numSlots; j++) {
+        Monster *m = &game->m_slots[j];
+
+        if (m->m_playerNum != 0 && m != this && !m->m_dead && m != m_target) {
+            FVECTOR p, d;
+            float d2;
+
+            vecApplyRows(&p, m->m_cs->mat, (_fvector *)((char *)this + 0x3F0));
+            vecAdd(&p, &p, &m->m_cs->trans);
+            p.z = *(float *)((char *)m + 0x3E38);
+            vecSub(&d, &p, &from);
+            d2 = vecLenSq(&d);
+            if (d2 < bestSq) {
+                float *f = (float *)((char *)m_cs + 0x30);
+                float dot, len2;
+
+                vecSub(&d, &p, &eye);
+                dot = f[0] * d.x + f[1] * d.y + f[2] * d.z;
+                if (dot < 0.0f)
+                    continue;
+                len2 = d.x * d.x + d.y * d.y + d.z * d.z;
+                if (len2 > 1e-10f && dot / eeSqrtf(len2) >= cosAngle) {
+                    bestSq = d2;
+                    best = m;
+                }
+            }
+        }
+    }
+    distSq = bestSq;
+    return best;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Monster", getClosestMonsterInFOV__7MonsterR8_fvectorfT1fRf);
+#endif
 Monster *Monster::getClosestTargetable(unsigned short a, bool b, float x, float y)
 {
     return getClosestTargetable(a, b, x, x, y);
