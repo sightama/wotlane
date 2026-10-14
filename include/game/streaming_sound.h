@@ -13,6 +13,8 @@ public:
 
     void updateStreamingSoundManager(int cinema);
     void bufferIntroCinemaMusic(void);
+    void startCinemaMusic(void);
+    void stopCinemaMusic(void);
 };
 
 #define STREAMING_SOUND() ((StreamingSoundManager *)((char *)game + 0x1204C0))

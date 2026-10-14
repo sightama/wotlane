@@ -507,7 +507,13 @@ public:
     char pad112480[0x11C370 - 0x112480]; /* includes the Weapons spawner at 0x112490 */
     TokenManager m_tokens[2];        /* 0x11C370 */
     char pad11E378[0x120380 - 0x11E378];
-    Monster *m_monsters[8];          /* 0x120380: indexed up to m_numMonsters; vegas also reads [4] and [5] */
+    union {
+        Monster *m_monsters[8];      /* 0x120380: indexed up to m_numMonsters; vegas also reads [4] and [5] */
+        struct {
+            Monster *players[4];     /* 0x120380 */
+            Monster *ais[4];         /* 0x120390: AI monsters, up to m_numAIs (ActionDispatch indexes this one directly) */
+        } m_lists;
+    };
     char pad1203A0[0x1203C0 - 0x1203A0];
     float m_defaultHeight;           /* 0x1203C0: hat default height (tweak key 0xBBA, hdSetDefaultHeight) */
     float m_gravity;                 /* 0x1203C4 */
@@ -616,6 +622,7 @@ public:
     static void SetCameraMonster(int view, Monster *m);
     static void TogglePOV(int view);
     static float GetUnifiedTime(void);
+    static void StartShake(_fvector &pos, float f);
 };
 
 void fontSetColor(int font, int r, int g, int b, int a);

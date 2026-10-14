@@ -12,6 +12,8 @@ public:
     void initPowerUpsAfter(void);
     void KillPowerUps(void);
     void CreatePowerUp(int type, unsigned char arg, _fvector *pos);
+    void startCinema(void);
+    void endCinema(void);
 };
 
 #endif

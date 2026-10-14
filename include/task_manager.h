@@ -26,6 +26,7 @@ public:
     TaskConfig *add(unsigned (*f)(), int delay);
     void remove(void *&handle);
     int update(void);
+    static unsigned update(void *tm);   /* task callback that runs another TaskManager (ActionDispatch) */
     void executeAndDeleteAll(void);
     TaskConfig *createTask(void);
     void deleteTask(TaskConfig *t);
