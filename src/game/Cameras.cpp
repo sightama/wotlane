@@ -66,6 +66,12 @@ extern "C" int printf(const char *, ...);
 void hierSetCameraLosPoint(_fvector *pos, int view, int idx);
 void hierSetLosPointsPerView(int idx, int points);
 extern int moviePlaying;
+int inputFixAnalogValue(int axis, int pad);
+void boundEulerAngles(_fvector *v);
+void mathfMatrixFromPointToPoint(float (*m)[4], _fvector *from, _fvector *to);
+/* closeCombatUpdate's function-local static (frames since the ground height under the monster last jumped) */
+extern int zChangeTime __asm__("zChangeTime.2523");
+__asm__("#SNFIX_SMALL zChangeTime.2523");
 /* dst = a + b * s (xyz) in VU0, the way retail inlines it */
 #define VEC_MADD(dst, a, b, s)                                                                                    \
     __asm__ volatile("lqc2 $vf11, 0x0(%1)\n\tlqc2 $vf12, 0x0(%2)\n\tmfc1 $2, %3\n\tqmtc2.ni $2, $vf13\n\t"      \
@@ -859,8 +865,398 @@ void Cameras::InitPlantBossCamera(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", InitPlantBossCamera__7Cameras);
 #endif
+/* POVs 1 and 9 (close combat). With two monsters it frames the pair from +0xE20, far enough back (at least +0xD10.x,
+   times 1.5) for both to fit, above the ground and looking at their midpoint; the pair drifting apart, dying or dropping
+   +0x7970 leaves the unified view. With one player it frames the player from +0xE20 (re-aimed at its pin target when
+   that leaves the view), leaves the view (through LeaveUnifiedTask after +0xDA8 frames) once no AI is within +0xE00,
+   and swings the heading and pitch by how much the player and the camera face the same way (+0xDBC, +0xDC0). */
+#ifdef NON_MATCHING
+/* equivalente: não pontuada ainda */
+/* r is the look-at rotation: nudge heading by how sideways the camera faces the monster's heading, pitch by how much
+   it faces along it */
+#define CC_SWING(r, eps)                                                                                              \
+    do {                                                                                                              \
+        FVECTOR f_;                                                                                                   \
+        FVECTOR g_;                                                                                                   \
+        float dot_;                                                                                                   \
+        float k_;                                                                                                     \
+        float s_;                                                                                                     \
+                                                                                                                      \
+        s_ = sinf(CAM_CS(c)->rot.z);                                                                                  \
+        f_.x = s_;                                                                                                    \
+        f_.y = cosf(CAM_CS(c)->rot.z);                                                                                \
+        f_.z = 0.0f;                                                                                                  \
+        s_ = sinf(CAM_MONSTER(c)->m_cs->rot.z);                                                                       \
+        g_.x = s_;                                                                                                    \
+        g_.y = cosf(CAM_MONSTER(c)->m_cs->rot.z);                                                                     \
+        g_.z = 0.0f;                                                                                                  \
+        dot_ = f_.x * g_.x + f_.y * g_.y + f_.z * g_.z;                                                               \
+        k_ = CF(c, 0xDBC);                                                                                            \
+        if (0.0f < f_.x * g_.y - f_.y * g_.x)                                                                         \
+            k_ = -k_;                                                                                                 \
+        CF(c, 0xDEC) = smoothEasyIn(CF(c, 0xDEC), (1.0f - fabsf(dot_)) * k_, CF(c, 0xDD4), 0.001f);                   \
+        (r).z += CF(c, 0xDEC) * 0.017453292f;                                                                         \
+        CAM_CS(c)->rot.z = smoothEasyInAngle(CAM_CS(c)->rot.z, (r).z, CF(c, 0xDD0), eps);                             \
+        k_ = CF(c, 0xDC0);                                                                                            \
+        if (dot_ < 0.0f)                                                                                              \
+            k_ = -k_;                                                                                                 \
+        CF(c, 0xDF0) = smoothEasyIn(CF(c, 0xDF0), fabsf(dot_) * k_, CF(c, 0xDD4), 0.001f);                            \
+        (r).x += CF(c, 0xDF0) * 0.017453292f;                                                                         \
+        CAM_CS(c)->rot.x = smoothEasyInAngle(CAM_CS(c)->rot.x, (r).x, CF(c, 0xDE4), eps);                             \
+    } while (0)
+void Camera::closeCombatUpdate(void)
+{
+    char *c = m_raw;
+    FVECTOR v;
+    FVECTOR w;
+    FVECTOR r;
+
+    if (CAM_CS(c) == 0 || *(Monster **)(c + 0xE0C) == 0 || *(Monster **)(c + 0xE10) == 0) {
+        CF(c, 0xD88) = 0.0f;
+        return;
+    }
+    if (CF(c, 0xE34) < CF(c, 0xE44) && CI(c, 0xD9C) == 0) {
+        CF(c, 0xDE0) = FMIN(CF(c, 0xDC4), CF(c, 0xDE0) + CF(c, 0xE38));
+        CF(c, 0xDE4) = FMIN(CF(c, 0xDCC), CF(c, 0xDE4) + CF(c, 0xE3C));
+        CF(c, 0xDE8) = FMIN(1.0f, CF(c, 0xDE8) + CF(c, 0xE40));
+    } else if (CI(c, 0xD9C) == 0) {
+        CF(c, 0xDE0) = CF(c, 0xDC4);
+        CF(c, 0xDE4) = CF(c, 0xDCC);
+        CF(c, 0xDE8) = 1.0f;
+    } else if (CI(c, 0xD9C) == 1) {
+        CI(c, 0xD9C) = 0;
+        CF(c, 0xDE8) = 1.0f;
+        CF(c, 0xDE0) = 1.0f;
+        CF(c, 0xDE4) = 1.0f;
+    }
+    if (game->m_numMonsters == 2) {
+        Monster *a = *(Monster **)(c + 0xE0C);
+        Monster *b = *(Monster **)(c + 0xE10);
+        float spread;
+        float rise;
+        float halfFov;
+        float dist;
+        float h;
+
+        /* v: the pair's midpoint, w: the camera offset */
+        vecSub(&v, &a->m_cs->trans, &b->m_cs->trans);
+        spread = eeSqrtf(v.x * v.x + v.y * v.y);
+        rise = fabsf(a->m_cs->trans.z - b->m_cs->trans.z);
+        if (gUseUnifiedView && game->m_gameMode != 8) {
+            if (CF(c, 0xE00) < spread || CF(c, 0xE00) < rise || a->m_dead || b->m_dead || !a->m_camUnify ||
+                !b->m_camUnify) {
+                Cameras::LeaveUnifiedView(1);
+                shakeCamera();
+                return;
+            }
+        }
+        a = *(Monster **)(c + 0xE0C);
+        b = *(Monster **)(c + 0xE10);
+        vecAdd(&v, &a->m_cs->trans, &b->m_cs->trans);
+        vecScale(&v, &v, 0.5f);
+        halfFov = *(float *)((char *)viewGetDef(viewGetCurView()) + 0xB0) * 0.5f * 0.017453292f;
+        spread = spread * 0.5f / tanf(halfFov);
+        rise = rise * 0.5f / tanf(halfFov * 0.75f);
+        dist = FMAX(spread, rise);
+        dist = FMAX(dist, CF(c, 0xD10));
+        if (CF(c, 0xE08) < dist && game->m_gameMode != 8) {
+            if ((MI((*(Monster **)(c + 0xE0C))->m_state, 0x4) & 0x10) ||
+                (MI((*(Monster **)(c + 0xE10))->m_state, 0x4) & 0x10)) {
+                Cameras::LeaveUnifiedView(9);
+                return;
+            }
+        }
+        vecScale(&w, (_fvector *)(c + 0xE20), dist * 1.5f);
+        if (CI(c, 0xDA0) == 0) {
+            CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, v.x + w.x, CF(c, 0xDE0), 0.01f);
+            CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, v.y + w.y, CF(c, 0xDE0), 0.01f);
+            CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, v.z + w.z + CF(c, 0xD18), CF(c, 0xDE0), 0.01f);
+            r = CAM_CS(c)->trans;
+            r.z += 100.0f;
+            h = hdHatTest(&r, &w, 0.0f, true, 4096.0f);
+            if (h == 0.0f)
+                r.z -= 100.0f;
+            else
+                r.z -= h - CF(c, 0xD18);
+            a = *(Monster **)(c + 0xE0C);
+            b = *(Monster **)(c + 0xE10);
+            r.z = FMAX(r.z, FMIN(a->m_cs->trans.z, b->m_cs->trans.z) + CF(c, 0xD18));
+            CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, r.z, CF(c, 0xDE0), 0.01f);
+            mathfRotationFromPointToPoint(&w, &CAM_CS(c)->trans, &v);
+            w.x += CF(c, 0xD00);
+            w.x = FMIN(w.x, 0.34906584f);
+            CAM_CS(c)->rot.x = smoothEasyInAngle(CAM_CS(c)->rot.x, w.x, CF(c, 0xDE4), 0.003f);
+            CAM_CS(c)->rot.z = smoothEasyInAngle(CAM_CS(c)->rot.z, w.z, CF(c, 0xDE8), 0.003f);
+            CAM_CS(c)->rot.y = 0.0f;
+            mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+        }
+    } else {
+        Monster *p;
+        bool near;
+        int i;
+        int n;
+
+        if (CAM_MONSTER(c)->m_playerNum == 1)
+            p = CAM_MONSTER(c);
+        else if ((*(Monster **)(c + 0xE10))->m_playerNum == 1)
+            p = *(Monster **)(c + 0xE10);
+        else {
+            Cameras::LeaveUnifiedView(0xB);
+            return;
+        }
+        near = false;
+        for (i = 0; i < game->m_numAIs; i++) {
+            Monster *m = game->m_lists.ais[i];
+
+            if (p->hasPinTarget() && (Monster *)p->m_pinTarget != m)
+                continue;
+            if (EnemyInfo::getInfo(*p, *m)->dist < CF(c, 0xE00) && !m->m_dead)
+                near = true;
+        }
+        n = 0;
+        if (!near)
+            n = CI(c, 0xDA4) + 1;
+        CI(c, 0xDA4) = n;
+        if (n >= CI(c, 0xDA8) && !leaveTriggered) {
+            leaveTriggered = 1;
+            *(void **)(c + 0xE68) = TaskManager::global.add(static_cast<unsigned (*)(void *)>(&Cameras::LeaveUnifiedTask), 0, 1);
+        } else {
+            if (CAM_MONSTER(c)->hasPinTarget() && !near && !CAM_MONSTER(c)->m_freeFalling &&
+                (CAM_MONSTER(c)->isIdle(7) || CAM_MONSTER(c)->m_pinTime < 7.5f)) {
+                if (*(void **)(c + 0xE68)) {
+                    leaveTriggered = 0;
+                    TaskManager::global.remove(*(void **)(c + 0xE68));
+                }
+                Cameras::LeaveUnifiedView(0xE);
+                return;
+            }
+            if (CI(c, 0xDA4) < CI(c, 0xDA8) && leaveTriggered) {
+                leaveTriggered = 0;
+                TaskManager::global.remove(*(void **)(c + 0xE68));
+            }
+        }
+        /* the player pins something that drops out of view: re-aim the offset at it */
+        if (CAM_MONSTER(c)->hasPinTarget() && CF(c, 0xE44) < CF(c, 0xE34) && !CAM_MONSTER(c)->m_freeFalling &&
+            (CAM_MONSTER(c)->isIdle(7) || CAM_MONSTER(c)->m_pinTime < 7.5f)) {
+            _cs *tcs = ((Monster *)CAM_MONSTER(c)->m_pinTarget)->m_cs;
+
+            if (!((tcs->inFov >> viewGetCurView()) & 1) || !posInFOV(tcs->trans, 0, true)) {
+                float m[3][4] __attribute__((aligned(16)));
+                FVECTOR from;
+                FVECTOR to;
+
+                *(u_long128_t *)&from = 0;
+                from.x = CAM_MONSTER(c)->m_cs->trans.x;
+                from.y = CAM_MONSTER(c)->m_cs->trans.y;
+                *(u_long128_t *)&to = 0;
+                to.x = tcs->trans.x;
+                to.y = tcs->trans.y;
+                mathfMatrixFromPointToPoint(m, &from, &to);
+                vecApplyRows((_fvector *)(c + 0xE20), m, (_fvector *)(c + 0xD10));
+                if (CAM_MONSTER(c)->m_cs->mat[1][0] * m[1][1] - CAM_MONSTER(c)->m_cs->mat[1][1] * m[1][0] < 0.0f) {
+                    CF(c, 0xD10) = -CF(c, 0xD10);
+                    vecApplyRows((_fvector *)(c + 0xE20), m, (_fvector *)(c + 0xD10));
+                    CF(c, 0xD10) = -CF(c, 0xD10);
+                }
+                CF(c, 0xDE0) = CF(c, 0xE38);
+                CF(c, 0xDE4) = CF(c, 0xE3C);
+                CF(c, 0xDE8) = CF(c, 0xE40);
+                CF(c, 0xDEC) = 0.0f;
+                CF(c, 0xE34) = 0.0f;
+                CF(c, 0xDF0) = 0.0f;
+            }
+        }
+        if (CI(c, 0xDA0) == 0) {
+            if (CF(c, 0xE34) < CF(c, 0xE44)) {
+                /* POV change in progress: ease in, orbiting as translateCamera sees fit */
+                vecAdd(&v, &CAM_MONSTER(c)->m_cs->trans, (_fvector *)(c + 0xE20));
+                translateCamera(v, CF(c, 0xDE0), false);
+                mathfRotationFromPointToPoint(&w, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
+                w.y = 0.0f;
+                w.x += CF(c, 0xD00);
+                w.x = FMIN(w.x, 0.7853982f);
+                CC_SWING(w, 0.0f);
+                mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+            } else {
+                float dist;
+                float lo;
+                float hi;
+                char *hd;
+                float h;
+
+                /* keep the distance within 0.9 .. 1.1 of the offset's length */
+                vecSub(&v, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
+                dist = eeSqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+                lo = eeSqrtf(CF(c, 0xD10) * CF(c, 0xD10) + CF(c, 0xD14) * CF(c, 0xD14) + CF(c, 0xD18) * CF(c, 0xD18)) * 0.9f;
+                hi = eeSqrtf(CF(c, 0xD10) * CF(c, 0xD10) + CF(c, 0xD14) * CF(c, 0xD14) + CF(c, 0xD18) * CF(c, 0xD18)) * 1.1f;
+                if (dist < lo || hi < dist) {
+                    float s;
+                    Monster *m;
+
+                    if (dist < lo) {
+                        s = lo / dist;
+                        CF(c, 0xDE0) = 1.0f;
+                    } else {
+                        s = hi / dist;
+                    }
+                    m = CAM_MONSTER(c);
+                    vecSub(&v, &CAM_CS(c)->trans, &m->m_cs->trans);
+                    if (m->m_state[0] == 0x1F || m->m_state == m->m_stateRef || hi < dist) {
+                        vecScale(&v, &v, s);
+                        v.z = FMIN(v.z, CF(c, 0xD18));
+                    } else {
+                        v.x *= s;
+                        v.y *= s;
+                    }
+                    CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, CAM_MONSTER(c)->m_cs->trans.x + v.x, CF(c, 0xDE0), 0.01f);
+                    CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, CAM_MONSTER(c)->m_cs->trans.y + v.y, CF(c, 0xDE0), 0.01f);
+                    CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, CAM_MONSTER(c)->m_cs->trans.z + v.z, CF(c, 0xDE0), 0.01f);
+                }
+                /* follow the ground under the monster's feet (unless falling): a jump of more than 50 restarts a
+                   30-frame ramp of the position rate */
+                hd = (char *)CAM_MONSTER(c)->getFootHDResult();
+                if (!CAM_MONSTER(c)->m_freeFalling) {
+                    unsigned char type = *(unsigned char *)(hd + 0x3);
+                    bool ground = false;
+
+                    if (type == 7 || (0.70710677f < MF(hd, 0x28) && type != 10 && type != 11))
+                        ground = true;
+                    if (ground) {
+                        if (50.0f < fabsf(CF(c, 0xD28) - MF(hd, 0x18))) {
+                            CF(c, 0xD28) = MF(hd, 0x18);
+                            CF(c, 0xE38) = CF(c, 0xDC4) / 30.0f;
+                            zChangeTime = 0;
+                        }
+                        if (zChangeTime++ < 30)
+                            CF(c, 0xDE0) = FMIN(CF(c, 0xDC4), CF(c, 0xE38) * (float)zChangeTime);
+                        CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, CF(c, 0xD28) + CF(c, 0xD18), CF(c, 0xDE0), 0.01f);
+                    }
+                }
+                /* stay above the ground */
+                v = CAM_CS(c)->trans;
+                v.z -= 50.0f;
+                h = hdHatTest(&v, &w, 100.0f, true, 4096.0f);
+                if (h < 0.0f) {
+                    v.z -= h - 50.0f;
+                    CAM_CS(c)->trans.z = v.z;
+                }
+                mathfRotationFromPointToPoint(&r, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
+                r.y = 0.0f;
+                r.x += CF(c, 0xD00);
+                r.x = FMIN(r.x, 0.7853982f);
+                CC_SWING(r, 0.003f);
+                mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+            }
+        }
+    }
+    shakeCamera();
+}
+#undef CC_SWING
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", closeCombatUpdate__6Camera);
+#endif
+/* Debug free-fly camera (POV 2), driven by pad 0: the digital buttons and the analog sticks turn it (pitch +0x60,
+   heading +0x68; 0x100/0x400 roll, 1 resets the roll) and move it in its own frame (stick past half way moves faster,
+   button 4 triples the stick speed). Holding 0x100+0x200+0x400+0x800 together freezes it. */
+#ifdef NON_MATCHING
+/* equivalente: não pontuada ainda */
+#define ROAM_TURN(field, up, down, axis)                                                                              \
+    do {                                                                                                              \
+        int v_;                                                                                                       \
+        if ((v_ = inputGetInput(up, 0)) != 0) {                                                                       \
+            if (__builtin_abs(v_) < 2)                                                                                \
+                field += 0.017453292f;                                                                                \
+            else                                                                                                      \
+                field += (float)v_ * 0.02617994f / 127.0f;                                                            \
+        } else if ((v_ = inputGetInput(down, 0)) != 0) {                                                              \
+            if (__builtin_abs(v_) < 2)                                                                                \
+                field -= 0.017453292f;                                                                                \
+            else                                                                                                      \
+                field -= (float)v_ * 0.02617994f / 127.0f;                                                            \
+        } else if ((v_ = inputFixAnalogValue(axis, 0)) != 0) {                                                        \
+            if (v_ >= 0x80)                                                                                           \
+                field -= (float)(0x7F - v_) * 0.034906585f / 127.0f;                                                  \
+            else                                                                                                      \
+                field += (float)v_ * 0.034906585f / 127.0f;                                                           \
+        }                                                                                                             \
+    } while (0)
+/* one button: +-0.5, or +-v/127 plus (2v - 63)/127 more past 0x40 */
+#define ROAM_STEP(field, v_, op)                                                                                      \
+    do {                                                                                                              \
+        if (__builtin_abs(v_) < 2) {                                                                                  \
+            field op 0.5f;                                                                                            \
+        } else {                                                                                                      \
+            float f_ = (float)v_;                                                                                     \
+            field op f_ / 127.0f;                                                                                     \
+            if (v_ >= 0x40)                                                                                           \
+                field op (f_ * 2.0f - 63.0f) / 127.0f;                                                                \
+        }                                                                                                             \
+    } while (0)
+/* a stick: above 0x80 it reads 0x7F - v (as retail does, which is never past 0x40 there) */
+#define ROAM_ANALOG(field, v_, opHi, opLo)                                                                            \
+    do {                                                                                                              \
+        if (v_ >= 0x80) {                                                                                             \
+            int w_ = 0x7F - v_;                                                                                       \
+            float f_ = (float)w_;                                                                                     \
+            field opHi f_ / 127.0f;                                                                                   \
+            if (w_ >= 0x40)                                                                                           \
+                field opHi (f_ * 2.0f - 63.0f) / 127.0f;                                                              \
+        } else {                                                                                                      \
+            float f_ = (float)v_;                                                                                     \
+            field opLo f_ / 127.0f;                                                                                   \
+            if (v_ >= 0x40)                                                                                           \
+                field opLo (f_ * 2.0f - 63.0f) / 127.0f;                                                              \
+        }                                                                                                             \
+        if (inputGetInput(4, 0))                                                                                      \
+            field *= 3.0f;                                                                                            \
+    } while (0)
+void Camera::roamUpdate(void)
+{
+    char *c = m_raw;
+    FVECTOR mv;
+    FVECTOR d;
+    int v;
+
+    if (CAM_CS(c) == 0)
+        return;
+    if (inputGetInput(0x400, 0) && inputGetInput(0x800, 0) && inputGetInput(0x100, 0) && inputGetInput(0x200, 0))
+        return;
+    ROAM_TURN(CAM_CS(c)->rot.z, 0x20, 0x80, 2);
+    ROAM_TURN(CAM_CS(c)->rot.x, 0x40, 0x10, 3);
+    if (inputGetInput(0x100, 0))
+        CAM_CS(c)->rot.y -= 0.017453292f;
+    else if (inputGetInput(0x400, 0))
+        CAM_CS(c)->rot.y += 0.017453292f;
+    else if (inputGetInput(1, 0))
+        CAM_CS(c)->rot.y = 0.0f;
+    boundEulerAngles(&CAM_CS(c)->rot);
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    *(u_long128_t *)&mv = 0;
+    if ((v = inputGetInput(0x1000, 0)) != 0)
+        ROAM_STEP(mv.y, v, +=);
+    else if ((v = inputGetInput(0x4000, 0)) != 0)
+        ROAM_STEP(mv.y, v, -=);
+    else if ((v = inputFixAnalogValue(1, 0)) != 0)
+        ROAM_ANALOG(mv.y, v, +=, -=);
+    if ((v = inputGetInput(0x2000, 0)) != 0)
+        ROAM_STEP(mv.x, v, +=);
+    else if ((v = inputGetInput(0x8000, 0)) != 0)
+        ROAM_STEP(mv.x, v, -=);
+    else if ((v = inputFixAnalogValue(0, 0)) != 0)
+        ROAM_ANALOG(mv.x, v, -=, +=);
+    if ((v = inputGetInput(0x800, 0)) != 0)
+        ROAM_STEP(mv.z, v, +=);
+    else if ((v = inputGetInput(0x200, 0)) != 0)
+        ROAM_STEP(mv.z, v, -=);
+    vecApplyRows(&d, CAM_CS(c)->mat, &mv);
+    vecAdd(&CAM_CS(c)->trans, &CAM_CS(c)->trans, &d);
+}
+#undef ROAM_TURN
+#undef ROAM_STEP
+#undef ROAM_ANALOG
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", roamUpdate__6Camera);
+#endif
 /* POV 3 (detached): eases the camera to its parked position (+0xD20) and turns it towards the followed monster. */
 void Camera::staticUpdate(void)
 {
