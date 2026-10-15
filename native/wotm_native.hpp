@@ -397,6 +397,8 @@ struct DrawItem {
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
+    uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior ou CLOAK
+    float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
 };
 
 struct Camera {
@@ -1087,7 +1089,7 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
-                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3]) {
+                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -1129,26 +1131,29 @@ public:
     }
 
     // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, v, rgb) com os tres vertices decodificados (UV,
-    // cor, slot de textura e culling da secao) e a cor de cada um nas unidades do GS (vertexRgb: com a luz do VU1 nos iluminados)
+    // cor, slot de textura e culling da secao), a cor de cada um nas unidades do GS (vertexRgb: com a luz do VU1 nos iluminados) e a
+    // normal no mundo do mapa de ambiente (envNormal; zero sem DrawItem::env)
     template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
         const MeshData *md = mesh(ram, it.node);
         if (!md || !md->valid) return;
         const uint32_t pal = md->skinned ? palette(ram, it) : 0;
-        const ObjLight ol = objectLight(ram, it.node);
+        const ObjLight ol = objectLight(ram, it);
         const auto &t = md->tris;
-        std::vector<M4> pm;   // paleta (osso x da normal nos iluminados)
-        if (pal && ol.lit)
+        std::vector<M4> pm;   // paleta (osso x da normal nos iluminados e no mapa de ambiente)
+        if (pal && (ol.lit || it.env))
             for (uint32_t s = 0; s < 32; ++s) pm.push_back(readM4(ram, pal + 0x10 + 0x40 * s));
-        float p[3][3];
+        float p[3][3], nw[3][3] = {};
         uint8_t rgb[3][3];
         for (size_t k = 0; k + 2 < t.size(); k += 3) {
             for (int c = 0; c < 3; ++c) {
                 const Vtx &v = t[k + c];
+                const M4 *bone = pm.empty() ? nullptr : &pm[(v.cx & 0x7F) / 4];
                 if (pal) skinVertex(ram, pal, it.m, v, p[c]);
                 else xform(it.m, v.x, v.y, v.z, p[c]);
-                vertexRgb(ol, it.color, pm.empty() ? nullptr : &pm[(v.cx & 0x7F) / 4], it.m, v, rgb[c]);
+                vertexRgb(ol, it.color, bone, it.m, v, rgb[c]);
+                if (it.env) envNormal(v, bone, it.m, nw[c]);
             }
-            f(p, &t[k], rgb);
+            f(p, &t[k], rgb, nw);
         }
     }
 
@@ -1159,7 +1164,7 @@ public:
         std::vector<float> cov(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3]) {
+            forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -2136,6 +2141,7 @@ public:
         std::stable_sort(order.begin(), order.end(), [](const Ent &a, const Ent &b) { return a.key < b.key; });
 
         SpriteView sprView;   // eixos e focos para os ObjSprite (montado no primeiro item que tiver)
+        EnvView envV;         // camera do UV do mapa de ambiente (idem, no primeiro item com DrawItem::env)
         const unsigned white = gsWhiteTexture();   // secoes sem textura (PRIM.TME 0): alfa 0x80 = 1,0 do GS
         uint64_t cur = ~0ull;
         bool open = false;
@@ -2209,7 +2215,7 @@ public:
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
             const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade * std::max(0.f, it.color[3]);
-            const ObjLight ol = objectLight(ram, it.node);
+            const ObjLight ol = objectLight(ram, it);
             const float fogBurn = ram.f32(it.node + 0x2C);   // fogBurnThru (somado ao F da neblina)
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
@@ -2262,6 +2268,21 @@ public:
                     if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fzScale;
                 }
                 if (t[k].cull && !wire && backFacing(p, eye_)) continue;
+                float eu[3], ev[3];   // UV do mapa de ambiente por vertice
+                bool envOk[3] = {false, false, false};
+                if (it.env && tid) {
+                    if (!envV.ok && eyeOk_) {
+                        float W[4][4];
+                        for (int r = 0; r < 4; ++r)
+                            for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(addr::worldToScreenMat + 16 * r + 4 * c);
+                        envV = envView(ram, W, eye_);
+                    }
+                    for (int c = 0; c < 3; ++c) {
+                        float nw[3];
+                        envNormal(t[k + c], pm ? &pm[(t[k + c].cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, nw);
+                        envOk[c] = envUv(it.env, it.envK, envV, p[c], nw, eu[c], ev[c]);
+                    }
+                }
                 for (int c = 0; c < 3; ++c) {
                     const int cs[2] = {c, (c + 1) % 3};
                     for (int e = 0; e < (wire ? 2 : 1); ++e) {
@@ -2279,7 +2300,9 @@ public:
                             const int k = gsA ? 1 : 2;
                             rlColor4ub(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
                         }
-                        if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
+                        const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
+                        if (tid && tid == screenId_) rlTexCoord2f(tu * (1024.f / 640.f), 1.f - tv * (256.f / 224.f));   // texels do GS na tela 640x224
+                        else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         shaderNormal(fogBurn, v.fge, gsV);   // neblina e modulacao do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
@@ -2479,6 +2502,24 @@ private:
         }
     }
 
+    // Mapa de ambiente: o pktAddVu1ObjAsm chama o pktBldEnvMapDma quando as flags (+0xC) tem envMapped (0x2), envMapIsVideo (0x4) ou
+    // envMapCloakFx (0x8, que ele liga quando o _cs em desenho tem cloakMe, +0xAA). Ramo 2 (video, quadro anterior ou CLOAK) com
+    // envMapIsVideo, texId[0] (+0x50) = 0 ou CLOAK; senao ramo 1. k = envMapWeight (+0x5C; 0 = 16); no CLOAK, cloakWeight (+0xAC) + j/64,
+    // j = 3 - (count & 7) com count & 8, senao (count & 7) - 3 (count = contador de quadros 0x6F88E0).
+    void objectEnv(const Ram &ram, uint32_t node, DrawItem &it) const {
+        const uint16_t f = ram.u16(node + 0xC);
+        const bool cloak = cs_ && ram.s16(cs_ + 0xAA) != 0;
+        if (!(f & 0x6) && !cloak) return;
+        it.env = ((f & 0x4) || ram.u16(node + 0x50) == 0 || cloak) ? 2 : 1;
+        it.envK = ram.f32(node + 0x5C);
+        if (it.envK == 0.f) it.envK = 16.f;
+        if (cloak) {
+            const uint32_t n = ram.u32(0x006F88E0);
+            const int j = (n & 8) ? 3 - int(n & 7) : int(n & 7) - 3;
+            it.envK = ram.f32(cs_ + 0xAC) + float(j) / 64.f;
+        }
+    }
+
     // Paleta de matrizes de um objeto skinned: animPktPtr[lod] e uma cadeia DMA (tag ref 0x3000007d) cujo endereco aponta o
     // bloco de 125 qwords (31 matrizes de 4 qwords a partir de +0x10). Devolve 0 se nao achar.
     static uint32_t palette(const Ram &ram, const DrawItem &it) {
@@ -2527,12 +2568,75 @@ public:
         if (!(w > 1e-3f)) return fog_.maxVal;
         return std::min(fog_.maxVal, std::max(0.f, burn + fog_.fa + fog_.fb / w));
     }
+
+    // UV do mapa de ambiente (DrawItem::env), como o pktBldEnvMapDma monta q997-q999 e o programa do VU1 (0x0A78; 0x0C08 com recorte)
+    // calcula ST = R . n + (S + desloc) * escala, Q = 1. n = normal crua / 4096 (ITOF12; nos skinned, girada pelo osso x e truncada
+    // como em vertexRgb) levada ao mundo pelas linhas da matriz do objeto (com a escala do _cs); e = (direita . n, baixo . n) com os
+    // eixos do olho (weMat de worldCtx, iguais aos tirados da worldToScreenMat); S = (X, Y) do vertice na tela do GS. Com o ViewDef da
+    // vista 0 (viewInfo[0].def: w, h em +4/+6 e offX/offY em +0x10/+0x14):
+    //   ramo 1: s = 0,5 + k e.x + f (X - offX) / w,  t = 0,5 - k e.y - f (Y - offY) / h,  f = 1 - 0,05 |k|
+    //   ramo 2: s = k e.x + (X - offX + w/2) / 1024,  t = k e.y + (Y - offY + h/2) / 256   (texels da tela 1024 x 256; sem o
+    //           meio texel do campo impar, viewIsOddScan, nem os +320 das vistas > 0)
+    struct EnvView { float W[4][4]; float eye[3]; float right[3], down[3]; float offX = 2048.f, offY = 2048.f, w = 640.f, h = 224.f; bool ok = false; };
+    static EnvView envView(const Ram &ram, const float W[4][4], const float eye[3]) {
+        EnvView ev;
+        std::memcpy(ev.W, W, sizeof ev.W);
+        std::memcpy(ev.eye, eye, sizeof ev.eye);
+        float rl = 0.f, dl = 0.f;
+        for (int a = 0; a < 3; ++a) {
+            ev.right[a] = W[0][a] - 2048.f * W[3][a];
+            ev.down[a] = W[1][a] - 2048.f * W[3][a];
+            rl += ev.right[a] * ev.right[a];
+            dl += ev.down[a] * ev.down[a];
+        }
+        if (!(rl > 0.f && dl > 0.f)) return ev;
+        rl = std::sqrt(rl); dl = std::sqrt(dl);
+        for (int a = 0; a < 3; ++a) { ev.right[a] /= rl; ev.down[a] /= dl; }
+        const uint32_t def = ram.u32(0x006E1904) & 0x0FFFFFFF;   // viewInfo[0].def
+        if (ram.ok(def, 0x18) && ram.u16(def + 4) && ram.u16(def + 6)) {
+            ev.w = ram.u16(def + 4); ev.h = ram.u16(def + 6);
+            ev.offX = ram.f32(def + 0x10); ev.offY = ram.f32(def + 0x14);
+        }
+        ev.ok = true;
+        return ev;
+    }
+    // Normal do vertice no mundo para o envUv. bone: osso x (skinned) ou nulo; m: matriz do objeto.
+    static void envNormal(const Vtx &v, const M4 *bone, const M4 &m, float out[3]) {
+        float n[3] = {float(v.nx), float(v.ny), float(v.nz)};
+        if (bone) {
+            const float b[3] = {n[0], n[1], n[2]};
+            for (int c = 0; c < 3; ++c) n[c] = std::trunc(b[0] * bone->m[0][c] + b[1] * bone->m[1][c] + b[2] * bone->m[2][c]);
+        }
+        for (int c = 0; c < 3; ++c) out[c] = (n[0] * m.m[0][c] + n[1] * m.m[1][c] + n[2] * m.m[2][c]) / 4096.f;
+    }
+    // Falso atras da camera (fica o UV do pacote).
+    static bool envUv(uint8_t env, float k, const EnvView &ev, const float p[3], const float nw[3], float &u, float &v) {
+        if (!env || !ev.ok) return false;
+        const float d[3] = {p[0] - ev.eye[0], p[1] - ev.eye[1], p[2] - ev.eye[2]};
+        const float q = ev.W[3][0] * d[0] + ev.W[3][1] * d[1] + ev.W[3][2] * d[2] + ev.W[3][3];
+        if (!(q > 1e-3f)) return false;
+        const float X = (ev.W[0][0] * d[0] + ev.W[0][1] * d[1] + ev.W[0][2] * d[2] + ev.W[0][3]) / q;
+        const float Y = (ev.W[1][0] * d[0] + ev.W[1][1] * d[1] + ev.W[1][2] * d[2] + ev.W[1][3]) / q;
+        const float ex = k * (ev.right[0] * nw[0] + ev.right[1] * nw[1] + ev.right[2] * nw[2]);
+        const float ey = k * (ev.down[0] * nw[0] + ev.down[1] * nw[1] + ev.down[2] * nw[2]);
+        if (env == 1) {
+            const float f = 1.f - 0.05f * std::fabs(k);
+            u = 0.5f + ex + f * (X - ev.offX) / ev.w;
+            v = 0.5f - ey - f * (Y - ev.offY) / ev.h;
+        } else {
+            u = ex + (X - ev.offX + ev.w * 0.5f) / 1024.f;
+            v = ey + (Y - ev.offY + ev.h * 0.5f) / 256.f;
+        }
+        return true;
+    }
 private:
 
     struct ObjLight { bool lit = false; float spec = 0.f; };
-    static ObjLight objectLight(const Ram &ram, uint32_t node) {
-        const uint16_t f = ram.u16(node + 0xC);
-        return {(f & 0x100) != 0, (f & 0x2000) ? ram.f32(node + 0x6C) : 0.f};
+    // O programa do mapa de ambiente (DrawItem::env) nao aplica a luz paralela, mesmo com dirLight.
+    static ObjLight objectLight(const Ram &ram, const DrawItem &it) {
+        const uint16_t f = ram.u16(it.node + 0xC);
+        if (it.env) return {};
+        return {(f & 0x100) != 0, (f & 0x2000) ? ram.f32(it.node + 0x6C) : 0.f};
     }
 
     // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
@@ -2707,6 +2811,7 @@ private:
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
             objectUvOffset(ram, node, items.back().uvOff);
             objectColor(ram, node, items.back().color);
+            objectEnv(ram, node, items.back());
             break;
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
             const uint8_t saved = blend_;
