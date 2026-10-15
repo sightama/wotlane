@@ -63,6 +63,14 @@ __asm__("#SNFIX_SMALL sShakeEnabled");
 typedef unsigned int u_long128_t __attribute__((mode(TI)));
 float mathfHeadingFromPointToPoint(_fvector *from, _fvector *to);
 extern "C" int printf(const char *, ...);
+void hierSetCameraLosPoint(_fvector *pos, int view, int idx);
+void hierSetLosPointsPerView(int idx, int points);
+extern int moviePlaying;
+/* dst = a + b * s (xyz) in VU0, the way retail inlines it */
+#define VEC_MADD(dst, a, b, s)                                                                                    \
+    __asm__ volatile("lqc2 $vf11, 0x0(%1)\n\tlqc2 $vf12, 0x0(%2)\n\tmfc1 $2, %3\n\tqmtc2.ni $2, $vf13\n\t"      \
+                     "vaddax.xyz $ACC, $vf11, $vf0x\n\tvmaddx.xyz $vf11, $vf12, $vf13x\n\tsqc2 $vf11, %0"       \
+                     : "=m"(*(dst)) : "r"(a), "r"(b), "f"(s) : "$2")
 #define FMIN(a, b) ({ float _r; __asm__ volatile("min.s %0,%1,%2" : "=f"(_r) : "f"(a), "f"(b) : "memory"); _r; })
 void mathfRotationFromPointToPoint(_fvector *rot, _fvector *from, _fvector *to);
 /* float (*)[4]: gcc 2.x mangles the bound minus one, so retail's FPA3_f */
@@ -970,7 +978,57 @@ INCLUDE_ASM("asm/nonmatchings/game/Cameras", victoryUpdate__6Camera);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", crushUpdate__6Camera);
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", normalUpdate__6Camera);
-INCLUDE_ASM("asm/nonmatchings/game/Cameras", checkCollision__6Camerai);
+/* Registers the line-of-sight points the renderer keeps clear for this camera: a point 50 above the followed monster
+   (along its up axis) and, in the close-combat view (or game mode 9), one per player monster of the pair. A monster
+   whose state has flag 0x10 set and +0x260 clear does not get one. */
+void Camera::checkCollision(int view)
+{
+    char *c = m_raw;
+    FVECTOR p;
+    int n;
+
+    VEC_MADD(&p, &CAM_MONSTER(c)->m_cs->trans, (_fvector *)CAM_MONSTER(c)->m_cs->mat[2], 50.0f);
+    hierSetCameraLosPoint(&p, view, 0);
+    n = 1;
+    if (gUseUnifiedView || game->m_gameMode == 9) {
+        n = 0;
+        if (CI(c, 0xCF8) == 1 || CI(c, 0xCF8) == 9) {
+            if (game->m_numMonsters == 2) {
+                Monster *b;
+                char *st = (char *)CAM_MONSTER(c)->m_state;
+
+                if (!(MI(st, 0x4) & 0x10) || MI(st, 0x260)) {
+                    hierSetCameraLosPoint(&p, 0, 0);
+                    n = 1;
+                }
+                b = *(Monster **)(c + 0xE10);
+                st = (char *)b->m_state;
+                if (!(MI(st, 0x4) & 0x10) || MI(st, 0x260)) {
+                    VEC_MADD(&p, &b->m_cs->trans, (_fvector *)b->m_cs->mat[2], 50.0f);
+                    hierSetCameraLosPoint(&p, 0, 1);
+                    n++;
+                }
+            } else if (CAM_MONSTER(c)->m_playerNum == 1) {
+                hierSetCameraLosPoint(&p, 0, 0);
+                n = 1;
+            } else {
+                Monster *b = *(Monster **)(c + 0xE10);
+
+                if (b->m_playerNum == 1) {
+                    VEC_MADD(&p, &b->m_cs->trans, (_fvector *)b->m_cs->mat[2], 50.0f);
+                    hierSetCameraLosPoint(&p, 0, 1);
+                    n = 1;
+                }
+            }
+        } else {
+            hierSetCameraLosPoint(&p, 0, 0);
+            n = 1;
+        }
+    }
+    if (moviePlaying)
+        n = 0;
+    hierSetLosPointsPerView(gUseUnifiedView ? 0 : view, n);
+}
 /* Close-combat camera: +0xE20 becomes the direction across the pair. With a single monster, the camera offset
    (+0xD10, mirrored to the side the other monster is on) is put in the first monster's frame instead. */
 #ifdef NON_MATCHING
