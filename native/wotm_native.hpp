@@ -632,10 +632,14 @@ public:
     }
 
     // Chave de textura de um objeto: id no `texInfo` + paleta (CBP/CSA/CPSM do TEX0). 0 = sem textura.
+    // texId 0 com TEX0 = o buffer em exibicao, isto e, o quadro anterior (rtMain -> texmPrepTexInfoZero; texmGetTextureAddrs monta
+    // PSMCT24 640 de largura, janela 1024x256): chave kScreenKey, textura de screenTexture.
+    static constexpr uint64_t kScreenKey = 1ull << 63;
     static uint64_t texKey(const Ram &ram, uint32_t node, uint32_t slot = 0) {
         const uint64_t t0 = objectTex0(ram, node, slot);
         const uint32_t tid = objectTexId(ram, node, slot);
-        if (!t0 || !tid) return 0;
+        if (!t0) return 0;
+        if (!tid) return kScreenKey;
         const gs::Tex0 t = gs::Tex0::decode(t0);
         return (uint64_t(tid) << 40) | (uint64_t(t.cbp) << 12) | (uint64_t(t.csa) << 4) | t.cpsm | (1ull << 62);
     }
@@ -945,6 +949,9 @@ public:
     }
 
     unsigned (*movieTexture)() = nullptr;   // textura do filme (texId 999); 0 = sem quadro. Quem toca o filme preenche (wotm_live.inc)
+    // quadro anterior (texId 0), render texture de cabeca para baixo com a tela de 640x224 do GS inteira; 0 = nao ha. Preenche: wotm_live.inc
+    unsigned (*screenTexture)() = nullptr;
+    unsigned screenId_ = 0;   // ultimo id devolvido para kScreenKey (o desenho converte o UV dele)
 
     unsigned textureId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
         // filme do menu: moviesSetScreenObject poe texId 999 no objeto (wotm_fmv.hpp); a textura vem do tocador, quadro a quadro
@@ -952,6 +959,7 @@ public:
             if (const unsigned id = movieTexture()) return id;
         const uint64_t key = texKey(ram, node, slot);
         if (!key) return 0;
+        if (key == kScreenKey) return screenId_ = screenTexture ? screenTexture() : 0;
         auto it = tex_.find(key);
         if (it != tex_.end()) return it->second.id;
         Texture2D t{};
@@ -1874,7 +1882,8 @@ public:
                         else if (v.isAdc) rlColor4ub(255, 0, 0, 255);   // WOTM_SHOWADC
                         else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
                         else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
-                        if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+                        if (tid && tid == screenId_) rlTexCoord2f(v.u * (1024.f / 640.f), 1.f - v.v * (256.f / 224.f));   // texels do GS na tela 640x224
+                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }

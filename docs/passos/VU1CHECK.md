@@ -16,7 +16,7 @@ Fonte única do estado, do que foi corrigido e das pistas da checagem. Índice e
 ## Estado
 - Central, 1 contra 1, 100 s, uma checagem por segundo: de 97,7% a 100% dos triângulos do VU1 casam; 5 de 91 checagens ficam abaixo de 99%. Textura: de 0 a 1 triângulo diferente por checagem.
 - Lote 1 contra 2 IAs, fases 1 e 4: pior caso de 97,4% e 96,0%.
-- METRO, 1 contra 1, 60 s, 11 checagens: pior caso de 99,9%. O `textura_difere_pior` de 90 é quase todo um único objeto (pista 8).
+- METRO, 1 contra 1, 60 s, 11 checagens: pior caso de 96,2% a 99,9%; textura: de 0 a 1 triângulo diferente por checagem (era 90, pista 8).
 
 ## Em aberto
 Não corrigir sem perguntar ao dono qual atacar.
@@ -29,9 +29,7 @@ Não corrigir sem perguntar ao dono qual atacar.
    - **Sistemas que só o VU1 tem:** de 2 a 19 quadrados por checagem.
    - **SPRITE do GS fora de `fx[]`:** de 340 a 380 por quadro, de origem não identificada (HUD?).
 7. **Itens de alfa animados** (tex 330/333, e tex 0 com flags `0xa210`/`0xa310`): às vezes saem de 1 a 6 px fora, em direções variadas. Parece questão de instante da coleta.
-8. **METRO, objeto que usa o quadro em exibição como textura (causa achada, falta corrigir no nativo).** Nó `a1c560`, `pkt a1c600`, 92 triângulos, flags `0x8316` (OT de alfa). O nativo o desenha sem textura; o VU1, com `psm 1 1024x256` e tbp alternando entre `8c0` e `1180` de uma checagem para outra.
-   - **Causa:** texId 0 é o framebuffer. A cada quadro o `rtMain` chama `texmPrepTexInfoZero` com o `DISPFB2` de `viewGetDb(0)` (+0x10 ou +0x50, pela paridade de `g_frame`), que grava `displayBuffer = FBP << 5`. O `texmGetTextureAddrs` (e o `texmParticleTexture`) monta para texId 0 o TEX0 `displayBuffer | 0x28128000` com TH 8: PSMCT24, TBW 10 (640), janela de 1024x256 sobre o buffer **em exibição**, ou seja, a imagem do quadro anterior. FBP 0x46 e 0x8C são os dois buffers de 640x224 (70 páginas cada).
-   - **Correção proposta:** no nativo, guardar a imagem do quadro anterior numa textura (render texture) e usá-la para texId 0, com UV em texels do GS (u·1024 e v·256 sobre a tela de 640x224). Falta identificar o que é o objeto (vidro, água, distorção?).
+8. Corrigida (ver "Corrigido"). Falta só identificar o que é o objeto da METRO (vidro, água, distorção?).
 10. **Textura trocada entre tex 156 e 193:** 1 triângulo de vez em quando (sobreposição?).
 
 ## Explicadas, sem bug no nativo
@@ -42,6 +40,7 @@ Não corrigir sem perguntar ao dono qual atacar.
 
 ## Corrigido
 Bugs do nativo:
+- **Pista 8, texId 0 = quadro em exibição:** o nativo desenhava sem textura um objeto da METRO (nó `a1c560`, 92 triângulos, flags `0x8316`) que o VU1 texturiza com o framebuffer. A cada quadro o `rtMain` chama `texmPrepTexInfoZero` com o `DISPFB2` de `viewGetDb(0)` (+0x10 ou +0x50, pela paridade de `g_frame`), que grava `displayBuffer` (0x6F87F8) = `FBP << 5`; o `texmGetTextureAddrs` monta para texId 0 o TEX0 `displayBuffer | 0x28128000` com TH 8 (PSMCT24, TBW 10, janela 1024x256 sobre o buffer em exibição, isto é, o quadro anterior). Os dois buffers de 640x224 ficam em FBP 0x46 e 0x8C (tbp `8c0`/`1180`). Agora o `texKey` dá `kScreenKey` para texId 0, o runtime alterna duas render textures e passa a do quadro anterior (`Scene::screenTexture`), e o UV vira texel do GS na tela 640x224 (`u·1024/640`, `1 − v·256/224`). A checagem compara com o TEX0 montado a partir do `displayBuffer`: textura difere na METRO caiu de 90 para de 0 a 1.
 - **PRIM.TME da seção** (08a4df2): as seções só com cor de vértice saíam com a textura do slot 0. Agora usam o slot `kSlotNoTex`.
 - **Sprite e texSprite com o dobro do tamanho:** o meio-lado é `pos.w/2·foco/profundidade`.
 - **Pista 3, `_cs` com matriz não ortonormal** (8020844): o VU1 desenha em `olho + (trans − olho)·RᵀR`. Afetava os destroços que encolhem. Corrigido no `Scene::drawCs`.
@@ -71,7 +70,7 @@ Defeitos da própria checagem:
 - HUD: vai direto ao GS, fora do VU1.
 
 ## Próximos passos
-1. Pistas em aberto (perguntar qual antes de corrigir). A 8 já tem causa e correção proposta.
+1. Pistas em aberto (perguntar qual antes de corrigir).
 2. Estender a comparação para UV, RGBA de vértice e ALPHA/ABE por triângulo (alcança as texturas animadas e a explosão), e talvez um hash da CLUT por quadro.
 3. HUD: tap nos pacotes que vão direto ao GS (PATH2/PATH3) e identificação dos SPRITE fora de `fx[]`.
 
