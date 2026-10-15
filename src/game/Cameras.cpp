@@ -115,7 +115,7 @@ PitchChange &PitchChange::operator=(PitchChange &o)
     return *this;
 }
 #ifdef NON_MATCHING
-/* equivalente: 18/19 palavras; o retail copia m_20 com o endereço da origem num registrador (addiu + lq 0), o nosso
+/* equivalente: 0/19 palavras (uma instrução a menos desloca o resto); o retail copia m_20 com o endereço da origem num registrador (addiu + lq 0), o nosso
    ee-gcc dobra o deslocamento no lq */
 ShakeData &ShakeData::operator=(ShakeData &o)
 {
@@ -133,7 +133,7 @@ ShakeData &ShakeData::operator=(ShakeData &o)
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", __as__9ShakeDataR9ShakeData);
 #endif
 #ifdef NON_MATCHING
-/* equivalente: mesmas cópias; o retail copia m_10/m_20 com o endereço da origem num registrador (addiu + lq 0) */
+/* equivalente: 4/71 palavras (mesmas cópias); o retail copia m_10/m_20 com o endereço da origem num registrador (addiu + lq 0) */
 MonsterCameraData &MonsterCameraData::operator=(MonsterCameraData &o)
 {
     m_00 = o.m_00;
