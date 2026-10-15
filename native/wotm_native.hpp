@@ -134,6 +134,7 @@ struct Vtx {
     uint8_t slot = 0;                 // indice do gsTexCtx/texId da secao (palavra 3 da tag GIF = 1 + 3*slot; 0 = slot 0); kSlotNoTex = sem textura
     uint8_t sub = 0;                  // indice do sub-pacote da cadeia (diagnostico)
     uint8_t isAdc = 0;                // triangulo normalmente descartado pelo ADC (so com WOTM_SHOWADC)
+    uint8_t cull = 0;                 // secao com culling (bit 15 do seletor): o VU1 descarta a face de costas (Scene::backFacing)
 };
 
 struct MeshData {
@@ -223,9 +224,10 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                 const P3 p = j < pos.size() ? pos[j] : P3{0, 0, 0, 1.f, 0, 0, 0};
                 Vtx v{};
                 v.x = p.x; v.y = p.y; v.z = p.z; v.w = p.w; v.cx = p.cx; v.cy = p.cy; v.cz = p.cz;
-                const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: flag (os predios usam 0x8001, 0x8004...)
+                const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: culling da secao (os predios usam 0x8001, 0x8004...)
                 if (sel >= 1 && sel <= 13) md.curSlot = uint8_t((sel - 1) / 3);   // 0 = mantem a textura anterior
                 v.slot = md.curTme ? md.curSlot : kSlotNoTex;
+                v.cull = uint8_t((hdrSel >> 15) & 1);
                 v.sub = md.curSub;
                 md.slotMask |= 1u << v.slot;
                 if (k < rgba.size()) { v.r = rgba[k][0]; v.g = rgba[k][1]; v.b = rgba[k][2]; v.a = rgba[k][3]; }
@@ -824,7 +826,7 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
-                    forEachTri(ram, it, [&](const float p[3][3], uint8_t) {
+                    forEachTri(ram, it, [&](const float p[3][3], uint8_t, bool) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -856,7 +858,16 @@ public:
         rlEnableBackfaceCulling();
     }
 
-    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, slot de textura da secao)
+    // Face de costas vista de `eye`: o VU1 (microprograma dos objetos) poe ADC nos triangulos de area positiva na tela do GS
+    // (y para baixo), so nas secoes com o bit 15 do seletor (Vtx::cull). Em mundo: normal (b - a) x (c - a) para longe do olho.
+    static bool backFacing(const float p[3][3], const float eye[3]) {
+        const float u[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
+        const float v[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
+        const float n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        return n[0] * (p[0][0] - eye[0]) + n[1] * (p[0][1] - eye[1]) + n[2] * (p[0][2] - eye[2]) > 0.f;
+    }
+
+    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, slot de textura da secao, culling da secao)
     template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
         const MeshData *md = mesh(ram, it.node);
         if (!md || !md->valid) return;
@@ -868,7 +879,7 @@ public:
                 if (pal) skinVertex(ram, pal, it.m, t[k + c], p[c]);
                 else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
             }
-            f(p, t[k].slot);
+            f(p, t[k].slot, t[k].cull != 0);
         }
     }
 
@@ -879,7 +890,7 @@ public:
         std::vector<float> cov(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], uint8_t) {
+            forEachTri(ram, it, [&](const float p[3][3], uint8_t, bool) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -1874,6 +1885,7 @@ public:
                     else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
                     if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fzScale;
                 }
+                if (t[k].cull && !wire && backFacing(p, eye_)) continue;
                 for (int c = 0; c < 3; ++c) {
                     const int cs[2] = {c, (c + 1) % 3};
                     for (int e = 0; e < (wire ? 2 : 1); ++e) {
