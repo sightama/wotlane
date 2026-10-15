@@ -25,7 +25,6 @@ Não corrigir sem perguntar ao dono qual atacar.
 - **Lens flare (tipo 11):** fora do `particleDraw` (`particleAddLensFlareToList`, `particleLensFlareTestZbuffer`, `particleLensFlareRender`). Recurso a implementar.
 - **13. UV do mapa de ambiente** (`envMapped` 0x2, ex.: tex 86, 38–55 texels): o programa 0x0A88 gera o ST pela normal girada por uma matriz da câmera (qwords 997–999 e 0–2) mais a posição na tela. Pede ler o programa; o CLOAK usa o mesmo caminho (`envMapIsVideo`).
 - **16 (resto):** no Togera, ~5% dos vértices com um cinza a mais no nativo (média 8; provável especular). O fator de contexto do q5 (+0x160 do bloco do hier) não é reproduzido.
-- **10.** Textura trocada entre tex 156 e 193, um triângulo às vezes (ambiguidade, como a 14).
 - **Não coberto:** texels/CLUT e alfa da textura (a escala `4a/255` do alfa de vértice no nativo contra `a/128` do GS não foi conferida), atributos das partículas (a explosão opaca), linhas e leques do VU1, HUD (PATH2/PATH3).
 
 ## Microprogramas das partículas
@@ -54,6 +53,7 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 ## Explicadas, sem bug no nativo
 - **7 (padrão B):** os itens de alfa presos aos monstros às vezes saem 1–2,5 px fora: o pacote leva as matrizes do instante da travessia, e nenhuma coleta cai ali. A checagem tenta também a coleta no `hier(0, 1)`.
 - **9, `so pela sombra`:** a passada da sombra projetada redesenha faces de costas que a base descarta, e triângulos finos geram ambiguidade.
+- **10 (tex 156/193):** os números são o conjunto de texturas do objeto (`node+0x50`), de vários prédios estáticos da fase 1. A troca é sempre entre a textura comum 128x128 (cbp 1bd2) e uma 64x64 do mesmo objeto, 1 ou 2 triângulos por checagem (372 de 4.959). Caso dissecado em `f1_1697.csv` (pkt d7e980): o triângulo do VU1 é um fio (0,01 px²) na aresta entre as duas seções, e os três vértices dele casam com um vértice só de outro fio nativo. O `match()` não exige correspondência um a um. O gêmeo nativo verdadeiro cai abaixo do limiar do `degenerate()` (|área2| 0,0029 < 0,02), enquanto o do VU1 passa (0,0232), porque o GS arredonda para 1/16 px. Embaralhando a ordem do VU1, o erro aparece em 10 de 20 ordens. Nos 52 dumps `f1_*`, 1 par com textura diferente em 520 mil. Na checagem daria para quantizar o nativo a 1/16 px no `project()` e exigir vértices distintos no `match()` (não aplicado).
 - **14 (tex 242/243):** prédio distante de triângulos minúsculos; com 1 px, quase todo triângulo do VU1 tem 4+ nativos no mesmo lugar. 94% a 99,6% têm um nativo igual no lugar; o resto é ambiguidade.
 
 ## Corrigido
