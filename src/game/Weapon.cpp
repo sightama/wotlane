@@ -30,6 +30,8 @@ void mathfMatrixFromNormal(float (*m)[4], _fvector *n);
 #define PARTICLE_POS(p) ((_fvector *)((char *)(p) + 0x2D00))
 #define PARTICLE_MAT(p) ((float (*)[4])((char *)(p) + 0x2D20))
 void mathfRandVector(_fvector *v, float r);
+extern "C" float atan2f(float y, float x);
+extern "C" float fabsf(float);
 /* One of the 32 dynamic point lights (common/PointLight). */
 class PointLight {
 public:
@@ -501,8 +503,103 @@ void Weapon::UpdateRotation(void)
 }
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockOnTarget__6Weapon);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockAheadOfMonster__6Weapon);
+/* Homing mode 3: turn heading then pitch toward m_targetPos at the thrower's LavaBlast turn rates; a target more than 90
+   degrees off either way breaks the lock. Before the first field the weapon only spins by m_B0. */
+#ifdef NON_MATCHING
+/* equivalent: 17/170 words, 0x29c vs 0x2a8; scheduling of the pi/2 and 0 constants (f22/f23 swapped) and of the bail-out branches */
+void Weapon::UpdateLockVertical(void)
+{
+    char *owner = (char *)Interactives::getInteractive(m_ownerId);
+    float d[2];
+    float a;
+    float dx, dy, dz, dist;
+
+    if (m_age > 0) {
+        dy = m_targetPos.y - m_cs->trans.y;
+        dx = m_targetPos.x - m_cs->trans.x;
+        if (dy == 0.0f)
+            dy = 0.01f;
+        a = atan2f(dx, dy);
+        d[0] = a - m_cs->rot.z;
+        boundEulerAngle(&d[0]);
+        if (fabsf(d[0]) > 1.5707964f) {
+            m_48 = 0;
+            m_targetId = 0;
+            return;
+        }
+        owner += 0x10930; /* the thrower's StateLavaBlast */
+        m_cs->rot.z = smoothEasyInAngle(m_cs->rot.z, a, *(float *)(owner + 0x194), 0.0001f);
+        dz = m_targetPos.z - m_cs->trans.z;
+        dist = mathfManhatDist(&m_targetPos, &m_cs->trans);
+        if (dist == 0.0f)
+            dist = 0.01f;
+        a = atan2f(dz, dist);
+        d[1] = a - m_cs->rot.x;
+        boundEulerAngle(&d[1]);
+        if (fabsf(d[1]) > 1.5707964f) {
+            m_B0.x = d[1];
+            m_targetId = 0;
+            m_48 = 0;
+            m_60 = 0;
+            return;
+        }
+        m_cs->rot.x = smoothEasyInAngle(m_cs->rot.x, a, *(float *)(owner + 0x198), 0.0001f);
+        vecAdd(&m_cs->rot, &m_cs->rot, &m_B0);
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+    } else if (m_B0.x != 0.0f || m_B0.y != 0.0f || m_B0.z != 0.0f) {
+        m_cs->rot.x += m_B0.x;
+        m_cs->rot.y += m_B0.y;
+        m_cs->rot.z += m_B0.z;
+        boundEulerAngle(&m_cs->rot.x);
+        boundEulerAngle(&m_cs->rot.y);
+        boundEulerAngle(&m_cs->rot.z);
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockVertical__6Weapon);
+#endif
+/* Wobble of an unsteady projectile: every m_58 fields (15..60) a new random spin target, up to m_80.x degrees in heading
+   (at least 5) and in pitch, either sign; the spin follows it for the first half of the period and settles in the second.
+   Within 300 of the target the wobble (and m_dyn.f1C) eases out. */
+#ifdef NON_MATCHING
+/* equivalent: 67/158 words, 0x26c vs 0x278; the target pointer is picked before the m_cs load and the distance compare uses other registers */
+void Weapon::UpdateErraticity(void)
+{
+    _fvector *t;
+
+    if (m_58 < ++m_54) {
+        m_54 = 0;
+        m_58 = mathfRand(15, 60);
+        if (mathfRand(0, 1))
+            m_80.y = mathfRandf(0.08726646f, m_80.x * 0.017453292f);
+        else
+            m_80.y = -mathfRandf(0.08726646f, m_80.x * 0.017453292f);
+        if (mathfRand(0, 1))
+            m_80.z = mathfRandf(0.0f, m_80.x * 0.017453292f);
+        else
+            m_80.z = -mathfRandf(0.0f, m_80.x * 0.017453292f);
+    }
+    if (m_targetId > 0)
+        t = &Interactives::getInteractive(m_targetId)->m_cs->trans;
+    else
+        t = m_targetPoint;
+    if (mathfManhatDist(&m_cs->trans, t) < 300.0f) {
+        m_54 = m_58;
+        m_80.x = (int)smoothEasyIn(m_80.x, 0.0f, 0.08f, 0.001f);
+        m_dyn.f1C = smoothEasyIn(m_dyn.f1C, 0.1f, 0.08f, 0.001f);
+    }
+    if (m_54 < m_58 >> 1) {
+        m_B0.x = smoothEasyInAngle(m_B0.x, m_80.z, 0.1f, 0.0001f);
+        m_B0.z = smoothEasyInAngle(m_B0.z, m_80.y, 0.1f, 0.0001f);
+    } else {
+        m_B0.x = smoothEasyInAngle(m_B0.x, 0.0f, 0.07f, 0.0001f);
+        m_B0.z = smoothEasyInAngle(m_B0.z, 0.0f, 0.07f, 0.0001f);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateErraticity__6Weapon);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateTranslation__6Weapon);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", WeaponHD__6Weapon);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", D_006F28F8);
