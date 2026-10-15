@@ -102,7 +102,7 @@ public:
     void popAction(void);
     void interpretInputs(GamePad &pad);
     void computeMotionVec(_fvector &v);
-    void computeMotionRot(void);
+    float computeMotionRot(void);
     void updateViewChanges(GamePad &pad);
     int okToChangeMap(void);
     int dashDoubleTap(GamePad &pad);

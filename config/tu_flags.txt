@@ -2,3 +2,4 @@
 common/hieri -O0
 game/Ai -ffast-math
 game/AiAction -ffast-math
+game/MonsterDynamics -ffast-math
