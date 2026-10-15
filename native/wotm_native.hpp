@@ -345,7 +345,7 @@ struct DrawItem {
     uint32_t animPkt = 0;   // CHAR_INSTANCE::animPktPtr (paleta de matrizes dos objetos skinned)
     int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
-    uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd*(1-As)
+    uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd-Cs*As
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
@@ -1357,8 +1357,8 @@ public:
                 if (s.flip & 1) std::swap(u0, u1);
                 if (s.flip & 2) std::swap(v0, v1);
             }
-            // alfa no modo GS do shader: 0x80 = 1,0 (a textura traz o alfa cru)
-            const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(128.f * std::max(0.f, std::min(1.f, s.rgba[3])));
+            // cor e alfa no modo GS do shader: 0x80 = 1,0 (a textura traz o alfa cru)
+            const unsigned char cr = uint8_t(128.f * std::min(1.f, s.rgba[0])), cg = uint8_t(128.f * std::min(1.f, s.rgba[1])), cb = uint8_t(128.f * std::min(1.f, s.rgba[2])), ca = uint8_t(128.f * std::max(0.f, std::min(1.f, s.rgba[3])));
             float c[4][3];
             spriteCorners(s, R, U, c);
             const float cu[4] = {u0, u1, u1, u0}, cv[4] = {v1, v1, v0, v0};
@@ -1683,8 +1683,9 @@ public:
         // A normal do vertice leva (fogBurnThru, 1, FGE + 2 * GS) (shaderNormal; o rlNormal3f normaliza, entao o shader le as razoes
         // por y); quem desenha a preenche e a zera no fim (normal 0 = sem neblina, alfa comum).
         //  - FGE: neblina (ver Fog).
-        //  - GS: textura e vertice trazem o alfa cru do GS (0x80 = 1,0) e o shader mistura como o GS, As = At * Av / 16384
-        //    (TFX MODULATE), limitado a 1 (o GS aceita ate ~4); sem ele, o produto comum (sombras, depuracao).
+        //  - GS: textura e vertice trazem cor e alfa crus do GS (0x80 = 1,0) e o shader modula como o GS (TFX MODULATE):
+        //    cor = texel * Cv / 128 (Cv > 0x80 clareia) e As = At * Av / 16384, limitados a 1 (o As do GS vai ate ~4);
+        //    sem ele, o produto comum (sombras, depuracao).
         if (!alphaShaderTried_) {
             alphaShaderTried_ = true;
             static const char *vs =
@@ -1709,7 +1710,9 @@ public:
                 "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA;\n"
                 "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; out vec4 finalColor;\n"
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
-                "  if (fragGsA > 0.5) t.a = min(t.a * 3.9690, 1.0);\n"   // (255 / 128)^2: At * Av / (128 * 128)
+                // GS: cor = texel * cor do vertice / 128 (o vertice vem cru, 0x80 = 1,0; acima disso clareia), limitada a 255;
+                // As = At * Av / (128 * 128)
+                "  if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); t.a = min(t.a * 3.9690, 1.0); }\n"
                 "  if (t.a < 0.06) discard;\n"
                 "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
                 "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
@@ -1881,7 +1884,7 @@ public:
             if (b == curBlend) return;
             curBlend = b;
             if (b == 1) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_ADD); rlSetBlendMode(RL_BLEND_CUSTOM); }          // Cs*As + Cd
-            else if (b == 2) { rlSetBlendFactors(RL_ZERO, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD); rlSetBlendMode(RL_BLEND_CUSTOM); }   // Cd*(1-As)
+            else if (b == 2) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_REVERSE_SUBTRACT); rlSetBlendMode(RL_BLEND_CUSTOM); }   // Cd - Cs*As
             else rlSetBlendMode(RL_BLEND_ALPHA);
         };
         for (const auto &o : order) {
@@ -2003,19 +2006,22 @@ public:
                     const int cs[2] = {c, (c + 1) % 3};
                     for (int e = 0; e < (wire ? 2 : 1); ++e) {
                         const Vtx &v = t[k + cs[e]];
-                        if (idcMode) { const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
-                        else if (v.isAdc) rlColor4ub(255, 0, 0, 255);   // WOTM_SHOWADC
-                        else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
+                        bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
+                        if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
+                        else if (v.isAdc) { gsV = false; rlColor4ub(255, 0, 0, 255); }   // WOTM_SHOWADC
+                        else if (noVcol && md->skinned) { gsV = false; rlColor4ub(255, 255, 255, 255); }   // diagnostico
                         else {
                             uint8_t rgb[3];
                             vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
-                            // alfa: cru no modo GS (o shader faz At * Av / 16384); no quadro anterior e no filme, o antigo (4a/255)
+                            // cor e alfa crus no modo GS (o shader faz texel * Cv / 128 e At * Av / 16384); no quadro anterior e no filme,
+                            // o antigo (cor dobrada e limitada a 1,0, alfa 4a/255)
                             const float va = v.a * fade * (gsA ? 1.f : 4.f);
-                            rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
+                            const int k = gsA ? 1 : 2;
+                            rlColor4ub(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
                         }
                         if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        shaderNormal(fogBurn, v.fge, gsA);   // neblina e alfa do GS no shader do draw
+                        shaderNormal(fogBurn, v.fge, gsV);   // neblina e modulacao do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
@@ -2159,7 +2165,7 @@ private:
         switch (ram.u32(ctx + 0x20) & 0xFF) {
         case 0x44: return 0;   // (Cs-Cd)*As+Cd
         case 0x48: return 1;   // (Cs-0)*As+Cd: brilho aditivo (Kineticlops)
-        case 0x42: return 2;   // (0-Cd)*As+Cd: escurece o fundo
+        case 0x42: return 2;   // (0-Cs)*As+Cd = Cd - Cs*As (B = 0 e Cs): tira do fundo a cor da camada (escurece e muda o tom)
         default: return 0;
         }
     }

@@ -685,18 +685,20 @@ private:
     }
 
     // Registrador ALPHA do GS -> modo de mistura do raylib. Campos de 2 bits: A, B, C (0 Cs/As, 1 Cd/Ad, 2 0/FIX), D.
+    static constexpr int kBlendSubtract = -2;   // Cd - Cs*As: o BLEND_SUBTRACT_COLORS do raylib faz Cs - Cd
     static int blendFor(uint32_t alpha) {
         const uint32_t A = alpha & 3, B = (alpha >> 2) & 3, C = (alpha >> 4) & 3, D = (alpha >> 6) & 3;
         if (A == 0 && B == 2 && C == 0 && D == 1) return BLEND_ADDITIVE;        // Cs*As + Cd
-        if (A == 2 && B == 0 && C == 0 && D == 1) return BLEND_SUBTRACT_COLORS; // Cd - Cs*As
+        if (A == 2 && B == 0 && C == 0 && D == 1) return kBlendSubtract;        // Cd - Cs*As
         return BLEND_ALPHA;                                                     // (Cs-Cd)*As + Cd e o resto
     }
-
-    // RGBAQ do GS (0x80 = 1,0): a cor dobrada (o raylib so multiplica por <= 1), o alfa cru (modo GS do shader, shaderNormal)
-    static void vcolor(uint32_t c) {
-        const int r = int(c & 255), g = int((c >> 8) & 255), b = int((c >> 16) & 255), a = int(c >> 24);
-        rlColor4ub(uint8_t(std::min(255, r * 2)), uint8_t(std::min(255, g * 2)), uint8_t(std::min(255, b * 2)), uint8_t(a));
+    static void setBlend(int mode) {
+        if (mode == kBlendSubtract) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_REVERSE_SUBTRACT); rlSetBlendMode(RL_BLEND_CUSTOM); }
+        else rlSetBlendMode(mode);
     }
+
+    // RGBAQ do GS (0x80 = 1,0) cru: o modo GS do shader (shaderNormal) faz texel * Cv / 128 e At * Av / 16384
+    static void vcolor(uint32_t c) { rlColor4ub(uint8_t(c & 255), uint8_t((c >> 8) & 255), uint8_t((c >> 16) & 255), uint8_t(c >> 24)); }
 
     // Quadro de textura do texSprite (texSpritePacketBuild)
     static uint32_t texFrame(const Ram &ram, uint32_t b, int i, int age) {
@@ -728,7 +730,7 @@ private:
         };
 
         rlDrawRenderBatchActive();
-        rlSetBlendMode(blendFor(ram.u32(b + fxoff::alphaContext)));
+        setBlend(blendFor(ram.u32(b + fxoff::alphaContext)));
         // neblina no shader do Scene::draw: o XGKICK das particulas leva PRIM.FGE em todos os tipos medidos pela checagem VU1 (sprite,
         // texSprite, stripe, strite, arco, sprine, frag, pedestre, dustTrail); alfa do GS (texturas com alfa cru); o draw zera no fim
         shaderNormal(0.f, true, true);
