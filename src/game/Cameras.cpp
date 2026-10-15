@@ -71,6 +71,12 @@ extern int moviePlaying;
     __asm__ volatile("lqc2 $vf11, 0x0(%1)\n\tlqc2 $vf12, 0x0(%2)\n\tmfc1 $2, %3\n\tqmtc2.ni $2, $vf13\n\t"      \
                      "vaddax.xyz $ACC, $vf11, $vf0x\n\tvmaddx.xyz $vf11, $vf12, $vf13x\n\tsqc2 $vf11, %0"       \
                      : "=m"(*(dst)) : "r"(a), "r"(b), "f"(s) : "$2")
+void mathfQuaternionMulTransVec(_fvector *dst, _fvector *q, _fvector *v);
+int viewGetCurView(void);
+void *viewGetDef(int view);
+extern "C" float tanf(float);
+extern "C" float fabsf(float);
+#define FMAX(a, b) ({ float _r; __asm__ volatile("max.s %0,%1,%2" : "=f"(_r) : "f"(a), "f"(b) : "memory"); _r; })
 #define FMIN(a, b) ({ float _r; __asm__ volatile("min.s %0,%1,%2" : "=f"(_r) : "f"(a), "f"(b) : "memory"); _r; })
 void mathfRotationFromPointToPoint(_fvector *rot, _fvector *from, _fvector *to);
 /* float (*)[4]: gcc 2.x mangles the bound minus one, so retail's FPA3_f */
@@ -917,7 +923,68 @@ void Camera::getupUpdate(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", getupUpdate__6Camera);
 #endif
+/* POV 5: keeps the camera between +0xDB0 and +0xDB4 from the monster. Too close, it is pushed out (and swung 2 degrees
+   around the vertical); too far, pulled in. Either way it looks at the monster's +0x3E30 point. */
+#ifdef NON_MATCHING
+/* equivalente: 32/196 palavras; o retail monta v e q zerando o quadword antes, e agenda as subtrações de outro jeito */
+void Camera::knockbackUpdate(void)
+{
+    char *c = m_raw;
+    FVECTOR d;
+    float dist;
+
+    if (CAM_CS(c) == 0 || CAM_MONSTER(c) == 0) {
+        CF(c, 0xD88) = 0.0f;
+        return;
+    }
+    if (CI(c, 0xD9C) == 0) {
+        CF(c, 0xDE0) = CF(c, 0xDC4);
+        CF(c, 0xDE4) = CF(c, 0xDCC);
+        CF(c, 0xDE8) = 1.0f;
+    } else if (CI(c, 0xD9C) == 1) {
+        CI(c, 0xD9C) = 0;
+        CF(c, 0xDE8) = 1.0f;
+        CF(c, 0xDE0) = 1.0f;
+        CF(c, 0xDE4) = 1.0f;
+    }
+    vecSub(&d, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
+    dist = eeSqrtf(vecDot(&d, &d));
+    if (dist < CF(c, 0xDB0) || CF(c, 0xDB4) < dist) {
+        vecSub(&d, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
+        if (dist < CF(c, 0xDB0)) {
+            float s = CF(c, 0xDB0) / dist;
+            FVECTOR v;
+            FVECTOR q;
+
+            v.x = d.x * s;
+            v.y = d.y * s;
+            v.z = d.z;
+            v.w = 0.0f;
+            q.x = 0.0f;
+            q.y = 0.0f;
+            q.z = sinf(0.034906585f);
+            q.w = cosf(0.034906585f);
+            mathfQuaternionMulTransVec(&d, &q, &v);
+            if (CF(c, 0xE44) < CF(c, 0xE34))
+                CF(c, 0xDE0) = 1.0f;
+        } else {
+            vecScale(&d, &d, CF(c, 0xDB4) / dist);
+            CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, CAM_MONSTER(c)->m_cs->trans.z + d.z, CF(c, 0xDE0), 0.01f);
+        }
+        CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, CAM_MONSTER(c)->m_cs->trans.x + d.x, CF(c, 0xDE0), 0.01f);
+        CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, CAM_MONSTER(c)->m_cs->trans.y + d.y, CF(c, 0xDE0), 0.01f);
+    }
+    mathfRotationFromPointToPoint(&d, &CAM_CS(c)->trans, (_fvector *)((char *)CAM_MONSTER(c) + 0x3E30));
+    d.y = 0.0f;
+    CAM_CS(c)->rot.z = smoothEasyInAngle(CAM_CS(c)->rot.z, d.z, CF(c, 0xDE8), 0.003f);
+    CAM_CS(c)->rot.x = smoothEasyInAngle(CAM_CS(c)->rot.x, d.x, CF(c, 0xDE4), 0.003f);
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    posInFOV(CAM_MONSTER(c)->m_cs->trans, 0, false);
+    shakeCamera();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", knockbackUpdate__6Camera);
+#endif
 /* POVs 6 and 8: looks straight down from the monster plus the POV offset (+0xD10, in the monster's frame unless
    monster +0xF8 is set), with the monster's heading. */
 void Camera::topdownUpdate(void)
@@ -976,7 +1043,77 @@ void Camera::victoryUpdate(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", victoryUpdate__6Camera);
 #endif
+/* POV 9 (crush level): on the first update (+0xD98) jumps to the marker of the trigger volume around (0, 0, 50) and
+   aims +0xE20 from the origin to it; then stays far enough back along +0xE20 (at least 300, times 1.5) to frame both
+   monsters of the pair, looking at their midpoint. */
+#ifdef NON_MATCHING
+/* equivalente: 54/193 palavras; sqrt.s em outro FPR (eeSqrtf fixa $f4) e ordem do laço de tdTest */
+void Camera::crushUpdate(void)
+{
+    char *c = m_raw;
+    FVECTOR pos;
+    _tdResult res[8];
+    FVECTOR q;
+    FVECTOR origin;
+    FVECTOR off;
+    Monster *a;
+    Monster *b;
+    float spread;
+    float rise;
+    float halfFov;
+    int n;
+    int i;
+    int j;
+
+    if (CAM_CS(c) == 0)
+        return;
+    if (CI(c, 0xD98)) {
+        *(u_long128_t *)&q = 0;
+        q.z = 50.0f;
+        n = tdTest(&q, res, 8);
+        for (i = 0; i < n; i++) {
+            char *t = (char *)res[i].trigger;
+
+            for (j = 0; j < *(int *)(t + 0x8); j++) {
+                int *item = ((int **)(t + 0x10))[j];
+
+                if ((item[0] & 0x3F) == 0xF) {
+                    pos.x = ((float *)item)[1];
+                    pos.y = ((float *)item)[2];
+                    pos.z = ((float *)item)[3];
+                }
+            }
+        }
+        *(FVECTOR *)(c + 0xD20) = pos;
+        CAM_CS(c)->trans = pos;
+        *(u_long128_t *)&origin = 0;
+        {
+            float h = mathfHeadingFromPointToPoint(&origin, &pos);
+            float s = sinf(h);
+
+            SET_XYZ((_fvector *)(c + 0xE20), s, cosf(h), 0.0f);
+        }
+        CI(c, 0xD98) = 0;
+    }
+    a = *(Monster **)(c + 0xE0C);
+    b = *(Monster **)(c + 0xE10);
+    vecSub(&pos, &a->m_cs->trans, &b->m_cs->trans);
+    spread = eeSqrtf(pos.x * pos.x + pos.y * pos.y);
+    rise = fabsf(a->m_cs->trans.z - b->m_cs->trans.z);
+    vecAdd(&pos, &a->m_cs->trans, &b->m_cs->trans);
+    vecScale(&pos, &pos, 0.5f);
+    halfFov = *(float *)((char *)viewGetDef(viewGetCurView()) + 0xB0) * 0.5f * 0.017453292f;
+    spread = spread * 0.5f / tanf(halfFov);
+    rise = rise * 0.5f / tanf(halfFov * 0.75f);
+    vecScale(&off, (_fvector *)(c + 0xE20), FMAX(FMAX(spread, rise), 300.0f) * 1.5f);
+    CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, pos.x + off.x, 0.1f, 0.01f);
+    CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, pos.y + off.y, 0.1f, 0.01f);
+    mathfRotationFromPointToPoint(&CAM_CS(c)->rot, &CAM_CS(c)->trans, &pos);
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", crushUpdate__6Camera);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", normalUpdate__6Camera);
 /* Registers the line-of-sight points the renderer keeps clear for this camera: a point 50 above the followed monster
    (along its up axis) and, in the close-combat view (or game mode 9), one per player monster of the pair. A monster
