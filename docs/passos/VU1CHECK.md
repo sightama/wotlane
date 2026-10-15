@@ -12,7 +12,7 @@
   - `WOTM_VU1CHECK_DUMP=<prefixo>` grava os triângulos de cada checagem num CSV para análise offline. A última coluna dos triângulos é o TEX0 (0 = sem textura). As partículas saem como `fx<i>,vuq|natq,<n>,x0,y0,…` e `fxsys,<i>,<cadeia>,<preset>,<tipo>,<n>,<câmera>`.
 - **Medido:**
   - Geometria: em central, 1 contra 1, de 98,2% a 99,9% dos triângulos do VU1 casam por quadro, contando os monstros.
-  - Textura (central e fase 2, depois da correção do TME): de 0 a 11 triângulos por quadro com textura diferente, entre 7.500 e 14.000 casados. Nenhum triângulo ficou sem TEX0 conhecido.
+  - Textura (central e fase 2, depois da correção do TME): de 0 a 11 triângulos por quadro com textura diferente, entre 7.500 e 14.000 casados. Nenhum triângulo ficou sem TEX0 conhecido. Com o casamento por textura (pista 4), central caiu para 0 ou 1 por checagem.
   - Partículas (fases 1, 2, 4, 5, 7 e 8, 1 contra 1, 60 a 90 s): o número de quadrados por sistema bate quase sempre entre VU1 e nativo. A forma só bate em sprite e texSprite (abaixo).
 
 ## Corrigido com a checagem
@@ -51,10 +51,10 @@
 2. **Resolvida:** monstros com 20% a 28% a mais de triângulos no VU1, só com 3 IAs (`WOTM_MATCH=1,3,2,2,1`). Era o mesmo ADC errado do VIF1 fora de passo.
    - Remedido depois da correção (central, 90 s, checagem a cada 5 s, 17 checagens, `VIF1 fora de passo 0`): os quatro monstros casam de 99,0% a 100% em todas, com o mesmo número de triângulos no VU1 e no nativo (diferença de até 6).
 3. **Resolvida:** objetos com tex 66 e várias instâncias às vezes não casavam. Ver "Corrigido com a checagem" (posição dos `_cs` com matriz não ortonormal).
-4. **Resto da textura (1 a 11 triângulos por quadro):** o VU1 usa a textura de outro objeto ou o slot vizinho do mesmo objeto.
-   - Exemplo: `tbp 27a5 128x128 cbp 1bd2` aparece no VU1 em objetos sem relação entre si (tex 110, 155, 225, 236). Também aparecem pares trocados de slot (tbp 23a9 e 23b1 nos tex 231 e 233).
-   - Hipótese: seção com seletor 0 herda o TEX0 que o GS tinha, que pode ser do objeto desenhado antes. O nativo herda só dentro do próprio objeto e começa no slot 0.
-   - Não conferido. Seria um detalhe do jogo, não necessariamente algo a imitar.
+4. **Resolvida (era a checagem):** resto da textura, de 1 a 19 triângulos por quadro em que o VU1 parecia usar a textura de outro objeto ou o slot vizinho (`tbp 27a5` nos tex 110, 155, 225 e 236; slots trocados `23a9`/`23b1` nos tex 231 e 233).
+   - Hipótese da seção com seletor 0 herdando o TEX0 do objeto anterior: descartada com teste. Marcando no decodificador de onde vinha o slot de cada seção (seletor próprio, herdado dentro do objeto ou seletor 0 sem nenhum antes no objeto), as seções do 3º tipo deram 0 triângulos de textura diferente em todas as checagens.
+   - Causa: o casamento guloso não olhava a textura. Geometria repetida no mesmo lugar (camadas do objeto em slots diferentes) trocava os pares. Agora o `match` casa em três rodadas: (2) só pares de mesma textura; (1) triângulos do VU1 com alguma textura que o objeto nativo usa; (0) o resto.
+   - Depois da correção (lote 1 contra 1, fases 1 e 4, 60 s): central com 0 ou 1 triângulo de textura diferente por checagem (antes, até 19). O que sobra é um triângulo trocado entre os objetos tex 156 e 193 (cada um sai com a textura do outro), provavelmente sobreposição dos dois. Na METRO, só o objeto da pista 8 (91 e 92).
 5. **Resolvida:** VU1 sem nenhum objeto. Era o VIF1 fora de passo; ver "Corrigido com a checagem".
 6. **Formas de partícula que o nativo não imita** (por tipo; a contagem de quadrados por sistema bate):
    - **Pedestres (14):** o VU1 desenha cada um como um quadradinho inclinado (85 ou 100 por sistema, de 2 a 3 px). O nativo desenha sprites voltados para a câmera com o tamanho de `pos.w`: cerca de 12% saem com tamanho zero, e os outros têm em mediana metade do tamanho do VU1. O tamanho e a orientação devem vir de outro campo.
@@ -67,7 +67,7 @@
    - **SPRITE do GS fora de `fx[]`:** de 320 a 350 retângulos por quadro, quase constantes, de origens fora dos sistemas de partícula. Não identificados (HUD ou ícones?).
 7. **Objetos com a mesma contagem e nenhum triângulo casado** (vistos agora que a OT de alfa chega à checagem): em central, tex 330 (nós `12ba5d0`/`12bb3e0`, flags `0x8a01`) e tex 0 (nó `12b9250`, flags `0x311`, fora da OT de alfa). A posição ou a orientação diferem. São eles que derrubam três checagens para 95,9% a 97,1%. Os dois têm o bit 0 (sem teste de esfera); o tex 330 tem também `0x0800`, que a travessia não testa (talvez o `pktAddVu1ObjAsm` escolha outro microprograma: billboard?). Não conferido.
 8. **Objeto com textura do tamanho da tela na METRO:** tex 0, nó `a1c560`, 92 triângulos, sem textura no nativo; no VU1 sai com `tbp 1180 psm 1 1024x256` (parece o próprio framebuffer: reflexo ou vidro). Não conferido.
-9. **Passada da sombra antes da base:** em poucos triângulos por quadro, o casamento guloso pega a passada da sombra (`tbp 3e60 psm 0 128x128`) no lugar da passada base, e a textura conta como diferente (a METRO chegou a 9 numa checagem).
+9. **Resolvida em parte (checagem):** passada da sombra casada como textura diferente (`tbp 3e60 psm 0 128x128`, até 9 por checagem na METRO). Mesmo com as rodadas por textura da pista 4, a sombra continua casando de 0 a 10 triângulos por checagem que **nenhuma** passada base do VU1 casou (de frente e de costas). Esses agora contam à parte, em `so pela sombra N` na linha de resumo (textura PSMCT32 que o objeto nativo não usa), fora do `textura difere`. Não conferido por que a passada base não tem esses triângulos.
 
 ## O que a checagem não cobre hoje
 Ela compara a geometria dos objetos (triângulos na tela) e das partículas (quadrados na tela) e a textura dos objetos (TEX0). Cor de vértice, mistura e alfa ficam de fora.
@@ -83,7 +83,7 @@ Resumo: pega objeto ou partícula que falta, sobra, está fora do lugar ou com o
 ## Próximos passos (do mais barato ao mais caro)
 1. **HUD pelo caminho direto ao GS:** pôr um tap também nos pacotes GIF que vão direto ao GS (PATH3/PATH2, fora do VU1) e comparar com o que o nativo desenha por cima da cena (texto, ícones). Antes, confirmar por onde o HUD sai e de onde vêm os ~340 SPRITE do GS fora de `fx[]`.
 2. **Cor de vértice e ALPHA por triângulo:** o XGKICK traz o RGBAQ de cada vértice e o registrador ALPHA; daria para estender a comparação de textura para cor e mistura (alcança a explosão opaca) e para as partículas.
-3. **Investigar as pistas 4, 6, 7 e 8 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
+3. **Investigar as pistas 6, 7 e 8 acima** (pedir ao usuário qual atacar e não corrigir sem pedir). Na pista 6, os pedestres são os mais visíveis: são centenas por quadro.
 
 ## Problema antigo encontrado no caminho
 O caminho emulado inteiro (sem `PS2X_NO_VU1`) está quebrado. A luta trava no primeiro quadro (laço do `particleDraw`) e, contornado isso, cai em `GS::consumeLocalToHostBytes` (leitura de VRAM do `sceGsExecStoreImage`, chamado a cada quadro de 0x2153FC). A checagem não depende desse caminho. O método para localizar um `[CRASH] exe+0x…` está em `NATIVO.md`.

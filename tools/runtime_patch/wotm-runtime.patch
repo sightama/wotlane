@@ -3580,10 +3580,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..ea21f7a
+index 0000000..7e60202
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,782 @@
+@@ -0,0 +1,813 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -3938,6 +3938,18 @@ index 0000000..ea21f7a
 +
 +// Para cada triangulo do VU1, o nativo ainda livre de menor soma de distancias entre vertices (em qualquer ordem), com cada vertice
 +// a ate 1 px (grade de 4 px pelo centroide). vuPair = indice do nativo casado (-1 = nenhum); natHit marca os nativos casados.
++// Mesma textura? TBP 0 no nativo: objeto da OT de alfa; o texmGetTextureAddrs do fim do hier preenche o TBP so na copia do pacote de
++// alfa, nao no polyPkt de onde sai o TEX0 de referencia (o nativo desenha pela textura do texInfo, sem esse TBP).
++inline bool sameTex(uint64_t vuTex, uint64_t natTex)
++{
++    if (vuTex == kTexUnknown) return false;
++    const bool noTbp = natTex && !(natTex & 0x3FFFu);
++    return noTbp ? (vuTex & ~0x3FFFull) == natTex : vuTex == natTex;
++}
++
++// Tres rodadas: (2) so pares de mesma textura; (1) triangulos do VU1 com alguma textura que o objeto nativo usa; (0) o resto. Sem
++// isso, geometria repetida no mesmo lugar (camadas do objeto em slots diferentes, a passada da sombra projetada, cuja textura nenhum
++// objeto nativo tem) trocava os pares e acusava textura diferente.
 +uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vector<int> &vuPair, std::vector<char> &natHit)
 +{
 +    constexpr float kTol = 1.f;
@@ -3947,8 +3959,18 @@ index 0000000..ea21f7a
 +        grid.emplace(cell((nat[i].x[0] + nat[i].x[1] + nat[i].x[2]) / 3.f, (nat[i].y[0] + nat[i].y[1] + nat[i].y[2]) / 3.f), i);
 +    vuPair.assign(vu.size(), -1);
 +    natHit.assign(nat.size(), 0);
++    std::vector<uint64_t> natTexs;
++    for (const Tri &n : nat) natTexs.push_back(n.tex);
++    std::sort(natTexs.begin(), natTexs.end());
++    natTexs.erase(std::unique(natTexs.begin(), natTexs.end()), natTexs.end());
++    std::vector<char> known(vu.size(), 0);
++    for (size_t i = 0; i < vu.size(); ++i)
++        for (uint64_t nt : natTexs)
++            if (sameTex(vu[i].tex, nt)) { known[i] = 1; break; }
 +    uint32_t matched = 0;
++    for (int texRound = 2; texRound >= 0; --texRound)
 +    for (size_t i = 0; i < vu.size(); ++i) {
++        if (vuPair[i] >= 0 || (texRound == 1 && !known[i])) continue;
 +        const Tri &t = vu[i];
 +        const float cx = (t.x[0] + t.x[1] + t.x[2]) / 3.f, cy = (t.y[0] + t.y[1] + t.y[2]) / 3.f;
 +        int best = -1;
@@ -3959,6 +3981,7 @@ index 0000000..ea21f7a
 +                for (auto g = range.first; g != range.second; ++g) {
 +                    if (natHit[g->second]) continue;
 +                    const Tri &n = nat[g->second];
++                    if (texRound == 2 && !sameTex(t.tex, n.tex)) continue;
 +                    float cost = 0.f;
 +                    bool all = true;
 +                    for (int a = 0; a < 3 && all; ++a) {
@@ -4168,7 +4191,7 @@ index 0000000..ea21f7a
 +    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas, texDifere; uint64_t vuTex, natTex; uint8_t natSlot; };
 +    std::vector<Row> rows;
 +    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, totRep = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
-+    uint32_t totTexDifere = 0, totTexUnknown = 0;
++    uint32_t totTexDifere = 0, totTexUnknown = 0, totShadowOnly = 0;
 +    std::vector<uint32_t> keys;   // objetos da 1a coleta e os que o VU1 desenhou
 +    for (const auto &kv : g_nats[0]) keys.push_back(kv.first);
 +    for (const auto &kv : vuBy) keys.push_back(kv.first);
@@ -4216,16 +4239,24 @@ index 0000000..ea21f7a
 +                if (pair2[j] >= 0) { vuPair[idx[j]] = -2; ++rep; }   // -2 = repetido (fora da comparacao de textura)
 +        }
 +        // textura dos casados: a do GS no XGKICK contra a que o nativo escolheu para o slot da secao
++        // Casado so pela sombra: textura PSMCT32 que o objeto nativo nao usa (o quadro da sombra projetada, tbp 3e60) num triangulo que
++        // nenhuma passada base casou; fica fora do "textura difere".
 +        uint32_t texDifere = 0;
 +        std::map<std::tuple<uint64_t, uint64_t, uint8_t>, uint32_t> texPairs;
++        std::vector<uint64_t> natTexs;
++        for (const Tri &n : nat) natTexs.push_back(n.tex);
++        std::sort(natTexs.begin(), natTexs.end());
++        natTexs.erase(std::unique(natTexs.begin(), natTexs.end()), natTexs.end());
 +        for (size_t i = 0; i < vu.size(); ++i) {
 +            if (vuPair[i] < 0) continue;
 +            const Tri &n = nat[size_t(vuPair[i])];
-+            // TBP 0 no nativo: objeto da OT de alfa; o texmGetTextureAddrs do fim do hier preenche o TBP so na copia do pacote de
-+            // alfa, nao no polyPkt de onde sai o TEX0 de referencia (o nativo desenha pela textura do texInfo, sem esse TBP)
-+            const bool noTbp = n.tex && !(n.tex & 0x3FFFu);
 +            if (vu[i].tex == kTexUnknown) ++totTexUnknown;
-+            else if (noTbp ? (vu[i].tex & ~0x3FFFull) != n.tex : vu[i].tex != n.tex) { ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}]; }
++            else if (!sameTex(vu[i].tex, n.tex)) {
++                const bool shadow = vu[i].tex && wotm::gs::Tex0::decode(vu[i].tex).psm == 0 &&
++                                    std::none_of(natTexs.begin(), natTexs.end(), [&](uint64_t nt) { return sameTex(vu[i].tex, nt); });
++                if (shadow) { ++totShadowOnly; continue; }
++                ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}];
++            }
 +        }
 +        std::tuple<uint64_t, uint64_t, uint8_t> texWorst{};
 +        uint32_t texWorstN = 0;
@@ -4256,9 +4287,9 @@ index 0000000..ea21f7a
 +    for (const auto &kv : orphan) orphanTris += kv.second;
 +    const double pct = totVu ? 100.0 * (totVu - totRep - totFalta) / (totVu - totRep) : 0.0;
 +    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u (repetidos %u) nativo %u casados %.1f%% faltam %u sobram %u "
-+                         "(costas %u) | textura difere %u, sem TEX0 %u | XGKICK %u tris, %u fora da tela | particulas %u tris, sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
++                         "(costas %u) | textura difere %u, sem TEX0 %u, so pela sombra %u | XGKICK %u tris, %u fora da tela | particulas %u tris, sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
 +                         "vertices nao finitos %u, VIF1 fora de passo %u\n",
-+                 g_frame, objVu, objNat, objBoth, totVu, totRep, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, g_vuKicked, g_vuOff, fxTris, orphanTris, g_chains,
++                 g_frame, objVu, objNat, objBoth, totVu, totRep, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, totShadowOnly, g_vuKicked, g_vuOff, fxTris, orphanTris, g_chains,
 +                 g_walkMs, g_projMs, g_progs.size(), bad, g_wotmVif1Bad);
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.falta + a.sobra > b.falta + b.sobra; });
 +    int shown = 0;
