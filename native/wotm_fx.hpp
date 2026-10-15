@@ -64,6 +64,8 @@ constexpr uint32_t uvI = 0x2B40;          // u8[256]
 constexpr uint32_t emitVec = 0x2CA0;      // emit.ParticleToEmitVec
 constexpr uint32_t fxId = 0x2DDC;         // emit.fxId (parece ser o indice do preset de particleInitFx; nao confirmado em dump)
 constexpr uint32_t infoAttribs = 0x2E30;  // info.attribs (0x400 = pacote montado neste quadro)
+constexpr uint32_t minSize = 0x2E38;      // info.minSize (pedestres: largura do carimbo)
+constexpr uint32_t maxSize = 0x2E3C;      // info.maxSize (pedestres: altura do carimbo)
 constexpr uint32_t lifetime = 0x2E4A;     // info.lifetime (s16, campos)
 constexpr uint32_t mapsPerFrame = 0x2E74; // info.mapsPerFrame (4.12)
 constexpr uint32_t colorsPerFrame = 0x2E78;
@@ -83,7 +85,7 @@ constexpr uint32_t maxParticles = 0x2ED4;
 
 enum FxType : uint32_t {
     FX_LINE = 1, FX_SWEEPTRAIL = 2, FX_SPRITE = 3, FX_TEXSPRITE = 4, FX_STRIPE = 5, FX_STRITE = 6, FX_SPRINE = 8, FX_KITE = 9,
-    FX_FRAG = 13, FX_DUSTTRAIL = 15, FX_WAKE = 16,
+    FX_FRAG = 13, FX_PEDS = 14, FX_DUSTTRAIL = 15, FX_WAKE = 16,
 };
 
 inline const char *fxTypeName(uint32_t t) {
@@ -100,7 +102,7 @@ inline const char *fxTypeName(uint32_t t) {
     case FX_DUSTTRAIL: return "dustTrail";
     case FX_WAKE: return "wake";
     case 7: return "tipo7";
-    case 14: return "pedestre";
+    case FX_PEDS: return "pedestre";
     default: return "?";
     }
 }
@@ -235,6 +237,44 @@ public:
                 }
                 uv[0][0] = u0; uv[0][1] = 0.f; uv[1][0] = u0; uv[1][1] = 1.f;
                 uv[2][0] = u1; uv[2][1] = 1.f; uv[3][0] = u1; uv[3][1] = 0.f;
+                f(i, c, uv);
+            }
+            return;
+        }
+        if (s.type == FX_PEDS) {
+            // Pedestres (pedsCreate/stampPacketInit, PedGroup): carimbo em pe no Z do mundo, base em pos, largura info.minSize na
+            // horizontal da camera e altura info.maxSize (medido pela checagem VU1 x nativo: a inclinacao na tela segue a perspectiva
+            // de um eixo vertical e o centro fica meia altura acima de pos). pos.w nao e tamanho: e float(variante de cor) (scatter)
+            // com a meia-palavra baixa trocada pelo quadro da animacao (update). A folha tem os quadros em U (texMask + 1) e as
+            // variantes em V (vis.numColors), du/dv do TextureInfo em 1/16 de texel.
+            const float W = ram.f32(b + fxoff::minSize), H = ram.f32(b + fxoff::maxSize);
+            float rh[3] = {view.right[0], view.right[1], 0.f};
+            const float rl = std::sqrt(rh[0] * rh[0] + rh[1] * rh[1]);
+            if (rl < 1e-6f) return;
+            rh[0] /= rl; rh[1] /= rl;
+            const uint32_t tinfo = fxaddr::textureInfo + 8 * (ram.u32(b + fxoff::texInfoIndex) & 127);
+            const uint32_t k = ram.u16(tinfo + 2) & 127;
+            const uint64_t t0 = uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
+            const float texW = float(1u << ((t0 >> 26) & 15)), texH = float(1u << ((t0 >> 30) & 15));
+            const uint32_t frames = ram.u32(b + fxoff::texMask) + 1, rows = std::max<uint32_t>(ram.u32(b + fxoff::numColors), 1);
+            const float du = float(ram.u16(tinfo + 4) >> 4) / float(frames) / texW, dv = float(ram.u16(tinfo + 6) >> 4) / float(rows) / texH;
+            for (int i = 0; i < s.n; ++i) {
+                float p[4];
+                P(i, p);
+                uint32_t wbits;
+                std::memcpy(&wbits, &p[3], 4);
+                if (int32_t(wbits) < 0 || !std::isfinite(p[0])) continue;   // pedsTurnOff: w = -1
+                const uint32_t vbits = wbits & 0xFFFF0000u;
+                float variant;
+                std::memcpy(&variant, &vbits, 4);
+                const float u0 = float((wbits & 0xFFFF) % frames) * du, v0 = float(uint32_t(std::max(variant, 0.f)) % rows) * dv;
+                for (int a = 0; a < 3; ++a) {
+                    c[0][a] = p[a] - rh[a] * W * 0.5f; c[1][a] = p[a] + rh[a] * W * 0.5f;
+                    c[2][a] = c[1][a]; c[3][a] = c[0][a];
+                }
+                c[2][2] += H; c[3][2] += H;
+                uv[0][0] = u0; uv[0][1] = v0 + dv; uv[1][0] = u0 + du; uv[1][1] = v0 + dv;
+                uv[2][0] = u0 + du; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
                 f(i, c, uv);
             }
             return;
@@ -383,7 +423,8 @@ private:
                 cur = tex;
                 open = true;
             }
-            const uint32_t c0 = colorAt(ram, b, ag), c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
+            // pedestres: vis.colorIndex e a propria cor RGBA (stampPacketInit a sobe byte a byte); numColors conta as variantes da folha
+            const uint32_t c0 = s.type == FX_PEDS ? ram.u32(b + fxoff::colorIndex) : colorAt(ram, b, ag), c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
             for (int k = 0; k < 4; ++k) {
                 vcolor(k < 2 ? c0 : c1);
                 rlTexCoord2f(uv[k][0], uv[k][1]);
