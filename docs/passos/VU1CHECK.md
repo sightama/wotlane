@@ -33,7 +33,7 @@ Não corrigir sem perguntar ao dono qual atacar.
    - **Fase 8, objetos:** `casados_pior` de 91,9% em todas as rodadas (anterior a estas mudanças). Não investigado.
    - **Pedestres na METRO:** são 8 sistemas de 125 (fx 91 a 98). Em cerca de 5% das checagens o VU1 não desenha nenhum deles (`0/0/1000`), e às vezes só parte (`750/750/1000`). O nativo desenha todos. Não é o teste de visão (já aplicado, quase não mudou) nem o `info.attribs` (0x400 nos dois casos; o `emit.info.attribs` dos pedestres é 0). Suspeita: instante (os pedestres saem noutro trecho do quadro?). Em 90 s: VU1 19108, nativo 23858.
    - **Lens flare (tipo 11):** era o "sistema que só o VU1 tem" de 2 a 4 quadrados (fx 80 na fase 8). Não passa pelo `particleDraw`: o `hier` põe as luzes com flare numa lista dentro de `lensFlarePacket[2]` (`particleAddLensFlareToList`), o `particleLensFlareTestZbuffer` testa a visibilidade no z-buffer e o `particleLensFlareRender` desenha (retângulos alinhados à tela). O nativo não desenha flares: é recurso a implementar, não correção.
-   - **SPRITE do GS fora de `fx[]`:** de 340 a 380 por quadro, de origem não identificada (HUD?).
+   - **SPRITE do GS fora de `fx[]` (identificado):** de 340 a 380 por quadro. Não é HUD: vêm do `dustPacket` (`D_0078F6E0`, montado por `texDrawDustPacketBuild` no `particleInitAfter`) e de um trecho do `displayList`. É a composição das texturas de poeira e fumaça iluminadas na VRAM (0xFD800), que as partículas "compostas" (texInfo 0xFFFF) usam; o nativo as troca por um círculo suave. Falta: a checagem contá-los como render-to-texture, e o nativo gerar essas texturas (parâmetros em `dustPktParams`, luz em `dustLighting`). O dump grava as origens (`rectorf`).
 7. **Itens de alfa animados** (tex 330/333, e tex 0 com flags `0xa210`/`0xa310`): às vezes saem de 1 a 6 px fora, em direções variadas. Parece questão de instante da coleta.
 8. Corrigida (ver "Corrigido"). Falta só identificar o que é o objeto da METRO (vidro, água, distorção?).
 10. **Textura trocada entre tex 156 e 193:** 1 triângulo de vez em quando (sobreposição?).
@@ -81,7 +81,7 @@ Defeitos da própria checagem:
 ## Próximos passos
 1. Pistas em aberto (perguntar qual antes de corrigir).
 2. Estender a comparação para UV, RGBA de vértice e ALPHA/ABE por triângulo (alcança as texturas animadas e a explosão), e talvez um hash da CLUT por quadro.
-3. HUD: tap nos pacotes que vão direto ao GS (PATH2/PATH3) e identificação dos SPRITE fora de `fx[]`.
+3. HUD: tap nos pacotes que vão direto ao GS (PATH2/PATH3). Os SPRITE fora de `fx[]` já foram identificados (textura composta da poeira, pista 6).
 
 ## Notas
 - O caminho emulado inteiro (sem `PS2X_NO_VU1`) está quebrado: trava no laço do `particleDraw` e depois cai em `GS::consumeLocalToHostBytes`. A checagem não depende dele (detalhes em `NATIVO.md`).
