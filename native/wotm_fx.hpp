@@ -297,8 +297,9 @@ public:
     //  - 18 SPRITEs (tabelas no pacote, q8-q25: TEX0, t, meio-lado com o seletor de UV nos 2 bits baixos; q26-q43: R, G, B, A). Sprite k
     //    no ponto C + t_k (S - C) da linha do centro da tela C ate a fonte S; cantos +/- (h, h/2) px do GS. k = 0: h = meio-lado tamanho A,
     //    cor min(255, RGB rgb). k > 0: h = meio-lado, cor min(32, RGB rgb A brilho). Alfa 0x80, ALPHA 0x48 (aditivo), UV de (0,5; 0,5) no
-    //    canto + ate (uvMax - 0,5) no canto - (uvMax = 32, 64 ou 128 texels pelo seletor). Depois de um sprite com as tres cores < 1, a
-    //    entrada sai dos seguintes.
+    //    canto + ate uvMax no canto - (uvMax = 31,5, 63,5 ou 127,5 texels pelo seletor: 0x1F8, 0x3F8, 0x7F8 em 1/16). Depois de um sprite
+    //    com as tres cores < 1, a entrada sai dos seguintes.
+    // Conferido pela checagem VU1 x nativo (entrada lida da memoria do VU1 no MSCAL do 0x2B20): cantos, cor e UV de todos os sprites.
     struct FlareSprite { uint64_t tex0 = 0; uint32_t texId = 0; float t = 0.f, half = 0.f, uvMax = 0.f, rgba[4] = {0, 0, 0, 0}; };
     struct Flare { float x = 0, y = 0, z = 0, w = 0, zfudge = 0, dot = 0, bw = 0, rgb[3] = {0, 0, 0}, intensity = 0; uint32_t flags = 0, id = 0; };
     struct FlareFrame {
@@ -384,6 +385,55 @@ public:
         }
     }
 
+    // Entrada como o VU1 a recebe: posicao na tela do GS e intensity depois do teste de Z
+    struct FlareIn { float x, y, intensity; const Flare *fl; };
+    // Sprite do GS (px do GS): canto + (xa, ya) com UV (u0, v0), canto - (xb, yb) com (u1, v1); k = linha da tabela, entry = indice em `in`
+    struct FlareQuad { int k; size_t entry; float xa, ya, xb, yb, u0, v0, u1, v1; uint8_t rgb[3]; };
+
+    // Microprograma 0x2B20 sobre a lista (sem o teste de Z): o desenho e a checagem VU1 x nativo usam o mesmo
+    template <class E> static void flareSprites(const FlareFrame &f, const std::vector<FlareIn> &in, E &&emit) {
+        struct V { float bright, size; bool on; };
+        std::vector<V> v(in.size());
+        for (size_t i = 0; i < in.size(); ++i) {   // laco por entrada
+            const Flare &fl = *in[i].fl;
+            const float I = in[i].intensity;
+            v[i].on = (fl.flags & 1) && fl.w != 0.f;
+            if (!v[i].on) continue;
+            const float q = 1.f / fl.w;
+            v[i].bright = I * q * q;
+            v[i].size = std::sqrt(std::max(I, 0.f)) * q;
+            if (fl.flags & 8) {
+                const float k = ((fl.flags & 0x10) ? std::fabs(fl.dot) : std::max(fl.dot, 0.f)) + fl.bw - 1.f;
+                if (!(v[i].bright * k > 0.f) || fl.bw == 0.f) { v[i].on = false; continue; }
+                v[i].bright = v[i].bright * k / fl.bw;
+                v[i].size = v[i].size * k / fl.bw;
+            }
+        }
+        auto ftoi4 = [](float a) { return std::trunc(a * 16.f) / 16.f; };
+        for (int k = 0; k < f.nspr; ++k) {   // laco por sprite da tabela, entradas por dentro
+            const FlareSprite &s = f.spr[k];
+            const float tw = float(1u << ((s.tex0 >> 26) & 15)), th = float(1u << ((s.tex0 >> 30) & 15));
+            for (size_t i = 0; i < in.size(); ++i) {
+                if (!v[i].on) continue;
+                const Flare &fl = *in[i].fl;
+                const float px = f.cx + s.t * (in[i].x - f.cx), py = f.cy + s.t * (in[i].y - f.cy);
+                float h, col[3];
+                for (int j = 0; j < 3; ++j) col[j] = s.rgba[j] * fl.rgb[j];
+                if (k == 0) h = s.half * v[i].size * s.rgba[3];
+                else {
+                    h = s.half;
+                    for (float &c : col) c *= s.rgba[3] * v[i].bright;
+                }
+                if (col[0] < 1.f && col[1] < 1.f && col[2] < 1.f) v[i].on = false;   // os sprites seguintes nao desenham mais esta
+                const float cap = k == 0 ? 255.f : 32.f;
+                FlareQuad q{k, i, ftoi4(px + h), ftoi4(py + 0.5f * h), ftoi4(px - h), ftoi4(py - 0.5f * h),
+                            0.5f / tw, 0.5f / th, s.uvMax / tw, s.uvMax / th, {0, 0, 0}};
+                for (int j = 0; j < 3; ++j) q.rgb[j] = uint8_t(std::clamp(col[j], 0.f, cap));
+                emit(q);
+            }
+        }
+    }
+
     // Desenha os flares do ultimo quadro do jogo em espaco de tela (dentro de BeginMode3D, depois das particulas; o pacote do lens flare
     // sai depois delas no particleDraw). Le a profundidade ja desenhada para o teste de oclusao (o particleLensFlareRender).
     void drawFlares(const TexFn &texture) {
@@ -407,8 +457,7 @@ public:
         };
         auto fptoui = [](float v) -> uint32_t { return v <= 0.f ? 0u : v >= 4294967040.f ? 0xFFFFFFFFu : uint32_t(v); };
 
-        struct Vis { float x, y, bright, size; const Flare *fl; bool on; };
-        std::vector<Vis> vis;
+        std::vector<FlareIn> vis;
         static const bool log = std::getenv("WOTM_FLARELOG") != nullptr;
         for (const Flare &fl : f.e) {
             if (!(fl.flags & 0xFF)) continue;
@@ -439,21 +488,15 @@ public:
             if (cnt == 0 || I < 1.f / 256.f) continue;
             // o retail ja somou o centroide do GS emulado (visibilidade total: 1,5 - 2 ou 1,5 - 1); troca pelo daqui
             const float shift = 1.5f - (inf ? 2.f : 1.f);
-            Vis v{fl.x - shift + (float(sumC) / float(cnt) - (inf ? 2.f : 1.f)), fl.y - shift + (float(sumR) / float(cnt) - (inf ? 2.f : 1.f)), 0.f, 0.f, &fl, true};
-            // microprograma 0x2B20, laco por entrada
-            if (!(fl.flags & 1) || !(fl.w != 0.f)) continue;
-            const float q = 1.f / fl.w;
-            v.bright = I * q * q;
-            v.size = std::sqrt(std::max(I, 0.f)) * q;
-            if (fl.flags & 8) {
-                const float k = ((fl.flags & 0x10) ? std::fabs(fl.dot) : std::max(fl.dot, 0.f)) + fl.bw - 1.f;
-                if (!(v.bright * k > 0.f) || fl.bw == 0.f) continue;
-                v.bright = v.bright * k / fl.bw;
-                v.size = v.size * k / fl.bw;
-            }
-            vis.push_back(v);
+            vis.push_back({fl.x - shift + (float(sumC) / float(cnt) - (inf ? 2.f : 1.f)), fl.y - shift + (float(sumR) / float(cnt) - (inf ? 2.f : 1.f)), I, &fl});
         }
-        if (vis.empty()) return;
+        std::vector<FlareQuad> quads;
+        float big = 0.f;   // maior meio-lado do sprite 0 (diagnostico WOTM_FLARESHOT)
+        flareSprites(f, vis, [&](const FlareQuad &q) {
+            quads.push_back(q);
+            if (q.k == 0) big = std::max(big, std::fabs(q.xa - q.xb) * 0.5f);
+        });
+        if (quads.empty()) return;
 
         rlMatrixMode(RL_PROJECTION);
         rlPushMatrix();
@@ -467,42 +510,25 @@ public:
         setBlend(BLEND_ADDITIVE);   // ALPHA 0x48: Cs As + Cd
         shaderNormal(0.f, false, true);
         const float ox = f.cx - 0.5f * f.vw, oy = f.cy - 0.5f * f.vh;
-        for (int k = 0; k < f.nspr; ++k) {
-            const FlareSprite &s = f.spr[k];
-            unsigned tex = s.texId ? texture(s.texId, s.tex0) : 0;
-            if (!tex) tex = blobTexture();
-            const float tw = float(1u << ((s.tex0 >> 26) & 15)), th = float(1u << ((s.tex0 >> 30) & 15));
-            const float u0 = 0.5f / tw, v0 = 0.5f / th, u1 = (s.uvMax - 0.5f) / tw, v1 = (s.uvMax - 0.5f) / th;
-            rlBegin(RL_QUADS);
-            rlSetTexture(tex);
-            for (Vis &v : vis) {
-                if (!v.on) continue;
-                const Flare &fl = *v.fl;
-                const float px = f.cx + s.t * (v.x - f.cx), py = f.cy + s.t * (v.y - f.cy);
-                float h, col[3];
-                for (int j = 0; j < 3; ++j) col[j] = s.rgba[j] * fl.rgb[j];
-                if (k == 0) h = s.half * v.size * s.rgba[3];
-                else {
-                    h = s.half;
-                    for (float &c : col) c *= s.rgba[3] * v.bright;
-                }
-                if (col[0] < 1.f && col[1] < 1.f && col[2] < 1.f) v.on = false;   // as entradas seguintes nao desenham mais esta
-                const float cap = k == 0 ? 255.f : 32.f;
-                uint8_t rgb[3];
-                for (int j = 0; j < 3; ++j) rgb[j] = uint8_t(std::clamp(col[j], 0.f, cap));
-                // cantos com FTOI4 (1/16 px); o canto + leva o UV (0,5; 0,5) e o canto - o (uvMax - 0,5)
-                auto gx = [](float a) { return std::trunc(a * 16.f) / 16.f; };
-                const float xa = (gx(px + h) - ox) * sx, ya = (gx(py + 0.5f * h) - oy) * sy;
-                const float xb = (gx(px - h) - ox) * sx, yb = (gx(py - 0.5f * h) - oy) * sy;
-                rlColor4ub(rgb[0], rgb[1], rgb[2], 0x80);
-                rlTexCoord2f(u0, v0); rlVertex2f(xa, ya);
-                rlTexCoord2f(u0, v1); rlVertex2f(xa, yb);
-                rlTexCoord2f(u1, v1); rlVertex2f(xb, yb);
-                rlTexCoord2f(u1, v0); rlVertex2f(xb, ya);
+        int curK = -1;
+        for (const FlareQuad &q : quads) {
+            if (q.k != curK) {   // um lote por sprite da tabela (textura propria)
+                if (curK >= 0) { rlEnd(); rlDrawRenderBatchActive(); }
+                curK = q.k;
+                const FlareSprite &s = f.spr[q.k];
+                unsigned tex = s.texId ? texture(s.texId, s.tex0) : 0;
+                rlBegin(RL_QUADS);
+                rlSetTexture(tex ? tex : blobTexture());
             }
-            rlEnd();
-            rlDrawRenderBatchActive();
+            const float xa = (q.xa - ox) * sx, ya = (q.ya - oy) * sy, xb = (q.xb - ox) * sx, yb = (q.yb - oy) * sy;
+            rlColor4ub(q.rgb[0], q.rgb[1], q.rgb[2], 0x80);
+            rlTexCoord2f(q.u0, q.v0); rlVertex2f(xa, ya);
+            rlTexCoord2f(q.u0, q.v1); rlVertex2f(xa, yb);
+            rlTexCoord2f(q.u1, q.v1); rlVertex2f(xb, yb);
+            rlTexCoord2f(q.u1, q.v0); rlVertex2f(xb, ya);
         }
+        rlEnd();
+        rlDrawRenderBatchActive();
         rlSetTexture(0);
         rlNormal3f(0.f, 0.f, 0.f);
         setBlend(BLEND_ALPHA);
@@ -516,8 +542,6 @@ public:
         static const char *shot = std::getenv("WOTM_FLARESHOT");
         static int shots = 0;
         static double lastShot = -10.0;
-        float big = 0.f;
-        for (const Vis &v : vis) big = std::max(big, f.spr[0].half * v.size * f.spr[0].rgba[3]);
         if (shot && shots < 8 && big >= 8.f && GetTime() - lastShot >= 1.0) {
             lastShot = GetTime();
             unsigned char *px = rlReadScreenPixels(fbw, fbh);
