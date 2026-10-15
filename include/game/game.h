@@ -626,6 +626,7 @@ public:
     static void Update(void);
     static void SetCameraToFollowMonster(int view, Monster *m);
     static void SetCameraPOV(int view, Camera::CameraPOV pov);
+    static void LeaveUnifiedView(unsigned frames);
     static void ResetPOVChange(int view, float t);
     static void SetCameraMonster(int view, Monster *m);
     static void TogglePOV(int view);

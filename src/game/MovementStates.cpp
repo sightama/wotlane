@@ -257,20 +257,22 @@ typedef char _size_StateDash[sizeof(StateDash) == 0x44 ? 1 : -1];
  * touch (both = the wall goes on above, the monster can climb rather than mount the ledge). */
 class StateClimb : public MonsterState {
 public:
-    enum SubState { SUB_HANG = 0, SUB_CLIMB = 1, SUB_MOUNT = 3, SUB_DISMOUNT = 4 };
+    enum SubState { SUB_HANG = 0, SUB_CLIMB = 1, SUB_MOVE = 2, SUB_MOUNT = 3, SUB_DISMOUNT = 4 };
 
     float blendHang;       /* 0x14: animation 0x6A */
     float blendClimb;      /* 0x18: animation 0x64 */
-    float f1C, f20;
+    float blendVertical;   /* 0x1C: animations 0x65/0x66 (climbing up/down) */
+    float blendStrafe;     /* 0x20: animations 0x67/0x68 (sideways) */
     float blendMount;      /* 0x24: animation 0x69 */
     float speedHang;       /* 0x28 */
     float speedClimb;      /* 0x2C */
-    float f30, f34;
+    float speedVertical;   /* 0x30 */
+    float speedStrafe;     /* 0x34 */
     float speedMount;      /* 0x38 */
     float probeLow;        /* 0x3C, 0x40: their sum is the height of the upper probes */
     float probeHigh;
-    int f44;
-    float f48;
+    int mountDelay;        /* 0x44: frames of hanging before holding up mounts the ledge */
+    float turnRate;        /* 0x48: how fast the monster turns to face the wall */
     char pad4C[0x50 - 0x4C];
     float halfWidth;       /* 0x50: init: half the monster's width */
     float reach;           /* 0x54 */
@@ -279,11 +281,11 @@ public:
     FVECTOR huckVelocity;  /* 0x60 */
     int f70;
     int reverse;           /* 0x74: the climb animation runs backwards */
-    int f78;
+    int hangStart;         /* 0x78: timerGetFieldCount() when the monster started hanging at the top (0 = not) */
     int subState;          /* 0x7C */
     int anim;              /* 0x80: MonsterAnim playing */
     char pad84[0x90 - 0x84];
-    FVECTOR motion;        /* 0x90: climb motion quaternion */
+    FVECTOR motion;        /* 0x90: climb velocity in the monster frame (x across, z up), turned into the dynamics velocity */
     int contactFlags;      /* 0xA0 */
     int contactSurface;    /* 0xA4, 0xA8: bytes 2 and 3 of the wall contact */
     int contactKind;
@@ -300,6 +302,7 @@ public:
     void enterSubState(SubState s);
     void checkWallContact(void);
     _hdResult *getMinContact(_hdResult *r, int n, bool facing);
+    void update(void);
 };
 typedef char _size_StateClimb[sizeof(StateClimb) == 0xD0 ? 1 : -1];
 #define MSOUND(m) ((MonsterSound *)(m)->m_sound)
@@ -443,6 +446,15 @@ extern float TOE_IN __asm__("TOE_IN.2513"); /* checkWallContact: 30 */
 __asm__("#SNFIX_SMALL TOE_IN.2513");
 int hdBundledSphereTest(_hdSphereBundleTest *tests, int n, int skipId2);
 void mathfVectorCrossUp(_fvector *dst, _fvector *v);
+void mathfRotationFromVector(_fvector *rph, _fvector *v);
+float smoothEasyInAngle(float cur, float target, float rate, float tolerance);
+void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);
+int timerGetFieldCount(void);
+extern "C" float cosf(float);
+extern float slack __asm__("slack.2503"); /* StateClimb::update: 20 */
+__asm__("#SNFIX_SMALL slack.2503");
+/* (0, 0, 0, 1): the VU0 vf0 constant retail stores with sqc2 */
+#define SET_STILL(v) ((v).x = 0.0f, (v).y = 0.0f, (v).z = 0.0f, (v).w = 1.0f)
 #define DYN(m) ((MonsterDynamics *)((char *)(m) + 0x100))
 /* MonsterDynamics velocity (Monster+0x1E0) */
 #define MVEL(m) ((_fvector *)((char *)(m) + 0x1E0))
@@ -857,12 +869,199 @@ void StateClimb::transitionInto(void)
     motion.z = 0.0f;
     motion.w = 1.0f;
     owner->m_unk49 = 1;
-    f78 = 0;
+    hangStart = 0;
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", transitionInto__10StateClimb);
 #endif
+/* Each frame: probe the wall, turn to face it (both hands on it), and pull the monster to it when it drifted past
+ * its reach plus `slack`. The directions give the climb velocity (up/down at Monster::m_climbSpeed, sideways at
+ * m_climbStrafeSpeed while that hand touches). Climbing onto the wall: back to hanging (or to the air state) once the
+ * animation ends. Mount: when the blend settles, leave with the huck velocity. Dismount: hang once the wall goes on
+ * above. Hanging at the top: holding up past mountDelay, or a fresh press of up, mounts the ledge; it does not climb
+ * further up. Moving picks the up/down (0x65, 0x66 or 0x65 reversed) or sideways (0x67, 0x68 or 0x67 reversed)
+ * animation, still: hang. The grab button lets go, a fresh jump mounts, down on the ground stands up; losing both hands
+ * falls; a human player in the unified view facing away from the camera (more than 110 degrees) leaves it. */
+#ifdef NON_MATCHING
+/* untuned: 21/691 words; retail turns the velocities with VU0 (vmulax/vmadd, vmsubx) and shares the animation switching code */
+void StateClimb::update(void)
+{
+    FVECTOR in;
+    int move = 1;
+
+    MonsterState::update();
+    checkWallContact();
+    vecScale(&in, (_fvector *)&contactNormal, -1.0f);
+    if ((contactFlags & 6) == 6) {
+        FVECTOR rph;
+        _cs *cs;
+
+        mathfRotationFromVector(&rph, &in);
+        cs = owner->m_cs;
+        cs->rot.x = smoothEasyInAngle(cs->rot.x, rph.x, turnRate, 0.001f);
+        owner->m_cs->rot.y = 0.0f;
+        cs = owner->m_cs;
+        cs->rot.z = smoothEasyInAngle(cs->rot.z, rph.z, turnRate, 0.001f);
+        mathfRotMatrixRPH(owner->m_cs->mat, (_fvector *)&owner->m_cs->rot);
+    }
+    if (*(float *)((char *)owner + 0x2BC) + slack < contactDist) {
+        float pull = contactDist - *(float *)((char *)owner + 0x2BC) - slack;
+        _cs *cs = owner->m_cs;
+
+        cs->trans.x = cs->trans.x - contactNormal.x * pull;
+        cs->trans.y = cs->trans.y - contactNormal.y * pull;
+        cs->trans.z = cs->trans.z - contactNormal.z * pull;
+    }
+    owner->m_fallTime = 0;
+    owner->m_freeFalling = 0;
+    if (owner->m_padFlags[0]->dirUp != 0) {
+        motion.y = 0.0f;
+        motion.z = owner->m_climbSpeed;
+    } else if (owner->m_padFlags[0]->dirDown != 0) {
+        motion.y = 0.0f;
+        motion.z = -owner->m_climbSpeed;
+    } else {
+        motion.z = 0.0f;
+        motion.y = 0.0f;
+    }
+    if ((owner->m_padFlags[0]->dirLeft != 0 || owner->m_padFlags[0]->f1A != 0) && (contactFlags & 2))
+        motion.x = -owner->m_climbStrafeSpeed;
+    else if ((owner->m_padFlags[0]->dirRight != 0 || owner->m_padFlags[0]->f1C != 0) && (contactFlags & 4))
+        motion.x = owner->m_climbStrafeSpeed;
+    else
+        motion.x = 0.0f;
+
+    switch (subState) {
+    case SUB_CLIMB:
+        SET_STILL(motion);
+        if (!animationIsRunning(owner->m_anims[anim])) {
+            if (reverse) {
+                enterSubState(SUB_HANG);
+            } else {
+                move = 0;
+                owner->enterNewState((MonsterState *)owner->m_stateRef);
+            }
+        }
+        goto moved;
+    case SUB_MOUNT:
+        SET_STILL(motion);
+        if (!animationIsTransitioning(owner->m_anims[0x69])) {
+            float (*m)[4] = owner->m_cs->mat;
+            _fvector *v = MVEL(owner);
+
+            v->x = m[0][0] * huckVelocity.x + m[1][0] * huckVelocity.y + m[2][0] * huckVelocity.z;
+            v->y = m[0][1] * huckVelocity.x + m[1][1] * huckVelocity.y + m[2][1] * huckVelocity.z;
+            v->z = m[0][2] * huckVelocity.x + m[1][2] * huckVelocity.y + m[2][2] * huckVelocity.z;
+            v->w = huckVelocity.w;
+            owner->enterNewState((MonsterState *)owner->m_stateRef);
+            return;
+        }
+        goto moved;
+    case SUB_DISMOUNT:
+        SET_STILL(motion);
+        if ((contactFlags & 0x30) != 0x30) {
+            motion.z = -owner->m_climbSpeed;
+        } else {
+            enterSubState(SUB_HANG);
+            motion.z = owner->m_climbSpeed;
+            hangStart = timerGetFieldCount();
+        }
+        goto moved;
+    case SUB_HANG:
+        if (hangStart > 0) {
+            if ((mountDelay < timerGetFieldCount() - hangStart && owner->m_padFlags[0]->dirUp != 0)
+                || (owner->m_padFlags[0]->dirUp != 0 && owner->m_padFlags[1]->dirUp == 0)) {
+                enterSubState(SUB_MOUNT);
+                goto moved;
+            }
+            motion.z = motion.z < 0.0f ? motion.z : 0.0f;
+        }
+        break;
+    }
+    if (motion.z != 0.0f) {
+        subState = SUB_MOVE;
+        if (0.0f < motion.z) {
+            if (anim != 0x65) {
+                animationSetDirection(owner->m_anims[0x65], true);
+                animationSetSpeed(owner->m_anims[0x65], speedVertical);
+                animationTransitionInto(owner->m_anims[0x65], blendVertical, 1, 1);
+                anim = 0x65;
+            }
+        } else {
+            int a = owner->m_anims[0x66].ci != 0 ? 0x66 : 0x65;
+
+            if (anim != a) {
+                if (a == 0x65)
+                    animationSetDirection(owner->m_anims[0x65], false);
+                animationSetSpeed(owner->m_anims[a], speedVertical);
+                animationTransitionInto(owner->m_anims[a], blendVertical, 1, 1);
+                anim = a;
+            }
+        }
+    } else if (motion.x != 0.0f) {
+        if (hangStart == 0 && subState == SUB_HANG)
+            subState = SUB_MOVE;
+        if (motion.x < 0.0f) {
+            if (anim != 0x67) {
+                animationSetDirection(owner->m_anims[0x67], true);
+                animationSetSpeed(owner->m_anims[0x67], speedStrafe);
+                animationTransitionInto(owner->m_anims[0x67], blendStrafe, 1, 1);
+                anim = 0x67;
+            }
+        } else {
+            int a = owner->m_anims[0x68].ci != 0 ? 0x68 : 0x67;
+
+            if (anim != a) {
+                if (a == 0x67)
+                    animationSetDirection(owner->m_anims[0x67], false);
+                animationSetSpeed(owner->m_anims[a], speedStrafe);
+                animationTransitionInto(owner->m_anims[a], blendStrafe, 1, 1);
+                anim = a;
+            }
+        }
+    } else if (anim != 0x6A) {
+        enterSubState(SUB_HANG);
+    }
+moved:
+    if (move) {
+        float (*m)[4] = owner->m_cs->mat;
+        _fvector *v = MVEL(owner);
+
+        v->x = m[0][0] * motion.x + m[1][0] * motion.y + m[2][0] * motion.z;
+        v->y = m[0][1] * motion.x + m[1][1] * motion.y + m[2][1] * motion.z;
+        v->z = m[0][2] * motion.x + m[1][2] * motion.y + m[2][2] * motion.z;
+        v->w = motion.w;
+    }
+    if (owner->m_padFlags[0]->action != 0 && owner->m_padFlags[1]->action == 0)
+        owner->enterNewState((MonsterState *)owner->m_stateRef);
+    else if (owner->m_padFlags[0]->jump != 0 && owner->m_padFlags[1]->jump == 0 && subState != SUB_MOUNT)
+        enterSubState(SUB_MOUNT);
+    if (owner->m_padFlags[0]->dirDown != 0 && (contactFlags & 8))
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    if (subState == SUB_DISMOUNT || (contactFlags & 0x30) == 0x30) {
+        hangStart = 0;
+    } else if (hangStart == 0) {
+        if (subState == SUB_MOUNT)
+            goto sound;
+        enterSubState(SUB_HANG);
+        hangStart = timerGetFieldCount();
+    }
+    if (subState == SUB_MOUNT)
+        goto sound;
+    if (!(contactFlags & 6)) {
+        owner->enterNewState((MonsterState *)owner->m_stateRef);
+    } else if (gUseUnifiedView != 0 && owner->m_playerNum == PLAYER_HUMAN && game->f120464 == 0) {
+        _cs *camCs = cameraViews[2].cs; /* the unified view's camera */
+
+        if (vecDot((_fvector *)owner->m_cs->mat[1], (_fvector *)camCs->mat[1]) < -cosf(1.2217305f))
+            Cameras::LeaveUnifiedView(20);
+    }
+sound:
+    MSOUND(owner)->updateClimbingSound((MonsterAnim)anim);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__10StateClimb);
+#endif
 #ifdef NON_MATCHING
 void StateClimb::handlePreemption(MonsterState *next)
 {

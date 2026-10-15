@@ -7,9 +7,10 @@ class GamePad;
 
 /* One per-frame snapshot of the pad state (94 bytes); only the fields seen so far are named. */
 struct PadEntry {
-    char data[0xA];
+    char data[0x2];
+    unsigned short dirUp, dirDown, dirLeft, dirRight; /* 0x02..0x08: directions (StateClimb climbs/strafes with them) */
     unsigned short face[4]; /* 0x0A..0x10: four buttons, probably the face buttons; a fresh press of any of them is a struggle in StateImpaled */
-    unsigned short f12, f14; /* 0x12..0x1C: movement inputs (StateRun starts on any of 0x12..0x1C; 0x12, 0x14, 0x1A, 0x1C pick its sub-state) */
+    unsigned short f12, f14; /* 0x12..0x1C: analog stick (computeMotionVec: 0x12 forward, 0x14 back, 0x1A left, 0x1C right; StateRun picks its sub-state from them) */
     unsigned short f16, f18, f1A, f1C, f1E, f20;
     short f22, f24, f26, f28;
     unsigned short jump;    /* 0x2A: jump/fly button */
