@@ -228,40 +228,70 @@ public:
             // stripe: o stripePacketBuild manda ao VU1 a idade da particula mais nova (n - 1), e a largura sai descontada do quanto ela
             // ja cresceu: com o emissor parado a faixa inteira afina. Medido pela checagem (preset 106): meia-largura =
             // |pos.w| - |pos.w[n - 1]| + minSize (com o emissor ativo, a mais nova tem idade ~0 e da |pos.w|).
-            float wHead = 0.f;
-            if (s.type == FX_STRIPE) { float ph[4]; P(s.n - 1, ph); wHead = std::fabs(ph[3]) - ram.f32(b + fxoff::minSize); }
-            auto halfW = [&](float w) { return std::max(std::fabs(w) - wHead, 0.f); };
-            auto off = [&](int i, float o[3]) {
-                float pa[4], pb[4];
-                P(std::max(i - 1, 0), pa); P(std::min(i + 1, s.n - 1), pb);
-                auto scr = [&](const float *q, float &x, float &y) {
-                    const float z = view.depth[0] * q[0] + view.depth[1] * q[1] + view.depth[2] * q[2] + view.depth[3];
-                    const float iz = 1.f / std::max(z, 1e-3f);
-                    x = (view.ox[0] * q[0] + view.ox[1] * q[1] + view.ox[2] * q[2] + view.ox[3]) * iz;
-                    y = (view.oy[0] * q[0] + view.oy[1] * q[1] + view.oy[2] * q[2] + view.oy[3]) * iz;
-                };
-                float xa, ya, xb, yb, pi[4];
-                scr(pa, xa, ya); scr(pb, xb, yb); P(i, pi);
+            // Polilinha: as particulas (stripe, sweepTrail) ou a Catmull-Rom do sprine, cada ponto com a meia-largura e a particula
+            // do trecho (para a cor no draw).
+            struct Pt { float p[3], hw, u; int seg; };
+            std::vector<Pt> pts;
+            pts.reserve(size_t(s.n));
+            if (s.type == FX_SPRINE) {
+                // sprine (sprinePacketInit): curva com N = max(2, (int)(info +0x2D8C + 0,5)) passos por trecho, que o VU1 anda por
+                // diferencas avancadas (a contagem de quadrados casa com a checagem). Aqui Catmull-Rom; os pontos do VU1 ficam a ~2 px
+                // (sem padrao: o VU1 parece perturbar cada particula com os bits aleatorios de pos.w, randBits12 no particleEmit).
+                // Meia-largura: minSize, NAO conferida (minSize + exp*idade e + (max-min)*bits12/4096 deram de 1,3x a 3,5x a do VU1).
+                const int N = std::max(2, int(ram.f32(b + 0x2D8C) + 0.5f));
+                for (int i = 0; i + 1 < s.n; ++i) {
+                    float q[4][4];
+                    P(std::max(i - 1, 0), q[0]); P(i, q[1]); P(i + 1, q[2]); P(std::min(i + 2, s.n - 1), q[3]);
+                    if (!std::isfinite(q[1][0]) || !std::isfinite(q[2][0])) continue;
+                    for (int k = (i == 0 ? 0 : 1); k <= N; ++k) {
+                        const float t = float(k) / float(N), t2 = t * t, t3 = t2 * t;
+                        const float w0 = -0.5f * t3 + t2 - 0.5f * t, w1 = 1.5f * t3 - 2.5f * t2 + 1.f, w2 = -1.5f * t3 + 2.f * t2 + 0.5f * t, w3 = 0.5f * t3 - 0.5f * t2;
+                        Pt pt;
+                        for (int a = 0; a < 3; ++a) pt.p[a] = w0 * q[0][a] + w1 * q[1][a] + w2 * q[2][a] + w3 * q[3][a];
+                        pt.hw = ram.f32(b + fxoff::minSize);
+                        pt.u = (float(i) + t) / float(s.n - 1);
+                        pt.seg = i;
+                        pts.push_back(pt);
+                    }
+                }
+            } else {
+                float wHead = 0.f;
+                if (s.type == FX_STRIPE) { float ph[4]; P(s.n - 1, ph); wHead = std::fabs(ph[3]) - ram.f32(b + fxoff::minSize); }
+                for (int i = 0; i < s.n; ++i) {
+                    float q[4];
+                    P(i, q);
+                    if (!std::isfinite(q[0])) continue;
+                    pts.push_back({{q[0], q[1], q[2]}, std::max(std::fabs(q[3]) - wHead, 0.f), float(i) / float(std::max(s.n - 1, 1)), i});
+                }
+            }
+            auto scr = [&](const float *q, float &x, float &y) {
+                const float z = view.depth[0] * q[0] + view.depth[1] * q[1] + view.depth[2] * q[2] + view.depth[3];
+                const float iz = 1.f / std::max(z, 1e-3f);
+                x = (view.ox[0] * q[0] + view.ox[1] * q[1] + view.ox[2] * q[2] + view.ox[3]) * iz;
+                y = (view.oy[0] * q[0] + view.oy[1] * q[1] + view.oy[2] * q[2] + view.oy[3]) * iz;
+            };
+            auto off = [&](size_t i, float o[3]) {
+                float xa, ya, xb, yb;
+                scr(pts[i > 0 ? i - 1 : 0].p, xa, ya); scr(pts[std::min(i + 1, pts.size() - 1)].p, xb, yb);
                 float nx = -(yb - ya), ny = xb - xa;
                 const float l = std::sqrt(nx * nx + ny * ny);
                 if (!(l > 1e-9f)) return false;
-                nx *= halfW(pi[3]) / l; ny *= halfW(pi[3]) / l;
+                nx *= pts[i].hw / l; ny *= pts[i].hw / l;
                 for (int a = 0; a < 3; ++a) o[a] = view.right[a] * nx + view.up[a] * ny;
                 return true;
             };
-            for (int i = 0; i + 1 < s.n; ++i) {
-                float p0[4], p1[4], o0[3], o1[3];
-                P(i, p0); P(i + 1, p1);
-                if (!std::isfinite(p0[0]) || !std::isfinite(p1[0])) continue;
+            for (size_t i = 0; i + 1 < pts.size(); ++i) {
+                const Pt &a0 = pts[i], &a1 = pts[i + 1];
+                if (s.type != FX_SPRINE && a1.seg != a0.seg + 1) continue;   // particula invalida no meio: sem ponte
+                float o0[3], o1[3];
                 if (!off(i, o0) || !off(i + 1, o1)) continue;
-                const float u0 = float(i) / float(s.n - 1), u1 = float(i + 1) / float(s.n - 1);
                 for (int a = 0; a < 3; ++a) {
-                    c[0][a] = p0[a] - o0[a]; c[1][a] = p0[a] + o0[a];
-                    c[2][a] = p1[a] + o1[a]; c[3][a] = p1[a] - o1[a];
+                    c[0][a] = a0.p[a] - o0[a]; c[1][a] = a0.p[a] + o0[a];
+                    c[2][a] = a1.p[a] + o1[a]; c[3][a] = a1.p[a] - o1[a];
                 }
-                uv[0][0] = u0; uv[0][1] = 0.f; uv[1][0] = u0; uv[1][1] = 1.f;
-                uv[2][0] = u1; uv[2][1] = 1.f; uv[3][0] = u1; uv[3][1] = 0.f;
-                f(i, c, uv);
+                uv[0][0] = a0.u; uv[0][1] = 0.f; uv[1][0] = a0.u; uv[1][1] = 1.f;
+                uv[2][0] = a1.u; uv[2][1] = 1.f; uv[3][0] = a1.u; uv[3][1] = 0.f;
+                f(a0.seg, c, uv);
             }
             return;
         }
