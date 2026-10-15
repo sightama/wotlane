@@ -33,6 +33,7 @@ void mathfRandVector(_fvector *v, float r);
 extern "C" float atan2f(float y, float x);
 extern "C" float fabsf(float);
 float hdHatTest(_fvector *pos, _fvector *out, float up, bool b, float down);
+float mathfPitchFromPointToPoint(_fvector *from, _fvector *to);
 /* One of the 32 dynamic point lights (common/PointLight). */
 class PointLight {
 public:
@@ -201,21 +202,21 @@ void Weapons::InitWeaponsBefore(void)
         w->m_dyn.damage = 0;
         w->m_dyn.lifetime = 0;
         w->m_dyn.f18 = 0;
-        w->m_dyn.f1C = 0;
+        w->m_dyn.turnRate = 0;
         w->m_dyn.speed = 0;
-        w->m_48 = 0;
+        w->m_homing = 0;
         w->m_targetPoint = 0;
         w->m_type = 0;
-        w->m_80.x = 0;
-        w->m_80.y = 0;
-        w->m_80.z = 0;
-        w->m_54 = 0;
+        w->m_wobble.x = 0;
+        w->m_wobble.y = 0;
+        w->m_wobble.z = 0;
+        w->m_wobbleTime = 0;
         w->m_5C = 0;
         w->m_cs = 0;
-        w->m_A0.x = 0;
-        w->m_A0.y = 0;
-        w->m_A0.z = 0;
-        _fvector *v = &w->m_B0;
+        w->m_vel.x = 0;
+        w->m_vel.y = 0;
+        w->m_vel.z = 0;
+        _fvector *v = &w->m_spin;
         v->x = 0;
         v->y = 0;
         v->z = 0;
@@ -259,7 +260,7 @@ void Weapons::InitWeaponsAfter(void)
         d->damage = 1.0f;
         d->lifetime = 3.0f;
         d->f18 = 1.0f;
-        d->f1C = 0;
+        d->turnRate = 0;
         d->speed = 800.0f;
     }
     red->r = 96.0f;
@@ -286,137 +287,137 @@ void Weapons::InitWeaponsAfter(void)
     m_params[13].damage = 15.0f;
     m_params[13].lifetime = 10.0f;
     m_params[13].f18 = 1.0f;
-    m_params[13].f1C = 0.01f;
+    m_params[13].turnRate = 0.01f;
     m_params[13].speed = 700.0f;
 
     m_params[21].damage = 1.0f;
     m_params[21].lifetime = 8.0f;
     m_params[21].f18 = 1.0f;
-    m_params[21].f1C = 0.02f;
+    m_params[21].turnRate = 0.02f;
     m_params[21].speed = 500.0f;
 
     m_params[22].damage = 1.0f;
     m_params[22].lifetime = 8.0f;
     m_params[22].f18 = 1.0f;
-    m_params[22].f1C = 0.02f;
+    m_params[22].turnRate = 0.02f;
     m_params[22].speed = 500.0f;
 
     m_params[23].damage = 5.0f;
     m_params[23].lifetime = 10.0f;
     m_params[23].f18 = 1.0f;
-    m_params[23].f1C = 0;
+    m_params[23].turnRate = 0;
     m_params[23].speed = 800.0f;
 
     m_params[24].damage = 1.0f;
     m_params[24].lifetime = 3.0f;
     m_params[24].f18 = 1.0f;
-    m_params[24].f1C = 0;
+    m_params[24].turnRate = 0;
     m_params[24].speed = 800.0f;
 
     m_params[25].damage = 3.0f;
     m_params[25].lifetime = 2.0f;
     m_params[25].f18 = 1.0f;
-    m_params[25].f1C = 0;
+    m_params[25].turnRate = 0;
     m_params[25].speed = 1400.0f;
 
     m_params[26].damage = 8.0f;
     m_params[26].lifetime = 5.0f;
     m_params[26].f18 = 0.05f;
-    m_params[26].f1C = 0.08f;
+    m_params[26].turnRate = 0.08f;
     m_params[26].speed = 700.0f;
 
     m_params[27].damage = 8.0f;
     m_params[27].lifetime = 5.0f;
     m_params[27].f18 = 0.05f;
-    m_params[27].f1C = 1.5f;
+    m_params[27].turnRate = 1.5f;
     m_params[27].speed = 700.0f;
-    m_params[27].f28 = 1.75f;
+    m_params[27].pitchRate = 1.75f;
 
     m_params[28].damage = 3.0f;
     m_params[28].lifetime = 2.0f;
     m_params[28].f18 = 1.0f;
-    m_params[28].f1C = 0;
+    m_params[28].turnRate = 0;
     m_params[28].speed = 1400.0f;
 
     m_params[29].damage = 3.0f;
     m_params[29].lifetime = 2.0f;
     m_params[29].f18 = 1.0f;
-    m_params[29].f1C = 0.2f;
+    m_params[29].turnRate = 0.2f;
     m_params[29].speed = 1400.0f;
-    m_params[29].f28 = 0.4f;
+    m_params[29].pitchRate = 0.4f;
 
     m_params[30].damage = 1.0f;
     m_params[30].lifetime = 2.0f;
     m_params[30].f18 = 1.0f;
-    m_params[30].f1C = 0;
+    m_params[30].turnRate = 0;
     m_params[30].speed = 800.0f;
 
     m_params[31].damage = 1.0f;
     m_params[31].lifetime = 2.0f;
     m_params[31].f18 = 1.0f;
-    m_params[31].f1C = 0.2f;
+    m_params[31].turnRate = 0.2f;
     m_params[31].speed = 800.0f;
-    m_params[31].f28 = 0.4f;
+    m_params[31].pitchRate = 0.4f;
 
     m_params[32].damage = 3.0f;
     m_params[32].lifetime = 2.0f;
     m_params[32].f18 = 1.0f;
-    m_params[32].f1C = 0;
+    m_params[32].turnRate = 0;
     m_params[32].speed = 1400.0f;
 
     m_params[33].damage = 3.0f;
     m_params[33].lifetime = 2.0f;
     m_params[33].f18 = 1.0f;
-    m_params[33].f1C = 0;
+    m_params[33].turnRate = 0;
     m_params[33].speed = 1400.0f;
 
     m_params[34].damage = 3.0f;
     m_params[34].lifetime = 2.0f;
     m_params[34].f18 = 1.0f;
-    m_params[34].f1C = 0;
+    m_params[34].turnRate = 0;
     m_params[34].speed = 1400.0f;
 
     m_params[35].damage = 3.0f;
     m_params[35].lifetime = 2.0f;
     m_params[35].f18 = 1.0f;
-    m_params[35].f1C = 0;
+    m_params[35].turnRate = 0;
     m_params[35].speed = 1400.0f;
 
     m_params[36].damage = 1.0f;
     m_params[36].lifetime = 2.0f;
     m_params[36].f18 = 1.0f;
-    m_params[36].f1C = 0;
+    m_params[36].turnRate = 0;
     m_params[36].speed = 1000.0f;
 
     m_params[37].damage = 1.0f;
     m_params[37].lifetime = 2.0f;
     m_params[37].f18 = 1.0f;
-    m_params[37].f1C = 0;
+    m_params[37].turnRate = 0;
     m_params[37].speed = 1000.0f;
 
     m_params[38].damage = 1.0f;
     m_params[38].lifetime = 2.0f;
     m_params[38].f18 = 1.0f;
-    m_params[38].f1C = 0.07f;
+    m_params[38].turnRate = 0.07f;
     m_params[38].speed = 1200.0f;
 
     m_params[42].damage = 30.0f;
     m_params[42].lifetime = 0.05f;
     m_params[42].f18 = 1.0f;
-    m_params[42].f1C = 0;
+    m_params[42].turnRate = 0;
     m_params[42].speed = 400.0f;
 
     m_params[43].damage = 10.0f;
     m_params[43].lifetime = 1.2f;
     m_params[43].f18 = 1.0f;
-    m_params[43].f1C = 0;
+    m_params[43].turnRate = 0;
     m_params[43].speed = 250.0f;
 
     /* faster in match mode */
     m_params[44].damage = (float)game->m_matchMode + 1.75f;
     m_params[44].lifetime = 4.0f;
     m_params[44].f18 = 1.0f;
-    m_params[44].f1C = 0.04f;
+    m_params[44].turnRate = 0.04f;
     m_params[44].speed = 800.0f;
 }
 #else
@@ -470,21 +471,21 @@ int Weapons::WeaponInRadius(_fvector *pos, float r, Weapon **out)
     }
     return 0;
 }
-/* Homing (m_48: 1 lock on the target, 2 lead the monster, 3 vertical) or, unguided, the spin in m_B0 easing out in pitch and
+/* Homing (m_homing: 1 lock on the target, 2 lead the monster, 3 vertical) or, unguided, the spin in m_spin easing out in pitch and
    heading. A cloaked target monster breaks the lock. */
 void Weapon::UpdateRotation(void)
 {
     if (m_targetId > 0) {
         DbInteractive *t = Interactives::getInteractive(m_targetId);
         if (t->m_kind == 1 && ((Monster *)t)->m_cloaked)
-            m_48 = 0;
+            m_homing = 0;
     }
-    switch (m_48) {
+    switch (m_homing) {
     case 0:
-        if (m_B0.x != 0.0f || m_B0.y != 0.0f || m_B0.z != 0.0f) {
-            m_B0.x = smoothEasyInAngle(m_B0.x, 0.0f, 0.1f, 0.01f);
-            m_B0.z = smoothEasyInAngle(m_B0.z, 0.0f, 0.1f, 0.01f);
-            vecAdd(&m_cs->rot, &m_cs->rot, &m_B0);
+        if (m_spin.x != 0.0f || m_spin.y != 0.0f || m_spin.z != 0.0f) {
+            m_spin.x = smoothEasyInAngle(m_spin.x, 0.0f, 0.1f, 0.01f);
+            m_spin.z = smoothEasyInAngle(m_spin.z, 0.0f, 0.1f, 0.01f);
+            vecAdd(&m_cs->rot, &m_cs->rot, &m_spin);
             boundEulerAngle(&m_cs->rot.x);
             boundEulerAngle(&m_cs->rot.y);
             boundEulerAngle(&m_cs->rot.z);
@@ -502,10 +503,65 @@ void Weapon::UpdateRotation(void)
         break;
     }
 }
+/* Homing mode 1: turn toward the target's pin point, heading at m_dyn.turnRate and pitch at m_dyn.pitchRate (turnRate when 0). An untargetable
+   target drops the lock; so does one more than angle2C (heading) or angle30 (pitch) off, unless the weapon wobbles (m_wobble.x).
+   Before the first field, or without a target, it only spins by m_spin. */
+#ifdef NON_MATCHING
+/* equivalent: 45/191 words, 0x2f4 vs 0x2fc; the 0.0f constant is kept in $f20/$f21 from the start and the eased angle lands in $f1 */
+void Weapon::UpdateLockOnTarget(void)
+{
+    float d[2];
+    float a;
+    float r;
+    DbInteractive *t;
+
+    if (m_targetId && m_age > 0) {
+        t = Interactives::getInteractive(m_targetId);
+        if (!t || !(t->m_flags & 2)) {
+            m_targetId = 0;
+            return;
+        }
+        a = mathfHeadingFromPointToPoint(&m_cs->trans, PIN_TRANS(t));
+        d[0] = a - m_cs->rot.z;
+        boundEulerAngle(&d[0]);
+        if (m_wobble.x == 0.0f && fabsf(d[0]) > m_dyn.angle2C)
+            goto lost;
+        r = smoothEasyInAngle(m_cs->rot.z, a, m_dyn.turnRate, 0.0001f);
+        m_spin.z = r - m_cs->rot.z;
+        m_cs->rot.z = r;
+        a = mathfPitchFromPointToPoint(&m_cs->trans, PIN_TRANS(t));
+        d[1] = a - m_cs->rot.x;
+        boundEulerAngle(&d[1]);
+        if (m_wobble.x == 0.0f && fabsf(d[1]) > m_dyn.angle30) {
+        lost:
+            m_hugGround = 0;
+            m_targetId = 0;
+            m_homing = 0;
+            return;
+        }
+        r = smoothEasyInAngle(m_cs->rot.x, a, m_dyn.pitchRate != 0.0f ? m_dyn.pitchRate : m_dyn.turnRate, 0.0001f);
+        m_spin.x = r - m_cs->rot.x;
+        m_cs->rot.x = r;
+        if (m_wobble.x != 0.0f)
+            UpdateErraticity();
+        vecAdd(&m_cs->rot, &m_cs->rot, &m_spin);
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+    } else if (m_spin.x != 0.0f || m_spin.y != 0.0f || m_spin.z != 0.0f) {
+        m_cs->rot.x += m_spin.x;
+        m_cs->rot.y += m_spin.y;
+        m_cs->rot.z += m_spin.z;
+        boundEulerAngle(&m_cs->rot.x);
+        boundEulerAngle(&m_cs->rot.y);
+        boundEulerAngle(&m_cs->rot.z);
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockOnTarget__6Weapon);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockAheadOfMonster__6Weapon);
 /* Homing mode 3: turn heading then pitch toward m_targetPos at the thrower's LavaBlast turn rates; a target more than 90
-   degrees off either way breaks the lock. Before the first field the weapon only spins by m_B0. */
+   degrees off either way breaks the lock. Before the first field the weapon only spins by m_spin. */
 #ifdef NON_MATCHING
 /* equivalent: 17/170 words, 0x29c vs 0x2a8; scheduling of the pi/2 and 0 constants (f22/f23 swapped) and of the bail-out branches */
 void Weapon::UpdateLockVertical(void)
@@ -524,7 +580,7 @@ void Weapon::UpdateLockVertical(void)
         d[0] = a - m_cs->rot.z;
         boundEulerAngle(&d[0]);
         if (fabsf(d[0]) > 1.5707964f) {
-            m_48 = 0;
+            m_homing = 0;
             m_targetId = 0;
             return;
         }
@@ -538,19 +594,19 @@ void Weapon::UpdateLockVertical(void)
         d[1] = a - m_cs->rot.x;
         boundEulerAngle(&d[1]);
         if (fabsf(d[1]) > 1.5707964f) {
-            m_B0.x = d[1];
+            m_spin.x = d[1];
             m_targetId = 0;
-            m_48 = 0;
-            m_60 = 0;
+            m_homing = 0;
+            m_hugGround = 0;
             return;
         }
         m_cs->rot.x = smoothEasyInAngle(m_cs->rot.x, a, *(float *)(owner + 0x198), 0.0001f);
-        vecAdd(&m_cs->rot, &m_cs->rot, &m_B0);
+        vecAdd(&m_cs->rot, &m_cs->rot, &m_spin);
         mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
-    } else if (m_B0.x != 0.0f || m_B0.y != 0.0f || m_B0.z != 0.0f) {
-        m_cs->rot.x += m_B0.x;
-        m_cs->rot.y += m_B0.y;
-        m_cs->rot.z += m_B0.z;
+    } else if (m_spin.x != 0.0f || m_spin.y != 0.0f || m_spin.z != 0.0f) {
+        m_cs->rot.x += m_spin.x;
+        m_cs->rot.y += m_spin.y;
+        m_cs->rot.z += m_spin.z;
         boundEulerAngle(&m_cs->rot.x);
         boundEulerAngle(&m_cs->rot.y);
         boundEulerAngle(&m_cs->rot.z);
@@ -560,49 +616,49 @@ void Weapon::UpdateLockVertical(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockVertical__6Weapon);
 #endif
-/* Wobble of an unsteady projectile: every m_58 fields (15..60) a new random spin target, up to m_80.x degrees in heading
+/* Wobble of an unsteady projectile: every m_wobblePeriod fields (15..60) a new random spin target, up to m_wobble.x degrees in heading
    (at least 5) and in pitch, either sign; the spin follows it for the first half of the period and settles in the second.
-   Within 300 of the target the wobble (and m_dyn.f1C) eases out. */
+   Within 300 of the target the wobble (and m_dyn.turnRate) eases out. */
 #ifdef NON_MATCHING
 /* equivalent: 67/158 words, 0x26c vs 0x278; the target pointer is picked before the m_cs load and the distance compare uses other registers */
 void Weapon::UpdateErraticity(void)
 {
     _fvector *t;
 
-    if (m_58 < ++m_54) {
-        m_54 = 0;
-        m_58 = mathfRand(15, 60);
+    if (m_wobblePeriod < ++m_wobbleTime) {
+        m_wobbleTime = 0;
+        m_wobblePeriod = mathfRand(15, 60);
         if (mathfRand(0, 1))
-            m_80.y = mathfRandf(0.08726646f, m_80.x * 0.017453292f);
+            m_wobble.y = mathfRandf(0.08726646f, m_wobble.x * 0.017453292f);
         else
-            m_80.y = -mathfRandf(0.08726646f, m_80.x * 0.017453292f);
+            m_wobble.y = -mathfRandf(0.08726646f, m_wobble.x * 0.017453292f);
         if (mathfRand(0, 1))
-            m_80.z = mathfRandf(0.0f, m_80.x * 0.017453292f);
+            m_wobble.z = mathfRandf(0.0f, m_wobble.x * 0.017453292f);
         else
-            m_80.z = -mathfRandf(0.0f, m_80.x * 0.017453292f);
+            m_wobble.z = -mathfRandf(0.0f, m_wobble.x * 0.017453292f);
     }
     if (m_targetId > 0)
         t = &Interactives::getInteractive(m_targetId)->m_cs->trans;
     else
         t = m_targetPoint;
     if (mathfManhatDist(&m_cs->trans, t) < 300.0f) {
-        m_54 = m_58;
-        m_80.x = (int)smoothEasyIn(m_80.x, 0.0f, 0.08f, 0.001f);
-        m_dyn.f1C = smoothEasyIn(m_dyn.f1C, 0.1f, 0.08f, 0.001f);
+        m_wobbleTime = m_wobblePeriod;
+        m_wobble.x = (int)smoothEasyIn(m_wobble.x, 0.0f, 0.08f, 0.001f);
+        m_dyn.turnRate = smoothEasyIn(m_dyn.turnRate, 0.1f, 0.08f, 0.001f);
     }
-    if (m_54 < m_58 >> 1) {
-        m_B0.x = smoothEasyInAngle(m_B0.x, m_80.z, 0.1f, 0.0001f);
-        m_B0.z = smoothEasyInAngle(m_B0.z, m_80.y, 0.1f, 0.0001f);
+    if (m_wobbleTime < m_wobblePeriod >> 1) {
+        m_spin.x = smoothEasyInAngle(m_spin.x, m_wobble.z, 0.1f, 0.0001f);
+        m_spin.z = smoothEasyInAngle(m_spin.z, m_wobble.y, 0.1f, 0.0001f);
     } else {
-        m_B0.x = smoothEasyInAngle(m_B0.x, 0.0f, 0.07f, 0.0001f);
-        m_B0.z = smoothEasyInAngle(m_B0.z, 0.0f, 0.07f, 0.0001f);
+        m_spin.x = smoothEasyInAngle(m_spin.x, 0.0f, 0.07f, 0.0001f);
+        m_spin.z = smoothEasyInAngle(m_spin.z, 0.0f, 0.07f, 0.0001f);
     }
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateErraticity__6Weapon);
 #endif
-/* Moves the weapon: the forward speed m_A0.y eases toward m_dyn.speed (mph to units per field; slowing down is near
-   instant), m_A0 is applied in the cs frame, a ballistic arc overrides z, and with m_60 set the weapon hugs the ground 5 above
+/* Moves the weapon: the forward speed m_vel.y eases toward m_dyn.speed (mph to units per field; slowing down is near
+   instant), m_vel is applied in the cs frame, a ballistic arc overrides z, and with m_hugGround set the weapon hugs the ground 5 above
    the hat. A lava ball that starts falling becomes a homing shot (750 mph). */
 #ifdef NON_MATCHING
 /* equivalent: 65/204 words, 0x330 vs 0x328; the 0.0f constant is hoisted to $f20 and the ground-hug branches are laid out differently */
@@ -615,18 +671,18 @@ void Weapon::UpdateTranslation(void)
     float h;
     float rate;
 
-    if (m_A0.y != 0.0f)
+    if (m_vel.y != 0.0f)
         vecCopy(&m_prevPos, &m_cs->trans);
     target = m_dyn.speed * 0.024444444f;
-    m_A0.y = smoothEasyIn(m_A0.y, target, target < m_A0.y ? 0.0001f : m_dyn.f18, 0.0001f);
-    vecScale(&local, &m_A0, (float)timerGetFieldsLastFrame());
+    m_vel.y = smoothEasyIn(m_vel.y, target, target < m_vel.y ? 0.0001f : m_dyn.f18, 0.0001f);
+    vecScale(&local, &m_vel, (float)timerGetFieldsLastFrame());
     vecApplyRows(&world, m_cs->mat, &local);
     vecAdd(&m_cs->trans, &m_cs->trans, &world);
     if (m_vz != 0.0f) {
         t = (float)(timerGetCurTics() - m_launchTics) / 576.0f * 0.001f;
         m_cs->trans.z = m_startZ + m_vz * t + m_gravity * (t * t);
     }
-    if (m_60) {
+    if (m_hugGround) {
         h = hdHatTest(&m_cs->trans, &world, 0.0f, false, 4096.0f);
         if (m_targetId || m_targetPoint) {
             if (!(0.0f < h && h < 5.0f))
@@ -642,16 +698,16 @@ void Weapon::UpdateTranslation(void)
 light:
     if (m_pointLight >= 0)
         pointLights.lights[m_pointLight].SetPos(&m_cs->trans);
-    if ((unsigned)(m_type - 0x27) < 3 && m_50 && m_cs->trans.z < m_prevPos.z) {
-        m_48 = 1;
-        m_dyn.f1C = 0.1f;
+    if ((unsigned)(m_type - 0x27) < 3 && m_lavaHoming && m_cs->trans.z < m_prevPos.z) {
+        m_homing = 1;
+        m_dyn.turnRate = 0.1f;
         m_dyn.speed = 750.0f;
-        m_50 = 0;
+        m_lavaHoming = 0;
         m_vz = 0;
         m_gravity = 0;
         m_maxRange = 0;
     }
-    if (m_48 == 1 && m_vz != 0.0f && m_cs->trans.z < m_prevPos.z)
+    if (m_homing == 1 && m_vz != 0.0f && m_cs->trans.z < m_prevPos.z)
         m_vz = 0;
 }
 #else
@@ -724,14 +780,14 @@ int Weapons::CreateStaticWeapon(Weapon::WeaponType type, int byId, int targetId,
             w = &m_weapons[i];
             w->m_active = 1;
             w->m_age = 0;
-            w->m_50 = 0;
-            w->m_80.x = 0;
-            w->m_80.y = 0;
-            w->m_80.z = 0;
-            w->m_54 = 0;
-            w->m_60 = 0;
+            w->m_lavaHoming = 0;
+            w->m_wobble.x = 0;
+            w->m_wobble.y = 0;
+            w->m_wobble.z = 0;
+            w->m_wobbleTime = 0;
+            w->m_hugGround = 0;
             w->m_ownerId = byId;
-            w->m_48 = targetId != 0;
+            w->m_homing = targetId != 0;
             w->m_type = type;
             w->m_targetId = targetId;
             w->m_cs = CsPool::csActivate();
@@ -746,11 +802,11 @@ int Weapons::CreateStaticWeapon(Weapon::WeaponType type, int byId, int targetId,
             vecCopy(&w->m_prevPos, pos);
             vecCopy(&w->m_cs->rot, rot);
             mathfRotMatrixRPH(w->m_cs->mat, &w->m_cs->rot);
-            a = &w->m_A0;
+            a = &w->m_vel;
             a->x = 0;
             a->y = 0;
             a->z = 0;
-            b = &w->m_B0;
+            b = &w->m_spin;
             b->x = 0;
             b->y = 0;
             b->z = 0;
@@ -768,8 +824,8 @@ int Weapons::CreateStaticWeapon(Weapon::WeaponType type, int byId, int targetId,
     if (i == 100)
         return -1;
     w->InitWeapon();
-    if (w->m_dyn.f1C == 0.0f)
-        w->m_48 = 0;
+    if (w->m_dyn.turnRate == 0.0f)
+        w->m_homing = 0;
     return i;
 }
 #else
@@ -792,28 +848,28 @@ int Weapons::CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector 
             w->m_pickup = it;
             w->m_active = 1;
             w->m_ownerId = byId;
-            w->m_48 = targetId != 0;
+            w->m_homing = targetId != 0;
             w->m_type = 0x17;
             w->m_fx2 = -1;
             w->m_cs = ITER_PICKUP(it)->cs;
             w->m_targetId = targetId;
             w->m_fx = -1;
             w->m_age = 0;
-            w->m_50 = 0;
-            w->m_80.x = 0;
-            w->m_80.y = 0;
-            w->m_80.z = 0;
-            w->m_54 = 0;
-            w->m_60 = 0;
+            w->m_lavaHoming = 0;
+            w->m_wobble.x = 0;
+            w->m_wobble.y = 0;
+            w->m_wobble.z = 0;
+            w->m_wobbleTime = 0;
+            w->m_hugGround = 0;
             w->m_vz = 0;
             vecCopy(&w->m_cs->rot, rot);
             mathfRotMatrixRPH(w->m_cs->mat, rot);
             vecCopy(&w->m_prevPos, &w->m_cs->trans);
-            a = &w->m_A0;
+            a = &w->m_vel;
             a->x = 0;
             a->y = 0;
             a->z = 0;
-            b = &w->m_B0;
+            b = &w->m_spin;
             b->x = 0;
             b->y = 0;
             b->z = 0;
@@ -831,8 +887,8 @@ int Weapons::CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector 
     w->InitWeapon();
     if (ITER_PICKUP(it)->pickupType != 7)
         w->CalculateBallisticArc();
-    if (w->m_dyn.f1C == 0.0f)
-        w->m_48 = 0;
+    if (w->m_dyn.turnRate == 0.0f)
+        w->m_homing = 0;
     return i;
 }
 #else
@@ -856,15 +912,15 @@ void Weapons::CreateLavaBall(_fvector *pos, _fvector *rot, _fvector *target, int
             w->m_age = 0;
             w->m_targetId = targetId;
             if (targetId > 0)
-                w->m_50 = 1;
+                w->m_lavaHoming = 1;
             else
-                w->m_50 = 0;
-            w->m_48 = 0;
-            w->m_80.x = 0;
-            w->m_80.y = 0;
-            w->m_80.z = 0;
-            w->m_54 = 0;
-            w->m_60 = 0;
+                w->m_lavaHoming = 0;
+            w->m_homing = 0;
+            w->m_wobble.x = 0;
+            w->m_wobble.y = 0;
+            w->m_wobble.z = 0;
+            w->m_wobbleTime = 0;
+            w->m_hugGround = 0;
             w->m_cs = CsPool::csActivate();
             if (!w->m_cs) {
                 printf(noCsMsg);
@@ -879,11 +935,11 @@ void Weapons::CreateLavaBall(_fvector *pos, _fvector *rot, _fvector *target, int
             mathfRotMatrixRPH(w->m_cs->mat, &w->m_cs->rot);
             w->m_targetPoint = target;
             vecCopy(&w->m_targetPos, target);
-            a = &w->m_A0;
+            a = &w->m_vel;
             a->x = 0;
             a->y = 0;
             a->z = 0;
-            b = &w->m_B0;
+            b = &w->m_spin;
             b->x = 0;
             b->y = 0;
             b->z = 0;

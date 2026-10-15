@@ -23,13 +23,13 @@ public:
         float lightRange;   /* 0x0C: 0 = no point light */
         float damage;       /* 0x10: handed to Interactives::dispatchHit */
         float lifetime;     /* 0x14: seconds in the table, fields (x60) once copied to a Weapon */
-        float f18;          /* 0x18 */
-        float f1C;          /* 0x1C: > 1 widens the angle limits below (InitWeapon) */
+        float f18;          /* 0x18: ease rate of the forward speed toward `speed` (UpdateTranslation) */
+        float turnRate;     /* 0x1C: homing heading rate (smoothEasyInAngle); 0 = no homing; > 1 widens the angle limits below */
         float speed;        /* 0x20: miles per hour (x 5280 / 3600 for units per second) */
         float radius;       /* 0x24: blast radius of DispatchRangeBasedDamage */
-        float f28;          /* 0x28 */
-        float angle2C;      /* 0x2C: pi/4 */
-        float angle30;      /* 0x30: 75 degrees */
+        float pitchRate;    /* 0x28: homing pitch rate (0 = turnRate) */
+        float angle2C;      /* 0x2C: pi/4; the lock breaks past this heading error (UpdateLockOnTarget) */
+        float angle30;      /* 0x30: 75 degrees; the same for the pitch */
         int pad34[3];
 
         Dynamics(void);
@@ -38,23 +38,23 @@ public:
     Dynamics m_dyn;         /* 0x00 */
     int m_active;           /* 0x40 */
     int m_age;              /* 0x44: fields alive; detonates or dies once past m_dyn.lifetime */
-    int m_48;               /* 0x48 */
+    int m_homing;           /* 0x48: 0 none, 1 lock on the target, 2 lead the monster, 3 vertical (UpdateRotation) */
     int m_type;             /* 0x4C: WeaponType; 0x17 = a thrown pickup (its cs belongs to the pickup) */
-    int m_50;
-    int m_54;               /* 0x54 */
-    int m_58;
+    int m_lavaHoming;       /* 0x50: lava ball with a target: turns into a homing shot once it falls */
+    int m_wobbleTime;       /* 0x54: fields into the current wobble period (UpdateErraticity) */
+    int m_wobblePeriod;     /* 0x58: 15..60 fields */
     int m_5C;               /* 0x5C */
-    int m_60;               /* 0x60 */
+    int m_hugGround;        /* 0x60: keep 5 above the ground (UpdateTranslation) */
     WeaponSound m_sound;    /* 0x64 */
     float m_startZ;         /* 0x6C: ballistic arc (CalculateBallisticArc): launch height */
     float m_vz;             /* 0x70: initial vertical speed */
     float m_gravity;        /* 0x74: z = startZ + vz t + gravity t^2 */
     int m_launchTics;       /* 0x78: timerGetCurTics() at launch */
     float m_maxRange;       /* 0x7C: beyond it the gravity is scaled down */
-    _fvector m_80;          /* 0x80 */
+    _fvector m_wobble;      /* 0x80: x amplitude (degrees, eased out near the target), y/z the current spin targets (radians) */
     FVECTOR m_prevPos;      /* 0x90: cs translation before this frame's move (GetVel) */
-    _fvector m_A0;          /* 0xA0 */
-    _fvector m_B0;          /* 0xB0 */
+    _fvector m_vel;         /* 0xA0: velocity per field in the cs frame (y forward) */
+    _fvector m_spin;        /* 0xB0: added to the cs rotation every field */
     _fvector m_C0;          /* 0xC0 */
     char padD0[0x120 - 0xD0];
     int m_ownerId;          /* 0x120: interactive id of the thrower */
