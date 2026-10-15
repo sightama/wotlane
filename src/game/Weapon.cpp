@@ -29,6 +29,7 @@ void mathfMatrixFromNormal(float (*m)[4], _fvector *n);
 /* a particle's position and matrix (common/particle) */
 #define PARTICLE_POS(p) ((_fvector *)((char *)(p) + 0x2D00))
 #define PARTICLE_MAT(p) ((float (*)[4])((char *)(p) + 0x2D20))
+void mathfRandVector(_fvector *v, float r);
 /* One of the 32 dynamic point lights (common/PointLight). */
 class PointLight {
 public:
@@ -81,7 +82,58 @@ static inline void vecSubNR(_fvector *dst, _fvector *a, _fvector *b)
                      : "=m"(*dst) : "r"(a), "r"(b));
 }
 
+/* v /= |v| with one rsqrt.s, in the registers retail's inline uses */
 #ifdef NON_MATCHING
+static inline void vecNormalize(_fvector *v)
+{
+    register float x __asm__("$f3") = v->x;
+    register float y __asm__("$f4") = v->y;
+    register float z __asm__("$f2") = v->z;
+    register float s __asm__("$f5");
+    register float one __asm__("$f1");
+    register float inv __asm__("$f0");
+
+    __asm__("mula.s %1, %1\n\t"
+            "madda.s %2, %2\n\t"
+            "madd.s %0, %3, %3"
+            : "=f"(s) : "f"(x), "f"(y), "f"(z));
+    __asm__ volatile(".set noat\n\t"
+                     "lui $1, 0x3F80\n\t"
+                     "mtc1 $1, %4\n\t"
+                     ".set at\n\t"
+                     "rsqrt.s %3, %4, %5\n\t"
+                     "mul.s %6, %6, %3\n\t"
+                     "mul.s %7, %7, %3\n\t"
+                     "mul.s %8, %8, %3\n\t"
+                     "swc1 %6, %2\n\t"
+                     "swc1 %7, %0\n\t"
+                     "swc1 %8, %1"
+                     : "=m"(v->x), "=m"(v->y), "=m"(v->z), "=f"(inv), "=f"(one)
+                     : "f"(s), "f"(z), "f"(x), "f"(y));
+}
+/* a . b loaded from memory, in the registers retail's inline uses */
+static inline float vecDotMem(_fvector *a, _fvector *b)
+{
+    register float ax __asm__("$f1");
+    register float bx __asm__("$f5");
+    register float ay __asm__("$f4");
+    register float by __asm__("$f3");
+    register float az __asm__("$f2");
+    register float bz __asm__("$f0");
+
+    __asm__ volatile("lwc1 %0, 0(%6)\n\t"
+                     "lwc1 %1, 0(%7)\n\t"
+                     "lwc1 %2, 4(%6)\n\t"
+                     "lwc1 %3, 4(%7)\n\t"
+                     "lwc1 %4, 8(%6)\n\t"
+                     "lwc1 %5, 8(%7)\n\t"
+                     "mula.s %0, %1\n\t"
+                     "madda.s %2, %3\n\t"
+                     "madd.s %0, %4, %5"
+                     : "=&f"(ax), "=&f"(bx), "=&f"(ay), "=&f"(by), "=&f"(az), "=&f"(bz)
+                     : "r"(a), "r"(b) : "memory");
+    return ax;
+}
 /* x^2 + y^2 + z^2 on the FPU accumulator */
 static inline float sumSq3(float x, float y, float z)
 {
@@ -472,7 +524,37 @@ void Weapon::setCsTransform(_fvector *pos, float (&m)[4][4])
     vecCopy(&m_prevPos, &m_cs->trans);
     vecCopy(&m_cs->trans, pos);
 }
+/* Bounce direction off a surface of normal n, from the last frame's move: the mirrored unit direction when reflect is set,
+   otherwise a random direction around n (radius 0.25). A weapon that did not move counts as moving along +y. */
+#ifdef NON_MATCHING
+/* equivalent: 39/110 words, same size; the zero test of the move does not steal the normalize loads into its branch delay slots */
+void Weapon::ComputeReflection(_fvector *n, _fvector *out, bool reflect)
+{
+    FVECTOR v;
+    FVECTOR t;
+    float m[4][4];
+    FVECTOR r;
+    float k;
+
+    vecSub(&v, &m_cs->trans, &m_prevPos);
+    if (v.x == 0.0f && v.y == 0.0f && v.z == 0.0f)
+        v.y = 0.001f;
+    else
+        vecNormalize(&v);
+    k = -vecDotMem(&v, n);
+    if (reflect) {
+        vecScale(&t, n, k + k);
+        vecAdd(out, &v, &t);
+        vecNormalize(out);
+    } else {
+        mathfMatrixFromNormal(m, n);
+        mathfRandVector(&r, 0.25f);
+        vecApplyRows(out, m, &r);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", ComputeReflection__6WeaponP8_fvectorT1b);
+#endif
 /* A free weapon slot for a projectile of the given type at pos (rotation rot); returns its index, -1 if none is free or no
    cs is left. byId/targetId are interactive ids (0 = none); h is not used. */
 #ifdef NON_MATCHING
@@ -748,7 +830,129 @@ void Weapon::GetVel(_fvector &v)
 void Weapons::DecrementWeaponCount(Monster *m, int type)
 {
 }
-INCLUDE_ASM("asm/nonmatchings/game/Weapon", AddWeaponEpNode__7WeaponsiP9_hierhead);
+/* Model of a weapon type, from the level db (node db ids 4000..4042; only the first instance, id2 0, is kept). */
+void Weapons::AddWeaponEpNode(int idx, _hierhead *h)
+{
+    if (h->id2)
+        return;
+    switch (idx) {
+    case 4000:
+        m_epNodes[24] = h;
+        break;
+    case 4002:
+        m_epNodes[23] = h;
+        break;
+    case 4001:
+        m_epNodes[0] = h;
+        break;
+    case 4003:
+        m_epNodes[1] = h;
+        break;
+    case 4008:
+        m_epNodes[2] = h;
+        break;
+    case 4009:
+        m_epNodes[3] = h;
+        break;
+    case 4010:
+        m_epNodes[4] = h;
+        break;
+    case 4011:
+        m_epNodes[5] = h;
+        break;
+    case 4012:
+        m_epNodes[6] = h;
+        break;
+    case 4013:
+        m_epNodes[7] = h;
+        break;
+    case 4014:
+        m_epNodes[8] = h;
+        break;
+    case 4018:
+        m_epNodes[9] = h;
+        break;
+    case 4019:
+        m_epNodes[21] = h;
+        break;
+    case 4021:
+        m_epNodes[22] = h;
+        break;
+    case 4028:
+        m_epNodes[10] = h;
+        break;
+    case 4005:
+        m_epNodes[13] = h;
+        break;
+    case 4015:
+        m_epNodes[20] = h;
+        break;
+    case 4017:
+        m_epNodes[11] = h;
+        break;
+    case 4022:
+        m_epNodes[39] = h;
+        break;
+    case 4023:
+        m_epNodes[40] = h;
+        break;
+    case 4024:
+        m_epNodes[41] = h;
+        break;
+    case 4025:
+        m_epNodes[25] = h;
+        break;
+    case 4026:
+        m_epNodes[26] = h;
+        break;
+    case 4027:
+        m_epNodes[30] = h;
+        break;
+    case 4029:
+        m_epNodes[28] = h;
+        break;
+    case 4030:
+        m_epNodes[32] = h;
+        break;
+    case 4031:
+        m_epNodes[33] = h;
+        break;
+    case 4032:
+        m_epNodes[36] = h;
+        m_epNodes[38] = h;
+        break;
+    case 4033:
+        m_epNodes[27] = h;
+        break;
+    case 4034:
+        m_epNodes[31] = h;
+        break;
+    case 4035:
+        m_epNodes[29] = h;
+        break;
+    case 4036:
+        m_epNodes[34] = h;
+        break;
+    case 4037:
+        m_epNodes[35] = h;
+        break;
+    case 4038:
+        m_epNodes[37] = h;
+        break;
+    case 4040:
+        m_epNodes[42] = h;
+        break;
+    case 4041:
+        m_epNodes[43] = h;
+        break;
+    case 4042:
+        m_epNodes[44] = h;
+        break;
+    }
+}
+/* retail pads the jump table of AddWeaponEpNode to an even word count */
+__asm__(".section .rodata\n\t.word 0\n\t.text");
+
 /* A ground fire at pos (radius r) credited to interactive id; when all ten are burning, slot 0 is taken over. */
 #ifdef NON_MATCHING
 /* equivalent: 81/95 words, same size; pos and id swap $s1/$s2 */
