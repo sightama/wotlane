@@ -631,6 +631,8 @@ class Cameras {
 public:
     char pad0[0x2A58];
     int m_state;              /* 0x2A58: 7 = cinema */
+    char pad2A5C[0x2AF8 - 0x2A5C];
+    int m_unk2AF8;            /* 0x2AF8: set to 1 by StateGrappleLift::transitionInto along with the close-combat camera */
 
     static Cameras m_cameras;
     static void InitCrushMonsters(Monster *a, Monster *b);
@@ -646,6 +648,7 @@ public:
     static void LeaveUnifiedView(unsigned reason);
     static int ccMonsNoLongerInRange(float dist);
     static void InitCCCamera(Monster *a, Monster *b);
+    static void InitCCCameraFromThrow(Monster *a, Monster *b);
 };
 
 void fontSetColor(int font, int r, int g, int b, int a);
