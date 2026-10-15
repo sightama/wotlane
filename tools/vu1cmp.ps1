@@ -1,11 +1,14 @@
 # Checagem VU1 x nativo sem jogo, a partir de instantaneos (.vu1snap) gravados pelo runtime com WOTM_VU1CHECK_SNAP=<prefixo>.
 # Roda `ps2EntryRunner --vu1cmp` (wotm_vu1check.inc) para cada arquivo e imprime as linhas [vu1check]; leva ~1 s por instantaneo.
-#   tools\vu1cmp.ps1 <arquivo.vu1snap | pasta> [-Dump <prefixo>] [-Full] [-Build build_dev]
-#   -Full: todas as linhas [vu1check] (padrao: so as linhas de resumo de cada instantaneo: objetos, atributos, particulas, sprites)
+#   tools\vu1cmp.ps1 <arquivo.vu1snap | pasta> [-Frame <g_frame>] [-Dump <prefixo>] [-Full] [-Build build_dev]
+#   Um arquivo guarda os quadros de uma sessao (gatilho/rajada: WOTM_VU1CHECK_WHEN, WOTM_VU1CHECK_BURST); todos sao comparados.
+#   -Frame <g_frame>: so esse quadro do arquivo
+#   -Full: todas as linhas [vu1check] (padrao: so as linhas de resumo de cada quadro: objetos, atributos, particulas, sprites)
 #   -Dump <prefixo>: grava os triangulos de cada checagem em <prefixo>_<g_frame>.csv (o mesmo WOTM_VU1CHECK_DUMP)
 # A pasta do runtime vem de WOTM_RECOMP_DIR ou de .wotm_recomp_dir na raiz do repo (gravado pelo build_runtime.bat).
 param(
     [Parameter(Mandatory = $true)][string]$Path,
+    [int]$Frame = 0,
     [string]$Dump = '',
     [switch]$Full,
     [string]$Build = 'build_dev'
@@ -24,6 +27,7 @@ $out = Join-Path $env:TEMP 'wotm_vu1cmp.out.log'
 $rc = 0
 foreach ($f in $files) {
     $args = "--vu1cmp `"$f`""
+    if ($Frame -gt 0) { $args += " --frame $Frame" }
     if ($Dump) { $args += " --dump `"$Dump`"" }
     # Start-Process redireciona sem passar pelo PowerShell (o `2>` do PS 5 grava UTF-16 e quebra as linhas longas)
     $p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait -PassThru -RedirectStandardError $err -RedirectStandardOutput $out

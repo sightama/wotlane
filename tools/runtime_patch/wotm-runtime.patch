@@ -3840,10 +3840,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..a6a2d31
+index 0000000..025aa21
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,1526 @@
+@@ -0,0 +1,1618 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -5107,67 +5107,103 @@ index 0000000..a6a2d31
 +// ---- Instantaneo do quadro amostrado (WOTM_VU1CHECK_SNAP=<prefixo>) e replay sem jogo (ps2EntryRunner --vu1cmp <arquivo>) ----
 +// O que o VU1 manda ao GS e funcao pura de um estado: a RAM no instante de cada cadeia (a camada nativa a le), memoria e registradores
 +// do VU1/VIF1 na entrada do quadro, e os bytes de cada cadeia DMA (o VIF1 so le a copia, nunca a RAM). O arquivo guarda isso em
-+// registros na ordem em que aconteceram: 'A' (entrada do hier(0,0): estado do VU1/VIF1, RAM e VRAM inteiras), 'C' (cadeia: paginas de
-+// 4 KB da RAM que mudaram desde o registro anterior, origens dos trechos e os bytes), 'P' (entrada do hier(0,1): paginas que mudaram),
-+// 'E' (fim). O replay refaz a sequencia dentro do runtime, sem jogo, e imprime a mesma saida [vu1check] da checagem ao vivo.
++// registros na ordem em que aconteceram, varios quadros no mesmo arquivo (<prefixo>_<g_frame do primeiro>.vu1snap): 'A' (1o quadro:
++// estado do VU1/VIF1, RAM e VRAM inteiras), 'a' (quadros seguintes: estado do VU1/VIF1 e so as paginas de 4 KB da RAM e da VRAM que
++// mudaram desde o registro anterior), 'C' (cadeia: paginas que mudaram, origens dos trechos e os bytes), 'P' (entrada do hier(0,1):
++// paginas que mudaram), 'E' (fim do quadro). Entre quadros da mesma fase quase tudo e igual, entao os seguintes custam poucos MB.
++// WOTM_VU1CHECK_SNAP_MAX=<MB> (padrao 2048) para de gravar ao passar do teto. O replay refaz a sequencia dentro do runtime, sem jogo,
++// e imprime a mesma saida [vu1check] da checagem ao vivo.
 +namespace snap
 +{
-+constexpr char kMagic[8] = {'W', 'V', 'U', '1', 'S', 'N', 'P', '1'};
++constexpr char kMagic[8] = {'W', 'V', 'U', '1', 'S', 'N', 'P', '2'};
 +struct Hdr { char magic[8]; uint32_t frame, ramSize, vramSize, vu1State, vifRegs; };
 +constexpr uint32_t kPage = 4096;
 +FILE *g_out = nullptr;
-+std::vector<uint8_t> g_prev;   // RAM como ficou no ultimo registro (para as paginas que mudaram)
++bool g_inFrame = false;
++std::vector<uint8_t> g_prev, g_prevVram;   // RAM e VRAM como ficaram no ultimo registro (para as paginas que mudaram)
 +PS2Runtime *g_rt = nullptr;
++uint64_t g_bytes = 0, g_max = 2048ull << 20;
++uint32_t g_frames = 0;
 +
-+void put(const void *p, size_t n) { if (g_out && std::fwrite(p, 1, n, g_out) != n) { std::fprintf(stderr, "[vu1check] erro ao gravar o instantaneo\n"); std::fclose(g_out); g_out = nullptr; } }
++void put(const void *p, size_t n)
++{
++    if (!g_out) return;
++    if (std::fwrite(p, 1, n, g_out) != n) { std::fprintf(stderr, "[vu1check] erro ao gravar o instantaneo\n"); std::fclose(g_out); g_out = nullptr; }
++    g_bytes += n;
++}
 +template <class T> void putv(const T &v) { put(&v, sizeof v); }
 +
-+void putDelta(const uint8_t *ram)
++void putDelta(const uint8_t *cur, std::vector<uint8_t> &prev)
 +{
 +    std::vector<uint32_t> pages;
-+    for (uint32_t pg = 0; pg < PS2_RAM_SIZE / kPage; ++pg)
-+        if (std::memcmp(ram + size_t(pg) * kPage, g_prev.data() + size_t(pg) * kPage, kPage) != 0) pages.push_back(pg);
++    const uint32_t n = uint32_t(prev.size() / kPage);
++    for (uint32_t pg = 0; pg < n; ++pg)
++        if (std::memcmp(cur + size_t(pg) * kPage, prev.data() + size_t(pg) * kPage, kPage) != 0) pages.push_back(pg);
 +    putv(uint32_t(pages.size()));
 +    for (uint32_t pg : pages) {
 +        putv(pg);
-+        put(ram + size_t(pg) * kPage, kPage);
-+        std::memcpy(g_prev.data() + size_t(pg) * kPage, ram + size_t(pg) * kPage, kPage);
++        put(cur + size_t(pg) * kPage, kPage);
++        std::memcpy(prev.data() + size_t(pg) * kPage, cur + size_t(pg) * kPage, kPage);
 +    }
++}
++
++void putState()
++{
++    putv(g_rt->vu1().state());
++    putv(g_rt->cpu().vu0_fbrst);
++    putv(g_rt->memory().vif1_regs);
++    put(g_rt->memory().getVU1Code(), PS2_VU1_CODE_SIZE);
++    put(g_rt->memory().getVU1Data(), PS2_VU1_DATA_SIZE);
 +}
 +
 +void begin(const uint8_t *ram, uint32_t frame)   // entrada do hier(0, 0) do quadro amostrado
 +{
 +    const char *pre = std::getenv("WOTM_VU1CHECK_SNAP");
 +    if (!pre || !g_rt) return;
-+    char name[1024];
-+    std::snprintf(name, sizeof name, "%s_%u.vu1snap", pre, frame);
-+    g_out = std::fopen(name, "wb");
-+    if (!g_out) { std::fprintf(stderr, "[vu1check] nao consegui gravar %s\n", name); return; }
-+    Hdr h{};
-+    std::memcpy(h.magic, kMagic, 8);
-+    h.frame = frame;
-+    h.ramSize = PS2_RAM_SIZE;
-+    h.vramSize = uint32_t(PS2_GS_VRAM_SIZE);
-+    h.vu1State = sizeof(VU1State);
-+    h.vifRegs = sizeof(VIFRegisters);
-+    putv(h);
-+    putv(uint8_t('A'));
-+    putv(g_rt->vu1().state());
-+    putv(g_rt->cpu().vu0_fbrst);
-+    putv(g_rt->memory().vif1_regs);
-+    put(g_rt->memory().getVU1Code(), PS2_VU1_CODE_SIZE);
-+    put(g_rt->memory().getVU1Data(), PS2_VU1_DATA_SIZE);
-+    put(ram, PS2_RAM_SIZE);
-+    put(g_rt->memory().getGSVRAM(), PS2_GS_VRAM_SIZE);
-+    g_prev.assign(ram, ram + PS2_RAM_SIZE);
-+    std::fprintf(stderr, "[vu1check] instantaneo: %s\n", name);
++    if (g_out && g_bytes >= g_max) {
++        std::fprintf(stderr, "[vu1check] instantaneo parou no teto (WOTM_VU1CHECK_SNAP_MAX, %llu MB) com %u quadros\n", (unsigned long long)(g_max >> 20), g_frames);
++        std::fclose(g_out);
++        g_out = nullptr;
++        return;
++    }
++    if (!g_out) {
++        if (g_bytes >= g_max) return;   // ja parou no teto
++        char name[1024];
++        std::snprintf(name, sizeof name, "%s_%u.vu1snap", pre, frame);
++        g_out = std::fopen(name, "wb");
++        if (!g_out) { std::fprintf(stderr, "[vu1check] nao consegui gravar %s\n", name); return; }
++        Hdr h{};
++        std::memcpy(h.magic, kMagic, 8);
++        h.frame = frame;
++        h.ramSize = PS2_RAM_SIZE;
++        h.vramSize = uint32_t(PS2_GS_VRAM_SIZE);
++        h.vu1State = sizeof(VU1State);
++        h.vifRegs = sizeof(VIFRegisters);
++        putv(h);
++        putv(uint8_t('A'));
++        putv(frame);
++        putState();
++        put(ram, PS2_RAM_SIZE);
++        put(g_rt->memory().getGSVRAM(), PS2_GS_VRAM_SIZE);
++        g_prev.assign(ram, ram + PS2_RAM_SIZE);
++        g_prevVram.assign(g_rt->memory().getGSVRAM(), g_rt->memory().getGSVRAM() + PS2_GS_VRAM_SIZE);
++        std::fprintf(stderr, "[vu1check] instantaneo: %s\n", name);
++    } else {
++        putv(uint8_t('a'));
++        putv(frame);
++        putState();
++        putDelta(ram, g_prev);
++        putDelta(g_rt->memory().getGSVRAM(), g_prevVram);
++    }
++    g_inFrame = true;
++    ++g_frames;
 +}
 +
 +void chain(const uint8_t *ram, const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t *data, uint32_t bytes)
 +{
-+    if (!g_out) return;
++    if (!g_out || !g_inFrame) return;
 +    putv(uint8_t('C'));
-+    putDelta(ram);
++    putDelta(ram, g_prev);
 +    putv(uint32_t(n));
 +    put(segs, n * sizeof *segs);
 +    putv(bytes);
@@ -5176,21 +5212,55 @@ index 0000000..a6a2d31
 +
 +void pass1(const uint8_t *ram)
 +{
-+    if (!g_out) return;
++    if (!g_out || !g_inFrame) return;
 +    putv(uint8_t('P'));
-+    putDelta(ram);
++    putDelta(ram, g_prev);
 +}
 +
-+void end()
++void end()   // fim do quadro amostrado; o arquivo fica aberto para os proximos quadros da sessao
 +{
-+    if (!g_out) return;
++    if (!g_out || !g_inFrame) return;
 +    putv(uint8_t('E'));
-+    if (g_out) std::fclose(g_out);
-+    g_out = nullptr;
-+    g_prev.clear();
-+    g_prev.shrink_to_fit();
++    g_inFrame = false;
++    if (g_out) std::fflush(g_out);   // o processo e morto no fim do lote: o que ja esta no arquivo vale
 +}
 +} // namespace snap
++
++// Gatilho (WOTM_VU1CHECK_WHEN=<cond>[,<cond>], qualquer uma basta) e rajada (WOTM_VU1CHECK_BURST=<k> quadros seguidos por disparo):
++//  - fx:<tipo visual>: algum sistema de particulas vivo (numParticles > 0) com vis.attribs & 0xFF == tipo (3 sprite, 7 arco, 13 destroco...);
++//  - frame:<a>[-<b>]: g_frame dentro da faixa.
++// Com gatilho, a amostra so dispara quando a condicao vale; o periodo (WOTM_VU1CHECK) e o descanso minimo entre disparos.
++struct Cond { enum Kind { Fx, Frame } kind; uint32_t a, b; };
++std::vector<Cond> g_when;
++uint32_t g_burst = 1, g_burstLeft = 0;
++
++bool condTrue(const uint8_t *rdram, uint32_t frame)
++{
++    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
++    for (const Cond &c : g_when) {
++        if (c.kind == Cond::Frame) { if (frame >= c.a && frame <= c.b) return true; continue; }
++        for (uint32_t i = 1; i < wotm::fxaddr::count; ++i) {
++            const uint32_t b = wotm::fxaddr::fx + i * wotm::fxaddr::stride;
++            if ((ram.u32(b + wotm::fxoff::type) & 0xFF) == c.a && int32_t(ram.u32(b + wotm::fxoff::numParticles)) > 0) return true;
++        }
++    }
++    return false;
++}
++
++void parseWhen(const char *s)
++{
++    for (const char *p = s; p && *p;) {
++        const char *e = std::strchr(p, ',');
++        const std::string tok(p, e ? size_t(e - p) : std::strlen(p));
++        p = e ? e + 1 : nullptr;
++        if (tok.rfind("fx:", 0) == 0) g_when.push_back({Cond::Fx, uint32_t(std::strtoul(tok.c_str() + 3, nullptr, 0)), 0});
++        else if (tok.rfind("frame:", 0) == 0) {
++            char *dash = nullptr;
++            const uint32_t a = uint32_t(std::strtoul(tok.c_str() + 6, &dash, 0));
++            g_when.push_back({Cond::Frame, a, dash && *dash == '-' ? uint32_t(std::strtoul(dash + 1, nullptr, 0)) : a});
++        } else std::fprintf(stderr, "[vu1check] condicao desconhecida em WOTM_VU1CHECK_WHEN: %s\n", tok.c_str());
++    }
++}
 +
 +void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
 +{
@@ -5206,9 +5276,14 @@ index 0000000..a6a2d31
 +        finish();
 +    }
 +    const auto now = std::chrono::steady_clock::now();
-+    if ((!g_armed && now >= g_next && frame >= 30) || g_armed) {   // armado aqui = passe 1 perdido: recomeca
++    bool start = g_armed;   // armado aqui = passe 1 perdido: recomeca
++    if (!g_armed) {
++        if (!g_burstLeft && now >= g_next && frame >= 30 && (g_when.empty() || condTrue(rdram, frame))) g_burstLeft = g_burst;
++        if (g_burstLeft) { --g_burstLeft; start = true; }
++    }
++    if (start) {
 +        g_next = now + std::chrono::seconds(g_period);
-+        snap::end();   // passe 1 perdido com instantaneo aberto: descarta o anterior
++        snap::end();   // passe 1 perdido com quadro aberto no instantaneo: fecha o anterior como esta
 +        arm(rdram, frame);
 +        snap::begin(rdram, frame);
 +    }
@@ -5234,6 +5309,11 @@ index 0000000..a6a2d31
 +    if (!(wotm_vu1check::g_origHier = runtime.lookupFunction(0x2029B0u))) return;
 +    wotm_vu1check::snap::g_rt = &runtime;
 +    wotm_vu1check::g_period = std::atoi(e);
++    if (const char *w = std::getenv("WOTM_VU1CHECK_WHEN")) wotm_vu1check::parseWhen(w);
++    if (const char *b = std::getenv("WOTM_VU1CHECK_BURST")) wotm_vu1check::g_burst = std::max(1u, uint32_t(std::strtoul(b, nullptr, 10)));
++    if (const char *m = std::getenv("WOTM_VU1CHECK_SNAP_MAX")) wotm_vu1check::snap::g_max = uint64_t(std::strtoull(m, nullptr, 10)) << 20;
++    if (!wotm_vu1check::g_when.empty() || wotm_vu1check::g_burst > 1)
++        std::fprintf(stderr, "[vu1check] gatilho: %s, rajada de %u quadro(s)\n", std::getenv("WOTM_VU1CHECK_WHEN") ? std::getenv("WOTM_VU1CHECK_WHEN") : "periodo", wotm_vu1check::g_burst);
 +    wotm_vu1check::g_next = std::chrono::steady_clock::now() + std::chrono::seconds(wotm_vu1check::g_period);
 +    g_wotmVif1Keep = true;
 +    g_wotmGifTap = &wotm_vu1check::gifTap;
@@ -5246,7 +5326,7 @@ index 0000000..a6a2d31
 +// `ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--dump <prefixo>]`: refaz a checagem de um instantaneo (WOTM_VU1CHECK_SNAP) sem jogo.
 +// Abre o runtime so pela memoria, VIF1 e VU1 (a janela do raylib vem junto no initialize), restaura o estado do registro 'A' e
 +// reaplica cada cadeia na ordem gravada, com a mesma coleta nativa e a mesma comparacao da checagem ao vivo.
-+static int vu1cmpBody(const char *path, const char *dump)
++static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame)
 +{
 +    using namespace wotm_vu1check;
 +    if (dump) {
@@ -5274,61 +5354,72 @@ index 0000000..a6a2d31
 +    g_wotmGifTap = &gifTap;
 +    g_wotmMscalTap = &mscalTap;
 +    g_wotmChainTap = &chainTap;
-+    auto applyDelta = [&]() {
++    auto applyDelta = [&](uint8_t *base, size_t size) {   // paginas que mudaram (RAM ou VRAM)
 +        uint32_t n = 0;
 +        if (!get(&n, 4)) return false;
 +        for (uint32_t i = 0; i < n; ++i) {
 +            uint32_t pg = 0;
-+            if (!get(&pg, 4) || pg >= PS2_RAM_SIZE / snap::kPage || !get(ram + size_t(pg) * snap::kPage, snap::kPage)) return false;
++            if (!get(&pg, 4) || size_t(pg) * snap::kPage >= size || !get(base + size_t(pg) * snap::kPage, snap::kPage)) return false;
 +        }
 +        return true;
 +    };
-+    uint32_t chains = 0;
-+    bool ok = true, done = false;
-+    while (ok && !done) {
++    auto getState = [&]() {
++        runtime.vu1().reset();
++        const bool ok = get(&runtime.vu1().state(), sizeof(VU1State)) && get(&runtime.cpu().vu0_fbrst, 4) && get(&mem.vif1_regs, sizeof(VIFRegisters)) &&
++                        get(mem.getVU1Code(), PS2_VU1_CODE_SIZE) && get(mem.getVU1Data(), PS2_VU1_DATA_SIZE);
++        mem.markVU1CodeModified();
++        return ok;
++    };
++    uint32_t chains = 0, frame = 0, framesDone = 0, framesSeen = 0;
++    bool ok = true, inFrame = false, skip = false;   // skip: quadro que nao e o pedido (--frame): so aplica os deltas
++    for (;;) {
 +        uint8_t type = 0;
-+        if (!get(&type, 1)) { ok = false; break; }
-+        switch (type) {
-+        case 'A': {
-+            runtime.vu1().reset();
-+            ok = get(&runtime.vu1().state(), sizeof(VU1State)) && get(&runtime.cpu().vu0_fbrst, 4) && get(&mem.vif1_regs, sizeof(VIFRegisters)) &&
-+                 get(mem.getVU1Code(), PS2_VU1_CODE_SIZE) && get(mem.getVU1Data(), PS2_VU1_DATA_SIZE) && get(ram, PS2_RAM_SIZE) &&
-+                 get(mem.getGSVRAM(), PS2_GS_VRAM_SIZE);
-+            mem.markVU1CodeModified();
-+            if (ok) arm(ram, h.frame);
-+            break;
++        if (!get(&type, 1)) { ok = !inFrame; break; }   // fim do arquivo entre quadros = normal; no meio de um = truncado
++        if (type == 'A' || type == 'a') {
++            if (inFrame) { ok = false; break; }
++            ok = get(&frame, 4) && getState();
++            if (ok) ok = type == 'A' ? (get(ram, PS2_RAM_SIZE) && get(mem.getGSVRAM(), PS2_GS_VRAM_SIZE))
++                                     : (applyDelta(ram, PS2_RAM_SIZE) && applyDelta(mem.getGSVRAM(), PS2_GS_VRAM_SIZE));
++            if (!ok) break;
++            inFrame = true;
++            ++framesSeen;
++            skip = onlyFrame && frame != onlyFrame;
++            chains = 0;
++            if (!skip) arm(ram, frame);
++            continue;
 +        }
-+        case 'C': {
++        if (!inFrame) { ok = false; break; }
++        if (type == 'C') {
 +            uint32_t n = 0, bytes = 0;
 +            std::vector<std::pair<uint32_t, uint32_t>> segs;
 +            std::vector<uint8_t> data;
-+            ok = g_armed && applyDelta() && get(&n, 4);
++            ok = applyDelta(ram, PS2_RAM_SIZE) && get(&n, 4);
 +            if (ok) { segs.resize(n); ok = get(segs.data(), n * sizeof segs[0]) && get(&bytes, 4); }
 +            if (ok) { data.resize(bytes); ok = get(data.data(), bytes); }
 +            if (!ok) break;
++            if (skip) continue;
 +            ++chains;
 +            mem.m_vif1ChainSrc = segs.empty() ? nullptr : &segs;
 +            if (mem.m_vif1ChainSrc) chainTap(segs.data(), segs.size(), data.data(), bytes);
 +            mem.processVIF1Data(data.data(), bytes);
 +            mem.m_vif1ChainSrc = nullptr;
-+            break;
-+        }
-+        case 'P':
-+            ok = g_armed && applyDelta();
-+            if (ok) { g_pass = 1; g_cam[1] = readCam(ram); collectNative(ram, g_natPass1); }
-+            break;
-+        case 'E':
-+            done = true;
-+            break;
-+        default:
-+            ok = false;
-+        }
++        } else if (type == 'P') {
++            ok = applyDelta(ram, PS2_RAM_SIZE);
++            if (ok && !skip) { g_pass = 1; g_cam[1] = readCam(ram); collectNative(ram, g_natPass1); }
++            if (!ok) break;
++        } else if (type == 'E') {
++            inFrame = false;
++            if (skip) continue;
++            std::fprintf(stderr, "[vu1cmp] quadro g_frame %u (%u cadeias)\n", frame, chains);
++            finish();
++            ++framesDone;
++        } else { ok = false; break; }
 +    }
 +    std::fclose(f);
-+    if (!ok) { std::fprintf(stderr, "[vu1cmp] instantaneo truncado ou corrompido (%u cadeias lidas)\n", chains); return 1; }
-+    std::fprintf(stderr, "[vu1cmp] %s: g_frame %u, %u cadeias\n", path, h.frame, chains);
-+    finish();
-+    return 0;
++    if (!ok) std::fprintf(stderr, "[vu1cmp] instantaneo truncado ou corrompido no quadro %u (%u cadeias lidas); %u quadro(s) inteiros antes\n", frame, chains, framesDone);
++    if (onlyFrame && !framesDone) std::fprintf(stderr, "[vu1cmp] o quadro %u nao esta no arquivo (%u quadros)\n", onlyFrame, framesSeen);
++    std::fprintf(stderr, "[vu1cmp] %s: %u quadro(s) comparados\n", path, framesDone);
++    return framesDone ? 0 : 1;
 +}
 +
 +// A checagem ao vivo roda na thread do EE; a thread principal tem 1 MB de pilha e estoura (coleta, VU1, comparacao). O corpo roda
@@ -5340,25 +5431,26 @@ index 0000000..a6a2d31
 +#else
 +#define __stdcall
 +#endif
-+struct Vu1CmpJob { const char *path, *dump; int rc; };
++struct Vu1CmpJob { const char *path, *dump; uint32_t frame; int rc; };
 +static unsigned __stdcall vu1cmpThread(void *p)
 +{
 +    Vu1CmpJob *j = static_cast<Vu1CmpJob *>(p);
-+    j->rc = vu1cmpBody(j->path, j->dump);
++    j->rc = vu1cmpBody(j->path, j->dump, j->frame);
 +    return 0;
 +}
 +
 +int wotmVu1CmpMain(int argc, char **argv)
 +{
-+    Vu1CmpJob job{nullptr, nullptr, 1};
++    Vu1CmpJob job{nullptr, nullptr, 0, 1};
 +    for (int i = 2; i < argc; ++i) {
 +        if (!std::strcmp(argv[i], "--dump") && i + 1 < argc) job.dump = argv[++i];
++        else if (!std::strcmp(argv[i], "--frame") && i + 1 < argc) job.frame = uint32_t(std::strtoul(argv[++i], nullptr, 10));
 +        else job.path = argv[i];
 +    }
-+    if (!job.path) { std::fprintf(stderr, "uso: ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--dump <prefixo>]\n"); return 2; }
++    if (!job.path) { std::fprintf(stderr, "uso: ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--frame <g_frame>] [--dump <prefixo>]\n"); return 2; }
 +#ifdef _WIN32
 +    const uintptr_t h = _beginthreadex(nullptr, 512u << 20, &vu1cmpThread, &job, 0, nullptr);
-+    if (!h) return vu1cmpBody(job.path, job.dump);
++    if (!h) return vu1cmpBody(job.path, job.dump, job.frame);
 +    WaitForSingleObject(reinterpret_cast<void *>(h), 0xFFFFFFFFul);
 +    CloseHandle(reinterpret_cast<void *>(h));
 +#else
