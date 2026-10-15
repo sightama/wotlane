@@ -439,6 +439,10 @@ extern float FACE_ANGLE_TOL __asm__("FACE_ANGLE_TOL.2517"); /* getMinContact: 0.
 __asm__("#SNFIX_SMALL FACE_ANGLE_TOL.2517");
 extern float TURN_ANGLE_TOL __asm__("TURN_ANGLE_TOL.2518"); /* getMinContact: -0.1 */
 __asm__("#SNFIX_SMALL TURN_ANGLE_TOL.2518");
+extern float TOE_IN __asm__("TOE_IN.2513"); /* checkWallContact: 30 */
+__asm__("#SNFIX_SMALL TOE_IN.2513");
+int hdBundledSphereTest(_hdSphereBundleTest *tests, int n, int skipId2);
+void mathfVectorCrossUp(_fvector *dst, _fvector *v);
 #define DYN(m) ((MonsterDynamics *)((char *)(m) + 0x100))
 /* MonsterDynamics velocity (Monster+0x1E0) */
 #define MVEL(m) ((_fvector *)((char *)(m) + 0x1E0))
@@ -914,7 +918,156 @@ void StateClimb::enterSubState(SubState s)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", enterSubState__10StateClimbQ210StateClimb8SubState);
 #endif
+/* Six sphere probes, swept forward from the monster (monster frame: x across, y forward, z up), tested in one bundle:
+ * 0/1 the hands (at the top of the body, toed in by TOE_IN), 2 the feet (down from 10 to -15, just ahead), 3 the
+ * body centre (radius = the monster's reach, Monster+0x2BC), 4/5 the upper probes (height probeLow + probeHigh). The
+ * nearest facing wall hit of each sets contactFlags (the feet also count when the ground probe at Monster+0x3B0 stands
+ * on a floor). The body probe gives the contact distance, surface bytes and interactive; with both hands on the wall
+ * the contact normal is the horizontal across the two hand points, its z taken from the wall, and x/y scaled so that
+ * (1 - z) is spread over them (w keeps the scale). */
+#ifdef NON_MATCHING
+/* untuned: 1/316 words; retail transforms the probe points with VU0 (vmulax/vmadd) and keeps the probe arrays as parallel pointers */
+void StateClimb::checkWallContact(void)
+{
+    struct Probe {
+        _fvector *from;
+        _fvector *to;
+        float radius;
+        int maxResults;
+        _hdResult *results;
+        int numResults;
+    };
+    Probe probes[6];
+    FVECTOR from[6];
+    FVECTOR to[6];
+    _hdResult results[6][5];
+    Monster *m = owner;
+    float hw = halfWidth;
+    float bodyReach = *(float *)((char *)m + 0x2BC);
+    float top = *(float *)((char *)m + 0x2B8 + (*(int *)((char *)m + 0x360) - 1) * 0x10);
+    float up = probeLow + probeHigh;
+    _hdResult *hand0, *hand1, *body, *up0, *up1;
+    int i;
+
+    from[0].x = -hw;
+    from[0].y = 0.0f;
+    from[0].z = top;
+    to[0].x = -hw + TOE_IN;
+    to[0].y = reach;
+    to[0].z = top;
+    from[1].x = hw;
+    from[1].y = 0.0f;
+    from[1].z = top;
+    to[1].x = hw - TOE_IN;
+    to[1].y = reach;
+    to[1].z = top;
+    from[2].x = 0.0f;
+    from[2].y = *(float *)((char *)m + 0x2B4) + bodyReach - 1.0f;
+    from[2].z = 10.0f;
+    to[2].x = 0.0f;
+    to[2].y = from[2].y;
+    to[2].z = -15.0f;
+    from[3].x = 0.0f;
+    from[3].y = 0.0f;
+    from[3].z = (*(float *)((char *)m + 0x2B8) + top) * 0.5f;
+    to[3].x = 0.0f;
+    to[3].y = reach - bodyReach;
+    to[3].z = from[3].z;
+    from[4].x = -hw + 10.0f;
+    from[4].y = 0.0f;
+    from[4].z = up;
+    to[4].x = -hw + TOE_IN;
+    to[4].y = reach;
+    to[4].z = up;
+    from[5].x = hw - 10.0f;
+    from[5].y = 0.0f;
+    from[5].z = up;
+    to[5].x = hw - TOE_IN;
+    to[5].y = reach;
+    to[5].z = up;
+    for (i = 0; i < 6; i++) {
+        _cs *cs = owner->m_cs;
+        FVECTOR *pt[2];
+        int j;
+
+        /* into the world: rotate by the cs matrix, then translate */
+        pt[0] = &from[i];
+        pt[1] = &to[i];
+        for (j = 0; j < 2; j++) {
+            float x = pt[j]->x, y = pt[j]->y, z = pt[j]->z;
+
+            pt[j]->x = cs->mat[0][0] * x + cs->mat[1][0] * y + cs->mat[2][0] * z + cs->trans.x;
+            pt[j]->y = cs->mat[0][1] * x + cs->mat[1][1] * y + cs->mat[2][1] * z + cs->trans.y;
+            pt[j]->z = cs->mat[0][2] * x + cs->mat[1][2] * y + cs->mat[2][2] * z + cs->trans.z;
+        }
+        probes[i].from = &from[i];
+        probes[i].to = &to[i];
+        probes[i].results = results[i];
+        probes[i].maxResults = 5;
+        probes[i].radius = 1.0f;
+    }
+    probes[3].radius = bodyReach;
+    hdBundledSphereTest((_hdSphereBundleTest *)probes, 6, owner->m_id);
+    hand0 = getMinContact(probes[0].results, probes[0].numResults, true);
+    hand1 = getMinContact(probes[1].results, probes[1].numResults, true);
+    body = getMinContact(probes[3].results, probes[3].numResults, true);
+    up0 = getMinContact(probes[4].results, probes[4].numResults, true);
+    up1 = getMinContact(probes[5].results, probes[5].numResults, true);
+    contactFlags = 0;
+    if (hand0 != 0)
+        contactFlags = 2;
+    if (hand1 != 0)
+        contactFlags |= 4;
+    if (probes[2].numResults != 0) {
+        contactFlags |= 8;
+    } else {
+        _hdResult *g = (_hdResult *)((char *)owner + 0x3B0);
+
+        if (*(signed char *)&g->hit != 0) {
+            int kind = ((unsigned char *)g)[3];
+
+            if (kind == 7 || (0.7071f < g->normal.z && kind != 10 && kind != 11))
+                contactFlags |= 8;
+        }
+    }
+    if (up0 != 0)
+        contactFlags |= 0x10;
+    if (up1 != 0)
+        contactFlags |= 0x20;
+    if (body == 0) {
+        contactInteractive = 0;
+        contactSurface = 0;
+        contactKind = 0;
+        return;
+    }
+    {
+        float dx = from[3].x - body->point.x;
+        float dy = from[3].y - body->point.y;
+        float dz = from[3].z - body->point.z;
+
+        contactDist = eeSqrtf(dx * dx + dy * dy + dz * dz);
+    }
+    contactSurface = ((unsigned char *)body)[2];
+    contactKind = ((unsigned char *)body)[3];
+    contactInteractive = body->ids & 0x7FF;
+    if ((contactFlags & 6) == 6) {
+        FVECTOR across;
+        float k;
+
+        across.x = hand1->point.x - hand0->point.x;
+        across.y = hand1->point.y - hand0->point.y;
+        across.z = hand1->point.z - hand0->point.z;
+        mathfVectorCrossUp((_fvector *)&contactNormal, (_fvector *)&across);
+        contactNormal.z = body->normal.z;
+        k = (1.0f - contactNormal.z) / eeSqrtf(contactNormal.x * contactNormal.x + contactNormal.y * contactNormal.y);
+        contactNormal.w = k;
+        contactNormal.y = contactNormal.y * k;
+        contactNormal.x = contactNormal.x * k;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", checkWallContact__10StateClimb);
+#endif
 /* The nearest (smallest point.w) of `n` probe results that hit a wall surface (kind byte 2 or 10). With `facing`, only
  * walls not too flat (|normal.z| <= FACE_ANGLE_TOL) that the monster faces (normal . heading <= TURN_ANGLE_TOL). */
 #ifdef NON_MATCHING
@@ -1480,7 +1633,7 @@ void StateFly::enterSubState(SubState s)
         *(int *)((char *)owner + 0x130) = 3;
         f318 = 0;
         anim = 0x6E;
-        animationTransitionInto(owner->m_anims[0x6E], glideBlend, 1, 1);
+        animationTransitionInto(owner->m_anims[0x6E], glideBlend, 0, 1);
         if (glide != 0)
             glide->rampIn(glideBlend);
         *(int *)((char *)owner + 0x6728) = 0;
@@ -2697,8 +2850,16 @@ unsigned char getSubState__11JumpFlyBase(void *self)
 {
     return *(unsigned char *)((char *)self + 0x18);
 }
-INCLUDE_ASM("asm/nonmatchings/game/MovementStates", getApexHeight__11JumpFlyBase);
-INCLUDE_ASM("asm/nonmatchings/game/MovementStates", getHeightGain__11JumpFlyBase);
+float getApexHeight__11JumpFlyBase(JumpFlyBase *self) __asm__("getApexHeight__11JumpFlyBase");
+float getApexHeight__11JumpFlyBase(JumpFlyBase *self)
+{
+    return self->apexZ;
+}
+float getHeightGain__11JumpFlyBase(JumpFlyBase *self) __asm__("getHeightGain__11JumpFlyBase");
+float getHeightGain__11JumpFlyBase(JumpFlyBase *self)
+{
+    return self->apexZ - self->startZ;
+}
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", D_006ED800);
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", __tf8StateFly);
 unsigned char getSubState__8StateFly(void *self) __asm__("getSubState__8StateFly");
