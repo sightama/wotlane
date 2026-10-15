@@ -24,7 +24,9 @@ Não corrigir sem perguntar ao dono qual atacar.
 6. **Resto das partículas:**
    - **Sprine (8):** a contagem casa (`N = max(2, int(+0x2D8C + 0,5))` passos por trecho), mas os pontos ficam a cerca de 2 px (perturbação aleatória pelos bits do `pos.w`?). A largura `minSize` não foi conferida. Pede ler o microprograma.
    - **Arco elétrico (7, `common/electric`):** subdivisão e zigue-zague feitos no microprograma, com semente `+0x2DC0` e jitter `+0x2E50`. Pede ler o microprograma.
-   - **Strite (6) e wake (16):** só o nativo desenha quadrados para eles.
+   - **Strite (6) e wake (16):** o VU1 desenha **um triângulo por partícula**, não um quadrado (`soltos` = n na linha do sistema). O nativo desenha quadrados.
+     - Wake (preset 146, fase 8, dump `t_1003`): triângulos de cerca de 80x20 px, com o centroide na projeção de `pos` (a até 1–2 px) e um vértice bem à frente dos outros dois, como um "V" de esteira ao longo do movimento. O nativo desenha um quadradinho de 0,3 px.
+     - Falta medir em 3D: a checagem precisa gravar `pos`, `vel` e `pos.w` de cada partícula no dump, para ajustar a ponta e a base (pela `vel`? no plano do chão?). Depois, ler o microprograma ou ajustar como foi feito no `stripe`.
    - **Pedestres na METRO:** numa checagem, VU1 750 e nativo 1000 (um sistema descartado pelo `pedsUpdateFOVbox`?).
    - **Sistemas que só o VU1 tem:** de 2 a 19 quadrados por checagem.
    - **SPRITE do GS fora de `fx[]`:** de 340 a 380 por quadro, de origem não identificada (HUD?).
