@@ -68,6 +68,30 @@ def expand_dli(rd, value):
         k, n = rest >> (h - 15), h - 15
         out = [f'ori {rd},$0,{k:#x}', f'dsll {rd},{rd},{n}' if n < 32 else f'dsll32 {rd},{rd},{n - 32}']
         return out + ([f'ori {rd},{rd},{lo:#x}'] if lo else [])
+    for sh in range(1, 17):
+        # a sign-extended 32-bit constant shifted left, then ori of the low bits: li + dsll + ori
+        # (game/Weapon UpdateWeapons: 0xfffff800ffffffff -> li 0x800fffff; dsll 12; ori 0xfff)
+        hi = signed >> sh
+        if -0x80000000 <= hi < 0x80000000 and not (-0x8000 <= hi < 0x10000):
+            low = value & ((1 << sh) - 1)
+            return [f'li {rd},{hi & 0xFFFFFFFF:#x}', f'dsll {rd},{rd},{sh}'] + ([f'ori {rd},{rd},{low:#x}'] if low else [])
+    if value >> 63:
+        # top-down 16-bit chunks, each starting at the highest set bit left (zeros skipped by the shift), the last one
+        # the leftover low bits (game/Weapon UpdateWeapons: 0xfe0007ffffffffff -> ori 0xfe00; dsll 21; ori 0xffff;
+        # dsll 16; ori 0xffff; dsll 11; ori 0x7ff)
+        cur = 48
+        out = [f'ori {rd},$0,{value >> 48:#x}']
+        while cur > 0:
+            rem = value & ((1 << cur) - 1)
+            hb = rem.bit_length()
+            nxt = hb - 16 if hb > 16 else 0
+            n = cur - nxt
+            out.append(f'dsll {rd},{rd},{n}' if n < 32 else f'dsll32 {rd},{rd},{n - 32}')
+            chunk = rem >> nxt
+            if chunk:
+                out.append(f'ori {rd},{rd},{chunk:#x}')
+            cur = nxt
+        return out
     raise ValueError(f'snfix: no known SN expansion for dli {rd},{value:#x}')
 
 
