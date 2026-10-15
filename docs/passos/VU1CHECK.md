@@ -34,6 +34,11 @@ Não corrigir sem perguntar ao dono qual atacar.
 7. **Itens de alfa animados** (tex 330/333, e tex 0 com flags `0xa210`/`0xa310`): às vezes saem de 1 a 6 px fora, em direções variadas. Parece questão de instante da coleta.
 8. Corrigida (ver "Corrigido"). Falta só identificar o que é o objeto da METRO (vidro, água, distorção?).
 10. **Textura trocada entre tex 156 e 193:** 1 triângulo de vez em quando (sobreposição?).
+11. **Culling por seção: o nativo desenha faces de costas que o VU1 descarta.** Nas fases 1 e 4 os objetos com mais `sobram` (flags `0x1290`, ex.: `c29b80` com 161 do VU1 contra 312 do nativo) têm quase o dobro de triângulos no nativo. Não pesa no `casados` (só conta o que falta), e a regra de `costas` da checagem não os pega porque o objeto mistura seções com e sem culling.
+    - Regra, lida no microprograma dos objetos rígidos e conferida com dump (fase 1, 12 checagens): **o bit 15 da palavra de seletor da seção (`hdrSel`, a palavra alta de REGS na tag GIF) liga o culling**. O VU1 faz o produto vetorial das arestas na tela, com o sinal alternando a cada vértice da tira, e põe ADC nas faces `+` (área positiva na tela do GS, y para baixo, com o triângulo ímpar da tira trocado como no nativo). Sem o bit 15, a seção é desenhada dos dois lados.
+    - Conferência: dos 5.663 triângulos nativos que sobram em seções com bit 15, 5.662 são `+`; dos 52.733 casados, 52.345 obedecem à regra. Sobram 388 casados `+` em seções com bit 15, concentrados em `c29b80`, `b8b300`, `ba9200` (instância espelhada? passada sem culling?), e 647 sobras em seções sem culling (outras causas).
+    - O nativo desenha tudo sem culling (`drawList` faz `rlDisableBackfaceCulling`). Em malha fechada não aparece (o z-buffer esconde), mas pode mostrar o lado de dentro de paredes de uma face só e brigar com faces coplanares.
+    - Correção possível (não feita, perguntar): guardar o bit 15 por triângulo no `decodePacket` e, nessas seções, descartar no desenho a face de costas (pelo lado da câmera, em mundo); a checagem passa a contar essas como `costas`. Vale também conferir os microprogramas dos skinned (outro trecho com o mesmo teste).
 
 ## Explicadas, sem bug no nativo
 - **Pista 9, `so pela sombra` (de 0 a 22 triângulos por checagem):** analisado com dump na METRO (22 triângulos em 11 checagens, todos com tbp 3e60). Dois casos:
