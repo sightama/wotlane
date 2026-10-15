@@ -43,7 +43,7 @@ public:
     int m_lavaHoming;       /* 0x50: lava ball with a target: turns into a homing shot once it falls */
     int m_wobbleTime;       /* 0x54: fields into the current wobble period (UpdateErraticity) */
     int m_wobblePeriod;     /* 0x58: 15..60 fields */
-    int m_5C;               /* 0x5C */
+    int m_5C;               /* 0x5C: add m_aimOffset to the lead point (UpdateLockAheadOfMonster) */
     int m_hugGround;        /* 0x60: keep 5 above the ground (UpdateTranslation) */
     WeaponSound m_sound;    /* 0x64 */
     float m_startZ;         /* 0x6C: ballistic arc (CalculateBallisticArc): launch height */
@@ -62,7 +62,7 @@ public:
     _fvector *m_targetPoint; /* 0x128: aimed-at point when there is no target */
     int pad12C;
     FVECTOR m_targetPos;    /* 0x130 */
-    char pad140[0x150 - 0x140];
+    _fvector m_aimOffset;   /* 0x140: in the target monster's frame (UpdateLockAheadOfMonster with m_5C) */
     _cs *m_cs;              /* 0x150 */
     PickupIter m_pickup;    /* 0x154: the thrown pickup (type 0x17) */
     int m_fx;               /* 0x158: particle fx handle */

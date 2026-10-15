@@ -31,10 +31,22 @@ public:
     struct Info {
         float health;        /* 0x00: initial health of the pickup type */
         float heldHealth;    /* 0x04: health while held, if non-zero */
-        char pad8[0x28];
+        /* the rest is the thrown pickup's projectile (Weapon::InitWeapon, scaled by the thrower's m_pu*Mod) */
+        float damage;        /* 0x08 */
+        float radius;        /* 0x0C: collision radius of a thrown one (Weapon::WeaponHD) */
+        char pad10[0x2C - 0x10];
+        float duration;      /* 0x2C: seconds */
         float staminaGain;   /* 0x30 */
-        char pad34[0x20];
+        float speed;         /* 0x34: mph */
+        float gravity;       /* 0x38 */
+        float maxRange;      /* 0x3C */
+        float turnRate;      /* 0x40 */
+        float pitchRate;     /* 0x44 */
+        float headingBreak;  /* 0x48 */
+        float pitchBreak;    /* 0x4C */
+        char pad50[4];
     };
+    typedef char _size_Info[sizeof(Info) == 0x54 ? 1 : -1];
     static Info s_info[];
 
     static void *getClosestThrownPickup(_fvector &p, float r);
