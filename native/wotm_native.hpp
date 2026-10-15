@@ -1161,7 +1161,7 @@ public:
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;   // diagnostico: sem particulas
         if (off) return;
         constexpr uint32_t kFx = 0x005BA280u, kStride = 12000u;
-        for (uint32_t i = 1; i < 98 && sprites.size() < 6000; ++i) {
+        for (uint32_t i = 1; i < fxaddr::count && sprites.size() < 6000; ++i) {   // fx[100]: o VU1 desenha destroços em fx[98] e fx[99]
             const uint32_t b = kFx + i * kStride;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t type = ram.u32(b + 0x2E90) & 0xFF;
