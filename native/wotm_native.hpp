@@ -49,6 +49,8 @@ constexpr uint32_t worldCtx = 0x00445CD0;         // _worldctx worldCtx[5] (0x1F
 constexpr uint32_t viewInfo = 0x006E1900;         // 5 x 0x14: [0] = _cs* da camera, [1] = viewport*
 constexpr uint32_t worldToScreenMat = 0x006E1FD0; // 5 x 0x40
 constexpr uint32_t paraL = 0x006DFC00;            // float[4][4]: linhas x, y, z; colunas = luzes paralelas 0-2 e vetor-meio do especular, x32
+constexpr uint32_t vu1FogParams = 0x0025B280;     // float[4] (D_0025B280, qword 21 do VU1): fogFA, fogMaxVal, 1, fogFB (fogUpdate)
+constexpr uint32_t fogColorCtx = 0x00445580;      // u64[6]: pacote do FOGCOL que o fogUpdate manda ao GS; [4] = R | G << 8 | B << 16
 constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): cor/128 das luzes 0-2 (linhas); a linha 3 e o ambiente/especular
 constexpr uint32_t csActiveList = 0x0043A2C0;     // CsPool::m_activeList (CsNode: cs@0, next@4)
 constexpr uint32_t csHPActiveList = 0x0043A2E0;   // CsPool::m_HPActiveList
@@ -149,6 +151,7 @@ struct Vtx {
     uint8_t isAdc = 0;                // triangulo normalmente descartado pelo ADC (so com WOTM_SHOWADC)
     uint8_t cull = 0;                 // secao com culling (bit 15 do seletor): o VU1 descarta a face de costas (Scene::backFacing)
     int8_t nx = 0, ny = 0, nz = 0;    // normal (V3-8 @0x175, mesmo indice da posicao; modulo ~127): luz por vertice (Scene::vertexRgb)
+    uint8_t fge = 0;                  // PRIM.FGE da secao: o GS aplica a neblina (Scene::draw, shader)
 };
 
 struct MeshData {
@@ -164,6 +167,7 @@ struct MeshData {
     uint8_t curSub = 0;   // sub-pacote em decodificacao (diagnostico)
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
     uint8_t curTme = 1;   // PRIM.TME em vigor (tag GIF com PRE; sem PRE o GS mantem o PRIM anterior)
+    uint8_t curFge = 0;   // PRIM.FGE em vigor (neblina; mesma regra do TME)
     uint32_t posTot = 0, posUsed = 0;   // posicoes carregadas / usadas por algum indice (diagnostico)
     uint32_t dropAdc = 0, dropDegen = 0;   // triangulos descartados por ADC / degenerados (diagnostico)
     uint32_t secTot = 0, secBad = 0, secBadEx = 0;   // secoes de tira / com nloop != indices (diagnostico)
@@ -243,6 +247,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                 const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: culling da secao (os predios usam 0x8001, 0x8004...)
                 if (sel >= 1 && sel <= 13) md.curSlot = uint8_t((sel - 1) / 3);   // 0 = mantem a textura anterior
                 v.slot = md.curTme ? md.curSlot : kSlotNoTex;
+                v.fge = md.curFge;
                 v.cull = uint8_t((hdrSel >> 15) & 1);
                 v.sub = md.curSub;
                 md.slotMask |= 1u << v.slot;
@@ -284,6 +289,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                 hdrAddr = addr; nloop = ram.u32(a) & 0x7FFF; haveHdr = true;
                 hdrSel = ram.u32(a + 12);   // palavra alta de REGS: o jogo a usa como seletor de textura (1 + 3*slot)
                 if ((ram.u32(a + 4) >> 14) & 1) md.curTme = uint8_t((ram.u32(a + 4) >> 19) & 1);   // PRE: PRIM nos bits 47-57 (TME = bit 4)
+                if ((ram.u32(a + 4) >> 14) & 1) md.curFge = uint8_t((ram.u32(a + 4) >> 20) & 1);   // FGE = bit 5 do PRIM
                 if (((ram.u32(a + 4) >> 15) >> 6) & 1) md.abe = true;
             } else if (haveHdr && vn == 0 && vl == 2 && (mask & 0xFF) == 0xBF) {   // S-8 sob mascara: ADC
                 for (uint32_t k = 0; k < n; ++k) {
@@ -1055,6 +1061,7 @@ public:
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
     void collect(const Ram &ram, int maxLod = -1) {
         lights_ = readParaLights(ram);
+        fog_ = readFog(ram);
         items.clear();
         sky.clear();
         overlay.clear();
@@ -1660,17 +1667,45 @@ public:
     // Desenha com o raylib (deve estar dentro de BeginMode3D).
     void draw(const Ram &ram, bool wire = false) {
         // Teste de alfa: pixels transparentes (sombras, helices, grades) nao podem escrever profundidade nem cor.
+        // Neblina (ver Fog): a normal do vertice leva (fogBurnThru, FGE, 0); o drawList a preenche e a zera no fim (sem neblina).
         if (!alphaShaderTried_) {
             alphaShaderTried_ = true;
+            static const char *vs =
+                "#version 330\n"
+                "in vec3 vertexPosition; in vec2 vertexTexCoord; in vec3 vertexNormal; in vec4 vertexColor;\n"
+                "uniform mat4 mvp; uniform vec3 fogEye; uniform vec4 fogRow3; uniform vec3 fogParams;\n"
+                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog;\n"
+                "void main() {\n"
+                "  fragTexCoord = vertexTexCoord; fragColor = vertexColor;\n"
+                "  float w = dot(fogRow3.xyz, vertexPosition - fogEye) + fogRow3.w;\n"
+                "  float f = 255.0;\n"
+                "  if (vertexNormal.y > 0.5 && w > 0.001) f = clamp(vertexNormal.x + fogParams.x + fogParams.z / w, 0.0, fogParams.y);\n"
+                "  fragFog = f / 255.0;\n"
+                "  gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
+                "}\n";
             static const char *fs =
                 "#version 330\n"
-                "in vec2 fragTexCoord; in vec4 fragColor;\n"
-                "uniform sampler2D texture0; uniform vec4 colDiffuse; out vec4 finalColor;\n"
-                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; if (t.a < 0.06) discard; finalColor = t; }\n";
-            alphaShader_ = LoadShaderFromMemory(nullptr, fs);
+                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog;\n"
+                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; out vec4 finalColor;\n"
+                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; if (t.a < 0.06) discard;\n"
+                "  finalColor = vec4(mix(fogColor, t.rgb, fragFog), t.a); }\n";
+            alphaShader_ = LoadShaderFromMemory(vs, fs);
+            fogLoc_[0] = GetShaderLocation(alphaShader_, "fogEye");
+            fogLoc_[1] = GetShaderLocation(alphaShader_, "fogRow3");
+            fogLoc_[2] = GetShaderLocation(alphaShader_, "fogParams");
+            fogLoc_[3] = GetShaderLocation(alphaShader_, "fogColor");
         }
         const bool useShader = !wire && alphaShader_.id > 0;
-        if (useShader) BeginShaderMode(alphaShader_);
+        if (useShader) {
+            float row3[4];
+            for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+            const float params[3] = {fog_.fa, fog_.maxVal, fog_.fb};
+            if (fogLoc_[0] >= 0) SetShaderValue(alphaShader_, fogLoc_[0], eye_, SHADER_UNIFORM_VEC3);
+            if (fogLoc_[1] >= 0) SetShaderValue(alphaShader_, fogLoc_[1], row3, SHADER_UNIFORM_VEC4);
+            if (fogLoc_[2] >= 0) SetShaderValue(alphaShader_, fogLoc_[2], params, SHADER_UNIFORM_VEC3);
+            if (fogLoc_[3] >= 0) SetShaderValue(alphaShader_, fogLoc_[3], fog_.col, SHADER_UNIFORM_VEC3);
+            BeginShaderMode(alphaShader_);
+        }
         rlDisableDepthTest();   // o ceu e desenhado primeiro, centrado no olho, sem profundidade
         drawList(ram, sky, wire);
         rlDrawRenderBatchActive();
@@ -1871,6 +1906,7 @@ public:
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
             const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade * std::max(0.f, it.color[3]);
             const ObjLight ol = objectLight(ram, it.node);
+            const float fogBurn = ram.f32(it.node + 0x2C);   // fogBurnThru (somado ao F da neblina)
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
             static const uint32_t palOverride = std::getenv("WOTM_PALBLOCK") ? uint32_t(std::strtoul(std::getenv("WOTM_PALBLOCK"), nullptr, 16)) : 0;   // diagnostico
@@ -1936,12 +1972,14 @@ public:
                         }
                         if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+                        rlNormal3f(fogBurn, v.fge ? 1.f : 0.f, 0.f);   // neblina no shader do draw (ver Fog)
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+        rlNormal3f(0.f, 0.f, 0.f);   // o que vier depois (sombras, particulas) sai sem neblina
         setBlend(0);
         rlSetTexture(0);
         rlEnableBackfaceCulling();
@@ -2054,6 +2092,7 @@ private:
     int lod_ = -1;
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual
     Shader alphaShader_{};
+    int fogLoc_[4] = {-1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
     std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
@@ -2135,6 +2174,29 @@ private:
         return l;
     }
     ParaLights lights_;   // luzes paralelas do ultimo collect (vertexRgb)
+
+public:
+    // Neblina, como os programas de desenho do VU1 e o GS: por vertice das secoes com PRIM.FGE,
+    //   F = clamp(fogBurnThru do OBJECT (+0x2C) + fogFA + fogFB / W, 0, fogMaxVal)   (W = linha 3 do worldToScreenMat . (p - olho))
+    // e o GS mistura (F * cor + (255 - F) * FOGCOL) / 255 (F = 255: sem neblina). Parametros de vu1FogParams; FOGCOL de fogColorCtx[4].
+    struct Fog { float fa = 0.f, maxVal = 255.f, fb = 0.f; float col[3] = {0, 0, 0}; };
+    static Fog readFog(const Ram &ram) {
+        Fog f;
+        f.fa = ram.f32(addr::vu1FogParams);
+        f.maxVal = ram.f32(addr::vu1FogParams + 4);
+        f.fb = ram.f32(addr::vu1FogParams + 12);
+        const uint32_t c = ram.u32(addr::fogColorCtx + 0x20);
+        for (int k = 0; k < 3; ++k) f.col[k] = float((c >> (8 * k)) & 0xFF) / 255.f;
+        return f;
+    }
+    Fog fog_;   // do ultimo collect
+    // F de um ponto (mundo) de uma secao com FGE; mesma conta do shader do draw. row3/eye: linha 3 do worldToScreenMat e olho.
+    float fogF(const float p[3], float burn, const float row3[4], const float eye[3]) const {
+        const float w = row3[0] * (p[0] - eye[0]) + row3[1] * (p[1] - eye[1]) + row3[2] * (p[2] - eye[2]) + row3[3];
+        if (!(w > 1e-3f)) return fog_.maxVal;
+        return std::min(fog_.maxVal, std::max(0.f, burn + fog_.fa + fog_.fb / w));
+    }
+private:
 
     struct ObjLight { bool lit = false; float spec = 0.f; };
     static ObjLight objectLight(const Ram &ram, uint32_t node) {
