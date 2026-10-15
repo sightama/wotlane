@@ -27,7 +27,7 @@
 //     UV (3 normal, 1 espelha U, 2 espelha V, 0 os dois); a cor sai da tabela pela idade, como no loadColors
 //   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
 //   - strite: cabeca pos e cauda pos - vel, esticada 2x para cada lado (de pos + 2*vel a pos - 3*vel), largura por pos.w
-// Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8, pos.w = giro, interpolados).
+// Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8, interpolados; pos.w = lado e bits baixos = celula/espelhamento).
 // Ainda aproximado: as faixas (sprine, stripe, sweepTrail) ligam particulas consecutivas; kite, wake e dustTrail viram sprites;
 // a cauda das linhas e do strite usa a matriz atual.
 #pragma once
