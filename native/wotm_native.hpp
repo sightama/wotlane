@@ -341,6 +341,7 @@ struct DrawItem {
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
     uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd*(1-As)
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
+    float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
 };
 
 struct Camera {
@@ -1931,8 +1932,8 @@ public:
                             vertexRgb(ol, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
                             rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
                         }
-                        if (tid && tid == screenId_) rlTexCoord2f(v.u * (1024.f / 640.f), 1.f - v.v * (256.f / 224.f));   // texels do GS na tela 640x224
-                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+                        if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
+                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
@@ -2075,6 +2076,19 @@ private:
         case 0x48: return 1;   // (Cs-0)*As+Cd: brilho aditivo (Kineticlops)
         case 0x42: return 2;   // (0-Cd)*As+Cd: escurece o fundo
         default: return 0;
+        }
+    }
+
+    // Deslocamento do UV do OBJECT, como o hierTraverseAsm monta o qword 4 do cabecalho do VU1 (vf19.xy, que os programas de desenho somam
+    // ao UV normalizado): uOffset/vOffset (+0x20/+0x24) e, com uvScroll (bit 0x800 das flags) dentro de um CHAR_INSTANCE, os canais de
+    // animacao uOffIdx/vOffIdx (+0x30/+0x32; indice negativo = 0).
+    void objectUvOffset(const Ram &ram, uint32_t node, float out[2]) const {
+        out[0] = ram.f32(node + 0x20);
+        out[1] = ram.f32(node + 0x24);
+        if (!(ram.u16(node + 0xC) & 0x800) || !animVal_) return;
+        for (int k = 0; k < 2; ++k) {
+            const int16_t idx = ram.s16(node + 0x30 + 2 * k);
+            out[k] = idx >= 0 ? ram.f32(animVal_ + 4 * uint32_t(idx)) : 0.f;
         }
     }
 
@@ -2275,7 +2289,10 @@ private:
         const uint32_t op = ram.u32(node) & 0x3F;
         ++byOp[op];
         switch (op) {
-        case 0: items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_}); break;                   // OBJECT
+        case 0:                                                                                                 // OBJECT
+            items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
+            objectUvOffset(ram, node, items.back().uvOff);
+            break;
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
             const uint8_t saved = blend_;
             const int b = groupBlend(ram, ram.u32(node + 4) & 0x0FFFFFFF);
