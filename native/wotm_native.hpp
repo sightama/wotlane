@@ -1956,21 +1956,24 @@ public:
         // por y); quem desenha a preenche e a zera no fim (normal 0 = sem neblina, alfa comum).
         //  - FGE: neblina (ver Fog).
         //  - GS: textura e vertice trazem cor e alfa crus do GS (0x80 = 1,0) e o shader modula como o GS (TFX MODULATE):
-        //    cor = texel * Cv / 128 (Cv > 0x80 clareia) e As = At * Av / 16384, limitados a 1 (o As do GS vai ate ~4);
-        //    sem ele, o produto comum (sombras, depuracao).
+        //    cor = texel * Cv / 128 (Cv > 0x80 clareia) e As = min(At * Av / 128, 255) / 128 (ate 1,99: a funcao de textura satura
+        //    em 255). Na mistura comum o As fica limitado a 1;
+        //    sem o modo GS, o produto comum (sombras, depuracao).
+        //  - PM: mistura aditiva/subtrativa (gsBlend 1 e 2); a saida e a cor vezes o As inteiro, e a mistura usa fator 1.
         if (!alphaShaderTried_) {
             alphaShaderTried_ = true;
             static const char *vs =
                 "#version 330\n"
                 "in vec3 vertexPosition; in vec2 vertexTexCoord; in vec3 vertexNormal; in vec4 vertexColor;\n"
                 "uniform mat4 mvp; uniform vec3 fogEye; uniform vec4 fogRow3; uniform vec3 fogParams;\n"
-                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog; out float fragGsA;\n"
+                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog; out float fragGsA; out float fragPm;\n"
                 "void main() {\n"
                 "  fragTexCoord = vertexTexCoord; fragColor = vertexColor;\n"
-                // normal = (burn, 1, FGE + 2 * GS) normalizada pelo rlNormal3f: as razoes por y sobrevivem; y = 0 = sem nada
+                // normal = (burn, 1, FGE + 2 * GS + 4 * PM) normalizada pelo rlNormal3f: as razoes por y sobrevivem; y = 0 = sem nada
                 "  float burn = 0.0, fl = 0.0;\n"
                 "  if (vertexNormal.y > 1e-6) { burn = vertexNormal.x / vertexNormal.y; fl = floor(vertexNormal.z / vertexNormal.y + 0.5); }\n"
-                "  fragGsA = fl >= 1.5 ? 1.0 : 0.0;\n"
+                "  fragGsA = mod(floor(fl / 2.0), 2.0) > 0.5 ? 1.0 : 0.0;\n"
+                "  fragPm = fl >= 3.5 ? 1.0 : 0.0;\n"
                 "  float w = dot(fogRow3.xyz, vertexPosition - fogEye) + fogRow3.w;\n"
                 "  float f = 255.0;\n"
                 "  if (mod(fl, 2.0) > 0.5 && w > 0.001) f = clamp(burn + fogParams.x + fogParams.z / w, 0.0, fogParams.y);\n"
@@ -1979,16 +1982,19 @@ public:
                 "}\n";
             static const char *fs =
                 "#version 330\n"
-                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA;\n"
+                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA; in float fragPm;\n"
                 "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; out vec4 finalColor;\n"
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
                 // GS: cor = texel * cor do vertice / 128 (o vertice vem cru, 0x80 = 1,0; acima disso clareia), limitada a 255;
-                // As = At * Av / (128 * 128)
-                "  if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); t.a = min(t.a * 3.9690, 1.0); }\n"
+                // As = At * Av / 128, saturado em 255 pela funcao de textura (como a cor), / 128: ate 255/128
+                "  float as = t.a;\n"
+                "  if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); as = min(t.a * 3.9690, 1.9922); t.a = min(as, 1.0); }\n"
                 "  if (t.a < 0.06) discard;\n"
                 "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
                 "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
-                "  finalColor = vec4(mix(fogColor, t.rgb, f), t.a); }\n";
+                "  vec3 c = mix(fogColor, t.rgb, f);\n"
+                // aditivo/subtrativo: a cor ja vezes o As inteiro (a mistura usa fator 1; gsBlend)
+                "  finalColor = fragPm > 0.5 ? vec4(c * as, 1.0) : vec4(c, t.a); }\n";
             alphaShader_ = LoadShaderFromMemory(vs, fs);
             fogLoc_[0] = GetShaderLocation(alphaShader_, "fogEye");
             fogLoc_[1] = GetShaderLocation(alphaShader_, "fogRow3");
@@ -2019,6 +2025,7 @@ public:
                              fog_.col[0] * 255.f, fog_.col[1] * 255.f, fog_.col[2] * 255.f, row3[0], row3[1], row3[2], row3[3]);
             if (fogLoc_[4] >= 0) SetShaderValue(alphaShader_, fogLoc_[4], &splitX, SHADER_UNIFORM_FLOAT);
             BeginShaderMode(alphaShader_);
+            g_premulShader = true;
         }
         rlDisableDepthTest();   // o ceu e desenhado primeiro, centrado no olho, sem profundidade
         drawList(ram, sky, wire);
@@ -2044,6 +2051,7 @@ public:
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
+        g_premulShader = false;
     }
 
     // Translucido: textura com alfa parcial ou vertices de alfa baixo. Esses vao no segundo passe (tras para frente, sem escrever profundidade).
@@ -2158,12 +2166,10 @@ public:
         unsigned clampedId = 0;    // textura posta em CLAMP no lote aberto; volta a REPEAT depois do flush
         bool open = false;
         int curBlend = 0;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
-        auto setBlend = [&](int b) {
+        auto setBlend = [&](int b) {   // 1: Cs*As + Cd; 2: Cd - Cs*As (cor pre-multiplicada no shader: shaderNormal com pm)
             if (b == curBlend) return;
             curBlend = b;
-            if (b == 1) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_ADD); rlSetBlendMode(RL_BLEND_CUSTOM); }          // Cs*As + Cd
-            else if (b == 2) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_REVERSE_SUBTRACT); rlSetBlendMode(RL_BLEND_CUSTOM); }   // Cd - Cs*As
-            else rlSetBlendMode(RL_BLEND_ALPHA);
+            gsBlend(b);
         };
         for (const auto &o : order) {
             const DrawItem &it = list[o.item];
@@ -2320,7 +2326,7 @@ public:
                         if (tid && tid == screenId_) rlTexCoord2f(tu * (1024.f / 640.f), 1.f - tv * (256.f / 224.f));   // texels do GS na tela 640x224
                         else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        shaderNormal(fogBurn, v.fge, gsV);   // neblina e modulacao do GS no shader do draw
+                        shaderNormal(fogBurn, v.fge, gsV, curBlend != 0);   // neblina e modulacao do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
@@ -2343,7 +2349,7 @@ public:
                     const int k = ix[q];
                     rlColor4ub(cr, cg, cb, ca);
                     if (tid) rlTexCoord2f(cu[k], cv[k]);
-                    shaderNormal(fogBurn, s.fge, gsA);
+                    shaderNormal(fogBurn, s.fge, gsA, curBlend != 0);
                     rlVertex3f(c[k][0], c[k][1], c[k][2]);
                 }
             }

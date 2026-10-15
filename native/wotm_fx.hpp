@@ -58,7 +58,21 @@ namespace wotm {
 
 // Normal do vertice para o shader do Scene::draw: (fogBurnThru, 1, FGE + 2 * GS). O rlNormal3f normaliza; o shader le as razoes
 // por y. FGE = neblina; GS = alfa cru do GS na textura e no vertice (As = At * Av / 16384). rlNormal3f(0, 0, 0) desliga os dois.
-inline void shaderNormal(float burn, bool fge, bool gs) { rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f)); }
+// PM (+4): a mistura e aditiva ou subtrativa e o shader devolve a cor ja vezes o As inteiro (gsBlend usa fator 1 na origem). O As do
+// GS vai ate 255/128 (At * Av / 128 saturado em 255 pela funcao de textura); o fator SRC_ALPHA do GL o limitaria a 1. Na mistura comum
+// ((Cs - Cd) As + Cd) fica limitado: As > 1 pediria fator negativo no destino.
+inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
+inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false) {
+    rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f));
+}
+// Mistura do GS: 0 = (Cs - Cd) As + Cd, 1 = Cs As + Cd (ALPHA 0x48), 2 = Cd - Cs As (0x42). Com o shader, 1 e 2 esperam a cor
+// pre-multiplicada (shaderNormal com pm).
+inline void gsBlend(int mode) {
+    const int src = g_premulShader ? RL_ONE : RL_SRC_ALPHA;
+    if (mode == 1) { rlSetBlendFactors(src, RL_ONE, RL_FUNC_ADD); rlSetBlendMode(RL_BLEND_CUSTOM); }
+    else if (mode == 2) { rlSetBlendFactors(src, RL_ONE, RL_FUNC_REVERSE_SUBTRACT); rlSetBlendMode(RL_BLEND_CUSTOM); }
+    else rlSetBlendMode(RL_BLEND_ALPHA);
+}
 
 // Textura branca com alfa 0x80 (1,0 do GS): o "sem textura" no modo GS (a padrao do raylib, alfa 255, valeria 2,0).
 inline unsigned gsWhiteTexture() {
@@ -508,7 +522,7 @@ public:
         rlDisableDepthTest();
         rlDisableBackfaceCulling();
         setBlend(BLEND_ADDITIVE);   // ALPHA 0x48: Cs As + Cd
-        shaderNormal(0.f, false, true);
+        shaderNormal(0.f, false, true, true);
         const float ox = f.cx - 0.5f * f.vw, oy = f.cy - 0.5f * f.vh;
         int curK = -1;
         for (const FlareQuad &q : quads) {
@@ -1110,10 +1124,8 @@ private:
         if (A == 2 && B == 0 && C == 0 && D == 1) return kBlendSubtract;        // Cd - Cs*As
         return BLEND_ALPHA;                                                     // (Cs-Cd)*As + Cd e o resto
     }
-    static void setBlend(int mode) {
-        if (mode == kBlendSubtract) { rlSetBlendFactors(RL_SRC_ALPHA, RL_ONE, RL_FUNC_REVERSE_SUBTRACT); rlSetBlendMode(RL_BLEND_CUSTOM); }
-        else rlSetBlendMode(mode);
-    }
+    static void setBlend(int mode) { gsBlend(mode == kBlendSubtract ? 2 : mode == BLEND_ADDITIVE ? 1 : 0); }
+    static bool premulFor(int mode) { return mode == kBlendSubtract || mode == BLEND_ADDITIVE; }
 
     // RGBAQ do GS (0x80 = 1,0) cru: o modo GS do shader (shaderNormal) faz texel * Cv / 128 e At * Av / 16384
     static void vcolor(uint32_t c) { rlColor4ub(uint8_t(c & 255), uint8_t((c >> 8) & 255), uint8_t((c >> 16) & 255), uint8_t(c >> 24)); }
@@ -1148,10 +1160,11 @@ private:
         };
 
         rlDrawRenderBatchActive();
-        setBlend(blendFor(ram.u32(b + fxoff::alphaContext)));
+        const int blend = blendFor(ram.u32(b + fxoff::alphaContext));
+        setBlend(blend);
         // neblina no shader do Scene::draw: o XGKICK das particulas leva PRIM.FGE em todos os tipos medidos pela checagem VU1 (sprite,
         // texSprite, stripe, strite, arco, sprine, frag, pedestre, dustTrail); alfa do GS (texturas com alfa cru); o draw zera no fim
-        shaderNormal(0.f, true, true);
+        shaderNormal(0.f, true, true, premulFor(blend));
         auto A = [&](int i) { return haveAge ? int(ram.s16(age + 2 * uint32_t(i))) : 0; };
 
         if (s.type == FX_LINE) {
