@@ -75,6 +75,9 @@ void mathfQuaternionMulTransVec(_fvector *dst, _fvector *q, _fvector *v);
 int viewGetCurView(void);
 void *viewGetDef(int view);
 extern "C" float tanf(float);
+extern "C" float acosf(float);
+extern "C" float atanf(float);
+void mathfNormalizeQuaternionFromW(_fvector *dst, _fvector *src);
 extern "C" float fabsf(float);
 #define FMAX(a, b) ({ float _r; __asm__ volatile("max.s %0,%1,%2" : "=f"(_r) : "f"(a), "f"(b) : "memory"); _r; })
 #define FMIN(a, b) ({ float _r; __asm__ volatile("min.s %0,%1,%2" : "=f"(_r) : "f"(a), "f"(b) : "memory"); _r; })
@@ -1203,8 +1206,145 @@ void Camera::checkNewPosition(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", checkNewPosition__6Camera);
 #endif
+/* Nonzero when pos is inside the view cone: vertically within 32.5 degrees (axis 0 or 1) and horizontally within 40% of
+   the view's FOV (axis 0 or 2). Unless testOnly, a position outside is brought in by turning the camera (pitch clamped
+   to about +-89 degrees). */
+#ifdef NON_MATCHING
+/* equivalente: 152/225 palavras; alocação de FPR e ordem dos testes */
+int Camera::posInFOV(_fvector &pos, int axis, bool testOnly)
+{
+    char *c = m_raw;
+    float vAngle;
+    float hAngle;
+    float cosA;
+    FVECTOR d;
+    FVECTOR p;
+    int out;
+
+    vAngle = 0.5672320f;
+    hAngle = *(float *)((char *)viewGetDef(viewGetCurView()) + 0xB0) * 0.4f * 0.017453292f;
+    vecSub(&d, &pos, &CAM_CS(c)->trans);
+    out = 0;
+    if ((unsigned)axis < 2) {
+        VEC_MADD(&p, &d, (_fvector *)CAM_CS(c)->mat[0], -vecDot(&d, (_fvector *)CAM_CS(c)->mat[0]));
+        vecNormalize3(&p);
+        cosA = vecDot(&p, (_fvector *)CAM_CS(c)->mat[1]);
+        if (cosA < cosf(vAngle)) {
+            out = 1;
+            if (!testOnly) {
+                if (p.z < CAM_CS(c)->mat[1][2]) {
+                    CAM_CS(c)->rot.x -= acosf(cosA) - vAngle;
+                    CAM_CS(c)->rot.x = FMAX(CAM_CS(c)->rot.x, -1.553343f);
+                } else {
+                    CAM_CS(c)->rot.x += acosf(cosA) - vAngle;
+                    CAM_CS(c)->rot.x = FMIN(CAM_CS(c)->rot.x, 1.553343f);
+                }
+                out = 1;
+            }
+        }
+    }
+    if (axis == 0 || axis == 2) {
+        VEC_MADD(&p, &d, (_fvector *)CAM_CS(c)->mat[2], -vecDot(&d, (_fvector *)CAM_CS(c)->mat[2]));
+        vecNormalize3(&p);
+        cosA = vecDot(&p, (_fvector *)CAM_CS(c)->mat[1]);
+        if (cosA < cosf(hAngle)) {
+            out = 1;
+            if (!testOnly) {
+                if (d.x * CAM_CS(c)->mat[1][1] - d.y * CAM_CS(c)->mat[1][0] < 0.0f)
+                    CAM_CS(c)->rot.z -= acosf(cosA) - hAngle;
+                else
+                    CAM_CS(c)->rot.z += acosf(cosA) - hAngle;
+                out = 1;
+            }
+        }
+    }
+    if (out && !testOnly)
+        mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    return !out;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", posInFOV__6CameraR8_fvectorib);
+#endif
+/* Moves the camera towards target at `rate`. Seen from above, when the monster would leave the camera's view angle
+   (atan of +0xE48 over its distance from target) and the camera is farther from target than the monster, the camera
+   orbits around target instead (rotation +0xE50, a quaternion about z, mirrored to the side the monster is on) and
+   returns 1. Afterwards the orbit eases back to identity. `direct` skips the orbit. */
+#ifdef NON_MATCHING
+/* equivalente: 14/244 palavras; o retail reusa E54 (0) como o zero dos smoothEasyIn e do teste de lado; sqrt.s em outro FPR */
+int Camera::translateCamera(_fvector &target, float rate, bool direct)
+{
+    char *c = m_raw;
+    FVECTOR mon;
+    FVECTOR cam;
+    FVECTOR tgt;
+    FVECTOR a;
+    FVECTOR aN;
+    FVECTOR b;
+    FVECTOR bN;
+    FVECTOR r;
+    float lenA;
+    float lenB;
+    float ang;
+    float cosAB;
+    float z;
+    float s;
+
+    mon.x = CAM_MONSTER(c)->m_cs->trans.x;
+    mon.y = CAM_MONSTER(c)->m_cs->trans.y;
+    mon.z = 0.0f;
+    cam.x = CAM_CS(c)->trans.x;
+    cam.y = CAM_CS(c)->trans.y;
+    cam.z = 0.0f;
+    tgt.x = target.x;
+    tgt.y = target.y;
+    tgt.z = 0.0f;
+    vecSub(&a, &mon, &tgt);
+    vecSub(&b, &cam, &tgt);
+    lenA = eeSqrtf(vecDot(&a, &a));
+    s = 1.0f / lenA;
+    aN.z = a.z * s;
+    aN.x = a.x * s;
+    aN.y = a.y * s;
+    lenB = eeSqrtf(vecDot(&b, &b));
+    s = 1.0f / lenB;
+    bN.z = b.z * s;
+    bN.y = b.y * s;
+    bN.x = b.x * s;
+    ang = atanf(CF(c, 0xE48) / lenA);
+    cosAB = vecDot(&aN, &bN);
+    if (cosf(ang) < cosAB && lenA < lenB && !direct) {
+        float t = (ang - acosf(cosAB)) * rate * 0.5f;
+        float sn = sinf(t);
+
+        CF(c, 0xE50) = 0.0f;
+        CF(c, 0xE54) = 0.0f;
+        CF(c, 0xE58) = sn;
+        CF(c, 0xE5C) = cosf(t);
+        if (0.0f < b.x * a.y - b.y * a.x)
+            CF(c, 0xE58) = -CF(c, 0xE58);
+        mathfQuaternionMulTransVec(&r, (_fvector *)(c + 0xE50), &bN);
+        z = CAM_CS(c)->trans.z;
+        VEC_MADD(&CAM_CS(c)->trans, &tgt, &r, lenB * (1.0f - rate));
+        CAM_CS(c)->trans.z = smoothEasyIn(z, target.z, rate, 0.0f);
+        return 1;
+    }
+    if (CF(c, 0xE5C) < 0.999f && !direct) {
+        CF(c, 0xE5C) = smoothEasyIn(CF(c, 0xE5C), 1.0f, 0.1f, 0.001f);
+        mathfNormalizeQuaternionFromW((_fvector *)(c + 0xE50), (_fvector *)(c + 0xE50));
+        mathfQuaternionMulTransVec(&r, (_fvector *)(c + 0xE50), &bN);
+        z = CAM_CS(c)->trans.z;
+        VEC_MADD(&CAM_CS(c)->trans, &tgt, &r, lenB * (1.0f - rate));
+        CAM_CS(c)->trans.z = smoothEasyIn(z, target.z, rate, 0.0f);
+        return 0;
+    }
+    CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, target.x, rate, 0.0f);
+    CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, target.y, rate, 0.0f);
+    CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, target.z, rate, 0.0f);
+    return 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", translateCamera__6CameraR8_fvectorfb);
+#endif
 /* While the shake amount (+0xD88) is above 1 (and shaking is enabled): jolts the camera sideways by a random amount
    in the camera's frame (offset kept at +0xD30) plus a random rise, then lets the amount fall off (+0xD8C). */
 void Camera::shakeCamera(void)

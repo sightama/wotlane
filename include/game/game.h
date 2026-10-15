@@ -43,7 +43,7 @@ public:
     void checkCollision(int view);
     void checkNewPosition(void);
     int posInFOV(_fvector &pos, int a, bool b);
-    void translateCamera(_fvector &pos, float f, bool b);
+    int translateCamera(_fvector &target, float rate, bool direct);
     void shakeCamera(void);
 };
 
