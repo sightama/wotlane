@@ -692,6 +692,8 @@ public:
         tex_.clear();
         for (auto &kv : fontTex_) if (kv.second.id) UnloadTexture(kv.second);
         fontTex_.clear();
+        for (DustSrc &s : dustSrc_) s.ok = false;
+        dustHash_ = 0;
     }
 
     // TEX0 do objeto (gsTexCtx[slot]); 0 quando o objeto nao tem textura ou a secao e kSlotNoTex
@@ -795,8 +797,10 @@ public:
     }
 
     // Textura de particula: texId (indice do texInfo global) + TEX0 da tabela de particulas (psm/CBP). 0 = nao decodificou.
+    // Particles::kDustTexId = a textura composta de poeira/fumaca (dustTexture).
     // WOTM_FXNOGRAY=1: sem a rampa cinza quando a paleta nao esta nos .RTX carregados (diagnostico).
     unsigned particleTexture(const Ram &ram, uint32_t texId, uint64_t tex0) {
+        if (texId == Particles::kDustTexId) return dustTexture(ram);
         if (!texId || texId >= 1000) return 0;
         const gs::Tex0 t0 = gs::Tex0::decode(tex0);
         const uint64_t key = (uint64_t(texId) << 40) | (uint64_t(t0.cbp) << 12) | (uint64_t(t0.csa) << 4) | t0.cpsm | (1ull << 61);
@@ -815,6 +819,184 @@ public:
         tex_[key] = t;
         return t.id;
     }
+
+    // Textura composta de poeira/fumaca (VRAM 0xFD800, TEX0 com TBP 0x3F60, CT32 64x64, quatro celulas de 32x32), que o jogo refaz
+    // na VRAM a cada particleDraw com algum sistema (texDrawDustPacketBuild, pacote em 0x78F6E0). Aqui a mesma conta na CPU, refeita
+    // quando os parametros mudam (a fase anda 1/256 por quadro; depende da camera). docs/passos/VU1CHECK.md, "Corrigido".
+    //  - Passe 1 (microprograma 0x2E98): um gerador h = frac(c + h * b) sorteia 70 normais x 4 celulas; cada uma vira um SPRITE de
+    //    meio-lado 5 + 4t texels (t = frac(fase + h.w)) no centro da celula + A * n * t, com A das colunas do worldToScreenMat (q0-q3)
+    //    e o foco (q5); z = min(72 - 1000 t (frente . n), 128), a = min(t, 1 - t) z, emitido so com a >= 1 (hemisferio voltado para a
+    //    camera), ate 199 sprites. Desenha a fonte 1 (TextureInfo[32]) com RGBA (1, 106, 1, a) aditivo so RGB: a densidade fica no G.
+    //  - Metade do RGB e A = G & 0x7F (copyGreenChannelToAlpha, o truque do CT16).
+    //  - Passe 2 (MSCNT, 0x31C0): fundo e sprites com cor = ambiente + 0,5 + soma das luzes da fase (dustLighting) pela normal, e
+    //    A = a * 1,20755, com a fonte 2 (TextureInfo[33]) em (Cs - Cd) * As + Cd so RGB.
+    // Aritmetica em float comum (o VU trunca); a distribuicao e a mesma do dustsim.py da investigacao. Na METRO: cor ~(57, 57, 40),
+    // alfa ate 127 (fumaca escura).
+    unsigned dustTexture(const Ram &ram) {
+        constexpr uint32_t kPkt = 0x0078F6E0u, kParams = 0x006F8DA4u, kNormals = 0x006F8D9Cu, kColors = 0x006F8DA0u, kCtx = 0x00256B90u;
+        const uint32_t pa = ram.u32(kParams), na = ram.u32(kNormals), ca = ram.u32(kColors);
+        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustTex_.id;
+        float P[8], L[3][4], C[5][3], ctx[8][4];
+        for (int i = 0; i < 8; ++i) P[i] = ram.f32(pa + 4 * uint32_t(i));
+        for (int r = 0; r < 3; ++r) for (int i = 0; i < 4; ++i) L[r][i] = ram.f32(na + 16 * uint32_t(r) + 4 * uint32_t(i));
+        for (int k = 0; k < 5; ++k) for (int i = 0; i < 3; ++i) C[k][i] = ram.f32(ca + 16 * uint32_t(k) + 4 * uint32_t(i));
+        for (int q = 0; q < 8; ++q) for (int i = 0; i < 4; ++i) ctx[q][i] = ram.f32(kCtx + 16 * uint32_t(q) + 4 * uint32_t(i));
+        const uint32_t nloop = ram.u32(pa - 16), seed = ram.u32(pa - 4);
+        uint64_t hash = 1469598103934665603ull;
+        auto mix = [&](const void *d, size_t n) { for (size_t i = 0; i < n; ++i) hash = (hash ^ static_cast<const uint8_t *>(d)[i]) * 1099511628211ull; };
+        mix(P, sizeof P); mix(L, sizeof L); mix(C, sizeof C); mix(ctx, sizeof ctx); mix(&nloop, 4); mix(&seed, 4);
+        if (dustTex_.id && hash == dustHash_) return dustTex_.id;
+
+        auto source = [&](uint32_t ti, DustSrc &s) {   // decodificada uma vez por (texId, TEX0)
+            const uint32_t k = ram.u16(fxaddr::textureInfo + 8 * ti + 2) & 127, id = ram.u16(fxaddr::texId + 2 * k);
+            const uint64_t t0 = uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
+            if (!id || id >= 1000) return false;
+            if (s.ok && s.id == id && s.tex0 == t0) return true;
+            const uint32_t ptr = ram.u32(addr::texInfo + 16 * id) & 0x0FFFFFFF;
+            s.id = id; s.tex0 = t0;
+            s.ok = decodeUploadTex(ram, ptr, gs::Tex0::decode(t0), s.px, s.w, s.h, false, true) && s.w && s.h && s.px.size() >= size_t(s.w) * s.h;
+            return s.ok;
+        };
+        DustSrc &src1 = dustSrc_[0], &src2 = dustSrc_[1];
+        if (!source(32, src1) || !source(33, src2)) return dustTex_.id;
+        const double startTime = GetTime();   // diagnostico (WOTM_DUSTLOG): custo da conta, sem a decodificacao das fontes
+
+        // ---- passe 1: lista de sprites
+        auto fbits = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
+        auto fbitsOf = [](float f) { uint32_t b; std::memcpy(&b, &f, 4); return b; };
+        uint32_t rnd = 0x3F800000u | (seed & 0x7FFFFFu);   // RINIT / RNEXT do VU
+        auto rnext = [&]() { const uint32_t x = rnd & 0x7FFFFFu; rnd = ((((x << 1) | (((x >> 4) ^ (x >> 22)) & 1u)) & 0x7FFFFFu) | 0x3F800000u); return fbits(rnd); };
+        float h[4];
+        for (float &v : h) v = rnext();
+        const float hc[4] = {fbits(0x3f3659ad), fbits(0x3f1ec458), fbits(0x3eb64807), fbits(0x3f16d60a)};
+        const float hb[4] = {fbits(0x3f7e2a20), fbits(0x3f7cd6ea), fbits(0x3f66b74f), fbits(0x3f7e6ea7)};
+        const float sx = P[2] / ctx[5][0], sy = P[2] / ctx[5][1];
+        float col[3][3];
+        for (int i = 0; i < 3; ++i) {
+            const float *c = ctx[i];
+            col[i][0] = (c[0] + ctx[6][0] * c[3]) * sx; col[i][1] = (c[1] + ctx[6][1] * c[3]) * sy; col[i][2] = P[6] * c[3];
+        }
+        const float fwd[3] = {ctx[0][3], ctx[1][3], ctx[2][3]};
+        static const float kCenter[4][2] = {{2032, 2032}, {2064, 2032}, {2032, 2064}, {2064, 2064}};   // celulas na tela do GS (2016 = texel 0)
+        int16_t uvtab[16][4];   // UNPACK V4-16 do pacote: 4 sub-imagens x 4 espelhamentos da fonte, em 1/16 de texel
+        for (uint32_t k = 0; k < 16; ++k)
+            for (uint32_t c = 0; c < 4; ++c) uvtab[k][c] = ram.s16(kPkt + 0xB4 + 8 * k + 2 * c);
+        struct DSpr { int x0, y0, x1, y1, a1; const int16_t *uv; float n[3]; int rgb2[3], a2; };
+        std::vector<DSpr> spr;
+        float r21[3] = {h[0] - 1.5f, h[1] - 1.5f, h[2] - 1.5f};
+        int left = int(nloop), vi5 = 29;
+        bool full = false;
+        while (left > 0 && !full) {
+            float t = P[3] + h[3];
+            t -= t >= 0.f ? std::floor(t) : std::trunc(t);
+            for (int i = 0; i < 4; ++i) { h[i] = hc[i] + h[i] * hb[i]; h[i] -= std::trunc(h[i]); }
+            const float r2 = r21[0] * r21[0] + r21[1] * r21[1] + r21[2] * r21[2];
+            const float half = (1.f + P[0]) + t * P[1];
+            std::rotate(h, h + 1, h + 4);   // MR32
+            const float rs = 1.f / std::sqrt(r2);
+            float n[3] = {r21[0] * rs, r21[1] * rs, r21[2] * rs};
+            for (int i = 0; i < 3; ++i) r21[i] = h[i] - 0.5f;
+            for (int k = 0; k < 4; ++k) {
+                const uint32_t idx = fbitsOf(h[0]) & 15;
+                std::rotate(h, h + 1, h + 4);
+                --left;
+                if (vi5 >= 0x3FC) { full = true; break; }
+                const float d[3] = {n[0] * t, n[1] * t, n[2] * t};
+                const float cx = col[0][0] * d[0] + col[1][0] * d[1] + col[2][0] * d[2] + kCenter[k][0];
+                const float cy = col[0][1] * d[0] + col[1][1] * d[1] + col[2][1] * d[2] + kCenter[k][1];
+                const float cz = std::min(col[0][2] * d[0] + col[1][2] * d[1] + col[2][2] * d[2] + P[7], 128.f);
+                const float a = std::min(1.f - t, t) * cz;
+                if (a >= 1.f) {
+                    DSpr s{int((cx - half) * 16.f) - 2016 * 16, int((cy - half) * 16.f) - 2016 * 16, int((cx + half) * 16.f) - 2016 * 16,
+                           int((cy + half) * 16.f) - 2016 * 16, int(a), uvtab[idx], {n[0], n[1], n[2]}, {0, 0, 0}, 0};
+                    spr.push_back(s);
+                    vi5 += 5;
+                }
+                const float n0 = n[0];
+                n[0] = -n[1]; n[1] = n[2]; n[2] = n0;   // a normal gira de celula para celula: (x, y, z) -> (-y, z, x)
+            }
+        }
+
+        // ---- passe 2: luz
+        auto light = [&](const float nv[3], int out[3]) {
+            float dots[4];
+            for (int j = 0; j < 4; ++j) dots[j] = std::max(0.f, L[0][j] * nv[0] + L[1][j] * nv[1] + L[2][j] * nv[2]);
+            for (int i = 0; i < 3; ++i) {
+                float v = C[4][i] + 0.5f;
+                for (int j = 0; j < 4; ++j) v += C[j][i] * dots[j];
+                out[i] = std::min(255, std::max(0, int(v)));
+            }
+        };
+        int bg[3];
+        light(fwd, bg);
+        for (DSpr &s : spr) { light(s.n, s.rgb2); s.a2 = int(float(s.a1) * P[5]); }
+
+        // ---- rasterizacao como o GS (bilinear com CLAMP na fonte; regra do canto superior esquerdo)
+        auto sample = [](const DustSrc &src, float u, float v, int out[4]) {
+            u -= 0.5f; v -= 0.5f;
+            const int i0 = int(std::floor(u)), j0 = int(std::floor(v));
+            const float fu = u - float(i0), fv = v - float(j0);
+            float acc[4] = {0, 0, 0, 0};
+            for (int dj = 0; dj < 2; ++dj)
+                for (int di = 0; di < 2; ++di) {
+                    const float wgt = (di ? fu : 1.f - fu) * (dj ? fv : 1.f - fv);
+                    const int x = std::min(std::max(i0 + di, 0), int(src.w) - 1), y = std::min(std::max(j0 + dj, 0), int(src.h) - 1);
+                    const uint32_t p = src.px[size_t(y) * src.w + size_t(x)];
+                    for (int c = 0; c < 4; ++c) acc[c] += float((p >> (8 * c)) & 255) * wgt;
+                }
+            for (int c = 0; c < 4; ++c) out[c] = int(acc[c]);
+        };
+        std::vector<std::array<int, 4>> fb(64 * 64, std::array<int, 4>{0, 0, 0, 0});
+        auto draw = [&](const DSpr &s, const DustSrc &src, const int rgb[3], int a, bool additive) {
+            const float u0 = s.uv[0] / 16.f, v0 = s.uv[1] / 16.f, u1 = s.uv[2] / 16.f, v1 = s.uv[3] / 16.f;
+            if (s.x1 <= s.x0 || s.y1 <= s.y0) return;
+            for (int py = std::max(0, (s.y0 + 15) >> 4); py < std::min(64, (s.y1 + 15) >> 4); ++py)
+                for (int px = std::max(0, (s.x0 + 15) >> 4); px < std::min(64, (s.x1 + 15) >> 4); ++px) {
+                    int t[4];
+                    sample(src, u0 + (u1 - u0) * float(px * 16 - s.x0) / float(s.x1 - s.x0), v0 + (v1 - v0) * float(py * 16 - s.y0) / float(s.y1 - s.y0), t);
+                    const int as = (a * t[3]) >> 7;
+                    auto &d = fb[size_t(py) * 64 + size_t(px)];
+                    for (int c = 0; c < 3; ++c) {
+                        const int cs = (rgb[c] * t[c]) >> 7;
+                        d[c] = additive ? std::min(255, ((cs * as) >> 7) + d[c]) : std::max(0, std::min(255, (((cs - d[c]) * as) >> 7) + d[c]));
+                    }
+                }
+        };
+        const int rgb1[3] = {1, int(P[4]), 1};
+        for (const DSpr &s : spr) draw(s, src1, rgb1, s.a1, true);
+        for (auto &p : fb) {
+            for (int c = 0; c < 3; ++c) p[c] >>= 1;          // sprite (0, 0, 0, 64) em (Cs - Cd) * As + Cd: ((-Cd * 64) >> 7) + Cd
+            p[3] = p[1] & 0x7F;                            // copyGreenChannelToAlpha (o bit 15 do CT16 sai 0)
+            for (int c = 0; c < 3; ++c) p[c] = bg[c];      // passe 2: fundo
+        }
+        for (const DSpr &s : spr) draw(s, src2, s.rgb2, s.a2, false);
+
+        std::vector<uint32_t> px(64 * 64);   // alfa cru do GS (0x80 = 1,0), como as outras texturas de particula
+        for (size_t i = 0; i < px.size(); ++i)
+            px[i] = uint32_t(fb[i][0]) | (uint32_t(fb[i][1]) << 8) | (uint32_t(fb[i][2]) << 16) | (uint32_t(fb[i][3]) << 24);
+        if (!dustTex_.id) {
+            Image img{px.data(), 64, 64, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            dustTex_ = LoadTextureFromImage(img);
+            if (dustTex_.id) { SetTextureFilter(dustTex_, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dustTex_, TEXTURE_WRAP_CLAMP); }
+        } else {
+            UpdateTexture(dustTex_, px.data());
+        }
+        dustHash_ = hash;
+        {   // diagnostico: WOTM_DUSTLOG=1 imprime o resumo a cada regeneracao
+            static const bool lg = std::getenv("WOTM_DUSTLOG") != nullptr;
+            if (lg) {
+                int amax = 0; double asum = 0, cw[3] = {0, 0, 0};
+                for (const auto &p : fb) { amax = std::max(amax, p[3]); asum += p[3]; for (int c = 0; c < 3; ++c) cw[c] += double(p[c]) * p[3]; }
+                std::fprintf(stderr, "[dust] fase %.4f sprites %zu fundo %d %d %d alfa max %d media %.1f cor ponderada %.0f %.0f %.0f (%.2f ms)\n", P[3], spr.size(), bg[0], bg[1], bg[2],
+                             amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0, (GetTime() - startTime) * 1000.0);
+            }
+        }
+        return dustTex_.id;
+    }
+    struct DustSrc { std::vector<uint32_t> px; uint32_t w = 0, h = 0, id = 0; uint64_t tex0 = 0; bool ok = false; };
+    DustSrc dustSrc_[2];   // fontes 1 e 2 (TextureInfo[32] e [33]) decodificadas
+    Texture2D dustTex_{};
+    uint64_t dustHash_ = 0;
 
     Particles fx;   // sistemas de particulas do quadro (collect junto com a cena, draw depois dos translucidos)
 
@@ -1258,8 +1440,8 @@ public:
     // ---- Particulas (fx[], 0x5BA280: 98 x 0x2EE0 bytes; o VU1 monta os quadrados, aqui viram sprites voltados para a camera) ----
     // Por efeito: vis.attribs & 0xFF = tipo (3 sprite, 4 texsprite, 13 destroço, 14 pedestre, 15 poeira...), numParticles +0x2ED0, pos[] (+0x2EB0,
     // 16 bytes: xyz mundo e w = rotacao nos destroços), age[] (+0x2EB8, int16), info.lifetime (+0x2E4A), tamanho min/max (+0x2E38/+0x2E3C),
-    // texLoad[0] (+0x2C40) = indice em texInfo e TEX0ptr (+0x2EBC) = TEX0 (psm, CBP da paleta). Poeira/fumaça "compostas" (texInfo 0xFFFF) nao
-    // tem pixels no jogo (geradas na VRAM): ficam como circulo suave. Destroços (13) usam o atlas FragTex em celulas de 8x8.
+    // texLoad[0] (+0x2C40) = indice em texInfo e TEX0ptr (+0x2EBC) = TEX0 (psm, CBP da paleta). So destroços (13), com o atlas FragTex em
+    // celulas de 8x8; destroço sem atlas vira circulo suave. Os outros tipos (inclusive a poeira composta, dustTexture) ficam com `fx`.
     void collectParticles(const Ram &ram) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;   // diagnostico: sem particulas
         if (off) return;

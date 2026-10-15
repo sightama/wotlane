@@ -144,6 +144,16 @@ public:
 
     std::vector<FxSystem> systems;
 
+    // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
+    // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
+    // 105) e o dustTrail (1, 2 e 118) sobem a tabela de UV das celulas e escolhem a entrada pelos bits baixos de pos.w.
+    static constexpr uint32_t kDustTexId = 0xFFFF;
+    static bool isDustTex(uint64_t tex0) { return (tex0 & 0x3FFF) == 0x3F60; }
+    static uint64_t systemTex0(const Ram &ram, uint32_t b, uint32_t frame = 0) {
+        const uint32_t k = (ram.u16(fxaddr::textureInfo + 8 * (ram.u32(b + fxoff::texInfoIndex) & 127) + 2) + frame) & 127;
+        return uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
+    }
+
     // Teste de visao do particleDraw: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), a caixa (centro, meia-extensao) contra
     // os 6 planos de worldCtx[0] (fovNormsTP em +0xF0, fovSigns em +0x170; src/common/view.cpp). Falso = o retail nao desenha o sistema.
     static bool inViewFov(const Ram &ram, uint32_t b) {
@@ -601,6 +611,7 @@ public:
             return;
         }
         // Sprites (sprite, texSprite, dustTrail, frag, kite, wake, strite): um quad por particula
+        const bool dust = isDustTex(systemTex0(ram, b));
         for (int i = 0; i < s.n; ++i) {
             float p[4];
             P(i, p);
@@ -644,7 +655,11 @@ public:
             uint32_t wbits;
             std::memcpy(&wbits, &p[3], 4);
             const bool fu = (wbits & 2) == 0, fv = (wbits & 1) == 0;
-            const float u0 = fu ? 1.f : 0.f, u1 = fu ? 0.f : 1.f, v0 = fv ? 1.f : 0.f, v1 = fv ? 0.f : 1.f;
+            float u0 = fu ? 1.f : 0.f, u1 = fu ? 0.f : 1.f, v0 = fv ? 1.f : 0.f, v1 = fv ? 0.f : 1.f;
+            if (dust) {   // celula wbits & 3 da textura composta: (9, 9, 503, 503) + 512 * (k & 1, k >> 1), em 1/16 de texel de 64
+                const float cu = float(wbits & 1) * 0.5f, cv = float((wbits >> 1) & 1) * 0.5f;
+                u0 = cu + 9.f / 1024.f; u1 = cu + 503.f / 1024.f; v0 = cv + 9.f / 1024.f; v1 = cv + 503.f / 1024.f;
+            }
             const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
             for (int k = 0; k < 4; ++k)
                 for (int a = 0; a < 3; ++a) c[k][a] = cpos[a] + ax[a] * sx[k] + ay[a] * sy[k];
@@ -732,7 +747,7 @@ private:
             const uint32_t k = (texIndex + frame) & 127;
             const uint32_t id = ram.u16(fxaddr::texId + 2 * k);
             const uint64_t t0 = uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
-            unsigned gl = (numTex > 0 && id) ? texture(id, t0) : 0;
+            unsigned gl = (numTex > 0 && id) ? texture(id, t0) : isDustTex(t0) ? texture(kDustTexId, t0) : 0;
             return gl ? gl : blobTexture();
         };
 
