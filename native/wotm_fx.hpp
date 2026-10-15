@@ -84,8 +84,8 @@ constexpr uint32_t maxParticles = 0x2ED4;
 }
 
 enum FxType : uint32_t {
-    FX_LINE = 1, FX_SWEEPTRAIL = 2, FX_SPRITE = 3, FX_TEXSPRITE = 4, FX_STRIPE = 5, FX_STRITE = 6, FX_SPRINE = 8, FX_KITE = 9,
-    FX_FRAG = 13, FX_PEDS = 14, FX_DUSTTRAIL = 15, FX_WAKE = 16,
+    FX_LINE = 1, FX_SWEEPTRAIL = 2, FX_SPRITE = 3, FX_TEXSPRITE = 4, FX_STRIPE = 5, FX_STRITE = 6, FX_ARC = 7, FX_SPRINE = 8, FX_KITE = 9,
+    FX_FRAG = 13, FX_PEDS = 14, FX_DUSTTRAIL = 15, FX_WAKE = 16, FX_ARC2 = 17,
 };
 
 inline const char *fxTypeName(uint32_t t) {
@@ -101,7 +101,8 @@ inline const char *fxTypeName(uint32_t t) {
     case FX_FRAG: return "frag";
     case FX_DUSTTRAIL: return "dustTrail";
     case FX_WAKE: return "wake";
-    case 7: return "tipo7";
+    case FX_ARC: return "arco";
+    case FX_ARC2: return "arco17";
     case FX_PEDS: return "pedestre";
     default: return "?";
     }
@@ -318,6 +319,137 @@ public:
         return foggedAt(v, p);
     }
 
+    // Gerador do VU (RINIT/RNEXT, como o PCSX2): R em [1, 2) com 23 bits de LFSR
+    static uint32_t vuRinit(uint32_t bits) { return 0x3F800000u | (bits & 0x7FFFFFu); }
+    static float vuRnext(uint32_t &R) {
+        const uint32_t x = (R >> 4) & 1, y = (R >> 22) & 1;
+        R = (((R << 1) ^ x ^ y) & 0x7FFFFFu) | 0x3F800000u;
+        float f;
+        std::memcpy(&f, &R, 4);
+        return f;
+    }
+
+    // Arco eletrico (tipos 7 e 17; electricArcPacketInit/Build/Update, microprograma 0x19F8, lido em build/vu1/particle.txt).
+    // Pacote: pos[] (fx +0x2EB0) em cadeias (cabeca: w baixo = 1 + elos; elo: w baixo = 5 << (nivel - 1), ou 0 = reto; cabeca 0
+    // encerra); antes dele o cabecalho (pos - 0x28: minSize, semente, segInitU, 138 + CLUToffset, expansionRate, jag, segDeltaU,
+    // numColors - 1) e 16 cores RGBA em float 0..255 (pos - 0x13C), que o electricArcPacketUpdate reescreve.
+    //  - RINIT(semente) uma vez por pacote. Elo de nivel L de a a b: 2^L sub-trechos; amp = jag * |b - a|, metade a cada nivel; em cada
+    //    vao, meio = 0,5a + r * amp - 1,5 * amp + 0,5b, r = (rx, ry, rz) numa janela deslizante de RNEXT (tres na entrada do elo; depois
+    //    de cada meio, rx = ry, ry = rz, rz = RNEXT).
+    //  - Fita (sub-rotina 0x1F70) nos S + 1 pontos, em coordenadas de tela isotropicas com y para baixo (o VU1 corrige o y pela razao
+    //    dos focos): fantasmas 2P0 - P1 e 2PS - PS-1 (homogeneos), t_in e t_out unitarios, n = (t.y, -t.x); v = n_in + n_out +
+    //    (t_out - t_in) se t_in x t_out < 0, senao + (t_in - t_out) (sem renormalizar). Vertices p +/- s_k / 2 * v no plano de vista,
+    //    s_k = minSize + exp * k / S; A (+) com V = 1, B (-) com V = 0; U_k = segInitU + segDeltaU * (k - S / 2) (perspectiva, STQ);
+    //    cor = lerp da tabela em clut + k * (nc - 1) / S, + 0,5, truncada (a mesma nos dois vertices).
+    //  - O VU1 marca ADC com W < 1, F < 1 ou fora da banda de recorte; aqui some o quadrado com algum W < 1 (o F, no forEachQuad).
+    // g(k, cantos[4][3] (A_k, B_k, B_k+1, A_k+1), uv[4][2], cor[2] (RGBA 0x80 = 1,0, em k e k + 1)).
+    template <class G> static void arcQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
+        const uint32_t pos = ram.u32(s.base + fxoff::pos);
+        if (s.n < 3 || !ram.ok(pos - 0x13C, 0x13C + 16 * uint32_t(s.n))) return;
+        const float minSize = ram.f32(pos - 0x28), segInitU = ram.f32(pos - 0x20), clut = ram.f32(pos - 0x1C) - 138.f;
+        const float expRate = ram.f32(pos - 0x18), jag = ram.f32(pos - 0x14), segDeltaU = ram.f32(pos - 0x10), ncm1 = ram.f32(pos - 0xC);
+        uint32_t R = vuRinit(ram.u32(pos - 0x24));
+        struct V3 { float x, y, z; };
+        auto at = [&](int i) { return V3{ram.f32(pos + 16 * uint32_t(i)), ram.f32(pos + 16 * uint32_t(i) + 4), ram.f32(pos + 16 * uint32_t(i) + 8)}; };
+        auto w16 = [&](int i) { return int(ram.u16(pos + 16 * uint32_t(i) + 12)); };
+        auto color = [&](float cpos) {   // cor RGBA (0x80 = 1,0) na posicao cpos da tabela (lerp, + 0,5, truncada)
+            const int k0 = std::clamp(int(cpos), 0, 15), k1 = std::min(k0 + 1, 15);
+            const float fr = cpos - float(int(cpos));
+            uint32_t out = 0;
+            for (int c = 0; c < 4; ++c) {
+                const float a = ram.f32(pos - 0x13C + 16 * uint32_t(k0) + 4 * uint32_t(c)), b = ram.f32(pos - 0x13C + 16 * uint32_t(k1) + 4 * uint32_t(c));
+                const float v = a + 0.5f - a * fr + b * fr;
+                out |= uint32_t(std::clamp(int(v), 0, 255)) << (8 * c);
+            }
+            return out;
+        };
+        // tela isotropica (y para baixo) e W do VU1 (linha 3 do worldToScreenMat; sem camera do jogo, a profundidade)
+        auto proj = [&](const V3 &p, float &x, float &y) {
+            const float z = view.depth[0] * p.x + view.depth[1] * p.y + view.depth[2] * p.z + view.depth[3];
+            const float iz = 1.f / (std::fabs(z) > 1e-6f ? z : 1e-6f);
+            x = (view.ox[0] * p.x + view.ox[1] * p.y + view.ox[2] * p.z + view.ox[3]) * iz;
+            y = -(view.oy[0] * p.x + view.oy[1] * p.y + view.oy[2] * p.z + view.oy[3]) * iz;
+        };
+        auto wOf = [&](const V3 &p) {
+            if (view.fogW[0] == 0.f && view.fogW[1] == 0.f && view.fogW[2] == 0.f)
+                return view.depth[0] * p.x + view.depth[1] * p.y + view.depth[2] * p.z + view.depth[3];
+            return view.fogW[0] * p.x + view.fogW[1] * p.y + view.fogW[2] * p.z + view.fogW[3];
+        };
+        std::vector<V3> P;
+        int i = 0;
+        while (i < s.n) {
+            const int links = w16(i) - 1;
+            if (links < 0 || i + links >= s.n) break;   // cabeca 0 (fim) ou cadeia truncada
+            P.clear();
+            P.push_back(at(i));
+            for (int l = 1; l <= links; ++l) {
+                const V3 b = at(i + l);
+                const int wl = w16(i + l);
+                if (wl == 0) { P.push_back(b); continue; }
+                int h = wl / 5;   // meia-distancia (em pontos) do primeiro nivel: 2^(L - 1)
+                if (h < 1 || h > 64) { P.push_back(b); continue; }
+                const size_t base = P.size() - 1, end = base + size_t(2 * h);
+                P.resize(end + 1);
+                P[end] = b;
+                const V3 a = P[base];
+                const float dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+                float amp = jag * std::sqrt(dx * dx + dy * dy + dz * dz);
+                float rx = vuRnext(R), ry = vuRnext(R), rz = vuRnext(R);
+                for (; h >= 1; h /= 2, amp *= 0.5f)
+                    for (size_t j = base; j < end; j += size_t(2 * h)) {
+                        const V3 &pa = P[j], &pb = P[j + size_t(2 * h)];
+                        V3 &m = P[j + size_t(h)];
+                        m.x = 0.5f * pa.x + rx * amp - 1.5f * amp + 0.5f * pb.x;
+                        m.y = 0.5f * pa.y + ry * amp - 1.5f * amp + 0.5f * pb.y;
+                        m.z = 0.5f * pa.z + rz * amp - 1.5f * amp + 0.5f * pb.z;
+                        rx = ry; ry = rz; rz = vuRnext(R);
+                    }
+            }
+            i += links + 1;
+            const int S = int(P.size()) - 1;
+            if (S < 1) continue;
+            // pontos na tela, com os fantasmas nas pontas
+            const size_t np = P.size();
+            std::vector<float> sx(np + 2), sy(np + 2);
+            const V3 g0{2.f * P[0].x - P[1].x, 2.f * P[0].y - P[1].y, 2.f * P[0].z - P[1].z};
+            const V3 gn{2.f * P[np - 1].x - P[np - 2].x, 2.f * P[np - 1].y - P[np - 2].y, 2.f * P[np - 1].z - P[np - 2].z};
+            proj(g0, sx[0], sy[0]);
+            for (size_t k = 0; k < np; ++k) proj(P[k], sx[k + 1], sy[k + 1]);
+            proj(gn, sx[np + 1], sy[np + 1]);
+            std::vector<float> ox(np), oy(np);   // v de cada ponto (tela isotropica, y para baixo)
+            std::vector<char> ok(np);
+            for (size_t k = 0; k < np; ++k) {
+                float tix = sx[k + 1] - sx[k], tiy = sy[k + 1] - sy[k], tox = sx[k + 2] - sx[k + 1], toy = sy[k + 2] - sy[k + 1];
+                const float li = std::sqrt(tix * tix + tiy * tiy), lo = std::sqrt(tox * tox + toy * toy);
+                ok[k] = li > 1e-12f && lo > 1e-12f && wOf(P[k]) >= 1.f;
+                if (!ok[k]) continue;
+                tix /= li; tiy /= li; tox /= lo; toy /= lo;
+                const float cross = tix * toy - tox * tiy;
+                const float sgn = cross < 0.f ? 1.f : -1.f;
+                ox[k] = tiy + toy + sgn * (tox - tix);
+                oy[k] = -tix - tox + sgn * (toy - tiy);
+            }
+            float cs[4][3], uv[4][2];
+            const float u0 = segInitU - segDeltaU * 0.5f * float(S);
+            auto corner = [&](size_t k, float side, float out[3]) {
+                // o VU1 desloca v * s * (metade do foco, q5.xy) / W pixels: no plano de vista, s / 2 (medido: razao 0,5 contra s)
+                const float sz = 0.5f * (minSize + expRate * float(k) / float(S));
+                const float wx = side * sz * ox[k], wy = side * sz * oy[k];   // no plano de vista: y da tela para baixo = -up
+                const float p[3] = {P[k].x, P[k].y, P[k].z};
+                for (int a = 0; a < 3; ++a) out[a] = p[a] + view.right[a] * wx - view.up[a] * wy;
+            };
+            for (size_t k = 0; k + 1 < np; ++k) {
+                if (!ok[k] || !ok[k + 1]) continue;
+                corner(k, 1.f, cs[0]); corner(k, -1.f, cs[1]); corner(k + 1, -1.f, cs[2]); corner(k + 1, 1.f, cs[3]);
+                const float ua = u0 + segDeltaU * float(k), ub = u0 + segDeltaU * float(k + 1);
+                uv[0][0] = ua; uv[0][1] = 1.f; uv[1][0] = ua; uv[1][1] = 0.f;
+                uv[2][0] = ub; uv[2][1] = 0.f; uv[3][0] = ub; uv[3][1] = 1.f;
+                const uint32_t col[2] = {color(clut + float(k) * ncm1 / float(S)), color(clut + float(k + 1) * ncm1 / float(S))};
+                g(int(k), cs, uv, col);
+            }
+        }
+    }
+
     // Geometria do sistema em coordenadas de mundo, um quadrado por vez: f(i, cantos[4][3], uv[4][2]), i = particula (nas faixas,
     // a ponta de i a i + 1; cantos 0 e 1 em i, 2 e 3 em i + 1). Linhas (FX_LINE) nao passam por aqui. Serve ao draw e a checagem VU1.
     template <class F> static void forEachQuad(const Ram &ram, const FxSystem &s, const FxView &view, F &&emit) {
@@ -330,6 +462,10 @@ public:
         auto V = [&](int i, float out[3]) { for (int c = 0; c < 3; ++c) out[c] = haveVel ? ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(c)) : 0.f; };
         float c[4][3], uv[4][2];
         if (s.type == FX_LINE) return;
+        if (s.type == FX_ARC || s.type == FX_ARC2) {
+            arcQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], const uint32_t *) { f(k, cc, uu); });
+            return;
+        }
         if (isStrip(s.type)) {
             // Faixa ligando particulas consecutivas, de meia-largura |pos.w|. Como no VU1 (medido pela checagem em stripe: a aresta de
             // cada ponta sai perpendicular a faixa na tela), a ponta i abre perpendicular, na tela, a direcao entre as vizinhas
@@ -599,6 +735,22 @@ private:
                 rlVertex3f(p[0] - v[0], p[1] - v[1], p[2] - v[2]);
             }
             rlEnd();
+            return;
+        }
+
+        if (s.type == FX_ARC || s.type == FX_ARC2) {   // fita com a cor de cada ponto (arcQuads)
+            rlBegin(RL_QUADS);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
+            rlSetTexture(texFor(0));
+            arcQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], const uint32_t col[2]) {
+                if (fogged(view, c)) return;
+                for (int k = 0; k < 4; ++k) {
+                    vcolor(k < 2 ? col[0] : col[1]);
+                    rlTexCoord2f(uv[k][0], uv[k][1]);
+                    rlVertex3f(c[k][0], c[k][1], c[k][2]);
+                }
+            });
+            rlEnd();
+            rlSetTexture(0);
             return;
         }
 
