@@ -311,8 +311,20 @@ public:
             // microcodigo de sprites: meio-lado na tela = pos.w / 2 * foco / profundidade, limitado a foco / 2 (pos.w e o lado em mundo;
             // medido em sprite e texSprite). Os outros tipos que caem aqui continuam com pos.w inteiro (nao conferidos).
             const float depth = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
-            const float half = (s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]);
-            const float r = depth > 0.f ? std::min(half, 0.5f * depth) : half;
+            float half = (s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]), cap = 0.5f;
+            if (s.type == FX_DUSTTRAIL) {
+                // dustTrail (particleEmit, is15): pos.w e a idade normalizada (0..1, vel.w = 1/vida) e o byte 3 da palavra de idade e o
+                // sorteio de tamanho (de min*255/max a 255). Medido pela checagem VU1 x nativo em 5 presets: meio-lado =
+                // S/2 + exp*vida*w/2, limitado a 0,375 * profundidade; o termo da idade e exato, S ~ 1,12*max*a3/255 - 0,3*min e
+                // aproximado (erro ate ~4%; a formula do microcodigo para o byte nao foi achada, deve envolver info +0x2D88).
+                const uint32_t ages = ram.u32(b + fxoff::age);
+                const float a3 = float(ram.u8(ages + 4 * uint32_t(i) + 3));
+                const float mn = ram.f32(b + fxoff::minSize), mx = ram.f32(b + fxoff::maxSize);
+                const float S = 1.12f * mx * a3 / 255.f - 0.3f * mn;
+                half = std::max(0.5f * S + 0.5f * ram.f32(b + 0x2E44) * float(ram.s16(b + fxoff::lifetime)) * p[3], 0.f);
+                cap = 0.375f;
+            }
+            const float r = depth > 0.f ? std::min(half, cap * depth) : half;
             float ax[3] = {view.right[0] * r, view.right[1] * r, view.right[2] * r}, ay[3] = {view.up[0] * r, view.up[1] * r, view.up[2] * r};
             float cpos[3] = {p[0], p[1], p[2]};
             if (s.type == FX_STRITE) {
