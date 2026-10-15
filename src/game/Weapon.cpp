@@ -5,6 +5,7 @@
 #include "vecmath.h"
 #include "game/hit_event.h"
 #include "game/pickup.h"
+#include "task_manager.h"
 
 /* game/Weapon: the classes are in game/weapons.h. Weapons is embedded in TheGame at 0x112490 (gameWeapons()). */
 
@@ -559,7 +560,68 @@ void Weapon::UpdateLockOnTarget(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockOnTarget__6Weapon);
 #endif
+/* Homing mode 2: aim at the target monster's locator 0x809 led by a third of the way it runs (m_speed per second along its
+   forward axis) while the weapon covers the distance, plus m_aimOffset in the monster's frame when m_5C is set; heading
+   then pitch at m_dyn.turnRate. More than 90 degrees off either way breaks the lock. Before the first field, or without
+   a target, it only spins by m_spin. */
+#ifdef NON_MATCHING
+void Weapon::UpdateLockAheadOfMonster(void)
+{
+    float d[2];
+    float a;
+    float dx, dy, dz, dist, lead;
+    FVECTOR aim, off;
+    Monster *t;
+
+    if (m_targetId && m_age > 0) {
+        t = (Monster *)Interactives::getInteractive(m_targetId);
+        if (((DbInteractive *)t)->m_kind != 1)
+            return;
+        dist = mathfManhatDist(&m_cs->trans, &t->m_cs->trans);
+        lead = t->m_speed / 60.0f * (dist / (m_dyn.speed * (5280.0f / 3600.0f / 60.0f)) * 0.33f);
+        vecScale(&aim, (_fvector *)t->m_cs->mat[1], lead);
+        vecAdd(&aim, &aim, (_fvector *)((char *)t + 0x3E30)); /* locator 0x809 */
+        if (m_5C) {
+            vecApplyRows(&off, t->m_cs->mat, &m_aimOffset);
+            vecAdd(&aim, &aim, &off);
+        }
+        dy = aim.y - m_cs->trans.y;
+        dx = aim.x - m_cs->trans.x;
+        if (dy == 0.0f)
+            dy = 0.01f;
+        a = atan2f(dx, dy);
+        d[0] = a - m_cs->rot.z;
+        boundEulerAngle(&d[0]);
+        if (fabsf(d[0]) > 1.5707964f)
+            goto lost;
+        m_cs->rot.z = smoothEasyInAngle(m_cs->rot.z, a, m_dyn.turnRate, 0.0001f);
+        dz = aim.z - m_cs->trans.z;
+        dist = mathfManhatDist(&aim, &m_cs->trans);
+        if (dist == 0.0f)
+            dist = 0.01f;
+        a = atan2f(dz, dist);
+        d[1] = a - m_cs->rot.x;
+        boundEulerAngle(&d[1]);
+        if (fabsf(d[1]) > 1.5707964f) {
+        lost:
+            m_homing = 0;
+            m_targetId = 0;
+            return;
+        }
+        m_cs->rot.x = smoothEasyInAngle(m_cs->rot.x, a, m_dyn.turnRate, 0.0001f);
+        vecAdd(&m_cs->rot, &m_cs->rot, &m_spin);
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+    } else if (m_spin.x != 0.0f || m_spin.y != 0.0f || m_spin.z != 0.0f) {
+        vecAdd(&m_cs->rot, &m_cs->rot, &m_spin);
+        boundEulerAngle(&m_cs->rot.x);
+        boundEulerAngle(&m_cs->rot.y);
+        boundEulerAngle(&m_cs->rot.z);
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockAheadOfMonster__6Weapon);
+#endif
 /* Homing mode 3: turn heading then pitch toward m_targetPos at the thrower's LavaBlast turn rates; a target more than 90
    degrees off either way breaks the lock. Before the first field the weapon only spins by m_spin. */
 #ifdef NON_MATCHING
@@ -713,7 +775,172 @@ light:
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateTranslation__6Weapon);
 #endif
+/* Collision of this field's move (m_prevPos -> cs): a swept sphere whose radius depends on the type (a thrown pickup uses its
+   collision sphere or its LevelPickups radius and credits the thrower's "Pickup Use" token), squishing pedestrians on the way.
+   Hits on the thrower, on hats 0xB/0xC and, for some types, on certain level objects are ignored; a monster blocking with a
+   shield (held pickup type 0x10) facing the shot reflects it; anything else detonates the weapon. */
+#ifdef NON_MATCHING
+/* equivalent: 6/408 words, 0x61c vs 0x660 untuned; gcc merges the repeated token credit and the id checks */
+int hdSphereTest(_fvector *a, _fvector *b, float r, _hdResult *res, unsigned skipId2, int max);
+void hdPolyCheckBackface(bool on);
+void mathfRotationFromVector(_fvector *rot, _fvector *v);
+class PedGroup {
+public:
+    static void squishGlobal(_fvector &pos, float r, Monster *by);
+};
+/* the 64-bit first word of an _hdResult: id2 in bits 32..42, id1 in bits 43..56 */
+#define HD_ID2(r) ((int)((r).ids & 0x7FF))
+#define HD_ID1(r) ((int)(((r).ids >> 11) & 0x3FFF))
+
+void Weapon::WeaponHD(void)
+{
+    _hdResult res;
+    Monster *owner;
+    _fvector *from;
+    int bounced;
+
+    res.hit = 0;
+    owner = 0;
+    if (m_ownerId && Interactives::getInteractive(m_ownerId)->m_kind == 1)
+        owner = (Monster *)Interactives::getInteractive(m_ownerId);
+    switch (m_type) {
+    default:
+        hdSphereTest(&m_prevPos, &m_cs->trans, 0.0f, &res, m_ownerId, 1);
+        from = &m_prevPos;
+        if (!res.hit)
+            return;
+        PedGroup::squishGlobal(m_cs->trans, 15.0f, owner);
+        goto levelObject;
+    case 9:
+    case 0x15:
+    case 0x16:
+        hdSphereTest(&m_prevPos, &m_cs->trans, 15.0f, &res, m_ownerId, 1);
+        from = &m_prevPos;
+        if (!res.hit)
+            return;
+        PedGroup::squishGlobal(m_cs->trans, 30.0f, owner);
+        if (!res.hit)
+            return;
+        PedGroup::squishGlobal(m_cs->trans, 15.0f, owner);
+    levelObject:
+        /* kind 5 objects with a positive +0xD8 are not hit in the first 5 fields */
+        if (HD_ID2(res) != 0) {
+            DbInteractive *o = Interactives::getInteractive(HD_ID2(res));
+
+            if (o->m_kind == 5 && m_age < 5 && *(int *)((char *)o + 0xD8) > 0)
+                res.hit = 0;
+        }
+        break;
+    case 0x18:
+    case 0x19:
+    case 0x1A:
+    case 0x1C:
+    case 0x1E:
+    case 0x20:
+    case 0x21:
+    case 0x24:
+    case 0x26: {
+        int id1;
+
+        hdSphereTest(&m_prevPos, &m_cs->trans, 0.0f, &res, m_ownerId, 1);
+        from = &m_prevPos;
+        if (!res.hit)
+            return;
+        id1 = HD_ID1(res);
+        if (id1 == 0x139F || id1 == 0x13A1 || (id1 >= 0x1391 && id1 < 0x1395))
+            res.hit = 0;
+        break;
+    }
+    case 0x27:
+    case 0x28:
+    case 0x29:
+        hdSphereTest(&m_prevPos, &m_cs->trans, 15.0f, &res, 0, 1);
+        from = &m_prevPos;
+        if (m_age < 60 && HD_ID2(res) == 0)
+            res.hit = 0;
+        if (!res.hit)
+            return;
+        PedGroup::squishGlobal(m_cs->trans, 15.0f, owner);
+        break;
+    case 0x17: {
+        Pickup *p;
+
+        hdPolyCheckBackface(true);
+        p = ITER_PICKUP(m_pickup);
+        if (p->pickupType == 7) {
+            FVECTOR a, b;
+
+            vecApplyRows(&a, m_cs->mat, p->getCollisSphereTrans(0));
+            vecAdd(&b, &a, &m_cs->trans);
+            vecAdd(&a, &a, &m_prevPos);
+            from = &m_prevPos;
+            hdSphereTest(&a, &b, ITER_PICKUP(m_pickup)->getCollisSphereRadius(0), &res, m_cs->epNode->id2, 1);
+            if (res.hit) {
+                PedGroup::squishGlobal(m_cs->trans, 15.0f, owner);
+                if (owner && owner->m_playerNum == 1)
+                    game->m_tokens[owner->m_index].credit("Pickup Use", 10);
+            }
+        } else {
+            float r = LevelPickups::s_info[p->pickupType].radius;
+
+            from = &m_prevPos;
+            hdSphereTest(&m_prevPos, &m_cs->trans, r, &res, m_ownerId, 1);
+            if (res.hit) {
+                PedGroup::squishGlobal(m_cs->trans, r + r, owner);
+                if (owner && owner->m_playerNum == 1)
+                    game->m_tokens[owner->m_index].credit("Pickup Use", 10);
+            }
+        }
+        hdPolyCheckBackface(false);
+        break;
+    }
+    }
+    if (!res.hit)
+        return;
+    if (HD_ID1(res) == 0xB || HD_ID1(res) == 0xC)
+        res.hit = 0;
+    if (HD_ID2(res) == m_ownerId)
+        res.hit = 0;
+    if (!res.hit)
+        return;
+    bounced = 0;
+    if ((unsigned)(m_type - 0xC) >= 11 && HD_ID2(res) != 0) {
+        int kind = Interactives::getInteractive(HD_ID2(res))->m_kind;
+
+        if (kind == 1) {
+            Monster *t = (Monster *)Interactives::getInteractive(HD_ID2(res));
+            int shield = 0;
+
+            if (t->isBlocking() && t->m_pickup != 0)
+                shield = (*(Pickup **)t->m_pickup)->pickupType == 0x10 ? kind : 0;
+            if (shield) {
+                FVECTOR d;
+                float k;
+
+                vecSub(&d, &m_cs->trans, from);
+                k = eeRsqrtf(1.0f, d.x * d.x + d.y * d.y + d.z * d.z);
+                d.z *= k;
+                d.x *= k;
+                d.y *= k;
+                if (d.x * t->m_cs->mat[1][0] + d.y * t->m_cs->mat[1][1] + d.z * t->m_cs->mat[1][2] < 0.0f) {
+                    ComputeReflection((_fvector *)t->m_cs->mat[1], &d, false);
+                    bounced = 1;
+                    mathfRotationFromVector(&m_cs->rot, &d);
+                    mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+                } else {
+                    bounced = 0;
+                }
+            }
+        }
+    }
+    if (!bounced) {
+        DetonateWeapon(res);
+        KillWeapon();
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", WeaponHD__6Weapon);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", D_006F28F8);
 void Weapon::setCsTransform(_fvector *pos, float (&m)[4][4])
 {
@@ -1021,7 +1248,234 @@ void Weapon::CalculateBallisticArc(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CalculateBallisticArc__6Weapon);
 #endif
+/* Fills m_dyn from Weapons::m_params of the type, then by type: a monster's default projectile (0..11, 20) from the thrower's
+   m_dp* tuning (homing at 0.08 while raging), a thrown pickup (0x17) from its LevelPickups::Info scaled by the thrower's m_pu*Mod,
+   lava (0x15/0x16) from the thrower's StateLavaBlast aimed at the target or the reticle, and the level's own shots (0x2A..0x2C).
+   Turn/pitch rates above 1 are clamped with wider break angles; a weapon with a light range gets a point light. */
+#ifdef NON_MATCHING
+/* equivalent: 67/595 words, 0x8ec vs 0x94c untuned; gcc merges the repeated hierSetCsEpNode/particleCreateFx tails. The m_targetPos copies use vecCopy
+   (the same lq/sq) because difftest mis-tracks the upper half of a plain struct copy through $v1. */
+int particleCreateFx(_fvector *pos, float (*m)[4], int type, float f, _fvector *pos2, float (*m2)[4], bool b, float f2);
+
+void Weapon::InitWeapon(void)
+{
+    Weapons *ws = game->getWeapons();
+    Dynamics *p = &ws->m_params[m_type];
+
+    m_dyn.f18 = p->f18;
+    m_dyn.damage = p->damage;
+    m_dyn.lifetime = p->lifetime * 60.0f;
+    m_dyn.turnRate = p->turnRate;
+    m_dyn.pitchRate = p->pitchRate;
+    m_dyn.speed = p->speed;
+    vecCopy((_fvector *)&m_dyn, (_fvector *)p);
+    switch (m_type) {
+    case 0x17: {
+        Monster *o;
+        int t;
+        float life;
+        LevelPickups::Info *info;
+
+        if (ITER_PICKUP(m_pickup)->pickupType != 7)
+            m_spin.y = 0.125f;
+        m_hugGround = 0;
+        o = (Monster *)Interactives::getInteractive(m_ownerId);
+        t = ITER_PICKUP(m_pickup)->pickupType;
+        info = &LevelPickups::s_info[t];
+        life = o->m_puDurationMod[t] * info->duration * 60.0f;
+        m_dyn.lifetime = (int)(life > 0.0f ? life + 0.5f : life - 0.5f);
+        m_dyn.damage = o->m_puLaunchDamageMod[t] * info->damage;
+        m_dyn.speed = o->m_puSpeedMod[t] * info->speed;
+        m_dyn.turnRate = info->turnRate;
+        m_dyn.pitchRate = info->pitchRate;
+        m_gravity = info->gravity;
+        m_maxRange = info->maxRange;
+        m_dyn.angle2C = info->headingBreak;
+        m_dyn.angle30 = info->pitchBreak;
+        m_fx = particleCreateFx(&m_cs->trans, m_cs->mat, 5, 1.0f, 0, 0, false, 0.0f);
+        break;
+    }
+    case 0x1A:
+    case 0x1B:
+    case 0x21:
+    case 0x23:
+        m_fx = particleCreateFx(&m_cs->trans, m_cs->mat, 0x36, 0.25f, 0, 0, false, 0.0f);
+        m_age = -5;
+        /* fall through */
+    case 0x18:
+    case 0x19:
+    case 0x1C:
+    case 0x1D:
+    case 0x1E:
+    case 0x1F:
+    case 0x20:
+    case 0x22:
+    case 0x24:
+    case 0x25:
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type] ? ws->m_epNodes[m_type] : ws->m_epNodes[0x18]);
+        break;
+    case 0x26:
+        if (m_ownerId) {
+            DbInteractive *o = Interactives::getInteractive(m_ownerId);
+
+            if (o->m_kind == 5 && *(int *)((char *)o + 0x210))
+                m_dyn.damage = GAME_FIELD(float, 0x1204AC);
+        }
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type] ? ws->m_epNodes[m_type] : ws->m_epNodes[0x18]);
+        break;
+    case 9:
+        m_fx = particleCreateFx(&m_cs->trans, m_cs->mat, 0x2F, 5.0f, 0, 0, false, 0.0f);
+        /* fall through */
+    case 0:
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+    case 6:
+    case 7:
+    case 8:
+    case 10:
+    case 11:
+    case 20: {
+        Monster *o = (Monster *)Interactives::getInteractive(m_ownerId);
+
+        m_dyn.damage = o->m_dpDamage;
+        m_dyn.lifetime = o->m_dpDuration * 60.0f;
+        m_dyn.speed = o->m_dpSpeed;
+        m_dyn.turnRate = o->m_dpHomingFactor;
+        m_dyn.pitchRate = o->m_dpVertHomingFactor;
+        m_dyn.angle2C = o->m_dpHeadingBreak;
+        m_dyn.angle30 = o->m_dpPitchBreak;
+        if (o && (((signed char *)o)[0xED] || o->m_unkF5)) {
+            m_homing = 1;
+            m_dyn.turnRate = 0.08f;
+        }
+        if (m_type == 10) {
+            m_age = 0;
+            m_dyn.speed = 1000.0f;
+        }
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type] ? ws->m_epNodes[m_type] : ws->m_epNodes[0]);
+        break;
+    }
+    case 13: {
+        char *st = (char *)Interactives::getInteractive(m_ownerId) + 0xFE5C;
+        void *part;
+
+        m_dyn.lifetime = *(float *)(st + 0x48) * 60.0f;
+        m_dyn.speed = *(float *)(st + 0x4C);
+        m_dyn.turnRate = *(float *)(st + 0x50);
+        m_homing = m_targetId ? 1 : 0;
+        m_fx = particleCreateFx(&m_cs->trans, m_cs->mat, 0x36, 1.0f, 0, 0, false, 0.0f);
+        m_fx2 = particleCreateFx(&m_cs->trans, m_cs->mat, 0x15, 10.0f, 0, 0, false, 0.0f);
+        part = particleGetParticle(m_fx2);
+        if (part) {
+            *(short *)((char *)part + 0x2D86) = 600;
+            *(short *)((char *)part + 0x2E4A) = 60;
+            *(float *)((char *)part + 0x2D90) = 0.125f;
+        }
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type]);
+        break;
+    }
+    case 0x15:
+    case 0x16: {
+        Monster *t = 0;
+        Monster *o = (Monster *)Interactives::getInteractive(m_ownerId);
+        char *lava;
+
+        m_age = -6;
+        m_wobble.x = 15.0f;
+        mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+        if (m_targetId > 0) {
+            DbInteractive *d = Interactives::getInteractive(m_targetId);
+
+            if (d->m_kind == 1)
+                t = (Monster *)d;
+        }
+        m_dyn.turnRate = ws->m_params[m_type].turnRate;
+        m_homing = m_targetId ? 1 : 0;
+        vecCopy(&m_targetPos, t ? &t->m_cs->trans : &o->m_reticleCS->trans);
+        lava = (char *)o + 0x10930; /* the thrower's StateLavaBlast */
+        m_dyn.damage = *(float *)(lava + 0x19C);
+        m_dyn.speed = *(float *)(lava + 0x1A0);
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type]);
+        m_fx = particleCreateFx(&m_cs->trans, m_cs->mat, 0x2F, 5.0f, 0, 0, false, 0.0f);
+        break;
+    }
+    case 0x2A: {
+        Monster *pl = game->m_lists.players[0];
+
+        m_dyn.radius = 100.0f;
+        m_dyn.damage = ws->m_params[m_type].damage;
+        m_dyn.turnRate = 0.1f;
+        m_dyn.speed = ws->m_params[m_type].speed;
+        m_homing = 1;
+        m_age = 0;
+        if (pl)
+            vecCopy(&m_targetPos, &pl->m_cs->trans);
+        break;
+    }
+    case 0x2B:
+        m_dyn.radius = 100.0f;
+        m_dyn.damage = ws->m_params[m_type].damage;
+        m_dyn.speed = ws->m_params[m_type].speed + mathfRandf(-50.0f, 50.0f);
+        m_dyn.lifetime += mathfRandf(-10.0f, 10.0f);
+        m_homing = 0;
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type]);
+        break;
+    case 0x2C: {
+        Monster *t = game->m_lists.players[0];
+
+        if (m_targetId > 0) {
+            DbInteractive *d = Interactives::getInteractive(m_targetId);
+
+            if (d->m_kind == 1)
+                t = (Monster *)d;
+        }
+        m_homing = 1;
+        m_dyn.turnRate = 0.03f;
+        m_age = 0;
+        if (t)
+            vecCopy(&m_targetPos, &t->m_cs->trans);
+        m_dyn.radius = 100.0f;
+        m_dyn.damage = ws->m_params[m_type].damage;
+        m_dyn.speed = ws->m_params[m_type].speed + mathfRandf(-50.0f, 50.0f);
+        m_dyn.lifetime = mathfRandf(6.0f, 90.0f);
+        hierSetCsEpNode(m_cs, ws->m_epNodes[m_type]);
+        break;
+    }
+    }
+    if (m_dyn.turnRate > 1.5f) {
+        m_dyn.angle30 = 1.5707964f;
+        m_dyn.turnRate = 1.0f;
+        m_dyn.angle2C = 1.5707964f;
+    } else if (m_dyn.turnRate > 1.0f) {
+        m_dyn.turnRate = 1.0f;
+        m_dyn.angle30 = 1.1780972f;
+        m_dyn.angle2C = 1.1780972f;
+    }
+    if (m_dyn.pitchRate > 1.5f) {
+        m_dyn.angle30 = 1.5707964f;
+        m_dyn.pitchRate = 1.0f;
+        m_dyn.angle2C = 1.5707964f;
+    } else if (m_dyn.pitchRate > 1.0f) {
+        m_dyn.pitchRate = 1.0f;
+        m_dyn.angle30 = 1.1780972f;
+        m_dyn.angle2C = 1.1780972f;
+    }
+    if (m_dyn.lightRange > 0.0f) {
+        m_pointLight = pointLights.Create();
+        if (m_pointLight >= 0) {
+            pointLights.lights[m_pointLight].SetPos(&m_cs->trans);
+            pointLights.lights[m_pointLight].SetColor(m_dyn.r, m_dyn.g, m_dyn.b);
+            pointLights.lights[m_pointLight].SetRange(m_dyn.lightRange);
+            pointLights.lights[m_pointLight].f38 = 1;
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", InitWeapon__6Weapon);
+#endif
 void Weapon::KillWeapon(void)
 {
     m_active = 0;
@@ -1086,7 +1540,341 @@ void *ricochetParticlesOffSurface(int fx, _fvector *from, _fvector *to, _fvector
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", ricochetParticlesOffSurface__FiP8_fvectorN31);
 #endif
+/* The explosion at res.point: per type its particles (most pointed off the surface by ricochetParticlesOffSurface), and a few
+   specials: a thrown pickup impales a monster (the rigid pickup type 7) or is destroyed and credits the thrower's stamina, the
+   generator pickup (0xE) starts its generator on a monster with m_unk49; type 8 an electric arc, 13 the owner's shockwave,
+   0x27..0x29 a blast that sets the monster on fire, 0x2A/0x2B five more shots of the next type. A hit on an interactive gets a big
+   hit (type 3, source 0xC) along the last move, unless it is a kind 3 object hit by a source-1 explosion. */
+#ifdef NON_MATCHING
+/* equivalent: untuned; the shockwave ring is copied by value as in retail (ShockWave::Activate takes it by value) */
+struct ShockWaveConfig {
+    int f0;
+    float damage;
+    float f8;
+    float strength38;
+    float strength34;
+    float f14, f18;
+};
+template <class T>
+class ExpandingRing {
+public:
+    int numRings;
+    char pad4[0x20 - 0x4];
+    T rings[20];      /* 0x20 */
+    float reach[20];  /* 0x250 */
+    float timeScale;  /* 0x2A0 */
+};
+typedef char _size_ShockRing[sizeof(ExpandingRing<ShockWaveConfig>) == 0x2A4 ? 1 : -1];
+class SpecFxAnim {
+public:
+    static SpecFxAnim *getInstance(Monster *m, int id);
+};
+class ShockWave {
+public:
+    static void *Activate(_fvector *pos, ExpandingRing<ShockWaveConfig> cfg, HitEvent::DamageCause cause, int id, SpecFxAnim *anim);
+};
+void electricArc(_fvector *from, _fvector *to, unsigned colorA, unsigned colorB, float a, float b, float c, float d, int n,
+                 unsigned seed, unsigned e);
+extern "C" int rand(void);
+void mathfRotationFromPointToPoint(_fvector *rot, _fvector *from, _fvector *to);
+extern "C" unsigned pickupUpdateGenerator(void *p) __asm__("updateGenerator__6PickupPv");
+void monsterAttachPickupImpaler(Monster *m, PickupIter it, _fvector *dir) __asm__("attachPickupImpaler__7MonsterGQ2t10LinkedList1ZP6Pickup8IteratorP8_fvector");
+#define PU_FIELD(type, p, off) (*(type *)((char *)(p) + (off)))
+#define HITEVENT_28(e) (*(int *)((char *)(e) + 0x28))
+
+void Weapon::DetonateWeapon(_hdResult &res)
+{
+    HitEvent *e = 0;
+    FVECTOR dir;
+    int impaled = 0;
+    int fx;
+    float (*m)[4];
+
+    if (m_type != 0xD && HD_ID2(res) != 0) {
+        e = HitEvent::create();
+        e->pos = &res.point;
+        e->type = 3;
+        e->source = 0xC;
+        e->subtype = m_type;
+        vecSub(&dir, &m_cs->trans, &m_prevPos);
+    }
+    switch (m_type) {
+    case 0x17: {
+        Pickup *p;
+
+        if (e) {
+            e->source = 0xB;
+            HITEVENT_28(e) = ITER_PICKUP(m_pickup)->pickupType;
+        }
+        p = ITER_PICKUP(m_pickup);
+        if (p->pickupType == 7 && HD_ID2(res) != 0 && p->cs != 0) {
+            DbInteractive *t = Interactives::getInteractive(HD_ID2(res));
+
+            ITER_PICKUP(m_pickup)->takeUseDamage(LevelPickups::s_info[ITER_PICKUP(m_pickup)->pickupType].useDamage);
+            if (t->m_kind == 1) {
+                impaled = 1;
+                monsterAttachPickupImpaler((Monster *)t, m_pickup, &dir);
+            }
+        }
+        if (!impaled)
+            LevelPickups::killPickup(m_pickup, 1);
+        if (HD_ID2(res) != 0) {
+            Monster *o = (Monster *)Interactives::getInteractive(m_ownerId);
+
+            o->creditStamina(LevelPickups::s_info[ITER_PICKUP(m_pickup)->pickupType].staminaGain, false);
+        }
+        if (ITER_PICKUP(m_pickup)->pickupType == 0xE) {
+            int gen = 0;
+
+            if (e)
+                e->type = 5;
+            if (HD_ID2(res) != 0) {
+                DbInteractive *t = Interactives::getInteractive(HD_ID2(res));
+                DbInteractive *o = Interactives::getInteractive(m_ownerId);
+
+                if (t->m_kind == 1) {
+                    PU_FIELD(DbInteractive *, ITER_PICKUP(m_pickup), 0xE0) = t;
+                    PU_FIELD(DbInteractive *, ITER_PICKUP(m_pickup), 0xE4) = o;
+                    if (((Monster *)t)->m_unk49)
+                        gen = 1;
+                    goto generator;
+                }
+            }
+            vecCopy(&PU_FIELD(FVECTOR, ITER_PICKUP(m_pickup), 0xF0), &m_cs->trans);
+            PU_FIELD(DbInteractive *, ITER_PICKUP(m_pickup), 0xE0) = 0;
+        generator:
+            if (gen) {
+                TaskManager::global.add(pickupUpdateGenerator, ITER_PICKUP(m_pickup), 1);
+                PU_FIELD(short, ITER_PICKUP(m_pickup), 0xDC) = 0;
+            }
+        }
+        if (ITER_PICKUP(m_pickup)->pickupType == 4) {
+            fx = particleCreateFx(&res.point, 0x52, 1.0f, 0, 0.0f);
+            particleCreateFx(&res.point, 0x53, 1.0f, 0, 0.0f);
+            particleCreateFx(&res.point, 0x1D, 2.0f, 0, 0.0f);
+            ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        }
+        break;
+    }
+    case 0x1A:
+    case 0x1B:
+    case 0x21:
+    case 0x23:
+        particleCreateFx(&res.point, 9, 0.5f, 0, 0.0f);
+        fx = particleCreateFx(&res.point, 0x17, 14.0f, 0, 0.0f);
+        goto ricochet;
+    case 0x18:
+    case 0x19:
+    case 0x1C:
+    case 0x1D:
+    case 0x1E:
+    case 0x1F:
+    case 0x20:
+    case 0x22:
+    case 0x24:
+    case 0x25:
+    case 0x26:
+        if (e)
+            e->source = 1;
+        break;
+    case 0:
+        fx = particleCreateFx(&res.point, 0x4B, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4A, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x25, 2.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1D, 2.0f, 0, 0.0f);
+        goto ricochet;
+    case 1:
+    case 10:
+        fx = particleCreateFx(&res.point, 0x4C, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1E, 1.0f, 0, 0.0f);
+        goto ricochet;
+    case 2:
+        fx = particleCreateFx(&res.point, 0x4E, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4D, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4F, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x73, 1.0f, 0, 0.0f);
+        goto ricochet;
+    case 3:
+        fx = particleCreateFx(&res.point, 0x51, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x50, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x24, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1D, 2.0f, 0, 0.0f);
+        goto ricochet;
+    case 4:
+        fx = particleCreateFx(&res.point, 0x52, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x53, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1D, 2.0f, 0, 0.0f);
+        goto ricochet;
+    case 5:
+        fx = particleCreateFx(&res.point, 0x54, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1D, 2.0f, 0, 0.0f);
+        goto ricochet;
+    case 6:
+        fx = particleCreateFx(&res.point, 0x70, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1D, 2.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x74, 1.0f, 0, 0.0f);
+        goto ricochet;
+    case 7:
+    case 11:
+    case 20:
+        fx = particleCreateFx(&res.point, 0x58, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x21, 1.5f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1F, 2.0f, 0, 0.0f);
+        goto ricochet;
+    case 0x2A:
+    case 0x2B: {
+        /* five more shots of the next type, spread around the line to player 1 */
+        float scale = m_type == 0x2A ? 5.0f : 3.0f;
+        float spread = m_type == 0x2A ? 45.0f : 60.0f;
+        int next = m_type == 0x2A ? 0x2B : 0x2C;
+
+        fx = particleCreateFx(&res.point, 0x4E, scale, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4D, scale, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4F, scale, 0, 0.0f);
+        particleCreateFx(&res.point, 0x73, scale, 0, 0.0f);
+        if (HD_ID1(res) == 0) {
+            FVECTOR rot, r;
+            int i;
+
+            DispatchRangeBasedDamage();
+            mathfRotationFromPointToPoint(&rot, &m_cs->trans, (_fvector *)((char *)game->m_lists.players[0] + 0x3E30));
+            for (i = 0; i < 5; i++) {
+                vecCopy(&r, &rot);
+                r.x += mathfRandf(-25.0f, 25.0f) * 0.017453292f;
+                r.z += mathfRandf(-spread, spread) * 0.017453292f;
+                game->getWeapons()->CreateStaticWeapon((Weapon::WeaponType)next, m_ownerId, m_targetId, &m_cs->trans, &r, 0);
+            }
+        }
+        if (res.hit)
+            goto ricochet;
+        break;
+    }
+    case 0x2C:
+        fx = particleCreateFx(&res.point, 0x4E, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4D, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x4F, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x73, 1.0f, 0, 0.0f);
+        if (HD_ID1(res) == 0)
+            DispatchRangeBasedDamage();
+        if (!res.hit)
+            break;
+    ricochet:
+        if (e)
+            e->source = 1;
+        ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        break;
+    case 8: {
+        FVECTOR end;
+
+        if (e)
+            e->source = 1;
+        fx = particleCreateFx(&res.point, 0x17, 1.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x20, 3.0f, 0, 0.0f);
+        ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        vecCopy(&end, &res.point);
+        end.x = res.point.x + res.normal.x * 250.0f;
+        end.y = res.point.y + res.normal.y * 250.0f;
+        end.z = res.point.z + res.normal.z * 250.0f;
+        electricArc(&res.point, &end, 0x80806040, 0x2800040, 0.0f, 6.0f, 0.5f, 0.5f, 8, rand(), 4);
+        break;
+    }
+    case 9:
+        if (e)
+            e->source = 1;
+        fx = particleCreateFx(&res.point, 0x6B, 1.0f, 0, 0.0f);
+        m = (float (*)[4])ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        particleCreateFx(&res.point, 9, 5.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1B, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x1B, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x1B, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x1B, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        break;
+    case 0x15:
+    case 0x16:
+        if (e) {
+            e->source = 5;
+            e->type = 2;
+        }
+        fx = particleCreateFx(&res.point, 0x6B, 1.0f, 0, 0.0f);
+        m = (float (*)[4])ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        particleCreateFx(&res.point, 9, 5.0f, 0, 0.0f);
+        particleCreateFx(&res.point, 0x1B, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x1B, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        break;
+    case 13: {
+        Monster *o = (Monster *)Interactives::getInteractive(m_ownerId);
+        char *st = (char *)o + 0xFE5C;
+        ExpandingRing<ShockWaveConfig> *ring = (ExpandingRing<ShockWaveConfig> *)(st + 0x58);
+        SpecFxAnim *a = SpecFxAnim::getInstance(o, 0x11FF);
+        float r;
+
+        if (!a)
+            break;
+        animationSetSpeed(*(_animHandle *)((char *)a + 0x10), *(float *)(st + 0x444));
+        r = ring->reach[ring->numRings - 1];
+        ring->timeScale = r / (r * 240.0f * 0.001f / 240.0f * 240.0f);
+        ShockWave::Activate(&m_cs->trans, *ring, (HitEvent::DamageCause)5, m_ownerId, a);
+        vecCopy(&(*(_cs **)((char *)a + 0x38))->trans, &m_cs->trans);
+        fx = particleCreateFx(&res.point, 0x16, 200.0f, 0, 0.0f);
+        m = (float (*)[4])ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        particleCreateFx(&res.point, 0x6A, 1.0f, m, 0.0f);
+        break;
+    }
+    case 0x27:
+    case 0x28:
+    case 0x29:
+        DispatchRangeBasedDamage();
+        if (e)
+            e->source = 5;
+        fx = particleCreateFx(&res.point, 0x6B, 2.0f, 0, 0.0f);
+        ricochetParticlesOffSurface(fx, &m_cs->trans, &m_prevPos, &res.point, &res.normal);
+        particleCreateFx(&res.point, 9, 10.0f, 0, 0.0f);
+        if (HD_ID2(res) != 0) {
+            Monster *t = (Monster *)Interactives::getInteractive(HD_ID2(res));
+
+            if (((DbInteractive *)t)->m_kind == 1) {
+                char *o = (char *)Interactives::getInteractive(m_ownerId);
+
+                if (t->m_health > 0.0f) {
+                    if (*(int *)(o + 0x14) == 0x100) {
+                        char *lava = o + 0x10930;
+
+                        t->lightOnFire(*(float *)(lava + 0x1A8), *(float *)(lava + 0x1A4), *(int *)(o + 0x20));
+                    } else {
+                        t->lightOnFire(300.0f, 1.0f, *(int *)(o + 0x20));
+                    }
+                }
+            }
+        }
+        break;
+    case 14:
+        particleKillFx(m_fx);
+        m_fx = particleCreateFx(&m_cs->trans, m_cs->mat, 0x6D, 1.0f, 0, 0, false, 0.0f);
+        break;
+    default:
+        particleCreateFx(&res.point, 0x1A, 1.0f, 0, 0.0f);
+        break;
+    }
+    if (m_type != 0xD && HD_ID2(res) != 0) {
+        if (e->source != 1 || Interactives::getInteractive(HD_ID2(res))->m_kind != 3)
+            Interactives::dispatchHit(&dir, m_dyn.damage, m_ownerId, HD_ID2(res));
+    }
+    m_sound.playWeaponExplosion(&m_cs->trans, m_type, impaled);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", DetonateWeapon__6WeaponR9_hdResult);
+#endif
 /* Blast damage: every interactive but the thrower within m_dyn.radius (Manhattan) of the weapon takes a blockable hit
    (a big one for types 0x2B and 0x2C) along the weapon's last move. */
 void Weapon::DispatchRangeBasedDamage(void)
