@@ -22,7 +22,10 @@ Fonte única do estado, do que foi corrigido e das pistas da checagem. Índice e
 Não corrigir sem perguntar ao dono qual atacar.
 
 6. **Resto das partículas:**
-   - **Sprine (8):** a contagem casa (`N = max(2, int(+0x2D8C + 0,5))` passos por trecho), mas os pontos ficam a cerca de 2 px (perturbação aleatória pelos bits do `pos.w`?). A largura `minSize` não foi conferida. Pede ler o microprograma.
+   - **Sprine (8):** a contagem casa (`N = max(2, int(+0x2D8C + 0,5))` passos por trecho), mas os pontos ficam a cerca de 2 px. A largura `minSize` não foi conferida. Lido em parte (microprograma em 0x2770 = `D_2770` do `sprinePacketBuild`):
+     - A perturbação é confirmada: `RINIT R` com o `pos.w` da partícula e `RNEXT` a cada passo, ou seja, o gerador aleatório do VU semeado por partícula. Para casar, o nativo tem que emular o `R` do VU (LFSR de 23 bits).
+     - A curva anda por diferenças avançadas, com a base e os coeficientes do bloco do VU em 300–306 (vf20–vf26; `vi9` = contagem em 306.z).
+     - O cabeçalho que o `sprinePacketBuild` grava antes do `pos[]`: uma linha da `ParticleToEmitMat` (`fx + 0x2CD0`), `(n − 1)·N`, `idade[n − 1]·N` e `n − 1`.
    - **Arco elétrico (7, `common/electric`):** subdivisão e zigue-zague feitos no microprograma, com semente `+0x2DC0` e jitter `+0x2E50`. Pede ler o microprograma.
    - **Strite (6), precisão:** o VU1 manda um triângulo por partícula (o nativo já desenha assim), mas nenhum casa a 1 px. Lido no microprograma de partículas (`tools/vu1dis.py --addr 0x253060`, entrada 0xA88 = `D_A88` do `stritePacketBuild`):
      - `H = M·pos` com a matriz atual e `T = M′·(pos − vel)` com a **matriz do quadro anterior**: `prevViewMat` (`fx + 0x2EC0`, aponta para 4 qwords dentro do pacote; layout VU, colunas x/y/z/translação em coordenadas de mundo, sem subtrair o olho). Fica zerada nos sistemas que não a usam.
