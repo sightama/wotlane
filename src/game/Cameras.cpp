@@ -56,8 +56,17 @@ struct _tdResult {
     unsigned short hatId2;    /* 0x6 */
 };
 int tdTest(_fvector *p, _tdResult *res, int max);
+float smoothEasyInAngle(float cur, float target, float rate, float minStep);
+float hdHatTest(_fvector *pos, _fvector *normal, float up, bool option, float down);
+extern int sShakeEnabled;
+__asm__("#SNFIX_SMALL sShakeEnabled");
+typedef unsigned int u_long128_t __attribute__((mode(TI)));
+float mathfHeadingFromPointToPoint(_fvector *from, _fvector *to);
+extern "C" int printf(const char *, ...);
+#define FMIN(a, b) ({ float _r; __asm__ volatile("min.s %0,%1,%2" : "=f"(_r) : "f"(a), "f"(b) : "memory"); _r; })
 void mathfRotationFromPointToPoint(_fvector *rot, _fvector *from, _fvector *to);
-void mathfRotMatrixRPH(float (*m)[3], _fvector *rph);
+/* float (*)[4]: gcc 2.x mangles the bound minus one, so retail's FPA3_f */
+void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);
 extern char camerasObj[] __asm__("_7Cameras$m_cameras");
 extern int camerasNum __asm__("_7Cameras$m_numCameras");
 extern int leaveTriggered __asm__("_7Cameras$m_leaveTriggered");
@@ -412,7 +421,7 @@ void Cameras::DetachCamera(int view, _fvector *pos)
     SetCameraPOV(view, Camera::POV_3);
     mathfRotationFromPointToPoint(&CAM_CS(c)->rot, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
     CAM_CS(c)->rot.y = 0.0f;
-    mathfRotMatrixRPH((float (*)[3])CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", DetachCamera__7CamerasiP8_fvector);
@@ -483,7 +492,7 @@ void Cameras::InitCCCamera(Monster *a, Monster *b)
             CI(c, 0xD9C) = 0;
             CAM_CS(c)->trans = CAM_CS(CAM(0))->trans;
             CAM_CS(c)->rot = CAM_CS(CAM(0))->rot;
-            mathfRotMatrixRPH((float (*)[3])CAM_CS(c)->mat, &CAM_CS(c)->rot);
+            mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
             CI(c, 0xDE8) = 0;
             CI(c, 0xDE0) = 0;
             CI(c, 0xDE4) = 0;
@@ -532,7 +541,7 @@ void Cameras::InitCCCameraFromThrow(Monster *a, Monster *b)
             CI(c, 0xD9C) = 0;
             CAM_CS(c)->trans = CAM_CS(CAM(0))->trans;
             CAM_CS(c)->rot = CAM_CS(CAM(0))->rot;
-            mathfRotMatrixRPH((float (*)[3])CAM_CS(c)->mat, &CAM_CS(c)->rot);
+            mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
             CI(c, 0xDE8) = 0;
             CI(c, 0xDE0) = 0;
             CI(c, 0xDE4) = 0;
@@ -651,7 +660,7 @@ void Cameras::LeaveUnifiedView(unsigned reason)
     }
     CAM_CS(CAM(0))->trans = CAM_CS(CAM(2))->trans;
     CAM_CS(CAM(0))->rot = CAM_CS(CAM(2))->rot;
-    mathfRotMatrixRPH((float (*)[3])CAM_CS(CAM(0))->mat, &CAM_CS(CAM(0))->rot);
+    mathfRotMatrixRPH(CAM_CS(CAM(0))->mat, &CAM_CS(CAM(0))->rot);
     CI(CAM(0), 0xE60) = 1;
     CF(CAM(0), 0xE5C) = 1.0f;
     CF(CAM(0), 0xE40) = 1.0f / CF(CAM(0), 0xE44);
@@ -688,7 +697,7 @@ unsigned Cameras::LeaveUnifiedTask(void)
     SetCameraPOV(2, Camera::POV_3);
     CAM_CS(CAM(0))->trans = CAM_CS(CAM(2))->trans;
     CAM_CS(CAM(0))->rot = CAM_CS(CAM(2))->rot;
-    mathfRotMatrixRPH((float (*)[3])CAM_CS(CAM(0))->mat, &CAM_CS(CAM(0))->rot);
+    mathfRotMatrixRPH(CAM_CS(CAM(0))->mat, &CAM_CS(CAM(0))->rot);
     CI(CAM(0), 0xE60) = 1;
     CF(CAM(0), 0xE5C) = 1.0f;
     CF(CAM(0), 0xE40) = 1.0f / CF(CAM(0), 0xE44);
@@ -825,7 +834,7 @@ void Cameras::InitPlantBossCamera(void)
         CAM_CS(c)->trans = pos;
         mathfRotationFromPointToPoint(&CAM_CS(c)->rot, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
         CAM_CS(c)->rot.x += CF(c, 0xD00);
-        mathfRotMatrixRPH((float (*)[3])CAM_CS(c)->mat, &CAM_CS(c)->rot);
+        mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
     } else {
         *(FVECTOR *)(c + 0xD20) = CAM_CS(c)->trans;
     }
@@ -835,18 +844,191 @@ INCLUDE_ASM("asm/nonmatchings/game/Cameras", InitPlantBossCamera__7Cameras);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", closeCombatUpdate__6Camera);
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", roamUpdate__6Camera);
-INCLUDE_ASM("asm/nonmatchings/game/Cameras", staticUpdate__6Camera);
+/* POV 3 (detached): eases the camera to its parked position (+0xD20) and turns it towards the followed monster. */
+void Camera::staticUpdate(void)
+{
+    char *c = m_raw;
+    FVECTOR rot;
+    _cs *mcs;
+
+    if (CAM_CS(c) == 0 || CAM_MONSTER(c) == 0) {
+        CF(c, 0xD88) = 0.0f;
+        return;
+    }
+    mcs = CAM_MONSTER(c)->m_cs;
+    CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, CF(c, 0xD20), CF(c, 0xDC4), 0.1f);
+    CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, CF(c, 0xD24), CF(c, 0xDC4), 0.1f);
+    CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, CF(c, 0xD28), CF(c, 0xDC4), 0.1f);
+    mathfRotationFromPointToPoint(&rot, &CAM_CS(c)->trans, &mcs->trans);
+    CAM_CS(c)->rot.x = smoothEasyInAngle(CAM_CS(c)->rot.x, rot.x, CF(c, 0xDCC), 0.001f);
+    CAM_CS(c)->rot.z = smoothEasyInAngle(CAM_CS(c)->rot.z, rot.z, CF(c, 0xDD0), 0.001f);
+    CAM_CS(c)->rot.y = 0.0f;
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    shakeCamera();
+}
+/* POV 4: follows the monster at the POV offset (+0xD10) in the frame at +0xE70, ramping the position and rotation
+   rates (+0xDE0..0xDE8) up to their targets over the POV change (+0xE34 of +0xE44 ticks). */
+#ifdef NON_MATCHING
+/* equivalente: 105/123 palavras; alocação de FPR dos min.s */
+void Camera::getupUpdate(void)
+{
+    char *c = m_raw;
+    _cs *mcs;
+    FVECTOR t;
+
+    if (CAM_CS(c) == 0 || CAM_MONSTER(c) == 0) {
+        CF(c, 0xD88) = 0.0f;
+        return;
+    }
+    mcs = CAM_MONSTER(c)->m_cs;
+    if (CF(c, 0xE34) < CF(c, 0xE44) && CI(c, 0xD9C) == 0) {
+        CF(c, 0xDE0) = FMIN(CF(c, 0xDC4), CF(c, 0xDE0) + CF(c, 0xE38));
+        CF(c, 0xDE4) = FMIN(CF(c, 0xDCC), CF(c, 0xDE4) + CF(c, 0xE3C));
+        CF(c, 0xDE8) = FMIN(1.0f, CF(c, 0xDE8) + CF(c, 0xE40));
+    } else if (CI(c, 0xD9C) == 0) {
+        CF(c, 0xDE0) = CF(c, 0xDC4);
+        CF(c, 0xDE4) = CF(c, 0xDCC);
+        CF(c, 0xDE8) = 1.0f;
+    } else if (CI(c, 0xD9C) == 1) {
+        CI(c, 0xD9C) = 0;
+        CF(c, 0xDE8) = 1.0f;
+        CF(c, 0xDE0) = 1.0f;
+        CF(c, 0xDE4) = 1.0f;
+    }
+    vecApplyRows(&t, (float (*)[4])(c + 0xE70), (_fvector *)(c + 0xD10));
+    vecAdd((_fvector *)(c + 0xD20), &mcs->trans, &t);
+    translateCamera(*(_fvector *)(c + 0xD20), CF(c, 0xDE0), false);
+    mathfRotationFromPointToPoint(&t, &CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans);
+    t.x += CF(c, 0xD00);
+    CAM_CS(c)->rot.x = smoothEasyInAngle(CAM_CS(c)->rot.x, t.x, CF(c, 0xDE4), 0.001f);
+    CAM_CS(c)->rot.z = smoothEasyInAngle(CAM_CS(c)->rot.z, t.z, CF(c, 0xDE8), 0.001f);
+    CAM_CS(c)->rot.y = 0.0f;
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    shakeCamera();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", getupUpdate__6Camera);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", knockbackUpdate__6Camera);
-INCLUDE_ASM("asm/nonmatchings/game/Cameras", topdownUpdate__6Camera);
+/* POVs 6 and 8: looks straight down from the monster plus the POV offset (+0xD10, in the monster's frame unless
+   monster +0xF8 is set), with the monster's heading. */
+void Camera::topdownUpdate(void)
+{
+    char *c = m_raw;
+
+    if (CAM_CS(c) == 0 || CAM_MONSTER(c) == 0) {
+        CF(c, 0xD88) = 0.0f;
+        return;
+    }
+    if (*((signed char *)CAM_MONSTER(c) + 0xF8)) {
+        CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, CAM_MONSTER(c)->m_cs->trans.x + CF(c, 0xD10), CF(c, 0xDC4), 0.01f);
+        CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, CAM_MONSTER(c)->m_cs->trans.y + CF(c, 0xD14), CF(c, 0xDC4), 0.01f);
+        CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, CAM_MONSTER(c)->m_cs->trans.z + CF(c, 0xD18), CF(c, 0xDC4), 0.01f);
+    } else {
+        vecApplyRows((_fvector *)(c + 0xD20), CAM_MONSTER(c)->m_cs->mat, (_fvector *)(c + 0xD10));
+        CAM_CS(c)->trans.x = smoothEasyIn(CAM_CS(c)->trans.x, CAM_MONSTER(c)->m_cs->trans.x + CF(c, 0xD20), CF(c, 0xDC4), 0.01f);
+        CAM_CS(c)->trans.y = smoothEasyIn(CAM_CS(c)->trans.y, CAM_MONSTER(c)->m_cs->trans.y + CF(c, 0xD24), CF(c, 0xDC4), 0.01f);
+        CAM_CS(c)->trans.z = smoothEasyIn(CAM_CS(c)->trans.z, CAM_MONSTER(c)->m_cs->trans.z + CF(c, 0xD28), CF(c, 0xDC4), 0.01f);
+    }
+    CAM_CS(c)->rot.x = smoothEasyInAngle(CAM_CS(c)->rot.x, -1.5707964f, CF(c, 0xDCC), 0.001f);
+    CAM_CS(c)->rot.y = 0.0f;
+    CAM_CS(c)->rot.z = CAM_MONSTER(c)->m_cs->rot.z;
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+    shakeCamera();
+}
+/* POV 7: places the camera at the POV offset (+0xD10) in a frame built from the monster's forward axis and world up,
+   kept above the ground, looking at the monster's +0x3E30 point. */
+#ifdef NON_MATCHING
+/* equivalente: 25/95 palavras; o retail copia o eixo com o endereço num registrador (addiu + lq 0) e aloca outros FPR na normalização */
+void Camera::victoryUpdate(void)
+{
+    char *c = m_raw;
+    FVECTOR axes[4];
+    FVECTOR up;
+
+    if (CAM_CS(c) == 0 || CAM_MONSTER(c) == 0)
+        return;
+    *(u_long128_t *)&up = 0;
+    up.z = 1.0f;
+    axes[0] = *(FVECTOR *)CAM_MONSTER(c)->m_cs->mat[0];
+    vecCross(&axes[1], &up, &axes[0]);
+    vecNormalize3(&axes[1]);
+    vecCross(&axes[2], &axes[0], &axes[1]);
+    vecApplyRows((_fvector *)(c + 0xD20), (float (*)[4])axes, (_fvector *)(c + 0xD10));
+    vecAdd(&CAM_CS(c)->trans, &CAM_MONSTER(c)->m_cs->trans, (_fvector *)(c + 0xD20));
+    {
+        float h = hdHatTest(&CAM_CS(c)->trans, (_fvector *)CAM_CS(c)->mat[2], 100.0f, false, 4096.0f);
+
+        if (h < 0.0f)
+            CAM_CS(c)->trans.z -= h;
+    }
+    mathfRotationFromPointToPoint(&CAM_CS(c)->rot, &CAM_CS(c)->trans, (_fvector *)((char *)CAM_MONSTER(c) + 0x3E30));
+    mathfRotMatrixRPH(CAM_CS(c)->mat, &CAM_CS(c)->rot);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", victoryUpdate__6Camera);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", crushUpdate__6Camera);
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", normalUpdate__6Camera);
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", checkCollision__6Camerai);
+/* Close-combat camera: +0xE20 becomes the direction across the pair. With a single monster, the camera offset
+   (+0xD10, mirrored to the side the other monster is on) is put in the first monster's frame instead. */
+#ifdef NON_MATCHING
+/* equivalente: 9/125 palavras; o retail calcula o ponto médio (não usado) e agenda os sinf/cosf de outro jeito */
+void Camera::checkNewPosition(void)
+{
+    char *c = m_raw;
+    Monster *a = *(Monster **)(c + 0xE0C);
+    Monster *b = *(Monster **)(c + 0xE10);
+    FVECTOR mid;
+    FVECTOR d;
+    float heading;
+
+    mid.x = (a->m_cs->trans.x + b->m_cs->trans.x) * 0.5f;
+    mid.y = (a->m_cs->trans.y + b->m_cs->trans.y) * 0.5f;
+    mid.z = (a->m_cs->trans.z + b->m_cs->trans.z) * 0.5f;
+    heading = mathfHeadingFromPointToPoint(&a->m_cs->trans, &b->m_cs->trans) + 1.5707964f;
+    {
+        float s = sinf(heading);
+
+        SET_XYZ((_fvector *)(c + 0xE20), s, cosf(heading), 0.0f);
+    }
+    if (game->m_numMonsters == 1) {
+        vecApplyRows((_fvector *)(c + 0xE20), a->m_cs->mat, (_fvector *)(c + 0xD10));
+        vecSub(&d, &b->m_cs->trans, &a->m_cs->trans);
+        if (0.0f < a->m_cs->mat[1][0] * d.y - a->m_cs->mat[1][1] * d.x) {
+            CF(c, 0xD10) = -CF(c, 0xD10);
+            vecApplyRows((_fvector *)(c + 0xE20), a->m_cs->mat, (_fvector *)(c + 0xD10));
+            CF(c, 0xD10) = -CF(c, 0xD10);
+        }
+        if (CF(c, 0xE28) < 0.0f)
+            printf("Trying to place unified cam below ground\n");
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", checkNewPosition__6Camera);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", posInFOV__6CameraR8_fvectorib);
 INCLUDE_ASM("asm/nonmatchings/game/Cameras", translateCamera__6CameraR8_fvectorfb);
-INCLUDE_ASM("asm/nonmatchings/game/Cameras", shakeCamera__6Camera);
+/* While the shake amount (+0xD88) is above 1 (and shaking is enabled): jolts the camera sideways by a random amount
+   in the camera's frame (offset kept at +0xD30) plus a random rise, then lets the amount fall off (+0xD8C). */
+void Camera::shakeCamera(void)
+{
+    char *c = m_raw;
+    FVECTOR v;
+    float z;
+
+    if (1.0f < CF(c, 0xD88) && sShakeEnabled) {
+        CF(c, 0xD34) = 0.0f;
+        CF(c, 0xD30) = mathfRandf(-CF(c, 0xD88), CF(c, 0xD88));
+        CF(c, 0xD38) = 0.0f;
+        vecApplyRows(&v, CAM_CS(c)->mat, (_fvector *)(c + 0xD30));
+        z = CF(c, 0xD38);
+        v.z += mathfRandf(z, CF(c, 0xD88) * 0.5f);
+        vecAdd(&CAM_CS(c)->trans, &CAM_CS(c)->trans, &v);
+        CF(c, 0xD88) = smoothEasyIn(CF(c, 0xD88), z, CF(c, 0xD8C), 0.0001f);
+    }
+}
 unsigned Cameras::CCFadeIn(void *p)
 {
     return ((Cameras *)p)->CCFadeIn();
