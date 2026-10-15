@@ -117,7 +117,8 @@ struct FxSystem {
 };
 
 // Eixos da camera para montar os quadrados: right/up no plano da tela, back = -frente, profundidade(p) = depth . (p, 1)
-struct FxView { float right[3], up[3], back[3], depth[4]; };
+// ox/oy: coordenadas x e y de vista (ox . (p, 1)), na mesma base de right/up.
+struct FxView { float right[3], up[3], back[3], depth[4], ox[4], oy[4]; };
 
 class Particles {
 public:
@@ -169,7 +170,8 @@ public:
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;
         if (off || systems.empty()) return;
         const Matrix mv = rlGetMatrixModelview();
-        const FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14}};
+        const FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14},
+                          {mv.m0, mv.m4, mv.m8, mv.m12}, {mv.m1, mv.m5, mv.m9, mv.m13}};
         // particleDraw: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec + vis.priority; opacos (alpha 0) antes
         for (FxSystem &s : systems) {
             if (ram.u32(s.base + fxoff::alphaContext) == 0) { s.key = 50000.f + ram.f32(s.base + fxoff::priority); continue; }
@@ -220,20 +222,42 @@ public:
         float c[4][3], uv[4][2];
         if (s.type == FX_LINE) return;
         if (isStrip(s.type)) {
-            // Faixa ligando particulas consecutivas, de largura 2*pos.w, virada para a camera
+            // Faixa ligando particulas consecutivas, de meia-largura |pos.w|. Como no VU1 (medido pela checagem em stripe: a aresta de
+            // cada ponta sai perpendicular a faixa na tela), a ponta i abre perpendicular, na tela, a direcao entre as vizinhas
+            // (i - 1 e i + 1), com a meia-largura no plano de vista (projeta em |pos.w| * foco / profundidade).
+            // stripe: o stripePacketBuild manda ao VU1 a idade da particula mais nova (n - 1), e a largura sai descontada do quanto ela
+            // ja cresceu: com o emissor parado a faixa inteira afina. Medido pela checagem (preset 106): meia-largura =
+            // |pos.w| - |pos.w[n - 1]| + minSize (com o emissor ativo, a mais nova tem idade ~0 e da |pos.w|).
+            float wHead = 0.f;
+            if (s.type == FX_STRIPE) { float ph[4]; P(s.n - 1, ph); wHead = std::fabs(ph[3]) - ram.f32(b + fxoff::minSize); }
+            auto halfW = [&](float w) { return std::max(std::fabs(w) - wHead, 0.f); };
+            auto off = [&](int i, float o[3]) {
+                float pa[4], pb[4];
+                P(std::max(i - 1, 0), pa); P(std::min(i + 1, s.n - 1), pb);
+                auto scr = [&](const float *q, float &x, float &y) {
+                    const float z = view.depth[0] * q[0] + view.depth[1] * q[1] + view.depth[2] * q[2] + view.depth[3];
+                    const float iz = 1.f / std::max(z, 1e-3f);
+                    x = (view.ox[0] * q[0] + view.ox[1] * q[1] + view.ox[2] * q[2] + view.ox[3]) * iz;
+                    y = (view.oy[0] * q[0] + view.oy[1] * q[1] + view.oy[2] * q[2] + view.oy[3]) * iz;
+                };
+                float xa, ya, xb, yb, pi[4];
+                scr(pa, xa, ya); scr(pb, xb, yb); P(i, pi);
+                float nx = -(yb - ya), ny = xb - xa;
+                const float l = std::sqrt(nx * nx + ny * ny);
+                if (!(l > 1e-9f)) return false;
+                nx *= halfW(pi[3]) / l; ny *= halfW(pi[3]) / l;
+                for (int a = 0; a < 3; ++a) o[a] = view.right[a] * nx + view.up[a] * ny;
+                return true;
+            };
             for (int i = 0; i + 1 < s.n; ++i) {
-                float p0[4], p1[4];
+                float p0[4], p1[4], o0[3], o1[3];
                 P(i, p0); P(i + 1, p1);
                 if (!std::isfinite(p0[0]) || !std::isfinite(p1[0])) continue;
-                float d[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]};
-                float w[3] = {d[1] * back[2] - d[2] * back[1], d[2] * back[0] - d[0] * back[2], d[0] * back[1] - d[1] * back[0]};
-                const float l = std::sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
-                if (l < 1e-6f) continue;
-                const float r0 = std::fabs(p0[3]) / l, r1 = std::fabs(p1[3]) / l;
+                if (!off(i, o0) || !off(i + 1, o1)) continue;
                 const float u0 = float(i) / float(s.n - 1), u1 = float(i + 1) / float(s.n - 1);
                 for (int a = 0; a < 3; ++a) {
-                    c[0][a] = p0[a] - w[a] * r0; c[1][a] = p0[a] + w[a] * r0;
-                    c[2][a] = p1[a] + w[a] * r1; c[3][a] = p1[a] - w[a] * r1;
+                    c[0][a] = p0[a] - o0[a]; c[1][a] = p0[a] + o0[a];
+                    c[2][a] = p1[a] + o1[a]; c[3][a] = p1[a] - o1[a];
                 }
                 uv[0][0] = u0; uv[0][1] = 0.f; uv[1][0] = u0; uv[1][1] = 1.f;
                 uv[2][0] = u1; uv[2][1] = 1.f; uv[3][0] = u1; uv[3][1] = 0.f;

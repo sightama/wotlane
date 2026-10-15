@@ -3580,10 +3580,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..7e60202
+index 0000000..17d7d0b
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,813 @@
+@@ -0,0 +1,818 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -3729,6 +3729,11 @@ index 0000000..7e60202
 +        v.back[a] = -f[a] / fl;
 +        v.depth[a] = f[a] / fl;
 +        v.depth[3] -= v.depth[a] * cam.eye[a];
++    }
++    v.ox[3] = v.oy[3] = 0.f;   // x e y de vista (faixas: perpendicular na tela)
++    for (int a = 0; a < 3; ++a) {
++        v.ox[a] = v.right[a]; v.oy[a] = v.up[a];
++        v.ox[3] -= v.right[a] * cam.eye[a]; v.oy[3] -= v.up[a] * cam.eye[a];
 +    }
 +    return v;
 +}
