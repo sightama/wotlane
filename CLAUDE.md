@@ -46,3 +46,5 @@ Decompile de cima para baixo ao longo do caminho real de execução, não por fi
 
 ## Verificação de comportamento
 Sem testes unitários por decisão do projeto. A verificação é por: `tools/difftest.py` / `difftest_all.py` (retail vs nossa função num emulador MIPS, mesmo estado aleatório), e, quando houver algo rodando, comparação com o PCSX2. Depurar sintoma: pausar o PCSX2, extrair a RAM do EE e recalcular a lógica do retail a partir do dump (`tools/ramdiff.py`). Se uma variante do ELF travar com "executing data", compare a RAM do EE com o ELF antes de suspeitar da função decompilada (já aconteceu: era código realocado sobrescrito por DMA).
+
+**Dumps e instantâneos são descartáveis.** `.vu1snap` (~40 MB cada), `ram_*.bin`/`vram_*.bin` (36 MB), dumps do vigia e pastas de `lote/` ficam fora do repo e enchem o disco. Depois que uma correção é validada, apague os instantâneos e dumps que a motivaram (`snaps/`, `discroot/ram_*`, `lote/<data>/`); guarde só os que ainda mostram um problema em aberto ou que você nomeou de propósito como corpus de regressão (`tools/vu1cmp.ps1 <pasta>`). Nunca deixe `WOTM_VU1CHECK_SNAP` ligado em lote.
