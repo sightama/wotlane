@@ -11,7 +11,7 @@ Fonte única do estado, do que foi corrigido e das pistas da checagem. Índice e
   - `em textura (sombra)`: triângulos desenhados num FRAME que o quadro usa como textura (a silhueta no quadro da sombra).
 - Objeto que não casa com a coleta nativa da sua cadeia tenta a da 1ª cadeia (a OT de alfa sai no fim do quadro).
 - `tools/lote.ps1` liga por padrão com `-Check 1`. O `resumo.csv` traz `casados_pior`, `textura_difere_pior`, `fx_casados_pior`, `vif1_fora_de_passo` (deve ser 0) e outras colunas.
-- `WOTM_VU1CHECK_DUMP=<prefixo>` grava os triângulos e quadrados de cada checagem em `<prefixo>_<g_frame>.csv`, para análise offline (o `lote.ps1` herda a variável do ambiente). Por sistema de partículas grava também a câmera da comparação (`fxcam`: W 4x4 por linhas e olho, projeção como o `projectPt`) e as partículas cruas (`fxp`: pos, vel, idade, minSize, maxSize).
+- `WOTM_VU1CHECK_DUMP=<prefixo>` grava os triângulos e quadrados de cada checagem em `<prefixo>_<g_frame>.csv`, para análise offline (o `lote.ps1` herda a variável do ambiente). Por sistema de partículas grava também a câmera da comparação (`fxcam`: W 4x4 por linhas e olho, projeção como o `projectPt`) e as partículas cruas (`fxp`: pos, vel, idade, minSize, maxSize) e as matrizes cruas (`fxmat`).
 
 ## Estado
 - Central, 1 contra 1, 100 s, uma checagem por segundo: de 97,7% a 100% dos triângulos do VU1 casam; 5 de 91 checagens ficam abaixo de 99%. Textura: de 0 a 1 triângulo diferente por checagem.
@@ -24,7 +24,11 @@ Não corrigir sem perguntar ao dono qual atacar.
 6. **Resto das partículas:**
    - **Sprine (8):** a contagem casa (`N = max(2, int(+0x2D8C + 0,5))` passos por trecho), mas os pontos ficam a cerca de 2 px (perturbação aleatória pelos bits do `pos.w`?). A largura `minSize` não foi conferida. Pede ler o microprograma.
    - **Arco elétrico (7, `common/electric`):** subdivisão e zigue-zague feitos no microprograma, com semente `+0x2DC0` e jitter `+0x2E50`. Pede ler o microprograma.
-   - **Strite (6), precisão:** o VU1 manda um triângulo por partícula, com a ponta na cauda e a base de largura cheia na cabeça. O nativo já desenha assim, mas nenhum casa a 1 px. Ajustando `pos + k·vel ± e·vel/|vel|` com os dados crus, o erro mediano fica em 2–3 px e o p90 em 5–6 px: não é fórmula simples. Bate com a nota antiga de que a cauda usa a matriz do quadro anterior. Pede ler o microprograma.
+   - **Strite (6), precisão:** o VU1 manda um triângulo por partícula (o nativo já desenha assim), mas nenhum casa a 1 px. Lido no microprograma de partículas (`tools/vu1dis.py --addr 0x253060`, entrada 0xA88 = `D_A88` do `stritePacketBuild`):
+     - `H = M·pos` com a matriz atual e `T = M′·(pos − vel)` com a **matriz do quadro anterior**: `prevViewMat` (`fx + 0x2EC0`, aponta para 4 qwords dentro do pacote; layout VU, colunas x/y/z/translação em coordenadas de mundo, sem subtrair o olho). Fica zerada nos sistemas que não a usam.
+     - Ponta = `3T − 2H` (≈ `pos − 3·vel`), centro da base = `3H − 2T` (≈ `pos + 2·vel`), em coordenadas homogêneas; meia-largura perpendicular na tela, escalada por `pos.w`.
+     - Conferido com dump (fase 8, 206 triângulos): a direção e a linha batem (erro perpendicular 0), mas sobra um deslocamento **ao longo** do eixo depois da divisão: a base fica cerca de 4,8% do comprimento mais à frente e a ponta de 8% a 13% mais atrás. Não é `c/w` nem um múltiplo fixo na tela; deve vir dos termos `vf20`/`vf21` (direção normalizada × constantes do contexto `vf27`/`vf23` × `pos.w`). Falta terminar de ler esse trecho.
+     - O dump grava `fxmat` (`prevViewMat` e `worldToScreenMat` crus) por sistema.
    - **Fase 8, `vif1_fora_de_passo` 38:** apareceu numa rodada de 120 s, a partir de g=1731, a primeira em que um round terminou (`rodadas` 1). Nas outras 5 rodadas da fase 8, 0. Não investigado.
    - **Fase 8, objetos:** `casados_pior` de 91,9% em todas as rodadas (anterior a estas mudanças). Não investigado.
    - **Pedestres na METRO:** numa checagem, VU1 750 e nativo 1000 (um sistema descartado pelo `pedsUpdateFOVbox`?).
