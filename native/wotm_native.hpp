@@ -2234,6 +2234,34 @@ public:
             // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
             const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
+            {   // diagnostico: WOTM_TEXINFO=<id> imprime (ate 6 vezes) os objetos com esse texId: mistura, cor, fudge, textura e vertices
+                static const int ti = std::getenv("WOTM_TEXINFO") ? std::atoi(std::getenv("WOTM_TEXINFO")) : -1;
+                static int printed = 0;
+                if (ti >= 0 && printed < 6 && int(objectTexId(ram, it.node, slot)) == ti) {
+                    ++printed;
+                    std::fprintf(stderr, "[texinfo] node %x blend %d abe %d color %.3f %.3f %.3f %.3f fade %.3f gsA %d key %llx tris %zu\n", it.node, it.blend,
+                                 int(md->abe), it.color[0], it.color[1], it.color[2], it.color[3], it.fade, int(gsA), (unsigned long long)o.key, t.size());
+                    std::fprintf(stderr, "[texinfo]   fudge %.4f burn %.3f flags %04x pos %.1f %.1f %.1f\n", ram.f32(it.node + 0x28), ram.f32(it.node + 0x2C),
+                                 ram.u16(it.node + 0xC), it.m.m[3][0], it.m.m[3][1], it.m.m[3][2]);
+                    std::vector<uint32_t> tp;
+                    uint32_t tw = 0, th = 0;
+                    if (decodeTex(ram, it.node, tp, tw, th, slot, true)) {
+                        double s[4] = {0, 0, 0, 0};
+                        uint32_t amin = 255, amax = 0;
+                        for (uint32_t c : tp) { for (int k = 0; k < 4; ++k) s[k] += (c >> (8 * k)) & 255; amin = std::min(amin, c >> 24); amax = std::max(amax, c >> 24); }
+                        std::fprintf(stderr, "[texinfo]   textura %ux%u media %.0f %.0f %.0f %.0f alfa %u..%u texKey %llx\n", tw, th, s[0] / tp.size(), s[1] / tp.size(),
+                                     s[2] / tp.size(), s[3] / tp.size(), amin, amax, (unsigned long long)texKey(ram, it.node, slot));
+                        for (uint32_t y = 0; y < th; y += th / 8) {
+                            std::fprintf(stderr, "[texinfo]   ");
+                            for (uint32_t x = 0; x < tw; x += tw / 8) std::fprintf(stderr, "%08x ", tp[y * tw + x]);
+                            std::fprintf(stderr, "\n");
+                        }
+                    }
+                    for (size_t q = 0; q < t.size() && q < 6; ++q)
+                        std::fprintf(stderr, "[texinfo]   v %.1f %.1f %.1f uv %.3f %.3f rgba %u %u %u %u fge %d\n", t[q].x, t[q].y, t[q].z, t[q].u, t[q].v,
+                                     t[q].r, t[q].g, t[q].b, t[q].a, int(t[q].fge));
+                }
+            }
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
             const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade * std::max(0.f, it.color[3]);
