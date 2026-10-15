@@ -26,10 +26,10 @@
 //     pos.w e o lado em unidades de mundo e o meio-lado nunca passa de metade da profundidade. Os bits baixos de pos.w indexam os cantos de
 //     UV (3 normal, 1 espelha U, 2 espelha V, 0 os dois); a cor sai da tabela pela idade, como no loadColors
 //   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
-//   - strite: cabeca pos e cauda pos - vel, esticada 2x para cada lado (de pos + 2*vel a pos - 3*vel), largura por pos.w
+//   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat)
 // Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8, interpolados; pos.w = lado e bits baixos = celula/espelhamento).
 // Ainda aproximado: as faixas (sprine, stripe, sweepTrail) ligam particulas consecutivas; kite, wake e dustTrail viram sprites;
-// a cauda das linhas e do strite usa a matriz atual.
+// a cauda das linhas usa a matriz atual.
 #pragma once
 
 #include <algorithm>
@@ -140,6 +140,69 @@ public:
                 for (uint32_t k = 0; k < 3; ++k) d += ram.f32(n + 4 * k) * (c[k] + e[k] * ram.f32(s + 4 * k));
                 if (d < ram.f32(w + 0xF0 + 64 * i + 48 + 4 * j)) return false;
             }
+        return true;
+    }
+
+    // Strite como o microprograma do VU1 (entrada 0xA88; conferido pela checagem, erro < 0,1 px). Em pixels do GS:
+    //   H = M (pos) com a worldToScreenMat atual; T = M' (pos - vel) com a prevViewMat (fx + 0x2EC0: 4 qwords no pacote, colunas
+    //   x/y/z/translacao em coordenadas de mundo): a cauda sai onde estava na tela do quadro anterior (borrao de movimento).
+    //   A = 3T - 2H (ponta), B = 3H - 2T (base), divididos pelo proprio w. Direcao m = (B - A) normalizada no espaco dividido pelos focos
+    //   (fx, fy da matriz: 384 e 180,48 na luta); ponta recua 0,5 pos.w, base avanca 0,25 pos.w e a meia-largura e 0,433 pos.w
+    //   (0,866 / 2), em unidades de vista: pixel = foco * deslocamento * pos.w / w.
+    // Os tres pontos voltam ao mundo pela matriz atual, cada um na sua profundidade. c[0] = c[3] = ponta, c[1]/c[2] = base.
+    static bool striteTriangle(const Ram &ram, uint32_t b, const float p[4], const float v[3], float c[4][3]) {
+        constexpr uint32_t kW2S = 0x006E1FD0u, kEo = 0x00445CD0u + 0x20;   // worldToScreenMat[0], worldCtx[0].eo (= -olho)
+        float M[4][4], eye[3];
+        for (int r = 0; r < 4; ++r)
+            for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(kEo + 4 * k);
+        const uint32_t pm = ram.u32(b + 0x2EC0);
+        if (!ram.ok(pm, 64)) return false;
+        float P[16];
+        bool any = false;
+        for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * k); any = any || P[k] != 0.f; }
+        if (!any) return false;
+        float H[4], T[4];
+        const float d[3] = {p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]}, t[3] = {p[0] - v[0], p[1] - v[1], p[2] - v[2]};
+        for (int r = 0; r < 4; ++r) {
+            H[r] = M[r][0] * d[0] + M[r][1] * d[1] + M[r][2] * d[2] + M[r][3];
+            T[r] = P[12 + r] + P[r] * t[0] + P[4 + r] * t[1] + P[8 + r] * t[2];
+        }
+        float A[4], B[4];
+        for (int r = 0; r < 4; ++r) { A[r] = 3.f * T[r] - 2.f * H[r]; B[r] = 3.f * H[r] - 2.f * T[r]; }
+        if (!(A[3] > 1e-3f) || !(B[3] > 1e-3f)) return false;
+        // focos: parte das linhas 0 e 1 perpendicular a linha 3 (frente)
+        float n3 = 0.f, d03 = 0.f, d13 = 0.f;
+        for (int k = 0; k < 3; ++k) { n3 += M[3][k] * M[3][k]; d03 += M[0][k] * M[3][k]; d13 += M[1][k] * M[3][k]; }
+        if (!(n3 > 1e-6f)) return false;
+        float fx = 0.f, fy = 0.f;
+        for (int k = 0; k < 3; ++k) {
+            const float a0 = M[0][k] - d03 / n3 * M[3][k], a1 = M[1][k] - d13 / n3 * M[3][k];
+            fx += a0 * a0; fy += a1 * a1;
+        }
+        fx = std::sqrt(fx); fy = std::sqrt(fy);
+        const float ax = A[0] / A[3], ay = A[1] / A[3], bx = B[0] / B[3], by = B[1] / B[3];
+        float mx = (bx - ax) / fx, my = (by - ay) / fy;
+        const float ml = std::sqrt(mx * mx + my * my);
+        if (!(ml > 1e-9f)) return false;
+        mx /= ml; my /= ml;
+        const float w = p[3], ka = 0.5f * w / A[3], kb = w / B[3];
+        const float px[3] = {ax - ka * mx * fx, bx + kb * (0.25f * mx * fx - 0.4330127f * my * fx), bx + kb * (0.25f * mx * fx + 0.4330127f * my * fx)};
+        const float py[3] = {ay - ka * my * fy, by + kb * (0.25f * my * fy + 0.4330127f * mx * fy), by + kb * (0.25f * my * fy - 0.4330127f * mx * fy)};
+        const float pw[3] = {A[3], B[3], B[3]};
+        // volta ao mundo: linhas 0, 1 e 3 de M aplicadas a (q - olho) dao (x w, y w, w)
+        const float m00 = M[0][0], m01 = M[0][1], m02 = M[0][2], m10 = M[1][0], m11 = M[1][1], m12 = M[1][2], m30 = M[3][0], m31 = M[3][1], m32 = M[3][2];
+        const float det = m00 * (m11 * m32 - m12 * m31) - m01 * (m10 * m32 - m12 * m30) + m02 * (m10 * m31 - m11 * m30);
+        if (!(std::fabs(det) > 1e-12f)) return false;
+        for (int k = 0; k < 3; ++k) {
+            const float r0 = px[k] * pw[k] - M[0][3], r1 = py[k] * pw[k] - M[1][3], r3 = pw[k] - M[3][3];
+            const float q0 = (r0 * (m11 * m32 - m12 * m31) - m01 * (r1 * m32 - m12 * r3) + m02 * (r1 * m31 - m11 * r3)) / det;
+            const float q1 = (m00 * (r1 * m32 - m12 * r3) - r0 * (m10 * m32 - m12 * m30) + m02 * (m10 * r3 - r1 * m30)) / det;
+            const float q2 = (m00 * (m11 * r3 - r1 * m31) - m01 * (m10 * r3 - r1 * m30) + r0 * (m10 * m31 - m11 * m30)) / det;
+            const int dst = k == 0 ? 0 : k;
+            c[dst][0] = eye[0] + q0; c[dst][1] = eye[1] + q1; c[dst][2] = eye[2] + q2;
+        }
+        for (int a = 0; a < 3; ++a) c[3][a] = c[0][a];
         return true;
     }
 
@@ -400,8 +463,10 @@ public:
                 for (int a = 0; a < 3; ++a) c[k][a] = cpos[a] + ax[a] * sx[k] + ay[a] * sy[k];
             // O VU1 manda strite e wake como UM triangulo por particula (checagem VU1 x nativo); aqui o quad degenera (canto 3 = canto 0).
             if (s.type == FX_STRITE) {
-                // ponta na cauda (meio dos cantos 0 e 3), base de largura cheia na cabeca: casa a ~1,5 px
-                for (int a = 0; a < 3; ++a) c[0][a] = c[3][a] = cpos[a] - ax[a];
+                float v[3];
+                V(i, v);
+                if (!striteTriangle(ram, b, p, v, c))   // sem a camera do jogo: ponta no meio dos cantos 0 e 3 (aproximacao antiga)
+                    for (int a = 0; a < 3; ++a) c[0][a] = c[3][a] = cpos[a] - ax[a];
             } else if (s.type == FX_WAKE) {
                 // triangulo equilatero no plano XY do mundo, centrado em pos, um vertice em +X; raio pelo pos.w.
                 // Medido so no preset 146 (minSize = maxSize = 90), w de 0 a 0,94: R = 45 + 120 w + 7,5 s (2 - s), s = min(w / 0,235, 1)
