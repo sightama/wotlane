@@ -5,6 +5,12 @@ Fonte única do estado, do que foi corrigido e das pistas da checagem. Índice e
 ## Como funciona
 - `WOTM_VU1CHECK=<s>` (runtime, `wotm_vu1check.inc`): a cada `<s>` segundos, num quadro da luta, o VU1 executa a cadeia do quadro. Cada triângulo do XGKICK é casado (1 px) com o triângulo nativo do mesmo objeto (`polyPkt`), e cada quadrado de partícula com o do seu sistema `fx[i]`.
 - Compara geometria, textura (TEX0 por triângulo; o casamento prefere pares de mesma textura) e a forma das partículas.
+- **Atributos dos casados** (desde 2026-10-15; fora os repetidos e os de textura diferente): cada vértice do VU1 contra o nativo mais próximo na tela. Linha `[vu1check] g=… atributos:` e até 8 objetos `atributos pkt …` com o primeiro exemplo de cada diferença.
+  - `uv difere`: algum vértice a mais de 1 texel (VU1: S/Q e T/Q, ou UV/16 com `PRIM.FST`; escala pelo TW/TH do TEX0). `volta inteira` = o mesmo deslocamento inteiro em todos os vértices (repetição, não conta).
+  - `cor difere`: algum canal RGB a mais de 4, cru (RGBAQ do VU1 contra `Vtx::r/g/b`; 0x80 = 1,0). `so acima de 0x80`: só porque o VU1 clareia além de 1,0.
+  - `alfa difere`: com ABE nos dois, alfa de vértice cru a mais de 4 (nativo: `Vtx::a · fade`). A escala com que o nativo desenha o alfa (`4a/255` contra `a/128` do GS, compensada pelo alfa da textura) fica fora.
+  - `ABE difere` (`PRIM.ABE` contra `MeshData::abe`), `ALPHA difere` (byte baixo do ALPHA_1/2 contra o equivalente do `DrawItem::blend`), `TFX/TCC fora do padrao` (o nativo sempre modula com o alfa da textura) e `neblina` (`PRIM.FGE`; o nativo não tem neblina).
+  - O dump ganhou, depois do FBP: u, v e RGBA de cada vértice, ABE, ALPHA, FGE e o TEX0 inteiro (só VU1). O `resumo.csv` ganhou `uv_difere_pior`, `cor_difere_pior`, `alfa_difere_pior`, `abe_difere_pior` e `alpha_difere_pior`.
 - Conta à parte:
   - `repetidos`: passadas da sombra projetada sobre o que já casou;
   - `so pela sombra`: triângulo com a textura da sombra (tbp 3e60) que nenhuma passada base casou (ver pista 9);
@@ -33,6 +39,11 @@ Não corrigir sem perguntar ao dono qual atacar.
    - **SPRITE do GS fora de `fx[]` (identificado):** de 340 a 380 por quadro. Não é HUD: vêm do `dustPacket` (`D_0078F6E0`, montado por `texDrawDustPacketBuild` no `particleInitAfter`) e de um trecho do `displayList`. É a composição das texturas de poeira e fumaça iluminadas na VRAM (0xFD800), que as partículas "compostas" (texInfo 0xFFFF) usam; o nativo as troca por um círculo suave. Falta: a checagem contá-los como render-to-texture, e o nativo gerar essas texturas (parâmetros em `dustPktParams`, luz em `dustLighting`). O dump grava as origens (`rectorf`).
 8. Corrigida e identificada (ver "Corrigido"): o objeto é o power-up de invisibilidade (CLOAK).
 10. **Textura trocada entre tex 156 e 193:** 1 triângulo de vez em quando (sobreposição?).
+12. **Iluminação por vértice dos monstros** (achada pelos atributos, fase 1, Congar contra Togera, 40 s): nos skinned (flags `2310`, ex.: tex 314 e 326) todo triângulo casado tem cor diferente. O nativo usa a cor gravada no pacote (`333333`) e o VU1 manda cor calculada (`694f48`, `6c514a`, `302522`: varia com o monstro e o quadro). As peças rígidas presas aos monstros (flags `2310`/`2311`, ex.: tex 76, 87, 326) também: `404040` no nativo contra `8d777b` ou `000000` no VU1. É iluminação do microprograma (provável: normal × luzes da fase). Explica os monstros cinza das capturas do lote. Pede ler o microprograma dos skinned.
+13. **UV animado:** objetos com o UV deslocado por inteiro, sempre na mesma direção, de dezenas de texels: tex 304 (flags `8a00`, +49 a +177 texels em v) e tex 86 (flags `212`, +38 a +55 em u e v). Bate com as texturas animadas reportadas. Falta achar quem grava o deslocamento (matriz ou offset de UV no pacote, ou animação de textura no `texm`).
+14. **Cor de vértice que muda em objetos da fase:** tex 242 e 243 (flags `290`): o VU1 manda `000704` contra `41506e` no nativo, em 130 a 160 de ~570 triângulos. Não investigado (luz local? vértices pintados pela lógica?).
+15. **Neblina:** o VU1 liga `PRIM.FGE` em todos os triângulos da fase 1; o nativo não desenha neblina. Falta ler o FOG por vértice (o `F` do XYZF2) e o FOGCOL.
+- Sem diferença na fase 1: `ABE difere`, `TFX/TCC fora do padrao` (tudo MODULATE com alfa da textura) e quase nada de `ALPHA difere` (até 80 por checagem; o 0x42 do VU1 é a passada da sombra).
 
 ## Explicadas, sem bug no nativo
 - **Pista 7, itens de alfa deslocados (padrão B):** os itens de alfa presos aos monstros (flags `0x8a01`/`0x8211`, tex 330/333 e 348/351, três por monstro) às vezes saem inteiros de 1 a 2,5 px fora, em direções variadas, em cerca de 1 de 30 checagens. O pacote do VU1 leva as matrizes do instante em que a travessia passou pelo monstro (o `hierAnimTransNode` as recalcula durante o `hier`), e nenhuma coleta da checagem cai exatamente ali. A checagem agora tenta também a coleta na entrada do `hier(0, 1)` (fim da travessia do passe 0): numa rodada de 60 s na fase 1, as linhas desses itens com mais de 10 triângulos sem par caíram de 13 para 7. O nativo desenha cada quadro de uma única leitura da RAM; não é bug dele.
@@ -47,6 +58,7 @@ Bugs do nativo:
 - **Pista 6, teste de visão das partículas:** o nativo pulava o `viewInFOV(0, &FOVsphere, &FOVextent)` do `particleDraw` (caixa contra os 6 planos de `worldCtx[0]`). Agora `Particles::inViewFov` o aplica (sistemas e destroços); nenhum sistema que o VU1 desenha ficou de fora.
 - **Pista 8, texId 0 = quadro em exibição:** o nativo desenhava sem textura um objeto da METRO (nó `a1c560`, 92 triângulos, flags `0x8316`) que o VU1 texturiza com o framebuffer. A cada quadro o `rtMain` chama `texmPrepTexInfoZero` com o `DISPFB2` de `viewGetDb(0)` (+0x10 ou +0x50, pela paridade de `g_frame`), que grava `displayBuffer` (0x6F87F8) = `FBP << 5`; o `texmGetTextureAddrs` monta para texId 0 o TEX0 `displayBuffer | 0x28128000` com TH 8 (PSMCT24, TBW 10, janela 1024x256 sobre o buffer em exibição, isto é, o quadro anterior). Os dois buffers de 640x224 ficam em FBP 0x46 e 0x8C (tbp `8c0`/`1180`). Agora o `texKey` dá `kScreenKey` para texId 0, o runtime alterna duas render textures e passa a do quadro anterior (`Scene::screenTexture`), e o UV vira texel do GS na tela 640x224 (`u·1024/640`, `1 − v·256/224`). A checagem compara com o TEX0 montado a partir do `displayBuffer`: textura difere na METRO caiu de 90 para de 0 a 1.
   - **O objeto é o power-up CLOAK** (invisibilidade). Na imagem `LVL/METRO.NGP` (descomprimida em 0xA00000): GROUP id1 5109 (filho direto da raiz `a00280`) → CHAR_INSTANCE `a22190` → LOD `a20440` → ANIM_XFORM `a1db60` → GROUP `a1db30` (com contexto de alfa) → TRANSLATE (0, 0, −5) → OBJECT `a1c560`. O tipo do power-up é `id1 − 0x13EC` = 9 = `CLOAK`, e o grupo está em `PowerUps::m_epNodes[9]` (`0x7BDAD0`); o CS ativo dele (`drawMe` 1) ficava em (1390, −362, 121) numa rodada. A malha é uma casca facetada de planos cruzados (raio ~19, alfa 32/64, bits `envMapped` + `envMapIsVideo` + `alphaSort`) que refrata a tela; o irmão `a1c060` é a esfera cinza sem textura do miolo (raio 7,5). Deve aparecer em toda fase que tenha o CLOAK (não conferido); nas checagens só caiu na METRO.
+- **Cache de malhas dos skinned:** o `Scene::mesh` revalidava a assinatura com a última palavra do pacote, que o `decodePacket` não usa nos skinned. Todo `mesh()` de monstro decodificava a malha de novo e liberava a anterior, deixando solto o ponteiro devolvido antes (achado pelos atributos: `abe` lixo nos monstros). Agora usa a mesma fórmula.
 - **PRIM.TME da seção** (08a4df2): as seções só com cor de vértice saíam com a textura do slot 0. Agora usam o slot `kSlotNoTex`.
 - **Sprite e texSprite com o dobro do tamanho:** o meio-lado é `pos.w/2·foco/profundidade`.
 - **Pista 3, `_cs` com matriz não ortonormal** (8020844): o VU1 desenha em `olho + (trans − olho)·RᵀR`. Afetava os destroços que encolhem. Corrigido no `Scene::drawCs`.
@@ -94,14 +106,14 @@ Defeitos da própria checagem:
 
 ## O que a checagem não cobre
 - Texels decodificados: ela compara qual textura, não os pixels.
-- UV, cor de vértice, ALPHA/mistura: por isso não pega as texturas animadas nem a explosão opaca.
-- Textura e cor das partículas.
+- CLUT e alfa da textura (a escala do alfa no desenho nativo depende dele).
+- Textura, UV e cor das partículas (a explosão opaca é partícula: ainda fora).
 - Linhas e leques do VU1 (só contados).
 - HUD: vai direto ao GS, fora do VU1.
 
 ## Próximos passos
 1. Pistas em aberto (perguntar qual antes de corrigir).
-2. Estender a comparação para UV, RGBA de vértice e ALPHA/ABE por triângulo (alcança as texturas animadas e a explosão), e talvez um hash da CLUT por quadro.
+2. Atributos feitos nos objetos (pistas 12 a 15). Falta: os mesmos atributos nas partículas (alcança a explosão opaca) e talvez um hash da CLUT por quadro.
 3. HUD: tap nos pacotes que vão direto ao GS (PATH2/PATH3). Os SPRITE fora de `fx[]` já foram identificados (textura composta da poeira, pista 6).
 
 ## Notas

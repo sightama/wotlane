@@ -837,7 +837,7 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
-                    forEachTri(ram, it, [&](const float p[3][3], uint8_t, bool) {
+                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -878,7 +878,8 @@ public:
         return n[0] * (p[0][0] - eye[0]) + n[1] * (p[0][1] - eye[1]) + n[2] * (p[0][2] - eye[2]) > 0.f;
     }
 
-    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, slot de textura da secao, culling da secao)
+    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, v) com os tres vertices decodificados (UV, cor,
+    // slot de textura e culling da secao)
     template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
         const MeshData *md = mesh(ram, it.node);
         if (!md || !md->valid) return;
@@ -890,7 +891,7 @@ public:
                 if (pal) skinVertex(ram, pal, it.m, t[k + c], p[c]);
                 else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
             }
-            f(p, t[k].slot, t[k].cull != 0);
+            f(p, &t[k]);
         }
     }
 
@@ -901,7 +902,7 @@ public:
         std::vector<float> cov(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], uint8_t, bool) {
+            forEachTri(ram, it, [&](const float p[3][3], const Vtx *) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -1627,7 +1628,9 @@ public:
             // revalida a assinatura (a RAM do nivel pode ter sido reaproveitada)
             const uint32_t tag = ram.u32(pp);
             const uint32_t qwc = tag & 0xFFFF, nwords = (qwc + 1) * 4 - 2;
-            const uint32_t sig = tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ (ram.u32(pp + 4 * (nwords + 1)) * 17u);
+            // mesma formula do decodePacket (sem a ultima palavra nos skinned); diferente, a malha era decodificada de novo a cada
+            // chamada e o ponteiro devolvido antes ficava solto
+            const uint32_t sig = tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ ((tag & 0x10000) ? 0u : ram.u32(pp + 4 * (nwords + 1)) * 17u);
             if (it->second->sig == sig) return it->second.get();
         }
         auto md = std::make_shared<MeshData>(decodeObject(ram, node));
