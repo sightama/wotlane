@@ -40,10 +40,19 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "raylib.h"
 #include "rlgl.h"
+
+// GL 1.1 (opengl32), so para ler a profundidade no teste de oclusao do lens flare; o raylib nao expoe leitura de profundidade
+#ifdef _WIN32
+extern "C" __declspec(dllimport) void __stdcall glReadPixels(int x, int y, int w, int h, unsigned format, unsigned type, void *data);
+#else
+extern "C" void glReadPixels(int x, int y, int w, int h, unsigned format, unsigned type, void *data);
+#endif
 
 namespace wotm {
 
@@ -263,6 +272,263 @@ public:
         }
         static const bool list = std::getenv("WOTM_FXLIST") != nullptr;
         if (list) dump(ram);
+        collectFlares(ram);
+    }
+
+    // Lens flare (tipo 11): fora do particleDraw comum. Dois fx[] tipo 11 (lensFlarePacket[vista], 0x6F8908; particleInitAfter) cujo
+    // pos[] (fx + 0x2EB0) e a lista HierLensFlareList[74] (48 bytes) de lensFlareList[vista] (0x6F8900), com lensFlareIndex[vista]
+    // (0x6F88F8) entradas. A lista e alimentada pelo hierLightNode (luzes com hasLensFlare: pos no mundo, flags = as da luz, intensity,
+    // cor, dotProd/beamWidth do feixe) e pelo particleAddLensFlareToList (sistemas com vis.lightColor & 0x1000000: flags 3, Zfudge,
+    // intensity = lightIntensity^2, cor = lightColor / 255).
+    //  - particleLensFlareTestZbuffer (no fim do particleDraw, depois do VU1 desenhar a cena): projeta cada entrada, descarta as fora da
+    //    tela ou com W < 1 (compacta a lista), grava pos = (X, Y, Z do GS), distance = W (100 com lightAtInfinity, bit 7 das flags) e le
+    //    do GS o Z 4x4 em (X - 2, Y - 2) (sceGsStoreImage PSMZ32).
+    //  - particleLensFlareRender: amostra visivel = Z <= limiar. Luz no infinito: as 16, limiar fptoui(1,03125 Z) + 1; local: as 4
+    //    centrais, limiar fptoui(a + b / (W - max(Zfudge; 1,5))) (a, b = viewGetZBuffParams). intensity *= visiveis / amostras; pos +=
+    //    centroide das visiveis - (2 ou 1); com 0 < ID < 0x7FF (so luzes no infinito: particleLensFlareAddToDeBounceList), intensity =
+    //    media com a do quadro anterior (D_0078FF00); abaixo de 1/256 zera o byte das flags. Depois o lensFlarePacketBuild grava q44 =
+    //    (centro X, centro Y, 18, n) e o UNPACK de 3n qwords da lista em q45.
+    // No runtime o GS emulado nao tem a cena (sem VU1); aqui o teste e refeito contra a profundidade do nativo (drawFlares), e o centroide
+    // e a fracao do GS emulado sao desfeitos supondo visibilidade total la (ver o WOTM_FLARELOG para conferir).
+    // O microprograma 0x2B20 (build/vu1/particle.txt), por entrada (q45 + 3i):
+    //  - so com flags & 1; Q = 1/distance; brilho = I Q Q (o segundo MULq le o Q antigo: o DIV 1/beamWidth ainda nao terminou; com o Q
+    //    novo as particulas, sem beamWidth, sairiam com lixo), tamanho = sqrt(I) Q. Com flags & 8 (direcional): os dois vezes
+    //    f / beamWidth, f = max(dotProd, 0) + beamWidth - 1 (|dotProd| com flags & 0x10, bidirecional); some se brilho f <= 0.
+    //  - 18 SPRITEs (tabelas no pacote, q8-q25: TEX0, t, meio-lado com o seletor de UV nos 2 bits baixos; q26-q43: R, G, B, A). Sprite k
+    //    no ponto C + t_k (S - C) da linha do centro da tela C ate a fonte S; cantos +/- (h, h/2) px do GS. k = 0: h = meio-lado tamanho A,
+    //    cor min(255, RGB rgb). k > 0: h = meio-lado, cor min(32, RGB rgb A brilho). Alfa 0x80, ALPHA 0x48 (aditivo), UV de (0,5; 0,5) no
+    //    canto + ate (uvMax - 0,5) no canto - (uvMax = 32, 64 ou 128 texels pelo seletor). Depois de um sprite com as tres cores < 1, a
+    //    entrada sai dos seguintes.
+    struct FlareSprite { uint64_t tex0 = 0; uint32_t texId = 0; float t = 0.f, half = 0.f, uvMax = 0.f, rgba[4] = {0, 0, 0, 0}; };
+    struct Flare { float x = 0, y = 0, z = 0, w = 0, zfudge = 0, dot = 0, bw = 0, rgb[3] = {0, 0, 0}, intensity = 0; uint32_t flags = 0, id = 0; };
+    struct FlareFrame {
+        float cx = 2048.f, cy = 2048.f, vw = 640.f, vh = 224.f, zScale = 0.f, zOff = 0.f;
+        int nspr = 0;
+        FlareSprite spr[18];
+        std::vector<Flare> e;
+    };
+    FlareFrame flares;
+
+    // A lista so esta pronta (projetada, com a fracao visivel) entre o fim do particleDraw e o hier do quadro seguinte. A apresentacao
+    // roda em outra thread e quase sempre a pega ja refeita pelo hier (em coordenadas de mundo, sem os flares de particula, que o
+    // particleAddLensFlareToList so acrescenta dentro do particleDraw). O runtime chama captureFlares na thread do jogo logo depois do
+    // particleDraw; o collect usa essa copia. Sem captura (viewer sobre dump) le a RAM e so desenha se a lista estiver projetada.
+    struct FlareSlot { std::mutex m; FlareFrame f; bool used = false; };
+    static FlareSlot &flareSlot() { static FlareSlot s; return s; }
+    static void captureFlares(const Ram &ram) {
+        FlareFrame f;
+        readFlares(ram, f);
+        FlareSlot &s = flareSlot();
+        std::lock_guard<std::mutex> g(s.m);
+        s.f = std::move(f);
+        s.used = true;
+    }
+
+    void collectFlares(const Ram &ram) {
+        {
+            FlareSlot &s = flareSlot();
+            std::lock_guard<std::mutex> g(s.m);
+            if (s.used) { flares = s.f; logFlares(); return; }
+        }
+        readFlares(ram, flares);
+        logFlares();
+    }
+    void logFlares() const {
+        static const bool log = std::getenv("WOTM_FLARELOG") != nullptr;
+        if (log)
+            for (const Flare &fl : flares.e)
+                std::fprintf(stderr, "[flare] n %zu centro %.0f %.0f | %.1f %.1f Z %.0f W %.1f id %u flags %02x dot %.3f bw %.3f rgb %.3f %.3f %.3f I %.4g\n",
+                             flares.e.size(), flares.cx, flares.cy, fl.x, fl.y, fl.z, fl.w, fl.id, fl.flags & 0xFF, fl.dot, fl.bw, fl.rgb[0], fl.rgb[1],
+                             fl.rgb[2], fl.intensity);
+    }
+
+    static void readFlares(const Ram &ram, FlareFrame &f) {
+        constexpr uint32_t kIndex = 0x006F88F8u, kPacket = 0x006F8908u, kViewDef = 0x006E1904u, kScreenMats = 0x006E1990u;
+        f.e.clear();
+        f.nspr = 0;
+        const uint32_t p = ram.u32(kPacket);
+        if (!ram.ok(p, fxaddr::stride)) return;
+        const uint32_t pos = ram.u32(p + fxoff::pos), q44 = pos - 0x18, q8 = q44 - 36 * 16;
+        const int n = int32_t(ram.u32(kIndex));
+        if (n <= 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || int32_t(ram.u32(q44 + 12)) != n) return;
+        f.cx = ram.f32(q44);
+        f.cy = ram.f32(q44 + 4);
+        f.nspr = std::min<int>(18, std::max<int>(0, int32_t(ram.u32(q44 + 8))));
+        const uint32_t def = ram.u32(kViewDef) & 0x0FFFFFFF;
+        if (ram.ok(def, 0x18) && ram.u16(def + 4) && ram.u16(def + 6)) { f.vw = ram.u16(def + 4); f.vh = ram.u16(def + 6); }
+        f.zScale = ram.f32(kScreenMats + 0x28);   // viewScreenMats[0][2][2] e [2][3]
+        f.zOff = ram.f32(kScreenMats + 0x2C);
+        const uint32_t gif = (p + 0xC + 15) & ~15u;   // lensFlarePacketInit: FLUSHA, UNPACK de 4 qwords em 0x110 (tag A+D, ALPHA, TEX0, tag SPRITE)
+        for (int k = 0; k < f.nspr; ++k) {
+            FlareSprite &s = f.spr[k];
+            const uint32_t a = q8 + 16 * uint32_t(k), c = a + 18 * 16;
+            s.tex0 = uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32);
+            s.t = ram.f32(a + 8);
+            s.half = ram.f32(a + 12);
+            s.uvMax = float(ram.u32(gif + 16 + 16 * (ram.u32(a + 12) & 3) + 12) & 0xFFFF) / 16.f;
+            for (int j = 0; j < 4; ++j) s.rgba[j] = ram.f32(c + 4 * uint32_t(j));
+            s.texId = ram.u16(p + 0x2C40 + 2 * uint32_t(k));
+        }
+        const float x0 = f.cx - 0.5f * f.vw, x1 = f.cx + 0.5f * f.vw, y0 = f.cy - 0.5f * f.vh, y1 = f.cy + 0.5f * f.vh;
+        for (int i = 0; i < n; ++i) {
+            const uint32_t e = pos + 48 * uint32_t(i);
+            Flare fl;
+            fl.x = ram.f32(e); fl.y = ram.f32(e + 4); fl.z = ram.f32(e + 8); fl.id = ram.u32(e + 0xC);
+            fl.flags = ram.u32(e + 0x10); fl.zfudge = ram.f32(e + 0x10); fl.w = ram.f32(e + 0x14);
+            fl.dot = ram.f32(e + 0x18); fl.bw = ram.f32(e + 0x1C);
+            for (int j = 0; j < 3; ++j) fl.rgb[j] = ram.f32(e + 0x20 + 4 * uint32_t(j));
+            fl.intensity = ram.f32(e + 0x2C);
+            // fora da tela = lista ainda em coordenadas de mundo (o hier ja a refez e o teste de Z nao rodou): nada a desenhar
+            if (!(fl.x >= x0 - 3.f && fl.x <= x1 + 3.f && fl.y >= y0 - 3.f && fl.y <= y1 + 3.f)) { f.e.clear(); break; }
+            f.e.push_back(fl);
+        }
+    }
+
+    // Desenha os flares do ultimo quadro do jogo em espaco de tela (dentro de BeginMode3D, depois das particulas; o pacote do lens flare
+    // sai depois delas no particleDraw). Le a profundidade ja desenhada para o teste de oclusao (o particleLensFlareRender).
+    void drawFlares(const TexFn &texture) {
+        static const bool off = std::getenv("WOTM_NOFX") != nullptr || std::getenv("WOTM_NOFLARE") != nullptr;
+        if (off || flares.e.empty() || flares.nspr == 0) return;
+        const FlareFrame &f = flares;
+        rlDrawRenderBatchActive();
+        const int fbw = rlGetFramebufferWidth(), fbh = rlGetFramebufferHeight();
+        if (fbw <= 0 || fbh <= 0) return;
+        const float sx = float(fbw) / f.vw, sy = float(fbh) / f.vh;   // px do GS -> px do nativo
+        const double zn = rlGetCullDistanceNear(), zf = rlGetCullDistanceFar();
+        // Z do GS (24 bits) que o retail leria no pixel (gx, gy) da tela do GS: a + b / W da profundidade nativa; vazio (fundo) = 0
+        auto gsZ = [&](int gx, int gy) -> uint32_t {
+            const int px = std::clamp(int((float(gx) + 0.5f) * sx), 0, fbw - 1), py = std::clamp(int((float(gy) + 0.5f) * sy), 0, fbh - 1);
+            float d = 1.f;
+            glReadPixels(px, fbh - 1 - py, 1, 1, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, &d);
+            if (d >= 1.f) return 0u;
+            const double ndc = 2.0 * d - 1.0, W = 2.0 * zn * zf / (zf + zn - ndc * (zf - zn));
+            const double z = double(f.zScale) + double(f.zOff) / std::max(W, 1e-3);
+            return uint32_t(std::clamp(z, 0.0, 16777215.0));
+        };
+        auto fptoui = [](float v) -> uint32_t { return v <= 0.f ? 0u : v >= 4294967040.f ? 0xFFFFFFFFu : uint32_t(v); };
+
+        struct Vis { float x, y, bright, size; const Flare *fl; bool on; };
+        std::vector<Vis> vis;
+        static const bool log = std::getenv("WOTM_FLARELOG") != nullptr;
+        for (const Flare &fl : f.e) {
+            if (!(fl.flags & 0xFF)) continue;
+            const bool inf = (fl.flags & 0x80) != 0;
+            // pixel do canto do bloco 4x4: (int) X - 0x6C2 (o retail supoe centro 2048 e tela 640 x 224)
+            const int bx = int(fptoui(fl.x)) - int(f.cx - 0.5f * f.vw) - 2, by = int(fptoui(fl.y)) - int(f.cy - 0.5f * f.vh) - 2;
+            uint32_t thr;
+            if (inf) thr = fptoui(fl.z * 1.03125f) + 1;
+            else {
+                const float fud = fl.zfudge > 1.5f ? fl.zfudge : 1.5f, d = fl.w - fud;
+                thr = fptoui((f.zScale * d + f.zOff) / d);
+            }
+            const int lo = inf ? 0 : 1, hi = inf ? 4 : 3;
+            int cnt = 0, sumC = 0, sumR = 0;
+            for (int r = lo; r < hi; ++r)
+                for (int c = lo; c < hi; ++c)
+                    if (gsZ(bx + c, by + r) <= thr) { ++cnt; sumC += c; sumR += r; }
+            float frac = float(cnt) / float((hi - lo) * (hi - lo));
+            if (fl.id && fl.id < 0x7FF) {   // debounce por ID (D_0078FF00): media com a fracao do quadro anterior
+                float &prev = flarePrev_[fl.id];
+                const float raw = frac;
+                frac = 0.5f * (prev + raw);
+                prev = raw;
+            }
+            const float I = fl.intensity * frac;
+            if (log)
+                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g\n", fl.x, fl.y, cnt, thr, I);
+            if (cnt == 0 || I < 1.f / 256.f) continue;
+            // o retail ja somou o centroide do GS emulado (visibilidade total: 1,5 - 2 ou 1,5 - 1); troca pelo daqui
+            const float shift = 1.5f - (inf ? 2.f : 1.f);
+            Vis v{fl.x - shift + (float(sumC) / float(cnt) - (inf ? 2.f : 1.f)), fl.y - shift + (float(sumR) / float(cnt) - (inf ? 2.f : 1.f)), 0.f, 0.f, &fl, true};
+            // microprograma 0x2B20, laco por entrada
+            if (!(fl.flags & 1) || !(fl.w != 0.f)) continue;
+            const float q = 1.f / fl.w;
+            v.bright = I * q * q;
+            v.size = std::sqrt(std::max(I, 0.f)) * q;
+            if (fl.flags & 8) {
+                const float k = ((fl.flags & 0x10) ? std::fabs(fl.dot) : std::max(fl.dot, 0.f)) + fl.bw - 1.f;
+                if (!(v.bright * k > 0.f) || fl.bw == 0.f) continue;
+                v.bright = v.bright * k / fl.bw;
+                v.size = v.size * k / fl.bw;
+            }
+            vis.push_back(v);
+        }
+        if (vis.empty()) return;
+
+        rlMatrixMode(RL_PROJECTION);
+        rlPushMatrix();
+        rlLoadIdentity();
+        rlOrtho(0.0, double(fbw), double(fbh), 0.0, -1.0, 1.0);
+        rlMatrixMode(RL_MODELVIEW);
+        rlPushMatrix();
+        rlLoadIdentity();
+        rlDisableDepthTest();
+        rlDisableBackfaceCulling();
+        setBlend(BLEND_ADDITIVE);   // ALPHA 0x48: Cs As + Cd
+        shaderNormal(0.f, false, true);
+        const float ox = f.cx - 0.5f * f.vw, oy = f.cy - 0.5f * f.vh;
+        for (int k = 0; k < f.nspr; ++k) {
+            const FlareSprite &s = f.spr[k];
+            unsigned tex = s.texId ? texture(s.texId, s.tex0) : 0;
+            if (!tex) tex = blobTexture();
+            const float tw = float(1u << ((s.tex0 >> 26) & 15)), th = float(1u << ((s.tex0 >> 30) & 15));
+            const float u0 = 0.5f / tw, v0 = 0.5f / th, u1 = (s.uvMax - 0.5f) / tw, v1 = (s.uvMax - 0.5f) / th;
+            rlBegin(RL_QUADS);
+            rlSetTexture(tex);
+            for (Vis &v : vis) {
+                if (!v.on) continue;
+                const Flare &fl = *v.fl;
+                const float px = f.cx + s.t * (v.x - f.cx), py = f.cy + s.t * (v.y - f.cy);
+                float h, col[3];
+                for (int j = 0; j < 3; ++j) col[j] = s.rgba[j] * fl.rgb[j];
+                if (k == 0) h = s.half * v.size * s.rgba[3];
+                else {
+                    h = s.half;
+                    for (float &c : col) c *= s.rgba[3] * v.bright;
+                }
+                if (col[0] < 1.f && col[1] < 1.f && col[2] < 1.f) v.on = false;   // as entradas seguintes nao desenham mais esta
+                const float cap = k == 0 ? 255.f : 32.f;
+                uint8_t rgb[3];
+                for (int j = 0; j < 3; ++j) rgb[j] = uint8_t(std::clamp(col[j], 0.f, cap));
+                // cantos com FTOI4 (1/16 px); o canto + leva o UV (0,5; 0,5) e o canto - o (uvMax - 0,5)
+                auto gx = [](float a) { return std::trunc(a * 16.f) / 16.f; };
+                const float xa = (gx(px + h) - ox) * sx, ya = (gx(py + 0.5f * h) - oy) * sy;
+                const float xb = (gx(px - h) - ox) * sx, yb = (gx(py - 0.5f * h) - oy) * sy;
+                rlColor4ub(rgb[0], rgb[1], rgb[2], 0x80);
+                rlTexCoord2f(u0, v0); rlVertex2f(xa, ya);
+                rlTexCoord2f(u0, v1); rlVertex2f(xa, yb);
+                rlTexCoord2f(u1, v1); rlVertex2f(xb, yb);
+                rlTexCoord2f(u1, v0); rlVertex2f(xb, ya);
+            }
+            rlEnd();
+            rlDrawRenderBatchActive();
+        }
+        rlSetTexture(0);
+        rlNormal3f(0.f, 0.f, 0.f);
+        setBlend(BLEND_ALPHA);
+        rlEnableBackfaceCulling();
+        rlEnableDepthTest();
+        rlMatrixMode(RL_PROJECTION);
+        rlPopMatrix();
+        rlMatrixMode(RL_MODELVIEW);
+        rlPopMatrix();
+        // diagnostico: WOTM_FLARESHOT=<prefixo> grava ate 8 quadros (>= 1 s entre eles) com um flare de meio-lado >= 8 px do GS
+        static const char *shot = std::getenv("WOTM_FLARESHOT");
+        static int shots = 0;
+        static double lastShot = -10.0;
+        float big = 0.f;
+        for (const Vis &v : vis) big = std::max(big, f.spr[0].half * v.size * f.spr[0].rgba[3]);
+        if (shot && shots < 8 && big >= 8.f && GetTime() - lastShot >= 1.0) {
+            lastShot = GetTime();
+            unsigned char *px = rlReadScreenPixels(fbw, fbh);
+            for (int i = 0; i < fbw * fbh; ++i) px[4 * i + 3] = 255;   // o alfa do quadro e o das misturas, nao opacidade
+            Image img{px, fbw, fbh, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            char name[512];
+            std::snprintf(name, sizeof name, "%s_%d.png", shot, shots++);
+            ExportImage(img, name);
+            RL_FREE(px);
+            std::fprintf(stderr, "[flare] captura %s (meio-lado %.1f px, %zu entradas)\n", name, big, vis.size());
+        }
     }
 
     // Diagnostico (WOTM_FXLIST=1): um sistema por linha e a primeira particula
@@ -772,6 +1038,7 @@ public:
 
 private:
     unsigned blob_ = 0;   // textura de reserva (disco suave) quando a do sistema nao decodifica
+    std::unordered_map<uint32_t, float> flarePrev_;   // debounce do lens flare: fracao visivel do quadro anterior por ID
 
     unsigned blobTexture() {
         if (blob_) return blob_;

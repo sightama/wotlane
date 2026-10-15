@@ -2,7 +2,9 @@
 
 Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; o método (coleta por cadeia, faces de costas, formato da saída) está em `NATIVO.md`, "Runtime: checagem VU1 x nativo". Microcódigo desmontado em `build/vu1/` (`tools/vu1dis.py`; código do jogo, fora do repo).
 
-## Como funciona
+<details>
+<summary>Como funciona</summary>
+
 - `WOTM_VU1CHECK=<s>` (runtime, `wotm_vu1check.inc`): a cada `<s>` s, num quadro da luta, o VU1 executa a cadeia do quadro. Cada triângulo do XGKICK casa (1 px) com o nativo do mesmo objeto (`polyPkt`); cada quadrado de partícula, com o do seu `fx[i]`. Empate de geometria desempata pela cor.
 - Compara geometria, textura (TEX0) e forma das partículas. Nos pares casados, também os atributos (linha `atributos:` e até 8 objetos `atributos pkt`):
   - `uv difere` (> 1 texel; `volta inteira` não conta), `cor difere` (RGB > 4, a cor que o nativo desenha), `alfa difere` (com ABE nos dois), `ABE difere`, `ALPHA difere`, `TFX/TCC fora do padrao`;
@@ -13,23 +15,27 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 - `WOTM_VU1CHECK_DUMP=<prefixo>` grava cada checagem em `<prefixo>_<g_frame>.csv`: triângulos (posição, TEX0, FBP, UV e RGBA por vértice, ABE, ALPHA, FGE, TEX0 inteiro), `hdr` (por programa: endereço do MSCAL, `ffffffff` = MSCNT, e qwords 5–8 e 17–20 do VU1), `luzes` (`paraL`, `D_0025B238`, `specularColor`), partículas (`fxcam`, `fxp`, `fxmat`) e origens dos SPRITE fora de `fx[]` (`rectorf`).
 - Diagnóstico da neblina: `WOTM_FOGSPLIT=1` (metade esquerda sem), `=2` (máscara; imprime os parâmetros), `=3` (alterna por quadro).
 
-## Estado (2026-10-15)
+</details>
+
+<details>
+<summary>Estado (2026-10-15)</summary>
+
 - Geometria: fase 1 de 99,2% a 99,7% no pior caso; fase 8, 98,7% a 99,8%; METRO, 96,2% a 99,9%. Textura: 0 a 1 triângulo diferente por checagem.
 - Atributos (fase 1, 40 s): pior `cor difere` 366 por checagem (era 2.832); monstros com 95% a 98% dos vértices iguais (Togera 98,8%); `uv difere` 184 a 240; neblina com 0 a 4 F diferentes em ~10 mil.
 - Partículas (METRO 2+2): pedestres 99,9%, arco 97,5%, sprite e strite ~100%, sprine 100% (fases 1 e 4). SPRITE de objeto 100%. SPRITE do GS fora de fx[] e de objeto: 0 a 1 por checagem.
 - Feito em 2026-10-15: neblina nas partículas, arco elétrico, normal dos skinned truncada, alfa e cor de vértice como o GS, ALPHA 0x42, OBJECT sprite (halo), textura composta de poeira/fumaça, UV do mapa de ambiente (sem luz nesses objetos). Detalhes em "Corrigido".
 
-## Em aberto
+</details>
+
+<details>
+<summary>Em aberto</summary>
+
 Não corrigir sem perguntar ao dono qual atacar.
 
-**Fila combinada com o dono (2026-10-15), nesta ordem** (1 a 4 feitos, em "Corrigido"; o 3 era o UV do mapa de ambiente e o CLOAK, o 4 o sprine):
-5. **Lens flare (tipo 11)**, especificado (scripts em `scratchpad/flare` da sessão de 2026-10-15):
-   - Fora do `particleDraw`: dois `fx[]` tipo 11 (um por buffer) e a lista `HierLensFlareList[74]` dentro do pacote. Ela é alimentada pelo `hierLightNode` (luzes com `hasLensFlare`) e pelo `particleAddLensFlareToList` (sistemas com `vis.lightColor & 0x1000000`: presets 7, 28–32, 58, 61, 64, 68–70, 115, 129, 138, 140).
-   - O `particleLensFlareTestZbuffer` projeta as entradas e lê do GS o Z 4×4 de cada uma (`sceGsStoreImage` PSMZ32). O `particleLensFlareRender` conta as amostras atrás do limiar (luz no infinito: Z·1,03125 nas 16; local: a + b/(W − max(Zfudge; 1,5)) nas 4 centrais) e faz intensity ×= fração, com debounce por ID.
-   - O microprograma 0x2B20 desenha 18 SPRITEs aditivos na linha do centro da tela até a fonte (tabelas t, lado, A e cor em `D_006F4530`/`4578`/`45C0`/`44E0`; texturas 4, 54, 55, 56).
-   - No nativo, o teste de Z teria de usar o depth buffer próprio (ler 2×2/4×4 ou occlusion query). No quadro da METRO não havia flare ativo.
+**Fila combinada com o dono (2026-10-15):** os 5 itens feitos (em "Corrigido"; o 3 era o UV do mapa de ambiente e o CLOAK, o 4 o sprine, o 5 o lens flare).
 
 **Depois, sem especificação:**
+- **Lens flare, resíduo:** sem conferência contra o VU1 nem contra o PCSX2. A checagem não o cobre (o pacote do tipo 11 sai do `particleLensFlareRender`, fora dos `fx[]` que ela compara). Também não foram conferidos: o Q antigo no brilho (leitura do microprograma), a escala de cor 32 nos sprites k > 0 e a ordem do I nos pares com `[I]`.
 - **Fator de contexto do q5** (+0x160 do bloco do hier, item 16): não reproduzido. No Togera sobra ~1,2% dos vértices com cor diferente, para os dois lados.
 - **Arco elétrico, resíduo:** 2,5% dos quadrados do VU1 sem par (1–2 px do meio para o fim da fita em alguns sistemas; provável instante: `pos[]` se move entre a coleta e o DMA); o nativo desenha alguns quadrados a mais nas pontas (o ADC fora da banda de recorte não é reproduzido). A textura (U por trecho, V = 1/0) não foi conferida na tela.
 - **Destroços:** ~1,7% a mais no nativo.
@@ -37,7 +43,11 @@ Não corrigir sem perguntar ao dono qual atacar.
 - **Elipse do power-up no chão** (`m_shadow`: GROUP com ALPHA 0x48 e TEST 0x5040C, quad de ±29,61 em z = 0,1, tex 90, cor (0, 128, 0, 6)): no lugar certo, mas no PCSX2 não aparece.
 - **Não coberto pela checagem:** texels/CLUT da textura, atributos das partículas (cor, inclusive a explosão opaca), linhas e leques do VU1, HUD (PATH2/PATH3). A neblina foi conferida à parte (máscara do `WOTM_FOGSPLIT=2` na METRO: FA −107,9, FB 326.571, cor 45/33/20; pesa a partir de W ≈ 900).
 
-## Microprogramas das partículas
+</details>
+
+<details>
+<summary>Microprogramas das partículas</summary>
+
 Lidos em `build/vu1/particle.txt`; o sprine foi conferido com o pacote num dump (`build/dumps_live/ram_B1.bin`, fx 82). Contexto comum (qwords 0–7, de 0x256B90): q0–q3 = `worldToScreenMat` transposta; q4 = ambiente×0,3, `fogFA` em w; q5 = metade do foco (192; 90,24), `fogFB` em w; q6 = (−2048, −2048, −2049, 2048); q7 = (4095, 4095, 16777215, 255). CLIP: x e y em [0, 4096], W ≥ 1, e some se F < 1.
 
 Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R = (((R<<1) ^ bit4(R) ^ bit22(R)) & 0x7FFFFF) | 0x3F800000 (float em [1, 2)).
@@ -59,16 +69,28 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 - RINIT(seed) por pacote (o R segue entre as cadeias). Elo de a a b com nível L > 0 vira 2^L sub-trechos: amp = jag·|b − a| no 1º nível, metade a cada nível; cada vão ganha o meio 0,5a + r·amp − 1,5·amp + 0,5b, com r = (rx, ry, rz): três RNEXT na entrada do elo, e depois de cada meio rx = ry, ry = rz, rz = RNEXT.
 - Fita (sub-rotina 0x1F70), em tela isotrópica com y para baixo (o y vezes fxh/fyh): fantasmas P₋₁ = 2P₀ − P₁ e Pₙ = 2Pₙ₋₁ − Pₙ₋₂ (homogêneos); t_in e t_out unitários, n = (t.y, −t.x); v = n_in + n_out + (t_out − t_in) se t_in × t_out < 0, senão + (t_in − t_out), sem renormalizar. Vértices S ± v·(fxh·s_k/W, fyh·s_k/W) com fxh, fyh = metade do foco (q5): no plano de vista, p ± (s_k/2)·v. s_k = minSize + exp·k/S; A (+) com V = 1, B (−) com V = 0; ST = (U_k/W, 1/W ou 0, 1/W), U_k = segInitU + segDeltaU·(k − S/2); cor = lerp na tabela (clut + k·(nc − 1)/S, + 0,5, truncada); F = fogFA + fogFB/W. ADC fora da banda, com W < 1 ou F < 1; 0x2330/0x2390 tratam ponta com W < 1 (a tangente vai até o plano W = 0).
 
-## Explicadas
+</details>
+
+<details>
+<summary>Explicadas</summary>
+
 - **Pedestres da METRO** (fx 91–99; o nativo desenha os que o VU1 descarta): é a neblina, não o instante. O VU1 descarta a partícula com F < 1. Na METRO, `vu1FogParams` = (−107,9; 255; 1; 326.600) (`build/dumps_live/ram_energy_robot.bin`), então F = −107,9 + 326.600/W < 1 com W > ~3.000. Nos dumps `f4_477/519/560` (2+2) os sistemas perdidos têm W ≥ 3.138 e os desenhados W ≤ 2.953 (a lista do `particleDraw` vai do mais longe ao mais perto, por isso faltam sempre os primeiros, fx 91 e 92). Na fase 1 o corte fica em ~16 mil. Corrigido com a neblina nas partículas (seção "Corrigido"). As perdas totais (0/1000) só aparecem nos lotes anteriores à correção do `sceGsSetDefLoadImage` (#311), com o "em textura (sombra)" saltando de ~570 para ~5.900: o FRAME vinha errado, e a checagem descartava as partículas como render-to-texture.
 
-## Explicadas, sem bug no nativo
+</details>
+
+<details>
+<summary>Explicadas, sem bug no nativo</summary>
+
 - **7 (padrão B):** os itens de alfa presos aos monstros às vezes saem 1–2,5 px fora: o pacote leva as matrizes do instante da travessia, e nenhuma coleta cai ali. A checagem tenta também a coleta no `hier(0, 1)`.
 - **9, `so pela sombra`:** a passada da sombra projetada redesenha faces de costas que a base descarta, e triângulos finos geram ambiguidade.
 - **10 (tex 156/193):** os números são o conjunto de texturas do objeto (`node+0x50`), de vários prédios estáticos da fase 1. A troca é sempre entre a textura comum 128x128 (cbp 1bd2) e uma 64x64 do mesmo objeto, 1 ou 2 triângulos por checagem (372 de 4.959). Caso dissecado em `f1_1697.csv` (pkt d7e980): o triângulo do VU1 é um fio (0,01 px²) na aresta entre as duas seções, e os três vértices dele casam com um vértice só de outro fio nativo. O `match()` não exige correspondência um a um. O gêmeo nativo verdadeiro cai abaixo do limiar do `degenerate()` (|área2| 0,0029 < 0,02), enquanto o do VU1 passa (0,0232), porque o GS arredonda para 1/16 px. Embaralhando a ordem do VU1, o erro aparece em 10 de 20 ordens. Nos 52 dumps `f1_*`, 1 par com textura diferente em 520 mil. Na checagem daria para quantizar o nativo a 1/16 px no `project()` e exigir vértices distintos no `match()` (não aplicado).
 - **14 (tex 242/243):** prédio distante de triângulos minúsculos; com 1 px, quase todo triângulo do VU1 tem 4+ nativos no mesmo lugar. 94% a 99,6% têm um nativo igual no lugar; o resto é ambiguidade.
 
-## Corrigido
+</details>
+
+<details>
+<summary>Corrigido</summary>
+
 Nativo (`native/wotm_native.hpp`, `wotm_fx.hpp`). Flags do OBJECT em +0xC (`_hierobject`, `include/hieri_types.h`); o `hierTraverseAsm` (asm do `texm`) monta o cabeçalho de cada OBJECT para o VU1.
 - **1 da fila, OBJECT sprite (`objType` 2):** o pacote não tem posições em 0xB5 nem índices. A seção é uma tag GIF SPRITE em H (PRIM 0x76, REGS ST, RGBAQ, XYZF2, ST, NOP, XYZF2) com 6 qwords por sprite: ST0 em H+1 e ST1 em H+4 (V2-16, passo 3), RGBA em H+2 e centro local + lado em w em H+3 (V4-8 e V4-32, STCYCL 0x0106). O microprograma 0x2E58 (tabela +0x158 do `pktAddVu1ObjAsm`, escolhida quando `t8 & t7` = 0; o 0x2D08, +0x15C, não aplica neblina, cor nem `uvOff`, e não foi conferido quando entra) projeta o centro e emite os cantos centro ∓ (512, 256)·lado/W px do GS, ST/4096 + `uvOff`, cor do pacote × q5 limitada a 255 (sem luz), F da neblina no centro e ADC fora da banda. Nativo: `decodePacket` guarda `MeshData::sprites` (`ObjSprite`), e o `drawList` monta o quadrado voltado para a câmera no plano do centro (512·lado/fx ao longo da direita, 256·lado/fy ao longo de −cima, focos de `Particles::screenFoci`), no passe translúcido. Checagem: 100% dos SPRITE de objeto do VU1 casados (fase 1 e METRO, 6 a 202 por checagem); o nativo às vezes tem 1 a mais, provavelmente um que o VU1 descarta pelo recorte. Na fase 1 há até ~200 desses (o halo é um caso). Captura `docs/screenshots/2026-10-15_halo_powerup_antes_agora_pcsx2.png` (antes, agora, PCSX2; o recorte do PCSX2 está esticado na vertical).
 - **2 da fila, textura composta de poeira/fumaça:** o nativo usava um disco branco (as "esferas de luz" no prédio desmoronando da METRO), e o jogo mostra fumaça escura. A textura é um impostor 64×64 em 0xFD800 (TEX0 com TBP 0x3F60, CT32; `TextureInfo[34]`, sem pixels na RAM) com 4 células de 32×32, refeito na VRAM a cada `particleDraw` com algum sistema (`texDrawDustPacketBuild`, pacote em 0x78F6E0, MSCAL 0x2E98 e MSCNT 0x31C0). Usam: VisualInfo 1, 2 e 118 (dustTrail) e 105 (sprite), com a célula pelos bits baixos de `pos.w` (tabela de UV (9,9,503,503) + 512·(k & 1, k >> 1), em 1/16 de texel). Nativo: `Scene::dustTexture` repete a conta na CPU (o comentário lá resume os dois passes; investigação em `dustsim.py`, `scratchpad/dust` da sessão de 2026-10-15), refaz quando os parâmetros mudam e guarda as fontes decodificadas; `Particles::isDustTex` e as células no `forEachQuad`. No `ram_p1.bin` bate com o simulador: 171 sprites, fundo (48, 43, 32), alfa até 127 (média 32,3), cor ponderada (57, 57, 40). Custo: 2 a 3 ms por regeneração (viewer, a frio; `WOTM_DUSTLOG=1`), uma vez por quadro do jogo enquanto houver poeira. Sem conferência pixel a pixel (aritmética do VU sem truncar; o PCSX2 por hardware não devolve 0xFD800); o pixel final, o teste a ≥ 1, o A = G/2 e a saturação aditiva são inferidos. Checagem: os SPRITE com FRAME fora dos buffers de tela contam como `em textura` (~300 a 360 por checagem, os dois passes), e os `fora de fx[]` caíram de ~330 para 0 a 1. Captura `docs/screenshots/2026-10-15_poeira_composta_antes_agora_pcsx2.png`.
@@ -83,6 +105,17 @@ Nativo (`native/wotm_native.hpp`, `wotm_fx.hpp`). Flags do OBJECT em +0xC (`_hie
   - Teste: `WOTM_CLOAK=1` (runtime, só no clone, `wotm_overrides.cpp`) chama o `Monster::setCloakOn` (0x162CD0) na entrada do `Monster::update` (0x15B488) do jogador sempre que `m_cloaked` (+0xEF) está 0. Checagem com CLOAK (1 contra 2, fase 1, 40 s): monstro do jogador (tex 314, flags 0x2318) com cor e textura 0 diferentes; UV com 3 a 24 vértices diferentes em ~1.520, como sem CLOAK (o mesmo monstro tem 3 a 13), e em 2 de ~32 checagens 566/732 vértices a 1,5–3,6 texels. Hipótese, não conferida: o `cloakWeight` anda até ~0,5 por quadro logo depois de religar (`smoothEasyIn` no `Monster::update`), e a coleta e o pacote leem quadros diferentes. Todos os triângulos com CLOAK contam em `TFX/TCC fora do padrao`: é o TCC 0 do TEX0 da tela, como no power-up de texId 0. O nativo desenha a render texture sem alfa próprio.
   - Falta: o meio texel do `viewIsOddScan` e os +320 das vistas > 0 no ramo B.
 - **4 da fila, sprine (tipo 8):** o nativo desenhava uma faixa Catmull-Rom; o VU1 emite um SPRITE quadrado por passo da curva (ver "Microprogramas"). `Particles::sprineQuads` repete o microprograma 0x2770 lendo q264–q306 do próprio pacote, no desenho (cor da tabela por passo) e na checagem. Lido o laço inteiro: o fantasma Pm tem fator 2 e a troca de parábola vem depois do avanço (a especificação anterior estava imprecisa nesses dois pontos). Checagem: 1 contra 2 na fase 1 (preset 5) de 0/41 casados para 100% (12, 48 e 152 por checagem); METRO 2+2 (monstros 3 e 4/5/9/10) 100% em todas as checagens com sprine (7 a 224 quadrados, inclusive contagens de N ímpar). Cor e UV não são conferidos pela checagem.
+- **5 da fila, lens flare (tipo 11):** o nativo não desenhava. A lista `HierLensFlareList[74]` (48 bytes; `lensFlareList[vista]` 0x6F8900, `lensFlareIndex` 0x6F88F8) é o `pos[]` do `fx[]` tipo 11 de `lensFlarePacket[vista]` (0x6F8908). Ela recebe as luzes com `hasLensFlare` do `hierLightNode` e os sistemas com `vis.lightColor & 0x1000000` do `particleAddLensFlareToList`, este só dentro do `particleDraw` (presets 7, 28–32, 58, 61, 64, 68–70, 115, 129, 138, 140).
+  - `particleLensFlareTestZbuffer`: projeta (`mathfTransform3dTo2d`) e compacta a lista, mantendo só o que está dentro da tela e com W ≥ 1. Grava pos = (X, Y, Z do GS), distance = W (100 com `lightAtInfinity`) e lê o Z 4×4 em (X − 2, Y − 2).
+  - `particleLensFlareRender`: amostra visível quando Z ≤ limiar. Luz no infinito: as 16, limiar fptoui(1,03125·Z) + 1; local: as 4 centrais, fptoui(a + b/(W − max(Zfudge; 1,5))), com a, b de `viewScreenMats[0][2][2..3]`. Faz intensity ×= fração e pos += centroide − (2 ou 1). Com 0 < ID < 0x7FF (luz no infinito, `particleLensFlareAddToDeBounceList`) tira a média com o quadro anterior, e abaixo de 1/256 zera o byte das flags. O `lensFlarePacketBuild` grava q44 = (centro X, centro Y, 18, n) e põe a lista em q45.
+  - Pacote (`lensFlarePacketInit`): buffers GIF em 0x110/0x288 (tag A+D com `ALPHA_1` 0x48, `TEX0_1`, tag SPRITE PRIM 0x156 com REGS RGBAQ, UV, XYZ2, UV, XYZ2). O w dos qwords 0–2 dá o UV máximo pelo seletor (0x1F8, 0x3F8, 0x7F8 em 1/16 de texel). Tabelas: q8–q25 = (TEX0, t, meio-lado com o seletor nos 2 bits baixos) de `D_006F4530`/`4578`/`4608`; q26–q43 = (R, G, B, A) de `D_006F44E0`/`45C0`; texturas de `TextureInfo` 15, 17, 18, 19 (`D_006F4518`).
+  - Microprograma 0x2B20, por entrada: só com flags & 1, Q = 1/distance, brilho = I·Q·Q e tamanho = √I·Q. O segundo MULq lê o Q antigo porque o DIV 1/beamWidth ainda não terminou; com o Q novo, as partículas, que não gravam beamWidth, sairiam com lixo. Com flags & 8 (direcional), os dois são multiplicados por f/beamWidth, com f = max(dotProd; 0) + beamWidth − 1 (|dotProd| com 0x10); a entrada some com f ≤ 0. Por sprite k: P = C + t_k·(S − C), cantos P ± (h; h/2) px do GS.
+    - k = 0: h = meio-lado·tamanho·A, cor min(255; RGB·rgb).
+    - k > 0: h = meio-lado, cor min(32; RGB·rgb·A·brilho).
+    - Comum: alfa 0x80, UV (0,5; 0,5) no canto + e uvMax − 0,5 no canto −. Um sprite com as três cores < 1 tira a entrada dos seguintes.
+  - Nativo: `Particles::readFlares`/`drawFlares` (`wotm_fx.hpp`), chamado no `Scene::draw` depois das partículas. Desenha em espaço de tela (ortho, aditivo, modo GS do shader) e refaz o teste de Z com a profundidade do nativo (`glReadPixels`; a profundidade vira o Z do GS por a + b/W, fundo = 0). O GS emulado do runtime não tem a cena: medido, a intensidade sai do `particleLensFlareRender` intacta (40 nas luzes, 36 a 144 nas partículas), e o nativo troca o centroide de lá pelo próprio. O debounce é refeito sobre a fração.
+  - A lista só está projetada entre o fim do `particleDraw` e o `hier` do quadro seguinte, e a apresentação quase sempre a pega já refeita. O runtime chama `Particles::captureFlares` na thread do jogo logo depois do `particleDraw` (`hook_particleDraw` → `wotmFlareCapture`, só no clone). O viewer lê a RAM do dump e só desenha se a lista estiver projetada. `WOTM_FLARELOG=1` imprime as entradas e o teste; `WOTM_NOFLARE=1` desliga.
+  - Medido no lote (40 s por fase): luzes direcionais vermelhas com flare (flags 0x0F, I 40, beamWidth 0,974) e partículas com flare (flags 3, cor (1; 0,5; 0,125)).
 - **Cache de malhas (`Scene::mesh`) com assinatura diferente da do `decodePacket`:** o `mesh()` não pulava os qwords zerados do começo do pacote, a assinatura nunca batia nesses objetos, e a malha era decodificada a cada chamada, soltando o ponteiro devolvido antes (queda na checagem ao ler `md` depois do `forEachTri`). Agora as duas usam `packetSig`/`skipZeroQwords`.
 - **12, luz paralela** (`dabeefd`): OBJECT com `dirLight` (0x100). Normal V3-8 @0x175 (índice da posição; nos skinned, girada só pelo osso x). `d = max(0, [q6 q7 q8]·n)` (direções de `paraL` 0x6DFC00, ×32, no espaço do objeto; a lane w é o vetor-meio do especular, elevada à 16ª); `cor = min(255, vcol × q5 × Σ q17..19·d + q20·d.w¹⁶)`, q17–19 = `vu1LightColor` (`D_0025B238`, cor/128), q20 = `specIntensity` (+0x6C) com `specLightMe` (0x2000). `Scene::objectLight`/`vertexRgb`. Capturas: `docs/screenshots/2026-10-15_monstros_sem_luz.png` e `_iluminados.png`.
 - **16, cinza a mais nos skinned (especular):** o laço de skinning (0x3D0) grava a normal girada pelo osso x com `FTOI12` (trunca a 1/4096) e o programa de luz a lê com `ITOF12`. Perto do realce, a 16ª potência amplifica a truncagem, e o nativo (normal em float) saía +4 a +16 mais claro. `Scene::vertexRgb` trunca como o VU1. Togera, fase 1: vértices com a cor exata de 93,6% para 98,8% (aditivos de 3.026 para 157).
@@ -108,8 +141,14 @@ Runtime (clone; os genéricos estão nos PRs do PS2Recomp #310, #311 e #312):
 - **1 e 7 (padrão A), OT de alfa:** o `hook_particleDraw` e a apresentação (`wotmDrawScene`) zeravam `objsInPacket`/`objsInAlphaPacket` antes do `hierFlushObjQ`; no quadro amostrado, não zeram mais.
 - Checagem: textura por rodadas (4), sombra à parte (9), render-to-texture e instante da coleta (7).
 
-## Notas
+</details>
+
+<details>
+<summary>Notas para IAs</summary>
+
 - **Mesmo quadro no PCSX2 e no nativo:** retail no PCSX2 pelo `tools/pcsx2_auto` (`emu.ps1 start retail`, teclas por `emu.ps1 key`, `PAUSE` pausa; na seleção de fase, RIGHT anda Midtown → Gamblers → Rosdale → Metro), `emu.ps1 snap` (só a janela) e `ramdump.py build/pcsx2_test/SCUS_971.97_retail.elf ram.bin` com o jogo pausado. Depois, `build/viewer.exe ram.bin --shot x.png` (o raylib grava o PNG na pasta atual, sem caminho) desenha a mesma RAM com a câmera do jogo. Para antes/depois, compilar o viewer de outro commit (`git show <commit>:native/...` numa pasta e o `build.bat` dela).
 - O `ps2EntryRunner` é unity build: mudar só `src/main.cpp` não recompila; toque `build_dev/ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/Unity/unity_168_cxx.cxx`.
 - O caminho emulado inteiro (sem `PS2X_NO_VU1`) trava no `particleDraw`; a checagem não depende dele.
 - O `run_live.ps1` usa `Start-Process -RedirectStandardError` (o `2>` do PowerShell 5 grava UTF-16 e quebra linhas).
+
+</details>
