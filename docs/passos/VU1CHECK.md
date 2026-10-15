@@ -27,7 +27,12 @@ Não corrigir sem perguntar ao dono qual atacar.
   - CPU (`pktBldEnvMapDma`, `asm/common/pkt.s`, UNPACK V4-32 de 3 qwords em 997): q997 = (k·wc+0x30, k·wc+0x40, offx, offy), q998 = (k·wc+0x34, k·wc+0x44, 1/1024, 1/256), q999 = (k·wc+0x38, k·wc+0x48, 0, 0). wc = `worldCtx` + 0x1F0·vista; k = float do objeto em +0x5C (16 se 0; com o CLOAK, + (count & 7 − 3)/64 sobre +0xAC); offx = −viewInfo+0x10 + largura/2 (u16 +4; +320 na vista 1), offy = −viewInfo+0x14 + altura/2 (u16 +6) − `viewIsOddScan`/2.
   - Leitura: u = k·(cam_x · Qn) + pixel_x/1024 e v = k·(cam_y · Qn) + pixel_y/256 (pixel da tela 640×224). Falta conferir o que são q0–q2 no contexto do objeto (o dump `hdr` não grava esses qwords) e o segundo ramo (0x21C420, sem `envMapped` no cabeçalho).
 - **16 (resto):** o fator de contexto do q5 (+0x160 do bloco do hier) não é reproduzido. No Togera sobra ~1,2% dos vértices com cor diferente, para os dois lados (sem padrão aditivo).
-- **Alfa, resíduo:** o As > 1 do GS (até ~4) fica limitado a 1. O quadro anterior (CLOAK) e o filme continuam com a escala antiga (4a/255). A mistura nova não tem conferência numérica (a checagem não lê o alfa final), só visual.
+- **Alfa, resíduo:** o As > 1 do GS (até ~4) fica limitado a 1. O quadro anterior (CLOAK) e o filme continuam com a escala antiga (4a/255). A mistura nova não tem conferência numérica (a checagem não lê o alfa final). Conferência visual contra o PCSX2 no mesmo quadro (método em "Notas"; capturas `docs/screenshots/2026-10-15_pcsx2_x_nativo_metro*.png`: PCSX2, nativo antes e depois do alfa): sem regressão. As médias por bloco antes e depois são iguais, e a elipse verde no chão do power-up ficou mais fraca (no PCSX2 ela não aparece ali).
+- **Achados da comparação com o PCSX2 (METRO, não investigados):**
+  - O chão da rua sai com R ×1,3 no PCSX2 (laranja contra oliva no nativo), com G e B iguais. As cores de vértice e o F batem com o VU1, então deve ser textura/CLUT (não coberto) ou uma passada translúcida no chão.
+  - O power-up tem no PCSX2 um halo verde grande centrado na esfera. O nativo desenha a esfera pequena e uma elipse chapada no chão, deslocada.
+  - O prédio desmoronando mostra janelas brancas no viewer, onde o PCSX2 mostra a estrutura escura. Provável texId 0 (quadro anterior), que o viewer não tem; falta conferir no runtime.
+  - A neblina está certa (máscara do `WOTM_FOGSPLIT=2` com FA −107,9, FB 326.571, cor 45/33/20; pesa a partir de W ≈ 900).
 - **Não coberto:** texels/CLUT da textura, atributos das partículas (a explosão opaca), linhas e leques do VU1, HUD (PATH2/PATH3).
 
 ## Microprogramas das partículas
@@ -86,6 +91,7 @@ Runtime (clone; os genéricos estão nos PRs do PS2Recomp #310, #311 e #312):
 - Checagem: textura por rodadas (4), sombra à parte (9), render-to-texture e instante da coleta (7).
 
 ## Notas
+- **Mesmo quadro no PCSX2 e no nativo:** retail no PCSX2 pelo `tools/pcsx2_auto` (`emu.ps1 start retail`, teclas por `emu.ps1 key`, `PAUSE` pausa; na seleção de fase, RIGHT anda Midtown → Gamblers → Rosdale → Metro), `emu.ps1 snap` (só a janela) e `ramdump.py build/pcsx2_test/SCUS_971.97_retail.elf ram.bin` com o jogo pausado. Depois, `build/viewer.exe ram.bin --shot x.png` (o raylib grava o PNG na pasta atual, sem caminho) desenha a mesma RAM com a câmera do jogo. Para antes/depois, compilar o viewer de outro commit (`git show <commit>:native/...` numa pasta e o `build.bat` dela).
 - O `ps2EntryRunner` é unity build: mudar só `src/main.cpp` não recompila; toque `build_dev/ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/Unity/unity_168_cxx.cxx`.
 - O caminho emulado inteiro (sem `PS2X_NO_VU1`) trava no `particleDraw`; a checagem não depende dele.
 - O `run_live.ps1` usa `Start-Process -RedirectStandardError` (o `2>` do PowerShell 5 grava UTF-16 e quebra linhas).
