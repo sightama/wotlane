@@ -4,6 +4,7 @@
 #include "game/hit_event.h"
 #include "game/anim_blend.h"
 #include "game/streaming_sound.h"
+#include "game/weapons.h"
 #include "cs_pool.h"
 #include "engine.h"
 #include "vecmath.h"
@@ -29,7 +30,9 @@ public:
 
 class AnimContact {
 public:
-    char pad[0x50];
+    char pad[0x1C];
+    float m_ch[2][6];         /* 0x1C: two frames of contact channels; [m_cur][5] is the one the plant head listens to */
+    int m_cur;                /* 0x4C */
     void init(_animHandle &h);
     void update(void);
 };
@@ -63,9 +66,9 @@ public:
     float m_health;           /* 0x1C: 20 at initBefore */
     float m_hurt;             /* 0x20: damage taken since state 1; 10 makes it recoil (state 17) */
     int m_24;                 /* 0x24 */
-    int m_invulnerable;       /* 0x28: no damage taken; health stops at 1 */
+    int m_holding;            /* 0x28: player 1 is in its mouth (chomp hit); no damage taken meanwhile, health stops at 1 */
     int m_recoiled;           /* 0x2C: set with state 17, cleared by state 1 */
-    int m_30;                 /* 0x30: cleared by state 18 */
+    int m_sporeLaunched;      /* 0x30: state 18 fired its spore (cleared on entry) */
     char pad34[0x38 - 0x34];
     _cs *m_headCs;            /* 0x38: the head (hit target, m_cs) */
     _hierhead *m_headEp;      /* 0x3C */
@@ -74,9 +77,9 @@ public:
     _hierswitch *m_switch;    /* 0x48: shown at wakeUp */
     _animHandle m_anims[19];  /* 0x4C: hier 0x271B + head, animations 0..18 */
     FVECTOR m_pos;            /* 0x180: where the head sits (its cs trans at wakeUp) */
-    char pad190[0x1A0 - 0x190];
+    FVECTOR m_prevPin;        /* 0x190: m_pinTrans of the previous field (the spit throws along the difference) */
     FVECTOR m_pinTrans;       /* 0x1A0: aim point (getPinTrans; HomingBug aims at it) */
-    char pad1B0[0x1F0 - 0x1B0];
+    FMATRIX_16 m_pinMat;      /* 0x1B0: the stem cs matrix; row 1 is the spit direction */
     PlantBossHeadSound m_sound; /* 0x1F0 */
     AnimContact m_contact;    /* 0x1F4 */
     char pad244[0x250 - 0x244];
@@ -614,13 +617,335 @@ void PlantBossHead::enterState(int s)
         m_stemCs->testCollision = 1;
         break;
     case 18:
-        m_30 = 0;
+        m_sporeLaunched = 0;
         animationTransitionInto(m_anims[18], 500.0f, 1, 1);
         m_stemCs->testCollision = 1;
         break;
     }
 }
+#ifdef NON_MATCHING
+extern float junk __asm__("junk.2582"); /* static of update: a chomp only bites while the animation is under it */
+__asm__("#SNFIX_SMALL junk.2582");
+float smoothEasyInAngle(float cur, float target, float rate, float eps);
+void mathfRotationFromPointToPoint(_fvector *rot, _fvector *from, _fvector *to);
+#define MONSTER_VEL_FIELD(m) ((_fvector *)((char *)(m) + 0x1E0))     /* MonsterDynamics velocity */
+#define MONSTER_24C(m) (*(int *)((char *)(m) + 0x24C))
+/* this->takeHit through the vtable (slot 0x8) */
+#define HEAD_TAKEHIT(h, dir, dmg, id) \
+    ((void (*)(void *, _fvector *, float, int))*(void **)((char *)(h)->m_vptr + 0xC))((char *)(h) + *(short *)((char *)(h)->m_vptr + 0x8), dir, dmg, id)
+
+/* Turns the head towards player 1 at `rate` (yaw only). */
+#define HEAD_FACE(rate)                                                                                             \
+    do {                                                                                                            \
+        float heading_ = mathfHeadingFromPointToPoint(&m_headCs->trans, &m->m_cs->trans);                            \
+        m_headCs->rot.x = 0.0f;                                                                                     \
+        m_headCs->rot.y = 0.0f;                                                                                     \
+        m_headCs->rot.z = smoothEasyInAngle(m_headCs->rot.z, heading_, rate, 0.001f);                               \
+        mathfRotMatrixRPH(m_headCs->mat, &m_headCs->rot);                                                           \
+    } while (0)
+
+/* Keeps player 1 in the mouth: moved by how far the pin is from its locator 0x809. */
+#define HEAD_HOLD()                                                                                                 \
+    do {                                                                                                            \
+        FVECTOR p_;                                                                                                 \
+        vecSub(&p_, &m_pinTrans, MONSTER_LOCATOR(m, 0x809));                                                       \
+        vecAdd(&p_, &m->m_cs->trans, &p_);                                                                          \
+        m->setTrans(p_);                                                                                            \
+    } while (0)
+
+/* 0 idle (hiss/growl now and then), 1 rises (then 2, 3 or 4 by distance: chomp near/mid/far, or recoil 17),
+ * 2..4 chomp: bites player 1 within 100 of the pin before `junk` of the animation (a blocking player hurts the head
+ * instead); 5..7 chew while holding, 8 spit (throws the player along the pin's motion), 9..12 retract, 13 dies,
+ * 14/15 face the player, 17 recoils, 18 launches a spore at 80%. */
+void PlantBossHead::update(void)
+{
+    Monster *m = game->m_lists.players[0];
+    float pct, d;
+
+    switch (m_state) {
+    case 0:
+        if (mathfManhatDist(&m_headCs->trans, &m->m_cs->trans) > 450.0f) {
+            HEAD_FACE(0.05f);
+        }
+        if (m_24 > 0 && --m_24 == 0) {
+            m_flags |= 8;
+            m_stemCs->testCollision = 1;
+        }
+        switch (mathfRand(0, 0x118)) {
+        case 0:
+            m_sound.playPlantBossHissSound(&m_pinTrans);
+            break;
+        case 1:
+            m_sound.playPlantBossGrowlSound(&m_pinTrans);
+            break;
+        }
+        break;
+    case 1:
+        pct = animationGetCurrentPercent(m_anims[m_state]);
+        {
+            float heading = mathfHeadingFromPointToPoint(&m_headCs->trans, &m->m_cs->trans);
+
+            m_holding = 0;
+            m_headCs->rot.x = 0.0f;
+            m_headCs->rot.y = 0.0f;
+            m_headCs->rot.z = smoothEasyInAngle(m_headCs->rot.z, heading, 0.05f, 0.001f);
+            mathfRotMatrixRPH(m_headCs->mat, &m_headCs->rot);
+        }
+        if (animationGetCurrentFrame(m_anims[m_state]) == 144.0f) {
+            m_sound.playPlantBossHissSound(&m_pinTrans);
+        }
+        if (pct >= 0.99f) {
+            if (m_recoiled != 0) {
+                plantBoss.m_04 = 0x12C;
+                enterState(0x11);
+            } else {
+                d = mathfManhatDist(&m_headCs->trans, &m->m_cs->trans);
+                if (d < 450.0f) {
+                    enterState(0);
+                }
+                if (d < 650.0f) {
+                    enterState(2);
+                } else if (d < 850.0f) {
+                    enterState(3);
+                } else {
+                    enterState(4);
+                }
+            }
+        }
+        break;
+    case 2:
+    case 3:
+    case 4: {
+        int play;
+        float heading = mathfHeadingFromPointToPoint(&m_headCs->trans, &m->m_cs->trans);
+
+        pct = animationGetCurrentPercent(m_anims[m_state]);
+        m_headCs->rot.x = 0.0f;
+        m_headCs->rot.y = 0.0f;
+        m_headCs->rot.z = smoothEasyInAngle(m_headCs->rot.z, heading, 0.1f, 0.001f);
+        mathfRotMatrixRPH(m_headCs->mat, &m_headCs->rot);
+        play = 0;
+        if (animationGetCurrentFrame(m_anims[m_state]) == 20.0f) {
+            play = m_holding == 0;
+        }
+        if (play) {
+            m_sound.playPlantBossMissChompSound(&m_pinTrans);
+        }
+        play = 0;
+        if (animationGetCurrentFrame(m_anims[m_state]) == 20.0f) {
+            play = m_holding != 0;
+        }
+        if (play) {
+            m_sound.playPlantBossChompSound(&m_pinTrans);
+        }
+        if (pct >= 1.0f) {
+            if (m_holding != 0) {
+                switch (m_state) {
+                case 2:
+                    enterState(5);
+                    break;
+                case 3:
+                    enterState(6);
+                    break;
+                case 4:
+                    enterState(7);
+                    break;
+                }
+            } else {
+                switch (m_state) {
+                case 2:
+                    enterState(9);
+                    break;
+                case 3:
+                    enterState(10);
+                    break;
+                case 4:
+                    enterState(11);
+                    break;
+                }
+                switch (mathfRand(0, 2)) {
+                case 0:
+                    m_sound.playPlantBossHissSound(&m_pinTrans);
+                    break;
+                case 1:
+                    m_sound.playPlantBossGrowlSound(&m_pinTrans);
+                    break;
+                }
+            }
+        }
+        d = mathfManhatDist(&m_pinTrans, MONSTER_LOCATOR(m, 0x809));
+        if (d < 150.0f) {
+            m_stemCs->testCollision = 0;
+        }
+        if (d < 100.0f && pct < junk && m_holding == 0) {
+            {
+                ActuatorData a = GAME_ACTUATOR(0x1227E0);
+
+                inputSetActuator(0, &a);
+            }
+            if (*m->m_state != 3) {
+                m->takeDamage(m->m_health > 25.0f ? 25.0f : m->m_health - 1.0f, false, 0);
+                Cameras::InitPlantBossCamera();
+                if (m->m_dead == 0) {
+                    m_holding = 1;
+                    MONSTER_24C(m) = 0;
+                    m->m_cs->rot.y = mathfRand(0, 1) != 0 ? 1.5707964f : -1.5707964f;
+                    mathfRotMatrixRPH(m->m_cs->mat, &m->m_cs->rot);
+                }
+                Cameras::StartShake(50.0f);
+            } else {
+                HitEvent *e = HitEvent::create();
+                FVECTOR dir;
+
+                vecSub(&dir, &m_pinTrans, &m->m_cs->trans);
+                e->type = 2;
+                e->pos = &m->m_cs->trans;
+                HEAD_TAKEHIT(this, &dir, 1.0f, m->m_id);
+                switch (m_state) {
+                case 2:
+                    enterState(9);
+                    break;
+                case 3:
+                    enterState(10);
+                    break;
+                case 4:
+                    enterState(11);
+                    break;
+                }
+            }
+        }
+        if (m_holding != 0) {
+            HEAD_HOLD();
+            m->m_attacksEnabled = 0;
+        }
+        break;
+    }
+    case 5:
+    case 6:
+    case 7:
+        pct = animationGetCurrentPercent(m_anims[m_state]);
+        m_sound.updateChompSound(&m_pinTrans);
+        if (pct >= 1.0f) {
+            if (m_holding != 0) {
+                enterState(8);
+            } else {
+                enterState(0);
+                m_sound.terminateChompSound();
+            }
+        }
+        m->m_unk1E8 = 0.0f;
+        HEAD_HOLD();
+        m->m_attacksEnabled = 0;
+        m_24 = 0;
+        break;
+    case 8:
+        pct = animationGetCurrentPercent(m_anims[8]);
+        if (animationGetCurrentFrame(m_anims[8]) == 100.0f) {
+            m_sound.playPlantBossSpitSound(&m_pinTrans);
+            m_sound.terminateChompSound();
+        }
+        if (pct < 0.714f) {
+            HEAD_HOLD();
+        } else if (m_24 == 0) {
+            m_24 = 0x78;
+            MONSTER_24C(m) = 1;
+            vecSub(MONSTER_VEL_FIELD(m), &m_pinTrans, &m_prevPin);
+            m->m_attacksEnabled = 1;
+            m->knockBack(*(_fvector *)m_pinMat[1], -200.0f, 800.0f);
+            if (CAMERA_POV(0) == 3) {
+                if (m->m_state[1] & 0x10) {
+                    Cameras::SetCameraPOV(0, (Camera::CameraPOV)5);
+                } else {
+                    Cameras::SetCameraPOV(0, (Camera::CameraPOV)0);
+                }
+                CAMERA_D9C(0) = 1;
+            }
+        } else if (pct >= 1.0f) {
+            m_stemCs->testCollision = 0;
+            enterState(0);
+            plantBoss.m_04 = 0x3C;
+        }
+        break;
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+        if (animationGetCurrentPercent(m_anims[m_state]) >= 1.0f) {
+            enterState(0);
+            plantBoss.m_04 = 0x78;
+        }
+        m_stemCs->testCollision = 1;
+        break;
+    case 13:
+        if (animationGetCurrentPercent(m_anims[m_state]) >= 1.0f) {
+            m_state = 0x63;
+            m_awake = 0;
+            if (++numDeadHeads < 3) {
+                plantBoss.m_04 = 1;
+            }
+        }
+        break;
+    case 17:
+        if (animationGetCurrentPercent(m_anims[m_state]) >= 0.99f) {
+            plantBoss.m_04 = 1;
+        }
+        break;
+    case 14:
+        HEAD_FACE(0.05f);
+        break;
+    case 15:
+        pct = animationGetCurrentPercent(m_anims[15]);
+        HEAD_FACE(0.05f);
+        if (pct >= 1.0f) {
+            enterState(0);
+        }
+        switch (mathfRand(0, 0xB4)) {
+        case 0:
+            m_sound.playPlantBossHissSound(&m_pinTrans);
+            break;
+        case 1:
+            m_sound.playPlantBossGrowlSound(&m_pinTrans);
+            break;
+        }
+        break;
+    case 18:
+        pct = animationGetCurrentPercent(m_anims[18]);
+        d = mathfManhatDist(&m_headCs->trans, &m->m_cs->trans);
+        if (animationGetCurrentFrame(m_anims[18]) == 124.0f) {
+            m_sound.playPlantBossSporeLaunchSound(&m_pinTrans);
+        }
+        if (d > 450.0f) {
+            HEAD_FACE(0.05f);
+        }
+        if (pct >= 0.8f && m_sporeLaunched == 0) {
+            FVECTOR rot;
+
+            mathfRotationFromPointToPoint(&rot, &m_pinTrans, MONSTER_LOCATOR(m, 0x809));
+            m_sporeLaunched = 1;
+            game->getWeapons()->CreateStaticWeapon((Weapon::WeaponType)0x2A, m_stemCs->epNode->id2, m->m_id, &m_pinTrans,
+                                                   &rot, 0);
+        }
+        if (pct >= 1.0f) {
+            enterState(0);
+            if (numDeadHeads != 0) {
+                plantBoss.m_04 = numDeadHeads == 1 ? 0x1E : 2;
+            }
+        }
+        break;
+    }
+    m_prevPin = m_pinTrans;
+    vecApplyRows(&m_headCs->trans, m_headCs->mat, &m_pos);
+    m_stemCs->trans = m_pinTrans;
+    matCopy(m_stemCs->mat, m_pinMat);
+    hdReparentCsGrid(m_stemCs);
+    m_contact.update();
+    if (m_contact.m_ch[m_contact.m_cur][5] > 0.5f && m_contact.m_ch[m_contact.m_cur == 0][5] < 0.5f) {
+        m_sound.playPlantBossHeadDeadSound(&m_pinTrans);
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/PlantBoss", update__13PlantBossHead);
+#endif
 /* Hurts only while exposed (state 1 past half its animation, or 2..4); hits under 0.11 count only as shocks, and a
  * monster with 0xEC set deals 1000. Dying (state 13) on the third head ends the fight (fade, plantBoss.m_08 = 885);
  * 10 damage makes it recoil (state 17). Every hit flashes animation 16 as an additive layer. */
@@ -631,7 +956,7 @@ void PlantBossHead::takeHit(_fvector *dir, float dmg, int attacker)
     Monster *m;
     int exposed;
 
-    if (m_invulnerable != 0) {
+    if (m_holding != 0) {
         return;
     }
     if (dmg < 0.11f && s_takeHitInfo.source != 5) {
@@ -656,7 +981,7 @@ void PlantBossHead::takeHit(_fvector *dir, float dmg, int attacker)
     m_health -= dmg;
     plantBoss.m_10 = 10;
     if (m_health <= 0.0f) {
-        if (m_invulnerable != 0) {
+        if (m_holding != 0) {
             m_health = 1.0f;
         } else {
             m_health = 0.0f;
