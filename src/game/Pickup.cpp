@@ -16,11 +16,6 @@ __asm__("#SNFIX_SMALL game");
 void hdReparentCsGrid(_cs *cs, _fvector *pos, float f);
 void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);
 void mathfRotationFromVector(_fvector *rot, _fvector *v);
-class Weapon {
-public:
-    void GetVel(_fvector &v);
-    void KillWeapon(void);
-};
 class DodgeBallLevel {
 public:
     void ResetCountdown(void);

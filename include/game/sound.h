@@ -6,6 +6,7 @@
    and the small sound objects embedded in monsters, pickups, vehicles and the shell. */
 
 #include "engine.h"
+#include "game/sound_objects.h"
 class Monster;
 
 extern "C" {
@@ -523,19 +524,6 @@ public:
     void updateHudSound(void);
 };
 
-/* A positioned loop from any bank. */
-class GenericSound {
-public:
-    unsigned m_handle;          // 0x0
-    int m_bank;                 // 0x4 gSoundBanks index
-    int m_sound;                // 0x8
-    int m_minDist;              // 0xC
-    int m_maxDist;              // 0x10
-    void initGenericSound(int bank, int sound, int minDist, int maxDist);
-    void terminateGenericSound(void);
-    void updateGenericSound(_fvector *pos);
-};
-
 /* Crowd loop of a pedestrian group (only groups of 16 or more). */
 class PedSound {
 public:
@@ -868,21 +856,6 @@ public:
     void updateWindSound(void);
     void rampWindVolumeDown(void);
     void rampWindVolumeUp(void);
-};
-
-/* A projectile in flight: the flight loop of the weapon types that have one (with the doppler pitch in one-player games),
-   plus the launch and explosion one-shots by weapon type. */
-class Weapon;
-class WeaponSound {
-public:
-    unsigned m_handle;          // 0x0: flight loop
-    float m_prevDist;           // 0x4: for the doppler pitch
-    void initWeaponSound(void);
-    void terminateWeaponSound(void);
-    void updateWeaponSound(Weapon *w);
-    void playWeaponLaunchSound(_fvector *pos, int type);
-    void playWeaponExplosion(_fvector *pos, int type, int hit);
-    void playRockSpecialImpact(_fvector *pos);
 };
 
 #endif

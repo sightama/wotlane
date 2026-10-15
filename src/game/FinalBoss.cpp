@@ -70,20 +70,6 @@ struct ActuatorData {
 };
 void inputSetActuator(int pad, ActuatorData *a);
 
-/* A live projectile (game/Weapons); only what the jelly's tazer field reads. */
-class Weapon {
-public:
-    char pad0[0x44];
-    int m_44;                 /* 0x44: >= 7 is zapped at any distance */
-    char pad48[0x4C - 0x48];
-    int m_type;               /* 0x4C: 0x17 = a thrown pickup (killed with it) */
-    char pad50[0x150 - 0x50];
-    _cs *m_cs;                /* 0x150 */
-    PickupIter m_pickup;      /* 0x154 */
-
-    void KillWeapon(void);
-};
-
 class HurtHistory {
 public:
     char pad[4];
@@ -749,7 +735,7 @@ void FinalBoss::updateJelly(void)
     hierSetSwitch((_hierswitch *)m_ep27AD, sw);
 
     if (gameWeapons()->WeaponInRadius(&m_monster74->m_cs->trans, 600.0f, &w)
-        && (w->m_44 >= 7 || mathfManhatDist2D(&m_monster74->m_cs->trans, &w->m_cs->trans) < 200.0f)) {
+        && (w->m_age >= 7 || mathfManhatDist2D(&m_monster74->m_cs->trans, &w->m_cs->trans) < 200.0f)) {
         FVECTOR from;
 
         vecCopy(&from, MONSTER_LOCATOR(m_monster74, 0x809));

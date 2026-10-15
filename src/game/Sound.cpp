@@ -32,15 +32,6 @@ public:
     char padE0[0x1A8 - 0xE0];
     float m_maxSpeed;           /* 0x1A8 */
 };
-class Weapon {
-public:
-    char pad0[0x40];
-    int m_active;               /* 0x40 */
-    char pad44[0x4C - 0x44];
-    int m_type;                 /* 0x4C: Weapon::WeaponType */
-    char pad50[0x150 - 0x50];
-    _cs *m_cs;                  /* 0x150 */
-};
 
 SoundManager::SoundManager()
 {

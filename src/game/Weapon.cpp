@@ -1,47 +1,23 @@
 #include "common.h"
-#include "hieri_types.h"
+#include "game/game.h"
 #include "hd.h"
-#include "engine.h"
 #include "cs_pool.h"
 #include "vecmath.h"
-#include "game/level_pickups.h"
+#include "game/hit_event.h"
+#include "game/pickup.h"
 
-/* game/Weapon: projectiles (thrown pickups, monster specials, military fire, lava balls) and the ground fires they leave.
-   Weapons is embedded in TheGame at 0x112490 (gameWeapons()). The classes stay local to this TU: FinalBoss, Pickup and Sound
-   declare their own partial Weapon, and game.h pulls in game/weapons.h everywhere. */
+/* game/Weapon: the classes are in game/weapons.h. Weapons is embedded in TheGame at 0x112490 (gameWeapons()). */
 
-class TheGame;
-extern TheGame *game;
+/* TheGame fields game.h does not name yet */
 #define GAME_FIELD(type, off) (*(type *)((char *)game + (off)))
 
+float mathfManhatDist(_fvector *a, _fvector *b);
 float mathfManhatDist2D(_fvector *a, _fvector *b);
 int particleCreateFx(_fvector *pos, int id, float scale, float (*m)[4], float strength);
+int particleCreateFadingFlame(_fvector *pos, int fields, _fvector *vel, float scale);
+void *particleGetParticle(int h);
 void lightSetAmbient(int i, float r, float g, float b);
-
-/* game/Sound's classes, as declared in game/sound.h (which needs game.h) */
-class Weapon;
-class WeaponSound {
-public:
-    unsigned m_handle;          /* 0x0: flight loop */
-    float m_prevDist;           /* 0x4: for the doppler pitch */
-    void initWeaponSound(void);
-    void terminateWeaponSound(void);
-    void updateWeaponSound(Weapon *w);
-    void playWeaponLaunchSound(_fvector *pos, int type);
-    void playWeaponExplosion(_fvector *pos, int type, int hit);
-    void playRockSpecialImpact(_fvector *pos);
-};
-class GenericSound {
-public:
-    unsigned m_handle;          /* 0x0 */
-    int m_bank;                 /* 0x4 */
-    int m_sound;                /* 0x8 */
-    int m_minDist;              /* 0xC */
-    int m_maxDist;              /* 0x10 */
-    void initGenericSound(int bank, int sound, int minDist, int maxDist);
-    void terminateGenericSound(void);
-    void updateGenericSound(_fvector *pos);
-};
+int timerGetCurTics(void);
 
 /* One of the 32 dynamic point lights (common/PointLight). */
 class PointLight {
@@ -52,6 +28,7 @@ public:
     int f3C;
 
     void SetPos(_fvector *p);
+    void SetPos(float px, float py, float pz);
     void SetRange(float rng);
     void SetColor(float cr, float cg, float cb);
 };
@@ -62,131 +39,72 @@ public:
 };
 extern PointLights pointLights;
 
-class Weapon {
+class DbInteractive {
 public:
-    enum WeaponType { };
-    /* Per-type tuning (Weapons::m_params, filled by InitWeaponsAfter); InitWeapon copies it to the start of the Weapon. */
-    class Dynamics {
-    public:
-        float r;            /* 0x00: point light color (128 gray by default) */
-        float g;            /* 0x04 */
-        float b;            /* 0x08 */
-        float lightRange;   /* 0x0C: 0 = no point light */
-        float f10;          /* 0x10 */
-        float lifetime;     /* 0x14: seconds in the table, fields (x60) once copied to a Weapon */
-        float f18;          /* 0x18 */
-        float f1C;          /* 0x1C: > 1 widens the angle limits below (InitWeapon) */
-        float f20;          /* 0x20 */
-        float f24;          /* 0x24 */
-        float f28;          /* 0x28 */
-        float angle2C;      /* 0x2C: pi/4 */
-        float angle30;      /* 0x30: 75 degrees */
-        int pad34[3];
-
-        Dynamics(void);
-    };
-
-    Dynamics m_dyn;         /* 0x00 */
-    int m_active;           /* 0x40 */
-    int m_age;              /* 0x44: fields alive; detonates or dies once past m_dyn.lifetime */
-    int m_48;               /* 0x48 */
-    int m_type;             /* 0x4C: WeaponType; 0x17 = a thrown pickup (its cs belongs to the pickup) */
-    int m_50;
-    int m_54;               /* 0x54 */
-    int m_58;
-    int m_5C;               /* 0x5C */
-    int m_60;               /* 0x60 */
-    WeaponSound m_sound;    /* 0x64 */
-    char pad6C[0x80 - 0x6C];
-    _fvector m_80;          /* 0x80 */
-    FVECTOR m_prevPos;      /* 0x90: cs translation before this frame's move (GetVel) */
-    _fvector m_A0;          /* 0xA0 */
-    _fvector m_B0;          /* 0xB0 */
-    char padC0[0x120 - 0xC0];
-    int m_ownerId;          /* 0x120: interactive id of the thrower */
-    int m_targetId;         /* 0x124: interactive id of the target (0 = none) */
-    int m_128;              /* 0x128 */
-    int pad12C;
-    FVECTOR m_targetPos;    /* 0x130 */
-    char pad140[0x150 - 0x140];
-    _cs *m_cs;              /* 0x150 */
-    PickupIter m_pickup;    /* 0x154: the thrown pickup (type 0x17) */
-    int m_fx;               /* 0x158: particle fx handle */
-    int m_fx2;              /* 0x15C */
-    int m_pointLight;       /* 0x160: index in pointLights, -1 = none */
-    int m_164;              /* 0x164 */
-    int pad168[2];
-
-    void UpdateRotation(void);
-    void UpdateLockOnTarget(void);
-    void UpdateLockAheadOfMonster(void);
-    void UpdateLockVertical(void);
-    void UpdateErraticity(void);
-    void UpdateTranslation(void);
-    void WeaponHD(void);
-    void setCsTransform(_fvector *pos, float (&m)[4][4]);
-    void ComputeReflection(_fvector *a, _fvector *b, bool c);
-    void CalculateBallisticArc(void);
-    void InitWeapon(void);
-    void KillWeapon(void);
-    void DetonateWeapon(_hdResult &res);
-    void DispatchRangeBasedDamage(void);
-    void GetVel(_fvector &v);
+    int m_kind;               /* 0x00: 1 monster */
+    unsigned short m_flags;   /* 0x04 */
+    char pad6[6];
+    _cs *m_cs;                /* 0x0C */
+    void *m_vptr;             /* 0x10 */
 };
-typedef char _size_Weapon[sizeof(Weapon) == 0x170 ? 1 : -1];
-typedef char _size_WeaponDynamics[sizeof(Weapon::Dynamics) == 0x40 ? 1 : -1];
-
-/* A ground fire (CreateFire, UpdateFlames). */
-struct WeaponFlame {
-    GenericSound sound;     /* 0x00 */
-    int f14;                /* 0x14 */
-    int f18;                /* 0x18 */
-    int fx;                 /* 0x1C: particle fx handle, -1 = none */
-    int f20;                /* 0x20 */
-    int f24;                /* 0x24 */
-    int pad28[2];
-    _fvector pos;           /* 0x30 */
-    int pad40[4];
-};
-typedef char _size_WeaponFlame[sizeof(WeaponFlame) == 0x50 ? 1 : -1];
-
-class Monster;
-class Weapons {
+class Interactives {
 public:
-    _hierhead *m_epNodes[45];           /* 0x0000: model of each weapon type (AddWeaponEpNode) */
-    int padB4[3];
-    Weapon::Dynamics m_params[45];      /* 0x00C0 */
-    Weapon m_weapons[100];              /* 0x0C00 */
-    WeaponFlame m_flames[10];           /* 0x9BC0 */
-
-    void InitWeaponsBefore(void);
-    void InitWeaponsAfter(void);
-    void UpdateWeapons(void);
-    int WeaponInRadius(_fvector *pos, float r, Weapon **out);
-    void DecrementWeaponCount(Monster *m, int type);
-    void AddWeaponEpNode(int idx, _hierhead *h);
-    void CreateFire(_fvector *pos, float r, int id);
-    void UpdateFlames(void);
+    static int s_numInteractives;
+    static DbInteractive *getInteractive(int i);
+    static void dispatchHit(_fvector *dir, float dmg, int attackerId, int targetId);
 };
-typedef char _size_Weapons[sizeof(Weapons) == 0x9EE0 ? 1 : -1];
+/* virtual getPinTrans() of an interactive (vtable entry {delta, function} at vptr + 0x10) */
+#define PIN_TRANS(t) \
+    (((_fvector *(*)(void *))*(void **)(*(char **)((char *)(t) + 0x10) + 0x14))((char *)(t) + *(short *)(*(char **)((char *)(t) + 0x10) + 0x10)))
+/* the Pickup a LevelPickups list iterator stands on (the node's data word) */
+#define ITER_PICKUP(it) (*(Pickup **)(it).cur)
 
 /* vecSub in noreorder mode: GNU as would otherwise move the sqc2 into the delay slot of the call that follows */
 static inline void vecSubNR(_fvector *dst, _fvector *a, _fvector *b)
 {
-    __asm__ volatile(".set push
-	.set noreorder
-	"
-                     "lqc2 $vf11, 0x0(%1)
-	"
-                     "lqc2 $vf12, 0x0(%2)
-	"
-                     "vsub.xyz $vf11, $vf11, $vf12
-	"
-                     "sqc2 $vf11, %0
-	"
+    __asm__ volatile(".set push\n\t.set noreorder\n\t"
+                     "lqc2 $vf11, 0x0(%1)\n\t"
+                     "lqc2 $vf12, 0x0(%2)\n\t"
+                     "vsub.xyz $vf11, $vf11, $vf12\n\t"
+                     "sqc2 $vf11, %0\n\t"
                      ".set pop"
                      : "=m"(*dst) : "r"(a), "r"(b));
 }
+
+#ifdef NON_MATCHING
+/* |v|^2 on the FPU accumulator like vecLenSq, registers left to the compiler */
+static inline float vecLenSqR(_fvector *v)
+{
+    float *f = (float *)v;
+    float x, y, z, r;
+
+    __asm__ volatile("lwc1 %0, %4\n\t"
+                     "lwc1 %1, %5\n\t"
+                     "lwc1 %2, %6\n\t"
+                     "mula.s %0, %0\n\t"
+                     "madda.s %1, %1\n\t"
+                     "madd.s %3, %2, %2"
+                     : "=&f"(x), "=&f"(y), "=&f"(z), "=f"(r) : "m"(f[0]), "m"(f[1]), "m"(f[2]));
+    return r;
+}
+/* the same with x, y, z in $f2, $f3, $f0 and the result over x */
+static inline float vecLenSqX(_fvector *v)
+{
+    float *f = (float *)v;
+    register float x __asm__("$f2");
+    register float y __asm__("$f3");
+    register float z __asm__("$f0");
+
+    __asm__ volatile("lwc1 %0, %3\n\t"
+                     "lwc1 %1, %4\n\t"
+                     "lwc1 %2, %5\n\t"
+                     "mula.s %0, %0\n\t"
+                     "madda.s %1, %1\n\t"
+                     "madd.s %0, %2, %2"
+                     : "=f"(x), "=f"(y), "=f"(z) : "m"(f[0]), "m"(f[1]), "m"(f[2]));
+    return x;
+}
+#endif
 
 Weapon::Dynamics::Dynamics(void)
 {
@@ -204,13 +122,13 @@ void Weapons::InitWeaponsBefore(void)
     for (i = 0; i < 100; i++) {
         Weapon *w = &m_weapons[i];
         w->m_active = 0;
-        w->m_dyn.f10 = 0;
+        w->m_dyn.damage = 0;
         w->m_dyn.lifetime = 0;
         w->m_dyn.f18 = 0;
         w->m_dyn.f1C = 0;
-        w->m_dyn.f20 = 0;
+        w->m_dyn.speed = 0;
         w->m_48 = 0;
-        w->m_128 = 0;
+        w->m_targetPoint = 0;
         w->m_type = 0;
         w->m_80.x = 0;
         w->m_80.y = 0;
@@ -232,11 +150,11 @@ void Weapons::InitWeaponsBefore(void)
     }
     for (i = 0; i < 10; i++) {
         WeaponFlame *f = &m_flames[i];
-        f->f14 = 0;
-        f->f18 = 0;
-        f->f20 = 0;
-        f->f24 = 0;
-        f->fx = -1;
+        f->active = 0;
+        f->age = 0;
+        f->radius = 0;
+        f->fx = 0;
+        f->light = -1;
         _fvector *v = &f->pos;
         v->x = 0;
         v->y = 0;
@@ -262,11 +180,11 @@ void Weapons::InitWeaponsAfter(void)
     lightSetAmbient(2, 0, 0, 255.0f);
     for (i = 0; i < 45; i++) {
         Weapon::Dynamics *d = &m_params[i];
-        d->f10 = 1.0f;
+        d->damage = 1.0f;
         d->lifetime = 3.0f;
         d->f18 = 1.0f;
         d->f1C = 0;
-        d->f20 = 800.0f;
+        d->speed = 800.0f;
     }
     red->r = 96.0f;
     red->g = 32.0f;
@@ -289,141 +207,141 @@ void Weapons::InitWeaponsAfter(void)
     blue->b = 96.0f;
     blue->lightRange = 400.0f;
 
-    m_params[13].f10 = 15.0f;
+    m_params[13].damage = 15.0f;
     m_params[13].lifetime = 10.0f;
     m_params[13].f18 = 1.0f;
     m_params[13].f1C = 0.01f;
-    m_params[13].f20 = 700.0f;
+    m_params[13].speed = 700.0f;
 
-    m_params[21].f10 = 1.0f;
+    m_params[21].damage = 1.0f;
     m_params[21].lifetime = 8.0f;
     m_params[21].f18 = 1.0f;
     m_params[21].f1C = 0.02f;
-    m_params[21].f20 = 500.0f;
+    m_params[21].speed = 500.0f;
 
-    m_params[22].f10 = 1.0f;
+    m_params[22].damage = 1.0f;
     m_params[22].lifetime = 8.0f;
     m_params[22].f18 = 1.0f;
     m_params[22].f1C = 0.02f;
-    m_params[22].f20 = 500.0f;
+    m_params[22].speed = 500.0f;
 
-    m_params[23].f10 = 5.0f;
+    m_params[23].damage = 5.0f;
     m_params[23].lifetime = 10.0f;
     m_params[23].f18 = 1.0f;
     m_params[23].f1C = 0;
-    m_params[23].f20 = 800.0f;
+    m_params[23].speed = 800.0f;
 
-    m_params[24].f10 = 1.0f;
+    m_params[24].damage = 1.0f;
     m_params[24].lifetime = 3.0f;
     m_params[24].f18 = 1.0f;
     m_params[24].f1C = 0;
-    m_params[24].f20 = 800.0f;
+    m_params[24].speed = 800.0f;
 
-    m_params[25].f10 = 3.0f;
+    m_params[25].damage = 3.0f;
     m_params[25].lifetime = 2.0f;
     m_params[25].f18 = 1.0f;
     m_params[25].f1C = 0;
-    m_params[25].f20 = 1400.0f;
+    m_params[25].speed = 1400.0f;
 
-    m_params[26].f10 = 8.0f;
+    m_params[26].damage = 8.0f;
     m_params[26].lifetime = 5.0f;
     m_params[26].f18 = 0.05f;
     m_params[26].f1C = 0.08f;
-    m_params[26].f20 = 700.0f;
+    m_params[26].speed = 700.0f;
 
-    m_params[27].f10 = 8.0f;
+    m_params[27].damage = 8.0f;
     m_params[27].lifetime = 5.0f;
     m_params[27].f18 = 0.05f;
     m_params[27].f1C = 1.5f;
-    m_params[27].f20 = 700.0f;
+    m_params[27].speed = 700.0f;
     m_params[27].f28 = 1.75f;
 
-    m_params[28].f10 = 3.0f;
+    m_params[28].damage = 3.0f;
     m_params[28].lifetime = 2.0f;
     m_params[28].f18 = 1.0f;
     m_params[28].f1C = 0;
-    m_params[28].f20 = 1400.0f;
+    m_params[28].speed = 1400.0f;
 
-    m_params[29].f10 = 3.0f;
+    m_params[29].damage = 3.0f;
     m_params[29].lifetime = 2.0f;
     m_params[29].f18 = 1.0f;
     m_params[29].f1C = 0.2f;
-    m_params[29].f20 = 1400.0f;
+    m_params[29].speed = 1400.0f;
     m_params[29].f28 = 0.4f;
 
-    m_params[30].f10 = 1.0f;
+    m_params[30].damage = 1.0f;
     m_params[30].lifetime = 2.0f;
     m_params[30].f18 = 1.0f;
     m_params[30].f1C = 0;
-    m_params[30].f20 = 800.0f;
+    m_params[30].speed = 800.0f;
 
-    m_params[31].f10 = 1.0f;
+    m_params[31].damage = 1.0f;
     m_params[31].lifetime = 2.0f;
     m_params[31].f18 = 1.0f;
     m_params[31].f1C = 0.2f;
-    m_params[31].f20 = 800.0f;
+    m_params[31].speed = 800.0f;
     m_params[31].f28 = 0.4f;
 
-    m_params[32].f10 = 3.0f;
+    m_params[32].damage = 3.0f;
     m_params[32].lifetime = 2.0f;
     m_params[32].f18 = 1.0f;
     m_params[32].f1C = 0;
-    m_params[32].f20 = 1400.0f;
+    m_params[32].speed = 1400.0f;
 
-    m_params[33].f10 = 3.0f;
+    m_params[33].damage = 3.0f;
     m_params[33].lifetime = 2.0f;
     m_params[33].f18 = 1.0f;
     m_params[33].f1C = 0;
-    m_params[33].f20 = 1400.0f;
+    m_params[33].speed = 1400.0f;
 
-    m_params[34].f10 = 3.0f;
+    m_params[34].damage = 3.0f;
     m_params[34].lifetime = 2.0f;
     m_params[34].f18 = 1.0f;
     m_params[34].f1C = 0;
-    m_params[34].f20 = 1400.0f;
+    m_params[34].speed = 1400.0f;
 
-    m_params[35].f10 = 3.0f;
+    m_params[35].damage = 3.0f;
     m_params[35].lifetime = 2.0f;
     m_params[35].f18 = 1.0f;
     m_params[35].f1C = 0;
-    m_params[35].f20 = 1400.0f;
+    m_params[35].speed = 1400.0f;
 
-    m_params[36].f10 = 1.0f;
+    m_params[36].damage = 1.0f;
     m_params[36].lifetime = 2.0f;
     m_params[36].f18 = 1.0f;
     m_params[36].f1C = 0;
-    m_params[36].f20 = 1000.0f;
+    m_params[36].speed = 1000.0f;
 
-    m_params[37].f10 = 1.0f;
+    m_params[37].damage = 1.0f;
     m_params[37].lifetime = 2.0f;
     m_params[37].f18 = 1.0f;
     m_params[37].f1C = 0;
-    m_params[37].f20 = 1000.0f;
+    m_params[37].speed = 1000.0f;
 
-    m_params[38].f10 = 1.0f;
+    m_params[38].damage = 1.0f;
     m_params[38].lifetime = 2.0f;
     m_params[38].f18 = 1.0f;
     m_params[38].f1C = 0.07f;
-    m_params[38].f20 = 1200.0f;
+    m_params[38].speed = 1200.0f;
 
-    m_params[42].f10 = 30.0f;
+    m_params[42].damage = 30.0f;
     m_params[42].lifetime = 0.05f;
     m_params[42].f18 = 1.0f;
     m_params[42].f1C = 0;
-    m_params[42].f20 = 400.0f;
+    m_params[42].speed = 400.0f;
 
-    m_params[43].f10 = 10.0f;
+    m_params[43].damage = 10.0f;
     m_params[43].lifetime = 1.2f;
     m_params[43].f18 = 1.0f;
     m_params[43].f1C = 0;
-    m_params[43].f20 = 250.0f;
+    m_params[43].speed = 250.0f;
 
     /* faster in match mode */
-    m_params[44].f10 = (float)GAME_FIELD(int, 0x1203CC) + 1.75f;
+    m_params[44].damage = (float)game->m_matchMode + 1.75f;
     m_params[44].lifetime = 4.0f;
     m_params[44].f18 = 1.0f;
     m_params[44].f1C = 0.04f;
-    m_params[44].f20 = 800.0f;
+    m_params[44].speed = 800.0f;
 }
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", InitWeaponsAfter__7Weapons);
@@ -488,20 +406,13 @@ void Weapon::setCsTransform(_fvector *pos, float (&m)[4][4])
 {
     float (*d)[4] = m_cs->mat;
 
-    __asm__ volatile("lq $8, 0(%4)
-	"
-                     "lq $9, 16(%4)
-	"
-                     "lq $10, 32(%4)
-	"
-                     "lq $11, 48(%4)
-	"
-                     "sq $8, %0
-	"
-                     "sq $9, %1
-	"
-                     "sq $10, %2
-	"
+    __asm__ volatile("lq $8, 0(%4)\n\t"
+                     "lq $9, 16(%4)\n\t"
+                     "lq $10, 32(%4)\n\t"
+                     "lq $11, 48(%4)\n\t"
+                     "sq $8, %0\n\t"
+                     "sq $9, %1\n\t"
+                     "sq $10, %2\n\t"
                      "sq $11, %3"
                      : "=m"(d[0][0]), "=m"(d[1][0]), "=m"(d[2][0]), "=m"(d[3][0])
                      : "r"(m)
@@ -513,7 +424,44 @@ INCLUDE_ASM("asm/nonmatchings/game/Weapon", ComputeReflection__6WeaponP8_fvector
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateStaticWeapon__7WeaponsQ26Weapon10WeaponTypeiiP8_fvectorT4P9_hierhead);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateStaticWeapon__7WeaponsGQ2t10LinkedList1ZP6Pickup8IteratoriiP8_fvector);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateLavaBall__7WeaponsP8_fvectorN21ii);
+/* Ballistic launch toward the target's pin point (or the aimed-at point, or the thrower's reticle): z follows
+   startZ + vz t + gravity t^2 over the flight time at m_dyn.speed; past m_maxRange the gravity is scaled down. */
+#ifdef NON_MATCHING
+/* equivalent: 15/77 words, 0x134 vs 0x130; the target pointer and the owner swap $v0/$v1 (one extra move), the rest is identical */
+void Weapon::CalculateBallisticArc(void)
+{
+    Monster *owner = (Monster *)Interactives::getInteractive(m_ownerId);
+    FVECTOR d;
+    FVECTOR target;
+    _fvector *t;
+    _cs *cs;
+    float speed;
+    float time;
+
+    if (m_targetId > 0) {
+        DbInteractive *tgt = Interactives::getInteractive(m_targetId);
+        t = PIN_TRANS(tgt);
+    } else if (!(t = m_targetPoint))
+        t = &owner->m_reticleCS->trans;
+    vecCopy(&target, t);
+    if (m_type == 0x17)
+        cs = ITER_PICKUP(m_pickup)->cs;
+    else
+        cs = m_cs;
+    vecSub(&d, &target, &cs->trans);
+    register float dist __asm__("$f3") = vecLenSqR(&d);
+    __asm__ volatile(".word 0x460300C4" : "+f"(dist)); /* sqrt.s $f3, $f3 (R5900 form, see eeSqrtf) */
+    speed = m_dyn.speed * 5280.0f / 3600.0f;
+    if (m_maxRange < dist)
+        m_gravity *= m_maxRange / dist;
+    time = dist / speed;
+    m_startZ = cs->trans.z;
+    m_vz = (target.z - m_startZ - m_gravity * time * time) / time;
+    m_launchTics = timerGetCurTics();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CalculateBallisticArc__6Weapon);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", InitWeapon__6Weapon);
 void Weapon::KillWeapon(void)
 {
@@ -539,7 +487,37 @@ void Weapon::KillWeapon(void)
 }
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", ricochetParticlesOffSurface__FiP8_fvectorN31);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", DetonateWeapon__6WeaponR9_hdResult);
-INCLUDE_ASM("asm/nonmatchings/game/Weapon", DispatchRangeBasedDamage__6Weapon);
+/* Blast damage: every interactive but the thrower within m_dyn.radius (Manhattan) of the weapon takes a blockable hit
+   (a big one for types 0x2B and 0x2C) along the weapon's last move. */
+void Weapon::DispatchRangeBasedDamage(void)
+{
+    int n = Interactives::s_numInteractives;
+    int i;
+
+    for (i = 1; i < n; i++) {
+        DbInteractive *d = Interactives::getInteractive(i);
+        _fvector *pos;
+
+        if (m_ownerId == i)
+            continue;
+        if (!d->m_cs)
+            continue;
+        pos = &d->m_cs->trans;
+        if (pos && mathfManhatDist(&m_cs->trans, pos) < m_dyn.radius) {
+            HitEvent *e = HitEvent::create();
+            FVECTOR dir;
+
+            e->pos = pos;
+            e->type = 2;
+            e->source = 12;
+            e->subtype = m_type;
+            if ((unsigned)(m_type - 0x2B) < 2)
+                e->type = 3;
+            vecSub(&dir, &m_cs->trans, &m_prevPos);
+            Interactives::dispatchHit(&dir, m_dyn.damage, m_ownerId, i);
+        }
+    }
+}
 /* Velocity per second from the last frame's move. */
 void Weapon::GetVel(_fvector &v)
 {
@@ -550,5 +528,85 @@ void Weapons::DecrementWeaponCount(Monster *m, int type)
 {
 }
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", AddWeaponEpNode__7WeaponsiP9_hierhead);
+/* A ground fire at pos (radius r) credited to interactive id; when all ten are burning, slot 0 is taken over. */
+#ifdef NON_MATCHING
+/* equivalent: 81/95 words, same size; pos and id swap $s1/$s2 */
+void Weapons::CreateFire(_fvector *pos, float r, int id)
+{
+    int i;
+    WeaponFlame *f;
+
+    for (i = 0; i < 10; i++)
+        if (!m_flames[i].active)
+            break;
+    if (i == 10) {
+        i = 0;
+        if (m_flames[0].light >= 0) {
+            PointLight *pl = &pointLights.lights[m_flames[0].light];
+            pl->active = 0;
+            pl->f38 = 0;
+        }
+    }
+    f = &m_flames[i];
+    f->active = 1;
+    f->age = 0;
+    f->radius = r;
+    f->fx = particleCreateFadingFlame(pos, 1800, 0, r / 25.0f);
+    f->ownerId = id;
+    vecCopy(&f->pos, pos);
+    f->light = pointLights.Create();
+    if (f->light >= 0) {
+        pointLights.lights[f->light].SetPos(pos->x, pos->y, pos->z + 50.0f);
+        pointLights.lights[f->light].SetColor(128.0f, 35.0f, 0);
+        pointLights.lights[f->light].f38 = 1;
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateFire__7WeaponsP8_fvectorfi);
+#endif
+/* Burns the living monsters inside each fire, keeps its light on the flame particle and puts it out after 1800 fields. */
+#ifdef NON_MATCHING
+/* equivalent: 115/160 words, same size; register allocation (this in $s5, game kept in $a1 instead of reloaded) */
+void Weapons::UpdateFlames(void)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < 10; i++) {
+        if (!m_flames[i].active)
+            continue;
+        for (j = 0; j < game->m_numSlots; j++) {
+            Monster *m = &game->m_slots[j];
+            FVECTOR d;
+
+            vecSub(&d, &m_flames[i].pos, &m->m_cs->trans);
+            if (vecLenSqX(&d) < m_flames[i].radius * m_flames[i].radius && 0.0f < m->m_health)
+                m->lightOnFire((float)GAME_FIELD(int, 0x1204A0), 2.0f, m_flames[i].ownerId);
+        }
+        m_flames[i].sound.updateGenericSound(&m_flames[i].pos);
+        char *p = (char *)particleGetParticle(m_flames[i].fx);
+        if (p) {
+            float z = *(float *)(p + 0x2D08);
+            if (m_flames[i].pos.z != z)
+                m_flames[i].pos.z = z;
+            if (m_flames[i].light >= 0)
+                pointLights.lights[m_flames[i].light].SetPos(m_flames[i].pos.x, m_flames[i].pos.y, m_flames[i].pos.z + 50.0f);
+        }
+        if (++m_flames[i].age > 1800) {
+            m_flames[i].active = 0;
+            m_flames[i].age = 0;
+            particleKillFx(m_flames[i].fx);
+            m_flames[i].sound.terminateGenericSound();
+            if (m_flames[i].light >= 0) {
+                PointLight *pl = &pointLights.lights[m_flames[i].light];
+                pl->active = 0;
+                pl->f38 = 0;
+                m_flames[i].light = -1;
+            }
+        }
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateFlames__7Weapons);
+#endif
+
