@@ -14,6 +14,7 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 - `tools/lote.ps1` liga com `-Check 1`. `resumo.csv`: `casados_pior`, `textura_difere_pior`, `fx_casados_pior`, `vif1_fora_de_passo` (deve ser 0), `uv/cor/alfa/abe/alpha_difere_pior`.
 - `WOTM_VU1CHECK_DUMP=<prefixo>` grava cada checagem em `<prefixo>_<g_frame>.csv`: triângulos (posição, TEX0, FBP, UV e RGBA por vértice, ABE, ALPHA, FGE, TEX0 inteiro), `hdr` (por programa: endereço do MSCAL, `ffffffff` = MSCNT, e qwords 5–8 e 17–20 do VU1), `luzes` (`paraL`, `D_0025B238`, `specularColor`), partículas (`fxcam`, `fxp`, `fxmat`) e origens dos SPRITE fora de `fx[]` (`rectorf`).
 - Diagnóstico da neblina: `WOTM_FOGSPLIT=1` (metade esquerda sem), `=2` (máscara; imprime os parâmetros), `=3` (alterna por quadro).
+- **Sem jogo (2026-10-15):** `WOTM_VU1CHECK_SNAP=<prefixo>` grava o instantâneo de cada quadro amostrado (`<prefixo>_<g_frame>.vu1snap`); `tools\vu1cmp.ps1 <arquivo ou pasta>` refaz a checagem em ~1 s por instantâneo, com a mesma saída, sem abrir o jogo (detalhes em `NATIVO.md`, "Instantâneo e checagem sem jogo"). Para investigar uma pista: gravar uma vez os quadros que a mostram, e rodar o `vu1cmp.ps1` na pasta a cada mudança em `native/`.
 
 </details>
 
