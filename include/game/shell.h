@@ -92,7 +92,7 @@ public:
     int m_vibration[2];   /* 0x2B94: vibration option of each player (TheGame::SetVibration) */
     int m_selFirst;       /* 0x2B9C: first selectable monster column of the select screen (1 while the first monster is locked) */
     int m_selLast;        /* 0x2BA0: one past the last selectable column (9 while the last monster is locked) */
-    char pad2BA4[0x2BA8 - 0x2BA4];
+    int m_inCinema;       /* 0x2BA4: an ActCinema is running (ActionDispatch doCinema/endCinema) */
     int m_restart;        /* 0x2BA8: 1 = the level is being restarted (ResetLevel, not UnpauseLevel) and needs the loading background */
     char pad2BAC[0x2BB0 - 0x2BAC];
     int m_levelNum;       /* 0x2BB0: index into GameLevelNames (0 = the level named on the command line) */

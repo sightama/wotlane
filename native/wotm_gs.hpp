@@ -94,6 +94,9 @@ inline uint32_t from16(uint32_t h) {   // A1B5G5R5
     const uint32_t r = (h & 31) * 255 / 31, g = ((h >> 5) & 31) * 255 / 31, b = ((h >> 10) & 31) * 255 / 31;
     return r | (g << 8) | (b << 16) | ((h & 0x8000) ? 0xFF000000u : 0u);
 }
+// Alfa cru do GS (0x80 = 1,0, ate 0xFF ~ 2,0), para quem mistura como o GS (As = At * Av / 16384, shader do Scene::draw):
+// CT32 como esta; CT24 e o bit 1 do CT16 dao 0x80 (TA0/TA1 = 1,0), o bit 0 do CT16 da 0.
+inline uint32_t from16Raw(uint32_t h) { return (from16(h) & 0x00FFFFFFu) | ((h & 0x8000) ? 0x80000000u : 0u); }
 
 struct Tex0 {
     uint32_t tbp0, tbw, psm, tw, th, tcc, tfx, cbp, cpsm, csm, csa;
@@ -118,8 +121,9 @@ inline void readPalette(const Vram &v, const Tex0 &t, uint32_t pal[256]) {
 }
 
 // Decodifica pixels de um upload linear (a ordem em que o `.TEX` os guarda: linhas de `w` pixels, T4 com o nibble baixo primeiro).
+// rawAlpha: alfa cru do GS nos formatos diretos (ver from16Raw); a paleta vem pronta de quem chama.
 inline bool decodeUpload(const uint8_t *pix, size_t avail, uint32_t w, uint32_t h, uint32_t psm, uint32_t csa,
-                         const uint32_t pal[256], std::vector<uint32_t> &out) {
+                         const uint32_t pal[256], std::vector<uint32_t> &out, bool rawAlpha = false) {
     if (w == 0 || h == 0 || w > 1024 || h > 1024) return false;
     out.assign(size_t(w) * h, 0);
     for (uint32_t y = 0; y < h; ++y)
@@ -129,9 +133,19 @@ inline bool decodeUpload(const uint8_t *pix, size_t avail, uint32_t w, uint32_t 
             switch (psm) {
             case T8: if (n >= avail) return false; c = pal[pix[n]]; break;
             case T4: { if (n / 2 >= avail) return false; const uint32_t b = pix[n / 2]; c = pal[(csa * 16 + ((n & 1) ? (b >> 4) : (b & 15))) & 255]; break; }
-            case CT32: { if (n * 4 + 4 > avail) return false; c = fixAlpha(uint32_t(pix[n * 4] | (pix[n * 4 + 1] << 8) | (pix[n * 4 + 2] << 16) | (uint32_t(pix[n * 4 + 3]) << 24))); break; }
-            case CT24: { if (n * 4 + 4 > avail) return false; c = uint32_t(pix[n * 4] | (pix[n * 4 + 1] << 8) | (pix[n * 4 + 2] << 16)) | 0xFF000000u; break; }
-            case CT16: case CT16S: { if (n * 2 + 2 > avail) return false; c = from16(uint32_t(pix[n * 2] | (pix[n * 2 + 1] << 8))); break; }
+            case CT32: {
+                if (n * 4 + 4 > avail) return false;
+                c = uint32_t(pix[n * 4] | (pix[n * 4 + 1] << 8) | (pix[n * 4 + 2] << 16) | (uint32_t(pix[n * 4 + 3]) << 24));
+                if (!rawAlpha) c = fixAlpha(c);
+                break;
+            }
+            case CT24: { if (n * 4 + 4 > avail) return false; c = uint32_t(pix[n * 4] | (pix[n * 4 + 1] << 8) | (pix[n * 4 + 2] << 16)) | (rawAlpha ? 0x80000000u : 0xFF000000u); break; }
+            case CT16: case CT16S: {
+                if (n * 2 + 2 > avail) return false;
+                const uint32_t v = uint32_t(pix[n * 2] | (pix[n * 2 + 1] << 8));
+                c = rawAlpha ? from16Raw(v) : from16(v);
+                break;
+            }
             default: return false;
             }
             out[n] = c;

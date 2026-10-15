@@ -4,6 +4,8 @@
 #include "hieri_types.h"
 #include "game/level_pickups.h"
 #include "game/pickup_sound.h"
+#include "game/pickup_type.h"
+#include "game/monster_anim.h"
 
 /* Base of the pickups (cars, military, subway, tanks ...). Virtual in retail (vptr at 0x10, set by the ctor; offset 0 holds a
    constant 5): derived pickups declare their own non-virtual overrides and keep vtable/ctor/__tf as asm. sizeof == 0x170. */
@@ -73,8 +75,14 @@ public:
     void resetHealth(void);
     void takeHit(_fvector *pos, float dmg, int x);
     void takeUseDamage(float dmg);
-    void updateGenerator(void);
-    void updateGenerator(void *p);
+    int updateGenerator(void);
+    int updateGenerator(void *p);
+    void updateCS(_fvector *pos, float (&m)[4][4], bool flip);
+    void initCollisSpheres(_fvector *p);
+    void swipeTrailEffect(void);
+    void initLocators(_hierhead *ep);
+    int init(_hierhead *ep, _fvector &pos, float (*m)[4], bool regen, ePickupType type);
+    int collisTestBatAttack(float a, unsigned byId, MonsterAnim anim, class HitHistory &hist, float b, float c, float d);
 };
 typedef char _size_Pickup[sizeof(Pickup) == 0xE0 ? 1 : -1];
 

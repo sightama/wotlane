@@ -166,8 +166,9 @@ int main(int argc, char **argv) {
         uint32_t nlin = 0;
         for (uint32_t id = 0; id < 400; ++id) {
             const uint32_t ptr = ram.u32(wotm::addr::texInfo + 16 * id) & 0x0FFFFFFF;
-            if (!ram.ok(ptr + 0x80) || ram.u8(ptr + 0x2B) != wotm::gs::T4) continue;
-            const uint32_t w = ram.u16(ptr + 0x24), h = ram.u16(ptr + 0x26), bw = std::max<uint32_t>(1, ram.u8(ptr + 0x2A));
+            const wotm::UploadHdr hd = wotm::UploadHdr::read(ram, ptr);
+            if (!ram.ok(ptr + 0x80) || hd.psm != wotm::gs::T4) continue;
+            const uint32_t w = hd.w, h = hd.h, bw = std::max<uint32_t>(1, hd.bw);
             if (w < 16 || h < 16 || w > 256 || h > 256 || !ram.ok(ptr + 0x80 + w * h / 2)) continue;
             double lin = 0, sw = 0;
             uint32_t n = 0;
@@ -206,7 +207,7 @@ int main(int argc, char **argv) {
     }
     if (const char *fxd = std::getenv("WOTM_FXDUMP")) {   // depuracao: texturas dos efeitos (fx[] em 0x5BA280, 98 x 12000 bytes) decodificadas da VRAM do dump
         std::unordered_map<uint64_t, int> done;
-        for (uint32_t i = 1; i < 98; ++i) {
+        for (uint32_t i = 1; i < wotm::fxaddr::count; ++i) {
             const uint32_t b = 0x005BA280u + i * 12000u;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t t0p = ram.u32(b + 0x2EBC);

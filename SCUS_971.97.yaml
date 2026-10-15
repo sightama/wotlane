@@ -72,7 +72,7 @@ segments:
     subsegments:
       # BEGIN text TUs (tools/apply_tus.py)
       - [0x000000, asm, crt0]  # asm, 3 funcs, name: manual
-      - [0x000100, asm, game/ActionDispatch]  # c++, 31 funcs, name: manual
+      - [0x000100, cpp, game/ActionDispatch]  # c++, 31 funcs, name: manual
       - [0x0012A0, cpp, game/Ai]  # c++, 46 funcs, name: guess
       - [0x002BB8, cpp, game/AiAction]  # c++, 30 funcs, name: manual
       - [0x003760, asm, game/Ai_2]  # c++, 7 funcs, name: guess
@@ -118,7 +118,7 @@ segments:
       - [0x03E928, cpp, game/HeliPickup]  # c++, 12 funcs, name: guess
       - [0x03F6A0, cpp, game/HeliVehicle]  # c++, 10 funcs, name: guess
       - [0x03FD40, asm, game/HeliVehicleNav]  # c++, 25 funcs, name: guess
-      - [0x041608, asm, game/HomingBug]  # c++, 25 funcs, name: guess
+      - [0x041608, cpp, game/HomingBug]  # c++, 25 funcs, name: guess
       - [0x043038, cpp, game/Hud]  # c++, 26 funcs, name: guess
       - [0x047160, cpp, game/Interactives]  # c++, 10 funcs, name: guess
       - [0x047450, cpp, game/island]  # c++, 7 funcs, name: guess
@@ -511,8 +511,7 @@ segments:
       - [0x5E65A8, data, sce/libkernl/libosd]
       - [0x5E6D68, data, sce/libkernl/tlbfunc]
       - [0x5E7484, data, newlib/libc/machine/r5900/memcmp]
-      - [0x5E7500, rodata, crt0]
-      - [0x5E7540, rodata, game/ActionDispatch]
+      - [0x5E7500, .rodata, game/ActionDispatch]
       - [0x5E7598, .rodata, game/AiAction]
       - [0x5E7720, rodata, game/Ai_2]
       - [0x5E7A10, .rodata, game/AiBrain]
@@ -542,7 +541,7 @@ segments:
       - [0x5E9750, .rodata, game/GrappleThrow]
       - [0x5E98C0, .rodata, game/HeliPickup]
       - [0x5E9980, rodata, game/HeliVehicleNav]
-      - [0x5E99A0, rodata, game/HomingBug]
+      - [0x5E99A0, .rodata, game/HomingBug]
       - [0x5EA8F0, .rodata, game/Hud]
       - [0x5EAB50, .rodata, game/Interactives]
       - [0x5EABA0, rodata, game/McFile]

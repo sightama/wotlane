@@ -387,7 +387,8 @@ public:
 /* Sound action of an interactive (the timed building collapse). */
 class ActPlaySound {
 public:
-    char pad0[0xC];
+    char pad0[8];                   // 0x0: ActHead
+    unsigned m_soundId;             // 0x8: played at once when m_time is 0
     unsigned m_time;                // 0xC: fields
     _fvector m_offset;              // 0x10: where the second (late) sound plays, relative to the first
 };

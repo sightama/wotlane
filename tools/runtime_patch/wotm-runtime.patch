@@ -1537,7 +1537,7 @@ index 45cb9d2..31fbce5 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..9f20ba7 100644
+index b02c7ca..a63dcc0 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,9 @@
@@ -1662,7 +1662,7 @@ index b02c7ca..9f20ba7 100644
                  m_vu1MscntCallback(runTop, runItop);
              continue;
          }
-@@ -495,12 +515,39 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -495,12 +515,41 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
              if (qwCount > availableQw)
                  qwCount = availableQw;
  
@@ -1700,6 +1700,8 @@ index b02c7ca..9f20ba7 100644
 -                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
 +                if (!g_wotmVu1Tap && !g_wotmVif1Keep)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa)
 +                    submitGifPacket(GifPathId::Path2, data + directPos, directQw * 16, true, directHl);
++                else if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: a checagem acompanha os registradores (FRAME, TEX0) que chegam pelo PATH2
++                    g_wotmGifTap(0u, data + directPos, directQw * 16);
  
 -                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
 +                const uint32_t pendingImageQw = pendingGifImageQwc(data + directPos, directQw * 16u);
@@ -3580,10 +3582,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..0b9d58d
+index 0000000..ea4d661
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,764 @@
+@@ -0,0 +1,842 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -3610,6 +3612,7 @@ index 0000000..0b9d58d
 +#ifdef WOTM_HAVE_NATIVE
 +#include <array>
 +#include <map>
++#include <set>
 +#include <tuple>
 +
 +namespace wotm_vu1check
@@ -3619,7 +3622,7 @@ index 0000000..0b9d58d
 +constexpr uint64_t kTexMask = 0x3FFFFFFFFull | (0x1FFFFFFull << 37);
 +constexpr uint64_t kTexUnknown = ~0ull;
 +
-+struct Tri { uint32_t prog; float x[3], y[3]; uint64_t tex = 0; uint8_t slot = 0; };   // slot: so no nativo
++struct Tri { uint32_t prog; float x[3], y[3]; uint64_t tex = 0; uint8_t slot = 0; uint16_t fbp = 0xFFFF; };   // slot: so no nativo; fbp: FRAME do VU1 (0xFFFF = nao visto)
 +
 +struct WTri { float p[3][3]; uint64_t tex; uint8_t slot; };   // triangulo nativo em coordenadas de mundo
 +
@@ -3729,6 +3732,11 @@ index 0000000..0b9d58d
 +        v.back[a] = -f[a] / fl;
 +        v.depth[a] = f[a] / fl;
 +        v.depth[3] -= v.depth[a] * cam.eye[a];
++    }
++    v.ox[3] = v.oy[3] = 0.f;   // x e y de vista (faixas: perpendicular na tela)
++    for (int a = 0; a < 3; ++a) {
++        v.ox[a] = v.right[a]; v.oy[a] = v.up[a];
++        v.ox[3] -= v.right[a] * cam.eye[a]; v.oy[3] -= v.up[a] * cam.eye[a];
 +    }
 +    return v;
 +}
@@ -3869,11 +3877,13 @@ index 0000000..0b9d58d
 +// Triangulo impar da tira com os dois primeiros trocados, como o nativo (orientacao igual nos dois lados).
 +// TEX0_1/TEX0_2 (PACKED 0x6/0x7 ou A+D) valem ate a proxima troca, entre pacotes: cada triangulo leva o do contexto do PRIM.
 +uint64_t g_tex0[2] = {kTexUnknown, kTexUnknown};
++uint16_t g_fbp[2] = {0xFFFF, 0xFFFF};   // FRAME_1/FRAME_2.FBP em vigor (A+D 0x4C/0x4D)
 +void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
 +{
 +    uint32_t prim = 4, nv = 0;
 +    float vx[3] = {}, vy[3] = {};
 +    auto vertex = [&](float x, float y, bool kick) {
++        if (!prog) return;   // PATH2 (DIRECT do VIF1): so os registradores
 +        vx[0] = vx[1]; vy[0] = vy[1];
 +        vx[1] = vx[2]; vy[1] = vy[2];
 +        vx[2] = x; vy[2] = y;
@@ -3883,7 +3893,8 @@ index 0000000..0b9d58d
 +            const int a = (type == 4 && ((nv - 1) & 1)) ? 1 : 0;
 +            const uint64_t t0 = g_tex0[(prim >> 9) & 1];
 +            const uint64_t tex = !((prim >> 4) & 1) ? 0 : t0 == kTexUnknown ? kTexUnknown : t0 & kTexMask;
-+            const Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}, tex};
++            Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}, tex};
++            t.fbp = g_fbp[(prim >> 9) & 1];
 +            ++g_vuKicked;
 +            if (!inScreen(t)) ++g_vuOff;
 +            else if (!degenerate(t)) g_vu.push_back(t);
@@ -3917,6 +3928,7 @@ index 0000000..0b9d58d
 +                    else if (reg == 0x6 || reg == 0x7) g_tex0[reg - 0x6] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
 +                    else if (reg == 0xE && ((w[2] & 0xFF) == 0x06 || (w[2] & 0xFF) == 0x07))
 +                        g_tex0[(w[2] & 0xFF) - 0x06] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
++                    else if (reg == 0xE && ((w[2] & 0xFF) == 0x4C || (w[2] & 0xFF) == 0x4D)) g_fbp[(w[2] & 0xFF) - 0x4C] = uint16_t(w[0] & 0x1FF);
 +                }
 +        } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
 +        else pos += nloop * 16;
@@ -3938,6 +3950,18 @@ index 0000000..0b9d58d
 +
 +// Para cada triangulo do VU1, o nativo ainda livre de menor soma de distancias entre vertices (em qualquer ordem), com cada vertice
 +// a ate 1 px (grade de 4 px pelo centroide). vuPair = indice do nativo casado (-1 = nenhum); natHit marca os nativos casados.
++// Mesma textura? TBP 0 no nativo: objeto da OT de alfa; o texmGetTextureAddrs do fim do hier preenche o TBP so na copia do pacote de
++// alfa, nao no polyPkt de onde sai o TEX0 de referencia (o nativo desenha pela textura do texInfo, sem esse TBP).
++inline bool sameTex(uint64_t vuTex, uint64_t natTex)
++{
++    if (vuTex == kTexUnknown) return false;
++    const bool noTbp = natTex && !(natTex & 0x3FFFu);
++    return noTbp ? (vuTex & ~0x3FFFull) == natTex : vuTex == natTex;
++}
++
++// Tres rodadas: (2) so pares de mesma textura; (1) triangulos do VU1 com alguma textura que o objeto nativo usa; (0) o resto. Sem
++// isso, geometria repetida no mesmo lugar (camadas do objeto em slots diferentes, a passada da sombra projetada, cuja textura nenhum
++// objeto nativo tem) trocava os pares e acusava textura diferente.
 +uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vector<int> &vuPair, std::vector<char> &natHit)
 +{
 +    constexpr float kTol = 1.f;
@@ -3947,8 +3971,18 @@ index 0000000..0b9d58d
 +        grid.emplace(cell((nat[i].x[0] + nat[i].x[1] + nat[i].x[2]) / 3.f, (nat[i].y[0] + nat[i].y[1] + nat[i].y[2]) / 3.f), i);
 +    vuPair.assign(vu.size(), -1);
 +    natHit.assign(nat.size(), 0);
++    std::vector<uint64_t> natTexs;
++    for (const Tri &n : nat) natTexs.push_back(n.tex);
++    std::sort(natTexs.begin(), natTexs.end());
++    natTexs.erase(std::unique(natTexs.begin(), natTexs.end()), natTexs.end());
++    std::vector<char> known(vu.size(), 0);
++    for (size_t i = 0; i < vu.size(); ++i)
++        for (uint64_t nt : natTexs)
++            if (sameTex(vu[i].tex, nt)) { known[i] = 1; break; }
 +    uint32_t matched = 0;
++    for (int texRound = 2; texRound >= 0; --texRound)
 +    for (size_t i = 0; i < vu.size(); ++i) {
++        if (vuPair[i] >= 0 || (texRound == 1 && !known[i])) continue;
 +        const Tri &t = vu[i];
 +        const float cx = (t.x[0] + t.x[1] + t.x[2]) / 3.f, cy = (t.y[0] + t.y[1] + t.y[2]) / 3.f;
 +        int best = -1;
@@ -3959,6 +3993,7 @@ index 0000000..0b9d58d
 +                for (auto g = range.first; g != range.second; ++g) {
 +                    if (natHit[g->second]) continue;
 +                    const Tri &n = nat[g->second];
++                    if (texRound == 2 && !sameTex(t.tex, n.tex)) continue;
 +                    float cost = 0.f;
 +                    bool all = true;
 +                    for (int a = 0; a < 3 && all; ++a) {
@@ -4143,7 +4178,14 @@ index 0000000..0b9d58d
 +        if (const int sys = fxOf(r.first); sys >= 0) fxVu[uint32_t(sys)][g_progChain[r.first - 1]].rects.push_back(r.second);
 +        else ++rectsOrphan;
 +    }
++    // Render-to-texture: triangulos desenhados num FRAME que o proprio quadro usa como textura (o quadro da sombra projetada, FBP
++    // 0x1F3 = tbp 0x3E60, recebe as silhuetas sem textura dos objetos que fazem sombra) nao vao para a tela; ficam fora.
++    std::set<uint32_t> texTbp;
++    for (const Tri &t : g_vu)
++        if (t.tex && t.tex != kTexUnknown) texTbp.insert(uint32_t(t.tex & 0x3FFF));
++    uint32_t rtt = 0;
 +    for (const Tri &t : g_vu) {
++        if (t.fbp != 0xFFFF && texTbp.count(uint32_t(t.fbp) * 32u)) { ++rtt; continue; }
 +        const uint32_t chain = g_progChain[t.prog - 1];
 +        const uint32_t key = objectOf(g_nats[chain], t.prog);
 +        if (key) {
@@ -4167,8 +4209,8 @@ index 0000000..0b9d58d
 +    // texDifere: casados com textura diferente; vuTex/natTex/natSlot: o par diferente mais comum do objeto
 +    struct Row { uint32_t pp; const NatObj *o; uint32_t vu, nat, falta, sobra, costas, texDifere; uint64_t vuTex, natTex; uint8_t natSlot; };
 +    std::vector<Row> rows;
-+    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
-+    uint32_t totTexDifere = 0, totTexUnknown = 0;
++    uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, totRep = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
++    uint32_t totTexDifere = 0, totTexUnknown = 0, totShadowOnly = 0;
 +    std::vector<uint32_t> keys;   // objetos da 1a coleta e os que o VU1 desenhou
 +    for (const auto &kv : g_nats[0]) keys.push_back(kv.first);
 +    for (const auto &kv : vuBy) keys.push_back(kv.first);
@@ -4188,27 +4230,63 @@ index 0000000..0b9d58d
 +        }
 +        const auto oit = g_nats[chain].find(key);
 +        if (oit == g_nats[chain].end() || oit->second.skip) continue;
-+        const NatObj &o = oit->second;
-+        bad += o.badVerts;
++        const NatObj *op = &oit->second;
 +        // camera: a do hier que montou o pacote (copiada nele); uma cadeia do passe 0 pode sair pela interrupcao ja dentro do passe 1,
-+        // entao vale a que casar mais
-+        std::vector<Tri> nat = project(o.tris, g_cam[0], key);
-+        std::vector<int> vuPair, vuPair1;
-+        std::vector<char> natHit, natHit1;
-+        uint32_t m = match(vu, nat, vuPair, natHit);
-+        if (m < vu.size()) {
-+            std::vector<Tri> nat1 = project(o.tris, g_cam[1], key);
-+            const uint32_t m1 = match(vu, nat1, vuPair1, natHit1);
-+            if (m1 > m) { m = m1; nat.swap(nat1); vuPair.swap(vuPair1); natHit.swap(natHit1); }
++        // entao vale a que casar mais. Coleta: a da cadeia e, se nao casar tudo, a da 1a cadeia (a OT de alfa so sai no fim do quadro,
++        // quando a animacao de pecas presas aos monstros ja pode ter andado; o pacote leva as matrizes do hier).
++        std::vector<Tri> nat;
++        std::vector<int> vuPair;
++        std::vector<char> natHit;
++        uint32_t m = 0;
++        bool first = true;
++        const NatObj *cands[2] = {op, chain && g_nats[0].count(key) ? &g_nats[0].at(key) : nullptr};
++        for (const NatObj *cand : cands) {
++            if (!cand || (!first && m >= vu.size())) continue;
++            for (int ci = 0; ci < 2; ++ci) {
++                if (!first && m >= vu.size()) break;
++                std::vector<Tri> n1 = project(cand->tris, g_cam[ci], key);
++                std::vector<int> p1;
++                std::vector<char> h1;
++                const uint32_t m1 = match(vu, n1, p1, h1);
++                if (first || m1 > m) { m = m1; nat.swap(n1); vuPair.swap(p1); natHit.swap(h1); op = cand; }
++                first = false;
++            }
++        }
++        const NatObj &o = *op;
++        bad += o.badVerts;
++        // Passadas repetidas: o VU1 redesenha o mesmo triangulo (a sombra projetada repassa cada objeto que a recebe, uma vez por
++        // monstro, na OT de alfa: psAttachDmaToAlpha). O que sobra e casa com um nativo ja casado conta como repetido, nao como falta.
++        uint32_t rep = 0;
++        for (int round = 0; round < 4 && m + rep < vu.size(); ++round) {
++            std::vector<size_t> idx;
++            std::vector<Tri> rest;
++            for (size_t i = 0; i < vu.size(); ++i)
++                if (vuPair[i] == -1) { idx.push_back(i); rest.push_back(vu[i]); }
++            std::vector<int> pair2;
++            std::vector<char> hit2;
++            if (!match(rest, nat, pair2, hit2)) break;
++            for (size_t j = 0; j < rest.size(); ++j)
++                if (pair2[j] >= 0) { vuPair[idx[j]] = -2; ++rep; }   // -2 = repetido (fora da comparacao de textura)
 +        }
 +        // textura dos casados: a do GS no XGKICK contra a que o nativo escolheu para o slot da secao
++        // Casado so pela sombra: textura PSMCT32 que o objeto nativo nao usa (o quadro da sombra projetada, tbp 3e60) num triangulo que
++        // nenhuma passada base casou; fica fora do "textura difere".
 +        uint32_t texDifere = 0;
 +        std::map<std::tuple<uint64_t, uint64_t, uint8_t>, uint32_t> texPairs;
++        std::vector<uint64_t> natTexs;
++        for (const Tri &n : nat) natTexs.push_back(n.tex);
++        std::sort(natTexs.begin(), natTexs.end());
++        natTexs.erase(std::unique(natTexs.begin(), natTexs.end()), natTexs.end());
 +        for (size_t i = 0; i < vu.size(); ++i) {
 +            if (vuPair[i] < 0) continue;
 +            const Tri &n = nat[size_t(vuPair[i])];
 +            if (vu[i].tex == kTexUnknown) ++totTexUnknown;
-+            else if (vu[i].tex != n.tex) { ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}]; }
++            else if (!sameTex(vu[i].tex, n.tex)) {
++                const bool shadow = vu[i].tex && wotm::gs::Tex0::decode(vu[i].tex).psm == 0 &&
++                                    std::none_of(natTexs.begin(), natTexs.end(), [&](uint64_t nt) { return sameTex(vu[i].tex, nt); });
++                if (shadow) { ++totShadowOnly; continue; }
++                ++texDifere; ++texPairs[{vu[i].tex, n.tex, n.slot}];
++            }
 +        }
 +        std::tuple<uint64_t, uint64_t, uint8_t> texWorst{};
 +        uint32_t texWorstN = 0;
@@ -4221,10 +4299,10 @@ index 0000000..0b9d58d
 +        const bool culled = vuBack * 50 <= vu.size();
 +        for (size_t i = 0; i < nat.size(); ++i)
 +            if (!natHit[i]) ++((culled && area2(nat[i]) > 0.f) ? costas : sobra);
-+        const uint32_t nVu = uint32_t(vu.size()), nNat = uint32_t(nat.size()) - costas, falta = nVu - m;
++        const uint32_t nVu = uint32_t(vu.size()), nNat = uint32_t(nat.size()) - costas, falta = nVu - m - rep;
 +        objVu += nVu > 0; objNat += nNat > 0; objBoth += nVu && nNat;
-+        totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas;
-+        rows.push_back({key, &o, nVu, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst)});
++        totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas; totRep += rep;
++        rows.push_back({key, &o, nVu - rep, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst)});
 +        if (g_dump) {
 +            auto row = [&](const char *side, int hit, const Tri &t) {
 +                std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llx\n", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2],
@@ -4237,19 +4315,20 @@ index 0000000..0b9d58d
 +    }
 +    uint32_t orphanTris = 0;
 +    for (const auto &kv : orphan) orphanTris += kv.second;
-+    const double pct = totVu ? 100.0 * (totVu - totFalta) / totVu : 0.0;
-+    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u nativo %u casados %.1f%% faltam %u sobram %u "
-+                         "(costas %u) | textura difere %u, sem TEX0 %u | XGKICK %u tris, %u fora da tela | particulas %u tris, sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
++    const double pct = totVu ? 100.0 * (totVu - totRep - totFalta) / (totVu - totRep) : 0.0;
++    std::fprintf(stderr, "[vu1check] g=%u objetos vu %u nativo %u ambos %u | tris vu %u (repetidos %u) nativo %u casados %.1f%% faltam %u sobram %u "
++                         "(costas %u) | textura difere %u, sem TEX0 %u, so pela sombra %u | XGKICK %u tris, %u fora da tela, %u em textura (sombra) | particulas %u tris, sem objeto %u tris, cadeias %u (coleta nativa %.0f + %.0f ms), programas %zu, "
 +                         "vertices nao finitos %u, VIF1 fora de passo %u\n",
-+                 g_frame, objVu, objNat, objBoth, totVu, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, g_vuKicked, g_vuOff, fxTris, orphanTris, g_chains,
++                 g_frame, objVu, objNat, objBoth, totVu, totRep, totNat, pct, totFalta, totSobra, totCostas, totTexDifere, totTexUnknown, totShadowOnly, g_vuKicked, g_vuOff, rtt, fxTris, orphanTris, g_chains,
 +                 g_walkMs, g_projMs, g_progs.size(), bad, g_wotmVif1Bad);
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.falta + a.sobra > b.falta + b.sobra; });
 +    int shown = 0;
 +    for (const Row &r : rows) {
 +        if (shown >= 8 || r.falta + r.sobra < 4 || 10 * (r.falta + r.sobra) < std::max(r.vu, r.nat)) continue;
 +        ++shown;
-+        std::fprintf(stderr, "[vu1check]   pkt %x no %x tex %u%s itens %d: vu %u nativo %u faltam %u sobram %u (costas %u)\n", r.pp,
-+                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.o->items, r.vu, r.nat, r.falta, r.sobra, r.costas);
++        std::fprintf(stderr, "[vu1check]   pkt %x no %x tex %u%s itens %d: vu %u nativo %u faltam %u sobram %u (costas %u) flags %x\n", r.pp,
++                     r.o->node, unsigned(r.o->tex), r.o->skinned ? " skinned" : "", r.o->items, r.vu, r.nat, r.falta, r.sobra, r.costas,
++                     unsigned(g_rdram[r.o->node + 0xC] | (g_rdram[r.o->node + 0xD] << 8)));   // flags do OBJECT (0x8000 = OT de alfa)
 +    }
 +    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.texDifere > b.texDifere; });
 +    auto texStr = [](uint64_t v, char *s, size_t n) {
@@ -4311,6 +4390,7 @@ index 0000000..0b9d58d
 +        g_vuRects.clear();
 +        g_vuRectsKicked = 0;
 +        g_tex0[0] = g_tex0[1] = kTexUnknown;
++        g_fbp[0] = g_fbp[1] = 0xFFFF;
 +        g_chains = 0;
 +        g_walkMs = g_projMs = 0.0;
 +        g_armed = true;
@@ -4349,10 +4429,10 @@ index 0000000..0b9d58d
 +void wotmVu1CheckInstall(PS2Runtime &) {}
 +#endif
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..0119198 100644
+index 563bcbd..42decd7 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,12 +164,59 @@ namespace
+@@ -164,12 +164,67 @@ namespace
      }
  }
  
@@ -4397,6 +4477,14 @@ index 563bcbd..0119198 100644
 +static PS2Runtime::RecompiledFunction g_particleDraw = nullptr;
 +static void hook_particleDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
++    // Quadro amostrado pela checagem VU1 x nativo: o fim do hier deixa o ultimo pacote (a OT de alfa com os objetos que a travessia
++    // guarda na hierAlpList: OBJECT 0x8000, e 0x4000 durante o fade de LOD) para o hierFlushObjQ da interrupcao do DMA do VIF1, que
++    // no PS2 chega antes daqui. Zerar os contadores sem disparar perdia a OT, e esses objetos saiam como "so o nativo desenha".
++    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(0x006F87A0u) || READ32(0x006F87A4u)))
++    {
++        R5900Context temp = *ctx;
++        g_origFlushObjQ(rdram, &temp, runtime);
++    }
 +    WRITE32(0x006F87A0u, 0u);
 +    WRITE32(0x006F87A4u, 0u);
 +    g_particleDraw(rdram, ctx, runtime);
@@ -4412,7 +4500,7 @@ index 563bcbd..0119198 100644
  
      try
      {
-@@ -220,12 +267,77 @@ int main(int argc, char *argv[])
+@@ -220,12 +275,77 @@ int main(int argc, char *argv[])
              return 1;
          }
  

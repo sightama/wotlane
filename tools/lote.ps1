@@ -9,7 +9,7 @@
 # Saida em <runtime>\lote\<data_hora>\: <jogador>_<ias com +>_<fase>.log (linhas [partida]/[vigia]/[CRASH]/[vu1check] e a fase/monstros
 # carregados), .png (a tela ~12 s antes do fim), os dumps do vigia e resumo.csv.
 #
-# Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0] [-Check 10]
+# Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0] [-Check 1]
 #   Indices: monstros e fases como no GLOSSARIO.md (MonsterLongNames, GameLevelNames). Sem -Opponents, usa a mesma lista de -Monsters.
 #   -AIs: quantidades de IAs (1 a 3) que se alternam. -Max N para depois de N combinacoes (0 = todas). -Check 0 desliga a comparacao.
 #   As listas sao texto separado por virgula (com -File o PowerShell nao converte "1,2" em lista).
@@ -21,7 +21,7 @@ param(
     [int]$Seed = 1,
     [int]$Secs = 180,
     [int]$Max = 0,
-    [int]$Check = 10
+    [int]$Check = 1
 )
 $ErrorActionPreference = 'Stop'
 function Split-Ints([string]$s) { @($s -split ',' | Where-Object { $_.Trim() } | ForEach-Object { [int]$_.Trim() }) }
@@ -39,7 +39,7 @@ $out = Join-Path $runtime ("lote\" + (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
 New-Item -ItemType Directory -Force $out | Out-Null
 $disc = "$runtime\discroot"
 $summary = Join-Path $out 'resumo.csv'
-'jogador,ias,fase,segundos,rodadas,vitorias,congelou,lento,crash,saiu_antes,checagens,casados_pior,objetos_divergentes,textura_difere_pior,objetos_textura,fx_casados_pior,fx_tipos_divergentes,vif1_fora_de_passo' | Set-Content $summary -Encoding ASCII
+'jogador,ias,fase,segundos,rodadas,vitorias,congelou,lento,crash,saiu_antes,checagens,casados_pior,objetos_divergentes,textura_difere_pior,objetos_textura,fx_casados_pior,fx_tipos_divergentes,vif1_fora_de_passo,uv_difere_pior,cor_difere_pior,alfa_difere_pior,abe_difere_pior,alpha_difere_pior' | Set-Content $summary -Encoding ASCII
 
 # Cada combinacao: @(jogador, ia1, [ia2, [ia3,]] fase)
 $rng = New-Object System.Random $Seed
@@ -111,8 +111,13 @@ foreach ($c in $combos) {
     # codigos VIF1 invalidos desde o boot (o VIF1 saiu de passo e leu dados como comandos; pista 5 do VU1CHECK.md): a maior contagem vista
     $vifBad = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objetos .* VIF1 fora de passo (\d+)') { [int]$Matches[1] } })
     $vifBadMax = if ($vifBad.Count) { ($vifBad | Measure-Object -Maximum).Maximum } else { '' }
-    '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash,
-        [int]$early, $checks.Count, $worst, $diverging, $texWorst, $texObjs, $fxWorst, $fxTypes, $vifBadMax | Add-Content $summary -Encoding ASCII
+    # atributos dos triangulos casados (uv, cor, alfa, ABE, ALPHA): o pior numero de triangulos diferentes num quadro
+    $attrWorst = foreach ($name in 'uv difere', 'cor difere', 'alfa difere', 'ABE difere', 'ALPHA difere') {
+        $v = @($lines | ForEach-Object { if ($_ -match ('\[vu1check\] g=\d+ atributos: .*\| ' + $name + ' (\d+)')) { [int]$Matches[1] } })
+        if ($v.Count) { ($v | Measure-Object -Maximum).Maximum } else { '' }
+    }
+    '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash,
+        [int]$early, $checks.Count, $worst, $diverging, $texWorst, $texObjs, $fxWorst, $fxTypes, $vifBadMax, $attrWorst[0], $attrWorst[1], $attrWorst[2], $attrWorst[3], $attrWorst[4] | Add-Content $summary -Encoding ASCII
     if ($frozen -or $crash -or $early) { Write-Host ("   PROBLEMA: congelou={0} crash={1} saiu_antes={2}" -f $frozen, $crash, [int]$early) -ForegroundColor Red }
     else { Write-Host ("   ok: {0} rodadas, lento={1}" -f $rounds.Count, $slow) }
 }

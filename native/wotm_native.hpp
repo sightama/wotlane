@@ -48,6 +48,10 @@ constexpr uint32_t world = 0x006F87C4;            // _worldctx *world (ep@0, sky
 constexpr uint32_t worldCtx = 0x00445CD0;         // _worldctx worldCtx[5] (0x1F0 cada)
 constexpr uint32_t viewInfo = 0x006E1900;         // 5 x 0x14: [0] = _cs* da camera, [1] = viewport*
 constexpr uint32_t worldToScreenMat = 0x006E1FD0; // 5 x 0x40
+constexpr uint32_t paraL = 0x006DFC00;            // float[4][4]: linhas x, y, z; colunas = luzes paralelas 0-2 e vetor-meio do especular, x32
+constexpr uint32_t vu1FogParams = 0x0025B280;     // float[4] (D_0025B280, qword 21 do VU1): fogFA, fogMaxVal, 1, fogFB (fogUpdate)
+constexpr uint32_t fogColorCtx = 0x00445580;      // u64[6]: pacote do FOGCOL que o fogUpdate manda ao GS; [4] = R | G << 8 | B << 16
+constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): cor/128 das luzes 0-2 (linhas); a linha 3 e o ambiente/especular
 constexpr uint32_t csActiveList = 0x0043A2C0;     // CsPool::m_activeList (CsNode: cs@0, next@4)
 constexpr uint32_t csHPActiveList = 0x0043A2E0;   // CsPool::m_HPActiveList
 constexpr uint32_t tempVramTexAddr = 0x006F8818;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
@@ -59,6 +63,17 @@ constexpr uint32_t psLitDirWs = 0x0054CC90;      // direcao da luz das sombras (
 constexpr uint32_t psShadowIntens = 0x006F8820;  // float, 80 = 0,625 (escala do GS)
 constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 }
+
+// Pacote de upload de uma textura (`texInfo[id]`): o `texmSetupTexture` monta em +0x20 o `sceGsLoadImage` do SDK
+// (`sceGsSetDefLoadImage`): BITBLTBUF em +0x30 (DBW nos bits 48..53, DPSM 56..61), TRXREG em +0x50 (RRW 0..11, RRH 32..43); pixels
+// lineares a partir de +0x80. (Ate 2026-10-15 o stub do runtime gravava ali uma struct propria, com largura em +0x24, altura em +0x26 e
+// psm em +0x2B; dumps de RAM daquela epoca nao servem mais.)
+struct UploadHdr {
+    uint32_t w, h, psm, bw;
+    static UploadHdr read(const Ram &ram, uint32_t ptr) {
+        return {ram.u16(ptr + 0x50) & 0xFFFu, ram.u16(ptr + 0x54) & 0xFFFu, ram.u8(ptr + 0x37) & 0x3Fu, ram.u8(ptr + 0x36) & 0x3Fu};
+    }
+};
 
 }  // namespace wotm
 
@@ -134,6 +149,9 @@ struct Vtx {
     uint8_t slot = 0;                 // indice do gsTexCtx/texId da secao (palavra 3 da tag GIF = 1 + 3*slot; 0 = slot 0); kSlotNoTex = sem textura
     uint8_t sub = 0;                  // indice do sub-pacote da cadeia (diagnostico)
     uint8_t isAdc = 0;                // triangulo normalmente descartado pelo ADC (so com WOTM_SHOWADC)
+    uint8_t cull = 0;                 // secao com culling (bit 15 do seletor): o VU1 descarta a face de costas (Scene::backFacing)
+    int8_t nx = 0, ny = 0, nz = 0;    // normal (V3-8 @0x175, mesmo indice da posicao; modulo ~127): luz por vertice (Scene::vertexRgb)
+    uint8_t fge = 0;                  // PRIM.FGE da secao: o GS aplica a neblina (Scene::draw, shader)
 };
 
 struct MeshData {
@@ -149,6 +167,7 @@ struct MeshData {
     uint8_t curSub = 0;   // sub-pacote em decodificacao (diagnostico)
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
     uint8_t curTme = 1;   // PRIM.TME em vigor (tag GIF com PRE; sem PRE o GS mantem o PRIM anterior)
+    uint8_t curFge = 0;   // PRIM.FGE em vigor (neblina; mesma regra do TME)
     uint32_t posTot = 0, posUsed = 0;   // posicoes carregadas / usadas por algum indice (diagnostico)
     uint32_t dropAdc = 0, dropDegen = 0;   // triangulos descartados por ADC / degenerados (diagnostico)
     uint32_t secTot = 0, secBad = 0, secBadEx = 0;   // secoes de tira / com nloop != indices (diagnostico)
@@ -179,6 +198,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
 
     struct P3 { float x, y, z, w; uint8_t cx, cy, cz; };
     std::vector<P3> pos;
+    std::vector<std::array<int8_t, 3>> nrm;   // normais (V3-8 @0x175), pelo indice da posicao
     std::vector<char> usedPos;   // diagnostico: posicao referenciada por algum indice
     uint32_t hdrAddr = 0, nloop = 0, hdrSel = 0;
     bool haveHdr = false;
@@ -223,9 +243,12 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                 const P3 p = j < pos.size() ? pos[j] : P3{0, 0, 0, 1.f, 0, 0, 0};
                 Vtx v{};
                 v.x = p.x; v.y = p.y; v.z = p.z; v.w = p.w; v.cx = p.cx; v.cy = p.cy; v.cz = p.cz;
-                const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: flag (os predios usam 0x8001, 0x8004...)
+                if (j < nrm.size()) { v.nx = nrm[j][0]; v.ny = nrm[j][1]; v.nz = nrm[j][2]; }
+                const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: culling da secao (os predios usam 0x8001, 0x8004...)
                 if (sel >= 1 && sel <= 13) md.curSlot = uint8_t((sel - 1) / 3);   // 0 = mantem a textura anterior
                 v.slot = md.curTme ? md.curSlot : kSlotNoTex;
+                v.fge = md.curFge;
+                v.cull = uint8_t((hdrSel >> 15) & 1);
                 v.sub = md.curSub;
                 md.slotMask |= 1u << v.slot;
                 if (k < rgba.size()) { v.r = rgba[k][0]; v.g = rgba[k][1]; v.b = rgba[k][2]; v.a = rgba[k][3]; }
@@ -259,10 +282,14 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                     pos[k] = {ram.f32(o), ram.f32(o + 4), ram.f32(o + 8), ram.f32(o + 12),
                               uint8_t(ram.u32(o) & 0xFF), uint8_t(ram.u32(o + 4) & 0xFF), uint8_t(ram.u32(o + 8) & 0xFF)};
                 }
+            } else if (vn == 2 && vl == 2 && addr == 0x175) {                 // V3-8 normais (chegam junto das posicoes)
+                nrm.resize(n);
+                for (uint32_t k = 0; k < n; ++k) nrm[k] = {int8_t(ram.u8(a + 3 * k)), int8_t(ram.u8(a + 3 * k + 1)), int8_t(ram.u8(a + 3 * k + 2))};
             } else if (vn == 3 && vl == 0 && n == 1) {                        // V4-32: tag GIF
                 hdrAddr = addr; nloop = ram.u32(a) & 0x7FFF; haveHdr = true;
                 hdrSel = ram.u32(a + 12);   // palavra alta de REGS: o jogo a usa como seletor de textura (1 + 3*slot)
                 if ((ram.u32(a + 4) >> 14) & 1) md.curTme = uint8_t((ram.u32(a + 4) >> 19) & 1);   // PRE: PRIM nos bits 47-57 (TME = bit 4)
+                if ((ram.u32(a + 4) >> 14) & 1) md.curFge = uint8_t((ram.u32(a + 4) >> 20) & 1);   // FGE = bit 5 do PRIM
                 if (((ram.u32(a + 4) >> 15) >> 6) & 1) md.abe = true;
             } else if (haveHdr && vn == 0 && vl == 2 && (mask & 0xFF) == 0xBF) {   // S-8 sob mascara: ADC
                 for (uint32_t k = 0; k < n; ++k) {
@@ -319,6 +346,9 @@ struct DrawItem {
     int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
     uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd*(1-As)
+    float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
+    float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
+    float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
 };
 
 struct Camera {
@@ -448,6 +478,8 @@ struct Sprite {
     uint32_t texId = 0;     // indice em texInfo (0 = circulo suave procedural)
     uint64_t tex0 = 0;      // TEX0 do efeito (psm, CBP da paleta)
     uint32_t cell = 0;      // celula do atlas (celulas de 8x8 texels)
+    int16_t row = -1;       // destroço: linha do atlas (>= 0: a coluna sai de cell)
+    uint8_t flip = 0;       // destroço: bit 0 espelha U, bit 1 espelha V
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
 };
 
@@ -629,10 +661,14 @@ public:
     }
 
     // Chave de textura de um objeto: id no `texInfo` + paleta (CBP/CSA/CPSM do TEX0). 0 = sem textura.
+    // texId 0 com TEX0 = o buffer em exibicao, isto e, o quadro anterior (rtMain -> texmPrepTexInfoZero; texmGetTextureAddrs monta
+    // PSMCT24 640 de largura, janela 1024x256): chave kScreenKey, textura de screenTexture.
+    static constexpr uint64_t kScreenKey = 1ull << 63;
     static uint64_t texKey(const Ram &ram, uint32_t node, uint32_t slot = 0) {
         const uint64_t t0 = objectTex0(ram, node, slot);
         const uint32_t tid = objectTexId(ram, node, slot);
-        if (!t0 || !tid) return 0;
+        if (!t0) return 0;
+        if (!tid) return kScreenKey;
         const gs::Tex0 t = gs::Tex0::decode(t0);
         return (uint64_t(tid) << 40) | (uint64_t(t.cbp) << 12) | (uint64_t(t.csa) << 4) | t.cpsm | (1ull << 62);
     }
@@ -640,17 +676,18 @@ public:
     // Preenche a paleta de 256 entradas. O GS le CLUTs de 256 cores em CSM1 com os bits 3 e 4 do indice trocados (entradas 8-15 e
     // 16-23 de cada grupo de 32); o .RTX guarda o upload cru, entao a leitura tem que aplicar a troca (sem ela: granulado em degrades).
     // WOTM_PALNOSWAP=1 desliga (diagnostico).
-    static void fillPal(uint32_t pal[256], const std::vector<uint32_t> &src, bool is8bit) {
+    // rawAlpha: alfa cru do GS (0x80 = 1,0), para o que o Scene::draw mistura como o GS; senao, 0..255 com 0x80 saturado (fixAlpha).
+    static void fillPal(uint32_t pal[256], const std::vector<uint32_t> &src, bool is8bit, bool rawAlpha = false) {
         static const bool swap = std::getenv("WOTM_PALNOSWAP") == nullptr;
         for (size_t i = 0; i < 256 && i < src.size(); ++i) {
             const size_t k = (swap && is8bit && src.size() >= 256) ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
-            pal[i] = gs::fixAlpha(src[k]);
+            pal[i] = rawAlpha ? src[k] : gs::fixAlpha(src[k]);
         }
     }
 
     // Textura do objeto: os pixels vem do pacote de upload apontado por `texInfo[texId]` (pixels lineares a partir de +0x80,
-    // descritor em +0x24 largura, +0x26 altura, +0x2B PSM); a paleta vem da VRAM (carregada junto com a fase).
-    bool decodeTex(const Ram &ram, uint32_t node, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot = 0) const {
+    // cabecalho em UploadHdr); a paleta vem do .RTX (carregado junto com a fase).
+    bool decodeTex(const Ram &ram, uint32_t node, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot = 0, bool rawAlpha = false) const {
         const uint64_t t0v = objectTex0(ram, node, slot);
         if (!t0v) return false;
         const gs::Tex0 t0 = gs::Tex0::decode(t0v);
@@ -663,38 +700,41 @@ public:
             // 8 bits, ou 4 bits empacotados (nibble baixo primeiro); tamanho = TW/TH do TEX0. Fallback: a RAM em `ptr` (nao confiavel).
             const auto it = rtxPal.find(t0.cbp);
             if (it == rtxPal.end()) return false;
-            fillPal(pal, it->second, t0.psm == gs::T8H);
+            fillPal(pal, it->second, t0.psm == gs::T8H, rawAlpha);
             w = 1u << t0.tw; h = 1u << t0.th;
             const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
             if (im != rtxImg.end())
                 return gs::decodeUpload(im->second.data(), im->second.size(), w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
             return gs::decodeUpload(ram.p + ptr, ram.size - ptr, w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
         }
-        return decodeUploadTex(ram, ptr, t0, px, w, h);
+        return decodeUploadTex(ram, ptr, t0, px, w, h, false, rawAlpha);
     }
 
-    // Pixels do pacote de upload em `ptr` (= texInfo[texId]; descritor em +0x24 largura, +0x26 altura, +0x2B PSM, pixels lineares
-    // a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
+    // Pixels do pacote de upload em `ptr` (= texInfo[texId]; cabecalho em UploadHdr, pixels lineares a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
     bool decodeUploadTex(const Ram &ram, uint32_t ptr, const gs::Tex0 &t0, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h,
-                         bool grayFallback = false) const {
+                         bool grayFallback = false, bool rawAlpha = false) const {
         if (!ram.ok(ptr + 0x80)) return false;
         uint32_t pal[256] = {};
-        const uint32_t psm = ram.u8(ptr + 0x2B);
+        const UploadHdr hd = UploadHdr::read(ram, ptr);
+        const uint32_t psm = hd.psm;
         if (psm == gs::T8 || psm == gs::T4) {
             // A paleta vem do .RTX carregado (loadRtx); sem ela a textura cai para a cor de vertice.
             const auto it = rtxPal.find(t0.cbp);
-            if (it != rtxPal.end()) fillPal(pal, it->second, psm == gs::T8);
+            if (it != rtxPal.end()) fillPal(pal, it->second, psm == gs::T8, rawAlpha);
             else if (grayFallback) {
-                // Particulas: muitas texturas sao mascaras de luminancia/alfa; sem a paleta, rampa cinza com alfa = indice
+                // Particulas: muitas texturas sao mascaras de luminancia/alfa; sem a paleta, rampa cinza com alfa = indice (1,0 no fim)
                 const uint32_t n = psm == gs::T8 ? 256 : 16;
-                for (uint32_t i = 0; i < n; ++i) { const uint32_t v = i * 255 / (n - 1); pal[i] = v | (v << 8) | (v << 16) | (v << 24); }
+                for (uint32_t i = 0; i < n; ++i) {
+                    const uint32_t v = i * 255 / (n - 1), a = rawAlpha ? i * 128 / (n - 1) : v;
+                    pal[i] = v | (v << 8) | (v << 16) | (a << 24);
+                }
             } else return false;
         }
-        w = ram.u16(ptr + 0x24); h = ram.u16(ptr + 0x26);
+        w = hd.w; h = hd.h;
         static const bool t4swz = std::getenv("WOTM_T4SWZ") != nullptr;   // diagnostico: pixels T4 do pacote como memoria do GS (nibbles embaralhados)
         if (t4swz && psm == gs::T4 && w && h && w <= 512 && h <= 512) {
             px.assign(size_t(w) * h, 0);
-            const uint32_t bw = std::max<uint32_t>(1, ram.u8(ptr + 0x2A));
+            const uint32_t bw = std::max<uint32_t>(1, hd.bw);
             for (uint32_t y = 0; y < h; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
                     const uint32_t n = gs::nibT4(0, bw, x, y);
@@ -703,7 +743,7 @@ public:
                 }
             return true;
         }
-        return gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px);
+        return gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px, rawAlpha);
     }
 
     // Textura de particula: texId (indice do texInfo global) + TEX0 da tabela de particulas (psm/CBP). 0 = nao decodificou.
@@ -719,7 +759,7 @@ public:
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
         Texture2D t{};
-        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray) && w && h && px.size() >= size_t(w) * h) {
+        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray, true) && w && h && px.size() >= size_t(w) * h) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
@@ -817,7 +857,7 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
-                    forEachTri(ram, it, [&](const float p[3][3], uint8_t) {
+                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3]) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -849,19 +889,36 @@ public:
         rlEnableBackfaceCulling();
     }
 
-    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, slot de textura da secao)
+    // Face de costas vista de `eye`: o VU1 (microprograma dos objetos) poe ADC nos triangulos de area positiva na tela do GS
+    // (y para baixo), so nas secoes com o bit 15 do seletor (Vtx::cull). Em mundo: normal (b - a) x (c - a) para longe do olho.
+    static bool backFacing(const float p[3][3], const float eye[3]) {
+        const float u[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
+        const float v[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
+        const float n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        return n[0] * (p[0][0] - eye[0]) + n[1] * (p[0][1] - eye[1]) + n[2] * (p[0][2] - eye[2]) > 0.f;
+    }
+
+    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, v, rgb) com os tres vertices decodificados (UV,
+    // cor, slot de textura e culling da secao) e a cor de cada um nas unidades do GS (vertexRgb: com a luz do VU1 nos iluminados)
     template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
         const MeshData *md = mesh(ram, it.node);
         if (!md || !md->valid) return;
         const uint32_t pal = md->skinned ? palette(ram, it) : 0;
+        const ObjLight ol = objectLight(ram, it.node);
         const auto &t = md->tris;
+        std::vector<M4> pm;   // paleta (osso x da normal nos iluminados)
+        if (pal && ol.lit)
+            for (uint32_t s = 0; s < 32; ++s) pm.push_back(readM4(ram, pal + 0x10 + 0x40 * s));
         float p[3][3];
+        uint8_t rgb[3][3];
         for (size_t k = 0; k + 2 < t.size(); k += 3) {
             for (int c = 0; c < 3; ++c) {
-                if (pal) skinVertex(ram, pal, it.m, t[k + c], p[c]);
-                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+                const Vtx &v = t[k + c];
+                if (pal) skinVertex(ram, pal, it.m, v, p[c]);
+                else xform(it.m, v.x, v.y, v.z, p[c]);
+                vertexRgb(ol, it.color, pm.empty() ? nullptr : &pm[(v.cx & 0x7F) / 4], it.m, v, rgb[c]);
             }
-            f(p, t[k].slot);
+            f(p, &t[k], rgb);
         }
     }
 
@@ -872,7 +929,7 @@ public:
         std::vector<float> cov(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], uint8_t) {
+            forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3]) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -924,14 +981,15 @@ public:
         const uint32_t ptr = ram.u32(addr::texInfo + 16 * id) & 0x0FFFFFFF;
         if (!ram.ok(ptr + 0x80)) return false;
         uint32_t pal[256] = {};
-        const uint32_t psm = ram.u8(ptr + 0x2B);
+        const UploadHdr hd = UploadHdr::read(ram, ptr);
+        const uint32_t psm = hd.psm;
         if (psm == gs::T8 || psm == gs::T4) {
             const auto it = rtxPal.find(t0.cbp);
             if (it == rtxPal.end()) return false;
-            fillPal(pal, it->second, psm == gs::T8);
+            fillPal(pal, it->second, psm == gs::T8, true);
         }
-        w = ram.u16(ptr + 0x24); h = ram.u16(ptr + 0x26);
-        return w && h && gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px);
+        w = hd.w; h = hd.h;
+        return w && h && gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px, true);
     }
 
     // diagnostico: WOTM_TEXFROM=<de>:<para> desenha os vertices do slot <de> com a textura do slot <para>
@@ -942,6 +1000,9 @@ public:
     }
 
     unsigned (*movieTexture)() = nullptr;   // textura do filme (texId 999); 0 = sem quadro. Quem toca o filme preenche (wotm_live.inc)
+    // quadro anterior (texId 0), render texture de cabeca para baixo com a tela de 640x224 do GS inteira; 0 = nao ha. Preenche: wotm_live.inc
+    unsigned (*screenTexture)() = nullptr;
+    unsigned screenId_ = 0;   // ultimo id devolvido para kScreenKey (o desenho converte o UV dele)
 
     unsigned textureId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
         // filme do menu: moviesSetScreenObject poe texId 999 no objeto (wotm_fmv.hpp); a textura vem do tocador, quadro a quadro
@@ -949,12 +1010,13 @@ public:
             if (const unsigned id = movieTexture()) return id;
         const uint64_t key = texKey(ram, node, slot);
         if (!key) return 0;
+        if (key == kScreenKey) return screenId_ = screenTexture ? screenTexture() : 0;
         auto it = tex_.find(key);
         if (it != tex_.end()) return it->second.id;
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
-        if (decodeTex(ram, node, px, w, h, slot)) {
+        if (decodeTex(ram, node, px, w, h, slot, true)) {   // alfa cru do GS: o shader do draw mistura As = At * Av / 16384
             if (std::getenv("WOTM_ALPHASTAT")) {
                 size_t a0 = 0, am = 0;
                 for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++a0; else if (a < 255) ++am; }
@@ -964,7 +1026,8 @@ public:
                 // Texels com alfa 0 guardam uma cor qualquer (escura); o filtro bilinear a mistura nas bordas e faz uma franja.
                 // Espalha a cor dos vizinhos visiveis para dentro dos transparentes (2 passos de 3x3).
                 size_t partial = 0, clear = 0;
-                for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++clear; else if (a < 250) ++partial; }
+                // alfa cru: semitransparente = abaixo de ~1,0 com o vertice em 0x80 (0x7C); 0x80..0xFF e opaco
+                for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++clear; else if (a < 0x7C) ++partial; }
                 partial_[key] = partial * 100 > px.size();   // mais de 1% dos texels semitransparentes
                 if (clear && clear < px.size()) {
                     std::vector<uint8_t> solid(px.size());
@@ -1002,12 +1065,15 @@ public:
     // Reune os objetos visiveis a partir de world->ep e das listas de CS.
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
     void collect(const Ram &ram, int maxLod = -1) {
+        lights_ = readParaLights(ram);
+        fog_ = readFog(ram);
         items.clear();
         sky.clear();
         overlay.clear();
         sprites.clear();
         atMat_ = 0;
         animVal_ = 0;
+        cs_ = 0;
         blend_ = 0;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
@@ -1150,11 +1216,15 @@ public:
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;   // diagnostico: sem particulas
         if (off) return;
         constexpr uint32_t kFx = 0x005BA280u, kStride = 12000u;
-        for (uint32_t i = 1; i < 98 && sprites.size() < 6000; ++i) {
+        FxView fog{};   // o VU1 descarta a particula toda na neblina (F < 1; Particles::setFog)
+        float row3[4];
+        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+        Particles::setFog(ram, fog, row3, eye_);
+        for (uint32_t i = 1; i < fxaddr::count && sprites.size() < 6000; ++i) {   // fx[100]: o VU1 desenha destroços em fx[98] e fx[99]
             const uint32_t b = kFx + i * kStride;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t type = ram.u32(b + 0x2E90) & 0xFF;
-            if (!np || np > 1024 || type != 13) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
+            if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));
@@ -1168,16 +1238,25 @@ public:
                 Sprite s;
                 for (int c = 0; c < 3; ++c) s.pos[c] = ram.f32(pos + 16 * k + 4 * c);
                 if (!std::isfinite(s.pos[0]) || !std::isfinite(s.pos[1]) || !std::isfinite(s.pos[2])) continue;
+                if (Particles::foggedAt(fog, s.pos)) continue;
                 const int a = int(int16_t(ram.u16(age + 2 * k)));
                 if (a < 0 || (life > 0 && a >= life)) continue;
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
                 const uint32_t h = (k * 2654435761u) ^ (i * 40503u);
                 s.key = i * 4096u + k;
-                if (atlas) {   // destroço: celula e tamanho fixos por particula, gira com w, some no fim da vida
+                if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild), some no fim da vida
+                    // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os 4 bits baixos sorteados.
+                    // Medido pela checagem VU1 x nativo (preset 66, minSize 6): lado = max(minSize, 2 * minSize * |w|), sem giro. Os bits
+                    // baixos escolhem uma das 4 entradas de UV por linha do atlas (normal, espelha V, espelha U, os dois; fragPacketInit)
+                    // e a linha; a coluna nao foi conferida (aqui sorteada por particula).
+                    const float w = ram.f32(pos + 16 * k + 12);
+                    const uint32_t wl = ram.u32(pos + 16 * k + 12) & 15;
                     s.texId = texLoad; s.tex0 = tex0;
                     s.cell = (h >> 8) & 0xFFFF;
-                    s.size = minS + (maxS - minS) * float((h >> 4) & 255) / 255.f;
-                    s.rot = ram.f32(pos + 16 * k + 12);
+                    s.row = int16_t(wl >> 2);
+                    s.flip = uint8_t(wl & 3) == 0 ? 0 : (wl & 3) == 1 ? 2 : (wl & 3) == 2 ? 1 : 3;
+                    s.size = std::max(minS, 2.f * minS * std::fabs(w));
+                    s.rot = 0.f;
                     s.rgba[3] = t > 0.85f ? (1.f - t) / 0.15f : 1.f;
                 } else {       // poeira/fumaça: circulo suave que cresce e esvanece
                     s.size = minS + (maxS > minS ? (maxS - minS) * t : 0.f);
@@ -1255,6 +1334,7 @@ public:
         std::sort(order.begin(), order.end());
         rlDisableBackfaceCulling();
         rlDisableDepthMask();
+        shaderNormal(0.f, true, true);   // neblina (FGE) e alfa do GS no shader do draw, como o XGKICK dos destroços
         unsigned cur = ~0u;
         bool open = false;
         for (const auto &o : order) {
@@ -1271,10 +1351,14 @@ public:
             float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
             if (s.tex0 && tw >= 8 && th >= 8) {   // atlas de celulas 8x8
                 const uint32_t cols = uint32_t(tw) / 8, rows = uint32_t(th) / 8, c = s.cell % (cols * rows);
-                u0 = float(c % cols) * 8.f / float(tw); u1 = u0 + 8.f / float(tw);
-                v0 = float(c / cols) * 8.f / float(th); v1 = v0 + 8.f / float(th);
+                const uint32_t col = s.row >= 0 ? s.cell % cols : c % cols, row = s.row >= 0 ? uint32_t(s.row) % rows : c / cols;
+                u0 = float(col) * 8.f / float(tw); u1 = u0 + 8.f / float(tw);
+                v0 = float(row) * 8.f / float(th); v1 = v0 + 8.f / float(th);
+                if (s.flip & 1) std::swap(u0, u1);
+                if (s.flip & 2) std::swap(v0, v1);
             }
-            const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(255.f * std::max(0.f, std::min(1.f, s.rgba[3])));
+            // alfa no modo GS do shader: 0x80 = 1,0 (a textura traz o alfa cru)
+            const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(128.f * std::max(0.f, std::min(1.f, s.rgba[3])));
             float c[4][3];
             spriteCorners(s, R, U, c);
             const float cu[4] = {u0, u1, u1, u0}, cv[4] = {v1, v1, v0, v0};
@@ -1287,6 +1371,7 @@ public:
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }
+        rlNormal3f(0.f, 0.f, 0.f);
         rlSetTexture(0);
         rlEnableDepthMask();
         rlEnableBackfaceCulling();
@@ -1314,7 +1399,8 @@ public:
             const MeshData *md = mesh(ram, it.node);
             if (!md || md->skinned || md->tris.empty() || !texKey(ram, it.node)) continue;
             const uint32_t ptr = ram.u32(addr::texInfo + 16 * ram.u16(it.node + 0x50)) & 0x0FFFFFFF;
-            const uint32_t w = ram.u16(ptr + 0x24), h = ram.u16(ptr + 0x26);
+            const UploadHdr hd = UploadHdr::read(ram, ptr);
+            const uint32_t w = hd.w, h = hd.h;
             if (!w || !h) continue;
             for (size_t i = 0; i + 2 < md->tris.size(); i += 3) {
                 const Vtx &a = md->tris[i], &b = md->tris[i + 1], &c = md->tris[i + 2];
@@ -1569,7 +1655,7 @@ public:
             const gs::Tex0 t0 = gs::Tex0::decode(t0v);
             const uint32_t ptr = ram.u32(addr::texInfo + 16 * ram.u16(it.node + 0x50)) & 0x0FFFFFFF;
             std::fprintf(stderr, "   texId=%u tex0=%016llx cbp=%u csa=%u base=%u psm=%u ptr=%06x hasPal=%d\n", ram.u16(it.node + 0x50),
-                         (unsigned long long)t0v, t0.cbp, t0.csa, ram.u32(addr::tempVramTexAddr) >> 6, ram.u8(ptr + 0x2B), ptr,
+                         (unsigned long long)t0v, t0.cbp, t0.csa, ram.u32(addr::tempVramTexAddr) >> 6, UploadHdr::read(ram, ptr).psm, ptr,
                          int(rtxPal.count(t0.cbp)));
         }
     }
@@ -1581,7 +1667,9 @@ public:
             // revalida a assinatura (a RAM do nivel pode ter sido reaproveitada)
             const uint32_t tag = ram.u32(pp);
             const uint32_t qwc = tag & 0xFFFF, nwords = (qwc + 1) * 4 - 2;
-            const uint32_t sig = tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ (ram.u32(pp + 4 * (nwords + 1)) * 17u);
+            // mesma formula do decodePacket (sem a ultima palavra nos skinned); diferente, a malha era decodificada de novo a cada
+            // chamada e o ponteiro devolvido antes ficava solto
+            const uint32_t sig = tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ ((tag & 0x10000) ? 0u : ram.u32(pp + 4 * (nwords + 1)) * 17u);
             if (it->second->sig == sig) return it->second.get();
         }
         auto md = std::make_shared<MeshData>(decodeObject(ram, node));
@@ -1592,17 +1680,71 @@ public:
     // Desenha com o raylib (deve estar dentro de BeginMode3D).
     void draw(const Ram &ram, bool wire = false) {
         // Teste de alfa: pixels transparentes (sombras, helices, grades) nao podem escrever profundidade nem cor.
+        // A normal do vertice leva (fogBurnThru, 1, FGE + 2 * GS) (shaderNormal; o rlNormal3f normaliza, entao o shader le as razoes
+        // por y); quem desenha a preenche e a zera no fim (normal 0 = sem neblina, alfa comum).
+        //  - FGE: neblina (ver Fog).
+        //  - GS: textura e vertice trazem o alfa cru do GS (0x80 = 1,0) e o shader mistura como o GS, As = At * Av / 16384
+        //    (TFX MODULATE), limitado a 1 (o GS aceita ate ~4); sem ele, o produto comum (sombras, depuracao).
         if (!alphaShaderTried_) {
             alphaShaderTried_ = true;
+            static const char *vs =
+                "#version 330\n"
+                "in vec3 vertexPosition; in vec2 vertexTexCoord; in vec3 vertexNormal; in vec4 vertexColor;\n"
+                "uniform mat4 mvp; uniform vec3 fogEye; uniform vec4 fogRow3; uniform vec3 fogParams;\n"
+                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog; out float fragGsA;\n"
+                "void main() {\n"
+                "  fragTexCoord = vertexTexCoord; fragColor = vertexColor;\n"
+                // normal = (burn, 1, FGE + 2 * GS) normalizada pelo rlNormal3f: as razoes por y sobrevivem; y = 0 = sem nada
+                "  float burn = 0.0, fl = 0.0;\n"
+                "  if (vertexNormal.y > 1e-6) { burn = vertexNormal.x / vertexNormal.y; fl = floor(vertexNormal.z / vertexNormal.y + 0.5); }\n"
+                "  fragGsA = fl >= 1.5 ? 1.0 : 0.0;\n"
+                "  float w = dot(fogRow3.xyz, vertexPosition - fogEye) + fogRow3.w;\n"
+                "  float f = 255.0;\n"
+                "  if (mod(fl, 2.0) > 0.5 && w > 0.001) f = clamp(burn + fogParams.x + fogParams.z / w, 0.0, fogParams.y);\n"
+                "  fragFog = f / 255.0;\n"
+                "  gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
+                "}\n";
             static const char *fs =
                 "#version 330\n"
-                "in vec2 fragTexCoord; in vec4 fragColor;\n"
-                "uniform sampler2D texture0; uniform vec4 colDiffuse; out vec4 finalColor;\n"
-                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; if (t.a < 0.06) discard; finalColor = t; }\n";
-            alphaShader_ = LoadShaderFromMemory(nullptr, fs);
+                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA;\n"
+                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; out vec4 finalColor;\n"
+                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
+                "  if (fragGsA > 0.5) t.a = min(t.a * 3.9690, 1.0);\n"   // (255 / 128)^2: At * Av / (128 * 128)
+                "  if (t.a < 0.06) discard;\n"
+                "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
+                "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
+                "  finalColor = vec4(mix(fogColor, t.rgb, f), t.a); }\n";
+            alphaShader_ = LoadShaderFromMemory(vs, fs);
+            fogLoc_[0] = GetShaderLocation(alphaShader_, "fogEye");
+            fogLoc_[1] = GetShaderLocation(alphaShader_, "fogRow3");
+            fogLoc_[2] = GetShaderLocation(alphaShader_, "fogParams");
+            fogLoc_[3] = GetShaderLocation(alphaShader_, "fogColor");
+            fogLoc_[4] = GetShaderLocation(alphaShader_, "fogSplit");
         }
         const bool useShader = !wire && alphaShader_.id > 0;
-        if (useShader) BeginShaderMode(alphaShader_);
+        if (useShader) {
+            float row3[4];
+            for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+            const float params[3] = {fog_.fa, fog_.maxVal, fog_.fb};
+            if (fogLoc_[0] >= 0) SetShaderValue(alphaShader_, fogLoc_[0], eye_, SHADER_UNIFORM_VEC3);
+            if (fogLoc_[1] >= 0) SetShaderValue(alphaShader_, fogLoc_[1], row3, SHADER_UNIFORM_VEC4);
+            if (fogLoc_[2] >= 0) SetShaderValue(alphaShader_, fogLoc_[2], params, SHADER_UNIFORM_VEC3);
+            if (fogLoc_[3] >= 0) SetShaderValue(alphaShader_, fogLoc_[3], fog_.col, SHADER_UNIFORM_VEC3);
+            // diagnostico: WOTM_FOGSPLIT=1 tira a neblina da metade esquerda da tela (comparacao no mesmo quadro); =2 desenha a mascara
+            // da neblina (branco = so FOGCOL) e imprime os parametros a cada ~2 s
+            static const int split = std::getenv("WOTM_FOGSPLIT") ? std::atoi(std::getenv("WOTM_FOGSPLIT")) : 0;
+            // =3: neblina so nos quadros pares (duas capturas seguidas = com e sem, quase a mesma cena)
+            static uint32_t drawCount = 0;
+            const bool oddFrame = (drawCount++ & 1) != 0;
+            const float splitX = split == 1 ? 0.5f * float(rlGetFramebufferWidth()) : split == 2 ? -2.f
+                               : (split == 3 && oddFrame) ? 1e9f : -1.f;
+            static int fogLog = 0;
+            if (split && fogLog++ % 120 == 0)
+                std::fprintf(stderr, "[fog] FA %.3f FB %.1f max %.1f cor %.0f %.0f %.0f row3 %.3f %.3f %.3f %.3f\n", fog_.fa, fog_.fb, fog_.maxVal,
+                             fog_.col[0] * 255.f, fog_.col[1] * 255.f, fog_.col[2] * 255.f, row3[0], row3[1], row3[2], row3[3]);
+            if (fogLoc_[4] >= 0) SetShaderValue(alphaShader_, fogLoc_[4], &splitX, SHADER_UNIFORM_FLOAT);
+            BeginShaderMode(alphaShader_);
+        }
         rlDisableDepthTest();   // o ceu e desenhado primeiro, centrado no olho, sem profundidade
         drawList(ram, sky, wire);
         rlDrawRenderBatchActive();
@@ -1619,7 +1761,7 @@ public:
         }
         // particulas por ultimo (testam profundidade, nao escrevem): destroços interpolados (drawSprites), depois os demais tipos na ordem de particleDraw
         if (!wire) drawSprites(ram);
-        if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+        if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
         rlDrawRenderBatchActive();
         rlDisableDepthTest();   // icones de botao por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         drawList(ram, overlay, wire, -1, true);
@@ -1631,6 +1773,7 @@ public:
     // Translucido: textura com alfa parcial ou vertices de alfa baixo. Esses vao no segundo passe (tras para frente, sem escrever profundidade).
     bool translucent(const Ram &ram, const DrawItem &it) {
         const MeshData *md = mesh(ram, it.node);
+        if (it.fade < 1.f) return true;   // cross-fade de LOD
         if (md && md->lowAlpha) return true;
         if (md && md->abe && it.blend) return true;   // mistura aditiva/escurecedora precisa do passe translucido
         for (uint32_t sl = 0; sl < 5; ++sl) {
@@ -1730,7 +1873,7 @@ public:
         }
         std::stable_sort(order.begin(), order.end(), [](const Ent &a, const Ent &b) { return a.key < b.key; });
 
-        const unsigned white = rlGetTextureIdDefault();
+        const unsigned white = gsWhiteTexture();   // secoes sem textura (PRIM.TME 0): alfa 0x80 = 1,0 do GS
         uint64_t cur = ~0ull;
         bool open = false;
         int curBlend = 0;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
@@ -1797,10 +1940,14 @@ public:
             }
             static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
             const unsigned tid = (wire || !cur) ? 0 : textureId(ram, it.node, texRemap(slot));
+            // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
+            const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
-            const float fade = fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f;
+            const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade * std::max(0.f, it.color[3]);
+            const ObjLight ol = objectLight(ram, it.node);
+            const float fogBurn = ram.f32(it.node + 0x2C);   // fogBurnThru (somado ao F da neblina)
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
             static const uint32_t palOverride = std::getenv("WOTM_PALBLOCK") ? uint32_t(std::strtoul(std::getenv("WOTM_PALBLOCK"), nullptr, 16)) : 0;   // diagnostico
@@ -1851,6 +1998,7 @@ public:
                     else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
                     if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fzScale;
                 }
+                if (t[k].cull && !wire && backFacing(p, eye_)) continue;
                 for (int c = 0; c < 3; ++c) {
                     const int cs[2] = {c, (c + 1) % 3};
                     for (int e = 0; e < (wire ? 2 : 1); ++e) {
@@ -1858,14 +2006,23 @@ public:
                         if (idcMode) { const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
                         else if (v.isAdc) rlColor4ub(255, 0, 0, 255);   // WOTM_SHOWADC
                         else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
-                        else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
-                        if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+                        else {
+                            uint8_t rgb[3];
+                            vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
+                            // alfa: cru no modo GS (o shader faz At * Av / 16384); no quadro anterior e no filme, o antigo (4a/255)
+                            const float va = v.a * fade * (gsA ? 1.f : 4.f);
+                            rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
+                        }
+                        if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
+                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+                        shaderNormal(fogBurn, v.fge, gsA);   // neblina e alfa do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+        rlNormal3f(0.f, 0.f, 0.f);   // o que vier depois (sombras, particulas) sai sem neblina
         setBlend(0);
         rlSetTexture(0);
         rlEnableBackfaceCulling();
@@ -1978,6 +2135,7 @@ private:
     int lod_ = -1;
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual
     Shader alphaShader_{};
+    int fogLoc_[5] = {-1, -1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor, fogSplit
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
     std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
@@ -1989,8 +2147,10 @@ private:
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
+    uint32_t cs_ = 0;      // _cs em desenho (drawCs; 0 no mundo e no ceu): colorQuad em objectColor
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
     uint8_t blend_ = 0;    // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
+    float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
 
     // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D com ALPHA_1 (data em +0x20, endereco 0x42 em +0x28), TEST_1 e ZBUF_1.
     // Traduz o ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7) para DrawItem::blend; -1 = ctx sem ALPHA_1 (herda o do pai).
@@ -2004,6 +2164,33 @@ private:
         }
     }
 
+    // Deslocamento do UV do OBJECT, como o hierTraverseAsm monta o qword 4 do cabecalho do VU1 (vf19.xy, que os programas de desenho somam
+    // ao UV normalizado): uOffset/vOffset (+0x20/+0x24) e, com uvScroll (bit 0x800 das flags) dentro de um CHAR_INSTANCE, os canais de
+    // animacao uOffIdx/vOffIdx (+0x30/+0x32; indice negativo = 0).
+    void objectUvOffset(const Ram &ram, uint32_t node, float out[2]) const {
+        out[0] = ram.f32(node + 0x20);
+        out[1] = ram.f32(node + 0x24);
+        if (!(ram.u16(node + 0xC) & 0x800) || !animVal_) return;
+        for (int k = 0; k < 2; ++k) {
+            const int16_t idx = ram.s16(node + 0x30 + 2 * k);
+            out[k] = idx >= 0 ? ram.f32(animVal_ + 4 * uint32_t(idx)) : 0.f;
+        }
+    }
+
+    // Multiplicador da cor do vertice do OBJECT, como o hierTraverseAsm monta o qword 5 do cabecalho do VU1 (vf31, que todos os programas
+    // de desenho aplicam a cor do vertice): redAnim..alphaAnim (+0x40) ou, dentro de um CHAR_INSTANCE, os canais rAnimIdx..aAnimIdx
+    // (+0x34; indice negativo = o do no), vezes o colorQuad (+0x70) do CS em desenho. O retail tambem multiplica o alfa pelo fade do
+    // no (aqui em DrawItem::fade) e o RGB por uma cor do contexto (+0x160 do bloco do hier) quando ligada: nao reproduzido.
+    void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
+        for (int k = 0; k < 4; ++k) {
+            out[k] = ram.f32(node + 0x40 + 4 * k);
+            const int16_t idx = ram.s16(node + 0x34 + 2 * k);
+            if (animVal_ && idx >= 0) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
+            if (cs_) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
+            if (!std::isfinite(out[k])) out[k] = 1.f;
+        }
+    }
+
     // Paleta de matrizes de um objeto skinned: animPktPtr[lod] e uma cadeia DMA (tag ref 0x3000007d) cujo endereco aponta o
     // bloco de 125 qwords (31 matrizes de 4 qwords a partir de +0x10). Devolve 0 se nao achar.
     static uint32_t palette(const Ram &ram, const DrawItem &it) {
@@ -2014,10 +2201,85 @@ private:
         return ram.ok(block, 0x10 + 0x40 * 32) ? block : 0;
     }
 
+    // Luz por vertice, como o programa do VU1 em 0x1010 (OBJECT com dirLight, bit 0x100 das flags em +0xC): com a normal crua n (modulo
+    // ~127) girada pelo osso x (skinned) e pelo objeto, d_i = max(0, n.L_i / 4096) para as tres luzes paralelas e o vetor-meio do
+    // especular (colunas de paraL, x32; o hier as leva ao espaco de cada objeto em lightDir) e
+    //   cor = min(255, cor do vertice * (soma de cor_i * d_i) + especular * d_3^16)
+    // com cor_i em vu1LightColor (D_0025B238, cor/128; qwords 17-19 do cabecalho) e especular = specIntensity (+0x6C) com specLightMe
+    // (bit 0x2000), senao 0 (qword 20). O qword 5 do cabecalho, que tambem multiplica a cor do vertice, vale 1.
+    struct ParaLights { float dir[4][3] = {}; float col[3][3] = {}; };
+    static ParaLights readParaLights(const Ram &ram) {
+        ParaLights l;
+        for (int i = 0; i < 4; ++i)
+            for (int a = 0; a < 3; ++a) l.dir[i][a] = ram.f32(addr::paraL + 16 * a + 4 * i);
+        for (int i = 0; i < 3; ++i)
+            for (int c = 0; c < 3; ++c) l.col[i][c] = ram.f32(addr::vu1LightColor + 16 * i + 4 * c);
+        return l;
+    }
+    ParaLights lights_;   // luzes paralelas do ultimo collect (vertexRgb)
+
+public:
+    // Neblina, como os programas de desenho do VU1 e o GS: por vertice das secoes com PRIM.FGE,
+    //   F = clamp(fogBurnThru do OBJECT (+0x2C) + fogFA + fogFB / W, 0, fogMaxVal)   (W = linha 3 do worldToScreenMat . (p - olho))
+    // e o GS mistura (F * cor + (255 - F) * FOGCOL) / 255 (F = 255: sem neblina). Parametros de vu1FogParams; FOGCOL de fogColorCtx[4].
+    struct Fog { float fa = 0.f, maxVal = 255.f, fb = 0.f; float col[3] = {0, 0, 0}; };
+    static Fog readFog(const Ram &ram) {
+        Fog f;
+        f.fa = ram.f32(addr::vu1FogParams);
+        f.maxVal = ram.f32(addr::vu1FogParams + 4);
+        f.fb = ram.f32(addr::vu1FogParams + 12);
+        const uint32_t c = ram.u32(addr::fogColorCtx + 0x20);
+        for (int k = 0; k < 3; ++k) f.col[k] = float((c >> (8 * k)) & 0xFF) / 255.f;
+        return f;
+    }
+    Fog fog_;   // do ultimo collect
+    // F de um ponto (mundo) de uma secao com FGE; mesma conta do shader do draw. row3/eye: linha 3 do worldToScreenMat e olho.
+    float fogF(const float p[3], float burn, const float row3[4], const float eye[3]) const {
+        const float w = row3[0] * (p[0] - eye[0]) + row3[1] * (p[1] - eye[1]) + row3[2] * (p[2] - eye[2]) + row3[3];
+        if (!(w > 1e-3f)) return fog_.maxVal;
+        return std::min(fog_.maxVal, std::max(0.f, burn + fog_.fa + fog_.fb / w));
+    }
+private:
+
+    struct ObjLight { bool lit = false; float spec = 0.f; };
+    static ObjLight objectLight(const Ram &ram, uint32_t node) {
+        const uint16_t f = ram.u16(node + 0xC);
+        return {(f & 0x100) != 0, (f & 0x2000) ? ram.f32(node + 0x6C) : 0.f};
+    }
+
+    // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
+    // iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
+    void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
+        const float vc[3] = {v.r * mul[0], v.g * mul[1], v.b * mul[2]};
+        if (!ol.lit) {
+            for (int c = 0; c < 3; ++c) out[c] = uint8_t(std::min(255.f, std::max(0.f, vc[c])));
+            return;
+        }
+        float n[3] = {float(v.nx), float(v.ny), float(v.nz)};
+        if (bone) {   // o laco de skinning do VU1 (0x3D0) grava a normal girada com FTOI12 (trunca a 1/4096) e a luz le com ITOF12
+            const float b[3] = {n[0], n[1], n[2]};
+            for (int c = 0; c < 3; ++c) n[c] = std::trunc(b[0] * bone->m[0][c] + b[1] * bone->m[1][c] + b[2] * bone->m[2][c]);
+        }
+        float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (o hier normaliza as colunas de lightDir)
+        for (int r = 0; r < 3; ++r) {
+            const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+            if (len > 1e-6f)
+                for (int c = 0; c < 3; ++c) w[c] += n[r] * m.m[r][c] / len;
+        }
+        float d[4];
+        for (int i = 0; i < 4; ++i) d[i] = std::max(0.f, (w[0] * lights_.dir[i][0] + w[1] * lights_.dir[i][1] + w[2] * lights_.dir[i][2]) / 4096.f);
+        float s = d[3];
+        for (int k = 0; k < 4; ++k) s *= s;   // ^16
+        for (int c = 0; c < 3; ++c) {
+            const float x = vc[c] * (lights_.col[0][c] * d[0] + lights_.col[1][c] * d[1] + lights_.col[2][c] * d[2]) + ol.spec * s;
+            out[c] = uint8_t(std::min(255.f, std::max(0.f, x)));
+        }
+    }
+
     // Skinning, como o microcodigo do VU1 (desmontado com tools/vu1dis.py; laco em 0x3C8): tres ossos por vertice.
     // Os codigos de osso (8 bits baixos de x, y, z; & 0x7F = endereco de qword da matriz na paleta) escolhem 3 matrizes e os pesos
     // saem do float w: w1 = w, w2 = frac(w * 2048) (mantissa baixa), w3 = 1 - w1 - w2. pos = w1*Mx*p + w2*My*p + w3*Mz*p.
-    // Slot da paleta = (codigo & 0x7F) / 4.
+    // Slot da paleta = (codigo & 0x7F) / 4. A normal so gira pelo osso x (vertexRgb).
     static void skinVertexPM(const M4 *pm, const M4 &m, const Vtx &v, float out[3]) {
         static const bool old2 = std::getenv("WOTM_SKIN2BONE") != nullptr;
         float w1 = v.w, w2 = 0.f, w3 = 0.f;
@@ -2153,7 +2415,11 @@ private:
         const uint32_t op = ram.u32(node) & 0x3F;
         ++byOp[op];
         switch (op) {
-        case 0: items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_}); break;                          // OBJECT
+        case 0:                                                                                                 // OBJECT
+            items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
+            objectUvOffset(ram, node, items.back().uvOff);
+            objectColor(ram, node, items.back().color);
+            break;
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
             const uint8_t saved = blend_;
             const int b = groupBlend(ram, ram.u32(node + 4) & 0x0FFFFFFF);
@@ -2182,8 +2448,33 @@ private:
                 const uint32_t i = uint32_t(pick);
                 const uint32_t c = ram.u32(node + 0x20 + 16 * i + 8);
                 const int savedLod = lodIdx_;
+                const float savedFade = fade_;
+                // Cross-fade (hierLod): passada a distancia `fade` (+0x20 + 16i, ao quadrado como switchOutDis), o jogo desenha o LOD i e
+                // o i - 1 juntos, com t = 1 - (d - fade) / (switchOutDis - fade): t > 0,5 -> i inteiro e i - 1 com alfa (1 - t) * 2;
+                // senao i - 1 inteiro e i com alfa 2t; sem i - 1, i com alfa t. Sem isso o nativo trocava de LOD de uma vez (checagem
+                // VU1, pista 7: o VU1 desenhava uma instancia "a mais", o LOD vizinho no mesmo lugar).
+                float fi = 1.f, fprev = 0.f;
+                const float fd = lod_ < 0 && eyeOk_ ? ram.f32(node + 0x20 + 16 * i) : 0.f;
+                if (fd > 0.f) {
+                    float d2 = 0.f, cc[3];
+                    xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), cc);
+                    for (int a = 0; a < 3; ++a) d2 += (cc[a] - eye_[a]) * (cc[a] - eye_[a]);
+                    if (fd < d2) {
+                        const float t = 1.f - (d2 - fd) / (ram.f32(node + 0x20 + 16 * i + 4) - fd);
+                        if (i >= 1) { if (t > 0.5f) fprev = (1.f - t) * 2.f; else { fprev = 1.f; fi = t * 2.f; } }
+                        else fi = t;
+                    }
+                }
                 lodIdx_ = int(i);
-                if (ram.ok(c)) walk(ram, c, m, depth + 1);
+                fade_ = savedFade * fi;
+                if (ram.ok(c) && fade_ > 0.f) walk(ram, c, m, depth + 1);
+                if (fprev > 0.f) {
+                    const uint32_t c2 = ram.u32(node + 0x20 + 16 * (i - 1) + 8);
+                    lodIdx_ = int(i - 1);
+                    fade_ = savedFade * fprev;
+                    if (ram.ok(c2)) walk(ram, c2, m, depth + 1);
+                }
+                fade_ = savedFade;
                 lodIdx_ = savedLod;
             }
             break;
@@ -2238,10 +2529,15 @@ private:
                 const float vis = (vidx >= 0 && animVal_ && vidx < 4096) ? ram.f32(animVal_ + 4 * uint32_t(vidx)) : (vidx >= 0 ? ram.f32(node + 0xC) : 1.f);
                 if (vis == 0.f) break;
             }
+            // hierAnimScaleNode: o olho vai ao espaco do filho por (eo + translate + postScale) / scale + preScale, ou seja, o ponto do
+            // filho p vai ao pai em scale * (p + preScale) + translate + postScale (preScale +0x40 e postScale +0x50; ignora-los
+            // deslocava itens presos aos monstros, checagem VU1 pista 7).
             float sx = ram.f32(node + 0x20), sy = ram.f32(node + 0x24), sz = ram.f32(node + 0x28);
             if (sx == 0.f && sy == 0.f && sz == 0.f) sx = sy = sz = 1.f;
-            kids(ram, node + 0x60, ram.u32(node + 4),
-                 mul(mul(scaleM(sx, sy, sz), translateM(ram.f32(node + 0x30), ram.f32(node + 0x34), ram.f32(node + 0x38))), m), depth);
+            const M4 pre = translateM(ram.f32(node + 0x40), ram.f32(node + 0x44), ram.f32(node + 0x48));
+            const M4 post = translateM(ram.f32(node + 0x30) + ram.f32(node + 0x50), ram.f32(node + 0x34) + ram.f32(node + 0x54),
+                                       ram.f32(node + 0x38) + ram.f32(node + 0x58));
+            kids(ram, node + 0x60, ram.u32(node + 4), mul(mul(mul(pre, scaleM(sx, sy, sz)), post), m), depth);
             break;
         }
         case 39: {                                                                          // INTERACTIVE_STATE (+4 whichChild, +0xC filho)
@@ -2292,12 +2588,24 @@ private:
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
         if (at) { m.m[3][0] = at[0]; m.m[3][1] = at[1]; m.m[3][2] = at[2]; }
+        else if (eyeOk_) {
+            // O hier leva o olho ao espaco do objeto com a propria mat (hierCsUpdate: mat * (eo + trans)) e volta com ela, nao com a
+            // inversa: o VU1 desenha em olho + (trans - olho) * R^T * R (R = 3x3 da mat). Com R ortonormal nao muda nada; nos destrocos
+            // que encolhem (linhas com norma < 1) o objeto sai puxado para a camera (ate ~37 unidades; checagem VU1, pista 3).
+            float a[3];
+            for (int i = 0; i < 3; ++i)
+                a[i] = (m.m[3][0] - eye_[0]) * m.m[i][0] + (m.m[3][1] - eye_[1]) * m.m[i][1] + (m.m[3][2] - eye_[2]) * m.m[i][2];
+            for (int k = 0; k < 3; ++k) m.m[3][k] = eye_[k] + a[0] * m.m[0][k] + a[1] * m.m[1][k] + a[2] * m.m[2][k];
+        }
         if (ram.u8(cs + 0xF)) {   // scaleMe
             const float sx = ram.f32(cs + 0x80), sy = ram.f32(cs + 0x84), sz = ram.f32(cs + 0x88);
             m = mul(scaleM(sx, sy, sz), m);
         }
         const size_t before = items.size();
+        const uint32_t savedCs = cs_;
+        cs_ = cs;
         walk(ram, ep, m, 0);
+        cs_ = savedCs;
         if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);

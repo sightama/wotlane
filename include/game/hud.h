@@ -19,7 +19,7 @@ public:
     char pad5C[0x98 - 0x5C];
     _cs *m_cs1F43;              /* 0x98: cs of HUD element 0x1F43 (hidden) */
     _cs *m_mcButtonCs[4];       /* 0x9C: cs of the memory card buttons 0x1F51..0x1F54 */
-    int fAC;                    /* 0xAC: zeroed when the rage flash (h180) starts */
+    int fAC;                    /* 0xAC: zeroed by PowerUps::TakeHit (special weapon power-up) and when the rage flash (h180) starts */
     char padB0[0xD0 - 0xB0];
     int f0D0;
     char pad0D4[0xE4 - 0xD4];
