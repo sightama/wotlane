@@ -12,38 +12,85 @@
 #include "game/hit_history.h"
 
 /* Movement states: a state's tunables are blocks inside the object ("configs"); jumping and flying pick the heavy block while holding a monster or a two-handed pickup. */
+/* pad rumble pattern (inputSetActuator) */
+struct ActuatorData {
+    int w[8];
+};
+void inputSetActuator(int pad, ActuatorData *a);
+/* Base of the attack states (MonsterStates); its constructor zeroes the two words. */
+class AttackState : public MonsterState {
+public:
+    int unk14; /* 0x14 */
+    int unk18; /* 0x18 */
+
+    void creditStaminaForAttack(float f);
+};
+/* One ring of a shockwave (ExpandingRing<ShockWaveConfig>). */
+struct ShockWaveConfig {
+    int f0;
+    float damage;     /* 0x04: dealt directly to a monster right under a butt slam */
+    float f8;
+    float strength38; /* 0x0C, 0x10: copied into HitEvent::strength38/strength34 */
+    float strength34;
+    float f14, f18;
+};
+/* Rings of a shockwave and the reach of each. */
+template <class T>
+class ExpandingRing {
+public:
+    int numRings;
+    char pad4[0x20 - 0x4];
+    T rings[20];      /* 0x20 */
+    float reach[20];  /* 0x250 */
+    float timeScale;  /* 0x2A0 */
+};
+typedef char _size_ShockRing[sizeof(ExpandingRing<ShockWaveConfig>) == 0x2A4 ? 1 : -1];
+class SpecFxAnim;
+class ShockWave {
+public:
+    static void *Activate(_fvector *pos, ExpandingRing<ShockWaveConfig> cfg, HitEvent::DamageCause cause, int id, SpecFxAnim *anim);
+};
 /* Common base of jumping and flying: tracks the height the monster left from and the highest point reached. */
 class JumpFlyBase : public MonsterState {
 public:
     enum SubState { SUB_0, SUB_1, SUB_2, SUB_3, SUB_4, SUB_5, SUB_6, SUB_7, SUB_8, SUB_9 };
     enum FootPref { FOOT_0, FOOT_1, FOOT_ANY };
 
-    int heavy;      /* 0x14: holding a monster or a two-handed pickup (heavy config in use) */
-    int subState;   /* 0x18 */
-    int footPref;   /* 0x1C: 2 while heavy and after the state */
-    int f20;
-    float startZ;   /* 0x24: height when the state began */
-    float apexZ;    /* 0x28: highest point reached */
+    int heavy;          /* 0x14: holding a monster or a two-handed pickup (heavy config in use) */
+    int subState;       /* 0x18 */
+    int footPref;       /* 0x1C: foot to jump from (StateRun picks it from the stride); 2 = any */
+    float landMomentum; /* 0x20: vertical speed at landing (at least config's minimum), handed to StateRun */
+    float startZ;       /* 0x24: height when the state began */
+    float apexZ;        /* 0x28: highest point reached */
 
     void transitionInto(void);
     void update(void);
+    void handleStateTransitions(void);
 };
 /* Flight (Monster+0xF0B0). Two configs (0x38 bytes each): light at 0x44, heavy at 0x7C. */
 class StateFly : public JumpFlyBase {
 public:
-    char pad2C[0x44 - 0x2C];
+    char pad2C[0x3C - 0x2C];
+    float crouchBlend;             /* 0x3C */
+    float f40;
     char lightConfig[0x7C - 0x44]; /* 0x44 */
     char heavyConfig[0xB4 - 0x7C]; /* 0x7C; +0x10: stamina needed to flap */
-    char padB4[0x100 - 0xB4];
+    float flapBlend;               /* 0xB4 */
+    char padB8[0xC4 - 0xB8];
+    float flapSpeed;               /* 0xC4 */
+    float fallBlend;               /* 0xC8 */
+    float glideBlend;              /* 0xCC */
+    char padD0[0x100 - 0xD0];
     char *config;                  /* 0x100: lightConfig or heavyConfig */
-    char pad104[0x108 - 0x104];
-    AnimBlend blend108;            /* 0x108 */
-    AnimBlend blend170;            /* 0x170 */
-    AnimBlend blendWings[3];       /* 0x1D8: animations 0x24, 0x25, 0x26 */
+    int anim;                      /* 0x104: MonsterAnim playing */
+    AnimBlend blend108;            /* 0x108: rising/falling layer */
+    AnimBlend blend170;            /* 0x170: heavy fall / landing layer */
+    AnimBlend lean[3];             /* 0x1D8: lean layers (animations 0x24, 0x25, 0x26) */
     AnimBlend *glide;              /* 0x310: additive glide layer (animation 0x6F) from AnimBlendPool */
-    char pad314[0x31C - 0x314];
+    int f314;
+    int f318;
     int savedMonster130;           /* 0x31C: Monster+0x130 saved on entry, restored on exit */
-    char pad320[0x340 - 0x320];
+    ActuatorData landRumble;       /* 0x320 */
 
     void init(Monster *m);
     int transitionOK(void);
@@ -61,21 +108,24 @@ typedef char _size_StateFly[sizeof(StateFly) == 0x340 ? 1 : -1];
 /* Jump (Monster+0x7AD4). Two configs (0x30 bytes each): light at 0x38, heavy at 0x68. */
 class StateJump : public JumpFlyBase {
 public:
-    char pad2C[0x38 - 0x2C];
+    float crouchBlend;             /* 0x2C */
+    float fallBlend;               /* 0x30 */
+    float getUpBlend;              /* 0x34 */
     char lightConfig[0x68 - 0x38]; /* 0x38 */
     char heavyConfig[0x98 - 0x68]; /* 0x68 */
-    char pad98[0x9C - 0x98];
-    AnimBlend blend9C;             /* 0x9C */
-    AnimBlend blend104;            /* 0x104 */
-    AnimBlend blendWings[3];       /* 0x16C: animations 0x24, 0x25, 0x26 */
-    char pad2A4[0x2A8 - 0x2A4];
+    float heavyFootF;              /* 0x98: foot motion while a heavy jump crouches or lands */
+    AnimBlend blend9C;             /* 0x9C: rising/falling layer */
+    AnimBlend blend104;            /* 0x104: heavy fall / landing layer */
+    AnimBlend lean[3];             /* 0x16C: lean layers (animations 0x24, 0x25, 0x26) */
+    int jumpAnim;                  /* 0x2A4: MonsterAnim playing */
     char *config;                  /* 0x2A8: lightConfig or heavyConfig */
-    char pad2AC[0x2CC - 0x2AC];
+    ActuatorData landRumble;       /* 0x2AC */
 
     void init(Monster *m);
     int transitionOK(void);
     int transitionFeasible(void);
     void transitionInto(void);
+    void update(void);
     void enterSubState(SubState s);
     void handleCollis(_hdResult &r);
     void handlePreemption(MonsterState *next);
@@ -84,12 +134,11 @@ public:
 };
 typedef char _size_StateJump[sizeof(StateJump) == 0x2CC ? 1 : -1];
 /* Ram attack (Monster+0xFD40): a charge on all fours. */
-class StateRamAttack : public MonsterState {
+class StateRamAttack : public AttackState {
 public:
     /* charge (animation 0x10A, or 0x109 kept when missing), coasting, impact (0x10B), done */
     enum SubState { SUB_CHARGE, SUB_COAST, SUB_IMPACT, SUB_DONE };
 
-    int unk14, unk18;      /* AttackState */
     float blendTime;       /* 0x1C */
     float f20;
     float accel;           /* 0x24 */
@@ -99,8 +148,8 @@ public:
     float maxSpeed;        /* 0x34: charge speed (75% of it puts out a fire) */
     float duration;        /* 0x38: frames of the charge */
     float impactBlend;     /* 0x3C */
-    float f40;
-    int f44;
+    float hitDamage;       /* 0x40: base damage of a ram hit */
+    float hitDamagePerSpeed; /* 0x44: plus this times the speed into the surface */
     float staminaCost;     /* 0x48 */
     float f4C, f50, f54, f58;
     int subState;          /* 0x5C */
@@ -129,6 +178,7 @@ public:
         sprayPos.y = a[1] * 0.5f + b[1] * 0.5f;
         sprayPos.z = 20.0f + a[2] * 0.5f + b[2] * 0.5f;
     }
+    void handleCollis(_hdResult &r);
     int acceptHit(HitEvent &e);
     void setMaxSpeedMPH(float mph);
     void handlePreemption(MonsterState *next);
@@ -140,7 +190,10 @@ typedef char _size_StateRamAttack[sizeof(StateRamAttack) == 0xE0 ? 1 : -1];
 struct RunConfig {
     float speed;     /* 0x00: run speed; the run animation speed is the ground speed over it */
     float walkSpeed; /* 0x04: the same for the walk animation */
-    float f8, fC, f10, f14, f18, f1C;
+    float f8;        /* 0x08: blend time between the stride halves (StateRun::enterSubState) */
+    float fC;
+    float f10, f14;  /* 0x10, 0x14: stride percents a run starts at on its first entry */
+    float f18, f1C;  /* 0x18, 0x1C: a jump inside this window of the stride takes off from foot 0, else foot 1 */
 };
 /* Running (Monster+0x79AC). Two configs: normal at 0x14 and heavy at 0x34. The run animation (runAnim) is chosen on
  * entry: walk 1 (with 7) when slow, run 2 (with 8), a landing run 6 (with 9) after a fall with momentum, or the heavy
@@ -151,14 +204,14 @@ public:
 
     RunConfig normal;               /* 0x14 */
     RunConfig heavy;                /* 0x34: holding something heavy */
-    float f54;
-    float walkSpeed;                /* 0x58: below this speed the monster walks */
-    float f5C;
+    float landDecay;                /* 0x54: landMomentum is multiplied by it each frame */
+    float walkMax;                  /* 0x58: above this speed the walk turns into a run (and below it a run starts as a walk) */
+    float runMin;                   /* 0x5C: below this speed the run turns into a walk */
     int anim;                       /* 0x60: MonsterAnim playing */
     int runAnim;                    /* 0x64 */
     int altAnim;                    /* 0x68 */
     AnimBlend blend;                /* 0x6C: running blend layer, ramped in on entry at the old percent */
-    int fD4;
+    int lastSubState;               /* 0xD4: sub-state last entered (0 = none yet since transitionInto) */
     RunConfig *config;              /* 0xD8: normal or heavy */
     float landMomentum;             /* 0xDC: set when landing from a jump; >= 350 starts the landing run */
     int fE0;
@@ -169,6 +222,7 @@ public:
     void enterSubState(SubState s);
     void handlePreemption(MonsterState *next);
     float getAnimSpeed(float speed);
+    void update(void);
 };
 typedef char _size_StateRun[sizeof(StateRun) == 0xE4 ? 1 : -1];
 /* Dash (Monster+0x7A90): a burst of speed while the dash button is held. Sub-states: 0 start (animation 0x108),
@@ -253,6 +307,7 @@ void particleKillFx(int &handle);
 class Interactives {
 public:
     static int *getInteractive(int i); /* first word: kind (1 monster, 3 ...) */
+    static void dispatchHit(_fvector *dir, float dmg, int src, int id);
 };
 class StateGrappled : public MonsterState {
 public:
@@ -261,6 +316,7 @@ public:
 class StateGrapple : public MonsterState {
 public:
     void detach(void);
+    int transitionOK(void);
 };
 class StateBlock : public MonsterState {
 public:
@@ -295,6 +351,66 @@ struct Mat44 {
 };
 extern const Mat44 ramSprayLeft __asm__("D_006ED4B0");
 extern const Mat44 ramSprayRight __asm__("D_006ED4F0");
+/* the other states StateRun can hand over to (only their transitionOK is called from here) */
+#define DECLARE_STATE(cls) \
+    class cls : public MonsterState { \
+    public: \
+        int transitionOK(void); \
+    }
+DECLARE_STATE(StateStompAttack);
+DECLARE_STATE(StateShieldAttack);
+DECLARE_STATE(StateBatSwipe);
+DECLARE_STATE(StatePunch);
+DECLARE_STATE(StateCrowdControl);
+DECLARE_STATE(StateGrappleThrow);
+DECLARE_STATE(StatePickUp);
+DECLARE_STATE(StateCatch);
+DECLARE_STATE(StateThrow);
+DECLARE_STATE(StateJavelin);
+DECLARE_STATE(StateTwoHandedThrow);
+#define ST_DASH 0x7A90
+#define ST_PUNCH 0x8470
+#define ST_BAT_SWIPE 0xAE90
+#define ST_PICK_UP 0xDC70
+#define ST_GRAPPLE_THROW 0xDD74
+#define ST_THROW 0xEF40
+#define ST_CROWD_CONTROL 0xF3F0
+#define ST_JAVELIN 0xFE38
+#define ST_TWO_HANDED_THROW 0x1074C
+#define ST_CATCH 0x10BF0
+#define ST_STOMP 0x10CF0
+#define ST_SHIELD 0x10D90
+float mathfHeadingFromVector(_fvector *v);
+float smoothEasyInTC(float cur, float target, float rate, float tolerance);
+unsigned timerGetCurTics(void);
+void animationSetToPercent(_animHandle h, float pct, int update);
+extern float s_turnCap __asm__("s_turnCap.2669"); /* StateRun::update: 2.5 */
+__asm__("#SNFIX_SMALL s_turnCap.2669");
+DECLARE_STATE(StateTaunt);
+DECLARE_STATE(StateGrappleThrow1);
+#define ST_RUN 0x79AC
+#define ST_GRAPPLE_THROW1 0xDDA0
+#define ST_BUTT_SLAM 0xFA1C
+#define ST_TAUNT 0xFE20
+/* the state embedded at `off` can be entered / enter it */
+#define TRY_STATE(cls, off) (((cls *)STATE_AT(owner, off))->transitionOK())
+#define ENTER_STATE(off) owner->enterNewState(STATE_AT(owner, off))
+#define CLAMP_HALF(t) ((t) < -0.5f ? -0.5f : (t) > 0.5f ? 0.5f : (t))
+/* virtual Monster::takeHit (Monster vtable slot 8, entries {this delta, function} like the states') */
+#define MONSTER_TAKE_HIT(m, dir, dmg, id) \
+    (((void (*)(void *, _fvector *, float, int))*(void **)(*(char **)((char *)(m) + 0x10) + 0xC))( \
+        (char *)(m) + *(short *)(*(char **)((char *)(m) + 0x10) + 8), (dir), (dmg), (id)))
+int particleCreateFx(_fvector *pos, int id, float scale, float (*m)[4], float strength);
+void *particleGetParticle(int h);
+void mathfMatrixFromNormal(float (*m)[4], _fvector *n);
+float getWaterLevel(void);
+void threeMileFillTub(Monster *m);
+void islandEruptVolcano(int type, int id);
+void sanFranStartSteam(void);
+extern int quakeDone;
+#define SURFACE_WATER 3   /* low byte of an _hdResult surface word */
+#define STATE_ID_PUNCH 3
+#define STATE_ID_RAM 0x28
 /* Virtual transitionFeasible(): vtable slot {delta @0x28, function @0x2C}. */
 #define VFEASIBLE(st) (((int (*)(void *))*(void **)((char *)(st)->vptr + 0x2C))((char *)(st) + *(short *)((char *)(st)->vptr + 0x28)))
 #define PAD(m, n) ((char *)(*(PadFlags *)((char *)(m) + 0x5040))[n])
@@ -310,6 +426,7 @@ public:
     float getSpeedModifier(void);
     void updateFootMotion(float speed, float accel, float f);
     void updateAirMotion(float speed, float accel);
+    void smoothToUpright(float rate);
 };
 void animationSetToEnd(_animHandle h, bool update);
 void animationSetDirection(_animHandle h, bool forward);
@@ -341,16 +458,18 @@ struct CameraView {
     _cs *cs;          /* 0xCF0 */
     Monster *follows; /* 0xCF4 */
     int pov;          /* 0xCF8 */
-    char padCFC[0xEB0 - 0xCFC];
+    char padCFC[0xDA4 - 0xCFC];
+    int fDA4;         /* 0xDA4: set from fDA8 when a monster lands or slams (camera bounce) */
+    int fDA8;
+    char padDAC[0xEB0 - 0xDAC];
 };
 typedef char _size_CameraView[sizeof(CameraView) == 0xEB0 ? 1 : -1];
 extern CameraView cameraViews[] __asm__("_7Cameras$m_cameras");
 
 /* Butt slam (Monster+0xFA1C): from a jump or a flight, the monster drops onto what is below. Animation 0x105 is the jump
  * into the slam (velocity cancelled, then a downward push at boostPercent), 0x106 the drop itself; handleCollis lands it. */
-class StateButtSlam : public MonsterState {
+class StateButtSlam : public AttackState {
 public:
-    int unk14, unk18;      /* AttackState */
     float maxRiseSpeed;    /* 0x1C: not while still rising faster than this */
     float maxDropFromApex; /* 0x20: not once fallen this far below the jump's apex */
     float minHeight;       /* 0x24: or, if lower than this above the ground shadow, only over a hat id in [0x20, 0x400] */
@@ -358,7 +477,7 @@ public:
     float blendTime;       /* 0x2C */
     float boostPercent;    /* 0x30: point of animation 0x105 where the downward push comes */
     float boostDrop;       /* 0x34: the push (subtracted from vel.z) */
-    float f38;
+    float dropBlend;       /* 0x38: blend into the drop animation 0x106 */
     float launchPercent;   /* 0x3C: point of the drop animation where the monster is launched */
     float launchUp;        /* 0x40: launch velocity added upward */
     float launchBack;      /* 0x44: and backward along the heading */
@@ -366,15 +485,17 @@ public:
     float staminaCost;     /* 0x4C */
     char pad50[0x64 - 0x50];
     _cs *shockwave;        /* 0x64: hidden when the slam is preempted */
-    char pad68[0x30C - 0x68];
+    ExpandingRing<ShockWaveConfig> shock; /* 0x68: the slam's shockwave; reach[0] is also the range of the direct hit */
     int anim;              /* 0x30C: MonsterAnim playing */
     int boostPending;      /* 0x310 */
     int launched;          /* 0x314 */
+    char pad318[0x324 - 0x318];
 
     int transitionOK(void);
     int transitionFeasible(void);
     void transitionInto(void);
     void update(void);
+    void handleCollis(_hdResult &r);
     int acceptHit(HitEvent &e);
     void handlePreemption(MonsterState *next);
 };
@@ -521,7 +642,102 @@ void StateButtSlam::update(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__13StateButtSlam);
 #endif
+/* The first touch after the push starts the drop animation (0x106) and the impact: the human player's pad rumbles; a
+ * monster within the shockwave's first reach takes the first ring's hit directly, otherwise the shockwave goes off
+ * with dust (bigger for the assboss, a splash on water). Stamina is credited, the slam sound plays and the camera
+ * bounces. Slamming special hats triggers level events: 10001 fills the Three Mile tub, 10025..10027 erupt the island
+ * volcano (with a lava burst), 10075 starts the San Francisco steam once the quake happened. */
+#ifdef NON_MATCHING
+/* untuned: 2/357 words; retail copies the shockwave config with an unaligned-aware loop and reads the hat ids with ld */
+void StateButtSlam::handleCollis(_hdResult &r)
+{
+    unsigned hat;
+
+    MonsterState::handleCollis(r);
+    if (anim != ANIM_BUTTSLAM_FALL && !boostPending) {
+        Monster *victim;
+        CameraView *cam;
+
+        anim = ANIM_BUTTSLAM_FALL;
+        animationTransitionInto(owner->m_anims[ANIM_BUTTSLAM_FALL], dropBlend, 1, 1);
+        if (owner->m_playerNum == PLAYER_HUMAN) {
+            ActuatorData rumble = *(ActuatorData *)((char *)game + 0x1227E0);
+
+            inputSetActuator(owner->m_index, &rumble);
+        }
+        victim = owner->getClosestMonster(shock.reach[0]);
+        if (victim != 0) {
+            HitEvent *e = HitEvent::create();
+            FVECTOR dir;
+
+            e->pos = (_fvector *)&r.point;
+            e->type = 2;
+            e->source = 7;
+            e->result = &r;
+            dir.x = 0.0f;
+            dir.y = 0.0f;
+            dir.z = 0.0f;
+            e->strength34 = shock.rings[0].strength34;
+            e->strength38 = shock.rings[0].strength38;
+            MONSTER_TAKE_HIT(victim, &dir, shock.rings[0].damage, owner->m_id);
+        } else {
+            float mat[4][4];
+
+            ShockWave::Activate((_fvector *)&owner->m_cs->trans, shock, HitEvent::DAMAGE_BUTT_SLAM, owner->m_id, 0);
+            mathfMatrixFromNormal(mat, (_fvector *)&r.normal);
+            if (owner->m_typeBits == MONSTER_TYPE_ASSBOSS) {
+                particleCreateFx((_fvector *)&r.point, 0x43, 10.0f, mat, 0.0f);
+                particleCreateFx((_fvector *)&r.point, 0x75, 5.0f, mat, 0.0f);
+            } else if (((unsigned char *)owner)[0x1A42] == SURFACE_WATER) {
+                FVECTOR splash = r.point;
+
+                splash.z = getWaterLevel();
+                particleCreateFx(&splash, 0x41, 1.0f, 0, 0.0f);
+                particleCreateFx(&splash, 0x55, 1.0f, 0, 0.0f);
+            } else {
+                particleCreateFx((_fvector *)&r.point, 0x43, 1.0f, mat, 0.0f);
+                particleCreateFx((_fvector *)&r.point, 0x75, 1.0f, mat, 0.0f);
+                particleCreateFx((_fvector *)&r.point, 0x1D, 2.0f, 0, 0.0f);
+            }
+        }
+        creditStaminaForAttack(0.0f);
+        MSOUND(owner)->playButtSlamSound();
+        cam = &cameraViews[owner->m_cameraView];
+        cam->fDA4 = cam->fDA8;
+    }
+    hat = (r.ids >> 11) & 0x3FFF;
+    if (hat == 10001) {
+        threeMileFillTub(owner);
+        gameHud(owner->m_cameraView)->addMessage(0xD, 1);
+    }
+    if (hat == 10025 || hat == 10026 || hat == 10027) {
+        FVECTOR up = {0.0f, 0.0f, 1.0f, 0.0f};
+        float mat[4][4];
+        int fx;
+        char *p;
+
+        fx = particleCreateFx((_fvector *)&r.point, 0x6B, 2.0f, 0, 0.0f);
+        mathfMatrixFromNormal(mat, &up);
+        p = (char *)particleGetParticle(fx);
+        if (p != 0) {
+            *(Mat44 *)(p + 0x2D20) = *(Mat44 *)mat;
+            *(FVECTOR *)(p + 0x2D00) = r.point;
+            *(char **)(p + 0x2D98) = p + 0x2D20;
+            *(char **)(p + 0x2D94) = p + 0x2D00;
+        }
+        particleCreateFx((_fvector *)&r.point, 9, 10.0f, mat, 0.0f);
+        islandEruptVolcano(hat, owner->m_id);
+    }
+    if (hat == 10075 && quakeDone)  {
+        sanFranStartSteam();
+        gameHud(owner->m_cameraView)->addMessage(0xF, 1);
+    }
+    if (shockwave != 0)
+        shockwave->drawMe = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", handleCollis__13StateButtSlamR9_hdResult);
+#endif
 /* Shocks (source 5) always get through; a hit from sources 2..4 of kind 0, 2 or 5, or a melee hit (0xB), only with
  * some strength. */
 int StateButtSlam::acceptHit(HitEvent &e)
@@ -916,14 +1132,102 @@ void JumpFlyBase::update(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__11JumpFlyBase);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/MovementStates", handleStateTransitions__11JumpFlyBase);
+/* The states that can take over a jump or a flight, in priority order. Once landed (sub-state 9; not while heavy,
+ * not monster type 0x1C0): taunt, block, counter, the air state again, run (carrying landMomentum), dash, the
+ * attacks, the special, crowd control, the state at Monster+0x797C, the grapples, climb, pick up, catch, throw,
+ * javelin, two-handed throw. In the air: the grapple throws, butt slam, grapple, climb, pick up, the attacks, throw,
+ * javelin, two-handed throw, crowd control, catch. */
+void JumpFlyBase::handleStateTransitions(void)
+{
+    if (subState == SUB_9) {
+        if (heavy == 1 || owner->m_typeBits == 0x1C0)
+            return;
+        if (TRY_STATE(StateTaunt, ST_TAUNT)) {
+            ENTER_STATE(ST_TAUNT);
+        } else if (TRY_STATE(StateBlock, ST_BLOCK)) {
+            ENTER_STATE(ST_BLOCK);
+        } else if (TRY_STATE(StateCounter, ST_COUNTER)) {
+            ENTER_STATE(ST_COUNTER);
+        } else if (VCALL_INT((MonsterState *)owner->m_stateRef, VT_TRANSITION_OK)) {
+            owner->enterNewState((MonsterState *)owner->m_stateRef);
+        } else if (TRY_STATE(StateRun, ST_RUN)) {
+            ((StateRun *)STATE_AT(owner, ST_RUN))->landMomentum = landMomentum;
+            ENTER_STATE(ST_RUN);
+        } else if (TRY_STATE(StateDash, ST_DASH)) {
+            ENTER_STATE(ST_DASH);
+        } else if (TRY_STATE(StateStompAttack, ST_STOMP)) {
+            ENTER_STATE(ST_STOMP);
+        } else if (TRY_STATE(StateShieldAttack, ST_SHIELD)) {
+            ENTER_STATE(ST_SHIELD);
+        } else if (TRY_STATE(StateBatSwipe, ST_BAT_SWIPE)) {
+            ENTER_STATE(ST_BAT_SWIPE);
+        } else if (TRY_STATE(StatePunch, ST_PUNCH)) {
+            ENTER_STATE(ST_PUNCH);
+        } else if (owner->m_specialState != 0 && VCALL_INT((MonsterState *)owner->m_specialState, VT_TRANSITION_OK)) {
+            owner->enterNewState((MonsterState *)owner->m_specialState);
+        } else if (TRY_STATE(StateCrowdControl, ST_CROWD_CONTROL)) {
+            ENTER_STATE(ST_CROWD_CONTROL);
+        } else if (VCALL_INT(*(MonsterState **)((char *)owner + 0x797C), VT_TRANSITION_OK)) {
+            owner->enterNewState(*(MonsterState **)((char *)owner + 0x797C));
+        } else if (TRY_STATE(StateGrappleThrow, ST_GRAPPLE_THROW)) {
+            ENTER_STATE(ST_GRAPPLE_THROW);
+        } else if (TRY_STATE(StateGrappleThrow1, ST_GRAPPLE_THROW1)) {
+            ENTER_STATE(ST_GRAPPLE_THROW1);
+        } else if (TRY_STATE(StateGrapple, ST_GRAPPLE)) {
+            ENTER_STATE(ST_GRAPPLE);
+        } else if (TRY_STATE(StateClimb, ST_CLIMB)) {
+            ENTER_STATE(ST_CLIMB);
+        } else if (TRY_STATE(StatePickUp, ST_PICK_UP)) {
+            ENTER_STATE(ST_PICK_UP);
+        } else if (TRY_STATE(StateCatch, ST_CATCH)) {
+            ENTER_STATE(ST_CATCH);
+        } else if (TRY_STATE(StateThrow, ST_THROW)) {
+            ENTER_STATE(ST_THROW);
+        } else if (TRY_STATE(StateJavelin, ST_JAVELIN)) {
+            ENTER_STATE(ST_JAVELIN);
+        } else if (TRY_STATE(StateTwoHandedThrow, ST_TWO_HANDED_THROW)) {
+            ENTER_STATE(ST_TWO_HANDED_THROW);
+        }
+        return;
+    }
+    if (TRY_STATE(StateGrappleThrow, ST_GRAPPLE_THROW))
+        ENTER_STATE(ST_GRAPPLE_THROW);
+    else if (TRY_STATE(StateGrappleThrow1, ST_GRAPPLE_THROW1))
+        ENTER_STATE(ST_GRAPPLE_THROW1);
+    else if (TRY_STATE(StateButtSlam, ST_BUTT_SLAM))
+        ENTER_STATE(ST_BUTT_SLAM);
+    else if (TRY_STATE(StateGrapple, ST_GRAPPLE))
+        ENTER_STATE(ST_GRAPPLE);
+    else if (TRY_STATE(StateClimb, ST_CLIMB))
+        ENTER_STATE(ST_CLIMB);
+    else if (TRY_STATE(StatePickUp, ST_PICK_UP))
+        ENTER_STATE(ST_PICK_UP);
+    else if (TRY_STATE(StateStompAttack, ST_STOMP))
+        ENTER_STATE(ST_STOMP);
+    else if (TRY_STATE(StateShieldAttack, ST_SHIELD))
+        ENTER_STATE(ST_SHIELD);
+    else if (TRY_STATE(StateBatSwipe, ST_BAT_SWIPE))
+        ENTER_STATE(ST_BAT_SWIPE);
+    else if (TRY_STATE(StatePunch, ST_PUNCH))
+        ENTER_STATE(ST_PUNCH);
+    else if (TRY_STATE(StateThrow, ST_THROW))
+        ENTER_STATE(ST_THROW);
+    else if (TRY_STATE(StateJavelin, ST_JAVELIN))
+        ENTER_STATE(ST_JAVELIN);
+    else if (TRY_STATE(StateTwoHandedThrow, ST_TWO_HANDED_THROW))
+        ENTER_STATE(ST_TWO_HANDED_THROW);
+    else if (TRY_STATE(StateCrowdControl, ST_CROWD_CONTROL))
+        ENTER_STATE(ST_CROWD_CONTROL);
+    else if (TRY_STATE(StateCatch, ST_CATCH))
+        ENTER_STATE(ST_CATCH);
+}
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", __8StateFly);
 void StateFly::init(Monster *m)
 {
     owner = m;
-    blendWings[0].init(m->m_anims[0x24]);
-    blendWings[1].init(owner->m_anims[0x25]);
-    blendWings[2].init(owner->m_anims[0x26]);
+    lean[0].init(m->m_anims[0x24]);
+    lean[1].init(owner->m_anims[0x25]);
+    lean[2].init(owner->m_anims[0x26]);
 }
 #ifdef NON_MATCHING
 /* Height reached by the jump launch speed (config +0xC) against gravity: v^2 / (2g), g being negative. */
@@ -1047,7 +1351,174 @@ void StateFly::transitionInto(void)
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", transitionInto__8StateFly);
 #endif
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__8StateFly);
+/* Leaving a flap (4) or a glide (7) restarts the height tracking; leaving a glide also ramps the glide layer out,
+ * restores Monster+0x130 and, for a human player (unified view and nothing held, or game mode 9), sets two PadFlags
+ * fields. Sub-states: 1 crouch (as StateJump), 2 launch, 3 rising (0x21 with the lean layers, 0xB5 heavy), 4 flap
+ * (0x71, 0x72 with input 0x14, looping), 5 flap boost (pays the flap stamina), 6 falling (0x22; 0xB6 heavy as a layer),
+ * 7 glide (0x6E, glide layer in, Monster+0x130 = 3), 8 landing (0x23 layer), 9 landed (as StateJump). State flag 0x20
+ * is set while airborne. */
+#ifdef NON_MATCHING
+/* untuned: 16/512 words; register allocation of the jump table cases and anim handle addressing */
+void StateFly::enterSubState(SubState s)
+{
+    if (subState == SUB_4) {
+        startZ = apexZ = owner->m_cs->trans.z;
+    } else if (subState == SUB_7) {
+        if (glide != 0 && glide->m_node.active)
+            glide->rampOut(glideBlend);
+        *(int *)((char *)owner + 0x130) = savedMonster130;
+        startZ = apexZ = owner->m_cs->trans.z;
+        if (owner->m_playerNum == PLAYER_HUMAN && ((gUseUnifiedView != 0 && owner->m_target == 0) || game->m_gameMode == 9)) {
+            owner->m_padFlags.f16E8 = 1;
+            owner->m_padFlags.f16E4 = 1;
+        }
+    }
+    flags |= 0x20;
+    switch (s) {
+    case SUB_1:
+        owner->m_unk1B8 = 1.0f;
+        if (config == heavyConfig)
+            footPref = FOOT_ANY;
+        if (footPref == FOOT_0 && owner->m_anims[0x1F].ci != 0) {
+            anim = 0x1F;
+        } else if (footPref == FOOT_1 && owner->m_anims[0x20].ci != 0) {
+            anim = 0x20;
+        } else {
+            anim = config == lightConfig ? 0x1E : 0xB4;
+            animationSetTotalRunFrames(owner->m_anims[anim], SCFG(config, 0));
+        }
+        animationTransitionInto(owner->m_anims[anim], crouchBlend, 1, 1);
+        flags &= ~0x20;
+        break;
+    case SUB_2:
+        if (!(*owner->m_prevState == STATE_ID_CLIMB && ((StateClimb *)STATE_AT(owner, ST_CLIMB))->subState == StateClimb::SUB_MOUNT)) {
+            MVEL(owner)->z = SCFG(config, 0xC);
+            MSOUND(owner)->playJumpSound();
+        }
+        f314 = 0;
+        break;
+    case SUB_3:
+        if (config == lightConfig) {
+            int i;
+
+            blend108.init(owner->m_anims[0x21]);
+            for (i = 0; i < 3; i++) {
+                lean[i].rampIn(300.0f);
+                lean[i].m_weight = 1.0f;
+                lean[i].setPercent(0.5f);
+                lean[i].setSpeed(0.0f);
+            }
+        } else {
+            blend108.init(owner->m_anims[0xB5]);
+        }
+        blend108.m_weight = 0.0f;
+        blend108.rampIn(300.0f);
+        blend108.setSpeed(1.0f);
+        break;
+    case SUB_4: {
+        _animHandle *h;
+
+        owner->m_unk1B8 = 1.0f;
+        lean[0].rampOut(100.0f);
+        lean[1].rampOut(100.0f);
+        lean[2].rampOut(100.0f);
+        blend108.rampOut(100.0f);
+        blend170.rampOut(100.0f);
+        if (subState != SUB_5) {
+            float *f = (float *)((char *)owner + 0x200);
+
+            f[0] = 0.0f;
+            f[2] = 0.0f;
+            f[1] = 0.0f;
+        }
+        f314 = 0;
+        anim = owner->m_padFlags[0]->f14 != 0 ? 0x72 : 0x71;
+        h = &owner->m_anims[anim];
+        animationSetSpeed(*h, flapSpeed);
+        animationLoop(*h, false);
+        if (animationIsRunning(*h))
+            animationStart(*h, true);
+        else
+            animationTransitionInto(*h, flapBlend, 1, 1);
+        break;
+    }
+    case SUB_5:
+        MVEL(owner)->z = SCFG(config, 0x14);
+        owner->m_stamina.drain(SCFG(config, 0x10), true, false);
+        break;
+    case SUB_6: {
+        float *f;
+
+        owner->m_unk1B8 = 1.5f;
+        f = (float *)((char *)owner + 0x200);
+        f[0] = 0.0f;
+        f[2] = 0.0f;
+        f[1] = 0.0f;
+        if (!blend108.m_node.active) {
+            blend108.init(owner->m_anims[config == lightConfig ? 0x21 : 0xB5]);
+            blend108.m_weight = 0.0f;
+            blend108.rampIn(300.0f);
+            blend108.setSpeed(1.0f);
+        }
+        if (config == lightConfig) {
+            anim = 0x22;
+            animationTransitionInto(owner->m_anims[0x22], fallBlend, 1, 1);
+        } else {
+            anim = 0xB6;
+            blend170.init(owner->m_anims[0xB6]);
+            blend170.rampIn(300.0f);
+            blend170.setSpeed(0.0f);
+            blend170.setPercent(0.0f);
+        }
+        break;
+    }
+    case SUB_7:
+        lean[0].rampOut(100.0f);
+        lean[1].rampOut(100.0f);
+        lean[2].rampOut(100.0f);
+        blend108.rampOut(100.0f);
+        *(int *)((char *)owner + 0x130) = 3;
+        f318 = 0;
+        anim = 0x6E;
+        animationTransitionInto(owner->m_anims[0x6E], glideBlend, 1, 1);
+        if (glide != 0)
+            glide->rampIn(glideBlend);
+        *(int *)((char *)owner + 0x6728) = 0;
+        break;
+    case SUB_8:
+        if (config == lightConfig) {
+            lean[0].rampOut(100.0f);
+            lean[1].rampOut(100.0f);
+            lean[2].rampOut(100.0f);
+            anim = 0x23;
+            blend170.init(owner->m_anims[0x23]);
+            blend170.rampIn(300.0f);
+            blend170.setSpeed(0.0f);
+            blend170.setPercent(0.0f);
+        }
+        blend108.rampOut(100.0f);
+        break;
+    case SUB_9: {
+        float vz;
+        CameraView *cam;
+
+        flags &= ~0x20;
+        vz = fabsf(MVEL(owner)->z);
+        landMomentum = vz > SCFG(config, 0x2C) ? vz : SCFG(config, 0x2C);
+        owner->landingShake();
+        MSOUND(owner)->playLandingSound();
+        cam = &cameraViews[owner->m_cameraView];
+        cam->fDA4 = cam->fDA8;
+        if (owner->m_playerNum == PLAYER_HUMAN)
+            inputSetActuator(owner->m_index, &landRumble);
+        break;
+    }
+    }
+    subState = s;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", enterSubState__8StateFlyQ211JumpFlyBase8SubState);
+#endif
 /* Ignores interactives without flag 8 and other monsters. Landing on a floor (kind 7, or a normal steeper than 45
  * degrees up that is not kind 10/11) while not rising: a dive (7) lands (8) only above s_impactVel into the surface;
  * 3 and 6 land, 8 goes on to 9. A dive into a wall faster than s_impactVel bounces off (6). */
@@ -1099,9 +1570,9 @@ void StateFly::handlePreemption(MonsterState *next)
     footPref = FOOT_ANY;
     blend108.rampOut(100.0f);
     blend170.rampOut(100.0f);
-    blendWings[0].rampOut(100.0f);
-    blendWings[1].rampOut(100.0f);
-    blendWings[2].rampOut(100.0f);
+    lean[0].rampOut(100.0f);
+    lean[1].rampOut(100.0f);
+    lean[2].rampOut(100.0f);
     if (glide != 0) {
         glide->rampOutAndDealloc(100.0f);
         glide = 0;
@@ -1114,9 +1585,9 @@ INCLUDE_ASM("asm/nonmatchings/game/MovementStates", __9StateJump);
 void StateJump::init(Monster *m)
 {
     owner = m;
-    blendWings[0].init(m->m_anims[0x24]);
-    blendWings[1].init(owner->m_anims[0x25]);
-    blendWings[2].init(owner->m_anims[0x26]);
+    lean[0].init(m->m_anims[0x24]);
+    lean[1].init(owner->m_anims[0x25]);
+    lean[2].init(owner->m_anims[0x26]);
 }
 #ifdef NON_MATCHING
 /* Height reached by the jump launch speed (config +0xC) against gravity: v^2 / (2g), g being negative. */
@@ -1204,8 +1675,251 @@ void StateJump::transitionInto(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", transitionInto__9StateJump);
 #endif
+/* Crouch: launch at the take-off percent of the config ([1] with no preferred foot, [2] otherwise). Launch: while a
+ * ledge mount (climb animation 0x69) plays, carry the climb's huck velocity in the monster's frame; rise once the
+ * vertical speed drops to config[5]. Rising: releasing the button cuts the rise (not the assboss); falling once vz <= 0.
+ * Falling: land when touching down or when the ground (shadow) is closer than config[7] - vz * config[8]. The jump
+ * layer's weight follows |vz| between config[4] and config[5]/[6]. Landed: the landing layer settles with the landing
+ * momentum, then the get-up animation (0x27, 0xB7 heavy) takes over; idle at the end. Heavy jumps and monster type
+ * 0x1C0 do not steer while crouching or landed. The lean layers follow the turn rate and the side/forward speeds. */
+#ifdef NON_MATCHING
+/* untuned: 11/526 words; retail clamps with min.s/max.s and shares the lean-weight code between sub-states */
+void StateJump::update(void)
+{
+    MonsterDynamics *dyn;
+    float pct;
+    float a, lo, hi;
+    float t;
+
+    JumpFlyBase::update();
+    dyn = DYN(owner);
+    pct = animationGetCurrentPercent(owner->m_anims[jumpAnim]);
+    switch (subState) {
+    case SUB_1:
+        if ((footPref == FOOT_ANY ? SCFG(config, 4) : SCFG(config, 8)) < pct)
+            enterSubState(SUB_2);
+        break;
+    case SUB_2:
+        if (*owner->m_prevState == STATE_ID_CLIMB && ((StateClimb *)STATE_AT(owner, ST_CLIMB))->subState == StateClimb::SUB_MOUNT
+            && animationGetCurrentPercent(owner->m_anims[0x69]) < 1.0f) {
+            FVECTOR *huck = &((StateClimb *)STATE_AT(owner, ST_CLIMB))->huckVelocity;
+            float (*m)[4] = owner->m_cs->mat;
+            _fvector *v = MVEL(owner);
+
+            v->x = m[0][0] * huck->x + m[1][0] * huck->y + m[2][0] * huck->z;
+            v->y = m[0][1] * huck->x + m[1][1] * huck->y + m[2][1] * huck->z;
+            v->z = m[0][2] * huck->x + m[1][2] * huck->y + m[2][2] * huck->z;
+            v->w = huck->w;
+        } else if (MVEL(owner)->z <= SCFG(config, 0x14)) {
+            enterSubState(SUB_3);
+        }
+        break;
+    case SUB_3: {
+        _fvector *v;
+
+        dyn->smoothToUpright(0.2f);
+        v = MVEL(owner);
+        if (v->z <= 0.0f) {
+            enterSubState(SUB_6);
+            break;
+        }
+        if (owner->m_padFlags[0]->jump == 0 && owner->m_typeBits != MONSTER_TYPE_ASSBOSS)
+            v->z = smoothEasyInTC(v->z, 0.0f, 0.08f, 0.001f);
+        a = fabsf(v->z);
+        lo = SCFG(config, 0x10);
+        hi = SCFG(config, 0x14);
+        goto weight;
+    }
+    case SUB_6:
+        dyn->smoothToUpright(0.2f);
+        if (!owner->m_freeFalling
+            || owner->m_cs->trans.z - owner->m_shadow->trans.z < SCFG(config, 0x1C) - MVEL(owner)->z * SCFG(config, 0x20)) {
+            enterSubState(SUB_8);
+            break;
+        }
+        a = fabsf(MVEL(owner)->z);
+        lo = SCFG(config, 0x10);
+        hi = SCFG(config, 0x18);
+    weight:
+        if (a < lo) {
+            blend9C.m_node.weight = 1.0f;
+        } else if (a < hi) {
+            t = 1.0f - (a - lo) / (hi - lo);
+            blend9C.m_node.weight = (t + t) - t * t;
+        }
+        break;
+    case SUB_8:
+        dyn->smoothToUpright(0.2f);
+        break;
+    case SUB_9:
+        if (jumpAnim == 0x23 || jumpAnim == 0xB6) {
+            AnimBlend *b = &blend104;
+            float p;
+
+            landMomentum = landMomentum * SCFG(config, 0x2C);
+            p = b->getPercent() + landMomentum * SCFG(config, 0x28);
+            b->setPercent(1.0f < p ? 1.0f : p);
+            if (landMomentum < 0.1f) {
+                jumpAnim = config == lightConfig ? 0x27 : 0xB7;
+                animationSetToPercent(owner->m_anims[jumpAnim], 1.0f - b->getPercent(), 1);
+                animationStart(owner->m_anims[jumpAnim], false);
+                b->rampOut(getUpBlend);
+            }
+        } else if (0.99f <= pct) {
+            owner->enterNewState(STATE_AT(owner, ST_IDLE));
+        }
+        break;
+    }
+    if ((config == heavyConfig || owner->m_typeBits == 0x1C0) && (subState == SUB_1 || subState == SUB_9)) {
+        DYN(owner)->updateTurn(true);
+        DYN(owner)->updateFootMotion(0.0f, 0.0f, heavyFootF);
+    } else {
+        DYN(owner)->updateTurn(true);
+        DYN(owner)->updateMove(true);
+        owner->updateLock((MonsterReticleState)1);
+    }
+    if (lean[0].m_node.active) {
+        t = *(float *)((char *)dyn + 0x108) / *(float *)((char *)owner + 0xC8) * 0.5f;
+        t = CLAMP_HALF(t);
+        lean[0].setPercent(smoothEasyInTC(lean[0].getPercent(), t + 0.5f, 0.1f, 0.01f));
+        t = *(float *)((char *)dyn + 0x158) / dyn->getConfig()[4] * 0.5f;
+        t = CLAMP_HALF(t);
+        if (subState == SUB_6 || subState == SUB_8) {
+            float w = blend9C.getWeight();
+
+            w = w * w;
+            t = t * ((1.0f - w * w) * -0.7f);
+        }
+        lean[1].setPercent(smoothEasyInTC(lean[1].getPercent(), t + 0.5f, 0.1f, 0.01f));
+        t = *(float *)((char *)dyn + 0x154) / dyn->getConfig()[3] * -0.5f;
+        t = CLAMP_HALF(t);
+        if (subState == SUB_6 || subState == SUB_8) {
+            float w = blend9C.getWeight();
+
+            w = w * w;
+            t = t * ((1.0f - w * w) * -0.7f);
+        }
+        lean[2].setPercent(smoothEasyInTC(lean[2].getPercent(), t + 0.5f, 0.1f, 0.01f));
+    }
+    handleStateTransitions();
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__9StateJump);
+#endif
+/* 1 crouch (take-off animation by foot: 0x1F left, 0x20 right, else 0x1E stretched to config[0] frames; 0xB4 heavy),
+ * 2 launch (vertical speed from the config, unless climbing over a ledge), 3 rising (0x21 with the wing layers, 0xB5
+ * heavy), 6 falling (0x22; 0xB6 heavy as a layer), 8 landing (0x23 layer), 9 landed (dust at both feet, landing
+ * shake, sound, camera bounce and the human player's rumble; keeps the landing speed for the run). State flag 0x20 is
+ * set while airborne. */
+#ifdef NON_MATCHING
+/* untuned: 7/367 words; register allocation of the jump table cases and anim handle addressing */
+void StateJump::enterSubState(SubState s)
+{
+    switch (s) {
+    case SUB_1:
+        flags &= ~0x20;
+        if (config == heavyConfig)
+            footPref = FOOT_ANY;
+        if (footPref == FOOT_0 && owner->m_anims[0x1F].ci != 0) {
+            jumpAnim = 0x1F;
+        } else if (footPref == FOOT_1 && owner->m_anims[0x20].ci != 0) {
+            jumpAnim = 0x20;
+        } else {
+            jumpAnim = config == lightConfig ? 0x1E : 0xB4;
+            animationSetTotalRunFrames(owner->m_anims[jumpAnim], SCFG(config, 0));
+        }
+        animationTransitionInto(owner->m_anims[jumpAnim], crouchBlend, 1, 1);
+        break;
+    case SUB_2:
+        flags |= 0x20;
+        if (*owner->m_prevState == STATE_ID_CLIMB && ((StateClimb *)STATE_AT(owner, ST_CLIMB))->subState == StateClimb::SUB_MOUNT)
+            break;
+        MVEL(owner)->z = SCFG(config, 0xC);
+        MSOUND(owner)->playJumpSound();
+        break;
+    case SUB_3:
+        flags |= 0x20;
+        if (config == lightConfig) {
+            int i;
+
+            jumpAnim = 0x21;
+            for (i = 0; i < 3; i++) {
+                lean[i].rampIn(300.0f);
+                lean[i].m_weight = 1.0f;
+                lean[i].setPercent(0.5f);
+                lean[i].setSpeed(0.0f);
+            }
+        } else {
+            jumpAnim = 0xB5;
+        }
+        blend9C.init(owner->m_anims[jumpAnim]);
+        blend9C.m_weight = 0.0f;
+        blend9C.rampIn(300.0f);
+        blend9C.setSpeed(1.0f);
+        break;
+    case SUB_6:
+        flags |= 0x20;
+        owner->m_unk1B8 = 1.5f;
+        if (config == lightConfig) {
+            jumpAnim = 0x22;
+            if (0.99f <= blend9C.getWeight())
+                animationStart(owner->m_anims[0x22], true);
+            else
+                animationTransitionInto(owner->m_anims[0x22], fallBlend, 1, 1);
+        } else {
+            jumpAnim = 0xB6;
+            blend104.init(owner->m_anims[0xB6]);
+            blend104.rampIn(300.0f);
+            blend104.setSpeed(0.0f);
+            blend104.setPercent(0.0f);
+        }
+        break;
+    case SUB_8:
+        flags &= ~0x20;
+        if (config == lightConfig) {
+            AnimBlend *b = &blend104;
+            float pct;
+
+            jumpAnim = 0x23;
+            if (b->m_node.active)
+                pct = b->getPercent();
+            else
+                pct = 0.0f;
+            b->init(owner->m_anims[jumpAnim]);
+            b->rampIn(0.0f < pct ? 0.0f : 300.0f);
+            b->setSpeed(0.0f);
+            b->setPercent(pct);
+        }
+        blend9C.rampOut(300.0f);
+        break;
+    case SUB_9: {
+        float vz;
+        CameraView *cam;
+
+        flags &= ~0x20;
+        if (config == lightConfig) {
+            lean[0].rampOut(100.0f);
+            lean[1].rampOut(100.0f);
+            lean[2].rampOut(100.0f);
+        }
+        vz = fabsf(MVEL(owner)->z);
+        landMomentum = vz > SCFG(config, 0x24) ? vz : SCFG(config, 0x24);
+        particleCreateFx((_fvector *)((char *)owner + 0x3DE0), (float (*)[4])((char *)owner + 0x3200), 0x69, 1.0f, 0, 0, false, 0.0f);
+        particleCreateFx((_fvector *)((char *)owner + 0x3DF0), (float (*)[4])((char *)owner + 0x3240), 0x69, 1.0f, 0, 0, false, 0.0f);
+        owner->landingShake();
+        MSOUND(owner)->playLandingSound();
+        cam = &cameraViews[owner->m_cameraView];
+        cam->fDA4 = cam->fDA8;
+        if (owner->m_playerNum == PLAYER_HUMAN)
+            inputSetActuator(owner->m_index, &landRumble);
+        break;
+    }
+    }
+    subState = s;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", enterSubState__9StateJumpQ211JumpFlyBase8SubState);
+#endif
 /* Only while not rising. Ignores interactives without flag 8 and other monsters. On a floor (kind 7, or a normal
  * steeper than 45 degrees up that is not kind 10/11), sub-states 3 and 6 land (8), and 8 goes on to 9. */
 #ifdef NON_MATCHING
@@ -1245,9 +1959,9 @@ void StateJump::handlePreemption(MonsterState *next)
     footPref = FOOT_ANY;
     blend9C.rampOut(100.0f);
     blend104.rampOut(100.0f);
-    blendWings[0].rampOut(100.0f);
-    blendWings[1].rampOut(100.0f);
-    blendWings[2].rampOut(100.0f);
+    lean[0].rampOut(100.0f);
+    lean[1].rampOut(100.0f);
+    lean[2].rampOut(100.0f);
     owner->m_unk1B8 = 1.0f;
 }
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", __14StateRamAttack);
@@ -1338,7 +2052,100 @@ void StateRamAttack::update(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__14StateRamAttack);
 #endif
+/* Not in game mode 8 nor after the impact. A plain wall must be hit head-on (normal against the heading by more than
+ * 45 degrees); an interactive too unless it is kind 5. The assboss rams through hats 0x20..0x400, and knocks player 1
+ * back when it rams the hat that player stands on or the wall it climbs. A new hit on an interactive deals
+ * f40 + f44 * |speed into the surface|: another monster is hit (credits stamina and the combo) unless it is in the
+ * middle of a punch of kind 0, 2 or 5 (no damage) or ramming too (both rams end in an impact); the body impact sound
+ * plays. The ram stops with an impact unless it hit a monster or a kind-3 interactive with +0x14 <= 10. */
+#ifdef NON_MATCHING
+/* untuned: 3/280 words; retail reads the hit ids with ld/lwu (64-bit bitfield) and negates the normal with VU0 */
+void StateRamAttack::handleCollis(_hdResult &r)
+{
+    int keepGoing = 0;
+    int id;
+    int *hit;
+
+    MonsterState::handleCollis(r);
+    if (game->m_gameMode == 8)
+        return;
+    if (subState == SUB_IMPACT)
+        return;
+    id = r.ids & 0x7FF;
+    if (id == 0 && -0.7071f < vecDot((_fvector *)&r.normal, (_fvector *)owner->m_cs->mat[1]))
+        return;
+    if (owner->m_typeBits == MONSTER_TYPE_ASSBOSS) {
+        Monster *target;
+        int knock;
+
+        keepGoing = ((r.ids >> 11) & 0x3FFF) - 0x20 < 0x3E1;
+        if (id == 0) {
+            enterSubState(SUB_IMPACT);
+            return;
+        }
+        target = game->m_monsters[0];
+        knock = 0;
+        if (!target->m_freeFalling && (((_hdResult *)((char *)target + 0x3B0))->ids & 0x7FF) == id)
+            knock = 1;
+        else if (target->m_state == (int *)STATE_AT(target, ST_CLIMB) && ((StateClimb *)STATE_AT(target, ST_CLIMB))->contactInteractive == id)
+            knock = 1;
+        if (knock) {
+            vecScale((_fvector *)&r.normal, (_fvector *)&r.normal, -1.0f);
+            target->knockBack(*(_fvector *)&r.normal, 300.0f, 500.0f);
+            vecScale((_fvector *)&r.normal, (_fvector *)&r.normal, -1.0f);
+            Cameras::StartShake(*(_fvector *)&target->m_cs->trans, 50.0f);
+        }
+    }
+    if (id == 0) {
+        enterSubState(SUB_IMPACT);
+        return;
+    }
+    hit = Interactives::getInteractive(id);
+    if (*hit != 5 && -0.7071f < vecDot((_fvector *)&r.normal, (_fvector *)owner->m_cs->mat[1]))
+        return;
+    if (((HitHistory *)hits)->newHit(id, false)) {
+        float dmg = hitDamage + fabsf(vecDot(MVEL(owner), (_fvector *)&r.normal)) * hitDamagePerSpeed;
+
+        if (*hit == 1) {
+            Monster *victim = (Monster *)hit;
+            int *st = victim->m_state;
+
+            keepGoing = 1;
+            if (st[0] == STATE_ID_PUNCH && *(int *)((char *)st + 0x2A00) != 0
+                && (*(int *)((char *)st + 0x298C) == 0 || *(int *)((char *)st + 0x298C) == 2 || *(int *)((char *)st + 0x298C) == 5)) {
+                dmg = 0.0f;
+            } else if (st[0] == STATE_ID_RAM) {
+                keepGoing = 0;
+                dmg = 0.0f;
+                ((StateRamAttack *)STATE_AT(victim, ST_RAM))->enterSubState(SUB_IMPACT);
+            } else {
+                creditStaminaForAttack(0.0f);
+                owner->registerComboHit(victim);
+            }
+            MSOUND(victim)->playBodyImpactSound();
+        } else {
+            MSOUND(owner)->playBodyImpactSound();
+        }
+        if (0.0f < dmg) {
+            HitEvent *e = HitEvent::create();
+
+            e->pos = (_fvector *)&r.point;
+            e->source = 9;
+            e->type = 2;
+            e->result = &r;
+            vecScale((_fvector *)&r.normal, (_fvector *)&r.normal, -1.0f);
+            Interactives::dispatchHit((_fvector *)&r.normal, dmg, owner->m_id, r.ids & 0x7FF);
+            vecScale((_fvector *)&r.normal, (_fvector *)&r.normal, -1.0f);
+        }
+    }
+    if (*hit == 3 && *(float *)((char *)hit + 0x14) <= 10.0f)
+        keepGoing = 1;
+    if (!keepGoing)
+        enterSubState(SUB_IMPACT);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", handleCollis__14StateRamAttackR9_hdResult);
+#endif
 /* Charge: animation, sound, stamina, the three effects (a dust trail 0x31 under the monster, two sprays 0x13 between
  * the locators, angled by ramSprayLeft/ramSprayRight) and a fresh hit history. Coasting stops the effects. Impact:
  * animation 0x10B with a camera shake (once), effects stopped, the velocity cut to a quarter. Done: back to idle and
@@ -1429,8 +2236,8 @@ void StateRun::init(Monster *m)
 {
     owner = m;
     blend.init(m->m_anims[5]);
-    walkSpeed = 250.0f;
-    f5C = 240.0f;
+    walkMax = 250.0f;
+    runMin = 240.0f;
     normal.walkSpeed = 150.0f;
     heavy.speed = MPH(170);
     heavy.f10 = 0.5f;
@@ -1540,7 +2347,7 @@ void StateRun::transitionInto(void)
     float pct;
 
     frames = 0;
-    fD4 = 0;
+    lastSubState = 0;
     fE0 = 0;
     if (owner->m_target != 0 || (owner->m_pickup != 0 && TWO_HANDED(owner))) {
         config = &heavy;
@@ -1550,7 +2357,7 @@ void StateRun::transitionInto(void)
     } else {
         config = &normal;
         if (landMomentum < 350.0f) {
-            if (owner->m_speed < walkSpeed && owner->m_anims[1].ci != 0 && owner->m_anims[7].ci != 0) {
+            if (owner->m_speed < walkMax && owner->m_anims[1].ci != 0 && owner->m_anims[7].ci != 0) {
                 runAnim = 1;
                 altAnim = 7;
             } else {
@@ -1584,8 +2391,216 @@ void StateRun::transitionInto(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", transitionInto__8StateRun);
 #endif
+/* Animation speed follows the ground speed; landing momentum decays (landDecay per frame) into the normal run; the blend
+ * layer leans with the heading of the motion. The input held picks the sub-state (turning in place counts as 1, and
+ * past s_turnCap the turn is driven as input 5 for this frame). Walk and run swap with hysteresis (walkMax/runMin).
+ * Then the states that can take over, in priority order: block, counter, air (the foot to jump from depends on where
+ * the stride is), dash, stomp, shield, bat swipe, punch, the monster's special, crowd control, the state at
+ * Monster+0x797C, grapple throw, grapple, climb, pick up, catch, throw, javelin, two-handed throw; idle once no input
+ * is held and the animation settled. */
+#ifdef NON_MATCHING
+/* untuned: 14/448 words; retail merges the state hand-overs into one enterNewState call (tail merge) */
+void StateRun::update(void)
+{
+    float pct;
+    _fvector *motion;
+    FVECTOR back;
+    float lean;
+    unsigned short held;
+    int sub;
+
+    MonsterState::update();
+    pct = animationGetCurrentPercent(owner->m_anims[anim]);
+    animationSetSpeed(owner->m_anims[anim], getAnimSpeed(owner->m_speed));
+    if (0.1f < landMomentum) {
+        landMomentum = landMomentum * landDecay;
+        if (landMomentum <= 0.1f) {
+            landMomentum = 0.0f;
+            if (owner->m_speed < runMin && owner->m_anims[1].ci != 0 && owner->m_anims[7].ci != 0) {
+                runAnim = 1;
+                altAnim = 7;
+            } else {
+                runAnim = 2;
+                altAnim = 8;
+            }
+            enterSubState((SubState)lastSubState);
+        }
+    }
+    motion = (_fvector *)((char *)owner + 0x220);
+    if (motion->y < 0.0f) {
+        vecScale(&back, motion, -1.0f);
+        motion = &back;
+    }
+    lean = mathfHeadingFromVector(motion) * 0.31830987f + 0.5f;
+    blend.setPercent(smoothEasyInTC(blend.getPercent(), lean, 0.08f, 0.01f));
+
+    held = owner->m_padFlags[0]->f12;
+    sub = SUB_0;
+    if (owner->m_padFlags[0]->f12 != 0) {
+        sub = SUB_1;
+    } else if (owner->m_padFlags[0]->f14 != 0) {
+        sub = SUB_2;
+    } else if (owner->m_padFlags[0]->f1A != 0) {
+        sub = SUB_3;
+    } else if (owner->m_padFlags[0]->f1C != 0) {
+        sub = SUB_4;
+    } else if (owner->m_padFlags[0]->f18 != 0 || owner->m_padFlags[0]->f16 != 0) {
+        sub = SUB_1;
+        if (s_turnCap < fabsf(*(float *)((char *)owner + 0x208)))
+            owner->m_padFlags[0]->f12 = 5;
+    }
+    owner->updateLock((MonsterReticleState)1);
+    DYN(owner)->updateTurn(true);
+    DYN(owner)->updateMove(true);
+    owner->m_padFlags[0]->f12 = held;
+
+    if (!animationIsTransitioning(owner->m_anims[anim])) {
+        if (sub != lastSubState && sub != SUB_0) {
+            enterSubState((SubState)sub);
+        } else if (landMomentum <= 0.1f) {
+            if (walkMax < owner->m_speed && runAnim == 1) {
+                runAnim = 2;
+                altAnim = 8;
+                enterSubState((SubState)lastSubState);
+            } else if (owner->m_speed < runMin && runAnim == 2 && owner->m_anims[1].ci != 0 && owner->m_anims[7].ci != 0) {
+                runAnim = 1;
+                altAnim = 7;
+                enterSubState((SubState)lastSubState);
+            }
+        }
+    }
+
+    if (TRY_STATE(StateBlock, ST_BLOCK)) {
+        owner->enterNewState(STATE_AT(owner, ST_BLOCK));
+    } else if (TRY_STATE(StateCounter, ST_COUNTER)) {
+        owner->enterNewState(STATE_AT(owner, ST_COUNTER));
+    } else if (VCALL_INT((MonsterState *)owner->m_stateRef, VT_TRANSITION_OK)) {
+        if (config->f18 < pct && pct < config->f1C)
+            ((JumpFlyBase *)owner->m_stateRef)->footPref = JumpFlyBase::FOOT_0;
+        else
+            ((JumpFlyBase *)owner->m_stateRef)->footPref = JumpFlyBase::FOOT_1;
+        owner->enterNewState((MonsterState *)owner->m_stateRef);
+    } else if (TRY_STATE(StateDash, ST_DASH)) {
+        owner->enterNewState(STATE_AT(owner, ST_DASH));
+    } else if (TRY_STATE(StateStompAttack, ST_STOMP)) {
+        owner->enterNewState(STATE_AT(owner, ST_STOMP));
+    } else if (TRY_STATE(StateShieldAttack, ST_SHIELD)) {
+        owner->enterNewState(STATE_AT(owner, ST_SHIELD));
+    } else if (TRY_STATE(StateBatSwipe, ST_BAT_SWIPE)) {
+        owner->enterNewState(STATE_AT(owner, ST_BAT_SWIPE));
+    } else if (TRY_STATE(StatePunch, ST_PUNCH)) {
+        owner->enterNewState(STATE_AT(owner, ST_PUNCH));
+    } else if (owner->m_specialState != 0 && VCALL_INT((MonsterState *)owner->m_specialState, VT_TRANSITION_OK)) {
+        owner->enterNewState((MonsterState *)owner->m_specialState);
+    } else if (TRY_STATE(StateCrowdControl, ST_CROWD_CONTROL)) {
+        owner->enterNewState(STATE_AT(owner, ST_CROWD_CONTROL));
+    } else if (VCALL_INT(*(MonsterState **)((char *)owner + 0x797C), VT_TRANSITION_OK)) {
+        owner->enterNewState(*(MonsterState **)((char *)owner + 0x797C));
+    } else if (TRY_STATE(StateGrappleThrow, ST_GRAPPLE_THROW)) {
+        owner->enterNewState(STATE_AT(owner, ST_GRAPPLE_THROW));
+    } else if (TRY_STATE(StateGrapple, ST_GRAPPLE)) {
+        owner->enterNewState(STATE_AT(owner, ST_GRAPPLE));
+    } else if (TRY_STATE(StateClimb, ST_CLIMB)) {
+        owner->enterNewState(STATE_AT(owner, ST_CLIMB));
+    } else if (TRY_STATE(StatePickUp, ST_PICK_UP)) {
+        owner->enterNewState(STATE_AT(owner, ST_PICK_UP));
+    } else if (TRY_STATE(StateCatch, ST_CATCH)) {
+        owner->enterNewState(STATE_AT(owner, ST_CATCH));
+    } else if (TRY_STATE(StateThrow, ST_THROW)) {
+        owner->enterNewState(STATE_AT(owner, ST_THROW));
+    } else if (TRY_STATE(StateJavelin, ST_JAVELIN)) {
+        owner->enterNewState(STATE_AT(owner, ST_JAVELIN));
+    } else if (TRY_STATE(StateTwoHandedThrow, ST_TWO_HANDED_THROW)) {
+        owner->enterNewState(STATE_AT(owner, ST_TWO_HANDED_THROW));
+    } else if (sub == SUB_0 && !animationIsTransitioning(owner->m_anims[anim])) {
+        owner->enterNewState(STATE_AT(owner, ST_IDLE));
+    }
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", update__8StateRun);
+#endif
+/* Sub-states 1, 3 and 4 run on runAnim, 2 on altAnim (the two halves of the stride). The new animation starts where
+ * the stride stands: at the old animation's percent when it was the same one, mirrored (1 - p) when it was the other
+ * half, or, on the first entry, at one of the config's two start percents (f14 when input 0x1C is held, f10 with input
+ * 0x1A; without either, picked by the timer's low bit). Blends in over config f8 (50 with landing momentum, 400 out
+ * of the landing run). */
+#ifdef NON_MATCHING
+/* untuned: 34/386 words; anim handle addressing (0x1CF0 added before the copy) and FPR allocation */
+void StateRun::enterSubState(SubState s)
+{
+    float blendTime;
+    float runPct;
+    float altPct;
+    float pct;
+
+    blendTime = config->f8;
+    if (0.0f < landMomentum)
+        blendTime = 50.0f;
+    else if (anim == 6 || anim == 9)
+        blendTime = 400.0f;
+    altPct = -1.0f;
+    runPct = altPct;
+    switch (anim) {
+    case 1:
+    case 2:
+    case 6:
+    case 0xAD:
+        if (animationIsRunning(owner->m_anims[anim]))
+            runPct = animationGetCurrentPercent(owner->m_anims[anim]);
+        break;
+    case 7:
+    case 8:
+    case 9:
+    case 0xB0:
+        if (animationIsRunning(owner->m_anims[anim]))
+            altPct = animationGetCurrentPercent(owner->m_anims[anim]);
+        break;
+    }
+    switch (s) {
+    case SUB_1:
+    case SUB_3:
+    case SUB_4:
+        if (lastSubState == 0) {
+            pct = config->f10;
+            if (0.0f <= runPct)
+                pct = runPct;
+            else if (owner->m_padFlags[0]->f1C != 0 || (owner->m_padFlags[0]->f1A == 0 && !(timerGetCurTics() & 1)))
+                pct = config->f14;
+            animationSetToPercent(owner->m_anims[runAnim], pct, 0);
+        } else if (0.0f <= altPct) {
+            animationSetToPercent(owner->m_anims[runAnim], 1.0f - altPct, 0);
+        } else {
+            animationSetSpeed(owner->m_anims[anim], getAnimSpeed(owner->m_speed));
+            animationSetSpeed(owner->m_anims[runAnim], getAnimSpeed(owner->m_speed));
+            animationSetToPercent(owner->m_anims[runAnim], runPct, 0);
+        }
+        animationTransitionInto(owner->m_anims[runAnim], blendTime, 0, 1);
+        anim = runAnim;
+        break;
+    case SUB_2:
+        animationSetSpeed(owner->m_anims[altAnim], getAnimSpeed(owner->m_speed));
+        if (lastSubState == 0) {
+            pct = config->f10;
+            if (0.0f <= altPct)
+                pct = altPct;
+            else if (owner->m_padFlags[0]->f1C != 0 || (owner->m_padFlags[0]->f1A == 0 && !(timerGetCurTics() & 1)))
+                pct = config->f14;
+            animationSetToPercent(owner->m_anims[altAnim], pct, 0);
+        } else if (0.0f <= runPct) {
+            animationSetToPercent(owner->m_anims[altAnim], 1.0f - runPct, 0);
+        } else {
+            animationSetToPercent(owner->m_anims[altAnim], altPct, 0);
+        }
+        animationTransitionInto(owner->m_anims[altAnim], blendTime, 0, 1);
+        anim = altAnim;
+        break;
+    }
+    if (s != SUB_0)
+        lastSubState = s;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/MovementStates", enterSubState__8StateRunQ28StateRun8SubState);
+#endif
 /* The blend layer ramps out slowly into the air state, quickly otherwise. */
 void StateRun::handlePreemption(MonsterState *next)
 {
