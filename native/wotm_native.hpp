@@ -448,6 +448,8 @@ struct Sprite {
     uint32_t texId = 0;     // indice em texInfo (0 = circulo suave procedural)
     uint64_t tex0 = 0;      // TEX0 do efeito (psm, CBP da paleta)
     uint32_t cell = 0;      // celula do atlas (celulas de 8x8 texels)
+    int16_t row = -1;       // destroço: linha do atlas (>= 0: a coluna sai de cell)
+    uint8_t flip = 0;       // destroço: bit 0 espelha U, bit 1 espelha V
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
 };
 
@@ -1173,11 +1175,19 @@ public:
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
                 const uint32_t h = (k * 2654435761u) ^ (i * 40503u);
                 s.key = i * 4096u + k;
-                if (atlas) {   // destroço: celula e tamanho fixos por particula, gira com w, some no fim da vida
+                if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild), some no fim da vida
+                    // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os 4 bits baixos sorteados.
+                    // Medido pela checagem VU1 x nativo (preset 66, minSize 6): lado = max(minSize, 2 * minSize * |w|), sem giro. Os bits
+                    // baixos escolhem uma das 4 entradas de UV por linha do atlas (normal, espelha V, espelha U, os dois; fragPacketInit)
+                    // e a linha; a coluna nao foi conferida (aqui sorteada por particula).
+                    const float w = ram.f32(pos + 16 * k + 12);
+                    const uint32_t wl = ram.u32(pos + 16 * k + 12) & 15;
                     s.texId = texLoad; s.tex0 = tex0;
                     s.cell = (h >> 8) & 0xFFFF;
-                    s.size = minS + (maxS - minS) * float((h >> 4) & 255) / 255.f;
-                    s.rot = ram.f32(pos + 16 * k + 12);
+                    s.row = int16_t(wl >> 2);
+                    s.flip = uint8_t(wl & 3) == 0 ? 0 : (wl & 3) == 1 ? 2 : (wl & 3) == 2 ? 1 : 3;
+                    s.size = std::max(minS, 2.f * minS * std::fabs(w));
+                    s.rot = 0.f;
                     s.rgba[3] = t > 0.85f ? (1.f - t) / 0.15f : 1.f;
                 } else {       // poeira/fumaça: circulo suave que cresce e esvanece
                     s.size = minS + (maxS > minS ? (maxS - minS) * t : 0.f);
@@ -1271,8 +1281,11 @@ public:
             float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
             if (s.tex0 && tw >= 8 && th >= 8) {   // atlas de celulas 8x8
                 const uint32_t cols = uint32_t(tw) / 8, rows = uint32_t(th) / 8, c = s.cell % (cols * rows);
-                u0 = float(c % cols) * 8.f / float(tw); u1 = u0 + 8.f / float(tw);
-                v0 = float(c / cols) * 8.f / float(th); v1 = v0 + 8.f / float(th);
+                const uint32_t col = s.row >= 0 ? s.cell % cols : c % cols, row = s.row >= 0 ? uint32_t(s.row) % rows : c / cols;
+                u0 = float(col) * 8.f / float(tw); u1 = u0 + 8.f / float(tw);
+                v0 = float(row) * 8.f / float(th); v1 = v0 + 8.f / float(th);
+                if (s.flip & 1) std::swap(u0, u1);
+                if (s.flip & 2) std::swap(v0, v1);
             }
             const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(255.f * std::max(0.f, std::min(1.f, s.rgba[3])));
             float c[4][3];
