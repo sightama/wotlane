@@ -31,7 +31,7 @@ Não corrigir sem perguntar ao dono qual atacar.
 - **Achados da comparação com o PCSX2 (METRO, não investigados):**
   - O chão da rua sai com R ×1,3 no PCSX2 (laranja contra oliva no nativo), com G e B iguais. As cores de vértice e o F batem com o VU1, então deve ser textura/CLUT (não coberto) ou uma passada translúcida no chão.
   - O power-up tem no PCSX2 um halo verde grande centrado na esfera. O nativo desenha a esfera pequena e uma elipse chapada no chão, deslocada.
-  - O prédio desmoronando mostra janelas brancas no viewer, onde o PCSX2 mostra a estrutura escura. Provável texId 0 (quadro anterior), que o viewer não tem; falta conferir no runtime.
+  - No prédio desmoronando, o PCSX2 mostra fumaça escura, e o nativo, bolas brancas com degradê de transparência, como esferas de luz (identificado pelo dono). É o item das texturas compostas de poeira/fumaça: o nativo usa um círculo suave claro no lugar da textura que o `dustPacket` compõe na VRAM.
   - A neblina está certa (máscara do `WOTM_FOGSPLIT=2` com FA −107,9, FB 326.571, cor 45/33/20; pesa a partir de W ≈ 900).
 - **Não coberto:** texels/CLUT da textura, atributos das partículas (a explosão opaca), linhas e leques do VU1, HUD (PATH2/PATH3).
 
