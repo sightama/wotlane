@@ -1686,14 +1686,17 @@ public:
             static const char *fs =
                 "#version 330\n"
                 "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog;\n"
-                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; out vec4 finalColor;\n"
+                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; out vec4 finalColor;\n"
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; if (t.a < 0.06) discard;\n"
-                "  finalColor = vec4(mix(fogColor, t.rgb, fragFog), t.a); }\n";
+                "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
+                "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
+                "  finalColor = vec4(mix(fogColor, t.rgb, f), t.a); }\n";
             alphaShader_ = LoadShaderFromMemory(vs, fs);
             fogLoc_[0] = GetShaderLocation(alphaShader_, "fogEye");
             fogLoc_[1] = GetShaderLocation(alphaShader_, "fogRow3");
             fogLoc_[2] = GetShaderLocation(alphaShader_, "fogParams");
             fogLoc_[3] = GetShaderLocation(alphaShader_, "fogColor");
+            fogLoc_[4] = GetShaderLocation(alphaShader_, "fogSplit");
         }
         const bool useShader = !wire && alphaShader_.id > 0;
         if (useShader) {
@@ -1704,6 +1707,19 @@ public:
             if (fogLoc_[1] >= 0) SetShaderValue(alphaShader_, fogLoc_[1], row3, SHADER_UNIFORM_VEC4);
             if (fogLoc_[2] >= 0) SetShaderValue(alphaShader_, fogLoc_[2], params, SHADER_UNIFORM_VEC3);
             if (fogLoc_[3] >= 0) SetShaderValue(alphaShader_, fogLoc_[3], fog_.col, SHADER_UNIFORM_VEC3);
+            // diagnostico: WOTM_FOGSPLIT=1 tira a neblina da metade esquerda da tela (comparacao no mesmo quadro); =2 desenha a mascara
+            // da neblina (branco = so FOGCOL) e imprime os parametros a cada ~2 s
+            static const int split = std::getenv("WOTM_FOGSPLIT") ? std::atoi(std::getenv("WOTM_FOGSPLIT")) : 0;
+            // =3: neblina so nos quadros pares (duas capturas seguidas = com e sem, quase a mesma cena)
+            static uint32_t drawCount = 0;
+            const bool oddFrame = (drawCount++ & 1) != 0;
+            const float splitX = split == 1 ? 0.5f * float(rlGetFramebufferWidth()) : split == 2 ? -2.f
+                               : (split == 3 && oddFrame) ? 1e9f : -1.f;
+            static int fogLog = 0;
+            if (split && fogLog++ % 120 == 0)
+                std::fprintf(stderr, "[fog] FA %.3f FB %.1f max %.1f cor %.0f %.0f %.0f row3 %.3f %.3f %.3f %.3f\n", fog_.fa, fog_.fb, fog_.maxVal,
+                             fog_.col[0] * 255.f, fog_.col[1] * 255.f, fog_.col[2] * 255.f, row3[0], row3[1], row3[2], row3[3]);
+            if (fogLoc_[4] >= 0) SetShaderValue(alphaShader_, fogLoc_[4], &splitX, SHADER_UNIFORM_FLOAT);
             BeginShaderMode(alphaShader_);
         }
         rlDisableDepthTest();   // o ceu e desenhado primeiro, centrado no olho, sem profundidade
@@ -2092,7 +2108,7 @@ private:
     int lod_ = -1;
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual
     Shader alphaShader_{};
-    int fogLoc_[4] = {-1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor
+    int fogLoc_[5] = {-1, -1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor, fogSplit
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
     std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
