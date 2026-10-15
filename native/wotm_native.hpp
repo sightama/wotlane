@@ -676,17 +676,18 @@ public:
     // Preenche a paleta de 256 entradas. O GS le CLUTs de 256 cores em CSM1 com os bits 3 e 4 do indice trocados (entradas 8-15 e
     // 16-23 de cada grupo de 32); o .RTX guarda o upload cru, entao a leitura tem que aplicar a troca (sem ela: granulado em degrades).
     // WOTM_PALNOSWAP=1 desliga (diagnostico).
-    static void fillPal(uint32_t pal[256], const std::vector<uint32_t> &src, bool is8bit) {
+    // rawAlpha: alfa cru do GS (0x80 = 1,0), para o que o Scene::draw mistura como o GS; senao, 0..255 com 0x80 saturado (fixAlpha).
+    static void fillPal(uint32_t pal[256], const std::vector<uint32_t> &src, bool is8bit, bool rawAlpha = false) {
         static const bool swap = std::getenv("WOTM_PALNOSWAP") == nullptr;
         for (size_t i = 0; i < 256 && i < src.size(); ++i) {
             const size_t k = (swap && is8bit && src.size() >= 256) ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
-            pal[i] = gs::fixAlpha(src[k]);
+            pal[i] = rawAlpha ? src[k] : gs::fixAlpha(src[k]);
         }
     }
 
     // Textura do objeto: os pixels vem do pacote de upload apontado por `texInfo[texId]` (pixels lineares a partir de +0x80,
     // cabecalho em UploadHdr); a paleta vem do .RTX (carregado junto com a fase).
-    bool decodeTex(const Ram &ram, uint32_t node, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot = 0) const {
+    bool decodeTex(const Ram &ram, uint32_t node, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot = 0, bool rawAlpha = false) const {
         const uint64_t t0v = objectTex0(ram, node, slot);
         if (!t0v) return false;
         const gs::Tex0 t0 = gs::Tex0::decode(t0v);
@@ -699,19 +700,19 @@ public:
             // 8 bits, ou 4 bits empacotados (nibble baixo primeiro); tamanho = TW/TH do TEX0. Fallback: a RAM em `ptr` (nao confiavel).
             const auto it = rtxPal.find(t0.cbp);
             if (it == rtxPal.end()) return false;
-            fillPal(pal, it->second, t0.psm == gs::T8H);
+            fillPal(pal, it->second, t0.psm == gs::T8H, rawAlpha);
             w = 1u << t0.tw; h = 1u << t0.th;
             const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
             if (im != rtxImg.end())
                 return gs::decodeUpload(im->second.data(), im->second.size(), w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
             return gs::decodeUpload(ram.p + ptr, ram.size - ptr, w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
         }
-        return decodeUploadTex(ram, ptr, t0, px, w, h);
+        return decodeUploadTex(ram, ptr, t0, px, w, h, false, rawAlpha);
     }
 
     // Pixels do pacote de upload em `ptr` (= texInfo[texId]; cabecalho em UploadHdr, pixels lineares a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
     bool decodeUploadTex(const Ram &ram, uint32_t ptr, const gs::Tex0 &t0, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h,
-                         bool grayFallback = false) const {
+                         bool grayFallback = false, bool rawAlpha = false) const {
         if (!ram.ok(ptr + 0x80)) return false;
         uint32_t pal[256] = {};
         const UploadHdr hd = UploadHdr::read(ram, ptr);
@@ -719,11 +720,14 @@ public:
         if (psm == gs::T8 || psm == gs::T4) {
             // A paleta vem do .RTX carregado (loadRtx); sem ela a textura cai para a cor de vertice.
             const auto it = rtxPal.find(t0.cbp);
-            if (it != rtxPal.end()) fillPal(pal, it->second, psm == gs::T8);
+            if (it != rtxPal.end()) fillPal(pal, it->second, psm == gs::T8, rawAlpha);
             else if (grayFallback) {
-                // Particulas: muitas texturas sao mascaras de luminancia/alfa; sem a paleta, rampa cinza com alfa = indice
+                // Particulas: muitas texturas sao mascaras de luminancia/alfa; sem a paleta, rampa cinza com alfa = indice (1,0 no fim)
                 const uint32_t n = psm == gs::T8 ? 256 : 16;
-                for (uint32_t i = 0; i < n; ++i) { const uint32_t v = i * 255 / (n - 1); pal[i] = v | (v << 8) | (v << 16) | (v << 24); }
+                for (uint32_t i = 0; i < n; ++i) {
+                    const uint32_t v = i * 255 / (n - 1), a = rawAlpha ? i * 128 / (n - 1) : v;
+                    pal[i] = v | (v << 8) | (v << 16) | (a << 24);
+                }
             } else return false;
         }
         w = hd.w; h = hd.h;
@@ -739,7 +743,7 @@ public:
                 }
             return true;
         }
-        return gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px);
+        return gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px, rawAlpha);
     }
 
     // Textura de particula: texId (indice do texInfo global) + TEX0 da tabela de particulas (psm/CBP). 0 = nao decodificou.
@@ -755,7 +759,7 @@ public:
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
         Texture2D t{};
-        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray) && w && h && px.size() >= size_t(w) * h) {
+        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray, true) && w && h && px.size() >= size_t(w) * h) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
@@ -982,10 +986,10 @@ public:
         if (psm == gs::T8 || psm == gs::T4) {
             const auto it = rtxPal.find(t0.cbp);
             if (it == rtxPal.end()) return false;
-            fillPal(pal, it->second, psm == gs::T8);
+            fillPal(pal, it->second, psm == gs::T8, true);
         }
         w = hd.w; h = hd.h;
-        return w && h && gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px);
+        return w && h && gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px, true);
     }
 
     // diagnostico: WOTM_TEXFROM=<de>:<para> desenha os vertices do slot <de> com a textura do slot <para>
@@ -1012,7 +1016,7 @@ public:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
-        if (decodeTex(ram, node, px, w, h, slot)) {
+        if (decodeTex(ram, node, px, w, h, slot, true)) {   // alfa cru do GS: o shader do draw mistura As = At * Av / 16384
             if (std::getenv("WOTM_ALPHASTAT")) {
                 size_t a0 = 0, am = 0;
                 for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++a0; else if (a < 255) ++am; }
@@ -1022,7 +1026,8 @@ public:
                 // Texels com alfa 0 guardam uma cor qualquer (escura); o filtro bilinear a mistura nas bordas e faz uma franja.
                 // Espalha a cor dos vizinhos visiveis para dentro dos transparentes (2 passos de 3x3).
                 size_t partial = 0, clear = 0;
-                for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++clear; else if (a < 250) ++partial; }
+                // alfa cru: semitransparente = abaixo de ~1,0 com o vertice em 0x80 (0x7C); 0x80..0xFF e opaco
+                for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++clear; else if (a < 0x7C) ++partial; }
                 partial_[key] = partial * 100 > px.size();   // mais de 1% dos texels semitransparentes
                 if (clear && clear < px.size()) {
                     std::vector<uint8_t> solid(px.size());
@@ -1329,7 +1334,7 @@ public:
         std::sort(order.begin(), order.end());
         rlDisableBackfaceCulling();
         rlDisableDepthMask();
-        rlNormal3f(0.f, 1.f, 0.f);   // neblina (FGE) no shader do draw, como o XGKICK dos destroços
+        shaderNormal(0.f, true, true);   // neblina (FGE) e alfa do GS no shader do draw, como o XGKICK dos destroços
         unsigned cur = ~0u;
         bool open = false;
         for (const auto &o : order) {
@@ -1352,7 +1357,8 @@ public:
                 if (s.flip & 1) std::swap(u0, u1);
                 if (s.flip & 2) std::swap(v0, v1);
             }
-            const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(255.f * std::max(0.f, std::min(1.f, s.rgba[3])));
+            // alfa no modo GS do shader: 0x80 = 1,0 (a textura traz o alfa cru)
+            const unsigned char cr = uint8_t(255.f * std::min(1.f, s.rgba[0])), cg = uint8_t(255.f * std::min(1.f, s.rgba[1])), cb = uint8_t(255.f * std::min(1.f, s.rgba[2])), ca = uint8_t(128.f * std::max(0.f, std::min(1.f, s.rgba[3])));
             float c[4][3];
             spriteCorners(s, R, U, c);
             const float cu[4] = {u0, u1, u1, u0}, cv[4] = {v1, v1, v0, v0};
@@ -1674,27 +1680,37 @@ public:
     // Desenha com o raylib (deve estar dentro de BeginMode3D).
     void draw(const Ram &ram, bool wire = false) {
         // Teste de alfa: pixels transparentes (sombras, helices, grades) nao podem escrever profundidade nem cor.
-        // Neblina (ver Fog): a normal do vertice leva (fogBurnThru, FGE, 0); o drawList a preenche e a zera no fim (sem neblina).
+        // A normal do vertice leva (fogBurnThru, 1, FGE + 2 * GS) (shaderNormal; o rlNormal3f normaliza, entao o shader le as razoes
+        // por y); quem desenha a preenche e a zera no fim (normal 0 = sem neblina, alfa comum).
+        //  - FGE: neblina (ver Fog).
+        //  - GS: textura e vertice trazem o alfa cru do GS (0x80 = 1,0) e o shader mistura como o GS, As = At * Av / 16384
+        //    (TFX MODULATE), limitado a 1 (o GS aceita ate ~4); sem ele, o produto comum (sombras, depuracao).
         if (!alphaShaderTried_) {
             alphaShaderTried_ = true;
             static const char *vs =
                 "#version 330\n"
                 "in vec3 vertexPosition; in vec2 vertexTexCoord; in vec3 vertexNormal; in vec4 vertexColor;\n"
                 "uniform mat4 mvp; uniform vec3 fogEye; uniform vec4 fogRow3; uniform vec3 fogParams;\n"
-                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog;\n"
+                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog; out float fragGsA;\n"
                 "void main() {\n"
                 "  fragTexCoord = vertexTexCoord; fragColor = vertexColor;\n"
+                // normal = (burn, 1, FGE + 2 * GS) normalizada pelo rlNormal3f: as razoes por y sobrevivem; y = 0 = sem nada
+                "  float burn = 0.0, fl = 0.0;\n"
+                "  if (vertexNormal.y > 1e-6) { burn = vertexNormal.x / vertexNormal.y; fl = floor(vertexNormal.z / vertexNormal.y + 0.5); }\n"
+                "  fragGsA = fl >= 1.5 ? 1.0 : 0.0;\n"
                 "  float w = dot(fogRow3.xyz, vertexPosition - fogEye) + fogRow3.w;\n"
                 "  float f = 255.0;\n"
-                "  if (vertexNormal.y > 0.5 && w > 0.001) f = clamp(vertexNormal.x + fogParams.x + fogParams.z / w, 0.0, fogParams.y);\n"
+                "  if (mod(fl, 2.0) > 0.5 && w > 0.001) f = clamp(burn + fogParams.x + fogParams.z / w, 0.0, fogParams.y);\n"
                 "  fragFog = f / 255.0;\n"
                 "  gl_Position = mvp * vec4(vertexPosition, 1.0);\n"
                 "}\n";
             static const char *fs =
                 "#version 330\n"
-                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog;\n"
+                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA;\n"
                 "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; out vec4 finalColor;\n"
-                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; if (t.a < 0.06) discard;\n"
+                "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
+                "  if (fragGsA > 0.5) t.a = min(t.a * 3.9690, 1.0);\n"   // (255 / 128)^2: At * Av / (128 * 128)
+                "  if (t.a < 0.06) discard;\n"
                 "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
                 "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
                 "  finalColor = vec4(mix(fogColor, t.rgb, f), t.a); }\n";
@@ -1857,7 +1873,7 @@ public:
         }
         std::stable_sort(order.begin(), order.end(), [](const Ent &a, const Ent &b) { return a.key < b.key; });
 
-        const unsigned white = rlGetTextureIdDefault();
+        const unsigned white = gsWhiteTexture();   // secoes sem textura (PRIM.TME 0): alfa 0x80 = 1,0 do GS
         uint64_t cur = ~0ull;
         bool open = false;
         int curBlend = 0;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
@@ -1924,6 +1940,8 @@ public:
             }
             static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
             const unsigned tid = (wire || !cur) ? 0 : textureId(ram, it.node, texRemap(slot));
+            // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
+            const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
@@ -1991,11 +2009,13 @@ public:
                         else {
                             uint8_t rgb[3];
                             vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
-                            rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
+                            // alfa: cru no modo GS (o shader faz At * Av / 16384); no quadro anterior e no filme, o antigo (4a/255)
+                            const float va = v.a * fade * (gsA ? 1.f : 4.f);
+                            rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
                         }
                         if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        rlNormal3f(fogBurn, v.fge ? 1.f : 0.f, 0.f);   // neblina no shader do draw (ver Fog)
+                        shaderNormal(fogBurn, v.fge, gsA);   // neblina e alfa do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }

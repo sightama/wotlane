@@ -46,6 +46,21 @@
 
 namespace wotm {
 
+// Normal do vertice para o shader do Scene::draw: (fogBurnThru, 1, FGE + 2 * GS). O rlNormal3f normaliza; o shader le as razoes
+// por y. FGE = neblina; GS = alfa cru do GS na textura e no vertice (As = At * Av / 16384). rlNormal3f(0, 0, 0) desliga os dois.
+inline void shaderNormal(float burn, bool fge, bool gs) { rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f)); }
+
+// Textura branca com alfa 0x80 (1,0 do GS): o "sem textura" no modo GS (a padrao do raylib, alfa 255, valeria 2,0).
+inline unsigned gsWhiteTexture() {
+    static unsigned id = 0;
+    if (!id) {
+        uint32_t px = 0x80FFFFFFu;
+        Image img{&px, 1, 1, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        id = LoadTextureFromImage(img).id;
+    }
+    return id;
+}
+
 namespace fxaddr {
 constexpr uint32_t fx = 0x005BA280;           // _ParticleType fx[100]
 constexpr uint32_t stride = 0x2EE0;           // sizeof(_ParticleType)
@@ -660,7 +675,7 @@ private:
                 const float dx = (x + 0.5f) / n * 2.f - 1.f, dy = (y + 0.5f) / n * 2.f - 1.f;
                 const float r = std::sqrt(dx * dx + dy * dy);
                 const float a = std::max(0.f, 1.f - r);
-                px[size_t(y * n + x)] = 0x00FFFFFFu | (uint32_t(a * a * 255.f) << 24);
+                px[size_t(y * n + x)] = 0x00FFFFFFu | (uint32_t(a * a * 128.f) << 24);   // alfa do GS: 0x80 = 1,0
             }
         Image img{px.data(), n, n, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         const Texture2D t = LoadTextureFromImage(img);
@@ -677,9 +692,10 @@ private:
         return BLEND_ALPHA;                                                     // (Cs-Cd)*As + Cd e o resto
     }
 
+    // RGBAQ do GS (0x80 = 1,0): a cor dobrada (o raylib so multiplica por <= 1), o alfa cru (modo GS do shader, shaderNormal)
     static void vcolor(uint32_t c) {
         const int r = int(c & 255), g = int((c >> 8) & 255), b = int((c >> 16) & 255), a = int(c >> 24);
-        rlColor4ub(uint8_t(std::min(255, r * 2)), uint8_t(std::min(255, g * 2)), uint8_t(std::min(255, b * 2)), uint8_t(std::min(255, a * 2)));
+        rlColor4ub(uint8_t(std::min(255, r * 2)), uint8_t(std::min(255, g * 2)), uint8_t(std::min(255, b * 2)), uint8_t(a));
     }
 
     // Quadro de textura do texSprite (texSpritePacketBuild)
@@ -713,14 +729,14 @@ private:
 
         rlDrawRenderBatchActive();
         rlSetBlendMode(blendFor(ram.u32(b + fxoff::alphaContext)));
-        // neblina no shader do Scene::draw (normal = (fogBurnThru, FGE, 0)): o XGKICK das particulas leva PRIM.FGE em todos os tipos
-        // medidos pela checagem VU1 (sprite, texSprite, stripe, strite, arco, sprine, frag, pedestre, dustTrail); o draw zera no fim
-        rlNormal3f(0.f, 1.f, 0.f);
+        // neblina no shader do Scene::draw: o XGKICK das particulas leva PRIM.FGE em todos os tipos medidos pela checagem VU1 (sprite,
+        // texSprite, stripe, strite, arco, sprine, frag, pedestre, dustTrail); alfa do GS (texturas com alfa cru); o draw zera no fim
+        shaderNormal(0.f, true, true);
         auto A = [&](int i) { return haveAge ? int(ram.s16(age + 2 * uint32_t(i))) : 0; };
 
         if (s.type == FX_LINE) {
-            rlSetTexture(0);
             rlBegin(RL_LINES);
+            rlSetTexture(gsWhiteTexture());   // sem textura no modo GS: alfa 0x80
             for (int i = 0; i < s.n; ++i) {
                 float p[3], v[3];
                 for (int c = 0; c < 3; ++c) {
