@@ -48,6 +48,8 @@ constexpr uint32_t world = 0x006F87C4;            // _worldctx *world (ep@0, sky
 constexpr uint32_t worldCtx = 0x00445CD0;         // _worldctx worldCtx[5] (0x1F0 cada)
 constexpr uint32_t viewInfo = 0x006E1900;         // 5 x 0x14: [0] = _cs* da camera, [1] = viewport*
 constexpr uint32_t worldToScreenMat = 0x006E1FD0; // 5 x 0x40
+constexpr uint32_t paraL = 0x006DFC00;            // float[4][4]: linhas x, y, z; colunas = luzes paralelas 0-2 e vetor-meio do especular, x32
+constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): cor/128 das luzes 0-2 (linhas); a linha 3 e o ambiente/especular
 constexpr uint32_t csActiveList = 0x0043A2C0;     // CsPool::m_activeList (CsNode: cs@0, next@4)
 constexpr uint32_t csHPActiveList = 0x0043A2E0;   // CsPool::m_HPActiveList
 constexpr uint32_t tempVramTexAddr = 0x006F8818;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
@@ -146,6 +148,7 @@ struct Vtx {
     uint8_t sub = 0;                  // indice do sub-pacote da cadeia (diagnostico)
     uint8_t isAdc = 0;                // triangulo normalmente descartado pelo ADC (so com WOTM_SHOWADC)
     uint8_t cull = 0;                 // secao com culling (bit 15 do seletor): o VU1 descarta a face de costas (Scene::backFacing)
+    int8_t nx = 0, ny = 0, nz = 0;    // normal (V3-8 @0x175, mesmo indice da posicao; modulo ~127): luz por vertice (Scene::vertexRgb)
 };
 
 struct MeshData {
@@ -191,6 +194,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
 
     struct P3 { float x, y, z, w; uint8_t cx, cy, cz; };
     std::vector<P3> pos;
+    std::vector<std::array<int8_t, 3>> nrm;   // normais (V3-8 @0x175), pelo indice da posicao
     std::vector<char> usedPos;   // diagnostico: posicao referenciada por algum indice
     uint32_t hdrAddr = 0, nloop = 0, hdrSel = 0;
     bool haveHdr = false;
@@ -235,6 +239,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                 const P3 p = j < pos.size() ? pos[j] : P3{0, 0, 0, 1.f, 0, 0, 0};
                 Vtx v{};
                 v.x = p.x; v.y = p.y; v.z = p.z; v.w = p.w; v.cx = p.cx; v.cy = p.cy; v.cz = p.cz;
+                if (j < nrm.size()) { v.nx = nrm[j][0]; v.ny = nrm[j][1]; v.nz = nrm[j][2]; }
                 const uint32_t sel = hdrSel & 0x7FFF;   // bit 15: culling da secao (os predios usam 0x8001, 0x8004...)
                 if (sel >= 1 && sel <= 13) md.curSlot = uint8_t((sel - 1) / 3);   // 0 = mantem a textura anterior
                 v.slot = md.curTme ? md.curSlot : kSlotNoTex;
@@ -272,6 +277,9 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
                     pos[k] = {ram.f32(o), ram.f32(o + 4), ram.f32(o + 8), ram.f32(o + 12),
                               uint8_t(ram.u32(o) & 0xFF), uint8_t(ram.u32(o + 4) & 0xFF), uint8_t(ram.u32(o + 8) & 0xFF)};
                 }
+            } else if (vn == 2 && vl == 2 && addr == 0x175) {                 // V3-8 normais (chegam junto das posicoes)
+                nrm.resize(n);
+                for (uint32_t k = 0; k < n; ++k) nrm[k] = {int8_t(ram.u8(a + 3 * k)), int8_t(ram.u8(a + 3 * k + 1)), int8_t(ram.u8(a + 3 * k + 2))};
             } else if (vn == 3 && vl == 0 && n == 1) {                        // V4-32: tag GIF
                 hdrAddr = addr; nloop = ram.u32(a) & 0x7FFF; haveHdr = true;
                 hdrSel = ram.u32(a + 12);   // palavra alta de REGS: o jogo a usa como seletor de textura (1 + 3*slot)
@@ -837,7 +845,7 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
-                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *) {
+                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3]) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -878,20 +886,27 @@ public:
         return n[0] * (p[0][0] - eye[0]) + n[1] * (p[0][1] - eye[1]) + n[2] * (p[0][2] - eye[2]) > 0.f;
     }
 
-    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, v) com os tres vertices decodificados (UV, cor,
-    // slot de textura e culling da secao)
+    // Triangulos de um item em coordenadas de mundo (com skinning), todos os slots: f(p, v, rgb) com os tres vertices decodificados (UV,
+    // cor, slot de textura e culling da secao) e a cor de cada um nas unidades do GS (vertexRgb: com a luz do VU1 nos iluminados)
     template <class F> void forEachTri(const Ram &ram, const DrawItem &it, F &&f) {
         const MeshData *md = mesh(ram, it.node);
         if (!md || !md->valid) return;
         const uint32_t pal = md->skinned ? palette(ram, it) : 0;
+        const ObjLight ol = objectLight(ram, it.node);
         const auto &t = md->tris;
+        std::vector<M4> pm;   // paleta (osso x da normal nos iluminados)
+        if (pal && ol.lit)
+            for (uint32_t s = 0; s < 32; ++s) pm.push_back(readM4(ram, pal + 0x10 + 0x40 * s));
         float p[3][3];
+        uint8_t rgb[3][3];
         for (size_t k = 0; k + 2 < t.size(); k += 3) {
             for (int c = 0; c < 3; ++c) {
-                if (pal) skinVertex(ram, pal, it.m, t[k + c], p[c]);
-                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+                const Vtx &v = t[k + c];
+                if (pal) skinVertex(ram, pal, it.m, v, p[c]);
+                else xform(it.m, v.x, v.y, v.z, p[c]);
+                vertexRgb(ol, pm.empty() ? nullptr : &pm[(v.cx & 0x7F) / 4], it.m, v, rgb[c]);
             }
-            f(p, &t[k]);
+            f(p, &t[k], rgb);
         }
     }
 
@@ -902,7 +917,7 @@ public:
         std::vector<float> cov(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], const Vtx *) {
+            forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3]) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -1037,6 +1052,7 @@ public:
     // Reune os objetos visiveis a partir de world->ep e das listas de CS.
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
     void collect(const Ram &ram, int maxLod = -1) {
+        lights_ = readParaLights(ram);
         items.clear();
         sky.clear();
         overlay.clear();
@@ -1851,6 +1867,7 @@ public:
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
             const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade;
+            const ObjLight ol = objectLight(ram, it.node);
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
             static const uint32_t palOverride = std::getenv("WOTM_PALBLOCK") ? uint32_t(std::strtoul(std::getenv("WOTM_PALBLOCK"), nullptr, 16)) : 0;   // diagnostico
@@ -1909,7 +1926,11 @@ public:
                         if (idcMode) { const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
                         else if (v.isAdc) rlColor4ub(255, 0, 0, 255);   // WOTM_SHOWADC
                         else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
-                        else rlColor4ub(uint8_t(std::min(255, v.r * 2)), uint8_t(std::min(255, v.g * 2)), uint8_t(std::min(255, v.b * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
+                        else {
+                            uint8_t rgb[3];
+                            vertexRgb(ol, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
+                            rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
+                        }
                         if (tid && tid == screenId_) rlTexCoord2f(v.u * (1024.f / 640.f), 1.f - v.v * (256.f / 224.f));   // texels do GS na tela 640x224
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * v.u, sv * v.v); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
@@ -2067,10 +2088,58 @@ private:
         return ram.ok(block, 0x10 + 0x40 * 32) ? block : 0;
     }
 
+    // Luz por vertice, como o programa do VU1 em 0x1010 (OBJECT com dirLight, bit 0x100 das flags em +0xC): com a normal crua n (modulo
+    // ~127) girada pelo osso x (skinned) e pelo objeto, d_i = max(0, n.L_i / 4096) para as tres luzes paralelas e o vetor-meio do
+    // especular (colunas de paraL, x32; o hier as leva ao espaco de cada objeto em lightDir) e
+    //   cor = min(255, cor do vertice * (soma de cor_i * d_i) + especular * d_3^16)
+    // com cor_i em vu1LightColor (D_0025B238, cor/128; qwords 17-19 do cabecalho) e especular = specIntensity (+0x6C) com specLightMe
+    // (bit 0x2000), senao 0 (qword 20). O qword 5 do cabecalho, que tambem multiplica a cor do vertice, vale 1.
+    struct ParaLights { float dir[4][3] = {}; float col[3][3] = {}; };
+    static ParaLights readParaLights(const Ram &ram) {
+        ParaLights l;
+        for (int i = 0; i < 4; ++i)
+            for (int a = 0; a < 3; ++a) l.dir[i][a] = ram.f32(addr::paraL + 16 * a + 4 * i);
+        for (int i = 0; i < 3; ++i)
+            for (int c = 0; c < 3; ++c) l.col[i][c] = ram.f32(addr::vu1LightColor + 16 * i + 4 * c);
+        return l;
+    }
+    ParaLights lights_;   // luzes paralelas do ultimo collect (vertexRgb)
+
+    struct ObjLight { bool lit = false; float spec = 0.f; };
+    static ObjLight objectLight(const Ram &ram, uint32_t node) {
+        const uint16_t f = ram.u16(node + 0xC);
+        return {(f & 0x100) != 0, (f & 0x2000) ? ram.f32(node + 0x6C) : 0.f};
+    }
+
+    // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote ou, nos iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
+    void vertexRgb(const ObjLight &ol, const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
+        if (!ol.lit) { out[0] = v.r; out[1] = v.g; out[2] = v.b; return; }
+        float n[3] = {float(v.nx), float(v.ny), float(v.nz)};
+        if (bone) {
+            const float b[3] = {n[0], n[1], n[2]};
+            for (int c = 0; c < 3; ++c) n[c] = b[0] * bone->m[0][c] + b[1] * bone->m[1][c] + b[2] * bone->m[2][c];
+        }
+        float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (o hier normaliza as colunas de lightDir)
+        for (int r = 0; r < 3; ++r) {
+            const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+            if (len > 1e-6f)
+                for (int c = 0; c < 3; ++c) w[c] += n[r] * m.m[r][c] / len;
+        }
+        float d[4];
+        for (int i = 0; i < 4; ++i) d[i] = std::max(0.f, (w[0] * lights_.dir[i][0] + w[1] * lights_.dir[i][1] + w[2] * lights_.dir[i][2]) / 4096.f);
+        float s = d[3];
+        for (int k = 0; k < 4; ++k) s *= s;   // ^16
+        const uint8_t vc[3] = {v.r, v.g, v.b};
+        for (int c = 0; c < 3; ++c) {
+            const float x = vc[c] * (lights_.col[0][c] * d[0] + lights_.col[1][c] * d[1] + lights_.col[2][c] * d[2]) + ol.spec * s;
+            out[c] = uint8_t(std::min(255.f, std::max(0.f, x)));
+        }
+    }
+
     // Skinning, como o microcodigo do VU1 (desmontado com tools/vu1dis.py; laco em 0x3C8): tres ossos por vertice.
     // Os codigos de osso (8 bits baixos de x, y, z; & 0x7F = endereco de qword da matriz na paleta) escolhem 3 matrizes e os pesos
     // saem do float w: w1 = w, w2 = frac(w * 2048) (mantissa baixa), w3 = 1 - w1 - w2. pos = w1*Mx*p + w2*My*p + w3*Mz*p.
-    // Slot da paleta = (codigo & 0x7F) / 4.
+    // Slot da paleta = (codigo & 0x7F) / 4. A normal so gira pelo osso x (vertexRgb).
     static void skinVertexPM(const M4 *pm, const M4 &m, const Vtx &v, float out[3]) {
         static const bool old2 = std::getenv("WOTM_SKIN2BONE") != nullptr;
         float w1 = v.w, w2 = 0.f, w3 = 0.f;
