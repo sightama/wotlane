@@ -2508,13 +2508,20 @@ private:
     // Multiplicador da cor do vertice do OBJECT, como o hierTraverseAsm monta o qword 5 do cabecalho do VU1 (vf31, que todos os programas
     // de desenho aplicam a cor do vertice): redAnim..alphaAnim (+0x40) ou, dentro de um CHAR_INSTANCE, os canais rAnimIdx..aAnimIdx
     // (+0x34; indice negativo = o do no), vezes o colorQuad (+0x70) do CS em desenho. O retail tambem multiplica o alfa pelo fade do
-    // no (aqui em DrawItem::fade) e o RGB por uma cor do contexto (+0x160 do bloco do hier) quando ligada: nao reproduzido.
+    // no (aqui em DrawItem::fade). Detalhes do asm (0x2085C8-0x2086D0):
+    //  - o canal azul nunca vem da animacao: no lugar do lwc1 do valor animado ha um swc1 do blueAnim (fica o +0x48);
+    //  - o colorQuad so entra com CsColor::isEnabled() (D_007B3040, copiado no scratchpad +0x8C pelo pktCacheForAsm);
+    //  - o RGB vezes a cor ambiente animada (viewAnimAmbientRed/Green/Blue, 0x6F8AD0, = ambiente / 32 do viewSetAmbient, que o
+    //    resetcom le do arquivo da fase) quando viewAmbientChanged (0x6F8ADC; scratchpad +0x160 e +0x84).
     void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
+        const bool quad = cs_ && ram.u32(0x007B3040) != 0;
+        const bool amb = ram.u32(0x006F8ADC) != 0;
         for (int k = 0; k < 4; ++k) {
             out[k] = ram.f32(node + 0x40 + 4 * k);
             const int16_t idx = ram.s16(node + 0x34 + 2 * k);
-            if (animVal_ && idx >= 0) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
-            if (cs_) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
+            if (animVal_ && idx >= 0 && k != 2) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
+            if (quad) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
+            if (amb && k < 3) out[k] *= ram.f32(0x006F8AD0 + 4 * uint32_t(k));
             if (!std::isfinite(out[k])) out[k] = 1.f;
         }
     }
