@@ -20,8 +20,7 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 Não corrigir sem perguntar ao dono qual atacar.
 - **Arco elétrico (tipo 7, Robo-47):** especificado em "Microprogramas"; o VU1 desenha 20 quadrados por sistema e o nativo 6 (trechos retos). Falta implementar.
 - **Sprine (tipo 8):** especificado; falta implementar e conferir no dump o j duplo do 1º passo, o UV com r_{k+1} e a deriva com N ímpar.
-- **Neblina nas partículas:** o sprine e o arco calculam F como os objetos (ver "Microprogramas").
-- **Pedestres da METRO** (fx 91–98): em ~5% das checagens o VU1 desenha 0 ou parte deles; o nativo, todos (90 s: 19.108 contra 23.858). Não é o teste de visão nem `info.attribs`; suspeita: instante.
+- **Neblina nas partículas:** o sprine e o arco calculam F como os objetos (ver "Microprogramas"). Inclui o descarte com F < 1, que explica os pedestres da METRO (abaixo).
 - **Texturas compostas de poeira/fumaça:** os 340–380 SPRITE fora de `fx[]` por quadro vêm do `dustPacket` (`D_0078F6E0`, `texDrawDustPacketBuild`) e compõem na VRAM (0xFD800) as texturas das partículas com texInfo 0xFFFF; o nativo usa um círculo suave. Falta gerá-las (`dustPktParams`, `dustLighting`) e a checagem contá-las como render-to-texture.
 - **Lens flare (tipo 11):** fora do `particleDraw` (`particleAddLensFlareToList`, `particleLensFlareTestZbuffer`, `particleLensFlareRender`). Recurso a implementar.
 - **13. UV do mapa de ambiente** (`envMapped` 0x2, ex.: tex 86, 38–55 texels): o programa 0x0A88 gera o ST pela normal girada por uma matriz da câmera (qwords 997–999 e 0–2) mais a posição na tela. Pede ler o programa; o CLOAK usa o mesmo caminho (`envMapIsVideo`).
@@ -48,6 +47,9 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 - Memória: `pos[]` em cadeias no qword 8 (cabeça: w = 1 + nº de elos; elo: w = 5<<(nível−1) ou 0; 0 na cabeça encerra); 16 cores (float 0..255) em 138–153; tag em 154 (PRIM 0x7C: TRISTRIP, IIP, TME, FGE, ABE, STQ); 155 = (minSize, seed, segInitU, 138 + CLUToffset); 156 = (expansionRate, jag, segDeltaU, numColors−1). Exige n ≥ 3.
 - RINIT(seed) por pacote. Elo de a a b com nível L > 0 vira 2^L sub-trechos: no nível l, amp = jag·L/2^(l−1) e cada vão ganha o ponto médio (0,5a + r·amp − 1,5·amp) + 0,5b (cubo de lado amp em xyz do mundo, r de uma janela deslizante de RNEXT).
 - Fita: fantasmas P₋₁ = 2P₀ − P₁, Pₙ = 2Pₙ₋₁ − Pₙ₋₂; normais na tela de t_in e t_out somadas (mitra aproximada, usa ERSQRT); vértices S ± v·(fxh·s_k/W, fyh·s_k/W), s_k = minSize + exp·k/S; ST = (U_k/W, 1/W ou 0, 1/W), U_k = segInitU + segDeltaU·(k − S/2); cor por lerp; neblina como no sprine, exceto nos pontos 0 e 1. ADC no triângulo fora da banda, com W < 1 ou F < 1. O recorte no plano próximo é inferido: o nativo pode descartar W < 1.
+
+## Explicadas
+- **Pedestres da METRO** (fx 91–99; o nativo desenha os que o VU1 descarta): é a neblina, não o instante. O VU1 descarta a partícula com F < 1. Na METRO, `vu1FogParams` = (−107,9; 255; 1; 326.600) (`build/dumps_live/ram_energy_robot.bin`), então F = −107,9 + 326.600/W < 1 com W > ~3.000. Nos dumps `f4_477/519/560` (2+2) os sistemas perdidos têm W ≥ 3.138 e os desenhados W ≤ 2.953 (a lista do `particleDraw` vai do mais longe ao mais perto, por isso faltam sempre os primeiros, fx 91 e 92). Na fase 1 o corte fica em ~16 mil. Bug do nativo: falta a neblina nas partículas (em aberto). As perdas totais (0/1000) só aparecem nos lotes anteriores à correção do `sceGsSetDefLoadImage` (#311), com o "em textura (sombra)" saltando de ~570 para ~5.900: o FRAME vinha errado, e a checagem descartava as partículas como render-to-texture.
 
 ## Explicadas, sem bug no nativo
 - **7 (padrão B):** os itens de alfa presos aos monstros às vezes saem 1–2,5 px fora: o pacote leva as matrizes do instante da travessia, e nenhuma coleta cai ali. A checagem tenta também a coleta no `hier(0, 1)`.
