@@ -381,6 +381,20 @@ public:
             const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
             for (int k = 0; k < 4; ++k)
                 for (int a = 0; a < 3; ++a) c[k][a] = cpos[a] + ax[a] * sx[k] + ay[a] * sy[k];
+            // O VU1 manda strite e wake como UM triangulo por particula (checagem VU1 x nativo); aqui o quad degenera (canto 3 = canto 0).
+            if (s.type == FX_STRITE) {
+                // ponta na cauda (meio dos cantos 0 e 3), base de largura cheia na cabeca: casa a ~1,5 px
+                for (int a = 0; a < 3; ++a) c[0][a] = c[3][a] = cpos[a] - ax[a];
+            } else if (s.type == FX_WAKE) {
+                // triangulo equilatero no plano XY do mundo, centrado em pos, um vertice em +X; raio pelo pos.w.
+                // Medido so no preset 146 (minSize = maxSize = 90), w de 0 a 0,94: R = 45 + 120 w + 7,5 s (2 - s), s = min(w / 0,235, 1)
+                // (erro < 0,4 unidade; o termo que satura e ajuste, nao formula do microprograma).
+                const float sw = std::min(std::fabs(p[3]) / 0.235f, 1.f);
+                const float R = 0.5f * ram.f32(b + fxoff::minSize) + 120.1f * p[3] + 7.5f * sw * (2.f - sw);
+                const float dx[3] = {1.f, -0.5f, -0.5f}, dy[3] = {0.f, 0.8660254f, -0.8660254f};
+                for (int k = 0; k < 3; ++k) { c[k][0] = p[0] + R * dx[k]; c[k][1] = p[1] + R * dy[k]; c[k][2] = p[2]; }
+                for (int a = 0; a < 3; ++a) c[3][a] = c[0][a];
+            }
             uv[0][0] = u0; uv[0][1] = v1; uv[1][0] = u1; uv[1][1] = v1;
             uv[2][0] = u1; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
             f(i, c, uv);

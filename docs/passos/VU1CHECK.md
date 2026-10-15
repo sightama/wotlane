@@ -11,7 +11,7 @@ Fonte única do estado, do que foi corrigido e das pistas da checagem. Índice e
   - `em textura (sombra)`: triângulos desenhados num FRAME que o quadro usa como textura (a silhueta no quadro da sombra).
 - Objeto que não casa com a coleta nativa da sua cadeia tenta a da 1ª cadeia (a OT de alfa sai no fim do quadro).
 - `tools/lote.ps1` liga por padrão com `-Check 1`. O `resumo.csv` traz `casados_pior`, `textura_difere_pior`, `fx_casados_pior`, `vif1_fora_de_passo` (deve ser 0) e outras colunas.
-- `WOTM_VU1CHECK_DUMP=<prefixo>` grava os triângulos e quadrados de cada checagem em `<prefixo>_<g_frame>.csv`, para análise offline (o `lote.ps1` herda a variável do ambiente).
+- `WOTM_VU1CHECK_DUMP=<prefixo>` grava os triângulos e quadrados de cada checagem em `<prefixo>_<g_frame>.csv`, para análise offline (o `lote.ps1` herda a variável do ambiente). Por sistema de partículas grava também a câmera da comparação (`fxcam`: W 4x4 por linhas e olho, projeção como o `projectPt`) e as partículas cruas (`fxp`: pos, vel, idade, minSize, maxSize).
 
 ## Estado
 - Central, 1 contra 1, 100 s, uma checagem por segundo: de 97,7% a 100% dos triângulos do VU1 casam; 5 de 91 checagens ficam abaixo de 99%. Textura: de 0 a 1 triângulo diferente por checagem.
@@ -24,9 +24,9 @@ Não corrigir sem perguntar ao dono qual atacar.
 6. **Resto das partículas:**
    - **Sprine (8):** a contagem casa (`N = max(2, int(+0x2D8C + 0,5))` passos por trecho), mas os pontos ficam a cerca de 2 px (perturbação aleatória pelos bits do `pos.w`?). A largura `minSize` não foi conferida. Pede ler o microprograma.
    - **Arco elétrico (7, `common/electric`):** subdivisão e zigue-zague feitos no microprograma, com semente `+0x2DC0` e jitter `+0x2E50`. Pede ler o microprograma.
-   - **Strite (6) e wake (16):** o VU1 desenha **um triângulo por partícula**, não um quadrado (`soltos` = n na linha do sistema). O nativo desenha quadrados.
-     - Wake (preset 146, fase 8, dump `t_1003`): triângulos de cerca de 80x20 px, com o centroide na projeção de `pos` (a até 1–2 px) e um vértice bem à frente dos outros dois, como um "V" de esteira ao longo do movimento. O nativo desenha um quadradinho de 0,3 px.
-     - Falta medir em 3D: a checagem precisa gravar `pos`, `vel` e `pos.w` de cada partícula no dump, para ajustar a ponta e a base (pela `vel`? no plano do chão?). Depois, ler o microprograma ou ajustar como foi feito no `stripe`.
+   - **Strite (6), precisão:** o VU1 manda um triângulo por partícula, com a ponta na cauda e a base de largura cheia na cabeça. O nativo já desenha assim, mas nenhum casa a 1 px. Ajustando `pos + k·vel ± e·vel/|vel|` com os dados crus, o erro mediano fica em 2–3 px e o p90 em 5–6 px: não é fórmula simples. Bate com a nota antiga de que a cauda usa a matriz do quadro anterior. Pede ler o microprograma.
+   - **Fase 8, `vif1_fora_de_passo` 38:** apareceu numa rodada de 120 s, a partir de g=1731, a primeira em que um round terminou (`rodadas` 1). Nas outras 5 rodadas da fase 8, 0. Não investigado.
+   - **Fase 8, objetos:** `casados_pior` de 91,9% em todas as rodadas (anterior a estas mudanças). Não investigado.
    - **Pedestres na METRO:** numa checagem, VU1 750 e nativo 1000 (um sistema descartado pelo `pedsUpdateFOVbox`?).
    - **Sistemas que só o VU1 tem:** de 2 a 19 quadrados por checagem.
    - **SPRITE do GS fora de `fx[]`:** de 340 a 380 por quadro, de origem não identificada (HUD?).
@@ -50,6 +50,7 @@ Bugs do nativo:
   - **Pedestres (14)** (631a053): o `pos.w` é `float(variante)`, com o quadro da animação na meia-palavra baixa. Agora são carimbos `minSize × maxSize` em pé no Z, apoiados em `pos`. Casam 100%.
   - **Destroços (13)** (2f5f471): SPRITE alinhado à tela de lado `max(minS, 2·minS·|w|)`, com os bits baixos do `w` escolhendo a célula e o espelhamento. Casam de 96% a 100%.
   - **Stripe (5)** (070c3f9): perpendicular à faixa **na tela**, com meia-largura `|pos.w| − |pos.w[n−1]| + minSize` (a faixa afina com o emissor parado). Casam de 94% a 100%.
+  - **Wake (16):** um triângulo por partícula, equilátero no plano XY do mundo, centrado em `pos`, com um vértice em +X. Raio `R = minSize/2 + 120·w + 7,5·s·(2 − s)`, com `s = min(w/0,235, 1)`, medido só no preset 146 (minSize = maxSize = 90, w de 0 a 0,94; erro < 0,4 unidade; o termo que satura é ajuste). Casam 100% (372 de 372 na fase 8). A checagem compara os triângulos soltos de strite e wake com o quad degenerado do nativo.
   - **dustTrail (15)** (91d1e7b): o `pos.w` é a idade normalizada. Meio-lado `S/2 + exp·vida·w/2`, limitado a 0,375·profundidade. O termo `S ≈ 1,12·max·a3/255 − 0,3·min` é aproximado (até 4% de erro). Razão de tamanho de 0,98 a 1,06.
 - **Pista 7, itens** (4f249df):
   - ANIM_SCALE leva o filho por `scale·(p + preScale) + translate + postScale` (os itens presos aos monstros saíam até 42 px fora).
