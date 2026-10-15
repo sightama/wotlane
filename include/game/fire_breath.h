@@ -18,6 +18,8 @@ public:
     void playCloakingSound(void);
     void updateMonsterSound(void);
     void updateMonsterCinemaSound(void);
+    void updateElectricShockSound(void);
+    void terminateElectricShockSound(void);
 };
 
 class StateFireBreath {

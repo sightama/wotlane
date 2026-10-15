@@ -93,7 +93,8 @@ public:
     void updateLock(MonsterReticleState state);
     Monster *getClosestMonster2D(float maxDist);
     Monster *getClosestMonsterWithLos(float maxDist);
-    Monster *getClosestMonsterToPunch(float maxDist, float angle, float c); /* c: a third limit, not read yet */
+    Monster *getClosestMonsterInFOV(_fvector &from, float maxDist, _fvector &eye, float cosAngle, float &distSq);
+    Monster *getClosestMonsterToPunch(float maxDist, float angle, float reach);
     Monster *getClosestMonster(int locA, int locB, float radius);
     bool isIdle(unsigned t);
     int inCameraFov(_fvector &a, _fvector &b);
@@ -162,6 +163,8 @@ public:
     void update(void);
     void updateCinema(void);
     void updatePosition(void);
+    void updateShadow(void);
+    void launchDefaultProjectile(int bone);
     void updateDefaultProjectile(void);
     _cs * getShadow(void);
     float getAimHeading(void) const;
