@@ -9,7 +9,7 @@
 # Saida em <runtime>\lote\<data_hora>\: <jogador>_<ias com +>_<fase>.log (linhas [partida]/[vigia]/[CRASH]/[vu1check] e a fase/monstros
 # carregados), .png (a tela ~12 s antes do fim), os dumps do vigia e resumo.csv.
 #
-# Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0] [-Check 10]
+# Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0] [-Check 1]
 #   Indices: monstros e fases como no GLOSSARIO.md (MonsterLongNames, GameLevelNames). Sem -Opponents, usa a mesma lista de -Monsters.
 #   -AIs: quantidades de IAs (1 a 3) que se alternam. -Max N para depois de N combinacoes (0 = todas). -Check 0 desliga a comparacao.
 #   As listas sao texto separado por virgula (com -File o PowerShell nao converte "1,2" em lista).
@@ -21,7 +21,7 @@ param(
     [int]$Seed = 1,
     [int]$Secs = 180,
     [int]$Max = 0,
-    [int]$Check = 10
+    [int]$Check = 1
 )
 $ErrorActionPreference = 'Stop'
 function Split-Ints([string]$s) { @($s -split ',' | Where-Object { $_.Trim() } | ForEach-Object { [int]$_.Trim() }) }
