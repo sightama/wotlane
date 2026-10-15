@@ -319,6 +319,7 @@ struct DrawItem {
     int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
     uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd*(1-As)
+    float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
 };
 
 struct Camera {
@@ -1644,6 +1645,7 @@ public:
     // Translucido: textura com alfa parcial ou vertices de alfa baixo. Esses vao no segundo passe (tras para frente, sem escrever profundidade).
     bool translucent(const Ram &ram, const DrawItem &it) {
         const MeshData *md = mesh(ram, it.node);
+        if (it.fade < 1.f) return true;   // cross-fade de LOD
         if (md && md->lowAlpha) return true;
         if (md && md->abe && it.blend) return true;   // mistura aditiva/escurecedora precisa do passe translucido
         for (uint32_t sl = 0; sl < 5; ++sl) {
@@ -1813,7 +1815,7 @@ public:
             const auto &t = md->tris;
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
-            const float fade = fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f;
+            const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade;
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
             static const uint32_t palOverride = std::getenv("WOTM_PALBLOCK") ? uint32_t(std::strtoul(std::getenv("WOTM_PALBLOCK"), nullptr, 16)) : 0;   // diagnostico
@@ -2004,6 +2006,7 @@ private:
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
     uint8_t blend_ = 0;    // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
+    float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
 
     // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D com ALPHA_1 (data em +0x20, endereco 0x42 em +0x28), TEST_1 e ZBUF_1.
     // Traduz o ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7) para DrawItem::blend; -1 = ctx sem ALPHA_1 (herda o do pai).
@@ -2166,7 +2169,7 @@ private:
         const uint32_t op = ram.u32(node) & 0x3F;
         ++byOp[op];
         switch (op) {
-        case 0: items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_}); break;                          // OBJECT
+        case 0: items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_}); break;                   // OBJECT
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
             const uint8_t saved = blend_;
             const int b = groupBlend(ram, ram.u32(node + 4) & 0x0FFFFFFF);
@@ -2195,8 +2198,33 @@ private:
                 const uint32_t i = uint32_t(pick);
                 const uint32_t c = ram.u32(node + 0x20 + 16 * i + 8);
                 const int savedLod = lodIdx_;
+                const float savedFade = fade_;
+                // Cross-fade (hierLod): passada a distancia `fade` (+0x20 + 16i, ao quadrado como switchOutDis), o jogo desenha o LOD i e
+                // o i - 1 juntos, com t = 1 - (d - fade) / (switchOutDis - fade): t > 0,5 -> i inteiro e i - 1 com alfa (1 - t) * 2;
+                // senao i - 1 inteiro e i com alfa 2t; sem i - 1, i com alfa t. Sem isso o nativo trocava de LOD de uma vez (checagem
+                // VU1, pista 7: o VU1 desenhava uma instancia "a mais", o LOD vizinho no mesmo lugar).
+                float fi = 1.f, fprev = 0.f;
+                const float fd = lod_ < 0 && eyeOk_ ? ram.f32(node + 0x20 + 16 * i) : 0.f;
+                if (fd > 0.f) {
+                    float d2 = 0.f, cc[3];
+                    xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), cc);
+                    for (int a = 0; a < 3; ++a) d2 += (cc[a] - eye_[a]) * (cc[a] - eye_[a]);
+                    if (fd < d2) {
+                        const float t = 1.f - (d2 - fd) / (ram.f32(node + 0x20 + 16 * i + 4) - fd);
+                        if (i >= 1) { if (t > 0.5f) fprev = (1.f - t) * 2.f; else { fprev = 1.f; fi = t * 2.f; } }
+                        else fi = t;
+                    }
+                }
                 lodIdx_ = int(i);
-                if (ram.ok(c)) walk(ram, c, m, depth + 1);
+                fade_ = savedFade * fi;
+                if (ram.ok(c) && fade_ > 0.f) walk(ram, c, m, depth + 1);
+                if (fprev > 0.f) {
+                    const uint32_t c2 = ram.u32(node + 0x20 + 16 * (i - 1) + 8);
+                    lodIdx_ = int(i - 1);
+                    fade_ = savedFade * fprev;
+                    if (ram.ok(c2)) walk(ram, c2, m, depth + 1);
+                }
+                fade_ = savedFade;
                 lodIdx_ = savedLod;
             }
             break;
@@ -2251,10 +2279,15 @@ private:
                 const float vis = (vidx >= 0 && animVal_ && vidx < 4096) ? ram.f32(animVal_ + 4 * uint32_t(vidx)) : (vidx >= 0 ? ram.f32(node + 0xC) : 1.f);
                 if (vis == 0.f) break;
             }
+            // hierAnimScaleNode: o olho vai ao espaco do filho por (eo + translate + postScale) / scale + preScale, ou seja, o ponto do
+            // filho p vai ao pai em scale * (p + preScale) + translate + postScale (preScale +0x40 e postScale +0x50; ignora-los
+            // deslocava itens presos aos monstros, checagem VU1 pista 7).
             float sx = ram.f32(node + 0x20), sy = ram.f32(node + 0x24), sz = ram.f32(node + 0x28);
             if (sx == 0.f && sy == 0.f && sz == 0.f) sx = sy = sz = 1.f;
-            kids(ram, node + 0x60, ram.u32(node + 4),
-                 mul(mul(scaleM(sx, sy, sz), translateM(ram.f32(node + 0x30), ram.f32(node + 0x34), ram.f32(node + 0x38))), m), depth);
+            const M4 pre = translateM(ram.f32(node + 0x40), ram.f32(node + 0x44), ram.f32(node + 0x48));
+            const M4 post = translateM(ram.f32(node + 0x30) + ram.f32(node + 0x50), ram.f32(node + 0x34) + ram.f32(node + 0x54),
+                                       ram.f32(node + 0x38) + ram.f32(node + 0x58));
+            kids(ram, node + 0x60, ram.u32(node + 4), mul(mul(mul(pre, scaleM(sx, sy, sz)), post), m), depth);
             break;
         }
         case 39: {                                                                          // INTERACTIVE_STATE (+4 whichChild, +0xC filho)
