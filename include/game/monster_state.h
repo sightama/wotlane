@@ -15,7 +15,7 @@ public:
     void *vptr;         /* 0x10 */
 
     void update(void); /* base update: frame counter and common bookkeeping */
-    void handleCollis(_hdResult &r);
+    void handleCollis(_hdResult &r); /* base collision handling */
 };
 
 #endif

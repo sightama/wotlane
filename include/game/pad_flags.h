@@ -7,20 +7,23 @@ class GamePad;
 
 /* One per-frame snapshot of the pad state (94 bytes); only the fields seen so far are named. */
 struct PadEntry {
-    char data[0xA];
+    char data[0x2];
+    unsigned short dirUp, dirDown, dirLeft, dirRight; /* 0x02..0x08: directions (StateClimb climbs/strafes with them) */
     unsigned short face[4]; /* 0x0A..0x10: four buttons, probably the face buttons; a fresh press of any of them is a struggle in StateImpaled */
-    char pad12[0x16 - 0x12];
+    unsigned short f12, f14; /* 0x12..0x1C: analog stick (computeMotionVec: 0x12 forward, 0x14 back, 0x1A left, 0x1C right; StateRun picks its sub-state from them) */
     unsigned short f16, f18, f1A, f1C, f1E, f20;
     short f22, f24, f26, f28;
-    char pad2A[0x2C - 0x2A];
-    unsigned short f2C;     /* 0x2C: a fresh press chains Congar's second overhead hit (StateMonkeyOHAttack) */
+    unsigned short jump;    /* 0x2A: jump/fly button */
+    unsigned short f2C;     /* 0x2C: StateRamAttack charges on while it is held (or until 6 frames of falling); a fresh press chains Congar's second overhead hit (StateMonkeyOHAttack) */
     unsigned short action;  /* 0x2E: grab/throw button (StateThrow; StateClimb starts on a fresh press too) */
     char pad30[0x32 - 0x30];
     unsigned short f32;
     unsigned short block;   /* 0x34: block button held (StateBlock) */
     char pad36[0x3E - 0x36];
     short f3E;
-    char pad40[0x46 - 0x40];
+    unsigned short f40;     /* 0x40: ram attack button */
+    char pad42[0x44 - 0x42];
+    unsigned short f44;     /* 0x44: butt slam button */
     unsigned short counter; /* 0x46: counter button pressed (StateCounter) */
     char pad48[0x5C - 0x48];
     signed char f5C; /* retail reads it with lb */

@@ -971,7 +971,7 @@ void StateThrowBack::handleDamage(_hdResult &r)
     e = HitEvent::create();
     e->pos = &r.point;
     e->source = 0xD;
-    e->hd = &r;
+    e->result = &r;
     e->type = 0;
     Interactives::dispatchHit(&r.normal, dmg, throwSource ? throwSource->m_id : (int)(r.ids & 0x7FF), owner->m_id);
     if (!(r.ids & 0x7FF))
