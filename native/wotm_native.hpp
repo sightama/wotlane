@@ -397,7 +397,7 @@ struct DrawItem {
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
-    uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior ou CLOAK
+    uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
 };
 
@@ -723,6 +723,11 @@ public:
         if (!tid) return kScreenKey;
         const gs::Tex0 t = gs::Tex0::decode(t0);
         return (uint64_t(tid) << 40) | (uint64_t(t.cbp) << 12) | (uint64_t(t.csa) << 4) | t.cpsm | (1ull << 62);
+    }
+    // No CLOAK (DrawItem::env 3) o pktBldEnvMapDma troca o TEX0 de cada slot com textura pelo do texId 0 (texmGetTextureAddrs).
+    static uint64_t texKey(const Ram &ram, const DrawItem &it, uint32_t slot) {
+        const uint64_t k = texKey(ram, it.node, slot);
+        return k && it.env == 3 ? kScreenKey : k;
     }
 
     // Preenche a paleta de 256 entradas. O GS le CLUTs de 256 cores em CSM1 com os bits 3 e 4 do indice trocados (entradas 8-15 e
@@ -1239,6 +1244,10 @@ public:
     unsigned (*screenTexture)() = nullptr;
     unsigned screenId_ = 0;   // ultimo id devolvido para kScreenKey (o desenho converte o UV dele)
 
+    unsigned textureId(const Ram &ram, const DrawItem &it, uint32_t slot) {
+        if (texKey(ram, it, slot) == kScreenKey) return screenId_ = screenTexture ? screenTexture() : 0;
+        return textureId(ram, it.node, slot);
+    }
     unsigned textureId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
         // filme do menu: moviesSetScreenObject poe texId 999 no objeto (wotm_fmv.hpp); a textura vem do tocador, quadro a quadro
         if (movieTexture && objectTexId(ram, node, slot) == 999)
@@ -2045,9 +2054,9 @@ public:
         if (md && md->abe && it.blend) return true;   // mistura aditiva/escurecedora precisa do passe translucido
         for (uint32_t sl = 0; sl < 5; ++sl) {
             if (md && md->slotMask && !(md->slotMask & (1u << sl))) continue;
-            const uint64_t k = texKey(ram, it.node, sl);
+            const uint64_t k = texKey(ram, it, sl);
             if (!k) continue;
-            textureId(ram, it.node, sl);
+            textureId(ram, it, sl);
             const auto f = partial_.find(k);
             if (f != partial_.end() && f->second) return true;
         }
@@ -2126,7 +2135,7 @@ public:
             for (uint32_t sl = 0; sl < 32; ++sl) {   // slots 0-4 e kSlotNoTex
             if (!(smask & (1u << sl))) continue;
             { static const int onlySl = std::getenv("WOTM_ONLYSLOT") ? std::atoi(std::getenv("WOTM_ONLYSLOT")) : -1; if (onlySl >= 0 && int(sl) != onlySl) continue; }   // diagnostico: so este slot de textura
-            uint64_t key = wire ? 0 : texKey(ram, list[i].node, texRemap(sl));
+            uint64_t key = wire ? 0 : texKey(ram, list[i], texRemap(sl));
             if (far2near) {
                 const M4 &m = list[i].m;
                 const float dx = m.m[3][0] - eye_[0], dy = m.m[3][1] - eye_[1], dz = m.m[3][2] - eye_[2];
@@ -2144,6 +2153,8 @@ public:
         EnvView envV;         // camera do UV do mapa de ambiente (idem, no primeiro item com DrawItem::env)
         const unsigned white = gsWhiteTexture();   // secoes sem textura (PRIM.TME 0): alfa 0x80 = 1,0 do GS
         uint64_t cur = ~0ull;
+        bool curClamp = false;     // lote aberto com DrawItem::env 1 (textura em CLAMP)
+        unsigned clampedId = 0;    // textura posta em CLAMP no lote aberto; volta a REPEAT depois do flush
         bool open = false;
         int curBlend = 0;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
         auto setBlend = [&](int b) {
@@ -2197,18 +2208,22 @@ public:
             if (!md || !md->valid || (md->tris.empty() && md->sprites.empty())) continue;
             const uint32_t slot = o.slot;
             const bool multi = md->slotMask & (md->slotMask - 1);   // mais de um slot usado
-            if (o.key != cur || !open || far2near) {
+            const bool envClamp = it.env == 1 && !wire;   // mapa de ambiente comum: CLAMP_1 = 5 (as texturas de objeto repetem)
+            if (o.key != cur || !open || far2near || envClamp != curClamp) {
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
+                if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
                 if (!wire && md->abe) setBlend(it.blend); else if (!wire) setBlend(0);
                 cur = o.key;
-                const unsigned id = wire ? 0 : textureId(ram, it.node, texRemap(slot));
+                curClamp = envClamp;
+                const unsigned id = wire ? 0 : textureId(ram, it, texRemap(slot));
+                if (envClamp && id && id != screenId_) { rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); clampedId = id; }
                 rlBegin(wire ? RL_LINES : RL_TRIANGLES);   // rlBegin com outro modo reseta a textura do lote: setar depois
                 static const bool idc = std::getenv("WOTM_IDCOLOR") != nullptr;   // diagnostico: cor = texId do objeto (leia o pixel para achar o id)
                 rlSetTexture((id && !idc) ? id : white);
                 open = true;
             }
             static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
-            const unsigned tid = (wire || !cur) ? 0 : textureId(ram, it.node, texRemap(slot));
+            const unsigned tid = (wire || !cur) ? 0 : textureId(ram, it, texRemap(slot));
             // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
             const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
@@ -2333,6 +2348,7 @@ public:
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+        if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); }
         rlNormal3f(0.f, 0.f, 0.f);   // o que vier depois (sombras, particulas) sai sem neblina
         setBlend(0);
         rlSetTexture(0);
@@ -2505,18 +2521,23 @@ private:
     // Mapa de ambiente: o pktAddVu1ObjAsm chama o pktBldEnvMapDma quando as flags (+0xC) tem envMapped (0x2), envMapIsVideo (0x4) ou
     // envMapCloakFx (0x8, que ele liga quando o _cs em desenho tem cloakMe, +0xAA). Ramo 2 (video, quadro anterior ou CLOAK) com
     // envMapIsVideo, texId[0] (+0x50) = 0 ou CLOAK; senao ramo 1. k = envMapWeight (+0x5C; 0 = 16); no CLOAK, cloakWeight (+0xAC) + j/64,
-    // j = 3 - (count & 7) com count & 8, senao (count & 7) - 3 (count = contador de quadros 0x6F88E0).
+    // j = 3 - (count & 7) com count & 8, senao (count & 7) - 3 (count = contador de quadros 0x6F88E0). O CLOAK (env 3) tambem poe
+    // ALPHA_1 0x44 (blend 0), troca o multiplicador de cor q5 por (2,59375; 2,59375; 2,59375; 1) e a textura de cada slot pela do
+    // quadro anterior (texKey com DrawItem).
     void objectEnv(const Ram &ram, uint32_t node, DrawItem &it) const {
         const uint16_t f = ram.u16(node + 0xC);
         const bool cloak = cs_ && ram.s16(cs_ + 0xAA) != 0;
         if (!(f & 0x6) && !cloak) return;
-        it.env = ((f & 0x4) || ram.u16(node + 0x50) == 0 || cloak) ? 2 : 1;
+        it.env = cloak ? 3 : ((f & 0x4) || ram.u16(node + 0x50) == 0) ? 2 : 1;
         it.envK = ram.f32(node + 0x5C);
         if (it.envK == 0.f) it.envK = 16.f;
         if (cloak) {
             const uint32_t n = ram.u32(0x006F88E0);
             const int j = (n & 8) ? 3 - int(n & 7) : int(n & 7) - 3;
             it.envK = ram.f32(cs_ + 0xAC) + float(j) / 64.f;
+            it.blend = 0;
+            for (int c = 0; c < 3; ++c) it.color[c] = 2.59375f;
+            it.color[3] = 1.f;
         }
     }
 
