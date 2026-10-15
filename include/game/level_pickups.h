@@ -34,7 +34,9 @@ public:
         /* the rest is the thrown pickup's projectile (Weapon::InitWeapon, scaled by the thrower's m_pu*Mod) */
         float damage;        /* 0x08 */
         float radius;        /* 0x0C: collision radius of a thrown one (Weapon::WeaponHD) */
-        char pad10[0x2C - 0x10];
+        char pad10[0x18 - 0x10];
+        float useDamage;     /* 0x18: what a thrown rigid one (type 7) loses when it impales a monster (Weapon::DetonateWeapon) */
+        char pad1C[0x2C - 0x1C];
         float duration;      /* 0x2C: seconds */
         float staminaGain;   /* 0x30 */
         float speed;         /* 0x34: mph */
