@@ -2,6 +2,7 @@
 #define MONSTER_STATE_H
 
 class Monster;
+struct _hdResult;
 
 /* Base of the monster state objects (StateRun, StateJump, StateRecoil ...), embedded in Monster at fixed offsets. Virtual in retail: the vptr sits at 0x10
    (vtable entries are {this delta, 0, function}); the ctor and vtable stay as asm and the derived classes below declare their methods without `virtual`. */
@@ -14,6 +15,7 @@ public:
     void *vptr;         /* 0x10 */
 
     void update(void); /* base update: frame counter and common bookkeeping */
+    void handleCollis(_hdResult &r); /* base collision handling */
 };
 
 #endif
