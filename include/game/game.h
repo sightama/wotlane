@@ -627,6 +627,8 @@ public:
     static void SetCameraToFollowMonster(int view, Monster *m);
     static void SetCameraPOV(int view, Camera::CameraPOV pov);
     static void SetCameraMonster(int view, Monster *m);
+    static void InitCCMonsters(Monster *a, Monster *b);
+    static void DetachCamera(int view, _fvector *pos);
     static void TogglePOV(int view);
     static float GetUnifiedTime(void);
     static void StartShake(_fvector &pos, float f);
