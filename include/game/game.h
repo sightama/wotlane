@@ -321,14 +321,19 @@ public:
     char pad48[0x49 - 0x48];
     signed char m_unk49;   /* 0x49 */
     signed char m_attacksEnabled;   /* 0x4A */
-    char pad4B[0xB0 - 0x4B];
+    char pad4B[0x90 - 0x4B];
+    _fvector m_prevTrans;   /* 0x90: cs trans of the previous frame (getPrevTrans); MonsterDynamics measures its velocity from it */
+    char padA0[0xB0 - 0xA0];
     float m_maxHeadingChange;   /* 0xB0 */
     float m_bodyHeight;   /* 0xB4 */
     float m_heightAboveCOG;   /* 0xB8 */
     char padBC[0xC0 - 0xBC];
     float m_rearOffset;   /* 0xC0 */
     float m_width;   /* 0xC4 */
-    char padC8[0xDC - 0xC8];
+    float m_turnMaxRate;   /* 0xC8: MonsterDynamics::updateTurn: the heading rate the turn input settles at */
+    float m_turnAccel;   /* 0xCC: turn acceleration at full input */
+    float m_turnDrag;   /* 0xD0: damping of the heading rate with no turn input */
+    char padD4[0xDC - 0xD4];
     float m_pitchRate1;   /* 0xDC */
     float m_pitchRate2;   /* 0xE0 */
     char padE4[0xE8 - 0xE4];
@@ -343,7 +348,7 @@ public:
     signed char m_turning;   /* 0xF1 */
     char padF2[0xF3 - 0xF2];
     unsigned char m_specialWeapon;   /* 0xF3 */
-    char padF4[0xF5 - 0xF4];
+    signed char m_boostFull;   /* 0xF4: the rage gauge is full (updateBoostAndRage); m_boostSpeedMod/m_boostDamageMod apply */
     signed char m_unkF5;   /* 0xF5 */
     signed char m_unkF6;   /* 0xF6 */
     signed char m_unkF7;   /* 0xF7: victory shown (StateVictory sets it at 85% of the celebration; blocks another one) */
@@ -373,7 +378,13 @@ public:
     float m_health;   /* 0x44C */
     char pad450[0x460 - 0x450];
     StaminaMeter m_stamina;   /* 0x460 */
-    char pad48C[0x4AC - 0x48C];
+    float m_boostDamageMod;   /* 0x48C: damage dealt x this while m_boostFull (when > 0) */
+    float m_boostSpeedMod;   /* 0x490: speed x this while m_boostFull (when > 0) */
+    float m_rageDuration;   /* 0x494: seconds (20 when 0) */
+    float m_rageDrain;   /* 0x498 */
+    float m_rageDamageMod;   /* 0x49C: damage dealt x this while raging (m_unkF5) */
+    float m_rageSpeedMod;   /* 0x4A0: speed x this while raging */
+    char pad4A4[0x4AC - 0x4A4];
     unsigned char m_okToGlow;   /* 0x4AC */
     char pad4AD[0x4B0 - 0x4AD];
     int m_healthGlow[3];   /* 0x4B0 */
