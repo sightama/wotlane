@@ -2236,9 +2236,9 @@ private:
             return;
         }
         float n[3] = {float(v.nx), float(v.ny), float(v.nz)};
-        if (bone) {
+        if (bone) {   // o laco de skinning do VU1 (0x3D0) grava a normal girada com FTOI12 (trunca a 1/4096) e a luz le com ITOF12
             const float b[3] = {n[0], n[1], n[2]};
-            for (int c = 0; c < 3; ++c) n[c] = b[0] * bone->m[0][c] + b[1] * bone->m[1][c] + b[2] * bone->m[2][c];
+            for (int c = 0; c < 3; ++c) n[c] = std::trunc(b[0] * bone->m[0][c] + b[1] * bone->m[1][c] + b[2] * bone->m[2][c]);
         }
         float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (o hier normaliza as colunas de lightDir)
         for (int r = 0; r < 3; ++r) {
