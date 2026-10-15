@@ -28,7 +28,8 @@
 //   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
 //   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat)
 // Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8, interpolados; pos.w = lado e bits baixos = celula/espelhamento).
-// Ainda aproximado: as faixas (sprine, stripe, sweepTrail) ligam particulas consecutivas; kite, wake e dustTrail viram sprites;
+// Sprine: Particles::sprineQuads (sprites ao longo da curva do microprograma). Ainda aproximado: as faixas (stripe, sweepTrail) ligam
+// particulas consecutivas; kite, wake e dustTrail viram sprites;
 // a cauda das linhas usa a matriz atual.
 #pragma once
 
@@ -327,7 +328,7 @@ public:
     }
 
 
-    static bool isStrip(uint32_t type) { return type == FX_SPRINE || type == FX_STRIPE || type == FX_SWEEPTRAIL; }
+    static bool isStrip(uint32_t type) { return type == FX_STRIPE || type == FX_SWEEPTRAIL; }
 
     // Neblina das particulas: o contexto comum dos microprogramas (qwords 0-7, de 0x256B90) leva fogFA em q4.w e fogFB em q5.w, os
     // mesmos de vu1FogParams; o VU1 calcula F = min(fogFA + fogFB / W, 255) e descarta a particula com F < 1 (CLIP), com ou sem FGE.
@@ -482,6 +483,108 @@ public:
         }
     }
 
+    // Sprine (tipo 8; sprinePacketInit/Build, microprograma 0x2770 em build/vu1/particle.txt). O pacote fica antes de pos[] (qword 8):
+    // cores RGBA (V4-8, q264-295), UV (V4-16 em 1/16 de texel, q296-299: u0, v0, u1, v1), e q300-q306 num UNPACK de 7 qwords que termina
+    // em pos - 4: q300.x = preAgeFactor (pa); q301 = (h (nc - 1) / vida, h exp, -, f6); q302 = (minSize, N, (N + 1) >> 1, sprites por
+    // lote; os tres inteiros); q303 e q304 = pesos das diferencas avancadas (x h^2); q305 = M2 (linha 2 da ParticleToEmitMat);
+    // q306 = ((n - 1) N, idade[n - 1] N, n - 1; inteiro, float, inteiro). h = 1/N.
+    //  - Um trecho por par A = pos[i], B = pos[i - 1] (i de n - 1 a 1), com Pm = pos[i + 1] e Pn = pos[i - 2]; fantasmas: no 1o trecho
+    //    Pm = B - 2 M2 ((B - A) . M2) (reflexo de B no plano de A normal a M2), no ultimo Pn = 2 pos[0] - pos[1].
+    //  - D1 = q303 . (Pm, A, B, Pn), D2 = q304 . (...), D2' = q304 invertido (w, z, y, x) . (...). p = A; a cada passo: emite em p,
+    //    p += D1, D1 += D2; se depois disso faltam (N + 1) >> 1 passos (e N > 2), D1 += c (D2' - D2), D2 = D2' (c = 0,5 com N par,
+    //    0,125 impar). N passos por trecho; pos[0] nao e emitido.
+    //  - Passo global s (aN = q306.y + s): r = valor corrente do gerador; j = 1 + pa (2 - r); lado = (minSize + q301.y aN) (1 + (r - 1) f6);
+    //    cor = tabela em min(31, q301.x aN j) (lerp, + 0,5, truncada; no 1o passo de um trecho que nao comeca lote, j entra duas vezes).
+    //    Depois RNEXT, e o UV do passo e q296 + (bits de r & 3). RINIT(pos[n - 1].w) e um RNEXT no comeco; RINIT(pos[i].w) em cada trecho
+    //    (so reinicia o gerador; o r corrente segue).
+    //  - SPRITE alinhado a tela: centro p +/- (192, 90,24) lado / W px, ou seja meio-lado lado / 2 no plano de vista. Some com W < 1 ou
+    //    F < 1 (o F no forEachQuad).
+    // g(passo, cantos[4][3] ((-,-), (+,-), (+,+), (-,+) na tela), uv[4][2], cor RGBA (0x80 = 1,0)).
+    template <class G> static void sprineQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
+        const uint32_t pos = ram.u32(s.base + fxoff::pos);
+        const uint32_t q300 = pos - 0x74;
+        if (s.n < 2 || !ram.ok(q300 - 0x24 - 0x80 - 4, 0x200) || !ram.ok(pos, 16 * uint32_t(s.n))) return;
+        if ((ram.u32(q300 - 4) & 0x7F0003FFu) != (0x6C000000u | 300u) || (ram.u32(pos - 4) & 0x3FF) != 8) return;   // UNPACK de q300 e de pos
+        const uint32_t uvAt = q300 - 4 - 0x20, colAt = uvAt - 4 - 0x80;   // dados dos UNPACK de q296 (4 x V4-16) e q264 (32 x V4-8)
+        if ((ram.u32(uvAt - 4) & 0x3FF) != 296 || (ram.u32(colAt - 4) & 0x3FF) != 264) return;
+        auto q = [&](int k, int c) { return ram.f32(q300 + 16 * uint32_t(k - 300) + 4 * uint32_t(c)); };
+        auto qi = [&](int k, int c) { return int(ram.u32(q300 + 16 * uint32_t(k - 300) + 4 * uint32_t(c)) & 0xFFFF); };
+        const float pa = q(300, 0), cPos = q(301, 0), cExp = q(301, 1), f6 = q(301, 3), minSize = q(302, 0);
+        const int N = qi(302, 1), half = qi(302, 2), batch = qi(302, 3), total = qi(306, 0);
+        if (N < 2 || N > 64 || batch < 1 || total != (s.n - 1) * N) return;
+        float W3[4], W4[4];
+        for (int c = 0; c < 4; ++c) { W3[c] = q(303, c); W4[c] = q(304, c); }
+        const float M2[3] = {q(305, 0), q(305, 1), q(305, 2)};
+        const float cc = (N & 1) ? 0.125f : 0.5f;
+        const uint64_t t0 = systemTex0(ram, s.base);
+        const float tw = 16.f * float(1u << ((t0 >> 26) & 15)), th = 16.f * float(1u << ((t0 >> 30) & 15));
+        struct V3 { float v[3]; };
+        auto P = [&](int i) { return V3{{ram.f32(pos + 16 * uint32_t(i)), ram.f32(pos + 16 * uint32_t(i) + 4), ram.f32(pos + 16 * uint32_t(i) + 8)}}; };
+        auto wbits = [&](int i) { return ram.u32(pos + 16 * uint32_t(i) + 12); };
+        auto color = [&](float cpos) {
+            const int k0 = std::clamp(int(cpos), 0, 31), k1 = std::min(k0 + 1, 31);
+            const float fr = cpos - float(k0);
+            uint32_t out = 0;
+            for (int c = 0; c < 4; ++c) {
+                const float a = ram.u8(colAt + 4 * uint32_t(k0) + uint32_t(c)), b = ram.u8(colAt + 4 * uint32_t(k1) + uint32_t(c));
+                out |= uint32_t(std::clamp(int(a + 0.5f - a * fr + b * fr), 0, 255)) << (8 * c);
+            }
+            return out;
+        };
+        auto wOf = [&](const float p[3]) {
+            if (view.fogW[0] == 0.f && view.fogW[1] == 0.f && view.fogW[2] == 0.f)
+                return view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
+            return view.fogW[0] * p[0] + view.fogW[1] * p[1] + view.fogW[2] * p[2] + view.fogW[3];
+        };
+        uint32_t R = vuRinit(wbits(s.n - 1));
+        float r = vuRnext(R);
+        float aN = q(306, 1);
+        int step = 0;
+        V3 Pm, A = P(s.n - 1), B = P(s.n - 2), Pn;
+        {
+            float d = 0.f;
+            for (int a = 0; a < 3; ++a) d += (B.v[a] - A.v[a]) * M2[a];
+            for (int a = 0; a < 3; ++a) Pm.v[a] = B.v[a] - M2[a] * (2.f * d);
+        }
+        for (int i = s.n - 1; i >= 1; --i) {
+            if (i >= 2) Pn = P(i - 2);
+            else for (int a = 0; a < 3; ++a) Pn.v[a] = 2.f * B.v[a] - A.v[a];
+            float D1[3], D2[3], D2b[3], p[3];
+            for (int a = 0; a < 3; ++a) {
+                D1[a] = Pm.v[a] * W3[0] + A.v[a] * W3[1] + B.v[a] * W3[2] + Pn.v[a] * W3[3];
+                D2[a] = Pm.v[a] * W4[0] + A.v[a] * W4[1] + B.v[a] * W4[2] + Pn.v[a] * W4[3];
+                D2b[a] = Pm.v[a] * W4[3] + A.v[a] * W4[2] + B.v[a] * W4[1] + Pn.v[a] * W4[0];
+                p[a] = A.v[a];
+            }
+            R = vuRinit(wbits(i));
+            const bool twiceJ = step % batch != 0;   // 1o passo de trecho que nao comeca lote
+            for (int k = 0; k < N; ++k, ++step) {
+                const float j = 1.f + pa * (2.f - r);
+                const float side = (minSize + cExp * aN) * (1.f + (r - 1.f) * f6);
+                const float cpos = std::min(31.f, cPos * aN * j * (k == 0 && twiceJ ? j : 1.f));
+                r = vuRnext(R);
+                const uint32_t uvq = uvAt + 8 * (R & 3);
+                const float u0 = ram.u16(uvq) / tw, v0 = ram.u16(uvq + 2) / th, u1 = ram.u16(uvq + 4) / tw, v1 = ram.u16(uvq + 6) / th;
+                if (wOf(p) >= 1.f) {
+                    const float h = 0.5f * side;
+                    float cs[4][3];
+                    for (int a = 0; a < 3; ++a) {
+                        const float rx = view.right[a] * h, uy = view.up[a] * h;   // y da tela para baixo = -up
+                        cs[0][a] = p[a] - rx + uy; cs[1][a] = p[a] + rx + uy;
+                        cs[2][a] = p[a] + rx - uy; cs[3][a] = p[a] - rx - uy;
+                    }
+                    const float uv[4][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v1}};
+                    g(step, cs, uv, color(cpos));
+                }
+                aN += 1.f;
+                for (int a = 0; a < 3; ++a) { p[a] += D1[a]; D1[a] += D2[a]; }
+                if (N > 2 && N - 1 - k == half)
+                    for (int a = 0; a < 3; ++a) { D1[a] = D1[a] - cc * D2[a] + cc * D2b[a]; D2[a] = D2b[a]; }
+            }
+            Pm = A; A = B; B = Pn;
+        }
+    }
+
     // Geometria do sistema em coordenadas de mundo, um quadrado por vez: f(i, cantos[4][3], uv[4][2]), i = particula (nas faixas,
     // a ponta de i a i + 1; cantos 0 e 1 em i, 2 e 3 em i + 1). Linhas (FX_LINE) nao passam por aqui. Serve ao draw e a checagem VU1.
     template <class F> static void forEachQuad(const Ram &ram, const FxSystem &s, const FxView &view, F &&emit) {
@@ -498,6 +601,10 @@ public:
             arcQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], const uint32_t *) { f(k, cc, uu); });
             return;
         }
+        if (s.type == FX_SPRINE) {
+            sprineQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], uint32_t) { f(k, cc, uu); });
+            return;
+        }
         if (isStrip(s.type)) {
             // Faixa ligando particulas consecutivas, de meia-largura |pos.w|. Como no VU1 (medido pela checagem em stripe: a aresta de
             // cada ponta sai perpendicular a faixa na tela), a ponta i abre perpendicular, na tela, a direcao entre as vizinhas
@@ -505,33 +612,11 @@ public:
             // stripe: o stripePacketBuild manda ao VU1 a idade da particula mais nova (n - 1), e a largura sai descontada do quanto ela
             // ja cresceu: com o emissor parado a faixa inteira afina. Medido pela checagem (preset 106): meia-largura =
             // |pos.w| - |pos.w[n - 1]| + minSize (com o emissor ativo, a mais nova tem idade ~0 e da |pos.w|).
-            // Polilinha: as particulas (stripe, sweepTrail) ou a Catmull-Rom do sprine, cada ponto com a meia-largura e a particula
-            // do trecho (para a cor no draw).
+            // Polilinha das particulas (stripe, sweepTrail), cada ponto com a meia-largura e a particula (para a cor no draw).
             struct Pt { float p[3], hw, u; int seg; };
             std::vector<Pt> pts;
             pts.reserve(size_t(s.n));
-            if (s.type == FX_SPRINE) {
-                // sprine (sprinePacketInit): curva com N = max(2, (int)(info +0x2D8C + 0,5)) passos por trecho, que o VU1 anda por
-                // diferencas avancadas (a contagem de quadrados casa com a checagem). Aqui Catmull-Rom; os pontos do VU1 ficam a ~2 px
-                // (sem padrao: o VU1 parece perturbar cada particula com os bits aleatorios de pos.w, randBits12 no particleEmit).
-                // Meia-largura: minSize, NAO conferida (minSize + exp*idade e + (max-min)*bits12/4096 deram de 1,3x a 3,5x a do VU1).
-                const int N = std::max(2, int(ram.f32(b + 0x2D8C) + 0.5f));
-                for (int i = 0; i + 1 < s.n; ++i) {
-                    float q[4][4];
-                    P(std::max(i - 1, 0), q[0]); P(i, q[1]); P(i + 1, q[2]); P(std::min(i + 2, s.n - 1), q[3]);
-                    if (!std::isfinite(q[1][0]) || !std::isfinite(q[2][0])) continue;
-                    for (int k = (i == 0 ? 0 : 1); k <= N; ++k) {
-                        const float t = float(k) / float(N), t2 = t * t, t3 = t2 * t;
-                        const float w0 = -0.5f * t3 + t2 - 0.5f * t, w1 = 1.5f * t3 - 2.5f * t2 + 1.f, w2 = -1.5f * t3 + 2.f * t2 + 0.5f * t, w3 = 0.5f * t3 - 0.5f * t2;
-                        Pt pt;
-                        for (int a = 0; a < 3; ++a) pt.p[a] = w0 * q[0][a] + w1 * q[1][a] + w2 * q[2][a] + w3 * q[3][a];
-                        pt.hw = ram.f32(b + fxoff::minSize);
-                        pt.u = (float(i) + t) / float(s.n - 1);
-                        pt.seg = i;
-                        pts.push_back(pt);
-                    }
-                }
-            } else {
+            {
                 float wHead = 0.f;
                 if (s.type == FX_STRIPE) { float ph[4]; P(s.n - 1, ph); wHead = std::fabs(ph[3]) - ram.f32(b + fxoff::minSize); }
                 for (int i = 0; i < s.n; ++i) {
@@ -559,7 +644,7 @@ public:
             };
             for (size_t i = 0; i + 1 < pts.size(); ++i) {
                 const Pt &a0 = pts[i], &a1 = pts[i + 1];
-                if (s.type != FX_SPRINE && a1.seg != a0.seg + 1) continue;   // particula invalida no meio: sem ponte
+                if (a1.seg != a0.seg + 1) continue;   // particula invalida no meio: sem ponte
                 float o0[3], o1[3];
                 if (!off(i, o0) || !off(i + 1, o1)) continue;
                 for (int a = 0; a < 3; ++a) {
@@ -785,6 +870,22 @@ private:
                 if (fogged(view, c)) return;
                 for (int k = 0; k < 4; ++k) {
                     vcolor(k < 2 ? col[0] : col[1]);
+                    rlTexCoord2f(uv[k][0], uv[k][1]);
+                    rlVertex3f(c[k][0], c[k][1], c[k][2]);
+                }
+            });
+            rlEnd();
+            rlSetTexture(0);
+            return;
+        }
+
+        if (s.type == FX_SPRINE) {   // sprites da curva com a cor de cada passo (sprineQuads)
+            rlBegin(RL_QUADS);
+            rlSetTexture(texFor(0));
+            sprineQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], uint32_t col) {
+                if (fogged(view, c)) return;
+                for (int k = 0; k < 4; ++k) {
+                    vcolor(col);
                     rlTexCoord2f(uv[k][0], uv[k][1]);
                     rlVertex3f(c[k][0], c[k][1], c[k][2]);
                 }
