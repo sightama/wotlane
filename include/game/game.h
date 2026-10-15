@@ -25,6 +25,26 @@ enum MonsterReticleState { MonsterReticleState_dummy };
 class Camera {
 public:
     enum CameraPOV { POV_0, POV_1, POV_2, POV_3 };
+    /* One per view, 0xEB0 bytes, at the start of Cameras::m_cameras; fields are still accessed by offset (Cameras.cpp).
+       ccMonsNoLongerInRange/ccMonsMovingTogether copy a whole Camera by value, hence the 16-aligned raw block. */
+    char m_raw[0xEB0] __attribute__((aligned(16)));
+
+    /* Per-POV update, indexed by the POV at +0xCF8 (Cameras::Update). */
+    static void (Camera::*const UPDATE_FUNK[10])(void);
+    void closeCombatUpdate(void);
+    void roamUpdate(void);
+    void staticUpdate(void);
+    void getupUpdate(void);
+    void knockbackUpdate(void);
+    void topdownUpdate(void);
+    void victoryUpdate(void);
+    void crushUpdate(void);
+    void normalUpdate(void);
+    void checkCollision(int view);
+    void checkNewPosition(void);
+    int posInFOV(_fvector &pos, int a, bool b);
+    void translateCamera(_fvector &pos, float f, bool b);
+    void shakeCamera(void);
 };
 
 /* Monster (0x11190 bytes). Its MonsterStates live inside it at fixed offsets (from the constructor):
@@ -630,9 +650,27 @@ extern int gUseUnifiedView;
 class Cameras {
 public:
     char pad0[0x2A58];
-    int m_state;              /* 0x2A58: 7 = cinema */
+    int m_state;              /* 0x2A58: POV of camera 2 (the unified view; one 0xEB0 block per view, POV at +0xCF8); 7 = cinema */
 
     static Cameras m_cameras;
+    /* Task callbacks (Pv) forward the task argument as `this` of the real member; nonzero keeps the task running. */
+    unsigned CCFadeIn(void);
+    unsigned CCFadeOut(void);
+    unsigned LeaveUnifiedTask(void);
+    static unsigned CCFadeIn(void *p);
+    static unsigned CCFadeOut(void *p);
+    static unsigned LeaveUnifiedTask(void *p);
+    static void InitCCCameraFromThrow(Monster *a, Monster *b);
+    static int ccMonsMovingTogether(void);
+    static void InitPlantBossCamera(void);
+    static _cs *GetCsCameraFollows(int view);
+    static void ReattachCamera(int view);
+    static void ResetPOVChange(int view, float t);
+    static void StartShake(float f);
+    static void ShakeFalloff(float f);
+    static void Init(void);
+    static void AlignCsWithView(int view, _cs *cs, float dist, float x, float z);
+    static void AlignCsWithCamera(int view, _cs *cs, float dist, float x, float z);
     static void InitCrushMonsters(Monster *a, Monster *b);
     static void Update(void);
     static void SetCameraToFollowMonster(int view, Monster *m);
