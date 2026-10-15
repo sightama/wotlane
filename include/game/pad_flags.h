@@ -12,7 +12,8 @@ struct PadEntry {
     char pad12[0x16 - 0x12];
     unsigned short f16, f18, f1A, f1C, f1E, f20;
     short f22, f24, f26, f28;
-    char pad2A[0x2E - 0x2A];
+    char pad2A[0x2C - 0x2A];
+    unsigned short f2C;     /* 0x2C: a fresh press chains Congar's second overhead hit (StateMonkeyOHAttack) */
     unsigned short action;  /* 0x2E: grab/throw button (StateThrow; StateClimb starts on a fresh press too) */
     char pad30[0x32 - 0x30];
     unsigned short f32;
