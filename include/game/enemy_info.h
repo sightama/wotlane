@@ -11,7 +11,8 @@ public:
         float dist;       /* 0xC: distance */
         float dist2D;     /* 0x10: ground-plane distance */
         float dot;        /* 0x14: facing, compared with cos(angle) */
-        char pad18[8];
+        float f18;        /* 0x18: compared with cos(45 degrees) by StateThrowBack (facing of the pair) */
+        char pad1C[4];
         int los;          /* 0x20: clear line of sight */
         char pad24[0xC];
     };

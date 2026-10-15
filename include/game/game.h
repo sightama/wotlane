@@ -630,6 +630,10 @@ public:
     static void TogglePOV(int view);
     static float GetUnifiedTime(void);
     static void StartShake(_fvector &pos, float f);
+    static void LeaveUnifiedView(unsigned reason);
+    static int ccMonsNoLongerInRange(float dist);
+    static void InitCCMonsters(Monster *a, Monster *b);
+    static void InitCCCamera(Monster *a, Monster *b);
 };
 
 void fontSetColor(int font, int r, int g, int b, int a);

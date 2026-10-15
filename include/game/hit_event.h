@@ -6,7 +6,8 @@
 struct _fvector;
 struct HitEvent {
     _fvector *pos; /* 0x00: where it lands (HomingBug: the contact point on a boss hull) */
-    char pad4[0xC - 0x4];
+    void *hd;      /* 0x04: the _hdResult of the contact (StateThrowBack::handleDamage) */
+    char pad8[0xC - 0x8];
     int type;      /* 0x0C: 0 none, 1 normal (recoil), 2 blockable, 3 big hit, 5 shock, 7 stun, 8 knockback only, 10 burn */
     int source;    /* 0x10: what dealt it (0xB melee; 5, 6 and 0x14 are special-cased by StateBlock::isBlockable) */
     int subtype;   /* 0x14: recoil subtype for type 3 */
