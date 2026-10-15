@@ -160,6 +160,21 @@ public:
         return true;
     }
 
+    // Focos da worldToScreenMat M (pixels do GS por unidade de vista a W = 1): parte das linhas 0 e 1 perpendicular a linha 3 (frente).
+    // 384 e 180,48 na luta.
+    static bool screenFoci(const float M[4][4], float &fx, float &fy) {
+        float n3 = 0.f, d03 = 0.f, d13 = 0.f;
+        for (int k = 0; k < 3; ++k) { n3 += M[3][k] * M[3][k]; d03 += M[0][k] * M[3][k]; d13 += M[1][k] * M[3][k]; }
+        if (!(n3 > 1e-6f)) return false;
+        fx = 0.f; fy = 0.f;
+        for (int k = 0; k < 3; ++k) {
+            const float a0 = M[0][k] - d03 / n3 * M[3][k], a1 = M[1][k] - d13 / n3 * M[3][k];
+            fx += a0 * a0; fy += a1 * a1;
+        }
+        fx = std::sqrt(fx); fy = std::sqrt(fy);
+        return fx > 1e-6f && fy > 1e-6f;
+    }
+
     // Strite como o microprograma do VU1 (entrada 0xA88; conferido pela checagem, erro < 0,1 px). Em pixels do GS:
     //   H = M (pos) com a worldToScreenMat atual; T = M' (pos - vel) com a prevViewMat (fx + 0x2EC0: 4 qwords no pacote, colunas
     //   x/y/z/translacao em coordenadas de mundo): a cauda sai onde estava na tela do quadro anterior (borrao de movimento).
@@ -188,16 +203,8 @@ public:
         float A[4], B[4];
         for (int r = 0; r < 4; ++r) { A[r] = 3.f * T[r] - 2.f * H[r]; B[r] = 3.f * H[r] - 2.f * T[r]; }
         if (!(A[3] > 1e-3f) || !(B[3] > 1e-3f)) return false;
-        // focos: parte das linhas 0 e 1 perpendicular a linha 3 (frente)
-        float n3 = 0.f, d03 = 0.f, d13 = 0.f;
-        for (int k = 0; k < 3; ++k) { n3 += M[3][k] * M[3][k]; d03 += M[0][k] * M[3][k]; d13 += M[1][k] * M[3][k]; }
-        if (!(n3 > 1e-6f)) return false;
-        float fx = 0.f, fy = 0.f;
-        for (int k = 0; k < 3; ++k) {
-            const float a0 = M[0][k] - d03 / n3 * M[3][k], a1 = M[1][k] - d13 / n3 * M[3][k];
-            fx += a0 * a0; fy += a1 * a1;
-        }
-        fx = std::sqrt(fx); fy = std::sqrt(fy);
+        float fx, fy;
+        if (!screenFoci(M, fx, fy)) return false;
         const float ax = A[0] / A[3], ay = A[1] / A[3], bx = B[0] / B[3], by = B[1] / B[3];
         float mx = (bx - ax) / fx, my = (by - ay) / fy;
         const float ml = std::sqrt(mx * mx + my * my);

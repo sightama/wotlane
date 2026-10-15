@@ -154,8 +154,20 @@ struct Vtx {
     uint8_t fge = 0;                  // PRIM.FGE da secao: o GS aplica a neblina (Scene::draw, shader)
 };
 
+// OBJECT sprite (objType 2, flags +0xC bits 5-6): secao com tag GIF SPRITE em H e 6 qwords por sprite, sem indices: ST0 @H+1,
+// RGBA @H+2 (V4-8, passo 6), centro local + lado em w @H+3 (V4-32, passo 6), ST1 @H+4 (V2-16, passo 3 com o ST0). O microprograma
+// (0x2E58, `pktAddVu1ObjAsm` pela tabela +0x158) projeta o centro e emite os cantos centro -/+ (512, 256) * lado / W pixels do GS,
+// com ST0/ST1 (/4096, + uvOff), cor do pacote vezes q5 (limitada a 255, sem luz) e o F da neblina no centro. Halo do power-up.
+struct ObjSprite {
+    float x, y, z, size;          // centro no espaco do objeto; lado (o w do V4-32)
+    float u0, v0, u1, v1;         // ST dos cantos (-, -) e (+, +) da tela do GS (4096 = 1,0)
+    uint8_t r, g, b, a;           // RGBA cru do GS (0x80 = 1,0)
+    uint8_t slot = 0, fge = 0;    // como Vtx::slot / Vtx::fge
+};
+
 struct MeshData {
     std::vector<Vtx> tris;   // lista de triangulos (3 vertices por triangulo)
+    std::vector<ObjSprite> sprites;   // secoes SPRITE (ObjSprite): voltadas para a camera, montadas no desenho
     uint32_t qwc = 0;
     uint32_t sig = 0;        // assinatura barata para detectar RAM reaproveitada por outro nivel
     uint16_t texId = 0;
@@ -168,17 +180,31 @@ struct MeshData {
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
     uint8_t curTme = 1;   // PRIM.TME em vigor (tag GIF com PRE; sem PRE o GS mantem o PRIM anterior)
     uint8_t curFge = 0;   // PRIM.FGE em vigor (neblina; mesma regra do TME)
+    uint8_t curSprite = 0;   // PRIM do tipo SPRITE em vigor (ObjSprite; mesma regra do TME)
     uint32_t posTot = 0, posUsed = 0;   // posicoes carregadas / usadas por algum indice (diagnostico)
     uint32_t dropAdc = 0, dropDegen = 0;   // triangulos descartados por ADC / degenerados (diagnostico)
     uint32_t secTot = 0, secBad = 0, secBadEx = 0;   // secoes de tira / com nloop != indices (diagnostico)
     uint32_t oobIdx = 0, totIdx = 0;   // indices de vertice fora de `pos` (viram (0,0,0)) / total: diagnostico de decodificacao
 };
 
+// Pula os qwords zerados entre sub-pacotes.
+inline uint32_t skipZeroQwords(const Ram &ram, uint32_t pp) {
+    uint32_t skip = 0;
+    while (skip < 0x400 && ram.ok(pp + skip, 16) && ram.u32(pp + skip) == 0 && ram.u32(pp + skip + 4) == 0) skip += 16;
+    return pp + skip;
+}
+
+// Assinatura barata do pacote em `pp` (ja sem os qwords zerados): tag, primeira e ultima palavra (sem a ultima nos skinned, cujo
+// fim so se acha decodificando). Scene::mesh revalida o cache com ela; uma formula diferente da do decodePacket fazia a malha ser
+// decodificada de novo a cada chamada, e o ponteiro devolvido antes ficava solto.
+inline uint32_t packetSig(const Ram &ram, uint32_t pp) {
+    const uint32_t tag = ram.u32(pp), nwords = ((tag & 0xFFFF) + 1) * 4 - 2;
+    return tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ ((tag & 0x10000) ? 0u : ram.u32(pp + 4 * (nwords + 1)) * 17u);
+}
+
 // Decodifica um sub-pacote em `md`; devolve o endereco do proximo (cadeia skinned) ou 0.
 inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool first) {
-    uint32_t skip = 0;
-    while (skip < 0x400 && ram.ok(pp + skip, 16) && ram.u32(pp + skip) == 0 && ram.u32(pp + skip + 4) == 0) skip += 16;   // qwords zerados entre sub-pacotes
-    pp += skip;
+    pp = skipZeroQwords(ram, pp);
     if (!ram.ok(pp, 16)) return 0;
     const uint32_t tag = ram.u32(pp);
     if (((tag >> 28) & 7) != 6) return 0;
@@ -191,7 +217,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
     if (skinnedPkt) md.skinned = true;
     if (first) {
         md.qwc = qwc;
-        md.sig = tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ (skinnedPkt ? 0u : ram.u32(pp + 4 * (nwords + 1)) * 17u);
+        md.sig = packetSig(ram, pp);
         md.valid = true;
     }
     uint32_t endPp = 0;
@@ -206,10 +232,25 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
     std::vector<std::array<uint8_t, 4>> rgba;
     std::vector<std::array<int16_t, 2>> uv;
     std::vector<uint32_t> adc;
+    std::vector<std::array<float, 4>> spos;   // centros + lado das secoes SPRITE
     uint32_t mask = 0;
 
     auto flush = [&]() {
-        if (haveHdr && !idx.empty()) {
+        if (haveHdr && md.curSprite) {
+            const uint32_t sel = hdrSel & 0x7FFF;
+            if (sel >= 1 && sel <= 13) md.curSlot = uint8_t((sel - 1) / 3);
+            const uint8_t slot = md.curTme ? md.curSlot : kSlotNoTex;
+            const size_t n = std::min<size_t>({nloop, spos.size(), rgba.size(), uv.size() / 2});
+            for (size_t k = 0; k < n; ++k) {
+                ObjSprite s;
+                s.x = spos[k][0]; s.y = spos[k][1]; s.z = spos[k][2]; s.size = spos[k][3];
+                s.u0 = uv[2 * k][0] / 4096.f; s.v0 = uv[2 * k][1] / 4096.f; s.u1 = uv[2 * k + 1][0] / 4096.f; s.v1 = uv[2 * k + 1][1] / 4096.f;
+                s.r = rgba[k][0]; s.g = rgba[k][1]; s.b = rgba[k][2]; s.a = rgba[k][3];
+                s.slot = slot; s.fge = md.curFge;
+                md.sprites.push_back(s);
+                md.slotMask |= 1u << slot;
+            }
+        } else if (haveHdr && !idx.empty()) {
             const uint32_t n = std::min<uint32_t>(nloop, uint32_t(idx.size()));
             ++md.secTot;
             if (nloop != idx.size() || rgba.size() < n || uv.size() < n) { ++md.secBad; if (md.secBadEx < 4) { ++md.secBadEx; std::fprintf(stderr, "   secao: nloop=%u idx=%zu rgba=%zu uv=%zu" "%c", nloop, idx.size(), rgba.size(), uv.size(), 10); } }
@@ -258,7 +299,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
             }
             emit();
         }
-        haveHdr = false; idx.clear(); rgba.clear(); uv.clear(); adc.clear();
+        haveHdr = false; idx.clear(); rgba.clear(); uv.clear(); adc.clear(); spos.clear();
     };
 
     uint32_t i = 0;
@@ -285,11 +326,18 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
             } else if (vn == 2 && vl == 2 && addr == 0x175) {                 // V3-8 normais (chegam junto das posicoes)
                 nrm.resize(n);
                 for (uint32_t k = 0; k < n; ++k) nrm[k] = {int8_t(ram.u8(a + 3 * k)), int8_t(ram.u8(a + 3 * k + 1)), int8_t(ram.u8(a + 3 * k + 2))};
+            } else if (haveHdr && md.curSprite && vn == 3 && vl == 0 && addr == hdrAddr + 3) {   // V4-32 centros + lado (SPRITE)
+                spos.resize(n);
+                for (uint32_t k = 0; k < n; ++k) spos[k] = {ram.f32(a + 16 * k), ram.f32(a + 16 * k + 4), ram.f32(a + 16 * k + 8), ram.f32(a + 16 * k + 12)};
+            } else if (haveHdr && md.curSprite && vn == 1 && vl == 1 && addr == hdrAddr + 1) {   // V2-16 ST0/ST1 (SPRITE)
+                uv.resize(n);
+                for (uint32_t k = 0; k < n; ++k) uv[k] = {ram.s16(a + 4 * k), ram.s16(a + 4 * k + 2)};
             } else if (vn == 3 && vl == 0 && n == 1) {                        // V4-32: tag GIF
                 hdrAddr = addr; nloop = ram.u32(a) & 0x7FFF; haveHdr = true;
                 hdrSel = ram.u32(a + 12);   // palavra alta de REGS: o jogo a usa como seletor de textura (1 + 3*slot)
                 if ((ram.u32(a + 4) >> 14) & 1) md.curTme = uint8_t((ram.u32(a + 4) >> 19) & 1);   // PRE: PRIM nos bits 47-57 (TME = bit 4)
                 if ((ram.u32(a + 4) >> 14) & 1) md.curFge = uint8_t((ram.u32(a + 4) >> 20) & 1);   // FGE = bit 5 do PRIM
+                if ((ram.u32(a + 4) >> 14) & 1) md.curSprite = uint8_t(((ram.u32(a + 4) >> 15) & 7) == 6);   // tipo 6 = SPRITE
                 if (((ram.u32(a + 4) >> 15) >> 6) & 1) md.abe = true;
             } else if (haveHdr && vn == 0 && vl == 2 && (mask & 0xFF) == 0xBF) {   // S-8 sob mascara: ADC
                 for (uint32_t k = 0; k < n; ++k) {
@@ -1316,6 +1364,39 @@ public:
         }
     }
 
+    // Camera para os ObjSprite: R/U = eixos direita/cima da camera do raylib (a mesma do desenho), M = worldToScreenMat, focos fx/fy.
+    struct SpriteView {
+        bool ok = false;
+        float R[3], U[3], eye[3], M[4][4], fx = 0.f, fy = 0.f;
+        static SpriteView make(const Ram &ram, const float eye[3]) {
+            SpriteView v;
+            const Matrix mv = rlGetMatrixModelview();
+            const float R[3] = {mv.m0, mv.m4, mv.m8}, U[3] = {mv.m1, mv.m5, mv.m9};
+            for (int a = 0; a < 3; ++a) { v.R[a] = R[a]; v.U[a] = U[a]; v.eye[a] = eye[a]; }
+            for (int r = 0; r < 4; ++r)
+                for (int k = 0; k < 4; ++k) v.M[r][k] = ram.f32(addr::worldToScreenMat + 16 * r + 4 * k);
+            v.ok = Particles::screenFoci(v.M, v.fx, v.fy);
+            return v;
+        }
+    };
+
+    // Cantos do ObjSprite no mundo como o microprograma 0x2E58: centro c = m * (x, y, z), W = linha 3 de M * (c - olho), cantos
+    // c -/+ (512, 256) * lado / W pixels do GS. No plano de vista do centro (mesmo W), o deslocamento e 512 * lado / fx ao longo de R e
+    // 256 * lado / fy ao longo de -U (o y do GS desce). Ordem: (-, -), (+, -), (+, +), (-, +) do GS. Falso com W < 1 (o CLIP descarta).
+    static bool objSpriteCorners(const SpriteView &v, const M4 &m, const ObjSprite &s, float c[4][3]) {
+        if (!v.ok) return false;
+        float p[3];
+        xform(m, s.x, s.y, s.z, p);
+        float w = v.M[3][3];
+        for (int a = 0; a < 3; ++a) w += v.M[3][a] * (p[a] - v.eye[a]);
+        if (!(w >= 1.f)) return false;
+        const float hx = 512.f * s.size / v.fx, hy = 256.f * s.size / v.fy;
+        const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
+        for (int k = 0; k < 4; ++k)
+            for (int a = 0; a < 3; ++a) c[k][a] = p[a] + v.R[a] * hx * sx[k] - v.U[a] * hy * sy[k];
+        return true;
+    }
+
     void drawSprites(const Ram &ram) {
         if (sprites.empty() || !cam_.ok) return;
         float R[3] = {cam_.fwd[1] * cam_.up[2] - cam_.fwd[2] * cam_.up[1], cam_.fwd[2] * cam_.up[0] - cam_.fwd[0] * cam_.up[2], cam_.fwd[0] * cam_.up[1] - cam_.fwd[1] * cam_.up[0]};
@@ -1665,12 +1746,7 @@ public:
         auto it = cache_.find(pp);
         if (it != cache_.end()) {
             // revalida a assinatura (a RAM do nivel pode ter sido reaproveitada)
-            const uint32_t tag = ram.u32(pp);
-            const uint32_t qwc = tag & 0xFFFF, nwords = (qwc + 1) * 4 - 2;
-            // mesma formula do decodePacket (sem a ultima palavra nos skinned); diferente, a malha era decodificada de novo a cada
-            // chamada e o ponteiro devolvido antes ficava solto
-            const uint32_t sig = tag ^ ram.u32(pp + 8) ^ (ram.u32(pp + 12) * 31u) ^ ((tag & 0x10000) ? 0u : ram.u32(pp + 4 * (nwords + 1)) * 17u);
-            if (it->second->sig == sig) return it->second.get();
+            if (it->second->sig == packetSig(ram, skipZeroQwords(ram, pp))) return it->second.get();
         }
         auto md = std::make_shared<MeshData>(decodeObject(ram, node));
         cache_[pp] = md;
@@ -1778,6 +1854,7 @@ public:
         const MeshData *md = mesh(ram, it.node);
         if (it.fade < 1.f) return true;   // cross-fade de LOD
         if (md && md->lowAlpha) return true;
+        if (md && !md->sprites.empty()) return true;   // ObjSprite: brilho (alphaSort no halo do power-up)
         if (md && md->abe && it.blend) return true;   // mistura aditiva/escurecedora precisa do passe translucido
         for (uint32_t sl = 0; sl < 5; ++sl) {
             if (md && md->slotMask && !(md->slotMask & (1u << sl))) continue;
@@ -1876,6 +1953,7 @@ public:
         }
         std::stable_sort(order.begin(), order.end(), [](const Ent &a, const Ent &b) { return a.key < b.key; });
 
+        SpriteView sprView;   // eixos e focos para os ObjSprite (montado no primeiro item que tiver)
         const unsigned white = gsWhiteTexture();   // secoes sem textura (PRIM.TME 0): alfa 0x80 = 1,0 do GS
         uint64_t cur = ~0ull;
         bool open = false;
@@ -1928,7 +2006,7 @@ public:
                 }
                 if (ls && md && md->skinned && !wire) { for (int r = 0; r < 3; ++r) std::fprintf(stderr, "   m[%d] %.3f %.3f %.3f %.3f\n", r, it.m.m[r][0], it.m.m[r][1], it.m.m[r][2], it.m.m[r][3]); }
             }
-            if (!md || !md->valid || md->tris.empty()) continue;
+            if (!md || !md->valid || (md->tris.empty() && md->sprites.empty())) continue;
             const uint32_t slot = o.slot;
             const bool multi = md->slotMask & (md->slotMask - 1);   // mais de um slot usado
             if (o.key != cur || !open || far2near) {
@@ -2024,6 +2102,28 @@ public:
                         shaderNormal(fogBurn, v.fge, gsV);   // neblina e modulacao do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
+                }
+            }
+            if (!md->sprites.empty() && !sprView.ok) sprView = SpriteView::make(ram, eye_);
+            for (const ObjSprite &s : md->sprites) {
+                if (multi && s.slot != slot) continue;
+                float c[4][3];
+                if (!objSpriteCorners(sprView, it.m, s, c)) continue;
+                if (fudge) for (auto &q : c) for (int a = 0; a < 3; ++a) q[a] = eye_[a] + (q[a] - eye_[a]) * fzScale;
+                const uint8_t cr = uint8_t(std::min(255.f, s.r * it.color[0])), cg = uint8_t(std::min(255.f, s.g * it.color[1])),
+                              cb = uint8_t(std::min(255.f, s.b * it.color[2])), ca = uint8_t(std::min(255.f, s.a * fade));
+                // ST como o GS (repete): desloca o par para >= 0, para nao depender do modo de repeticao da textura do raylib
+                const float u0 = s.u0 + it.uvOff[0], u1 = s.u1 + it.uvOff[0], v0 = s.v0 + it.uvOff[1], v1 = s.v1 + it.uvOff[1];
+                const float du = std::floor(std::min(u0, u1)), dv = std::floor(std::min(v0, v1));
+                const float cu[4] = {u0 - du, u1 - du, u1 - du, u0 - du}, cv[4] = {v0 - dv, v0 - dv, v1 - dv, v1 - dv};
+                static const int triIdx[6] = {0, 1, 2, 0, 2, 3}, edgeIdx[8] = {0, 1, 1, 2, 2, 3, 3, 0};
+                const int *ix = wire ? edgeIdx : triIdx;
+                for (int q = 0; q < (wire ? 8 : 6); ++q) {
+                    const int k = ix[q];
+                    rlColor4ub(cr, cg, cb, ca);
+                    if (tid) rlTexCoord2f(cu[k], cv[k]);
+                    shaderNormal(fogBurn, s.fge, gsA);
+                    rlVertex3f(c[k][0], c[k][1], c[k][2]);
                 }
             }
         }
