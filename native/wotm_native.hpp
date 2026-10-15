@@ -342,6 +342,7 @@ struct DrawItem {
     uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd*(1-As)
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
+    float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
 };
 
 struct Camera {
@@ -905,7 +906,7 @@ public:
                 const Vtx &v = t[k + c];
                 if (pal) skinVertex(ram, pal, it.m, v, p[c]);
                 else xform(it.m, v.x, v.y, v.z, p[c]);
-                vertexRgb(ol, pm.empty() ? nullptr : &pm[(v.cx & 0x7F) / 4], it.m, v, rgb[c]);
+                vertexRgb(ol, it.color, pm.empty() ? nullptr : &pm[(v.cx & 0x7F) / 4], it.m, v, rgb[c]);
             }
             f(p, &t[k], rgb);
         }
@@ -1060,6 +1061,7 @@ public:
         sprites.clear();
         atMat_ = 0;
         animVal_ = 0;
+        cs_ = 0;
         blend_ = 0;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
@@ -1867,7 +1869,7 @@ public:
             const auto &t = md->tris;
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
             const bool forceOpaque = forceOpaqueEnv && md->skinned;
-            const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade;
+            const float fade = (fadeByNode ? std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) : 1.f) * it.fade * std::max(0.f, it.color[3]);
             const ObjLight ol = objectLight(ram, it.node);
             static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
             static const bool noSkin = std::getenv("WOTM_NOSKIN") != nullptr;   // diagnostico: pose de referencia, sem skinning
@@ -1929,7 +1931,7 @@ public:
                         else if (noVcol && md->skinned) rlColor4ub(255, 255, 255, 255);   // diagnostico
                         else {
                             uint8_t rgb[3];
-                            vertexRgb(ol, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
+                            vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
                             rlColor4ub(uint8_t(std::min(255, rgb[0] * 2)), uint8_t(std::min(255, rgb[1] * 2)), uint8_t(std::min(255, rgb[2] * 2)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, v.a * 4 * fade)));
                         }
                         if (tid && tid == screenId_) rlTexCoord2f((v.u + it.uvOff[0]) * (1024.f / 640.f), 1.f - (v.v + it.uvOff[1]) * (256.f / 224.f));   // texels do GS na tela 640x224
@@ -2063,6 +2065,7 @@ private:
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
+    uint32_t cs_ = 0;      // _cs em desenho (drawCs; 0 no mundo e no ceu): colorQuad em objectColor
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
     uint8_t blend_ = 0;    // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
@@ -2089,6 +2092,20 @@ private:
         for (int k = 0; k < 2; ++k) {
             const int16_t idx = ram.s16(node + 0x30 + 2 * k);
             out[k] = idx >= 0 ? ram.f32(animVal_ + 4 * uint32_t(idx)) : 0.f;
+        }
+    }
+
+    // Multiplicador da cor do vertice do OBJECT, como o hierTraverseAsm monta o qword 5 do cabecalho do VU1 (vf31, que todos os programas
+    // de desenho aplicam a cor do vertice): redAnim..alphaAnim (+0x40) ou, dentro de um CHAR_INSTANCE, os canais rAnimIdx..aAnimIdx
+    // (+0x34; indice negativo = o do no), vezes o colorQuad (+0x70) do CS em desenho. O retail tambem multiplica o alfa pelo fade do
+    // no (aqui em DrawItem::fade) e o RGB por uma cor do contexto (+0x160 do bloco do hier) quando ligada: nao reproduzido.
+    void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
+        for (int k = 0; k < 4; ++k) {
+            out[k] = ram.f32(node + 0x40 + 4 * k);
+            const int16_t idx = ram.s16(node + 0x34 + 2 * k);
+            if (animVal_ && idx >= 0) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
+            if (cs_) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
+            if (!std::isfinite(out[k])) out[k] = 1.f;
         }
     }
 
@@ -2125,9 +2142,14 @@ private:
         return {(f & 0x100) != 0, (f & 0x2000) ? ram.f32(node + 0x6C) : 0.f};
     }
 
-    // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote ou, nos iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
-    void vertexRgb(const ObjLight &ol, const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
-        if (!ol.lit) { out[0] = v.r; out[1] = v.g; out[2] = v.b; return; }
+    // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
+    // iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
+    void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
+        const float vc[3] = {v.r * mul[0], v.g * mul[1], v.b * mul[2]};
+        if (!ol.lit) {
+            for (int c = 0; c < 3; ++c) out[c] = uint8_t(std::min(255.f, std::max(0.f, vc[c])));
+            return;
+        }
         float n[3] = {float(v.nx), float(v.ny), float(v.nz)};
         if (bone) {
             const float b[3] = {n[0], n[1], n[2]};
@@ -2143,7 +2165,6 @@ private:
         for (int i = 0; i < 4; ++i) d[i] = std::max(0.f, (w[0] * lights_.dir[i][0] + w[1] * lights_.dir[i][1] + w[2] * lights_.dir[i][2]) / 4096.f);
         float s = d[3];
         for (int k = 0; k < 4; ++k) s *= s;   // ^16
-        const uint8_t vc[3] = {v.r, v.g, v.b};
         for (int c = 0; c < 3; ++c) {
             const float x = vc[c] * (lights_.col[0][c] * d[0] + lights_.col[1][c] * d[1] + lights_.col[2][c] * d[2]) + ol.spec * s;
             out[c] = uint8_t(std::min(255.f, std::max(0.f, x)));
@@ -2292,6 +2313,7 @@ private:
         case 0:                                                                                                 // OBJECT
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
             objectUvOffset(ram, node, items.back().uvOff);
+            objectColor(ram, node, items.back().color);
             break;
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
             const uint8_t saved = blend_;
@@ -2475,7 +2497,10 @@ private:
             m = mul(scaleM(sx, sy, sz), m);
         }
         const size_t before = items.size();
+        const uint32_t savedCs = cs_;
+        cs_ = cs;
         walk(ram, ep, m, 0);
+        cs_ = savedCs;
         if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
