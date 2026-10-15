@@ -118,7 +118,8 @@ struct FxSystem {
 
 // Eixos da camera para montar os quadrados: right/up no plano da tela, back = -frente, profundidade(p) = depth . (p, 1)
 // ox/oy: coordenadas x e y de vista (ox . (p, 1)), na mesma base de right/up.
-struct FxView { float right[3], up[3], back[3], depth[4], ox[4], oy[4]; };
+// Neblina (Particles::setFog): W(p) = fogW . (p, 1) (linha 3 do worldToScreenMat, com o olho), F = fogFA + fogFB / W; fogFB 0 = sem neblina.
+struct FxView { float right[3], up[3], back[3], depth[4], ox[4], oy[4]; float fogW[4] = {0, 0, 0, 0}, fogFA = 0.f, fogFB = 0.f; };
 
 class Particles {
 public:
@@ -246,12 +247,16 @@ public:
     }
 
     // Desenha (dentro de BeginMode3D, depois dos objetos opacos e translucidos). Testa profundidade, nao escreve.
-    void draw(const Ram &ram, const TexFn &texture) {
+    // eye: olho da camera (o W da neblina e medido a partir dele, como no VU1)
+    void draw(const Ram &ram, const TexFn &texture, const float eye[3]) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;
         if (off || systems.empty()) return;
         const Matrix mv = rlGetMatrixModelview();
-        const FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14},
-                          {mv.m0, mv.m4, mv.m8, mv.m12}, {mv.m1, mv.m5, mv.m9, mv.m13}};
+        FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14},
+                    {mv.m0, mv.m4, mv.m8, mv.m12}, {mv.m1, mv.m5, mv.m9, mv.m13}};
+        float row3[4];
+        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+        setFog(ram, view, row3, eye);
         // particleDraw: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec + vis.priority; opacos (alpha 0) antes
         for (FxSystem &s : systems) {
             if (ram.u32(s.base + fxoff::alphaContext) == 0) { s.key = 50000.f + ram.f32(s.base + fxoff::priority); continue; }
@@ -264,6 +269,7 @@ public:
         rlDisableBackfaceCulling();
         for (const FxSystem &s : systems) drawSystem(ram, s, texture, view);
         rlDrawRenderBatchActive();
+        rlNormal3f(0.f, 0.f, 0.f);   // sem neblina para o que vem depois (overlay)
         rlSetBlendMode(BLEND_ALPHA);
         rlEnableDepthMask();
         rlEnableBackfaceCulling();
@@ -290,9 +296,32 @@ public:
 
     static bool isStrip(uint32_t type) { return type == FX_SPRINE || type == FX_STRIPE || type == FX_SWEEPTRAIL; }
 
+    // Neblina das particulas: o contexto comum dos microprogramas (qwords 0-7, de 0x256B90) leva fogFA em q4.w e fogFB em q5.w, os
+    // mesmos de vu1FogParams; o VU1 calcula F = min(fogFA + fogFB / W, 255) e descarta a particula com F < 1 (CLIP), com ou sem FGE.
+    // Medido na METRO (fogFA -107,9, fogFB 326.600: W > ~3.000): os pedestres somem ali (VU1CHECK.md, "Explicadas").
+    static void setFog(const Ram &ram, FxView &v, const float row3[4], const float eye[3]) {
+        v.fogFA = ram.f32(addr::vu1FogParams);
+        v.fogFB = ram.f32(addr::vu1FogParams + 12);
+        v.fogW[3] = row3[3];
+        for (int a = 0; a < 3; ++a) { v.fogW[a] = row3[a]; v.fogW[3] -= row3[a] * eye[a]; }
+    }
+    // Ponto (mundo) todo na neblina: F < 1
+    static bool foggedAt(const FxView &v, const float p[3]) {
+        if (v.fogFB == 0.f) return false;
+        const float w = v.fogW[0] * p[0] + v.fogW[1] * p[1] + v.fogW[2] * p[2] + v.fogW[3];
+        return w > 1e-3f && v.fogFA + v.fogFB / w < 1.f;
+    }
+    // Particula toda na neblina (no centro do quadrado)
+    static bool fogged(const FxView &v, const float c[4][3]) {
+        float p[3];
+        for (int a = 0; a < 3; ++a) p[a] = 0.25f * (c[0][a] + c[1][a] + c[2][a] + c[3][a]);
+        return foggedAt(v, p);
+    }
+
     // Geometria do sistema em coordenadas de mundo, um quadrado por vez: f(i, cantos[4][3], uv[4][2]), i = particula (nas faixas,
     // a ponta de i a i + 1; cantos 0 e 1 em i, 2 e 3 em i + 1). Linhas (FX_LINE) nao passam por aqui. Serve ao draw e a checagem VU1.
-    template <class F> static void forEachQuad(const Ram &ram, const FxSystem &s, const FxView &view, F &&f) {
+    template <class F> static void forEachQuad(const Ram &ram, const FxSystem &s, const FxView &view, F &&emit) {
+        auto f = [&](int i, const float c[4][3], const float uv[4][2]) { if (!fogged(view, c)) emit(i, c, uv); };
         const uint32_t b = s.base;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel);
         const bool haveVel = ram.ok(vel, 16 * uint32_t(s.n));
@@ -548,6 +577,9 @@ private:
 
         rlDrawRenderBatchActive();
         rlSetBlendMode(blendFor(ram.u32(b + fxoff::alphaContext)));
+        // neblina no shader do Scene::draw (normal = (fogBurnThru, FGE, 0)): o XGKICK das particulas leva PRIM.FGE em todos os tipos
+        // medidos pela checagem VU1 (sprite, texSprite, stripe, strite, arco, sprine, frag, pedestre, dustTrail); o draw zera no fim
+        rlNormal3f(0.f, 1.f, 0.f);
         auto A = [&](int i) { return haveAge ? int(ram.s16(age + 2 * uint32_t(i))) : 0; };
 
         if (s.type == FX_LINE) {

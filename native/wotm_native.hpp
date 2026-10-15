@@ -1211,6 +1211,10 @@ public:
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;   // diagnostico: sem particulas
         if (off) return;
         constexpr uint32_t kFx = 0x005BA280u, kStride = 12000u;
+        FxView fog{};   // o VU1 descarta a particula toda na neblina (F < 1; Particles::setFog)
+        float row3[4];
+        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+        Particles::setFog(ram, fog, row3, eye_);
         for (uint32_t i = 1; i < fxaddr::count && sprites.size() < 6000; ++i) {   // fx[100]: o VU1 desenha destroços em fx[98] e fx[99]
             const uint32_t b = kFx + i * kStride;
             const uint32_t np = ram.u32(b + 0x2ED0);
@@ -1229,6 +1233,7 @@ public:
                 Sprite s;
                 for (int c = 0; c < 3; ++c) s.pos[c] = ram.f32(pos + 16 * k + 4 * c);
                 if (!std::isfinite(s.pos[0]) || !std::isfinite(s.pos[1]) || !std::isfinite(s.pos[2])) continue;
+                if (Particles::foggedAt(fog, s.pos)) continue;
                 const int a = int(int16_t(ram.u16(age + 2 * k)));
                 if (a < 0 || (life > 0 && a >= life)) continue;
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
@@ -1324,6 +1329,7 @@ public:
         std::sort(order.begin(), order.end());
         rlDisableBackfaceCulling();
         rlDisableDepthMask();
+        rlNormal3f(0.f, 1.f, 0.f);   // neblina (FGE) no shader do draw, como o XGKICK dos destroços
         unsigned cur = ~0u;
         bool open = false;
         for (const auto &o : order) {
@@ -1359,6 +1365,7 @@ public:
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }
+        rlNormal3f(0.f, 0.f, 0.f);
         rlSetTexture(0);
         rlEnableDepthMask();
         rlEnableBackfaceCulling();
@@ -1738,7 +1745,7 @@ public:
         }
         // particulas por ultimo (testam profundidade, nao escrevem): destroços interpolados (drawSprites), depois os demais tipos na ordem de particleDraw
         if (!wire) drawSprites(ram);
-        if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+        if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
         rlDrawRenderBatchActive();
         rlDisableDepthTest();   // icones de botao por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         drawList(ram, overlay, wire, -1, true);
