@@ -645,7 +645,6 @@ public:
     static void StartShake(_fvector &pos, float f);
     static void LeaveUnifiedView(unsigned reason);
     static int ccMonsNoLongerInRange(float dist);
-    static void InitCCMonsters(Monster *a, Monster *b);
     static void InitCCCamera(Monster *a, Monster *b);
 };
 
