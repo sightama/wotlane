@@ -14,10 +14,21 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 
 ## Estado (2026-10-15)
 - Geometria: fase 1 de 99,2% a 99,7% no pior caso; fase 8, 98,7% a 99,8%; METRO, 96,2% a 99,9%. Textura: 0 a 1 triângulo diferente por checagem.
-- Atributos (fase 1, 40 s): pior `cor difere` 366 por checagem (era 2.832); monstros com 95% a 98% dos vértices iguais; `uv difere` 184 a 240; neblina com 0 a 4 F diferentes em ~10 mil.
+- Atributos (fase 1, 40 s): pior `cor difere` 366 por checagem (era 2.832); monstros com 95% a 98% dos vértices iguais (Togera 98,8% depois da normal truncada); `uv difere` 184 a 240; neblina com 0 a 4 F diferentes em ~10 mil.
+- Partículas (METRO 2+2): pedestres 99,9%, arco 97,5%, sprite e strite ~100%, sprine ~1%.
+- Feito em 2026-10-15: neblina nas partículas, arco elétrico, normal dos skinned truncada, alfa e cor de vértice como o GS (MODULATE), ALPHA 0x42 = Cd − Cs·As, codificação da normal do shader (burn), pedestres e pista 10 explicados. Detalhes em "Corrigido" e "Explicadas".
 
 ## Em aberto
 Não corrigir sem perguntar ao dono qual atacar.
+
+**Fila combinada com o dono (2026-10-15), especificados e prontos para implementar, nesta ordem:**
+1. OBJECT sprite (`objType` 2): halo do power-up e outros brilhos; o nativo não desenha nada (ver "Achados da comparação com o PCSX2").
+2. Texturas compostas de poeira/fumaça: esferas de luz brancas no lugar de fumaça escura.
+3. UV do mapa de ambiente e CLOAK (item 13).
+4. Sprine (tipo 8).
+5. Lens flare (tipo 11): precisa de teste de oclusão no depth buffer do nativo.
+
+Depois, sem especificação: fator de contexto do q5 (+0x160), resíduos do arco, destroços com ~1,7% a mais no nativo, As > 1, e o que a checagem não cobre (cor das partículas, inclusive a explosão opaca; linhas e leques; HUD).
 - **Arco elétrico, resíduo:** 2,5% dos quadrados do VU1 sem par, com 1–2 px do meio para o fim da fita em alguns sistemas (provável instante: `pos[]` se move entre a coleta nativa e o DMA), e o nativo desenha alguns quadrados a mais nas pontas (o VU1 marca ADC fora da banda de recorte, não reproduzida). A textura (U por trecho, V = 1/0) não foi conferida na tela.
 - **Sprine (tipo 8):** especificado; falta implementar e conferir no dump o j duplo do 1º passo, o UV com r_{k+1} e a deriva com N ímpar.
 - **Texturas compostas de poeira/fumaça (especificado, não implementado; scripts e simulação em `scratchpad/dust`, `dustsim.py`):** o nativo usa um círculo suave claro, e o jogo mostra fumaça escura.
