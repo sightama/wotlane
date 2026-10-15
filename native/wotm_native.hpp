@@ -60,6 +60,17 @@ constexpr uint32_t psShadowIntens = 0x006F8820;  // float, 80 = 0,625 (escala do
 constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 }
 
+// Pacote de upload de uma textura (`texInfo[id]`): o `texmSetupTexture` monta em +0x20 o `sceGsLoadImage` do SDK
+// (`sceGsSetDefLoadImage`): BITBLTBUF em +0x30 (DBW nos bits 48..53, DPSM 56..61), TRXREG em +0x50 (RRW 0..11, RRH 32..43); pixels
+// lineares a partir de +0x80. (Ate 2026-10-15 o stub do runtime gravava ali uma struct propria, com largura em +0x24, altura em +0x26 e
+// psm em +0x2B; dumps de RAM daquela epoca nao servem mais.)
+struct UploadHdr {
+    uint32_t w, h, psm, bw;
+    static UploadHdr read(const Ram &ram, uint32_t ptr) {
+        return {ram.u16(ptr + 0x50) & 0xFFFu, ram.u16(ptr + 0x54) & 0xFFFu, ram.u8(ptr + 0x37) & 0x3Fu, ram.u8(ptr + 0x36) & 0x3Fu};
+    }
+};
+
 }  // namespace wotm
 
 // Particulas e efeitos: precisa de Ram (acima); a Scene os desenha depois dos translucidos
@@ -658,7 +669,7 @@ public:
     }
 
     // Textura do objeto: os pixels vem do pacote de upload apontado por `texInfo[texId]` (pixels lineares a partir de +0x80,
-    // descritor em +0x24 largura, +0x26 altura, +0x2B PSM); a paleta vem da VRAM (carregada junto com a fase).
+    // cabecalho em UploadHdr); a paleta vem do .RTX (carregado junto com a fase).
     bool decodeTex(const Ram &ram, uint32_t node, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot = 0) const {
         const uint64_t t0v = objectTex0(ram, node, slot);
         if (!t0v) return false;
@@ -682,13 +693,13 @@ public:
         return decodeUploadTex(ram, ptr, t0, px, w, h);
     }
 
-    // Pixels do pacote de upload em `ptr` (= texInfo[texId]; descritor em +0x24 largura, +0x26 altura, +0x2B PSM, pixels lineares
-    // a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
+    // Pixels do pacote de upload em `ptr` (= texInfo[texId]; cabecalho em UploadHdr, pixels lineares a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
     bool decodeUploadTex(const Ram &ram, uint32_t ptr, const gs::Tex0 &t0, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h,
                          bool grayFallback = false) const {
         if (!ram.ok(ptr + 0x80)) return false;
         uint32_t pal[256] = {};
-        const uint32_t psm = ram.u8(ptr + 0x2B);
+        const UploadHdr hd = UploadHdr::read(ram, ptr);
+        const uint32_t psm = hd.psm;
         if (psm == gs::T8 || psm == gs::T4) {
             // A paleta vem do .RTX carregado (loadRtx); sem ela a textura cai para a cor de vertice.
             const auto it = rtxPal.find(t0.cbp);
@@ -699,11 +710,11 @@ public:
                 for (uint32_t i = 0; i < n; ++i) { const uint32_t v = i * 255 / (n - 1); pal[i] = v | (v << 8) | (v << 16) | (v << 24); }
             } else return false;
         }
-        w = ram.u16(ptr + 0x24); h = ram.u16(ptr + 0x26);
+        w = hd.w; h = hd.h;
         static const bool t4swz = std::getenv("WOTM_T4SWZ") != nullptr;   // diagnostico: pixels T4 do pacote como memoria do GS (nibbles embaralhados)
         if (t4swz && psm == gs::T4 && w && h && w <= 512 && h <= 512) {
             px.assign(size_t(w) * h, 0);
-            const uint32_t bw = std::max<uint32_t>(1, ram.u8(ptr + 0x2A));
+            const uint32_t bw = std::max<uint32_t>(1, hd.bw);
             for (uint32_t y = 0; y < h; ++y)
                 for (uint32_t x = 0; x < w; ++x) {
                     const uint32_t n = gs::nibT4(0, bw, x, y);
@@ -942,13 +953,14 @@ public:
         const uint32_t ptr = ram.u32(addr::texInfo + 16 * id) & 0x0FFFFFFF;
         if (!ram.ok(ptr + 0x80)) return false;
         uint32_t pal[256] = {};
-        const uint32_t psm = ram.u8(ptr + 0x2B);
+        const UploadHdr hd = UploadHdr::read(ram, ptr);
+        const uint32_t psm = hd.psm;
         if (psm == gs::T8 || psm == gs::T4) {
             const auto it = rtxPal.find(t0.cbp);
             if (it == rtxPal.end()) return false;
             fillPal(pal, it->second, psm == gs::T8);
         }
-        w = ram.u16(ptr + 0x24); h = ram.u16(ptr + 0x26);
+        w = hd.w; h = hd.h;
         return w && h && gs::decodeUpload(ram.p + ptr + 0x80, ram.size - ptr - 0x80, w, h, psm, t0.csa, pal, px);
     }
 
@@ -1347,7 +1359,8 @@ public:
             const MeshData *md = mesh(ram, it.node);
             if (!md || md->skinned || md->tris.empty() || !texKey(ram, it.node)) continue;
             const uint32_t ptr = ram.u32(addr::texInfo + 16 * ram.u16(it.node + 0x50)) & 0x0FFFFFFF;
-            const uint32_t w = ram.u16(ptr + 0x24), h = ram.u16(ptr + 0x26);
+            const UploadHdr hd = UploadHdr::read(ram, ptr);
+            const uint32_t w = hd.w, h = hd.h;
             if (!w || !h) continue;
             for (size_t i = 0; i + 2 < md->tris.size(); i += 3) {
                 const Vtx &a = md->tris[i], &b = md->tris[i + 1], &c = md->tris[i + 2];
@@ -1602,7 +1615,7 @@ public:
             const gs::Tex0 t0 = gs::Tex0::decode(t0v);
             const uint32_t ptr = ram.u32(addr::texInfo + 16 * ram.u16(it.node + 0x50)) & 0x0FFFFFFF;
             std::fprintf(stderr, "   texId=%u tex0=%016llx cbp=%u csa=%u base=%u psm=%u ptr=%06x hasPal=%d\n", ram.u16(it.node + 0x50),
-                         (unsigned long long)t0v, t0.cbp, t0.csa, ram.u32(addr::tempVramTexAddr) >> 6, ram.u8(ptr + 0x2B), ptr,
+                         (unsigned long long)t0v, t0.cbp, t0.csa, ram.u32(addr::tempVramTexAddr) >> 6, UploadHdr::read(ram, ptr).psm, ptr,
                          int(rtxPal.count(t0.cbp)));
         }
     }
