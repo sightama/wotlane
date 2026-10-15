@@ -32,6 +32,7 @@ void mathfMatrixFromNormal(float (*m)[4], _fvector *n);
 void mathfRandVector(_fvector *v, float r);
 extern "C" float atan2f(float y, float x);
 extern "C" float fabsf(float);
+float hdHatTest(_fvector *pos, _fvector *out, float up, bool b, float down);
 /* One of the 32 dynamic point lights (common/PointLight). */
 class PointLight {
 public:
@@ -600,7 +601,62 @@ void Weapon::UpdateErraticity(void)
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateErraticity__6Weapon);
 #endif
+/* Moves the weapon: the forward speed m_A0.y eases toward m_dyn.speed (mph to units per field; slowing down is near
+   instant), m_A0 is applied in the cs frame, a ballistic arc overrides z, and with m_60 set the weapon hugs the ground 5 above
+   the hat. A lava ball that starts falling becomes a homing shot (750 mph). */
+#ifdef NON_MATCHING
+/* equivalent: 65/204 words, 0x330 vs 0x328; the 0.0f constant is hoisted to $f20 and the ground-hug branches are laid out differently */
+void Weapon::UpdateTranslation(void)
+{
+    FVECTOR world;
+    FVECTOR local;
+    float target;
+    float t;
+    float h;
+    float rate;
+
+    if (m_A0.y != 0.0f)
+        vecCopy(&m_prevPos, &m_cs->trans);
+    target = m_dyn.speed * 0.024444444f;
+    m_A0.y = smoothEasyIn(m_A0.y, target, target < m_A0.y ? 0.0001f : m_dyn.f18, 0.0001f);
+    vecScale(&local, &m_A0, (float)timerGetFieldsLastFrame());
+    vecApplyRows(&world, m_cs->mat, &local);
+    vecAdd(&m_cs->trans, &m_cs->trans, &world);
+    if (m_vz != 0.0f) {
+        t = (float)(timerGetCurTics() - m_launchTics) / 576.0f * 0.001f;
+        m_cs->trans.z = m_startZ + m_vz * t + m_gravity * (t * t);
+    }
+    if (m_60) {
+        h = hdHatTest(&m_cs->trans, &world, 0.0f, false, 4096.0f);
+        if (m_targetId || m_targetPoint) {
+            if (!(0.0f < h && h < 5.0f))
+                goto light;
+            rate = 0.2f;
+        } else if (5.0f < h) {
+            rate = 0.01f;
+        } else {
+            rate = 0.2f;
+        }
+        m_cs->trans.z = smoothEasyIn(m_cs->trans.z, m_cs->trans.z - h + 5.0f, rate, 0.001f);
+    }
+light:
+    if (m_pointLight >= 0)
+        pointLights.lights[m_pointLight].SetPos(&m_cs->trans);
+    if ((unsigned)(m_type - 0x27) < 3 && m_50 && m_cs->trans.z < m_prevPos.z) {
+        m_48 = 1;
+        m_dyn.f1C = 0.1f;
+        m_dyn.speed = 750.0f;
+        m_50 = 0;
+        m_vz = 0;
+        m_gravity = 0;
+        m_maxRange = 0;
+    }
+    if (m_48 == 1 && m_vz != 0.0f && m_cs->trans.z < m_prevPos.z)
+        m_vz = 0;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateTranslation__6Weapon);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", WeaponHD__6Weapon);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", D_006F28F8);
 void Weapon::setCsTransform(_fvector *pos, float (&m)[4][4])
@@ -782,7 +838,95 @@ int Weapons::CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector 
 #else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateStaticWeapon__7WeaponsGQ2t10LinkedList1ZP6Pickup8IteratoriiP8_fvector);
 #endif
-INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateLavaBall__7WeaponsP8_fvectorN21ii);
+/* A lava ball (types 0x27..0x29, one at random) lobbed from pos at the target point; it turns into a homing shot once it
+   starts falling (UpdateTranslation). If no slot is free the ballistic arc is still computed, on a null weapon (retail bug). */
+void Weapons::CreateLavaBall(_fvector *pos, _fvector *rot, _fvector *target, int byId, int targetId)
+{
+    int i;
+    Weapon *w = 0;
+    Weapons *ws;
+
+    for (i = 0; i < 100; i++) {
+        if (!m_weapons[i].m_active) {
+            _fvector *a, *b, *c;
+
+            w = &m_weapons[i];
+            w->m_ownerId = byId;
+            w->m_active = 1;
+            w->m_age = 0;
+            w->m_targetId = targetId;
+            if (targetId > 0)
+                w->m_50 = 1;
+            else
+                w->m_50 = 0;
+            w->m_48 = 0;
+            w->m_80.x = 0;
+            w->m_80.y = 0;
+            w->m_80.z = 0;
+            w->m_54 = 0;
+            w->m_60 = 0;
+            w->m_cs = CsPool::csActivate();
+            if (!w->m_cs) {
+                printf(noCsMsg);
+                w->m_active = 0;
+                return;
+            }
+            w->m_cs->drawMe = 1;
+            w->m_cs->testCollision = 0;
+            vecCopy(&w->m_cs->trans, pos);
+            vecCopy(&w->m_prevPos, pos);
+            vecCopy(&w->m_cs->rot, rot);
+            mathfRotMatrixRPH(w->m_cs->mat, &w->m_cs->rot);
+            w->m_targetPoint = target;
+            vecCopy(&w->m_targetPos, target);
+            a = &w->m_A0;
+            a->x = 0;
+            a->y = 0;
+            a->z = 0;
+            b = &w->m_B0;
+            b->x = 0;
+            b->y = 0;
+            b->z = 0;
+            c = &w->m_C0;
+            c->x = 0;
+            c->y = 0;
+            c->z = 0;
+            ws = gameWeapons();
+            w->m_dyn.f18 = 0.1f;
+            w->m_dyn.damage = 5.0f;
+            w->m_dyn.radius = 50.0f;
+            w->m_dyn.lifetime = 600.0f;
+            w->m_dyn.speed = mathfRandf(500.0f, 600.0f);
+            w->m_gravity = -800.0f;
+            w->m_maxRange = 1000.0f;
+            switch (mathfRand(0, 2)) {
+            case 0:
+                w->m_type = 0x27;
+                hierSetCsEpNode(w->m_cs, ws->m_epNodes[39]);
+                w->m_fx = particleCreateFx(&w->m_cs->trans, w->m_cs->mat, 0x2F, 8.0f, 0, 0, 0, 0.0f);
+                break;
+            case 1:
+                w->m_type = 0x28;
+                hierSetCsEpNode(w->m_cs, ws->m_epNodes[40]);
+                w->m_fx = particleCreateFx(&w->m_cs->trans, w->m_cs->mat, 0x2F, 12.0f, 0, 0, 0, 0.0f);
+                break;
+            case 2:
+                w->m_type = 0x29;
+                hierSetCsEpNode(w->m_cs, ws->m_epNodes[41]);
+                w->m_fx = particleCreateFx(&w->m_cs->trans, w->m_cs->mat, 0x2F, 15.0f, 0, 0, 0, 0.0f);
+                break;
+            }
+            if (w->m_fx != -1) {
+                *(int *)((char *)particleGetParticle(w->m_fx) + 0x2DA0) = 0;
+                *(float *)((char *)particleGetParticle(w->m_fx) + 0x2DA4) = 1.0f;
+                *(float *)((char *)particleGetParticle(w->m_fx) + 0x2D90) = 1.0f;
+            }
+            w->m_sound.playWeaponLaunchSound(&w->m_cs->trans, w->m_type);
+            break;
+        }
+    }
+    w->CalculateBallisticArc();
+}
 /* Ballistic launch toward the target's pin point (or the aimed-at point, or the thrower's reticle): z follows
    startZ + vz t + gravity t^2 over the flight time at m_dyn.speed; past m_maxRange the gravity is scaled down. */
 #ifdef NON_MATCHING

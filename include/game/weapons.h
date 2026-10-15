@@ -122,7 +122,8 @@ public:
     /* weapon slot that carries a thrown non-rigid pickup; ids are the thrower's and the target's interactive ids (0 if none) */
     int CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector *rot);
     int CreateStaticWeapon(Weapon::WeaponType type, int byId, int targetId, _fvector *pos, _fvector *rot, _hierhead *h);
-    void CreateLavaBall(_fvector *pos, _fvector *dir, _fvector *target, int a, int b);
+    /* lava ball lobbed from pos (rotation rot) at target; byId/targetId are interactive ids */
+    void CreateLavaBall(_fvector *pos, _fvector *rot, _fvector *target, int byId, int targetId);
     void DecrementWeaponCount(Monster *m, int type);
     void AddWeaponEpNode(int idx, _hierhead *h);
     void CreateFire(_fvector *pos, float r, int id);
