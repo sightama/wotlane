@@ -37,7 +37,7 @@ Não corrigir sem perguntar ao dono qual atacar.
 **Depois, sem especificação:**
 - **Lens flare, resíduo:** o desenho bate com o VU1 do runtime (linha `lens flare` da checagem, em "Corrigido"), mas o teste de oclusão do nativo (profundidade nativa no lugar do Z do GS) não tem conferência: a checagem compara a partir da intensity que o VU1 recebeu, e o GS emulado não tem a cena. Sem comparação com o PCSX2 na tela.
 - **Cor dos monstros, resíduo** (item 16): no Togera sobra ~1,2% dos vértices com cor diferente, para os dois lados. O fator de contexto do q5 não é a causa (ver "Corrigido"). Medir exige comparar o q5 do `hdr` com o `DrawItem::color` por objeto: entre lutas iguais, o total de `cor difere` varia de 1,1% a 1,9% (explosões e destruição mudam de uma para outra).
-- **Arco elétrico, resíduo:** 2,5% dos quadrados do VU1 sem par (1–2 px do meio para o fim da fita em alguns sistemas; provável instante: `pos[]` se move entre a coleta e o DMA); o nativo desenha alguns quadrados a mais nas pontas (o ADC fora da banda de recorte não é reproduzido). A textura (U por trecho, V = 1/0) não foi conferida na tela.
+- **Arco elétrico, resíduo:** a textura (U por trecho, V = 1/0) não foi conferida na tela. A geometria está explicada (ver "Explicadas, sem bug no nativo").
 - **Destroços:** ~1,7% a mais no nativo.
 - **Alfa, resíduo:** o As > 1 do GS (até ~4) fica limitado a 1; o quadro anterior (CLOAK) e o filme continuam com a escala antiga (4a/255). A mistura não tem conferência numérica (a checagem não lê o alfa final); visualmente, sem regressão contra o PCSX2 (`docs/screenshots/2026-10-15_pcsx2_x_nativo_metro*.png`).
 - **Elipse do power-up no chão** (`m_shadow`: GROUP com ALPHA 0x48 e TEST 0x5040C, quad de ±29,61 em z = 0,1, tex 90, cor (0, 128, 0, 6)): no lugar certo, mas no PCSX2 não aparece.
@@ -81,6 +81,11 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 <details>
 <summary>Explicadas, sem bug no nativo</summary>
 
+- **Arco elétrico, ~2,5% do VU1 sem par e ~6% a mais no nativo:** METRO, Robo-47 contra 3 Robo-47, dump de 40 s. Por extensão do arco na tela:
+  - até 10 px: nativo 1.028 quadrados, todos com par a 1 px; VU1 868 quadrados e 104 triângulos soltos;
+  - 10 a 30 px: 8 sem par em 634;
+  - acima de 30 px: 428 de 428.
+  É a checagem: o `degenerate()` descarta do VU1 os triângulos com área < 0,02 px² (um quadrado de arco distante tem menos de 1 px), e do nativo não. O recorte do microprograma foi lido e aplicado (`arcQuads`, máscara por triângulo da tira com a banda [0, 4096] e W ≥ 1, diagonal B_k–A_k+1), sem mudar a medida.
 - **7 (padrão B):** os itens de alfa presos aos monstros às vezes saem 1–2,5 px fora: o pacote leva as matrizes do instante da travessia, e nenhuma coleta cai ali. A checagem tenta também a coleta no `hier(0, 1)`.
 - **9, `so pela sombra`:** a passada da sombra projetada redesenha faces de costas que a base descarta, e triângulos finos geram ambiguidade.
 - **10 (tex 156/193):** os números são o conjunto de texturas do objeto (`node+0x50`), de vários prédios estáticos da fase 1. A troca é sempre entre a textura comum 128x128 (cbp 1bd2) e uma 64x64 do mesmo objeto, 1 ou 2 triângulos por checagem (372 de 4.959). Caso dissecado em `f1_1697.csv` (pkt d7e980): o triângulo do VU1 é um fio (0,01 px²) na aresta entre as duas seções, e os três vértices dele casam com um vértice só de outro fio nativo. O `match()` não exige correspondência um a um. O gêmeo nativo verdadeiro cai abaixo do limiar do `degenerate()` (|área2| 0,0029 < 0,02), enquanto o do VU1 passa (0,0232), porque o GS arredonda para 1/16 px. Embaralhando a ordem do VU1, o erro aparece em 10 de 20 ordens. Nos 52 dumps `f1_*`, 1 par com textura diferente em 520 mil. Na checagem daria para quantizar o nativo a 1/16 px no `project()` e exigir vértices distintos no `match()` (não aplicado).

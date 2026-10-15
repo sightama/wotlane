@@ -664,8 +664,11 @@ public:
     //    (t_out - t_in) se t_in x t_out < 0, senao + (t_in - t_out) (sem renormalizar). Vertices p +/- s_k / 2 * v no plano de vista,
     //    s_k = minSize + exp * k / S; A (+) com V = 1, B (-) com V = 0; U_k = segInitU + segDeltaU * (k - S / 2) (perspectiva, STQ);
     //    cor = lerp da tabela em clut + k * (nc - 1) / S, + 0,5, truncada (a mesma nos dois vertices).
-    //  - O VU1 marca ADC com W < 1, F < 1 ou fora da banda de recorte; aqui some o quadrado com algum W < 1 (o F, no forEachQuad).
-    // g(k, cantos[4][3] (A_k, B_k, B_k+1, A_k+1), uv[4][2], cor[2] (RGBA 0x80 = 1,0, em k e k + 1)).
+    //  - Recorte (0x2210-0x2288): CLIP de cada vertice da tira, A e B, contra a banda (x e y do GS em [0, 4096], z = W >= 1), e o ADC
+    //    vem das flags dos ultimos 4 vertices. Resultado: some cada triangulo da tira (A_k, B_k, A_k+1) e (B_k, A_k+1, B_k+1) com algum
+    //    vertice fora. O F < 1 fica no forEachQuad (pelo centro).
+    // g(k, cantos[4][3] (A_k, B_k, B_k+1, A_k+1), uv[4][2], cor[2] (RGBA 0x80 = 1,0, em k e k + 1), mascara): bit 0 = triangulo
+    // (A_k, B_k, A_k+1) = cantos 0, 1, 3; bit 1 = (B_k, A_k+1, B_k+1) = cantos 1, 3, 2 (a diagonal da tira e B_k - A_k+1).
     template <class G> static void arcQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
         const uint32_t pos = ram.u32(s.base + fxoff::pos);
         if (s.n < 3 || !ram.ok(pos - 0x13C, 0x13C + 16 * uint32_t(s.n))) return;
@@ -697,6 +700,19 @@ public:
             if (view.fogW[0] == 0.f && view.fogW[1] == 0.f && view.fogW[2] == 0.f)
                 return view.depth[0] * p.x + view.depth[1] * p.y + view.depth[2] * p.z + view.depth[3];
             return view.fogW[0] * p.x + view.fogW[1] * p.y + view.fogW[2] * p.z + view.fogW[3];
+        };
+        // banda de recorte do VU1 na tela do GS (worldToScreenMat com o olho, como o striteTriangle)
+        float M[4][4], eye[3];
+        for (int r = 0; r < 4; ++r)
+            for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(addr::worldToScreenMat + 16 * uint32_t(r) + 4 * uint32_t(k));
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(0x00445CD0u + 0x20 + 4 * uint32_t(k));   // worldCtx[0].eo = -olho
+        auto outOfBand = [&](const float c[3]) {
+            const float d[3] = {c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]};
+            float h[4];
+            for (int r = 0; r < 4; ++r) h[r] = M[r][0] * d[0] + M[r][1] * d[1] + M[r][2] * d[2] + M[r][3];
+            if (!(h[3] >= 1.f)) return true;
+            const float x = h[0] / h[3], y = h[1] / h[3];
+            return !(x >= 0.f && x <= 4096.f && y >= 0.f && y <= 4096.f);
         };
         std::vector<V3> P;
         int i = 0;
@@ -764,11 +780,14 @@ public:
             for (size_t k = 0; k + 1 < np; ++k) {
                 if (!ok[k] || !ok[k + 1]) continue;
                 corner(k, 1.f, cs[0]); corner(k, -1.f, cs[1]); corner(k + 1, -1.f, cs[2]); corner(k + 1, 1.f, cs[3]);
+                const bool o[4] = {outOfBand(cs[0]), outOfBand(cs[1]), outOfBand(cs[2]), outOfBand(cs[3])};
+                const int mask = (!o[0] && !o[1] && !o[3] ? 1 : 0) | (!o[1] && !o[3] && !o[2] ? 2 : 0);
+                if (!mask) continue;
                 const float ua = u0 + segDeltaU * float(k), ub = u0 + segDeltaU * float(k + 1);
                 uv[0][0] = ua; uv[0][1] = 1.f; uv[1][0] = ua; uv[1][1] = 0.f;
                 uv[2][0] = ub; uv[2][1] = 0.f; uv[3][0] = ub; uv[3][1] = 1.f;
                 const uint32_t col[2] = {color(clut + float(k) * ncm1 / float(S)), color(clut + float(k + 1) * ncm1 / float(S))};
-                g(int(k), cs, uv, col);
+                g(int(k), cs, uv, col, mask);
             }
         }
     }
@@ -888,7 +907,8 @@ public:
         float c[4][3], uv[4][2];
         if (s.type == FX_LINE) return;
         if (s.type == FX_ARC || s.type == FX_ARC2) {
-            arcQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], const uint32_t *) { f(k, cc, uu); });
+            // so os quadrados com os dois triangulos (no VU1 um triangulo sem par conta como solto)
+            arcQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], const uint32_t *, int mask) { if (mask == 3) f(k, cc, uu); });
             return;
         }
         if (s.type == FX_SPRINE) {
@@ -1154,15 +1174,19 @@ private:
             return;
         }
 
-        if (s.type == FX_ARC || s.type == FX_ARC2) {   // fita com a cor de cada ponto (arcQuads)
-            rlBegin(RL_QUADS);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
+        if (s.type == FX_ARC || s.type == FX_ARC2) {   // fita com a cor de cada ponto (arcQuads), em triangulos com a diagonal da tira
+            rlBegin(RL_TRIANGLES);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
             rlSetTexture(texFor(0));
-            arcQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], const uint32_t col[2]) {
+            arcQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], const uint32_t col[2], int mask) {
                 if (fogged(view, c)) return;
-                for (int k = 0; k < 4; ++k) {
-                    vcolor(k < 2 ? col[0] : col[1]);
-                    rlTexCoord2f(uv[k][0], uv[k][1]);
-                    rlVertex3f(c[k][0], c[k][1], c[k][2]);
+                static const int tri[2][3] = {{0, 1, 3}, {1, 3, 2}};
+                for (int t = 0; t < 2; ++t) {
+                    if (!(mask & (1 << t))) continue;
+                    for (int k : tri[t]) {
+                        vcolor(k < 2 ? col[0] : col[1]);
+                        rlTexCoord2f(uv[k][0], uv[k][1]);
+                        rlVertex3f(c[k][0], c[k][1], c[k][2]);
+                    }
                 }
             });
             rlEnd();
