@@ -55,7 +55,8 @@ public:
     FVECTOR m_prevPos;      /* 0x90: cs translation before this frame's move (GetVel) */
     _fvector m_A0;          /* 0xA0 */
     _fvector m_B0;          /* 0xB0 */
-    char padC0[0x120 - 0xC0];
+    _fvector m_C0;          /* 0xC0 */
+    char padD0[0x120 - 0xD0];
     int m_ownerId;          /* 0x120: interactive id of the thrower */
     int m_targetId;         /* 0x124: interactive id of the target (0 = none) */
     _fvector *m_targetPoint; /* 0x128: aimed-at point when there is no target */
@@ -120,6 +121,7 @@ public:
     int WeaponInRadius(_fvector *pos, float r, Weapon **out);
     /* weapon slot that carries a thrown non-rigid pickup; ids are the thrower's and the target's interactive ids (0 if none) */
     int CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector *rot);
+    int CreateStaticWeapon(Weapon::WeaponType type, int byId, int targetId, _fvector *pos, _fvector *rot, _hierhead *h);
     void CreateLavaBall(_fvector *pos, _fvector *dir, _fvector *target, int a, int b);
     void DecrementWeaponCount(Monster *m, int type);
     void AddWeaponEpNode(int idx, _hierhead *h);

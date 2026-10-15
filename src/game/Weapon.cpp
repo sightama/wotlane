@@ -19,6 +19,16 @@ void *particleGetParticle(int h);
 void lightSetAmbient(int i, float r, float g, float b);
 int timerGetCurTics(void);
 
+extern "C" int printf(const char *, ...);
+void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);
+/* "Weapons::CreateStaticWeapon - Unable to activate CS for weapon.  Will NOT be added.\n", kept in the asm rodata */
+extern char noCsMsg[] __asm__("D_006F28F8");
+float smoothEasyInAngle(float cur, float target, float rate, float eps);
+void boundEulerAngle(float *a);
+void mathfMatrixFromNormal(float (*m)[4], _fvector *n);
+/* a particle's position and matrix (common/particle) */
+#define PARTICLE_POS(p) ((_fvector *)((char *)(p) + 0x2D00))
+#define PARTICLE_MAT(p) ((float (*)[4])((char *)(p) + 0x2D20))
 /* One of the 32 dynamic point lights (common/PointLight). */
 class PointLight {
 public:
@@ -72,6 +82,17 @@ static inline void vecSubNR(_fvector *dst, _fvector *a, _fvector *b)
 }
 
 #ifdef NON_MATCHING
+/* x^2 + y^2 + z^2 on the FPU accumulator */
+static inline float sumSq3(float x, float y, float z)
+{
+    float r;
+
+    __asm__ volatile("mula.s %1, %1\n\t"
+                     "madda.s %2, %2\n\t"
+                     "madd.s %0, %3, %3"
+                     : "=f"(r) : "f"(x), "f"(y), "f"(z));
+    return r;
+}
 /* |v|^2 on the FPU accumulator like vecLenSq, registers left to the compiler */
 static inline float vecLenSqR(_fvector *v)
 {
@@ -394,7 +415,38 @@ int Weapons::WeaponInRadius(_fvector *pos, float r, Weapon **out)
     }
     return 0;
 }
-INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateRotation__6Weapon);
+/* Homing (m_48: 1 lock on the target, 2 lead the monster, 3 vertical) or, unguided, the spin in m_B0 easing out in pitch and
+   heading. A cloaked target monster breaks the lock. */
+void Weapon::UpdateRotation(void)
+{
+    if (m_targetId > 0) {
+        DbInteractive *t = Interactives::getInteractive(m_targetId);
+        if (t->m_kind == 1 && ((Monster *)t)->m_cloaked)
+            m_48 = 0;
+    }
+    switch (m_48) {
+    case 0:
+        if (m_B0.x != 0.0f || m_B0.y != 0.0f || m_B0.z != 0.0f) {
+            m_B0.x = smoothEasyInAngle(m_B0.x, 0.0f, 0.1f, 0.01f);
+            m_B0.z = smoothEasyInAngle(m_B0.z, 0.0f, 0.1f, 0.01f);
+            vecAdd(&m_cs->rot, &m_cs->rot, &m_B0);
+            boundEulerAngle(&m_cs->rot.x);
+            boundEulerAngle(&m_cs->rot.y);
+            boundEulerAngle(&m_cs->rot.z);
+            mathfRotMatrixRPH(m_cs->mat, &m_cs->rot);
+        }
+        break;
+    case 1:
+        UpdateLockOnTarget();
+        break;
+    case 2:
+        UpdateLockAheadOfMonster();
+        break;
+    case 3:
+        UpdateLockVertical();
+        break;
+    }
+}
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockOnTarget__6Weapon);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockAheadOfMonster__6Weapon);
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", UpdateLockVertical__6Weapon);
@@ -421,8 +473,136 @@ void Weapon::setCsTransform(_fvector *pos, float (&m)[4][4])
     vecCopy(&m_cs->trans, pos);
 }
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", ComputeReflection__6WeaponP8_fvectorT1b);
+/* A free weapon slot for a projectile of the given type at pos (rotation rot); returns its index, -1 if none is free or no
+   cs is left. byId/targetId are interactive ids (0 = none); h is not used. */
+#ifdef NON_MATCHING
+/* equivalent: 89/108 words, same size; register allocation only (pos, rot, i and the constants 1/-1 in other $s registers) */
+int Weapons::CreateStaticWeapon(Weapon::WeaponType type, int byId, int targetId, _fvector *pos, _fvector *rot, _hierhead *h)
+{
+    int i;
+    Weapon *w = 0;
+
+    for (i = 0; i < 100; i++) {
+        if (!m_weapons[i].m_active) {
+            _fvector *a, *b, *c;
+
+            w = &m_weapons[i];
+            w->m_active = 1;
+            w->m_age = 0;
+            w->m_50 = 0;
+            w->m_80.x = 0;
+            w->m_80.y = 0;
+            w->m_80.z = 0;
+            w->m_54 = 0;
+            w->m_60 = 0;
+            w->m_ownerId = byId;
+            w->m_48 = targetId != 0;
+            w->m_type = type;
+            w->m_targetId = targetId;
+            w->m_cs = CsPool::csActivate();
+            if (!w->m_cs) {
+                printf(noCsMsg);
+                w->m_active = 0;
+                return -1;
+            }
+            w->m_cs->drawMe = 1;
+            w->m_cs->testCollision = 0;
+            vecCopy(&w->m_cs->trans, pos);
+            vecCopy(&w->m_prevPos, pos);
+            vecCopy(&w->m_cs->rot, rot);
+            mathfRotMatrixRPH(w->m_cs->mat, &w->m_cs->rot);
+            a = &w->m_A0;
+            a->x = 0;
+            a->y = 0;
+            a->z = 0;
+            b = &w->m_B0;
+            b->x = 0;
+            b->y = 0;
+            b->z = 0;
+            c = &w->m_C0;
+            c->x = 0;
+            c->y = 0;
+            c->z = 0;
+            w->m_fx2 = -1;
+            w->m_fx = -1;
+            w->m_vz = 0;
+            w->m_sound.playWeaponLaunchSound(&w->m_cs->trans, w->m_type);
+            break;
+        }
+    }
+    if (i == 100)
+        return -1;
+    w->InitWeapon();
+    if (w->m_dyn.f1C == 0.0f)
+        w->m_48 = 0;
+    return i;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateStaticWeapon__7WeaponsQ26Weapon10WeaponTypeiiP8_fvectorT4P9_hierhead);
+#endif
+/* A weapon slot that flies a thrown pickup (type 0x17, the pickup's own cs); returns its index or -1. Rigid pickups
+   (pickupType 7) fly straight, the others on a ballistic arc. */
+#ifdef NON_MATCHING
+/* equivalent: 76/102 words, same size; register allocation of the arguments and the order of the first stores */
+int Weapons::CreateStaticWeapon(PickupIter it, int byId, int targetId, _fvector *rot)
+{
+    int i;
+    Weapon *w = 0;
+
+    for (i = 0; i < 100; i++) {
+        if (!m_weapons[i].m_active) {
+            _fvector *a, *b, *c;
+
+            w = &m_weapons[i];
+            w->m_pickup = it;
+            w->m_active = 1;
+            w->m_ownerId = byId;
+            w->m_48 = targetId != 0;
+            w->m_type = 0x17;
+            w->m_fx2 = -1;
+            w->m_cs = ITER_PICKUP(it)->cs;
+            w->m_targetId = targetId;
+            w->m_fx = -1;
+            w->m_age = 0;
+            w->m_50 = 0;
+            w->m_80.x = 0;
+            w->m_80.y = 0;
+            w->m_80.z = 0;
+            w->m_54 = 0;
+            w->m_60 = 0;
+            w->m_vz = 0;
+            vecCopy(&w->m_cs->rot, rot);
+            mathfRotMatrixRPH(w->m_cs->mat, rot);
+            vecCopy(&w->m_prevPos, &w->m_cs->trans);
+            a = &w->m_A0;
+            a->x = 0;
+            a->y = 0;
+            a->z = 0;
+            b = &w->m_B0;
+            b->x = 0;
+            b->y = 0;
+            b->z = 0;
+            c = &w->m_C0;
+            c->x = 0;
+            c->y = 0;
+            c->z = 0;
+            w->m_sound.playWeaponLaunchSound(&w->m_cs->trans, w->m_type);
+            w->m_targetPoint = 0;
+            break;
+        }
+    }
+    if (i == 100)
+        return -1;
+    w->InitWeapon();
+    if (ITER_PICKUP(it)->pickupType != 7)
+        w->CalculateBallisticArc();
+    if (w->m_dyn.f1C == 0.0f)
+        w->m_48 = 0;
+    return i;
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateStaticWeapon__7WeaponsGQ2t10LinkedList1ZP6Pickup8IteratoriiP8_fvector);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", CreateLavaBall__7WeaponsP8_fvectorN21ii);
 /* Ballistic launch toward the target's pin point (or the aimed-at point, or the thrower's reticle): z follows
    startZ + vz t + gravity t^2 over the flight time at m_dyn.speed; past m_maxRange the gravity is scaled down. */
@@ -485,7 +665,48 @@ void Weapon::KillWeapon(void)
     particleKillFx(m_fx2);
     m_sound.terminateWeaponSound();
 }
+/* Points the ricochet particle fx along the reflection of the from->to direction off a surface of the given normal, at hitPos;
+   the glancing angle scales its size. Returns the particle's matrix (0 when the fx is gone); no caller reads it. */
+#ifdef NON_MATCHING
+/* equivalent: 61/102 words, same size; register allocation (particle/normal in $s1/$s2) and the load order of the dot products */
+void *ricochetParticlesOffSurface(int fx, _fvector *from, _fvector *to, _fvector *hitPos, _fvector *normal)
+{
+    char *p = (char *)particleGetParticle(fx);
+    FVECTOR dir;
+    FVECTOR push;
+    FVECTOR refl;
+    FVECTOR out;
+    float x, y, z;
+    float inv;
+    float d;
+    float e;
+
+    if (!p)
+        return 0;
+    vecSub(&dir, from, to);
+    x = dir.x;
+    y = dir.y;
+    z = dir.z;
+    inv = eeRsqrtf(1.0f, sumSq3(x, y, z));
+    dir.z = z * inv;
+    dir.x = x * inv;
+    dir.y = y * inv;
+    d = vecDot(&dir, normal);
+    vecScale(&push, normal, d + d);
+    vecSub(&refl, &dir, &push);
+    mathfMatrixFromNormal(PARTICLE_MAT(p), &refl);
+    *(_fvector **)(p + 0x2D94) = PARTICLE_POS(p);
+    vecCopy(PARTICLE_POS(p), hitPos);
+    *(float (**)[4])(p + 0x2D98) = PARTICLE_MAT(p);
+    vecScale(&out, normal, -d);
+    e = vecDot(&refl, &out);
+    *(float *)(p + 0x2D90) = e * 0.5f;
+    *(float *)(p + 0x2D8C) *= e * 0.6f + 0.4f;
+    return PARTICLE_MAT(p);
+}
+#else
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", ricochetParticlesOffSurface__FiP8_fvectorN31);
+#endif
 INCLUDE_ASM("asm/nonmatchings/game/Weapon", DetonateWeapon__6WeaponR9_hdResult);
 /* Blast damage: every interactive but the thrower within m_dyn.radius (Manhattan) of the weapon takes a blockable hit
    (a big one for types 0x2B and 0x2C) along the weapon's last move. */
