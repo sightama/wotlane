@@ -127,7 +127,23 @@ public:
 
     std::vector<FxSystem> systems;
 
-    // Reune os sistemas desenhaveis (mesmos testes de particleDraw, menos o de campo de visao). A ordem sai no draw (camera atual).
+    // Teste de visao do particleDraw: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), a caixa (centro, meia-extensao) contra
+    // os 6 planos de worldCtx[0] (fovNormsTP em +0xF0, fovSigns em +0x170; src/common/view.cpp). Falso = o retail nao desenha o sistema.
+    static bool inViewFov(const Ram &ram, uint32_t b) {
+        constexpr uint32_t w = 0x00445CD0u;   // worldCtx[0]
+        float c[3], e[3];
+        for (int k = 0; k < 3; ++k) { c[k] = ram.f32(b + 0x2C80 + 4 * k); e[k] = ram.f32(b + 0x2C90 + 4 * k); }
+        for (uint32_t i = 0; i < 2; ++i)
+            for (uint32_t j = 0; j < 3; ++j) {
+                const uint32_t n = w + 0xF0 + 64 * i + 16 * j, s = w + 0x170 + 64 * i + 16 * j;
+                float d = 0.f;
+                for (uint32_t k = 0; k < 3; ++k) d += ram.f32(n + 4 * k) * (c[k] + e[k] * ram.f32(s + 4 * k));
+                if (d < ram.f32(w + 0xF0 + 64 * i + 48 + 4 * j)) return false;
+            }
+        return true;
+    }
+
+    // Reune os sistemas desenhaveis (mesmos testes de particleDraw). A ordem sai no draw (camera atual).
     void collect(const Ram &ram) {
         systems.clear();
         uint32_t i = ram.u32(fxaddr::fxActiveTop);
@@ -142,7 +158,8 @@ public:
             const int maxN = int32_t(ram.u32(b + fxoff::maxParticles));
             const bool built = (ram.u32(b + fxoff::infoAttribs) & 0x400) != 0;
             const int minN = s.type == FX_SPRINE ? 2 : 1;
-            if (built && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)))
+            if (built && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
+                inViewFov(ram, b))
                 systems.push_back(s);
             i = next;
         }

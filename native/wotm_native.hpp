@@ -1165,7 +1165,7 @@ public:
             const uint32_t b = kFx + i * kStride;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t type = ram.u32(b + 0x2E90) & 0xFF;
-            if (!np || np > 1024 || type != 13) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
+            if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));

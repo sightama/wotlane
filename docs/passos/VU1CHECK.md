@@ -31,8 +31,8 @@ Não corrigir sem perguntar ao dono qual atacar.
      - O dump grava `fxmat` (`prevViewMat` e `worldToScreenMat` crus) por sistema.
    - **Fase 8, `vif1_fora_de_passo` 38:** apareceu numa rodada de 120 s, a partir de g=1731, a primeira em que um round terminou (`rodadas` 1). Nas outras 5 rodadas da fase 8, 0. Não investigado.
    - **Fase 8, objetos:** `casados_pior` de 91,9% em todas as rodadas (anterior a estas mudanças). Não investigado.
-   - **Pedestres na METRO:** numa checagem, VU1 750 e nativo 1000 (um sistema descartado pelo `pedsUpdateFOVbox`?).
-   - **Sistemas que só o VU1 tem:** de 2 a 19 quadrados por checagem.
+   - **Pedestres na METRO:** são 8 sistemas de 125 (fx 91 a 98). Em cerca de 5% das checagens o VU1 não desenha nenhum deles (`0/0/1000`), e às vezes só parte (`750/750/1000`). O nativo desenha todos. Não é o teste de visão (já aplicado, quase não mudou) nem o `info.attribs` (0x400 nos dois casos; o `emit.info.attribs` dos pedestres é 0). Suspeita: instante (os pedestres saem noutro trecho do quadro?). Em 90 s: VU1 19108, nativo 23858.
+   - **Lens flare (tipo 11):** era o "sistema que só o VU1 tem" de 2 a 4 quadrados (fx 80 na fase 8). Não passa pelo `particleDraw`: o `hier` põe as luzes com flare numa lista dentro de `lensFlarePacket[2]` (`particleAddLensFlareToList`), o `particleLensFlareTestZbuffer` testa a visibilidade no z-buffer e o `particleLensFlareRender` desenha (retângulos alinhados à tela). O nativo não desenha flares: é recurso a implementar, não correção.
    - **SPRITE do GS fora de `fx[]`:** de 340 a 380 por quadro, de origem não identificada (HUD?).
 7. **Itens de alfa animados** (tex 330/333, e tex 0 com flags `0xa210`/`0xa310`): às vezes saem de 1 a 6 px fora, em direções variadas. Parece questão de instante da coleta.
 8. Corrigida (ver "Corrigido"). Falta só identificar o que é o objeto da METRO (vidro, água, distorção?).
@@ -46,6 +46,8 @@ Não corrigir sem perguntar ao dono qual atacar.
 
 ## Corrigido
 Bugs do nativo:
+- **Pista 6, `fx[100]`** (d43c9c3): o laço dos destroços (e o do `viewer`) parava em fx 97; o VU1 desenha destroços em fx 98 e 99 (os "sistemas que só o VU1 tem" de até 110 quadrados). Agora vai até `fxaddr::count`.
+- **Pista 6, teste de visão das partículas:** o nativo pulava o `viewInFOV(0, &FOVsphere, &FOVextent)` do `particleDraw` (caixa contra os 6 planos de `worldCtx[0]`). Agora `Particles::inViewFov` o aplica (sistemas e destroços); nenhum sistema que o VU1 desenha ficou de fora.
 - **Pista 8, texId 0 = quadro em exibição:** o nativo desenhava sem textura um objeto da METRO (nó `a1c560`, 92 triângulos, flags `0x8316`) que o VU1 texturiza com o framebuffer. A cada quadro o `rtMain` chama `texmPrepTexInfoZero` com o `DISPFB2` de `viewGetDb(0)` (+0x10 ou +0x50, pela paridade de `g_frame`), que grava `displayBuffer` (0x6F87F8) = `FBP << 5`; o `texmGetTextureAddrs` monta para texId 0 o TEX0 `displayBuffer | 0x28128000` com TH 8 (PSMCT24, TBW 10, janela 1024x256 sobre o buffer em exibição, isto é, o quadro anterior). Os dois buffers de 640x224 ficam em FBP 0x46 e 0x8C (tbp `8c0`/`1180`). Agora o `texKey` dá `kScreenKey` para texId 0, o runtime alterna duas render textures e passa a do quadro anterior (`Scene::screenTexture`), e o UV vira texel do GS na tela 640x224 (`u·1024/640`, `1 − v·256/224`). A checagem compara com o TEX0 montado a partir do `displayBuffer`: textura difere na METRO caiu de 90 para de 0 a 1.
 - **PRIM.TME da seção** (08a4df2): as seções só com cor de vértice saíam com a textura do slot 0. Agora usam o slot `kSlotNoTex`.
 - **Sprite e texSprite com o dobro do tamanho:** o meio-lado é `pos.w/2·foco/profundidade`.
