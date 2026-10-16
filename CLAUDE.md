@@ -28,7 +28,8 @@ Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe d
 1. Ler `asm/nonmatchings/<tu>/<função>.s`. Para mais de ~30 instruções, `sh tools/m2c.sh <tu> <função>` dá um rascunho. Nunca confie nele sem ler o asm (os argumentos que ele mostra são ruído de registradores). Troque `unkNNN` por campos nomeados dos headers.
 2. Converter o TU para C++ se ainda não estiver: `sh tools/wsl/convert_tus.sh <Tu>` (um por vez).
 3. Escrever C++ natural, na ordem natural do fonte (muitas vezes já bate). Pontuar com `sh tools/wsl/scoreall.sh <TU>`; se não bater, `tools/nm_wrap.py <arquivo> <símbolo> "<nota>" [Classe::método]`. Só afine quando for barato (`tools/wsl/variants.py`, `tools/wsl/permute.py`).
-4. Rodar `gate.sh`, depois `python3 tools/progress.py`, depois commitar.
+4. Verificar a TU inteira num comando: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU>` (pontuação, difftest, sequência de chamadas, layout e retornos consumidos, numa tabela por função; `--no-nm` pula o ELF das equivalentes e leva segundos em vez de minutos). Rascunhos do m2c para a fila inteira: `sh tools/m2c_batch.sh` (em `build/m2c/`).
+5. Rodar `gate.sh`, depois `python3 tools/progress.py`, depois commitar.
 
 ## Armadilhas conhecidas (bugs que já aconteceram)
 Uma pontuação "untuned" pode esconder erro de semântica. Depois de escrever uma função equivalente, confira:

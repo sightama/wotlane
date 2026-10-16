@@ -41,6 +41,8 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
    Depois de um TU removido/revertido, regenerar com `~/.venvs/wotm/bin/python configure.py --split` (senão o `build.ninja` aponta para arquivo inexistente).
 4. Por função: ler `asm/nonmatchings/<tu>/<func>.s` (ou rodar o m2c), escrever o C++ no lugar da linha `INCLUDE_ASM`,
    `sh tools/wsl/scoreall.sh <TU...>` (pontua com `-DNON_MATCHING`), `nm_wrap.py <arquivo> <simbolo> "<nota>" [Classe::metodo]` se não bater.
+   Rascunhos de toda a fila de uma vez: `sh tools/m2c_batch.sh` (`build/m2c/`). No fim da TU: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU>`
+   (tabela por função com pontuação, difftest, chamadas, layout e retornos; `--no-nm` para a versão rápida). Detalhes em `passos/FERRAMENTAS.md`.
 5. Antes de mexer em header compartilhado: `sh tools/wsl/scoreall.sh <todos os TUs de src/game> > ~/base.txt`; depois comparar com `diff`. Rodar `gate.sh`.
 
 ## Índice dos detalhes (`docs/passos/`)
