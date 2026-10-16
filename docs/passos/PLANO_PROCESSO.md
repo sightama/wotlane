@@ -186,9 +186,12 @@ ORDEM DE EXECUÇÃO
    [FEITO 2026-10-16] Dia 2, nomes: `tex <id>` pelo DBP do upload, origem na RAM pelo símbolo do ELF
    (`wotm::symtab` em wotm_syms.h), e os elementos de HUD que o nativo pula entram na travessia
    (`Scene::hud`) para o inventário dar o id ao que o VU1 desenha (luta: barras de vida = id 0x1f47).
-2. Parte 2, peça 2: diff por pixel com atribuição (qual primitivo pintou cada pixel que difere) e a
-   imagem de referência nos menus (sai preta: buffer/Z do GS em software); peça 3 (corpus, com um
-   instantâneo por tela de menu e os da luta).
+   [FEITO 2026-10-16] Dia 3: diff por pixel com dono (linhas `inv px`: mapa de dono por pixel de cada
+   lado, pares `ref | nat` contados) e a imagem de referência nos menus (a limpeza do canal GIF
+   gravada depois das cadeias apagava o buffer; o replay reaplica na ordem só os pacotes sem vértices).
+   Limite que fica: o GS em software não pinta o céu.
+2. Parte 2, peça 3: corpus (um instantâneo por tela de menu e os da luta, nomeados pelo que mostram)
+   e o texto do nativo no mapa de donos.
 3. [FEITO 2026-10-15] 1.2: wotm_live/scene/snd/vu1check.inc, wotm_overrides.cpp e wotm_vu0_native.cpp/.h
    vivem em native/runtime/ no repo; o CMake do fork (-DWOTM_NATIVE_DIR obrigatório) os inclui e compila;
    o patch caiu de ~5.900 para ~2.500 linhas e só tem costuras. O .gen.inc do VU0 vai para <build>\wotm_gen.

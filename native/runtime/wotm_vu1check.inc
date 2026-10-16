@@ -119,6 +119,8 @@ std::vector<char> g_fxChain;                    // cadeia com particulas coletad
 std::vector<std::vector<uint32_t>> g_progs;     // id - 1 -> origens dos trechos da cadeia ate o MSCAL
 std::vector<uint32_t> g_progChain;              // id - 1 -> cadeia (indice em g_nats)
 std::vector<Tri> g_vu;                          // triangulos do VU1 (Tri::prog = id do programa)
+struct PxTri { uint32_t prog; float x[3], y[3]; uint16_t fbp; };
+std::vector<PxTri> g_vuAll;                     // todos os triangulos do XGKICK, inteiros ou nao na tela (atribuicao por pixel no replay)
 uint32_t g_vuKicked = 0, g_vuOff = 0;             // triangulos do XGKICK no quadro / fora da tela (parcial ou inteiro)
 uint32_t g_vuPrimVerts[8] = {};                 // vertices em primitivos que a checagem nao compara (ponto, linha, leque), por PRIM.PRIM
 std::vector<std::pair<uint32_t, Quad>> g_vuRects;   // SPRITE do GS inteiros na tela (programa, retangulo)
@@ -508,6 +510,7 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
                 t.f[k] = s.f;
             }
             ++g_vuKicked;
+            g_vuAll.push_back({prog, {t.x[0], t.x[1], t.x[2]}, {t.y[0], t.y[1], t.y[2]}, t.fbp});   // atribuicao por pixel: inteiros ou nao
             if (!inScreen(t)) ++g_vuOff;
             else if (!degenerate(t)) g_vu.push_back(t);
         } else if (kick && type == 6) {   // SPRITE: retangulo entre os dois ultimos vertices (particulas)
@@ -1465,6 +1468,7 @@ void arm(const uint8_t *rdram, uint32_t frame)
     g_progChain.clear();
     g_progHdr.clear();
     g_vu.clear();
+    g_vuAll.clear();
     g_vuKicked = g_vuOff = 0;
     std::memset(g_vuPrimVerts, 0, sizeof g_vuPrimVerts);
     g_vuRects.clear();
@@ -1808,6 +1812,139 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
 // VU1 e do PATH2: e uma aproximacao do GS do PS2, nao o GS), _nat.png (a camada nativa, pela mesma funcao do jogo ao vivo, sem o
 // contador de FPS), _diff.png (pixels que diferem em mais de 24 em algum canal, em vermelho sobre a referencia escurecida) e _trio.png
 // (os tres lado a lado, 640x448 cada). Guia para o olho; o criterio continua sendo a tabela numerica.
+// ---- Atribuicao por pixel (replay com imagens): quem desenhou cada pixel que difere, de cada lado (linhas "[vu1check] inv px") ----
+// Um mapa de dono por pixel da tela do GS (640x224) por lado, preenchido na ordem de desenho (o ultimo ganha; sem Z, aproximacao):
+// referencia = todos os triangulos e SPRITE do XGKICK no buffer de tela (inteiros ou nao) e os primitivos do PATH2/3; nativo = os
+// triangulos projetados dos objetos da 1a coleta (camera do passe 0; sem ceu/icones/HUD) e os quadrados das particulas. Cada pixel que
+// difere vira um par (dono na referencia, dono no nativo), contado; "nenhum" = fundo, limpeza, framebuffer de antes ou texto do nativo.
+namespace wotm_vu1check
+{
+struct PxOwner { uint8_t kind; uint32_t a, b; };   // 0 nenhum; 1 objeto (pkt, tex); 2 HUD (id); 3 fx (sistema, tipo); 4 MSCAL sem dono (origem); 5 path (caminho, tipo)
+struct PxMap {
+    static constexpr int W = 640, H = 224;
+    std::vector<uint16_t> id = std::vector<uint16_t>(size_t(W) * H, 0);
+    std::vector<PxOwner> owners{{0, 0, 0}};
+    std::map<std::tuple<uint8_t, uint32_t, uint32_t>, uint16_t> index;
+    uint16_t owner(uint8_t kind, uint32_t a, uint32_t b) {
+        auto it = index.find({kind, a, b});
+        if (it != index.end()) return it->second;
+        if (owners.size() >= 65535) return 0;
+        owners.push_back({kind, a, b});
+        return index[{kind, a, b}] = uint16_t(owners.size() - 1);
+    }
+    void tri(uint16_t o, const float *x, const float *y) {   // coordenadas do GS (2048 no centro)
+        float px[3], py[3];
+        for (int k = 0; k < 3; ++k) { px[k] = x[k] - kX0; py[k] = y[k] - kY0; }
+        const int x0 = std::max(0, int(std::floor(std::min({px[0], px[1], px[2]})))), x1 = std::min(W - 1, int(std::ceil(std::max({px[0], px[1], px[2]}))));
+        const int y0 = std::max(0, int(std::floor(std::min({py[0], py[1], py[2]})))), y1 = std::min(H - 1, int(std::ceil(std::max({py[0], py[1], py[2]}))));
+        if (x0 > x1 || y0 > y1) return;
+        const float area = (px[1] - px[0]) * (py[2] - py[0]) - (px[2] - px[0]) * (py[1] - py[0]);
+        if (std::fabs(area) < 1e-6f) return;
+        for (int yy = y0; yy <= y1; ++yy)
+            for (int xx = x0; xx <= x1; ++xx) {
+                const float cx = xx + 0.5f, cy = yy + 0.5f;
+                const float w0 = ((px[1] - cx) * (py[2] - cy) - (px[2] - cx) * (py[1] - cy)) / area;
+                const float w1 = ((px[2] - cx) * (py[0] - cy) - (px[0] - cx) * (py[2] - cy)) / area;
+                const float w2 = 1.f - w0 - w1;
+                if (w0 >= 0.f && w1 >= 0.f && w2 >= 0.f) id[size_t(yy) * W + xx] = o;
+            }
+    }
+    void rect(uint16_t o, float ax, float ay, float bx, float by) {
+        const int x0 = std::max(0, int(std::floor(std::min(ax, bx) - kX0))), x1 = std::min(W - 1, int(std::ceil(std::max(ax, bx) - kX0)) - 1);
+        const int y0 = std::max(0, int(std::floor(std::min(ay, by) - kY0))), y1 = std::min(H - 1, int(std::ceil(std::max(ay, by) - kY0)) - 1);
+        for (int yy = y0; yy <= y1; ++yy)
+            for (int xx = x0; xx <= x1; ++xx) id[size_t(yy) * W + xx] = o;
+    }
+};
+
+inline bool screenFbp(uint16_t fbp) { return fbp == 0xFFFF || fbp == 0x46 || fbp == 0x8C; }
+
+// Dono de um programa do VU1 (como a comparacao: objeto nativo pelo polyPkt, senao fx[], senao a origem do MSCAL)
+PxOwner ownerOfProg(uint32_t prog)
+{
+    const uint32_t chain = g_progChain[prog - 1];
+    if (chain < g_nats.size())
+        if (const uint32_t key = objectOf(g_nats[chain], prog)) {
+            const NatObj &o = g_nats[chain].at(key);
+            if (o.hudId) return {2, o.hudId, 0};
+            return {1, key, o.tex};
+        }
+    if (const int sys = fxOf(prog); sys >= 0) {
+        uint32_t type = 0;
+        if (!g_fxNats.empty()) { const auto it = g_fxNats[0].find(uint32_t(sys)); if (it != g_fxNats[0].end()) type = it->second.type; }
+        return {3, uint32_t(sys), type};
+    }
+    return {4, g_progs[prog - 1].empty() ? 0u : g_progs[prog - 1].back() & ~0xFFu, 0};
+}
+
+void ownerName(const PxOwner &o, char *s, size_t n)
+{
+    char sym[96];
+    switch (o.kind) {
+    case 1: std::snprintf(s, n, "pkt %x tex %u", o.a, o.b); break;
+    case 2: std::snprintf(s, n, "HUD %x", o.a); break;
+    case 3: std::snprintf(s, n, "fx %u tipo %u", o.a, o.b); break;
+    case 4: symOf(o.a, sym, sizeof sym); std::snprintf(s, n, "vu1 mscal %x%s%s%s", o.a, sym[0] ? " (" : "", sym, sym[0] ? ")" : ""); break;
+    case 5: std::snprintf(s, n, "path%u %s", o.a, o.b == 6 ? "sprites" : "tris"); break;
+    case 6: std::snprintf(s, n, "ceu/icone pkt %x tex %u", o.a, o.b); break;
+    default: std::snprintf(s, n, "nenhum"); break;
+    }
+}
+
+// diff: imagem W x H (640 x 448) com d[0] == 255 nos pixels que diferem (vu1cmpImages). Imprime os pares de donos mais frequentes.
+void attributePixels(const Image &diff, int W, int H)
+{
+    if (g_nats.empty()) return;
+    PxMap ref, nat;
+    // PATH3 primeiro: a limpeza do canal GIF vem antes das cadeias no PS2 (sem VU1 fica gravada depois; ver o replay dos 'G')
+    for (const RefPrim &r : g_ref23)
+        if (r.path == 3 && screenFbp(r.fbp)) ref.rect(ref.owner(5, r.path, r.kind == 6 ? 6 : 3), r.x0, r.y0, r.x1, r.y1);   // caixa (os triangulos do PATH2/3 sao raros)
+    for (const PxTri &t : g_vuAll)
+        if (screenFbp(t.fbp)) { const PxOwner o = ownerOfProg(t.prog); ref.tri(ref.owner(o.kind, o.a, o.b), t.x, t.y); }
+    for (size_t i = 0; i < g_vuRects.size(); ++i) {
+        const PxOwner o = ownerOfProg(g_vuRects[i].first);
+        const Quad &q = g_vuRects[i].second;
+        ref.rect(ref.owner(o.kind, o.a, o.b), q.x[0], q.y[0], q.x[2], q.y[2]);
+    }
+    for (const RefPrim &r : g_ref23)
+        if (r.path == 2 && screenFbp(r.fbp)) ref.rect(ref.owner(5, r.path, r.kind == 6 ? 6 : 3), r.x0, r.y0, r.x1, r.y1);
+    for (const auto &kv : g_nats[0]) {
+        const NatObj &o = kv.second;
+        if (o.hudId || o.tris.empty()) continue;   // HUD: o nativo nao desenha; ceu/icones entram (kind 6; o ceu nativo e centrado na camera, posicao aproximada)
+        const uint16_t id = nat.owner(o.skip ? 6 : 1, kv.first, o.tex);
+        for (const Tri &t : project(o.tris, g_cam[0], kv.first)) nat.tri(id, t.x, t.y);
+    }
+    if (!g_fxNats.empty())
+        for (const auto &kv : g_fxNats[0]) {
+            const uint16_t id = nat.owner(3, kv.first, kv.second.type);
+            for (const Quad &q : kv.second.quads[1]) { nat.tri(id, q.x, q.y); const float x2[3] = {q.x[0], q.x[2], q.x[3]}, y2[3] = {q.y[0], q.y[2], q.y[3]}; nat.tri(id, x2, y2); }
+        }
+    std::map<std::pair<uint16_t, uint16_t>, uint32_t> pairs;
+    uint32_t total = 0, refOnly = 0, natOnly = 0, none = 0, both = 0;
+    const uint8_t *d = static_cast<const uint8_t *>(diff.data);
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x, d += 4) {
+            if (d[0] != 255) continue;
+            const int gx = x * PxMap::W / W, gy = y * PxMap::H / H;
+            const uint16_t r = ref.id[size_t(gy) * PxMap::W + gx], n = nat.id[size_t(gy) * PxMap::W + gx];
+            ++total;
+            ++pairs[{r, n}];
+            if (r && !n) ++refOnly; else if (!r && n) ++natOnly; else if (!r && !n) ++none; else ++both;
+        }
+    if (!total) return;
+    std::fprintf(stderr, "[vu1check] inv px g=%u: %u pixels diferentes: so a referencia pinta %u, so o nativo pinta %u, os dois %u, nenhum %u (fundo/limpeza/texto)\n",
+                 g_frame, total, refOnly, natOnly, both, none);
+    std::vector<std::pair<std::pair<uint16_t, uint16_t>, uint32_t>> v(pairs.begin(), pairs.end());
+    std::sort(v.begin(), v.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
+    char a[160], b[160];
+    for (size_t i = 0; i < v.size() && i < 14; ++i) {
+        ownerName(ref.owners[v[i].first.first], a, sizeof a);
+        ownerName(nat.owners[v[i].first.second], b, sizeof b);
+        std::fprintf(stderr, "[vu1check] inv px   ref %s | nat %s: %u px (%.1f%%)\n", a, b, v[i].second, 100.0 * v[i].second / total);
+    }
+}
+} // namespace wotm_vu1check
+
 static uint16_t g_frameFbp = 0xFFFF;   // buffer de tela em que o quadro desenha (deduzido no aquecimento; 0xFFFF = usa o FRAME dos triangulos)
 static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runtime, const uint8_t *ram)
 {
@@ -1885,6 +2022,7 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
             d[3] = 255;
         }
     }
+    wotm_vu1check::attributePixels(diff, W, H);   // linhas "inv px": dono de cada pixel que difere, nos dois lados
     Image trio = GenImageColor(3 * W + 8, H, DARKGRAY);
     const Rectangle src{0.f, 0.f, float(W), float(H)};
     ImageDraw(&trio, ref, src, Rectangle{0.f, 0.f, float(W), float(H)}, WHITE);
@@ -2111,7 +2249,31 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
                 std::fprintf(stderr, "[vu1cmp] G %u bytes:%s\n", bytes, s.c_str());
             }
             if (!skip) path3Tap(data.data(), bytes);   // inventario (sem origem na RAM: o arquivo guarda so os bytes)
-            if (!skip && png) mem.submitGifPacket(GifPathId::Path3, data.data(), bytes, true);
+            // Reaplicados na ordem gravada (alem do aquecimento) so os pacotes sem vertices (ambiente de desenho: XYOFFSET, SCISSOR,
+            // FRAME...), de que a luta precisa. Os que desenham (a limpeza do quadro seguinte, dois SPRITE de tela inteira) ficam de fora:
+            // sem VU1 a cadeia do VIF1 so e despachada tarde, entao eles ficam gravados depois das cadeias e, no GS, apagavam o buffer
+            // que elas acabaram de desenhar (nos menus a imagem saia preta; no PS2 a limpeza vem antes). WOTM_VU1CMP_GORDER=1 reaplica
+            // todos (diagnostico).
+            static const bool s_gOrder = std::getenv("WOTM_VU1CMP_GORDER") && std::atoi(std::getenv("WOTM_VU1CMP_GORDER")) > 0;
+            auto hasKick = [&]() {   // algum XYZ2/XYZF2 (PACKED ou REGLIST) no pacote
+                for (uint32_t pos = 0; pos + 16 <= bytes;) {
+                    uint64_t lo, hi;
+                    std::memcpy(&lo, data.data() + pos, 8);
+                    std::memcpy(&hi, data.data() + pos + 8, 8);
+                    pos += 16;
+                    const uint32_t nloop = uint32_t(lo & 0x7FFF), flg = uint32_t((lo >> 58) & 3), nreg = uint32_t((lo >> 60) & 0xF) ? uint32_t((lo >> 60) & 0xF) : 16u;
+                    if (flg == 0 || flg == 1) {
+                        for (uint32_t r = 0; r < nreg; ++r) {
+                            const uint32_t reg = uint32_t((hi >> (4 * r)) & 0xF);
+                            if (nloop && (reg == 0x4 || reg == 0x5)) return true;
+                        }
+                        pos += flg == 0 ? nloop * nreg * 16 : ((nloop * nreg + 1) / 2) * 16;
+                    } else pos += nloop * 16;
+                    if ((lo >> 15) & 1) break;
+                }
+                return false;
+            };
+            if (!skip && png && (s_gOrder || !hasKick())) mem.submitGifPacket(GifPathId::Path3, data.data(), bytes, true);
         } else if (type == 'E') {
             inFrame = false;
             if (skip) continue;
