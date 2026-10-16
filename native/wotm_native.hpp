@@ -481,11 +481,27 @@ struct TextQuad {
     uint64_t tex0;        // TEX0 em vigor (atlas T8H 512x512 do .RTX da fase + paleta CBP)
 };
 
-// Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada): os desenhos ate o proximo quadro do jogo repetem este,
-// sem ler a RAM que o jogo esta reescrevendo.
+// Bloqueador de sombra ativo (Scene::collectShadows / drawShadows): entrada de psBlkLst e os objetos que projetam a silhueta.
+struct ShadowBlocker {
+    int index = 0;               // entrada de psBlkLst
+    float origin[3] = {0, 0, 0}; // cs->trans
+    float extent = 0;            // meio lado do quadro de luz (raio do no * 1,1)
+    std::vector<DrawItem> casters;
+    std::vector<uint32_t> casterNodes;
+};
+struct ParaLights { float dir[4][3] = {}; float col[3][3] = {}; };   // luzes paralelas (Scene::readParaLights)
+struct Fog { float fa = 0.f, maxVal = 255.f, fb = 0.f; float col[3] = {0, 0, 0}; };   // neblina (Scene::readFog, Scene::fogF)
+
+// Tudo o que o desenho le do quadro do jogo, copiado da RAM de uma vez (itens com a paleta copiada, particulas, sombras, luzes,
+// neblina). Na luta e no menu e tirado na thread do EE na entrada de timerWaitForMinUpdateRate, com o quadro pronto
+// (wotmCaptureFrame); os desenhos ate o proximo quadro do jogo repetem este, sem ler a RAM que o jogo esta reescrevendo.
 struct Snapshot {
     std::vector<Sprite> sprites;
     std::vector<DrawItem> items, sky, overlay, hud;
+    std::vector<FxSystem> fx;
+    std::vector<ShadowBlocker> shadows;
+    ParaLights lights;
+    Fog fog;
     GameCamera cam;
     uint32_t g = 0;     // contador de quadros do jogo
     bool valid = false;
@@ -940,13 +956,6 @@ public:
     // proximos (psBldBlkRObjs). Aqui: a silhueta e rasterizada na CPU num quadro ortografico no espaco da luz (sem trocar de
     // framebuffer dentro do BeginMode3D, o que quebraria o render texture do runtime) e os triangulos dos objetos proximos sao
     // redesenhados com essa textura projetada. docs/passos/NATIVO.md ("Sombras").
-    struct ShadowBlocker {
-        int index = 0;               // entrada de psBlkLst
-        float origin[3] = {0, 0, 0}; // cs->trans
-        float extent = 0;            // meio lado do quadro de luz (raio do no * 1,1)
-        std::vector<DrawItem> casters;
-        std::vector<uint32_t> casterNodes;
-    };
     std::vector<ShadowBlocker> shadows;
 
     // Bloqueadores ativos, como psFindActiveBlockers: sombras ligadas (psSetShadowOnOff), entrada em uso, cs desenhavel e visivel na vista 0
@@ -1292,6 +1301,10 @@ public:
         sn.overlay = overlay;
         sn.hud = hud;
         sn.sprites = sprites;
+        sn.fx = fx.systems;
+        sn.shadows = shadows;
+        sn.lights = lights_;
+        sn.fog = fog_;
         sn.cam = readGameCamera(ram, 0);
         sn.g = g;
         sn.valid = true;
@@ -1319,6 +1332,10 @@ public:
         overlay = s.overlay;
         hud = s.hud;
         sprites = s.sprites;
+        fx.systems = s.fx;
+        shadows = s.shadows;
+        lights_ = s.lights;
+        fog_ = s.fog;
         cam_ = s.cam;
         eyeOk_ = s.cam.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = s.cam.pos[i];
@@ -2476,7 +2493,6 @@ private:
     //   cor = min(255, cor do vertice * (soma de cor_i * d_i) + especular * d_3^16)
     // com cor_i em vu1LightColor (D_0025B238, cor/128; qwords 17-19 do cabecalho) e especular = specIntensity (+0x6C) com specLightMe
     // (bit 0x2000), senao 0 (qword 20). O qword 5 do cabecalho, que tambem multiplica a cor do vertice, vale 1.
-    struct ParaLights { float dir[4][3] = {}; float col[3][3] = {}; };
     static ParaLights readParaLights(const Ram &ram) {
         ParaLights l;
         for (int i = 0; i < 4; ++i)
@@ -2491,7 +2507,6 @@ public:
     // Neblina, como os programas de desenho do VU1 e o GS: por vertice das secoes com PRIM.FGE,
     //   F = clamp(fogBurnThru do OBJECT (+0x2C) + fogFA + fogFB / W, 0, fogMaxVal)   (W = linha 3 do worldToScreenMat . (p - olho))
     // e o GS mistura (F * cor + (255 - F) * FOGCOL) / 255 (F = 255: sem neblina). Parametros de vu1FogParams; FOGCOL de fogColorCtx[4].
-    struct Fog { float fa = 0.f, maxVal = 255.f, fb = 0.f; float col[3] = {0, 0, 0}; };
     static Fog readFog(const Ram &ram) {
         Fog f;
         f.fa = ram.f32(addr::vu1FogParams);

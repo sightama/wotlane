@@ -2003,6 +2003,7 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
     }
 
     wotm_live::g_hideFps = true;
+    wotm_live::g_localCollect = true;   // sem jogo rodando: a cena sai da RAM do instantaneo, nao da captura da thread do EE
     wotm_live::g_force43 = true;   // a referencia do GS e 4:3; o recorte abaixo supoe o quadro de 960x720
     bool natOk = false;
     for (int pass = 0; pass < 2; ++pass) {   // o 1o desenho de uma fase so carrega (recursos, instantaneo A/B); o 2o desenha

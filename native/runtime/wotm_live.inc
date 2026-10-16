@@ -286,7 +286,46 @@ static void initWindowAspect()
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
     SetWindowSize(static_cast<int>(std::lround(720.f * a)), 720);
 }
+
+// Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
+// timerWaitForMinUpdateRate, ponto comum a rtMain, ShellRtLoop::endField e userintMain): ali o quadro esta pronto (update, hier,
+// particleDraw, HUD) e a logica do seguinte ainda nao comecou. A apresentacao roda em outra thread; lendo a RAM na hora em que
+// via o g_frame mudar, pegava as vezes o quadro seguinte pela metade (o _cs do HUD fora do lugar, bloqueador de sombra sem
+// marcar: HUD, reticula e sombra piscando).
+struct Capture
+{
+    std::mutex m;
+    wotm::Snapshot snap;   // ultimo quadro capturado, ainda nao consumido pela apresentacao
+    bool fresh = false;
+    std::atomic<bool> on{false};   // a apresentacao desenha nativo (liga na primeira chamada de wotmDrawNative)
+    std::atomic<float> wide{1.f};  // Scene::wide da apresentacao (teste de visao das particulas)
+};
+static Capture &capture()
+{
+    static Capture c;
+    return c;
+}
+static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
 } // namespace wotm_live
+
+void wotmCaptureFrame(const uint8_t *rdram)
+{
+    wotm_live::Capture &c = wotm_live::capture();
+    if (!rdram || !c.on.load(std::memory_order_relaxed))
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    const uint32_t wc = ram.u32(wotm::addr::world);
+    if (!ram.ok(wc, 0x40) || !ram.ok(ram.u32(wc)))
+        return;
+    static wotm::Scene cap;   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
+    cap.wide = c.wide.load(std::memory_order_relaxed);
+    cap.collect(ram);
+    wotm::Snapshot sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
+    std::lock_guard<std::mutex> lk(c.m);
+    c.snap = std::move(sn);
+    c.fresh = true;
+}
+
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
@@ -297,6 +336,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // quadro nativo: 720 de altura na proporcao da tela (wotm_live::viewAspect); a tela do GS e a faixa 4:3 central
     const int RH = 720, RW = static_cast<int>(std::lround(RH * wotm_live::viewAspect()));
     S.scene.wide = static_cast<float>(RW) / (RH * 4.f / 3.f);
+    wotm_live::Capture &cap = wotm_live::capture();
+    cap.wide.store(S.scene.wide, std::memory_order_relaxed);
+    cap.on.store(true, std::memory_order_relaxed);
     static bool filterInstalled = false;
     if (!filterInstalled)
     {
@@ -316,15 +358,35 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.rtxChosen = false;
         S.snap = wotm::Snapshot{};
     }
-    // Quadro novo do jogo (g_frame em 0x6F7E38 mudou): le a cena da RAM e guarda no instantaneo. Os desenhos seguintes repetem o
-    // instantaneo: o jogo termina o quadro e espera o pacing, entao a RAM e consistente logo depois do g_frame++.
-    const uint32_t gNow = ram.u32(wotm::sym::g_frame);
-    if (!S.snap.valid || gNow != S.snap.g)
+    // Quadro novo do jogo: o instantaneo capturado na thread do EE (wotmCaptureFrame). No replay (--vu1cmp) nao ha jogo rodando e a
+    // RAM do instantaneo e fixa: a coleta e aqui mesmo. Os desenhos seguintes repetem o instantaneo.
+    wotm::Snapshot sn;
+    if (wotm_live::g_localCollect)
     {
-        wotm_live::g_stage = "collect";
-        S.scene.collect(ram);
-        if (S.scene.items.size() < 20)
+        const uint32_t gNow = ram.u32(wotm::sym::g_frame);
+        if (!S.snap.valid || gNow != S.snap.g)
+        {
+            wotm_live::g_stage = "collect";
+            S.scene.collect(ram);
+            sn = S.scene.takeSnapshot(ram, gNow);
+        }
+    }
+    else
+    {
+        std::lock_guard<std::mutex> lk(cap.m);
+        if (cap.fresh)
+        {
+            sn = std::move(cap.snap);
+            cap.fresh = false;
+        }
+    }
+    if (sn.valid)
+    {
+        if (sn.items.size() < 20 || !sn.cam.ok)   // sem fase de verdade (carregando, tela vazia): fica o quadro do GS
+        {
+            S.snap = wotm::Snapshot{};
             return false;
+        }
         {
             // nivel + monstros: nomes e bases das paletas vem de fileStatus (idempotente; refaz so quando mudam)
             std::string log;
@@ -337,10 +399,6 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 wotmBootDone("fase na tela");
             }
         }
-        wotm_live::g_stage = "snapshot";
-        wotm::Snapshot sn = S.scene.takeSnapshot(ram, gNow);
-        if (!sn.cam.ok)
-            return false;
         S.snap = std::move(sn);
     }
     if (!S.snap.valid)
@@ -443,8 +501,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     }
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
-        std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu nos=%u rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),
-                     S.scene.visited, S.rtxPath.c_str());
+        std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),
+                     S.rtxPath.c_str());
     return true;
 }
 // Chamado na thread do jogo logo depois do particleDraw (hook_particleDraw, main.cpp): copia a lista do lens flare ja projetada
@@ -457,5 +515,6 @@ void wotmFlareCapture(const uint8_t *rdram)
 #else
 namespace wotm_live { static void initWindowAspect() {} }
 static bool wotmDrawNative(const uint8_t *) { return false; }
+void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 #endif

@@ -29,6 +29,7 @@ extern uint64_t g_wotmEeCycle, g_wotmIdleCycles;
 extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
+void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 
 namespace
 {
@@ -330,6 +331,8 @@ namespace
             // ha quadros sem chamada, e a linha somava dois quadros)
             if (g_fieldLog)
                 fieldLogFrame(rdram, ctx, runtime);
+            // quadro pronto (update, hier, particleDraw) e o seguinte ainda nao comecou: o desenho nativo copia a cena aqui
+            wotmCaptureFrame(rdram);
             if (g_wotmFreeSpinPc != 0u && g_frameStartValid)
             {
                 const uint64_t vblanks = runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync;
