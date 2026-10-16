@@ -272,7 +272,10 @@ int main(int argc, char **argv) {
         scene.draw(ram, wire);
         EndMode3D();
         scene.updateText(ram);
-        scene.drawText(ram, float(GetScreenWidth()), float(GetScreenHeight()));
+        scene.screenPolys.clear();
+        wotm::readScreenPolys(ram, scene.screenPolys);   // so com numPolys > 0 (dump tirado antes do dmaData)
+        scene.drawQuads(scene.screenPolys, float(GetScreenWidth()), float(GetScreenHeight()));
+        scene.drawQuads(scene.text, float(GetScreenWidth()), float(GetScreenHeight()));
         DrawText(TextFormat("itens %zu  lod %d  %s  cam %.0f %.0f %.0f", scene.items.size(), lod, wire ? "arame" : "solido", cam.pos[0], cam.pos[1], cam.pos[2]), 10, 10, 18, WHITE);
         EndDrawing();
         ++frame;

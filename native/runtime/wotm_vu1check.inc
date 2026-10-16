@@ -1888,6 +1888,7 @@ void ownerName(const PxOwner &o, char *s, size_t n)
     case 5: std::snprintf(s, n, "path%u %s", o.a, o.b == 6 ? "sprites" : "tris"); break;
     case 6: std::snprintf(s, n, "ceu/icone pkt %x tex %u", o.a, o.b); break;
     case 7: std::snprintf(s, n, "texto (fontPacket)"); break;
+    case 8: std::snprintf(s, n, "HUD ScreenPolys"); break;
     default: std::snprintf(s, n, "nenhum"); break;
     }
 }
@@ -1925,6 +1926,12 @@ void attributePixels(const Image &diff, int W, int H)
             const uint16_t id = nat.owner(2, kv.second.hudId, 0);
             for (const Tri &t : project(kv.second.tris, g_cam[0], kv.first)) nat.tri(id, t.x, t.y);
         }
+    if (g_rdram) {   // HUD do ScreenPolys do nativo (readScreenPolys, como o takeSnapshot do replay), antes do texto como no rtMain
+        std::vector<wotm::TextQuad> polys;
+        wotm::readScreenPolys(wotm::Ram{g_rdram, PS2_RAM_SIZE}, polys);
+        const uint16_t id = nat.owner(8, 0, 0);
+        for (const wotm::TextQuad &t : polys) nat.rect(id, t.x0 + kX0, t.y0 + kY0, t.x1 + kX0, t.y1 + kY0);
+    }
     if (g_scene && g_rdram) {   // texto do nativo (fontPacket, Scene::updateText): glifos em pixels da tela 640x224
         g_scene->updateText(wotm::Ram{g_rdram, PS2_RAM_SIZE});
         const uint16_t id = nat.owner(7, 0, 0);

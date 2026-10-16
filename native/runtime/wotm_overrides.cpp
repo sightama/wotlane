@@ -31,7 +31,8 @@ extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
-void wotmShellFade(int start, int step, bool accumulate);   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
+void wotmShellFade(int start, int step, bool accumulate);
+void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPolys, lido na entrada do dmaData   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
 
 namespace
 {
@@ -391,6 +392,18 @@ namespace
         g_origShellFade(rdram, ctx, runtime);
     }
 
+    // HUD do ScreenPolys (icone de vida do Hud::drawHealthIcon): o dmaData manda os pacotes de s_polyBuffer e zera numPolys; na
+    // entrada os quadrados do quadro ainda estao contados (wotm::readScreenPolys).
+    constexpr uint32_t kScreenPolysDmaData = wotm::fn::dmaData__11ScreenPolysv;
+    PS2Runtime::RecompiledFunction g_origPolysDma = nullptr;
+
+    void screenPolysDmaTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kScreenPolysDmaData)
+            wotmScreenPolys(rdram);
+        g_origPolysDma(rdram, ctx, runtime);
+    }
+
     // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
     void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -442,6 +455,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))
         runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
+    if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
+        runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
         int v[5], n = 0;

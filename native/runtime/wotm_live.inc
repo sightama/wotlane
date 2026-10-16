@@ -313,6 +313,9 @@ static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a 
 // vez a tela ja levou os alfas a - 2·passo, a - 4·passo... desde o inicio, e o escurecimento acumula (Scene::drawScreenRects recebe o
 // alfa equivalente). g_shellFade: -1 = parado; senao inicio | passo << 8 | acumula << 16.
 static std::vector<wotm::ScreenRect> g_pendingRects;
+// HUD do ScreenPolys do quadro em montagem: lido na entrada do ScreenPolys::dmaData (wotmScreenPolys), que zera numPolys; a captura
+// o junta ao instantaneo (o takeSnapshot na captura ja nao o ve).
+static std::vector<wotm::TextQuad> g_pendingPolys;
 static std::atomic<int> g_shellFade{-1};
 } // namespace wotm_live
 
@@ -321,6 +324,11 @@ void wotmScreenRect(const uint8_t *rdram, uint32_t pkt)
     wotm::ScreenRect r{};
     if (rdram && wotm_live::g_pendingRects.size() < 16 && wotm::readScreenRect(wotm::Ram{rdram, PS2_RAM_SIZE}, pkt, r))
         wotm_live::g_pendingRects.push_back(r);
+}
+void wotmScreenPolys(const uint8_t *rdram)
+{
+    if (rdram && wotm_live::g_pendingPolys.size() < 256)
+        wotm::readScreenPolys(wotm::Ram{rdram, PS2_RAM_SIZE}, wotm_live::g_pendingPolys);
 }
 void wotmShellFade(int start, int step, bool accumulate)
 {
@@ -332,6 +340,8 @@ void wotmCaptureFrame(const uint8_t *rdram)
     wotm_live::Capture &c = wotm_live::capture();
     std::vector<wotm::ScreenRect> rects;
     rects.swap(wotm_live::g_pendingRects);
+    std::vector<wotm::TextQuad> polys;
+    polys.swap(wotm_live::g_pendingPolys);
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
     if (!rdram || !c.on.load(std::memory_order_relaxed))
         return;
@@ -344,6 +354,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     cap.collect(ram);
     wotm::Snapshot sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
     sn.screenRects = std::move(rects);
+    sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
@@ -481,7 +492,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     wotm_live::g_stage = "idle";
     EndMode3D();
     S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
-    S.scene.drawText(ram, static_cast<float>(RW), static_cast<float>(RH));
+    S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
+    S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
     S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // fades, por cima de tudo
     EndTextureMode();
 
@@ -558,5 +570,6 @@ static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 void wotmScreenRect(const uint8_t *, uint32_t) {}
+void wotmScreenPolys(const uint8_t *) {}
 void wotmShellFade(int, int, bool) {}
 #endif

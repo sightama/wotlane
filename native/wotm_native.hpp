@@ -523,6 +523,36 @@ inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) {
     return false;
 }
 
+// Quadrados de tela do ScreenPolys (HUD fora do hier: o icone de vida do Hud::drawHealthIcon). Cada fonte de s_sourceObjects (0x20
+// bytes: pkt, end, numPolys, headerQw, curQw, obj, rgba, fx) tem um pacote GIF em s_polyBuffer: o polyInitPacket poe o A+D com o TEX0
+// do objeto em pkt + 0x30 (ALPHA_1 0x44, TEST_1 0x8D: alfa > 8) e o polyBuildPrim acrescenta, a partir de pkt + 16·headerQw, 5 qwords
+// por quadrado: RGBAQ, UV, XYZ2, UV, XYZ2 (SPRITE com textura, UV em texels 12.4). O dmaData fecha as tags, manda e zera numPolys:
+// le-se com numPolys > 0, isto e, na entrada do dmaData (hook) ou antes dele (a coleta do replay, na entrada do hier, ja os tem: o
+// Hud::addHealthIndicators roda antes). XY como o texto: tela do jogo 640 x 224, centro do GS em 2048.
+inline void readScreenPolys(const Ram &ram, std::vector<TextQuad> &out) {
+    auto u64 = [&](uint32_t a) { return uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32); };
+    const int n = int(ram.u32(sym::s_numSourceObjects));
+    for (int s = 0; s < n && s < 8; ++s) {   // s_sourceObjects: 0x100 bytes = 8 fontes
+        const uint32_t so = sym::s_sourceObjects + 0x20 * uint32_t(s);
+        const uint32_t pkt = ram.u32(so), polys = ram.u32(so + 8), hdr = ram.u32(so + 0xC);
+        if (!polys || polys > 256 || !ram.ok(pkt + 16 * (hdr + 5 * polys)) || (u64(pkt + 0x38) & 0xFF) != 0x06) continue;
+        const uint64_t tex0 = u64(pkt + 0x30);
+        for (uint32_t i = 0; i < polys; ++i) {
+            const uint32_t q = pkt + 16 * (hdr + 5 * i);
+            constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;
+            TextQuad t{};
+            t.r = uint8_t(std::min(255u, ram.u32(q))); t.g = uint8_t(std::min(255u, ram.u32(q + 4)));
+            t.b = uint8_t(std::min(255u, ram.u32(q + 8))); t.a = uint8_t(std::min(255u, ram.u32(q + 12)));
+            t.u0 = float(ram.u32(q + 16) & 0x3FFF) / 16.f; t.v0 = float(ram.u32(q + 20) & 0x3FFF) / 16.f;
+            t.x0 = float(ram.u32(q + 32) & 0xFFFF) / 16.f - kOx; t.y0 = float(ram.u32(q + 36) & 0xFFFF) / 16.f - kOy;
+            t.u1 = float(ram.u32(q + 48) & 0x3FFF) / 16.f; t.v1 = float(ram.u32(q + 52) & 0x3FFF) / 16.f;
+            t.x1 = float(ram.u32(q + 64) & 0xFFFF) / 16.f - kOx; t.y1 = float(ram.u32(q + 68) & 0xFFFF) / 16.f - kOy;
+            t.tex0 = tex0;
+            out.push_back(t);
+        }
+    }
+}
+
 // Bloqueador de sombra ativo (Scene::collectShadows / drawShadows): entrada de psBlkLst e os objetos que projetam a silhueta.
 struct ShadowBlocker {
     int index = 0;               // entrada de psBlkLst
@@ -543,6 +573,7 @@ struct Snapshot {
     std::vector<FxSystem> fx;
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
+    std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (readScreenPolys: no takeSnapshot e no hook do dmaData)
     ParaLights lights;
     Fog fog;
     GameCamera cam;
@@ -559,8 +590,9 @@ public:
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
     std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133): por cima da cena, sem profundidade, depois dos icones (DrawItem::hudId = id do objeto)
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
-    std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
+    std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawQuads depois da cena 3D e do screenPolys
     std::vector<ScreenRect> screenRects;   // fades (Snapshot::screenRects), desenhados por drawScreenRects por ultimo
+    std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (Snapshot::screenPolys), desenhado por drawScreenPolys antes do texto
     uint32_t visited = 0;
     uint32_t byOp[64] = {};
 
@@ -736,22 +768,28 @@ public:
         if (!t0v) return false;
         const gs::Tex0 t0 = gs::Tex0::decode(t0v);
         const uint32_t ptr = ram.u32(addr::texInfo + 16 * objectTexId(ram, node, slot)) & 0x0FFFFFFF;
-        uint32_t pal[256] = {};
         if (t0.psm == gs::T8H || t0.psm == gs::T4HL || t0.psm == gs::T4HH) {
-            // Texturas residentes do menu em PSMT8H/4HL/4HH (telas, fontes, logos, retratos): `texInfo[id]` aponta para outra coisa; os
-            // pixels vem do .RTX do disco, entrada com DBP == TEX0.TBP0 e mesmo psm (4HL e 4HH repartem o DBP: sao os dois nibbles).
-            // 8 bits, ou 4 bits empacotados (nibble baixo primeiro); tamanho = TW/TH do TEX0. Fallback: a RAM em `ptr` (nao confiavel).
-            const auto it = rtxPal.find(t0.cbp);
-            if (it == rtxPal.end()) return false;
-            fillPal(pal, it->second, t0.psm == gs::T8H, rawAlpha);
-            w = 1u << t0.tw; h = 1u << t0.th;
-            const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
-            if (im != rtxImg.end())
-                return gs::decodeUpload(im->second.data(), im->second.size(), w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
-            if (!ram.ok(ptr + 0x80)) return false;
+            uint32_t pal[256] = {};
+            if (decodeResident(t0, px, w, h, rawAlpha, pal)) return true;
+            // Paleta sem a imagem no .RTX: a RAM em `ptr` (nao confiavel).
+            if (rtxPal.find(t0.cbp) == rtxPal.end() || !ram.ok(ptr + 0x80)) return false;
             return gs::decodeUpload(ram.p + ptr, ram.size - ptr, w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
         }
         return decodeUploadTex(ram, ptr, t0, px, w, h, false, rawAlpha);
+    }
+
+    // Texturas residentes em PSMT8H/4HL/4HH (telas e logos do menu, fontes, retratos, icones do HUD): `texInfo[id]` aponta para outra
+    // coisa; os pixels vem do .RTX do disco, entrada com DBP == TEX0.TBP0 e mesmo psm (4HL e 4HH repartem o DBP: sao os dois nibbles).
+    // 8 bits, ou 4 bits empacotados (nibble baixo primeiro); tamanho = TW/TH do TEX0. `pal` sai preenchida se a paleta existe.
+    bool decodeResident(const gs::Tex0 &t0, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, bool rawAlpha, uint32_t pal[256]) const {
+        if (t0.psm != gs::T8H && t0.psm != gs::T4HL && t0.psm != gs::T4HH) return false;
+        const auto it = rtxPal.find(t0.cbp);
+        if (it == rtxPal.end()) return false;
+        fillPal(pal, it->second, t0.psm == gs::T8H, rawAlpha);
+        w = 1u << t0.tw; h = 1u << t0.th;
+        const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
+        return im != rtxImg.end() &&
+               gs::decodeUpload(im->second.data(), im->second.size(), w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
     }
 
     // Pixels do pacote de upload em `ptr` (= texInfo[texId]; cabecalho em UploadHdr, pixels lineares a partir de +0x80) com a paleta do .RTX pelo CBP do TEX0. Serve aos objetos (decodeTex) e as particulas (particleTexture).
@@ -1350,6 +1388,7 @@ public:
         sn.lights = lights_;
         sn.fog = fog_;
         sn.cam = readGameCamera(ram, 0);
+        readScreenPolys(ram, sn.screenPolys);
         sn.g = g;
         sn.valid = true;
         std::unordered_map<uint32_t, std::shared_ptr<std::vector<M4>>> byBlock;
@@ -1379,6 +1418,7 @@ public:
         fx.systems = s.fx;
         shadows = s.shadows;
         screenRects = s.screenRects;
+        screenPolys = s.screenPolys;
         lights_ = s.lights;
         fog_ = s.fog;
         cam_ = s.cam;
@@ -2370,10 +2410,11 @@ public:
         text.swap(q);
     }
 
-    // Desenha o texto em coordenadas da tela do jogo (640 x 224) escaladas para a faixa 4:3 central de `rw` x `rh` (fora do modo 3D,
-    // por cima da cena).
-    void drawText(const Ram &ram, float rw, float rh) {
-        if (text.empty()) return;
+    // Desenha quadrados de tela (texto, HUD do ScreenPolys) em coordenadas da tela do jogo (640 x 224) escaladas para a faixa 4:3
+    // central de `rw` x `rh` (fora do modo 3D, por cima da cena). Ordem do rtMain: screenPolys (ScreenPolys::dmaData) e depois text
+    // (fontDmaFontData).
+    void drawQuads(const std::vector<TextQuad> &quads, float rw, float rh) {
+        if (quads.empty()) return;
         if (!textShaderTried_) {
             // O GS faz textura * cor / 0x80 (0x80 = 1,0) e satura em 1,0: cores acima de 0x80 clareiam o glifo. O raylib so multiplica por
             // <= 1; o shader dobra o RGB (a cor do vertice entra como r/255, ou seja r/0x80 = 2 * r/255).
@@ -2388,13 +2429,15 @@ public:
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sx = gr.w / 640.f, sy = gr.h / 224.f;
         if (textShader_.id > 0) BeginShaderMode(textShader_);
-        for (const TextQuad &t : text) {
-            const Texture2D tex = fontTexture(ram, t.tex0);
+        for (const TextQuad &t : quads) {
+            const Texture2D tex = residentTexture(t.tex0);
             if (!tex.id) continue;
             const bool gain = textShader_.id > 0;   // sem o shader a cor fica em <= 1,0 (dobra aqui)
             const int k = gain ? 1 : 2;
             const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
-            DrawTexturePro(tex, Rectangle{t.u0, t.v0, t.u1 - t.u0, t.v1 - t.v0},
+            // UV invertido (u1 < u0, v1 < v0: o ScreenPolys espelha e o polyBuildPrim grava V = 0x80 - v): o GS anda de u0 para u1. O
+            // DrawTexturePro com largura negativa espelha a faixa [x, x + |w|], entao a origem e o menor dos dois.
+            DrawTexturePro(tex, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0},
                            Rectangle{gr.x0 + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
         }
         if (textShader_.id > 0) EndShaderMode();
@@ -2416,30 +2459,21 @@ public:
     }
 
 private:
-    std::unordered_map<uint64_t, Texture2D> fontTex_;   // atlas de fonte por TEX0 (id 0 = nao decodificado)
+    std::unordered_map<uint64_t, Texture2D> fontTex_;   // texturas residentes de drawQuads por TEX0 (id 0 = nao decodificado)
     Shader textShader_{};
     bool textShaderTried_ = false;
 
-    // Atlas da fonte: PSMT8H 512x512 do .RTX da fase (entrada com DBP == TBP0) + paleta CT32 em CBP, como as telas do menu em decodeTex.
-    Texture2D fontTexture(const Ram &, uint64_t tex0) {
+    // Textura residente de um quadrado de tela (decodeResident): atlas da fonte (T8H 512x512 do .RTX da fase), icones do HUD (T4HL).
+    Texture2D residentTexture(uint64_t tex0) {
         const auto it = fontTex_.find(tex0);
         if (it != fontTex_.end()) return it->second;
         Texture2D t{};
-        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
-        const auto pal0 = rtxPal.find(t0.cbp);
-        const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
         std::vector<uint32_t> px;
-        uint32_t pal[256] = {};
-        if (t0.psm == gs::T8H && pal0 != rtxPal.end() && im != rtxImg.end()) {
-            fillPal(pal, pal0->second, true);
-            const uint32_t w = 1u << t0.tw, h = 1u << t0.th;
-            if (gs::decodeUpload(im->second.data(), im->second.size(), w, h, gs::T8, t0.csa, pal, px)) {
-                Image img{};
-                img.data = px.data(); img.width = int(w); img.height = int(h); img.mipmaps = 1;
-                img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-                t = LoadTextureFromImage(img);
-                if (t.id) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
-            }
+        uint32_t pal[256] = {}, w = 0, h = 0;
+        if (decodeResident(gs::Tex0::decode(tex0), px, w, h, false, pal)) {
+            Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            t = LoadTextureFromImage(img);
+            if (t.id) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
         }
         fontTex_[tex0] = t;
         return t;
