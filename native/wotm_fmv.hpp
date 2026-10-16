@@ -568,6 +568,13 @@ public:
     bool hasFrame(Slot s) const { return shown_[s].load(); }
     // O jogador apertou confirmar (X/Espaco, Start/Enter) no filme de tela cheia; o hook de update trata como "pulou"
     bool skipRequested() const { return skip_.load(); }
+    // O mesmo pulo pelo pad que o jogo le (pad emulado, roteiro PS2X_PAD): toque novo de X ou Start, sem a espera de 600 quadros que
+    // o uiMain impoe ao intro_m. Thread do EE (hook de updateMpegMovieDecoding); `buttons` ativo em 0, como no libpad.
+    void padInput(uint16_t buttons) {
+        const uint16_t down = uint16_t(~buttons) & 0x4008u;   // cross 0x4000, start 0x0008
+        if ((down & ~padDown_) && skipAllowed()) skip_.store(true);
+        padDown_ = down;
+    }
     // Pulo so vale 100 ms depois do inicio do filme: um toque longo que pulou o anterior nao pula o seguinte junto
     bool skipAllowed() const {
         const auto t0 = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(startedAt_.load()));
@@ -645,6 +652,7 @@ private:
     std::mutex m_;
     Req req_[2];
     std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{};
+    uint16_t padDown_ = 0;   // X/Start do pad no quadro anterior (so a thread do EE)
     std::atomic<std::chrono::steady_clock::rep> startedAt_{};
     std::atomic<uint32_t> screenW_{256}, screenH_{128};
     long lastFrame_[2] = {-1, -1};
@@ -693,6 +701,7 @@ constexpr uint32_t CurrentMovieScreen = wotm::sym::CurrentMovieScreen;
 constexpr uint32_t partialMovie = wotm::sym::partialMovie;
 constexpr uint32_t originalTexZero = wotm::sym::originalTexZero;   // 16 bytes: TEX0 original do objeto
 constexpr uint32_t movieTexId = 999;               // texInfo[999]: reservado para o filme
+constexpr uint32_t inputPadData = 0x00779D00u;     // D_00779D00 (common/input): buffer do libpad do pad 0, botoes em +2 (ativo em 0)
 }
 
 inline uint32_t rd(const uint8_t *ram, uint32_t a) { uint32_t v; std::memcpy(&v, ram + (a & 0x01FFFFFFu), 4); return v; }
@@ -729,6 +738,7 @@ inline void termAll(uint8_t *ram) {
 inline uint32_t updateMpegMovieDecoding(uint8_t *ram, uint32_t keepGoing) {
     Player &p = Player::get();
     const bool started = rd(ram, ga::isStarted) != 0;
+    p.padInput(uint16_t(rd(ram, ga::inputPadData) >> 16));
     if (!p.skipAllowed()) keepGoing = 1;   // ignora tambem o Start lido pelo jogo (por nivel) nos primeiros 100 ms
     else if (p.skipRequested()) keepGoing = 0;
     if (p.finished(Player::Full) || !p.active(Player::Full) || ((keepGoing & 0xFF) == 0 && started)) {
