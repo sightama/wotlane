@@ -8,6 +8,7 @@ extern bool g_wotmVu1Tap;   // ps2_memory.cpp (checagem VU1 x nativo)
 static void wotmDrawScene(const uint8_t *rdram)
 {
     if (!rdram) return;
+    wotm_live::initWindowAspect();   // janela na proporcao do widescreen (uma vez, antes da abertura)
     {
         // Sem VU1 ninguem conclui o pacote: o jogo espera `objsInPacket | objsInAlphaPacket` zerarem (rtWaitForVu1, e um laco
         // embutido em particleDraw). A apresentacao (60 Hz) faz o papel da conclusao do VU1. No quadro amostrado pela checagem VU1 x

@@ -250,7 +250,44 @@ inline uint32_t levelSignature(const wotm::Ram &ram)
 } // namespace wotm_live
 
 // Desenha a fase lida da RAM (sem VU1/GS) por cima do quadro; devolve falso (e nao desenha) quando nao ha fase carregada.
-namespace wotm_live { static bool g_hideFps = false; }   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
+namespace wotm_live
+{
+static bool g_hideFps = false;   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
+static bool g_force43 = false;   // replay: quadro 4:3, como a imagem de referencia do GS
+
+// Widescreen (Hor+): o FOV vertical e o do jogo e a largura acompanha a proporcao. WOTM_ASPECT=L:A fixa a proporcao (4:3 = tela
+// original, com faixas nas laterais); sem ela a proporcao segue a janela (entre 4:3 e 32:9), que abre em 16:9.
+static float fixedAspect()
+{
+    static const float a = []() {
+        const char *s = std::getenv("WOTM_ASPECT");
+        float w = 0.f, h = 0.f;
+        if (s && std::sscanf(s, "%f:%f", &w, &h) == 2 && w > 0.f && h > 0.f)
+            return std::clamp(w / h, 4.f / 3.f, 32.f / 9.f);
+        return 0.f;
+    }();
+    return a;
+}
+static float viewAspect()
+{
+    if (g_force43)
+        return 4.f / 3.f;
+    if (const float a = fixedAspect())
+        return a;
+    const float sh = static_cast<float>(GetScreenHeight());
+    return sh > 0.f ? std::clamp(static_cast<float>(GetScreenWidth()) / sh, 4.f / 3.f, 32.f / 9.f) : 4.f / 3.f;
+}
+// Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): a janela de 960x720 do runtime vira 720 de altura na proporcao
+static void initWindowAspect()
+{
+    static bool done = false;
+    if (done)
+        return;
+    done = true;
+    const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
+    SetWindowSize(static_cast<int>(std::lround(720.f * a)), 720);
+}
+} // namespace wotm_live
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
@@ -258,6 +295,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
 #endif
     S.scene.screenTexture = []() { return S.rts[S.cur ^ 1].texture.id; };   // texId 0: quadro anterior
+    // quadro nativo: 720 de altura na proporcao da tela (wotm_live::viewAspect); a tela do GS e a faixa 4:3 central
+    const int RH = 720, RW = static_cast<int>(std::lround(RH * wotm_live::viewAspect()));
+    S.scene.wide = static_cast<float>(RW) / (RH * 4.f / 3.f);
     static bool filterInstalled = false;
     if (!filterInstalled)
     {
@@ -323,15 +363,20 @@ static bool wotmDrawNative(const uint8_t *rdram)
     if (!gc.ok)
         return false;
 
-    const int RW = 960, RH = 720;
     S.cur ^= 1;
+    for (RenderTexture2D &r : S.rts)
+        if (r.id != 0 && r.texture.width != RW)   // proporcao mudou (janela redimensionada): refaz os dois
+        {
+            UnloadRenderTexture(r);
+            r = RenderTexture2D{};
+        }
     for (RenderTexture2D &r : S.rts)
         if (r.id == 0)
         {
             r = LoadRenderTexture(RW, RH);
             SetTextureFilter(r.texture, TEXTURE_FILTER_BILINEAR);
             // texId 0 (quadro anterior): o mapa de ambiente de video/CLOAK usa REGION_CLAMP na tela 640x224 do GS, que e a
-            // textura inteira (Scene::envUv)
+            // textura inteira em 4:3 e a faixa central em widescreen (Scene::envUv, gsScreenRect)
             SetTextureWrap(r.texture, TEXTURE_WRAP_CLAMP);
         }
     RenderTexture2D &rt = S.rts[S.cur];
@@ -354,7 +399,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.scene.drawText(ram, static_cast<float>(RW), static_cast<float>(RH));
     EndTextureMode();
 
-    // letterbox 4:3 na janela
+    // quadro na janela, mantendo a proporcao (faixas so se a janela sair de 4:3..32:9 ou com WOTM_ASPECT fixo)
     const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
     const float k = std::min(sw / RW, sh / RH);
     const Rectangle src{0.f, 0.f, static_cast<float>(RW), -static_cast<float>(RH)};
@@ -422,6 +467,7 @@ void wotmFlareCapture(const uint8_t *rdram)
         wotm::Particles::captureFlares(wotm::Ram{rdram, PS2_RAM_SIZE});
 }
 #else
+namespace wotm_live { static void initWindowAspect() {} }
 static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmFlareCapture(const uint8_t *) {}
 #endif

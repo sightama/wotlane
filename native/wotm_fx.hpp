@@ -86,6 +86,15 @@ inline unsigned gsWhiteTexture() {
     return id;
 }
 
+// Tela do GS (640 x 224, exibida em 4:3) dentro do quadro nativo de fbw x fbh: a faixa central com a altura toda. Em widescreen
+// (Hor+: o FOV vertical do jogo fica, a largura cresce) as sobras sao as laterais; o que o jogo poe em pixels do GS (texto, lens
+// flare, quadro anterior) fica nessa faixa.
+struct GsScreenRect { float x0, w, h; };
+inline GsScreenRect gsScreenRect(float fbw, float fbh) {
+    const float w = std::min(fbw, fbh * 4.f / 3.f);
+    return {(fbw - w) * 0.5f, w, fbh};
+}
+
 namespace fxaddr {
 constexpr uint32_t fx = wotm::sym::fx;           // _ParticleType fx[100]
 constexpr uint32_t stride = 0x2EE0;           // sizeof(_ParticleType)
@@ -168,6 +177,7 @@ public:
     using TexFn = std::function<unsigned(uint32_t texId, uint64_t tex0)>;
 
     std::vector<FxSystem> systems;
+    float wide = 1.f;   // largura da tela / largura 4:3 (Scene::wide): teste de visao com os planos laterais da tela larga
 
     // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
     // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
@@ -181,17 +191,36 @@ public:
 
     // Teste de visao do particleDraw: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), a caixa (centro, meia-extensao) contra
     // os 6 planos de worldCtx[0] (fovNormsTP em +0xF0, fovSigns em +0x170; src/common/view.cpp). Falso = o retail nao desenha o sistema.
-    static bool inViewFov(const Ram &ram, uint32_t b) {
+    // wide > 1 (widescreen: largura da tela / largura 4:3): os planos laterais (planes[0][1] e [0][2] do viewSetFov, os de +/- w/2)
+    // saem da worldToScreenMat com a borda em |X - 2048| = 320 * wide pixels do GS; perto, cima, baixo e longe continuam os do jogo.
+    static bool inViewFov(const Ram &ram, uint32_t b, float wide = 1.f) {
         constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]
+        const bool ws = wide > 1.001f;
         float c[3], e[3];
         for (int k = 0; k < 3; ++k) { c[k] = ram.f32(b + 0x2C80 + 4 * k); e[k] = ram.f32(b + 0x2C90 + 4 * k); }
         for (uint32_t i = 0; i < 2; ++i)
             for (uint32_t j = 0; j < 3; ++j) {
+                if (ws && i == 0 && j > 0) continue;
                 const uint32_t n = w + 0xF0 + 64 * i + 16 * j, s = w + 0x170 + 64 * i + 16 * j;
                 float d = 0.f;
                 for (uint32_t k = 0; k < 3; ++k) d += ram.f32(n + 4 * k) * (c[k] + e[k] * ram.f32(s + 4 * k));
                 if (d < ram.f32(w + 0xF0 + 64 * i + 48 + 4 * j)) return false;
             }
+        if (!ws) return true;
+        // X = (M0 . d) / (M3 . d), d = (p - olho, 1). Dentro da borda direita: X - 2048 <= h  <=>  (h M3 - (M0 - 2048 M3)) . d >= 0;
+        // esquerda com o sinal trocado. Para a caixa, o canto mais favoravel: n . (c - olho) + n3 + sum |n_k| e_k >= 0.
+        constexpr uint32_t kW2S = wotm::sym::worldToScreenMat;
+        float M0[4], M3[4], eye[3];
+        for (int k = 0; k < 4; ++k) { M0[k] = ram.f32(kW2S + 4 * k); M3[k] = ram.f32(kW2S + 48 + 4 * k); }
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(w + 0x20 + 4 * k);   // worldCtx[0].eo = -olho
+        const float h = 320.f * wide;
+        for (float sgn : {1.f, -1.f}) {
+            float n[4];
+            for (int k = 0; k < 4; ++k) n[k] = h * M3[k] - sgn * (M0[k] - 2048.f * M3[k]);
+            float d = n[3];
+            for (int k = 0; k < 3; ++k) d += n[k] * (c[k] - eye[k]) + std::fabs(n[k]) * e[k];
+            if (!(d >= 0.f)) return false;
+        }
         return true;
     }
 
@@ -281,7 +310,7 @@ public:
             const bool built = (ram.u32(b + fxoff::infoAttribs) & 0x400) != 0;
             const int minN = s.type == FX_SPRINE ? 2 : 1;
             if (built && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
-                inViewFov(ram, b))
+                inViewFov(ram, b, wide))
                 systems.push_back(s);
             i = next;
         }
@@ -458,11 +487,12 @@ public:
         rlDrawRenderBatchActive();
         const int fbw = rlGetFramebufferWidth(), fbh = rlGetFramebufferHeight();
         if (fbw <= 0 || fbh <= 0) return;
-        const float sx = float(fbw) / f.vw, sy = float(fbh) / f.vh;   // px do GS -> px do nativo
+        const GsScreenRect gr = gsScreenRect(float(fbw), float(fbh));   // px do GS -> px do nativo (faixa 4:3 central em widescreen)
+        const float sx = gr.w / f.vw, sy = gr.h / f.vh, x0 = gr.x0;
         const double zn = rlGetCullDistanceNear(), zf = rlGetCullDistanceFar();
         // Z do GS (24 bits) que o retail leria no pixel (gx, gy) da tela do GS: a + b / W da profundidade nativa; vazio (fundo) = 0
         auto gsZ = [&](int gx, int gy) -> uint32_t {
-            const int px = std::clamp(int((float(gx) + 0.5f) * sx), 0, fbw - 1), py = std::clamp(int((float(gy) + 0.5f) * sy), 0, fbh - 1);
+            const int px = std::clamp(int(x0 + (float(gx) + 0.5f) * sx), 0, fbw - 1), py = std::clamp(int((float(gy) + 0.5f) * sy), 0, fbh - 1);
             float d = 1.f;
             glReadPixels(px, fbh - 1 - py, 1, 1, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, &d);
             if (d >= 1.f) return 0u;
@@ -535,7 +565,7 @@ public:
                 rlBegin(RL_QUADS);
                 rlSetTexture(tex ? tex : blobTexture());
             }
-            const float xa = (q.xa - ox) * sx, ya = (q.ya - oy) * sy, xb = (q.xb - ox) * sx, yb = (q.yb - oy) * sy;
+            const float xa = x0 + (q.xa - ox) * sx, ya = (q.ya - oy) * sy, xb = x0 + (q.xb - ox) * sx, yb = (q.yb - oy) * sy;
             rlColor4ub(q.rgb[0], q.rgb[1], q.rgb[2], 0x80);
             rlTexCoord2f(q.u0, q.v0); rlVertex2f(xa, ya);
             rlTexCoord2f(q.u0, q.v1); rlVertex2f(xa, yb);

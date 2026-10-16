@@ -573,6 +573,8 @@ inline GameCamera lerpCamera(const GameCamera &a, const GameCamera &b, float t) 
 
 class Scene {
 public:
+    // Largura do quadro nativo / largura 4:3 da mesma altura (widescreen Hor+; 1 = tela original). Preenche: wotm_live.inc
+    float wide = 1.f;
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
@@ -1353,6 +1355,7 @@ public:
         }
         csList(ram, addr::csActiveList);
         csList(ram, addr::csHPActiveList);
+        fx.wide = wide;
         fx.collect(ram);          // particulas com cor/textura/mistura do retail (wotm_fx.hpp); destroços (13) ficam com collectParticles
         collectShadows(ram);
         collectParticles(ram);
@@ -1476,7 +1479,7 @@ public:
             const uint32_t b = kFx + i * kStride;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t type = ram.u32(b + 0x2E90) & 0xFF;
-            if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
+            if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b, wide)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));
@@ -2359,7 +2362,8 @@ public:
                             rlColor4ub(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
                         }
                         const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
-                        if (tid && tid == screenId_) rlTexCoord2f(tu * (1024.f / 640.f), 1.f - tv * (256.f / 224.f));   // texels do GS na tela 640x224
+                        // texels do GS na tela 640x224, que em widescreen e a faixa 4:3 central do quadro anterior (gsScreenRect)
+                        if (tid && tid == screenId_) rlTexCoord2f(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
                         else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
                         shaderNormal(fogBurn, v.fge, gsV, curBlend != 0);   // neblina e modulacao do GS no shader do draw
@@ -2441,7 +2445,8 @@ public:
         text.swap(q);
     }
 
-    // Desenha o texto em coordenadas da tela do jogo (640 x 224) escaladas para `rw` x `rh` (fora do modo 3D, por cima da cena).
+    // Desenha o texto em coordenadas da tela do jogo (640 x 224) escaladas para a faixa 4:3 central de `rw` x `rh` (fora do modo 3D,
+    // por cima da cena).
     void drawText(const Ram &ram, float rw, float rh) {
         if (text.empty()) return;
         if (!textShaderTried_) {
@@ -2455,7 +2460,8 @@ public:
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; finalColor = vec4(min(t.rgb * 2.0, 1.0), t.a); }\n";
             textShader_ = LoadShaderFromMemory(nullptr, fs);
         }
-        const float sx = rw / 640.f, sy = rh / 224.f;
+        const GsScreenRect gr = gsScreenRect(rw, rh);
+        const float sx = gr.w / 640.f, sy = gr.h / 224.f;
         if (textShader_.id > 0) BeginShaderMode(textShader_);
         for (const TextQuad &t : text) {
             const Texture2D tex = fontTexture(ram, t.tex0);
@@ -2464,7 +2470,7 @@ public:
             const int k = gain ? 1 : 2;
             const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
             DrawTexturePro(tex, Rectangle{t.u0, t.v0, t.u1 - t.u0, t.v1 - t.v0},
-                           Rectangle{t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
+                           Rectangle{gr.x0 + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
         }
         if (textShader_.id > 0) EndShaderMode();
     }
