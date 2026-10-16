@@ -95,7 +95,6 @@ extern _texbins texAllBins[15];
 extern unsigned texLastUsedCnt;
 extern unsigned lastVramTexAddr;
 extern unsigned nextVramAddr;
-__asm__("#SNFIX_SMALL nextVramAddr");
 extern unsigned startVramAddr;
 extern unsigned tempVramTexAddr;
 extern int iBookmark;

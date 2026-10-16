@@ -26,7 +26,9 @@ for ln in lines:
 out += [f'{t} -DNON_MATCHING' for t in sorted(set(spec) - seen)]
 open('config/tu_flags.txt', 'w').write('\n'.join(out) + '\n')
 
-pat = re.compile(r'#ifdef NON_MATCHING\n((?:/\*.*?\*/\n)?.*?#else\nINCLUDE_ASM\("[^"]+", (\S+)\);\n#endif)', re.S)
+# the body may not cross an #endif or another #ifdef NON_MATCHING: a helper block without #else (static inlines) would otherwise be
+# swallowed by the next function's match and disabled with it
+pat = re.compile(r'#ifdef NON_MATCHING\n((?:(?!#endif\n|#ifdef NON_MATCHING\n).)*?#else\nINCLUDE_ASM\("[^"]+", (\S+)\);\n#endif)', re.S)
 for tu, fl in spec.items():
     if not fl:
         continue

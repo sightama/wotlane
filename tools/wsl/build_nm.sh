@@ -16,9 +16,14 @@ name=${1:-halfcpp}
 src=$(cd "$(dirname "$0")/../.." && pwd)
 dst=$HOME/wotm_nm_$name
 mkdir -p "$dst"
-(cd "$src" && tar cf - --exclude=./ISO --exclude=./.git --exclude='./disc/[0-9A-Z]*' --exclude=./build .) | (cd "$dst" && tar xf -)
+# .ninja_log/.ninja_deps ficam os da copia: com os do repo, o ninja compara os comandos com os do build matching e uma TU que sai
+# da selecao (perde o -DNON_MATCHING) mantem o .o velho com as equivalentes
+(cd "$src" && tar cf - --exclude=./ISO --exclude=./.git --exclude='./disc/[0-9A-Z]*' --exclude=./build \
+    --exclude=./.ninja_log --exclude=./.ninja_deps .) | (cd "$dst" && tar xf -)
 cd "$dst"
 export PATH=$HOME/.venvs/wotm/bin:$PATH
+# code pointers that splat wrote as raw .short pairs (pointer-to-member tables) must follow their function here (tools/nm_fix_data.py)
+python3 "$src/tools/nm_fix_data.py"
 # CrushLevel's NM code brings its own .sdata strings; -G0 keeps them out of the gp-relative area (which has no free room)
 sed -i 's/\r$//' config/tu_flags.txt
 echo 'game/CrushLevel -G0' >> config/tu_flags.txt
@@ -34,9 +39,13 @@ else
     export WOTM_EXTRA_CFLAGS=-DNON_MATCHING
 fi
 python configure.py > /dev/null
-ninja build/SCUS_971.97.elf -j8 2>&1 | grep -v '^\[' | grep -v warning | head -30 || true
+# the plain link may fail (equivalents that grew overflow the retail layout; gen_nm_ld.py links on its own), but a failed compile
+# must stop here: the link below would silently take the stale .o of the previous selection
+ninja build/SCUS_971.97.elf -j8 > ninja_nm.log 2>&1 || true
+grep -v '^\[' ninja_nm.log | grep -v warning | head -30
+if grep -q '^FAILED: .*\.o' ninja_nm.log; then echo "build_nm: compile failed ($dst/ninja_nm.log)"; exit 1; fi
 python3 tools/gen_nm_ld.py "$src" "$dst"
-mips-linux-gnu-ld -EL --no-check-sections -T SCUS_971.97.nm.ld -T undefined_syms_auto.txt -T undefined_funcs_auto.txt \
+mips-linux-gnu-ld -EL --no-check-sections -T SCUS_971.97.nm.ld -T undefined_syms_nm.txt -T undefined_funcs_nm.txt \
     -T linker_script_extra.ld -Map nm.map -o build/SCUS_971.97.nm.elf 2>&1 | grep -v RWX || true
 mkdir -p "$src/build/pcsx2_test"
 # NM_HEAP=0x8E0000 fixes the heap start for every variant (and for the control), so RAM dumps of two builds can be compared word by word

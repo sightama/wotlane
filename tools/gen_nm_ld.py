@@ -9,8 +9,9 @@ had already dropped the original alignments). Here:
   1. both builds are linked with start/end markers around each piece,
   2. a piece that grew in the NM build moves to an area after the end of the image,
   3. every other piece is pinned to `. = <retail address>`.
-Writes <scratch>/SCUS_971.97.nm.ld and prints the pieces that moved.
+Writes <scratch>/SCUS_971.97.nm.ld and prints the pieces that moved; also <scratch>/undefined_{funcs,syms}_nm.txt (see the end).
 """
+import bisect
 import re
 import subprocess
 import sys
@@ -113,6 +114,34 @@ for ln in lines:
         continue
     out.append(ln)
 (scratch / 'SCUS_971.97.nm.ld').write_text('\n'.join(out))
+
+# Only the start of each piece is pinned: an equivalent of another size shifts the rest of its piece. The undefined_*_auto.txt entries
+# are absolute addresses, and a few point inside a function (splat names a jump into the middle of handwritten asm "func_XXXXXXXX":
+# hierTraverseAsm's `j func_00207668`, its loop head). Left absolute, they keep the retail address while the code moved, and the jump
+# lands elsewhere (the boot froze in hierTraverseAsm once texmActivateTexture, before it in common/texm, came out 8 bytes smaller).
+# The NM link gets copies where such an entry is relative to the retail symbol that contains it.
+sized = []
+for ln in (repo / 'symbol_addrs.txt').read_text(errors='replace').splitlines():
+    m = re.match(r'\s*(\S+)\s*=\s*0x([0-9A-Fa-f]+);.*size:0x([0-9A-Fa-f]+)', ln)
+    if m:
+        sized.append((int(m.group(2), 16), int(m.group(3), 16), m.group(1)))
+sized.sort()
+starts = [s[0] for s in sized]
+for name in ('undefined_funcs_auto.txt', 'undefined_syms_auto.txt'):
+    rel = []
+    lines_out = []
+    for ln in (scratch / name).read_text().splitlines():
+        m = re.match(r'\s*(\S+)\s*=\s*0x([0-9A-Fa-f]+);', ln)
+        if m:
+            addr = int(m.group(2), 16)
+            i = bisect.bisect_right(starts, addr) - 1
+            if i >= 0 and sized[i][0] < addr < sized[i][0] + sized[i][1]:
+                ln = f'{m.group(1)} = {sized[i][2]} + 0x{addr - sized[i][0]:X};'
+                rel.append(ln)
+        lines_out.append(ln)
+    (scratch / name.replace('_auto', '_nm')).write_text('\n'.join(lines_out) + '\n')
+    for r in rel:
+        print(f'  {name}: {r}')
 print(f'{n} pieces, {len(grown)} grown and moved behind the image:')
 for k, (a, b) in sorted(grown.items()):
     m = pieces[k]

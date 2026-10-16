@@ -2,6 +2,9 @@
 // wotm::sym::<nome> = endereco de um dado (global, tabela, objeto); wotm::fn::<nome> = endereco de uma funcao (hooks).
 // Os nomes sao os do ELF (mangling do gcc 2.95), com '$' e '.' trocados por '_'.
 #pragma once
+#if __has_include("wotm_syms_nm.h")
+#include "wotm_syms_nm.h"
+#else
 #include <cstdint>
 
 namespace wotm {
@@ -7293,3 +7296,4 @@ constexpr uint32_t sn_reg_frame = 0x00250FFC;   // size 0x14
 constexpr uint32_t sn_dereg_frame = 0x00251014;   // size 0xC
 } // namespace fn
 } // namespace wotm
+#endif

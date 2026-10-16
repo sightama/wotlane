@@ -3,7 +3,11 @@
 
   python tools/native_syms.py --gen            grava native/wotm_syms.h (wotm::sym::<dado>, wotm::fn::<funcao>) a partir de
                                                symbol_addrs.txt (+ symbol_addrs_manual.txt, se existir)
-  python tools/native_syms.py --audit          lista os literais hex de native/ que batem com um simbolo (exato), caem dentro de um
+  python tools/native_syms.py --nm <nm.txt> <out.h>
+                                               mesmo header, com os enderecos de outro ELF (saida de `nm` dele): o runtime cobaia
+                                               (build_dev_nm) o recebe como wotm_syms_nm.h, que o wotm_syms.h usa no lugar dos
+                                               enderecos retail quando esta no caminho de include
+  python tools/native_syms.py --audit         lista os literais hex de native/ que batem com um simbolo (exato), caem dentro de um
                                                (offset) ou nao casam; nao altera nada
   python tools/native_syms.py --apply [arq..]  troca, nos arquivos dados (padrao: todos de native/), cada literal que e exatamente o
                                                endereco de um simbolo por wotm::sym::<nome> / wotm::fn::<nome>; os de offset ficam
@@ -74,10 +78,14 @@ def unique_idents(symbols):
     return out
 
 
-def gen(symbols):
+def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do ELF retail)", remap=None):
+    """remap = {(name, addr retail): addr no outro ELF}: mesmos identificadores do header retail, enderecos do outro ELF."""
     idents = unique_idents(symbols)
+    if remap is not None:
+        idents = {(n, remap.get((n, a), a)): idents[(n, a)] for n, a, _, _ in symbols}
+        symbols = [(n, remap.get((n, a), a), f, s) for n, a, f, s in symbols]
     lines = [
-        "// Gerado por tools/native_syms.py a partir de symbol_addrs.txt (tabela de simbolos do ELF retail). Nao edite a mao.",
+        "// Gerado por tools/native_syms.py a partir de %s. Nao edite a mao." % source,
         "// wotm::sym::<nome> = endereco de um dado (global, tabela, objeto); wotm::fn::<nome> = endereco de uma funcao (hooks).",
         "// Os nomes sao os do ELF (mangling do gcc 2.95), com '$' e '.' trocados por '_'.",
         "#pragma once",
@@ -86,6 +94,11 @@ def gen(symbols):
         "namespace wotm {",
         "namespace sym {",
     ]
+    if remap is None:
+        # o runtime cobaia (build_dev_nm) traz no caminho de include um wotm_syms_nm.h com os enderecos do ELF nmall
+        lines[4:4] = ["#if __has_include(\"wotm_syms_nm.h\")", "#include \"wotm_syms_nm.h\"", "#else"]
+    else:
+        lines.insert(4, "#define WOTM_SYMS_NM 1   // runtime cobaia: enderecos do ELF nmall")
     for name, addr, is_func, size in symbols:
         if is_func:
             continue
@@ -95,11 +108,36 @@ def gen(symbols):
         if not is_func:
             continue
         lines.append("constexpr uint32_t %s = 0x%08X;%s" % (idents[(name, addr)], addr, ("   // size 0x%X" % size) if size else ""))
-    lines += ["} // namespace fn", "} // namespace wotm", ""]
-    with open(HEADER, "w", encoding="utf-8", newline="\n") as f:
+    lines += ["} // namespace fn", "} // namespace wotm"]
+    lines += ["#endif", ""] if remap is None else [""]
+    with open(header, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
     nd = sum(1 for s in symbols if not s[2])
-    print("%s: %d dados, %d funcoes" % (os.path.relpath(HEADER, ROOT), nd, len(symbols) - nd))
+    print("%s: %d dados, %d funcoes" % (header, nd, len(symbols) - nd))
+
+
+def nm_remap(symbols, nm_txt):
+    """Enderecos de outro ELF (saida do nm dele) por nome. Nome ausente ou ambiguo (estatico repetido) fica com o retail."""
+    where = {}
+    with open(nm_txt, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            p = line.split()
+            if len(p) == 3:
+                where.setdefault(p[2], set()).add(int(p[0], 16))
+    remap, moved, missing, ambiguous = {}, 0, 0, 0
+    for name, addr, _, _ in symbols:
+        got = where.get(name)
+        if not got:
+            missing += 1
+        elif addr in got:
+            continue
+        elif len(got) > 1:
+            ambiguous += 1
+        else:
+            remap[(name, addr)] = next(iter(got))
+            moved += 1
+    print("%d simbolos mudaram de endereco, %d ausentes e %d ambiguos ficam com o retail" % (moved, missing, ambiguous))
+    return remap
 
 
 def native_files():
@@ -220,6 +258,12 @@ def main(argv):
     if not symbols:
         print("symbol_addrs.txt vazio ou ausente (gere com configure.py --split)")
         return 1
+    if "--nm" in argv:
+        i = argv.index("--nm")
+        nm_txt, out = argv[i + 1], argv[i + 2]
+        gen(symbols, out, "symbol_addrs.txt com os enderecos de %s (ELF nmall, runtime cobaia)" % os.path.basename(nm_txt),
+            nm_remap(symbols, nm_txt))
+        return 0
     if "--gen" in argv:
         gen(symbols)
     files = [a for a in argv if not a.startswith("--")] or native_files()

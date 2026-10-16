@@ -32,7 +32,7 @@ index e5f63a9..2a93dcf 100644
          m_impl->eeCycleCarry = total % 8u;
          if (iopCycles)
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..e0f1a20 100644
+index 589d768..d7e06c9 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -43,7 +43,51 @@ index 589d768..e0f1a20 100644
      src/lib/games_database.cpp
  )
  
-@@ -608,3 +609,29 @@ endif()
+@@ -437,8 +438,19 @@ target_sources(ps2_runtime PRIVATE
+     ${KERNEL_SRC_FILES}
+ )
+ 
++# PS2X_RUNNER_DIR: pasta com o jogo traduzido (register_functions.cpp, um .cpp por funcao e os dois ps2_recompiled_*.h). Padrao
++# src/runner (com os headers copiados para include/). WoTM: -DPS2X_RUNNER_DIR=<repo>/recomp/nm compila o runtime "cobaia", traduzido
++# do ELF com as funcoes reescritas no lugar das originais (tools/wsl/recomp_nm.sh), para comparar comportamento com o retail.
++set(PS2X_RUNNER_DIR "" CACHE PATH "Generated game code directory (default: src/runner)")
++if(PS2X_RUNNER_DIR)
++    set(PS2X_RUNNER_SRC_DIR "${PS2X_RUNNER_DIR}")
++    set(PS2X_RUNNER_HDR_DIR "${PS2X_RUNNER_DIR}")
++else()
++    set(PS2X_RUNNER_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/runner")
++    set(PS2X_RUNNER_HDR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include")
++endif()
+ file(GLOB RUNNER_SRC_FILES CONFIGURE_DEPENDS
+-    "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/*.cpp"
++    "${PS2X_RUNNER_SRC_DIR}/*.cpp"
+ )
+ 
+ set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
+@@ -476,8 +488,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
+     )
+ 
+     foreach(PS2X_RUNNER_GENERATED_HEADER IN ITEMS
+-        "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_functions.h"
+-        "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_recompiled_stubs.h")
++        "${PS2X_RUNNER_HDR_DIR}/ps2_recompiled_functions.h"
++        "${PS2X_RUNNER_HDR_DIR}/ps2_recompiled_stubs.h")
+         if(EXISTS "${PS2X_RUNNER_GENERATED_HEADER}")
+             list(APPEND PS2X_RUNNER_PCH_HEADERS "${PS2X_RUNNER_GENERATED_HEADER}")
+         endif()
+@@ -506,6 +518,11 @@ target_include_directories(ps2_runtime PUBLIC
+     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
+ )
+ 
++if(PS2X_RUNNER_DIR)   # os ps2_recompiled_*.h do jogo traduzido vem da mesma pasta, antes dos de include/ (que sao os do retail)
++    target_include_directories(ps2_runtime BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
++    target_include_directories(ps2EntryRunner BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
++endif()
++
+ target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+ target_link_libraries(ps2EntryRunner
+     PRIVATE
+@@ -608,3 +625,31 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -57,6 +101,8 @@ index 589d768..e0f1a20 100644
 +    message(FATAL_ERROR "WOTM_NATIVE_DIR nao definido: aponte para a pasta native/ do repo WoTM (-DWOTM_NATIVE_DIR=<repo>/native)")
 +endif()
 +target_include_directories(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}" "${WOTM_NATIVE_DIR}/runtime" "${CMAKE_BINARY_DIR}/wotm_gen")
++# main.cpp instala hooks por nome (wotm_syms.h; no runtime cobaia, o wotm_syms_nm.h de wotm_gen troca os enderecos pelos do ELF nmall)
++target_include_directories(ps2EntryRunner PRIVATE "${WOTM_NATIVE_DIR}" "${CMAKE_BINARY_DIR}/wotm_gen")
 +target_sources(ps2_runtime PRIVATE
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_overrides.cpp"
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"
@@ -2384,21 +2430,22 @@ index bd75bba..9d093f8 100644
          {
              reportReservedInstruction(decoded.upperUsage.reserved, decoded.upperUsage.reserved ? decoded.upper : decoded.lower);
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..5a153e9 100644
+index 563bcbd..9231c31 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,12 +164,72 @@ namespace
+@@ -164,12 +164,73 @@ namespace
      }
  }
  
 +#include "ps2_runtime_macros.h"
++#include "wotm_syms.h"   // wotm::sym / wotm::fn (native/; no runtime cobaia, enderecos do ELF nmall)
 +
 +// Hook de teste: pula os filmes (decoder IPU do jogo ainda nao tem backend).
 +// Faz o que o fim natural faria: movieRequested=1, movieIsCompletelyFinished=1.
 +static void hook_skipMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
-+    WRITE32(0x006F8840u, 1u);
-+    WRITE32(0x006F8844u, 1u);
++    WRITE32(wotm::sym::movieRequested, 1u);
++    WRITE32(wotm::sym::movieIsCompletelyFinished, 1u);
 +}
 +
 +// Corte na fronteira da engine (sem VU1/GS emulado): o VU1 do runtime executa microcodigo invalido e o DMA do VIF1
@@ -2419,8 +2466,8 @@ index 563bcbd..5a153e9 100644
 +        g_origFlushObjQ(rdram, ctx, runtime);
 +        return;
 +    }
-+    WRITE32(0x006F87A0u, 0u); // objsInPacket
-+    WRITE32(0x006F87A4u, 0u); // objsInAlphaPacket
++    WRITE32(wotm::sym::objsInPacket, 0u); // objsInPacket
++    WRITE32(wotm::sym::objsInAlphaPacket, 0u); // objsInAlphaPacket
 +}
 +// Relogio do jogo. O jogo mede a duracao da logica de cada quadro pelo timer 1 (fields = ticks / 9619; updateRate =
 +// 60 / fields; a fisica integra com dt = 1 / updateRate). O timer anda pelo relogio virtual do EE, e o particleDraw tem
@@ -2437,13 +2484,13 @@ index 563bcbd..5a153e9 100644
 +    // Quadro amostrado pela checagem VU1 x nativo: o fim do hier deixa o ultimo pacote (a OT de alfa com os objetos que a travessia
 +    // guarda na hierAlpList: OBJECT 0x8000, e 0x4000 durante o fade de LOD) para o hierFlushObjQ da interrupcao do DMA do VIF1, que
 +    // no PS2 chega antes daqui. Zerar os contadores sem disparar perdia a OT, e esses objetos saiam como "so o nativo desenha".
-+    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(0x006F87A0u) || READ32(0x006F87A4u)))
++    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(wotm::sym::objsInPacket) || READ32(wotm::sym::objsInAlphaPacket)))
 +    {
 +        R5900Context temp = *ctx;
 +        g_origFlushObjQ(rdram, &temp, runtime);
 +    }
-+    WRITE32(0x006F87A0u, 0u);
-+    WRITE32(0x006F87A4u, 0u);
++    WRITE32(wotm::sym::objsInPacket, 0u);
++    WRITE32(wotm::sym::objsInAlphaPacket, 0u);
 +    g_particleDraw(rdram, ctx, runtime);
 +    wotmFlareCapture(rdram);   // lens flare projetado e testado (wotm_live.inc)
 +}
@@ -2460,7 +2507,7 @@ index 563bcbd..5a153e9 100644
  
      try
      {
-@@ -220,12 +280,77 @@ int main(int argc, char *argv[])
+@@ -220,12 +281,83 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -2481,15 +2528,15 @@ index 563bcbd..5a153e9 100644
 +        wotmBoot("instalando hooks (filmes, som nativo)");
 +        if (std::getenv("PS2X_SKIP_MOVIES"))
 +        {
-+            runtime.registerFunction(0x0020F4B0u, hostLeaf<hook_skipMovie>); // playMpegMovieWithDB
-+            runtime.registerFunction(0x0020F440u, hostLeaf<hook_skipMovie>); // playMpegMovie
-+            runtime.registerFunction(0x0020F540u, hostLeaf<hook_skipMovie>); // updateMpegMovieDecoding (corpo da thread)
++            runtime.registerFunction(wotm::fn::playMpegMovieWithDB__FPcb, hostLeaf<hook_skipMovie>); // playMpegMovieWithDB
++            runtime.registerFunction(wotm::fn::playMpegMovie__FPc, hostLeaf<hook_skipMovie>); // playMpegMovie
++            runtime.registerFunction(wotm::fn::updateMpegMovieDecoding__Fb, hostLeaf<hook_skipMovie>); // updateMpegMovieDecoding (corpo da thread)
 +            std::cout << "[hook] filmes pulados" << std::endl;
 +        }
 +        if (std::getenv("PS2X_SKIP_CMOVIE")) // caminho CMovie (menu): Play vira no-op, Update devolve 1
 +        {
-+            runtime.registerFunction(0x00210090u, hostLeaf<hook_noop>); // CMovie::Play
-+            runtime.registerFunction(0x00210408u, hostLeaf<hook_ret1>); // CMovie::Update
++            runtime.registerFunction(wotm::fn::Play__6CMoviebPc, hostLeaf<hook_noop>); // CMovie::Play
++            runtime.registerFunction(wotm::fn::Update__6CMovieb, hostLeaf<hook_ret1>); // CMovie::Update
 +            std::cout << "[hook] CMovie::Play/Update pulados" << std::endl;
 +        }
 +        if (std::getenv("PS2X_FMV")) // filmes nativos (native/wotm_fmv.hpp, em wotm_live.inc): substitui os hooks de pular filme acima
@@ -2517,18 +2564,24 @@ index 563bcbd..5a153e9 100644
 +        }
 +        if (const char *nv = std::getenv("PS2X_NO_VU1"))
 +        {
-+            runtime.registerFunction(0x00188FD8u, hostLeaf<hook_noop>);        // rtWaitForVu1
++            runtime.registerFunction(wotm::fn::rtWaitForVu1__Fv, hostLeaf<hook_noop>);        // rtWaitForVu1
 +            if (nv[0] != '2') // PS2X_NO_VU1=2: o DMA do quadro segue (PS2X_VIF1_UPLOADS leva as texturas/CLUTs ao GS) sem esperar o VU1
 +            {
-+                g_origFlushObjQ = runtime.lookupFunction(0x00209D88u);
-+                runtime.registerFunction(0x00209D88u, hostLeaf<hook_flushObjQ>);   // hierFlushObjQ (nao dispara o DMA do VIF1)
++                g_origFlushObjQ = runtime.lookupFunction(wotm::fn::hierFlushObjQ__Fv);
++                runtime.registerFunction(wotm::fn::hierFlushObjQ__Fv, hostLeaf<hook_flushObjQ>);   // hierFlushObjQ (nao dispara o DMA do VIF1)
 +                if (!std::getenv("WOTM_OLDCLOCK"))   // relogio do jogo (comentario acima)
 +                {
-+                    g_wotmFreeSpinPc = 0x0021B8A0u;
-+                    g_wotmFreeSpinZero[0] = 0x006F87A0u;   // objsInPacket
-+                    g_wotmFreeSpinZero[1] = 0x006F87A4u;   // objsInAlphaPacket
-+                    if ((g_particleDraw = runtime.lookupFunction(0x0021B378u)))
-+                        runtime.registerFunction(0x0021B378u, hook_particleDraw);
++#ifdef WOTM_SYMS_NM
++                    // cobaia: o laco de espera do particleDraw reescrito nao tem endereco conhecido. Pc impar nunca casa; o laco nem
++                    // gira (os contadores sao zerados na entrada) e o valor diferente de 0 mantem o relogio do jogo
++                    g_wotmFreeSpinPc = 0x1u;
++#else
++                    g_wotmFreeSpinPc = 0x0021B8A0u;   // laco de espera dentro do particleDraw (sem simbolo)
++#endif
++                    g_wotmFreeSpinZero[0] = wotm::sym::objsInPacket;   // objsInPacket
++                    g_wotmFreeSpinZero[1] = wotm::sym::objsInAlphaPacket;   // objsInAlphaPacket
++                    if ((g_particleDraw = runtime.lookupFunction(wotm::fn::particleDraw__Fi)))
++                        runtime.registerFunction(wotm::fn::particleDraw__Fi, hook_particleDraw);
 +                }
 +            }
 +            std::cout << "[hook] VU1/DMA do VIF1 cortados (rtWaitForVu1, hierFlushObjQ"

@@ -37,6 +37,13 @@ if ($Bat -eq 'build_dev_nm.bat') {
 $gen = Join-Path $PSScriptRoot 'vu0native.py'
 $genDir = Join-Path $Dir ([IO.Path]::GetFileNameWithoutExtension($Bat)) | Join-Path -ChildPath 'wotm_gen'
 New-Item -ItemType Directory -Force $genDir | Out-Null
+# cobaia: hooks e leituras da camada nativa com os enderecos do ELF nmall (gerado pelo recomp_nm.sh; native/wotm_syms.h o usa se
+# estiver no caminho de include, e so o wotm_gen do build_dev_nm o tem)
+if ($Bat -eq 'build_dev_nm.bat') {
+    $nmSyms = Join-Path $repo 'recomp\nm\wotm_syms_nm.h'
+    if (-not (Test-Path $nmSyms)) { throw "falta $nmSyms (rode de novo sh tools/wsl/recomp_nm.sh)" }
+    Copy-Item $nmSyms $genDir -Force
+}
 $inc = Join-Path $genDir 'wotm_vu0_native.gen.inc'
 $elf = Join-Path $PSScriptRoot '..\disc\SCUS_971.97'
 if ((Test-Path $elf) -and (-not (Test-Path $inc) -or (Get-Item $inc).LastWriteTime -lt (Get-Item $gen).LastWriteTime)) {
