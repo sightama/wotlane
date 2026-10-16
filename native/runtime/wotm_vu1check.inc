@@ -2128,6 +2128,7 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
     // na janela do quadro anterior; o que a janela deste traz e o do seguinte, com os mesmos XYOFFSET/SCISSOR/ZBUF. Para a imagem de
     // referencia, os 'G' do quadro sao aplicados ao GS antes das cadeias (lidos adiantado do arquivo) e de novo na ordem gravada.
     std::vector<std::vector<uint8_t>> gifs;
+    std::vector<uint8_t> vramRec(PS2_GS_VRAM_SIZE);   // VRAM como gravada no arquivo (os deltas do 'a' valem sobre ela, nao sobre a do replay)
     std::vector<uint8_t> frameRam;   // RAM na entrada do quadro (imagem nativa; a RAM de agora e a do fim do quadro)
 #ifdef _WIN32
     auto tell = [&]() { return _ftelli64(f); };
@@ -2220,8 +2221,12 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
         if (type == 'A' || type == 'a') {
             if (inFrame) { ok = false; break; }
             ok = get(&frame, 4) && getState();
-            if (ok) ok = type == 'A' ? (get(ram, PS2_RAM_SIZE) && get(mem.getGSVRAM(), PS2_GS_VRAM_SIZE))
-                                     : (applyDelta(ram, PS2_RAM_SIZE) && applyDelta(mem.getGSVRAM(), PS2_GS_VRAM_SIZE));
+            // A VRAM gravada fica a parte (vramRec): o delta do 'a' so traz as paginas que o jogo mudou, e na captura (sem GS) o
+            // framebuffer e o Z quase nao mudam; aplicado direto na VRAM do GS, deixava nelas o que o replay desenhou no quadro anterior,
+            // e o Z velho escondia o mundo (imagem de referencia preta a partir do 2o quadro do arquivo; com --frame saia certa).
+            if (ok) ok = type == 'A' ? (get(ram, PS2_RAM_SIZE) && get(vramRec.data(), PS2_GS_VRAM_SIZE))
+                                     : (applyDelta(ram, PS2_RAM_SIZE) && applyDelta(vramRec.data(), PS2_GS_VRAM_SIZE));
+            if (ok) std::memcpy(mem.getGSVRAM(), vramRec.data(), PS2_GS_VRAM_SIZE);
             if (!ok) break;
             inFrame = true;
             ++framesSeen;
@@ -2284,7 +2289,7 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
                     } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
                     else pos += nloop * 16;
                 }
-                std::fprintf(stderr, "[vu1cmp] G %u bytes:%s\n", bytes, s.c_str());
+                std::fprintf(stderr, "[vu1cmp] G %u bytes (depois de %u cadeias):%s\n", bytes, chains, s.c_str());
             }
             if (!skip) path3Tap(data.data(), bytes);   // inventario (sem origem na RAM: o arquivo guarda so os bytes)
             // Reaplicados na ordem gravada (alem do aquecimento) so os pacotes sem vertices (ambiente de desenho: XYOFFSET, SCISSOR,
