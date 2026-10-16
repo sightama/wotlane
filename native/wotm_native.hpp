@@ -256,9 +256,7 @@ inline uint32_t decodePacket(const Ram &ram, uint32_t pp, MeshData &md, bool fir
             ++md.secTot;
             if (nloop != idx.size() || rgba.size() < n || uv.size() < n) { ++md.secBad; if (md.secBadEx < 4) { ++md.secBadEx; std::fprintf(stderr, "   secao: nloop=%u idx=%zu rgba=%zu uv=%zu" "%c", nloop, idx.size(), rgba.size(), uv.size(), 10); } }
             std::vector<bool> restart(n + 1, false);
-            static const int adcMode = std::getenv("WOTM_ADCMODE") ? std::atoi(std::getenv("WOTM_ADCMODE")) : 0;   // diagnostico: 1 = ignora ADC
-            static const int adcShift = std::getenv("WOTM_ADCSHIFT") ? std::atoi(std::getenv("WOTM_ADCSHIFT")) : 0;   // diagnostico
-            if (adcMode != 1) for (uint32_t k : adc) { const int kk = int(k) + adcShift; if (kk >= 0 && uint32_t(kk) < n) restart[uint32_t(kk)] = true; }
+            for (uint32_t k : adc) if (k < n) restart[k] = true;
             { static const bool hs = std::getenv("WOTM_HDRSEL") != nullptr; if (hs) std::fprintf(stderr, "[hdrsel] tex=%u sel=%u n=%u\n", md.texId, hdrSel, n); }   // diagnostico
             std::vector<Vtx> strip;
             // ADC (bit de GIF no vertice k): o GS NAO desenha o triangulo que termina em k, mas a tira continua (a convencao de
@@ -733,12 +731,10 @@ public:
 
     // Preenche a paleta de 256 entradas. O GS le CLUTs de 256 cores em CSM1 com os bits 3 e 4 do indice trocados (entradas 8-15 e
     // 16-23 de cada grupo de 32); o .RTX guarda o upload cru, entao a leitura tem que aplicar a troca (sem ela: granulado em degrades).
-    // WOTM_PALNOSWAP=1 desliga (diagnostico).
     // rawAlpha: alfa cru do GS (0x80 = 1,0), para o que o Scene::draw mistura como o GS; senao, 0..255 com 0x80 saturado (fixAlpha).
     static void fillPal(uint32_t pal[256], const std::vector<uint32_t> &src, bool is8bit, bool rawAlpha = false) {
-        static const bool swap = std::getenv("WOTM_PALNOSWAP") == nullptr;
         for (size_t i = 0; i < 256 && i < src.size(); ++i) {
-            const size_t k = (swap && is8bit && src.size() >= 256) ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
+            const size_t k = (is8bit && src.size() >= 256) ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
             pal[i] = rawAlpha ? src[k] : gs::fixAlpha(src[k]);
         }
     }
@@ -2289,8 +2285,7 @@ public:
             // olho muda so a profundidade, nao a posicao na tela: resolve o z-fighting de camadas coplanares.
             const float fz = ram.f32(it.node + 0x28);
             const bool fudge = !wire && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
-            static const bool fzOld = std::getenv("WOTM_FUDGEOLD") != nullptr;   // diagnostico: direcao antiga (>1 = mais longe)
-            const float fzScale = fzOld ? fz : 1.f / fz;
+            const float fzScale = 1.f / fz;   // zBufferFudge > 1 = mais perto (no raio do olho)
             {   // diagnostico: WOTM_SKINBOX=1 imprime a caixa (mundo) dos vertices skinned de cada no, por osso x
                 static const bool sb = std::getenv("WOTM_SKINBOX") != nullptr;
                 if (sb && pm && md->skinned && !wire) {
@@ -2737,10 +2732,8 @@ private:
     // saem do float w: w1 = w, w2 = frac(w * 2048) (mantissa baixa), w3 = 1 - w1 - w2. pos = w1*Mx*p + w2*My*p + w3*Mz*p.
     // Slot da paleta = (codigo & 0x7F) / 4. A normal so gira pelo osso x (vertexRgb).
     static void skinVertexPM(const M4 *pm, const M4 &m, const Vtx &v, float out[3]) {
-        static const bool old2 = std::getenv("WOTM_SKIN2BONE") != nullptr;
         float w1 = v.w, w2 = 0.f, w3 = 0.f;
-        if (old2) { w1 = std::min(1.f, std::max(0.f, v.w)); w2 = 1.f - w1; }
-        else { const float s = v.w * 2048.f; w2 = s - std::trunc(s); w3 = 1.f - w1 - w2; }
+        { const float s = v.w * 2048.f; w2 = s - std::trunc(s); w3 = 1.f - w1 - w2; }
         const uint8_t codes[3] = {v.cx, v.cy, v.cz};
         const float ws[3] = {w1, w2, w3};
         float q[3] = {0, 0, 0};
@@ -2754,10 +2747,8 @@ private:
     }
 
     static void skinVertex(const Ram &ram, uint32_t pal, const M4 &m, const Vtx &v, float out[3]) {
-        static const bool old2 = std::getenv("WOTM_SKIN2BONE") != nullptr;   // diagnostico: modelo antigo (2 ossos, w clampado)
         float w1 = v.w, w2 = 0.f, w3 = 0.f;
-        if (old2) { w1 = std::min(1.f, std::max(0.f, v.w)); w2 = 1.f - w1; }
-        else {
+        {   // 3 ossos: w1 = w, w2 = frac(w * 2048), w3 = o resto (microcodigo do VU1)
             const float s = v.w * 2048.f;
             w2 = s - std::trunc(s);
             w3 = 1.f - w1 - w2;
@@ -2821,9 +2812,8 @@ private:
     }
 
     uint32_t ctrlChild(const Ram &ram, uint32_t node, const M4 &m) const {
-        static const bool off = std::getenv("WOTM_NOCTRL") != nullptr;   // diagnostico: sempre child1 (comportamento antigo)
         const uint32_t c1 = ram.u32(node + 4), c2 = ram.u32(node + 8);
-        if (off || !eyeOk_) return c1;
+        if (!eyeOk_) return c1;
         const uint32_t nvol = std::min<uint32_t>(ram.u8(node + 0xC), 16), vtype = ram.u8(node + 0xE);
         if (!nvol || !ram.ok(node, 0x20 + 4 * nvol)) return c1;
         float eyeL[3];
@@ -3005,9 +2995,8 @@ private:
             if ((ram.u32(c) & 63) == 31) {
                 const uint32_t n = ram.u16(c + 0xA);
                 uint32_t w = ram.u32(node + 4);
-                static const bool noDestr = std::getenv("WOTM_NODESTR") != nullptr;   // diagnostico: sempre o estado 0 (intacto)
                 ++destrHist_[std::min<uint32_t>(w, 7)];
-                if (noDestr || w >= n) w = 0;
+                if (w >= n) w = 0;
                 if (!n) break;
                 const uint32_t ch = ram.u32(c + 0xC + 12 * w);
                 if (ram.ok(ch)) walk(ram, ch, m, depth + 1);

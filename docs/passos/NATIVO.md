@@ -17,8 +17,7 @@ A cena é lida direto da RAM do EE e desenhada com raylib, sem VU1/GS, com a câ
 - **Pixels:** `texInfo[texId]` (0x50F100, 16 B por entrada) aponta um pacote: largura `+0x24`, altura `+0x26`, TBW `+0x2A`, PSM `+0x2B`, pixels **lineares** a partir de `+0x80` (T8 = 1 byte, T4 = 2 por byte, nibble baixo primeiro). O `TBP0` do TEX0 do objeto costuma ser 0 (o `texm` remenda no desenho) e não é usado.
 - **Paletas vêm do `.RTX` do disco**, nunca da VRAM do dump (que guarda restos do menu). Entradas de `(palavra0 >> 2) * 16` bytes, cabeçalho de 16 B (descritor GS em `+8`: DBP relativo na meia-palavra `+0xA`, TW/TH nos bits 40..47); 16x16 CT32 = 256 cores (1040 B), 8x2 = 16 cores (80 B). `Scene::loadResources(ram, raiz)` indexa por **CBP absoluto** (`rtxPal`); é idempotente.
 - **Base de cada `.RTX`:** o jogo empilha nível, jogadores e IAs na ordem de carga; `fileStatus` (0x445390) guarda `names[i][9]` (+0xB1) e `maxTexAddr[i]` (u16, +0x14C). Base do nível = `tempVramTexAddr (0x6F8818) >> 6`; base do arquivo `i` = `maxTexAddr[i-1]`. Busca: `LVL/<nome>.RTX`, `MON/<nome>.RTX`, `<nome>/<nome>.RTX` (menu: `SHELL/SHELL.RTX`) e `SHELL/<nome>.RTX` (LOAD, UI, SHELL2, PRESHELL).
-- **CSM1:** CLUTs de 256 cores têm os bits 3 e 4 do índice trocados; entrada lógica `i` = palavra `(i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1)`. Só em T8/T8H (sem isso: retratos e monstros granulados, sem os espinhos amarelos). `WOTM_PALNOSWAP=1` desliga.
-- **PSMT8H/4HL/4HH** (menu: telas, fontes, logos, retratos 512x512): `texInfo` não aponta o pixel certo; os pixels estão no `.RTX` (cabeçalho 0x80 B, psm nos bits 32..37 do desc, tamanhos `0x1080`, `0x880`, `0x40080`). `TEX0.TBP0 == DBP` da entrada; 4HL e 4HH repartem o DBP (os dois nibbles do mesmo byte). Guardado em `rtxImg[(psm<<16)|DBP]`. A textura 180 (128x128, tbp0 4096) vem de um arquivo ainda não identificado.
+- **CSM1:** CLUTs de 256 cores têm os bits 3 e 4 do índice trocados; entrada lógica `i` = palavra `(i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1)`. Só em T8/T8H (sem isso: retratos e monstros granulados, sem os espinhos amarelos).- **PSMT8H/4HL/4HH** (menu: telas, fontes, logos, retratos 512x512): `texInfo` não aponta o pixel certo; os pixels estão no `.RTX` (cabeçalho 0x80 B, psm nos bits 32..37 do desc, tamanhos `0x1080`, `0x880`, `0x40080`). `TEX0.TBP0 == DBP` da entrada; 4HL e 4HH repartem o DBP (os dois nibbles do mesmo byte). Guardado em `rtxImg[(psm<<16)|DBP]`. A textura 180 (128x128, tbp0 4096) vem de um arquivo ainda não identificado.
 - **Alfa GS:** 0x80 = 1,0 (`fixAlpha`). UV dos objetos = `int16/4096` normalizado pelo tamanho (conferido contra o retail; prédios vão a ±8 e repetem de propósito; UV fora de 0..1 exige `TEXTURE_WRAP_REPEAT`).
 
 ## Malhas e estado de desenho
@@ -26,8 +25,7 @@ A cena é lida direto da RAM do EE e desenhada com raylib, sem VU1/GS, com a câ
 - **ADC (STMASK + S-8):** pula só o triângulo que termina naquele vértice; a tira continua. Tratar como reinício perde triângulos (furos, céu rasgado). `tools/ngp.py` ainda usa o modelo antigo.
 - **Multitextura:** até 5 texturas por objeto (`texId[5]` em `+0x50`, `numTextures` `+0x5A`, `gsTexCtx[i]` em `+0x70 + 0x30*i`). A 4ª palavra (REGS alta) da tag GIF de cada seção é o **seletor `1 + 3*slot`**, com duas regras: `sel = 0` **herda** a textura da seção anterior (o GS mantém o TEX0; estado em `MeshData.curSlot`, inicial 0), e o **bit 15** é flag (slot = `(sel & 0x7FFF)`). Sem isso: terraço com textura de parede, carros de polícia "camuflados" (conferido contra o retail). Em aberto, risco baixo: 1ª seção com `sel = 0` (só o texId 189).
 - **Mistura (blend):** o estado do GS de um objeto translúcido vem do **`ctx` do GROUP pai (`+4`)**: tag A+D com `ALPHA_1` em `+0x20`, `TEST_1` e `ZBUF_1`. `0x44` = normal, `0x48` = aditivo (Kineticlops), `0x42` = `Cd*(1-As)`. `Scene::groupBlend` herda pelos GROUPs; `DrawItem::blend`; vai ao passe translúcido se `blend != 0 && abe`. **O `TEST_1` (alfa > ref) ainda não é aplicado.**
-- **zBufferFudge** (`HierObject +0x28`, 1,0..1,12): **>1 = mais perto** (no GS z maior é mais perto e z ~ 1/distância); o nativo escala o vértice no raio do olho por `1/fz`. Com a direção errada somem rótulos do menu de opções, janelas acesas e trilhas de terra. `WOTM_FUDGEOLD=1` volta à antiga.
-- **Céu:** `worldCtx[0]` `+4/+8/+0xC` (`skyCs`, `skyCs2`, nuvens), antes do mundo, sem profundidade, na posição da câmera. **HUD:** ids 0x1C20..0x2133 são de tela e ficam fora do 3D (exceto ícones de botão, abaixo).
+- **zBufferFudge** (`HierObject +0x28`, 1,0..1,12): **>1 = mais perto** (no GS z maior é mais perto e z ~ 1/distância); o nativo escala o vértice no raio do olho por `1/fz`. Com a direção errada somem rótulos do menu de opções, janelas acesas e trilhas de terra.- **Céu:** `worldCtx[0]` `+4/+8/+0xC` (`skyCs`, `skyCs2`, nuvens), antes do mundo, sem profundidade, na posição da câmera. **HUD:** ids 0x1C20..0x2133 são de tela e ficam fora do 3D (exceto ícones de botão, abaixo).
 
 ## Hierarquia, LOD e personagens
 - **Rígidos:** `CHAR_INSTANCE` (`+4` = `animOutput.val`, `+0xC` = `atMat`, `+0x14` = `animMatrixPtr`, `+0x18` = `animPktPtr`, filhos em `+0x2C`). `ANIM_XFORM` (op 17): o jogo calcula a matriz local em `atMat[matrixIdx]` (`+0xC4`; `visible` float `+0xC`, filhos `+0xCC`); o nativo só lê.
@@ -38,7 +36,7 @@ A cena é lida direto da RAM do EE e desenhada com raylib, sem VU1/GS, com a câ
 - **LOD:** escolhe o maior índice cujo `switchOutDis` (`+0x20 + 16*i + 4`, distância ao quadrado) é maior que a distância² do centro (`+0x10`, transformado) ao olho; nenhum -> não desenha. Índice 0 é o mais grosseiro. O `fade` entre LODs não é reproduzido.
 - **Skinned (monstros):** `CS` 96/97/101/105/106/107 -> GROUP -> `CHAR_INSTANCE` -> `SKEL_BONE` + `LOD`. O `polyPkt` é uma **cadeia de sub-pacotes**: tag `0x600100b4` (bit 16 = skinned; os 16 bits baixos não são tamanho), `UNPACK V4-32 @0xB5` (até 190 vértices: xyz + peso em w, **código de osso nos 8 bits baixos de x, y e z**), normais `V3-8 @0x175`, seções de strip; cada sub-pacote termina em dois NOPs e o próximo vem alinhado em qword após zeros.
 - **Paleta de matrizes:** `animPktPtr[lod]` -> 1º tag `3000007d <endereço>` -> bloco de 125 qwords; código de osso = endereço de qword no VU1: `slot = (código & 0x7F) / 4`, matriz em `bloco + 0x10 + 0x40*slot`. `animMatrixPtr[i]` aponta slots **embaralhados** (não use `animMatrixPtr[código/4]`). O bit 0x80 não é usado pelo microcódigo.
-- **Pesos (microcódigo VU1 desmontado com `tools/vu1dis.py`, saída em `build/vu1/`, código do jogo):** 3 ossos por vértice, `w1 = w`, `w2 = frac(w * 2048)`, `w3 = 1 - w1 - w2`; posição = `w1*Mx*p + w2*My*p + w3*Mz*p`. Implementado em `skinVertex` (`WOTM_SKIN2BONE=1` = modelo antigo de 2 ossos).
+- **Pesos (microcódigo VU1 desmontado com `tools/vu1dis.py`, saída em `build/vu1/`, código do jogo):** 3 ossos por vértice, `w1 = w`, `w2 = frac(w * 2048)`, `w3 = 1 - w1 - w2`; posição = `w1*Mx*p + w2*My*p + w3*Mz*p`. Implementado em `skinVertex`.
 - **Robo-47:** falta o **arco elétrico** da calota: `fx[]` tipo visual 7 (VisArc), `texLoad[0]` 57; nenhum dump tem `pos[]` preenchido, precisa de dump **durante** um arco.
 
 ## Física com `dt = 1/updateRate` (runtime)
@@ -132,10 +130,12 @@ Compara, por objeto e em números, o que o microcódigo do VU1 mandaria ao GS co
 | `WOTM_LISTITEMS=1`, `WOTM_LISTSKIN=1`, `WOTM_LISTRIGID=1` | lista itens por passe / skinned (hash da geometria) / partes rígidas |
 | `WOTM_SKINBOX=1` | caixa de mundo por nó skinned e ossos com lixo |
 | `WOTM_SKINM1=<animPkt>`, `WOTM_PALBLOCK=hex`, `WOTM_SKINPOS=x,y,z`, `WOTM_CMP=1` | troca matriz/paleta/posição dos skinned; compara dois itens |
-| `WOTM_SKIN2BONE`, `WOTM_NOSKIN`, `WOTM_BONECODES=no`, `WOTM_SKINSAN`, `WOTM_SKINFIT` | variantes do skinning |
-| `WOTM_ADCMODE`, `WOTM_ADCSHIFT=n`, `WOTM_SHOWADC`, `WOTM_SUBPKT=n` | variantes do ADC / sub-pacote |
-| `WOTM_NOVCOL`, `WOTM_OPAQUE`, `WOTM_ONEPASS`, `WOTM_UVISO`, `WOTM_PALNOSWAP`, `WOTM_FUDGEOLD` | desligam partes do desenho |
-| `WOTM_NOCTRL`, `WOTM_NODESTR`, `WOTM_NOFX`, `WOTM_FXNOGRAY`, `WOTM_NOSHADOW` | voltam ao comportamento antigo / desligam |
+| `WOTM_NOSKIN`, `WOTM_BONECODES=no`, `WOTM_SKINSAN`, `WOTM_SKINFIT` | variantes do skinning (diagnóstico) |
+| `WOTM_SHOWADC`, `WOTM_SUBPKT=n` | mostra os triângulos descartados pelo ADC em vermelho / só um sub-pacote |
+| `WOTM_NOVCOL`, `WOTM_OPAQUE`, `WOTM_ONEPASS`, `WOTM_UVISO` | desligam partes do desenho |
+| `WOTM_NOFX`, `WOTM_FXNOGRAY`, `WOTM_NOSHADOW` | desligam partículas / rampa cinza / sombras |
+
+Removidas em 2026-10-15 (eram "volta ao comportamento antigo", já descartado): `WOTM_SKIN2BONE`, `WOTM_FUDGEOLD`, `WOTM_PALNOSWAP`, `WOTM_ADCMODE`, `WOTM_ADCSHIFT`, `WOTM_NOCTRL`, `WOTM_NODESTR`.
 | `WOTM_FXLIST=1`, `WOTM_FXDUMP=<prefixo>` | lista sistemas de partículas / grava suas texturas (`tools/fx.py` dá nomes) |
 | `WOTM_DESTRSTAT=1`, `WOTM_CAMLOG=1`, `WOTM_TURNLOG=1` | contagem de destrutíveis, `[cam]`, `[turn]` |
 | `WOTM_FIELDLOG=1` | uma linha `[field]` por quadro do jogo: fields, rate, ticks do timer 1, ciclos do EE, tempo de host, ócio e os 3 pcs que mais gastam |

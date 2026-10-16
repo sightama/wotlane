@@ -17,9 +17,9 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - O que foi medido e como reproduzir está em `tools/recomp_oracle/README.md` e na seção "Recompilação estática" de `docs/ANALYSIS.md`.
 
 ## Onde estamos
-- `sh tools/wsl/gate.sh` diz `ROM OK` (build + SHA1). Último estado medido (`python3 tools/progress.py`): `game` ~170 de 3181 funções
-  decompiladas (idênticas + equivalentes), ~14 KB de 930 KB; `common` 192 de 1144. Convenções em `docs/ANALYSIS.md` ("Convenções de status das funções").
-- Ritmo de hoje: ~2,6 KB/hora em funções pequenas. Decompilar o `game` inteiro nesse ritmo não fecha; por isso a estratégia mudou (abaixo).
+- `sh tools/wsl/gate.sh` diz `ROM OK` (build + SHA1). Estado em 2026-10-15 (`python3 tools/progress.py`, bloco de progresso do README): `game` 1719 de 3181 funções
+  decompiladas (idênticas + equivalentes), 407 KB de 909 KB; `common` 836 de 1144. Convenções em `docs/ANALYSIS.md` ("Convenções de status das funções").
+- Ferramentas do dia a dia: `tools/verify_tu.py` (todas as verificações de uma TU numa tabela), `tools/m2c_batch.sh` (rascunhos da fila), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, sem jogo). O código do runtime mora em `native/runtime/`.
 - Objetivo do port: precisa de ~1000 funções / ~310 KB (lógica de jogo alcançável pelo laço de atualização), fora hardware. Lista em `config/callgraph.csv`.
 
 ## Estratégia (decidida com o usuário em 2026-10-07)
