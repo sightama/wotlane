@@ -183,6 +183,9 @@ ORDEM DE EXECUÇÃO
    outro. Funciona em qualquer tela (qualquer chamador de hier(0,0)); gatilho mem:<end>[=<val>] e
    tecla F8. Costura nova no fork: g_wotmPath2Src (origem na RAM do DIRECT). Testado: 10 telas do
    menu numa sessão, replay offline igual ao ao vivo; primeiro achado em VU1CHECK.md.
+   [FEITO 2026-10-16] Dia 2, nomes: `tex <id>` pelo DBP do upload, origem na RAM pelo símbolo do ELF
+   (`wotm::symtab` em wotm_syms.h), e os elementos de HUD que o nativo pula entram na travessia
+   (`Scene::hud`) para o inventário dar o id ao que o VU1 desenha (luta: barras de vida = id 0x1f47).
 2. Parte 2, peça 2: diff por pixel com atribuição (qual primitivo pintou cada pixel que difere) e a
    imagem de referência nos menus (sai preta: buffer/Z do GS em software); peça 3 (corpus, com um
    instantâneo por tela de menu e os da luta).

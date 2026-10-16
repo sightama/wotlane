@@ -66,7 +66,8 @@ struct WTri { float p[3][3]; uint64_t tex; uint8_t slot; bool cull; float u[3], 
 struct NatObj {
     uint32_t node = 0, span = 0;
     uint16_t tex = 0;
-    bool skinned = false, skip = false;   // skip: ceu/icones (o nativo os desenha em outro lugar de proposito)
+    bool skinned = false, skip = false;   // skip: ceu/icones (o nativo os desenha em outro lugar de proposito) e HUD (nao desenha)
+    uint16_t hudId = 0;                    // elemento de HUD (Scene::hud): id do objeto; 0 = nao e HUD
     int items = 0;
     uint32_t badVerts = 0;                 // vertices nao finitos (invariante)
     std::vector<WTri> tris;
@@ -291,7 +292,7 @@ double g_walkMs = 0.0, g_projMs = 0.0;   // tempo das coletas nativas no quadro 
 // uma cadeia), so os objetos cujo polyPkt contem alguma delas.
 void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t> *only = nullptr)
 {
-    if (!g_scene) g_scene = new wotm::Scene();
+    if (!g_scene) { g_scene = new wotm::Scene(); g_scene->collectHud = true; }   // o HUD vai para Scene::hud (inventario)
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     auto t0 = std::chrono::steady_clock::now();
     g_scene->collect(ram);
@@ -313,6 +314,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
                 o.tex = ram.u16(it.node + 0x50);
                 o.skinned = md->skinned;
                 o.span = span;
+                o.hudId = it.hudId;
             }
             o.skip = o.skip || skip;
             ++o.items;
@@ -363,6 +365,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
     add(g_scene->items, false);
     add(g_scene->sky, true);
     add(g_scene->overlay, true);
+    add(g_scene->hud, true);   // o nativo nao desenha o HUD: entra so para o inventario dar nome (id) ao que o VU1 desenha
     g_projMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
 }
 
@@ -1028,9 +1031,74 @@ void texStr(uint64_t v, char *s, size_t n)
 struct InvGroup { uint32_t n = 0; float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; uint32_t src0 = ~0u, src1 = 0; uint8_t rgba[4] = {}; };
 using InvKey = std::tuple<uint8_t, uint8_t, uint64_t, uint16_t, bool, uint32_t>;   // caminho, tipo (3 tri / 6 sprite), textura, FBP, ABE, origem (VU1: MSCAL & ~0xFF)
 
+// Nome do dado do ELF que contem o endereco (wotm::symtab, gerado por tools/native_syms.py): "nome+0x10"; "" se nenhum (heap).
+const char *symOf(uint32_t a, char *buf, size_t n)
+{
+    const wotm::symtab::Entry *e = wotm::symtab::find(a);
+    if (!e) { buf[0] = 0; return buf; }
+    if (a == e->addr) std::snprintf(buf, n, "%s", e->name);
+    else std::snprintf(buf, n, "%s+0x%x", e->name, a - e->addr);
+    return buf;
+}
+
+// Id de textura (indice em texInfo, o numero que o nativo usa) pelo TBP0 do TEX0: o pacote de upload de texInfo[id] leva o DBP no
+// BITBLTBUF (+0x30, bits 32..45) e o PSM (bits 56..61). Texturas residentes do menu (texInfo aponta para outra coisa) ficam de fora.
+std::map<uint32_t, uint32_t> texIdsByTbp(const uint8_t *rdram)
+{
+    std::map<uint32_t, uint32_t> out;
+    if (!rdram) return out;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    for (uint32_t id = 1; id < 1000; ++id) {
+        const uint32_t ptr = ram.u32(wotm::addr::texInfo + 16 * id) & 0x0FFFFFFF;
+        if (!ptr || !ram.ok(ptr, 0x80)) continue;
+        const uint32_t hi = ram.u32(ptr + 0x34);   // palavra alta do BITBLTBUF: DBP 0..13, DBW 16..21, DPSM 24..29
+        const uint32_t dbp = hi & 0x3FFF, dpsm = (hi >> 24) & 0x3F;
+        if (dpsm > 0x34 || ram.u16(ptr + 0x50) == 0) continue;   // nao parece um pacote de upload
+        out.emplace(dbp, id);
+    }
+    return out;
+}
+
 void inventory(const std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> &vuBy, const std::map<uint32_t, uint32_t> &skipVu,
                const std::vector<const Tri *> &orphanTris, const std::vector<size_t> &orphanRects)
 {
+    const std::map<uint32_t, uint32_t> texIds = texIdsByTbp(g_rdram);
+    auto texName = [&](uint64_t tex, char *s, size_t n) {
+        texStr(tex, s, n);
+        if (!tex || tex == kTexUnknown) return;
+        const auto it = texIds.find(uint32_t(tex & 0x3FFF));
+        if (it != texIds.end()) {
+            char t[96];
+            std::snprintf(t, sizeof t, "tex %u (%s)", it->second, s);
+            std::snprintf(s, n, "%s", t);
+        }
+    };
+    // HUD: o VU1 desenha, o nativo pula de proposito (Scene::hud). Por id, com os triangulos do VU1 que cairam nos seus pacotes.
+    {
+        std::map<uint16_t, std::pair<uint32_t, uint32_t>> hud;   // id -> (objetos, tris do VU1)
+        if (!g_nats.empty())
+            for (const auto &kv : g_nats[0])
+                if (kv.second.hudId) {
+                    auto &h = hud[kv.second.hudId];
+                    ++h.first;
+                    const auto sv = skipVu.find(kv.first);
+                    if (sv != skipVu.end()) h.second += sv->second;
+                }
+        uint32_t tris = 0;
+        for (const auto &kv : hud) tris += kv.second.second;
+        if (!hud.empty()) {
+            std::string s;
+            char b[48];
+            size_t shown = 0;
+            for (const auto &kv : hud) {
+                if (!kv.second.second) continue;   // o VU1 nao desenhou este id neste quadro (fora da tela ou oculto)
+                if (shown++ >= 40) { s += " ..."; break; }
+                std::snprintf(b, sizeof b, " %x:%u", unsigned(kv.first), kv.second.second);
+                s += b;
+            }
+            std::fprintf(stderr, "[vu1check] inv   HUD (o VU1 desenha, o nativo ainda nao): %zu ids, %u tris do VU1; por id (id:tris):%s\n", hud.size(), tris, s.c_str());
+        }
+    }
     std::map<InvKey, InvGroup> groups;
     auto add = [&](const InvKey &k, float x0, float y0, float x1, float y1, uint32_t src, const uint8_t *rgba) {
         InvGroup &g = groups[k];
@@ -1088,11 +1156,16 @@ void inventory(const std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> &v
     for (size_t i = 0; i < gs.size() && i < kMaxLines; ++i) {
         const InvKey &k = gs[i].first;
         const InvGroup &g = gs[i].second;
-        char tex[96], where[64] = "", src[48] = "";
-        texStr(std::get<2>(k), tex, sizeof tex);
-        if (std::get<0>(k) == 1) std::snprintf(where, sizeof where, "vu1 mscal %x", std::get<5>(k));
-        else std::snprintf(where, sizeof where, "path%u", unsigned(std::get<0>(k)));
-        if (g.src0 != ~0u) std::snprintf(src, sizeof src, " src %x-%x", g.src0, g.src1);
+        char tex[128], where[160] = "", src[192] = "", sym[96];
+        texName(std::get<2>(k), tex, sizeof tex);
+        if (std::get<0>(k) == 1) {
+            symOf(std::get<5>(k), sym, sizeof sym);
+            std::snprintf(where, sizeof where, "vu1 mscal %x%s%s%s", std::get<5>(k), sym[0] ? " (" : "", sym, sym[0] ? ")" : "");
+        } else std::snprintf(where, sizeof where, "path%u", unsigned(std::get<0>(k)));
+        if (g.src0 != ~0u) {
+            symOf(g.src0, sym, sizeof sym);
+            std::snprintf(src, sizeof src, " src %x-%x%s%s%s", g.src0, g.src1, sym[0] ? " (" : "", sym, sym[0] ? ")" : "");
+        }
         const uint16_t fbp = std::get<3>(k);
         const bool full = g.x0 <= kX0 + 2.f && g.y0 <= kY0 + 2.f && g.x1 >= kX1 - 2.f && g.y1 >= kY1 - 2.f;
         std::fprintf(stderr, "[vu1check] inv   ref %s %s x%u: %s fbp %x abe %d cor %02x%02x%02x%02x tela %.0f,%.0f-%.0f,%.0f%s%s%s\n", where,

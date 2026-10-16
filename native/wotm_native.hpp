@@ -398,6 +398,7 @@ struct DrawItem {
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
+    uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
 };
 
 struct Camera {
@@ -575,6 +576,8 @@ public:
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
+    std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133, espaco de tela): o nativo ainda nao os desenha; a checagem VU1 x nativo os inventaria (DrawItem::hudId)
+    bool collectHud = false;         // ligado pela checagem: a travessia poe os elementos de HUD em `hud` em vez de pula-los
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
     uint32_t visited = 0;
@@ -1311,6 +1314,7 @@ public:
         items.clear();
         sky.clear();
         overlay.clear();
+        hud.clear();
         sprites.clear();
         atMat_ = 0;
         animVal_ = 0;
@@ -3029,7 +3033,8 @@ private:
         const uint32_t ep = ram.u32(cs);
         if (!ram.ok(ep)) return;
         const uint32_t id = ram.u32(ep) >> 18;   // id do objeto (14 bits altos); 0x1C20..0x2133 = elementos de HUD (espaco de tela)
-        if (needDrawMe && id >= 0x1C20 && id <= 0x2133 && !isButtonId(id)) return;
+        const bool isHud = needDrawMe && id >= 0x1C20 && id <= 0x2133 && !isButtonId(id);
+        if (isHud && !collectHud) return;   // o nativo nao desenha o HUD; com collectHud a travessia vai para `hud` (inventario)
         M4 m = readM4(ram, cs + 0x20);
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
@@ -3054,6 +3059,10 @@ private:
         cs_ = savedCs;
         if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
+            items.resize(before);
+        } else if (isHud) {   // HUD: fora do desenho, com o id para o inventario
+            for (size_t i = before; i < items.size(); ++i) items[i].hudId = uint16_t(id);
+            hud.insert(hud.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
         }
     }

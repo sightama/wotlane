@@ -108,7 +108,32 @@ def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do 
         if not is_func:
             continue
         lines.append("constexpr uint32_t %s = 0x%08X;%s" % (idents[(name, addr)], addr, ("   // size 0x%X" % size) if size else ""))
-    lines += ["} // namespace fn", "} // namespace wotm"]
+    lines += ["} // namespace fn", ""]
+    # Tabela dos dados por endereco, para dar nome a um endereco em tempo de execucao (inventario da checagem VU1 x nativo:
+    # "src dentro de fontPacket+0x40"). Entradas com tamanho; a busca acha a ultima entrada que comeca antes do endereco.
+    lines += [
+        "// Dados por endereco (nome do ELF, sem troca de caracteres), para dar nome a um endereco: symtab::find(a).",
+        "namespace symtab {",
+        "struct Entry { uint32_t addr, size; const char *name; };",
+        "inline const Entry kData[] = {",
+    ]
+    data = sorted((s for s in symbols if not s[2]), key=lambda t: t[1])
+    for name, addr, _, size in data:
+        lines.append('    {0x%08X, 0x%X, "%s"},' % (addr, size, name.replace("\\", "\\\\").replace('"', '\\"')))
+    lines += [
+        "};",
+        "inline constexpr size_t kCount = sizeof(kData) / sizeof(kData[0]);",
+        "// Entrada que contem `a` (ou a ultima que comeca antes dele, quando nao tem tamanho); nullptr antes da primeira.",
+        "inline const Entry *find(uint32_t a) {",
+        "    size_t lo = 0, hi = kCount;",
+        "    while (lo < hi) { const size_t mid = (lo + hi) / 2; if (kData[mid].addr <= a) lo = mid + 1; else hi = mid; }",
+        "    if (!lo) return nullptr;",
+        "    const Entry *e = &kData[lo - 1];",
+        "    return (!e->size || a < e->addr + e->size) ? e : nullptr;",
+        "}",
+        "} // namespace symtab",
+        "} // namespace wotm",
+    ]
     lines += ["#endif", ""] if remap is None else [""]
     with open(header, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
