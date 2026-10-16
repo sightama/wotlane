@@ -2,12 +2,20 @@
 
 Projeto de decompilação do executável `SCUS_971.97`. O objetivo final é um port nativo de PC fácil de modar. O dono do projeto escreve em português; responda em português.
 
-**Direção atual (2026-10-09, em validação):** a base passa a ser o jogo recompilado com o PS2Recomp (fora do repo; o C++ gerado é código do jogo) e a decompilação daqui vira a camada legível que substitui,
-por hook, só o que importa para modar. **Byte match não é mais requisito por função** (`equivalent` basta; `matched` quando sai barato; o `gate.sh` continua obrigatório). Priorize pelo que importa para modar
-usando `config/boot_coverage_asm.csv`, não por tamanho. O VU1/GS emulado do runtime do PS2Recomp é só ponte; o destino é renderização nativa na fronteira da engine. Detalhes em `docs/PROXIMOS_PASSOS.md`
-("Direção atual") e `docs/ANALYSIS.md` ("Recompilação estática"). As regras abaixo continuam valendo; onde disserem "matching", leia "matching quando for o objetivo da função".
+**Direção atual (decidida em 2026-10-09, confirmada em 2026-10-16): port primeiro.** A base é o jogo recompilado com o PS2Recomp (fora do repo; o C++ gerado é código do jogo) mais a camada nativa deste repo
+(`native/`: desenho com GPU, som, filmes, teclado), que já roda a luta a 60 fps. A decompilação (`src/`) é a camada legível que substitui, por hook, só o que importa para modar (`Shell::Load*`, `MonsterParse`,
+câmera); o runtime cobaia com as equivalentes está parado. **Byte match não é requisito por função** (`equivalent` basta; `matched` quando sai barato; o `gate.sh` continua obrigatório). O VU1/GS emulado do
+runtime é só a referência da checagem (`docs/passos/VU1CHECK.md`); o destino é renderização nativa na fronteira da engine. Ordem do port: widescreen como primeiro mod, depois HUD, fades, iluminação e bugs
+gráficos na ordem do inventário. Detalhes em `docs/PROXIMOS_PASSOS.md`. As regras abaixo continuam valendo; onde disserem "matching", leia "matching quando for o objetivo da função".
 
 Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe do ELF e as convenções de status) e `docs/PROXIMOS_PASSOS.md` (como retomar e índice; ferramentas, headers e armadilhas em `docs/passos/`).
+
+## Fluxo do port (mudança em `native/`)
+1. Antes de mexer: `tools\corpus.ps1 -Check` guarda a base (`<runtime>\corpus\resumo_<data>.csv`; capture o corpus uma vez com `-Capture`). O que está errado ou faltando vem do inventário (`VU1CHECK.md`, "Inventário do port"), não de lembrança.
+2. Editar `native/*.hpp` ou `native/runtime/*.inc|.cpp` (hooks e código do jogo que rodam dentro do runtime). Endereços por nome (`wotm::sym::`/`wotm::fn::` de `native/wotm_syms.h`), nunca número cru. Variável de diagnóstico nova entra na tabela do `NATIVO.md` (`python tools/wotm_env.py` confere).
+3. `build_runtime.bat` na raiz (configura e compila `build_dev`, sem LTCG; o ninja não rastreia `native/`, o script cuida disso). Nunca o `build.bat` da pasta velha com LTCG.
+4. Conferir: `tools\corpus.ps1 -Check -Baseline <csv da base>` diz o que piorou; `run_live.bat` para ver na tela; `tools\lote.ps1` para lutas em lote com vigia.
+5. Commit sem gate (`native/`, `docs/` e `tools/` fora do build não mudam a ROM). Mudança numa costura do PS2Recomp (CMake, `main.cpp`, taps) exige regenerar `tools/runtime_patch/wotm-runtime.patch`.
 
 ## Regras que não podem ser quebradas
 1. **Nenhum arquivo do jogo vai para o repo.** `ISO/`, `disc/`, `asm/`, `assets/`, `build/`, `*.rom`, `*.elf` e `tools/cc/` estão no `.gitignore`. O `asm/` contém código do jogo: nunca force `git add -f`, nunca cole assembly do jogo em issues, PRs ou documentação.

@@ -7,16 +7,16 @@ Projeto de decompilação/recompilação de **War of the Monsters** (PS2, NTSC-U
 Você precisa de uma cópia própria do jogo. Nenhum arquivo do jogo vai para este repositório.
 
 ## Objetivo
-Um **port nativo de PC fácil de modar**. O caminho que estamos validando (decidido em 2026-10-09, ainda em teste):
+Um **port nativo de PC fácil de modar**. O caminho (decidido em 2026-10-09, confirmado em 2026-10-16: port primeiro, decomp só na superfície de mod):
 1. **Recompilação estática como base.** O [PS2Recomp](https://github.com/ran-j/PS2Recomp) traduz o executável inteiro (5.382 funções, 0 falhas de decodificação, VU0 incluso) para C++ que roda num runtime próprio. Esse C++ é literal (uma função por função MIPS, sobre uma RAM de PS2 emulada) e é código do jogo, então **nunca entra neste repositório**: é gerado localmente a partir da sua ISO.
 2. **Decompilação só do que importa para modar.** Lógica de jogo, IA, monstros, fases e formatos de arquivo viram C++ legível aqui (função `matched` ou `equivalent`) e entram como *hooks* no lugar da versão recompilada. Bater byte a byte é **opcional**: serve para manter a ROM retail reproduzível, mas não é exigido de cada função.
-3. **Renderização nativa.** Em vez de emular VU1/GS, cortamos na fronteira da engine (`hier`, `pkt`, `disp`, partículas; veja `config/hw_boundary.csv`) e desenhamos com a GPU do PC. Som, FMVs e entrada completa ficam para depois do primeiro port.
+3. **Renderização nativa.** Em vez de emular VU1/GS, cortamos na fronteira da engine (`hier`, `pkt`, `disp`, partículas; veja `config/hw_boundary.csv`) e desenhamos com a GPU do PC (`native/`). Som, filmes e teclado também são nativos.
 
 Arquitetura, o que vai no repo e o que se gera localmente: [docs/PLANO.md](docs/PLANO.md).
 
 **Licença:** o código deste repositório é [GPL-3.0](LICENSE). Ela cobre apenas o que está aqui (decomp, ferramentas, camada nativa); não dá nenhum direito sobre o jogo, que continua pertencendo aos seus detentores.
 
-Estado: o jogo recompilado inicializa e chega ao laço de interface (`userintMain`) num runtime de teste; ainda **não** validamos imagem na tela (teste em Windows/MSVC em andamento). Veja [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md) e [tools/recomp_oracle/README.md](tools/recomp_oracle/README.md).
+**Estado (2026-10-16):** o jogo roda no Windows a 60 fps com desenho nativo (fases, monstros, partículas, sombras, neblina), luta jogável por teclado, som e filmes; a geometria casa com o VU1 do PS2 em mais de 99% dos triângulos (`docs/passos/VU1CHECK.md`). Falta o HUD, fades, widescreen e os bugs gráficos listados no inventário; o que vem a seguir está em [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
 ## Setup (WSL/Ubuntu)
 ```sh

@@ -36,11 +36,17 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 <details>
 <summary>Em aberto</summary>
 
-Não corrigir sem perguntar ao dono qual atacar.
+Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inventário (direção de 2026-10-16: widescreen como primeiro mod, depois HUD, fades, iluminação e bugs gráficos).
 
-**Fila combinada com o dono (2026-10-15):** os 5 itens feitos (em "Corrigido"; o 3 era o UV do mapa de ambiente e o CLOAK, o 4 o sprine, o 5 o lens flare).
+**Inventário do port (o que a checagem diz que falta ou sobra; refaça com `tools\corpus.ps1 -Check` e as linhas `inv` do `menus.vu1snap` e das lutas):**
+- **HUD:** o nativo não desenha nada do PATH2/PATH3. Na luta, os 30 triângulos das barras de vida são o id `0x1f47` (linha `inv HUD ... por id`); os demais elementos (medidores, retratos, texto do placar) saem na mesma linha por id. É o primeiro bloco do port depois do widescreen.
+- **Fades e limpeza de tela:** os primitivos `TELA INTEIRA` do PATH3 (fade do menu, `Shell::FadeScreen`) só existem na referência.
+- **Menus, `tex 75/76`:** nas telas 1, 2, 12, 15, 6 e 8 o nativo desenha dois pares de objetos (62 tris, flags 0x8a00, faixa larga no alto) que o VU1 não desenha; o nativo os põe com alfa 0x03/0x09, quase invisíveis. Falta descobrir o critério do `hier` que os pula.
+- **Menus, objetos que só a referência pinta:** na seleção de personagem, `ref pkt a1e080 tex 174 | nat nenhum: 11029 px` (linha `inv px`); conferir se é visibilidade (`ANIM_SCALE`, `CONTROL`) ou alfa.
+- **Texto:** a referência da luta e dos menus mostra texto onde o nativo não mostra e vice-versa ("player 1" na seleção): o texto do nativo vem do `fontPacket` lido fora do quadro amostrado. É limitação da amostra, não necessariamente do port; precisa de conferência na tela.
+- **Limites da referência (não é bug do port):** o GS em software não pinta o céu (`ref pkt ... tex 241 | nat nenhum` na luta, faixa preta no alto) nem o chão mais próximo em alguns quadros; a partícula 0 dos destroços (abaixo).
 
-**Depois, sem especificação:**
+**Resíduos das correções já feitas:**
 - **Lens flare, resíduo:** o desenho bate com o VU1 do runtime (linha `lens flare` da checagem, em "Corrigido"), mas o teste de oclusão do nativo (profundidade nativa no lugar do Z do GS) não tem conferência: a checagem compara a partir da intensity que o VU1 recebeu, e o GS emulado não tem a cena. Sem comparação com o PCSX2 na tela.
 - **Cor dos monstros, resíduo** (item 16): no Togera sobra ~1,2% dos vértices com cor diferente, para os dois lados. O fator de contexto do q5 não é a causa (ver "Corrigido"). Medir exige comparar o q5 do `hdr` com o `DrawItem::color` por objeto: entre lutas iguais, o total de `cor difere` varia de 1,1% a 1,9% (explosões e destruição mudam de uma para outra).
 - **Arco elétrico, resíduo:** a textura (U por trecho, V = 1/0) não foi conferida na tela. A geometria está explicada (ver "Explicadas, sem bug no nativo").
@@ -51,7 +57,7 @@ Não corrigir sem perguntar ao dono qual atacar.
   - o programa do VU1 multiplica o z da matriz objeto→tela pelo fudge (0x1E80–0x1E98), então o Z do GS sobe (mais perto) e o quadrado passaria no ZTST GEQUAL. O TEST não tem teste de alfa (ATE 0);
   - pela conta do GS (As = 255·6/128/128 ≈ 0,09), seriam +24 no canal, que é o que o nativo desenha.
   Falta o TEX0 real da seção (TCC/TFX) ou uma captura do PCSX2 sem o halo por cima para saber por que some.
-- **Não coberto pela checagem:** texels/CLUT da textura, atributos das partículas (cor, inclusive a explosão opaca), linhas e leques do VU1, HUD (PATH2/PATH3). A neblina foi conferida à parte (máscara do `WOTM_FOGSPLIT=2` na METRO: FA −107,9, FB 326.571, cor 45/33/20; pesa a partir de W ≈ 900).
+- **Não coberto pela checagem:** texels/CLUT da textura, atributos das partículas (cor, inclusive a explosão opaca), linhas e leques do VU1. O HUD (PATH2/PATH3) só entra pelo inventário (contagem e caixa por id), sem comparação de pixels. A neblina foi conferida à parte (máscara do `WOTM_FOGSPLIT=2` na METRO: FA −107,9, FB 326.571, cor 45/33/20; pesa a partir de W ≈ 900).
 
 </details>
 

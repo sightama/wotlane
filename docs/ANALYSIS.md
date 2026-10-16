@@ -134,8 +134,8 @@ Feita com o [PS2Recomp](https://github.com/ran-j/PS2Recomp) (commit 2c5fbb9), **
   (0 jump tables detectadas); o recompilador as cobre com "fallback entries" (60.604).
 - Todo o C++ compila e linka com o runtime. No runtime de teste o jogo inicializa: carrega os 7 IRX no IOP emulado (989snd incluso), passa do init de som e entra no laço de
   interface (`userintMain`). Os filmes ficam presos porque o decodificador do jogo (`decBs0`/`videoDec*`) espera a IPU, que o runtime não emula; nos testes foram pulados por hook
-  (`playMpegMovie*` e a thread `updateMpegMovieDecoding`). Imagem na tela **ainda não validada** (os testes foram em WSL com `llvmpip`).
-- O runtime já traz GS em CPU, interpretadores de VU e VIF1 e um IOP emulado; é a ponte, não o destino (o destino é renderização nativa na fronteira da engine).
+  (`playMpegMovie*` e a thread `updateMpegMovieDecoding`). Desde 2026-10-10 o jogo roda no Windows (MSVC) com desenho, som, filmes e teclado nativos (`native/`; estado em `docs/PROXIMOS_PASSOS.md`).
+- O runtime já traz GS em CPU, interpretadores de VU e VIF1 e um IOP emulado; é a ponte, não o destino (o destino é renderização nativa na fronteira da engine). O VU1 emulado serve de referência para a checagem VU1 x nativo (`docs/passos/VU1CHECK.md`).
 - **Bug do PS2Recomp achado**: `SQRT.S fd, ft` lê a fonte em `ft` (usa |ft|) e `RSQRT.S fd, fs, ft` é `fs / sqrt(|ft|)`; o upstream usava `fs`. Afeta 108 funções (`sqrt.s`) e 76 (`rsqrt.s`).
   Suspeitos **não verificados**: `div.s` por zero (o EE satura em ±FLT_MAX) e `min/max` com NaN.
 - **Bug nosso achado pelo oracle**: o gas codifica `sqrt.s` na forma MIPS32 (fonte em `fs`); no EE isso lê `$f0`. Corrigido com `eeSqrtf` (`include/vecmath.h`).
@@ -152,6 +152,6 @@ Cada função do binário está em um destes estados (`python3 tools/progress.py
 | `asm` | ainda só em assembly | `INCLUDE_ASM` simples |
 
 - O build padrão (`ninja`, `tools/wsl/check.sh`) usa o assembly original das funções `equivalent`, então a ROM sempre confere com o retail. Um build com `-DNON_MATCHING` compilaria todas as reescritas em C++ (base do port).
-- As funções `equivalent` **não foram verificadas** além da leitura do assembly. Quando o port rodar algo palpável, a verificação será por comparação de comportamento com o PCSX2, não por testes unitários.
+- As funções `equivalent` são verificadas sem testes unitários (decisão do projeto): `tools/difftest.py` (retail x nossa num emulador MIPS, mesmo estado aleatório), `tools/recomp_oracle` (as com VU0 ou `min/max/madd`), o ELF halfcpp no PCSX2 (`docs/passos/TESTE_PCSX2.md`) e, incompleto, o runtime cobaia (`docs/passos/NATIVO.md`). `tools/verify_tu.py` roda tudo isso por TU. Erros reais já achados por cada um estão em `docs/passos/ARMADILHAS.md` e `TESTE_PCSX2.md`.
 - Quem quiser continuar o trabalho byte a byte: `grep -rn NON_MATCHING src/`, o comentário ao lado de cada função diz onde parou. `tools/wsl/variants.py` e `tools/wsl/permute.py` testam muitas variações do fonte em paralelo.
 - Código `hw` e funções de biblioteca (`libs`) não precisam bater: não gastar esforço neles.
