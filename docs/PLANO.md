@@ -20,7 +20,7 @@ Estado verificado em 2026-10-09; o que ainda não foi feito está marcado.
   O código gerado fica em `recomp/` (no `.gitignore`): `recomp/retail/` (ELF retail) e `recomp/nm/` (ELF com as equivalentes). O runtime lê essa pasta com `-DPS2X_GENERATED_DIR=<repo>/recomp/retail`,
   sem copiar nada para dentro do submódulo.
 - **Ainda manual:** gerar `recomp/` (analisador + `ps2_recomp` sobre o ELF) e compilar o runtime (MSVC no Windows). *Falta:* um script único que faça isso a partir da ISO.
-  Os hooks específicos do jogo (`PS2X_SKIP_MOVIES`, `PS2X_NO_VU1`) e a travessia de cena (`wotm_scene.inc`) ainda estão no fork; o plano é movê-los para um módulo do jogo neste repo.
+  Os hooks específicos do jogo e a travessia de cena moram em `native/runtime/` neste repo desde 2026-10-15 (`wotm_scene.inc`, `wotm_live.inc`, `wotm_overrides.cpp`...); o fork só tem as costuras (`tools/runtime_patch/README.md`).
 - O recompilador precisa da correção de `SQRT.S`/`RSQRT.S` (PR https://github.com/ran-j/PS2Recomp/pull/277); sem ela, 108 + 76 funções do jogo calculam errado.
 
 ## Direitos autorais e licença

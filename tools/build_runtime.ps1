@@ -13,9 +13,12 @@ try { if (Test-Path $timeFile) { $expected = [double](Get-Content $timeFile -Tot
 if ($expected -lt 5) { $expected = 5 }
 
 (Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\lib\ps2_runtime.cpp").LastWriteTime = Get-Date
-# microprogramas do VU0 em C++ (gerados do ELF; sem o .inc o runtime usa so o interpretador)
+# microprogramas do VU0 em C++ (gerados do ELF; sem o .inc o runtime usa so o interpretador). Vao para <build>\wotm_gen, que o
+# CMake do runtime poe no caminho de include (e codigo do jogo: fora do repo e fora da arvore do PS2Recomp)
 $gen = Join-Path $PSScriptRoot 'vu0native.py'
-$inc = "$Dir\PS2Recomp\ps2xRuntime\src\lib\vu\wotm_vu0_native.gen.inc"
+$genDir = Join-Path $Dir ([IO.Path]::GetFileNameWithoutExtension($Bat)) | Join-Path -ChildPath 'wotm_gen'
+New-Item -ItemType Directory -Force $genDir | Out-Null
+$inc = Join-Path $genDir 'wotm_vu0_native.gen.inc'
 $elf = Join-Path $PSScriptRoot '..\disc\SCUS_971.97'
 if ((Test-Path $elf) -and (-not (Test-Path $inc) -or (Get-Item $inc).LastWriteTime -lt (Get-Item $gen).LastWriteTime)) {
     & python $gen $elf $inc | Out-Null

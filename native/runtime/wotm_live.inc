@@ -1,0 +1,424 @@
+// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
+// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
+// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
+// Substitui CMovie::Play/Update/End e playMpegMovieWithDB/updateMpegMovieDecoding (o decodificador do jogo espera a IPU, que o
+// runtime nao emula) e toca o .PSS do disco (pasta cdRoot ou a ISO de PS2X_CD_IMAGE) com o FFmpeg. Sem o header ou sem o FFmpeg,
+// PS2X_FMV so avisa.
+#if __has_include("wotm_fmv.hpp") && __has_include(<libavcodec/avcodec.h>)
+#include "wotm_fmv.hpp"
+#define WOTM_HAVE_FMV 1
+namespace wotm_fmv_hooks
+{
+inline void playWithDB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+{
+    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::playMpegMovieWithDB(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5))));
+}
+inline void updateDecoding(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+{
+    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::updateMpegMovieDecoding(rdram, getRegU32(ctx, 4))));
+}
+inline void cmoviePlay(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+{
+    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmoviePlay(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 6))));
+}
+inline void cmovieUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+{
+    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmovieUpdate(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5))));
+}
+inline void cmovieEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+{
+    setReturnS32(ctx, static_cast<int32_t>(wotm::fmv::hooks::cmovieEnd(rdram, getRegU32(ctx, 4))));
+}
+} // namespace wotm_fmv_hooks
+
+void wotmFmvInstall(PS2Runtime &runtime)
+{
+    const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    wotm::fmv::Player &p = wotm::fmv::Player::get();
+    p.discRoot = io.cdRoot;
+    p.isoPath = io.cdImage;
+    runtime.registerFunction(0x0020F4B0u, hostLeaf<wotm_fmv_hooks::playWithDB>);     // playMpegMovieWithDB
+    runtime.registerFunction(0x0020F540u, hostLeaf<wotm_fmv_hooks::updateDecoding>); // updateMpegMovieDecoding
+    runtime.registerFunction(0x00210090u, hostLeaf<wotm_fmv_hooks::cmoviePlay>);     // CMovie::Play
+    runtime.registerFunction(0x00210360u, hostLeaf<wotm_fmv_hooks::cmovieEnd>);      // CMovie::End
+    runtime.registerFunction(0x00210408u, hostLeaf<wotm_fmv_hooks::cmovieUpdate>);   // CMovie::Update
+    std::fprintf(stderr, "[fmv] filmes nativos ligados (disco: %s, iso: %s)\n", io.cdRoot.string().c_str(), io.cdImage.string().c_str());
+}
+
+// Uma vez por apresentacao (thread da janela, dentro do BeginDrawing): avanca os filmes, copia o do menu para a VRAM do GS e
+// desenha o de tela cheia por cima.
+static void wotmFmvPresent(uint8_t *gsVram)
+{
+    wotm::fmv::Player &p = wotm::fmv::Player::get();
+    p.pump(gsVram, PS2_GS_VRAM_SIZE);
+    p.drawFullscreen();
+}
+#else
+void wotmFmvInstall(PS2Runtime &)
+{
+    std::fprintf(stderr, "[fmv] PS2X_FMV ignorado: falta native/wotm_fmv.hpp (WOTM_NATIVE_DIR) ou o FFmpeg (PS2X_ENABLE_FFMPEG)\n");
+}
+static void wotmFmvPresent(uint8_t *) {}
+#endif
+
+// Rastro do boot: da abertura do processo ao primeiro filme ou quadro do jogo, cada etapa vai ao stderr com o tempo desde o inicio
+// ("[boot]  3.21 s  disco: ...") e aparece escrita na tela preta. Etapa parada ha mais de 3 s repete no log com o PC do EE, para
+// achar o gargalo em maquinas onde a tela preta demora. Chamado do main.cpp, de initialize/run, do sceCdSearchFile e do log do IOP.
+#include <cstdarg>
+#include <mutex>
+namespace wotm_boot
+{
+inline const std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+inline std::mutex mx;
+inline std::string step = "iniciando";
+inline double stepAt = 0.0;
+inline std::atomic<bool> done{false}, presenting{false};
+inline std::thread::id mainThread;
+inline double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+// Consolas do Windows (carregada na thread da janela, na primeira vez); sem o arquivo, a fonte padrao do raylib
+inline Font font()
+{
+    static Font f = [] {
+        Font r = LoadFontEx("C:/Windows/Fonts/consola.ttf", 40, nullptr, 0);
+        if (r.texture.id == 0)
+            return GetFontDefault();
+        SetTextureFilter(r.texture, TEXTURE_FILTER_BILINEAR);
+        return r;
+    }();
+    return f;
+}
+inline void drawOverlay()
+{
+    std::string s;
+    double at;
+    {
+        std::lock_guard<std::mutex> lk(mx);
+        s = step;
+        at = stepAt;
+    }
+    const double t = now();
+    const float h = static_cast<float>(GetScreenHeight());
+    DrawTextEx(font(), TextFormat("Carregando... %.1f s", t), Vector2{16.0f, h - 54.0f}, 20.0f, 0.0f, LIGHTGRAY);
+    DrawTextEx(font(), TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s nesta etapa)", t - at) : ""), Vector2{16.0f, h - 28.0f},
+               16.0f, 0.0f, GRAY);
+}
+} // namespace wotm_boot
+
+void wotmBoot(const char *fmt, ...)
+{
+    if (wotm_boot::done.load(std::memory_order_relaxed))
+        return;
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    std::vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    for (size_t n = std::strlen(buf); n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' '); --n)
+        buf[n - 1] = '\0';   // o printf do IOP vem com quebra de linha
+    const double t = wotm_boot::now();
+    {
+        std::lock_guard<std::mutex> lk(wotm_boot::mx);
+        if (wotm_boot::mainThread == std::thread::id())
+            wotm_boot::mainThread = std::this_thread::get_id();
+        wotm_boot::step = buf;
+        wotm_boot::stepAt = t;
+    }
+    std::fprintf(stderr, "[boot] %6.2f s  %s\n", t, buf);
+    std::fflush(stderr);
+    // antes do laco de apresentacao (ELF, hooks) ninguem desenha: a thread principal desenha um quadro com a etapa
+    if (!wotm_boot::presenting.load(std::memory_order_relaxed) && IsWindowReady() && std::this_thread::get_id() == wotm_boot::mainThread)
+    {
+        BeginDrawing();
+        ClearBackground(BLACK);
+        wotm_boot::drawOverlay();
+        EndDrawing();
+    }
+}
+
+// Uma vez por apresentacao, enquanto o boot nao termina: escreve a etapa na tela, repete no log a etapa parada (com o PC do EE) e
+// encerra o rastro no primeiro filme; sem filme (WOTM_MATCH pula a abertura), quando a camada nativa carrega a fase (wotmBootDone).
+// g_frame e world nao servem: os dois ja estao preenchidos antes da abertura.
+static void wotmBootDone(const char *what)
+{
+    if (wotm_boot::done.load(std::memory_order_relaxed))
+        return;
+    wotmBoot("pronto: %s", what);
+    wotm_boot::done.store(true, std::memory_order_relaxed);
+}
+// O vsync por segundo no aviso mostra se a espera e o relogio virtual andando devagar (o boot espera vsyncs).
+static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
+{
+    if (wotm_boot::done.load(std::memory_order_relaxed))
+        return;
+    wotm_boot::presenting.store(true, std::memory_order_relaxed);
+#ifdef WOTM_HAVE_FMV
+    const wotm::fmv::Player &fp = wotm::fmv::Player::get();
+    if (fp.active(wotm::fmv::Player::Full) || fp.active(wotm::fmv::Player::Screen))
+        return wotmBootDone("primeiro filme");
+#endif
+    static double s_lastBeat = 0.0;
+    static uint64_t s_lastVsync = 0;
+    const double t = wotm_boot::now();
+    if (s_lastBeat == 0.0)
+    {
+        s_lastBeat = t;
+        s_lastVsync = vsync;
+    }
+    std::string s;
+    double at;
+    {
+        std::lock_guard<std::mutex> lk(wotm_boot::mx);
+        s = wotm_boot::step;
+        at = wotm_boot::stepAt;
+    }
+    if (t - at >= 2.0 && t - s_lastBeat >= 2.0)
+    {
+        const double rate = double(vsync - s_lastVsync) / (t - s_lastBeat);
+        std::fprintf(stderr, "[boot] %6.2f s  ... ainda em \"%s\" ha %.1f s (PC do EE 0x%06x, vsync %llu, %.0f/s)\n", t, s.c_str(), t - at,
+                     eePc, (unsigned long long)vsync, rate);
+        std::fflush(stderr);
+        s_lastBeat = t;
+        s_lastVsync = vsync;
+    }
+    wotm_boot::drawOverlay();
+}
+
+// Som nativo (native/wotm_snd.hpp), ligado com PS2X_SND=1 (wotmSndInstall, chamado do main.cpp)
+#include "wotm_snd.inc"
+
+#if __has_include("wotm_native.hpp")
+#include "wotm_native.hpp"
+#include <filesystem>
+#define WOTM_HAVE_NATIVE 1
+
+namespace wotm_live
+{
+// Diagnostico de queda: sem windows.h (conflita com o raylib), espelha so o que o filtro precisa.
+struct ExcRecord
+{
+    unsigned long code, flags;
+    ExcRecord *next;
+    void *address;
+    unsigned long nparams;
+    unsigned long long info[15];
+};
+struct ExcPointers
+{
+    ExcRecord *rec;
+    void *ctx;
+};
+extern "C" __declspec(dllimport) void *__stdcall SetUnhandledExceptionFilter(long(__stdcall *)(ExcPointers *));
+extern "C" __declspec(dllimport) void *__stdcall GetModuleHandleA(const char *);
+inline const char *g_stage = "idle";   // etapa da camada nativa em andamento (para localizar a queda)
+inline long __stdcall crashFilter(ExcPointers *e)
+{
+    const char *base = static_cast<const char *>(GetModuleHandleA(nullptr));
+    std::fprintf(stderr, "[CRASH] code=0x%08lx addr=%p (exe+0x%llx) stage=%s", e->rec->code, e->rec->address,
+                 (unsigned long long)(static_cast<const char *>(e->rec->address) - base), g_stage);
+    if (e->rec->code == 0xC0000005)
+        std::fprintf(stderr, " acesso=%s endereco=0x%llx", e->rec->info[0] == 1 ? "escrita" : (e->rec->info[0] == 8 ? "execucao" : "leitura"), e->rec->info[1]);
+    std::fprintf(stderr, "\n");
+    std::fflush(stderr);
+    return 0; // EXCEPTION_CONTINUE_SEARCH
+}
+struct State
+{
+    wotm::Scene scene;
+    RenderTexture2D rts[2]{};   // alternadas: a do quadro anterior e a textura do texId 0 (o jogo amostra o buffer em exibicao)
+    int cur = 0;
+    uint32_t levelSig = 0;
+    bool rtxChosen = false;
+    std::string rtxPath;
+    long frame = 0;
+    wotm::Snapshot A, B;   // quadros do jogo anterior e atual (interpolacao: o jogo anda a 30/s, a tela desenha a 60)
+    bool interp = std::getenv("WOTM_NOINTERP") == nullptr;   // F4 liga/desliga a interpolacao (WOTM_NOINTERP: comeca desligada)
+};
+
+// Fase carregada: so o cabecalho da imagem do nivel em 0xA00000 (N e os N ponteiros dos nos-raiz, docs/FORMATOS.md) e o endereco
+// das texturas. Os nos logo depois sao estado vivo (o menu reescreve matrizes ali a cada quadro nas transicoes de tela, o que
+// invalidava a cena inteira por quadro: tela a ~16/s).
+inline uint32_t levelSignature(const wotm::Ram &ram)
+{
+    uint32_t h = ram.u32(wotm::addr::tempVramTexAddr) * 2654435761u;
+    const uint32_t n = std::min<uint32_t>(ram.u32(0xA00000), 255u);
+    for (uint32_t k = 0; k <= n; ++k)
+        h = (h ^ ram.u32(0xA00000 + 4 * k)) * 16777619u;
+    return h;
+}
+
+} // namespace wotm_live
+
+// Desenha a fase lida da RAM (sem VU1/GS) por cima do quadro; devolve falso (e nao desenha) quando nao ha fase carregada.
+namespace wotm_live { static bool g_hideFps = false; }   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
+static bool wotmDrawNative(const uint8_t *rdram)
+{
+    static wotm_live::State S;
+#ifdef WOTM_HAVE_FMV
+    S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
+#endif
+    S.scene.screenTexture = []() { return S.rts[S.cur ^ 1].texture.id; };   // texId 0: quadro anterior
+    static bool filterInstalled = false;
+    if (!filterInstalled)
+    {
+        filterInstalled = true;
+        wotm_live::SetUnhandledExceptionFilter(wotm_live::crashFilter);
+    }
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    const uint32_t wc = ram.u32(wotm::addr::world);
+    if (!ram.ok(wc, 0x40) || !ram.ok(ram.u32(wc)))
+        return false;
+
+    const uint32_t sig = wotm_live::levelSignature(ram);
+    if (sig != S.levelSig)
+    {
+        S.scene.invalidate();
+        S.levelSig = sig;
+        S.rtxChosen = false;
+        S.A = wotm::Snapshot{};
+        S.B = wotm::Snapshot{};
+    }
+    // Quadro novo do jogo (g_frame em 0x6F7E38 mudou): le a cena da RAM e guarda como instantaneo B (o anterior vira A). Nos desenhos
+    // seguintes so mistura A e B: o jogo termina o quadro e espera o pacing, entao a RAM e consistente logo depois do g_frame++.
+    const uint32_t gNow = ram.u32(0x6F7E38);
+    const double tNow = GetTime();
+    if (!S.B.valid || gNow != S.B.g)
+    {
+        wotm_live::g_stage = "collect";
+        S.scene.collect(ram);
+        if (S.scene.items.size() < 20)
+            return false;
+        {
+            // nivel + monstros: nomes e bases das paletas vem de fileStatus (idempotente; refaz so quando mudam)
+            std::string log;
+            wotm_live::g_stage = "loadResources";
+            S.rtxChosen = S.scene.loadResources(ram, "", &log);
+            if (!log.empty() && log != S.rtxPath)
+            {
+                S.rtxPath = log;
+                std::fprintf(stderr, "[native] recursos: %s\n", log.c_str());
+                wotmBootDone("fase na tela");
+            }
+        }
+        wotm_live::g_stage = "snapshot";
+        wotm::Snapshot sn = S.scene.takeSnapshot(ram, tNow, gNow);
+        if (!sn.cam.ok)
+            return false;
+        S.A = S.B.valid ? std::move(S.B) : sn;
+        S.B = std::move(sn);
+    }
+    if (!S.B.valid)
+        return false;
+    if (IsKeyPressed(KEY_F4))
+        S.interp = !S.interp;
+    float alpha = 1.f;
+    {
+        const double span = S.B.t - S.A.t;   // duracao do quadro anterior do jogo; o atual deve durar parecido
+        if (S.interp && span > 0.004 && span < 0.25)
+            alpha = static_cast<float>((tNow - S.B.t) / span);
+    }
+    const wotm::GameCamera gc = S.scene.blend(S.A, S.B, alpha);
+    if (!gc.ok)
+        return false;
+
+    const int RW = 960, RH = 720;
+    S.cur ^= 1;
+    for (RenderTexture2D &r : S.rts)
+        if (r.id == 0)
+        {
+            r = LoadRenderTexture(RW, RH);
+            SetTextureFilter(r.texture, TEXTURE_FILTER_BILINEAR);
+            // texId 0 (quadro anterior): o mapa de ambiente de video/CLOAK usa REGION_CLAMP na tela 640x224 do GS, que e a
+            // textura inteira (Scene::envUv)
+            SetTextureWrap(r.texture, TEXTURE_WRAP_CLAMP);
+        }
+    RenderTexture2D &rt = S.rts[S.cur];
+
+    BeginTextureMode(rt);
+    ClearBackground(Color{30, 40, 60, 255});
+    rlSetClipPlanes(0.5, 30000.0);
+    Camera3D c3{};
+    c3.position = {gc.pos[0], gc.pos[1], gc.pos[2]};
+    c3.target = {gc.pos[0] + gc.fwd[0], gc.pos[1] + gc.fwd[1], gc.pos[2] + gc.fwd[2]};
+    c3.up = {gc.up[0], gc.up[1], gc.up[2]};
+    c3.fovy = gc.fovy;
+    c3.projection = CAMERA_PERSPECTIVE;
+    BeginMode3D(c3);
+    wotm_live::g_stage = "draw";
+    S.scene.draw(ram, false);
+    wotm_live::g_stage = "idle";
+    EndMode3D();
+    S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
+    S.scene.drawText(ram, static_cast<float>(RW), static_cast<float>(RH));
+    EndTextureMode();
+
+    // letterbox 4:3 na janela
+    const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
+    const float k = std::min(sw / RW, sh / RH);
+    const Rectangle src{0.f, 0.f, static_cast<float>(RW), -static_cast<float>(RH)};
+    const Rectangle dst{(sw - RW * k) * 0.5f, (sh - RH * k) * 0.5f, RW * k, RH * k};
+    DrawTexturePro(rt.texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
+
+    {   // contador de FPS (F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
+        static bool show = !wotm_live::g_hideFps;
+        static uint32_t lastG = 0;
+        static double lastT = 0.0;
+        static int drawn = 0;
+        static float gameFps = 0.f, screenFps = 0.f;
+        if (IsKeyPressed(KEY_F3))
+            show = !show;
+        ++drawn;
+        const double now = GetTime();
+        static const bool camLog = std::getenv("WOTM_CAMLOG") != nullptr;   // diagnostico: serie temporal da camera lida (um [cam] por desenho)
+        if (camLog)
+        {
+            // _cs das vistas 0 e 1 (ponteiros) e a frente da worldToScreenMat (linha 3), lidos agora: separam troca de camera de leitura rasgada
+            const uint32_t wm = wotm::addr::worldToScreenMat;
+            const uint32_t cs = ram.u32(wotm::addr::viewInfo);
+            float csp[3] = {0, 0, 0}, csu[3] = {0, 0, 0};
+            if (ram.ok(cs, 0x60))
+                for (int i = 0; i < 3; ++i) { csp[i] = ram.f32(cs + 0x10 + 4 * i); csu[i] = ram.f32(cs + 0x40 + 4 * i); }
+            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f cs=%x,%x wm3=%.4f,%.4f,%.4f a=%.2f csp=%.2f,%.2f,%.2f "
+                                 "up=%.4f,%.4f,%.4f csu=%.4f,%.4f,%.4f\n",
+                         now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0], gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2], cs,
+                         ram.u32(wotm::addr::viewInfo + 0x14), ram.f32(wm + 0x30), ram.f32(wm + 0x34), ram.f32(wm + 0x38), alpha, csp[0], csp[1], csp[2],
+                         gc.up[0], gc.up[1], gc.up[2], csu[0], csu[1], csu[2]);
+        }
+        if (lastT == 0.0)
+        {
+            lastT = now;
+            lastG = ram.u32(0x6F7E38);
+        }
+        else if (now - lastT >= 0.5)
+        {
+            const uint32_t g = ram.u32(0x6F7E38);
+            gameFps = static_cast<float>(g - lastG) / static_cast<float>(now - lastT);
+            screenFps = static_cast<float>(drawn) / static_cast<float>(now - lastT);
+            lastG = g;
+            drawn = 0;
+            lastT = now;
+        }
+        if (show)
+        {
+            char line[128];
+            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps | fov %.1f | interp %s (F4)", gameFps, screenFps, gc.fovy, S.interp ? "ligada" : "desligada");
+            DrawText(line, 11, 11, 20, BLACK);
+            DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
+        }
+    }
+
+    if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
+        std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu nos=%u rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),
+                     S.scene.visited, S.rtxPath.c_str());
+    return true;
+}
+// Chamado na thread do jogo logo depois do particleDraw (hook_particleDraw, main.cpp): copia a lista do lens flare ja projetada
+// (Particles::captureFlares); a apresentacao chega tarde demais (o hier do quadro seguinte ja a refez).
+void wotmFlareCapture(const uint8_t *rdram)
+{
+    if (rdram)
+        wotm::Particles::captureFlares(wotm::Ram{rdram, PS2_RAM_SIZE});
+}
+#else
+static bool wotmDrawNative(const uint8_t *) { return false; }
+void wotmFlareCapture(const uint8_t *) {}
+#endif
