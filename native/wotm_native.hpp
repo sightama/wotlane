@@ -58,6 +58,7 @@ constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // Cs
 constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
 constexpr uint32_t fileStatus = wotm::sym::fileStatus;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C, maxResAddr[14]@0x168
 constexpr uint32_t texInfo = wotm::sym::texInfo;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
+constexpr uint32_t shellFadePacket = 0x00731540; // D_00731540: pacote do Shell::FadeScreen (DMA, A+D ALPHA_1, SPRITE); o laco reescreve o alfa em +0x4C a cada campo
 constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
 constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
 constexpr uint32_t psLitDirWs = wotm::sym::psLitDirWs;      // direcao da luz das sombras (da cena para a luz), mundo
@@ -481,6 +482,47 @@ struct TextQuad {
     uint64_t tex0;        // TEX0 em vigor (atlas T8H 512x512 do .RTX da fase + paleta CBP)
 };
 
+// Retangulo de tela sem textura (fade): SPRITE do GS com ABE e ALPHA_1 0x44 ((Cs - Cd)·As + Cd, As = a/0x80) sobre a vista, montado
+// como pacote GIF por rtFadeScreen, TheGame::updateFadeOut/updateFadeOutAndIn, uiFadeScreen e Shell::FadeScreen. XY na tela do jogo
+// (640 x 224, campo), como o texto.
+struct ScreenRect {
+    float x0, y0, x1, y1;
+    uint8_t r, g, b, a;   // RGBAQ do GS: a = 0x80 cobre tudo
+};
+
+// Le de um pacote (tag DMA em p, tags GIF PACKED a partir de p + 16) o primeiro SPRITE sem textura com mistura (REGS RGBAQ, XYZ2, XYZ2),
+// exigindo que o A+D do mesmo pacote tenha posto ALPHA_1 = 0x44. Outro formato: false.
+inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) {
+    auto u64 = [&](uint32_t a) { return uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32); };
+    uint64_t alpha = ~0ull;
+    uint32_t q = p + 16;
+    for (int t = 0; t < 4 && ram.ok(q, 16); ++t) {
+        const uint64_t tag = u64(q), regs = u64(q + 8);
+        const uint32_t nloop = uint32_t(tag & 0x7FFF), flg = uint32_t(tag >> 58) & 3, nreg = (uint32_t(tag >> 60) & 15) ? (uint32_t(tag >> 60) & 15) : 16;
+        const uint32_t prim = uint32_t(tag >> 47) & 0x7FF;
+        q += 16;
+        if (flg != 0) return false;
+        bool ad = true;
+        for (uint32_t i = 0; i < nreg; ++i) ad = ad && ((regs >> (4 * i)) & 0xF) == 0xE;
+        if (ad) {
+            for (uint32_t i = 0; i < nloop * nreg && ram.ok(q, 16); ++i, q += 16)
+                if ((u64(q + 8) & 0xFF) == 0x42) alpha = u64(q);   // ALPHA_1
+            continue;
+        }
+        // PRE, SPRITE (6), ABE (0x40), sem TME (0x10)
+        if (!((tag >> 46) & 1) || (prim & 7) != 6 || !(prim & 0x40) || (prim & 0x10) || nreg != 3 || (regs & 0xFFF) != 0x551 || nloop < 1 ||
+            (alpha & 0xFF) != 0x44 || !ram.ok(q, 48))
+            return false;
+        constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;   // viewport cheio: 640 x 224 (campo), centro 2048 (como o texto)
+        out.r = uint8_t(std::min(255u, ram.u32(q))); out.g = uint8_t(std::min(255u, ram.u32(q + 4)));
+        out.b = uint8_t(std::min(255u, ram.u32(q + 8))); out.a = uint8_t(std::min(255u, ram.u32(q + 12)));
+        out.x0 = float(ram.u32(q + 16) & 0xFFFF) / 16.f - kOx; out.y0 = float(ram.u32(q + 20) & 0xFFFF) / 16.f - kOy;
+        out.x1 = float(ram.u32(q + 32) & 0xFFFF) / 16.f - kOx; out.y1 = float(ram.u32(q + 36) & 0xFFFF) / 16.f - kOy;
+        return true;
+    }
+    return false;
+}
+
 // Bloqueador de sombra ativo (Scene::collectShadows / drawShadows): entrada de psBlkLst e os objetos que projetam a silhueta.
 struct ShadowBlocker {
     int index = 0;               // entrada de psBlkLst
@@ -500,6 +542,7 @@ struct Snapshot {
     std::vector<DrawItem> items, sky, overlay, hud;
     std::vector<FxSystem> fx;
     std::vector<ShadowBlocker> shadows;
+    std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
     ParaLights lights;
     Fog fog;
     GameCamera cam;
@@ -517,6 +560,7 @@ public:
     std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133): por cima da cena, sem profundidade, depois dos icones (DrawItem::hudId = id do objeto)
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
+    std::vector<ScreenRect> screenRects;   // fades (Snapshot::screenRects), desenhados por drawScreenRects por ultimo
     uint32_t visited = 0;
     uint32_t byOp[64] = {};
 
@@ -1334,6 +1378,7 @@ public:
         sprites = s.sprites;
         fx.systems = s.fx;
         shadows = s.shadows;
+        screenRects = s.screenRects;
         lights_ = s.lights;
         fog_ = s.fog;
         cam_ = s.cam;
@@ -2353,6 +2398,21 @@ public:
                            Rectangle{gr.x0 + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
         }
         if (textShader_.id > 0) EndShaderMode();
+    }
+
+    // Fades por cima de tudo (no PS2 saem depois do HUD e do texto: fila do gsPkt no fim do quadro, uiFadeScreen depois do
+    // fontDmaFontData). Retangulo da largura da tela do jogo cobre o quadro inteiro (em widescreen o fade escurece a janela toda);
+    // um menor fica na faixa 4:3 central, como o texto.
+    void drawScreenRects(float rw, float rh) const {
+        const GsScreenRect gr = gsScreenRect(rw, rh);
+        const float sy = rh / 224.f;
+        for (const ScreenRect &r : screenRects) {
+            const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
+            if (!a) continue;
+            const bool full = r.x0 <= 0.f && r.x1 >= 640.f;
+            const float x0 = full ? 0.f : gr.x0 + r.x0 * gr.w / 640.f, x1 = full ? rw : gr.x0 + r.x1 * gr.w / 640.f;
+            DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
+        }
     }
 
 private:

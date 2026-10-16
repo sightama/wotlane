@@ -15,7 +15,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 
 ## Onde estamos
 - **Port:** o jogo roda no Windows a 60 fps com desenho nativo (fases, monstros, partículas, sombras, neblina, texto do menu), luta por teclado, som e filmes. Geometria casada com o VU1 em mais de 99%
-  dos triângulos; textura, UV, cor e neblina conferidos; HUD do `hier` (retrato, barras de vida e energia, *letterbox*) e widescreen Hor+ (janela em 16:9, `WOTM_ASPECT`) desde 2026-10-16. Falta: HUD que sai como pacote do GS (`ScreenPolys`, PATH2/PATH3), fades e o resto do inventário. Código em `native/` e `native/runtime/`; estado por área em `passos/NATIVO.md`.
+  dos triângulos; textura, UV, cor e neblina conferidos; HUD do `hier` (retrato, barras de vida e energia, *letterbox*) e widescreen Hor+ (janela em 16:9, `WOTM_ASPECT`) desde 2026-10-16. Fades desde 2026-10-16. Falta o resto do inventário (iluminação e bugs gráficos). Código em `native/` e `native/runtime/`; estado por área em `passos/NATIVO.md`.
 - **Decomp:** `sh tools/wsl/gate.sh` diz `ROM OK` (build + SHA1). Bloco de progresso do README (`python3 tools/progress.py`): `game` 1723 de 3181 funções decompiladas (idênticas + equivalentes),
   417 KB de 909 KB; `common` 836 de 1144. Convenções em `docs/ANALYSIS.md` ("Convenções de status das funções").
 - **Ferramentas do dia a dia:** `tools/corpus.ps1` (corpus de regressão da checagem), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, com inventário por dono, gatilho

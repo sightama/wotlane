@@ -30,6 +30,8 @@ extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
+void wotmScreenRect(const uint8_t *rdram, uint32_t pkt);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmShellFade(int start, int step, bool accumulate);   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
 
 namespace
 {
@@ -345,6 +347,50 @@ namespace
         g_origWaitMinRate(rdram, ctx, runtime);
     }
 
+    // Fades para o desenho nativo (wotm_live.inc, Scene::drawScreenRects): o jogo escurece a tela com um SPRITE do GS montado na hora.
+    // rtFadeScreen (entrada da luta) e TheGame::updateFadeOut/updateFadeOutAndIn (fim de rodada, cinemas) o poem na fila do gsPkt
+    // (AddCallToQueue, a1 = pacote): o tap le cada pacote enfileirado, e o leitor so aceita o formato do fade. O uiFadeScreen (menus)
+    // monta na pilha (0xB0 abaixo do sp de entrada) e manda direto: lido depois de voltar. O Shell::FadeScreen e um laco que espera
+    // vsyncs: marca na entrada; o pacote fica em D_00731540. Argumentos: a2 = b (redesenha a cena a cada passo), e na pilha de entrada
+    // alfa inicial (+0), final (+8) e passo (+0x10), bytes.
+    constexpr uint32_t kAddCallToQueue = wotm::fn::AddCallToQueue__5GsPktP6QwData, kUiFadeScreen = wotm::fn::uiFadeScreen__FUi,
+                       kShellFadeScreen = wotm::fn::FadeScreen__5ShellibRUiT3UcUcUcUcUcUc;
+    PS2Runtime::RecompiledFunction g_origAddCall = nullptr, g_origUiFade = nullptr, g_origShellFade = nullptr;
+
+    void addCallToQueueTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kAddCallToQueue)
+            wotmScreenRect(rdram, GPR_U32(ctx, 5));
+        g_origAddCall(rdram, ctx, runtime);
+    }
+
+    void uiFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static uint32_t ra = 0, sp = 0;
+        if (ctx->pc == kUiFadeScreen)
+        {
+            ra = GPR_U32(ctx, 31);
+            sp = GPR_U32(ctx, 29);
+        }
+        g_origUiFade(rdram, ctx, runtime);
+        if (ra && ctx->pc == ra && GPR_U32(ctx, 29) == sp)   // voltou (nao so uma pausa no meio)
+        {
+            wotmScreenRect(rdram, sp - 0xB0u);
+            ra = 0;
+        }
+    }
+
+    void shellFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kShellFadeScreen)
+        {
+            const uint32_t sp = GPR_U32(ctx, 29);
+            const int start = READ8(sp), end = READ8(sp + 8), step = READ8(sp + 0x10);
+            wotmShellFade(start, step, (GPR_U32(ctx, 6) & 0xFF) == 0 && start < end);   // sem redesenho, subindo: acumula
+        }
+        g_origShellFade(rdram, ctx, runtime);
+    }
+
     // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
     void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -390,6 +436,12 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kTimerWaitForMinUpdateRate, &waitMinRateByVblanks);
         runtime.registerFunction(kTimerGetCurTics, &getCurTicsMarked);
     }
+    if ((g_origAddCall = runtime.lookupFunction(kAddCallToQueue)))
+        runtime.registerFunction(kAddCallToQueue, &addCallToQueueTapped);
+    if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
+        runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
+    if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))
+        runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
         int v[5], n = 0;

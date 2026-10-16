@@ -306,11 +306,33 @@ static Capture &capture()
     return c;
 }
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
+// Fades do quadro em montagem (thread do EE): os hooks dos emissores (wotm_overrides.cpp) leem o pacote recem-montado; o
+// wotmCaptureFrame os passa ao instantaneo. O Shell::FadeScreen e um laco proprio (sem timerWaitForMinUpdateRate, logo sem
+// captura): enquanto roda, a apresentacao le o pacote dele ao vivo (o laco so reescreve o alfa); a proxima captura o desliga.
+// Sem redesenho (b = false), o laco pinta o fade de novo por cima do mesmo buffer a cada campo (dois buffers alternados): no buffer da
+// vez a tela ja levou os alfas a - 2·passo, a - 4·passo... desde o inicio, e o escurecimento acumula (Scene::drawScreenRects recebe o
+// alfa equivalente). g_shellFade: -1 = parado; senao inicio | passo << 8 | acumula << 16.
+static std::vector<wotm::ScreenRect> g_pendingRects;
+static std::atomic<int> g_shellFade{-1};
 } // namespace wotm_live
+
+void wotmScreenRect(const uint8_t *rdram, uint32_t pkt)
+{
+    wotm::ScreenRect r{};
+    if (rdram && wotm_live::g_pendingRects.size() < 16 && wotm::readScreenRect(wotm::Ram{rdram, PS2_RAM_SIZE}, pkt, r))
+        wotm_live::g_pendingRects.push_back(r);
+}
+void wotmShellFade(int start, int step, bool accumulate)
+{
+    wotm_live::g_shellFade.store((start & 0xFF) | ((step & 0xFF) << 8) | (accumulate ? 1 << 16 : 0), std::memory_order_relaxed);
+}
 
 void wotmCaptureFrame(const uint8_t *rdram)
 {
     wotm_live::Capture &c = wotm_live::capture();
+    std::vector<wotm::ScreenRect> rects;
+    rects.swap(wotm_live::g_pendingRects);
+    wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
     if (!rdram || !c.on.load(std::memory_order_relaxed))
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
@@ -321,6 +343,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     cap.wide = c.wide.load(std::memory_order_relaxed);
     cap.collect(ram);
     wotm::Snapshot sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
+    sn.screenRects = std::move(rects);
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
@@ -408,6 +431,22 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const wotm::GameCamera gc = S.scene.show(S.snap);
     if (!gc.ok)
         return false;
+    if (const int sf = wotm_live::g_shellFade.load(std::memory_order_relaxed); sf >= 0)
+    {
+        wotm::ScreenRect r{};
+        if (wotm::readScreenRect(ram, wotm::addr::shellFadePacket, r))
+        {
+            const int start = sf & 0xFF, step = (sf >> 8) & 0xFF;
+            if ((sf >> 16) && step > 0)
+            {
+                float keep = 1.f;   // fracao da cena que sobra no buffer da vez
+                for (int a = r.a; a >= start; a -= 2 * step)
+                    keep *= 1.f - std::min(a, 0x80) / 128.f;
+                r.a = static_cast<uint8_t>(std::lround((1.f - keep) * 0x80));
+            }
+            S.scene.screenRects.push_back(r);
+        }
+    }
 
     S.cur ^= 1;
     for (RenderTexture2D &r : S.rts)
@@ -443,6 +482,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     EndMode3D();
     S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
     S.scene.drawText(ram, static_cast<float>(RW), static_cast<float>(RH));
+    S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // fades, por cima de tudo
     EndTextureMode();
 
     // quadro na janela, mantendo a proporcao (faixas so se a janela sair de 4:3..32:9 ou com WOTM_ASPECT fixo)
@@ -517,4 +557,6 @@ namespace wotm_live { static void initWindowAspect() {} }
 static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
+void wotmScreenRect(const uint8_t *, uint32_t) {}
+void wotmShellFade(int, int, bool) {}
 #endif
