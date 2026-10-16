@@ -177,7 +177,15 @@ ORDEM DE EXECUÇÃO
    instantâneo passou a guardar os pacotes do canal GIF e os registradores do GS, e ao vivo os
    uploads de textura vão ao GS (PS2X_GS_UPLOADS ligado sozinho). Verdade de pixel continua sendo
    exportar os pacotes para o renderizador por software do PCSX2 (passo futuro).
-2. Parte 2, peça 2 com imagem de referência pelo GS em software e diff por pixel; peça 3 (corpus).
+   [FEITO 2026-10-16] Inventário (dia 1 do plano decidido com o dono): a checagem lista o que só um
+   lado desenha, por dono (linhas "inv"): primitivos do PATH2/PATH3 (HUD, menus, fade) e órfãos do
+   VU1 de um lado, objetos nativos sem triângulo do VU1 (inclusive céu/ícones, com alfa máximo) do
+   outro. Funciona em qualquer tela (qualquer chamador de hier(0,0)); gatilho mem:<end>[=<val>] e
+   tecla F8. Costura nova no fork: g_wotmPath2Src (origem na RAM do DIRECT). Testado: 10 telas do
+   menu numa sessão, replay offline igual ao ao vivo; primeiro achado em VU1CHECK.md.
+2. Parte 2, peça 2: diff por pixel com atribuição (qual primitivo pintou cada pixel que difere) e a
+   imagem de referência nos menus (sai preta: buffer/Z do GS em software); peça 3 (corpus, com um
+   instantâneo por tela de menu e os da luta).
 3. [FEITO 2026-10-15] 1.2: wotm_live/scene/snd/vu1check.inc, wotm_overrides.cpp e wotm_vu0_native.cpp/.h
    vivem em native/runtime/ no repo; o CMake do fork (-DWOTM_NATIVE_DIR obrigatório) os inclui e compila;
    o patch caiu de ~5.900 para ~2.500 linhas e só tem costuras. O .gen.inc do VU0 vai para <build>\wotm_gen.

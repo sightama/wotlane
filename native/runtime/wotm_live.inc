@@ -311,6 +311,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         return false;
     if (IsKeyPressed(KEY_F4))
         S.interp = !S.interp;
+    if (IsKeyPressed(KEY_F8))
+        g_wotmShotKey = true;   // checagem VU1 x nativo: grava e compara o proximo quadro (WOTM_VU1CHECK ligado)
     float alpha = 1.f;
     {
         const double span = S.B.t - S.A.t;   // duracao do quadro anterior do jogo; o atual deve durar parecido

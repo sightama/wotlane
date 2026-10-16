@@ -238,10 +238,10 @@ index 0f19c9f..cbe7866 100644
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..2721c17 100644
+index ea86a9c..49e4e9e 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
-@@ -23,6 +23,18 @@
+@@ -23,6 +23,19 @@
  
  class GS;
  
@@ -253,6 +253,7 @@ index ea86a9c..2721c17 100644
 +extern void (*g_wotmGifDmaTap)(const uint8_t *data, uint32_t bytes);   // cada pacote do canal GIF (PATH3: ambiente de desenho, uploads) com o tap ligado
 +extern uint32_t g_wotmVu1Src;
 +extern void (*g_wotmGifTap)(uint32_t src, const uint8_t *packet, uint32_t bytes);
++extern uint32_t g_wotmPath2Src;   // endereco na RAM do pacote DIRECT (PATH2) que esta indo para g_wotmGifTap(0, ...) (0 = desconhecido)
 +extern uint32_t (*g_wotmMscalTap)(const uint32_t *srcs, uint32_t n, uint32_t prog, const uint8_t *vu1Data);   // origens dos trechos ate o MSCAL, endereco do programa e memoria de dados do VU1 -> id (g_wotmVu1Src)
 +extern void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t *data, uint32_t bytes);   // inicio de cada cadeia do VIF1 com o tap ligado (trechos: deslocamento, origem; bytes da cadeia, para o instantaneo)
 +extern uint32_t g_wotmVif1Bad;   // codigos VIF1 invalidos desde o boot (fluxo fora de passo); a checagem VU1 x nativo o mostra
@@ -260,7 +261,7 @@ index ea86a9c..2721c17 100644
  constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
  constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
-@@ -417,7 +429,9 @@ public:
+@@ -417,7 +430,9 @@ public:
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
@@ -893,10 +894,10 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..99f1567 100644
+index 37b6a4d..2b3005a 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
-@@ -10,6 +10,16 @@
+@@ -10,6 +10,17 @@
  #include <string>
  #include <vector>
  
@@ -906,6 +907,7 @@ index 37b6a4d..99f1567 100644
 +void (*g_wotmGifDmaTap)(const uint8_t *, uint32_t) = nullptr;
 +uint32_t g_wotmVu1Src = 0;
 +void (*g_wotmGifTap)(uint32_t, const uint8_t *, uint32_t) = nullptr;
++uint32_t g_wotmPath2Src = 0;
 +uint32_t (*g_wotmMscalTap)(const uint32_t *, uint32_t, uint32_t, const uint8_t *) = nullptr;
 +void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *, size_t, const uint8_t *, uint32_t) = nullptr;
 +uint32_t g_wotmVif1Bad = 0;
@@ -913,7 +915,7 @@ index 37b6a4d..99f1567 100644
  namespace
  {
      inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
-@@ -1346,9 +1356,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1346,9 +1357,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                      const bool tieEnabled = (chcr & (1u << 7)) != 0u;
                      const int kMaxChainTags = 4096;
                      std::vector<uint8_t> chainBuf;
@@ -927,7 +929,7 @@ index 37b6a4d..99f1567 100644
                          const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                          uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                          const bool scratch = isScratchpad(srcAddr);
-@@ -1395,6 +1409,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1395,6 +1410,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
  
                          // CHCR.TTE sends the DMAtag's upper 64 bits to the channel before
                          // the tag payload. VIF chains use those bytes for two VIFcodes.
@@ -936,7 +938,7 @@ index 37b6a4d..99f1567 100644
                          chainBuf.insert(chainBuf.end(), localBase + tagPhys + 8u, localBase + tagPhys + 16u);
                      };
  
-@@ -1446,6 +1462,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1446,6 +1463,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          bool hasPayload = (tagQwc > 0);
                          bool endChain = false;
  
@@ -980,7 +982,7 @@ index 37b6a4d..99f1567 100644
                          switch (id)
                          {
                          case 0:
-@@ -1535,6 +1588,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1535,6 +1589,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          pt.srcAddr = 0;
                          pt.qwc = 0;
                          pt.chainData = std::move(chainBuf);
@@ -988,7 +990,7 @@ index 37b6a4d..99f1567 100644
                          if (channelBase == 0x1000A000)
                          {
                              m_pendingGifTransfers.push_back(std::move(pt));
-@@ -1802,11 +1856,19 @@ void PS2Memory::processPendingTransfers()
+@@ -1802,11 +1857,19 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -1008,7 +1010,7 @@ index 37b6a4d..99f1567 100644
          }
          else if (p.qwc > 0)
          {
-@@ -1956,6 +2018,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+@@ -1956,6 +2019,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
              return;
          }
          flushMaskedPath3Packets(false);
@@ -1713,7 +1715,7 @@ index 45cb9d2..69acaee 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..34f94a6 100644
+index b02c7ca..11cb9da 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,9 @@
@@ -1873,7 +1875,7 @@ index b02c7ca..34f94a6 100644
                  m_vu1MscntCallback(runTop, runItop);
              continue;
          }
-@@ -495,12 +544,43 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -495,12 +544,58 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
              if (qwCount > availableQw)
                  qwCount = availableQw;
  
@@ -1913,8 +1915,23 @@ index b02c7ca..34f94a6 100644
 +                static const bool s_gsUploads2 = std::getenv("PS2X_GS_UPLOADS") != nullptr;
 +                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads2)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa), salvo no replay (imagem de referencia) e, com PS2X_GS_UPLOADS, para os uploads
 +                    submitGifPacket(GifPathId::Path2, data + directPos, directQw * 16, true, directHl);
-+                if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: a checagem acompanha os registradores (FRAME, TEX0) que chegam pelo PATH2
++                if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: a checagem acompanha os registradores (FRAME, TEX0) e os primitivos que chegam pelo PATH2
++                {
++                    // origem na RAM do pacote DIRECT (trecho da cadeia que contem directPos), para o inventario da checagem
++                    g_wotmPath2Src = 0u;
++                    if (m_vif1ChainSrc && !m_vif1ChainSrc->empty())
++                    {
++                        auto byOfs = [](uint32_t v, const std::pair<uint32_t, uint32_t> &e) { return v < e.first; };
++                        auto it = std::upper_bound(m_vif1ChainSrc->begin(), m_vif1ChainSrc->end(), directPos, byOfs);
++                        if (it != m_vif1ChainSrc->begin())
++                        {
++                            --it;
++                            g_wotmPath2Src = it->second + (directPos - it->first);
++                        }
++                    }
 +                    g_wotmGifTap(0u, data + directPos, directQw * 16);
++                    g_wotmPath2Src = 0u;
++                }
  
 -                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
 +                const uint32_t pendingImageQw = pendingGifImageQwc(data + directPos, directQw * 16u);

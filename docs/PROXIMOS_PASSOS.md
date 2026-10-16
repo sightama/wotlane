@@ -19,7 +19,8 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 ## Onde estamos
 - `sh tools/wsl/gate.sh` diz `ROM OK` (build + SHA1). Estado em 2026-10-15 (`python3 tools/progress.py`, bloco de progresso do README): `game` 1719 de 3181 funções
   decompiladas (idênticas + equivalentes), 407 KB de 909 KB; `common` 836 de 1144. Convenções em `docs/ANALYSIS.md` ("Convenções de status das funções").
-- Ferramentas do dia a dia: `tools/verify_tu.py` (todas as verificações de uma TU numa tabela), `tools/m2c_batch.sh` (rascunhos da fila), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, sem jogo). O código do runtime mora em `native/runtime/`.
+- Ferramentas do dia a dia: `tools/verify_tu.py` (todas as verificações de uma TU numa tabela), `tools/m2c_batch.sh` (rascunhos da fila), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, sem jogo; desde 2026-10-16 imprime o **inventário**: o que só a referência ou só o nativo desenha, por dono, em qualquer tela, com gatilho `mem:currScreen` e tecla F8; `passos/VU1CHECK.md`). O código do runtime mora em `native/runtime/`.
+- **Direção decidida em 2026-10-16:** port de PC primeiro; decomp só na superfície de mod (`Shell::Load*`, `MonsterParse`, câmera); runtime cobaia parado. Ordem: (1) inventário automático do que falta (feito o lado numérico; falta o diff por pixel com atribuição e a imagem de referência nos menus), (2) widescreen como primeiro mod, (3) HUD, fades, iluminação e bugs gráficos na ordem do inventário.
 - Objetivo do port: precisa de ~1000 funções / ~310 KB (lógica de jogo alcançável pelo laço de atualização), fora hardware. Lista em `config/callgraph.csv`.
 
 ## Estratégia (decidida com o usuário em 2026-10-07)

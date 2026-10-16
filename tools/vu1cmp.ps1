@@ -3,7 +3,8 @@
 #   tools\vu1cmp.ps1 <arquivo.vu1snap | pasta> [-Frame <g_frame>] [-Dump <prefixo>] [-Full] [-Build build_dev]
 #   Um arquivo guarda os quadros de uma sessao (gatilho/rajada: WOTM_VU1CHECK_WHEN, WOTM_VU1CHECK_BURST); todos sao comparados.
 #   -Frame <g_frame>: so esse quadro do arquivo
-#   -Full: todas as linhas [vu1check] (padrao: so as linhas de resumo de cada quadro: objetos, atributos, particulas, sprites)
+#   -Full: todas as linhas [vu1check] (padrao: as linhas de resumo de cada quadro, objetos/atributos/particulas/sprites, e o inventario
+#          inteiro, linhas "inv": o que so a referencia ou so o nativo desenha, por dono; ver docs/passos/VU1CHECK.md)
 #   -Dump <prefixo>: grava os triangulos de cada checagem em <prefixo>_<g_frame>.csv (o mesmo WOTM_VU1CHECK_DUMP)
 #   -NoPng: sem as imagens (padrao: <arquivo>_<g_frame>_{ref,nat,diff,trio}.png ao lado do instantaneo; ref = GS em software do
 #           runtime, aproximacao do GS do PS2; nat = camada nativa; diff = pixels diferentes; trio = os tres lado a lado)
@@ -42,7 +43,8 @@ foreach ($f in $files) {
         $lines | Where-Object { $_ -match '\[vu1cmp\]' } | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
         continue
     }
-    $sel = if ($Full) { $lines | Where-Object { $_ -match '\[vu1check\]|\[vu1cmp\] (imagens|sem quadro|a camada)' } } else { $lines | Where-Object { $_ -match '\[vu1check\] g=\d+ |\[vu1cmp\] (imagens|sem quadro|a camada)' } }
+    # padrao: resumos de cada quadro e o inventario inteiro (linhas "inv": o que so um lado desenha, por dono)
+    $sel = if ($Full) { $lines | Where-Object { $_ -match '\[vu1check\]|\[vu1cmp\] (imagens|sem quadro|a camada)' } } else { $lines | Where-Object { $_ -match '\[vu1check\] (g=\d+ |inv )|\[vu1cmp\] (imagens|sem quadro|a camada)' } }
     $sel | ForEach-Object { $_ -replace '^\[vu1check\] ', '' }
 }
 exit $rc

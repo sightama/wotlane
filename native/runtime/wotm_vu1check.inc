@@ -21,6 +21,10 @@
 // usa (texKey/objectTex0), nos campos que escolhem os texels.
 // Saida: linhas [vu1check] no stderr (totais e os objetos com mais diferenca). WOTM_VU1CHECK_DUMP=<prefixo> grava os triangulos de
 // cada checagem em <prefixo>_<g_frame>.csv.
+// Inventario (linhas "[vu1check] inv", funcao inventory): o que cada lado desenha sem par no outro, por dono. Do lado da referencia
+// entram tambem os primitivos do PATH2 (DIRECT do VIF1) e do PATH3 (canal GIF), que e por onde saem HUD, menus e fade; do lado
+// nativo, os objetos (inclusive ceu e icones) cujo polyPkt nenhum triangulo do VU1 tocou. E a lista do que falta ou sobra no port.
+// Funciona em qualquer tela (qualquer chamador de hier(0, 0)); gatilhos mem:<endereco>[=<valor>] e a tecla F8 pegam os menus.
 // WOTM_VU1CHECK_SNAP=<prefixo> grava um instantaneo de cada quadro amostrado (<prefixo>_<g_frame>.vu1snap) que reproduz a checagem
 // sem jogo: `ps2EntryRunner --vu1cmp <arquivo> [--dump <prefixo>]` (namespace snap e wotmVu1CmpMain, no fim).
 #ifdef WOTM_HAVE_NATIVE
@@ -76,6 +80,19 @@ struct Cam { float W[4][4]; float eye[3]; };
 // (Particles::forEachQuad, e Scene::spriteCorners nos destroços) e eles sao projetados na tela (collectFx).
 constexpr uint32_t kFx0 = wotm::fxaddr::fx, kFxEnd = wotm::fxaddr::fx + wotm::fxaddr::count * wotm::fxaddr::stride;
 struct Quad { float x[4], y[4]; uint8_t n; bool fge = false; };   // n = 4 (quadrado) ou 3 (triangulo sem par, so no VU1); fge: PRIM.FGE (VU1)
+
+// Primitivo da referencia para o inventario (linhas "[vu1check] inv"): o que a referencia desenha fora do caminho 1 (PATH2: DIRECT do
+// VIF1; PATH3: canal GIF), e os SPRITE do VU1, com a origem na RAM quando se conhece (PATH2: trecho da cadeia DMA; PATH3: so quando o
+// DMA leu a RAM no lugar). Inteiros ou nao na tela (o HUD fica nas bordas).
+struct RefPrim {
+    uint8_t path, kind;   // path 1/2/3; kind = PRIM.PRIM (3/4/5 triangulo, 6 sprite)
+    uint32_t src;         // origem na RAM do pacote (0 = desconhecida)
+    float x0, y0, x1, y1; // caixa na tela (coordenadas do GS)
+    uint64_t tex;         // TEX0 do contexto mascarado (0 = sem textura, kTexUnknown = nao visto)
+    uint16_t fbp, alpha;
+    bool abe;
+    uint8_t rgba[4];
+};
 constexpr int kFxCams = 3;   // camera do instante da cadeia, da entrada do passe 0 e do passe 1
 struct FxNat {
     uint32_t type = 0, preset = 0;
@@ -104,12 +121,17 @@ std::vector<Tri> g_vu;                          // triangulos do VU1 (Tri::prog 
 uint32_t g_vuKicked = 0, g_vuOff = 0;             // triangulos do XGKICK no quadro / fora da tela (parcial ou inteiro)
 uint32_t g_vuPrimVerts[8] = {};                 // vertices em primitivos que a checagem nao compara (ponto, linha, leque), por PRIM.PRIM
 std::vector<std::pair<uint32_t, Quad>> g_vuRects;   // SPRITE do GS inteiros na tela (programa, retangulo)
+std::vector<RefPrim> g_vuRectInfo;   // paralelo a g_vuRects: textura, FRAME, ABE e cor de cada SPRITE (inventario)
 uint32_t g_vuRectsKicked = 0, g_vuRectsRtt = 0;   // SPRITE do XGKICK / desses, em textura (FRAME fora da tela)
 // SPRITE do lens flare (programa com origem no fx[] de lensFlarePacket[0]), inteiros ou nao: cantos na ordem do XGKICK, UV (FST) e cor
 struct FlareRect { float x[2], y[2], u[2], v[2]; uint8_t c[4]; uint64_t tex0; };
 std::vector<FlareRect> g_vuFlare;
 wotm::Scene *g_scene = nullptr;
 FILE *g_dump = nullptr;
+
+std::vector<RefPrim> g_ref23;   // primitivos do PATH2/PATH3 do quadro (inventario)
+uint8_t g_curPath = 2;   // caminho do pacote em gifTap(0, ...): 2 (PATH2, origem em g_wotmPath2Src) ou 3 (PATH3, origem em g_curSrc)
+uint32_t g_curSrc = 0;
 
 constexpr float kX0 = 1728.f, kX1 = 2368.f, kY0 = 1936.f, kY1 = 2160.f;   // tela do GS (640 x 224, centro 2048)
 inline bool inScreen(const Tri &t) {
@@ -294,7 +316,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
             }
             o.skip = o.skip || skip;
             ++o.items;
-            if (skip) continue;
+            // os objetos skip (ceu, icones) tambem ganham triangulos: a comparacao por objeto os ignora, o inventario os conta
             uint64_t tex[32] = {};   // por slot: a textura com que o nativo desenha (Scene::textureId -> texKey/objectTex0)
             for (uint32_t s = 0; s < 32; ++s)
                 if (md->slotMask & (1u << s)) {
@@ -436,7 +458,6 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
     struct VAttr { float s, t, q; uint32_t uv; uint8_t c[4]; uint8_t f; };
     VAttr va[3] = {};
     auto vertex = [&](float x, float y, bool kick, uint8_t f) {
-        if (!prog) return;   // PATH2 (DIRECT do VIF1): so os registradores
         vx[0] = vx[1]; vy[0] = vy[1];
         vx[1] = vx[2]; vy[1] = vy[2];
         vx[2] = x; vy[2] = y;
@@ -445,6 +466,23 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
         va[2] = {g_s, g_t, g_q, g_uv, {g_rgba[0], g_rgba[1], g_rgba[2], g_rgba[3]}, f};
         ++nv;
         const uint32_t type = prim & 7;
+        if (!prog) {   // PATH2/PATH3: os registradores ja ficaram em g_tex0/g_fbp/...; os primitivos vao para o inventario (g_ref23)
+            if (!kick) return;
+            const bool tri = nv >= 3 && (type == 4 || type == 5 || (type == 3 && nv % 3 == 0));   // leque: caixa dos 3 ultimos (aproximada)
+            const bool spr = type == 6 && nv % 2 == 0;
+            if (!tri && !spr) return;
+            const uint32_t ctx = (prim >> 9) & 1;
+            const uint64_t t0 = g_tex0[ctx];
+            RefPrim r{g_curPath, uint8_t(type), g_curPath == 2 ? g_wotmPath2Src : g_curSrc, vx[2], vy[2], vx[2], vy[2],
+                      !((prim >> 4) & 1) ? 0 : t0 == kTexUnknown ? kTexUnknown : t0 & kTexMask, g_fbp[ctx], g_alpha[ctx], ((prim >> 6) & 1) != 0, {}};
+            for (int k = tri ? 0 : 1; k < 2; ++k) {
+                r.x0 = std::min(r.x0, vx[k]); r.x1 = std::max(r.x1, vx[k]);
+                r.y0 = std::min(r.y0, vy[k]); r.y1 = std::max(r.y1, vy[k]);
+            }
+            std::memcpy(r.rgba, va[2].c, 4);
+            g_ref23.push_back(r);
+            return;
+        }
         if (kick && nv >= 3 && (type == 4 || (type == 3 && nv % 3 == 0))) {
             const int a = (type == 4 && ((nv - 1) & 1)) ? 1 : 0;
             const uint32_t ctx = (prim >> 9) & 1;
@@ -488,7 +526,14 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
             // render-to-texture (FRAME fora dos buffers de tela): a composicao da poeira/fumaca (FBP 0x1FB, Scene::dustTexture)
             const uint16_t fbp = g_fbp[(prim >> 9) & 1];
             if (fbp != 0xFFFF && fbp != 0x46 && fbp != 0x8C) { ++g_vuRectsRtt; return; }
-            if (in) g_vuRects.push_back({prog, q});
+            if (in) {
+                g_vuRects.push_back({prog, q});
+                const uint64_t t0 = g_tex0[(prim >> 9) & 1];
+                RefPrim r{1, 6, 0, std::min(vx[1], vx[2]), std::min(vy[1], vy[2]), std::max(vx[1], vx[2]), std::max(vy[1], vy[2]),
+                          !((prim >> 4) & 1) ? 0 : t0 == kTexUnknown ? kTexUnknown : t0 & kTexMask, fbp, g_alpha[(prim >> 9) & 1], ((prim >> 6) & 1) != 0, {}};
+                std::memcpy(r.rgba, va[2].c, 4);
+                g_vuRectInfo.push_back(r);
+            }
         } else if (kick && type != 3 && type != 4) ++g_vuPrimVerts[type];
     };
     for (uint32_t pos = 0; pos + 16 <= bytes;) {
@@ -526,6 +571,18 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
         else pos += nloop * 16;
         if ((lo >> 15) & 1) break;   // EOP
     }
+}
+
+// Pacote do canal GIF (PATH3) para o inventario: o mesmo parser do PATH2 (registradores e primitivos). A origem na RAM so se conhece
+// quando o DMA do canal GIF leu a RAM no lugar (o ponteiro aponta para dentro dela); no replay e nos pacotes copiados fica 0.
+void path3Tap(const uint8_t *data, uint32_t bytes)
+{
+    if (!g_armed) return;
+    g_curPath = 3;
+    g_curSrc = (g_rdram && data >= g_rdram && data < g_rdram + PS2_RAM_SIZE) ? uint32_t(data - g_rdram) : 0u;
+    gifTap(0, data, bytes);
+    g_curPath = 2;
+    g_curSrc = 0;
 }
 
 // Objeto nativo (polyPkt) que contem alguma origem do programa; 0 = nenhum.
@@ -954,10 +1011,113 @@ void compareObjSprites(const std::vector<Quad> &vu)
                 std::fprintf(g_dump, "objspr,%s,%.3f,%.3f,%.3f,%.3f\n", s ? "nat" : "vu", q.x[0], q.y[0], q.x[2], q.y[2]);
 }
 
+// Textura em texto: TBP, PSM, tamanho, CLUT (ou "sem textura" / "tex ?").
+void texStr(uint64_t v, char *s, size_t n)
+{
+    if (!v) { std::snprintf(s, n, "sem textura"); return; }
+    if (v == kTexUnknown) { std::snprintf(s, n, "tex ?"); return; }
+    const wotm::gs::Tex0 t = wotm::gs::Tex0::decode(v);
+    std::snprintf(s, n, "tbp %x psm %u %ux%u cbp %x csa %u", t.tbp0, t.psm, 1u << t.tw, 1u << t.th, t.cbp, t.csa);
+}
+
+// ---- Inventario (linhas "[vu1check] inv"): o que cada lado desenha sem par no outro, por dono ----
+// Referencia: triangulos e SPRITE do VU1 sem objeto nativo nem fx[] (agrupados pela origem do MSCAL) e todo primitivo do PATH2/PATH3,
+// agrupados por (caminho, tipo, textura, FRAME, ABE). Nativo: objetos da 1a coleta com triangulos cujo polyPkt o VU1 nao tocou, inclusive
+// ceu e icones (skip). "Nos dois lados" por objeto ja sai na comparacao (faltam/sobram). Tela em pixels (0..640 x 0..224, canto da tela
+// do GS); "TELA INTEIRA" = caixa que cobre a tela (fade, limpeza); "em textura" = FRAME fora dos buffers de tela.
+struct InvGroup { uint32_t n = 0; float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f; uint32_t src0 = ~0u, src1 = 0; uint8_t rgba[4] = {}; };
+using InvKey = std::tuple<uint8_t, uint8_t, uint64_t, uint16_t, bool, uint32_t>;   // caminho, tipo (3 tri / 6 sprite), textura, FBP, ABE, origem (VU1: MSCAL & ~0xFF)
+
+void inventory(const std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> &vuBy, const std::map<uint32_t, uint32_t> &skipVu,
+               const std::vector<const Tri *> &orphanTris, const std::vector<size_t> &orphanRects)
+{
+    std::map<InvKey, InvGroup> groups;
+    auto add = [&](const InvKey &k, float x0, float y0, float x1, float y1, uint32_t src, const uint8_t *rgba) {
+        InvGroup &g = groups[k];
+        if (!g.n && rgba) std::memcpy(g.rgba, rgba, 4);
+        ++g.n;
+        g.x0 = std::min(g.x0, x0); g.y0 = std::min(g.y0, y0); g.x1 = std::max(g.x1, x1); g.y1 = std::max(g.y1, y1);
+        if (src) { g.src0 = std::min(g.src0, src); g.src1 = std::max(g.src1, src); }
+    };
+    auto origin = [&](uint32_t prog) { return g_progs[prog - 1].empty() ? 0u : g_progs[prog - 1].back() & ~0xFFu; };
+    uint32_t nVuTris = 0, nVuRects = 0, nP2 = 0, nP3 = 0, nRtt = 0;
+    for (const Tri *t : orphanTris) {
+        add({1, 3, t->tex, t->fbp, t->abe, origin(t->prog)}, std::min({t->x[0], t->x[1], t->x[2]}), std::min({t->y[0], t->y[1], t->y[2]}),
+            std::max({t->x[0], t->x[1], t->x[2]}), std::max({t->y[0], t->y[1], t->y[2]}), 0, t->c[0]);
+        ++nVuTris;
+    }
+    for (size_t i : orphanRects) {
+        if (i >= g_vuRectInfo.size()) continue;
+        const RefPrim &r = g_vuRectInfo[i];
+        add({1, 6, r.tex, r.fbp, r.abe, origin(g_vuRects[i].first)}, r.x0, r.y0, r.x1, r.y1, 0, r.rgba);
+        ++nVuRects;
+    }
+    for (const RefPrim &r : g_ref23) {
+        add({r.path, uint8_t(r.kind == 6 ? 6 : 3), r.tex, r.fbp, r.abe, 0}, r.x0, r.y0, r.x1, r.y1, r.src, r.rgba);
+        ++(r.path == 2 ? nP2 : nP3);
+        if (r.fbp != 0xFFFF && r.fbp != 0x46 && r.fbp != 0x8C) ++nRtt;
+    }
+    // Nativo sem referencia: objetos da 1a coleta cujo polyPkt nenhum triangulo do VU1 tocou
+    struct NatOnly { uint32_t pp; const NatObj *o; uint32_t tris, onScreen; float x0, y0, x1, y1; uint8_t aMax = 0; };   // aMax: maior alfa de vertice (0 = invisivel: o nativo "desenha" mas nao aparece)
+    std::vector<NatOnly> natOnly;
+    uint32_t bothObjs = 0, natOnlyTris = 0, natOnlySkip = 0;
+    if (!g_nats.empty())
+        for (const auto &kv : g_nats[0]) {
+            const NatObj &o = kv.second;
+            if (vuBy.count(kv.first) || skipVu.count(kv.first)) { ++bothObjs; continue; }
+            if (o.tris.empty()) continue;
+            const std::vector<Tri> pr = project(o.tris, g_cam[0], kv.first);
+            NatOnly r{kv.first, &o, uint32_t(o.tris.size()), uint32_t(pr.size()), 1e9f, 1e9f, -1e9f, -1e9f};
+            for (const Tri &t : pr)
+                for (int c = 0; c < 3; ++c) {
+                    r.x0 = std::min(r.x0, t.x[c]); r.y0 = std::min(r.y0, t.y[c]); r.x1 = std::max(r.x1, t.x[c]); r.y1 = std::max(r.y1, t.y[c]);
+                    r.aMax = std::max(r.aMax, t.c[c][3]);
+                }
+            natOnlyTris += r.onScreen;
+            natOnlySkip += o.skip;
+            natOnly.push_back(r);
+        }
+    uint32_t refPrims = 0;
+    for (const auto &kv : groups) refPrims += kv.second.n;
+    std::fprintf(stderr, "[vu1check] inv g=%u so a referencia: %zu grupos, %u primitivos (vu1 sem dono %u tris + %u sprites; path2 %u; path3 %u; em textura %u) | "
+                         "so o nativo: %zu objetos, %u tris na tela (ceu/icones %u) | objetos nos dois lados %u\n",
+                 g_frame, groups.size(), refPrims, nVuTris, nVuRects, nP2, nP3, nRtt, natOnly.size(), natOnlyTris, natOnlySkip, bothObjs);
+    std::vector<std::pair<InvKey, InvGroup>> gs(groups.begin(), groups.end());
+    std::sort(gs.begin(), gs.end(), [](const auto &a, const auto &b) { return a.second.n > b.second.n; });
+    constexpr size_t kMaxLines = 24;
+    for (size_t i = 0; i < gs.size() && i < kMaxLines; ++i) {
+        const InvKey &k = gs[i].first;
+        const InvGroup &g = gs[i].second;
+        char tex[96], where[64] = "", src[48] = "";
+        texStr(std::get<2>(k), tex, sizeof tex);
+        if (std::get<0>(k) == 1) std::snprintf(where, sizeof where, "vu1 mscal %x", std::get<5>(k));
+        else std::snprintf(where, sizeof where, "path%u", unsigned(std::get<0>(k)));
+        if (g.src0 != ~0u) std::snprintf(src, sizeof src, " src %x-%x", g.src0, g.src1);
+        const uint16_t fbp = std::get<3>(k);
+        const bool full = g.x0 <= kX0 + 2.f && g.y0 <= kY0 + 2.f && g.x1 >= kX1 - 2.f && g.y1 >= kY1 - 2.f;
+        std::fprintf(stderr, "[vu1check] inv   ref %s %s x%u: %s fbp %x abe %d cor %02x%02x%02x%02x tela %.0f,%.0f-%.0f,%.0f%s%s%s\n", where,
+                     std::get<1>(k) == 6 ? "sprites" : "tris", g.n, tex, unsigned(fbp), int(std::get<4>(k)), g.rgba[0], g.rgba[1], g.rgba[2], g.rgba[3],
+                     g.x0 - kX0, g.y0 - kY0, g.x1 - kX0, g.y1 - kY0, full ? " TELA INTEIRA" : "",
+                     fbp != 0xFFFF && fbp != 0x46 && fbp != 0x8C ? " em textura" : "", src);
+    }
+    if (gs.size() > kMaxLines) std::fprintf(stderr, "[vu1check] inv   ref ... e mais %zu grupos\n", gs.size() - kMaxLines);
+    std::sort(natOnly.begin(), natOnly.end(), [](const NatOnly &a, const NatOnly &b) { return a.onScreen > b.onScreen; });
+    size_t shown = 0;
+    for (const NatOnly &r : natOnly) {
+        if (!r.onScreen) continue;   // objeto nativo inteiro fora da tela: sem interesse
+        if (shown++ >= kMaxLines) break;
+        std::fprintf(stderr, "[vu1check] inv   nat pkt %x no %x tex %u itens %d%s%s: tris %u (na tela %u) alfa max %02x tela %.0f,%.0f-%.0f,%.0f flags %x\n", r.pp, r.o->node,
+                     unsigned(r.o->tex), r.o->items, r.o->skinned ? " skinned" : "", r.o->skip ? " ceu/icone" : "", r.tris, r.onScreen, r.aMax,
+                     r.x0 - kX0, r.y0 - kY0, r.x1 - kX0, r.y1 - kY0, g_rdram ? unsigned(g_rdram[r.o->node + 0xC] | (g_rdram[r.o->node + 0xD] << 8)) : 0u);
+    }
+    if (shown > kMaxLines) std::fprintf(stderr, "[vu1check] inv   nat ... e mais %zu objetos\n", shown - kMaxLines);
+}
+
 void compare()
 {
     if (g_progs.empty() || g_nats.empty()) {
         std::fprintf(stderr, "[vu1check] g=%u: nenhum MSCAL no quadro (o hierFlushObjQ nao disparou o DMA?)\n", g_frame);
+        inventory({}, {}, {}, {});
         return;
     }
     // triangulos do VU1 por (objeto, cadeia); os sem objeto nativo ficam por origem do MSCAL
@@ -966,11 +1126,16 @@ void compare()
     FxVuMap fxVu;   // particulas: por sistema (fx[]) e cadeia
     uint32_t fxTris = 0, rectsOrphan = 0;
     std::vector<Quad> objRects;   // SPRITE do GS de OBJECT (ObjSprite)
-    for (const auto &r : g_vuRects) {
+    std::vector<const Tri *> orphanTriRefs;   // inventario: triangulos e SPRITE do VU1 sem objeto nativo nem fx[]
+    std::vector<size_t> orphanRects;
+    std::map<uint32_t, uint32_t> skipVu;   // inventario: triangulos do VU1 por objeto skip (ceu, icones): so contados
+    for (size_t ri = 0; ri < g_vuRects.size(); ++ri) {
+        const auto &r = g_vuRects[ri];
         if (const int sys = fxOf(r.first); sys >= 0) fxVu[uint32_t(sys)][g_progChain[r.first - 1]].rects.push_back(r.second);
         else if (objectOf(g_nats[g_progChain[r.first - 1]], r.first)) objRects.push_back(r.second);
         else {
             ++rectsOrphan;
+            orphanRects.push_back(ri);
             if (g_dump) {   // origens do programa (trechos da cadeia DMA) do SPRITE fora de fx[]: mapear com o .map
                 std::fprintf(g_dump, "rectorf,%u", r.first);
                 for (uint32_t a : g_progs[r.first - 1]) std::fprintf(g_dump, ",%x", a);
@@ -988,6 +1153,7 @@ void compare()
         const uint32_t key = objectOf(g_nats[chain], t.prog);
         if (key) {
             if (!g_nats[chain].at(key).skip) vuBy[key][chain].push_back(t);
+            else ++skipVu[key];
             continue;
         }
         if (const int sys = fxOf(t.prog); sys >= 0) {
@@ -996,6 +1162,7 @@ void compare()
             continue;
         }
         ++orphan[g_progs[t.prog - 1].empty() ? 0u : g_progs[t.prog - 1].back() & ~0xFFu];
+        orphanTriRefs.push_back(&t);
         if (g_dump) std::fprintf(g_dump, "0,orf,0,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llx,%x\n", t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2],
                                  (unsigned long long)t.tex, unsigned(t.fbp));
     }
@@ -1177,11 +1344,6 @@ void compare()
                      unsigned(g_rdram[r.o->node + 0xC] | (g_rdram[r.o->node + 0xD] << 8)));   // flags do OBJECT (0x8000 = OT de alfa)
     }
     std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.texDifere > b.texDifere; });
-    auto texStr = [](uint64_t v, char *s, size_t n) {
-        if (!v) { std::snprintf(s, n, "sem textura"); return; }
-        const wotm::gs::Tex0 t = wotm::gs::Tex0::decode(v);
-        std::snprintf(s, n, "tbp %x psm %u %ux%u cbp %x csa %u", t.tbp0, t.psm, 1u << t.tw, 1u << t.th, t.cbp, t.csa);
-    };
     for (size_t i = 0; i < rows.size() && i < 8 && rows[i].texDifere; ++i) {
         const Row &r = rows[i];
         char a[96], b[96];
@@ -1211,6 +1373,7 @@ void compare()
     compareFx(fxVu, rectsOrphan);
     compareObjSprites(objRects);
     compareFlare();
+    inventory(vuBy, skipVu, orphanTriRefs, orphanRects);
 }
 
 // Entrada de hier (0x2029B0): a0 = vista, a1 = passe, ra = de onde veio (rtMain: 0x188750 passe 0, 0x18891C passe 1).
@@ -1234,6 +1397,8 @@ void arm(const uint8_t *rdram, uint32_t frame)
     g_vuRects.clear();
     g_vuFlare.clear();
     g_flareVuIn.clear();
+    g_ref23.clear();
+    g_vuRectInfo.clear();
     g_vuRectsKicked = g_vuRectsRtt = 0;
     g_tex0[0] = g_tex0[1] = kTexUnknown;
     g_fbp[0] = g_fbp[1] = 0xFFFF;
@@ -1393,6 +1558,13 @@ void end()   // fim do quadro amostrado; o arquivo fica aberto para os proximos 
 }
 } // namespace snap
 
+// Cada pacote do canal GIF (PATH3) com o tap ligado: vai para o instantaneo e para o inventario.
+void gifDmaTap(const uint8_t *data, uint32_t bytes)
+{
+    snap::gif(data, bytes);
+    path3Tap(data, bytes);
+}
+
 // Gatilho (WOTM_VU1CHECK_WHEN=<cond>[,<cond>], qualquer uma basta) e rajada (WOTM_VU1CHECK_BURST=<k> quadros seguidos por disparo):
 //  - fx:<tipo visual>: algum sistema de particulas vivo (numParticles > 0) com vis.attribs & 0xFF == tipo (3 sprite, 7 arco, 13 destroco...);
 //  - preset:<fxId>: idem, pelo preset do sistema (fxoff::fxId; nomes em tools/fx.py): separa a fumaca do vulcao da de um predio;
@@ -1400,31 +1572,47 @@ void end()   // fim do quadro amostrado; o arquivo fica aberto para os proximos 
 // O disparo e por borda: a condicao passou de falsa a verdadeira (o evento nasceu). Um emissor permanente (fumaca do vulcao) dispara
 // uma vez; uma explosao, a cada explosao nova. O periodo (WOTM_VU1CHECK) e o descanso minimo entre disparos e WOTM_VU1CHECK_SHOTS=<n>
 // limita os disparos da sessao (0 = sem limite).
-struct Cond { enum Kind { Fx, Preset, Frame } kind; uint32_t a, b; };
+//  - mem:<endereco>[=<valor>]: a palavra (u32) da RAM nesse endereco vale <valor> (dispara ao entrar nela); sem <valor>, dispara a cada
+//    mudanca da palavra. Com currScreen (0x6F8464): mem:0x6F8464 grava um quadro de cada tela do menu; mem:0x6F8464=1 so a de jogo.
+//  - A tecla F8 na janela do runtime grava um quadro na hora, sem condicao nem descanso.
+struct Cond { enum Kind { Fx, Preset, Frame, Mem } kind; uint32_t a, b; bool anyChange = false; uint32_t prev = 0; bool seen = false; };
 std::vector<Cond> g_when;
 uint32_t g_burst = 1, g_burstLeft = 0, g_shots = 0, g_shotsDone = 0;
 bool g_condPrev = false;
 
-bool condTrue(const uint8_t *rdram, uint32_t frame)
+// Condicoes de nivel (fx, preset, frame, mem:=valor): verdadeiro enquanto valem; o disparo e na borda de subida (fireNow). As mem: sem
+// valor sao de mudanca: `changed` sai verdadeiro na avaliacao em que a palavra mudou, e isso ja e a borda (duas mudancas em avaliacoes
+// seguidas disparam duas vezes).
+bool condTrue(const uint8_t *rdram, uint32_t frame, bool &changed)
 {
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
-    for (const Cond &c : g_when) {
-        if (c.kind == Cond::Frame) { if (frame >= c.a && frame <= c.b) return true; continue; }
-        for (uint32_t i = 1; i < wotm::fxaddr::count; ++i) {
+    bool any = false;   // todas sao avaliadas (as mem: sem valor guardam o ultimo visto)
+    changed = false;
+    for (Cond &c : g_when) {
+        if (c.kind == Cond::Frame) { any = any || (frame >= c.a && frame <= c.b); continue; }
+        if (c.kind == Cond::Mem) {
+            if (!ram.ok(c.a, 4)) continue;
+            const uint32_t v = ram.u32(c.a);
+            if (c.anyChange) { changed = changed || (c.seen && v != c.prev); c.prev = v; c.seen = true; }
+            else any = any || v == c.b;
+            continue;
+        }
+        for (uint32_t i = 1; i < wotm::fxaddr::count && !any; ++i) {
             const uint32_t b = wotm::fxaddr::fx + i * wotm::fxaddr::stride;
             if (int32_t(ram.u32(b + wotm::fxoff::numParticles)) <= 0) continue;
-            if (c.kind == Cond::Fx ? (ram.u32(b + wotm::fxoff::type) & 0xFF) == c.a : ram.u32(b + wotm::fxoff::fxId) == c.a) return true;
+            if (c.kind == Cond::Fx ? (ram.u32(b + wotm::fxoff::type) & 0xFF) == c.a : ram.u32(b + wotm::fxoff::fxId) == c.a) any = true;
         }
     }
-    return false;
+    return any;
 }
 
 // Verdadeiro so no quadro em que alguma condicao passa a valer (borda de subida). Sem condicoes: sempre.
 bool fireNow(const uint8_t *rdram, uint32_t frame)
 {
     if (g_when.empty()) return true;
-    const bool now = condTrue(rdram, frame);
-    const bool fire = now && !g_condPrev;
+    bool changed = false;
+    const bool now = condTrue(rdram, frame, changed);
+    const bool fire = changed || (now && !g_condPrev);
     g_condPrev = now;
     return fire;
 }
@@ -1441,33 +1629,52 @@ void parseWhen(const char *s)
             char *dash = nullptr;
             const uint32_t a = uint32_t(std::strtoul(tok.c_str() + 6, &dash, 0));
             g_when.push_back({Cond::Frame, a, dash && *dash == '-' ? uint32_t(std::strtoul(dash + 1, nullptr, 0)) : a});
+        } else if (tok.rfind("mem:", 0) == 0) {
+            char *eq = nullptr;
+            const uint32_t a = uint32_t(std::strtoul(tok.c_str() + 4, &eq, 0));
+            Cond c{Cond::Mem, a, 0};
+            if (eq && *eq == '=') c.b = uint32_t(std::strtoul(eq + 1, nullptr, 0));
+            else c.anyChange = true;
+            g_when.push_back(c);
         } else std::fprintf(stderr, "[vu1check] condicao desconhecida em WOTM_VU1CHECK_WHEN: %s\n", tok.c_str());
     }
 }
 
+// Qualquer chamador de hier(0, 0) marca um quadro (rtMain na luta; userintMain, ShellRtLoop e FadeScreen nos menus e no carregamento):
+// o quadro amostrado vai da entrada de um hier(0, 0) a do seguinte, com ou sem passe 1 no meio (os menus podem nao ter).
+uint32_t g_hierCalls = 0;   // chamadas de hier(0, 0) desde o ultimo quadro amostrado (diagnostico do gatilho)
 void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
 {
-    if (view != 0 || (ra != 0x188750u && ra != 0x18891Cu)) return;
+    if (view != 0) return;
     uint32_t frame;
-    std::memcpy(&frame, rdram + wotm::sym::g_frame, 4);   // g_frame
+    std::memcpy(&frame, rdram + wotm::sym::g_frame, 4);   // g_frame (so anda na luta; nos menus fica parado)
     if (pass == 1) {
         if (g_armed) { snap::pass1(rdram); g_pass = 1; g_cam[1] = readCam(rdram); collectNative(rdram, g_natPass1); }
         return;
     }
-    if (g_armed && g_pass == 1) {   // quadro amostrado completo (os dois passes e as cadeias da interrupcao)
+    ++g_hierCalls;
+    if (g_armed) {   // quadro amostrado completo (passes e cadeias da interrupcao)
+        uint32_t inPkt = 0, inAlpha = 0;   // pacotes ainda nao despachados ao VU1 (a OT de alfa sai pela interrupcao do DMA; main.cpp a forca na luta)
+        std::memcpy(&inPkt, rdram + wotm::sym::objsInPacket, 4);
+        std::memcpy(&inAlpha, rdram + wotm::sym::objsInAlphaPacket, 4);
+        std::fprintf(stderr, "[vu1check] fim do quadro amostrado: hier(0,0) de %x, passe 1 %s, %u cadeias, objsInPacket %u objsInAlphaPacket %u\n", ra,
+                     g_pass == 1 ? "sim" : "nao", g_chains, inPkt, inAlpha);
         snap::end();
         finish();
     }
     const auto now = std::chrono::steady_clock::now();
-    bool start = g_armed;   // armado aqui = passe 1 perdido: recomeca
-    if (!g_armed) {
-        const bool fire = frame >= 30 && fireNow(rdram, frame);   // avaliado todo quadro, para a borda nao se perder no descanso
-        if (!g_burstLeft && fire && now >= g_next && (!g_shots || g_shotsDone < g_shots)) { g_burstLeft = g_burst; ++g_shotsDone; }
-        if (g_burstLeft) { --g_burstLeft; start = true; }
-    }
-    if (start) {
+    const bool key = g_wotmShotKey.exchange(false);   // F8: na hora, sem condicao, descanso nem limite de disparos
+    // avaliado todo quadro, para a borda nao se perder no descanso; sem condicoes (periodo), so na luta (g_frame >= 30)
+    const bool fire = key || (g_when.empty() ? frame >= 30 : fireNow(rdram, frame));
+    if (!g_burstLeft && fire && (key || (now >= g_next && (!g_shots || g_shotsDone < g_shots)))) { g_burstLeft = g_burst; ++g_shotsDone; }
+    if (g_burstLeft) {
+        --g_burstLeft;
         g_next = now + std::chrono::seconds(g_period);
-        snap::end();   // passe 1 perdido com quadro aberto no instantaneo: fecha o anterior como esta
+        uint32_t scr = 0;
+        std::memcpy(&scr, rdram + wotm::sym::currScreen, 4);
+        std::fprintf(stderr, "[vu1check] quadro amostrado: g_frame %u, currScreen %u, hier(0,0) de %x (%u chamadas desde o anterior)%s\n", frame, scr, ra,
+                     g_hierCalls, key ? ", pela tecla F8" : "");
+        g_hierCalls = 0;
         arm(rdram, frame);
         snap::begin(rdram, frame);
     }
@@ -1492,7 +1699,7 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
     }
     if (!(wotm_vu1check::g_origHier = runtime.lookupFunction(wotm::fn::hier__Fii))) return;
     wotm_vu1check::snap::g_rt = &runtime;
-    g_wotmGifDmaTap = &wotm_vu1check::snap::gif;
+    g_wotmGifDmaTap = &wotm_vu1check::gifDmaTap;
     if (std::getenv("WOTM_VU1CHECK_SNAP") && !std::getenv("PS2X_GS_UPLOADS")) {
         // A VRAM do instantaneo precisa das texturas e CLUTs: com PS2X_NO_GS o GS so processa os uploads (sem rasterizar) quando
         // PS2X_GS_UPLOADS esta ligado, e o VIF1 deixa passar os pacotes do PATH2 para isso. Lido pelo GS/VIF1 na primeira vez que rodam,
@@ -1830,6 +2037,7 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
                 }
                 std::fprintf(stderr, "[vu1cmp] G %u bytes:%s\n", bytes, s.c_str());
             }
+            if (!skip) path3Tap(data.data(), bytes);   // inventario (sem origem na RAM: o arquivo guarda so os bytes)
             if (!skip && png) mem.submitGifPacket(GifPathId::Path3, data.data(), bytes, true);
         } else if (type == 'E') {
             inFrame = false;

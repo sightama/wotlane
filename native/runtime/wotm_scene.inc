@@ -1,4 +1,6 @@
 // wotm_scene.inc (incluido por ps2_runtime.cpp; raylib e ps2_runtime.h ja estao incluidos)
+#include <atomic>
+static std::atomic<bool> g_wotmShotKey{false};   // F8 na janela (wotm_live.inc) -> um quadro da checagem VU1 x nativo agora (wotm_vu1check.inc)
 #include "wotm_live.inc"
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 
