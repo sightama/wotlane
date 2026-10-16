@@ -64,7 +64,8 @@ function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
 if ($Capture) {
     . "$runtime\pad_script.ps1"
     $sessions = [ordered]@{
-        menus       = @{ PS2X_PAD = (Get-PadScript -First 12 -Step 1.5); WOTM_VU1CHECK_WHEN = 'mem:0x6F8464' }
+        # menus: o roteiro do run_live (X pula os filmes da abertura); o antigo -First 12 apertava Start antes da tela 20 aceitar
+        menus      = @{ PS2X_PAD = (Get-PadScript -SkipFrom 3 -First 9 -Step 1.5); WOTM_VU1CHECK_WHEN = 'mem:0x6F8464' }
         luta_centro = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:300-100000'; WOTM_VU1CHECK_SHOTS = '1' }
         luta_3ia    = @{ WOTM_MATCH = '1,2,3,4,2'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:300-100000'; WOTM_VU1CHECK_SHOTS = '1' }
         luta_hud    = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:1200-100000'; WOTM_VU1CHECK_SHOTS = '1' }

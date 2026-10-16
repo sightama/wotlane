@@ -2447,10 +2447,10 @@ index bd75bba..9d093f8 100644
          {
              reportReservedInstruction(decoded.upperUsage.reserved, decoded.upperUsage.reserved ? decoded.upper : decoded.lower);
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..9231c31 100644
+index 563bcbd..ee72629 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,12 +164,73 @@ namespace
+@@ -164,12 +164,85 @@ namespace
      }
  }
  
@@ -2485,6 +2485,18 @@ index 563bcbd..9231c31 100644
 +    }
 +    WRITE32(wotm::sym::objsInPacket, 0u); // objsInPacket
 +    WRITE32(wotm::sym::objsInAlphaPacket, 0u); // objsInAlphaPacket
++}
++// rtWaitForVu1 (menus: userintMain entre o hier(0,0) e o hier(0,1)) espera o hierFlushObjQ da interrupcao do DMA do VIF1 despachar
++// o ultimo pacote do hier, com a OT de alfa. Sem VU1 nao ha o que esperar; no quadro amostrado pela checagem VU1 x nativo o pacote
++// sai aqui, como no PS2 (antes do letterbox e do fade que o userintMain manda pelo PATH3). Sem isso o hier(0,1) reiniciava os
++// pacotes com a OT pendente e os objetos de alfa dos menus saiam como "so o nativo desenha".
++static void hook_waitVu1(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++{
++    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(wotm::sym::objsInPacket) || READ32(wotm::sym::objsInAlphaPacket)))
++    {
++        R5900Context temp = *ctx;
++        g_origFlushObjQ(rdram, &temp, runtime);
++    }
 +}
 +// Relogio do jogo. O jogo mede a duracao da logica de cada quadro pelo timer 1 (fields = ticks / 9619; updateRate =
 +// 60 / fields; a fisica integra com dt = 1 / updateRate). O timer anda pelo relogio virtual do EE, e o particleDraw tem
@@ -2524,7 +2536,7 @@ index 563bcbd..9231c31 100644
  
      try
      {
-@@ -220,12 +281,83 @@ int main(int argc, char *argv[])
+@@ -220,12 +293,83 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -2581,7 +2593,7 @@ index 563bcbd..9231c31 100644
 +        }
 +        if (const char *nv = std::getenv("PS2X_NO_VU1"))
 +        {
-+            runtime.registerFunction(wotm::fn::rtWaitForVu1__Fv, hostLeaf<hook_noop>);        // rtWaitForVu1
++            runtime.registerFunction(wotm::fn::rtWaitForVu1__Fv, hostLeaf<hook_waitVu1>);     // rtWaitForVu1 (so despacha no quadro amostrado)
 +            if (nv[0] != '2') // PS2X_NO_VU1=2: o DMA do quadro segue (PS2X_VIF1_UPLOADS leva as texturas/CLUTs ao GS) sem esperar o VU1
 +            {
 +                g_origFlushObjQ = runtime.lookupFunction(wotm::fn::hierFlushObjQ__Fv);
