@@ -201,10 +201,10 @@ index 0f19c9f..cbe7866 100644
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..f84e8cb 100644
+index ea86a9c..2721c17 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
-@@ -23,6 +23,16 @@
+@@ -23,6 +23,18 @@
  
  class GS;
  
@@ -212,6 +212,8 @@ index ea86a9c..f84e8cb 100644
 +// g_wotmVu1Src o id que g_wotmMscalTap da as origens dos trechos ate ele, e cada XGKICK concluido vai para g_wotmGifTap com o id do seu inicio.
 +extern bool g_wotmVu1Tap;
 +extern bool g_wotmVif1Keep;   // checagem: o VIF1 processa toda cadeia (estado do VU1 em dia) sem executar o VU1 nem alimentar o GS
++extern bool g_wotmGsFeed;     // replay (--vu1cmp): com o tap ligado, PATH2 e XGKICK tambem alimentam o GS (imagem de referencia)
++extern void (*g_wotmGifDmaTap)(const uint8_t *data, uint32_t bytes);   // cada pacote do canal GIF (PATH3: ambiente de desenho, uploads) com o tap ligado
 +extern uint32_t g_wotmVu1Src;
 +extern void (*g_wotmGifTap)(uint32_t src, const uint8_t *packet, uint32_t bytes);
 +extern uint32_t (*g_wotmMscalTap)(const uint32_t *srcs, uint32_t n, uint32_t prog, const uint8_t *vu1Data);   // origens dos trechos ate o MSCAL, endereco do programa e memoria de dados do VU1 -> id (g_wotmVu1Src)
@@ -221,7 +223,7 @@ index ea86a9c..f84e8cb 100644
  constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
  constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
-@@ -417,7 +427,9 @@ public:
+@@ -417,7 +429,9 @@ public:
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
@@ -854,15 +856,17 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..2f2d017 100644
+index 37b6a4d..99f1567 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
-@@ -10,6 +10,14 @@
+@@ -10,6 +10,16 @@
  #include <string>
  #include <vector>
  
 +bool g_wotmVu1Tap = false;
 +bool g_wotmVif1Keep = false;
++bool g_wotmGsFeed = false;
++void (*g_wotmGifDmaTap)(const uint8_t *, uint32_t) = nullptr;
 +uint32_t g_wotmVu1Src = 0;
 +void (*g_wotmGifTap)(uint32_t, const uint8_t *, uint32_t) = nullptr;
 +uint32_t (*g_wotmMscalTap)(const uint32_t *, uint32_t, uint32_t, const uint8_t *) = nullptr;
@@ -872,7 +876,7 @@ index 37b6a4d..2f2d017 100644
  namespace
  {
      inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
-@@ -1346,9 +1354,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1346,9 +1356,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                      const bool tieEnabled = (chcr & (1u << 7)) != 0u;
                      const int kMaxChainTags = 4096;
                      std::vector<uint8_t> chainBuf;
@@ -886,7 +890,7 @@ index 37b6a4d..2f2d017 100644
                          const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                          uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                          const bool scratch = isScratchpad(srcAddr);
-@@ -1395,6 +1407,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1395,6 +1409,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
  
                          // CHCR.TTE sends the DMAtag's upper 64 bits to the channel before
                          // the tag payload. VIF chains use those bytes for two VIFcodes.
@@ -895,7 +899,7 @@ index 37b6a4d..2f2d017 100644
                          chainBuf.insert(chainBuf.end(), localBase + tagPhys + 8u, localBase + tagPhys + 16u);
                      };
  
-@@ -1446,6 +1460,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1446,6 +1462,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          bool hasPayload = (tagQwc > 0);
                          bool endChain = false;
  
@@ -939,7 +943,7 @@ index 37b6a4d..2f2d017 100644
                          switch (id)
                          {
                          case 0:
-@@ -1535,6 +1586,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1535,6 +1588,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          pt.srcAddr = 0;
                          pt.qwc = 0;
                          pt.chainData = std::move(chainBuf);
@@ -947,7 +951,7 @@ index 37b6a4d..2f2d017 100644
                          if (channelBase == 0x1000A000)
                          {
                              m_pendingGifTransfers.push_back(std::move(pt));
-@@ -1802,11 +1854,19 @@ void PS2Memory::processPendingTransfers()
+@@ -1802,11 +1856,19 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -967,6 +971,15 @@ index 37b6a4d..2f2d017 100644
          }
          else if (p.qwc > 0)
          {
+@@ -1956,6 +2018,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+             return;
+         }
+         flushMaskedPath3Packets(false);
++        if (g_wotmVu1Tap && g_wotmGifDmaTap)   // WotM: instantaneo da checagem VU1 x nativo (ambiente de desenho e uploads do quadro)
++            g_wotmGifDmaTap(data, sizeBytes);
+     }
+ 
+     if (m_gifArbiter)
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
 index 8590f14..addb826 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
@@ -1663,7 +1676,7 @@ index 45cb9d2..31fbce5 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..e1b64c9 100644
+index b02c7ca..34f94a6 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,9 @@
@@ -1823,7 +1836,7 @@ index b02c7ca..e1b64c9 100644
                  m_vu1MscntCallback(runTop, runItop);
              continue;
          }
-@@ -495,12 +544,41 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -495,12 +544,43 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
              if (qwCount > availableQw)
                  qwCount = availableQw;
  
@@ -1837,7 +1850,8 @@ index b02c7ca..e1b64c9 100644
 +            if (m_vif1PendingPath2ImageQwc != 0u && directQw > 0u)
 +            {
 +                const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, directQw);
-+                if (!g_wotmVu1Tap && !g_wotmVif1Keep)
++                static const bool s_gsUploads = std::getenv("PS2X_GS_UPLOADS") != nullptr;   // WotM: com a checagem, so os uploads (texturas/CLUTs na VRAM) chegam ao GS
++                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads)
 +                {
 +                    std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
 +                    const uint64_t imageTag =
@@ -1859,9 +1873,10 @@ index b02c7ca..e1b64c9 100644
              {
 -                const bool directHl = (opcode == VIF_DIRECTHL);
 -                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
-+                if (!g_wotmVu1Tap && !g_wotmVif1Keep)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa)
++                static const bool s_gsUploads2 = std::getenv("PS2X_GS_UPLOADS") != nullptr;
++                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads2)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa), salvo no replay (imagem de referencia) e, com PS2X_GS_UPLOADS, para os uploads
 +                    submitGifPacket(GifPathId::Path2, data + directPos, directQw * 16, true, directHl);
-+                else if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: a checagem acompanha os registradores (FRAME, TEX0) que chegam pelo PATH2
++                if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: a checagem acompanha os registradores (FRAME, TEX0) que chegam pelo PATH2
 +                    g_wotmGifTap(0u, data + directPos, directQw * 16);
  
 -                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
@@ -1870,7 +1885,7 @@ index b02c7ca..e1b64c9 100644
                  {
                      m_vif1PendingPath2ImageQwc = pendingImageQw;
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-index bd75bba..1ed4289 100644
+index bd75bba..9d093f8 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 +++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 @@ -5,6 +5,7 @@
@@ -2042,14 +2057,14 @@ index bd75bba..1ed4289 100644
 -        if (entry.writesMac)
 -            m_state.mac = entry.mac;
 -        if (entry.writesStatus)
-+        uint64_t m = ~0ull;
-+        for (FlagPipelineEntry &entry : m_flagPipeline)
-         {
+-        {
 -            const uint32_t current = entry.status & 0xFu;
 -            m_state.status = (m_state.status & 0xFF0u) | current | ((current | entry.extraSticky) << 6);
 -        }
 -        if (entry.writesSticky)
--        {
++        uint64_t m = ~0ull;
++        for (FlagPipelineEntry &entry : m_flagPipeline)
+         {
 -            m_state.status = (m_state.status & 0x03Fu) | (entry.status & 0xFC0u);
 +            if (!entry.valid)
 +                continue;
@@ -2115,15 +2130,14 @@ index bd75bba..1ed4289 100644
 +            if (!store.valid)
 +                continue;
 +            if (store.readyCycle > m_cycle)
++            {
++                m = std::min(m, store.readyCycle);
++                continue;
++            }
++            if (m_activeVuData && store.address + 16u <= m_activeVuDataSize)
              {
 -                if ((store.laneMask & laneForComponent(component)) != 0u)
 -                    oldWords[component] = store.words[component];
-+                m = std::min(m, store.readyCycle);
-+                continue;
-             }
--            std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
-+            if (m_activeVuData && store.address + 16u <= m_activeVuDataSize)
-+            {
 +                uint32_t oldWords[4]{};
 +                std::memcpy(oldWords, m_activeVuData + store.address, sizeof(oldWords));
 +                for (uint32_t component = 0; component < 4u; ++component)
@@ -2132,7 +2146,8 @@ index bd75bba..1ed4289 100644
 +                        oldWords[component] = store.words[component];
 +                }
 +                std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
-+            }
+             }
+-            std::memcpy(m_activeVuData + store.address, oldWords, sizeof(oldWords));
 +            store = {};
          }
 -        store = {};
@@ -2237,7 +2252,7 @@ index bd75bba..1ed4289 100644
  }
  
  void VU1Interpreter::progressXgkick()
-@@ -919,6 +991,13 @@ void VU1Interpreter::finishXgkick()
+@@ -919,6 +991,16 @@ void VU1Interpreter::finishXgkick()
      if (!m_xgkick.active)
          return;
  
@@ -2245,13 +2260,16 @@ index bd75bba..1ed4289 100644
 +    {
 +        // checagem VU1 x nativo: a saida do quadro amostrado so vai para a comparacao (quem desenha e a camada nativa)
 +        g_wotmGifTap(m_xgkick.wotmSrc, m_xgkick.packet.data(), m_xgkick.totalBytes);
-+        m_xgkick.active = false;
-+        return;
++        if (!g_wotmGsFeed)   // no replay (--vu1cmp) o pacote tambem vai ao GS, para a imagem de referencia
++        {
++            m_xgkick.active = false;
++            return;
++        }
 +    }
      if (m_activeMemory)
          m_activeMemory->submitGifPacket(GifPathId::Path1, m_xgkick.packet.data(), m_xgkick.totalBytes);
      else if (m_activeGs)
-@@ -937,6 +1016,7 @@ void VU1Interpreter::startXgkick(uint32_t qwordAddress)
+@@ -937,6 +1019,7 @@ void VU1Interpreter::startXgkick(uint32_t qwordAddress)
      m_xgkick.sourceAddress = sourceAddress;
      m_xgkick.cycleCredit = 1u; // XGKICK's issue cycle counts toward PATH1.
      m_xgkick.issueCycle = m_cycle;
@@ -2259,7 +2277,7 @@ index bd75bba..1ed4289 100644
  }
  
  void VU1Interpreter::advanceOneCycle()
-@@ -1005,11 +1085,8 @@ uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &d
+@@ -1005,11 +1088,8 @@ uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &d
                      ready = std::max(ready, m_vfReady[access.reg][component]);
              }
          }
@@ -2273,7 +2291,7 @@ index bd75bba..1ed4289 100644
          for (uint32_t component = 0; component < 4u; ++component)
          {
              if ((usage->accRead & laneForComponent(component)) != 0u)
-@@ -1063,11 +1140,8 @@ void VU1Interpreter::markPairWrites(const DecodedInstructionPair &decoded)
+@@ -1063,11 +1143,8 @@ void VU1Interpreter::markPairWrites(const DecodedInstructionPair &decoded)
          }
      }
  
@@ -2287,7 +2305,7 @@ index bd75bba..1ed4289 100644
      for (uint32_t component = 0; component < 4u; ++component)
      {
          if ((decoded.upperUsage.accWrite & laneForComponent(component)) != 0u)
-@@ -1436,12 +1510,14 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
+@@ -1436,12 +1513,14 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
      case 0x74:
      case 0x75:
      case 0x76:
@@ -2303,7 +2321,7 @@ index bd75bba..1ed4289 100644
          if (m_unit == Unit::VU0)
          {
              usage.reserved = true;
-@@ -1455,7 +1531,7 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
+@@ -1455,7 +1534,7 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
              break;
          case 0x71:
          case 0x72:
@@ -2312,7 +2330,7 @@ index bd75bba..1ed4289 100644
              usage.latency = 18u;
              break;
          case 0x73:
-@@ -1463,7 +1539,7 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
+@@ -1463,7 +1542,7 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
              break;
          case 0x74:
          case 0x75:
@@ -2321,7 +2339,7 @@ index bd75bba..1ed4289 100644
              usage.latency = 54u;
              break;
          case 0x76:
-@@ -1471,10 +1547,10 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
+@@ -1471,10 +1550,10 @@ VU1Interpreter::InstructionUsage VU1Interpreter::decodeLowerUsage(uint32_t lower
          case 0x7A:
              usage.latency = 12u;
              break;
@@ -2334,7 +2352,7 @@ index bd75bba..1ed4289 100644
              usage.latency = 44u;
              break;
          default:
-@@ -1545,17 +1621,18 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
+@@ -1545,17 +1624,18 @@ void VU1Interpreter::rebuildDecodedCodeCache(const uint8_t *vuCode, uint32_t cod
      m_decodedCodeCacheValid = true;
  }
  
@@ -2356,7 +2374,7 @@ index bd75bba..1ed4289 100644
  
      const uint64_t generation = m_unit == Unit::VU1 ? memory->getVU1CodeGeneration() : memory->getVU0CodeGeneration();
      if (!m_decodedCodeCacheValid ||
-@@ -1568,7 +1645,7 @@ VU1Interpreter::DecodedInstructionPair VU1Interpreter::getDecodedInstructionPair
+@@ -1568,7 +1648,7 @@ VU1Interpreter::DecodedInstructionPair VU1Interpreter::getDecodedInstructionPair
      }
      const uint32_t pairIndex = pc / 8u;
      if (pairIndex >= kMaxDecodedPairs)
@@ -2365,7 +2383,7 @@ index bd75bba..1ed4289 100644
      return m_decodedCodeCache[pairIndex];
  }
  
-@@ -1639,7 +1716,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+@@ -1639,7 +1719,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
          if (m_state.pc + 8u > codeSize)
              break;
  
@@ -2663,10 +2681,10 @@ index 0000000..481f867
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_live.inc b/ps2xRuntime/src/lib/wotm_live.inc
 new file mode 100644
-index 0000000..41b039c
+index 0000000..67a963c
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_live.inc
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,424 @@
 +// wotm_live.inc: desenho nativo ao vivo (incluido por wotm_scene.inc, no escopo global de ps2_runtime.cpp).
 +// Usa native/wotm_native.hpp (do repo WoTM; passe -DWOTM_NATIVE_DIR=<WoTM>/native ao CMake). Sem o header, nao faz nada.
 +// Filmes (FMV) nativos: native/wotm_fmv.hpp do repo WoTM, ligado com PS2X_FMV=1 (wotmFmvInstall, chamado do main.cpp).
@@ -2918,6 +2936,7 @@ index 0000000..41b039c
 +} // namespace wotm_live
 +
 +// Desenha a fase lida da RAM (sem VU1/GS) por cima do quadro; devolve falso (e nao desenha) quando nao ha fase carregada.
++namespace wotm_live { static bool g_hideFps = false; }   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
 +static bool wotmDrawNative(const uint8_t *rdram)
 +{
 +    static wotm_live::State S;
@@ -3027,7 +3046,7 @@ index 0000000..41b039c
 +    DrawTexturePro(rt.texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
 +
 +    {   // contador de FPS (F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
-+        static bool show = true;
++        static bool show = !wotm_live::g_hideFps;
 +        static uint32_t lastG = 0;
 +        static double lastT = 0.0;
 +        static int drawn = 0;
@@ -3840,10 +3859,10 @@ index 0000000..ff4e723
 +#endif
 diff --git a/ps2xRuntime/src/lib/wotm_vu1check.inc b/ps2xRuntime/src/lib/wotm_vu1check.inc
 new file mode 100644
-index 0000000..025aa21
+index 0000000..8c7dc82
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/wotm_vu1check.inc
-@@ -0,0 +1,1618 @@
+@@ -0,0 +1,1889 @@
 +// wotm_vu1check.inc: compara, por objeto, o que o microcodigo do VU1 manda ao GS com o que a camada nativa (native/wotm_native.hpp)
 +// desenha, em numeros e sem imagem. Incluido por wotm_scene.inc (escopo global de ps2_runtime.cpp).
 +//
@@ -5115,7 +5134,8 @@ index 0000000..025aa21
 +// e imprime a mesma saida [vu1check] da checagem ao vivo.
 +namespace snap
 +{
-+constexpr char kMagic[8] = {'W', 'V', 'U', '1', 'S', 'N', 'P', '2'};
++constexpr char kMagic[8] = {'W', 'V', 'U', '1', 'S', 'N', 'P', '4'};
++constexpr size_t kGsRegsBytes = 15 * sizeof(uint64_t);   // GSRegisters de PMODE a BGCOLOR (os campos simples; CSR/vsyncTick sao atomicos e ficam de fora)
 +struct Hdr { char magic[8]; uint32_t frame, ramSize, vramSize, vu1State, vifRegs; };
 +constexpr uint32_t kPage = 4096;
 +FILE *g_out = nullptr;
@@ -5154,6 +5174,7 @@ index 0000000..025aa21
 +    putv(g_rt->memory().vif1_regs);
 +    put(g_rt->memory().getVU1Code(), PS2_VU1_CODE_SIZE);
 +    put(g_rt->memory().getVU1Data(), PS2_VU1_DATA_SIZE);
++    put(&g_rt->memory().gs_regs, kGsRegsBytes);   // PMODE/DISPFB/DISPLAY: qual buffer o GS apresenta (imagem de referencia do replay)
 +}
 +
 +void begin(const uint8_t *ram, uint32_t frame)   // entrada do hier(0, 0) do quadro amostrado
@@ -5217,6 +5238,16 @@ index 0000000..025aa21
 +    putDelta(ram, g_prev);
 +}
 +
++// Pacote do canal GIF (PATH3): o ambiente de desenho (FRAME/ZBUF/XYOFFSET/SCISSOR, sceGsPutDrawEnv) e uploads que o jogo manda fora da
++// cadeia do VIF1. So a imagem de referencia do replay precisa deles; a comparacao numerica nao.
++void gif(const uint8_t *data, uint32_t bytes)
++{
++    if (!g_out || !g_inFrame) return;
++    putv(uint8_t('G'));
++    putv(bytes);
++    put(data, bytes);
++}
++
 +void end()   // fim do quadro amostrado; o arquivo fica aberto para os proximos quadros da sessao
 +{
 +    if (!g_out || !g_inFrame) return;
@@ -5228,11 +5259,15 @@ index 0000000..025aa21
 +
 +// Gatilho (WOTM_VU1CHECK_WHEN=<cond>[,<cond>], qualquer uma basta) e rajada (WOTM_VU1CHECK_BURST=<k> quadros seguidos por disparo):
 +//  - fx:<tipo visual>: algum sistema de particulas vivo (numParticles > 0) com vis.attribs & 0xFF == tipo (3 sprite, 7 arco, 13 destroco...);
++//  - preset:<fxId>: idem, pelo preset do sistema (fxoff::fxId; nomes em tools/fx.py): separa a fumaca do vulcao da de um predio;
 +//  - frame:<a>[-<b>]: g_frame dentro da faixa.
-+// Com gatilho, a amostra so dispara quando a condicao vale; o periodo (WOTM_VU1CHECK) e o descanso minimo entre disparos.
-+struct Cond { enum Kind { Fx, Frame } kind; uint32_t a, b; };
++// O disparo e por borda: a condicao passou de falsa a verdadeira (o evento nasceu). Um emissor permanente (fumaca do vulcao) dispara
++// uma vez; uma explosao, a cada explosao nova. O periodo (WOTM_VU1CHECK) e o descanso minimo entre disparos e WOTM_VU1CHECK_SHOTS=<n>
++// limita os disparos da sessao (0 = sem limite).
++struct Cond { enum Kind { Fx, Preset, Frame } kind; uint32_t a, b; };
 +std::vector<Cond> g_when;
-+uint32_t g_burst = 1, g_burstLeft = 0;
++uint32_t g_burst = 1, g_burstLeft = 0, g_shots = 0, g_shotsDone = 0;
++bool g_condPrev = false;
 +
 +bool condTrue(const uint8_t *rdram, uint32_t frame)
 +{
@@ -5241,10 +5276,21 @@ index 0000000..025aa21
 +        if (c.kind == Cond::Frame) { if (frame >= c.a && frame <= c.b) return true; continue; }
 +        for (uint32_t i = 1; i < wotm::fxaddr::count; ++i) {
 +            const uint32_t b = wotm::fxaddr::fx + i * wotm::fxaddr::stride;
-+            if ((ram.u32(b + wotm::fxoff::type) & 0xFF) == c.a && int32_t(ram.u32(b + wotm::fxoff::numParticles)) > 0) return true;
++            if (int32_t(ram.u32(b + wotm::fxoff::numParticles)) <= 0) continue;
++            if (c.kind == Cond::Fx ? (ram.u32(b + wotm::fxoff::type) & 0xFF) == c.a : ram.u32(b + wotm::fxoff::fxId) == c.a) return true;
 +        }
 +    }
 +    return false;
++}
++
++// Verdadeiro so no quadro em que alguma condicao passa a valer (borda de subida). Sem condicoes: sempre.
++bool fireNow(const uint8_t *rdram, uint32_t frame)
++{
++    if (g_when.empty()) return true;
++    const bool now = condTrue(rdram, frame);
++    const bool fire = now && !g_condPrev;
++    g_condPrev = now;
++    return fire;
 +}
 +
 +void parseWhen(const char *s)
@@ -5254,6 +5300,7 @@ index 0000000..025aa21
 +        const std::string tok(p, e ? size_t(e - p) : std::strlen(p));
 +        p = e ? e + 1 : nullptr;
 +        if (tok.rfind("fx:", 0) == 0) g_when.push_back({Cond::Fx, uint32_t(std::strtoul(tok.c_str() + 3, nullptr, 0)), 0});
++        else if (tok.rfind("preset:", 0) == 0) g_when.push_back({Cond::Preset, uint32_t(std::strtoul(tok.c_str() + 7, nullptr, 0)), 0});
 +        else if (tok.rfind("frame:", 0) == 0) {
 +            char *dash = nullptr;
 +            const uint32_t a = uint32_t(std::strtoul(tok.c_str() + 6, &dash, 0));
@@ -5278,7 +5325,8 @@ index 0000000..025aa21
 +    const auto now = std::chrono::steady_clock::now();
 +    bool start = g_armed;   // armado aqui = passe 1 perdido: recomeca
 +    if (!g_armed) {
-+        if (!g_burstLeft && now >= g_next && frame >= 30 && (g_when.empty() || condTrue(rdram, frame))) g_burstLeft = g_burst;
++        const bool fire = frame >= 30 && fireNow(rdram, frame);   // avaliado todo quadro, para a borda nao se perder no descanso
++        if (!g_burstLeft && fire && now >= g_next && (!g_shots || g_shotsDone < g_shots)) { g_burstLeft = g_burst; ++g_shotsDone; }
 +        if (g_burstLeft) { --g_burstLeft; start = true; }
 +    }
 +    if (start) {
@@ -5308,12 +5356,26 @@ index 0000000..025aa21
 +    }
 +    if (!(wotm_vu1check::g_origHier = runtime.lookupFunction(0x2029B0u))) return;
 +    wotm_vu1check::snap::g_rt = &runtime;
++    g_wotmGifDmaTap = &wotm_vu1check::snap::gif;
++    if (std::getenv("WOTM_VU1CHECK_SNAP") && !std::getenv("PS2X_GS_UPLOADS")) {
++        // A VRAM do instantaneo precisa das texturas e CLUTs: com PS2X_NO_GS o GS so processa os uploads (sem rasterizar) quando
++        // PS2X_GS_UPLOADS esta ligado, e o VIF1 deixa passar os pacotes do PATH2 para isso. Lido pelo GS/VIF1 na primeira vez que rodam,
++        // ainda depois daqui.
++#ifdef _WIN32
++        _putenv_s("PS2X_GS_UPLOADS", "1");
++#else
++        setenv("PS2X_GS_UPLOADS", "1", 1);
++#endif
++        std::fprintf(stderr, "[vu1check] instantaneo ligado: uploads de textura vao ao GS (PS2X_GS_UPLOADS=1) para a VRAM do arquivo\n");
++    }
 +    wotm_vu1check::g_period = std::atoi(e);
 +    if (const char *w = std::getenv("WOTM_VU1CHECK_WHEN")) wotm_vu1check::parseWhen(w);
 +    if (const char *b = std::getenv("WOTM_VU1CHECK_BURST")) wotm_vu1check::g_burst = std::max(1u, uint32_t(std::strtoul(b, nullptr, 10)));
++    if (const char *n = std::getenv("WOTM_VU1CHECK_SHOTS")) wotm_vu1check::g_shots = uint32_t(std::strtoul(n, nullptr, 10));
 +    if (const char *m = std::getenv("WOTM_VU1CHECK_SNAP_MAX")) wotm_vu1check::snap::g_max = uint64_t(std::strtoull(m, nullptr, 10)) << 20;
-+    if (!wotm_vu1check::g_when.empty() || wotm_vu1check::g_burst > 1)
-+        std::fprintf(stderr, "[vu1check] gatilho: %s, rajada de %u quadro(s)\n", std::getenv("WOTM_VU1CHECK_WHEN") ? std::getenv("WOTM_VU1CHECK_WHEN") : "periodo", wotm_vu1check::g_burst);
++    if (!wotm_vu1check::g_when.empty() || wotm_vu1check::g_burst > 1 || wotm_vu1check::g_shots)
++        std::fprintf(stderr, "[vu1check] gatilho: %s (por borda), rajada de %u quadro(s), ate %u disparo(s)\n",
++                     std::getenv("WOTM_VU1CHECK_WHEN") ? std::getenv("WOTM_VU1CHECK_WHEN") : "periodo", wotm_vu1check::g_burst, wotm_vu1check::g_shots);
 +    wotm_vu1check::g_next = std::chrono::steady_clock::now() + std::chrono::seconds(wotm_vu1check::g_period);
 +    g_wotmVif1Keep = true;
 +    g_wotmGifTap = &wotm_vu1check::gifTap;
@@ -5326,9 +5388,107 @@ index 0000000..025aa21
 +// `ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--dump <prefixo>]`: refaz a checagem de um instantaneo (WOTM_VU1CHECK_SNAP) sem jogo.
 +// Abre o runtime so pela memoria, VIF1 e VU1 (a janela do raylib vem junto no initialize), restaura o estado do registro 'A' e
 +// reaplica cada cadeia na ordem gravada, com a mesma coleta nativa e a mesma comparacao da checagem ao vivo.
-+static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame)
++// Imagens do quadro, ao lado do instantaneo: <base>_<g_frame>_ref.png (o GS em software do runtime, alimentado pelos mesmos pacotes do
++// VU1 e do PATH2: e uma aproximacao do GS do PS2, nao o GS), _nat.png (a camada nativa, pela mesma funcao do jogo ao vivo, sem o
++// contador de FPS), _diff.png (pixels que diferem em mais de 24 em algum canal, em vermelho sobre a referencia escurecida) e _trio.png
++// (os tres lado a lado, 640x448 cada). Guia para o olho; o criterio continua sendo a tabela numerica.
++static uint16_t g_frameFbp = 0xFFFF;   // buffer de tela em que o quadro desenha (deduzido no aquecimento; 0xFFFF = usa o FRAME dos triangulos)
++static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runtime, const uint8_t *ram)
++{
++    constexpr int W = 640, H = 448;
++    std::string base(snapPath);
++    if (base.size() > 8 && base.compare(base.size() - 8, 8, ".vu1snap") == 0) base.resize(base.size() - 8);
++    base += "_" + std::to_string(frame);
++
++    Image ref{};
++    {
++        std::vector<uint8_t> px;
++        uint32_t w = 0, h = 0, dfbp = 0, sfbp = 0;
++        bool pref = false;
++        // O DISPFB do instantaneo mostra o buffer do quadro anterior (duplo buffer; o jogo so o troca no vsync, depois do quadro). O que
++        // interessa e o buffer em que este quadro desenhou: o FRAME mais usado pelos triangulos do VU1 na tela.
++        {
++            std::map<uint16_t, uint32_t> byFbp;
++            for (const wotm_vu1check::Tri &t : wotm_vu1check::g_vu) if (t.fbp != 0xFFFF) ++byFbp[t.fbp];
++            uint16_t best = 0xFFFF;
++            uint32_t n = 0;
++            for (const auto &kv : byFbp) if (kv.second > n) { n = kv.second; best = kv.first; }
++            if (g_frameFbp != 0xFFFF) best = g_frameFbp;
++            if (best != 0xFFFF) {
++                GSRegisters &gr = runtime.memory().gs_regs;
++                gr.dispfb1 = (gr.dispfb1 & ~0x1FFull) | best;
++                gr.dispfb2 = (gr.dispfb2 & ~0x1FFull) | best;
++            }
++        }
++        runtime.gs().latchHostPresentationFrame();
++        const bool got = runtime.gs().copyLatchedHostPresentationFrame(px, w, h, &dfbp, &sfbp, &pref);
++        {
++            extern std::atomic<unsigned long long> g_wotmGifPackets, g_wotmGifBytes;
++            const GSRegisters &gr = runtime.memory().gs_regs;
++            std::fprintf(stderr, "[vu1cmp] gs: pacotes %llu (%llu bytes), quadro %ux%u dispfb %x fonte %x preferida %d, pmode %llx dispfb1 %llx dispfb2 %llx\n",
++                         g_wotmGifPackets.load(), g_wotmGifBytes.load(), w, h, dfbp, sfbp, int(pref), (unsigned long long)gr.pmode, (unsigned long long)gr.dispfb1, (unsigned long long)gr.dispfb2);
++        }
++        if (got && w && h && px.size() >= size_t(w) * h * 4) {
++            ref = GenImageColor(int(w), int(h), BLACK);
++            std::memcpy(ref.data, px.data(), size_t(w) * h * 4);
++            ImageResizeNN(&ref, W, H);
++        } else {
++            ref = GenImageColor(W, H, BLACK);
++            std::fprintf(stderr, "[vu1cmp] sem quadro do GS para a imagem de referencia (o DISPFB do instantaneo nao aponta um buffer desenhado?)\n");
++        }
++    }
++
++    wotm_live::g_hideFps = true;
++    bool natOk = false;
++    for (int pass = 0; pass < 2; ++pass) {   // o 1o desenho de uma fase so carrega (recursos, instantaneo A/B); o 2o desenha
++        BeginDrawing();
++        ClearBackground(BLACK);
++        natOk = wotmDrawNative(ram);
++        EndDrawing();
++    }
++    Image nat = LoadImageFromScreen();
++    ImageFormat(&nat, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
++    {   // recorta o letterbox 4:3 do wotmDrawNative (render texture de 960x720 ajustada na janela)
++        const float sw = float(GetScreenWidth()), sh = float(GetScreenHeight());
++        const float k = std::min(sw / 960.f, sh / 720.f);
++        ImageCrop(&nat, Rectangle{(sw - 960.f * k) * 0.5f, (sh - 720.f * k) * 0.5f, 960.f * k, 720.f * k});
++        ImageResize(&nat, W, H);
++    }
++    if (!natOk) std::fprintf(stderr, "[vu1cmp] a camada nativa nao desenhou este quadro (cena sem fase?)\n");
++
++    Image diff = GenImageColor(W, H, BLACK);
++    uint32_t differ = 0;
++    {
++        const uint8_t *r = static_cast<const uint8_t *>(ref.data), *n = static_cast<const uint8_t *>(nat.data);
++        uint8_t *d = static_cast<uint8_t *>(diff.data);
++        for (int i = 0; i < W * H; ++i, r += 4, n += 4, d += 4) {
++            int m = 0;
++            for (int c = 0; c < 3; ++c) m = std::max(m, std::abs(int(r[c]) - int(n[c])));
++            if (m > 24) { ++differ; d[0] = 255; d[1] = uint8_t(255 - m); d[2] = 0; }
++            else { const uint8_t g = uint8_t((r[0] + r[1] + r[2]) / 12); d[0] = d[1] = d[2] = g; }
++            d[3] = 255;
++        }
++    }
++    Image trio = GenImageColor(3 * W + 8, H, DARKGRAY);
++    const Rectangle src{0.f, 0.f, float(W), float(H)};
++    ImageDraw(&trio, ref, src, Rectangle{0.f, 0.f, float(W), float(H)}, WHITE);
++    ImageDraw(&trio, nat, src, Rectangle{float(W + 4), 0.f, float(W), float(H)}, WHITE);
++    ImageDraw(&trio, diff, src, Rectangle{float(2 * W + 8), 0.f, float(W), float(H)}, WHITE);
++    ExportImage(ref, (base + "_ref.png").c_str());
++    ExportImage(nat, (base + "_nat.png").c_str());
++    ExportImage(diff, (base + "_diff.png").c_str());
++    ExportImage(trio, (base + "_trio.png").c_str());
++    UnloadImage(ref);
++    UnloadImage(nat);
++    UnloadImage(diff);
++    UnloadImage(trio);
++    std::fprintf(stderr, "[vu1cmp] imagens: %s_{ref,nat,diff,trio}.png; pixels diferentes %u (%.1f%%)\n", base.c_str(), differ, 100.0 * differ / (W * H));
++}
++
++static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bool png)
 +{
 +    using namespace wotm_vu1check;
++    g_wotmGsFeed = png;   // com imagens, o GS em software do runtime recebe os pacotes (PATH2 e XGKICK) do quadro
 +    if (dump) {
 +#ifdef _WIN32
 +        _putenv_s("WOTM_VU1CHECK_DUMP", dump);
@@ -5366,12 +5526,102 @@ index 0000000..025aa21
 +    auto getState = [&]() {
 +        runtime.vu1().reset();
 +        const bool ok = get(&runtime.vu1().state(), sizeof(VU1State)) && get(&runtime.cpu().vu0_fbrst, 4) && get(&mem.vif1_regs, sizeof(VIFRegisters)) &&
-+                        get(mem.getVU1Code(), PS2_VU1_CODE_SIZE) && get(mem.getVU1Data(), PS2_VU1_DATA_SIZE);
++                        get(mem.getVU1Code(), PS2_VU1_CODE_SIZE) && get(mem.getVU1Data(), PS2_VU1_DATA_SIZE) && get(&mem.gs_regs, snap::kGsRegsBytes);
 +        mem.markVU1CodeModified();
 +        return ok;
 +    };
 +    uint32_t chains = 0, frame = 0, framesDone = 0, framesSeen = 0;
 +    bool ok = true, inFrame = false, skip = false;   // skip: quadro que nao e o pedido (--frame): so aplica os deltas
++    // Pacotes do canal GIF ('G') do quadro: o ambiente de desenho deste quadro foi mandado antes da entrada do hier(0,0), ou seja,
++    // na janela do quadro anterior; o que a janela deste traz e o do seguinte, com os mesmos XYOFFSET/SCISSOR/ZBUF. Para a imagem de
++    // referencia, os 'G' do quadro sao aplicados ao GS antes das cadeias (lidos adiantado do arquivo) e de novo na ordem gravada.
++    std::vector<std::vector<uint8_t>> gifs;
++    std::vector<uint8_t> frameRam;   // RAM na entrada do quadro (imagem nativa; a RAM de agora e a do fim do quadro)
++#ifdef _WIN32
++    auto tell = [&]() { return _ftelli64(f); };
++    auto seek = [&](int64_t off, int whence) { return _fseeki64(f, off, whence) == 0; };
++#else
++    auto tell = [&]() { return int64_t(ftello(f)); };
++    auto seek = [&](int64_t off, int whence) { return fseeko(f, off, whence) == 0; };
++#endif
++    // Aquecimento do GS para a imagem de referencia: o GS em software comeca zerado, e parte do seu estado (registradores que o jogo
++    // so manda no fim do quadro, para o quadro seguinte) vem do quadro anterior; sem isso o primeiro quadro do arquivo sai sem o mundo.
++    // Roda as cadeias e os pacotes do canal GIF do quadro uma vez so pelo GS (sem os taps da checagem), devolve a VRAM e o VU1/VIF1
++    // ao estado de entrada e deixa o resto (registradores do GS) como ficou.
++    std::vector<uint8_t> vramIn(PS2_GS_VRAM_SIZE), vu1CodeIn(PS2_VU1_CODE_SIZE), vu1DataIn(PS2_VU1_DATA_SIZE);
++    auto warmUp = [&]() {
++        gifs.clear();
++        const int64_t pos = tell();
++        std::memcpy(vramIn.data(), mem.getGSVRAM(), PS2_GS_VRAM_SIZE);
++        std::memcpy(vu1CodeIn.data(), mem.getVU1Code(), PS2_VU1_CODE_SIZE);
++        std::memcpy(vu1DataIn.data(), mem.getVU1Data(), PS2_VU1_DATA_SIZE);
++        const VU1State vuIn = runtime.vu1().state();
++        const VIFRegisters vifIn = mem.vif1_regs;
++        g_wotmVu1Tap = false;   // sem taps: o XGKICK e o PATH2 vao direto ao GS (g_wotmGsFeed)
++        std::vector<uint8_t> data;
++        for (;;) {
++            uint8_t type = 0;
++            if (!get(&type, 1) || type == 'E' || type == 'A' || type == 'a') break;
++            uint32_t n = 0, bytes = 0;
++            bool more = true;
++            auto skipDelta = [&]() { if (!get(&n, 4)) return false; return seek(int64_t(n) * (4 + int64_t(snap::kPage)), SEEK_CUR); };
++            if (type == 'C') {
++                more = skipDelta() && get(&n, 4) && seek(int64_t(n) * 8, SEEK_CUR) && get(&bytes, 4);
++                if (more) { data.resize(bytes); more = get(data.data(), bytes); }
++                if (more) mem.processVIF1Data(data.data(), bytes);
++            }
++            else if (type == 'P') more = skipDelta();
++            else if (type == 'G') {
++                more = get(&bytes, 4);
++                if (more) { gifs.emplace_back(bytes); more = get(gifs.back().data(), bytes); }
++                if (more) mem.submitGifPacket(GifPathId::Path3, gifs.back().data(), bytes, true);
++            }
++            else more = false;
++            if (!more) break;
++        }
++        seek(pos, SEEK_SET);
++        std::memcpy(mem.getGSVRAM(), vramIn.data(), PS2_GS_VRAM_SIZE);
++        std::memcpy(mem.getVU1Code(), vu1CodeIn.data(), PS2_VU1_CODE_SIZE);
++        std::memcpy(mem.getVU1Data(), vu1DataIn.data(), PS2_VU1_DATA_SIZE);
++        mem.markVU1CodeModified();
++        runtime.vu1().reset();
++        runtime.vu1().state() = vuIn;
++        mem.vif1_regs = vifIn;
++        // A VRAM voltou ao estado de entrada, com o Z do quadro anterior ainda la (a limpeza para este quadro saiu na janela do
++        // anterior, que o arquivo nao tem no 1o quadro). Os pacotes do canal GIF deste quadro limpam o Z (compartilhado) para o
++        // seguinte: reaplicados agora, deixam o Z limpo para o passe real; o FRAME que eles poem e trocado pela propria cadeia.
++        for (const auto &g : gifs) mem.submitGifPacket(GifPathId::Path3, g.data(), uint32_t(g.size()), true);
++        // O FRAME em vigor agora e o do ultimo ambiente da janela, o do quadro seguinte. O deste quadro e o primeiro FRAME que os
++        // pacotes do canal GIF da janela escrevem (o jogo o reenvia depois do render-to-texture); se so ha o do seguinte, e o outro
++        // buffer de tela. Forca FRAME_1/FRAME_2 para ele e e esse buffer que a imagem de referencia mostra.
++        uint64_t first = 0, last = 0;
++        for (const auto &g : gifs)
++            for (uint32_t pos = 0; pos + 16 <= g.size();) {
++                uint64_t lo, hi;
++                std::memcpy(&lo, g.data() + pos, 8);
++                std::memcpy(&hi, g.data() + pos + 8, 8);
++                pos += 16;
++                const uint32_t nloop = uint32_t(lo & 0x7FFF), flg = uint32_t((lo >> 58) & 3), nreg = uint32_t((lo >> 60) & 0xF) ? uint32_t((lo >> 60) & 0xF) : 16u;
++                if (flg == 0) {
++                    for (uint32_t l = 0; l < nloop; ++l)
++                        for (uint32_t r = 0; r < nreg && pos + 16 <= g.size(); ++r, pos += 16)
++                            if (uint32_t((hi >> (4 * r)) & 0xF) == 0xE) {
++                                uint64_t v0, v1;
++                                std::memcpy(&v0, g.data() + pos, 8);
++                                std::memcpy(&v1, g.data() + pos + 8, 8);
++                                if ((v1 & 0xFF) == 0x4C) { if (!first) first = v0; last = v0; }
++                            }
++                } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
++                else pos += nloop * 16;
++            }
++        if (last) {
++            uint64_t fr = first != last ? first : ((last & ~0x1FFull) | ((last & 0x1FF) == 0x46 ? 0x8Cu : 0x46u));
++            runtime.gs().writeRegister(0x4C, fr);
++            runtime.gs().writeRegister(0x4D, fr);
++            g_frameFbp = uint16_t(fr & 0x1FF);
++        } else g_frameFbp = 0xFFFF;
++        g_wotmVu1Tap = true;
++    };
 +    for (;;) {
 +        uint8_t type = 0;
 +        if (!get(&type, 1)) { ok = !inFrame; break; }   // fim do arquivo entre quadros = normal; no meio de um = truncado
@@ -5385,7 +5635,10 @@ index 0000000..025aa21
 +            ++framesSeen;
 +            skip = onlyFrame && frame != onlyFrame;
 +            chains = 0;
-+            if (!skip) arm(ram, frame);
++            if (!skip) {
++                if (png) { warmUp(); frameRam.assign(ram, ram + PS2_RAM_SIZE); }   // a imagem nativa usa a RAM da entrada do quadro
++                arm(ram, frame);
++            }
 +            continue;
 +        }
 +        if (!inFrame) { ok = false; break; }
@@ -5407,12 +5660,48 @@ index 0000000..025aa21
 +            ok = applyDelta(ram, PS2_RAM_SIZE);
 +            if (ok && !skip) { g_pass = 1; g_cam[1] = readCam(ram); collectNative(ram, g_natPass1); }
 +            if (!ok) break;
++        } else if (type == 'G') {
++            uint32_t bytes = 0;
++            std::vector<uint8_t> data;
++            ok = get(&bytes, 4);
++            if (ok) { data.resize(bytes); ok = get(data.data(), bytes); }
++            if (!ok) break;
++            static const bool s_listG = std::getenv("WOTM_VU1CMP_LISTG") != nullptr;   // diagnostico: lista os registradores de cada pacote do canal GIF
++            if (s_listG && !skip) {   // tags GIF do pacote: NLOOP, formato e os registradores A+D (com o valor)
++                std::string s;
++                char b[96];
++                for (uint32_t pos = 0; pos + 16 <= bytes;) {
++                    uint64_t lo, hi;
++                    std::memcpy(&lo, data.data() + pos, 8);
++                    std::memcpy(&hi, data.data() + pos + 8, 8);
++                    pos += 16;
++                    const uint32_t nloop = uint32_t(lo & 0x7FFF), flg = uint32_t((lo >> 58) & 3), nreg = uint32_t((lo >> 60) & 0xF) ? uint32_t((lo >> 60) & 0xF) : 16u;
++                    std::snprintf(b, sizeof b, " [nloop %u flg %u nreg %u%s]", nloop, flg, nreg, (lo >> 15) & 1 ? " eop" : "");
++                    s += b;
++                    if (flg == 0) {
++                        for (uint32_t l = 0; l < nloop; ++l)
++                            for (uint32_t r = 0; r < nreg && pos + 16 <= bytes; ++r, pos += 16) {
++                                const uint32_t reg = uint32_t((hi >> (4 * r)) & 0xF);
++                                uint64_t v0, v1;
++                                std::memcpy(&v0, data.data() + pos, 8);
++                                std::memcpy(&v1, data.data() + pos + 8, 8);
++                                if (reg == 0xE) std::snprintf(b, sizeof b, " %02llx=%llx", (unsigned long long)(v1 & 0xFF), (unsigned long long)v0);
++                                else std::snprintf(b, sizeof b, " r%x", reg);
++                                s += b;
++                            }
++                    } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
++                    else pos += nloop * 16;
++                }
++                std::fprintf(stderr, "[vu1cmp] G %u bytes:%s\n", bytes, s.c_str());
++            }
++            if (!skip && png) mem.submitGifPacket(GifPathId::Path3, data.data(), bytes, true);
 +        } else if (type == 'E') {
 +            inFrame = false;
 +            if (skip) continue;
-+            std::fprintf(stderr, "[vu1cmp] quadro g_frame %u (%u cadeias)\n", frame, chains);
++            std::fprintf(stderr, "[vu1cmp] quadro g_frame %u (%u cadeias, %zu pacotes do canal GIF)\n", frame, chains, gifs.size());
 +            finish();
 +            ++framesDone;
++            if (png) vu1cmpImages(path, frame, runtime, frameRam.data());
 +        } else { ok = false; break; }
 +    }
 +    std::fclose(f);
@@ -5431,26 +5720,27 @@ index 0000000..025aa21
 +#else
 +#define __stdcall
 +#endif
-+struct Vu1CmpJob { const char *path, *dump; uint32_t frame; int rc; };
++struct Vu1CmpJob { const char *path, *dump; uint32_t frame; bool png; int rc; };
 +static unsigned __stdcall vu1cmpThread(void *p)
 +{
 +    Vu1CmpJob *j = static_cast<Vu1CmpJob *>(p);
-+    j->rc = vu1cmpBody(j->path, j->dump, j->frame);
++    j->rc = vu1cmpBody(j->path, j->dump, j->frame, j->png);
 +    return 0;
 +}
 +
 +int wotmVu1CmpMain(int argc, char **argv)
 +{
-+    Vu1CmpJob job{nullptr, nullptr, 0, 1};
++    Vu1CmpJob job{nullptr, nullptr, 0, true, 1};
 +    for (int i = 2; i < argc; ++i) {
 +        if (!std::strcmp(argv[i], "--dump") && i + 1 < argc) job.dump = argv[++i];
 +        else if (!std::strcmp(argv[i], "--frame") && i + 1 < argc) job.frame = uint32_t(std::strtoul(argv[++i], nullptr, 10));
++        else if (!std::strcmp(argv[i], "--nopng")) job.png = false;
 +        else job.path = argv[i];
 +    }
-+    if (!job.path) { std::fprintf(stderr, "uso: ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--frame <g_frame>] [--dump <prefixo>]\n"); return 2; }
++    if (!job.path) { std::fprintf(stderr, "uso: ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--frame <g_frame>] [--dump <prefixo>] [--nopng]\n"); return 2; }
 +#ifdef _WIN32
 +    const uintptr_t h = _beginthreadex(nullptr, 512u << 20, &vu1cmpThread, &job, 0, nullptr);
-+    if (!h) return vu1cmpBody(job.path, job.dump, job.frame);
++    if (!h) return vu1cmpBody(job.path, job.dump, job.frame, job.png);
 +    WaitForSingleObject(reinterpret_cast<void *>(h), 0xFFFFFFFFul);
 +    CloseHandle(reinterpret_cast<void *>(h));
 +#else

@@ -5,12 +5,15 @@
 #   -Frame <g_frame>: so esse quadro do arquivo
 #   -Full: todas as linhas [vu1check] (padrao: so as linhas de resumo de cada quadro: objetos, atributos, particulas, sprites)
 #   -Dump <prefixo>: grava os triangulos de cada checagem em <prefixo>_<g_frame>.csv (o mesmo WOTM_VU1CHECK_DUMP)
+#   -NoPng: sem as imagens (padrao: <arquivo>_<g_frame>_{ref,nat,diff,trio}.png ao lado do instantaneo; ref = GS em software do
+#           runtime, aproximacao do GS do PS2; nat = camada nativa; diff = pixels diferentes; trio = os tres lado a lado)
 # A pasta do runtime vem de WOTM_RECOMP_DIR ou de .wotm_recomp_dir na raiz do repo (gravado pelo build_runtime.bat).
 param(
     [Parameter(Mandatory = $true)][string]$Path,
     [int]$Frame = 0,
     [string]$Dump = '',
     [switch]$Full,
+    [switch]$NoPng,
     [string]$Build = 'build_dev'
 )
 $ErrorActionPreference = 'Stop'
@@ -29,6 +32,7 @@ foreach ($f in $files) {
     $args = "--vu1cmp `"$f`""
     if ($Frame -gt 0) { $args += " --frame $Frame" }
     if ($Dump) { $args += " --dump `"$Dump`"" }
+    if ($NoPng) { $args += " --nopng" }
     # Start-Process redireciona sem passar pelo PowerShell (o `2>` do PS 5 grava UTF-16 e quebra as linhas longas)
     $p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
     $lines = Get-Content $err
@@ -38,7 +42,7 @@ foreach ($f in $files) {
         $lines | Where-Object { $_ -match '\[vu1cmp\]' } | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
         continue
     }
-    $sel = if ($Full) { $lines | Where-Object { $_ -match '\[vu1check\]' } } else { $lines | Where-Object { $_ -match '\[vu1check\] g=\d+ ' } }
+    $sel = if ($Full) { $lines | Where-Object { $_ -match '\[vu1check\]|\[vu1cmp\] (imagens|sem quadro|a camada)' } } else { $lines | Where-Object { $_ -match '\[vu1check\] g=\d+ |\[vu1cmp\] (imagens|sem quadro|a camada)' } }
     $sel | ForEach-Object { $_ -replace '^\[vu1check\] ', '' }
 }
 exit $rc
