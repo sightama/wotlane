@@ -386,6 +386,19 @@ void chainTap(const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t
     std::sort(only.begin(), only.end());
     g_nats.emplace_back();
     collectNative(g_rdram, g_nats.back(), g_nats.size() == 1 ? nullptr : &only);
+    if (g_nats.size() > 1) {
+        // A OT de alfa e montada na descida do hier(v,0) e sai numa cadeia do hier(v,1), depois do TheGame::Update, que pode ter
+        // desligado o _cs nesse meio (retícula que some: drawMe 0). O objeto que a cadeia referencia e esta coleta nao achou vem
+        // da 1a coleta, a do momento em que o pacote foi montado.
+        NatMap &cur = g_nats.back();
+        const NatMap &first = g_nats.front();
+        for (uint32_t a : only) {
+            auto it = first.upper_bound(a);
+            if (it == first.begin()) continue;
+            --it;
+            if (a - it->first < it->second.span && !cur.count(it->first)) cur.emplace(it->first, it->second);
+        }
+    }
     const bool fx = g_nats.size() == 1 || std::any_of(only.begin(), only.end(), [](uint32_t a) { return a >= kFx0 && a < kFxEnd; });
     g_fxNats.emplace_back();
     g_fxChain.push_back(fx);
@@ -1496,6 +1509,11 @@ void finish()
         char name[1024];
         std::snprintf(name, sizeof name, "%s_%u.csv", path, g_frame);
         g_dump = std::fopen(name, "w");
+    }
+    if (const char *pre = std::getenv("WOTM_VU1CMP_RAM"); pre && g_rdram) {   // RAM da entrada do hier(0,0) do quadro (crua, como os ram_*.bin)
+        char name[1024];
+        std::snprintf(name, sizeof name, "%s_%u.bin", pre, g_frame);
+        if (FILE *f = std::fopen(name, "wb")) { std::fwrite(g_rdram, 1, PS2_RAM_SIZE, f); std::fclose(f); }
     }
     compare();
     if (g_dump) { std::fclose(g_dump); g_dump = nullptr; }

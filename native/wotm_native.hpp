@@ -2237,6 +2237,11 @@ public:
                     for (size_t q = 0; q < t.size() && q < 6; ++q)
                         std::fprintf(stderr, "[texinfo]   v %.1f %.1f %.1f uv %.3f %.3f rgba %u %u %u %u fge %d\n", t[q].x, t[q].y, t[q].z, t[q].u, t[q].v,
                                      t[q].r, t[q].g, t[q].b, t[q].a, int(t[q].fge));
+                    for (size_t q = 0; q < md->sprites.size() && q < 6; ++q) {   // OBJECT sprite (objType 2)
+                        const ObjSprite &s = md->sprites[q];
+                        std::fprintf(stderr, "[texinfo]   sprite uv %.3f %.3f - %.3f %.3f rgba %u %u %u %u fge %d\n", s.u0, s.v0, s.u1, s.v1,
+                                     unsigned(s.r), unsigned(s.g), unsigned(s.b), unsigned(s.a), int(s.fge));
+                    }
                 }
             }
             static const bool forceOpaqueEnv = std::getenv("WOTM_OPAQUE") != nullptr;   // diagnostico: alfa de vertice ignorado em skinned
