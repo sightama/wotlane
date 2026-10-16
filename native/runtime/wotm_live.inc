@@ -436,7 +436,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (show)
         {
             char line[128];
-            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps | fov %.1f", gameFps, screenFps, gc.fovy);
+            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps", gameFps, screenFps);
             DrawText(line, 11, 11, 20, BLACK);
             DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
         }
