@@ -406,66 +406,6 @@ struct Camera {
     float yaw = 0, pitch = 0;   // radianos; yaw 0 olha para +X, Z para cima
 };
 
-// ---------------------------------------------------------------- interpolacao entre quadros do jogo
-// O jogo atualiza a 30 quadros/s e a tela desenha a 60: sem interpolar, camera e animacoes ficam "picotadas". A camada ao vivo guarda dois
-// instantaneos (A anterior, B atual) e desenha a mistura; a rotacao usa slerp (lerp elemento a elemento encolhe a malha em giros rapidos).
-struct Quat { float w, x, y, z; };
-
-// Rotacao (linhas = imagens dos eixos) + escala uniforme; falso se a matriz nao for rotacao * escala uniforme (ai o chamador faz lerp simples).
-inline bool decomposeRot(const M4 &m, Quat &q, float &scale) {
-    float rl[3];
-    for (int i = 0; i < 3; ++i) rl[i] = std::sqrt(m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
-    scale = rl[0];
-    if (!(scale > 1e-4f) || std::fabs(rl[1] - scale) > 0.03f * scale || std::fabs(rl[2] - scale) > 0.03f * scale) return false;
-    float A[3][3];   // matriz-coluna padrao A = (R/escala)^T
-    for (int r = 0; r < 3; ++r)
-        for (int c = 0; c < 3; ++c) A[r][c] = m.m[c][r] / scale;
-    for (int i = 0; i < 3; ++i) {   // ortogonalidade
-        const int j = (i + 1) % 3;
-        const float d = m.m[i][0] * m.m[j][0] + m.m[i][1] * m.m[j][1] + m.m[i][2] * m.m[j][2];
-        if (std::fabs(d) > 0.03f * scale * scale) return false;
-    }
-    const float det = A[0][0] * (A[1][1] * A[2][2] - A[1][2] * A[2][1]) - A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) + A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
-    if (det < 0.9f) return false;   // reflexao: lerp simples
-    const float tr = A[0][0] + A[1][1] + A[2][2];
-    if (tr > 0.f) { const float t = std::sqrt(tr + 1.f) * 2.f; q = {0.25f * t, (A[2][1] - A[1][2]) / t, (A[0][2] - A[2][0]) / t, (A[1][0] - A[0][1]) / t}; }
-    else if (A[0][0] > A[1][1] && A[0][0] > A[2][2]) { const float t = std::sqrt(1.f + A[0][0] - A[1][1] - A[2][2]) * 2.f; q = {(A[2][1] - A[1][2]) / t, 0.25f * t, (A[0][1] + A[1][0]) / t, (A[0][2] + A[2][0]) / t}; }
-    else if (A[1][1] > A[2][2]) { const float t = std::sqrt(1.f + A[1][1] - A[0][0] - A[2][2]) * 2.f; q = {(A[0][2] - A[2][0]) / t, (A[0][1] + A[1][0]) / t, 0.25f * t, (A[1][2] + A[2][1]) / t}; }
-    else { const float t = std::sqrt(1.f + A[2][2] - A[0][0] - A[1][1]) * 2.f; q = {(A[1][0] - A[0][1]) / t, (A[0][2] + A[2][0]) / t, (A[1][2] + A[2][1]) / t, 0.25f * t}; }
-    return true;
-}
-
-inline Quat slerp(Quat a, Quat b, float t) {
-    float d = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
-    if (d < 0.f) { b = {-b.w, -b.x, -b.y, -b.z}; d = -d; }
-    float ka, kb;
-    if (d > 0.9995f) { ka = 1.f - t; kb = t; }
-    else { const float th = std::acos(d), sn = std::sin(th); ka = std::sin((1.f - t) * th) / sn; kb = std::sin(t * th) / sn; }
-    Quat r{ka * a.w + kb * b.w, ka * a.x + kb * b.x, ka * a.y + kb * b.y, ka * a.z + kb * b.z};
-    const float n = std::sqrt(r.w * r.w + r.x * r.x + r.y * r.y + r.z * r.z);
-    if (n > 0.f) { r.w /= n; r.x /= n; r.y /= n; r.z /= n; }
-    return r;
-}
-
-inline M4 lerpM4(const M4 &a, const M4 &b, float t) {
-    M4 r;
-    for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j] + (b.m[i][j] - a.m[i][j]) * t;   // translacao e coluna 4 (e fallback da rotacao)
-    Quat qa, qb;
-    float sa, sb;
-    if (decomposeRot(a, qa, sa) && decomposeRot(b, qb, sb)) {
-        const Quat q = slerp(qa, qb, t);
-        const float s = sa + (sb - sa) * t;
-        const float x = q.x, y = q.y, z = q.z, w = q.w;
-        const float A[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)},
-                               {2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)},
-                               {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}};
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j) r.m[i][j] = A[j][i] * s;   // volta para vetores-linha
-    }
-    return r;
-}
-
 // Camera do jogo para uma vista: o que o viewUpdate gravou (worldToScreenMat e worldCtx[view].eo). Sem matriz valida (menus), o
 // `_cs` de viewInfo[view] (posicao em +0x10, matriz em +0x20: as linhas sao os eixos do olho em coordenadas de mundo = direita,
 // FRENTE, cima). worldToScreenMat tem foco 384 sobre 640 px (HFOV ~79,6 graus) e, em 4:3, o VFOV e ~63,7 graus (o eixo de
@@ -541,35 +481,15 @@ struct TextQuad {
     uint64_t tex0;        // TEX0 em vigor (atlas T8H 512x512 do .RTX da fase + paleta CBP)
 };
 
-// Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada) para interpolar entre dois quadros.
+// Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada): os desenhos ate o proximo quadro do jogo repetem este,
+// sem ler a RAM que o jogo esta reescrevendo.
 struct Snapshot {
     std::vector<Sprite> sprites;
     std::vector<DrawItem> items, sky, overlay, hud;
     GameCamera cam;
-    double t = 0.0;     // relogio da apresentacao no momento da captura (segundos)
     uint32_t g = 0;     // contador de quadros do jogo
     bool valid = false;
 };
-
-// Mistura de camera: posicao lerp, eixos nlerp, FOV lerp. Corte (teleporte ou giro brusco) = sem mistura.
-inline GameCamera lerpCamera(const GameCamera &a, const GameCamera &b, float t) {
-    GameCamera r = b;
-    if (!a.ok || !b.ok) return r;
-    const float dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
-    const float dotf = a.fwd[0] * b.fwd[0] + a.fwd[1] * b.fwd[1] + a.fwd[2] * b.fwd[2];
-    if (dx * dx + dy * dy + dz * dz > 400.f * 400.f || dotf < 0.7f) return r;   // corte de camera
-    for (int i = 0; i < 3; ++i) {
-        r.pos[i] = a.pos[i] + (b.pos[i] - a.pos[i]) * t;
-        r.fwd[i] = a.fwd[i] + (b.fwd[i] - a.fwd[i]) * t;
-        r.up[i] = a.up[i] + (b.up[i] - a.up[i]) * t;
-    }
-    for (float *v : {r.fwd, r.up}) {
-        const float n = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-        if (n > 1e-6f) { v[0] /= n; v[1] /= n; v[2] /= n; }
-    }
-    r.fovy = a.fovy + (b.fovy - a.fovy) * t;
-    return r;
-}
 
 class Scene {
 public:
@@ -1365,7 +1285,7 @@ public:
 
     // Copia o estado atual da cena (depois de collect) para um instantaneo: itens, ceu, camera e as paletas de matrizes dos skinned
     // (a RAM e reescrita a cada quadro do jogo; o instantaneo precisa guardar os valores).
-    Snapshot takeSnapshot(const Ram &ram, double now, uint32_t g) {
+    Snapshot takeSnapshot(const Ram &ram, uint32_t g) {
         Snapshot sn;
         sn.items = items;
         sn.sky = sky;
@@ -1373,7 +1293,6 @@ public:
         sn.hud = hud;
         sn.sprites = sprites;
         sn.cam = readGameCamera(ram, 0);
-        sn.t = now;
         sn.g = g;
         sn.valid = true;
         std::unordered_map<uint32_t, std::shared_ptr<std::vector<M4>>> byBlock;
@@ -1393,73 +1312,17 @@ public:
         return sn;
     }
 
-    // Preenche items/sky com a mistura de A (anterior) e B (atual) em alpha (0 = A, 1 = B) e devolve a camera misturada. Itens que
-    // existem so em B entram sem mistura; saltos grandes (teleporte, troca de LOD) tambem. Atualiza o olho usado no desenho.
-    GameCamera blend(const Snapshot &A, const Snapshot &B, float alpha) {
-        alpha = std::min(1.f, std::max(0.f, alpha));
-        auto mix = [&](const std::vector<DrawItem> &la, const std::vector<DrawItem> &lb, std::vector<DrawItem> &out) {
-            out.clear();
-            out.reserve(lb.size());
-            std::unordered_map<uint64_t, const DrawItem *> amap;
-            amap.reserve(la.size() * 2);
-            {
-                std::unordered_map<uint32_t, uint32_t> occ;
-                for (const DrawItem &a : la) amap[(uint64_t(a.node) << 8) | std::min<uint32_t>(occ[a.node]++, 255)] = &a;
-            }
-            std::unordered_map<uint32_t, uint32_t> occ;
-            std::map<std::pair<const void *, const void *>, std::shared_ptr<std::vector<M4>>> palCache;
-            for (const DrawItem &b : lb) {
-                DrawItem r = b;
-                const auto f = amap.find((uint64_t(b.node) << 8) | std::min<uint32_t>(occ[b.node]++, 255));
-                if (f != amap.end()) {
-                    const DrawItem &a = *f->second;
-                    const float dx = b.m.m[3][0] - a.m.m[3][0], dy = b.m.m[3][1] - a.m.m[3][1], dz = b.m.m[3][2] - a.m.m[3][2];
-                    if (dx * dx + dy * dy + dz * dz < 150.f * 150.f && a.lodIdx == b.lodIdx) {
-                        r.m = lerpM4(a.m, b.m, alpha);
-                        if (a.pal && b.pal && a.pal->size() == b.pal->size() && a.pal != b.pal) {
-                            auto &sp = palCache[{a.pal.get(), b.pal.get()}];
-                            if (!sp) {
-                                sp = std::make_shared<std::vector<M4>>(a.pal->size());
-                                for (size_t k = 0; k < sp->size(); ++k) (*sp)[k] = lerpM4((*a.pal)[k], (*b.pal)[k], alpha);
-                            }
-                            r.pal = sp;
-                        }
-                    }
-                }
-                out.push_back(std::move(r));
-            }
-        };
-        mix(A.items, B.items, items);
-        mix(A.sky, B.sky, sky);
-        mix(A.overlay, B.overlay, overlay);
-        mix(A.hud, B.hud, hud);
-        {   // particulas: mesma (fx, indice) nos dois quadros -> posicao, tamanho e rotacao misturados
-            std::unordered_map<uint32_t, const Sprite *> am;
-            am.reserve(A.sprites.size() * 2);
-            for (const Sprite &a : A.sprites) am[a.key] = &a;
-            sprites.clear();
-            sprites.reserve(B.sprites.size());
-            for (const Sprite &b : B.sprites) {
-                Sprite r = b;
-                const auto f = am.find(b.key);
-                if (f != am.end()) {
-                    const Sprite &a = *f->second;
-                    const float dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
-                    if (dx * dx + dy * dy + dz * dz < 200.f * 200.f) {
-                        for (int c = 0; c < 3; ++c) r.pos[c] = a.pos[c] + (b.pos[c] - a.pos[c]) * alpha;
-                        r.size = a.size + (b.size - a.size) * alpha;
-                        r.rot = a.rot + (b.rot - a.rot) * alpha;
-                        for (int c = 0; c < 4; ++c) r.rgba[c] = a.rgba[c] + (b.rgba[c] - a.rgba[c]) * alpha;
-                    }
-                }
-                sprites.push_back(r);
-            }
-        }
-        const GameCamera c = lerpCamera(A.cam, B.cam, alpha);
-        cam_ = c;
-        eyeOk_ = c.ok;
-        for (int i = 0; i < 3; ++i) eye_[i] = c.pos[i];
-        return c;
+    // Desenha o instantaneo do ultimo quadro do jogo como esta (sem interpolar: a logica roda a 60/s) e devolve a sua camera.
+    GameCamera show(const Snapshot &s) {
+        items = s.items;
+        sky = s.sky;
+        overlay = s.overlay;
+        hud = s.hud;
+        sprites = s.sprites;
+        cam_ = s.cam;
+        eyeOk_ = s.cam.ok;
+        for (int i = 0; i < 3; ++i) eye_[i] = s.cam.pos[i];
+        return s.cam;
     }
 
     // ---- Particulas (fx[], 0x5BA280: 98 x 0x2EE0 bytes; o VU1 monta os quadrados, aqui viram sprites voltados para a camera) ----
@@ -2052,7 +1915,7 @@ public:
             rlDrawRenderBatchActive();
             rlEnableDepthMask();
         }
-        // particulas por ultimo (testam profundidade, nao escrevem): destroços interpolados (drawSprites), depois os demais tipos na ordem de particleDraw
+        // particulas por ultimo (testam profundidade, nao escrevem): destroços (drawSprites), depois os demais tipos na ordem de particleDraw
         if (!wire) drawSprites(ram);
         if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
         if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas

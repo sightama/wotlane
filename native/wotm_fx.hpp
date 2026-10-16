@@ -27,7 +27,7 @@
 //     UV (3 normal, 1 espelha U, 2 espelha V, 0 os dois); a cor sai da tabela pela idade, como no loadColors
 //   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
 //   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat)
-// Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8, interpolados; pos.w = lado e bits baixos = celula/espelhamento).
+// Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8; pos.w = lado e bits baixos = celula/espelhamento).
 // Sprine: Particles::sprineQuads (sprites ao longo da curva do microprograma). Ainda aproximado: as faixas (stripe, sweepTrail) ligam
 // particulas consecutivas; kite, wake e dustTrail viram sprites;
 // a cauda das linhas usa a matriz atual.

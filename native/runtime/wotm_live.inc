@@ -231,8 +231,7 @@ struct State
     bool rtxChosen = false;
     std::string rtxPath;
     long frame = 0;
-    wotm::Snapshot A, B;   // quadros do jogo anterior e atual (interpolacao: o jogo anda a 30/s, a tela desenha a 60)
-    bool interp = std::getenv("WOTM_NOINTERP") == nullptr;   // F4 liga/desliga a interpolacao (WOTM_NOINTERP: comeca desligada)
+    wotm::Snapshot snap;   // ultimo quadro do jogo (desenhado ate o proximo)
 };
 
 // Fase carregada: so o cabecalho da imagem do nivel em 0xA00000 (N e os N ponteiros dos nos-raiz, docs/FORMATOS.md) e o endereco
@@ -315,14 +314,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.scene.invalidate();
         S.levelSig = sig;
         S.rtxChosen = false;
-        S.A = wotm::Snapshot{};
-        S.B = wotm::Snapshot{};
+        S.snap = wotm::Snapshot{};
     }
-    // Quadro novo do jogo (g_frame em 0x6F7E38 mudou): le a cena da RAM e guarda como instantaneo B (o anterior vira A). Nos desenhos
-    // seguintes so mistura A e B: o jogo termina o quadro e espera o pacing, entao a RAM e consistente logo depois do g_frame++.
+    // Quadro novo do jogo (g_frame em 0x6F7E38 mudou): le a cena da RAM e guarda no instantaneo. Os desenhos seguintes repetem o
+    // instantaneo: o jogo termina o quadro e espera o pacing, entao a RAM e consistente logo depois do g_frame++.
     const uint32_t gNow = ram.u32(wotm::sym::g_frame);
-    const double tNow = GetTime();
-    if (!S.B.valid || gNow != S.B.g)
+    if (!S.snap.valid || gNow != S.snap.g)
     {
         wotm_live::g_stage = "collect";
         S.scene.collect(ram);
@@ -341,25 +338,16 @@ static bool wotmDrawNative(const uint8_t *rdram)
             }
         }
         wotm_live::g_stage = "snapshot";
-        wotm::Snapshot sn = S.scene.takeSnapshot(ram, tNow, gNow);
+        wotm::Snapshot sn = S.scene.takeSnapshot(ram, gNow);
         if (!sn.cam.ok)
             return false;
-        S.A = S.B.valid ? std::move(S.B) : sn;
-        S.B = std::move(sn);
+        S.snap = std::move(sn);
     }
-    if (!S.B.valid)
+    if (!S.snap.valid)
         return false;
-    if (IsKeyPressed(KEY_F4))
-        S.interp = !S.interp;
     if (IsKeyPressed(KEY_F8))
         g_wotmShotKey = true;   // checagem VU1 x nativo: grava e compara o proximo quadro (WOTM_VU1CHECK ligado)
-    float alpha = 1.f;
-    {
-        const double span = S.B.t - S.A.t;   // duracao do quadro anterior do jogo; o atual deve durar parecido
-        if (S.interp && span > 0.004 && span < 0.25)
-            alpha = static_cast<float>((tNow - S.B.t) / span);
-    }
-    const wotm::GameCamera gc = S.scene.blend(S.A, S.B, alpha);
+    const wotm::GameCamera gc = S.scene.show(S.snap);
     if (!gc.ok)
         return false;
 
@@ -425,10 +413,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
             float csp[3] = {0, 0, 0}, csu[3] = {0, 0, 0};
             if (ram.ok(cs, 0x60))
                 for (int i = 0; i < 3; ++i) { csp[i] = ram.f32(cs + 0x10 + 4 * i); csu[i] = ram.f32(cs + 0x40 + 4 * i); }
-            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f cs=%x,%x wm3=%.4f,%.4f,%.4f a=%.2f csp=%.2f,%.2f,%.2f "
+            std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f cs=%x,%x wm3=%.4f,%.4f,%.4f csp=%.2f,%.2f,%.2f "
                                  "up=%.4f,%.4f,%.4f csu=%.4f,%.4f,%.4f\n",
                          now, ram.u32(wotm::sym::g_frame), gc.fovy, gc.pos[0], gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2], cs,
-                         ram.u32(wotm::addr::viewInfo + 0x14), ram.f32(wm + 0x30), ram.f32(wm + 0x34), ram.f32(wm + 0x38), alpha, csp[0], csp[1], csp[2],
+                         ram.u32(wotm::addr::viewInfo + 0x14), ram.f32(wm + 0x30), ram.f32(wm + 0x34), ram.f32(wm + 0x38), csp[0], csp[1], csp[2],
                          gc.up[0], gc.up[1], gc.up[2], csu[0], csu[1], csu[2]);
         }
         if (lastT == 0.0)
@@ -448,7 +436,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (show)
         {
             char line[128];
-            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps | fov %.1f | interp %s (F4)", gameFps, screenFps, gc.fovy, S.interp ? "ligada" : "desligada");
+            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps | fov %.1f", gameFps, screenFps, gc.fovy);
             DrawText(line, 11, 11, 20, BLACK);
             DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
         }
