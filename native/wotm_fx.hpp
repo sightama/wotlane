@@ -32,6 +32,7 @@
 // particulas consecutivas; kite, wake e dustTrail viram sprites;
 // a cauda das linhas usa a matriz atual.
 #pragma once
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 
 #include <algorithm>
 #include <cmath>
@@ -86,14 +87,14 @@ inline unsigned gsWhiteTexture() {
 }
 
 namespace fxaddr {
-constexpr uint32_t fx = 0x005BA280;           // _ParticleType fx[100]
+constexpr uint32_t fx = wotm::sym::fx;           // _ParticleType fx[100]
 constexpr uint32_t stride = 0x2EE0;           // sizeof(_ParticleType)
 constexpr uint32_t count = 100;
-constexpr uint32_t fxList = 0x006DF200;       // 12 bytes por sistema: next em +8
-constexpr uint32_t fxActiveTop = 0x006F88EC;  // primeiro ativo (-1 = nenhum)
-constexpr uint32_t textureInfo = 0x005B9E80;  // TextureInfoType[128]: numTextures s16, texIndex u16, du u16, dv u16
-constexpr uint32_t texId = 0x006DFAB0;        // u16[128]: indice no texInfo global
-constexpr uint32_t tex0 = 0x006DF6B0;         // u64[128]: TEX0 de cada textura de particula
+constexpr uint32_t fxList = wotm::sym::fxList;       // 12 bytes por sistema: next em +8
+constexpr uint32_t fxActiveTop = wotm::sym::fxActiveTop;  // primeiro ativo (-1 = nenhum)
+constexpr uint32_t textureInfo = wotm::sym::TextureInfo;  // TextureInfoType[128]: numTextures s16, texIndex u16, du u16, dv u16
+constexpr uint32_t texId = wotm::sym::texId;        // u16[128]: indice no texInfo global
+constexpr uint32_t tex0 = wotm::sym::TEX0;         // u64[128]: TEX0 de cada textura de particula
 constexpr uint32_t colors = 0x00256C10;       // RGBA (0x80 = 1,0), indexado por vis.colorIndex
 }
 
@@ -181,7 +182,7 @@ public:
     // Teste de visao do particleDraw: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), a caixa (centro, meia-extensao) contra
     // os 6 planos de worldCtx[0] (fovNormsTP em +0xF0, fovSigns em +0x170; src/common/view.cpp). Falso = o retail nao desenha o sistema.
     static bool inViewFov(const Ram &ram, uint32_t b) {
-        constexpr uint32_t w = 0x00445CD0u;   // worldCtx[0]
+        constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]
         float c[3], e[3];
         for (int k = 0; k < 3; ++k) { c[k] = ram.f32(b + 0x2C80 + 4 * k); e[k] = ram.f32(b + 0x2C90 + 4 * k); }
         for (uint32_t i = 0; i < 2; ++i)
@@ -217,7 +218,7 @@ public:
     //   (0,866 / 2), em unidades de vista: pixel = foco * deslocamento * pos.w / w.
     // Os tres pontos voltam ao mundo pela matriz atual, cada um na sua profundidade. c[0] = c[3] = ponta, c[1]/c[2] = base.
     static bool striteTriangle(const Ram &ram, uint32_t b, const float p[4], const float v[3], float c[4][3]) {
-        constexpr uint32_t kW2S = 0x006E1FD0u, kEo = 0x00445CD0u + 0x20;   // worldToScreenMat[0], worldCtx[0].eo (= -olho)
+        constexpr uint32_t kW2S = wotm::sym::worldToScreenMat, kEo = wotm::sym::worldCtx + 0x20;   // worldToScreenMat[0], worldCtx[0].eo (= -olho)
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
@@ -358,7 +359,7 @@ public:
     }
 
     static void readFlares(const Ram &ram, FlareFrame &f) {
-        constexpr uint32_t kIndex = 0x006F88F8u, kPacket = 0x006F8908u, kViewDef = 0x006E1904u, kScreenMats = 0x006E1990u;
+        constexpr uint32_t kIndex = wotm::sym::lensFlareIndex, kPacket = wotm::sym::lensFlarePacket, kViewDef = 0x006E1904u, kScreenMats = wotm::sym::viewScreenMats;
         f.e.clear();
         f.nspr = 0;
         const uint32_t p = ram.u32(kPacket);
@@ -719,7 +720,7 @@ public:
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(addr::worldToScreenMat + 16 * uint32_t(r) + 4 * uint32_t(k));
-        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(0x00445CD0u + 0x20 + 4 * uint32_t(k));   // worldCtx[0].eo = -olho
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(wotm::sym::worldCtx + 0x20 + 4 * uint32_t(k));   // worldCtx[0].eo = -olho
         auto outOfBand = [&](const float c[3]) {
             const float d[3] = {c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]};
             float h[4];

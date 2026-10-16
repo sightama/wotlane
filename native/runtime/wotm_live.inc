@@ -6,6 +6,7 @@
 // PS2X_FMV so avisa.
 #if __has_include("wotm_fmv.hpp") && __has_include(<libavcodec/avcodec.h>)
 #include "wotm_fmv.hpp"
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #define WOTM_HAVE_FMV 1
 namespace wotm_fmv_hooks
 {
@@ -37,11 +38,11 @@ void wotmFmvInstall(PS2Runtime &runtime)
     wotm::fmv::Player &p = wotm::fmv::Player::get();
     p.discRoot = io.cdRoot;
     p.isoPath = io.cdImage;
-    runtime.registerFunction(0x0020F4B0u, hostLeaf<wotm_fmv_hooks::playWithDB>);     // playMpegMovieWithDB
-    runtime.registerFunction(0x0020F540u, hostLeaf<wotm_fmv_hooks::updateDecoding>); // updateMpegMovieDecoding
-    runtime.registerFunction(0x00210090u, hostLeaf<wotm_fmv_hooks::cmoviePlay>);     // CMovie::Play
-    runtime.registerFunction(0x00210360u, hostLeaf<wotm_fmv_hooks::cmovieEnd>);      // CMovie::End
-    runtime.registerFunction(0x00210408u, hostLeaf<wotm_fmv_hooks::cmovieUpdate>);   // CMovie::Update
+    runtime.registerFunction(wotm::fn::playMpegMovieWithDB__FPcb, hostLeaf<wotm_fmv_hooks::playWithDB>);     // playMpegMovieWithDB
+    runtime.registerFunction(wotm::fn::updateMpegMovieDecoding__Fb, hostLeaf<wotm_fmv_hooks::updateDecoding>); // updateMpegMovieDecoding
+    runtime.registerFunction(wotm::fn::Play__6CMoviebPc, hostLeaf<wotm_fmv_hooks::cmoviePlay>);     // CMovie::Play
+    runtime.registerFunction(wotm::fn::End__6CMovie, hostLeaf<wotm_fmv_hooks::cmovieEnd>);      // CMovie::End
+    runtime.registerFunction(wotm::fn::Update__6CMovieb, hostLeaf<wotm_fmv_hooks::cmovieUpdate>);   // CMovie::Update
     std::fprintf(stderr, "[fmv] filmes nativos ligados (disco: %s, iso: %s)\n", io.cdRoot.string().c_str(), io.cdImage.string().c_str());
 }
 
@@ -279,7 +280,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     }
     // Quadro novo do jogo (g_frame em 0x6F7E38 mudou): le a cena da RAM e guarda como instantaneo B (o anterior vira A). Nos desenhos
     // seguintes so mistura A e B: o jogo termina o quadro e espera o pacing, entao a RAM e consistente logo depois do g_frame++.
-    const uint32_t gNow = ram.u32(0x6F7E38);
+    const uint32_t gNow = ram.u32(wotm::sym::g_frame);
     const double tNow = GetTime();
     if (!S.B.valid || gNow != S.B.g)
     {
@@ -379,18 +380,18 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 for (int i = 0; i < 3; ++i) { csp[i] = ram.f32(cs + 0x10 + 4 * i); csu[i] = ram.f32(cs + 0x40 + 4 * i); }
             std::fprintf(stderr, "[cam] t=%.4f g=%u fov=%.2f pos=%.2f,%.2f,%.2f fwd=%.4f,%.4f,%.4f cs=%x,%x wm3=%.4f,%.4f,%.4f a=%.2f csp=%.2f,%.2f,%.2f "
                                  "up=%.4f,%.4f,%.4f csu=%.4f,%.4f,%.4f\n",
-                         now, ram.u32(0x6F7E38), gc.fovy, gc.pos[0], gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2], cs,
+                         now, ram.u32(wotm::sym::g_frame), gc.fovy, gc.pos[0], gc.pos[1], gc.pos[2], gc.fwd[0], gc.fwd[1], gc.fwd[2], cs,
                          ram.u32(wotm::addr::viewInfo + 0x14), ram.f32(wm + 0x30), ram.f32(wm + 0x34), ram.f32(wm + 0x38), alpha, csp[0], csp[1], csp[2],
                          gc.up[0], gc.up[1], gc.up[2], csu[0], csu[1], csu[2]);
         }
         if (lastT == 0.0)
         {
             lastT = now;
-            lastG = ram.u32(0x6F7E38);
+            lastG = ram.u32(wotm::sym::g_frame);
         }
         else if (now - lastT >= 0.5)
         {
-            const uint32_t g = ram.u32(0x6F7E38);
+            const uint32_t g = ram.u32(wotm::sym::g_frame);
             gameFps = static_cast<float>(g - lastG) / static_cast<float>(now - lastT);
             screenFps = static_cast<float>(drawn) / static_cast<float>(now - lastT);
             lastG = g;

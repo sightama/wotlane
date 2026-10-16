@@ -25,6 +25,7 @@
 // sem jogo: `ps2EntryRunner --vu1cmp <arquivo> [--dump <prefixo>]` (namespace snap e wotmVu1CmpMain, no fim).
 #ifdef WOTM_HAVE_NATIVE
 #include <array>
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include <map>
 #include <set>
 #include <tuple>
@@ -299,7 +300,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
                 if (md->slotMask & (1u << s)) {
                     const uint64_t k = wotm::Scene::texKey(ram, it, s);
                     // texId 0 = buffer em exibicao: o TEX0 que o texmGetTextureAddrs monta com displayBuffer (0x6F87F8)
-                    tex[s] = k == wotm::Scene::kScreenKey ? ((uint64_t(ram.u32(0x6F87F8u) | 0x28128000u) | (1ull << 33)) & kTexMask)
+                    tex[s] = k == wotm::Scene::kScreenKey ? ((uint64_t(ram.u32(wotm::sym::displayBuffer) | 0x28128000u) | (1ull << 33)) & kTexMask)
                            : k ? wotm::Scene::objectTex0(ram, it.node, s) & kTexMask : 0;
                 }
             static const uint16_t kBlendAlpha[3] = {0x44, 0x48, 0x42};   // Scene::groupBlend ao contrario
@@ -472,7 +473,7 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
             if (nv % 2) return;
             const Quad q{{vx[1], vx[2], vx[2], vx[1]}, {vy[1], vy[1], vy[2], vy[2]}, 4, ((prim >> 5) & 1) != 0};
             uint32_t lf = 0;   // lensFlarePacket[0]
-            std::memcpy(&lf, g_rdram + 0x006F8908u, 4);
+            std::memcpy(&lf, g_rdram + wotm::sym::lensFlarePacket, 4);
             if (lf >= kFx0 && lf < kFxEnd && fxOf(prog) == int((lf - kFx0) / wotm::fxaddr::stride)) {
                 const uint64_t t0 = g_tex0[(prim >> 9) & 1];
                 const float tw = t0 == kTexUnknown ? 1.f : float(1u << ((t0 >> 26) & 0xF)), th = t0 == kTexUnknown ? 1.f : float(1u << ((t0 >> 30) & 0xF));
@@ -1000,10 +1001,10 @@ void compare()
     }
     if (g_dump) {   // luzes da CPU: paraL (0x6DFC00, direcoes x32 nas colunas) e vu1LightColor (D_0025B238, cores/128 e ambiente)
         std::fprintf(g_dump, "luzes");
-        for (uint32_t a : {0x6DFC00u, 0x25B238u})
+        for (uint32_t a : {wotm::sym::paraL, 0x25B238u})
             for (int k = 0; k < 16; ++k) { float f; std::memcpy(&f, g_rdram + a + 4 * k, 4); std::fprintf(g_dump, ",%g", f); }
         float spec;
-        std::memcpy(&spec, g_rdram + 0x6F8938u, 4);   // specularColor
+        std::memcpy(&spec, g_rdram + wotm::sym::specularColor, 4);   // specularColor
         std::fprintf(g_dump, ",%g", spec);
         std::fprintf(g_dump, "\n");
     }
@@ -1448,7 +1449,7 @@ void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
 {
     if (view != 0 || (ra != 0x188750u && ra != 0x18891Cu)) return;
     uint32_t frame;
-    std::memcpy(&frame, rdram + 0x6F7E38u, 4);   // g_frame
+    std::memcpy(&frame, rdram + wotm::sym::g_frame, 4);   // g_frame
     if (pass == 1) {
         if (g_armed) { snap::pass1(rdram); g_pass = 1; g_cam[1] = readCam(rdram); collectNative(rdram, g_natPass1); }
         return;
@@ -1475,7 +1476,7 @@ void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
 PS2Runtime::RecompiledFunction g_origHier = nullptr;
 void hierChecked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == 0x2029B0u)
+    if (ctx->pc == wotm::fn::hier__Fii)
         onHier(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 31));
     g_origHier(rdram, ctx, runtime);
 }
@@ -1489,7 +1490,7 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
         std::fprintf(stderr, "[vu1check] desligado: so no modo nativo (PS2X_NO_VU1)\n");
         return;
     }
-    if (!(wotm_vu1check::g_origHier = runtime.lookupFunction(0x2029B0u))) return;
+    if (!(wotm_vu1check::g_origHier = runtime.lookupFunction(wotm::fn::hier__Fii))) return;
     wotm_vu1check::snap::g_rt = &runtime;
     g_wotmGifDmaTap = &wotm_vu1check::snap::gif;
     if (std::getenv("WOTM_VU1CHECK_SNAP") && !std::getenv("PS2X_GS_UPLOADS")) {
@@ -1516,7 +1517,7 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
     g_wotmGifTap = &wotm_vu1check::gifTap;
     g_wotmMscalTap = &wotm_vu1check::mscalTap;
     g_wotmChainTap = &wotm_vu1check::chainTap;
-    runtime.registerFunction(0x2029B0u, &wotm_vu1check::hierChecked);
+    runtime.registerFunction(wotm::fn::hier__Fii, &wotm_vu1check::hierChecked);
     std::fprintf(stderr, "[vu1check] comparando VU1 x nativo a cada %d s\n", wotm_vu1check::g_period);
 }
 

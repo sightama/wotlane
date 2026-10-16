@@ -6,6 +6,7 @@
 // Sem --vram, procura vram_<n>.bin ao lado de ram_<n>.bin.
 // Teclas: botao direito + mouse = olhar; WASD = mover (Shift = rapido); Q/E = descer/subir; Tab = arame; L = LOD; F12 = captura.
 #include <cstdlib>
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include <unordered_map>
 #include <string>
 
@@ -208,7 +209,7 @@ int main(int argc, char **argv) {
     if (const char *fxd = std::getenv("WOTM_FXDUMP")) {   // depuracao: texturas dos efeitos (fx[] em 0x5BA280, 98 x 12000 bytes) decodificadas da VRAM do dump
         std::unordered_map<uint64_t, int> done;
         for (uint32_t i = 1; i < wotm::fxaddr::count; ++i) {
-            const uint32_t b = 0x005BA280u + i * 12000u;
+            const uint32_t b = wotm::sym::fx + i * 12000u;
             const uint32_t np = ram.u32(b + 0x2ED0);
             const uint32_t t0p = ram.u32(b + 0x2EBC);
             if (!np || np > 4096 || !ram.ok(t0p, 8)) continue;

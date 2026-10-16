@@ -1,5 +1,6 @@
 // wotm_scene.inc (incluido por ps2_runtime.cpp; raylib e ps2_runtime.h ja estao incluidos)
 #include "wotm_live.inc"
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 
 extern bool g_wotmVu1Tap;   // ps2_memory.cpp (checagem VU1 x nativo)
 static void wotmDrawScene(const uint8_t *rdram)
@@ -14,8 +15,8 @@ static void wotmDrawScene(const uint8_t *rdram)
         if (s_noVu1 && !g_wotmVu1Tap)
         {
             const uint32_t zero = 0;
-            std::memcpy(const_cast<uint8_t *>(rdram) + 0x6F87A0u, &zero, 4);
-            std::memcpy(const_cast<uint8_t *>(rdram) + 0x6F87A4u, &zero, 4);
+            std::memcpy(const_cast<uint8_t *>(rdram) + wotm::sym::objsInPacket, &zero, 4);
+            std::memcpy(const_cast<uint8_t *>(rdram) + wotm::sym::objsInAlphaPacket, &zero, 4);
         }
     }
     wotmDrawNative(rdram); // camada nativa (native/wotm_native.hpp): fase lida da RAM, sem VU1/GS; sem fase, o quadro do GS fica como esta

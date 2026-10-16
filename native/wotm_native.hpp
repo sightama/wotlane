@@ -6,6 +6,7 @@
 //
 // Convencoes do jogo (PS2): vetores-linha (p' = p * M), mundo com Z para cima, float32 little-endian.
 #pragma once
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 
 #include <algorithm>
 #include <array>
@@ -44,23 +45,23 @@ struct Ram {
 
 // Enderecos fixos do retail NTSC-U (SCUS_971.97): symbol_addrs.txt
 namespace addr {
-constexpr uint32_t world = 0x006F87C4;            // _worldctx *world (ep@0, skyCs@4, eo@0x20, weMat@0x30)
-constexpr uint32_t worldCtx = 0x00445CD0;         // _worldctx worldCtx[5] (0x1F0 cada)
-constexpr uint32_t viewInfo = 0x006E1900;         // 5 x 0x14: [0] = _cs* da camera, [1] = viewport*
-constexpr uint32_t worldToScreenMat = 0x006E1FD0; // 5 x 0x40
-constexpr uint32_t paraL = 0x006DFC00;            // float[4][4]: linhas x, y, z; colunas = luzes paralelas 0-2 e vetor-meio do especular, x32
+constexpr uint32_t world = wotm::sym::world;            // _worldctx *world (ep@0, skyCs@4, eo@0x20, weMat@0x30)
+constexpr uint32_t worldCtx = wotm::sym::worldCtx;         // _worldctx worldCtx[5] (0x1F0 cada)
+constexpr uint32_t viewInfo = wotm::sym::viewInfo;         // 5 x 0x14: [0] = _cs* da camera, [1] = viewport*
+constexpr uint32_t worldToScreenMat = wotm::sym::worldToScreenMat; // 5 x 0x40
+constexpr uint32_t paraL = wotm::sym::paraL;            // float[4][4]: linhas x, y, z; colunas = luzes paralelas 0-2 e vetor-meio do especular, x32
 constexpr uint32_t vu1FogParams = 0x0025B280;     // float[4] (D_0025B280, qword 21 do VU1): fogFA, fogMaxVal, 1, fogFB (fogUpdate)
-constexpr uint32_t fogColorCtx = 0x00445580;      // u64[6]: pacote do FOGCOL que o fogUpdate manda ao GS; [4] = R | G << 8 | B << 16
+constexpr uint32_t fogColorCtx = wotm::sym::fogColorCtx;      // u64[6]: pacote do FOGCOL que o fogUpdate manda ao GS; [4] = R | G << 8 | B << 16
 constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): cor/128 das luzes 0-2 (linhas); a linha 3 e o ambiente/especular
-constexpr uint32_t csActiveList = 0x0043A2C0;     // CsPool::m_activeList (CsNode: cs@0, next@4)
-constexpr uint32_t csHPActiveList = 0x0043A2E0;   // CsPool::m_HPActiveList
-constexpr uint32_t tempVramTexAddr = 0x006F8818;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
-constexpr uint32_t fileStatus = 0x00445390;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C
-constexpr uint32_t texInfo = 0x0050F100;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
+constexpr uint32_t csActiveList = wotm::sym::x_6CsPool_m_activeList;     // CsPool::m_activeList (CsNode: cs@0, next@4)
+constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // CsPool::m_HPActiveList
+constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
+constexpr uint32_t fileStatus = wotm::sym::fileStatus;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C
+constexpr uint32_t texInfo = wotm::sym::texInfo;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
 constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
-constexpr uint32_t psBlkLst = 0x0051C600;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
-constexpr uint32_t psLitDirWs = 0x0054CC90;      // direcao da luz das sombras (da cena para a luz), mundo
-constexpr uint32_t psShadowIntens = 0x006F8820;  // float, 80 = 0,625 (escala do GS)
+constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
+constexpr uint32_t psLitDirWs = wotm::sym::psLitDirWs;      // direcao da luz das sombras (da cena para a luz), mundo
+constexpr uint32_t psShadowIntens = wotm::sym::psShadowIntens;  // float, 80 = 0,625 (escala do GS)
 constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 }
 
@@ -1459,7 +1460,7 @@ public:
     void collectParticles(const Ram &ram) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;   // diagnostico: sem particulas
         if (off) return;
-        constexpr uint32_t kFx = 0x005BA280u, kStride = 12000u;
+        constexpr uint32_t kFx = wotm::sym::fx, kStride = 12000u;
         FxView fog{};   // o VU1 descarta a particula toda na neblina (F < 1; Particles::setFog)
         float row3[4];
         for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
@@ -2549,13 +2550,13 @@ private:
     //    resetcom le do arquivo da fase) quando viewAmbientChanged (0x6F8ADC; scratchpad +0x160 e +0x84).
     void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
         const bool quad = cs_ && ram.u32(0x007B3040) != 0;
-        const bool amb = ram.u32(0x006F8ADC) != 0;
+        const bool amb = ram.u32(wotm::sym::viewAmbientChanged) != 0;
         for (int k = 0; k < 4; ++k) {
             out[k] = ram.f32(node + 0x40 + 4 * k);
             const int16_t idx = ram.s16(node + 0x34 + 2 * k);
             if (animVal_ && idx >= 0 && k != 2) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
             if (quad) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
-            if (amb && k < 3) out[k] *= ram.f32(0x006F8AD0 + 4 * uint32_t(k));
+            if (amb && k < 3) out[k] *= ram.f32(wotm::sym::viewAnimAmbientRed + 4 * uint32_t(k));
             if (!std::isfinite(out[k])) out[k] = 1.f;
         }
     }
@@ -2574,7 +2575,7 @@ private:
         it.envK = ram.f32(node + 0x5C);
         if (it.envK == 0.f) it.envK = 16.f;
         if (cloak) {
-            const uint32_t n = ram.u32(0x006F88E0);
+            const uint32_t n = ram.u32(wotm::sym::count_006F88E0);
             const int j = (n & 8) ? 3 - int(n & 7) : int(n & 7) - 3;
             it.envK = ram.f32(cs_ + 0xAC) + float(j) / 64.f;
             it.blend = 0;
@@ -2778,7 +2779,7 @@ private:
     // volType 0: se o olho NAO esta no ar (folha != 0x200) em algum volume -> child2 (camera dentro do predio). volType != 0: para cada
     // ponto de visada (g_cameraLosPoints: direcao unitaria da camera ate o monstro + distancia em w) o segmento olho->ponto nao pode
     // atravessar solido (folha != 0x200) de nenhum volume; se atravessar -> child2 (que pode ser nulo = o predio some).
-    static constexpr uint32_t kLosPoints = 0x0050F020, kLosPerView = 0x0050F0C0;
+    static constexpr uint32_t kLosPoints = wotm::sym::g_cameraLosPoints, kLosPerView = wotm::sym::g_cameraLosPointsPerView;
 
     static void toLocal(const M4 &m, const float w[3], float out[3]) {
         for (int c = 0; c < 3; ++c) {

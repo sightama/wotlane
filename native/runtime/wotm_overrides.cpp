@@ -11,6 +11,7 @@
 // um pouco mais devagar em vez de pular, e todo integrador fica na margem para a qual foi feito. Nada muda quando o rate
 // ja e >= 30 (retail). Substitui os limites pontuais anteriores (WOTM_SPRINGMIN na mola, WOTM_TURNMIN no giro).
 #include "ps2_runtime.h"
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "ps2_runtime_macros.h"
 #include "runtime/ee_scheduler.h"
 
@@ -31,7 +32,7 @@ extern uint32_t g_wotmFreeSpinPc;
 
 namespace
 {
-    constexpr uint32_t kTimerGetUpdateRate = 0x2236D8u;
+    constexpr uint32_t kTimerGetUpdateRate = wotm::fn::timerGetUpdateRate__Fv;
     constexpr uint32_t kUpdateRateVar = 0x6F8DB8u;   // D_006F8DB8, lido pelo gp
 
     int g_minRate = 30;
@@ -45,8 +46,8 @@ namespace
     // o jogo conta 1 field num quadro de 2 vsyncs e anda mais devagar que o relogio (18% dos quadros, ~11% de lentidao
     // na luta). A correcao: na entrada de timerWaitForMinUpdateRate o contador passa a ser no minimo os vblanks desde o
     // inicio do quadro (marcado pelo timerGetCurTics no fim de timerWaitForMinUpdateRate / em timerSetFrameStart).
-    constexpr uint32_t kTimerWaitForMinUpdateRate = 0x223568u;
-    constexpr uint32_t kTimerGetCurTics = 0x2236B8u;
+    constexpr uint32_t kTimerWaitForMinUpdateRate = wotm::fn::timerWaitForMinUpdateRate__FPUi;
+    constexpr uint32_t kTimerGetCurTics = wotm::fn::timerGetCurTics__Fv;
     constexpr uint32_t kFrameStartRa[2] = {0x22369Cu, 0x223480u};   // retorno do jal em timerWaitForMinUpdateRate / timerSetFrameStart
     constexpr uint32_t kFieldCounter = 0x6F8DBCu, kFieldCounterAtStart = 0x6F8DC0u;
     PS2Runtime::RecompiledFunction g_origWaitMinRate = nullptr, g_origGetCurTics = nullptr;
@@ -73,10 +74,10 @@ namespace
     // meta de vitorias, EvaluateOnePlayerChallengeStatus so reergue o monstro derrubado e a luta segue, sem o dialogo "PLAY AGAIN"
     // que esperaria o pad. O filme de abertura (uiMain, 0x1D93D8) vira no-op. Cada fim de rodada (entrada de
     // Shell::EvaluateGameStatus, 0x1A7960) sai no log como [partida] com a vida e as vitorias dos dois monstros.
-    constexpr uint32_t kUserintMain = 0x1D9868u, kUiMain = 0x1D93D8u, kEvaluateGameStatus = 0x1A7960u;
+    constexpr uint32_t kUserintMain = wotm::fn::userintMain__Fv, kUiMain = wotm::fn::uiMain__Fi, kEvaluateGameStatus = wotm::fn::EvaluateGameStatus__5Shelli;
     PS2Runtime::RecompiledFunction g_origEvaluate = nullptr;
     unsigned g_rounds = 0;
-    constexpr uint32_t kShell = 0x414D80u, kGame = 0x2B35A0u;   // shellInfo, shellGame
+    constexpr uint32_t kShell = wotm::sym::shellInfo, kGame = wotm::sym::shellGame;   // shellInfo, shellGame
     int g_matchMonsters[4] = {-1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
     unsigned g_matchCount = 0;
@@ -141,7 +142,7 @@ namespace
     // Camera e HUD seguem no jogador (SetPlayerMonster). Retomada no meio cai direto no aiInit (o salto nao volta para ca).
     // TheGame::SetAIMonster (0x137B10) recalcula m_numAIs (0x1203E0) contando os slots com m_playerNum 2, o que agora inclui o
     // jogador; m_monsters[4 + i] seria lido alem da ultima IA (bancos de som, pickups). Depois dele, tira da conta os jogadores.
-    constexpr uint32_t kPlayerInit = 0x165F10u, kAiInit = 0x166038u, kSetAIMonster = 0x137B10u;
+    constexpr uint32_t kPlayerInit = wotm::fn::playerInit__7Monster, kAiInit = wotm::fn::aiInit__7Monster, kSetAIMonster = wotm::fn::SetAIMonster__7TheGameiiii;
     PS2Runtime::RecompiledFunction g_aiInit = nullptr, g_origSetAIMonster = nullptr;
 
     void playerInitAsAi(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -171,7 +172,7 @@ namespace
     // TheGame::gameGetStartPoint (0x138D68; com m_playerNum 2 o jogador nascia num ponto da IA e a IA no do jogador) e
     // Cameras::Update (0x11C770; so chama Camera::checkCollision, que monta os pontos de visada dos predios "fantasma", para
     // camera de monstro com m_playerNum 1). Durante essas duas funcoes os jogadores voltam a 1. Nenhuma das duas espera.
-    constexpr uint32_t kGameGetStartPoint = 0x138D68u, kCamerasUpdate = 0x11C770u;
+    constexpr uint32_t kGameGetStartPoint = wotm::fn::gameGetStartPoint__7TheGameP7Monster, kCamerasUpdate = wotm::fn::Update__7Cameras;
     PS2Runtime::RecompiledFunction g_origStartPoint = nullptr, g_origCamerasUpdate = nullptr;
 
     void callAsHumans(PS2Runtime::RecompiledFunction orig, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -198,7 +199,7 @@ namespace
 
     // WOTM_CLOAK=1 (teste do CLOAK na checagem VU1): na entrada de Monster::update (0x15B488) do jogador (m_monsters[0]) sem CLOAK
     // (m_cloaked, +0xEF), chama Monster::setCloakOn (0x162CD0), como o power-up; quando o tempo acaba, liga de novo no quadro seguinte.
-    constexpr uint32_t kMonsterUpdate = 0x15B488u, kSetCloakOn = 0x162CD0u;
+    constexpr uint32_t kMonsterUpdate = wotm::fn::update__7Monster, kSetCloakOn = wotm::fn::setCloakOn__7Monster;
     PS2Runtime::RecompiledFunction g_origMonsterUpdate = nullptr, g_setCloakOn = nullptr;
 
     void monsterUpdateCloaked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -221,7 +222,7 @@ namespace
     // WOTM_TURNLOG: uma linha [turn] por MonsterDynamics::updatePosition (cada monstro, cada quadro do jogo):
     // quadro (g_frame), monstro, rate, acelRot (+0x110, zerada pela funcao), velRot (+0x100) antes/depois e os angulos
     // (Monster+0xC -> +0x60, em radianos) depois da integracao. O rate mostrado e o da variavel (sem o limite).
-    constexpr uint32_t kMonsterDynamicsUpdatePosition = 0x165100u;
+    constexpr uint32_t kMonsterDynamicsUpdatePosition = wotm::fn::updatePosition__15MonsterDynamics;
     PS2Runtime::RecompiledFunction g_origUpdatePosition = nullptr;
 
     void updatePositionLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -245,7 +246,7 @@ namespace
         const uint32_t mon = READ32(dyn);
         const uint32_t cs = READ32(mon + 0xC);
         std::fprintf(stderr, "[turn] g=%u mon=%06x rate=%d acc=%+.3f,%+.3f,%+.3f vel=%+.3f,%+.3f,%+.3f -> %+.3f,%+.3f,%+.3f ang=%+.3f,%+.3f,%+.3f\n",
-                     READ32(0x6F7E38u), mon, rate, acc[0], acc[1], acc[2], v0[0], v0[1], v0[2], readF(rdram, dyn + 0x100), readF(rdram, dyn + 0x104),
+                     READ32(wotm::sym::g_frame), mon, rate, acc[0], acc[1], acc[2], v0[0], v0[1], v0[2], readF(rdram, dyn + 0x100), readF(rdram, dyn + 0x104),
                      readF(rdram, dyn + 0x108), readF(rdram, cs + 0x60), readF(rdram, cs + 0x64), readF(rdram, cs + 0x68));
     }
 
@@ -255,7 +256,7 @@ namespace
     // tempo real (total, ocioso esperando evento e esperando o relogio de parede para soltar um prazo).
     bool g_fieldLog = false;
     // Chamadas a sceGsSyncV no quadro (cada uma espera 1 vsync) e o $ra das 4 primeiras: mostra quem gasta os fields.
-    constexpr uint32_t kSceGsSyncV = 0x231450u;
+    constexpr uint32_t kSceGsSyncV = wotm::fn::sceGsSyncV;
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
     uint32_t g_syncVCalls = 0, g_syncVRa[4];
     void syncVLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -297,7 +298,7 @@ namespace
         static uint32_t lastTics = 0;   // D_006F8DC4: ticks do timer 1 que o jogo acumulou (9619 por field)
         const uint32_t tics = READ32(0x6F8DC4u);
         std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms ritmo=%.1fms top",
-                     READ32(0x6F7E38u), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
+                     READ32(wotm::sym::g_frame), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
                      (tics - lastTics) / 9619.0,
                      (g_wotmEeCycle - g_lastCycle) / field, g_wotmIdleCycles / field,
                      std::chrono::duration<double, std::milli>(now - g_lastHost).count(), (idleUs - g_lastIdleUs) / 1000.0,

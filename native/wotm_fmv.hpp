@@ -24,6 +24,7 @@
 // "SSbd" + tamanho e dos dados: blocos de 512 bytes alternando esquerdo e direito. O FFmpeg nao reconhece esse audio; o
 // demultiplexador daqui separa os dois fluxos e o PCM e tocado direto.
 #pragma once
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 
 #include <algorithm>
 #include <atomic>
@@ -673,24 +674,24 @@ private:
 namespace hooks {
 
 namespace ga {   // globais do jogo
-constexpr uint32_t movieIsPlaying = 0x006F8650;
-constexpr uint32_t movieRequested = 0x006F8840;
-constexpr uint32_t movieIsCompletelyFinished = 0x006F8844;
-constexpr uint32_t IsInVram = 0x006F884C;
-constexpr uint32_t isWithAudio = 0x006F8864;
-constexpr uint32_t isStarted = 0x006F8874;
-constexpr uint32_t originalTexId = 0x006F88A0;
-constexpr uint32_t originalNumTextures = 0x006F88A4;
-constexpr uint32_t gO = 0x006F88A8;
-constexpr uint32_t ScreenObjectPending = 0x006F88B0;
-constexpr uint32_t gMovObj = 0x006F88B4;
-constexpr uint32_t gMovWid = 0x006F88B8;
-constexpr uint32_t gMovHei = 0x006F88BC;
-constexpr uint32_t movieFrameCounter = 0x006F88C0;
-constexpr uint32_t moviePreFrameCounter = 0x006F88C4;
-constexpr uint32_t CurrentMovieScreen = 0x006F88C8;
-constexpr uint32_t partialMovie = 0x006F8974;
-constexpr uint32_t originalTexZero = 0x0054DB60;   // 16 bytes: TEX0 original do objeto
+constexpr uint32_t movieIsPlaying = wotm::sym::movieIsPlaying;
+constexpr uint32_t movieRequested = wotm::sym::movieRequested;
+constexpr uint32_t movieIsCompletelyFinished = wotm::sym::movieIsCompletelyFinished;
+constexpr uint32_t IsInVram = wotm::sym::IsInVram;
+constexpr uint32_t isWithAudio = wotm::sym::isWithAudio;
+constexpr uint32_t isStarted = wotm::sym::isStarted;
+constexpr uint32_t originalTexId = wotm::sym::originalTexId;
+constexpr uint32_t originalNumTextures = wotm::sym::originalNumTextures;
+constexpr uint32_t gO = wotm::sym::gO;
+constexpr uint32_t ScreenObjectPending = wotm::sym::ScreenObjectPending;
+constexpr uint32_t gMovObj = wotm::sym::gMovObj;
+constexpr uint32_t gMovWid = wotm::sym::gMovWid;
+constexpr uint32_t gMovHei = wotm::sym::gMovHei;
+constexpr uint32_t movieFrameCounter = wotm::sym::movieFrameCounter;
+constexpr uint32_t moviePreFrameCounter = wotm::sym::moviePreFrameCounter;
+constexpr uint32_t CurrentMovieScreen = wotm::sym::CurrentMovieScreen;
+constexpr uint32_t partialMovie = wotm::sym::partialMovie;
+constexpr uint32_t originalTexZero = wotm::sym::originalTexZero;   // 16 bytes: TEX0 original do objeto
 constexpr uint32_t movieTexId = 999;               // texInfo[999]: reservado para o filme
 }
 

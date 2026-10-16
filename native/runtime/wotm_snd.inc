@@ -5,6 +5,7 @@
 // PS2X_SND_LOG=1: uma linha por chamada (menos as por quadro: volume/pan, "ainda tocando").
 #if __has_include("wotm_snd.hpp")
 #include "raylib.h"   // antes do motor: liga Engine::startOutput (AudioStream)
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "wotm_snd.hpp"
 #include <cctype>
 #include <cstring>
@@ -229,30 +230,30 @@ void wotmSndInstall(PS2Runtime &runtime)
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction fn; };
     // enderecos de config/status.csv (lib989snd/snd)
     const H hooks[] = {
-        {0x1eaa38, hostLeaf<startSoundSystem>}, {0x1eac78, hostLeaf<ret0> /* FlushSoundCommands */}, {0x1eaea8, hostLeaf<stopSoundSystem>}, {0x1eaed8, hostLeaf<getTick>},
-        {0x1eb1d8, hostLeaf<bankLoadByLoc>}, {0x1eb310, hostLeaf<bankLoadByLocCB>}, {0x1eb8b8, hostLeaf<ret0> /* ResolveBankXREFS */},
-        {0x1eb8e8, hostLeaf<unloadBank>}, {0x1eb918, hostLeaf<unloadBankCB>},
-        {0x1eb9a8, hostLeaf<setMasterVolume>}, {0x1eb9e0, hostLeaf<getMasterVolume>}, {0x1eba38, hostLeaf<setPlaybackMode>}, {0x1ebb28, hostLeaf<ret0> /* SetGroupVoiceRange */},
-        {0x1ebb68, hostLeaf<playSound>}, {0x1ebbe8, hostLeaf<playSound> /* _A */}, {0x1ebc80, hostLeaf<playSoundCB>},
-        {0x1ebda0, hostLeaf<stopSound>}, {0x1ebe58, hostLeaf<pauseSound>}, {0x1ebe88, hostLeaf<continueSound>}, {0x1ebeb8, hostLeaf<stopAllSounds>},
-        {0x1ebee8, hostLeaf<pauseGroups>}, {0x1ebf18, hostLeaf<continueGroups>}, {0x1ebf48, hostLeaf<isPlaying>}, {0x1ebf70, hostLeaf<isPlayingCB>},
-        {0x1ec008, hostLeaf<setVolPan>}, {0x1ec140, hostLeaf<setPitchBend>}, {0x1ec178, hostLeaf<setPitchMod>},
-        {0x1ec1b0, hostLeaf<setParams>}, {0x1ec1f0, hostLeaf<setParams> /* _A */}, {0x1ec210, hostLeaf<setParamsCB>},
-        {0x1ec4e0, hostLeaf<unhandledCommand> /* SendIOPCommandAndWait */}, {0x1ec680, hostLeaf<unhandledCommand> /* SendIOPCommandNoWait */},
-        {0x1ecb08, hostLeaf<initVagStreaming>}, {0x1ecbc8, hostLeaf<stopSound> /* StopVAGStream */}, {0x1ecbf8, hostLeaf<stopAllStreams>},
-        {0x1ecc28, hostLeaf<stopAllStreams> /* CloseVAGStreaming */}, {0x1ecca0, hostLeaf<playStream>}, {0x1ecd00, hostLeaf<playStream> /* _A */},
-        {0x1ecd28, hostLeaf<playStreamCB>}, {0x1ecd90, hostLeaf<pauseSound> /* PauseVAGStream */}, {0x1ecdc0, hostLeaf<continueSound> /* ContinueVAGStream */},
-        {0x1ecf50, hostLeaf<ret1> /* IsVAGStreamBuffered */}, {0x1ecf78, hostLeaf<isStreamBufferedCB>},
-        {0x1ed228, hostLeaf<ret0> /* SetReverbType */}, {0x1ed260, hostLeaf<ret0> /* SetReverbDepth */}, {0x1ed2a0, hostLeaf<ret0> /* SetReverbEx */},
-        {0x1ed4a0, hostLeaf<sramFree>},
-        {0x1ed550, hostLeaf<ret0> /* InitMovieSound (os filmes tem audio proprio em wotm_fmv.hpp) */}, {0x1ed588, hostLeaf<ret0>}, {0x1ed5b0, hostLeaf<ret0>},
-        {0x1ed5d8, hostLeaf<ret0>}, {0x1ed600, hostLeaf<ret0>}, {0x1ed638, hostLeaf<ret0> /* GetTransStatus */},
+        {wotm::fn::snd_StartSoundSystem, hostLeaf<startSoundSystem>}, {wotm::fn::snd_FlushSoundCommands, hostLeaf<ret0> /* FlushSoundCommands */}, {wotm::fn::snd_StopSoundSystem, hostLeaf<stopSoundSystem>}, {wotm::fn::snd_GetTick, hostLeaf<getTick>},
+        {wotm::fn::snd_BankLoadByLoc, hostLeaf<bankLoadByLoc>}, {wotm::fn::snd_BankLoadByLoc_CB, hostLeaf<bankLoadByLocCB>}, {wotm::fn::snd_ResolveBankXREFS, hostLeaf<ret0> /* ResolveBankXREFS */},
+        {wotm::fn::snd_UnloadBank, hostLeaf<unloadBank>}, {wotm::fn::snd_UnloadBank_CB, hostLeaf<unloadBankCB>},
+        {wotm::fn::snd_SetMasterVolume, hostLeaf<setMasterVolume>}, {wotm::fn::snd_GetMasterVolume, hostLeaf<getMasterVolume>}, {wotm::fn::snd_SetPlaybackMode, hostLeaf<setPlaybackMode>}, {wotm::fn::snd_SetGroupVoiceRange, hostLeaf<ret0> /* SetGroupVoiceRange */},
+        {wotm::fn::snd_PlaySoundVolPanPMPB, hostLeaf<playSound>}, {wotm::fn::snd_PlaySoundVolPanPMPB_A, hostLeaf<playSound> /* _A */}, {wotm::fn::snd_PlaySoundVolPanPMPB_CB, hostLeaf<playSoundCB>},
+        {wotm::fn::snd_StopSound, hostLeaf<stopSound>}, {wotm::fn::snd_PauseSound, hostLeaf<pauseSound>}, {wotm::fn::snd_ContinueSound, hostLeaf<continueSound>}, {wotm::fn::snd_StopAllSounds, hostLeaf<stopAllSounds>},
+        {wotm::fn::snd_PauseAllSoundsInGroup, hostLeaf<pauseGroups>}, {wotm::fn::snd_ContinueAllSoundsInGroup, hostLeaf<continueGroups>}, {wotm::fn::snd_SoundIsStillPlaying, hostLeaf<isPlaying>}, {wotm::fn::snd_SoundIsStillPlaying_CB, hostLeaf<isPlayingCB>},
+        {wotm::fn::snd_SetSoundVolPan, hostLeaf<setVolPan>}, {wotm::fn::snd_SetSoundPitchBend, hostLeaf<setPitchBend>}, {wotm::fn::snd_SetSoundPitchModifier, hostLeaf<setPitchMod>},
+        {wotm::fn::snd_SetSoundParams, hostLeaf<setParams>}, {wotm::fn::snd_SetSoundParams_A, hostLeaf<setParams> /* _A */}, {wotm::fn::snd_SetSoundParams_CB, hostLeaf<setParamsCB>},
+        {wotm::fn::snd_SendIOPCommandAndWait, hostLeaf<unhandledCommand> /* SendIOPCommandAndWait */}, {wotm::fn::snd_SendIOPCommandNoWait, hostLeaf<unhandledCommand> /* SendIOPCommandNoWait */},
+        {wotm::fn::snd_InitVAGStreamingEx, hostLeaf<initVagStreaming>}, {wotm::fn::snd_StopVAGStream, hostLeaf<stopSound> /* StopVAGStream */}, {wotm::fn::snd_StopAllStreams, hostLeaf<stopAllStreams>},
+        {wotm::fn::snd_CloseVAGStreaming, hostLeaf<stopAllStreams> /* CloseVAGStreaming */}, {wotm::fn::snd_PlayVAGStreamByLoc, hostLeaf<playStream>}, {wotm::fn::snd_PlayVAGStreamByLoc_A, hostLeaf<playStream> /* _A */},
+        {wotm::fn::snd_PlayVAGStreamByLoc_CB, hostLeaf<playStreamCB>}, {wotm::fn::snd_PauseVAGStream, hostLeaf<pauseSound> /* PauseVAGStream */}, {wotm::fn::snd_ContinueVAGStream, hostLeaf<continueSound> /* ContinueVAGStream */},
+        {wotm::fn::snd_IsVAGStreamBuffered, hostLeaf<ret1> /* IsVAGStreamBuffered */}, {wotm::fn::snd_IsVAGStreamBuffered_CB, hostLeaf<isStreamBufferedCB>},
+        {wotm::fn::snd_SetReverbType, hostLeaf<ret0> /* SetReverbType */}, {wotm::fn::snd_SetReverbDepth, hostLeaf<ret0> /* SetReverbDepth */}, {wotm::fn::snd_SetReverbEx, hostLeaf<ret0> /* SetReverbEx */},
+        {wotm::fn::snd_SRAMGetFreeMem, hostLeaf<sramFree>},
+        {wotm::fn::snd_InitMovieSound, hostLeaf<ret0> /* InitMovieSound (os filmes tem audio proprio em wotm_fmv.hpp) */}, {wotm::fn::snd_ResetMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_PauseMovieSound, hostLeaf<ret0>},
+        {wotm::fn::snd_CloseMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_StartMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_GetTransStatus, hostLeaf<ret0> /* GetTransStatus */},
     };
     for (const H &h : hooks)
         runtime.registerFunction(h.addr, h.fn);
-    g_origLoadModule = runtime.lookupFunction(0x24deb0);   // sceSifLoadModule (stub do runtime)
+    g_origLoadModule = runtime.lookupFunction(wotm::fn::sceSifLoadModule);   // sceSifLoadModule (stub do runtime)
     if (g_origLoadModule)
-        runtime.registerFunction(0x24deb0, hostLeaf<loadModule>);
+        runtime.registerFunction(wotm::fn::sceSifLoadModule, hostLeaf<loadModule>);
     std::fprintf(stderr, "[snd] som nativo: %zu funcoes do 989snd trocadas\n", sizeof hooks / sizeof hooks[0]);
 }
 #else
