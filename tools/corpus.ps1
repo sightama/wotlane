@@ -2,7 +2,7 @@
 # que roda todos em segundos (tools\vu1cmp.ps1) e grava um CSV comparavel com o de antes de uma mudanca em native/.
 #   tools\corpus.ps1 -Capture [-Dir <pasta>] [-Only menus,luta_centro,...]
 #       grava em <runtime>\corpus (padrao): menus.vu1snap (um quadro por tela do menu; menus.txt diz g_frame=tela),
-#       luta_centro.vu1snap (1 jogador + 1 IA, fase 1, g_frame 300), luta_3ia.vu1snap (3 IAs, fase 2), destrocos.vu1snap
+#       luta_centro.vu1snap (1 jogador + 1 IA, fase 1, g_frame 300), luta_3ia.vu1snap (3 IAs, fase 2), luta_hud.vu1snap (como luta_centro, g_frame 1200, com o HUD na tela), destrocos.vu1snap
 #       (primeiro sistema de destrocos, fx:13) e arco.vu1snap (primeiro arco eletrico, fx:7). Cada sessao e uma execucao do
 #       runtime (build_dev) de ate -Secs segundos; a que nao disparar fica sem arquivo (o script avisa).
 #   tools\corpus.ps1 -Check [-Dir <pasta>] [-Baseline <resumo.csv>] [-NoPng]
@@ -67,6 +67,7 @@ if ($Capture) {
         menus       = @{ PS2X_PAD = (Get-PadScript -First 12 -Step 1.5); WOTM_VU1CHECK_WHEN = 'mem:0x6F8464' }
         luta_centro = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:300-100000'; WOTM_VU1CHECK_SHOTS = '1' }
         luta_3ia    = @{ WOTM_MATCH = '1,2,3,4,2'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:300-100000'; WOTM_VU1CHECK_SHOTS = '1' }
+        luta_hud    = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:1200-100000'; WOTM_VU1CHECK_SHOTS = '1' }
         destrocos   = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'fx:13'; WOTM_VU1CHECK_SHOTS = '1' }
         arco        = @{ WOTM_MATCH = '2,1,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'fx:7'; WOTM_VU1CHECK_SHOTS = '1' }
     }
@@ -106,16 +107,18 @@ if ($Check) {
     if ($Baseline) {
         $base = @{}
         Import-Csv $Baseline | ForEach-Object { $base[$_.arquivo + '#' + $_.quadro] = $_ }
+        # O CSV sai com a cultura do Windows (pt-BR: "99,9"); [double]"99,9" daria 999. Num le os dois formatos.
+        function Num($v) { [double]::Parse(([string]$v).Replace(",", "."), [Globalization.CultureInfo]::InvariantCulture) }
         $worse = 0
         foreach ($r in $rows) {
             $b = $base[$r.arquivo + '#' + $r.quadro]
             if (-not $b) { Write-Host ("{0} g={1}: novo (sem base)" -f $r.arquivo, $r.quadro); continue }
             $msgs = @()
-            if ([double]$r.casados -lt [double]$b.casados - 0.1) { $msgs += ('casados {0}% -> {1}%' -f $b.casados, $r.casados) }
+            if ((Num $r.casados) -lt (Num $b.casados) - 0.1) { $msgs += ('casados {0}% -> {1}%' -f $b.casados, $r.casados) }
             foreach ($k in 'faltam','sobram','textura','inv_ref','inv_nat','px') {
-                if ($r.$k -ne '' -and $b.$k -ne '' -and [double]$r.$k -gt [double]$b.$k * 1.05 + 2) { $msgs += ('{0} {1} -> {2}' -f $k, $b.$k, $r.$k) }
+                if ($r.$k -ne '' -and $b.$k -ne '' -and (Num $r.$k) -gt (Num $b.$k) * 1.05 + 2) { $msgs += ('{0} {1} -> {2}' -f $k, $b.$k, $r.$k) }
             }
-            if ($r.fx_casados -ne '' -and $b.fx_casados -ne '' -and [double]$r.fx_casados -lt [double]$b.fx_casados - 0.1) { $msgs += ('fx_casados {0}% -> {1}%' -f $b.fx_casados, $r.fx_casados) }
+            if ($r.fx_casados -ne '' -and $b.fx_casados -ne '' -and (Num $r.fx_casados) -lt (Num $b.fx_casados) - 0.1) { $msgs += ('fx_casados {0}% -> {1}%' -f $b.fx_casados, $r.fx_casados) }
             if ($msgs) { $worse++; Write-Host ("PIOROU {0} g={1} (tela {2}): {3}" -f $r.arquivo, $r.quadro, $r.tela, ($msgs -join '; ')) -ForegroundColor Yellow }
         }
         if (-not $worse) { Write-Host "Nada piorou em relacao a $Baseline" -ForegroundColor Green }

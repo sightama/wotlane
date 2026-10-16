@@ -56,7 +56,7 @@ constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): c
 constexpr uint32_t csActiveList = wotm::sym::x_6CsPool_m_activeList;     // CsPool::m_activeList (CsNode: cs@0, next@4)
 constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // CsPool::m_HPActiveList
 constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
-constexpr uint32_t fileStatus = wotm::sym::fileStatus;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C
+constexpr uint32_t fileStatus = wotm::sym::fileStatus;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C, maxResAddr[14]@0x168
 constexpr uint32_t texInfo = wotm::sym::texInfo;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
 constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
 constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
@@ -544,7 +544,7 @@ struct TextQuad {
 // Instantaneo da cena em um quadro do jogo (itens ja com a paleta copiada) para interpolar entre dois quadros.
 struct Snapshot {
     std::vector<Sprite> sprites;
-    std::vector<DrawItem> items, sky, overlay;
+    std::vector<DrawItem> items, sky, overlay, hud;
     GameCamera cam;
     double t = 0.0;     // relogio da apresentacao no momento da captura (segundos)
     uint32_t g = 0;     // contador de quadros do jogo
@@ -576,8 +576,7 @@ public:
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
-    std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133, espaco de tela): o nativo ainda nao os desenha; a checagem VU1 x nativo os inventaria (DrawItem::hudId)
-    bool collectHud = false;         // ligado pela checagem: a travessia poe os elementos de HUD em `hud` em vez de pula-los
+    std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133): por cima da cena, sem profundidade, depois dos icones (DrawItem::hudId = id do objeto)
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawText depois da cena 3D
     uint32_t visited = 0;
@@ -591,8 +590,9 @@ public:
     // A chave e o CBP ABSOLUTO (base do arquivo + DBP). Base do nivel = tempVramTexAddr >> 6; a do monstro i = fileStatus.maxTexAddr[i-1]
     // (texmResInit empilha os arquivos .RTX na ordem em que o Shell os carregou: nivel, jogadores, IAs).
     std::unordered_map<uint32_t, std::vector<uint32_t>> rtxPal;
-    // Imagens residentes do .RTX (PSMT8H/4HL/4HH: telas, fontes, logos do menu): chave (psm << 16) | DBP. Os pixels da RAM em
-    // `texInfo[id]` nao servem (o ponteiro aponta para outra coisa); o TBP0 do TEX0 e o DBP da entrada coincidem.
+    // Imagens residentes do .RTX (PSMT8H/4HL/4HH: telas, fontes, logos do menu, retratos do HUD): chave (psm << 16) | DBP. Os pixels
+    // da RAM em `texInfo[id]` nao servem (o ponteiro aponta para outra coisa); o TBP0 do TEX0 e o DBP da entrada coincidem. Nos
+    // arquivos de monstro o DBP e relativo: o texmResRelocate soma o fim da area residente do arquivo anterior (`resBase`).
     std::unordered_map<uint32_t, std::vector<uint8_t>> rtxImg;
 
     void clearRtx() { rtxPal.clear(); rtxImg.clear(); }
@@ -631,7 +631,8 @@ public:
         if (log) *log = names[0] + (lvl ? "" : " (nao achado)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
-            const bool ok = loadRtx((root + sep + "MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true);
+            const bool ok = loadRtx((root + sep + "MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
+                                    ram.u16(fs + 0x168 + 2 * (i - 1)));   // maxTexAddr e maxResAddr do arquivo anterior
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }
         invalidate();
@@ -639,7 +640,9 @@ public:
         return lvl;
     }
 
-    bool loadRtx(const char *path, uint32_t base, bool append = false) {
+    // base: soma no DBP das paletas (base do arquivo); resBase: soma no DBP das imagens residentes (0 na fase e no menu; num monstro,
+    // fileStatus.maxResAddr do arquivo anterior, como no texmResRelocate).
+    bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
         if (!append) { rtxPal.clear(); rtxImg.clear(); }
         std::vector<uint8_t> raw;
         if (FILE *f = std::fopen(path, "rb")) {
@@ -669,11 +672,13 @@ public:
             data = raw;
         }
         size_t off = 0, added = 0;
-        while (off + 16 <= data.size()) {
+        // A entrada com tamanho 0 e a ultima e tambem vale (vai ate o fim do arquivo): nos monstros e o retrato do HUD (T8H 128x64).
+        bool last = false;
+        while (!last && off + 16 <= data.size()) {
             uint32_t w[4];
             std::memcpy(w, data.data() + off, 16);
-            if (w[0] == 0) break;
-            const size_t sz = size_t(w[0] >> 2) * 16;
+            last = w[0] == 0;
+            const size_t sz = last ? data.size() - off : size_t(w[0] >> 2) * 16;
             if (sz < 16 || off + sz > data.size()) break;
             const uint64_t desc = uint64_t(w[2]) | (uint64_t(w[3]) << 32);
             const uint32_t psm = uint32_t(desc >> 32) & 0x3F, tw = uint32_t(desc >> 40) & 15, th = uint32_t(desc >> 44) & 15;
@@ -683,7 +688,7 @@ public:
                 rtxPal[base + ((w[2] >> 16) & 0xFFFF)] = std::move(p);
                 ++added;
             } else if ((psm == gs::T8H || psm == gs::T4HL || psm == gs::T4HH) && sz > 0x80) {
-                rtxImg[(psm << 16) | ((w[2] >> 16) & 0xFFFF)].assign(data.begin() + long(off) + 0x80, data.begin() + long(off + sz));
+                rtxImg[(psm << 16) | ((resBase + ((w[2] >> 16) & 0xFFFF)) & 0xFFFF)].assign(data.begin() + long(off) + 0x80, data.begin() + long(off + sz));
             }
             off += sz;
         }
@@ -749,7 +754,6 @@ public:
         if (!t0v) return false;
         const gs::Tex0 t0 = gs::Tex0::decode(t0v);
         const uint32_t ptr = ram.u32(addr::texInfo + 16 * objectTexId(ram, node, slot)) & 0x0FFFFFFF;
-        if (!ram.ok(ptr + 0x80)) return false;
         uint32_t pal[256] = {};
         if (t0.psm == gs::T8H || t0.psm == gs::T4HL || t0.psm == gs::T4HH) {
             // Texturas residentes do menu em PSMT8H/4HL/4HH (telas, fontes, logos, retratos): `texInfo[id]` aponta para outra coisa; os
@@ -762,6 +766,7 @@ public:
             const auto im = rtxImg.find((t0.psm << 16) | t0.tbp0);
             if (im != rtxImg.end())
                 return gs::decodeUpload(im->second.data(), im->second.size(), w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
+            if (!ram.ok(ptr + 0x80)) return false;
             return gs::decodeUpload(ram.p + ptr, ram.size - ptr, w, h, t0.psm == gs::T8H ? gs::T8 : gs::T4, t0.csa, pal, px);
         }
         return decodeUploadTex(ram, ptr, t0, px, w, h, false, rawAlpha);
@@ -1362,6 +1367,7 @@ public:
         sn.items = items;
         sn.sky = sky;
         sn.overlay = overlay;
+        sn.hud = hud;
         sn.sprites = sprites;
         sn.cam = readGameCamera(ram, 0);
         sn.t = now;
@@ -1423,6 +1429,7 @@ public:
         mix(A.items, B.items, items);
         mix(A.sky, B.sky, sky);
         mix(A.overlay, B.overlay, overlay);
+        mix(A.hud, B.hud, hud);
         {   // particulas: mesma (fx, indice) nos dois quadros -> posicao, tamanho e rotacao misturados
             std::unordered_map<uint32_t, const Sprite *> am;
             am.reserve(A.sprites.size() * 2);
@@ -2047,8 +2054,9 @@ public:
         if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
         if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas
         rlDrawRenderBatchActive();
-        rlDisableDepthTest();   // icones de botao por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
+        rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         drawList(ram, overlay, wire, -1, true);
+        drawList(ram, hud, wire, -1);   // HUD por ultimo, na ordem da travessia
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
@@ -3032,9 +3040,10 @@ private:
         if (!ram.ok(cs, 0xB0) || (needDrawMe && !ram.u8(cs + 0xC))) return;
         const uint32_t ep = ram.u32(cs);
         if (!ram.ok(ep)) return;
-        const uint32_t id = ram.u32(ep) >> 18;   // id do objeto (14 bits altos); 0x1C20..0x2133 = elementos de HUD (espaco de tela)
+        // id do objeto (14 bits altos); 0x1C20..0x2133 = elementos de HUD. O Hud::update poe o _cs do HUD a cada quadro na frente da camera
+        // (trans = olho + R * gHudPos, mat = rotacao da vista), entao ele projeta como o resto; vai para `hud`, desenhado por cima de tudo.
+        const uint32_t id = ram.u32(ep) >> 18;
         const bool isHud = needDrawMe && id >= 0x1C20 && id <= 0x2133 && !isButtonId(id);
-        if (isHud && !collectHud) return;   // o nativo nao desenha o HUD; com collectHud a travessia vai para `hud` (inventario)
         M4 m = readM4(ram, cs + 0x20);
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
@@ -3060,7 +3069,7 @@ private:
         if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
-        } else if (isHud) {   // HUD: fora do desenho, com o id para o inventario
+        } else if (isHud) {   // HUD: por cima da cena (ver `hud`), com o id para a checagem
             for (size_t i = before; i < items.size(); ++i) items[i].hudId = uint16_t(id);
             hud.insert(hud.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);

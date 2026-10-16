@@ -47,7 +47,7 @@ Direção confirmada em 2026-10-16: **port primeiro**; a decomp só avança na s
 | 1 | Filmes (FFmpeg) | feito: `native/wotm_fmv.hpp` toca os `.PSS` de tela cheia e o telão do menu; falta sincronizar o áudio com o relógio do jogo |
 | 2 | Travessia nativa da hierarquia de cena (`world`, céu, listas de `Cs`) | feito: rígidos, skinned, LOD, destrutíveis, prédios fantasma, mapa de ambiente, luz paralela, neblina |
 | 3 | Chegar a uma fase e desenhar objetos e modelos nativos | feito: `WOTM_MATCH` entra direto na luta; geometria 99%+ casada com o VU1 |
-| 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | feito, menos o HUD (PATH2/PATH3: barras de vida, medidores, retratos) e os fades de tela |
+| 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | feito, menos o HUD que sai como pacote do GS (`ScreenPolys`, PATH2/PATH3) e os fades de tela; HUD do `hier` (retrato, barras, *letterbox*) feito em 2026-10-16 |
 | 5 | Controle completo, som, FMVs | teclado e som nativos feitos (`wotm_snd.hpp`); gamepad e remapeamento ficam para depois |
 | 6 | Widescreen (primeiro mod), HUD, fades, iluminação e bugs gráficos na ordem do inventário | próximo (`VU1CHECK.md`, "Inventário do port") |
 | 7 | Mods de exemplo com verificação pelo oracle e pelo cobaia | depois do 6 |

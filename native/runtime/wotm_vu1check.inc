@@ -66,8 +66,8 @@ struct WTri { float p[3][3]; uint64_t tex; uint8_t slot; bool cull; float u[3], 
 struct NatObj {
     uint32_t node = 0, span = 0;
     uint16_t tex = 0;
-    bool skinned = false, skip = false;   // skip: ceu/icones (o nativo os desenha em outro lugar de proposito) e HUD (nao desenha)
-    uint16_t hudId = 0;                    // elemento de HUD (Scene::hud): id do objeto; 0 = nao e HUD
+    bool skinned = false, skip = false;   // skip: ceu/icones (o nativo os desenha em outro lugar de proposito)
+    uint16_t hudId = 0;                    // elemento de HUD (Scene::hud, desenhado por cima da cena): id do objeto; 0 = nao e HUD
     int items = 0;
     uint32_t badVerts = 0;                 // vertices nao finitos (invariante)
     std::vector<WTri> tris;
@@ -294,7 +294,7 @@ double g_walkMs = 0.0, g_projMs = 0.0;   // tempo das coletas nativas no quadro 
 // uma cadeia), so os objetos cujo polyPkt contem alguma delas.
 void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t> *only = nullptr)
 {
-    if (!g_scene) { g_scene = new wotm::Scene(); g_scene->collectHud = true; }   // o HUD vai para Scene::hud (inventario)
+    if (!g_scene) g_scene = new wotm::Scene();
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     auto t0 = std::chrono::steady_clock::now();
     g_scene->collect(ram);
@@ -367,7 +367,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
     add(g_scene->items, false);
     add(g_scene->sky, true);
     add(g_scene->overlay, true);
-    add(g_scene->hud, true);   // o nativo nao desenha o HUD: entra so para o inventario dar nome (id) ao que o VU1 desenha
+    add(g_scene->hud, false);   // HUD: o nativo desenha na frente da camera como os demais objetos; o inventario ainda o lista por id
     g_projMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
 }
 
@@ -1076,7 +1076,7 @@ void inventory(const std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> &v
             std::snprintf(s, n, "%s", t);
         }
     };
-    // HUD: o VU1 desenha, o nativo pula de proposito (Scene::hud). Por id, com os triangulos do VU1 que cairam nos seus pacotes.
+    // HUD (Scene::hud): por id, com os triangulos do VU1 que cairam nos seus pacotes (a comparacao por objeto os inclui).
     {
         std::map<uint16_t, std::pair<uint32_t, uint32_t>> hud;   // id -> (objetos, tris do VU1)
         if (!g_nats.empty())
@@ -1084,8 +1084,8 @@ void inventory(const std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> &v
                 if (kv.second.hudId) {
                     auto &h = hud[kv.second.hudId];
                     ++h.first;
-                    const auto sv = skipVu.find(kv.first);
-                    if (sv != skipVu.end()) h.second += sv->second;
+                    const auto vb = vuBy.find(kv.first);
+                    if (vb != vuBy.end()) for (const auto &c : vb->second) h.second += uint32_t(c.second.size());
                 }
         uint32_t tris = 0;
         for (const auto &kv : hud) tris += kv.second.second;
@@ -1099,7 +1099,7 @@ void inventory(const std::map<uint32_t, std::map<uint32_t, std::vector<Tri>>> &v
                 std::snprintf(b, sizeof b, " %x:%u", unsigned(kv.first), kv.second.second);
                 s += b;
             }
-            std::fprintf(stderr, "[vu1check] inv   HUD (o VU1 desenha, o nativo ainda nao): %zu ids, %u tris do VU1; por id (id:tris):%s\n", hud.size(), tris, s.c_str());
+            std::fprintf(stderr, "[vu1check] inv   HUD: %zu ids, %u tris do VU1; por id (id:tris):%s\n", hud.size(), tris, s.c_str());
         }
     }
     std::map<InvKey, InvGroup> groups;
@@ -1815,8 +1815,8 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
 // ---- Atribuicao por pixel (replay com imagens): quem desenhou cada pixel que difere, de cada lado (linhas "[vu1check] inv px") ----
 // Um mapa de dono por pixel da tela do GS (640x224) por lado, preenchido na ordem de desenho (o ultimo ganha; sem Z, aproximacao):
 // referencia = todos os triangulos e SPRITE do XGKICK no buffer de tela (inteiros ou nao) e os primitivos do PATH2/3; nativo = os
-// triangulos projetados dos objetos da 1a coleta (camera do passe 0; sem ceu/icones/HUD) e os quadrados das particulas. Cada pixel que
-// difere vira um par (dono na referencia, dono no nativo), contado; "nenhum" = fundo, limpeza, framebuffer de antes ou texto do nativo.
+// triangulos projetados dos objetos da 1a coleta (camera do passe 0; ceu/icones marcados), os quadrados das particulas, o HUD por cima e o texto. Cada pixel que
+// difere vira um par (dono na referencia, dono no nativo), contado; "nenhum" = fundo, limpeza ou framebuffer de antes.
 namespace wotm_vu1check
 {
 struct PxOwner { uint8_t kind; uint32_t a, b; };   // 0 nenhum; 1 objeto (pkt, tex); 2 HUD (id); 3 fx (sistema, tipo); 4 MSCAL sem dono (origem); 5 path (caminho, tipo)
@@ -1911,7 +1911,7 @@ void attributePixels(const Image &diff, int W, int H)
         if (r.path == 2 && screenFbp(r.fbp)) ref.rect(ref.owner(5, r.path, r.kind == 6 ? 6 : 3), r.x0, r.y0, r.x1, r.y1);
     for (const auto &kv : g_nats[0]) {
         const NatObj &o = kv.second;
-        if (o.hudId || o.tris.empty()) continue;   // HUD: o nativo nao desenha; ceu/icones entram (kind 6; o ceu nativo e centrado na camera, posicao aproximada)
+        if (o.hudId || o.tris.empty()) continue;   // HUD: depois das particulas (abaixo); ceu/icones entram (kind 6; o ceu nativo e centrado na camera, posicao aproximada)
         const uint16_t id = nat.owner(o.skip ? 6 : 1, kv.first, o.tex);
         for (const Tri &t : project(o.tris, g_cam[0], kv.first)) nat.tri(id, t.x, t.y);
     }
@@ -1919,6 +1919,11 @@ void attributePixels(const Image &diff, int W, int H)
         for (const auto &kv : g_fxNats[0]) {
             const uint16_t id = nat.owner(3, kv.first, kv.second.type);
             for (const Quad &q : kv.second.quads[1]) { nat.tri(id, q.x, q.y); const float x2[3] = {q.x[0], q.x[2], q.x[3]}, y2[3] = {q.y[0], q.y[2], q.y[3]}; nat.tri(id, x2, y2); }
+        }
+    for (const auto &kv : g_nats[0])   // HUD: o nativo o desenha por ultimo na cena 3D, sem profundidade
+        if (kv.second.hudId) {
+            const uint16_t id = nat.owner(2, kv.second.hudId, 0);
+            for (const Tri &t : project(kv.second.tris, g_cam[0], kv.first)) nat.tri(id, t.x, t.y);
         }
     if (g_scene && g_rdram) {   // texto do nativo (fontPacket, Scene::updateText): glifos em pixels da tela 640x224
         g_scene->updateText(wotm::Ram{g_rdram, PS2_RAM_SIZE});
