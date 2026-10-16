@@ -13,7 +13,7 @@ extern int gUseUnifiedView;
 extern "C" float cosf(float);
 extern "C" float atan2f(float y, float x);
 void boundEulerAngle(float *p);
-void mathfRotMatrixRPH(float (*m)[3], _fvector *rph);
+void mathfRotMatrixRPH(float (*m)[4], _fvector *rph);   // mangling do retail: PA3_f (float[4][4]); com [3] o link NM nao achava o simbolo
 float animationGetTotalRunFrames(_animHandle h);
 /* engine.h declares it int; retail tests the result here as a bool (xori 1) */
 bool animIsRunning(_animHandle h) __asm__("animationIsRunning__FG11_animHandle");
@@ -258,7 +258,7 @@ void StateGrapple::update(void)
             heading = atan2f(victim->m_cs->trans.x - owner->m_cs->trans.x, victim->m_cs->trans.y - owner->m_cs->trans.y);
             boundEulerAngle(&heading);
             owner->m_cs->rot.z = heading;
-            mathfRotMatrixRPH((float (*)[3])owner->m_cs->mat, &owner->m_cs->rot);
+            mathfRotMatrixRPH((float (*)[4])owner->m_cs->mat, &owner->m_cs->rot);
         }
         if (owner->m_target != 0)
             return;

@@ -33,8 +33,10 @@ Estado verificado em 2026-10-09; o que ainda não foi feito está marcado.
 ## Fluxo de um mod
 1. Escolher a função (por exemplo, uma IA ou uma regra de fase) e abrir a versão legível (`matched` ou `equivalent`).
 2. Alterar o comportamento (um mod **não** dá byte match, por definição).
-3. Gerar o ELF NM (`tools/wsl/build_nm.sh`), recompilar com o PS2Recomp e rodar.
-4. Conferir que **só** o que se queria mudou: `tools/recomp_oracle` compara a versão original com a nova.
+3. Gerar o jogo traduzido com as reescritas no lugar das originais: `sh tools/wsl/recomp_nm.sh` (WSL: `build_nm.sh nmall` + PS2Recomp → `recomp/nm/`), depois
+   `build_runtime.bat nm` (Windows: `build_dev_nm`, o runtime "cobaia", mesmos hooks) e `run_live.bat -Build build_dev_nm` para jogar.
+4. Conferir que **só** o que se queria mudou: `tools\lote.ps1 -Build build_dev_nm` com o mesmo lote (mesma `-Seed`) do runtime normal e comparar os `resumo.csv`;
+   para uma função isolada, `tools/recomp_oracle` compara a versão original com a nova. Equivalentes que não linkam no ELF completo ficam listadas em `config/nm_all_exclude.txt`.
 
 ## Marcos
 | # | Marco | Estado |

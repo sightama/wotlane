@@ -12,6 +12,25 @@ $expected = if ($Bat -eq 'build.bat') { 300.0 } else { 90.0 }
 try { if (Test-Path $timeFile) { $expected = [double](Get-Content $timeFile -TotalCount 1) } } catch {}
 if ($expected -lt 5) { $expected = 5 }
 
+# Runtime "cobaia" (build_runtime.bat nm): mesmo runtime e hooks, mas o jogo traduzido vem de <repo>\recomp\nm (ELF com as funcoes
+# reescritas; sh tools/wsl/recomp_nm.sh). Configura build_dev_nm a partir do configure_dev.bat e cria o build_dev_nm.bat na 1a vez.
+if ($Bat -eq 'build_dev_nm.bat') {
+    $repo = Split-Path $PSScriptRoot -Parent
+    $nmDir = Join-Path $repo 'recomp\nm'
+    if (-not (Test-Path (Join-Path $nmDir 'register_functions.cpp'))) { throw "recomp\nm nao existe: no WSL, sh tools/wsl/recomp_nm.sh" }
+    $nmCmake = ($nmDir -replace '\\', '/')
+    if (-not (Test-Path "$Dir\build_dev_nm\build.ninja")) {
+        $cfg = Get-Content "$Dir\configure_dev.bat" -Raw
+        $cfg = $cfg -replace 'build_dev"', "build_dev_nm`" -DPS2X_RUNNER_DIR=$nmCmake"
+        Set-Content "$Dir\configure_dev_nm.bat" $cfg -NoNewline
+        Write-Host "configurando build_dev_nm (jogo traduzido de $nmDir)..."
+        & $env:ComSpec /c "`"$Dir\configure_dev_nm.bat`"" | Select-Object -Last 3
+        if (-not (Test-Path "$Dir\build_dev_nm\build.ninja")) { throw "configure_dev_nm.bat falhou" }
+    }
+    if (-not (Test-Path "$Dir\$Bat")) {
+        (Get-Content "$Dir\build_dev.bat" -Raw) -replace 'build_dev', 'build_dev_nm' | Set-Content "$Dir\$Bat" -NoNewline
+    }
+}
 (Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\lib\ps2_runtime.cpp").LastWriteTime = Get-Date
 # microprogramas do VU0 em C++ (gerados do ELF; sem o .inc o runtime usa so o interpretador). Vao para <build>\wotm_gen, que o
 # CMake do runtime poe no caminho de include (e codigo do jogo: fora do repo e fora da arvore do PS2Recomp)

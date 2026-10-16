@@ -21,7 +21,8 @@ param(
     [int]$Seed = 1,
     [int]$Secs = 180,
     [int]$Max = 0,
-    [int]$Check = 1
+    [int]$Check = 1,
+    [string]$Build = 'build_dev'   # build_dev_nm = runtime cobaia com as funcoes reescritas (build_runtime.bat nm); rode o mesmo lote nos dois e compare o resumo.csv
 )
 $ErrorActionPreference = 'Stop'
 function Split-Ints([string]$s) { @($s -split ',' | Where-Object { $_.Trim() } | ForEach-Object { [int]$_.Trim() }) }
@@ -74,7 +75,7 @@ foreach ($c in $combos) {
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Remove-Item -Force
     $env:PS2X_SHOT_FRAMES = [string][math]::Max(60, ($Secs - 12) * 60)   # uma captura perto do fim (quadros da tela, ~60/s)
     $start = Get-Date
-    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$runtime\run_live.ps1`" -Auto 0" -WindowStyle Minimized | Out-Null
+    Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$runtime\run_live.ps1`" -Auto 0 -Build $Build" -WindowStyle Minimized | Out-Null
     Start-Sleep -Seconds 5
     $early = $false
     while (((Get-Date) - $start).TotalSeconds -lt $Secs) {

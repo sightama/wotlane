@@ -1,0 +1,3 @@
+# Equivalentes que ficam de fora do ELF "nmall" (tools/wsl/recomp_nm.sh -> recomp/nm, o runtime cobaia). Uma por linha: tu:simbolo motivo;
+# "tu:*" tira a TU inteira. Entram aqui so as que impedem o link do ELF com todas as equivalentes; o motivo diz o que falta consertar.
+game/screen:* jump tables dos switch das telas (jtbl_006EEB80 e outras) ficam no .rodata compartilhado da TU (asm/data/game/screen.rodata.s) e apontam labels de dentro das funcoes em asm; com a versao C++ no lugar os labels somem (undefined reference a .L0019FD30, .L0019E518...). Consertar: mover cada tabela para o .s da sua funcao ou guarda-la por NON_MATCHING. O menu nao entra no que se compara jogando, entao perder a TU aqui custa pouco.

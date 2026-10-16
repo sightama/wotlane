@@ -22,8 +22,9 @@ export PATH=$HOME/.venvs/wotm/bin:$PATH
 # CrushLevel's NM code brings its own .sdata strings; -G0 keeps them out of the gp-relative area (which has no free room)
 sed -i 's/\r$//' config/tu_flags.txt
 echo 'game/CrushLevel -G0' >> config/tu_flags.txt
-# TUs whose retail image has no .sdata of their own: float literals of the equivalent code must not land in the small-data area either
-for t in game/AiAction; do
+# TUs whose retail image has no .sdata of their own (or no room left in it): float literals of the equivalent code must not land in the
+# small-data area either (".sdata referenced in .text ... defined in discarded section" at link time). NM_G0="game/X game/Y" adds more.
+for t in game/AiAction game/Monster $NM_G0; do
     if grep -q "^$t " config/tu_flags.txt; then sed -i "s|^$t \(.*\)|$t \1 -G0|" config/tu_flags.txt; else echo "$t -G0" >> config/tu_flags.txt; fi
 done
 if [ $# -gt 0 ]; then

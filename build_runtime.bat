@@ -4,6 +4,8 @@ rem O ninja nao rastreia native/wotm_native.hpp (fica fora da arvore do PS2Recom
 rem antes de compilar. Acha sozinho a pasta do runtime (a mesma do run_live.bat).
 rem Uso:  build_runtime.bat           -> build_dev (sem LTCG, ~1,5 min; o que o run_live.bat usa por padrao)
 rem       build_runtime.bat build     -> build com LTCG (mais lento; usado por run_live.bat -Build build)
+rem       build_runtime.bat nm        -> build_dev_nm: runtime "cobaia", traduzido do ELF com as funcoes reescritas (recomp\nm,
+rem                                      gerado por sh tools/wsl/recomp_nm.sh no WSL); rodar com run_live.bat -Build build_dev_nm
 setlocal enableextensions
 set "REPO=%~dp0"
 if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
@@ -36,7 +38,11 @@ if /i "%~1"=="build" (
     set "BAT=build.bat"
     set "LOG=build.log"
 )
-if not exist "%FOUND%\%BAT%" (
+if /i "%~1"=="nm" (
+    set "BAT=build_dev_nm.bat"
+    set "LOG=build_dev_nm.log"
+)
+if /i not "%~1"=="nm" if not exist "%FOUND%\%BAT%" (
     echo Nao achei "%FOUND%\%BAT%".
     exit /b 1
 )
