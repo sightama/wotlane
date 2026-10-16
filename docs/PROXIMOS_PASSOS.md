@@ -54,4 +54,5 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - [ESPINHA.md](passos/ESPINHA.md): cadeia `main` -> monstro no mapa, menu, `rtMain`, roteiro de blocos pendentes.
 - [IA.md](passos/IA.md): estrutura de AiAction/AiSeek e onde parei.
 - [VIEWER_WEB.md](passos/VIEWER_WEB.md): ideia de visualizador de modelos 3D no navegador (2026-10-14): o que já se sabe, o que falta (texturas e pose dos monstros sem dump), regra de não hospedar arquivos do jogo, estimativa.
+- [PLANO_PROCESSO.md](passos/PLANO_PROCESSO.md): plano de 2026-10-15 para otimizar o processo de decomp e de port (comparação offline VU1 x nativo, código do port no repo, endereços por nome, verify_tu, runtime cobaia 1.1) com o estado de cada item.
 - [VU1CHECK.md](passos/VU1CHECK.md): checagem VU1 x nativo (2026-10-14): objetos, textura e partículas por sistema; fonte única do estado, do que foi corrigido e das pistas abertas (partículas restantes, itens de alfa, tex 156/193), o que não cobre (cor, alfa, HUD) e próximos passos.

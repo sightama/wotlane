@@ -33,6 +33,9 @@ tools/pcsx2_auto/*.bin
 # caminho local do runtime (salvo por run_live.bat)
 .wotm_recomp_dir
 
+# memory card criado pelo runtime na raiz
+/mc0/
+
 # launcher compilado (tools/launcher/build.bat) e o estado das caixas
 /WotM_Launcher.exe
 /WotM_Launcher.ini
