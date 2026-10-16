@@ -478,7 +478,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     RenderTexture2D &rt = S.rts[S.cur];
 
     BeginTextureMode(rt);
-    ClearBackground(Color{30, 40, 60, 255});
+    ClearBackground(BLACK);
     rlSetClipPlanes(0.5, 30000.0);
     Camera3D c3{};
     c3.position = {gc.pos[0], gc.pos[1], gc.pos[2]};
