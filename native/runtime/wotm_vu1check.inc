@@ -1887,6 +1887,7 @@ void ownerName(const PxOwner &o, char *s, size_t n)
     case 4: symOf(o.a, sym, sizeof sym); std::snprintf(s, n, "vu1 mscal %x%s%s%s", o.a, sym[0] ? " (" : "", sym, sym[0] ? ")" : ""); break;
     case 5: std::snprintf(s, n, "path%u %s", o.a, o.b == 6 ? "sprites" : "tris"); break;
     case 6: std::snprintf(s, n, "ceu/icone pkt %x tex %u", o.a, o.b); break;
+    case 7: std::snprintf(s, n, "texto (fontPacket)"); break;
     default: std::snprintf(s, n, "nenhum"); break;
     }
 }
@@ -1919,6 +1920,11 @@ void attributePixels(const Image &diff, int W, int H)
             const uint16_t id = nat.owner(3, kv.first, kv.second.type);
             for (const Quad &q : kv.second.quads[1]) { nat.tri(id, q.x, q.y); const float x2[3] = {q.x[0], q.x[2], q.x[3]}, y2[3] = {q.y[0], q.y[2], q.y[3]}; nat.tri(id, x2, y2); }
         }
+    if (g_scene && g_rdram) {   // texto do nativo (fontPacket, Scene::updateText): glifos em pixels da tela 640x224
+        g_scene->updateText(wotm::Ram{g_rdram, PS2_RAM_SIZE});
+        const uint16_t id = nat.owner(7, 0, 0);
+        for (const wotm::TextQuad &t : g_scene->text) nat.rect(id, t.x0 + kX0, t.y0 + kY0, t.x1 + kX0, t.y1 + kY0);
+    }
     std::map<std::pair<uint16_t, uint16_t>, uint32_t> pairs;
     uint32_t total = 0, refOnly = 0, natOnly = 0, none = 0, both = 0;
     const uint8_t *d = static_cast<const uint8_t *>(diff.data);
@@ -1932,7 +1938,7 @@ void attributePixels(const Image &diff, int W, int H)
             if (r && !n) ++refOnly; else if (!r && n) ++natOnly; else if (!r && !n) ++none; else ++both;
         }
     if (!total) return;
-    std::fprintf(stderr, "[vu1check] inv px g=%u: %u pixels diferentes: so a referencia pinta %u, so o nativo pinta %u, os dois %u, nenhum %u (fundo/limpeza/texto)\n",
+    std::fprintf(stderr, "[vu1check] inv px g=%u: %u pixels diferentes: so a referencia pinta %u, so o nativo pinta %u, os dois %u, nenhum %u (fundo/limpeza/framebuffer de antes)\n",
                  g_frame, total, refOnly, natOnly, both, none);
     std::vector<std::pair<std::pair<uint16_t, uint16_t>, uint32_t>> v(pairs.begin(), pairs.end());
     std::sort(v.begin(), v.end(), [](const auto &a, const auto &b) { return a.second > b.second; });

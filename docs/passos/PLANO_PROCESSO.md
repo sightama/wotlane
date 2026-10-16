@@ -190,8 +190,10 @@ ORDEM DE EXECUÇÃO
    lado, pares `ref | nat` contados) e a imagem de referência nos menus (a limpeza do canal GIF
    gravada depois das cadeias apagava o buffer; o replay reaplica na ordem só os pacotes sem vértices).
    Limite que fica: o GS em software não pinta o céu.
-2. Parte 2, peça 3: corpus (um instantâneo por tela de menu e os da luta, nomeados pelo que mostram)
-   e o texto do nativo no mapa de donos.
+   [FEITO 2026-10-16] Dia 4: tools/corpus.ps1 (-Capture: menus + 4 situações de luta em <runtime>\corpus;
+   -Check [-Baseline]: CSV por quadro e lista do que piorou) e o texto do nativo no mapa de donos.
+2. Parte 2 concluída. Próximo da direção: widescreen como primeiro mod, depois HUD/fades/iluminação na
+   ordem do inventário (corpus -Check antes e depois de cada mudança em native/).
 3. [FEITO 2026-10-15] 1.2: wotm_live/scene/snd/vu1check.inc, wotm_overrides.cpp e wotm_vu0_native.cpp/.h
    vivem em native/runtime/ no repo; o CMake do fork (-DWOTM_NATIVE_DIR obrigatório) os inclui e compila;
    o patch caiu de ~5.900 para ~2.500 linhas e só tem costuras. O .gen.inc do VU0 vai para <build>\wotm_gen.
