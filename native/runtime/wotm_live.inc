@@ -191,6 +191,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_native.hpp"
 #include "wotm_cheats.h"   // menu de debug (F1)
 #include <filesystem>
+#include "wotm_freecam.inc"   // camera livre de debug (F5)
 #define WOTM_HAVE_NATIVE 1
 
 namespace wotm_live
@@ -510,11 +511,39 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         S.snap = std::move(sn);
     }
+    // Camera livre com o jogo pausado (F7): a coleta da captura recortou pela vista congelada. Com a thread do EE parada a RAM nao
+    // muda, entao a apresentacao coleta de novo, uma vez por quadro pausado, sem o recorte (o resto do instantaneo fica o mesmo).
+    {
+        static uint32_t uncullG = ~0u;
+        if (S.snap.valid && g_wotmFreeCam.load(std::memory_order_relaxed) && wotmPaused() && S.snap.g != uncullG)
+        {
+            uncullG = S.snap.g;
+            static wotm::Scene rc;
+            rc.wide = cap.wide.load(std::memory_order_relaxed);
+            rc.fovCull = false;
+            wotm_live::g_stage = "collect (camera livre)";
+            rc.collect(ram);
+            wotm::Snapshot un = rc.takeSnapshot(ram, S.snap.g);
+            un.screenRects = S.snap.screenRects;
+            un.screenPolys = S.snap.screenPolys;
+            un.flares = S.snap.flares;
+            un.cam = S.snap.cam;
+            S.snap = std::move(un);
+        }
+    }
     if (!S.snap.valid)
         return false;
-    const wotm::GameCamera gc = S.scene.show(S.snap);
-    if (!gc.ok)
+    if (!S.snap.cam.ok)
         return false;
+    // camera livre pausada: o show ja recebe a pose (olho das faces de tras, neblina, sprites), e a cena perde o que segue a camera do jogo
+    const wotm_freecam::View freeView = wotm_freecam::update(S.snap.cam);
+    const wotm::GameCamera gameCam = S.snap.cam;
+    if (freeView.override)
+        S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose);
+    const wotm::GameCamera gc = S.scene.show(S.snap);
+    S.snap.cam = gameCam;
+    if (freeView.override)
+        wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
     if (const int sf = wotm_live::g_shellFade.load(std::memory_order_relaxed); sf >= 0)
     {
         wotm::ScreenRect r{};
@@ -687,6 +716,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
             DrawText(line, x, top, fs, ORANGE);
         }
     }
+
+    wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5)
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),

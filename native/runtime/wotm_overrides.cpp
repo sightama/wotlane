@@ -43,6 +43,13 @@ void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPol
 std::atomic<uint32_t> g_wotmCheats{0};
 std::atomic<bool> g_wotmCheatWin{false};
 
+// Camera livre de debug (F5): a janela (wotm_freecam.inc) move a pose, a thread do EE a poe no _cs da vista 0 (freeCamWrite).
+#include "wotm_freecam.h"
+std::atomic<bool> g_wotmFreeCam{false};
+std::atomic<bool> g_wotmFreeCamPad{false};
+std::mutex g_wotmFreeCamM;
+WotmFreeCamPose g_wotmFreeCamPose;
+
 namespace
 {
     constexpr uint32_t kTimerGetUpdateRate = wotm::fn::timerGetUpdateRate__Fv;
@@ -681,6 +688,76 @@ namespace
     }
 }
 
+namespace
+{
+    // Camera livre (F5, wotm_freecam.h). O _cs da vista 0 (viewInfo[0], o mesmo que a camera do jogo move) recebe a pose em dois
+    // pontos: depois de Cameras::Update (o resto da logica do quadro, como os scripts da fase, o som e a IA, ja ve a camera nova) e na
+    // entrada de viewUpdate(0), que monta worldToScreenMat e worldCtx[0] a partir de cs->trans e cs->mat (ganha de quem mexer no
+    // _cs entre os dois, como a camera da introducao da luta). A camera do jogo continua rodando por baixo: ao desligar, ela sai da
+    // pose livre e volta sozinha para o monstro. Com ela ligada (e sem o Tab), o scePadRead devolve o pad em repouso.
+    constexpr uint32_t kViewUpdate = wotm::fn::viewUpdate__Fi, kScePadRead = wotm::fn::scePadRead;
+    constexpr uint32_t kViewInfo = wotm::sym::viewInfo;   // 5 x 0x14: [0] = _cs* da vista
+    PS2Runtime::RecompiledFunction g_origViewUpdate = nullptr, g_origCamerasUpdateFree = nullptr, g_origPadRead = nullptr;
+
+    void putF(uint8_t *rdram, uint32_t a, float v) { std::memcpy(rdram + a, &v, 4); }
+
+    void freeCamWrite(uint8_t *rdram)
+    {
+        if (!g_wotmFreeCam.load(std::memory_order_relaxed))
+            return;
+        uint32_t cs = 0;
+        std::memcpy(&cs, rdram + kViewInfo, 4);
+        cs &= 0x1FFFFFFFu;
+        if (cs < 0x1000u || cs + 0x70u > PS2_RAM_SIZE)
+            return;
+        WotmFreeCamPose p;
+        {
+            std::lock_guard<std::mutex> lk(g_wotmFreeCamM);
+            p = g_wotmFreeCamPose;
+        }
+        float ax[3][3];
+        wotmFreeCamAxes(p, ax[0], ax[1], ax[2]);
+        for (int i = 0; i < 3; ++i)
+        {
+            putF(rdram, cs + 0x10 + 4 * i, p.pos[i]);   // trans
+            for (int r = 0; r < 3; ++r)
+                putF(rdram, cs + 0x20 + 0x10 * r + 4 * i, ax[r][i]);   // mat: direita, frente, cima
+        }
+        for (int r = 0; r < 3; ++r)
+            putF(rdram, cs + 0x20 + 0x10 * r + 0xC, 0.f);
+        putF(rdram, cs + 0x60, p.pitch);   // rot (RPH): a camera do jogo parte daqui ao desligar
+        putF(rdram, cs + 0x64, 0.f);
+        putF(rdram, cs + 0x68, p.heading);
+    }
+
+    void camerasUpdateFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_origCamerasUpdateFree(rdram, ctx, runtime);
+        freeCamWrite(rdram);
+    }
+
+    void viewUpdateFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (GPR_U32(ctx, 4) == 0u)
+            freeCamWrite(rdram);
+        g_origViewUpdate(rdram, ctx, runtime);
+    }
+
+    void padReadFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
+        g_origPadRead(rdram, ctx, runtime);
+        if (!g_wotmFreeCam.load(std::memory_order_relaxed) || g_wotmFreeCamPad.load(std::memory_order_relaxed))
+            return;
+        if (GPR_U32(ctx, 2) == 0u || data < 0x1000u || data + 32u > PS2_RAM_SIZE)
+            return;
+        uint8_t *d = rdram + data;
+        d[2] = d[3] = 0xFF;                // botoes (ativos em 0)
+        std::memset(d + 4, 0x80, 4);       // analogicos no centro
+        std::memset(d + 8, 0, 12);         // pressao dos botoes
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -798,6 +875,16 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         if (c || g_autoWinSecs > 0)
             std::fprintf(stderr, "[wotm] trapacas de debug ligadas desde o inicio: 0x%x, vencer a cada %d s (WOTM_CHEATS/WOTM_CLOAK)\n", c, g_autoWinSecs);
     }
+    // Camera livre (F5): depois dos outros hooks, para o de Cameras::Update embrulhar o do WOTM_AIVSAI quando ele existe
+    if ((g_origCamerasUpdateFree = runtime.lookupFunction(kCamerasUpdate)) && (g_origViewUpdate = runtime.lookupFunction(kViewUpdate)) &&
+        (g_origPadRead = runtime.lookupFunction(kScePadRead)))
+    {
+        runtime.registerFunction(kCamerasUpdate, &camerasUpdateFree);
+        runtime.registerFunction(kViewUpdate, &viewUpdateFree);
+        runtime.registerFunction(kScePadRead, &padReadFree);
+    }
+    else
+        std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
     if (g_minRate > 0)
