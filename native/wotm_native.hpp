@@ -477,9 +477,10 @@ struct Sprite {
     float rgba[4] = {1, 1, 1, 1};
     uint32_t texId = 0;     // indice em texInfo (0 = circulo suave procedural)
     uint64_t tex0 = 0;      // TEX0 do efeito (psm, CBP da paleta)
-    uint32_t cell = 0;      // celula do atlas (celulas de 8x8 texels)
-    int16_t row = -1;       // destroço: linha do atlas (>= 0: a coluna sai de cell)
-    uint8_t flip = 0;       // destroço: bit 0 espelha U, bit 1 espelha V
+    float uv[4] = {0, 0, 1, 1};   // u0, v0, u1, v1 normalizados ((u0, v0) no canto de cima a esquerda da tela)
+    uint32_t gsCol = 0;     // destroço: RGBA do GS (0x80 = 1,0) do RGBAQ do pacote; 0 = usa rgba
+    int16_t aref = 8;       // destroço: limiar do teste de alfa (Scene::setAlphaRef); kGsAlphaRef = padrao
+    bool opaque = false;    // destroço sem ABE com alphaContext 0: grava profundidade (ZBUF do setOpeningContext)
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
 };
 
@@ -1485,7 +1486,24 @@ public:
             const uint32_t t0p = ram.u32(b + 0x2EBC);
             uint64_t tex0 = 0;
             if (ram.ok(t0p, 8)) tex0 = uint64_t(ram.u32(t0p)) | (uint64_t(ram.u32(t0p + 4)) << 32);
-            const bool atlas = type == 13 && texLoad != 0xFFFF && tex0;
+            // fragPacketInit: TextureInfo[+0x2E98] da o atlas (largura e altura em 1/16 de texel; celulas de 8x8 = 0x80), uma
+            // cor RGBAQ por sistema e o contexto (alphaContext 0: TEST_1 0x5040B, alfa >= 0x40, e ZBUF gravando)
+            const uint32_t ti = wotm::sym::TextureInfo + 8 * (ram.u32(b + 0x2E98) & 127);
+            const uint32_t tw16 = ram.u16(ti + 4), th16 = ram.u16(ti + 6);
+            const uint32_t cols = tw16 >> 7, rows = th16 >> 7;
+            const bool atlas = type == 13 && texLoad != 0xFFFF && tex0 && cols && rows;
+            uint32_t gsCol = 0x80808080u;
+            if (ram.u32(b + 0x2E30) & 0x200) {   // cor em floats (0..255; alfa 0..1)
+                const uint32_t cp = ram.u32(b + 0x2E58);
+                if (ram.ok(cp, 16)) {
+                    auto ub = [](float v) { return uint32_t(std::clamp(v, 0.f, 255.f)); };
+                    gsCol = ub(ram.f32(cp)) | ub(ram.f32(cp + 4)) << 8 | ub(ram.f32(cp + 8)) << 16 | ub(ram.f32(cp + 12) * 128.f) << 24;
+                }
+            } else {
+                gsCol = (ram.u32(fxaddr::colors + 4 * ram.u32(b + 0x2EA0)) & 0x00FFFFFFu) | 0x80000000u;
+            }
+            const bool opaque = ram.u32(b + 0x2EA8) == 0;
+            const float counter = float(int32_t(ram.u32(b + 0x2DC0)));   // fragPacketBuild: +4 por quadro, vai ao q330.y
             for (uint32_t k = 0; k < np; ++k) {
                 Sprite s;
                 for (int c = 0; c < 3; ++c) s.pos[c] = ram.f32(pos + 16 * k + 4 * c);
@@ -1494,22 +1512,30 @@ public:
                 const int a = int(int16_t(ram.u16(age + 2 * k)));
                 if (a < 0 || (life > 0 && a >= life)) continue;
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
-                const uint32_t h = (k * 2654435761u) ^ (i * 40503u);
                 s.key = i * 4096u + k;
-                if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild), some no fim da vida
-                    // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os 4 bits baixos sorteados.
-                    // Medido pela checagem VU1 x nativo (preset 66, minSize 6): lado = max(minSize, 2 * minSize * |w|), sem giro. Os bits
-                    // baixos escolhem uma das 4 entradas de UV por linha do atlas (normal, espelha V, espelha U, os dois; fragPacketInit)
-                    // e a linha; a coluna nao foi conferida (aqui sorteada por particula).
+                if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild, microprograma 0x1180)
+                    // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os bits baixos sorteados.
+                    //  - lado = max(minSize, |w| maxSize / 2) (q330 = (minSize, contador, 128, maxSize / 2)), sem giro;
+                    //  - entrada de UV = bits(w) & (linhas * 4 - 1) (w da tag em q328): 4 por linha do atlas (normal, espelha V,
+                    //    espelha U, os dois), u0 = 0x08, u1 = 0x88 em 1/16 de texel, v = 0x80 * linha + idem;
+                    //  - coluna: FTOI4(contador * w) & ((colunas - 1) * 0x80) somado aos dois U (q329.w): o destroço passa pelas
+                    //    celulas da linha conforme o contador anda (4 por quadro);
+                    //  - PRIM 0x136 (SPRITE, TME, FGE, FST, sem ABE): opaco, com a cor do sistema; some quando o particleMove o tira.
                     const float w = ram.f32(pos + 16 * k + 12);
-                    const uint32_t wl = ram.u32(pos + 16 * k + 12) & 15;
+                    const uint32_t e = ram.u32(pos + 16 * k + 12) & (rows * 4 - 1);
+                    const int32_t colOff = int32_t(counter * w * 16.f) & int32_t((cols - 1) * 0x80);
+                    const uint32_t vRow = 0x80 * (e >> 2);
+                    const uint32_t lo = 0x08, hi = 0x88;
+                    const bool fu = (e & 3) == 2 || (e & 3) == 3, fv = (e & 3) == 1 || (e & 3) == 3;
+                    const float uA = float((fu ? hi : lo) + colOff), uB = float((fu ? lo : hi) + colOff);
+                    const float vA = float((fv ? hi : lo) + vRow), vB = float((fv ? lo : hi) + vRow);
+                    s.uv[0] = uA / float(tw16); s.uv[1] = vA / float(th16); s.uv[2] = uB / float(tw16); s.uv[3] = vB / float(th16);
                     s.texId = texLoad; s.tex0 = tex0;
-                    s.cell = (h >> 8) & 0xFFFF;
-                    s.row = int16_t(wl >> 2);
-                    s.flip = uint8_t(wl & 3) == 0 ? 0 : (wl & 3) == 1 ? 2 : (wl & 3) == 2 ? 1 : 3;
-                    s.size = std::max(minS, 2.f * minS * std::fabs(w));
+                    s.size = std::max(minS, std::fabs(w) * maxS * 0.5f);
                     s.rot = 0.f;
-                    s.rgba[3] = t > 0.85f ? (1.f - t) / 0.15f : 1.f;
+                    s.gsCol = gsCol;
+                    s.opaque = opaque;
+                    s.aref = opaque ? int16_t(0x40 - 1) : kGsAlphaRef;   // TEST_1 0x5040B: GEQUAL 0x40
                 } else {       // poeira/fumaça: circulo suave que cresce e esvanece
                     s.size = minS + (maxS > minS ? (maxS - minS) * t : 0.f);
                     if (s.size < 1.f) s.size = 8.f;
@@ -1621,29 +1647,31 @@ public:
         rlDisableDepthMask();
         shaderNormal(0.f, true, true);   // neblina (FGE) e alfa do GS no shader do draw, como o XGKICK dos destroços
         unsigned cur = ~0u;
-        bool open = false;
+        bool open = false, curOpaque = false;
+        int16_t curRef = kGsAlphaRef;
+        gsBlend(kGsAlphaNormal);
         for (const auto &o : order) {
             const Sprite &s = sprites[o.second];
             int tw = 0, th = 0;
             const unsigned id = fxTexture(ram, s.texId, s.tex0, tw, th);
             if (!id) continue;
-            if (id != cur || !open) {
+            if (id != cur || !open || s.opaque != curOpaque || s.aref != curRef) {
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }
+                if (s.opaque != curOpaque) {   // destroço opaco: sem ABE (PRIM 0x136) e gravando profundidade
+                    gsBlend(s.opaque ? kGsNoAbe : kGsAlphaNormal);
+                    if (s.opaque) rlEnableDepthMask(); else rlDisableDepthMask();
+                    curOpaque = s.opaque;
+                }
+                if (s.aref != curRef) { setAlphaRef(s.aref); curRef = s.aref; }
                 rlBegin(RL_TRIANGLES);
                 rlSetTexture(id);
                 cur = id; open = true;
             }
-            float u0 = 0.f, v0 = 0.f, u1 = 1.f, v1 = 1.f;
-            if (s.tex0 && tw >= 8 && th >= 8) {   // atlas de celulas 8x8
-                const uint32_t cols = uint32_t(tw) / 8, rows = uint32_t(th) / 8, c = s.cell % (cols * rows);
-                const uint32_t col = s.row >= 0 ? s.cell % cols : c % cols, row = s.row >= 0 ? uint32_t(s.row) % rows : c / cols;
-                u0 = float(col) * 8.f / float(tw); u1 = u0 + 8.f / float(tw);
-                v0 = float(row) * 8.f / float(th); v1 = v0 + 8.f / float(th);
-                if (s.flip & 1) std::swap(u0, u1);
-                if (s.flip & 2) std::swap(v0, v1);
-            }
+            const float u0 = s.uv[0], v0 = s.uv[1], u1 = s.uv[2], v1 = s.uv[3];
             // cor e alfa no modo GS do shader: 0x80 = 1,0 (a textura traz o alfa cru)
-            const unsigned char cr = uint8_t(128.f * std::min(1.f, s.rgba[0])), cg = uint8_t(128.f * std::min(1.f, s.rgba[1])), cb = uint8_t(128.f * std::min(1.f, s.rgba[2])), ca = uint8_t(128.f * std::max(0.f, std::min(1.f, s.rgba[3])));
+            auto ch = [](float v) { return uint8_t(128.f * std::max(0.f, std::min(1.f, v))); };
+            unsigned char cr = ch(s.rgba[0]), cg = ch(s.rgba[1]), cb = ch(s.rgba[2]), ca = ch(s.rgba[3]);
+            if (s.gsCol) { cr = uint8_t(s.gsCol); cg = uint8_t(s.gsCol >> 8); cb = uint8_t(s.gsCol >> 16); ca = uint8_t(s.gsCol >> 24); }
             float c[4][3];
             spriteCorners(s, R, U, c);
             const float cu[4] = {u0, u1, u1, u0}, cv[4] = {v1, v1, v0, v0};
@@ -1656,6 +1684,8 @@ public:
             }
         }
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }
+        if (curRef != kGsAlphaRef) setAlphaRef(kGsAlphaRef);
+        gsBlend(kGsAlphaNormal);
         rlNormal3f(0.f, 0.f, 0.f);
         rlSetTexture(0);
         rlEnableDepthMask();
