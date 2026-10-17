@@ -6,6 +6,12 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - **O port vem antes da decomp.** Próximo: iluminação e bugs gráficos **na ordem do inventário** da checagem (`passos/VU1CHECK.md`, "Inventário do port"),
   com `tools\corpus.ps1 -Check` antes e depois de cada mudança em `native/` (fluxo no `CLAUDE.md`, "Fluxo do port"). O runtime cobaia (equivalentes dentro do runtime) está parado, incompleto
   (`passos/NATIVO.md`, "Runtime cobaia").
+- **A fazer (anotado em 2026-10-17): ordem LIFO da OT de alfa no passe translúcido.** O jogo (`pktLinkAlphaObjAsm`) põe cada objeto translúcido no
+  começo da lista da sua faixa de profundidade (`int(8z)+1`, z = vf30.x do programa 0x0 do VU0), então no empate o último visitado é desenhado primeiro;
+  o nativo desenha na ordem da travessia. Confirmado pela ordem do XGKICK no menu (`g` 469: logo `ea3300` antes da tela `ea2800`). A 1a tentativa sumiu
+  com o logo do menu, mas as duas pendências que a travavam caíram em `b33d854` (corte por esfera; o logo forte vinha do filme do telão, `texId 999`).
+  Fazer: trocar o desempate no `drawList` (e a profundidade pela esfera do objeto contra o plano da câmera), conferir o logo no menu ao vivo e no
+  `menus.vu1snap`, e ver se muda as rachaduras do Kineticlops na cor 3. Contexto em `passos/VU1CHECK.md` ("Kineticlops na cor 3", item (2)).
 - **Decomp só na superfície de mod:** `Shell::Load*`, `MonsterParse`, câmera. **Byte match não é requisito por função.** `equivalent` é suficiente; `matched` quando sai barato; o `gate.sh`
   continua obrigatório (a ROM do build normal tem que bater o SHA1). Quando voltar a decompilar fora dessa superfície, a fila é `config/boot_coverage_asm.csv` (engine/formatos/lógica primeiro;
   memory card, `input`, `vi`, `ps`, `sce/*`, `lib989snd` por último).
