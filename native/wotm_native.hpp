@@ -397,6 +397,7 @@ struct DrawItem {
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
+    float spec = 0.f;  // especular do VU1 (qword 20) que vale para este objeto: Scene::walk (herdado do ultimo com specLightMe)
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
@@ -1338,6 +1339,7 @@ public:
         animVal_ = 0;
         cs_ = 0;
         blend_ = 0;
+        spec_ = 0.f;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
         std::memset(byOp, 0, sizeof byOp);
@@ -2506,6 +2508,7 @@ private:
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
     uint8_t blend_ = 0;    // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
+    float spec_ = 0.f;     // DrawItem::spec: o qword 20 que esta na memoria do VU1 neste ponto da ordem do hier
 
     // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D com ALPHA_1 (data em +0x20, endereco 0x42 em +0x28), TEST_1 e ZBUF_1.
     // Traduz o ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7) para DrawItem::blend; -1 = ctx sem ALPHA_1 (herda o do pai).
@@ -2690,7 +2693,7 @@ private:
     static ObjLight objectLight(const Ram &ram, const DrawItem &it) {
         const uint16_t f = ram.u16(it.node + 0xC);
         if (it.env) return {};
-        return {(f & 0x100) != 0, (f & 0x2000) ? ram.f32(it.node + 0x6C) : 0.f};
+        return {(f & 0x100) != 0, it.spec};
     }
 
     // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
@@ -2858,6 +2861,11 @@ private:
         switch (op) {
         case 0:                                                                                                 // OBJECT
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
+            // O pktAddVu1ObjAsm so grava o qword 20 (especular, specIntensity +0x6C) com specLightMe (0x2000); sem ele o programa de
+            // luz le o que o ultimo objeto deixou na memoria do VU1. As partes do Togera sem o bit (corpo skinned, flags 0x310) herdam
+            // o especular da parte anterior do proprio monstro (checagem: ~10% dos vertices dele saiam mais escuros, so no cinza).
+            if (ram.u16(node + 0xC) & 0x2000) spec_ = ram.f32(node + 0x6C);
+            items.back().spec = spec_;
             objectUvOffset(ram, node, items.back().uvOff);
             objectColor(ram, node, items.back().color);
             objectEnv(ram, node, items.back());
