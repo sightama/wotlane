@@ -41,8 +41,13 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 
 **Inventário do port (o que a checagem diz que falta ou sobra; refaça com `tools\corpus.ps1 -Check` e as linhas `inv` do `menus.vu1snap` e das lutas):**
 - **Separador da tela dividida** (`Hud::dmaPacket`/`buildSeparator`, PATH3): só monta pacote com a tela dividida (`viewGetScreenDisplay` != 0, dois jogadores): uma faixa preta opaca (SPRITE sem ABE, cor 0/0/0/0x80) entre as vistas, pela fila do `gsPkt`. O nativo não tem tela dividida; fica para quando tiver (o `readScreenRect` recusa SPRITE sem ABE).
-- **Feitos que a checagem ainda conta (não é falta do port; detalhes em "Corrigido"):** HUD do `hier` (sobra só a filtragem nas bordas, `ref HUD 1f47 | nat HUD 1f47` no `luta_hud`); `ScreenPolys` (a checagem lista `ref path3 sprites x2`, porque o PATH3 da referência só entra no inventário por caixa, e o mapa de pixels o mostra como `nat HUD ScreenPolys`); fades (os `TELA INTEIRA` do PATH3 contam como só da referência: chegam ao nativo por hooks na hora em que o jogo monta o pacote, que o replay não roda; a limpeza de tela o nativo faz por conta própria).
-- **Limites da referência (não é bug do port):** o GS em software não pinta o chão mais próximo em alguns quadros nem o marcador de vida do `ScreenPolys` (T4HL em `tbp 1000`; o PCSX2 o mostra, `docs/screenshots/2026-10-15/2026-10-15_pcsx2_x_nativo_metro.png`). A faixa preta da luta no `g_frame` 300, antes contada aqui como céu sem pintar, era a *letterbox* (resolvida com o HUD).
+
+**A checagem acusa, mas não é bug do port (não entra no inventário):**
+- **HUD:** pronto. Os dois lados desenham a mesma textura (`ref HUD 1f47 | nat HUD 1f47` no `luta_hud`); sobra só um leve borrado nas bordas, do jeito de suavizar a textura.
+- **`ScreenPolys` (formas chapadas do HUD):** pronto. A checagem lista `ref path3 sprites x2` como se só a referência desenhasse, porque nesse canal do PS2 (PATH3) ela só anota um retângulo em volta. O mapa de pixels mostra que o nativo desenha (`nat HUD ScreenPolys`).
+- **Fades (escurecer e clarear a tela):** prontos e aparecem no jogo. Os `TELA INTEIRA` contam como só da referência porque o nativo recebe o fade na hora em que o jogo o monta, e o replay da checagem não roda esse código. A limpeza de tela o nativo faz sozinho.
+- **Chão mais próximo e marcador de vida:** o GS em software da referência não pinta o chão mais próximo em alguns quadros nem o marcador de vida do `ScreenPolys` (T4HL em `tbp 1000`). O PCSX2 mostra os dois (`docs/screenshots/2026-10-15/2026-10-15_pcsx2_x_nativo_metro.png`).
+- A faixa preta da luta no `g_frame` 300 era a *letterbox* (resolvida com o HUD), não céu sem pintar.
 
 **Bugs vistos jogando (relatos do dono desde 2026-10-16; os fechados saem da lista):**
 1. **Pedestres** não aparecem como no retail: todos no mesmo ponto de nascimento, parados, sem animação e espelhados na vertical (foto METRO 002). Num quadro só, 99,8% casam com o VU1; o parado e espelhado só se confere com quadros seguidos (F6). Os que o nativo desenhava a mais estão em "Pedestres da METRO" ("Explicadas").
