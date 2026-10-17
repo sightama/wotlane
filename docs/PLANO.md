@@ -41,15 +41,15 @@ Direção confirmada em 2026-10-16: **port primeiro**; a decomp só avança na s
    **Estado:** a cadeia existe, mas o cobaia ainda quebra na luta (`docs/passos/NATIVO.md`, "Runtime cobaia"); está parado até o port ter HUD e widescreen.
 
 ## Marcos
-| # | Marco | Estado (2026-10-16) |
+| # | Marco | Estado (2026-10-17) |
 |---|---|---|
 | 0 | Jogo inteiro recompilado, compila e roda no runtime até o menu | feito |
 | 1 | Filmes (FFmpeg) | feito: `native/wotm_fmv.hpp` toca os `.PSS` de tela cheia e o telão do menu; falta sincronizar o áudio com o relógio do jogo |
 | 2 | Travessia nativa da hierarquia de cena (`world`, céu, listas de `Cs`) | feito: rígidos, skinned, LOD, destrutíveis, prédios fantasma, mapa de ambiente, luz paralela, neblina |
 | 3 | Chegar a uma fase e desenhar objetos e modelos nativos | feito: `WOTM_MATCH` entra direto na luta; geometria 99%+ casada com o VU1 |
-| 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | feito, menos o HUD que sai como pacote do GS (`ScreenPolys`, PATH2/PATH3) e os fades de tela; HUD do `hier` (retrato, barras, *letterbox*) feito em 2026-10-16 |
+| 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | feito, inclusive o HUD (`hier`, `ScreenPolys`) e os fades de tela (2026-10-16) |
 | 5 | Controle completo, som, FMVs | teclado e som nativos feitos (`wotm_snd.hpp`); gamepad e remapeamento ficam para depois |
-| 6 | Widescreen (primeiro mod), HUD, fades, iluminação e bugs gráficos na ordem do inventário | widescreen feito em 2026-10-16 (Hor+, `WOTM_ASPECT`); o resto é o próximo (`VU1CHECK.md`, "Inventário do port") |
+| 6 | Widescreen (primeiro mod), HUD, fades, iluminação e bugs gráficos na ordem do inventário | widescreen, HUD e fades feitos em 2026-10-16; bugs gráficos em andamento; falta a iluminação (`VU1CHECK.md`, "Inventário do port") |
 | 7 | Mods de exemplo com verificação pelo oracle e pelo cobaia | depois do 6 |
 
 ## Armadilhas já pagas
