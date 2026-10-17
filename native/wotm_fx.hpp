@@ -149,7 +149,13 @@ constexpr uint32_t fxId = 0x2DDC;         // emit.fxId (parece ser o indice do p
 constexpr uint32_t infoAttribs = 0x2E30;  // info.attribs (0x400 = pacote montado neste quadro)
 constexpr uint32_t minSize = 0x2E38;      // info.minSize (pedestres: largura do carimbo)
 constexpr uint32_t maxSize = 0x2E3C;      // info.maxSize (pedestres: altura do carimbo)
+constexpr uint32_t expansionRate = 0x2E44; // info.expansionRate
 constexpr uint32_t lifetime = 0x2E4A;     // info.lifetime (s16, campos)
+constexpr uint32_t alphaFadeIn = 0x2E60;  // info.alphaFadeIn (dustTrail: fracao da vida)
+constexpr uint32_t alphaFadeOut = 0x2E64;
+constexpr uint32_t minAlpha = 0x2E68;
+constexpr uint32_t maxAlpha = 0x2E6C;
+constexpr uint32_t preAgeFactor = 0x2D88; // emit.info.preAgeFactor
 constexpr uint32_t mapsPerFrame = 0x2E74; // info.mapsPerFrame (4.12)
 constexpr uint32_t colorsPerFrame = 0x2E78;
 constexpr uint32_t type = 0x2E90;         // vis.attribs
@@ -215,7 +221,8 @@ public:
 
     // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
     // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
-    // 105) e o dustTrail (1, 2 e 118) sobem a tabela de UV das celulas e escolhem a entrada pelos bits baixos de pos.w.
+    // 105) e o dustTrail (1, 2 e 118) sobem a tabela de UV das celulas; o sprite escolhe a entrada pelos bits baixos de pos.w e o
+    // dustTrail pelo byte 2 da palavra de idade (dustTrailVu).
     static constexpr uint32_t kDustTexId = 0xFFFF;
     static bool isDustTex(uint64_t tex0) { return (tex0 & 0x3FFF) == 0x3F60; }
     static uint64_t systemTex0(const Ram &ram, uint32_t b, uint32_t frame = 0) {
@@ -705,6 +712,33 @@ public:
     }
 
 
+    // dustTrail (tipo 15), microprograma 0x800 com o cabecalho do dustTrailPacketInit em 0x20C-0x20E. A palavra de idade (32 bits por
+    // particula, particleEmit is15) e a cor: RGB nos bytes 0-2 (os 2 bits baixos do byte 2 escolhem a celula de UV) e o sorteio de
+    // tamanho a no byte 3 (de min*255/max a 255); pos.w e a idade normalizada (0..1). Por particula, com W = profundidade:
+    //  - meio-lado = exp*vida*w/2 + (min + (max-min)*a/255) * (1 - k + k*a/255) / 2, k = emit.preAgeFactor (+0x2D88); o limite de
+    //    0,375 * W fica no forEachQuad;
+    //  - alfa = min(W - 128, minAlpha + (maxAlpha-minAlpha)*a/255) * min(1, w/alphaFadeIn, (1-w)/alphaFadeOut), truncado;
+    //  - descarta com W <= 128 (MAC Sw|Zw de W - 128) ou alfa < 8 (o F <= 0 e os cantos fora da banda ficam com o fogged e a tela:
+    //    com o limite de tamanho, um centro na tela nunca tem canto fora da banda de 4096).
+    struct DustTrailVu { bool visible; float half; uint32_t cell; uint32_t rgba; };
+    static DustTrailVu dustTrailVu(const Ram &ram, uint32_t b, int i, float w, float W) {
+        DustTrailVu d{false, 0.f, 0, 0};
+        if (!(W > 128.f)) return d;
+        const uint32_t word = ram.u32(ram.u32(b + fxoff::age) + 4 * uint32_t(i));
+        const float a = float(word >> 24) / 255.f;
+        const float mn = ram.f32(b + fxoff::minSize), mx = ram.f32(b + fxoff::maxSize), k = ram.f32(b + fxoff::preAgeFactor);
+        d.half = 0.5f * ram.f32(b + fxoff::expansionRate) * float(ram.s16(b + fxoff::lifetime)) * w + 0.5f * (mn + (mx - mn) * a) * (1.f - k + k * a);
+        const float fin = ram.f32(b + fxoff::alphaFadeIn), fout = ram.f32(b + fxoff::alphaFadeOut);
+        const float amin = ram.f32(b + fxoff::minAlpha), amax = ram.f32(b + fxoff::maxAlpha);
+        const float fade = std::min({1.f, fin > 0.f ? w / fin : 1.f, fout > 0.f ? (1.f - w) / fout : 1.f});   // DIV por 0 no VU: maximo
+        const float alpha = std::min(W - 128.f, amin + (amax - amin) * a) * fade;
+        if (!(alpha >= 8.f)) return d;
+        d.visible = true;
+        d.cell = (word >> 16) & 3;
+        d.rgba = (word & 0x00FFFFFFu) | (uint32_t(std::min(alpha, 255.f)) << 24);
+        return d;
+    }
+
     static bool isStrip(uint32_t type) { return type == FX_STRIPE || type == FX_SWEEPTRAIL; }
 
     // Neblina das particulas: o contexto comum dos microprogramas (qwords 0-7, de 0x256B90) leva fogFA em q4.w e fogFB em q5.w, os
@@ -1102,16 +1136,12 @@ public:
             // medido em sprite e texSprite). Os outros tipos que caem aqui continuam com pos.w inteiro (nao conferidos).
             const float depth = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
             float half = (s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]), cap = 0.5f;
+            uint32_t dustCell = 0;
             if (s.type == FX_DUSTTRAIL) {
-                // dustTrail (particleEmit, is15): pos.w e a idade normalizada (0..1, vel.w = 1/vida) e o byte 3 da palavra de idade e o
-                // sorteio de tamanho (de min*255/max a 255). Medido pela checagem VU1 x nativo em 5 presets: meio-lado =
-                // S/2 + exp*vida*w/2, limitado a 0,375 * profundidade; o termo da idade e exato, S ~ 1,12*max*a3/255 - 0,3*min e
-                // aproximado (erro ate ~4%; a formula do microcodigo para o byte nao foi achada, deve envolver info +0x2D88).
-                const uint32_t ages = ram.u32(b + fxoff::age);
-                const float a3 = float(ram.u8(ages + 4 * uint32_t(i) + 3));
-                const float mn = ram.f32(b + fxoff::minSize), mx = ram.f32(b + fxoff::maxSize);
-                const float S = 1.12f * mx * a3 / 255.f - 0.3f * mn;
-                half = std::max(0.5f * S + 0.5f * ram.f32(b + 0x2E44) * float(ram.s16(b + fxoff::lifetime)) * p[3], 0.f);
+                const DustTrailVu d = dustTrailVu(ram, b, i, p[3], depth);
+                if (!d.visible) continue;
+                half = d.half;
+                dustCell = d.cell;
                 cap = 0.375f;
             }
             const float r = depth > 0.f ? std::min(half, cap * depth) : half;
@@ -1138,7 +1168,16 @@ public:
             std::memcpy(&wbits, &p[3], 4);
             const bool fu = (wbits & 2) == 0, fv = (wbits & 1) == 0;
             float u0 = fu ? 1.f : 0.f, u1 = fu ? 0.f : 1.f, v0 = fv ? 1.f : 0.f, v1 = fv ? 0.f : 1.f;
-            if (dust) {   // celula wbits & 3 da textura composta: (9, 9, 503, 503) + 512 * (k & 1, k >> 1), em 1/16 de texel de 64
+            if (s.type == FX_DUSTTRAIL) {
+                // dustTrailPacketInit: tabela de 4 celulas (cantos (9, 9) a (du/2 - 9, du/2 - 9) mais du/2 em U pela celula & 1 e em V
+                // pela celula >> 1, em 1/16 de texel; du do TextureInfo nos dois eixos); o VU escolhe pelo byte 2 da palavra de idade & 3
+                const uint32_t tinfo = fxaddr::textureInfo + 8 * (ram.u32(b + fxoff::texInfoIndex) & 127);
+                const uint64_t t0 = systemTex0(ram, b);
+                const float du = float(ram.u16(tinfo + 4)), tw = 16.f * float(1u << ((t0 >> 26) & 15)), th = 16.f * float(1u << ((t0 >> 30) & 15));
+                const float h = std::floor(du * 0.5f);   // celula 0: 9 a h - 9; celula com o bit: h + 9 a du - 9
+                u0 = ((dustCell & 1) ? h + 9.f : 9.f) / tw; u1 = ((dustCell & 1) ? du - 9.f : h - 9.f) / tw;
+                v0 = ((dustCell >> 1) ? h + 9.f : 9.f) / th; v1 = ((dustCell >> 1) ? du - 9.f : h - 9.f) / th;
+            } else if (dust) {   // celula wbits & 3 da textura composta: (9, 9, 503, 503) + 512 * (k & 1, k >> 1), em 1/16 de texel de 64
                 const float cu = float(wbits & 1) * 0.5f, cv = float((wbits >> 1) & 1) * 0.5f;
                 u0 = cu + 9.f / 1024.f; u1 = cu + 503.f / 1024.f; v0 = cv + 9.f / 1024.f; v1 = cv + 503.f / 1024.f;
             }
@@ -1304,7 +1343,14 @@ private:
                 open = true;
             }
             // pedestres: vis.colorIndex e a propria cor RGBA (stampPacketInit a sobe byte a byte); numColors conta as variantes da folha
-            const uint32_t c0 = s.type == FX_PEDS ? ram.u32(b + fxoff::colorIndex) : colorAt(ram, b, ag), c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
+            uint32_t c0 = s.type == FX_PEDS ? ram.u32(b + fxoff::colorIndex) : colorAt(ram, b, ag);
+            if (s.type == FX_DUSTTRAIL) {   // cor e alfa do microprograma (dustTrailVu): a palavra de idade, nao a tabela de cores
+                float p[3];
+                for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
+                const float W = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
+                c0 = dustTrailVu(ram, b, i, ram.f32(pos + 16 * uint32_t(i) + 12), W).rgba;
+            }
+            const uint32_t c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
             for (int k = 0; k < 4; ++k) {
                 vcolor(k < 2 ? c0 : c1);
                 rlTexCoord2f(uv[k][0], uv[k][1]);
