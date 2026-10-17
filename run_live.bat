@@ -32,6 +32,8 @@ if not defined FOUND (
 
 echo Runtime: %FOUND%
 set "WOTM_REPO=%REPO%"
+rem Fotos para depurar (F7 pausa, F6 avanca, F8 foto com nota) ligadas por padrao, como no launcher
+if not defined WOTM_FOTOS set "WOTM_FOTOS=1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%FOUND%\run_live.ps1" %*
 exit /b %errorlevel%
 

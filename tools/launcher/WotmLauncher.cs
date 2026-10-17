@@ -36,19 +36,15 @@ class Launcher : Form
         new Flag("Controle", "PS2X_PADLOG", false, "Log do gamepad (nome e eixos no live.err.log)", "Linhas [pad]: nome do gamepad 0 e cada mudanca dos analogicos, com o horario."),
         new Flag("Controle", "PS2X_PAD_DEADZONE=0.25", false, "Zona morta de 0,25 nos analogicos", "Sem ela o runtime repassa qualquer desvio do eixo ao jogo."),
 
-        new Flag("Camera", "WOTM_NOINTERP", false, "Comecar com a interpolacao 30->60 desligada", "O jogo anda a 30 quadros/s; a interpolacao mistura dois quadros para desenhar a 60. F4 alterna durante o jogo."),
         new Flag("Camera", "WOTM_TURNLOG", false, "Log da rotacao dos monstros (live.err.log)", "Uma linha [turn] por monstro por quadro do jogo: rate, aceleracao e velocidade de giro, angulos."),
         new Flag("Camera", "WOTM_CAMLOG", false, "Gravar a camera a cada desenho (live.err.log)", "Uma linha [cam] por desenho: t, g_frame, fov, posicao e direcao."),
 
         new Flag("Desenho", "WOTM_NOFX", false, "Sem particulas/efeitos", "Desliga as particulas de fx[] e os efeitos de wotm_fx."),
         new Flag("Desenho", "WOTM_NOSHADOW", false, "Sem sombras", "Desliga as sombras dos bloqueadores (monstros e afins)."),
-        new Flag("Desenho", "WOTM_NODESTR", false, "Destrutiveis sempre intactos", "Ignora o estado de destruicao (sempre o estado 0)."),
-        new Flag("Desenho", "WOTM_NOCTRL", false, "Sem predios fantasma (sempre child1)", "Comportamento antigo: nao troca para a versao transparente quando a camera esta dentro/atras."),
         new Flag("Desenho", "WOTM_NOSKIN", false, "Monstros na pose de referencia (sem skinning)", "Diagnostico de malha."),
         new Flag("Desenho", "WOTM_NOVCOL", false, "Sem cor de vertice", "Ignora o sombreamento por vertice."),
         new Flag("Desenho", "WOTM_OPAQUE", false, "Ignorar o alfa de vertice nos skinned", "Diagnostico de transparencia."),
         new Flag("Desenho", "WOTM_ONEPASS", false, "Tudo num passe so", "Nao separa os translucidos num segundo passe."),
-        new Flag("Desenho", "WOTM_FUDGEOLD", false, "zBufferFudge na direcao antiga", "Diagnostico: > 1 empurra para longe (antes da correcao dos rotulos)."),
 
         new Flag("Som", "PS2X_SND=0", false, "Desligar o som nativo (fica mudo)", "PS2X_SND=0 volta ao 989snd no IOP emulado, que nao tem SPU2."),
         new Flag("Som", "PS2X_SND_LOG", false, "Log do som nativo", "Chamadas do 989snd no live.err.log."),
