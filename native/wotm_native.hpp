@@ -738,7 +738,7 @@ public:
         return ram.u16(node + 0x50 + 2 * slot);
     }
 
-    // Chave de textura de um objeto: id no `texInfo` + paleta (CBP/CSA/CPSM do TEX0). 0 = sem textura.
+    // Chave de textura de um objeto: id no `texInfo` + paleta (CBP/CSA/CPSM do TEX0) + TCC = 0 (bit 30; decodeTex). 0 = sem textura.
     // texId 0 com TEX0 = o buffer em exibicao, isto e, o quadro anterior (rtMain -> texmPrepTexInfoZero; texmGetTextureAddrs monta
     // PSMCT24 640 de largura, janela 1024x256): chave kScreenKey, textura de screenTexture.
     static constexpr uint64_t kScreenKey = 1ull << 63;
@@ -748,7 +748,8 @@ public:
         if (!t0) return 0;
         if (!tid) return kScreenKey;
         const gs::Tex0 t = gs::Tex0::decode(t0);
-        return (uint64_t(tid) << 40) | (uint64_t(t.cbp) << 12) | (uint64_t(t.csa) << 4) | t.cpsm | (1ull << 62);
+        const uint64_t noTcc = (t0 >> 34) & 1 ? 0 : 1ull << 30;
+        return (uint64_t(tid) << 40) | noTcc | (uint64_t(t.cbp) << 12) | (uint64_t(t.csa) << 4) | t.cpsm | (1ull << 62);
     }
     // No CLOAK (DrawItem::env 3) o pktBldEnvMapDma troca o TEX0 de cada slot com textura pelo do texId 0 (texmGetTextureAddrs).
     static uint64_t texKey(const Ram &ram, const DrawItem &it, uint32_t slot) {
@@ -768,9 +769,19 @@ public:
 
     // Textura do objeto: os pixels vem do pacote de upload apontado por `texInfo[texId]` (pixels lineares a partir de +0x80,
     // cabecalho em UploadHdr); a paleta vem do .RTX (carregado junto com a fase).
+    // TEX0.TCC = 0 (so RGB): o GS usa o alfa do vertice e ignora o da textura; aqui o texel sai com alfa 1,0 (a tela do drive-in do
+    // menu, tex 76, com vertices de alfa 0 e 0x80 por cima do logo).
     bool decodeTex(const Ram &ram, uint32_t node, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot = 0, bool rawAlpha = false) const {
         const uint64_t t0v = objectTex0(ram, node, slot);
         if (!t0v) return false;
+        if (!decodeTexRgba(ram, node, t0v, px, w, h, slot, rawAlpha)) return false;
+        if (!((t0v >> 34) & 1)) {
+            const uint32_t one = rawAlpha ? 0x80000000u : 0xFF000000u;
+            for (uint32_t &c : px) c = (c & 0x00FFFFFFu) | one;
+        }
+        return true;
+    }
+    bool decodeTexRgba(const Ram &ram, uint32_t node, uint64_t t0v, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, uint32_t slot, bool rawAlpha) const {
         const gs::Tex0 t0 = gs::Tex0::decode(t0v);
         const uint32_t ptr = ram.u32(addr::texInfo + 16 * objectTexId(ram, node, slot)) & 0x0FFFFFFF;
         if (t0.psm == gs::T8H || t0.psm == gs::T4HL || t0.psm == gs::T4HH) {
