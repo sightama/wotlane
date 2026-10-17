@@ -1661,7 +1661,8 @@ void gifDmaTap(const uint8_t *data, uint32_t bytes)
 }
 
 // Gatilho (WOTM_VU1CHECK_WHEN=<cond>[,<cond>], qualquer uma basta) e rajada (WOTM_VU1CHECK_BURST=<k> quadros seguidos por disparo):
-//  - fx:<tipo visual>: algum sistema de particulas vivo (numParticles > 0) com vis.attribs & 0xFF == tipo (3 sprite, 7 arco, 13 destroco...);
+//  - fx:<tipo visual>: algum sistema de particulas vivo (numParticles > 0) com vis.attribs & 0xFF == tipo (3 sprite, 7 arco, 13 destroco...),
+//    so a partir do g_frame 30. No quadro em que o sistema nasce o pacote ainda pode nao estar montado: use rajada;
 //  - preset:<fxId>: idem, pelo preset do sistema (fxoff::fxId; nomes em tools/fx.py): separa a fumaca do vulcao da de um predio;
 //  - frame:<a>[-<b>]: g_frame dentro da faixa.
 // O disparo e por borda: a condicao passou de falsa a verdadeira (o evento nasceu). Um emissor permanente (fumaca do vulcao) dispara
@@ -1692,9 +1693,11 @@ bool condTrue(const uint8_t *rdram, uint32_t frame, bool &changed)
             else any = any || v == c.b;
             continue;
         }
+        if (frame < 30) continue;   // como a amostragem periodica: no comeco da fase o fx[] tem sistema vivo sem nada desenhado (arco em g_frame 8)
         for (uint32_t i = 1; i < wotm::fxaddr::count && !any; ++i) {
             const uint32_t b = wotm::fxaddr::fx + i * wotm::fxaddr::stride;
             if (int32_t(ram.u32(b + wotm::fxoff::numParticles)) <= 0) continue;
+            if (!(ram.u32(b + wotm::fxoff::infoAttribs) & 0x400)) continue;   // so com o pacote montado (vivo mas fora da vista nao desenha)
             if (c.kind == Cond::Fx ? (ram.u32(b + wotm::fxoff::type) & 0xFF) == c.a : ram.u32(b + wotm::fxoff::fxId) == c.a) any = true;
         }
     }

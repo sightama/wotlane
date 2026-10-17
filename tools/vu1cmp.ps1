@@ -24,7 +24,7 @@ if (-not $runtime -or -not (Test-Path "$runtime\$Build\ps2xRuntime\ps2EntryRunne
     Write-Error "Nao achei o runtime ($Build\ps2xRuntime\ps2EntryRunner.exe) em '$runtime': defina WOTM_RECOMP_DIR ou rode build_runtime.bat uma vez."
 }
 $exe = "$runtime\$Build\ps2xRuntime\ps2EntryRunner.exe"
-$files = if (Test-Path $Path -PathType Container) { Get-ChildItem $Path -Filter '*.vu1snap' | Sort-Object { [int](($_.BaseName -split '_')[-1]) } | ForEach-Object { $_.FullName } } else { @((Resolve-Path $Path).Path) }
+$files = if (Test-Path $Path -PathType Container) { Get-ChildItem $Path -Filter '*.vu1snap' | Sort-Object { (($_.BaseName -split '_')[-1]) -as [int] }, Name | ForEach-Object { $_.FullName } } else { @((Resolve-Path $Path).Path) }
 if (-not $files) { Write-Error "Nenhum .vu1snap em $Path" }
 $err = Join-Path $env:TEMP 'wotm_vu1cmp.err.log'
 $out = Join-Path $env:TEMP 'wotm_vu1cmp.out.log'

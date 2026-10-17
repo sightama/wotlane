@@ -1939,7 +1939,7 @@ index b02c7ca..11cb9da 100644
                  {
                      m_vif1PendingPath2ImageQwc = pendingImageQw;
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-index bd75bba..9d093f8 100644
+index bd75bba..68268a1 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 +++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 @@ -5,6 +5,7 @@
@@ -2446,6 +2446,19 @@ index bd75bba..9d093f8 100644
          if (decoded.upperUsage.reserved || decoded.lowerUsage.reserved)
          {
              reportReservedInstruction(decoded.upperUsage.reserved, decoded.upperUsage.reserved ? decoded.upper : decoded.lower);
+@@ -1719,6 +1799,12 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
+         else
+         {
+             execUpper(decoded.upper);
++            // vf0 e constante: um upper com destino vf0 (so pelas flags MAC, ex. MADDq.w vf0 + DIV Q, vf0w, vf6w no microprograma dos
++            // destrocos) nao pode mudar o que o lower do mesmo par le. O destino 0 nao entra no sombreamento (upperVfShadowReg).
++            m_state.vf[0][0] = 0.0f;
++            m_state.vf[0][1] = 0.0f;
++            m_state.vf[0][2] = 0.0f;
++            m_state.vf[0][3] = 1.0f;
+             execLower(decoded.lower, vuData, dataSize, gs, memory, decoded.upper);
+         }
+ 
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
 index 563bcbd..ee72629 100644
 --- a/ps2xRuntime/src/main.cpp
