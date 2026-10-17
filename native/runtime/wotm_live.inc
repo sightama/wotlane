@@ -322,7 +322,8 @@ static void initWindowAspect()
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
-// timerWaitForMinUpdateRate, ponto comum a rtMain, ShellRtLoop::endField e userintMain): ali o quadro esta pronto (update, hier,
+// timerWaitForMinUpdateRate, ponto comum a rtMain, ShellRtLoop::endField e userintMain, e no sceGsSyncV do fim do laco do
+// displayDialog, menu de pause e cia., que nao passa por ele): ali o quadro esta pronto (update, hier,
 // particleDraw, HUD) e a logica do seguinte ainda nao comecou. A apresentacao roda em outra thread; lendo a RAM na hora em que
 // via o g_frame mudar, pegava as vezes o quadro seguinte pela metade (o _cs do HUD fora do lugar, bloqueador de sombra sem
 // marcar: HUD, reticula e sombra piscando).
@@ -363,17 +364,37 @@ static std::string resources() { return g_state ? g_state->rtxPath : std::string
 // vez a tela ja levou os alfas a - 2·passo, a - 4·passo... desde o inicio, e o escurecimento acumula (Scene::drawScreenRects recebe o
 // alfa equivalente). g_shellFade: -1 = parado; senao inicio | passo << 8 | acumula << 16.
 static std::vector<wotm::ScreenRect> g_pendingRects;
+// Por fade pendente: 0 = mandado direto (uiFadeScreen), 1 = na fila do gsPkt, 2 = fila ja despachada (DmaGsPktQueue). No
+// fontDmaFontData, os de estado 2 ficam sob o texto (ScreenRect::underText).
+static std::vector<uint8_t> g_pendingState;
 // HUD do ScreenPolys do quadro em montagem: lido na entrada do ScreenPolys::dmaData (wotmScreenPolys), que zera numPolys; a captura
 // o junta ao instantaneo (o takeSnapshot na captura ja nao o ve).
 static std::vector<wotm::TextQuad> g_pendingPolys;
 static std::atomic<int> g_shellFade{-1};
 } // namespace wotm_live
 
-void wotmScreenRect(const uint8_t *rdram, uint32_t pkt)
+void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued)
 {
     wotm::ScreenRect r{};
     if (rdram && wotm_live::g_pendingRects.size() < 16 && wotm::readScreenRect(wotm::Ram{rdram, PS2_RAM_SIZE}, pkt, r))
+    {
         wotm_live::g_pendingRects.push_back(r);
+        wotm_live::g_pendingState.push_back(queued ? 1 : 0);
+    }
+}
+void wotmGsPktQueueSent()
+{
+    for (uint8_t &s : wotm_live::g_pendingState)
+        if (s == 1) s = 2;
+}
+void wotmFontSent()
+{
+    for (size_t i = 0; i < wotm_live::g_pendingRects.size(); ++i)
+        if (wotm_live::g_pendingState[i] == 2)
+        {
+            wotm_live::g_pendingRects[i].underText = true;
+            wotm_live::g_pendingState[i] = 3;   // ja decidido
+        }
 }
 void wotmScreenPolys(const uint8_t *rdram)
 {
@@ -390,6 +411,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     wotm_live::Capture &c = wotm_live::capture();
     std::vector<wotm::ScreenRect> rects;
     rects.swap(wotm_live::g_pendingRects);
+    wotm_live::g_pendingState.clear();
     std::vector<wotm::TextQuad> polys;
     polys.swap(wotm_live::g_pendingPolys);
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
@@ -471,8 +493,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     if (sn.valid)
     {
         if (sn.items.size() < 20 || !sn.cam.ok)   // sem fase de verdade (carregando, tela vazia): fica o quadro do GS
-        {
-            S.snap = wotm::Snapshot{};
+        {            S.snap = wotm::Snapshot{};
             return false;
         }
         {
@@ -545,8 +566,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
     EndMode3D();
     S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
     S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
+    S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH), true);   // fades despachados antes do texto
+    BeginMode3D(c3);   // lista de alta prioridade: depois desses fades (ShellRtLoop::endField), antes do texto
+    S.scene.drawHp(ram);
+    EndMode3D();
     S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
-    S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // fades, por cima de tudo
+    S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
     EndTextureMode();
 
     // quadro na janela, mantendo a proporcao (faixas so se a janela sair de 4:3..32:9 ou com WOTM_ASPECT fixo)
@@ -685,7 +710,9 @@ static std::string resources() { return {}; }
 static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
-void wotmScreenRect(const uint8_t *, uint32_t) {}
+void wotmScreenRect(const uint8_t *, uint32_t, bool) {}
+void wotmGsPktQueueSent() {}
+void wotmFontSent() {}
 void wotmScreenPolys(const uint8_t *) {}
 void wotmShellFade(int, int, bool) {}
 #endif

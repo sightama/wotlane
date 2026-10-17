@@ -6,11 +6,6 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - **O port vem antes da decomp.** Próximo: iluminação e bugs gráficos **na ordem do inventário** da checagem (`passos/VU1CHECK.md`, "Inventário do port"),
   com `tools\corpus.ps1 -Check` antes e depois de cada mudança em `native/` (fluxo no `CLAUDE.md`, "Fluxo do port"). O runtime cobaia (equivalentes dentro do runtime) está parado, incompleto
   (`passos/NATIVO.md`, "Runtime cobaia").
-- **Feito em 2026-10-17: ordem do hier e da OT de alfa** (`passos/VU1CHECK.md`, "Ordem do hier e OT de alfa" em "Corrigido"). Resolveu o logo na seleção
-  de fase (bug 7), conferido ao vivo pelo dono. A piora da `luta_hud` caiu de +3,3 para +1,8 mil px (ordem do
-  cross-fade de LOD, bit 0x4000, ABE 0, receptores de sombra); o resto está onde a referência não tem as texturas (árvores e brilho do poste existem no jogo, conferido ao vivo).
-- **Feito em 2026-10-17: contexto do GS fora do GROUP** (`passos/VU1CHECK.md`, "Contexto do GS fora do GROUP"). O ctx (mistura, teste de alfa, ZMSK) também vem de TRANSLATE, ROTATE, SCALE, ANIM_XFORM e ANIM_SCALE. A esfera da explosão e o halo dos power-ups agora saem aditivos, como no VU1. O dono conferiu ao vivo: a transparência da Kineticlops na cor 3 e os especiais de explosão estão corrigidos; no power-up a esfera ficou boa, mas o halo e o brilho no chão (e o brilho dos postes) ainda não têm degradê. A `luta_hud` subiu para 55.890 px porque o halo clareia o parque, que na referência não tem árvores.
-- **Feito em 2026-10-17: luzes pontuais** (`passos/VU1CHECK.md`, "Luzes pontuais" em "Corrigido"). O fogo cria luzes em `pointLights`; o nativo agora escolhe até 3 por objeto como o programa 0x748 do VU0 e acende como o 0x15D8 do VU1 (instantâneo `luz_pontual` no corpus). Na mesma rodada a checagem conferiu as **texturas animadas** (os OBJECT com `uvScroll` rolam, um quadro adiantados) e o **verde dos pick-ups** (`colorQuad` igual ao do VU1); os dois só precisam ser vistos ao vivo pelo dono.
 - **Decomp só na superfície de mod:** `Shell::Load*`, `MonsterParse`, câmera. **Byte match não é requisito por função.** `equivalent` é suficiente; `matched` quando sai barato; o `gate.sh`
   continua obrigatório (a ROM do build normal tem que bater o SHA1). Quando voltar a decompilar fora dessa superfície, a fila é `config/boot_coverage_asm.csv` (engine/formatos/lógica primeiro;
   memory card, `input`, `vi`, `ps`, `sce/*`, `lib989snd` por último).
@@ -42,7 +37,7 @@ Lista legível do estado (bugs, investigações, o que falta), escrita com o don
 
 ## Índice dos detalhes (`docs/passos/`)
 - [NATIVO.md](passos/NATIVO.md): `native/` (raylib), texturas/paletas, desenho ao vivo, monstros skinned, LOD, partículas/efeitos, sombras, física com `dt` no runtime, hooks de host, vigia, partida direta (`WOTM_MATCH`), lote, runtime cobaia, tabela de variáveis `WOTM_*`.
-- [VU1CHECK.md](passos/VU1CHECK.md): checagem VU1 x nativo: como funciona, **inventário do port** (o que falta/sobra, por dono), estado, resíduos em aberto, microprogramas das partículas, tudo o que já foi corrigido.
+- [VU1CHECK.md](passos/VU1CHECK.md): checagem VU1 x nativo: como funciona, **inventário do port** (o que falta/sobra, por dono), estado, resíduos em aberto, microprogramas das partículas, explicações (o histórico das correções até 2026-10-17 está no git, `git show 5eca44b:docs/passos/VU1CHECK.md`).
 - [RUNTIME.md](passos/RUNTIME.md): runtime recompilado no Windows: build sem LTCG, variáveis `PS2X_*`, teclado, rastro do boot, endereços úteis.
 - [FERRAMENTAS.md](passos/FERRAMENTAS.md): `tools/`, headers compartilhados (`include/`), estado de `TheGame`, difftest.
 - [ARMADILHAS.md](passos/ARMADILHAS.md): bugs/pegadinhas já vistos (gcc 2.95, gp, rodata, `sqrtf`, `__asm__("sym")`, build NM).
@@ -50,4 +45,3 @@ Lista legível do estado (bugs, investigações, o que falta), escrita com o don
 - [ESPINHA.md](passos/ESPINHA.md): cadeia `main` -> monstro no mapa, menu, `rtMain`, estados de monstro: o que se sabe do fluxo do jogo.
 - [IA.md](passos/IA.md): estrutura de AiAction/AiSeek e onde parou.
 - [VIEWER_WEB.md](passos/VIEWER_WEB.md): ideia de visualizador de modelos 3D no navegador (2026-10-14).
-- [PLANO_PROCESSO.md](passos/PLANO_PROCESSO.md): plano de 2026-10-15 para otimizar o processo (com explicação para leigo) e o estado de cada item.

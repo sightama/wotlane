@@ -30,7 +30,9 @@ extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
-void wotmScreenRect(const uint8_t *rdram, uint32_t pkt);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
+void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
 void wotmShellFade(int start, int step, bool accumulate);
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
@@ -296,6 +298,79 @@ namespace
         g_origTakeDamage(rdram, ctx, runtime);
     }
 
+    // Modo deus sem reacao de golpe: no jogador com kCheatGod, Monster::takeHit (0x15F048, a entrada virtual de todo golpe),
+    // knockBack (0x1601C8) e takeAdditiveRecoil (0x160058) voltam na entrada, e o enterNewState (0x1621C8) recusa os estados de
+    // reacao, como o proprio jogo faz no modo 7 (empurroes de explosao e colisao chamam knockBack ou entram no estado por fora).
+    constexpr uint32_t kTakeHit = wotm::fn::takeHit__7MonsterP8_fvectorfi, kKnockBack = wotm::fn::knockBack__7MonsterR8_fvectorff,
+                       kAdditiveRecoil = wotm::fn::takeAdditiveRecoil__7MonsterR8_fvectorf, kEnterNewState = wotm::fn::enterNewState__7MonsterP12MonsterState;
+    PS2Runtime::RecompiledFunction g_origTakeHit = nullptr, g_origKnockBack = nullptr, g_origAdditiveRecoil = nullptr, g_origEnterNewState = nullptr;
+    // offsets dos estados de reacao dentro do Monster (game.h): Recoil, KnockBack, Grappled, BeingSlammed, BeingThrown, Impaled,
+    // Stunned, Shocked, BigTakeHit, Countered
+    constexpr uint32_t kHitStates[] = {0x7E30, 0x7EA0, 0xDDCC, 0xDE30, 0xE3E0, 0x106E0, 0x10714, 0x10BA0, 0x11100, 0x11114};
+
+    bool godPlayer(uint8_t *rdram, uint32_t m)
+    {
+        return (g_wotmCheats.load(std::memory_order_relaxed) & kCheatGod) && isPlayerMonster(rdram, m);
+    }
+
+    void godBlocked(const char *what)
+    {
+        static uint32_t n = 0;
+        if (++n <= 3 || n % 100 == 0)
+            std::fprintf(stderr, "[debug] deus: %s recusado no jogador (%u)\n", what, n);
+    }
+
+    void takeHitCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTakeHit && godPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            godBlocked("takeHit");
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origTakeHit(rdram, ctx, runtime);
+    }
+
+    void knockBackCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kKnockBack && godPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            godBlocked("knockBack");
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origKnockBack(rdram, ctx, runtime);
+    }
+
+    void additiveRecoilCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kAdditiveRecoil && godPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origAdditiveRecoil(rdram, ctx, runtime);
+    }
+
+    void enterNewStateCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        if (ctx->pc == kEnterNewState && godPlayer(rdram, m))
+        {
+            const uint32_t off = GPR_U32(ctx, 5) - m;
+            for (uint32_t s : kHitStates)
+                if (off == s)
+                {
+                    char what[48];
+                    std::snprintf(what, sizeof what, "estado +0x%X", s);
+                    godBlocked(what);
+                    ctx->pc = GPR_U32(ctx, 31);
+                    return;
+                }
+        }
+        g_origEnterNewState(rdram, ctx, runtime);
+    }
+
     void monsterUpdateCheats(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4);
@@ -409,11 +484,27 @@ namespace
     constexpr uint32_t kSceGsSyncV = wotm::fn::sceGsSyncV;
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
     uint32_t g_syncVCalls = 0, g_syncVRa[4];
-    void syncVLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    // Laco do displayDialog (menu de pause, areYouSure, fim de luta do multiplayer...): monta o quadro sozinho (hier, particleDraw,
+    // Hud::print, a funcao do dialogo, fontDmaFontData) e espera o vsync no sceGsSyncV do fim do laco, sem passar pelo
+    // timerWaitForMinUpdateRate. Sem captura ali, a tela repetia o ultimo quadro de antes do dialogo, e a moldura do pause (o _cs
+    // shell->m_cs610, que o pauseLevelOverlay liga) nunca aparecia. $ra desse jal: displayDialog + 0x7C4 (jal em 0x1ACB9C).
+    // Na ultima volta ($s1 != 0, o beqz logo depois volta ao laco com 0) o Shell::FadeScreen acabou de escurecer a tela: capturar
+    // ali desligaria o fade (wotmCaptureFrame) e mostraria a cena clara ate o proximo quadro. Fica sem captura, como antes.
+    constexpr uint32_t kDialogLoopSyncVRa = wotm::fn::displayDialog__Fi + 0x7C4u;
+    void syncVTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (g_syncVCalls < 4)
-            g_syncVRa[g_syncVCalls] = GPR_U32(ctx, 31);
-        ++g_syncVCalls;
+        if (ctx->pc == kSceGsSyncV)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            if (g_fieldLog)
+            {
+                if (g_syncVCalls < 4)
+                    g_syncVRa[g_syncVCalls] = ra;
+                ++g_syncVCalls;
+            }
+            if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
+                wotmCaptureFrame(rdram);
+        }
         g_origSyncV(rdram, ctx, runtime);
     }
     uint32_t g_lastFieldStart = 0;
@@ -512,8 +603,28 @@ namespace
     void addCallToQueueTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kAddCallToQueue)
-            wotmScreenRect(rdram, GPR_U32(ctx, 5));
+            wotmScreenRect(rdram, GPR_U32(ctx, 5), true);
         g_origAddCall(rdram, ctx, runtime);
+    }
+
+    // Ordem fila x texto: o rtMain manda o texto (fontDmaFontData) e depois a fila do gsPkt (DmaGsPktQueue), e o fade cobre o texto;
+    // o ShellRtLoop::endField (laco dos dialogos de fim de fase, wonLevelOverlay e cia.) manda a fila antes do texto, e o dialogo de
+    // tokens sai sobre a tela escurecida pelo TheGame::updateFadeOut. Marcado na entrada de cada um (ScreenRect::underText).
+    constexpr uint32_t kDmaGsPktQueue = wotm::fn::DmaGsPktQueue__5GsPkt, kFontDmaFontData = wotm::fn::fontDmaFontData__Fv;
+    PS2Runtime::RecompiledFunction g_origDmaGsPktQueue = nullptr, g_origFontDma = nullptr;
+
+    void dmaGsPktQueueTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kDmaGsPktQueue)
+            wotmGsPktQueueSent();
+        g_origDmaGsPktQueue(rdram, ctx, runtime);
+    }
+
+    void fontDmaTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFontDmaFontData)
+            wotmFontSent();
+        g_origFontDma(rdram, ctx, runtime);
     }
 
     void uiFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -527,7 +638,7 @@ namespace
         g_origUiFade(rdram, ctx, runtime);
         if (ra && ctx->pc == ra && GPR_U32(ctx, 29) == sp)   // voltou (nao so uma pausa no meio)
         {
-            wotmScreenRect(rdram, sp - 0xB0u);
+            wotmScreenRect(rdram, sp - 0xB0u, false);
             ra = 0;
         }
     }
@@ -588,12 +699,12 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     {
         g_fieldLog = g_wotmCycleProf = true;
         g_lastHost = std::chrono::steady_clock::now();
-        if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
-            runtime.registerFunction(kSceGsSyncV, &syncVLogged);
         std::fprintf(stderr, "[wotm] log de fields por quadro ligado (WOTM_FIELDLOG)\n");
     }
     if (g_minRate > 0 || g_fieldLog)
         runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
+    if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
+        runtime.registerFunction(kSceGsSyncV, &syncVTapped);
     if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
         (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)))
     {
@@ -602,6 +713,10 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     if ((g_origAddCall = runtime.lookupFunction(kAddCallToQueue)))
         runtime.registerFunction(kAddCallToQueue, &addCallToQueueTapped);
+    if ((g_origDmaGsPktQueue = runtime.lookupFunction(kDmaGsPktQueue)))
+        runtime.registerFunction(kDmaGsPktQueue, &dmaGsPktQueueTapped);
+    if ((g_origFontDma = runtime.lookupFunction(kFontDmaFontData)))
+        runtime.registerFunction(kFontDmaFontData, &fontDmaTapped);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))
@@ -659,7 +774,14 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         g_setCloakOn = runtime.lookupFunction(kSetCloakOn);
         runtime.registerFunction(kMonsterUpdate, &monsterUpdateCheats);
         runtime.registerFunction(kTakeDamage, &takeDamageCheat);
-        uint32_t c = std::getenv("WOTM_CLOAK") ? kCheatCloak : 0u;
+        if ((g_origTakeHit = runtime.lookupFunction(kTakeHit)))
+            runtime.registerFunction(kTakeHit, &takeHitCheat);
+        if ((g_origKnockBack = runtime.lookupFunction(kKnockBack)))
+            runtime.registerFunction(kKnockBack, &knockBackCheat);
+        if ((g_origAdditiveRecoil = runtime.lookupFunction(kAdditiveRecoil)))
+            runtime.registerFunction(kAdditiveRecoil, &additiveRecoilCheat);
+        if ((g_origEnterNewState = runtime.lookupFunction(kEnterNewState)))
+            runtime.registerFunction(kEnterNewState, &enterNewStateCheat);        uint32_t c = std::getenv("WOTM_CLOAK") ? kCheatCloak : 0u;
         if (const char *e = std::getenv("WOTM_CHEATS"))
         {
             const std::string s = std::string(",") + e + ",";

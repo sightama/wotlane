@@ -366,6 +366,8 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
     add(g_scene->items, false);
     add(g_scene->sky, true);
     add(g_scene->overlay, true);
+    add(g_scene->hp, false);
+    add(g_scene->hpOverlay, true);
     add(g_scene->hud, false);   // HUD: o nativo desenha na frente da camera como os demais objetos; o inventario ainda o lista por id
     g_projMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
 }
