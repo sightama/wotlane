@@ -296,6 +296,79 @@ namespace
         g_origTakeDamage(rdram, ctx, runtime);
     }
 
+    // Modo deus sem reacao de golpe: no jogador com kCheatGod, Monster::takeHit (0x15F048, a entrada virtual de todo golpe),
+    // knockBack (0x1601C8) e takeAdditiveRecoil (0x160058) voltam na entrada, e o enterNewState (0x1621C8) recusa os estados de
+    // reacao, como o proprio jogo faz no modo 7 (empurroes de explosao e colisao chamam knockBack ou entram no estado por fora).
+    constexpr uint32_t kTakeHit = wotm::fn::takeHit__7MonsterP8_fvectorfi, kKnockBack = wotm::fn::knockBack__7MonsterR8_fvectorff,
+                       kAdditiveRecoil = wotm::fn::takeAdditiveRecoil__7MonsterR8_fvectorf, kEnterNewState = wotm::fn::enterNewState__7MonsterP12MonsterState;
+    PS2Runtime::RecompiledFunction g_origTakeHit = nullptr, g_origKnockBack = nullptr, g_origAdditiveRecoil = nullptr, g_origEnterNewState = nullptr;
+    // offsets dos estados de reacao dentro do Monster (game.h): Recoil, KnockBack, Grappled, BeingSlammed, BeingThrown, Impaled,
+    // Stunned, Shocked, BigTakeHit, Countered
+    constexpr uint32_t kHitStates[] = {0x7E30, 0x7EA0, 0xDDCC, 0xDE30, 0xE3E0, 0x106E0, 0x10714, 0x10BA0, 0x11100, 0x11114};
+
+    bool godPlayer(uint8_t *rdram, uint32_t m)
+    {
+        return (g_wotmCheats.load(std::memory_order_relaxed) & kCheatGod) && isPlayerMonster(rdram, m);
+    }
+
+    void godBlocked(const char *what)
+    {
+        static uint32_t n = 0;
+        if (++n <= 3 || n % 100 == 0)
+            std::fprintf(stderr, "[debug] deus: %s recusado no jogador (%u)\n", what, n);
+    }
+
+    void takeHitCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTakeHit && godPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            godBlocked("takeHit");
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origTakeHit(rdram, ctx, runtime);
+    }
+
+    void knockBackCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kKnockBack && godPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            godBlocked("knockBack");
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origKnockBack(rdram, ctx, runtime);
+    }
+
+    void additiveRecoilCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kAdditiveRecoil && godPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origAdditiveRecoil(rdram, ctx, runtime);
+    }
+
+    void enterNewStateCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        if (ctx->pc == kEnterNewState && godPlayer(rdram, m))
+        {
+            const uint32_t off = GPR_U32(ctx, 5) - m;
+            for (uint32_t s : kHitStates)
+                if (off == s)
+                {
+                    char what[48];
+                    std::snprintf(what, sizeof what, "estado +0x%X", s);
+                    godBlocked(what);
+                    ctx->pc = GPR_U32(ctx, 31);
+                    return;
+                }
+        }
+        g_origEnterNewState(rdram, ctx, runtime);
+    }
+
     void monsterUpdateCheats(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4);
@@ -659,7 +732,14 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         g_setCloakOn = runtime.lookupFunction(kSetCloakOn);
         runtime.registerFunction(kMonsterUpdate, &monsterUpdateCheats);
         runtime.registerFunction(kTakeDamage, &takeDamageCheat);
-        uint32_t c = std::getenv("WOTM_CLOAK") ? kCheatCloak : 0u;
+        if ((g_origTakeHit = runtime.lookupFunction(kTakeHit)))
+            runtime.registerFunction(kTakeHit, &takeHitCheat);
+        if ((g_origKnockBack = runtime.lookupFunction(kKnockBack)))
+            runtime.registerFunction(kKnockBack, &knockBackCheat);
+        if ((g_origAdditiveRecoil = runtime.lookupFunction(kAdditiveRecoil)))
+            runtime.registerFunction(kAdditiveRecoil, &additiveRecoilCheat);
+        if ((g_origEnterNewState = runtime.lookupFunction(kEnterNewState)))
+            runtime.registerFunction(kEnterNewState, &enterNewStateCheat);        uint32_t c = std::getenv("WOTM_CLOAK") ? kCheatCloak : 0u;
         if (const char *e = std::getenv("WOTM_CHEATS"))
         {
             const std::string s = std::string(",") + e + ",";
