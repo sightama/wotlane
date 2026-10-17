@@ -44,7 +44,17 @@ class Launcher : Form
         new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Som nativo", "Chamadas do 989snd."),
     };
 
+    // Video: altura do quadro nativo (WOTM_RES) e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
+    static readonly string[] Resolutions = { "448", "480", "720", "1080", "1440", "2160" };
+    static readonly string[] ResolutionLabels = { "448 (original do PS2)", "480", "720", "1080", "1440", "2160 (4K)" };
+    static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
+    const string DefaultRes = "720", DefaultAspect = "16:9";
+
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
+    readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly ComboBox aspect = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
+    readonly CheckBox dynWidth = new CheckBox { Text = "Largura dinamica (proporcao segue a janela)", AutoSize = true };
+    readonly CheckBox fullscreen = new CheckBox { Text = "Tela cheia   [WOTM_FULLSCREEN]", AutoSize = true };
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
@@ -62,6 +72,7 @@ class Launcher : Form
         var tips = new ToolTip();
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
         Dictionary<string, string> saved = LoadIni();
+        root.Controls.Add(VideoGroup(saved, tips));
         GroupBox gb = null;
         FlowLayoutPanel inner = null;
         foreach (Flag f in Flags)
@@ -87,7 +98,14 @@ class Launcher : Form
         var log = new Button { Text = "Abrir live.err.log", AutoSize = true };
         log.Click += delegate { OpenLog(); };
         var reset = new Button { Text = "Padrao", AutoSize = true };
-        reset.Click += delegate { foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default; };
+        reset.Click += delegate
+        {
+            foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
+            res.SelectedIndex = Array.IndexOf(Resolutions, DefaultRes);
+            aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
+            dynWidth.Checked = true;
+            fullscreen.Checked = false;
+        };
         buttons.Controls.Add(play);
         buttons.Controls.Add(log);
         buttons.Controls.Add(reset);
@@ -98,6 +116,47 @@ class Launcher : Form
         Controls.Add(root);
         AcceptButton = play;
         FormClosing += delegate { SaveIni(); };
+    }
+
+    GroupBox VideoGroup(Dictionary<string, string> saved, ToolTip tips)
+    {
+        var gb = new GroupBox { Text = "Video", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
+        gb.Controls.Add(inner);
+        string v;
+
+        res.Items.AddRange(ResolutionLabels);
+        int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : DefaultRes);
+        res.SelectedIndex = ri >= 0 ? ri : Array.IndexOf(Resolutions, DefaultRes);
+        tips.SetToolTip(res, "Altura do quadro nativo em pixels (WOTM_RES); a largura sai da proporcao. Independe do tamanho da janela: " +
+            "a janela so amplia ou reduz o quadro.");
+        inner.Controls.Add(Row("Resolucao (linhas)   [WOTM_RES]", res));
+
+        dynWidth.Checked = !saved.TryGetValue(":DynWidth", out v) || v == "1";
+        tips.SetToolTip(dynWidth, "Marcado: a largura acompanha a janela (ou o monitor, em tela cheia), de 4:3 a 32:9. " +
+            "Desmarcado: proporcao fixa (WOTM_ASPECT), com faixas pretas se a janela nao bater.");
+        inner.Controls.Add(dynWidth);
+
+        aspect.Items.AddRange(Aspects);
+        int ai = Array.IndexOf(Aspects, saved.TryGetValue("WOTM_ASPECT", out v) ? v : DefaultAspect);
+        aspect.SelectedIndex = ai >= 0 ? ai : Array.IndexOf(Aspects, DefaultAspect);
+        tips.SetToolTip(aspect, "4:3 = tela original do jogo.");
+        inner.Controls.Add(Row("Proporcao fixa   [WOTM_ASPECT]", aspect));
+        aspect.Enabled = !dynWidth.Checked;
+        dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
+
+        fullscreen.Checked = saved.TryGetValue("WOTM_FULLSCREEN", out v) && v == "1";
+        tips.SetToolTip(fullscreen, "Tela cheia sem borda no monitor da janela. Sem ela a janela abre no tamanho da resolucao (reduzida se nao couber).");
+        inner.Controls.Add(fullscreen);
+        return gb;
+    }
+
+    static FlowLayoutPanel Row(string label, Control c)
+    {
+        var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        p.Controls.Add(new Label { Text = label, AutoSize = false, Size = new Size(210, 23), TextAlign = ContentAlignment.MiddleLeft });
+        p.Controls.Add(c);
+        return p;
     }
 
     Dictionary<string, string> LoadIni()
@@ -119,6 +178,10 @@ class Launcher : Form
     {
         var lines = new List<string>();
         foreach (var kv in boxes) lines.Add(kv.Key.Key + "|" + (kv.Value.Checked ? "1" : "0"));
+        lines.Add("WOTM_RES|" + Resolutions[res.SelectedIndex]);
+        lines.Add("WOTM_ASPECT|" + Aspects[aspect.SelectedIndex]);
+        lines.Add(":DynWidth|" + (dynWidth.Checked ? "1" : "0"));
+        lines.Add("WOTM_FULLSCREEN|" + (fullscreen.Checked ? "1" : "0"));
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
@@ -169,6 +232,11 @@ class Launcher : Form
             if (kv.Value.Checked) psi.EnvironmentVariables[name] = value;
             else psi.EnvironmentVariables.Remove(name);
         }
+        psi.EnvironmentVariables["WOTM_RES"] = Resolutions[res.SelectedIndex];
+        if (dynWidth.Checked) psi.EnvironmentVariables.Remove("WOTM_ASPECT");
+        else psi.EnvironmentVariables["WOTM_ASPECT"] = Aspects[aspect.SelectedIndex];
+        if (fullscreen.Checked) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "1";
+        else psi.EnvironmentVariables.Remove("WOTM_FULLSCREEN");
         try
         {
             Process.Start(psi);

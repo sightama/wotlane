@@ -276,15 +276,47 @@ static float viewAspect()
     const float sh = static_cast<float>(GetScreenHeight());
     return sh > 0.f ? std::clamp(static_cast<float>(GetScreenWidth()) / sh, 4.f / 3.f, 32.f / 9.f) : 4.f / 3.f;
 }
-// Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): a janela de 960x720 do runtime vira 720 de altura na proporcao
+// Altura do quadro nativo em pixels (WOTM_RES=<linhas>, padrao 720; a tela do PS2 tem 448, 224 por campo); a largura sai da proporcao.
+// O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
+static int renderHeight()
+{
+    static const int h = []() {
+        const char *s = std::getenv("WOTM_RES");
+        const int v = s ? std::atoi(s) : 0;
+        return v > 0 ? std::clamp(v, 224, 4320) : 720;
+    }();
+    return g_force43 ? 720 : h;
+}
+// Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): WOTM_FULLSCREEN=1 vai para a tela cheia sem borda (proporcao
+// do monitor; com WOTM_ASPECT fixo o quadro fica com faixas); senao a janela de 960x720 do runtime vira o tamanho do quadro nativo
+// (renderHeight na proporcao), reduzido para caber no monitor. O quadro nao depende da janela: so a ampliacao final muda.
 static void initWindowAspect()
 {
     static bool done = false;
     if (done)
         return;
     done = true;
+    if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
+    {
+        ToggleBorderlessWindowed();
+        return;
+    }
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
-    SetWindowSize(static_cast<int>(std::lround(720.f * a)), 720);
+    float h = static_cast<float>(renderHeight()), w = h * a;
+    const int mon = GetCurrentMonitor();
+    const float mw = 0.9f * GetMonitorWidth(mon), mh = 0.9f * GetMonitorHeight(mon);
+    if (mw > 0.f && mh > 0.f)
+    {
+        const float k = std::min({1.f, mw / w, mh / h});
+        w *= k;
+        h *= k;
+    }
+    SetWindowSize(static_cast<int>(std::lround(w)), static_cast<int>(std::lround(h)));
+    if (mw > 0.f && mh > 0.f)
+    {
+        const Vector2 p = GetMonitorPosition(mon);
+        SetWindowPosition(static_cast<int>(p.x + (mw / 0.9f - w) * 0.5f), static_cast<int>(p.y + (mh / 0.9f - h) * 0.5f));
+    }
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
@@ -382,8 +414,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
 #endif
     S.scene.screenTexture = []() { return S.rts[S.cur ^ 1].texture.id; };   // texId 0: quadro anterior
-    // quadro nativo: 720 de altura na proporcao da tela (wotm_live::viewAspect); a tela do GS e a faixa 4:3 central
-    const int RH = 720, RW = static_cast<int>(std::lround(RH * wotm_live::viewAspect()));
+    // quadro nativo: renderHeight de altura (WOTM_RES) na proporcao da tela (wotm_live::viewAspect); a tela do GS e a faixa 4:3 central
+    const int RH = wotm_live::renderHeight(), RW = static_cast<int>(std::lround(RH * wotm_live::viewAspect()));
     S.scene.wide = static_cast<float>(RW) / (RH * 4.f / 3.f);
     wotm_live::Capture &cap = wotm_live::capture();
     cap.wide.store(S.scene.wide, std::memory_order_relaxed);
@@ -474,7 +506,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
 
     S.cur ^= 1;
     for (RenderTexture2D &r : S.rts)
-        if (r.id != 0 && r.texture.width != RW)   // proporcao mudou (janela redimensionada): refaz os dois
+        if (r.id != 0 && (r.texture.width != RW || r.texture.height != RH))   // proporcao mudou (janela redimensionada): refaz os dois
         {
             UnloadRenderTexture(r);
             r = RenderTexture2D{};
