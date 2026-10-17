@@ -189,6 +189,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 
 #if __has_include("wotm_native.hpp")
 #include "wotm_native.hpp"
+#include "wotm_cheats.h"   // menu de debug (F1)
 #include <filesystem>
 #define WOTM_HAVE_NATIVE 1
 
@@ -605,6 +606,60 @@ static bool wotmDrawNative(const uint8_t *rdram)
             std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps", gameFps, screenFps);
             DrawText(line, 11, 11, 20, BLACK);
             DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
+        }
+    }
+
+    {   // menu de debug (F1 abre/fecha; com ele aberto, 1..6 alternam). Setas e Enter sao do pad (ps2_pad.cpp): nao servem aqui.
+        // So escreve g_wotmCheats; quem aplica e a thread do EE (monsterUpdateCheats, wotm_overrides.cpp).
+        static bool open = false;
+        if (IsKeyPressed(KEY_F1))
+            open = !open;
+        uint32_t c = g_wotmCheats.load(std::memory_order_relaxed);
+        const uint32_t st = (c & kCheatStaminaMask) / kCheatStamina1;
+        if (open)
+        {
+            uint32_t n = c;
+            if (IsKeyPressed(KEY_ONE)) n ^= kCheatInvincible;
+            if (IsKeyPressed(KEY_TWO)) n = (n & ~kCheatStaminaMask) | ((st + 1u) % 3u) * kCheatStamina1;
+            if (IsKeyPressed(KEY_THREE)) n ^= kCheatSpecial;
+            if (IsKeyPressed(KEY_FOUR)) n ^= kCheatCloak;
+            if (IsKeyPressed(KEY_FIVE)) n ^= kCheatGod;
+            if (IsKeyPressed(KEY_SIX)) g_wotmCheatWin = true;
+            if (n != c)
+            {
+                g_wotmCheats = n;
+                std::fprintf(stderr, "[debug] trapacas 0x%x -> 0x%x\n", c, n);
+                c = n;
+            }
+        }
+        const uint32_t s2 = (c & kCheatStaminaMask) / kCheatStamina1;
+        static const char *const stName[3] = {"normal", "cheia", "furia (130)"};
+        const int fs = 20, x = 10, top = 40;
+        if (open)
+        {
+            char lines[8][64];
+            int nl = 0;
+            std::snprintf(lines[nl++], 64, "DEBUG (F1 fecha)");
+            std::snprintf(lines[nl++], 64, "1  Invencivel        %s", (c & kCheatInvincible) ? "LIGADO" : "-");
+            std::snprintf(lines[nl++], 64, "2  Stamina           %s", stName[s2]);
+            std::snprintf(lines[nl++], 64, "3  Especial pronto   %s", (c & kCheatSpecial) ? "LIGADO" : "-");
+            std::snprintf(lines[nl++], 64, "4  Cloak (invisivel) %s", (c & kCheatCloak) ? "LIGADO" : "-");
+            std::snprintf(lines[nl++], 64, "5  Modo deus do jogo %s", (c & kCheatGod) ? "LIGADO" : "-");
+            std::snprintf(lines[nl++], 64, "6  Vencer a luta (derruba as IAs)");
+            int w = 0;
+            for (int i = 0; i < nl; ++i)
+                w = std::max(w, MeasureText(lines[i], fs));
+            DrawRectangle(x - 6, top - 6, w + 12, nl * (fs + 4) + 8, Color{0, 0, 0, 170});
+            for (int i = 0; i < nl; ++i)
+                DrawText(lines[i], x, top + i * (fs + 4), fs, i == 0 ? YELLOW : RAYWHITE);
+        }
+        else if (c)
+        {   // fechado: lembrete curto do que esta ligado
+            char line[96];
+            std::snprintf(line, sizeof line, "debug:%s%s%s%s%s", (c & kCheatInvincible) ? " INV" : "", s2 == 1 ? " STA" : (s2 == 2 ? " FURIA" : ""),
+                          (c & kCheatSpecial) ? " ESP" : "", (c & kCheatCloak) ? " CLOAK" : "", (c & kCheatGod) ? " DEUS" : "");
+            DrawText(line, x + 1, top + 1, fs, BLACK);
+            DrawText(line, x, top, fs, ORANGE);
         }
     }
 

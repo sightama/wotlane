@@ -36,6 +36,11 @@ bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread 
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPolys, lido na entrada do dmaData   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
 
+// Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
+#include "wotm_cheats.h"
+std::atomic<uint32_t> g_wotmCheats{0};
+std::atomic<bool> g_wotmCheatWin{false};
+
 namespace
 {
     constexpr uint32_t kTimerGetUpdateRate = wotm::fn::timerGetUpdateRate__Fv;
@@ -235,24 +240,131 @@ namespace
             WRITE8(sw + 8, 0);                                        // whichChild
     }
 
-    // WOTM_CLOAK=1 (teste do CLOAK na checagem VU1): na entrada de Monster::update (0x15B488) do jogador (m_monsters[0]) sem CLOAK
-    // (m_cloaked, +0xEF), chama Monster::setCloakOn (0x162CD0), como o power-up; quando o tempo acaba, liga de novo no quadro seguinte.
-    constexpr uint32_t kMonsterUpdate = wotm::fn::update__7Monster, kSetCloakOn = wotm::fn::setCloakOn__7Monster;
-    PS2Runtime::RecompiledFunction g_origMonsterUpdate = nullptr, g_setCloakOn = nullptr;
+    // Trapacas de debug (menu F1 do wotm_live.inc, ou WOTM_CHEATS no inicio): aplicadas na thread do EE, na entrada de Monster::update
+    // (0x15B488) de cada jogador (m_monsters[0 .. m_numPlayers-1]), antes da logica do quadro dele. A janela so escreve g_wotmCheats.
+    //   invencivel: Monster::takeDamage (0x15FE40) volta na entrada quando a vitima e um jogador (nem o dano forcado passa).
+    //   stamina:    1 = cheia (cur = max 100, sem exaustao); 2 = no nivel de furia (cur = maxLevel, 130).
+    //   especial:   m_specialWeapon (+0xF3) = 1, a liberacao que o drainSpecial tira e o isSpecialAvailable le.
+    //   cloak:      sem CLOAK (m_cloaked, +0xEF), chama Monster::setCloakOn (0x162CD0), como o power-up; acabou o tempo, liga de novo.
+    //   deus:       m_godMode (+0xE9), o modo do proprio jogo: sem dano, vida, stamina e especial cheios a cada quadro.
+    //   vencer:     acao de uma vez: takeDamage(100000, force, jogador) em cada IA viva (m_monsters[4 + i], i < m_numAIs).
+    // WOTM_CLOAK=1 (teste do CLOAK na checagem VU1) e o mesmo que WOTM_CHEATS=cloak.
+    constexpr uint32_t kMonsterUpdate = wotm::fn::update__7Monster, kSetCloakOn = wotm::fn::setCloakOn__7Monster,
+                       kTakeDamage = wotm::fn::takeDamage__7MonsterfbP7Monster;
+    PS2Runtime::RecompiledFunction g_origMonsterUpdate = nullptr, g_setCloakOn = nullptr, g_origTakeDamage = nullptr;
+    uint32_t g_godApplied = 0;
+    int g_autoWinSecs = 0;   // WOTM_CHEATS=vencer=N   // bits dos slots de jogador em que o m_godMode foi ligado por aqui (para desligar so esses)
 
-    void monsterUpdateCloaked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    bool isPlayerMonster(uint8_t *rdram, uint32_t m, int *slot = nullptr)
+    {
+        int32_t players = static_cast<int32_t>(FAST_READ32(kShell + 0x2BB4));   // m_numPlayers
+        if (players < 1 || players > 4)
+            players = 1;
+        for (int32_t i = 0; i < players; ++i)
+            if (m && FAST_READ32(kGame + 0x120380 + 4 * i) == m)
+            {
+                if (slot)
+                    *slot = i;
+                return true;
+            }
+        return false;
+    }
+
+    void callTakeDamage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t victim, float damage, uint32_t source)
+    {
+        const R5900Context saved = *ctx;
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(victim)));
+        ctx->r[5] = _mm_set_epi64x(0, 1);   // force
+        ctx->r[6] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(source)));
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->f[12] = damage;
+        ctx->pc = kTakeDamage;
+        g_origTakeDamage(rdram, ctx, runtime);
+        *ctx = saved;
+    }
+
+    void takeDamageCheat(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTakeDamage && (g_wotmCheats.load(std::memory_order_relaxed) & kCheatInvincible) && isPlayerMonster(rdram, GPR_U32(ctx, 4)))
+        {
+            static uint32_t blocked = 0;
+            if (++blocked <= 3 || blocked % 100 == 0)
+                std::fprintf(stderr, "[debug] invencivel: dano bloqueado no jogador (%u)\n", blocked);
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_origTakeDamage(rdram, ctx, runtime);
+    }
+
+    void monsterUpdateCheats(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4);
-        static uint32_t calls = 0;
-        if (++calls <= 2) std::fprintf(stderr, "[wotm] Monster::update pc %x monstro %x jogador %x\n", ctx->pc, m, READ32(kGame + 0x120380));
-        if (ctx->pc == kMonsterUpdate && m && m == READ32(kGame + 0x120380) && !(READ32(m + 0xEC) & 0xFF000000u))
+        int slot = 0;
+        if (ctx->pc == kMonsterUpdate && isPlayerMonster(rdram, m, &slot))
         {
-            const R5900Context saved = *ctx;
-            ctx->pc = kSetCloakOn;
-            g_setCloakOn(rdram, ctx, runtime);
-            static uint32_t n = 0;
-            if (++n <= 3) std::fprintf(stderr, "[wotm] CLOAK ligado no monstro %x (m_cloaked %u)\n", m, READ32(m + 0xEC) >> 24);
-            *ctx = saved;
+            const uint32_t c = g_wotmCheats.load(std::memory_order_relaxed);
+            const uint32_t st = (c & kCheatStaminaMask) / kCheatStamina1;
+            if (st == 1u)
+            {
+                WRITE32(m + 0x470, READ32(m + 0x460));   // StaminaMeter (+0x460): cur = max
+                WRITE32(m + 0x474, 0);                    // recoverPool
+                WRITE32(m + 0x478, 0);                    // exhaustTimer
+                WRITE32(m + 0x480, 0);                    // exhausted
+            }
+            else if (st == 2u)
+            {
+                WRITE32(m + 0x470, READ32(m + 0x468));   // cur = maxLevel (furia)
+                WRITE32(m + 0x474, 0);
+                WRITE32(m + 0x478, 0);
+                WRITE32(m + 0x480, 0);
+            }
+            if (c & kCheatSpecial)
+                WRITE8(m + 0xF3, 1);   // m_specialWeapon
+            const uint32_t bit = 1u << slot;
+            if (c & kCheatGod)
+            {
+                WRITE8(m + 0xE9, 1);   // m_godMode
+                g_godApplied |= bit;
+            }
+            else if (g_godApplied & bit)
+            {
+                WRITE8(m + 0xE9, 0);
+                g_godApplied &= ~bit;
+            }
+            if ((c & kCheatCloak) && g_setCloakOn && !READ8(m + 0xEF))   // m_cloaked
+            {
+                const R5900Context saved = *ctx;
+                ctx->pc = kSetCloakOn;
+                g_setCloakOn(rdram, ctx, runtime);
+                *ctx = saved;
+            }
+            if (slot == 0 && g_autoWinSecs > 0)
+            {   // WOTM_CHEATS=vencer=N: a cada N segundos de jogo (60 quadros do g_frame por segundo), o mesmo pedido da tecla 6
+                static uint32_t last = 0;
+                const uint32_t f = READ32(wotm::sym::g_frame);
+                if (last == 0 || f < last)
+                    last = f;
+                else if (f - last >= static_cast<uint32_t>(g_autoWinSecs) * 60u)
+                {
+                    last = f;
+                    g_wotmCheatWin = true;
+                }
+            }
+            if (slot == 0 && g_wotmCheatWin.exchange(false))
+            {
+                const int32_t ais = static_cast<int32_t>(READ32(kGame + 0x1203E0));   // m_numAIs
+                int killed = 0;
+                for (int32_t i = 0; i < ais && i < 4; ++i)
+                {
+                    const uint32_t ai = READ32(kGame + 0x120390 + 4 * i);   // m_monsters[4 + i]
+                    if (ai && !READ8(ai + 0xE8))                           // m_dead
+                    {
+                        callTakeDamage(rdram, ctx, runtime, ai, 100000.0f, m);
+                        ++killed;
+                    }
+                }
+                std::fprintf(stderr, "[debug] vencer a luta: %d IA(s) derrubada(s) de %d\n", killed, ais);
+            }
         }
         g_origMonsterUpdate(rdram, ctx, runtime);
     }
@@ -541,11 +653,28 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
         runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
-    if (std::getenv("WOTM_CLOAK") && (g_origMonsterUpdate = runtime.lookupFunction(kMonsterUpdate)) &&
-        (g_setCloakOn = runtime.lookupFunction(kSetCloakOn)))
+    // Trapacas de debug (menu F1): sempre instaladas; WOTM_CHEATS=inv,stam,furia,esp,cloak,deus liga desde o inicio
+    if ((g_origMonsterUpdate = runtime.lookupFunction(kMonsterUpdate)) && (g_origTakeDamage = runtime.lookupFunction(kTakeDamage)))
     {
-        runtime.registerFunction(kMonsterUpdate, &monsterUpdateCloaked);
-        std::fprintf(stderr, "[wotm] jogador sempre com CLOAK (WOTM_CLOAK)\n");
+        g_setCloakOn = runtime.lookupFunction(kSetCloakOn);
+        runtime.registerFunction(kMonsterUpdate, &monsterUpdateCheats);
+        runtime.registerFunction(kTakeDamage, &takeDamageCheat);
+        uint32_t c = std::getenv("WOTM_CLOAK") ? kCheatCloak : 0u;
+        if (const char *e = std::getenv("WOTM_CHEATS"))
+        {
+            const std::string s = std::string(",") + e + ",";
+            if (s.find(",inv,") != std::string::npos) c |= kCheatInvincible;
+            if (s.find(",stam,") != std::string::npos) c = (c & ~kCheatStaminaMask) | kCheatStamina1;
+            if (s.find(",furia,") != std::string::npos) c = (c & ~kCheatStaminaMask) | 2u * kCheatStamina1;
+            if (s.find(",esp,") != std::string::npos) c |= kCheatSpecial;
+            if (s.find(",cloak,") != std::string::npos) c |= kCheatCloak;
+            if (s.find(",deus,") != std::string::npos) c |= kCheatGod;
+            if (const size_t w = s.find(",vencer="); w != std::string::npos)
+                g_autoWinSecs = std::atoi(s.c_str() + w + 8);
+        }
+        g_wotmCheats = c;
+        if (c || g_autoWinSecs > 0)
+            std::fprintf(stderr, "[wotm] trapacas de debug ligadas desde o inicio: 0x%x, vencer a cada %d s (WOTM_CHEATS/WOTM_CLOAK)\n", c, g_autoWinSecs);
     }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
