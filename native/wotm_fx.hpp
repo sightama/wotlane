@@ -29,7 +29,7 @@
 //   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat)
 // Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8; pos.w = lado e bits baixos = celula/espelhamento).
 // Sprine: Particles::sprineQuads (sprites ao longo da curva do microprograma). Ainda aproximado: as faixas (stripe, sweepTrail) ligam
-// particulas consecutivas; kite, wake e dustTrail viram sprites;
+// particulas consecutivas; kite vira sprite (wake e dustTrail seguem o microprograma: wakeVu, dustTrailVu);
 // a cauda das linhas usa a matriz atual.
 #pragma once
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
@@ -739,6 +739,49 @@ public:
         return d;
     }
 
+    // wake (16): wakePacketInit e o microprograma 0x3470. Um triangulo por particula com os dados do pacote, que fica logo antes de
+    // pos[] (UNPACK de 25 qwords em q264; q264 = pos - 0x19C):
+    //  - q264-q279: 8 conjuntos de ST (STQ) de um triangulo equilatero que circunscreve o quadrado [0,1]^2 da textura (vertices
+    //    (-0,366; 0), (1,366; 0), (0,5; 1,5) em ordens diferentes): v0 = q[264+k].xy, v1 = q[264+k].zw, v2 = q[272+k].xy, k = bits & 7;
+    //  - q282: cor RGB (inteiros, 0x80 = 1,0) de colors[colorIndex], a mesma nos tres vertices (o fxId 0x93 a troca a cada quadro);
+    //  - q283-q285: curvas de tamanho (x, z) e de alfa (y, w) pela idade w de pos.w (0..1): ate a transicao (q283.z / q283.w) uma
+    //    parabola q285 + q284*w + q283*w^2, depois a reta q285.zw + q284.zw*w (tamanho maxSize + expansao; alfa de minAlpha subindo
+    //    128/alphaFadeIn por vida ate a reta que desce 128/alphaFadeOut e chega a maxAlpha em w = 1);
+    //  - q287, q288: eixos A = 0,5 * linha 0 e B = -0,25 * linha 0 + 0,433 * linha 2 da StaticMat do emissor (fx+0x2D20; com
+    //    info.attribs & 0x4000, X e Y do mundo). Vertices pos + S*A, pos + S*B e pos - S*(A + B).
+    // Os 12 bits baixos de pos.w sao fixos por particula (wakeEmit; wakeAndKiteMove preserva a mascara 0xFFF): bits 3-11 escalam o
+    // tamanho, S = (bits & 0xFF8) / 4096 * tamanho(w); bits 0-2 escolhem o conjunto de ST. Alfa = min(alfa(w), 128) truncado (o GS
+    // pega o byte baixo). Descarta com W > 4000 (MAC Sw|Zw de W - 4000).
+    struct WakeVu { bool visible; float c[3][3]; float uv[3][2]; uint32_t rgba; };
+    static WakeVu wakeVu(const Ram &ram, uint32_t b, int i, float W) {
+        WakeVu r{};
+        const uint32_t pos = ram.u32(b + fxoff::pos), q264 = pos - 0x19C, pw = pos + 16 * uint32_t(i);
+        if (!(W <= 4000.f) || !ram.ok(q264, 0x19C) || !ram.ok(pw, 16)) return r;
+        auto q = [&](int k, int c) { return ram.f32(q264 + 16 * uint32_t(k - 264) + 4 * uint32_t(c)); };
+        const float w = ram.f32(pw + 12);
+        const uint32_t bits = ram.u32(pw + 12) & 0xFFFF;
+        const float w2 = w * w;
+        const float size = q(283, 2) - w < 0.f ? q(285, 2) + q(284, 2) * w : q(285, 0) + q(284, 0) * w + q(283, 0) * w2;
+        const float alpha = q(283, 3) - w < 0.f ? q(285, 3) + q(284, 3) * w : q(285, 1) + q(284, 1) * w + q(283, 1) * w2;
+        const float S = float(bits & 0xFF8) / 4096.f * size;
+        float A[3], B[3];
+        for (int a = 0; a < 3; ++a) { A[a] = q(287, a) * S; B[a] = q(288, a) * S; }
+        for (int a = 0; a < 3; ++a) {
+            const float p = ram.f32(pw + 4 * uint32_t(a));
+            r.c[0][a] = p + A[a]; r.c[1][a] = p + B[a]; r.c[2][a] = p - A[a] - B[a];
+        }
+        const int k = int(bits & 7);
+        r.uv[0][0] = q(264 + k, 0); r.uv[0][1] = q(264 + k, 1);
+        r.uv[1][0] = q(264 + k, 2); r.uv[1][1] = q(264 + k, 3);
+        r.uv[2][0] = q(272 + k, 0); r.uv[2][1] = q(272 + k, 1);
+        const float am = std::min(alpha, 128.f);
+        const int ai = std::isfinite(am) ? int(am) : 0;
+        const uint32_t q282 = q264 + 16 * 18;
+        r.rgba = (ram.u32(q282) & 255) | ((ram.u32(q282 + 4) & 255) << 8) | ((ram.u32(q282 + 8) & 255) << 16) | (uint32_t(ai & 255) << 24);
+        r.visible = std::isfinite(S);
+        return r;
+    }
+
     static bool isStrip(uint32_t type) { return type == FX_STRIPE || type == FX_SWEEPTRAIL; }
 
     // Neblina das particulas: o contexto comum dos microprogramas (qwords 0-7, de 0x256B90) leva fogFA em q4.w e fogFB em q5.w, os
@@ -1135,7 +1178,18 @@ public:
             // microcodigo de sprites: meio-lado na tela = pos.w / 2 * foco / profundidade, limitado a foco / 2 (pos.w e o lado em mundo;
             // medido em sprite e texSprite). Os outros tipos que caem aqui continuam com pos.w inteiro (nao conferidos).
             const float depth = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
-            float half = (s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]), cap = 0.5f;
+            if (s.type == FX_WAKE) {   // microprograma 0x3470 (wakeVu): o triangulo e o ST do pacote; o quad degenera (canto 3 = canto 0)
+                const WakeVu wv = wakeVu(ram, b, i, depth);
+                if (!wv.visible) continue;
+                for (int k = 0; k < 4; ++k) {
+                    const int v = k < 3 ? k : 0;
+                    for (int a = 0; a < 3; ++a) c[k][a] = wv.c[v][a];
+                    uv[k][0] = wv.uv[v][0]; uv[k][1] = wv.uv[v][1];
+                }
+                f(i, c, uv);
+                continue;
+            }
+            float half =(s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]), cap = 0.5f;
             uint32_t dustCell = 0;
             if (s.type == FX_DUSTTRAIL) {
                 const DustTrailVu d = dustTrailVu(ram, b, i, p[3], depth);
@@ -1190,15 +1244,6 @@ public:
                 V(i, v);
                 if (!striteTriangle(ram, b, p, v, c))   // sem a camera do jogo: ponta no meio dos cantos 0 e 3 (aproximacao antiga)
                     for (int a = 0; a < 3; ++a) c[0][a] = c[3][a] = cpos[a] - ax[a];
-            } else if (s.type == FX_WAKE) {
-                // triangulo equilatero no plano XY do mundo, centrado em pos, um vertice em +X; raio pelo pos.w.
-                // Medido so no preset 146 (minSize = maxSize = 90), w de 0 a 0,94: R = 45 + 120 w + 7,5 s (2 - s), s = min(w / 0,235, 1)
-                // (erro < 0,4 unidade; o termo que satura e ajuste, nao formula do microprograma).
-                const float sw = std::min(std::fabs(p[3]) / 0.235f, 1.f);
-                const float R = 0.5f * ram.f32(b + fxoff::minSize) + 120.1f * p[3] + 7.5f * sw * (2.f - sw);
-                const float dx[3] = {1.f, -0.5f, -0.5f}, dy[3] = {0.f, 0.8660254f, -0.8660254f};
-                for (int k = 0; k < 3; ++k) { c[k][0] = p[0] + R * dx[k]; c[k][1] = p[1] + R * dy[k]; c[k][2] = p[2]; }
-                for (int a = 0; a < 3; ++a) c[3][a] = c[0][a];
             }
             uv[0][0] = u0; uv[0][1] = v1; uv[1][0] = u1; uv[1][1] = v1;
             uv[2][0] = u1; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
@@ -1349,6 +1394,10 @@ private:
                 for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
                 const float W = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
                 c0 = dustTrailVu(ram, b, i, ram.f32(pos + 16 * uint32_t(i) + 12), W).rgba;
+            } else if (s.type == FX_WAKE) {   // cor fixa do pacote e alfa pela curva do microprograma (wakeVu)
+                float p[3];
+                for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
+                c0 = wakeVu(ram, b, i, view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3]).rgba;
             }
             const uint32_t c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
             for (int k = 0; k < 4; ++k) {
