@@ -43,6 +43,24 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 - **Feitos que a checagem ainda conta (não é falta do port; detalhes em "Corrigido"):** HUD do `hier` (sobra só a filtragem nas bordas, `ref HUD 1f47 | nat HUD 1f47` no `luta_hud`); `ScreenPolys` (a checagem lista `ref path3 sprites x2`, porque o PATH3 da referência só entra no inventário por caixa, e o mapa de pixels o mostra como `nat HUD ScreenPolys`); fades (os `TELA INTEIRA` do PATH3 contam como só da referência: chegam ao nativo por hooks na hora em que o jogo monta o pacote, que o replay não roda; a limpeza de tela o nativo faz por conta própria).
 - **Limites da referência (não é bug do port):** o GS em software não pinta o chão mais próximo em alguns quadros nem o marcador de vida do `ScreenPolys` (T4HL em `tbp 1000`; o PCSX2 o mostra, `docs/screenshots/2026-10-15_pcsx2_x_nativo_metro.png`). A faixa preta da luta no `g_frame` 300, antes contada aqui como céu sem pintar, era a *letterbox* (resolvida com o HUD).
 
+**Bugs vistos jogando (reportados pelo dono em 2026-10-16; nenhum conferido ainda, ordem do relato):**
+1. **Pedestres** continuam sem aparecer.
+2. **Fumaças** bem diferentes do retail (PCSX2). Não se sabe se o GS da checagem é parecido com o PCSX2 ou com o nativo.
+3. **Power-ups de vida e energia** parecem mais escuros do que deveriam (pode ser impressão; conferir com o PCSX2).
+4. **Partículas de destruição dos prédios** parecem pipoca: o alfa delas parece errado ou não aplicado.
+5. **Goliath Prime** com as texturas bem erradas.
+6. **Menu 1 player -> Free-for-All -> X CPU monster:** a tela seguinte deveria ter texto e não mostra nada.
+7. **Seleção de fase:** o logo do jogo do menu principal continua na tela.
+8. **Logo do menu principal** parece meio transparente no nativo e não deveria (a confirmar).
+9. **Sombra ao escalar prédio** vira um feixe grande que percorre o prédio todo (a confirmar).
+10. **Menu de pause:** sumiu o contorno em volta das opções.
+11. **Barreira azul nos limites da fase:** ao esbarrar, o efeito pisca (flicker) e sai horizontal quando deveria ser vertical.
+12. **Corda:** o especial do Ultra-V de puxar o inimigo não aparece; na introdução da primeira fase da aventura, as cordas dos dois helicópteros com braceletes no Congar aparecem erradas.
+13. **Entrada da partida:** às vezes uma luz verde no centro da tela que some (provavelmente o sumiço é o fade-in, não a luz apagando).
+14. **Vitória na campanha:** a tela apaga enquanto ainda deveria mostrar os tokens e a pergunta de salvar.
+
+Também em aberto, de relatos anteriores (2026-10-11, estado de 2026-10-14): **explosão do X + Quadrado opaca** (o dono acha que é textura, não mistura) e **texturas animadas** (paredes/limites do mapa e o Kineticlops ficam estáticos no nativo).
+
 **Resíduos das correções já feitas:**
 - **Lens flare, resíduo:** o desenho bate com o VU1 do runtime (linha `lens flare` da checagem, em "Corrigido"), mas o teste de oclusão do nativo (profundidade nativa no lugar do Z do GS) não tem conferência: a checagem compara a partir da intensity que o VU1 recebeu, e o GS emulado não tem a cena. Sem comparação com o PCSX2 na tela.
 - **Cor dos monstros, resíduo** (item 16): no Togera sobra ~1,2% dos vértices com cor diferente, para os dois lados. O fator de contexto do q5 não é a causa (ver "Corrigido"). Medir exige comparar o q5 do `hdr` com o `DrawItem::color` por objeto: entre lutas iguais, o total de `cor difere` varia de 1,1% a 1,9% (explosões e destruição mudam de uma para outra).
