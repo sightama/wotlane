@@ -2148,6 +2148,9 @@ public:
             { static const int onlySl = std::getenv("WOTM_ONLYSLOT") ? std::atoi(std::getenv("WOTM_ONLYSLOT")) : -1; if (onlySl >= 0 && int(sl) != onlySl) continue; }   // diagnostico: so este slot de textura
             uint64_t key = wire ? 0 : texKey(ram, list[i], texRemap(sl));
             if (far2near) {
+                // Distancia da origem do OBJECT ao olho; empate (pecas com a mesma origem) na ordem da travessia. O retail ordena pela
+                // faixa da OT de alfa (pktLinkAlphaObjAsm: vf30.x do VU0 sobre a esfera do objeto, ultimo inserido sai primeiro), mas
+                // nem a profundidade da esfera pela camera nem o desempate LIFO reproduzem a tela do drive-in (tex 76 antes do logo, tex 75).
                 const M4 &m = list[i].m;
                 const float dx = m.m[3][0] - eye_[0], dy = m.m[3][1] - eye_[1], dz = m.m[3][2] - eye_[2];
                 const float d2 = dx * dx + dy * dy + dz * dz;
@@ -2159,13 +2162,7 @@ public:
             if (!wire && mdi && mdi->abe && gsBlendFactors(list[i].blend).doubled) order.push_back({key, i, sl | kSlotDouble});   // 2o passe, logo depois
             }
         }
-        // Empate no passe translucido (mesma distancia: as partes de um mesmo personagem): o pktLinkAlphaObjAsm poe cada objeto no
-        // comeco da lista da sua faixa de profundidade da OT de alfa, entao o ultimo da travessia sai primeiro. O Kineticlops na cor 3
-        // depende disso: o 0x81 (tex 139, depois na arvore) subtrai as rachaduras do fundo antes de o 0x46 (tex 140) escurecer o resto.
-        std::stable_sort(order.begin(), order.end(), [far2near](const Ent &a, const Ent &b) {
-            if (a.key != b.key) return a.key < b.key;
-            return far2near && a.item > b.item;
-        });
+        std::stable_sort(order.begin(), order.end(), [](const Ent &a, const Ent &b) { return a.key < b.key; });
 
         SpriteView sprView;   // eixos e focos para os ObjSprite (montado no primeiro item que tiver)
         EnvView envV;         // camera do UV do mapa de ambiente (idem, no primeiro item com DrawItem::env)
