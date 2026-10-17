@@ -299,6 +299,7 @@ static void initWindowAspect()
     if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
     {
         ToggleBorderlessWindowed();
+        ClearWindowState(FLAG_WINDOW_TOPMOST);   // o raylib 5.5 poe a janela sem borda sempre por cima (GLFW_FLOATING)
         return;
     }
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;

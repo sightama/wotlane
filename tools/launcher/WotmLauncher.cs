@@ -45,8 +45,8 @@ class Launcher : Form
     };
 
     // Video: altura do quadro nativo (WOTM_RES) e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
-    static readonly string[] Resolutions = { "448", "480", "720", "1080", "1440", "2160" };
-    static readonly string[] ResolutionLabels = { "448 (original do PS2)", "480", "720", "1080", "1440", "2160 (4K)" };
+    static readonly string[] Resolutions = { "448", "720", "1080", "1440", "2160" };
+    static readonly string[] ResolutionLabels = { "448 (original do PS2)", "720", "1080", "1440", "2160" };
     static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
     const string DefaultRes = "720", DefaultAspect = "16:9";
 
