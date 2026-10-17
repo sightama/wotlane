@@ -69,6 +69,7 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "vram: %s (%zu bytes)\n", vramPath.c_str(), vram.size());
     wotm::Ram ram{data.data(), data.size()};
     wotm::Scene scene;
+    scene.fovCull = !useFree;
     scene.vram = {vram.data(), vram.size()};
     if (rtxPath.empty()) {   // padrao: nivel + monstros do jogo, achados por fileStatus (nomes e bases das paletas) no disco extraido
         std::string log;

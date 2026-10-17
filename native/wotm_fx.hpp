@@ -227,16 +227,24 @@ public:
     // wide > 1 (widescreen: largura da tela / largura 4:3): os planos laterais (planes[0][1] e [0][2] do viewSetFov, os de +/- w/2)
     // saem da worldToScreenMat com a borda em |X - 2048| = 320 * wide pixels do GS; perto, cima, baixo e longe continuam os do jogo.
     static bool inViewFov(const Ram &ram, uint32_t b, float wide = 1.f) {
-        constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]
-        const bool ws = wide > 1.001f;
         float c[3], e[3];
         for (int k = 0; k < 3; ++k) { c[k] = ram.f32(b + 0x2C80 + 4 * k); e[k] = ram.f32(b + 0x2C90 + 4 * k); }
+        return inViewVolume(ram, c, e, 0.f, wide);
+    }
+
+    // Caixa (centro c, meia-extensao e) mais esfera de raio r em volta dela, em mundo, contra os 6 planos de worldCtx[0]: o viewInFOV
+    // (r = 0) e o programa 0x0 do VU0 que o hierTraverseAsm roda em cada GROUP e OBJECT (e = 0; vf30 = fovNorms . (centro + eo) e
+    // vf29 = fovNorms1 . (centro + eo) contra -raio, o plano 1.z com o farClip da memoria 0 do VU0, como o fovNormsTP[1][3][2]).
+    // Planos unitarios; o termo sum |n_k| e_k e o fovSigns do jogo.
+    static bool inViewVolume(const Ram &ram, const float c[3], const float e[3], float r, float wide = 1.f) {
+        constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]
+        const bool ws = wide > 1.001f;
         for (uint32_t i = 0; i < 2; ++i)
             for (uint32_t j = 0; j < 3; ++j) {
                 if (ws && i == 0 && j > 0) continue;
-                const uint32_t n = w + 0xF0 + 64 * i + 16 * j, s = w + 0x170 + 64 * i + 16 * j;
-                float d = 0.f;
-                for (uint32_t k = 0; k < 3; ++k) d += ram.f32(n + 4 * k) * (c[k] + e[k] * ram.f32(s + 4 * k));
+                const uint32_t n = w + 0xF0 + 64 * i + 16 * j;
+                float d = r;
+                for (uint32_t k = 0; k < 3; ++k) d += ram.f32(n + 4 * k) * c[k] + std::fabs(ram.f32(n + 4 * k)) * e[k];
                 if (d < ram.f32(w + 0xF0 + 64 * i + 48 + 4 * j)) return false;
             }
         if (!ws) return true;
@@ -250,7 +258,7 @@ public:
         for (float sgn : {1.f, -1.f}) {
             float n[4];
             for (int k = 0; k < 4; ++k) n[k] = h * M3[k] - sgn * (M0[k] - 2048.f * M3[k]);
-            float d = n[3];
+            float d = n[3] + r * std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
             for (int k = 0; k < 3; ++k) d += n[k] * (c[k] - eye[k]) + std::fabs(n[k]) * e[k];
             if (!(d >= 0.f)) return false;
         }

@@ -2055,6 +2055,20 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
 
     wotm_live::g_hideFps = true;
     wotm_live::g_localCollect = true;   // sem jogo rodando: a cena sai da RAM do instantaneo, nao da captura da thread do EE
+    {   // filme do telao do menu (texId 999): sem tocador no replay, o quadro que o tocador deixou na VRAM (CT32 em 0x3BA0, largura
+        // 320, 256x128; wotm_fmv.hpp), como o GS da referencia o amostra
+        static Texture2D movie{};
+        std::vector<uint32_t> px;
+        uint32_t mw = 0, mh = 0;
+        const uint64_t tex0 = 0x3BA0ull | (5ull << 14) | (8ull << 26) | (7ull << 30);
+        if (wotm::gs::decodeTexture({runtime.memory().getGSVRAM(), PS2_GS_VRAM_SIZE}, tex0, px, mw, mh)) {
+            if (!movie.id) {
+                Image im{px.data(), int(mw), int(mh), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                movie = LoadTextureFromImage(im);
+            } else UpdateTexture(movie, px.data());
+            wotm_live::g_replayMovieTex = []() { return movie.id; };
+        }
+    }
     wotm_live::g_force43 = true;   // a referencia do GS e 4:3 (e o quadro fica em 960x720, renderHeight); o recorte abaixo supoe isso
     bool natOk = false;
     for (int pass = 0; pass < 2; ++pass) {   // o 1o desenho de uma fase so carrega (recursos, instantaneo A/B); o 2o desenha

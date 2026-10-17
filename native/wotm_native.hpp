@@ -47,6 +47,7 @@ struct Ram {
 namespace addr {
 constexpr uint32_t world = wotm::sym::world;            // _worldctx *world (ep@0, skyCs@4, eo@0x20, weMat@0x30)
 constexpr uint32_t worldCtx = wotm::sym::worldCtx;         // _worldctx worldCtx[5] (0x1F0 cada)
+constexpr uint32_t g_doFOVGroups = wotm::sym::g_doFOVGroups; // int: o hierTraverseAsm corta GROUP por esfera (Scene::outOfView)
 constexpr uint32_t viewInfo = wotm::sym::viewInfo;         // 5 x 0x14: [0] = _cs* da camera, [1] = viewport*
 constexpr uint32_t worldToScreenMat = wotm::sym::worldToScreenMat; // 5 x 0x40
 constexpr uint32_t paraL = wotm::sym::paraL;            // float[4][4]: linhas x, y, z; colunas = luzes paralelas 0-2 e vetor-meio do especular, x32
@@ -590,6 +591,8 @@ class Scene {
 public:
     // Largura do quadro nativo / largura 4:3 da mesma altura (widescreen Hor+; 1 = tela original). Preenche: wotm_live.inc
     float wide = 1.f;
+    // Corte por esfera contra a vista do jogo, como o hierTraverseAsm (Scene::outOfView); o viewer com camera livre o desliga.
+    bool fovCull = true;
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
@@ -2904,6 +2907,19 @@ private:
         return visible ? c1 : c2;
     }
 
+    // Corte por esfera do hierTraverseAsm: o programa 0x0 do VU0 testa a esfera do no (+0x10 centro, +0x1C raio) contra os planos
+    // da vista (Particles::inViewVolume); fora de algum plano, o OBJECT nao vai ao VU1 (a nao ser com nofov, bit 0 de +0xC) e o GROUP
+    // pula os filhos (com g_doFOVGroups e sem noFOV). O jogo testa no espaco do no com os planos de colunas normalizadas; em mundo o
+    // raio vai pela maior escala da matriz.
+    bool outOfView(const Ram &ram, uint32_t node, const M4 &m) const {
+        if (!fovCull) return false;
+        float c[3], s2 = 0.f;
+        xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), c);
+        for (int i = 0; i < 3; ++i) s2 = std::max(s2, m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
+        static constexpr float kNoBox[3] = {0.f, 0.f, 0.f};
+        return !Particles::inViewVolume(ram, c, kNoBox, ram.f32(node + 0x1C) * std::sqrt(s2), wide);
+    }
+
     bool already(uint32_t n) {
         // lista pequena e ordenada por insercao; o jogo tem ate alguns milhares de nos
         for (uint32_t s : seen_) if (s == n) return true;
@@ -2928,6 +2944,7 @@ private:
         ++byOp[op];
         switch (op) {
         case 0:                                                                                                 // OBJECT
+            if (!(ram.u16(node + 0xC) & 1) && outOfView(ram, node, m)) break;
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
             // O pktAddVu1ObjAsm so grava o qword 20 (especular, specIntensity +0x6C) com specLightMe (0x2000); sem ele o programa de
             // luz le o que o ultimo objeto deixou na memoria do VU1. As partes do Togera sem o bit (corpo skinned, flags 0x310) herdam
@@ -2940,6 +2957,9 @@ private:
             objectEnv(ram, node, items.back());
             break;
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 e TEST_1 dos filhos)
+            const uint16_t gflags = ram.u16(node + 0xA);                                    // visual (bit 0), noFOV (bit 2)
+            if (!(gflags & 1)) break;
+            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && outOfView(ram, node, m)) break;
             const uint8_t saved = blend_, savedRef = aref_;
             int b, r;
             groupState(ram, ram.u32(node + 4) & 0x0FFFFFFF, b, r);

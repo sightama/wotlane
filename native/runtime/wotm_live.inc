@@ -339,6 +339,8 @@ static Capture &capture()
     return c;
 }
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
+// replay: textura do filme do telao tirada da VRAM do instantaneo (sem tocador; wotm_vu1check.inc); 0 = nenhuma
+static unsigned (*g_replayMovieTex)() = nullptr;
 static State *g_state = nullptr;      // o da apresentacao (wotmDrawNative), para as fotos (wotm_foto.inc)
 // Ultimo quadro nativo desenhado (o da janela, sem o contador de FPS por cima) num PNG
 static bool exportFrame(const char *path)
@@ -411,9 +413,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
     wotm_live::g_state = &S;
+    S.scene.movieTexture = []() -> unsigned {   // objeto do menu com texId 999
 #ifdef WOTM_HAVE_FMV
-    S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
+        if (const unsigned id = wotm::fmv::Player::get().screenTexture()) return id;
 #endif
+        return wotm_live::g_localCollect && wotm_live::g_replayMovieTex ? wotm_live::g_replayMovieTex() : 0u;
+    };
     S.scene.screenTexture = []() { return S.rts[S.cur ^ 1].texture.id; };   // texId 0: quadro anterior
     // quadro nativo: renderHeight de altura (WOTM_RES) na proporcao da tela (wotm_live::viewAspect); a tela do GS e a faixa 4:3 central
     const int RH = wotm_live::renderHeight(), RW = static_cast<int>(std::lround(RH * wotm_live::viewAspect()));
