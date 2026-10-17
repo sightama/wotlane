@@ -581,6 +581,7 @@ struct Snapshot {
     std::vector<Sprite> sprites;
     std::vector<DrawItem> items, sky, overlay, hud;
     std::vector<FxSystem> fx;
+    Particles::FlareFrame flares;          // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (readScreenPolys: no takeSnapshot e no hook do dmaData)
@@ -1417,6 +1418,7 @@ public:
         sn.hud = hud;
         sn.sprites = sprites;
         sn.fx = fx.systems;
+        sn.flares = fx.flares;
         sn.shadows = shadows;
         sn.lights = lights_;
         sn.fog = fog_;
@@ -1449,6 +1451,7 @@ public:
         hud = s.hud;
         sprites = s.sprites;
         fx.systems = s.fx;
+        fx.flares = s.flares;
         shadows = s.shadows;
         screenRects = s.screenRects;
         screenPolys = s.screenPolys;

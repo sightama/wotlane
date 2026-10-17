@@ -531,6 +531,8 @@ public:
     // sai depois delas no particleDraw). Le a profundidade ja desenhada para o teste de oclusao (o particleLensFlareRender).
     void drawFlares(const TexFn &texture) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr || std::getenv("WOTM_NOFLARE") != nullptr;
+        static const bool log0 = std::getenv("WOTM_FLARELOG") != nullptr;
+        if (log0 && !flares.e.empty()) std::fprintf(stderr, "[flare] drawFlares: %zu entradas, %d sprites\n", flares.e.size(), flares.nspr);
         if (off || flares.e.empty() || flares.nspr == 0) return;
         const FlareFrame &f = flares;
         rlDrawRenderBatchActive();
@@ -566,9 +568,13 @@ public:
             }
             const int lo = inf ? 0 : 1, hi = inf ? 4 : 3;
             int cnt = 0, sumC = 0, sumR = 0;
+            uint32_t zMax = 0;   // amostra mais perto (WOTM_FLARELOG)
             for (int r = lo; r < hi; ++r)
-                for (int c = lo; c < hi; ++c)
-                    if (gsZ(bx + c, by + r) <= thr) { ++cnt; sumC += c; sumR += r; }
+                for (int c = lo; c < hi; ++c) {
+                    const uint32_t z = gsZ(bx + c, by + r);
+                    zMax = std::max(zMax, z);
+                    if (z <= thr) { ++cnt; sumC += c; sumR += r; }
+                }
             float frac = float(cnt) / float((hi - lo) * (hi - lo));
             if (fl.id && fl.id < 0x7FF) {   // debounce por ID (D_0078FF00): media com a fracao do quadro anterior
                 float &prev = flarePrev_[fl.id];
@@ -578,7 +584,8 @@ public:
             }
             const float I = fl.intensity * frac;
             if (log)
-                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g\n", fl.x, fl.y, cnt, thr, I);
+                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g | W da luz %.2f, W do mais perto %.2f\n", fl.x, fl.y, cnt, thr, I,
+                             fl.w, zMax && float(zMax) != f.zScale ? f.zOff / (float(zMax) - f.zScale) : 0.f);
             if (cnt == 0 || I < 1.f / 256.f) continue;
             // o retail ja somou o centroide do GS emulado (visibilidade total: 1,5 - 2 ou 1,5 - 1); troca pelo daqui
             const float shift = 1.5f - (inf ? 2.f : 1.f);
@@ -592,12 +599,15 @@ public:
         });
         if (quads.empty()) return;
 
+        // Tela em pixels: a projecao vai para a pilha; a modelview e guardada a parte (o rlPushMatrix em modelview liga a matriz de
+        // transformacao do rlgl, que so desliga quando a pilha esvazia em modelview; empilhar as duas e desempilhar a projecao primeiro
+        // trocava as matrizes e o HUD desenhado depois sumia)
+        const Matrix mv3d = rlGetMatrixModelview();
         rlMatrixMode(RL_PROJECTION);
         rlPushMatrix();
         rlLoadIdentity();
         rlOrtho(0.0, double(fbw), double(fbh), 0.0, -1.0, 1.0);
         rlMatrixMode(RL_MODELVIEW);
-        rlPushMatrix();
         rlLoadIdentity();
         rlDisableDepthTest();
         rlDisableBackfaceCulling();
@@ -631,7 +641,7 @@ public:
         rlMatrixMode(RL_PROJECTION);
         rlPopMatrix();
         rlMatrixMode(RL_MODELVIEW);
-        rlPopMatrix();
+        rlSetMatrixModelview(mv3d);
         // diagnostico: WOTM_FLARESHOT=<prefixo> grava ate 8 quadros (>= 1 s entre eles) com um flare de meio-lado >= 8 px do GS
         static const char *shot = std::getenv("WOTM_FLARESHOT");
         static int shots = 0;

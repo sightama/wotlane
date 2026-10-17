@@ -2064,6 +2064,21 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
 
     wotm_live::g_hideFps = true;
     wotm_live::g_localCollect = true;   // sem jogo rodando: a cena sai da RAM do instantaneo, nao da captura da thread do EE
+    // Lens flare: na entrada do quadro a lista ja esta em coordenadas de mundo (o readFlares a descarta); usa a que o VU1 recebeu
+    // (g_flareVuIn) como a captura do jogo ao vivo, com o texId de cada sprite e a profundidade do GS lidos da RAM do quadro
+    if (!wotm_vu1check::g_flareVuIn.empty()) {
+        wotm::Particles::FlareFrame f = wotm_vu1check::g_flareVuIn.back();
+        const wotm::Ram r{const_cast<uint8_t *>(ram), PS2_RAM_SIZE};
+        const uint32_t p = r.u32(wotm::sym::lensFlarePacket);
+        if (r.ok(p, 0x2EE0))
+            for (int k = 0; k < f.nspr; ++k) f.spr[k].texId = r.u16(p + 0x2C40 + 2 * uint32_t(k));
+        f.zScale = r.f32(wotm::sym::viewScreenMats + 0x28);
+        f.zOff = r.f32(wotm::sym::viewScreenMats + 0x2C);
+        auto &slot = wotm::Particles::flareSlot();
+        std::lock_guard<std::mutex> g(slot.m);
+        slot.f = std::move(f);
+        slot.used = true;
+    }
     {   // filme do telao do menu (texId 999): sem tocador no replay, o quadro que o tocador deixou na VRAM (CT32 em 0x3BA0, largura
         // 320, 256x128; wotm_fmv.hpp), como o GS da referencia o amostra
         static Texture2D movie{};
