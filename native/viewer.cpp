@@ -271,6 +271,7 @@ int main(int argc, char **argv) {
         rlSetClipPlanes(0.5, 30000.0);
         BeginMode3D(c3);
         scene.draw(ram, wire);
+        scene.drawHp(ram, wire);   // sem fades no viewer: logo depois da cena
         EndMode3D();
         scene.updateText(ram);
         scene.screenPolys.clear();

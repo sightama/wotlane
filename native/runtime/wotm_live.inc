@@ -322,7 +322,8 @@ static void initWindowAspect()
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
-// timerWaitForMinUpdateRate, ponto comum a rtMain, ShellRtLoop::endField e userintMain): ali o quadro esta pronto (update, hier,
+// timerWaitForMinUpdateRate, ponto comum a rtMain, ShellRtLoop::endField e userintMain, e no sceGsSyncV do fim do laco do
+// displayDialog, menu de pause e cia., que nao passa por ele): ali o quadro esta pronto (update, hier,
 // particleDraw, HUD) e a logica do seguinte ainda nao comecou. A apresentacao roda em outra thread; lendo a RAM na hora em que
 // via o g_frame mudar, pegava as vezes o quadro seguinte pela metade (o _cs do HUD fora do lugar, bloqueador de sombra sem
 // marcar: HUD, reticula e sombra piscando).
@@ -566,6 +567,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
     S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
     S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH), true);   // fades despachados antes do texto
+    BeginMode3D(c3);   // lista de alta prioridade: depois desses fades (ShellRtLoop::endField), antes do texto
+    S.scene.drawHp(ram);
+    EndMode3D();
     S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
     S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
     EndTextureMode();

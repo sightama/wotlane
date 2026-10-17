@@ -484,11 +484,27 @@ namespace
     constexpr uint32_t kSceGsSyncV = wotm::fn::sceGsSyncV;
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
     uint32_t g_syncVCalls = 0, g_syncVRa[4];
-    void syncVLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    // Laco do displayDialog (menu de pause, areYouSure, fim de luta do multiplayer...): monta o quadro sozinho (hier, particleDraw,
+    // Hud::print, a funcao do dialogo, fontDmaFontData) e espera o vsync no sceGsSyncV do fim do laco, sem passar pelo
+    // timerWaitForMinUpdateRate. Sem captura ali, a tela repetia o ultimo quadro de antes do dialogo, e a moldura do pause (o _cs
+    // shell->m_cs610, que o pauseLevelOverlay liga) nunca aparecia. $ra desse jal: displayDialog + 0x7C4 (jal em 0x1ACB9C).
+    // Na ultima volta ($s1 != 0, o beqz logo depois volta ao laco com 0) o Shell::FadeScreen acabou de escurecer a tela: capturar
+    // ali desligaria o fade (wotmCaptureFrame) e mostraria a cena clara ate o proximo quadro. Fica sem captura, como antes.
+    constexpr uint32_t kDialogLoopSyncVRa = wotm::fn::displayDialog__Fi + 0x7C4u;
+    void syncVTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (g_syncVCalls < 4)
-            g_syncVRa[g_syncVCalls] = GPR_U32(ctx, 31);
-        ++g_syncVCalls;
+        if (ctx->pc == kSceGsSyncV)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            if (g_fieldLog)
+            {
+                if (g_syncVCalls < 4)
+                    g_syncVRa[g_syncVCalls] = ra;
+                ++g_syncVCalls;
+            }
+            if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
+                wotmCaptureFrame(rdram);
+        }
         g_origSyncV(rdram, ctx, runtime);
     }
     uint32_t g_lastFieldStart = 0;
@@ -683,12 +699,12 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     {
         g_fieldLog = g_wotmCycleProf = true;
         g_lastHost = std::chrono::steady_clock::now();
-        if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
-            runtime.registerFunction(kSceGsSyncV, &syncVLogged);
         std::fprintf(stderr, "[wotm] log de fields por quadro ligado (WOTM_FIELDLOG)\n");
     }
     if (g_minRate > 0 || g_fieldLog)
         runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
+    if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
+        runtime.registerFunction(kSceGsSyncV, &syncVTapped);
     if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
         (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)))
     {

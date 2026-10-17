@@ -582,7 +582,7 @@ struct Fog { float fa = 0.f, maxVal = 255.f, fb = 0.f; float col[3] = {0, 0, 0};
 // (wotmCaptureFrame); os desenhos ate o proximo quadro do jogo repetem este, sem ler a RAM que o jogo esta reescrevendo.
 struct Snapshot {
     std::vector<Sprite> sprites;
-    std::vector<DrawItem> items, sky, overlay, hud;
+    std::vector<DrawItem> items, sky, overlay, hud, hp, hpOverlay;
     std::vector<FxSystem> fx;
     Particles::FlareFrame flares;          // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
     std::vector<ShadowBlocker> shadows;
@@ -605,6 +605,10 @@ public:
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
     std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133): por cima da cena, sem profundidade, depois dos icones (DrawItem::hudId = id do objeto)
+    // Lista de alta prioridade (CsPool::m_HPActiveList; hier(v, 1) -> hierTraceHPCsList), fora o HUD: moldura dos dialogos (shell->m_cs610,
+    // pauseLevelOverlay e cia.) e icones de botao deles. O ShellRtLoop::endField a desenha depois da fila do gsPkt (fade) e antes do
+    // texto; no rtMain e no displayDialog vem antes dos dois. drawHp, chamado pelo lado que apresenta depois dos fades sob o texto.
+    std::vector<DrawItem> hp, hpOverlay;   // hpOverlay: os icones de botao dela (fadeByNode)
     std::vector<Sprite> sprites;   // particulas (destroços, poeira) lidas de fx[]; desenhadas como sprites voltados para a camera
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawQuads depois da cena 3D e do screenPolys
     std::vector<ScreenRect> screenRects;   // fades (Snapshot::screenRects), desenhados por drawScreenRects por ultimo
@@ -1366,6 +1370,8 @@ public:
         sky.clear();
         overlay.clear();
         hud.clear();
+        hp.clear();
+        hpOverlay.clear();
         sprites.clear();
         atMat_ = 0;
         animVal_ = 0;
@@ -1402,7 +1408,9 @@ public:
             items.swap(world);
         }
         csList(ram, addr::csActiveList);
+        hpList_ = true;
         csList(ram, addr::csHPActiveList);
+        hpList_ = false;
         fx.wide = wide;
         fx.collect(ram);          // particulas com cor/textura/mistura do retail (wotm_fx.hpp); destroços (13) ficam com collectParticles
         collectShadows(ram);
@@ -1419,6 +1427,8 @@ public:
         sn.sky = sky;
         sn.overlay = overlay;
         sn.hud = hud;
+        sn.hp = hp;
+        sn.hpOverlay = hpOverlay;
         sn.sprites = sprites;
         sn.fx = fx.systems;
         sn.flares = fx.flares;
@@ -1452,6 +1462,8 @@ public:
         sky = s.sky;
         overlay = s.overlay;
         hud = s.hud;
+        hp = s.hp;
+        hpOverlay = s.hpOverlay;
         sprites = s.sprites;
         fx.systems = s.fx;
         fx.flares = s.flares;
@@ -2003,7 +2015,9 @@ public:
     }
 
     // Desenha com o raylib (deve estar dentro de BeginMode3D).
-    void draw(const Ram &ram, bool wire = false) {
+    // Liga o shader do GS (neblina, alfa) para uma passada de objetos; devolve se ligou (quem chama faz EndShaderMode e zera
+    // g_premulShader no fim).
+    bool beginShader(const Ram &ram, bool wire) {
         // Teste de alfa: pixels transparentes (sombras, helices, grades) nao podem escrever profundidade nem cor.
         // A normal do vertice leva (fogBurnThru, 1, FGE + 2 * GS) (shaderNormal; o rlNormal3f normaliza, entao o shader le as razoes
         // por y); quem desenha a preenche e a zera no fim (normal 0 = sem neblina, alfa comum).
@@ -2088,6 +2102,11 @@ public:
             BeginShaderMode(alphaShader_);
             g_premulShader = true;
         }
+        return useShader;
+    }
+
+    void draw(const Ram &ram, bool wire = false) {
+        const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();   // o ceu e desenhado primeiro, centrado no olho, sem profundidade
         drawList(ram, sky, wire);
         rlDrawRenderBatchActive();
@@ -2114,6 +2133,20 @@ public:
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         drawList(ram, overlay, wire, -1, true);
         drawList(ram, hud, wire, -1);   // HUD por ultimo, na ordem da travessia
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
+        if (useShader) EndShaderMode();
+        g_premulShader = false;
+    }
+
+    // Lista de alta prioridade (`hp`), com a camera 3D do quadro ligada: na frente da camera, por cima do que ja esta na tela, sem
+    // profundidade (como os icones de botao).
+    void drawHp(const Ram &ram, bool wire = false) {
+        if (hp.empty() && hpOverlay.empty()) return;
+        const bool useShader = beginShader(ram, wire);
+        rlDisableDepthTest();
+        drawList(ram, hp, wire, -1);
+        drawList(ram, hpOverlay, wire, -1, true);
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
@@ -3264,6 +3297,7 @@ private:
         }
     }
 
+    bool hpList_ = false;   // collect percorrendo CsPool::m_HPActiveList (drawCs manda para `hp`)
     void csList(const Ram &ram, uint32_t head) {
         uint32_t n = ram.u32(head + 4);
         for (int guard = 0; ram.ok(n) && n != head && guard < 4096; ++guard, n = ram.u32(n + 4)) {
@@ -3307,7 +3341,11 @@ private:
         cs_ = cs;
         walk(ram, ep, m, 0);
         cs_ = savedCs;
-        if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
+        if (hpList_ && needDrawMe && !isHud) {   // lista de alta prioridade: passada propria (ver `hp`)
+            std::vector<DrawItem> &dst = isButtonId(id) ? hpOverlay : hp;
+            dst.insert(dst.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
+            items.resize(before);
+        } else if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
         } else if (isHud) {   // HUD: por cima da cena (ver `hud`), com o id para a checagem
