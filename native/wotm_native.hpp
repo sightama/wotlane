@@ -397,7 +397,7 @@ struct DrawItem {
     uint32_t animPkt = 0;   // CHAR_INSTANCE::animPktPtr (paleta de matrizes dos objetos skinned)
     int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
-    uint8_t blend = kGsAlphaNormal;   // byte baixo do ALPHA_1 do GROUP que contem o objeto (ctx em +4; gsBlend)
+    uint8_t blend = kGsAlphaNormal;   // byte baixo do ALPHA_1 do no mais proximo com ctx (GROUP, TRANSLATE...; Scene::CtxScope, gsBlend)
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
@@ -2633,9 +2633,9 @@ private:
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
     uint32_t cs_ = 0;      // _cs em desenho (drawCs; 0 no mundo e no ceu): colorQuad em objectColor
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
-    uint8_t aref_ = kGsAlphaRef;       // DrawItem::aref herdado do GROUP mais proximo com ctx de TEST_1
-    bool zmsk_ = false;                // DrawItem::zmsk herdado do GROUP mais proximo com ctx de ZBUF_1
-    uint8_t blend_ = kGsAlphaNormal;   // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
+    uint8_t aref_ = kGsAlphaRef;       // DrawItem::aref herdado do no mais proximo com ctx de TEST_1 (CtxScope)
+    bool zmsk_ = false;                // DrawItem::zmsk herdado do no mais proximo com ctx de ZBUF_1 (CtxScope)
+    uint8_t blend_ = kGsAlphaNormal;   // DrawItem::blend herdado do no mais proximo com ctx de ALPHA_1 (CtxScope)
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
     bool lodX_ = false;    // DrawItem::lodX na descida
     float spec_ = 0.f;     // DrawItem::spec: o qword 20 que esta na memoria do VU1 neste ponto da ordem do hier
@@ -2664,6 +2664,25 @@ private:
             } else if (reg == 0x4E) zmsk = int(ram.u32(ctx + 0x24 + 16 * i) & 1);
         }
     }
+
+    // Estado do GS herdado na descida. O hierTraverseAsm troca o ctx atual ($s4, que comeca no ctxGetDefaultGSCtx) em todo no que
+    // carrega um ctx nao nulo, nao so no GROUP: TRANSLATE, ROTATE e SCALE em +4; ANIM_XFORM e ANIM_SCALE em +8 (contagem em +4). Os
+    // filhos herdam e o pai volta ao sair (o $s4 vai na pilha da travessia). A esfera da explosao (tex 146) esta abaixo de um desses
+    // com ALPHA_1 0x48 (aditivo), sem GROUP com ctx; o nativo a desenhava com a mistura comum. O mesmo com o halo dos power-ups (tex 70):
+    // saia como um disco escuro em vez de clarear.
+    struct CtxScope {
+        Scene &s;
+        uint8_t blend, aref;
+        bool zmsk;
+        CtxScope(Scene &sc, const Ram &ram, uint32_t ctx) : s(sc), blend(sc.blend_), aref(sc.aref_), zmsk(sc.zmsk_) {
+            int b, r, z;
+            groupState(ram, ctx & 0x0FFFFFFF, b, r, z);
+            if (b >= 0) s.blend_ = uint8_t(b);
+            if (r >= 0) s.aref_ = uint8_t(r);
+            if (z >= 0) s.zmsk_ = z != 0;
+        }
+        ~CtxScope() { s.blend_ = blend; s.aref_ = aref; s.zmsk_ = zmsk; }
+    };
 
     // Deslocamento do UV do OBJECT, como o hierTraverseAsm monta o qword 4 do cabecalho do VU1 (vf19.xy, que os programas de desenho somam
     // ao UV normalizado): uOffset/vOffset (+0x20/+0x24) e, com uvScroll (bit 0x800 das flags) dentro de um CHAR_INSTANCE, os canais de
@@ -3034,17 +3053,8 @@ private:
             const uint16_t gflags = ram.u16(node + 0xA);                                    // visual (bit 0), noFOV (bit 2)
             if (!(gflags & 1)) break;
             if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && outOfView(ram, node, m)) break;
-            const uint8_t saved = blend_, savedRef = aref_;
-            const bool savedZ = zmsk_;
-            int b, r, z;
-            groupState(ram, ram.u32(node + 4) & 0x0FFFFFFF, b, r, z);
-            if (b >= 0) blend_ = uint8_t(b);
-            if (r >= 0) aref_ = uint8_t(r);
-            if (z >= 0) zmsk_ = z != 0;
+            const CtxScope cs(*this, ram, ram.u32(node + 4));
             kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
-            blend_ = saved;
-            aref_ = savedRef;
-            zmsk_ = savedZ;
             break;
         }
         case 2: {                                                                           // LOD
@@ -3104,16 +3114,24 @@ private:
             }
             break;
         }
-        case 3:                                                                             // TRANSLATE
+        case 3: {                                                                           // TRANSLATE
+            const CtxScope cs(*this, ram, ram.u32(node + 4));
             kids(ram, node + 0x1C, ram.u32(node + 8),
                  mul(translateM(ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18)), m), depth);
             break;
-        case 4: kids(ram, node + 0x50, ram.u32(node + 8), mul(readM4(ram, node + 0x10), m), depth); break;   // ROTATE
-        case 30:                                                                            // SCALE
+        }
+        case 4: {                                                                           // ROTATE
+            const CtxScope cs(*this, ram, ram.u32(node + 4));
+            kids(ram, node + 0x50, ram.u32(node + 8), mul(readM4(ram, node + 0x10), m), depth);
+            break;
+        }
+        case 30: {                                                                          // SCALE
+            const CtxScope cs(*this, ram, ram.u32(node + 4));
             kids(ram, node + 0x2C, ram.u32(node + 8),
                  mul(mul(scaleM(ram.f32(node + 0x20), ram.f32(node + 0x24), ram.f32(node + 0x28)),
                          translateM(ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18))), m), depth);
             break;
+        }
         case 6: {                                                                           // SWITCH
             const uint32_t which = ram.u8(node + 8), n = ram.u8(node + 0xB);
             if (which < n) { const uint32_t c = ram.u32(node + 0xC + 4 * which); if (ram.ok(c)) walk(ram, c, m, depth + 1); }
@@ -3145,6 +3163,7 @@ private:
             const uint32_t idx = ram.u32(node + 0xC4);
             if (atMat_ && idx < 4096 && ram.ok(atMat_ + idx * 64, 64)) local = readM4(ram, atMat_ + idx * 64);
             local.m[0][3] = local.m[1][3] = local.m[2][3] = 0.f; local.m[3][3] = 1.f;
+            const CtxScope cs(*this, ram, ram.u32(node + 8));
             kids(ram, node + 0xCC, ram.u32(node + 4), mul(local, m), depth);
             break;
         }
@@ -3162,6 +3181,7 @@ private:
             const M4 pre = translateM(ram.f32(node + 0x40), ram.f32(node + 0x44), ram.f32(node + 0x48));
             const M4 post = translateM(ram.f32(node + 0x30) + ram.f32(node + 0x50), ram.f32(node + 0x34) + ram.f32(node + 0x54),
                                        ram.f32(node + 0x38) + ram.f32(node + 0x58));
+            const CtxScope cs(*this, ram, ram.u32(node + 8));
             kids(ram, node + 0x60, ram.u32(node + 4), mul(mul(mul(pre, scaleM(sx, sy, sz)), post), m), depth);
             break;
         }
