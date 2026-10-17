@@ -21,34 +21,27 @@ class Flag
 class Launcher : Form
 {
     // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
+    // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     static readonly Flag[] Flags = {
         new Flag("Execucao", ":Auto", true, "Roteiro automatico ate a fase", "-Auto 1: o pad do roteiro joga ate uma fase (~50 s). Desmarcado: voce joga com o teclado."),
-        new Flag("Execucao", ":Stats", false, "Estatisticas no log (PS2X_STATS)", "-Stats 1: [native]/[ui]/[time] em live.err.log."),
-        new Flag("Execucao", ":LTCG", false, "Usar o build com LTCG (pasta build)", "-Build build em vez de build_dev. So vale se voce compilou com build_runtime.bat build."),
-        new Flag("Execucao", "WOTM_RATEMIN=0", false, "Diagnostico: tirar o limite do updateRate (dt livre)", "Por padrao o runtime devolve updateRate >= 30 ao jogo (dt <= 1/30): sem isso, nos quadros lentos a fisica integra com dt grande e diverge (pelo do Congar esticado, monstro girando sozinho)."),
-        new Flag("Execucao", "WOTM_FIELDLOG", false, "Log de fields por quadro (live.err.log)", "Uma linha [field] por quadro do jogo: fields, updateRate, ciclos do EE, tempo de host e os lacos que mais gastam."),
-        new Flag("Execucao", "WOTM_OLDCLOCK", false, "Diagnostico: relogio antigo do EE", "Volta a espera pelo VU1 no particleDraw contando ciclos e o relogio virtual solto do de parede (ritmo irregular: rate 15/20/60 alternando)."),
-        new Flag("Execucao", "WOTM_AIVSAI", false, "Jogador controlado pela IA do jogo", "O monstro do jogador 1 vira IA (playerInit -> aiInit): luta IA contra IA. Para lotes sem menu use tools\\lote.ps1."),
         new Flag("Execucao", "WOTM_FOTOS", true, "Fotos para depurar (F7 pausa, F6 avanca, F8 foto com nota)", "F8 grava o quadro (instantaneo da checagem VU1 x nativo, ~40 MB), um PNG da janela e a sua nota em <runtime>\\fotos\\<data>. Apague as fotos depois de resolvidas."),
+        new Flag("Execucao", "WOTM_AIVSAI", false, "Jogador controlado pela IA do jogo", "O monstro do jogador 1 vira IA (playerInit -> aiInit): luta IA contra IA. Para lotes sem menu use tools\\lote.ps1."),
         new Flag("Execucao", "WOTM_WATCHDOG=0", false, "Desligar o vigia de congelamento", "Por padrao, g_frame parado por 8 s (fora de filme) grava [vigia] no live.err.log e ram_/vram_vigia_<g_frame>.bin no discroot; quadros do jogo abaixo de 25/s viram aviso [vigia] LENTO."),
-        new Flag("Execucao", "WOTM_VU0_INTERP", false, "Diagnostico: VU0 so no interpretador", "Desliga os microprogramas do VU0 em C++ (gerados do ELF por tools/vu0native.py) e roda todos no interpretador, como antes (logica bem mais lenta)."),
+        new Flag("Execucao", "WOTM_FMV_MUTE", false, "Filmes sem audio", ""),
 
-        new Flag("Controle", "PS2X_PADLOG", false, "Log do gamepad (nome e eixos no live.err.log)", "Linhas [pad]: nome do gamepad 0 e cada mudanca dos analogicos, com o horario."),
-        new Flag("Controle", "PS2X_PAD_DEADZONE=0.25", false, "Zona morta de 0,25 nos analogicos", "Sem ela o runtime repassa qualquer desvio do eixo ao jogo."),
+        new Flag("Diagnostico de desenho", "WOTM_NOFX", false, "Sem particulas/efeitos", "Desliga as particulas de fx[] e os efeitos de wotm_fx."),
+        new Flag("Diagnostico de desenho", "WOTM_NOSHADOW", false, "Sem sombras", "Desliga as sombras dos bloqueadores (monstros e afins)."),
+        new Flag("Diagnostico de desenho", "WOTM_NOSKIN", false, "Monstros na pose de referencia (sem skinning)", "Diagnostico de malha."),
+        new Flag("Diagnostico de desenho", "WOTM_NOVCOL", false, "Sem cor de vertice", "Ignora o sombreamento por vertice."),
+        new Flag("Diagnostico de desenho", "WOTM_OPAQUE", false, "Ignorar o alfa de vertice nos skinned", "Diagnostico de transparencia."),
+        new Flag("Diagnostico de desenho", "WOTM_ONEPASS", false, "Tudo num passe so", "Nao separa os translucidos num segundo passe."),
 
-        new Flag("Camera", "WOTM_TURNLOG", false, "Log da rotacao dos monstros (live.err.log)", "Uma linha [turn] por monstro por quadro do jogo: rate, aceleracao e velocidade de giro, angulos."),
-        new Flag("Camera", "WOTM_CAMLOG", false, "Gravar a camera a cada desenho (live.err.log)", "Uma linha [cam] por desenho: t, g_frame, fov, posicao e direcao."),
-
-        new Flag("Desenho", "WOTM_NOFX", false, "Sem particulas/efeitos", "Desliga as particulas de fx[] e os efeitos de wotm_fx."),
-        new Flag("Desenho", "WOTM_NOSHADOW", false, "Sem sombras", "Desliga as sombras dos bloqueadores (monstros e afins)."),
-        new Flag("Desenho", "WOTM_NOSKIN", false, "Monstros na pose de referencia (sem skinning)", "Diagnostico de malha."),
-        new Flag("Desenho", "WOTM_NOVCOL", false, "Sem cor de vertice", "Ignora o sombreamento por vertice."),
-        new Flag("Desenho", "WOTM_OPAQUE", false, "Ignorar o alfa de vertice nos skinned", "Diagnostico de transparencia."),
-        new Flag("Desenho", "WOTM_ONEPASS", false, "Tudo num passe so", "Nao separa os translucidos num segundo passe."),
-
-        new Flag("Som", "PS2X_SND=0", false, "Desligar o som nativo (fica mudo)", "PS2X_SND=0 volta ao 989snd no IOP emulado, que nao tem SPU2."),
-        new Flag("Som", "PS2X_SND_LOG", false, "Log do som nativo", "Chamadas do 989snd no live.err.log."),
-        new Flag("Som", "WOTM_FMV_MUTE", false, "Filmes sem audio", ""),
+        new Flag("Logs (live.err.log)", ":Stats", false, "Estatisticas (PS2X_STATS)", "-Stats 1: linhas [native]/[ui]/[time]."),
+        new Flag("Logs (live.err.log)", "WOTM_FIELDLOG", false, "Fields por quadro", "Uma linha [field] por quadro do jogo: fields, updateRate, ciclos do EE, tempo de host e os lacos que mais gastam."),
+        new Flag("Logs (live.err.log)", "WOTM_TURNLOG", false, "Rotacao dos monstros", "Uma linha [turn] por monstro por quadro do jogo: rate, aceleracao e velocidade de giro, angulos."),
+        new Flag("Logs (live.err.log)", "WOTM_CAMLOG", false, "Camera a cada desenho", "Uma linha [cam] por desenho: t, g_frame, fov, posicao e direcao."),
+        new Flag("Logs (live.err.log)", "PS2X_PADLOG", false, "Gamepad (nome e eixos)", "Linhas [pad]: nome do gamepad 0 e cada mudanca dos analogicos, com o horario."),
+        new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Som nativo", "Chamadas do 989snd."),
     };
 
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
@@ -163,7 +156,7 @@ class Launcher : Form
         string rt = RuntimeDir();
         if (rt == null) { status.Text = "Nao achei a pasta do runtime (run_live.ps1)."; return; }
         string args = string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Auto {1} -Stats {2} -Build {3}",
-            Path.Combine(rt, "run_live.ps1"), On(":Auto") ? 1 : 0, On(":Stats") ? 1 : 0, On(":LTCG") ? "build" : "build_dev");
+            Path.Combine(rt, "run_live.ps1"), On(":Auto") ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
         psi.EnvironmentVariables["WOTM_REPO"] = exeDir;
         foreach (var kv in boxes)

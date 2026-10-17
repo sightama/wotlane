@@ -184,7 +184,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
     wotm_boot::drawOverlay();
 }
 
-// Som nativo (native/wotm_snd.hpp), ligado com PS2X_SND=1 (wotmSndInstall, chamado do main.cpp)
+// Som nativo (native/wotm_snd.hpp), sempre ligado (wotmSndInstall, chamado do main.cpp)
 #include "wotm_snd.inc"
 
 #if __has_include("wotm_native.hpp")

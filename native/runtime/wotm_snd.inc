@@ -1,4 +1,4 @@
-// wotm_snd.inc: som nativo (incluido por wotm_live.inc, no escopo global de ps2_runtime.cpp). Ligado com PS2X_SND=1.
+// wotm_snd.inc: som nativo (incluido por wotm_live.inc, no escopo global de ps2_runtime.cpp). Sempre ligado.
 // Troca as funcoes snd_* da lib989snd do EE (que mandam comandos por RPC ao 989snd no IOP) pelo motor de native/wotm_snd.hpp
 // (repo WoTM): bancos lidos do disco, sons e streams mixados no host. Com isso os IRX de som (LIBSD, 989SND, 989ERR) nao
 // sao carregados no IOP emulado. Formatos e API em docs/FORMATOS.md ("Som").
@@ -259,6 +259,6 @@ void wotmSndInstall(PS2Runtime &runtime)
 #else
 void wotmSndInstall(PS2Runtime &)
 {
-    std::fprintf(stderr, "[snd] PS2X_SND ignorado: falta native/wotm_snd.hpp (WOTM_NATIVE_DIR)\n");
+    std::fprintf(stderr, "[snd] som nativo desligado: falta native/wotm_snd.hpp (WOTM_NATIVE_DIR)\n");
 }
 #endif

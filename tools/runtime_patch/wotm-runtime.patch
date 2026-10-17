@@ -1053,7 +1053,7 @@ index 37b6a4d..2b3005a 100644
  
      if (m_gifArbiter)
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..addb826 100644
+index 8590f14..603719d 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
 @@ -1,6 +1,12 @@
@@ -1074,9 +1074,9 @@ index 8590f14..addb826 100644
          float rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
          float ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
 +        // PS2X_PADLOG: nome do gamepad e cada mudanca dos eixos (>= 0,05) no stderr, com o horario.
-+        // PS2X_PAD_DEADZONE=<0..1>: zera o eixo com |valor| abaixo do limite (padrao 0 = sem zona morta, como antes).
++        // PS2X_PAD_DEADZONE=<0..1>: zera o eixo com |valor| abaixo do limite (padrao 0,25; 0 = sem zona morta).
 +        static const bool padLog = std::getenv("PS2X_PADLOG") != nullptr;
-+        static const float deadzone = std::getenv("PS2X_PAD_DEADZONE") ? static_cast<float>(std::atof(std::getenv("PS2X_PAD_DEADZONE"))) : 0.f;
++        static const float deadzone = std::getenv("PS2X_PAD_DEADZONE") ? static_cast<float>(std::atof(std::getenv("PS2X_PAD_DEADZONE"))) : 0.25f;
 +        if (padLog)
 +        {
 +            static bool named = false;
@@ -2496,7 +2496,7 @@ index bd75bba..68268a1 100644
          }
  
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..ee72629 100644
+index 563bcbd..c5f8c4e 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
 @@ -164,12 +164,85 @@ namespace
@@ -2554,7 +2554,7 @@ index 563bcbd..ee72629 100644
 +// aleatoriamente (updateRate 15/20/60 alternando; giro do monstro e mola do pelo instaveis).
 +// Agora: os contadores sao zerados na entrada do particleDraw (sem VU1 nao ha o que esperar), as voltas no laco nao
 +// contam ciclos, e o relogio virtual acompanha o de parede enquanto a logica roda (EeScheduler::checkpointDue): o jogo
-+// mede a duracao real da logica, como no PS2 (2 fields, rate 30, na luta). WOTM_OLDCLOCK=1 volta ao comportamento antigo.
++// mede a duracao real da logica, como no PS2 (2 fields, rate 30, na luta).
 +extern uint32_t g_wotmFreeSpinPc, g_wotmFreeSpinZero[2];
 +static PS2Runtime::RecompiledFunction g_particleDraw = nullptr;
 +static void hook_particleDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -2585,7 +2585,7 @@ index 563bcbd..ee72629 100644
  
      try
      {
-@@ -220,12 +293,83 @@ int main(int argc, char *argv[])
+@@ -220,12 +293,79 @@ int main(int argc, char *argv[])
              return 1;
          }
  
@@ -2619,10 +2619,8 @@ index 563bcbd..ee72629 100644
 +        }
 +        if (std::getenv("PS2X_FMV")) // filmes nativos (native/wotm_fmv.hpp, em wotm_live.inc): substitui os hooks de pular filme acima
 +            wotmFmvInstall(runtime);
-+        // som nativo (native/wotm_snd.hpp, em wotm_snd.inc), ligado por padrao: o 989snd nao sobe no IOP emulado.
-+        // PS2X_SND=0 volta ao 989snd no IOP emulado (sem SPU2: mudo).
-+        if (const char *snd = std::getenv("PS2X_SND"); !snd || std::strcmp(snd, "0") != 0)
-+            wotmSndInstall(runtime);
++        // som nativo (native/wotm_snd.hpp, em wotm_snd.inc): o 989snd nao sobe no IOP emulado (sem SPU2)
++        wotmSndInstall(runtime);
 +
 +        if (const char *noop = std::getenv("PS2X_NOOP")) // lista de enderecos hex separados por virgula: funcoes viram no-op
 +        {
@@ -2647,20 +2645,18 @@ index 563bcbd..ee72629 100644
 +            {
 +                g_origFlushObjQ = runtime.lookupFunction(wotm::fn::hierFlushObjQ__Fv);
 +                runtime.registerFunction(wotm::fn::hierFlushObjQ__Fv, hostLeaf<hook_flushObjQ>);   // hierFlushObjQ (nao dispara o DMA do VIF1)
-+                if (!std::getenv("WOTM_OLDCLOCK"))   // relogio do jogo (comentario acima)
-+                {
++                // relogio do jogo (comentario acima)
 +#ifdef WOTM_SYMS_NM
-+                    // cobaia: o laco de espera do particleDraw reescrito nao tem endereco conhecido. Pc impar nunca casa; o laco nem
-+                    // gira (os contadores sao zerados na entrada) e o valor diferente de 0 mantem o relogio do jogo
-+                    g_wotmFreeSpinPc = 0x1u;
++                // cobaia: o laco de espera do particleDraw reescrito nao tem endereco conhecido. Pc impar nunca casa; o laco nem
++                // gira (os contadores sao zerados na entrada) e o valor diferente de 0 mantem o relogio do jogo
++                g_wotmFreeSpinPc = 0x1u;
 +#else
-+                    g_wotmFreeSpinPc = 0x0021B8A0u;   // laco de espera dentro do particleDraw (sem simbolo)
++                g_wotmFreeSpinPc = 0x0021B8A0u;   // laco de espera dentro do particleDraw (sem simbolo)
 +#endif
-+                    g_wotmFreeSpinZero[0] = wotm::sym::objsInPacket;   // objsInPacket
-+                    g_wotmFreeSpinZero[1] = wotm::sym::objsInAlphaPacket;   // objsInAlphaPacket
-+                    if ((g_particleDraw = runtime.lookupFunction(wotm::fn::particleDraw__Fi)))
-+                        runtime.registerFunction(wotm::fn::particleDraw__Fi, hook_particleDraw);
-+                }
++                g_wotmFreeSpinZero[0] = wotm::sym::objsInPacket;   // objsInPacket
++                g_wotmFreeSpinZero[1] = wotm::sym::objsInAlphaPacket;   // objsInAlphaPacket
++                if ((g_particleDraw = runtime.lookupFunction(wotm::fn::particleDraw__Fi)))
++                    runtime.registerFunction(wotm::fn::particleDraw__Fi, hook_particleDraw);
 +            }
 +            std::cout << "[hook] VU1/DMA do VIF1 cortados (rtWaitForVu1, hierFlushObjQ"
 +                      << (g_wotmFreeSpinPc ? "; sem espera em particleDraw, relogio do EE pelo de parede)" : ")") << std::endl;

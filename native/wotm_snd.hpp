@@ -1,7 +1,7 @@
 // wotm_snd.hpp: som nativo do War of the Monsters, sem IOP nem SPU2 emulados.
 //
 // O jogo fala com o driver 989snd (que roda no IOP) pelas funcoes `snd_*` da lib989snd do EE. O runtime troca essas funcoes
-// por hooks (wotm_live.inc, PS2X_SND=1) que chamam este motor: os bancos .BNK sao lidos do disco, os sons sao executados
+// por hooks (wotm_live.inc, sempre ligados) que chamam este motor: os bancos .BNK sao lidos do disco, os sons sao executados
 // grain a grain como no 989snd e as vozes ADPCM do SPU2 sao mixadas aqui, a 48 kHz, numa AudioStream do raylib.
 // Formatos e API em docs/FORMATOS.md ("Som") e tools/snd989.py.
 //

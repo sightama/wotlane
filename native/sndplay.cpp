@@ -1,4 +1,4 @@
-// Verificador offline do som nativo (wotm_snd.hpp), sem o jogo e sem o runtime: o mesmo motor que o runtime usa com PS2X_SND=1
+// Verificador offline do som nativo (wotm_snd.hpp), sem o jogo e sem o runtime: o mesmo motor que o runtime usa ao vivo
 // grava em WAV o que tocaria.
 //   sndplay disc/SND/SHELLMUS.BNK 0 musica.wav [segundos]    som N do banco (0x400 de volume, pan do banco)
 //   sndplay disc/VAG/CITYAMB.VPK - cidade.wav [segundos]      stream .VPK/.VAG
