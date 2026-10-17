@@ -306,6 +306,20 @@ static Capture &capture()
     return c;
 }
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
+static State *g_state = nullptr;      // o da apresentacao (wotmDrawNative), para as fotos (wotm_foto.inc)
+// Ultimo quadro nativo desenhado (o da janela, sem o contador de FPS por cima) num PNG
+static bool exportFrame(const char *path)
+{
+    if (!g_state || g_state->rts[g_state->cur].id == 0)
+        return false;
+    Image img = LoadImageFromTexture(g_state->rts[g_state->cur].texture);
+    ImageFlipVertical(&img);
+    const bool ok = ExportImage(img, path);
+    UnloadImage(img);
+    return ok;
+}
+// Recursos carregados (nivel e monstros), como sai no log [native] recursos
+static std::string resources() { return g_state ? g_state->rtxPath : std::string(); }
 // Fades do quadro em montagem (thread do EE): os hooks dos emissores (wotm_overrides.cpp) leem o pacote recem-montado; o
 // wotmCaptureFrame os passa ao instantaneo. O Shell::FadeScreen e um laco proprio (sem timerWaitForMinUpdateRate, logo sem
 // captura): enquanto roda, a apresentacao le o pacote dele ao vivo (o laco so reescreve o alfa); a proxima captura o desliga.
@@ -363,6 +377,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
+    wotm_live::g_state = &S;
 #ifdef WOTM_HAVE_FMV
     S.scene.movieTexture = []() { return wotm::fmv::Player::get().screenTexture(); };   // objeto do menu com texId 999
 #endif
@@ -437,8 +452,6 @@ static bool wotmDrawNative(const uint8_t *rdram)
     }
     if (!S.snap.valid)
         return false;
-    if (IsKeyPressed(KEY_F8))
-        g_wotmShotKey = true;   // checagem VU1 x nativo: grava e compara o proximo quadro (WOTM_VU1CHECK ligado)
     const wotm::GameCamera gc = S.scene.show(S.snap);
     if (!gc.ok)
         return false;
@@ -565,7 +578,12 @@ void wotmFlareCapture(const uint8_t *rdram)
         wotm::Particles::captureFlares(wotm::Ram{rdram, PS2_RAM_SIZE});
 }
 #else
-namespace wotm_live { static void initWindowAspect() {} }
+namespace wotm_live
+{
+static void initWindowAspect() {}
+static bool exportFrame(const char *) { return false; }
+static std::string resources() { return {}; }
+}
 static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}

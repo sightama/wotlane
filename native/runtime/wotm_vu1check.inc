@@ -1540,6 +1540,9 @@ std::vector<uint8_t> g_prev, g_prevVram;   // RAM e VRAM como ficaram no ultimo 
 PS2Runtime *g_rt = nullptr;
 uint64_t g_bytes = 0, g_max = 2048ull << 20;
 uint32_t g_frames = 0;
+std::string g_prefix;   // WOTM_VU1CHECK_SNAP; vazio = sem instantaneo
+bool g_perShot = false; // fotos (WOTM_FOTOS): um arquivo por quadro, <foto>.vu1snap, fechado no fim do quadro e sem teto
+std::string g_file;     // arquivo em gravacao
 
 void put(const void *p, size_t n)
 {
@@ -1575,20 +1578,21 @@ void putState()
 
 void begin(const uint8_t *ram, uint32_t frame)   // entrada do hier(0, 0) do quadro amostrado
 {
-    const char *pre = std::getenv("WOTM_VU1CHECK_SNAP");
-    if (!pre || !g_rt) return;
-    if (g_out && g_bytes >= g_max) {
+    if ((g_prefix.empty() && !g_perShot) || !g_rt) return;
+    if (g_out && g_bytes >= g_max && !g_perShot) {
         std::fprintf(stderr, "[vu1check] instantaneo parou no teto (WOTM_VU1CHECK_SNAP_MAX, %llu MB) com %u quadros\n", (unsigned long long)(g_max >> 20), g_frames);
         std::fclose(g_out);
         g_out = nullptr;
         return;
     }
     if (!g_out) {
-        if (g_bytes >= g_max) return;   // ja parou no teto
+        if (g_bytes >= g_max && !g_perShot) return;   // ja parou no teto
         char name[1024];
-        std::snprintf(name, sizeof name, "%s_%u.vu1snap", pre, frame);
+        if (g_perShot) std::snprintf(name, sizeof name, "%s", wotmFotoSnapPath().c_str());
+        else std::snprintf(name, sizeof name, "%s_%u.vu1snap", g_prefix.c_str(), frame);
         g_out = std::fopen(name, "wb");
         if (!g_out) { std::fprintf(stderr, "[vu1check] nao consegui gravar %s\n", name); return; }
+        g_file = name;
         Hdr h{};
         std::memcpy(h.magic, kMagic, 8);
         h.frame = frame;
@@ -1649,7 +1653,8 @@ void end()   // fim do quadro amostrado; o arquivo fica aberto para os proximos 
     if (!g_out || !g_inFrame) return;
     putv(uint8_t('E'));
     g_inFrame = false;
-    if (g_out) std::fflush(g_out);   // o processo e morto no fim do lote: o que ja esta no arquivo vale
+    if (g_out && g_perShot) { std::fclose(g_out); g_out = nullptr; }   // foto: arquivo proprio, o proximo comeca com 'A'
+    else if (g_out) std::fflush(g_out);   // o processo e morto no fim do lote: o que ja esta no arquivo vale
 }
 } // namespace snap
 
@@ -1675,6 +1680,8 @@ struct Cond { enum Kind { Fx, Preset, Frame, Mem } kind; uint32_t a, b; bool any
 std::vector<Cond> g_when;
 uint32_t g_burst = 1, g_burstLeft = 0, g_shots = 0, g_shotsDone = 0;
 bool g_condPrev = false;
+bool g_keyOnly = false;   // fotos (WOTM_FOTOS): so o F8 dispara, sem periodo nem condicoes
+bool g_keyShot = false;   // o quadro amostrado em andamento foi pedido pelo F8
 
 // Condicoes de nivel (fx, preset, frame, mem:=valor): verdadeiro enquanto valem; o disparo e na borda de subida (fireNow). As mem: sem
 // valor sao de mudanca: `changed` sai verdadeiro na avaliacao em que a palavra mudou, e isso ja e a borda (duas mudancas em avaliacoes
@@ -1759,11 +1766,17 @@ void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
                      g_pass == 1 ? "sim" : "nao", g_chains, inPkt, inAlpha);
         snap::end();
         finish();
+        if (g_keyShot && wotmFotosOn()) {   // foto: para aqui, com o quadro fotografado na tela, para a nota
+            g_keyShot = false;
+            wotmFotoDone(rdram, g_frame, snap::g_file);
+            wotmPauseBlock(snap::g_rt);
+        }
+        g_keyShot = false;
     }
     const auto now = std::chrono::steady_clock::now();
     const bool key = g_wotmShotKey.exchange(false);   // F8: na hora, sem condicao, descanso nem limite de disparos
     // avaliado todo quadro, para a borda nao se perder no descanso; sem condicoes (periodo), so na luta (g_frame >= 30)
-    const bool fire = key || (g_when.empty() ? frame >= 30 : fireNow(rdram, frame));
+    const bool fire = key || (!g_keyOnly && (g_when.empty() ? frame >= 30 : fireNow(rdram, frame)));
     if (!g_burstLeft && fire && (key || (now >= g_next && (!g_shots || g_shotsDone < g_shots)))) { g_burstLeft = g_burst; ++g_shotsDone; }
     if (g_burstLeft) {
         --g_burstLeft;
@@ -1773,6 +1786,7 @@ void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
         std::fprintf(stderr, "[vu1check] quadro amostrado: g_frame %u, currScreen %u, hier(0,0) de %x (%u chamadas desde o anterior)%s\n", frame, scr, ra,
                      g_hierCalls, key ? ", pela tecla F8" : "");
         g_hierCalls = 0;
+        g_keyShot = key;
         arm(rdram, frame);
         snap::begin(rdram, frame);
     }
@@ -1789,16 +1803,25 @@ void hierChecked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 void wotmVu1CheckInstall(PS2Runtime &runtime)
 {
-    const char *e = std::getenv("WOTM_VU1CHECK");
-    if (!e || std::atoi(e) <= 0) return;
+    // WOTM_FOTOS=<pasta> (ou 1): so o F8 dispara, e cada disparo e uma foto (wotm_foto.inc) com instantaneo proprio. Ganha do
+    // WOTM_VU1CHECK (periodo, condicoes e WOTM_VU1CHECK_SNAP ficam de fora).
+    const char *e = std::getenv("WOTM_VU1CHECK"), *fotos = std::getenv("WOTM_FOTOS");
+    if (fotos && !*fotos) fotos = nullptr;
+    if (!fotos && (!e || std::atoi(e) <= 0)) return;
     if (!std::getenv("PS2X_NO_VU1")) {   // o hierFlushObjQ do main.cpp (so com PS2X_NO_VU1) e quem libera o DMA no quadro amostrado
         std::fprintf(stderr, "[vu1check] desligado: so no modo nativo (PS2X_NO_VU1)\n");
         return;
     }
     if (!(wotm_vu1check::g_origHier = runtime.lookupFunction(wotm::fn::hier__Fii))) return;
+    if (fotos && !wotmFotoInit(fotos)) fotos = nullptr;
+    if (fotos) {
+        wotm_vu1check::g_keyOnly = true;
+        wotm_vu1check::snap::g_perShot = true;
+    } else if (const char *sp = std::getenv("WOTM_VU1CHECK_SNAP")) wotm_vu1check::snap::g_prefix = sp;
+    if (!fotos && (!e || std::atoi(e) <= 0)) return;
     wotm_vu1check::snap::g_rt = &runtime;
     g_wotmGifDmaTap = &wotm_vu1check::gifDmaTap;
-    if (std::getenv("WOTM_VU1CHECK_SNAP") && !std::getenv("PS2X_GS_UPLOADS")) {
+    if ((fotos || std::getenv("WOTM_VU1CHECK_SNAP")) && !std::getenv("PS2X_GS_UPLOADS")) {
         // A VRAM do instantaneo precisa das texturas e CLUTs: com PS2X_NO_GS o GS so processa os uploads (sem rasterizar) quando
         // PS2X_GS_UPLOADS esta ligado, e o VIF1 deixa passar os pacotes do PATH2 para isso. Lido pelo GS/VIF1 na primeira vez que rodam,
         // ainda depois daqui.
@@ -1809,8 +1832,8 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
 #endif
         std::fprintf(stderr, "[vu1check] instantaneo ligado: uploads de textura vao ao GS (PS2X_GS_UPLOADS=1) para a VRAM do arquivo\n");
     }
-    wotm_vu1check::g_period = std::atoi(e);
-    if (const char *w = std::getenv("WOTM_VU1CHECK_WHEN")) wotm_vu1check::parseWhen(w);
+    wotm_vu1check::g_period = e ? std::max(1, std::atoi(e)) : 1;
+    if (const char *w = std::getenv("WOTM_VU1CHECK_WHEN"); w && !fotos) wotm_vu1check::parseWhen(w);
     if (const char *b = std::getenv("WOTM_VU1CHECK_BURST")) wotm_vu1check::g_burst = std::max(1u, uint32_t(std::strtoul(b, nullptr, 10)));
     if (const char *n = std::getenv("WOTM_VU1CHECK_SHOTS")) wotm_vu1check::g_shots = uint32_t(std::strtoul(n, nullptr, 10));
     if (const char *m = std::getenv("WOTM_VU1CHECK_SNAP_MAX")) wotm_vu1check::snap::g_max = uint64_t(std::strtoull(m, nullptr, 10)) << 20;
@@ -1823,7 +1846,8 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
     g_wotmMscalTap = &wotm_vu1check::mscalTap;
     g_wotmChainTap = &wotm_vu1check::chainTap;
     runtime.registerFunction(wotm::fn::hier__Fii, &wotm_vu1check::hierChecked);
-    std::fprintf(stderr, "[vu1check] comparando VU1 x nativo a cada %d s\n", wotm_vu1check::g_period);
+    if (fotos) std::fprintf(stderr, "[vu1check] so pelo F8 (fotos)\n");
+    else std::fprintf(stderr, "[vu1check] comparando VU1 x nativo a cada %d s\n", wotm_vu1check::g_period);
 }
 
 // `ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--dump <prefixo>]`: refaz a checagem de um instantaneo (WOTM_VU1CHECK_SNAP) sem jogo.

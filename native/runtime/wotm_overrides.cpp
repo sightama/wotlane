@@ -32,6 +32,8 @@ extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
 void wotmShellFade(int start, int step, bool accumulate);
+bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
+bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPolys, lido na entrada do dmaData   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
 
 namespace
@@ -336,7 +338,12 @@ namespace
                 fieldLogFrame(rdram, ctx, runtime);
             // quadro pronto (update, hier, particleDraw) e o seguinte ainda nao comecou: o desenho nativo copia a cena aqui
             wotmCaptureFrame(rdram);
-            if (g_wotmFreeSpinPc != 0u && g_frameStartValid)
+            // pausa (F7/F6/F8, wotm_foto.inc): o quadro pronto fica na tela e o seguinte nao comeca. O quadro com parada conta 1 field:
+            // o tempo parado nao vira dt (sem isso o updateRate caia ao limite e o jogo dava um passo de 1/30 na volta)
+            wotmPauseBlock(runtime);
+            if (wotmPauseTookFrame())
+                WRITE32(kFieldCounter, READ32(kFieldCounterAtStart) + 1u);
+            else if (g_wotmFreeSpinPc != 0u && g_frameStartValid)
             {
                 const uint64_t vblanks = runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync;
                 const int32_t start = static_cast<int32_t>(READ32(kFieldCounterAtStart));
