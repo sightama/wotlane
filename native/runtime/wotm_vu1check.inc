@@ -468,16 +468,19 @@ uint8_t g_rgba[4] = {0x80, 0x80, 0x80, 0x80};
 float g_s = 0.f, g_t = 0.f, g_q = 1.f;
 uint32_t g_uv = 0;   // U nos bits 0-13, V nos 16-29 (10.4)
 uint8_t g_fogF = 255;   // F da neblina em vigor (XYZF2/XYZF3 ou FOG por A+D 0x0A)
+uint32_t g_gifZ = 0;    // Z do ultimo XYZ2/XYZF2 (24 bits no XYZF2), para o WOTM_VU1CHECK_Z
 void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
 {
     uint32_t prim = 4, nv = 0;
     float vx[3] = {}, vy[3] = {};
+    uint32_t vz[3] = {};
     struct VAttr { float s, t, q; uint32_t uv; uint8_t c[4]; uint8_t f; };
     VAttr va[3] = {};
     auto vertex = [&](float x, float y, bool kick, uint8_t f) {
         vx[0] = vx[1]; vy[0] = vy[1];
         vx[1] = vx[2]; vy[1] = vy[2];
         vx[2] = x; vy[2] = y;
+        vz[0] = vz[1]; vz[1] = vz[2]; vz[2] = g_gifZ;
         va[0] = va[1];
         va[1] = va[2];
         va[2] = {g_s, g_t, g_q, g_uv, {g_rgba[0], g_rgba[1], g_rgba[2], g_rgba[3]}, f};
@@ -520,6 +523,11 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
                 else if (s.q != 0.f) { t.u[k] = s.s / s.q; t.v[k] = s.t / s.q; }
                 std::memcpy(t.c[k], s.c, 4);
                 t.f[k] = s.f;
+            }
+            {   // diagnostico: WOTM_VU1CHECK_Z=<prog[,prog..]> imprime o Z do GS dos triangulos desses programas (indice do MSCAL, coluna 4 do dump)
+                static const char *zp = std::getenv("WOTM_VU1CHECK_Z");
+                if (zp && (*zp == '*' || (std::string(",") + zp + ",").find("," + std::to_string(prog) + ",") != std::string::npos))
+                    std::fprintf(stderr, "[z] prog %u (%.1f %.1f %u) (%.1f %.1f %u) (%.1f %.1f %u)\n", prog, vx[0], vy[0], vz[0], vx[1], vy[1], vz[1], vx[2], vy[2], vz[2]);
             }
             ++g_vuKicked;
             g_vuAll.push_back({prog, {t.x[0], t.x[1], t.x[2]}, {t.y[0], t.y[1], t.y[2]}, t.fbp});   // atribuicao por pixel: inteiros ou nao
@@ -571,6 +579,7 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
                     if (reg == 0x4 || reg == 0x5 || reg == 0xC || reg == 0xD) {
                         const bool adc = (w[3] >> 15) & 1;
                         if (reg == 0x4 || reg == 0xC) g_fogF = uint8_t((w[3] >> 4) & 0xFF);   // XYZF2/XYZF3: F nos bits 100-107
+                        g_gifZ = (reg == 0x4 || reg == 0xC) ? ((w[2] >> 4) & 0xFFFFFF) : w[2];   // PACKED XYZF2: Z nos bits 68-91
                         vertex((w[0] & 0xFFFF) / 16.f, (w[1] & 0xFFFF) / 16.f, (reg == 0x4 || reg == 0x5) && !adc, g_fogF);
                     } else if (reg == 0x1) { for (int k = 0; k < 4; ++k) g_rgba[k] = uint8_t(w[k]); }
                     else if (reg == 0x2) { std::memcpy(&g_s, &w[0], 4); std::memcpy(&g_t, &w[1], 4); std::memcpy(&g_q, &w[2], 4); }
@@ -2067,6 +2076,22 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
                 movie = LoadTextureFromImage(im);
             } else UpdateTexture(movie, px.data());
             wotm_live::g_replayMovieTex = []() { return movie.id; };
+        }
+    }
+    if (const char *tl = std::getenv("WOTM_VU1CMP_VRAMTEX")) {   // diagnostico: <tex0 hex>[,..] grava <instantaneo>_vram_<tex0>.png da VRAM
+        for (const char *s = tl; *s;) {
+            char *end = nullptr;
+            const uint64_t t0 = std::strtoull(s, &end, 16);
+            if (end == s) break;
+            std::vector<uint32_t> px;
+            uint32_t mw = 0, mh = 0;
+            if (wotm::gs::decodeTexture({runtime.memory().getGSVRAM(), PS2_GS_VRAM_SIZE}, t0, px, mw, mh)) {
+                Image im{px.data(), int(mw), int(mh), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                char name[1024];
+                std::snprintf(name, sizeof name, "%s_vram_%llx.png", snapPath, (unsigned long long)t0);
+                ExportImage(im, name);
+            } else std::fprintf(stderr, "[vu1cmp] VRAMTEX %llx: decodeTexture falhou\n", (unsigned long long)t0);
+            s = *end == ',' ? end + 1 : end;
         }
     }
     wotm_live::g_force43 = true;   // a referencia do GS e 4:3 (e o quadro fica em 960x720, renderHeight); o recorte abaixo supoe isso

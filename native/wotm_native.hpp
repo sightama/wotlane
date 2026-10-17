@@ -406,6 +406,7 @@ struct DrawItem {
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
     uint8_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState)
+    bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
 };
 
 struct Camera {
@@ -1358,6 +1359,7 @@ public:
         cs_ = 0;
         blend_ = kGsAlphaNormal;
         aref_ = kGsAlphaRef;
+        zmsk_ = false;
         spec_ = 0.f;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
@@ -2046,15 +2048,19 @@ public:
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         static const bool onePass = std::getenv("WOTM_ONEPASS") != nullptr;   // diagnostico: tudo num passe so (sem separar translucidos)
-        drawList(ram, items, wire, (wire || onePass) ? -1 : 0);
-        if (!wire) drawShadows(ram);   // sobre os opacos, antes dos translucidos
+        // Como o hier: fora da OT de alfa, opacos e translucidos juntos na ordem da travessia (gravando Z conforme o ZMSK do GROUP); a
+        // OT de alfa (passe 1) depois. Com dois passes (opacos primeiro), a previa da fase (tex 102, As ~ 1) saia antes do logo do
+        // telao (tex 140/141, sem gravar Z) e o logo ficava por cima; no GS a previa vem depois e o cobre.
+        drawList(ram, items, wire, (wire || onePass) ? -1 : 2);
         if (!wire && !onePass) {
             rlDrawRenderBatchActive();
-            rlDisableDepthMask();   // translucidos testam profundidade mas nao a escrevem
+            rlDisableDepthMask();   // translucidos: o drawList grava profundidade item a item pelo ZBUF_1.ZMSK (DrawItem::zmsk)
             drawList(ram, items, wire, 1);
             rlDrawRenderBatchActive();
             rlEnableDepthMask();
         }
+        // sombras projetadas depois da OT de alfa: no XGKICK os receptores redesenhados com a textura da sombra vem depois dela
+        if (!wire) drawShadows(ram);
         // particulas por ultimo (testam profundidade, nao escrevem): destroços (drawSprites), depois os demais tipos na ordem de particleDraw
         if (!wire) drawSprites(ram);
         if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
@@ -2087,7 +2093,27 @@ public:
         return false;
     }
 
-    // pass: -1 tudo; 0 so opacos/recortados; 1 so translucidos (ordenados do mais longe ao mais perto)
+    // Faixa da OT de alfa (pktLinkAlphaObjAsm): z = vf30.x do programa 0x0 do VU0, a distancia do centro da esfera do no (+0x10) ao
+    // plano 0 da vista (o de perto, fovNorms; em mundo, o mesmo de Particles::inViewVolume), no espaco do no (dividida pela escala).
+    // z <= 8 -> faixa 1; senao int(min(z, 1016) / 8) + 1, ate 128. pktInitReverseAlphaOT encadeia da faixa 128 para a 0.
+    // OBJECT com o bit 0x8000 das flags (+0xC): o hierTraverseAsm o liga na OT de alfa (pktLinkAlphaObjAsm), que sai depois de
+    // todas as cadeias normais do hier; os demais saem na ordem da travessia.
+    static bool inAlphaOT(const Ram &ram, const DrawItem &it) { return (ram.u16(it.node + 0xC) & 0x8000) != 0; }
+
+    static int alphaBin(const Ram &ram, const DrawItem &it) {
+        constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]: plano 0 em +0xF0, limiar em +0x120
+        const M4 &m = it.m;
+        float c[3], s2 = 0.f, z = -ram.f32(w + 0xF0 + 48);
+        xform(m, ram.f32(it.node + 0x10), ram.f32(it.node + 0x14), ram.f32(it.node + 0x18), c);
+        for (int k = 0; k < 3; ++k) z += ram.f32(w + 0xF0 + 4 * k) * c[k];
+        for (int i = 0; i < 3; ++i) s2 = std::max(s2, m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
+        if (s2 > 1e-12f) z /= std::sqrt(s2);
+        if (!(z > 8.f)) return 1;
+        return int(std::min(z, 1016.f) * 0.125f) + 1;
+    }
+
+    // pass: -1 tudo; 0 so opacos/recortados; 1 so a OT de alfa (inAlphaOT; alphaBin, empate LIFO); 2 tudo fora da OT, na ordem da
+    // travessia (lotes so entre itens seguidos com a mesma textura e o mesmo estado)
     // fadeByNode: multiplica o alfa pelo float em +0x4C do objeto (fade dos botoes: screenSetButtonAlpha grava `targetAlpha` ali)
     void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1, bool fadeByNode = false) {
         rlDisableBackfaceCulling();
@@ -2132,9 +2158,13 @@ public:
         constexpr uint32_t kSlotDouble = 0x80000000u;   // Ent::slot: 2o passe de GsBlendFactors::doubled (destino * 2)
         std::vector<Ent> order;   // (chave de textura, indice do item, slot de textura)
         order.reserve(list.size());
-        const bool far2near = pass == 1 && !wire;
+        const bool far2near = pass == 1 && !wire;   // OT de alfa: faixas e LIFO
+        const bool trav = pass == 2 && !wire;       // fora da OT: ordem da travessia, como as cadeias normais do hier
         for (uint32_t i = 0; i < list.size(); ++i) {
-            if (pass >= 0 && !wire && translucent(ram, list[i]) != (pass == 1)) continue;
+            if (pass >= 0 && !wire) {
+                const bool sel = pass == 0 ? !translucent(ram, list[i]) : pass == 1 ? inAlphaOT(ram, list[i]) : !inAlphaOT(ram, list[i]);
+                if (!sel) continue;
+            }
             {   // diagnostico: WOTM_ONLYTEX=<id[,id..]> desenha so esses texId (bisseccao de defeitos)
                 static const char *only = std::getenv("WOTM_ONLYTEX");
                 if (only) {
@@ -2161,22 +2191,26 @@ public:
             if (!(smask & (1u << sl))) continue;
             { static const int onlySl = std::getenv("WOTM_ONLYSLOT") ? std::atoi(std::getenv("WOTM_ONLYSLOT")) : -1; if (onlySl >= 0 && int(sl) != onlySl) continue; }   // diagnostico: so este slot de textura
             uint64_t key = wire ? 0 : texKey(ram, list[i], texRemap(sl));
-            if (far2near) {
-                // Distancia da origem do OBJECT ao olho; empate (pecas com a mesma origem) na ordem da travessia. O retail ordena pela
-                // faixa da OT de alfa (pktLinkAlphaObjAsm: vf30.x do VU0 sobre a esfera do objeto, ultimo inserido sai primeiro), mas
-                // nem a profundidade da esfera pela camera nem o desempate LIFO reproduzem a tela do drive-in (tex 76 antes do logo, tex 75).
-                const M4 &m = list[i].m;
-                const float dx = m.m[3][0] - eye_[0], dy = m.m[3][1] - eye_[1], dz = m.m[3][2] - eye_[2];
-                const float d2 = dx * dx + dy * dy + dz * dz;
-                uint32_t bits;
-                std::memcpy(&bits, &d2, 4);
-                key = uint64_t(~bits) + 1;   // maior distancia primeiro; nunca 0 (0 = "sem textura" abaixo)
-            }
+            if (far2near) key = uint64_t(2 + 128 - alphaBin(ram, list[i]));   // faixa mais longe primeiro (nunca 0 nem 1)
             order.push_back({key, i, sl});
             if (!wire && mdi && mdi->abe && gsBlendFactors(list[i].blend).doubled) order.push_back({key, i, sl | kSlotDouble});   // 2o passe, logo depois
             }
         }
-        std::stable_sort(order.begin(), order.end(), [](const Ent &a, const Ent &b) { return a.key < b.key; });
+        // Passe translucido na ordem do retail: os objetos fora da OT de alfa saem nas cadeias normais, na ordem da travessia; depois
+        // a OT (inAlphaOT), das faixas mais longe para as mais perto e, dentro da faixa, o ultimo da travessia primeiro
+        // (pktLinkAlphaObjAsm insere no comeco da lista). Os slots de um item e o 2o passe ficam juntos.
+        if (!trav)   // na travessia a ordem ja e a da lista (itens crescentes, slots do item juntos)
+            std::stable_sort(order.begin(), order.end(), [far2near](const Ent &a, const Ent &b) {
+                if (a.key != b.key) return a.key < b.key;
+                return far2near && a.item > b.item;   // OT: o ultimo da travessia primeiro
+            });
+        {   // diagnostico: WOTM_ALPHAORDER=1 lista o passe translucido na ordem em que sai (no, texId, faixa da OT de alfa, ALPHA_1)
+            static const bool ao = std::getenv("WOTM_ALPHAORDER") != nullptr;
+            if (ao && far2near)
+                for (const Ent &e : order)
+                    std::fprintf(stderr, "[alpha] no %x tex %u faixa %d item %u slot %x blend %02x\n", list[e.item].node, unsigned(ram.u16(list[e.item].node + 0x50)),
+                                 130 - int(e.key), e.item, e.slot, list[e.item].blend);
+        }
 
         SpriteView sprView;   // eixos e focos para os ObjSprite (montado no primeiro item que tiver)
         EnvView envV;         // camera do UV do mapa de ambiente (idem, no primeiro item com DrawItem::env)
@@ -2190,6 +2224,8 @@ public:
         constexpr uint8_t kBlendDouble = 0xFF;   // curBlend no 2o passe do doubled (A = 3 nao existe: nunca e um ALPHA)
         bool curDbl = false;   // lote aberto e o 2o passe do doubled
         int curMode = 0;       // modo do shaderNormal no lote aberto (1 e 2: passes do doubled)
+        uint8_t curItBlend = 0, curItRef = 0;   // estado do item do lote aberto (passe da travessia: lote so com o mesmo estado)
+        bool curItZ = false, curItAbe = false;
         auto setBlend = [&](uint8_t b) {
             if (b == curBlend) return;
             curBlend = b;
@@ -2248,7 +2284,10 @@ public:
             const uint32_t slot = o.slot & ~kSlotDouble;
             const bool multi = md->slotMask & (md->slotMask - 1);   // mais de um slot usado
             const bool envClamp = it.env == 1 && !wire;   // mapa de ambiente comum: CLAMP_1 = 5 (as texturas de objeto repetem)
-            if (o.key != cur || !open || far2near || envClamp != curClamp || dbl != curDbl) {
+            // na travessia o lote continua so com a mesma textura e o mesmo estado do GS (mistura, teste de alfa, ZMSK)
+            const bool travState = trav && open && (it.blend != curItBlend || it.aref != curItRef || it.zmsk != curItZ || md->abe != curItAbe);
+            if (o.key != cur || !open || far2near || travState || envClamp != curClamp || dbl != curDbl) {
+                curItBlend = it.blend; curItRef = it.aref; curItZ = it.zmsk; curItAbe = md->abe;
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
                 if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
                 if (!wire && dbl) { gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
@@ -2256,6 +2295,8 @@ public:
                 curDbl = dbl;
                 curMode = dbl ? 2 : (!wire && md->abe && gsBlendFactors(it.blend).doubled) ? 1 : 0;
                 if (!wire) setRef(it.aref);
+                // passe translucido: grava profundidade como o GS, a menos que o GROUP ligue o ZMSK (o chamador volta a mascara ao fim)
+                if (far2near || trav) { if (it.zmsk) rlDisableDepthMask(); else rlEnableDepthMask(); }
                 cur = o.key;
                 curClamp = envClamp;
                 const unsigned id = wire ? 0 : textureId(ram, it, texRemap(slot));
@@ -2429,6 +2470,7 @@ public:
         setBlend(kGsAlphaNormal);
         setRef(kGsAlphaRef);
         rlSetTexture(0);
+        if (trav) rlEnableDepthMask();   // a travessia muda a mascara item a item; quem vem depois espera gravar
         rlEnableBackfaceCulling();
     }
 
@@ -2566,6 +2608,7 @@ private:
     uint32_t cs_ = 0;      // _cs em desenho (drawCs; 0 no mundo e no ceu): colorQuad em objectColor
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
     uint8_t aref_ = kGsAlphaRef;       // DrawItem::aref herdado do GROUP mais proximo com ctx de TEST_1
+    bool zmsk_ = false;                // DrawItem::zmsk herdado do GROUP mais proximo com ctx de ZBUF_1
     uint8_t blend_ = kGsAlphaNormal;   // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
     float spec_ = 0.f;     // DrawItem::spec: o qword 20 que esta na memoria do VU1 neste ponto da ordem do hier
@@ -2578,8 +2621,10 @@ private:
     //  - aref: limiar do teste de alfa do TEST_1 para DrawItem::aref. Sem ATE (bit 0) ou com ALWAYS, o padrao do shader (kGsAlphaRef);
     //    GREATER (ATST 6) passa com A > AREF (bits 4-11), GEQUAL (5) com A >= AREF; os outros ATST nao aparecem e ficam no padrao.
     //    O 0x81 do Kineticlops vem com 0x5040D (A > 0x40): (Cd - Cs) As nao soma o fundo, e sem o teste o corpo inteiro sairia preto.
-    static void groupState(const Ram &ram, uint32_t ctx, int &alpha, int &aref) {
-        alpha = aref = -1;
+    //  - zmsk: ZBUF_1.ZMSK (bit 32) para DrawItem::zmsk. O logo do telao do drive-in (tex 140/141, GROUP com ZTST GEQUAL e ZMSK) fica
+    //    atras do telao (e8da50, sem ctx: grava Z) e o GS o esconde; sem o Z do telao, o nativo o mostrava na selecao de fase.
+    static void groupState(const Ram &ram, uint32_t ctx, int &alpha, int &aref, int &zmsk) {
+        alpha = aref = zmsk = -1;
         if (!ctx || !ram.ok(ctx, 0x20) || ram.u32(ctx + 0x14) != 0x10000000 || ram.u32(ctx + 0x18) != 0xE) return;
         const uint32_t n = std::min<uint32_t>(ram.u32(ctx + 0x10) & 0x7FFF, 8);
         if (!ram.ok(ctx, 0x20 + 16 * n)) return;
@@ -2589,7 +2634,7 @@ private:
             else if (reg == 0x47) {
                 const uint32_t atst = (d >> 1) & 7, ref = (d >> 4) & 0xFF;
                 aref = !(d & 1) ? kGsAlphaRef : atst == 6 ? int(ref) : atst == 5 ? std::max(int(ref) - 1, 0) : kGsAlphaRef;
-            }
+            } else if (reg == 0x4E) zmsk = int(ram.u32(ctx + 0x24 + 16 * i) & 1);
         }
     }
 
@@ -2952,6 +2997,7 @@ private:
             if (ram.u16(node + 0xC) & 0x2000) spec_ = ram.f32(node + 0x6C);
             items.back().spec = spec_;
             items.back().aref = aref_;
+            items.back().zmsk = zmsk_;
             objectUvOffset(ram, node, items.back().uvOff);
             objectColor(ram, node, items.back().color);
             objectEnv(ram, node, items.back());
@@ -2961,13 +3007,16 @@ private:
             if (!(gflags & 1)) break;
             if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && outOfView(ram, node, m)) break;
             const uint8_t saved = blend_, savedRef = aref_;
-            int b, r;
-            groupState(ram, ram.u32(node + 4) & 0x0FFFFFFF, b, r);
+            const bool savedZ = zmsk_;
+            int b, r, z;
+            groupState(ram, ram.u32(node + 4) & 0x0FFFFFFF, b, r, z);
             if (b >= 0) blend_ = uint8_t(b);
             if (r >= 0) aref_ = uint8_t(r);
+            if (z >= 0) zmsk_ = z != 0;
             kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
             blend_ = saved;
             aref_ = savedRef;
+            zmsk_ = savedZ;
             break;
         }
         case 2: {                                                                           // LOD
