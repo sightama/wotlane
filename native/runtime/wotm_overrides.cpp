@@ -203,6 +203,38 @@ namespace
     void startPointAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origStartPoint, rdram, ctx, runtime); }
     void camerasUpdateAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origCamerasUpdate, rdram, ctx, runtime); }
 
+    // Free for all de 1 jogador sem IA (mod, sempre ligado): screenFreeForAllOptions1P (tela 12) anda o cursor so por 1..3 IAs, mas
+    // o retail ja trata o item 0 na confirmacao (m_numAIs 0, pula o "first to" e vai direto a escolha do monstro, tela 3, que sem IA
+    // segue para a fase; na luta EvaluateOnePlayerChallengeStatus so reergue o jogador). Aqui o cursor passa a dar a volta por 0..3:
+    // depois da original, cima de 1 (que ia para 3) e baixo de 3 (que ia para 1) param no 0. O switch do menu (shell +0x43C) recebe
+    // o mesmo valor, como o hierSetSwitch faria (whichChild, se o switch tiver esse filho).
+    constexpr uint32_t kFfaOptions1P = wotm::fn::screenFreeForAllOptions1P__Fv;
+    constexpr uint32_t kFfaCursor = wotm::sym::currentSelection + 12 * 4;   // currentSelection[12]
+    PS2Runtime::RecompiledFunction g_origFfaOptions1P = nullptr;
+    uint32_t g_ffaRa = 0, g_ffaBefore = 0;
+    bool g_ffaPending = false;
+
+    void ffaOptions1PWithZero(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFfaOptions1P)
+        {
+            g_ffaRa = GPR_U32(ctx, 31);
+            g_ffaBefore = READ32(kFfaCursor);
+            g_ffaPending = true;
+        }
+        g_origFfaOptions1P(rdram, ctx, runtime);
+        if (!g_ffaPending || ctx->pc != g_ffaRa)
+            return;   // parou no meio (retomada cai aqui de novo e termina o servico)
+        g_ffaPending = false;
+        const uint32_t after = READ32(kFfaCursor);
+        if (!((g_ffaBefore == 1 && after == 3) || (g_ffaBefore == 3 && after == 1)))
+            return;
+        WRITE32(kFfaCursor, 0);
+        const uint32_t sw = READ32(kShell + 0x43C);
+        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > 0)   // SWITCH_NODE, numKids
+            WRITE8(sw + 8, 0);                                        // whichChild
+    }
+
     // WOTM_CLOAK=1 (teste do CLOAK na checagem VU1): na entrada de Monster::update (0x15B488) do jogador (m_monsters[0]) sem CLOAK
     // (m_cloaked, +0xEF), chama Monster::setCloakOn (0x162CD0), como o power-up; quando o tempo acaba, liga de novo no quadro seguinte.
     constexpr uint32_t kMonsterUpdate = wotm::fn::update__7Monster, kSetCloakOn = wotm::fn::setCloakOn__7Monster;
@@ -507,6 +539,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             runtime.registerFunction(kCamerasUpdate, &camerasUpdateAsHumans);
         std::fprintf(stderr, "[wotm] jogador controlado pela IA (WOTM_AIVSAI)\n");
     }
+    if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
+        runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
     if (std::getenv("WOTM_CLOAK") && (g_origMonsterUpdate = runtime.lookupFunction(kMonsterUpdate)) &&
         (g_setCloakOn = runtime.lookupFunction(kSetCloakOn)))
     {
