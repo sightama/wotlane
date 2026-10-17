@@ -329,8 +329,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
                     tex[s] = k == wotm::Scene::kScreenKey ? ((uint64_t(ram.u32(wotm::sym::displayBuffer) | 0x28128000u) | (1ull << 33)) & kTexMask)
                            : k ? wotm::Scene::objectTex0(ram, it.node, s) & kTexMask : 0;
                 }
-            static const uint16_t kBlendAlpha[3] = {0x44, 0x48, 0x42};   // Scene::groupBlend ao contrario
-            const uint16_t alpha = md->abe && it.blend < 3 ? kBlendAlpha[it.blend] : 0x44;
+            const uint16_t alpha = md->abe ? it.blend : wotm::kGsAlphaNormal;
             g_scene->forEachTri(ram, it, [&](const float p[3][3], const wotm::Vtx *v, const uint8_t (*rgb)[3], const float (*nw)[3]) {
                 WTri w;
                 w.slot = v[0].slot;

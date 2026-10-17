@@ -60,6 +60,17 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 13. **Entrada da partida:** às vezes uma luz verde no centro da tela que some (provavelmente o sumiço é o fade-in, não a luz apagando).
 14. **Vitória na campanha:** a tela apaga enquanto ainda deveria mostrar os tokens e a pergunta de salvar.
 
+**Fotos do dono (2026-10-17, `<runtime>\fotos\2026-10-17_002146`, `_004304`, `_004902`; `vu1cmp` de cada uma).** A geometria casa de 96% a 100% em todas; os defeitos são de mistura, textura e partículas:
+- **Kineticlops cor 3** (fotos 005, 008, 009): **corrigido**, ver "Corrigido". Sobra o UV da `tex 139` (rachaduras) deslocado em −1,6/−3,2 texels em todos os quadros: provavelmente a textura animada parada (abaixo).
+- **Esfera da explosão** (010; METRO 004 parecida): `pkt dd7180` etc., `tex 146`, `ALPHA` 0x48 no VU1 e 0x44 no nativo. Nenhum GROUP com `ctx` acima dela: herda o estado que o objeto anterior deixou na OT de alfa (`lastGsCtx`, `hierAlphaPkt`). Falta ler o `hierTraverseAsm`/`hierFlushObjQ` para reproduzir o vazamento.
+- **Fumaça** (003): `sistemas vu 0 nativo 1`. O nativo desenha um sistema tipo 15 (nuvem enorme, `fx 96`) que o VU1 não desenha nesse quadro.
+- **Faísca da parede** (004): partículas com 0% casados (vu 6, nativo 7); anéis em pé na referência, faixa deitada no nativo (orientação do quadrado). Mesmo item 11 acima.
+- **Destroços "pipoca"** (007; METRO 003/004 brancos): posição e tamanho casam (96,8% a 100%), mas a cor/textura sai branca e quadrada no nativo, marrom e texturizada na referência. Item 4.
+- **Feixe do poste em círculos** (002, 007, 008) e **brilho dos power-ups** (006, 011): os sprites de halo casam (49/49), mas onde a referência mostra o feixe (`pkt b20b00 tex 115`) o nativo mostra os halos (`c37f00 tex 108`) por cima; no power-up grande a referência pinta a `tex 108` onde o nativo não pinta nada (13 mil px). Item 3.
+- **Logotipo na seleção de fase** (001, `currScreen` 8): o par `tex 75/76` de novo. A referência desenha só a 76 (mapa), o nativo a 75 (logotipo) por cima, 26 mil px. Item 7.
+- **Fade cedo na entrada da luta** (004902, g 164): a referência é preta mas pinta o mundo (37 mil px da `tex 259`), ou seja, o jogo desenha a cena com cor zero; o nativo mostra a cena. Hipótese: escurecimento pela cor/luz, não por SPRITE de fade.
+- **Pedestres** (METRO 002): 99,8% casam num quadro; "parados e espelhados" só se confere com quadros seguidos (F6).
+
 Também em aberto, de relatos anteriores (2026-10-11, estado de 2026-10-14): **explosão do X + Quadrado opaca** (o dono acha que é textura, não mistura) e **texturas animadas** (paredes/limites do mapa e o Kineticlops ficam estáticos no nativo).
 
 **Resíduos das correções já feitas:**
@@ -142,6 +153,7 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 <details>
 <summary>Corrigido</summary>
 
+- **Kineticlops na cor 3 (2026-10-17, fotos 005/008 do dono):** o monstro saía verde e translúcido, e na referência sai preto e picotado com rachaduras azuis. Dois passes skinned: `tex 140` num GROUP com `ALPHA_1` 0x46 (`Cd*(1-As)`, escurece o fundo) e `tex 139` num GROUP com 0x81 (`(Cd-Cs)*As`) e `TEST_1` 0x5040D (passa com `A > 0x40`). O `groupBlend` só conhecia 0x44/0x48/0x42 e o resto virava 0x44; o shader descartava sempre `As <= 0,06`. Agora `gsBlend` (`wotm_fx.hpp`) monta os fatores do GL de qualquer `(A-B)*C+D` (as partículas também usam), e o `Scene::groupState` herda o `ALPHA_1` e o limiar do `TEST_1` (`DrawItem::aref`, uniform `alphaRef`). `ALPHA difere` de ~2.850 para 0 nas fotos com o monstro; `px` da foto 005 de 37.167 para 28.977; corpus sem piora. O corpus não tinha o Kineticlops nessa cor.
 - **Fundo da tela (2026-10-16):** o nativo limpava o quadro com `{30, 40, 60}` (azul de depuração) e o jogo com preto (a limpeza do quadro, dois SPRITE de tela inteira com RGBAQ 0/0/0/0x80). O céu dos menus e da luta deixa o fundo aparecer, e no nativo ele saía azulado (`tex 174`, domo do drive-in, ~52% dos pixels diferentes da seleção de personagem). `wotm_live.inc` limpa com preto. Corpus: seleção (tela 8) de 81 para 36 mil `px`, tela 99 de 68 para 40 mil, `destrocos` de 97 para 89 mil, `luta_centro` de 34 para 26 mil; nada piorou. `docs/screenshots/2026-10-16_fundo_preto_selecao.png` e `_luta.png` (referência | nativo antes | nativo depois).
 
 Nativo (`native/wotm_native.hpp`, `wotm_fx.hpp`). Flags do OBJECT em +0xC (`_hierobject`, `include/hieri_types.h`); o `hierTraverseAsm` (asm do `texm`) monta o cabeçalho de cada OBJECT para o VU1.

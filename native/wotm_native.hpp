@@ -387,13 +387,16 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
 
 // ---------------------------------------------------------------- cena
 
+// Teste de alfa padrao (TEST_1 0x8D: alfa > 8): o que o shader do Scene::draw descarta quando o GROUP nao traz outro.
+inline constexpr uint8_t kGsAlphaRef = 8;
+
 struct DrawItem {
     M4 m;
     uint32_t node;   // HierObject
     uint32_t animPkt = 0;   // CHAR_INSTANCE::animPktPtr (paleta de matrizes dos objetos skinned)
     int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
-    uint8_t blend = 0;      // mistura do ALPHA_1 do GROUP que contem o objeto (ctx em +4): 0 = (Cs-Cd)*As+Cd, 1 = Cs*As+Cd (aditivo), 2 = Cd-Cs*As
+    uint8_t blend = kGsAlphaNormal;   // byte baixo do ALPHA_1 do GROUP que contem o objeto (ctx em +4; gsBlend)
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
@@ -401,6 +404,7 @@ struct DrawItem {
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
+    uint8_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState)
 };
 
 struct Camera {
@@ -1338,7 +1342,8 @@ public:
         atMat_ = 0;
         animVal_ = 0;
         cs_ = 0;
-        blend_ = 0;
+        blend_ = kGsAlphaNormal;
+        aref_ = kGsAlphaRef;
         spec_ = 0.f;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
@@ -1927,6 +1932,15 @@ public:
         return md.get();
     }
 
+    // Limiar do teste de alfa no shader do draw (DrawItem::aref, unidades do alfa do GS: 0x80 = 1,0). Descarrega o lote antes: o
+    // uniform vale para o que for desenhado depois.
+    void setAlphaRef(uint8_t r) {
+        if (alphaRefLoc_ < 0) return;
+        rlDrawRenderBatchActive();
+        const float f = float(r);
+        SetShaderValue(alphaShader_, alphaRefLoc_, &f, SHADER_UNIFORM_FLOAT);
+    }
+
     // Desenha com o raylib (deve estar dentro de BeginMode3D).
     void draw(const Ram &ram, bool wire = false) {
         // Teste de alfa: pixels transparentes (sombras, helices, grades) nao podem escrever profundidade nem cor.
@@ -1961,13 +1975,14 @@ public:
             static const char *fs =
                 "#version 330\n"
                 "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA; in float fragPm;\n"
-                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; out vec4 finalColor;\n"
+                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; uniform float alphaRef; out vec4 finalColor;\n"
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
                 // GS: cor = texel * cor do vertice / 128 (o vertice vem cru, 0x80 = 1,0; acima disso clareia), limitada a 255;
                 // As = At * Av / 128, saturado em 255 pela funcao de textura (como a cor), / 128: ate 255/128
                 "  float as = t.a;\n"
                 "  if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); as = min(t.a * 3.9690, 1.9922); t.a = min(as, 1.0); }\n"
-                "  if (t.a < 0.06) discard;\n"
+                // teste de alfa do GS (TEST_1 do GROUP, DrawItem::aref; padrao kGsAlphaRef = alfa > 8)
+                "  if (as * 128.0 <= alphaRef) discard;\n"
                 "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
                 "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
                 "  vec3 c = mix(fogColor, t.rgb, f);\n"
@@ -1979,6 +1994,8 @@ public:
             fogLoc_[2] = GetShaderLocation(alphaShader_, "fogParams");
             fogLoc_[3] = GetShaderLocation(alphaShader_, "fogColor");
             fogLoc_[4] = GetShaderLocation(alphaShader_, "fogSplit");
+            alphaRefLoc_ = GetShaderLocation(alphaShader_, "alphaRef");
+            setAlphaRef(kGsAlphaRef);
         }
         const bool useShader = !wire && alphaShader_.id > 0;
         if (useShader) {
@@ -2039,7 +2056,7 @@ public:
         if (it.fade < 1.f) return true;   // cross-fade de LOD
         if (md && md->lowAlpha) return true;
         if (md && !md->sprites.empty()) return true;   // ObjSprite: brilho (alphaSort no halo do power-up)
-        if (md && md->abe && it.blend) return true;   // mistura aditiva/escurecedora precisa do passe translucido
+        if (md && md->abe && it.blend != kGsAlphaNormal) return true;   // mistura aditiva/escurecedora precisa do passe translucido
         for (uint32_t sl = 0; sl < 5; ++sl) {
             if (md && md->slotMask && !(md->slotMask & (1u << sl))) continue;
             const uint64_t k = texKey(ram, it, sl);
@@ -2144,11 +2161,19 @@ public:
         bool curClamp = false;     // lote aberto com DrawItem::env 1 (textura em CLAMP)
         unsigned clampedId = 0;    // textura posta em CLAMP no lote aberto; volta a REPEAT depois do flush
         bool open = false;
-        int curBlend = 0;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
-        auto setBlend = [&](int b) {   // 1: Cs*As + Cd; 2: Cd - Cs*As (cor pre-multiplicada no shader: shaderNormal com pm)
+        uint8_t curBlend = kGsAlphaNormal;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
+        bool curPremul = false;              // gsBlendPremul(curBlend): cor pre-multiplicada no shader (shaderNormal com pm)
+        auto setBlend = [&](uint8_t b) {
             if (b == curBlend) return;
             curBlend = b;
+            curPremul = gsBlendPremul(b);
             gsBlend(b);
+        };
+        uint8_t curRef = kGsAlphaRef;   // DrawItem::aref no uniform do shader (idem)
+        auto setRef = [&](uint8_t r) {
+            if (r == curRef) return;
+            curRef = r;
+            setAlphaRef(r);
         };
         for (const auto &o : order) {
             const DrawItem &it = list[o.item];
@@ -2198,7 +2223,8 @@ public:
             if (o.key != cur || !open || far2near || envClamp != curClamp) {
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
                 if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
-                if (!wire && md->abe) setBlend(it.blend); else if (!wire) setBlend(0);
+                if (!wire) setBlend(md->abe ? it.blend : kGsAlphaNormal);
+                if (!wire) setRef(it.aref);
                 cur = o.key;
                 curClamp = envClamp;
                 const unsigned id = wire ? 0 : textureId(ram, it, texRemap(slot));
@@ -2338,7 +2364,7 @@ public:
                         if (tid && tid == screenId_) rlTexCoord2f(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
                         else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        shaderNormal(fogBurn, v.fge, gsV, curBlend != 0);   // neblina e modulacao do GS no shader do draw
+                        shaderNormal(fogBurn, v.fge, gsV, curPremul);   // neblina e modulacao do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
@@ -2361,7 +2387,7 @@ public:
                     const int k = ix[q];
                     rlColor4ub(cr, cg, cb, ca);
                     if (tid) rlTexCoord2f(cu[k], cv[k]);
-                    shaderNormal(fogBurn, s.fge, gsA, curBlend != 0);
+                    shaderNormal(fogBurn, s.fge, gsA, curPremul);
                     rlVertex3f(c[k][0], c[k][1], c[k][2]);
                 }
             }
@@ -2369,7 +2395,8 @@ public:
         if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
         if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); }
         rlNormal3f(0.f, 0.f, 0.f);   // o que vier depois (sombras, particulas) sai sem neblina
-        setBlend(0);
+        setBlend(kGsAlphaNormal);
+        setRef(kGsAlphaRef);
         rlSetTexture(0);
         rlEnableBackfaceCulling();
     }
@@ -2492,6 +2519,7 @@ private:
     int lod_ = -1;
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual
     Shader alphaShader_{};
+    int alphaRefLoc_ = -1;   // uniform do teste de alfa (DrawItem::aref) no alphaShader_
     int fogLoc_[5] = {-1, -1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor, fogSplit
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
@@ -2506,19 +2534,31 @@ private:
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
     uint32_t cs_ = 0;      // _cs em desenho (drawCs; 0 no mundo e no ceu): colorQuad em objectColor
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
-    uint8_t blend_ = 0;    // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
+    uint8_t aref_ = kGsAlphaRef;       // DrawItem::aref herdado do GROUP mais proximo com ctx de TEST_1
+    uint8_t blend_ = kGsAlphaNormal;   // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
     float spec_ = 0.f;     // DrawItem::spec: o qword 20 que esta na memoria do VU1 neste ponto da ordem do hier
 
-    // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D com ALPHA_1 (data em +0x20, endereco 0x42 em +0x28), TEST_1 e ZBUF_1.
-    // Traduz o ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7) para DrawItem::blend; -1 = ctx sem ALPHA_1 (herda o do pai).
-    static int groupBlend(const Ram &ram, uint32_t ctx) {
-        if (!ctx || !ram.ok(ctx, 0x30) || ram.u32(ctx + 0x14) != 0x10000000 || ram.u32(ctx + 0x18) != 0xE || ram.u32(ctx + 0x28) != 0x42) return -1;
-        switch (ram.u32(ctx + 0x20) & 0xFF) {
-        case 0x44: return 0;   // (Cs-Cd)*As+Cd
-        case 0x48: return 1;   // (Cs-0)*As+Cd: brilho aditivo (Kineticlops)
-        case 0x42: return 2;   // (0-Cs)*As+Cd = Cd - Cs*As (B = 0 e Cs): tira do fundo a cor da camada (escurece e muda o tom)
-        default: return 0;
+    // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D (NLOOP em +0x10, um registrador A+D) e os pares (dado, endereco) a
+    // partir de +0x20; medidos: ALPHA_1 (0x42), TEST_1 (0x47) e ZBUF_1. Traduz para o estado dos filhos (-1 = ctx sem o registrador,
+    // herda o do pai):
+    //  - alpha: byte baixo do ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7; ver gsBlend) para DrawItem::blend. Medidos: 0x44 comum, 0x48
+    //    aditivo (Kineticlops), 0x42 escurece e muda o tom, 0x46 e 0x81 (Kineticlops em outra cor);
+    //  - aref: limiar do teste de alfa do TEST_1 para DrawItem::aref. Sem ATE (bit 0) ou com ALWAYS, o padrao do shader (kGsAlphaRef);
+    //    GREATER (ATST 6) passa com A > AREF (bits 4-11), GEQUAL (5) com A >= AREF; os outros ATST nao aparecem e ficam no padrao.
+    //    O 0x81 do Kineticlops vem com 0x5040D (A > 0x40): (Cd - Cs) As nao soma o fundo, e sem o teste o corpo inteiro sairia preto.
+    static void groupState(const Ram &ram, uint32_t ctx, int &alpha, int &aref) {
+        alpha = aref = -1;
+        if (!ctx || !ram.ok(ctx, 0x20) || ram.u32(ctx + 0x14) != 0x10000000 || ram.u32(ctx + 0x18) != 0xE) return;
+        const uint32_t n = std::min<uint32_t>(ram.u32(ctx + 0x10) & 0x7FFF, 8);
+        if (!ram.ok(ctx, 0x20 + 16 * n)) return;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t d = ram.u32(ctx + 0x20 + 16 * i), reg = ram.u32(ctx + 0x28 + 16 * i) & 0xFF;
+            if (reg == 0x42) alpha = int(d & 0xFF);
+            else if (reg == 0x47) {
+                const uint32_t atst = (d >> 1) & 7, ref = (d >> 4) & 0xFF;
+                aref = !(d & 1) ? kGsAlphaRef : atst == 6 ? int(ref) : atst == 5 ? std::max(int(ref) - 1, 0) : kGsAlphaRef;
+            }
         }
     }
 
@@ -2560,7 +2600,7 @@ private:
     // envMapCloakFx (0x8, que ele liga quando o _cs em desenho tem cloakMe, +0xAA). Ramo 2 (video, quadro anterior ou CLOAK) com
     // envMapIsVideo, texId[0] (+0x50) = 0 ou CLOAK; senao ramo 1. k = envMapWeight (+0x5C; 0 = 16); no CLOAK, cloakWeight (+0xAC) + j/64,
     // j = 3 - (count & 7) com count & 8, senao (count & 7) - 3 (count = contador de quadros 0x6F88E0). O CLOAK (env 3) tambem poe
-    // ALPHA_1 0x44 (blend 0), troca o multiplicador de cor q5 por (2,59375; 2,59375; 2,59375; 1) e a textura de cada slot pela do
+    // ALPHA_1 0x44 (kGsAlphaNormal), troca o multiplicador de cor q5 por (2,59375; 2,59375; 2,59375; 1) e a textura de cada slot pela do
     // quadro anterior (texKey com DrawItem).
     void objectEnv(const Ram &ram, uint32_t node, DrawItem &it) const {
         const uint16_t f = ram.u16(node + 0xC);
@@ -2573,7 +2613,7 @@ private:
             const uint32_t n = ram.u32(wotm::sym::count_006F88E0);
             const int j = (n & 8) ? 3 - int(n & 7) : int(n & 7) - 3;
             it.envK = ram.f32(cs_ + 0xAC) + float(j) / 64.f;
-            it.blend = 0;
+            it.blend = kGsAlphaNormal;
             for (int c = 0; c < 3; ++c) it.color[c] = 2.59375f;
             it.color[3] = 1.f;
         }
@@ -2866,16 +2906,20 @@ private:
             // o especular da parte anterior do proprio monstro (checagem: ~10% dos vertices dele saiam mais escuros, so no cinza).
             if (ram.u16(node + 0xC) & 0x2000) spec_ = ram.f32(node + 0x6C);
             items.back().spec = spec_;
+            items.back().aref = aref_;
             objectUvOffset(ram, node, items.back().uvOff);
             objectColor(ram, node, items.back().color);
             objectEnv(ram, node, items.back());
             break;
-        case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 dos filhos)
-            const uint8_t saved = blend_;
-            const int b = groupBlend(ram, ram.u32(node + 4) & 0x0FFFFFFF);
+        case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 e TEST_1 dos filhos)
+            const uint8_t saved = blend_, savedRef = aref_;
+            int b, r;
+            groupState(ram, ram.u32(node + 4) & 0x0FFFFFFF, b, r);
             if (b >= 0) blend_ = uint8_t(b);
+            if (r >= 0) aref_ = uint8_t(r);
             kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
             blend_ = saved;
+            aref_ = savedRef;
             break;
         }
         case 2: {                                                                           // LOD
