@@ -62,16 +62,19 @@ namespace wotm {
 // PM (+4): a mistura e aditiva ou subtrativa e o shader devolve a cor ja vezes o As inteiro (gsBlend usa fator 1 na origem). O As do
 // GS vai ate 255/128 (At * Av / 128 saturado em 255 pela funcao de textura); o fator SRC_ALPHA do GL o limitaria a 1. Na mistura comum
 // ((Cs - Cd) As + Cd) fica limitado: As > 1 pediria fator negativo no destino.
+// Modo (+8 * modo): 1 = sai com alfa As / 2 e 2 = sai branco (os dois passes de GsBlendFactors::doubled).
 inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
-inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false) {
-    rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f));
+inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false, int mode = 0) {
+    rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f) + (g_premulShader ? 8.f * float(mode) : 0.f));
 }
 // Mistura do GS pelo byte baixo do registrador ALPHA: cor = (A - B) * C + D, campos de 2 bits A, B, D (0 Cs, 1 Cd, 2 zero) e C (0 As,
 // 1 Ad, 2 FIX; Ad e FIX nao aparecem nos objetos medidos e ficam como As). Vira Cs * (as * As + ks) + Cd * (ad * As + kd) no GL:
 // 0x44 = (Cs - Cd) As + Cd (comum), 0x48 = Cs As + Cd (aditivo), 0x42 = Cd - Cs As, 0x46 = Cd (1 - As) e 0x81 = (Cd - Cs) As (cores do
 // Kineticlops). Fator 1 + As nao existe no GL e satura em 1. Com o fator As so na origem, o shader pre-multiplica (gsBlendPremul:
-// shaderNormal com pm), e o As passa de 1 como no GS.
-struct GsBlendFactors { int src = RL_SRC_ALPHA, dst = RL_ONE_MINUS_SRC_ALPHA, eq = RL_FUNC_ADD; bool premul = false; };
+// shaderNormal com pm), e o As passa de 1 como no GS. Com D = 0 e o As no destino (0x81) nao da para pre-multiplicar, e o As do GS
+// vai ate ~2 (textura 0xFF com vertice 0x80): doubled = desenhar com As / 2 (shaderNormal modo 1) e dobrar o destino num segundo
+// passe da mesma geometria (gsBlendDouble, modo 2). Com D = Cd o As > 1 so zeraria o fator, como o GL ja faz.
+struct GsBlendFactors { int src = RL_SRC_ALPHA, dst = RL_ONE_MINUS_SRC_ALPHA, eq = RL_FUNC_ADD; bool premul = false, doubled = false; };
 inline GsBlendFactors gsBlendFactors(uint8_t alpha) {
     const int A = alpha & 3, B = (alpha >> 2) & 3, D = (alpha >> 6) & 3;
     struct Term { int f; bool neg; };
@@ -88,7 +91,13 @@ inline GsBlendFactors gsBlendFactors(uint8_t alpha) {
     else if (s.neg) r.eq = RL_FUNC_REVERSE_SUBTRACT;
     else if (d.neg) r.eq = RL_FUNC_SUBTRACT;
     r.premul = r.src == RL_SRC_ALPHA && (r.dst == RL_ZERO || r.dst == RL_ONE);
+    r.doubled = D == 2 && r.dst == RL_SRC_ALPHA;
     return r;
+}
+// Segundo passe do doubled: destino * 2 (saida branca vezes DST_COLOR, mais o destino)
+inline void gsBlendDouble() {
+    rlSetBlendFactors(RL_DST_COLOR, RL_ONE, RL_FUNC_ADD);
+    rlSetBlendMode(RL_BLEND_CUSTOM);
 }
 inline bool gsBlendPremul(uint8_t alpha) { return gsBlendFactors(alpha).premul; }
 inline void gsBlend(uint8_t alpha) {
