@@ -406,7 +406,7 @@ void chainTap(const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t
 
 // Cabecalho do VU1 no MSCAL (so com o dump): endereco do programa e os qwords 5-8 (vf31 e as direcoes das luzes) e 17-20 (cores das
 // luzes) da memoria de dados, que o programa de luz (0x1010) le com LQ n(vi0).
-struct ProgHdr { uint32_t addr; float q[8][4]; };
+struct ProgHdr { uint32_t addr; float q[8][4]; float pt[7][4]; };
 std::vector<ProgHdr> g_progHdr;
 
 // Entrada do microprograma do lens flare (0x2B20) lida da memoria de dados do VU1 no MSCAL, como ele a le: q44 = (centro, 18, n),
@@ -450,6 +450,7 @@ uint32_t mscalTap(const uint32_t *srcs, uint32_t n, uint32_t prog, const uint8_t
     if (dump) {
         ProgHdr h{prog, {}};
         static const int qw[8] = {5, 6, 7, 8, 17, 18, 19, 20};
+        if (vu1Data && prog == 0x15D8u) for (int k = 0; k < 7; ++k) std::memcpy(h.pt[k], vu1Data + 16 * (169 + k), 16);   // luzes pontuais (q169-q175)
         if (vu1Data)
             for (int k = 0; k < 8; ++k) std::memcpy(h.q[k], vu1Data + 16 * qw[k], 16);
         g_progHdr.push_back(h);
@@ -1282,6 +1283,12 @@ void compare()
                 for (int k = 0; k < 8; ++k)
                     for (int c = 0; c < 4; ++c) std::fprintf(g_dump, ",%g", g_progHdr[i].q[k][c]);
                 std::fprintf(g_dump, "\n");
+                if (g_progHdr[i].addr == 0x15D8u) {   // luzes pontuais: q169-q171 (-luz no objeto, transpostas), q172-q174 (cores), q175 (falloffs)
+                    std::fprintf(g_dump, "ptl,%zu", i + 1);
+                    for (int k = 0; k < 7; ++k)
+                        for (int c = 0; c < 4; ++c) std::fprintf(g_dump, ",%g", g_progHdr[i].pt[k][c]);
+                    std::fprintf(g_dump, "\n");
+                }
             }
         }
     // texDifere: casados com textura diferente; vuTex/natTex/natSlot: o par diferente mais comum do objeto

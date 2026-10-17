@@ -159,6 +159,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_NOFX`, `WOTM_FXNOGRAY`, `WOTM_NOSHADOW`, `WOTM_NOFLARE` | desligam partículas / rampa cinza / sombras / lens flare |
 | `WOTM_SHADOWPULL=<f>` | fração da distância ao olho que o vértice da sombra é puxado para não brigar com o receptor (padrão 0,002, teto 1000 × f = 2) |
 | `WOTM_FXLIST=1`, `WOTM_FXDUMP=<prefixo>` | lista sistemas de partículas / grava suas texturas (`tools/fx.py` dá nomes) |
+| `WOTM_PTLOG=1` | imprime a tabela de luzes pontuais (`pointLights`: `closest[]`, posição, alcance, cor, falloff) a cada `collect` e cada teste de esfera do `objectPointLights` |
 | `WOTM_FLARELOG=1`, `WOTM_FLARESHOT=<png>` | imprime as entradas da lista de lens flare, a entrada do `drawFlares` e o teste de Z (amostras visíveis, W da luz e W da amostra mais perto) / grava a imagem do teste de profundidade do flare |
 | `WOTM_DUSTLOG=1` | tempo e parâmetros de cada regeneração da textura composta de poeira (`Scene::dustTexture`) |
 | `WOTM_FOGSPLIT=1`, `=2` ou `=3` | neblina: metade esquerda sem / máscara (imprime os parâmetros) / alterna por quadro |
