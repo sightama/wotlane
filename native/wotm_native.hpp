@@ -389,7 +389,8 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
 // ---------------------------------------------------------------- cena
 
 // Teste de alfa padrao (TEST_1 0x8D: alfa > 8): o que o shader do Scene::draw descarta quando o GROUP nao traz outro.
-inline constexpr uint8_t kGsAlphaRef = 8;
+// kGsAlphaNoTest: TEST_1 com ATE = 0 (sem teste: o GS desenha todo pixel, inclusive As = 0; os brilhos aditivos 0x5040C dependem disso).
+inline constexpr int16_t kGsAlphaRef = 8, kGsAlphaNoTest = -1;
 
 struct DrawItem {
     M4 m;
@@ -405,7 +406,7 @@ struct DrawItem {
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
-    uint8_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState)
+    int16_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState; kGsAlphaNoTest = sem teste)
     bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
     bool lodX = false;   // dentro de um cross-fade de LOD (os dois LODs, inclusive o de fade 1): com o bit 0x4000 vai para a OT de alfa
 };
@@ -1958,7 +1959,7 @@ public:
 
     // Limiar do teste de alfa no shader do draw (DrawItem::aref, unidades do alfa do GS: 0x80 = 1,0). Descarrega o lote antes: o
     // uniform vale para o que for desenhado depois.
-    void setAlphaRef(uint8_t r) {
+    void setAlphaRef(int16_t r) {
         if (alphaRefLoc_ < 0) return;
         rlDrawRenderBatchActive();
         const float f = float(r);
@@ -2180,9 +2181,10 @@ public:
             }
             {   // diagnostico: WOTM_ONLYTEX=<id[,id..]> desenha so esses texId (bisseccao de defeitos)
                 static const char *only = std::getenv("WOTM_ONLYTEX");
-                if (only) {
-                    const std::string s = std::string(",") + only + ",";
-                    if (s.find("," + std::to_string(ram.u16(list[i].node + 0x50)) + ",") == std::string::npos) continue;
+                if (only) {   // com '-' na frente: desenha tudo menos esses
+                    const bool skip = *only == '-';
+                    const std::string s = std::string(",") + (skip ? only + 1 : only) + ",";
+                    if ((s.find("," + std::to_string(ram.u16(list[i].node + 0x50)) + ",") == std::string::npos) != skip) continue;
                 }
             }
             {   // diagnostico: WOTM_ONLYNODE=<hex[,hex..]> desenha so esses nos (isola um personagem do resto da cena)
@@ -2243,7 +2245,8 @@ public:
         constexpr uint8_t kBlendDouble = 0xFF;   // curBlend no 2o passe do doubled (A = 3 nao existe: nunca e um ALPHA)
         bool curDbl = false;   // lote aberto e o 2o passe do doubled
         int curMode = 0;       // modo do shaderNormal no lote aberto (1 e 2: passes do doubled)
-        uint8_t curItBlend = 0, curItRef = 0;   // estado do item do lote aberto (passe da travessia: lote so com o mesmo estado)
+        uint8_t curItBlend = 0;
+        int16_t curItRef = 0;   // estado do item do lote aberto (passe da travessia: lote so com o mesmo estado)
         bool curItZ = false, curItAbe = false;
         auto setBlend = [&](uint8_t b) {
             if (b == curBlend) return;
@@ -2251,8 +2254,8 @@ public:
             curPremul = gsBlendPremul(b);
             gsBlend(b);
         };
-        uint8_t curRef = kGsAlphaRef;   // DrawItem::aref no uniform do shader (idem)
-        auto setRef = [&](uint8_t r) {
+        int16_t curRef = kGsAlphaRef;   // DrawItem::aref no uniform do shader (idem)
+        auto setRef = [&](int16_t r) {
             if (r == curRef) return;
             curRef = r;
             setAlphaRef(r);
@@ -2336,13 +2339,15 @@ public:
             // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
             const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
-            {   // diagnostico: WOTM_TEXINFO=<id> imprime (ate 6 vezes) os objetos com esse texId: mistura, cor, fudge, textura e vertices
+            {   // diagnostico: WOTM_TEXINFO=<id> imprime (ate WOTM_TEXINFO_N vezes, padrao 6) os objetos com esse texId: mistura, cor, fudge, textura e vertices
                 static const int ti = std::getenv("WOTM_TEXINFO") ? std::atoi(std::getenv("WOTM_TEXINFO")) : -1;
                 static int printed = 0;
-                if (ti >= 0 && printed < 6 && int(objectTexId(ram, it.node, slot)) == ti) {
+                static const int tiMax = std::getenv("WOTM_TEXINFO_N") ? std::atoi(std::getenv("WOTM_TEXINFO_N")) : 6;
+                if (printed < tiMax && ((ti >= 0 && int(objectTexId(ram, it.node, slot)) == ti) || (ti == -2 && !md->sprites.empty()) || (ti == -3 && it.blend != kGsAlphaNormal && !t.empty()) || (ti == -4 && it.aref == kGsAlphaNoTest))) {   // -2: todos os OBJECT sprite; -3: malhas fora da mistura comum; -4: sem teste de alfa
                     ++printed;
-                    std::fprintf(stderr, "[texinfo] node %x blend %d abe %d color %.3f %.3f %.3f %.3f fade %.3f gsA %d key %llx tris %zu\n", it.node, it.blend,
-                                 int(md->abe), it.color[0], it.color[1], it.color[2], it.color[3], it.fade, int(gsA), (unsigned long long)o.key, t.size());
+                    std::fprintf(stderr, "[texinfo] tex %u node %x blend %d abe %d color %.3f %.3f %.3f %.3f fade %.3f gsA %d key %llx tris %zu sprites %zu tex0 %llx aref %d\n", objectTexId(ram, it.node, slot), it.node, it.blend,
+                                 int(md->abe), it.color[0], it.color[1], it.color[2], it.color[3], it.fade, int(gsA), (unsigned long long)o.key, t.size(),
+                                 md->sprites.size(), (unsigned long long)objectTex0(ram, it.node, slot), int(it.aref));
                     std::fprintf(stderr, "[texinfo]   fudge %.4f burn %.3f flags %04x pos %.1f %.1f %.1f\n", ram.f32(it.node + 0x28), ram.f32(it.node + 0x2C),
                                  ram.u16(it.node + 0xC), it.m.m[3][0], it.m.m[3][1], it.m.m[3][2]);
                     std::vector<uint32_t> tp;
@@ -2353,6 +2358,12 @@ public:
                         for (uint32_t c : tp) { for (int k = 0; k < 4; ++k) s[k] += (c >> (8 * k)) & 255; amin = std::min(amin, c >> 24); amax = std::max(amax, c >> 24); }
                         std::fprintf(stderr, "[texinfo]   textura %ux%u media %.0f %.0f %.0f %.0f alfa %u..%u texKey %llx\n", tw, th, s[0] / tp.size(), s[1] / tp.size(),
                                      s[2] / tp.size(), s[3] / tp.size(), amin, amax, (unsigned long long)texKey(ram, it.node, slot));
+                        if (const char *dir = std::getenv("WOTM_TEXINFO_PNG")) {   // grava <dir>/texinfo_<texKey>.png (alfa cru do GS, 0x80 = 1,0)
+                            char name[1024];
+                            std::snprintf(name, sizeof name, "%s/texinfo_%llx.png", dir, (unsigned long long)texKey(ram, it.node, slot));
+                            Image im{tp.data(), int(tw), int(th), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                            ExportImage(im, name);
+                        }
                         for (uint32_t y = 0; y < th; y += th / 8) {
                             std::fprintf(stderr, "[texinfo]   ");
                             for (uint32_t x = 0; x < tw; x += tw / 8) std::fprintf(stderr, "%08x ", tp[y * tw + x]);
@@ -2633,7 +2644,7 @@ private:
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
     uint32_t cs_ = 0;      // _cs em desenho (drawCs; 0 no mundo e no ceu): colorQuad em objectColor
     int lodIdx_ = 0;       // LOD escolhido mais recentemente na descida
-    uint8_t aref_ = kGsAlphaRef;       // DrawItem::aref herdado do no mais proximo com ctx de TEST_1 (CtxScope)
+    int16_t aref_ = kGsAlphaRef;       // DrawItem::aref herdado do no mais proximo com ctx de TEST_1 (CtxScope)
     bool zmsk_ = false;                // DrawItem::zmsk herdado do no mais proximo com ctx de ZBUF_1 (CtxScope)
     uint8_t blend_ = kGsAlphaNormal;   // DrawItem::blend herdado do no mais proximo com ctx de ALPHA_1 (CtxScope)
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
@@ -2645,13 +2656,17 @@ private:
     // herda o do pai):
     //  - alpha: byte baixo do ALPHA_1 (A,B,C,D = bits 0-1, 2-3, 4-5, 6-7; ver gsBlend) para DrawItem::blend. Medidos: 0x44 comum, 0x48
     //    aditivo (Kineticlops), 0x42 escurece e muda o tom, 0x46 e 0x81 (Kineticlops em outra cor);
-    //  - aref: limiar do teste de alfa do TEST_1 para DrawItem::aref. Sem ATE (bit 0) ou com ALWAYS, o padrao do shader (kGsAlphaRef);
-    //    GREATER (ATST 6) passa com A > AREF (bits 4-11), GEQUAL (5) com A >= AREF; os outros ATST nao aparecem e ficam no padrao.
+    //  - aref: limiar do teste de alfa do TEST_1 para DrawItem::aref. Sem ATE (bit 0): sem teste (kGsAlphaNoTest; o halo dos
+    //    power-ups e o brilho dos postes, 0x5040C com alfa de vertice 6 a 38, perdiam o degrade no limiar 8 e viravam disco de borda
+    //    dura) e ALWAYS (ATST 1) tambem. GREATER (6) passa com A > AREF (bits 4-11), GEQUAL (5) com A >= AREF; os outros ATST nao
+    //    aparecem e ficam no padrao do shader (kGsAlphaRef).
     //    O 0x81 do Kineticlops vem com 0x5040D (A > 0x40): (Cd - Cs) As nao soma o fundo, e sem o teste o corpo inteiro sairia preto.
     //  - zmsk: ZBUF_1.ZMSK (bit 32) para DrawItem::zmsk. O logo do telao do drive-in (tex 140/141, GROUP com ZTST GEQUAL e ZMSK) fica
     //    atras do telao (e8da50, sem ctx: grava Z) e o GS o esconde; sem o Z do telao, o nativo o mostrava na selecao de fase.
+    static constexpr int kRefAbsent = -1000;   // groupState: ctx sem TEST_1 (herda o aref do pai)
     static void groupState(const Ram &ram, uint32_t ctx, int &alpha, int &aref, int &zmsk) {
-        alpha = aref = zmsk = -1;
+        alpha = zmsk = -1;
+        aref = kRefAbsent;
         if (!ctx || !ram.ok(ctx, 0x20) || ram.u32(ctx + 0x14) != 0x10000000 || ram.u32(ctx + 0x18) != 0xE) return;
         const uint32_t n = std::min<uint32_t>(ram.u32(ctx + 0x10) & 0x7FFF, 8);
         if (!ram.ok(ctx, 0x20 + 16 * n)) return;
@@ -2660,7 +2675,8 @@ private:
             if (reg == 0x42) alpha = int(d & 0xFF);
             else if (reg == 0x47) {
                 const uint32_t atst = (d >> 1) & 7, ref = (d >> 4) & 0xFF;
-                aref = !(d & 1) ? kGsAlphaRef : atst == 6 ? int(ref) : atst == 5 ? std::max(int(ref) - 1, 0) : kGsAlphaRef;
+                static const bool oldAte = std::getenv("WOTM_ATEOLD") != nullptr;   // diagnostico: ATE 0 com o limiar padrao (antes de 2026-10-17)
+                aref = (!(d & 1) || atst == 1) ? (oldAte ? kGsAlphaRef : kGsAlphaNoTest) : atst == 6 ? int(ref) : atst == 5 ? std::max(int(ref) - 1, 0) : kGsAlphaRef;
             } else if (reg == 0x4E) zmsk = int(ram.u32(ctx + 0x24 + 16 * i) & 1);
         }
     }
@@ -2672,13 +2688,14 @@ private:
     // saia como um disco escuro em vez de clarear.
     struct CtxScope {
         Scene &s;
-        uint8_t blend, aref;
+        uint8_t blend;
+        int16_t aref;
         bool zmsk;
         CtxScope(Scene &sc, const Ram &ram, uint32_t ctx) : s(sc), blend(sc.blend_), aref(sc.aref_), zmsk(sc.zmsk_) {
             int b, r, z;
             groupState(ram, ctx & 0x0FFFFFFF, b, r, z);
             if (b >= 0) s.blend_ = uint8_t(b);
-            if (r >= 0) s.aref_ = uint8_t(r);
+            if (r != kRefAbsent) s.aref_ = int16_t(r);
             if (z >= 0) s.zmsk_ = z != 0;
         }
         ~CtxScope() { s.blend_ = blend; s.aref_ = aref; s.zmsk_ = zmsk; }
