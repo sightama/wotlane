@@ -107,6 +107,7 @@ inline void gsBlend(uint8_t alpha) {
 }
 inline constexpr uint8_t kGsAlphaNormal = 0x44;   // (Cs - Cd) As + Cd
 inline constexpr uint8_t kGsAlphaAdd = 0x48;      // Cs As + Cd
+inline constexpr uint8_t kGsNoAbe = 0x0A;         // (0 - 0) As + Cs = Cs: PRIM.ABE 0, o alfa so vale para o teste (TEST_1)
 
 // Textura branca com alfa 0x80 (1,0 do GS): o "sem textura" no modo GS (a padrao do raylib, alfa 255, valeria 2,0).
 inline unsigned gsWhiteTexture() {

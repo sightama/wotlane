@@ -134,8 +134,8 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 <!-- WOTM_ENV:START -->
 | Variável | Efeito |
 |---|---|
-| `WOTM_IDCOLOR=1` | pinta cada objeto com o texId (`R + 256*G`) |
-| `WOTM_ONLYTEX=id,..` / `WOTM_ONLYNODE=hex,..` / `WOTM_ONLYSLOT=n` | desenha só essas texturas / nós / só o slot `n` de textura de cada seção |
+| `WOTM_IDCOLOR=1` ou `=2` | `=1`: pinta cada objeto com o texId (`R + 256*G`); `=2`: com o endereço do nó dividido por 16 (`R + 256*G + 65536*B`), sem mistura nem neblina (o pixel diz o último objeto que o gravou) |
+| `WOTM_ONLYTEX=id,..` / `WOTM_ONLYNODE=hex,..` / `WOTM_SKIPNODE=hex,..` / `WOTM_ONLYSLOT=n` | desenha só essas texturas / só esses nós / tudo menos esses nós / só o slot `n` de textura de cada seção |
 | `WOTM_TEXFROM=de:para` | desenha o slot `de` com a textura de `para` |
 | `WOTM_TEXINFO=id` | viewer: imprime a entrada `texInfo[id]` e o pacote de pixels (usado na elipse do power-up) |
 | `WOTM_NODETEX=id`, `WOTM_PALCMP=cbp`, `WOTM_T4SMOOTH=1` | viewer: lista os objetos com `texId[0] == id` (texIds, TEX0 por contexto) / paleta do CBP no `.RTX` x na VRAM do dump / suavidade dos pacotes T4 lineares x como memória do GS |
@@ -150,6 +150,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_SHOWADC`, `WOTM_SUBPKT=n` | mostra os triângulos descartados pelo ADC em vermelho / só um sub-pacote |
 | `WOTM_NOVCOL`, `WOTM_OPAQUE`, `WOTM_ONEPASS`, `WOTM_UVISO` | desligam partes do desenho |
 | `WOTM_NOFX`, `WOTM_FXNOGRAY`, `WOTM_NOSHADOW`, `WOTM_NOFLARE` | desligam partículas / rampa cinza / sombras / lens flare |
+| `WOTM_SHADOWPULL=<f>` | fração da distância ao olho que o vértice da sombra é puxado para não brigar com o receptor (padrão 0,002, teto 1000 × f = 2) |
 | `WOTM_FXLIST=1`, `WOTM_FXDUMP=<prefixo>` | lista sistemas de partículas / grava suas texturas (`tools/fx.py` dá nomes) |
 | `WOTM_FLARELOG=1`, `WOTM_FLARESHOT=<png>` | imprime as entradas da lista de lens flare e o teste de Z / grava a imagem do teste de profundidade do flare |
 | `WOTM_DUSTLOG=1` | tempo e parâmetros de cada regeneração da textura composta de poeira (`Scene::dustTexture`) |

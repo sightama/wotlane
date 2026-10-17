@@ -407,6 +407,7 @@ struct DrawItem {
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
     uint8_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState)
     bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
+    bool lodX = false;   // dentro de um cross-fade de LOD (os dois LODs, inclusive o de fade 1): com o bit 0x4000 vai para a OT de alfa
 };
 
 struct Camera {
@@ -1101,6 +1102,8 @@ public:
         const float rl = std::sqrt(R[0] * R[0] + R[1] * R[1] + R[2] * R[2]);
         for (float &c : R) c /= rl;
         const float U[3] = {L[1] * R[2] - L[2] * R[1], L[2] * R[0] - L[0] * R[2], L[0] * R[1] - L[1] * R[0]};
+        static const float kShadowPull = std::getenv("WOTM_SHADOWPULL") ? float(std::atof(std::getenv("WOTM_SHADOWPULL"))) : 0.002f;   // diagnostico
+        const float kShadowPullMax = kShadowPull * 1000.f;
         float inten = ram.f32(addr::psShadowIntens);   // 80 no psVarInit (escala do GS: 0x80 = 1,0)
         inten = (inten > 0.f && inten < 1000.f) ? std::min(1.f, inten / 128.f) : 0.625f;
 
@@ -1124,6 +1127,9 @@ public:
             auto receive = [&](const std::vector<DrawItem> &list) {
                 for (const DrawItem &it : list) {
                     if (std::binary_search(b.casterNodes.begin(), b.casterNodes.end(), it.node)) continue;
+                    // so recebe sombra o OBJECT sem 0x200 nem 0x60 nas flags: o hierTraverseAsm so chama o psObjectCull (teste do
+                    // receptor) nesses. No luta_hud recebem so os pisos (flags 0x90); o vidro, as arvores e os brilhos nao
+                    if (ram.u16(it.node + 0xC) & 0x260) continue;
                     // esfera do objeto (+0x10 centro, +0x1C raio) contra o cilindro de sombra
                     float c[3];
                     xform(it.m, ram.f32(it.node + 0x10), ram.f32(it.node + 0x14), ram.f32(it.node + 0x18), c);
@@ -1146,7 +1152,8 @@ public:
                             if (eyeOk_) {
                                 const float dx = eye_[0] - q[0], dy = eye_[1] - q[1], dz = eye_[2] - q[2];
                                 const float dl = std::sqrt(dx * dx + dy * dy + dz * dz);
-                                if (dl > 1e-3f) { const float s = std::min(2.f, dl * 0.002f) / dl; q[0] += dx * s; q[1] += dy * s; q[2] += dz * s; }
+                                // 0,2% da distancia (ate 2); WOTM_SHADOWPULL troca (no luta_hud 0 a 0,002 da o mesmo)
+                                if (dl > 1e-3f) { const float s = std::min(kShadowPullMax, dl * kShadowPull) / dl; q[0] += dx * s; q[1] += dy * s; q[2] += dz * s; }
                             }
                             rlColor4ub(255, 255, 255, uint8_t(255.f * inten * fade));
                             rlTexCoord2f(tu[i] * 0.5f + 0.5f, tv[i] * 0.5f + 0.5f);
@@ -1360,6 +1367,7 @@ public:
         blend_ = kGsAlphaNormal;
         aref_ = kGsAlphaRef;
         zmsk_ = false;
+        lodX_ = false;
         spec_ = 0.f;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
@@ -2098,7 +2106,12 @@ public:
     // z <= 8 -> faixa 1; senao int(min(z, 1016) / 8) + 1, ate 128. pktInitReverseAlphaOT encadeia da faixa 128 para a 0.
     // OBJECT com o bit 0x8000 das flags (+0xC): o hierTraverseAsm o liga na OT de alfa (pktLinkAlphaObjAsm), que sai depois de
     // todas as cadeias normais do hier; os demais saem na ordem da travessia.
-    static bool inAlphaOT(const Ram &ram, const DrawItem &it) { return (ram.u16(it.node + 0xC) & 0x8000) != 0; }
+    // Bit 0x4000: so dentro de um cross-fade de LOD (o hierTraverseAsm testa flags & 0xC000; sem o 0x8000, exige o peso do LOD
+    // herdado > 0). No luta_hud as colunas da tex 234 saem no meio da OT (programa 1001 de 936-1214).
+    static bool inAlphaOT(const Ram &ram, const DrawItem &it) {
+        const uint16_t f = ram.u16(it.node + 0xC);
+        return (f & 0x8000) || ((f & 0x4000) && it.lodX);
+    }
 
     static int alphaBin(const Ram &ram, const DrawItem &it) {
         constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]: plano 0 em +0xF0, limiar em +0x120
@@ -2178,13 +2191,19 @@ public:
                     char b[16]; std::snprintf(b, sizeof b, ",%x,", list[i].node);
                     if ((std::string(",") + onlyN + ",").find(b) == std::string::npos) continue;
                 }
+                static const char *skipN = std::getenv("WOTM_SKIPNODE");   // =<hex[,hex..]>: desenha tudo menos esses nos
+                if (skipN) {
+                    char b[16]; std::snprintf(b, sizeof b, ",%x,", list[i].node);
+                    if ((std::string(",") + skipN + ",").find(b) != std::string::npos) continue;
+                }
             }
             const MeshData *mdi = mesh(ram, list[i].node);
             {   // diagnostico: WOTM_LISTITEMS=1 lista os itens de cada passe (no, texId, zBufferFudge, translucido, posicao, triangulos)
                 static const bool li = std::getenv("WOTM_LISTITEMS") != nullptr;
                 if (li && !wire)
-                    std::fprintf(stderr, "[item] pass %d no %x tex %u fz %.4f tris %zu pos %.1f %.1f %.1f\n", pass, list[i].node, unsigned(ram.u16(list[i].node + 0x50)),
-                                 ram.f32(list[i].node + 0x28), mdi ? mdi->tris.size() / 3 : size_t(0), list[i].m.m[3][0], list[i].m.m[3][1], list[i].m.m[3][2]);
+                    std::fprintf(stderr, "[item] pass %d no %x tex %u fz %.4f tris %zu pos %.1f %.1f %.1f blend %02x abe %d zmsk %d fade %.2f\n", pass, list[i].node,
+                                 unsigned(ram.u16(list[i].node + 0x50)), ram.f32(list[i].node + 0x28), mdi ? mdi->tris.size() / 3 : size_t(0), list[i].m.m[3][0],
+                                 list[i].m.m[3][1], list[i].m.m[3][2], list[i].blend, mdi ? int(mdi->abe) : -1, int(list[i].zmsk), list[i].fade);
             }
             const uint32_t smask = (mdi && mdi->slotMask) ? mdi->slotMask : 1u;
             for (uint32_t sl = 0; sl < 32; ++sl) {   // slots 0-4 e kSlotNoTex
@@ -2291,7 +2310,12 @@ public:
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
                 if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
                 if (!wire && dbl) { gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire) setBlend(md->abe ? it.blend : kGsAlphaNormal);
+                // sem ABE o GS grava a cor da fonte sem misturar (o alfa, com o fade do LOD, so vale para o teste): o predio 133 do
+                // luta_hud em cross-fade saia meio transparente e deixava ver o predio de tras
+                else if (!wire) {
+                    static const bool idcOpaque = std::getenv("WOTM_IDCOLOR") && std::atoi(std::getenv("WOTM_IDCOLOR")) == 2;
+                    setBlend(md->abe && !idcOpaque ? it.blend : kGsNoAbe);
+                }
                 curDbl = dbl;
                 curMode = dbl ? 2 : (!wire && md->abe && gsBlendFactors(it.blend).doubled) ? 1 : 0;
                 if (!wire) setRef(it.aref);
@@ -2307,6 +2331,7 @@ public:
                 open = true;
             }
             static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
+            static const bool idcNode = idcMode && std::atoi(std::getenv("WOTM_IDCOLOR")) == 2;   // =2: no >> 4 em RGB, sem mistura nem neblina
             const unsigned tid = (wire || !cur) ? 0 : textureId(ram, it, texRemap(slot));
             // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
             const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
@@ -2419,7 +2444,8 @@ public:
                     for (int e = 0; e < (wire ? 2 : 1); ++e) {
                         const Vtx &v = t[k + cs[e]];
                         bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
-                        if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
+                        if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; rlColor4ub(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
+                        else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
                         else if (v.isAdc) { gsV = false; rlColor4ub(255, 0, 0, 255); }   // WOTM_SHOWADC
                         else if (noVcol && md->skinned) { gsV = false; rlColor4ub(255, 255, 255, 255); }   // diagnostico
                         else {
@@ -2436,7 +2462,7 @@ public:
                         if (tid && tid == screenId_) rlTexCoord2f(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
                         else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
                         else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        shaderNormal(fogBurn, v.fge, gsV, curPremul, curMode);   // neblina e modulacao do GS no shader do draw
+                        shaderNormal(fogBurn, v.fge && !idcNode, gsV, curPremul, curMode);   // neblina e modulacao do GS no shader do draw
                         rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
                     }
                 }
@@ -2611,6 +2637,7 @@ private:
     bool zmsk_ = false;                // DrawItem::zmsk herdado do GROUP mais proximo com ctx de ZBUF_1
     uint8_t blend_ = kGsAlphaNormal;   // DrawItem::blend herdado do GROUP mais proximo com ctx de ALPHA_1
     float fade_ = 1.f;     // DrawItem::fade (cross-fade de LOD do hierLod) na descida
+    bool lodX_ = false;    // DrawItem::lodX na descida
     float spec_ = 0.f;     // DrawItem::spec: o qword 20 que esta na memoria do VU1 neste ponto da ordem do hier
 
     // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D (NLOOP em +0x10, um registrador A+D) e os pares (dado, endereco) a
@@ -2998,6 +3025,7 @@ private:
             items.back().spec = spec_;
             items.back().aref = aref_;
             items.back().zmsk = zmsk_;
+            items.back().lodX = lodX_;
             objectUvOffset(ram, node, items.back().uvOff);
             objectColor(ram, node, items.back().color);
             objectEnv(ram, node, items.back());
@@ -3046,6 +3074,7 @@ private:
                 // VU1, pista 7: o VU1 desenhava uma instancia "a mais", o LOD vizinho no mesmo lugar).
                 float fi = 1.f, fprev = 0.f;
                 const float fd = lod_ < 0 && eyeOk_ ? ram.f32(node + 0x20 + 16 * i) : 0.f;
+                const bool savedX = lodX_;
                 if (fd > 0.f) {
                     float d2 = 0.f, cc[3];
                     xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), cc);
@@ -3054,18 +3083,23 @@ private:
                         const float t = 1.f - (d2 - fd) / (ram.f32(node + 0x20 + 16 * i + 4) - fd);
                         if (i >= 1) { if (t > 0.5f) fprev = (1.f - t) * 2.f; else { fprev = 1.f; fi = t * 2.f; } }
                         else fi = t;
+                        lodX_ = true;   // o hierTraverseAsm guarda o peso (!= 0) e manda os OBJECTs 0x4000 para a OT de alfa
                     }
                 }
-                lodIdx_ = int(i);
-                fade_ = savedFade * fi;
-                if (ram.ok(c) && fade_ > 0.f) walk(ram, c, m, depth + 1);
+                // ordem do hierTraverseAsm: no cross-fade ele segue direto o filho do LOD i - 1 e empilha o do LOD i (com o peso),
+                // que sai depois. Com os translucidos gravando Z na travessia, o LOD i quase transparente na frente fazia o i - 1
+                // solido falhar no teste (luta_hud: predio d51400 sob o d51c40 de fade 0,21, o horizonte aparecia)
                 if (fprev > 0.f) {
                     const uint32_t c2 = ram.u32(node + 0x20 + 16 * (i - 1) + 8);
                     lodIdx_ = int(i - 1);
                     fade_ = savedFade * fprev;
                     if (ram.ok(c2)) walk(ram, c2, m, depth + 1);
                 }
+                lodIdx_ = int(i);
+                fade_ = savedFade * fi;
+                if (ram.ok(c) && fade_ > 0.f) walk(ram, c, m, depth + 1);
                 fade_ = savedFade;
+                lodX_ = savedX;
                 lodIdx_ = savedLod;
             }
             break;

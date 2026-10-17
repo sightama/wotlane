@@ -7,7 +7,8 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
   com `tools\corpus.ps1 -Check` antes e depois de cada mudança em `native/` (fluxo no `CLAUDE.md`, "Fluxo do port"). O runtime cobaia (equivalentes dentro do runtime) está parado, incompleto
   (`passos/NATIVO.md`, "Runtime cobaia").
 - **Feito em 2026-10-17: ordem do hier e da OT de alfa** (`passos/VU1CHECK.md`, "Ordem do hier e OT de alfa" em "Corrigido"). Resolveu o logo na seleção
-  de fase (bug 7) no replay; falta o dono conferir ao vivo. Não resolveu a Kineticlops na cor 3. Ficou aberta a `luta_hud` +3,3 mil px (o parque).
+  de fase (bug 7) no replay; falta o dono conferir ao vivo. Não resolveu a Kineticlops na cor 3. A piora da `luta_hud` caiu de +3,3 para +1,8 mil px (ordem do
+  cross-fade de LOD, bit 0x4000, ABE 0, receptores de sombra); o resto está onde a referência não tem as texturas (árvores do parque, brilho do poste).
 - **Decomp só na superfície de mod:** `Shell::Load*`, `MonsterParse`, câmera. **Byte match não é requisito por função.** `equivalent` é suficiente; `matched` quando sai barato; o `gate.sh`
   continua obrigatório (a ROM do build normal tem que bater o SHA1). Quando voltar a decompilar fora dessa superfície, a fila é `config/boot_coverage_asm.csv` (engine/formatos/lógica primeiro;
   memory card, `input`, `vi`, `ps`, `sce/*`, `lib989snd` por último).
