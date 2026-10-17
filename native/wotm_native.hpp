@@ -396,7 +396,7 @@ struct DrawItem {
     M4 m;
     uint32_t node;   // HierObject
     uint32_t animPkt = 0;   // CHAR_INSTANCE::animPktPtr (paleta de matrizes dos objetos skinned)
-    int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
+    int lodIdx = 0;         // indice do LOD escolhido (diagnostico; a cadeia da paleta e animPktPtr[packetPtrIdx], Scene::palette)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
     uint8_t blend = kGsAlphaNormal;   // byte baixo do ALPHA_1 do no mais proximo com ctx (GROUP, TRANSLATE...; Scene::CtxScope, gsBlend)
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
@@ -2829,11 +2829,14 @@ private:
         }
     }
 
-    // Paleta de matrizes de um objeto skinned: animPktPtr[lod] e uma cadeia DMA (tag ref 0x3000007d) cujo endereco aponta o
-    // bloco de 125 qwords (31 matrizes de 4 qwords a partir de +0x10). Devolve 0 se nao achar.
+    // Paleta de matrizes de um objeto skinned: animPktPtr[packetPtrIdx] e uma cadeia DMA que alterna a paleta (tag ref 0x3000007d, bloco
+    // de 125 qwords: 31 matrizes de 4 qwords a partir de +0x10) e os sub-pacotes da malha. O indice vem do OBJECT (+0x68, packetPtrIdx;
+    // negativo = sem cadeia), como no pktAddVu1ObjAsm, e nao da posicao do filho no LOD: os dois coincidem no Congar e no Robo-47, mas
+    // nos objetos do Raptros vale 5 e 6 com o LOD 2, e a paleta de outra parte do corpo quebrava a malha. Devolve 0 se nao achar.
     static uint32_t palette(const Ram &ram, const DrawItem &it) {
-        if (!it.animPkt || it.lodIdx < 0 || it.lodIdx > 15) return 0;
-        const uint32_t chain = ram.u32(it.animPkt + 4 * uint32_t(it.lodIdx)) & 0x0FFFFFFF;
+        const int32_t idx = int32_t(ram.u32(it.node + 0x68));
+        if (!it.animPkt || idx < 0 || idx > 63) return 0;
+        const uint32_t chain = ram.u32(it.animPkt + 4 * uint32_t(idx)) & 0x0FFFFFFF;
         if (!ram.ok(chain, 8) || ((ram.u32(chain) >> 28) & 7) != 3) return 0;
         const uint32_t block = ram.u32(chain + 4) & 0x0FFFFFFF;
         return ram.ok(block, 0x10 + 0x40 * 32) ? block : 0;
