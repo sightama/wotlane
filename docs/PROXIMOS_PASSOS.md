@@ -1,4 +1,4 @@
-# Próximos passos (atualizado em 2026-10-16; detalhes em docs/passos/)
+# Próximos passos (atualizado em 2026-10-17; detalhes em docs/passos/)
 
 ## Direção (decidida em 2026-10-09, confirmada em 2026-10-16): port primeiro
 O objetivo continua sendo um port nativo de PC fácil de modar. A base é o jogo **recompilado** (PS2Recomp, fora do repo) mais a camada nativa deste repo (`native/`), e a decompilação é a
@@ -10,8 +10,10 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
   começo da lista da sua faixa de profundidade (`int(8z)+1`, z = vf30.x do programa 0x0 do VU0), então no empate o último visitado é desenhado primeiro;
   o nativo desenha na ordem da travessia. Confirmado pela ordem do XGKICK no menu (`g` 469: logo `ea3300` antes da tela `ea2800`). A 1a tentativa sumiu
   com o logo do menu, mas as duas pendências que a travavam caíram em `b33d854` (corte por esfera; o logo forte vinha do filme do telão, `texId 999`).
-  Fazer: trocar o desempate no `drawList` (e a profundidade pela esfera do objeto contra o plano da câmera), conferir o logo no menu ao vivo e no
-  `menus.vu1snap`, e ver se muda as rachaduras do Kineticlops na cor 3. Contexto em `passos/VU1CHECK.md` ("Kineticlops na cor 3", item (2)).
+  Deve resolver o bug 7 do inventário (logo por cima da prévia na seleção de fase; foto `002146`/001: o PS2 cobre o logo com a `tex 76`, o nativo não)
+  e pode resolver a transparência do Kineticlops na cor 3 que o dono ainda vê (foto `022655`/001).
+  Fazer: trocar o desempate no `drawList` (e a profundidade pela esfera do objeto contra o plano da câmera), conferir o logo no menu e na seleção de fase
+  ao vivo e no `menus.vu1snap`, e refazer o `vu1cmp` das duas fotos. Contexto em `passos/VU1CHECK.md` ("Kineticlops na cor 3", item (2)).
 - **Decomp só na superfície de mod:** `Shell::Load*`, `MonsterParse`, câmera. **Byte match não é requisito por função.** `equivalent` é suficiente; `matched` quando sai barato; o `gate.sh`
   continua obrigatório (a ROM do build normal tem que bater o SHA1). Quando voltar a decompilar fora dessa superfície, a fila é `config/boot_coverage_asm.csv` (engine/formatos/lógica primeiro;
   memory card, `input`, `vi`, `ps`, `sce/*`, `lib989snd` por último).
@@ -24,7 +26,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
   dos triângulos; textura, UV, cor e neblina conferidos; HUD do `hier` (retrato, barras de vida e energia, *letterbox*) e widescreen Hor+ (janela em 16:9, `WOTM_ASPECT`) e fades desde 2026-10-16. Falta o resto do inventário (iluminação e bugs gráficos; resíduos em aberto em `passos/VU1CHECK.md`). Código em `native/` e `native/runtime/`; estado por área em `passos/NATIVO.md`.
 - **Decomp:** `sh tools/wsl/gate.sh` diz `ROM OK` (build + SHA1). Bloco de progresso do README (`python3 tools/progress.py`): `game` 1723 de 3181 funções decompiladas (idênticas + equivalentes),
   417 KB de 909 KB; `common` 836 de 1144. Convenções em `docs/ANALYSIS.md` ("Convenções de status das funções").
-- **Ferramentas do dia a dia:** `tools/corpus.ps1` (corpus de regressão da checagem), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, com inventário por dono, gatilho
+- **Ferramentas do dia a dia:** `tools/corpus.ps1` (corpus de regressão: 5 instantâneos fixos do jogo que a checagem refaz antes e depois de cada mudança), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, com inventário por dono, gatilho
   `mem:currScreen` e tecla F8), `tools/lote.ps1` (lutas em lote com vigia), `tools/verify_tu.py`, `tools/m2c_batch.sh`, `tools/wotm_env.py` (tabela de variáveis `WOTM_*`).
 
 ## Como retomar
