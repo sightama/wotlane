@@ -30,7 +30,9 @@ extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
-void wotmScreenRect(const uint8_t *rdram, uint32_t pkt);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
+void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
 void wotmShellFade(int start, int step, bool accumulate);
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
@@ -585,8 +587,28 @@ namespace
     void addCallToQueueTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kAddCallToQueue)
-            wotmScreenRect(rdram, GPR_U32(ctx, 5));
+            wotmScreenRect(rdram, GPR_U32(ctx, 5), true);
         g_origAddCall(rdram, ctx, runtime);
+    }
+
+    // Ordem fila x texto: o rtMain manda o texto (fontDmaFontData) e depois a fila do gsPkt (DmaGsPktQueue), e o fade cobre o texto;
+    // o ShellRtLoop::endField (laco dos dialogos de fim de fase, wonLevelOverlay e cia.) manda a fila antes do texto, e o dialogo de
+    // tokens sai sobre a tela escurecida pelo TheGame::updateFadeOut. Marcado na entrada de cada um (ScreenRect::underText).
+    constexpr uint32_t kDmaGsPktQueue = wotm::fn::DmaGsPktQueue__5GsPkt, kFontDmaFontData = wotm::fn::fontDmaFontData__Fv;
+    PS2Runtime::RecompiledFunction g_origDmaGsPktQueue = nullptr, g_origFontDma = nullptr;
+
+    void dmaGsPktQueueTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kDmaGsPktQueue)
+            wotmGsPktQueueSent();
+        g_origDmaGsPktQueue(rdram, ctx, runtime);
+    }
+
+    void fontDmaTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFontDmaFontData)
+            wotmFontSent();
+        g_origFontDma(rdram, ctx, runtime);
     }
 
     void uiFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -600,7 +622,7 @@ namespace
         g_origUiFade(rdram, ctx, runtime);
         if (ra && ctx->pc == ra && GPR_U32(ctx, 29) == sp)   // voltou (nao so uma pausa no meio)
         {
-            wotmScreenRect(rdram, sp - 0xB0u);
+            wotmScreenRect(rdram, sp - 0xB0u, false);
             ra = 0;
         }
     }
@@ -675,6 +697,10 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     if ((g_origAddCall = runtime.lookupFunction(kAddCallToQueue)))
         runtime.registerFunction(kAddCallToQueue, &addCallToQueueTapped);
+    if ((g_origDmaGsPktQueue = runtime.lookupFunction(kDmaGsPktQueue)))
+        runtime.registerFunction(kDmaGsPktQueue, &dmaGsPktQueueTapped);
+    if ((g_origFontDma = runtime.lookupFunction(kFontDmaFontData)))
+        runtime.registerFunction(kFontDmaFontData, &fontDmaTapped);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))

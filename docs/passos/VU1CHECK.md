@@ -58,7 +58,7 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 11. ~~**Barreira azul nos limites da fase:** ao esbarrar, o efeito pisca (flicker) e sai horizontal quando deveria ser vertical.~~ Corrigido em 2026-10-17 (`ca5344d`; "Wake como o microprograma 0x3470" em "Corrigido"): o anel sai em pé, no tamanho, alfa e cor do VU1. Conferido ao vivo pelo dono (2026-10-17).
 12. **Corda:** o especial do Ultra-V de puxar o inimigo não aparece; na introdução da primeira fase da aventura, as cordas dos dois helicópteros com braceletes no Congar aparecem erradas.
 13. **Entrada da partida:** às vezes uma luz verde no centro da tela que some (provavelmente o sumiço é o fade-in, não a luz apagando).
-14. **Vitória na campanha:** a tela apaga enquanto ainda deveria mostrar os tokens e a pergunta de salvar.
+14. ~~**Vitória na campanha:** a tela apaga enquanto ainda deveria mostrar os tokens e a pergunta de salvar.~~ Corrigido em 2026-10-17 ("Fade sob o texto nos diálogos de fim de fase" em "Corrigido") e conferido ao vivo pelo dono (`docs/screenshots/2026-10-17/2026-10-17_vitoria_campanha_tokens_salvar.png`). Falta a moldura em volta do diálogo, que parece ser o mesmo defeito do item 10.
 
 **Fotos do dono (2026-10-17, `<runtime>\fotos\2026-10-17_002146`, `_004304`, `_004902`, `_012538`, `_022655`; `vu1cmp` de cada uma).** A geometria casa de 96% a 100% em todas; os defeitos são de mistura, textura e partículas:
 - **Fumaça** (003): `sistemas vu 0 nativo 1`. O nativo desenha um sistema tipo 15 (nuvem enorme, `fx 96`) que o VU1 não desenha nesse quadro. **Corrigido no replay (2026-10-17):** `sistemas vu 0 nativo 0`; a partícula (idade 0,96, W ≈ 362) tem alfa < 8 no VU1 e é descartada. Item 2, fechado.
@@ -160,6 +160,8 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 
 <details>
 <summary>Corrigido</summary>
+
+- **Fade sob o texto nos diálogos de fim de fase (2026-10-17, item 14):** ao vencer uma fase da campanha, o `Shell::EvaluateOnePlayerStoryStatus` chama `displayDialog(2)`, que roda o `wonLevelOverlay` (laço do `ShellRtLoop`: `startField`, `MonsterMc::updateStoryModeSave`, `endField`). A tela fica preta pelo fade do `TheGame::updateFadeOut`, que vai na fila do `gsPkt`. No `endField` a fila sai (`DmaGsPktQueue`) **antes** do texto (`fontDmaFontData`), então os tokens e o "SAVE GAME?" aparecem sobre o preto; no `rtMain` a ordem é a inversa (texto, depois `rtFadeScreen` e a fila), e o fade cobre o texto. O nativo desenhava todo fade por último, e o diálogo sumia sob o preto. Agora os taps de `DmaGsPktQueue` e `fontDmaFontData` marcam o fade da fila que saiu antes do texto (`ScreenRect::underText`), e a apresentação o desenha antes do texto. Reproduzido sozinho (campanha pelo `PS2X_PAD` com `WOTM_CHEATS=inv,vencer=20`: tela preta para sempre depois da vitória) e conferido ao vivo pelo dono.
 
 - **Lens flare de volta na tela; brilho dos olhos (2026-10-17, fotos `171318`/001 Goliath Prime e /027 dois Robo-47):** o brilho do olho (verde ou vermelho no Robo-47, vermelho no Goliath Prime) é um lens flare (`lensFlarePacket[0]`, tipo 11; entrada da luz do olho com flags 0x0f, direcional, `Zfudge` ~0, ou seja margem 1,5), e o nativo não desenhava nenhum lens flare ao vivo. Três defeitos:
   - **A lista não chegava ao desenho:** desde a captura na thread do EE, a cena vai para a tela por `Scene::takeSnapshot`/`show`, que copiava `fx.systems` mas não `fx.flares`. O `drawFlares` do lado que desenha sempre via a lista vazia. Agora `Snapshot::flares`.

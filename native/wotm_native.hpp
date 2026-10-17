@@ -498,6 +498,9 @@ struct TextQuad {
 struct ScreenRect {
     float x0, y0, x1, y1;
     uint8_t r, g, b, a;   // RGBAQ do GS: a = 0x80 cobre tudo
+    // Saiu ao GS antes do texto do quadro (fila do gsPkt despachada antes do fontDmaFontData, como no ShellRtLoop::endField dos
+    // dialogos de fim de fase): o texto vai por cima. No rtMain a fila sai depois do texto e o fade cobre tudo (false).
+    bool underText = false;
 };
 
 // Le de um pacote (tag DMA em p, tags GIF PACKED a partir de p + 16) o primeiro SPRITE sem textura com mistura (REGS RGBAQ, XYZ2, XYZ2),
@@ -2620,13 +2623,15 @@ public:
         if (textShader_.id > 0) EndShaderMode();
     }
 
-    // Fades por cima de tudo (no PS2 saem depois do HUD e do texto: fila do gsPkt no fim do quadro, uiFadeScreen depois do
-    // fontDmaFontData). Retangulo da largura da tela do jogo cobre o quadro inteiro (em widescreen o fade escurece a janela toda);
-    // um menor fica na faixa 4:3 central, como o texto.
-    void drawScreenRects(float rw, float rh) const {
+    // Fades na ordem do GS: underText = true antes do texto (ShellRtLoop::endField despacha a fila do gsPkt antes do
+    // fontDmaFontData: o dialogo de tokens sai sobre a tela escura), false por cima de tudo (rtMain manda a fila depois do texto;
+    // uiFadeScreen sai depois do fontDmaFontData; Shell::FadeScreen). Retangulo da largura da tela do jogo cobre o quadro inteiro (em
+    // widescreen o fade escurece a janela toda); um menor fica na faixa 4:3 central, como o texto.
+    void drawScreenRects(float rw, float rh, bool underText = false) const {
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sy = rh / 224.f;
         for (const ScreenRect &r : screenRects) {
+            if (r.underText != underText) continue;
             const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
             if (!a) continue;
             const bool full = r.x0 <= 0.f && r.x1 >= 640.f;
