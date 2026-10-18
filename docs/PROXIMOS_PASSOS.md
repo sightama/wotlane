@@ -33,7 +33,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
    Rascunhos de toda a fila de uma vez: `sh tools/m2c_batch.sh` (`build/m2c/`). No fim da TU: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU>`. Detalhes em `passos/FERRAMENTAS.md`.
 6. Antes de mexer em header compartilhado: `sh tools/wsl/scoreall.sh <todos os TUs de src/game> > ~/base.txt`; depois comparar com `diff`. Rodar `gate.sh`.
 
-Lista legível do estado (bugs, investigações, o que falta), escrita com o dono: [SNAPSHOT_2026-10-17.md](SNAPSHOT_2026-10-17.md).
+Lista legível do estado (bugs, investigações, o que falta), escrita com o dono: [SNAPSHOT.md](SNAPSHOT.md).
 
 ## Índice dos detalhes (`docs/passos/`)
 - [NATIVO.md](passos/NATIVO.md): `native/` (raylib), texturas/paletas, desenho ao vivo, monstros skinned, LOD, partículas/efeitos, sombras, física com `dt` no runtime, hooks de host, vigia, partida direta (`WOTM_MATCH`), lote, runtime cobaia, tabela de variáveis `WOTM_*`.
