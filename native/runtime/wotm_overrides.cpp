@@ -1004,6 +1004,84 @@ namespace
     }
 }
 
+namespace
+{
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "Mods" do launcher). O jogo trava a mira enquanto o "lock-on segurado" do
+    // quadro esta ligado: PadFlags (Monster +0x5040) guarda 60 quadros de 0x5E bytes (o atual em +0x16F0, operator[](0)), e o u16
+    // em +0x32 do quadro atual e o lock-on ja resolvido pela configuracao de controle (updateInput{0,1,2}Config{CR,SR}; na CR,
+    // 1 com os dois botoes dele segurados). Monster::updateLock le esse campo e, desligado, solta o alvo (+0x6C04). Aqui, na saida
+    // do PadFlags::interpretInputs (que monta o quadro), um toque novo no lock-on liga ou desliga um estado por jogador humano
+    // (dono em PadFlags +0x1810, um dos m_numPlayers primeiros monstros do TheGame), e o campo passa a valer esse estado em todo quadro: tudo o que le o
+    // lock-on (updateLock, os estados que andam de lado olhando o alvo) ve o modo alternado. A IA nao muda.
+    constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
+    constexpr uint32_t kPadFlagsCur = 0x16F0u, kPadFlagsOwner = 0x1810u, kPadFlagsStride = 0x5Eu, kPadFlagsLock = 0x32u;
+    PS2Runtime::RecompiledFunction g_origInterpretInputs = nullptr;
+    struct LockToggle
+    {
+        uint32_t pf = 0;      // PadFlags do jogador (0 = livre)
+        bool held = false;    // lock-on segurado no quadro anterior (borda)
+        bool on = false;      // estado alternado
+    } g_lockToggle[4];
+    uint32_t g_iiRa = 0, g_iiPf = 0;
+    bool g_iiPending = false;
+
+    bool ramOk(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
+
+    void lockToggleApply(uint8_t *rdram, uint32_t pf)
+    {
+        if (!ramOk(pf, kPadFlagsOwner + 4u))
+            return;
+        const uint32_t owner = FAST_READ32(pf + kPadFlagsOwner);
+        int slot = 0;
+        if (!isPlayerMonster(rdram, owner, &slot))
+            return;   // IA (o m_playerNum dela tambem nao e 0)
+        int32_t cur = static_cast<int32_t>(FAST_READ32(pf + kPadFlagsCur));
+        if (cur < 0 || cur >= 60)
+            return;
+        const uint32_t field = pf + static_cast<uint32_t>(cur) * kPadFlagsStride + kPadFlagsLock;
+        LockToggle *t = nullptr;
+        for (LockToggle &e : g_lockToggle)
+            if (e.pf == pf)
+                t = &e;
+        if (!t)
+            for (LockToggle &e : g_lockToggle)
+                if (!e.pf)
+                {
+                    t = &e;
+                    t->pf = pf;
+                    break;
+                }
+        if (!t)
+            return;
+        uint16_t raw = 0;
+        std::memcpy(&raw, rdram + field, 2);
+        const bool held = raw != 0;
+        if (held && !t->held)
+        {
+            t->on = !t->on;
+            std::fprintf(stderr, "[lockon] jogador %d: %s\n", slot + 1, t->on ? "travado" : "solto");
+        }
+        t->held = held;
+        const uint16_t v = t->on ? 1u : 0u;
+        std::memcpy(rdram + field, &v, 2);
+    }
+
+    void interpretInputsLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kInterpretInputs)
+        {
+            g_iiRa = GPR_U32(ctx, 31);
+            g_iiPf = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+            g_iiPending = true;
+        }
+        g_origInterpretInputs(rdram, ctx, runtime);
+        if (!g_iiPending || ctx->pc != g_iiRa)
+            return;   // parou no meio (a retomada cai aqui de novo e termina o servico)
+        g_iiPending = false;
+        lockToggleApply(rdram, g_iiPf);
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -1169,6 +1247,17 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
         std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "Mods" do launcher): um toque trava, outro solta
+    if (const char *e = std::getenv("WOTM_LOCKTOGGLE"); e && *e && std::strcmp(e, "0") != 0)
+    {
+        if ((g_origInterpretInputs = runtime.lookupFunction(kInterpretInputs)))
+        {
+            runtime.registerFunction(kInterpretInputs, &interpretInputsLockToggle);
+            std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE): um toque trava, outro solta\n");
+        }
+        else
+            std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::interpretInputs sem funcao no runtime\n");
+    }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
     if (g_minRate > 0)

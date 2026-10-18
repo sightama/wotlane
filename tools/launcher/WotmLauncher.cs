@@ -23,6 +23,10 @@ class Launcher : Form
     // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     static readonly Flag[] Flags = {
+        new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Lock-on alternado (um toque trava, outro solta)",
+            "O lock-on deixa de ser segurado: um toque no botao do lock-on trava a mira no monstro mais perto e ela fica travada ate " +
+            "o proximo toque. Vale para os jogadores humanos; a IA nao muda. Desmarcado: segurar, como no jogo original."),
+
         new Flag("Execucao", ":Auto", true, "Roteiro automatico ate a fase", "-Auto 1: o pad do roteiro joga ate uma fase (~50 s). Desmarcado: voce joga com o teclado."),
         new Flag("Execucao", "WOTM_FOTOS", true, "Fotos para depurar (F7 pausa, F6 avanca, F8 foto com nota)", "F8 grava o quadro (instantaneo da checagem VU1 x nativo, ~40 MB), um PNG da janela e a sua nota em <runtime>\\fotos\\<data>. Apague as fotos depois de resolvidas."),
         new Flag("Execucao", "WOTM_AIVSAI", false, "Jogador controlado pela IA do jogo", "O monstro do jogador 1 vira IA (playerInit -> aiInit): luta IA contra IA. Para lotes sem menu use tools\\lote.ps1."),
