@@ -38,6 +38,12 @@ void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_
 void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do menu, lidas do pacote do letterboxDmaData
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
 void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
+// wotm_live.inc: texto pelas chamadas da fonte (wotm::FontText), na entrada de cada uma
+void wotmFontInitPacket(uint32_t vram);
+void wotmFontSetTexId(const uint8_t *rdram, uint32_t node);
+void wotmFontColor(const uint8_t *rdram, int font);
+void wotmFontGlyph(const uint8_t *rdram, int font, int ch);
+void wotmFontDma(const uint8_t *rdram);
 void wotmShellFade(int start, int step, bool accumulate);
 void wotmCaptureFadeStep(const uint8_t *rdram);   // wotm_live.inc: cena de um passo do Shell::FadeScreen com redesenho
 void wotmLoadFreeze(bool on);   // wotm_live.inc: carga da fase (LoadLevelFiles ate o rtMain), a tela repete o ultimo quadro
@@ -648,8 +654,41 @@ namespace
     void fontDmaTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kFontDmaFontData)
+        {
+            wotmFontDma(rdram);
             wotmFontSent();
+        }
         g_origFontDma(rdram, ctx, runtime);
+    }
+
+    // Texto pelas chamadas da fonte (wotm::FontText): o desenho nativo refaz os glifos sem ler o fontPacket.
+    constexpr uint32_t kFontInitPacket = wotm::fn::fontInitPacket__FP6QwData10_vramAddrs, kFontSetTexId = wotm::fn::fontSetTexId__FP9_hierhead,
+                       kFontSetColorGifTag = wotm::fn::fontSetColorGifTag__Fi, kFontBuildPrim = wotm::fn::fontBuildPrim__FicP6QwData;
+    PS2Runtime::RecompiledFunction g_origFontInitPacket = nullptr, g_origFontSetTexId = nullptr, g_origFontColor = nullptr, g_origFontGlyph = nullptr;
+
+    void fontInitPacketTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFontInitPacket)
+            wotmFontInitPacket(GPR_U32(ctx, 5));
+        g_origFontInitPacket(rdram, ctx, runtime);
+    }
+    void fontSetTexIdTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFontSetTexId)
+            wotmFontSetTexId(rdram, GPR_U32(ctx, 4));
+        g_origFontSetTexId(rdram, ctx, runtime);
+    }
+    void fontColorTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFontSetColorGifTag)
+            wotmFontColor(rdram, static_cast<int>(GPR_U32(ctx, 4)));
+        g_origFontColor(rdram, ctx, runtime);
+    }
+    void fontGlyphTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kFontBuildPrim)
+            wotmFontGlyph(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5) & 0xFF));
+        g_origFontGlyph(rdram, ctx, runtime);
     }
 
     void uiFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -933,6 +972,14 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kDmaGsPktQueue, &dmaGsPktQueueTapped);
     if ((g_origFontDma = runtime.lookupFunction(kFontDmaFontData)))
         runtime.registerFunction(kFontDmaFontData, &fontDmaTapped);
+    if ((g_origFontInitPacket = runtime.lookupFunction(kFontInitPacket)))
+        runtime.registerFunction(kFontInitPacket, &fontInitPacketTapped);
+    if ((g_origFontSetTexId = runtime.lookupFunction(kFontSetTexId)))
+        runtime.registerFunction(kFontSetTexId, &fontSetTexIdTapped);
+    if ((g_origFontColor = runtime.lookupFunction(kFontSetColorGifTag)))
+        runtime.registerFunction(kFontSetColorGifTag, &fontColorTapped);
+    if ((g_origFontGlyph = runtime.lookupFunction(kFontBuildPrim)))
+        runtime.registerFunction(kFontBuildPrim, &fontGlyphTapped);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
     if ((g_origLetterbox = runtime.lookupFunction(kLetterboxDmaData)))

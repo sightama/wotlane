@@ -593,6 +593,82 @@ inline void readScreenPolys(const Ram &ram, std::vector<TextQuad> &out) {
     }
 }
 
+// Texto do jogo pelas chamadas da fonte (common/font), sem ler o fontPacket: os ganchos (wotm_overrides.cpp) seguem o que o jogo
+// manda montar e refazem cada glifo com a mesma conta do fontBuildPrim, a partir do estado da fonte (fonts[2], 0x38 cada: celula do
+// atlas em +0/+2, tamanho do glifo no atlas em +4/+6, tamanho na tela em +8/+0xA, cursor em +0x10/+0x12, cor em +0x18) e da vista
+// corrente (centro e tamanho do viewDef). Posicoes e UV em 1/16 (subpixel do GS), XY com o centro do GS em 2048 como no pacote.
+//  - fontInitPacket(pkt, vram): TEX0 do atlas do boot (vram - 0x840 em TBP0, vram - 0x40 em CBP, T8H 512x512) e cor padrao.
+//  - fontSetTexId(no): TEX0 do atlas do .RTX da fase (no + 0x70) e modo de atlas 1 (D_006F8D38).
+//  - fontSetColorGifTag(fonte): a cor da fonte passa a valer para os glifos seguintes, de qualquer fonte (a tag de cor e do pacote).
+//    Chamada com o pacote vazio (logo depois do despacho), ela reescreve a cor do cabecalho, que vale no comeco de cada quadro.
+//  - fontBuildPrim(fonte, c): um glifo. Atlas 0: 8 colunas a partir de '!', minusculas viram maiusculas; atlas 1: 16 colunas.
+//  - fontDmaFontData: fecha o quadro (o texto mandado ao GS) e volta a cor a do cabecalho.
+struct FontText {
+    static constexpr uint32_t kFonts = 0x00735890;      // D_00735890: Font fonts[2]
+    static constexpr uint32_t kAtlasMode = 0x006F8D38;  // D_006F8D38: 0 = atlas do boot, 1 = atlas do .RTX (fontSetTexId)
+    static constexpr uint32_t kPktState = 0x006F8D3C;   // D_006F8D3C: 0 = sem pacote, 1 = ultima tag e de cor, 2 = de sprites
+    static constexpr uint32_t kPktCount = 0x006F8D30, kPktHeader = 0x006F8D44;   // qwords no pacote; tamanho do cabecalho
+    uint64_t tex0 = 0;
+    uint8_t col[4] = {0x80, 0x80, 0x40, 0x80}, headerCol[4] = {0x80, 0x80, 0x40, 0x80};
+    std::vector<TextQuad> building;   // glifos desde o ultimo fontDmaFontData
+
+    void initPacket(uint32_t vram) {
+        const uint64_t tbp = uint16_t(int32_t((vram - 0x840u) << 10) >> 16), cbp = uint16_t(int32_t((vram - 0x40u) << 10) >> 16);
+        tex0 = tbp | (cbp << 37) | (0xBBA8ull << 19) | 0x8000ull | (0x8000ull << 46);
+        static constexpr uint8_t kDef[4] = {0x80, 0x80, 0x40, 0x80};
+        std::memcpy(col, kDef, 4);
+        std::memcpy(headerCol, kDef, 4);
+        building.clear();
+    }
+    void setTexId(const Ram &ram, uint32_t node) {
+        node &= 0x1FFFFFFFu;
+        if (ram.ok(node, 0x78) && !(ram.u32(node) & 0x3F)) tex0 = uint64_t(ram.u32(node + 0x70)) | (uint64_t(ram.u32(node + 0x74)) << 32);
+    }
+    // Na entrada do fontSetColorGifTag (a cor ja esta na fonte; o estado do pacote ainda e o de antes).
+    void setColor(const Ram &ram, int font) {
+        const uint32_t f = kFonts + 0x38u * uint32_t(font) + 0x18;
+        if (font < 0 || font > 1) return;
+        for (int i = 0; i < 4; ++i) col[i] = ram.u8(f + i);
+        if (ram.u32(kPktState) == 1 && ram.u32(kPktCount) == ram.u32(kPktHeader)) std::memcpy(headerCol, col, 4);
+    }
+    // Na entrada do fontBuildPrim.
+    void glyph(const Ram &ram, int font, int ch) {
+        if (font < 0 || font > 1 || building.size() >= 4096) return;
+        const uint32_t f = kFonts + 0x38u * uint32_t(font);
+        const uint32_t view = ram.u32(sym::viewCurView);
+        const uint32_t def = view < 5 ? ram.u32(addr::viewInfo + 0x14 * view + 4) & 0x1FFFFFFFu : 0;
+        if (!ram.ok(def, 0x20)) return;
+        const int cx = int(ram.u32(def + 0x18)), cy = int(ram.u32(def + 0x1C)), w = ram.u16(def + 4), h = ram.u16(def + 6);
+        int c = int8_t(ch);
+        const bool rtx = ram.u32(kAtlasMode) != 0;
+        if (!rtx && unsigned(c - 0x61) < 0x1Au) c = int8_t(c - 0x20);
+        int row, column, base;
+        if (rtx) { row = c >> 4; column = c & 15; base = 0x10; }
+        else { const int a = c - 0x21; row = a >> 3; column = a & 7; base = 8; }
+        const uint16_t u0 = uint16_t(ram.u16(f) * column + base), v0 = uint16_t(ram.u16(f + 2) * row + base);
+        const uint16_t u1 = uint16_t(ram.u16(f + 4) + u0), v1 = uint16_t(ram.u16(f + 6) + v0);
+        const uint16_t x0 = uint16_t(ram.u16(f + 0x10) + cx * 16 - w * 8), y0 = uint16_t(ram.u16(f + 0x12) + cy * 16 - h * 8);
+        const uint16_t x1 = uint16_t(ram.u16(f + 8) + x0), y1 = uint16_t(ram.u16(f + 0xA) + y0);
+        constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;   // como o Scene::updateText
+        TextQuad t{};
+        t.u0 = float(u0 & 0x3FFF) / 16.f; t.v0 = float(v0 & 0x3FFF) / 16.f;
+        t.u1 = float(u1 & 0x3FFF) / 16.f; t.v1 = float(v1 & 0x3FFF) / 16.f;
+        t.x0 = float(x0) / 16.f - kOx; t.y0 = float(y0) / 16.f - kOy;
+        t.x1 = float(x1) / 16.f - kOx; t.y1 = float(y1) / 16.f - kOy;
+        t.r = col[0]; t.g = col[1]; t.b = col[2]; t.a = col[3];
+        t.tex0 = tex0;
+        building.push_back(t);
+    }
+    // Na entrada do fontDmaFontData: true = o quadro foi fechado (glifos em `out`).
+    bool sent(const Ram &ram, std::vector<TextQuad> &out) {
+        if (ram.u32(kPktState) == 0) return false;
+        out.swap(building);
+        building.clear();
+        std::memcpy(col, headerCol, 4);
+        return true;
+    }
+};
+
 // Bloqueador de sombra ativo (Scene::collectShadows / drawShadows): entrada de psBlkLst e os objetos que projetam a silhueta.
 struct ShadowBlocker {
     int index = 0;               // entrada de psBlkLst

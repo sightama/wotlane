@@ -377,6 +377,21 @@ static std::vector<wotm::TextQuad> g_pendingPolys;
 // colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
 static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
 static std::atomic<int> g_shellFade{-1};
+// Texto do jogo pelos ganchos da fonte (wotm::FontText; thread do EE). O texto do ultimo fontDmaFontData vai para g_textSent, que a
+// apresentacao le a cada desenho (como lia o fontPacket ao vivo: os lacos de dialogo que nao passam pela captura tambem atualizam).
+static wotm::FontText g_font;
+static std::mutex g_textM;
+static std::vector<wotm::TextQuad> g_textSent;   // protegido por g_textM
+static std::atomic<bool> g_textHooked{false};    // algum fontDmaFontData passou pelo gancho
+// Texto ao vivo (ganchos); false no replay (--vu1cmp: sem jogo, o texto sai do fontPacket do instantaneo) ou antes do primeiro quadro.
+static bool liveText(std::vector<wotm::TextQuad> &out)
+{
+    if (g_localCollect || !g_textHooked.load(std::memory_order_relaxed))
+        return false;
+    std::lock_guard<std::mutex> lk(g_textM);
+    out = g_textSent;
+    return true;
+}
 // Carga da fase (Shell::LoadLevelFiles ate a entrada do rtMain): no PS2 a tela fica parada no ultimo quadro do cartao LOAD (a barra
 // de carga e desenhada direto no quadro, sem hier) e o Shell::FadeScreen sem redesenho so a escurece. O nativo nao pode redesenhar
 // o cartao nesse meio tempo: a RAM ja tem o nivel novo, e o loadResources troca as texturas pelas dele (o cartao saia com uma
@@ -480,6 +495,28 @@ void wotmFontSent()
             wotm_live::g_pendingRects[i].underText = true;
             wotm_live::g_pendingState[i] = 3;   // ja decidido
         }
+}
+void wotmFontInitPacket(uint32_t vram) { wotm_live::g_font.initPacket(vram); }
+void wotmFontSetTexId(const uint8_t *rdram, uint32_t node)
+{
+    if (rdram) wotm_live::g_font.setTexId(wotm::Ram{rdram, PS2_RAM_SIZE}, node);
+}
+void wotmFontColor(const uint8_t *rdram, int font)
+{
+    if (rdram) wotm_live::g_font.setColor(wotm::Ram{rdram, PS2_RAM_SIZE}, font);
+}
+void wotmFontGlyph(const uint8_t *rdram, int font, int ch)
+{
+    if (rdram) wotm_live::g_font.glyph(wotm::Ram{rdram, PS2_RAM_SIZE}, font, ch);
+}
+void wotmFontDma(const uint8_t *rdram)
+{
+    std::vector<wotm::TextQuad> q;
+    if (!rdram || !wotm_live::g_font.sent(wotm::Ram{rdram, PS2_RAM_SIZE}, q))
+        return;
+    std::lock_guard<std::mutex> lk(wotm_live::g_textM);
+    wotm_live::g_textSent.swap(q);
+    wotm_live::g_textHooked.store(true, std::memory_order_relaxed);
 }
 void wotmScreenPolys(const uint8_t *rdram)
 {
@@ -792,7 +829,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.scene.draw(ram, false);
     wotm_live::g_stage = "idle";
     EndMode3D();
-    S.scene.updateText(ram);   // texto do jogo (menu de pausa, HUD): sprites do GS lidos de fontPacket
+    if (!wotm_live::liveText(S.scene.text))   // texto do jogo (menu de pausa, HUD): ganchos da fonte (wotm::FontText)
+        S.scene.updateText(ram);              // replay: sprites do GS lidos do fontPacket do instantaneo
     S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
     S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH), true);   // fades despachados antes do texto
     BeginMode3D(c3);   // lista de alta prioridade: depois desses fades (ShellRtLoop::endField), antes do texto
@@ -968,6 +1006,11 @@ void wotmScreenRect(const uint8_t *, uint32_t, bool) {}
 void wotmLetterbox(const uint8_t *) {}
 void wotmGsPktQueueSent() {}
 void wotmFontSent() {}
+void wotmFontInitPacket(uint32_t) {}
+void wotmFontSetTexId(const uint8_t *, uint32_t) {}
+void wotmFontColor(const uint8_t *, int) {}
+void wotmFontGlyph(const uint8_t *, int, int) {}
+void wotmFontDma(const uint8_t *) {}
 void wotmScreenPolys(const uint8_t *) {}
 void wotmShellFade(int, int, bool) {}
 void wotmLoadFreeze(bool) {}

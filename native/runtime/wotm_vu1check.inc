@@ -2498,7 +2498,7 @@ void ownerName(const PxOwner &o, char *s, size_t n)
     case 4: symOf(o.a, sym, sizeof sym); std::snprintf(s, n, "vu1 mscal %x%s%s%s", o.a, sym[0] ? " (" : "", sym, sym[0] ? ")" : ""); break;
     case 5: std::snprintf(s, n, "path%u %s", o.a, o.b == 6 ? "sprites" : "tris"); break;
     case 6: std::snprintf(s, n, "ceu/icone pkt %x tex %u", o.a, o.b); break;
-    case 7: std::snprintf(s, n, "texto (fontPacket)"); break;
+    case 7: std::snprintf(s, n, "texto (fonte)"); break;
     case 8: std::snprintf(s, n, "HUD ScreenPolys"); break;
     default: std::snprintf(s, n, "nenhum"); break;
     }
@@ -2543,8 +2543,9 @@ void attributePixels(const Image &diff, int W, int H)
         const uint16_t id = nat.owner(8, 0, 0);
         for (const wotm::TextQuad &t : polys) nat.rect(id, t.x0 + kX0, t.y0 + kY0, t.x1 + kX0, t.y1 + kY0);
     }
-    if (g_scene && g_rdram) {   // texto do nativo (fontPacket, Scene::updateText): glifos em pixels da tela 640x224
-        g_scene->updateText(wotm::Ram{g_rdram, PS2_RAM_SIZE});
+    if (g_scene && g_rdram) {   // texto do nativo (ganchos da fonte; no replay, o fontPacket): glifos em pixels da tela 640x224
+        if (!wotm_live::liveText(g_scene->text))
+            g_scene->updateText(wotm::Ram{g_rdram, PS2_RAM_SIZE});
         const uint16_t id = nat.owner(7, 0, 0);
         for (const wotm::TextQuad &t : g_scene->text) nat.rect(id, t.x0 + kX0, t.y0 + kY0, t.x1 + kX0, t.y1 + kY0);
     }
