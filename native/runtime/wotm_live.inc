@@ -406,6 +406,38 @@ void wotmShellFade(int start, int step, bool accumulate)
     wotm_live::g_shellFade.store((start & 0xFF) | ((step & 0xFF) << 8) | (accumulate ? 1 << 16 : 0), std::memory_order_relaxed);
 }
 
+// A cena (objetos, ceu, HUD, lista de alta prioridade, sombras, luz, camera e paletas) e coletada na saida do hier(0, 0)
+// (wotmCaptureScene, gancho do wotm_overrides.cpp): o PS2 desenha os objetos com o estado da travessia, e o gameUpdate e o
+// animationRunGlobal que vem depois ja deixam na RAM monstros, paletas e camera do quadro seguinte. Coletando tudo no fim do quadro,
+// a malha saia um quadro a frente das luzes dos olhos (lens flare, cuja lista o hier monta) e do proprio PS2. As particulas, os
+// flares, o texto e os fades continuam no fim do quadro (wotmCaptureFrame): o particleDraw do PS2 vem depois do gameUpdate.
+namespace wotm_live
+{
+static wotm::Scene &captureScene()
+{
+    static wotm::Scene cap;   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
+    return cap;
+}
+static wotm::Snapshot g_sceneSnap;   // cena do ultimo hier(0, 0) ainda nao publicada (thread do EE)
+static bool g_sceneFresh = false;
+}
+
+void wotmCaptureScene(const uint8_t *rdram)
+{
+    wotm_live::Capture &c = wotm_live::capture();
+    if (!rdram || !c.on.load(std::memory_order_relaxed))
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    const uint32_t wc = ram.u32(wotm::addr::world);
+    if (!ram.ok(wc, 0x40) || !ram.ok(ram.u32(wc)))
+        return;
+    wotm::Scene &cap = wotm_live::captureScene();
+    cap.wide = c.wide.load(std::memory_order_relaxed);
+    cap.collect(ram);
+    wotm_live::g_sceneSnap = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
+    wotm_live::g_sceneFresh = true;
+}
+
 void wotmCaptureFrame(const uint8_t *rdram)
 {
     wotm_live::Capture &c = wotm_live::capture();
@@ -415,16 +447,30 @@ void wotmCaptureFrame(const uint8_t *rdram)
     std::vector<wotm::TextQuad> polys;
     polys.swap(wotm_live::g_pendingPolys);
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
+    const bool haveScene = wotm_live::g_sceneFresh;
+    wotm_live::g_sceneFresh = false;
     if (!rdram || !c.on.load(std::memory_order_relaxed))
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     const uint32_t wc = ram.u32(wotm::addr::world);
     if (!ram.ok(wc, 0x40) || !ram.ok(ram.u32(wc)))
         return;
-    static wotm::Scene cap;   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
+    wotm::Scene &cap = wotm_live::captureScene();
     cap.wide = c.wide.load(std::memory_order_relaxed);
-    cap.collect(ram);
-    wotm::Snapshot sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
+    wotm::Snapshot sn;
+    if (haveScene) {   // cena do hier(0, 0) deste quadro; particulas de agora
+        sn = std::move(wotm_live::g_sceneSnap);
+        cap.collectFx(ram);
+        sn.fx = cap.fx.systems;
+        sn.flares = cap.fx.flares;
+        sn.sprites = cap.sprites;
+        sn.screenPolys.clear();   // o hier vem antes do ScreenPolys::dmaData: os quadrados do quadro chegam pelo gancho (polys)
+        wotm::readScreenPolys(ram, sn.screenPolys);
+        sn.g = ram.u32(wotm::sym::g_frame);
+    } else {   // quadro sem hier(0, 0) (filme, carga): tudo de agora, como antes
+        cap.collect(ram);
+        sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
+    }
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     std::lock_guard<std::mutex> lk(c.m);
@@ -574,6 +620,29 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
     EndTextureMode();
 
+    {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
+        // segundos; para conferir telas ao vivo com um roteiro de pad (PS2X_PAD), sem tecla
+        static std::vector<double> shots = [] {
+            std::vector<double> v;
+            if (const char *s = std::getenv("WOTM_SHOTS"))
+                for (const char *p = s; *p;) {
+                    char *e = nullptr;
+                    const double t = std::strtod(p, &e);
+                    if (e == p) break;
+                    v.push_back(t);
+                    p = (*e == ',') ? e + 1 : e;
+                }
+            return v;
+        }();
+        static size_t next = 0;
+        if (next < shots.size() && GetTime() >= shots[next]) {
+            char name[64];
+            std::snprintf(name, sizeof name, "shot_%g.png", shots[next]);
+            if (wotm_live::exportFrame(name)) std::fprintf(stderr, "[shot] %s (g_frame %u)\n", name, ram.u32(0x006F7E38));
+            ++next;
+        }
+    }
+
     // quadro na janela, mantendo a proporcao (faixas so se a janela sair de 4:3..32:9 ou com WOTM_ASPECT fixo)
     const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
     const float k = std::min(sw / RW, sh / RH);
@@ -709,6 +778,7 @@ static std::string resources() { return {}; }
 }
 static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
+void wotmCaptureScene(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 void wotmScreenRect(const uint8_t *, uint32_t, bool) {}
 void wotmGsPktQueueSent() {}

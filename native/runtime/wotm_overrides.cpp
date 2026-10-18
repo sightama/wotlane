@@ -30,6 +30,7 @@ extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
+void wotmCaptureScene(const uint8_t *rdram);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(0, 0)
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
 void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
@@ -666,6 +667,25 @@ namespace
         g_origPolysDma(rdram, ctx, runtime);
     }
 
+    // Saida do hier(0, 0): o desenho nativo copia a cena aqui (wotmCaptureScene), com o estado que a travessia acabou de mandar ao
+    // VU1; o gameUpdate e o animationRunGlobal do rtMain, logo depois, ja escrevem o quadro seguinte.
+    constexpr uint32_t kHier = wotm::fn::hier__Fii;
+    PS2Runtime::RecompiledFunction g_origHier = nullptr;
+
+    // A funcao pode voltar no meio (troca de thread) e ser retomada depois: so captura quando o pc chega ao $ra da chamada.
+    uint32_t g_hierSceneRa = 0;   // $ra do hier(0, 0) em andamento (0 = nenhum)
+    void hierTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kHier && GPR_U32(ctx, 4) == 0u && GPR_U32(ctx, 5) == 0u)
+            g_hierSceneRa = GPR_U32(ctx, 31);
+        g_origHier(rdram, ctx, runtime);
+        if (g_hierSceneRa && ctx->pc == g_hierSceneRa)
+        {
+            g_hierSceneRa = 0;
+            wotmCaptureScene(rdram);
+        }
+    }
+
     // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
     void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -723,6 +743,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
     if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
         runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
+    if ((g_origHier = runtime.lookupFunction(kHier)))
+        runtime.registerFunction(kHier, &hierTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
         int v[5], n = 0;

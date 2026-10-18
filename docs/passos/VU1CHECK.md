@@ -49,7 +49,7 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 2. **Corda:** o especial do Ultra-V de puxar o inimigo não aparece; na introdução da primeira fase da aventura, as cordas dos dois helicópteros com braceletes no Congar aparecem erradas.
 3. **Entrada da partida:** às vezes uma luz no centro da tela (verde, às vezes vermelha) que some; provavelmente o brilho de um power-up por cima do fade-in, e o sumiço é o fade.
 4. **`tex 108`** (anel de montanhas do céu): no power-up (`powerup_halo` do corpus e foto `002146`/011) a referência pinta a `tex 108` onde o nativo não pinta nada (13 mil px). Sem explicação.
-5. **Olhos do Congar (skin 2) e do Robo-47:** as luzes que saem dos olhos ficam desalinhadas, como se seguissem os olhos com atraso (na foto parecem sumir). Fotos `2026-10-17_184848`/001 e 002 (VEGAS).
+5. **Olhos do Congar (skin 2) e do Robo-47:** as luzes que saem dos olhos ficam desalinhadas, como se seguissem os olhos com atraso (na foto parecem sumir). Fotos `2026-10-17_184848`/001 e 002 (VEGAS). **Causa provável, corrigida em 2026-10-17 (falta conferir ao vivo):** a captura do nativo no `timerWaitForMinUpdateRate` vinha depois do `gameUpdate` e do `animationRunGlobal`, que o `rtMain` roda entre o `hier(view, 0)` e o `particleDraw`; a malha saía com monstros, paletas e câmera do quadro seguinte, e o lens flare com a lista que o `hier` montou (estado do quadro). Agora a cena é copiada na saída do `hier(0, 0)` (`wotmCaptureScene`, gancho no `wotm_overrides.cpp`) e só as partículas, flares, texto e fades ficam no fim do quadro.
 6. **Explosão do Robo-47:** o efeito parece incorreto. Foto `2026-10-17_200206`/001 (ISLAND).
 
 **Fotos do dono (2026-10-17, `<runtime>\fotos\2026-10-17_171318`; ainda não investigadas):**
