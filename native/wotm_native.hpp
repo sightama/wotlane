@@ -397,7 +397,7 @@ struct DrawItem {
     M4 m;
     uint32_t node;   // HierObject
     uint32_t animPkt = 0;   // CHAR_INSTANCE::animPktPtr (paleta de matrizes dos objetos skinned)
-    int lodIdx = 0;         // indice do LOD escolhido (animPktPtr[lodIdx] = cadeia DMA da paleta)
+    int lodIdx = 0;         // indice do LOD escolhido (diagnostico; a cadeia da paleta e animPktPtr[packetPtrIdx], Scene::palette)
     std::shared_ptr<std::vector<M4>> pal;   // copia das 31 matrizes da paleta (preenchida por takeSnapshot; vazia = ler da RAM)
     uint8_t blend = kGsAlphaNormal;   // byte baixo do ALPHA_1 do no mais proximo com ctx (GROUP, TRANSLATE...; Scene::CtxScope, gsBlend)
     float fade = 1.f;       // cross-fade de LOD (hierLod): multiplica o alfa; < 1 vai para o passe translucido
@@ -1442,6 +1442,15 @@ public:
         collectParticles(ram);
         static const bool ds = std::getenv("WOTM_DESTRSTAT") != nullptr;
         if (ds) { std::fprintf(stderr, "[destr] estados:"); for (int i = 0; i < 8; ++i) std::fprintf(stderr, " %u", destrHist_[i]); std::fprintf(stderr, "\n"); }
+    }
+
+    // So as particulas (fx[] e destroços), sem a travessia: o desenho ao vivo coleta a cena na saida do hier(0, 0) e as particulas no
+    // fim do quadro (o particleDraw do PS2 vem depois do gameUpdate; wotm_live.inc, wotmCaptureScene/wotmCaptureFrame).
+    void collectFx(const Ram &ram) {
+        sprites.clear();
+        fx.wide = wide;
+        fx.collect(ram);
+        collectParticles(ram);
     }
 
     // Copia o estado atual da cena (depois de collect) para um instantaneo: itens, ceu, camera e as paletas de matrizes dos skinned
