@@ -137,7 +137,7 @@ Feita com o [PS2Recomp](https://github.com/ran-j/PS2Recomp) (commit 2c5fbb9), **
   (`playMpegMovie*` e a thread `updateMpegMovieDecoding`). Desde 2026-10-10 o jogo roda no Windows (MSVC) com desenho, som, filmes e teclado nativos (`native/`; estado em `docs/PROXIMOS_PASSOS.md`).
 - O runtime já traz GS em CPU, interpretadores de VU e VIF1 e um IOP emulado; é a ponte, não o destino (o destino é renderização nativa na fronteira da engine). O VU1 emulado serve de referência para a checagem VU1 x nativo (`docs/passos/VU1CHECK.md`).
 - **Bug do PS2Recomp achado**: `SQRT.S fd, ft` lê a fonte em `ft` (usa |ft|) e `RSQRT.S fd, fs, ft` é `fs / sqrt(|ft|)`; o upstream usava `fs`. Afeta 108 funções (`sqrt.s`) e 76 (`rsqrt.s`).
-  **`div.s` e `rsqrt.s` por zero** (confirmado em 2026-10-18 pelos pedestres da METRO, `docs/investigacoes/2026-10-17/02_pedestres.md`): o gerador emitia ±Inf
+  **`div.s` e `rsqrt.s` por zero** (confirmado em 2026-10-18 pelos pedestres da METRO; análise no commit 7c1c24e): o gerador emitia ±Inf
   (o EE satura em ±FLT_MAX) e o VU0 transformava em NaN (0 × Inf). Corrigido no gerador do WSL (`~/wotm-recomp`, `fpu_translator.cpp`: `FPU_DIV_S`/`FPU_RSQRT_S`) e no
   runtime (`ps2_fpu_rsqrt` no patch); 746 `div.s` e 134 `rsqrt.s` regenerados no `runner/`. O upstream corrigiu o mesmo no PR #272. Ainda **não verificado**: `min/max` com NaN.
 - **Bug do stub `rand` do PS2Recomp** (2026-10-18; o upstream também tem): `std::rand() & 0x7FFF` em vez do LCG da newlib (31 bits). O `mathfRandf` usa os 23 bits baixos de `rand()` como mantissa e saía em [lo, lo + 0,004·(hi − lo)). Corrigido no `LibC.cpp` do patch.
