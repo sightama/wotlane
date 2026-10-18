@@ -163,10 +163,10 @@ index 4b9242c..f786283 100644
 +
  #endif // PS2_RUNTIME_H
 diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
-index 0f19c9f..cbe7866 100644
+index 0f19c9f..b6f38e6 100644
 --- a/ps2xRuntime/include/ps2_runtime_macros.h
 +++ b/ps2xRuntime/include/ps2_runtime_macros.h
-@@ -604,11 +604,51 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
+@@ -604,11 +604,68 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
  #define PS2_PMFHL_SH(hi, lo) _mm_shufflehi_epi16(_mm_shufflelo_epi16(_mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi)), _MM_SHUFFLE(3, 1, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
  
  // FPU (COP1) operations
@@ -201,6 +201,22 @@ index 0f19c9f..cbe7866 100644
 +    }
 +    return ps2_fpu_fix(a / b);
 +}
++// RSQRT.S fd, fs, ft = fs / sqrt(|ft|). O sinal de ft e ignorado: ft zero (ou denormal) da +-Fmax com o sinal de fs.
++static inline float ps2_fpu_rsqrt(float a, float b)
++{
++    a = ps2_fpu_fix(a);
++    b = ps2_fpu_fix(b);
++    if (b == 0.0f)
++    {
++        uint32_t ba;
++        std::memcpy(&ba, &a, sizeof(ba));
++        const uint32_t r = (ba & 0x80000000u) | 0x7F7FFFFFu;
++        float f;
++        std::memcpy(&f, &r, sizeof(f));
++        return f;
++    }
++    return ps2_fpu_fix(a / sqrtf(fabsf(b)));
++}
 +static inline int32_t ps2_fpu_cvt_w(float v)
 +{
 +    v = ps2_fpu_fix(v);
@@ -219,10 +235,11 @@ index 0f19c9f..cbe7866 100644
 +#define FPU_SUB_S(a, b) ps2_fpu_fix(ps2_fpu_fix((float)(a)) - ps2_fpu_fix((float)(b)))
 +#define FPU_MUL_S(a, b) ps2_fpu_fix(ps2_fpu_fix((float)(a)) * ps2_fpu_fix((float)(b)))
 +#define FPU_DIV_S(a, b) ps2_fpu_div((float)(a), (float)(b))
++#define FPU_RSQRT_S(a, b) ps2_fpu_rsqrt((float)(a), (float)(b))
  #define FPU_SQRT_S(a) sqrtf((float)(a))
  #define FPU_ABS_S(a) fabsf((float)(a))
  #define FPU_MOV_S(a) ((float)(a))
-@@ -618,12 +658,12 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
+@@ -618,12 +675,12 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
  #define FPU_CEIL_L_S(a) ((int64_t)ceilf((float)(a)))
  #define FPU_FLOOR_L_S(a) ((int64_t)floorf((float)(a)))
  #define FPU_ROUND_W_S(a) ((int32_t)nearbyintf((float)(a)))

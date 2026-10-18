@@ -1225,8 +1225,13 @@ public:
                     c[2][a] = c[1][a]; c[3][a] = c[0][a];
                 }
                 c[2][2] += H; c[3][2] += H;
-                uv[0][0] = u0; uv[0][1] = v0 + dv; uv[1][0] = u0 + du; uv[1][1] = v0 + dv;
-                uv[2][0] = u0 + du; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
+                // VU1 (prog 0x1373): V cresce para cima (pe em v0, cabeca em v0 + dv; a folha guarda os bonecos de cabeca
+                // para baixo), com o recuo de meio texel do stampPacketInit (0.5/(du>>4); aqui a regiao e a textura inteira)
+                const float hu = 0.5f / texW, hv = 0.5f / texH;
+                uv[0][0] = u0 + hu;      uv[0][1] = v0 + hv;
+                uv[1][0] = u0 + du - hu; uv[1][1] = v0 + hv;
+                uv[2][0] = u0 + du - hu; uv[2][1] = v0 + dv - hv;
+                uv[3][0] = u0 + hu;      uv[3][1] = v0 + dv - hv;
                 f(i, c, uv);
             }
             return;
