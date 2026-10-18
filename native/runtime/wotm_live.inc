@@ -191,6 +191,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_native.hpp"
 #include "wotm_cheats.h"   // menu de debug (F1)
 #include <filesystem>
+#include "wotm_freecam.inc"   // camera livre de debug (F5)
 #define WOTM_HAVE_NATIVE 1
 
 namespace wotm_live
@@ -370,8 +371,41 @@ static std::vector<uint8_t> g_pendingState;
 // HUD do ScreenPolys do quadro em montagem: lido na entrada do ScreenPolys::dmaData (wotmScreenPolys), que zera numPolys; a captura
 // o junta ao instantaneo (o takeSnapshot na captura ja nao o ve).
 static std::vector<wotm::TextQuad> g_pendingPolys;
+// colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
+static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
 static std::atomic<int> g_shellFade{-1};
 } // namespace wotm_live
+
+// Saida do LevelPickups::enableHighlights (thread do EE): anota o colorQuad do _cs do pick-up destacado de cada um dos dois
+// primeiros monstros (highlightList[monstro+0x28] -> no -> Pickup -> cs +0xC). Os dois de uma vez porque, na tela dividida, a
+// chamada de um jogador devolve o pick-up do outro a 1; o ultimo valor ganha.
+void wotmPickupHighlights(const uint8_t *rdram)
+{
+    if (!rdram)
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    for (uint32_t j = 0; j < 2; ++j)
+    {
+        const uint32_t m = ram.u32(wotm::sym::shellGame + 0x120380 + 4 * j) & 0x1FFFFFFFu;   // m_monsters[j]
+        if (!ram.ok(m, 0x2C))
+            continue;
+        const uint32_t idx = ram.u32(m + 0x28);
+        if (idx >= 16)
+            continue;
+        const uint32_t node = ram.u32(wotm::sym::x_12LevelPickups_s_highlightPickup + 4 * idx) & 0x1FFFFFFFu;
+        const uint32_t pk = ram.ok(node) ? ram.u32(node) & 0x1FFFFFFFu : 0;
+        const uint32_t cs = ram.ok(pk, 0x10) ? ram.u32(pk + 0xC) & 0x1FFFFFFFu : 0;
+        if (!ram.ok(cs, 0x80))
+            continue;
+        wotm::Scene::CsColorAtDraw c{cs, {ram.f32(cs + 0x70), ram.f32(cs + 0x74), ram.f32(cs + 0x78), ram.f32(cs + 0x7C)}};
+        auto &v = wotm_live::g_pendingCsColor;
+        auto it = std::find_if(v.begin(), v.end(), [&](const wotm::Scene::CsColorAtDraw &e) { return e.cs == cs; });
+        if (it != v.end())
+            *it = c;
+        else if (v.size() < 8)
+            v.push_back(c);
+    }
+}
 
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued)
 {
@@ -380,6 +414,20 @@ void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued)
     {
         wotm_live::g_pendingRects.push_back(r);
         wotm_live::g_pendingState.push_back(queued ? 1 : 0);
+    }
+}
+// Faixas pretas do menu (letterboxDmaData, mandado pelo userintMain entre o hier(0,0) e o hier(0,1)): dois SPRITEs de 24 linhas no
+// topo e na base da vista, sem A+D (ALPHA_1 em vigor). Ficam com os fades que saem antes do texto e da lista de alta prioridade
+// (underText); cobrem a largura da vista, entao em widescreen vao de lado a lado da janela.
+void wotmLetterbox(const uint8_t *rdram)
+{
+    wotm::ScreenRect r[2];
+    const int n = rdram ? wotm::readScreenRects(wotm::Ram{rdram, PS2_RAM_SIZE}, wotm::addr::letterboxPacket, r, 2, false) : 0;
+    for (int i = 0; i < n && wotm_live::g_pendingRects.size() < 16; ++i)
+    {
+        r[i].underText = true;
+        wotm_live::g_pendingRects.push_back(r[i]);
+        wotm_live::g_pendingState.push_back(3);   // ja decidido
     }
 }
 void wotmGsPktQueueSent()
@@ -414,6 +462,8 @@ void wotmCaptureFrame(const uint8_t *rdram)
     wotm_live::g_pendingState.clear();
     std::vector<wotm::TextQuad> polys;
     polys.swap(wotm_live::g_pendingPolys);
+    std::vector<wotm::Scene::CsColorAtDraw> csColor;
+    csColor.swap(wotm_live::g_pendingCsColor);
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
     if (!rdram || !c.on.load(std::memory_order_relaxed))
         return;
@@ -423,6 +473,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
         return;
     static wotm::Scene cap;   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
     cap.wide = c.wide.load(std::memory_order_relaxed);
+    cap.csColorAtDraw = std::move(csColor);
     cap.collect(ram);
     wotm::Snapshot sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
     sn.screenRects = std::move(rects);
@@ -510,11 +561,39 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         S.snap = std::move(sn);
     }
+    // Camera livre com o jogo pausado (F7): a coleta da captura recortou pela vista congelada. Com a thread do EE parada a RAM nao
+    // muda, entao a apresentacao coleta de novo, uma vez por quadro pausado, sem o recorte (o resto do instantaneo fica o mesmo).
+    {
+        static uint32_t uncullG = ~0u;
+        if (S.snap.valid && g_wotmFreeCam.load(std::memory_order_relaxed) && wotmPaused() && S.snap.g != uncullG)
+        {
+            uncullG = S.snap.g;
+            static wotm::Scene rc;
+            rc.wide = cap.wide.load(std::memory_order_relaxed);
+            rc.fovCull = false;
+            wotm_live::g_stage = "collect (camera livre)";
+            rc.collect(ram);
+            wotm::Snapshot un = rc.takeSnapshot(ram, S.snap.g);
+            un.screenRects = S.snap.screenRects;
+            un.screenPolys = S.snap.screenPolys;
+            un.flares = S.snap.flares;
+            un.cam = S.snap.cam;
+            S.snap = std::move(un);
+        }
+    }
     if (!S.snap.valid)
         return false;
-    const wotm::GameCamera gc = S.scene.show(S.snap);
-    if (!gc.ok)
+    if (!S.snap.cam.ok)
         return false;
+    // camera livre pausada: o show ja recebe a pose (olho das faces de tras, neblina, sprites), e a cena perde o que segue a camera do jogo
+    const wotm_freecam::View freeView = wotm_freecam::update(S.snap.cam);
+    const wotm::GameCamera gameCam = S.snap.cam;
+    if (freeView.override)
+        S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose);
+    const wotm::GameCamera gc = S.scene.show(S.snap);
+    S.snap.cam = gameCam;
+    if (freeView.override)
+        wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
     if (const int sf = wotm_live::g_shellFade.load(std::memory_order_relaxed); sf >= 0)
     {
         wotm::ScreenRect r{};
@@ -586,8 +665,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     DrawTexturePro(rt.texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
     EndBlendMode();
 
-    {   // contador de FPS (F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
-        static bool show = !wotm_live::g_hideFps;
+    {   // contador de FPS (desligado ao abrir; F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
+        static bool show = false;
         static uint32_t lastG = 0;
         static double lastT = 0.0;
         static int drawn = 0;
@@ -625,7 +704,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             drawn = 0;
             lastT = now;
         }
-        if (show)
+        if (show && !wotm_live::g_hideFps)
         {
             char line[128];
             std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps", gameFps, screenFps);
@@ -688,6 +767,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
     }
 
+    wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5)
+
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),
                      S.rtxPath.c_str());
@@ -711,8 +792,10 @@ static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 void wotmScreenRect(const uint8_t *, uint32_t, bool) {}
+void wotmLetterbox(const uint8_t *) {}
 void wotmGsPktQueueSent() {}
 void wotmFontSent() {}
 void wotmScreenPolys(const uint8_t *) {}
 void wotmShellFade(int, int, bool) {}
+void wotmPickupHighlights(const uint8_t *) {}
 #endif
