@@ -1026,7 +1026,8 @@ namespace
     // (andar de lado), R1 -> byte 4 (defesa), L2 do jogo fica solto; o L1 fisico so alterna o lock-on (lido aqui, nao pelo jogo).
     // Com o lock-on ligado, esquerda/direita do direcional (lidas cruas no scePadRead, porta = jogador) trocam o alvo
     // (m_pinTarget: o updateLock mantem o alvo enquanto ele continua alvejavel) para o proximo monstro vivo a esquerda ou a
-    // direita na tela, e nao movem o boneco. Os bytes originais voltam na saida. As configuracoes 1 e 2 ficam com os botoes do jogo.
+    // direita na tela, e nao movem o boneco; o L2/R2 entra como esquerda/direita, que travado o jogo ja transforma em andar de
+    // lado (PadEntry +0x16/+0x18 -> +0x1A/+0x1C, so sem L2/R2 do jogo, o byte 4 = defesa). Os bytes originais voltam na saida. As configuracoes 1 e 2 ficam com os botoes do jogo.
     constexpr uint32_t kUpdateHistory[3] = {wotm::fn::updateHistory0__8PadFlagsR7GamePad, wotm::fn::updateHistory1__8PadFlagsR7GamePad,
                                             wotm::fn::updateHistory2__8PadFlagsR7GamePad};
     constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
@@ -1198,7 +1199,14 @@ namespace
             }
             t->dirHeld[i] = held;
         }
-        const uint32_t ra = GPR_U32(ctx, 31);
+        if (t->on)
+        {
+            // travado, o jogo anda de lado pela esquerda/direita (PadEntry +0x16/+0x18 -> +0x1A/+0x1C) e ignora os bytes 0/3
+            if (saved[kPadL2])
+                b[kPadLeft] = 0xFF;
+            if (saved[kPadR2])
+                b[kPadRight] = 0xFF;
+        }        const uint32_t ra = GPR_U32(ctx, 31);
         g_origInterpretInputs(rdram, ctx, runtime);
         if (ctx->pc == ra)   // fatia de tempo acabou no meio: o resto ainda le os bytes trocados (o loadPadInputs refaz todos)
             std::memcpy(b, saved, sizeof saved);    }
