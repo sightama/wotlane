@@ -71,3 +71,10 @@ Feito sem mexer na RAM: `WOTM_MATCH` aceita até 7 IAs (`native/runtime/wotm_ove
 O bloco em 0x1B70000 que parecia ocupado é sobra do menu: a área de carga vai até ~0x1F10000 (o Metro com 2 monstros chega a
 0x1D0C380). Centro + 8 monstros terminou em 0x1CC3400, com 2,3 MB de folga; luta de 150 s sem travar, todos lutando, 60 fps,
 ~9 ms de CPU por quadro. Detalhes em `docs/passos/NATIVO.md` ("Até 8 monstros").
+
+### 8 monstros em todas as fases do lote (30 s cada, IA contra IA)
+Fim da carga com 8 monstros sorteados (folga até o teto 0x1F10000): Centro 2,6 MB, Vegas 2,1, Aeroporto 7,5, San Francisco 1,8,
+Ilha 2,9, Tóquio 5,2, UFO 4,6, Canyon1 8,8, MiniSF 4,6, Vulcão 8,1, TokyoDM 5,9. Todas rodaram sem travar, cair nem ficar lentas.
+**Metro (fase 4) não cabe:** a carga foi até 0x23B4300 (35,7 MB), passou dos 32 MB e o jogo congelou na carga (vigia, `g_frame`
+205). Só com a RAM de 64 MB (degrau 2). San Francisco e Vegas ficam com ~2 MB: monstros mais pesados (Zorgulon, Raptros, Kineticlops)
+podem encostar no teto.
