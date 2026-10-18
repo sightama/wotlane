@@ -1256,11 +1256,18 @@ public:
             {
                 float wHead = 0.f;
                 if (s.type == FX_STRIPE) { float ph[4]; P(s.n - 1, ph); wHead = std::fabs(ph[3]) - ram.f32(b + fxoff::minSize); }
+                // stripe: U do cabecalho do pacote (pos - 0x28, stripePacketInit/Build): +0x8 = U da particula mais nova (o build o
+                // faz rolar a cada quadro), +0x18 = passo por particula (segmentDeltaU / rate); U_i = U0 + passo (n - 1 - i), fora de
+                // 0..1 (o GS repete). Conferido na foto 2026-10-18_025733/001 (fx 16: -0,580 + 8/64 na particula 60 de 69).
+                const uint32_t posA = ram.u32(b + fxoff::pos);
+                const bool vuU = s.type == FX_STRIPE && ram.ok(posA - 0x28, 0x28);
+                const float u0 = vuU ? ram.f32(posA - 0x20) : 0.f, du = vuU ? ram.f32(posA - 0x10) : 0.f;
                 for (int i = 0; i < s.n; ++i) {
                     float q[4];
                     P(i, q);
                     if (!std::isfinite(q[0])) continue;
-                    pts.push_back({{q[0], q[1], q[2]}, std::max(std::fabs(q[3]) - wHead, 0.f), float(i) / float(std::max(s.n - 1, 1)), i});
+                    const float u = vuU ? u0 + du * float(s.n - 1 - i) : float(i) / float(std::max(s.n - 1, 1));
+                    pts.push_back({{q[0], q[1], q[2]}, std::max(std::fabs(q[3]) - wHead, 0.f), u, i});
                 }
             }
             auto scr = [&](const float *q, float &x, float &y) {
@@ -1662,6 +1669,8 @@ private:
         // faixas: uma textura e a cor de cada ponta; sprites: textura (quadro do texSprite) e cor por particula
         const bool strip = isStrip(s.type), perFrame = s.type == FX_TEXSPRITE;
         const unsigned stripTex = strip ? texFor(0) : 0;
+        const bool repS = s.type == FX_STRIPE && stripTex != 0;   // U fora de 0..1 (cabecalho do pacote): REPEAT no S so durante este sistema
+        if (repS) rlTextureParameters(stripTex, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT);
         unsigned cur = ~0u;
         bool open = false;
         forEachQuad(ram, s, view, [&](int i, const float c[4][3], const float uv[4][2]) {
@@ -1683,6 +1692,7 @@ private:
             }
         });
         if (open) rlEnd();
+        if (repS) { rlDrawRenderBatchActive(); rlTextureParameters(stripTex, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); }
         rlSetTexture(0);
     }
 };
