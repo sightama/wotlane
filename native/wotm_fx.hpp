@@ -855,7 +855,7 @@ public:
     // Corrente (tipo 12; chainCreate/chainPacketInit/Build, microprograma 0x1D00, que chama a mesma fita 0x1F70): o mesmo cabecalho
     // em outro lugar (pos - 0x4C: minSize ja multiplicado por 0,5 pelo EE, -, segInitU, clut 642; pos - 0x3C: expansionRate, -,
     // segDeltaU, numColors - 1) e 2 cores em pos - 0x28. Cada corrente: cabeca com o numero de pontos no w (inteiro); sem
-    // subdivisao (os pontos vao direto para a fita). docs/investigacoes/2026-10-17/01_corda_ultrav.md.
+    // subdivisao (os pontos vao direto para a fita). Analise: git show 75f7fd4:docs/investigacoes/2026-10-17/01_corda_ultrav.md.
     template <class G> static void arcQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
         const uint32_t pos = ram.u32(s.base + fxoff::pos);
         const bool chain = s.type == FX_CHAIN;
