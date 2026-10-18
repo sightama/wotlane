@@ -2320,6 +2320,31 @@ void hierChecked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         onHier(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 31));
     g_origHier(rdram, ctx, runtime);
 }
+
+// texmActivateTexture(texId, tex0, pkt): falta na cache de texturas da fase. Grava o DBP do slot no BITBLTBUF do pacote de upload
+// (texInfo[id][0] + 0x30) e o enfileira na cadeia do VU1 do hier (pktAddVu1Tex). Fora do quadro amostrado essa cadeia nunca vai ao
+// DMA (o hierFlushObjQ do main.cpp so zera os contadores), e o upload se perdia: a VRAM do instantaneo ficava com a textura antiga
+// no slot e a imagem de referencia saia com outra textura (VU1CHECK.md, "Texels"; achado com o WOTM_GSUPLOADLOG). Com o instantaneo
+// ligado, o gancho manda o mesmo pacote (sceGsLoadImage: A+D com BITBLTBUF/TRXPOS/TRXREG/TRXDIR e a imagem) direto ao GS. As
+// mipmaps (texmSetMipMapTbl) continuam de fora. No quadro amostrado a cadeia vai ao DMA de verdade e o gancho nao faz nada.
+PS2Runtime::RecompiledFunction g_origTexActivate = nullptr;
+void texActivateChecked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    const uint32_t id = getRegU32(ctx, 4);
+    g_origTexActivate(rdram, ctx, runtime);
+    if (g_wotmVu1Tap || id >= 1000) return;
+    const uint32_t pkt = (*(const uint32_t *)(rdram + wotm::sym::texInfo + 16 * id) & 0x01FFFFFFu) + 0x20;
+    uint32_t p = pkt;
+    for (int tag = 0; tag < 4 && p + 16 <= PS2_RAM_SIZE; ++tag) {   // GIF: tags ate o EOP (A+D PACKED, depois IMAGE)
+        uint64_t t;
+        std::memcpy(&t, rdram + p, 8);
+        const uint32_t nloop = uint32_t(t & 0x7FFF), flg = uint32_t(t >> 58) & 3, nreg = uint32_t(t >> 60) ? uint32_t(t >> 60) : 16u;
+        p += 16 + (flg == 0 ? nloop * nreg * 16 : flg == 2 ? nloop * 16 : (nloop * nreg + 1) / 2 * 16);
+        if (t & 0x8000) break;
+    }
+    if (p <= pkt || p > PS2_RAM_SIZE || p - pkt > 0x100000) return;
+    runtime->memory().submitGifPacket(GifPathId::Path2, rdram + pkt, p - pkt, true);
+}
 } // namespace wotm_vu1check
 
 // Saida do hier(0, 0), o mesmo ponto do wotmCaptureScene (wotm_overrides.cpp, hierSceneExit): registro 'S' do instantaneo
@@ -2356,6 +2381,9 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
 #endif
         std::fprintf(stderr, "[vu1check] instantaneo ligado: uploads de textura vao ao GS (PS2X_GS_UPLOADS=1) para a VRAM do arquivo\n");
     }
+    if ((fotos || std::getenv("WOTM_VU1CHECK_SNAP")) &&
+        (wotm_vu1check::g_origTexActivate = runtime.lookupFunction(wotm::fn::texmActivateTexture__FiP6QwDataP9Vu1DmaPkt)))
+        runtime.registerFunction(wotm::fn::texmActivateTexture__FiP6QwDataP9Vu1DmaPkt, &wotm_vu1check::texActivateChecked);   // uploads da cache fora do quadro amostrado
     wotm_vu1check::g_period = e ? std::max(1, std::atoi(e)) : 1;
     if (const char *w = std::getenv("WOTM_VU1CHECK_WHEN"); w && !fotos) wotm_vu1check::parseWhen(w);
     if (const char *b = std::getenv("WOTM_VU1CHECK_BURST")) wotm_vu1check::g_burst = std::max(1u, uint32_t(std::strtoul(b, nullptr, 10)));

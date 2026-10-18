@@ -759,10 +759,18 @@ index d467c4b..ba6df64 100644
      }
  
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
-index 5658928..d8b3573 100644
+index 5658928..d968780 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 +++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
-@@ -638,8 +638,28 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
+@@ -6,6 +6,7 @@
+ #include <algorithm>
+ #include <cmath>
+ #include <cstdio>
++#include <cstdlib>
+ #include <cstring>
+ #include <iostream>
+ #include <sstream>
+@@ -638,8 +639,28 @@ bool GS::copyLatchedHostPresentationFrame(std::vector<uint8_t> &outPixels,
      return true;
  }
  
@@ -791,7 +799,54 @@ index 5658928..d8b3573 100644
      std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
      if (!data || sizeBytes < 16 || !m_backend)
          return;
-@@ -1572,7 +1592,8 @@ void GS::vertexKick(bool drawing)
+@@ -1384,6 +1405,46 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
+     {
+         m_trxdir = static_cast<uint32_t>(value & 0x3);
+ 
++        // WotM: WOTM_GSUPLOADLOG=<dbp>[,<dbp>...] (hex) imprime toda transferencia host -> GS que cobre algum desses blocos (faixa
++        // aproximada pela largura do buffer: dbw paginas de 64 px por linha) e WOTM_GSUPLOADLOG=all imprime todas; diagnostico das
++        // texturas que a VRAM do instantaneo nao tem (VU1CHECK.md, "Texels").
++        if (m_trxdir == 0u)
++        {
++            static const char *s_upLog = std::getenv("WOTM_GSUPLOADLOG");
++            if (s_upLog)
++            {
++                static std::vector<uint32_t> s_upDbp;
++                static bool s_upAll = false, s_upParsed = false;
++                static uint32_t s_upCount = 0;
++                if (!s_upParsed)
++                {
++                    s_upParsed = true;
++                    s_upAll = std::strcmp(s_upLog, "all") == 0;
++                    for (const char *p = s_upLog; *p && !s_upAll;)
++                    {
++                        char *end = nullptr;
++                        const unsigned long v = std::strtoul(p, &end, 16);
++                        if (end == p) break;
++                        s_upDbp.push_back(static_cast<uint32_t>(v));
++                        p = *end == ',' ? end + 1 : end;
++                    }
++                }
++                const uint32_t psm = m_bitbltbuf.dpsm;
++                const uint32_t bpp = (psm == 0x00 || psm == 0x01 || psm == 0x1B || psm == 0x24 || psm == 0x2C || psm == 0x30 || psm == 0x31) ? 32u
++                                     : (psm == 0x13) ? 8u : (psm == 0x14) ? 4u : 16u;
++                const uint32_t rowPx = std::max<uint32_t>(1u, m_bitbltbuf.dbw) * 64u;
++                const uint64_t bytes = uint64_t(rowPx) * (m_trxpos.dsay + m_trxreg.rrh) * bpp / 8u;
++                const uint32_t b0 = m_bitbltbuf.dbp, b1 = b0 + static_cast<uint32_t>((bytes + 255u) / 256u);
++                ++s_upCount;
++                bool hit = s_upAll;
++                for (uint32_t d : s_upDbp) hit = hit || (d >= b0 && d < b1);
++                if (hit)
++                    std::fprintf(stderr, "[gsup] #%u dbp %x..%x dbw %u dpsm %x dsa (%u,%u) rr %ux%u\n", s_upCount, b0, b1,
++                                 unsigned(m_bitbltbuf.dbw), psm, unsigned(m_trxpos.dsax), unsigned(m_trxpos.dsay),
++                                 unsigned(m_trxreg.rrw), unsigned(m_trxreg.rrh));
++            }
++        }
++
+         if (m_backend)
+         {
+             GSTransferCommand command{};
+@@ -1572,7 +1633,8 @@ void GS::vertexKick(bool drawing)
      if (m_vtxCount < needed)
          return;
  
