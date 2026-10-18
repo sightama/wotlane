@@ -65,3 +65,9 @@ Também provado no retail: o Endurance mantém 6 monstros carregados e o `m_mode
 4. Medir quadro e som com 16; otimizar o `EnemyInfo` se for ele.
 
 Esforço estimado: degrau 1 em um ou dois dias; 2 e 3 juntos em alguns dias; o resto depende do que a medição mostrar.
+
+## Resultado do degrau 1 (8 monstros, mesmo dia)
+Feito sem mexer na RAM: `WOTM_MATCH` aceita até 7 IAs (`native/runtime/wotm_overrides.cpp`) e `tools/lote.ps1 -AIs` vai até 7.
+O bloco em 0x1B70000 que parecia ocupado é sobra do menu: a área de carga vai até ~0x1F10000 (o Metro com 2 monstros chega a
+0x1D0C380). Centro + 8 monstros terminou em 0x1CC3400, com 2,3 MB de folga; luta de 150 s sem travar, todos lutando, 60 fps,
+~9 ms de CPU por quadro. Detalhes em `docs/passos/NATIVO.md` ("Até 8 monstros").

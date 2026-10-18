@@ -11,7 +11,7 @@
 #
 # Uso: powershell -File tools\lote.ps1 [-Monsters 1,2,3] [-Opponents 1,2,3] [-Levels 1,2] [-AIs 1,2,3] [-Seed 1] [-Secs 180] [-Max 0] [-Check 1]
 #   Indices: monstros e fases como no GLOSSARIO.md (MonsterLongNames, GameLevelNames). Sem -Opponents, usa a mesma lista de -Monsters.
-#   -AIs: quantidades de IAs (1 a 3) que se alternam. -Max N para depois de N combinacoes (0 = todas). -Check 0 desliga a comparacao.
+#   -AIs: quantidades de IAs (1 a 7) que se alternam. -Max N para depois de N combinacoes (0 = todas). -Check 0 desliga a comparacao.
 #   As listas sao texto separado por virgula (com -File o PowerShell nao converte "1,2" em lista).
 param(
     [string]$Monsters = '1,2,3,4,5,7,8,9,10,11',
@@ -30,7 +30,7 @@ $monList = Split-Ints $Monsters
 $oppList = Split-Ints $Opponents
 $levList = Split-Ints $Levels
 $aiCounts = Split-Ints $AIs
-if (@($aiCounts | Where-Object { $_ -lt 1 -or $_ -gt 3 }).Count) { throw "-AIs aceita so 1, 2 ou 3." }
+if (@($aiCounts | Where-Object { $_ -lt 1 -or $_ -gt 7 }).Count) { throw "-AIs aceita de 1 a 7." }
 $repo = Split-Path $PSScriptRoot -Parent
 $runtime = if ($env:WOTM_RECOMP_DIR) { $env:WOTM_RECOMP_DIR } elseif (Test-Path "$repo\.wotm_recomp_dir") { (Get-Content "$repo\.wotm_recomp_dir" -TotalCount 1).Trim() } else { '' }
 if (-not $runtime -or -not (Test-Path "$runtime\run_live.ps1")) { throw "Pasta do runtime nao encontrada: rode run_live.bat uma vez ou defina WOTM_RECOMP_DIR." }
@@ -86,7 +86,7 @@ foreach ($c in $combos) {
     Get-Process ps2EntryRunner -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
 
-    $lines = @(Select-String -Path "$runtime\live.err.log" -Pattern '\[partida\]|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })
+    $lines = @(Select-String -Path "$runtime\live.err.log" -Pattern '\[partida\]|\[wotm\] carga|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })
     $lines | Set-Content (Join-Path $out "$tag.log") -Encoding UTF8
     Get-ChildItem $disc -Filter '*_vigia_*.bin' -ErrorAction SilentlyContinue | ForEach-Object { Move-Item $_.FullName (Join-Path $out ("{0}_{1}" -f $tag, $_.Name)) -Force }
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Move-Item $_.FullName (Join-Path $out "$tag.png") -Force }

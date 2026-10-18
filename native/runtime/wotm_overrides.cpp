@@ -15,6 +15,7 @@
 #include "ps2_runtime_macros.h"
 #include "runtime/ee_scheduler.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -105,18 +106,21 @@ namespace
     PS2Runtime::RecompiledFunction g_origEvaluate = nullptr;
     unsigned g_rounds = 0;
     constexpr uint32_t kShell = wotm::sym::shellInfo, kGame = wotm::sym::shellGame;   // shellInfo, shellGame
-    int g_matchMonsters[4] = {-1, -1, -1, -1};   // jogador, depois as IAs
+    // Ate 7 IAs (8 monstros): m_monsterSel[4 + i] passa do [8] do header e cai em pad2958 (livre; o Endurance do retail ja grava
+    // m_monsterSel[8] com 5 IAs), m_costume[2 + i] vai ate o indice 8 (antes de m_mode em 0x2C10), m_monsters[4 + i] ate 10 (cabem 16),
+    // e fase + 8 monstros ocupam 9 dos 13 arquivos do fileStatus. O teto pratico e a RAM: veja wotmCheckLoadEnd.
+    constexpr int kMatchMaxAIs = 7;
+    int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
     void userintMainDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        for (uint32_t i = 0; i < 8; ++i)
-        {
-            WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel
-            WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume
-        }
+        for (uint32_t i = 0; i < 16; ++i)
+            WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel (4 jogadores + ate 12 IAs, ate 0x2978)
+        for (uint32_t i = 0; i < 12; ++i)
+            WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume (ate 0x2C10, onde mora m_mode)
         for (int i = 0; i <= g_matchAIs; ++i)
         {
             uint32_t costume = 0;
@@ -149,8 +153,9 @@ namespace
         if (ctx->pc == kEvaluateGameStatus)
         {
             std::fprintf(stderr, "[partida] rodada %u terminou (rtMain devolveu %d):", ++g_rounds, static_cast<int32_t>(GPR_U32(ctx, 5)));
-            for (uint32_t slot : {0u, 4u, 5u, 6u})   // m_monsters[0] (jogador) e m_monsters[4..] (IAs)
+            for (uint32_t k = 0; k <= static_cast<uint32_t>(kMatchMaxAIs); ++k)   // m_monsters[0] (jogador) e m_monsters[4..] (IAs)
             {
+                const uint32_t slot = k ? 3u + k : 0u;
                 const uint32_t m = READ32(kGame + 0x120380 + 4 * slot);
                 if (!m)
                     continue;
@@ -705,10 +710,33 @@ namespace
             wotmLoadFreeze(true);
         g_origLoadLevelFiles(rdram, ctx, runtime);
     }
+    // Fim da carga da fase: a fase e os monstros entram contiguos a partir de 0xA00000 (NGP, depois RTX e TEX, fileStatus) e nada
+    // confere o teto. Acima de ~0x1F10000 ha dados vivos (e o buffer do zip em 0x1F7F840); medido em 2026-10-18, o bloco em 0x1B70000
+    // e sobra do menu e pode ser sobrescrito (o Metro com 2 monstros vai ate 0x1D0C380). Loga quando muda e avisa perto do teto.
+    constexpr uint32_t kFileStatus = wotm::sym::fileStatus, kLoadBase = 0xA00000u, kLoadCeiling = 0x1F10000u;
+    uint32_t g_lastLoadEnd = 0;
+
+    void wotmCheckLoadEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t texN = READ8(kFileStatus + 0x38), ngpN = READ8(kFileStatus + 0x74), resN = READ8(kFileStatus + 0xB0);
+        if (texN > 13 || ngpN > 13 || resN > 13)
+            return;
+        const uint32_t end = std::max({READ32(kFileStatus + 4 * texN), READ32(kFileStatus + 0x3C + 4 * ngpN), READ32(kFileStatus + 0x78 + 4 * resN)});
+        if (end == g_lastLoadEnd || end < kLoadBase)
+            return;
+        g_lastLoadEnd = end;
+        const double used = (end - kLoadBase) / 1048576.0, left = (int64_t(kLoadCeiling) - end) / 1048576.0;
+        std::fprintf(stderr, "[wotm] carga da fase: %u arquivos, termina em 0x%07X (%.1f MB usados, %.1f MB ate o teto 0x%07X)%s\n", ngpN, end,
+                     used, left, kLoadCeiling, left < 0.5 ? " -- PERTO OU ALEM DO TETO, espere corrupcao" : "");
+    }
+
     void rtMainTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kRtMain)
+        {
             wotmLoadFreeze(false);
+            wotmCheckLoadEnd(rdram, ctx, runtime);
+        }
         g_origRtMain(rdram, ctx, runtime);
     }
 
@@ -928,9 +956,9 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
-        int v[5], n = 0;
+        int v[kMatchMaxAIs + 2], n = 0;
         const char *p = e;
-        for (char *end; n < 5; p = end + 1)
+        for (char *end; n < kMatchMaxAIs + 2; p = end + 1)
         {
             v[n++] = static_cast<int>(std::strtol(p, &end, 10));
             if (end == p || *end != ',')
@@ -955,7 +983,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             std::fprintf(stderr, "[wotm] partida direta: monstro %d contra %d IA(s), fase %d (WOTM_MATCH)\n", g_matchMonsters[0], g_matchAIs, g_matchLevel);
         }
         else
-            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>,<IA>[,<IA>[,<IA>]],<fase>)\n", e);
+            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>,<IA>[,<IA>...ate 7],<fase>)\n", e);
     }
     if (std::getenv("WOTM_AIVSAI") && (g_aiInit = runtime.lookupFunction(kAiInit)) &&
         (g_origSetAIMonster = runtime.lookupFunction(kSetAIMonster)))

@@ -14,7 +14,7 @@ O release do PS2Recomp liga `/GL` + `/LTCG` e o link leva ~28 min a cada mudanç
 
 ## Rodar
 - `run_live.bat` (ou `run_live.ps1` no clone: `-Auto 0` para jogar, `-Stats 1` loga `[native]`, `-Build build_dev_nm` para o cobaia). Põe `PS2X_NO_VU1=1 PS2X_NO_VIF1=1 PS2X_NO_GS=1 PS2X_SCENE=1 PS2X_FMV=1` (VU1 e GS emulados desligados, desenho e filmes nativos). Usa `Start-Process -RedirectStandardError` de propósito (o `2>` do PowerShell 5 grava UTF-16). Logs em `live.err.log`.
-- Partida direta sem menu: `WOTM_MATCH=<jogador>,<ia>[,<ia>[,<ia>]],<fase>`; IA contra IA: `WOTM_AIVSAI=1`; lote: `tools\lote.ps1` (tudo em `NATIVO.md`).
+- Partida direta sem menu: `WOTM_MATCH=<jogador>,<ia>[,<ia>...],<fase>` (até 7 IAs); IA contra IA: `WOTM_AIVSAI=1`; lote: `tools\lote.ps1` (tudo em `NATIVO.md`).
 - Outras `PS2X_*` úteis: `PS2X_PAD` (roteiro de botões com tempos), `PS2X_DUMP_RAM="3300,3900"` (grava `ram_<q>.bin`/`vram_<q>.bin` para o viewer), `PS2X_CD_IMAGE` (ISO), `PS2X_PEEK="hex,hex"` (palavras da RDRAM no log), `PS2X_HOSTPROF=1` (amostrador de RIP do host), `PS2X_COVERAGE` (cobertura de funções), `PS2X_IOP_BATCH` (padrão 256).
 - **Teclado** (backend em `ps2_pad.cpp`, soma ao gamepad): **setas = analógico esquerdo**, **I/J/K/L = D-pad**, **Espaço = X**, **Z = quadrado**, **X = triângulo**, **S = bola**, **Enter = Start**, **Backspace = Select**, **Q = L1**, **W = R1**, **Shift = L1+R1**, **A = L2**, **C = R2**. Camada nativa: **F3** FPS, **F7** pausa e continua, **F6** (pausado) avança um quadro do jogo, **F8** tira uma foto com nota (com `WOTM_FOTOS`; só com `WOTM_VU1CHECK`, grava e compara o próximo quadro). Fluxo em `VU1CHECK.md`, "Fotos".
 
