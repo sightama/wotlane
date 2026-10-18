@@ -1571,7 +1571,7 @@ void finish()
 // registros na ordem em que aconteceram, varios quadros no mesmo arquivo (<prefixo>_<g_frame do primeiro>.vu1snap): 'A' (1o quadro:
 // estado do VU1/VIF1, RAM e VRAM inteiras), 'a' (quadros seguintes: estado do VU1/VIF1 e so as paginas de 4 KB da RAM e da VRAM que
 // mudaram desde o registro anterior), 'C' (cadeia: paginas que mudaram, origens dos trechos e os bytes), 'P' (entrada do hier(0,1):
-// paginas que mudaram), 'E' (fim do quadro). Entre quadros da mesma fase quase tudo e igual, entao os seguintes custam poucos MB.
+// paginas que mudaram), 'S' (saida do hier(0,0): paginas que mudaram; ausente nos arquivos antigos), 'E' (fim do quadro). Entre quadros da mesma fase quase tudo e igual, entao os seguintes custam poucos MB.
 // WOTM_VU1CHECK_SNAP_MAX=<MB> (padrao 2048) para de gravar ao passar do teto. O replay refaz a sequencia dentro do runtime, sem jogo,
 // e imprime a mesma saida [vu1check] da checagem ao vivo.
 namespace snap
@@ -1681,6 +1681,15 @@ void pass1(const uint8_t *ram)
 {
     if (!g_out || !g_inFrame) return;
     putv(uint8_t('P'));
+    putDelta(ram, g_prev);
+}
+
+// Saida do hier(0, 0): a RAM que o desenho nativo ao vivo coleta (wotmCaptureScene). As paletas de ossos sao reescritas no meio da
+// travessia, entao a da entrada do quadro poe os monstros noutra pose na imagem nativa do replay.
+void sceneExit(const uint8_t *ram)
+{
+    if (!g_out || !g_inFrame) return;
+    putv(uint8_t('S'));
     putDelta(ram, g_prev);
 }
 
@@ -1839,11 +1848,19 @@ void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
 }
 
 PS2Runtime::RecompiledFunction g_origHier = nullptr;
+uint32_t g_hierExitRa = 0;   // $ra do hier(0, 0) em andamento (a funcao pode voltar no meio, numa troca de thread)
 void hierChecked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == wotm::fn::hier__Fii)
-        onHier(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 31));
+    if (ctx->pc == wotm::fn::hier__Fii) {
+        const uint32_t view = getRegU32(ctx, 4), pass = getRegU32(ctx, 5), ra = getRegU32(ctx, 31);
+        onHier(rdram, view, pass, ra);
+        if (view == 0 && pass == 0) g_hierExitRa = ra;
+    }
     g_origHier(rdram, ctx, runtime);
+    if (g_hierExitRa && ctx->pc == g_hierExitRa) {
+        g_hierExitRa = 0;
+        snap::sceneExit(rdram);
+    }
 }
 } // namespace wotm_vu1check
 
@@ -2116,6 +2133,7 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
         std::lock_guard<std::mutex> g(slot.m);
         slot.f = std::move(f);
         slot.used = true;
+        slot.fresh = true;   // sem ele o collectFlares trata o quadro como sem particleDraw e a imagem nativa saia sem flares
     }
     {   // filme do telao do menu (texId 999): sem tocador no replay, o quadro que o tocador deixou na VRAM (CT32 em 0x3BA0, largura
         // 320, 256x128; wotm_fmv.hpp), como o GS da referencia o amostra
@@ -2247,7 +2265,10 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
     // referencia, os 'G' do quadro sao aplicados ao GS antes das cadeias (lidos adiantado do arquivo) e de novo na ordem gravada.
     std::vector<std::vector<uint8_t>> gifs;
     std::vector<uint8_t> vramRec(PS2_GS_VRAM_SIZE);   // VRAM como gravada no arquivo (os deltas do 'a' valem sobre ela, nao sobre a do replay)
-    std::vector<uint8_t> frameRam;   // RAM na entrada do quadro (imagem nativa; a RAM de agora e a do fim do quadro)
+    // RAM da imagem nativa: a da saida do hier(0, 0) (registro 'S'), a mesma que o desenho ao vivo coleta; nos arquivos antigos, sem
+    // 'S', fica a da entrada do quadro (paletas de ossos de antes da travessia: monstro que se mexe sai noutra pose)
+    std::vector<uint8_t> frameRam;
+    bool sceneRam = false;   // frameRam ja e a do 'S' deste quadro
 #ifdef _WIN32
     auto tell = [&]() { return _ftelli64(f); };
     auto seek = [&](int64_t off, int whence) { return _fseeki64(f, off, whence) == 0; };
@@ -2281,7 +2302,7 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
                 if (more) { data.resize(bytes); more = get(data.data(), bytes); }
                 if (more) mem.processVIF1Data(data.data(), bytes);
             }
-            else if (type == 'P') more = skipDelta();
+            else if (type == 'P' || type == 'S') more = skipDelta();
             else if (type == 'G') {
                 more = get(&bytes, 4);
                 if (more) { gifs.emplace_back(bytes); more = get(gifs.back().data(), bytes); }
@@ -2351,7 +2372,7 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
             skip = onlyFrame && frame != onlyFrame;
             chains = 0;
             if (!skip) {
-                if (png) { warmUp(); frameRam.assign(ram, ram + PS2_RAM_SIZE); }   // a imagem nativa usa a RAM da entrada do quadro
+                if (png) { warmUp(); frameRam.assign(ram, ram + PS2_RAM_SIZE); sceneRam = false; }   // trocada pela do 'S', se houver
                 arm(ram, frame);
             }
             continue;
@@ -2375,6 +2396,10 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
             ok = applyDelta(ram, PS2_RAM_SIZE);
             if (ok && !skip) { g_pass = 1; g_cam[1] = readCam(ram); collectNative(ram, g_natPass1); }
             if (!ok) break;
+        } else if (type == 'S') {
+            ok = applyDelta(ram, PS2_RAM_SIZE);
+            if (!ok) break;
+            if (!skip && png && !sceneRam) { std::memcpy(frameRam.data(), ram, PS2_RAM_SIZE); sceneRam = true; }
         } else if (type == 'G') {
             uint32_t bytes = 0;
             std::vector<uint8_t> data;

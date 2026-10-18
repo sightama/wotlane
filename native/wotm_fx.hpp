@@ -384,7 +384,7 @@ public:
     // intensity = lightIntensity^2, cor = lightColor / 255).
     //  - particleLensFlareTestZbuffer (no fim do particleDraw, depois do VU1 desenhar a cena): projeta cada entrada, descarta as fora da
     //    tela ou com W < 1 (compacta a lista), grava pos = (X, Y, Z do GS), distance = W (100 com lightAtInfinity, bit 7 das flags) e le
-    //    do GS o Z 4x4 em (X - 2, Y - 2) (sceGsStoreImage PSMZ32).
+    //    do GS o Z 4x4 em (X - 2, Y) (sceGsStoreImage PSMZ32; origem X - 0x6C2, Y - 0x790).
     //  - particleLensFlareRender: amostra visivel = Z <= limiar. Luz no infinito: as 16, limiar fptoui(1,03125 Z) + 1; local: as 4
     //    centrais, limiar fptoui(a + b / (W - max(Zfudge; 1,5))) (a, b = viewGetZBuffParams). intensity *= visiveis / amostras; pos +=
     //    centroide das visiveis - (2 ou 1); com 0 < ID < 0x7FF (so luzes no infinito: particleLensFlareAddToDeBounceList), intensity =
@@ -582,8 +582,10 @@ public:
         for (const Flare &fl : f.e) {
             if (!(fl.flags & 0xFF)) continue;
             const bool inf = (fl.flags & 0x80) != 0;
-            // pixel do canto do bloco 4x4: (int) X - 0x6C2 (o retail supoe centro 2048 e tela 640 x 224)
-            const int bx = int(fptoui(fl.x)) - int(f.cx - 0.5f * f.vw) - 2, by = int(fptoui(fl.y)) - int(f.cy - 0.5f * f.vh) - 2;
+            // pixel do canto do bloco 4x4: ((int) X - 0x6C2, (int) Y - 0x790), ou seja colunas X-2..X+1 e linhas Y..Y+3 (o retail supoe
+            // centro 2048 e tela 640 x 224; TRXPOS conferido no instantaneo). Com o -2 tambem na vertical, as amostras de luz local caiam
+            // duas linhas acima (sobrancelha do Congar, borda da lente do Robo-47) e o flare dos olhos sumia.
+            const int bx = int(fptoui(fl.x)) - int(f.cx - 0.5f * f.vw) - 2, by = int(fptoui(fl.y)) - int(f.cy - 0.5f * f.vh);
             uint32_t thr;
             if (inf) thr = fptoui(fl.z * 1.03125f) + 1;
             else {
