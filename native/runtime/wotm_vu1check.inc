@@ -355,6 +355,18 @@ int fxOf(uint32_t prog)
     return sys;
 }
 
+// O fx[] do pacote de lens flare (lensFlarePacket[0] e [1]): os sprites dele vao para a linha "lens flare", nao para "particulas".
+bool flareSys(int sys)
+{
+    if (sys < 0) return false;
+    for (int v = 0; v < 2; ++v) {
+        uint32_t lf = 0;
+        std::memcpy(&lf, g_rdram + wotm::sym::lensFlarePacket + 4 * v, 4);
+        if (lf >= kFx0 && lf < kFxEnd && sys == int((lf - kFx0) / wotm::fxaddr::stride)) return true;
+    }
+    return false;
+}
+
 double g_walkMs = 0.0, g_projMs = 0.0;   // tempo das coletas nativas no quadro amostrado (descida na hierarquia / triangulos)
 
 // Triangulos nativos (RAM de agora, coordenadas de mundo, com skinning), por polyPkt. Com `only` (origens ordenadas dos trechos de
@@ -1713,7 +1725,9 @@ void compare()
     std::map<uint32_t, uint32_t> skipVu;   // inventario: triangulos do VU1 por objeto skip (ceu, icones): so contados
     for (size_t ri = 0; ri < g_vuRects.size(); ++ri) {
         const auto &r = g_vuRects[ri];
-        if (const int sys = fxOf(r.first); sys >= 0) fxVu[uint32_t(sys)][g_progChain[r.first - 1]].rects.push_back(r.second);
+        if (const int sys = fxOf(r.first); sys >= 0) {
+            if (!flareSys(sys)) fxVu[uint32_t(sys)][g_progChain[r.first - 1]].rects.push_back(r.second);
+        }
         else if (objectOf(g_nats[g_progChain[r.first - 1]], r.first)) objRects.push_back(r.second);
         else {
             ++rectsOrphan;
