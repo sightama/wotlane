@@ -1848,21 +1848,16 @@ void onHier(const uint8_t *rdram, uint32_t view, uint32_t pass, uint32_t ra)
 }
 
 PS2Runtime::RecompiledFunction g_origHier = nullptr;
-uint32_t g_hierExitRa = 0;   // $ra do hier(0, 0) em andamento (a funcao pode voltar no meio, numa troca de thread)
 void hierChecked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == wotm::fn::hier__Fii) {
-        const uint32_t view = getRegU32(ctx, 4), pass = getRegU32(ctx, 5), ra = getRegU32(ctx, 31);
-        onHier(rdram, view, pass, ra);
-        if (view == 0 && pass == 0) g_hierExitRa = ra;
-    }
+    if (ctx->pc == wotm::fn::hier__Fii)
+        onHier(rdram, getRegU32(ctx, 4), getRegU32(ctx, 5), getRegU32(ctx, 31));
     g_origHier(rdram, ctx, runtime);
-    if (g_hierExitRa && ctx->pc == g_hierExitRa) {
-        g_hierExitRa = 0;
-        snap::sceneExit(rdram);
-    }
 }
 } // namespace wotm_vu1check
+
+// Saida do hier(0, 0), o mesmo ponto do wotmCaptureScene (wotm_overrides.cpp, hierSceneExit): registro 'S' do instantaneo
+void wotmVu1SceneExit(const uint8_t *rdram) { wotm_vu1check::snap::sceneExit(rdram); }
 
 void wotmVu1CheckInstall(PS2Runtime &runtime)
 {
@@ -2515,5 +2510,6 @@ int wotmVu1CmpMain(int argc, char **argv)
 }
 #else
 void wotmVu1CheckInstall(PS2Runtime &) {}
+void wotmVu1SceneExit(const uint8_t *) {}
 int wotmVu1CmpMain(int, char **) { std::fprintf(stderr, "runtime sem a camada nativa (WOTM_HAVE_NATIVE): sem --vu1cmp\n"); return 1; }
 #endif

@@ -31,6 +31,7 @@ extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmCaptureScene(const uint8_t *rdram);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(0, 0)
+void wotmVu1SceneExit(const uint8_t *rdram);   // wotm_vu1check.inc: registro 'S' do instantaneo, no mesmo ponto
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
 void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do menu, lidas do pacote do letterboxDmaData
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
@@ -727,18 +728,32 @@ namespace
     constexpr uint32_t kHier = wotm::fn::hier__Fii;
     PS2Runtime::RecompiledFunction g_origHier = nullptr;
 
-    // A funcao pode voltar no meio (troca de thread) e ser retomada depois: so captura quando o pc chega ao $ra da chamada.
+    // A funcao pode voltar no meio (troca de thread) e ser retomada depois, ja sem passar por aqui: so captura quando o pc chega ao
+    // $ra da chamada. Quando a volta escapa (60% dos quadros da luta), a captura sai na entrada do TheGame::Update, que o rtMain chama
+    // logo depois (so o RtLoopView::end no meio). Sem essa reserva a cena saia do fim do quadro, um quadro a frente do lens flare.
     uint32_t g_hierSceneRa = 0;   // $ra do hier(0, 0) em andamento (0 = nenhum)
+    void hierSceneExit(uint8_t *rdram)
+    {
+        g_hierSceneRa = 0;
+        wotmCaptureScene(rdram);
+        wotmVu1SceneExit(rdram);
+    }
     void hierTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kHier && GPR_U32(ctx, 4) == 0u && GPR_U32(ctx, 5) == 0u)
             g_hierSceneRa = GPR_U32(ctx, 31);
         g_origHier(rdram, ctx, runtime);
         if (g_hierSceneRa && ctx->pc == g_hierSceneRa)
-        {
-            g_hierSceneRa = 0;
-            wotmCaptureScene(rdram);
-        }
+            hierSceneExit(rdram);
+    }
+
+    constexpr uint32_t kTheGameUpdate = wotm::fn::Update__7TheGame;
+    PS2Runtime::RecompiledFunction g_origTheGameUpdate = nullptr;
+    void theGameUpdateTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTheGameUpdate && g_hierSceneRa)
+            hierSceneExit(rdram);
+        g_origTheGameUpdate(rdram, ctx, runtime);
     }
 
     // Tom verde do pick-up que o monstro pode pegar: o enableHighlights o grava no colorQuad do _cs antes do hier(v,0), e o
@@ -891,6 +906,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
         runtime.registerFunction(kHier, &hierTapped);
+    if (g_origHier && (g_origTheGameUpdate = runtime.lookupFunction(kTheGameUpdate)))
+        runtime.registerFunction(kTheGameUpdate, &theGameUpdateTapped);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
