@@ -43,5 +43,4 @@ Lista legível do estado (bugs, investigações, o que falta), escrita com o don
 - [ARMADILHAS.md](passos/ARMADILHAS.md): bugs/pegadinhas já vistos (gcc 2.95, gp, rodata, `sqrtf`, `__asm__("sym")`, build NM).
 - [TESTE_PCSX2.md](passos/TESTE_PCSX2.md): ELF halfcpp no PCSX2, layout `gen_nm_ld.py`, heap, bugs de comportamento achados jogando.
 - [ESPINHA.md](passos/ESPINHA.md): cadeia `main` -> monstro no mapa, menu, `rtMain`, estados de monstro: o que se sabe do fluxo do jogo.
-- [IA.md](passos/IA.md): estrutura de AiAction/AiSeek e onde parou.
 - [VIEWER_WEB.md](passos/VIEWER_WEB.md): ideia de visualizador de modelos 3D no navegador (2026-10-14).
