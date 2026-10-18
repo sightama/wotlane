@@ -162,6 +162,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_SHOWADC`, `WOTM_SUBPKT=n` | mostra os triângulos descartados pelo ADC em vermelho / só um sub-pacote |
 | `WOTM_NOVCOL`, `WOTM_OPAQUE`, `WOTM_ONEPASS`, `WOTM_UVISO` | desligam partes do desenho |
 | `WOTM_NOFX`, `WOTM_FXNOGRAY`, `WOTM_NOSHADOW`, `WOTM_NOFLARE` | desligam partículas / rampa cinza / sombras / lens flare |
+| `WOTM_FXLIVE=1` | partículas lidas da RAM viva na apresentação, como antes de 2026-10-18 (sem a cópia de sombra do instantâneo, `Particles::shadowRam`): comparar o quadrado na origem do impacto do Magmo |
 | `WOTM_SHADOWPULL=<f>` | fração da distância ao olho que o vértice da sombra é puxado para não brigar com o receptor (padrão 0,002, teto 1000 × f = 2) |
 | `WOTM_FXLIST=1`, `WOTM_FXDUMP=<prefixo>` | lista sistemas de partículas / grava suas texturas (`tools/fx.py` dá nomes) |
 | `WOTM_SHOTS=<s>[,<s>...]` | grava o quadro nativo em `shot_<s>.png` (pasta atual, o `discroot`) quando o relógio da janela passa de cada `<s>` segundos: conferir telas ao vivo com um roteiro de pad (`PS2X_PAD`), sem tecla |

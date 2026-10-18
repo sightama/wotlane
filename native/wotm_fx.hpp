@@ -437,6 +437,52 @@ public:
     }
     void resetFlareDebounce() { flarePrev_.clear(); }
 
+    // Copia de sombra do que o draw le da RAM (docs/investigacoes/2026-10-17/09_magmo_impacto.md). O instantaneo guarda so a contagem
+    // de cada sistema; posicoes, idades e cabecalhos de pacote eram lidos da RAM viva na apresentacao, e se o particleMove do quadro
+    // seguinte ja tinha matado particulas, pos[n] era o fecho do pacote (0, 0, 0, w enorme): um quadrado gigante na origem do mapa.
+    // Chamada so na thread do EE (wotmCaptureFrame), com os sistemas recem-coletados. Devolve um buffer do tamanho da RAM com as
+    // faixas copiadas (o resto fica com lixo de usos anteriores, que o draw nunca le); nullptr = desligado (WOTM_FXLIVE=1).
+    static std::shared_ptr<const uint8_t> shadowRam(const Ram &ram, const std::vector<FxSystem> &systems) {
+        static const bool live = std::getenv("WOTM_FXLIVE") != nullptr;   // diagnostico: le a RAM viva, como antes
+        if (live || !ram.p || systems.empty()) return nullptr;
+        // pool: buffer livre = so o pool o segura (o instantaneo publicado, o da apresentacao e o da Scene seguram os outros)
+        static std::vector<std::shared_ptr<uint8_t>> pool;
+        std::shared_ptr<uint8_t> buf;
+        for (auto &p : pool)
+            if (p.use_count() == 1) { buf = p; break; }
+        if (!buf) {
+            if (pool.size() >= 6) return nullptr;
+            pool.emplace_back(new uint8_t[ram.size], std::default_delete<uint8_t[]>());
+            buf = pool.back();
+        }
+        uint8_t *dst = buf.get();
+        auto copy = [&](uint32_t a, uint32_t n) {
+            if (a < 0x1000 || a >= ram.size) return;
+            n = uint32_t(std::min<uint64_t>(n, ram.size - a));
+            std::memcpy(dst + a, ram.p + a, n);
+        };
+        copy(fxaddr::fx, fxaddr::count * fxaddr::stride);   // pos/vel/idade e pacotes (cabecalhos do wake, arco, sprine) ficam dentro de fx[i]
+        copy(fxaddr::textureInfo, 128 * 8);
+        copy(fxaddr::texId, 128 * 2);
+        copy(fxaddr::tex0, 128 * 8);
+        copy(addr::worldToScreenMat, 5 * 0x40);
+        copy(addr::worldCtx, 5 * 0x1F0);
+        copy(addr::vu1FogParams, 16);
+        const uint32_t lo = fxaddr::fx, hi = fxaddr::fx + fxaddr::count * fxaddr::stride;
+        auto outside = [&](uint32_t a, uint32_t n) { return a < lo || uint64_t(a) + n > hi; };
+        for (const FxSystem &s : systems) {
+            const uint32_t b = s.base, n = uint32_t(std::max(s.n, 0)) + 1;
+            copy(fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex), 4 * std::min<uint32_t>(ram.u32(b + fxoff::numColors), 256));
+            // ponteiros que apontem para fora de fx[] (nao visto ate hoje): a faixa que o draw le em volta deles
+            const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age), pm = ram.u32(b + 0x2EC0);
+            if (outside(pos - 0x400, 0x400 + 16 * n)) copy(pos - 0x400, 0x400 + 16 * n);
+            if (outside(vel, 16 * n)) copy(vel, 16 * n);
+            if (outside(age, 4 * n)) copy(age, 4 * n);
+            if (pm && outside(pm, 64)) copy(pm, 64);
+        }
+        return std::shared_ptr<const uint8_t>(buf, buf.get());
+    }
+
     void collectFlares(const Ram &ram) {
         {
             FlareSlot &s = flareSlot();

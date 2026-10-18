@@ -604,7 +604,8 @@ struct Snapshot {
     std::vector<Sprite> sprites;
     std::vector<DrawItem> items, sky, overlay, hud, hp, hpOverlay;
     std::vector<FxSystem> fx;
-    Particles::FlareFrame flares;          // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
+    std::shared_ptr<const uint8_t> fxRam;  // copia de sombra da RAM das particulas (Particles::shadowRam, ao vivo); nullptr = ler a RAM passada ao draw
+    Particles::FlareFrame flares;       // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (readScreenPolys: no takeSnapshot e no hook do dmaData)
@@ -1508,6 +1509,7 @@ public:
         hpOverlay = s.hpOverlay;
         sprites = s.sprites;
         fx.systems = s.fx;
+        fxRam_ = s.fxRam;
         fx.flares = s.flares;
         shadows = s.shadows;
         screenRects = s.screenRects;
@@ -2172,7 +2174,8 @@ public:
         // Teste de alfa das particulas: os pacotes translucidos nao mexem no TEST e herdam o 0x7000D (As > 0) do restoreScreenDrawEnv;
         // os destroços trazem o proprio TEST e fecham com o setClosingContext (0x5004B: As >= 4). Medido pela checagem (TEST do XGKICK).
         if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
-        if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
+        // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
+        if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
         if (!wire) setAlphaRef(kGsAlphaRef);
         if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas
         rlDrawRenderBatchActive();
@@ -2756,6 +2759,7 @@ private:
     GameCamera cam_;   // camera do ultimo collect/blend (eixos para os sprites)
     bool eyeOk_ = false;
     float eye_[3] = {0, 0, 0};
+    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual

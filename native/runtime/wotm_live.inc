@@ -582,6 +582,9 @@ void wotmCaptureFrame(const uint8_t *rdram)
         cap.collect(ram);
         sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
     }
+    // posicoes, idades e pacotes das particulas deste instante: a apresentacao desenha depois, com o particleMove seguinte ja
+    // rodando (contagem do instantaneo com dados vivos = o fecho do pacote lido como particula; 09_magmo_impacto.md)
+    sn.fxRam = wotm::Particles::shadowRam(ram, sn.fx);
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     std::lock_guard<std::mutex> lk(c.m);
