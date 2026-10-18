@@ -253,12 +253,16 @@ void collectFx(const uint8_t *rdram, FxMap &out)
             if (!ci && wantRaw) {
                 const uint32_t pp = ram.u32(sys.base + wotm::fxoff::pos), vp = ram.u32(sys.base + wotm::fxoff::vel), ap = ram.u32(sys.base + wotm::fxoff::age);
                 const float mn = ram.f32(sys.base + wotm::fxoff::minSize), mx = ram.f32(sys.base + wotm::fxoff::maxSize);
-                if (ram.ok(pp, 16 * uint32_t(sys.n)) && ram.ok(vp, 16 * uint32_t(sys.n)) && ram.ok(ap, 2 * uint32_t(sys.n)))
+                // vel e age podem faltar (a corrente, tipo 12, zera os dois): ficam 0
+                const bool hv = ram.ok(vp, 16 * uint32_t(sys.n)), ha = ram.ok(ap, 2 * uint32_t(sys.n));
+                auto vf = [&](int k, int c) { return hv ? ram.f32(vp + 16 * k + 4 * c) : 0.f; };
+                auto ag = [&](int k) { return ha ? int16_t(ram.u16(ap + 2 * k)) : int16_t(0); };
+                if (ram.ok(pp, 16 * uint32_t(sys.n)))
                     for (int k = 0; k < sys.n; ++k) {
                         s.raw.push_back({ram.f32(pp + 16 * k), ram.f32(pp + 16 * k + 4), ram.f32(pp + 16 * k + 8), ram.f32(pp + 16 * k + 12),
-                                         ram.f32(vp + 16 * k), ram.f32(vp + 16 * k + 4), ram.f32(vp + 16 * k + 8), float(int16_t(ram.u16(ap + 2 * k))), mn, mx});
-                        uint32_t col = wotm::Particles::colorAt(ram, sys.base, int16_t(ram.u16(ap + 2 * k)));
-                        if (sys.type == wotm::FX_STRITE) {   // alfa do strite como o desenho (Particles::drawSystem)
+                                         vf(k, 0), vf(k, 1), vf(k, 2), float(ag(k)), mn, mx});
+                        uint32_t col = wotm::Particles::colorAt(ram, sys.base, ag(k));
+                        if (sys.type == wotm::FX_STRITE && hv) {   // alfa do strite como o desenho (Particles::drawSystem)
                             float p[4], v[3], tri[4][3], ak = 1.f;
                             for (int a = 0; a < 4; ++a) p[a] = ram.f32(pp + 16 * k + 4 * a);
                             for (int a = 0; a < 3; ++a) v[a] = ram.f32(vp + 16 * k + 4 * a);
