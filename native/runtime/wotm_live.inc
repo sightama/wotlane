@@ -342,6 +342,9 @@ static Capture &capture()
     return c;
 }
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
+// replay com varios arquivos numa execucao: o proximo wotmDrawNative recomeca a apresentacao do zero (cena, recursos, quadro anterior),
+// como num processo novo; sem isso um arquivo herdava o estado do anterior quando a fase era a mesma
+static bool g_replayFresh = false;
 // replay: textura do filme do telao tirada da VRAM do instantaneo (sem tocador; wotm_vu1check.inc); 0 = nenhuma
 static unsigned (*g_replayMovieTex)() = nullptr;
 static State *g_state = nullptr;      // o da apresentacao (wotmDrawNative), para as fotos (wotm_foto.inc)
@@ -595,6 +598,16 @@ void wotmCaptureFrame(const uint8_t *rdram)
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
+    if (wotm_live::g_replayFresh)
+    {
+        wotm_live::g_replayFresh = false;
+        S.scene.invalidate();
+        for (RenderTexture2D &r : S.rts)
+            if (r.id != 0)
+                UnloadRenderTexture(r);
+        S.~State();
+        new (&S) wotm_live::State();
+    }
     wotm_live::g_state = &S;
     S.scene.movieTexture = []() -> unsigned {   // objeto do menu com texId 999
 #ifdef WOTM_HAVE_FMV

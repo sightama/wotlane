@@ -83,14 +83,30 @@ if ($Capture) {
 if ($Check) {
     $files = Get-ChildItem $Dir -Filter '*.vu1snap' | Sort-Object Name
     if (-not $files) { throw "Nenhum .vu1snap em $Dir" }
+    # Uma execucao do runtime para o corpus inteiro (antes era um powershell + um runtime por arquivo, e abrir custava mais que comparar);
+    # a saida de cada arquivo comeca em "[vu1cmp] arquivo <caminho>"
+    $cmpArgs = '--vu1cmp ' + (($files | ForEach-Object { "`"$($_.FullName)`"" }) -join ' ')
+    if ($NoPng) { $cmpArgs += ' --nopng' }
+    $cmpErr = Join-Path $Dir 'check.err.log'
+    Write-Host ("vu1cmp em {0} arquivo(s)..." -f @($files).Count)
+    Start-Process -FilePath "$runtime\build_dev\ps2xRuntime\ps2EntryRunner.exe" -ArgumentList $cmpArgs -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait `
+        -RedirectStandardError $cmpErr -RedirectStandardOutput (Join-Path $Dir 'check.out.log') | Out-Null
+    $byFile = @{}
+    $curList = $null
+    foreach ($l in (Get-Content $cmpErr)) {
+        if ($l -match '^\[vu1cmp\] arquivo (.+)$') { $curList = New-Object System.Collections.Generic.List[string]; $byFile[$Matches[1]] = $curList; continue }
+        if ($null -ne $curList) { $curList.Add(($l -replace '^\[vu1check\] ', '')) }
+    }
     $rows = @()
     foreach ($f in $files) {
         $name = $f.BaseName
         $screens = @{}
         if (Test-Path (Join-Path $Dir "$name.txt")) { Get-Content (Join-Path $Dir "$name.txt") | ForEach-Object { if ($_ -match '^(\d+)=(\d+)$') { $screens[$Matches[1]] = $Matches[2] } } }
-        $args = @('-ExecutionPolicy', 'Bypass', '-File', "$PSScriptRoot\vu1cmp.ps1", $f.FullName)
-        if ($NoPng) { $args += '-NoPng' }
-        $lines = & powershell @args 2>&1 | ForEach-Object { [string]$_ }
+        $lines = if ($byFile.ContainsKey($f.FullName)) { $byFile[$f.FullName] } else { @() }
+        if (-not ($lines -match ': [1-9]\d* quadro\(s\) comparados$')) {
+            Write-Host ("{0}: falhou" -f $name) -ForegroundColor Yellow
+            $lines | Where-Object { $_ -match '\[vu1cmp\]' } | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        }
         $cur = $null
         foreach ($l in $lines) {
             if ($l -match '^g=(\d+) objetos .* casados ([\d.]+)% faltam (\d+) sobram (\d+) .* textura difere (\d+)') {

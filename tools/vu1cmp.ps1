@@ -1,5 +1,5 @@
 # Checagem VU1 x nativo sem jogo, a partir de instantaneos (.vu1snap) gravados pelo runtime com WOTM_VU1CHECK_SNAP=<prefixo>.
-# Roda `ps2EntryRunner --vu1cmp` (wotm_vu1check.inc) para cada arquivo e imprime as linhas [vu1check]; leva ~1 s por instantaneo.
+# Roda `ps2EntryRunner --vu1cmp` (wotm_vu1check.inc) uma vez para todos os arquivos e imprime as linhas [vu1check] de cada um.
 #   tools\vu1cmp.ps1 <arquivo.vu1snap | pasta> [-Frame <g_frame>] [-Dump <prefixo>] [-Full] [-Build build_dev]
 #   Um arquivo guarda os quadros de uma sessao (gatilho/rajada: WOTM_VU1CHECK_WHEN, WOTM_VU1CHECK_BURST); todos sao comparados.
 #   -Frame <g_frame>: so esse quadro do arquivo
@@ -29,16 +29,29 @@ if (-not $files) { Write-Error "Nenhum .vu1snap em $Path" }
 $err = Join-Path $env:TEMP 'wotm_vu1cmp.err.log'
 $out = Join-Path $env:TEMP 'wotm_vu1cmp.out.log'
 $rc = 0
+# Uma execucao so para todos os arquivos (abrir o runtime custava mais que a comparacao); a saida de cada um comeca em "[vu1cmp] arquivo <caminho>"
+$args = '--vu1cmp ' + (($files | ForEach-Object { "`"$_`"" }) -join ' ')
+if ($Frame -gt 0) { $args += " --frame $Frame" }
+if ($Dump) { $args += " --dump `"$Dump`"" }
+if ($NoPng) { $args += " --nopng" }
+# Start-Process redireciona sem passar pelo PowerShell (o `2>` do PS 5 grava UTF-16 e quebra as linhas longas)
+$p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
+$all = @(Get-Content $err)
+$blocks = [ordered]@{}
+foreach ($f in $files) { $blocks[$f] = New-Object System.Collections.Generic.List[string] }
+$curBlock = $null
+foreach ($l in $all) {
+    if ($l -match '^\[vu1cmp\] arquivo (.+)$') { $curBlock = $blocks[$Matches[1]]; continue }
+    if ($null -ne $curBlock) { $curBlock.Add($l) }
+}
+if ($p.ExitCode -ne 0 -and -not ($all -match '^\[vu1cmp\] arquivo ')) {   # o runtime nem abriu
+    $all | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
+    exit 1
+}
 foreach ($f in $files) {
-    $args = "--vu1cmp `"$f`""
-    if ($Frame -gt 0) { $args += " --frame $Frame" }
-    if ($Dump) { $args += " --dump `"$Dump`"" }
-    if ($NoPng) { $args += " --nopng" }
-    # Start-Process redireciona sem passar pelo PowerShell (o `2>` do PS 5 grava UTF-16 e quebra as linhas longas)
-    $p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
-    $lines = Get-Content $err
+    $lines = $blocks[$f]
     Write-Host ("== {0}" -f (Split-Path $f -Leaf)) -ForegroundColor Cyan
-    if ($p.ExitCode -ne 0) {
+    if (-not ($lines -match ': [1-9]\d* quadro\(s\) comparados$')) {   # o arquivo falhou (nao abriu, outro build, sem o quadro pedido)
         $rc = 1
         $lines | Where-Object { $_ -match '\[vu1cmp\]' } | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
         continue

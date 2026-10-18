@@ -26,7 +26,7 @@
 // nativo, os objetos (inclusive ceu e icones) cujo polyPkt nenhum triangulo do VU1 tocou. E a lista do que falta ou sobra no port.
 // Funciona em qualquer tela (qualquer chamador de hier(0, 0)); gatilhos mem:<endereco>[=<valor>] e a tecla F8 pegam os menus.
 // WOTM_VU1CHECK_SNAP=<prefixo> grava um instantaneo de cada quadro amostrado (<prefixo>_<g_frame>.vu1snap) que reproduz a checagem
-// sem jogo: `ps2EntryRunner --vu1cmp <arquivo> [--dump <prefixo>]` (namespace snap e wotmVu1CmpMain, no fim).
+// sem jogo: `ps2EntryRunner --vu1cmp <arquivo>... [--dump <prefixo>]` (namespace snap e wotmVu1CmpMain, no fim).
 #ifdef WOTM_HAVE_NATIVE
 #include <array>
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
@@ -1908,7 +1908,7 @@ void wotmVu1CheckInstall(PS2Runtime &runtime)
     else std::fprintf(stderr, "[vu1check] comparando VU1 x nativo a cada %d s\n", wotm_vu1check::g_period);
 }
 
-// `ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--dump <prefixo>]`: refaz a checagem de um instantaneo (WOTM_VU1CHECK_SNAP) sem jogo.
+// `ps2EntryRunner --vu1cmp <arquivo.vu1snap>... [--dump <prefixo>]`: refaz a checagem de instantaneos (WOTM_VU1CHECK_SNAP) sem jogo, todos numa execucao.
 // Abre o runtime so pela memoria, VIF1 e VU1 (a janela do raylib vem junto no initialize), restaura o estado do registro 'A' e
 // reaplica cada cadeia na ordem gravada, com a mesma coleta nativa e a mesma comparacao da checagem ao vivo.
 // Imagens do quadro, ao lado do instantaneo: <base>_<g_frame>_ref.png (o GS em software do runtime, alimentado pelos mesmos pacotes do
@@ -2222,9 +2222,11 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
     std::fprintf(stderr, "[vu1cmp] imagens: %s_{ref,nat,diff,trio}.png; pixels diferentes %u (%.1f%%)\n", base.c_str(), differ, 100.0 * differ / (W * H));
 }
 
-static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bool png)
+static int vu1cmpBody(PS2Runtime &runtime, const char *path, const char *dump, uint32_t onlyFrame, bool png)
 {
     using namespace wotm_vu1check;
+    // Marca o inicio de cada arquivo na saida (varios arquivos numa execucao; tools\vu1cmp.ps1 e corpus.ps1 separam por ela)
+    std::fprintf(stderr, "[vu1cmp] arquivo %s\n", path);
     g_wotmGsFeed = png;   // com imagens, o GS em software do runtime recebe os pacotes (PATH2 e XGKICK) do quadro
     if (dump) {
 #ifdef _WIN32
@@ -2242,9 +2244,23 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
         std::fprintf(stderr, "[vu1cmp] instantaneo de outro build do runtime (tamanhos do estado diferem)\n");
         return 1;
     }
-    std::unique_ptr<PS2Runtime> rtp(new PS2Runtime());
-    PS2Runtime &runtime = *rtp;
-    if (!runtime.initialize("WotM vu1cmp")) return 1;
+    // O runtime (janela OpenGL e audio) e criado uma vez para todos os arquivos: o GS em software volta ao estado de um runtime novo
+    // a cada arquivo (o aquecimento supoe o GS zerado); RAM, VRAM, VU1 e VIF1 vem do proprio instantaneo
+    runtime.gs().reset();
+    runtime.vu1().reset();
+    wotm_live::g_replayFresh = true;   // a camada nativa tambem recomeca do zero (cena, recursos, quadro anterior)
+    {   // e os lens flares: o slot so e preenchido em quadro com flare, e o arquivo sem flare herdava os do anterior
+        auto &slot = wotm::Particles::flareSlot();
+        std::lock_guard<std::mutex> g(slot.m);
+        slot.f = wotm::Particles::FlareFrame{};
+        slot.used = false;
+        slot.fresh = false;
+    }
+    {
+        extern std::atomic<unsigned long long> g_wotmGifPackets, g_wotmGifBytes;
+        g_wotmGifPackets = 0;
+        g_wotmGifBytes = 0;
+    }
     PS2Memory &mem = runtime.memory();
     uint8_t *ram = mem.getRDRAM();
     g_wotmVif1Keep = true;
@@ -2511,27 +2527,32 @@ extern "C" __declspec(dllimport) int __stdcall CloseHandle(void *handle);
 #else
 #define __stdcall
 #endif
-struct Vu1CmpJob { const char *path, *dump; uint32_t frame; bool png; int rc; };
+struct Vu1CmpJob { std::vector<const char *> paths; const char *dump; uint32_t frame; bool png; int rc; };
+// Todos os arquivos numa execucao so (abrir o runtime, janela e audio, custava mais que a comparacao). rc 1 se algum falhou.
 static unsigned __stdcall vu1cmpThread(void *p)
 {
     Vu1CmpJob *j = static_cast<Vu1CmpJob *>(p);
-    j->rc = vu1cmpBody(j->path, j->dump, j->frame, j->png);
+    std::unique_ptr<PS2Runtime> rtp(new PS2Runtime());
+    if (!rtp->initialize("WotM vu1cmp")) { j->rc = 1; return 0; }
+    j->rc = 0;
+    for (const char *path : j->paths)
+        if (vu1cmpBody(*rtp, path, j->dump, j->frame, j->png) != 0) j->rc = 1;
     return 0;
 }
 
 int wotmVu1CmpMain(int argc, char **argv)
 {
-    Vu1CmpJob job{nullptr, nullptr, 0, true, 1};
+    Vu1CmpJob job{{}, nullptr, 0, true, 1};
     for (int i = 2; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--dump") && i + 1 < argc) job.dump = argv[++i];
         else if (!std::strcmp(argv[i], "--frame") && i + 1 < argc) job.frame = uint32_t(std::strtoul(argv[++i], nullptr, 10));
         else if (!std::strcmp(argv[i], "--nopng")) job.png = false;
-        else job.path = argv[i];
+        else job.paths.push_back(argv[i]);
     }
-    if (!job.path) { std::fprintf(stderr, "uso: ps2EntryRunner --vu1cmp <arquivo.vu1snap> [--frame <g_frame>] [--dump <prefixo>] [--nopng]\n"); return 2; }
+    if (job.paths.empty()) { std::fprintf(stderr, "uso: ps2EntryRunner --vu1cmp <arquivo.vu1snap>... [--frame <g_frame>] [--dump <prefixo>] [--nopng]\n"); return 2; }
 #ifdef _WIN32
     const uintptr_t h = _beginthreadex(nullptr, 512u << 20, &vu1cmpThread, &job, 0, nullptr);
-    if (!h) return vu1cmpBody(job.path, job.dump, job.frame, job.png);
+    if (!h) { vu1cmpThread(&job); return job.rc; }
     WaitForSingleObject(reinterpret_cast<void *>(h), 0xFFFFFFFFul);
     CloseHandle(reinterpret_cast<void *>(h));
 #else
