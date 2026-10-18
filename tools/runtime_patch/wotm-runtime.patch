@@ -1,5 +1,5 @@
 diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
-index e5f63a9..2a93dcf 100644
+index e5f63a9..c1f1cf3 100644
 --- a/ps2xIOP/src/emulator/iop_emulator.cpp
 +++ b/ps2xIOP/src/emulator/iop_emulator.cpp
 @@ -19,6 +19,7 @@
@@ -10,7 +10,7 @@ index e5f63a9..2a93dcf 100644
  #include <map>
  #include <optional>
  #include <span>
-@@ -741,7 +742,20 @@ namespace ps2x::iop::detail
+@@ -741,7 +742,32 @@ namespace ps2x::iop::detail
  
      void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
      {
@@ -22,6 +22,18 @@ index e5f63a9..2a93dcf 100644
 +            const long v = e ? std::atol(e) : 256;
 +            return v > 0 ? static_cast<uint64_t>(v) : 1u;
 +        }();
++        // WotM: sem modulo carregado (o jogo nao sobe IRX; wotm_snd.inc) e sem evento pendente nao ha o que rodar: o IOP fica parado.
++        if (m_impl->modules.empty() && m_impl->pendingDmaInterrupts.empty() && m_impl->pendingGuestCallbacks.empty())
++        {
++            static bool s_said = false;
++            if (!s_said)
++            {
++                s_said = true;
++                std::fprintf(stderr, "[iop] sem modulos: o IOP emulado fica parado\n");
++            }
++            m_impl->eeCycleCarry = 0;
++            return;
++        }
          const uint64_t total = m_impl->eeCycleCarry + eeCycles;
 +        if (total < batch * 8u)
 +        {
@@ -1316,7 +1328,7 @@ index 8590f14..603719d 100644
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..73bd3c9 100644
+index 45cb9d2..3833ba9 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -1350,7 +1362,28 @@ index 45cb9d2..73bd3c9 100644
          UpdateTexture(tex, blank.data);
          UnloadImage(blank);
          outWidth = FB_WIDTH;
-@@ -732,7 +736,9 @@ bool PS2Runtime::initialize(const char *title)
+@@ -594,6 +598,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
+ 
+ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
+ {
++    static uint32_t s_wotmRpcN = 0;   // WotM (FRONTEIRA.md): o que ainda chega ao IOP
++    if (++s_wotmRpcN <= 40)
++        std::fprintf(stderr, "[iop] rpc #%u sid=%08x fn=%u modo=%u\n", s_wotmRpcN, request.sid, request.function, request.mode);
+     auto scope = m_iopHost->enterCall(ctx, rdram);
+     request.callToken = scope.token();
+     return m_iopSubsystem->handleRpc(request);
+@@ -601,6 +608,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
+ 
+ void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer)
+ {
++    static uint32_t s_wotmSifN = 0;
++    if (++s_wotmSifN <= 40)
++        std::fprintf(stderr, "[iop] sif #%u tipo=%u fase=%u %08x -> %08x (%u B)\n", s_wotmSifN, unsigned(transfer.kind), unsigned(transfer.phase),
++                     transfer.sourceAddress, transfer.destinationAddress, transfer.size);
+     auto scope = m_iopHost->enterCall(nullptr, rdram);
+     m_iopSubsystem->onSifTransfer(transfer);
+ }
+@@ -732,7 +743,9 @@ bool PS2Runtime::initialize(const char *title)
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
  #else
          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
@@ -1360,7 +1393,7 @@ index 45cb9d2..73bd3c9 100644
          InitAudioDevice();
          m_audioBackend.setAudioReady(IsAudioDeviceReady());
  #endif
-@@ -1008,6 +1014,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -1008,6 +1021,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,
                                        elfCrc32Valid);
@@ -1371,7 +1404,7 @@ index 45cb9d2..73bd3c9 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1352,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1359,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -1385,7 +1418,7 @@ index 45cb9d2..73bd3c9 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1368,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1375,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -1403,7 +1436,7 @@ index 45cb9d2..73bd3c9 100644
          return false;
      }
  
-@@ -1396,6 +1417,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1424,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -1411,7 +1444,7 @@ index 45cb9d2..73bd3c9 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1425,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1432,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -1423,7 +1456,7 @@ index 45cb9d2..73bd3c9 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1448,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1455,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -1455,7 +1488,7 @@ index 45cb9d2..73bd3c9 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1484,100 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1491,100 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -1556,7 +1589,7 @@ index 45cb9d2..73bd3c9 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2211,7 +2345,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2352,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -1568,7 +1601,7 @@ index 45cb9d2..73bd3c9 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2356,6 +2493,7 @@ void PS2Runtime::run()
+@@ -2356,6 +2500,7 @@ void PS2Runtime::run()
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -1576,7 +1609,7 @@ index 45cb9d2..73bd3c9 100644
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-@@ -2422,7 +2560,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2567,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -1588,7 +1621,7 @@ index 45cb9d2..73bd3c9 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2586,260 @@ void PS2Runtime::run()
+@@ -2444,7 +2593,260 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
