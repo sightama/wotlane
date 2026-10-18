@@ -2829,12 +2829,21 @@ private:
         }
     }
 
-    // Paleta de matrizes de um objeto skinned: animPktPtr[lod] e uma cadeia DMA (tag ref 0x3000007d) cujo endereco aponta o
-    // bloco de 125 qwords (31 matrizes de 4 qwords a partir de +0x10). Devolve 0 se nao achar.
+    // Paleta de matrizes de um objeto skinned: animPktPtr[i] e uma cadeia DMA cujo 1o tag (ref) aponta o bloco da paleta: 1 qword
+    // de VIF (UNPACK V4-32 para o qword 0x358 do VU1) e as matrizes, 4 qwords cada, a partir de +0x10. Em geral 0x7d qwords (31
+    // matrizes); o corpo do Dragon usa uma paleta propria de 0x41 (16 matrizes), mandada antes de cada sub-pacote. Como o destino no
+    // VU1 e o mesmo, o codigo de osso indexa as duas do mesmo jeito. O indice i e o do OBJECT em +0x68, como no pktAddVu1ObjAsm
+    // (negativo: o jogo manda o pacote do +4, sem paleta); o indice do LOD so coincide quando o personagem tem um objeto skinned por
+    // LOD (o Dragon tem corpo e asas: com o do LOD, o corpo pegava a paleta de outro objeto). Devolve 0 se nao achar.
     static uint32_t palette(const Ram &ram, const DrawItem &it) {
-        if (!it.animPkt || it.lodIdx < 0 || it.lodIdx > 15) return 0;
-        const uint32_t chain = ram.u32(it.animPkt + 4 * uint32_t(it.lodIdx)) & 0x0FFFFFFF;
+        if (!it.animPkt) return 0;
+        int idx = ram.ok(it.node + 0x68, 4) ? int(int32_t(ram.u32(it.node + 0x68))) : -1;
+        if (idx < 0) idx = it.lodIdx;   // sem indice no OBJECT: o comportamento antigo
+        if (idx < 0 || idx > 63) return 0;
+        const uint32_t chain = ram.u32(it.animPkt + 4 * uint32_t(idx)) & 0x0FFFFFFF;
         if (!ram.ok(chain, 8) || ((ram.u32(chain) >> 28) & 7) != 3) return 0;
+        const uint32_t qwc = ram.u32(chain) & 0xFFFF;
+        if (qwc < 5 || qwc > 0x7D || (qwc - 1) % 4 != 0) return 0;
         const uint32_t block = ram.u32(chain + 4) & 0x0FFFFFFF;
         return ram.ok(block, 0x10 + 0x40 * 32) ? block : 0;
     }
