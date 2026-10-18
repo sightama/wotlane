@@ -580,14 +580,16 @@ public:
         f.nspr = 0;
         const uint32_t p = ram.u32(kPacket);
         if (!ram.ok(p, fxaddr::stride)) return;
+        // q44 (centro X, centro Y, 18, n) e o que o lensFlarePacketBuild grava a cada quadro: aqui vem da origem (viewGetCenter da vista
+        // 0, lensFlareIndex[0]), sem depender do pacote do quadro; as tabelas dos sprites (q8-q43, 18 em q44 + 8) sao do lensFlarePacketInit.
         const uint32_t pos = ram.u32(p + fxoff::pos), q44 = pos - 0x18, q8 = q44 - 36 * 16;
         const int n = int32_t(ram.u32(kIndex));
-        if (n <= 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || int32_t(ram.u32(q44 + 12)) != n) return;
-        f.cx = ram.f32(q44);
-        f.cy = ram.f32(q44 + 4);
-        f.nspr = std::min<int>(18, std::max<int>(0, int32_t(ram.u32(q44 + 8))));
         const uint32_t def = ram.u32(kViewDef) & 0x0FFFFFFF;
-        if (ram.ok(def, 0x18) && ram.u16(def + 4) && ram.u16(def + 6)) { f.vw = ram.u16(def + 4); f.vh = ram.u16(def + 6); }
+        if (n <= 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || !ram.ok(def, 0x20)) return;
+        f.cx = float(int32_t(ram.u32(def + 0x18)));
+        f.cy = float(int32_t(ram.u32(def + 0x1C)));
+        f.nspr = std::min<int>(18, std::max<int>(0, int32_t(ram.u32(q44 + 8))));
+        if (ram.u16(def + 4) && ram.u16(def + 6)) { f.vw = ram.u16(def + 4); f.vh = ram.u16(def + 6); }
         f.zScale = ram.f32(kScreenMats + 0x28);   // viewScreenMats[0][2][2] e [2][3]
         f.zOff = ram.f32(kScreenMats + 0x2C);
         const uint32_t gif = (p + 0xC + 15) & ~15u;   // lensFlarePacketInit: FLUSHA, UNPACK de 4 qwords em 0x110 (tag A+D, ALPHA, TEX0, tag SPRITE)
