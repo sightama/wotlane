@@ -374,7 +374,41 @@ static std::vector<wotm::TextQuad> g_pendingPolys;
 // colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
 static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
 static std::atomic<int> g_shellFade{-1};
+// Carga da fase (Shell::LoadLevelFiles ate a entrada do rtMain): no PS2 a tela fica parada no ultimo quadro do cartao LOAD (a barra
+// de carga e desenhada direto no quadro, sem hier) e o Shell::FadeScreen sem redesenho so a escurece. O nativo nao pode redesenhar
+// o cartao nesse meio tempo: a RAM ja tem o nivel novo, e o loadResources troca as texturas pelas dele (o cartao saia com uma
+// textura qualquer do nivel, como o brilho verde do power-up no CENTRAL). Enquanto vale, a captura nao publica nada e a
+// apresentacao repete o ultimo quadro desenhado, com o fade do Shell::FadeScreen por cima (wotmDrawFrozen).
+static std::atomic<bool> g_loadFreeze{false};
+
+// Fade do Shell::FadeScreen em curso (g_shellFade), lido ao vivo do pacote dele; com acumulo, o alfa equivalente no buffer da vez.
+static bool shellFadeRect(const wotm::Ram &ram, wotm::ScreenRect &r)
+{
+    const int sf = g_shellFade.load(std::memory_order_relaxed);
+    if (sf < 0 || !wotm::readScreenRect(ram, wotm::addr::shellFadePacket, r))
+        return false;
+    const int start = sf & 0xFF, step = (sf >> 8) & 0xFF;
+    if ((sf >> 16) && step > 0)
+    {
+        float keep = 1.f;   // fracao da cena que sobra no buffer da vez
+        for (int a = r.a; a >= start; a -= 2 * step)
+            keep *= 1.f - std::min(a, 0x80) / 128.f;
+        r.a = static_cast<uint8_t>(std::lround((1.f - keep) * 0x80));
+    }
+    return true;
+}
 } // namespace wotm_live
+
+void wotmLoadFreeze(bool on)
+{
+    wotm_live::g_loadFreeze.store(on, std::memory_order_relaxed);
+    if (on)
+    {   // instantaneo ainda nao desenhado: le a RAM de antes da carga, mas seria desenhado depois dela
+        wotm_live::Capture &c = wotm_live::capture();
+        std::lock_guard<std::mutex> lk(c.m);
+        c.fresh = false;
+    }
+}
 
 // Saida do LevelPickups::enableHighlights (thread do EE): anota o colorQuad do _cs do pick-up destacado de cada um dos dois
 // primeiros monstros (highlightList[monstro+0x28] -> no -> Pickup -> cs +0xC). Os dois de uma vez porque, na tela dividida, a
@@ -502,7 +536,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
     const bool haveScene = wotm_live::g_sceneFresh;
     wotm_live::g_sceneFresh = false;
-    if (!rdram || !c.on.load(std::memory_order_relaxed))
+    if (!rdram || !c.on.load(std::memory_order_relaxed) || wotm_live::g_loadFreeze.load(std::memory_order_relaxed))
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     const uint32_t wc = ram.u32(wotm::addr::world);
@@ -556,6 +590,47 @@ static bool wotmDrawNative(const uint8_t *rdram)
         wotm_live::SetUnhandledExceptionFilter(wotm_live::crashFilter);
     }
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    // Carga da fase (g_loadFreeze): repete o ultimo quadro desenhado (S.rts[S.cur], intocado) com o fade do Shell::FadeScreen por cima,
+    // no outro buffer; nada de instantaneo nem de troca de recursos ate o rtMain comecar.
+    if (wotm_live::g_loadFreeze.load(std::memory_order_relaxed) && !wotm_live::g_localCollect && S.rts[S.cur].id != 0)
+    {
+        {
+            std::lock_guard<std::mutex> lk(cap.m);
+            cap.fresh = false;
+        }
+        const RenderTexture2D &base = S.rts[S.cur];
+        RenderTexture2D &out = S.rts[S.cur ^ 1];
+        if (out.id != 0 && (out.texture.width != base.texture.width || out.texture.height != base.texture.height))
+        {
+            UnloadRenderTexture(out);
+            out = RenderTexture2D{};
+        }
+        if (out.id == 0)
+        {
+            out = LoadRenderTexture(base.texture.width, base.texture.height);
+            SetTextureFilter(out.texture, TEXTURE_FILTER_BILINEAR);
+            SetTextureWrap(out.texture, TEXTURE_WRAP_CLAMP);
+        }
+        const float bw = static_cast<float>(base.texture.width), bh = static_cast<float>(base.texture.height);
+        BeginTextureMode(out);
+        rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM);
+        DrawTexturePro(base.texture, Rectangle{0.f, 0.f, bw, -bh}, Rectangle{0.f, 0.f, bw, bh}, Vector2{0.f, 0.f}, 0.f, WHITE);
+        EndBlendMode();
+        S.scene.screenRects.clear();
+        if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(ram, r))
+            S.scene.screenRects.push_back(r);
+        S.scene.drawScreenRects(bw, bh);
+        EndTextureMode();
+        const float sw = static_cast<float>(GetScreenWidth()), sh = static_cast<float>(GetScreenHeight());
+        const float k = std::min(sw / bw, sh / bh);
+        rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM);
+        DrawTexturePro(out.texture, Rectangle{0.f, 0.f, bw, -bh}, Rectangle{(sw - bw * k) * 0.5f, (sh - bh * k) * 0.5f, bw * k, bh * k},
+                       Vector2{0.f, 0.f}, 0.f, WHITE);
+        EndBlendMode();
+        return true;
+    }
     const uint32_t wc = ram.u32(wotm::addr::world);
     if (!ram.ok(wc, 0x40) || !ram.ok(ram.u32(wc)))
         return false;
@@ -643,22 +718,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.snap.cam = gameCam;
     if (freeView.override)
         wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
-    if (const int sf = wotm_live::g_shellFade.load(std::memory_order_relaxed); sf >= 0)
-    {
-        wotm::ScreenRect r{};
-        if (wotm::readScreenRect(ram, wotm::addr::shellFadePacket, r))
-        {
-            const int start = sf & 0xFF, step = (sf >> 8) & 0xFF;
-            if ((sf >> 16) && step > 0)
-            {
-                float keep = 1.f;   // fracao da cena que sobra no buffer da vez
-                for (int a = r.a; a >= start; a -= 2 * step)
-                    keep *= 1.f - std::min(a, 0x80) / 128.f;
-                r.a = static_cast<uint8_t>(std::lround((1.f - keep) * 0x80));
-            }
-            S.scene.screenRects.push_back(r);
-        }
-    }
+    if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(ram, r))
+        S.scene.screenRects.push_back(r);
 
     S.cur ^= 1;
     for (RenderTexture2D &r : S.rts)
@@ -870,5 +931,6 @@ void wotmGsPktQueueSent() {}
 void wotmFontSent() {}
 void wotmScreenPolys(const uint8_t *) {}
 void wotmShellFade(int, int, bool) {}
+void wotmLoadFreeze(bool) {}
 void wotmPickupHighlights(const uint8_t *) {}
 #endif

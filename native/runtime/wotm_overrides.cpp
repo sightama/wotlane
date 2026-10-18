@@ -36,6 +36,7 @@ void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do m
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
 void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
 void wotmShellFade(int start, int step, bool accumulate);
+void wotmLoadFreeze(bool on);   // wotm_live.inc: carga da fase (LoadLevelFiles ate o rtMain), a tela repete o ultimo quadro
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
@@ -684,6 +685,24 @@ namespace
         g_origShellFade(rdram, ctx, runtime);
     }
 
+    // Carga da fase: da entrada do Shell::LoadLevelFiles (o nivel novo comeca a sobrescrever a RAM; o cartao LOAD continua na
+    // hierarquia) ate a entrada do rtMain, a tela nativa fica no ultimo quadro, so com o Shell::FadeScreen por cima (wotmLoadFreeze).
+    constexpr uint32_t kLoadLevelFiles = wotm::fn::LoadLevelFiles__5Shell, kRtMain = wotm::fn::rtMain__Fb;
+    PS2Runtime::RecompiledFunction g_origLoadLevelFiles = nullptr, g_origRtMain = nullptr;
+
+    void loadLevelFilesTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kLoadLevelFiles)
+            wotmLoadFreeze(true);
+        g_origLoadLevelFiles(rdram, ctx, runtime);
+    }
+    void rtMainTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kRtMain)
+            wotmLoadFreeze(false);
+        g_origRtMain(rdram, ctx, runtime);
+    }
+
     // HUD do ScreenPolys (icone de vida do Hud::drawHealthIcon): o dmaData manda os pacotes de s_polyBuffer e zera numPolys; na
     // entrada os quadrados do quadro ainda estao contados (wotm::readScreenPolys).
     constexpr uint32_t kScreenPolysDmaData = wotm::fn::dmaData__11ScreenPolysv;
@@ -856,6 +875,11 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kLetterboxDmaData, &letterboxTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))
         runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
+    if ((g_origLoadLevelFiles = runtime.lookupFunction(kLoadLevelFiles)) && (g_origRtMain = runtime.lookupFunction(kRtMain)))
+    {
+        runtime.registerFunction(kLoadLevelFiles, &loadLevelFilesTapped);
+        runtime.registerFunction(kRtMain, &rtMainTapped);
+    }
     if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
         runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
