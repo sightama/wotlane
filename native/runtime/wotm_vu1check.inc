@@ -306,28 +306,21 @@ void collectFx(const uint8_t *rdram, FxMap &out)
                     q.hasC = true;
                 }
             });
-            if (sys.type == wotm::FX_LINE) {   // como o drawSystem: pos com a cor da particula, pos - vel com a mesma cor e alfa 0
-                const uint32_t pp = ram.u32(sys.base + wotm::fxoff::pos), vp = ram.u32(sys.base + wotm::fxoff::vel), ap = ram.u32(sys.base + wotm::fxoff::age);
-                const bool hv = ram.ok(vp, 16 * uint32_t(sys.n)), ha = ram.ok(ap, 2 * uint32_t(sys.n));
-                if (ram.ok(pp, 16 * uint32_t(sys.n)))
-                    for (int k = 0; k < sys.n; ++k) {
-                        float p[2][3];
-                        for (int a = 0; a < 3; ++a) {
-                            p[0][a] = ram.f32(pp + 16 * uint32_t(k) + 4 * uint32_t(a));
-                            p[1][a] = p[0][a] - (hv ? ram.f32(vp + 16 * uint32_t(k) + 4 * uint32_t(a)) : 0.f);
-                        }
-                        if (!std::isfinite(p[0][0])) continue;
-                        Seg g{};
-                        bool in = true;
-                        for (int e = 0; e < 2 && in; ++e)
-                            in = projectPt(cam, p[e], g.x[e], g.y[e]) && g.x[e] >= kX0 && g.x[e] < kX1 && g.y[e] >= kY0 && g.y[e] < kY1;
-                        if (!in) continue;
-                        const uint32_t col = wotm::Particles::colorAt(ram, sys.base, ha ? int(ram.s16(ap + 2 * uint32_t(k))) : 0);
-                        const uint32_t tail = col & 0x00FFFFFFu;
-                        std::memcpy(g.c[0], &col, 4);
-                        std::memcpy(g.c[1], &tail, 4);
-                        s.lines[ci].push_back(g);
-                    }
+            if (sys.type == wotm::FX_LINE) {   // como o drawSystem (Particles::lineVu): ponta com a cor, cauda pela prevViewMat com alfa 0
+                for (int k = 0; k < sys.n; ++k) {
+                    float p[2][3];
+                    uint32_t col;
+                    if (!wotm::Particles::lineVu(ram, sys.base, view, k, p[0], p[1], col)) continue;
+                    Seg g{};
+                    bool in = true;
+                    for (int e = 0; e < 2 && in; ++e)
+                        in = projectPt(cam, p[e], g.x[e], g.y[e]) && g.x[e] >= kX0 && g.x[e] < kX1 && g.y[e] >= kY0 && g.y[e] < kY1;
+                    if (!in) continue;
+                    const uint32_t tail = col & 0x00FFFFFFu;
+                    std::memcpy(g.c[0], &col, 4);
+                    std::memcpy(g.c[1], &tail, 4);
+                    s.lines[ci].push_back(g);
+                }
             }
         }
         for (const wotm::Sprite &sp : g_scene->sprites) {   // destroços (frag): Scene::collectParticles, key = fx * 4096 + particula
@@ -866,7 +859,10 @@ uint32_t match(const std::vector<Tri> &vu, const std::vector<Tri> &nat, std::vec
 
 // Particulas do VU1 de um sistema (na ordem do XGKICK) -> quadrados: dois triangulos seguidos do mesmo programa com dois vertices em
 // comum viram um quadrado; o que sobra fica como triangulo (n = 3; o par saiu da tela ou e degenerado).
-std::vector<Quad> vuQuads(const std::vector<Tri> &tris)
+// skipFirst: o primeiro triangulo fica sozinho e o pareamento comeca no segundo. Numa tira (stripe, sweepTrail) todo triangulo tem dois
+// vertices em comum com o seguinte, e um triangulo a mais no comeco (meia ponte recortada na borda) defasa todos os pares; quem chama
+// tenta as duas paridades e fica com a que casa mais.
+std::vector<Quad> vuQuads(const std::vector<Tri> &tris, bool skipFirst = false)
 {
     std::vector<Quad> out;
     auto same = [](float ax, float ay, float bx, float by) { return std::fabs(ax - bx) < 0.01f && std::fabs(ay - by) < 0.01f; };
@@ -875,7 +871,7 @@ std::vector<Quad> vuQuads(const std::vector<Tri> &tris)
         Quad q{{a.x[0], a.x[1], a.x[2]}, {a.y[0], a.y[1], a.y[2]}, 3, a.fge};
         std::memcpy(q.c, a.c, sizeof a.c);
         q.hasC = true;
-        if (i + 1 < tris.size() && tris[i + 1].prog == a.prog) {
+        if (i + 1 < tris.size() && tris[i + 1].prog == a.prog && !(skipFirst && i == 0)) {
             const Tri &b = tris[i + 1];
             int shared = 0, extra = -1;
             for (int k = 0; k < 3; ++k) {
@@ -897,12 +893,18 @@ uint32_t matchQuads(const std::vector<Quad> &vu, const std::vector<Quad> &nat, s
 {
     constexpr float kTol = 1.f;
     auto cell = [](float x, float y) { return (uint64_t(uint32_t(int32_t(std::floor(x / 4.f)))) << 32) | uint32_t(int32_t(std::floor(y / 4.f))); };
-    auto cover = [](const Quad &a, const Quad &b, float &cost) {   // todo vertice de a perto de algum de b
+    // todo vertice de a perto de algum de b; com cor nos dois, desempate pela cor do vertice mais proximo (no maximo ~0,01 px: dois
+    // quadrados iguais no mesmo lugar, como as particulas de idade 0 e 1 do preset 29 nos destrocos, casavam cruzados)
+    auto cover = [](const Quad &a, const Quad &b, float &cost) {
         for (int i = 0; i < a.n; ++i) {
             float d = 1e30f;
-            for (int j = 0; j < b.n; ++j) d = std::min(d, std::max(std::fabs(a.x[i] - b.x[j]), std::fabs(a.y[i] - b.y[j])));
+            int bj = 0;
+            for (int j = 0; j < b.n; ++j)
+                if (const float e = std::max(std::fabs(a.x[i] - b.x[j]), std::fabs(a.y[i] - b.y[j])); e < d) { d = e; bj = j; }
             if (d > kTol) return false;
             cost += d;
+            if (a.hasC && b.hasC)
+                for (int k = 0; k < 4; ++k) cost += 1e-5f * std::fabs(float(a.c[i][k]) - float(b.c[bj][k]));
         }
         return true;
     };
@@ -1012,27 +1014,35 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
     static const FxNat kNone;
     for (uint32_t sys : keys) {
         uint32_t chain = uint32_t(lastFx);
-        std::vector<Quad> vq, whole;
         const auto vit = fxVu.find(sys);
         if (vit != fxVu.end()) {
             size_t most = 0;
-            for (const auto &kv : vit->second) {
-                const std::vector<Quad> q = vuQuads(kv.second.tris);
-                vq.insert(vq.end(), q.begin(), q.end());
-                vq.insert(vq.end(), kv.second.rects.begin(), kv.second.rects.end());
-                if (q.size() + kv.second.rects.size() > most) { most = q.size() + kv.second.rects.size(); chain = kv.first; }
-            }
+            for (const auto &kv : vit->second)
+                if (kv.second.tris.size() + kv.second.rects.size() > most) { most = kv.second.tris.size() + kv.second.rects.size(); chain = kv.first; }
         }
         const auto nit = g_fxNats[chain].find(sys);
         const FxNat &s = nit != g_fxNats[chain].end() ? nit->second : kNone;
-        uint32_t soltos = 0;
         const bool triFx = s.type == wotm::FX_STRITE || s.type == wotm::FX_WAKE;   // um triangulo por particula (o nativo: quad degenerado)
-        for (const Quad &q : vq) ((q.n == 4 || triFx) ? (whole.push_back(q), 0u) : ++soltos);
+        std::vector<Quad> whole;
+        uint32_t soltos = 0, m = 0;
         int cam = 0;   // a camera que casar mais
-        uint32_t m = matchQuads(whole, s.quads[0]);
-        for (int ci = 1; ci < kFxCams && m < whole.size(); ++ci)
-            if (!s.quads[ci].empty())
-                if (const uint32_t mc = matchQuads(whole, s.quads[ci]); mc > m) { m = mc; cam = ci; }
+        for (int par = 0; par < (triFx ? 1 : 2); ++par) {   // paridade dos pares de triangulos (vuQuads skipFirst): a que casar mais
+            std::vector<Quad> vq, w;
+            if (vit != fxVu.end())
+                for (const auto &kv : vit->second) {
+                    const std::vector<Quad> q = vuQuads(kv.second.tris, par == 1);
+                    vq.insert(vq.end(), q.begin(), q.end());
+                    vq.insert(vq.end(), kv.second.rects.begin(), kv.second.rects.end());
+                }
+            uint32_t so = 0;
+            for (const Quad &q : vq) ((q.n == 4 || triFx) ? (w.push_back(q), 0u) : ++so);
+            int cc = 0;
+            uint32_t mm = matchQuads(w, s.quads[0]);
+            for (int ci = 1; ci < kFxCams && mm < w.size(); ++ci)
+                if (!s.quads[ci].empty())
+                    if (const uint32_t mc = matchQuads(w, s.quads[ci]); mc > mm) { mm = mc; cc = ci; }
+            if (par == 0 || mm > m) { whole.swap(w); soltos = so; m = mm; cam = cc; }
+        }
         const std::vector<Quad> &nq = s.quads[cam];
         const uint32_t nVu = uint32_t(whole.size()), nNat = uint32_t(nq.size());
         if (!nVu && !nNat) continue;
@@ -1048,6 +1058,12 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
                 if (qp[j] < 0) continue;
                 const Quad &a = whole[j], &b = nq[size_t(qp[j])];
                 if (!a.hasC || !b.hasC) continue;
+                if (s.type == wotm::FX_ARC || s.type == wotm::FX_ARC2 || s.type == wotm::FX_CHAIN) {
+                    // arco com menos de 2 px: a tolerancia de 1 px casa o quadrado de um passo com o vizinho e a cor sai a do ponto ao lado
+                    float x0 = a.x[0], x1 = a.x[0], y0 = a.y[0], y1 = a.y[0];
+                    for (int k = 1; k < a.n; ++k) { x0 = std::min(x0, a.x[k]); x1 = std::max(x1, a.x[k]); y0 = std::min(y0, a.y[k]); y1 = std::max(y1, a.y[k]); }
+                    if (x1 - x0 < 2.f && y1 - y0 < 2.f) continue;
+                }
                 ++row.comp;
                 bool dc = false, da = false;
                 for (int k = 0; k < a.n; ++k) {
@@ -1068,9 +1084,9 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
         }
         rows.push_back(row);
         if (g_dump) {
-            for (const Quad &q : vq)
-                std::fprintf(g_dump, "fx%u,vuq,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", sys, q.n, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2],
-                             q.n == 4 ? q.x[3] : 0.f, q.n == 4 ? q.y[3] : 0.f);
+            for (const Quad &q : whole)   // os comparados (paridade escolhida; sem os triangulos soltos), com a cor RGBA do canto 0
+                std::fprintf(g_dump, "fx%u,vuq,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%02x%02x%02x%02x\n", sys, q.n, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2],
+                             q.y[2], q.n == 4 ? q.x[3] : 0.f, q.n == 4 ? q.y[3] : 0.f, q.c[0][0], q.c[0][1], q.c[0][2], q.c[0][3]);
             if (vit != fxVu.end())   // atributos dos triangulos do VU1 (UV, cor, ALPHA, TEX0), na ordem do XGKICK
                 for (const auto &kv : vit->second)
                     for (const Tri &t : kv.second.tris)
@@ -1886,13 +1902,13 @@ void compare()
         totVu += nVu; totNat += nNat; totFalta += falta; totSobra += sobra; totCostas += costas; totRep += rep;
         rows.push_back({key, &o, nVu - rep, nNat, falta, sobra, costas, texDifere, std::get<0>(texWorst), std::get<1>(texWorst), std::get<2>(texWorst), at});
         if (g_dump) {
-            // depois do FBP: u, v e RGBA (hex) de cada vertice, ABE, ALPHA, neblina e o TEX0 inteiro (so VU1)
+            // depois do FBP: u, v e RGBA (hex) de cada vertice, ABE, ALPHA, neblina, o TEX0 inteiro e o TEST_1 (os dois so VU1)
             auto row = [&](const char *side, int hit, const Tri &t) {
                 std::fprintf(g_dump, "%x,%s,%d,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%llx,%x", key, side, hit, t.prog, t.x[0], t.y[0], t.x[1], t.y[1], t.x[2],
                              t.y[2], (unsigned long long)t.tex, unsigned(t.fbp));
                 for (int k = 0; k < 3; ++k)
                     std::fprintf(g_dump, ",%.5f,%.5f,%02x%02x%02x%02x", t.u[k], t.v[k], t.c[k][0], t.c[k][1], t.c[k][2], t.c[k][3]);
-                std::fprintf(g_dump, ",%d,%x,%d,%llx\n", int(t.abe), unsigned(t.alpha), int(t.fge), (unsigned long long)t.tex0);
+                std::fprintf(g_dump, ",%d,%x,%d,%llx,%x\n", int(t.abe), unsigned(t.alpha), int(t.fge), (unsigned long long)t.tex0, t.test);   // TEST: ffffffff = nativo/nao visto
             };
             for (size_t i = 0; i < vu.size(); ++i) row("vu", vuPair[i] >= 0, vu[i]);
             for (size_t i = 0; i < nat.size(); ++i) row("nat", natHit[i], nat[i]);

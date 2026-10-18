@@ -389,7 +389,8 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
 
 // ---------------------------------------------------------------- cena
 
-// Teste de alfa padrao (TEST_1 0x8D: alfa > 8): o que o shader do Scene::draw descarta quando o GROUP nao traz outro.
+// Teste de alfa do shader do Scene::draw quando nada traz outro (TEST_1 0x8D: alfa > 8). Na travessia dos objetos o estado inicial vem
+// do ctxDef do jogo (Scene::collect: 0x5040C, sem teste); este limiar fica para as passadas fora do hier (sombras, destrocos, HUD).
 // kGsAlphaNoTest: TEST_1 com ATE = 0 (sem teste: o GS desenha todo pixel, inclusive As = 0; os brilhos aditivos 0x5040C dependem disso).
 inline constexpr int16_t kGsAlphaRef = 8, kGsAlphaNoTest = -1;
 
@@ -1115,7 +1116,13 @@ public:
             if (ram.ok(cs2, 0xB0) && ram.u8(cs2 + 0xC)) drawCs(ram, cs2, false);
             b.casters.swap(items);
             items.swap(keep);
-            for (const DrawItem &it : b.casters) b.casterNodes.push_back(it.node);
+            for (const DrawItem &it : b.casters) b.casterNodes.push_back(it.node);   // todos (receptor excluido), antes do filtro
+            // dontCastShadow (bit 29 dos bits do OBJECT em +0xC): o psBldBlkRObjs sai sem emitir o objeto. No Kineticlops so o olho
+            // projeta; o corpo translucido tem o bit.
+            constexpr uint32_t kObjDontCastShadow = 0x20000000;
+            b.casters.erase(std::remove_if(b.casters.begin(), b.casters.end(),
+                                           [&](const DrawItem &it) { return (ram.u32(it.node + 0xC) & kObjDontCastShadow) != 0; }),
+                            b.casters.end());
             std::sort(b.casterNodes.begin(), b.casterNodes.end());
             if (!b.casters.empty()) shadows.push_back(std::move(b));
         }
@@ -1410,6 +1417,15 @@ public:
         blend_ = kGsAlphaNormal;
         aref_ = kGsAlphaRef;
         zmsk_ = false;
+        {   // a travessia comeca no ctx padrao do jogo (ctxGetDefaultGSCtx = ctxDef, montado pelo ctxSetUpGSCtx: ALPHA_1 0x44,
+            // TEST_1 0x5040C = sem teste de alfa, ZBUF_1 gravando). Sem ele o nativo supunha o 0x8D (alfa > 8) e descartava o alto do
+            // domo do ceu do drive-in (alfa de vertice 0), que o GS desenha.
+            int b, r, z;
+            groupState(ram, sym::ctxDef, b, r, z);
+            if (b >= 0) blend_ = uint8_t(b);
+            if (r != kRefAbsent) aref_ = int16_t(r);
+            if (z >= 0) zmsk_ = z != 0;
+        }
         lodX_ = false;
         spec_ = 0.f;
         lightOwn_ = false;

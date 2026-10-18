@@ -65,7 +65,10 @@ namespace wotm {
 // ((Cs - Cd) As + Cd) fica limitado: As > 1 pediria fator negativo no destino.
 // Modo (+8 * modo): 1 = sai com alfa As / 2 e 2 = sai branco (os dois passes de GsBlendFactors::doubled).
 inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
+// O burn fica limitado a +-4096: o F satura (0 ou 255) muito antes, e o domo do ceu da AIRPORT tem fogBurnThru 1e7, que deixava o y
+// normalizado abaixo do limite do shader (1e-6) e apagava todos os flags (o domo saia sem o modo GS, ~0,13 da cor).
 inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false, int mode = 0) {
+    burn = burn > 4096.f ? 4096.f : (burn < -4096.f ? -4096.f : burn);
     rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f) + (g_premulShader ? 8.f * float(mode) : 0.f));
 }
 // Mistura do GS pelo byte baixo do registrador ALPHA: cor = (A - B) * C + D, campos de 2 bits A, B, D (0 Cs, 1 Cd, 2 zero) e C (0 As,
@@ -152,6 +155,7 @@ constexpr uint32_t minSize = 0x2E38;      // info.minSize (pedestres: largura do
 constexpr uint32_t maxSize = 0x2E3C;      // info.maxSize (pedestres: altura do carimbo)
 constexpr uint32_t expansionRate = 0x2E44; // info.expansionRate
 constexpr uint32_t lifetime = 0x2E4A;     // info.lifetime (s16, campos)
+constexpr uint32_t useThisColor = 0x2E58; // info.useThisColor: vetor (R, G, B 0..255; w = escala do alfa) com o bit 0x200 do attribs
 constexpr uint32_t alphaFadeIn = 0x2E60;  // info.alphaFadeIn (dustTrail: fracao da vida)
 constexpr uint32_t alphaFadeOut = 0x2E64;
 constexpr uint32_t minAlpha = 0x2E68;
@@ -349,6 +353,70 @@ public:
             c[dst][0] = eye[0] + q0; c[dst][1] = eye[1] + q1; c[dst][2] = eye[2] + q2;
         }
         for (int a = 0; a < 3; ++a) c[3][a] = c[0][a];
+        return true;
+    }
+
+    // Linha (FX_LINE) como o microprograma do VU1 (MPG 0x0000; linePacketInit/Build em asm/common/partdraw.s):
+    //  - ponta = pos com a camera atual; cauda = M' (pos - vel - vento), M' = prevViewMat (fx + 0x2EC0, 4 qwords do pacote, colunas
+    //    x/y/z/translacao) e vento = q537 (logo antes dela: field.wind.xyz + Gusts * field.wind.w, gravado pelo linePacketBuild). A cauda
+    //    volta ao mundo pela matriz atual, na sua profundidade (como o striteTriangle): fica onde a cauda estava na tela do quadro anterior;
+    //  - cor = lerp da tabela em vel.w * (numColors - 1) / lifetime, + 0,5, truncada (nao pela idade);
+    //  - alfa = alfa da cor * pos.w * (fogFA + fogFB / W) / 255, teto 255: a neblina entra no alfa (o PRIM 0x49 nao tem FGE). Some com
+    //    alfa < 1. A cauda leva o RGB com alfa 0.
+    // Conferido na checagem (ultrav_corda2: cauda a 0,05 px do VU1 no ajuste offline).
+    static bool lineVu(const Ram &ram, uint32_t b, const FxView &view, int i, float head[3], float tail[3], uint32_t &col) {
+        constexpr uint32_t kW2S = wotm::sym::worldToScreenMat, kEo = wotm::sym::worldCtx + 0x20;
+        const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), pm = ram.u32(b + 0x2EC0);
+        if (!ram.ok(pos + 16 * uint32_t(i), 16) || !ram.ok(vel + 16 * uint32_t(i), 16) || !ram.ok(pm - 16, 80)) return false;
+        float p[4], v[4], wind[3], P[16], M[4][4], eye[3];
+        for (int a = 0; a < 4; ++a) { p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a)); v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a)); }
+        if (!std::isfinite(p[0]) || !std::isfinite(v[0])) return false;
+        for (int a = 0; a < 3; ++a) wind[a] = ram.f32(pm - 16 + 4 * uint32_t(a));
+        bool any = false;
+        for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * k); any = any || P[k] != 0.f; }
+        if (!any) return false;
+        for (int r = 0; r < 4; ++r)
+            for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(kEo + 4 * k);
+        // cor: q520 + indice (ate 16 entradas; as que passam de numColors tem alfa 0)
+        const uint32_t nc = ram.u32(b + fxoff::numColors), tab = fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex);
+        const int life = int(ram.s16(b + fxoff::lifetime));
+        const float rate = life != 0 && nc > 0 ? float(int(nc) - 1) / float(life) : 0.f;
+        const float cp = v[3] * rate;
+        if (!std::isfinite(cp)) return false;
+        int k0 = int(cp);   // FTOI0: trunca
+        const float fr = cp - float(k0);
+        const int nEnt = int(std::min<uint32_t>(nc + 1, 16));
+        auto entry = [&](int k, int sh) -> float {
+            if (k < 0 || k >= nEnt) return 0.f;
+            if (sh == 24 && k >= int(nc)) return 0.f;
+            return float((ram.u32(tab + 4 * uint32_t(k)) >> sh) & 255);
+        };
+        float c[4];
+        for (int a = 0; a < 4; ++a) c[a] = entry(k0, 8 * a) * (1.f - fr) + entry(k0 + 1, 8 * a) * fr + 0.5f;
+        // profundidade da ponta (W) para a neblina no alfa
+        float W = 0.f;
+        for (int k = 0; k < 3; ++k) W += M[3][k] * (p[k] - eye[k]);
+        W += M[3][3];
+        if (!(W > 1e-3f)) return false;
+        const float A = std::min(c[3] * p[3] * (view.fogFA + view.fogFB / W) / 255.f, 255.f);
+        if (!(A >= 1.f)) return false;
+        auto ub = [](float x) { return uint32_t(std::clamp(x, 0.f, 255.f)); };
+        col = ub(c[0]) | ub(c[1]) << 8 | ub(c[2]) << 16 | ub(A) << 24;
+        // cauda: T = P (pos - vel - vento), de volta ao mundo pela matriz atual na profundidade T.w
+        const float t[3] = {p[0] - v[0] - wind[0], p[1] - v[1] - wind[1], p[2] - v[2] - wind[2]};
+        float T[4];
+        for (int r = 0; r < 4; ++r) T[r] = P[12 + r] + P[r] * t[0] + P[4 + r] * t[1] + P[8 + r] * t[2];
+        if (!(T[3] > 1e-3f)) return false;
+        const float m00 = M[0][0], m01 = M[0][1], m02 = M[0][2], m10 = M[1][0], m11 = M[1][1], m12 = M[1][2], m30 = M[3][0], m31 = M[3][1], m32 = M[3][2];
+        const float det = m00 * (m11 * m32 - m12 * m31) - m01 * (m10 * m32 - m12 * m30) + m02 * (m10 * m31 - m11 * m30);
+        if (!(std::fabs(det) > 1e-12f)) return false;
+        const float r0 = T[0] - M[0][3], r1 = T[1] - M[1][3], r3 = T[3] - M[3][3];   // (x w, y w, w) = T.x, T.y, T.w
+        const float q0 = (r0 * (m11 * m32 - m12 * m31) - m01 * (r1 * m32 - m12 * r3) + m02 * (r1 * m31 - m11 * r3)) / det;
+        const float q1 = (m00 * (r1 * m32 - m12 * r3) - r0 * (m10 * m32 - m12 * m30) + m02 * (m10 * r3 - r1 * m30)) / det;
+        const float q2 = (m00 * (m11 * r3 - r1 * m31) - m01 * (m10 * r3 - r1 * m30) + r0 * (m10 * m31 - m11 * m30)) / det;
+        tail[0] = eye[0] + q0; tail[1] = eye[1] + q1; tail[2] = eye[2] + q2;
+        for (int a = 0; a < 3; ++a) head[a] = p[a];
         return true;
     }
 
@@ -1451,14 +1519,37 @@ public:
             float p[3];
             for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
             c0 = wakeVu(ram, b, i, view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3]).rgba;
-        } else if (s.type == FX_STRITE && haveVel) {   // alfa escalado pelo comprimento do rastro (striteTriangle, alphaK)
-            float p[4], v[3], tri[4][3], k = 1.f;
+        } else if (s.type == FX_STRITE && haveVel) {
+            // cor pela posicao vel.w na tabela (microprograma 0xA88: indice FTOI0(vel.w), lerp, + 0,5; vel.w e a idade com espalhamento
+            // por particula, nao idade * colorsPerFrame) e alfa escalado pelo comprimento do rastro (striteTriangle, alphaK)
+            float p[4], v[4], tri[4][3], k = 1.f;
             for (int a = 0; a < 4; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
-            for (int a = 0; a < 3; ++a) v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a));
-            if (striteTriangle(ram, b, p, v, tri, &k)) c0 = (c0 & 0x00FFFFFFu) | (uint32_t(float(c0 >> 24) * k) << 24);   // FTOI0 trunca
+            for (int a = 0; a < 4; ++a) v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a));
+            const uint32_t nc = ram.u32(b + fxoff::numColors), tab = fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex);
+            float cf[4] = {128.5f, 128.5f, 128.5f, 128.5f};
+            if (nc > 0 && std::isfinite(v[3]) && v[3] >= 0.f) {
+                const int k0 = std::min(int(v[3]), int(nc) - 1), k1 = std::min(k0 + 1, int(nc) - 1);   // so numColors entradas no pacote
+                const float fr = std::min(v[3] - float(k0), 1.f);
+                const uint32_t e0 = ram.u32(tab + 4 * uint32_t(k0)), e1 = ram.u32(tab + 4 * uint32_t(k1));
+                for (int a = 0; a < 4; ++a) cf[a] = float((e0 >> (8 * a)) & 255) * (1.f - fr) + float((e1 >> (8 * a)) & 255) * fr + 0.5f;
+            }
+            if (!striteTriangle(ram, b, p, v, tri, &k)) k = 1.f;
+            auto ub = [](float x) { return uint32_t(std::clamp(x, 0.f, 255.f)); };   // FTOI0 trunca
+            c0 = ub(cf[0]) | ub(cf[1]) << 8 | ub(cf[2]) << 16 | ub(cf[3] * k) << 24;
         }
         col[0] = c0;
         col[1] = isStrip(s.type) ? colorAt(ram, b, A(i + 1)) : c0;
+        // stripePacketInit: com info.attribs & 0x200 o RGB de todas as cores do pacote vem do vetor info.useThisColor (trailColoring da
+        // fase no rastro de poeira) e o alfa e o da tabela vezes o w do vetor. So o stripe (o frag tem a sua versao no Scene).
+        if (s.type == FX_STRIPE && (ram.u32(b + fxoff::infoAttribs) & 0x200)) {
+            const uint32_t cp = ram.u32(b + fxoff::useThisColor);
+            if (ram.ok(cp, 16)) {
+                auto ub = [](float v) { return uint32_t(std::clamp(v + 0.5f, 0.f, 255.f)); };   // lerp de valores iguais + 0,5, FTOI0
+                const uint32_t rgb = ub(ram.f32(cp)) | ub(ram.f32(cp + 4)) << 8 | ub(ram.f32(cp + 8)) << 16;
+                const float w = ram.f32(cp + 12);
+                for (int k = 0; k < 2; ++k) col[k] = rgb | ub(float(col[k] >> 24) * w - 0.5f) << 24;
+            }
+        }
     }
 
     // forEachQuad com a cor que o desenho usa em cada quadrado: emit(i, cantos, uv, cor dos cantos 0 e 1, cor dos cantos 2 e 3).
@@ -1510,20 +1601,17 @@ private:
         auto A = [&](int i) { return haveAge ? int(ram.s16(age + 2 * uint32_t(i))) : 0; };
 
         if (s.type == FX_LINE) {
+            shaderNormal(0.f, false, true, gsBlendPremul(blend));   // PRIM 0x49 sem FGE: a neblina ja vem no alfa (lineVu)
             rlBegin(RL_LINES);
             rlSetTexture(gsWhiteTexture());   // sem textura no modo GS: alfa 0x80
             for (int i = 0; i < s.n; ++i) {
-                float p[3], v[3];
-                for (int c = 0; c < 3; ++c) {
-                    p[c] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(c));
-                    v[c] = haveVel ? ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(c)) : 0.f;
-                }
-                if (!std::isfinite(p[0])) continue;
-                const uint32_t c = colorAt(ram, b, A(i));
+                float h[3], t[3];
+                uint32_t c;
+                if (!lineVu(ram, b, view, i, h, t, c)) continue;
                 vcolor(c);
-                rlVertex3f(p[0], p[1], p[2]);
-                vcolor(c & 0x00FFFFFFu);   // microcodigo de linhas: a cauda e pos - vel (projetada com a matriz do quadro anterior)
-                rlVertex3f(p[0] - v[0], p[1] - v[1], p[2] - v[2]);
+                rlVertex3f(h[0], h[1], h[2]);
+                vcolor(c & 0x00FFFFFFu);
+                rlVertex3f(t[0], t[1], t[2]);
             }
             rlEnd();
             return;
