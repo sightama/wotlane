@@ -189,6 +189,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_VU1CMP_VRAMTEX=<tex0 hex>[,..]` | no `--vu1cmp`: grava `<instantâneo>_vram_<tex0>.png` com a textura desse TEX0 lida da VRAM do instantâneo (o que o GS amostra; serve para comparar com a textura que o nativo lê da RAM) |
 | `WOTM_VU1CHECK_Z=<prog[,..]>` ou `*` | imprime o Z do GS (XYZF2/XYZ2) dos triângulos desses programas do VU1 (índice do MSCAL, coluna 4 do dump), linhas `[z]` no stderr |
 | `WOTM_VU1CMP_LISTG=1`, `WOTM_VU1CMP_GORDER=1` | no `--vu1cmp`: lista os registradores de cada pacote do canal GIF do quadro / reaplica todos os pacotes do canal GIF na ordem (padrão: só os sem vértices) |
+| `WOTM_VU1CMP_WIDE=1` | no `--vu1cmp`: grava também `<instantâneo>_<g>_wide.png`, o quadro nativo na proporção e altura do jogo ao vivo (`WOTM_ASPECT`, `WOTM_RES`), para conferir o que só aparece em widescreen |
 | `WOTM_COVER`, `WOTM_COVERPAL`, `WOTM_COVERTOL` | cobertura de superfície entre LODs |
 <!-- WOTM_ENV:END -->
 

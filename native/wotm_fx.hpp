@@ -483,7 +483,9 @@ public:
             s.tex0 = uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32);
             s.t = ram.f32(a + 8);
             s.half = ram.f32(a + 12);
-            s.uvMax = float(ram.u32(gif + 16 + 16 * (ram.u32(a + 12) & 3) + 12) & 0xFFFF) / 16.f;
+            // o UNPACK leva os 4 qwords a partir de gif (= VU1 0x110, conferido no instantaneo); com um qword a mais o uvMax saia o
+            // do registro seguinte (127,5 numa textura de 64): a textura so cobria metade do sprite e o brilho caia fora do olho
+            s.uvMax = float(ram.u32(gif + 16 * (ram.u32(a + 12) & 3) + 12) & 0xFFFF) / 16.f;
             for (int j = 0; j < 4; ++j) s.rgba[j] = ram.f32(c + 4 * uint32_t(j));
             s.texId = ram.u16(p + 0x2C40 + 2 * uint32_t(k));
         }

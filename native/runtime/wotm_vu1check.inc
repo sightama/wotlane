@@ -2177,6 +2177,20 @@ static void vu1cmpImages(const char *snapPath, uint32_t frame, PS2Runtime &runti
         ImageResize(&nat, W, H);
     }
     if (!natOk) std::fprintf(stderr, "[vu1cmp] a camada nativa nao desenhou este quadro (cena sem fase?)\n");
+    // WOTM_VU1CMP_WIDE=1 (diagnostico): o quadro nativo de novo na proporcao do jogo ao vivo (WOTM_ASPECT, padrao a da janela) e
+    // na altura WOTM_RES, gravado como <base>_wide.png; para conferir o que so aparece em widescreen
+    if (const char *w = std::getenv("WOTM_VU1CMP_WIDE"); w && std::atoi(w) > 0) {
+        wotm_live::g_force43 = false;
+        for (int pass = 0; pass < 2; ++pass) {
+            BeginDrawing();
+            ClearBackground(BLACK);
+            wotmDrawNative(ram);
+            EndDrawing();
+        }
+        const std::string wide = base + "_wide.png";
+        if (wotm_live::exportFrame(wide.c_str())) std::fprintf(stderr, "[vu1cmp] widescreen: %s\n", wide.c_str());
+        wotm_live::g_force43 = true;
+    }
 
     Image diff = GenImageColor(W, H, BLACK);
     uint32_t differ = 0;
@@ -2391,6 +2405,23 @@ static int vu1cmpBody(const char *path, const char *dump, uint32_t onlyFrame, bo
             ok = applyDelta(ram, PS2_RAM_SIZE);
             if (ok && !skip) { g_pass = 1; g_cam[1] = readCam(ram); collectNative(ram, g_natPass1); }
             if (!ok) break;
+            if (ok && !skip && !g_flareVuIn.empty()) {
+                // A entrada do hier(0, 1) vem logo depois do particleDraw: a lista como o jogo ao vivo a copia (readFlares) contra a que
+                // o VU1 recebeu. Diferenca aqui = o desenho ao vivo usa outro dado que o replay (o uvMax lido um qword adiante passou assim).
+                wotm::Particles::FlareFrame ff;
+                wotm::Particles::readFlares(wotm::Ram{ram, PS2_RAM_SIZE}, ff);
+                const auto &vf = g_flareVuIn.back();
+                uint32_t spr = 0, ent = 0;
+                for (int k = 0; k < std::min(ff.nspr, vf.nspr); ++k) {
+                    const auto &a = ff.spr[k], &b = vf.spr[k];
+                    spr += a.tex0 != b.tex0 || a.t != b.t || a.half != b.half || a.uvMax != b.uvMax || std::memcmp(a.rgba, b.rgba, sizeof a.rgba) != 0;
+                }
+                for (size_t i = 0; i < std::min(ff.e.size(), vf.e.size()); ++i)
+                    ent += ff.e[i].x != vf.e[i].x || ff.e[i].y != vf.e[i].y || ff.e[i].intensity != vf.e[i].intensity;
+                if (spr || ent || ff.nspr != vf.nspr || ff.e.size() != vf.e.size())
+                    std::fprintf(stderr, "[vu1check] g=%u lens flare ao vivo difere do VU1: sprites %d/%d (%u diferentes), entradas %zu/%zu (%u diferentes)\n", frame,
+                                 ff.nspr, vf.nspr, spr, ff.e.size(), vf.e.size(), ent);
+            }
         } else if (type == 'S') {
             ok = applyDelta(ram, PS2_RAM_SIZE);
             if (!ok) break;
