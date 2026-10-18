@@ -416,6 +416,20 @@ void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued)
         wotm_live::g_pendingState.push_back(queued ? 1 : 0);
     }
 }
+// Faixas pretas do menu (letterboxDmaData, mandado pelo userintMain entre o hier(0,0) e o hier(0,1)): dois SPRITEs de 24 linhas no
+// topo e na base da vista, sem A+D (ALPHA_1 em vigor). Ficam com os fades que saem antes do texto e da lista de alta prioridade
+// (underText); cobrem a largura da vista, entao em widescreen vao de lado a lado da janela.
+void wotmLetterbox(const uint8_t *rdram)
+{
+    wotm::ScreenRect r[2];
+    const int n = rdram ? wotm::readScreenRects(wotm::Ram{rdram, PS2_RAM_SIZE}, wotm::addr::letterboxPacket, r, 2, false) : 0;
+    for (int i = 0; i < n && wotm_live::g_pendingRects.size() < 16; ++i)
+    {
+        r[i].underText = true;
+        wotm_live::g_pendingRects.push_back(r[i]);
+        wotm_live::g_pendingState.push_back(3);   // ja decidido
+    }
+}
 void wotmGsPktQueueSent()
 {
     for (uint8_t &s : wotm_live::g_pendingState)
@@ -778,6 +792,7 @@ static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 void wotmScreenRect(const uint8_t *, uint32_t, bool) {}
+void wotmLetterbox(const uint8_t *) {}
 void wotmGsPktQueueSent() {}
 void wotmFontSent() {}
 void wotmScreenPolys(const uint8_t *) {}

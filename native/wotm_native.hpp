@@ -59,6 +59,7 @@ constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // Cs
 constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
 constexpr uint32_t fileStatus = wotm::sym::fileStatus;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C, maxResAddr[14]@0x168
 constexpr uint32_t texInfo = wotm::sym::texInfo;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
+constexpr uint32_t letterboxPacket = 0x00731850; // D_00731850: pacote do letterboxDmaData (faixas pretas do menu; DMA, 2 SPRITEs, sem A+D)
 constexpr uint32_t shellFadePacket = 0x00731540; // D_00731540: pacote do Shell::FadeScreen (DMA, A+D ALPHA_1, SPRITE); o laco reescreve o alfa em +0x4C a cada campo
 constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
 constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
@@ -503,18 +504,19 @@ struct ScreenRect {
     bool underText = false;
 };
 
-// Le de um pacote (tag DMA em p, tags GIF PACKED a partir de p + 16) o primeiro SPRITE sem textura com mistura (REGS RGBAQ, XYZ2, XYZ2),
-// exigindo que o A+D do mesmo pacote tenha posto ALPHA_1 = 0x44. Outro formato: false.
-inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) {
+// Le de um pacote (tag DMA em p, tags GIF PACKED a partir de p + 16) os SPRITEs sem textura com mistura (REGS RGBAQ, XYZ2, XYZ2) da
+// primeira tag de primitivos, ate `max`; devolve quantos. Com needAlpha, exige que o A+D do mesmo pacote tenha posto ALPHA_1 = 0x44
+// (fades); sem, aceita o pacote sem A+D, que usa o ALPHA_1 em vigor (0x44 nos menus: letterboxDmaData). Outro formato: 0.
+inline int readScreenRects(const Ram &ram, uint32_t p, ScreenRect *out, int max, bool needAlpha = true) {
     auto u64 = [&](uint32_t a) { return uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32); };
-    uint64_t alpha = ~0ull;
+    uint64_t alpha = needAlpha ? ~0ull : 0x44ull;
     uint32_t q = p + 16;
     for (int t = 0; t < 4 && ram.ok(q, 16); ++t) {
         const uint64_t tag = u64(q), regs = u64(q + 8);
         const uint32_t nloop = uint32_t(tag & 0x7FFF), flg = uint32_t(tag >> 58) & 3, nreg = (uint32_t(tag >> 60) & 15) ? (uint32_t(tag >> 60) & 15) : 16;
         const uint32_t prim = uint32_t(tag >> 47) & 0x7FF;
         q += 16;
-        if (flg != 0) return false;
+        if (flg != 0) return 0;
         bool ad = true;
         for (uint32_t i = 0; i < nreg; ++i) ad = ad && ((regs >> (4 * i)) & 0xF) == 0xE;
         if (ad) {
@@ -524,17 +526,25 @@ inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) {
         }
         // PRE, SPRITE (6), ABE (0x40), sem TME (0x10)
         if (!((tag >> 46) & 1) || (prim & 7) != 6 || !(prim & 0x40) || (prim & 0x10) || nreg != 3 || (regs & 0xFFF) != 0x551 || nloop < 1 ||
-            (alpha & 0xFF) != 0x44 || !ram.ok(q, 48))
-            return false;
+            (alpha & 0xFF) != 0x44)
+            return 0;
         constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;   // viewport cheio: 640 x 224 (campo), centro 2048 (como o texto)
-        out.r = uint8_t(std::min(255u, ram.u32(q))); out.g = uint8_t(std::min(255u, ram.u32(q + 4)));
-        out.b = uint8_t(std::min(255u, ram.u32(q + 8))); out.a = uint8_t(std::min(255u, ram.u32(q + 12)));
-        out.x0 = float(ram.u32(q + 16) & 0xFFFF) / 16.f - kOx; out.y0 = float(ram.u32(q + 20) & 0xFFFF) / 16.f - kOy;
-        out.x1 = float(ram.u32(q + 32) & 0xFFFF) / 16.f - kOx; out.y1 = float(ram.u32(q + 36) & 0xFFFF) / 16.f - kOy;
-        return true;
+        int n = 0;
+        for (; n < max && uint32_t(n) < nloop && ram.ok(q, 48); ++n, q += 48) {
+            ScreenRect &o = out[n];
+            o = ScreenRect{};
+            o.r = uint8_t(std::min(255u, ram.u32(q))); o.g = uint8_t(std::min(255u, ram.u32(q + 4)));
+            o.b = uint8_t(std::min(255u, ram.u32(q + 8))); o.a = uint8_t(std::min(255u, ram.u32(q + 12)));
+            o.x0 = float(ram.u32(q + 16) & 0xFFFF) / 16.f - kOx; o.y0 = float(ram.u32(q + 20) & 0xFFFF) / 16.f - kOy;
+            o.x1 = float(ram.u32(q + 32) & 0xFFFF) / 16.f - kOx; o.y1 = float(ram.u32(q + 36) & 0xFFFF) / 16.f - kOy;
+        }
+        return n;
     }
-    return false;
+    return 0;
 }
+
+// O primeiro SPRITE do pacote de um fade (readScreenRects com o A+D de ALPHA_1 = 0x44 exigido).
+inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) { return readScreenRects(ram, p, &out, 1) == 1; }
 
 // Quadrados de tela do ScreenPolys (HUD fora do hier: o icone de vida do Hud::drawHealthIcon). Cada fonte de s_sourceObjects (0x20
 // bytes: pkt, end, numPolys, headerQw, curQw, obj, rgba, fx) tem um pacote GIF em s_polyBuffer: o polyInitPacket poe o A+D com o TEX0

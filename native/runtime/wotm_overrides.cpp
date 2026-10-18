@@ -31,6 +31,7 @@ extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do menu, lidas do pacote do letterboxDmaData
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
 void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
 void wotmShellFade(int start, int step, bool accumulate);
@@ -651,6 +652,26 @@ namespace
         }
     }
 
+    // Faixas pretas do menu: o letterboxDmaData(alfa) monta o pacote em D_00731850 e o manda direto; lido depois de voltar.
+    constexpr uint32_t kLetterboxDmaData = wotm::fn::letterboxDmaData__Ff;
+    PS2Runtime::RecompiledFunction g_origLetterbox = nullptr;
+
+    void letterboxTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static uint32_t ra = 0, sp = 0;
+        if (ctx->pc == kLetterboxDmaData)
+        {
+            ra = GPR_U32(ctx, 31);
+            sp = GPR_U32(ctx, 29);
+        }
+        g_origLetterbox(rdram, ctx, runtime);
+        if (ra && ctx->pc == ra && GPR_U32(ctx, 29) == sp)   // voltou (nao so uma pausa no meio)
+        {
+            wotmLetterbox(rdram);
+            ra = 0;
+        }
+    }
+
     void shellFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kShellFadeScreen)
@@ -811,6 +832,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kFontDmaFontData, &fontDmaTapped);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
+    if ((g_origLetterbox = runtime.lookupFunction(kLetterboxDmaData)))
+        runtime.registerFunction(kLetterboxDmaData, &letterboxTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))
         runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
     if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
