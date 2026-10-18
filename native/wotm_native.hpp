@@ -59,6 +59,7 @@ constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // Cs
 constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
 constexpr uint32_t fileStatus = wotm::sym::fileStatus;      // FileStatus: resAddr@0x78, resLoaded@0xB0, names[14][9]@0xB1, maxTexAddr[14]@0x14C, maxResAddr[14]@0x168
 constexpr uint32_t texInfo = wotm::sym::texInfo;         // texInfo[1000] x 16: [0] = pacote de upload da textura (RAM), [4] = residencia/VRAM
+constexpr uint32_t letterboxPacket = 0x00731850; // D_00731850: pacote do letterboxDmaData (faixas pretas do menu; DMA, 2 SPRITEs, sem A+D)
 constexpr uint32_t shellFadePacket = 0x00731540; // D_00731540: pacote do Shell::FadeScreen (DMA, A+D ALPHA_1, SPRITE); o laco reescreve o alfa em +0x4C a cada campo
 constexpr uint32_t fontPacket = 0x00735900;      // pacote GIF do texto do quadro (fontBuildPrim/fontDmaFontData): cabecalho A+D, depois corridas de sprites
 constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10] x 0x30: cs@0x10, cs2@0x18, &origem@0x1C, &raio@0x20, fator@0x24, emUso u16@0x2E
@@ -503,18 +504,19 @@ struct ScreenRect {
     bool underText = false;
 };
 
-// Le de um pacote (tag DMA em p, tags GIF PACKED a partir de p + 16) o primeiro SPRITE sem textura com mistura (REGS RGBAQ, XYZ2, XYZ2),
-// exigindo que o A+D do mesmo pacote tenha posto ALPHA_1 = 0x44. Outro formato: false.
-inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) {
+// Le de um pacote (tag DMA em p, tags GIF PACKED a partir de p + 16) os SPRITEs sem textura com mistura (REGS RGBAQ, XYZ2, XYZ2) da
+// primeira tag de primitivos, ate `max`; devolve quantos. Com needAlpha, exige que o A+D do mesmo pacote tenha posto ALPHA_1 = 0x44
+// (fades); sem, aceita o pacote sem A+D, que usa o ALPHA_1 em vigor (0x44 nos menus: letterboxDmaData). Outro formato: 0.
+inline int readScreenRects(const Ram &ram, uint32_t p, ScreenRect *out, int max, bool needAlpha = true) {
     auto u64 = [&](uint32_t a) { return uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32); };
-    uint64_t alpha = ~0ull;
+    uint64_t alpha = needAlpha ? ~0ull : 0x44ull;
     uint32_t q = p + 16;
     for (int t = 0; t < 4 && ram.ok(q, 16); ++t) {
         const uint64_t tag = u64(q), regs = u64(q + 8);
         const uint32_t nloop = uint32_t(tag & 0x7FFF), flg = uint32_t(tag >> 58) & 3, nreg = (uint32_t(tag >> 60) & 15) ? (uint32_t(tag >> 60) & 15) : 16;
         const uint32_t prim = uint32_t(tag >> 47) & 0x7FF;
         q += 16;
-        if (flg != 0) return false;
+        if (flg != 0) return 0;
         bool ad = true;
         for (uint32_t i = 0; i < nreg; ++i) ad = ad && ((regs >> (4 * i)) & 0xF) == 0xE;
         if (ad) {
@@ -524,17 +526,25 @@ inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) {
         }
         // PRE, SPRITE (6), ABE (0x40), sem TME (0x10)
         if (!((tag >> 46) & 1) || (prim & 7) != 6 || !(prim & 0x40) || (prim & 0x10) || nreg != 3 || (regs & 0xFFF) != 0x551 || nloop < 1 ||
-            (alpha & 0xFF) != 0x44 || !ram.ok(q, 48))
-            return false;
+            (alpha & 0xFF) != 0x44)
+            return 0;
         constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;   // viewport cheio: 640 x 224 (campo), centro 2048 (como o texto)
-        out.r = uint8_t(std::min(255u, ram.u32(q))); out.g = uint8_t(std::min(255u, ram.u32(q + 4)));
-        out.b = uint8_t(std::min(255u, ram.u32(q + 8))); out.a = uint8_t(std::min(255u, ram.u32(q + 12)));
-        out.x0 = float(ram.u32(q + 16) & 0xFFFF) / 16.f - kOx; out.y0 = float(ram.u32(q + 20) & 0xFFFF) / 16.f - kOy;
-        out.x1 = float(ram.u32(q + 32) & 0xFFFF) / 16.f - kOx; out.y1 = float(ram.u32(q + 36) & 0xFFFF) / 16.f - kOy;
-        return true;
+        int n = 0;
+        for (; n < max && uint32_t(n) < nloop && ram.ok(q, 48); ++n, q += 48) {
+            ScreenRect &o = out[n];
+            o = ScreenRect{};
+            o.r = uint8_t(std::min(255u, ram.u32(q))); o.g = uint8_t(std::min(255u, ram.u32(q + 4)));
+            o.b = uint8_t(std::min(255u, ram.u32(q + 8))); o.a = uint8_t(std::min(255u, ram.u32(q + 12)));
+            o.x0 = float(ram.u32(q + 16) & 0xFFFF) / 16.f - kOx; o.y0 = float(ram.u32(q + 20) & 0xFFFF) / 16.f - kOy;
+            o.x1 = float(ram.u32(q + 32) & 0xFFFF) / 16.f - kOx; o.y1 = float(ram.u32(q + 36) & 0xFFFF) / 16.f - kOy;
+        }
+        return n;
     }
-    return false;
+    return 0;
 }
+
+// O primeiro SPRITE do pacote de um fade (readScreenRects com o A+D de ALPHA_1 = 0x44 exigido).
+inline bool readScreenRect(const Ram &ram, uint32_t p, ScreenRect &out) { return readScreenRects(ram, p, &out, 1) == 1; }
 
 // Quadrados de tela do ScreenPolys (HUD fora do hier: o icone de vida do Hud::drawHealthIcon). Cada fonte de s_sourceObjects (0x20
 // bytes: pkt, end, numPolys, headerQw, curQw, obj, rgba, fx) tem um pacote GIF em s_polyBuffer: o polyInitPacket poe o A+D com o TEX0
@@ -1360,6 +1370,14 @@ public:
         tex_[key] = t;
         return t.id;
     }
+
+    // colorQuad (+0x70) de _cs que o jogo muda entre o hier(v,0) e o fim do quadro, como o valor estava quando o hier desenhou. Caso
+    // conhecido: o pick-up que o monstro pode pegar. O rtMain chama LevelPickups::enableHighlights (pulsa o verde no colorQuad do _cs
+    // do pick-up destacado) antes do hier(v,0), e o Monster::update, dentro do TheGame::Update depois dele, chama computeHighlight, que
+    // volta o colorQuad a 1. A captura no fim do quadro so via o 1 (o carro nunca ficava verde). Preenchido pela captura ao vivo
+    // (hook do enableHighlights no runtime); vazio no viewer e no replay, que leem a RAM.
+    struct CsColorAtDraw { uint32_t cs; float q[4]; };
+    std::vector<CsColorAtDraw> csColorAtDraw;
 
     // Reune os objetos visiveis a partir de world->ep e das listas de CS.
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
@@ -2421,7 +2439,7 @@ public:
                 static const int ti = std::getenv("WOTM_TEXINFO") ? std::atoi(std::getenv("WOTM_TEXINFO")) : -1;
                 static int printed = 0;
                 static const int tiMax = std::getenv("WOTM_TEXINFO_N") ? std::atoi(std::getenv("WOTM_TEXINFO_N")) : 6;
-                if (printed < tiMax && ((ti >= 0 && int(objectTexId(ram, it.node, slot)) == ti) || (ti == -2 && !md->sprites.empty()) || (ti == -3 && it.blend != kGsAlphaNormal && !t.empty()) || (ti == -4 && it.aref == kGsAlphaNoTest))) {   // -2: todos os OBJECT sprite; -3: malhas fora da mistura comum; -4: sem teste de alfa
+                if (printed < tiMax && ((ti >= 0 && int(objectTexId(ram, it.node, slot)) == ti) || (ti == -2 && !md->sprites.empty()) || (ti == -3 && it.blend != kGsAlphaNormal && !t.empty()) || (ti == -4 && it.aref == kGsAlphaNoTest) || (ti == -5 && it.color[1] > 1.05f && it.color[0] < 0.95f))) {   // -2: todos os OBJECT sprite; -3: malhas fora da mistura comum; -4: sem teste de alfa; -5: cor esverdeada (pick-up destacado)
                     ++printed;
                     std::fprintf(stderr, "[texinfo] tex %u node %x blend %d abe %d color %.3f %.3f %.3f %.3f fade %.3f gsA %d key %llx tris %zu sprites %zu tex0 %llx aref %d\n", objectTexId(ram, it.node, slot), it.node, it.blend,
                                  int(md->abe), it.color[0], it.color[1], it.color[2], it.color[3], it.fade, int(gsA), (unsigned long long)o.key, t.size(),
@@ -2805,11 +2823,15 @@ private:
     void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
         const bool quad = cs_ && ram.u32(0x007B3040) != 0;
         const bool amb = ram.u32(wotm::sym::viewAmbientChanged) != 0;
+        const float *atDraw = nullptr;   // colorQuad da hora do hier (csColorAtDraw), no lugar do que sobrou na RAM
+        if (quad)
+            for (const CsColorAtDraw &c : csColorAtDraw)
+                if (c.cs == cs_) { atDraw = c.q; break; }
         for (int k = 0; k < 4; ++k) {
             out[k] = ram.f32(node + 0x40 + 4 * k);
             const int16_t idx = ram.s16(node + 0x34 + 2 * k);
             if (animVal_ && idx >= 0 && k != 2) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
-            if (quad) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
+            if (quad) out[k] *= atDraw ? atDraw[k] : ram.f32(cs_ + 0x70 + 4 * k);
             if (amb && k < 3) out[k] *= ram.f32(wotm::sym::viewAnimAmbientRed + 4 * uint32_t(k));
             if (!std::isfinite(out[k])) out[k] = 1.f;
         }
@@ -2838,15 +2860,21 @@ private:
         }
     }
 
-    // Paleta de matrizes de um objeto skinned: animPktPtr[packetPtrIdx] e uma cadeia DMA que alterna a paleta (tag ref 0x3000007d, bloco
-    // de 125 qwords: 31 matrizes de 4 qwords a partir de +0x10) e os sub-pacotes da malha. O indice vem do OBJECT (+0x68, packetPtrIdx;
-    // negativo = sem cadeia), como no pktAddVu1ObjAsm, e nao da posicao do filho no LOD: os dois coincidem no Congar e no Robo-47, mas
-    // nos objetos do Raptros vale 5 e 6 com o LOD 2, e a paleta de outra parte do corpo quebrava a malha. Devolve 0 se nao achar.
+    // Paleta de matrizes de um objeto skinned: animPktPtr[i] e uma cadeia DMA cujo 1o tag (ref) aponta o bloco da paleta: 1 qword
+    // de VIF (UNPACK V4-32 para o qword 0x358 do VU1) e as matrizes, 4 qwords cada, a partir de +0x10. Em geral 0x7d qwords (31
+    // matrizes); o corpo do Dragon usa uma paleta propria de 0x41 (16 matrizes), mandada antes de cada sub-pacote. Como o destino no
+    // VU1 e o mesmo, o codigo de osso indexa as duas do mesmo jeito. O indice i e o do OBJECT em +0x68, como no pktAddVu1ObjAsm
+    // (negativo: o jogo manda o pacote do +4, sem paleta); o indice do LOD so coincide quando o personagem tem um objeto skinned por
+    // LOD (o Dragon tem corpo e asas: com o do LOD, o corpo pegava a paleta de outro objeto). Devolve 0 se nao achar.
     static uint32_t palette(const Ram &ram, const DrawItem &it) {
-        const int32_t idx = int32_t(ram.u32(it.node + 0x68));
-        if (!it.animPkt || idx < 0 || idx > 63) return 0;
+        if (!it.animPkt) return 0;
+        int idx = ram.ok(it.node + 0x68, 4) ? int(int32_t(ram.u32(it.node + 0x68))) : -1;
+        if (idx < 0) idx = it.lodIdx;   // sem indice no OBJECT: o comportamento antigo
+        if (idx < 0 || idx > 63) return 0;
         const uint32_t chain = ram.u32(it.animPkt + 4 * uint32_t(idx)) & 0x0FFFFFFF;
         if (!ram.ok(chain, 8) || ((ram.u32(chain) >> 28) & 7) != 3) return 0;
+        const uint32_t qwc = ram.u32(chain) & 0xFFFF;
+        if (qwc < 5 || qwc > 0x7D || (qwc - 1) % 4 != 0) return 0;
         const uint32_t block = ram.u32(chain + 4) & 0x0FFFFFFF;
         return ram.ok(block, 0x10 + 0x40 * 32) ? block : 0;
     }

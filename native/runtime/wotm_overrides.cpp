@@ -32,17 +32,26 @@ extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmCaptureScene(const uint8_t *rdram);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(0, 0)
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
+void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do menu, lidas do pacote do letterboxDmaData
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
 void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
 void wotmShellFade(int start, int step, bool accumulate);
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
+void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
 void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPolys, lido na entrada do dmaData   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
 std::atomic<uint32_t> g_wotmCheats{0};
 std::atomic<bool> g_wotmCheatWin{false};
+
+// Camera livre de debug (F5): a janela (wotm_freecam.inc) move a pose, a thread do EE a poe no _cs da vista 0 (freeCamWrite).
+#include "wotm_freecam.h"
+std::atomic<bool> g_wotmFreeCam{false};
+std::atomic<bool> g_wotmFreeCamPad{false};
+std::mutex g_wotmFreeCamM;
+WotmFreeCamPose g_wotmFreeCamPose;
 
 namespace
 {
@@ -644,6 +653,26 @@ namespace
         }
     }
 
+    // Faixas pretas do menu: o letterboxDmaData(alfa) monta o pacote em D_00731850 e o manda direto; lido depois de voltar.
+    constexpr uint32_t kLetterboxDmaData = wotm::fn::letterboxDmaData__Ff;
+    PS2Runtime::RecompiledFunction g_origLetterbox = nullptr;
+
+    void letterboxTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static uint32_t ra = 0, sp = 0;
+        if (ctx->pc == kLetterboxDmaData)
+        {
+            ra = GPR_U32(ctx, 31);
+            sp = GPR_U32(ctx, 29);
+        }
+        g_origLetterbox(rdram, ctx, runtime);
+        if (ra && ctx->pc == ra && GPR_U32(ctx, 29) == sp)   // voltou (nao so uma pausa no meio)
+        {
+            wotmLetterbox(rdram);
+            ra = 0;
+        }
+    }
+
     void shellFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kShellFadeScreen)
@@ -686,6 +715,20 @@ namespace
         }
     }
 
+    // Tom verde do pick-up que o monstro pode pegar: o enableHighlights o grava no colorQuad do _cs antes do hier(v,0), e o
+    // computeHighlight (Monster::update, depois do hier) o volta a 1 antes da captura. Na saida, wotmPickupHighlights anota o valor
+    // (Scene::csColorAtDraw).
+    constexpr uint32_t kEnableHighlights = wotm::fn::enableHighlights__12LevelPickupsi;
+    PS2Runtime::RecompiledFunction g_origEnableHighlights = nullptr;
+
+    void enableHighlightsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const bool entry = ctx->pc == kEnableHighlights;
+        g_origEnableHighlights(rdram, ctx, runtime);
+        if (entry)
+            wotmPickupHighlights(rdram);
+    }
+
     // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
     void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -698,6 +741,76 @@ namespace
         }
         SET_GPR_S32(ctx, 2, rate);
         ctx->pc = GPR_U32(ctx, 31);
+    }
+}
+
+namespace
+{
+    // Camera livre (F5, wotm_freecam.h). O _cs da vista 0 (viewInfo[0], o mesmo que a camera do jogo move) recebe a pose em dois
+    // pontos: depois de Cameras::Update (o resto da logica do quadro, como os scripts da fase, o som e a IA, ja ve a camera nova) e na
+    // entrada de viewUpdate(0), que monta worldToScreenMat e worldCtx[0] a partir de cs->trans e cs->mat (ganha de quem mexer no
+    // _cs entre os dois, como a camera da introducao da luta). A camera do jogo continua rodando por baixo: ao desligar, ela sai da
+    // pose livre e volta sozinha para o monstro. Com ela ligada (e sem o Tab), o scePadRead devolve o pad em repouso.
+    constexpr uint32_t kViewUpdate = wotm::fn::viewUpdate__Fi, kScePadRead = wotm::fn::scePadRead;
+    constexpr uint32_t kViewInfo = wotm::sym::viewInfo;   // 5 x 0x14: [0] = _cs* da vista
+    PS2Runtime::RecompiledFunction g_origViewUpdate = nullptr, g_origCamerasUpdateFree = nullptr, g_origPadRead = nullptr;
+
+    void putF(uint8_t *rdram, uint32_t a, float v) { std::memcpy(rdram + a, &v, 4); }
+
+    void freeCamWrite(uint8_t *rdram)
+    {
+        if (!g_wotmFreeCam.load(std::memory_order_relaxed))
+            return;
+        uint32_t cs = 0;
+        std::memcpy(&cs, rdram + kViewInfo, 4);
+        cs &= 0x1FFFFFFFu;
+        if (cs < 0x1000u || cs + 0x70u > PS2_RAM_SIZE)
+            return;
+        WotmFreeCamPose p;
+        {
+            std::lock_guard<std::mutex> lk(g_wotmFreeCamM);
+            p = g_wotmFreeCamPose;
+        }
+        float ax[3][3];
+        wotmFreeCamAxes(p, ax[0], ax[1], ax[2]);
+        for (int i = 0; i < 3; ++i)
+        {
+            putF(rdram, cs + 0x10 + 4 * i, p.pos[i]);   // trans
+            for (int r = 0; r < 3; ++r)
+                putF(rdram, cs + 0x20 + 0x10 * r + 4 * i, ax[r][i]);   // mat: direita, frente, cima
+        }
+        for (int r = 0; r < 3; ++r)
+            putF(rdram, cs + 0x20 + 0x10 * r + 0xC, 0.f);
+        putF(rdram, cs + 0x60, p.pitch);   // rot (RPH): a camera do jogo parte daqui ao desligar
+        putF(rdram, cs + 0x64, 0.f);
+        putF(rdram, cs + 0x68, p.heading);
+    }
+
+    void camerasUpdateFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_origCamerasUpdateFree(rdram, ctx, runtime);
+        freeCamWrite(rdram);
+    }
+
+    void viewUpdateFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (GPR_U32(ctx, 4) == 0u)
+            freeCamWrite(rdram);
+        g_origViewUpdate(rdram, ctx, runtime);
+    }
+
+    void padReadFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
+        g_origPadRead(rdram, ctx, runtime);
+        if (!g_wotmFreeCam.load(std::memory_order_relaxed) || g_wotmFreeCamPad.load(std::memory_order_relaxed))
+            return;
+        if (GPR_U32(ctx, 2) == 0u || data < 0x1000u || data + 32u > PS2_RAM_SIZE)
+            return;
+        uint8_t *d = rdram + data;
+        d[2] = d[3] = 0xFF;                // botoes (ativos em 0)
+        std::memset(d + 4, 0x80, 4);       // analogicos no centro
+        std::memset(d + 8, 0, 12);         // pressao dos botoes
     }
 }
 
@@ -739,12 +852,16 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kFontDmaFontData, &fontDmaTapped);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
+    if ((g_origLetterbox = runtime.lookupFunction(kLetterboxDmaData)))
+        runtime.registerFunction(kLetterboxDmaData, &letterboxTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))
         runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
     if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
         runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
         runtime.registerFunction(kHier, &hierTapped);
+    if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
+        runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
         int v[5], n = 0;
@@ -820,6 +937,16 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         if (c || g_autoWinSecs > 0)
             std::fprintf(stderr, "[wotm] trapacas de debug ligadas desde o inicio: 0x%x, vencer a cada %d s (WOTM_CHEATS/WOTM_CLOAK)\n", c, g_autoWinSecs);
     }
+    // Camera livre (F5): depois dos outros hooks, para o de Cameras::Update embrulhar o do WOTM_AIVSAI quando ele existe
+    if ((g_origCamerasUpdateFree = runtime.lookupFunction(kCamerasUpdate)) && (g_origViewUpdate = runtime.lookupFunction(kViewUpdate)) &&
+        (g_origPadRead = runtime.lookupFunction(kScePadRead)))
+    {
+        runtime.registerFunction(kCamerasUpdate, &camerasUpdateFree);
+        runtime.registerFunction(kViewUpdate, &viewUpdateFree);
+        runtime.registerFunction(kScePadRead, &padReadFree);
+    }
+    else
+        std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
     if (g_minRate > 0)
