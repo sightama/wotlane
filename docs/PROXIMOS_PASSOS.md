@@ -41,5 +41,5 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - [ARMADILHAS.md](passos/ARMADILHAS.md): bugs/pegadinhas já vistos (gcc 2.95, gp, rodata, `sqrtf`, `__asm__("sym")`, build NM).
 - [TESTE_PCSX2.md](passos/TESTE_PCSX2.md): ELF halfcpp no PCSX2, layout `gen_nm_ld.py`, heap, bugs de comportamento achados jogando.
 - [ESPINHA.md](passos/ESPINHA.md): cadeia `main` -> monstro no mapa, menu, `rtMain`, estados de monstro: o que se sabe do fluxo do jogo.
-- [FRONTEIRA.md](passos/FRONTEIRA.md): fronteira de hardware: o que do PS2 o port ainda usa por quadro (desenho, VU0, IOP, relógio, SDK), como o runtime atende cada parte e a ordem para tirar o código de emulador do executável (`tools/hw_frame.py` mede). Desde 2026-10-18 nenhum IRX sobe e o IOP emulado fica parado.
+- [FRONTEIRA.md](passos/FRONTEIRA.md): fronteira de hardware: o que do PS2 o port ainda usa por quadro (desenho, VU0, IOP, relógio, SDK), como o runtime atende cada parte e a ordem para tirar o código de emulador do executável (`tools/hw_frame.py` mede). Desde 2026-10-18 nenhum IRX sobe, o IOP emulado fica parado e o nativo não lê mais os pacotes de texto, HUD e lens flare.
 - [VIEWER_WEB.md](passos/VIEWER_WEB.md): ideia de visualizador de modelos 3D no navegador (2026-10-14).
