@@ -1015,10 +1015,12 @@ namespace
     // toque novo no lock-on liga ou desliga um estado por jogador humano (dono em PadFlags +0x1810), e os contadores passam a
     // valer "segurando" (ligado) ou "nao segurando" (desligado): o resto da configuracao, inclusive as combinacoes com o lock-on,
     // ve exatamente o que veria com o botao segurado ou solto. Os contadores reais ficam guardados e voltam antes do proximo
-    // updateHistory, que conta a partir deles. A IA nao muda.
+    // updateHistory, que conta a partir deles. Alvo travado morto desliga o estado (segurando, o updateLock pularia para o
+    // monstro mais proximo). A IA nao muda.
     constexpr uint32_t kUpdateHistory[3] = {wotm::fn::updateHistory0__8PadFlagsR7GamePad, wotm::fn::updateHistory1__8PadFlagsR7GamePad,
                                             wotm::fn::updateHistory2__8PadFlagsR7GamePad};
     constexpr uint32_t kPadFlagsLockA = 0x1658u, kPadFlagsLockB = 0x165Eu, kPadFlagsHoldTweak = 0x16C4u, kPadFlagsOwner = 0x1810u;
+    constexpr uint32_t kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u;
     PS2Runtime::RecompiledFunction g_origUpdateHistory[3] = {};
     struct LockToggle
     {
@@ -1050,6 +1052,18 @@ namespace
         return nullptr;
     }
 
+    // O alvo travado (m_pinTarget, Monster +0x6C04, do quadro anterior) e um dos m_monsters do TheGame com m_dead (+0xE8)?
+    bool lockTargetDead(uint8_t *rdram, uint32_t owner)
+    {
+        const uint32_t target = FAST_READ32(owner + kMonsterPinTarget);
+        if (!target)
+            return false;
+        for (uint32_t i = 0; i < 8; ++i)
+            if (FAST_READ32(kGame + 0x120380 + 4 * i) == target)
+                return ramOk(target, kMonsterDead + 1u) && static_cast<int8_t>(rdram[target + kMonsterDead]) != 0;
+        return false;   // predio, peca de chefe etc.
+    }
+
     void lockToggleApply(uint8_t *rdram, uint32_t pf, int config)
     {
         const uint32_t owner = FAST_READ32(pf + kPadFlagsOwner);
@@ -1070,6 +1084,11 @@ namespace
         const uint16_t over = static_cast<uint16_t>(std::clamp<int32_t>(tweak + 1, 1, 0xFFFF));   // acima do limiar: trava
         const uint16_t under = static_cast<uint16_t>(std::clamp<int32_t>(tweak, 0, 0xFFFF));
         const bool held = config == 0 ? (a > tweak && b > tweak) : a != 0;
+        if (t->on && lockTargetDead(rdram, owner))
+        {
+            t->on = false;   // segurando, o updateLock passaria para o mais proximo; alternado, solta
+            std::fprintf(stderr, "[lockon] jogador %d: solto (alvo morreu)\n", slot + 1);
+        }
         if (held && !t->held)
         {
             t->on = !t->on;
