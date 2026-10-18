@@ -175,7 +175,7 @@ constexpr uint32_t maxParticles = 0x2ED4;
 
 enum FxType : uint32_t {
     FX_LINE = 1, FX_SWEEPTRAIL = 2, FX_SPRITE = 3, FX_TEXSPRITE = 4, FX_STRIPE = 5, FX_STRITE = 6, FX_ARC = 7, FX_SPRINE = 8, FX_KITE = 9,
-    FX_FRAG = 13, FX_PEDS = 14, FX_DUSTTRAIL = 15, FX_WAKE = 16, FX_ARC2 = 17,
+    FX_CHAIN = 12, FX_FRAG = 13, FX_PEDS = 14, FX_DUSTTRAIL = 15, FX_WAKE = 16, FX_ARC2 = 17,
 };
 
 inline const char *fxTypeName(uint32_t t) {
@@ -193,6 +193,7 @@ inline const char *fxTypeName(uint32_t t) {
     case FX_WAKE: return "wake";
     case FX_ARC: return "arco";
     case FX_ARC2: return "arco17";
+    case FX_CHAIN: return "corrente";
     case FX_PEDS: return "pedestre";
     default: return "?";
     }
@@ -851,21 +852,29 @@ public:
     //    vertice fora. O F < 1 fica no forEachQuad (pelo centro).
     // g(k, cantos[4][3] (A_k, B_k, B_k+1, A_k+1), uv[4][2], cor[2] (RGBA 0x80 = 1,0, em k e k + 1), mascara): bit 0 = triangulo
     // (A_k, B_k, A_k+1) = cantos 0, 1, 3; bit 1 = (B_k, A_k+1, B_k+1) = cantos 1, 3, 2 (a diagonal da tira e B_k - A_k+1).
+    // Corrente (tipo 12; chainCreate/chainPacketInit/Build, microprograma 0x1D00, que chama a mesma fita 0x1F70): o mesmo cabecalho
+    // em outro lugar (pos - 0x4C: minSize ja multiplicado por 0,5 pelo EE, -, segInitU, clut 642; pos - 0x3C: expansionRate, -,
+    // segDeltaU, numColors - 1) e 2 cores em pos - 0x28. Cada corrente: cabeca com o numero de pontos no w (inteiro); sem
+    // subdivisao (os pontos vao direto para a fita). docs/investigacoes/2026-10-17/01_corda_ultrav.md.
     template <class G> static void arcQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
         const uint32_t pos = ram.u32(s.base + fxoff::pos);
-        if (s.n < 3 || !ram.ok(pos - 0x13C, 0x13C + 16 * uint32_t(s.n))) return;
-        const float minSize = ram.f32(pos - 0x28), segInitU = ram.f32(pos - 0x20), clut = ram.f32(pos - 0x1C) - 138.f;
-        const float expRate = ram.f32(pos - 0x18), jag = ram.f32(pos - 0x14), segDeltaU = ram.f32(pos - 0x10), ncm1 = ram.f32(pos - 0xC);
-        uint32_t R = vuRinit(ram.u32(pos - 0x24));
+        const bool chain = s.type == FX_CHAIN;
+        const uint32_t hdr = chain ? 0x4C : 0x28, cols = chain ? 0x28 : 0x13C;
+        const int lastCol = chain ? 1 : 15;
+        if (s.n < 3 || !ram.ok(pos - std::max(hdr, cols), std::max(hdr, cols) + 16 * uint32_t(s.n))) return;
+        const float minSize = ram.f32(pos - hdr), segInitU = ram.f32(pos - hdr + 8), clut = chain ? 0.f : ram.f32(pos - 0x1C) - 138.f;
+        const float expRate = ram.f32(pos - hdr + 0x10), jag = chain ? 0.f : ram.f32(pos - 0x14), segDeltaU = ram.f32(pos - hdr + 0x18),
+                    ncm1 = ram.f32(pos - hdr + 0x1C);
+        uint32_t R = vuRinit(chain ? 0u : ram.u32(pos - 0x24));
         struct V3 { float x, y, z; };
         auto at = [&](int i) { return V3{ram.f32(pos + 16 * uint32_t(i)), ram.f32(pos + 16 * uint32_t(i) + 4), ram.f32(pos + 16 * uint32_t(i) + 8)}; };
         auto w16 = [&](int i) { return int(ram.u16(pos + 16 * uint32_t(i) + 12)); };
         auto color = [&](float cpos) {   // cor RGBA (0x80 = 1,0) na posicao cpos da tabela (lerp, + 0,5, truncada)
-            const int k0 = std::clamp(int(cpos), 0, 15), k1 = std::min(k0 + 1, 15);
+            const int k0 = std::clamp(int(cpos), 0, lastCol), k1 = std::min(k0 + 1, lastCol);
             const float fr = cpos - float(int(cpos));
             uint32_t out = 0;
             for (int c = 0; c < 4; ++c) {
-                const float a = ram.f32(pos - 0x13C + 16 * uint32_t(k0) + 4 * uint32_t(c)), b = ram.f32(pos - 0x13C + 16 * uint32_t(k1) + 4 * uint32_t(c));
+                const float a = ram.f32(pos - cols + 16 * uint32_t(k0) + 4 * uint32_t(c)), b = ram.f32(pos - cols + 16 * uint32_t(k1) + 4 * uint32_t(c));
                 const float v = a + 0.5f - a * fr + b * fr;
                 out |= uint32_t(std::clamp(int(v), 0, 255)) << (8 * c);
             }
@@ -905,7 +914,7 @@ public:
             P.push_back(at(i));
             for (int l = 1; l <= links; ++l) {
                 const V3 b = at(i + l);
-                const int wl = w16(i + l);
+                const int wl = chain ? 0 : w16(i + l);   // corrente: o w dos elos nao e lido
                 if (wl == 0) { P.push_back(b); continue; }
                 int h = wl / 5;   // meia-distancia (em pontos) do primeiro nivel: 2^(L - 1)
                 if (h < 1 || h > 64) { P.push_back(b); continue; }
@@ -942,9 +951,11 @@ public:
             for (size_t k = 0; k < np; ++k) {
                 float tix = sx[k + 1] - sx[k], tiy = sy[k + 1] - sy[k], tox = sx[k + 2] - sx[k + 1], toy = sy[k + 2] - sy[k + 1];
                 const float li = std::sqrt(tix * tix + tiy * tiy), lo = std::sqrt(tox * tox + toy * toy);
-                ok[k] = li > 1e-12f && lo > 1e-12f && wOf(P[k]) >= 1.f;
+                // corrente: tangente de comprimento zero vira o vetor zero (no VU, 0 * RSQRT(0) = 0; os pontos do fim coincidem)
+                ok[k] = (chain ? li > 1e-12f || lo > 1e-12f : li > 1e-12f && lo > 1e-12f) && wOf(P[k]) >= 1.f;
                 if (!ok[k]) continue;
-                tix /= li; tiy /= li; tox /= lo; toy /= lo;
+                const float ri = li > 1e-12f ? 1.f / li : 0.f, ro = lo > 1e-12f ? 1.f / lo : 0.f;
+                tix *= ri; tiy *= ri; tox *= ro; toy *= ro;
                 const float cross = tix * toy - tox * tiy;
                 const float sgn = cross < 0.f ? 1.f : -1.f;
                 ox[k] = tiy + toy + sgn * (tox - tix);
@@ -954,7 +965,8 @@ public:
             const float u0 = segInitU - segDeltaU * 0.5f * float(S);
             auto corner = [&](size_t k, float side, float out[3]) {
                 // o VU1 desloca v * s * (metade do foco, q5.xy) / W pixels: no plano de vista, s / 2 (medido: razao 0,5 contra s)
-                const float sz = 0.5f * (minSize + expRate * float(k) / float(S));
+                // corrente: metade disso (medido na foto 2026-10-17_224038/002: com o q265.x = 10 do pacote, o VU1 da largura 0,25 * 10 * v)
+                const float sz = (chain ? 0.25f : 0.5f) * (minSize + expRate * float(k) / float(S));
                 const float wx = side * sz * ox[k], wy = side * sz * oy[k];   // no plano de vista: y da tela para baixo = -up
                 const float p[3] = {P[k].x, P[k].y, P[k].z};
                 for (int a = 0; a < 3; ++a) out[a] = p[a] + view.right[a] * wx - view.up[a] * wy;
@@ -1088,7 +1100,7 @@ public:
         auto V = [&](int i, float out[3]) { for (int c = 0; c < 3; ++c) out[c] = haveVel ? ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(c)) : 0.f; };
         float c[4][3], uv[4][2];
         if (s.type == FX_LINE) return;
-        if (s.type == FX_ARC || s.type == FX_ARC2) {
+        if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {
             // so os quadrados com os dois triangulos (no VU1 um triangulo sem par conta como solto)
             arcQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], const uint32_t *, int mask) { if (mask == 3) f(k, cc, uu); });
             return;
@@ -1396,9 +1408,14 @@ private:
             return;
         }
 
-        if (s.type == FX_ARC || s.type == FX_ARC2) {   // fita com a cor de cada ponto (arcQuads), em triangulos com a diagonal da tira
+        if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {   // fita com a cor de cada ponto (arcQuads), em triangulos com a diagonal da tira
             rlBegin(RL_TRIANGLES);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
-            rlSetTexture(texFor(0));
+            const unsigned tex = texFor(0);
+            rlSetTexture(tex);
+            // corrente: o U vai de segInitU - 0,15 (n - 1) a segInitU (fora de 0..1) e o GS repete a ChainTex (a corda torcida da
+            // referencia); as texturas de particula ficam em CLAMP, entao REPEAT no S so durante este sistema
+            const bool repS = s.type == FX_CHAIN;
+            if (repS) rlTextureParameters(tex, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT);
             arcQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], const uint32_t col[2], int mask) {
                 if (fogged(view, c)) return;
                 static const int tri[2][3] = {{0, 1, 3}, {1, 3, 2}};
@@ -1412,6 +1429,7 @@ private:
                 }
             });
             rlEnd();
+            if (repS) { rlDrawRenderBatchActive(); rlTextureParameters(tex, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); }
             rlSetTexture(0);
             return;
         }
