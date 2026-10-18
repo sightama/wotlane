@@ -410,6 +410,12 @@ struct DrawItem {
     int16_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState; kGsAlphaNoTest = sem teste)
     bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
     bool lodX = false;   // dentro de um cross-fade de LOD (os dois LODs, inclusive o de fade 1): com o bit 0x4000 vai para a OT de alfa
+    // Luzes pontuais que tocam a esfera do objeto (Scene::objectPointLights, programa 0x748 do VU0): ptN > 0 troca o programa de luz
+    // pelo 0x15D8 do VU1. ptRel = -(posicao da luz no espaco do objeto), ptCol = cor, ptFall = falloff (PointLight +0x2C).
+    uint8_t ptN = 0;
+    float ptRel[3][3] = {};
+    float ptCol[3][3] = {};
+    float ptFall[3] = {};
 };
 
 struct Camera {
@@ -1383,6 +1389,7 @@ public:
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
     void collect(const Ram &ram, int maxLod = -1) {
         lights_ = readParaLights(ram);
+        pts_ = readPointLights(ram);
         fog_ = readFog(ram);
         items.clear();
         sky.clear();
@@ -2890,6 +2897,85 @@ private:
     }
     ParaLights lights_;   // luzes paralelas do ultimo collect (vertexRgb)
 
+    // Luzes pontuais (PointLights em pointLights 0x6DFCE0): o hier chama GetClosestPts, que poe na memoria do VU0 as ate 8 luzes ativas
+    // mais perto da camera (closest[] em +0x800, na ordem; posicao xyz + alcance em w a partir do q30, cor rgb + falloff em w a partir
+    // do q38) e o hierCacheForAsm grava a posicao da camera (viewGetTrans) no q28 e a contagem (+0x820) no scratchpad.
+    struct PointLightList { int n = 0; float pos[8][4] = {}; float col[8][4] = {}; float eye[3] = {}; };
+    static PointLightList readPointLights(const Ram &ram) {
+        PointLightList l;
+        constexpr uint32_t pl = wotm::sym::pointLights;
+        if (!ram.ok(pl, 0x8A0) || ram.u32(pl + 0x820) == 0) return l;
+        const uint32_t cs = ram.u32(addr::viewInfo);
+        if (!ram.ok(cs, 0x20)) return l;
+        for (int a = 0; a < 3; ++a) l.eye[a] = ram.f32(cs + 0x10 + 4 * a);
+        static const bool log = std::getenv("WOTM_PTLOG") != nullptr;
+        if (log) {
+            std::fprintf(stderr, "[ptl] count %u closest", ram.u32(pl + 0x820));
+            for (int k = 0; k < 8; ++k) std::fprintf(stderr, " %d", int32_t(ram.u32(pl + 0x800 + 4 * k)));
+            std::fprintf(stderr, " eye (%g %g %g)\n", l.eye[0], l.eye[1], l.eye[2]);
+            for (int i = 0; i < 32; ++i) {
+                const uint32_t p = pl + 0x40 * uint32_t(i);
+                if (!ram.u32(p)) continue;
+                std::fprintf(stderr, "[ptl] luz %d f38 %u f30 %u pos (%g %g %g) alcance %g cor (%g %g %g) falloff %g int %g\n", i, ram.u32(p + 0x38),
+                             ram.u32(p + 0x30), ram.f32(p + 0x10), ram.f32(p + 0x14), ram.f32(p + 0x18), ram.f32(p + 0x1C), ram.f32(p + 0x20),
+                             ram.f32(p + 0x24), ram.f32(p + 0x28), ram.f32(p + 0x2C), ram.f32(p + 0x34));
+            }
+        }
+        // closest[0] < 0: o GetClosestPts grava contagem 0 e sai sem limpar closest[1..7] (restos de quadros anteriores)
+        if (int32_t(ram.u32(pl + 0x800)) < 0) return l;
+        for (int k = 0; k < 8; ++k) {
+            const int32_t i = int32_t(ram.u32(pl + 0x800 + 4 * k));
+            if (i < 0 || i >= 32) continue;
+            const uint32_t p = pl + 0x40 * uint32_t(i);
+            for (int a = 0; a < 4; ++a) {
+                l.pos[l.n][a] = ram.f32(p + 0x10 + 4 * a);
+                l.col[l.n][a] = ram.f32(p + 0x20 + 4 * a);
+            }
+            ++l.n;
+        }
+        return l;
+    }
+    PointLightList pts_;   // do ultimo collect (objectPointLights)
+
+    // Luzes pontuais de um OBJECT, como o hierTraverseAsm e o programa 0x748 do VU0: so OBJECT comum (objType 0) com pointLight (0x80),
+    // com luzes no quadro e, dentro de um _cs, com ptLightMe (+0xA9). Com R = linhas 0-2 da matriz e T = linha 3 menos a camera (o hier
+    // empilha as matrizes relativas a camera), para cada luz da lista, na ordem, ate 3:
+    //   v = R^T (L - camera);  toca se |T + centro - v|^2 < alcance^2 + raio^2;  ptRel = T - v
+    // A conta mistura espacos (T nao e girado), como no jogo; com R = identidade e a posicao da luz no espaco do objeto.
+    void objectPointLights(const Ram &ram, uint32_t node, DrawItem &it) const {
+        it.ptN = 0;
+        if (!pts_.n) return;
+        const uint16_t f = ram.u16(node + 0xC);
+        if (!(f & 0x80) || (f & 0x60)) return;
+        if (cs_ && ram.s8(cs_ + 0xA9) == 0) return;
+        const M4 &m = it.m;
+        float T[3], c[3];
+        for (int a = 0; a < 3; ++a) {
+            T[a] = m.m[3][a] - pts_.eye[a];
+            c[a] = T[a] + ram.f32(node + 0x10 + 4 * a);
+        }
+        const float r = ram.f32(node + 0x1C);
+        for (int k = 0; k < pts_.n && it.ptN < 3; ++k) {
+            float d[3], v[3], s = 0.f;
+            for (int a = 0; a < 3; ++a) d[a] = pts_.pos[k][a] - pts_.eye[a];
+            for (int a = 0; a < 3; ++a) {
+                v[a] = m.m[a][0] * d[0] + m.m[a][1] * d[1] + m.m[a][2] * d[2];
+                s += (c[a] - v[a]) * (c[a] - v[a]);
+            }
+            static const bool log = std::getenv("WOTM_PTLOG") != nullptr;   // diagnostico: cada teste de esfera
+            if (log)
+                std::fprintf(stderr, "[ptl] no %x luz %d v (%g %g %g) T (%g %g %g) d2 %g lim %g\n", node, k, v[0], v[1], v[2], T[0], T[1], T[2], s,
+                             pts_.pos[k][3] * pts_.pos[k][3] + r * r);
+            if (!(s - (pts_.pos[k][3] * pts_.pos[k][3] + r * r) < 0.f)) continue;
+            const int j = it.ptN++;
+            for (int a = 0; a < 3; ++a) {
+                it.ptRel[j][a] = T[a] - v[a];
+                it.ptCol[j][a] = pts_.col[k][a];
+            }
+            it.ptFall[j] = pts_.col[k][3];
+        }
+    }
+
 public:
     // Neblina, como os programas de desenho do VU1 e o GS: por vertice das secoes com PRIM.FGE,
     //   F = clamp(fogBurnThru do OBJECT (+0x2C) + fogFA + fogFB / W, 0, fogMaxVal)   (W = linha 3 do worldToScreenMat . (p - olho))
@@ -2973,18 +3059,47 @@ public:
     }
 private:
 
-    struct ObjLight { bool lit = false; float spec = 0.f; };
-    // O programa do mapa de ambiente (DrawItem::env) nao aplica a luz paralela, mesmo com dirLight.
+    struct ObjLight { bool lit = false; float spec = 0.f; const DrawItem *pt = nullptr; };
+    // O programa do mapa de ambiente (DrawItem::env) nao aplica a luz paralela, mesmo com dirLight. O pktAddVu1ObjAsm escolhe o programa
+    // das luzes pontuais (0x15D8, tabela +0x16C) antes do da luz paralela: com luz pontual, a paralela nao entra.
     static ObjLight objectLight(const Ram &ram, const DrawItem &it) {
         const uint16_t f = ram.u16(it.node + 0xC);
         if (it.env) return {};
+        if (it.ptN) return {false, 0.f, &it};
         return {(f & 0x100) != 0, it.spec};
+    }
+
+    // Cor com luzes pontuais, como o programa 0x15D8 do VU1: p = posicao do vertice no espaco do objeto, n = normal crua / 128, e para
+    // cada luz k, d_k = p + ptRel_k (vertice menos luz) e
+    //   f_k = min(0,5; max(0, -d_k . n) * falloff_k / |d_k|^2)
+    //   cor = min(255, cor do vertice * vf31 + soma de cor_k * f_k)
+    // Sem luz paralela nem especular.
+    static void pointRgb(const DrawItem &it, const float vc[3], const Vtx &v, uint8_t out[3]) {
+        const float n[3] = {float(v.nx) / 128.f, float(v.ny) / 128.f, float(v.nz) / 128.f};
+        const float p[3] = {v.x, v.y, v.z};
+        float acc[3] = {vc[0], vc[1], vc[2]};
+        for (int k = 0; k < it.ptN; ++k) {
+            float d[3], d2 = 0.f, dot = 0.f;
+            for (int a = 0; a < 3; ++a) {
+                d[a] = p[a] + it.ptRel[k][a];
+                d2 += d[a] * d[a];
+                dot -= d[a] * n[a];
+            }
+            if (!(d2 > 0.f)) continue;
+            const float fk = std::min(0.5f, std::max(0.f, dot) * it.ptFall[k] / d2);
+            for (int c = 0; c < 3; ++c) acc[c] += it.ptCol[k][c] * fk;
+        }
+        for (int c = 0; c < 3; ++c) out[c] = uint8_t(std::min(255.f, std::max(0.f, acc[c])));
     }
 
     // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
     // iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
     void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
         const float vc[3] = {v.r * mul[0], v.g * mul[1], v.b * mul[2]};
+        if (ol.pt) {
+            pointRgb(*ol.pt, vc, v, out);
+            return;
+        }
         if (!ol.lit) {
             for (int c = 0; c < 3; ++c) out[c] = uint8_t(std::min(255.f, std::max(0.f, vc[c])));
             return;
@@ -3171,6 +3286,7 @@ private:
             objectUvOffset(ram, node, items.back().uvOff);
             objectColor(ram, node, items.back().color);
             objectEnv(ram, node, items.back());
+            objectPointLights(ram, node, items.back());
             break;
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 e TEST_1 dos filhos)
             const uint16_t gflags = ram.u16(node + 0xA);                                    // visual (bit 0), noFOV (bit 2)
