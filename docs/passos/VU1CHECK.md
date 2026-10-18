@@ -43,8 +43,6 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 <details>
 <summary>Em aberto</summary>
 
-Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inventário (direção de 2026-10-16; widescreen, HUD e fades já feitos; próximo: iluminação e bugs gráficos).
-
 **Inventário do port (o que a checagem diz que falta ou sobra; refaça com `tools\corpus.ps1 -Check` e as linhas `inv` do `menus.vu1snap` e das lutas):**
 - **Separador da tela dividida** (`Hud::dmaPacket`/`buildSeparator`, PATH3): só monta pacote com a tela dividida (`viewGetScreenDisplay` != 0, dois jogadores): uma faixa preta opaca (SPRITE sem ABE, cor 0/0/0/0x80) entre as vistas, pela fila do `gsPkt`. O nativo não tem tela dividida; fica para quando tiver (o `readScreenRect` recusa SPRITE sem ABE).
 
@@ -58,7 +56,6 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 
 **Fotos do dono (2026-10-17, `<runtime>\fotos\2026-10-17_171318`; ainda não investigadas):**
 - **Projétil do Magmo** (005, CANYON2): gera partículas gigantes, fora do lugar, de tamanho aparentemente errado e piscando (a captura de tela não pega direito o pisca).
-- **Pick-ups sem o tom esverdeado** (009, METRO): deveriam ficar esverdeados, assim como os monstros já ficam avermelhados ao levar dano.
 - **Plantboss** (013, 014, 015 e 025; 3-MILE): o projétil antes de se dividir (014), os menores logo depois (015) e o quadro em que nascem (025; no seguinte já explodem). Para análise; o dono não descreveu defeito.
 - **Para análise, sem defeito descrito:** 007 e 008 (METRO), 026 (SANFRAN, tanques contra naves).
 

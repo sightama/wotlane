@@ -1361,6 +1361,14 @@ public:
         return t.id;
     }
 
+    // colorQuad (+0x70) de _cs que o jogo muda entre o hier(v,0) e o fim do quadro, como o valor estava quando o hier desenhou. Caso
+    // conhecido: o pick-up que o monstro pode pegar. O rtMain chama LevelPickups::enableHighlights (pulsa o verde no colorQuad do _cs
+    // do pick-up destacado) antes do hier(v,0), e o Monster::update, dentro do TheGame::Update depois dele, chama computeHighlight, que
+    // volta o colorQuad a 1. A captura no fim do quadro so via o 1 (o carro nunca ficava verde). Preenchido pela captura ao vivo
+    // (hook do enableHighlights no runtime); vazio no viewer e no replay, que leem a RAM.
+    struct CsColorAtDraw { uint32_t cs; float q[4]; };
+    std::vector<CsColorAtDraw> csColorAtDraw;
+
     // Reune os objetos visiveis a partir de world->ep e das listas de CS.
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
     void collect(const Ram &ram, int maxLod = -1) {
@@ -2412,7 +2420,7 @@ public:
                 static const int ti = std::getenv("WOTM_TEXINFO") ? std::atoi(std::getenv("WOTM_TEXINFO")) : -1;
                 static int printed = 0;
                 static const int tiMax = std::getenv("WOTM_TEXINFO_N") ? std::atoi(std::getenv("WOTM_TEXINFO_N")) : 6;
-                if (printed < tiMax && ((ti >= 0 && int(objectTexId(ram, it.node, slot)) == ti) || (ti == -2 && !md->sprites.empty()) || (ti == -3 && it.blend != kGsAlphaNormal && !t.empty()) || (ti == -4 && it.aref == kGsAlphaNoTest))) {   // -2: todos os OBJECT sprite; -3: malhas fora da mistura comum; -4: sem teste de alfa
+                if (printed < tiMax && ((ti >= 0 && int(objectTexId(ram, it.node, slot)) == ti) || (ti == -2 && !md->sprites.empty()) || (ti == -3 && it.blend != kGsAlphaNormal && !t.empty()) || (ti == -4 && it.aref == kGsAlphaNoTest) || (ti == -5 && it.color[1] > 1.05f && it.color[0] < 0.95f))) {   // -2: todos os OBJECT sprite; -3: malhas fora da mistura comum; -4: sem teste de alfa; -5: cor esverdeada (pick-up destacado)
                     ++printed;
                     std::fprintf(stderr, "[texinfo] tex %u node %x blend %d abe %d color %.3f %.3f %.3f %.3f fade %.3f gsA %d key %llx tris %zu sprites %zu tex0 %llx aref %d\n", objectTexId(ram, it.node, slot), it.node, it.blend,
                                  int(md->abe), it.color[0], it.color[1], it.color[2], it.color[3], it.fade, int(gsA), (unsigned long long)o.key, t.size(),
@@ -2796,11 +2804,15 @@ private:
     void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
         const bool quad = cs_ && ram.u32(0x007B3040) != 0;
         const bool amb = ram.u32(wotm::sym::viewAmbientChanged) != 0;
+        const float *atDraw = nullptr;   // colorQuad da hora do hier (csColorAtDraw), no lugar do que sobrou na RAM
+        if (quad)
+            for (const CsColorAtDraw &c : csColorAtDraw)
+                if (c.cs == cs_) { atDraw = c.q; break; }
         for (int k = 0; k < 4; ++k) {
             out[k] = ram.f32(node + 0x40 + 4 * k);
             const int16_t idx = ram.s16(node + 0x34 + 2 * k);
             if (animVal_ && idx >= 0 && k != 2) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
-            if (quad) out[k] *= ram.f32(cs_ + 0x70 + 4 * k);
+            if (quad) out[k] *= atDraw ? atDraw[k] : ram.f32(cs_ + 0x70 + 4 * k);
             if (amb && k < 3) out[k] *= ram.f32(wotm::sym::viewAnimAmbientRed + 4 * uint32_t(k));
             if (!std::isfinite(out[k])) out[k] = 1.f;
         }

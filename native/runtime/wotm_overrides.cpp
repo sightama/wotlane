@@ -36,6 +36,7 @@ void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado 
 void wotmShellFade(int start, int step, bool accumulate);
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
+void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
 void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPolys, lido na entrada do dmaData   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
@@ -673,6 +674,20 @@ namespace
         g_origPolysDma(rdram, ctx, runtime);
     }
 
+    // Tom verde do pick-up que o monstro pode pegar: o enableHighlights o grava no colorQuad do _cs antes do hier(v,0), e o
+    // computeHighlight (Monster::update, depois do hier) o volta a 1 antes da captura. Na saida, wotmPickupHighlights anota o valor
+    // (Scene::csColorAtDraw).
+    constexpr uint32_t kEnableHighlights = wotm::fn::enableHighlights__12LevelPickupsi;
+    PS2Runtime::RecompiledFunction g_origEnableHighlights = nullptr;
+
+    void enableHighlightsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const bool entry = ctx->pc == kEnableHighlights;
+        g_origEnableHighlights(rdram, ctx, runtime);
+        if (entry)
+            wotmPickupHighlights(rdram);
+    }
+
     // Mesmo comportamento da original (`jr $ra; lw $v0, gp_rel(D_006F8DB8)`), exceto o limite acima.
     void timerGetUpdateRate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -800,6 +815,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kShellFadeScreen, &shellFadeScreenTapped);
     if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
         runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
+    if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
+        runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
         int v[5], n = 0;
