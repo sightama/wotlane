@@ -23,9 +23,9 @@ class Launcher : Form
     // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     static readonly Flag[] Flags = {
-        new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Lock-on alternado no L1 (setas trocam o alvo)",
-            "O lock-on deixa de ser segurado: um toque no L1 trava a mira no monstro mais perto e ela fica travada ate o proximo toque. " +
-            "Travado, esquerda/direita do direcional trocam o alvo. Defesa no R1, andar de lado no L2/R2 (controle na configuracao " +
+        new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Lock-on alternado no R1 (setas trocam o alvo)",
+            "O lock-on deixa de ser segurado: um toque no R1 trava a mira no monstro mais perto e ela fica travada ate o proximo toque. " +
+            "Travado, esquerda/direita do direcional trocam o alvo. Defesa no L1, andar de lado no L2/R2 (controle na configuracao " +
             "padrao). Vale para os jogadores humanos; a IA nao muda. Desmarcado: os botoes do jogo original."),
 
         new Flag("Execucao", ":Auto", true, "Roteiro automatico ate a fase", "-Auto 1: o pad do roteiro joga ate uma fase (~50 s). Desmarcado: voce joga com o teclado."),

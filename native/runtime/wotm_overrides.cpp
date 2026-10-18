@@ -1023,7 +1023,7 @@ namespace
     // (0 L1, 1 L2, 3 R1, 4 R2, 0xC/0xD esquerda/direita do direcional ou do analogico). Na configuracao 0 o jogo usa L1+R1 para
     // o lock-on, L1 ou R1 sozinho para andar de lado (o valor do byte vai para PadEntry +0x1A/+0x1C), R2 para a defesa (e o
     // contra-ataque) e L2 para a camera. Na entrada do interpretInputs os bytes sao trocados: L2 fisico -> byte 0 e R2 -> byte 3
-    // (andar de lado), R1 -> byte 4 (defesa), L2 do jogo fica solto; o L1 fisico so alterna o lock-on (lido aqui, nao pelo jogo).
+    // (andar de lado), L1 -> byte 4 (defesa), L2 do jogo fica solto; o R1 fisico so alterna o lock-on (lido aqui, nao pelo jogo).
     // Com o lock-on ligado, esquerda/direita do direcional (lidas cruas no scePadRead, porta = jogador) trocam o alvo
     // (m_pinTarget: o updateLock mantem o alvo enquanto ele continua alvejavel) para o proximo monstro vivo a esquerda ou a
     // direita na tela, e nao movem o boneco; o L2/R2 entra como esquerda/direita, que travado o jogo ja transforma em andar de
@@ -1044,7 +1044,7 @@ namespace
         bool held = false;       // lock-on fisicamente segurado no quadro anterior (borda)
         bool on = false;         // estado alternado
         bool forged = false;     // contadores regravados (realA/realB voltam antes do proximo updateHistory)
-        bool remap = false;      // botoes do mod neste quadro (configuracao 0): o lock-on e o L1 fisico (lockHeld)
+        bool remap = false;      // botoes do mod neste quadro (configuracao 0): o lock-on e o R1 fisico (lockHeld)
         bool lockHeld = false;
         bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
         uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
@@ -1182,10 +1182,10 @@ namespace
         }
         uint8_t *b = rdram + gp, saved[0x10];
         std::memcpy(saved, b, sizeof saved);
-        t->lockHeld = saved[kPadL1] != 0;
+        t->lockHeld = saved[kPadR1] != 0;
         b[kPadL1] = saved[kPadL2];                // andar de lado: L2 e R2
         b[kPadR1] = saved[kPadR2];
-        b[kPadR2] = saved[kPadR1] ? 0xFF : 0;     // defesa: R1
+        b[kPadR2] = saved[kPadL1] ? 0xFF : 0;     // defesa: L1
         b[kPadL2] = 0;
         const uint8_t dirs = slot < 2 ? g_padDir[slot] : 0;
         for (int i = 0; i < 2; ++i)
@@ -1474,7 +1474,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             {
                 runtime.registerFunction(kInterpretInputs, &interpretInputsLockToggle);
                 runtime.registerFunction(kScePadRead, &padReadLockToggle);
-                std::fprintf(stderr, "[wotm] lock-on no L1, defesa no R1, andar de lado no L2/R2, setas trocam o alvo (configuracao 0)\n");
+                std::fprintf(stderr, "[wotm] lock-on no R1, defesa no L1, andar de lado no L2/R2, setas trocam o alvo (configuracao 0)\n");
             }
         }
         else
