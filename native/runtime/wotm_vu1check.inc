@@ -67,7 +67,8 @@ struct WTri { float p[3][3]; uint64_t tex; uint8_t slot; bool cull; float u[3], 
 struct NatObj {
     uint32_t node = 0, span = 0;
     uint16_t tex = 0;
-    bool skinned = false, skip = false;   // skip: ceu/icones (o nativo os desenha em outro lugar de proposito)
+    bool skinned = false, skip = false;   // skip: icones (o nativo os desenha em outro lugar de proposito)
+    bool sky = false;                     // ceu (Scene::sky): comparado como os outros; no mapa de donos sai como "ceu"
     uint16_t hudId = 0;                    // elemento de HUD (Scene::hud, desenhado por cima da cena): id do objeto; 0 = nao e HUD
     int items = 0;
     uint32_t badVerts = 0;                 // vertices nao finitos (invariante)
@@ -315,7 +316,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
     g_scene->collect(ram);
     auto t1 = std::chrono::steady_clock::now();
     g_walkMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    auto add = [&](const std::vector<wotm::DrawItem> &list, bool skip) {
+    auto add = [&](const std::vector<wotm::DrawItem> &list, bool skip, bool sky = false) {
         for (const wotm::DrawItem &it : list) {
             const uint32_t pp = ram.u32(it.node + 4) & 0x0FFFFFFF;
             const wotm::MeshData *md = g_scene->mesh(ram, it.node);
@@ -334,8 +335,9 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
                 o.hudId = it.hudId;
             }
             o.skip = o.skip || skip;
+            o.sky = o.sky || sky;
             ++o.items;
-            // os objetos skip (ceu, icones) tambem ganham triangulos: a comparacao por objeto os ignora, o inventario os conta
+            // os objetos skip (icones) tambem ganham triangulos: a comparacao por objeto os ignora, o inventario os conta
             uint64_t tex[32] = {};   // por slot: a textura com que o nativo desenha (Scene::textureId -> texKey/objectTex0)
             for (uint32_t s = 0; s < 32; ++s)
                 if (md->slotMask & (1u << s)) {
@@ -379,7 +381,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
         }
     };
     add(g_scene->items, false);
-    add(g_scene->sky, true);
+    add(g_scene->sky, false, true);   // ceu em skyCs->trans como o hierTraceSky: entra na comparacao
     add(g_scene->overlay, true);
     add(g_scene->hp, false);
     add(g_scene->hpOverlay, true);
@@ -2001,8 +2003,8 @@ void attributePixels(const Image &diff, int W, int H)
         if (r.path == 2 && screenFbp(r.fbp)) ref.rect(ref.owner(5, r.path, r.kind == 6 ? 6 : 3), r.x0, r.y0, r.x1, r.y1);
     for (const auto &kv : g_nats[0]) {
         const NatObj &o = kv.second;
-        if (o.hudId || o.tris.empty()) continue;   // HUD: depois das particulas (abaixo); ceu/icones entram (kind 6; o ceu nativo e centrado na camera, posicao aproximada)
-        const uint16_t id = nat.owner(o.skip ? 6 : 1, kv.first, o.tex);
+        if (o.hudId || o.tris.empty()) continue;   // HUD: depois das particulas (abaixo); ceu/icones entram (kind 6)
+        const uint16_t id = nat.owner((o.skip || o.sky) ? 6 : 1, kv.first, o.tex);
         for (const Tri &t : project(o.tris, g_cam[0], kv.first)) nat.tri(id, t.x, t.y);
     }
     if (!g_fxNats.empty())

@@ -622,7 +622,7 @@ public:
     // Corte por esfera contra a vista do jogo, como o hierTraverseAsm (Scene::outOfView); o viewer com camera livre o desliga.
     bool fovCull = true;
     std::vector<DrawItem> items;
-    std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, centrados na camera)
+    std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, sem profundidade, em skyCs->trans)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
     std::vector<DrawItem> hud;       // elementos de HUD (ids 0x1C20..0x2133): por cima da cena, sem profundidade, depois dos icones (DrawItem::hudId = id do objeto)
     // Lista de alta prioridade (CsPool::m_HPActiveList; hier(v, 1) -> hierTraceHPCsList), fora o HUD: moldura dos dialogos (shell->m_cs610,
@@ -1429,12 +1429,14 @@ public:
             const uint32_t ep = ram.u32(wc);
             if (ram.ok(ep)) walk(ram, ep, ident(), 0);
         }
-        // ceu da vista 0: skyCs/skyCs2/skyClouds de worldCtx[0] (+4/+8/+0xC); hierTraceSky so olha o epNode e desenha no olho
+        // ceu da vista 0: skyCs/skyCs2/skyClouds de worldCtx[0] (+4/+8/+0xC). O hierTraceSky usa o trans do _cs como qualquer objeto
+        // (hierCsUpdate), nao o olho: o trans so muda pelo viewSetSkyTrans, que o hierSetCamera chama depois de passar por um no de
+        // camera do hier. Nos menus isso e todo quadro (trans = olho); na luta o ceu fica onde a ultima camera de locator o deixou e a
+        // camera do jogo anda em volta dele (paralaxe do anel de montanhas, tex 108; docs/investigacoes/2026-10-17/05_tex108.md).
         {
             std::vector<DrawItem> world;
             world.swap(items);
-            const GameCamera gc = readGameCamera(ram, 0);
-            for (uint32_t off : {4u, 8u, 0xCu}) drawCs(ram, ram.u32(addr::worldCtx + off), false, gc.ok ? gc.pos : nullptr);
+            for (uint32_t off : {4u, 8u, 0xCu}) drawCs(ram, ram.u32(addr::worldCtx + off), false);
             sky.swap(items);
             items.swap(world);
         }
@@ -2147,7 +2149,7 @@ public:
 
     void draw(const Ram &ram, bool wire = false) {
         const bool useShader = beginShader(ram, wire);
-        rlDisableDepthTest();   // o ceu e desenhado primeiro, centrado no olho, sem profundidade
+        rlDisableDepthTest();   // o ceu e desenhado primeiro, sem profundidade
         drawList(ram, sky, wire);
         rlDrawRenderBatchActive();
         rlEnableDepthTest();

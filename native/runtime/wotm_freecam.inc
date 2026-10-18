@@ -113,16 +113,16 @@ static View update(const wotm::GameCamera &gc)
     return v;
 }
 
-// Pausado: tira da cena o que o jogo prende na frente da camera dele e leva o ceu (desenhado no olho) para a pose
+// Pausado: tira da cena o que o jogo prende na frente da camera dele. O ceu fica onde esta: o jogo o desenha em skyCs->trans, fixo
+// no mundo, nao no olho.
 static void applyToScene(wotm::Scene &scene, const wotm::GameCamera &gc, const WotmFreeCamPose &p)
 {
+    (void)gc;
+    (void)p;
     scene.hud.clear();
     scene.hp.clear();
     scene.hpOverlay.clear();
     scene.overlay.clear();
-    const float d[3] = {p.pos[0] - gc.pos[0], p.pos[1] - gc.pos[1], p.pos[2] - gc.pos[2]};
-    for (auto &it : scene.sky)
-        for (int i = 0; i < 3; ++i) it.m.m[3][i] += d[i];
 }
 
 static wotm::GameCamera camera(const wotm::GameCamera &gc, const WotmFreeCamPose &p)
