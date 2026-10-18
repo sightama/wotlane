@@ -59,7 +59,6 @@ Não corrigir sem perguntar ao dono qual atacar. A ordem de ataque é a do inven
 **Fotos do dono (2026-10-17, `<runtime>\fotos\2026-10-17_171318`; ainda não investigadas):**
 - **Projétil do Magmo** (005, CANYON2): gera partículas gigantes, fora do lugar, de tamanho aparentemente errado e piscando (a captura de tela não pega direito o pisca).
 - **Pick-ups sem o tom esverdeado** (009, METRO): deveriam ficar esverdeados, assim como os monstros já ficam avermelhados ao levar dano.
-- **Ícone do cubo de invisibilidade** (012, AIRPORT; outra vista, com a `004304`/001).
 - **Plantboss** (013, 014, 015 e 025; 3-MILE): o projétil antes de se dividir (014), os menores logo depois (015) e o quadro em que nascem (025; no seguinte já explodem). Para análise; o dono não descreveu defeito.
 - **Para análise, sem defeito descrito:** 007 e 008 (METRO), 026 (SANFRAN, tanques contra naves).
 
