@@ -1117,6 +1117,38 @@ public:
                 y = (view.oy[0] * q[0] + view.oy[1] * q[1] + view.oy[2] * q[2] + view.oy[3]) * iz;
             };
             auto off = [&](size_t i, float o[3]) {
+                if (s.type == FX_STRIPE) {
+                    // Junta do microprograma do stripe (0x1708, rotina 0x1F70/0x2118), no plano da tela com o y corrigido pela proporcao
+                    // (o mesmo que x/z, y/z da vista): d1 = atual - anterior, d2 = proximo - atual (nas pontas, o vizinho que falta e o
+                    // reflexo 2*ponta - vizinho), u = d/|d|, p(u) = (u.y, -u.x) e, pelo lado da curva (sinal de d1 x d2),
+                    //   v = p(u1) + p(u2) + (u1 - u2)   se d1.x*d2.y - d2.x*d1.y >= 0, senao   p(u1) + p(u2) - (u1 - u2)
+                    // e a ponta abre v * meia-largura / 2 (numa reta, |v| = 2). Numa curva fechada a ponta abre quase ao longo do
+                    // caminho; o nativo usava a perpendicular a (proximo - anterior), e os rastros em zigue-zague do ExploSmokeTrail
+                    // saiam deslocados ate ~16 px (checagem VU1 x nativo: 88% dos quadrados casados).
+                    // O fantasma das pontas (2 * ponta - vizinho) e feito nas coordenadas homogeneas, antes da divisao por W: como a
+                    // projecao e afim antes dela, e o reflexo no mundo, projetado (refletir na tela mudava direcao e largura da ponta).
+                    const size_t last = pts.size() - 1;
+                    if (last == 0) return false;
+                    float xc, yc, xp, yp, xn, yn;
+                    scr(pts[i].p, xc, yc);
+                    auto ghost = [&](size_t end, size_t nb, float &gx, float &gy) {
+                        float g[3];
+                        for (int a = 0; a < 3; ++a) g[a] = 2.f * pts[end].p[a] - pts[nb].p[a];
+                        scr(g, gx, gy);
+                    };
+                    if (i > 0) scr(pts[i - 1].p, xp, yp); else ghost(0, 1, xp, yp);
+                    if (i < last) scr(pts[i + 1].p, xn, yn); else ghost(last, last - 1, xn, yn);
+                    const float d1x = xc - xp, d1y = yc - yp, d2x = xn - xc, d2y = yn - yc;
+                    const float l1 = std::sqrt(d1x * d1x + d1y * d1y), l2 = std::sqrt(d2x * d2x + d2y * d2y);
+                    if (!(l1 > 1e-9f) || !(l2 > 1e-9f)) return false;
+                    const float u1x = d1x / l1, u1y = d1y / l1, u2x = d2x / l2, u2y = d2y / l2;
+                    const float sg = (d1x * d2y - d2x * d1y) >= 0.f ? 1.f : -1.f;
+                    const float vx = u1y + u2y + sg * (u1x - u2x), vy = -u1x - u2x + sg * (u1y - u2y);
+                    // mesmo sentido da formula antiga numa reta (cantos 0/3 de um lado, 1/2 do outro)
+                    const float nx = -0.5f * vx * pts[i].hw, ny = -0.5f * vy * pts[i].hw;
+                    for (int a = 0; a < 3; ++a) o[a] = view.right[a] * nx + view.up[a] * ny;
+                    return true;
+                }
                 float xa, ya, xb, yb;
                 scr(pts[i > 0 ? i - 1 : 0].p, xa, ya); scr(pts[std::min(i + 1, pts.size() - 1)].p, xb, yb);
                 float nx = -(yb - ya), ny = xb - xa;
