@@ -593,6 +593,38 @@ inline void readScreenPolys(const Ram &ram, std::vector<TextQuad> &out) {
     }
 }
 
+// Um quadrado do ScreenPolys pela chamada que o monta, sem ler s_polyBuffer: na entrada do polyBuildPrim(src, x, y, pd, pkt) refaz o
+// resolveFX (fx da fonte e do quadrado: centro, espelho em x a partir da borda direita da vista, troca de u e de v; posicao relativa
+// ao canto da vista corrente) e o sprite que ele grava (cor da fonte; V = 0x80 - v). Fonte invalida ou pd fora da RAM: false.
+inline bool screenPolyFromCall(const Ram &ram, int src, int x, int y, uint32_t pd, TextQuad &t) {
+    if (src < 0 || src >= int(ram.u32(sym::s_numSourceObjects)) || src >= 8 || !ram.ok(pd & 0x1FFFFFFFu, 0x24)) return false;
+    pd &= 0x1FFFFFFFu;
+    const uint32_t so = sym::s_sourceObjects + 0x20u * uint32_t(src);
+    const uint32_t view = ram.u32(sym::viewCurView);
+    const uint32_t def = view < 5 ? ram.u32(addr::viewInfo + 0x14 * view + 4) & 0x1FFFFFFFu : 0;
+    if (!ram.ok(def, 0x20)) return false;
+    const int cx = int(ram.u32(def + 0x18)), cy = int(ram.u32(def + 0x1C)), w = ram.u16(def + 4), h = ram.u16(def + 6);
+    auto in = [&](int i) { return int(ram.u32(pd + 4 * uint32_t(i))); };   // x0, y0, x1, y1, u0, v0, u1, v1
+    const int sfx = ram.u16(so + 0x1C), pfx = ram.u16(pd + 0x20);
+    const int fx = (sfx & (0x2 | 0x8)) ^ ((sfx & 0x10) | pfx);
+    if (fx & 0x10) { x -= (in(2) - in(0)) / 2; y -= (in(3) - in(1)) / 2; }
+    const int ox = (fx & 0x8) ? cx + w / 2 - (x + (in(2) - in(0))) : x + (cx - w / 2), oy = y + (cy - h / 2);
+    const int u0 = (fx & 0x2) ? in(6) : in(4), u1 = (fx & 0x2) ? in(4) : in(6);
+    const int v0 = (fx & 0x4) ? in(7) : in(5), v1 = (fx & 0x4) ? in(5) : in(7);
+    const uint32_t gu0 = uint32_t(u0 * 16), gv0 = uint32_t((0x80 - v0) * 16), gu1 = uint32_t(u1 * 16), gv1 = uint32_t((0x80 - v1) * 16);
+    const uint32_t gx0 = uint32_t((in(0) + ox) * 16), gy0 = uint32_t((in(1) + oy) * 16), gx1 = uint32_t((in(2) + ox) * 16), gy1 = uint32_t((in(3) + oy) * 16);
+    constexpr float kOx = 2048.f - 320.f, kOy = 2048.f - 112.f;   // como readScreenPolys
+    t = TextQuad{};
+    t.r = ram.u8(so + 0x18); t.g = ram.u8(so + 0x19); t.b = ram.u8(so + 0x1A); t.a = ram.u8(so + 0x1B);
+    t.u0 = float(gu0 & 0x3FFF) / 16.f; t.v0 = float(gv0 & 0x3FFF) / 16.f;
+    t.u1 = float(gu1 & 0x3FFF) / 16.f; t.v1 = float(gv1 & 0x3FFF) / 16.f;
+    t.x0 = float(gx0 & 0xFFFF) / 16.f - kOx; t.y0 = float(gy0 & 0xFFFF) / 16.f - kOy;
+    t.x1 = float(gx1 & 0xFFFF) / 16.f - kOx; t.y1 = float(gy1 & 0xFFFF) / 16.f - kOy;
+    const uint32_t obj = ram.u32(so + 0x14) & 0x1FFFFFFFu;   // _hierobject: TEX0 em +0x70 (o polyInitPacket o copia para o A+D)
+    t.tex0 = ram.ok(obj, 0x78) ? uint64_t(ram.u32(obj + 0x70)) | (uint64_t(ram.u32(obj + 0x74)) << 32) : 0;
+    return true;
+}
+
 // Texto do jogo pelas chamadas da fonte (common/font), sem ler o fontPacket: os ganchos (wotm_overrides.cpp) seguem o que o jogo
 // manda montar e refazem cada glifo com a mesma conta do fontBuildPrim, a partir do estado da fonte (fonts[2], 0x38 cada: celula do
 // atlas em +0/+2, tamanho do glifo no atlas em +4/+6, tamanho na tela em +8/+0xA, cursor em +0x10/+0x12, cor em +0x18) e da vista

@@ -50,7 +50,7 @@ void wotmLoadFreeze(bool on);   // wotm_live.inc: carga da fase (LoadLevelFiles 
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
-void wotmScreenPolys(const uint8_t *rdram);   // wotm_live.inc: HUD do ScreenPolys, lido na entrada do dmaData   // wotm_live.inc: Shell::FadeScreen rodando (a apresentacao le o pacote dele ao vivo)
+void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -779,16 +779,16 @@ namespace
         g_origRtMain(rdram, ctx, runtime);
     }
 
-    // HUD do ScreenPolys (icone de vida do Hud::drawHealthIcon): o dmaData manda os pacotes de s_polyBuffer e zera numPolys; na
-    // entrada os quadrados do quadro ainda estao contados (wotm::readScreenPolys).
-    constexpr uint32_t kScreenPolysDmaData = wotm::fn::dmaData__11ScreenPolysv;
-    PS2Runtime::RecompiledFunction g_origPolysDma = nullptr;
+    // HUD do ScreenPolys (icone de vida do Hud::drawHealthIcon): um quadrado por polyBuildPrim(src, x, y, pd, pkt), refeito pelo
+    // nativo a partir dos argumentos (wotm::screenPolyFromCall), sem ler s_polyBuffer.
+    constexpr uint32_t kPolyBuildPrim = wotm::fn::polyBuildPrim__FiiiRQ211ScreenPolys8PolyDataP6QwData;
+    PS2Runtime::RecompiledFunction g_origPolyBuild = nullptr;
 
-    void screenPolysDmaTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    void polyBuildPrimTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == kScreenPolysDmaData)
-            wotmScreenPolys(rdram);
-        g_origPolysDma(rdram, ctx, runtime);
+        if (ctx->pc == kPolyBuildPrim)
+            wotmScreenPoly(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)), static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7));
+        g_origPolyBuild(rdram, ctx, runtime);
     }
 
     // Saida do hier(0, 0): o desenho nativo copia a cena aqui (wotmCaptureScene), com o estado que a travessia acabou de mandar ao
@@ -991,8 +991,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kLoadLevelFiles, &loadLevelFilesTapped);
         runtime.registerFunction(kRtMain, &rtMainTapped);
     }
-    if ((g_origPolysDma = runtime.lookupFunction(kScreenPolysDmaData)))
-        runtime.registerFunction(kScreenPolysDmaData, &screenPolysDmaTapped);
+    if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
+        runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
         runtime.registerFunction(kHier, &hierTapped);
     if (g_origHier && (g_origTheGameUpdate = runtime.lookupFunction(kTheGameUpdate)))

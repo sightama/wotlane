@@ -371,8 +371,8 @@ static std::vector<wotm::ScreenRect> g_pendingRects;
 // Por fade pendente: 0 = mandado direto (uiFadeScreen), 1 = na fila do gsPkt, 2 = fila ja despachada (DmaGsPktQueue). No
 // fontDmaFontData, os de estado 2 ficam sob o texto (ScreenRect::underText).
 static std::vector<uint8_t> g_pendingState;
-// HUD do ScreenPolys do quadro em montagem: lido na entrada do ScreenPolys::dmaData (wotmScreenPolys), que zera numPolys; a captura
-// o junta ao instantaneo (o takeSnapshot na captura ja nao o ve).
+// HUD do ScreenPolys desde a ultima captura: um quadrado por polyBuildPrim (wotmScreenPoly, wotm::screenPolyFromCall); a captura o
+// passa ao instantaneo.
 static std::vector<wotm::TextQuad> g_pendingPolys;
 // colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
 static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
@@ -518,10 +518,11 @@ void wotmFontDma(const uint8_t *rdram)
     wotm_live::g_textSent.swap(q);
     wotm_live::g_textHooked.store(true, std::memory_order_relaxed);
 }
-void wotmScreenPolys(const uint8_t *rdram)
+void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd)
 {
-    if (rdram && wotm_live::g_pendingPolys.size() < 256)
-        wotm::readScreenPolys(wotm::Ram{rdram, PS2_RAM_SIZE}, wotm_live::g_pendingPolys);
+    wotm::TextQuad t;
+    if (rdram && wotm_live::g_pendingPolys.size() < 256 && wotm::screenPolyFromCall(wotm::Ram{rdram, PS2_RAM_SIZE}, src, x, y, pd, t))
+        wotm_live::g_pendingPolys.push_back(t);
 }
 void wotmShellFade(int start, int step, bool accumulate)
 {
@@ -614,13 +615,13 @@ void wotmCaptureFrame(const uint8_t *rdram)
         sn.fx = cap.fx.systems;
         sn.flares = cap.fx.flares;
         sn.sprites = cap.sprites;
-        sn.screenPolys.clear();   // o hier vem antes do ScreenPolys::dmaData: os quadrados do quadro chegam pelo gancho (polys)
-        wotm::readScreenPolys(ram, sn.screenPolys);
+        sn.screenPolys.clear();   // os quadrados do quadro chegam pelo gancho do polyBuildPrim (polys)
         sn.g = ram.u32(wotm::sym::g_frame);
     } else {   // quadro sem hier(0, 0) (filme, carga): tudo de agora, como antes
         cap.csColorAtDraw = std::move(csColor);
         cap.collect(ram);
         sn = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
+        sn.screenPolys.clear();   // idem (o takeSnapshot le o s_polyBuffer, que e do replay)
     }
     // posicoes, idades e pacotes das particulas deste instante: a apresentacao desenha depois, com o particleMove seguinte ja
     // rodando (contagem do instantaneo com dados vivos = o fecho do pacote lido como particula; 09_magmo_impacto.md)
@@ -1011,7 +1012,7 @@ void wotmFontSetTexId(const uint8_t *, uint32_t) {}
 void wotmFontColor(const uint8_t *, int) {}
 void wotmFontGlyph(const uint8_t *, int, int) {}
 void wotmFontDma(const uint8_t *) {}
-void wotmScreenPolys(const uint8_t *) {}
+void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
 void wotmShellFade(int, int, bool) {}
 void wotmLoadFreeze(bool) {}
 void wotmCaptureFadeStep(const uint8_t *) {}
