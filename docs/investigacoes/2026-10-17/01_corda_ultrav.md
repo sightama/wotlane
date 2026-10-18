@@ -3,7 +3,7 @@
 Fotos `<runtime>\fotos\2026-10-17_224038\foto_001` e `foto_002` (VEGAS, `SHOGUN0`/`SHOGUN1`). Refeitas com
 `ps2EntryRunner --vu1cmp <cópia> --dump <prefixo>` numa pasta de rascunho (cópias dos `.vu1snap`, já apagadas).
 
-## Resultado (2026-10-17, corrigido; falta conferir ao vivo)
+## Resultado (2026-10-17, corrigido; conferido ao vivo pelo dono)
 
 Feito em `native/wotm_fx.hpp` pela alternativa sem refatorar do passo 2: `FX_CHAIN = 12` ("corrente") e o `arcQuads` com um modo
 corrente (cabeçalho em `pos − 0x4C`, 2 cores em `pos − 0x28`, sem subdivisão nem leitura do `w` dos elos); `forEachQuad` e `draw` tratam
@@ -21,7 +21,7 @@ o tipo 12 como o arco. A medição corrigiu três pontos da receita abaixo:
 Checagem: foto 002, fx 82 de 0/12 para **10/12** casados; foto 001, 6/8; a corrente recolhida (fx 83) sem nada, como no VU1. A corda
 torcida aparece igual à referência (`docs/screenshots/2026-10-17/2026-10-17_corda_ultrav_corrigida.png`). Corpus contra
 `resumo_2026-10-17_232701.csv`: nada piorou. Foto 002 guardada no corpus como `ultrav_corda`. O dump da checagem (`fxp`) agora grava os
-pontos de sistemas sem `vel`/`age` (a corrente). Falta: ver ao vivo o golpe do Ultra-V e um Congar com as correntes esticadas.
+pontos de sistemas sem `vel`/`age` (a corrente). Conferido ao vivo pelo dono em 2026-10-17: funcionou.
 
 ## Conclusão
 
