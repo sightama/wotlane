@@ -3,7 +3,7 @@
 ## Direção (decidida em 2026-10-09, confirmada em 2026-10-16): port primeiro
 O objetivo continua sendo um port nativo de PC fácil de modar. A base é o jogo **recompilado** (PS2Recomp, fora do repo) mais a camada nativa deste repo (`native/`), e a decompilação é a
 camada legível que substitui, por *hook*, só as funções que importam para modar. Consequências práticas:
-- **O port vem antes da decomp.** Próximo: iluminação e bugs gráficos **na ordem do inventário** da checagem (`passos/VU1CHECK.md`, "Inventário do port"),
+- **O port vem antes da decomp.** Próximo: iluminação (hoje o nativo só tem a luz direcional; nenhuma luz pontual) e bugs gráficos **na ordem do inventário** da checagem (`passos/VU1CHECK.md`, "Inventário do port"),
   com `tools\corpus.ps1 -Check` antes e depois de cada mudança em `native/` (fluxo no `CLAUDE.md`, "Fluxo do port"). O runtime cobaia (equivalentes dentro do runtime) está parado, incompleto
   (`passos/NATIVO.md`, "Runtime cobaia").
 - **Decomp só na superfície de mod:** `Shell::Load*`, `MonsterParse`, câmera. **Byte match não é requisito por função.** `equivalent` é suficiente; `matched` quando sai barato; o `gate.sh`
@@ -32,8 +32,6 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
    `sh tools/wsl/scoreall.sh <TU...>` (pontua com `-DNON_MATCHING`), `nm_wrap.py <arquivo> <simbolo> "<nota>" [Classe::metodo]` se não bater.
    Rascunhos de toda a fila de uma vez: `sh tools/m2c_batch.sh` (`build/m2c/`). No fim da TU: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU>`. Detalhes em `passos/FERRAMENTAS.md`.
 6. Antes de mexer em header compartilhado: `sh tools/wsl/scoreall.sh <todos os TUs de src/game> > ~/base.txt`; depois comparar com `diff`. Rodar `gate.sh`.
-
-Lista legível do estado (bugs, investigações, o que falta), escrita com o dono: [SNAPSHOT.md](SNAPSHOT.md).
 
 ## Índice dos detalhes (`docs/passos/`)
 - [NATIVO.md](passos/NATIVO.md): `native/` (raylib), texturas/paletas, desenho ao vivo, monstros skinned, LOD, partículas/efeitos, sombras, física com `dt` no runtime, hooks de host, vigia, partida direta (`WOTM_MATCH`), lote, runtime cobaia, tabela de variáveis `WOTM_*`.
