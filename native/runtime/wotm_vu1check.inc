@@ -55,6 +55,7 @@ struct Tri {
     uint8_t c[3][4] = {};
     uint64_t tex0 = 0;   // TEX0 inteiro (so no VU1: TCC/TFX)
     uint16_t alpha = kAlphaUnknown;
+    uint32_t test = 0xFFFFFFFFu;   // TEST do contexto (so no VU1; 0xFFFFFFFF = nao visto)
     bool abe = false, fge = false;
     uint8_t f[3] = {255, 255, 255};   // F da neblina por vertice (VU1: campo F do XYZF2; nativo: Scene::fogF com a camera da projecao)
 };
@@ -80,7 +81,7 @@ struct Cam { float W[4][4]; float eye[3]; };
 // O VU1 manda cada particula como dois triangulos (quadrado) ou como um SPRITE do GS (retangulo); o nativo monta os mesmos quadrados
 // (Particles::forEachQuad, e Scene::spriteCorners nos destroços) e eles sao projetados na tela (collectFx).
 constexpr uint32_t kFx0 = wotm::fxaddr::fx, kFxEnd = wotm::fxaddr::fx + wotm::fxaddr::count * wotm::fxaddr::stride;
-struct Quad { float x[4], y[4]; uint8_t n; bool fge = false; };   // n = 4 (quadrado) ou 3 (triangulo sem par, so no VU1); fge: PRIM.FGE (VU1)
+struct Quad { float x[4], y[4]; uint8_t n; bool fge = false; int idx = -1; };   // n = 4 (quadrado) ou 3 (triangulo sem par, so no VU1); fge: PRIM.FGE (VU1); idx: particula (nativo, so para o dump)
 
 // Primitivo da referencia para o inventario (linhas "[vu1check] inv"): o que a referencia desenha fora do caminho 1 (PATH2: DIRECT do
 // VIF1; PATH3: canal GIF), e os SPRITE do VU1, com a origem na RAM quando se conhece (PATH2: trecho da cadeia DMA; PATH3: so quando o
@@ -102,6 +103,7 @@ struct FxNat {
     std::vector<Quad> quads[kFxCams];   // por camera
     Cam cams[kFxCams] = {};
     std::vector<std::array<float, 10>> raw;   // so para o dump: pos (4), vel (3), idade, minSize, maxSize de cada particula
+    std::vector<uint32_t> rawColor;           // so para o dump: a cor nativa (Particles::colorAt) de cada particula
     float prevMat[16] = {}, curMat[16] = {};   // so para o dump: prevViewMat (+0x2EC0, no pacote) e worldToScreenMat crus
 };
 using FxMap = std::map<uint32_t, FxNat>;   // por indice em fx[]
@@ -234,8 +236,8 @@ void collectFx(const uint8_t *rdram, FxMap &out)
         const Cam &cam = cams[ci];
         wotm::FxView view = fxView(cam);
         wotm::Particles::setFog(ram, view, cam.W[3], cam.eye);   // o nativo descarta as particulas com F < 1, como o VU1
-        auto add = [&](FxNat &s, const float c[4][3]) {
-            Quad q{{}, {}, 4};
+        auto add = [&](FxNat &s, const float c[4][3], int idx = -1) {
+            Quad q{{}, {}, 4, false, idx};
             for (int k = 0; k < 4; ++k)
                 if (!projectPt(cam, c[k], q.x[k], q.y[k]) || !(q.x[k] >= kX0 && q.x[k] < kX1 && q.y[k] >= kY0 && q.y[k] < kY1)) return;
             s.quads[ci].push_back(q);
@@ -252,16 +254,25 @@ void collectFx(const uint8_t *rdram, FxMap &out)
                 const uint32_t pp = ram.u32(sys.base + wotm::fxoff::pos), vp = ram.u32(sys.base + wotm::fxoff::vel), ap = ram.u32(sys.base + wotm::fxoff::age);
                 const float mn = ram.f32(sys.base + wotm::fxoff::minSize), mx = ram.f32(sys.base + wotm::fxoff::maxSize);
                 if (ram.ok(pp, 16 * uint32_t(sys.n)) && ram.ok(vp, 16 * uint32_t(sys.n)) && ram.ok(ap, 2 * uint32_t(sys.n)))
-                    for (int k = 0; k < sys.n; ++k)
+                    for (int k = 0; k < sys.n; ++k) {
                         s.raw.push_back({ram.f32(pp + 16 * k), ram.f32(pp + 16 * k + 4), ram.f32(pp + 16 * k + 8), ram.f32(pp + 16 * k + 12),
                                          ram.f32(vp + 16 * k), ram.f32(vp + 16 * k + 4), ram.f32(vp + 16 * k + 8), float(int16_t(ram.u16(ap + 2 * k))), mn, mx});
+                        uint32_t col = wotm::Particles::colorAt(ram, sys.base, int16_t(ram.u16(ap + 2 * k)));
+                        if (sys.type == wotm::FX_STRITE) {   // alfa do strite como o desenho (Particles::drawSystem)
+                            float p[4], v[3], tri[4][3], ak = 1.f;
+                            for (int a = 0; a < 4; ++a) p[a] = ram.f32(pp + 16 * k + 4 * a);
+                            for (int a = 0; a < 3; ++a) v[a] = ram.f32(vp + 16 * k + 4 * a);
+                            if (wotm::Particles::striteTriangle(ram, sys.base, p, v, tri, &ak)) col = (col & 0x00FFFFFFu) | (uint32_t(float(col >> 24) * ak) << 24);
+                        }
+                        s.rawColor.push_back(col);
+                    }
                 const uint32_t pm = ram.u32(sys.base + 0x2EC0);
                 for (int k = 0; k < 16; ++k) {
                     if (ram.ok(pm, 64)) s.prevMat[k] = ram.f32(pm + 4 * k);
                     s.curMat[k] = ram.f32(wotm::addr::worldToScreenMat + 4 * k);
                 }
             }
-            wotm::Particles::forEachQuad(ram, sys, view, [&](int, const float c[4][3], const float[4][2]) { add(s, c); });
+            wotm::Particles::forEachQuad(ram, sys, view, [&](int i, const float c[4][3], const float[4][2]) { add(s, c, i); });
         }
         for (const wotm::Sprite &sp : g_scene->sprites) {   // destroços (frag): Scene::collectParticles, key = fx * 4096 + particula
             FxNat &s = out[sp.key >> 12];
@@ -465,6 +476,7 @@ uint32_t mscalTap(const uint32_t *srcs, uint32_t n, uint32_t prog, const uint8_t
 uint64_t g_tex0[2] = {kTexUnknown, kTexUnknown};
 uint16_t g_fbp[2] = {0xFFFF, 0xFFFF};   // FRAME_1/FRAME_2.FBP em vigor (A+D 0x4C/0x4D)
 uint16_t g_alpha[2] = {kAlphaUnknown, kAlphaUnknown};   // ALPHA_1/ALPHA_2 em vigor (A+D 0x42/0x43), byte baixo
+uint32_t g_test[2] = {0xFFFFFFFFu, 0xFFFFFFFFu};   // TEST_1/TEST_2 em vigor (A+D 0x47/0x48); 0xFFFFFFFF = nao visto
 // RGBAQ, ST e UV em vigor no GS (valem entre pacotes, como o TEX0)
 uint8_t g_rgba[4] = {0x80, 0x80, 0x80, 0x80};
 float g_s = 0.f, g_t = 0.f, g_q = 1.f;
@@ -514,6 +526,7 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
             t.fbp = g_fbp[ctx];
             t.tex0 = t0;
             t.alpha = g_alpha[ctx];
+            t.test = g_test[ctx];
             t.abe = (prim >> 6) & 1;
             t.fge = (prim >> 5) & 1;
             const bool fst = (prim >> 8) & 1;
@@ -590,6 +603,7 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
                     else if (reg == 0xE && (w[2] & 0xFF) == 0x02) { std::memcpy(&g_s, &w[0], 4); std::memcpy(&g_t, &w[1], 4); }
                     else if (reg == 0xE && (w[2] & 0xFF) == 0x03) g_uv = w[0] & 0x3FFF3FFF;
                     else if (reg == 0xE && ((w[2] & 0xFF) == 0x42 || (w[2] & 0xFF) == 0x43)) g_alpha[(w[2] & 0xFF) - 0x42] = uint16_t(w[0] & 0xFF);
+                    else if (reg == 0xE && ((w[2] & 0xFF) == 0x47 || (w[2] & 0xFF) == 0x48)) g_test[(w[2] & 0xFF) - 0x47] = w[0];
                     else if (reg == 0x0 || (reg == 0xE && (w[2] & 0xFF) == 0x00)) { prim = w[0] & 0x7FF; nv = 0; }
                     else if (reg == 0x6 || reg == 0x7) g_tex0[reg - 0x6] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
                     else if (reg == 0xE && ((w[2] & 0xFF) == 0x06 || (w[2] & 0xFF) == 0x07))
@@ -871,8 +885,16 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
             for (const Quad &q : vq)
                 std::fprintf(g_dump, "fx%u,vuq,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", sys, q.n, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2],
                              q.n == 4 ? q.x[3] : 0.f, q.n == 4 ? q.y[3] : 0.f);
+            if (vit != fxVu.end())   // atributos dos triangulos do VU1 (UV, cor, ALPHA, TEX0), na ordem do XGKICK
+                for (const auto &kv : vit->second)
+                    for (const Tri &t : kv.second.tris)
+                        std::fprintf(g_dump, "fx%u,vut,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%08x,%08x,%08x,%x,%d,%llx,%x,%u\n", sys,
+                                     t.x[0], t.y[0], t.x[1], t.y[1], t.x[2], t.y[2], t.u[0], t.v[0], t.u[1], t.v[1], t.u[2], t.v[2],
+                                     *(const uint32_t *)t.c[0], *(const uint32_t *)t.c[1], *(const uint32_t *)t.c[2], t.alpha, int(t.abe),
+                                     (unsigned long long)t.tex0, t.test, t.prog);
             for (const Quad &q : nq)
-                std::fprintf(g_dump, "fx%u,natq,4,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", sys, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2], q.x[3], q.y[3]);
+                std::fprintf(g_dump, "fx%u,natq,4,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d\n", sys, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2], q.x[3], q.y[3],
+                             q.idx);
             std::fprintf(g_dump, "fxsys,%u,%u,%u,%u,%d,%d\n", sys, chain, s.preset, s.type, s.n, cam);
             // camera da comparacao (W 4x4 por linhas, olho) e as particulas cruas: offline projeta qualquer ponto como o projectPt
             const Cam &c = s.cams[cam];
@@ -887,7 +909,7 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
             for (size_t k = 0; k < s.raw.size(); ++k) {
                 std::fprintf(g_dump, "fxp,%u,%zu", sys, k);
                 for (float f : s.raw[k]) std::fprintf(g_dump, ",%.6g", f);
-                std::fprintf(g_dump, "\n");
+                std::fprintf(g_dump, ",%08x\n", k < s.rawColor.size() ? s.rawColor[k] : 0u);
             }
         }
     }
@@ -1503,6 +1525,7 @@ void arm(const uint8_t *rdram, uint32_t frame)
     g_tex0[0] = g_tex0[1] = kTexUnknown;
     g_fbp[0] = g_fbp[1] = 0xFFFF;
     g_alpha[0] = g_alpha[1] = kAlphaUnknown;
+    g_test[0] = g_test[1] = 0xFFFFFFFFu;
     g_fogF = 255;
     g_chains = 0;
     g_walkMs = g_projMs = 0.0;

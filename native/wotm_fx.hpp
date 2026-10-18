@@ -26,7 +26,8 @@
 //     pos.w e o lado em unidades de mundo e o meio-lado nunca passa de metade da profundidade. Os bits baixos de pos.w indexam os cantos de
 //     UV (3 normal, 1 espelha U, 2 espelha V, 0 os dois); a cor sai da tabela pela idade, como no loadColors
 //   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
-//   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat)
+//   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat; ST que inscreve o disco no triangulo e
+//     alfa escalado pelo comprimento do rastro)
 // Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8; pos.w = lado e bits baixos = celula/espelhamento).
 // Sprine: Particles::sprineQuads (sprites ao longo da curva do microprograma). Ainda aproximado: as faixas (stripe, sweepTrail) ligam
 // particulas consecutivas; kite vira sprite (wake e dustTrail seguem o microprograma: wakeVu, dustTrailVu);
@@ -295,7 +296,10 @@ public:
     //   (fx, fy da matriz: 384 e 180,48 na luta); ponta recua 0,5 pos.w, base avanca 0,25 pos.w e a meia-largura e 0,433 pos.w
     //   (0,866 / 2), em unidades de vista: pixel = foco * deslocamento * pos.w / w.
     // Os tres pontos voltam ao mundo pela matriz atual, cada um na sua profundidade. c[0] = c[3] = ponta, c[1]/c[2] = base.
-    static bool striteTriangle(const Ram &ram, uint32_t b, const float p[4], const float v[3], float c[4][3]) {
+    // alphaK: o microprograma multiplica o alfa da cor por K / (len + K) (0x0DC0-0x0E30: ESQRT, DIV Q = vf24w / vf10x, MULq.w), com
+    // len = |B/w - A/w| na tela (Y escalado por fx/fy, vf24z) e K = 4 vf27x pos.w / B.w = 2 fx pos.w / B.w (vf27x = fx / 2; medido contra
+    // o VU1 na foto 2026-10-17_200206): rastro longo fica mais fraco.
+    static bool striteTriangle(const Ram &ram, uint32_t b, const float p[4], const float v[3], float c[4][3], float *alphaK = nullptr) {
         constexpr uint32_t kW2S = wotm::sym::worldToScreenMat, kEo = wotm::sym::worldCtx + 0x20;   // worldToScreenMat[0], worldCtx[0].eo (= -olho)
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
@@ -322,6 +326,10 @@ public:
         float mx = (bx - ax) / fx, my = (by - ay) / fy;
         const float ml = std::sqrt(mx * mx + my * my);
         if (!(ml > 1e-9f)) return false;
+        if (alphaK) {
+            const float len = ml * fx, k = 2.f * fx * p[3] / B[3];
+            *alphaK = len + k > 0.f ? k / (len + k) : 1.f;
+        }
         mx /= ml; my /= ml;
         const float w = p[3], ka = 0.5f * w / A[3], kb = w / B[3];
         const float px[3] = {ax - ka * mx * fx, bx + kb * (0.25f * mx * fx - 0.4330127f * my * fx), bx + kb * (0.25f * mx * fx + 0.4330127f * my * fx)};
@@ -1249,14 +1257,21 @@ public:
             for (int k = 0; k < 4; ++k)
                 for (int a = 0; a < 3; ++a) c[k][a] = cpos[a] + ax[a] * sx[k] + ay[a] * sy[k];
             // O VU1 manda strite e wake como UM triangulo por particula (checagem VU1 x nativo); aqui o quad degenera (canto 3 = canto 0).
+            uv[0][0] = u0; uv[0][1] = v1; uv[1][0] = u1; uv[1][1] = v1;
+            uv[2][0] = u1; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
             if (s.type == FX_STRITE) {
                 float v[3];
                 V(i, v);
-                if (!striteTriangle(ram, b, p, v, c))   // sem a camera do jogo: ponta no meio dos cantos 0 e 3 (aproximacao antiga)
+                if (striteTriangle(ram, b, p, v, c)) {
+                    // ST do microprograma (checagem, foto 2026-10-17_200206): ponta (0,5; 1,5), base (1,366; 0) e (-0,366; 0). O triangulo
+                    // equilatero circunscreve o quadrado da textura: o disco fica inscrito (raio 0,5) e o resto cai fora de 0..1 (texturas de particula em CLAMP)
+                    uv[0][0] = uv[3][0] = 0.5f; uv[0][1] = uv[3][1] = 1.5f;
+                    uv[1][0] = 1.3660254f; uv[1][1] = 0.f;
+                    uv[2][0] = -0.3660254f; uv[2][1] = 0.f;
+                } else {   // sem a camera do jogo: ponta no meio dos cantos 0 e 3 (aproximacao antiga)
                     for (int a = 0; a < 3; ++a) c[0][a] = c[3][a] = cpos[a] - ax[a];
+                }
             }
-            uv[0][0] = u0; uv[0][1] = v1; uv[1][0] = u1; uv[1][1] = v1;
-            uv[2][0] = u1; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
             f(i, c, uv);
         }
     }
@@ -1278,7 +1293,7 @@ private:
             }
         Image img{px.data(), n, n, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         const Texture2D t = LoadTextureFromImage(img);
-        if (t.id) SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+        if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }   // CLAMP como as do jogo (strite usa UV fora de 0..1)
         blob_ = t.id;
         return blob_;
     }
@@ -1408,6 +1423,11 @@ private:
                 float p[3];
                 for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
                 c0 = wakeVu(ram, b, i, view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3]).rgba;
+            } else if (s.type == FX_STRITE && haveVel) {   // alfa escalado pelo comprimento do rastro (striteTriangle, alphaK)
+                float p[4], v[3], tri[4][3], k = 1.f;
+                for (int a = 0; a < 4; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
+                for (int a = 0; a < 3; ++a) v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a));
+                if (striteTriangle(ram, b, p, v, tri, &k)) c0 = (c0 & 0x00FFFFFFu) | (uint32_t(float(c0 >> 24) * k) << 24);   // FTOI0 trunca
             }
             const uint32_t c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
             for (int k = 0; k < 4; ++k) {

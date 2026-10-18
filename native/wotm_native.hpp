@@ -2145,7 +2145,11 @@ public:
         if (!wire) drawShadows(ram);
         // particulas por ultimo (testam profundidade, nao escrevem): destroços (drawSprites), depois os demais tipos na ordem de particleDraw
         if (!wire) drawSprites(ram);
+        // Teste de alfa das particulas: os pacotes translucidos nao mexem no TEST e herdam o 0x7000D (As > 0) do restoreScreenDrawEnv;
+        // os destroços trazem o proprio TEST e fecham com o setClosingContext (0x5004B: As >= 4). Medido pela checagem (TEST do XGKICK).
+        if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
         if (!wire) fx.draw(ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
+        if (!wire) setAlphaRef(kGsAlphaRef);
         if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas
         rlDrawRenderBatchActive();
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
