@@ -384,7 +384,7 @@ void collectNative(const uint8_t *rdram, NatMap &nat, const std::vector<uint32_t
             const uint32_t pp = ram.u32(it.node + 4) & 0x0FFFFFFF;
             const wotm::MeshData *md = g_scene->mesh(ram, it.node);
             if (!pp || !md || !md->valid) continue;
-            const uint32_t span = md->skinned ? 0x20000u : (md->qwc + 1) * 16u;
+            const uint32_t span = md->skinned ? std::max(md->bytes, 0x100u) : (md->qwc + 1) * 16u;
             if (only) {
                 const auto s = std::lower_bound(only->begin(), only->end(), pp);
                 if (s == only->end() || *s - pp >= span) continue;

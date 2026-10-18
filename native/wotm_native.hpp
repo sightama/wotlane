@@ -173,7 +173,8 @@ struct MeshData {
     std::vector<Vtx> tris;   // lista de triangulos (3 vertices por triangulo)
     std::vector<ObjSprite> sprites;   // secoes SPRITE (ObjSprite): voltadas para a camera, montadas no desenho
     uint32_t qwc = 0;
-    uint32_t sig = 0;        // assinatura barata para detectar RAM reaproveitada por outro nivel
+    uint32_t bytes = 0;      // skinned: do polyPkt ao fim do ultimo sub-pacote decodificado (o pacote do Goliath passa de 128 KB)
+    uint32_t sig = 0;       // assinatura barata para detectar RAM reaproveitada por outro nivel
     uint16_t texId = 0;
     bool valid = false;
     bool lowAlpha = false;   // algum vertice com alfa baixo (< 0x3C; 0x40 = opaco): nevoa/sombras, desenhado no passe translucido
@@ -382,7 +383,12 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
     uint32_t pp = ram.u32(node + 4) & 0x0FFFFFFF;
     if (!ram.ok(pp, 16)) return md;
     md.texId = ram.u16(node + 0x50);
-    for (int guard = 0; pp && guard < 256; ++guard) { md.curSub = uint8_t(guard); pp = decodePacket(ram, pp, md, guard == 0); }
+    const uint32_t start = pp;
+    for (int guard = 0; pp && guard < 256; ++guard) {
+        md.curSub = uint8_t(guard);
+        pp = decodePacket(ram, pp, md, guard == 0);
+        if (pp) md.bytes = pp - start;
+    }
     for (const Vtx &v : md.tris) if (v.a < 0x3C) { md.lowAlpha = true; break; }
     return md;
 }
