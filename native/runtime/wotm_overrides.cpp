@@ -1006,79 +1006,119 @@ namespace
 
 namespace
 {
-    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "Mods" do launcher). O jogo trava a mira enquanto o "lock-on segurado" do
-    // quadro esta ligado: PadFlags (Monster +0x5040) guarda 60 quadros de 0x5E bytes (o atual em +0x16F0, operator[](0)), e o u16
-    // em +0x32 do quadro atual e o lock-on ja resolvido pela configuracao de controle (updateInput{0,1,2}Config{CR,SR}; na CR,
-    // 1 com os dois botoes dele segurados). Monster::updateLock le esse campo e, desligado, solta o alvo (+0x6C04). Aqui, na saida
-    // do PadFlags::interpretInputs (que monta o quadro), um toque novo no lock-on liga ou desliga um estado por jogador humano
-    // (dono em PadFlags +0x1810, um dos m_numPlayers primeiros monstros do TheGame), e o campo passa a valer esse estado em todo quadro: tudo o que le o
-    // lock-on (updateLock, os estados que andam de lado olhando o alvo) ve o modo alternado. A IA nao muda.
-    constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
-    constexpr uint32_t kPadFlagsCur = 0x16F0u, kPadFlagsOwner = 0x1810u, kPadFlagsStride = 0x5Eu, kPadFlagsLock = 0x32u;
-    PS2Runtime::RecompiledFunction g_origInterpretInputs = nullptr;
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "Mods" do launcher). O lock-on do quadro (PadEntry +0x32) e decidido em
+    // updateInput{0,1,2}Config{CR,SR} a partir dos contadores de quadros segurados que o updateHistory{0,1,2} da mesma
+    // configuracao acabou de atualizar (PadFlags +0x1658 e +0x165E: ++ segurado, 0 solto). Na configuracao 0 trava com os dois
+    // acima de PadFlags +0x16C4 (um so anda de lado, PadEntry +0x1A/+0x1C); na 1 e na 2, com +0x1658 diferente de zero. A propria
+    // configuracao le o +0x32 logo em seguida para escolher o mapeamento do analogico e do direcional; por isso regravar so o
+    // +0x32 depois do interpretInputs deixava o boneco travado com o movimento de solto. Aqui, na saida do updateHistory, um
+    // toque novo no lock-on liga ou desliga um estado por jogador humano (dono em PadFlags +0x1810), e os contadores passam a
+    // valer "segurando" (ligado) ou "nao segurando" (desligado): o resto da configuracao, inclusive as combinacoes com o lock-on,
+    // ve exatamente o que veria com o botao segurado ou solto. Os contadores reais ficam guardados e voltam antes do proximo
+    // updateHistory, que conta a partir deles. A IA nao muda.
+    constexpr uint32_t kUpdateHistory[3] = {wotm::fn::updateHistory0__8PadFlagsR7GamePad, wotm::fn::updateHistory1__8PadFlagsR7GamePad,
+                                            wotm::fn::updateHistory2__8PadFlagsR7GamePad};
+    constexpr uint32_t kPadFlagsLockA = 0x1658u, kPadFlagsLockB = 0x165Eu, kPadFlagsHoldTweak = 0x16C4u, kPadFlagsOwner = 0x1810u;
+    PS2Runtime::RecompiledFunction g_origUpdateHistory[3] = {};
     struct LockToggle
     {
-        uint32_t pf = 0;      // PadFlags do jogador (0 = livre)
-        bool held = false;    // lock-on segurado no quadro anterior (borda)
-        bool on = false;      // estado alternado
+        uint32_t pf = 0;         // PadFlags do jogador (0 = livre)
+        uint32_t owner = 0;      // monstro dono (outro dono no mesmo PadFlags zera o estado)
+        bool held = false;       // lock-on fisicamente segurado no quadro anterior (borda)
+        bool on = false;         // estado alternado
+        bool forged = false;     // contadores regravados (realA/realB voltam antes do proximo updateHistory)
+        uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
     } g_lockToggle[4];
-    uint32_t g_iiRa = 0, g_iiPf = 0;
-    bool g_iiPending = false;
 
     bool ramOk(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
+    uint16_t rd16(uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + a, 2); return v; }
+    void wr16(uint8_t *rdram, uint32_t a, uint16_t v) { std::memcpy(rdram + a, &v, 2); }
 
-    void lockToggleApply(uint8_t *rdram, uint32_t pf)
+    LockToggle *lockToggleFind(uint32_t pf, bool create)
     {
-        if (!ramOk(pf, kPadFlagsOwner + 4u))
-            return;
+        for (LockToggle &e : g_lockToggle)
+            if (e.pf == pf)
+                return &e;
+        if (create)
+            for (LockToggle &e : g_lockToggle)
+                if (!e.pf)
+                {
+                    e = LockToggle{};
+                    e.pf = pf;
+                    return &e;
+                }
+        return nullptr;
+    }
+
+    void lockToggleApply(uint8_t *rdram, uint32_t pf, int config)
+    {
         const uint32_t owner = FAST_READ32(pf + kPadFlagsOwner);
         int slot = 0;
         if (!isPlayerMonster(rdram, owner, &slot))
             return;   // IA (o m_playerNum dela tambem nao e 0)
-        int32_t cur = static_cast<int32_t>(FAST_READ32(pf + kPadFlagsCur));
-        if (cur < 0 || cur >= 60)
-            return;
-        const uint32_t field = pf + static_cast<uint32_t>(cur) * kPadFlagsStride + kPadFlagsLock;
-        LockToggle *t = nullptr;
-        for (LockToggle &e : g_lockToggle)
-            if (e.pf == pf)
-                t = &e;
-        if (!t)
-            for (LockToggle &e : g_lockToggle)
-                if (!e.pf)
-                {
-                    t = &e;
-                    t->pf = pf;
-                    break;
-                }
+        LockToggle *t = lockToggleFind(pf, true);
         if (!t)
             return;
-        uint16_t raw = 0;
-        std::memcpy(&raw, rdram + field, 2);
-        const bool held = raw != 0;
+        if (t->owner != owner)
+        {
+            *t = LockToggle{};
+            t->pf = pf;
+            t->owner = owner;
+        }
+        const uint16_t a = rd16(rdram, pf + kPadFlagsLockA), b = rd16(rdram, pf + kPadFlagsLockB);
+        const int32_t tweak = static_cast<int32_t>(FAST_READ32(pf + kPadFlagsHoldTweak));
+        const uint16_t over = static_cast<uint16_t>(std::clamp<int32_t>(tweak + 1, 1, 0xFFFF));   // acima do limiar: trava
+        const uint16_t under = static_cast<uint16_t>(std::clamp<int32_t>(tweak, 0, 0xFFFF));
+        const bool held = config == 0 ? (a > tweak && b > tweak) : a != 0;
         if (held && !t->held)
         {
             t->on = !t->on;
             std::fprintf(stderr, "[lockon] jogador %d: %s\n", slot + 1, t->on ? "travado" : "solto");
         }
         t->held = held;
-        const uint16_t v = t->on ? 1u : 0u;
-        std::memcpy(rdram + field, &v, 2);
+        t->realA = a;
+        t->realB = b;
+        if (config == 0)
+        {
+            if (t->on)
+            {
+                wr16(rdram, pf + kPadFlagsLockA, std::max(a, over));
+                wr16(rdram, pf + kPadFlagsLockB, std::max(b, over));
+            }
+            else if (held)
+            {
+                wr16(rdram, pf + kPadFlagsLockA, std::min(a, under));   // os dois juntos, abaixo do limiar: nem trava nem anda de lado
+                wr16(rdram, pf + kPadFlagsLockB, std::min(b, under));
+            }
+        }
+        else if (t->on)
+            wr16(rdram, pf + kPadFlagsLockA, std::max<uint16_t>(a, 1));
+        else
+            wr16(rdram, pf + kPadFlagsLockA, 0);
+        t->fakeA = rd16(rdram, pf + kPadFlagsLockA);
+        t->fakeB = rd16(rdram, pf + kPadFlagsLockB);
+        t->forged = t->fakeA != a || t->fakeB != b;
     }
 
-    void interpretInputsLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    template <int N>
+    void updateHistoryLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == kInterpretInputs)
-        {
-            g_iiRa = GPR_U32(ctx, 31);
-            g_iiPf = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
-            g_iiPending = true;
-        }
-        g_origInterpretInputs(rdram, ctx, runtime);
-        if (!g_iiPending || ctx->pc != g_iiRa)
-            return;   // parou no meio (a retomada cai aqui de novo e termina o servico)
-        g_iiPending = false;
-        lockToggleApply(rdram, g_iiPf);
+        const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, ra = GPR_U32(ctx, 31);
+        const bool ok = ctx->pc == kUpdateHistory[N] && ramOk(pf, kPadFlagsOwner + 4u);
+        if (ok)
+            if (LockToggle *t = lockToggleFind(pf, false); t && t->forged)
+            {
+                // o updateHistory conta a partir dos contadores reais (se alguem os zerou no meio, fica o que ele gravou)
+                if (rd16(rdram, pf + kPadFlagsLockA) == t->fakeA && rd16(rdram, pf + kPadFlagsLockB) == t->fakeB)
+                {
+                    wr16(rdram, pf + kPadFlagsLockA, t->realA);
+                    wr16(rdram, pf + kPadFlagsLockB, t->realB);
+                }
+                t->forged = false;
+            }
+        g_origUpdateHistory[N](rdram, ctx, runtime);
+        if (ok && ctx->pc == ra)
+            lockToggleApply(rdram, pf, N);
     }
 }
 
@@ -1250,13 +1290,18 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "Mods" do launcher): um toque trava, outro solta
     if (const char *e = std::getenv("WOTM_LOCKTOGGLE"); e && *e && std::strcmp(e, "0") != 0)
     {
-        if ((g_origInterpretInputs = runtime.lookupFunction(kInterpretInputs)))
+        constexpr PS2Runtime::RecompiledFunction kHooks[3] = {&updateHistoryLockToggle<0>, &updateHistoryLockToggle<1>,
+                                                              &updateHistoryLockToggle<2>};
+        for (int i = 0; i < 3; i++)
+            g_origUpdateHistory[i] = runtime.lookupFunction(kUpdateHistory[i]);
+        if (g_origUpdateHistory[0] && g_origUpdateHistory[1] && g_origUpdateHistory[2])
         {
-            runtime.registerFunction(kInterpretInputs, &interpretInputsLockToggle);
+            for (int i = 0; i < 3; i++)
+                runtime.registerFunction(kUpdateHistory[i], kHooks[i]);
             std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE): um toque trava, outro solta\n");
         }
         else
-            std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::interpretInputs sem funcao no runtime\n");
+            std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
     }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
