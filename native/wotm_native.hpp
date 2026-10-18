@@ -404,6 +404,10 @@ struct DrawItem {
     float uvOff[2] = {0, 0};   // deslocamento do UV (qword 4 do cabecalho do VU1, somado ao UV normalizado): Scene::objectUvOffset
     float color[4] = {1, 1, 1, 1};   // multiplicador da cor do vertice (qword 5, vf31; sem o fade, que fica em `fade`): Scene::objectColor
     float spec = 0.f;  // especular do VU1 (qword 20) que vale para este objeto: Scene::walk (herdado do ultimo com specLightMe)
+    // Luzes paralelas no espaco do objeto (x32; colunas 0-2 e vetor-meio em [3]) quando o objeto fica abaixo de um SCALE que corrige a
+    // luz (Scene::lightScale): o hier nao gira o paraL, usa a tabela lightDir do nivel (q6-q8 do VU1). Sem isso, ownLight = false.
+    bool ownLight = false;
+    float lightObj[4][3] = {};
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
@@ -1406,6 +1410,7 @@ public:
         zmsk_ = false;
         lodX_ = false;
         spec_ = 0.f;
+        lightOwn_ = false;
         visited = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
         std::memset(byOp, 0, sizeof byOp);
@@ -2760,6 +2765,52 @@ private:
     bool lodX_ = false;    // DrawItem::lodX na descida
     float spec_ = 0.f;     // DrawItem::spec: o qword 20 que esta na memoria do VU1 neste ponto da ordem do hier
 
+    // Tabela de luz do nivel (lightDir, scratchpad 0x70001300 + 64 * nivel; q6-q8 do VU1): linhas = eixos do objeto, colunas = luzes
+    // 0-2 e vetor-meio, x32. Fora de um SCALE ela e o paraL levado pela matriz (o microprograma 0x1A8 do VU0 faz filho = M * pai), e o
+    // vertexRgb a reproduz com as linhas da matriz normalizadas. O hierScaleNode (flag +0xC = 0) e o hierAnimScaleNode (escala nao
+    // uniforme: |sx - sy| ou |sx - sz| >= 0,001) gravam outra coisa: diag(1/sx, 1/sy, 1/sz) * pai (mathfMulMatrix3x3, que so escreve
+    // xyz e deixa o w da matriz unitaria: vetor-meio 0, sem especular), cada coluna normalizada (mathfNormalizeColumns; norma < 1e-7
+    // vira (0, 0, 1)) e vezes 32. Com escala (1; 4; 5), as duas pecas 0x311 do Togera saiam 15 a 20 mais claras no nativo. Abaixo de
+    // um desses nos, lightOwn_ leva a tabela (lightObj_[luz][eixo]) e cada matriz local a gira como o 0x1A8.
+    bool lightOwn_ = false;
+    float lightObj_[4][3] = {};
+    struct LightScope {   // restaura a tabela de luz na saida do no
+        Scene &s;
+        bool own;
+        float l[4][3];
+        explicit LightScope(Scene &sc) : s(sc), own(sc.lightOwn_) { std::memcpy(l, sc.lightObj_, sizeof l); }
+        ~LightScope() { s.lightOwn_ = own; std::memcpy(s.lightObj_, l, sizeof l); }
+    };
+    void lightRotate(const M4 &local) {   // filho = local * pai (linhas de local = eixos do filho no espaco do pai)
+        if (!lightOwn_) return;
+        float o[4][3];
+        for (int i = 0; i < 4; ++i)
+            for (int r = 0; r < 3; ++r)
+                o[i][r] = local.m[r][0] * lightObj_[i][0] + local.m[r][1] * lightObj_[i][1] + local.m[r][2] * lightObj_[i][2];
+        std::memcpy(lightObj_, o, sizeof o);
+    }
+    void lightScale(const M4 &m, float sx, float sy, float sz) {   // m = matriz do pai (mundo)
+        float base[4][3];
+        if (lightOwn_) std::memcpy(base, lightObj_, sizeof base);
+        else   // a tabela do pai: paraL no espaco do pai (linhas de m normalizadas, como o vertexRgb)
+            for (int r = 0; r < 3; ++r) {
+                const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+                for (int i = 0; i < 4; ++i)
+                    base[i][r] = len > 1e-6f ? (m.m[r][0] * lights_.dir[i][0] + m.m[r][1] * lights_.dir[i][1] + m.m[r][2] * lights_.dir[i][2]) / len : 0.f;
+            }
+        const float s[3] = {sx, sy, sz};
+        for (int i = 0; i < 3; ++i) {
+            float v[3], n2 = 0.f;
+            for (int r = 0; r < 3; ++r) { v[r] = base[i][r] / s[r]; n2 += v[r] * v[r]; }
+            const float n = std::sqrt(n2);
+            if (!(n >= 1e-7f)) { v[0] = v[1] = 0.f; v[2] = 1.f; }
+            else for (float &x : v) x /= n;
+            for (int r = 0; r < 3; ++r) lightObj_[i][r] = 32.f * v[r];
+        }
+        lightObj_[3][0] = lightObj_[3][1] = lightObj_[3][2] = 0.f;
+        lightOwn_ = true;
+    }
+
     // O ctx de um GROUP (+4) e um pacote de estado do GS: tag A+D (NLOOP em +0x10, um registrador A+D) e os pares (dado, endereco) a
     // partir de +0x20; medidos: ALPHA_1 (0x42), TEST_1 (0x47) e ZBUF_1. Traduz para o estado dos filhos (-1 = ctx sem o registrador,
     // herda o do pai):
@@ -3068,14 +3119,15 @@ public:
     }
 private:
 
-    struct ObjLight { bool lit = false; float spec = 0.f; const DrawItem *pt = nullptr; };
+    // obj: luzes no espaco do objeto (DrawItem::lightObj) quando ele as tem; nulo = paraL girado pela matriz do objeto
+    struct ObjLight { bool lit = false; float spec = 0.f; const DrawItem *pt = nullptr; const float (*obj)[3] = nullptr; };
     // O programa do mapa de ambiente (DrawItem::env) nao aplica a luz paralela, mesmo com dirLight. O pktAddVu1ObjAsm escolhe o programa
     // das luzes pontuais (0x15D8, tabela +0x16C) antes do da luz paralela: com luz pontual, a paralela nao entra.
     static ObjLight objectLight(const Ram &ram, const DrawItem &it) {
         const uint16_t f = ram.u16(it.node + 0xC);
         if (it.env) return {};
         if (it.ptN) return {false, 0.f, &it};
-        return {(f & 0x100) != 0, it.spec};
+        return {(f & 0x100) != 0, it.spec, nullptr, it.ownLight ? it.lightObj : nullptr};
     }
 
     // Cor com luzes pontuais, como o programa 0x15D8 do VU1: p = posicao do vertice no espaco do objeto, n = normal crua / 128, e para
@@ -3118,14 +3170,18 @@ private:
             const float b[3] = {n[0], n[1], n[2]};
             for (int c = 0; c < 3; ++c) n[c] = std::trunc(b[0] * bone->m[0][c] + b[1] * bone->m[1][c] + b[2] * bone->m[2][c]);
         }
-        float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (o hier normaliza as colunas de lightDir)
-        for (int r = 0; r < 3; ++r) {
-            const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
-            if (len > 1e-6f)
-                for (int c = 0; c < 3; ++c) w[c] += n[r] * m.m[r][c] / len;
-        }
         float d[4];
-        for (int i = 0; i < 4; ++i) d[i] = std::max(0.f, (w[0] * lights_.dir[i][0] + w[1] * lights_.dir[i][1] + w[2] * lights_.dir[i][2]) / 4096.f);
+        if (ol.obj) {   // luzes ja no espaco do objeto (abaixo de um SCALE: Scene::lightScale), contra a normal do objeto
+            for (int i = 0; i < 4; ++i) d[i] = std::max(0.f, (n[0] * ol.obj[i][0] + n[1] * ol.obj[i][1] + n[2] * ol.obj[i][2]) / 4096.f);
+        } else {
+            float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (sem SCALE no caminho, a matriz e uma rotacao)
+            for (int r = 0; r < 3; ++r) {
+                const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+                if (len > 1e-6f)
+                    for (int c = 0; c < 3; ++c) w[c] += n[r] * m.m[r][c] / len;
+            }
+            for (int i = 0; i < 4; ++i) d[i] = std::max(0.f, (w[0] * lights_.dir[i][0] + w[1] * lights_.dir[i][1] + w[2] * lights_.dir[i][2]) / 4096.f);
+        }
         float s = d[3];
         for (int k = 0; k < 4; ++k) s *= s;   // ^16
         for (int c = 0; c < 3; ++c) {
@@ -3289,6 +3345,10 @@ private:
             // o especular da parte anterior do proprio monstro (checagem: ~10% dos vertices dele saiam mais escuros, so no cinza).
             if (ram.u16(node + 0xC) & 0x2000) spec_ = ram.f32(node + 0x6C);
             items.back().spec = spec_;
+            if (lightOwn_) {
+                items.back().ownLight = true;
+                std::memcpy(items.back().lightObj, lightObj_, sizeof lightObj_);
+            }
             items.back().aref = aref_;
             items.back().zmsk = zmsk_;
             items.back().lodX = lodX_;
@@ -3370,14 +3430,19 @@ private:
         }
         case 4: {                                                                           // ROTATE
             const CtxScope cs(*this, ram, ram.u32(node + 4));
-            kids(ram, node + 0x50, ram.u32(node + 8), mul(readM4(ram, node + 0x10), m), depth);
+            const LightScope ls(*this);
+            const M4 local = readM4(ram, node + 0x10);
+            lightRotate(local);
+            kids(ram, node + 0x50, ram.u32(node + 8), mul(local, m), depth);
             break;
         }
         case 30: {                                                                          // SCALE
             const CtxScope cs(*this, ram, ram.u32(node + 4));
+            const LightScope ls(*this);
+            const float sx = ram.f32(node + 0x20), sy = ram.f32(node + 0x24), sz = ram.f32(node + 0x28);
+            if (ram.u32(node + 0xC) == 0) lightScale(m, sx, sy, sz);   // hierScaleNode: com +0xC != 0 copia a tabela do pai
             kids(ram, node + 0x2C, ram.u32(node + 8),
-                 mul(mul(scaleM(ram.f32(node + 0x20), ram.f32(node + 0x24), ram.f32(node + 0x28)),
-                         translateM(ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18))), m), depth);
+                 mul(mul(scaleM(sx, sy, sz), translateM(ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18))), m), depth);
             break;
         }
         case 6: {                                                                           // SWITCH
@@ -3412,6 +3477,8 @@ private:
             if (atMat_ && idx < 4096 && ram.ok(atMat_ + idx * 64, 64)) local = readM4(ram, atMat_ + idx * 64);
             local.m[0][3] = local.m[1][3] = local.m[2][3] = 0.f; local.m[3][3] = 1.f;
             const CtxScope cs(*this, ram, ram.u32(node + 8));
+            const LightScope ls(*this);
+            lightRotate(local);
             kids(ram, node + 0xCC, ram.u32(node + 4), mul(local, m), depth);
             break;
         }
@@ -3430,6 +3497,8 @@ private:
             const M4 post = translateM(ram.f32(node + 0x30) + ram.f32(node + 0x50), ram.f32(node + 0x34) + ram.f32(node + 0x54),
                                        ram.f32(node + 0x38) + ram.f32(node + 0x58));
             const CtxScope cs(*this, ram, ram.u32(node + 8));
+            const LightScope ls(*this);
+            if (std::fabs(sx - sy) >= 0.001f || std::fabs(sx - sz) >= 0.001f) lightScale(m, sx, sy, sz);   // uniforme: copia a do pai
             kids(ram, node + 0x60, ram.u32(node + 4), mul(mul(mul(pre, scaleM(sx, sy, sz)), post), m), depth);
             break;
         }
