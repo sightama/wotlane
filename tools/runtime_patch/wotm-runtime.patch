@@ -731,6 +731,33 @@ index b1bb6d8..0c717fc 100644
          return true;
      }
  
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
+index d467c4b..ba6df64 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
+@@ -1080,14 +1080,20 @@ namespace ps2_stubs
+         setReturnU32(ctx, 0u);
+     }
+ 
++    // rand/srand da newlib do SDK (o do jogo): LCG de 32 bits, semente inicial 1, devolve 31 bits (RAND_MAX 0x7FFFFFFF).
++    // O std::rand() & 0x7FFF de antes dava 15 bits; quem usa os bits baixos como mantissa (mathfRandf: (rand() & 0x7FFFFF) | 1.0f)
++    // recebia so [0, 0.004) e os pedestres nasciam todos no mesmo ponto.
++    static uint32_t s_newlibRandNext = 1u;
++
+     void rand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        setReturnS32(ctx, std::rand() & 0x7FFF);
++        s_newlibRandNext = s_newlibRandNext * 1103515245u + 12345u;
++        setReturnS32(ctx, static_cast<int32_t>(s_newlibRandNext & 0x7FFFFFFFu));
+     }
+ 
+     void srand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        std::srand(getRegU32(ctx, 4));
++        s_newlibRandNext = getRegU32(ctx, 4);
+         setReturnS32(ctx, 0);
+     }
+ 
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 index 5658928..d8b3573 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
