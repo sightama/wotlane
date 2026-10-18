@@ -665,8 +665,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     DrawTexturePro(rt.texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
     EndBlendMode();
 
-    {   // contador de FPS (F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
-        static bool show = !wotm_live::g_hideFps;
+    {   // contador de FPS (desligado ao abrir; F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
+        static bool show = false;
         static uint32_t lastG = 0;
         static double lastT = 0.0;
         static int drawn = 0;
@@ -704,7 +704,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             drawn = 0;
             lastT = now;
         }
-        if (show)
+        if (show && !wotm_live::g_hideFps)
         {
             char line[128];
             std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps", gameFps, screenFps);
