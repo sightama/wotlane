@@ -181,6 +181,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_RES=<linhas>`, `WOTM_FULLSCREEN=1` | altura do quadro nativo (padrão 720; 224..4320; o PS2 mostra 448) / tela cheia sem borda; a janela abre no tamanho do quadro, reduzida para caber no monitor (launcher, grupo Vídeo) |
 | `WOTM_DISC=<pasta>`, `WOTM_ISO=<arquivo>` | forçam a origem dos arquivos do disco (`.RTX`, `.PSS`) em vez de `PS2X_CD_IMAGE`/pasta do ELF |
 | `WOTM_FMV_MUTE=1` | filmes sem áudio |
+| `WOTM_IRX=1` | carrega no IOP emulado os IRX que não são de som (SIO2MAN, PADMAN, MCMAN, MCSERV), como antes de 2026-10-18; sem ela nenhum IRX sobe (`FRONTEIRA.md`) |
 | `WOTM_MATCH=<jogador>,<ia>[,<ia>...],<fase>` (até 7 IAs), `WOTM_AIVSAI=1` | partida direta sem menu / o jogador também sob a IA (seção "partida direta") |
 | `WOTM_CLOAK=1` | liga o CLOAK no jogador em todo `Monster::update` (teste do mapa de ambiente, `VU1CHECK.md`); o mesmo que `WOTM_CHEATS=cloak` |
 | `WOTM_CHEATS=inv,stam\|furia,esp,cloak,deus,vencer=N` | trapaças do menu F1 ligadas desde o início; `vencer=N` derruba as IAs a cada N segundos (seção "menu de debug") |

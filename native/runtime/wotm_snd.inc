@@ -205,15 +205,20 @@ void unhandledCommand(uint8_t *, R5900Context *ctx, PS2Runtime *)
     setReturnS32(ctx, 0);
 }
 
-// sceSifLoadModule: com o som nativo, os IRX de som nao sobem para o IOP emulado
+// sceSifLoadModule: nenhum IRX sobe para o IOP emulado. Os de som sobram com o som nativo; os outros (SIO2MAN, PADMAN, MCMAN,
+// MCSERV) tambem, porque o lado do EE ja e atendido pelos stubs do runtime (scePad* le o teclado e o roteiro de pad, sceMc* grava
+// em arquivos do host, sceCd* le a ISO). Conferido em 2026-10-18: menu pelo roteiro de pad ate a luta e luta IA x IA, a 60 q/s
+// (docs/passos/FRONTEIRA.md). WOTM_IRX=1 volta a carregar os IRX que nao sao de som no IOP emulado.
 void loadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 {
     const char *path = reinterpret_cast<const char *>(rdram + (arg(ctx, 0) & PS2_RAM_MASK));
     std::string p(path, strnlen(path, 128));
     for (char &c : p) c = char(std::toupper(static_cast<unsigned char>(c)));
-    if (p.find("989SND") != std::string::npos || p.find("LIBSD") != std::string::npos || p.find("989ERR") != std::string::npos)
+    static const bool irx = std::getenv("WOTM_IRX") != nullptr;
+    const bool sound = p.find("989SND") != std::string::npos || p.find("LIBSD") != std::string::npos || p.find("989ERR") != std::string::npos;
+    if (!irx || sound)
     {
-        std::fprintf(stderr, "[snd] %s nao carregado (som nativo)\n", path);
+        std::fprintf(stderr, "[iop] %s nao carregado (%s)\n", path, sound ? "som nativo" : "stubs do runtime");
         setReturnS32(ctx, 0x100);   // id de modulo positivo = sucesso
         return;
     }

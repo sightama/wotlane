@@ -106,6 +106,7 @@ Um decomp-permuter deve resolver boa parte desses casos.
   o `configure.py` corrige os dois depois do split.
 
 ## Fronteira com o hardware (primeira passada)
+Visão dinâmica (o que roda por quadro no port e a ordem para tirar o código de emulador): `docs/passos/FRONTEIRA.md`.
 `tools/hw_boundary.py` gera `config/hw_boundary.csv` com, por TU, chamadas ao SDK, acessos a registradores
 (0x1000xxxx/0x1200xxxx), instruções VU0 (COP2), scratchpad e chamadas ao 989snd.
 - **VU0 macro-mode está em quase todo o código de jogo** (2.681 `lqc2`, 1.426 `sqc2`, `vmulax/vmadday/vmaddz`...):
