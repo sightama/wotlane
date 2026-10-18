@@ -1198,8 +1198,10 @@ namespace
             }
             t->dirHeld[i] = held;
         }
+        const uint32_t ra = GPR_U32(ctx, 31);
         g_origInterpretInputs(rdram, ctx, runtime);
-        std::memcpy(b, saved, sizeof saved);    }
+        if (ctx->pc == ra)   // fatia de tempo acabou no meio: o resto ainda le os bytes trocados (o loadPadInputs refaz todos)
+            std::memcpy(b, saved, sizeof saved);    }
 
     void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
