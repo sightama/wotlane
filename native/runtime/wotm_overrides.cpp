@@ -32,6 +32,7 @@ extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmCaptureScene(const uint8_t *rdram);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(0, 0)
 void wotmVu1SceneExit(const uint8_t *rdram);   // wotm_vu1check.inc: registro 'S' do instantaneo, no mesmo ponto
+void wotmFlareCapture(const uint8_t *rdram);   // wotm_live.inc: lens flare projetado e testado
 void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued);   // wotm_live.inc: fade do quadro, lido de um pacote GIF recem-montado
 void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do menu, lidas do pacote do letterboxDmaData
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
@@ -747,6 +748,19 @@ namespace
             hierSceneExit(rdram);
     }
 
+    // Lens flare: a lista fica pronta (projetada e testada) na saida do particleLensFlareRender. O main.cpp a copia depois do
+    // particleDraw, mas no quadro armado pela checagem (F8, WOTM_VU1CHECK) o DMA roda de verdade, o particleDraw espera e volta no
+    // meio, e aquela copia pegava a lista ainda em coordenadas de mundo (o quadro da foto saia sem flare). Esta vem depois e vale.
+    constexpr uint32_t kLensFlareRender = wotm::fn::particleLensFlareRender__FP6QwDataiPPUi;
+    PS2Runtime::RecompiledFunction g_origLensFlareRender = nullptr;
+    void lensFlareRenderTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = ctx->pc == kLensFlareRender ? GPR_U32(ctx, 31) : 0u;
+        g_origLensFlareRender(rdram, ctx, runtime);
+        if (ra && ctx->pc == ra)
+            wotmFlareCapture(rdram);
+    }
+
     constexpr uint32_t kTheGameUpdate = wotm::fn::Update__7TheGame;
     PS2Runtime::RecompiledFunction g_origTheGameUpdate = nullptr;
     void theGameUpdateTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -908,6 +922,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kHier, &hierTapped);
     if (g_origHier && (g_origTheGameUpdate = runtime.lookupFunction(kTheGameUpdate)))
         runtime.registerFunction(kTheGameUpdate, &theGameUpdateTapped);
+    if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
+        runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
