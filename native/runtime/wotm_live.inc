@@ -521,6 +521,29 @@ void wotmCaptureScene(const uint8_t *rdram)
     wotm_live::g_sceneFresh = true;
 }
 
+// Passo do Shell::FadeScreen com redesenho (b = true: hier(0, 0) e sceGsSyncV por passo, sem timerWaitForMinUpdateRate): publica a
+// cena desse hier sem desligar o fade (g_shellFade, que a apresentacao desenha por cima). Sem isso o fade-in da tela de carregamento
+// (DisplayLoadBackground) passava sem quadro nativo e o cartao LOAD so aparecia ja claro.
+void wotmCaptureFadeStep(const uint8_t *rdram)
+{
+    if (!wotm_live::g_sceneFresh || wotm_live::g_loadFreeze.load(std::memory_order_relaxed))
+        return;
+    wotm_live::g_sceneFresh = false;
+    wotm_live::Capture &c = wotm_live::capture();
+    if (!rdram || !c.on.load(std::memory_order_relaxed))
+        return;
+    wotm::Snapshot sn = std::move(wotm_live::g_sceneSnap);
+    sn.fx.clear();
+    sn.sprites.clear();
+    sn.flares = {};
+    sn.screenRects.clear();
+    sn.screenPolys.clear();
+    sn.g = wotm::Ram{rdram, PS2_RAM_SIZE}.u32(wotm::sym::g_frame);
+    std::lock_guard<std::mutex> lk(c.m);
+    c.snap = std::move(sn);
+    c.fresh = true;
+}
+
 void wotmCaptureFrame(const uint8_t *rdram)
 {
     // a copia do lens flare vale so para este quadro: o seguinte sem particleDraw (menu, LOAD) sai sem flares
@@ -932,5 +955,6 @@ void wotmFontSent() {}
 void wotmScreenPolys(const uint8_t *) {}
 void wotmShellFade(int, int, bool) {}
 void wotmLoadFreeze(bool) {}
+void wotmCaptureFadeStep(const uint8_t *) {}
 void wotmPickupHighlights(const uint8_t *) {}
 #endif

@@ -36,6 +36,7 @@ void wotmLetterbox(const uint8_t *rdram);   // wotm_live.inc: faixas pretas do m
 void wotmGsPktQueueSent();   // wotm_live.inc: a fila do gsPkt foi despachada (DmaGsPktQueue)
 void wotmFontSent();         // wotm_live.inc: o texto do quadro foi despachado (fontDmaFontData)
 void wotmShellFade(int start, int step, bool accumulate);
+void wotmCaptureFadeStep(const uint8_t *rdram);   // wotm_live.inc: cena de um passo do Shell::FadeScreen com redesenho
 void wotmLoadFreeze(bool on);   // wotm_live.inc: carga da fase (LoadLevelFiles ate o rtMain), a tela repete o ultimo quadro
 bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread do EE enquanto pausado
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
@@ -502,6 +503,10 @@ namespace
     // Na ultima volta ($s1 != 0, o beqz logo depois volta ao laco com 0) o Shell::FadeScreen acabou de escurecer a tela: capturar
     // ali desligaria o fade (wotmCaptureFrame) e mostraria a cena clara ate o proximo quadro. Fica sem captura, como antes.
     constexpr uint32_t kDialogLoopSyncVRa = wotm::fn::displayDialog__Fi + 0x7C4u;
+    // Os dois lacos do Shell::FadeScreen (passo com hier(0, 0) quando b = true; jal sceGsSyncV em +0x2A4 e +0x40C): wotmCaptureFadeStep
+    // publica a cena do passo, se houve hier, sem desligar o fade.
+    constexpr uint32_t kFadeStepSyncVRa[2] = {wotm::fn::FadeScreen__5ShellibRUiT3UcUcUcUcUcUc + 0x2ACu,
+                                              wotm::fn::FadeScreen__5ShellibRUiT3UcUcUcUcUcUc + 0x414u};
     void syncVTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kSceGsSyncV)
@@ -515,6 +520,8 @@ namespace
             }
             if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
                 wotmCaptureFrame(rdram);
+            else if (ra == kFadeStepSyncVRa[0] || ra == kFadeStepSyncVRa[1])
+                wotmCaptureFadeStep(rdram);
         }
         g_origSyncV(rdram, ctx, runtime);
     }
