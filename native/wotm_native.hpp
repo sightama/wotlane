@@ -757,6 +757,7 @@ public:
         fontTex_.clear();
         for (DustSrc &s : dustSrc_) s.ok = false;
         dustHash_ = 0;
+        fx.resetFlareDebounce();   // fracao visivel do quadro anterior e do nivel velho
     }
 
     // TEX0 do objeto (gsTexCtx[slot]); 0 quando o objeto nao tem textura ou a secao e kSlotNoTex

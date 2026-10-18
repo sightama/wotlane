@@ -416,7 +416,10 @@ public:
     // roda em outra thread e quase sempre a pega ja refeita pelo hier (em coordenadas de mundo, sem os flares de particula, que o
     // particleAddLensFlareToList so acrescenta dentro do particleDraw). O runtime chama captureFlares na thread do jogo logo depois do
     // particleDraw; o collect usa essa copia. Sem captura (viewer sobre dump) le a RAM e so desenha se a lista estiver projetada.
-    struct FlareSlot { std::mutex m; FlareFrame f; bool used = false; };
+    // A copia vale so para o quadro do particleDraw que a fez (fresh; o wotmCaptureFrame a consome com consumeFlares). Quadro sem
+    // particleDraw (menu, tela de carregamento) sai sem flares, como no PS2, onde o pacote so existe se o particleDraw o montou; antes
+    // a lista da ultima luta voltava na tela LOAD seguinte (luz verde/vermelha no centro na entrada da partida).
+    struct FlareSlot { std::mutex m; FlareFrame f; bool used = false, fresh = false; };
     static FlareSlot &flareSlot() { static FlareSlot s; return s; }
     static void captureFlares(const Ram &ram) {
         FlareFrame f;
@@ -425,13 +428,25 @@ public:
         std::lock_guard<std::mutex> g(s.m);
         s.f = std::move(f);
         s.used = true;
+        s.fresh = true;
     }
+    static void consumeFlares() {
+        FlareSlot &s = flareSlot();
+        std::lock_guard<std::mutex> g(s.m);
+        s.fresh = false;
+    }
+    void resetFlareDebounce() { flarePrev_.clear(); }
 
     void collectFlares(const Ram &ram) {
         {
             FlareSlot &s = flareSlot();
             std::lock_guard<std::mutex> g(s.m);
-            if (s.used) { flares = s.f; logFlares(); return; }
+            if (s.used) {   // ao vivo: sem particleDraw neste quadro, sem flares
+                if (s.fresh) flares = s.f;
+                else { flares.e.clear(); flares.nspr = 0; }
+                logFlares();
+                return;
+            }
         }
         readFlares(ram, flares);
         logFlares();

@@ -489,6 +489,8 @@ void wotmCaptureScene(const uint8_t *rdram)
 
 void wotmCaptureFrame(const uint8_t *rdram)
 {
+    // a copia do lens flare vale so para este quadro: o seguinte sem particleDraw (menu, LOAD) sai sem flares
+    struct ConsumeFlares { ~ConsumeFlares() { wotm::Particles::consumeFlares(); } } consumeFlares;
     wotm_live::Capture &c = wotm_live::capture();
     std::vector<wotm::ScreenRect> rects;
     rects.swap(wotm_live::g_pendingRects);
