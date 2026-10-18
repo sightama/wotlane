@@ -1185,8 +1185,10 @@ public:
             float p[4];
             P(i, p);
             if (!std::isfinite(p[0]) || !std::isfinite(p[3])) continue;
-            // microcodigo de sprites: meio-lado na tela = pos.w / 2 * foco / profundidade, limitado a foco / 2 (pos.w e o lado em mundo;
-            // medido em sprite e texSprite). Os outros tipos que caem aqui continuam com pos.w inteiro (nao conferidos).
+            // microcodigo de sprites (0x2C8) e texSprite (0xF18): meio-lado na tela = vf27.xy * pos.w / W, com vf27.xy = metade do foco
+            // (192; 90,24), limitado por MINI a vf17.xy = vf27.xy / 2 (96; 45,12 px). Em mundo: meio-lado = pos.w / 2 e teto = profundidade
+            // / 4 (com teto / 2 a explosao do Magmo e o WhiteExplosionFx saiam ate o dobro do tamanho; checagem: todos os quadrados do VU1
+            // com 192 x 90,25 px). Os outros tipos que caem aqui continuam com pos.w inteiro e teto / 2 (nao conferidos).
             const float depth = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
             if (s.type == FX_WAKE) {   // microprograma 0x3470 (wakeVu): o triangulo e o ST do pacote; o quad degenera (canto 3 = canto 0)
                 const WakeVu wv = wakeVu(ram, b, i, depth);
@@ -1199,7 +1201,8 @@ public:
                 f(i, c, uv);
                 continue;
             }
-            float half =(s.type == FX_SPRITE || s.type == FX_TEXSPRITE ? 0.5f : 1.f) * std::fabs(p[3]), cap = 0.5f;
+            const bool spr = s.type == FX_SPRITE || s.type == FX_TEXSPRITE;
+            float half = (spr ? 0.5f : 1.f) * std::fabs(p[3]), cap = spr ? 0.25f : 0.5f;
             uint32_t dustCell = 0;
             if (s.type == FX_DUSTTRAIL) {
                 const DustTrailVu d = dustTrailVu(ram, b, i, p[3], depth);
