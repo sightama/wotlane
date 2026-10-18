@@ -1432,6 +1432,57 @@ private:
         return f % frames;
     }
 
+public:
+    // Cor (RGBAQ do GS, 0x80 = 1,0) do quadrado i de forEachQuad como o drawSystem a desenha: col[0] nos cantos 0 e 1, col[1] nos 2 e 3
+    // (so as faixas mudam de uma ponta para a outra). Nao serve a arco, corrente e sprine (a cor sai de arcQuads/sprineQuads).
+    static void quadColor(const Ram &ram, const FxSystem &s, const FxView &view, int i, uint32_t col[2]) {
+        const uint32_t b = s.base;
+        const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age);
+        const bool haveVel = ram.ok(vel, 16 * uint32_t(s.n)), haveAge = ram.ok(age, 2 * uint32_t(s.n));
+        auto A = [&](int k) { return haveAge ? int(ram.s16(age + 2 * uint32_t(k))) : 0; };
+        // pedestres: vis.colorIndex e a propria cor RGBA (stampPacketInit a sobe byte a byte); numColors conta as variantes da folha
+        uint32_t c0 = s.type == FX_PEDS ? ram.u32(b + fxoff::colorIndex) : colorAt(ram, b, A(i));
+        if (s.type == FX_DUSTTRAIL) {   // cor e alfa do microprograma (dustTrailVu): a palavra de idade, nao a tabela de cores
+            float p[3];
+            for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
+            const float W = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
+            c0 = dustTrailVu(ram, b, i, ram.f32(pos + 16 * uint32_t(i) + 12), W).rgba;
+        } else if (s.type == FX_WAKE) {   // cor fixa do pacote e alfa pela curva do microprograma (wakeVu)
+            float p[3];
+            for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
+            c0 = wakeVu(ram, b, i, view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3]).rgba;
+        } else if (s.type == FX_STRITE && haveVel) {   // alfa escalado pelo comprimento do rastro (striteTriangle, alphaK)
+            float p[4], v[3], tri[4][3], k = 1.f;
+            for (int a = 0; a < 4; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
+            for (int a = 0; a < 3; ++a) v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a));
+            if (striteTriangle(ram, b, p, v, tri, &k)) c0 = (c0 & 0x00FFFFFFu) | (uint32_t(float(c0 >> 24) * k) << 24);   // FTOI0 trunca
+        }
+        col[0] = c0;
+        col[1] = isStrip(s.type) ? colorAt(ram, b, A(i + 1)) : c0;
+    }
+
+    // forEachQuad com a cor que o desenho usa em cada quadrado: emit(i, cantos, uv, cor dos cantos 0 e 1, cor dos cantos 2 e 3).
+    // Mesma geometria e mesmo descarte do forEachQuad (arco e corrente so com os dois triangulos). Serve a checagem VU1.
+    template <class F> static void forEachQuadColored(const Ram &ram, const FxSystem &s, const FxView &view, F &&emit) {
+        if (s.type == FX_LINE) return;
+        if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {
+            arcQuads(ram, s, view, [&](int k, const float c[4][3], const float uv[4][2], const uint32_t *col, int mask) {
+                if (mask == 3 && !fogged(view, c)) emit(k, c, uv, col[0], col[1]);
+            });
+            return;
+        }
+        if (s.type == FX_SPRINE) {
+            sprineQuads(ram, s, view, [&](int k, const float c[4][3], const float uv[4][2], uint32_t col) { if (!fogged(view, c)) emit(k, c, uv, col, col); });
+            return;
+        }
+        forEachQuad(ram, s, view, [&](int i, const float c[4][3], const float uv[4][2]) {
+            uint32_t col[2];
+            quadColor(ram, s, view, i, col);
+            emit(i, c, uv, col[0], col[1]);
+        });
+    }
+
+private:
     void drawSystem(const Ram &ram, const FxSystem &s, const TexFn &texture, const FxView &view) {
         const uint32_t b = s.base;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age);
@@ -1535,26 +1586,10 @@ private:
                 cur = tex;
                 open = true;
             }
-            // pedestres: vis.colorIndex e a propria cor RGBA (stampPacketInit a sobe byte a byte); numColors conta as variantes da folha
-            uint32_t c0 = s.type == FX_PEDS ? ram.u32(b + fxoff::colorIndex) : colorAt(ram, b, ag);
-            if (s.type == FX_DUSTTRAIL) {   // cor e alfa do microprograma (dustTrailVu): a palavra de idade, nao a tabela de cores
-                float p[3];
-                for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
-                const float W = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
-                c0 = dustTrailVu(ram, b, i, ram.f32(pos + 16 * uint32_t(i) + 12), W).rgba;
-            } else if (s.type == FX_WAKE) {   // cor fixa do pacote e alfa pela curva do microprograma (wakeVu)
-                float p[3];
-                for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
-                c0 = wakeVu(ram, b, i, view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3]).rgba;
-            } else if (s.type == FX_STRITE && haveVel) {   // alfa escalado pelo comprimento do rastro (striteTriangle, alphaK)
-                float p[4], v[3], tri[4][3], k = 1.f;
-                for (int a = 0; a < 4; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
-                for (int a = 0; a < 3; ++a) v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a));
-                if (striteTriangle(ram, b, p, v, tri, &k)) c0 = (c0 & 0x00FFFFFFu) | (uint32_t(float(c0 >> 24) * k) << 24);   // FTOI0 trunca
-            }
-            const uint32_t c1 = strip ? colorAt(ram, b, A(i + 1)) : c0;
+            uint32_t col[2];
+            quadColor(ram, s, view, i, col);
             for (int k = 0; k < 4; ++k) {
-                vcolor(k < 2 ? c0 : c1);
+                vcolor(col[k < 2 ? 0 : 1]);
                 rlTexCoord2f(uv[k][0], uv[k][1]);
                 rlVertex3f(c[k][0], c[k][1], c[k][2]);
             }

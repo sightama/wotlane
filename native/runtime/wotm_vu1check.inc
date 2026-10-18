@@ -58,6 +58,7 @@ struct Tri {
     uint32_t test = 0xFFFFFFFFu;   // TEST do contexto (so no VU1; 0xFFFFFFFF = nao visto)
     bool abe = false, fge = false;
     uint8_t f[3] = {255, 255, 255};   // F da neblina por vertice (VU1: campo F do XYZF2; nativo: Scene::fogF com a camera da projecao)
+    int32_t refTex = -1;   // so no VU1: textura lida da VRAM do GS na hora do desenho (indice em g_refTex; -1 = nao lida)
 };
 
 // Triangulo nativo em coordenadas de mundo; env/envK/nw: mapa de ambiente (o UV sai no project, Scene::envUv com a camera da projecao)
@@ -82,7 +83,9 @@ struct Cam { float W[4][4]; float eye[3]; };
 // O VU1 manda cada particula como dois triangulos (quadrado) ou como um SPRITE do GS (retangulo); o nativo monta os mesmos quadrados
 // (Particles::forEachQuad, e Scene::spriteCorners nos destroços) e eles sao projetados na tela (collectFx).
 constexpr uint32_t kFx0 = wotm::fxaddr::fx, kFxEnd = wotm::fxaddr::fx + wotm::fxaddr::count * wotm::fxaddr::stride;
-struct Quad { float x[4], y[4]; uint8_t n; bool fge = false; int idx = -1; };   // n = 4 (quadrado) ou 3 (triangulo sem par, so no VU1); fge: PRIM.FGE (VU1); idx: particula (nativo, so para o dump)
+// c: RGBA (unidades do GS) de cada canto, a do RGBAQ de cada vertice (VU1; SPRITE: a do 2o vertice nos quatro) ou a que o nativo desenha
+// (Particles::forEachQuadColored; destrocos: Sprite::gsCol); hasC: c preenchido
+struct Quad { float x[4], y[4]; uint8_t n; bool fge = false; int idx = -1; uint8_t c[4][4] = {}; bool hasC = false; };   // n = 4 (quadrado) ou 3 (triangulo sem par, so no VU1); fge: PRIM.FGE (VU1); idx: particula (nativo, so para o dump)
 
 // Primitivo da referencia para o inventario (linhas "[vu1check] inv"): o que a referencia desenha fora do caminho 1 (PATH2: DIRECT do
 // VIF1; PATH3: canal GIF), e os SPRITE do VU1, com a origem na RAM quando se conhece (PATH2: trecho da cadeia DMA; PATH3: so quando o
@@ -96,12 +99,16 @@ struct RefPrim {
     bool abe;
     uint8_t rgba[4];
 };
+// Segmento de linha (PRIM 1/2 do GS) na tela, com a cor de cada ponta (unidades do GS): no VU1, o XGKICK; no nativo, o FX_LINE
+// (Particles::drawSystem: pos com a cor da particula, pos - vel com alfa 0)
+struct Seg { float x[2], y[2]; uint8_t c[2][4]; };
 constexpr int kFxCams = 3;   // camera do instante da cadeia, da entrada do passe 0 e do passe 1
 struct FxNat {
     uint32_t type = 0, preset = 0;
     int n = 0;
     bool built = false;               // info.attribs & 0x400 (pacote montado neste quadro)
     std::vector<Quad> quads[kFxCams];   // por camera
+    std::vector<Seg> lines[kFxCams];   // FX_LINE: um segmento por particula (pos -> pos - vel), por camera
     Cam cams[kFxCams] = {};
     std::vector<std::array<float, 10>> raw;   // so para o dump: pos (4), vel (3), idade, minSize, maxSize de cada particula
     std::vector<uint32_t> rawColor;           // so para o dump: a cor nativa (Particles::colorAt) de cada particula
@@ -125,7 +132,7 @@ std::vector<Tri> g_vu;                          // triangulos do VU1 (Tri::prog 
 struct PxTri { uint32_t prog; float x[3], y[3]; uint16_t fbp; };
 std::vector<PxTri> g_vuAll;                     // todos os triangulos do XGKICK, inteiros ou nao na tela (atribuicao por pixel no replay)
 uint32_t g_vuKicked = 0, g_vuOff = 0;             // triangulos do XGKICK no quadro / fora da tela (parcial ou inteiro)
-uint32_t g_vuPrimVerts[8] = {};                 // vertices em primitivos que a checagem nao compara (ponto, linha, leque), por PRIM.PRIM
+uint32_t g_vuPrimVerts[8] = {};                 // vertices em primitivos que a checagem nao compara (so ponto), por PRIM.PRIM
 std::vector<std::pair<uint32_t, Quad>> g_vuRects;   // SPRITE do GS inteiros na tela (programa, retangulo)
 std::vector<RefPrim> g_vuRectInfo;   // paralelo a g_vuRects: textura, FRAME, ABE e cor de cada SPRITE (inventario)
 uint32_t g_vuRectsKicked = 0, g_vuRectsRtt = 0;   // SPRITE do XGKICK / desses, em textura (FRAME fora da tela)
@@ -134,6 +141,20 @@ struct FlareRect { float x[2], y[2], u[2], v[2]; uint8_t c[4]; uint64_t tex0; };
 std::vector<FlareRect> g_vuFlare;
 wotm::Scene *g_scene = nullptr;
 FILE *g_dump = nullptr;
+
+std::vector<std::pair<uint32_t, Seg>> g_vuLines;   // linhas do XGKICK inteiras na tela e num buffer de tela (programa, segmento)
+uint32_t g_vuLinesKicked = 0;                      // segmentos do XGKICK no quadro (inteiros ou nao)
+
+// Texels: a textura de cada TEX0 do XGKICK lida da VRAM do GS na hora do desenho (decodeVram), so quando o GS recebe os uploads (replay
+// com imagens, g_vram). upTex/upClut: o TBP0 / o CBP receberam um upload (BITBLTBUF + TRXDIR) antes, neste quadro (so informativo: na
+// luta as texturas ja estao na VRAM do instantaneo).
+struct RefTex { uint64_t tex0 = 0; uint32_t w = 0, h = 0, seq = 0; bool ok = false, upTex = false, upClut = false; std::vector<uint32_t> px; };
+std::vector<RefTex> g_refTex;
+std::map<uint64_t, int32_t> g_refTexIdx;   // TEX0 sem TCC/TFX/CLD -> ultima leitura (refeita se houver upload no TBP0 ou no CBP depois dela)
+std::map<uint32_t, uint32_t> g_upSeq;      // DBP -> numero do ultimo upload do quadro (1, 2, ...)
+uint32_t g_upCount = 0, g_upPath[4] = {};  // uploads do quadro, por caminho (1 = XGKICK, 2 = DIRECT, 3 = canal GIF)
+uint32_t g_bitbltDbp = 0;
+const uint8_t *g_vram = nullptr;           // VRAM do GS (so no replay com imagens); nulo = sem comparacao de texels
 
 std::vector<RefPrim> g_ref23;   // primitivos do PATH2/PATH3 do quadro (inventario)
 uint8_t g_curPath = 2;   // caminho do pacote em gifTap(0, ...): 2 (PATH2, origem em g_wotmPath2Src) ou 3 (PATH3, origem em g_curSrc)
@@ -240,8 +261,9 @@ void collectFx(const uint8_t *rdram, FxMap &out)
         auto add = [&](FxNat &s, const float c[4][3], int idx = -1) {
             Quad q{{}, {}, 4, false, idx};
             for (int k = 0; k < 4; ++k)
-                if (!projectPt(cam, c[k], q.x[k], q.y[k]) || !(q.x[k] >= kX0 && q.x[k] < kX1 && q.y[k] >= kY0 && q.y[k] < kY1)) return;
+                if (!projectPt(cam, c[k], q.x[k], q.y[k]) || !(q.x[k] >= kX0 && q.x[k] < kX1 && q.y[k] >= kY0 && q.y[k] < kY1)) return false;
             s.quads[ci].push_back(q);
+            return true;
         };
         for (const wotm::FxSystem &sys : g_scene->fx.systems) {
             FxNat &s = out[sys.index];
@@ -277,7 +299,36 @@ void collectFx(const uint8_t *rdram, FxMap &out)
                     s.curMat[k] = ram.f32(wotm::addr::worldToScreenMat + 4 * k);
                 }
             }
-            wotm::Particles::forEachQuad(ram, sys, view, [&](int i, const float c[4][3], const float[4][2]) { add(s, c, i); });
+            wotm::Particles::forEachQuadColored(ram, sys, view, [&](int i, const float c[4][3], const float[4][2], uint32_t c01, uint32_t c23) {
+                if (add(s, c, i)) {
+                    Quad &q = s.quads[ci].back();
+                    for (int k = 0; k < 4; ++k) std::memcpy(q.c[k], k < 2 ? &c01 : &c23, 4);
+                    q.hasC = true;
+                }
+            });
+            if (sys.type == wotm::FX_LINE) {   // como o drawSystem: pos com a cor da particula, pos - vel com a mesma cor e alfa 0
+                const uint32_t pp = ram.u32(sys.base + wotm::fxoff::pos), vp = ram.u32(sys.base + wotm::fxoff::vel), ap = ram.u32(sys.base + wotm::fxoff::age);
+                const bool hv = ram.ok(vp, 16 * uint32_t(sys.n)), ha = ram.ok(ap, 2 * uint32_t(sys.n));
+                if (ram.ok(pp, 16 * uint32_t(sys.n)))
+                    for (int k = 0; k < sys.n; ++k) {
+                        float p[2][3];
+                        for (int a = 0; a < 3; ++a) {
+                            p[0][a] = ram.f32(pp + 16 * uint32_t(k) + 4 * uint32_t(a));
+                            p[1][a] = p[0][a] - (hv ? ram.f32(vp + 16 * uint32_t(k) + 4 * uint32_t(a)) : 0.f);
+                        }
+                        if (!std::isfinite(p[0][0])) continue;
+                        Seg g{};
+                        bool in = true;
+                        for (int e = 0; e < 2 && in; ++e)
+                            in = projectPt(cam, p[e], g.x[e], g.y[e]) && g.x[e] >= kX0 && g.x[e] < kX1 && g.y[e] >= kY0 && g.y[e] < kY1;
+                        if (!in) continue;
+                        const uint32_t col = wotm::Particles::colorAt(ram, sys.base, ha ? int(ram.s16(ap + 2 * uint32_t(k))) : 0);
+                        const uint32_t tail = col & 0x00FFFFFFu;
+                        std::memcpy(g.c[0], &col, 4);
+                        std::memcpy(g.c[1], &tail, 4);
+                        s.lines[ci].push_back(g);
+                    }
+            }
         }
         for (const wotm::Sprite &sp : g_scene->sprites) {   // destroços (frag): Scene::collectParticles, key = fx * 4096 + particula
             FxNat &s = out[sp.key >> 12];
@@ -290,7 +341,14 @@ void collectFx(const uint8_t *rdram, FxMap &out)
             }
             float c[4][3];
             wotm::Scene::spriteCorners(sp, view.right, view.up, c);
-            add(s, c);
+            if (add(s, c)) {   // cor do destroço como o Scene::drawSprites: o RGBAQ do pacote (gsCol); sem ele, rgba (1,0 = 0x80)
+                uint32_t col = sp.gsCol;
+                if (!col)
+                    for (int k = 0; k < 4; ++k) col |= uint32_t(uint8_t(128.f * std::max(0.f, std::min(1.f, sp.rgba[k])))) << (8 * k);
+                Quad &q = s.quads[ci].back();
+                for (int k = 0; k < 4; ++k) std::memcpy(q.c[k], &col, 4);
+                q.hasC = true;
+            }
         }
     }
 }
@@ -490,6 +548,71 @@ float g_s = 0.f, g_t = 0.f, g_q = 1.f;
 uint32_t g_uv = 0;   // U nos bits 0-13, V nos 16-29 (10.4)
 uint8_t g_fogF = 255;   // F da neblina em vigor (XYZF2/XYZF3 ou FOG por A+D 0x0A)
 uint32_t g_gifZ = 0;    // Z do ultimo XYZ2/XYZF2 (24 bits no XYZF2), para o WOTM_VU1CHECK_Z
+// Textura de um TEX0 lida da VRAM como o GS a amostra, em RGBA com o alfa cru do GS (0x80 = 1,0), para comparar com o nativo
+// (Scene::decodeTex com rawAlpha). Formatos: CT32/24/16, T8, T4 e os residentes T8H/T4HL/T4HH (indice no byte alto de um CT32).
+// Paleta CSM1: 256 cores = 16x16 com as entradas 8-15 e 16-23 de cada grupo de 32 trocadas, 16 cores = 8x2, no PSM da paleta (CT32
+// ou CT16). Com 16 cores o GS carrega as 16 entradas do CBP na posicao CSA e le dali: o CSA nao muda a cor. CT24 e CT16 seguem o
+// que o nativo supoe do TEXA (TA0 = 0x80 no CT24; CT16: bit 15 = 0x80, senao 0); CT16 expande 5 bits como o GS (v << 3).
+bool decodeVram(const uint8_t *vram, uint64_t t0v, std::vector<uint32_t> &out, uint32_t &w, uint32_t &h)
+{
+    using namespace wotm::gs;
+    const Vram v{vram, PS2_GS_VRAM_SIZE};
+    const Tex0 t = Tex0::decode(t0v);
+    w = 1u << t.tw; h = 1u << t.th;
+    if (w > 1024 || h > 1024) return false;
+    auto c16 = [](uint32_t x) { return ((x & 31) << 3) | (((x >> 5) & 31) << 11) | (((x >> 10) & 31) << 19) | ((x & 0x8000) ? 0x80000000u : 0u); };
+    uint32_t pal[256] = {};
+    const bool p8 = t.psm == T8 || t.psm == T8H, p4 = t.psm == T4 || t.psm == T4HL || t.psm == T4HH;
+    if (p8 || p4) {
+        if (t.cpsm != CT32 && t.cpsm != CT24 && t.cpsm != CT16 && t.cpsm != CT16S) return false;
+        for (uint32_t i = 0; i < (p8 ? 256u : 16u); ++i) {
+            const uint32_t x = p8 ? (i & 7) | ((i & 0x10) >> 1) : (i & 7), y = p8 ? ((i & 0xE0) >> 4) | ((i & 8) >> 3) : (i >> 3);
+            pal[i] = (t.cpsm == CT32 || t.cpsm == CT24) ? rd32(v, addrCT32(t.cbp, 1, x, y)) : c16(rd16(v, addrCT16(t.cbp, 1, x, y)));
+            if (t.cpsm == CT24) pal[i] = (pal[i] & 0x00FFFFFFu) | 0x80000000u;
+        }
+    }
+    out.assign(size_t(w) * h, 0);
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x) {
+            uint32_t c = 0;
+            switch (t.psm) {
+            case CT32: c = rd32(v, addrCT32(t.tbp0, t.tbw, x, y)); break;
+            case CT24: c = (rd32(v, addrCT32(t.tbp0, t.tbw, x, y)) & 0x00FFFFFFu) | 0x80000000u; break;
+            case CT16: case CT16S: c = c16(rd16(v, addrCT16(t.tbp0, t.tbw, x, y))); break;
+            case T8: c = pal[rd8(v, addrT8(t.tbp0, t.tbw, x, y))]; break;
+            case T4: { const uint32_t n = nibT4(t.tbp0, t.tbw, x, y), b = rd8(v, n >> 1); c = pal[(n & 1) ? (b >> 4) : (b & 15)]; break; }
+            case T8H: c = pal[rd32(v, addrCT32(t.tbp0, t.tbw, x, y)) >> 24]; break;
+            case T4HL: c = pal[(rd32(v, addrCT32(t.tbp0, t.tbw, x, y)) >> 24) & 15]; break;
+            case T4HH: c = pal[rd32(v, addrCT32(t.tbp0, t.tbw, x, y)) >> 28]; break;
+            default: return false;
+            }
+            out[size_t(y) * w + x] = c;
+        }
+    return true;
+}
+
+// Leitura da VRAM do TEX0 em uso (uma por TEX0 por quadro, refeita se o TBP0 ou o CBP recebeu upload depois dela); -1 = sem VRAM.
+int32_t refTexFor(uint64_t t0)
+{
+    if (!g_vram || t0 == kTexUnknown) return -1;
+    constexpr uint64_t kMask = 0x3FFFFFFFFull | (0xFFFFFFull << 37);   // TBP0..TH e CBP..CSA (sem TCC, TFX e CLD)
+    const uint64_t key = t0 & kMask;
+    const wotm::gs::Tex0 t = wotm::gs::Tex0::decode(t0);
+    const bool indexed = t.psm == wotm::gs::T8 || t.psm == wotm::gs::T4 || t.psm == wotm::gs::T8H || t.psm == wotm::gs::T4HL || t.psm == wotm::gs::T4HH;
+    auto up = [](uint32_t bp) { const auto it = g_upSeq.find(bp); return it == g_upSeq.end() ? 0u : it->second; };
+    const uint32_t seq = std::max(up(t.tbp0), indexed ? up(t.cbp) : 0u);
+    const auto it = g_refTexIdx.find(key);
+    if (it != g_refTexIdx.end() && g_refTex[size_t(it->second)].seq >= seq) return it->second;
+    RefTex r;
+    r.tex0 = key;
+    r.seq = seq;
+    r.upTex = up(t.tbp0) != 0;
+    r.upClut = !indexed || up(t.cbp) != 0;
+    r.ok = decodeVram(g_vram, t0, r.px, r.w, r.h);
+    g_refTex.push_back(std::move(r));
+    return g_refTexIdx[key] = int32_t(g_refTex.size() - 1);
+}
+
 void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
 {
     uint32_t prim = 4, nv = 0;
@@ -497,6 +620,9 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
     uint32_t vz[3] = {};
     struct VAttr { float s, t, q; uint32_t uv; uint8_t c[4]; uint8_t f; };
     VAttr va[3] = {};
+    float fx0 = 0.f, fy0 = 0.f;   // leque (PRIM 5): o 1o vertice, comum a todos os triangulos
+    uint32_t fz0 = 0;
+    VAttr fa0 = {};
     auto vertex = [&](float x, float y, bool kick, uint8_t f) {
         vx[0] = vx[1]; vy[0] = vy[1];
         vx[1] = vx[2]; vy[1] = vy[2];
@@ -507,9 +633,11 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
         va[2] = {g_s, g_t, g_q, g_uv, {g_rgba[0], g_rgba[1], g_rgba[2], g_rgba[3]}, f};
         ++nv;
         const uint32_t type = prim & 7;
+        if (nv == 1) { fx0 = x; fy0 = y; fz0 = g_gifZ; fa0 = va[2]; }
+        if (type == 5 && nv >= 3) { vx[0] = fx0; vy[0] = fy0; vz[0] = fz0; va[0] = fa0; }   // leque: triangulo (1o, penultimo, ultimo)
         if (!prog) {   // PATH2/PATH3: os registradores ja ficaram em g_tex0/g_fbp/...; os primitivos vao para o inventario (g_ref23)
             if (!kick) return;
-            const bool tri = nv >= 3 && (type == 4 || type == 5 || (type == 3 && nv % 3 == 0));   // leque: caixa dos 3 ultimos (aproximada)
+            const bool tri = nv >= 3 && (type == 4 || type == 5 || (type == 3 && nv % 3 == 0));
             const bool spr = type == 6 && nv % 2 == 0;
             if (!tri && !spr) return;
             const uint32_t ctx = (prim >> 9) & 1;
@@ -524,12 +652,25 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
             g_ref23.push_back(r);
             return;
         }
-        if (kick && nv >= 3 && (type == 4 || (type == 3 && nv % 3 == 0))) {
+        if (kick && (type == 1 || type == 2) && (type == 2 ? nv >= 2 : nv % 2 == 0)) {   // linha / tira de linhas: segmento dos 2 ultimos
+            ++g_vuLinesKicked;
+            const uint16_t fbp = g_fbp[(prim >> 9) & 1];
+            bool in = fbp == 0xFFFF || fbp == 0x46 || fbp == 0x8C;
+            for (int k = 1; k < 3; ++k) in = in && vx[k] >= kX0 && vx[k] < kX1 && vy[k] >= kY0 && vy[k] < kY1;
+            if (!in) return;
+            Seg g{{vx[1], vx[2]}, {vy[1], vy[2]}, {}};
+            std::memcpy(g.c[0], va[1].c, 4);
+            std::memcpy(g.c[1], va[2].c, 4);
+            g_vuLines.push_back({prog, g});
+            return;
+        }
+        if (kick && nv >= 3 && (type == 4 || type == 5 || (type == 3 && nv % 3 == 0))) {
             const int a = (type == 4 && ((nv - 1) & 1)) ? 1 : 0;
             const uint32_t ctx = (prim >> 9) & 1;
             const uint64_t t0 = g_tex0[ctx];
             const uint64_t tex = !((prim >> 4) & 1) ? 0 : t0 == kTexUnknown ? kTexUnknown : t0 & kTexMask;
             Tri t{prog, {vx[a], vx[1 - a], vx[2]}, {vy[a], vy[1 - a], vy[2]}, tex};
+            if (tex && tex != kTexUnknown) t.refTex = refTexFor(t0);
             t.fbp = g_fbp[ctx];
             t.tex0 = t0;
             t.alpha = g_alpha[ctx];
@@ -557,7 +698,9 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
             else if (!degenerate(t)) g_vu.push_back(t);
         } else if (kick && type == 6) {   // SPRITE: retangulo entre os dois ultimos vertices (particulas)
             if (nv % 2) return;
-            const Quad q{{vx[1], vx[2], vx[2], vx[1]}, {vy[1], vy[1], vy[2], vy[2]}, 4, ((prim >> 5) & 1) != 0};
+            Quad q{{vx[1], vx[2], vx[2], vx[1]}, {vy[1], vy[1], vy[2], vy[2]}, 4, ((prim >> 5) & 1) != 0};
+            for (int k = 0; k < 4; ++k) std::memcpy(q.c[k], va[2].c, 4);   // o SPRITE pinta com o RGBAQ do 2o vertice
+            q.hasC = true;
             uint32_t lf = 0;   // lensFlarePacket[0]
             std::memcpy(&lf, g_rdram + wotm::sym::lensFlarePacket, 4);
             if (lf >= kFx0 && lf < kFxEnd && fxOf(prog) == int((lf - kFx0) / wotm::fxaddr::stride)) {
@@ -582,7 +725,7 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
                 std::memcpy(r.rgba, va[2].c, 4);
                 g_vuRectInfo.push_back(r);
             }
-        } else if (kick && type != 3 && type != 4) ++g_vuPrimVerts[type];
+        } else if (kick && type != 3 && type != 4 && type != 5) ++g_vuPrimVerts[type];
     };
     for (uint32_t pos = 0; pos + 16 <= bytes;) {
         uint64_t lo, hi;
@@ -616,6 +759,11 @@ void gifTap(uint32_t prog, const uint8_t *p, uint32_t bytes)
                     else if (reg == 0xE && ((w[2] & 0xFF) == 0x06 || (w[2] & 0xFF) == 0x07))
                         g_tex0[(w[2] & 0xFF) - 0x06] = uint64_t(w[0]) | (uint64_t(w[1]) << 32);
                     else if (reg == 0xE && ((w[2] & 0xFF) == 0x4C || (w[2] & 0xFF) == 0x4D)) g_fbp[(w[2] & 0xFF) - 0x4C] = uint16_t(w[0] & 0x1FF);
+                    else if (reg == 0xE && (w[2] & 0xFF) == 0x50) g_bitbltDbp = w[1] & 0x3FFF;   // BITBLTBUF.DBP (bits 32..45)
+                    else if (reg == 0xE && (w[2] & 0xFF) == 0x53 && (w[0] & 3) == 0) {   // TRXDIR 0: upload da EE para a VRAM no DBP
+                        g_upSeq[g_bitbltDbp] = ++g_upCount;
+                        ++g_upPath[prog ? 1 : g_curPath];
+                    }
                 }
         } else if (flg == 1) pos += ((nloop * nreg + 1) / 2) * 16;
         else pos += nloop * 16;
@@ -725,6 +873,8 @@ std::vector<Quad> vuQuads(const std::vector<Tri> &tris)
     for (size_t i = 0; i < tris.size(); ++i) {
         const Tri &a = tris[i];
         Quad q{{a.x[0], a.x[1], a.x[2]}, {a.y[0], a.y[1], a.y[2]}, 3, a.fge};
+        std::memcpy(q.c, a.c, sizeof a.c);
+        q.hasC = true;
         if (i + 1 < tris.size() && tris[i + 1].prog == a.prog) {
             const Tri &b = tris[i + 1];
             int shared = 0, extra = -1;
@@ -734,7 +884,7 @@ std::vector<Quad> vuQuads(const std::vector<Tri> &tris)
                 if (in) ++shared;
                 else extra = k;
             }
-            if (shared == 2) { q.x[3] = b.x[extra]; q.y[3] = b.y[extra]; q.n = 4; ++i; }
+            if (shared == 2) { q.x[3] = b.x[extra]; q.y[3] = b.y[extra]; std::memcpy(q.c[3], b.c[extra], 4); q.n = 4; ++i; }
         }
         out.push_back(q);
     }
@@ -742,8 +892,8 @@ std::vector<Quad> vuQuads(const std::vector<Tri> &tris)
 }
 
 // Casa cada quadrado do VU1 com o nativo livre mais proximo: todo vertice de um a ate 1 px de algum do outro (nos dois sentidos para
-// os quadrados; triangulos soltos so no sentido VU1 -> nativo). Devolve quantos casaram.
-uint32_t matchQuads(const std::vector<Quad> &vu, const std::vector<Quad> &nat)
+// os quadrados; triangulos soltos so no sentido VU1 -> nativo). Devolve quantos casaram; pairs (opcional): o nativo de cada um (-1 = nenhum).
+uint32_t matchQuads(const std::vector<Quad> &vu, const std::vector<Quad> &nat, std::vector<int> *pairs = nullptr)
 {
     constexpr float kTol = 1.f;
     auto cell = [](float x, float y) { return (uint64_t(uint32_t(int32_t(std::floor(x / 4.f)))) << 32) | uint32_t(int32_t(std::floor(y / 4.f))); };
@@ -760,7 +910,9 @@ uint32_t matchQuads(const std::vector<Quad> &vu, const std::vector<Quad> &nat)
     for (uint32_t i = 0; i < nat.size(); ++i) grid.emplace(cell(nat[i].x[0], nat[i].y[0]), i);
     std::vector<char> hit(nat.size(), 0);
     uint32_t matched = 0;
-    for (const Quad &q : vu) {
+    if (pairs) pairs->assign(vu.size(), -1);
+    for (size_t qi = 0; qi < vu.size(); ++qi) {
+        const Quad &q = vu[qi];
         int best = -1;
         float bestCost = 1e30f;
         std::vector<uint32_t> cand;
@@ -776,7 +928,7 @@ uint32_t matchQuads(const std::vector<Quad> &vu, const std::vector<Quad> &nat)
             if (!cover(q, nat[c], cost) || (q.n == 4 && !cover(nat[c], q, cost))) continue;
             if (cost < bestCost) { bestCost = cost; best = int(c); }
         }
-        if (best >= 0) { hit[size_t(best)] = 1; ++matched; }
+        if (best >= 0) { hit[size_t(best)] = 1; ++matched; if (pairs) (*pairs)[qi] = best; }
     }
     return matched;
 }
@@ -853,7 +1005,8 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
     for (const auto &kv : g_fxNats[size_t(lastFx)]) keys.push_back(kv.first);
     std::sort(keys.begin(), keys.end());
     keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
-    struct Row { uint32_t sys; const FxNat *s; uint32_t vu, nat, m, soltos, fge; };
+    // cor: nos quadrados casados, cada canto do VU1 contra o canto nativo mais proximo; cor = algum RGB a mais de 4, alfa = alfa a mais de 4
+    struct Row { uint32_t sys; const FxNat *s; uint32_t vu, nat, m, soltos, fge, comp = 0, cor = 0, alfa = 0; uint8_t vuC[4] = {}, natC[4] = {}; };
     std::vector<Row> rows;
     uint32_t sysVu = 0, sysNat = 0, sysBoth = 0, totVu = 0, totNat = 0, totM = 0, totSoltos = 0;
     static const FxNat kNone;
@@ -887,7 +1040,33 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
         totVu += nVu; totNat += nNat; totM += m; totSoltos += soltos;
         uint32_t fge = 0;
         for (const Quad &q : whole) fge += q.fge;
-        rows.push_back({sys, &s, nVu, nNat, m, soltos, fge});
+        Row row{sys, &s, nVu, nNat, m, soltos, fge};
+        if (m) {
+            std::vector<int> qp;
+            matchQuads(whole, nq, &qp);
+            for (size_t j = 0; j < whole.size(); ++j) {
+                if (qp[j] < 0) continue;
+                const Quad &a = whole[j], &b = nq[size_t(qp[j])];
+                if (!a.hasC || !b.hasC) continue;
+                ++row.comp;
+                bool dc = false, da = false;
+                for (int k = 0; k < a.n; ++k) {
+                    int bb = 0;
+                    float d = 1e30f;
+                    for (int e = 0; e < b.n; ++e)
+                        if (const float de = std::max(std::fabs(a.x[k] - b.x[e]), std::fabs(a.y[k] - b.y[e])); de < d) { d = de; bb = e; }
+                    bool c1 = false;
+                    for (int ch = 0; ch < 3; ++ch) c1 = c1 || std::abs(int(a.c[k][ch]) - int(b.c[bb][ch])) > 4;
+                    const bool a1 = std::abs(int(a.c[k][3]) - int(b.c[bb][3])) > 4;
+                    if ((c1 || a1) && !row.cor && !row.alfa && !dc && !da) { std::memcpy(row.vuC, a.c[k], 4); std::memcpy(row.natC, b.c[bb], 4); }
+                    dc = dc || c1;
+                    da = da || a1;
+                }
+                row.cor += dc;
+                row.alfa += da;
+            }
+        }
+        rows.push_back(row);
         if (g_dump) {
             for (const Quad &q : vq)
                 std::fprintf(g_dump, "fx%u,vuq,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", sys, q.n, q.x[0], q.y[0], q.x[1], q.y[1], q.x[2], q.y[2],
@@ -922,10 +1101,9 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
     }
     const double pct = totVu ? 100.0 * totM / totVu : 0.0;
     std::fprintf(stderr, "[vu1check] g=%u particulas: sistemas vu %u nativo %u ambos %u | quadrados vu %u nativo %u casados %.1f%% faltam %u sobram %u | "
-                         "triangulos soltos no vu %u | SPRITE do GS %u (%u em textura, %u na tela, %u fora de fx[]) | vertices do VU1 nao comparados: ponto %u linha %u "
-                         "tira de linhas %u leque %u\n",
+                         "triangulos soltos no vu %u | SPRITE do GS %u (%u em textura, %u na tela, %u fora de fx[]) | vertices do VU1 nao comparados: ponto %u\n",
                  g_frame, sysVu, sysNat, sysBoth, totVu, totNat, pct, totVu - totM, totNat - totM, totSoltos, g_vuRectsKicked, g_vuRectsRtt, uint32_t(g_vuRects.size()),
-                 rectsOrphan, g_vuPrimVerts[0], g_vuPrimVerts[1], g_vuPrimVerts[2], g_vuPrimVerts[5]);
+                 rectsOrphan, g_vuPrimVerts[0]);
     // por tipo (vis.attribs; 0 = sistema que o nativo nao tem): casados / quadrados do VU1 / quadrados nativos, e quantos do VU1 com FGE
     std::map<uint32_t, std::array<uint32_t, 4>> byType;
     for (const Row &r : rows) {
@@ -941,6 +1119,32 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
             line += part;
         }
         std::fprintf(stderr, "[vu1check]   particulas por tipo (casados/vu/nativo, fge = do VU1 com PRIM.FGE):%s\n", line.c_str());
+    }
+    {   // cor das particulas casadas: total, por tipo e os sistemas com mais diferenca (1a diferenca: RGBA do VU1 e do nativo)
+        uint32_t comp = 0, cor = 0, alfa = 0;
+        std::map<uint32_t, std::array<uint32_t, 3>> byT;
+        for (const Row &r : rows) {
+            comp += r.comp; cor += r.cor; alfa += r.alfa;
+            if (r.comp) { auto &t = byT[r.s->n ? r.s->type : 0u]; t[0] += r.comp; t[1] += r.cor; t[2] += r.alfa; }
+        }
+        std::string line;
+        char part[112];
+        for (const auto &kv : byT) {
+            std::snprintf(part, sizeof part, " %u %s %u/%u/%u", kv.first, kv.first ? wotm::fxTypeName(kv.first) : "-", kv.second[1], kv.second[2], kv.second[0]);
+            line += part;
+        }
+        std::fprintf(stderr, "[vu1check] g=%u particulas cor: %u casados com cor | cor difere %u | alfa difere %u | por tipo (cor/alfa/casados):%s\n", g_frame, comp, cor,
+                     alfa, line.c_str());
+        std::vector<const Row *> worst;
+        for (const Row &r : rows)
+            if (r.cor + r.alfa) worst.push_back(&r);
+        std::sort(worst.begin(), worst.end(), [](const Row *a, const Row *b) { return a->cor + a->alfa > b->cor + b->alfa; });
+        for (size_t i = 0; i < worst.size() && i < 6; ++i) {
+            const Row &r = *worst[i];
+            std::fprintf(stderr, "[vu1check]   cor fx %u preset %u tipo %u %s: %u casados, cor %u alfa %u (vu %02x%02x%02x%02x nativo %02x%02x%02x%02x)\n", r.sys,
+                         r.s->preset, r.s->type, r.s->n ? wotm::fxTypeName(r.s->type) : "-", r.comp, r.cor, r.alfa, r.vuC[0], r.vuC[1], r.vuC[2], r.vuC[3],
+                         r.natC[0], r.natC[1], r.natC[2], r.natC[3]);
+        }
     }
     std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) { return a.vu + a.nat - 2 * a.m > b.vu + b.nat - 2 * b.m; });
     for (size_t i = 0; i < rows.size() && i < 8; ++i) {
@@ -960,6 +1164,240 @@ void compareFx(const FxVuMap &fxVu, uint32_t rectsOrphan)
             std::fprintf(stderr, "[vu1check]     cru: tipo %u n %u attribs %x emit %x preset %u ativo %d\n", ram.u32(b + wotm::fxoff::type) & 0xFF,
                          ram.u32(b + wotm::fxoff::numParticles), ram.u32(b + wotm::fxoff::infoAttribs), ram.u32(b + 0x2D80), ram.u32(b + wotm::fxoff::fxId), int(listed));
         }
+    }
+}
+
+// Linha [vu1check] linhas: segmentos do XGKICK (PRIM 1/2) por sistema de fx[] contra o FX_LINE nativo (pos -> pos - vel, collectFx).
+// Casa as duas pontas a ate 1 px (em qualquer ordem), com a camera que casar mais; "so a ponta casa" = a ponta da particula (pos) a
+// ate 1 px e a outra nao (a cauda sai de outra conta). Nos casados, cor (RGB a mais de 4) e alfa (a mais de 4) de cada ponta.
+void compareLines()
+{
+    if (g_vuLines.empty()) {
+        bool any = false;
+        for (const FxMap &m : g_fxNats)
+            for (const auto &kv : m)
+                for (const auto &l : kv.second.lines) any = any || !l.empty();
+        if (!any) return;
+    }
+    std::map<uint32_t, std::vector<Seg>> vuBy;   // sistema -> segmentos do VU1
+    std::map<uint32_t, uint32_t> chainOf;        // sistema -> cadeia (a do ultimo programa)
+    uint32_t orphan = 0;
+    for (const auto &pl : g_vuLines) {
+        const int sys = fxOf(pl.first);
+        if (sys < 0) { ++orphan; continue; }
+        vuBy[uint32_t(sys)].push_back(pl.second);
+        chainOf[uint32_t(sys)] = g_progChain[pl.first - 1];
+    }
+    int lastFx = -1;
+    for (size_t c = 0; c < g_fxChain.size(); ++c)
+        if (g_fxChain[c]) lastFx = int(c);
+    std::vector<uint32_t> keys;
+    for (const auto &kv : vuBy) keys.push_back(kv.first);
+    if (lastFx >= 0)
+        for (const auto &kv : g_fxNats[size_t(lastFx)])
+            if (kv.second.type == wotm::FX_LINE) keys.push_back(kv.first);
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+    auto near1 = [](float ax, float ay, float bx, float by) { return std::fabs(ax - bx) <= 1.f && std::fabs(ay - by) <= 1.f; };
+    uint32_t totVu = 0, totNat = 0, totM = 0, totHead = 0, cor = 0, alfa = 0;
+    uint8_t exVu[4] = {}, exNat[4] = {};
+    bool ex = false;
+    std::string worst;
+    for (uint32_t sys : keys) {
+        const std::vector<Seg> &vu = vuBy[sys];
+        const size_t chain = chainOf.count(sys) ? chainOf[sys] : size_t(std::max(lastFx, 0));
+        if (chain >= g_fxNats.size()) continue;
+        const auto nit = g_fxNats[chain].find(sys);
+        static const FxNat kNone;
+        const FxNat &s = nit != g_fxNats[chain].end() ? nit->second : kNone;
+        // melhor camera: mais segmentos inteiros casados
+        uint32_t bestM = 0, bestHead = 0;
+        int bestCam = 0;
+        std::vector<int> bestPair, bestFlip;
+        for (int ci = 0; ci < kFxCams; ++ci) {
+            const std::vector<Seg> &nat = s.lines[ci];
+            if (ci && nat.empty()) continue;
+            std::vector<char> used(nat.size(), 0);
+            std::vector<int> pair(vu.size(), -1), flip(vu.size(), 0);
+            uint32_t m = 0, head = 0;
+            for (size_t i = 0; i < vu.size(); ++i) {
+                const Seg &a = vu[i];
+                int hd = -1;
+                for (size_t j = 0; j < nat.size() && pair[i] < 0; ++j) {
+                    if (used[j]) continue;
+                    const Seg &b = nat[j];
+                    const bool same = near1(a.x[0], a.y[0], b.x[0], b.y[0]) && near1(a.x[1], a.y[1], b.x[1], b.y[1]);
+                    const bool rev = near1(a.x[0], a.y[0], b.x[1], b.y[1]) && near1(a.x[1], a.y[1], b.x[0], b.y[0]);
+                    if (same || rev) { pair[i] = int(j); flip[i] = !same; used[j] = 1; ++m; }
+                    else if (hd < 0 && (near1(a.x[0], a.y[0], b.x[0], b.y[0]) || near1(a.x[1], a.y[1], b.x[0], b.y[0]))) hd = int(j);
+                }
+                if (pair[i] < 0 && hd >= 0) ++head;
+            }
+            if (!ci || m > bestM) { bestM = m; bestHead = head; bestCam = ci; bestPair.swap(pair); bestFlip.swap(flip); }
+        }
+        const std::vector<Seg> &nat = s.lines[bestCam];
+        totVu += uint32_t(vu.size()); totNat += uint32_t(nat.size()); totM += bestM; totHead += bestHead;
+        for (size_t i = 0; i < vu.size(); ++i) {
+            if (bestPair[i] < 0) continue;
+            const Seg &a = vu[i], &b = nat[size_t(bestPair[i])];
+            bool dc = false, da = false;
+            for (int e = 0; e < 2; ++e) {
+                const uint8_t *vc = a.c[e], *nc = b.c[bestFlip[i] ? 1 - e : e];
+                for (int ch = 0; ch < 3; ++ch) dc = dc || std::abs(int(vc[ch]) - int(nc[ch])) > 4;
+                da = da || std::abs(int(vc[3]) - int(nc[3])) > 4;
+                if ((dc || da) && !ex) { std::memcpy(exVu, vc, 4); std::memcpy(exNat, nc, 4); ex = true; }
+            }
+            cor += dc; alfa += da;
+        }
+        if (vu.size() + nat.size() > 2 * bestM) {
+            char b[160];
+            std::snprintf(b, sizeof b, " | fx %u preset %u tipo %u: vu %zu nativo %zu casados %u (so a ponta %u)", sys, s.preset, s.type, vu.size(), nat.size(), bestM, bestHead);
+            if (worst.size() < 600) worst += b;
+        }
+        if (g_dump) {
+            for (const Seg &a : vu) std::fprintf(g_dump, "line,vu,%u,%.3f,%.3f,%.3f,%.3f,%02x%02x%02x%02x,%02x%02x%02x%02x\n", sys, a.x[0], a.y[0], a.x[1], a.y[1],
+                                                a.c[0][0], a.c[0][1], a.c[0][2], a.c[0][3], a.c[1][0], a.c[1][1], a.c[1][2], a.c[1][3]);
+            for (const Seg &a : nat) std::fprintf(g_dump, "line,nat,%u,%.3f,%.3f,%.3f,%.3f,%02x%02x%02x%02x,%02x%02x%02x%02x\n", sys, a.x[0], a.y[0], a.x[1], a.y[1],
+                                                  a.c[0][0], a.c[0][1], a.c[0][2], a.c[0][3], a.c[1][0], a.c[1][1], a.c[1][2], a.c[1][3]);
+            // como no compareFx: camera da comparacao, matrizes cruas e particulas (offline refaz a projecao de qualquer ponta)
+            const Cam &c = s.cams[bestCam];
+            std::fprintf(g_dump, "linecam,%u", sys);
+            for (int r = 0; r < 4; ++r)
+                for (int k = 0; k < 4; ++k) std::fprintf(g_dump, ",%.6g", c.W[r][k]);
+            std::fprintf(g_dump, ",%.6g,%.6g,%.6g\nlinemat,%u", c.eye[0], c.eye[1], c.eye[2], sys);
+            for (float f : s.prevMat) std::fprintf(g_dump, ",%.7g", f);
+            for (float f : s.curMat) std::fprintf(g_dump, ",%.7g", f);
+            std::fprintf(g_dump, "\n");
+            for (size_t k = 0; k < s.raw.size(); ++k) {
+                std::fprintf(g_dump, "linep,%u,%zu", sys, k);
+                for (float f : s.raw[k]) std::fprintf(g_dump, ",%.6g", f);
+                std::fprintf(g_dump, "\n");
+            }
+        }
+    }
+    std::fprintf(stderr, "[vu1check] g=%u linhas: XGKICK %u segmentos (%u fora de fx[]) | vu %u nativo %u casados %u, so a ponta casa %u | cor difere %u alfa difere %u "
+                         "(vu %02x%02x%02x%02x nativo %02x%02x%02x%02x)%s\n",
+                 g_frame, g_vuLinesKicked, orphan, totVu, totNat, totM, totHead, cor, alfa, exVu[0], exVu[1], exVu[2], exVu[3], exNat[0], exNat[1], exNat[2], exNat[3],
+                 worst.c_str());
+}
+
+// Linha [vu1check] texels: para cada par (textura do XGKICK lida da VRAM, objeto nativo e slot) dos triangulos casados com a mesma
+// textura, os texels do GS (decodeVram) contra os que o nativo decodifica (Scene::decodeTex, alfa cru, sem o espalhamento de cor nos
+// texels transparentes do textureId). Compara RGB, e o alfa so com TEX0.TCC = 1; com alfa 0 nos dois lados o RGB nao conta (o GS nao
+// o mostra). Por par: iguais (diferenca maxima <= 1), perto (<= 8: arredondamento, ex. 5 bits do CT16) ou diferem. Fora da conta:
+// filme do menu (texId 999) e textura da tela. Na luta as texturas ja moram na VRAM do instantaneo (nenhum upload no quadro); "com
+// upload" conta os pares cuja textura (e paleta, se indexada) o quadro subiu antes do desenho.
+using TexelKey = std::tuple<int32_t, uint32_t, uint8_t, uint8_t>;   // indice em g_refTex, no do objeto, slot, TCC
+void texStr(uint64_t v, char *s, size_t n);
+std::map<uint32_t, uint32_t> texIdsByTbp(const uint8_t *rdram);
+void compareTexels(const std::map<TexelKey, uint32_t> &pairs)
+{
+    if (!g_vram || pairs.empty()) return;
+    const wotm::Ram ram{g_rdram, PS2_RAM_SIZE};
+    g_scene->loadResources(ram, "", nullptr);
+    const std::map<uint32_t, uint32_t> texIds = texIdsByTbp(g_rdram);
+    uint32_t n = 0, tris = 0, iguais = 0, perto = 0, diferem = 0, outra = 0, tam = 0, semUp = 0, semClut = 0, fora = 0, vramFalhou = 0, natFalhou = 0;
+    struct Worst { double pct; int maxd; uint32_t id, node, slot, tris, x, y, vc, nc, w, h, nw, nh; uint64_t tex0; };
+    std::vector<Worst> worst;
+    struct NatTex { bool ok = false; uint32_t w = 0, h = 0; std::vector<uint32_t> px; };
+    std::map<std::pair<uint32_t, uint8_t>, NatTex> natCache;
+    for (const auto &kv : pairs) {
+        const auto [ri, node, slot, tcc] = kv.first;
+        const RefTex &r = g_refTex[size_t(ri)];
+        ++n;
+        tris += kv.second;
+        semUp += r.upTex && r.upClut;
+        semClut += !r.upClut;
+        if (!r.ok) { ++vramFalhou; continue; }
+        if (wotm::Scene::texKey(ram, node, slot) == wotm::Scene::kScreenKey || wotm::Scene::objectTexId(ram, node, slot) == 999) { ++fora; continue; }
+        NatTex &nt = natCache[{node, slot}];
+        if (!nt.ok && nt.px.empty()) nt.ok = g_scene->decodeTex(ram, node, nt.px, nt.w, nt.h, slot, true) && nt.px.size() >= size_t(nt.w) * nt.h;
+        const wotm::gs::Tex0 t = wotm::gs::Tex0::decode(r.tex0);
+        const auto idIt = texIds.find(t.tbp0);
+        const uint32_t id = idIt != texIds.end() ? idIt->second : wotm::Scene::objectTexId(ram, node, slot);
+        if (!nt.ok) { ++natFalhou; continue; }
+        if (nt.w != r.w || nt.h != r.h) {
+            ++tam;
+            worst.push_back({200.0, 255, id, node, slot, kv.second, 0, 0, 0, 0, r.w, r.h, nt.w, nt.h, r.tex0});
+            continue;
+        }
+        int maxd = 0;
+        size_t bad = 0;
+        uint32_t wx = 0, wy = 0, wvc = 0, wnc = 0;
+        for (uint32_t y = 0; y < r.h; ++y)
+            for (uint32_t x = 0; x < r.w; ++x) {
+                const uint32_t vc = r.px[size_t(y) * r.w + x], nc = nt.px[size_t(y) * r.w + x];
+                const bool clear = tcc && (vc >> 24) == 0 && (nc >> 24) == 0;
+                int d = 0;
+                if (!clear)
+                    for (int ch = 0; ch < 3; ++ch) d = std::max(d, std::abs(int((vc >> (8 * ch)) & 255) - int((nc >> (8 * ch)) & 255)));
+                if (tcc) d = std::max(d, std::abs(int(vc >> 24) - int(nc >> 24)));
+                if (d > 8) ++bad;
+                if (d > maxd) { maxd = d; wx = x; wy = y; wvc = vc; wnc = nc; }
+            }
+        static const char *dbg = std::getenv("WOTM_VU1CHECK_TEXELS");   // diagnostico: <tex id> imprime as paletas (VRAM e nativo) e os indices da linha 0
+        if (dbg && uint32_t(std::atoi(dbg)) == id) {
+            const bool p8 = t.psm == wotm::gs::T8 || t.psm == wotm::gs::T8H;
+            std::string a = "VRAM:", b = "nativo (.RTX):";
+            char e[16];
+            const auto pit = g_scene->rtxPal.find(t.cbp);
+            for (uint32_t i = 0; i < (p8 ? 32u : 16u); ++i) {
+                const uint32_t x = p8 ? (i & 7) | ((i & 0x10) >> 1) : (i & 7), y = p8 ? ((i & 0xE0) >> 4) | ((i & 8) >> 3) : (i >> 3);
+                std::snprintf(e, sizeof e, " %08x", wotm::gs::rd32({g_vram, PS2_GS_VRAM_SIZE}, wotm::gs::addrCT32(t.cbp, 1, x, y)));
+                a += e;
+                const size_t k = p8 ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;
+                std::snprintf(e, sizeof e, " %08x", pit != g_scene->rtxPal.end() && k < pit->second.size() ? pit->second[k] : 0u);
+                b += e;
+            }
+            std::fprintf(stderr, "[vu1check]   texels tex %u no %x slot %u tcc %u cpsm %u csa %u: paleta %s | %s\n", id, node, slot, unsigned(tcc), t.cpsm, t.csa,
+                         a.c_str(), b.c_str());
+            for (int side = 0; side < 2; ++side) {   // texels_<id>_{vram,nat}.png no diretorio atual (alfa cru dobrado para 0..255)
+                std::vector<uint32_t> img(side ? nt.px : r.px);
+                for (uint32_t &c : img) c = (c & 0x00FFFFFFu) | (std::min<uint32_t>(255, (c >> 24) * 2) << 24);
+                Image im{img.data(), int(r.w), int(r.h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                char name[64];
+                std::snprintf(name, sizeof name, "texels_%u_%s.png", id, side ? "nat" : "vram");
+                ExportImage(im, name);
+            }
+        }
+        if (maxd <= 1) ++iguais;
+        else if (maxd <= 8) ++perto;
+        else {
+            // Outra textura do texInfo com upload no mesmo DBP, que bata com a VRAM (mesma paleta e tamanho): a VRAM guarda essa, nao a do
+            // objeto (as duas repartem o lugar e o upload desta nao aconteceu antes do instantaneo). Nesse caso a referencia e que esta errada.
+            uint32_t other = 0;
+            for (uint32_t oid = 1; oid < 1000 && !other; ++oid) {
+                const uint32_t ptr = ram.u32(wotm::addr::texInfo + 16 * oid) & 0x0FFFFFFF;
+                if (oid == id || !ptr || !ram.ok(ptr, 0x80) || (ram.u32(ptr + 0x34) & 0x3FFF) != t.tbp0) continue;
+                std::vector<uint32_t> op;
+                uint32_t ow = 0, oh = 0;
+                if (!g_scene->decodeUploadTex(ram, ptr, t, op, ow, oh, false, true) || ow != r.w || oh != r.h || op.size() < r.px.size()) continue;
+                size_t diff = 0;
+                for (size_t k = 0; k < r.px.size(); ++k) {
+                    const uint32_t a = r.px[k], b = op[k];
+                    if (tcc ? a != b : (a & 0xFFFFFFu) != (b & 0xFFFFFFu)) ++diff;
+                }
+                if (diff * 100 <= r.px.size()) other = oid;
+            }
+            if (other) { ++outra; continue; }
+            ++diferem;
+            worst.push_back({100.0 * double(bad) / double(size_t(r.w) * r.h), maxd, id, node, slot, kv.second, wx, wy, wvc, wnc, r.w, r.h, nt.w, nt.h, r.tex0});
+        }
+    }
+    std::fprintf(stderr, "[vu1check] g=%u texels: %u pares textura x objeto (%u tris casados) | iguais %u, perto %u, diferem %u, tamanho difere %u, VRAM com outra "
+                         "textura do mesmo TBP %u | fora: filme/tela %u, VRAM ilegivel %u, nativo sem textura %u | com upload no quadro %u (sem o da paleta %u) | uploads no "
+                         "quadro: XGKICK %u DIRECT %u canal GIF %u\n",
+                 g_frame, n, tris, iguais, perto, diferem, tam, outra, fora, vramFalhou, natFalhou, semUp, semClut, g_upPath[1], g_upPath[2], g_upPath[3]);
+    std::sort(worst.begin(), worst.end(), [](const Worst &a, const Worst &b) { return a.pct * double(a.tris) > b.pct * double(b.tris); });
+    for (size_t i = 0; i < worst.size() && i < 6; ++i) {
+        const Worst &w = worst[i];
+        char ts[96];
+        texStr(w.tex0, ts, sizeof ts);
+        if (w.pct > 100.0)
+            std::fprintf(stderr, "[vu1check]   texels tex %u (%s) no %x slot %u: tamanho vu %ux%u nativo %ux%u (%u tris)\n", w.id, ts, w.node, w.slot, w.w, w.h, w.nw, w.nh, w.tris);
+        else
+            std::fprintf(stderr, "[vu1check]   texels tex %u (%s) no %x slot %u: %.1f%% dos texels diferem (> 8), pior %d em (%u, %u): vu %08x nativo %08x (%u tris)\n", w.id,
+                         ts, w.node, w.slot, w.pct, w.maxd, w.x, w.y, w.vc, w.nc, w.tris);
     }
 }
 
@@ -1327,6 +1765,7 @@ void compare()
     uint32_t totVu = 0, totNat = 0, totFalta = 0, totSobra = 0, totCostas = 0, totRep = 0, objVu = 0, objNat = 0, objBoth = 0, bad = 0;
     uint32_t totTexDifere = 0, totTexUnknown = 0, totShadowOnly = 0, totRecorte = 0;
     Attr attrTot;
+    std::map<TexelKey, uint32_t> texels;   // pares (textura da VRAM, objeto, slot, TCC) dos casados de mesma textura: compareTexels
     std::vector<uint32_t> keys;   // objetos da 1a coleta e os que o VU1 desenhou
     for (const auto &kv : g_nats[0]) keys.push_back(kv.first);
     for (const auto &kv : vuBy) keys.push_back(kv.first);
@@ -1433,6 +1872,7 @@ void compare()
             const Tri &t = vu[i], &n = nat[size_t(vuPair[i])];
             if (t.tex && t.tex != kTexUnknown && !sameTex(t.tex, n.tex)) continue;   // textura diferente ja contada (ou sombra)
             compareAttr(t, n, at);
+            if (t.refTex >= 0 && n.slot != wotm::kSlotNoTex) ++texels[{t.refTex, o.node, n.slot, uint8_t((t.tex0 >> 34) & 1)}];
         }
         attrTot.add(at);
         if (vu.empty() && nat.empty()) continue;
@@ -1504,7 +1944,9 @@ void compare()
     std::sort(orph.begin(), orph.end(), [](const auto &a, const auto &b) { return a.second > b.second; });
     for (size_t i = 0; i < orph.size() && i < 3; ++i)
         if (orph[i].second >= 8) std::fprintf(stderr, "[vu1check]   so no VU1: MSCAL em %x, %u tris\n", orph[i].first, orph[i].second);
+    compareTexels(texels);
     compareFx(fxVu, rectsOrphan);
+    compareLines();
     compareObjSprites(objRects);
     compareFlare();
     inventory(vuBy, skipVu, orphanTriRefs, orphanRects);
@@ -1533,6 +1975,14 @@ void arm(const uint8_t *rdram, uint32_t frame)
     g_vuFlare.clear();
     g_flareVuIn.clear();
     g_ref23.clear();
+    g_vuLines.clear();
+    g_vuLinesKicked = 0;
+    g_refTex.clear();
+    g_refTexIdx.clear();
+    g_upSeq.clear();
+    g_upCount = 0;
+    std::memset(g_upPath, 0, sizeof g_upPath);
+    g_bitbltDbp = 0;
     g_vuRectInfo.clear();
     g_vuRectsKicked = g_vuRectsRtt = 0;
     g_tex0[0] = g_tex0[1] = kTexUnknown;
@@ -2263,6 +2713,7 @@ static int vu1cmpBody(PS2Runtime &runtime, const char *path, const char *dump, u
     }
     PS2Memory &mem = runtime.memory();
     uint8_t *ram = mem.getRDRAM();
+    g_vram = png ? mem.getGSVRAM() : nullptr;   // texels: so com o GS recebendo os uploads do quadro
     g_wotmVif1Keep = true;
     g_wotmGifTap = &gifTap;
     g_wotmMscalTap = &mscalTap;
@@ -2290,6 +2741,7 @@ static int vu1cmpBody(PS2Runtime &runtime, const char *path, const char *dump, u
     // referencia, os 'G' do quadro sao aplicados ao GS antes das cadeias (lidos adiantado do arquivo) e de novo na ordem gravada.
     std::vector<std::vector<uint8_t>> gifs;
     std::vector<uint8_t> vramRec(PS2_GS_VRAM_SIZE);   // VRAM como gravada no arquivo (os deltas do 'a' valem sobre ela, nao sobre a do replay)
+    if (png && std::getenv("WOTM_VU1CHECK_TEXREC")) g_vram = vramRec.data();   // diagnostico: texels da VRAM gravada (inicio do quadro), nao a do GS no desenho
     // RAM da imagem nativa: a da saida do hier(0, 0) (registro 'S'), a mesma que o desenho ao vivo coleta; nos arquivos antigos, sem
     // 'S', fica a da entrada do quadro (paletas de ossos de antes da travessia: monstro que se mexe sai noutra pose)
     std::vector<uint8_t> frameRam;
