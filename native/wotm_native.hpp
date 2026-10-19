@@ -1751,7 +1751,8 @@ public:
         if (decodeFxTex(ram, texId, tex0, px, tw, th)) {
             Image img{px.data(), int(tw), int(th), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
-            if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_POINT); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
+            // BILINEAR como o GS (as gotas do Plantboss saiam em blocos de texel e pareciam maiores: foto 2026-10-19_003247/001)
+            if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
         }
         tex_[key] = t;
         w = t.width; h = t.height;
