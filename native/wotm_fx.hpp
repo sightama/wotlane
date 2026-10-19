@@ -294,6 +294,29 @@ public:
         return fx > 1e-6f && fy > 1e-6f;
     }
 
+    // prevViewMat do pacote (fx + 0x2EC0: colunas x/y/z/translacao em mundo) para a cauda das linhas e dos strites. O particleDraw so a
+    // grava (a matriz da vista, logo antes do pacote) nos sistemas que passam no teste de visao 4:3; o nativo em widescreen desenha
+    // tambem os que ficam so na faixa lateral, e neles a matriz e de um quadro antigo ou lixo do linePacketInit ((63, 0, 0, 0) num
+    // sistema novo): a cauda virava um risco de milhares de pixels (riscos amarelos na 3-MILE, foto 2026-10-18_232542/001 e dump de
+    // 2026-10-19). Fora da visao 4:3 a cauda usa a vista atual (sem o borrao da camera) e o vento fica de fora (o linePacketBuild
+    // tambem nao rodou). Falso se a matriz lida for toda zero.
+    static bool prevViewMat(const Ram &ram, uint32_t b, const float M[4][4], const float eye[3], float P[16], float wind[3]) {
+        const uint32_t pm = ram.u32(b + 0x2EC0);
+        if (!inViewFov(ram, b)) {
+            for (int r = 0; r < 4; ++r) {
+                P[r] = M[r][0]; P[4 + r] = M[r][1]; P[8 + r] = M[r][2];
+                P[12 + r] = M[r][3] - (M[r][0] * eye[0] + M[r][1] * eye[1] + M[r][2] * eye[2]);
+            }
+            if (wind) wind[0] = wind[1] = wind[2] = 0.f;
+            return true;
+        }
+        if (!ram.ok(pm - 16, 80)) return false;
+        bool any = false;
+        for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
+        if (wind) for (int a = 0; a < 3; ++a) wind[a] = ram.f32(pm - 16 + 4 * uint32_t(a));
+        return any;
+    }
+
     // Strite como o microprograma do VU1 (entrada 0xA88; conferido pela checagem, erro < 0,1 px). Em pixels do GS:
     //   H = M (pos) com a worldToScreenMat atual; T = M' (pos - vel) com a prevViewMat (fx + 0x2EC0: 4 qwords no pacote, colunas
     //   x/y/z/translacao em coordenadas de mundo): a cauda sai onde estava na tela do quadro anterior (borrao de movimento).
@@ -310,12 +333,8 @@ public:
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
         for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(kEo + 4 * k);
-        const uint32_t pm = ram.u32(b + 0x2EC0);
-        if (!ram.ok(pm, 64)) return false;
         float P[16];
-        bool any = false;
-        for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * k); any = any || P[k] != 0.f; }
-        if (!any) return false;
+        if (!prevViewMat(ram, b, M, eye, P, nullptr)) return false;
         float H[4], T[4];
         const float d[3] = {p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]}, t[3] = {p[0] - v[0], p[1] - v[1], p[2] - v[2]};
         for (int r = 0; r < 4; ++r) {
@@ -366,18 +385,15 @@ public:
     // Conferido na checagem (ultrav_corda2: cauda a 0,05 px do VU1 no ajuste offline).
     static bool lineVu(const Ram &ram, uint32_t b, const FxView &view, int i, float head[3], float tail[3], uint32_t &col) {
         constexpr uint32_t kW2S = wotm::sym::worldToScreenMat, kEo = wotm::sym::worldCtx + 0x20;
-        const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), pm = ram.u32(b + 0x2EC0);
-        if (!ram.ok(pos + 16 * uint32_t(i), 16) || !ram.ok(vel + 16 * uint32_t(i), 16) || !ram.ok(pm - 16, 80)) return false;
+        const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel);
+        if (!ram.ok(pos + 16 * uint32_t(i), 16) || !ram.ok(vel + 16 * uint32_t(i), 16)) return false;
         float p[4], v[4], wind[3], P[16], M[4][4], eye[3];
         for (int a = 0; a < 4; ++a) { p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a)); v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a)); }
         if (!std::isfinite(p[0]) || !std::isfinite(v[0])) return false;
-        for (int a = 0; a < 3; ++a) wind[a] = ram.f32(pm - 16 + 4 * uint32_t(a));
-        bool any = false;
-        for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * k); any = any || P[k] != 0.f; }
-        if (!any) return false;
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
         for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(kEo + 4 * k);
+        if (!prevViewMat(ram, b, M, eye, P, wind)) return false;
         // cor: q520 + indice (ate 16 entradas; as que passam de numColors tem alfa 0)
         const uint32_t nc = ram.u32(b + fxoff::numColors), tab = fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex);
         const int life = int(ram.s16(b + fxoff::lifetime));
