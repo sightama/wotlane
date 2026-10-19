@@ -139,8 +139,8 @@ static void overlay(const View &v)
     if (!v.on)
         return;
     char line[200];
-    std::snprintf(line, sizeof line, "CAMERA LIVRE (F5 sai)  WASD/QE move, Shift/Ctrl, roda: vel %.0f  |  botao dir./setas olham  |  Tab: pad %s%s",
-                  speed, g_wotmFreeCamPad.load(std::memory_order_relaxed) ? "COM O JOGO" : "bloqueado", v.override ? "  |  pausado: sem HUD" : "");
+    std::snprintf(line, sizeof line, "FREE CAMERA (F5 exits)  WASD/QE move, Shift/Ctrl, wheel: speed %.0f  |  right button/arrows look  |  Tab: pad %s%s",
+                  speed, g_wotmFreeCamPad.load(std::memory_order_relaxed) ? "GOES TO THE GAME" : "blocked", v.override ? "  |  paused: no HUD" : "");
     const int fs = 18, x = 10, y = GetScreenHeight() - fs - 10;
     DrawText(line, x + 1, y + 1, fs, BLACK);
     DrawText(line, x, y, fs, SKYBLUE);

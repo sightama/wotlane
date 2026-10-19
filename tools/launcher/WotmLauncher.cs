@@ -25,35 +25,35 @@ class Launcher : Form
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
-        new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Lock-on alternado no R1 (setas trocam o alvo)",
-            "O lock-on deixa de ser segurado: um toque no R1 trava a mira no monstro mais perto e ela fica travada ate o proximo toque. " +
-            "Travado, o analogico anda em relacao a camera, quem te acerta vira o alvo e esquerda/direita do direcional trocam o alvo. Defesa no L1, andar de lado no L2/R2 (controle na configuracao " +
-            "padrao). Vale para os jogadores humanos; a IA nao muda. Desmarcado: os botoes do jogo original."),
-        new Flag("Mods", "WOTM_ENEMYBARS", false, "Barras de vida e energia sobre os inimigos",
-            "No lugar da bolinha com o numero sobre cada inimigo, no estilo do HUD do jogador: barra de vida (verde, dano recente em vermelho) e, embaixo, a de energia " +
-            "(azul; cinza enquanto esgotada). Desmarcado: a bolinha do jogo original."),
-        new Flag("Mods", "WOTM_DAMAGEPOP", false, "Numeros de dano (golpes, arremessos, especiais)",
-            "Cada dano aparece como um numero no ponto do impacto, sobe e some: golpe em branco, objeto ou monstro arremessado em " +
-            "laranja, especial em ciano. Vale para todos os monstros, inclusive o seu."),
+        new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Toggle lock-on on R1 (D-pad switches target)",
+            "Lock-on is no longer held: one tap on R1 locks onto the nearest monster and it stays locked until the next tap. " +
+            "While locked, the stick moves relative to the camera, whoever hits you becomes the target and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
+            "controller setup). Applies to human players; the AI is unchanged. Unchecked: the original game's buttons."),
+        new Flag("Mods", "WOTM_ENEMYBARS", false, "Health and energy bars over enemies",
+            "Replaces the numbered dot over each enemy, in the style of the player HUD: a health bar (green, recent damage in red) and an energy bar below it " +
+            "(blue; gray while depleted). Also shows every enemy, not only the first 4. Unchecked: the original game's dot."),
+        new Flag("Mods", "WOTM_DAMAGEPOP", false, "Damage numbers (hits, throws, specials)",
+            "Each hit shows a number at the point of impact that rises and fades: white for hits, orange for thrown objects or " +
+            "monsters, cyan for specials. Applies to every monster, including yours."),
 
-        new Flag("Execucao", ":Auto", true, "Roteiro automatico ate a fase", "-Auto 1: o pad do roteiro joga ate uma fase (~50 s). Desmarcado: voce joga com o teclado."),
-        new Flag("Execucao", "WOTM_FOTOS", true, "Fotos para depurar (F7 pausa, F6 avanca, F8 foto com nota)", "F8 grava o quadro (instantaneo da checagem VU1 x nativo, ~40 MB), um PNG da janela e a sua nota em <runtime>\\fotos\\<data>. Apague as fotos depois de resolvidas."),
-        new Flag("Execucao", "WOTM_AIVSAI", false, "Jogador controlado pela IA do jogo", "O monstro do jogador 1 vira IA (playerInit -> aiInit): luta IA contra IA. Para lotes sem menu use tools\\lote.ps1."),
-        new Flag("Execucao", "WOTM_WATCHDOG=0", false, "Desligar o vigia de congelamento", "Por padrao, g_frame parado por 8 s (fora de filme) grava [vigia] no live.err.log e ram_/vram_vigia_<g_frame>.bin no discroot; quadros do jogo abaixo de 25/s viram aviso [vigia] LENTO."),
-        new Flag("Execucao", "WOTM_FMV_MUTE", false, "Filmes sem audio", ""),
+        new Flag("Run", ":Auto", true, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
+        new Flag("Run", "WOTM_FOTOS", true, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
+        new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
+        new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
+        new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
 
-        new Flag("Diagnostico de desenho", "WOTM_NOFX", false, "Sem particulas/efeitos", "Desliga as particulas de fx[] e os efeitos de wotm_fx."),
-        new Flag("Diagnostico de desenho", "WOTM_NOSHADOW", false, "Sem sombras", "Desliga as sombras dos bloqueadores (monstros e afins)."),
+        new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
+        new Flag("Rendering diagnostics", "WOTM_NOSHADOW", false, "No shadows", "Turns off blocker shadows (monsters and the like)."),
 
-        new Flag("Logs (live.err.log)", ":Stats", false, "Estatisticas (PS2X_STATS)", "-Stats 1: linhas [native]/[ui]/[time]."),
-        new Flag("Logs (live.err.log)", "WOTM_FIELDLOG", false, "Fields por quadro", "Uma linha [field] por quadro do jogo: fields, updateRate, ciclos do EE, tempo de host e os lacos que mais gastam."),
-        new Flag("Logs (live.err.log)", "WOTM_CAMLOG", false, "Camera a cada desenho", "Uma linha [cam] por desenho: t, g_frame, fov, posicao e direcao."),
-        new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Som nativo", "Chamadas do 989snd."),
+        new Flag("Logs (live.err.log)", ":Stats", false, "Statistics (PS2X_STATS)", "-Stats 1: [native]/[ui]/[time] lines."),
+        new Flag("Logs (live.err.log)", "WOTM_FIELDLOG", false, "Fields per frame", "One [field] line per game frame: fields, updateRate, EE cycles, host time and the most expensive loops."),
+        new Flag("Logs (live.err.log)", "WOTM_CAMLOG", false, "Camera on every draw", "One [cam] line per draw: t, g_frame, fov, position and direction."),
+        new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Native sound", "989snd calls."),
     };
 
     // Video: altura do quadro nativo (WOTM_RES) e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
     static readonly string[] Resolutions = { "448", "720", "1080", "1440", "2160" };
-    static readonly string[] ResolutionLabels = { "448 (original do PS2)", "720", "1080", "1440", "2160" };
+    static readonly string[] ResolutionLabels = { "448 (original PS2)", "720", "1080", "1440", "2160" };
     static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
     const string DefaultRes = "720", DefaultAspect = "16:9";
     // Taxa de apresentacao (WOTM_HZ): "0" = a do monitor (o runtime detecta sozinho; a variavel nao e passada). A logica do jogo
@@ -67,8 +67,8 @@ class Launcher : Form
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
     readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox aspect = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
-    readonly CheckBox dynWidth = new CheckBox { Text = "Largura dinamica (proporcao segue a janela)", AutoSize = true };
-    readonly CheckBox fullscreen = new CheckBox { Text = "Tela cheia   [WOTM_FULLSCREEN]", AutoSize = true };
+    readonly CheckBox dynWidth = new CheckBox { Text = "Dynamic width (aspect follows the window)", AutoSize = true };
+    readonly CheckBox fullscreen = new CheckBox { Text = "Fullscreen (F11)   [WOTM_FULLSCREEN]", AutoSize = true };
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
@@ -76,7 +76,7 @@ class Launcher : Form
     Launcher()
     {
         MonitorMode(out monitorWidth, out monitorHeight, out monitorHz);
-        Text = "WotM - opcoes";
+        Text = "WotM - options";
         Font = new Font("Segoe UI", 9f);
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -115,16 +115,19 @@ class Launcher : Form
             inner.Controls.Add(cb);
             boxes[f] = cb;
         }
+        // o aviso dos marcadores depende do mod de barras (caixas criadas depois do grupo da partida)
+        foreach (var kv in boxes) if (kv.Key.Key == "WOTM_ENEMYBARS") kv.Value.CheckedChanged += delegate { UpdateMatch(); };
+        UpdateMatch();
         int wide = 0;
         foreach (Control c in right.Controls) wide = Math.Max(wide, c.PreferredSize.Width);
         foreach (Control c in right.Controls) c.MinimumSize = new Size(wide, 0);
 
         var buttons = new FlowLayoutPanel { AutoSize = true };
-        var play = new Button { Text = "Jogar", AutoSize = true };
+        var play = new Button { Text = "Play", AutoSize = true };
         play.Click += delegate { Play(); };
-        var log = new Button { Text = "Abrir live.err.log", AutoSize = true };
+        var log = new Button { Text = "Open live.err.log", AutoSize = true };
         log.Click += delegate { OpenLog(); };
-        var reset = new Button { Text = "Padrao", AutoSize = true };
+        var reset = new Button { Text = "Defaults", AutoSize = true };
         reset.Click += delegate
         {
             foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
@@ -165,43 +168,43 @@ class Launcher : Form
         // sem configuracao salva: a maior resolucao que cabe no monitor (primeira execucao)
         int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : MonitorRes());
         res.SelectedIndex = ri >= 0 ? ri : Array.IndexOf(Resolutions, DefaultRes);
-        tips.SetToolTip(res, "Altura do quadro nativo em pixels (WOTM_RES); a largura sai da proporcao. Independe do tamanho da janela: " +
-            "a janela so amplia ou reduz o quadro.");
-        inner.Controls.Add(Row("Resolucao (linhas)   [WOTM_RES]", res));
+        tips.SetToolTip(res, "Height of the native frame in pixels (WOTM_RES); the width comes from the aspect ratio. Independent of the window size: " +
+            "the window only scales the frame up or down.");
+        inner.Controls.Add(Row("Resolution (lines)   [WOTM_RES]", res));
 
         dynWidth.Checked = !saved.TryGetValue(":DynWidth", out v) || v == "1";
-        tips.SetToolTip(dynWidth, "Marcado: a largura acompanha a janela (ou o monitor, em tela cheia), de 4:3 a 32:9. " +
-            "Desmarcado: proporcao fixa (WOTM_ASPECT), com faixas pretas se a janela nao bater.");
+        tips.SetToolTip(dynWidth, "Checked: the width follows the window (or the monitor, in fullscreen), from 4:3 to 32:9. " +
+            "Unchecked: fixed aspect ratio (WOTM_ASPECT), with black bars if the window does not match.");
         inner.Controls.Add(dynWidth);
 
         aspect.Items.AddRange(Aspects);
         int ai = Array.IndexOf(Aspects, saved.TryGetValue("WOTM_ASPECT", out v) ? v : DefaultAspect);
         aspect.SelectedIndex = ai >= 0 ? ai : Array.IndexOf(Aspects, DefaultAspect);
-        tips.SetToolTip(aspect, "4:3 = tela original do jogo.");
-        inner.Controls.Add(Row("Proporcao fixa   [WOTM_ASPECT]", aspect));
+        tips.SetToolTip(aspect, "4:3 = the game's original screen.");
+        inner.Controls.Add(Row("Fixed aspect   [WOTM_ASPECT]", aspect));
         aspect.Enabled = !dynWidth.Checked;
         dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
 
         fullscreen.Checked = saved.TryGetValue("WOTM_FULLSCREEN", out v) && v == "1";
-        tips.SetToolTip(fullscreen, "Abre em tela cheia sem borda no monitor da janela (F11 alterna a qualquer hora). Sem ela a janela abre no tamanho da resolucao (reduzida se nao couber).");
+        tips.SetToolTip(fullscreen, "Opens in borderless fullscreen on the window's monitor (F11 toggles at any time). Without it the window opens at the resolution's size (smaller if it does not fit).");
         inner.Controls.Add(fullscreen);
 
         rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");
         for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
         int hi = Array.IndexOf(Rates, saved.TryGetValue("WOTM_HZ", out v) ? v : "0");
         rate.SelectedIndex = hi >= 0 ? hi : 0;
-        tips.SetToolTip(rate, "Quantas vezes por segundo a tela e apresentada (WOTM_HZ). A logica do jogo continua a 60: acima disso o quadro " +
-            "se repete, com ritmo regular e sem tearing. 'Monitor' usa a taxa do monitor da janela.");
-        inner.Controls.Add(Row("Taxa da tela   [WOTM_HZ]", rate));
+        tips.SetToolTip(rate, "How many times per second the screen is presented (WOTM_HZ). Game logic stays at 60: above that the frame " +
+            "is repeated, with even pacing and no tearing. 'Monitor' uses the refresh rate of the window's monitor.");
+        inner.Controls.Add(Row("Refresh rate   [WOTM_HZ]", rate));
         vsync.Checked = !saved.TryGetValue("WOTM_VSYNC", out v) || v == "1";
-        tips.SetToolTip(vsync, "Sincroniza com o monitor (sem tearing). Desmarcado: so limita pelo relogio.");
+        tips.SetToolTip(vsync, "Syncs with the monitor (no tearing). Unchecked: only limited by the clock.");
         inner.Controls.Add(vsync);
-        inner.Controls.Add(new Label { Text = "Monitor principal: " + monitorWidth + "x" + monitorHeight +
-            (monitorHz > 0 ? " a " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = SystemColors.GrayText });
+        inner.Controls.Add(new Label { Text = "Primary monitor: " + monitorWidth + "x" + monitorHeight +
+            (monitorHz > 0 ? " at " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = SystemColors.GrayText });
         return gb;
     }
 
-    // Partida direta (WOTM_MATCH=<jogador>,<ia>[,<ia>...],<fase>): indices do GLOSSARIO.md. O runtime aceita ate 7 IAs (8 monstros).
+    // Partida direta (WOTM_MATCH=<jogador>[,<ia>...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime aceita ate 7 IAs (8 monstros).
     // Fora da lista: Spider (6) e Ogre (12), cortados, e os chefes (13..15).
     static readonly int[] MonsterIds = { 1, 2, 3, 4, 5, 7, 8, 9, 10, 11 };
     static readonly string[] MonsterNames = { "Congar", "Robo-47", "Togera", "Ultra V", "Preytor", "Kineticlops", "Magmo", "Raptros", "Agamo", "Zorgulon" };
@@ -210,7 +213,7 @@ class Launcher : Form
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7, MetroId = 4;
 
-    readonly CheckBox matchOn = new CheckBox { Text = "Partida direta, sem menu   [WOTM_MATCH]", AutoSize = true };
+    readonly CheckBox matchOn = new CheckBox { Text = "Direct match, no menu   [WOTM_MATCH]", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
@@ -218,39 +221,39 @@ class Launcher : Form
 
     GroupBox MatchGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new GroupBox { Text = "Partida", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new GroupBox { Text = "Match", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
 
         matchOn.Checked = saved.TryGetValue(":MatchOn", out v) && v == "1";
-        tips.SetToolTip(matchOn, "Pula o menu e vai direto para a luta (1 jogador contra a CPU, 3 vidas, sem meta de vitorias: " +
-            "a luta segue sem o dialogo do fim). Liga sozinho -Auto 0, porque o roteiro do pad apertaria botoes no meio da luta. " +
-            "Com 'Jogador controlado pela IA' (Execucao) vira IA contra IA.");
+        tips.SetToolTip(matchOn, "Skips the menu and goes straight to the fight (1 player against the CPU, 3 lives, no win target: " +
+            "the fight goes on without the end-of-match dialog). With no AI you play alone on the stage. Forces -Auto 0, since the scripted pad would press buttons mid-fight. " +
+            "With 'Player controlled by the game's AI' (Run) it becomes AI vs AI.");
         inner.Controls.Add(matchOn);
 
         matchPlayer.Items.AddRange(MonsterNames);
         matchPlayer.SelectedIndex = IndexOrZero(MonsterIds, saved, ":MatchPlayer");
-        inner.Controls.Add(Row("Seu monstro", matchPlayer));
+        inner.Controls.Add(Row("Your monster", matchPlayer));
 
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
-        tips.SetToolTip(matchLevel, "Numero = indice da fase no GLOSSARIO.md. O teto e a RAM: com 8 monstros o Metro City passa dos 32 MB na carga e congela; " +
-            "Baytown e Gamblers Gulch ficam com ~2 MB de folga.");
-        inner.Controls.Add(Row("Fase", matchLevel));
+        tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. The limit is RAM: with 8 monsters Metro City goes over 32 MB while loading and freezes; " +
+            "Baytown and Gamblers Gulch have ~2 MB to spare.");
+        inner.Controls.Add(Row("Stage", matchLevel));
 
-        inner.Controls.Add(new Label { Text = "Oponentes da IA (ate 7; o primeiro e obrigatorio):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
+        inner.Controls.Add(new Label { Text = "AI opponents (up to 7; none = play solo on the stage):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
         var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(400, 0), WrapContents = true };
         for (int i = 0; i < MatchMaxAIs; ++i)
         {
             var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 122 };
-            cb.Items.Add(i == 0 ? "(escolha)" : "-");
+            cb.Items.Add("-");
             cb.Items.AddRange(MonsterNames);
             int id = saved.TryGetValue(":MatchAI" + (i + 1), out v) ? ParseInt(v) : (i == 0 ? MonsterIds[0] : 0);
             int k = Array.IndexOf(MonsterIds, id);
-            cb.SelectedIndex = k >= 0 ? k + 1 : (i == 0 ? 1 : 0);
+            cb.SelectedIndex = k >= 0 ? k + 1 : 0;
             cb.SelectedIndexChanged += delegate { UpdateMatch(); };
-            tips.SetToolTip(cb, "Monstro repetido recebe o proximo figurino, como no menu. '-' = vaga vazia.");
+            tips.SetToolTip(cb, "A repeated monster gets the next costume, as in the menu. '-' = empty slot.");
             matchAIs[i] = cb;
             foes.Controls.Add(cb);
         }
@@ -277,9 +280,9 @@ class Launcher : Form
         matchPlayer.Enabled = matchLevel.Enabled = on;
         foreach (ComboBox cb in matchAIs) cb.Enabled = on;
         int total = 1 + MatchFoes();
-        string txt = total + " monstros na luta.";
-        if (LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8) txt += " Metro City com 8 congela na carga (falta RAM).";
-        if (total > 4) txt += " Os marcadores fora da tela so numeram ate 4.";
+        string txt = total == 1 ? "Solo: just you on the stage." : total + " monsters in the fight.";
+        if (LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8) txt += " Metro City with 8 freezes while loading (out of RAM).";
+        if (total > 4 && !On("WOTM_ENEMYBARS")) txt += " Only 4 enemies get an off-screen health marker (the health bars mod shows all of them).";
         matchInfo.Text = txt;
         matchInfo.ForeColor = LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8 ? Color.Firebrick : SystemColors.GrayText;
     }
@@ -294,18 +297,18 @@ class Launcher : Form
 
     // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
     static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
-    static readonly string[] CheatLabels = { "Invencivel", "Especial sempre pronto", "CLOAK", "Modo deus (sem dano e sem reacao a golpe)" };
+    static readonly string[] CheatLabels = { "Invincible", "Special always ready", "CLOAK", "God mode (no damage, no hit reaction)" };
     readonly CheckBox[] cheatBoxes = new CheckBox[4];
     readonly ComboBox cheatStamina = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly NumericUpDown cheatWin = new NumericUpDown { Minimum = 0, Maximum = 3600, Width = 70 };
 
     GroupBox CheatsGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new GroupBox { Text = "Trapacas desde o inicio   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new GroupBox { Text = "Cheats from the start   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
-        inner.Controls.Add(new Label { Text = "As mesmas do menu F1 na luta; valem para os jogadores humanos.", AutoSize = true, ForeColor = SystemColors.GrayText });
+        inner.Controls.Add(new Label { Text = "Same as the in-fight F1 menu; apply to human players.", AutoSize = true, ForeColor = SystemColors.GrayText });
         for (int i = 0; i < CheatKeys.Length; ++i)
         {
             var cb = new CheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
@@ -313,14 +316,14 @@ class Launcher : Form
             cheatBoxes[i] = cb;
             inner.Controls.Add(cb);
         }
-        tips.SetToolTip(cheatBoxes[0], "A vida nao cai; o golpe ainda empurra.");
-        tips.SetToolTip(cheatBoxes[3], "m_godMode do jogo (vida, stamina e especial cheios) e, por nos, sem reacao a golpe. Predio que cai em cima ainda mata.");
-        cheatStamina.Items.AddRange(new object[] { "Normal", "Sempre cheia   [stam]", "Furia (130)   [furia]" });
+        tips.SetToolTip(cheatBoxes[0], "Health never drops; hits still push you.");
+        tips.SetToolTip(cheatBoxes[3], "The game's m_godMode (full health, stamina and special) plus, from us, no hit reaction. A building falling on you still kills.");
+        cheatStamina.Items.AddRange(new object[] { "Normal", "Always full   [stam]", "Rage (130)   [furia]" });
         cheatStamina.SelectedIndex = saved.TryGetValue(":CheatStamina", out v) ? Math.Max(0, Math.Min(2, ParseInt(v))) : 0;
         inner.Controls.Add(Row("Stamina", cheatStamina));
         cheatWin.Value = saved.TryGetValue(":CheatWin", out v) ? Math.Max(0, Math.Min(3600, ParseInt(v))) : 0;
-        tips.SetToolTip(cheatWin, "Derruba todas as IAs vivas a cada N segundos de jogo (o 'vencer a luta' do F1). 0 = desligado.");
-        inner.Controls.Add(Row("Vencer a cada (s, 0 = nao)   [vencer]", cheatWin));
+        tips.SetToolTip(cheatWin, "Knocks out every living AI every N seconds of game time (F1's 'win the fight'). 0 = off.");
+        inner.Controls.Add(Row("Win every (s, 0 = off)   [vencer]", cheatWin));
         return gb;
     }
 
@@ -443,7 +446,7 @@ class Launcher : Form
             string dir = File.ReadAllText(saved).Trim();
             if (File.Exists(Path.Combine(dir, "run_live.ps1"))) return dir;
         }
-        using (var dlg = new FolderBrowserDialog { Description = "Pasta do runtime (a que contem run_live.ps1)" })
+        using (var dlg = new FolderBrowserDialog { Description = "Runtime folder (the one containing run_live.ps1)" })
         {
             if (dlg.ShowDialog(this) == DialogResult.OK && File.Exists(Path.Combine(dlg.SelectedPath, "run_live.ps1")))
             {
@@ -464,8 +467,7 @@ class Launcher : Form
     {
         SaveIni();
         string rt = RuntimeDir();
-        if (rt == null) { status.Text = "Nao achei a pasta do runtime (run_live.ps1)."; return; }
-        if (matchOn.Checked && MatchFoes() == 0) { status.Text = "Partida direta: escolha pelo menos um oponente."; return; }
+        if (rt == null) { status.Text = "Runtime folder not found (run_live.ps1)."; return; }
         // partida direta pula o menu: o roteiro do pad (-Auto 1) apertaria botoes no meio da luta
         string args = string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Auto {1} -Stats {2} -Build {3}",
             Path.Combine(rt, "run_live.ps1"), On(":Auto") && !matchOn.Checked ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
@@ -498,9 +500,9 @@ class Launcher : Form
         try
         {
             Process.Start(psi);
-            status.Text = "Iniciado (" + rt + "). Saida em live.out.log / live.err.log.";
+            status.Text = "Started (" + rt + "). Output in live.out.log / live.err.log.";
         }
-        catch (Exception e) { status.Text = "Falhou: " + e.Message; }
+        catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
 
     void OpenLog()
@@ -508,7 +510,7 @@ class Launcher : Form
         string rt = RuntimeDir();
         string p = rt == null ? null : Path.Combine(rt, "live.err.log");
         if (p != null && File.Exists(p)) Process.Start("notepad.exe", "\"" + p + "\"");
-        else status.Text = "Ainda nao ha live.err.log.";
+        else status.Text = "No live.err.log yet.";
     }
 
     [STAThread]

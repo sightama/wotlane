@@ -152,7 +152,7 @@ static void wotmFotoKeys()
     if (IsKeyPressed(KEY_F7)) {
         paused = !paused;
         steps = 0;
-        say(paused ? "PAUSADO" : "continuando", paused ? 0.0 : 1.0);
+        say(paused ? "PAUSED" : "resuming", paused ? 0.0 : 1.0);
     }
     if (IsKeyPressed(KEY_F6) && paused && !photoRun) ++steps;
     if (IsKeyPressed(KEY_F8)) {
@@ -164,14 +164,14 @@ static void wotmFotoKeys()
             paused = true;
             steps = 0;
             photoAsked = GetTime();
-            say("fotografando...", 5.0);
+            say("taking photo...", 5.0);
         }
     }
     // Sem hier(0, 0) (filme, carregamento) a checagem nao dispara: desiste e pausa no proximo quadro
     if (photoRun && GetTime() - photoAsked > 3.0) {
         photoRun = false;
         g_wotmShotKey = false;
-        say("nao deu para fotografar nesta tela (sem quadro do jogo)", 4.0);
+        say("can't take a photo on this screen (no game frame)", 4.0);
     }
     cv.notify_all();
 }
@@ -224,14 +224,14 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
                 std::lock_guard<std::mutex> lk(m);
                 done.ready = false;
             }
-            say("foto " + std::to_string(d.n) + " salva (F7 continua, F6 avanca)", 3.0);
+            say("photo " + std::to_string(d.n) + " saved (F7 resumes, F6 steps)", 3.0);
         }
     }
     if (noteOpen) {
         const float h = 96.f, y = sh - h - 16.f;
         DrawRectangle(16, int(y), int(sw) - 32, int(h), Fade(BLACK, 0.85f));
         DrawRectangleLines(16, int(y), int(sw) - 32, int(h), YELLOW);
-        DrawTextEx(f, TextFormat("Foto %03u (g_frame %u, tela %u): o que esta errado? Enter salva", d.n, d.frame, d.screen),
+        DrawTextEx(f, TextFormat("Photo %03u (g_frame %u, screen %u): what is wrong? Enter saves", d.n, d.frame, d.screen),
                    Vector2{28.f, y + 10.f}, 18.f, 0.f, YELLOW);
         const bool blink = std::fmod(GetTime(), 1.0) < 0.5;
         DrawTextEx(f, (note + (blink ? "_" : " ")).c_str(), Vector2{28.f, y + 44.f}, 22.f, 0.f, RAYWHITE);
@@ -244,7 +244,7 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
         run = photoRun;
     }
     std::string line = GetTime() < msgUntil ? msg : "";
-    if (isPaused && !run && line.empty()) line = wotmFotosOn() ? "PAUSADO  F7 continua  F6 avanca um quadro  F8 foto" : "PAUSADO  F7 continua  F6 avanca um quadro";
+    if (isPaused && !run && line.empty()) line = wotmFotosOn() ? "PAUSED  F7 resumes  F6 steps one frame  F8 photo" : "PAUSED  F7 resumes  F6 steps one frame";
     if (!line.empty()) {
         if (isPaused && !run && rdram) {
             uint32_t g = 0;

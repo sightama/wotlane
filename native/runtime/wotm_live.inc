@@ -99,8 +99,8 @@ inline void drawOverlay()
     }
     const double t = now();
     const float h = static_cast<float>(GetScreenHeight());
-    DrawTextEx(font(), TextFormat("Carregando... %.1f s", t), Vector2{16.0f, h - 54.0f}, 20.0f, 0.0f, LIGHTGRAY);
-    DrawTextEx(font(), TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s nesta etapa)", t - at) : ""), Vector2{16.0f, h - 28.0f},
+    DrawTextEx(font(), TextFormat("Loading... %.1f s", t), Vector2{16.0f, h - 54.0f}, 20.0f, 0.0f, LIGHTGRAY);
+    DrawTextEx(font(), TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s in this step)", t - at) : ""), Vector2{16.0f, h - 28.0f},
                16.0f, 0.0f, GRAY);
 }
 } // namespace wotm_boot
@@ -143,7 +143,7 @@ static void wotmBootDone(const char *what)
 {
     if (wotm_boot::done.load(std::memory_order_relaxed))
         return;
-    wotmBoot("pronto: %s", what);
+    wotmBoot("ready: %s", what);
     wotm_boot::done.store(true, std::memory_order_relaxed);
 }
 // O vsync por segundo no aviso mostra se a espera e o relogio virtual andando devagar (o boot espera vsyncs).
@@ -155,7 +155,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #ifdef WOTM_HAVE_FMV
     const wotm::fmv::Player &fp = wotm::fmv::Player::get();
     if (fp.active(wotm::fmv::Player::Full) || fp.active(wotm::fmv::Player::Screen))
-        return wotmBootDone("primeiro filme");
+        return wotmBootDone("first movie");
 #endif
     static double s_lastBeat = 0.0;
     static uint64_t s_lastVsync = 0;
@@ -1037,7 +1037,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             {
                 S.rtxPath = log;
                 std::fprintf(stderr, "[native] recursos: %s\n", log.c_str());
-                wotmBootDone("fase na tela");
+                wotmBootDone("stage on screen");
             }
         }
         S.snap = std::move(sn);
@@ -1227,7 +1227,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (show && !wotm_live::g_hideFps)
         {
             char line[128];
-            std::snprintf(line, sizeof line, "jogo %.1f fps | tela %.1f fps", gameFps, screenFps);
+            std::snprintf(line, sizeof line, "game %.1f fps | screen %.1f fps", gameFps, screenFps);
             DrawText(line, 11, 11, 20, BLACK);
             DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
         }
@@ -1257,19 +1257,19 @@ static bool wotmDrawNative(const uint8_t *rdram)
             }
         }
         const uint32_t s2 = (c & kCheatStaminaMask) / kCheatStamina1;
-        static const char *const stName[3] = {"normal", "cheia", "furia (130)"};
+        static const char *const stName[3] = {"normal", "full", "rage (130)"};
         const int fs = 20, x = 10, top = 40;
         if (open)
         {
             char lines[8][64];
             int nl = 0;
-            std::snprintf(lines[nl++], 64, "DEBUG (F1 fecha)");
-            std::snprintf(lines[nl++], 64, "1  Invencivel        %s", (c & kCheatInvincible) ? "LIGADO" : "-");
+            std::snprintf(lines[nl++], 64, "DEBUG (F1 closes)");
+            std::snprintf(lines[nl++], 64, "1  Invincible        %s", (c & kCheatInvincible) ? "ON" : "-");
             std::snprintf(lines[nl++], 64, "2  Stamina           %s", stName[s2]);
-            std::snprintf(lines[nl++], 64, "3  Especial pronto   %s", (c & kCheatSpecial) ? "LIGADO" : "-");
-            std::snprintf(lines[nl++], 64, "4  Cloak (invisivel) %s", (c & kCheatCloak) ? "LIGADO" : "-");
-            std::snprintf(lines[nl++], 64, "5  Modo deus do jogo %s", (c & kCheatGod) ? "LIGADO" : "-");
-            std::snprintf(lines[nl++], 64, "6  Vencer a luta (derruba as IAs)");
+            std::snprintf(lines[nl++], 64, "3  Special ready     %s", (c & kCheatSpecial) ? "ON" : "-");
+            std::snprintf(lines[nl++], 64, "4  Cloak (invisible) %s", (c & kCheatCloak) ? "ON" : "-");
+            std::snprintf(lines[nl++], 64, "5  Game's god mode   %s", (c & kCheatGod) ? "ON" : "-");
+            std::snprintf(lines[nl++], 64, "6  Win the fight (knocks out the AIs)");
             int w = 0;
             for (int i = 0; i < nl; ++i)
                 w = std::max(w, MeasureText(lines[i], fs));
@@ -1280,8 +1280,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         else if (c)
         {   // fechado: lembrete curto do que esta ligado
             char line[96];
-            std::snprintf(line, sizeof line, "debug:%s%s%s%s%s", (c & kCheatInvincible) ? " INV" : "", s2 == 1 ? " STA" : (s2 == 2 ? " FURIA" : ""),
-                          (c & kCheatSpecial) ? " ESP" : "", (c & kCheatCloak) ? " CLOAK" : "", (c & kCheatGod) ? " DEUS" : "");
+            std::snprintf(line, sizeof line, "debug:%s%s%s%s%s", (c & kCheatInvincible) ? " INV" : "", s2 == 1 ? " STA" : (s2 == 2 ? " RAGE" : ""),
+                          (c & kCheatSpecial) ? " SPC" : "", (c & kCheatCloak) ? " CLOAK" : "", (c & kCheatGod) ? " GOD" : "");
             DrawText(line, x + 1, top + 1, fs, BLACK);
             DrawText(line, x, top, fs, ORANGE);
         }

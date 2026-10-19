@@ -82,7 +82,7 @@ inline bool readLsn(uint32_t lsn, uint32_t sectors, uint8_t *dst)
     const auto t0 = std::chrono::steady_clock::now();
     const bool ok = readLsnRaw(lsn, sectors, dst, from);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    wotmBoot("som: LSN %u, %u setores (%s) em %.1f ms%s", lsn, sectors, from, ms, ok ? "" : " FALHOU");
+    wotmBoot("sound: LSN %u, %u sectors (%s) in %.1f ms%s", lsn, sectors, from, ms, ok ? "" : " FAILED");
     return ok;
 }
 

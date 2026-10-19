@@ -162,10 +162,10 @@ namespace
     }
 
 
-    // Partida direta, WOTM_MATCH="<monstro do jogador>,<IA>[,<IA>[,<IA>]],<fase>" (indices de MonsterLongNames e GameLevelNames;
+    // Partida direta, WOTM_MATCH="<monstro do jogador>[,<IA>...ate 7],<fase>" (indices de MonsterLongNames e GameLevelNames;
     // "3,1,1" = lizard contra monkey em central; "3,1,2,5,1" = lizard contra monkey, robot e mantis): userintMain (0x1D9868) nao abre
     // o menu e devolve 0 (comecar a sessao) com o shell como o menu o deixa em "1 jogador contra a CPU" (medido com dumps no fim do
-    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 1 a 3 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas; monstro
+    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 0 a 7 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas; monstro
     // repetido ganha o proximo figurino (o menu nao deixa dois iguais no mesmo figurino). A diferenca e m_killTarget 0 (o menu poe 1): sem
     // meta de vitorias, EvaluateOnePlayerChallengeStatus so reergue o monstro derrubado e a luta segue, sem o dialogo "PLAY AGAIN"
     // que esperaria o pad. O filme de abertura (uiMain, 0x1D93D8) vira no-op. Cada fim de rodada (entrada de
@@ -206,10 +206,11 @@ namespace
             WRITE32(kShell + 0x2BBC + 4 * i, 3);                         // m_lives
         WRITE32(kShell + 0x2C10, 2);                                      // m_mode: free for all
         WRITE32(kGame + 0x1203C8, 2);                                     // TheGame::m_gameMode
-        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s) contra", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
+        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s) %s", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "",
+                     g_matchAIs ? "contra" : "sozinho");
         for (int i = 1; i <= g_matchAIs; ++i)
             std::fprintf(stderr, " %d", g_matchMonsters[i]);
-        std::fprintf(stderr, " (IA), fase %d\n", g_matchLevel);
+        std::fprintf(stderr, "%s, fase %d\n", g_matchAIs ? " (IA)" : "", g_matchLevel);
         SET_GPR_S32(ctx, 2, 0);
         ctx->pc = GPR_U32(ctx, 31);
     }
@@ -1770,14 +1771,14 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 break;
             }
         }
-        if (p && *p == '\0' && n >= 3)
+        if (p && *p == '\0' && n >= 2)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 2;
             for (int i = 0; i <= g_matchAIs; ++i)
                 g_matchMonsters[i] = v[i];
             g_matchLevel = v[n - 1];
         }
-        if (g_matchAIs > 0)
+        if (g_matchLevel >= 0)
         {
             runtime.registerFunction(kUserintMain, &userintMainDirect);
             runtime.registerFunction(kUiMain, &uiMainSkipped);
@@ -1786,7 +1787,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             std::fprintf(stderr, "[wotm] partida direta: monstro %d contra %d IA(s), fase %d (WOTM_MATCH)\n", g_matchMonsters[0], g_matchAIs, g_matchLevel);
         }
         else
-            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>,<IA>[,<IA>...ate 7],<fase>)\n", e);
+            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[,<IA>...ate 7],<fase>)\n", e);
     }
     if (std::getenv("WOTM_AIVSAI") && (g_aiInit = runtime.lookupFunction(kAiInit)) &&
         (g_origSetAIMonster = runtime.lookupFunction(kSetAIMonster)))
