@@ -20,7 +20,7 @@ Ao contribuir, você concorda que sua contribuição seja distribuída sob a [GP
 1. Fork do repo (ou branch, se você tem acesso de escrita) a partir da `master` atualizada: `git switch -c <tu>-<assunto>`.
 2. Um PR por TU ou por pequeno grupo de funções relacionadas.
 3. Antes de cada commit: `sh tools/wsl/gate.sh` tem que terminar em `ROM OK`.
-4. **Não commite** `config/status.csv`, o bloco de progresso do README nem `docs/progress.svg`: são gerados e causam conflito em todo PR. O dono regenera depois do merge. Por isso **não ative** o hook `.githooks/pre-commit` (ele reescreve e dá `git add` nesses arquivos) e evite `git commit -a`.
+4. **Não commite** `config/status.csv`: é gerado (`tools/progress.py`) e causa conflito em todo PR. O dono regenera depois do merge. Evite `git commit -a`.
 5. Abra o PR contra `master` preenchendo o template. Não há CI (não dá para buildar sem a ROM), então a saída do `gate.sh` no PR é a prova. O merge na `master` é feito só pelo dono e por `LostTwilightG`.
 6. Mantenha o branch atualizado com `git rebase origin/master`.
 

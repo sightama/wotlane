@@ -2,65 +2,77 @@
 
 # War of the Monsters Recompiled!
 
-Projeto de decompilação/recompilação de **War of the Monsters** (PS2, NTSC-U, SCUS-97197).
+A decompilation and recompilation project for **War of the Monsters** (PS2, NTSC-U, SCUS-97197), aiming at an **easy-to-mod native PC port**.
 
-Você precisa de uma cópia própria do jogo. Nenhum arquivo do jogo vai para este repositório.
+You need your own copy of the game. No game files are, or ever will be, in this repository.
 
-## Objetivo
-Um **port nativo de PC fácil de modar**. O caminho (decidido em 2026-10-09, confirmado em 2026-10-16: port primeiro, decomp só na superfície de mod):
-1. **Recompilação estática como base.** O [PS2Recomp](https://github.com/ran-j/PS2Recomp) traduz o executável inteiro (5.382 funções, 0 falhas de decodificação, VU0 incluso) para C++ que roda num runtime próprio. Esse C++ é literal (uma função por função MIPS, sobre uma RAM de PS2 emulada) e é código do jogo, então **nunca entra neste repositório**: é gerado localmente a partir da sua ISO.
-2. **Decompilação só do que importa para modar.** Lógica de jogo, IA, monstros, fases e formatos de arquivo viram C++ legível aqui (função `matched` ou `equivalent`) e entram como *hooks* no lugar da versão recompilada. Bater byte a byte é **opcional**: serve para manter a ROM retail reproduzível, mas não é exigido de cada função.
-3. **Renderização nativa.** Em vez de emular VU1/GS, cortamos na fronteira da engine (`hier`, `pkt`, `disp`, partículas; veja `config/hw_boundary.csv`) e desenhamos com a GPU do PC (`native/`). Som, filmes e teclado também são nativos.
-
-Arquitetura, o que vai no repo e o que se gera localmente: [docs/PLANO.md](docs/PLANO.md).
-
-**Licença:** o código deste repositório é [GPL-3.0](LICENSE). Ela cobre apenas o que está aqui (decomp, ferramentas, camada nativa); não dá nenhum direito sobre o jogo, que continua pertencendo aos seus detentores.
-
-**Estado (2026-10-16):** o jogo roda no Windows a 60 fps com desenho nativo (fases, monstros, partículas, sombras, neblina), luta jogável por teclado, som e filmes; a geometria casa com o VU1 do PS2 em mais de 99% dos triângulos (`docs/passos/VU1CHECK.md`). Falta o HUD, fades, widescreen e os bugs gráficos listados no inventário; o que vem a seguir está em [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
-
-## Setup (WSL/Ubuntu)
-```sh
-sudo apt install binutils-mips-linux-gnu ninja-build python3-venv
-python3 -m venv ~/.venvs/wotm && ~/.venvs/wotm/bin/pip install "splat64[mips]" pyelftools
-```
-1. Coloque a ISO em `ISO/` e extraia para `disc/` (por exemplo, `7z x -odisc ISO/*.iso`).
-2. `~/.venvs/wotm/bin/python configure.py --split` gera a ROM, os símbolos, roda o splat e escreve o `build.ninja`.
-3. `ninja` monta, linka e confere o SHA1 contra o executável original (`build/SCUS_971.97.rom: OK`).
-
-### Notas para um clone novo
-- `tools/cc.sh` roda o compilador (binário Win32) via `wine`, que precisa da arquitetura i386 habilitada **antes** da instalação:
-  ```sh
-  sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine wine32:i386
-  ```
-- Em clone novo, `configure.py --split` pode não gerar os `.s` de dados (por exemplo as vtables, como `_vt$12PointToolKit.s`) e o `ninja` quebra por arquivo inexistente (visto com splat 0.41.1 e 0.50.0). Contorno: mover `src/` para fora do repo, rodar o `--split` e restaurar `src/` em seguida. Causa ainda não investigada.
-- `tools/difftest.py` precisa de `unicorn` e `pyelftools` no venv e roda no WSL.
-
-`tools/symdiff.py` lista símbolos fora do lugar e `tools/romdiff.py` mostra as palavras que diferem quando o checksum falha.
-
-Veja [docs/ANALYSIS.md](docs/ANALYSIS.md) para o que já se sabe sobre o executável.
-
-<!-- PROGRESS:START -->
-## Progresso da decompilação
-
-![Progresso da decompilação](docs/progress.svg)
-
-| Área | Feitas | Total | % | Bytes |
-|---|---:|---:|---:|---|
-| `game` | 1723 | 3181 | 54,2% | 416,8 KB de 909,0 KB (45,8%) |
-| `common` / engine | 836 | 1144 | 73,1% | 179,4 KB de 252,4 KB (71,1%) |
-
-"Feita" = função `matched` (byte a byte igual ao original) ou `equivalent` (C++ equivalente, ainda sem bater).
-Ignoradas: **1338** funções, sendo 1056 de bibliotecas/SDK (`libs`: gcc, newlib, sce, lib989snd, crt0) e 282 de código de hardware do PS2 (`hw`) que o port substitui.
-Gerado por `tools/update_readme.py` a partir de `config/status.csv` (veja `tools/progress.py`); total de 5381 funções.
-<!-- PROGRESS:END -->
+## Status (2026-10-19)
+The game runs on Windows at 60 fps with native rendering: stages, monsters, particles, shadows, fog, menu text, HUD, screen fades and Hor+ widescreen. Fights are playable with the
+keyboard, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
+The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
 <details>
-  <summary>Ver mídia sobre o progresso</summary>
+  <summary>Screenshots and video</summary>
 
-Veja mais imagens em docs/screenshots
+More images in [docs/screenshots](docs/screenshots).
 
 <img width="1024" height="768" alt="image" src="https://github.com/user-attachments/assets/c374d9bd-b484-45e7-88f3-e50b50bb1985" />
 
 https://github.com/user-attachments/assets/758f6b00-cc1d-4ac8-87dd-0591663a8dcf
 
 </details>
+
+## How it works
+The port comes first; the decompilation only covers what modders need.
+
+1. **Static recompilation as the base.** [PS2Recomp](https://github.com/ran-j/PS2Recomp) translates the whole executable (5,382 functions, zero decoding failures, VU0 included) into
+   C++ that runs on its own runtime. That C++ is a literal, function-by-function translation over an emulated PS2 RAM. It is game code, so it **never goes into this repository**: everyone
+   generates it locally from their own disc.
+2. **Native layer** ([native/](native/)). Instead of emulating the VU1 and GS, we cut at the engine boundary (scene hierarchy, packets, display lists, particles; see
+   `config/hw_boundary.csv`) and draw with the PC's GPU (raylib). Sound, FMVs and keyboard input are native too. The code that runs inside the runtime as hooks lives in
+   [native/runtime/](native/runtime/). The emulated VU1 is kept only as a reference to check the native renderer against.
+3. **Readable decompilation** ([src/](src/), [include/](include/)). Game logic, AI, monsters, stages and file formats become readable C++ that can replace the recompiled version through a hook.
+   A function is either `matched` (byte-identical to the retail code) or `equivalent` (same behavior, not byte-identical). Byte matching is optional per function, but the full ROM build
+   must still reproduce the retail SHA1.
+
+Architecture, and what lives in the repo versus what is generated locally: [docs/PLANO.md](docs/PLANO.md). What is known about the executable: [docs/ANALYSIS.md](docs/ANALYSIS.md).
+File formats: [docs/FORMATOS.md](docs/FORMATOS.md).
+
+## Building the decompilation (WSL/Ubuntu)
+```sh
+sudo apt install binutils-mips-linux-gnu ninja-build python3-venv
+python3 -m venv ~/.venvs/wotm && ~/.venvs/wotm/bin/pip install "splat64[mips]" pyelftools
+sh tools/setup_toolchain.sh        # downloads ee-gcc 2.95.2 (SN ProDG) into tools/cc/
+```
+1. Put your ISO in `ISO/` and extract it to `disc/` (for example `7z x -odisc ISO/*.iso`).
+2. `~/.venvs/wotm/bin/python configure.py --split` builds the ROM and symbols, runs splat and writes `build.ninja`.
+3. `ninja` assembles, links and checks the SHA1 against the original executable (`build/SCUS_971.97.rom: OK`).
+
+Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build + SHA1 check).
+
+### Notes for a fresh clone
+- `tools/cc.sh` runs the compiler (a Win32 binary) through `wine`, which needs the i386 architecture enabled **before** installing it:
+  ```sh
+  sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine wine32:i386
+  ```
+- On a fresh clone, `configure.py --split` may skip generating the data `.s` files (vtables such as `_vt$12PointToolKit.s`) and `ninja` then fails on a missing file (seen with splat
+  0.41.1 and 0.50.0). Workaround: move `src/` out of the repo, run `--split`, then put `src/` back. The cause has not been investigated yet.
+- `tools/difftest.py` needs `unicorn` and `pyelftools` in the venv and runs in WSL.
+- When the checksum fails, `tools/symdiff.py` lists misplaced symbols and `tools/romdiff.py` shows the words that differ.
+
+## Building and running the port (Windows)
+- Clone with submodules (`git clone --recurse-submodules`): PS2Recomp is the `third_party/PS2Recomp` submodule (branch `wotm` of the `yanm1103/PS2Recomp` fork, which carries the
+  `SQRT.S`/`RSQRT.S` fix from [PR #277](https://github.com/ran-j/PS2Recomp/pull/277)).
+- Generating the recompiled code (`recomp/`, git-ignored) from the ELF is still a manual step (the PS2Recomp analyzer plus `ps2_recomp`); a single script that does it from the ISO is
+  still missing.
+- `build_runtime.bat` builds the runtime with the native layer (`build_dev`, fast link without LTCG).
+- `run_live.bat -Auto 0` runs the game to play with the keyboard; `tools/launcher/` is a small launcher with options such as starting a match directly (`WOTM_MATCH`) and cheats.
+
+Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md).
+
+## Contributing
+See [CONTRIBUTING.md](CONTRIBUTING.md). The rules in [CLAUDE.md](CLAUDE.md) apply to humans too: no game files or game assembly in the repo, issues or PRs, and the ROM must keep matching
+the retail SHA1. Most project documentation is currently written in Portuguese.
+
+## License
+The code in this repository is [GPL-3.0](LICENSE). It only covers what is here (decompilation, tools, native layer) and grants no rights over the game, which still belongs to its owners.
