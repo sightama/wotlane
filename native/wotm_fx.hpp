@@ -224,6 +224,8 @@ public:
 
     std::vector<FxSystem> systems;
     float wide = 1.f;   // largura da tela / largura 4:3 (Scene::wide): teste de visao com os planos laterais da tela larga
+    bool fovCull = true;     // collect recorta pela vista do jogo (inViewFov); false = camera livre pausada
+    bool frameGate = true;   // collect sem particulas em quadro sem particleDraw (flareSlot); false = recoleta da camera livre pausada
 
     // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
     // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
@@ -452,7 +454,7 @@ public:
             const bool built = (ram.u32(b + fxoff::infoAttribs) & 0x400) != 0;
             const int minN = s.type == FX_SPRINE ? 2 : 1;
             if (built && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
-                inViewFov(ram, b, wide))
+                (!fovCull || inViewFov(ram, b, wide)))
                 systems.push_back(s);
             i = next;
         }
@@ -461,7 +463,9 @@ public:
             // o captureFlares (logo depois de cada particleDraw) marca o quadro como o lens flare
             FlareSlot &s = flareSlot();
             std::lock_guard<std::mutex> g(s.m);
-            if (s.used && !s.fresh) systems.clear();
+            // a recoleta da camera livre pausada (wotm_live.inc) roda depois do consumeFlares do quadro: la a RAM parada e a do
+            // quadro com particleDraw, e o corte apagava todas as particulas de fx[] (pedestres, fogo do Agamo) so na pausa
+            if (frameGate && s.used && !s.fresh) systems.clear();
         }
         static const bool list = std::getenv("WOTM_FXLIST") != nullptr;
         if (list) dump(ram);

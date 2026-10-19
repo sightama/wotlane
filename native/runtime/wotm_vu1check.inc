@@ -251,7 +251,11 @@ wotm::FxView fxView(const Cam &cam)
 // na comparacao vale a que casar mais.
 void collectFx(const uint8_t *rdram, FxMap &out)
 {
-    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    const wotm::Ram live{rdram, PS2_RAM_SIZE};
+    // WOTM_VU1CHECK_FXSHADOW: as particulas saem da copia de sombra (Particles::shadowRam), como na janela ao vivo, nao da RAM inteira
+    static const bool useShadow = std::getenv("WOTM_VU1CHECK_FXSHADOW") != nullptr;
+    const std::shared_ptr<const uint8_t> shadow = useShadow ? wotm::Particles::shadowRam(live, g_scene->fx.systems) : nullptr;
+    const wotm::Ram ram = shadow ? wotm::Ram{shadow.get(), PS2_RAM_SIZE} : live;
     const Cam cams[kFxCams] = {readCam(rdram), g_cam[0], g_cam[1]};
     const int nCams = g_pass == 1 ? 3 : 2;
     for (int ci = 0; ci < nCams; ++ci) {

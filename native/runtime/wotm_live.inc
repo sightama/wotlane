@@ -1053,6 +1053,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
             static wotm::Scene rc;
             rc.wide = cap.wide.load(std::memory_order_relaxed);
             rc.fovCull = false;
+            rc.fx.fovCull = false;
+            rc.fx.frameGate = false;   // a RAM parada e a do quadro capturado, que teve particleDraw
             wotm_live::g_stage = "collect (camera livre)";
             rc.collect(ram);
             wotm::Snapshot un = rc.takeSnapshot(ram, S.snap.g);
