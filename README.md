@@ -11,9 +11,8 @@ The game runs on Windows at 60 fps with native rendering: stages, monsters, part
 keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
 
 **Not an emulator.** The EE (the PS2's CPU) code is statically recompiled to C++ and runs natively; VU0 code is translated too (inline instructions by PS2Recomp, microprograms by
-`tools/vu0native.py`). The emulated VU1, VIF1 and GS are switched off in the game and only run as the reference for the renderer check; the IOP sits idle (no modules loaded).
-What remains of emulation: the PS2 kernel's threads, interrupts and vsync, plus the emulator code still linked into the executable (next steps in
-[docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md)).
+`tools/vu0native.py`). The game executable (`wotm.exe`) has no emulated VU1, VIF1 or GS; those only exist in a separate test executable, as the reference for the renderer check.
+What is still PS2-specific in the game: [docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md).
 
 The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
@@ -39,7 +38,7 @@ The port comes first; the decompilation only covers what modders need.
    generates it locally from their own disc.
 2. **Native layer** ([native/](native/)). Instead of emulating the VU1 and GS, we cut at the engine boundary (scene hierarchy, packets, display lists, particles; see
    `config/hw_boundary.csv`) and draw with the PC's GPU (raylib). Sound, FMVs and keyboard input are native too. The code that runs inside the runtime as hooks lives in
-   [native/runtime/](native/runtime/). The emulated VU1 is kept only as a reference to check the native renderer against.
+   [native/runtime/](native/runtime/). The emulated VU1 is kept only in the test executable, as a reference to check the native renderer against.
 3. **Readable decompilation** ([src/](src/), [include/](include/)). Game logic, AI, monsters, stages and file formats become readable C++ that can replace the recompiled version through a hook.
    A function is either `matched` (byte-identical to the retail code) or `equivalent` (same behavior, not byte-identical). Byte matching is optional per function, but the full ROM build
    must still reproduce the retail SHA1.
@@ -74,7 +73,8 @@ Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build 
   `SQRT.S`/`RSQRT.S` fix from [PR #277](https://github.com/ran-j/PS2Recomp/pull/277)).
 - Generating the recompiled code (`recomp/`, git-ignored) from the ELF is still a manual step (the PS2Recomp analyzer plus `ps2_recomp`); a single script that does it from the ISO is
   still missing.
-- `build_runtime.bat` builds the runtime with the native layer (`build_dev`, fast link without LTCG).
+- `build_runtime.bat` builds the runtime with the native layer (`build_dev`, fast link without LTCG): `wotm.exe` (the game) and `ps2EntryRunner.exe` (test build with the
+  emulated VU1/GS and the renderer check).
 - `run_live.bat -Auto 0` runs the game to play with the keyboard; `tools/launcher/` is a small launcher with options such as starting a match directly (`WOTM_MATCH`) and cheats.
 
 Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md).
