@@ -1038,7 +1038,8 @@ namespace
                        kPadFlagsOwner = 0x1810u;
     constexpr uint32_t kMonsterCs = 0xCu, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u, kMonsterDying = 0xEFu,
                        kMonsterCameraView = 0x6CD8u;
-    constexpr uint32_t kPadL1 = 0x0u, kPadL2 = 0x1u, kPadR1 = 0x3u, kPadR2 = 0x4u, kPadLeft = 0xCu, kPadRight = 0xDu;
+    constexpr uint32_t kPadL1 = 0x0u, kPadL2 = 0x1u, kPadR1 = 0x3u, kPadR2 = 0x4u, kPadLeft = 0xCu, kPadRight = 0xDu, kPadUp = 0xEu,
+                       kPadDown = 0xFu;
     PS2Runtime::RecompiledFunction g_origUpdateHistory[3] = {}, g_origInterpretInputs = nullptr, g_origPadReadLock = nullptr;
     struct LockToggle
     {
@@ -1151,23 +1152,32 @@ namespace
 
     // Troca o alvo travado para o monstro vivo mais proximo a esquerda (dir < 0) ou a direita (dir > 0) do atual na tela: angulo
     // horizontal visto da camera do jogador (eixos direita e frente do _cs da vista), dando a volta no fim.
-    void lockCycleTarget(uint8_t *rdram, uint32_t owner, int slot, int dir)
+    // Eixos direita e frente (no plano XY) da camera do jogador: _cs da vista dele (viewInfo[vista], mat em +0x20/+0x30)
+    bool lockCameraAxes(uint8_t *rdram, uint32_t owner, float right[2], float fwd[2])
     {
-        const uint32_t cur = FAST_READ32(owner + kMonsterPinTarget);
-        float me[3], tp[3];
-        if (!cur || !targetPos(rdram, owner, me))
-            return;
         int32_t players = static_cast<int32_t>(FAST_READ32(kShell + 0x2BB4));   // m_numPlayers
         const int32_t view = players > 1 ? std::clamp<int32_t>(static_cast<int32_t>(FAST_READ32(owner + kMonsterCameraView)), 0, 4) : 0;
         const uint32_t cam = FAST_READ32(kViewInfo + 0x14u * view) & 0x1FFFFFFFu;   // _cs da vista
         if (!ramOk(cam, 0x40u))
-            return;
-        float right[2], fwd[2];
+            return false;
         for (int i = 0; i < 2; ++i)
         {
             right[i] = rdF(rdram, cam + 0x20 + 4 * i);
             fwd[i] = rdF(rdram, cam + 0x30 + 4 * i);
         }
+        // olhando quase de cima, a frente no chao some: o "cima" da camera (+0x40) aponta para onde a tela sobe
+        if (fwd[0] * fwd[0] + fwd[1] * fwd[1] < 0.09f)
+            for (int i = 0; i < 2; ++i)
+                fwd[i] = rdF(rdram, cam + 0x40 + 4 * i);
+        return std::isfinite(right[0] + right[1] + fwd[0] + fwd[1]);
+    }
+
+    void lockCycleTarget(uint8_t *rdram, uint32_t owner, int slot, int dir)
+    {
+        const uint32_t cur = FAST_READ32(owner + kMonsterPinTarget);
+        float me[3], tp[3], right[2], fwd[2];
+        if (!cur || !targetPos(rdram, owner, me) || !lockCameraAxes(rdram, owner, right, fwd))
+            return;
         auto screenAngle = [&](const float p[3]) {
             const float dx = p[0] - me[0], dy = p[1] - me[1];
             return std::atan2(dx * right[0] + dy * right[1], dx * fwd[0] + dy * fwd[1]);
@@ -1199,6 +1209,8 @@ namespace
         FAST_WRITE32(owner + kMonsterPinTarget, best);
         std::fprintf(stderr, "[lockon] jogador %d: alvo a %s (0x%x)\n", slot + 1, dir < 0 ? "esquerda" : "direita", best);
     }
+
+    void lockCameraStick(uint8_t *rdram, uint32_t owner, uint8_t *b);
 
     void interpretInputsLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -1235,15 +1247,81 @@ namespace
         }
         if (t->on)
         {
+            lockCameraStick(rdram, t->owner, b);
             // travado, o jogo anda de lado pela esquerda/direita (PadEntry +0x16/+0x18 -> +0x1A/+0x1C) e ignora os bytes 0/3
             if (saved[kPadL2])
                 b[kPadLeft] = 0xFF;
             if (saved[kPadR2])
                 b[kPadRight] = 0xFF;
-        }        const uint32_t ra = GPR_U32(ctx, 31);
+        }
+        const uint32_t ra = GPR_U32(ctx, 31);
         g_origInterpretInputs(rdram, ctx, runtime);
         if (ctx->pc == ra)   // fatia de tempo acabou no meio: o resto ainda le os bytes trocados (o loadPadInputs refaz todos)
-            std::memcpy(b, saved, sizeof saved);    }
+            std::memcpy(b, saved, sizeof saved);
+    }
+
+    // Travado, o jogo move o monstro no referencial dele, virado para o alvo (cima/baixo = para o alvo e para tras, esquerda/direita =
+    // de lado). Para o analogico (e o direcional) valer em relacao a camera, como solto: a direcao que ele aponta na tela vira um vetor
+    // no chao pelos eixos da camera e e reescrita nos bytes cima/baixo/esquerda/direita do GamePad no referencial do monstro (frente =
+    // para o alvo; direita com o mesmo sentido da direita da camera em relacao a frente dela). O tamanho se mantem.
+    void lockCameraStick(uint8_t *rdram, uint32_t owner, uint8_t *b)
+    {
+        const float sx = (float(b[kPadRight]) - float(b[kPadLeft])) / 255.f, sy = (float(b[kPadUp]) - float(b[kPadDown])) / 255.f;
+        if (std::fabs(sx) < 0.01f && std::fabs(sy) < 0.01f)
+            return;
+        const uint32_t target = FAST_READ32(owner + kMonsterPinTarget);
+        float me[3], tp[3], cr[2], cf[2];
+        if (!target || !targetPos(rdram, owner, me) || !targetPos(rdram, target, tp) || !lockCameraAxes(rdram, owner, cr, cf))
+            return;
+        auto norm = [](float v[2]) {
+            const float l = std::sqrt(v[0] * v[0] + v[1] * v[1]);
+            if (l < 1e-4f) return false;
+            v[0] /= l;
+            v[1] /= l;
+            return true;
+        };
+        float mf[2] = {tp[0] - me[0], tp[1] - me[1]};
+        if (!norm(cr) || !norm(cf) || !norm(mf))
+            return;
+        // perp(v) = (v.y, -v.x); a direita da camera e +perp(frente) ou -perp(frente) conforme o sentido do mundo
+        const float hand = cr[0] * cf[1] - cr[1] * cf[0] >= 0.f ? 1.f : -1.f;
+        const float mr[2] = {hand * mf[1], -hand * mf[0]};
+        const float w[2] = {sx * cr[0] + sy * cf[0], sx * cr[1] + sy * cf[1]};
+        const float lx = std::clamp(w[0] * mr[0] + w[1] * mr[1], -1.f, 1.f), ly = std::clamp(w[0] * mf[0] + w[1] * mf[1], -1.f, 1.f);
+        b[kPadRight] = static_cast<uint8_t>(std::lround(std::max(lx, 0.f) * 255.f));
+        b[kPadLeft] = static_cast<uint8_t>(std::lround(std::max(-lx, 0.f) * 255.f));
+        b[kPadUp] = static_cast<uint8_t>(std::lround(std::max(ly, 0.f) * 255.f));
+        b[kPadDown] = static_cast<uint8_t>(std::lround(std::max(-ly, 0.f) * 255.f));
+    }
+
+    // Travado, quem acerta o jogador vira o alvo: Monster::takeHit(vitima, pos, dano, id do atacante); o atacante e o
+    // Interactives::s_dbInteractive[id] (getInteractive), quando for um monstro vivo e alvejavel.
+    constexpr uint32_t kTakeHitLock = wotm::fn::takeHit__7MonsterP8_fvectorfi;
+    constexpr uint32_t kNumInteractives = wotm::sym::x_12Interactives_s_numInteractives, kDbInteractive = wotm::sym::x_12Interactives_s_dbInteractive;
+    PS2Runtime::RecompiledFunction g_origTakeHitLock = nullptr;
+
+    void takeHitLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t victim = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        const int32_t id = static_cast<int32_t>(GPR_U32(ctx, 6));
+        if (ctx->pc == kTakeHitLock && id > 0 && id < static_cast<int32_t>(FAST_READ32(kNumInteractives)) && ramOk(victim, 0x6C08u))
+            if (LockToggle *t = lockToggleFind(victim + 0x5040u, false); t && t->on && t->owner == victim)   // m_padFlags
+            {
+                const uint32_t attacker = FAST_READ32(kDbInteractive + 4u * static_cast<uint32_t>(id)) & 0x1FFFFFFFu;
+                float tp[3];
+                bool monster = false;
+                for (uint32_t i = 0; i < 8 && !monster; ++i)
+                    monster = (FAST_READ32(kGame + 0x120380 + 4 * i) & 0x1FFFFFFFu) == attacker;   // m_monsters[i]
+                if (monster && attacker != FAST_READ32(victim + kMonsterPinTarget) && lockCandidate(rdram, attacker, victim, tp))
+                {
+                    int slot = 0;
+                    isPlayerMonster(rdram, victim, &slot);
+                    FAST_WRITE32(victim + kMonsterPinTarget, attacker);
+                    std::fprintf(stderr, "[lockon] jogador %d: alvo e quem bateu (0x%x)\n", slot + 1, attacker);
+                }
+            }
+        g_origTakeHitLock(rdram, ctx, runtime);
+    }
 
     void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -1770,6 +1848,9 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 runtime.registerFunction(kScePadRead, &padReadLockToggle);
                 std::fprintf(stderr, "[wotm] lock-on no R1, defesa no L1, andar de lado no L2/R2, setas trocam o alvo (configuracao 0)\n");
             }
+            // travado, quem bate vira o alvo
+            if ((g_origTakeHitLock = runtime.lookupFunction(kTakeHitLock)))
+                runtime.registerFunction(kTakeHitLock, &takeHitLockToggle);
         }
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
