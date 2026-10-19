@@ -17,16 +17,7 @@ What remains of emulation: the PS2 kernel's threads, interrupts and vsync, plus 
 
 The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
-<details>
-  <summary>Screenshots and video</summary>
-
-More images in [docs/screenshots](docs/screenshots).
-
-<img width="1024" height="768" alt="image" src="https://github.com/user-attachments/assets/c374d9bd-b484-45e7-88f3-e50b50bb1985" />
-
-https://github.com/user-attachments/assets/758f6b00-cc1d-4ac8-87dd-0591663a8dcf
-
-</details>
+Video: [https://www.youtube.com/watch?v=IvLLuSYORPc](https://www.youtube.com/watch?v=IvLLuSYORPc). Screenshots and older videos, by date: [docs/screenshots](docs/screenshots).
 
 ## How it works
 The port comes first; the decompilation only covers what modders need.
