@@ -1785,6 +1785,13 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
         runtime.registerFunction(kSceGsSyncV, &syncVTapped);
     g_nativeTimer = std::getenv("WOTM_TIMER_EMU") == nullptr;
+#if !PS2X_HW_EMU
+    if (!g_nativeTimer)   // o wotm.exe nao tem os timers do EE (FRONTEIRA.md, passo 8): o T1 emulado ficaria parado
+    {
+        std::fprintf(stderr, "[wotm] WOTM_TIMER_EMU ignorada: o wotm.exe nao tem os timers do EE (use o ps2EntryRunner)\n");
+        g_nativeTimer = true;
+    }
+#endif
     if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
         (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)) &&
         (g_origTimer1 = runtime.lookupFunction(kTimer1Handler)))

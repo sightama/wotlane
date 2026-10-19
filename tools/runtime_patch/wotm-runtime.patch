@@ -256,7 +256,7 @@ index 0000000..adf6c37
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..20458d5 100644
+index 589d768..5f91b97 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -416,8 +416,8 @@ index 589d768..20458d5 100644
 +# WoTM: executavel do jogo (wotm) sem GS, VU1 e VIF1 emulados (passo 5 de docs/passos/FRONTEIRA.md no repo WoTM). Mesmo jogo
 +# traduzido (ps2_game_code) e mesma configuracao do ps2_runtime/ps2EntryRunner, sem os fontes do GS (frontend, rasterizador,
 +# enderecamento da VRAM) e do interpretador do VU1/VU0; o VIF1 e a checagem VU1 x nativo (wotm_vu1check.inc, --vu1cmp, fotos) saem
-+# por PS2X_HW_EMU=0. O VIF0 fica (sobe o microcodigo e os dados do VU0, que os microprogramas traduzidos leem). O ps2EntryRunner
-+# continua com tudo, como executavel de teste.
++# por PS2X_HW_EMU=0, e tambem o VIF0 (passo 7: o microcodigo do VU0 sobe por copia direta, wotm_live.inc) e os timers do EE (passo 8,
++# EeScheduler.cpp). O ps2EntryRunner continua com tudo, como executavel de teste.
 +if(TARGET ps2_game_code)
 +    get_target_property(WOTM_RT_SOURCES ps2_runtime SOURCES)
 +    list(FILTER WOTM_RT_SOURCES EXCLUDE REGEX "(gs_frontend|gs_cpu_backend|ps2_gs_memory|ps2_vu1_core|ps2_vu1_upper|ps2_vu1_lower)\\.cpp$")
@@ -787,7 +787,7 @@ index 67c8184..b889c42 100644
  
  #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..a5141b2 100644
+index c5e31c4..7edc4d4 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 @@ -4,10 +4,55 @@
@@ -932,15 +932,26 @@ index c5e31c4..a5141b2 100644
      const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
      if (nextEventCycle != 0u && m_eeCycle >= nextEventCycle)
      {
-@@ -392,6 +484,7 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+@@ -392,12 +484,18 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
  {
      const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
      m_eeCycle += elapsed;
 +    g_wotmEeCycle = m_eeCycle;
++#if PS2X_HW_EMU
      m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
      m_runtime.advanceIopEeCycles(elapsed);
      if (m_pendingEeTimerInterrupts != 0u)
-@@ -1766,7 +1859,9 @@ void EeScheduler::processPendingEvents()
+     {
+         m_checkpointPending.store(true, std::memory_order_release);
+     }
++#else
++    // Jogo (wotm, passo 8 da FRONTEIRA.md no repo WoTM): os timers do EE nao contam e o IOP nao existe. O WotM so usa o T1, pelo
++    // timerGetCurTics e o timer1Handler, que leem o relogio do host (wotm_overrides.cpp); nenhum handler de interrupcao de timer.
++#endif
+ }
+ 
+ bool EeScheduler::isExecutingGuest() const noexcept
+@@ -1766,7 +1864,9 @@ void EeScheduler::processPendingEvents()
      {
          std::lock_guard lock(m_eventMutex);
          const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
@@ -951,7 +962,7 @@ index c5e31c4..a5141b2 100644
          const bool pendingWork = !m_events.empty() || cycleEventDue || m_stopRequested.load(std::memory_order_acquire);
          m_checkpointPending.store(pendingWork, std::memory_order_release);
      }
-@@ -1775,46 +1870,20 @@ void EeScheduler::processPendingEvents()
+@@ -1775,46 +1875,20 @@ void EeScheduler::processPendingEvents()
  
  void EeScheduler::processDueDeadlines()
  {
@@ -1006,7 +1017,7 @@ index c5e31c4..a5141b2 100644
              due.insert(due.end(),
                         std::make_move_iterator(m_deadlines.begin()),
                         std::make_move_iterator(firstFuture));
-@@ -1824,9 +1893,9 @@ void EeScheduler::processDueDeadlines()
+@@ -1824,9 +1898,9 @@ void EeScheduler::processDueDeadlines()
  
          std::sort(due.begin(), due.end(), [](const ScheduledEvent &left, const ScheduledEvent &right)
                    {
@@ -1018,7 +1029,7 @@ index c5e31c4..a5141b2 100644
                        }
                        if (left.event.type != right.event.type)
                        {
-@@ -1847,11 +1916,14 @@ void EeScheduler::processDueDeadlines()
+@@ -1847,11 +1921,14 @@ void EeScheduler::processDueDeadlines()
          {
              if (scheduled.event.type == EeEventType::VBlankStart)
              {
@@ -1037,7 +1048,7 @@ index c5e31c4..a5141b2 100644
                                EeEvent{EeEventType::VBlankStart, 0, 0});
              }
              processEvent(scheduled.event);
-@@ -1994,8 +2066,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1994,8 +2071,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
@@ -1049,7 +1060,7 @@ index c5e31c4..a5141b2 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
-@@ -2010,48 +2085,54 @@ void EeScheduler::waitForEvent()
+@@ -2010,48 +2090,54 @@ void EeScheduler::waitForEvent()
          return;
      }
  
@@ -1131,7 +1142,7 @@ index c5e31c4..a5141b2 100644
  }
  
  void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
-@@ -2068,21 +2149,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2068,21 +2154,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
  
  void EeScheduler::updateNextDeadline()
  {
@@ -1902,7 +1913,7 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..dac3a0b 100644
+index 37b6a4d..ffe4f98 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
 @@ -9,7 +9,19 @@
@@ -2001,7 +2012,17 @@ index 37b6a4d..dac3a0b 100644
                          if (channelBase == 0x1000A000)
                          {
                              m_pendingGifTransfers.push_back(std::move(pt));
-@@ -1802,11 +1858,19 @@ void PS2Memory::processPendingTransfers()
+@@ -1671,7 +1727,8 @@ void PS2Memory::processPendingTransfers()
+                                          : transfer.qwc;
+         observedGifQwc = static_cast<uint32_t>(std::min<uint64_t>(16u, static_cast<uint64_t>(observedGifQwc) + transferQwc));
+     }
+-    if (observedGifQwc != 0u)
++    // no jogo sem GS (wotm) o pacote do GIF e descartado na hora: a FIFO nunca enche (e os timers, que a esvaziavam, nao andam)
++    if (PS2X_HW_EMU && observedGifQwc != 0u)
+     {
+         constexpr uint32_t kGifStat = 0x10003020u;
+         constexpr uint32_t kGifFqcMask = 0x1F000000u;
+@@ -1802,11 +1859,19 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -2021,7 +2042,7 @@ index 37b6a4d..dac3a0b 100644
          }
          else if (p.qwc > 0)
          {
-@@ -1956,6 +2020,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+@@ -1956,6 +2021,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
              return;
          }
          flushMaskedPath3Packets(false);
@@ -2030,7 +2051,7 @@ index 37b6a4d..dac3a0b 100644
      }
  
      if (m_gifArbiter)
-@@ -2001,6 +2067,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+@@ -2001,6 +2068,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
          m_gifPacketCallback(data, sizeBytes);
  }
  
@@ -2038,7 +2059,7 @@ index 37b6a4d..dac3a0b 100644
  bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
  {
      static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-@@ -2272,6 +2339,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
+@@ -2272,6 +2340,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
      queueCompletedDmacCause(2u);
      return true;
  }
