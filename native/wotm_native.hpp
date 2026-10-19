@@ -2309,7 +2309,7 @@ public:
                 // GS: cor = texel * cor do vertice / 128 (o vertice vem cru, 0x80 = 1,0; acima disso clareia), limitada a 255;
                 // As = At * Av / 128, saturado em 255 pela funcao de textura (como a cor), / 128: ate 255/128
                 "  float as = t.a;\n"
-                // WOTM_GSTRUNC=1: as etapas inteiras do GS (texel inteiro, cor do DDA truncada, (Ct * Cv) >> 7 e (At * Av) >> 7 limitados a
+                // padrao (WOTM_GSTRUNC=0 desliga): as etapas inteiras do GS (texel inteiro, cor do DDA truncada, (Ct * Cv) >> 7 e (At * Av) >> 7 limitados a
                 // 255); em float o nativo fica ~2 niveis mais claro (pista no VU1CHECK.md)
                 "  if (fragGsA > 0.5 && gsTrunc > 0.5) {\n"
                 "    vec4 tx = floor(texture(texture0, fragTexCoord) * 255.0 + 0.5);\n"
@@ -2345,9 +2345,10 @@ public:
             fogLoc_[4] = GetShaderLocation(alphaShader_, "fogSplit");
             alphaRefLoc_ = GetShaderLocation(alphaShader_, "alphaRef");
             setAlphaRef(kGsAlphaRef);
-            // WOTM_GSTRUNC=1: contas inteiras do GS no shader (modulacao, Gouraud, neblina); desligado = float como antes
+            // contas inteiras do GS no shader (modulacao, Gouraud, neblina), ligado por padrao: o chao do VEGAS no PCSX2 software sai
+            // 2 niveis abaixo do float; WOTM_GSTRUNC=0 volta ao float
             const int gsTruncLoc = GetShaderLocation(alphaShader_, "gsTrunc");
-            const float gsTrunc = (std::getenv("WOTM_GSTRUNC") && std::atoi(std::getenv("WOTM_GSTRUNC")) != 0) ? 1.0f : 0.0f;
+            const float gsTrunc = (std::getenv("WOTM_GSTRUNC") && std::atoi(std::getenv("WOTM_GSTRUNC")) == 0) ? 0.0f : 1.0f;
             if (gsTruncLoc >= 0) SetShaderValue(alphaShader_, gsTruncLoc, &gsTrunc, SHADER_UNIFORM_FLOAT);
         }
         const bool useShader = !wire && alphaShader_.id > 0;
