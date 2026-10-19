@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -54,6 +55,8 @@ bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread 
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
+bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
+void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -1004,6 +1007,475 @@ namespace
     }
 }
 
+namespace
+{
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "Mods" do launcher). O lock-on do quadro (PadEntry +0x32) e decidido em
+    // updateInput{0,1,2}Config{CR,SR} a partir dos contadores de quadros segurados que o updateHistory{0,1,2} da mesma
+    // configuracao acabou de atualizar (PadFlags +0x1658 e +0x165E: ++ segurado, 0 solto). Na configuracao 0 trava com os dois
+    // acima de PadFlags +0x16C4 (um so anda de lado, PadEntry +0x1A/+0x1C); na 1 e na 2, com +0x1658 diferente de zero. A propria
+    // configuracao le o +0x32 logo em seguida para escolher o mapeamento do analogico e do direcional; por isso regravar so o
+    // +0x32 depois do interpretInputs deixava o boneco travado com o movimento de solto. Aqui, na saida do updateHistory, um
+    // toque novo no lock-on liga ou desliga um estado por jogador humano (dono em PadFlags +0x1810), e os contadores passam a
+    // valer "segurando" (ligado) ou "nao segurando" (desligado): o resto da configuracao, inclusive as combinacoes com o lock-on,
+    // ve exatamente o que veria com o botao segurado ou solto. Os contadores reais ficam guardados e voltam antes do proximo
+    // updateHistory, que conta a partir deles. Alvo travado morto desliga o estado (segurando, o updateLock pularia para o
+    // monstro mais proximo). A IA nao muda.
+    //
+    // Botoes do mod na configuracao 0 (a padrao; PadFlags +0x16EC): o GamePad que o loadPadInputs monta tem um byte por botao
+    // (0 L1, 1 L2, 3 R1, 4 R2, 0xC/0xD esquerda/direita do direcional ou do analogico). Na configuracao 0 o jogo usa L1+R1 para
+    // o lock-on, L1 ou R1 sozinho para andar de lado (o valor do byte vai para PadEntry +0x1A/+0x1C), R2 para a defesa (e o
+    // contra-ataque) e L2 para a camera. Na entrada do interpretInputs os bytes sao trocados: L2 fisico -> byte 0 e R2 -> byte 3
+    // (andar de lado), L1 -> byte 4 (defesa), L2 do jogo fica solto; o R1 fisico so alterna o lock-on (lido aqui, nao pelo jogo).
+    // Com o lock-on ligado, esquerda/direita do direcional (lidas cruas no scePadRead, porta = jogador) trocam o alvo
+    // (m_pinTarget: o updateLock mantem o alvo enquanto ele continua alvejavel) para o proximo monstro vivo a esquerda ou a
+    // direita na tela, e nao movem o boneco; o L2/R2 entra como esquerda/direita, que travado o jogo ja transforma em andar de
+    // lado (PadEntry +0x16/+0x18 -> +0x1A/+0x1C, so sem L2/R2 do jogo, o byte 4 = defesa). Os bytes originais voltam na saida. As configuracoes 1 e 2 ficam com os botoes do jogo.
+    constexpr uint32_t kUpdateHistory[3] = {wotm::fn::updateHistory0__8PadFlagsR7GamePad, wotm::fn::updateHistory1__8PadFlagsR7GamePad,
+                                            wotm::fn::updateHistory2__8PadFlagsR7GamePad};
+    constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
+    constexpr uint32_t kPadFlagsLockA = 0x1658u, kPadFlagsLockB = 0x165Eu, kPadFlagsHoldTweak = 0x16C4u, kPadFlagsConfig = 0x16ECu,
+                       kPadFlagsOwner = 0x1810u;
+    constexpr uint32_t kMonsterCs = 0xCu, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u, kMonsterDying = 0xEFu,
+                       kMonsterCameraView = 0x6CD8u;
+    constexpr uint32_t kPadL1 = 0x0u, kPadL2 = 0x1u, kPadR1 = 0x3u, kPadR2 = 0x4u, kPadLeft = 0xCu, kPadRight = 0xDu;
+    PS2Runtime::RecompiledFunction g_origUpdateHistory[3] = {}, g_origInterpretInputs = nullptr, g_origPadReadLock = nullptr;
+    struct LockToggle
+    {
+        uint32_t pf = 0;         // PadFlags do jogador (0 = livre)
+        uint32_t owner = 0;      // monstro dono (outro dono no mesmo PadFlags zera o estado)
+        bool held = false;       // lock-on fisicamente segurado no quadro anterior (borda)
+        bool on = false;         // estado alternado
+        bool forged = false;     // contadores regravados (realA/realB voltam antes do proximo updateHistory)
+        bool remap = false;      // botoes do mod neste quadro (configuracao 0): o lock-on e o R1 fisico (lockHeld)
+        bool lockHeld = false;
+        bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
+        uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
+    } g_lockToggle[4];
+    uint8_t g_padDir[2] = {};    // por porta: bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
+
+    bool ramOk(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
+    uint16_t rd16(uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + a, 2); return v; }
+    void wr16(uint8_t *rdram, uint32_t a, uint16_t v) { std::memcpy(rdram + a, &v, 2); }
+
+    LockToggle *lockToggleFind(uint32_t pf, bool create)
+    {
+        for (LockToggle &e : g_lockToggle)
+            if (e.pf == pf)
+                return &e;
+        if (create)
+            for (LockToggle &e : g_lockToggle)
+                if (!e.pf)
+                {
+                    e = LockToggle{};
+                    e.pf = pf;
+                    return &e;
+                }
+        return nullptr;
+    }
+
+    // O alvo travado (m_pinTarget, Monster +0x6C04, do quadro anterior) e um dos m_monsters do TheGame com m_dead (+0xE8)?
+    bool lockTargetDead(uint8_t *rdram, uint32_t owner)
+    {
+        const uint32_t target = FAST_READ32(owner + kMonsterPinTarget);
+        if (!target)
+            return false;
+        for (uint32_t i = 0; i < 8; ++i)
+            if (FAST_READ32(kGame + 0x120380 + 4 * i) == target)
+                return ramOk(target, kMonsterDead + 1u) && static_cast<int8_t>(rdram[target + kMonsterDead]) != 0;
+        return false;   // predio, peca de chefe etc.
+    }
+
+    // Estado do jogador humano dono deste PadFlags (nullptr para a IA)
+    LockToggle *lockToggleFor(uint8_t *rdram, uint32_t pf, int *slot)
+    {
+        const uint32_t owner = FAST_READ32(pf + kPadFlagsOwner);
+        if (!isPlayerMonster(rdram, owner, slot))
+            return nullptr;   // IA (o m_playerNum dela tambem nao e 0)
+        LockToggle *t = lockToggleFind(pf, true);
+        if (t && t->owner != owner)
+        {
+            *t = LockToggle{};
+            t->pf = pf;
+            t->owner = owner;
+        }
+        return t;
+    }
+
+    float rdF(uint8_t *rdram, uint32_t a) { float v; std::memcpy(&v, rdram + a, 4); return v; }
+
+    // Posicao (cs->trans) de um monstro ou de outro alvejavel (o _cs fica no +0xC dos dois)
+    bool targetPos(uint8_t *rdram, uint32_t obj, float p[3])
+    {
+        if (!ramOk(obj, 0x10u))
+            return false;
+        const uint32_t cs = FAST_READ32(obj + kMonsterCs) & 0x1FFFFFFFu;
+        if (!ramOk(cs, 0x20u))
+            return false;
+        for (int i = 0; i < 3; ++i)
+            p[i] = rdF(rdram, cs + 0x10 + 4 * i);
+        return true;
+    }
+
+    // m_monsters[i] serve de alvo para o dono: vivo e alvejavel como no getClosestTargetable(6); posicao em tp
+    bool lockCandidate(uint8_t *rdram, uint32_t m, uint32_t owner, float tp[3])
+    {
+        if (!m || m == owner || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying])
+            return false;
+        return (rd16(rdram, m + 4) & 6u) == 6u && targetPos(rdram, m, tp);
+    }
+
+    // Ao travar: o alvo e o monstro vivo mais perto (distancia 3D). O getClosestTargetable do updateLock pesa tambem a direcao para
+    // onde o monstro olha; com o m_pinTarget ja preenchido e alvejavel, o updateLock o mantem.
+    void lockNearestTarget(uint8_t *rdram, uint32_t owner)
+    {
+        float me[3], tp[3];
+        if (!targetPos(rdram, owner, me))
+            return;
+        uint32_t best = 0;
+        float bestD = 0.f;
+        for (uint32_t i = 0; i < 8; ++i)
+        {
+            const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
+            if (!lockCandidate(rdram, m, owner, tp))
+                continue;
+            const float d = (tp[0] - me[0]) * (tp[0] - me[0]) + (tp[1] - me[1]) * (tp[1] - me[1]) + (tp[2] - me[2]) * (tp[2] - me[2]);            if (!best || d < bestD)
+            {
+                best = m;
+                bestD = d;
+            }
+        }
+        if (best)
+            FAST_WRITE32(owner + kMonsterPinTarget, best);
+    }
+
+    // Troca o alvo travado para o monstro vivo mais proximo a esquerda (dir < 0) ou a direita (dir > 0) do atual na tela: angulo
+    // horizontal visto da camera do jogador (eixos direita e frente do _cs da vista), dando a volta no fim.
+    void lockCycleTarget(uint8_t *rdram, uint32_t owner, int slot, int dir)
+    {
+        const uint32_t cur = FAST_READ32(owner + kMonsterPinTarget);
+        float me[3], tp[3];
+        if (!cur || !targetPos(rdram, owner, me))
+            return;
+        int32_t players = static_cast<int32_t>(FAST_READ32(kShell + 0x2BB4));   // m_numPlayers
+        const int32_t view = players > 1 ? std::clamp<int32_t>(static_cast<int32_t>(FAST_READ32(owner + kMonsterCameraView)), 0, 4) : 0;
+        const uint32_t cam = FAST_READ32(kViewInfo + 0x14u * view) & 0x1FFFFFFFu;   // _cs da vista
+        if (!ramOk(cam, 0x40u))
+            return;
+        float right[2], fwd[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            right[i] = rdF(rdram, cam + 0x20 + 4 * i);
+            fwd[i] = rdF(rdram, cam + 0x30 + 4 * i);
+        }
+        auto screenAngle = [&](const float p[3]) {
+            const float dx = p[0] - me[0], dy = p[1] - me[1];
+            return std::atan2(dx * right[0] + dy * right[1], dx * fwd[0] + dy * fwd[1]);
+        };
+        const float curA = targetPos(rdram, cur, tp) ? screenAngle(tp) : 0.f;
+        uint32_t best = 0, wrap = 0;
+        float bestD = 1e9f, wrapA = 0.f;
+        for (uint32_t i = 0; i < 8; ++i)
+        {
+            const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
+            if (m == cur || !lockCandidate(rdram, m, owner, tp))
+                continue;
+            const float a = screenAngle(tp), d = (a - curA) * static_cast<float>(dir);
+            if (d > 0.f && d < bestD)
+            {
+                bestD = d;
+                best = m;
+            }
+            if (!wrap || a * -static_cast<float>(dir) > wrapA * -static_cast<float>(dir))
+            {
+                wrap = m;   // o mais do lado oposto: a volta
+                wrapA = a;
+            }
+        }
+        if (!best)
+            best = wrap;
+        if (!best)
+            return;
+        FAST_WRITE32(owner + kMonsterPinTarget, best);
+        std::fprintf(stderr, "[lockon] jogador %d: alvo a %s (0x%x)\n", slot + 1, dir < 0 ? "esquerda" : "direita", best);
+    }
+
+    void interpretInputsLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, gp = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+        LockToggle *t = nullptr;
+        int slot = 0;
+        if (ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
+            t = lockToggleFor(rdram, pf, &slot);
+        if (t)
+            t->remap = FAST_READ32(pf + kPadFlagsConfig) == 0u;
+        if (!t || !t->remap)
+        {
+            g_origInterpretInputs(rdram, ctx, runtime);
+            return;
+        }
+        uint8_t *b = rdram + gp, saved[0x10];
+        std::memcpy(saved, b, sizeof saved);
+        t->lockHeld = saved[kPadR1] != 0;
+        b[kPadL1] = saved[kPadL2];                // andar de lado: L2 e R2
+        b[kPadR1] = saved[kPadR2];
+        b[kPadR2] = saved[kPadL1] ? 0xFF : 0;     // defesa: L1
+        b[kPadL2] = 0;
+        const uint8_t dirs = slot < 2 ? g_padDir[slot] : 0;
+        for (int i = 0; i < 2; ++i)
+        {
+            const bool held = (dirs >> i) & 1u;
+            if (t->on && held)
+            {
+                b[kPadLeft] = b[kPadRight] = 0;   // travado, as setas trocam o alvo e nao movem
+                if (!t->dirHeld[i])
+                    lockCycleTarget(rdram, t->owner, slot, i ? 1 : -1);
+            }
+            t->dirHeld[i] = held;
+        }
+        if (t->on)
+        {
+            // travado, o jogo anda de lado pela esquerda/direita (PadEntry +0x16/+0x18 -> +0x1A/+0x1C) e ignora os bytes 0/3
+            if (saved[kPadL2])
+                b[kPadLeft] = 0xFF;
+            if (saved[kPadR2])
+                b[kPadRight] = 0xFF;
+        }        const uint32_t ra = GPR_U32(ctx, 31);
+        g_origInterpretInputs(rdram, ctx, runtime);
+        if (ctx->pc == ra)   // fatia de tempo acabou no meio: o resto ainda le os bytes trocados (o loadPadInputs refaz todos)
+            std::memcpy(b, saved, sizeof saved);    }
+
+    void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t port = GPR_U32(ctx, 4), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
+        g_origPadReadLock(rdram, ctx, runtime);
+        if (port < 2 && GPR_U32(ctx, 2) != 0u && ramOk(data, 32u))
+        {
+            const uint8_t btn = static_cast<uint8_t>(~rdram[data + 2]);   // ativos em 0: 0x80 esquerda, 0x20 direita
+            g_padDir[port] = static_cast<uint8_t>(((btn >> 7) & 1u) | (((btn >> 5) & 1u) << 1));
+        }
+    }
+
+    void lockToggleApply(uint8_t *rdram, uint32_t pf, int config)
+    {
+        int slot = 0;
+        LockToggle *t = lockToggleFor(rdram, pf, &slot);
+        if (!t)
+            return;
+        const uint32_t owner = t->owner;
+        const uint16_t a = rd16(rdram, pf + kPadFlagsLockA), b = rd16(rdram, pf + kPadFlagsLockB);
+        const int32_t tweak = static_cast<int32_t>(FAST_READ32(pf + kPadFlagsHoldTweak));
+        const uint16_t over = static_cast<uint16_t>(std::clamp<int32_t>(tweak + 1, 1, 0xFFFF));   // acima do limiar: trava
+        const uint16_t under = static_cast<uint16_t>(std::clamp<int32_t>(tweak, 0, 0xFFFF));
+        const bool remap = config == 0 && t->remap;
+        const bool held = remap ? t->lockHeld : config == 0 ? (a > tweak && b > tweak) : a != 0;
+        if (t->on && lockTargetDead(rdram, owner))
+        {
+            t->on = false;   // segurando, o updateLock passaria para o mais proximo; alternado, solta
+            std::fprintf(stderr, "[lockon] jogador %d: solto (alvo morreu)\n", slot + 1);
+        }
+        if (held && !t->held)
+        {
+            t->on = !t->on;
+            if (t->on)
+                lockNearestTarget(rdram, owner);
+            std::fprintf(stderr, "[lockon] jogador %d: %s (alvo 0x%x)\n", slot + 1, t->on ? "travado" : "solto", FAST_READ32(owner + kMonsterPinTarget));
+        }
+        t->held = held;
+        t->realA = a;
+        t->realB = b;
+        if (config == 0)
+        {
+            if (t->on)
+            {
+                wr16(rdram, pf + kPadFlagsLockA, std::max(a, over));
+                wr16(rdram, pf + kPadFlagsLockB, std::max(b, over));
+            }
+            else if (remap ? (a > tweak && b > tweak) : held)   // com os botoes do mod: L2+R2 juntos tambem nao travam
+            {
+                wr16(rdram, pf + kPadFlagsLockA, std::min(a, under));   // os dois juntos, abaixo do limiar: nem trava nem anda de lado
+                wr16(rdram, pf + kPadFlagsLockB, std::min(b, under));
+            }
+        }
+        else if (t->on)
+            wr16(rdram, pf + kPadFlagsLockA, std::max<uint16_t>(a, 1));
+        else
+            wr16(rdram, pf + kPadFlagsLockA, 0);
+        t->fakeA = rd16(rdram, pf + kPadFlagsLockA);
+        t->fakeB = rd16(rdram, pf + kPadFlagsLockB);
+        t->forged = t->fakeA != a || t->fakeB != b;
+    }
+
+    template <int N>
+    void updateHistoryLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, ra = GPR_U32(ctx, 31);
+        const bool ok = ctx->pc == kUpdateHistory[N] && ramOk(pf, kPadFlagsOwner + 4u);
+        if (ok)
+            if (LockToggle *t = lockToggleFind(pf, false); t && t->forged)
+            {
+                // o updateHistory conta a partir dos contadores reais (se alguem os zerou no meio, fica o que ele gravou)
+                if (rd16(rdram, pf + kPadFlagsLockA) == t->fakeA && rd16(rdram, pf + kPadFlagsLockB) == t->fakeB)
+                {
+                    wr16(rdram, pf + kPadFlagsLockA, t->realA);
+                    wr16(rdram, pf + kPadFlagsLockB, t->realB);
+                }
+                t->forged = false;
+            }
+        g_origUpdateHistory[N](rdram, ctx, runtime);
+        if (ok && ctx->pc == ra)
+            lockToggleApply(rdram, pf, N);
+    }
+}
+
+namespace
+{
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "Mods" do launcher), no lugar do icone de vida (a bolinha
+    // com o numero do jogador, que muda de cor com a vida). O Hud::drawHealthIcon(monstro, n) projeta a cabeca do monstro e manda dois
+    // quadrados ao ScreenPolys::addPoly no mesmo ponto: o numero (branco) e o anel (cor do +0x686C/+0x6870). Aqui o gancho no
+    // drawHealthIcon guarda o monstro, e o do addPoly, quando chamado de dentro dele, troca os dois quadrados por duas barras sem
+    // textura (wotmBarRect, desenhadas com os retangulos de tela) centradas onde o primeiro ficaria: vida (m_health/m_maxHealth,
+    // +0x44C/+0x448, com o dano recente em vermelho) e, embaixo, energia (StaminaMeter em +0x460: cur/max; cinza enquanto esgotada),
+    // no estilo das barras do HUD do jogador. O resto do HUD nao muda.
+    constexpr uint32_t kDrawHealthIcon = wotm::fn::drawHealthIcon__3HudP7Monsteri, kDrawHealthIconSize = 0x4F8u,
+                       kAddPoly = wotm::fn::addPoly__11ScreenPolysiiiRQ211ScreenPolys8PolyData;
+    constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
+    PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr;
+    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon
+    bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
+
+    float barFrac(uint8_t *rdram, uint32_t cur, uint32_t max)
+    {
+        float c, m;
+        std::memcpy(&c, rdram + cur, 4);
+        std::memcpy(&m, rdram + max, 4);
+        return m > 0.f && std::isfinite(c) ? std::clamp(c / m, 0.f, 1.f) : 0.f;
+    }
+
+    // Estilo do HUD do jogador (medido num print 720p): moldura preta, cinza (94) e preta; dentro, faixas de cor no sentido da
+    // espessura (escuro nas bordas, brilho claro perto do meio). Vida verde com o dano recente em vermelho (brilho embaixo), energia
+    // azul; o vazio escurece o fundo.
+    constexpr uint8_t kHealthProf[][3] = {{20, 58, 2},    {43, 101, 16},  {81, 170, 39},  {96, 181, 53},  {169, 191, 148},
+                                          {146, 191, 109}, {85, 178, 42},  {68, 146, 31},  {31, 79, 9}};
+    constexpr uint8_t kLagProf[][3] = {{80, 28, 26}, {118, 40, 38}, {160, 56, 53}, {160, 56, 53}, {187, 103, 104}, {184, 95, 95}};
+    constexpr uint8_t kEnergyProf[][3] = {{13, 23, 67},    {37, 55, 133},  {46, 67, 153},  {112, 127, 153}, {146, 150, 153},
+                                          {85, 105, 153},  {46, 67, 153},  {28, 43, 112},  {7, 15, 51}};
+    constexpr uint8_t kExhaustedProf[][3] = {{30, 30, 34},  {60, 60, 68},   {80, 80, 90},   {120, 120, 128}, {140, 140, 146},
+                                             {100, 100, 110}, {80, 80, 90},  {55, 55, 62},   {25, 25, 30}};
+
+    template <size_t N>
+    void gradBar(float x0, float y0, float x1, float y1, const uint8_t (&prof)[N][3])
+    {
+        if (x1 <= x0)
+            return;
+        const float h = (y1 - y0) / static_cast<float>(N);
+        for (size_t i = 0; i < N; ++i)
+            wotmBarRect(x0, y0 + h * i, x1, y0 + h * (i + 1), prof[i][0], prof[i][1], prof[i][2], 0x80);
+    }
+
+    // Moldura de uma barra em volta do miolo (x0, y0)-(x1, y1); 1 unidade = 1,5 px em x e 3,2 px em y a 720p
+    // Anel de espessura (tx, ty) por fora de (x0, y0)-(x1, y1)
+    void barRing(float x0, float y0, float x1, float y1, float tx, float ty, uint8_t c)
+    {
+        wotmBarRect(x0 - tx, y0 - ty, x1 + tx, y0, c, c, c, 0x80);
+        wotmBarRect(x0 - tx, y1, x1 + tx, y1 + ty, c, c, c, 0x80);
+        wotmBarRect(x0 - tx, y0, x0, y1, c, c, c, 0x80);
+        wotmBarRect(x1, y0, x1 + tx, y1, c, c, c, 0x80);
+    }
+
+    void barFrame(float x0, float y0, float x1, float y1)
+    {
+        constexpr float kOx = 0.7f, kOy = 0.3f, kGx = 1.3f, kGy = 0.6f, kIx = 1.0f, kIy = 0.45f;
+        barRing(x0 - kIx - kGx, y0 - kIy - kGy, x1 + kIx + kGx, y1 + kIy + kGy, kOx, kOy, 0);
+        barRing(x0 - kIx, y0 - kIy, x1 + kIx, y1 + kIy, kGx, kGy, 94);
+        barRing(x0, y0, x1, y1, kIx, kIy, 0);
+        wotmBarRect(x0, y0, x1, y1, 0, 0, 0, 0x40);   // vazio: o fundo escurecido
+    }
+
+    // Dano recente (o trecho vermelho): segura ~0,5 s e escoa ate a vida atual, por monstro
+    struct BarLag
+    {
+        uint32_t m = 0;
+        float lag = 0.f;
+        int hold = 0;
+    } g_barLag[16];
+
+    float barLag(uint32_t m, float health)
+    {
+        BarLag *e = nullptr;
+        for (BarLag &b : g_barLag)
+            if (b.m == m)
+                e = &b;
+        if (!e)
+            for (BarLag &b : g_barLag)
+                if (!b.m)
+                {
+                    e = &b;
+                    *e = BarLag{m, health, 0};
+                    break;
+                }
+        if (!e)
+            return health;
+        if (health >= e->lag)
+        {
+            e->lag = health;
+            e->hold = 0;
+        }
+        else if (++e->hold > 30)
+            e->lag = std::max(health, e->lag - 0.006f);
+        return e->lag;
+    }
+
+    void emitBars(uint8_t *rdram, uint32_t m, const float box[4])
+    {
+        if (!ramOk(m, kMonsterStamina + 0x24u))
+            return;
+        const float health = barFrac(rdram, m + kMonsterHealth, m + kMonsterMaxHealth);
+        const float energy = barFrac(rdram, m + kMonsterStamina + 0x10u, m + kMonsterStamina);
+        const bool exhausted = FAST_READ32(m + kMonsterStamina + 0x20u) != 0u;
+        const float lag = barLag(m, health);        // tela do jogo 640 x 224 (campo: 1 unidade em y = 2 linhas)
+        constexpr float kW = 44.f, kHealthH = 2.6f, kEnergyH = 1.6f, kGap = 0.6f;
+        constexpr float kFrameY = 0.3f + 0.6f + 0.45f;   // espessura da moldura em y (barFrame)
+        const float cx = 0.5f * (box[0] + box[2]), cy = 0.5f * (box[1] + box[3]);
+        const float x0 = cx - 0.5f * kW, x1 = cx + 0.5f * kW;
+        const float y0 = cy - 0.5f * (kHealthH + kEnergyH + kGap) - kFrameY, y1 = y0 + kHealthH;
+        const float y2 = y1 + 2.f * kFrameY + kGap, y3 = y2 + kEnergyH;
+        barFrame(x0, y0, x1, y1);
+        gradBar(x0 + kW * health, y0, x0 + kW * lag, y1, kLagProf);
+        gradBar(x0, y0, x0 + kW * health, y1, kHealthProf);
+        barFrame(x0, y2, x1, y3);
+        if (exhausted)
+            gradBar(x0, y2, x0 + kW * energy, y3, kExhaustedProf);
+        else
+            gradBar(x0, y2, x0 + kW * energy, y3, kEnergyProf);
+    }
+
+    void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kDrawHealthIcon)
+        {
+            g_barMonster = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+            g_barDone = false;
+        }
+        g_origDrawHealthIcon(rdram, ctx, runtime);
+    }
+
+    void addPolyBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31);
+        if (ctx->pc != kAddPoly || ra < kDrawHealthIcon || ra >= kDrawHealthIcon + kDrawHealthIconSize || !g_barMonster)
+        {
+            g_origAddPolyBars(rdram, ctx, runtime);
+            return;
+        }
+        float box[4];
+        if (!g_barDone && wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)),
+                                            static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7), box))
+            emitBars(rdram, g_barMonster, box);
+        g_barDone = true;
+        ctx->pc = ra;   // o quadrado do icone nao e montado
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -1169,6 +1641,41 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
         std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "Mods" do launcher): um toque trava, outro solta
+    if (const char *e = std::getenv("WOTM_LOCKTOGGLE"); e && *e && std::strcmp(e, "0") != 0)
+    {
+        constexpr PS2Runtime::RecompiledFunction kHooks[3] = {&updateHistoryLockToggle<0>, &updateHistoryLockToggle<1>,
+                                                              &updateHistoryLockToggle<2>};
+        for (int i = 0; i < 3; i++)
+            g_origUpdateHistory[i] = runtime.lookupFunction(kUpdateHistory[i]);
+        if (g_origUpdateHistory[0] && g_origUpdateHistory[1] && g_origUpdateHistory[2])
+        {
+            for (int i = 0; i < 3; i++)
+                runtime.registerFunction(kUpdateHistory[i], kHooks[i]);
+            std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE): um toque trava, outro solta\n");
+            // botoes do mod na configuracao 0 (depois da camera livre: o scePadRead daqui embrulha o dela)
+            if ((g_origInterpretInputs = runtime.lookupFunction(kInterpretInputs)) && (g_origPadReadLock = runtime.lookupFunction(kScePadRead)))
+            {
+                runtime.registerFunction(kInterpretInputs, &interpretInputsLockToggle);
+                runtime.registerFunction(kScePadRead, &padReadLockToggle);
+                std::fprintf(stderr, "[wotm] lock-on no R1, defesa no L1, andar de lado no L2/R2, setas trocam o alvo (configuracao 0)\n");
+            }
+        }
+        else
+            std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
+    }
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon
+    if (const char *e = std::getenv("WOTM_ENEMYBARS"); e && *e && std::strcmp(e, "0") != 0)
+    {
+        if ((g_origDrawHealthIcon = runtime.lookupFunction(kDrawHealthIcon)) && (g_origAddPolyBars = runtime.lookupFunction(kAddPoly)))
+        {
+            runtime.registerFunction(kDrawHealthIcon, &drawHealthIconBars);
+            runtime.registerFunction(kAddPoly, &addPolyBars);
+            std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
+        }
+        else
+            std::fprintf(stderr, "[wotm] barras sobre os inimigos indisponiveis: Hud::drawHealthIcon ou ScreenPolys::addPoly sem funcao no runtime\n");
+    }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
     if (g_minRate > 0)
