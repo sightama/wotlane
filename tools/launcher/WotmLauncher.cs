@@ -183,7 +183,7 @@ class Launcher : Form
         dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
 
         fullscreen.Checked = saved.TryGetValue("WOTM_FULLSCREEN", out v) && v == "1";
-        tips.SetToolTip(fullscreen, "Tela cheia sem borda no monitor da janela. Sem ela a janela abre no tamanho da resolucao (reduzida se nao couber).");
+        tips.SetToolTip(fullscreen, "Abre em tela cheia sem borda no monitor da janela (F11 alterna a qualquer hora). Sem ela a janela abre no tamanho da resolucao (reduzida se nao couber).");
         inner.Controls.Add(fullscreen);
 
         rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");

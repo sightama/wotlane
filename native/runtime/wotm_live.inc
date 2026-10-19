@@ -315,20 +315,9 @@ static void initPresentRate()
                  monHz, vsync ? "ligado" : "desligado");
 }
 
-static void initWindowAspect()
+// Janela no tamanho do quadro nativo (renderHeight na proporcao fixa, ou 16:9), reduzida para caber em 90% do monitor e centrada.
+static void fitWindow()
 {
-    static bool done = false;
-    if (done)
-        return;
-    done = true;
-    if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
-        initPresentRate();
-    if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
-    {
-        ToggleBorderlessWindowed();
-        ClearWindowState(FLAG_WINDOW_TOPMOST);   // o raylib 5.5 poe a janela sem borda sempre por cima (GLFW_FLOATING)
-        return;
-    }
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
     float h = static_cast<float>(renderHeight()), w = h * a;
     const int mon = GetCurrentMonitor();
@@ -345,6 +334,39 @@ static void initWindowAspect()
         const Vector2 p = GetMonitorPosition(mon);
         SetWindowPosition(static_cast<int>(p.x + (mw / 0.9f - w) * 0.5f), static_cast<int>(p.y + (mh / 0.9f - h) * 0.5f));
     }
+}
+
+// Tela cheia sem borda no monitor da janela (proporcao do monitor; com WOTM_ASPECT fixo o quadro fica com faixas) ou de volta a janela.
+static void setFullscreen(bool on)
+{
+    if (on == IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE))
+        return;
+    ToggleBorderlessWindowed();
+    if (on)
+        ClearWindowState(FLAG_WINDOW_TOPMOST);   // o raylib 5.5 poe a janela sem borda sempre por cima (GLFW_FLOATING)
+    else
+        fitWindow();   // o raylib volta ao tamanho de antes, que e o 960x720 do runtime quando a sessao abriu em tela cheia
+}
+
+static void initWindowAspect()
+{
+    static bool done = false;
+    if (done)
+        return;
+    done = true;
+    if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
+        initPresentRate();
+    if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
+        setFullscreen(true);
+    else
+        fitWindow();
+}
+
+// F11 alterna entre tela cheia e janela (a cada apresentacao, na thread da janela; vale no menu, nos filmes e na luta).
+static void fullscreenKey()
+{
+    if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
+        setFullscreen(!IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
@@ -1283,6 +1305,7 @@ void wotmFlareCapture(const uint8_t *rdram)
 namespace wotm_live
 {
 static void initWindowAspect() {}
+static void fullscreenKey() {}
 static bool exportFrame(const char *) { return false; }
 static std::string resources() { return {}; }
 }
