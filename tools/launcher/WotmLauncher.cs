@@ -84,10 +84,19 @@ class Launcher : Form
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
 
-        var tips = new ToolTip();
+        var tips = new ToolTip { AutoPopDelay = 30000 };
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
+        // duas colunas: video, partida e trapacas a esquerda; as caixas de Flags a direita
+        var cols = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        var left = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
+        var right = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
+        cols.Controls.Add(left);
+        cols.Controls.Add(right);
+        root.Controls.Add(cols);
         Dictionary<string, string> saved = LoadIni();
-        root.Controls.Add(VideoGroup(saved, tips));
+        left.Controls.Add(VideoGroup(saved, tips));
+        left.Controls.Add(MatchGroup(saved, tips));
+        left.Controls.Add(CheatsGroup(saved, tips));
         GroupBox gb = null;
         FlowLayoutPanel inner = null;
         foreach (Flag f in Flags)
@@ -97,7 +106,7 @@ class Launcher : Form
                 gb = new GroupBox { Text = f.Group, AutoSize = true, Width = 420, Padding = new Padding(8) };
                 inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
                 gb.Controls.Add(inner);
-                root.Controls.Add(gb);
+                right.Controls.Add(gb);
             }
             var cb = new CheckBox { Text = f.Label + "   [" + f.Key.TrimStart(':') + "]", AutoSize = true };
             string v;
@@ -106,6 +115,9 @@ class Launcher : Form
             inner.Controls.Add(cb);
             boxes[f] = cb;
         }
+        int wide = 0;
+        foreach (Control c in right.Controls) wide = Math.Max(wide, c.PreferredSize.Width);
+        foreach (Control c in right.Controls) c.MinimumSize = new Size(wide, 0);
 
         var buttons = new FlowLayoutPanel { AutoSize = true };
         var play = new Button { Text = "Jogar", AutoSize = true };
@@ -122,6 +134,13 @@ class Launcher : Form
             aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
             dynWidth.Checked = true;
             fullscreen.Checked = false;
+            matchOn.Checked = false;
+            matchPlayer.SelectedIndex = 0;
+            matchLevel.SelectedIndex = 0;
+            for (int i = 0; i < matchAIs.Length; ++i) matchAIs[i].SelectedIndex = i == 0 ? 1 : 0;
+            foreach (CheckBox c in cheatBoxes) c.Checked = false;
+            cheatStamina.SelectedIndex = 0;
+            cheatWin.Value = 0;
         };
         buttons.Controls.Add(play);
         buttons.Controls.Add(log);
@@ -180,6 +199,152 @@ class Launcher : Form
         inner.Controls.Add(new Label { Text = "Monitor principal: " + monitorWidth + "x" + monitorHeight +
             (monitorHz > 0 ? " a " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = SystemColors.GrayText });
         return gb;
+    }
+
+    // Partida direta (WOTM_MATCH=<jogador>,<ia>[,<ia>...],<fase>): indices do GLOSSARIO.md. O runtime aceita ate 7 IAs (8 monstros).
+    // Fora da lista: Spider (6) e Ogre (12), cortados, e os chefes (13..15).
+    static readonly int[] MonsterIds = { 1, 2, 3, 4, 5, 7, 8, 9, 10, 11 };
+    static readonly string[] MonsterNames = { "Congar", "Robo-47", "Togera", "Ultra V", "Preytor", "Kineticlops", "Magmo", "Raptros", "Agamo", "Zorgulon" };
+    static readonly int[] LevelIds = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16 };
+    static readonly string[] LevelNames = { "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City", "Century Airfield", "Atomic Island",
+        "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
+    const int MatchMaxAIs = 7, MetroId = 4;
+
+    readonly CheckBox matchOn = new CheckBox { Text = "Partida direta, sem menu   [WOTM_MATCH]", AutoSize = true };
+    readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
+    readonly Label matchInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
+
+    GroupBox MatchGroup(Dictionary<string, string> saved, ToolTip tips)
+    {
+        var gb = new GroupBox { Text = "Partida", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
+        gb.Controls.Add(inner);
+        string v;
+
+        matchOn.Checked = saved.TryGetValue(":MatchOn", out v) && v == "1";
+        tips.SetToolTip(matchOn, "Pula o menu e vai direto para a luta (1 jogador contra a CPU, 3 vidas, sem meta de vitorias: " +
+            "a luta segue sem o dialogo do fim). Liga sozinho -Auto 0, porque o roteiro do pad apertaria botoes no meio da luta. " +
+            "Com 'Jogador controlado pela IA' (Execucao) vira IA contra IA.");
+        inner.Controls.Add(matchOn);
+
+        matchPlayer.Items.AddRange(MonsterNames);
+        matchPlayer.SelectedIndex = IndexOrZero(MonsterIds, saved, ":MatchPlayer");
+        inner.Controls.Add(Row("Seu monstro", matchPlayer));
+
+        foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
+        matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
+        tips.SetToolTip(matchLevel, "Numero = indice da fase no GLOSSARIO.md. O teto e a RAM: com 8 monstros o Metro City passa dos 32 MB na carga e congela; " +
+            "Baytown e Gamblers Gulch ficam com ~2 MB de folga.");
+        inner.Controls.Add(Row("Fase", matchLevel));
+
+        inner.Controls.Add(new Label { Text = "Oponentes da IA (ate 7; o primeiro e obrigatorio):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
+        var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(400, 0), WrapContents = true };
+        for (int i = 0; i < MatchMaxAIs; ++i)
+        {
+            var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 122 };
+            cb.Items.Add(i == 0 ? "(escolha)" : "-");
+            cb.Items.AddRange(MonsterNames);
+            int id = saved.TryGetValue(":MatchAI" + (i + 1), out v) ? ParseInt(v) : (i == 0 ? MonsterIds[0] : 0);
+            int k = Array.IndexOf(MonsterIds, id);
+            cb.SelectedIndex = k >= 0 ? k + 1 : (i == 0 ? 1 : 0);
+            cb.SelectedIndexChanged += delegate { UpdateMatch(); };
+            tips.SetToolTip(cb, "Monstro repetido recebe o proximo figurino, como no menu. '-' = vaga vazia.");
+            matchAIs[i] = cb;
+            foes.Controls.Add(cb);
+        }
+        inner.Controls.Add(foes);
+        matchInfo.ForeColor = SystemColors.GrayText;
+        inner.Controls.Add(matchInfo);
+
+        matchOn.CheckedChanged += delegate { UpdateMatch(); };
+        matchLevel.SelectedIndexChanged += delegate { UpdateMatch(); };
+        UpdateMatch();
+        return gb;
+    }
+
+    int MatchFoes()
+    {
+        int n = 0;
+        foreach (ComboBox cb in matchAIs) if (cb.SelectedIndex > 0) ++n;
+        return n;
+    }
+
+    void UpdateMatch()
+    {
+        bool on = matchOn.Checked;
+        matchPlayer.Enabled = matchLevel.Enabled = on;
+        foreach (ComboBox cb in matchAIs) cb.Enabled = on;
+        int total = 1 + MatchFoes();
+        string txt = total + " monstros na luta.";
+        if (LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8) txt += " Metro City com 8 congela na carga (falta RAM).";
+        if (total > 4) txt += " Os marcadores fora da tela so numeram ate 4.";
+        matchInfo.Text = txt;
+        matchInfo.ForeColor = LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8 ? Color.Firebrick : SystemColors.GrayText;
+    }
+
+    string MatchValue()
+    {
+        var parts = new List<string> { MonsterIds[matchPlayer.SelectedIndex].ToString() };
+        foreach (ComboBox cb in matchAIs) if (cb.SelectedIndex > 0) parts.Add(MonsterIds[cb.SelectedIndex - 1].ToString());
+        parts.Add(LevelIds[matchLevel.SelectedIndex].ToString());
+        return string.Join(",", parts.ToArray());
+    }
+
+    // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
+    static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
+    static readonly string[] CheatLabels = { "Invencivel", "Especial sempre pronto", "CLOAK", "Modo deus (sem dano e sem reacao a golpe)" };
+    readonly CheckBox[] cheatBoxes = new CheckBox[4];
+    readonly ComboBox cheatStamina = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly NumericUpDown cheatWin = new NumericUpDown { Minimum = 0, Maximum = 3600, Width = 70 };
+
+    GroupBox CheatsGroup(Dictionary<string, string> saved, ToolTip tips)
+    {
+        var gb = new GroupBox { Text = "Trapacas desde o inicio   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
+        gb.Controls.Add(inner);
+        string v;
+        inner.Controls.Add(new Label { Text = "As mesmas do menu F1 na luta; valem para os jogadores humanos.", AutoSize = true, ForeColor = SystemColors.GrayText });
+        for (int i = 0; i < CheatKeys.Length; ++i)
+        {
+            var cb = new CheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
+            cb.Checked = saved.TryGetValue(":Cheat_" + CheatKeys[i], out v) && v == "1";
+            cheatBoxes[i] = cb;
+            inner.Controls.Add(cb);
+        }
+        tips.SetToolTip(cheatBoxes[0], "A vida nao cai; o golpe ainda empurra.");
+        tips.SetToolTip(cheatBoxes[3], "m_godMode do jogo (vida, stamina e especial cheios) e, por nos, sem reacao a golpe. Predio que cai em cima ainda mata.");
+        cheatStamina.Items.AddRange(new object[] { "Normal", "Sempre cheia   [stam]", "Furia (130)   [furia]" });
+        cheatStamina.SelectedIndex = saved.TryGetValue(":CheatStamina", out v) ? Math.Max(0, Math.Min(2, ParseInt(v))) : 0;
+        inner.Controls.Add(Row("Stamina", cheatStamina));
+        cheatWin.Value = saved.TryGetValue(":CheatWin", out v) ? Math.Max(0, Math.Min(3600, ParseInt(v))) : 0;
+        tips.SetToolTip(cheatWin, "Derruba todas as IAs vivas a cada N segundos de jogo (o 'vencer a luta' do F1). 0 = desligado.");
+        inner.Controls.Add(Row("Vencer a cada (s, 0 = nao)   [vencer]", cheatWin));
+        return gb;
+    }
+
+    string CheatsValue()
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < CheatKeys.Length; ++i) if (cheatBoxes[i].Checked) parts.Add(CheatKeys[i]);
+        if (cheatStamina.SelectedIndex == 1) parts.Add("stam");
+        else if (cheatStamina.SelectedIndex == 2) parts.Add("furia");
+        if (cheatWin.Value > 0) parts.Add("vencer=" + (int)cheatWin.Value);
+        return string.Join(",", parts.ToArray());
+    }
+
+    static int ParseInt(string s)
+    {
+        int n;
+        return int.TryParse(s, out n) ? n : 0;
+    }
+
+    static int IndexOrZero(int[] ids, Dictionary<string, string> saved, string key)
+    {
+        string v;
+        int k = saved.TryGetValue(key, out v) ? Array.IndexOf(ids, ParseInt(v)) : -1;
+        return k >= 0 ? k : 0;
     }
 
     // Maior resolucao da lista que cabe na altura do monitor principal.
@@ -256,6 +421,14 @@ class Launcher : Form
         lines.Add("WOTM_FULLSCREEN|" + (fullscreen.Checked ? "1" : "0"));
         lines.Add("WOTM_HZ|" + Rates[rate.SelectedIndex]);
         lines.Add("WOTM_VSYNC|" + (vsync.Checked ? "1" : "0"));
+        lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
+        lines.Add(":MatchPlayer|" + MonsterIds[matchPlayer.SelectedIndex]);
+        lines.Add(":MatchLevel|" + LevelIds[matchLevel.SelectedIndex]);
+        for (int i = 0; i < matchAIs.Length; ++i)
+            lines.Add(":MatchAI" + (i + 1) + "|" + (matchAIs[i].SelectedIndex > 0 ? MonsterIds[matchAIs[i].SelectedIndex - 1] : 0));
+        for (int i = 0; i < CheatKeys.Length; ++i) lines.Add(":Cheat_" + CheatKeys[i] + "|" + (cheatBoxes[i].Checked ? "1" : "0"));
+        lines.Add(":CheatStamina|" + cheatStamina.SelectedIndex);
+        lines.Add(":CheatWin|" + (int)cheatWin.Value);
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
@@ -292,8 +465,10 @@ class Launcher : Form
         SaveIni();
         string rt = RuntimeDir();
         if (rt == null) { status.Text = "Nao achei a pasta do runtime (run_live.ps1)."; return; }
+        if (matchOn.Checked && MatchFoes() == 0) { status.Text = "Partida direta: escolha pelo menos um oponente."; return; }
+        // partida direta pula o menu: o roteiro do pad (-Auto 1) apertaria botoes no meio da luta
         string args = string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Auto {1} -Stats {2} -Build {3}",
-            Path.Combine(rt, "run_live.ps1"), On(":Auto") ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
+            Path.Combine(rt, "run_live.ps1"), On(":Auto") && !matchOn.Checked ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
         psi.EnvironmentVariables["WOTM_REPO"] = exeDir;
         foreach (var kv in boxes)
@@ -315,6 +490,11 @@ class Launcher : Form
         else psi.EnvironmentVariables.Remove("WOTM_HZ");
         if (vsync.Checked) psi.EnvironmentVariables.Remove("WOTM_VSYNC");
         else psi.EnvironmentVariables["WOTM_VSYNC"] = "0";
+        if (matchOn.Checked) psi.EnvironmentVariables["WOTM_MATCH"] = MatchValue();
+        else psi.EnvironmentVariables.Remove("WOTM_MATCH");
+        string cheats = CheatsValue();
+        if (cheats.Length > 0) psi.EnvironmentVariables["WOTM_CHEATS"] = cheats;
+        else psi.EnvironmentVariables.Remove("WOTM_CHEATS");
         try
         {
             Process.Start(psi);
