@@ -3521,7 +3521,7 @@ index bd75bba..68268a1 100644
          }
  
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..dcda031 100644
+index 563bcbd..19fd797 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
 @@ -164,12 +164,98 @@ namespace
@@ -3623,7 +3623,31 @@ index 563bcbd..dcda031 100644
  
      try
      {
-@@ -220,12 +306,79 @@ int main(int argc, char *argv[])
+@@ -177,21 +263,9 @@ int main(int argc, char *argv[])
+ 
+         std::string filePathStr = pathObj.string();
+         std::string elfName = pathObj.filename().string();
+-        std::string normalizedId = normalizeGameId(elfName);
+ 
+-        std::string windowTitle = "PS2-Recomp | ";
+-        const char *gameName = getGameName(normalizedId);
+-
+-#if !defined(PLATFORM_VITA)
+-        if (gameName)
+-        {
+-            windowTitle += std::string(gameName) + " | " + elfName;
+-        }
+-        else
+-#endif
+-        {
+-            windowTitle += elfName;
+-        }
++        // Titulo da janela do port (o do PS2Recomp era "PS2-Recomp | <jogo> | <elf>").
++        std::string windowTitle = "War of the Monsters Recompiled!";
+ 
+         PS2Runtime runtime;
+ #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
+@@ -220,12 +294,79 @@ int main(int argc, char *argv[])
              return 1;
          }
  
