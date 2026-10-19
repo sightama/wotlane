@@ -19,6 +19,23 @@ class Flag
     }
 }
 
+// GroupBox com borda e titulo desenhados aqui no tema escuro: com estilo visual o titulo sai na cor do tema e ignora ForeColor.
+class DarkGroupBox : GroupBox
+{
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (!Launcher.Dark) { base.OnPaint(e); return; }
+        Graphics g = e.Graphics;
+        Size sz = TextRenderer.MeasureText(g, Text, Font);
+        int y = sz.Height / 2;
+        g.Clear(BackColor);
+        using (var pen = new Pen(Color.FromArgb(85, 85, 85))) g.DrawRectangle(pen, 0, y, Width - 1, Height - y - 1);
+        var r = new Rectangle(7, 0, sz.Width, sz.Height);
+        using (var b = new SolidBrush(BackColor)) g.FillRectangle(b, r);
+        TextRenderer.DrawText(g, Text, Font, r, ForeColor);
+    }
+}
+
 class Launcher : Form
 {
     // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
@@ -103,7 +120,7 @@ class Launcher : Form
         {
             if (gb == null || gb.Text != f.Group)
             {
-                gb = new GroupBox { Text = f.Group, AutoSize = true, Width = 420, Padding = new Padding(8) };
+                gb = new DarkGroupBox { Text = f.Group, AutoSize = true, Width = 420, Padding = new Padding(8) };
                 inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
                 gb.Controls.Add(inner);
                 right.Controls.Add(gb);
@@ -153,13 +170,14 @@ class Launcher : Form
         status.MaximumSize = new Size(420, 0);
         root.Controls.Add(status);
         Controls.Add(root);
+        if (Dark) ApplyDark(this);
         AcceptButton = play;
         FormClosing += delegate { SaveIni(); };
     }
 
     GroupBox VideoGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new GroupBox { Text = "Video", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new DarkGroupBox { Text = "Video", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
@@ -200,7 +218,7 @@ class Launcher : Form
         tips.SetToolTip(vsync, "Syncs with the monitor (no tearing). Unchecked: only limited by the clock.");
         inner.Controls.Add(vsync);
         inner.Controls.Add(new Label { Text = "Primary monitor: " + monitorWidth + "x" + monitorHeight +
-            (monitorHz > 0 ? " at " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = SystemColors.GrayText });
+            (monitorHz > 0 ? " at " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = DimColor });
         return gb;
     }
 
@@ -221,7 +239,7 @@ class Launcher : Form
 
     GroupBox MatchGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new GroupBox { Text = "Match", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new DarkGroupBox { Text = "Match", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
@@ -258,7 +276,7 @@ class Launcher : Form
             foes.Controls.Add(cb);
         }
         inner.Controls.Add(foes);
-        matchInfo.ForeColor = SystemColors.GrayText;
+        matchInfo.ForeColor = DimColor;
         inner.Controls.Add(matchInfo);
 
         matchOn.CheckedChanged += delegate { UpdateMatch(); };
@@ -284,7 +302,7 @@ class Launcher : Form
         if (LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8) txt += " Metro City with 8 freezes while loading (out of RAM).";
         if (total > 4 && !On("WOTM_ENEMYBARS")) txt += " Only 4 enemies get an off-screen health marker (the health bars mod shows all of them).";
         matchInfo.Text = txt;
-        matchInfo.ForeColor = LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8 ? Color.Firebrick : SystemColors.GrayText;
+        matchInfo.ForeColor = LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8 ? WarnColor : DimColor;
     }
 
     string MatchValue()
@@ -304,11 +322,11 @@ class Launcher : Form
 
     GroupBox CheatsGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new GroupBox { Text = "Cheats from the start   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new DarkGroupBox { Text = "Cheats from the start   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
-        inner.Controls.Add(new Label { Text = "Same as the in-fight F1 menu; apply to human players.", AutoSize = true, ForeColor = SystemColors.GrayText });
+        inner.Controls.Add(new Label { Text = "Same as the in-fight F1 menu; apply to human players.", AutoSize = true, ForeColor = DimColor });
         for (int i = 0; i < CheatKeys.Length; ++i)
         {
             var cb = new CheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
@@ -511,6 +529,60 @@ class Launcher : Form
         string p = rt == null ? null : Path.Combine(rt, "live.err.log");
         if (p != null && File.Exists(p)) Process.Start("notepad.exe", "\"" + p + "\"");
         else status.Text = "No live.err.log yet.";
+    }
+
+    // Tema: segue o modo dos aplicativos do Windows (Personalizacao > Cores). Escuro = cores abaixo e barra de titulo escura (DWM).
+    internal static readonly bool Dark = AppsUseDark();
+    static readonly Color BgColor = Color.FromArgb(32, 32, 32), InputColor = Color.FromArgb(51, 51, 51), ButtonColor = Color.FromArgb(58, 58, 58);
+    static readonly Color FgColor = Color.FromArgb(232, 232, 232);
+    static readonly Color DimColor = Dark ? Color.FromArgb(150, 150, 150) : SystemColors.GrayText;
+    static readonly Color WarnColor = Dark ? Color.FromArgb(255, 110, 100) : Color.Firebrick;
+
+    static bool AppsUseDark()
+    {
+        try
+        {
+            object v = Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1);
+            return v is int && (int)v == 0;
+        }
+        catch (Exception) { return false; }
+    }
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        if (!Dark) return;
+        int on = 1;
+        try
+        {   // DWMWA_USE_IMMERSIVE_DARK_MODE: 20 no Windows 10 20H1+ e 11, 19 antes
+            if (DwmSetWindowAttribute(Handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(Handle, 19, ref on, 4);
+        }
+        catch (Exception) { }
+    }
+
+    // Texto com a cor padrao vira claro; cores escolhidas (cinza das notas, aviso vermelho) ficam.
+    static void ApplyDark(Control c)
+    {
+        if (c.ForeColor == SystemColors.ControlText) c.ForeColor = FgColor;
+        if (c is ComboBox) { c.BackColor = InputColor; ((ComboBox)c).FlatStyle = FlatStyle.Flat; }
+        else if (c is NumericUpDown)
+        {   // a cor tem que ir para a caixa de texto interna (UpDownEdit) tambem
+            c.BackColor = InputColor;
+            ((NumericUpDown)c).BorderStyle = BorderStyle.FixedSingle;
+            foreach (Control k in c.Controls) if (k is TextBox) { k.BackColor = InputColor; k.ForeColor = FgColor; }
+        }
+        else if (c is Button)
+        {
+            var b = (Button)c;
+            b.FlatStyle = FlatStyle.Flat;
+            b.BackColor = ButtonColor;
+            b.FlatAppearance.BorderColor = Color.FromArgb(100, 100, 100);
+        }
+        else c.BackColor = BgColor;
+        if (!(c is NumericUpDown)) foreach (Control k in c.Controls) ApplyDark(k);
     }
 
     [STAThread]
