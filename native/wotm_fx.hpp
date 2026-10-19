@@ -541,6 +541,9 @@ public:
         for (const FxSystem &s : systems) {
             const uint32_t b = s.base, n = uint32_t(std::max(s.n, 0)) + 1;
             copy(fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex), 4 * std::min<uint32_t>(ram.u32(b + fxoff::numColors), 256));
+            // info.useThisColor (bit 0x200: rastro de poeira, frag) aponta para fora de fx[] (trailColoring da fase, 0x5B4F60 na VEGAS);
+            // sem a copia o stripe lia lixo/zeros ao vivo (cor preta, alfa 0) e o rastro sumia, embora o replay (RAM inteira) o desenhasse
+            if (ram.u32(b + fxoff::infoAttribs) & 0x200) copy(ram.u32(b + fxoff::useThisColor), 16);
             // ponteiros que apontem para fora de fx[] (nao visto ate hoje): a faixa que o draw le em volta deles
             const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age), pm = ram.u32(b + 0x2EC0);
             if (outside(pos - 0x400, 0x400 + 16 * n)) copy(pos - 0x400, 0x400 + 16 * n);

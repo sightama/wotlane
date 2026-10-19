@@ -70,8 +70,11 @@ Fotos `2026-10-18_225102`/001–004 (VEGAS, `g_frame` 471, 504, 704, 1179) e o P
   contra 75). A simulação bate.
 - Pixels do rastro no print do PCSX2: ~(50, 42, 40) sobre fundo ~(10–25), o tom do 3c3232 modulado e misturado a ~0,5. No
   PCSX2 o rastro aparece porque o fundo é mais escuro; contra o céu da VEGAS (~(60, 40, 45)) ele quase some.
-- Conclusão provável: igual ao retail. Antes do 308f2b7 o nativo usava a cor clara da tabela (`706757`), e o rastro chamava
-  atenção. Falta conferir no PCSX2 na VEGAS. Se o dono quiser o visual antigo, o caminho é um mod (ignorar o bit 0x200), não
-  uma correção.
+- ~~Conclusão provável: igual ao retail.~~ Errado: o dono fala dos arcos longos que os destroços soltam (os stripes), que somem
+  por completo ao vivo. **Causa:** a cópia de sombra (`Particles::shadowRam`, da correção do Magmo, `09_magmo_impacto.md`) só
+  copia `fx[]`, tabelas e as faixas de pos/vel/idade; o `useThisColor` (0x5B4F60) fica fora de `fx[]`. Ao vivo o draw lia o
+  buffer de sombra nesse endereço (zeros ou lixo): RGB 0 e w = 0, alfa 0, rastro invisível. O replay lê a RAM inteira, por isso
+  desenhava certo. As duas mudanças são do mesmo dia (308f2b7 passou a usar o vetor; a sombra veio na correção do Magmo).
+  Correção: `shadowRam` copia os 16 bytes do vetor de cada sistema com `info.attribs & 0x200`.
 - Imagens: `docs/screenshots/2026-10-18/2026-10-18_rastro_poeira_pcsx2.png` (recorte do PCSX2) e
   `2026-10-18_rastro_poeira_ref_x_nativo.png` (foto 002, referência à esquerda, nativo à direita, 3x).
