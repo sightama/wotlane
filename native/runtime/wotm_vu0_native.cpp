@@ -206,6 +206,15 @@ static const WotmVu0Program kPrograms[] = {{0, 0, 0, 0, nullptr}};
 static constexpr size_t kProgramCount = 0;
 #endif
 
+const uint8_t *wotmVu0CodeImage()
+{
+#ifdef WOTM_VU0_HAVE_IMAGE
+    return kVu0CodeImage;
+#else
+    return nullptr;
+#endif
+}
+
 namespace
 {
     uint64_t fnv1a(const uint8_t *p, uint32_t n)

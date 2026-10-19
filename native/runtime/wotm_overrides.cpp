@@ -1992,6 +1992,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
+    extern void wotmVu0UcodeInstall(PS2Runtime &);   // wotm_live.inc: microcodigo do VU0 sem VIF0 no executavel do jogo
+    wotmVu0UcodeInstall(runtime);
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else

@@ -62,6 +62,75 @@ void wotmFmvInstall(PS2Runtime &)
 static void wotmFmvPresent(uint8_t *) {}
 #endif
 
+// Microcodigo do VU0 sem VIF0 (FRONTEIRA.md, passo 7). A cada quadro o hier chama o hierLoadVu0Ucode, que manda pelo canal 0
+// do DMA uma cadeia fixa do ELF: so MPG, a imagem inteira dos microprogramas (sombras e particulas inclusas), nunca UNPACK.
+// No executavel do jogo o gancho copia a imagem (wotmVu0CodeImage, gerada por tools/vu0native.py do mesmo pacote) direto na
+// memoria de codigo do VU0, so quando ela muda (a geracao nova faz os microprogramas traduzidos conferirem o hash de novo); o
+// VIF0 nao existe no wotm. No de teste o original continua, e a primeira carga confere que o VIF0 deixou a mesma imagem.
+#if __has_include("wotm_vu0_native.h") && __has_include("wotm_syms.h")
+#include "wotm_vu0_native.h"
+#include "wotm_syms.h"
+namespace wotm_vu0ucode
+{
+static_assert(PS2_VU0_CODE_SIZE == 4096, "imagem do vu0native.py tem 4096 bytes");
+static PS2Runtime::RecompiledFunction g_orig = nullptr;
+inline bool sameAsImage(PS2Runtime *rt)
+{
+    const uint8_t *img = wotmVu0CodeImage();
+    const uint8_t *code = rt->memory().getVU0Code();
+    return img && code && std::memcmp(code, img, PS2_VU0_CODE_SIZE) == 0;
+}
+inline void load(uint8_t *, R5900Context *, PS2Runtime *rt)
+{
+    if (sameAsImage(rt))
+        return;
+    static int s_loads = 0;
+    if (++s_loads <= 3)
+        std::fprintf(stderr, "[vu0] microcodigo copiado da imagem (#%d)\n", s_loads);
+    std::memcpy(rt->memory().getVU0Code(), wotmVu0CodeImage(), PS2_VU0_CODE_SIZE);
+    rt->memory().markVU0CodeModified();
+}
+// o hierInit manda a mesma cadeia do VIF0 por conta propria (boot), e os microprogramas rodam antes do primeiro hierLoadVu0Ucode
+static PS2Runtime::RecompiledFunction g_origInit = nullptr;
+inline void initThenLoad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+{
+    g_origInit(rdram, ctx, rt);
+    load(rdram, ctx, rt);
+}
+// o DMA do VIF0 e aplicado depois (fila do PS2Memory): confere na segunda chamada, antes do original, o que a primeira deixou
+inline void loadAndCheck(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+{
+    static int s_calls = 0;
+    if (++s_calls == 2)
+        std::fprintf(stderr, "[vu0] microcodigo do VIF0 %s a imagem gerada (wotmVu0CodeImage)\n", sameAsImage(rt) ? "igual a" : "DIFERENTE da");
+    g_orig(rdram, ctx, rt);
+}
+} // namespace wotm_vu0ucode
+
+void wotmVu0UcodeInstall(PS2Runtime &runtime)
+{
+    if (!wotmVu0CodeImage())
+    {
+        std::fprintf(stderr, "[vu0] wotm_vu0_native.gen.inc sem a imagem do microcodigo: rode o build_runtime.bat (tools/vu0native.py)\n");
+        return;
+    }
+#if PS2X_HW_EMU
+    wotm_vu0ucode::g_orig = runtime.lookupFunction(wotm::fn::hierLoadVu0Ucode__Fv);
+    if (wotm_vu0ucode::g_orig)
+        runtime.registerFunction(wotm::fn::hierLoadVu0Ucode__Fv, hostLeaf<wotm_vu0ucode::loadAndCheck>);
+#else
+    runtime.registerFunction(wotm::fn::hierLoadVu0Ucode__Fv, hostLeaf<wotm_vu0ucode::load>);
+    wotm_vu0ucode::g_origInit = runtime.lookupFunction(wotm::fn::hierInit__Fv);
+    if (wotm_vu0ucode::g_origInit)
+        runtime.registerFunction(wotm::fn::hierInit__Fv, hostLeaf<wotm_vu0ucode::initThenLoad>);
+    else
+        std::fprintf(stderr, "[vu0] hierInit nao encontrado: o microcodigo so sobe no primeiro hierLoadVu0Ucode\n");
+#endif
+}
+#else
+void wotmVu0UcodeInstall(PS2Runtime &) {}
+#endif
+
 // Rastro do boot: da abertura do processo ao primeiro filme ou quadro do jogo, cada etapa vai ao stderr com o tempo desde o inicio
 // ("[boot]  3.21 s  disco: ...") e aparece escrita na tela preta. Etapa parada ha mais de 3 s repete no log com o PC do EE, para
 // achar o gargalo em maquinas onde a tela preta demora. Chamado do main.cpp, de initialize/run, do sceCdSearchFile e do log do IOP.

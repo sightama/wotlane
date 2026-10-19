@@ -1902,13 +1902,17 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..2086214 100644
+index 37b6a4d..dac3a0b 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
-@@ -10,6 +10,17 @@
+@@ -9,7 +9,19 @@
+ #include <algorithm>
  #include <string>
  #include <vector>
- 
+-
++#include <cstdio>
++#include <cstdlib>
++
 +bool g_wotmVu1Tap = false;
 +bool g_wotmVif1Keep = false;
 +bool g_wotmGsFeed = false;
@@ -1919,11 +1923,10 @@ index 37b6a4d..2086214 100644
 +uint32_t (*g_wotmMscalTap)(const uint32_t *, uint32_t, uint32_t, const uint8_t *) = nullptr;
 +void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *, size_t, const uint8_t *, uint32_t) = nullptr;
 +uint32_t g_wotmVif1Bad = 0;
-+
  namespace
  {
      inline void inRange(uint32_t offset, size_t bytes, size_t regionSize, const char *op, uint32_t address)
-@@ -1346,9 +1357,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1346,9 +1358,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                      const bool tieEnabled = (chcr & (1u << 7)) != 0u;
                      const int kMaxChainTags = 4096;
                      std::vector<uint8_t> chainBuf;
@@ -1937,7 +1940,7 @@ index 37b6a4d..2086214 100644
                          const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                          uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                          const bool scratch = isScratchpad(srcAddr);
-@@ -1395,6 +1410,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1395,6 +1411,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
  
                          // CHCR.TTE sends the DMAtag's upper 64 bits to the channel before
                          // the tag payload. VIF chains use those bytes for two VIFcodes.
@@ -1946,7 +1949,7 @@ index 37b6a4d..2086214 100644
                          chainBuf.insert(chainBuf.end(), localBase + tagPhys + 8u, localBase + tagPhys + 16u);
                      };
  
-@@ -1446,6 +1463,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1446,6 +1464,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          bool hasPayload = (tagQwc > 0);
                          bool endChain = false;
  
@@ -1990,7 +1993,7 @@ index 37b6a4d..2086214 100644
                          switch (id)
                          {
                          case 0:
-@@ -1535,6 +1589,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1535,6 +1590,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          pt.srcAddr = 0;
                          pt.qwc = 0;
                          pt.chainData = std::move(chainBuf);
@@ -1998,7 +2001,7 @@ index 37b6a4d..2086214 100644
                          if (channelBase == 0x1000A000)
                          {
                              m_pendingGifTransfers.push_back(std::move(pt));
-@@ -1802,11 +1857,19 @@ void PS2Memory::processPendingTransfers()
+@@ -1802,11 +1858,19 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -2018,7 +2021,7 @@ index 37b6a4d..2086214 100644
          }
          else if (p.qwc > 0)
          {
-@@ -1956,6 +2019,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+@@ -1956,6 +2020,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
              return;
          }
          flushMaskedPath3Packets(false);
@@ -2027,7 +2030,7 @@ index 37b6a4d..2086214 100644
      }
  
      if (m_gifArbiter)
-@@ -2001,6 +2066,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+@@ -2001,6 +2067,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
          m_gifPacketCallback(data, sizeBytes);
  }
  
@@ -2035,7 +2038,7 @@ index 37b6a4d..2086214 100644
  bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
  {
      static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-@@ -2272,6 +2338,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
+@@ -2272,6 +2339,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
      queueCompletedDmacCause(2u);
      return true;
  }
@@ -2974,12 +2977,13 @@ index 45cb9d2..6967f55 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..6b4437e 100644
+index b02c7ca..b27913e 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,10 @@
  // Based on Blackline Interactive implementation
 +#include <cstdlib>
++#include <cstdio>
  #include "runtime/ps2_memory.h"
  #include <cstring>
 +#include <algorithm>
@@ -2987,7 +2991,7 @@ index b02c7ca..6b4437e 100644
  
  enum VIFCmd : uint8_t
  {
-@@ -30,6 +33,22 @@ namespace
+@@ -30,6 +34,22 @@ namespace
  {
      constexpr uint8_t kGifFmtImage = 2u;
  
@@ -3010,10 +3014,43 @@ index b02c7ca..6b4437e 100644
      uint32_t pendingGifImageQwc(const uint8_t *data, uint32_t sizeBytes)
      {
          if (!data || sizeBytes < 16u)
-@@ -283,6 +302,11 @@ void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -81,6 +101,30 @@ namespace
      }
  }
  
++#if !PS2X_HW_EMU
++// Jogo sem VIF0 (wotm, passo 7 da FRONTEIRA.md no repo WoTM): o unico uso por quadro era o hierLoadVu0Ucode (so MPG), que um gancho
++// troca pela copia direta da imagem do microcodigo (wotm_live.inc). O que ainda chegar e descartado; avisa na primeira vez.
++static void wotmVif0Discard(const uint8_t *data, uint32_t sizeBytes)
++{
++    static bool s_warned = false;
++    if (sizeBytes == 0u || s_warned)
++        return;
++    s_warned = true;
++    std::fprintf(stderr, "[vif0] DMA do VIF0 descartado (%u B): o wotm.exe nao tem VIF0; primeiras palavras:", sizeBytes);
++    for (uint32_t k = 0; data && k + 4u <= sizeBytes && k < 64u; k += 4u)
++    {
++        uint32_t w;
++        std::memcpy(&w, data + k, 4);
++        std::fprintf(stderr, " %08x", w);
++    }
++    std::fprintf(stderr, "\n");
++}
++void PS2Memory::processVIF0Data(uint32_t srcPhys, uint32_t sizeBytes)
++{
++    wotmVif0Discard(srcPhys < PS2_RAM_SIZE && sizeBytes <= PS2_RAM_SIZE - srcPhys ? m_rdram + srcPhys : nullptr, sizeBytes);
++}
++void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes) { wotmVif0Discard(data, sizeBytes); }
++#else
+ void PS2Memory::processVIF0Data(uint32_t srcPhys, uint32_t sizeBytes)
+ {
+     if (sizeBytes == 0u || srcPhys >= PS2_RAM_SIZE)
+@@ -283,6 +327,13 @@ void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
+     }
+ }
+ 
++#endif // PS2X_HW_EMU (VIF0)
++
 +#if !PS2X_HW_EMU
 +// Jogo sem VU1/GS (wotm): o VIF1 nao existe; o que chega ao FIFO e descartado (o DMA do canal 1 conclui sem processar, ps2_memory.cpp)
 +void PS2Memory::processVIF1Data(uint32_t, uint32_t) {}
@@ -3022,7 +3059,7 @@ index b02c7ca..6b4437e 100644
  void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
  {
      if (sizeBytes == 0u || srcPhys >= PS2_RAM_SIZE)
-@@ -295,48 +319,76 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
+@@ -295,48 +346,76 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
      processVIF1Data(m_rdram + srcPhys, sizeBytes);
  }
  
@@ -3126,7 +3163,7 @@ index b02c7ca..6b4437e 100644
          uint8_t num = (cmd >> 16) & 0xFF;
          const bool irq = (cmd & 0x80000000u) != 0u;
  
-@@ -416,7 +468,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -416,7 +495,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                  vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
@@ -3136,7 +3173,7 @@ index b02c7ca..6b4437e 100644
                  m_vu1MscalCallback(startPC, runTop, runItop);
              continue;
          }
-@@ -434,7 +487,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -434,7 +514,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                  vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
@@ -3146,7 +3183,7 @@ index b02c7ca..6b4437e 100644
                  m_vu1MscntCallback(runTop, runItop);
              continue;
          }
-@@ -495,12 +549,58 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -495,12 +576,58 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
              if (qwCount > availableQw)
                  qwCount = availableQw;
  
@@ -3158,7 +3195,9 @@ index b02c7ca..6b4437e 100644
 +            uint32_t directQw = qwCount;
 +            const bool directHl = (opcode == VIF_DIRECTHL);
 +            if (m_vif1PendingPath2ImageQwc != 0u && directQw > 0u)
-+            {
+             {
+-                const bool directHl = (opcode == VIF_DIRECTHL);
+-                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
 +                const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, directQw);
 +                static const bool s_gsUploads = std::getenv("PS2X_GS_UPLOADS") != nullptr;   // WotM: com a checagem, so os uploads (texturas/CLUTs na VRAM) chegam ao GS
 +                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads)
@@ -3180,9 +3219,7 @@ index b02c7ca..6b4437e 100644
 +            }
 +
 +            if (directQw > 0)
-             {
--                const bool directHl = (opcode == VIF_DIRECTHL);
--                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
++            {
 +                static const bool s_gsUploads2 = std::getenv("PS2X_GS_UPLOADS") != nullptr;
 +                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads2)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa), salvo no replay (imagem de referencia) e, com PS2X_GS_UPLOADS, para os uploads
 +                    submitGifPacket(GifPathId::Path2, data + directPos, directQw * 16, true, directHl);
@@ -3209,7 +3246,7 @@ index b02c7ca..6b4437e 100644
                  if (pendingImageQw != 0u)
                  {
                      m_vif1PendingPath2ImageQwc = pendingImageQw;
-@@ -781,3 +881,4 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -781,3 +908,4 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
          }
      }
  }
