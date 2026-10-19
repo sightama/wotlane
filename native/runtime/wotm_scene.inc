@@ -24,7 +24,15 @@ static void wotmDrawScene(const uint8_t *rdram)
         }
     }
     wotmFotoKeys();
-    const bool drew = wotmDrawNative(rdram); // camada nativa (native/wotm_native.hpp): fase lida da RAM, sem VU1/GS; sem fase, o quadro do GS fica como esta
+    const bool drew = wotmDrawNative(rdram); // camada nativa (native/wotm_native.hpp): fase lida da RAM, sem VU1/GS
+    {
+        // Sem cena nativa (carregamento, troca de tela) a janela ficava com o quadro do GS. Com PS2X_NO_GS o GS nao desenha nada: a
+        // area exibida so tem os uploads de textura, e entre o pulo da abertura e o menu aparecia a VRAM crua (blocos de textura
+        // embaralhados). Aqui fica preto; WOTM_GSFRAME=1 volta a mostrar o quadro do GS (diagnostico).
+        static const bool s_blackGap = std::getenv("PS2X_NO_GS") != nullptr && std::getenv("WOTM_GSFRAME") == nullptr;
+        if (!drew && s_blackGap)
+            ClearBackground(BLACK);
+    }
     wotmFotoOverlay(drew, rdram);
 }
 #include "wotm_vu1check.inc"
