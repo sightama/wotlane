@@ -17,7 +17,19 @@ What remains of emulation: the PS2 kernel's threads, interrupts and vsync, plus 
 
 The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
-Video: [https://www.youtube.com/watch?v=IvLLuSYORPc](https://www.youtube.com/watch?v=IvLLuSYORPc). Screenshots and older videos, by date: [docs/screenshots](docs/screenshots).
+8 Monsters brawling: [https://www.youtube.com/watch?v=IvLLuSYORPc](https://www.youtube.com/watch?v=IvLLuSYORPc).
+
+<img width="912" height="822" alt="image" src="https://github.com/user-attachments/assets/77483682-f8e2-470a-95aa-06aabe857b6a" />
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/8f837f1f-c5a8-49fe-8ad0-30bfd13bdf84" />
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/4583be43-878b-48df-a0e5-30b99702bad9" />
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/ddb512fd-ebf0-46d8-90bd-cc40ee9a4334" />
+
+<img width="2560" height="1440" alt="image" src="https://github.com/user-attachments/assets/562f7135-1780-4582-b8d2-fed4b5ca9e85" />
+
+Screenshots and older videos, by date: [docs/screenshots](docs/screenshots).
 
 ## How it works
 The port comes first; the decompilation only covers what modders need.
