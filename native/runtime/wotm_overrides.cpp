@@ -57,7 +57,7 @@ void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad d
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
-void wotmDamagePopup(const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
+void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -1577,7 +1577,8 @@ namespace
                         else
                             p[0] = p[1] = p[2] = 0.f;
                         if (p[0] != 0.f || p[1] != 0.f || p[2] != 0.f)
-                            wotmDamagePopup(p, lost, recent ? d->kind : 0);                    }
+                            wotmDamagePopup(rdram, p, lost, recent ? d->kind : 0);
+                    }
                     d->last = h;
                 }
             }
