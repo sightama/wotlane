@@ -55,6 +55,8 @@ bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread 
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
+bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
+void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -1325,6 +1327,155 @@ namespace
     }
 }
 
+namespace
+{
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "Mods" do launcher), no lugar do icone de vida (a bolinha
+    // com o numero do jogador, que muda de cor com a vida). O Hud::drawHealthIcon(monstro, n) projeta a cabeca do monstro e manda dois
+    // quadrados ao ScreenPolys::addPoly no mesmo ponto: o numero (branco) e o anel (cor do +0x686C/+0x6870). Aqui o gancho no
+    // drawHealthIcon guarda o monstro, e o do addPoly, quando chamado de dentro dele, troca os dois quadrados por duas barras sem
+    // textura (wotmBarRect, desenhadas com os retangulos de tela) centradas onde o primeiro ficaria: vida (m_health/m_maxHealth,
+    // +0x44C/+0x448, com o dano recente em vermelho) e, embaixo, energia (StaminaMeter em +0x460: cur/max; cinza enquanto esgotada),
+    // no estilo das barras do HUD do jogador. O resto do HUD nao muda.
+    constexpr uint32_t kDrawHealthIcon = wotm::fn::drawHealthIcon__3HudP7Monsteri, kDrawHealthIconSize = 0x4F8u,
+                       kAddPoly = wotm::fn::addPoly__11ScreenPolysiiiRQ211ScreenPolys8PolyData;
+    constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
+    PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr;
+    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon
+    bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
+
+    float barFrac(uint8_t *rdram, uint32_t cur, uint32_t max)
+    {
+        float c, m;
+        std::memcpy(&c, rdram + cur, 4);
+        std::memcpy(&m, rdram + max, 4);
+        return m > 0.f && std::isfinite(c) ? std::clamp(c / m, 0.f, 1.f) : 0.f;
+    }
+
+    // Estilo do HUD do jogador (medido num print 720p): moldura preta, cinza (94) e preta; dentro, faixas de cor no sentido da
+    // espessura (escuro nas bordas, brilho claro perto do meio). Vida verde com o dano recente em vermelho (brilho embaixo), energia
+    // azul; o vazio escurece o fundo.
+    constexpr uint8_t kHealthProf[][3] = {{20, 58, 2},    {43, 101, 16},  {81, 170, 39},  {96, 181, 53},  {169, 191, 148},
+                                          {146, 191, 109}, {85, 178, 42},  {68, 146, 31},  {31, 79, 9}};
+    constexpr uint8_t kLagProf[][3] = {{80, 28, 26}, {118, 40, 38}, {160, 56, 53}, {160, 56, 53}, {187, 103, 104}, {184, 95, 95}};
+    constexpr uint8_t kEnergyProf[][3] = {{13, 23, 67},    {37, 55, 133},  {46, 67, 153},  {112, 127, 153}, {146, 150, 153},
+                                          {85, 105, 153},  {46, 67, 153},  {28, 43, 112},  {7, 15, 51}};
+    constexpr uint8_t kExhaustedProf[][3] = {{30, 30, 34},  {60, 60, 68},   {80, 80, 90},   {120, 120, 128}, {140, 140, 146},
+                                             {100, 100, 110}, {80, 80, 90},  {55, 55, 62},   {25, 25, 30}};
+
+    template <size_t N>
+    void gradBar(float x0, float y0, float x1, float y1, const uint8_t (&prof)[N][3])
+    {
+        if (x1 <= x0)
+            return;
+        const float h = (y1 - y0) / static_cast<float>(N);
+        for (size_t i = 0; i < N; ++i)
+            wotmBarRect(x0, y0 + h * i, x1, y0 + h * (i + 1), prof[i][0], prof[i][1], prof[i][2], 0x80);
+    }
+
+    // Moldura de uma barra em volta do miolo (x0, y0)-(x1, y1); 1 unidade = 1,5 px em x e 3,2 px em y a 720p
+    // Anel de espessura (tx, ty) por fora de (x0, y0)-(x1, y1)
+    void barRing(float x0, float y0, float x1, float y1, float tx, float ty, uint8_t c)
+    {
+        wotmBarRect(x0 - tx, y0 - ty, x1 + tx, y0, c, c, c, 0x80);
+        wotmBarRect(x0 - tx, y1, x1 + tx, y1 + ty, c, c, c, 0x80);
+        wotmBarRect(x0 - tx, y0, x0, y1, c, c, c, 0x80);
+        wotmBarRect(x1, y0, x1 + tx, y1, c, c, c, 0x80);
+    }
+
+    void barFrame(float x0, float y0, float x1, float y1)
+    {
+        constexpr float kOx = 0.7f, kOy = 0.3f, kGx = 1.3f, kGy = 0.6f, kIx = 1.0f, kIy = 0.45f;
+        barRing(x0 - kIx - kGx, y0 - kIy - kGy, x1 + kIx + kGx, y1 + kIy + kGy, kOx, kOy, 0);
+        barRing(x0 - kIx, y0 - kIy, x1 + kIx, y1 + kIy, kGx, kGy, 94);
+        barRing(x0, y0, x1, y1, kIx, kIy, 0);
+        wotmBarRect(x0, y0, x1, y1, 0, 0, 0, 0x40);   // vazio: o fundo escurecido
+    }
+
+    // Dano recente (o trecho vermelho): segura ~0,5 s e escoa ate a vida atual, por monstro
+    struct BarLag
+    {
+        uint32_t m = 0;
+        float lag = 0.f;
+        int hold = 0;
+    } g_barLag[16];
+
+    float barLag(uint32_t m, float health)
+    {
+        BarLag *e = nullptr;
+        for (BarLag &b : g_barLag)
+            if (b.m == m)
+                e = &b;
+        if (!e)
+            for (BarLag &b : g_barLag)
+                if (!b.m)
+                {
+                    e = &b;
+                    *e = BarLag{m, health, 0};
+                    break;
+                }
+        if (!e)
+            return health;
+        if (health >= e->lag)
+        {
+            e->lag = health;
+            e->hold = 0;
+        }
+        else if (++e->hold > 30)
+            e->lag = std::max(health, e->lag - 0.006f);
+        return e->lag;
+    }
+
+    void emitBars(uint8_t *rdram, uint32_t m, const float box[4])
+    {
+        if (!ramOk(m, kMonsterStamina + 0x24u))
+            return;
+        const float health = barFrac(rdram, m + kMonsterHealth, m + kMonsterMaxHealth);
+        const float energy = barFrac(rdram, m + kMonsterStamina + 0x10u, m + kMonsterStamina);
+        const bool exhausted = FAST_READ32(m + kMonsterStamina + 0x20u) != 0u;
+        const float lag = barLag(m, health);        // tela do jogo 640 x 224 (campo: 1 unidade em y = 2 linhas)
+        constexpr float kW = 44.f, kHealthH = 2.6f, kEnergyH = 1.6f, kGap = 0.6f;
+        constexpr float kFrameY = 0.3f + 0.6f + 0.45f;   // espessura da moldura em y (barFrame)
+        const float cx = 0.5f * (box[0] + box[2]), cy = 0.5f * (box[1] + box[3]);
+        const float x0 = cx - 0.5f * kW, x1 = cx + 0.5f * kW;
+        const float y0 = cy - 0.5f * (kHealthH + kEnergyH + kGap) - kFrameY, y1 = y0 + kHealthH;
+        const float y2 = y1 + 2.f * kFrameY + kGap, y3 = y2 + kEnergyH;
+        barFrame(x0, y0, x1, y1);
+        gradBar(x0 + kW * health, y0, x0 + kW * lag, y1, kLagProf);
+        gradBar(x0, y0, x0 + kW * health, y1, kHealthProf);
+        barFrame(x0, y2, x1, y3);
+        if (exhausted)
+            gradBar(x0, y2, x0 + kW * energy, y3, kExhaustedProf);
+        else
+            gradBar(x0, y2, x0 + kW * energy, y3, kEnergyProf);
+    }
+
+    void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kDrawHealthIcon)
+        {
+            g_barMonster = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+            g_barDone = false;
+        }
+        g_origDrawHealthIcon(rdram, ctx, runtime);
+    }
+
+    void addPolyBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31);
+        if (ctx->pc != kAddPoly || ra < kDrawHealthIcon || ra >= kDrawHealthIcon + kDrawHealthIconSize || !g_barMonster)
+        {
+            g_origAddPolyBars(rdram, ctx, runtime);
+            return;
+        }
+        float box[4];
+        if (!g_barDone && wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)),
+                                            static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7), box))
+            emitBars(rdram, g_barMonster, box);
+        g_barDone = true;
+        ctx->pc = ra;   // o quadrado do icone nao e montado
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -1512,6 +1663,18 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         }
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
+    }
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon
+    if (const char *e = std::getenv("WOTM_ENEMYBARS"); e && *e && std::strcmp(e, "0") != 0)
+    {
+        if ((g_origDrawHealthIcon = runtime.lookupFunction(kDrawHealthIcon)) && (g_origAddPolyBars = runtime.lookupFunction(kAddPoly)))
+        {
+            runtime.registerFunction(kDrawHealthIcon, &drawHealthIconBars);
+            runtime.registerFunction(kAddPoly, &addPolyBars);
+            std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
+        }
+        else
+            std::fprintf(stderr, "[wotm] barras sobre os inimigos indisponiveis: Hud::drawHealthIcon ou ScreenPolys::addPoly sem funcao no runtime\n");
     }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);

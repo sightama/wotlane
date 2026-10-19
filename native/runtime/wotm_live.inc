@@ -374,6 +374,9 @@ static std::vector<uint8_t> g_pendingState;
 // HUD do ScreenPolys desde a ultima captura: um quadrado por polyBuildPrim (wotmScreenPoly, wotm::screenPolyFromCall); a captura o
 // passa ao instantaneo.
 static std::vector<wotm::TextQuad> g_pendingPolys;
+// Barras de vida e energia sobre os inimigos (mod WOTM_ENEMYBARS, wotmBarRect) desde a ultima captura: vao para o comeco dos
+// retangulos do quadro (os fades saem por cima).
+static std::vector<wotm::ScreenRect> g_pendingBars;
 // colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
 static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
 static std::atomic<int> g_shellFade{-1};
@@ -568,6 +571,23 @@ void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd)
     if (rdram && wotm_live::g_pendingPolys.size() < 256 && wotm::screenPolyFromCall(wotm::Ram{rdram, PS2_RAM_SIZE}, src, x, y, pd, t))
         wotm_live::g_pendingPolys.push_back(t);
 }
+// Caixa (x0, y0, x1, y1, tela do jogo 640 x 224) do quadrado que addPoly(src, x, y, pd) montaria, sem monta-lo
+bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4])
+{
+    wotm::TextQuad t;
+    if (!rdram || !wotm::screenPolyFromCall(wotm::Ram{rdram, PS2_RAM_SIZE}, src, x, y, pd, t))
+        return false;
+    box[0] = std::min(t.x0, t.x1);
+    box[1] = std::min(t.y0, t.y1);
+    box[2] = std::max(t.x0, t.x1);
+    box[3] = std::max(t.y0, t.y1);
+    return true;
+}
+void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
+{
+    if (wotm_live::g_pendingBars.size() < 512)
+        wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a});
+}
 // Entrada do Shell::FadeScreen(vista, redesenha, ..., r, g, b, inicio, fim, passo): o laco grava inicio, inicio +/- passo... enquanto
 // nao chega ao fim, um valor por sceGsSyncV (wotmShellFadeStep); inicio == fim nao desenha nada.
 void wotmShellFade(const uint8_t *rdram, int view, uint32_t r, uint32_t g, uint32_t b, int start, int end, int step, bool redraw)
@@ -670,7 +690,9 @@ void wotmCaptureFrame(const uint8_t *rdram)
     struct ConsumeFlares { ~ConsumeFlares() { wotm::Particles::consumeFlares(); } } consumeFlares;
     wotm_live::Capture &c = wotm_live::capture();
     std::vector<wotm::ScreenRect> rects;
-    rects.swap(wotm_live::g_pendingRects);
+    rects.swap(wotm_live::g_pendingBars);
+    rects.insert(rects.end(), wotm_live::g_pendingRects.begin(), wotm_live::g_pendingRects.end());
+    wotm_live::g_pendingRects.clear();
     wotm_live::g_pendingState.clear();
     std::vector<wotm::TextQuad> polys;
     polys.swap(wotm_live::g_pendingPolys);
@@ -1093,6 +1115,8 @@ void wotmFontColor(const uint8_t *, int) {}
 void wotmFontGlyph(const uint8_t *, int, int) {}
 void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
+bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { return false; }
+void wotmBarRect(float, float, float, float, uint8_t, uint8_t, uint8_t, uint8_t) {}
 void wotmShellFade(const uint8_t *, int, uint32_t, uint32_t, uint32_t, int, int, int, bool) {}
 void wotmShellFadeStep() {}
 void wotmShellFadeStepDone() {}
