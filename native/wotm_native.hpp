@@ -554,6 +554,9 @@ struct ScreenRect {
     // Saiu ao GS antes do texto do quadro (fila do gsPkt despachada antes do fontDmaFontData, como no ShellRtLoop::endField dos
     // dialogos de fim de fase): o texto vai por cima. No rtMain a fila sai depois do texto e o fade cobre tudo (false).
     bool underText = false;
+    // Barra de vida sobre o inimigo (wotmBarRect): vista em que foi montada (-1 = nao e barra). Na tela dividida vai para a metade da
+    // janela dessa vista e fica cortada nela, sem esticar ate a borda como o fade e as faixas de cinema
+    int8_t barView = -1;
 };
 
 // Centro (pixels do GS, viewGetCenter) e tamanho (viewGetWH) da vista `view`, do viewDef dela.
@@ -2882,6 +2885,21 @@ public:
             if (r.underText != underText) continue;
             const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
             if (!a) continue;
+            if (r.barView >= 0) {   // barra sobre o inimigo
+                const float k = gr.w / 640.f;
+                float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
+                if (splitEdges) {
+                    // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
+                    // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado)
+                    const float half = 0.5f * rw, v = float(r.barView);
+                    const float off = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
+                    x0 = std::max(x0 + off, v * half);
+                    x1 = std::min(x1 + off, (v + 1.f) * half);
+                }
+                if (x1 <= x0) continue;
+                DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
+                continue;
+            }
             const bool full = r.x0 <= 0.f && r.x1 >= 640.f;
             const bool left = full || (splitEdges && r.x0 <= 0.f), right = full || (splitEdges && r.x1 >= 640.f);
             const float x0 = left ? 0.f : gr.x0 + r.x0 * gr.w / 640.f, x1 = right ? rw : gr.x0 + r.x1 * gr.w / 640.f;

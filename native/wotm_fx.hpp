@@ -144,6 +144,9 @@ constexpr uint32_t textureInfo = wotm::sym::TextureInfo;  // TextureInfoType[128
 constexpr uint32_t texId = wotm::sym::texId;        // u16[128]: indice no texInfo global
 constexpr uint32_t tex0 = wotm::sym::TEX0;         // u64[128]: TEX0 de cada textura de particula
 constexpr uint32_t colors = 0x00256C10;       // RGBA (0x80 = 1,0), indexado por vis.colorIndex
+// D_0078F5A0 (particle.bss): float[5][16], a matriz da vista no particleDraw(v) anterior. O particleDraw copia a da vista v para o
+// pacote de cada sistema (fx + 0x2EC0) e no fim grava a atual (D_00256B90) nela
+constexpr uint32_t viewPrevMat = 0x0078F5A0;
 }
 
 // Offsets dentro de _ParticleType (include/hieri_types.h)
@@ -303,6 +306,9 @@ public:
     // sistema novo): a cauda virava um risco de milhares de pixels (riscos amarelos na 3-MILE, foto 2026-10-18_232542/001 e dump de
     // 2026-10-19). Fora da visao 4:3 a cauda usa a vista atual (sem o borrao da camera) e o vento fica de fora (o linePacketBuild
     // tambem nao rodou). Falso se a matriz lida for toda zero.
+    // Tela dividida: o pacote e um so por sistema e o particleDraw da vista 1 grava a matriz dela por cima da da vista 0 (as linhas do
+    // tiro do Robo-47 riscavam a vista da esquerda, foto 2026-10-19_130401). Ai a matriz sai de fxaddr::viewPrevMat[vista], que a
+    // captura (shadowRam) preenche com a do quadro anterior de cada vista.
     static bool prevViewMat(const Ram &ram, uint32_t b, const float M[4][4], const float eye[3], float P[16], float wind[3]) {
         const uint32_t pm = ram.u32(b + 0x2EC0);
         if (!inViewFov(ram, b)) {
@@ -315,7 +321,12 @@ public:
         }
         if (!ram.ok(pm - 16, 80)) return false;
         bool any = false;
-        for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
+        if (!curView().full()) {
+            const uint32_t vm = fxaddr::viewPrevMat + 64u * uint32_t(curView().view == 1 ? 1 : 0);
+            for (int k = 0; k < 16; ++k) { P[k] = ram.f32(vm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
+        }
+        if (!any)
+            for (int k = 0; k < 16; ++k) { P[k] = ram.f32(pm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
         if (wind) for (int a = 0; a < 3; ++a) wind[a] = ram.f32(pm - 16 + 4 * uint32_t(a));
         return any;
     }
@@ -546,7 +557,9 @@ public:
     // seguinte ja tinha matado particulas, pos[n] era o fecho do pacote (0, 0, 0, w enorme): um quadrado gigante na origem do mapa.
     // Chamada so na thread do EE (wotmCaptureFrame), com os sistemas recem-coletados. Devolve um buffer do tamanho da RAM com as
     // faixas copiadas (o resto fica com lixo de usos anteriores, que o draw nunca le); nullptr = desligado (WOTM_FXLIVE=1).
-    static std::shared_ptr<const uint8_t> shadowRam(const Ram &ram, const std::vector<FxSystem> &systems) {
+    // prevMats (tela dividida): float[2][16], a matriz de cada vista no quadro anterior, gravada em fxaddr::viewPrevMat (prevViewMat);
+    // sem ela a faixa fica zerada e vale o pacote
+    static std::shared_ptr<const uint8_t> shadowRam(const Ram &ram, const std::vector<FxSystem> &systems, const float *prevMats = nullptr) {
         static const bool live = std::getenv("WOTM_FXLIVE") != nullptr;   // diagnostico: le a RAM viva, como antes
         if (live || !ram.p || systems.empty()) return nullptr;
         // pool: buffer livre = so o pool o segura (o instantaneo publicado, o da apresentacao e o da Scene seguram os outros)
@@ -572,6 +585,8 @@ public:
         copy(addr::worldToScreenMat, 5 * 0x40);
         copy(addr::worldCtx, 5 * 0x1F0);
         copy(addr::vu1FogParams, 16);
+        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 2 * 64);
+        else std::memset(dst + fxaddr::viewPrevMat, 0, 2 * 64);
         const uint32_t lo = fxaddr::fx, hi = fxaddr::fx + fxaddr::count * fxaddr::stride;
         auto outside = [&](uint32_t a, uint32_t n) { return a < lo || uint64_t(a) + n > hi; };
         for (const FxSystem &s : systems) {

@@ -58,6 +58,7 @@ void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad d
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
+float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
 
@@ -1457,9 +1458,12 @@ namespace
     constexpr uint32_t kDrawHealthIcon = wotm::fn::drawHealthIcon__3HudP7Monsteri, kDrawHealthIconSize = 0x4F8u,
                        kAddPoly = wotm::fn::addPoly__11ScreenPolysiiiRQ211ScreenPolys8PolyData;
     constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
-    PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr;
+    constexpr uint32_t kXform2d = wotm::fn::mathfTransform3dTo2d__FiP8_fvectorT1;
+    PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr, g_origXform2dBars = nullptr;
     uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon
     bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
+    float g_barRawX = 0.f;       // x projetado da cabeca (pixels do GS), antes do limite do drawHealthIcon
+    bool g_barRawOk = false;
 
     float barFrac(uint8_t *rdram, uint32_t cur, uint32_t max)
     {
@@ -1573,8 +1577,22 @@ namespace
         {
             g_barMonster = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
             g_barDone = false;
+            g_barRawOk = false;
         }
         g_origDrawHealthIcon(rdram, ctx, runtime);
+    }
+
+    // mathfTransform3dTo2d(vista, ponto, saida) chamado do drawHealthIcon: guarda o x antes do limite da vista 4:3
+    void xform2dBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31), out = GPR_U32(ctx, 6) & 0x1FFFFFFFu;
+        const bool mine = ctx->pc == kXform2d && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize && ramOk(out, 8u);
+        g_origXform2dBars(rdram, ctx, runtime);
+        if (mine && ctx->pc == ra)
+        {
+            std::memcpy(&g_barRawX, rdram + out, 4);
+            g_barRawOk = true;
+        }
     }
 
     void addPolyBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1588,7 +1606,13 @@ namespace
         float box[4];
         if (!g_barDone && wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)),
                                             static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7), box))
+        {
+            // limite do x na largura widescreen da vista (e a vista dos retangulos); sem o x cru fica o do jogo
+            const float dx = wotmHealthIconShift(rdram, g_barRawOk ? g_barRawX : std::nanf(""));
+            box[0] += dx;
+            box[2] += dx;
             emitBars(rdram, g_barMonster, box);
+        }
         g_barDone = true;
         ctx->pc = ra;   // o quadrado do icone nao e montado
     }
@@ -1921,6 +1945,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         {
             runtime.registerFunction(kDrawHealthIcon, &drawHealthIconBars);
             runtime.registerFunction(kAddPoly, &addPolyBars);
+            if ((g_origXform2dBars = runtime.lookupFunction(kXform2d)))
+                runtime.registerFunction(kXform2d, &xform2dBars);
             std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
         }
         else

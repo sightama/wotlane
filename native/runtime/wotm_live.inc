@@ -668,10 +668,28 @@ bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd,
     box[3] = std::max(t.y0, t.y1);
     return true;
 }
+static int g_barView = 0;   // vista da barra em montagem (wotmHealthIconShift)
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
     if (wotm_live::g_pendingBars.size() < 512)
-        wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a});
+        wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a, false, static_cast<int8_t>(g_barView)});
+}
+// Barras sobre o inimigo: o Hud::drawHealthIcon prende o x projetado (rx, pixels do GS) entre centro - w/2 + 8 e centro + w/2 - 16 da
+// vista, a largura 4:3 dela; em widescreen a barra parava antes da borda (fotos 2026-10-19_132149). Devolve quanto o x muda com o
+// mesmo limite na largura da janela (w/2 * wide) e grava a vista corrente para os retangulos que vem a seguir.
+float wotmHealthIconShift(const uint8_t *rdram, float rx)
+{
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    g_barView = ram.u32(wotm::sym::viewCurView) == 1u ? 1 : 0;
+    const wotm::ViewCtx vc = wotm::readViewCtx(ram, g_barView);
+    const float wide = std::max(1.f, wotm_live::capture().wide.load(std::memory_order_relaxed));
+    if (!std::isfinite(rx)) return 0.f;
+    const int x = static_cast<int>(rx > 0.f ? rx + 0.5f : rx - 0.5f);
+    auto clampTo = [&](float hw) {
+        const int lo = static_cast<int>(vc.cx - hw + 8.f), hi = static_cast<int>(vc.cx + hw - 16.f);
+        return x < lo ? lo : (hi < x ? hi : x);
+    };
+    return static_cast<float>(clampTo(0.5f * vc.w * wide) - clampTo(0.5f * vc.w));
 }
 // Entrada do Shell::FadeScreen(vista, redesenha, ..., r, g, b, inicio, fim, passo): o laco grava inicio, inicio +/- passo... enquanto
 // nao chega ao fim, um valor por sceGsSyncV (wotmShellFadeStep); inicio == fim nao desenha nada.
@@ -846,7 +864,13 @@ void wotmCaptureFrame(const uint8_t *rdram)
     }
     // posicoes, idades e pacotes das particulas deste instante: a apresentacao desenha depois, com o particleMove seguinte ja
     // rodando (contagem do instantaneo com dados vivos = o fecho do pacote lido como particula; 09_magmo_impacto.md)
-    sn.fxRam = wotm::Particles::shadowRam(ram, sn.view1 ? fxAll : sn.fx);
+    // tela dividida: a matriz de cada vista no particleDraw anterior (viewPrevMat ja tem a deste quadro; a de antes fica guardada aqui)
+    static float prevMats[2][16];
+    static bool havePrev = false;
+    sn.fxRam = wotm::Particles::shadowRam(ram, sn.view1 ? fxAll : sn.fx, sn.view1 && havePrev ? &prevMats[0][0] : nullptr);
+    for (int k = 0; k < 32; ++k)
+        prevMats[k / 16][k % 16] = ram.f32(wotm::fxaddr::viewPrevMat + 4u * uint32_t(k));
+    havePrev = true;
     if (sn.view1)
         sn.view1->fxRam = sn.fxRam;
     sn.screenRects = std::move(rects);
@@ -1469,6 +1493,7 @@ void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
 bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { return false; }
 void wotmBarRect(float, float, float, float, uint8_t, uint8_t, uint8_t, uint8_t) {}
+float wotmHealthIconShift(const uint8_t *, float) { return 0.f; }
 void wotmShellFade(const uint8_t *, int, uint32_t, uint32_t, uint32_t, int, int, int, bool) {}
 void wotmShellFadeStep() {}
 void wotmShellFadeStepDone() {}
