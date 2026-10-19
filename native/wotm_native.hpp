@@ -2285,7 +2285,7 @@ public:
                 "#version 330\n"
                 "in vec3 vertexPosition; in vec2 vertexTexCoord; in vec3 vertexNormal; in vec4 vertexColor;\n"
                 "uniform mat4 mvp; uniform vec3 fogEye; uniform vec4 fogRow3; uniform vec3 fogParams;\n"
-                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog; out float fragGsA; out float fragPm; out float fragMode;\n"
+                "out vec2 fragTexCoord; out vec4 fragColor; out float fragFog; out float fragGsA; out float fragPm; out float fragMode; out float fragFge;\n"
                 "void main() {\n"
                 "  fragTexCoord = vertexTexCoord; fragColor = vertexColor;\n"
                 // normal = (burn, 1, FGE + 2 * GS + 4 * PM) normalizada pelo rlNormal3f: as razoes por y sobrevivem; y = 0 = sem nada
@@ -2294,6 +2294,7 @@ public:
                 "  fragGsA = mod(floor(fl / 2.0), 2.0) > 0.5 ? 1.0 : 0.0;\n"
                 "  fragPm = mod(floor(fl / 4.0), 2.0) > 0.5 ? 1.0 : 0.0;\n"
                 "  fragMode = floor(fl / 8.0);\n"
+                "  fragFge = mod(fl, 2.0) > 0.5 ? 1.0 : 0.0;\n"
                 "  float w = dot(fogRow3.xyz, vertexPosition - fogEye) + fogRow3.w;\n"
                 "  float f = 255.0;\n"
                 "  if (mod(fl, 2.0) > 0.5 && w > 0.001) f = clamp(burn + fogParams.x + fogParams.z / w, 0.0, fogParams.y);\n"
@@ -2302,13 +2303,20 @@ public:
                 "}\n";
             static const char *fs =
                 "#version 330\n"
-                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA; in float fragPm; in float fragMode;\n"
-                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; uniform float alphaRef; out vec4 finalColor;\n"
+                "in vec2 fragTexCoord; in vec4 fragColor; in float fragFog; in float fragGsA; in float fragPm; in float fragMode; in float fragFge;\n"
+                "uniform sampler2D texture0; uniform vec4 colDiffuse; uniform vec3 fogColor; uniform float fogSplit; uniform float alphaRef; uniform float gsTrunc; out vec4 finalColor;\n"
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
                 // GS: cor = texel * cor do vertice / 128 (o vertice vem cru, 0x80 = 1,0; acima disso clareia), limitada a 255;
                 // As = At * Av / 128, saturado em 255 pela funcao de textura (como a cor), / 128: ate 255/128
                 "  float as = t.a;\n"
-                "  if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); as = min(t.a * 3.9690, 1.9922); t.a = min(as, 1.0); }\n"
+                // WOTM_GSTRUNC=1: as etapas inteiras do GS (texel inteiro, cor do DDA truncada, (Ct * Cv) >> 7 e (At * Av) >> 7 limitados a
+                // 255); em float o nativo fica ~2 niveis mais claro (docs/investigacoes/2026-10-19/brilho_nativo.md)
+                "  if (fragGsA > 0.5 && gsTrunc > 0.5) {\n"
+                "    vec4 tx = floor(texture(texture0, fragTexCoord) * 255.0 + 0.5);\n"
+                "    vec4 cv = floor(fragColor * colDiffuse * 255.0 + 0.001);\n"
+                "    t.rgb = min(floor(tx.rgb * cv.rgb / 128.0), 255.0) / 255.0;\n"
+                "    as = min(floor(tx.a * cv.a / 128.0), 255.0) / 128.0; t.a = min(as, 1.0);\n"
+                "  } else if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); as = min(t.a * 3.9690, 1.9922); t.a = min(as, 1.0); }\n"
                 // teste de alfa do GS (TEST_1 do GROUP, DrawItem::aref; padrao kGsAlphaRef = alfa > 8)
                 "  if (as * 128.0 <= alphaRef) discard;\n"
                 "  if (fragMode > 1.5 && fragMode < 2.5) { finalColor = vec4(1.0); return; }\n"   // 2o passe do doubled (gsBlendDouble)
@@ -2319,6 +2327,11 @@ public:
                 "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
                 "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
                 "  vec3 c = mix(fogColor, t.rgb, f);\n"
+                // GS: F inteiro truncado; (F * C) >> 8 + ((255 - F) * Cf) >> 8 (com F = 255 sai C - 1); so com FGE
+                "  if (fragGsA > 0.5 && gsTrunc > 0.5 && fragFge > 0.5 && gl_FragCoord.x >= fogSplit) {\n"
+                "    float F = floor(f * 255.0 + 0.001);\n"
+                "    c = (floor(F * floor(t.rgb * 255.0 + 0.5) / 256.0) + floor((255.0 - F) * floor(fogColor * 255.0 + 0.5) / 256.0)) / 255.0;\n"
+                "  }\n"
                 // aditivo/subtrativo: a cor ja vezes o As inteiro (a mistura usa fator 1; gsBlend)
                 // doubled (modo 1): alfa As / 2, sem o limite de 1 (o 2o passe dobra o destino)
                 // As > 1 na mistura comum: 1o passe sem efeito (alfa 0); 2o passe Cs - Cd (1 - 1/As)
@@ -2332,6 +2345,10 @@ public:
             fogLoc_[4] = GetShaderLocation(alphaShader_, "fogSplit");
             alphaRefLoc_ = GetShaderLocation(alphaShader_, "alphaRef");
             setAlphaRef(kGsAlphaRef);
+            // WOTM_GSTRUNC=1: contas inteiras do GS no shader (modulacao, Gouraud, neblina); desligado = float como antes
+            const int gsTruncLoc = GetShaderLocation(alphaShader_, "gsTrunc");
+            const float gsTrunc = (std::getenv("WOTM_GSTRUNC") && std::atoi(std::getenv("WOTM_GSTRUNC")) != 0) ? 1.0f : 0.0f;
+            if (gsTruncLoc >= 0) SetShaderValue(alphaShader_, gsTruncLoc, &gsTrunc, SHADER_UNIFORM_FLOAT);
         }
         const bool useShader = !wire && alphaShader_.id > 0;
         if (useShader) {
