@@ -11,7 +11,7 @@ The game runs on Windows at 60 fps with native rendering: stages, monsters, part
 keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
 
 **Not an emulator.** The EE (the PS2's CPU) code is statically recompiled to C++ and runs natively; VU0 code is translated too (inline instructions by PS2Recomp, microprograms by
-`tools/vu0native.py`). The game executable (`wotm.exe`) has no emulated VU1, VIF1 or GS; those only exist in a separate test executable, as the reference for the renderer check.
+`tools/vu0native.py`). The game executable (`wotm.exe`) has no emulated VU1, VIF1, GS or IOP; those only exist in a separate test executable, the VU1/GS as the reference for the renderer check.
 What is still PS2-specific in the game: [docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md).
 
 The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).

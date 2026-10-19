@@ -1,3 +1,28 @@
+diff --git a/ps2xIOP/CMakeLists.txt b/ps2xIOP/CMakeLists.txt
+index f8d3e44..a55051b 100644
+--- a/ps2xIOP/CMakeLists.txt
++++ b/ps2xIOP/CMakeLists.txt
+@@ -42,6 +42,20 @@ target_include_directories(ps2_iop
+ 
+ add_library(ps2x::iop ALIAS ps2_iop)
+ 
++# WoTM: IOP do executavel do jogo (wotm), passo 6 de docs/passos/FRONTEIRA.md no repo WoTM. So a RAM do IOP e os caminhos PS2
++# (ps2_path), sem interpretador nem modulos HLE (src/iop_subsystem_host.cpp). O ps2EntryRunner continua com o ps2_iop.
++add_library(ps2_iop_game STATIC
++    src/ps2_path.cpp
++    src/iop_subsystem_host.cpp
++)
++target_compile_features(ps2_iop_game PUBLIC cxx_std_20)
++target_include_directories(ps2_iop_game
++    PUBLIC
++        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
++    PRIVATE
++        ${CMAKE_CURRENT_SOURCE_DIR}/src
++)
++
+ if(PS2X_IOP_BUILD_TESTS)
+     enable_testing()
+     add_executable(ps2_iop_emulator_tests tests/iop_emulator_tests.cpp)
 diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
 index e5f63a9..c1f1cf3 100644
 --- a/ps2xIOP/src/emulator/iop_emulator.cpp
@@ -43,8 +68,195 @@ index e5f63a9..c1f1cf3 100644
          const uint64_t iopCycles = total / 8u;
          m_impl->eeCycleCarry = total % 8u;
          if (iopCycles)
+diff --git a/ps2xIOP/src/iop_subsystem_host.cpp b/ps2xIOP/src/iop_subsystem_host.cpp
+new file mode 100644
+index 0000000..adf6c37
+--- /dev/null
++++ b/ps2xIOP/src/iop_subsystem_host.cpp
+@@ -0,0 +1,181 @@
++// WoTM (passo 6 de docs/passos/FRONTEIRA.md no repo WoTM): IopSubsystem do executavel do jogo (wotm), no lugar de
++// iop_subsystem.cpp. Sem interpretador do IOP e sem os modulos HLE (mcserv, dbcman, libsd): nenhum IRX sobe (o hook de
++// sceSifLoadModule em native/runtime/wotm_snd.inc), pad, CD e memory card sao stubs do lado do EE e o som e nativo, entao nenhum
++// RPC tem servidor. Fica so a RAM do IOP (2 MB), que o SIF.cpp aloca, le e escreve, com as mesmas regras de enderecos e de heap do
++// IopMemory. O ps2EntryRunner continua com o IOP emulado (iop_subsystem.cpp).
++#include "ps2x/iop/iop_subsystem.h"
++
++#include <algorithm>
++#include <cstring>
++#include <vector>
++
++namespace ps2x::iop
++{
++    namespace
++    {
++        constexpr uint32_t kRamSize = 2u * 1024u * 1024u;
++        constexpr uint32_t kHeapBase = 0x00120000u;
++        constexpr uint32_t kHeapLimit = 0x001F0000u;
++
++        uint32_t alignUp(uint32_t value, uint32_t alignment)
++        {
++            return (value + alignment - 1u) & ~(alignment - 1u);
++        }
++
++        uint32_t physicalAddress(uint32_t address)
++        {
++            return address & 0x1FFFFFFFu;
++        }
++    }
++
++    class IopSubsystem::Impl
++    {
++    public:
++        struct Allocation
++        {
++            uint32_t address = 0;
++            uint32_t size = 0;
++        };
++
++        Impl() : ram(kRamSize) { reset(); }
++
++        void reset()
++        {
++            std::fill(ram.begin(), ram.end(), uint8_t{0});
++            allocations.clear();
++            heapCursor = kHeapBase;
++        }
++
++        std::vector<uint8_t> ram;
++        std::vector<Allocation> allocations;
++        uint32_t heapCursor = kHeapBase;
++    };
++
++    IopSubsystem::IopSubsystem(IopHost &)
++        : m_impl(std::make_unique<Impl>())
++    {
++    }
++
++    IopSubsystem::~IopSubsystem() = default;
++    IopSubsystem::IopSubsystem(IopSubsystem &&) noexcept = default;
++    IopSubsystem &IopSubsystem::operator=(IopSubsystem &&) noexcept = default;
++
++    void IopSubsystem::reset()
++    {
++        m_impl->reset();
++    }
++
++    ModuleLoadResult IopSubsystem::loadModule(std::string_view, const void *, uint32_t)
++    {
++        return {true, -1, -1};
++    }
++
++    ModuleLoadResult IopSubsystem::loadModuleBuffer(uint32_t, const void *, uint32_t)
++    {
++        return {true, -1, -1};
++    }
++
++    bool IopSubsystem::stopModule(int32_t, int32_t *)
++    {
++        return false;
++    }
++
++    void IopSubsystem::runEeCycles(uint64_t) noexcept
++    {
++    }
++
++    RpcAbi IopSubsystem::selectRpcAbi(const RpcAbiRequest &) const
++    {
++        return RpcAbi::RuntimeDefault;
++    }
++
++    bool IopSubsystem::canBindRpc(uint32_t) const noexcept
++    {
++        return false;
++    }
++
++    RpcResult IopSubsystem::handleRpc(const RpcRequest &)
++    {
++        return {};
++    }
++
++    void IopSubsystem::onSifTransfer(const SifTransfer &)
++    {
++    }
++
++    uint32_t IopSubsystem::allocateMemory(uint32_t size, uint32_t alignment)
++    {
++        Impl &m = *m_impl;
++        size = alignUp(std::max(size, 1u), 16u);
++        alignment = std::max<uint32_t>(alignment, 4u);
++        uint32_t candidate = alignUp(m.heapCursor, alignment);
++        for (bool overlap = true; overlap;)
++        {
++            overlap = false;
++            for (const auto &block : m.allocations)
++            {
++                if (candidate < block.address + block.size && block.address < candidate + size)
++                {
++                    candidate = alignUp(block.address + block.size, alignment);
++                    overlap = true;
++                    break;
++                }
++            }
++        }
++        if (candidate > kHeapLimit || size > kHeapLimit - candidate)
++            return 0u;
++        m.allocations.push_back({candidate, size});
++        m.heapCursor = std::max(m.heapCursor, candidate + size);
++        return candidate;
++    }
++
++    bool IopSubsystem::freeMemory(uint32_t address)
++    {
++        auto &list = m_impl->allocations;
++        const auto block = std::find_if(list.begin(), list.end(), [&](const Impl::Allocation &a) { return a.address == address; });
++        if (block == list.end())
++            return false;
++        list.erase(block);
++        return true;
++    }
++
++    bool IopSubsystem::readMemory(uint32_t address, void *destination, size_t size) const
++    {
++        if (!isMemoryRange(address, size) || (!destination && size != 0u))
++            return false;
++        std::memcpy(destination, m_impl->ram.data() + physicalAddress(address), size);
++        return true;
++    }
++
++    bool IopSubsystem::writeMemory(uint32_t address, const void *source, size_t size)
++    {
++        if (!isMemoryRange(address, size) || (!source && size != 0u))
++            return false;
++        std::memcpy(m_impl->ram.data() + physicalAddress(address), source, size);
++        return true;
++    }
++
++    bool IopSubsystem::zeroMemory(uint32_t address, size_t size)
++    {
++        if (!isMemoryRange(address, size))
++            return false;
++        std::memset(m_impl->ram.data() + physicalAddress(address), 0, size);
++        return true;
++    }
++
++    bool IopSubsystem::isMemoryRange(uint32_t address, size_t size) const
++    {
++        const bool physicalSegment = address < kRamSize;
++        const bool cachedSegment = address >= 0x80000000u && address < 0x80200000u;
++        const bool uncachedSegment = address >= 0xA0000000u && address < 0xA0200000u;
++        if (!physicalSegment && !cachedSegment && !uncachedSegment)
++            return false;
++        const uint32_t physical = physicalAddress(address);
++        return physical <= kRamSize && size <= kRamSize - physical;
++    }
++
++    DebugSnapshot IopSubsystem::debugSnapshot() const
++    {
++        return {};
++    }
++}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..92c4858 100644
+index 589d768..20458d5 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -157,7 +369,7 @@ index 589d768..92c4858 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +643,75 @@ endif()
+@@ -608,3 +643,78 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -214,6 +426,9 @@ index 589d768..92c4858 100644
 +                               INTERFACE_COMPILE_DEFINITIONS INTERFACE_LINK_LIBRARIES LINK_LIBRARIES)
 +        get_target_property(WOTM_VALUE ps2_runtime ${WOTM_PROP})
 +        if(WOTM_VALUE)
++            if(WOTM_PROP MATCHES "LINK_LIBRARIES$")   # passo 6: IOP so com a RAM (ps2xIOP/src/iop_subsystem_host.cpp)
++                list(TRANSFORM WOTM_VALUE REPLACE "^ps2_iop$" "ps2_iop_game")
++            endif()
 +            set_property(TARGET ps2_runtime_game PROPERTY ${WOTM_PROP} "${WOTM_VALUE}")
 +        endif()
 +    endforeach()
