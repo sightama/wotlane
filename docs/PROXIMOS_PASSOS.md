@@ -1,4 +1,4 @@
-# Próximos passos (atualizado em 2026-10-17; detalhes em docs/passos/)
+# Próximos passos (atualizado em 2026-10-19; detalhes em docs/passos/)
 
 ## Direção (decidida em 2026-10-09, confirmada em 2026-10-16): port primeiro
 O objetivo continua sendo um port nativo de PC fácil de modar. A base é o jogo **recompilado** (PS2Recomp, fora do repo) mais a camada nativa deste repo (`native/`), e a decompilação é a
@@ -16,7 +16,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 
 ## Onde estamos
 - **Port:** o jogo roda no Windows a 60 fps com desenho nativo (fases, monstros, partículas, sombras, neblina, texto do menu), luta por teclado, som e filmes. Geometria casada com o VU1 em mais de 99%
-  dos triângulos; textura, UV, cor e neblina conferidos; HUD do `hier` (retrato, barras de vida e energia, *letterbox*) e widescreen Hor+ (janela em 16:9, `WOTM_ASPECT`) e fades desde 2026-10-16; luz paralela, luzes pontuais (fogo) e luz sob escala como o VU1 desde 2026-10-17. Falta o resto do inventário (resíduos em aberto em `passos/VU1CHECK.md`). Código em `native/` e `native/runtime/`; estado por área em `passos/NATIVO.md`.
+  dos triângulos; textura, UV, cor e neblina conferidos; HUD do `hier` (retrato, barras de vida e energia, *letterbox*) e widescreen Hor+ (janela em 16:9, `WOTM_ASPECT`) e fades desde 2026-10-16; luz paralela, luzes pontuais (fogo) e luz sob escala como o VU1 desde 2026-10-17. Desde 2026-10-19 o jogo é o `wotm.exe`, sem GS, VU1 nem VIF1 emulados; os emulados e a checagem ficam no `ps2EntryRunner.exe`, de teste (`passos/FRONTEIRA.md`, passo 5, que lista o que ainda é do PS2: IOP parado, escalonador do EE, VIF0, registradores do GS, pacote de desenho na RAM). Falta o resto do inventário (resíduos em aberto em `passos/VU1CHECK.md`). Código em `native/` e `native/runtime/`; estado por área em `passos/NATIVO.md`.
 - **Decomp:** `sh tools/wsl/gate.sh` diz `ROM OK` (build + SHA1). Progresso (`python3 tools/progress.py`, em 2026-10-16): `game` 1723 de 3181 funções decompiladas (idênticas + equivalentes),
   417 KB de 909 KB; `common` 836 de 1144. Convenções em `docs/ANALYSIS.md` ("Convenções de status das funções").
 - **Ferramentas do dia a dia:** `tools/corpus.ps1` (corpus de regressão: 5 instantâneos fixos do jogo que a checagem refaz antes e depois de cada mudança), `tools/vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos, com inventário por dono, gatilho
@@ -24,7 +24,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 
 ## Como retomar
 1. `wsl -d Ubuntu` (a distro padrão é a `docker-desktop`, que não serve). Venv: `~/.venvs/wotm/bin/python`. Raiz: `/mnt/c/Users/TwistZero/WoTM`.
-2. **Port:** `build_runtime.bat` (build `build_dev`, sem LTCG), `run_live.bat` para jogar (teclas em `passos/RUNTIME.md`), `tools\corpus.ps1 -Check` antes e depois. Commit sem gate.
+2. **Port:** `build_runtime.bat` (build `build_dev`, sem LTCG), `run_live.bat` para jogar (abre o `ps2EntryRunner.exe` porque liga as fotos; o `run_live.ps1` do clone abre o `wotm.exe`; teclas em `passos/RUNTIME.md`), `tools\corpus.ps1 -Check` antes e depois. Commit sem gate.
 3. **Decomp, gate de commit:** `sh tools/wsl/gate.sh && git commit ...` (de preferência o `git commit` rodando no Windows; o git do WSL não tem identidade).
    `check.sh; git commit` ou `check.sh | tail && git commit` commitam builds quebrados.
 4. Converter TUs novos: `sh tools/wsl/convert_tus.sh TuA TuB ...` (um de cada vez, só mantém os que não quebram a ROM, posiciona vtables com `place_data.py`).
