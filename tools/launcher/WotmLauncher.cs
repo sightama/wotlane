@@ -25,19 +25,19 @@ class Launcher : Form
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
-        new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Toggle lock-on on R1 (D-pad switches target)",
+        new Flag("Mods", "WOTM_LOCKTOGGLE", true, "Toggle lock-on on R1 (D-pad switches target)",
             "Lock-on is no longer held: one tap on R1 locks onto the nearest monster and it stays locked until the next tap. " +
             "While locked, the stick moves relative to the camera, whoever hits you becomes the target and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
             "controller setup). Applies to human players; the AI is unchanged. Unchecked: the original game's buttons."),
-        new Flag("Mods", "WOTM_ENEMYBARS", false, "Health and energy bars over enemies",
+        new Flag("Mods", "WOTM_ENEMYBARS", true, "Health and energy bars over enemies",
             "Replaces the numbered dot over each enemy, in the style of the player HUD: a health bar (green, recent damage in red) and an energy bar below it " +
             "(blue; gray while depleted). Also shows every enemy, not only the first 4. Unchecked: the original game's dot."),
-        new Flag("Mods", "WOTM_DAMAGEPOP", false, "Damage numbers (hits, throws, specials)",
+        new Flag("Mods", "WOTM_DAMAGEPOP", true, "Damage numbers (hits, throws, specials)",
             "Each hit shows a number at the point of impact that rises and fades: white for hits, orange for thrown objects or " +
             "monsters, cyan for specials. Applies to every monster, including yours."),
 
-        new Flag("Run", ":Auto", true, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
-        new Flag("Run", "WOTM_FOTOS", true, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
+        new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
+        new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
         new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
@@ -136,7 +136,7 @@ class Launcher : Form
             vsync.Checked = true;
             aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
             dynWidth.Checked = true;
-            fullscreen.Checked = false;
+            fullscreen.Checked = true;
             matchOn.Checked = false;
             matchPlayer.SelectedIndex = 0;
             matchLevel.SelectedIndex = 0;
@@ -185,7 +185,7 @@ class Launcher : Form
         aspect.Enabled = !dynWidth.Checked;
         dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
 
-        fullscreen.Checked = saved.TryGetValue("WOTM_FULLSCREEN", out v) && v == "1";
+        fullscreen.Checked = !saved.TryGetValue("WOTM_FULLSCREEN", out v) || v == "1";
         tips.SetToolTip(fullscreen, "Opens in borderless fullscreen on the window's monitor (F11 toggles at any time). Without it the window opens at the resolution's size (smaller if it does not fit).");
         inner.Controls.Add(fullscreen);
 
