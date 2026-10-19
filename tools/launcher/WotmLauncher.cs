@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 class Flag
@@ -57,6 +58,13 @@ class Launcher : Form
     static readonly string[] ResolutionLabels = { "448 (original do PS2)", "720", "1080", "1440", "2160" };
     static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
     const string DefaultRes = "720", DefaultAspect = "16:9";
+    // Taxa de apresentacao (WOTM_HZ): "0" = a do monitor (o runtime detecta sozinho; a variavel nao e passada). A logica do jogo
+    // continua a 60; acima disso a tela so reapresenta o ultimo quadro, com ritmo regular e vsync.
+    static readonly string[] Rates = { "0", "60", "120", "144", "165", "180", "240" };
+
+    readonly ComboBox rate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly CheckBox vsync = new CheckBox { Text = "Vsync   [WOTM_VSYNC]", AutoSize = true };
+    readonly int monitorHz, monitorWidth, monitorHeight;   // modo atual do monitor principal, em pixels reais (sem a escala do Windows)
 
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
     readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
@@ -69,6 +77,7 @@ class Launcher : Form
 
     Launcher()
     {
+        MonitorMode(out monitorWidth, out monitorHeight, out monitorHz);
         Text = "WotM - opcoes";
         Font = new Font("Segoe UI", 9f);
         AutoSize = true;
@@ -109,7 +118,9 @@ class Launcher : Form
         reset.Click += delegate
         {
             foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
-            res.SelectedIndex = Array.IndexOf(Resolutions, DefaultRes);
+            res.SelectedIndex = Array.IndexOf(Resolutions, MonitorRes());
+            rate.SelectedIndex = 0;
+            vsync.Checked = true;
             aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
             dynWidth.Checked = true;
             fullscreen.Checked = false;
@@ -134,7 +145,8 @@ class Launcher : Form
         string v;
 
         res.Items.AddRange(ResolutionLabels);
-        int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : DefaultRes);
+        // sem configuracao salva: a maior resolucao que cabe no monitor (primeira execucao)
+        int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : MonitorRes());
         res.SelectedIndex = ri >= 0 ? ri : Array.IndexOf(Resolutions, DefaultRes);
         tips.SetToolTip(res, "Altura do quadro nativo em pixels (WOTM_RES); a largura sai da proporcao. Independe do tamanho da janela: " +
             "a janela so amplia ou reduz o quadro.");
@@ -156,7 +168,61 @@ class Launcher : Form
         fullscreen.Checked = saved.TryGetValue("WOTM_FULLSCREEN", out v) && v == "1";
         tips.SetToolTip(fullscreen, "Tela cheia sem borda no monitor da janela. Sem ela a janela abre no tamanho da resolucao (reduzida se nao couber).");
         inner.Controls.Add(fullscreen);
+
+        rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");
+        for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
+        int hi = Array.IndexOf(Rates, saved.TryGetValue("WOTM_HZ", out v) ? v : "0");
+        rate.SelectedIndex = hi >= 0 ? hi : 0;
+        tips.SetToolTip(rate, "Quantas vezes por segundo a tela e apresentada (WOTM_HZ). A logica do jogo continua a 60: acima disso o quadro " +
+            "se repete, com ritmo regular e sem tearing. 'Monitor' usa a taxa do monitor da janela.");
+        inner.Controls.Add(Row("Taxa da tela   [WOTM_HZ]", rate));
+        vsync.Checked = !saved.TryGetValue("WOTM_VSYNC", out v) || v == "1";
+        tips.SetToolTip(vsync, "Sincroniza com o monitor (sem tearing). Desmarcado: so limita pelo relogio.");
+        inner.Controls.Add(vsync);
+        inner.Controls.Add(new Label { Text = "Monitor principal: " + monitorWidth + "x" + monitorHeight +
+            (monitorHz > 0 ? " a " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = SystemColors.GrayText });
         return gb;
+    }
+
+    // Maior resolucao da lista que cabe na altura do monitor principal.
+    string MonitorRes()
+    {
+        string best = Resolutions[0];
+        foreach (string r in Resolutions) if (int.Parse(r) <= monitorHeight) best = r;
+        return best;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+        public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+        public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
+
+    // Modo atual do monitor principal; se nao der para ler, o tamanho do Screen (pode vir reduzido pela escala) e taxa 0.
+    static void MonitorMode(out int width, out int height, out int hz)
+    {
+        var dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        const int ENUM_CURRENT_SETTINGS = -1;
+        if (EnumDisplaySettings(Screen.PrimaryScreen.DeviceName, ENUM_CURRENT_SETTINGS, ref dm) && dm.dmPelsHeight > 0)
+        {
+            width = dm.dmPelsWidth;
+            height = dm.dmPelsHeight;
+            hz = dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0;
+            return;
+        }
+        width = Screen.PrimaryScreen.Bounds.Width;
+        height = Screen.PrimaryScreen.Bounds.Height;
+        hz = 0;
     }
 
     static FlowLayoutPanel Row(string label, Control c)
@@ -190,6 +256,8 @@ class Launcher : Form
         lines.Add("WOTM_ASPECT|" + Aspects[aspect.SelectedIndex]);
         lines.Add(":DynWidth|" + (dynWidth.Checked ? "1" : "0"));
         lines.Add("WOTM_FULLSCREEN|" + (fullscreen.Checked ? "1" : "0"));
+        lines.Add("WOTM_HZ|" + Rates[rate.SelectedIndex]);
+        lines.Add("WOTM_VSYNC|" + (vsync.Checked ? "1" : "0"));
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
@@ -245,6 +313,10 @@ class Launcher : Form
         else psi.EnvironmentVariables["WOTM_ASPECT"] = Aspects[aspect.SelectedIndex];
         if (fullscreen.Checked) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "1";
         else psi.EnvironmentVariables.Remove("WOTM_FULLSCREEN");
+        if (rate.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_HZ"] = Rates[rate.SelectedIndex];
+        else psi.EnvironmentVariables.Remove("WOTM_HZ");
+        if (vsync.Checked) psi.EnvironmentVariables.Remove("WOTM_VSYNC");
+        else psi.EnvironmentVariables["WOTM_VSYNC"] = "0";
         try
         {
             Process.Start(psi);

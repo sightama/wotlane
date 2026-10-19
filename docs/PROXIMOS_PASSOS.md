@@ -11,6 +11,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
   memory card, `input`, `vi`, `ps`, `sce/*`, `lib989snd` por último).
 - **Verificação das equivalentes:** `tools/verify_tu.py game/<TU>` (pontuação, difftest, chamadas, layout, retornos); para funções com VU0 ou `min/max/madd` use `tools/recomp_oracle`
   (`tools/recomp_oracle/README.md`; hoje só folhas, 24 de 60 candidatas rodaram).
+- **Interpolação de quadros (pendente, escolhida pelo dono em 2026-10-18):** a apresentação já vai na taxa do monitor (`passos/NATIVO.md`, "Taxa de apresentação"), mas repete o quadro do jogo. Para quadros intermediários de verdade, o nativo desenharia a mistura dos dois últimos instantâneos (câmera, matrizes dos objetos, paleta de ossos), com um quadro de atraso; partículas e objetos que nascem ou somem entre os dois pedem tratamento à parte. Rodar a lógica acima de 60 não serve: o `updateRate` só sai de 60/fields e muita coisa conta em quadros.
 - **Pendências fora do caminho crítico:** PR #277 no PS2Recomp (`SQRT.S`/`RSQRT.S`; 108 + 76 funções do jogo afetadas); oracle para funções com chamadas; cobertura com gameplay para realimentar `boot_coverage_asm.csv`.
 
 ## Onde estamos

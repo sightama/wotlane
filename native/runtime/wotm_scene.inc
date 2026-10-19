@@ -12,7 +12,7 @@ static void wotmDrawScene(const uint8_t *rdram)
     wotm_live::initWindowAspect();   // janela na proporcao do widescreen (uma vez, antes da abertura)
     {
         // Sem VU1 ninguem conclui o pacote: o jogo espera `objsInPacket | objsInAlphaPacket` zerarem (rtWaitForVu1, e um laco
-        // embutido em particleDraw). A apresentacao (60 Hz) faz o papel da conclusao do VU1. No quadro amostrado pela checagem VU1 x
+        // embutido em particleDraw). Cada apresentacao faz o papel da conclusao do VU1. No quadro amostrado pela checagem VU1 x
         // nativo nao: la o hierFlushObjQ dispara o DMA de verdade, e zerar aqui descartava a OT de alfa ainda nao despachada (os
         // objetos 0x8000/0x4000 saiam como "so o nativo desenha", pista 7 do VU1CHECK).
         static const bool s_noVu1 = std::getenv("PS2X_NO_VU1") != nullptr;

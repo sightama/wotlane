@@ -255,6 +255,7 @@ namespace wotm_live
 {
 static bool g_hideFps = false;   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
 static bool g_force43 = false;   // replay: quadro 4:3, como a imagem de referencia do GS
+static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
 
 // Widescreen (Hor+): o FOV vertical e o do jogo e a largura acompanha a proporcao. WOTM_ASPECT=L:A fixa a proporcao (4:3 = tela
 // original, com faixas nas laterais); sem ela a proporcao segue a janela (entre 4:3 e 32:9), que abre em 16:9.
@@ -292,12 +293,36 @@ static int renderHeight()
 // Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): WOTM_FULLSCREEN=1 vai para a tela cheia sem borda (proporcao
 // do monitor; com WOTM_ASPECT fixo o quadro fica com faixas); senao a janela de 960x720 do runtime vira o tamanho do quadro nativo
 // (renderHeight na proporcao), reduzido para caber no monitor. O quadro nao depende da janela: so a ampliacao final muda.
+// Taxa de apresentacao: WOTM_HZ=<n> (padrao: a do monitor da janela) com o vsync do monitor (WOTM_VSYNC=0 desliga e so limita pelo
+// relogio). A logica do jogo continua a 60: a apresentacao so redesenha a cena quando chega quadro novo (wotmDrawNative, "redesenho")
+// e nas outras reapresenta a ultima imagem. Ganho: ritmo regular (sem a batida entre os 60 do raylib e o monitor), sem tearing.
+// O runtime abria com SetTargetFPS(60) fixo (ps2_runtime.cpp); aqui e trocado na primeira apresentacao.
+static void initPresentRate()
+{
+    const int mon = GetCurrentMonitor(), monHz = GetMonitorRefreshRate(mon);
+    const char *e = std::getenv("WOTM_HZ");
+    int hz = e ? std::atoi(e) : 0;
+    if (hz <= 0)
+        hz = monHz > 0 ? monHz : 60;
+    hz = std::clamp(hz, 30, 1000);
+    const char *v = std::getenv("WOTM_VSYNC");
+    const bool vsync = !(v && *v == '0');
+    if (vsync)
+        SetWindowState(FLAG_VSYNC_HINT);
+    // com vsync na taxa do monitor quem segura e a troca de buffers; abaixo dela o limite por tempo divide (60 num de 180 = 1 em 3)
+    SetTargetFPS(vsync && hz >= monHz ? 0 : hz);
+    std::fprintf(stderr, "[native] apresentacao: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", vsync && monHz > 0 ? std::min(hz, monHz) : hz,
+                 monHz, vsync ? "ligado" : "desligado");
+}
+
 static void initWindowAspect()
 {
     static bool done = false;
     if (done)
         return;
     done = true;
+    if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
+        initPresentRate();
     if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
     {
         ToggleBorderlessWindowed();
@@ -341,7 +366,6 @@ static Capture &capture()
     static Capture c;
     return c;
 }
-static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
 // replay com varios arquivos numa execucao: o proximo wotmDrawNative recomeca a apresentacao do zero (cena, recursos, quadro anterior),
 // como num processo novo; sem isso um arquivo herdava o estado do anterior quando a fase era a mesma
 static bool g_replayFresh = false;
@@ -824,6 +848,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // Quadro novo do jogo: o instantaneo capturado na thread do EE (wotmCaptureFrame). No replay (--vu1cmp) nao ha jogo rodando e a
     // RAM do instantaneo e fixa: a coleta e aqui mesmo. Os desenhos seguintes repetem o instantaneo.
     wotm::Snapshot sn;
+    bool fresh = false;   // instantaneo novo nesta apresentacao (redesenho, abaixo)
     if (wotm_live::g_localCollect)
     {
         const uint32_t gNow = ram.u32(wotm::sym::g_frame);
@@ -862,6 +887,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             }
         }
         S.snap = std::move(sn);
+        fresh = true;
     }
     // Camera livre com o jogo pausado (F7): a coleta da captura recortou pela vista congelada. Com a thread do EE parada a RAM nao
     // muda, entao a apresentacao coleta de novo, uma vez por quadro pausado, sem o recorte (o resto do instantaneo fica o mesmo).
@@ -881,6 +907,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             un.flares = S.snap.flares;
             un.cam = S.snap.cam;
             S.snap = std::move(un);
+            fresh = true;
         }
     }
     if (!S.snap.valid)
@@ -892,76 +919,102 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const wotm::GameCamera gameCam = S.snap.cam;
     if (freeView.override)
         S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose);
-    const wotm::GameCamera gc = S.scene.show(S.snap);
-    S.snap.cam = gameCam;
-    if (freeView.override)
-        wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
-    if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(r))
-        S.scene.screenRects.push_back(r);
+    // Redesenho: so com quadro novo do jogo (ou instantaneo novo da camera livre), fade do Shell::FadeScreen mudando, camera livre
+    // pausada ou janela redimensionada; parado sem quadro novo (pausa, lacos sem captura) volta a redesenhar a ~60/s. Nas outras
+    // apresentacoes (monitor acima de 60 Hz, initPresentRate) a ultima imagem e so reapresentada: o custo fica o de 60 e o texId 0
+    // (quadro anterior, mapa de ambiente/CLOAK) continua sendo o desenho anterior, nao uma copia do mesmo quadro.
+    const double nowT = GetTime();
+    static double lastFreshT = 0.0, lastRenderT = 0.0;
+    static long s_renders = 0;   // redesenhos (PS2X_STATS, linha [native])
+    if (fresh)
+        lastFreshT = nowT;
+    wotm::ScreenRect fadeNow{};
+    const bool hasFade = wotm_live::shellFadeRect(fadeNow);
+    static wotm::ScreenRect lastFade{};
+    static bool lastHasFade = false;
+    const bool fadeChanged = hasFade != lastHasFade || (hasFade && std::memcmp(&fadeNow, &lastFade, offsetof(wotm::ScreenRect, underText)) != 0);
+    const RenderTexture2D &shown = S.rts[S.cur];
+    const bool sizeOk = shown.id != 0 && shown.texture.width == RW && shown.texture.height == RH;
+    const bool rerender = fresh || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect ||
+                          (nowT - lastFreshT >= 0.04 && nowT - lastRenderT >= 1.0 / 60.0 - 0.001);
+    wotm::GameCamera gc = S.snap.cam;
+    if (rerender)
+    {
+        lastRenderT = nowT;
+        ++s_renders;
+        lastFade = fadeNow;
+        lastHasFade = hasFade;
+        gc = S.scene.show(S.snap);
+        S.snap.cam = gameCam;
+        if (freeView.override)
+            wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
+        if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(r))
+            S.scene.screenRects.push_back(r);
 
-    S.cur ^= 1;
-    for (RenderTexture2D &r : S.rts)
-        if (r.id != 0 && (r.texture.width != RW || r.texture.height != RH))   // proporcao mudou (janela redimensionada): refaz os dois
-        {
-            UnloadRenderTexture(r);
-            r = RenderTexture2D{};
-        }
-    for (RenderTexture2D &r : S.rts)
-        if (r.id == 0)
-        {
-            r = LoadRenderTexture(RW, RH);
-            SetTextureFilter(r.texture, TEXTURE_FILTER_BILINEAR);
-            // texId 0 (quadro anterior): o mapa de ambiente de video/CLOAK usa REGION_CLAMP na tela 640x224 do GS, que e a
-            // textura inteira em 4:3 e a faixa central em widescreen (Scene::envUv, gsScreenRect)
-            SetTextureWrap(r.texture, TEXTURE_WRAP_CLAMP);
-        }
-    RenderTexture2D &rt = S.rts[S.cur];
+        S.cur ^= 1;
+        for (RenderTexture2D &r : S.rts)
+            if (r.id != 0 && (r.texture.width != RW || r.texture.height != RH))   // proporcao mudou (janela redimensionada): refaz os dois
+            {
+                UnloadRenderTexture(r);
+                r = RenderTexture2D{};
+            }
+        for (RenderTexture2D &r : S.rts)
+            if (r.id == 0)
+            {
+                r = LoadRenderTexture(RW, RH);
+                SetTextureFilter(r.texture, TEXTURE_FILTER_BILINEAR);
+                // texId 0 (quadro anterior): o mapa de ambiente de video/CLOAK usa REGION_CLAMP na tela 640x224 do GS, que e a
+                // textura inteira em 4:3 e a faixa central em widescreen (Scene::envUv, gsScreenRect)
+                SetTextureWrap(r.texture, TEXTURE_WRAP_CLAMP);
+            }
+        RenderTexture2D &rt = S.rts[S.cur];
 
-    BeginTextureMode(rt);
-    ClearBackground(BLACK);
-    rlSetClipPlanes(0.5, 30000.0);
-    Camera3D c3{};
-    c3.position = {gc.pos[0], gc.pos[1], gc.pos[2]};
-    c3.target = {gc.pos[0] + gc.fwd[0], gc.pos[1] + gc.fwd[1], gc.pos[2] + gc.fwd[2]};
-    c3.up = {gc.up[0], gc.up[1], gc.up[2]};
-    c3.fovy = gc.fovy;
-    c3.projection = CAMERA_PERSPECTIVE;
-    BeginMode3D(c3);
-    wotm_live::g_stage = "draw";
-    S.scene.draw(ram, false);
-    wotm_live::g_stage = "idle";
-    EndMode3D();
-    if (!wotm_live::liveText(S.scene.text))   // texto do jogo (menu de pausa, HUD): ganchos da fonte (wotm::FontText)
-        S.scene.updateText(ram);              // replay: sprites do GS lidos do fontPacket do instantaneo
-    S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
-    S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH), true);   // fades despachados antes do texto
-    BeginMode3D(c3);   // lista de alta prioridade: depois desses fades (ShellRtLoop::endField), antes do texto
-    S.scene.drawHp(ram);
-    EndMode3D();
-    S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
-    S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
-    EndTextureMode();
+        BeginTextureMode(rt);
+        ClearBackground(BLACK);
+        rlSetClipPlanes(0.5, 30000.0);
+        Camera3D c3{};
+        c3.position = {gc.pos[0], gc.pos[1], gc.pos[2]};
+        c3.target = {gc.pos[0] + gc.fwd[0], gc.pos[1] + gc.fwd[1], gc.pos[2] + gc.fwd[2]};
+        c3.up = {gc.up[0], gc.up[1], gc.up[2]};
+        c3.fovy = gc.fovy;
+        c3.projection = CAMERA_PERSPECTIVE;
+        BeginMode3D(c3);
+        wotm_live::g_stage = "draw";
+        S.scene.draw(ram, false);
+        wotm_live::g_stage = "idle";
+        EndMode3D();
+        if (!wotm_live::liveText(S.scene.text))   // texto do jogo (menu de pausa, HUD): ganchos da fonte (wotm::FontText)
+            S.scene.updateText(ram);              // replay: sprites do GS lidos do fontPacket do instantaneo
+        S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
+        S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH), true);   // fades despachados antes do texto
+        BeginMode3D(c3);   // lista de alta prioridade: depois desses fades (ShellRtLoop::endField), antes do texto
+        S.scene.drawHp(ram);
+        EndMode3D();
+        S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
+        S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
+        EndTextureMode();
 
-    {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
-        // segundos; para conferir telas ao vivo com um roteiro de pad (PS2X_PAD), sem tecla
-        static std::vector<double> shots = [] {
-            std::vector<double> v;
-            if (const char *s = std::getenv("WOTM_SHOTS"))
-                for (const char *p = s; *p;) {
-                    char *e = nullptr;
-                    const double t = std::strtod(p, &e);
-                    if (e == p) break;
-                    v.push_back(t);
-                    p = (*e == ',') ? e + 1 : e;
-                }
-            return v;
-        }();
-        static size_t next = 0;
-        if (next < shots.size() && GetTime() >= shots[next]) {
-            char name[64];
-            std::snprintf(name, sizeof name, "shot_%g.png", shots[next]);
-            if (wotm_live::exportFrame(name)) std::fprintf(stderr, "[shot] %s (g_frame %u)\n", name, ram.u32(0x006F7E38));
-            ++next;
+        {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
+            // segundos; para conferir telas ao vivo com um roteiro de pad (PS2X_PAD), sem tecla
+            static std::vector<double> shots = [] {
+                std::vector<double> v;
+                if (const char *s = std::getenv("WOTM_SHOTS"))
+                    for (const char *p = s; *p;) {
+                        char *e = nullptr;
+                        const double t = std::strtod(p, &e);
+                        if (e == p) break;
+                        v.push_back(t);
+                        p = (*e == ',') ? e + 1 : e;
+                    }
+                return v;
+            }();
+            static size_t next = 0;
+            if (next < shots.size() && GetTime() >= shots[next]) {
+                char name[64];
+                std::snprintf(name, sizeof name, "shot_%g.png", shots[next]);
+                if (wotm_live::exportFrame(name)) std::fprintf(stderr, "[shot] %s (g_frame %u)\n", name, ram.u32(0x006F7E38));
+                ++next;
+            }
         }
     }
 
@@ -974,7 +1027,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // BLEND_ALPHA sobre o preto a cena saia escurecida pelo alfa, e os quadrados aditivos (halo dos power-ups) viravam retangulos claros.
     rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
     BeginBlendMode(BLEND_CUSTOM);
-    DrawTexturePro(rt.texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
+    DrawTexturePro(S.rts[S.cur].texture, src, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
     EndBlendMode();
 
     {   // contador de FPS (desligado ao abrir; F3 liga/desliga): "jogo" = quadros do jogo por segundo (g_frame, 0x6F7E38); "tela" = desenhos nativos por segundo
@@ -1082,8 +1135,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5)
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
-        std::fprintf(stderr, "[native] frame %ld itens=%zu ceu=%zu rtx=%s\n", S.frame, S.scene.items.size(), S.scene.sky.size(),
-                     S.rtxPath.c_str());
+        std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),
+                     S.scene.items.size(), S.scene.sky.size(), S.rtxPath.c_str());
     return true;
 }
 // Chamado na thread do jogo logo depois do particleDraw (hook_particleDraw, main.cpp): copia a lista do lens flare ja projetada
