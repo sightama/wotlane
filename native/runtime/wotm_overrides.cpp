@@ -55,6 +55,8 @@ bool wotmPauseBlock(PS2Runtime *rt);   // wotm_foto.inc: F7/F6, segura a thread 
 bool wotmPauseTookFrame();             // wotm_foto.inc: o quadro que acabou teve parada (pausa ou foto)
 void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad dos pick-ups destacados, na saida do enableHighlights
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
+bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
+void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -1325,6 +1327,82 @@ namespace
     }
 }
 
+namespace
+{
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "Mods" do launcher), no lugar do icone de vida (a bolinha
+    // com o numero do jogador, que muda de cor com a vida). O Hud::drawHealthIcon(monstro, n) projeta a cabeca do monstro e manda dois
+    // quadrados ao ScreenPolys::addPoly no mesmo ponto: o numero (branco) e o anel (cor do +0x686C/+0x6870). Aqui o gancho no
+    // drawHealthIcon guarda o monstro, e o do addPoly, quando chamado de dentro dele, troca os dois quadrados por duas barras sem
+    // textura (wotmBarRect, desenhadas com os retangulos de tela) centradas onde o primeiro ficaria: vida (m_health/m_maxHealth,
+    // +0x44C/+0x448) e, embaixo, energia (StaminaMeter em +0x460: cur/max; cinza enquanto esgotada). O resto do HUD nao muda.
+    constexpr uint32_t kDrawHealthIcon = wotm::fn::drawHealthIcon__3HudP7Monsteri, kDrawHealthIconSize = 0x4F8u,
+                       kAddPoly = wotm::fn::addPoly__11ScreenPolysiiiRQ211ScreenPolys8PolyData;
+    constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
+    PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr;
+    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon
+    bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
+
+    float barFrac(uint8_t *rdram, uint32_t cur, uint32_t max)
+    {
+        float c, m;
+        std::memcpy(&c, rdram + cur, 4);
+        std::memcpy(&m, rdram + max, 4);
+        return m > 0.f && std::isfinite(c) ? std::clamp(c / m, 0.f, 1.f) : 0.f;
+    }
+
+    void emitBars(uint8_t *rdram, uint32_t m, const float box[4])
+    {
+        if (!ramOk(m, kMonsterStamina + 0x24u))
+            return;
+        const float health = barFrac(rdram, m + kMonsterHealth, m + kMonsterMaxHealth);
+        const float energy = barFrac(rdram, m + kMonsterStamina + 0x10u, m + kMonsterStamina);
+        const bool exhausted = FAST_READ32(m + kMonsterStamina + 0x20u) != 0u;
+        // tela do jogo 640 x 224 (campo: 1 unidade em y = 2 linhas)
+        constexpr float kW = 40.f, kHealthH = 3.f, kEnergyH = 2.f, kGap = 1.f;
+        const float cx = 0.5f * (box[0] + box[2]), cy = 0.5f * (box[1] + box[3]);
+        const float x0 = cx - 0.5f * kW, x1 = cx + 0.5f * kW;
+        const float y0 = cy - 0.5f * (kHealthH + kGap + kEnergyH), y1 = y0 + kHealthH, y2 = y1 + kGap, y3 = y2 + kEnergyH;
+        wotmBarRect(x0 - 1.f, y0 - 1.f, x1 + 1.f, y3 + 1.f, 0, 0, 0, 0x60);   // fundo
+        const uint8_t hr = health > 0.5f ? static_cast<uint8_t>(255.f * 2.f * (1.f - health)) : 255;
+        const uint8_t hg = health > 0.5f ? 220 : static_cast<uint8_t>(220.f * 2.f * health);
+        if (health > 0.f)
+            wotmBarRect(x0, y0, x0 + kW * health, y1, hr, hg, 30, 0x80);
+        if (energy > 0.f)
+        {
+            if (exhausted)
+                wotmBarRect(x0, y2, x0 + kW * energy, y3, 120, 120, 130, 0x80);
+            else
+                wotmBarRect(x0, y2, x0 + kW * energy, y3, 40, 110, 255, 0x80);
+        }
+    }
+
+    void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kDrawHealthIcon)
+        {
+            g_barMonster = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+            g_barDone = false;
+        }
+        g_origDrawHealthIcon(rdram, ctx, runtime);
+    }
+
+    void addPolyBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31);
+        if (ctx->pc != kAddPoly || ra < kDrawHealthIcon || ra >= kDrawHealthIcon + kDrawHealthIconSize || !g_barMonster)
+        {
+            g_origAddPolyBars(rdram, ctx, runtime);
+            return;
+        }
+        float box[4];
+        if (!g_barDone && wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)),
+                                            static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7), box))
+            emitBars(rdram, g_barMonster, box);
+        g_barDone = true;
+        ctx->pc = ra;   // o quadrado do icone nao e montado
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -1512,6 +1590,18 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         }
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
+    }
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon
+    if (const char *e = std::getenv("WOTM_ENEMYBARS"); e && *e && std::strcmp(e, "0") != 0)
+    {
+        if ((g_origDrawHealthIcon = runtime.lookupFunction(kDrawHealthIcon)) && (g_origAddPolyBars = runtime.lookupFunction(kAddPoly)))
+        {
+            runtime.registerFunction(kDrawHealthIcon, &drawHealthIconBars);
+            runtime.registerFunction(kAddPoly, &addPolyBars);
+            std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
+        }
+        else
+            std::fprintf(stderr, "[wotm] barras sobre os inimigos indisponiveis: Hud::drawHealthIcon ou ScreenPolys::addPoly sem funcao no runtime\n");
     }
     extern void wotmVu1CheckInstall(PS2Runtime &);   // wotm_vu1check.inc (WOTM_VU1CHECK: VU1 x nativo por objeto)
     wotmVu1CheckInstall(runtime);
