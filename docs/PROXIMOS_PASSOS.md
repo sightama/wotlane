@@ -12,7 +12,7 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - **Verificação das equivalentes:** `tools/verify_tu.py game/<TU>` (pontuação, difftest, chamadas, layout, retornos); para funções com VU0 ou `min/max/madd` use `tools/recomp_oracle`
   (`tools/recomp_oracle/README.md`; hoje só folhas, 24 de 60 candidatas rodaram).
 - **Interpolação de quadros (pendente, escolhida pelo dono em 2026-10-18):** a apresentação já vai na taxa do monitor (`passos/NATIVO.md`, "Taxa de apresentação"), mas repete o quadro do jogo. Para quadros intermediários de verdade, o nativo desenharia a mistura dos dois últimos instantâneos (câmera, matrizes dos objetos, paleta de ossos), com um quadro de atraso; partículas e objetos que nascem ou somem entre os dois pedem tratamento à parte. Rodar a lógica acima de 60 não serve: o `updateRate` só sai de 60/fields e muita coisa conta em quadros.
-- **Depois da fronteira de hardware (lista do dono, 2026-10-19):** RAM acima de 32 MB (METRO com 8 monstros), save em JSON, sem tela de memory card, ícone de salvamento automático, multiplayer até 4, campanha com até 4, prévia 3D na seleção; notas e dependências em `passos/POS_FRONTEIRA.md`.
+- **Depois da fronteira de hardware (lista do dono, 2026-10-19):** RAM acima de 32 MB, HUD dos inimigos, save em JSON (por nomes), sem tela de memory card, ícone de salvamento automático, câmera orbital, mods que adicionam skins e monstros, chefes jogáveis, multiplayer até 4, prévia 3D na seleção, campanha com até 4; ordem, dependências e notas em `passos/POS_FRONTEIRA.md`.
 - **Pendências fora do caminho crítico:** PR #277 no PS2Recomp (`SQRT.S`/`RSQRT.S`; 108 + 76 funções do jogo afetadas); oracle para funções com chamadas; cobertura com gameplay para realimentar `boot_coverage_asm.csv`.
 
 ## Onde estamos
@@ -44,5 +44,5 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - [TESTE_PCSX2.md](passos/TESTE_PCSX2.md): ELF halfcpp no PCSX2, layout `gen_nm_ld.py`, heap, bugs de comportamento achados jogando.
 - [ESPINHA.md](passos/ESPINHA.md): cadeia `main` -> monstro no mapa, menu, `rtMain`, estados de monstro: o que se sabe do fluxo do jogo.
 - [FRONTEIRA.md](passos/FRONTEIRA.md): fronteira de hardware: o que do PS2 o port ainda usa por quadro (desenho, VU0, IOP, relógio, SDK), como o runtime atende cada parte e a ordem para tirar o código de emulador do executável (`tools/hw_frame.py` mede).
-- [POS_FRONTEIRA.md](passos/POS_FRONTEIRA.md): prioridades depois da fronteira de hardware (RAM, save em JSON, multiplayer até 4, mods de skins), com o que já se sabe de cada item.
+- [POS_FRONTEIRA.md](passos/POS_FRONTEIRA.md): prioridades depois da fronteira de hardware (RAM, HUD, save em JSON, câmera, mods, chefes, multiplayer até 4), com o que já se sabe de cada item.
 - [VIEWER_WEB.md](passos/VIEWER_WEB.md): ideia de visualizador de modelos 3D no navegador (2026-10-14).
