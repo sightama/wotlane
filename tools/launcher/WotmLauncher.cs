@@ -550,6 +550,11 @@ class Launcher : Form
 
     [DllImport("dwmapi.dll")]
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    static extern int SetWindowTheme(IntPtr hwnd, string appName, string idList);
+    // SetPreferredAppMode (sem nome exportado, ordinal 135, Windows 10 1903+): 1 = segue o sistema; sem ele a lista aberta sai clara
+    [DllImport("uxtheme.dll", EntryPoint = "#135")]
+    static extern int SetPreferredAppMode(int mode);
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -567,7 +572,14 @@ class Launcher : Form
     static void ApplyDark(Control c)
     {
         if (c.ForeColor == SystemColors.ControlText) c.ForeColor = FgColor;
-        if (c is ComboBox) { c.BackColor = InputColor; ((ComboBox)c).FlatStyle = FlatStyle.Flat; }
+        if (c is ComboBox)
+        {   // tema escuro nativo do Windows (o das caixas de arquivo): legivel tambem desabilitado, ao contrario do FlatStyle com cores
+            c.BackColor = InputColor;
+            Control cc = c;
+            EventHandler theme = delegate { try { SetWindowTheme(cc.Handle, "DarkMode_CFD", null); } catch (Exception) { } };
+            if (c.IsHandleCreated) theme(c, EventArgs.Empty);
+            else c.HandleCreated += theme;
+        }
         else if (c is NumericUpDown)
         {   // a cor tem que ir para a caixa de texto interna (UpDownEdit) tambem
             c.BackColor = InputColor;
@@ -589,6 +601,7 @@ class Launcher : Form
     static void Main()
     {
         Application.EnableVisualStyles();
+        if (Dark) try { SetPreferredAppMode(1); } catch (Exception) { }
         Application.Run(new Launcher());
     }
 }
