@@ -25,7 +25,11 @@
 #include <cstring>
 #include <string>
 
-extern std::atomic<unsigned long long> g_wotmIdleUs, g_wotmPaceUs;
+extern std::atomic<unsigned long long> g_wotmIdleUs;
+void wotmHostProfWatchThisThread();                            // ps2_hostprof.cpp (PS2X_HOSTPROF)
+void wotmHostProfDump(long long t0, long long t1, const char *tag);
+double wotmThreadCpuMs();
+void wotmHostProfFrameStart();
 extern bool g_wotmCycleProf;
 extern uint64_t g_wotmEeCycle, g_wotmIdleCycles;
 extern uint32_t g_wotmProfPc[4096];
@@ -624,8 +628,9 @@ namespace
         }
     }
     uint32_t g_lastFieldStart = 0;
-    uint64_t g_lastCycle = 0, g_lastIdleUs = 0, g_lastPaceUs = 0;
+    uint64_t g_lastCycle = 0, g_lastIdleUs = 0;
     std::chrono::steady_clock::time_point g_lastHost;
+    bool g_hostProfWatch = false;
 
     void fieldLogFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -634,7 +639,7 @@ namespace
             return;
         g_lastFieldStart = start;
         const auto now = std::chrono::steady_clock::now();
-        const uint64_t idleUs = g_wotmIdleUs.load(std::memory_order_relaxed), paceUs = g_wotmPaceUs.load(std::memory_order_relaxed);
+        const uint64_t idleUs = g_wotmIdleUs.load(std::memory_order_relaxed);
         int top[3] = {-1, -1, -1};
         for (int i = 0; i < 4096; ++i)
         {
@@ -654,12 +659,15 @@ namespace
         const double field = 294912000.0 / 59.94;
         static uint32_t lastTics = 0;   // ticks do host (relogio nativo) ou D_006F8DC4, os do timer 1 emulado (9619 por field)
         const uint32_t tics = g_nativeTimer ? hostTics() : READ32(0x6F8DC4u);
-        std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms ritmo=%.1fms top",
+        static double lastCpuMs = 0.0;   // CPU da thread do EE (usuario + kernel): quadro lento com pouca CPU = bloqueado fora do ocio
+        const double cpuMs = wotmThreadCpuMs();
+        std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms cpu=%.1fms top",
                      READ32(wotm::sym::g_frame), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
                      (tics - lastTics) / 9619.0,
                      (g_wotmEeCycle - g_lastCycle) / field, g_wotmIdleCycles / field,
                      std::chrono::duration<double, std::milli>(now - g_lastHost).count(), (idleUs - g_lastIdleUs) / 1000.0,
-                     (paceUs - g_lastPaceUs) / 1000.0);
+                     cpuMs - lastCpuMs);
+        lastCpuMs = cpuMs;
         for (int k = 0; k < 3; ++k)
             if (top[k] >= 0)
                 std::fprintf(stderr, " %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
@@ -668,13 +676,26 @@ namespace
             std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
         std::fprintf(stderr, "\n");
+        // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
+        if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
+        {
+            g_hostProfWatch = true;
+            wotmHostProfWatchThisThread();
+        }
+        if (g_hostProfWatch && now - g_lastHost > std::chrono::milliseconds(100))
+        {
+            char tag[48];
+            std::snprintf(tag, sizeof(tag), "quadro g=%u", READ32(wotm::sym::g_frame));
+            wotmHostProfDump(g_lastHost.time_since_epoch().count(), now.time_since_epoch().count(), tag);
+        }
+        if (g_hostProfWatch)
+            wotmHostProfFrameStart();
         std::memset(g_wotmProfPc, 0, sizeof(g_wotmProfPc));
         std::memset(g_wotmProfCyc, 0, sizeof(g_wotmProfCyc));
         g_wotmIdleCycles = 0;
         g_lastCycle = g_wotmEeCycle;
         g_lastHost = now;
         g_lastIdleUs = idleUs;
-        g_lastPaceUs = paceUs;
         lastTics = tics;
     }
 
@@ -934,10 +955,22 @@ namespace
 
     constexpr uint32_t kTheGameUpdate = wotm::fn::Update__7TheGame;
     PS2Runtime::RecompiledFunction g_origTheGameUpdate = nullptr;
+    // WOTM_LOGICDELAY=<ms>: atraso de host de 0 a <ms> (sorteado, sequencia fixa) na entrada do TheGame::Update, para testar o
+    // relogio e o vsync com quadros de 1 e 2 fields (FRONTEIRA.md, passo 4). Diagnostico; nunca ligado por padrao.
+    int g_logicDelayMs = 0;
+    uint32_t g_logicDelaySeed = 12345u;
     void theGameUpdateTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kTheGameUpdate && g_hierSceneRa)
             hierSceneExit(rdram);
+        if (ctx->pc == kTheGameUpdate && g_logicDelayMs > 0)
+        {
+            g_logicDelaySeed = g_logicDelaySeed * 1103515245u + 12345u;
+            const uint32_t us = (g_logicDelaySeed >> 8) % (static_cast<uint32_t>(g_logicDelayMs) * 1000u + 1u);
+            const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(us);
+            while (std::chrono::steady_clock::now() < until)   // espera ativa: o sleep do Windows arredonda para ~1 ms ou mais
+                ;
+        }
         g_origTheGameUpdate(rdram, ctx, runtime);
     }
     constexpr uint32_t kTheGameUpdate2 = wotm::fn::Update2__7TheGame;
@@ -1803,6 +1836,11 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
         runtime.registerFunction(kHier, &hierTapped);
+    if (const char *d = std::getenv("WOTM_LOGICDELAY"))
+    {
+        g_logicDelayMs = std::max(0, std::atoi(d));
+        std::fprintf(stderr, "[wotm] atraso de 0 a %d ms na entrada do TheGame::Update (WOTM_LOGICDELAY)\n", g_logicDelayMs);
+    }
     if (g_origHier && (g_origTheGameUpdate = runtime.lookupFunction(kTheGameUpdate)))
         runtime.registerFunction(kTheGameUpdate, &theGameUpdateTapped);
     if (g_origHier && (g_origTheGameUpdate2 = runtime.lookupFunction(kTheGameUpdate2)))
