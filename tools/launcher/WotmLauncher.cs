@@ -23,6 +23,7 @@ class Launcher : Form
 {
     // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
+    // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
         new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Lock-on alternado no R1 (setas trocam o alvo)",
             "O lock-on deixa de ser segurado: um toque no R1 trava a mira no monstro mais perto e ela fica travada ate o proximo toque. " +
@@ -43,16 +44,10 @@ class Launcher : Form
 
         new Flag("Diagnostico de desenho", "WOTM_NOFX", false, "Sem particulas/efeitos", "Desliga as particulas de fx[] e os efeitos de wotm_fx."),
         new Flag("Diagnostico de desenho", "WOTM_NOSHADOW", false, "Sem sombras", "Desliga as sombras dos bloqueadores (monstros e afins)."),
-        new Flag("Diagnostico de desenho", "WOTM_NOSKIN", false, "Monstros na pose de referencia (sem skinning)", "Diagnostico de malha."),
-        new Flag("Diagnostico de desenho", "WOTM_NOVCOL", false, "Sem cor de vertice", "Ignora o sombreamento por vertice."),
-        new Flag("Diagnostico de desenho", "WOTM_OPAQUE", false, "Ignorar o alfa de vertice nos skinned", "Diagnostico de transparencia."),
-        new Flag("Diagnostico de desenho", "WOTM_ONEPASS", false, "Tudo num passe so", "Nao separa os translucidos num segundo passe."),
 
         new Flag("Logs (live.err.log)", ":Stats", false, "Estatisticas (PS2X_STATS)", "-Stats 1: linhas [native]/[ui]/[time]."),
         new Flag("Logs (live.err.log)", "WOTM_FIELDLOG", false, "Fields por quadro", "Uma linha [field] por quadro do jogo: fields, updateRate, ciclos do EE, tempo de host e os lacos que mais gastam."),
-        new Flag("Logs (live.err.log)", "WOTM_TURNLOG", false, "Rotacao dos monstros", "Uma linha [turn] por monstro por quadro do jogo: rate, aceleracao e velocidade de giro, angulos."),
         new Flag("Logs (live.err.log)", "WOTM_CAMLOG", false, "Camera a cada desenho", "Uma linha [cam] por desenho: t, g_frame, fov, posicao e direcao."),
-        new Flag("Logs (live.err.log)", "PS2X_PADLOG", false, "Gamepad (nome e eixos)", "Linhas [pad]: nome do gamepad 0 e cada mudanca dos analogicos, com o horario."),
         new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Som nativo", "Chamadas do 989snd."),
     };
 
