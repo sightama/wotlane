@@ -133,7 +133,7 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 <summary>Notas para IAs</summary>
 
 - **Mesmo quadro no PCSX2 e no nativo:** retail no PCSX2 pelo `tools/pcsx2_auto` (`emu.ps1 start retail`, teclas por `emu.ps1 key`, `PAUSE` pausa; na seleção de fase, RIGHT anda Midtown → Gamblers → Rosdale → Metro), `emu.ps1 snap` (só a janela) e `ramdump.py build/pcsx2_test/SCUS_971.97_retail.elf ram.bin` com o jogo pausado. Depois, `build/viewer.exe ram.bin --shot x.png` (o raylib grava o PNG na pasta atual, sem caminho) desenha a mesma RAM com a câmera do jogo. Para antes/depois, compilar o viewer de outro commit (`git show <commit>:native/...` numa pasta e o `build.bat` dela).
-- O `ps2EntryRunner` é unity build: mudar só `src/main.cpp` não recompila; toque `build_dev/ps2xRuntime/CMakeFiles/ps2EntryRunner.dir/Unity/unity_168_cxx.cxx`.
+- A checagem só existe no `ps2EntryRunner.exe` (executável de teste); o `wotm.exe` ignora `WOTM_VU1CHECK`/`WOTM_FOTOS` com aviso (`FRONTEIRA.md`, passo 5). O jogo traduzido é a biblioteca de objetos `ps2_game_code` (unity build); o `main.cpp` compila fora dela, uma vez por executável.
 - O caminho emulado inteiro (sem `PS2X_NO_VU1`) trava no `particleDraw`; a checagem não depende dele.
 - O `run_live.ps1` usa `Start-Process -RedirectStandardError` (o `2>` do PowerShell 5 grava UTF-16 e quebra linhas).
 

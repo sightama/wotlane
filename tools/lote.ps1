@@ -70,7 +70,7 @@ foreach ($c in $combos) {
     $tag = '{0}_{1}_{2}' -f $player, ($foes -join '+'), $level
     $env:WOTM_MATCH = $c -join ','
     Write-Host ("[{0}/{1}] jogador {2} contra {3}, fase {4}" -f $n, $total, $player, ($foes -join ' '), $level)
-    Get-Process ps2EntryRunner -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process ps2EntryRunner, wotm -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-ChildItem $disc -Filter '*_vigia_*.bin' -ErrorAction SilentlyContinue | Remove-Item -Force
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Remove-Item -Force
     $env:PS2X_SHOT_FRAMES = [string][math]::Max(60, ($Secs - 12) * 60)   # uma captura perto do fim (quadros da tela, ~60/s)
@@ -79,11 +79,11 @@ foreach ($c in $combos) {
     Start-Sleep -Seconds 5
     $early = $false
     while (((Get-Date) - $start).TotalSeconds -lt $Secs) {
-        if (-not (Get-Process ps2EntryRunner -ErrorAction SilentlyContinue)) { $early = $true; break }
+        if (-not (Get-Process ps2EntryRunner, wotm -ErrorAction SilentlyContinue)) { $early = $true; break }
         Start-Sleep -Seconds 2
     }
     $elapsed = [int]((Get-Date) - $start).TotalSeconds
-    Get-Process ps2EntryRunner -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process ps2EntryRunner, wotm -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
 
     $lines = @(Select-String -Path "$runtime\live.err.log" -Pattern '\[partida\]|\[wotm\] carga|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })

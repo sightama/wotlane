@@ -50,15 +50,8 @@ if ((Test-Path $elf) -and (-not (Test-Path $inc) -or (Get-Item $inc).LastWriteTi
     & python $gen $elf $inc | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host 'vu0native.py falhou: VU0 fica no interpretador' -ForegroundColor Yellow }
 }
-# unity build: o ninja nao recompila o lote que inclui o main.cpp quando so ele muda; apaga o .obj desse lote se ficou velho
-$main = Get-Item "$Dir\PS2Recomp\ps2xRuntime\src\main.cpp"
-$unity = Join-Path $Dir ([IO.Path]::GetFileNameWithoutExtension($Bat)) | Join-Path -ChildPath 'ps2xRuntime\CMakeFiles\ps2EntryRunner.dir\Unity'
-if (Test-Path $unity) {
-    Get-ChildItem $unity -Filter '*.cxx' | Where-Object { Select-String -Path $_.FullName -Pattern 'src[\\/]main\.cpp' -Quiet } | ForEach-Object {
-        $obj = "$($_.FullName).obj"
-        if ((Test-Path $obj) -and (Get-Item $obj).LastWriteTime -lt $main.LastWriteTime) { Remove-Item $obj -Force }
-    }
-}
+# (o main.cpp ficava num lote do unity build com o jogo traduzido e o ninja nao o recompilava; desde 2026-10-19 o jogo traduzido e a
+# biblioteca de objetos ps2_game_code e o main.cpp compila sozinho em cada executavel, ps2EntryRunner e wotm)
 if (Test-Path $logPath) { Remove-Item $logPath -Force }
 
 # a saida do proprio .bat (vcvars etc.) vai para arquivo para nao quebrar a linha da barra; so aparece se falhar
@@ -102,7 +95,7 @@ while (-not $proc.HasExited) {
         $what = $what -replace '^(\[\d+/\d+\] ).*[\\/]', '$1'
         # o ninja so escreve "[1/4] ... ps2_runtime.cpp.obj" quando a compilacao acaba
         if ($done -eq 0) { $what = 'compilando ps2_runtime.cpp' }
-        $floor = if ($total -gt 0 -and $what -match 'ps2EntryRunner') { 0.95 } elseif ($total -gt 0 -and $what -match '\.lib') { 0.9 } else { 0 }
+        $floor = if ($total -gt 0 -and $what -match 'ps2EntryRunner|wotm.exe') { 0.95 } elseif ($total -gt 0 -and $what -match '\.lib') { 0.9 } else { 0 }
     } else { $floor = 0 }
     # tempo vs. ultimo build, sem chegar a 100% antes de terminar
     $t = [math]::Min($sw.Elapsed.TotalSeconds / $expected, 0.99)

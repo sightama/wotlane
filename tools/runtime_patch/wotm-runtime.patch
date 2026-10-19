@@ -44,7 +44,7 @@ index e5f63a9..c1f1cf3 100644
          m_impl->eeCycleCarry = total % 8u;
          if (iopCycles)
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..2d9d0b3 100644
+index 589d768..92c4858 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -76,7 +76,37 @@ index 589d768..2d9d0b3 100644
  )
  
  set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
-@@ -476,8 +488,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
+@@ -456,14 +468,27 @@ if(PS2X_IS_ANDROID)
+     )
+ 
+     target_link_options(ps2EntryRunner PRIVATE "-Wl,--undefined=ANativeActivity_onCreate")
++    set(PS2X_GAME_CODE_TARGET ps2EntryRunner)
+ else()
++    # WoTM: o jogo traduzido vira uma biblioteca de objetos, compilada uma vez e ligada aos dois executaveis: ps2EntryRunner (teste:
++    # com GS, VU1 e VIF1 emulados, a checagem VU1 x nativo e as fotos) e wotm (o jogo, sem eles; fim deste arquivo)
++    set(PS2X_GAME_SRC_FILES ${RUNNER_SRC_FILES})
++    list(REMOVE_ITEM PS2X_GAME_SRC_FILES "${RUNNER_MAIN_CPP}" "${ROOT_MAIN_CPP}")
++    set(PS2X_MAIN_SRC_FILES ${RUNNER_SRC_FILES})
++    list(REMOVE_ITEM PS2X_MAIN_SRC_FILES ${PS2X_GAME_SRC_FILES})
++    add_library(ps2_game_code OBJECT
++        ${PS2X_GAME_SRC_FILES}
++    )
+     add_executable(ps2EntryRunner
+-        ${RUNNER_SRC_FILES}
++        ${PS2X_MAIN_SRC_FILES}
++        $<TARGET_OBJECTS:ps2_game_code>
+     )
++    target_link_libraries(ps2_game_code PRIVATE ps2_runtime)   # so os includes e definicoes; os objetos vao aos dois executaveis
++    set(PS2X_GAME_CODE_TARGET ps2_game_code)
+ endif()
+ 
+ if(PS2X_ENABLE_RUNNER_UNITY_BUILD)
+-    set_target_properties(ps2EntryRunner PROPERTIES
++    set_target_properties(${PS2X_GAME_CODE_TARGET} PROPERTIES
+         UNITY_BUILD ON
+         UNITY_BUILD_BATCH_SIZE "${PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE}"
+     )
+@@ -476,8 +501,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
      )
  
      foreach(PS2X_RUNNER_GENERATED_HEADER IN ITEMS
@@ -87,19 +117,47 @@ index 589d768..2d9d0b3 100644
          if(EXISTS "${PS2X_RUNNER_GENERATED_HEADER}")
              list(APPEND PS2X_RUNNER_PCH_HEADERS "${PS2X_RUNNER_GENERATED_HEADER}")
          endif()
-@@ -506,6 +518,11 @@ target_include_directories(ps2_runtime PUBLIC
+@@ -488,7 +513,7 @@ if(PS2X_ENABLE_RUNNER_PCH)
+         "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_stubs.h"
+     )
+ 
+-    target_precompile_headers(ps2EntryRunner PRIVATE ${PS2X_RUNNER_PCH_HEADERS})
++    target_precompile_headers(${PS2X_GAME_CODE_TARGET} PRIVATE ${PS2X_RUNNER_PCH_HEADERS})
+ endif()
+ 
+ if(PS2X_DEFAULT_BOOT_ELF_DEFINE)
+@@ -499,6 +524,7 @@ endif()
+ 
+ if(MSVC)
+     target_compile_options(ps2EntryRunner PRIVATE /FS)
++    target_compile_options(${PS2X_GAME_CODE_TARGET} PRIVATE /FS)
+ endif()
+ 
+ target_include_directories(ps2_runtime PUBLIC
+@@ -506,6 +532,12 @@ target_include_directories(ps2_runtime PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
  )
  
 +if(PS2X_RUNNER_DIR)   # os ps2_recompiled_*.h do jogo traduzido vem da mesma pasta, antes dos de include/ (que sao os do retail)
 +    target_include_directories(ps2_runtime BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
 +    target_include_directories(ps2EntryRunner BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
++    target_include_directories(${PS2X_GAME_CODE_TARGET} BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
 +endif()
 +
  target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
  target_link_libraries(ps2EntryRunner
      PRIVATE
-@@ -608,3 +625,42 @@ endif()
+@@ -557,6 +589,9 @@ endif()
+ if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+     EnableFastReleaseMode(ps2_runtime)
+     EnableFastReleaseMode(ps2EntryRunner)
++    if(TARGET ps2_game_code)
++        EnableFastReleaseMode(ps2_game_code)
++    endif()
+ 
+     if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
+         if(MSVC)
+@@ -608,3 +643,75 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -142,6 +200,39 @@ index 589d768..2d9d0b3 100644
 +        COMPILE_OPTIONS "-ffp-contract=off;-fno-fast-math"
 +    )
 +endif()
++
++# WoTM: executavel do jogo (wotm) sem GS, VU1 e VIF1 emulados (passo 5 de docs/passos/FRONTEIRA.md no repo WoTM). Mesmo jogo
++# traduzido (ps2_game_code) e mesma configuracao do ps2_runtime/ps2EntryRunner, sem os fontes do GS (frontend, rasterizador,
++# enderecamento da VRAM) e do interpretador do VU1/VU0; o VIF1 e a checagem VU1 x nativo (wotm_vu1check.inc, --vu1cmp, fotos) saem
++# por PS2X_HW_EMU=0. O VIF0 fica (sobe o microcodigo e os dados do VU0, que os microprogramas traduzidos leem). O ps2EntryRunner
++# continua com tudo, como executavel de teste.
++if(TARGET ps2_game_code)
++    get_target_property(WOTM_RT_SOURCES ps2_runtime SOURCES)
++    list(FILTER WOTM_RT_SOURCES EXCLUDE REGEX "(gs_frontend|gs_cpu_backend|ps2_gs_memory|ps2_vu1_core|ps2_vu1_upper|ps2_vu1_lower)\\.cpp$")
++    add_library(ps2_runtime_game STATIC ${WOTM_RT_SOURCES})
++    foreach(WOTM_PROP IN ITEMS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS INTERFACE_INCLUDE_DIRECTORIES
++                               INTERFACE_COMPILE_DEFINITIONS INTERFACE_LINK_LIBRARIES LINK_LIBRARIES)
++        get_target_property(WOTM_VALUE ps2_runtime ${WOTM_PROP})
++        if(WOTM_VALUE)
++            set_property(TARGET ps2_runtime_game PROPERTY ${WOTM_PROP} "${WOTM_VALUE}")
++        endif()
++    endforeach()
++    target_compile_definitions(ps2_runtime_game PRIVATE PS2X_HW_EMU=0)
++
++    get_target_property(WOTM_MAIN_SOURCES ps2EntryRunner SOURCES)   # main.cpp, wotm.rc e os objetos do jogo
++    add_executable(wotm ${WOTM_MAIN_SOURCES})
++    foreach(WOTM_PROP IN ITEMS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS LINK_OPTIONS LINK_LIBRARIES)
++        get_target_property(WOTM_VALUE ps2EntryRunner ${WOTM_PROP})
++        if(WOTM_VALUE)
++            if(WOTM_PROP STREQUAL "LINK_LIBRARIES")
++                list(TRANSFORM WOTM_VALUE REPLACE "^ps2_runtime$" "ps2_runtime_game")
++            endif()
++            set_property(TARGET wotm PROPERTY ${WOTM_PROP} "${WOTM_VALUE}")
++        endif()
++    endforeach()
++    target_compile_definitions(wotm PRIVATE PS2X_HW_EMU=0)
++    ps2x_stage_ffmpeg_runtime_dlls(wotm)
++endif()
 diff --git a/ps2xRuntime/cmake/ReleaseMode.cmake b/ps2xRuntime/cmake/ReleaseMode.cmake
 index 92ef0d5..8d7346f 100644
 --- a/ps2xRuntime/cmake/ReleaseMode.cmake
@@ -170,10 +261,53 @@ index 92ef0d5..8d7346f 100644
          target_compile_options(${TargetName} PRIVATE
              $<$<CONFIG:Release>:
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
-index 4b9242c..f786283 100644
+index 4b9242c..6eeecf1 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
 +++ b/ps2xRuntime/include/ps2_runtime.h
-@@ -551,4 +551,18 @@ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
+@@ -438,14 +438,18 @@ public:
+     inline PS2Memory &memory() { return m_memory; }
+     inline const PS2Memory &memory() const { return m_memory; }
+ 
++#if PS2X_HW_EMU
+     inline GS &gs() { return m_gs; }
+     inline const GS &gs() const { return m_gs; }
++#endif
+     inline GifArbiter &gifArbiter() { return m_gifArbiter; }
+     inline const GifArbiter &gifArbiter() const { return m_gifArbiter; }
++#if PS2X_HW_EMU
+     inline VU1Interpreter &vu0() { return m_vu0; }
+     inline const VU1Interpreter &vu0() const { return m_vu0; }
+     inline VU1Interpreter &vu1() { return m_vu1; }
+     inline const VU1Interpreter &vu1() const { return m_vu1; }
++#endif
+ 
+     inline PS2AudioBackend &audioBackend() { return m_audioBackend; }
+     inline const PS2AudioBackend &audioBackend() const { return m_audioBackend; }
+@@ -489,16 +493,22 @@ private:
+ 
+ private:
+     PS2Memory m_memory;
+-    GifArbiter m_gifArbiter;
++    GifArbiter m_gifArbiter;   // no jogo (PS2X_HW_EMU=0) sem funcao de pacote: o canal GIF conclui e o pacote e descartado
++#if PS2X_HW_EMU
+     GS m_gs;
++#endif
+     std::unique_ptr<PS2IopHostAdapter> m_iopHost;
+     std::unique_ptr<ps2x::iop::IopSubsystem> m_iopSubsystem;
+     PS2AudioBackend m_audioBackend;
+     PSPadBackend m_padBackend;
+     PS2RomDevice m_romDevice;
+     PS2Vfs m_vfs;
++#if PS2X_HW_EMU
+     VU1Interpreter m_vu0{VU1Interpreter::Unit::VU0};
+     VU1Interpreter m_vu1{VU1Interpreter::Unit::VU1};
++#else
++    VU1State m_vu0State{};   // estado do VU0 para os microprogramas traduzidos (wotm_vu0_native); sem interpretador
++#endif
+     R5900Context m_cpuContext;
+     std::unique_ptr<EeScheduler> m_eeScheduler;
+     mutable std::mutex m_eeKernelStateMutex;
+@@ -551,4 +561,18 @@ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
  extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
  extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
  
@@ -310,13 +444,19 @@ index f247ff9..b7114cb 100644
      mutable std::mutex m_snapshotMutex;
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..49e4e9e 100644
+index ea86a9c..e46e315 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
-@@ -23,6 +23,19 @@
+@@ -23,6 +23,25 @@
  
  class GS;
  
++// WotM: PS2X_HW_EMU=0 no executavel do jogo (wotm, CMakeLists.txt): sem GS, VU1 e VIF1 emulados (o port desenha nativo), sem a
++// checagem VU1 x nativo. O ps2EntryRunner (teste) e qualquer codigo sem a definicao ficam com 1.
++#ifndef PS2X_HW_EMU
++#define PS2X_HW_EMU 1
++#endif
++
 +// WotM (wotm_vu1check.inc, WOTM_VU1CHECK): com g_wotmVu1Tap a cadeia DMA do VIF1 guarda a origem de cada trecho, o MSCAL/MSCNT poe em
 +// g_wotmVu1Src o id que g_wotmMscalTap da as origens dos trechos ate ele, e cada XGKICK concluido vai para g_wotmGifTap com o id do seu inicio.
 +extern bool g_wotmVu1Tap;
@@ -333,7 +473,7 @@ index ea86a9c..49e4e9e 100644
  constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
  constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
-@@ -417,7 +430,9 @@ public:
+@@ -417,7 +436,9 @@ public:
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
@@ -826,8 +966,130 @@ index 56a978e..0869e07 100644
          CdFileEntry resolvedEntry = entry;
          std::string resolvedPath;
  
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+index 9c54919..e6a2e29 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
+@@ -114,12 +114,14 @@ namespace ps2_stubs
+                 return;
+             }
+ 
++#if PS2X_HW_EMU   // sem GS (wotm) nao ha o que limpar
+             runtime->gs().writeRegister(static_cast<uint8_t>(clear.testa.reg & 0xFFu), clear.testa.value);
+             runtime->gs().writeRegister(static_cast<uint8_t>(clear.prim.reg & 0xFFu), clear.prim.value);
+             runtime->gs().writeRegister(static_cast<uint8_t>(clear.rgbaq.reg & 0xFFu), clear.rgbaq.value);
+             runtime->gs().writeRegister(static_cast<uint8_t>(clear.xyz2a.reg & 0xFFu), clear.xyz2a.value);
+             runtime->gs().writeRegister(static_cast<uint8_t>(clear.xyz2b.reg & 0xFFu), clear.xyz2b.value);
+             runtime->gs().writeRegister(static_cast<uint8_t>(clear.testb.reg & 0xFFu), clear.testb.value);
++#endif
+         }
+ 
+         void refreshPacketBuilderPendingCount(uint8_t *rdram, PS2Runtime *runtime, uint32_t stateAddr);
+@@ -631,7 +633,7 @@ namespace ps2_stubs
+             return;
+         }
+ 
+-        uint32_t dbp = (static_cast<uint32_t>(img.vram_addr) * 2048u) / 256u;
++        uint32_t dbp = img.vram_addr;   // BITBLTBUF.DBP, em blocos de 64 palavras (o dbp do sceGsSetDefLoadImage)
+         uint32_t dsax = static_cast<uint32_t>(img.x);
+         uint32_t dsay = static_cast<uint32_t>(img.y);
+ 
+@@ -673,7 +675,7 @@ namespace ps2_stubs
+         uint32_t dstAddr = getRegU32(ctx, 5);
+ 
+         GsImageMem img{};
+-        if (!runtime || !runtime->syncCoreSubsystems() || !readGsImage(rdram, imgAddr, img))
++        if (!runtime || !runtime->syncCoreSubsystems() || !readGsImage(rdram, imgAddr, img, true))
+         {
+             setReturnS32(ctx, -1);
+             return;
+@@ -696,7 +698,7 @@ namespace ps2_stubs
+             return;
+         }
+ 
+-        uint32_t sbp = (static_cast<uint32_t>(img.vram_addr) * 2048u) / 256u;
++        uint32_t sbp = img.vram_addr;   // BITBLTBUF.SBP, em blocos de 64 palavras
+         uint64_t bitbltbuf = (static_cast<uint64_t>(sbp & 0x3FFFu) << 0) |
+                              (static_cast<uint64_t>(fbw & 0x3Fu) << 16) |
+                              (static_cast<uint64_t>(img.psm & 0x3Fu) << 24) |
+@@ -745,7 +747,18 @@ namespace ps2_stubs
+         mem.processPendingTransfers();
+ 
+         ps2TraceGuestRangeWrite(rdram, dstAddr, totalImageBytes, "sceGsExecStoreImage", ctx);
++#if PS2X_HW_EMU
+         runtime->gs().consumeLocalToHostBytes(dst, totalImageBytes);
++#else
++        // sem GS (wotm) nao ha VRAM desenhada para ler de volta: a imagem sai preta
++        std::memset(dst, 0, totalImageBytes);
++        static bool s_warned = false;
++        if (!s_warned)
++        {
++            s_warned = true;
++            std::fprintf(stderr, "[gs] sceGsExecStoreImage sem GS: %ux%u psm %u sai preta\n", (unsigned)img.width, (unsigned)img.height, (unsigned)img.psm);
++        }
++#endif
+         runtime->guestFree(pktAddr);
+ 
+         setReturnS32(ctx, 0);
+@@ -1105,7 +1118,7 @@ namespace ps2_stubs
+         setReturnS32(ctx, 8);
+     }
+ 
+-    void sceGsSetDefLoadImage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    static void setDefImage(uint8_t *rdram, R5900Context *ctx, bool store)
+     {
+         uint32_t imgAddr = getRegU32(ctx, 4);
+         const GsSetDefImageArgs args = decodeGsSetDefImageArgs(rdram, ctx);
+@@ -1119,13 +1132,18 @@ namespace ps2_stubs
+         img.vram_width = static_cast<uint8_t>(args.vramWidth);
+         img.psm = static_cast<uint8_t>(args.psm);
+ 
+-        writeGsImage(rdram, imgAddr, img);
++        writeGsImage(rdram, imgAddr, img, store);
+         setReturnS32(ctx, 0);
+     }
+ 
++    void sceGsSetDefLoadImage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
++    {
++        setDefImage(rdram, ctx, false);
++    }
++
+     void sceGsSetDefStoreImage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+-        sceGsSetDefLoadImage(rdram, ctx, runtime);
++        setDefImage(rdram, ctx, true);
+     }
+ 
+     void sceGsSwapDBuffDc(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+@@ -1164,22 +1182,26 @@ namespace ps2_stubs
+         {
+             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw01), 8u);
+             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw02), 8u);
++#if PS2X_HW_EMU
+             if (hasSeededGsClearPacket(db.clear0))
+             {
+                 const uint32_t clearContext = static_cast<uint32_t>((db.clear0.prim.value >> 9) & 0x1u);
+                 runtime->gs().clearFramebufferContext(clearContext, static_cast<uint32_t>(db.clear0.rgbaq.value));
+             }
++#endif
+             applyGsClearPacket(runtime, db.clear0);
+         }
+         else
+         {
+             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw11), 8u);
+             applyGsRegPairs(runtime, reinterpret_cast<const GsRegPairMem *>(&db.draw12), 8u);
++#if PS2X_HW_EMU
+             if (hasSeededGsClearPacket(db.clear1))
+             {
+                 const uint32_t clearContext = static_cast<uint32_t>((db.clear1.prim.value >> 9) & 0x1u);
+                 runtime->gs().clearFramebufferContext(clearContext, static_cast<uint32_t>(db.clear1.rgbaq.value));
+             }
++#endif
+             applyGsClearPacket(runtime, db.clear1);
+         }
+ 
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
-index b1bb6d8..0c717fc 100644
+index b1bb6d8..c8ccbb6 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
 @@ -1,5 +1,8 @@
@@ -958,6 +1220,21 @@ index b1bb6d8..0c717fc 100644
          return true;
      }
  
+@@ -1892,10 +1966,14 @@ namespace
+     {
+         if (!runtime || !pairs || !runtime->syncCoreSubsystems())
+             return;
++#if PS2X_HW_EMU   // sem GS (wotm) os registradores de desenho nao vao a lugar nenhum
+         for (size_t i = 0; i < pairCount; ++i)
+         {
+             runtime->gs().writeRegister(static_cast<uint8_t>(pairs[i].reg & 0xFFu), pairs[i].value);
+         }
++#else
++        (void)pairCount;
++#endif
+     }
+ 
+     static void seedGsDrawEnv1(GsDrawEnv1Mem &env,
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
 index d467c4b..ba6df64 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
@@ -1410,7 +1687,7 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..2b3005a 100644
+index 37b6a4d..2086214 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
 @@ -10,6 +10,17 @@
@@ -1514,7 +1791,7 @@ index 37b6a4d..2b3005a 100644
 +    static const bool s_vif1Uploads = std::getenv("PS2X_VIF1_UPLOADS") != nullptr; // com NO_VIF1: processa a cadeia (uploads de textura/CLUT por DIRECT) sem executar o VU1
      for (auto &p : m_pendingVif1Transfers)
      {
-+        if (s_noVif1 && !s_vif1Uploads && !g_wotmVu1Tap && !g_wotmVif1Keep)
++        if (!PS2X_HW_EMU || (s_noVif1 && !s_vif1Uploads && !g_wotmVu1Tap && !g_wotmVif1Keep))   // jogo (wotm): nunca ha VIF1
 +            continue;
          if (!p.chainData.empty())
          {
@@ -1535,6 +1812,22 @@ index 37b6a4d..2b3005a 100644
      }
  
      if (m_gifArbiter)
+@@ -2001,6 +2066,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+         m_gifPacketCallback(data, sizeBytes);
+ }
+ 
++#if PS2X_HW_EMU   // atalhos do canal GIF direto para o GS (o jogo sem GS, wotm, nao os chama)
+ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
+ {
+     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
+@@ -2272,6 +2338,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
+     queueCompletedDmacCause(2u);
+     return true;
+ }
++#endif // PS2X_HW_EMU
+ 
+ int PS2Memory::pollDmaRegisters()
+ {
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
 index 8590f14..635d302 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
@@ -1809,7 +2102,7 @@ index 8590f14..635d302 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..43ffa59 100644
+index 45cb9d2..6967f55 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -1834,7 +2127,28 @@ index 45cb9d2..43ffa59 100644
  
  #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
  #define ET_EXEC 2            // Executable file
-@@ -414,7 +418,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -375,6 +379,20 @@ namespace
+ 
+ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
+ {
++#if !PS2X_HW_EMU
++    // jogo sem GS (wotm): nao ha quadro do GS; o fundo fica preto e a janela mostra a cena nativa (wotmDrawScene) e os filmes
++    (void)rt;
++    static bool s_blackUploaded = false;
++    if (!s_blackUploaded)
++    {
++        Image black = GenImageColor(FB_WIDTH, FB_HEIGHT, BLACK);
++        UpdateTexture(tex, black.data);
++        UnloadImage(black);
++        s_blackUploaded = true;
++    }
++    outWidth = FB_WIDTH;
++    outHeight = DEFAULT_DISPLAY_HEIGHT;
++#else
+     static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
+     static bool s_hasLatchedInitialFrame = false;
+     static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
+@@ -414,7 +432,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                     &sourceFbp,
                                                     &usedPreferredDisplaySource))
      {
@@ -1843,7 +2157,15 @@ index 45cb9d2..43ffa59 100644
          UpdateTexture(tex, blank.data);
          UnloadImage(blank);
          outWidth = FB_WIDTH;
-@@ -594,6 +598,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
+@@ -475,6 +493,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+     outWidth = width;
+     outHeight = height;
+     s_hasUploadedFrame = true;
++#endif
+ }
+ 
+ PS2Runtime::PS2Runtime()
+@@ -594,6 +613,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
  
  ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
  {
@@ -1853,7 +2175,7 @@ index 45cb9d2..43ffa59 100644
      auto scope = m_iopHost->enterCall(ctx, rdram);
      request.callToken = scope.token();
      return m_iopSubsystem->handleRpc(request);
-@@ -601,6 +608,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
+@@ -601,6 +623,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
  
  void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer)
  {
@@ -1864,7 +2186,30 @@ index 45cb9d2..43ffa59 100644
      auto scope = m_iopHost->enterCall(nullptr, rdram);
      m_iopSubsystem->onSifTransfer(transfer);
  }
-@@ -732,7 +743,9 @@ bool PS2Runtime::initialize(const char *title)
+@@ -664,6 +690,14 @@ bool PS2Runtime::syncCoreSubsystems()
+         return true;
+     }
+ 
++#if !PS2X_HW_EMU
++    // jogo sem GS/VU1 (wotm): o arbitro fica sem funcao de pacote (o DMA do canal GIF conclui e o pacote e descartado) e o MSCAL do
++    // VIF1 nao tem a quem chamar (o VIF1 nem processa as cadeias, ps2_memory.cpp)
++    m_gifArbiter.setProcessPacketFn(nullptr);
++    m_memory.setGifArbiter(&m_gifArbiter);
++    resetIop();
++    m_vu0State = VU1State{};
++#else
+     m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
+     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
+                                     { m_gs.processGIFPacket(data, size); });
+@@ -707,6 +741,7 @@ bool PS2Runtime::syncCoreSubsystems()
+     resetIop();
+     m_vu0.reset();
+     m_vu1.reset();
++#endif
+ 
+     m_boundRdram = rdram;
+     m_boundGSVram = gsVram;
+@@ -732,7 +767,9 @@ bool PS2Runtime::initialize(const char *title)
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
  #else
          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
@@ -1874,7 +2219,7 @@ index 45cb9d2..43ffa59 100644
          InitAudioDevice();
          m_audioBackend.setAudioReady(IsAudioDeviceReady());
  #endif
-@@ -1008,6 +1021,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -1008,6 +1045,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,
                                        elfCrc32Valid);
@@ -1885,7 +2230,7 @@ index 45cb9d2..43ffa59 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1359,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1383,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -1899,7 +2244,7 @@ index 45cb9d2..43ffa59 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1375,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1399,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -1917,7 +2262,7 @@ index 45cb9d2..43ffa59 100644
          return false;
      }
  
-@@ -1396,6 +1424,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1448,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -1925,7 +2270,7 @@ index 45cb9d2..43ffa59 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1432,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1456,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -1937,10 +2282,15 @@ index 45cb9d2..43ffa59 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1455,31 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1479,36 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
++#if !PS2X_HW_EMU
++// Contadores do GS (PS2X_STATS) que o gs_frontend.cpp define; sem GS (wotm) ficam em zero
++std::atomic<unsigned long long> g_wotmGifPackets{0}, g_wotmGifBytes{0}, g_wotmGifUs{0};
++#endif
++
 +// Diagnostico (PS2X_STATS): custo do interpretador de VU0 (VCALLMS dentro de hierTraverseAsm etc.)
 +void wotmHostProfInit();
 +std::atomic<unsigned long long> g_wotmVu0Us{0}, g_wotmVu0Calls{0};
@@ -1969,10 +2319,26 @@ index 45cb9d2..43ffa59 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1491,100 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1520,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
++#if !PS2X_HW_EMU
++    // jogo sem interpretador (wotm): so os microprogramas traduzidos (wotm_vu0_native). Um sem traducao (codigo do VU0 diferente do
++    // esperado) fica sem efeito, com aviso
++    if (WotmVu0Fn fn = wotmVu0NativeLookup(vu0Code, PS2_VU0_CODE_SIZE, m_memory.getVU0CodeGeneration(), startPC))
++    {
++        copyVu0ContextToState(ctx, m_vu0State);   // zera o resto do estado como o execute do interpretador
++        wotmVu0NativeRun(fn, m_vu0State, vu0Data);
++        copyVu0StateToContext(m_vu0State, ctx);
++        return;
++    }
++    static std::atomic<uint32_t> s_untranslated{0};
++    if (s_untranslated.fetch_add(1, std::memory_order_relaxed) < 16)
++        std::fprintf(stderr, "[vu0] microprograma sem traducao em pc=0x%x: ignorado (este executavel nao tem o interpretador)\n", startPC);
++    seedVu0IdleSuccess(ctx);
++    return;
++#else
 +    // PS2X_VU0_VERIFY: executa antes a mesma chamada num interpretador de referencia (atalho do agendador desligado) e compara com o normal
 +    static const bool verifyVu0 = std::getenv("PS2X_VU0_VERIFY") != nullptr;
 +    static VU1Interpreter s_vu0Ref(VU1Interpreter::Unit::VU0);
@@ -2001,6 +2367,10 @@ index 45cb9d2..43ffa59 100644
 +            copyVu0StateToContext(state, ctx);
 +            return;
 +        }
++        // sem traducao: o interpretador roda (aqui) e o executavel do jogo (wotm) ignoraria o programa; o aviso diz que falta traduzir
++        static std::atomic<uint32_t> s_untranslated{0};
++        if (!std::getenv("WOTM_VU0_INTERP") && s_untranslated.fetch_add(1, std::memory_order_relaxed) < 16)
++            std::fprintf(stderr, "[vu0] microprograma sem traducao em pc=0x%x: no interpretador\n", startPC);
 +    }
 +    const auto ph0 = std::chrono::steady_clock::now();
      m_vu0.reset();
@@ -2067,10 +2437,27 @@ index 45cb9d2..43ffa59 100644
 +    g_wotmVu0Phase[0] += (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(ph1 - ph0).count();
 +    g_wotmVu0Phase[1] += (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(ph2 - ph1).count();
 +    g_wotmVu0Phase[2] += (unsigned long long)std::chrono::duration_cast<std::chrono::nanoseconds>(ph3 - ph2).count();
++#endif
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2211,7 +2352,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2165,6 +2356,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+     ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
+     m_memory.writeIORegister(GIF_TADR, tadr);
+     ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
++#if PS2X_HW_EMU   // atalhos que entregam a cadeia ao GS; sem GS (wotm) a cadeia segue pelo DMA normal, que conclui e descarta
+     if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
+     {
+         drainCompletedDmacHandlers(rdram);
+@@ -2175,6 +2367,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+         drainCompletedDmacHandlers(rdram);
+         return;
+     }
++#endif
+     m_memory.writeIORegister(GIF_CHCR, chcr);
+     m_memory.processPendingTransfers();
+     drainCompletedDmacHandlers(rdram);
+@@ -2211,7 +2404,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -2082,7 +2469,7 @@ index 45cb9d2..43ffa59 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2356,6 +2500,7 @@ void PS2Runtime::run()
+@@ -2356,6 +2552,7 @@ void PS2Runtime::run()
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -2090,7 +2477,7 @@ index 45cb9d2..43ffa59 100644
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-@@ -2422,7 +2567,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2619,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -2102,7 +2489,7 @@ index 45cb9d2..43ffa59 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2593,259 @@ void PS2Runtime::run()
+@@ -2444,7 +2645,268 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -2232,6 +2619,7 @@ index 45cb9d2..43ffa59 100644
 +                    std::fwrite(m_memory.getRDRAM(), 1, PS2_RAM_SIZE, rf);
 +                    std::fclose(rf);
 +                }
++#if PS2X_HW_EMU
 +                m_gs.refreshDisplaySnapshot();
 +                uint32_t vramSize = 0;
 +                if (const uint8_t *vram = m_gs.lockDisplaySnapshot(vramSize))
@@ -2243,6 +2631,14 @@ index 45cb9d2..43ffa59 100644
 +                    }
 +                }
 +                m_gs.unlockDisplaySnapshot();
++#else
++                if (const uint8_t *vram = m_memory.getGSVRAM())   // sem GS: so o que os filmes copiam para la
++                    if (FILE *vf = std::fopen(("vram_" + tag + ".bin").c_str(), "wb"))
++                    {
++                        std::fwrite(vram, 1, PS2_GS_VRAM_SIZE, vf);
++                        std::fclose(vf);
++                    }
++#endif
 +            };
 +            if (const char *df = std::getenv("PS2X_DUMP_RAM")) // "600,900": ram_<frame>.bin e vram_<frame>.bin, para o visualizador nativo
 +            {
@@ -2363,7 +2759,7 @@ index 45cb9d2..43ffa59 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..11cb9da 100644
+index b02c7ca..6b4437e 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,9 @@
@@ -2399,7 +2795,19 @@ index b02c7ca..11cb9da 100644
      uint32_t pendingGifImageQwc(const uint8_t *data, uint32_t sizeBytes)
      {
          if (!data || sizeBytes < 16u)
-@@ -295,48 +314,76 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
+@@ -283,6 +302,11 @@ void PS2Memory::processVIF0Data(const uint8_t *data, uint32_t sizeBytes)
+     }
+ }
+ 
++#if !PS2X_HW_EMU
++// Jogo sem VU1/GS (wotm): o VIF1 nao existe; o que chega ao FIFO e descartado (o DMA do canal 1 conclui sem processar, ps2_memory.cpp)
++void PS2Memory::processVIF1Data(uint32_t, uint32_t) {}
++void PS2Memory::processVIF1Data(const uint8_t *, uint32_t) {}
++#else
+ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
+ {
+     if (sizeBytes == 0u || srcPhys >= PS2_RAM_SIZE)
+@@ -295,48 +319,76 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
      processVIF1Data(m_rdram + srcPhys, sizeBytes);
  }
  
@@ -2503,7 +2911,7 @@ index b02c7ca..11cb9da 100644
          uint8_t num = (cmd >> 16) & 0xFF;
          const bool irq = (cmd & 0x80000000u) != 0u;
  
-@@ -416,7 +463,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -416,7 +468,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                  vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
@@ -2513,7 +2921,7 @@ index b02c7ca..11cb9da 100644
                  m_vu1MscalCallback(startPC, runTop, runItop);
              continue;
          }
-@@ -434,7 +482,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -434,7 +487,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                  vif1_regs.tops = (vif1_regs.base + vif1_regs.ofst) & 0x3FFu;
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
@@ -2523,7 +2931,7 @@ index b02c7ca..11cb9da 100644
                  m_vu1MscntCallback(runTop, runItop);
              continue;
          }
-@@ -495,12 +544,58 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+@@ -495,12 +549,58 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
              if (qwCount > availableQw)
                  qwCount = availableQw;
  
@@ -2586,6 +2994,11 @@ index b02c7ca..11cb9da 100644
                  if (pendingImageQw != 0u)
                  {
                      m_vif1PendingPath2ImageQwc = pendingImageQw;
+@@ -781,3 +881,4 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
+         }
+     }
+ }
++#endif // PS2X_HW_EMU
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 index bd75bba..68268a1 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
@@ -3108,10 +3521,10 @@ index bd75bba..68268a1 100644
          }
  
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..e3bca64 100644
+index 563bcbd..dcda031 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,12 +164,85 @@ namespace
+@@ -164,12 +164,98 @@ namespace
      }
  }
  
@@ -3193,11 +3606,24 @@ index 563bcbd..e3bca64 100644
      setupTerminateLogger();
 +    if (argc >= 2 && std::strcmp(argv[1], "--vu1cmp") == 0)   // checagem VU1 x nativo a partir de um instantaneo (wotm_vu1check.inc)
 +        return wotmVu1CmpMain(argc, argv);
++#if !PS2X_HW_EMU
++    // Executavel do jogo (wotm): sem GS, VU1 e VIF1, o modo nativo e o unico. Os cortes que o ps2EntryRunner liga por PS2X_NO_VU1,
++    // PS2X_NO_VIF1 e PS2X_NO_GS (ganchos de hierFlushObjQ/rtWaitForVu1/particleDraw abaixo, conclusao do pacote e fundo preto em
++    // wotm_scene.inc) ficam sempre ligados.
++    for (const char *name : {"PS2X_NO_VU1", "PS2X_NO_VIF1", "PS2X_NO_GS"})
++    {
++#ifdef _WIN32
++        _putenv_s(name, "1");
++#else
++        setenv(name, "1", 1);
++#endif
++    }
++#endif
 +    wotmBoot("iniciando o runtime");
  
      try
      {
-@@ -220,12 +293,79 @@ int main(int argc, char *argv[])
+@@ -220,12 +306,79 @@ int main(int argc, char *argv[])
              return 1;
          }
  

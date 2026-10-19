@@ -27,7 +27,8 @@
 // Funciona em qualquer tela (qualquer chamador de hier(0, 0)); gatilhos mem:<endereco>[=<valor>] e a tecla F8 pegam os menus.
 // WOTM_VU1CHECK_SNAP=<prefixo> grava um instantaneo de cada quadro amostrado (<prefixo>_<g_frame>.vu1snap) que reproduz a checagem
 // sem jogo: `ps2EntryRunner --vu1cmp <arquivo>... [--dump <prefixo>]` (namespace snap e wotmVu1CmpMain, no fim).
-#ifdef WOTM_HAVE_NATIVE
+// So no executavel de teste (ps2EntryRunner): o do jogo (wotm, PS2X_HW_EMU=0) nao tem VU1 nem GS para comparar e fica com o ramo vazio.
+#if defined(WOTM_HAVE_NATIVE) && PS2X_HW_EMU
 #include <array>
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include <map>
@@ -3075,6 +3076,15 @@ int wotmVu1CmpMain(int argc, char **argv)
 #endif
     return job.rc;
 }
+#elif !PS2X_HW_EMU
+// Executavel do jogo (wotm): sem a checagem nem as fotos; avisa se pedirem
+void wotmVu1CheckInstall(PS2Runtime &)
+{
+    if (std::getenv("WOTM_VU1CHECK") || std::getenv("WOTM_FOTOS"))
+        std::fprintf(stderr, "[vu1check] WOTM_VU1CHECK/WOTM_FOTOS ignorados: a checagem e as fotos so existem no ps2EntryRunner (executavel de teste)\n");
+}
+void wotmVu1SceneExit(const uint8_t *) {}
+int wotmVu1CmpMain(int, char **) { std::fprintf(stderr, "--vu1cmp so no ps2EntryRunner (executavel de teste)\n"); return 1; }
 #else
 void wotmVu1CheckInstall(PS2Runtime &) {}
 void wotmVu1SceneExit(const uint8_t *) {}
