@@ -26,7 +26,7 @@ class Launcher : Form
     static readonly Flag[] Flags = {
         new Flag("Mods", "WOTM_LOCKTOGGLE", false, "Lock-on alternado no R1 (setas trocam o alvo)",
             "O lock-on deixa de ser segurado: um toque no R1 trava a mira no monstro mais perto e ela fica travada ate o proximo toque. " +
-            "Travado, esquerda/direita do direcional trocam o alvo. Defesa no L1, andar de lado no L2/R2 (controle na configuracao " +
+            "Travado, o analogico anda em relacao a camera, quem te acerta vira o alvo e esquerda/direita do direcional trocam o alvo. Defesa no L1, andar de lado no L2/R2 (controle na configuracao " +
             "padrao). Vale para os jogadores humanos; a IA nao muda. Desmarcado: os botoes do jogo original."),
         new Flag("Mods", "WOTM_ENEMYBARS", false, "Barras de vida e energia sobre os inimigos",
             "No lugar da bolinha com o numero sobre cada inimigo, no estilo do HUD do jogador: barra de vida (verde, dano recente em vermelho) e, embaixo, a de energia " +
