@@ -56,3 +56,22 @@ Foto `C:\Users\TwistZero\wotm-recomp-win\fotos\2026-10-18_025733\foto_001.vu1sna
 
 Scripts e dump (fora do repo): `C:\Users\TwistZero\.claude\jobs\ab2fc446\tmp\ag4\` (`d_2706.csv`, `bbox.py`, `cmp52.py`,
 `fxram.py`, `blend.py`).
+
+## Reaberto: "o rastro não aparece mais" (2026-10-18 noite)
+
+Fotos `2026-10-18_225102`/001–004 (VEGAS, `g_frame` 471, 504, 704, 1179) e o PCSX2 pausado com rastros na tela (outra fase).
+
+- Replay das fotos: referência e nativo iguais (stripe 62/62 e 70/70 casados, 0 de cor e alfa). O rastro é desenhado, cinza
+  avermelhado e curto (foto 002: fx 51, 54, 74 e 77 com 39–40 pontos, ~60 px numa tela de 640). Os outros 8 stripes da RAM não
+  entram na lista do `particleDraw` naquele quadro (estão fora da vista); a referência faz o mesmo.
+- RAM do PCSX2 (`tools/pcsx2_auto/ramdump.py`) contra a RAM do instantâneo (achada pela âncora do ELF em 0x100100): os mesmos
+  campos (attribs 0x600, `useThisColor` = (60, 50, 50, 1), tabela 736 com `706757`, vida 180, máx. 256, `alphaContext` 0x44,
+  mesma TEX0). Os pontos crescem um a cada 2 quadros nos dois; no PCSX2 havia 67–68 porque a pausa veio mais tarde (idade 134
+  contra 75). A simulação bate.
+- Pixels do rastro no print do PCSX2: ~(50, 42, 40) sobre fundo ~(10–25), o tom do 3c3232 modulado e misturado a ~0,5. No
+  PCSX2 o rastro aparece porque o fundo é mais escuro; contra o céu da VEGAS (~(60, 40, 45)) ele quase some.
+- Conclusão provável: igual ao retail. Antes do 308f2b7 o nativo usava a cor clara da tabela (`706757`), e o rastro chamava
+  atenção. Falta conferir no PCSX2 na VEGAS. Se o dono quiser o visual antigo, o caminho é um mod (ignorar o bit 0x200), não
+  uma correção.
+- Imagens: `docs/screenshots/2026-10-18/2026-10-18_rastro_poeira_pcsx2.png` (recorte do PCSX2) e
+  `2026-10-18_rastro_poeira_ref_x_nativo.png` (foto 002, referência à esquerda, nativo à direita, 3x).
