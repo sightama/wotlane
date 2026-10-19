@@ -36,6 +36,45 @@ class DarkGroupBox : GroupBox
     }
 }
 
+// CheckBox desenhada aqui no tema escuro (caixa escura; marcada, azul com o visto branco): o desenho do Windows nao tem versao escura
+// que respeite a cor do texto.
+class DarkCheckBox : CheckBox
+{
+    bool hover;
+    protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+    protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        if (!Launcher.Dark) { base.OnPaint(e); return; }
+        Graphics g = e.Graphics;
+        g.Clear(BackColor);
+        const int box = 14;
+        var r = new Rectangle(0, (Height - box) / 2, box, box);
+        Color fill, border;
+        if (Checked)
+        {
+            fill = Enabled ? (hover ? Color.FromArgb(120, 185, 255) : Color.FromArgb(96, 165, 250)) : Color.FromArgb(70, 90, 115);
+            border = fill;
+        }
+        else
+        {
+            fill = Color.FromArgb(45, 45, 45);
+            border = !Enabled ? Color.FromArgb(75, 75, 75) : (hover ? Color.FromArgb(200, 200, 200) : Color.FromArgb(150, 150, 150));
+        }
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var b = new SolidBrush(fill)) g.FillRectangle(b, r);
+        using (var p = new Pen(border)) g.DrawRectangle(p, r.X, r.Y, box - 1, box - 1);
+        if (Checked)
+            using (var p = new Pen(Enabled ? Color.FromArgb(20, 20, 20) : Color.FromArgb(150, 150, 150), 2f))
+                g.DrawLines(p, new[] { new PointF(r.X + 3f, r.Y + 7f), new PointF(r.X + 6f, r.Y + 10f), new PointF(r.X + 11f, r.Y + 4f) });
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.Default;
+        var tr = new Rectangle(box + 4, 0, Width - box - 4, Height);
+        TextRenderer.DrawText(g, Text, Font, tr, Enabled ? ForeColor : Color.FromArgb(120, 120, 120),
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+    }
+}
+
 class Launcher : Form
 {
     // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
@@ -78,14 +117,14 @@ class Launcher : Form
     static readonly string[] Rates = { "0", "60", "120", "144", "165", "180", "240" };
 
     readonly ComboBox rate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly CheckBox vsync = new CheckBox { Text = "Vsync   [WOTM_VSYNC]", AutoSize = true };
+    readonly CheckBox vsync = new DarkCheckBox { Text = "Vsync   [WOTM_VSYNC]", AutoSize = true };
     readonly int monitorHz, monitorWidth, monitorHeight;   // modo atual do monitor principal, em pixels reais (sem a escala do Windows)
 
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
     readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox aspect = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
-    readonly CheckBox dynWidth = new CheckBox { Text = "Dynamic width (aspect follows the window)", AutoSize = true };
-    readonly CheckBox fullscreen = new CheckBox { Text = "Fullscreen (F11)   [WOTM_FULLSCREEN]", AutoSize = true };
+    readonly CheckBox dynWidth = new DarkCheckBox { Text = "Dynamic width (aspect follows the window)", AutoSize = true };
+    readonly CheckBox fullscreen = new DarkCheckBox { Text = "Fullscreen (F11)   [WOTM_FULLSCREEN]", AutoSize = true };
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
@@ -125,7 +164,7 @@ class Launcher : Form
                 gb.Controls.Add(inner);
                 right.Controls.Add(gb);
             }
-            var cb = new CheckBox { Text = f.Label + "   [" + f.Key.TrimStart(':') + "]", AutoSize = true };
+            var cb = new DarkCheckBox { Text = f.Label + "   [" + f.Key.TrimStart(':') + "]", AutoSize = true };
             string v;
             cb.Checked = saved.TryGetValue(f.Key, out v) ? v == "1" : f.Default;
             if (f.Tip.Length > 0) tips.SetToolTip(cb, f.Tip);
@@ -231,7 +270,7 @@ class Launcher : Form
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7, MetroId = 4;
 
-    readonly CheckBox matchOn = new CheckBox { Text = "Direct match, no menu   [WOTM_MATCH]", AutoSize = true };
+    readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu   [WOTM_MATCH]", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
@@ -329,7 +368,7 @@ class Launcher : Form
         inner.Controls.Add(new Label { Text = "Same as the in-fight F1 menu; apply to human players.", AutoSize = true, ForeColor = DimColor });
         for (int i = 0; i < CheatKeys.Length; ++i)
         {
-            var cb = new CheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
+            var cb = new DarkCheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
             cb.Checked = saved.TryGetValue(":Cheat_" + CheatKeys[i], out v) && v == "1";
             cheatBoxes[i] = cb;
             inner.Controls.Add(cb);
