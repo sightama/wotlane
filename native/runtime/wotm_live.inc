@@ -187,6 +187,9 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 // Som nativo (native/wotm_snd.hpp), sempre ligado (wotmSndInstall, chamado do main.cpp)
 #include "wotm_snd.inc"
 
+// Controles e teclado por jogador (mapa porta -> dispositivos do ps2_pad.cpp), sempre ligado
+#include "wotm_pad.inc"
+
 #if __has_include("wotm_native.hpp")
 #include "wotm_native.hpp"
 #include "wotm_cheats.h"   // menu de debug (F1)

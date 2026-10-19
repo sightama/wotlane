@@ -92,6 +92,11 @@ class Launcher : Form
             "Each hit shows a number at the point of impact that rises and fades: white for hits, orange for thrown objects or " +
             "monsters, cyan for specials. Applies to every monster, including yours."),
 
+        new Flag("Controls", "WOTM_KBSEPARATE", false, "Keyboard is a separate player",
+            "Connected controllers are players 1 and 2, in connection order. Unchecked: the keyboard is the same player as the first " +
+            "controller (player 1). Checked: the keyboard is its own player after the controllers: player 1 with no controller, " +
+            "player 2 with one controller, unused with two."),
+
         new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
         new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),

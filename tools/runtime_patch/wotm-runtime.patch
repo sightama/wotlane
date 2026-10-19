@@ -325,6 +325,25 @@ index ea86a9c..49e4e9e 100644
      std::vector<PendingTransfer> m_pendingGifTransfers;
      std::vector<PendingTransfer> m_pendingVif0Transfers;
      std::vector<PendingTransfer> m_pendingVif1Transfers;
+diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
+index 7755fe6..61163e3 100644
+--- a/ps2xRuntime/include/runtime/ps2_pad.h
++++ b/ps2xRuntime/include/runtime/ps2_pad.h
+@@ -4,6 +4,14 @@
+ #include <cstddef>
+ #include <cstdint>
+ 
++// Dispositivos que alimentam uma porta do jogo: bit n = gamepad n do raylib (0..3), PS2_PAD_DEV_KEYBOARD = teclado.
++// Mais de um dispositivo na mesma porta: os botoes se somam; em cada eixo vale o mais longe do centro.
++constexpr uint32_t PS2_PAD_DEV_KEYBOARD = 1u << 8;
++constexpr int PS2_PAD_MAX_GAMEPADS = 4;
++// Mapa porta -> dispositivos, consultado a cada leitura. Sem funcao: porta n = gamepad n, e o teclado na porta 0.
++using PS2PadDeviceMapFn = uint32_t (*)(int port);
++extern PS2PadDeviceMapFn g_ps2PadDeviceMap;
++
+ class PSPadBackend
+ {
+ public:
 diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
 index 67c8184..b889c42 100644
 --- a/ps2xRuntime/include/runtime/ps2_vu1.h
@@ -1175,10 +1194,10 @@ index 37b6a4d..2b3005a 100644
  
      if (m_gifArbiter)
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..603719d 100644
+index 8590f14..635d302 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
-@@ -1,6 +1,12 @@
+@@ -1,6 +1,14 @@
  #include "runtime/ps2_pad.h"
  #include "ps2_host_backend.h"
 +#include <algorithm>
@@ -1188,98 +1207,100 @@ index 8590f14..603719d 100644
 +#include <cstdlib>
 +#include <string>
 +#include <vector>
++
++PS2PadDeviceMapFn g_ps2PadDeviceMap = nullptr;
  
  namespace
  {
-@@ -82,41 +88,133 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
-         float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
-         float rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
-         float ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
-+        // PS2X_PADLOG: nome do gamepad e cada mudanca dos eixos (>= 0,05) no stderr, com o horario.
+@@ -23,9 +31,158 @@ namespace
+     constexpr uint16_t PAD_L1 = 0x0400u;
+     constexpr uint16_t PAD_R2 = 0x0200u;
+     constexpr uint16_t PAD_L2 = 0x0100u;
++
++    uint32_t defaultDeviceMap(int port)
++    {
++        uint32_t devs = port >= 0 && port < PS2_PAD_MAX_GAMEPADS ? 1u << port : 0u;
++        if (port == 0)
++            devs |= PS2_PAD_DEV_KEYBOARD;
++        return devs;
++    }
++
++    // Eixo: fica o valor mais longe do centro entre os dispositivos da porta
++    void mergeAxis(uint8_t &dst, uint8_t v)
++    {
++        if (std::abs(int(v) - 0x80) > std::abs(int(dst) - 0x80))
++            dst = v;
++    }
++
++    void readGamepad(int pad, int port, uint16_t &btns, uint8_t *data)
++    {
++        static const struct { int button; uint16_t mask; } kMap[] = {
++            {GAMEPAD_BUTTON_LEFT_FACE_UP, PAD_UP}, {GAMEPAD_BUTTON_LEFT_FACE_DOWN, PAD_DOWN},
++            {GAMEPAD_BUTTON_LEFT_FACE_LEFT, PAD_LEFT}, {GAMEPAD_BUTTON_LEFT_FACE_RIGHT, PAD_RIGHT},
++            {GAMEPAD_BUTTON_RIGHT_FACE_DOWN, PAD_CROSS}, {GAMEPAD_BUTTON_RIGHT_FACE_RIGHT, PAD_CIRCLE},
++            {GAMEPAD_BUTTON_RIGHT_FACE_LEFT, PAD_SQUARE}, {GAMEPAD_BUTTON_RIGHT_FACE_UP, PAD_TRIANGLE},
++            {GAMEPAD_BUTTON_LEFT_TRIGGER_1, PAD_L1}, {GAMEPAD_BUTTON_RIGHT_TRIGGER_1, PAD_R1},
++            {GAMEPAD_BUTTON_LEFT_TRIGGER_2, PAD_L2}, {GAMEPAD_BUTTON_RIGHT_TRIGGER_2, PAD_R2},
++            {GAMEPAD_BUTTON_MIDDLE_RIGHT, PAD_START}, {GAMEPAD_BUTTON_MIDDLE_LEFT, PAD_SELECT},
++            {GAMEPAD_BUTTON_LEFT_THUMB, PAD_L3}, {GAMEPAD_BUTTON_RIGHT_THUMB, PAD_R3},
++        };
++        for (const auto &m : kMap)
++            if (IsGamepadButtonDown(pad, m.button))
++                btns &= ~m.mask;
++
++        float lx = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_LEFT_X);
++        float ly = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_LEFT_Y);
++        float rx = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_RIGHT_X);
++        float ry = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_RIGHT_Y);
++        // PS2X_PADLOG: nome de cada gamepad lido (e a porta) e cada mudanca dos eixos (>= 0,05) no stderr, com o horario.
 +        // PS2X_PAD_DEADZONE=<0..1>: zera o eixo com |valor| abaixo do limite (padrao 0,25; 0 = sem zona morta).
 +        static const bool padLog = std::getenv("PS2X_PADLOG") != nullptr;
 +        static const float deadzone = std::getenv("PS2X_PAD_DEADZONE") ? static_cast<float>(std::atof(std::getenv("PS2X_PAD_DEADZONE"))) : 0.25f;
 +        if (padLog)
 +        {
-+            static bool named = false;
-+            static float last[4] = {0, 0, 0, 0};
-+            if (!named)
++            static int namedPort[PS2_PAD_MAX_GAMEPADS] = {-1, -1, -1, -1};
++            static float last[PS2_PAD_MAX_GAMEPADS][4] = {};
++            if (namedPort[pad] != port)
 +            {
-+                named = true;
-+                std::fprintf(stderr, "[pad] gamepad 0: %s (eixos: %d)\n", GetGamepadName(kGamepad), GetGamepadAxisCount(kGamepad));
++                namedPort[pad] = port;
++                std::fprintf(stderr, "[pad] gamepad %d -> porta %d: %s (eixos: %d)\n", pad, port + 1, GetGamepadName(pad), GetGamepadAxisCount(pad));
 +            }
 +            const float cur[4] = {lx, ly, rx, ry};
 +            bool changed = false;
 +            for (int i = 0; i < 4; ++i)
-+                changed |= std::fabs(cur[i] - last[i]) >= 0.05f;
++                changed |= std::fabs(cur[i] - last[pad][i]) >= 0.05f;
 +            if (changed)
 +            {
-+                std::fprintf(stderr, "[pad] t=%.3f esq=%+.2f,%+.2f dir=%+.2f,%+.2f\n", GetTime(), lx, ly, rx, ry);
-+                std::copy(cur, cur + 4, last);
++                std::fprintf(stderr, "[pad] t=%.3f gamepad %d esq=%+.2f,%+.2f dir=%+.2f,%+.2f\n", GetTime(), pad, lx, ly, rx, ry);
++                std::copy(cur, cur + 4, last[pad]);
 +            }
 +        }
 +        if (deadzone > 0.f)
 +            for (float *a : {&lx, &ly, &rx, &ry})
 +                if (std::fabs(*a) < deadzone)
 +                    *a = 0.f;
-         data[6] = static_cast<uint8_t>(128 + lx * 127);
-         data[7] = static_cast<uint8_t>(128 + ly * 127);
-         data[4] = static_cast<uint8_t>(128 + rx * 127);
-         data[5] = static_cast<uint8_t>(128 + ry * 127);
-     }
--    else
-+    // Teclado sempre ativo, somado ao gamepad (um gamepad/dispositivo virtual presente nao pode desligar o teclado).
-+    // Mapeamento (definido pelo dono):
++        mergeAxis(data[6], static_cast<uint8_t>(128 + lx * 127));
++        mergeAxis(data[7], static_cast<uint8_t>(128 + ly * 127));
++        mergeAxis(data[4], static_cast<uint8_t>(128 + rx * 127));
++        mergeAxis(data[5], static_cast<uint8_t>(128 + ry * 127));
++    }
++
++    // Mapeamento do teclado (definido pelo dono):
 +    //   Setas = analogico esquerdo        I/J/K/L = D-pad (cima/esquerda/baixo/direita)
 +    //   Espaco = X   Z = quadrado   X = triangulo   S = bola
 +    //   Enter = Start   Backspace = Select
 +    //   Q = L1   W = R1   Shift = L1+R1   A = L2   C = R2
-     {
--        if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
-+        if (IsKeyDown(KEY_I))
-             clearBit(PAD_UP);
--        if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))
-+        if (IsKeyDown(KEY_K))
-             clearBit(PAD_DOWN);
--        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
-+        if (IsKeyDown(KEY_J))
-             clearBit(PAD_LEFT);
--        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
-+        if (IsKeyDown(KEY_L))
-             clearBit(PAD_RIGHT);
--        if (IsKeyDown(KEY_X) || IsKeyDown(KEY_SPACE))
-+        if (IsKeyDown(KEY_SPACE))
-             clearBit(PAD_CROSS);
--        if (IsKeyDown(KEY_C) || IsKeyDown(KEY_ESCAPE))
-+        if (IsKeyDown(KEY_S))
-             clearBit(PAD_CIRCLE);
--        if (IsKeyDown(KEY_Z) || IsKeyDown(KEY_KP_0))
-+        if (IsKeyDown(KEY_Z))
-             clearBit(PAD_SQUARE);
--        if (IsKeyDown(KEY_V) || IsKeyDown(KEY_KP_1))
-+        if (IsKeyDown(KEY_X))
-             clearBit(PAD_TRIANGLE);
-         if (IsKeyDown(KEY_Q))
-             clearBit(PAD_L1);
--        if (IsKeyDown(KEY_E))
-+        if (IsKeyDown(KEY_W))
-             clearBit(PAD_R1);
--        if (IsKeyDown(KEY_LEFT_SHIFT))
-+        if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))
-+        {
-+            clearBit(PAD_L1);
-+            clearBit(PAD_R1);
-+        }
-+        if (IsKeyDown(KEY_A))
-             clearBit(PAD_L2);
--        if (IsKeyDown(KEY_RIGHT_SHIFT))
-+        if (IsKeyDown(KEY_C))
-             clearBit(PAD_R2);
-         if (IsKeyDown(KEY_ENTER))
-             clearBit(PAD_START);
--        if (IsKeyDown(KEY_TAB))
-+        if (IsKeyDown(KEY_BACKSPACE))
-             clearBit(PAD_SELECT);
++    void readKeyboard(uint16_t &btns, uint8_t *data)
++    {
++        static const struct { int key; uint16_t mask; } kMap[] = {
++            {KEY_I, PAD_UP}, {KEY_K, PAD_DOWN}, {KEY_J, PAD_LEFT}, {KEY_L, PAD_RIGHT},
++            {KEY_SPACE, PAD_CROSS}, {KEY_S, PAD_CIRCLE}, {KEY_Z, PAD_SQUARE}, {KEY_X, PAD_TRIANGLE},
++            {KEY_Q, PAD_L1}, {KEY_W, PAD_R1}, {KEY_LEFT_SHIFT, PAD_L1 | PAD_R1}, {KEY_RIGHT_SHIFT, PAD_L1 | PAD_R1},
++            {KEY_A, PAD_L2}, {KEY_C, PAD_R2}, {KEY_ENTER, PAD_START}, {KEY_BACKSPACE, PAD_SELECT},
++        };
++        for (const auto &m : kMap)
++            if (IsKeyDown(m.key))
++                btns &= ~m.mask;
 +
 +        // Analogico esquerdo pelas setas (so quando alguma seta esta pressionada; senao fica o valor do gamepad/centro)
 +        const bool aL = IsKeyDown(KEY_LEFT), aR = IsKeyDown(KEY_RIGHT), aU = IsKeyDown(KEY_UP), aD = IsKeyDown(KEY_DOWN);
@@ -1289,9 +1310,11 @@ index 8590f14..603719d 100644
 +            data[7] = aU ? 0x00 : 0xFF;
 +    }
 +
-+    // Roteiro de botoes por tempo (teste sem tela): PS2X_PAD="seg:dur:botao;seg:dur:botao;..." (botao: up,down,left,right,cross,circle,square,triangle,l1,r1,l2,r2,start,select)
++    // Roteiro de botoes por tempo (teste sem tela): PS2X_PAD="seg:dur:botao;seg:dur:botao;..." (botao: up,down,left,right,cross,
++    // circle,square,triangle,l1,r1,l2,r2,start,select). Vale para o jogador 1 (porta 0); "botao@2" manda para o jogador 2 (porta 1).
++    void applyScript(int port, uint16_t &btns)
 +    {
-+        struct Step { double t0, dur; uint16_t mask; };
++        struct Step { double t0, dur; uint16_t mask; int port; };
 +        static std::vector<Step> steps;
 +        static bool parsed = false;
 +        if (!parsed)
@@ -1309,35 +1332,140 @@ index 8590f14..603719d 100644
 +                    pos = end + 1;
 +                    size_t a = item.find(':'), b = item.find(':', a + 1);
 +                    if (a == std::string::npos || b == std::string::npos) continue;
-+                    const std::string name = item.substr(b + 1);
++                    std::string name = item.substr(b + 1);
++                    int stepPort = 0;
++                    const size_t at = name.find('@');
++                    if (at != std::string::npos)
++                    {
++                        stepPort = std::max(0, std::atoi(name.c_str() + at + 1) - 1);
++                        name.resize(at);
++                    }
 +                    uint16_t m = 0;
 +                    if (name == "up") m = PAD_UP; else if (name == "down") m = PAD_DOWN; else if (name == "left") m = PAD_LEFT;
 +                    else if (name == "right") m = PAD_RIGHT; else if (name == "cross") m = PAD_CROSS; else if (name == "circle") m = PAD_CIRCLE;
 +                    else if (name == "square") m = PAD_SQUARE; else if (name == "triangle") m = PAD_TRIANGLE; else if (name == "l1") m = PAD_L1;
 +                    else if (name == "r1") m = PAD_R1; else if (name == "l2") m = PAD_L2; else if (name == "r2") m = PAD_R2;
 +                    else if (name == "start") m = PAD_START; else if (name == "select") m = PAD_SELECT;
-+                    if (m) steps.push_back({std::atof(item.substr(0, a).c_str()), std::atof(item.substr(a + 1, b - a - 1).c_str()), m});
++                    if (m) steps.push_back({std::atof(item.substr(0, a).c_str()), std::atof(item.substr(a + 1, b - a - 1).c_str()), m, stepPort});
 +                }
 +            }
 +        }
-+        if (!steps.empty())
++        if (steps.empty() || port < 0 || port > 1)
++            return;
++        const double now = GetTime();
++        static uint16_t lastBtns[2] = {0xFFFFu, 0xFFFFu};
++        static unsigned long calls[2] = {};
++        ++calls[port];
++        for (const Step &st : steps)
++            if (st.port == port && now >= st.t0 && now < st.t0 + st.dur)
++                btns &= ~st.mask;
++        if (btns != lastBtns[port])
 +        {
-+            const double now = GetTime();
-+            static uint16_t lastBtns = 0xFFFFu;
-+            static unsigned long calls = 0;
-+            ++calls;
-+            for (const Step &st : steps)
-+                if (now >= st.t0 && now < st.t0 + st.dur)
-+                    clearBit(st.mask);
-+            if (btns != lastBtns)
-+            {
-+                std::fprintf(stderr, "[pad] t=%.1f readState#%lu btns=%04x\n", now, calls, btns);
-+                lastBtns = btns;
-+            }
++            std::fprintf(stderr, "[pad] t=%.1f porta %d readState#%lu btns=%04x\n", now, port + 1, calls[port], btns);
++            lastBtns[port] = btns;
 +        }
-     }
++    }
+ }
+ 
+-bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
++bool PSPadBackend::readState(int port, int /*slot*/, uint8_t *data, size_t size)
+ {
+     if (!data || size < 32)
+         return false;
+@@ -38,86 +195,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+     data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
+ 
+     uint16_t btns = 0xFFFFu;
+-    constexpr int kGamepad = 0;
+-    const bool useGamepad = IsGamepadAvailable(kGamepad);
+-    auto clearBit = [&btns](uint16_t mask)
+-    { btns &= ~mask; };
+-
+-    if (useGamepad)
+-    {
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_UP))
+-            clearBit(PAD_UP);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_DOWN))
+-            clearBit(PAD_DOWN);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_LEFT))
+-            clearBit(PAD_LEFT);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_FACE_RIGHT))
+-            clearBit(PAD_RIGHT);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_DOWN))
+-            clearBit(PAD_CROSS);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT))
+-            clearBit(PAD_CIRCLE);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_LEFT))
+-            clearBit(PAD_SQUARE);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_FACE_UP))
+-            clearBit(PAD_TRIANGLE);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_1))
+-            clearBit(PAD_L1);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_1))
+-            clearBit(PAD_R1);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_TRIGGER_2))
+-            clearBit(PAD_L2);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_TRIGGER_2))
+-            clearBit(PAD_R2);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_RIGHT))
+-            clearBit(PAD_START);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_MIDDLE_LEFT))
+-            clearBit(PAD_SELECT);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_LEFT_THUMB))
+-            clearBit(PAD_L3);
+-        if (IsGamepadButtonDown(kGamepad, GAMEPAD_BUTTON_RIGHT_THUMB))
+-            clearBit(PAD_R3);
+-
+-        float lx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_X);
+-        float ly = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_LEFT_Y);
+-        float rx = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_X);
+-        float ry = GetGamepadAxisMovement(kGamepad, GAMEPAD_AXIS_RIGHT_Y);
+-        data[6] = static_cast<uint8_t>(128 + lx * 127);
+-        data[7] = static_cast<uint8_t>(128 + ly * 127);
+-        data[4] = static_cast<uint8_t>(128 + rx * 127);
+-        data[5] = static_cast<uint8_t>(128 + ry * 127);
+-    }
+-    else
+-    {
+-        if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W))
+-            clearBit(PAD_UP);
+-        if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S))
+-            clearBit(PAD_DOWN);
+-        if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A))
+-            clearBit(PAD_LEFT);
+-        if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D))
+-            clearBit(PAD_RIGHT);
+-        if (IsKeyDown(KEY_X) || IsKeyDown(KEY_SPACE))
+-            clearBit(PAD_CROSS);
+-        if (IsKeyDown(KEY_C) || IsKeyDown(KEY_ESCAPE))
+-            clearBit(PAD_CIRCLE);
+-        if (IsKeyDown(KEY_Z) || IsKeyDown(KEY_KP_0))
+-            clearBit(PAD_SQUARE);
+-        if (IsKeyDown(KEY_V) || IsKeyDown(KEY_KP_1))
+-            clearBit(PAD_TRIANGLE);
+-        if (IsKeyDown(KEY_Q))
+-            clearBit(PAD_L1);
+-        if (IsKeyDown(KEY_E))
+-            clearBit(PAD_R1);
+-        if (IsKeyDown(KEY_LEFT_SHIFT))
+-            clearBit(PAD_L2);
+-        if (IsKeyDown(KEY_RIGHT_SHIFT))
+-            clearBit(PAD_R2);
+-        if (IsKeyDown(KEY_ENTER))
+-            clearBit(PAD_START);
+-        if (IsKeyDown(KEY_TAB))
+-            clearBit(PAD_SELECT);
+-    }
++    const uint32_t devs = g_ps2PadDeviceMap ? g_ps2PadDeviceMap(port) : defaultDeviceMap(port);
++    for (int pad = 0; pad < PS2_PAD_MAX_GAMEPADS; ++pad)
++        if ((devs & (1u << pad)) && IsGamepadAvailable(pad))
++            readGamepad(pad, port, btns, data);
++    if (devs & PS2_PAD_DEV_KEYBOARD)
++        readKeyboard(btns, data);
++    applyScript(port, btns);
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
+     data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
 index 45cb9d2..3833ba9 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
