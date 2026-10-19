@@ -176,6 +176,8 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_NOFX`, `WOTM_FXNOGRAY`, `WOTM_NOSHADOW`, `WOTM_NOFLARE` | desligam partículas / rampa cinza / sombras / lens flare |
 | `WOTM_FXLIVE=1` | partículas lidas da RAM viva na apresentação, como antes de 2026-10-18 (sem a cópia de sombra do instantâneo, `Particles::shadowRam`): comparar o quadrado na origem do impacto do Magmo |
 | `WOTM_VU1CHECK_FXSHADOW=1` | no replay (`tools\vu1cmp.ps1`), as partículas nativas saem da cópia de sombra (`Particles::shadowRam`), como na janela ao vivo, e não da RAM inteira: reproduz sem jogar o que some na pausa |
+| `WOTM_SHADOWANYCS=1` | sombra projetada em objetos de qualquer `_cs`, como antes de 2026-10-19 (sem a regra do `psObjectCull`) |
+| `WOTM_SHADOWLOG=1` | por bloqueador de sombra: objetos que projetam (nó, bits, LOD, posição) e que recebem, e a silhueta em `shadow_<n>.png` no diretório atual |
 | `WOTM_SHADOWPULL=<f>` | fração da distância ao olho que o vértice da sombra é puxado para não brigar com o receptor (padrão 0,002, teto 1000 × f = 2) |
 | `WOTM_FXLIST=1`, `WOTM_FXDUMP=<prefixo>` | lista sistemas de partículas / grava suas texturas (`tools/fx.py` dá nomes) |
 | `WOTM_GSFRAME=1` | sem cena nativa (carregamento, troca de tela), mostra o quadro do GS como antes de 2026-10-19; o padrão com `PS2X_NO_GS` é tela preta (o GS não desenha, e a área exibida só tinha uploads de textura: a VRAM crua aparecia entre o pulo da abertura e o menu e entre lutas) |

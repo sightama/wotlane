@@ -456,6 +456,7 @@ struct DrawItem {
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
+    uint32_t cs = 0;      // _cs cuja travessia emitiu o objeto (0 na fase, como o cs_): receptor de sombra (psObjectCull)
     int16_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState; kGsAlphaNoTest = sem teste)
     bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
     bool lodX = false;   // dentro de um cross-fade de LOD (os dois LODs, inclusive o de fade 1): com o bit 0x4000 vai para a OT de alfa
@@ -733,6 +734,7 @@ struct ShadowBlocker {
     int index = 0;               // entrada de psBlkLst
     float origin[3] = {0, 0, 0}; // cs->trans
     float extent = 0;            // meio lado do quadro de luz (raio do no * 1,1)
+    uint32_t shadowCs = 0;       // entrada +0x14 (psBlockerSetShadowCs): so os objetos desse _cs recebem a sombra (psObjectCull)
     std::vector<DrawItem> casters;
     std::vector<uint32_t> casterNodes;
 };
@@ -1256,6 +1258,7 @@ public:
             const uint32_t rp = ram.u32(e + 0x20);   // &raio da esfera do no raiz (GROUP) do cs; 0 se o no nao e GROUP
             const float r = rp ? ram.f32(rp) : 0.f;
             b.extent = (r > 1.f && r < 5000.f ? r : 80.f) * 1.1f;
+            b.shadowCs = ram.u32(e + 0x14);
             std::vector<DrawItem> keep;
             keep.swap(items);
             drawCs(ram, cs, false);
@@ -1299,6 +1302,15 @@ public:
         rlSetBlendMode(BLEND_ALPHA);
         for (size_t k = 0; k < shadows.size(); ++k) {
             const ShadowBlocker &b = shadows[k];
+            if (std::getenv("WOTM_SHADOWLOG")) {
+                std::fprintf(stderr, "[shadow] bloqueador %d origem %.1f %.1f %.1f extent %.1f luz %.3f %.3f %.3f cs receptor %x (0 = fase), %zu projetam:\n", b.index,
+                             b.origin[0], b.origin[1], b.origin[2], b.extent, L[0], L[1], L[2], b.shadowCs, b.casters.size());
+                for (const DrawItem &it : b.casters) {
+                    const MeshData *md = mesh(ram, it.node);
+                    std::fprintf(stderr, "[shadow]   no %x tex %u bits %08x lod %d fade %.2f pos %.1f %.1f %.1f tris %zu skinned %d\n", it.node, unsigned(ram.u16(it.node + 0x50)),
+                                 ram.u32(it.node + 0xC), it.lodIdx, it.fade, it.m.m[3][0], it.m.m[3][1], it.m.m[3][2], md ? md->tris.size() / 3 : size_t(0), md ? int(md->skinned) : -1);
+                }
+            }
             const unsigned tex = shadowTexture(ram, k, b, R, U);
             if (!tex) continue;
             const float E = b.extent;
@@ -1316,6 +1328,11 @@ public:
                     // so recebe sombra o OBJECT sem 0x200 nem 0x60 nas flags: o hierTraverseAsm so chama o psObjectCull (teste do
                     // receptor) nesses. No luta_hud recebem so os pisos (flags 0x90); o vidro, as arvores e os brilhos nao
                     if (ram.u16(it.node + 0xC) & 0x260) continue;
+                    // e so o do _cs que o bloqueador indica (psObjectCull compara a entrada +0x14 com o _cs em travessia). Quase sempre
+                    // e 0, a fase; o Kineticlops aponta o _cs de um quadrado no chao (tex 324) e so ele recebe: o nativo projetava
+                    // tambem no piso, e a sombra saia dupla
+                    static const bool anyCs = std::getenv("WOTM_SHADOWANYCS") != nullptr;   // diagnostico: qualquer _cs recebe (como antes)
+                    if (it.cs != b.shadowCs && !anyCs) continue;
                     // esfera do objeto (+0x10 centro, +0x1C raio) contra o cilindro de sombra
                     float c[3];
                     xform(it.m, ram.f32(it.node + 0x10), ram.f32(it.node + 0x14), ram.f32(it.node + 0x18), c);
@@ -1324,6 +1341,16 @@ public:
                     lightUV(c, u, v, h);
                     const float rr = rad / E;
                     if (!(std::isfinite(u) && std::isfinite(rr)) || u * u + v * v > (1.5f + rr) * (1.5f + rr) || h - rr > 0.5f) continue;
+                    static const bool slog = std::getenv("WOTM_SHADOWLOG") != nullptr;
+                    if (slog)
+                        std::fprintf(stderr, "[shadow] bloqueador %d recebe (cs %x) no %x tex %u flags %04x centro %.1f %.1f %.1f raio %.1f (u %.2f v %.2f h %.2f)\n", b.index,
+                                     it.cs, it.node, unsigned(ram.u16(it.node + 0x50)), unsigned(ram.u16(it.node + 0xC)), c[0], c[1], c[2], rad, u, v, h);
+                    // zBufferFudge do receptor, como no drawList: o quadrado de sombra do Kineticlops fica rente ao piso e so passa
+                    // na frente dele pelo fudge (1,0122). So nos receptores de cs proprio: as camadas do piso da fase (fudge 1,0012)
+                    // com fudge escurecem a sombra alem da referencia (congar_olhos)
+                    const float fz = ram.f32(it.node + 0x28);
+                    const bool fudge = it.cs != 0 && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
+                    if (fudge && slog) std::fprintf(stderr, "[shadow]   fudge %.4f no %x\n", fz, it.node);
                     forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
@@ -1335,6 +1362,7 @@ public:
                             // some acima do bloqueador (lado da luz); puxa o vertice para o olho para nao brigar com a superficie
                             const float fade = th[i] < 0.15f ? 1.f : std::max(0.f, 1.f - (th[i] - 0.15f) / 0.35f);
                             float q[3] = {p[i][0], p[i][1], p[i][2]};
+                            if (fudge) for (int a = 0; a < 3; ++a) q[a] = eye_[a] + (q[a] - eye_[a]) / fz;
                             if (eyeOk_) {
                                 const float dx = eye_[0] - q[0], dy = eye_[1] - q[1], dz = eye_[2] - q[2];
                                 const float dl = std::sqrt(dx * dx + dy * dy + dz * dz);
@@ -1434,6 +1462,14 @@ public:
         }
         std::vector<uint32_t> px(cov.size());
         for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
+        if (std::getenv("WOTM_SHADOWLOG")) {   // diagnostico: silhueta em shadow_<slot>.png (branco = sombra) no diretorio atual
+            std::vector<uint32_t> vis(px.size());
+            for (size_t i = 0; i < px.size(); ++i) { const uint32_t a = px[i] >> 24; vis[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
+            Image img{vis.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            char name[64];
+            std::snprintf(name, sizeof name, "shadow_%zu.png", slot);
+            ExportImage(img, name);
+        }
         if (shadowTex_.size() <= slot) shadowTex_.resize(slot + 1);
         Texture2D &t = shadowTex_[slot];
         if (!t.id) {
@@ -3576,6 +3612,7 @@ private:
         case 0:                                                                                                 // OBJECT
             if (!(ram.u16(node + 0xC) & 1) && outOfView(ram, node, m)) break;
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
+            items.back().cs = cs_;
             // O pktAddVu1ObjAsm so grava o qword 20 (especular, specIntensity +0x6C) com specLightMe (0x2000); sem ele o programa de
             // luz le o que o ultimo objeto deixou na memoria do VU1. As partes do Togera sem o bit (corpo skinned, flags 0x310) herdam
             // o especular da parte anterior do proprio monstro (checagem: ~10% dos vertices dele saiam mais escuros, so no cinza).
