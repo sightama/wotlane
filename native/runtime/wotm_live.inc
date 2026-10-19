@@ -973,6 +973,9 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
     scene.drawQuads(quads, float(rw), float(rh));
 }
 
+// Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
+#include "wotm_padsel.inc"
+
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
@@ -1235,6 +1238,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
 
         if (split)
             drawView(S.vrts[0], gc);
+        // textura da escolha de lados (fora do BeginTextureMode do quadro); a fonte e o atlas do texto do quadro anterior
+        wotm_padsel::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
         BeginTextureMode(rt);
         ClearBackground(BLACK);
         rlSetClipPlanes(0.5, 30000.0);
@@ -1264,6 +1269,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             BeginMode3D(c3);
             wotm_live::g_stage = "draw";
             S.scene.draw(ram, false);
+            wotm_padsel::drawOnTelao(S.scene, ram, c3);   // escolha de lados do 2 jogadores (so no menu, durante a escolha)
             wotm_live::g_stage = "idle";
             EndMode3D();
         }
@@ -1469,4 +1475,5 @@ void wotmShellFadeStepDone() {}
 void wotmLoadFreeze(bool) {}
 void wotmCaptureFadeStep(const uint8_t *) {}
 void wotmPickupHighlights(const uint8_t *) {}
+void wotmPadSelInstall(PS2Runtime &) {}
 #endif

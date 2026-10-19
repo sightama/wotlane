@@ -5,8 +5,13 @@
 //   Padrao: o teclado e o mesmo jogador do primeiro controle (jogador 1).
 //   WOTM_KBSEPARATE=1: o teclado e um dispositivo a parte, depois dos controles (sem controle, jogador 1; com um, jogador 2;
 //   com dois, sobra).
+//   Escolha de lados do 2 jogadores (wotm_padsel.inc): enquanto g_manual, a porta 0 e a 1 recebem so os dispositivos que os
+//   jogadores puseram de cada lado (g_manualDevs, mesmos bits do mapa); os que ficaram no meio nao jogam.
 namespace wotm_pad
 {
+static std::atomic<bool> g_manual{false};
+static std::atomic<uint32_t> g_manualDevs[2] = {0u, 0u};
+
 static uint32_t deviceMap(int port)
 {
     static const bool kbSeparate = [] { const char *e = std::getenv("WOTM_KBSEPARATE"); return e && e[0] == '1'; }();
@@ -17,10 +22,15 @@ static uint32_t deviceMap(int port)
             pads[n++] = i;
 
     uint32_t devs = 0;
-    if (port >= 0 && port < n)
-        devs = 1u << pads[port];
-    if (kbSeparate ? port == n : port == 0)
-        devs |= PS2_PAD_DEV_KEYBOARD;
+    if (g_manual.load(std::memory_order_relaxed))
+        devs = port >= 0 && port < 2 ? g_manualDevs[port].load(std::memory_order_relaxed) : 0u;
+    else
+    {
+        if (port >= 0 && port < n)
+            devs = 1u << pads[port];
+        if (kbSeparate ? port == n : port == 0)
+            devs |= PS2_PAD_DEV_KEYBOARD;
+    }
 
     // uma linha por porta quando o que a alimenta muda (inicio, controle plugado ou desplugado)
     static uint32_t last[2] = {~0u, ~0u};

@@ -59,6 +59,7 @@ void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);  
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
+void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -1784,6 +1785,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kTheGameUpdate2, &theGameUpdate2Tapped);
     if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
+    wotmPadSelInstall(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
