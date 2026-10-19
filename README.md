@@ -9,6 +9,12 @@ You need your own copy of the game. No game files are, or ever will be, in this 
 ## Status (2026-10-19)
 The game runs on Windows at 60 fps with native rendering: stages, monsters, particles, shadows, fog, menu text, HUD, screen fades and Hor+ widescreen. Fights are playable with the
 keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
+
+**Not an emulator.** The EE (the PS2's CPU) code is statically recompiled to C++ and runs natively; VU0 code is translated too (inline instructions by PS2Recomp, microprograms by
+`tools/vu0native.py`). The emulated VU1, VIF1 and GS are switched off in the game and only run as the reference for the renderer check; the IOP sits idle (no modules loaded).
+What remains of emulation: the PS2 kernel's threads, interrupts and vsync, plus the emulator code still linked into the executable (next steps in
+[docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md)).
+
 The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
 <details>
