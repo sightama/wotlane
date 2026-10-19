@@ -377,6 +377,11 @@ static std::vector<wotm::TextQuad> g_pendingPolys;
 // colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
 static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
 static std::atomic<int> g_shellFade{-1};
+// Retangulo e cor do Shell::FadeScreen em curso (wotmShellFade, na entrada) e o alfa que o laco gravou por ultimo (wotmShellFadeStep).
+static std::mutex g_shellFadeM;
+static wotm::ScreenRect g_shellFadeRect{};
+static std::atomic<int> g_shellFadeA{0};
+static int g_shellFadeStart = 0, g_shellFadeEnd = 0, g_shellFadeStep = 0, g_shellFadeDir = 1, g_shellFadeSteps = 0;   // thread do EE
 // Texto do jogo pelos ganchos da fonte (wotm::FontText; thread do EE). O texto do ultimo fontDmaFontData vai para g_textSent, que a
 // apresentacao le a cada desenho (como lia o fontPacket ao vivo: os lacos de dialogo que nao passam pela captura tambem atualizam).
 static wotm::FontText g_font;
@@ -399,12 +404,18 @@ static bool liveText(std::vector<wotm::TextQuad> &out)
 // apresentacao repete o ultimo quadro desenhado, com o fade do Shell::FadeScreen por cima (wotmDrawFrozen).
 static std::atomic<bool> g_loadFreeze{false};
 
-// Fade do Shell::FadeScreen em curso (g_shellFade), lido ao vivo do pacote dele; com acumulo, o alfa equivalente no buffer da vez.
-static bool shellFadeRect(const wotm::Ram &ram, wotm::ScreenRect &r)
+// Fade do Shell::FadeScreen em curso (g_shellFade): o retangulo da entrada com o alfa do passo atual; com acumulo, o alfa
+// equivalente no buffer da vez.
+static bool shellFadeRect(wotm::ScreenRect &r)
 {
     const int sf = g_shellFade.load(std::memory_order_relaxed);
-    if (sf < 0 || !wotm::readScreenRect(ram, wotm::addr::shellFadePacket, r))
+    if (sf < 0)
         return false;
+    {
+        std::lock_guard<std::mutex> lk(g_shellFadeM);
+        r = g_shellFadeRect;
+    }
+    r.a = static_cast<uint8_t>(std::min(255, std::max(0, g_shellFadeA.load(std::memory_order_relaxed))));
     const int start = sf & 0xFF, step = (sf >> 8) & 0xFF;
     if ((sf >> 16) && step > 0)
     {
@@ -459,27 +470,60 @@ void wotmPickupHighlights(const uint8_t *rdram)
     }
 }
 
-void wotmScreenRect(const uint8_t *rdram, uint32_t pkt, bool queued)
+namespace wotm_live
+{
+static void pushRect(const wotm::ScreenRect &r, uint8_t state)
+{
+    if (g_pendingRects.size() >= 16)
+        return;
+    g_pendingRects.push_back(r);
+    g_pendingState.push_back(state);
+}
+}
+// Fade da vista inteira, preto, pelos argumentos do emissor: rtFadeScreen(vista, quanto) e uiFadeScreen(quanto) gravam alfa
+// 0x80 - quanto (32 bits); os fades do TheGame, o nivel dele. queued: vai pela fila do gsPkt (AddCallToQueue), senao sai direto.
+void wotmFadeView(const uint8_t *rdram, int view, uint32_t alpha, bool queued)
 {
     wotm::ScreenRect r{};
-    if (rdram && wotm_live::g_pendingRects.size() < 16 && wotm::readScreenRect(wotm::Ram{rdram, PS2_RAM_SIZE}, pkt, r))
+    if (rdram && wotm::viewFadeRect(wotm::Ram{rdram, PS2_RAM_SIZE}, view, 0, 0, 0, alpha, r))
+        wotm_live::pushRect(r, queued ? 1 : 0);
+}
+// Saida do TheGame::updateFadeOut / updateFadeOutAndIn: o nivel do fade (+0x120450, ja atualizado) em cada vista; da vista 1 em
+// diante so sem filme e sem vista unificada, como o laco deles.
+void wotmTheGameFade(const uint8_t *rdram, uint32_t self)
+{
+    if (!rdram)
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    self &= 0x1FFFFFFFu;
+    const uint32_t g = ram.u32(wotm::sym::game) & 0x1FFFFFFFu;
+    if (!ram.ok(self + 0x120450) || !ram.ok(g + 0x1203D8))
+        return;
+    const uint32_t level = ram.u32(self + 0x120450);
+    const int views = int32_t(ram.u32(g + 0x1203D8));
+    for (int v = 0; v < views && v < 5;)
     {
-        wotm_live::g_pendingRects.push_back(r);
-        wotm_live::g_pendingState.push_back(queued ? 1 : 0);
+        wotmFadeView(rdram, v, level, true);
+        if (++v >= views || ram.u32(wotm::sym::moviePlaying) != 0 || ram.u32(wotm::sym::gUseUnifiedView) != 0)
+            break;
     }
 }
-// Faixas pretas do menu (letterboxDmaData, mandado pelo userintMain entre o hier(0,0) e o hier(0,1)): dois SPRITEs de 24 linhas no
-// topo e na base da vista, sem A+D (ALPHA_1 em vigor). Ficam com os fades que saem antes do texto e da lista de alta prioridade
-// (underText); cobrem a largura da vista, entao em widescreen vao de lado a lado da janela.
-void wotmLetterbox(const uint8_t *rdram)
+// Faixas pretas do menu (letterboxDmaData(alfa), mandado pelo userintMain entre o hier(0,0) e o hier(0,1)): dois SPRITEs pretos de 24
+// linhas no topo e na base da vista 0, alfa fptoui(alfa * 128), sem A+D (ALPHA_1 em vigor). Ficam com os fades que saem antes do
+// texto e da lista de alta prioridade (underText); cobrem a largura da vista, entao em widescreen vao de lado a lado da janela.
+void wotmLetterbox(const uint8_t *rdram, float alpha)
 {
-    wotm::ScreenRect r[2];
-    const int n = rdram ? wotm::readScreenRects(wotm::Ram{rdram, PS2_RAM_SIZE}, wotm::addr::letterboxPacket, r, 2, false) : 0;
-    for (int i = 0; i < n && wotm_live::g_pendingRects.size() < 16; ++i)
+    int cx, cy, w, h;
+    if (!rdram || !wotm::viewGeom(wotm::Ram{rdram, PS2_RAM_SIZE}, 0, cx, cy, w, h))
+        return;
+    const float a = alpha * 128.f;
+    const uint32_t ai = a > 0.f ? static_cast<uint32_t>(a) : 0u;
+    const int x0 = cx - (w >> 1), top = cy - (h >> 1), bottom = cy + (h >> 1);
+    wotm::ScreenRect r[2] = {wotm::fadeRect(x0, top, x0 + w, top + 24, 0, 0, 0, ai), wotm::fadeRect(x0, bottom - 24, x0 + w, bottom, 0, 0, 0, ai)};
+    for (wotm::ScreenRect &x : r)
     {
-        r[i].underText = true;
-        wotm_live::g_pendingRects.push_back(r[i]);
-        wotm_live::g_pendingState.push_back(3);   // ja decidido
+        x.underText = true;
+        wotm_live::pushRect(x, 3);   // ja decidido
     }
 }
 void wotmGsPktQueueSent()
@@ -524,9 +568,44 @@ void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd)
     if (rdram && wotm_live::g_pendingPolys.size() < 256 && wotm::screenPolyFromCall(wotm::Ram{rdram, PS2_RAM_SIZE}, src, x, y, pd, t))
         wotm_live::g_pendingPolys.push_back(t);
 }
-void wotmShellFade(int start, int step, bool accumulate)
+// Entrada do Shell::FadeScreen(vista, redesenha, ..., r, g, b, inicio, fim, passo): o laco grava inicio, inicio +/- passo... enquanto
+// nao chega ao fim, um valor por sceGsSyncV (wotmShellFadeStep); inicio == fim nao desenha nada.
+void wotmShellFade(const uint8_t *rdram, int view, uint32_t r, uint32_t g, uint32_t b, int start, int end, int step, bool redraw)
 {
+    wotm::ScreenRect rc{};
+    if (!rdram || start == end || !wotm::viewFadeRect(wotm::Ram{rdram, PS2_RAM_SIZE}, view, r & 0xFF, g & 0xFF, b & 0xFF, 0, rc))
+    {
+        wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lk(wotm_live::g_shellFadeM);
+        wotm_live::g_shellFadeRect = rc;
+    }
+    wotm_live::g_shellFadeStart = start;
+    wotm_live::g_shellFadeEnd = end;
+    wotm_live::g_shellFadeStep = step;
+    wotm_live::g_shellFadeDir = start < end ? 1 : -1;
+    wotm_live::g_shellFadeSteps = 0;
+    wotm_live::g_shellFadeA.store(start, std::memory_order_relaxed);
+    const bool accumulate = !redraw && start < end;   // sem redesenho, subindo: acumula
     wotm_live::g_shellFade.store((start & 0xFF) | ((step & 0xFF) << 8) | (accumulate ? 1 << 16 : 0), std::memory_order_relaxed);
+}
+// Entrada do k-esimo sceGsSyncV do laco do Shell::FadeScreen (k a partir de 0): o alfa na tela e o que o laco acabou de gravar,
+// inicio +/- passo * k; o seguinte so e gravado na volta.
+void wotmShellFadeStep()
+{
+    using namespace wotm_live;
+    g_shellFadeA.store(g_shellFadeStart + g_shellFadeDir * g_shellFadeStep * g_shellFadeSteps, std::memory_order_relaxed);
+    ++g_shellFadeSteps;
+}
+// Volta desse sceGsSyncV: se o laco continua, ele grava logo o valor seguinte.
+void wotmShellFadeStepDone()
+{
+    using namespace wotm_live;
+    const int next = g_shellFadeStart + g_shellFadeDir * g_shellFadeStep * g_shellFadeSteps;
+    if (g_shellFadeDir > 0 ? next < g_shellFadeEnd : next > g_shellFadeEnd)
+        g_shellFadeA.store(next, std::memory_order_relaxed);
 }
 
 // A cena (objetos, ceu, HUD, lista de alta prioridade, sombras, luz, camera e paletas) e coletada na saida do hier(0, 0)
@@ -695,7 +774,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         DrawTexturePro(base.texture, Rectangle{0.f, 0.f, bw, -bh}, Rectangle{0.f, 0.f, bw, bh}, Vector2{0.f, 0.f}, 0.f, WHITE);
         EndBlendMode();
         S.scene.screenRects.clear();
-        if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(ram, r))
+        if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(r))
             S.scene.screenRects.push_back(r);
         S.scene.drawScreenRects(bw, bh);
         EndTextureMode();
@@ -795,7 +874,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     S.snap.cam = gameCam;
     if (freeView.override)
         wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
-    if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(ram, r))
+    if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(r))
         S.scene.screenRects.push_back(r);
 
     S.cur ^= 1;
@@ -1003,8 +1082,9 @@ static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmCaptureScene(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
-void wotmScreenRect(const uint8_t *, uint32_t, bool) {}
-void wotmLetterbox(const uint8_t *) {}
+void wotmFadeView(const uint8_t *, int, uint32_t, bool) {}
+void wotmTheGameFade(const uint8_t *, uint32_t) {}
+void wotmLetterbox(const uint8_t *, float) {}
 void wotmGsPktQueueSent() {}
 void wotmFontSent() {}
 void wotmFontInitPacket(uint32_t) {}
@@ -1013,7 +1093,9 @@ void wotmFontColor(const uint8_t *, int) {}
 void wotmFontGlyph(const uint8_t *, int, int) {}
 void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
-void wotmShellFade(int, int, bool) {}
+void wotmShellFade(const uint8_t *, int, uint32_t, uint32_t, uint32_t, int, int, int, bool) {}
+void wotmShellFadeStep() {}
+void wotmShellFadeStepDone() {}
 void wotmLoadFreeze(bool) {}
 void wotmCaptureFadeStep(const uint8_t *) {}
 void wotmPickupHighlights(const uint8_t *) {}
