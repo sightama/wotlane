@@ -47,14 +47,15 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 
 **Inventário do port (o que a checagem diz que falta ou sobra; refaça com `tools\corpus.ps1 -Check` e as linhas `inv` do `menus.vu1snap` e das lutas):**
 
+- Finalizado
+
 **Bugs vistos jogando (relatos do dono desde 2026-10-16; os fechados saem da lista):**
 - (nenhum aberto)
 
 **Fotos do dono (`<runtime>\fotos`; ainda não investigadas):**
 
-Olhar a foto e o trio do `vu1cmp`; se houver um problema visível de imediato, anotá-lo aqui como item; se não houver, apagar a foto (`.vu1snap` e PNGs) e registrar no `notas.txt` da pasta.
+> Olhar a foto e o trio do `vu1cmp`; se houver um problema visível de imediato, anotá-lo aqui como item; se não houver, apagar a foto (`.vu1snap` e PNGs) e registrar no `notas.txt` da pasta.
 
-**Pistas abertas:**
 - (nenhuma aberta)
 
 </details>
