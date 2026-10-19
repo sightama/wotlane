@@ -3001,11 +3001,12 @@ private:
     // no (aqui em DrawItem::fade). Detalhes do asm (0x2085C8-0x2086D0):
     //  - o canal azul nunca vem da animacao: no lugar do lwc1 do valor animado ha um swc1 do blueAnim (fica o +0x48);
     //  - o colorQuad so entra com CsColor::isEnabled() (D_007B3040, copiado no scratchpad +0x8C pelo pktCacheForAsm);
-    //  - o RGB vezes a cor ambiente animada (viewAnimAmbientRed/Green/Blue, 0x6F8AD0, = ambiente / 32 do viewSetAmbient, que o
-    //    resetcom le do arquivo da fase) quando viewAmbientChanged (0x6F8ADC; scratchpad +0x160 e +0x84).
+    //  - o asm ainda multiplica o RGB pela cor ambiente animada (viewAnimAmbientRed/Green/Blue = ambiente / 32 do viewSetAmbient)
+    //    quando o flag do scratchpad +0x84 (viewAmbientChanged, gravado pelo pktCacheForAsm) esta ligado, mas o q5 que chega ao
+    //    VU1 nunca o traz: na UFO (ambiente 15, 0,46875, flag ligado na RAM) os 1.309 cabecalhos da foto 2026-10-18_232542/002
+    //    tem q5 = (1, 1, 1, alfa), e o PCSX2 mostra a fase clara. Aplicado aqui, a UFO saia 2,13 vezes mais escura. Nao entra.
     void objectColor(const Ram &ram, uint32_t node, float out[4]) const {
         const bool quad = cs_ && ram.u32(0x007B3040) != 0;
-        const bool amb = ram.u32(wotm::sym::viewAmbientChanged) != 0;
         const float *atDraw = nullptr;   // colorQuad da hora do hier (csColorAtDraw), no lugar do que sobrou na RAM
         if (quad)
             for (const CsColorAtDraw &c : csColorAtDraw)
@@ -3015,7 +3016,6 @@ private:
             const int16_t idx = ram.s16(node + 0x34 + 2 * k);
             if (animVal_ && idx >= 0 && k != 2) out[k] = ram.f32(animVal_ + 4 * uint32_t(idx));
             if (quad) out[k] *= atDraw ? atDraw[k] : ram.f32(cs_ + 0x70 + 4 * k);
-            if (amb && k < 3) out[k] *= ram.f32(wotm::sym::viewAnimAmbientRed + 4 * uint32_t(k));
             if (!std::isfinite(out[k])) out[k] = 1.f;
         }
     }
