@@ -3048,7 +3048,9 @@ private:
     // matrizes); o corpo do Dragon usa uma paleta propria de 0x41 (16 matrizes), mandada antes de cada sub-pacote. Como o destino no
     // VU1 e o mesmo, o codigo de osso indexa as duas do mesmo jeito. O indice i e o do OBJECT em +0x68, como no pktAddVu1ObjAsm
     // (negativo: o jogo manda o pacote do +4, sem paleta); o indice do LOD so coincide quando o personagem tem um objeto skinned por
-    // LOD (o Dragon tem corpo e asas: com o do LOD, o corpo pegava a paleta de outro objeto). Devolve 0 se nao achar.
+    // LOD (o Dragon tem corpo e asas: com o do LOD, o corpo pegava a paleta de outro objeto). O chefe final (CAPITOL) usa 0x81
+    // qwords (32 matrizes, a paleta inteira que o codigo de osso alcanca); com o limite antigo de 0x7D, tres das quatro partes dele
+    // ficavam sem paleta e saiam na pose crua (pernas para o ceu, domo fora do lugar). Devolve 0 se nao achar.
     static uint32_t palette(const Ram &ram, const DrawItem &it) {
         if (!it.animPkt) return 0;
         int idx = ram.ok(it.node + 0x68, 4) ? int(int32_t(ram.u32(it.node + 0x68))) : -1;
@@ -3057,7 +3059,7 @@ private:
         const uint32_t chain = ram.u32(it.animPkt + 4 * uint32_t(idx)) & 0x0FFFFFFF;
         if (!ram.ok(chain, 8) || ((ram.u32(chain) >> 28) & 7) != 3) return 0;
         const uint32_t qwc = ram.u32(chain) & 0xFFFF;
-        if (qwc < 5 || qwc > 0x7D || (qwc - 1) % 4 != 0) return 0;
+        if (qwc < 5 || qwc > 0x81 || (qwc - 1) % 4 != 0) return 0;
         const uint32_t block = ram.u32(chain + 4) & 0x0FFFFFFF;
         return ram.ok(block, 0x10 + 0x40 * 32) ? block : 0;
     }
