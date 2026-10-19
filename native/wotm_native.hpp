@@ -3615,8 +3615,10 @@ private:
             // hierAnimScaleNode: o olho vai ao espaco do filho por (eo + translate + postScale) / scale + preScale, ou seja, o ponto do
             // filho p vai ao pai em scale * (p + preScale) + translate + postScale (preScale +0x40 e postScale +0x50; ignora-los
             // deslocava itens presos aos monstros, checagem VU1 pista 7).
+            // Escala zero achata o filho: o jogo nao desenha nada (feixes de luz da arvore do Plantboss, tex 297, com o canal da
+            // escala em 0 fora do golpe; o nativo trocava 0 por 1 e os desenhava inteiros, foto 2026-10-19_004009/002).
             float sx = ram.f32(node + 0x20), sy = ram.f32(node + 0x24), sz = ram.f32(node + 0x28);
-            if (sx == 0.f && sy == 0.f && sz == 0.f) sx = sy = sz = 1.f;
+            if (sx == 0.f && sy == 0.f && sz == 0.f) break;
             const M4 pre = translateM(ram.f32(node + 0x40), ram.f32(node + 0x44), ram.f32(node + 0x48));
             const M4 post = translateM(ram.f32(node + 0x30) + ram.f32(node + 0x50), ram.f32(node + 0x34) + ram.f32(node + 0x54),
                                        ram.f32(node + 0x38) + ram.f32(node + 0x58));
