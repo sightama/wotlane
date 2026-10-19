@@ -1113,6 +1113,9 @@ public:
             proj(gn, sx[np + 1], sy[np + 1]);
             std::vector<float> ox(np), oy(np);   // v de cada ponto (tela isotropica, y para baixo)
             std::vector<char> ok(np);
+            // corrente: o 0x1D00 percorre de P[n-1] a P[0] quando W(P[0]) < W(P[n-1]) (comeca pela ponta mais longe; visto no rastreio
+            // do VU1 do ultrav_corda); aqui so muda o ramo do produto zero, abaixo
+            const bool rev = chain && wOf(P[0]) < wOf(P[np - 1]);
             for (size_t k = 0; k < np; ++k) {
                 float tix = sx[k + 1] - sx[k], tiy = sy[k + 1] - sy[k], tox = sx[k + 2] - sx[k + 1], toy = sy[k + 2] - sy[k + 1];
                 const float li = std::sqrt(tix * tix + tiy * tiy), lo = std::sqrt(tox * tox + toy * toy);
@@ -1122,10 +1125,11 @@ public:
                 const float ri = li > 1e-12f ? 1.f / li : 0.f, ro = lo > 1e-12f ? 1.f / lo : 0.f;
                 tix *= ri; tiy *= ri; tox *= ro; toy *= ro;
                 const float cross = tix * toy - tox * tiy;
-                const float sgn = cross < 0.f ? 1.f : -1.f;
+                // no zero exato (tangente zero na ponta da corrente) o VU ve +0, "nao negativo": deste lado e o ramo de cross < 0
+                // quando a corrente e percorrida na mesma ordem e o outro quando ao contrario (rev)
+                const float sgn = cross < 0.f ? 1.f : cross > 0.f ? -1.f : (chain && !rev ? 1.f : -1.f);
                 ox[k] = tiy + toy + sgn * (tox - tix);
-                oy[k] = -tix - tox + sgn * (toy - tiy);
-            }
+                oy[k] = -tix - tox + sgn * (toy - tiy);            }
             float cs[4][3], uv[4][2];
             const float u0 = segInitU - segDeltaU * 0.5f * float(S);
             auto corner = [&](size_t k, float side, float out[3]) {

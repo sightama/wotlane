@@ -36,7 +36,7 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 <summary>Estado (corpus recapturado em 2026-10-18, `resumo_2026-10-18_155828.csv`)</summary>
 
 - Geometria: 99,4% a 100% dos triângulos casados nas lutas e nos destroços; nos menus 99,9% a 100% (fora o `g` 0, 96,9%, no meio do fade). Textura diferente: 0 (10 no `g` 0).
-- Partículas casadas (`resumo_2026-10-18_160434.csv`, já sem a contagem dupla do lens flare): `luta_3ia` 100%, `luta_hud` 98,6%, destroços 98,4% a 99,8%, `luta_centro` 96,5% (o resto são 2 quadrados do arco, ver "Explicadas"); as piores são as cordas do Ultra-V (`ultrav_corda` 90,5%, `ultrav_corda2` 81,8%), da ponta da corrente (inventário). Os quadros da luta mudam a cada captura (a IA joga diferente).
+- Partículas casadas (`resumo_2026-10-18_160434.csv`, já sem a contagem dupla do lens flare): `luta_3ia` 100%, `luta_hud` 98,6%, destroços 98,4% a 99,8%, `luta_centro` 96,5% (o resto são 2 quadrados do arco, ver "Explicadas"); as cordas do Ultra-V (`ultrav_corda`, `ultrav_corda2`) estão em 100% desde 2026-10-19 (`resumo_2026-10-19_111920.csv`: a ponta da corrente, ver "Corrente" nos microprogramas). Os quadros da luta mudam a cada captura (a IA joga diferente).
 - Pixels diferentes (guia, não critério): lutas 21 a 37 mil, destroços 36 a 40 mil, menus 16 a 34 mil (207 e 268 mil nos quadros de fade).
 - Medidas antigas por fase e por tipo de partícula (lotes de 2026-10-15) estão nas entradas de "Corrigido".
 
@@ -46,7 +46,6 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 <summary>Em aberto</summary>
 
 **Inventário do port (o que a checagem diz que falta ou sobra; refaça com `tools\corpus.ps1 -Check` e as linhas `inv` do `menus.vu1snap` e das lutas):**
-- **Ponta da corrente (tipo 12, corda do Ultra-V) com 2 a 3 px de diferença** (2026-10-18, `ultrav_corda2`, fx 82): é todo o "faltam 2 sobram 1" das duas cordas. As partículas 17 a 30 da corda estão no mesmo ponto. O VU1 desenha ainda o elo 17 → 18, de comprimento zero mas com largura nas duas pontas, e no vértice 17 a largura sai a ~45° e maior que a do nativo (mesmo centro). O nativo pula esse elo (tangentes zero) e usa no 17 a fórmula da fita com a tangente de saída zero. Trocar o ramo do produto vetorial quando ele dá zero (a flag de sinal do VU pode ver −0) aproxima o 17, mas não o iguala: falta entender como o laço do microprograma 0x1F70, com pipeline, trata o vetor zero (o `RSQRT` de 0 e o `Q` do passo anterior). Não aplicado; só mexer se a ponta aparecer na tela.
 - **Separador da tela dividida** (`Hud::dmaPacket`/`buildSeparator`, PATH3): só monta pacote com a tela dividida (`viewGetScreenDisplay` != 0, dois jogadores): uma faixa preta opaca (SPRITE sem ABE, cor 0/0/0/0x80) entre as vistas, pela fila do `gsPkt`. O nativo não tem tela dividida; fica para quando tiver (o `readScreenRect` recusa SPRITE sem ABE).
 
 **Bugs vistos jogando (relatos do dono desde 2026-10-16; os fechados saem da lista):**
@@ -84,6 +83,11 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 - Cabeçalho em `pos − 0x28` (minSize, semente, segInitU, 138 + CLUToffset, expansionRate, jag, segDeltaU, numColors − 1) e cores em `pos − 0x13C`; o w baixo (16 bits, ILW) da cabeça é 1 + nº de elos, o do elo é 5<<(L−1) (b fica a 2·w qwords de a, passo 5 por ponto).
 - RINIT(seed) por pacote (o R segue entre as cadeias). Elo de a a b com nível L > 0 vira 2^L sub-trechos: amp = jag·|b − a| no 1º nível, metade a cada nível; cada vão ganha o meio 0,5a + r·amp − 1,5·amp + 0,5b, com r = (rx, ry, rz): três RNEXT na entrada do elo, e depois de cada meio rx = ry, ry = rz, rz = RNEXT.
 - Fita (sub-rotina 0x1F70), em tela isotrópica com y para baixo (o y vezes fxh/fyh): fantasmas P₋₁ = 2P₀ − P₁ e Pₙ = 2Pₙ₋₁ − Pₙ₋₂ (homogêneos); t_in e t_out unitários, n = (t.y, −t.x); v = n_in + n_out + (t_out − t_in) se t_in × t_out < 0, senão + (t_in − t_out), sem renormalizar. Vértices S ± v·(fxh·s_k/W, fyh·s_k/W) com fxh, fyh = metade do foco (q5): no plano de vista, p ± (s_k/2)·v. s_k = minSize + exp·k/S; A (+) com V = 1, B (−) com V = 0; ST = (U_k/W, 1/W ou 0, 1/W), U_k = segInitU + segDeltaU·(k − S/2); cor = lerp na tabela (clut + k·(nc − 1)/S, + 0,5, truncada); F = fogFA + fogFB/W. ADC fora da banda, com W < 1 ou F < 1; 0x2330/0x2390 tratam ponta com W < 1 (a tangente vai até o plano W = 0).
+
+**Corrente (tipo 12, entrada 0x1D00, corda do Ultra-V; resolvida em 2026-10-19 com o rastreio do VU1):**
+- Mesma fita 0x1F70, sem subdivisão. A ordem de percurso vem de W(P₀) − W(Pₙ₋₁) (o MSUBz.w no fim do cabeçalho; a translação se cancela): negativo, de Pₙ₋₁ a P₀ (LQD); senão, de P₀ a Pₙ₋₁. Começa pela ponta mais longe.
+- Na ponta da corda vários pontos coincidem. A tangente entre eles é o vetor zero: o RSQRT de 0 dá Q = máximo e 0 · máx = 0. O produto t_in × t_out sai +0, "não negativo", e v = n + (t_in − t_out). No nativo (y para cima) esse é o ramo de cross < 0 quando a ordem é a mesma e o outro quando é a inversa (`rev` em `Particles`).
+- O "faltam/sobram" antigo das cordas tinha duas causas. A primeira era o próprio VU1 de referência: compilado com `/fp:fast /arch:AVX2`, o MADDq virava FMA, e `vf3·q − round(vf3·q)` deixava na tangente zero um ruído de 1 ulp, que normalizado desenhava um elo fantasma torto. Os `ps2_vu1_*.cpp` agora compilam com `/fp:precise`, como o VU0 nativo (costura no CMake do patch). A segunda era o ramo do produto zero no nativo.
 
 </details>
 
