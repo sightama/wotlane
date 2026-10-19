@@ -102,6 +102,60 @@ namespace
         }
     }
 
+    // Relogio nativo do timer (FRONTEIRA.md, passo 4; WOTM_TIMER_EMU=1 volta ao timer 1 emulado). O jogo mede o tempo pelo timer 1
+    // (timerInit: modo 0x82, BUSCLK/256 = 576 kHz; 9619 ticks por field, timerGetFrameTime divide por 576 para dar ms):
+    // timerGetCurTics devolve D_006F8DC4 + T1, e timer1Handler soma ceil(T1 / 9619) fields (ate 16) ao contador D_006F8DBC, sendo T1
+    // o tempo desde o ultimo zero (fim do timerWaitForMinUpdateRate, timerSetFrameStart ou o timer1Handler anterior). No runtime o
+    // T1 anda pelo relogio virtual do EE, que so acompanha o de parede por remendos do escalonador. Aqui os dois passam a ler o
+    // relogio do host: timerGetCurTics e trocado inteiro, e o timer1Handler continua rodando (espera o vsync), mas os fields que ele
+    // soma saem do tempo do host. O resto do timer (timerSetFrameStart, timerEndOfRealTimeProcessing, timerGetFrameTime...) so ve o T1
+    // pelo timerGetCurTics e fica no host sem mudanca. O vsync (sceGsSyncV) continua vindo do escalonador do runtime.
+    constexpr uint32_t kTimer1Handler = wotm::fn::timer1Handler__FPUi;
+    constexpr uint32_t kFieldsForAverage = 0x6F8DE4u;   // D_006F8DE4: fields desde o timerSetFrameStart (timerGetAverageFrameTime)
+    constexpr int32_t kTicsPerField = 9619;
+    constexpr uint32_t kT1Count = 0x10000800u;   // T1_COUNT: o timer1Handler o le e zera
+    PS2Runtime::RecompiledFunction g_origTimer1 = nullptr;
+    bool g_nativeTimer = true;
+    const auto g_hostT0 = std::chrono::steady_clock::now();
+    uint32_t g_t1Zero = 0;   // ticks do host no ultimo zero do T1
+
+    uint32_t hostTics()
+    {
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - g_hostT0).count();
+        return static_cast<uint32_t>(static_cast<uint64_t>(us) * 576u / 1000u);   // da a volta em ~2 h, como o contador do jogo
+    }
+
+    void getCurTicsNative(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31), now = hostTics();
+        SET_GPR_U32(ctx, 2, now);
+        ctx->pc = ra;
+        if (ra == kFrameStartRa[0] || ra == kFrameStartRa[1])   // o jogo zera o T1 ali: comeco do quadro
+        {
+            g_t1Zero = now;
+            g_frameStartVsync = runtime->eeScheduler().currentVSyncTick();
+            g_frameStartValid = true;
+        }
+    }
+
+    // A contagem e feita na entrada: o timer1Handler quase sempre bloqueia no sceGsSyncV, e a retomada entra direto no meio da funcao
+    // recompilada, sem passar por este envoltorio (um "depois" aqui nao roda). O T1 emulado e zerado para a original somar 0 fields
+    // (ela rele D_006F8DBC/D_006F8DE4 depois do vsync e grava de volta o que somamos).
+    void timer1HandlerNative(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTimer1Handler)
+        {
+            const uint32_t now = hostTics();
+            const int32_t elapsed = static_cast<int32_t>(now - g_t1Zero);
+            g_t1Zero = now;
+            const uint32_t add = elapsed <= 0 ? 0u : static_cast<uint32_t>(std::min((elapsed + kTicsPerField - 1) / kTicsPerField, 16));
+            WRITE32(kFieldCounter, READ32(kFieldCounter) + add);
+            WRITE32(kFieldsForAverage, READ32(kFieldsForAverage) + add);
+            runtime->memory().write32(kT1Count, 0u);
+        }
+        g_origTimer1(rdram, ctx, runtime);
+    }
+
 
     // Partida direta, WOTM_MATCH="<monstro do jogador>,<IA>[,<IA>[,<IA>]],<fase>" (indices de MonsterLongNames e GameLevelNames;
     // "3,1,1" = lizard contra monkey em central; "3,1,2,5,1" = lizard contra monkey, robot e mantis): userintMain (0x1D9868) nao abre
@@ -580,8 +634,8 @@ namespace
             }
         }
         const double field = 294912000.0 / 59.94;
-        static uint32_t lastTics = 0;   // D_006F8DC4: ticks do timer 1 que o jogo acumulou (9619 por field)
-        const uint32_t tics = READ32(0x6F8DC4u);
+        static uint32_t lastTics = 0;   // ticks do host (relogio nativo) ou D_006F8DC4, os do timer 1 emulado (9619 por field)
+        const uint32_t tics = g_nativeTimer ? hostTics() : READ32(0x6F8DC4u);
         std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms ritmo=%.1fms top",
                      READ32(wotm::sym::g_frame), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
                      (tics - lastTics) / 9619.0,
@@ -622,7 +676,7 @@ namespace
             wotmPauseBlock(runtime);
             if (wotmPauseTookFrame())
                 WRITE32(kFieldCounter, READ32(kFieldCounterAtStart) + 1u);
-            else if (g_wotmFreeSpinPc != 0u && g_frameStartValid)
+            else if ((g_nativeTimer || g_wotmFreeSpinPc != 0u) && g_frameStartValid)
             {
                 const uint64_t vblanks = runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync;
                 const int32_t start = static_cast<int32_t>(READ32(kFieldCounterAtStart));
@@ -974,12 +1028,23 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kTimerGetUpdateRate, &timerGetUpdateRate);
     if ((g_origSyncV = runtime.lookupFunction(kSceGsSyncV)))
         runtime.registerFunction(kSceGsSyncV, &syncVTapped);
+    g_nativeTimer = std::getenv("WOTM_TIMER_EMU") == nullptr;
     if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
-        (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)))
+        (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)) &&
+        (g_origTimer1 = runtime.lookupFunction(kTimer1Handler)))
     {
         runtime.registerFunction(kTimerWaitForMinUpdateRate, &waitMinRateByVblanks);
-        runtime.registerFunction(kTimerGetCurTics, &getCurTicsMarked);
+        if (g_nativeTimer)
+        {
+            runtime.registerFunction(kTimerGetCurTics, &getCurTicsNative);
+            runtime.registerFunction(kTimer1Handler, &timer1HandlerNative);
+            std::fprintf(stderr, "[wotm] timer do jogo pelo relogio do host (WOTM_TIMER_EMU=1 volta ao timer 1 emulado)\n");
+        }
+        else
+            runtime.registerFunction(kTimerGetCurTics, &getCurTicsMarked);
     }
+    else
+        g_nativeTimer = false;
     if ((g_origRtFade = runtime.lookupFunction(kRtFadeScreen)))
         runtime.registerFunction(kRtFadeScreen, &rtFadeScreenTapped);
     if ((g_origGameFadeOut = runtime.lookupFunction(kTheGameFadeOut)))
