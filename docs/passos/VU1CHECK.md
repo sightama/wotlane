@@ -55,7 +55,7 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 Olhar a foto e o trio do `vu1cmp`; se houver um problema visível de imediato, anotá-lo aqui como item; se não houver, apagar a foto (`.vu1snap` e PNGs) e registrar no `notas.txt` da pasta.
 
 **Pistas abertas:**
-- **Achados do `congar_olhos` com o nativo mais escuro (2026-10-19):** a sombra subtrativa do Congar no chão (pkt `1095e80`, ALPHA 0x42) sai ~2 mais escura no nativo; o chão perto da câmera (`112db80`, Av 0x42, As ≈ 0,52 sobre destino que o nativo limpa de preto e a referência tem como quadro anterior) sai ~30% mais escuro, talvez artefato do replay; e o Congar skin 2 (`11c75d0`) sai ~7% mais escuro com cor de vértice igual. Com as contas inteiras do GS no shader (padrão desde 2026-10-19; `WOTM_GSTRUNC=0` desliga) o quadro piora (pixels diferentes 50.150 → 53.267), porque o nativo deixou de ficar ~2 níveis mais claro, o que anulava esses três (histórico: `git show 0cda0b0:docs/investigacoes/2026-10-19/brilho_nativo.md`).
+- (nenhuma aberta)
 
 </details>
 
