@@ -557,7 +557,7 @@ class Launcher : Form
         try
         {
             Process.Start(psi);
-            status.Text = "Started (" + rt + "). Output in live.out.log / live.err.log.";
+            Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
         }
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
