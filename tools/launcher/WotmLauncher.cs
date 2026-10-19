@@ -28,7 +28,7 @@ class Launcher : Form
             "Travado, esquerda/direita do direcional trocam o alvo. Defesa no L1, andar de lado no L2/R2 (controle na configuracao " +
             "padrao). Vale para os jogadores humanos; a IA nao muda. Desmarcado: os botoes do jogo original."),
         new Flag("Mods", "WOTM_ENEMYBARS", false, "Barras de vida e energia sobre os inimigos",
-            "No lugar da bolinha com o numero sobre cada inimigo: uma barra de vida (verde, amarela, vermelha) e, embaixo, a de energia " +
+            "No lugar da bolinha com o numero sobre cada inimigo, no estilo do HUD do jogador: barra de vida (verde, dano recente em vermelho) e, embaixo, a de energia " +
             "(azul; cinza enquanto esgotada). Desmarcado: a bolinha do jogo original."),
 
         new Flag("Execucao", ":Auto", true, "Roteiro automatico ate a fase", "-Auto 1: o pad do roteiro joga ate uma fase (~50 s). Desmarcado: voce joga com o teclado."),

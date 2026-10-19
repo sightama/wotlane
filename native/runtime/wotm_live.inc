@@ -585,7 +585,7 @@ bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd,
 }
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
-    if (wotm_live::g_pendingBars.size() < 128)
+    if (wotm_live::g_pendingBars.size() < 512)
         wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a});
 }
 // Entrada do Shell::FadeScreen(vista, redesenha, ..., r, g, b, inicio, fim, passo): o laco grava inicio, inicio +/- passo... enquanto
