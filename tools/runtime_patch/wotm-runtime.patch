@@ -44,7 +44,7 @@ index e5f63a9..c1f1cf3 100644
          m_impl->eeCycleCarry = total % 8u;
          if (iopCycles)
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..d7e06c9 100644
+index 589d768..f447522 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -99,7 +99,7 @@ index 589d768..d7e06c9 100644
  target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
  target_link_libraries(ps2EntryRunner
      PRIVATE
-@@ -608,3 +625,31 @@ endif()
+@@ -608,3 +625,35 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -115,6 +115,10 @@ index 589d768..d7e06c9 100644
 +target_include_directories(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}" "${WOTM_NATIVE_DIR}/runtime" "${CMAKE_BINARY_DIR}/wotm_gen")
 +# main.cpp instala hooks por nome (wotm_syms.h; no runtime cobaia, o wotm_syms_nm.h de wotm_gen troca os enderecos pelos do ELF nmall)
 +target_include_directories(ps2EntryRunner PRIVATE "${WOTM_NATIVE_DIR}" "${CMAKE_BINARY_DIR}/wotm_gen")
++# icone do executavel (e da janela: o recurso se chama GLFW_ICON)
++if(WIN32)
++    target_sources(ps2EntryRunner PRIVATE "${WOTM_NATIVE_DIR}/wotm.rc")
++endif()
 +target_sources(ps2_runtime PRIVATE
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_overrides.cpp"
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"

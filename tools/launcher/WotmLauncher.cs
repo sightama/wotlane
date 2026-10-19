@@ -133,6 +133,7 @@ class Launcher : Form
     {
         MonitorMode(out monitorWidth, out monitorHeight, out monitorHz);
         Text = "WotM - options";
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // o do exe (native\wotm.ico)
         Font = new Font("Segoe UI", 9f);
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
