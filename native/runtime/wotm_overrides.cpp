@@ -1114,6 +1114,38 @@ namespace
         return true;
     }
 
+    // m_monsters[i] serve de alvo para o dono: vivo e alvejavel como no getClosestTargetable(6); posicao em tp
+    bool lockCandidate(uint8_t *rdram, uint32_t m, uint32_t owner, float tp[3])
+    {
+        if (!m || m == owner || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying])
+            return false;
+        return (rd16(rdram, m + 4) & 6u) == 6u && targetPos(rdram, m, tp);
+    }
+
+    // Ao travar: o alvo e o monstro vivo mais perto (distancia 3D). O getClosestTargetable do updateLock pesa tambem a direcao para
+    // onde o monstro olha; com o m_pinTarget ja preenchido e alvejavel, o updateLock o mantem.
+    void lockNearestTarget(uint8_t *rdram, uint32_t owner)
+    {
+        float me[3], tp[3];
+        if (!targetPos(rdram, owner, me))
+            return;
+        uint32_t best = 0;
+        float bestD = 0.f;
+        for (uint32_t i = 0; i < 8; ++i)
+        {
+            const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
+            if (!lockCandidate(rdram, m, owner, tp))
+                continue;
+            const float d = (tp[0] - me[0]) * (tp[0] - me[0]) + (tp[1] - me[1]) * (tp[1] - me[1]) + (tp[2] - me[2]) * (tp[2] - me[2]);            if (!best || d < bestD)
+            {
+                best = m;
+                bestD = d;
+            }
+        }
+        if (best)
+            FAST_WRITE32(owner + kMonsterPinTarget, best);
+    }
+
     // Troca o alvo travado para o monstro vivo mais proximo a esquerda (dir < 0) ou a direita (dir > 0) do atual na tela: angulo
     // horizontal visto da camera do jogador (eixos direita e frente do _cs da vista), dando a volta no fim.
     void lockCycleTarget(uint8_t *rdram, uint32_t owner, int slot, int dir)
@@ -1143,11 +1175,10 @@ namespace
         for (uint32_t i = 0; i < 8; ++i)
         {
             const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
-            if (!m || m == owner || m == cur || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying])
+            if (m == cur || !lockCandidate(rdram, m, owner, tp))
                 continue;
-            if ((rd16(rdram, m + 4) & 6u) != 6u || !targetPos(rdram, m, tp))   // alvejavel como no getClosestTargetable(6)
-                continue;
-            const float a = screenAngle(tp), d = (a - curA) * static_cast<float>(dir);            if (d > 0.f && d < bestD)
+            const float a = screenAngle(tp), d = (a - curA) * static_cast<float>(dir);
+            if (d > 0.f && d < bestD)
             {
                 bestD = d;
                 best = m;
@@ -1243,7 +1274,9 @@ namespace
         if (held && !t->held)
         {
             t->on = !t->on;
-            std::fprintf(stderr, "[lockon] jogador %d: %s\n", slot + 1, t->on ? "travado" : "solto");
+            if (t->on)
+                lockNearestTarget(rdram, owner);
+            std::fprintf(stderr, "[lockon] jogador %d: %s (alvo 0x%x)\n", slot + 1, t->on ? "travado" : "solto", FAST_READ32(owner + kMonsterPinTarget));
         }
         t->held = held;
         t->realA = a;
