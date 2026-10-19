@@ -35,6 +35,7 @@ void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro 
 void wotmCaptureScene(const uint8_t *rdram);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(0, 0)
 void wotmVu1SceneExit(const uint8_t *rdram);   // wotm_vu1check.inc: registro 'S' do instantaneo, no mesmo ponto
 void wotmFlareCapture(const uint8_t *rdram);   // wotm_live.inc: lens flare projetado e testado
+void wotmThreeMileFlash(const uint8_t *rdram);   // wotm_live.inc: clarao branco da usina da 3-MILE
 void wotmFadeView(const uint8_t *rdram, int view, uint32_t alpha, bool queued);   // wotm_live.inc: fade preto da vista inteira, pelos argumentos do emissor
 void wotmTheGameFade(const uint8_t *rdram, uint32_t self);   // wotm_live.inc: saida dos fades do TheGame
 void wotmLetterbox(const uint8_t *rdram, float alpha);   // wotm_live.inc: faixas pretas do menu, pelo alfa do letterboxDmaData
@@ -785,6 +786,16 @@ namespace
         if (ctx->pc == kUiFadeScreen)   // uiFadeScreen(quanto): vista 0, alfa 0x80 - quanto, direto
             wotmFadeView(rdram, 0, 0x80u - GPR_U32(ctx, 4), false);
         g_origUiFade(rdram, ctx, runtime);
+    }
+
+    // Clarao branco da 3-MILE: o threeMileDrawFlash monta um SPRITE de tela e o poe na fila do gsPkt (sem gancho, o nativo nao o via).
+    constexpr uint32_t kThreeMileDrawFlash = wotm::fn::threeMileDrawFlash__Fv;
+    PS2Runtime::RecompiledFunction g_origThreeMileFlash = nullptr;
+    void threeMileFlashTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kThreeMileDrawFlash)
+            wotmThreeMileFlash(rdram);
+        g_origThreeMileFlash(rdram, ctx, runtime);
     }
 
     // Faixas pretas do menu: o letterboxDmaData(alfa) monta o pacote em D_00731850 e o manda direto; lido depois de voltar.
@@ -1725,6 +1736,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kFontBuildPrim, &fontGlyphTapped);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
+    if ((g_origThreeMileFlash = runtime.lookupFunction(kThreeMileDrawFlash)))
+        runtime.registerFunction(kThreeMileDrawFlash, &threeMileFlashTapped);
     if ((g_origLetterbox = runtime.lookupFunction(kLetterboxDmaData)))
         runtime.registerFunction(kLetterboxDmaData, &letterboxTapped);
     if ((g_origShellFade = runtime.lookupFunction(kShellFadeScreen)))

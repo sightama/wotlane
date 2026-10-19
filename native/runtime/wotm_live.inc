@@ -515,6 +515,19 @@ void wotmFadeView(const uint8_t *rdram, int view, uint32_t alpha, bool queued)
     if (rdram && wotm::viewFadeRect(wotm::Ram{rdram, PS2_RAM_SIZE}, view, 0, 0, 0, alpha, r))
         wotm_live::pushRect(r, queued ? 1 : 0);
 }
+// Clarao da usina da 3-MILE (threeMileDrawFlash, chamado pelo threeMileUpdateCountDown e pelo threeMileUpdateTransition): SPRITE
+// branco da vista atual (viewCurView), ALPHA_1 0x44, alfa = threeMileFlashAlpha (0x80 = 1,0), pela fila do gsPkt. Lido na entrada:
+// o pacote leva o alfa de antes da atualizacao que vem depois da chamada.
+void wotmThreeMileFlash(const uint8_t *rdram)
+{
+    if (!rdram)
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    const uint32_t a = ram.u32(wotm::sym::threeMileFlashAlpha);
+    wotm::ScreenRect r{};
+    if (a && wotm::viewFadeRect(ram, int32_t(ram.u32(wotm::sym::viewCurView)), 0xFF, 0xFF, 0xFF, a, r))
+        wotm_live::pushRect(r, 1);
+}
 // Saida do TheGame::updateFadeOut / updateFadeOutAndIn: o nivel do fade (+0x120450, ja atualizado) em cada vista; da vista 1 em
 // diante so sem filme e sem vista unificada, como o laco deles.
 void wotmTheGameFade(const uint8_t *rdram, uint32_t self)
@@ -1280,6 +1293,7 @@ void wotmCaptureScene(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 void wotmFadeView(const uint8_t *, int, uint32_t, bool) {}
 void wotmTheGameFade(const uint8_t *, uint32_t) {}
+void wotmThreeMileFlash(const uint8_t *) {}
 void wotmLetterbox(const uint8_t *, float) {}
 void wotmGsPktQueueSent() {}
 void wotmFontSent() {}

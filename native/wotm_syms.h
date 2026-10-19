@@ -1661,6 +1661,7 @@ constexpr uint32_t zipFileBuf = 0x006F8B38;   // size 0x4
 constexpr uint32_t outFileBuf = 0x006F8B3C;   // size 0x4
 constexpr uint32_t gRet = 0x006F8B40;   // size 0x4
 constexpr uint32_t x_fbss = 0x006F8B80;
+constexpr uint32_t threeMileFlashAlpha = 0x006F8CD8;   // size 0x4
 constexpr uint32_t x_12Interactives_s_numInteractives = 0x006F8DF8;   // size 0x4
 constexpr uint32_t x__ti13AiActionTuple = 0x006F8E00;   // size 0x8
 constexpr uint32_t x__ti12AiActionList = 0x006F8E08;   // size 0x8
@@ -8952,6 +8953,7 @@ inline const Entry kData[] = {
     {0x006F8B3C, 0x4, "outFileBuf"},
     {0x006F8B40, 0x4, "gRet"},
     {0x006F8B80, 0x0, "_fbss"},
+    {0x006F8CD8, 0x4, "threeMileFlashAlpha"},
     {0x006F8DF8, 0x4, "_12Interactives$s_numInteractives"},
     {0x006F8E00, 0x8, "__ti13AiActionTuple"},
     {0x006F8E08, 0x8, "__ti12AiActionList"},

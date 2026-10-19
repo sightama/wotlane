@@ -1,0 +1,2 @@
+// Nomes manuais para a camada nativa (tools/native_syms.py); o build do decomp nao le este arquivo.
+threeMileFlashAlpha = 0x006F8CD8; // size:0x4
