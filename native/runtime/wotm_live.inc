@@ -758,6 +758,80 @@ void wotmCaptureFrame(const uint8_t *rdram)
     c.fresh = true;
 }
 
+// Numeros de dano (mod WOTM_DAMAGEPOP): a thread do EE manda cada dano (wotmDamagePopup: ponto no mundo, valor, tipo) e a janela os
+// projeta com a camera da cena nativa, subindo e sumindo em ~1 s. Tipo 0 golpe (branco), 1 objeto ou monstro arremessado (laranja),
+// 2 especial (ciano).
+namespace wotm_live
+{
+struct DamagePopup
+{
+    float p[3];
+    float amount;
+    int kind;
+    float dx;      // desvio lateral, para numeros seguidos nao se cobrirem
+    double t0;     // relogio da janela ao chegar (GetTime)
+};
+static std::mutex g_damageM;
+static std::vector<DamagePopup> g_damageNew;   // da thread do EE, ainda sem t0
+static std::vector<DamagePopup> g_damageLive;  // so da janela
+}
+void wotmDamagePopup(const float p[3], float amount, int kind)
+{
+    static uint32_t n = 0;
+    std::lock_guard<std::mutex> lk(wotm_live::g_damageM);
+    if (wotm_live::g_damageNew.size() < 64)
+        wotm_live::g_damageNew.push_back(wotm_live::DamagePopup{{p[0], p[1], p[2]}, amount, kind, float(int(n++ % 5) - 2), 0.0});
+}
+static void drawDamagePopups(const Camera3D &cam, int rw, int rh)
+{
+    using namespace wotm_live;
+    const double now = GetTime();
+    {
+        std::lock_guard<std::mutex> lk(g_damageM);
+        for (DamagePopup &d : g_damageNew)
+        {
+            d.t0 = now;
+            g_damageLive.push_back(d);
+        }
+        g_damageNew.clear();
+    }
+    constexpr double kLife = 1.1;
+    g_damageLive.erase(std::remove_if(g_damageLive.begin(), g_damageLive.end(), [&](const DamagePopup &d) { return now - d.t0 > kLife; }),
+                       g_damageLive.end());
+    const Font font = GetFontDefault();
+    for (const DamagePopup &d : g_damageLive)
+    {
+        // atras da camera: nao desenha
+        const float v[3] = {d.p[0] - cam.position.x, d.p[1] - cam.position.y, d.p[2] - cam.position.z};
+        const float f[3] = {cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z};
+        if (v[0] * f[0] + v[1] * f[1] + v[2] * f[2] <= 0.f)
+            continue;
+        const Vector2 s = GetWorldToScreenEx(Vector3{d.p[0], d.p[1], d.p[2]}, cam, rw, rh);
+        const float age = float(now - d.t0), k = age / float(kLife);
+        // entra grande e assenta (0,15 s), sobe ~7% da altura, some no ultimo terco
+        const float pop = age < 0.15f ? 1.f + 0.6f * (1.f - age / 0.15f) : 1.f;
+        const float size = float(rh) * 0.045f * pop * (d.kind == 2 ? 1.25f : 1.f);
+        const float alpha = k < 0.66f ? 1.f : std::max(0.f, (1.f - k) / 0.34f);
+        char txt[16];
+        if (d.amount >= 9.95f || std::fabs(d.amount - std::round(d.amount)) < 0.05f)   // inteiro sem ",0"
+            std::snprintf(txt, sizeof txt, "%d", int(d.amount + 0.5f));
+        else
+            std::snprintf(txt, sizeof txt, "%.1f", d.amount);
+        const float spacing = size / 10.f;
+        const Vector2 ts = MeasureTextEx(font, txt, size, spacing);
+        const float x = s.x - 0.5f * ts.x + d.dx * size * 0.35f, y = s.y - 0.5f * ts.y - float(rh) * 0.07f * k;
+        const Color col = d.kind == 1 ? Color{255, 160, 40, 255} : d.kind == 2 ? Color{90, 230, 255, 255} : Color{255, 255, 255, 255};
+        const Color edge{0, 0, 0, uint8_t(220 * alpha)};
+        const float o = std::max(1.f, size / 14.f);
+        for (int i = 0; i < 8; ++i)
+        {
+            static const float kx[8] = {-1, 0, 1, -1, 1, -1, 0, 1}, ky[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+            DrawTextEx(font, txt, Vector2{x + kx[i] * o, y + ky[i] * o}, size, spacing, edge);
+        }
+        DrawTextEx(font, txt, Vector2{x, y}, size, spacing, Color{col.r, col.g, col.b, uint8_t(255 * alpha)});
+    }
+}
+
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
@@ -992,6 +1066,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         EndMode3D();
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
+        drawDamagePopups(c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
         EndTextureMode();
 
         {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
@@ -1154,6 +1229,7 @@ static bool exportFrame(const char *) { return false; }
 static std::string resources() { return {}; }
 }
 static bool wotmDrawNative(const uint8_t *) { return false; }
+void wotmDamagePopup(const float *, float, int) {}
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmCaptureScene(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
