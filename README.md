@@ -8,7 +8,7 @@ You need your own copy of the game. No game files are, or ever will be, in this 
 
 ## Status (2026-10-19)
 The game runs on Windows at 60 fps with native rendering: stages, monsters, particles, shadows, fog, menu text, HUD, screen fades and Hor+ widescreen. Fights are playable with the
-keyboard, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
+keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
 The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
 
 <details>
