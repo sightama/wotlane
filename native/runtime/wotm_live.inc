@@ -576,9 +576,11 @@ void wotmFontColor(const uint8_t *rdram, int font)
 {
     if (rdram) wotm_live::g_font.setColor(wotm::Ram{rdram, PS2_RAM_SIZE}, font);
 }
+static int g_lastFontIdx = 0;   // fonte do ultimo glifo do jogo (na luta, a do "WINS"): a dos numeros de dano
 void wotmFontGlyph(const uint8_t *rdram, int font, int ch)
 {
     if (rdram) wotm_live::g_font.glyph(wotm::Ram{rdram, PS2_RAM_SIZE}, font, ch);
+    if (font == 0 || font == 1) g_lastFontIdx = font;
 }
 void wotmFontDma(const uint8_t *rdram)
 {
@@ -756,6 +758,123 @@ void wotmCaptureFrame(const uint8_t *rdram)
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
+}
+
+// Numeros de dano (mod WOTM_DAMAGEPOP): a thread do EE manda cada dano (wotmDamagePopup: ponto no mundo, valor, tipo) e a janela os
+// projeta com a camera da cena nativa, subindo e sumindo em ~1 s. Os digitos sao glifos da fonte do jogo (a do "WINS" da luta, a do
+// ultimo fontBuildPrim): na chegada, a thread do EE copia a celula e o tamanho dessa fonte (fonts[2], 0x38 cada), o modo do atlas e o
+// TEX0 em vigor, e a janela monta os quadrados com a mesma conta do FontText::glyph, tingidos pela cor do GS (0x80 = 1,0): golpe
+// branco, objeto ou monstro arremessado (1) laranja, especial (2) ciano e um pouco maior.
+namespace wotm_live
+{
+struct DamageFont
+{
+    uint64_t tex0 = 0;
+    bool rtx = false;              // atlas do .RTX (16 colunas a partir de 0) ou do boot (8 colunas a partir de '!')
+    uint16_t cellU = 0, cellV = 0; // celula no atlas (+0/+2), 1/16 de texel
+    uint16_t gw = 0, gh = 0;       // glifo no atlas (+4/+6)
+    uint16_t sw = 0, sh = 0;       // glifo na tela (+8/+0xA), 1/16 de pixel do GS
+};
+struct DamagePopup
+{
+    float p[3];
+    float amount;
+    int kind;
+    float dx;      // desvio lateral, para numeros seguidos nao se cobrirem
+    double t0;     // relogio da janela ao chegar (GetTime)
+    DamageFont font;
+};
+static std::mutex g_damageM;
+static std::vector<DamagePopup> g_damageNew;   // da thread do EE, ainda sem t0
+static std::vector<DamagePopup> g_damageLive;  // so da janela
+}
+void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind)
+{
+    static uint32_t n = 0;
+    if (!rdram)
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    wotm_live::DamageFont f;
+    const uint32_t fa = wotm::FontText::kFonts + 0x38u * uint32_t(g_lastFontIdx);
+    f.tex0 = wotm_live::g_font.tex0;
+    f.rtx = ram.u32(wotm::FontText::kAtlasMode) != 0;
+    f.cellU = ram.u16(fa);
+    f.cellV = ram.u16(fa + 2);
+    f.gw = ram.u16(fa + 4);
+    f.gh = ram.u16(fa + 6);
+    f.sw = ram.u16(fa + 8);
+    f.sh = ram.u16(fa + 0xA);
+    if (!f.tex0 || !f.sw || !f.sh)
+        return;
+    std::lock_guard<std::mutex> lk(wotm_live::g_damageM);
+    if (wotm_live::g_damageNew.size() < 64)
+        wotm_live::g_damageNew.push_back(wotm_live::DamagePopup{{p[0], p[1], p[2]}, amount, kind, float(int(n++ % 5) - 2), 0.0, f});
+}
+static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, int rh)
+{
+    using namespace wotm_live;
+    const double now = GetTime();
+    {
+        std::lock_guard<std::mutex> lk(g_damageM);
+        for (DamagePopup &d : g_damageNew)
+        {
+            d.t0 = now;
+            g_damageLive.push_back(d);
+        }
+        g_damageNew.clear();
+    }
+    constexpr double kLife = 1.1;
+    g_damageLive.erase(std::remove_if(g_damageLive.begin(), g_damageLive.end(), [&](const DamagePopup &d) { return now - d.t0 > kLife; }),
+                       g_damageLive.end());
+    if (g_damageLive.empty())
+        return;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    std::vector<wotm::TextQuad> quads;
+    for (const DamagePopup &d : g_damageLive)
+    {
+        // atras da camera: nao desenha
+        const float v[3] = {d.p[0] - cam.position.x, d.p[1] - cam.position.y, d.p[2] - cam.position.z};
+        const float f[3] = {cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z};
+        if (v[0] * f[0] + v[1] * f[1] + v[2] * f[2] <= 0.f)
+            continue;
+        const Vector2 s = GetWorldToScreenEx(Vector3{d.p[0], d.p[1], d.p[2]}, cam, rw, rh);
+        const float age = float(now - d.t0), k = age / float(kLife);
+        // entra grande e assenta (0,15 s), sobe ~7% da altura, some no ultimo terco
+        const float pop = age < 0.15f ? 1.f + 0.6f * (1.f - age / 0.15f) : 1.f;
+        const float alpha = k < 0.66f ? 1.f : std::max(0.f, (1.f - k) / 0.34f);
+        char txt[16];
+        if (d.amount >= 9.95f || std::fabs(d.amount - std::round(d.amount)) < 0.05f)   // inteiro sem ",0"
+            std::snprintf(txt, sizeof txt, "%d", int(d.amount + 0.5f));
+        else
+            std::snprintf(txt, sizeof txt, "%.1f", d.amount);
+        // digito visivel com ~2,6% da altura do quadro (x1,25 no especial): 80% do texto anterior (medido a 720p); o glifo ocupa ~70%
+        // do quadrado (WINS)
+        const float hPx = float(rh) * (0.033f / 0.7f) * pop * (d.kind == 2 ? 1.25f : 1.f);
+        const float gy = hPx * 224.f / float(rh), scale = gy / (float(d.font.sh) / 16.f);
+        const float gw = float(d.font.sw) / 16.f * scale;   // largura de um glifo (unidades de 640)
+        const float advance = gw * 0.8f;                    // a fonte e larga (contorno): glifos encostados como no HUD
+        const int n = int(std::strlen(txt));
+        const float cx = (s.x - gr.x0) * 640.f / gr.w + d.dx * gw * 0.6f, cy = s.y * 224.f / float(rh) - 224.f * 0.07f * k;
+        float x = cx - 0.5f * (advance * float(n - 1) + gw);
+        const float y = cy - 0.5f * gy;
+        // cor do GS (0x80 = 1,0; acima clareia o glifo): golpe como o texto do HUD, arremesso laranja, especial ciano
+        const uint8_t r = d.kind == 1 ? 0xFF : d.kind == 2 ? 0x50 : 0x80, g = d.kind == 1 ? 0x90 : d.kind == 2 ? 0xD0 : 0x80,
+                      b = d.kind == 1 ? 0x20 : d.kind == 2 ? 0xFF : 0x80, a = uint8_t(0x80 * alpha);
+        for (int i = 0; i < n; ++i, x += advance)
+        {
+            int c = int8_t(txt[i]), row, column, base;
+            if (d.font.rtx) { row = c >> 4; column = c & 15; base = 0x10; }
+            else { const int q = c - 0x21; row = q >> 3; column = q & 7; base = 8; }
+            const float u0 = float(d.font.cellU * column + base) / 16.f, v0 = float(d.font.cellV * row + base) / 16.f;
+            wotm::TextQuad t{};
+            t.u0 = u0; t.v0 = v0; t.u1 = u0 + float(d.font.gw) / 16.f; t.v1 = v0 + float(d.font.gh) / 16.f;
+            t.x0 = x; t.y0 = y; t.x1 = x + gw; t.y1 = y + gy;
+            t.r = r; t.g = g; t.b = b; t.a = a;
+            t.tex0 = d.font.tex0;
+            quads.push_back(t);
+        }
+    }
+    scene.drawQuads(quads, float(rw), float(rh));
 }
 
 static bool wotmDrawNative(const uint8_t *rdram)
@@ -992,6 +1111,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         EndMode3D();
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
+        drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
         EndTextureMode();
 
         {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
@@ -1154,6 +1274,7 @@ static bool exportFrame(const char *) { return false; }
 static std::string resources() { return {}; }
 }
 static bool wotmDrawNative(const uint8_t *) { return false; }
+void wotmDamagePopup(const uint8_t *, const float *, float, int) {}
 void wotmCaptureFrame(const uint8_t *) {}
 void wotmCaptureScene(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}

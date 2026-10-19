@@ -57,6 +57,7 @@ void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad d
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
+void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -1476,6 +1477,115 @@ namespace
     }
 }
 
+namespace
+{
+    // Numeros de dano (mod, WOTM_DAMAGEPOP=1; grupo "Mods" do launcher). A vida de cada monstro (m_health, +0x44C) e conferida na
+    // entrada do Monster::update: o que caiu desde a anterior vira um numero (wotmDamagePopup), o que pega tambem fogo, choque e
+    // queda, que nao passam pelo takeHit. O tipo vem do ultimo Monster::takeHit da vitima (ate 2 quadros antes), pelo
+    // HitEvent::s_takeHitInfo que o atacante montou: source 1, 5, 6, 12, 14 e 0x14 = especial (Weapon, FireBreath, StateZapAttack,
+    // StateSonicRoar, StateGrappleHook, StateUltraTazer, StateTazerAttack, StateTopSpin; 6 e 0x14 sao os que o StateBlock trata junto
+    // do 5, e o especial do Togera chega com 6), 8 e 13 = arremesso (MonsterState::handleCollis de objeto em voo, StateThrowBack de
+    // monstro jogado; vale ate 45 quadros, o dano da batida no cenario vem depois), o resto = golpe. Lugar: o ponto do golpe
+    // (s_takeHitInfo.pos) quando houver, senao o monstro um pouco acima.
+    constexpr uint32_t kMonsterUpdateDmg = wotm::fn::update__7Monster, kTakeHitDmg = wotm::fn::takeHit__7MonsterP8_fvectorfi;
+    constexpr uint32_t kTakeHitInfo = wotm::sym::x_8HitEvent_s_takeHitInfo;   // HitEvent: pos* +0, source +0x10
+    PS2Runtime::RecompiledFunction g_origMonsterUpdateDmg = nullptr, g_origTakeHitDmg = nullptr;
+    struct DamageTrack
+    {
+        uint32_t m = 0;
+        float last = 0.f;
+        int kind = 0;
+        uint32_t hitFrame = 0;
+        bool havePos = false;
+        float pos[3] = {};
+    } g_damageTrack[16];
+
+    // Um dos m_monsters do TheGame (lugar para 16)
+    bool isMonsterSlot(uint8_t *rdram, uint32_t m)
+    {
+        for (uint32_t i = 0; i < 16; ++i)
+            if (m && (FAST_READ32(kGame + 0x120380 + 4 * i) & 0x1FFFFFFFu) == m)
+                return true;
+        return false;
+    }
+
+    DamageTrack *damageTrack(uint8_t *rdram, uint32_t m)
+    {
+        for (DamageTrack &d : g_damageTrack)
+            if (d.m == m)
+                return &d;
+        for (DamageTrack &d : g_damageTrack)
+            if (!d.m || !isMonsterSlot(rdram, d.m))
+            {
+                d = DamageTrack{};
+                d.m = m;
+                std::memcpy(&d.last, rdram + m + 0x44Cu, 4);
+                return &d;
+            }
+        return nullptr;
+    }
+
+    int damageKind(int source)
+    {
+        switch (source)
+        {
+        case 1: case 5: case 6: case 12: case 14: case 20: return 2;
+        case 8: case 13: return 1;
+        default: return 0;
+        }
+    }
+
+    void takeHitDamage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        if (ctx->pc == kTakeHitDmg && ramOk(m, 0x450u) && isMonsterSlot(rdram, m))
+            if (DamageTrack *d = damageTrack(rdram, m))
+            {
+                d->kind = damageKind(static_cast<int32_t>(FAST_READ32(kTakeHitInfo + 0x10u)));
+                d->hitFrame = FAST_READ32(wotm::sym::g_frame);
+                const uint32_t p = FAST_READ32(kTakeHitInfo) & 0x1FFFFFFFu;
+                d->havePos = ramOk(p, 0x10u);
+                if (d->havePos)
+                    for (int i = 0; i < 3; ++i)
+                        d->pos[i] = rdF(rdram, p + 4 * i);
+                d->havePos = d->havePos && std::isfinite(d->pos[0]) && std::isfinite(d->pos[1]) && std::isfinite(d->pos[2]);
+            }
+        g_origTakeHitDmg(rdram, ctx, runtime);
+    }
+
+    void monsterUpdateDamage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        if (ctx->pc == kMonsterUpdateDmg && ramOk(m, 0x450u) && isMonsterSlot(rdram, m))
+            if (DamageTrack *d = damageTrack(rdram, m))
+            {
+                float h;
+                std::memcpy(&h, rdram + m + 0x44Cu, 4);
+                if (std::isfinite(h))
+                {
+                    const float lost = d->last - h;
+                    if (lost >= 0.05f)
+                    {
+                        const uint32_t g = FAST_READ32(wotm::sym::g_frame);
+                        // o arremessado leva o dano ao bater no cenario, alguns quadros depois do takeHit que o lancou
+                        const bool recent = d->hitFrame && g - d->hitFrame <= (d->kind == 1 ? 45u : 2u);
+                        float p[3];
+                        if (recent && d->havePos)
+                            std::memcpy(p, d->pos, sizeof p);
+                        else if (targetPos(rdram, m, p))
+                            p[2] += 60.f;   // sem ponto de golpe: um pouco acima da origem do monstro
+                        else
+                            p[0] = p[1] = p[2] = 0.f;
+                        if (p[0] != 0.f || p[1] != 0.f || p[2] != 0.f)
+                            wotmDamagePopup(rdram, p, lost, recent ? d->kind : 0);
+                    }
+                    d->last = h;
+                }
+            }
+        g_origMonsterUpdateDmg(rdram, ctx, runtime);
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -1663,6 +1773,18 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         }
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
+    }
+    // Numeros de dano (mod, WOTM_DAMAGEPOP=1): depois das trapacas, que tambem embrulham o Monster::update e o takeHit
+    if (const char *e = std::getenv("WOTM_DAMAGEPOP"); e && *e && std::strcmp(e, "0") != 0)
+    {
+        if ((g_origMonsterUpdateDmg = runtime.lookupFunction(kMonsterUpdateDmg)) && (g_origTakeHitDmg = runtime.lookupFunction(kTakeHitDmg)))
+        {
+            runtime.registerFunction(kMonsterUpdateDmg, &monsterUpdateDamage);
+            runtime.registerFunction(kTakeHitDmg, &takeHitDamage);
+            std::fprintf(stderr, "[wotm] numeros de dano (WOTM_DAMAGEPOP): golpe branco, arremesso laranja, especial ciano\n");
+        }
+        else
+            std::fprintf(stderr, "[wotm] numeros de dano indisponiveis: Monster::update ou Monster::takeHit sem funcao no runtime\n");
     }
     // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon
     if (const char *e = std::getenv("WOTM_ENEMYBARS"); e && *e && std::strcmp(e, "0") != 0)
