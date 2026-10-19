@@ -54,8 +54,8 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 
 Olhar a foto e o trio do `vu1cmp`; se houver um problema visível de imediato, anotá-lo aqui como item; se não houver, apagar a foto (`.vu1snap` e PNGs) e registrar no `notas.txt` da pasta.
 
-**Resíduos das correções já feitas:**
-- **Alfa acima de 1 na mistura comum (limitação aceita):** o GS deixa o As passar de 1 (até 255/128); o nativo o limita a 1 na mistura comum (nas aditiva e subtrativa já é exato). Atinge ~300 objetos por quadro com As ≈ 1,03 e ~8 com As ≈ 2 (ex.: neon `tex 242`). A mistura exata em 3 passes foi tentada em 2026-10-16 e desfeita (piorou contra a referência). Só voltar a isso se aparecer diferença visível na tela.
+**Pistas abertas:**
+- **Nativo ~5% mais claro que a referência no quadro todo (2026-10-19):** nos pixels do mesmo objeto nos dois lados, a mediana de ref/nativo é 0,92 a 0,97 em quase todo o corpus (`luta_centro` 0,928, `destrocos` 0,933, `luta_3ia` 0,948, `dragon_verde` 0,966; só `congar_olhos` dá 1,0). Não vem da apresentação da referência (PMODE 0x8002: só o circuito 2, sem mistura). Suspeitos: cor de vértice/luz, arredondamento do `(Ct·Cv)>>7` ou o filtro da textura. Distorce qualquer medida de erro absoluto contra a referência (foi o que fez a mistura exata do As > 1 parecer pior em 2026-10-16): para comparar antes e depois, escale o nativo por esse fator do quadro.
 
 </details>
 
@@ -92,6 +92,8 @@ Gerador do VU: `RINIT` faz R = 0x3F800000 | (bits(fs) & 0x7FFFFF); `RNEXT` faz R
 
 <details>
 <summary>Explicadas</summary>
+
+- **Alfa acima de 1 na mistura comum (corrigido em 2026-10-19):** o GS deixa o As passar de 1 (At·Av/128 até 255; ~300 objetos por quadro com As ≈ 1,03, textura 0xFF e vértice 0x42, e alguns com As ≈ 2), e na mistura comum faz Cs·As − Cd·(As − 1), limitado a 0..255. O nativo limitava o As a 1. Agora os objetos em que o As pode passar de 1 (maior alfa de vértice vezes o maior da textura, `MeshData::maxA` e `texAmax_`) saem em três passes da mesma geometria, cada pixel decidindo no shader (modos 3 a 5): a mistura comum com alfa 0 onde As > 1; `Cs − Cd·(1 − 1/As)` só onde As > 1 (`gsBlendOver1`, subtração); e o destino vezes As (`gsBlendOver2`, saída As − 1 vezes `DST_COLOR`, mais o destino). O framebuffer de 8 bits só arredonda o resultado/As (erro < 1). O domo do céu fica de fora: a referência não mostra o ganho nele (o destino sob o domo é o quadro anterior, o mesmo céu, e a conta converge para Cs), e no nativo, sobre a limpeza preta, ele saía ×1,027. A tentativa de 2026-10-16 (desfeita) pareceu pior porque o nativo é ~5% mais claro que a referência no quadro todo (ver "Pistas abertas"): sem descontar isso, clarear um objeto sempre aumenta o erro. Com o nativo escalado pelo fator de cada quadro, o erro médio nos pixels que mudam cai de 13,5 para 12,9 no corpus (`destrocos` 11,1 → 9,9 com 75% dos pixels melhores, menus 4,2 → 3,0 com ~90%, `luta_centro` 14,3 → 13,5); pioram um pouco `luta_3ia` (10,8 → 12,1, torre de vigas e prédio) e `congar_olhos` (10,7 → 11,2). Tabela da checagem: nada piorou (`resumo_2026-10-19_135733.csv` → `141904`). `WOTM_NOOVER=1` volta ao limite.
 
 - **Malhas skinned grandes "sem dono" (corrigido na checagem em 2026-10-18; `goliath_flare` e a foto do Assboss):** a checagem ligava cada programa do VU1 ao objeto nativo cujo pacote contém a origem do programa, e supunha 0x20000 bytes para o pacote skinned (uma cadeia de sub-pacotes de tamanho só conhecido decodificando). O do Goliath tem ~0x29000: os programas do fim caíam fora e viravam 2.890 triângulos sem dono, com os mesmos triângulos sobrando no nativo. O `decodeObject` agora guarda o fim da cadeia (`MeshData::bytes`), e a checagem usa esse tamanho. `goliath_flare`: só da referência 2.891 → 1, sobram 3.111 → 293; nada mais mudou no corpus. O nativo já desenhava certo.
 

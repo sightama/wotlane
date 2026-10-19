@@ -215,6 +215,7 @@ struct MeshData {
     bool lowAlpha = false;   // algum vertice com alfa baixo (< 0x3C; 0x40 = opaco): nevoa/sombras, desenhado no passe translucido
     bool skinned = false;    // polyPkt e uma cadeia de sub-pacotes com V4-32 (codigos de osso + peso)
     bool abe = false;        // PRIM.ABE da tag GIF: so entao o alfa de vertice vale (blend); senao opaco
+    uint8_t maxA = 0;        // maior alfa de vertice (tris e sprites, cru: 0x80 = 1,0); com o da textura diz se o As passa de 1
     uint32_t slotMask = 0;   // slots de textura usados pelas secoes (bit i = gsTexCtx[i])
     uint8_t curSub = 0;   // sub-pacote em decodificacao (diagnostico)
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
@@ -425,6 +426,8 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
         if (pp) md.bytes = pp - start;
     }
     for (const Vtx &v : md.tris) if (v.a < 0x3C) { md.lowAlpha = true; break; }
+    for (const Vtx &v : md.tris) md.maxA = std::max(md.maxA, v.a);
+    for (const ObjSprite &s : md.sprites) md.maxA = std::max(md.maxA, s.a);
     return md;
 }
 
@@ -1501,6 +1504,9 @@ public:
                 // alfa cru: semitransparente = abaixo de ~1,0 com o vertice em 0x80 (0x7C); 0x80..0xFF e opaco
                 for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++clear; else if (a < 0x7C) ++partial; }
                 partial_[key] = partial * 100 > px.size();   // mais de 1% dos texels semitransparentes
+                uint32_t amax = 0;
+                for (uint32_t c : px) amax = std::max(amax, c >> 24);
+                texAmax_[key] = uint8_t(amax);
                 if (clear && clear < px.size()) {
                     std::vector<uint8_t> solid(px.size());
                     for (size_t i = 0; i < px.size(); ++i) solid[i] = (px[i] >> 24) != 0;
@@ -2233,7 +2239,7 @@ public:
         //  - FGE: neblina (ver Fog).
         //  - GS: textura e vertice trazem cor e alfa crus do GS (0x80 = 1,0) e o shader modula como o GS (TFX MODULATE):
         //    cor = texel * Cv / 128 (Cv > 0x80 clareia) e As = min(At * Av / 128, 255) / 128 (ate 1,99: a funcao de textura satura
-        //    em 255). Na mistura comum o As fica limitado a 1;
+        //    em 255). Na mistura comum o As acima de 1 sai em tres passes (modos 3 a 5, gsBlendCommon);
         //    sem o modo GS, o produto comum (sombras, depuracao).
         //  - PM: mistura aditiva/subtrativa (gsBlend 1 e 2); a saida e a cor vezes o As inteiro, e a mistura usa fator 1.
         //  - modo (+8, +16): os dois passes de GsBlendFactors::doubled (alfa As / 2; saida branca).
@@ -2269,14 +2275,19 @@ public:
                 "  if (fragGsA > 0.5) { t.rgb = min(t.rgb * 1.9922, vec3(1.0)); as = min(t.a * 3.9690, 1.9922); t.a = min(as, 1.0); }\n"
                 // teste de alfa do GS (TEST_1 do GROUP, DrawItem::aref; padrao kGsAlphaRef = alfa > 8)
                 "  if (as * 128.0 <= alphaRef) discard;\n"
-                "  if (fragMode > 1.5) { finalColor = vec4(1.0); return; }\n"   // 2o passe do doubled (gsBlendDouble)
+                "  if (fragMode > 1.5 && fragMode < 2.5) { finalColor = vec4(1.0); return; }\n"   // 2o passe do doubled (gsBlendDouble)
+                // mistura comum com As > 1 (gsBlendCommon): 3o passe, destino * As (fora disso, sem efeito); 2o passe so onde As > 1
+                "  if (fragMode > 4.5) { finalColor = as > 1.0 ? vec4(vec3(as - 1.0), 1.0) : vec4(0.0); return; }\n"
+                "  if (fragMode > 3.5 && as <= 1.0) discard;\n"
 
                 "  if (fogSplit < -1.5) { finalColor = vec4(vec3(1.0 - fragFog), 1.0); return; }\n"   // WOTM_FOGSPLIT=2: mascara da neblina
                 "  float f = gl_FragCoord.x < fogSplit ? 1.0 : fragFog;\n"
                 "  vec3 c = mix(fogColor, t.rgb, f);\n"
                 // aditivo/subtrativo: a cor ja vezes o As inteiro (a mistura usa fator 1; gsBlend)
                 // doubled (modo 1): alfa As / 2, sem o limite de 1 (o 2o passe dobra o destino)
-                "  finalColor = fragPm > 0.5 ? vec4(c * as, 1.0) : vec4(c, fragMode > 0.5 ? as * 0.5 : t.a); }\n";
+                // As > 1 na mistura comum: 1o passe sem efeito (alfa 0); 2o passe Cs - Cd (1 - 1/As)
+                "  finalColor = fragPm > 0.5 ? vec4(c * as, 1.0) : fragMode > 3.5 ? vec4(c, 1.0 - 1.0 / as)\n"
+                "             : fragMode > 2.5 ? vec4(c, as > 1.0 ? 0.0 : as) : vec4(c, fragMode > 0.5 ? as * 0.5 : t.a); }\n";
             alphaShader_ = LoadShaderFromMemory(vs, fs);
             fogLoc_[0] = GetShaderLocation(alphaShader_, "fogEye");
             fogLoc_[1] = GetShaderLocation(alphaShader_, "fogRow3");
@@ -2455,6 +2466,28 @@ public:
         }
         struct Ent { uint64_t key; uint32_t item; uint32_t slot; };
         constexpr uint32_t kSlotDouble = 0x80000000u;   // Ent::slot: 2o passe de GsBlendFactors::doubled (destino * 2)
+        constexpr uint32_t kSlotOver1 = 0x40000000u;    // Ent::slot: 2o e 3o passes da mistura comum com As > 1 (gsBlendCommon)
+        constexpr uint32_t kSlotOver2 = 0x20000000u;
+        constexpr uint32_t kSlotPass = kSlotDouble | kSlotOver1 | kSlotOver2;
+        // Mistura comum em que o As pode passar de 1: maior alfa de vertice (com o fade) vezes o maior da textura acima de 128 * 128.
+        // Sem textura, o branco 0x80; quadro anterior e filme vao sem o modo GS (As ate 1).
+        // O ceu fica de fora: e o primeiro desenho do quadro, e a referencia nao mostra o ganho no domo (o destino sob ele e o quadro
+        // anterior, o mesmo ceu, e Cs As - Cd (As - 1) converge para Cs, o mesmo que As limitado a 1). No nativo o destino e a limpeza
+        // preta, e os passes deixavam o domo As vezes mais claro (x1,027 no corpus).
+        static const bool idcOpaqueOver = std::getenv("WOTM_IDCOLOR") != nullptr;
+        static const bool noOver = std::getenv("WOTM_NOOVER") != nullptr;   // diagnostico: As limitado a 1 na mistura comum (como antes)
+        const bool skyList = &list == &sky;
+        auto over = [&](const DrawItem &it, const MeshData *m, uint32_t sl) {
+            if (wire || noOver || skyList || idcOpaqueOver || !m || !m->abe || !gsBlendCommon(it.blend)) return false;
+            const float av = float(m->maxA) * it.fade * std::max(0.f, it.color[3]);
+            if (av * 255.f <= 16384.f) return false;
+            const uint32_t ts = texRemap(sl);
+            const uint64_t key = texKey(ram, it, ts);
+            if (key == kScreenKey || (movieTexture && objectTexId(ram, it.node, ts) == 999)) return false;
+            uint32_t at = 0x80;
+            if (key && textureId(ram, it.node, ts)) { const auto f = texAmax_.find(key); if (f != texAmax_.end()) at = f->second; }
+            return av * float(at) > 16384.f;
+        };
         std::vector<Ent> order;   // (chave de textura, indice do item, slot de textura)
         order.reserve(list.size());
         const bool far2near = pass == 1 && !wire;   // OT de alfa: faixas e LIFO
@@ -2500,6 +2533,7 @@ public:
             if (far2near) key = uint64_t(2 + 128 - alphaBin(ram, list[i]));   // faixa mais longe primeiro (nunca 0 nem 1)
             order.push_back({key, i, sl});
             if (!wire && mdi && mdi->abe && gsBlendFactors(list[i].blend).doubled) order.push_back({key, i, sl | kSlotDouble});   // 2o passe, logo depois
+            if (over(list[i], mdi, sl)) { order.push_back({key, i, sl | kSlotOver1}); order.push_back({key, i, sl | kSlotOver2}); }
             }
         }
         // Passe translucido na ordem do retail: os objetos fora da OT de alfa saem nas cadeias normais, na ordem da travessia; depois
@@ -2528,8 +2562,8 @@ public:
         uint8_t curBlend = kGsAlphaNormal;   // DrawItem::blend ativo no GL (o lote anterior ja foi descarregado quando isto muda)
         bool curPremul = false;              // gsBlendPremul(curBlend): cor pre-multiplicada no shader (shaderNormal com pm)
         constexpr uint8_t kBlendDouble = 0xFF;   // curBlend no 2o passe do doubled (A = 3 nao existe: nunca e um ALPHA)
-        bool curDbl = false;   // lote aberto e o 2o passe do doubled
-        int curMode = 0;       // modo do shaderNormal no lote aberto (1 e 2: passes do doubled)
+        uint32_t curPass = 0;  // passe do lote aberto (0 ou kSlotDouble/kSlotOver1/kSlotOver2)
+        int curMode = 0;       // modo do shaderNormal no lote aberto (1 e 2: passes do doubled; 3 a 5: As > 1 na mistura comum)
         uint8_t curItBlend = 0;
         int16_t curItRef = 0;   // estado do item do lote aberto (passe da travessia: lote so com o mesmo estado)
         bool curItZ = false, curItAbe = false;
@@ -2587,25 +2621,27 @@ public:
                 if (ls && md && md->skinned && !wire) { for (int r = 0; r < 3; ++r) std::fprintf(stderr, "   m[%d] %.3f %.3f %.3f %.3f\n", r, it.m.m[r][0], it.m.m[r][1], it.m.m[r][2], it.m.m[r][3]); }
             }
             if (!md || !md->valid || (md->tris.empty() && md->sprites.empty())) continue;
-            const bool dbl = (o.slot & kSlotDouble) != 0;
-            const uint32_t slot = o.slot & ~kSlotDouble;
+            const uint32_t passK = o.slot & kSlotPass;
+            const bool dbl = passK == kSlotDouble;
+            const uint32_t slot = o.slot & ~kSlotPass;
             const bool multi = md->slotMask & (md->slotMask - 1);   // mais de um slot usado
             const bool envClamp = it.env == 1 && !wire;   // mapa de ambiente comum: CLAMP_1 = 5 (as texturas de objeto repetem)
             // na travessia o lote continua so com a mesma textura e o mesmo estado do GS (mistura, teste de alfa, ZMSK)
             const bool travState = trav && open && (it.blend != curItBlend || it.aref != curItRef || it.zmsk != curItZ || md->abe != curItAbe);
-            if (o.key != cur || !open || far2near || travState || envClamp != curClamp || dbl != curDbl) {
+            if (o.key != cur || !open || far2near || travState || envClamp != curClamp || passK != curPass) {
                 curItBlend = it.blend; curItRef = it.aref; curItZ = it.zmsk; curItAbe = md->abe;
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
                 if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
                 if (!wire && dbl) { gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver1) { gsBlendOver1(); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver2) { gsBlendOver2(); curBlend = kBlendDouble; curPremul = false; }
                 // sem ABE o GS grava a cor da fonte sem misturar (o alfa, com o fade do LOD, so vale para o teste): o predio 133 do
                 // luta_hud em cross-fade saia meio transparente e deixava ver o predio de tras
                 else if (!wire) {
                     static const bool idcOpaque = std::getenv("WOTM_IDCOLOR") && std::atoi(std::getenv("WOTM_IDCOLOR")) == 2;
                     setBlend(md->abe && !idcOpaque ? it.blend : kGsNoAbe);
                 }
-                curDbl = dbl;
-                curMode = dbl ? 2 : (!wire && md->abe && gsBlendFactors(it.blend).doubled) ? 1 : 0;
+                curPass = passK;
                 if (!wire) setRef(it.aref);
                 // passe translucido: grava profundidade como o GS, a menos que o GROUP ligue o ZMSK (o chamador volta a mascara ao fim)
                 if (far2near || trav) { if (it.zmsk) rlDisableDepthMask(); else rlEnableDepthMask(); }
@@ -2618,6 +2654,9 @@ public:
                 rlSetTexture((id && !idc) ? id : white);
                 open = true;
             }
+            // modo por item (vai no vertice): um item com As > 1 pode cair num lote aberto por outro sem
+            curMode = dbl ? 2 : passK == kSlotOver1 ? 4 : passK == kSlotOver2 ? 5
+                    : (!wire && md->abe && gsBlendFactors(it.blend).doubled) ? 1 : over(it, md, slot) ? 3 : 0;
             static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
             static const bool idcNode = idcMode && std::atoi(std::getenv("WOTM_IDCOLOR")) == 2;   // =2: no >> 4 em RGB, sem mistura nem neblina
             const unsigned tid = (wire || !cur) ? 0 : textureId(ram, it, texRemap(slot));
@@ -2938,6 +2977,7 @@ private:
     int fogLoc_[5] = {-1, -1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor, fogSplit
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
+    std::unordered_map<uint64_t, uint8_t> texAmax_;   // maior alfa cru da textura (texKey): 0x80 = 1,0, ate 0xFF
     std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
     static constexpr int kShadowRes = 128;
     uint32_t resSig_ = 0;   // assinatura dos recursos em fileStatus ja carregados (loadResources)

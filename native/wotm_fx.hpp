@@ -62,8 +62,9 @@ namespace wotm {
 // por y. FGE = neblina; GS = alfa cru do GS na textura e no vertice (As = At * Av / 16384). rlNormal3f(0, 0, 0) desliga os dois.
 // PM (+4): a mistura e aditiva ou subtrativa e o shader devolve a cor ja vezes o As inteiro (gsBlend usa fator 1 na origem). O As do
 // GS vai ate 255/128 (At * Av / 128 saturado em 255 pela funcao de textura); o fator SRC_ALPHA do GL o limitaria a 1. Na mistura comum
-// ((Cs - Cd) As + Cd) fica limitado: As > 1 pediria fator negativo no destino.
-// Modo (+8 * modo): 1 = sai com alfa As / 2 e 2 = sai branco (os dois passes de GsBlendFactors::doubled).
+// ((Cs - Cd) As + Cd) o As > 1 pediria fator negativo no destino: passes extras (gsBlendOver1/2).
+// Modo (+8 * modo): 1 = sai com alfa As / 2 e 2 = sai branco (os dois passes de GsBlendFactors::doubled); 3, 4 e 5 = os tres passes da
+// mistura comum com As > 1 (gsBlendCommon).
 inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
 // O burn fica limitado a +-4096: o F satura (0 ou 255) muito antes, e o domo do ceu da AIRPORT tem fogBurnThru 1e7, que deixava o y
 // normalizado abaixo do limite do shader (1e-6) e apagava todos os flags (o domo saia sem o modo GS, ~0,13 da cor).
@@ -102,6 +103,25 @@ inline GsBlendFactors gsBlendFactors(uint8_t alpha) {
 inline void gsBlendDouble() {
     rlSetBlendFactors(RL_DST_COLOR, RL_ONE, RL_FUNC_ADD);
     rlSetBlendMode(RL_BLEND_CUSTOM);
+}
+// Mistura comum com As > 1 (textura 0xFF e vertice acima de 0x40: As = At * Av / 16384 ate 255/128). O GS faz Cs As - Cd (As - 1),
+// limitado a 0..255; no GL o fator do destino seria negativo. Tres passes da mesma geometria, cada pixel decidindo no shader:
+//  1. a mistura comum, com alfa 0 onde As > 1 (fica o destino);
+//  2. (gsBlendOver1, shaderNormal modo 4) so onde As > 1: Cs * 1 - Cd * (1 - 1/As) = resultado / As (descarta os demais);
+//  3. (gsBlendOver2, modo 5) destino * As: saida As - 1 vezes DST_COLOR, mais o destino (0 onde As <= 1).
+// O framebuffer de 8 bits so arredonda o resultado / As (erro ate As / 2 < 1). Comum = fatores SRC_ALPHA e 1 - SRC_ALPHA, soma.
+// O alfa do framebuffer (lido pelo quadro anterior) fica como na mistura comum com As 1: o 2o passe nao o toca e o 3o o poe em 1.
+inline bool gsBlendCommon(uint8_t alpha) {
+    const GsBlendFactors f = gsBlendFactors(alpha);
+    return f.src == RL_SRC_ALPHA && f.dst == RL_ONE_MINUS_SRC_ALPHA && f.eq == RL_FUNC_ADD;
+}
+inline void gsBlendOver1() {
+    rlSetBlendFactorsSeparate(RL_ONE, RL_SRC_ALPHA, RL_ZERO, RL_ONE, RL_FUNC_SUBTRACT, RL_FUNC_ADD);
+    rlSetBlendMode(RL_BLEND_CUSTOM_SEPARATE);
+}
+inline void gsBlendOver2() {
+    rlSetBlendFactorsSeparate(RL_DST_COLOR, RL_ONE, RL_ONE, RL_ONE, RL_FUNC_ADD, RL_FUNC_ADD);
+    rlSetBlendMode(RL_BLEND_CUSTOM_SEPARATE);
 }
 inline bool gsBlendPremul(uint8_t alpha) { return gsBlendFactors(alpha).premul; }
 inline void gsBlend(uint8_t alpha) {
