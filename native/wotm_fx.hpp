@@ -440,6 +440,13 @@ public:
                 systems.push_back(s);
             i = next;
         }
+        {   // ao vivo, quadro sem particleDraw (menu, carga): nada de particulas, como no PS2, onde o pacote so sai do particleDraw.
+            // fx[] continua com os sistemas da ultima luta (fx 81/86/90/93 no menu depois da campanha: quadrados verdes, foto 007);
+            // o captureFlares (logo depois de cada particleDraw) marca o quadro como o lens flare
+            FlareSlot &s = flareSlot();
+            std::lock_guard<std::mutex> g(s.m);
+            if (s.used && !s.fresh) systems.clear();
+        }
         static const bool list = std::getenv("WOTM_FXLIST") != nullptr;
         if (list) dump(ram);
         collectFlares(ram);
