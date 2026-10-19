@@ -66,6 +66,43 @@ constexpr uint32_t psShadowIntens = wotm::sym::psShadowIntens;  // float, 80 = 0
 constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 }
 
+// Vista do jogo que a coleta e o desenho em curso seguem (tela dividida: vistas 0 e 1, metades esquerda e direita de 320 x 224 do
+// GS; src/common/view.cpp). Por thread: a coleta roda na thread do EE e o desenho na da janela, cada um liga a sua com ViewScope. Sem
+// ViewScope vale a vista 0 com a tela cheia (640 x 224, centro 2048), como era antes da tela dividida. cx/cy/w/h: centro e tamanho
+// da vista em pixels do GS (viewDef da vista: cx/cy em +0x18/+0x1C, w/h em +4/+6).
+struct ViewCtx {
+    int view = 0;
+    float cx = 2048.f, cy = 2048.f, w = 640.f, h = 224.f;
+    // Proporcao com que a vista aparece na tela (640 x 224 = 4:3; a metade 320 x 224 = 2:3)
+    float aspect() const { return (w / 640.f) * (4.f / 3.f) / (h / 224.f); }
+    bool full() const { return w >= 640.f; }
+};
+inline ViewCtx &curView() { static thread_local ViewCtx v; return v; }
+struct ViewScope {
+    ViewCtx prev;
+    explicit ViewScope(const ViewCtx &v) : prev(curView()) { curView() = v; }
+    ~ViewScope() { curView() = prev; }
+    ViewScope(const ViewScope &) = delete;
+    ViewScope &operator=(const ViewScope &) = delete;
+};
+// Enderecos da vista corrente: worldToScreenMat[v], worldCtx[v], viewInfo[v]
+inline uint32_t viewW2S() { return addr::worldToScreenMat + 0x40u * uint32_t(curView().view); }
+inline uint32_t viewCtxAddr() { return addr::worldCtx + 0x1F0u * uint32_t(curView().view); }
+inline uint32_t viewInfoAddr() { return addr::viewInfo + 0x14u * uint32_t(curView().view); }
+// Geometria da vista `view` como o viewDef dela esta agora (fora da RAM ou sem tamanho: tela cheia)
+inline ViewCtx readViewCtx(const Ram &ram, int view) {
+    ViewCtx v;
+    v.view = view;
+    const uint32_t def = ram.u32(addr::viewInfo + 0x14u * uint32_t(view) + 4) & 0x1FFFFFFFu;
+    if (ram.ok(def, 0x20) && ram.u16(def + 4) && ram.u16(def + 6)) {
+        v.cx = float(int32_t(ram.u32(def + 0x18)));
+        v.cy = float(int32_t(ram.u32(def + 0x1C)));
+        v.w = ram.u16(def + 4);
+        v.h = ram.u16(def + 6);
+    }
+    return v;
+}
+
 // Pacote de upload de uma textura (`texInfo[id]`): o `texmSetupTexture` monta em +0x20 o `sceGsLoadImage` do SDK
 // (`sceGsSetDefLoadImage`): BITBLTBUF em +0x30 (DBW nos bits 48..53, DPSM 56..61), TRXREG em +0x50 (RRW 0..11, RRH 32..43); pixels
 // lineares a partir de +0x80. (Ate 2026-10-15 o stub do runtime gravava ali uma struct propria, com largura em +0x24, altura em +0x26 e
@@ -711,8 +748,11 @@ struct Snapshot {
     ParaLights lights;
     Fog fog;
     GameCamera cam;
+    ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita)
     uint32_t g = 0;     // contador de quadros do jogo
     bool valid = false;
+    // Tela dividida: a vista 1 do mesmo quadro (coletada na saida do hier(1, 0)); nullptr = uma vista so
+    std::shared_ptr<Snapshot> view1;
 };
 
 class Scene {
@@ -721,6 +761,9 @@ public:
     float wide = 1.f;
     // Corte por esfera contra a vista do jogo, como o hierTraverseAsm (Scene::outOfView); o viewer com camera livre o desliga.
     bool fovCull = true;
+    // Vista do jogo que collect segue e que draw desenha (tela dividida; ViewCtx). A coleta a recebe de quem chama; o show a copia do
+    // instantaneo.
+    ViewCtx vctx;
     std::vector<DrawItem> items;
     std::vector<DrawItem> sky;   // ceu / nuvens (desenhados antes, sem profundidade, em skyCs->trans)
     std::vector<DrawItem> overlay;   // icones de botao (McButtons): por cima de tudo, sem teste de profundidade
@@ -1499,6 +1542,7 @@ public:
     // Reune os objetos visiveis a partir de world->ep e das listas de CS.
     // maxLod < 0: LOD automatico por distancia ao olho da camera do jogo (como hierLod); >= 0 forca esse indice (0 = mais grosseiro).
     void collect(const Ram &ram, int maxLod = -1) {
+        ViewScope vs(vctx);
         lights_ = readParaLights(ram);
         pts_ = readPointLights(ram);
         fog_ = readFog(ram);
@@ -1534,7 +1578,7 @@ public:
         lod_ = maxLod;
         eyeOk_ = false;
         {
-            const GameCamera gc = readGameCamera(ram, 0);
+            const GameCamera gc = readGameCamera(ram, vctx.view);
             cam_ = gc;
             eyeOk_ = gc.ok;
             for (int c = 0; c < 3; ++c) eye_[c] = gc.pos[c];
@@ -1544,14 +1588,14 @@ public:
             const uint32_t ep = ram.u32(wc);
             if (ram.ok(ep)) walk(ram, ep, ident(), 0);
         }
-        // ceu da vista 0: skyCs/skyCs2/skyClouds de worldCtx[0] (+4/+8/+0xC). O hierTraceSky usa o trans do _cs como qualquer objeto
+        // ceu da vista: skyCs/skyCs2/skyClouds de worldCtx[vista] (+4/+8/+0xC). O hierTraceSky usa o trans do _cs como qualquer objeto
         // (hierCsUpdate), nao o olho: o trans so muda pelo viewSetSkyTrans, que o hierSetCamera chama depois de passar por um no de
         // camera do hier. Nos menus isso e todo quadro (trans = olho); na luta o ceu fica onde a ultima camera de locator o deixou e a
         // camera do jogo anda em volta dele (paralaxe do anel de montanhas, tex 108; docs/investigacoes/2026-10-17/05_tex108.md).
         {
             std::vector<DrawItem> world;
             world.swap(items);
-            for (uint32_t off : {4u, 8u, 0xCu}) drawCs(ram, ram.u32(addr::worldCtx + off), false);
+            for (uint32_t off : {4u, 8u, 0xCu}) drawCs(ram, ram.u32(viewCtxAddr() + off), false);
             sky.swap(items);
             items.swap(world);
         }
@@ -1570,6 +1614,7 @@ public:
     // So as particulas (fx[] e destroços), sem a travessia: o desenho ao vivo coleta a cena na saida do hier(0, 0) e as particulas no
     // fim do quadro (o particleDraw do PS2 vem depois do gameUpdate; wotm_live.inc, wotmCaptureScene/wotmCaptureFrame).
     void collectFx(const Ram &ram) {
+        ViewScope vs(vctx);
         sprites.clear();
         fx.wide = wide;
         fx.collect(ram);
@@ -1592,7 +1637,8 @@ public:
         sn.shadows = shadows;
         sn.lights = lights_;
         sn.fog = fog_;
-        sn.cam = readGameCamera(ram, 0);
+        sn.cam = readGameCamera(ram, vctx.view);
+        sn.vctx = vctx;
         readScreenPolys(ram, sn.screenPolys);
         sn.g = g;
         sn.valid = true;
@@ -1631,6 +1677,7 @@ public:
         lights_ = s.lights;
         fog_ = s.fog;
         cam_ = s.cam;
+        vctx = s.vctx;
         eyeOk_ = s.cam.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = s.cam.pos[i];
         return s.cam;
@@ -1647,7 +1694,7 @@ public:
         constexpr uint32_t kFx = wotm::sym::fx, kStride = 12000u;
         FxView fog{};   // o VU1 descarta a particula toda na neblina (F < 1; Particles::setFog)
         float row3[4];
-        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(viewW2S() + 48 + 4 * k);
         Particles::setFog(ram, fog, row3, eye_);
         for (uint32_t i = 1; i < fxaddr::count && sprites.size() < 6000; ++i) {   // fx[100]: o VU1 desenha destroços em fx[98] e fx[99]
             const uint32_t b = kFx + i * kStride;
@@ -1781,7 +1828,7 @@ public:
             const float R[3] = {mv.m0, mv.m4, mv.m8}, U[3] = {mv.m1, mv.m5, mv.m9};
             for (int a = 0; a < 3; ++a) { v.R[a] = R[a]; v.U[a] = U[a]; v.eye[a] = eye[a]; }
             for (int r = 0; r < 4; ++r)
-                for (int k = 0; k < 4; ++k) v.M[r][k] = ram.f32(addr::worldToScreenMat + 16 * r + 4 * k);
+                for (int k = 0; k < 4; ++k) v.M[r][k] = ram.f32(viewW2S() + 16 * r + 4 * k);
             v.ok = Particles::screenFoci(v.M, v.fx, v.fy);
             return v;
         }
@@ -2239,7 +2286,7 @@ public:
         const bool useShader = !wire && alphaShader_.id > 0;
         if (useShader) {
             float row3[4];
-            for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+            for (int k = 0; k < 4; ++k) row3[k] = ram.f32(viewW2S() + 48 + 4 * k);
             const float params[3] = {fog_.fa, fog_.maxVal, fog_.fb};
             if (fogLoc_[0] >= 0) SetShaderValue(alphaShader_, fogLoc_[0], eye_, SHADER_UNIFORM_VEC3);
             if (fogLoc_[1] >= 0) SetShaderValue(alphaShader_, fogLoc_[1], row3, SHADER_UNIFORM_VEC4);
@@ -2265,6 +2312,7 @@ public:
     }
 
     void draw(const Ram &ram, bool wire = false) {
+        ViewScope vs(vctx);
         const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();   // o ceu e desenhado primeiro, sem profundidade
         drawList(ram, sky, wire);
@@ -2307,6 +2355,7 @@ public:
     // profundidade (como os icones de botao).
     void drawHp(const Ram &ram, bool wire = false) {
         if (hp.empty() && hpOverlay.empty()) return;
+        ViewScope vs(vctx);
         const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();
         drawList(ram, hp, wire, -1);
@@ -2348,7 +2397,7 @@ public:
     }
 
     static int alphaBin(const Ram &ram, const DrawItem &it) {
-        constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]: plano 0 em +0xF0, limiar em +0x120
+        const uint32_t w = viewCtxAddr();   // worldCtx[vista]: plano 0 em +0xF0, limiar em +0x120
         const M4 &m = it.m;
         float c[3], s2 = 0.f, z = -ram.f32(w + 0xF0 + 48);
         xform(m, ram.f32(it.node + 0x10), ram.f32(it.node + 0x14), ram.f32(it.node + 0x18), c);
@@ -2674,7 +2723,7 @@ public:
                     if (!envV.ok && eyeOk_) {
                         float W[4][4];
                         for (int r = 0; r < 4; ++r)
-                            for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(addr::worldToScreenMat + 16 * r + 4 * c);
+                            for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(viewW2S() + 16 * r + 4 * c);
                         envV = envView(ram, W, eye_);
                     }
                     for (int c = 0; c < 3; ++c) {
@@ -2823,7 +2872,9 @@ public:
     // Fades na ordem do GS: underText = true antes do texto (ShellRtLoop::endField despacha a fila do gsPkt antes do
     // fontDmaFontData: o dialogo de tokens sai sobre a tela escura), false por cima de tudo (rtMain manda a fila depois do texto;
     // uiFadeScreen sai depois do fontDmaFontData; Shell::FadeScreen). Retangulo da largura da tela do jogo cobre o quadro inteiro (em
-    // widescreen o fade escurece a janela toda); um menor fica na faixa 4:3 central, como o texto.
+    // widescreen o fade escurece a janela toda); um menor fica na faixa 4:3 central, como o texto. Na tela dividida (splitEdges) cada
+    // borda vale por si: o fade e as faixas de cinema de uma vista (0..320 ou 320..640) vao ate a borda da janela do lado dela.
+    bool splitEdges = false;
     void drawScreenRects(float rw, float rh, bool underText = false) const {
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sy = rh / 224.f;
@@ -2832,7 +2883,8 @@ public:
             const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
             if (!a) continue;
             const bool full = r.x0 <= 0.f && r.x1 >= 640.f;
-            const float x0 = full ? 0.f : gr.x0 + r.x0 * gr.w / 640.f, x1 = full ? rw : gr.x0 + r.x1 * gr.w / 640.f;
+            const bool left = full || (splitEdges && r.x0 <= 0.f), right = full || (splitEdges && r.x1 >= 640.f);
+            const float x0 = left ? 0.f : gr.x0 + r.x0 * gr.w / 640.f, x1 = right ? rw : gr.x0 + r.x1 * gr.w / 640.f;
             DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
         }
     }
@@ -3089,7 +3141,7 @@ private:
         PointLightList l;
         constexpr uint32_t pl = wotm::sym::pointLights;
         if (!ram.ok(pl, 0x8A0) || ram.u32(pl + 0x820) == 0) return l;
-        const uint32_t cs = ram.u32(addr::viewInfo);
+        const uint32_t cs = ram.u32(viewInfoAddr());
         if (!ram.ok(cs, 0x20)) return l;
         for (int a = 0; a < 3; ++a) l.eye[a] = ram.f32(cs + 0x10 + 4 * a);
         static const bool log = std::getenv("WOTM_PTLOG") != nullptr;
@@ -3195,16 +3247,17 @@ public:
         std::memcpy(ev.W, W, sizeof ev.W);
         std::memcpy(ev.eye, eye, sizeof ev.eye);
         float rl = 0.f, dl = 0.f;
+        const float ocx = curView().cx, ocy = curView().cy;   // centro da vista no GS (linha 0 = foco * direita + cx * frente)
         for (int a = 0; a < 3; ++a) {
-            ev.right[a] = W[0][a] - 2048.f * W[3][a];
-            ev.down[a] = W[1][a] - 2048.f * W[3][a];
+            ev.right[a] = W[0][a] - ocx * W[3][a];
+            ev.down[a] = W[1][a] - ocy * W[3][a];
             rl += ev.right[a] * ev.right[a];
             dl += ev.down[a] * ev.down[a];
         }
         if (!(rl > 0.f && dl > 0.f)) return ev;
         rl = std::sqrt(rl); dl = std::sqrt(dl);
         for (int a = 0; a < 3; ++a) { ev.right[a] /= rl; ev.down[a] /= dl; }
-        const uint32_t def = ram.u32(0x006E1904) & 0x0FFFFFFF;   // viewInfo[0].def
+        const uint32_t def = ram.u32(viewInfoAddr() + 4) & 0x0FFFFFFF;   // viewInfo[vista].def
         if (ram.ok(def, 0x18) && ram.u16(def + 4) && ram.u16(def + 6)) {
             ev.w = ram.u16(def + 4); ev.h = ram.u16(def + 6);
             ev.offX = ram.f32(def + 0x10); ev.offY = ram.f32(def + 0x14);
@@ -3410,9 +3463,10 @@ private:
             for (uint32_t i = 0; i < nvol && visible; ++i)
                 if (bspPoint(ram, ram.u32(node + 0x20 + 4 * i), eyeL) != 0x200) visible = false;
         } else {
-            const int nlos = std::min<int>(int(ram.u32(kLosPerView)), 2);   // vista 0
+            const uint32_t v = uint32_t(curView().view);
+            const int nlos = std::min<int>(int(ram.u32(kLosPerView + 4 * v)), 2);
             for (int k = 0; k < nlos && visible; ++k) {
-                const uint32_t pa = kLosPoints + 0x20 * 0 + 16 * k;
+                const uint32_t pa = kLosPoints + 0x20 * v + 16 * k;
                 const float len = ram.f32(pa + 12);
                 if (!(len > 0.f) || len > 1e6f) continue;
                 const float pw[3] = {eye_[0] + ram.f32(pa) * len, eye_[1] + ram.f32(pa + 4) * len, eye_[2] + ram.f32(pa + 8) * len};

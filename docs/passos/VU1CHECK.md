@@ -46,7 +46,6 @@ Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; 
 <summary>Em aberto</summary>
 
 **Inventário do port (o que a checagem diz que falta ou sobra; refaça com `tools\corpus.ps1 -Check` e as linhas `inv` do `menus.vu1snap` e das lutas):**
-- **Separador da tela dividida** (`Hud::dmaPacket`/`buildSeparator`, PATH3): só monta pacote com a tela dividida (`viewGetScreenDisplay` != 0, dois jogadores): uma faixa preta opaca (SPRITE sem ABE, cor 0/0/0/0x80) entre as vistas, pela fila do `gsPkt`. O nativo não tem tela dividida; fica para quando tiver (o `readScreenRect` recusa SPRITE sem ABE).
 
 **Bugs vistos jogando (relatos do dono desde 2026-10-16; os fechados saem da lista):**
 - (nenhum aberto)

@@ -32,7 +32,7 @@ extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
-void wotmCaptureScene(const uint8_t *rdram);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(0, 0)
+void wotmCaptureScene(const uint8_t *rdram, int view);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(v, 0)
 void wotmVu1SceneExit(const uint8_t *rdram);   // wotm_vu1check.inc: registro 'S' do instantaneo, no mesmo ponto
 void wotmFlareCapture(const uint8_t *rdram);   // wotm_live.inc: lens flare projetado e testado
 void wotmThreeMileFlash(const uint8_t *rdram);   // wotm_live.inc: clarao branco da usina da 3-MILE
@@ -180,6 +180,9 @@ namespace
     constexpr int kMatchMaxAIs = 7;
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
+    // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
+    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA.
+    int g_matchPlayers = 1;
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
@@ -189,26 +192,33 @@ namespace
             WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel (4 jogadores + ate 12 IAs, ate 0x2978)
         for (uint32_t i = 0; i < 12; ++i)
             WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume (ate 0x2C10, onde mora m_mode)
-        for (int i = 0; i <= g_matchAIs; ++i)
+        for (int i = 0; i < g_matchPlayers + g_matchAIs; ++i)
         {
             uint32_t costume = 0;
             for (int j = 0; j < i; ++j)
                 costume += g_matchMonsters[j] == g_matchMonsters[i];
-            const uint32_t slot = i ? 4u + (i - 1) : 0u, costumeSlot = i ? 2u + (i - 1) : 0u;
+            const bool player = i < g_matchPlayers;
+            const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
+            const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
             WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
         }
         WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
-        WRITE32(kShell + 0x2BB4, 1);                                      // m_numPlayers
+        WRITE32(kShell + 0x2BB4, static_cast<uint32_t>(g_matchPlayers));  // m_numPlayers
         WRITE32(kShell + 0x2BB8, static_cast<uint32_t>(g_matchAIs));     // m_numAIs
         for (uint32_t i = 0; i < 4; ++i)
             WRITE32(kShell + 0x2BBC + 4 * i, 3);                         // m_lives
-        WRITE32(kShell + 0x2C10, 2);                                      // m_mode: free for all
-        WRITE32(kGame + 0x1203C8, 2);                                     // TheGame::m_gameMode
-        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s) %s", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "",
-                     g_matchAIs ? "contra" : "sozinho");
-        for (int i = 1; i <= g_matchAIs; ++i)
+        // m_mode: free for all de 1 jogador (2) ou batalha multijogador (3: o TheGame::gameReestablishViews cria as duas vistas da tela
+        // dividida nos modos 3, 6 e 7; com o 2 a luta ficava numa vista so e as cenas de cinema, que alternam a divisao, a ligavam)
+        const uint32_t mode = g_matchPlayers > 1 ? 3u : 2u;
+        WRITE32(kShell + 0x2C10, mode);
+        WRITE32(kGame + 0x1203C8, mode);                                  // TheGame::m_gameMode
+        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s)", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
+        if (g_matchPlayers > 1)
+            std::fprintf(stderr, " e %d (jogador 2)", g_matchMonsters[1]);
+        std::fprintf(stderr, " %s", g_matchAIs ? "contra" : (g_matchPlayers > 1 ? "sem IA" : "sozinho"));
+        for (int i = g_matchPlayers; i < g_matchPlayers + g_matchAIs; ++i)
             std::fprintf(stderr, " %d", g_matchMonsters[i]);
         std::fprintf(stderr, "%s, fase %d\n", g_matchAIs ? " (IA)" : "", g_matchLevel);
         SET_GPR_S32(ctx, 2, 0);
@@ -876,24 +886,32 @@ namespace
     }
 
     // Saida do hier(0, 0): o desenho nativo copia a cena aqui (wotmCaptureScene), com o estado que a travessia acabou de mandar ao
-    // VU1; o gameUpdate e o animationRunGlobal do rtMain, logo depois, ja escrevem o quadro seguinte.
+    // VU1; o gameUpdate e o animationRunGlobal do rtMain, logo depois, ja escrevem o quadro seguinte. Na tela dividida a vista 1 sai
+    // do mesmo jeito na saida do hier(1, 0) (reserva: entrada do TheGame::Update2, que o rtMain chama logo depois so na vista 1).
     constexpr uint32_t kHier = wotm::fn::hier__Fii;
     PS2Runtime::RecompiledFunction g_origHier = nullptr;
 
     // A funcao pode voltar no meio (troca de thread) e ser retomada depois, ja sem passar por aqui: so captura quando o pc chega ao
     // $ra da chamada. Quando a volta escapa (60% dos quadros da luta), a captura sai na entrada do TheGame::Update, que o rtMain chama
     // logo depois (so o RtLoopView::end no meio). Sem essa reserva a cena saia do fim do quadro, um quadro a frente do lens flare.
-    uint32_t g_hierSceneRa = 0;   // $ra do hier(0, 0) em andamento (0 = nenhum)
+    uint32_t g_hierSceneRa = 0;   // $ra do hier(v, 0) em andamento (0 = nenhum)
+    int g_hierSceneView = 0;      // a vista dele
     void hierSceneExit(uint8_t *rdram)
     {
         g_hierSceneRa = 0;
-        wotmCaptureScene(rdram);
-        wotmVu1SceneExit(rdram);
+        wotmCaptureScene(rdram, g_hierSceneView);
+        if (g_hierSceneView == 0)
+            wotmVu1SceneExit(rdram);
     }
     void hierTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == kHier && GPR_U32(ctx, 4) == 0u && GPR_U32(ctx, 5) == 0u)
+        if (ctx->pc == kHier && GPR_U32(ctx, 4) < 2u && GPR_U32(ctx, 5) == 0u)
+        {
+            if (g_hierSceneRa)   // a saida do anterior escapou sem reserva: captura antes de comecar este
+                hierSceneExit(rdram);
             g_hierSceneRa = GPR_U32(ctx, 31);
+            g_hierSceneView = static_cast<int>(GPR_U32(ctx, 4));
+        }
         g_origHier(rdram, ctx, runtime);
         if (g_hierSceneRa && ctx->pc == g_hierSceneRa)
             hierSceneExit(rdram);
@@ -919,6 +937,14 @@ namespace
         if (ctx->pc == kTheGameUpdate && g_hierSceneRa)
             hierSceneExit(rdram);
         g_origTheGameUpdate(rdram, ctx, runtime);
+    }
+    constexpr uint32_t kTheGameUpdate2 = wotm::fn::Update2__7TheGame;
+    PS2Runtime::RecompiledFunction g_origTheGameUpdate2 = nullptr;
+    void theGameUpdate2Tapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTheGameUpdate2 && g_hierSceneRa)
+            hierSceneExit(rdram);
+        g_origTheGameUpdate2(rdram, ctx, runtime);
     }
 
     // Tom verde do pick-up que o monstro pode pegar: o enableHighlights o grava no colorQuad do _cs antes do hier(v,0), e o
@@ -1754,6 +1780,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kHier, &hierTapped);
     if (g_origHier && (g_origTheGameUpdate = runtime.lookupFunction(kTheGameUpdate)))
         runtime.registerFunction(kTheGameUpdate, &theGameUpdateTapped);
+    if (g_origHier && (g_origTheGameUpdate2 = runtime.lookupFunction(kTheGameUpdate2)))
+        runtime.registerFunction(kTheGameUpdate2, &theGameUpdate2Tapped);
     if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
@@ -1771,10 +1799,12 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 break;
             }
         }
-        if (p && *p == '\0' && n >= 2)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
+        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) == 2)
+            g_matchPlayers = 2;
+        if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
-            g_matchAIs = n - 2;
-            for (int i = 0; i <= g_matchAIs; ++i)
+            g_matchAIs = n - 1 - g_matchPlayers;
+            for (int i = 0; i < n - 1; ++i)
                 g_matchMonsters[i] = v[i];
             g_matchLevel = v[n - 1];
         }
@@ -1784,7 +1814,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             runtime.registerFunction(kUiMain, &uiMainSkipped);
             if ((g_origEvaluate = runtime.lookupFunction(kEvaluateGameStatus)))
                 runtime.registerFunction(kEvaluateGameStatus, &evaluateGameStatusLogged);
-            std::fprintf(stderr, "[wotm] partida direta: monstro %d contra %d IA(s), fase %d (WOTM_MATCH)\n", g_matchMonsters[0], g_matchAIs, g_matchLevel);
+            std::fprintf(stderr, "[wotm] partida direta: %d jogador(es), monstro %d, %d IA(s), fase %d (WOTM_MATCH)\n", g_matchPlayers,
+                         g_matchMonsters[0], g_matchAIs, g_matchLevel);
         }
         else
             std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[,<IA>...ate 7],<fase>)\n", e);

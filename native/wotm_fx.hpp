@@ -128,8 +128,9 @@ inline unsigned gsWhiteTexture() {
 // (Hor+: o FOV vertical do jogo fica, a largura cresce) as sobras sao as laterais; o que o jogo poe em pixels do GS (texto, lens
 // flare, quadro anterior) fica nessa faixa.
 struct GsScreenRect { float x0, w, h; };
+// Na tela dividida (ViewScope de uma vista de 320 x 224) a faixa e a da vista: 2:3 no quadro da metade.
 inline GsScreenRect gsScreenRect(float fbw, float fbh) {
-    const float w = std::min(fbw, fbh * 4.f / 3.f);
+    const float w = std::min(fbw, fbh * curView().aspect());
     return {(fbw - w) * 0.5f, w, fbh};
 }
 
@@ -253,7 +254,7 @@ public:
     // vf29 = fovNorms1 . (centro + eo) contra -raio, o plano 1.z com o farClip da memoria 0 do VU0, como o fovNormsTP[1][3][2]).
     // Planos unitarios; o termo sum |n_k| e_k e o fovSigns do jogo.
     static bool inViewVolume(const Ram &ram, const float c[3], const float e[3], float r, float wide = 1.f) {
-        constexpr uint32_t w = wotm::sym::worldCtx;   // worldCtx[0]
+        const uint32_t w = viewCtxAddr();   // worldCtx[vista]
         const bool ws = wide > 1.001f;
         for (uint32_t i = 0; i < 2; ++i)
             for (uint32_t j = 0; j < 3; ++j) {
@@ -266,14 +267,14 @@ public:
         if (!ws) return true;
         // X = (M0 . d) / (M3 . d), d = (p - olho, 1). Dentro da borda direita: X - 2048 <= h  <=>  (h M3 - (M0 - 2048 M3)) . d >= 0;
         // esquerda com o sinal trocado. Para a caixa, o canto mais favoravel: n . (c - olho) + n3 + sum |n_k| e_k >= 0.
-        constexpr uint32_t kW2S = wotm::sym::worldToScreenMat;
+        const uint32_t kW2S = viewW2S();
         float M0[4], M3[4], eye[3];
         for (int k = 0; k < 4; ++k) { M0[k] = ram.f32(kW2S + 4 * k); M3[k] = ram.f32(kW2S + 48 + 4 * k); }
         for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(w + 0x20 + 4 * k);   // worldCtx[0].eo = -olho
-        const float h = 320.f * wide;
+        const float h = 0.5f * curView().w * wide, xc = curView().cx;   // meia-largura e centro da vista no GS
         for (float sgn : {1.f, -1.f}) {
             float n[4];
-            for (int k = 0; k < 4; ++k) n[k] = h * M3[k] - sgn * (M0[k] - 2048.f * M3[k]);
+            for (int k = 0; k < 4; ++k) n[k] = h * M3[k] - sgn * (M0[k] - xc * M3[k]);
             float d = n[3] + r * std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
             for (int k = 0; k < 3; ++k) d += n[k] * (c[k] - eye[k]) + std::fabs(n[k]) * e[k];
             if (!(d >= 0.f)) return false;
@@ -330,7 +331,7 @@ public:
     // len = |B/w - A/w| na tela (Y escalado por fx/fy, vf24z) e K = 4 vf27x pos.w / B.w = 2 fx pos.w / B.w (vf27x = fx / 2; medido contra
     // o VU1 na foto 2026-10-17_200206): rastro longo fica mais fraco.
     static bool striteTriangle(const Ram &ram, uint32_t b, const float p[4], const float v[3], float c[4][3], float *alphaK = nullptr) {
-        constexpr uint32_t kW2S = wotm::sym::worldToScreenMat, kEo = wotm::sym::worldCtx + 0x20;   // worldToScreenMat[0], worldCtx[0].eo (= -olho)
+        const uint32_t kW2S = viewW2S(), kEo = viewCtxAddr() + 0x20;   // worldToScreenMat[vista], worldCtx[vista].eo (= -olho)
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
@@ -386,7 +387,7 @@ public:
     //    alfa < 1. A cauda leva o RGB com alfa 0.
     // Conferido na checagem (ultrav_corda2: cauda a 0,05 px do VU1 no ajuste offline).
     static bool lineVu(const Ram &ram, uint32_t b, const FxView &view, int i, float head[3], float tail[3], uint32_t &col) {
-        constexpr uint32_t kW2S = wotm::sym::worldToScreenMat, kEo = wotm::sym::worldCtx + 0x20;
+        const uint32_t kW2S = viewW2S(), kEo = viewCtxAddr() + 0x20;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel);
         if (!ram.ok(pos + 16 * uint32_t(i), 16) || !ram.ok(vel + 16 * uint32_t(i), 16)) return false;
         float p[4], v[4], wind[3], P[16], M[4][4], eye[3];
@@ -514,21 +515,29 @@ public:
     // A copia vale so para o quadro do particleDraw que a fez (fresh; o wotmCaptureFrame a consome com consumeFlares). Quadro sem
     // particleDraw (menu, tela de carregamento) sai sem flares, como no PS2, onde o pacote so existe se o particleDraw o montou; antes
     // a lista da ultima luta voltava na tela LOAD seguinte (luz verde/vermelha no centro na entrada da partida).
+    // Uma copia por vista (lensFlareIndex/lensFlarePacket[vista]; na tela dividida o particleDraw(1) refaz a lista da vista 1). O
+    // captureFlares roda dentro do particleDraw da vista (viewCurView); a coleta pega a da vista corrente (curView).
     struct FlareSlot { std::mutex m; FlareFrame f; bool used = false, fresh = false; };
-    static FlareSlot &flareSlot() { static FlareSlot s; return s; }
+    static FlareSlot &flareSlot(int view = curView().view) { static FlareSlot s[2]; return s[view == 1 ? 1 : 0]; }
     static void captureFlares(const Ram &ram) {
+        const int v = ram.u32(wotm::sym::viewCurView) == 1u ? 1 : 0;
         FlareFrame f;
-        readFlares(ram, f);
-        FlareSlot &s = flareSlot();
+        {
+            ViewScope vs(readViewCtx(ram, v));
+            readFlares(ram, f);
+        }
+        FlareSlot &s = flareSlot(v);
         std::lock_guard<std::mutex> g(s.m);
         s.f = std::move(f);
         s.used = true;
         s.fresh = true;
     }
     static void consumeFlares() {
-        FlareSlot &s = flareSlot();
-        std::lock_guard<std::mutex> g(s.m);
-        s.fresh = false;
+        for (int v = 0; v < 2; ++v) {
+            FlareSlot &s = flareSlot(v);
+            std::lock_guard<std::mutex> g(s.m);
+            s.fresh = false;
+        }
     }
     void resetFlareDebounce() { flarePrev_.clear(); }
 
@@ -605,7 +614,9 @@ public:
     }
 
     static void readFlares(const Ram &ram, FlareFrame &f) {
-        constexpr uint32_t kIndex = wotm::sym::lensFlareIndex, kPacket = wotm::sym::lensFlarePacket, kViewDef = 0x006E1904u, kScreenMats = wotm::sym::viewScreenMats;
+        const uint32_t v = uint32_t(curView().view == 1 ? 1 : 0);   // lensFlareIndex/lensFlarePacket tem 2 entradas
+        const uint32_t kIndex = wotm::sym::lensFlareIndex + 4 * v, kPacket = wotm::sym::lensFlarePacket + 4 * v, kViewDef = viewInfoAddr() + 4,
+                       kScreenMats = wotm::sym::viewScreenMats + 0x40 * v;
         f.e.clear();
         f.nspr = 0;
         const uint32_t p = ram.u32(kPacket);
@@ -857,7 +868,7 @@ public:
         FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14},
                     {mv.m0, mv.m4, mv.m8, mv.m12}, {mv.m1, mv.m5, mv.m9, mv.m13}};
         float row3[4];
-        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(addr::worldToScreenMat + 48 + 4 * k);
+        for (int k = 0; k < 4; ++k) row3[k] = ram.f32(viewW2S() + 48 + 4 * k);
         setFog(ram, view, row3, eye);
         // particleDraw: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec + vis.priority; opacos (alpha 0) antes
         for (FxSystem &s : systems) {
@@ -1060,8 +1071,8 @@ public:
         // banda de recorte do VU1 na tela do GS (worldToScreenMat com o olho, como o striteTriangle)
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
-            for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(addr::worldToScreenMat + 16 * uint32_t(r) + 4 * uint32_t(k));
-        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(wotm::sym::worldCtx + 0x20 + 4 * uint32_t(k));   // worldCtx[0].eo = -olho
+            for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(viewW2S() + 16 * uint32_t(r) + 4 * uint32_t(k));
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(viewCtxAddr() + 0x20 + 4 * uint32_t(k));   // worldCtx[vista].eo = -olho
         auto outOfBand = [&](const float c[3]) {
             const float d[3] = {c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]};
             float h[4];
