@@ -7,14 +7,18 @@
 //   com dois, sobra).
 //   Escolha de lados do 2 jogadores (wotm_padsel.inc): enquanto g_manual, a porta 0 e a 1 recebem so os dispositivos que os
 //   jogadores puseram de cada lado (g_manualDevs, mesmos bits do mapa); os que ficaram no meio nao jogam.
+//   3 e 4 jogadores (WOTM_PLAYERS, wotm_split4.inc): o scePadRead do slot 1 de uma porta (jogadores 3 e 4) chega aqui com a porta
+//   do slot 0 e g_portBase 2; o jogador e porta + base, com o controle de mesma ordem.
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
 static std::atomic<uint32_t> g_manualDevs[2] = {0u, 0u};
+static std::atomic<int> g_portBase{0};
 
 static uint32_t deviceMap(int port)
 {
     static const bool kbSeparate = [] { const char *e = std::getenv("WOTM_KBSEPARATE"); return e && e[0] == '1'; }();
+    port += g_portBase.load(std::memory_order_relaxed);
     int pads[PS2_PAD_MAX_GAMEPADS];
     int n = 0;
     for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
@@ -32,9 +36,9 @@ static uint32_t deviceMap(int port)
             devs |= PS2_PAD_DEV_KEYBOARD;
     }
 
-    // uma linha por porta quando o que a alimenta muda (inicio, controle plugado ou desplugado)
-    static uint32_t last[2] = {~0u, ~0u};
-    if (port >= 0 && port < 2 && devs != last[port])
+    // uma linha por jogador quando o que o alimenta muda (inicio, controle plugado ou desplugado)
+    static uint32_t last[4] = {~0u, ~0u, ~0u, ~0u};
+    if (port >= 0 && port < 4 && devs != last[port])
     {
         last[port] = devs;
         std::string what;
@@ -50,3 +54,5 @@ static uint32_t deviceMap(int port)
 
 static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, true);
 }
+
+void wotmPadSetPortBase(int base) { wotm_pad::g_portBase.store(base, std::memory_order_relaxed); }

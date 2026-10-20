@@ -300,7 +300,7 @@ struct State
 {
     wotm::Scene scene;
     RenderTexture2D rts[2]{};   // alternadas: a do quadro anterior e a textura do texId 0 (o jogo amostra o buffer em exibicao)
-    RenderTexture2D vrts[2]{};  // tela dividida: uma por vista (metade do quadro), compostas em rts[cur]
+    RenderTexture2D vrts[4]{};  // tela dividida: uma por vista (metade ou quadrante do quadro), compostas em rts[cur]
     int cur = 0;
     uint32_t levelSig = 0;
     bool rtxChosen = false;
@@ -561,15 +561,15 @@ void wotmLoadFreeze(bool on)
     }
 }
 
-// Saida do LevelPickups::enableHighlights (thread do EE): anota o colorQuad do _cs do pick-up destacado de cada um dos dois
-// primeiros monstros (highlightList[monstro+0x28] -> no -> Pickup -> cs +0xC). Os dois de uma vez porque, na tela dividida, a
+// Saida do LevelPickups::enableHighlights (thread do EE): anota o colorQuad do _cs do pick-up destacado de cada um dos jogadores
+// (os 4 primeiros m_monsters; highlightList[monstro+0x28] -> no -> Pickup -> cs +0xC). Todos de uma vez porque, na tela dividida, a
 // chamada de um jogador devolve o pick-up do outro a 1; o ultimo valor ganha.
 void wotmPickupHighlights(const uint8_t *rdram)
 {
     if (!rdram)
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
-    for (uint32_t j = 0; j < 2; ++j)
+    for (uint32_t j = 0; j < 4; ++j)
     {
         const uint32_t m = ram.u32(wotm::sym::shellGame + 0x120380 + 4 * j) & 0x1FFFFFFFu;   // m_monsters[j]
         if (!ram.ok(m, 0x2C))
@@ -636,10 +636,12 @@ void wotmTheGameFade(const uint8_t *rdram, uint32_t self)
         return;
     const uint32_t level = ram.u32(self + 0x120450);
     const int views = int32_t(ram.u32(g + 0x1203D8));
+    // com os quadrantes (3 e 4 jogadores) o cinema sai em todas as vistas (wotm_split4.inc), entao o fade tambem
+    const bool quad = wotm::readViewCtx(ram, 0).h < 224.f;
     for (int v = 0; v < views && v < 5;)
     {
         wotmFadeView(rdram, v, level, true);
-        if (++v >= views || ram.u32(wotm::sym::moviePlaying) != 0 || ram.u32(wotm::sym::gUseUnifiedView) != 0)
+        if (++v >= views || (ram.u32(wotm::sym::moviePlaying) != 0 && !quad) || ram.u32(wotm::sym::gUseUnifiedView) != 0)
             break;
     }
 }
@@ -690,30 +692,61 @@ void wotmFontGlyph(const uint8_t *rdram, int font, int ch)
     if (rdram) wotm_live::g_font.glyph(wotm::Ram{rdram, PS2_RAM_SIZE}, font, ch);
     if (font == 0 || font == 1) g_lastFontIdx = font;
 }
-// Tela dividida: o rtMain manda o texto de cada vista no seu fontDmaFontData (vista 0, depois 1). O publicado e o das duas: a vista 0
-// sai com o ultimo texto da 1 (um quadro atras ate a 1 mandar o dela), assim a apresentacao nunca pega so metade do HUD.
+// Tela dividida: o rtMain manda o texto de cada vista no seu fontDmaFontData (vista 0, depois 1, e 2 e 3 com 3 e 4 jogadores). O
+// publicado e o de todas: a vista 0 sai com o ultimo texto das outras (um quadro atras ate cada uma mandar o dela), assim a
+// apresentacao nunca pega so parte do HUD. Uma vista que nao mandou texto desde a 0 anterior (dialogo: so a 0) fica sem.
 void wotmFontDma(const uint8_t *rdram)
 {
     std::vector<wotm::TextQuad> q;
     if (!rdram || !wotm_live::g_font.sent(wotm::Ram{rdram, PS2_RAM_SIZE}, q))
         return;
-    static std::vector<wotm::TextQuad> text0, text1;   // ultimo texto de cada vista (tela dividida)
-    static bool got1 = false;                          // a vista 1 mandou texto desde o ultimo da 0 (sem ela: dialogo, so a 0)
+    static std::vector<wotm::TextQuad> text[4];   // ultimo texto de cada vista (tela dividida)
+    static unsigned sentSince0 = 0;               // bits: vistas que mandaram texto desde o ultimo da 0
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     const uint32_t view = ram.u32(wotm::sym::viewCurView);
-    if (!wotm::readViewCtx(ram, 0).full() && view < 2)
+    // Quadrantes (3 e 4 jogadores): o Hud poe o texto como numa vista de 224 linhas, a partir do topo do quadrante (a fonte soma a
+    // origem da vista). O que cai na metade de baixo dessa vista (o "WINS" em y 200) sobe 224 - h, para o pe do proprio quadrante,
+    // sem mudar de tamanho. So quando as outras vistas tambem mandam texto (laco do rtMain): o dialogo de pausa sai so pela vista 0,
+    // com a tela inteira.
+    static const bool splitLog = std::getenv("WOTM_SPLITLOG") != nullptr;
+    static unsigned textLogN = 0;
+    if (splitLog && view < 4 && ++textLogN % 240 < 4)
+        std::fprintf(stderr, "[split] texto vista %u: %zu glifos\n", view, q.size());
+    static bool multi = false;
+    if (view == 0)
+        multi = (sentSince0 & ~1u) != 0;
+    else if (view < 4)
+        multi = true;
+    if (multi && view < 4)
+        if (const wotm::ViewCtx vc = wotm::readViewCtx(ram, int(view)); vc.h < 224.f)
+        {
+            const float top = vc.cy - 2048.f + 112.f - 0.5f * vc.h;
+            for (wotm::TextQuad &t : q)
+                if (std::min(t.y0, t.y1) - top >= vc.h)
+                {
+                    t.y0 -= 224.f - vc.h;
+                    t.y1 -= 224.f - vc.h;
+                }
+        }
+    if (!wotm::readViewCtx(ram, 0).full() && view < 4)
     {
-        if (view == 0 && !got1)
-            text1.clear();
-        got1 = view == 1;
-        (view ? text1 : text0) = q;
-        q = text0;
-        q.insert(q.end(), text1.begin(), text1.end());
+        if (view == 0)
+        {
+            for (int v = 1; v < 4; ++v)
+                if (!(sentSince0 & (1u << v)))
+                    text[v].clear();
+            sentSince0 = 0;
+        }
+        sentSince0 |= 1u << view;
+        text[view] = q;
+        q = text[0];
+        for (int v = 1; v < 4; ++v)
+            q.insert(q.end(), text[v].begin(), text[v].end());
     }
     else
     {
-        text0.clear();
-        text1.clear();
+        for (auto &t : text)
+            t.clear();
     }
     std::lock_guard<std::mutex> lk(wotm_live::g_textM);
     wotm_live::g_textSent.swap(q);
@@ -763,7 +796,7 @@ void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0,
 float wotmHealthIconShift(const uint8_t *rdram, float rx)
 {
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
-    g_barView = ram.u32(wotm::sym::viewCurView) == 1u ? 1 : 0;
+    g_barView = static_cast<int>(std::min<uint32_t>(ram.u32(wotm::sym::viewCurView), 3u));
     const wotm::ViewCtx vc = wotm::readViewCtx(ram, g_barView);
     const float wide = std::max(1.f, wotm_live::capture().wide.load(std::memory_order_relaxed));
     if (!std::isfinite(rx)) return 0.f;
@@ -821,23 +854,25 @@ void wotmShellFadeStepDone()
 // flares, o texto e os fades continuam no fim do quadro (wotmCaptureFrame): o particleDraw do PS2 vem depois do gameUpdate.
 // Tela dividida (dois jogadores, viewToggleSplitScreen: vistas 0 e 1 lado a lado, 320 x 224 cada): o rtMain roda o hier(v, 0) de
 // cada vista no mesmo quadro (a vista 1 ja com o gameUpdate da 0 aplicado). Cada uma sai na saida do seu hier, com a camera, o corte
-// e o ceu dela (Scene::vctx); a da vista 1 vai no instantaneo da 0 (Snapshot::view1). No agarrao (gUseUnifiedView) a vista 0 vira a
-// tela cheia de novo (viewGrappleConfig, viewport 5) e a apresentacao volta a uma vista so.
+// e o ceu dela (Scene::vctx); as vistas 1 a 3 vao no instantaneo da 0 (Snapshot::views). Com 3 e 4 jogadores (wotm_split4.inc) sao
+// 3 ou 4 vistas em quadrantes de 320 x 112. No agarrao (gUseUnifiedView) a vista 0 vira a tela cheia de novo (viewGrappleConfig,
+// viewport 5) e a apresentacao volta a uma vista so.
 namespace wotm_live
 {
+constexpr int kMaxViews = 4;
 static wotm::Scene &captureScene(int view = 0)
 {
-    static wotm::Scene cap[2];   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
-    return cap[view == 1 ? 1 : 0];
+    static wotm::Scene cap[kMaxViews];   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
+    return cap[std::clamp(view, 0, kMaxViews - 1)];
 }
-static wotm::Snapshot g_sceneSnap[2];   // cena do ultimo hier(v, 0) ainda nao publicada (thread do EE)
-static bool g_sceneFresh[2] = {false, false};
+static wotm::Snapshot g_sceneSnap[kMaxViews];   // cena do ultimo hier(v, 0) ainda nao publicada (thread do EE)
+static bool g_sceneFresh[kMaxViews] = {};
 }
 
 void wotmCaptureScene(const uint8_t *rdram, int view)
 {
     wotm_live::Capture &c = wotm_live::capture();
-    if (!rdram || !c.on.load(std::memory_order_relaxed) || view < 0 || view > 1)
+    if (!rdram || !c.on.load(std::memory_order_relaxed) || view < 0 || view >= wotm_live::kMaxViews)
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     const uint32_t wc = ram.u32(wotm::addr::world);
@@ -848,10 +883,14 @@ void wotmCaptureScene(const uint8_t *rdram, int view)
     cap.vctx = wotm::readViewCtx(ram, view);
     static const bool splitLog = std::getenv("WOTM_SPLITLOG") != nullptr;   // diagnostico: vista capturada e geometria dela
     if (splitLog)
-        std::fprintf(stderr, "[split] g=%u vista %d: def %08x viewport %d centro %.0f,%.0f tamanho %.0fx%.0f views=%u unificada=%u\n",
+    {
+        const wotm::GameCamera gc = wotm::readGameCamera(ram, view);
+        std::fprintf(stderr, "[split] g=%u vista %d: def %08x viewport %d centro %.0f,%.0f tamanho %.0fx%.0f views=%u unificada=%u camera %d em %.0f,%.0f,%.0f fovy %.1f\n",
                      ram.u32(wotm::sym::g_frame), view, ram.u32(wotm::addr::viewInfo + 0x14u * uint32_t(view) + 4),
                      static_cast<int32_t>(ram.u32(wotm::addr::viewInfo + 0x14u * uint32_t(view) + 8)), cap.vctx.cx, cap.vctx.cy, cap.vctx.w,
-                     cap.vctx.h, ram.u32(wotm::sym::viewNumViews), ram.u32(wotm::sym::gUseUnifiedView));
+                     cap.vctx.h, ram.u32(wotm::sym::viewNumViews), ram.u32(wotm::sym::gUseUnifiedView), gc.ok, gc.pos[0], gc.pos[1], gc.pos[2],
+                     gc.fovy);
+    }
     cap.csColorAtDraw = wotm_live::g_pendingCsColor;   // tom do pick-up gravado pelo enableHighlights deste quadro (o mesmo da RAM agora)
     cap.collect(ram);
     wotm_live::g_sceneSnap[view] = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
@@ -865,8 +904,8 @@ void wotmCaptureFadeStep(const uint8_t *rdram)
 {
     if (!wotm_live::g_sceneFresh[0] || wotm_live::g_loadFreeze.load(std::memory_order_relaxed))
         return;
-    wotm_live::g_sceneFresh[0] = false;
-    wotm_live::g_sceneFresh[1] = false;
+    for (bool &f : wotm_live::g_sceneFresh)
+        f = false;
     wotm_live::Capture &c = wotm_live::capture();
     if (!rdram || !c.on.load(std::memory_order_relaxed))
         return;
@@ -898,9 +937,11 @@ void wotmCaptureFrame(const uint8_t *rdram)
     csColor.swap(wotm_live::g_pendingCsColor);
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
     const bool haveScene = wotm_live::g_sceneFresh[0];
-    const bool haveView1 = haveScene && wotm_live::g_sceneFresh[1];
-    wotm_live::g_sceneFresh[0] = false;
-    wotm_live::g_sceneFresh[1] = false;
+    bool haveView[wotm_live::kMaxViews] = {};   // vistas 1 a 3 deste quadro (tela dividida)
+    for (int v = 1; v < wotm_live::kMaxViews; ++v)
+        haveView[v] = haveScene && wotm_live::g_sceneFresh[v];
+    for (bool &f : wotm_live::g_sceneFresh)
+        f = false;
     if (!rdram || !c.on.load(std::memory_order_relaxed) || wotm_live::g_loadFreeze.load(std::memory_order_relaxed))
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
@@ -910,7 +951,8 @@ void wotmCaptureFrame(const uint8_t *rdram)
     wotm::Scene &cap = wotm_live::captureScene();
     cap.wide = c.wide.load(std::memory_order_relaxed);
     wotm::Snapshot sn;
-    std::vector<wotm::FxSystem> fxAll;   // sistemas das duas vistas (uma copia de sombra so)
+    std::vector<wotm::FxSystem> fxAll;   // sistemas de todas as vistas (uma copia de sombra so)
+    bool split = false;
     if (haveScene) {   // cena do hier(0, 0) deste quadro; particulas de agora
         sn = std::move(wotm_live::g_sceneSnap[0]);
         cap.vctx = sn.vctx;
@@ -920,23 +962,26 @@ void wotmCaptureFrame(const uint8_t *rdram)
         sn.sprites = cap.sprites;
         sn.screenPolys.clear();   // os quadrados do quadro chegam pelo gancho do polyBuildPrim (polys)
         sn.g = ram.u32(wotm::sym::g_frame);
-        if (haveView1 && !sn.vctx.full()) {   // tela dividida: vista 1 com as particulas cortadas pela vista dela
-            auto v1 = std::make_shared<wotm::Snapshot>(std::move(wotm_live::g_sceneSnap[1]));
-            wotm::Scene &cap1 = wotm_live::captureScene(1);
-            cap1.wide = cap.wide;
-            cap1.vctx = v1->vctx;
-            cap1.collectFx(ram);
-            v1->fx = cap1.fx.systems;
-            v1->flares = cap1.fx.flares;
-            v1->sprites = cap1.sprites;
-            v1->screenPolys.clear();
-            v1->screenRects.clear();
-            v1->g = sn.g;
-            fxAll = sn.fx;
-            for (const wotm::FxSystem &s : v1->fx)
+        fxAll = sn.fx;
+        for (int v = 1; v < wotm_live::kMaxViews && !sn.vctx.full(); ++v) {   // tela dividida: cada vista com as particulas cortadas pela dela
+            if (!haveView[v])
+                continue;
+            auto vs = std::make_shared<wotm::Snapshot>(std::move(wotm_live::g_sceneSnap[v]));
+            wotm::Scene &capv = wotm_live::captureScene(v);
+            capv.wide = cap.wide;
+            capv.vctx = vs->vctx;
+            capv.collectFx(ram);
+            vs->fx = capv.fx.systems;
+            vs->flares = capv.fx.flares;
+            vs->sprites = capv.sprites;
+            vs->screenPolys.clear();
+            vs->screenRects.clear();
+            vs->g = sn.g;
+            for (const wotm::FxSystem &s : vs->fx)
                 if (std::none_of(fxAll.begin(), fxAll.end(), [&](const wotm::FxSystem &e) { return e.base == s.base; }))
                     fxAll.push_back(s);
-            sn.view1 = std::move(v1);
+            sn.views[v - 1] = std::move(vs);
+            split = true;
         }
     } else {   // quadro sem hier(0, 0) (filme, carga): tudo de agora, como antes
         cap.csColorAtDraw = std::move(csColor);
@@ -948,14 +993,15 @@ void wotmCaptureFrame(const uint8_t *rdram)
     // posicoes, idades e pacotes das particulas deste instante: a apresentacao desenha depois, com o particleMove seguinte ja
     // rodando (contagem do instantaneo com dados vivos = o fecho do pacote lido como particula; 09_magmo_impacto.md)
     // tela dividida: a matriz de cada vista no particleDraw anterior (viewPrevMat ja tem a deste quadro; a de antes fica guardada aqui)
-    static float prevMats[2][16];
+    static float prevMats[wotm_live::kMaxViews][16];
     static bool havePrev = false;
-    sn.fxRam = wotm::Particles::shadowRam(ram, sn.view1 ? fxAll : sn.fx, sn.view1 && havePrev ? &prevMats[0][0] : nullptr);
-    for (int k = 0; k < 32; ++k)
+    sn.fxRam = wotm::Particles::shadowRam(ram, split ? fxAll : sn.fx, split && havePrev ? &prevMats[0][0] : nullptr);
+    for (int k = 0; k < 16 * wotm_live::kMaxViews; ++k)
         prevMats[k / 16][k % 16] = ram.f32(wotm::fxaddr::viewPrevMat + 4u * uint32_t(k));
     havePrev = true;
-    if (sn.view1)
-        sn.view1->fxRam = sn.fxRam;
+    for (auto &vs : sn.views)
+        if (vs)
+            vs->fxRam = sn.fxRam;
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     std::lock_guard<std::mutex> lk(c.m);
@@ -1282,26 +1328,35 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const double tDraw0 = GetTime(), cpuDraw0 = wotmThreadCpuMs();   // custo do redesenho por numero de vistas (PS2X_STATS)
         lastFade = fadeNow;
         lastHasFade = hasFade;
-        // Tela dividida (Snapshot::view1): cada vista e desenhada numa textura da metade do quadro, com a camera dela, como se fosse a
+        // Tela dividida (Snapshot::views): cada vista e desenhada numa textura da metade do quadro, com a camera dela, como se fosse a
         // tela inteira (o que mede o framebuffer, como os flares e a proporcao da camera, vale sem mudar), e as duas sao compostas lado
-        // a lado. A camera livre (F5) mostra so a vista 0 em tela cheia.
-        const bool split = S.snap.view1 && S.snap.view1->valid && S.snap.view1->cam.ok && !S.snap.vctx.full() && !freeView.override;
+        // a lado. Com 3 e 4 jogadores (vistas de 320 x 112, wotm_split4.inc) as texturas sao quadrantes: a vista v na coluna v & 1 e
+        // na linha v >> 1; com 3, o quadrante de baixo a direita fica preto. A camera livre (F5) mostra so a vista 0 em tela cheia.
+        bool viewOk[4] = {true, false, false, false};
+        bool split = false;
+        for (int v = 1; v < 4; ++v)
+        {
+            const auto &vs = S.snap.views[v - 1];
+            viewOk[v] = vs && vs->valid && vs->cam.ok && !S.snap.vctx.full() && !freeView.override;
+            split = split || viewOk[v];
+        }
+        const bool quad = split && S.snap.vctx.h < 224.f;
         {
             static const bool splitLog = std::getenv("WOTM_SPLITLOG") != nullptr;
             if (splitLog)
-                std::fprintf(stderr, "[split] desenho g=%u view1=%d valid=%d camok=%d full=%d -> %d\n", S.snap.g, S.snap.view1 != nullptr,
-                             S.snap.view1 ? S.snap.view1->valid : 0, S.snap.view1 ? S.snap.view1->cam.ok : 0, S.snap.vctx.full(), split);
+                std::fprintf(stderr, "[split] desenho g=%u vistas %d%d%d full=%d -> %d%s\n", S.snap.g, viewOk[1], viewOk[2], viewOk[3],
+                             S.snap.vctx.full(), split, quad ? " (quadrantes)" : "");
         }
-        const int VW = RW / 2;
+        const int VW = RW / 2, VH = quad ? RH / 2 : RH;
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
-            if (vrt.id != 0 && (vrt.texture.width != VW || vrt.texture.height != RH))
+            if (vrt.id != 0 && (vrt.texture.width != VW || vrt.texture.height != VH))
             {
                 UnloadRenderTexture(vrt);
                 vrt = RenderTexture2D{};
             }
             if (vrt.id == 0)
             {
-                vrt = LoadRenderTexture(VW, RH);
+                vrt = LoadRenderTexture(VW, VH);
                 SetTextureFilter(vrt.texture, TEXTURE_FILTER_BILINEAR);
                 SetTextureWrap(vrt.texture, TEXTURE_WRAP_CLAMP);
             }
@@ -1324,8 +1379,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_live::g_stage = "idle";
             EndTextureMode();
         };
-        if (split)
-            drawView(S.vrts[1], S.scene.show(*S.snap.view1));
+        for (int v = 1; v < 4; ++v)
+            if (viewOk[v])
+                drawView(S.vrts[v], S.scene.show(*S.snap.views[v - 1]));
         gc = S.scene.show(S.snap);
         S.snap.cam = gameCam;
         if (freeView.override)
@@ -1371,18 +1427,26 @@ static bool wotmDrawNative(const uint8_t *rdram)
         c3.projection = CAMERA_PERSPECTIVE;
         if (split)
         {
-            // as duas metades copiadas como estao (alfa do GS incluido, como na apresentacao) e a faixa preta do Hud::buildSeparator:
-            // 6 px do GS na borda direita da vista 0, ate o centro da tela
+            // as metades (ou quadrantes) copiadas como estao (alfa do GS incluido, como na apresentacao) e a faixa preta do
+            // Hud::buildSeparator: 6 px do GS na borda direita da vista 0, ate o centro da tela; nos quadrantes, tambem uma faixa de
+            // 3 linhas do GS entre as duas linhas de vistas
             rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);
             BeginBlendMode(BLEND_CUSTOM);
-            for (int v = 0; v < 2; ++v)
-                DrawTexturePro(S.vrts[v].texture, Rectangle{0.f, 0.f, static_cast<float>(VW), -static_cast<float>(RH)},
-                               Rectangle{static_cast<float>(v * (RW - VW)), 0.f, static_cast<float>(VW), static_cast<float>(RH)},
-                               Vector2{0.f, 0.f}, 0.f, WHITE);
+            for (int v = 0; v < (quad ? 4 : 2); ++v)
+                if (viewOk[v])
+                    DrawTexturePro(S.vrts[v].texture, Rectangle{0.f, 0.f, static_cast<float>(VW), -static_cast<float>(VH)},
+                                   Rectangle{static_cast<float>((v & 1) * (RW - VW)), static_cast<float>((v >> 1) * (RH - VH)),
+                                             static_cast<float>(VW), static_cast<float>(VH)},
+                                   Vector2{0.f, 0.f}, 0.f, WHITE);
             EndBlendMode();
             const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
             const float sepW = std::max(1.f, 6.f * gr.w / 640.f);
             DrawRectangleRec(Rectangle{gr.x0 + gr.w * 0.5f - sepW, 0.f, sepW, static_cast<float>(RH)}, BLACK);
+            if (quad)
+            {
+                const float sepH = std::max(1.f, 3.f * static_cast<float>(RH) / 224.f);
+                DrawRectangleRec(Rectangle{0.f, 0.5f * static_cast<float>(RH) - 0.5f * sepH, static_cast<float>(RW), sepH}, BLACK);
+            }
         }
         else
         {

@@ -342,7 +342,7 @@ public:
         if (!ram.ok(pm - 16, 80)) return false;
         bool any = false;
         if (!curView().full()) {
-            const uint32_t vm = fxaddr::viewPrevMat + 64u * uint32_t(curView().view == 1 ? 1 : 0);
+            const uint32_t vm = fxaddr::viewPrevMat + 64u * uint32_t(std::clamp(curView().view, 0, 3));
             for (int k = 0; k < 16; ++k) { P[k] = ram.f32(vm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
         }
         if (!any)
@@ -546,12 +546,13 @@ public:
     // A copia vale so para o quadro do particleDraw que a fez (fresh; o wotmCaptureFrame a consome com consumeFlares). Quadro sem
     // particleDraw (menu, tela de carregamento) sai sem flares, como no PS2, onde o pacote so existe se o particleDraw o montou; antes
     // a lista da ultima luta voltava na tela LOAD seguinte (luz verde/vermelha no centro na entrada da partida).
-    // Uma copia por vista (lensFlareIndex/lensFlarePacket[vista]; na tela dividida o particleDraw(1) refaz a lista da vista 1). O
-    // captureFlares roda dentro do particleDraw da vista (viewCurView); a coleta pega a da vista corrente (curView).
+    // Uma copia por vista (lensFlareIndex/lensFlarePacket[vista & 1]; na tela dividida o particleDraw(1) refaz a lista da vista 1, e
+    // com 3 e 4 jogadores o das vistas 2 e 3 refaz a das 0 e 1). O captureFlares roda dentro do particleDraw da vista (viewCurView),
+    // antes da vista seguinte reaproveitar a lista; a coleta pega a da vista corrente (curView).
     struct FlareSlot { std::mutex m; FlareFrame f; bool used = false, fresh = false; };
-    static FlareSlot &flareSlot(int view = curView().view) { static FlareSlot s[2]; return s[view == 1 ? 1 : 0]; }
+    static FlareSlot &flareSlot(int view = curView().view) { static FlareSlot s[4]; return s[std::clamp(view, 0, 3)]; }
     static void captureFlares(const Ram &ram) {
-        const int v = ram.u32(wotm::sym::viewCurView) == 1u ? 1 : 0;
+        const int v = int(std::min<uint32_t>(ram.u32(wotm::sym::viewCurView), 3u));
         FlareFrame f;
         {
             ViewScope vs(readViewCtx(ram, v));
@@ -564,7 +565,7 @@ public:
         s.fresh = true;
     }
     static void consumeFlares() {
-        for (int v = 0; v < 2; ++v) {
+        for (int v = 0; v < 4; ++v) {
             FlareSlot &s = flareSlot(v);
             std::lock_guard<std::mutex> g(s.m);
             s.fresh = false;
@@ -577,8 +578,8 @@ public:
     // seguinte ja tinha matado particulas, pos[n] era o fecho do pacote (0, 0, 0, w enorme): um quadrado gigante na origem do mapa.
     // Chamada so na thread do EE (wotmCaptureFrame), com os sistemas recem-coletados. Devolve um buffer do tamanho da RAM com as
     // faixas copiadas (o resto fica com lixo de usos anteriores, que o draw nunca le); nullptr = desligado (WOTM_FXLIVE=1).
-    // prevMats (tela dividida): float[2][16], a matriz de cada vista no quadro anterior, gravada em fxaddr::viewPrevMat (prevViewMat);
-    // sem ela a faixa fica zerada e vale o pacote
+    // prevMats (tela dividida): float[4][16], a matriz de cada vista (0 a 3) no quadro anterior, gravada em fxaddr::viewPrevMat
+    // (prevViewMat); sem ela a faixa fica zerada e vale o pacote
     static std::shared_ptr<const uint8_t> shadowRam(const Ram &ram, const std::vector<FxSystem> &systems, const float *prevMats = nullptr) {
         static const bool live = std::getenv("WOTM_FXLIVE") != nullptr;   // diagnostico: le a RAM viva, como antes
         if (live || !ram.p || systems.empty()) return nullptr;
@@ -605,8 +606,8 @@ public:
         copy(addr::worldToScreenMat, 5 * 0x40);
         copy(addr::worldCtx, 5 * 0x1F0);
         copy(addr::vu1FogParams, 16);
-        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 2 * 64);
-        else std::memset(dst + fxaddr::viewPrevMat, 0, 2 * 64);
+        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 4 * 64);
+        else std::memset(dst + fxaddr::viewPrevMat, 0, 4 * 64);
         const uint32_t lo = fxaddr::fx, hi = fxaddr::fx + fxaddr::count * fxaddr::stride;
         auto outside = [&](uint32_t a, uint32_t n) { return a < lo || uint64_t(a) + n > hi; };
         for (const FxSystem &s : systems) {
@@ -649,9 +650,9 @@ public:
     }
 
     static void readFlares(const Ram &ram, FlareFrame &f) {
-        const uint32_t v = uint32_t(curView().view == 1 ? 1 : 0);   // lensFlareIndex/lensFlarePacket tem 2 entradas
+        const uint32_t view = uint32_t(std::clamp(curView().view, 0, 3)), v = view & 1u;   // lensFlareIndex/lensFlarePacket tem 2 entradas
         const uint32_t kIndex = wotm::sym::lensFlareIndex + 4 * v, kPacket = wotm::sym::lensFlarePacket + 4 * v, kViewDef = viewInfoAddr() + 4,
-                       kScreenMats = wotm::sym::viewScreenMats + 0x40 * v;
+                       kScreenMats = wotm::sym::viewScreenMats + 0x40 * view;
         f.e.clear();
         f.nspr = 0;
         const uint32_t p = ram.u32(kPacket);
