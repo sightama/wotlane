@@ -65,7 +65,9 @@ Lido com `tools/snd989.py` (bancos, estatísticas, exportação WAV) e reproduzi
 
 **`.VPK` (`disc/VAG`, 51 arquivos).** `" KPV"`, `u32 bytes por canal`, `u32 início dos dados` (0x800), `u32 tamanho do par de blocos` (0xA000), `u32 Hz`, `u32 canais` (2 em todos), e `{u16 vol, u16 pan}` por canal (127/270 e 127/90). Os dados alternam blocos de **0x5000** bytes de cada canal (o campo é o par esquerdo+direito: os meio-blocos 0 e 1 têm correlação ~0,6 entre si e ~0 com o seguinte, conferido em CITYAMB, TOKYOBAT e CONGAI), em ADPCM do SPU2 sem flags de fim nem de laço. `*AMB`/`*BAT` (música das fases, ~2 min a 44,1 kHz); os outros (falas, cinemas, `*I` de introdução, `*D`, `*T`) a 48 kHz.
 
-**`.VAG`** (`DEFEAT`, `VICTORY`, 2 KB cada): `"VAGp"` big-endian com 0x30 bytes de cabeçalho; praticamente vazios.
+**`.VAG`** (`DEFEAT`, `VICTORY`, 2 KB cada): `"VAGp"` big-endian com 0x30 bytes de cabeçalho (tamanho dos dados em 0x0C, Hz em 0x10, nome em 0x20; o `snd989.py` lia o Hz em 0x14 até 2026-10-20, o nativo sempre leu em 0x10); praticamente vazios.
+
+**De volta para o jogo (`tools/snd989.py`, 2026-10-20).** `vpk`, `vag` e `bnk-replace` codificam WAV (PCM 8/16/24/32 bits ou float) no ADPCM do SPU2. O codificador simula o decodificador bloco a bloco (filtro e shift de menor erro), então o que ele grava é exatamente o que o jogo reconstrói; ~40 dB de SNR em música, ~1 s de processamento por segundo de áudio estéreo. No `.VPK` o campo de bytes por canal vai em blocos inteiros de 0x5000 (o leitor do nativo lê só `início + bytes por canal × canais`), o que deixa até 0,8 s de silêncio no fim. O `bnk-replace` reamostra (linear) para a taxa do `TONE`, mantém o laço da amostra original e corrige os offsets dos outros sons, o tamanho do chunk e os campos de tamanho do `SBlk` (0x28 e 0x2C, que acompanham o total das amostras; significado exato não conferido). Falta conferir no jogo com arquivos reais.
 
 **ADPCM do SPU2.** Blocos de 16 bytes: `(filtro << 4) | shift`, flags (1 = fim do trecho, 2 = repete a partir do início do laço, 4 = início do laço) e 14 bytes com 28 amostras de 4 bits; filtros `(0,0) (60,0) (115,-52) (98,-55) (122,-60)` / 64.
 
