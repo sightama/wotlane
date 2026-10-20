@@ -274,7 +274,7 @@ class Launcher : Form
     static readonly int[] LevelIds = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16 };
     static readonly string[] LevelNames = { "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City", "Century Airfield", "Atomic Island",
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
-    const int MatchMaxAIs = 7, MetroId = 4;
+    const int MatchMaxAIs = 7;
 
     readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu   [WOTM_MATCH]", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
@@ -301,8 +301,8 @@ class Launcher : Form
 
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
-        tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. The limit is RAM: with 8 monsters Metro City goes over 32 MB while loading and freezes; " +
-            "Baytown and Gamblers Gulch have ~2 MB to spare.");
+        tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. Every stage fits 8 monsters: the monsters load above 32 MB (64 MB runtime); " +
+            "Metro City with 8 still has ~21 MB to spare. WOTM_HIGHRAM=0 brings back the PS2 32 MB limit (Metro with 8 freezes).");
         inner.Controls.Add(Row("Stage", matchLevel));
 
         inner.Controls.Add(new Label { Text = "AI opponents (up to 7; none = play solo on the stage):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
@@ -344,10 +344,8 @@ class Launcher : Form
         foreach (ComboBox cb in matchAIs) cb.Enabled = on;
         int total = 1 + MatchFoes();
         string txt = total == 1 ? "Solo: just you on the stage." : total + " monsters in the fight.";
-        if (LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8) txt += " Metro City with 8 freezes while loading (out of RAM).";
         if (total > 4 && !On("WOTM_ENEMYBARS")) txt += " Only 4 enemies get an off-screen health marker (the health bars mod shows all of them).";
         matchInfo.Text = txt;
-        matchInfo.ForeColor = LevelIds[matchLevel.SelectedIndex] == MetroId && total == 8 ? WarnColor : DimColor;
     }
 
     string MatchValue()
@@ -581,7 +579,6 @@ class Launcher : Form
     static readonly Color BgColor = Color.FromArgb(32, 32, 32), InputColor = Color.FromArgb(51, 51, 51), ButtonColor = Color.FromArgb(58, 58, 58);
     static readonly Color FgColor = Color.FromArgb(232, 232, 232);
     static readonly Color DimColor = Dark ? Color.FromArgb(150, 150, 150) : SystemColors.GrayText;
-    static readonly Color WarnColor = Dark ? Color.FromArgb(255, 110, 100) : Color.Firebrick;
 
     static bool AppsUseDark()
     {
