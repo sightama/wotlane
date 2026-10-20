@@ -197,7 +197,7 @@ index 0000000..0947e18
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..5f91b97 100644
+index 589d768..cc00340 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -208,7 +208,14 @@ index 589d768..5f91b97 100644
      src/lib/games_database.cpp
  )
  
-@@ -437,8 +438,19 @@ target_sources(ps2_runtime PRIVATE
+@@ -432,13 +433,26 @@ target_compile_definitions(ps2_runtime PRIVATE
+ file(GLOB_RECURSE KERNEL_SRC_FILES CONFIGURE_DEPENDS
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/*.cpp"
+ )
++# WoTM: o escalonador de uma thread (passo 10 de docs/passos/FRONTEIRA.md no repo WoTM) e so do executavel do jogo (wotm, abaixo)
++list(FILTER KERNEL_SRC_FILES EXCLUDE REGEX "EeSchedulerGame\\.cpp$")
+ 
+ target_sources(ps2_runtime PRIVATE
      ${KERNEL_SRC_FILES}
  )
  
@@ -229,7 +236,7 @@ index 589d768..5f91b97 100644
  )
  
  set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
-@@ -456,14 +468,27 @@ if(PS2X_IS_ANDROID)
+@@ -456,14 +470,27 @@ if(PS2X_IS_ANDROID)
      )
  
      target_link_options(ps2EntryRunner PRIVATE "-Wl,--undefined=ANativeActivity_onCreate")
@@ -259,7 +266,7 @@ index 589d768..5f91b97 100644
          UNITY_BUILD ON
          UNITY_BUILD_BATCH_SIZE "${PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE}"
      )
-@@ -476,8 +501,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
+@@ -476,8 +503,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
      )
  
      foreach(PS2X_RUNNER_GENERATED_HEADER IN ITEMS
@@ -270,7 +277,7 @@ index 589d768..5f91b97 100644
          if(EXISTS "${PS2X_RUNNER_GENERATED_HEADER}")
              list(APPEND PS2X_RUNNER_PCH_HEADERS "${PS2X_RUNNER_GENERATED_HEADER}")
          endif()
-@@ -488,7 +513,7 @@ if(PS2X_ENABLE_RUNNER_PCH)
+@@ -488,7 +515,7 @@ if(PS2X_ENABLE_RUNNER_PCH)
          "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_stubs.h"
      )
  
@@ -279,7 +286,7 @@ index 589d768..5f91b97 100644
  endif()
  
  if(PS2X_DEFAULT_BOOT_ELF_DEFINE)
-@@ -499,6 +524,7 @@ endif()
+@@ -499,6 +526,7 @@ endif()
  
  if(MSVC)
      target_compile_options(ps2EntryRunner PRIVATE /FS)
@@ -287,7 +294,7 @@ index 589d768..5f91b97 100644
  endif()
  
  target_include_directories(ps2_runtime PUBLIC
-@@ -506,6 +532,12 @@ target_include_directories(ps2_runtime PUBLIC
+@@ -506,6 +534,12 @@ target_include_directories(ps2_runtime PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
  )
  
@@ -300,7 +307,7 @@ index 589d768..5f91b97 100644
  target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
  target_link_libraries(ps2EntryRunner
      PRIVATE
-@@ -557,6 +589,9 @@ endif()
+@@ -557,6 +591,9 @@ endif()
  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
      EnableFastReleaseMode(ps2_runtime)
      EnableFastReleaseMode(ps2EntryRunner)
@@ -310,7 +317,7 @@ index 589d768..5f91b97 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +643,78 @@ endif()
+@@ -608,3 +645,81 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -357,11 +364,14 @@ index 589d768..5f91b97 100644
 +# WoTM: executavel do jogo (wotm) sem GS, VU1 e VIF1 emulados (passo 5 de docs/passos/FRONTEIRA.md no repo WoTM). Mesmo jogo
 +# traduzido (ps2_game_code) e mesma configuracao do ps2_runtime/ps2EntryRunner, sem os fontes do GS (frontend, rasterizador,
 +# enderecamento da VRAM) e do interpretador do VU1/VU0; o VIF1 e a checagem VU1 x nativo (wotm_vu1check.inc, --vu1cmp, fotos) saem
-+# por PS2X_HW_EMU=0, e tambem o VIF0 (passo 7: o microcodigo do VU0 sobe por copia direta, wotm_live.inc) e os timers do EE (passo 8,
-+# EeScheduler.cpp). O ps2EntryRunner continua com tudo, como executavel de teste.
++# por PS2X_HW_EMU=0, e tambem o VIF0 (passo 7: o microcodigo do VU0 sobe por copia direta, wotm_live.inc). O escalonador do EE
++# (EeScheduler.cpp, com threads, fatia de tempo, timers e IOP) da lugar a um laco de uma thread (passo 10, EeSchedulerGame.cpp).
++# O ps2EntryRunner continua com tudo, como executavel de teste.
 +if(TARGET ps2_game_code)
 +    get_target_property(WOTM_RT_SOURCES ps2_runtime SOURCES)
-+    list(FILTER WOTM_RT_SOURCES EXCLUDE REGEX "(gs_frontend|gs_cpu_backend|ps2_gs_memory|ps2_vu1_core|ps2_vu1_upper|ps2_vu1_lower)\\.cpp$")
++    list(FILTER WOTM_RT_SOURCES EXCLUDE REGEX "(gs_frontend|gs_cpu_backend|ps2_gs_memory|ps2_vu1_core|ps2_vu1_upper|ps2_vu1_lower|EeScheduler)\\.cpp$")
++    list(APPEND WOTM_RT_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/EeSchedulerGame.cpp")
++    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/EeSchedulerGame.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
 +    add_library(ps2_runtime_game STATIC ${WOTM_RT_SOURCES})
 +    foreach(WOTM_PROP IN ITEMS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS INTERFACE_INCLUDE_DIRECTORIES
 +                               INTERFACE_COMPILE_DEFINITIONS INTERFACE_LINK_LIBRARIES LINK_LIBRARIES)
@@ -575,10 +585,10 @@ index 0f19c9f..b6f38e6 100644
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
 diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
-index f247ff9..b7114cb 100644
+index f247ff9..3a3c5bf 100644
 --- a/ps2xRuntime/include/runtime/ee_scheduler.h
 +++ b/ps2xRuntime/include/runtime/ee_scheduler.h
-@@ -334,6 +334,9 @@ public:
+@@ -334,12 +334,18 @@ public:
      void dispatchIrq(bool dmac, uint32_t cause);
      void setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress);
      [[nodiscard]] uint64_t currentVSyncTick() const noexcept;
@@ -588,7 +598,30 @@ index f247ff9..b7114cb 100644
      uint32_t setGsVSyncCallback(uint32_t callback, uint32_t gp, uint32_t sp);
  
      [[noreturn]] void waitVSync(uint64_t afterTick, int fixedResult = -1, std::function<void(R5900Context &)> completion = {});
-@@ -449,6 +452,10 @@ private:
+     void completeVSync(uint64_t tick);
+     void completeExternalWait(uint32_t type, uint64_t token, int result);
+     [[noreturn]] void waitExternal(EeWaitReason reason, uint32_t type, uint64_t token, std::function<void(R5900Context &)> completion = {});
++    // WotM (passo 10 da FRONTEIRA.md no repo WoTM; so no executavel do jogo, EeSchedulerGame.cpp): espera o vblank no lugar e
++    // devolve o resultado do sceGsSyncV, sem desmontar a pilha. Quem chama poe o retorno em $v0 e segue.
++    int waitVSyncHere(uint64_t afterTick, int fixedResult);
+ 
+     [[nodiscard]] GuestThread *thread(int id);
+     [[nodiscard]] const GuestThread *thread(int id) const;
+@@ -369,6 +375,13 @@ private:
+         uint64_t sequence = 0;
+     };
+ 
++    // WotM (passo 10, EeSchedulerGame.cpp): laco nativo de uma thread no executavel do jogo
++    void wotmService(bool deliver);
++    void wotmVBlank();
++    void wotmDeliverPending();
++    void wotmRunInvocations(size_t baseDepth);
++    void wotmIdleWait();
++
+     void assertExecutor() const;
+     [[nodiscard]] int allocateThreadId();
+     GuestThread &acquireInvocationThread();
+@@ -449,6 +462,10 @@ private:
      uint32_t m_gsVSyncCallbackSp = 0;
      std::unordered_map<uint64_t, uint32_t> m_invocationStackTops;
      std::atomic<uint64_t> m_nextDeadlineCycle{0};
@@ -728,7 +761,7 @@ index 67c8184..b889c42 100644
  
  #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..7edc4d4 100644
+index c5e31c4..a5141b2 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 @@ -4,10 +4,55 @@
@@ -873,26 +906,15 @@ index c5e31c4..7edc4d4 100644
      const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
      if (nextEventCycle != 0u && m_eeCycle >= nextEventCycle)
      {
-@@ -392,12 +484,18 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
+@@ -392,6 +484,7 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
  {
      const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
      m_eeCycle += elapsed;
 +    g_wotmEeCycle = m_eeCycle;
-+#if PS2X_HW_EMU
      m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
      m_runtime.advanceIopEeCycles(elapsed);
      if (m_pendingEeTimerInterrupts != 0u)
-     {
-         m_checkpointPending.store(true, std::memory_order_release);
-     }
-+#else
-+    // Jogo (wotm, passo 8 da FRONTEIRA.md no repo WoTM): os timers do EE nao contam e o IOP nao existe. O WotM so usa o T1, pelo
-+    // timerGetCurTics e o timer1Handler, que leem o relogio do host (wotm_overrides.cpp); nenhum handler de interrupcao de timer.
-+#endif
- }
- 
- bool EeScheduler::isExecutingGuest() const noexcept
-@@ -1766,7 +1864,9 @@ void EeScheduler::processPendingEvents()
+@@ -1766,7 +1859,9 @@ void EeScheduler::processPendingEvents()
      {
          std::lock_guard lock(m_eventMutex);
          const uint64_t nextEventCycle = m_nextDeadlineCycle.load(std::memory_order_acquire);
@@ -903,7 +925,7 @@ index c5e31c4..7edc4d4 100644
          const bool pendingWork = !m_events.empty() || cycleEventDue || m_stopRequested.load(std::memory_order_acquire);
          m_checkpointPending.store(pendingWork, std::memory_order_release);
      }
-@@ -1775,46 +1875,20 @@ void EeScheduler::processPendingEvents()
+@@ -1775,46 +1870,20 @@ void EeScheduler::processPendingEvents()
  
  void EeScheduler::processDueDeadlines()
  {
@@ -958,7 +980,7 @@ index c5e31c4..7edc4d4 100644
              due.insert(due.end(),
                         std::make_move_iterator(m_deadlines.begin()),
                         std::make_move_iterator(firstFuture));
-@@ -1824,9 +1898,9 @@ void EeScheduler::processDueDeadlines()
+@@ -1824,9 +1893,9 @@ void EeScheduler::processDueDeadlines()
  
          std::sort(due.begin(), due.end(), [](const ScheduledEvent &left, const ScheduledEvent &right)
                    {
@@ -970,7 +992,7 @@ index c5e31c4..7edc4d4 100644
                        }
                        if (left.event.type != right.event.type)
                        {
-@@ -1847,11 +1921,14 @@ void EeScheduler::processDueDeadlines()
+@@ -1847,11 +1916,14 @@ void EeScheduler::processDueDeadlines()
          {
              if (scheduled.event.type == EeEventType::VBlankStart)
              {
@@ -989,7 +1011,7 @@ index c5e31c4..7edc4d4 100644
                                EeEvent{EeEventType::VBlankStart, 0, 0});
              }
              processEvent(scheduled.event);
-@@ -1994,8 +2071,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1994,8 +2066,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
@@ -1001,7 +1023,7 @@ index c5e31c4..7edc4d4 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
-@@ -2010,48 +2090,54 @@ void EeScheduler::waitForEvent()
+@@ -2010,48 +2085,54 @@ void EeScheduler::waitForEvent()
          return;
      }
  
@@ -1083,7 +1105,7 @@ index c5e31c4..7edc4d4 100644
  }
  
  void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
-@@ -2068,21 +2154,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2068,21 +2149,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
  
  void EeScheduler::updateNextDeadline()
  {
@@ -1112,6 +1134,1351 @@ index c5e31c4..7edc4d4 100644
  }
  
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
+diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
+new file mode 100644
+index 0000000..fd9425b
+--- /dev/null
++++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
+@@ -0,0 +1,1339 @@
++// WoTM (passo 10 de docs/passos/FRONTEIRA.md no repo WoTM): EeScheduler do executavel do jogo (wotm), no lugar de EeScheduler.cpp.
++// Medido no passo 8: o WotM usa uma thread so (a principal), nenhum handler de INTC, um handler de DMAC (hierSetDmaIntHandler,
++// canal 1) e o vblank (sceGsSyncV); nenhum semaforo, event flag, sleep ou alarme em uso. Entao aqui nao ha fila de prontos, fatia
++// de tempo, troca de thread nem relogio no checkpoint:
++//  - a thread principal roda direto (run); o checkpoint do codigo gerado so confere uma flag de "atencao" (vblank, evento,
++//    interrupcao pendente) e a parada;
++//  - o vblank vem de uma thread do host com a grade de 16,667 ms; o EE aplica no proximo checkpoint ou na espera;
++//  - esperas (sceGsSyncV, semaforo, event flag, sleep, espera externa) esperam no lugar, atendendo vblanks e interrupcoes;
++//    a do sceGsSyncV (waitVSyncHere) volta normalmente, sem a excecao que desmontava a pilha a cada quadro;
++//  - interrupcoes e callbacks (invocacoes) rodam aninhados, na pilha propria de cada profundidade; o que nao retorna
++//    ([[noreturn]] no header: invokeCurrent, waitVSync com continuacao, exitCurrent) faz o trabalho no lugar e depois lanca o
++//    mesmo EeDispatcherTransfer de antes, porque os chamadores contam com isso;
++//  - outras threads: CreateThread registra, StartThread falha com aviso (nao ha segundo fluxo de execucao).
++// O ps2EntryRunner continua com o EeScheduler.cpp completo.
++#include "runtime/ee_scheduler.h"
++
++#include "ps2_log.h"
++#include "ps2_runtime_macros.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cassert>
++#include <chrono>
++#include <condition_variable>
++#include <cstdio>
++#include <cstring>
++#include <limits>
++#include <stdexcept>
++#include <string>
++#include <thread>
++#include <unordered_map>
++
++// Lidos pelo resto do runtime e pela camada nativa (no executavel de teste vem do EeScheduler.cpp)
++std::atomic<unsigned long long> g_wotmIdleUs{0}, g_wotmIdleCalls{0};
++bool g_wotmCycleProf = false;
++uint32_t g_wotmFreeSpinPc = 0;            // main.cpp (PS2X_NO_VU1): espera ativa do particleDraw por VU1 ausente...
++uint32_t g_wotmFreeSpinZero[2] = {0, 0};  // ...termina ja: estas palavras da RDRAM sao zeradas quando o checkpoint cai nela
++uint64_t g_wotmEeCycle = 0, g_wotmIdleCycles = 0;
++uint32_t g_wotmProfPc[4096];
++uint64_t g_wotmProfCyc[4096];
++extern std::atomic<R5900Context *> g_wotmLiveCtx;   // ps2_runtime.cpp (dispatchGuestBranch)
++
++namespace
++{
++    constexpr int KE_OK = 0;
++    constexpr int KE_ERROR = -1;
++    constexpr int KE_ILLEGAL_PRIORITY = -403;
++    constexpr int KE_ILLEGAL_THID = -406;
++    constexpr int KE_UNKNOWN_THID = -407;
++    constexpr int KE_UNKNOWN_SEMID = -408;
++    constexpr int KE_UNKNOWN_EVFID = -409;
++    constexpr int KE_DORMANT = -413;
++    constexpr int KE_NOT_DORMANT = -414;
++    constexpr int KE_NOT_SUSPEND = -415;
++    constexpr int KE_NOT_WAIT = -416;
++    constexpr int KE_RELEASE_WAIT = -418;
++    constexpr int KE_SEMA_ZERO = -419;
++    constexpr int KE_SEMA_OVF = -420;
++    constexpr int KE_EVF_COND = -421;
++    constexpr int KE_WAIT_DELETE = -425;
++
++    constexpr uint32_t WEF_OR = 0x01u;
++    constexpr uint32_t WEF_CLEAR = 0x10u;
++    constexpr uint32_t WEF_CLEAR_ALL = 0x20u;
++
++    using Clock = std::chrono::steady_clock;
++    constexpr auto kVBlankPeriod = std::chrono::microseconds(16667);
++    constexpr size_t kMaxInvocationDepth = 48u;   // main.invocations reserva 64: o contexto de cada nivel nao muda de lugar
++
++    struct ExternalWait
++    {
++        uint32_t type = 0;
++        uint64_t token = 0;
++        bool done = false;
++        int result = 0;
++    };
++
++    struct HostState
++    {
++        R5900Context *active = nullptr;   // contexto que o codigo gerado roda agora (o principal ou a invocacao do topo)
++        int deliverDepth = 0;             // >0: dentro de uma interrupcao/callback entregue; outra so depois que ela voltar
++        bool mainDormant = false;         // ExitThread ou pc invalido na principal: so atende vblanks ate a parada
++        bool sleeping = false;
++        bool releaseWait = false;
++        std::thread timer;
++        std::condition_variable timerCv;
++        // protegidos por m_eventMutex
++        uint32_t vblankDue = 0;
++        Clock::time_point next{};
++        bool waiting = false;
++        bool stallOpen = false;
++        Clock::time_point stallStart{};
++        uint32_t stallPc = 0, stallRa = 0;
++        // so na thread do EE
++        std::vector<ExternalWait> external;
++        uint64_t publishedTick = 0;
++    };
++    HostState G;
++
++    void warnUnsupported(const char *what, int id)
++    {
++        static std::unordered_map<std::string, unsigned> counts;
++        unsigned &n = counts[what];
++        if (n++ < 4u)
++            std::fprintf(stderr, "[ee] %s (id=%d) nao suportado no wotm: o jogo so tem a thread principal (FRONTEIRA passo 10)\n",
++                         what, id);
++    }
++
++    void wotmProfAdd(uint32_t pc, uint64_t cycles)
++    {
++        uint32_t i = ((pc >> 2) * 2654435761u) >> 20;
++        for (int n = 0; n < 4096; ++n, i = (i + 1) & 4095u)
++        {
++            if (g_wotmProfPc[i] == pc || g_wotmProfCyc[i] == 0)
++            {
++                g_wotmProfPc[i] = pc;
++                g_wotmProfCyc[i] += cycles;
++                return;
++            }
++        }
++    }
++
++    template <typename Map>
++    int allocatePositiveId(int &nextId, const Map &objects)
++    {
++        const int first = std::max(1, nextId);
++        int candidate = first;
++        do
++        {
++            if (!objects.contains(candidate))
++            {
++                nextId = (candidate == std::numeric_limits<int>::max()) ? 1 : candidate + 1;
++                return candidate;
++            }
++            candidate = (candidate == std::numeric_limits<int>::max()) ? 1 : candidate + 1;
++        } while (candidate != first);
++        return 0;
++    }
++
++    bool eventCond(uint32_t current, uint32_t requested, uint32_t mode)
++    {
++        return (mode & WEF_OR) != 0u ? (current & requested) != 0u : (current & requested) == requested;
++    }
++}
++
++EeScheduler::EeScheduler(PS2Runtime &runtime)
++    : m_runtime(runtime)
++{
++}
++
++EeScheduler::~EeScheduler()
++{
++    requestStop();
++    if (G.timer.joinable())
++        G.timer.join();
++}
++
++void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
++{
++    m_executorThread = std::this_thread::get_id();
++    m_rdram = rdram;
++    m_threads.clear();
++    m_semaphores.clear();
++    m_eventFlags.clear();
++    m_alarms.clear();
++    m_intcHandlers.clear();
++    m_dmacHandlers.clear();
++    m_nextThreadId = kFirstThreadId;
++    m_nextSemaphoreId = 1;
++    m_nextEventFlagId = 1;
++    m_nextIntcHandlerId = 1;
++    m_nextDmacHandlerId = 1;
++    m_intcHeadOrder = 0;
++    m_intcTailOrder = 1000;
++    m_dmacHeadOrder = 0;
++    m_dmacTailOrder = 1000;
++    m_enabledIntcMask = 0xFFFFFFFFu;
++    m_enabledDmacMask = 0xFFFFFFFFu;
++    m_insideInterrupt = false;
++    m_eeCycle = 0u;
++    m_stopRequested.store(false, std::memory_order_release);
++    m_checkpointPending.store(false, std::memory_order_release);
++    {
++        std::lock_guard lock(m_eventMutex);
++        m_events.clear();
++        m_pendingInvocations.clear();
++        G.vblankDue = 0;
++        G.waiting = false;
++        G.stallOpen = false;
++    }
++    m_invocationSequence = 0;
++    m_invocationStackTops.clear();
++    m_vsyncTick = 0;
++    m_vsyncFlagAddress = 0;
++    m_vsyncTickAddress = 0;
++    m_gsVSyncCallback = 0;
++    m_gsVSyncCallbackGp = 0;
++    m_gsVSyncCallbackSp = 0;
++    m_runtime.memory().gs().vsyncTick.store(0u, std::memory_order_release);
++    G.deliverDepth = 0;
++    G.mainDormant = false;
++    G.sleeping = false;
++    G.releaseWait = false;
++    G.external.clear();
++    G.publishedTick = 0;
++
++    GuestThread main{};
++    main.id = kMainThreadId;
++    main.context = mainContext;
++    main.entry = mainContext.pc;
++    main.gp = getRegU32(&mainContext, 28);
++    main.status = EeThreadStatus::Running;
++    main.invocations.reserve(64u);
++    GuestThread &stored = m_threads.emplace(main.id, std::move(main)).first->second;
++    m_currentThreadId = kMainThreadId;
++    G.active = &stored.context;
++    publishSnapshot();
++}
++
++void EeScheduler::run()
++{
++    assertExecutor();
++    m_running.store(true, std::memory_order_release);
++    {
++        std::lock_guard lock(m_eventMutex);
++        G.vblankDue = 0;
++        G.next = Clock::now() + kVBlankPeriod;
++    }
++    // Relogio do vblank: grade fixa no host. Depois de uma travada de mais de 4 vblanks a grade recomeca de agora, e o EE aplica
++    // so um (wotmService), em vez de vencer os atrasados de uma vez.
++    G.timer = std::thread([this]()
++                          {
++        std::unique_lock lock(m_eventMutex);
++        while (!m_stopRequested.load(std::memory_order_acquire))
++        {
++            const Clock::time_point target = G.next;
++            G.timerCv.wait_until(lock, target, [this]() { return m_stopRequested.load(std::memory_order_acquire); });
++            if (m_stopRequested.load(std::memory_order_acquire))
++                break;
++            const Clock::time_point now = Clock::now();
++            if (now < G.next)   // acordou cedo, ou a pausa (shiftHostDeadlines) empurrou o prazo
++                continue;
++            if (now - G.next > 4 * kVBlankPeriod)
++                G.next = now;
++            G.next += kVBlankPeriod;
++            ++G.vblankDue;
++            // WOTM_FIELDLOG: tres vblanks sem o EE chegar a um checkpoint nem esperar = thread do jogo presa em alguma chamada
++            if (g_wotmCycleProf && !G.waiting && G.vblankDue >= 3u && !G.stallOpen)
++            {
++                G.stallOpen = true;
++                G.stallStart = now - 2 * kVBlankPeriod;
++                const R5900Context *c = g_wotmLiveCtx.load(std::memory_order_relaxed);
++                G.stallPc = c ? c->pc : 0u;
++                G.stallRa = c ? getRegU32(c, 31) : 0u;
++            }
++            m_checkpointPending.store(true, std::memory_order_release);
++            m_eventCv.notify_all();
++        } });
++
++    GuestThread &main = m_threads.at(kMainThreadId);
++    while (!m_stopRequested.load(std::memory_order_acquire))
++    {
++        if (G.mainDormant)
++        {
++            wotmIdleWait();
++            wotmService(true);
++            continue;
++        }
++        if (m_checkpointPending.load(std::memory_order_acquire))
++        {
++            wotmService(true);
++            if (m_stopRequested.load(std::memory_order_acquire))
++                break;
++        }
++        R5900Context &context = main.context;
++        G.active = &context;
++        if (context.pc == 0u || !m_runtime.hasFunction(context.pc))
++        {
++            if (context.pc != 0u)
++                m_runtime.reportMissingFunction(m_rdram, &context, context.pc, context.pc, PS2Runtime::GuestBranchKind::DirectJump,
++                                                "EE (wotm)");
++            std::fprintf(stderr, "[ee] a thread principal parou (pc=0x%x): o EE so atende vblanks daqui em diante\n", context.pc);
++            G.mainDormant = true;
++            main.status = EeThreadStatus::Dormant;
++            publishSnapshot();
++            continue;
++        }
++        PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
++        try
++        {
++            m_guestExecuting.store(true, std::memory_order_release);
++            function(m_rdram, &context, &m_runtime);
++            m_guestExecuting.store(false, std::memory_order_release);
++        }
++        catch (const EeDispatcherTransfer &)
++        {
++            m_guestExecuting.store(false, std::memory_order_release);
++        }
++        catch (...)
++        {
++            m_guestExecuting.store(false, std::memory_order_release);
++            m_running.store(false, std::memory_order_release);
++            requestStop();
++            if (G.timer.joinable())
++                G.timer.join();
++            publishSnapshot();
++            throw;
++        }
++    }
++
++    requestStop();
++    if (G.timer.joinable())
++        G.timer.join();
++    m_guestExecuting.store(false, std::memory_order_release);
++    m_running.store(false, std::memory_order_release);
++    copyMainContextToRuntime();
++    publishSnapshot();
++}
++
++void EeScheduler::requestStop()
++{
++    m_stopRequested.store(true, std::memory_order_release);
++    m_checkpointPending.store(true, std::memory_order_release);
++    {
++        std::lock_guard lock(m_eventMutex);
++    }
++    m_eventCv.notify_all();
++    G.timerCv.notify_all();
++}
++
++void EeScheduler::postEvent(EeEvent event)
++{
++    if (event.type == EeEventType::Stop)
++    {
++        requestStop();
++        return;
++    }
++    {
++        std::lock_guard lock(m_eventMutex);
++        m_events.push_back(event);
++        m_checkpointPending.store(true, std::memory_order_release);
++    }
++    m_eventCv.notify_all();
++}
++
++// Chamado pelo codigo gerado em toda cabeca de laco e toda chamada (27 a 47 mil vezes por quadro): sem relogio, sem fila.
++bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
++{
++    const uint64_t elapsed = std::max<uint32_t>(1u, cycles);
++    m_eeCycle += elapsed;
++    g_wotmEeCycle = m_eeCycle;
++    const R5900Context *c = G.active;
++    if (g_wotmFreeSpinPc != 0u && c && c->pc == g_wotmFreeSpinPc)
++    {
++        for (const uint32_t addr : g_wotmFreeSpinZero)
++            if (addr && m_rdram)
++                std::memset(m_rdram + (addr & 0x1FFFFFFFu), 0, 4);
++    }
++    if (g_wotmCycleProf && c)
++        wotmProfAdd(c->pc, elapsed);
++    if (!m_checkpointPending.load(std::memory_order_acquire))
++        return false;
++    if (m_stopRequested.load(std::memory_order_acquire))
++        return true;
++    if (G.deliverDepth > 0)   // dentro de uma interrupcao: o resto espera ela voltar
++        return false;
++    try
++    {
++        wotmService(true);
++    }
++    catch (const std::exception &e)
++    {
++        std::fprintf(stderr, "[ee] erro numa interrupcao/callback do jogo: %s; parando\n", e.what());
++        requestStop();
++    }
++    catch (...)
++    {
++        std::fprintf(stderr, "[ee] erro numa interrupcao/callback do jogo; parando\n");
++        requestStop();
++    }
++    return m_stopRequested.load(std::memory_order_acquire);
++}
++
++void EeScheduler::accountCycles(uint32_t cycles) noexcept
++{
++    m_eeCycle += std::max<uint32_t>(1u, cycles);
++    g_wotmEeCycle = m_eeCycle;
++}
++
++bool EeScheduler::isExecutingGuest() const noexcept
++{
++    return m_guestExecuting.load(std::memory_order_acquire);
++}
++
++// ---- atencao: vblank, eventos de outras threads, interrupcoes pendentes ----
++
++void EeScheduler::wotmService(bool deliver)
++{
++    uint32_t due = 0;
++    std::deque<EeEvent> events;
++    bool stallOpen = false;
++    Clock::time_point stallStart{};
++    uint32_t stallPc = 0, stallRa = 0;
++    {
++        std::lock_guard lock(m_eventMutex);
++        due = G.vblankDue;
++        G.vblankDue = 0;
++        events.swap(m_events);
++        m_checkpointPending.store(m_stopRequested.load(std::memory_order_acquire), std::memory_order_release);
++        if (G.stallOpen)
++        {
++            stallOpen = true;
++            stallStart = G.stallStart;
++            stallPc = G.stallPc;
++            stallRa = G.stallRa;
++            G.stallOpen = false;
++        }
++    }
++    if (stallOpen)
++        std::fprintf(stderr, "[stall] %.1f ms sem checkpoint: pc=%06x ra=%06x vsync=%llu\n",
++                     std::chrono::duration<double, std::milli>(Clock::now() - stallStart).count(), stallPc, stallRa,
++                     static_cast<unsigned long long>(m_vsyncTick));
++    if (due > 4u)
++        due = 1u;
++    for (uint32_t i = 0; i < due; ++i)
++        wotmVBlank();
++    for (const EeEvent &event : events)
++    {
++        if (event.type == EeEventType::Stop)
++            requestStop();
++        else if (event.type == EeEventType::ExternalWake)
++            completeExternalWait(event.id, event.value, KE_OK);
++    }
++    if (deliver && G.deliverDepth == 0)
++        wotmDeliverPending();
++    if (!m_pendingInvocations.empty())
++        m_checkpointPending.store(true, std::memory_order_release);
++}
++
++void EeScheduler::wotmVBlank()
++{
++    ++m_vsyncTick;
++    m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
++    if ((m_vsyncTick & 1u) != 0u)
++        m_runtime.memory().gs().csr.fetch_or(0x2000ull, std::memory_order_acq_rel);
++    else
++        m_runtime.memory().gs().csr.fetch_and(~0x2000ull, std::memory_order_acq_rel);
++    writeGuestU32(m_vsyncFlagAddress, 1u);
++    if (m_vsyncTickAddress != 0u)
++    {
++        const uint32_t physical = m_vsyncTickAddress & 0x1FFFFFFFu;
++        if (m_rdram && physical <= PS2_RAM_SIZE - sizeof(uint64_t))
++            std::memcpy(m_rdram + physical, &m_vsyncTick, sizeof(m_vsyncTick));
++    }
++    m_vsyncFlagAddress = 0u;
++    m_vsyncTickAddress = 0u;
++    if (m_gsVSyncCallback != 0u && m_runtime.hasFunction(m_gsVSyncCallback))
++    {
++        GuestInvocation invocation{};
++        invocation.kind = GuestInvocationKind::GsCallback;
++        invocation.context.pc = m_gsVSyncCallback;
++        SET_GPR_U32(&invocation.context, 4, static_cast<uint32_t>(m_vsyncTick));
++        SET_GPR_U32(&invocation.context, 28, m_gsVSyncCallbackGp);
++        SET_GPR_U32(&invocation.context, 29, 0u);
++        SET_GPR_U32(&invocation.context, 31, 0u);
++        queueInvocation(std::move(invocation));
++    }
++    // inicio e fim do vblank juntos: nenhum handler de INTC registrado no WotM (passo 8)
++    dispatchIrq(false, 2u);
++    dispatchIrq(false, 3u);
++
++    if (G.active)
++        publishDebugContext(*G.active);
++    if (m_vsyncTick - G.publishedTick >= 8u)
++    {
++        G.publishedTick = m_vsyncTick;
++        copyMainContextToRuntime();
++        publishSnapshot();
++    }
++}
++
++void EeScheduler::wotmDeliverPending()
++{
++    GuestThread &main = m_threads.at(kMainThreadId);
++    while (!m_pendingInvocations.empty() && !m_stopRequested.load(std::memory_order_acquire))
++    {
++        if (main.invocations.size() >= kMaxInvocationDepth)
++        {
++            warnUnsupported("interrupcao aninhada fundo demais", static_cast<int>(main.invocations.size()));
++            m_pendingInvocations.clear();
++            break;
++        }
++        GuestInvocation invocation = std::move(m_pendingInvocations.front());
++        m_pendingInvocations.pop_front();
++        if (getRegU32(&invocation.context, 29) == 0u)
++            SET_GPR_U32(&invocation.context, 29, invocationStackTop());
++        const size_t base = main.invocations.size();
++        main.invocations.push_back(std::move(invocation));
++        ++G.deliverDepth;
++        wotmRunInvocations(base);
++        --G.deliverDepth;
++    }
++}
++
++// Roda as invocacoes acima de baseDepth ate todas voltarem (pc 0), como o laco do escalonador fazia, mas aninhado.
++void EeScheduler::wotmRunInvocations(size_t baseDepth)
++{
++    GuestThread &main = m_threads.at(kMainThreadId);
++    while (main.invocations.size() > baseDepth)
++    {
++        GuestInvocation &top = main.invocations.back();
++        R5900Context &context = top.context;
++        G.active = &context;
++        if (context.pc == 0u || m_stopRequested.load(std::memory_order_acquire))
++        {
++            GuestInvocation done = std::move(top);
++            main.invocations.pop_back();
++            G.active = &main.activeContext();
++            if (done.onComplete && !m_stopRequested.load(std::memory_order_acquire))
++            {
++                try
++                {
++                    done.onComplete(done.context, main.activeContext());
++                }
++                catch (const EeDispatcherTransfer &)
++                {
++                }
++            }
++            continue;
++        }
++        if (!m_runtime.hasFunction(context.pc))
++        {
++            m_runtime.reportMissingFunction(m_rdram, &context, context.pc, context.pc, PS2Runtime::GuestBranchKind::DirectJump,
++                                            "EE invocacao (wotm)");
++            context.pc = 0u;
++            continue;
++        }
++        PS2Runtime::RecompiledFunction function = m_runtime.lookupFunction(context.pc);
++        const bool wasInside = m_insideInterrupt;
++        m_insideInterrupt = top.kind == GuestInvocationKind::Interrupt;
++        try
++        {
++            function(m_rdram, &context, &m_runtime);
++        }
++        catch (const EeDispatcherTransfer &)
++        {
++        }
++        m_insideInterrupt = wasInside;
++    }
++    G.active = &main.activeContext();
++}
++
++void EeScheduler::wotmIdleWait()
++{
++    const auto t0 = Clock::now();
++    g_wotmIdleCalls.fetch_add(1, std::memory_order_relaxed);
++    {
++        std::unique_lock lock(m_eventMutex);
++        G.waiting = true;
++        m_eventCv.wait(lock, [this]()
++                       { return G.vblankDue > 0u || !m_events.empty() || m_stopRequested.load(std::memory_order_acquire) ||
++                                (G.deliverDepth == 0 && !m_pendingInvocations.empty()); });
++        G.waiting = false;
++    }
++    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - t0).count();
++    g_wotmIdleUs.fetch_add(static_cast<unsigned long long>(us), std::memory_order_relaxed);
++    const uint64_t cycles = static_cast<uint64_t>(us) * kEeClockHz / 1000000ull;
++    g_wotmIdleCycles += cycles;
++    m_eeCycle += cycles;
++    g_wotmEeCycle = m_eeCycle;
++}
++
++// Espera no lugar: dorme ate a atencao, aplica (vblank, eventos, interrupcoes se nao estiver dentro de uma) e confere de novo.
++template <typename Done>
++static void wotmWaitUntil(EeScheduler &ee, GuestThread &main, EeWaitReason reason, Done done,
++                          void (EeScheduler::*idle)(), void (EeScheduler::*service)(bool), const std::atomic<bool> &stop)
++{
++    const EeThreadStatus status = main.status;
++    main.status = EeThreadStatus::Waiting;
++    main.wait.reason = reason;
++    while (!done() && !stop.load(std::memory_order_acquire))
++    {
++        (ee.*idle)();
++        (ee.*service)(G.deliverDepth == 0);
++    }
++    main.wait.reason = EeWaitReason::None;
++    main.status = status;
++}
++
++int EeScheduler::waitVSyncHere(uint64_t afterTick, int fixedResult)
++{
++    assertExecutor();
++    if (G.deliverDepth == 0 && m_checkpointPending.load(std::memory_order_acquire))
++        wotmService(true);
++    wotmWaitUntil(*this, m_threads.at(kMainThreadId), EeWaitReason::VSync,
++                  [this, afterTick]() { return m_vsyncTick > afterTick; },
++                  &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
++    return fixedResult >= 0 ? fixedResult : static_cast<int>((m_vsyncTick - 1u) & 1u);
++}
++
++[[noreturn]] void EeScheduler::waitVSync(uint64_t afterTick, int fixedResult, std::function<void(R5900Context &)> completion)
++{
++    const int result = waitVSyncHere(afterTick, fixedResult);
++    R5900Context &context = *currentContext();
++    setReturnS32(&context, result);
++    if (completion)
++        completion(context);
++    throw EeDispatcherTransfer{};
++}
++
++void EeScheduler::completeVSync(uint64_t)
++{
++}
++
++void EeScheduler::completeExternalWait(uint32_t type, uint64_t token, int result)
++{
++    for (ExternalWait &wait : G.external)
++        if (!wait.done && wait.type == type && wait.token == token)
++        {
++            wait.done = true;
++            wait.result = result;
++        }
++}
++
++[[noreturn]] void EeScheduler::waitExternal(EeWaitReason reason, uint32_t type, uint64_t token,
++                                            std::function<void(R5900Context &)> completion)
++{
++    assertExecutor();
++    const size_t slot = G.external.size();
++    G.external.push_back(ExternalWait{type, token, false, 0});
++    wotmWaitUntil(*this, m_threads.at(kMainThreadId), reason, [slot]() { return G.external[slot].done; },
++                  &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
++    const int result = G.external[slot].result;
++    G.external.resize(slot);
++    R5900Context &context = *currentContext();
++    setReturnS32(&context, result);
++    if (completion)
++        completion(context);
++    throw EeDispatcherTransfer{};
++}
++
++// ---- threads: so a principal ----
++
++void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_t gp)
++{
++    GuestThread *target = currentThread();
++    if (!target)
++        return;
++    target->stack = stack;
++    target->stackSize = stackSize;
++    target->gp = gp;
++    publishSnapshot();
++}
++
++int EeScheduler::createThread(const EeThreadCreateParams &params)
++{
++    if (params.priority < 1 || params.priority >= kPriorityCount)
++        return KE_ILLEGAL_PRIORITY;
++    const int id = allocateThreadId();
++    if (id == 0)
++        return KE_ERROR;
++    warnUnsupported("CreateThread (registrada, nunca roda)", id);
++    GuestThread thread{};
++    thread.id = id;
++    thread.entry = params.entry;
++    thread.stack = params.stack;
++    thread.stackSize = params.stackSize;
++    thread.gp = params.gp;
++    thread.attr = params.attr;
++    thread.option = params.option;
++    thread.initialPriority = params.priority;
++    thread.currentPriority = params.priority;
++    thread.status = EeThreadStatus::Dormant;
++    m_threads.emplace(id, std::move(thread));
++    publishSnapshot();
++    return id;
++}
++
++int EeScheduler::deleteThread(int id, uint32_t &ownedStack)
++{
++    ownedStack = 0;
++    if (id <= kMainThreadId)
++        return KE_ILLEGAL_THID;
++    auto it = m_threads.find(id);
++    if (it == m_threads.end())
++        return KE_UNKNOWN_THID;
++    if (it->second.ownsStack)
++        ownedStack = it->second.stack;
++    m_threads.erase(it);
++    publishSnapshot();
++    return KE_OK;
++}
++
++int EeScheduler::startThread(int id, uint32_t, const R5900Context &, bool)
++{
++    if (!thread(id))
++        return KE_UNKNOWN_THID;
++    warnUnsupported("StartThread", id);
++    return KE_ERROR;
++}
++
++[[noreturn]] void EeScheduler::exitCurrent(bool)
++{
++    std::fprintf(stderr, "[ee] ExitThread na thread principal: o EE so atende vblanks daqui em diante\n");
++    G.mainDormant = true;
++    if (GuestThread *main = thread(kMainThreadId))
++    {
++        main->status = EeThreadStatus::Dormant;
++        main->invocations.clear();
++    }
++    publishSnapshot();
++    throw EeDispatcherTransfer{};
++}
++
++int EeScheduler::terminateThread(int id, uint32_t &ownedStack, bool)
++{
++    ownedStack = 0;
++    if (id == 0 || id == kMainThreadId)
++        return KE_ILLEGAL_THID;
++    return thread(id) ? KE_DORMANT : KE_UNKNOWN_THID;
++}
++
++int EeScheduler::suspendThread(int id, bool)
++{
++    if (id == 0 || id == kMainThreadId)
++    {
++        warnUnsupported("SuspendThread da principal", id);
++        return KE_ILLEGAL_THID;
++    }
++    return thread(id) ? KE_DORMANT : KE_UNKNOWN_THID;
++}
++
++int EeScheduler::resumeThread(int id, bool)
++{
++    if (id == 0 || id == kMainThreadId)
++        return KE_ILLEGAL_THID;
++    return thread(id) ? KE_NOT_SUSPEND : KE_UNKNOWN_THID;
++}
++
++void EeScheduler::sleepCurrent()
++{
++    GuestThread &main = m_threads.at(kMainThreadId);
++    if (main.wakeupCount == 0u)
++    {
++        G.sleeping = true;
++        G.releaseWait = false;
++        wotmWaitUntil(*this, main, EeWaitReason::Sleep, [&main]() { return main.wakeupCount != 0u || G.releaseWait; },
++                      &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
++        G.sleeping = false;
++        if (G.releaseWait)
++        {
++            G.releaseWait = false;
++            setReturnS32(currentContext(), KE_RELEASE_WAIT);
++            return;
++        }
++    }
++    if (main.wakeupCount != 0u)
++        --main.wakeupCount;
++    setReturnS32(currentContext(), KE_OK);
++}
++
++int EeScheduler::wakeupThread(int id, bool)
++{
++    GuestThread *target = thread(id);
++    if (!target)
++        return id == 0 ? KE_ILLEGAL_THID : KE_UNKNOWN_THID;
++    if (id == kMainThreadId && !G.sleeping && G.deliverDepth == 0)
++        return KE_ILLEGAL_THID;   // a propria thread
++    if (target->status == EeThreadStatus::Dormant)
++        return KE_DORMANT;
++    ++target->wakeupCount;
++    return KE_OK;
++}
++
++int EeScheduler::cancelWakeup(int id)
++{
++    if (id == 0)
++        id = kMainThreadId;
++    GuestThread *target = thread(id);
++    if (!target)
++        return KE_UNKNOWN_THID;
++    const int old = static_cast<int>(target->wakeupCount);
++    target->wakeupCount = 0;
++    return old;
++}
++
++int EeScheduler::changePriority(int id, int priority, bool, int &oldPriority)
++{
++    if (priority < 1 || priority >= kPriorityCount)
++        return KE_ILLEGAL_PRIORITY;
++    if (id == 0)
++        id = kMainThreadId;
++    GuestThread *target = thread(id);
++    if (!target)
++        return KE_UNKNOWN_THID;
++    oldPriority = target->currentPriority;
++    target->currentPriority = priority;
++    return KE_OK;
++}
++
++int EeScheduler::rotateReadyQueue(int priority, bool)
++{
++    return (priority < 0 || priority >= kPriorityCount) ? KE_ILLEGAL_PRIORITY : KE_OK;
++}
++
++int EeScheduler::releaseWait(int id, bool)
++{
++    if (id == 0)
++        return KE_ILLEGAL_THID;
++    GuestThread *target = thread(id);
++    if (!target)
++        return KE_UNKNOWN_THID;
++    if (id != kMainThreadId || target->status != EeThreadStatus::Waiting)
++        return KE_NOT_WAIT;
++    G.releaseWait = true;
++    return KE_OK;
++}
++
++void EeScheduler::transferIfRequested(bool)
++{
++}
++
++// ---- semaforos e event flags (o WotM cria 2 semaforos e nao usa) ----
++
++int EeScheduler::createSemaphore(int initCount, int maxCount, uint32_t attr, uint32_t option)
++{
++    if (maxCount <= 0 || initCount < 0 || initCount > maxCount)
++        return KE_ERROR;
++    const int id = allocatePositiveId(m_nextSemaphoreId, m_semaphores);
++    if (id == 0)
++        return KE_ERROR;
++    EeSemaphore semaphore{};
++    semaphore.id = id;
++    semaphore.count = initCount;
++    semaphore.maxCount = maxCount;
++    semaphore.initCount = initCount;
++    semaphore.attr = attr;
++    semaphore.option = option;
++    m_semaphores.emplace(id, std::move(semaphore));
++    publishSnapshot();
++    return id;
++}
++
++int EeScheduler::deleteSemaphore(int id, bool)
++{
++    if (m_semaphores.erase(id) == 0u)
++        return KE_UNKNOWN_SEMID;
++    publishSnapshot();
++    return id;
++}
++
++int EeScheduler::signalSemaphore(int id, bool)
++{
++    EeSemaphore *object = semaphore(id);
++    if (!object)
++        return KE_UNKNOWN_SEMID;
++    if (object->count == object->maxCount)
++        return KE_SEMA_OVF;
++    ++object->count;
++    return id;
++}
++
++int EeScheduler::pollSemaphore(int id)
++{
++    EeSemaphore *object = semaphore(id);
++    if (!object)
++        return KE_UNKNOWN_SEMID;
++    if (object->count == 0)
++        return KE_SEMA_ZERO;
++    --object->count;
++    return id;
++}
++
++void EeScheduler::waitSemaphore(int id)
++{
++    if (!semaphore(id))
++    {
++        setReturnS32(currentContext(), KE_UNKNOWN_SEMID);
++        return;
++    }
++    if (semaphore(id)->count == 0)
++    {
++        warnUnsupported("WaitSema bloqueou (espera no lugar por uma interrupcao)", id);
++        wotmWaitUntil(*this, m_threads.at(kMainThreadId), EeWaitReason::Semaphore,
++                      [this, id]() { const EeSemaphore *s = semaphore(id); return !s || s->count != 0; },
++                      &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
++    }
++    EeSemaphore *object = semaphore(id);
++    if (!object)
++    {
++        setReturnS32(currentContext(), KE_WAIT_DELETE);
++        return;
++    }
++    if (object->count != 0)
++        --object->count;
++    setReturnS32(currentContext(), id);
++}
++
++int EeScheduler::createEventFlag(uint32_t initialBits, uint32_t attr, uint32_t option)
++{
++    const int id = allocatePositiveId(m_nextEventFlagId, m_eventFlags);
++    if (id == 0)
++        return KE_ERROR;
++    EeEventFlag flag{};
++    flag.id = id;
++    flag.attr = attr;
++    flag.option = option;
++    flag.initBits = initialBits;
++    flag.bits = initialBits;
++    m_eventFlags.emplace(id, std::move(flag));
++    publishSnapshot();
++    return id;
++}
++
++int EeScheduler::deleteEventFlag(int id, bool)
++{
++    if (m_eventFlags.erase(id) == 0u)
++        return KE_UNKNOWN_EVFID;
++    publishSnapshot();
++    return KE_OK;
++}
++
++int EeScheduler::setEventFlag(int id, uint32_t bits, bool)
++{
++    EeEventFlag *flag = eventFlag(id);
++    if (!flag)
++        return KE_UNKNOWN_EVFID;
++    flag->bits |= bits;
++    return KE_OK;
++}
++
++int EeScheduler::clearEventFlag(int id, uint32_t mask)
++{
++    EeEventFlag *flag = eventFlag(id);
++    if (!flag)
++        return KE_UNKNOWN_EVFID;
++    flag->bits &= mask;
++    return KE_OK;
++}
++
++int EeScheduler::pollEventFlag(int id, uint32_t bits, uint32_t mode, uint32_t &observedBits)
++{
++    EeEventFlag *flag = eventFlag(id);
++    if (!flag)
++        return KE_UNKNOWN_EVFID;
++    if (!eventCond(flag->bits, bits, mode))
++        return KE_EVF_COND;
++    observedBits = flag->bits;
++    if ((mode & WEF_CLEAR_ALL) != 0u)
++        flag->bits = 0;
++    else if ((mode & WEF_CLEAR) != 0u)
++        flag->bits &= ~bits;
++    return KE_OK;
++}
++
++void EeScheduler::waitEventFlag(int id, uint32_t bits, uint32_t mode, uint32_t resultAddress)
++{
++    if (!eventFlag(id))
++    {
++        setReturnS32(currentContext(), KE_UNKNOWN_EVFID);
++        return;
++    }
++    if (!eventCond(eventFlag(id)->bits, bits, mode))
++    {
++        warnUnsupported("WaitEventFlag bloqueou (espera no lugar por uma interrupcao)", id);
++        wotmWaitUntil(*this, m_threads.at(kMainThreadId), EeWaitReason::EventFlag,
++                      [this, id, bits, mode]() { const EeEventFlag *f = eventFlag(id); return !f || eventCond(f->bits, bits, mode); },
++                      &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
++    }
++    EeEventFlag *flag = eventFlag(id);
++    if (!flag)
++    {
++        setReturnS32(currentContext(), KE_WAIT_DELETE);
++        return;
++    }
++    writeGuestU32(resultAddress, flag->bits);
++    if ((mode & WEF_CLEAR_ALL) != 0u)
++        flag->bits = 0;
++    else if ((mode & WEF_CLEAR) != 0u)
++        flag->bits &= ~bits;
++    setReturnS32(currentContext(), KE_OK);
++}
++
++// ---- alarmes: nenhum no WotM ----
++
++int EeScheduler::setAlarm(uint16_t ticks, uint32_t, uint32_t, uint32_t, uint32_t)
++{
++    warnUnsupported("SetAlarm", ticks);
++    return KE_ERROR;
++}
++
++int EeScheduler::cancelAlarm(int)
++{
++    return KE_ERROR;
++}
++
++// ---- invocacoes (interrupcoes, callbacks) ----
++
++void EeScheduler::queueInvocation(GuestInvocation invocation)
++{
++    invocation.sequence = ++m_invocationSequence;
++    m_pendingInvocations.push_back(std::move(invocation));
++    m_checkpointPending.store(true, std::memory_order_release);
++}
++
++[[noreturn]] void EeScheduler::invokeCurrent(GuestInvocation invocation)
++{
++    GuestThread &main = m_threads.at(kMainThreadId);
++    if (main.invocations.size() >= kMaxInvocationDepth)
++    {
++        warnUnsupported("chamada aninhada fundo demais", static_cast<int>(main.invocations.size()));
++        throw EeDispatcherTransfer{};
++    }
++    if (getRegU32(&invocation.context, 29) == 0u)
++        SET_GPR_U32(&invocation.context, 29, invocationStackTop());
++    invocation.sequence = ++m_invocationSequence;
++    const size_t base = main.invocations.size();
++    main.invocations.push_back(std::move(invocation));
++    wotmRunInvocations(base);
++    throw EeDispatcherTransfer{};
++}
++
++[[noreturn]] void EeScheduler::invokeCurrentSequence(std::vector<GuestInvocation> invocations)
++{
++    GuestThread &main = m_threads.at(kMainThreadId);
++    const size_t base = main.invocations.size();
++    if (base + invocations.size() > kMaxInvocationDepth)
++    {
++        warnUnsupported("sequencia de chamadas fundo demais", static_cast<int>(invocations.size()));
++        throw EeDispatcherTransfer{};
++    }
++    for (auto it = invocations.rbegin(); it != invocations.rend(); ++it)
++    {
++        if (getRegU32(&it->context, 29) == 0u)
++            SET_GPR_U32(&it->context, 29, invocationStackTop());
++        it->sequence = ++m_invocationSequence;
++        main.invocations.push_back(std::move(*it));
++    }
++    wotmRunInvocations(base);
++    throw EeDispatcherTransfer{};
++}
++
++bool EeScheduler::hasInvocation(GuestInvocationKind kind, uint64_t tag) const
++{
++    const GuestThread *main = thread(kMainThreadId);
++    return main && std::any_of(main->invocations.begin(), main->invocations.end(),
++                               [kind, tag](const GuestInvocation &i) { return i.kind == kind && i.tag == tag; });
++}
++
++uint32_t EeScheduler::invocationStackTop()
++{
++    const GuestThread *main = thread(kMainThreadId);
++    const uint64_t key = main ? main->invocations.size() : 0u;
++    const auto existing = m_invocationStackTops.find(key);
++    if (existing != m_invocationStackTops.end())
++        return existing->second;
++    constexpr uint32_t kInvocationStackSize = 0x4000u;
++    const uint32_t top = m_runtime.reserveAsyncCallbackStack(kInvocationStackSize, 16u);
++    if (top == 0u)
++        throw std::runtime_error("EE invocation stack space exhausted");
++    m_invocationStackTops.emplace(key, top);
++    return top;
++}
++
++// ---- interrupcoes ----
++
++int EeScheduler::addIrqHandler(bool dmac, uint32_t cause, uint32_t handler, bool append, uint32_t argument, uint32_t gp, uint32_t sp)
++{
++    auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
++    int &nextId = dmac ? m_nextDmacHandlerId : m_nextIntcHandlerId;
++    const int id = allocatePositiveId(nextId, handlers);
++    if (id == 0)
++        return KE_ERROR;
++    int &head = dmac ? m_dmacHeadOrder : m_intcHeadOrder;
++    int &tail = dmac ? m_dmacTailOrder : m_intcTailOrder;
++    handlers.emplace(id, EeIrqHandler{id, cause, handler, argument, gp, sp, true, append ? ++tail : --head});
++    return id;
++}
++
++int EeScheduler::removeIrqHandler(bool dmac, uint32_t cause, int id)
++{
++    auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
++    auto it = handlers.find(id);
++    if (it != handlers.end() && it->second.cause == cause)
++        handlers.erase(it);
++    return KE_OK;
++}
++
++int EeScheduler::setIrqHandlerEnabled(bool dmac, int id, bool enabled)
++{
++    auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
++    auto it = handlers.find(id);
++    if (it != handlers.end())
++        it->second.enabled = enabled;
++    return KE_OK;
++}
++
++int EeScheduler::setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled)
++{
++    if (cause < 32u)
++    {
++        uint32_t &mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
++        if (enabled)
++            mask |= 1u << cause;
++        else
++            mask &= ~(1u << cause);
++    }
++    return KE_OK;
++}
++
++void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
++{
++    const uint32_t mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
++    if (cause < 32u && (mask & (1u << cause)) == 0u)
++        return;
++    const auto &handlers = dmac ? m_dmacHandlers : m_intcHandlers;
++    if (handlers.empty())
++        return;
++    std::vector<EeIrqHandler> matching;
++    for (const auto &[id, handler] : handlers)
++    {
++        (void)id;
++        if (handler.enabled && handler.cause == cause && handler.handler != 0u && m_runtime.hasFunction(handler.handler))
++            matching.push_back(handler);
++    }
++    std::sort(matching.begin(), matching.end(), [](const EeIrqHandler &l, const EeIrqHandler &r) { return l.order < r.order; });
++    for (const EeIrqHandler &handler : matching)
++    {
++        GuestInvocation invocation{};
++        invocation.kind = GuestInvocationKind::Interrupt;
++        invocation.context.pc = handler.handler;
++        SET_GPR_U32(&invocation.context, 4, cause);
++        SET_GPR_U32(&invocation.context, 5, handler.argument);
++        SET_GPR_U32(&invocation.context, 28, handler.gp);
++        SET_GPR_U32(&invocation.context, 29, 0u);
++        SET_GPR_U32(&invocation.context, 31, 0u);
++        queueInvocation(std::move(invocation));
++    }
++}
++
++void EeScheduler::setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress)
++{
++    m_vsyncFlagAddress = flagAddress;
++    m_vsyncTickAddress = tickAddress;
++    writeGuestU32(flagAddress, 0u);
++    if (tickAddress != 0u)
++    {
++        const uint32_t physical = tickAddress & 0x1FFFFFFFu;
++        if (m_rdram && physical <= PS2_RAM_SIZE - sizeof(uint64_t))
++        {
++            const uint64_t zero = 0u;
++            std::memcpy(m_rdram + physical, &zero, sizeof(zero));
++        }
++    }
++}
++
++uint64_t EeScheduler::currentVSyncTick() const noexcept
++{
++    return m_vsyncTick;
++}
++
++void EeScheduler::shiftHostDeadlines(std::chrono::steady_clock::duration d)
++{
++    {
++        std::lock_guard lock(m_eventMutex);
++        G.next += d;
++        G.vblankDue = 0;   // os vblanks contados durante a pausa nao vencem na volta
++    }
++    G.timerCv.notify_all();
++}
++
++uint32_t EeScheduler::setGsVSyncCallback(uint32_t callback, uint32_t gp, uint32_t)
++{
++    const uint32_t previous = m_gsVSyncCallback;
++    m_gsVSyncCallback = callback;
++    m_gsVSyncCallbackGp = gp;
++    m_gsVSyncCallbackSp = 0u;
++    return previous;
++}
++
++// ---- acesso e diagnostico ----
++
++GuestThread *EeScheduler::thread(int id)
++{
++    auto it = m_threads.find(id);
++    return it == m_threads.end() ? nullptr : &it->second;
++}
++
++const GuestThread *EeScheduler::thread(int id) const
++{
++    auto it = m_threads.find(id);
++    return it == m_threads.end() ? nullptr : &it->second;
++}
++
++EeSemaphore *EeScheduler::semaphore(int id)
++{
++    auto it = m_semaphores.find(id);
++    return it == m_semaphores.end() ? nullptr : &it->second;
++}
++
++const EeSemaphore *EeScheduler::semaphore(int id) const
++{
++    auto it = m_semaphores.find(id);
++    return it == m_semaphores.end() ? nullptr : &it->second;
++}
++
++EeEventFlag *EeScheduler::eventFlag(int id)
++{
++    auto it = m_eventFlags.find(id);
++    return it == m_eventFlags.end() ? nullptr : &it->second;
++}
++
++const EeEventFlag *EeScheduler::eventFlag(int id) const
++{
++    auto it = m_eventFlags.find(id);
++    return it == m_eventFlags.end() ? nullptr : &it->second;
++}
++
++GuestThread *EeScheduler::currentThread()
++{
++    return thread(m_currentThreadId);
++}
++
++const GuestThread *EeScheduler::currentThread() const
++{
++    return thread(m_currentThreadId);
++}
++
++int EeScheduler::currentThreadId() const noexcept
++{
++    return m_currentThreadId;
++}
++
++R5900Context *EeScheduler::currentContext()
++{
++    GuestThread *self = currentThread();
++    return self ? &self->activeContext() : nullptr;
++}
++
++uint8_t *EeScheduler::rdram() const noexcept
++{
++    return m_rdram;
++}
++
++void EeScheduler::bindMainContextForSyscall(R5900Context &ctx, uint8_t *rdram)
++{
++    if (m_executorThread == std::thread::id{})
++    {
++        reset(rdram, ctx);
++        return;
++    }
++    m_rdram = rdram;
++}
++
++EeKernelSnapshot EeScheduler::snapshot() const
++{
++    std::lock_guard lock(m_snapshotMutex);
++    return m_snapshot;
++}
++
++void EeScheduler::publishSnapshot()
++{
++    EeKernelSnapshot next{};
++    next.sequence = ++m_snapshotSequence;
++    next.eeCycle = m_eeCycle;
++    next.runningThreadId = m_currentThreadId;
++    for (const auto &[id, item] : m_threads)
++    {
++        EeThreadSnapshot s{};
++        s.id = id;
++        const R5900Context &context = item.activeContext();
++        s.pc = context.pc;
++        s.ra = getRegU32(&context, 31);
++        s.sp = getRegU32(&context, 29);
++        s.contextGp = getRegU32(&context, 28);
++        s.entry = item.entry;
++        s.stack = item.stack;
++        s.stackSize = item.stackSize;
++        s.gp = item.gp;
++        s.initialPriority = item.initialPriority;
++        s.currentPriority = item.currentPriority;
++        s.status = item.status;
++        s.waitReason = item.wait.reason;
++        s.wakeupCount = item.wakeupCount;
++        s.invocationDepth = static_cast<uint32_t>(item.invocations.size());
++        next.threads.push_back(s);
++    }
++    std::sort(next.threads.begin(), next.threads.end(), [](const auto &l, const auto &r) { return l.id < r.id; });
++    for (const auto &[id, item] : m_semaphores)
++        next.semaphores.push_back(EeSemaphoreSnapshot{id, item.count, item.maxCount, 0u});
++    std::sort(next.semaphores.begin(), next.semaphores.end(), [](const auto &l, const auto &r) { return l.id < r.id; });
++    for (const auto &[id, item] : m_eventFlags)
++        next.eventFlags.push_back(EeEventFlagSnapshot{id, item.bits, item.initBits, item.attr, 0u});
++    std::sort(next.eventFlags.begin(), next.eventFlags.end(), [](const auto &l, const auto &r) { return l.id < r.id; });
++    std::lock_guard lock(m_snapshotMutex);
++    m_snapshot = std::move(next);
++}
++
++void EeScheduler::assertExecutor() const
++{
++    assert(m_executorThread == std::this_thread::get_id());
++}
++
++int EeScheduler::allocateThreadId()
++{
++    for (int attempts = 0; attempts <= kLastThreadId - kFirstThreadId; ++attempts)
++    {
++        const int candidate = m_nextThreadId;
++        m_nextThreadId = candidate == kLastThreadId ? kFirstThreadId : candidate + 1;
++        if (!m_threads.contains(candidate))
++            return candidate;
++    }
++    return 0;
++}
++
++void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
++{
++    if (address == 0u)
++        return;
++    const uint32_t physical = address & 0x1FFFFFFFu;
++    if (!m_rdram || physical > PS2_RAM_SIZE - sizeof(value))
++        return;
++    std::memcpy(m_rdram + physical, &value, sizeof(value));
++}
++
++void EeScheduler::copyMainContextToRuntime()
++{
++    const GuestThread *main = thread(kMainThreadId);
++    if (main)
++        m_runtime.m_cpuContext = main->context;
++}
++
++void EeScheduler::publishDebugContext(const R5900Context &context)
++{
++    m_runtime.m_debugPc.store(context.pc, std::memory_order_relaxed);
++    m_runtime.m_debugRa.store(getRegU32(&context, 31), std::memory_order_relaxed);
++    m_runtime.m_debugSp.store(getRegU32(&context, 29), std::memory_order_relaxed);
++    m_runtime.m_debugGp.store(getRegU32(&context, 28), std::memory_order_relaxed);
++}
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
 index 56a978e..0869e07 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
@@ -1429,6 +2796,23 @@ index d467c4b..ba6df64 100644
          setReturnS32(ctx, 0);
      }
  
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+index 2c98016..3751e35 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
+@@ -78,7 +78,12 @@ namespace ps2_syscalls
+     void WaitVSyncTick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int fixedResult)
+     {
+         EeScheduler &ee = scheduler(rdram, ctx, runtime);
++#if PS2X_HW_EMU
+         ee.waitVSync(ee.currentVSyncTick(), fixedResult);
++#else
++        // jogo (wotm, passo 10 da FRONTEIRA.md no repo WoTM): espera no lugar e volta ao chamador (o pc ja e o $ra)
++        setReturnS32(ctx, ee.waitVSyncHere(ee.currentVSyncTick(), fixedResult));
++#endif
+     }
+ 
+     void SetVSyncFlag(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 index 5658928..d968780 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
