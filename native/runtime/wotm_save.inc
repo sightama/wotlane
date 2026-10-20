@@ -12,11 +12,17 @@
 
 #include "wotm_json.hpp"
 
+#include <atomic>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <system_error>
+#include <utility>
 #include <vector>
+
+// Cada gravacao do save.json soma 1 (thread do EE); o icone de salvamento (native/wotm_saveicon.hpp, thread da janela) le.
+std::atomic<uint32_t> g_wotmSaveCount{0};
 
 namespace wotm_save
 {
@@ -465,6 +471,202 @@ namespace wotm_save
         restamp();
     }
 
+    // ---- gravacao direta, sem as paginas do cartao (POS_FRONTEIRA.md, item 3, passo c) ----
+    //
+    // Boot, opcoes, destrave, endurance e fim da historia nao abrem mais o cartao: o MonsterMc::update* de cada um (chamado num laco
+    // ate MonsterMc+4) vira uma copia direta entre a RAM e o JSON e termina na mesma chamada. A aventura (updateStoryModeSave/Load)
+    // continua com as paginas e os binarios (item 5). Os tokens que o jogo soma fora dessas gravacoes (fim de fase da historia, em
+    // Shell::EvaluateOnePlayerStoryStatus) sao pegos pela vigia por quadro (poll). WOTM_SAVEAUTO=0 volta as paginas do cartao.
+
+    void w32(uint8_t *rdram, uint32_t a, uint32_t v) { std::memcpy(rdram + (a & 0x1FFFFFFu), &v, 4); }
+    constexpr uint32_t kSelStride = 0x2C, kSelState = 4, kSelCost = 8;   // SelectSlot (12 grupos de 4, 0xB0 por grupo)
+    constexpr uint32_t kGameMatchMode = 0x1203CC, kGameUnk = 0x1204B0;
+    constexpr uint32_t kShellSfx = 0x2A30, kShellMusic = 0x2A34, kShell2A40 = 0x2A40, kShellMono = 0x2C20, kShellCtl = 0x2B8C,
+                       kShellVib = 0x2B94, kShellTokens = 0x2B24;
+
+    // MonsterMc::getSettingsData: RAM -> bloco de 0x380 (o resto zero, com a marca)
+    bool ramToBlock(const uint8_t *rdram, std::vector<uint8_t> &b)
+    {
+        const uint32_t sh = ramU32(rdram, wotm::sym::shell), gm = ramU32(rdram, wotm::sym::game);
+        if (!sh || !gm)
+            return false;
+        b.assign(kSettingsSize, 0);
+        wr(b, 0x00, ramU32(rdram, gm + kGameMatchMode));
+        wr(b, 0x04, ramU32(rdram, sh + kShellSfx));
+        wr(b, 0x08, ramU32(rdram, sh + kShellMusic));
+        wr(b, 0x0C, ramU32(rdram, sh + kShell2A40));
+        wr(b, 0x10, ramU32(rdram, sh + kShellMono));
+        for (uint32_t k = 0; k < 2; ++k)
+        {
+            wr(b, 0x14 + k * 4, ramU32(rdram, sh + kShellCtl + k * 4));
+            wr(b, 0x1C + k * 4, ramU32(rdram, sh + kShellVib + k * 4));
+        }
+        wr(b, 0x24, ramU32(rdram, sh + kShellTokens));
+        for (uint32_t i = 0; i < 48; ++i)
+            wr(b, 0x28 + i * 4, ramU32(rdram, wotm::sym::monsterSelectMode + i * kSelStride + kSelState));
+        for (uint32_t k = 0; k < 3; ++k)
+            wr(b, 0xE8 + k * 4, ramU32(rdram, gm + kGameUnk + k * 4));
+        wr(b, kSettingsMagic, kMagic);
+        return true;
+    }
+
+    // MonsterMc::setSettingsData: bloco -> RAM (mono vira 0/1, como no jogo)
+    void blockToRam(uint8_t *rdram, const std::vector<uint8_t> &b)
+    {
+        const uint32_t sh = ramU32(rdram, wotm::sym::shell), gm = ramU32(rdram, wotm::sym::game);
+        if (!sh || !gm || b.size() != kSettingsSize)
+            return;
+        w32(rdram, gm + kGameMatchMode, rd(b, 0x00));
+        w32(rdram, sh + kShellSfx, rd(b, 0x04));
+        w32(rdram, sh + kShellMusic, rd(b, 0x08));
+        w32(rdram, sh + kShell2A40, rd(b, 0x0C));
+        w32(rdram, sh + kShellMono, rd(b, 0x10) != 0);
+        for (uint32_t k = 0; k < 2; ++k)
+        {
+            w32(rdram, sh + kShellCtl + k * 4, rd(b, 0x14 + k * 4));
+            w32(rdram, sh + kShellVib + k * 4, rd(b, 0x1C + k * 4));
+        }
+        w32(rdram, sh + kShellTokens, rd(b, 0x24));
+        for (uint32_t i = 0; i < 48; ++i)
+            w32(rdram, wotm::sym::monsterSelectMode + i * kSelStride + kSelState, rd(b, 0x28 + i * 4));
+        for (uint32_t k = 0; k < 3; ++k)
+            w32(rdram, gm + kGameUnk + k * 4, rd(b, 0xE8 + k * 4));
+    }
+
+    // Tokens e destraves da ultima gravacao (a vigia compara com a RAM)
+    struct Snap
+    {
+        bool valid = false;
+        uint32_t v[49] = {};
+        bool operator==(const Snap &o) const { return valid == o.valid && std::memcmp(v, o.v, sizeof v) == 0; }
+    };
+    Snap g_snap;
+    bool g_auto = false;
+    // cada gravacao do JSON soma g_wotmSaveCount (definido antes do namespace; o icone de salvamento, wotm_saveicon.hpp, le)
+
+    Snap snapOf(const uint8_t *rdram)
+    {
+        Snap s;
+        const uint32_t sh = ramU32(rdram, wotm::sym::shell);
+        if (!sh)
+            return s;
+        s.valid = true;
+        s.v[0] = ramU32(rdram, sh + kShellTokens);
+        for (uint32_t i = 0; i < 48; ++i)
+            s.v[1 + i] = ramU32(rdram, wotm::sym::monsterSelectMode + i * kSelStride + kSelState);
+        return s;
+    }
+
+    // RAM -> JSON. Sem `options`, so tokens e destraves (as opcoes do arquivo ficam: o menu de opcoes pode estar com valores ainda
+    // nao aceitos).
+    void ramToJson(const uint8_t *rdram, bool options, const char *why)
+    {
+        std::vector<uint8_t> b;
+        if (!ramToBlock(rdram, b))
+            return;
+        Value j;
+        std::error_code ec;
+        if (fs::exists(g_json, ec) && !loadJson(j))
+        {
+            fs::copy_file(g_json, g_json.string() + ".bad", fs::copy_options::overwrite_existing, ec);
+            std::fprintf(stderr, "[wotm] save: o JSON quebrado ficou em %s.bad\n", g_json.string().c_str());
+            j = Value();
+            g_badJson = false;
+        }
+        if (j.type != Value::Obj)
+            j = Value::object();
+        if (!j.get("format"))
+            j.at("format") = Value::integer(1);
+        const Value *oldOpt = j.get("options");
+        const bool keepOpt = !options && oldOpt;
+        const Value kept = keepOpt ? *oldOpt : Value();
+        settingsToJson(b, j);
+        if (keepOpt)
+            j.at("options") = kept;
+        saveJson(j, why);
+        g_snap = snapOf(rdram);
+        g_wotmSaveCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // JSON -> RAM (boot e "load settings"). Sem JSON, cria-o dos cartoes antigos se houver (beforeMc); sem nada, o jogo fica com
+    // os valores do construtor do Shell, como num cartao vazio.
+    void jsonToRam(uint8_t *rdram)
+    {
+        beforeMc();
+        Value j;
+        std::vector<uint8_t> b;
+        if (loadJson(j) && (j.get("options") || j.get("unlocks") || j.get("battleTokens")) && ramToBlock(rdram, b))
+        {
+            jsonToSettings(j, b);
+            blockToRam(rdram, b);
+        }
+        g_snap = snapOf(rdram);
+        afterMc(rdram);   // so a linha do log; os binarios nao mudaram
+    }
+
+    // A compra da tela de destrave so e efetivada dentro do McSaveSettings::update (g_monsterToUnlock/g_skinToUnlock: liga o
+    // state e desconta o preco); a tela poe -1 nos dois logo depois do laco.
+    void applyPendingUnlock(uint8_t *rdram)
+    {
+        const int32_t m = static_cast<int32_t>(ramU32(rdram, wotm::sym::g_monsterToUnlock));
+        const int32_t s = static_cast<int32_t>(ramU32(rdram, wotm::sym::g_skinToUnlock));
+        const uint32_t sh = ramU32(rdram, wotm::sym::shell);
+        if (m < 0 || s < 0 || !sh)
+            return;
+        const uint32_t e = wotm::sym::monsterSelectMode + (static_cast<uint32_t>(m) * 4 + static_cast<uint32_t>(s)) * kSelStride;
+        if (ramU32(rdram, e + kSelState))
+            return;
+        w32(rdram, sh + kShellTokens, ramU32(rdram, sh + kShellTokens) - ramU32(rdram, e + kSelCost));
+        w32(rdram, e + kSelState, 1);
+    }
+
+    enum class Seq { BootLoad, SettingsLoad, SettingsSave, UnlockSave, EndOfStorySave, EndureSave };
+    struct SeqHook { uint32_t fn; Seq seq; const char *why; };
+    const SeqHook kSeqHooks[] = {
+        {wotm::fn::updateBootLoad__9MonsterMc, Seq::BootLoad, "boot"},
+        {wotm::fn::updateSettingsLoad__9MonsterMc, Seq::SettingsLoad, "load settings"},
+        {wotm::fn::updateSettingsSave__9MonsterMc, Seq::SettingsSave, "opcoes"},
+        {wotm::fn::updateUnlockSave__9MonsterMc, Seq::UnlockSave, "destrave"},
+        {wotm::fn::updateEndOfStorySave__9MonsterMc, Seq::EndOfStorySave, "fim da historia"},
+        {wotm::fn::updateEndureSave__9MonsterMc, Seq::EndureSave, "endurance"},
+    };
+
+    template <size_t I> void seqReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+    {
+        const SeqHook &h = kSeqHooks[I];
+        const uint32_t self = GPR_U32(ctx, 4);
+        if (h.seq == Seq::BootLoad || h.seq == Seq::SettingsLoad)
+            jsonToRam(rdram);
+        else
+        {
+            applyPendingUnlock(rdram);
+            ramToJson(rdram, true, h.why);
+        }
+        // Como o stdExit: MonsterMc+0 (montar na proxima) e +4 (pronto, o laco do chamador sai). McPageMgr+0x130: a sequencia chegou
+        // a ultima pagina (a tela de opcoes so volta com ele ligado).
+        w32(rdram, self + 0, 1);
+        w32(rdram, self + 4, 1);
+        w32(rdram, wotm::sym::x_9McPageMgr_global + 0x130, 1);
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+    template <size_t... I> void registerSeqs(PS2Runtime &runtime, std::index_sequence<I...>)
+    {
+        (runtime.registerFunction(kSeqHooks[I].fn, &seqReplaced<I>), ...);
+    }
+
+    // Uma vez por quadro (sceGsSyncV): tokens ou destraves mudaram fora de uma gravacao -> JSON (so eles).
+    void poll(const uint8_t *rdram)
+    {
+        if (!g_auto || !g_snap.valid)
+            return;
+        const Snap now = snapOf(rdram);
+        if (now.valid && !(now == g_snap))
+        {
+            const bool tokens = now.v[0] != g_snap.v[0];
+            ramToJson(rdram, false, tokens ? "tokens" : "destraves");
+        }
+    }
+
     constexpr uint32_t kStdInit = wotm::fn::stdInit__9MonsterMc, kStdExit = wotm::fn::stdExit__9MonsterMc;
     PS2Runtime::RecompiledFunction g_origStdInit = nullptr, g_origStdExit = nullptr;
 
@@ -498,6 +700,12 @@ namespace wotm_save
         runtime.registerFunction(kStdInit, &stdInitTapped);
         runtime.registerFunction(kStdExit, &stdExitTapped);
         g_on = true;
-        std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga)\n", g_json.string().c_str());
+        const char *a = std::getenv("WOTM_SAVEAUTO");
+        g_auto = !(a && a[0] == '0');
+        if (g_auto)
+            registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
+        std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); %s\n", g_json.string().c_str(),
+                     g_auto ? "opcoes, destraves e tokens gravados sozinhos, sem as telas do cartao (WOTM_SAVEAUTO=0 volta as telas)"
+                            : "telas do cartao como no PS2 (WOTM_SAVEAUTO=0)");
     }
 }

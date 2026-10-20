@@ -4,6 +4,7 @@ static std::atomic<bool> g_wotmShotKey{false};   // F8 na janela (wotm_foto.inc)
 #include "wotm_live.inc"
 #include "wotm_foto.inc"   // F7 pausa, F6 avanca um quadro, F8 foto com nota (WOTM_FOTOS)
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
+#include "wotm_saveicon.hpp"   // icone de salvamento automatico
 
 extern bool g_wotmVu1Tap;   // ps2_memory.cpp (checagem VU1 x nativo)
 static void wotmDrawScene(const uint8_t *rdram)
@@ -34,6 +35,13 @@ static void wotmDrawScene(const uint8_t *rdram)
         static const bool s_blackGap = std::getenv("PS2X_NO_GS") != nullptr && std::getenv("WOTM_GSFRAME") == nullptr;
         if (!drew && s_blackGap)
             DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), BLACK);
+    }
+    {
+        // Icone de salvamento (POS_FRONTEIRA.md, item 6): 1 s no canto a cada gravacao do save.json (wotm_save.inc)
+        static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        static const std::filesystem::path card =
+            (io.mcRoot.empty() ? (io.elfDirectory.empty() ? std::filesystem::current_path() : io.elfDirectory) / "mc0" : io.mcRoot) / "BASCUS-97197";
+        wotm::saveicon::presenter().present(io.cdRoot, io.cdImage.string(), card);
     }
     wotmFotoOverlay(drew, rdram);
 }

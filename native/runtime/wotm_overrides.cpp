@@ -610,6 +610,7 @@ namespace
         static uint32_t fadeRa = 0;
         if (ctx->pc == kSceGsSyncV)
         {
+            wotm_save::poll(rdram);   // tokens e destraves que mudaram fora de uma gravacao vao para o save.json
             const uint32_t ra = GPR_U32(ctx, 31);
             if (g_fieldLog)
             {

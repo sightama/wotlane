@@ -176,10 +176,20 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   voltam; "load game" no cartão 2 abre a fita que veio dele; gravar as opções no cartão 2 também atualiza o JSON.
 - Cuidado: editar o `save.json` com o jogo aberto pode atropelar uma gravação (um editor com o arquivo aberto desde antes regrava a
   versão velha; aconteceu no teste). O certo é editar com o jogo fechado.
-- Próximo (combinado com o dono): opções, destraves e tokens salvos sozinhos (os `MonsterMc::update*Save` viram gravação direta da RAM
-  para o JSON, o boot lê direto do JSON; os tokens que o `Shell::EvaluateOnePlayerStoryStatus` soma no fim da fase também precisam ir
-  para o arquivo), com o ícone do item 6 no mesmo gancho; a campanha fica como a única escolha de slot (20 fitas), que é o item 5, junto
-  com a revisão dos 25 textos de memory card.
+- **Passo c, feito em 2026-10-20** (`WOTM_SAVEAUTO=0` volta as telas): opções, destraves e tokens se gravam sozinhos, sem tela do
+  cartão. Os chamadores (`screen init`, `saveSettings`, `saveUnlocks`, `loadSettings`, `wonStoryOverlay`, `lostEnduranceOverlay`) só
+  repetem o `MonsterMc::update*` até `MonsterMc+4`; os seis `update*` que não são da aventura (`BootLoad`, `SettingsLoad`,
+  `SettingsSave`, `UnlockSave`, `EndOfStorySave`, `EndureSave`) foram trocados por uma cópia direta (a mesma do
+  `getSettingsData`/`setSettingsData`) entre a RAM e o `save.json`, que liga `+0`, `+4` e `McPageMgr+0x130` (sequência concluída: a
+  tela de opções só volta com ele) na mesma chamada. Dois detalhes do retail que a troca mantém: a compra da tela de destrave só é
+  efetivada dentro do `McSaveSettings::update` (`g_monsterToUnlock`/`g_skinToUnlock`: liga o `state` e desconta o preço; a tela põe -1
+  nos dois logo depois), e o boot normaliza o mono e aplica volume e vibração depois que a sequência termina (isso continua no
+  chamador). Os tokens que o jogo soma fora dessas sequências (`Shell::EvaluateOnePlayerStoryStatus`, fim de fase da história: as duas
+  únicas escritas em `Shell+0x2B24` fora do cartão, do endurance e do construtor) são pegos por uma vigia no `sceGsSyncV`: tokens ou
+  destraves diferentes da última gravação vão para o JSON (só eles: as opções do arquivo ficam, o menu de opções pode estar com valores
+  não aceitos). A aventura (`updateStoryModeSave`/`Load`) segue com as telas e os binários, como antes (item 5).
+- Próximo: a campanha como a única escolha de slot (20 fitas), que é o item 5, junto com a revisão dos textos de memory card que
+  sobram nela.
 - Em aberto: o que é `Shell+0x2A40` e `TheGame+0x1204B0..B8`; o que exatamente o `McScrambleIcon` muda no `icon.sys`.
 
 ### 4. Pasta `mods/`
@@ -193,8 +203,11 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   array. **Em aberto:** como o jogador escolhe entre N slots sem a tela do cartão (decidir quando chegar aqui).
 
 ### 6. Ícone de salvamento automático
-- O ícone 3D do save do PS2 (formato de ícone do memory card) vem junto do que o jogo grava. Extrair e desenhar no nativo no canto
-  inferior direito por 1 s, disparado pelo gancho de gravação do item 3. Detalhes quando for fazer.
+- **Feito em 2026-10-20** (`native/wotm_saveicon.hpp`; `WOTM_SAVEICON_TEST=1` mostra a cada 3 s): o ícone é o `MEMCRD/ICON.ICO` do
+  disco (uma fita de filme; 1158 vértices, uma forma, textura 128x128 comprimida; o formato está no cabeçalho do arquivo). A cada
+  gravação do `save.json` o `wotm_save.inc` soma `g_wotmSaveCount`, e o `wotmDrawScene` desenha a fita girando no canto inferior
+  direito por 1 s (com 0,15 s de fade). Lê da pasta do disco, da ISO (`native/wotm_disc.hpp`, o leitor que era do FMV) ou, sem os
+  dois, da cópia que o jogo gravou no cartão. As luzes do `icon.sys` não são usadas (só a cor dos vértices e a textura).
 
 ### 7. Câmera moderna (orbital)
 - Hoje, na câmera padrão, esquerda/direita giram a câmera. Quando os monstros estão perto (vista unificada, `gUseUnifiedView`,

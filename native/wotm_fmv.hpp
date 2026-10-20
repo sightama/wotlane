@@ -25,6 +25,7 @@
 // demultiplexador daqui separa os dois fluxos e o PCM e tocado direto.
 #pragma once
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
+#include "wotm_disc.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -49,68 +50,14 @@ extern "C" {
 
 namespace wotm::fmv {
 
+// Leitura do disco (pasta ou ISO): wotm_disc.hpp
+using wotm::disc::Source;
+using wotm::disc::seek64;
+using wotm::disc::isoFind;
+using wotm::disc::discRelative;
+using wotm::disc::resolveDiscPath;
+
 // ---------------------------------------------------------------- demultiplexador do .PSS
-
-// Onde ler um filme: um arquivo solto (disco extraido) ou um trecho de uma imagem ISO
-struct Source {
-    std::string path;
-    uint64_t offset = 0;
-    uint64_t size = UINT64_MAX;
-    bool ok() const { return !path.empty(); }
-};
-
-inline int seek64(FILE *f, uint64_t off) {
-#ifdef _WIN32
-    return _fseeki64(f, int64_t(off), SEEK_SET);
-#else
-    return fseeko(f, off_t(off), SEEK_SET);
-#endif
-}
-
-// Arquivo dentro de uma ISO9660 ("MOV/INTRO_M.PSS", sem diferenciar maiusculas; a versao ";1" e ignorada)
-inline Source isoFind(const std::string &iso, const std::string &name) {
-    FILE *f = std::fopen(iso.c_str(), "rb");
-    if (!f) return {};
-    auto readAt = [&](uint64_t off, uint8_t *dst, size_t n) { return seek64(f, off) == 0 && std::fread(dst, 1, n, f) == n; };
-    auto le32 = [](const uint8_t *p) { return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24); };
-    auto upper = [](std::string s) { for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c))); return s; };
-    Source out;
-    uint8_t pvd[2048];
-    if (readAt(16 * 2048ull, pvd, sizeof pvd) && pvd[0] == 1 && std::memcmp(pvd + 1, "CD001", 5) == 0) {
-        uint32_t ext = le32(pvd + 156 + 2), size = le32(pvd + 156 + 10);
-        bool isDir = true, found = true;
-        size_t start = 0;
-        const std::string n = upper(name);
-        while (found && start < n.size()) {
-            const size_t slash = n.find('/', start);
-            const std::string part = n.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
-            start = slash == std::string::npos ? n.size() : slash + 1;
-            if (part.empty()) continue;
-            if (!isDir || size > (64u << 20)) { found = false; break; }
-            std::vector<uint8_t> dir(size);
-            if (!readAt(uint64_t(ext) * 2048, dir.data(), dir.size())) { found = false; break; }
-            found = false;
-            for (size_t o = 0; o < dir.size();) {
-                const uint8_t len = dir[o];
-                if (len == 0) { o = (o / 2048 + 1) * 2048; continue; }   // registros nao cruzam setores
-                if (o + len > dir.size() || len < 34) break;
-                std::string id(reinterpret_cast<const char *>(&dir[o + 33]), dir[o + 32]);
-                if (const auto sc = id.find(';'); sc != std::string::npos) id.resize(sc);
-                if (upper(id) == part) {
-                    ext = le32(&dir[o + 2]);
-                    size = le32(&dir[o + 10]);
-                    isDir = (dir[o + 25] & 2) != 0;
-                    found = true;
-                    break;
-                }
-                o += len;
-            }
-        }
-        if (found && !isDir) out = Source{iso, uint64_t(ext) * 2048, size};
-    }
-    std::fclose(f);
-    return out;
-}
 
 class PssDemux {
 public:
@@ -465,40 +412,6 @@ private:
 };
 
 // ---------------------------------------------------------------- tocador do runtime (pedidos da thread do EE, desenho na thread da janela)
-
-// Nome do jogo ("mov/intro_m.pss", "cdrom0:\MOV\INTRO_M.PSS;1") -> caminho relativo "mov/intro_m.pss"
-inline std::string discRelative(std::string name) {
-    if (const auto c = name.find(':'); c != std::string::npos) name = name.substr(c + 1);
-    if (const auto sc = name.find(';'); sc != std::string::npos) name = name.substr(0, sc);
-    std::replace(name.begin(), name.end(), '\\', '/');
-    while (!name.empty() && name[0] == '/') name.erase(0, 1);
-    return name;
-}
-
-// Caminho relativo contra a raiz de um disco extraido, sem diferenciar maiusculas; vazio se nao existe
-inline std::string resolveDiscPath(const std::filesystem::path &root, const std::string &rel) {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    if (root.empty() || !fs::is_directory(root, ec)) return {};
-    auto upper = [](std::string s) { for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c))); return s; };
-    fs::path cur = root;
-    size_t start = 0;
-    while (start < rel.size()) {
-        const size_t slash = rel.find('/', start);
-        const std::string part = rel.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
-        start = slash == std::string::npos ? rel.size() : slash + 1;
-        if (part.empty()) continue;
-        fs::path next = cur / part;
-        if (!fs::exists(next, ec)) {
-            bool hit = false;
-            for (const auto &e : fs::directory_iterator(cur, ec))
-                if (upper(e.path().filename().string()) == upper(part)) { next = e.path(); hit = true; break; }
-            if (!hit) return {};
-        }
-        cur = next;
-    }
-    return fs::is_regular_file(cur, ec) ? cur.string() : std::string{};
-}
 
 // Escrita de um quadro RGBA na VRAM do GS (PSMCT32, enderecamento de pagina/bloco/coluna do GS) em `tbp` com largura `tbw` x 64
 inline void vramWriteCT32(uint8_t *vram, size_t vramSize, uint32_t tbp, uint32_t tbw, const Frame &f) {
