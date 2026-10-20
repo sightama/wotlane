@@ -208,7 +208,8 @@ def decode(buf, off, psm, w, h, pal=None, csa=0):
 
 # ---------------------------------------------------------------- PNG e TGA (sem dependencias)
 
-def write_png(path, w, h, px):
+def png_bytes(w, h, px):
+    """PNG RGBA de 8 bits (sem filtro) em memoria."""
     raw = bytearray()
     for y in range(h):
         raw.append(0)
@@ -218,9 +219,12 @@ def write_png(path, w, h, px):
     def chunk(t, d):
         return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
     png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
+    return png + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b"")
+
+
+def write_png(path, w, h, px):
     with open(path, "wb") as f:
-        f.write(png)
+        f.write(png_bytes(w, h, px))
 
 
 def _paeth(a, b, c):
@@ -447,6 +451,63 @@ class Pairing:
             cbp, e = next(iter(self.pals.items()))
             return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H)), cbp, 0, combos
         return None, None, 0, combos
+
+
+class Library:
+    """Texturas de um arquivo (.TEX + .RTX) para quem desenha os objetos do .NGP: `image(texId, tex0)` com os numeros como
+    estao no objeto. Usa os mesmos deslocamentos do export (Pairing)."""
+
+    def __init__(self, tex_path=None, rtx_path=None, ngp_path=None, refs=None):
+        self.src = {}   # id(pacote) -> (dados, e do .RTX)
+        pkts = []
+        tex_data = rtx_data = rtx = None
+        if tex_path:
+            tex_data, _ = read_file(tex_path)
+            for p in parse(tex_data)["packets"]:
+                pkts.append(p)
+                self.src[id(p)] = (tex_data, False)
+        if rtx_path:
+            rtx_data, _ = read_file(rtx_path)
+            rtx = parse(rtx_data)
+            for p in rtx["packets"]:
+                if not p.is_palette():
+                    pkts.append(p)
+                    self.src[id(p)] = (rtx_data, True)
+        if refs is None:
+            refs = ngp_texrefs(ngp_path) if ngp_path else []
+        self.pair = Pairing({"packets": pkts}, rtx_data, rtx, refs)
+        self.by_id = {}
+        for p in pkts:
+            self.by_id.setdefault(p.texId, p)
+        self.cache = {}
+
+    def image(self, tex_id, tex0):
+        """(w, h, [(r,g,b,a)]) da textura que o objeto usa, ou None. TCC = 0 (so RGB) sai com alfa 255, como no jogo."""
+        key = (tex_id, tex0)
+        if key in self.cache:
+            return self.cache[key]
+        res = None
+        p = self.by_id.get(tex_id - self.pair.dtex)
+        f = tex0_fields(tex0)
+        if p is not None:
+            data, is_rtx = self.src[id(p)]
+            psm = p.psm
+            try:
+                if psm in (T8, T4, T8H, T4HL, T4HH):
+                    e = self.pair.pals.get(f["cbp"] - self.pair.dcbp)
+                    if e is not None:
+                        pal = palette_from_entry(self.pair.rtx_data, e, swap=psm in (T8, T8H))
+                        csa = f["csa"] if len(pal) >= 256 else 0
+                        px = decode(data, p.data_off(is_rtx), T8 if psm in (T8, T8H) else T4, p.w, p.h, pal, csa)
+                        res = (p.w, p.h, px)
+                elif psm in (CT32, CT24, CT16, CT16S):
+                    res = (p.w, p.h, decode(data, p.data_off(is_rtx), psm, p.w, p.h))
+            except (struct.error, IndexError):
+                res = None
+            if res and not f["tcc"]:
+                res = (res[0], res[1], [(r, g, b, 255) for (r, g, b, _a) in res[2]])
+        self.cache[key] = res
+        return res
 
 
 def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
