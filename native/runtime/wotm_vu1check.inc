@@ -2754,7 +2754,8 @@ static int vu1cmpBody(PS2Runtime &runtime, const char *path, const char *dump, u
     auto get = [&](void *p, size_t n) { return std::fread(p, 1, n, f) == n; };
     snap::Hdr h{};
     if (!get(&h, sizeof h) || std::memcmp(h.magic, snap::kMagic, 8) != 0) { std::fprintf(stderr, "[vu1cmp] %s nao e um instantaneo\n", path); return 1; }
-    if (h.ramSize != PS2_RAM_SIZE || h.vramSize != PS2_GS_VRAM_SIZE || h.vu1State != sizeof(VU1State) || h.vifRegs != sizeof(VIFRegisters)) {
+    // RAM menor que a do build (instantaneos de antes da RAM de 64 MB, 2026-10-19): entra no comeco e o resto fica zerado
+    if (h.ramSize == 0 || h.ramSize > PS2_RAM_SIZE || h.vramSize != PS2_GS_VRAM_SIZE || h.vu1State != sizeof(VU1State) || h.vifRegs != sizeof(VIFRegisters)) {
         std::fprintf(stderr, "[vu1cmp] instantaneo de outro build do runtime (tamanhos do estado diferem)\n");
         return 1;
     }
@@ -2904,7 +2905,8 @@ static int vu1cmpBody(PS2Runtime &runtime, const char *path, const char *dump, u
             // A VRAM gravada fica a parte (vramRec): o delta do 'a' so traz as paginas que o jogo mudou, e na captura (sem GS) o
             // framebuffer e o Z quase nao mudam; aplicado direto na VRAM do GS, deixava nelas o que o replay desenhou no quadro anterior,
             // e o Z velho escondia o mundo (imagem de referencia preta a partir do 2o quadro do arquivo; com --frame saia certa).
-            if (ok) ok = type == 'A' ? (get(ram, PS2_RAM_SIZE) && get(vramRec.data(), PS2_GS_VRAM_SIZE))
+            if (ok && type == 'A' && h.ramSize < PS2_RAM_SIZE) std::memset(ram + h.ramSize, 0, PS2_RAM_SIZE - h.ramSize);
+            if (ok) ok = type == 'A' ? (get(ram, h.ramSize) && get(vramRec.data(), PS2_GS_VRAM_SIZE))
                                      : (applyDelta(ram, PS2_RAM_SIZE) && applyDelta(vramRec.data(), PS2_GS_VRAM_SIZE));
             if (ok) std::memcpy(mem.getGSVRAM(), vramRec.data(), PS2_GS_VRAM_SIZE);
             if (!ok) break;

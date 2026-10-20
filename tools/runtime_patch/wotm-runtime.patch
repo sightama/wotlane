@@ -427,9 +427,18 @@ index 92ef0d5..8d7346f 100644
          target_compile_options(${TargetName} PRIVATE
              $<$<CONFIG:Release>:
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
-index 4b9242c..6eeecf1 100644
+index 4b9242c..e49a1b4 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
 +++ b/ps2xRuntime/include/ps2_runtime.h
+@@ -375,7 +375,7 @@ public:
+     void handleTLBWR(uint8_t *rdram, R5900Context *ctx);
+     void handleTLBP(uint8_t *rdram, R5900Context *ctx);
+     void clearLLBit(R5900Context *ctx);
+-    void configureGuestHeap(uint32_t guestBase, uint32_t guestLimit = PS2_RAM_SIZE);
++    void configureGuestHeap(uint32_t guestBase, uint32_t guestLimit = PS2_GUEST_RAM_SIZE);
+     uint32_t guestMalloc(uint32_t size, uint32_t alignment = 16u);
+     uint32_t guestCalloc(uint32_t count, uint32_t size, uint32_t alignment = 16u);
+     uint32_t guestRealloc(uint32_t guestAddr, uint32_t newSize, uint32_t alignment = 16u);
 @@ -438,14 +438,18 @@ public:
      inline PS2Memory &memory() { return m_memory; }
      inline const PS2Memory &memory() const { return m_memory; }
@@ -473,6 +482,20 @@ index 4b9242c..6eeecf1 100644
      R5900Context m_cpuContext;
      std::unique_ptr<EeScheduler> m_eeScheduler;
      mutable std::mutex m_eeKernelStateMutex;
+@@ -510,11 +520,11 @@ private:
+     std::vector<GuestHeapBlock> m_guestHeapBlocks;
+     uint32_t m_guestHeapBase = 0x00100000u;
+     uint32_t m_guestHeapEnd = 0x00100000u;
+-    uint32_t m_guestHeapLimit = PS2_RAM_SIZE;
++    uint32_t m_guestHeapLimit = PS2_GUEST_RAM_SIZE;
+     uint32_t m_guestHeapSuggestedBase = 0x00100000u;
+     bool m_guestHeapConfigured = false;
+     uint32_t m_asyncCallbackStackFloor = 0x01F00000u;
+-    uint32_t m_asyncCallbackStackTop = PS2_RAM_SIZE;
++    uint32_t m_asyncCallbackStackTop = PS2_GUEST_RAM_SIZE;
+ 
+     std::atomic<uint32_t> m_missingFunctionPolicy{static_cast<uint32_t>(MissingFunctionPolicy::ContinueToTarget)};
+     std::atomic<bool> m_missingFunctionReported{false};
 @@ -551,4 +561,18 @@ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
  extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
  extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
@@ -633,13 +656,15 @@ index f247ff9..3a3c5bf 100644
      mutable std::mutex m_snapshotMutex;
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..e46e315 100644
+index ea86a9c..ab90ce3 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
-@@ -23,6 +23,25 @@
+@@ -23,8 +23,30 @@
  
  class GS;
  
+-constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
+-constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
 +// WotM: PS2X_HW_EMU=0 no executavel do jogo (wotm, CMakeLists.txt): sem GS, VU1 e VIF1 emulados (o port desenha nativo), sem a
 +// checagem VU1 x nativo. O ps2EntryRunner (teste) e qualquer codigo sem a definicao ficam com 1.
 +#ifndef PS2X_HW_EMU
@@ -659,10 +684,15 @@ index ea86a9c..e46e315 100644
 +extern void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t *data, uint32_t bytes);   // inicio de cada cadeia do VIF1 com o tap ligado (trechos: deslocamento, origem; bytes da cadeia, para o instantaneo)
 +extern uint32_t g_wotmVif1Bad;   // codigos VIF1 invalidos desde o boot (fluxo fora de passo); a checagem VU1 x nativo o mostra
 +
- constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
- constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
++// WotM: a RAM do host tem 64 MB, mas o jogo continua vendo 32 MB (pilha, heap, GetMemorySize: PS2_GUEST_RAM_SIZE). Os 32 MB de
++// cima sao uma area extra que so os ganchos do WotM usam (carga dos monstros acima de 0x2000000, native/runtime/wotm_overrides.cpp).
++constexpr uint32_t PS2_RAM_SIZE = 64u * 1024u * 1024u; // 64MB
++constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;
++constexpr uint32_t PS2_GUEST_RAM_SIZE = 32u * 1024u * 1024u; // o que o jogo ve (o PS2 de verdade)
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
-@@ -417,7 +436,9 @@ public:
+ constexpr uint32_t PS2_SCRATCHPAD_BASE = 0x70000000;
+ constexpr uint32_t PS2_SCRATCHPAD_ALIAS_BASE = 0xF0000000;
+@@ -417,7 +439,9 @@ public:
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
@@ -2813,6 +2843,42 @@ index 2c98016..3751e35 100644
      }
  
      void SetVSyncFlag(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+index 9614016..72d2d6a 100644
+--- a/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Syscalls/System.cpp
+@@ -494,18 +494,18 @@ namespace ps2_syscalls
+             if (stackSizeSigned > 0)
+             {
+                 const uint32_t requestedSize = static_cast<uint32_t>(stackSizeSigned);
+-                if (requestedSize < PS2_RAM_SIZE)
++                if (requestedSize < PS2_GUEST_RAM_SIZE)
+                 {
+-                    sp = PS2_RAM_SIZE - requestedSize;
++                    sp = PS2_GUEST_RAM_SIZE - requestedSize;
+                 }
+                 else
+                 {
+-                    sp = PS2_RAM_SIZE;
++                    sp = PS2_GUEST_RAM_SIZE;
+                 }
+             }
+             else
+             {
+-                sp = PS2_RAM_SIZE;
++                sp = PS2_GUEST_RAM_SIZE;
+             }
+         }
+         else if (stack != 0u)
+@@ -596,7 +596,7 @@ namespace ps2_syscalls
+     {
+         (void)rdram;
+         (void)runtime;
+-        setReturnU32(ctx, PS2_RAM_SIZE);
++        setReturnU32(ctx, PS2_GUEST_RAM_SIZE);
+     }
+ 
+     void InitTLB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 index 5658928..d968780 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
@@ -3680,7 +3746,7 @@ index 8590f14..635d302 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..6967f55 100644
+index 45cb9d2..e2f41e7 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -3743,6 +3809,21 @@ index 45cb9d2..6967f55 100644
  }
  
  PS2Runtime::PS2Runtime()
+@@ -500,11 +519,11 @@ PS2Runtime::PS2Runtime()
+     m_guestHeapBlocks.clear();
+     m_guestHeapBase = kGuestHeapDefaultBase;
+     m_guestHeapEnd = kGuestHeapDefaultBase;
+-    m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
++    m_guestHeapLimit = std::min(kGuestHeapHardLimit, PS2_GUEST_RAM_SIZE);
+     m_guestHeapSuggestedBase = kGuestHeapDefaultBase;
+     m_guestHeapConfigured = false;
+-    m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
+-    m_asyncCallbackStackTop = PS2_RAM_SIZE;
++    m_asyncCallbackStackFloor = std::min(kGuestHeapHardLimit, PS2_GUEST_RAM_SIZE);
++    m_asyncCallbackStackTop = PS2_GUEST_RAM_SIZE;
+ }
+ 
+ void PS2Runtime::setDebugUiCallbacks(DebugUiCallback initCallback,
 @@ -594,6 +613,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
  
  ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
@@ -3797,6 +3878,45 @@ index 45cb9d2..6967f55 100644
          InitAudioDevice();
          m_audioBackend.setAudioReady(IsAudioDeviceReady());
  #endif
+@@ -949,20 +986,20 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+         return false;
+     }
+ 
+-    if (maxLoadedRdramEnd > PS2_RAM_SIZE)
++    if (maxLoadedRdramEnd > PS2_GUEST_RAM_SIZE)
+     {
+-        maxLoadedRdramEnd = PS2_RAM_SIZE;
++        maxLoadedRdramEnd = PS2_GUEST_RAM_SIZE;
+     }
+ 
+-    const uint32_t paddedEnd = (maxLoadedRdramEnd > (PS2_RAM_SIZE - kGuestHeapSafetyPad))
+-                                   ? PS2_RAM_SIZE
++    const uint32_t paddedEnd = (maxLoadedRdramEnd > (PS2_GUEST_RAM_SIZE - kGuestHeapSafetyPad))
++                                   ? PS2_GUEST_RAM_SIZE
+                                    : (maxLoadedRdramEnd + kGuestHeapSafetyPad);
+     const uint32_t suggestedHeapBase = alignGuestHeapValue(paddedEnd, kGuestHeapDefaultAlignment);
+     {
+         std::lock_guard<std::mutex> lock(m_guestHeapMutex);
+         if (!m_guestHeapConfigured)
+         {
+-            const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
++            const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_GUEST_RAM_SIZE);
+             m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
+             m_guestHeapBase = m_guestHeapSuggestedBase;
+             m_guestHeapEnd = m_guestHeapSuggestedBase;
+@@ -971,9 +1008,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+     }
+     {
+         std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
+-        const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_RAM_SIZE);
+-        m_asyncCallbackStackFloor = std::min(std::max(hardLimit, suggestedHeapBase), PS2_RAM_SIZE);
+-        m_asyncCallbackStackTop = PS2_RAM_SIZE;
++        const uint32_t hardLimit = std::min(kGuestHeapHardLimit, PS2_GUEST_RAM_SIZE);
++        m_asyncCallbackStackFloor = std::min(std::max(hardLimit, suggestedHeapBase), PS2_GUEST_RAM_SIZE);
++        m_asyncCallbackStackTop = PS2_GUEST_RAM_SIZE;
+     }
+ 
+     LoadedModule module;
 @@ -1008,6 +1045,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,

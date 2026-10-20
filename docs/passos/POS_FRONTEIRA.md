@@ -7,7 +7,7 @@ sabe e o que falta descobrir.
 ## Ordem
 | # | Item | Depende de | Custo estimado |
 |---|---|---|---|
-| 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) | — | baixo |
+| 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) — **feito em 2026-10-19** | — | baixo |
 | 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda | — | baixo (base pronta) |
 | 3 | Save em JSON legível, por nomes | — | médio |
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco | — | baixo/médio |
@@ -39,6 +39,38 @@ cinema, chefes e regras foram feitos para 1 jogador.
 - Conferir junto: `fileStatus` com 14 slots (fase + 12 monstros), `texInfo` com 1000, VRAM residente do `.RTX`.
 - **Medir aqui o custo de 4 vistas** (cena desenhada 4 vezes; com 8 monstros a CPU já está em ~9 ms por quadro) antes de investir na
   interface do item 11.
+
+**Feito em 2026-10-19.**
+- **RAM de 64 MB, o jogo vê 32.** No patch do runtime (`ps2_memory.h`): `PS2_RAM_SIZE` 64 MB e `PS2_GUEST_RAM_SIZE` 32 MB. A pilha da
+  thread principal (`SetupThread` com pilha -1), o `GetMemorySize`, o heap do runtime e a pilha dos callbacks assíncronos seguem o
+  segundo (`System.cpp`, `ps2_runtime.cpp/.h`), então tudo o que o jogo aloca fica onde estava; os 32 MB de cima só recebem o que os
+  ganchos mandam para lá. O endereçamento é por máscara (`PS2_RAM_MASK`) e o código traduzido não tem 32 MB fixo. Os dois executáveis
+  mudam (o código do jogo é compilado uma vez para os dois).
+- **Carga acima de 32 MB** (`wotm_overrides.cpp`, `loadMonstersDBHigh`): na entrada do `Shell::LoadMonstersDB` o próximo endereço de
+  carga (`fileStatus.ngpAddr[ngpLoaded]`, logo depois do NGP da fase) vira 0x2000000. Os NGP dos monstros e, atrás deles, os RTX e TEX
+  da fase e dos monstros vão para cima; embaixo fica só o NGP da fase. A relocação dos monstros (`dbsRelocateViaPtrListFile`) soma
+  "endereço - 0xA00000" em 32 bits e vale em qualquer endereço. `WOTM_HIGHRAM=0` volta à carga contígua do PS2. A linha
+  `[wotm] carga da fase` diz quanto sobra até o fim da RAM.
+- **Conferido:** Metro com 8 monstros (antes congelava na carga) carrega até ~0x2B10000 (21 MB de folga) e luta 60 s nos dois
+  executáveis, sem vigia; menu pelo roteiro de pad até a luta; corpus sem piora. Os instantâneos de 32 MB do corpus continuam
+  abrindo (o replay aceita RAM menor que a do build e zera o resto); os novos ficam com 64 MB no quadro inteiro. Mesma luta de 8 no Centro
+  com e sem `WOTM_HIGHRAM`: mesmos objetos divergentes na checagem VU1 x nativo, nenhuma textura diferente.
+- **Custo por vista** (luta IA x IA no Centro, 70 s, `wotm.exe`, monitor de 180 Hz; `WOTM_FIELDLOG` com `vistas=`/`hier=`/`cap=` e
+  `PS2X_STATS` com `[native] redesenho:`; a 2ª vista vem de `WOTM_PLAYERS=2`, que alterna tela dividida e unificada):
+
+  | Monstros | Vistas | EE por quadro (mediana / p99) | Redesenho nativo por quadro (parede / CPU) |
+  |---|---|---|---|
+  | 2 | 1 | 5,8 / 8,0 ms | 8,9 / 7,2 ms |
+  | 2 | 2 | 8,2 / 12,0 ms | 15,1 / 14,0 ms |
+  | 8 | 1 | 10,0 / 14,5 ms | 11,7 / 10,5 ms |
+  | 8 | 2 | 13,8 / 18,3 ms | 18,6 / 17,9 ms (96,5% dos quadros em 1 field) |
+
+  Cada vista a mais custa ~2,5 ms ao EE com 2 monstros e ~3,8 ms com 8 (o `hier` e o que ele puxa), e ~6,5 a 7 ms de CPU à thread da
+  janela: o desenho nativo é limitado pela CPU (envio pelo raylib), não pela GPU, e a meia largura da vista quase não o barateia. As
+  duas threads correm em paralelo, então o teto é a mais lenta. Extrapolando para 4 vistas: EE ~13 ms com 2 a 4 monstros (cabe), mas o
+  redesenho ~27 ms (não cabe em 16,7). **Antes do item 11, o desenho nativo precisa ficar mais barato por vista** (o que se repete por
+  vista: coleta e envio de cada objeto; candidatos: malhas estáticas da fase em buffers na GPU, lote por textura, corte por vista antes
+  do envio). Com 8 monstros e 2 vistas a janela já passa de 16,7 ms hoje.
 
 ### 2. HUD dos inimigos
 - Base pronta: `WOTM_ENEMYBARS=1` (`NATIVO.md`, tabela de variáveis) já troca o ícone de vida por barras de vida (`m_health`/

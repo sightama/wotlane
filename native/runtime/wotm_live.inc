@@ -1069,6 +1069,8 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 
+double wotmThreadCpuMs();   // ps2_hostprof.cpp: CPU da thread atual (usuario + kernel)
+
 static bool wotmDrawNative(const uint8_t *rdram)
 {
     static wotm_live::State S;
@@ -1242,6 +1244,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const double nowT = GetTime();
     static double lastFreshT = 0.0, lastRenderT = 0.0;
     static long s_renders = 0;   // redesenhos (PS2X_STATS, linha [native])
+    static double s_drawMs[2] = {}, s_drawCpu[2] = {};   // redesenhos com 1 e 2 vistas desde a ultima linha [native]: parede e CPU da thread
+    static long s_drawN[2] = {};
     if (fresh)
         lastFreshT = nowT;
     wotm::ScreenRect fadeNow{};
@@ -1258,6 +1262,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     {
         lastRenderT = nowT;
         ++s_renders;
+        const double tDraw0 = GetTime(), cpuDraw0 = wotmThreadCpuMs();   // custo do redesenho por numero de vistas (PS2X_STATS)
         lastFade = fadeNow;
         lastHasFade = hasFade;
         // Tela dividida (Snapshot::view1): cada vista e desenhada numa textura da metade do quadro, com a camera dela, como se fosse a
@@ -1382,6 +1387,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (!split)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
         EndTextureMode();
+        s_drawMs[split ? 1 : 0] += (GetTime() - tDraw0) * 1000.0;
+        s_drawCpu[split ? 1 : 0] += wotmThreadCpuMs() - cpuDraw0;   // passos de 15,6 ms no Windows: so vale na media
+        ++s_drawN[split ? 1 : 0];
 
         {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
             // segundos; para conferir telas ao vivo com um roteiro de pad (PS2X_PAD), sem tecla
@@ -1526,6 +1534,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),
                      S.scene.items.size(), S.scene.sky.size(), S.rtxPath.c_str());
+    if (S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
+    {
+        std::fprintf(stderr, "[native] redesenho: 1 vista %.2f ms (CPU %.2f) x %ld, 2 vistas %.2f ms (CPU %.2f) x %ld\n", s_drawN[0] ? s_drawMs[0] / s_drawN[0] : 0.0,
+                     s_drawN[0] ? s_drawCpu[0] / s_drawN[0] : 0.0, s_drawN[0], s_drawN[1] ? s_drawMs[1] / s_drawN[1] : 0.0,
+                     s_drawN[1] ? s_drawCpu[1] / s_drawN[1] : 0.0, s_drawN[1]);
+        s_drawMs[0] = s_drawMs[1] = s_drawCpu[0] = s_drawCpu[1] = 0.0;
+        s_drawN[0] = s_drawN[1] = 0;
+    }
     return true;
 }
 // Chamado na thread do jogo logo depois do particleDraw (hook_particleDraw, main.cpp): copia a lista do lens flare ja projetada

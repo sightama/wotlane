@@ -584,6 +584,8 @@ namespace
     // os ciclos virtuais do EE gastos (em fields: total, saltados no ocio e os 3 pcs de checkpoint que mais gastaram) e o
     // tempo real (total, ocioso esperando evento e esperando o relogio de parede para soltar um prazo).
     bool g_fieldLog = false;
+    double g_hierMs[2] = {}, g_captureMs[2] = {};   // por vista: hier (os dois passos) e captura nativa; ver hierTapped
+    unsigned g_hierViews = 0;                        // bits: vistas com hier(v, 0) no quadro
     // Chamadas a sceGsSyncV no quadro (cada uma espera 1 vsync) e o $ra das 4 primeiras: mostra quem gasta os fields.
     constexpr uint32_t kSceGsSyncV = wotm::fn::sceGsSyncV;
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
@@ -675,7 +677,10 @@ namespace
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
             std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
-        std::fprintf(stderr, "\n");
+        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f\n", (g_hierViews & 1u) + ((g_hierViews >> 1) & 1u), g_hierMs[0], g_hierMs[1],
+                     g_captureMs[0], g_captureMs[1]);
+        g_hierViews = 0;
+        g_hierMs[0] = g_hierMs[1] = g_captureMs[0] = g_captureMs[1] = 0.0;
         // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
         if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
         {
@@ -870,6 +875,26 @@ namespace
     // confere o teto. Acima de ~0x1F10000 ha dados vivos (e o buffer do zip em 0x1F7F840); medido em 2026-10-18, o bloco em 0x1B70000
     // e sobra do menu e pode ser sobrescrito (o Metro com 2 monstros vai ate 0x1D0C380). Loga quando muda e avisa perto do teto.
     constexpr uint32_t kFileStatus = wotm::sym::fileStatus, kLoadBase = 0xA00000u, kLoadCeiling = 0x1F10000u;
+    // RAM acima de 32 MB (POS_FRONTEIRA item 1): o runtime tem 64 MB (PS2_RAM_SIZE) e o jogo ve 32 (PS2_GUEST_RAM_SIZE: pilha, heap e
+    // GetMemorySize iguais aos do PS2). Na entrada do Shell::LoadMonstersDB o proximo endereco de carga (fileStatus.ngpAddr[ngpLoaded],
+    // logo depois do NGP da fase) pula para 0x2000000: os NGP dos monstros e, atras deles, os RTX e TEX da fase e dos monstros moram na
+    // area de cima, e embaixo fica so o NGP da fase. A relocacao (dbsRelocateViaPtrListFile) soma "endereco - 0xA00000" em 32 bits, entao
+    // vale em qualquer endereco. ngpAddr[1] (o fim da fase) vira 0x2000000; ninguem le esse valor como tamanho. WOTM_HIGHRAM=0 desliga.
+    constexpr uint32_t kLoadMonstersDB = wotm::fn::LoadMonstersDB__5Shell, kHighBase = PS2_GUEST_RAM_SIZE;
+    PS2Runtime::RecompiledFunction g_origLoadMonstersDB = nullptr;
+
+    void loadMonstersDBHigh(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kLoadMonstersDB)
+        {
+            const uint32_t ngpN = READ8(kFileStatus + 0x74);
+            const uint32_t slot = kFileStatus + 0x3C + 4 * ngpN;
+            if (ngpN >= 1 && ngpN <= 13 && READ32(slot) < kHighBase)
+                WRITE32(slot, kHighBase);
+        }
+        g_origLoadMonstersDB(rdram, ctx, runtime);
+    }
+
     uint32_t g_lastLoadEnd = 0;
 
     void wotmCheckLoadEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -881,6 +906,13 @@ namespace
         if (end == g_lastLoadEnd || end < kLoadBase)
             return;
         g_lastLoadEnd = end;
+        if (end > kHighBase)
+        {   // area de cima: embaixo fica so o NGP da fase (fileStatus.ngpAddr[0] ate o fim do arquivo, guardado no log da carga)
+            const double used = (end - kHighBase) / 1048576.0, left = (int64_t(PS2_RAM_SIZE) - end) / 1048576.0;
+            std::fprintf(stderr, "[wotm] carga da fase: %u arquivos, os monstros e as texturas terminam em 0x%07X (%.1f MB acima de 32 MB, %.1f MB ate o fim da RAM)%s\n",
+                         ngpN, end, used, left, left < 0.5 ? " -- PERTO OU ALEM DO FIM, espere corrupcao" : "");
+            return;
+        }
         const double used = (end - kLoadBase) / 1048576.0, left = (int64_t(kLoadCeiling) - end) / 1048576.0;
         std::fprintf(stderr, "[wotm] carga da fase: %u arquivos, termina em 0x%07X (%.1f MB usados, %.1f MB ate o teto 0x%07X)%s\n", ngpN, end,
                      used, left, kLoadCeiling, left < 0.5 ? " -- PERTO OU ALEM DO TETO, espere corrupcao" : "");
@@ -926,18 +958,33 @@ namespace
         if (g_hierSceneView == 0)
             wotmVu1SceneExit(rdram);
     }
+    // Custo por vista para o [field] (WOTM_FIELDLOG): tempo de host dentro do hier(v, passo) por vista, nos dois passos, e da captura
+    // nativa (wotmCaptureScene) na saida do hier(v, 0). So conta as chamadas que voltam pelo envoltorio (uma que bloqueia e e
+    // retomada no meio nao passa por aqui).
     void hierTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == kHier && GPR_U32(ctx, 4) < 2u && GPR_U32(ctx, 5) == 0u)
+        const bool entry = ctx->pc == kHier;
+        const uint32_t view = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
+        if (entry && view < 2u && GPR_U32(ctx, 5) == 0u)
         {
             if (g_hierSceneRa)   // a saida do anterior escapou sem reserva: captura antes de comecar este
                 hierSceneExit(rdram);
-            g_hierSceneRa = GPR_U32(ctx, 31);
-            g_hierSceneView = static_cast<int>(GPR_U32(ctx, 4));
+            g_hierSceneRa = ra;
+            g_hierSceneView = static_cast<int>(view);
+            g_hierViews |= 1u << view;
         }
+        const auto t0 = std::chrono::steady_clock::now();
         g_origHier(rdram, ctx, runtime);
+        const auto t1 = std::chrono::steady_clock::now();
+        if (entry && view < 2u && ctx->pc == ra)
+            g_hierMs[view] += std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (g_hierSceneRa && ctx->pc == g_hierSceneRa)
+        {
+            const int v = g_hierSceneView;
             hierSceneExit(rdram);
+            if (v >= 0 && v < 2)
+                g_captureMs[v] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+        }
     }
 
     // Lens flare: a lista fica pronta (projetada e testada) na saida do particleLensFlareRender. O main.cpp a copia depois do
@@ -1838,6 +1885,13 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     {
         runtime.registerFunction(kLoadLevelFiles, &loadLevelFilesTapped);
         runtime.registerFunction(kRtMain, &rtMainTapped);
+    }
+    {
+        const char *h = std::getenv("WOTM_HIGHRAM");
+        if (!(h && h[0] == '0') && (g_origLoadMonstersDB = runtime.lookupFunction(kLoadMonstersDB)))
+            runtime.registerFunction(kLoadMonstersDB, &loadMonstersDBHigh);
+        else
+            std::fprintf(stderr, "[wotm] monstros carregados embaixo de 32 MB, como no PS2 (WOTM_HIGHRAM=0)\n");
     }
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
