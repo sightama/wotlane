@@ -79,6 +79,9 @@ std::atomic<bool> g_wotmFreeCamPad{false};
 std::mutex g_wotmFreeCamM;
 WotmFreeCamPose g_wotmFreeCamPose;
 
+// Save em JSON ao lado do mc0/ (POS_FRONTEIRA.md, item 3): ganchos no MonsterMc::stdInit/stdExit.
+#include "wotm_save.inc"
+
 namespace
 {
     constexpr uint32_t kTimerGetUpdateRate = wotm::fn::timerGetUpdateRate__Fv;
@@ -1976,6 +1979,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         else
             std::fprintf(stderr, "[wotm] monstros carregados embaixo de 32 MB, como no PS2 (WOTM_HIGHRAM=0)\n");
     }
+    wotm_save::install(runtime);
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))

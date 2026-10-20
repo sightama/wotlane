@@ -9,7 +9,7 @@ sabe e o que falta descobrir.
 |---|---|---|---|
 | 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) — **feito em 2026-10-19** | — | baixo |
 | 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda — **feito em 2026-10-19** | — | baixo (base pronta) |
-| 3 | Save em JSON legível, por nomes | — | médio |
+| 3 | Save em JSON legível, por nomes — **feito em 2026-10-19** | — | médio |
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático | 3 | baixo |
@@ -152,17 +152,31 @@ comprar na tela de destrave: `McAskToSave` e grava as opções, onde ficam os de
 criam o `savegame.dat` em branco se faltar (`McSaveAdventureBlank`), e a da aventura escolhe o slot (`McSelectSaveSlot`) e grava o
 slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qualquer gravação.
 
-**Caminho para o JSON:**
-- O mais barato continua na camada do host, sem decompilar nada: no stub do memory card, `BASCUS-97197` e `savegame.dat` viram
-  `save.json` (por exemplo na pasta do usuário). Na leitura o stub monta o bloco binário a partir do JSON; na gravação decodifica o bloco
-  e atualiza o JSON. O jogo continua vendo os mesmos 0x380/0x280 bytes. O lixo de 0xF4..0x34B é descartado (na leitura vai zero, que o
-  jogo não lê).
-- Alternativa mais limpa para depois: gancho nos quatro `MonsterMc::get/set*Data`, que leem e escrevem os campos por nome direto da
-  RAM. Elimina o binário, mas o fluxo de páginas e as checagens de espaço continuam pedindo um cartão; isso é o item 5.
-- Formato (rascunho é a saída do `tools/mcsave.py`): `options` como objeto; destraves por nome (`"congar": {"skins": [...]}`,
-  `"levels": {"ufo": true}`), nunca por índice: um mod que adiciona monstro ou skin (item 8) só acrescenta chaves e não embaralha saves
-  antigos. Skins ainda por posição dentro do monstro; dar nome a cada traje fica para o item 8. `saves` como array (fase e monstro por
-  nome).
+**Feito em 2026-10-19** (`native/runtime/wotm_save.inc`, JSON em `native/wotm_json.hpp`; `WOTM_SAVEJSON=0` desliga).
+- Sem mexer no fork nem decompilar: ganchos na entrada do `MonsterMc::stdInit` e do `MonsterMc::stdExit`, que abrem e fecham toda
+  sequência de páginas do cartão (boot, opções, destrave, endurance, aventura). No `stdInit` os binários dos dois cartões (`mc0/`,
+  `mc1/`) são refeitos a partir do `save.json`; no `stdExit`, se o jogo gravou algum binário (data ou tamanho mudou), o JSON é
+  atualizado a partir dele. O jogo continua vendo os mesmos 0x380/0x280 bytes; o lixo da pilha (0xF4 em diante, menos a marca) vai zero.
+- **Um JSON só**, ao lado da pasta do cartão (`discroot/save.json`): `options`, `battleTokens`, `unlocks` (monstros e trajes, fases) e
+  `unknown` (os campos sem nome) uma vez, iguais nos dois cartões; `saves` com 20 slots, 0 a 9 no cartão 1 e 10 a 19 no 2 (`null` =
+  slot vazio; o array termina no último ocupado). Chaves por nome (`"congar": {"skins": [...]}`, `"levels": {"ufo": true}`, fase e
+  monstro dos saves por nome), nunca por índice: um mod que adiciona monstro ou skin (item 8) só acrescenta chaves. Chaves que o código
+  não conhece ficam no arquivo quando ele é reescrito (conferido com uma chave `modData`). Skins ainda por posição dentro do monstro;
+  dar nome a cada traje fica para o item 8.
+- Migração: sem JSON, o primeiro `stdInit` o cria a partir dos cartões; com JSON sem os slots de um cartão que tem aventuras, elas são
+  importadas em vez de apagadas. JSON que não abre (erro de sintaxe) é avisado no log, os cartões ficam como estão, e antes de o jogo
+  reescrevê-lo o arquivo do usuário vai para `save.json.bad`. A gravação é por arquivo temporário e troca.
+- O `[wotm] save: no jogo, N tokens, dificuldade D` no fim de cada sequência diz o que o jogo tem na RAM.
+- **Conferido:** JSON gerado do save antigo igual ao do `tools/mcsave.py`; JSON editado (tokens, dificuldade, traje) e binários
+  apagados → o jogo sobe com os valores do JSON e o `savegame.dat` refeito sai byte a byte igual ao original; pelo menu (o dono):
+  "accept and save settings" e compra na tela de destrave atualizam o JSON na hora, mantendo a chave do mod; ao reabrir, as opções
+  voltam; "load game" no cartão 2 abre a fita que veio dele; gravar as opções no cartão 2 também atualiza o JSON.
+- Cuidado: editar o `save.json` com o jogo aberto pode atropelar uma gravação (um editor com o arquivo aberto desde antes regrava a
+  versão velha; aconteceu no teste). O certo é editar com o jogo fechado.
+- Próximo (combinado com o dono): opções, destraves e tokens salvos sozinhos (os `MonsterMc::update*Save` viram gravação direta da RAM
+  para o JSON, o boot lê direto do JSON; os tokens que o `Shell::EvaluateOnePlayerStoryStatus` soma no fim da fase também precisam ir
+  para o arquivo), com o ícone do item 6 no mesmo gancho; a campanha fica como a única escolha de slot (20 fitas), que é o item 5, junto
+  com a revisão dos 25 textos de memory card.
 - Em aberto: o que é `Shell+0x2A40` e `TheGame+0x1204B0..B8`; o que exatamente o `McScrambleIcon` muda no `icon.sys`.
 
 ### 4. Pasta `mods/`
