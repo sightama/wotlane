@@ -125,6 +125,23 @@ O `TEX0` de cada objeto (`gsTexCtx[0].tex0`) usa o formato do GS (`TBP0` bits 0.
 `native/wotm_gs.hpp` decodifica `CT32/CT24/CT16/T8/T4` a partir de um dump da VRAM (4 MB); a paleta de 256 entradas (CSM1) está em memória linear com as entradas 8..15 e 16..23 de cada grupo de 32 trocadas.
 O runtime grava `ram_<quadro>.bin` e `vram_<quadro>.bin` com `PS2X_DUMP_RAM="quadro,..."` (`PS2X_NO_GS=1 PS2X_GS_UPLOADS=1` processa só os uploads, sem rasterizar).
 
+**Arquivos `.TEX` e `.RTX` (lidos do `src/common/texm.cpp`, 2026-10-20).** Ferramenta: `tools/tex.py` (`list`, `export` para PNG com
+`manifest.json`, `inject` de PNG/TGA).
+- Podem vir crus ou num zip de um arquivo com o magic `IE\3\4` (o `Shell` lê `shell/*.rtx|tex` por `zipInflateAll`).
+- Cabeçalho `_texfile`: `u32 numSizes`, `u32 headerQw` (o primeiro pacote fica em `headerQw * 16`) e `{u32 count, u32 blkSize}` por
+  faixa de tamanho (as "bins" da VRAM, `texmLoadTexture`).
+- Pacote `TexPkt` (16 bytes de cabeçalho): `u32 size` (o próximo está `(size >> 2) * 16` bytes adiante; 0 = último), `u32`,
+  `u16 texId`, `u16 tbp` (bloco de 64 palavras da VRAM), e os bits `psm` 0..5, `noUpload` 6, `skip` 7, `logW` 8..11, `logH` 12..15,
+  `numMips` 16..18, dois campos de 4 bits ainda sem nome (19..22 vai ao `texmSetupTexture`) e `bin` 27..31.
+- Pixels lineares (linhas de `w` pixels; T4 com o nibble baixo primeiro). No `.TEX` começam em `+0x80` (o jogo monta o
+  `sceGsLoadImage` do SDK em `+0x20`). No `.RTX`, os formatos altos (T8H/T4HL/T4HH: telas do menu, fontes, retratos) também em `+0x80`;
+  o resto (paletas CT32 16x16 e 8x2) em `+0x10` (`texmLoadResTexture`).
+- Relocação na carga: `texmRelocate` soma ao `texId` de cada `.TEX` depois do primeiro o maior id do anterior (e remapeia `bin`);
+  `texmResRelocate` soma ao `tbp` das paletas a base da VRAM e o fim do `.RTX` anterior, e ao `tbp`/`texId` dos formatos altos o
+  fim dos anteriores. O `TEX0` dos objetos do `.NGP` liga cada textura (`texId`) à paleta (`CBP` = `tbp` da entrada do `.RTX`).
+  Como os números no `.NGP` podem já estar somados, o `tex.py` acha os dois deslocamentos pela maior quantidade de objetos que
+  casam formato e tamanho; precisa de conferência com arquivos reais.
+
 ## Partículas e efeitos (`common/particle`, `common/partdraw`) — lido em 2026-10-11
 Leitores: `native/wotm_fx.hpp` (C++, desenha) e `tools/fx.py` (Python: sistemas ativos de um dump de RAM e `--presets` com o catálogo do ELF).
 O layout de `_ParticleType` (12000 bytes), `EmitterType`, `FieldInfoType`, `ParticleInfoType` e `VisualInfoType` está em `include/hieri_types.h` (stabs do `.mdebug`).
