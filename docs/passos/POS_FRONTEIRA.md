@@ -198,6 +198,10 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - É o primeiro degrau do item 8: aqui só substitui; acrescentar sem substituir vem lá.
 
 ### 5. Sem escolha de memory card
+- **Carregar (em teste, 2026-10-20, branch `save-auto`; `wotm_save.inc`):** o menu de cartão (`McLoadGameBoxes`) se escolhe sozinho e
+  é pulado no "voltar"; o `McSelectReel::refreshSaveData` lê o `savegame.dat` direto (sem o `McSync::sync`, que mostrava "procurando
+  memory card"); as 20 fitas são uma lista só em volta: passar da última fita de uma caixa (ou voltar da primeira) troca de caixa
+  com as animações do jogo. Falta gravar (a escolha de slot do `updateStoryModeSave`).
 - Ganchos nas telas do Shell que perguntam o cartão (achar pelo `screenTransition`, como no `wotm_padsel.inc`) para pular direto.
 - Hoje, ao carregar do cartão 2, o jogo anima a segunda caixa das fitas de vídeo 3D. No lugar do cartão 2, o JSON aceita mais slots no
   array. **Em aberto:** como o jogador escolhe entre N slots sem a tela do cartão (decidir quando chegar aqui).

@@ -664,15 +664,19 @@ namespace wotm_save
     //   - o menu de cartao se escolhe sozinho (cartao 1, ou o 2 se so ele tem aventuras): no update da pagina, a selecao vai para o
     //     cartao e o X e marcado como apertado; o jogo faz o resto. A pagina fica marcada para ser pulada no "voltar" (+0x268, lido
     //     pelo shouldSkipOnReturn, que tambem recolhe a caixa): voltar das fitas sai da tela;
-    //   - direita na ultima fita do cartao 1 (ou esquerda na primeira do 2), com aventuras no outro: a fita e a caixa atuais voltam,
-    //     o McState passa para o outro cartao, a outra caixa vem para a frente e a pagina recarrega as fitas (+0x500: o proprio
-    //     update chama o refreshSaveData, que le o cartao e empurra a fita escolhida).
-    // Nada aqui chama funcao do jogo que espere quadro (o McSync::sync desenha quadros): so dados e o AnimQueue::Push.
+    //   - McSelectReel::refreshSaveData trocado por uma versao que le o savegame.dat do cartao direto (o original le pelo
+    //     McSync::sync, que mostra "procurando memory card" por pelo menos 30 quadros); o resto e o que ele faz depois da leitura;
+    //   - as 20 fitas sao uma lista so, em volta: direita na ultima fita de uma caixa (ou esquerda na primeira), com aventuras na
+    //     outra caixa, recolhe fita e caixa atuais, passa o McState para o outro cartao, traz a outra caixa e mostra a primeira (ou a
+    //     ultima) fita dela. Sem aventuras na outra caixa, a seta da a volta na mesma, como no jogo.
+    // Nada aqui chama funcao do jogo que espere quadro (o McSync::sync desenha quadros): so dados e funcoes curtas.
     constexpr uint32_t kMgr = wotm::sym::x_9McPageMgr_global, kMcState = kMgr + 0x34;
     constexpr uint32_t kInputPressed = kMgr + 0x1158;   // McPageMgr::Input: {mascara, apertado} x 10; 2 = X, 8 = esquerda, 9 = direita
     constexpr uint32_t kBoxes = wotm::sym::x_15McLoadGameBoxes_global;
     constexpr uint32_t kSetPlayerTable = 0x006EAF00u;   // D_006EAF00 (rodata do McState::setPlayer): {+0x1C, +0x18} por cartao
     constexpr uint32_t kBoxesUpdate = wotm::fn::update__15McLoadGameBoxesR7McState, kReelUpdate = wotm::fn::update__12McSelectReelR7McState;
+    constexpr uint32_t kRefresh = wotm::fn::refreshSaveData__12McSelectReel;
+    constexpr uint32_t kReelData = 0x280;   // McSelectReel+0x280: o savegame.dat do cartao (0x280 bytes; +0 = numero de fitas)
     PS2Runtime::RecompiledFunction g_origBoxesUpdate = nullptr, g_origReelUpdate = nullptr;
 
     uint32_t cardSlots(int c)
@@ -681,8 +685,9 @@ namespace wotm_save
         return readAdventure(g_cards[c], a) ? std::min<uint32_t>(rd(a, 0), kAdvSlots) : 0u;
     }
 
-    // Funcao do jogo que nao bloqueia, com ate 8 argumentos (a0..a3, t0..t3); o contexto volta como estava.
-    void guestCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, std::initializer_list<uint32_t> args)
+    // Funcao do jogo que nao bloqueia, com ate 8 argumentos (a0..a3, t0..t3); o contexto volta como estava. `sp`: pilha da chamada
+    // (0 = a atual).
+    void guestCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, std::initializer_list<uint32_t> args, uint32_t sp = 0)
     {
         const PS2Runtime::RecompiledFunction f = rt->lookupFunction(fn);
         if (!f)
@@ -691,6 +696,8 @@ namespace wotm_save
         int r = 4;
         for (uint32_t a : args)
             ctx->r[r++] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(a)));
+        if (sp)
+            ctx->r[29] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(sp)));
         ctx->r[31] = _mm_set_epi64x(0, 0);
         ctx->pc = fn;
         f(rdram, ctx, rt);
@@ -715,6 +722,42 @@ namespace wotm_save
         g_origBoxesUpdate(rdram, ctx, rt);
     }
 
+    // McSelectReel::refreshSaveData sem o cartao: le o savegame.dat do cartao do McState e faz o que o original faz depois da
+    // leitura (fitas do cartao no comeco da animacao, so as ocupadas visiveis, rotulos, numSelectablesH, selecao limitada e a fita
+    // escolhida para a frente).
+    void refreshHost(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t self)
+    {
+        const uint32_t sh = ramU32(rdram, wotm::sym::shell), card = ramU32(rdram, kMcState + 0x1C);
+        if (!sh || card > 1)
+            return;
+        std::vector<uint8_t> a;
+        if (!readAdventure(g_cards[card], a))
+            a.assign(kAdvSize, 0);   // sem arquivo: caixa vazia
+        std::memcpy(rdram + ((self + kReelData) & 0x1FFFFFFu), a.data(), kAdvSize);
+        const uint32_t count = std::min<uint32_t>(rd(a, 0), kAdvSlots);
+        w32(rdram, self + kReelData, count);
+        // O original copia cada _animHandle (16 bytes, por valor) para a pilha e passa o endereco; aqui, 0x100 abaixo da pilha atual.
+        const uint32_t sp = (GPR_U32(ctx, 29) - 0x100u) & ~0xFu, copy = sp + 0x40;
+        guestCall(rdram, ctx, rt, wotm::fn::replaceMessage__6McPageii, {wotm::sym::x_9MonsterMc_global + 0x10, 0xE, card + 0xE}, sp);
+        for (uint32_t i = 0; i < kAdvSlots; ++i)
+        {
+            std::memcpy(rdram + (copy & 0x1FFFFFFu), rdram + ((sh + 0x2644 + card * 0xA0 + i * 16) & 0x1FFFFFFu), 16);
+            guestCall(rdram, ctx, rt, wotm::fn::animationSetToBeginning__FG11_animHandleb, {copy, 1}, sp);
+            guestCall(rdram, ctx, rt, wotm::fn::hierSetSwitch__FP11_hierswitchi, {ramU32(rdram, sh + 0x25F4 + card * 0x28 + i * 4), i < count ? 1u : 0u}, sp);
+        }
+        guestCall(rdram, ctx, rt, wotm::fn::setReelSwitches__FiiP13_SaveGameData, {card, count, self + kReelData}, sp);
+        w32(rdram, wotm::sym::numSelectablesH + card * 4, count);
+        int32_t sel = static_cast<int32_t>(ramU32(rdram, self + 0x224));
+        sel = std::max(0, std::min(sel, static_cast<int32_t>(count) - 1));
+        w32(rdram, self + 0x224, static_cast<uint32_t>(sel));
+        animPush(rdram, ctx, rt, sh + 0x2644 + card * 0xA0 + static_cast<uint32_t>(sel) * 16, 1, 0, 1);
+    }
+    void refreshReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+    {
+        refreshHost(rdram, ctx, rt, GPR_U32(ctx, 4));
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
     void reelUpdateAcross(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     {
         if (ctx->pc == kReelUpdate)
@@ -722,16 +765,12 @@ namespace wotm_save
             const uint32_t self = GPR_U32(ctx, 4), sh = ramU32(rdram, wotm::sym::shell);
             const uint32_t card = ramU32(rdram, kMcState + 0x1C);
             const bool left = ramU32(rdram, kInputPressed + 8 * 8) != 0, right = ramU32(rdram, kInputPressed + 9 * 8) != 0;
-            const int32_t count = static_cast<int32_t>(ramU32(rdram, self + 0x280)), sel = static_cast<int32_t>(ramU32(rdram, self + 0x224));
-            const bool busy = ramU32(rdram, wotm::sym::s_animQueue + 0x120) != 0;   // o onSelection tambem espera a fila
-            uint32_t to = card;
-            if (right && card == 0 && (count <= 0 || sel >= count - 1) && cardSlots(1))
-                to = 1;
-            else if (left && card == 1 && (count <= 0 || sel <= 0) && cardSlots(0))
-                to = 0;
-            if (to != card && sh && !busy && card < 2)
+            const int32_t count = static_cast<int32_t>(ramU32(rdram, self + kReelData)), sel = static_cast<int32_t>(ramU32(rdram, self + 0x224));
+            const bool atEnd = right && (count <= 0 || sel >= count - 1), atStart = left && (count <= 0 || sel <= 0);
+            const uint32_t to = 1u - card;
+            if (sh && card < 2 && (atEnd || atStart) && cardSlots(static_cast<int>(to)))
             {
-                w32(rdram, kInputPressed + (to ? 9 : 8) * 8, 0);   // o McPage::update nao anda nem da a volta
+                w32(rdram, kInputPressed + (atEnd ? 9 : 8) * 8, 0);   // o McPage::update nao anda nem da a volta
                 if (count > 0)
                     animPush(rdram, ctx, rt, sh + 0x2644 + card * 0xA0 + static_cast<uint32_t>(std::max(sel, 0)) * 16, 0, 0, 1);   // fita volta
                 animPush(rdram, ctx, rt, sh + 0x25D4 + card * 16, 0, 1, 0);   // caixa volta (McLoadGameBoxes::animateBox(false))
@@ -739,10 +778,9 @@ namespace wotm_save
                 w32(rdram, kMcState + 0x1C, ramU32(rdram, kSetPlayerTable + to * 8));   // McState::setPlayer(to, false)
                 w32(rdram, kMcState + 0x18, ramU32(rdram, kSetPlayerTable + to * 8 + 4));
                 w32(rdram, kBoxes + 0x224, ramU32(rdram, kBoxes + 0x220) + to);   // o "voltar" recolhe a caixa certa
-                w32(rdram, self + 0x224, to ? 0u : static_cast<uint32_t>(kAdvSlots - 1));   // o refreshSaveData limita ao ultimo
-                w32(rdram, self + 0x500, 1);
-                guestCall(rdram, ctx, rt, wotm::fn::playShellSFXSound__10ShellSoundi, {sh + 0x2918, to ? 4u : 2u});   // som do cursor
-                std::fprintf(stderr, "[wotm] save: carregar, fitas do cartao %u -> %u\n", card + 1, to + 1);
+                w32(rdram, self + 0x224, atEnd ? 0u : static_cast<uint32_t>(kAdvSlots - 1));   // primeira, ou a ultima (limitada)
+                refreshHost(rdram, ctx, rt, self);
+                guestCall(rdram, ctx, rt, wotm::fn::playShellSFXSound__10ShellSoundi, {sh + 0x2918, atEnd ? 4u : 2u});   // som do cursor
             }
         }
         g_origReelUpdate(rdram, ctx, rt);
@@ -803,6 +841,7 @@ namespace wotm_save
             {
                 runtime.registerFunction(kBoxesUpdate, &boxesUpdateAuto);
                 runtime.registerFunction(kReelUpdate, &reelUpdateAcross);
+                runtime.registerFunction(kRefresh, &refreshReplaced);
             }
         }
         std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); %s\n", g_json.string().c_str(),
