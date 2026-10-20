@@ -54,8 +54,8 @@ inline bool parse(const std::vector<uint8_t> &d, Model &m) {
     for (uint32_t i = 0; i < nv; ++i, o += stride) {
         Vtx &t = m.v[i];
         t.x = s16(o) / 4096.0f;
-        t.y = -s16(o + 2) / 4096.0f;   // y do icone e para baixo
-        t.z = s16(o + 4) / 4096.0f;
+        t.y = -s16(o + 2) / 4096.0f;   // y do icone e para baixo: gira 180 graus em x (y e z trocam de sinal), sem espelhar
+        t.z = -s16(o + 4) / 4096.0f;
         const size_t uv = o + 8 * shapes + 8;
         t.u = s16(uv) / 4096.0f;
         t.v = s16(uv + 2) / 4096.0f;
@@ -128,6 +128,7 @@ public:
             SetTextureFilter(rt_.texture, TEXTURE_FILTER_BILINEAR);
         }
         BeginTextureMode(rt_);
+        rlEnableDepthMask();   // a cena nativa pode ter deixado desligada: sem ela o clear nao limpa a profundidade nem o icone a grava
         ClearBackground(BLANK);
         Camera3D cam{};
         const float dist = model_.radius * 3.2f;
