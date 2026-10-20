@@ -231,6 +231,205 @@ def _decode_packet(img, pp, mesh):
     return end_pp
 
 
+# ---------------------------------------------------------------- malha completa (como o native/wotm_native.hpp)
+
+SLOT_NOTEX = 31   # secao com PRIM.TME 0: o GS desenha so a cor de vertice
+
+
+class Vtx:
+    __slots__ = ("x", "y", "z", "w", "cx", "cy", "cz", "u", "v", "r", "g", "b", "a", "nx", "ny", "nz", "slot", "cull", "fge", "sub")
+
+
+class MeshData:
+    """Resultado de `decode_mesh`: `tris` (3 Vtx por triangulo), `sprites` e o que o desenho precisa saber do objeto."""
+
+    def __init__(self):
+        self.tris = []
+        self.sprites = []     # (x, y, z, lado, u0, v0, u1, v1, r, g, b, a, slot, fge)
+        self.skinned = False
+        self.abe = False
+        self.slot_mask = 0
+        self.cur_slot = 0
+        self.cur_tme = 1
+        self.cur_fge = 0
+        self.cur_sprite = 0
+        self.cur_sub = 0
+        self.drop_adc = 0
+        self.drop_degen = 0
+
+
+def _skip_zero_qwords(img, pp):
+    skip = 0
+    while skip < 0x400 and img.ok(pp + skip, 16) and img.u32(pp + skip) == 0 and img.u32(pp + skip + 4) == 0:
+        skip += 16
+    return pp + skip
+
+
+def _decode_packet2(img, pp, md):
+    """Porte do decodePacket do nativo: devolve o proximo sub-pacote (cadeia skinned) ou 0."""
+    pp = _skip_zero_qwords(img, pp)
+    if not img.ok(pp, 16):
+        return 0
+    tag = img.u32(pp)
+    if ((tag >> 28) & 7) != 6:
+        return 0
+    skinned = bool(tag & 0x10000)
+    nwords = ((tag & 0xFFFF) + 1) * 4 - 2
+    base = pp + 8
+    if skinned:
+        nwords = max(0, min(60000, (img.base + len(img.d) - base) // 4))
+    if nwords == 0 or (not skinned and not img.ok(base, nwords * 4)):
+        return 0
+    if skinned:
+        md.skinned = True
+    end_pp = 0
+    st = {"pos": [], "nrm": [], "hdr": False, "haddr": 0, "nloop": 0, "sel": 0, "idx": [], "rgba": [], "uv": [], "adc": [],
+          "spos": []}
+
+    def flush():
+        if st["hdr"] and md.cur_sprite:
+            sel = st["sel"] & 0x7FFF
+            if 1 <= sel <= 13:
+                md.cur_slot = (sel - 1) // 3
+            slot = md.cur_slot if md.cur_tme else SLOT_NOTEX
+            n = min(st["nloop"], len(st["spos"]), len(st["rgba"]), len(st["uv"]) // 2)
+            for k in range(n):
+                sx, sy, sz, ss = st["spos"][k]
+                u0, v0 = st["uv"][2 * k]
+                u1, v1 = st["uv"][2 * k + 1]
+                r, g, b, a = st["rgba"][k]
+                md.sprites.append((sx, sy, sz, ss, u0 / 4096.0, v0 / 4096.0, u1 / 4096.0, v1 / 4096.0, r, g, b, a, slot, md.cur_fge))
+                md.slot_mask |= 1 << slot
+        elif st["hdr"] and st["idx"]:
+            n = min(st["nloop"], len(st["idx"]))
+            restart = [False] * (n + 1)
+            for k in st["adc"]:
+                if k < n:
+                    restart[k] = True
+            strip = []
+            pos, nrm, rgba, uv = st["pos"], st["nrm"], st["rgba"], st["uv"]
+            for k in range(n):
+                j = st["idx"][k]
+                p = pos[j] if j < len(pos) else (0.0, 0.0, 0.0, 1.0, 0, 0, 0)
+                v = Vtx()
+                v.x, v.y, v.z, v.w, v.cx, v.cy, v.cz = p
+                v.nx, v.ny, v.nz = nrm[j] if j < len(nrm) else (0, 0, 0)
+                sel = st["sel"] & 0x7FFF
+                if 1 <= sel <= 13:
+                    md.cur_slot = (sel - 1) // 3
+                v.slot = md.cur_slot if md.cur_tme else SLOT_NOTEX
+                v.fge = md.cur_fge
+                v.cull = (st["sel"] >> 15) & 1
+                v.sub = md.cur_sub
+                md.slot_mask |= 1 << v.slot
+                v.r, v.g, v.b, v.a = rgba[k] if k < len(rgba) else (128, 128, 128, 128)
+                if k < len(uv):
+                    v.u, v.v = uv[k][0] / 4096.0, uv[k][1] / 4096.0
+                else:
+                    v.u = v.v = 0.0
+                strip.append(v)
+            # ADC no vertice k: o GS nao desenha o triangulo que termina em k, mas a tira continua
+            for k in range(2, len(strip)):
+                if k < len(restart) and restart[k]:
+                    md.drop_adc += 1
+                    continue
+                a = strip[k - 1] if k & 1 else strip[k - 2]
+                b = strip[k - 2] if k & 1 else strip[k - 1]
+                c = strip[k]
+
+                def same(p, q):
+                    return p.x == q.x and p.y == q.y and p.z == q.z
+                if same(a, b) or same(b, c) or same(a, c):
+                    md.drop_degen += 1
+                    continue
+                md.tris += [a, b, c]
+        st.update(hdr=False, idx=[], rgba=[], uv=[], adc=[], spos=[])
+
+    mask = 0
+    i = 0
+    while i < nwords:
+        w = img.u32(base + 4 * i)
+        cmd, num, imm = (w >> 24) & 0x7F, (w >> 16) & 0xFF, w & 0xFFFF
+        a = base + 4 * (i + 1)
+        if cmd >= 0x60:
+            vn, vl = (cmd >> 2) & 3, cmd & 3
+            n = num or 256
+            addr = imm & 0x3FF
+            nw = _unpack_words(vn, vl, n)
+            ha = st["haddr"]
+            if vn == 2 and vl == 0 and addr == VU_POS:
+                if st["hdr"]:
+                    flush()
+                st["pos"] = [(img.f32(a + 12 * k), img.f32(a + 12 * k + 4), img.f32(a + 12 * k + 8), 1.0, 0, 0, 0) for k in range(n)]
+            elif vn == 3 and vl == 0 and addr == VU_POS and n > 1:
+                if st["hdr"]:
+                    flush()
+                st["pos"] = [(img.f32(a + 16 * k), img.f32(a + 16 * k + 4), img.f32(a + 16 * k + 8), img.f32(a + 16 * k + 12),
+                              img.u32(a + 16 * k) & 0xFF, img.u32(a + 16 * k + 4) & 0xFF, img.u32(a + 16 * k + 8) & 0xFF) for k in range(n)]
+            elif vn == 2 and vl == 2 and addr == VU_NRM:
+                st["nrm"] = [(img.s8(a + 3 * k), img.s8(a + 3 * k + 1), img.s8(a + 3 * k + 2)) for k in range(n)]
+            elif st["hdr"] and md.cur_sprite and vn == 3 and vl == 0 and addr == ha + 3:
+                st["spos"] = [(img.f32(a + 16 * k), img.f32(a + 16 * k + 4), img.f32(a + 16 * k + 8), img.f32(a + 16 * k + 12))
+                              for k in range(n)]
+            elif st["hdr"] and md.cur_sprite and vn == 1 and vl == 1 and addr == ha + 1:
+                st["uv"] = [(img.s16(a + 4 * k), img.s16(a + 4 * k + 2)) for k in range(n)]
+            elif vn == 3 and vl == 0 and n == 1:   # tag GIF da secao
+                g1 = img.u32(a + 4)
+                st.update(haddr=addr, nloop=img.u32(a) & 0x7FFF, hdr=True, sel=img.u32(a + 12))
+                if (g1 >> 14) & 1:                  # PRE: PRIM nos bits 47..57
+                    md.cur_tme = (g1 >> 19) & 1
+                    md.cur_fge = (g1 >> 20) & 1
+                    md.cur_sprite = 1 if ((g1 >> 15) & 7) == 6 else 0
+                if ((g1 >> 15) >> 6) & 1:
+                    md.abe = True
+            elif st["hdr"] and vn == 0 and vl == 2 and (mask & 0xFF) == 0xBF:   # S-8 sob mascara: ADC
+                for k in range(n):
+                    e = addr - ha - 3 + 3 * k
+                    if e >= 0 and e % 3 == 0:
+                        st["adc"].append(e // 3)
+            elif st["hdr"] and vn == 0 and vl == 2 and addr == ha + 1:
+                st["idx"] = [img.u8(a + k) for k in range(n)]
+            elif st["hdr"] and vn == 3 and vl == 2 and addr == ha + 2:
+                st["rgba"] = [(img.u8(a + 4 * k), img.u8(a + 4 * k + 1), img.u8(a + 4 * k + 2), img.u8(a + 4 * k + 3)) for k in range(n)]
+            elif st["hdr"] and vn == 1 and vl == 1 and addr == ha + 3:
+                st["uv"] = [(img.s16(a + 4 * k), img.s16(a + 4 * k + 2)) for k in range(n)]
+            i += 1 + nw
+            continue
+        extra = 0
+        if cmd == 0x20:
+            mask = img.u32(a)
+            extra = 1
+        elif cmd in (0x30, 0x31):
+            extra = 4
+        elif cmd == 0x4A:
+            extra = (num or 256) * 2
+        elif cmd in (0x50, 0x51):
+            extra = (imm or 65536) * 4
+        elif cmd in (0x14, 0x15, 0x17):
+            flush()
+        elif cmd == 0 and skinned and i > 8 and img.u32(a) == 0:
+            end_pp = (base + 4 * (i + 2) + 15) & ~15
+            break
+        i += 1 + extra
+    flush()
+    return end_pp
+
+
+def decode_mesh(img, node):
+    """Malha de um OBJECT com a textura de cada secao (`Vtx.slot` indexa texId[]/gsTexCtx[] do objeto; SLOT_NOTEX = sem
+    textura), quebra de tira (ADC) como o GS e sprites. Porte do decodeObject de native/wotm_native.hpp."""
+    md = MeshData()
+    pp = img.u32(node + 4) & 0x0FFFFFFF
+    if not img.ok(pp, 16):
+        return md
+    for guard in range(256):
+        md.cur_sub = guard
+        pp = _decode_packet2(img, pp, md)
+        if not pp:
+            break
+    return md
+
+
 # ---------------------------------------------------------------- hierarquia
 
 def ident():
@@ -261,7 +460,8 @@ def xform(m, p):
 
 
 def walk(img, node, visit, m=None, seen=None, depth=0, lod=0):
-    """Percorre a hierarquia chamando visit(node, matriz) em cada OBJECT. `lod`: indice do LOD (0 = mais detalhado)."""
+    """Percorre a hierarquia chamando visit(node, matriz) em cada OBJECT. `lod`: indice na lista do LOD (0 = o mais grosseiro;
+    um numero alto, como 99, pega o mais detalhado)."""
     if m is None:
         m = ident()
     if seen is None:
@@ -281,7 +481,8 @@ def walk(img, node, visit, m=None, seen=None, depth=0, lod=0):
     if op == 0:
         visit(node, m)
     elif op == 1:
-        kids(node + 0x20, img.u16(node + 8), m)
+        if img.u16(node + 0xA) & 1:   # so GROUP visual (o resto e colisao etc.; Scene::walk)
+            kids(node + 0x20, img.u16(node + 8), m)
     elif op == 3:
         t = (img.f32(node + 0x10), img.f32(node + 0x14), img.f32(node + 0x18))
         kids(node + 0x1C, img.u32(node + 8), mul(translate_m(t), m))
@@ -298,8 +499,36 @@ def walk(img, node, visit, m=None, seen=None, depth=0, lod=0):
             walk(img, img.u32(node + 0xC + 4 * which), visit, m, seen, depth + 1, lod)
     elif op == 2:
         n = img.u32(node + 4)
-        if n:
+        if 0 < n < 16:
             walk(img, img.u32(node + 0x20 + 16 * min(lod, n - 1) + 8), visit, m, seen, depth + 1, lod)
+    # os nos abaixo seguem o Scene::walk do nativo (native/wotm_native.hpp), sem o que so existe com o jogo rodando
+    elif op == 8:      # CONTROL: child1 (o predio solido; child2 e a versao "fantasma")
+        walk(img, img.u32(node + 4), visit, m, seen, depth + 1, lod)
+    elif op == 23:     # ACTION_DATA
+        walk(img, img.u32(node + 4), visit, m, seen, depth + 1, lod)
+    elif op == 35:     # conteiner de ANIM_XFORM (partes rigidas do monstro)
+        kids(node + 0xC, img.u32(node + 4), m)
+    elif op == 25:     # CHAR_INSTANCE
+        kids(node + 0x2C, img.u32(node + 0x28), m)
+    elif op == 17:     # ANIM_XFORM: a matriz sai da animacao em tempo de execucao; fora do jogo, identidade
+        kids(node + 0xCC, img.u32(node + 4), m)
+    elif op == 38:     # ANIM_SCALE: (p + preScale) * scale + translate + postScale, com os valores guardados no no
+        sx, sy, sz = img.f32(node + 0x20), img.f32(node + 0x24), img.f32(node + 0x28)
+        if sx or sy or sz:
+            pre = translate_m((img.f32(node + 0x40), img.f32(node + 0x44), img.f32(node + 0x48)))
+            post = translate_m((img.f32(node + 0x30) + img.f32(node + 0x50), img.f32(node + 0x34) + img.f32(node + 0x54),
+                                img.f32(node + 0x38) + img.f32(node + 0x58)))
+            kids(node + 0x60, img.u32(node + 4), mul(mul(mul(pre, scale_m((sx, sy, sz))), post), m))
+    elif op == 39:     # INTERACTIVE_STATE: filho em +0xC; se for DESTRUCTIBLE, o estado 0 (intacto)
+        c = img.u32(node + 0xC)
+        if img.ok(c, 4) and (img.u32(c) & 63) == 31:
+            if img.u16(c + 0xA):
+                walk(img, img.u32(c + 0xC), visit, m, seen, depth + 1, lod)
+        else:
+            walk(img, c, visit, m, seen, depth + 1, lod)
+    elif op == 31:     # DESTRUCTIBLE: estado 0
+        if img.u16(node + 0xA):
+            walk(img, img.u32(node + 0xC), visit, m, seen, depth + 1, lod)
 
 
 def main():
