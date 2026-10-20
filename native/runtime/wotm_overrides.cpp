@@ -62,6 +62,7 @@ void wotmPickupHighlights(const uint8_t *rdram);   // wotm_live.inc: colorQuad d
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);   // wotm_live.inc: um quadrado do ScreenPolys, na entrada do polyBuildPrim
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
+void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: retrato
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
@@ -865,10 +866,15 @@ namespace
     constexpr uint32_t kLoadLevelFiles = wotm::fn::LoadLevelFiles__5Shell, kRtMain = wotm::fn::rtMain__Fb;
     PS2Runtime::RecompiledFunction g_origLoadLevelFiles = nullptr, g_origRtMain = nullptr;
 
+    unsigned g_loadGen = 0;   // cargas de fase (Shell::LoadLevelFiles) desde o boot: o que e guardado por arquivo carregado recomeca
+
     void loadLevelFilesTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kLoadLevelFiles)
+        {
             wotmLoadFreeze(true);
+            ++g_loadGen;
+        }
         g_origLoadLevelFiles(rdram, ctx, runtime);
     }
     // Fim da carga da fase: a fase e os monstros entram contiguos a partir de 0xA00000 (NGP, depois RTX e TEX, fileStatus) e nada
@@ -1584,15 +1590,6 @@ namespace
         wotmBarRect(x1, y0, x1 + tx, y1, c, c, c, 0x80);
     }
 
-    void barFrame(float x0, float y0, float x1, float y1)
-    {
-        constexpr float kOx = 0.7f, kOy = 0.3f, kGx = 1.3f, kGy = 0.6f, kIx = 1.0f, kIy = 0.45f;
-        barRing(x0 - kIx - kGx, y0 - kIy - kGy, x1 + kIx + kGx, y1 + kIy + kGy, kOx, kOy, 0);
-        barRing(x0 - kIx, y0 - kIy, x1 + kIx, y1 + kIy, kGx, kGy, 94);
-        barRing(x0, y0, x1, y1, kIx, kIy, 0);
-        wotmBarRect(x0, y0, x1, y1, 0, 0, 0, 0x40);   // vazio: o fundo escurecido
-    }
-
     // Dano recente (o trecho vermelho): segura ~0,5 s e escoa ate a vida atual, por monstro
     struct BarLag
     {
@@ -1627,6 +1624,71 @@ namespace
         return e->lag;
     }
 
+    // Retrato do HUD de cada monstro: a ultima entrada do .RTX dele (T8H 128x64; a cara normal na metade esquerda, a da furia na
+    // direita). O TEX0 ja relocado mora no NGP do proprio monstro (objetos do retrato: TBP0 = fileStatus.maxResAddr do arquivo anterior,
+    // CBP = maxTexAddr anterior + a paleta do retrato, que muda de lugar por monstro). O arquivo do monstro sai do no raiz dele
+    // (Monster::m_cs -> _cs::epNode), que fica dentro do NGP; o TEX0 e procurado uma vez por arquivo carregado.
+    struct PortraitCache
+    {
+        uint32_t lo = 0, hi = 0;
+        uint64_t tex0 = 0;
+    } g_portraits[16];
+    unsigned g_portraitGen = 0;
+
+    uint64_t monsterPortrait(uint8_t *rdram, uint32_t m)
+    {
+        if (g_portraitGen != g_loadGen)
+        {
+            for (PortraitCache &c : g_portraits)
+                c = PortraitCache{};
+            g_portraitGen = g_loadGen;
+        }
+        if (!ramOk(m, 0x10u))
+            return 0;
+        const uint32_t cs = FAST_READ32(m + 0xCu) & 0x1FFFFFFFu;
+        if (!ramOk(cs, 4u))
+            return 0;
+        const uint32_t ep = FAST_READ32(cs) & 0x1FFFFFFFu;
+        const uint32_t n = FAST_READ8(kFileStatus + 0x74);
+        for (uint32_t i = 1; i < n && i < 13; ++i)
+        {
+            const uint32_t lo = FAST_READ32(kFileStatus + 0x3C + 4 * i), hi = FAST_READ32(kFileStatus + 0x3C + 4 * (i + 1));
+            if (ep < lo || ep >= hi || !ramOk(lo, hi - lo))
+                continue;
+            for (const PortraitCache &c : g_portraits)
+                if (c.lo == lo && c.hi == hi)
+                    return c.tex0;
+            const uint32_t resBase = FAST_READ16(kFileStatus + 0x168 + 2 * (i - 1));
+            uint64_t found = 0;
+            for (uint32_t a = (lo + 7u) & ~7u; a + 8u <= hi && !found; a += 8u)
+            {
+                uint64_t v;
+                std::memcpy(&v, rdram + a, 8);
+                const uint32_t psm = uint32_t(v >> 20) & 0x3F, tw = uint32_t(v >> 26) & 15, th = uint32_t(v >> 30) & 15;
+                if (psm == 0x1B && tw == 7 && th == 6 && ((v >> 51) & 15) == 0 && (v & 0x3FFF) == resBase)
+                    found = v;
+            }
+            PortraitCache *slot = &g_portraits[0];
+            for (PortraitCache &c : g_portraits)
+                if (!c.lo || c.lo >= c.hi)
+                {
+                    slot = &c;
+                    break;
+                }
+            *slot = PortraitCache{lo, hi, found};
+            std::fprintf(stderr, "[wotm] retrato do arquivo %u (NGP 0x%07X): %s\n", i, lo, found ? "achado" : "nao achado");
+            return found;
+        }
+        return 0;
+    }
+
+    // Botao do especial ligado: o vermelho do icone do HUD do jogador (medido num print com WOTM_CHEATS=esp), em faixas como as barras
+    constexpr uint8_t kSpecialProf[][3] = {{106, 36, 34}, {156, 53, 50}, {196, 68, 65}, {222, 91, 88}, {235, 112, 111},
+                                           {222, 91, 88}, {196, 68, 65}, {156, 53, 50}, {106, 36, 34}};
+
+    // Um bloco por inimigo: retrato a esquerda na altura toda; a direita, vida em cima e, embaixo, o especial e a energia (mais fina e
+    // mais curta). Cada celula tem o proprio contorno preto; a faixa cinza entre duas celulas e uma so (o vao entre elas e exatamente
+    // preto + cinza + preto), e um contorno preto fecha o bloco. Unidades da tela do jogo, 640 x 224 (1 em y = 2,14 em x na tela).
     void emitBars(uint8_t *rdram, uint32_t m, const float box[4])
     {
         if (!ramOk(m, kMonsterStamina + 0x24u))
@@ -1634,21 +1696,42 @@ namespace
         const float health = barFrac(rdram, m + kMonsterHealth, m + kMonsterMaxHealth);
         const float energy = barFrac(rdram, m + kMonsterStamina + 0x10u, m + kMonsterStamina);
         const bool exhausted = FAST_READ32(m + kMonsterStamina + 0x20u) != 0u;
-        const float lag = barLag(m, health);        // tela do jogo 640 x 224 (campo: 1 unidade em y = 2 linhas)
-        constexpr float kW = 44.f, kHealthH = 2.6f, kEnergyH = 1.6f, kGap = 0.6f;
-        constexpr float kFrameY = 0.3f + 0.6f + 0.45f;   // espessura da moldura em y (barFrame)
+        const bool fury = static_cast<int8_t>(FAST_READ8(m + 0xF4u)) != 0;   // m_boostFull: o Hud::update troca a cara do retrato por ele
+        const bool special = FAST_READ8(m + 0xF3u) != 0 && FAST_READ32((FAST_READ32(wotm::sym::game) & 0x1FFFFFFFu) + 0x1203C8u) != 9u;   // Monster::isSpecialAvailable (TheGame::m_gameMode)
+        const float lag = barLag(m, health);
+        constexpr float kOx = 0.7f, kOy = 0.3f, kGx = 1.3f, kGy = 0.6f, kIx = 1.0f, kIy = 0.45f;   // contorno: preto, cinza, preto
+        constexpr float kDx = 2.f * kIx + kGx, kDy = 2.f * kIy + kGy;                              // vao entre duas celulas
+        constexpr float kAspect = 480.f / 224.f;                                                    // 1 unidade em y em unidades de x
+        constexpr float kW = 44.f, kHealthH = 2.6f, kEnergyH = 1.6f;
+        constexpr float kRowsH = kHealthH + kDy + kEnergyH, kPortraitW = kRowsH * kAspect, kSpecialW = kEnergyH * kAspect;
         const float cx = 0.5f * (box[0] + box[2]), cy = 0.5f * (box[1] + box[3]);
-        const float x0 = cx - 0.5f * kW, x1 = cx + 0.5f * kW;
-        const float y0 = cy - 0.5f * (kHealthH + kEnergyH + kGap) - kFrameY, y1 = y0 + kHealthH;
-        const float y2 = y1 + 2.f * kFrameY + kGap, y3 = y2 + kEnergyH;
-        barFrame(x0, y0, x1, y1);
-        gradBar(x0 + kW * health, y0, x0 + kW * lag, y1, kLagProf);
-        gradBar(x0, y0, x0 + kW * health, y1, kHealthProf);
-        barFrame(x0, y2, x1, y3);
+        const float bx0 = cx - 0.5f * (kPortraitW + kDx + kW), ty0 = cy - 0.5f * kRowsH;
+        struct Cell { float x0, y0, x1, y1; };
+        const float hx0 = bx0 + kPortraitW + kDx, sy0 = ty0 + kHealthH + kDy;
+        const Cell portrait{bx0, ty0, bx0 + kPortraitW, ty0 + kRowsH};
+        const Cell hp{hx0, ty0, hx0 + kW, ty0 + kHealthH};
+        const Cell sp{hx0, sy0, hx0 + kSpecialW, sy0 + kEnergyH};
+        const Cell st{hx0 + kSpecialW + kDx, sy0, hx0 + kW, sy0 + kEnergyH};
+        const Cell cells[4] = {portrait, hp, sp, st};
+        barRing(bx0 - kIx - kGx, ty0 - kIy - kGy, hx0 + kW + kIx + kGx, ty0 + kRowsH + kIy + kGy, kOx, kOy, 0);
+        for (const Cell &c : cells)   // o cinza de todas antes do preto: o cinza de uma nao cobre o contorno da vizinha
+            barRing(c.x0 - kIx, c.y0 - kIy, c.x1 + kIx, c.y1 + kIy, kGx, kGy, 94);
+        for (const Cell &c : cells)
+        {
+            barRing(c.x0, c.y0, c.x1, c.y1, kIx, kIy, 0);
+            wotmBarRect(c.x0, c.y0, c.x1, c.y1, 0, 0, 0, 0x40);   // vazio: o fundo escurecido
+        }
+        if (const uint64_t t = monsterPortrait(rdram, m))
+            wotmBarTex(portrait.x0, portrait.y0, portrait.x1, portrait.y1, t, fury ? 64.f : 0.f, 64.f, fury ? 128.f : 64.f, 0.f);   // V de baixo para cima, como o polyBuildPrim (0x80 - v)
+        gradBar(hp.x0 + kW * health, hp.y0, hp.x0 + kW * lag, hp.y1, kLagProf);
+        gradBar(hp.x0, hp.y0, hp.x0 + kW * health, hp.y1, kHealthProf);
+        if (special)
+            gradBar(sp.x0, sp.y0, sp.x1, sp.y1, kSpecialProf);
+        const float stW = st.x1 - st.x0;
         if (exhausted)
-            gradBar(x0, y2, x0 + kW * energy, y3, kExhaustedProf);
+            gradBar(st.x0, st.y0, st.x0 + stW * energy, st.y1, kExhaustedProf);
         else
-            gradBar(x0, y2, x0 + kW * energy, y3, kEnergyProf);
+            gradBar(st.x0, st.y0, st.x0 + stW * energy, st.y1, kEnergyProf);
     }
 
     void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

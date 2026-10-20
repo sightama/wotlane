@@ -8,7 +8,7 @@ sabe e o que falta descobrir.
 | # | Item | Depende de | Custo estimado |
 |---|---|---|---|
 | 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) — **feito em 2026-10-19** | — | baixo |
-| 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda | — | baixo (base pronta) |
+| 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda — **feito em 2026-10-19** | — | baixo (base pronta) |
 | 3 | Save em JSON legível, por nomes | — | médio |
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON | 3 | baixo/médio |
@@ -75,8 +75,19 @@ cinema, chefes e regras foram feitos para 1 jogador.
 ### 2. HUD dos inimigos
 - Base pronta: `WOTM_ENEMYBARS=1` (`NATIVO.md`, tabela de variáveis) já troca o ícone de vida por barras de vida (`m_health`/
   `m_maxHealth`) e energia (`StaminaMeter`, +0x460), desenhadas no nativo pelo gancho em `Hud::drawHealthIcon`/`ScreenPolys::addPoly`.
-- Falta: as duas barras "grudadas" num bloco só, como no HUD do jogador, e o retrato do monstro à esquerda (as texturas de retrato
-  do HUD do jogador já são desenhadas no nativo; reaproveitar a mesma fonte por tipo de monstro).
+- **Feito em 2026-10-19.** Um bloco só sobre a cabeça de cada inimigo: retrato na altura toda à esquerda; à direita, vida em cima e,
+  embaixo, o botão do especial e a energia (mais fina e mais curta). Cada peça tem contorno preto próprio, a faixa cinza entre elas é
+  comum e há um contorno preto por fora.
+- Retrato: última entrada do `.RTX` do monstro (T8H 128x64; metade esquerda normal, direita fúria). O gancho acha o arquivo do
+  monstro pelo `epNode` do `m_cs` (+0xC) e os intervalos de `fileStatus.ngpAddr`, e procura no NGP o TEX0 desse retrato
+  (`tbp0 == maxResAddr[i-1]`); cache por carga de fase. Fúria = `m_boostFull` (+0xF4), a mesma chave do `hierSetSwitch` do
+  `Hud::update`. A textura fica de cabeça para baixo na VRAM (o jogo desenha com V = 0x80 - v): o retângulo vai de V 64 a 0.
+  Especial aceso = `m_specialWeapon` (+0xF3) fora do modo 9, como o `isSpecialAvailable`, no vermelho do ícone do HUD do jogador.
+- O nativo ganhou retângulo de tela com textura (`ScreenRect::tex0`, `wotmBarTex`), respeitando o corte da tela dividida.
+- Conferido: lutas de 3 inimigos (`WOTM_MATCH=3,1,2,5,1` e `1,1,2,3,1`), os 3 retratos achados e em pé como o do jogador; fúria
+  forçada num build de teste mostra a outra metade; especial forçado aceso em vermelho, igual ao do jogador com `WOTM_CHEATS=esp`.
+  Fotos em `docs/screenshots/2026-10-19/2026-10-19_hud_inimigos_bloco*`.
+- Em aberto: um bloco perto do topo da tela pode ficar por cima do HUD do jogador (a posição vem da cabeça, limitada pelo jogo).
 
 ### 3. Save em JSON
 - Hoje o stub `sceMc*` do runtime grava e lê arquivos em `mc0/` do host (`FRONTEIRA.md`, "Pad, CD, memory card"). O jogo

@@ -743,6 +743,20 @@ void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, u
     if (wotm_live::g_pendingBars.size() < 512)
         wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a, false, static_cast<int8_t>(g_barView)});
 }
+// Retangulo com textura residente do .RTX (retrato do inimigo): tex0 da imagem e o trecho (u0, v0)-(u1, v1) em texels
+void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1)
+{
+    if (wotm_live::g_pendingBars.size() < 512)
+    {
+        wotm::ScreenRect s{x0, y0, x1, y1, 255, 255, 255, 0x80, false, static_cast<int8_t>(g_barView)};   // tinta branca, opaco
+        s.tex0 = tex0;
+        s.u0 = u0;
+        s.v0 = v0;
+        s.u1 = u1;
+        s.v1 = v1;
+        wotm_live::g_pendingBars.push_back(s);
+    }
+}
 // Barras sobre o inimigo: o Hud::drawHealthIcon prende o x projetado (rx, pixels do GS) entre centro - w/2 + 8 e centro + w/2 - 16 da
 // vista, a largura 4:3 dela; em widescreen a barra parava antes da borda (fotos 2026-10-19_132149). Devolve quanto o x muda com o
 // mesmo limite na largura da janela (w/2 * wide) e grava a vista corrente para os retangulos que vem a seguir.
@@ -1578,6 +1592,7 @@ void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
 bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { return false; }
 void wotmBarRect(float, float, float, float, uint8_t, uint8_t, uint8_t, uint8_t) {}
+void wotmBarTex(float, float, float, float, uint64_t, float, float, float, float) {}
 float wotmHealthIconShift(const uint8_t *, float) { return 0.f; }
 void wotmShellFade(const uint8_t *, int, uint32_t, uint32_t, uint32_t, int, int, int, bool) {}
 void wotmShellFadeStep() {}

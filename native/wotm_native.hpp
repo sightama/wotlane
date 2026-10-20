@@ -561,6 +561,9 @@ struct ScreenRect {
     // Barra de vida sobre o inimigo (wotmBarRect): vista em que foi montada (-1 = nao e barra). Na tela dividida vai para a metade da
     // janela dessa vista e fica cortada nela, sem esticar ate a borda como o fade e as faixas de cinema
     int8_t barView = -1;
+    // Barra com textura residente (retrato do inimigo, wotmBarTex): TEX0 da imagem do .RTX (0 = cor lisa) e o trecho em texels
+    uint64_t tex0 = 0;
+    float u0 = 0.f, v0 = 0.f, u1 = 0.f, v1 = 0.f;
 };
 
 // Centro (pixels do GS, viewGetCenter) e tamanho (viewGetWH) da vista `view`, do viewDef dela.
@@ -2971,7 +2974,7 @@ public:
     // widescreen o fade escurece a janela toda); um menor fica na faixa 4:3 central, como o texto. Na tela dividida (splitEdges) cada
     // borda vale por si: o fade e as faixas de cinema de uma vista (0..320 ou 320..640) vao ate a borda da janela do lado dela.
     bool splitEdges = false;
-    void drawScreenRects(float rw, float rh, bool underText = false) const {
+    void drawScreenRects(float rw, float rh, bool underText = false) {
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sy = rh / 224.f;
         for (const ScreenRect &r : screenRects) {
@@ -2981,15 +2984,26 @@ public:
             if (r.barView >= 0) {   // barra sobre o inimigo
                 const float k = gr.w / 640.f;
                 float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
+                const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
+                float shift = 0.f;
                 if (splitEdges) {
                     // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
                     // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado)
                     const float half = 0.5f * rw, v = float(r.barView);
-                    const float off = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
-                    x0 = std::max(x0 + off, v * half);
-                    x1 = std::min(x1 + off, (v + 1.f) * half);
+                    shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
+                    x0 = std::max(x0 + shift, v * half);
+                    x1 = std::min(x1 + shift, (v + 1.f) * half);
                 }
                 if (x1 <= x0) continue;
+                if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte na metade da vista
+                    const Texture2D t = residentTexture(r.tex0);
+                    if (!t.id || fw <= 0.f) continue;
+                    const float du = (r.u1 - r.u0) / fw;
+                    const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
+                    DrawTexturePro(t, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}, Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
+                                   Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
+                    continue;
+                }
                 DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
                 continue;
             }
