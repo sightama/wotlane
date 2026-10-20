@@ -127,7 +127,10 @@ Os 48 flags são 12 grupos de 4. Grupos 0 a 9 são os monstros na ordem do `aiMo
 Preytor, Congar, Robo-47, Agamo, Ultra V, Magmo, Kineticlops, Zorgulon), e a entrada `j` do grupo é o traje `j`. Os grupos 10 e 11 são
 as fases do `levelUnlocked`: entrada 40 Volcano, 41 Mini Baytown, 42 Capitol, 43 UFO, 44 Dodge Ball, 45 Big Shot, 46 Crush; a 47 sobra.
 O `McCheckForSweetTooth` do boot procura o `BASCUS-97101/globalFile` (save do Twisted Metal: Black) no cartão e, se achar, liga a
-entrada 23 (Agamo, traje 3) e toca `ShellSound::playSweetUnlockedSound`. No PC esse destrave vira uma chave do JSON.
+entrada 23 ("Agamo Costume 4", o Mecha Sweet Tooth; `ROCK3`) e toca `ShellSound::playSweetUnlockedSound`. No PC esse destrave é a
+chave `unlocks.mechaSweetTooth` do JSON, que vale mais que `agamo.skins[3]` (criada com o estado do cartão quando falta).
+Os nomes e preços de cada entrada estão na própria tabela (`SelectSlot::name`/`cost` no ELF) e confirmam a ordem dos grupos; a entrada
+47 é uma "Level 4" de 5000 tokens que nenhum código lê.
 
 **`savegame.dat` (aventura):** +0 número de slots usados (o maior índice gravado + 1); slots em `0x10 + i*0x3C`; marca em 0x268; o resto
 é zero. Cada slot usa só 0x14 dos 0x3C bytes:

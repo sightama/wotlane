@@ -46,6 +46,7 @@ def settings(b, j):
     j["unlocks"] = {
         "monsters": {m: {"skins": [flag(g * 4 + k) != 0 for k in range(4)]} for g, m in enumerate(GROUP_MONSTERS)},
         "levels": {lv: flag(i) != 0 for i, lv in LEVEL_SLOTS},
+        "mechaSweetTooth": flag(23) != 0,   # Agamo traje 4; no runtime a chave vale mais que agamo.skins[3]
     }
     j["unknown"] = {"shell2A40": u32(b, 0x0C), "slot47": flag(47), "game1204B0": [u32(b, 0xE8 + k * 4) for k in range(3)]}
 

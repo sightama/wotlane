@@ -31,6 +31,7 @@ namespace wotm_save
     // Grupos do monsterSelectMode (12 x 4 SelectSlot). 0..9: monstros na ordem do aiMonsters de Shell::RandomlySelectAI, a entrada
     // j e o traje j. 10 e 11: fases do levelUnlocked (a entrada 47 sobra).
     const char *const kGroupMonsters[10] = {"raptros", "togera", "preytor", "congar", "robo-47", "agamo", "ultra-v", "magmo", "kineticlops", "zorgulon"};
+    constexpr int kSweetToothSlot = 23;   // "Agamo Costume 4", ligado pelo McCheckForSweetTooth
     struct LevelSlot { int slot; const char *name; };
     const LevelSlot kLevelSlots[] = {{40, "volcano"}, {41, "minisf"}, {42, "capitol"}, {43, "ufo"}, {44, "dball"}, {45, "bigshot"}, {46, "crush"}};
     // MonsterNewNames (indice em m_monsterSel >> 5) e GameLevelNames (m_levelNum).
@@ -128,6 +129,10 @@ namespace wotm_save
         Value &lv = un.at("levels");
         for (const auto &l : kLevelSlots)
             lv.at(l.name) = Value::boolean(rd(b, 0x28 + l.slot * 4) != 0);
+        // Mecha Sweet Tooth (Agamo, traje 4): no PS2 vinha do save do Twisted Metal: Black no cartao (McCheckForSweetTooth). Aqui e
+        // uma chave do usuario; so e criada, com o estado atual, quando falta.
+        if (!un.get("mechaSweetTooth"))
+            un.at("mechaSweetTooth") = Value::boolean(rd(b, 0x28 + kSweetToothSlot * 4) != 0);
 
         // Campos que o jogo grava e ainda nao se sabe para que servem: guardados como estao.
         Value &unk = j.at("unknown");
@@ -207,6 +212,9 @@ namespace wotm_save
                 for (const auto &l : kLevelSlots)
                     if (const Value *v = lv->get(l.name))
                         wr(b, 0x28 + l.slot * 4, v->asBool() ? 1u : 0u);
+            // Vale mais que agamo.skins[3]: e a chave que o usuario liga e desliga.
+            if (const Value *st = un->get("mechaSweetTooth"))
+                wr(b, 0x28 + kSweetToothSlot * 4, st->asBool() ? 1u : 0u);
         }
         if (const Value *unk = j.get("unknown"))
         {
@@ -384,8 +392,15 @@ namespace wotm_save
             return;
         }
         const bool hasSettings = j.get("options") || j.get("unlocks") || j.get("battleTokens");
-        const Value *saves = j.get("saves");
         bool imported = false;
+        // JSON de antes da chave mechaSweetTooth: cria com o estado do cartao 1
+        if (const Value *un = j.get("unlocks"); un && !un->get("mechaSweetTooth"))
+        {
+            std::vector<uint8_t> s;
+            j.at("unlocks").at("mechaSweetTooth") = Value::boolean(readSettings(g_cards[0], s) && rd(s, 0x28 + kSweetToothSlot * 4) != 0);
+            imported = true;
+        }
+        const Value *saves = j.get("saves");
         for (int c = 0; c < 2; ++c)
         {
             Card &card = g_cards[c];
@@ -423,7 +438,7 @@ namespace wotm_save
             }
         }
         if (imported)
-            saveJson(j, "aventuras importadas do cartao");
+            saveJson(j, "chaves novas ou aventuras importadas do cartao");
         restamp();
     }
 
@@ -439,7 +454,8 @@ namespace wotm_save
         // O que o jogo tem agora (confere que o JSON chegou: depois do boot, os tokens e a dificuldade do save.json)
         const uint32_t sh = ramU32(rdram, wotm::sym::shell), gm = ramU32(rdram, wotm::sym::game);
         if (sh && gm)
-            std::fprintf(stderr, "[wotm] save: no jogo, %u tokens, dificuldade %u\n", ramU32(rdram, sh + 0x2B24), ramU32(rdram, gm + 0x1203CC));
+            std::fprintf(stderr, "[wotm] save: no jogo, %u tokens, dificuldade %u, Mecha Sweet Tooth %s\n", ramU32(rdram, sh + 0x2B24),
+                         ramU32(rdram, gm + 0x1203CC), ramU32(rdram, wotm::sym::monsterSelectMode + kSweetToothSlot * 0x2C + 4) ? "liberado" : "travado");
         unsigned changed = 0;
         for (int c = 0; c < 2; ++c)
             if (stampOf(g_cards[c].dir / "BASCUS-97197") != g_cards[c].settings || stampOf(g_cards[c].dir / "savegame.dat") != g_cards[c].adventure)
