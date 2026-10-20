@@ -90,15 +90,80 @@ cinema, chefes e regras foram feitos para 1 jogador.
 - Em aberto: um bloco perto do topo da tela pode ficar por cima do HUD do jogador (a posição vem da cabeça, limitada pelo jogo).
 
 ### 3. Save em JSON
-- Hoje o stub `sceMc*` do runtime grava e lê arquivos em `mc0/` do host (`FRONTEIRA.md`, "Pad, CD, memory card"). O jogo
-  (`game/McFile`, 59 funções, só asm, fim da fila de decomp) monta um bloco binário e manda gravar.
-- Caminho mais barato: converter na camada do host (bloco ↔ JSON) sem decompilar o `McFile`. O jogo continua vendo o mesmo binário;
-  o disco guarda o JSON. Precisa conhecer o layout do bloco.
-- Primeiro passo: mapear o layout por diferença (gravar, destravar uma coisa, gravar de novo, comparar os arquivos de `mc0/`). Devem
-  estar no save: monstros destravados (`monster_select.h`, `state`), fases da tabela `monsterSelectMode` (`levelUnlocked`,
-  `ESPINHA.md`), battle tokens (`Shell+0x2B24`), trajes, opções. Conferir se há checksum.
-- Formato: destraváveis como booleanos; `saves` como array de objetos; `options` como objeto. **Chaves por nome** (`"congar": {...}`,
-  skins por nome), nunca por índice: um mod que adiciona monstro ou skin (item 8) só acrescenta chaves e não embaralha saves antigos.
+- Hoje o stub `sceMc*` do runtime (`ps2xRuntime/src/lib/Kernel/Stubs/MemoryCard.cpp` do fork) grava e lê arquivos em `mc0/` do host
+  (porta 1 em `mc1/`, ao lado). Quem monta os blocos é o `game/MonsterMc` (as páginas e o que vai em cada arquivo); o `game/McFile`
+  (tarefas `McLoadFile`/`McSaveFile`/`McSetupGameDir`/`McScrambleIcon` sobre `sceMc*`) e o `game/McPage` (menus) são plataforma.
+- **Layout mapeado em 2026-10-19 pelo asm** (sem precisar de diferença entre gravações) e conferido no save que existe em
+  `discroot/mc0/BASCUS-97197` (decodifica sem sobra). `python tools/mcsave.py <pasta>` mostra os dois arquivos como JSON por nome.
+
+**Arquivos** (pasta `BASCUS-97197`, título "War of the Monsters"):
+
+| Arquivo | Bytes | Conteúdo | Monta / aplica |
+|---|---|---|---|
+| `BASCUS-97197` | 0x380 | opções, battle tokens e destraves (`_SettingsData`) | `MonsterMc::getSettingsData` / `setSettingsData` |
+| `savegame.dat` | 0x280 | 10 slots da aventura (`_SaveGameData`) | `MonsterMc::getSaveData(slot)` / `setSaveData(slot)` |
+| `icon.sys`, `ICON.ICO` | 964, 61120 | ícone do PS2 (item 6) | `McSetupGameDir`; o `McScrambleIcon` regrava o `icon.sys` a cada gravação das opções |
+
+**Sem checksum.** As duas leituras (`McLoadSettings::update`, `McSelectReel::refreshSaveData`) só conferem a marca `0x12345678` no fim
+do bloco; marca errada vira erro do cartão. Nenhum ponteiro: tudo é `int` de 32 bits, little-endian.
+
+**`BASCUS-97197` (opções):**
+
+| Off | Origem | No save de exemplo |
+|---|---|---|
+| 0x00 | `TheGame+0x1203CC` (`m_matchMode`; o `Shell` acende `m_difficultySw[valor]`: é a dificuldade) | 0 |
+| 0x04, 0x08 | `Shell::m_sfxVolume`, `m_musicVolume` (0..0x400) | 1024, 830 |
+| 0x0C | `Shell+0x2A40`: o construtor põe 50 e ninguém mais lê (opção morta?) | 50 |
+| 0x10 | `Shell::m_mono` (ao carregar vira 0/1) | 0 |
+| 0x14, 0x18 | `Shell::m_ctlrCfg[2]` | 1, 1 |
+| 0x1C, 0x20 | `Shell::m_vibration[2]` | 1, 1 |
+| 0x24 | battle tokens (`Shell+0x2B24`) | 55975 |
+| 0x28..0xE7 | `monsterSelectMode[i].state` dos 48 `SelectSlot` (só o `state`; `taken`, preço e nomes ficam no ELF) | ver abaixo |
+| 0xE8..0xF3 | `TheGame+0x1204B0..B8`, 3 ints: não identificado (o `game.h` põe aí o fim de `m_actuator`, inferido; o `Weapon` lê vizinhos como tweaks) | 0, 0, 0 |
+| 0xF4..0x34B | **não é escrito**: o buffer é da pilha e esse trecho grava lixo (32 palavras não nulas no exemplo) | — |
+| 0x34C | marca `0x12345678` | |
+
+Os 48 flags são 12 grupos de 4. Grupos 0 a 9 são os monstros na ordem do `aiMonsters` de `Shell::RandomlySelectAI` (Raptros, Togera,
+Preytor, Congar, Robo-47, Agamo, Ultra V, Magmo, Kineticlops, Zorgulon), e a entrada `j` do grupo é o traje `j`. Os grupos 10 e 11 são
+as fases do `levelUnlocked`: entrada 40 Volcano, 41 Mini Baytown, 42 Capitol, 43 UFO, 44 Dodge Ball, 45 Big Shot, 46 Crush; a 47 sobra.
+O `McCheckForSweetTooth` do boot procura o `BASCUS-97101/globalFile` (save do Twisted Metal: Black) no cartão e, se achar, liga a
+entrada 23 (Agamo, traje 3) e toca `ShellSound::playSweetUnlockedSound`. No PC esse destrave vira uma chave do JSON.
+
+**`savegame.dat` (aventura):** +0 número de slots usados (o maior índice gravado + 1); slots em `0x10 + i*0x3C`; marca em 0x268; o resto
+é zero. Cada slot usa só 0x14 dos 0x3C bytes:
+
+| Off no slot | Origem | Ao carregar (`setSaveData`) |
+|---|---|---|
+| +0x00 | `Shell::m_levelNum` (fase onde parou) | idem; as IAs vêm de `m_levelNumAIs[fase]` e `levelMonsters[fase]` |
+| +0x04 | `Shell::m_monsterSel[0]` (`monstro << 5 \| variante`) | idem |
+| +0x08 | `Shell::m_lives[0]` | idem |
+| +0x0C | `Shell+0x2B28 + Shell+0x2B2C` (pontos da fase + acumulado) | tudo em `+0x2B2C` |
+| +0x10 | `Shell::m_costume[0]` | idem; e `m_numPlayers = 1`, `m_mode = 1` |
+
+Gravar um slot (`McSaveAdventure::onEnter`) lê o `savegame.dat` inteiro, troca só aquele slot (`copySaveData`) e grava os 0x280 de
+novo; com o arquivo ausente (`McSaveAdventureBlank`) começa de um bloco zerado com a marca. Os 10 slots são as "fitas" da tela de
+carregar (`McSelectReel`, `McLoadGameBoxes`); o cartão 2 dá outros 10.
+
+**Quando o jogo grava** (sequências de páginas montadas em `MonsterMc::update*`): `updateBootLoad` (boot: `McBootPage` →
+`McLoadSettings` → `McCheckForSweetTooth`), `updateSettingsLoad`/`updateSettingsSave` (menu de opções), `updateUnlockSave` (depois de
+comprar na tela de destrave: `McAskToSave` e grava as opções, onde ficam os destraves), `updateEndOfStorySave`, `updateStoryModeSave`/
+`updateStoryModeLoad` (aventura) e `updateEndureSave`. Toda gravação passa por `McChooseSlot` (cartão 1 ou 2), `McCheckSpace`,
+`McCheckFormat` e `McCheckOverwrite` e grava as opções (`McSaveSettings`); as de opções, destrave, endurance e fim de história também
+criam o `savegame.dat` em branco se faltar (`McSaveAdventureBlank`), e a da aventura escolhe o slot (`McSelectSaveSlot`) e grava o
+slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qualquer gravação.
+
+**Caminho para o JSON:**
+- O mais barato continua na camada do host, sem decompilar nada: no stub do memory card, `BASCUS-97197` e `savegame.dat` viram
+  `save.json` (por exemplo na pasta do usuário). Na leitura o stub monta o bloco binário a partir do JSON; na gravação decodifica o bloco
+  e atualiza o JSON. O jogo continua vendo os mesmos 0x380/0x280 bytes. O lixo de 0xF4..0x34B é descartado (na leitura vai zero, que o
+  jogo não lê).
+- Alternativa mais limpa para depois: gancho nos quatro `MonsterMc::get/set*Data`, que leem e escrevem os campos por nome direto da
+  RAM. Elimina o binário, mas o fluxo de páginas e as checagens de espaço continuam pedindo um cartão; isso é o item 5.
+- Formato (rascunho é a saída do `tools/mcsave.py`): `options` como objeto; destraves por nome (`"congar": {"skins": [...]}`,
+  `"levels": {"ufo": true}`), nunca por índice: um mod que adiciona monstro ou skin (item 8) só acrescenta chaves e não embaralha saves
+  antigos. Skins ainda por posição dentro do monstro; dar nome a cada traje fica para o item 8. `saves` como array (fase e monstro por
+  nome).
+- Em aberto: o que é `Shell+0x2A40` e `TheGame+0x1204B0..B8`; o que exatamente o `McScrambleIcon` muda no `icon.sys`.
 
 ### 4. Pasta `mods/`
 - O carregador procura cada arquivo primeiro em `mods/` (mesmo caminho relativo do disco) e, se não achar, lê o da ISO. Trocar skin,
