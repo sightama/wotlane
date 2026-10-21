@@ -266,6 +266,69 @@ slot (`McSaveAdventure`). In other words: tokens and unlocks go to the card on a
 - Caution: in `LoadMonstersDB` players 3/4 build the path with player 2's monster (a retail quirk,
   [`16_monsters.md`](../investigations/2026-10-18/16_monsters.md)); the new hook must not inherit that.
 
+**3 and 4 player split screen done on 2026-10-20** (`native/runtime/wotm_split4.inc`; enabled by `WOTM_PLAYERS=3..8` with
+`WOTM_MATCH`, [`NATIVE.md`](NATIVE.md)). Checked in `ps2EntryRunner` with the AI on everyone (`WOTM_AIVSAI=1`): 4 players in Centro
+(`WOTM_MATCH=3,1,2,5,1`) for 145 s, with 3 rounds, deaths and respawns, the 4 cameras on their monsters (no frame at the origin out of
+3634) and the 4 HUDs with portrait, health, "WINS" and messages in the right quadrant; 3 players and 1 AI (`3,1,2,7,1`) for 95 s; 2
+players unchanged. The test found and fixed, besides what follows: `Hud::initAfter`/`update` returning with index ≥ 2 (no HUD in the
+bottom views), the mode 3 round end looping (with 3 or 4 alive nobody respawned) and cameras 2 and 3 going to the origin in POV 3. In the
+4-player fight the watchdog reports stretches of ~24 game frames/s (the cost of 4 views, above). What the engine already had: `viewInfo`,
+`worldCtx`, `viewDb`, the aim points and the particles' `viewPrevMat` with 5 views, 4 cameras, 4 HUDs, `m_monsters[0..3]` for players,
+and `inputInit` opens 2 ports × 4 slots (controller = port + 2 × slot). The cinemas' `viewToggleSplitScreen` does nothing with 3 or more
+views. The hooks:
+- **Views:** at the exit of `gameReestablishViews` (modes 3, 6, 7) views 0 to 3 become 320 × 112 quadrants (column `v & 1`, row
+  `v >> 1`; with 3 the bottom right one stays black). The 4 `ViewDef`s live at the end of the upper RAM (the retail has only 8, none in a
+  quadrant), with half the full screen's screen distance (same FOV as 640 × 224); `viewSetFov` rebuilds planes and matrices.
+  `viewInfo[v].viewport` stays 1/2 (the cameras use the split screen POV table). `m_numCameras` = players. `viewGrappleConfig` sent
+  view 0 back to the half's `viewDef`: the hook reapplies the quadrant.
+- **No unified view:** camera 2 (the retail's unified one) is player 3's. `SetOkToUnify` clears `m_camUnify` every frame (`InitCCCamera*`
+  returns without unifying). The victory pose still unifies (full screen on camera 2); when the screen splits again, cameras 2 and 3 go
+  back to players 3 and 4. `ResetLevel` no longer changes camera 2's POV.
+- **Camera 3 with 4 players:** `SetAIMonster` put every AI on camera 3 (`gameInitCamera(3, ai)`); here the AI only gets `m_cameraView` 3.
+  Left over: states that call `SetCameraPOV(m_cameraView)` without checking for a human (end of a throw, `StateThrowBack`) touch the POV
+  of player 4's camera when it is an AI.
+- **Loading:** from `LoadLevelFiles` to the entry of `InitPlayers`, players 3 and 4 go through the AI path (`m_monsterSel[4..]`,
+  `m_costume[2..]`, same disc file) and then become players again; `SetPlayerMonster` gets their costume instead of `m_costume[1]`.
+  Players 3 and 4 take their controller configuration from `m_vibration[0..1]` (`Monster::playerInit` reads `m_ctlrCfg[m_index]`, which
+  only has 2).
+- **HUD:** `Hud::initAfter` and `Hud::update` return right away with index ≥ 2. HUD 2/3 becomes a copy of the HUD in the same column
+  (`i & 1`) and runs the update like it, with `m_viewSlot`, the camera's `_cs` and the bar swapped for its own view's during the call; the
+  two share the `_cs` and the bar animations, which each view redoes right before its `hier`. With `m_numMonsters` ≠ 2 the bar stays at
+  the full screen position, which is the quadrant's shape. The HUD text is laid out as in a 224-line view from the top of the quadrant:
+  natively, what falls in the bottom half (the "WINS") moves up 112 (only when more than one view sends text; the pause dialog stays as
+  it is).
+- **Round end (mode 3):** `EvaluateMultiPlayerBattleStatusNoAI` only handles 1 or 0 alive, and `...AI` respawns slots 0/1 as players
+  and the rest as AIs. With the quadrants both become: win target as in `...AI`, otherwise each dead one in `m_monsters` respawns through
+  `playerInit` (players) or `aiInit` (AIs).
+- **POV 3 of cameras 2 and 3:** POV 3 is the camera parked at `+0xD20` (`DetachCamera`, `TogglePOV`); cameras 2/3 never had that
+  position and went to the origin. When entering POV 3 it parks where it is; camera 2 leaves its initial POV 3 (the unified view's rest)
+  for 0.
+- **Cinema (monster introduction before the fight):** with 2 players `doCinema` joins the screen (`viewToggleSplitScreen`); with 3 or more
+  views the toggle does nothing and only view 0 followed the cinema, in its quadrant. At the start of each frame, cinema on puts the
+  screen in a single view (`viewNumViews` 1, view 0 with `viewDef[0]`, 640 × 224) and cinema off goes back to the quadrants, like the
+  retail 2-player mode (checked: introduction in full screen, then the 4 quadrants). On the way back every view is rebuilt: `endCinema`
+  calls the toggle, which with 1 view recreates views 0 and 1 as halves (view 1 stayed 320 × 224, with HUD and text outside the quadrant).
+- **Spawning:** in `gameGetStartPoint` (modes 2 to 6) a human's first spawn uses list 1 of `StartPoints` and an AI's list 2, in turn;
+  respawns use list 3. List 1 only has the retail's 2 player points (Centro: 2; lists 2 and 3 have 4, one in each corner), and players
+  2, 3 and 4 spawned on the same point. A player beyond list 1's points spawns as an AI (`m_playerNum` 2 during the call), on list 2
+  (checked in Centro: 3 and 4 in two corners of the map). Live check `largada_4`.
+- **Motion blur:** `MotionBlurAA::init` keeps 2 views and `drawOverlay` of views 2 and 3 sends nothing (the native renderer does not draw
+  the blur). It was not an overrun: `drawOverlay(field, odd, view)` addresses `0x7319F0 + field * 0x400 + odd * 0x800 + view * 0x100` and
+  the TU's bss is 0x1000 bytes (the next one, `common/animation`, starts at 0x7329F0), that is `[2][2][4 views][0x100]`; with 4 views
+  init writes up to base + 0xBD4 (checked on 2026-10-21).
+- **Controls:** the runtime's pad stub has the multitap slots (`tools/runtime_patch/wotm-runtime.patch`: controller = port + 2 × slot,
+  8 controllers); slot 1's `scePadRead` reads the devices of player port + 3 (`wotm_pad.inc`): the third and fourth raylib controller.
+  No hook on `scePad*`.
+- **Native:** `Snapshot::views[3]` instead of `view1`; views 2 and 3 captured at the exit of `hier(v, 0)` (fallback: entry of
+  `hier(v, 1)`); quadrant textures composited with the black cross bands; vertical FOV from the view's height (only for the `ViewDef`s
+  above 32 MB); text, bars over enemies, flares (`lensFlarePacket[v & 1]`, one copy per view) and the particles' previous matrix for 4
+  views. `WOTM_LOCALPLAYER` (online) draws only the local player's view, enlarged from its quadrant, with its text, icons, bars and fades
+  moved to the whole screen.
+- **To check:** real controllers on players 3 and 4, cost (4 views: the redraw estimated above goes past 16.7 ms; the watchdog saw ~24 game
+  frames/s in stretches), per-player sounds (`m_index` up to 3), the `TokenManager m_tokens[2]` (only 2) and the victory pose with a win
+  target (not tested: `WOTM_MATCH` has no target).
+- Missing: side selection with 4 columns and the menu ("2 players" → "multiplayer").
+
 ### 12. 3D preview in the selection
 - Today the selection shows each player's monster; with 4 that is 4 models loaded in the Shell at the same time.
 
