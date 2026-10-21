@@ -23,6 +23,7 @@ foreach ($pair in ($Env -split ';' | Where-Object { $_.Trim() })) {
     [Environment]::SetEnvironmentVariable($pair.Substring(0, $i).Trim(), $pair.Substring($i + 1))
 }
 $env:WOTM_REPO = $repo
+if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }   # checagem sem som
 
 $log = Join-Path $runtime 'live.err.log'
 if (Test-Path $log) { Remove-Item $log -Force }

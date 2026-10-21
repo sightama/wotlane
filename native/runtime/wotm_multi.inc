@@ -135,10 +135,72 @@ namespace wotm_multi
         ctx->pc = GPR_U32(ctx, 31);
     }
 
+    // Fim de rodada no modo 3. Com IAs, o Shell::EvaluateMultiPlayerBattleStatusAI reergue os derrubados com `slot < 2 ? playerInit :
+    // aiInit`, e os jogadores 3/4 (slots 2 e 3) voltavam como IA: o Monster::aiInit de um jogador vira playerInit (sem WOTM_AIVSAI).
+    // Sem IAs, o ...NoAI so reergue alguem quando sobra 1 ou nenhum vivo: com 3+ jogadores a rodada vai para o ...AI, que com
+    // m_killTarget 0 (WOTM_MATCH) reergue todos os derrubados.
+    constexpr uint32_t kEvalNoAI = wotm::fn::EvaluateMultiPlayerBattleStatusNoAI__5Shelli, kEvalAI = wotm::fn::EvaluateMultiPlayerBattleStatusAI__5Shelli;
+    PS2Runtime::RecompiledFunction g_origAiInit = nullptr, g_playerInit = nullptr, g_origEvalNoAI = nullptr, g_evalAI = nullptr;
+
+    bool isPlayer(uint8_t *rdram, uint32_t m)
+    {
+        for (int i = 0; i < g_matchPlayers; ++i)
+            if (m && FAST_READ32(kMonsters + 4 * i) == m)
+                return true;
+        return false;
+    }
+
+    void aiInitKeepsPlayers(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kAiInit && active() && !g_aiVsAi && isPlayer(rdram, GPR_U32(ctx, 4)))
+        {
+            ctx->pc = kPlayerInit;
+            g_playerInit(rdram, ctx, runtime);
+            return;
+        }
+        g_origAiInit(rdram, ctx, runtime);
+    }
+
+    void evaluateNoAIRespawnsAll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kEvalNoAI && active())
+        {
+            ctx->pc = kEvalAI;
+            g_evalAI(rdram, ctx, runtime);
+            return;
+        }
+        g_origEvalNoAI(rdram, ctx, runtime);
+    }
+
+    // Combate de perto: Cameras::InitCCCamera/InitCCCameraFromThrow ligam gUseUnifiedView e poem a camera 2 no POV 1; com a vista
+    // unificada o viewGetNumViews devolve 1 e 3 dos 4 jogadores ficam sem tela. Com 3+ jogadores nao fazem nada.
+    constexpr uint32_t kInitCC = wotm::fn::InitCCCamera__7CamerasP7MonsterT1, kInitCCThrow = wotm::fn::InitCCCameraFromThrow__7CamerasP7MonsterT1;
+    PS2Runtime::RecompiledFunction g_origInitCC = nullptr, g_origInitCCThrow = nullptr;
+
+    template <uint32_t Entry, PS2Runtime::RecompiledFunction *Orig> void closeCombatCameraOff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == Entry && active())
+        {
+            SET_GPR_S32(ctx, 2, 0);
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        (*Orig)(rdram, ctx, runtime);
+    }
+
     void install(PS2Runtime &runtime)
     {
         if (!active())
             return;
+        if ((g_origAiInit = runtime.lookupFunction(kAiInit)) && (g_playerInit = runtime.lookupFunction(kPlayerInit)) &&
+            (g_origEvalNoAI = runtime.lookupFunction(kEvalNoAI)) && (g_evalAI = runtime.lookupFunction(kEvalAI)) &&
+            (g_origInitCC = runtime.lookupFunction(kInitCC)) && (g_origInitCCThrow = runtime.lookupFunction(kInitCCThrow)))
+        {
+            runtime.registerFunction(kAiInit, &aiInitKeepsPlayers);
+            runtime.registerFunction(kEvalNoAI, &evaluateNoAIRespawnsAll);
+            runtime.registerFunction(kInitCC, &closeCombatCameraOff<kInitCC, &g_origInitCC>);
+            runtime.registerFunction(kInitCCThrow, &closeCombatCameraOff<kInitCCThrow, &g_origInitCCThrow>);
+        }
         if ((g_origLoad = runtime.lookupFunction(kLoadLevelFiles)) && (g_origInitPlayers = runtime.lookupFunction(kInitPlayers)) &&
             (g_origSetPlayer = runtime.lookupFunction(kSetPlayerMonster)) && (g_origInitCamera = runtime.lookupFunction(kGameInitCamera)) &&
             (g_origReestablish = runtime.lookupFunction(kReestablishViews)))

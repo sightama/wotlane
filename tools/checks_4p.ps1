@@ -12,6 +12,18 @@ $checks = [ordered]@{
     # (0x3D3920..0x3D392C) preenchidos, 4 vistas (viewNumViews 0x6F8AE0) e 4 cameras (Cameras::m_numCameras 0x6F8E30)
     'partida_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=3D3978,3D3920,3D3924,3D3928,3D392C,6F8AE0,6F8E30'; Secs = 35
                          Expect = '\[native\] recursos: CENTRAL \S+ \S+ \S+ \S+\r?\n|||3d3978=00000004|||3d3928=(?!00000000)[0-9a-f]{8}|||3d392c=(?!00000000)[0-9a-f]{8}|||6f8ae0=00000004|||6f8e30=00000004' }
+    # jogadores derrubados voltam: a cada 8 s de jogo (16 s reais: com 3+ jogadores o jogo roda a 30 quadros/s) o "vencer" derruba os
+    # jogadores 2..4 (e as IAs); se todos voltaram, a segunda vez derruba todos de novo (3 sem IA; antes, so o jogador 2 voltava). Com IA, o m_playerNum (+0x18) dos jogadores 3/4 (monstros em 0x2D6440 e 0x2E75D0, slots 2 e 3)
+    # continua 1 (humano), nunca 2 (IA)
+    'volta_4'       = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_CHEATS=vencer=8'; Secs = 50
+                         Expect = 'vencer a luta: 3 [^\n]*\n(.|\n)*vencer a luta: 3 ' }
+    'volta_4_ia'    = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_CHEATS=vencer=8;PS2X_STATS=1;PS2X_PEEK=2D6458,2E75E8'; Secs = 50
+                         Expect = 'vencer a luta: 4 [^\n]*\n(.|\n)*vencer a luta: 4 |||2d6458=00000001|||2e75e8=00000001'
+                         Reject = '2d6458=00000002|||2e75e8=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # a vista unificada (todos numa tela so no combate de perto, gUseUnifiedView 0x6F8A8C) nunca liga com 3+ jogadores
+    'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
+                         Expect = '6f8a8c=00000000'
+                         Reject = '6f8a8c=00000001|||\[CRASH\]|||\[vigia\] CONGELOU' }
 }
 
 $failed = @()
@@ -19,7 +31,8 @@ foreach ($name in $checks.Keys) {
     if ($Only -and $name -ne $Only) { continue }
     $c = $checks[$name]
     Write-Host "== $name"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $check -Env $c.Env -Secs $c.Secs -Expect $c.Expect
+    $reject = if ($c.Reject) { $c.Reject } else { '\[CRASH\]|||\[vigia\] CONGELOU' }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $check -Env $c.Env -Secs $c.Secs -Expect $c.Expect -Reject $reject
     if ($LASTEXITCODE -ne 0) { $failed += $name }
 }
 if ($failed.Count) { Write-Host "Falharam: $($failed -join ', ')" -ForegroundColor Red; exit 1 }

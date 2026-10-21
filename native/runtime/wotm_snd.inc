@@ -93,6 +93,11 @@ void startSoundSystem(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
     const bool ok = Engine::get().startOutput();
     std::fprintf(stderr, "[snd] snd_StartSoundSystem: som nativo %s\n", ok ? "ligado (48 kHz)" : "SEM saida de audio (InitAudioDevice falhou?)");
+    if (const char *m = std::getenv("WOTM_MUTE"); m && m[0] == '1')   // volume mestre do raylib: som e filmes
+    {
+        SetMasterVolume(0.0f);
+        std::fprintf(stderr, "[snd] mudo (WOTM_MUTE)\n");
+    }
     setReturnS32(ctx, 1);
 }
 void stopSoundSystem(uint8_t *, R5900Context *, PS2Runtime *) { Engine::get().stopAll(); }

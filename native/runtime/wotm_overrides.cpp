@@ -555,6 +555,15 @@ namespace
                         ++killed;
                     }
                 }
+                for (int i = 1; wotm_multi::active() && i < g_matchPlayers; ++i)   // 3+ jogadores: os outros jogadores tambem caem
+                {
+                    const uint32_t other = READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
+                    if (other && !READ8(other + 0xE8))
+                    {
+                        callTakeDamage(rdram, ctx, runtime, other, 100000.0f, m);
+                        ++killed;
+                    }
+                }
                 std::fprintf(stderr, "[debug] vencer a luta: %d IA(s) derrubada(s) de %d\n", killed, ais);
             }
         }

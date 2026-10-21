@@ -201,6 +201,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_RES=<linhas>`, `WOTM_FULLSCREEN=1` | altura do quadro nativo (padrão 720; 224..4320; o PS2 mostra 448) / tela cheia sem borda ao abrir (F11 alterna a qualquer hora); a janela abre no tamanho do quadro, reduzida para caber no monitor (launcher, grupo Vídeo) |
 | `WOTM_DISC=<pasta>`, `WOTM_ISO=<arquivo>` | forçam a origem dos arquivos do disco (`.RTX`, `.PSS`) em vez de `PS2X_CD_IMAGE`/pasta do ELF |
 | `WOTM_FMV_MUTE=1` | filmes sem áudio |
+| `WOTM_MUTE=1` | tudo sem som (volume mestre do raylib zerado no `snd_StartSoundSystem`): som do jogo e filmes; o `tools/live_check.ps1` liga |
 | `WOTM_IRX=1` | carrega no IOP emulado os IRX que não são de som (SIO2MAN, PADMAN, MCMAN, MCSERV), como antes de 2026-10-18; sem ela nenhum IRX sobe. Só no `ps2EntryRunner.exe`: o `wotm.exe` não tem IOP emulado e a ignora (`FRONTEIRA.md`, passo 6) |
 | `WOTM_MATCH=<jogador>[,<ia>...],<fase>` (0 a 7 IAs), `WOTM_AIVSAI=1` | partida direta sem menu (grupo "Partida" do launcher, que passa `-Auto 0`) / o jogador também sob a IA (seção "partida direta") |
 | `WOTM_SAVEJSON=0` | desliga o save em JSON (`wotm_save.inc`, `POS_FRONTEIRA.md` item 3): o jogo grava e lê só os binários de `mc0/`/`mc1/`, como antes. Sem ela, o `save.json` ao lado da pasta do cartão (opções e destraves uma vez, `saves` com 20 slots: 0 a 9 no cartão 1, 10 a 19 no 2) é a cópia que vale |
