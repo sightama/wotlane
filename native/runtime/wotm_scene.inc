@@ -44,5 +44,35 @@ static void wotmDrawScene(const uint8_t *rdram)
         wotm::saveicon::presenter().present(io.cdRoot, io.cdImage.string(), card);
     }
     wotmFotoOverlay(drew, rdram);
+    {
+        // WOTM_WINSHOTS=<s>[,<s>...]: a janela inteira (com o que vem por cima do quadro nativo) em win_<s>.png quando o relogio passa
+        // de cada <s> segundos. O WOTM_SHOTS so grava quando a cena nativa e redesenhada; este vale tambem nos lacos do Shell (dialogo
+        // depois da luta, cinemas) e com a tela preta de "sem cena".
+        static std::vector<double> shots = [] {
+            std::vector<double> v;
+            if (const char *s = std::getenv("WOTM_WINSHOTS"))
+                for (const char *p = s; *p;)
+                {
+                    char *e = nullptr;
+                    const double t = std::strtod(p, &e);
+                    if (e == p) break;
+                    v.push_back(t);
+                    p = (*e == ',') ? e + 1 : e;
+                }
+            return v;
+        }();
+        static size_t next = 0;
+        if (next < shots.size() && GetTime() >= shots[next])
+        {
+            char name[64];
+            std::snprintf(name, sizeof name, "win_%g.png", shots[next]);
+            rlDrawRenderBatchActive();   // o lote do raylib ainda nao foi para o quadro
+            Image img = LoadImageFromScreen();
+            if (ExportImage(img, name))
+                std::fprintf(stderr, "[shot] %s (janela, cena nativa %s)\n", name, drew ? "desenhada" : "ausente: preto");
+            UnloadImage(img);
+            ++next;
+        }
+    }
 }
 #include "wotm_vu1check.inc"

@@ -1200,7 +1200,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
     }
     if (sn.valid)
     {
-        if (sn.items.size() < 20 || !sn.cam.ok)   // sem fase de verdade (carregando, tela vazia): fica o quadro do GS
+        // Sem fase de verdade (carregando, tela vazia): fica o quadro do GS. Com dialogo na lista de alta prioridade (moldura do
+        // McBackground: "salvar?", lista de saves) vale mesmo com a fase quase vazia: em Tsunopolis, depois do disco voador levar o
+        // monstro na cena final, sobram 18 itens e a pergunta de salvar saia toda preta.
+        if ((sn.items.size() < 20 && sn.hp.empty()) || !sn.cam.ok)
         {            S.snap = wotm::Snapshot{};
             return false;
         }

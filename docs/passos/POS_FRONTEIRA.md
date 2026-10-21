@@ -206,6 +206,13 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   save é a próxima a jogar; "N of 11 levels" na linha de baixo). X carrega pelo `MonsterMc::setSaveData`; triângulo/círculo é o "voltar" da página. Gravar: o update
   do `McChooseSlot` (depois do "salvar?") vira o mesmo modal; slot vazio grava direto no JSON, ocupado pede um segundo X. Foto:
   `docs/screenshots/2026-10-20/2026-10-20_lista_de_saves_carregar.png`.
+- Na fase (gravar depois da luta) a moldura sai mais baixa que no menu (o tamanho vem da animação do `McBackground`; o
+  `setDestDims` não passa de 1): as alturas do texto são comprimidas para caber. A moldura vai direto ao tamanho final, porque ali o
+  `timerGetFieldsLastFrame` não anda e ela não cresceria (o `McPageMgr::update` só roda a página com ela pronta); o `+0x274` do
+  `McChooseSlot` (o `stateIsOk`) é ligado como no original. Os primeiros 100 ms não leem o pad (o X do "salvar?" chegava aqui e
+  gravava). Cima/baixo dão a volta nas pontas. Foto: `docs/screenshots/2026-10-20/2026-10-20_lista_de_saves_gravar_na_fase.png`.
+- Tela preta no "salvar?" depois da cena final de Tsunopolis (o disco voador leva o monstro e sobram 18 itens na fase): o nativo
+  recusava instantâneos com menos de 20 itens. Agora vale também quando há diálogo na lista de alta prioridade (`wotm_live.inc`).
 - A fonte do menu não tem `%` nem `:` (o progresso sai "4 of 11 levels"; nem `/`).
 - Falta: logo do monstro e fundo da fase à esquerda (o espaço já fica livre), depois o monstro 3D. Revisar os textos de memory
   card que sobram na aventura.

@@ -719,6 +719,8 @@ namespace wotm_save
         std::vector<Row> rows;
         int cur = 0, top = 0;
         bool confirm = false;   // gravar: segundo X sobrescreve
+        uint64_t openedAt = 0;  // g_vsyncs da abertura
+        Row pending;            // gravar: o que vai ser gravado (so para o desenho dos primeiros quadros)
         uint64_t seen = 0;      // g_vsyncs do ultimo update: um buraco quer dizer que a pagina foi fechada e aberta de novo
     };
     Modal g_modal;
@@ -818,6 +820,7 @@ namespace wotm_save
         m.open = true;
         m.saving = saving;
         m.page = page;
+        m.openedAt = g_vsyncs;
         buildRows(m);
         // Comeco: carregar, no primeiro ocupado; gravar, no vazio do fim
         m.cur = 0;
@@ -853,11 +856,16 @@ namespace wotm_save
         const Modal &m = g_modal;
         // A fonte do menu nao tem '%', ':' nem '/' (saem em branco). Maior linha: "99. Kineticlops at Century Airfield". Fontes do McPage menores (a lista e longa): copias em kFontsBuf com os tamanhos do makeCurrentFont (+0, +4, +8, +0xC, em
         // subpixels) escalados
+        // Na fase (gravar depois da luta) a moldura sai mais baixa que no menu: no menu ela vai de y ~25 a ~194 da tela do jogo, na
+        // fase de ~56 a ~179 (o tamanho vem da animacao do McBackground, nao do setDestDims). As alturas sao comprimidas para caber.
+        const bool inLevel = m.saving;
+        const float fk = inLevel ? 0.8f : 1.0f;
+        auto Y = [&](int y) { return inLevel ? static_cast<int>(std::lround(58 + (y - 25) * 0.7f)) : y; };
         auto scaled = [&](int idx, uint32_t src, float k) {
             const uint32_t dst = kFontsBuf + static_cast<uint32_t>(idx) * 0x28;
             std::memcpy(rdram + (dst & 0x1FFFFFFu), rdram + (src & 0x1FFFFFFu), 0x28);
             for (uint32_t o : {0u, 4u, 8u, 0xCu})
-                w32(rdram, dst + o, static_cast<uint32_t>(static_cast<int32_t>(std::lround(static_cast<int32_t>(ramU32(rdram, src + o)) * k))));
+                w32(rdram, dst + o, static_cast<uint32_t>(static_cast<int32_t>(std::lround(static_cast<int32_t>(ramU32(rdram, src + o)) * k * fk))));
             return dst;
         };
         const uint32_t fTitle = scaled(0, wotm::sym::x_6McPage_s_titleFont, 0.7f), fText = scaled(1, wotm::sym::x_6McPage_s_font, 0.8f);
@@ -870,30 +878,31 @@ namespace wotm_save
         constexpr int kLeftX = 30, kRightX = 318;
         if (m.confirm)
         {
-            text(rdram, ctx, rt, "Overwrite save file " + std::to_string(m.cur + 1) + "?", kLeftX, 40, fName);
-            text(rdram, ctx, rt, "Press X again to overwrite", kLeftX, 70, fText);
+            text(rdram, ctx, rt, "Overwrite save file " + std::to_string(m.cur + 1) + "?", kLeftX, Y(40), fName);
+            text(rdram, ctx, rt, "Press X again to overwrite", kLeftX, Y(70), fText);
         }
         else if (show)
         {
-            text(rdram, ctx, rt, rowTitle(rdram, *show), kLeftX, 40, fName);
-            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, 138, fText);
-            text(rdram, ctx, rt, "Adventure progress", kLeftX, 158, fText);
-            text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, 174, fText);
+            text(rdram, ctx, rt, rowTitle(rdram, *show), kLeftX, Y(40), fName);
+            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, Y(138), fText);
+            text(rdram, ctx, rt, "Adventure progress", kLeftX, Y(158), fText);
+            text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, Y(174), fText);
         }
         else
-            text(rdram, ctx, rt, "No saved adventures", kLeftX, 40, fName);
+            text(rdram, ctx, rt, "No saved adventures", kLeftX, Y(40), fName);
         // Direita: a lista
-        text(rdram, ctx, rt, "Save files", kRightX, 40, fTitle);
+        text(rdram, ctx, rt, "Save files", kRightX, Y(40), fTitle);
         for (int i = m.top; i < std::min<int>(m.top + kVisibleRows, static_cast<int>(m.rows.size())); ++i)
         {
             const Row &r = m.rows[static_cast<size_t>(i)];
             const std::string s = r.used ? std::to_string(i + 1) + ". " + rowTitle(rdram, r) : "-- Empty save file --";
-            text(rdram, ctx, rt, s, kRightX, 60 + (i - m.top) * 14, i == m.cur ? fSel : fUnsel);
+            text(rdram, ctx, rt, s, kRightX, Y(60 + (i - m.top) * 14), i == m.cur ? fSel : fUnsel);
         }
     }
 
     // Anda na lista (carregar pula os vazios); devolve true se mexeu
-    bool modalMove(Modal &m, int step)
+    // `wrap`: passar da ponta da a volta (cima/baixo); sem ele para na ponta (esquerda/direita, de 10 em 10).
+    bool modalMove(Modal &m, int step, bool wrap)
     {
         const int n = static_cast<int>(m.rows.size());
         int i = m.cur;
@@ -901,7 +910,11 @@ namespace wotm_save
         {
             i += step > 0 ? 1 : -1;
             if (i < 0 || i >= n)
-                return false;   // sem volta no fim, como uma lista
+            {
+                if (!wrap)
+                    return false;
+                i = i < 0 ? n - 1 : 0;
+            }
             if (m.saving || m.rows[static_cast<size_t>(i)].used)
                 break;
         }
@@ -972,6 +985,12 @@ namespace wotm_save
         if (!m.open || m.page != self || m.saving != saving || g_vsyncs - m.seen > 10)
             modalOpen(rdram, ctx, rt, self, saving);
         m.seen = g_vsyncs;
+        // O X que respondeu a pagina anterior ("salvar?") ainda chega aqui se for rapido: 100 ms sem ler o pad depois de abrir
+        if (g_vsyncs - m.openedAt < 6)
+        {
+            modalDraw(rdram, ctx, rt, saving ? &(m.pending = rowFromRam(rdram)) : nullptr);
+            return;
+        }
         auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0; };
         const Row current = saving ? rowFromRam(rdram) : Row{};
         if (pressed(kBtnTriangle) || pressed(kBtnCircle))
@@ -992,7 +1011,7 @@ namespace wotm_save
             const int steps = pressed(kBtnLeft) || pressed(kBtnRight) ? kVisibleRows : 1;
             bool moved = false;
             for (int k = 0; k < steps; ++k)
-                moved = modalMove(m, down ? 1 : -1) || moved;
+                moved = modalMove(m, down ? 1 : -1, steps == 1) || moved;
             if (moved)
             {
                 m.confirm = false;

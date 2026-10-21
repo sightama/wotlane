@@ -183,6 +183,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_FXLIST=1`, `WOTM_FXDUMP=<prefixo>` | lista sistemas de partículas / grava suas texturas (`tools/fx.py` dá nomes) |
 | `WOTM_GSFRAME=1` | sem cena nativa (carregamento, troca de tela), mostra o quadro do GS como antes de 2026-10-19; o padrão com `PS2X_NO_GS` é tela preta (o GS não desenha, e a área exibida só tinha uploads de textura: a VRAM crua aparecia entre o pulo da abertura e o menu e entre lutas) |
 | `WOTM_SHOTS=<s>[,<s>...]` | grava o quadro nativo em `shot_<s>.png` (pasta atual, o `discroot`) quando o relógio da janela passa de cada `<s>` segundos: conferir telas ao vivo com um roteiro de pad (`PS2X_PAD`), sem tecla |
+| `WOTM_WINSHOTS=<s>[,<s>...]` | como o `WOTM_SHOTS`, mas grava a janela inteira em `win_<s>.png` (com o ícone e o que vem por cima) e vale também quando a cena nativa não é redesenhada (diálogos depois da luta, tela preta de "sem cena"; `wotm_scene.inc`) |
 | `WOTM_PTLOG=1` | imprime a tabela de luzes pontuais (`pointLights`: `closest[]`, posição, alcance, cor, falloff) a cada `collect` e cada teste de esfera do `objectPointLights` |
 | `WOTM_FLARELOG=1`, `WOTM_FLARESHOT=<png>` | imprime as entradas da lista de lens flare, a entrada do `drawFlares` e o teste de Z (amostras visíveis, W da luz e W da amostra mais perto) / grava a imagem do teste de profundidade do flare |
 | `WOTM_DUSTLOG=1` | tempo e parâmetros de cada regeneração da textura composta de poeira (`Scene::dustTexture`) |
