@@ -1,5 +1,6 @@
 // wotm_scene.inc (incluido por ps2_runtime.cpp; raylib e ps2_runtime.h ja estao incluidos)
 #include <atomic>
+#include "wotm_savepics.hpp"   // imagens da lista de saves (wotm_live.inc as desenha)
 static std::atomic<bool> g_wotmShotKey{false};   // F8 na janela (wotm_foto.inc) -> um quadro da checagem VU1 x nativo agora (wotm_vu1check.inc)
 #include "wotm_live.inc"
 #include "wotm_foto.inc"   // F7 pausa, F6 avanca um quadro, F8 foto com nota (WOTM_FOTOS)
