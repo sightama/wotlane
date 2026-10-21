@@ -27,7 +27,7 @@ $disc = Join-Path $runtime 'discroot'
 $elf = Join-Path $disc 'SCUS_971.97'
 $out = Join-Path $runtime 'net'
 New-Item -ItemType Directory -Force $out | Out-Null
-Get-ChildItem $out -File | Remove-Item -Force
+Get-ChildItem $out | Remove-Item -Force -Recurse
 
 # o mesmo ambiente do run_live.ps1 (sem som, janela pequena, sem dispositivos do PC: so o roteiro de cada um)
 if (-not $env:PS2X_CD_IMAGE) {
@@ -63,7 +63,16 @@ try {
         $env:WOTM_STATEHASH = Join-Path $out "jogador$i.hash"
         $env:PS2X_PAD = $scripts[($i - 1) % $scripts.Count]
         $exePath = $exes[[Math]::Min($i - 1, $exes.Count - 1)]
-        $procs += Start-Process -FilePath $exePath -ArgumentList "`"$elf`"" -WorkingDirectory $disc -PassThru -WindowStyle Minimized `
+        # cada jogador na sua pasta, como em PCs diferentes: o ELF, o cartao (mc0) e o save.json dele; o resto do disco vem da ISO.
+        # Do segundo em diante o save tem outras opcoes (dificuldade, volumes, controle, tokens): a partida em rede nao pode le-lo.
+        $pdir = Join-Path $out "pc$i"
+        New-Item -ItemType Directory -Force $pdir | Out-Null
+        Copy-Item $elf $pdir -Force
+        if ($i -ge 2) {
+            Set-Content (Join-Path $pdir 'save.json') ('{"options": {"difficulty": 2, "sfxVolume": ' + (40 + $i) + ', "musicVolume": 30, "mono": 1, ' +
+                '"controllerConfig": [1, 1], "vibration": [0, 0]}, "battleTokens": 1234}') -Encoding ascii
+        }
+        $procs += Start-Process -FilePath $exePath -ArgumentList "`"$(Join-Path $pdir 'SCUS_971.97')`"" -WorkingDirectory $pdir -PassThru -WindowStyle Minimized `
             -RedirectStandardError (Join-Path $out "jogador$i.err.log") -RedirectStandardOutput (Join-Path $out "jogador$i.out.log")
     }
     if ($Drop -gt 0) {

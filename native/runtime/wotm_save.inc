@@ -637,11 +637,17 @@ namespace wotm_save
         {wotm::fn::updateEndureSave__9MonsterMc, Seq::EndureSave, "endurance"},
     };
 
+    // Partida em rede (WOTM_NET): o save deste PC nao entra nem e gravado. Opcoes, dificuldade, configuracao de controle e destraves
+    // ficam na RAM do jogo, e cada PC tem os seus: todos jogam com os padroes do jogo (como num cartao vazio), senao dessincroniza.
+    bool g_netplay = false;
+
     template <size_t I> void seqReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
     {
         const SeqHook &h = kSeqHooks[I];
         const uint32_t self = GPR_U32(ctx, 4);
-        if (h.seq == Seq::BootLoad || h.seq == Seq::SettingsLoad)
+        if (g_netplay)
+            ;
+        else if (h.seq == Seq::BootLoad || h.seq == Seq::SettingsLoad)
             jsonToRam(rdram);
         else
         {
@@ -1121,6 +1127,13 @@ namespace wotm_save
 
     void install(PS2Runtime &runtime)
     {
+        if (const char *n = std::getenv("WOTM_NET"); n && *n)
+        {   // as sequencas do cartao terminam sem ler nem gravar nada (sem stdInit/stdExit: os binarios do cartao ficam de fora tambem)
+            g_netplay = true;
+            registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
+            std::fprintf(stderr, "[wotm] save: partida em rede, opcoes e destraves padrao do jogo (o save deste PC nao e lido nem gravado)\n");
+            return;
+        }
         const char *e = std::getenv("WOTM_SAVEJSON");
         if (e && e[0] == '0')
         {
