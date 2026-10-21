@@ -569,7 +569,8 @@ class Launcher : Form
     void OpenLog()
     {
         string rt = RuntimeDir();
-        string p = rt == null ? null : Path.Combine(rt, "live.err.log");
+        string p = rt == null ? null : Path.Combine(rt, "logs", "live.err.log");
+        if (p != null && !File.Exists(p)) p = Path.Combine(rt, "live.err.log");   // run_live.ps1 antigo grava na raiz
         if (p != null && File.Exists(p)) Process.Start("notepad.exe", "\"" + p + "\"");
         else status.Text = "No live.err.log yet.";
     }

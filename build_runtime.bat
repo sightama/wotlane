@@ -33,14 +33,14 @@ if not defined FOUND (
 > "%REPO%\.wotm_recomp_dir" echo %FOUND%
 
 set "BAT=build_dev.bat"
-set "LOG=build_dev.log"
+set "LOG=logs\build_dev.log"
 if /i "%~1"=="build" (
     set "BAT=build.bat"
-    set "LOG=build.log"
+    set "LOG=logs\build.log"
 )
 if /i "%~1"=="nm" (
     set "BAT=build_dev_nm.bat"
-    set "LOG=build_dev_nm.log"
+    set "LOG=logs\build_dev_nm.log"
 )
 if /i not "%~1"=="nm" if not exist "%FOUND%\%BAT%" (
     echo Nao achei "%FOUND%\%BAT%".
