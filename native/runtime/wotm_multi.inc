@@ -27,6 +27,13 @@ namespace wotm_multi
     bool g_loadingAsAIs = false;   // o shell esta dizendo "2 jogadores + IAs" (entre o LoadLevelFiles e o InitPlayers)
 
     bool active() { return g_matchPlayers > 2; }
+    // Uma vista no viewport 0 por jogador e sem vista unificada: 3+ jogadores, ou 2+ com WOTM_LOCALPLAYER (cada um no seu PC ve a sua
+    // vista em tela cheia, sem a metade 2:3 da tela dividida do retail)
+    bool perPlayerViews()
+    {
+        static const bool local = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); return e && std::atoi(e) >= 1; }();
+        return active() || (local && g_matchPlayers >= 2);
+    }
 
     void loadLevelFilesAsAIs(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -105,7 +112,7 @@ namespace wotm_multi
 
     void reestablishViewsPerPlayer(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc != kReestablishViews || !active() || READ32(kGameMode) != 3u)
+        if (ctx->pc != kReestablishViews || !perPlayerViews() || READ32(kGameMode) != 3u)
         {
             g_origReestablish(rdram, ctx, runtime);
             return;
@@ -174,12 +181,16 @@ namespace wotm_multi
 
     // Combate de perto: Cameras::InitCCCamera/InitCCCameraFromThrow ligam gUseUnifiedView e poem a camera 2 no POV 1; com a vista
     // unificada o viewGetNumViews devolve 1 e 3 dos 4 jogadores ficam sem tela. Com 3+ jogadores nao fazem nada.
-    constexpr uint32_t kInitCC = wotm::fn::InitCCCamera__7CamerasP7MonsterT1, kInitCCThrow = wotm::fn::InitCCCameraFromThrow__7CamerasP7MonsterT1;
-    PS2Runtime::RecompiledFunction g_origInitCC = nullptr, g_origInitCCThrow = nullptr;
+    // As cinemas (doCinema/endCinema) alternam a tela dividida (viewToggleSplitScreen), que com 2 vistas volta a uma ou as metades 2:3;
+    // com uma vista por jogador ficam as vistas do gameReestablishViews.
+    constexpr uint32_t kInitCC = wotm::fn::InitCCCamera__7CamerasP7MonsterT1, kInitCCThrow = wotm::fn::InitCCCameraFromThrow__7CamerasP7MonsterT1,
+                       kToggleSplit = wotm::fn::viewToggleSplitScreen__FbT0;
+    PS2Runtime::RecompiledFunction g_origInitCC = nullptr, g_origInitCCThrow = nullptr, g_origToggleSplit = nullptr;
 
-    template <uint32_t Entry, PS2Runtime::RecompiledFunction *Orig> void closeCombatCameraOff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    // Mesmo gancho para a alternancia da tela dividida (as cinemas): com uma vista por jogador, ela tambem nao faz nada.
+    template <uint32_t Entry, PS2Runtime::RecompiledFunction *Orig> void skipWithPlayerViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == Entry && active())
+        if (ctx->pc == Entry && perPlayerViews())
         {
             SET_GPR_S32(ctx, 2, 0);
             ctx->pc = GPR_U32(ctx, 31);
@@ -190,7 +201,7 @@ namespace wotm_multi
 
     void install(PS2Runtime &runtime)
     {
-        if (!active())
+        if (!perPlayerViews())
             return;
         if ((g_origAiInit = runtime.lookupFunction(kAiInit)) && (g_playerInit = runtime.lookupFunction(kPlayerInit)) &&
             (g_origEvalNoAI = runtime.lookupFunction(kEvalNoAI)) && (g_evalAI = runtime.lookupFunction(kEvalAI)) &&
@@ -198,9 +209,11 @@ namespace wotm_multi
         {
             runtime.registerFunction(kAiInit, &aiInitKeepsPlayers);
             runtime.registerFunction(kEvalNoAI, &evaluateNoAIRespawnsAll);
-            runtime.registerFunction(kInitCC, &closeCombatCameraOff<kInitCC, &g_origInitCC>);
-            runtime.registerFunction(kInitCCThrow, &closeCombatCameraOff<kInitCCThrow, &g_origInitCCThrow>);
+            runtime.registerFunction(kInitCC, &skipWithPlayerViews<kInitCC, &g_origInitCC>);
+            runtime.registerFunction(kInitCCThrow, &skipWithPlayerViews<kInitCCThrow, &g_origInitCCThrow>);
         }
+        if ((g_origToggleSplit = runtime.lookupFunction(kToggleSplit)))
+            runtime.registerFunction(kToggleSplit, &skipWithPlayerViews<kToggleSplit, &g_origToggleSplit>);
         if ((g_origLoad = runtime.lookupFunction(kLoadLevelFiles)) && (g_origInitPlayers = runtime.lookupFunction(kInitPlayers)) &&
             (g_origSetPlayer = runtime.lookupFunction(kSetPlayerMonster)) && (g_origInitCamera = runtime.lookupFunction(kGameInitCamera)) &&
             (g_origReestablish = runtime.lookupFunction(kReestablishViews)))

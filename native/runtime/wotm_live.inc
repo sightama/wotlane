@@ -329,6 +329,12 @@ namespace wotm_live
 static bool g_hideFps = false;   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
 static bool g_force43 = false;   // replay: quadro 4:3, como a imagem de referencia do GS
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
+// WOTM_LOCALPLAYER=<n> (1..4): vista do jogo do jogador local (n - 1); -1 sem ela (todas as vistas, como o jogo as compoe)
+static int localView()
+{
+    static const int v = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); const int n = e ? std::atoi(e) : 0; return n >= 1 && n <= 4 ? n - 1 : -1; }();
+    return v;
+}
 
 // Widescreen (Hor+): o FOV vertical e o do jogo e a largura acompanha a proporcao. WOTM_ASPECT=L:A fixa a proporcao (4:3 = tela
 // original, com faixas nas laterais); sem ela a proporcao segue a janela (entre 4:3 e 32:9), que abre em 16:9.
@@ -704,7 +710,13 @@ void wotmFontDma(const uint8_t *rdram)
     static std::vector<wotm::TextQuad> gridText[4];    // tela em 4: ultimo texto de cada vista, ja no quarto da tela dela
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     const uint32_t view = ram.u32(wotm::sym::viewCurView);
-    if (wotm::readViewCtx(ram, 0).grid && view < 4)
+    if (wotm::readViewCtx(ram, 0).grid && view < 4 && wotm_live::localView() >= 0)
+    {
+        // so a vista do jogador local, no tamanho da tela (a apresentacao mostra so ela)
+        gridText[view] = std::move(q);
+        q = gridText[wotm_live::localView()];
+    }
+    else if (wotm::readViewCtx(ram, 0).grid && view < 4)
     {
         // a vista desenha o texto na tela cheia do jogo (640 x 224): metade do tamanho, no quarto dela
         const float ox = (view & 1u) ? 320.f : 0.f, oy = (view & 2u) ? 112.f : 0.f;
@@ -741,8 +753,27 @@ void wotmFontDma(const uint8_t *rdram)
 void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd)
 {
     wotm::TextQuad t;
-    if (rdram && wotm_live::g_pendingPolys.size() < 256 && wotm::screenPolyFromCall(wotm::Ram{rdram, PS2_RAM_SIZE}, src, x, y, pd, t))
-        wotm_live::g_pendingPolys.push_back(t);
+    if (!rdram || wotm_live::g_pendingPolys.size() >= 256 || !wotm::screenPolyFromCall(wotm::Ram{rdram, PS2_RAM_SIZE}, src, x, y, pd, t))
+        return;
+    const wotm::Ram ram{rdram, PS2_RAM_SIZE};
+    if (wotm::readViewCtx(ram, 0).grid)   // uma vista por jogador: o quadrado e da vista que o monta (como o texto, wotmFontDma)
+    {
+        const uint32_t view = std::min(ram.u32(wotm::sym::viewCurView), 3u);
+        if (wotm_live::localView() >= 0)
+        {
+            if (static_cast<int>(view) != wotm_live::localView())
+                return;
+        }
+        else
+        {
+            const float ox = (view & 1u) ? 320.f : 0.f, oy = (view & 2u) ? 112.f : 0.f;
+            t.x0 = ox + t.x0 * 0.5f;
+            t.x1 = ox + t.x1 * 0.5f;
+            t.y0 = oy + t.y0 * 0.5f;
+            t.y1 = oy + t.y1 * 0.5f;
+        }
+    }
+    wotm_live::g_pendingPolys.push_back(t);
 }
 // Caixa (x0, y0, x1, y1, tela do jogo 640 x 224) do quadrado que addPoly(src, x, y, pd) montaria, sem monta-lo
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4])
@@ -756,7 +787,8 @@ bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd,
     box[3] = std::max(t.y0, t.y1);
     return true;
 }
-static int g_barView = 0;   // vista da barra em montagem (wotmHealthIconShift)
+static int g_barView = 0;   // vista da barra em montagem (wotmHealthIconShift, wotmBarView)
+void wotmBarView(int view) { g_barView = std::clamp(view, 0, 3); }
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
     if (wotm_live::g_pendingBars.size() < 512)
@@ -782,7 +814,7 @@ void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0,
 float wotmHealthIconShift(const uint8_t *rdram, float rx)
 {
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
-    g_barView = ram.u32(wotm::sym::viewCurView) == 1u ? 1 : 0;
+    g_barView = static_cast<int>(std::min(ram.u32(wotm::sym::viewCurView), 3u));
     const wotm::ViewCtx vc = wotm::readViewCtx(ram, g_barView);
     const float wide = std::max(1.f, wotm_live::capture().wide.load(std::memory_order_relaxed));
     if (!std::isfinite(rx)) return 0.f;
@@ -1325,8 +1357,11 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // Tela em 4 (3 ou 4 jogadores, ViewCtx::grid): cada vista numa textura de um quarto do quadro, todas em tela cheia 4:3, compostas
         // em 2x2 (0 em cima a esquerda, 1 em cima a direita, 2 embaixo a esquerda, 3 embaixo a direita; com 3 o quarto fica preto).
         const auto extraOk = [&](int i) { return S.snap.extra[i] && S.snap.extra[i]->valid && S.snap.extra[i]->cam.ok; };
-        const bool split = extraOk(0) && !S.snap.vctx.full() && !freeView.override;
-        const bool grid = S.snap.vctx.grid && extraOk(0) && extraOk(1) && !freeView.override;
+        // WOTM_LOCALPLAYER=<n> (netcode, cada um no seu PC): so a vista do jogador n, em tela cheia, com o HUD dela
+        const int localView = wotm_live::localView();
+        const wotm::Snapshot *own = localView > 0 && S.snap.vctx.grid && extraOk(localView - 1) ? S.snap.extra[localView - 1].get() : nullptr;
+        const bool split = extraOk(0) && !S.snap.vctx.full() && !freeView.override && localView < 0;
+        const bool grid = S.snap.vctx.grid && extraOk(0) && extraOk(1) && !freeView.override && localView < 0;
         {
             static const bool splitLog = std::getenv("WOTM_SPLITLOG") != nullptr;
             if (splitLog)
@@ -1372,6 +1407,16 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 if (extraOk(v - 1))
                     drawView(S.vrts[v], S.scene.show(*S.snap.extra[v - 1]));
         gc = S.scene.show(S.snap);
+        if (own)   // a cena e a camera da vista local; barras, fades e quadrados do HUD sao do quadro (estao no instantaneo da vista 0)
+        {
+            std::vector<wotm::ScreenRect> rects = std::move(S.scene.screenRects);
+            std::vector<wotm::TextQuad> polys = std::move(S.scene.screenPolys);
+            gc = S.scene.show(*own);
+            S.scene.screenRects = std::move(rects);
+            S.scene.screenPolys = std::move(polys);
+        }
+        S.scene.localView = S.snap.vctx.grid ? localView : -1;
+        S.scene.gridBars = grid;
         S.snap.cam = gameCam;
         if (freeView.override)
             wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
@@ -1663,6 +1708,7 @@ void wotmFontGlyph(const uint8_t *, int, int) {}
 void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
 bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { return false; }
+void wotmBarView(int) {}
 void wotmBarRect(float, float, float, float, uint8_t, uint8_t, uint8_t, uint8_t) {}
 void wotmBarTex(float, float, float, float, uint64_t, float, float, float, float) {}
 float wotmHealthIconShift(const uint8_t *, float) { return 0.f; }

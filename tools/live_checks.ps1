@@ -28,6 +28,15 @@ $checks = [ordered]@{
     # a foto shot_30.png (discroot) fica para conferir os quadrantes a olho
     'tela_4'        = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;WOTM_SPLITLOG=1;WOTM_SHOTS=30'; Secs = 40
                          Expect = '\[split\] g=\d+ vista 3:|||4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]' }
+    # vista local (netcode, cada um no seu PC): com WOTM_LOCALPLAYER so a vista desse jogador, em tela cheia (redesenhos com 1 vista,
+    # nunca a tela em 4); foto shot_30.png com o HUD do jogador 3 no canto de cima a esquerda
+    'local_4'       = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;WOTM_LOCALPLAYER=3;PS2X_STATS=1;WOTM_SHOTS=30'; Secs = 40
+                         Expect = 'redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
+                         Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # 2 jogadores com vista local: as duas vistas no viewport 0 (viewInfo[1].viewport em 0x6E191C = 0), sem a metade 2:3
+    'local_2'       = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;WOTM_LOCALPLAYER=2;PS2X_STATS=1;PS2X_PEEK=6F8AE0,6E191C;WOTM_SHOTS=30'; Secs = 40
+                         Expect = '6f8ae0=00000002 6e191c=00000000|||redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
+                         Reject = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # padrao sem WOTM_FULLSCREEN/WOTM_RES: tela cheia sem borda e quadro na resolucao do monitor (esta maquina: 2560x1440)
     'tela_nativa'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_MATCH=3,1,1'; Secs = 25
                          Expect = '\[native\] quadro 2560x1440, janela 2560x1440 \(tela cheia' }

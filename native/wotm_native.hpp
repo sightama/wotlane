@@ -70,8 +70,9 @@ constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 // GS; src/common/view.cpp). Por thread: a coleta roda na thread do EE e o desenho na da janela, cada um liga a sua com ViewScope. Sem
 // ViewScope vale a vista 0 com a tela cheia (640 x 224, centro 2048), como era antes da tela dividida. cx/cy/w/h: centro e tamanho
 // da vista em pixels do GS (viewDef da vista: cx/cy em +0x18/+0x1C, w/h em +4/+6).
-// Tela em 4 (3 ou 4 jogadores, wotm_multi.inc): todas as vistas usam o viewport 0 (tela cheia, 4:3) e a apresentacao as compoe em
-// 2x2; `grid` marca o quadro com mais de 2 vistas (viewNumViews >= 3, sem a vista unificada).
+// Uma vista por jogador (wotm_multi.inc: 3 ou 4 jogadores, ou 2+ com WOTM_LOCALPLAYER): todas as vistas usam o viewport 0 (tela cheia,
+// 4:3); a apresentacao as compoe em 2x2 ou mostra so a do jogador local. `grid` marca o quadro com 2+ vistas no viewport 0 (sem a vista
+// unificada); a tela dividida de 2 jogadores do retail usa as metades (viewport 1/2) e nao entra.
 struct ViewCtx {
     int view = 0;
     float cx = 2048.f, cy = 2048.f, w = 640.f, h = 224.f;
@@ -105,7 +106,8 @@ inline ViewCtx readViewCtx(const Ram &ram, int view) {
         v.w = ram.u16(def + 4);
         v.h = ram.u16(def + 6);
     }
-    v.grid = ram.u32(wotm::sym::viewNumViews) >= 3u && ram.u32(wotm::sym::gUseUnifiedView) == 0u;
+    const uint32_t def0 = ram.u32(addr::viewInfo + 4) & 0x1FFFFFFFu;
+    v.grid = ram.u32(wotm::sym::viewNumViews) >= 2u && ram.u32(wotm::sym::gUseUnifiedView) == 0u && ram.ok(def0, 8) && ram.u16(def0 + 4) >= 640u;
     return v;
 }
 
@@ -2980,6 +2982,11 @@ public:
     // widescreen o fade escurece a janela toda); um menor fica na faixa 4:3 central, como o texto. Na tela dividida (splitEdges) cada
     // borda vale por si: o fade e as faixas de cinema de uma vista (0..320 ou 320..640) vao ate a borda da janela do lado dela.
     bool splitEdges = false;
+    // Uma vista por jogador: localView >= 0 = so a vista do jogador local na tela (as barras das outras vistas ficam de fora);
+    // gridBars = tela em 2x2 (a barra de cada vista vai para o quarto dela, na metade do tamanho).
+    int localView = -1;
+    bool gridBars = false;
+
     void drawScreenRects(float rw, float rh, bool underText = false) {
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sy = rh / 224.f;
@@ -2987,6 +2994,18 @@ public:
             if (r.underText != underText) continue;
             const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
             if (!a) continue;
+            if (r.barView >= 0 && localView >= 0 && r.barView != localView) continue;
+            if (r.barView >= 0 && gridBars) {   // a imagem da vista inteira vai reduzida a metade para o quarto dela
+                const float k = gr.w / 640.f, ox = (r.barView & 1) ? 0.5f * rw : 0.f, oy = (r.barView & 2) ? 0.5f * rh : 0.f;
+                const Rectangle dst{ox + 0.5f * (gr.x0 + r.x0 * k), oy + 0.5f * r.y0 * sy, 0.5f * (r.x1 - r.x0) * k, 0.5f * (r.y1 - r.y0) * sy};
+                if (r.tex0) {
+                    const Texture2D t = residentTexture(r.tex0);
+                    if (t.id)
+                        DrawTexturePro(t, Rectangle{r.u0, std::min(r.v0, r.v1), r.u1 - r.u0, r.v1 - r.v0}, dst, Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
+                } else
+                    DrawRectangleRec(dst, Color{r.r, r.g, r.b, a});
+                continue;
+            }
             if (r.barView >= 0) {   // barra sobre o inimigo
                 const float k = gr.w / 640.f;
                 float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
@@ -3861,6 +3880,9 @@ private:
         // (trans = olho + R * gHudPos, mat = rotacao da vista), entao ele projeta como o resto; vai para `hud`, desenhado por cima de tudo.
         const uint32_t id = ram.u32(ep) >> 18;
         const bool isHud = needDrawMe && id >= 0x1C20 && id <= 0x2133 && !isButtonId(id);
+        // Uma vista por jogador: o nivel so tem medidores para os HUDs 0 e 1, e o jogo reposiciona os objetos do HUD 1 na frente da camera
+        // de cada vista seguinte (medido: as vistas 2 e 3 viam o HUD do jogador 2). Nelas so vale o HUD nativo (emitPlayerHuds).
+        if (isHud && vctx.grid && vctx.view >= 2) return;
         M4 m = readM4(ram, cs + 0x20);
         m.m[3][0] = ram.f32(cs + 0x10); m.m[3][1] = ram.f32(cs + 0x14); m.m[3][2] = ram.f32(cs + 0x18); m.m[3][3] = 1.f;
         m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
