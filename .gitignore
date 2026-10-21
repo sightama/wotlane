@@ -43,3 +43,6 @@ tools/pcsx2_auto/*.bin
 # notas locais (nunca versionar)
 CLAUDE.local.md
 docs/plans/
+
+# pasta do runtime (clone do PS2Recomp, build, discroot) dentro do repo
+/runtime/
