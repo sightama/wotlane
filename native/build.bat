@@ -8,6 +8,8 @@ set "PATH=C:\Program Files (x86)\Microsoft Visual Studio\Installer;%PATH%"
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
 if not exist "%~dp0..\build" mkdir "%~dp0..\build"
 cl /nologo /std:c++17 /O2 /EHsc /MD /I"%RAYLIB_DIR%\include" "%~dp0viewer.cpp" /Fo"%~dp0..\build\viewer.obj" /Fe"%~dp0..\build\viewer.exe" /link /LIBPATH:"%RAYLIB_DIR%" raylib.lib winmm.lib gdi32.lib user32.lib shell32.lib opengl32.lib
+rem monview (monstro 3D direto do disco, native/wotm_model.hpp)
+cl /nologo /std:c++17 /O2 /EHsc /MD /I"%RAYLIB_DIR%\include" "%~dp0monview.cpp" /Fo"%~dp0..\build\monview.obj" /Fe"%~dp0..\build\monview.exe" /link /LIBPATH:"%RAYLIB_DIR%" raylib.lib winmm.lib gdi32.lib user32.lib shell32.lib opengl32.lib
 rem sndplay (som nativo, native/wotm_snd.hpp): so a biblioteca padrao
 cl /nologo /std:c++17 /O2 /EHsc /MD "%~dp0sndplay.cpp" /Fo"%~dp0..\build\sndplay.obj" /Fe"%~dp0..\build\sndplay.exe"
 rem fmvplay (filmes .PSS, native/wotm_fmv.hpp) so com o FFmpeg: o mesmo pacote que o CMake do runtime baixa (ffmpeg-n7.1-*-lgpl-amd64-shared).

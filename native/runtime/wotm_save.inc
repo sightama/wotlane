@@ -903,6 +903,13 @@ namespace wotm_save
             const float pw = 220.f * k, ph = pw * aspect * 0.5f, px0 = kLeftCenter - pw * 0.5f, py0 = static_cast<float>(Y(82));
             if (wotm::savepics::hasLevel(show->level))
                 pics.push_back({wotm::savepics::kLevel, show->level, px0, py0, px0 + pw, py0 + ph, a});
+            if (wotm::savepics::monsterFile(mon))
+            {
+                // Monstro 3D em idle por cima da foto, com os pes perto da borda de baixo dela. Quadrado na janela: largura da tela
+                // do jogo = altura * (720 / 224) / 1,5.
+                const float mh = ph * 1.32f, mw = mh / aspect, mcx = kLeftCenter, my1 = py0 + ph + 3.f * k;
+                pics.push_back({wotm::savepics::kMonster, mon | (show->costume & 3) << 8, mcx - mw * 0.5f, my1 - mh, mcx + mw * 0.5f, my1, a});
+            }
             text(rdram, ctx, rt, "Score " + std::to_string(show->score), kLeftX, Y(140), fText);
             text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, Y(154), fText);
             text(rdram, ctx, rt, "Adventure progress", kLeftX, Y(168), fText);

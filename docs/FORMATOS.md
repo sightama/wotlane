@@ -159,6 +159,7 @@ O layout de `_ParticleType` (12000 bytes), `EmitterType`, `FieldInfoType`, `Part
 
 ## Animação (curvas no `.NGP` e o mixer em tempo de execução)
 Fonte: `src/common/AnimCurve.cpp` e `src/common/animation.cpp` (TU inteiro em C++; as equivalentes ainda não passaram por difftest/oracle, então o que depende só delas está marcado (?)).
+Conferido em 2026-10-20 contra os canais de uma luta (128 de 130 iguais; `tools/animcurve.py`). Montar a pose do monstro só com o disco (esqueleto, paleta, texturas): `passos/MODELOS_3D.md`.
 Os nomes de struct e de campo vêm de `include/hieri_types.h` (gerado dos stabs); aqui está o que os valores significam.
 
 **Dados (no `.NGP`):** `CHARACTER_INSTANCE` (`_animCharInstance`) -> `character` (+0x20, `_animCharacter`: `numAnims`, `numChannels`, `animations[]`) -> cada `_animation` (`startTime`/`endTime` em quadros da
