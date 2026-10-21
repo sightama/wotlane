@@ -358,15 +358,22 @@ static float viewAspect()
     const float sh = static_cast<float>(GetScreenHeight());
     return sh > 0.f ? std::clamp(static_cast<float>(GetScreenWidth()) / sh, 4.f / 3.f, 32.f / 9.f) : 4.f / 3.f;
 }
-// Altura do quadro nativo em pixels (WOTM_RES=<linhas>; sem ela, a altura do monitor da janela; a tela do PS2 tem 448, 224 por campo);
-// a largura sai da proporcao. O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
+// Altura do quadro nativo em pixels (WOTM_RES=<linhas>; sem ela, a altura do monitor da janela vezes WOTM_SSAA; a tela do PS2 tem 448,
+// 224 por campo); a largura sai da proporcao. O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
+// Superamostragem (anti-serrilhado): WOTM_SSAA=2 (padrao) desenha no dobro da altura do monitor e a apresentacao reduz o quadro a metade
+// com filtro bilinear, que no fator exato de 2 e a media de cada bloco de 2x2. Custa preenchimento da GPU (o desenho nativo gasta CPU
+// por objeto, nao por pixel); WOTM_SSAA=1 desliga. So vale sem WOTM_RES.
 static int renderHeight()
 {
     static const int h = []() {
         const char *s = std::getenv("WOTM_RES");
         int v = s ? std::atoi(s) : 0;
         if (v <= 0 && IsWindowReady())
-            v = GetMonitorHeight(GetCurrentMonitor());
+        {
+            const char *a = std::getenv("WOTM_SSAA");
+            const int ssaa = a && *a ? std::clamp(std::atoi(a), 1, 2) : 2;
+            v = GetMonitorHeight(GetCurrentMonitor()) * ssaa;
+        }
         return v > 0 ? std::clamp(v, 224, 4320) : 720;
     }();
     return g_force43 ? 720 : h;
