@@ -1,6 +1,6 @@
 # Playing online (wotlane)
 
-Two to four friends, each on their own PC and screen, play one War of the Monsters fight over the internet. Each PC runs the whole game
+Two to eight friends, each on their own PC and screen, play one War of the Monsters fight over the internet. Each PC runs the whole game
 in deterministic mode and only the controller inputs travel (lockstep through a small server, `wotm_server`). Each friend owns the disc
 and builds the game from their own ISO: **never share `wotm.exe`, `recomp/`, `disc/` or the ISO**. The server program has no game code
 and can be shared freely.
@@ -21,7 +21,7 @@ and can be shared freely.
 
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
 2. Start it: in the launcher, section **Online**, press **Host server here**, or run `native\net\build\wotm_server.exe --port 7777`.
-   It keeps **2 lobbies** open (`--lobbies N` for more, `--players 2..4` per lobby) and reopens a lobby when its match ends. Leave its
+   It keeps **2 lobbies** open (`--lobbies N` for more, `--players 2..8` per lobby, 8 by default) and reopens a lobby when its match ends. Leave its
    window open while you play; close it to stop.
 3. The first time, Windows Firewall asks about `wotm_server.exe`: allow it on private networks (and public if your network is marked
    public).
@@ -56,8 +56,15 @@ for `wotm.exe` once someone starts the match (`--start <stage>` starts it); `--l
 - Everyone plays with the game's default options (difficulty, volumes, controller layout): local saves are neither read nor written
   online, because they live in game memory and would make the PCs drift apart.
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
-- Input delay: 2 frames on a LAN, about 4 to 6 over the internet (each frame is 16.7 ms; 33 ms with 3 or 4 players, where the game runs
-  its own 30 Hz mode). It is fixed for the whole match.
+- Input delay: 2 frames on a LAN, about 4 to 6 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
+  runs its own 30 Hz mode). It is fixed for the whole match.
+- **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
+  (same controls and moves as players 1 to 4), and their screen uses a camera made by wotlane that follows from behind and above, since
+  the game has no camera for them. It does not avoid buildings like the game's camera does, which is why it stays high. Every PC
+  simulates all 8 monsters, so 8 players need PCs that run the game comfortably (on Lane's Ryzen 5 5600X a frame with 8 monsters uses
+  about half of its time budget).
+- 12 players are not possible: the game has exactly 8 controller inputs, the level loader has room for 12 monster files and no more,
+  and the per-pair monster checks grow with the square of the count.
 - If a player leaves, their monster stands still for the rest of the match (same frame on every PC).
 - If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message. Please report it with
   everyone's `runtime\live.err.log`.
