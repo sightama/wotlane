@@ -18,8 +18,11 @@ static void wotmDrawScene(const uint8_t *rdram)
         // embutido em particleDraw). Cada apresentacao faz o papel da conclusao do VU1. No quadro amostrado pela checagem VU1 x
         // nativo nao: la o hierFlushObjQ dispara o DMA de verdade, e zerar aqui descartava a OT de alfa ainda nao despachada (os
         // objetos 0x8000/0x4000 saiam como "so o nativo desenha", pista 7 do VU1CHECK).
+        // No passo fixo (WOTM_FIXEDSTEP, netcode) a janela nao escreve na RAM do jogo: o instante da escrita dependia do host. Os ganchos
+        // do rtWaitForVu1/hierFlushObjQ/particleDraw zeram os mesmos contadores na thread do EE.
         static const bool s_noVu1 = std::getenv("PS2X_NO_VU1") != nullptr;
-        if (s_noVu1 && !g_wotmVu1Tap)
+        static const bool s_lockstep = [] { const char *e = std::getenv("WOTM_FIXEDSTEP"); return e && *e; }();
+        if (s_noVu1 && !g_wotmVu1Tap && !s_lockstep)
         {
             const uint32_t zero = 0;
             std::memcpy(const_cast<uint8_t *>(rdram) + wotm::sym::objsInPacket, &zero, 4);

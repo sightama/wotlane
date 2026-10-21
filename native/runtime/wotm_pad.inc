@@ -16,6 +16,10 @@ static std::atomic<uint32_t> g_manualDevs[2] = {0u, 0u};
 static uint32_t deviceMap(int port)
 {
     static const bool kbSeparate = [] { const char *e = std::getenv("WOTM_KBSEPARATE"); return e && e[0] == '1'; }();
+    // WOTM_NOINPUT=1: nenhum dispositivo do host chega ao jogo (testes de determinismo; o roteiro PS2X_PAD continua valendo)
+    static const bool noInput = [] { const char *e = std::getenv("WOTM_NOINPUT"); return e && e[0] == '1'; }();
+    if (noInput)
+        return 0u;
     int pads[PS2_PAD_MAX_GAMEPADS];
     int n = 0;
     for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)

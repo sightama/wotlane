@@ -142,9 +142,14 @@ namespace
         return static_cast<uint32_t>(static_cast<uint64_t>(us) * 576u / 1000u);   // da a volta em ~2 h, como o contador do jogo
     }
 
+#include "wotm_sync.inc"
+
+    // Relogio que o jogo ve: o do host, ou o virtual do passo fixo (WOTM_FIXEDSTEP; wotm_sync::callTics a cada pergunta do jogo)
+    uint32_t gameTics() { return wotm_sync::g_fixedStep ? wotm_sync::g_virtualTics : hostTics(); }
+
     void getCurTicsNative(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t ra = GPR_U32(ctx, 31), now = hostTics();
+        const uint32_t ra = GPR_U32(ctx, 31), now = wotm_sync::g_fixedStep ? wotm_sync::callTics() : hostTics();
         SET_GPR_U32(ctx, 2, now);
         ctx->pc = ra;
         if (ra == kFrameStartRa[0] || ra == kFrameStartRa[1])   // o jogo zera o T1 ali: comeco do quadro
@@ -162,12 +167,15 @@ namespace
     {
         if (ctx->pc == kTimer1Handler)
         {
-            const uint32_t now = hostTics();
+            const uint32_t now = gameTics();
             const int32_t elapsed = static_cast<int32_t>(now - g_t1Zero);
             g_t1Zero = now;
-            const uint32_t add = elapsed <= 0 ? 0u : static_cast<uint32_t>(std::min((elapsed + kTicsPerField - 1) / kTicsPerField, 16));
+            // passo fixo: o relogio virtual so anda na fronteira do quadro; 1 field por vsync deixa a espera do quadro terminar
+            const uint32_t add = wotm_sync::g_fixedStep ? 1u
+                               : elapsed <= 0 ? 0u : static_cast<uint32_t>(std::min((elapsed + kTicsPerField - 1) / kTicsPerField, 16));
             WRITE32(kFieldCounter, READ32(kFieldCounter) + add);
-            WRITE32(kFieldsForAverage, READ32(kFieldsForAverage) + add);
+            if (!wotm_sync::g_fixedStep)   // passo fixo: o wotm_sync::frame soma o passo na fronteira do quadro
+                WRITE32(kFieldsForAverage, READ32(kFieldsForAverage) + add);
             runtime->memory().write32(kT1Count, 0u);
         }
         g_origTimer1(rdram, ctx, runtime);
@@ -735,6 +743,7 @@ namespace
         lastTics = tics;
     }
 
+
     void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // so na entrada: retomada no meio (depois de um sceGsSyncV do laco) ja tem D_006F8DC0 atualizado
@@ -759,6 +768,7 @@ namespace
                 if (vblanks > 0u && vblanks < 16u && static_cast<int32_t>(vblanks) > measured)
                     WRITE32(kFieldCounter, static_cast<uint32_t>(start + static_cast<int32_t>(vblanks)));
             }
+            wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);   // passo fixo e hash do estado (WOTM_FIXEDSTEP, WOTM_STATEHASH)
         }
         g_origWaitMinRate(rdram, ctx, runtime);
     }
@@ -904,6 +914,7 @@ namespace
         {
             wotmLoadFreeze(true);
             ++g_loadGen;
+            wotm_sync::levelLoad();
         }
         g_origLoadLevelFiles(rdram, ctx, runtime);
     }
@@ -2094,6 +2105,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         std::fprintf(stderr, "[wotm] jogador controlado pela IA (WOTM_AIVSAI)\n");
     }
     wotm_multi::install(runtime);   // depois do gancho do LoadLevelFiles (carga da fase), que ele embrulha
+    wotm_sync::init(runtime);
     if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
         runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
     // Trapacas de debug (menu F1): sempre instaladas; WOTM_CHEATS=inv,stam,furia,esp,cloak,deus liga desde o inicio
