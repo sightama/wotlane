@@ -262,7 +262,7 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - Alguns chefes não são `Monster` comum (`NATIVO.md`, "Vencer a luta"; câmera própria em `InitPlantBossCamera`): precisam de estados
   de controle, golpes e escala que caibam numa luta normal. Usa o caminho do item 8 para entrar na seleção.
 
-### 11. Multiplayer até 4
+### 11. Multiplayer até 8
 - Já existe: tela dividida para 2 (vistas `viewDef[1]`/`[2]`, `ViewCtx`/`ViewScope`), controles por porta (`wotm_pad.inc`,
   `g_ps2PadDeviceMap`) e escolha de lados (`wotm_padsel.inc`); tudo em `NATIVO.md`. A engine carrega até 16 monstros.
 - Falta: portas 3 e 4 no mapa de controles; 4 vistas (quadrantes) e o HUD de 4; a escolha de lados com 4 colunas; o texto do menu
@@ -328,7 +328,31 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 - **A conferir:** controles de verdade nos jogadores 3 e 4, custo (4 vistas: o redesenho estimado acima passa de 16,7 ms; o vigia
   viu ~24 quadros/s do jogo em trechos), sons por jogador (`m_index` até 3), o `TokenManager m_tokens[2]` (só 2) e a pose de
   vitória com meta de vitórias (não testada: o `WOTM_MATCH` não tem meta).
-- Falta: a escolha de lados com 4 colunas e o menu ("2 players" → "multiplayer").
+- ~~Falta: a escolha de lados com 4 colunas e o menu ("2 players" → "multiplayer").~~ Feito em 2026-10-21 (abaixo).
+
+**De 5 a 8 jogadores e o menu multijogador, feitos em 2026-10-21** (`wotm_split4.inc`, `wotm_multihud.inc`, `wotm_padsel.inc`;
+`NATIVO.md`, "Menu multijogador de 2 a 8"):
+- **Tela de 5 a 8:** escolhida com o dono, uma tela cheia com a câmera compartilhada, em vez de 8 vistas. O motor só tem 4 câmeras, 4
+  HUDs e 5 vistas, e pelo custo medido por vista (acima) 8 telas dariam ~15 a 20 quadros/s. Na entrada do `viewUpdate(0)` o `_cs` da
+  vista recebe uma câmera que olha o centro dos vivos de cima (50°), num rumo fixo na luta, afastada até 3 vezes a distância da câmera
+  do jogo (mais longe a cidade inteira entra na vista e o EE cai a ~5 quadros/s); cinemas e pose de vitória ficam com a câmera do jogo.
+  O andar dos monstros é relativo a eles mesmos (`PadFlags::computeMotionVec`), então a câmera não muda os controles.
+- **Lugar dos jogadores 5 a 8:** `m_monsters[4..7]` (o das IAs; sem IA nesse caso), `m_index` 4 a 7, e o `m_numMonsters` do TheGame
+  fica em 4: o som tem vetores de 4 por jogador (`SoundManager::m_events`, `vols[4]` na pilha) e os laços por `m_numMonsters`
+  estourariam. O `m_playerInfo` dos 5 a 8 cairia no `Weapons` (`game + 0x112490`) e vai para a RAM de cima; o `playerInit` lê
+  `m_ctlrCfg[m_index]` (só 2) e a configuração de botões dos outros vira a do jogador 1; os bancos de som deles entram no
+  `loadRTSoundBanks` como os das IAs.
+- **Controles:** o `inputInit` já liga o jogador i ao controle i (porta i & 1, slot i >> 1); os slots 2 e 3 viram os jogadores 5 a 8, e
+  o runtime passa a ler 8 controles do raylib (`PS2_PAD_MAX_GAMEPADS` e `MAX_GAMEPADS` 8 no patch). No Windows o XInput só tem 4
+  controles de Xbox; os demais precisam ser DirectInput (DualShock e afins).
+- **Placar:** o Hud 0 continua mostrando o jogador 1; um placar nativo em cima à direita mostra cor, número, monstro, vida e vitórias de
+  cada jogador. O fade do TheGame fica só nas vistas que existem.
+- **Menu:** "2 player" vira "MULTIPLAYER"; escolha de controles com 8 colunas; de 3 a 8 o free for all sem CPU, direto ao "first to",
+  e uma seleção de monstros nativa no telão no lugar da tela 6.
+- **Conferido:** 5, 6, 7 e 8 jogadores com `WOTM_MATCH` + IA, e o menu do boot à luta com 4 e com 8 (roteiro de pad). 3 e 4 sem
+  mudança; corpus sem piora. **Pendentes:** controles de verdade nos jogadores 3 a 8; o desempenho com 8 (trechos de ~11 quadros/s do
+  jogo com a cidade inteira na vista); IA junto com 5 a 8 jogadores; eliminação e minigames com 3 ou mais; o placar com letra pequena;
+  a causa da posição infinita do fogo do Agamo (a trava contorna, `NATIVO.md`, "Até 8 monstros").
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.

@@ -11,12 +11,6 @@ int wotmSharedHudPlayers();   // wotm_split4.inc
 namespace wotm_multihud
 {
 constexpr uint32_t kMonsters = wotm::sym::shellGame + 0x120380;
-// Cores dos jogadores 1 a 8 (as mesmas da escolha de controles do wotm_padsel.inc)
-constexpr Color kPlayerColors[8] = {{230, 120, 50, 255}, {70, 140, 235, 255}, {90, 190, 80, 255}, {230, 200, 60, 255},
-                                    {170, 90, 220, 255}, {60, 200, 200, 255}, {235, 100, 170, 255}, {200, 200, 200, 255}};
-// Nomes do MonsterNames.h (tipo = m_typeBits >> 5)
-constexpr const char *kMonsterNames[17] = {"",       "CONGAR", "ROBO-47", "TOGERA", "ULTRA-V", "PREYTOR", "SPIDER", "KINETICLOPS", "MAGMO",
-                                           "RAPTROS", "AGAMO", "ZORGULON", "OGRE",   "ASSBOSS", "JELLY",   "FINAL",  ""};
 
 // Dentro do BeginTextureMode do quadro (rw x rh), depois do texto do jogo. `tex0` = atlas da fonte do quadro (0: sem texto).
 static void draw(wotm::Scene &scene, const wotm::Ram &ram, int rw, int rh, uint64_t tex0)
@@ -42,7 +36,7 @@ static void draw(wotm::Scene &scene, const wotm::Ram &ram, int rw, int rh, uint6
         const bool dead = ram.u8(m + 0xE8) != 0 || hp <= 0.f;
         const uint32_t type = ram.u32(m + 0x14) >> 5;
         const int wins = static_cast<int32_t>(ram.u32(m + 0x3C));
-        const Color c = kPlayerColors[i];
+        const Color c = wotm_padsel::kPlayerColors[i];
         const float x = x0 + float(i % cols) * (boxW + pad);
         const Rectangle box{x, top, boxW, boxH};
         DrawRectangleRounded(box, 0.25f, 6, Color{0, 0, 0, 150});
@@ -55,7 +49,7 @@ static void draw(wotm::Scene &scene, const wotm::Ram &ram, int rw, int rh, uint6
         if (!tex0)
             continue;
         char label[32];
-        std::snprintf(label, sizeof label, "P%d %s", i + 1, type < 17 ? kMonsterNames[type] : "");
+        std::snprintf(label, sizeof label, "P%d %s", i + 1, wotm_padsel::monsterName(type << 5));
         // cada letra tem 1,6 x a altura de largura (wotm_padsel::text): a altura cabe na largura do quadro
         const float th = std::min(boxH * 0.22f, boxW * 0.9f / (1.6f * float(std::max<size_t>(1, std::strlen(label)))));
         const Color tc = dead ? Color{0x50, 0x50, 0x50, 0x80} : Color{static_cast<unsigned char>(c.r / 2), static_cast<unsigned char>(c.g / 2),

@@ -993,3 +993,10 @@ int wotmSharedHudPlayers()
     using namespace wotm_split4;
     return nowMs() - g_sharedStamp.load(std::memory_order_relaxed) < 300 ? g_sharedN.load(std::memory_order_relaxed) : 0;
 }
+
+// Selecao de monstros do menu multijogador (wotm_padsel.inc): traje do jogador 3 a 8 (o Shell so guarda os dos jogadores 1 e 2)
+void wotmMultiSetCostume(int player, uint32_t costume)
+{
+    if (player >= 2 && player < wotm_split4::kMaxPlayers)
+        wotm_split4::g_extraCostume[player - 2] = costume & 3u;
+}

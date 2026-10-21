@@ -197,10 +197,27 @@ index 0000000..0947e18
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..cc00340 100644
+index 589d768..476523c 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
-@@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
+@@ -82,6 +82,16 @@ else()
+         GIT_PROGRESS TRUE
+     )
+     FetchContent_MakeAvailable(raylib)
++    # WoTM: ate 8 controles (multijogador de 3 a 8, PS2_PAD_MAX_GAMEPADS em ps2_pad.h). O config.h do raylib 5.5 fixa
++    # MAX_GAMEPADS 4 sem #ifndef: a linha e reescrita no configure, antes da compilacao (so grava se mudar).
++    set(_wotm_rl_cfg "${raylib_SOURCE_DIR}/src/config.h")
++    if(EXISTS "${_wotm_rl_cfg}")
++        file(READ "${_wotm_rl_cfg}" _wotm_rl_txt)
++        string(REGEX REPLACE "#define MAX_GAMEPADS( +)4( +)" "#define MAX_GAMEPADS\\18\\2" _wotm_rl_new "${_wotm_rl_txt}")
++        if(NOT _wotm_rl_new STREQUAL _wotm_rl_txt)
++            file(WRITE "${_wotm_rl_cfg}" "${_wotm_rl_new}")
++        endif()
++    endif()
+ 
+     if(PS2X_ENABLE_DEBUG_UI AND NOT PS2X_IS_ANDROID)
+         FetchContent_Declare(
+@@ -393,6 +403,7 @@ add_library(ps2_runtime STATIC
      src/lib/vu/ps2_vu1_core.cpp
      src/lib/vu/ps2_vu1_upper.cpp
      src/lib/vu/ps2_vu1_lower.cpp
@@ -208,7 +225,7 @@ index 589d768..cc00340 100644
      src/lib/games_database.cpp
  )
  
-@@ -432,13 +433,26 @@ target_compile_definitions(ps2_runtime PRIVATE
+@@ -432,13 +443,26 @@ target_compile_definitions(ps2_runtime PRIVATE
  file(GLOB_RECURSE KERNEL_SRC_FILES CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/*.cpp"
  )
@@ -236,7 +253,7 @@ index 589d768..cc00340 100644
  )
  
  set(RUNNER_MAIN_CPP "${CMAKE_CURRENT_SOURCE_DIR}/src/runner/main.cpp")
-@@ -456,14 +470,27 @@ if(PS2X_IS_ANDROID)
+@@ -456,14 +480,27 @@ if(PS2X_IS_ANDROID)
      )
  
      target_link_options(ps2EntryRunner PRIVATE "-Wl,--undefined=ANativeActivity_onCreate")
@@ -266,7 +283,7 @@ index 589d768..cc00340 100644
          UNITY_BUILD ON
          UNITY_BUILD_BATCH_SIZE "${PS2X_RUNNER_UNITY_BUILD_BATCH_SIZE}"
      )
-@@ -476,8 +503,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
+@@ -476,8 +513,8 @@ if(PS2X_ENABLE_RUNNER_PCH)
      )
  
      foreach(PS2X_RUNNER_GENERATED_HEADER IN ITEMS
@@ -277,7 +294,7 @@ index 589d768..cc00340 100644
          if(EXISTS "${PS2X_RUNNER_GENERATED_HEADER}")
              list(APPEND PS2X_RUNNER_PCH_HEADERS "${PS2X_RUNNER_GENERATED_HEADER}")
          endif()
-@@ -488,7 +515,7 @@ if(PS2X_ENABLE_RUNNER_PCH)
+@@ -488,7 +525,7 @@ if(PS2X_ENABLE_RUNNER_PCH)
          "${CMAKE_CURRENT_SOURCE_DIR}/include/ps2_stubs.h"
      )
  
@@ -286,7 +303,7 @@ index 589d768..cc00340 100644
  endif()
  
  if(PS2X_DEFAULT_BOOT_ELF_DEFINE)
-@@ -499,6 +526,7 @@ endif()
+@@ -499,6 +536,7 @@ endif()
  
  if(MSVC)
      target_compile_options(ps2EntryRunner PRIVATE /FS)
@@ -294,7 +311,7 @@ index 589d768..cc00340 100644
  endif()
  
  target_include_directories(ps2_runtime PUBLIC
-@@ -506,6 +534,12 @@ target_include_directories(ps2_runtime PUBLIC
+@@ -506,6 +544,12 @@ target_include_directories(ps2_runtime PUBLIC
      ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
  )
  
@@ -307,7 +324,7 @@ index 589d768..cc00340 100644
  target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
  target_link_libraries(ps2EntryRunner
      PRIVATE
-@@ -557,6 +591,9 @@ endif()
+@@ -557,6 +601,9 @@ endif()
  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
      EnableFastReleaseMode(ps2_runtime)
      EnableFastReleaseMode(ps2EntryRunner)
@@ -317,7 +334,7 @@ index 589d768..cc00340 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,81 @@ endif()
+@@ -608,3 +655,81 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -703,17 +720,17 @@ index ea86a9c..ab90ce3 100644
      std::vector<PendingTransfer> m_pendingVif0Transfers;
      std::vector<PendingTransfer> m_pendingVif1Transfers;
 diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
-index 7755fe6..61163e3 100644
+index 7755fe6..6d4312c 100644
 --- a/ps2xRuntime/include/runtime/ps2_pad.h
 +++ b/ps2xRuntime/include/runtime/ps2_pad.h
 @@ -4,6 +4,14 @@
  #include <cstddef>
  #include <cstdint>
  
-+// Dispositivos que alimentam uma porta do jogo: bit n = gamepad n do raylib (0..3), PS2_PAD_DEV_KEYBOARD = teclado.
++// Dispositivos que alimentam uma porta do jogo: bit n = gamepad n do raylib (0..7), PS2_PAD_DEV_KEYBOARD = teclado.
 +// Mais de um dispositivo na mesma porta: os botoes se somam; em cada eixo vale o mais longe do centro.
 +constexpr uint32_t PS2_PAD_DEV_KEYBOARD = 1u << 8;
-+constexpr int PS2_PAD_MAX_GAMEPADS = 4;
++constexpr int PS2_PAD_MAX_GAMEPADS = 8;   // multijogador de 3 a 8 (MAX_GAMEPADS do raylib sobe junto: ps2xRuntime/CMakeLists.txt)
 +// Mapa porta -> dispositivos, consultado a cada leitura. Sem funcao: porta n = gamepad n, e o teclado na porta 0.
 +using PS2PadDeviceMapFn = uint32_t (*)(int port);
 +extern PS2PadDeviceMapFn g_ps2PadDeviceMap;
@@ -3473,7 +3490,7 @@ index 37b6a4d..a68660f 100644
  int PS2Memory::pollDmaRegisters()
  {
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..635d302 100644
+index 8590f14..3ab9181 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
 @@ -1,6 +1,14 @@
@@ -3537,7 +3554,7 @@ index 8590f14..635d302 100644
 +        static const float deadzone = std::getenv("PS2X_PAD_DEADZONE") ? static_cast<float>(std::atof(std::getenv("PS2X_PAD_DEADZONE"))) : 0.25f;
 +        if (padLog)
 +        {
-+            static int namedPort[PS2_PAD_MAX_GAMEPADS] = {-1, -1, -1, -1};
++            static int namedPort[PS2_PAD_MAX_GAMEPADS] = {-1, -1, -1, -1, -1, -1, -1, -1};
 +            static float last[PS2_PAD_MAX_GAMEPADS][4] = {};
 +            if (namedPort[pad] != port)
 +            {
