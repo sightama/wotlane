@@ -81,6 +81,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 
 // Save em JSON ao lado do mc0/ (POS_FRONTEIRA.md, item 3): ganchos no MonsterMc::stdInit/stdExit.
 #include "wotm_save.inc"
+// "Press start" do menu principal: X vale como Start e o botao vale ja durante a transicao.
+#include "wotm_menu.inc"
 
 namespace
 {
@@ -1997,6 +1999,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     wotmPadSelInstall(runtime);
+    wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
