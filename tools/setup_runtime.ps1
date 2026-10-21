@@ -73,7 +73,7 @@ $repoFwd = $repo -replace '\\', '/'
 $cmakeBin = Split-Path $cmake -Parent
 foreach ($f in 'configure_dev.bat', 'build_dev.bat', 'build_tools.bat', 'run_live.ps1') {
     $text = Get-Content (Join-Path $PSScriptRoot "runtime_template\$f") -Raw
-    $text = $text.Replace('@VCVARS@', $vcvars).Replace('@CMAKE_BIN@', $cmakeBin).Replace('@REPO@', $repoFwd)
+    $text = $text.Replace('@VCVARS@', $vcvars).Replace('@CMAKE_BIN@', $cmakeBin).Replace('@REPO@', $repoFwd).Replace('@ISO@', (Resolve-Path $Iso).Path.Replace("'", "''"))
     Set-Content (Join-Path $rt $f) $text -NoNewline -Encoding ascii
 }
 Set-Content (Join-Path $repo '.wotm_recomp_dir') $rt -Encoding ascii

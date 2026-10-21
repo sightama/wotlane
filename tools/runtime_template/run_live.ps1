@@ -22,11 +22,15 @@ if ($Build -eq 'build_dev_nm') {
 if (-not (Test-Path $elf)) { throw "ELF nao encontrado: $elf" }
 
 # o jogo le setores crus do disco (fileCdSearchFile percorre o ISO9660 a partir do setor 0x10): precisa da ISO, nao so dos arquivos soltos
+$setupIso = '@ISO@'   # a ISO que o tools\setup_runtime.ps1 usou
 if (-not $env:PS2X_CD_IMAGE) {
-    $repo = if ($env:WOTM_REPO) { $env:WOTM_REPO } else { Split-Path $rt -Parent }
-    $iso = Get-ChildItem (Join-Path $repo 'ISO') -Filter *.iso -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $iso) { throw "Nenhuma .iso em $repo\ISO (defina PS2X_CD_IMAGE)" }
-    $env:PS2X_CD_IMAGE = $iso.FullName
+    if (Test-Path -LiteralPath $setupIso) { $env:PS2X_CD_IMAGE = $setupIso }
+    else {
+        $repo = if ($env:WOTM_REPO) { $env:WOTM_REPO } else { Split-Path $rt -Parent }
+        $iso = Get-ChildItem (Join-Path $repo 'ISO') -Filter *.iso -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $iso) { throw "Nenhuma .iso em $repo\ISO (defina PS2X_CD_IMAGE)" }
+        $env:PS2X_CD_IMAGE = $iso.FullName
+    }
 }
 $env:PS2X_NO_VU1 = '1'; $env:PS2X_NO_VIF1 = '1'; $env:PS2X_NO_GS = '1'
 $env:PS2X_SCENE = '1'; $env:PS2X_FMV = '1'
