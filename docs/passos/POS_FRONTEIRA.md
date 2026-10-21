@@ -11,8 +11,8 @@ sabe e o que falta descobrir.
 | 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda — **feito em 2026-10-19** | — | baixo (base pronta) |
 | 3 | Save em JSON legível, por nomes — **feito em 2026-10-19** | — | médio |
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco | — | baixo/médio |
-| 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON | 3 | baixo/médio |
-| 6 | Ícone de salvamento automático | 3 | baixo |
+| 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
+| 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
@@ -198,7 +198,7 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - É o primeiro degrau do item 8: aqui só substitui; acrescentar sem substituir vem lá.
 
 ### 5. Sem escolha de memory card
-- **Lista de saves (em teste, 2026-10-20, branch `save-auto`; `wotm_save.inc`):** as caixas e as fitas saíram (a troca de caixa
+- **Lista de saves (feito em 2026-10-20, merge 4da9c64; `wotm_save.inc`):** as caixas e as fitas saíram (a troca de caixa
   não ficou boa; decisão do dono). Carregar continua indo até as caixas no mapa do menu (`McPrepBoxScreen`), e o update do
   `McLoadGameBoxes` vira um modal com a moldura do `McBackground` e o texto do `McTextBox` (fontes do `McPage` reduzidas, sem
   cruzamento ao trocar de linha): à direita a lista do `save.json` (até 99 slots, 10 visíveis, cima/baixo e esquerda/direita de
@@ -221,7 +221,13 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   das texturas (4 por T8, 1 por T4; o `.NGP` não liga essas, o menu as troca por switch). As linhas estão de baixo para cima. O
   modal posta a lista a cada quadro e a janela desenha entre a moldura (lista de alta prioridade) e o texto, com 0,2 s de entrada.
   Sem logo (Spider, Ogre...) sai o nome em texto. Foto: `docs/screenshots/2026-10-20/2026-10-20_lista_de_saves_logo_e_fase.png`.
-- Falta: o monstro 3D sobre a foto. Revisar os textos de memory card que sobram na aventura.
+- **Monstro 3D sobre a foto (2026-10-21, merge 5a92844; `native/wotm_model.hpp` + `wotm_savepics.hpp`):** o monstro do save, no
+  traje do save, anima em 3/4 sobre a foto da fase, montado direto do `.NGP`/`.TEX`/`.RTX` do disco sem o Shell. Reproduz as
+  misturas do GS por nó (com a foto como fundo), a textura rolando do Kineticlops (camada 0x91), o LOD como o `hierLod` (Togera
+  traje 3), o fogo da cabeça do Agamo (emissor op 22, preset 141) e o lens flare (HierLight op 5: olhos do Robo-47 e do Congar).
+  Togera e Raptros têm a câmera mais perto (cauda e asas). Regras em `passos/MODELOS_3D.md`. Não reproduzido: molas do pelo/cauda,
+  oclusão do flare, os outros presets de fogo. Foto: `docs/screenshots/2026-10-21/2026-10-21_saves_agamo_fogo.png`.
+- Falta: revisar os textos de memory card que sobram na aventura.
 - O `savegame.dat` dos cartões só leva os 20 primeiros slots; os outros só existem no JSON.
 
 ### 6. Ícone de salvamento automático
@@ -267,7 +273,8 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.
 - Base pronta (2026-10-21): `native/wotm_model.hpp` monta qualquer monstro/traje animado direto do disco, sem o Shell
-  (`passos/MODELOS_3D.md`); já usado na lista de saves.
+  (`passos/MODELOS_3D.md`), com misturas do GS, textura rolando, LOD, fogo do Agamo e lens flare; já usado na lista de saves
+  (item 5). Para a seleção falta: um `Renderer` por jogador, trocar de traje recarregando o `.NGP` e a luz do jogo.
 
 ### 13. Campanha com até 4
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no
