@@ -71,8 +71,11 @@ Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build 
 ## Building and running the port (Windows)
 - Clone with submodules (`git clone --recurse-submodules`): PS2Recomp is the `third_party/PS2Recomp` submodule (branch `wotm` of the `yanm1103/PS2Recomp` fork, which carries the
   `SQRT.S`/`RSQRT.S` fix from [PR #277](https://github.com/ran-j/PS2Recomp/pull/277)).
-- Generating the recompiled code (`recomp/`, git-ignored) from the ELF is still a manual step (the PS2Recomp analyzer plus `ps2_recomp`); a single script that does it from the ISO is
-  still missing.
+- **One command from your ISO:** put the ISO in `ISO/` (or pass `-Iso <path>`) and run `powershell -ExecutionPolicy Bypass -File tools\setup_runtime.ps1`. It extracts the disc to
+  `disc/`, clones PS2Recomp at the base of `tools/runtime_patch/wotm-runtime.patch` into `runtime/` (git-ignored), applies that patch and the recompiler's `SQRT.S`/`RSQRT.S` fix
+  (`tools/runtime_patch/ps2recomp-fpu-sqrt.patch`), generates the recompiled code into `recomp/retail` (git-ignored), writes the runtime folder scripts from
+  `tools/runtime_template/` and runs the first build. Needs git, Python 3, CMake 3.24+ and MSVC 14.40+ (VS 2022 17.10+ or Build Tools; 14.32 hits an internal compiler error on
+  the generated code). Re-running it skips what already exists.
 - `build_runtime.bat` builds the runtime with the native layer (`build_dev`, fast link without LTCG): `wotm.exe` (the game) and `ps2EntryRunner.exe` (test build with the
   emulated VU1/GS and the renderer check).
 - `run_live.bat -Auto 0` runs the game to play with the keyboard; `tools/launcher/` is a small launcher with options such as starting a match directly (`WOTM_MATCH`) and cheats.
