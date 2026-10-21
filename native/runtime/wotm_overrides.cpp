@@ -193,8 +193,10 @@ namespace
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
-    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA.
+    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4:
+    // os jogadores 3 e 4 (wotm_multi.inc); o shell so tem figurino para 2 jogadores, os deles ficam em g_matchCostume.
     int g_matchPlayers = 1;
+    uint32_t g_matchCostume[4] = {};
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
@@ -213,7 +215,10 @@ namespace
             const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
-            WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
+            if (player)
+                g_matchCostume[i] = costume & 3u;
+            if (!player || i < 2)
+                WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
         }
         WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
@@ -227,8 +232,8 @@ namespace
         WRITE32(kShell + 0x2C10, mode);
         WRITE32(kGame + 0x1203C8, mode);                                  // TheGame::m_gameMode
         std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s)", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
-        if (g_matchPlayers > 1)
-            std::fprintf(stderr, " e %d (jogador 2)", g_matchMonsters[1]);
+        for (int i = 1; i < g_matchPlayers; ++i)
+            std::fprintf(stderr, " e %d (jogador %d)", g_matchMonsters[i], i + 1);
         std::fprintf(stderr, " %s", g_matchAIs ? "contra" : (g_matchPlayers > 1 ? "sem IA" : "sozinho"));
         for (int i = g_matchPlayers; i < g_matchPlayers + g_matchAIs; ++i)
             std::fprintf(stderr, " %d", g_matchMonsters[i]);
@@ -290,6 +295,8 @@ namespace
         }
         WRITE32(kGame + 0x1203E0, static_cast<uint32_t>(n < 0 ? 0 : n));
     }
+
+#include "wotm_multi.inc"
 
     // Fora do controle, o jogo ainda trata os slots de jogador como humanos onde o m_playerNum decide algo que nao e entrada:
     // TheGame::gameGetStartPoint (0x138D68; com m_playerNum 2 o jogador nascia num ponto da IA e a IA no do jogador) e
@@ -2036,8 +2043,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 break;
             }
         }
-        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) == 2)
-            g_matchPlayers = 2;
+        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 4)
+            g_matchPlayers = std::atoi(pl);
         if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
@@ -2069,6 +2076,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             runtime.registerFunction(kCamerasUpdate, &camerasUpdateAsHumans);
         std::fprintf(stderr, "[wotm] jogador controlado pela IA (WOTM_AIVSAI)\n");
     }
+    wotm_multi::install(runtime);   // depois do gancho do LoadLevelFiles (carga da fase), que ele embrulha
     if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
         runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
     // Trapacas de debug (menu F1): sempre instaladas; WOTM_CHEATS=inv,stam,furia,esp,cloak,deus liga desde o inicio
