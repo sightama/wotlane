@@ -5,21 +5,21 @@
 // O jogo continua tratando o item como o 2 player: X leva a tela 5 (screenGameModes2P).
 //
 // Escolha de controles (tela 5 vinda do menu principal): o telao mostra os controles conectados e o teclado. X (Espaco no teclado)
-// entra no jogo como o menor jogador livre (1 a 8); com o direcional esquerda/direita o dispositivo troca de jogador (dois
+// entra no jogo como o menor jogador livre (1 a 4); com o direcional esquerda/direita o dispositivo troca de jogador (dois
 // dispositivos no mesmo numero sao o mesmo jogador, como o teclado junto do controle 1); triangulo (X/Backspace no teclado) sai, e
 // de quem esta fora volta ao menu principal (o screenGetInput devolve o codigo 5). Start (Enter) com 2 ou mais jogadores confirma;
 // os numeros escolhidos sao renumerados em ordem (1, 3, 4 viram 1, 2, 3). Depois disso o mapa porta -> dispositivos do
 // wotm_pad.inc fica manual (wotm_pad::g_manual, g_manualDevs[jogador]) ate o jogo voltar ao menu principal ou ao "press start".
 //   - 2 jogadores: como no retail, os itens "free-for-all / elimination / minigames" aparecem (fade dos objetos da tela).
-//   - 3 a 8 (g_multi): so o free for all (modo 3) existe, sem IA: o gancho faz o que o item free-for-all faz (m_mode e
+//   - 3 e 4 (g_multi): so o free for all (modo 3) existe, sem IA: o gancho faz o que o item free-for-all faz (m_mode e
 //     m_battleMode 3, g_levelList = PO_MPFreeForAll, initSelectSwitches) e vai direto a tela 15 ("first to"), pulando a 13 (CPUs).
 //     A volta da 15 (que iria a 13) vem para a escolha de controles, e a volta desta vai ao menu principal.
 //
-// Selecao de monstros de 3 a 8 (tela 6, screenCharSelect2P, com g_multi): o screenCharSelect2P roda sem entrada (o filme do telao
+// Selecao de monstros de 3 e 4 (tela 6, screenCharSelect2P, com g_multi): o screenCharSelect2P roda sem entrada (o filme do telao
 // segue) e com os objetos da tela 6 e os paineis de traje escondidos; o telao mostra um quadro por jogador. Cada jogador, pelos
 // dispositivos dele: esquerda/direita troca de monstro (as colunas destravadas, monsterSelectMode), cima/baixo de traje (os abertos:
 // state 1 e taken 1), X confirma, triangulo desfaz (ou, sem ninguem pronto, volta a tela 15). Todos prontos: m_monsterSel[i] e
-// m_costume[0..1] (os trajes dos jogadores 3 a 8 vao para o wotm_split4.inc, wotmMultiSetCostume), m_numPlayers N, m_numAIs 0, e
+// m_costume[0..1] (os trajes dos jogadores 3 e 4 vao para o wotm_split4.inc, wotmMultiSetCostume), m_numPlayers N, m_numAIs 0, e
 // changeScreen(6, 8) como o retail (selecao de fase).
 //
 // Thread do EE: ganchos de screenTransition (esconde os itens das telas 5 e 6 e o rotulo do menu, mede o fade), screenGameModes2P,
@@ -27,15 +27,15 @@
 // screenMain/screenWaitForStart (desliga o mapa manual e o multijogador). Janela: renderUi desenha a escolha numa textura propria
 // (fonte do jogo, icones desenhados) e drawOnTelao a projeta no plano do objeto do filme do telao (shell->m_movieScreen); o rotulo
 // vai no retangulo do item.
-// Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..7 = controle, kb = teclado; acao left, right, up, down, ok,
+// Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
-void wotmMultiSetCostume(int player, uint32_t costume);   // wotm_split4.inc: traje dos jogadores 3 a 8 (o Shell so tem lugar para 2)
+void wotmMultiSetCostume(int player, uint32_t costume);   // wotm_split4.inc: traje dos jogadores 3 e 4 (o Shell so tem lugar para 2)
 
 namespace wotm_padsel
 {
 constexpr int kKb = PS2_PAD_MAX_GAMEPADS;   // indice do teclado na lista de dispositivos
 constexpr int kDevs = PS2_PAD_MAX_GAMEPADS + 1;
-constexpr int kMaxPlayers = 8;
+constexpr int kMaxPlayers = 4;
 constexpr uint32_t kShell = wotm::sym::shellInfo;
 constexpr uint32_t kMovieScreen = kShell + 0x160;   // shell->m_movieScreen
 constexpr uint32_t kShellSound = kShell + 0x2918;
@@ -45,9 +45,8 @@ constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +
 enum Action { Left, Right, Ok, Back, Start, Up, Down, kActions };
 enum Phase { Off, Config, Reveal, Leaving };
 
-// Cores dos jogadores 1 a 8 (tambem as do placar da luta, wotm_multihud.inc)
-constexpr Color kPlayerColors[kMaxPlayers] = {{230, 120, 50, 255}, {70, 140, 235, 255}, {90, 190, 80, 255},   {230, 200, 60, 255},
-                                              {170, 90, 220, 255}, {60, 200, 200, 255}, {235, 100, 170, 255}, {200, 200, 200, 255}};
+// Cores dos jogadores 1 a 4
+constexpr Color kPlayerColors[kMaxPlayers] = {{230, 120, 50, 255}, {70, 140, 235, 255}, {90, 190, 80, 255}, {230, 200, 60, 255}};
 // Nomes do MonsterNames.h (tipo = m_typeBits >> 5)
 constexpr const char *kMonsterNames[17] = {"",        "CONGAR", "ROBO-47",  "TOGERA", "ULTRA-V", "PREYTOR", "SPIDER", "KINETICLOPS", "MAGMO",
                                            "RAPTROS", "AGAMO",  "ZORGULON", "OGRE",   "ASSBOSS", "JELLY",   "FINAL",  ""};
@@ -70,7 +69,8 @@ struct View
     int selCostume[kMaxPlayers] = {}, selCostumes[kMaxPlayers] = {};
     bool selReady[kMaxPlayers] = {};
     // rotulo do menu principal
-    uint32_t labelObj = 0;   // objeto do switch do "2 player" em uso (0 = sem rotulo)
+    uint32_t labelObj[4] = {};   // objetos do switch do "2 player" em uso ([0] = 0: sem rotulo); o menor e o texto
+    uint32_t labelRef[4] = {};   // objetos do "1 player" em uso (texto e brilho): o menor da a coluna e a altura das letras
     bool labelLit = false;
     float labelAlpha = 0.f;
 };
@@ -84,7 +84,7 @@ static int g_slot[kDevs] = {};
 static bool g_prev[kDevs][kActions] = {};
 static bool g_primed = false;
 static int g_inject = 0;   // codigo para o proximo screenGetInput (5 = voltar)
-static int g_multi = 0;    // 3 a 8: jogadores da partida multijogador escolhida (0 = 1 ou 2 jogadores, retail)
+static int g_multi = 0;    // 3 ou 4: jogadores da partida multijogador escolhida (0 = 1 ou 2 jogadores, retail)
 static PS2Runtime::RecompiledFunction g_origTransition = nullptr, g_origModes2P = nullptr, g_origGetInput = nullptr, g_origMain = nullptr,
                                       g_origWaitStart = nullptr, g_origSelect2P = nullptr, g_origChangeScreen = nullptr;
 static uint32_t g_transRa = 0, g_modesRa = 0, g_selectRa = 0, g_mainRa = 0;
@@ -256,22 +256,24 @@ static void hideTwoPlayerItem(uint8_t *rdram)
 {
     const uint32_t cur = rd32(rdram, wotm::sym::currScreen), last = rd32(rdram, wotm::sym::lastScreen);
     const bool betweenOut = rd32(rdram, wotm::sym::betweenScreens) && last == 1;
-    uint32_t obj = 0;
+    uint32_t obj[4] = {}, ref[4] = {};
+    int nRef = 0, nObj = 0;
     float alpha = 0.f;
     if (cur == 1 || betweenOut)
     {
         forSwitchObjects(rdram, rd32(rdram, kShell + 0x25C + (1 * 10 + 1) * 4), [&](uint32_t o, bool used) {
-            if (used) std::memcpy(&alpha, rdram + o + 0x4C, 4);
+            if (used && nRef < 4) { std::memcpy(&alpha, rdram + o + 0x4C, 4); ref[nRef++] = o; }
         });
         forSwitchObjects(rdram, rd32(rdram, kShell + 0x25C + (1 * 10 + 2) * 4), [&](uint32_t o, bool used) {
             const float zero = 0.f;
             std::memcpy(rdram + o + 0x4C, &zero, 4);
-            if (used) obj = o;
+            if (used && nObj < 4) obj[nObj++] = o;
         });
     }
     const bool lit = rd32(rdram, wotm::sym::currentSelection + 4) == 2;   // currentSelection[1]
     std::lock_guard<std::mutex> lk(g_m);
-    g_view.labelObj = obj;
+    std::copy(obj, obj + 4, g_view.labelObj);
+    std::copy(ref, ref + 4, g_view.labelRef);
     g_view.labelLit = lit;
     g_view.labelAlpha = std::clamp(alpha, 0.f, 1.f);
 }
@@ -339,7 +341,7 @@ static void setManual(bool on, const int map[kMaxPlayers + 1] = nullptr)
         std::fprintf(stderr, "[padsel] controles %s\n", on ? "escolhidos: mapa manual" : "desligados: mapa padrao");
 }
 
-// 3 a 8: o que o item free-for-all da tela 5 faz, e direto a tela 15 (sem a 13, das CPUs)
+// 3 e 4: o que o item free-for-all da tela 5 faz, e direto a tela 15 (sem a 13, das CPUs)
 static void startMultiFreeForAll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     wr32(rdram, kMode, 3u);
@@ -429,7 +431,7 @@ static void configStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         sfx(rdram, ctx, runtime, moved);
 }
 
-// ------------------------------------------------------------------ selecao de monstros (3 a 8)
+// ------------------------------------------------------------------ selecao de monstros (3 e 4)
 
 static bool columnOpen(uint8_t *rdram, int col)
 {
@@ -803,13 +805,58 @@ static Vector3 vnorm(Vector3 a) { const float l = vlen(a); return l > 0.f ? vsca
 static Vector3 vcross(Vector3 a, Vector3 b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
 
 constexpr int kW = 1200, kH = 500;   // textura da escolha (2,4:1: cabe abaixo do logo do telao)
-// Rotulo "MULTIPLAYER": textura 4:3 (o text() mapeia a faixa 4:3 da textura na tela de 640 x 224 do jogo: cada letra tem
-// 1,6 x a altura x 224 / kLH pixels de largura), so a faixa do texto vai para o telao
-constexpr int kLW = 640, kLH = 480;
-constexpr float kLabelH = 70.f, kLabelW = 11.f * 1.6f * kLabelH * 224.f / float(kLH) + 10.f;   // 11 letras, espaco 1
 static RenderTexture2D g_rt{}, g_labelRt{};
 static float g_pos[kDevs] = {};   // coluna desenhada de cada dispositivo (anda ate a do jogador)
 static bool g_posInit = false;
+
+// Rotulo "multiplayer" no estilo dos outros itens do telao: minusculas numa fonte condensada (Bahnschrift do Windows, senao Arial
+// Negrito, senao a do raylib), com contorno escuro; aceso creme, apagado no laranja terroso dos itens apagados. O brilho do item
+// aceso continua o do jogo (objeto a parte do switch). Textura do tamanho do texto (g_labelRt), refeita quando o estado muda.
+static const char *const kLabelText = "multiplayer";
+constexpr float kLabelFont = 112.f, kLabelPad = 10.f;
+static Font g_labelFont{};
+static bool g_labelFontTried = false;
+static int g_labelState = -1;   // aceso (1) ou apagado (0) desenhado em g_labelRt
+
+static void renderLabel(bool lit)
+{
+    if (!g_labelFontTried)
+    {
+        g_labelFontTried = true;
+        for (const char *path : {"C:/Windows/Fonts/bahnschrift.ttf", "C:/Windows/Fonts/arialbd.ttf"})
+            if (FileExists(path))
+            {
+                g_labelFont = LoadFontEx(path, int(kLabelFont), nullptr, 0);
+                if (g_labelFont.texture.id) break;
+            }
+        if (!g_labelFont.texture.id)
+            g_labelFont = GetFontDefault();
+        SetTextureFilter(g_labelFont.texture, TEXTURE_FILTER_BILINEAR);
+    }
+    if (g_labelRt.id && g_labelState == int(lit))
+        return;
+    const Vector2 sz = MeasureTextEx(g_labelFont, kLabelText, kLabelFont, 0.f);
+    if (g_labelRt.id == 0)
+    {
+        g_labelRt = LoadRenderTexture(int(sz.x + 2.f * kLabelPad), int(sz.y + 2.f * kLabelPad));
+        SetTextureFilter(g_labelRt.texture, TEXTURE_FILTER_BILINEAR);
+    }
+    g_labelState = int(lit);
+    const Color fill = lit ? Color{242, 236, 222, 255} : Color{148, 90, 54, 255};
+    const Color edge = lit ? Color{96, 54, 24, 255} : Color{36, 18, 8, 255};
+    BeginTextureMode(g_labelRt);
+    ClearBackground(Color{edge.r, edge.g, edge.b, 0});
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    const Vector2 at{kLabelPad, kLabelPad};
+    for (int dy = -4; dy <= 4; dy += 2)   // contorno: o texto escuro deslocado em volta
+        for (int dx = -4; dx <= 4; dx += 2)
+            if (dx || dy)
+                DrawTextEx(g_labelFont, kLabelText, Vector2{at.x + float(dx), at.y + float(dy)}, kLabelFont, 0.f, edge);
+    DrawTextEx(g_labelFont, kLabelText, at, kLabelFont, 0.f, fill);
+    EndBlendMode();
+    EndTextureMode();
+}
 
 // Texto com a fonte 0 do jogo (atlas do quadro, `tex0`), como o fontBuildPrim: glifos de tamanho fixo, `h` = altura em pixels da
 // textura; cada letra tem 1,6 x a altura em unidades da tela do jogo (640 x 224), ou seja 0,8 x a altura na tela.
@@ -891,7 +938,7 @@ static void keyboardIcon(float cx, float cy, float s, Color body, Color line, Co
 
 static constexpr Color kCream{240, 222, 180, 255}, kLine{25, 18, 12, 255}, kDark{60, 48, 38, 255};
 
-// Escolha de controles: oito colunas (jogadores) em cima e, embaixo, quem esta fora; cada dispositivo anda ate a coluna dele
+// Escolha de controles: quatro colunas (jogadores) em cima e, embaixo, quem esta fora; cada dispositivo anda ate a coluna dele
 static void drawJoin(const View &v, std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, uint64_t tex0, float dt)
 {
     constexpr float W = kW, H = kH;
@@ -949,7 +996,7 @@ static void drawJoin(const View &v, std::vector<wotm::TextQuad> &quads, const wo
         text(quads, ram, tex0, kW, kH, hint, W * 0.5f, H * 0.94f, fitText(hint, H * 0.06f, W * 0.95f), Color{0x80, 0x7A, 0x60, 0x80});
 }
 
-// Selecao de monstros: um quadro por jogador (2 linhas de 4 com mais de 4 jogadores)
+// Selecao de monstros: um quadro por jogador, lado a lado
 static void drawSelect(const View &v, std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, uint64_t tex0)
 {
     constexpr float W = kW, H = kH;
@@ -1000,23 +1047,8 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         v = g_view;
     }
     // rotulo do menu principal
-    if (v.labelObj && v.labelAlpha > 0.f && tex0)
-    {
-        if (g_labelRt.id == 0)
-        {
-            g_labelRt = LoadRenderTexture(kLW, kLH);
-            SetTextureFilter(g_labelRt.texture, TEXTURE_FILTER_BILINEAR);
-        }
-        BeginTextureMode(g_labelRt);
-        ClearBackground(Color{0, 0, 0, 0});
-        std::vector<wotm::TextQuad> q;
-        // aceso: creme claro; apagado: o marrom dos outros itens do telao
-        const Color c = v.labelLit ? Color{0x7C, 0x76, 0x6C, 0x80} : Color{0x58, 0x36, 0x24, 0x80};
-        for (int k = 0; k < 3; ++k)   // tres passadas deslocadas: traco mais grosso, perto do peso das letras do telao
-            text(q, ram, tex0, kLW, kLH, "MULTIPLAYER", kLW * 0.5f + float(k) * 0.7f, kLH * 0.5f, kLabelH, c, 1.f);
-        scene.drawQuads(q, float(kLW), float(kLH));
-        EndTextureMode();
-    }
+    if (v.labelObj[0] && v.labelAlpha > 0.f)
+        renderLabel(v.labelLit);
     if ((!v.on && !v.select) || v.alpha <= 0.f)
     {
         g_posInit = false;
@@ -1132,15 +1164,33 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         std::lock_guard<std::mutex> lk(g_m);
         v = g_view;
     }
-    Plane pl;
-    if (v.labelObj && v.labelAlpha > 0.f && g_labelRt.id && objectPlane(scene, ram, cam, v.labelObj, pl))
+    // de varios objetos em uso de um item (o texto e o brilho, maior), o de menor altura
+    auto textPlane = [&](const uint32_t objs[4], Plane &out) {
+        bool got = false;
+        Plane p;
+        for (int i = 0; i < 4 && objs[i]; ++i)
+            if (objectPlane(scene, ram, cam, objs[i], p) && (!got || p.y1 - p.y0 < out.y1 - out.y0))
+            {
+                out = p;
+                got = true;
+            }
+        return got;
+    };
+    Plane pl, ref;
+    if (v.labelObj[0] && v.labelAlpha > 0.f && g_labelRt.id && textPlane(v.labelObj, pl))
     {
-        // a faixa do texto, um pouco mais larga que o item (em maiusculas), centrada nele
-        const float pad = 4.f, bw = kLabelW + 2.f * pad, bh = kLabelH + 2.f * pad;
-        const float uv[4] = {(kLW - bw) * 0.5f / kLW, (kLH - bh) * 0.5f / kLH, (kLW + bw) * 0.5f / kLW, (kLH + bh) * 0.5f / kLH};
-        const float wx = (pl.x1 - pl.x0) * 1.15f, hy = wx * bh / bw;
-        drawOnPlane(pl, g_labelRt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, (pl.y0 + pl.y1) * 0.5f + hy * 0.5f, wx, hy, v.labelAlpha,
-                    0.004f * (pl.x1 - pl.x0), uv);
+        // altura da linha = a do "1 player" (as letras dos itens tem o mesmo corpo); centro na coluna dele (os itens sao centrados), na
+        // altura do proprio item
+        float cx = 0.f, refH = pl.y1 - pl.y0;
+        if (textPlane(v.labelRef, ref))
+        {
+            cx = vdot(vsub(ref.c, pl.c), pl.right);   // o texto fica no centroide da malha (o retangulo do quadro tem margem desigual)
+            refH = ref.y1 - ref.y0;
+        }
+        const float texW = float(g_labelRt.texture.width), texH = float(g_labelRt.texture.height);
+        // as letras ocupam ~74% da altura do quadro do item
+        const float hy = 0.74f * refH * texH / (texH - 2.f * kLabelPad), wx = hy * texW / texH;
+        drawOnPlane(pl, g_labelRt.texture, cx - wx * 0.5f, (pl.y0 + pl.y1) * 0.5f + hy * 0.5f, wx, hy, v.labelAlpha, 0.004f * (pl.x1 - pl.x0));
     }
     if ((!v.on && !v.select) || v.alpha <= 0.f || g_rt.id == 0 || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
         return;

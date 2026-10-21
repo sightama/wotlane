@@ -623,7 +623,6 @@ void wotmThreeMileFlash(const uint8_t *rdram)
     if (a && wotm::viewFadeRect(ram, int32_t(ram.u32(wotm::sym::viewCurView)), 0xFF, 0xFF, 0xFF, a, r))
         wotm_live::pushRect(r, 1);
 }
-int wotmSharedHudPlayers();   // wotm_split4.inc: jogadores da luta de 5 a 8 em curso (0 fora dela)
 // Saida do TheGame::updateFadeOut / updateFadeOutAndIn: o nivel do fade (+0x120450, ja atualizado) em cada vista; da vista 1 em
 // diante so sem filme e sem vista unificada, como o laco deles.
 void wotmTheGameFade(const uint8_t *rdram, uint32_t self)
@@ -636,10 +635,7 @@ void wotmTheGameFade(const uint8_t *rdram, uint32_t self)
     if (!ram.ok(self + 0x120450) || !ram.ok(g + 0x1203D8))
         return;
     const uint32_t level = ram.u32(self + 0x120450);
-    int views = int32_t(ram.u32(g + 0x1203D8));
-    // 5 a 8 jogadores (wotm_split4.inc): m_numMonsters 4, mas a tela e uma vista so; as vistas 1 a 3 ficaram com os viewDef de antes
-    if (wotmSharedHudPlayers())
-        views = std::min(views, int32_t(ram.u32(wotm::sym::viewNumViews)));
+    const int views = int32_t(ram.u32(g + 0x1203D8));
     // com os quadrantes (3 e 4 jogadores) o cinema sai em todas as vistas (wotm_split4.inc), entao o fade tambem
     const bool quad = wotm::readViewCtx(ram, 0).h < 224.f;
     for (int v = 0; v < views && v < 5;)
@@ -1132,8 +1128,6 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
-// Placar da luta de 5 a 8 jogadores (camera compartilhada do wotm_split4.inc)
-#include "wotm_multihud.inc"
 
 double wotmThreadCpuMs();   // ps2_hostprof.cpp: CPU da thread atual (usuario + kernel)
 
@@ -1481,8 +1475,6 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
-        if (!split)   // placar da luta de 5 a 8 jogadores (vazio fora dela)
-            wotm_multihud::draw(S.scene, ram, RW, RH, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
         if (!split)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)

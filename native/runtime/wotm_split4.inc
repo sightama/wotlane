@@ -1,7 +1,5 @@
-// Multijogador de 3 a 8 (POS_FRONTEIRA.md, item 11). Incluido pelo wotm_overrides.cpp. Vale quando o Shell tem 3 ou mais jogadores
-// (m_numPlayers, posto pelo menu multijogador do wotm_padsel.inc ou pela WOTM_MATCH com WOTM_PLAYERS=3..8); com 1 ou 2 os ganchos
-// deixam o jogo como no retail. Com 3 e 4: tela em quadrantes (abaixo). Com 5 a 8: tela cheia com a camera compartilhada (fim do
-// comentario).
+// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11). Incluido pelo wotm_overrides.cpp. Sempre instalada: age quando o Shell
+// tem 3 ou 4 jogadores (m_numPlayers), postos pelo menu multijogador (wotm_padsel.inc) ou pela WOTM_MATCH com WOTM_PLAYERS=3 ou 4.
 //
 // O motor ja tem quase tudo para 4 vistas: viewInfo, worldCtx e viewDb com 5 entradas (a 4 e a da sombra), 4 cameras
 // (Cameras::m_cameras), 4 HUDs, a viewPrevMat das particulas e os pontos de visada com 5, e o viewToggleSplitScreen dos cinemas
@@ -32,26 +30,7 @@
 //   - Controles: o inputInit abre 2 portas x 4 slots (controle = porta + 2 * slot: o jogador 3 e o slot 1 da porta 0, o 4 o da porta
 //     1), mas o stub do runtime so tem o slot 0. As scePad* com (porta, slot) recebem o slot 1 como 0 (estado, modo e vibracao sao
 //     os da porta), o scePadPortOpen/Close do slot 1 so devolve sucesso, e o scePadRead dele le os dispositivos do jogador porta + 3
-//     (wotmPadSetPortBase, wotm_pad.inc). Decidido na instalacao: o inputInit roda no boot. Os slots 2 e 3 sao os jogadores 5 a 8
-//     (o inputInit poe inputPlayerPad[i] = i: o jogador i le o controle i, porta i & 1, slot i >> 1).
-//
-// 5 a 8 jogadores (sem IA): o motor so tem 4 cameras, 4 HUDs, 5 vistas (a 4 e a da sombra) e vetores de som de 4 por jogador
-// (SoundManager::m_events, os vols[4] na pilha dos sons 3D, laços por TheGame::m_numMonsters). Por isso:
-//   - Os jogadores 5 a 8 moram em m_monsters[4..7] (o lugar das IAs; sem IA nesse caso, m_numAIs 0) com m_index 4..7, e o
-//     m_numMonsters do TheGame fica em 4 (saida do Shell::InitRTState e do InitPlayers): os lacos por ele so veem os 4 primeiros.
-//     O m_numPlayers do Shell continua com todos (carga, InitPlayers, fim de rodada).
-//   - O m_playerInfo do SetPlayerMonster e game + 0x112480 + 4 * jogador: do 5 em diante cai no Weapons (0x112490). Os 16 bytes
-//     voltam na saida e o m_playerInfo deles passa para a RAM de cima (kPlayerDat). O playerInit le m_ctlrCfg[m_index], que so tem 2:
-//     do jogador 3 em diante a configuracao de botoes vira a do jogador 1. O setSoundVolumeInfo de m_index >= 4 nao grava (m_events[4]).
-//   - Uma vista, tela cheia (viewDef[0], viewNumViews 1, m_numCameras 1), refeita a cada quadro (o viewToggleSplitScreen dos cinemas
-//     e do botao de vista divide a tela de novo). Camera compartilhada: na entrada do viewUpdate(0) o _cs da vista recebe uma camera
-//     que enquadra os jogadores vivos (sharedCamera); fora dos cinemas e da pose de vitoria (gUseUnifiedView), que ficam com a do
-//     jogo. As cameras 1 a 7 nao existem: o gameInitCamera dos jogadores 2 a 8 so poe m_cameraView 0 (mensagens no HUD 0). O andar
-//     do monstro e relativo a ele mesmo (PadFlags::computeMotionVec), nao a camera.
-//   - HUD: o Hud 0 mostra o jogador 1 como no retail; a vida e as vitorias de todos vem do placar nativo (wotm_live.inc,
-//     wotmSharedHud).
-//   - Som: o loadRTSoundBanks carrega os bancos de m_monsters[0 .. m_numMonsters) e [4 .. 4 + m_numAIs): durante ele o m_numAIs vale
-//     os jogadores alem do 4.
+//     (wotmPadSetPortBase, wotm_pad.inc). Decidido na instalacao: o inputInit roda no boot.
 
 void wotmPadSetPortBase(int base);   // wotm_pad.inc: o scePadRead em curso le os dispositivos da porta + base
 
@@ -71,8 +50,6 @@ namespace wotm_split4
     constexpr uint32_t kDefSize = 0xC0, kDbSize = 0x360;
     constexpr uint32_t kDbScissor[4] = {0xC0, 0x140, 0x230, 0x2B0};
     constexpr uint32_t kQuadDefs = PS2_RAM_SIZE - 0x1000;   // 4 ViewDef dos quadrantes
-    constexpr uint32_t kPlayerDat = kQuadDefs + 0x400;      // m_playerInfo dos jogadores 5 a 8 (4 bytes por jogador, indice = jogador)
-    constexpr int kMaxPlayers = 8;
 
     constexpr uint32_t kReestablish = wotm::fn::gameReestablishViews__7TheGame, kGrapple = wotm::fn::viewGrappleConfig__Fv,
                        kOkToUnify = wotm::fn::SetOkToUnify__7TheGame, kResetLevel = wotm::fn::ResetLevel__7TheGame,
@@ -84,14 +61,13 @@ namespace wotm_split4
                                    g_origLoadLevelFiles = nullptr, g_origInitPlayers = nullptr, g_viewCreate = nullptr, g_viewSetFov = nullptr,
                                    g_follow = nullptr, g_setPov = nullptr;
 
-    int g_players = 0;              // teto de jogadores com os ganchos instalados (8); 0 = desligado
+    int g_players = 0;              // teto de jogadores com os ganchos instalados (4); 0 = desligado
     int g_views = 0;                // vistas em quadrante montadas (0 = nenhuma: tela cheia ou metades do retail)
-    bool g_shared = false;          // 5 a 8 jogadores: tela cheia com a camera compartilhada montada
     bool g_wasUnified = false;      // a vista unificada (vitoria) estava ligada no quadro anterior
     bool g_cinemaFull = false;      // cinema em tela cheia (cinemaViews)
     unsigned g_hudCalls[4] = {};    // diagnostico (WOTM_SPLITLOG): Hud::update de cada HUD desde a ultima linha
-    int g_loadExtra = 0;            // jogadores 3 a 8 no caminho das IAs (do LoadLevelFiles ao InitPlayers)
-    uint32_t g_extraCostume[kMaxPlayers - 2] = {};   // trajes dos jogadores 3 a 8 (o Shell nao tem lugar para eles)
+    int g_loadExtra = 0;            // jogadores 3 e 4 no caminho das IAs (do LoadLevelFiles ao InitPlayers)
+    uint32_t g_extraCostume[2] = {0, 0};   // trajes dos jogadores 3 e 4 (o Shell nao tem lugar para eles)
 
     float rdF(uint8_t *rdram, uint32_t a) { float v; std::memcpy(&v, rdram + a, 4); return v; }
     void wrF(uint8_t *rdram, uint32_t a, float v) { std::memcpy(rdram + a, &v, 4); }
@@ -116,29 +92,11 @@ namespace wotm_split4
         *ctx = saved;
     }
 
-    // Jogadores do Shell (m_numPlayers) quando os ganchos valem (3 a 8), sem olhar o modo; 0 = nao vale
-    int shellPlayers(uint8_t *rdram)
-    {
-        const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers));
-        return g_players && n >= 3 && n <= g_players ? n : 0;
-    }
-    // Jogadores numa luta multijogador agora (0 = nao vale): 3 a 8 no Shell, num dos modos com tela dividida (3, 6 e 7)
-    int multiPlayers(uint8_t *rdram)
-    {
-        const int32_t mode = static_cast<int32_t>(FAST_READ32(kGameMode));
-        return mode == 3 || mode == 6 || mode == 7 ? shellPlayers(rdram) : 0;
-    }
-    // ... com a tela em quadrantes (3 ou 4)
+    // Jogadores da tela em quadrantes agora (0 = nao vale): 3 ou 4 no Shell, num dos modos com tela dividida (3, 6 e 7)
     int splitPlayers(uint8_t *rdram)
     {
-        const int n = multiPlayers(rdram);
-        return n <= 4 ? n : 0;
-    }
-    // ... com a tela cheia e a camera compartilhada (5 a 8)
-    int sharedPlayers(uint8_t *rdram)
-    {
-        const int n = multiPlayers(rdram);
-        return n >= 5 ? n : 0;
+        const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers)), mode = static_cast<int32_t>(FAST_READ32(kGameMode));
+        return g_players && n >= 3 && n <= 4 && (mode == 3 || mode == 6 || mode == 7) ? n : 0;
     }
 
     void writeQuadDefs(uint8_t *rdram)
@@ -186,171 +144,12 @@ namespace wotm_split4
         }
     }
 
-    // 5 a 8: uma vista em tela cheia (viewDef[0]; o viewDef[5] da vista unificada da pose de vitoria tambem e tela cheia)
-    void sharedViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        FAST_WRITE32(kNumViews, 1u);
-        FAST_WRITE32(kNumCameras, 1u);
-        const uint32_t def = FAST_READ32(kViewInfo + 4);
-        if (def != kViewDef && def != kViewDef + kDefSize * 5u)
-        {
-            FAST_WRITE32(kViewInfo + 8, 0u);   // viewport 0: tela cheia (as cameras usam a tabela de POV dela)
-            applyDef(rdram, ctx, runtime, 0u, kViewDef);
-        }
-    }
-
-    // Camera compartilhada (5 a 8 jogadores), escrita no _cs da vista 0 na entrada do viewUpdate(0): olha o centro dos jogadores vivos
-    // de cima (kPitch), num rumo fixo na luta (o da camera do jogo no primeiro quadro), afastada o bastante para o circulo que os contem
-    // caber na altura da tela, com suavizacao. Escala pela distancia da camera do jogo ao jogador 1 no primeiro quadro (d0). Linhas do
-    // mat do _cs: direita (+0x20), frente (+0x30) e cima (+0x40) no mundo (lockCameraAxes), Z para cima; trans em +0x10.
-    // WOTM_SHAREDCAM=<pitch em graus>,<distancia maxima em d0> (padrao 50,3).
-    constexpr uint32_t kMonsterCs = 0xC;
-    struct SharedCam
-    {
-        bool init = false;
-        float t[3] = {}, dist = 0.f, yaw = 0.f, d0 = 0.f;
-    } g_cam;
-
-    void sharedCamera(uint8_t *rdram, int n)
-    {
-        static const float kPitch = [] { const char *e = std::getenv("WOTM_SHAREDCAM"); return (e ? float(std::atof(e)) : 50.f) * 0.0174533f; }();
-        static const float kMaxD = [] {
-            const char *e = std::getenv("WOTM_SHAREDCAM");
-            const char *c = e ? std::strchr(e, ',') : nullptr;
-            return c ? float(std::atof(c + 1)) : 3.f;
-        }();
-        const uint32_t cs = FAST_READ32(kViewInfo) & 0x1FFFFFFFu;
-        if (cs < 0x1000u || cs + 0x60u > PS2_RAM_SIZE)
-            return;
-        float pos[kMaxPlayers][3];
-        bool alive[kMaxPlayers] = {};
-        int got = 0, living = 0;
-        for (int i = 0; i < n; ++i)
-        {
-            const uint32_t m = FAST_READ32(kMonsters + 4u * uint32_t(i)) & 0x1FFFFFFFu;
-            const uint32_t mcs = m >= 0x1000u ? FAST_READ32(m + kMonsterCs) & 0x1FFFFFFFu : 0u;
-            if (mcs < 0x1000u || mcs + 0x20u > PS2_RAM_SIZE)
-                continue;
-            for (int k = 0; k < 3; ++k)
-                pos[got][k] = rdF(rdram, mcs + 0x10u + 4u * uint32_t(k));
-            if (!std::isfinite(pos[got][0] + pos[got][1] + pos[got][2]))
-                continue;
-            alive[got] = rdF(rdram, m + 0x44C) > 0.f && !FAST_READ8(m + 0xE8);   // m_health, m_dead
-            living += alive[got];
-            ++got;
-        }
-        if (!got)
-            return;
-        float c[3] = {0.f, 0.f, 0.f};
-        int used = 0;
-        for (int i = 0; i < got; ++i)
-            if (alive[i] || !living)
-            {
-                for (int k = 0; k < 3; ++k)
-                    c[k] += pos[i][k];
-                ++used;
-            }
-        for (float &v : c)
-            v /= float(used);
-        float r = 0.f;
-        for (int i = 0; i < got; ++i)
-            if (alive[i] || !living)
-                r = std::max(r, std::hypot(pos[i][0] - c[0], pos[i][1] - c[1]));
-        if (!g_cam.init)
-        {
-            // rumo e escala da camera do jogo (que segue o jogador 1)
-            const float fx = rdF(rdram, cs + 0x30), fy = rdF(rdram, cs + 0x34);
-            const float d0 = std::sqrt((rdF(rdram, cs + 0x10) - pos[0][0]) * (rdF(rdram, cs + 0x10) - pos[0][0]) +
-                                       (rdF(rdram, cs + 0x14) - pos[0][1]) * (rdF(rdram, cs + 0x14) - pos[0][1]) +
-                                       (rdF(rdram, cs + 0x18) - pos[0][2]) * (rdF(rdram, cs + 0x18) - pos[0][2]));
-            if (!std::isfinite(fx + fy + d0) || fx * fx + fy * fy < 0.01f || d0 < 10.f || d0 > 20000.f)
-                return;   // camera do jogo ainda nao posta: espera
-            g_cam.yaw = std::atan2(fy, fx);
-            g_cam.d0 = d0;
-            std::copy(c, c + 3, g_cam.t);
-            g_cam.dist = 0.f;
-            g_cam.init = true;
-            std::fprintf(stderr, "[split] camera compartilhada: rumo %.0f graus, d0 %.0f, inclinacao %.0f graus\n", g_cam.yaw * 57.2958f, d0,
-                         kPitch * 57.2958f);
-        }
-        const float d0 = g_cam.d0;
-        // o circulo de raio r + margem cabe na altura da tela: meia abertura vertical ~28 graus (fov 384 em 640 x 224)
-        const float want = std::clamp((r + 0.8f * d0) * 1.9f, 1.5f * d0, kMaxD * d0);
-        const float target[3] = {c[0], c[1], c[2] + 0.25f * d0};
-        const float a = g_cam.dist > 0.f ? 0.08f : 1.f;
-        for (int k = 0; k < 3; ++k)
-            g_cam.t[k] += (target[k] - g_cam.t[k]) * a;
-        g_cam.dist += (want - g_cam.dist) * a;
-        const float cp = std::cos(kPitch), sp = std::sin(kPitch);
-        const float f[3] = {cp * std::cos(g_cam.yaw), cp * std::sin(g_cam.yaw), -sp};
-        float rt[3] = {f[1], -f[0], 0.f};   // frente x Z
-        const float rl = std::hypot(rt[0], rt[1]);
-        rt[0] /= rl;
-        rt[1] /= rl;
-        const float up[3] = {rt[1] * f[2] - rt[2] * f[1], rt[2] * f[0] - rt[0] * f[2], rt[0] * f[1] - rt[1] * f[0]};   // direita x frente
-        for (int k = 0; k < 3; ++k)
-        {
-            wrF(rdram, cs + 0x10u + 4u * uint32_t(k), g_cam.t[k] - f[k] * g_cam.dist);
-            wrF(rdram, cs + 0x20u + 4u * uint32_t(k), rt[k]);
-            wrF(rdram, cs + 0x30u + 4u * uint32_t(k), f[k]);
-            wrF(rdram, cs + 0x40u + 4u * uint32_t(k), up[k]);
-        }
-    }
-
-    // viewUpdate(v): na vista 0 com 5 a 8 jogadores, a camera compartilhada antes das matrizes; o cinema e a pose de vitoria ficam com
-    // a camera do jogo
-    constexpr uint32_t kViewUpdate = wotm::fn::viewUpdate__Fi;
-    PS2Runtime::RecompiledFunction g_origViewUpdate = nullptr;
-    std::atomic<int64_t> g_sharedStamp{0};   // ultimo viewUpdate(0) da luta de 5 a 8 (ms do relogio estavel): placar nativo ligado
-    std::atomic<int> g_sharedN{0};
-    int64_t nowMs()
-    {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    }
-    void viewUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        if (ctx->pc == kViewUpdate && GPR_U32(ctx, 4) == 0u && g_shared)
-            if (const int n = sharedPlayers(rdram))
-            {
-                if (!FAST_READ32(wotm::sym::moviePlaying) && !FAST_READ32(kUnified))
-                    sharedCamera(rdram, n);
-                g_sharedN.store(n, std::memory_order_relaxed);
-                g_sharedStamp.store(nowMs(), std::memory_order_relaxed);
-            }
-        g_origViewUpdate(rdram, ctx, runtime);
-    }
-
-    // viewToggleSplitScreen (cinemas e o botao de vista do PadFlags::updateViewChanges): com 5 a 8 a tela fica numa vista
-    constexpr uint32_t kViewToggle = wotm::fn::viewToggleSplitScreen__FbT0;
-    PS2Runtime::RecompiledFunction g_origViewToggle = nullptr;
-    void viewToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        if (ctx->pc == kViewToggle && g_shared && sharedPlayers(rdram))
-        {
-            ctx->pc = GPR_U32(ctx, 31);
-            return;
-        }
-        g_origViewToggle(rdram, ctx, runtime);
-    }
-
     void reestablishViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t ra = ctx->pc == kReestablish ? GPR_U32(ctx, 31) : 0u;
         g_origReestablish(rdram, ctx, runtime);
         if (!ra || ctx->pc != ra)
             return;
-        if (const int s = sharedPlayers(rdram))
-        {
-            g_views = 0;
-            sharedViews(rdram, ctx, runtime);
-            if (!g_shared)
-                std::fprintf(stderr, "[split] %d jogadores: tela cheia, camera compartilhada\n", s);
-            g_shared = true;
-            g_cinemaFull = false;
-            g_wasUnified = false;
-            return;
-        }
-        g_shared = false;
         const int n = splitPlayers(rdram);
         if (!n)
         {
@@ -443,16 +242,6 @@ namespace wotm_split4
     PS2Runtime::RecompiledFunction g_origOkToUnify = nullptr;
     void okToUnify(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == kOkToUnify && g_shared && sharedPlayers(rdram))
-        {
-            // 5 a 8: sem camera de combate (a unificada); a tela volta a uma vista se algo a dividiu
-            sharedViews(rdram, ctx, runtime);
-            const uint32_t slots = std::min<uint32_t>(FAST_READ32(kNumSlots), 16u);
-            for (uint32_t i = 0; i < slots; ++i)
-                FAST_WRITE32(kSlots + kSlotStride * i + kCamUnify, 0);
-            ctx->pc = GPR_U32(ctx, 31);
-            return;
-        }
         if (ctx->pc != kOkToUnify || !g_views || !splitPlayers(rdram))
         {
             g_origOkToUnify(rdram, ctx, runtime);
@@ -497,19 +286,9 @@ namespace wotm_split4
             callGuest(g_setPov, kSetPov, rdram, ctx, runtime, 2u, pov);
     }
 
-    // TheGame::gameInitCamera(view, slot): com 4 jogadores a camera 3 fica com o jogador 4 (a IA nao a leva). Com 5 a 8 so a camera 0
-    // existe: os jogadores 2 a 8 (SetPlayerMonster(i, ..., vista i)) so recebem m_cameraView 0 (sem m_viewSlot[i], que passa do fim
-    // para o m_slotInteractive, nem camera i). Olha so o Shell: no InitPlayers o modo do TheGame ainda pode nao estar posto.
+    // TheGame::gameInitCamera(view, slot): com 4 jogadores a camera 3 fica com o jogador 4 (a IA nao a leva)
     void initCamera(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == kInitCamera && GPR_U32(ctx, 5) >= 1u && shellPlayers(rdram) >= 5)
-        {
-            const uint32_t slot = GPR_U32(ctx, 6);
-            if (slot < 16u)
-                FAST_WRITE32(kSlots + kSlotStride * slot + kCameraView, 0u);
-            ctx->pc = GPR_U32(ctx, 31);
-            return;
-        }
         if (ctx->pc == kInitCamera && GPR_U32(ctx, 5) == 3u && splitPlayers(rdram) == 4)
         {
             // jogador = um dos m_monsters[0..3] (o SetPlayerMonster ja o gravou); o m_playerNum nao serve: com WOTM_AIVSAI o jogador
@@ -529,20 +308,18 @@ namespace wotm_split4
         g_origInitCamera(rdram, ctx, runtime);
     }
 
-    // Jogadores 3 a 8 para o caminho das IAs (carga) e de volta (InitPlayers). As IAs andam extra posicoes; m_costume[2 + j] vai ate
-    // o indice 11 (0x2C0C, antes do m_mode): no maximo 10 entre jogadores extras e IAs. Com 5 a 8 jogadores nao ha IA: os jogadores
-    // 5 a 8 ficam em m_monsterSel[4..7] no lugar delas, e o deslocamento de sel(2 + k) para sel(4 + k) se sobrepoe (copia de tras
-    // para a frente).
+    // Jogadores 3 e 4 para o caminho das IAs (carga) e de volta (InitPlayers). As IAs andam extra posicoes; m_costume[2 + j] vai ate
+    // o indice 11 (0x2C0C, antes do m_mode): no maximo 10 entre jogadores extras e IAs.
     void toLoadLayout(uint8_t *rdram)
     {
         const int n = static_cast<int32_t>(FAST_READ32(kNumPlayers)), extra = n - 2;
-        int ais = n > 4 ? 0 : std::clamp(static_cast<int32_t>(FAST_READ32(kNumAIs)), 0, 10 - extra);
+        int ais = std::clamp(static_cast<int32_t>(FAST_READ32(kNumAIs)), 0, 10 - extra);
         for (int j = ais - 1; j >= 0; --j)
         {
             FAST_WRITE32(sel(4 + j + extra), FAST_READ32(sel(4 + j)));
             FAST_WRITE32(costume(2 + j + extra), FAST_READ32(costume(2 + j)));
         }
-        for (int k = extra - 1; k >= 0; --k)
+        for (int k = 0; k < extra; ++k)
         {
             FAST_WRITE32(sel(4 + k), FAST_READ32(sel(2 + k)));
             FAST_WRITE32(costume(2 + k), g_extraCostume[k]);
@@ -554,7 +331,7 @@ namespace wotm_split4
 
     void toPlayLayout(uint8_t *rdram)
     {
-        const int extra = g_loadExtra, ais = std::max(0, static_cast<int32_t>(FAST_READ32(kNumAIs)) - extra), n = 2 + extra;
+        const int extra = g_loadExtra, ais = std::max(0, static_cast<int32_t>(FAST_READ32(kNumAIs)) - extra);
         for (int k = 0; k < extra; ++k)
             FAST_WRITE32(sel(2 + k), FAST_READ32(sel(4 + k)));
         for (int j = 0; j < ais; ++j)
@@ -562,12 +339,12 @@ namespace wotm_split4
             FAST_WRITE32(sel(4 + j), FAST_READ32(sel(4 + j + extra)));
             FAST_WRITE32(costume(2 + j), FAST_READ32(costume(2 + j + extra)));
         }
-        // o que sobrou do caminho de carga: depois das IAs (3 e 4 jogadores) ou dos jogadores (5 a 8)
-        for (int i = std::max(n, 4 + ais); i < 4 + ais + extra; ++i)
-            FAST_WRITE32(sel(i), 0u);
         for (int k = 0; k < extra; ++k)
+        {
+            FAST_WRITE32(sel(4 + ais + k), 0u);
             FAST_WRITE32(costume(2 + ais + k), 0u);
-        FAST_WRITE32(kNumPlayers, uint32_t(n));
+        }
+        FAST_WRITE32(kNumPlayers, uint32_t(2 + extra));
         FAST_WRITE32(kNumAIs, uint32_t(ais));
         g_loadExtra = 0;
     }
@@ -578,106 +355,30 @@ namespace wotm_split4
         {
             if (g_loadExtra)   // a carga anterior nao chegou ao InitPlayers
                 toPlayLayout(rdram);
-            if (shellPlayers(rdram) && FAST_READ32(kShell + 0x2C10) != 6u)   // m_mode 6 carrega os 10 monstros por conta propria
+            const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers));
+            if (n >= 3 && n <= 4 && FAST_READ32(kShell + 0x2C10) != 6u)   // m_mode 6 carrega os 10 monstros por conta propria
                 toLoadLayout(rdram);
-            g_cam.init = false;   // fase nova: a camera compartilhada tira rumo e escala da camera do jogo de novo
         }
         g_origLoadLevelFiles(rdram, ctx, runtime);
     }
 
-    // m_numMonsters do TheGame (os lacos por ele so cabem 4 jogadores): no maximo 4, na saida de quem o grava com o m_numPlayers
-    void clampNumMonsters(uint8_t *rdram)
-    {
-        if (static_cast<int32_t>(FAST_READ32(kGame + 0x1203D8)) > 4 && shellPlayers(rdram) >= 5)
-            FAST_WRITE32(kGame + 0x1203D8, 4u);
-    }
-
     void initPlayers(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t ra = ctx->pc == kInitPlayers ? GPR_U32(ctx, 31) : 0u;
-        if (ra && g_loadExtra)
+        if (ctx->pc == kInitPlayers && g_loadExtra)
             toPlayLayout(rdram);
         g_origInitPlayers(rdram, ctx, runtime);
-        if (ra && ctx->pc == ra)
-            clampNumMonsters(rdram);
-    }
-
-    constexpr uint32_t kInitRTState = wotm::fn::InitRTState__5Shell;
-    PS2Runtime::RecompiledFunction g_origInitRTState = nullptr;
-    void initRTState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t ra = ctx->pc == kInitRTState ? GPR_U32(ctx, 31) : 0u;
-        g_origInitRTState(rdram, ctx, runtime);
-        if (ra && ctx->pc == ra)
-            clampNumMonsters(rdram);
-    }
-
-    // SoundManager::loadRTSoundBanks: bancos de m_monsters[0 .. m_numMonsters) e [4 .. 4 + m_numAIs). Com 5 a 8 jogadores, durante ele
-    // o m_numAIs vale os jogadores alem do 4 (os bancos deles entram como os das IAs).
-    constexpr uint32_t kLoadBanks = wotm::fn::loadRTSoundBanks__12SoundManager, kGameNumAIs = kGame + 0x1203E0;
-    PS2Runtime::RecompiledFunction g_origLoadBanks = nullptr;
-    void loadBanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t ra = ctx->pc == kLoadBanks ? GPR_U32(ctx, 31) : 0u;
-        const int n = ra ? shellPlayers(rdram) : 0;
-        const uint32_t ais = FAST_READ32(kGameNumAIs);
-        if (n >= 5)
-            FAST_WRITE32(kGameNumAIs, uint32_t(n - 4));
-        g_origLoadBanks(rdram, ctx, runtime);
-        if (n >= 5 && ctx->pc == ra)
-            FAST_WRITE32(kGameNumAIs, ais);
-    }
-
-    // SoundManager::setSoundVolumeInfo(m, ...): m_events[m_index] so tem 4 jogadores
-    constexpr uint32_t kSoundInfo = wotm::fn::setSoundVolumeInfo__12SoundManagerP7MonsteriP8_fvector;
-    PS2Runtime::RecompiledFunction g_origSoundInfo = nullptr;
-    void soundInfo(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t m = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
-        if (ctx->pc == kSoundInfo && m >= 0x1000u && m + 0x30u <= PS2_RAM_SIZE && FAST_READ32(m + 0x24) >= 4u)   // m_index
-        {
-            ctx->pc = GPR_U32(ctx, 31);
-            return;
-        }
-        g_origSoundInfo(rdram, ctx, runtime);
     }
 
     // TheGame::SetPlayerMonster(jogador, tipo, dup, vista, traje): o InitPlayers manda m_costume[1] a todo jogador depois do 1; os
-    // jogadores 3 a 8 recebem o deles (o do arquivo que a carga leu). Do jogador 5 em diante o m_playerInfo (game + 0x112480 +
-    // 4 * jogador, onde o playerInit grava o numero do controle) cai no Weapons: os bytes voltam e o m_playerInfo vai para kPlayerDat.
-    constexpr uint32_t kSetPlayer = wotm::fn::SetPlayerMonster__7TheGameiiiii, kPlayerInfoBase = kGame + 0x112480, kMonsterPlayerInfo = 0x4D8;
+    // jogadores 3 e 4 recebem o deles (o do arquivo que a carga leu)
+    constexpr uint32_t kSetPlayer = wotm::fn::SetPlayerMonster__7TheGameiiiii;
     PS2Runtime::RecompiledFunction g_origSetPlayer = nullptr;
     void setPlayerMonster(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t player = GPR_U32(ctx, 5), ra = ctx->pc == kSetPlayer ? GPR_U32(ctx, 31) : 0u;
-        const bool extra = ra && player >= 2u && player < uint32_t(kMaxPlayers) && shellPlayers(rdram);
-        if (extra)
+        const uint32_t player = GPR_U32(ctx, 5);
+        if (ctx->pc == kSetPlayer && player >= 2u && player < 4u && splitPlayers(rdram))
             ctx->r[9] = _mm_set_epi64x(0, static_cast<int64_t>(g_extraCostume[player - 2u]));   // t1
-        const bool relocate = extra && player >= 4u;
-        uint8_t saved[4 * (kMaxPlayers - 4)];
-        if (relocate)
-            std::memcpy(saved, rdram + kPlayerInfoBase + 16u, sizeof saved);
         g_origSetPlayer(rdram, ctx, runtime);
-        if (!relocate || ctx->pc != ra)
-            return;
-        const uint32_t pad = FAST_READ32(kPlayerInfoBase + 4u * player);
-        std::memcpy(rdram + kPlayerInfoBase + 16u, saved, sizeof saved);
-        FAST_WRITE32(kPlayerDat + 4u * player, pad);
-        const uint32_t m = FAST_READ32(kMonsters + 4u * player) & 0x1FFFFFFFu;
-        if (m >= 0x1000u && FAST_READ32(m + kMonsterPlayerInfo) == kPlayerInfoBase + 4u * player)
-            FAST_WRITE32(m + kMonsterPlayerInfo, kPlayerDat + 4u * player);
-    }
-
-    // Monster::playerInit: m_ctlrCfg[m_index] so tem os jogadores 1 e 2 (do 3 em diante o playerInit lia m_vibration, m_selFirst...):
-    // a configuracao de botoes (+0x672C) dos outros e a do jogador 1. Chamado tambem no renascimento (evaluateBattle).
-    constexpr uint32_t kPlayerInitFn = wotm::fn::playerInit__7Monster, kCtlrCfg = kShell + 0x2B8C, kMonsterCtlrCfg = 0x672C;
-    PS2Runtime::RecompiledFunction g_origPlayerInit = nullptr;
-    void playerInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu, ra = ctx->pc == kPlayerInitFn ? GPR_U32(ctx, 31) : 0u;
-        g_origPlayerInit(rdram, ctx, runtime);
-        if (ra && ctx->pc == ra && m >= 0x1000u && m + 0x6730u <= PS2_RAM_SIZE && FAST_READ32(m + 0x24) >= 2u && shellPlayers(rdram))
-            FAST_WRITE32(m + kMonsterCtlrCfg, FAST_READ32(kCtlrCfg) - 1u);
     }
 
     // Hud::update(hud): o retail sai logo no comeco com indice (+0) >= 2. O resto usa o indice para o monstro (m_viewSlot[indice]), a
@@ -750,7 +451,7 @@ namespace wotm_split4
         if (!ra || ctx->pc != ra || i < 2u || i >= 4u || self != kGame + kHudStride * i || !g_players)
             return;
         const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers));
-        if (n < 3 || n > 4 || static_cast<int32_t>(i) >= n)   // com 5 a 8 so o HUD 0 aparece
+        if (n < 3 || static_cast<int32_t>(i) >= n)
             return;
         std::memcpy(rdram + self, rdram + kGame + kHudStride * (i & 1u), kHudStride);
         FAST_WRITE32(self, i);
@@ -771,7 +472,7 @@ namespace wotm_split4
     void evaluateBattle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const bool entry = ctx->pc == kEvalNoAI || ctx->pc == kEvalAI;
-        if (!entry || !(g_views || g_shared) || !multiPlayers(rdram) || FAST_READ32(kGameMode) != 3u)
+        if (!entry || !g_views || !splitPlayers(rdram) || FAST_READ32(kGameMode) != 3u)
         {
             (ctx->pc == kEvalAI ? g_origEvalAI : g_origEvalNoAI)(rdram, ctx, runtime);
             return;
@@ -802,16 +503,15 @@ namespace wotm_split4
             callGuest(runtime->lookupFunction(kDisplayDialog), kDisplayDialog, rdram, ctx, runtime, 5u);
             return;
         }
-        // jogadores em m_monsters[0 .. jogadores) (de 5 a 8 eles ocupam o lugar das IAs, que nao existem), IAs em [4 .. 4 + m_numAIs)
-        const int players = multiPlayers(rdram), ais = static_cast<int32_t>(FAST_READ32(kGame + 0x1203E0));
-        for (int i = 0; i < std::max(players, 4 + ais); ++i)
+        const int players = splitPlayers(rdram), ais = static_cast<int32_t>(FAST_READ32(kGame + 0x1203E0));
+        for (int i = 0; i < 4 + ais; ++i)
         {
             if (i >= players && i < 4)
                 continue;
             const uint32_t m = FAST_READ32(kMonsters + 4u * uint32_t(i)) & 0x1FFFFFFFu;
             if (!m || !(rdF(rdram, m + kHealth) <= 0.f))
                 continue;
-            const uint32_t fn = i < players ? kPlayerInit : kAiInit;   // o do WOTM_AIVSAI (playerInit -> aiInit) vale: busca a cada vez
+            const uint32_t fn = i < 4 ? kPlayerInit : kAiInit;   // o do WOTM_AIVSAI (playerInit -> aiInit) vale: busca a cada vez
             callGuest(runtime->lookupFunction(fn), fn, rdram, ctx, runtime, m);
         }
         FAST_WRITE32(kInMenus, 0u);
@@ -851,7 +551,7 @@ namespace wotm_split4
             if ((FAST_READ32(kMonsters + 4u * uint32_t(i)) & 0x1FFFFFFFu) == m)
                 who = i;
         const int32_t humanPoints = static_cast<int32_t>(FAST_READ32(kPointTypes + 16u + 4u));   // lista 1
-        const bool asAi = ra && who >= humanPoints && who < multiPlayers(rdram) && FAST_READ32(m + kPlayerNum) == 1u;
+        const bool asAi = ra && who >= humanPoints && who < 4 && splitPlayers(rdram) && FAST_READ32(m + kPlayerNum) == 1u;
         if (asAi)
             FAST_WRITE32(m + kPlayerNum, 2u);
         g_origStartPoint(rdram, ctx, runtime);
@@ -886,8 +586,7 @@ namespace wotm_split4
         g_origBlurDraw(rdram, ctx, runtime);
     }
 
-    // scePad* com (porta, slot): os slots 1 a 3 viram o 0 da mesma porta; o scePadRead deles le os dispositivos do jogador
-    // porta + 2 * slot
+    // scePad* com (porta, slot): o slot 1 vira o 0 da mesma porta; o scePadRead dele le os dispositivos da porta + 2
     constexpr uint32_t kPadSlotFns[] = {wotm::fn::scePadRead,          wotm::fn::scePadGetState,      wotm::fn::scePadGetReqState,
                                         wotm::fn::scePadSetReqState,   wotm::fn::scePadInfoAct,       wotm::fn::scePadInfoMode,
                                         wotm::fn::scePadSetMainMode,   wotm::fn::scePadSetActDirect,  wotm::fn::scePadSetActAlign,
@@ -898,8 +597,7 @@ namespace wotm_split4
 
     void padSlotCall(size_t i, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t slot = GPR_U32(ctx, 5);
-        if (slot == 0u || slot > 3u)
+        if (GPR_U32(ctx, 5) != 1u)
         {
             g_padOrig[i](rdram, ctx, runtime);
             return;
@@ -907,11 +605,11 @@ namespace wotm_split4
         const bool read = kPadSlotFns[i] == wotm::fn::scePadRead;
         ctx->r[5] = _mm_set_epi64x(0, 0);
         if (read)
-            wotmPadSetPortBase(2 * static_cast<int>(slot));
+            wotmPadSetPortBase(2);
         g_padOrig[i](rdram, ctx, runtime);
         if (read)
             wotmPadSetPortBase(0);
-        ctx->r[5] = _mm_set_epi64x(0, static_cast<int64_t>(slot));
+        ctx->r[5] = _mm_set_epi64x(0, 1);
     }
     template <size_t I>
     void padSlotMirror(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { padSlotCall(I, rdram, ctx, runtime); }
@@ -921,7 +619,7 @@ namespace wotm_split4
 
     void portOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (GPR_U32(ctx, 5) == 0u || GPR_U32(ctx, 5) > 3u)
+        if (GPR_U32(ctx, 5) != 1u)
         {
             g_origPortOpen(rdram, ctx, runtime);
             return;
@@ -935,7 +633,7 @@ namespace wotm_split4
 
     void portClose(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (GPR_U32(ctx, 5) == 0u || GPR_U32(ctx, 5) > 3u)
+        if (GPR_U32(ctx, 5) != 1u)
         {
             g_origPortClose(rdram, ctx, runtime);
             return;
@@ -944,59 +642,69 @@ namespace wotm_split4
         ctx->pc = GPR_U32(ctx, 31);
     }
 
-    // Antes dos ganchos do scePadRead da camera livre e do lock-on alternado: eles embrulham este e veem o slot de verdade. Sempre
-    // instalado: os ganchos so agem com 3 ou mais jogadores no Shell (o menu multijogador ou a WOTM_MATCH com WOTM_PLAYERS), e os
-    // slots 1 a 3 das portas respondem como controles sem botao enquanto ninguem os alimenta.
+    // Antes dos ganchos do scePadRead da camera livre e do lock-on alternado: eles embrulham este e veem o slot de verdade
     void install(PS2Runtime &runtime)
     {
-        struct H { uint32_t addr; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; };
-        const H hooks[] = {
-            {kReestablish, &g_origReestablish, &reestablishViews}, {kGrapple, &g_origGrapple, &grappleConfig},
-            {kSetPov, &g_origSetPov, &setCameraPov},               {kOkToUnify, &g_origOkToUnify, &okToUnify},
-            {kResetLevel, &g_origResetLevel, &resetLevel},         {kInitCamera, &g_origInitCamera, &initCamera},
-            {kLoadLevelFiles, &g_origLoadLevelFiles, &loadLevelFiles}, {kInitPlayers, &g_origInitPlayers, &initPlayers},
-            {kInitRTState, &g_origInitRTState, &initRTState},      {kSetPlayer, &g_origSetPlayer, &setPlayerMonster},
-            {kPlayerInitFn, &g_origPlayerInit, &playerInit},       {kLoadBanks, &g_origLoadBanks, &loadBanks},
-            {kSoundInfo, &g_origSoundInfo, &soundInfo},            {kHudUpdate, &g_origHudUpdate, &hudUpdate},
-            {kStartPoint, &g_origStartPoint, &startPoint},         {kHudInitAfter, &g_origHudInitAfter, &hudInitAfter},
-            {kEvalNoAI, &g_origEvalNoAI, &evaluateBattle},         {kEvalAI, &g_origEvalAI, &evaluateBattle},
-            {kBlurInit, &g_origBlurInit, &blurInit},               {kBlurDraw, &g_origBlurDraw, &blurDraw},
-            {kViewUpdate, &g_origViewUpdate, &viewUpdate},         {kViewToggle, &g_origViewToggle, &viewToggle},
-            {wotm::fn::scePadPortOpen, &g_origPortOpen, &portOpen}, {wotm::fn::scePadPortClose, &g_origPortClose, &portClose},
-        };
+        constexpr int n = 4;   // teto de jogadores (com 1 ou 2 no Shell os ganchos deixam o jogo como no retail)
         g_viewCreate = runtime.lookupFunction(kViewCreate);
         g_viewSetFov = runtime.lookupFunction(kViewSetFov);
         g_follow = runtime.lookupFunction(kFollow);
-        g_setPov = runtime.lookupFunction(kSetPov);
-        bool ok = g_viewCreate && g_viewSetFov && g_follow && g_setPov;
-        for (const H &h : hooks)
-            ok = ok && (*h.orig = runtime.lookupFunction(h.addr)) != nullptr;
+        g_setPov = g_origSetPov = runtime.lookupFunction(kSetPov);
+        g_origReestablish = runtime.lookupFunction(kReestablish);
+        g_origGrapple = runtime.lookupFunction(kGrapple);
+        g_origOkToUnify = runtime.lookupFunction(kOkToUnify);
+        g_origResetLevel = runtime.lookupFunction(kResetLevel);
+        g_origInitCamera = runtime.lookupFunction(kInitCamera);
+        g_origLoadLevelFiles = runtime.lookupFunction(kLoadLevelFiles);
+        g_origInitPlayers = runtime.lookupFunction(kInitPlayers);
+        g_origSetPlayer = runtime.lookupFunction(kSetPlayer);
+        g_origHudUpdate = runtime.lookupFunction(kHudUpdate);
+        g_origStartPoint = runtime.lookupFunction(kStartPoint);
+        g_origHudInitAfter = runtime.lookupFunction(kHudInitAfter);
+        g_origEvalNoAI = runtime.lookupFunction(kEvalNoAI);
+        g_origEvalAI = runtime.lookupFunction(kEvalAI);
+        g_origBlurInit = runtime.lookupFunction(kBlurInit);
+        g_origBlurDraw = runtime.lookupFunction(kBlurDraw);
+        g_origPortOpen = runtime.lookupFunction(wotm::fn::scePadPortOpen);
+        g_origPortClose = runtime.lookupFunction(wotm::fn::scePadPortClose);
+        bool padsOk = g_origPortOpen && g_origPortClose;
         for (size_t i = 0; i < kPadSlotN; ++i)
-            ok = ok && (g_padOrig[i] = runtime.lookupFunction(kPadSlotFns[i])) != nullptr;
-        if (!ok)
+            padsOk = padsOk && (g_padOrig[i] = runtime.lookupFunction(kPadSlotFns[i])) != nullptr;
+        if (!g_viewCreate || !g_viewSetFov || !g_follow || !g_setPov || !g_origReestablish || !g_origGrapple || !g_origOkToUnify ||
+            !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI ||
+            !g_origBlurInit || !g_origBlurDraw || !padsOk)
         {
-            std::fprintf(stderr, "[split] multijogador desligado: funcao do jogo ou scePad* sem funcao no runtime\n");
+            std::fprintf(stderr, "[split] tela dividida de %d desligada: funcao do jogo ou scePad* sem funcao no runtime\n", n);
             return;
         }
-        g_players = kMaxPlayers;
-        for (const H &h : hooks)
-            runtime.registerFunction(h.addr, h.fn);
+        g_players = n;
+        runtime.registerFunction(kReestablish, &reestablishViews);
+        runtime.registerFunction(kGrapple, &grappleConfig);
+        runtime.registerFunction(kSetPov, &setCameraPov);
+        runtime.registerFunction(kOkToUnify, &okToUnify);
+        runtime.registerFunction(kResetLevel, &resetLevel);
+        runtime.registerFunction(kInitCamera, &initCamera);
+        runtime.registerFunction(kLoadLevelFiles, &loadLevelFiles);
+        runtime.registerFunction(kInitPlayers, &initPlayers);
+        runtime.registerFunction(kSetPlayer, &setPlayerMonster);
+        runtime.registerFunction(kHudUpdate, &hudUpdate);
+        runtime.registerFunction(kStartPoint, &startPoint);
+        runtime.registerFunction(kHudInitAfter, &hudInitAfter);
+        runtime.registerFunction(kEvalNoAI, &evaluateBattle);
+        runtime.registerFunction(kEvalAI, &evaluateBattle);
+        runtime.registerFunction(kBlurInit, &blurInit);
+        runtime.registerFunction(kBlurDraw, &blurDraw);
+        runtime.registerFunction(wotm::fn::scePadPortOpen, &portOpen);
+        runtime.registerFunction(wotm::fn::scePadPortClose, &portClose);
         for (size_t i = 0; i < kPadSlotN; ++i)
             runtime.registerFunction(kPadSlotFns[i], kPadSlotHooks[i]);
+        std::fprintf(stderr, "[split] ate %d jogadores: tela em quadrantes, controles 3 e 4 no slot 1 das portas\n", n);
     }
 }
 
-// Placar nativo (wotm_live.inc, wotmSharedHud): jogadores da luta de 5 a 8 em curso, ou 0 fora dela (sem viewUpdate da luta ha
-// mais de 0,3 s: menu, carga)
-int wotmSharedHudPlayers()
-{
-    using namespace wotm_split4;
-    return nowMs() - g_sharedStamp.load(std::memory_order_relaxed) < 300 ? g_sharedN.load(std::memory_order_relaxed) : 0;
-}
-
-// Selecao de monstros do menu multijogador (wotm_padsel.inc): traje do jogador 3 a 8 (o Shell so guarda os dos jogadores 1 e 2)
+// Selecao de monstros do menu multijogador (wotm_padsel.inc): traje dos jogadores 3 e 4 (o Shell so guarda os dos jogadores 1 e 2)
 void wotmMultiSetCostume(int player, uint32_t costume)
 {
-    if (player >= 2 && player < wotm_split4::kMaxPlayers)
+    if (player >= 2 && player < 4)
         wotm_split4::g_extraCostume[player - 2] = costume & 3u;
 }

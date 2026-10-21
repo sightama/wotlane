@@ -7,12 +7,12 @@
 //   com dois, sobra).
 //   Escolha de controles do multijogador (wotm_padsel.inc): enquanto g_manual, o jogador n recebe so os dispositivos que entraram
 //   na coluna dele (g_manualDevs[n], mesmos bits do mapa); os que ficaram de fora nao jogam.
-//   3 a 8 jogadores (wotm_split4.inc): o scePadRead do slot s de uma porta (jogadores 3 a 8) chega aqui com a porta do slot 0 e
-//   g_portBase 2 * s; o jogador e porta + base, com o controle de mesma ordem.
+//   3 e 4 jogadores (WOTM_PLAYERS, wotm_split4.inc): o scePadRead do slot 1 de uma porta (jogadores 3 e 4) chega aqui com a porta
+//   do slot 0 e g_portBase 2; o jogador e porta + base, com o controle de mesma ordem.
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
-static std::atomic<uint32_t> g_manualDevs[8] = {};
+static std::atomic<uint32_t> g_manualDevs[4] = {};
 static std::atomic<int> g_portBase{0};
 
 static uint32_t deviceMap(int port)
@@ -27,7 +27,7 @@ static uint32_t deviceMap(int port)
 
     uint32_t devs = 0;
     if (g_manual.load(std::memory_order_relaxed))
-        devs = port >= 0 && port < 8 ? g_manualDevs[port].load(std::memory_order_relaxed) : 0u;
+        devs = port >= 0 && port < 4 ? g_manualDevs[port].load(std::memory_order_relaxed) : 0u;
     else
     {
         if (port >= 0 && port < n)
@@ -37,8 +37,8 @@ static uint32_t deviceMap(int port)
     }
 
     // uma linha por jogador quando o que o alimenta muda (inicio, controle plugado ou desplugado)
-    static uint32_t last[8] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u};
-    if (port >= 0 && port < 8 && devs != last[port])
+    static uint32_t last[4] = {~0u, ~0u, ~0u, ~0u};
+    if (port >= 0 && port < 4 && devs != last[port])
     {
         last[port] = devs;
         std::string what;
