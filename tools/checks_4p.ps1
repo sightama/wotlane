@@ -20,6 +20,14 @@ $checks = [ordered]@{
     'volta_4_ia'    = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_CHEATS=vencer=8;PS2X_STATS=1;PS2X_PEEK=2D6458,2E75E8'; Secs = 50
                          Expect = 'vencer a luta: 4 [^\n]*\n(.|\n)*vencer a luta: 4 |||2d6458=00000001|||2e75e8=00000001'
                          Reject = '2d6458=00000002|||2e75e8=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # regressao: o 2 jogadores continua desenhando a tela dividida (redesenhos com 2 vistas) e nunca a tela em 4
+    'tela_2'        = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;PS2X_STATS=1'; Secs = 40
+                         Expect = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
+                         Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # tela em 4: a camada nativa captura as 4 vistas (linhas [split] da vista 3) e redesenha com 4 vistas (linha [native] redesenho);
+    # a foto shot_30.png (discroot) fica para conferir os quadrantes a olho
+    'tela_4'        = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;WOTM_SPLITLOG=1;WOTM_SHOTS=30'; Secs = 40
+                         Expect = '\[split\] g=\d+ vista 3:|||4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]' }
     # a vista unificada (todos numa tela so no combate de perto, gUseUnifiedView 0x6F8A8C) nunca liga com 3+ jogadores
     'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
                          Expect = '6f8a8c=00000000'

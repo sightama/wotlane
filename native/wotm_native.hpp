@@ -70,12 +70,17 @@ constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 // GS; src/common/view.cpp). Por thread: a coleta roda na thread do EE e o desenho na da janela, cada um liga a sua com ViewScope. Sem
 // ViewScope vale a vista 0 com a tela cheia (640 x 224, centro 2048), como era antes da tela dividida. cx/cy/w/h: centro e tamanho
 // da vista em pixels do GS (viewDef da vista: cx/cy em +0x18/+0x1C, w/h em +4/+6).
+// Tela em 4 (3 ou 4 jogadores, wotm_multi.inc): todas as vistas usam o viewport 0 (tela cheia, 4:3) e a apresentacao as compoe em
+// 2x2; `grid` marca o quadro com mais de 2 vistas (viewNumViews >= 3, sem a vista unificada).
 struct ViewCtx {
     int view = 0;
     float cx = 2048.f, cy = 2048.f, w = 640.f, h = 224.f;
+    bool grid = false;
     // Proporcao com que a vista aparece na tela (640 x 224 = 4:3; a metade 320 x 224 = 2:3)
     float aspect() const { return (w / 640.f) * (4.f / 3.f) / (h / 224.f); }
     bool full() const { return w >= 640.f; }
+    // O quadro tem outras vistas (tela dividida ou tela em 4): o que o jogo guarda por vista vale mais que o que e um so por quadro
+    bool shared() const { return !full() || grid; }
 };
 inline ViewCtx &curView() { static thread_local ViewCtx v; return v; }
 struct ViewScope {
@@ -100,6 +105,7 @@ inline ViewCtx readViewCtx(const Ram &ram, int view) {
         v.w = ram.u16(def + 4);
         v.h = ram.u16(def + 6);
     }
+    v.grid = ram.u32(wotm::sym::viewNumViews) >= 3u && ram.u32(wotm::sym::gUseUnifiedView) == 0u;
     return v;
 }
 
@@ -762,8 +768,8 @@ struct Snapshot {
     ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita)
     uint32_t g = 0;     // contador de quadros do jogo
     bool valid = false;
-    // Tela dividida: a vista 1 do mesmo quadro (coletada na saida do hier(1, 0)); nullptr = uma vista so
-    std::shared_ptr<Snapshot> view1;
+    // Tela dividida e tela em 4: as vistas 1..3 do mesmo quadro (coletadas na saida do hier(v, 0)); nullptr = vista ausente
+    std::shared_ptr<Snapshot> extra[3];
 };
 
 class Scene {

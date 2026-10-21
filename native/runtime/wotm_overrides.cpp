@@ -606,7 +606,7 @@ namespace
     // os ciclos virtuais do EE gastos (em fields: total, saltados no ocio e os 3 pcs de checkpoint que mais gastaram) e o
     // tempo real (total, ocioso esperando evento e esperando o relogio de parede para soltar um prazo).
     bool g_fieldLog = false;
-    double g_hierMs[2] = {}, g_captureMs[2] = {};   // por vista: hier (os dois passos) e captura nativa; ver hierTapped
+    double g_hierMs[4] = {}, g_captureMs[4] = {};   // por vista: hier (os dois passos) e captura nativa; ver hierTapped
     unsigned g_hierViews = 0;                        // bits: vistas com hier(v, 0) no quadro
     // Chamadas a sceGsSyncV no quadro (cada uma espera 1 vsync) e o $ra das 4 primeiras: mostra quem gasta os fields.
     constexpr uint32_t kSceGsSyncV = wotm::fn::sceGsSyncV;
@@ -700,10 +700,18 @@ namespace
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
             std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
-        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f\n", (g_hierViews & 1u) + ((g_hierViews >> 1) & 1u), g_hierMs[0], g_hierMs[1],
-                     g_captureMs[0], g_captureMs[1]);
+        std::fprintf(stderr, " vistas=%u hier=", (g_hierViews & 1u) + ((g_hierViews >> 1) & 1u) + ((g_hierViews >> 2) & 1u) + ((g_hierViews >> 3) & 1u));
+        for (int v = 0; v < 4; ++v)
+            if (v < 2 || (g_hierViews >> v) & 1u)
+                std::fprintf(stderr, "%s%.2f", v ? "/" : "", g_hierMs[v]);
+        std::fprintf(stderr, " cap=");
+        for (int v = 0; v < 4; ++v)
+            if (v < 2 || (g_hierViews >> v) & 1u)
+                std::fprintf(stderr, "%s%.2f", v ? "/" : "", g_captureMs[v]);
+        std::fprintf(stderr, "\n");
         g_hierViews = 0;
-        g_hierMs[0] = g_hierMs[1] = g_captureMs[0] = g_captureMs[1] = 0.0;
+        std::fill(std::begin(g_hierMs), std::end(g_hierMs), 0.0);
+        std::fill(std::begin(g_captureMs), std::end(g_captureMs), 0.0);
         // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
         if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
         {
@@ -993,7 +1001,7 @@ namespace
     {
         const bool entry = ctx->pc == kHier;
         const uint32_t view = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
-        if (entry && view < 2u && GPR_U32(ctx, 5) == 0u)
+        if (entry && view < 4u && GPR_U32(ctx, 5) == 0u)
         {
             if (g_hierSceneRa)   // a saida do anterior escapou sem reserva: captura antes de comecar este
                 hierSceneExit(rdram);
@@ -1004,13 +1012,13 @@ namespace
         const auto t0 = std::chrono::steady_clock::now();
         g_origHier(rdram, ctx, runtime);
         const auto t1 = std::chrono::steady_clock::now();
-        if (entry && view < 2u && ctx->pc == ra)
+        if (entry && view < 4u && ctx->pc == ra)
             g_hierMs[view] += std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (g_hierSceneRa && ctx->pc == g_hierSceneRa)
         {
             const int v = g_hierSceneView;
             hierSceneExit(rdram);
-            if (v >= 0 && v < 2)
+            if (v >= 0 && v < 4)
                 g_captureMs[v] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
         }
     }
