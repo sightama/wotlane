@@ -50,14 +50,14 @@ namespace wotm_sync
     }
 
     // Entrada por quadro (base do netcode): o scePadRead(porta, slot, dados) devolve 32 bytes por controle (controle = porta + 2 * slot,
-    // jogadores 1..4) e o jogo le cada controle duas vezes por quadro. Com o passo fixo, o estado de cada controle (botoes e analogicos,
+    // jogadores 1..8) e o jogo le cada controle duas vezes por quadro. Com o passo fixo, o estado de cada controle (botoes e analogicos,
     // wotm_net::PadState) vem de uma linha do tempo por quadro (native/net/wotm_lockstep.hpp): os dispositivos locais sao amostrados na
     // fronteira do quadro e valem WOTM_INPUTDELAY quadros depois (o atraso do lockstep; padrao 0), e as duas leituras do quadro veem o
     // mesmo estado. O runtime o formata como um controle de verdade (setPadOverrideState: modo e pressao vem do estado da porta).
     //   WOTM_INPUTREC=<arquivo>: grava {quadro, controle, estado} da entrada aplicada em cada quadro desde a carga da fase.
     //   WOTM_INPUTPLAY=<arquivo>: o jogo ve a entrada gravada (pelo indice do quadro) em vez da dos dispositivos.
     constexpr uint32_t kPadRead = wotm::fn::scePadRead;
-    constexpr int kControllers = 4;
+    constexpr int kControllers = 8;   // 2 portas x 4 slots do multitap: jogadores 1..8 (5..8 nas IAs, wotm_multi.inc)
     struct InputRecord
     {
         uint32_t index;
@@ -136,7 +136,7 @@ namespace wotm_sync
     void padReadLatched(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5);
-        const bool ours = ctx->pc == kPadRead && port <= 1u && slot <= 1u;
+        const bool ours = ctx->pc == kPadRead && port <= 1u && slot <= 3u;
         const wotm_net::PadState s = ours ? inputFor(static_cast<int>(port + 2u * slot), g_index) : wotm_net::PadState{};
         if (ours)
             ps2_stubs::setPadOverrideState(s.buttons, s.lx, s.ly, s.rx, s.ry);

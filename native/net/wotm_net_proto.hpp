@@ -14,7 +14,7 @@
 namespace wotm_net::proto
 {
     constexpr uint16_t kProtocol = 1;
-    constexpr int kMaxPlayers = 4;
+    constexpr int kMaxPlayers = 8;   // 4 nos lugares de jogador do jogo e 4 em lugares de IA guiados pela rede (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr size_t kMaxRun = 64;   // quadros de entrada por mensagem (o lockstep nunca deixa mais que o atraso pendente)
 

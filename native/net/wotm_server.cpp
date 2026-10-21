@@ -1,5 +1,5 @@
 // ABOUTME: wotm_server: servidor dedicado do netcode do wotlane (lobbies sempre abertos e partidas em lockstep), sem codigo do jogo.
-// ABOUTME: Uso: wotm_server [--port 7777] [--lobbies 2] [--players 4] [--delay N]. Encaminhe TCP e UDP da porta no roteador.
+// ABOUTME: Uso: wotm_server [--port 7777] [--lobbies 2] [--players 8] [--delay N]. Encaminhe TCP e UDP da porta no roteador.
 #include "wotm_net_server.hpp"
 
 #include <atomic>
@@ -16,10 +16,10 @@ namespace
 
     int usage()
     {
-        std::printf("uso: wotm_server [--port 7777] [--lobbies 2] [--players 4] [--delay <quadros>]\n"
+        std::printf("uso: wotm_server [--port 7777] [--lobbies 2] [--players 8] [--delay <quadros>]\n"
                     "  --port     porta TCP (lobby) e UDP (partida); encaminhe as duas no roteador para jogar pela internet\n"
                     "  --lobbies  quantos lobbies ficam abertos (padrao 2)\n"
-                    "  --players  jogadores por lobby (2 a 4; padrao 4)\n"
+                    "  --players  jogadores por lobby (2 a 8; padrao 8)\n"
                     "  --delay    atraso de entrada fixo em quadros (padrao: pelo ping de cada partida)\n");
         return 2;
     }

@@ -279,10 +279,33 @@ namespace
         }
     };
 
+    // porta livre em TCP e UDP (um processo de teste anterior que ainda esta fechando pode segurar as dele)
+    uint16_t freePort()
+    {
+        for (int tries = 0; tries < 200; ++tries)
+        {
+            const uint16_t port = g_nextPort++;
+            wotm_net::Listener tcp;
+            if (!tcp.listen(port))
+                continue;
+            const wotm_net::SocketHandle udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+            sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(INADDR_ANY);
+            a.sin_port = htons(port);
+            const bool ok = udp != wotm_net::kNoSocket && bind(udp, reinterpret_cast<sockaddr *>(&a), sizeof a) == 0;
+            if (udp != wotm_net::kNoSocket)
+                wotm_net::closeSocket(udp);
+            if (ok)
+                return port;
+        }
+        return g_nextPort++;
+    }
+
     ServerConfig testConfig()
     {
         ServerConfig c;
-        c.port = g_nextPort++;
+        c.port = freePort();
         c.startWaitMs = 100;
         return c;
     }
@@ -345,8 +368,8 @@ namespace
         watcher.sendLine("HELLO 1 b1");
         CHECK(readUntil(watcher, "WELCOME") == "WELCOME 2");
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY 0") == "LOBBY 0 waiting 0/4 -");
-        CHECK(readUntil(watcher, "LOBBY 1") == "LOBBY 1 waiting 0/4 -");
+        CHECK(readUntil(watcher, "LOBBY 0") == "LOBBY 0 waiting 0/8 -");
+        CHECK(readUntil(watcher, "LOBBY 1") == "LOBBY 1 waiting 0/8 -");
         CHECK(readUntil(watcher, "END") == "END");
 
         auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1}, 5);
@@ -360,7 +383,7 @@ namespace
         CHECK(a.at("token") != b.at("token") && a.at("token").size() == 16u);
 
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY 0") == "LOBBY 0 playing 2/4 Ana,Bia");
+        CHECK(readUntil(watcher, "LOBBY 0") == "LOBBY 0 playing 2/8 Ana,Bia");
     }
 
     TEST(lobby_refuses_other_protocols_builds_and_full_lobbies)
@@ -431,6 +454,43 @@ namespace
         CHECK(a.names() == std::vector<std::string>({"Ana", "Bia"}));
         exchange(a, b, 100);
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
+    }
+
+    // ate 8 jogadores (4 nos lugares de jogador do jogo e 4 em lugares de IA guiados pela rede): lobby, 30 Hz e entradas de todos
+    TEST(match_with_eight_players_shares_every_input)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        const std::vector<std::string> names = {"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"};
+        auto ms = formMatch(cfg.port, names, {3, 1, 2, 5, 4, 7, 8, 9});
+        CHECK(ms[7]->match.count("players") && ms[7]->match.at("players") == "8" && ms[7]->match.at("step") == "2");
+        if (!ms[7]->match.count("you"))
+            return;   // o oitavo nao entrou na partida: o resto nao tem como rodar
+        CHECK(ms[7]->match.at("you") == "7");
+        std::vector<std::unique_ptr<MatchClient>> cs;
+        std::string err;
+        for (auto &m : ms)
+        {
+            cs.push_back(std::make_unique<MatchClient>());
+            CHECK(cs.back()->start(clientFor(cfg.port, *m), err));
+        }
+        bool started = true;
+        for (auto &c : cs)
+            started = started && c->waitStarted(5000);
+        CHECK(started);
+        const uint32_t d = cs[0]->delay();
+        for (uint32_t f = 0; f < 60; ++f)
+            for (int p = 0; p < 8; ++p)
+                cs[static_cast<size_t>(p)]->pushLocal(f + d, pressed(static_cast<uint16_t>((p << 8) | f)));
+        bool all = true, same = true;
+        for (auto &c : cs)
+            all = all && c->waitFrame(d + 59, 5000);
+        CHECK(all);
+        for (uint32_t f = d; f < d + 60; ++f)
+            for (int p = 0; p < 8; ++p)
+                for (auto &c : cs)
+                    same = same && c->input(p, f) == pressed(static_cast<uint16_t>((p << 8) | (f - d)));
+        CHECK(same);
     }
 
     TEST(match_survives_lost_input_packets)
@@ -513,10 +573,19 @@ namespace
 
 int main()
 {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // cada linha sai na hora: um teste travado mostra onde parou
     for (const Test &t : tests())
     {
         const int before = g_failures;
-        t.run();
+        try
+        {
+            t.run();
+        }
+        catch (const std::exception &e)   // uma excecao e falha do teste, nunca um abort (que deixa o processo preso no relatorio de erro)
+        {
+            ++g_failures;
+            std::printf("  EXCECAO %s\n", e.what());
+        }
         std::printf("%s %s\n", g_failures == before ? "ok     " : "FALHOU ", t.name);
     }
     std::printf("%d checagens, %d falha(s)\n", g_checks, g_failures);

@@ -83,6 +83,8 @@ namespace wotm_net
 
     void Server::poll(int ms)
     {
+        if (!host_)   // start falhou ou nao foi chamado
+            return;
         acceptAndReadLobby();
         serviceEnet(ms);
         tickMatches();

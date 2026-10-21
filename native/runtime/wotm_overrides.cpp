@@ -220,7 +220,10 @@ namespace
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
     // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4:
     // os jogadores 3 e 4 (wotm_multi.inc); o shell so tem figurino para 2 jogadores, os deles ficam em g_matchCostume.
+    // WOTM_PLAYERS=5..8: os jogadores 1..4 nos lugares de jogador e os 5..8 nas primeiras IAs (m_monsters[4..7]), que leem os controles
+    // 4..7 no lugar da IA (g_padAIs; wotm_multi.inc, aiUpdateInputsFromPad).
     int g_matchPlayers = 1;
+    int g_padAIs = 0;
     uint32_t g_matchCostume[4] = {};
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
@@ -2110,9 +2113,12 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 break;
             }
         }
-        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 4)
-            g_matchPlayers = std::atoi(pl);
-        if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
+        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 8)
+        {
+            g_matchPlayers = std::min(std::atoi(pl), 4);
+            g_padAIs = std::atoi(pl) - g_matchPlayers;
+        }
+        if (p && *p == '\0' && n >= 1 + g_matchPlayers + g_padAIs)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
             for (int i = 0; i < n - 1; ++i)
@@ -2125,8 +2131,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             runtime.registerFunction(kUiMain, &uiMainSkipped);
             if ((g_origEvaluate = runtime.lookupFunction(kEvaluateGameStatus)))
                 runtime.registerFunction(kEvaluateGameStatus, &evaluateGameStatusLogged);
-            std::fprintf(stderr, "[wotm] partida direta: %d jogador(es), monstro %d, %d IA(s), fase %d (WOTM_MATCH)\n", g_matchPlayers,
-                         g_matchMonsters[0], g_matchAIs, g_matchLevel);
+            std::fprintf(stderr, "[wotm] partida direta: %d jogador(es), monstro %d, %d IA(s) (%d no controle de jogadores), fase %d (WOTM_MATCH)\n",
+                         g_matchPlayers + g_padAIs, g_matchMonsters[0], g_matchAIs, g_padAIs, g_matchLevel);
         }
         else
             std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[,<IA>...ate 7],<fase>)\n", e);
