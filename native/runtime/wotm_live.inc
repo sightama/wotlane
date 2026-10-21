@@ -771,15 +771,18 @@ bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd,
     return true;
 }
 static int g_barView = 0;   // vista da barra em montagem (wotmHealthIconShift)
+// Teto de retangulos de barra por quadro: ~25 por inimigo (moldura, celulas, retrato, faixas) e ate 3 inimigos por vista; com as 4
+// vistas dos quadrantes os 512 de antes acabavam antes da vista 3, que ficava sem barras
+constexpr size_t kMaxPendingBars = 2048;
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
-    if (wotm_live::g_pendingBars.size() < 512)
+    if (wotm_live::g_pendingBars.size() < kMaxPendingBars)
         wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a, false, static_cast<int8_t>(g_barView)});
 }
 // Retangulo com textura residente do .RTX (retrato do inimigo): tex0 da imagem e o trecho (u0, v0)-(u1, v1) em texels
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1)
 {
-    if (wotm_live::g_pendingBars.size() < 512)
+    if (wotm_live::g_pendingBars.size() < kMaxPendingBars)
     {
         wotm::ScreenRect s{x0, y0, x1, y1, 255, 255, 255, 0x80, false, static_cast<int8_t>(g_barView)};   // tinta branca, opaco
         s.tex0 = tex0;

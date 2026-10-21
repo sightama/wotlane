@@ -1639,7 +1639,8 @@ namespace
     constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
     constexpr uint32_t kXform2d = wotm::fn::mathfTransform3dTo2d__FiP8_fvectorT1;
     PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr, g_origXform2dBars = nullptr;
-    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon
+    bool g_barsAlways = false;   // WOTM_ENEMYBARS ligada: barras em toda luta (sem ela, so no multijogador de 3 e 4)
+    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon (0 = barras desligadas: o icone do jogo fica)
     bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
     float g_barRawX = 0.f;       // x projetado da cabeca (pixels do GS), antes do limite do drawHealthIcon
     bool g_barRawOk = false;
@@ -1852,7 +1853,9 @@ namespace
     {
         if (ctx->pc == kDrawHealthIcon)
         {
-            g_barMonster = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+            // com WOTM_ENEMYBARS sempre; sem ela, so na luta de 3 ou 4 jogadores (tela em quadrantes, wotm_split4.inc)
+            const bool on = g_barsAlways || wotm_split4::splitPlayers(rdram);
+            g_barMonster = on ? GPR_U32(ctx, 5) & 0x1FFFFFFFu : 0u;
             g_barDone = false;
             g_barRawOk = false;
         }
@@ -1884,10 +1887,33 @@ namespace
         if (!g_barDone && wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)),
                                             static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7), box))
         {
-            // limite do x na largura widescreen da vista (e a vista dos retangulos); sem o x cru fica o do jogo
-            const float dx = wotmHealthIconShift(rdram, g_barRawOk ? g_barRawX : std::nanf(""));
+            // limite do x na largura widescreen da vista (e a vista dos retangulos); sem o x cru fica o do jogo. Nos quadrantes o x cru
+            // vem fora da vista (abaixo) e o deslocamento saia errado: fica so a vista dos retangulos (o desenho nativo poe a coluna)
+            const float shift = wotmHealthIconShift(rdram, g_barRawOk ? g_barRawX : std::nanf(""));
+            const float dx = wotm_split4::splitPlayers(rdram) ? 0.f : shift;
             box[0] += dx;
             box[2] += dx;
+            // tela em quadrantes: nas vistas de baixo o y do icone vem com o deslocamento do quadrante duas vezes (como o x da vista 1, que
+            // o desenho nativo compensa), abaixo da tela (~228 de 224): volta a altura do quadrante. Depois o bloco (~4,2 linhas para
+            // cada lado do centro) fica dentro da faixa da vista (viewDef: y +0xE, altura +6), como o icone do jogo na borda
+            if (wotm_split4::splitPlayers(rdram))
+            {
+                const uint32_t view = std::min<uint32_t>(FAST_READ32(wotm::sym::viewCurView), 3u);
+                const uint32_t def = FAST_READ32(wotm::sym::viewInfo + 0x14u * view + 4u) & 0x1FFFFFFFu;
+                if (ramOk(def, 0x10u))
+                {
+                    constexpr float kHalf = 5.f;
+                    const float y0 = FAST_READ16(def + 0xE), y1 = y0 + FAST_READ16(def + 6);
+                    const float cy = 0.5f * (box[1] + box[3]) - y0;   // y0 = 0 em cima, a altura do quadrante embaixo
+                    const float dy = std::clamp(cy, y0 + kHalf, y1 - kHalf) - 0.5f * (box[1] + box[3]);
+                    box[1] += dy;
+                    box[3] += dy;
+                    // o x da coluna da direita vem com os 320 da coluna duas vezes tambem (~805): volta a coluna (x da vista, +0xC)
+                    const float x0 = FAST_READ16(def + 0xC);
+                    box[0] -= x0;
+                    box[2] -= x0;
+                }
+            }
             emitBars(rdram, g_barMonster, box);
         }
         g_barDone = true;
@@ -2241,16 +2267,19 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         else
             std::fprintf(stderr, "[wotm] numeros de dano indisponiveis: Monster::update ou Monster::takeHit sem funcao no runtime\n");
     }
-    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon
-    if (const char *e = std::getenv("WOTM_ENEMYBARS"); e && *e && std::strcmp(e, "0") != 0)
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon. Ganchos
+    // sempre instalados: sem a variavel, as barras valem so na luta de 3 ou 4 jogadores (o HUD do multijogador)
     {
+        const char *e = std::getenv("WOTM_ENEMYBARS");
+        g_barsAlways = e && *e && std::strcmp(e, "0") != 0;
         if ((g_origDrawHealthIcon = runtime.lookupFunction(kDrawHealthIcon)) && (g_origAddPolyBars = runtime.lookupFunction(kAddPoly)))
         {
             runtime.registerFunction(kDrawHealthIcon, &drawHealthIconBars);
             runtime.registerFunction(kAddPoly, &addPolyBars);
             if ((g_origXform2dBars = runtime.lookupFunction(kXform2d)))
                 runtime.registerFunction(kXform2d, &xform2dBars);
-            std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
+            if (g_barsAlways)
+                std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
         }
         else
             std::fprintf(stderr, "[wotm] barras sobre os inimigos indisponiveis: Hud::drawHealthIcon ou ScreenPolys::addPoly sem funcao no runtime\n");
