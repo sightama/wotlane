@@ -25,12 +25,12 @@
 
 namespace wotm::savepics {
 
-enum Kind : uint8_t { kLevel = 0, kLogo = 1 };
+enum Kind : uint8_t { kLevel = 0, kLogo = 1, kMonster = 2 };
 
 // Em coordenadas da tela do jogo (640 x 224, a faixa 4:3 da janela)
 struct Pic {
     Kind kind;
-    uint32_t id;   // fase (kLevels do wotm_save.inc) ou monstro (sel >> 5)
+    uint32_t id;   // fase (kLevels do wotm_save.inc), monstro (sel >> 5) ou, em kMonster, monstro | traje << 8
     float x0, y0, x1, y1;
     uint8_t a;     // 255 = opaco
 };
@@ -84,6 +84,11 @@ inline bool hasLogo(uint32_t monster) {
         if (p.monster == monster) return true;
     return false;
 }
+// Monstro (indice de kMonsters) -> prefixo do arquivo em MON/ (MONKEY0.NGP...: o numero e o traje, Shell::m_costume)
+inline const char *monsterFile(uint32_t monster) {
+    static const char *const k[] = {nullptr, "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", nullptr, "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN"};
+    return monster < std::size(k) ? k[monster] : nullptr;
+}
 
 // ---- fila do modal (thread do EE) para a janela ----
 struct Channel {
@@ -111,30 +116,17 @@ inline void clear() {
 
 #ifndef WOTM_SAVEPICS_NO_DRAW
 #include "wotm_disc.hpp"
+#include "wotm_model.hpp"   // monstro 3D (kMonster)
 #include "raylib.h"
+#include <map>
+#include <memory>
 
 namespace wotm::savepics {
 
 // ---- leitura do disco (thread da janela) ----
 namespace detail {
 // .TEX/.RTX num zip de um arquivo so com o magic "IE\3\4" (zipInflateAll)
-inline bool unzipIe(std::vector<uint8_t> &d) {
-    static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
-    if (d.size() < 30 || std::memcmp(d.data(), kMagic, 4) != 0) return d.size() >= 16;
-    uint32_t csize = 0;
-    uint16_t nlen = 0, xlen = 0;
-    std::memcpy(&csize, d.data() + 18, 4);
-    std::memcpy(&nlen, d.data() + 26, 2);
-    std::memcpy(&xlen, d.data() + 28, 2);
-    const size_t off = 30 + nlen + xlen;
-    if (off + csize > d.size()) return false;
-    int outSize = 0;
-    unsigned char *u = DecompressData(d.data() + off, int(csize), &outSize);
-    if (!u || outSize <= 0) return false;
-    d.assign(u, u + outSize);
-    MemFree(u);
-    return true;
-}
+inline bool unzipIe(std::vector<uint8_t> &d) { return model::unzipIe(d); }
 struct Packet {
     size_t off;
     uint16_t texId, tbp;
@@ -166,6 +158,63 @@ inline std::vector<Packet> packets(const std::vector<uint8_t> &d) {
 
 class Drawer {
 public:
+    // Thread da janela, FORA do BeginTextureMode do quadro (antes dele): desenha o monstro 3D da lista (kMonster) no RenderTexture
+    // dele, animado no idle desde que a linha foi escolhida. Mesmos argumentos do draw.
+    void prepare(const std::filesystem::path &discRoot, const std::string &iso, float w, float rh) {
+        const Pic *mp = nullptr, *lp = nullptr;
+        Pic pic{}, lev{};
+        {
+            Channel &c = channel();
+            std::lock_guard<std::mutex> lk(c.m);
+            if (!c.pics.empty() && std::chrono::steady_clock::now() - c.at <= std::chrono::milliseconds(250))
+                for (const Pic &p : c.pics) {
+                    if (p.kind == kMonster) { pic = p; mp = &pic; }
+                    if (p.kind == kLevel) { lev = p; lp = &lev; }
+                }
+        }
+        monReady_ = false;
+        if (!mp) return;
+        if (!model_ || monId_ != pic.id) {
+            monId_ = pic.id;
+            monT0_ = GetTime();
+            model_.reset();
+            const char *pre = monsterFile(pic.id & 0xFF);
+            const uint32_t costume = (pic.id >> 8) & 3;
+            if (pre) {
+                auto m = std::make_unique<model::Model>();
+                if (m->load(discRoot, iso, pre + std::to_string(costume)) || m->load(discRoot, iso, std::string(pre) + "0"))
+                    model_ = std::move(m), model_->computeFraming(model::kIdle);   // caixa fixa: a camera nao acompanha o idle
+                else
+                    std::fprintf(stderr, "[wotm] lista de saves: MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, costume);
+            }
+        }
+        if (!model_) return;
+        const float frame = float((GetTime() - monT0_) * 60.0);
+        if (!model_->pose(model::kIdle, frame)) model_->pose(-1, 0.f);
+        // 2x o tamanho na janela (o DrawTexturePro reduz com filtro bilinear: bordas suaves)
+        const float sx = w / 640.f, sy = rh / 224.f;
+        const int W = std::clamp(int((pic.x1 - pic.x0) * sx * 2.f), 16, 1536), H = std::clamp(int((pic.y1 - pic.y0) * sy * 2.f), 16, 1536);
+        // Fundo: o pedaco da foto da fase sob a caixa do monstro, opaco (o fade vem do tom no draw), para as misturas do GS que agem
+        // sobre o destino (escurecer, subtrair) terem o que escurecer. Fora da foto o fundo fica transparente.
+        const Texture2D *lt = nullptr;
+        if (lp && load(discRoot, iso))
+            for (size_t i = 0; i < std::size(kLevelPics); ++i)
+                if (kLevelPics[i].level == lp->id && level_[i].id) lt = &level_[i];
+        const float kx = float(W) / (pic.x1 - pic.x0), ky = float(H) / (pic.y1 - pic.y0);
+        if (!fxTried_) {   // fogo do Agamo e lens flare: texturas de particula da fase (LVL/CENTRAL), uma vez
+            fxTried_ = true;
+            if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] lista de saves: LVL/CENTRAL.TEX/.RTX nao achado; sem fogo nem lens flare\n");
+            renderer_.setFx(&fx_);
+        }
+        renderer_.render(*model_, W, H, kYaw, kPitch, zoomOf(monId_ & 0xFF), [&] {
+            if (!lt) return;
+            DrawTexturePro(*lt, Rectangle{0.f, 0.f, float(lt->width), float(lt->height)},
+                           Rectangle{(lev.x0 - pic.x0) * kx, (lev.y0 - pic.y0) * ky, (lev.x1 - lev.x0) * kx, (lev.y1 - lev.y0) * ky},
+                           Vector2{0.f, 0.f}, 0.f, WHITE);
+        });
+        monReady_ = true;
+    }
+
     // Thread da janela, dentro do BeginTextureMode do quadro nativo. `x0`/`w`: a faixa 4:3 da tela do jogo em pixels (gsScreenRect);
     // `rh`: altura do quadro.
     void draw(const std::filesystem::path &discRoot, const std::string &iso, float x0, float w, float rh) {
@@ -180,6 +229,17 @@ public:
         const float sx = w / 640.f, sy = rh / 224.f;
         for (const Pic &p : pics) {
             const Texture2D *t = nullptr;
+            if (p.kind == kMonster) {
+                if (!monReady_) continue;
+                // cor pre-multiplicada (Renderer): o fade escala cor e alfa juntos
+                const Texture2D &mt = renderer_.target().texture;
+                BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
+                DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)},
+                               Rectangle{x0 + p.x0 * sx, p.y0 * sy, (p.x1 - p.x0) * sx, (p.y1 - p.y0) * sy}, Vector2{0.f, 0.f}, 0.f,
+                               Color{p.a, p.a, p.a, p.a});
+                EndBlendMode();
+                continue;
+            }
             if (p.kind == kLevel) {
                 for (size_t i = 0; i < std::size(kLevelPics); ++i)
                     if (kLevelPics[i].level == p.id) t = &level_[i];
@@ -256,6 +316,18 @@ private:
     std::vector<detail::Packet> texPk_, rtxPk_;
     Texture2D level_[std::size(kLevelPics)]{}, logo_[std::size(kLogoPics)]{};
     bool tried_ = false, ok_ = false;
+    // Monstro 3D: virado 3/4 para a direita da tela (yaw 0 = de frente), camera um pouco acima
+    static constexpr float kYaw = 35.f, kPitch = 8.f;
+    // Aproximacao por monstro: o enquadramento usa a maior medida da caixa, e a cauda do Togera (3) e as asas do Raptros (9) deixavam
+    // os dois mais longe que os outros
+    static float zoomOf(uint32_t mon) { return mon == 3 ? 1.35f : mon == 9 ? 1.6f : 1.f; }
+    std::unique_ptr<model::Model> model_;
+    model::Renderer renderer_;
+    model::FxTextures fx_;
+    bool fxTried_ = false;
+    uint32_t monId_ = ~0u;
+    double monT0_ = 0.0;
+    bool monReady_ = false;
 };
 
 inline Drawer &drawer() {

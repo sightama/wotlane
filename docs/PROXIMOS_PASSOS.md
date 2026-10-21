@@ -46,3 +46,4 @@ camada legível que substitui, por *hook*, só as funções que importam para mo
 - [FRONTEIRA.md](passos/FRONTEIRA.md): fronteira de hardware: o que do PS2 o port ainda usa por quadro (desenho, VU0, IOP, relógio, SDK), como o runtime atende cada parte e a ordem para tirar o código de emulador do executável (`tools/hw_frame.py` mede).
 - [POS_FRONTEIRA.md](passos/POS_FRONTEIRA.md): prioridades depois da fronteira de hardware (RAM, HUD, save em JSON, câmera, mods, chefes, multiplayer até 4), com o que já se sabe de cada item.
 - [VIEWER_WEB.md](passos/VIEWER_WEB.md): ideia de visualizador de modelos 3D no navegador (2026-10-14).
+- [MODELOS_3D.md](passos/MODELOS_3D.md): monstro animado direto do disco (curvas, esqueleto, paleta, texturas), `wotm_model.hpp`, `monview`, `tools/pose.py`.

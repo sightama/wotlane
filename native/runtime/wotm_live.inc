@@ -1452,6 +1452,11 @@ static bool wotmDrawNative(const uint8_t *rdram)
             drawView(S.vrts[0], gc);
         // textura da escolha de lados (fora do BeginTextureMode do quadro); a fonte e o atlas do texto do quadro anterior
         wotm_padsel::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
+        {   // monstro 3D da lista de saves (wotm_savepics.hpp): no RenderTexture dele, antes do quadro; o draw abaixo o cola
+            static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+            const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
+            wotm::savepics::drawer().prepare(io.cdRoot, io.cdImage.string(), gr.w, static_cast<float>(RH));
+        }
         BeginTextureMode(rt);
         ClearBackground(BLACK);
         rlSetClipPlanes(0.5, 30000.0);
