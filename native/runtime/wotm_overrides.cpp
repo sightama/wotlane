@@ -83,6 +83,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_save.inc"
 // "Press start" do menu principal: X vale como Start e o botao vale ja durante a transicao.
 #include "wotm_menu.inc"
+// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
+#include "wotm_split4.inc"
 
 namespace
 {
@@ -193,7 +195,8 @@ namespace
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
-    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA.
+    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4: os
+    // tres ou quatro primeiros, com a tela em quadrantes (wotm_split4.inc).
     int g_matchPlayers = 1;
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
@@ -213,7 +216,10 @@ namespace
             const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
-            WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
+            if (player && i >= 2)   // jogadores 3 e 4: m_costume[2..] e das IAs (wotm_split4.inc os carrega pelo caminho delas)
+                wotm_split4::g_extraCostume[i - 2] = costume & 3u;
+            else
+                WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
         }
         WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
@@ -227,8 +233,8 @@ namespace
         WRITE32(kShell + 0x2C10, mode);
         WRITE32(kGame + 0x1203C8, mode);                                  // TheGame::m_gameMode
         std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s)", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
-        if (g_matchPlayers > 1)
-            std::fprintf(stderr, " e %d (jogador 2)", g_matchMonsters[1]);
+        for (int i = 1; i < g_matchPlayers; ++i)
+            std::fprintf(stderr, " e %d (jogador %d)", g_matchMonsters[i], i + 1);
         std::fprintf(stderr, " %s", g_matchAIs ? "contra" : (g_matchPlayers > 1 ? "sem IA" : "sozinho"));
         for (int i = g_matchPlayers; i < g_matchPlayers + g_matchAIs; ++i)
             std::fprintf(stderr, " %d", g_matchMonsters[i]);
@@ -244,9 +250,10 @@ namespace
         if (ctx->pc == kEvaluateGameStatus)
         {
             std::fprintf(stderr, "[partida] rodada %u terminou (rtMain devolveu %d):", ++g_rounds, static_cast<int32_t>(GPR_U32(ctx, 5)));
-            for (uint32_t k = 0; k <= static_cast<uint32_t>(kMatchMaxAIs); ++k)   // m_monsters[0] (jogador) e m_monsters[4..] (IAs)
+            for (uint32_t slot = 0; slot < 4u + static_cast<uint32_t>(kMatchMaxAIs); ++slot)   // m_monsters[0..] (jogadores) e [4..] (IAs)
             {
-                const uint32_t slot = k ? 3u + k : 0u;
+                if (slot < 4u && slot >= static_cast<uint32_t>(std::max(g_matchPlayers, 1)))
+                    continue;
                 const uint32_t m = READ32(kGame + 0x120380 + 4 * slot);
                 if (!m)
                     continue;
@@ -590,7 +597,7 @@ namespace
     // os ciclos virtuais do EE gastos (em fields: total, saltados no ocio e os 3 pcs de checkpoint que mais gastaram) e o
     // tempo real (total, ocioso esperando evento e esperando o relogio de parede para soltar um prazo).
     bool g_fieldLog = false;
-    double g_hierMs[2] = {}, g_captureMs[2] = {};   // por vista: hier (os dois passos) e captura nativa; ver hierTapped
+    double g_hierMs[4] = {}, g_captureMs[4] = {};   // por vista: hier (os dois passos) e captura nativa; ver hierTapped
     unsigned g_hierViews = 0;                        // bits: vistas com hier(v, 0) no quadro
     // Chamadas a sceGsSyncV no quadro (cada uma espera 1 vsync) e o $ra das 4 primeiras: mostra quem gasta os fields.
     constexpr uint32_t kSceGsSyncV = wotm::fn::sceGsSyncV;
@@ -684,10 +691,16 @@ namespace
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
             std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
-        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f\n", (g_hierViews & 1u) + ((g_hierViews >> 1) & 1u), g_hierMs[0], g_hierMs[1],
-                     g_captureMs[0], g_captureMs[1]);
+        unsigned views = 0;
+        for (unsigned v = 0; v < 4; ++v)
+            views += (g_hierViews >> v) & 1u;
+        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f", views, g_hierMs[0], g_hierMs[1], g_captureMs[0], g_captureMs[1]);
+        if (g_hierViews & 0xCu)   // 3 e 4 jogadores (wotm_split4.inc): vistas 2 e 3
+            std::fprintf(stderr, " hier23=%.2f/%.2f cap23=%.2f/%.2f", g_hierMs[2], g_hierMs[3], g_captureMs[2], g_captureMs[3]);
+        std::fprintf(stderr, "\n");
         g_hierViews = 0;
-        g_hierMs[0] = g_hierMs[1] = g_captureMs[0] = g_captureMs[1] = 0.0;
+        for (int v = 0; v < 4; ++v)
+            g_hierMs[v] = g_captureMs[v] = 0.0;
         // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
         if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
         {
@@ -973,11 +986,15 @@ namespace
     // Custo por vista para o [field] (WOTM_FIELDLOG): tempo de host dentro do hier(v, passo) por vista, nos dois passos, e da captura
     // nativa (wotmCaptureScene) na saida do hier(v, 0). So conta as chamadas que voltam pelo envoltorio (uma que bloqueia e e
     // retomada no meio nao passa por aqui).
+    // Vistas 2 e 3 (3 e 4 jogadores, wotm_split4.inc): o rtMain nao roda update entre o hier(v, 0) e o hier(v, 1) delas, entao a
+    // reserva da captura e a entrada do hier(v, 1).
     void hierTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const bool entry = ctx->pc == kHier;
         const uint32_t view = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
-        if (entry && view < 2u && GPR_U32(ctx, 5) == 0u)
+        if (entry && GPR_U32(ctx, 5) != 0u && g_hierSceneRa && g_hierSceneView >= 2)
+            hierSceneExit(rdram);
+        if (entry && view < 4u && GPR_U32(ctx, 5) == 0u)
         {
             if (g_hierSceneRa)   // a saida do anterior escapou sem reserva: captura antes de comecar este
                 hierSceneExit(rdram);
@@ -988,13 +1005,13 @@ namespace
         const auto t0 = std::chrono::steady_clock::now();
         g_origHier(rdram, ctx, runtime);
         const auto t1 = std::chrono::steady_clock::now();
-        if (entry && view < 2u && ctx->pc == ra)
+        if (entry && view < 4u && ctx->pc == ra)
             g_hierMs[view] += std::chrono::duration<double, std::milli>(t1 - t0).count();
         if (g_hierSceneRa && ctx->pc == g_hierSceneRa)
         {
             const int v = g_hierSceneView;
             hierSceneExit(rdram);
-            if (v >= 0 && v < 2)
+            if (v >= 0 && v < 4)
                 g_captureMs[v] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
         }
     }
@@ -1185,7 +1202,7 @@ namespace
         bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
         uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
     } g_lockToggle[4];
-    uint8_t g_padDir[2] = {};    // por porta: bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
+    uint8_t g_padDir[4] = {};    // por controle (porta + 2 * slot, o do jogador): bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
 
     bool ramOk(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
     uint16_t rd16(uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + a, 2); return v; }
@@ -1365,7 +1382,7 @@ namespace
         b[kPadR1] = saved[kPadR2];
         b[kPadR2] = saved[kPadL1] ? 0xFF : 0;     // defesa: L1
         b[kPadL2] = 0;
-        const uint8_t dirs = slot < 2 ? g_padDir[slot] : 0;
+        const uint8_t dirs = slot < 4 ? g_padDir[slot] : 0;
         for (int i = 0; i < 2; ++i)
         {
             const bool held = (dirs >> i) & 1u;
@@ -1457,12 +1474,12 @@ namespace
 
     void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t port = GPR_U32(ctx, 4), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
+        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
         g_origPadReadLock(rdram, ctx, runtime);
-        if (port < 2 && GPR_U32(ctx, 2) != 0u && ramOk(data, 32u))
+        if (port < 2 && slot < 2 && GPR_U32(ctx, 2) != 0u && ramOk(data, 32u))
         {
             const uint8_t btn = static_cast<uint8_t>(~rdram[data + 2]);   // ativos em 0: 0x80 esquerda, 0x20 direita
-            g_padDir[port] = static_cast<uint8_t>(((btn >> 7) & 1u) | (((btn >> 5) & 1u) << 1));
+            g_padDir[port + 2 * slot] = static_cast<uint8_t>(((btn >> 7) & 1u) | (((btn >> 5) & 1u) << 1));
         }
     }
 
@@ -2004,6 +2021,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             std::fprintf(stderr, "[wotm] monstros carregados embaixo de 32 MB, como no PS2 (WOTM_HIGHRAM=0)\n");
     }
     wotm_save::install(runtime);
+    wotm_split4::install(runtime);   // antes dos ganchos do scePadRead (camera livre, lock-on): eles embrulham o dela
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
@@ -2036,8 +2054,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 break;
             }
         }
-        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) == 2)
-            g_matchPlayers = 2;
+        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 4)
+            g_matchPlayers = std::atoi(pl);   // 3 e 4: tela em quadrantes (wotm_split4.inc)
         if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;

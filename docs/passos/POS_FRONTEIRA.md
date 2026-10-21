@@ -270,6 +270,66 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - Atenção: em `LoadMonstersDB` os jogadores 3/4 montam o caminho com o monstro do jogador 2 (peculiaridade do retail,
   `16_monstros.md`); o gancho novo não pode herdar isso.
 
+**Tela dividida de 3 e 4 feita em 2026-10-20** (`native/runtime/wotm_split4.inc`; ligada por `WOTM_PLAYERS=3` ou `4` com
+`WOTM_MATCH`, `NATIVO.md`). Conferido no `ps2EntryRunner` com IA em todos (`WOTM_AIVSAI=1`): 4 jogadores no Centro
+(`WOTM_MATCH=3,1,2,5,1`) por 145 s, com 3 rodadas, mortes e renascimentos, as 4 câmeras nos seus monstros (nenhum quadro na origem
+em 3634) e os 4 HUDs com retrato, vida, "WINS" e mensagens no quadrante certo; 3 jogadores e 1 IA (`3,1,2,7,1`) por 95 s; 2
+jogadores sem mudança. Com controles de verdade nos jogadores 3 e 4 ainda não. O teste achou e corrigiu, além do que segue:
+o `Hud::initAfter`/`update` sair com índice ≥ 2 (sem HUD nas vistas de baixo), o fim de rodada do modo 3 em laço (com 3 ou 4 vivos
+ninguém renascia) e as câmeras 2 e 3 indo à origem no POV 3. Na luta de 4 o vigia acusa trechos de ~24 quadros/s do jogo (o custo
+de 4 vistas, abaixo). O que o motor já tinha: `viewInfo`, `worldCtx`, `viewDb`, os pontos de visada e
+a `viewPrevMat` das partículas com 5 vistas, 4 câmeras, 4 HUDs, `m_monsters[0..3]` para jogadores, e o `inputInit` abre 2 portas × 4
+slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não mexe com 3 ou mais vistas. Os ganchos:
+- **Vistas:** na saída do `gameReestablishViews` (modos 3, 6, 7) as vistas 0 a 3 viram quadrantes de 320 × 112 (coluna `v & 1`, linha
+  `v >> 1`; com 3 o de baixo à direita fica preto). Os 4 `ViewDef` moram no fim da RAM de cima (o retail só tem 8, nenhum em
+  quadrante), com a distância de tela da tela cheia pela metade (mesmo FOV dos 640 × 224); `viewSetFov` refaz planos e matrizes.
+  `viewInfo[v].viewport` fica 1/2 (as câmeras usam a tabela de POV da tela dividida). `m_numCameras` = jogadores. O
+  `viewGrappleConfig` devolvia a vista 0 ao `viewDef` da metade: o gancho reaplica o quadrante.
+- **Sem vista unificada:** a câmera 2 (a unificada do retail) é a do jogador 3. O `SetOkToUnify` de cada quadro zera o `m_camUnify`
+  (o `InitCCCamera*` volta sem unificar). A pose de vitória ainda unifica (tela cheia na câmera 2); quando a tela volta a dividir, as
+  câmeras 2 e 3 voltam aos jogadores 3 e 4. O `ResetLevel` não troca mais o POV da câmera 2.
+- **Câmera 3 com 4 jogadores:** o `SetAIMonster` punha toda IA na câmera 3 (`gameInitCamera(3, ia)`); aqui a IA só recebe
+  `m_cameraView` 3. Sobra: estados que chamam `SetCameraPOV(m_cameraView)` sem olhar se é humano (fim do arremesso,
+  `StateThrowBack`) mexem no POV da câmera do jogador 4 quando é uma IA.
+- **Carga:** do `LoadLevelFiles` à entrada do `InitPlayers` os jogadores 3 e 4 passam pelo caminho das IAs (`m_monsterSel[4..]`,
+  `m_costume[2..]`, mesmo arquivo do disco) e depois voltam a jogadores; o `SetPlayerMonster` recebe o traje deles no lugar do
+  `m_costume[1]`. Os jogadores 3 e 4 tiram a configuração de controle do `m_vibration[0..1]` (o `Monster::playerInit` lê
+  `m_ctlrCfg[m_index]`, que só tem 2).
+- **HUD:** o `Hud::initAfter` e o `Hud::update` saem logo com índice ≥ 2. O HUD 2/3 vira uma cópia do HUD da mesma coluna
+  (`i & 1`) e roda o update como ele, com o `m_viewSlot`, o `_cs` da câmera e a barra trocados pelos da própria vista durante a
+  chamada; os dois dividem o `_cs` e as animações da barra, que cada vista refaz logo antes do seu `hier`. Com `m_numMonsters` ≠ 2 a
+  barra fica na posição da tela cheia, que é a forma do quadrante. O texto do HUD é posto como numa vista de 224 linhas a partir do
+  topo do quadrante: no nativo, o que cai na metade de baixo (o "WINS") sobe 112 (só quando mais de uma vista manda texto; o
+  diálogo de pausa fica como está).
+- **Fim de rodada (modo 3):** o `EvaluateMultiPlayerBattleStatusNoAI` só trata 1 ou 0 vivos e o `...AI` renasce os slots 0/1 como
+  jogador e o resto como IA. Com os quadrantes os dois viram: meta de vitórias como no `...AI`, senão cada morto de `m_monsters`
+  renasce pelo `playerInit` (jogadores) ou `aiInit` (IAs).
+- **POV 3 das câmeras 2 e 3:** o POV 3 é a câmera estacionada em `+0xD20` (`DetachCamera`, `TogglePOV`); as câmeras 2/3 nunca
+  tinham essa posição e iam para a origem. Ao entrar no POV 3 ela estaciona onde está; a câmera 2 sai do POV 3 inicial (repouso da
+  unificada) para o 0.
+- **Cinema (apresentação dos monstros antes da luta):** com 2 jogadores o `doCinema` junta a tela (`viewToggleSplitScreen`); com 3
+  ou mais vistas o toggle não faz nada e só a vista 0 seguia o cinema, no quadrante dela. No começo de cada quadro, cinema ligado põe
+  a tela numa vista só (`viewNumViews` 1, vista 0 com o `viewDef[0]`, 640 × 224) e cinema desligado volta aos quadrantes, como o 2
+  jogadores do retail (conferido: apresentação em tela cheia, depois os 4 quadrantes). Na volta todas as vistas são refeitas: o
+  `endCinema` chama o toggle, que com 1 vista recria as vistas 0 e 1 como metades (a vista 1 ficava 320 × 224, com HUD e texto fora
+  do quadrante).
+- **Largada:** no `gameGetStartPoint` (modos 2 a 6) o primeiro nascimento de humano usa a lista 1 do `StartPoints` e o de IA a
+  lista 2, em rodízio; os renascimentos, a lista 3. A lista 1 só tem os pontos dos 2 jogadores do retail (Centro: 2; as listas 2 e
+  3 têm 4, um em cada canto), e os jogadores 2, 3 e 4 nasciam no mesmo ponto. O jogador além dos pontos da lista 1 nasce como IA
+  (`m_playerNum` 2 durante a chamada), na lista 2 (conferido no Centro: 3 e 4 em dois cantos do mapa).
+- **Motion blur:** o `MotionBlurAA::init` monta um pacote de 0x100 bytes por vista num bloco do bss onde só cabem 2 (a 3ª passaria
+  do fim); o init fica com 2 vistas e o `drawOverlay` das vistas 2 e 3 não manda nada (o nativo não desenha o borrão).
+- **Controles:** o stub do runtime só tem o slot 0; as `scePad*` com slot 1 são respondidas como o slot 0 da porta, e o `scePadRead` do
+  slot 1 lê os dispositivos do jogador porta + 3 (`wotm_pad.inc`): terceiro e quarto controle do raylib (`PS2_PAD_MAX_GAMEPADS` = 4).
+- **Nativo:** `Snapshot::views[3]` no lugar do `view1`; captura das vistas 2 e 3 na saída do `hier(v, 0)` (reserva: entrada do
+  `hier(v, 1)`); texturas de quadrante compostas com as faixas pretas em cruz; FOV vertical pela altura da vista (só nos `ViewDef`
+  acima de 32 MB); texto, barras sobre os inimigos, flares (`lensFlarePacket[v & 1]`, uma cópia por vista) e a matriz anterior das
+  partículas para 4 vistas.
+- **A conferir:** controles de verdade nos jogadores 3 e 4, custo (4 vistas: o redesenho estimado acima passa de 16,7 ms; o vigia
+  viu ~24 quadros/s do jogo em trechos), sons por jogador (`m_index` até 3), o `TokenManager m_tokens[2]` (só 2) e a pose de
+  vitória com meta de vitórias (não testada: o `WOTM_MATCH` não tem meta).
+- Falta: a escolha de lados com 4 colunas e o menu ("2 players" → "multiplayer").
+
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.
 - Base pronta (2026-10-21): `native/wotm_model.hpp` monta qualquer monstro/traje animado direto do disco, sem o Shell
