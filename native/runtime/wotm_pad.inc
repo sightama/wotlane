@@ -8,26 +8,49 @@
 //   com dois, sobra).
 //   Escolha de lados do 2 jogadores (wotm_padsel.inc): enquanto g_manual, a porta 0 e a 1 recebem so os dispositivos que os
 //   jogadores puseram de cada lado (g_manualDevs, mesmos bits do mapa); os que ficaram no meio nao jogam.
+//   Partida em rede (WOTM_NET): um jogador por PC; o controle 0 recebe o teclado e todos os controles.
+// Receptores de teclado e mouse que o raylib lista como controle (Keychron Link) ficam de fora da lista de controles.
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
 static std::atomic<uint32_t> g_manualDevs[2] = {0u, 0u};
+
+// Receptores de teclado e mouse sem fio que o raylib lista como controle (o Keychron Link aparece como controle 0): nao contam como
+// controle, senao tomariam o lugar do jogador 1
+static bool notAGamepad(int i)
+{
+    std::string name = GetGamepadName(i) ? GetGamepadName(i) : "";
+    for (char &ch : name)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return name.find("keychron") != std::string::npos || name.find("keyboard") != std::string::npos || name.find("mouse") != std::string::npos;
+}
 
 static uint32_t deviceMap(int port)
 {
     static const bool kbSeparate = [] { const char *e = std::getenv("WOTM_KBSEPARATE"); return e && e[0] == '1'; }();
     // WOTM_NOINPUT=1: nenhum dispositivo do host chega ao jogo (testes de determinismo; o roteiro PS2X_PAD continua valendo)
     static const bool noInput = [] { const char *e = std::getenv("WOTM_NOINPUT"); return e && e[0] == '1'; }();
+    // partida em rede (WOTM_NET): um jogador por PC, alimentado pelo teclado e por todos os controles (a rede leva o controle 1)
+    static const bool netplay = [] { const char *e = std::getenv("WOTM_NET"); return e && *e; }();
     if (noInput)
         return 0u;
     int pads[PS2_PAD_MAX_GAMEPADS];
     int n = 0;
     for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
-        if (IsGamepadAvailable(i))
+        if (IsGamepadAvailable(i) && !notAGamepad(i))
             pads[n++] = i;
 
     uint32_t devs = 0;
-    if (g_manual.load(std::memory_order_relaxed))
+    if (netplay)
+    {
+        if (port == 0)
+        {
+            devs = PS2_PAD_DEV_KEYBOARD;
+            for (int i = 0; i < n; ++i)
+                devs |= 1u << pads[i];
+        }
+    }
+    else if (g_manual.load(std::memory_order_relaxed))
         devs = port >= 0 && port < 2 ? g_manualDevs[port].load(std::memory_order_relaxed) : 0u;
     else
     {
