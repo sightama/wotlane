@@ -113,6 +113,10 @@ if ($rc -eq 0) {
     Draw 1.0 'pronto'
     [Console]::WriteLine()
     try { Set-Content -Path $timeFile -Value ([int][math]::Ceiling($secs)) -Encoding ascii } catch {}
+    # identidade do build para a partida em rede (wotm.buildid ao lado do exe; todos os PCs da partida precisam do mesmo)
+    $buildName = [IO.Path]::GetFileNameWithoutExtension($Bat)
+    $bid = & python (Join-Path $PSScriptRoot 'build_id.py') --runtime $Dir --build $buildName --write
+    if ($LASTEXITCODE -eq 0) { Write-Host "build $bid" } else { Write-Host 'build_id.py falhou: sem wotm.buildid (a partida em rede recusa)' -ForegroundColor Yellow }
 } else {
     Draw $frac 'FALHOU'
     [Console]::WriteLine()

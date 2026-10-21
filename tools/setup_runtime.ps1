@@ -1,11 +1,11 @@
 # ABOUTME: Monta tudo o que o port precisa a partir da sua ISO, num comando: disco extraido, PS2Recomp com os patches, jogo traduzido
 # ABOUTME: (recomp\retail), pasta do runtime (runtime\) com os scripts, e o primeiro build do wotm.exe. Pode rodar de novo: pula o que ja existe.
 #
-# Uso: powershell -ExecutionPolicy Bypass -File tools\setup_runtime.ps1 [-Iso <caminho da .iso>] [-SkipBuild]
+# Uso: powershell -ExecutionPolicy Bypass -File tools\setup_runtime.ps1 [-Iso <caminho da .iso>] [-SkipBuild] [-AnyCompiler]
 #   Sem -Iso usa a primeira .iso em ISO\. Precisa de: git, Python 3, CMake 3.24 ou mais novo e o Visual Studio 2022 (ou Build Tools)
 #   com o compilador C++ 14.40 ou mais novo (o 14.32 tem um erro interno com o codigo traduzido). Nada do jogo vai para o repo:
 #   disc\, recomp\ e runtime\ estao no .gitignore.
-param([string]$Iso = '', [switch]$SkipBuild)
+param([string]$Iso = '', [switch]$SkipBuild, [switch]$AnyCompiler)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $rt = Join-Path $repo 'runtime'
@@ -26,13 +26,24 @@ $cmake = @((Get-Command cmake -ErrorAction SilentlyContinue).Source, 'C:\Program
 if (-not $cmake) { Fail 'falta CMake 3.24 ou mais novo (winget install Kitware.CMake)' }
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (-not (Test-Path $vswhere)) { Fail 'falta o Visual Studio 2022 / Build Tools com C++ (winget install Microsoft.VisualStudio.2022.BuildTools)' }
-$vcvars = $null
+# Partida em rede: o jogo traduzido e compilado com /fp:fast, entao todos os PCs da partida precisam do mesmo compilador. O fixado e o
+# MSVC 14.44 (VS 2022 17.14); o tools\build_id.py poe a versao exata no wotm.buildid e o servidor recusa builds diferentes.
+# -AnyCompiler aceita outro 14.40+ (jogo offline; online so com quem tiver o mesmo).
+$pinnedMsvc = '14.44'
+$vcvars = $null; $vcvarsArgs = ''
 foreach ($vs in (& $vswhere -all -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)) {
-    $msvc = Get-ChildItem "$vs\VC\Tools\MSVC" -ErrorAction SilentlyContinue | Sort-Object { [version]$_.Name } | Select-Object -Last 1
-    if ($msvc -and [version]$msvc.Name -ge [version]'14.40' -and (Test-Path "$vs\VC\Auxiliary\Build\vcvars64.bat")) { $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"; break }
+    if (-not (Test-Path "$vs\VC\Auxiliary\Build\vcvars64.bat")) { continue }
+    $tools = @(Get-ChildItem "$vs\VC\Tools\MSVC" -ErrorAction SilentlyContinue | Sort-Object { [version]$_.Name })
+    if ($tools | Where-Object { $_.Name -like "$pinnedMsvc.*" }) { $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"; $vcvarsArgs = "-vcvars_ver=$pinnedMsvc"; break }
+    if ($AnyCompiler -and -not $vcvars -and $tools -and [version]$tools[-1].Name -ge [version]'14.40') { $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat" }
 }
-if (-not $vcvars) { Fail 'falta um compilador C++ MSVC 14.40 ou mais novo (Visual Studio 2022 17.10+ ou Build Tools)' }
-Write-Host "cmake: $cmake`nvcvars: $vcvars"
+if (-not $vcvars) {
+    Fail ("falta o compilador MSVC $pinnedMsvc. No Visual Studio Installer: Modificar > Componentes individuais > " +
+          "'MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)' (todos os PCs da partida em rede precisam dele). " +
+          'Para jogar so offline com outro compilador 14.40+: -AnyCompiler')
+}
+if (-not $vcvarsArgs) { Write-Host "AVISO: sem o MSVC $pinnedMsvc; online so com quem tiver o mesmo compilador" -ForegroundColor Yellow }
+Write-Host "cmake: $cmake`nvcvars: $vcvars $vcvarsArgs"
 
 # --- disco
 Step 'disco'
@@ -73,12 +84,16 @@ $repoFwd = $repo -replace '\\', '/'
 $cmakeBin = Split-Path $cmake -Parent
 foreach ($f in 'configure_dev.bat', 'build_dev.bat', 'build_tools.bat', 'run_live.ps1') {
     $text = Get-Content (Join-Path $PSScriptRoot "runtime_template\$f") -Raw
-    $text = $text.Replace('@VCVARS@', $vcvars).Replace('@CMAKE_BIN@', $cmakeBin).Replace('@REPO@', $repoFwd).Replace('@ISO@', (Resolve-Path $Iso).Path.Replace("'", "''"))
+    $text = $text.Replace('@VCVARS_ARGS@', $vcvarsArgs).Replace('@VCVARS@', $vcvars).Replace('@CMAKE_BIN@', $cmakeBin).Replace('@REPO@', $repoFwd).Replace('@ISO@', (Resolve-Path $Iso).Path.Replace("'", "''"))
     Set-Content (Join-Path $rt $f) $text -NoNewline -Encoding ascii
 }
 Set-Content (Join-Path $repo '.wotm_recomp_dir') $rt -Encoding ascii
 New-Item -ItemType Directory -Force (Join-Path $rt 'discroot') | Out-Null
-Copy-Item (Join-Path $disc 'SCUS_971.97') (Join-Path $rt 'discroot\SCUS_971.97') -Force   # o resto do disco vem da ISO (PS2X_CD_IMAGE)
+$elfDst = Join-Path $rt 'discroot\SCUS_971.97'   # o resto do disco vem da ISO (PS2X_CD_IMAGE)
+# so copia se for diferente: o destino pode ser um hardlink para o proprio disc\SCUS_971.97 (copiar sobre si mesmo falha)
+if (-not (Test-Path $elfDst) -or (Get-FileHash $elfDst -Algorithm SHA1).Hash.ToLower() -ne $elfSha1) {
+    Copy-Item (Join-Path $disc 'SCUS_971.97') $elfDst -Force
+}
 
 # --- jogo traduzido (codigo do jogo: so local, recomp\ no .gitignore)
 Step 'jogo traduzido'
