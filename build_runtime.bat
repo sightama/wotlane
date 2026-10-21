@@ -13,10 +13,9 @@ set "FOUND="
 
 if defined WOTM_RECOMP_DIR if exist "%WOTM_RECOMP_DIR%\run_live.ps1" set "FOUND=%WOTM_RECOMP_DIR%"
 
-if not defined FOUND if exist "%REPO%\.wotm_recomp_dir" (
-    set /p SAVED=<"%REPO%\.wotm_recomp_dir"
-    call :check "%SAVED%"
-)
+rem set /p e o uso de SAVED em linhas separadas: dentro de um bloco ( ) o %SAVED% e expandido antes do set /p rodar
+if not defined FOUND if exist "%REPO%\.wotm_recomp_dir" set /p SAVED=<"%REPO%\.wotm_recomp_dir"
+if not defined FOUND if defined SAVED call :check "%SAVED%"
 if not defined FOUND call :check "%REPO%"
 if not defined FOUND call :check "%REPO%\..\wotm-recomp-win"
 if not defined FOUND for /d %%D in ("%REPO%\..\*") do if not defined FOUND call :check "%%~fD"
