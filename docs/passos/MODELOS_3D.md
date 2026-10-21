@@ -81,6 +81,18 @@ Conferido no dump de luta `build/dumps_live/ram_energy_robot.bin` (0,637 e 1,275
 ## Enquadramento
 `Model::computeFraming(id)` amostra a animação inteira e fixa a caixa; sem isso a câmera acompanha o idle (zoom "dançando").
 
+## Fogo e lens flare
+Texturas dos efeitos vêm de `LVL/CENTRAL.TEX/.RTX` (`FxTextures`): Fireball = texId 5 (paleta tbp 13); flare = texIds 54/4/55/56
+(paletas 203/9/207/211, texInfo 15/17/18/19). Detalhes da engenharia reversa em `docs/investigacoes/2026-10-21/fogo_agamo.md` e
+`lens_flare_monstros.md`.
+- **Fogo (nó op 22, HierParticleEmitter, preset +4 = 141 IdolHeadFlame).** Emissor E = posição(+0x10)·m. Partícula sprite aditiva,
+  vida 20 fields, tamanho 7 + 8U, crescimento 1 − 1,5·min(idade/10, 1), vento (0,0,3,2), arrasto 0,0390625, 2 por field, cor por
+  tabela de 16 (idade·3072 em 4.12), UV espelhado por 2 bits. Sistema novo começa com 30 passos de aquecimento. O enquadramento
+  estica a caixa 55 unidades acima do emissor. Só o 141 é simulado (AttachedFlames e a cabeça voadora não).
+- **Lens flare (nó op 5, HierLight com isOn e hasLensFlare).** P = pos·m, D = beam·m; brilho I/W², tamanho √I/W; direcional:
+  k = max(dot,0) + bw − 1, escala k/bw. 18 sprites fixos ao longo de C + t(S − C), aditivos, depois do Mode3D, sem teste de Z
+  (oclusão não reproduzida: sempre visível). Monstros com luz: ROBOT0–2, MONKEY1–3, JELLY0, ASSBOSS1.
+
 ## Não reproduzido
 Molas do pelo e da cauda (`BoneSpring`: ficam na pose da animação), olhar/cabeça procedural, camadas de mistura de animação e a luz
 do jogo (o `Renderer` usa uma direcional fixa + ambiente sobre a cor de vértice).

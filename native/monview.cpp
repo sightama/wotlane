@@ -74,6 +74,9 @@ int main(int argc, char **argv) {
     InitWindow(shot ? 64 : size, shot ? 64 : size, "monview");
     wotm::model::Renderer r;
     r.skipAbe = noAbe;
+    wotm::model::FxTextures fx;
+    if (!fx.load(disc, {})) std::fprintf(stderr, "sem LVL/CENTRAL.TEX/.RTX: sem fogo nem lens flare\n");
+    r.setFx(&fx);
     m.computeFraming(anim);
     m.pose(anim, frame);
     const auto bg = [] { DrawRectangle(0, 0, 4096, 4096, Color{40, 44, 52, 255}); };

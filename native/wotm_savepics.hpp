@@ -126,23 +126,7 @@ namespace wotm::savepics {
 // ---- leitura do disco (thread da janela) ----
 namespace detail {
 // .TEX/.RTX num zip de um arquivo so com o magic "IE\3\4" (zipInflateAll)
-inline bool unzipIe(std::vector<uint8_t> &d) {
-    static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
-    if (d.size() < 30 || std::memcmp(d.data(), kMagic, 4) != 0) return d.size() >= 16;
-    uint32_t csize = 0;
-    uint16_t nlen = 0, xlen = 0;
-    std::memcpy(&csize, d.data() + 18, 4);
-    std::memcpy(&nlen, d.data() + 26, 2);
-    std::memcpy(&xlen, d.data() + 28, 2);
-    const size_t off = 30 + nlen + xlen;
-    if (off + csize > d.size()) return false;
-    int outSize = 0;
-    unsigned char *u = DecompressData(d.data() + off, int(csize), &outSize);
-    if (!u || outSize <= 0) return false;
-    d.assign(u, u + outSize);
-    MemFree(u);
-    return true;
-}
+inline bool unzipIe(std::vector<uint8_t> &d) { return model::unzipIe(d); }
 struct Packet {
     size_t off;
     uint16_t texId, tbp;
@@ -217,6 +201,11 @@ public:
             for (size_t i = 0; i < std::size(kLevelPics); ++i)
                 if (kLevelPics[i].level == lp->id && level_[i].id) lt = &level_[i];
         const float kx = float(W) / (pic.x1 - pic.x0), ky = float(H) / (pic.y1 - pic.y0);
+        if (!fxTried_) {   // fogo do Agamo e lens flare: texturas de particula da fase (LVL/CENTRAL), uma vez
+            fxTried_ = true;
+            if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] lista de saves: LVL/CENTRAL.TEX/.RTX nao achado; sem fogo nem lens flare\n");
+            renderer_.setFx(&fx_);
+        }
         renderer_.render(*model_, W, H, kYaw, kPitch, zoomOf(monId_ & 0xFF), [&] {
             if (!lt) return;
             DrawTexturePro(*lt, Rectangle{0.f, 0.f, float(lt->width), float(lt->height)},
@@ -334,6 +323,8 @@ private:
     static float zoomOf(uint32_t mon) { return mon == 3 ? 1.35f : mon == 9 ? 1.6f : 1.f; }
     std::unique_ptr<model::Model> model_;
     model::Renderer renderer_;
+    model::FxTextures fx_;
+    bool fxTried_ = false;
     uint32_t monId_ = ~0u;
     double monT0_ = 0.0;
     bool monReady_ = false;

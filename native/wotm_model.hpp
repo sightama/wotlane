@@ -180,6 +180,77 @@ inline std::vector<TexPacket> parseTex(const std::vector<uint8_t> &d, bool rtx) 
     return out;
 }
 
+// .TEX/.RTX das fases vem num zip de um arquivo so com o magic "IE\3\4" (zipInflateAll); os de MON/ vem crus
+inline bool unzipIe(std::vector<uint8_t> &d) {
+    static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
+    if (d.size() < 30 || std::memcmp(d.data(), kMagic, 4) != 0) return d.size() >= 16;
+    uint32_t csize = 0;
+    uint16_t nlen = 0, xlen = 0;
+    std::memcpy(&csize, d.data() + 18, 4);
+    std::memcpy(&nlen, d.data() + 26, 2);
+    std::memcpy(&xlen, d.data() + 28, 2);
+    const size_t off = 30 + nlen + xlen;
+    if (off + csize > d.size()) return false;
+    int outSize = 0;
+    unsigned char *u = DecompressData(d.data() + off, int(csize), &outSize);
+    if (!u || outSize <= 0) return false;
+    d.assign(u, u + outSize);
+    MemFree(u);
+    return true;
+}
+
+struct TexImage;
+// Uma T8 do .TEX com a paleta CT32 16x16 de tbp `palTbp` do .RTX (CSM1: bits 3 e 4 trocados; alfa do GS 0x80 = 255), de cima para baixo
+inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, uint16_t texId, uint16_t palTbp, TexImage &out);
+
+// Texturas das particulas que os efeitos dos monstros usam. No jogo vem da fase (nos de particula com id1 0x1B58 + FxTextureId, lidos
+// pelo particleParseTexture no dbProcInteractive): nenhum .NGP de monstro nem do menu as traz. Aqui saem direto de LVL/CENTRAL.TEX/.RTX
+// (iguais nas outras fases, menos CANYON1/TOKYODM): FxTextureId 8 Fireball (texId 5, paleta tbp 13) e as do lens flare 15/17/18/19
+// (texIds 54/4/55/56, paletas 203/9/207/211). docs/investigacoes/2026-10-21/fogo_agamo.md e lens_flare_monstros.md.
+struct FxTextures {
+    bool ok = false;
+    std::vector<TexImage> fireball, flare;   // flare[texInfo - 15]; o 16 nao e usado (fica vazio)
+    bool load(const std::filesystem::path &discRoot, const std::string &iso);
+};
+
+inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, uint16_t texId, uint16_t palTbp, TexImage &out) {
+    const TexPacket *p = nullptr, *pal = nullptr;
+    const std::vector<TexPacket> tp = parseTex(tex, false), rp = parseTex(rtx, true);
+    for (const TexPacket &k : tp) if (k.texId == texId && k.psm == 0x13) p = &k;
+    for (const TexPacket &k : rp) if (k.isPalette() && k.tbp == palTbp && k.logW == 4) pal = &k;
+    if (!p || !pal) return false;
+    const size_t w = size_t(p->w()), h = size_t(p->h());
+    if (p->data() + w * h > tex.size() || pal->data() + 1024 > rtx.size()) return false;
+    uint32_t clut[256];
+    for (uint32_t i = 0; i < 256; ++i) {
+        const uint32_t j = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);
+        uint32_t c;
+        std::memcpy(&c, rtx.data() + pal->data() + 4 * j, 4);
+        const uint32_t a = c >> 24;
+        clut[i] = (c & 0xFFFFFFu) | (a >= 0x80 ? 255u : a * 2u) << 24;
+    }
+    out.w = int(w);
+    out.h = int(h);
+    out.rgba.resize(w * h);
+    for (size_t i = 0; i < w * h; ++i) out.rgba[i] = clut[tex[p->data() + i]];
+    return true;
+}
+
+inline bool FxTextures::load(const std::filesystem::path &discRoot, const std::string &iso) {
+    std::vector<uint8_t> tex, rtx;
+    if (!wotm::disc::readFile(discRoot, iso, "LVL/CENTRAL.TEX", tex) || !wotm::disc::readFile(discRoot, iso, "LVL/CENTRAL.RTX", rtx) ||
+        !unzipIe(tex) || !unzipIe(rtx))
+        return ok = false;
+    fireball.assign(1, TexImage{});
+    if (!decodeT8(tex, rtx, 5, 13, fireball[0])) fireball.clear();
+    static const uint16_t kId[5] = {54, 0, 4, 55, 56}, kPal[5] = {203, 0, 9, 207, 211};
+    flare.assign(5, TexImage{});
+    int n = 0;
+    for (int i = 0; i < 5; ++i) if (kId[i] && decodeT8(tex, rtx, kId[i], kPal[i], flare[size_t(i)])) ++n;
+    if (n < 4) flare.clear();
+    return ok = !fireball.empty() || !flare.empty();
+}
+
 // ---------------------------------------------------------------- modelo
 
 struct PVtx {
@@ -268,6 +339,9 @@ public:
             if (!pose(id, len * float(s) / float(samples))) { pose(-1, 0.f); s = samples; }
             float a[3], b[3];
             bounds(a, b);
+            // o fogo da cabeca (preset 141) sobe ~3,2 por field durante 20 fields: entra na caixa para nao sair cortado
+            for (const Emitter &em : emitters())
+                if (em.preset == 141) { a[2] = std::min(a[2], em.e[2]); b[2] = std::max(b[2], em.e[2] + 55.f); }
             for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], a[k]); hi[k] = std::max(hi[k], b[k]); }
         }
         for (int k = 0; k < 3; ++k) { frameLo_[k] = lo[k]; frameHi_[k] = hi[k]; }
@@ -291,6 +365,7 @@ public:
 
     // Monta a pose da animacao `id` no quadro `frame` (a partir do inicio, em laco) e refaz verts(). id < 0: pose de base.
     bool pose(int id, float frame) {
+        frame_ = frame;
         ctxs_.clear();
         ctxs_.push_back(makeCtx(main_));
         if (id >= 0) {
@@ -319,6 +394,7 @@ public:
             }
         }
         items_.clear();
+        visited_.clear();
         gs_ = GsState{};
         visit(root_, ident(), -1, -1, -1, 0);
         build();
@@ -326,6 +402,63 @@ public:
     }
 
     const std::vector<PVtx> &verts() const { return verts_; }
+    // Nos da ultima pose, na ordem da travessia: endereco (na base kBase), opcode, matriz do pai (a do mundo do monstro em que o no
+    // fica: os locais dele, como a posicao de um HierLight, saem por ela) e o ctx (CHAR_INSTANCE) em que estava. Para efeitos presos.
+    struct Visited { uint32_t node, op; M4 m; int ctx; };
+    const std::vector<Visited> &visited() const { return visited_; }
+    float frame() const { return frame_; }   // quadro da ultima pose (os efeitos andam pela diferenca)
+
+    // Luzes com lens flare (HierLight, op 5, hasLensFlare) na pose: posicao e feixe no mundo do monstro pela matriz do no pai (o
+    // hierLightNode: position · m, beamNormal · m). Robo-47 (trajes 0-2), Congar 1-3, JELLY e ASSBOSS1.
+    struct Light { float p[3], d[3], rgb[3], intensity, beamWidth; uint32_t flags; };
+    std::vector<Light> lights() const {
+        std::vector<Light> out;
+        for (const Visited &v : visited_) {
+            if (v.op != 5) continue;
+            const uint32_t n = v.node, fl = ram_.u32(n + 4);
+            if (!(fl & 1) || !(fl & 2)) continue;   // isOn, hasLensFlare
+            Light l;
+            xform(v.m, ram_.f32(n + 0x10), ram_.f32(n + 0x14), ram_.f32(n + 0x18), l.p);
+            rot3(v.m, ram_.f32(n + 0x20), ram_.f32(n + 0x24), ram_.f32(n + 0x28), l.d);
+            const float dn = std::sqrt(l.d[0] * l.d[0] + l.d[1] * l.d[1] + l.d[2] * l.d[2]);
+            if (dn > 1e-6f) for (float &c : l.d) c /= dn;
+            for (int k = 0; k < 3; ++k) l.rgb[k] = ram_.f32(n + 0x30 + 4 * uint32_t(k));
+            l.intensity = ram_.f32(n + 8);
+            l.beamWidth = ram_.f32(n + 0x3C);
+            l.flags = fl;
+            out.push_back(l);
+        }
+        return out;
+    }
+
+    // Emissores de particula (HierParticleEmitter, op 22) percorridos na pose (visiveis: o canal de visibilidade do ANIM_XFORM pai corta a
+    // subarvore e o jogo para de emitir). E = position · m (utilUpdateEmitterMatrices, parentVec + StaticVec · parentMat); base R =
+    // StaticMat · m, StaticMat = mathfMatrixFromNormal(n), n = (cos p sin h, cos p cos h, sin p): linha 1 = n.
+    struct Emitter { uint32_t node, preset; float e[3], r0[3], r1[3], r2[3]; };
+    std::vector<Emitter> emitters() const {
+        std::vector<Emitter> out;
+        for (const Visited &v : visited_) {
+            if (v.op != 22) continue;
+            const uint32_t n = v.node;
+            Emitter em;
+            em.node = n;
+            em.preset = ram_.u32(n + 4);
+            xform(v.m, ram_.f32(n + 0x10), ram_.f32(n + 0x14), ram_.f32(n + 0x18), em.e);
+            const float h = ram_.f32(n + 0x24), pt = ram_.f32(n + 0x28);
+            const float nl[3] = {std::cos(pt) * std::sin(h), std::cos(pt) * std::cos(h), std::sin(pt)};
+            // mathfMatrixFromNormal: com n vertical, linha 0 = +X e linha 2 = (0, -1, 0); no geral, linha 0 = X horizontal perpendicular a n
+            float a0[3];
+            if (std::fabs(nl[2]) > 0.999f) { a0[0] = 1.f; a0[1] = 0.f; a0[2] = 0.f; }
+            else { const float l = std::sqrt(nl[0] * nl[0] + nl[1] * nl[1]); a0[0] = nl[1] / l; a0[1] = -nl[0] / l; a0[2] = 0.f; }
+            const float a2[3] = {a0[1] * nl[2] - a0[2] * nl[1], a0[2] * nl[0] - a0[0] * nl[2], a0[0] * nl[1] - a0[1] * nl[0]};
+            rot3(v.m, a0[0], a0[1], a0[2], em.r0);
+            rot3(v.m, nl[0], nl[1], nl[2], em.r1);
+            rot3(v.m, a2[0], a2[1], a2[2], em.r2);
+            out.push_back(em);
+        }
+        return out;
+    }
+    const Ram &ram() const { return ram_; }
     const std::vector<TexImage> &textures() const { return texs_; }
     // Caixa dos vertices posados
     void bounds(float lo[3], float hi[3]) const {
@@ -428,6 +561,7 @@ private:
     void visit(uint32_t n, const M4 &m, int si, int mi, int ctx, int depth) {
         if (depth > 80 || !ram_.ok(n)) return;
         const uint32_t op = ram_.u32(n) & 63;
+        visited_.push_back(Visited{n, op, m, ctx});
         auto kids = [&](uint32_t arr, uint32_t cnt, const M4 &mm, int s2, int m2, int c2) {
             for (uint32_t q = 0; q < std::min<uint32_t>(cnt, 4096); ++q) visit(ram_.u32(arr + 4 * q), mm, s2, m2, c2, depth + 1);
         };
@@ -701,6 +835,8 @@ private:
     }
 
     static constexpr int kStack = 64;
+    std::vector<Visited> visited_;
+    float frame_ = 0.f;
     std::vector<uint8_t> buf_, texData_, rtxData_;
     Ram ram_;
     std::string name_;
@@ -739,12 +875,17 @@ public:
         gpu_.clear();
         if (rt_.id) UnloadRenderTexture(rt_);
         rt_ = {};
+        for (Texture2D &t : fxGpu_) if (t.id) UnloadTexture(t);
+        fxGpu_.clear();
+        flames_.clear();
         if (shader_.id) UnloadShader(shader_);
         shader_ = {};
         gen_ = 0;
     }
 
     const RenderTexture2D &target() const { return rt_; }
+    // Texturas dos efeitos (fogo do Agamo, lens flare); sem elas o monstro sai sem os efeitos. O Renderer nao e dono delas.
+    void setFx(const FxTextures *fx) { fx_ = fx; }
     bool skipAbe = false;   // diagnostico: so os opacos
 
     template <class Bg>
@@ -818,12 +959,14 @@ public:
                 i = j;
             }
         }
+        drawFire(m, cam);
         rlSetTexture(0);
         EndShaderMode();
         EndBlendMode();
         rlEnableDepthMask();
         rlEnableBackfaceCulling();
         EndMode3D();
+        drawFlares(m, cam, w, h, fovy);
         EndTextureMode();
         rlSetClipPlanes(nearWas, farWas);
         return rt_;
@@ -864,9 +1007,10 @@ private:
             static const char *fs =
                 "#version 330\n"
                 "in vec2 fragTexCoord; in vec4 fragColor; uniform sampler2D texture0; uniform vec4 colDiffuse;\n"
-                "uniform float mode; uniform float aref; out vec4 finalColor;\n"
+                "uniform float mode; uniform float aref; uniform float gain; out vec4 finalColor;\n"
                 "void main() {\n"
                 "  vec4 c = texture(texture0, fragTexCoord) * fragColor * colDiffuse;\n"
+                "  c.rgb *= gain;\n"
                 "  if (aref >= 0.0 && c.a * 128.0 <= aref) discard;\n"
                 "  if (mode > 2.5) finalColor = vec4(c.rgb, 1.0);\n"
                 "  else if (mode > 1.5) finalColor = vec4(0.0, 0.0, 0.0, c.a);\n"
@@ -876,6 +1020,8 @@ private:
             shader_ = LoadShaderFromMemory(nullptr, fs);
             locMode_ = GetShaderLocation(shader_, "mode");
             locAref_ = GetShaderLocation(shader_, "aref");
+            locGain_ = GetShaderLocation(shader_, "gain");
+            setGain(1.f);
         }
         if (gen_ == m.gen() && gpu_.size() == m.textures().size()) return;
         for (Texture2D &t : gpu_) if (t.id) UnloadTexture(t);
@@ -894,7 +1040,205 @@ private:
     std::vector<Texture2D> gpu_;
     RenderTexture2D rt_{};
     Shader shader_{};
-    int locMode_ = -1, locAref_ = -1;
+    int locMode_ = -1, locAref_ = -1, locGain_ = -1;
+    const FxTextures *fx_ = nullptr;
+    std::vector<Texture2D> fxGpu_;   // [0] Fireball, [1..5] flare (texInfo 15..19)
+    struct Part { float p[3], v[3], size, age; uint8_t sel; };
+    struct Flame { bool have = false; float prev[3] = {0, 0, 0}, acc = 0.f; std::vector<Part> parts; };
+    std::unordered_map<uint32_t, Flame> flames_;
+    uint32_t simGen_ = 0;
+    float simFrame_ = 0.f;
+    uint32_t rng_ = 0x2545F491u;
+    float rnd() { rng_ = rng_ * 1664525u + 1013904223u; return float(rng_ >> 8) / 16777216.f; }
+
+    void setGain(float g) { SetShaderValue(shader_, locGain_, &g, SHADER_UNIFORM_FLOAT); }
+
+    void uploadFx() {
+        if (!fx_ || !fx_->ok || !fxGpu_.empty()) return;
+        auto up = [](const TexImage &ti) {
+            if (ti.rgba.empty()) return Texture2D{};
+            Image img{const_cast<uint32_t *>(ti.rgba.data()), ti.w, ti.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            Texture2D t = LoadTextureFromImage(img);
+            SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+            SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+            return t;
+        };
+        fxGpu_.push_back(fx_->fireball.empty() ? Texture2D{} : up(fx_->fireball[0]));
+        for (size_t i = 0; i < 5; ++i) fxGpu_.push_back(i < fx_->flare.size() ? up(fx_->flare[i]) : Texture2D{});
+    }
+
+    // Fogo da cabeca do Agamo: preset 141 IdolHeadFlame (emissor op 22 do ROCKn.NGP), sprite aditivo com a textura Fireball, simulado
+    // por field como o particleEmit/particleMove (docs/investigacoes/2026-10-21/fogo_agamo.md; conferido num dump de luta da ISLAND):
+    // vento (0, 0, 3,2) somado a posicao, velocidade nasce com -vento (a particula nasce parada e acelera para cima), arrasto do ar
+    // 0,0390625, vida 20 fields, 2 por field parado. Os outros presets dos monstros (45 AttachedFlames, a cabeca que voa) nao ficam
+    // visiveis no idle e nao sao simulados.
+    void stepFlame(Flame &f, const Model::Emitter &em, bool emit) {
+        static const float kWind[3] = {0.f, 0.f, 3.2f};
+        const float airF = 0.0390625f;
+        for (size_t i = 0; i < f.parts.size();) {   // particleMove
+            Part &q = f.parts[i];
+            q.age += 1.f;
+            if (q.age >= 20.f) { f.parts[i] = f.parts.back(); f.parts.pop_back(); continue; }
+            const float vl = std::sqrt(q.v[0] * q.v[0] + q.v[1] * q.v[1] + q.v[2] * q.v[2]);
+            const float den = std::min(1.f + airF * vl, 2.f);
+            const float sc = int(q.age) < 5 ? 1.f - 0.2f * q.age + 0.2f * q.age / den : 1.f / den;
+            for (int c = 0; c < 3; ++c) { q.v[c] *= sc; q.p[c] += kWind[c] + q.v[c]; }
+            q.size += 1.f - 1.5f * std::min(q.age / 10.f, 1.f);
+            ++i;
+        }
+        if (!f.have) { std::memcpy(f.prev, em.e, sizeof f.prev); f.have = true; }
+        if (emit) {   // particleEmit
+            float disp[3], rel[3];
+            for (int c = 0; c < 3; ++c) { disp[c] = em.e[c] - f.prev[c]; rel[c] = disp[c] * 0.8f - kWind[c]; }
+            const float dl = std::sqrt(disp[0] * disp[0] + disp[1] * disp[1] + disp[2] * disp[2]);
+            f.acc += std::max(2.f, dl * 4.f / 15.f);
+            const int n = int(f.acc);
+            f.acc -= float(n);
+            for (int k = 1; k <= n && f.parts.size() < 256; ++k) {
+                const float frac = float(k) / float(n), remain = 1.f - frac;
+                const float y = rnd(), r = std::sqrt(std::max(0.f, 1.f - y * y)), th = 6.2831853f * rnd();
+                Part q;
+                for (int c = 0; c < 3; ++c) {
+                    const float u = r * (std::cos(th) * em.r0[c] + std::sin(th) * em.r2[c]);
+                    q.v[c] = rel[c] - u;
+                    q.p[c] = f.prev[c] + 5.f * u + disp[c] * frac - u * remain;
+                }
+                q.size = 7.f + 8.f * rnd();
+                q.age = std::floor(10.f * rnd());
+                q.sel = uint8_t((rng_ >> 13) & 3);
+                f.parts.push_back(q);
+            }
+        }
+        std::memcpy(f.prev, em.e, sizeof f.prev);
+    }
+
+    void drawFire(const Model &m, const Camera3D &cam) {
+        const std::vector<Model::Emitter> ems = m.emitters();
+        if (m.gen() != simGen_) { flames_.clear(); simGen_ = m.gen(); simFrame_ = m.frame(); }
+        // fields desde o ultimo desenho (a previa anda a 60 por segundo); sistema novo comeca aquecido, como no jogo ja rodando
+        int steps = int(std::floor(m.frame()) - std::floor(simFrame_));
+        if (steps < 0 || steps > 8) steps = 1;
+        simFrame_ = m.frame();
+        for (const Model::Emitter &em : ems) {
+            if (em.preset != 141) continue;
+            Flame &f = flames_[em.node];
+            const int n = f.have ? steps : 30;
+            for (int k = 0; k < n; ++k) stepFlame(f, em, true);
+        }
+        uploadFx();
+        if (fxGpu_.empty() || !fxGpu_[0].id || flames_.empty()) return;
+        // tabela de cor pela idade do preset (0x256C10 + 4 * 608): bytes R, G, B, A com 0x80 = 1; indice age * 3072 em 4.12
+        static const uint32_t kCol[16] = {0x00808080u, 0x28808080u, 0x4b808080u, 0x66808080u, 0x80808080u, 0x80808080u, 0x7d808080u, 0x72808080u,
+                                          0x64808080u, 0x54838180u, 0x457d7f80u, 0x37687580u, 0x284b6880u, 0x19355f80u, 0x0c21537du, 0x01124276u};
+        // eixos da camera para o sprite de frente (o GS desenha o SPRITE na tela)
+        float fw[3] = {cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z};
+        const float fl = std::sqrt(fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]);
+        for (float &c : fw) c /= fl;
+        float rt[3] = {fw[1] * cam.up.z - fw[2] * cam.up.y, fw[2] * cam.up.x - fw[0] * cam.up.z, fw[0] * cam.up.y - fw[1] * cam.up.x};
+        const float rl = std::sqrt(rt[0] * rt[0] + rt[1] * rt[1] + rt[2] * rt[2]);
+        for (float &c : rt) c /= rl;
+        const float upv[3] = {rt[1] * fw[2] - rt[2] * fw[1], rt[2] * fw[0] - rt[0] * fw[2], rt[0] * fw[1] - rt[1] * fw[0]};
+        setState(0x48, true, -1, true);   // aditiva, sem gravar Z (testa contra o monstro)
+        setGain(255.f / 128.f);           // MODULATE do GS: cor 0x80 = 1,0
+        rlBegin(RL_QUADS);
+        rlSetTexture(fxGpu_[0].id);
+        for (const auto &fe : flames_)
+            for (const Part &q : fe.second.parts) {
+                const float t = q.age * 3072.f / 4096.f;
+                const int i0 = std::min(15, int(t)), i1 = std::min(15, i0 + 1);
+                const float fr = t - float(int(t));
+                uint8_t c[4];
+                for (int b = 0; b < 4; ++b) {
+                    const float a = float((kCol[i0] >> (8 * b)) & 0xFF), z = float((kCol[i1] >> (8 * b)) & 0xFF);
+                    c[b] = uint8_t(std::clamp(a + (z - a) * fr, 0.f, 255.f));
+                }
+                rlColor4ub(c[0], c[1], c[2], uint8_t(std::min(255, c[3] * 2)));
+                const float h = std::max(q.size, 0.f);
+                // UV pelos 2 bits sorteados (spritePacketInit): 3 normal, 1 espelha U, 2 espelha V, 0 os dois
+                const float u0 = (q.sel & 2) ? 0.f : 1.f, u1 = 1.f - u0, v0 = (q.sel & 1) ? 0.f : 1.f, v1 = 1.f - v0;
+                auto vx = [&](float sx, float sy, float u, float v) {
+                    rlTexCoord2f(u, v);
+                    rlVertex3f(q.p[0] + h * (sx * rt[0] + sy * upv[0]), q.p[1] + h * (sx * rt[1] + sy * upv[1]), q.p[2] + h * (sx * rt[2] + sy * upv[2]));
+                };
+                vx(-1, 1, u0, v0); vx(-1, -1, u0, v1); vx(1, -1, u1, v1); vx(1, 1, u1, v0);
+            }
+        rlEnd();
+        rlDrawRenderBatchActive();
+        setGain(1.f);
+    }
+
+    // Lens flare das luzes do monstro (particleLensFlareRender + microprograma 0x2B20 do VU1, como Particles::flareSprites do nativo; sem o
+    // teste de Z: visibilidade total). 18 sprites constantes do lensFlarePacketInit (D_006F44E0..D_006F4608 no ELF; iguais ao pacote de um
+    // dump de luta), cada um no ponto C + t (S - C) da linha do centro da tela ate a luz, cantos +/- (h, h/2) px do GS (focos 384 x 180,48
+    // de 224 linhas), aditivos. W = profundidade da luz pela frente da camera.
+    void drawFlares(const Model &m, const Camera3D &cam, int w, int h, float fovy) {
+        const std::vector<Model::Light> ls = m.lights();
+        if (ls.empty()) return;
+        uploadFx();
+        if (fxGpu_.size() < 6) return;
+        struct Row { uint8_t tex; float t, half; uint8_t sel; uint8_t rgb[3]; float a; };
+        static const Row kRows[18] = {
+            {17, 1.f, 100, 1, {255, 255, 255}, 8.f}, {15, 0.15f, 6, 0, {192, 192, 255}, 1.4f}, {19, 0.125f, 6, 0, {255, 192, 224}, 1.f},
+            {17, -0.775f, 30, 1, {255, 224, 192}, 0.9f}, {17, -0.125f, 20, 1, {192, 255, 224}, 0.8f}, {17, 0.175f, 20, 1, {255, 192, 224}, 0.75f},
+            {19, -0.1f, 8, 0, {224, 192, 255}, 0.7f}, {17, -0.625f, 40, 1, {224, 192, 255}, 0.7f}, {18, 1.125f, 150, 1, {255, 255, 255}, 0.7f},
+            {15, 0.25f, 10, 0, {192, 255, 192}, 0.7f}, {19, -0.15f, 12, 0, {192, 224, 255}, 0.6f}, {19, -0.7f, 32, 0, {192, 255, 224}, 0.5f},
+            {19, 0.35f, 14, 0, {255, 224, 192}, 0.5f}, {15, -0.3f, 20, 0, {255, 255, 192}, 0.5f}, {15, 0.4f, 16, 0, {255, 192, 192}, 0.4f},
+            {18, -0.575f, 30, 1, {128, 255, 192}, 0.2f}, {15, -0.075f, 30, 0, {255, 192, 255}, 0.125f}, {18, -1.125f, 120, 1, {64, 255, 128}, 0.125f}};
+        float fw[3] = {cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z};
+        const float fl = std::sqrt(fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]);
+        for (float &c : fw) c /= fl;
+        const float foc = float(h) * 0.5f / std::tan(fovy * 0.5f * 3.14159265f / 180.f);
+        const float cx = float(w) * 0.5f, cy = float(h) * 0.5f;
+        BeginShaderMode(shader_);
+        rlDisableDepthTest();
+        setState(0x48, true, -1, true);
+        setGain(255.f / 128.f);
+        for (const Model::Light &l : ls) {
+            const float rel[3] = {l.p[0] - cam.position.x, l.p[1] - cam.position.y, l.p[2] - cam.position.z};
+            const float W = rel[0] * fw[0] + rel[1] * fw[1] + rel[2] * fw[2];
+            if (W < 1.f) continue;
+            const Vector2 S = GetWorldToScreenEx(Vector3{l.p[0], l.p[1], l.p[2]}, cam, w, h);
+            float bright = l.intensity / (W * W), size = std::sqrt(std::max(l.intensity, 0.f)) / W;
+            if (l.flags & 8) {   // direcional: cosseno entre o feixe e a direcao luz -> olho
+                const float rn = std::sqrt(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]);
+                const float dot = -(l.d[0] * rel[0] + l.d[1] * rel[1] + l.d[2] * rel[2]) / rn;
+                const float k = ((l.flags & 0x10) ? std::fabs(dot) : std::max(dot, 0.f)) + l.beamWidth - 1.f;
+                if (!(bright * k > 0.f) || l.beamWidth == 0.f) continue;
+                bright *= k / l.beamWidth;
+                size *= k / l.beamWidth;
+            }
+            for (int k = 0; k < 18; ++k) {
+                const Row &r = kRows[k];
+                const Texture2D &t = fxGpu_[size_t(1 + r.tex - 15)];
+                float col[3], hg;
+                for (int j = 0; j < 3; ++j) col[j] = float(r.rgb[j]) * l.rgb[j];
+                if (k == 0) hg = r.half * size * r.a;
+                else { hg = r.half; for (float &c : col) c *= r.a * bright; }
+                const bool last = col[0] < 1.f && col[1] < 1.f && col[2] < 1.f;
+                const float cap = k == 0 ? 255.f : 32.f;
+                if (t.id && !last) {
+                    const float px = cx + r.t * (S.x - cx), py = cy + r.t * (S.y - cy);
+                    const float hw = hg * foc / 384.f, hh = hg * foc / 360.96f;
+                    const float uv = (r.sel ? 63.5f : 31.5f) / float(t.width), u0 = 0.5f / float(t.width);
+                    rlBegin(RL_QUADS);
+                    rlSetTexture(t.id);
+                    rlColor4ub(uint8_t(std::clamp(col[0], 0.f, cap)), uint8_t(std::clamp(col[1], 0.f, cap)), uint8_t(std::clamp(col[2], 0.f, cap)), 255);
+                    rlTexCoord2f(u0, u0); rlVertex2f(px - hw, py - hh);
+                    rlTexCoord2f(u0, uv); rlVertex2f(px - hw, py + hh);
+                    rlTexCoord2f(uv, uv); rlVertex2f(px + hw, py + hh);
+                    rlTexCoord2f(uv, u0); rlVertex2f(px + hw, py - hh);
+                    rlEnd();
+                }
+                if (last) break;   // as tres cores < 1: a entrada sai dos sprites seguintes
+            }
+        }
+        rlDrawRenderBatchActive();
+        rlSetTexture(0);
+        setGain(1.f);
+        EndShaderMode();
+        EndBlendMode();
+        rlEnableDepthTest();
+    }
 };
 
 }  // namespace wotm::model
