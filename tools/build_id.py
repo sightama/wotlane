@@ -23,13 +23,14 @@ def text_digest(path):
     return hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
 
 
-def tree_digest(root, skip=()):
-    """sha256 dos arquivos de uma pasta: caminho relativo e conteudo de cada um, em ordem."""
+def tree_digest(root, skip_dirs=()):
+    """sha256 dos arquivos de uma pasta: caminho relativo e conteudo de cada um, em ordem; pastas com nome em skip_dirs (em qualquer
+    nivel) ficam de fora."""
     h = hashlib.sha256()
     if root.exists():
         for p in sorted(root.rglob('*')):
             rel = p.relative_to(root).as_posix()
-            if not p.is_file() or any(rel == s or rel.startswith(s + '/') for s in skip):
+            if not p.is_file() or any(part in skip_dirs for part in rel.split('/')[:-1]):
                 continue
             h.update(rel.encode() + b'\0' + text_digest(p).encode() + b'\n')
     return h.hexdigest()
@@ -80,7 +81,7 @@ def ps2recomp_head(runtime):
 
 def compute(repo, runtime, build, ps2recomp_commit=None):
     parts = {
-        'native': tree_digest(repo / 'native', skip=('net/build',)),
+        'native': tree_digest(repo / 'native', skip_dirs=('build', '__pycache__')),   # saidas de compilacao (net, tests)
         'patches': tree_digest(repo / 'tools' / 'runtime_patch'),
         'ps2recomp': ps2recomp_commit or ps2recomp_head(runtime),
         'recomp': recomp_digest(repo / 'recomp' / 'retail', runtime),

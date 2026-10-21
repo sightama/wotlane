@@ -63,6 +63,11 @@ class BuildIdTest(unittest.TestCase):
             before = self.compute(repo, runtime)
             (repo / 'native' / 'net' / 'build' / 'junk.obj').write_text('mudou')
             self.assertEqual(before, self.compute(repo, runtime))
+            # qualquer pasta build dentro de native/ (testes, ferramentas futuras) e saida de compilacao
+            other = repo / 'native' / 'tests' / 'build' / 'x.obj'
+            other.parent.mkdir(parents=True)
+            other.write_text('saida')
+            self.assertEqual(before, self.compute(repo, runtime))
 
     def test_compiler_version_comes_from_the_cmake_cache(self):
         with tempfile.TemporaryDirectory() as a:
