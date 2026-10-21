@@ -6,6 +6,8 @@
   python tools/monglb.py disc/MON/LIZARD0.NGP saida/LIZARD0.glb --all --split  # todas: LIZARD0.glb (malha, esqueleto,
       idle e a lista) + LIZARD0/aNNN.glb, uma animacao por arquivo, carregada quando o visitante escolhe
       (--anim-dir LIZARD: grava em LIZARD/ ao lado; os trajes de um monstro tem animacoes iguais e dividem a pasta)
+  python tools/monglb.py disc/LVL/3-MILE.NGP saida/PLANT0.glb --boss plant --split --anim-dir PLANT   # chefes montados
+      de pecas da fase: plant (3-MILE), root (3-MILE), mecha (CAPITOL); ver boss()
   opcoes: --unlit (material sem luz; padrao: com luz, como o Renderer do nativo), --fps 60
 
 Como sai (o mesmo modelo do tools/pose.py, conferido contra RAM de luta):
@@ -108,9 +110,13 @@ def const(vals, eps=1e-6):
 
 
 class Exporter:
-    def __init__(self, ngp_path, unlit=False):
+    def __init__(self, ngp_path, unlit=False, model=None, groups=None):
+        """model: um pose.Model ja montado (chefes); groups: [(nome, [instancias], id padrao)] — as animacoes de um chefe
+        sao por peca: a chave k = 100 * grupo + indice toca essa animacao no grupo (nas outras instancias do grupo, a de
+        mesmo id) e a animacao de id padrao nos outros grupos."""
         self.path = ngp_path
-        self.mdl = pose.Model(ngp_path)
+        self.mdl = model or pose.Model(ngp_path)
+        self.groups = groups
         self.img = self.mdl.img   # base 0xA00000 (o .NGP do monstro vem pre-ligado)
         tp, rp = tex.sibling(ngp_path, ".TEX"), tex.sibling(ngp_path, ".RTX")
         self.lib = tex.Library(tp, rp, ngp_path) if (tp or rp) else None
@@ -180,6 +186,26 @@ class Exporter:
     # ---- animacao
     def sample(self, k, fps):
         """Poses da animacao de indice k a cada quadro (60/s, 0..fim) -> (id, poses, tempos)."""
+        if self.groups:
+            gi, kk = divmod(k, 100)
+            name, cis, _d = self.groups[gi]
+            a = self.mdl.find_anim(None, ci=cis[0], k=kk)
+            if a is None:
+                raise ValueError("%s: %s sem animacao %d" % (self.path, name, kk))
+            aid, _k, st, et, _nch = a
+
+            def by_id(ci, want, fallback):
+                # o jogo pega a animacao pelo id (animationGetHandle: head.id1 == animId), nao pela posicao na tabela,
+                # e as cabecas da planta nao tem as tabelas na mesma ordem
+                return next((x[1] for x in self.mdl.anims(ci) if x[0] == want), fallback)
+
+            assign = {}
+            for gj, (_n, cs, did) in enumerate(self.groups):
+                for ci in cs:
+                    assign[ci] = by_id(ci, aid, kk) if gj == gi else by_id(ci, did, 0)
+            n = max(1, int(math.floor((et - st) * fps / 60.0 + 1e-6)) + 1)
+            frames = [self.mdl.pose(frame=f * 60.0 / fps, assign=assign) for f in range(n)]
+            return aid, frames, [f / fps for f in range(n)]
         a = self.mdl.find_anim(None, k=k)
         if a is None:
             raise ValueError("%s: sem animacao k %d" % (self.path, k))
@@ -557,7 +583,12 @@ class Exporter:
                 ga.j["animations"] = [animation(ga, k, aid, tracks, uvs, times, at.get)]
                 fn = "a%03d.glb" % k
                 ga.write(os.path.join(base, fn))
-                listing.append({"k": k, "id": aid, "frames": len(times), "file": os.path.basename(base) + "/" + fn})
+                entry = {"k": k, "id": aid, "frames": len(times), "file": os.path.basename(base) + "/" + fn}
+                if self.groups:
+                    entry["part"] = self.groups[k // 100][0]
+                if ai == 0:
+                    entry["first"] = True   # a que o .glb principal ja traz (o viewer comeca nela)
+                listing.append(entry)
         if anims:
             g.j["animations"] = anims
         g.j["scenes"][0]["extras"] = {"bones": len(bone_node), "parts": len(rigid_node)}
@@ -613,10 +644,90 @@ def reduce_keys(vals, tol):
     return keep
 
 
+def find_nodes(img, id1):
+    """{id2: no} dos nos da fase com o id de objeto id1 (14 bits altos da primeira palavra; id2 nos bits 7..17)."""
+    out = {}
+    d = img.d
+    for o in range(0, len(d) - 4, 4):
+        w = struct.unpack_from("<I", d, o)[0]
+        if w >> 18 == id1:
+            out.setdefault((w >> 7) & 0x7FF, []).append((img.base + o, w & 63))
+    return out
+
+
+def ep(img, id1, id2=0):
+    """O no de entrada (ep) que o jogo registra no dbProcInteractive: o GROUP/ROTATE com o id que contem a instancia."""
+    ci = ci_of(img, id1)
+    kids = pose.Model._kids
+    probe = pose.Model.__new__(pose.Model)
+    probe.img = img
+    nodes = [n for n, op in find_nodes(img, id1).get(id2, []) if op in (1, 3, 4)
+             and any(img.u32(arr + 4 * q) == ci for arr, cnt in kids(probe, n, op) for q in range(min(cnt, 64)))]
+    if not nodes:
+        raise ValueError("sem no %x/%d" % (id1, id2))
+    return nodes[0]
+
+
+def ci_of(img, id1):
+    for n, op in find_nodes(img, id1).get(0, []):
+        if op == 25 and img.ok(img.u32(n + 0x20)):
+            return n
+    raise ValueError("sem CHAR_INSTANCE %x" % id1)
+
+
+def place(x=0.0, y=0.0, z=0.0, heading=0.0):
+    """Matriz de um _cs: rotacao RPH so em Z (heading) e translacao."""
+    m = np.eye(4)
+    c, s_ = math.cos(heading), math.sin(heading)
+    m[0, :2] = (c, -s_)
+    m[1, :2] = (s_, c)
+    m[3, :3] = (x, y, z)
+    return m
+
+
+def boss(kind, ngp_path):
+    """Chefes montados das pecas da fase, como o jogo as poe (src/game/PlantBoss.cpp, FinalBoss.cpp):
+    plant (LVL/3-MILE.NGP): a base (0x2728) na origem e as tres cabecas (0x271B..0x271D) onde o wakeUp as poe, com o SWITCH
+      999 de cada uma ligado; animacoes por peca (cabecas, base). root: uma raiz (0x271E) sozinha, com as 5 animacoes dela
+      (o jogo poe as 10 em volta do jogador). mecha (LVL/CAPITOL.NGP): o robo da fase 1 do chefe final (0x27A6, com a
+      torre 0x27A7 tocando a animacao 1 que o FinalBoss::initAfter liga)."""
+    img = ngp.Image.load(ngp_path)
+    if kind == "plant":
+        heads = [0x271B, 0x271C, 0x271D]
+        pos = [(0.0, 33.884), (-29.344, -16.942), (29.344, -16.942)]   # PlantBossHead::wakeUp
+        parts = [(ep(img, 0x2728), place())] + [(ep(img, h), place(x, y)) for h, (x, y) in zip(heads, pos)]
+        sw = [n for h in heads for n, op in find_nodes(img, h).get(999, []) if op == 6]
+        mdl = pose.Model(ngp_path, parts=parts, main=ci_of(img, 0x2728), switch_on=sw)
+        groups = [("Head", [ci_of(img, h) for h in heads], 0), ("Base", [ci_of(img, 0x2728)], 1)]
+        return mdl, groups, (0, 0)
+    if kind == "root":
+        ci = ci_of(img, 0x271E)
+        mdl = pose.Model(ngp_path, parts=[(ep(img, 0x271E), place())], main=ci)
+        return mdl, [("Root", [ci], 1)], (0, 1)
+    if kind == "mecha":
+        ci = ci_of(img, 0x27A6)
+        mdl = pose.Model(ngp_path, parts=[(ep(img, 0x27A6), place())], main=ci)
+        return mdl, [("", [ci], 0), ("turret", [ci_of(img, 0x27A7)], 1)], (0, 0)
+    raise ValueError("chefe desconhecido: %s" % kind)
+
+
 def main(argv):
     if len(argv) < 2:
         print(__doc__)
         return 1
+    if "--boss" in argv:
+        # python tools/monglb.py disc/LVL/3-MILE.NGP saida/PLANT0.glb --boss plant --split --anim-dir PLANT
+        mdl, groups, first = boss(argv[argv.index("--boss") + 1], argv[0])
+        ex = Exporter(argv[0], unlit="--unlit" in argv, model=mdl, groups=groups)
+        gi0, id0 = first   # (grupo, id da animacao) em que o modelo comeca
+        keys = [100 * gi0 + next(a[1] for a in mdl.anims(groups[gi0][1][0]) if a[0] == id0)]
+        for gi, (name, cis, _d) in enumerate(groups):
+            if name.islower():   # pecas que so acompanham (a torre do robo) nao entram na lista
+                continue
+            keys += [100 * gi + a[1] for a in mdl.anims(cis[0]) if 100 * gi + a[1] != keys[0]]
+        anim_dir = argv[argv.index("--anim-dir") + 1] if "--anim-dir" in argv else None
+        ex.export(argv[1], keys, 60.0, split="--split" in argv, anim_dir=anim_dir)
+        return 0
     ex = Exporter(argv[0], unlit="--unlit" in argv)
     table = ex.mdl.anims()
     idle_k = next(a[1] for a in table if a[0] == pose.IDLE)

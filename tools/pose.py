@@ -128,14 +128,21 @@ def gs_apply(img, gs, ctxp):
 
 
 class Model:
-    def __init__(self, ngp_path):
+    """Monstro (raiz 0 do .NGP) ou, com parts, um modelo montado de pecas de uma fase (chefes): parts = [(no, matriz de
+    posicao)] percorridas como raizes, main = a instancia de personagem que a animacao escolhida move. switch_on: SWITCHes
+    forcados no filho 1 (o que o jogo liga na luta, ex. hierSetSwitch das cabecas da planta)."""
+
+    def __init__(self, ngp_path, parts=None, main=None, switch_on=()):
         self.img = ngp.Image.load(ngp_path)
-        self.root = self.img.roots()[0]
+        self.parts = parts or [(self.img.roots()[0], np.eye(4))]
+        self.root = self.parts[0][0]
+        self.switch_on = set(switch_on)
         self.cis = []
-        self._find(self.root, 0)
+        for n, _m in self.parts:
+            self._find(n, 0)
         if not self.cis:
             raise ValueError("%s: sem CHAR_INSTANCE na raiz 0" % ngp_path)
-        self.main = max(self.cis, key=lambda c: self.img.u16(self.img.u32(c + 0x20)))
+        self.main = main or max(self.cis, key=lambda c: self.img.u16(self.img.u32(c + 0x20)))
 
     def _find(self, n, depth):
         """CHAR_INSTANCEs alcancaveis da raiz (para achar a principal)."""
@@ -162,6 +169,23 @@ class Model:
             return [(n + a, img.u32(n + c))]
         return []
 
+    def apply_anim(self, ctx, k, frame):
+        """Escreve no ctx os canais da animacao de indice k no quadro frame (a partir do inicio, em laco)."""
+        img = self.img
+        ch = img.u32(ctx.ci + 0x20)
+        if not 0 <= k < img.u16(ch):
+            return
+        an = img.u32(ch + 0xC + 4 * k)
+        st, et, nch = img.f32(an + 4), img.f32(an + 8), img.u16(an + 0xC)
+        t = st + frame
+        if et > st and t > et:
+            t = st + math.fmod(t - st, et - st)
+        for c in range(nch):
+            cv = animcurve.Curve(img, img.u32(an + 0x18 + 4 * c))
+            if 0 <= cv.idx < ctx.nch:
+                ctx.val[cv.idx] = cv.eval(t)
+                ctx.dirty.add(cv.idx)
+
     def anims(self, ci=None):
         """[(id, indice, quadro inicial, quadro final, canais)] da instancia."""
         img = self.img
@@ -180,14 +204,19 @@ class Model:
                 return a
         return None
 
-    def pose(self, anim_id=IDLE, frame=0.0, rest=False, k=None):
+    def pose(self, anim_id=IDLE, frame=0.0, rest=False, k=None, assign=None):
         """[Item (OBJECT, matriz 4x4 do objeto, CharCtx ou None) com .gs e .uv] na pose da animacao `anim_id` (ou de indice
-        k) no quadro `frame` (a partir do inicio; com laco). rest=True: sem animacao (valores guardados nos nos)."""
+        k) no quadro `frame` (a partir do inicio; com laco). rest=True: sem animacao (valores guardados nos nos).
+        assign = {instancia: k}: cada instancia na sua animacao, no mesmo quadro (pecas de um chefe; no lugar de anim_id/k)."""
         img = self.img
         ctxs = {}
         main = CharCtx(img, self.main)
         ctxs[self.main] = main
-        if not rest:
+        if assign is not None:
+            for ci, kk in assign.items():
+                c = ctxs.setdefault(ci, CharCtx(img, ci))
+                self.apply_anim(c, kk, frame)
+        elif not rest:
             a = self.find_anim(anim_id, k=k)
             if a is None:
                 raise ValueError("sem animacao %s" % (anim_id if k is None else "k %d" % k))
@@ -272,6 +301,8 @@ class Model:
                 kids(n + 0x2C, img.u32(n + 8), L @ m)
             elif op == 6:
                 w, cnt = img.u8(n + 8), img.u8(n + 0xB)
+                if n in self.switch_on:
+                    w = 1
                 if w < cnt:
                     visit(img.u32(n + 0xC + 4 * w), m, si, mi, ctx, depth + 1, gs)
             elif op in (8, 23):
@@ -358,7 +389,8 @@ class Model:
                 if img.u16(n + 0xA):
                     visit(img.u32(n + 0xC), m, si, mi, ctx, depth + 1, gs)
 
-        visit(self.root, np.eye(4), -1, -1, None, 0)
+        for part, pm in self.parts:
+            visit(part, pm, -1, -1, None, 0)
         return items
 
     def palette_outs(self, node, ctx):
