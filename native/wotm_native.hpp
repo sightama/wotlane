@@ -25,6 +25,7 @@
 #include "raylib.h"
 #include "rlgl.h"
 #include "wotm_gs.hpp"
+#include "wotm_interp.hpp"   // interpolacao de quadros (blendSnapshots)
 
 namespace wotm {
 
@@ -64,6 +65,7 @@ constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10]
 constexpr uint32_t psLitDirWs = wotm::sym::psLitDirWs;      // direcao da luz das sombras (da cena para a luz), mundo
 constexpr uint32_t psShadowIntens = wotm::sym::psShadowIntens;  // float, 80 = 0,625 (escala do GS)
 constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
+constexpr uint32_t fieldCounterAtStart = 0x006F8DC0;   // D_006F8DC0: fields no comeco do quadro (timerWaitForMinUpdateRate); carimbo da interpolacao
 }
 
 // Vista do jogo que a coleta e o desenho em curso seguem (tela dividida: vistas 0 e 1, metades esquerda e direita de 320 x 224 do
@@ -474,6 +476,7 @@ struct DrawItem {
     float ptRel[3][3] = {};
     float ptCol[3][3] = {};
     float ptFall[3] = {};
+    uint32_t palBlk = 0;   // endereco do bloco da paleta copiada (takeSnapshot): a interpolacao so mistura paletas do mesmo bloco
 };
 
 struct Camera {
@@ -769,10 +772,105 @@ struct Snapshot {
     GameCamera cam;
     ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita)
     uint32_t g = 0;     // contador de quadros do jogo
+    uint32_t fields = 0;   // fields do jogo no comeco do quadro (addr::fieldCounterAtStart): carimbo da interpolacao
+    double hostT = 0.0;    // relogio do host na captura (s, steady_clock; wotm_live::hostSeconds)
+    // Mistura (blendSnapshots): as particulas vem do instantaneo mais perto do alfa e a copia de sombra delas tem a camera dele (fxCam);
+    // o desenho troca a matriz dessa vista pela da camera misturada (wotm_live.inc, FxCameraPatch)
+    bool blended = false;
+    GameCamera fxCam;
     bool valid = false;
     // Tela dividida e tela em 4: as vistas 1..3 do mesmo quadro (coletadas na saida do hier(v, 0)); nullptr = vista ausente
     std::shared_ptr<Snapshot> extra[3];
 };
+
+// ---------------------------------------------------------------- interpolacao entre dois quadros do jogo (so desenho)
+// A apresentacao (wotm_live.inc) guarda os ultimos instantaneos e, com a tela acima de 60 Hz, desenha a mistura do par que cerca o
+// relogio de exibicao (wotm_interp.hpp). Objetos casam por (_cs, no, ocorrencia); paletas so do mesmo bloco; HUD e o que o jogo
+// cola na camera (hud, overlay, hp) seguem a camera misturada sem misturar a matriz (M' = M_B * inv(V_B) * V_I). Particulas,
+// destrocos, texto e fades ficam os de B por enquanto. Corte de camera, vista diferente ou objeto que saltou: B sem mistura.
+inline interp::Camera toInterp(const GameCamera &c) {
+    interp::Camera r;
+    for (int i = 0; i < 3; ++i) { r.pos[i] = c.pos[i]; r.fwd[i] = c.fwd[i]; r.up[i] = c.up[i]; }
+    r.fovy = c.fovy;
+    return r;
+}
+
+struct BlendStats { size_t matched = 0, moved = 0, pals = 0, rebased = 0; bool cut = false; };
+
+inline Snapshot blendSnapshots(const Snapshot &A, const Snapshot &B, float t, BlendStats *stats = nullptr) {
+    Snapshot r = B;
+    if (t >= 1.f || !A.valid || !B.valid || !A.cam.ok || !B.cam.ok || A.vctx.view != B.vctx.view || A.vctx.grid != B.vctx.grid ||
+        A.vctx.w != B.vctx.w || interp::cameraCut(toInterp(A.cam), toInterp(B.cam))) {
+        if (stats && t < 1.f) stats->cut = true;
+        return r;
+    }
+    const interp::Camera ci = interp::lerpCamera(toInterp(A.cam), toInterp(B.cam), t);
+    for (int i = 0; i < 3; ++i) { r.cam.pos[i] = ci.pos[i]; r.cam.fwd[i] = ci.fwd[i]; r.cam.up[i] = ci.up[i]; }
+    r.cam.fovy = ci.fovy;
+    // particulas e destrocos do instantaneo mais perto (meio quadro de erro no maximo), com a camera dele para a troca da matriz
+    r.blended = true;
+    r.fxCam = t < 0.5f ? A.cam : B.cam;
+    if (t < 0.5f) {
+        r.sprites = A.sprites;
+        r.fx = A.fx;
+        r.fxRam = A.fxRam;
+        r.flares = A.flares;
+    }
+
+    // paletas misturadas, uma por par de copias (itens do mesmo monstro dividem o bloco)
+    std::map<std::pair<const void *, const void *>, std::shared_ptr<std::vector<M4>>> pals;
+    auto blendItem = [&](const DrawItem &a, DrawItem &b) {
+        if (stats) ++stats->matched;
+        if (std::memcmp(&a.m, &b.m, sizeof(M4)) != 0) {
+            const float dx = b.m.m[3][0] - a.m.m[3][0], dy = b.m.m[3][1] - a.m.m[3][1], dz = b.m.m[3][2] - a.m.m[3][2];
+            if (dx * dx + dy * dy + dz * dz > 150.f * 150.f) return;   // teleporte, _cs reaproveitado: B
+            interp::lerpMatrix(a.m.m, b.m.m, t, b.m.m);
+            if (stats) ++stats->moved;
+        }
+        if (a.pal && b.pal && a.pal != b.pal && a.palBlk == b.palBlk && a.pal->size() == b.pal->size()) {
+            auto &sp = pals[{a.pal.get(), b.pal.get()}];
+            if (!sp) {
+                sp = std::make_shared<std::vector<M4>>(b.pal->size());
+                for (size_t k = 0; k < sp->size(); ++k) interp::lerpMatrix((*a.pal)[k].m, (*b.pal)[k].m, t, (*sp)[k].m);
+                if (stats) ++stats->pals;
+            }
+            b.pal = sp;
+        }
+    };
+    // (_cs & 25 bits) << 39 | (no & 25 bits) << 14 | ocorrencia do mesmo (_cs, no) na lista (14 bits)
+    auto keyOf = [](const DrawItem &it, std::unordered_map<uint64_t, uint32_t> &occ) {
+        const uint64_t base = (uint64_t(it.cs & 0x1FFFFFFu) << 39) | (uint64_t(it.node & 0x1FFFFFFu) << 14);
+        return base | std::min<uint32_t>(occ[base]++, 0x3FFFu);
+    };
+    auto blendList = [&](const std::vector<DrawItem> &la, std::vector<DrawItem> &lb) {
+        std::unordered_map<uint64_t, uint32_t> occA, occB;
+        std::unordered_map<uint64_t, const DrawItem *> amap;
+        amap.reserve(la.size() * 2);
+        for (const DrawItem &a : la) amap[keyOf(a, occA)] = &a;
+        for (DrawItem &b : lb) {
+            const auto f = amap.find(keyOf(b, occB));
+            if (f != amap.end()) blendItem(*f->second, b);
+        }
+    };
+    blendList(A.items, r.items);
+    blendList(A.sky, r.sky);
+    for (ShadowBlocker &sb : r.shadows)
+        for (const ShadowBlocker &sa : A.shadows)
+            if (sa.index == sb.index && sa.casterNodes == sb.casterNodes && sa.casters.size() == sb.casters.size()) {
+                for (int i = 0; i < 3; ++i) sb.origin[i] = sa.origin[i] + (sb.origin[i] - sa.origin[i]) * t;
+                for (size_t k = 0; k < sb.casters.size(); ++k) blendItem(sa.casters[k], sb.casters[k]);
+                break;
+            }
+    for (std::vector<DrawItem> *list : {&r.hud, &r.overlay, &r.hp, &r.hpOverlay})
+        for (DrawItem &it : *list) {
+            interp::rebase(it.m.m, toInterp(B.cam), ci, it.m.m);
+            if (stats) ++stats->rebased;
+        }
+    for (int v = 0; v < 3; ++v)
+        if (A.extra[v] && B.extra[v] && A.extra[v]->valid && B.extra[v]->valid)
+            r.extra[v] = std::make_shared<Snapshot>(blendSnapshots(*A.extra[v], *B.extra[v], t, stats));
+    return r;
+}
 
 class Scene {
 public:
@@ -780,6 +878,9 @@ public:
     float wide = 1.f;
     // Corte por esfera contra a vista do jogo, como o hierTraverseAsm (Scene::outOfView); o viewer com camera livre o desliga.
     bool fovCull = true;
+    // Raio da esfera do corte multiplicado: com interpolacao a camera desenhada fica atras da do quadro coletado, e o que ela ainda ve na
+    // borda nao pode ter sido cortado (wotm_live.inc liga 1,25 na coleta quando a interpolacao esta ligada)
+    float cullMargin = 1.f;
     // Vista do jogo que collect segue e que draw desenha (tela dividida; ViewCtx). A coleta a recebe de quem chama; o show a copia do
     // instantaneo.
     ViewCtx vctx;
@@ -1711,6 +1812,7 @@ public:
                     for (uint32_t k = 0; k < 32; ++k) sp->push_back(readM4(ram, blk + 0x10 + 0x40 * k));
                 }
                 it.pal = sp;
+                it.palBlk = blk;
             }
         return sn;
     }
@@ -3640,7 +3742,7 @@ private:
         xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), c);
         for (int i = 0; i < 3; ++i) s2 = std::max(s2, m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
         static constexpr float kNoBox[3] = {0.f, 0.f, 0.f};
-        return !Particles::inViewVolume(ram, c, kNoBox, ram.f32(node + 0x1C) * std::sqrt(s2), wide);
+        return !Particles::inViewVolume(ram, c, kNoBox, ram.f32(node + 0x1C) * std::sqrt(s2) * cullMargin, wide);
     }
 
     bool already(uint32_t n) {

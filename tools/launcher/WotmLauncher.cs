@@ -122,6 +122,7 @@ class Launcher : Form
     static readonly string[] Rates = { "0", "60", "120", "144", "165", "180", "240" };
 
     readonly ComboBox rate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
+    readonly ComboBox interp = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly CheckBox vsync = new DarkCheckBox { Text = "Vsync   [WOTM_VSYNC]", AutoSize = true };
     readonly int monitorHz, monitorWidth, monitorHeight;   // modo atual do monitor principal, em pixels reais (sem a escala do Windows)
 
@@ -196,6 +197,7 @@ class Launcher : Form
             foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
             res.SelectedIndex = Array.IndexOf(Resolutions, MonitorRes());
             rate.SelectedIndex = 0;
+            interp.SelectedIndex = 0;
             vsync.Checked = true;
             aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
             dynWidth.Checked = true;
@@ -257,9 +259,16 @@ class Launcher : Form
         for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
         int hi = Array.IndexOf(Rates, saved.TryGetValue("WOTM_HZ", out v) ? v : "0");
         rate.SelectedIndex = hi >= 0 ? hi : 0;
-        tips.SetToolTip(rate, "How many times per second the screen is presented (WOTM_HZ). Game logic stays at 60: above that the frame " +
-            "is repeated, with even pacing and no tearing. 'Monitor' uses the refresh rate of the window's monitor.");
+        tips.SetToolTip(rate, "How many times per second the screen is presented (WOTM_HZ). Game logic stays at 60: above that the frames " +
+            "in between are interpolated (Frame interpolation) or the last frame is repeated, with even pacing and no tearing. " +
+            "'Monitor' uses the refresh rate of the window's monitor.");
         inner.Controls.Add(Row("Refresh rate   [WOTM_HZ]", rate));
+        interp.Items.AddRange(new object[] { "Auto (above 60 Hz)", "On", "Off" });
+        interp.SelectedIndex = saved.TryGetValue("WOTM_INTERP", out v) ? (v == "1" ? 1 : v == "0" ? 2 : 0) : 0;
+        tips.SetToolTip(interp, "Draws the blend of the last two game frames on every screen refresh, so motion is smooth above 60 Hz " +
+            "(costs one game frame of latency, about 17 ms). Auto turns it on above 60 Hz and off when the redraw does not fit in the refresh " +
+            "period; when it only fits every other refresh it draws at half the refresh rate (72 images/s at 144 Hz), still evenly paced.");
+        inner.Controls.Add(Row("Frame interpolation   [WOTM_INTERP]", interp));
         vsync.Checked = !saved.TryGetValue("WOTM_VSYNC", out v) || v == "1";
         tips.SetToolTip(vsync, "Syncs with the monitor (no tearing). Unchecked: only limited by the clock.");
         inner.Controls.Add(vsync);
@@ -636,6 +645,7 @@ class Launcher : Form
         lines.Add("WOTM_FULLSCREEN|" + (fullscreen.Checked ? "1" : "0"));
         lines.Add("WOTM_HZ|" + Rates[rate.SelectedIndex]);
         lines.Add("WOTM_VSYNC|" + (vsync.Checked ? "1" : "0"));
+        lines.Add("WOTM_INTERP|" + (interp.SelectedIndex == 1 ? "1" : interp.SelectedIndex == 2 ? "0" : "auto"));
         lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
         lines.Add(":MatchPlayer|" + MonsterIds[matchPlayer.SelectedIndex]);
         lines.Add(":MatchLevel|" + LevelIds[matchLevel.SelectedIndex]);
@@ -734,6 +744,8 @@ class Launcher : Form
         else psi.EnvironmentVariables.Remove("WOTM_HZ");
         if (vsync.Checked) psi.EnvironmentVariables.Remove("WOTM_VSYNC");
         else psi.EnvironmentVariables["WOTM_VSYNC"] = "0";
+        if (interp.SelectedIndex == 0) psi.EnvironmentVariables.Remove("WOTM_INTERP");
+        else psi.EnvironmentVariables["WOTM_INTERP"] = interp.SelectedIndex == 1 ? "1" : "0";
         if (matchOn.Checked) psi.EnvironmentVariables["WOTM_MATCH"] = MatchValue();
         else psi.EnvironmentVariables.Remove("WOTM_MATCH");
         string cheats = CheatsValue();

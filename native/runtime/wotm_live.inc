@@ -263,6 +263,9 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_native.hpp"
 #include "wotm_cheats.h"   // menu de debug (F1)
 #include "wotm_netstatus.h"   // partida em rede: mensagem na tela, teclas de debug desligadas
+bool wotmHoldGame(bool hold);  // wotm_foto.inc: segura a thread do EE na fronteira do quadro (autoteste da interpolacao)
+#include <chrono>
+#include <deque>
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)
 #define WOTM_HAVE_NATIVE 1
@@ -308,6 +311,9 @@ struct State
     std::string rtxPath;
     long frame = 0;
     wotm::Snapshot snap;   // ultimo quadro do jogo (desenhado ate o proximo)
+    // interpolacao: os ultimos quadros do jogo (do mais velho ao mais novo) e o relogio de exibicao
+    std::deque<std::shared_ptr<const wotm::Snapshot>> hist;
+    wotm::interp::ContentClock content;
 };
 
 // Fase carregada: so o cabecalho da imagem do nivel em 0xA00000 (N e os N ponteiros dos nos-raiz, docs/FORMATOS.md) e o endereco
@@ -386,6 +392,7 @@ static int renderHeight()
 // relogio). A logica do jogo continua a 60: a apresentacao so redesenha a cena quando chega quadro novo (wotmDrawNative, "redesenho")
 // e nas outras reapresenta a ultima imagem. Ganho: ritmo regular (sem a batida entre os 60 do raylib e o monitor), sem tearing.
 // O runtime abria com SetTargetFPS(60) fixo (ps2_runtime.cpp); aqui e trocado na primeira apresentacao.
+static std::atomic<int> g_presentHz{60};   // apresentacoes por segundo (a interpolacao liga sozinha acima de 60)
 static void initPresentRate()
 {
     const int mon = GetCurrentMonitor(), monHz = GetMonitorRefreshRate(mon);
@@ -400,8 +407,245 @@ static void initPresentRate()
         SetWindowState(FLAG_VSYNC_HINT);
     // com vsync na taxa do monitor quem segura e a troca de buffers; abaixo dela o limite por tempo divide (60 num de 180 = 1 em 3)
     SetTargetFPS(vsync && hz >= monHz ? 0 : hz);
-    std::fprintf(stderr, "[native] apresentacao: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", vsync && monHz > 0 ? std::min(hz, monHz) : hz,
+    g_presentHz = vsync && monHz > 0 ? std::min(hz, monHz) : hz;
+    std::fprintf(stderr, "[native] apresentacao: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", g_presentHz.load(),
                  monHz, vsync ? "ligado" : "desligado");
+}
+
+// Interpolacao de quadros (so desenho; native/wotm_interp.hpp, wotm::blendSnapshots). O jogo anda a 60 (ou 30 com 3+ jogadores) e a
+// tela pode ir a 144: em vez de repetir a ultima imagem, a apresentacao desenha a mistura dos dois quadros do jogo que cercam o relogio
+// de exibicao, que anda um quadro atras (+1 quadro de latencia). Nunca extrapola e nunca toca a RAM do jogo.
+//   WOTM_INTERP=1 liga, 0 desliga; sem ela liga sozinha com a tela acima de 60 Hz e desliga se o redesenho nao couber no periodo.
+//   WOTM_INTERP_HZ=<n>: no maximo n redesenhos por segundo (nas outras apresentacoes repete a imagem); sem ela, medido.
+//   WOTM_INTERP_ALPHA=<f>: alfa fixo entre os dois ultimos quadros (teste: 1 = sem mistura, 0 = o quadro anterior).
+//   WOTM_INTERP_DELAY=<ms>: folga fixa do relogio de exibicao alem de um quadro do jogo; sem ela comeca em 6 e se ajusta (4 a 25)
+//     pela frequencia com que o quadro mais novo chega atrasado e a imagem segura (wotm::interp::DelayTuner).
+//   WOTM_INTERPLOG=1: uma linha [interp] por apresentacao (alfa, se redesenhou, camera; tools\interp_smooth.py mede a suavidade).
+//   WOTM_INTERP_SELFTEST=<s>: depois de s segundos de luta desenha fora da tela a mistura com alfa 1 e o quadro B e conta os pixels
+//     diferentes (tem que ser 0), e alfa 0 contra A (informativo).
+struct InterpConfig
+{
+    int mode = -1;         // -1 automatico, 0 desligada, 1 ligada
+    int capHz = 0;         // 0: sem limite fixo
+    float alpha = -1.f;    // < 0: relogio de exibicao
+    double delayMs = -1.0; // folga do relogio de exibicao alem de um quadro do jogo; < 0: ajustada sozinha (interpDelay)
+    bool log = false;
+    double selftest = -1.0;
+};
+static const InterpConfig &interpConfig()
+{
+    static const InterpConfig c = [] {
+        InterpConfig r;
+        if (const char *e = std::getenv("WOTM_INTERP"); e && *e)
+            r.mode = std::atoi(e) != 0 ? 1 : 0;
+        if (const char *e = std::getenv("WOTM_INTERP_HZ"); e && *e)
+            r.capHz = std::max(0, std::atoi(e));
+        if (const char *e = std::getenv("WOTM_INTERP_ALPHA"); e && *e)
+            r.alpha = std::clamp(static_cast<float>(std::atof(e)), 0.f, 1.f);
+        if (const char *e = std::getenv("WOTM_INTERP_DELAY"); e && *e)
+            r.delayMs = std::clamp(std::atof(e), 0.0, 50.0);
+        r.log = std::getenv("WOTM_INTERPLOG") != nullptr;
+        if (const char *e = std::getenv("WOTM_INTERP_SELFTEST"); e && *e)
+            r.selftest = std::atof(e);
+        return r;
+    }();
+    return c;
+}
+static std::atomic<bool> g_interpOn{false};   // decidido pela apresentacao; a coleta (thread do EE) alarga o corte por esfera
+// Redesenho a cada g_interpDiv apresentacoes (1, 2, 3...): sempre um divisor da taxa da tela, para cada imagem ficar o mesmo numero
+// de vblanks (144 Hz com redesenho de 7 ms: 72 imagens/s, 2 vblanks cada, movimento uniforme). WOTM_INTERP_HZ fixa; sem ela, medido.
+static int g_interpDiv = 1;
+static bool g_interpAutoOff = false;           // automatica: nem dividindo a taxa passaria de 60 imagens/s
+inline double hostSeconds() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+
+// folga do relogio de exibicao (fixa com WOTM_INTERP_DELAY; sem ela, ajustada a cada 300 redesenhos pelas imagens seguradas)
+static wotm::interp::DelayTuner &interpDelay()
+{
+    static wotm::interp::DelayTuner d = [] {
+        const double fixed = interpConfig().delayMs;
+        return fixed >= 0.0 ? wotm::interp::DelayTuner(fixed, fixed, fixed) : wotm::interp::DelayTuner(6.0, 4.0, 25.0);
+    }();
+    return d;
+}
+
+static void setInterpDiv(const InterpConfig &c, int div, const char *why)
+{
+    const int hz = std::max(1, g_presentHz.load());
+    div = std::max(1, div);
+    if (c.mode < 0 && hz / div <= 60)
+    {
+        if (!g_interpAutoOff)
+            std::fprintf(stderr, "[interp] desligada: %s; nem %d imagens/s (1 a cada %d apresentacoes) passam de 60 (WOTM_INTERP=1 forca)\n", why,
+                         hz / div, div);
+        g_interpAutoOff = true;
+        return;
+    }
+    if (div != g_interpDiv)
+        std::fprintf(stderr, "[interp] %s: redesenho a cada %d apresentacao(oes), %d imagens/s\n", why, div, hz / div);
+    g_interpDiv = div;
+}
+
+// Custo do redesenho com interpolacao (CPU da janela): a cada 120 redesenhos, o divisor que deixa 15% de folga no periodo
+static void interpBudget(const InterpConfig &c, double ms)
+{
+    static double sum = 0.0;
+    static int n = 0;
+    sum += ms;
+    if (++n < 120 || c.capHz > 0)
+        return;
+    const double avg = sum / n, period = 1000.0 / std::max(1, g_presentHz.load());
+    sum = 0.0;
+    n = 0;
+    const int need = static_cast<int>(std::ceil(avg / (0.85 * period)));
+    if (need > g_interpDiv || (need < g_interpDiv && avg < 0.6 * period * g_interpDiv))
+    {
+        char why[64];
+        std::snprintf(why, sizeof why, "redesenho de %.1f ms", avg);
+        setInterpDiv(c, need, why);
+    }
+}
+
+// Particulas de um instantaneo misturado (Snapshot::blended): durante o redesenho, a worldToScreenMat e o olho (worldCtx.eo) de cada
+// vista na copia de sombra delas viram os da camera misturada (W_I = inv(V_I) * V_B * W_B, wotm::interp::reprojectToCamera), e no fim
+// voltam. Sem isso as particulas projetavam com a camera do quadro de onde vieram e escorregavam na cena nos giros de camera. A copia so
+// e lida pela thread da janela (a do EE grava num buffer livre do pool).
+class FxCameraPatch
+{
+public:
+    void apply(const wotm::Snapshot &s)
+    {
+        patch(s);
+        for (const auto &e : s.extra)
+            if (e)
+                patch(*e);
+    }
+    ~FxCameraPatch()
+    {
+        for (auto it = saved_.rbegin(); it != saved_.rend(); ++it)
+        {
+            std::memcpy(it->base + it->w2s, it->w.data(), it->w.size());
+            std::memcpy(it->base + it->eo, it->e.data(), it->e.size());
+        }
+    }
+
+private:
+    struct Saved
+    {
+        uint8_t *base;
+        uint32_t w2s, eo;
+        std::array<uint8_t, 0x40> w;
+        std::array<uint8_t, 12> e;
+    };
+    std::vector<Saved> saved_;
+
+    static bool sameCamera(const wotm::GameCamera &a, const wotm::GameCamera &b)
+    {
+        return std::memcmp(a.pos, b.pos, sizeof a.pos) == 0 && std::memcmp(a.fwd, b.fwd, sizeof a.fwd) == 0 &&
+               std::memcmp(a.up, b.up, sizeof a.up) == 0 && a.fovy == b.fovy;
+    }
+
+    void patch(const wotm::Snapshot &s)
+    {
+        if (!s.blended || !s.fxRam || !s.cam.ok || !s.fxCam.ok || sameCamera(s.fxCam, s.cam))
+            return;
+        uint8_t *base = const_cast<uint8_t *>(s.fxRam.get());
+        const uint32_t view = static_cast<uint32_t>(std::clamp(s.vctx.view, 0, 4));
+        const uint32_t w2s = wotm::addr::worldToScreenMat + 0x40u * view, eo = wotm::addr::worldCtx + 0x1F0u * view + 0x20u;
+        for (const Saved &sv : saved_)
+            if (sv.base == base && sv.w2s == w2s)
+                return;
+        Saved sv{base, w2s, eo, {}, {}};
+        std::memcpy(sv.w.data(), base + w2s, sv.w.size());
+        std::memcpy(sv.e.data(), base + eo, sv.e.size());
+        saved_.push_back(sv);
+        float W[4][4], out[4][4];
+        std::memcpy(W, base + w2s, sizeof W);
+        wotm::interp::reprojectToCamera(W, wotm::toInterp(s.fxCam), wotm::toInterp(s.cam), out);
+        std::memcpy(base + w2s, out, sizeof out);
+        const float eye[3] = {-s.cam.pos[0], -s.cam.pos[1], -s.cam.pos[2]};
+        std::memcpy(base + eo, eye, sizeof eye);
+    }
+};
+
+// Quadro do jogo novo no historico da interpolacao (3 no maximo). Contador que nao anda ou salta mais de 8 fields (carga, pausa,
+// dialogo) recomeca o historico e o relogio.
+static void pushHistory(State &S, std::shared_ptr<const wotm::Snapshot> s)
+{
+    if (!S.hist.empty() && (s->fields <= S.hist.back()->fields || s->fields - S.hist.back()->fields > 8u))
+    {
+        S.hist.clear();
+        S.content.reset();
+    }
+    S.hist.push_back(std::move(s));
+    while (S.hist.size() > 3)
+        S.hist.pop_front();
+    if (interpConfig().log)   // ritmo da captura: fields do jogo e instante (tools\interp_smooth.py ignora; diagnostico do relogio)
+        std::fprintf(stderr, "[interp] quadro fields=%u captura=%.4f chegada=%.4f g=%u\n", S.hist.back()->fields, S.hist.back()->hostT, hostSeconds(),
+                     S.hist.back()->g);
+}
+
+// WOTM_INTERP_SELFTEST=<s>: uma vez, depois de s segundos, com uma luta de uma vista no historico: desenha fora da tela a mistura do
+// ultimo par com alfa 1 e o quadro B (tem que dar a mesma imagem), e com alfa 0 contra A (informativo: o que so existe em B entra)
+static void interpSelfTest(State &S, const wotm::Ram &ram, const InterpConfig &c, double nowT)
+{
+    static bool done = false;
+    if (done || c.selftest < 0.0 || nowT < c.selftest || S.hist.size() < 2)
+        return;
+    const wotm::Snapshot &A = *S.hist[S.hist.size() - 2], &B = *S.hist.back();
+    if (A.items.size() < 20 || B.vctx.grid || !B.vctx.full() || B.extra[0])
+        return;
+    done = true;
+    // o desenho le partes da RAM ao vivo (texturas animadas, campos de nos): com o jogo andando, dois desenhos do mesmo instantaneo ja
+    // diferem; o jogo fica parado na fronteira do quadro durante o teste
+    const bool held = wotmHoldGame(true);
+    struct Release { ~Release() { wotmHoldGame(false); } } release;
+    static RenderTexture2D rt{};
+    if (rt.id == 0)
+        rt = LoadRenderTexture(640, 360);
+    auto render = [&](const wotm::Snapshot &s) {
+        const wotm::GameCamera gc = S.scene.show(s);
+        BeginTextureMode(rt);
+        ClearBackground(BLACK);
+        rlSetClipPlanes(0.5, 30000.0);
+        Camera3D c3{};
+        c3.position = {gc.pos[0], gc.pos[1], gc.pos[2]};
+        c3.target = {gc.pos[0] + gc.fwd[0], gc.pos[1] + gc.fwd[1], gc.pos[2] + gc.fwd[2]};
+        c3.up = {gc.up[0], gc.up[1], gc.up[2]};
+        c3.fovy = gc.fovy;
+        c3.projection = CAMERA_PERSPECTIVE;
+        BeginMode3D(c3);
+        S.scene.draw(ram, false);
+        EndMode3D();
+        BeginMode3D(c3);
+        S.scene.drawHp(ram);
+        EndMode3D();
+        EndTextureMode();
+        return LoadImageFromTexture(rt.texture);
+    };
+    auto differ = [](const Image &x, const Image &y) {
+        long n = 0;
+        const auto *p = static_cast<const uint32_t *>(x.data), *q = static_cast<const uint32_t *>(y.data);
+        for (int i = 0; i < x.width * x.height; ++i)
+            n += p[i] != q[i];
+        return n;
+    };
+    UnloadImage(render(B));   // aquece (texturas e malhas carregadas no primeiro uso)
+    Image b0 = render(B), b1 = render(wotm::blendSnapshots(A, B, 1.f)), b = render(B), a0 = render(wotm::blendSnapshots(A, B, 0.f)), a = render(A);
+    std::fprintf(stderr, "[interp] autoteste (g=%u e %u, jogo %s): B x B: %ld; alfa 1 x B: %ld pixels diferentes; alfa 0 x A: %ld de %d\n", A.g,
+                 B.g, held ? "parado" : "ANDANDO", differ(b0, b), differ(b1, b), differ(a0, a), b.width * b.height);
+    {   // imagens na pasta atual (o discroot): B, B de novo, alfa 1 e a mascara do que difere de B (branco)
+        Image mask = ImageCopy(b);
+        auto *m = static_cast<uint32_t *>(mask.data);
+        const auto *p0 = static_cast<const uint32_t *>(b0.data), *p1 = static_cast<const uint32_t *>(b1.data), *pb = static_cast<const uint32_t *>(b.data);
+        for (int i = 0; i < b.width * b.height; ++i)
+            m[i] = (p0[i] != pb[i] ? 0xFF0000FFu : 0xFF000000u) | (p1[i] != pb[i] ? 0xFF00FF00u : 0u);   // vermelho: B x B; verde: alfa 1
+        ExportImage(b, "interp_autoteste_b.png");
+        ExportImage(b1, "interp_autoteste_alfa1.png");
+        ExportImage(mask, "interp_autoteste_dif.png");
+        UnloadImage(mask);
+    }
+    for (Image *im : {&b0, &b1, &b, &a0, &a})
+        UnloadImage(*im);
 }
 
 // Janela no tamanho do quadro nativo (renderHeight na proporcao fixa, ou 16:9), reduzida para caber em 90% do monitor e centrada.
@@ -469,6 +713,22 @@ struct Capture
     std::mutex m;
     wotm::Snapshot snap;   // ultimo quadro capturado, ainda nao consumido pela apresentacao
     bool fresh = false;
+    wotm::Snapshot prev;   // o publicado antes dele, se a apresentacao nao o pegou (a interpolacao precisa do par)
+    bool prevFresh = false;
+    void publish(wotm::Snapshot &&s)   // com m travado
+    {
+        if (fresh)
+        {
+            prev = std::move(snap);
+            prevFresh = true;
+        }
+        snap = std::move(s);
+        fresh = true;
+    }
+    void drop()   // com m travado
+    {
+        fresh = prevFresh = false;
+    }
     std::atomic<bool> on{false};   // a apresentacao desenha nativo (liga na primeira chamada de wotmDrawNative)
     std::atomic<float> wide{1.f};  // Scene::wide da apresentacao (teste de visao das particulas)
 };
@@ -573,7 +833,7 @@ void wotmLoadFreeze(bool on)
     {   // instantaneo ainda nao desenhado: le a RAM de antes da carga, mas seria desenhado depois dela
         wotm_live::Capture &c = wotm_live::capture();
         std::lock_guard<std::mutex> lk(c.m);
-        c.fresh = false;
+        c.drop();
     }
 }
 
@@ -906,6 +1166,7 @@ void wotmCaptureScene(const uint8_t *rdram, int view)
         return;
     wotm::Scene &cap = wotm_live::captureScene(view);
     cap.wide = c.wide.load(std::memory_order_relaxed);
+    cap.cullMargin = wotm_live::g_interpOn.load(std::memory_order_relaxed) ? 1.25f : 1.f;   // a camera interpolada fica atras desta
     cap.vctx = wotm::readViewCtx(ram, view);
     static const bool splitLog = std::getenv("WOTM_SPLITLOG") != nullptr;   // diagnostico: vista capturada e geometria dela
     if (splitLog)
@@ -937,9 +1198,10 @@ void wotmCaptureFadeStep(const uint8_t *rdram)
     sn.screenRects.clear();
     sn.screenPolys.clear();
     sn.g = wotm::Ram{rdram, PS2_RAM_SIZE}.u32(wotm::sym::g_frame);
+    sn.fields = wotm::Ram{rdram, PS2_RAM_SIZE}.u32(wotm::addr::fieldCounterAtStart);
+    sn.hostT = wotm_live::hostSeconds();
     std::lock_guard<std::mutex> lk(c.m);
-    c.snap = std::move(sn);
-    c.fresh = true;
+    c.publish(std::move(sn));
 }
 
 void wotmCaptureFrame(const uint8_t *rdram)
@@ -1025,9 +1287,13 @@ void wotmCaptureFrame(const uint8_t *rdram)
             vs->fxRam = sn.fxRam;
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
+    sn.fields = ram.u32(wotm::addr::fieldCounterAtStart);
+    sn.hostT = wotm_live::hostSeconds();
+    for (auto &vs : sn.extra)
+        if (vs)
+            vs->fields = sn.fields, vs->hostT = sn.hostT;
     std::lock_guard<std::mutex> lk(c.m);
-    c.snap = std::move(sn);
-    c.fresh = true;
+    c.publish(std::move(sn));
 }
 
 // Numeros de dano (mod WOTM_DAMAGEPOP): a thread do EE manda cada dano (wotmDamagePopup: ponto no mundo, valor, tipo) e a janela os
@@ -1192,6 +1458,21 @@ static bool wotmDrawNative(const uint8_t *rdram)
     wotm_live::Capture &cap = wotm_live::capture();
     cap.wide.store(S.scene.wide, std::memory_order_relaxed);
     cap.on.store(true, std::memory_order_relaxed);
+    {   // interpolacao ligada? (WOTM_INTERP; automatica: tela acima de 60 Hz e redesenho cabendo no periodo)
+        const wotm_live::InterpConfig &ic = wotm_live::interpConfig();
+        const bool want = !wotm_live::g_localCollect &&
+                          (ic.mode == 1 || (ic.mode < 0 && wotm_live::g_presentHz.load() > 60 && !wotm_live::g_interpAutoOff));
+        if (want != wotm_live::g_interpOn.load(std::memory_order_relaxed))
+        {
+            wotm_live::g_interpOn = want;
+            if (!want)
+            {
+                S.hist.clear();
+                S.content.reset();
+            }
+            std::fprintf(stderr, "[interp] %s (tela %d Hz; WOTM_INTERP)\n", want ? "ligada" : "desligada", wotm_live::g_presentHz.load());
+        }
+    }
     static bool filterInstalled = false;
     if (!filterInstalled)
     {
@@ -1205,8 +1486,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
     {
         {
             std::lock_guard<std::mutex> lk(cap.m);
-            cap.fresh = false;
+            cap.drop();
         }
+        S.hist.clear();
+        S.content.reset();
         const RenderTexture2D &base = S.rts[S.cur];
         RenderTexture2D &out = S.rts[S.cur ^ 1];
         if (out.id != 0 && (out.texture.width != base.texture.width || out.texture.height != base.texture.height))
@@ -1251,6 +1534,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.levelSig = sig;
         S.rtxChosen = false;
         S.snap = wotm::Snapshot{};
+        S.hist.clear();
+        S.content.reset();
     }
     // Quadro novo do jogo: o instantaneo capturado na thread do EE (wotmCaptureFrame). No replay (--vu1cmp) nao ha jogo rodando e a
     // RAM do instantaneo e fixa: a coleta e aqui mesmo. Os desenhos seguintes repetem o instantaneo.
@@ -1269,6 +1554,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
     else
     {
         std::lock_guard<std::mutex> lk(cap.m);
+        if (cap.prevFresh)   // a apresentacao atrasou e perdeu um quadro: so entra no historico da interpolacao
+        {
+            if (cap.prev.valid && cap.prev.cam.ok && wotm_live::g_interpOn.load(std::memory_order_relaxed))
+                wotm_live::pushHistory(S, std::make_shared<const wotm::Snapshot>(std::move(cap.prev)));
+            cap.prevFresh = false;
+        }
         if (cap.fresh)
         {
             sn = std::move(cap.snap);
@@ -1282,6 +1573,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // monstro na cena final, sobram 18 itens e a pergunta de salvar saia toda preta.
         if ((sn.items.size() < 20 && sn.hp.empty()) || !sn.cam.ok)
         {            S.snap = wotm::Snapshot{};
+            S.hist.clear();
             return false;
         }
         {
@@ -1298,6 +1590,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         S.snap = std::move(sn);
         fresh = true;
+        if (wotm_live::g_interpOn.load(std::memory_order_relaxed) && !wotm_live::g_localCollect)
+            wotm_live::pushHistory(S, std::make_shared<const wotm::Snapshot>(S.snap));
+        else
+            S.hist.clear();
     }
     // Camera livre com o jogo pausado (F7): a coleta da captura recortou pela vista congelada. Com a thread do EE parada a RAM nao
     // muda, entao a apresentacao coleta de novo, uma vez por quadro pausado, sem o recorte (o resto do instantaneo fica o mesmo).
@@ -1349,9 +1645,48 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const bool fadeChanged = hasFade != lastHasFade || (hasFade && std::memcmp(&fadeNow, &lastFade, offsetof(wotm::ScreenRect, underText)) != 0);
     const RenderTexture2D &shown = S.rts[S.cur];
     const bool sizeOk = shown.id != 0 && shown.texture.width == RW && shown.texture.height == RH;
-    const bool rerender = fresh || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect ||
+    // Interpolacao: o par de quadros do jogo que cerca o relogio de conteudo e o alfa entre eles (relogio alem do mais novo: segura o mais
+    // novo, nunca extrapola). Redesenha quando o par ou o alfa mudam, a cada g_interpDiv apresentacoes.
+    const wotm_live::InterpConfig &icfg = wotm_live::interpConfig();
+    const bool interpActive = wotm_live::g_interpOn.load(std::memory_order_relaxed) && S.hist.size() >= 2 && !freeView.override &&
+                              !wotmPaused() && !wotm_live::g_localCollect;
+    std::shared_ptr<const wotm::Snapshot> pairA, pairB;
+    float alpha = 1.f;
+    static long s_presentN = 0;   // apresentacoes (com vsync, vblanks): o log da interpolacao usa a grade n / Hz
+    ++s_presentN;
+    if (interpActive)
+    {
+        if (icfg.alpha >= 0.f)
+            pairA = S.hist[S.hist.size() - 2], pairB = S.hist.back(), alpha = icfg.alpha;
+        else
+        {
+            // relogio de conteudo: um passo de 60 / Hz fields por apresentacao, puxado para um quadro (e a folga) atras do mais novo
+            const auto &newest = *S.hist.back(), &before = *S.hist[S.hist.size() - 2];
+            const double frameFields = std::clamp<double>(static_cast<double>(newest.fields) - before.fields, 1.0, 4.0);
+            const double p = S.content.advance(60.0 / std::max(1, wotm_live::g_presentHz.load()), newest.fields,
+                                               frameFields + wotm_live::interpDelay().ms() * 60.0 / 1000.0);
+            size_t i = 0;
+            while (i + 1 < S.hist.size() && S.hist[i + 1]->fields <= p)
+                ++i;
+            pairA = S.hist[i];
+            pairB = i + 1 < S.hist.size() ? S.hist[i + 1] : S.hist[i];
+            alpha = pairA == pairB ? 1.f : wotm::interp::alphaBetween(p, pairA->fields, pairB->fields);
+        }
+    }
+    static uint32_t lastPairG = ~0u;
+    static float lastAlpha = -1.f;
+    static long s_presents = 0;   // apresentacoes com interpolacao (o redesenho cai nas multiplas do divisor)
+    if (icfg.capHz > 0)
+        wotm_live::g_interpDiv = std::max(1, static_cast<int>(std::lround(wotm_live::g_presentHz.load() / static_cast<double>(icfg.capHz))));
+    const bool onCadence = interpActive && (s_presents++ % wotm_live::g_interpDiv) == 0;
+    const bool interpDue = onCadence && (pairB->g != lastPairG || alpha != lastAlpha);
+    // com interpolacao o quadro novo do jogo nao forca redesenho fora da cadencia (entra no par na proxima vez)
+    const bool rerender = (fresh && !interpActive) || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect || interpDue ||
                           (nowT - lastFreshT >= 0.04 && nowT - lastRenderT >= 1.0 / 60.0 - 0.001);
     wotm::GameCamera gc = S.snap.cam;
+    static wotm::GameCamera s_shownCam;   // camera da imagem na tela (WOTM_INTERPLOG)
+    static float s_shownAlpha = 1.f;
+    static double s_shownCt = 0.0;        // tempo do jogo da imagem na tela, em fields (WOTM_INTERPLOG; tools\interp_smooth.py)
     if (rerender)
     {
         lastRenderT = nowT;
@@ -1359,22 +1694,46 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const double tDraw0 = GetTime(), cpuDraw0 = wotmThreadCpuMs();   // custo do redesenho por numero de vistas (PS2X_STATS)
         lastFade = fadeNow;
         lastHasFade = hasFade;
+        // o instantaneo desenhado: o ultimo quadro do jogo, ou a mistura do par da interpolacao
+        wotm::Snapshot blended;
+        const wotm::Snapshot *view = &S.snap;
+        wotm_live::FxCameraPatch fxPatch;   // particulas na camera misturada ate o fim deste redesenho
+        if (interpActive)
+        {
+            wotm::BlendStats bst;
+            blended = wotm::blendSnapshots(*pairA, *pairB, alpha, &bst);
+            view = &blended;
+            lastPairG = pairB->g;
+            lastAlpha = alpha;
+            if (icfg.alpha < 0.f)
+            {   // relogio alem do quadro mais novo: segurou a imagem; a folga se ajusta
+                const double before = wotm_live::interpDelay().ms();
+                wotm_live::interpDelay().onRedraw(pairA == pairB);
+                if (wotm_live::interpDelay().ms() != before)
+                    std::fprintf(stderr, "[interp] folga do relogio %.1f ms\n", wotm_live::interpDelay().ms());
+            }
+            wotm_live::interpSelfTest(S, ram, icfg, nowT);
+            fxPatch.apply(*view);
+        }
+        s_shownAlpha = interpActive ? alpha : 1.f;
+        s_shownCt = interpActive ? pairA->fields + static_cast<double>(alpha) * (static_cast<double>(pairB->fields) - pairA->fields)
+                                 : static_cast<double>(S.snap.fields);
         // Tela dividida (Snapshot::view1): cada vista e desenhada numa textura da metade do quadro, com a camera dela, como se fosse a
         // tela inteira (o que mede o framebuffer, como os flares e a proporcao da camera, vale sem mudar), e as duas sao compostas lado
         // a lado. A camera livre (F5) mostra so a vista 0 em tela cheia.
         // Tela em 4 (3 ou 4 jogadores, ViewCtx::grid): cada vista numa textura de um quarto do quadro, todas em tela cheia 4:3, compostas
         // em 2x2 (0 em cima a esquerda, 1 em cima a direita, 2 embaixo a esquerda, 3 embaixo a direita; com 3 o quarto fica preto).
-        const auto extraOk = [&](int i) { return S.snap.extra[i] && S.snap.extra[i]->valid && S.snap.extra[i]->cam.ok; };
+        const auto extraOk = [&](int i) { return view->extra[i] && view->extra[i]->valid && view->extra[i]->cam.ok; };
         // WOTM_LOCALPLAYER=<n> (netcode, cada um no seu PC): so a vista do jogador n, em tela cheia, com o HUD dela
         const int localView = wotm_live::localView();
-        const wotm::Snapshot *own = localView > 0 && S.snap.vctx.grid && extraOk(localView - 1) ? S.snap.extra[localView - 1].get() : nullptr;
-        const bool split = extraOk(0) && !S.snap.vctx.full() && !freeView.override && localView < 0;
-        const bool grid = S.snap.vctx.grid && extraOk(0) && extraOk(1) && !freeView.override && localView < 0;
+        const wotm::Snapshot *own = localView > 0 && view->vctx.grid && extraOk(localView - 1) ? view->extra[localView - 1].get() : nullptr;
+        const bool split = extraOk(0) && !view->vctx.full() && !freeView.override && localView < 0;
+        const bool grid = view->vctx.grid && extraOk(0) && extraOk(1) && !freeView.override && localView < 0;
         {
             static const bool splitLog = std::getenv("WOTM_SPLITLOG") != nullptr;
             if (splitLog)
-                std::fprintf(stderr, "[split] desenho g=%u extra=%d,%d,%d full=%d grid=%d -> %d %d\n", S.snap.g, extraOk(0), extraOk(1), extraOk(2),
-                             S.snap.vctx.full(), S.snap.vctx.grid, split, grid);
+                std::fprintf(stderr, "[split] desenho g=%u extra=%d,%d,%d full=%d grid=%d -> %d %d\n", view->g, extraOk(0), extraOk(1), extraOk(2),
+                             view->vctx.full(), view->vctx.grid, split, grid);
         }
         const int VW = RW / 2, VH = grid ? RH / 2 : RH;
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
@@ -1409,12 +1768,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
             EndTextureMode();
         };
         if (split)
-            drawView(S.vrts[1], S.scene.show(*S.snap.extra[0]));
+            drawView(S.vrts[1], S.scene.show(*view->extra[0]));
         if (grid)
             for (int v = 1; v < 4; ++v)
                 if (extraOk(v - 1))
-                    drawView(S.vrts[v], S.scene.show(*S.snap.extra[v - 1]));
-        gc = S.scene.show(S.snap);
+                    drawView(S.vrts[v], S.scene.show(*view->extra[v - 1]));
+        gc = S.scene.show(*view);
         if (own)   // a cena e a camera da vista local; barras, fades e quadrados do HUD sao do quadro (estao no instantaneo da vista 0)
         {
             std::vector<wotm::ScreenRect> rects = std::move(S.scene.screenRects);
@@ -1423,7 +1782,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             S.scene.screenRects = std::move(rects);
             S.scene.screenPolys = std::move(polys);
         }
-        S.scene.localView = S.snap.vctx.grid ? localView : -1;
+        S.scene.localView = view->vctx.grid ? localView : -1;
         S.scene.gridBars = grid;
         S.snap.cam = gameCam;
         if (freeView.override)
@@ -1532,6 +1891,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         s_drawMs[grid ? 2 : (split ? 1 : 0)] += (GetTime() - tDraw0) * 1000.0;
         s_drawCpu[grid ? 2 : (split ? 1 : 0)] += wotmThreadCpuMs() - cpuDraw0;   // passos de 15,6 ms no Windows: so vale na media
         ++s_drawN[grid ? 2 : (split ? 1 : 0)];
+        s_shownCam = gc;
+        if (interpActive)
+            wotm_live::interpBudget(icfg, (GetTime() - tDraw0) * 1000.0);
 
         {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
             // segundos; para conferir telas ao vivo com um roteiro de pad (PS2X_PAD), sem tecla
@@ -1690,6 +2052,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
     }
 
+    if (wotm_live::interpConfig().log)   // uma linha por apresentacao: a camera da imagem na tela (tools\interp_smooth.py)
+        std::fprintf(stderr, "[interp] t=%.4f a=%.3f r=%d ct=%.3f n=%ld hz=%d cam=%.3f,%.3f,%.3f\n", wotm_live::hostSeconds(), s_shownAlpha,
+                     rerender ? 1 : 0, s_shownCt, s_presentN, wotm_live::g_presentHz.load(), s_shownCam.pos[0], s_shownCam.pos[1], s_shownCam.pos[2]);
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),
                      S.scene.items.size(), S.scene.sky.size(), S.rtxPath.c_str());

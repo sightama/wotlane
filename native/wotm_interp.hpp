@@ -253,6 +253,18 @@ namespace wotm::interp
         mul(t, vi, out);
     }
 
+    // Matriz mundo -> tela de B (W_B = inv(V_B) * C, C = camera -> tela) para a camera I: W_I = inv(V_I) * V_B * W_B. As particulas
+    // projetam com a worldToScreenMat do jogo; trocada por esta, seguem a camera misturada como o resto da cena.
+    inline void reprojectToCamera(const Mat wb, const Camera &b, const Camera &i, Mat out)
+    {
+        Mat vb, vi, ivi, t;
+        cameraToWorld(b, vb);
+        cameraToWorld(i, vi);
+        invertRigid(vi, ivi);
+        mul(ivi, vb, t);
+        mul(t, wb, out);
+    }
+
     // Posicao do que se mostra, em fields do jogo, entre dois instantaneos: 0 = A, 1 = B, sem extrapolar
     inline float alphaBetween(double position, uint32_t fieldsA, uint32_t fieldsB)
     {
@@ -261,27 +273,55 @@ namespace wotm::interp
         return static_cast<float>(std::clamp((position - static_cast<double>(fieldsA)) / static_cast<double>(fieldsB - fieldsA), 0.0, 1.0));
     }
 
-    // Relogio de exibicao (em fields, 1/60 s): cada instantaneo diz o contador do jogo e o instante da captura; o que se mostra anda com
-    // o relogio do host, atrasado de um quadro do jogo mais uma folga, e um filtro absorve a variacao do instante da captura (o fim da
-    // logica varia alguns ms). Erro acima de 2 fields (pausa, carga, salto) ressincroniza na hora.
-    class DisplayClock
+    // Relogio de conteudo (em fields do jogo): o que cada apresentacao mostra. Com vsync, cada apresentacao e um vblank, entao ele anda
+    // um passo fixo por apresentacao (60 / Hz da tela, vezes as apresentacoes por redesenho) e o movimento sai uniforme por construcao;
+    // um ajuste lento (5% por apresentacao) o mantem `lag` fields atras do quadro mais novo que ja chegou, e a chegada irregular dos
+    // quadros vira uma correcao pequena. Passou do mais novo: segura (nunca extrapola). Erro de mais de 3 fields (carga, pausa): pula.
+    class ContentClock
     {
     public:
-        static constexpr double kMargin = 0.15;   // fields (~2,5 ms)
-
-        void onSnapshot(uint32_t fields, double hostT, double frameFields)
+        double advance(double step, double newest, double lag)
         {
-            const double target = hostT * 60.0 - static_cast<double>(fields) + frameFields + kMargin;
-            if (!init_ || std::fabs(target - offset_) > 2.0)
-                offset_ = target, init_ = true;
+            const double target = newest - lag;
+            if (!init_ || std::fabs(target - p_) > 3.0)
+                p_ = target, init_ = true;
             else
-                offset_ += 0.05 * (target - offset_);
+            {
+                p_ += step;
+                p_ += 0.05 * (target - p_);
+            }
+            p_ = std::min(p_, newest);
+            return p_;
         }
-        double position(double now) const { return now * 60.0 - offset_; }
         void reset() { init_ = false; }
 
     private:
         bool init_ = false;
-        double offset_ = 0.0;
+        double p_ = 0.0;
+    };
+
+    // Folga do relogio de exibicao ajustada pelo que acontece: a cada 300 redesenhos, se mais de 3% seguraram o quadro mais novo
+    // (chegou depois do relogio), +2 ms; se menos de 0,5%, -0,5 ms; entre lo e hi. O que atrasa a chegada depende da maquina e da
+    // resolucao (a captura so entra quando a janela termina o redesenho em curso).
+    class DelayTuner
+    {
+    public:
+        DelayTuner(double start, double lo, double hi) : ms_(start), lo_(lo), hi_(hi) {}
+        void onRedraw(bool held)
+        {
+            held_ += held ? 1 : 0;
+            if (++n_ < 300)
+                return;
+            if (held_ * 100 > n_ * 3)
+                ms_ = std::min(hi_, ms_ + 2.0);
+            else if (held_ * 1000 < n_ * 5)
+                ms_ = std::max(lo_, ms_ - 0.5);
+            n_ = held_ = 0;
+        }
+        double ms() const { return ms_; }
+
+    private:
+        double ms_, lo_, hi_;
+        int n_ = 0, held_ = 0;
     };
 }

@@ -121,6 +121,24 @@ bool wotmPauseBlock(PS2Runtime *rt)
     tookFrame.store(true, std::memory_order_relaxed);
     return true;
 }
+// Apresentacao: segura a thread do EE na fronteira do quadro (como o F7) ate hold(false); devolve se ela parou em ate 2 s. Para quem
+// precisa da RAM parada por um instante (autoteste da interpolacao: o desenho le partes da RAM ao vivo).
+bool wotmHoldGame(bool hold)
+{
+    using namespace wotm_foto;
+    {
+        std::lock_guard<std::mutex> lk(m);
+        paused = hold;
+        steps = 0;
+    }
+    cv.notify_all();
+    if (!hold)
+        return true;
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!blocked.load(std::memory_order_relaxed) && std::chrono::steady_clock::now() < until)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    return blocked.load(std::memory_order_relaxed);
+}
 // wotm_overrides.cpp, na entrada de timerWaitForMinUpdateRate: o quadro que acabou teve uma parada (o tempo dela nao conta)
 bool wotmPauseTookFrame() { return wotm_foto::tookFrame.exchange(false, std::memory_order_relaxed); }
 // Vigia (ps2_runtime.cpp): g_frame parado de proposito

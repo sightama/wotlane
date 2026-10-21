@@ -187,48 +187,108 @@ namespace
         CHECK(same);
     }
 
-    // relogio de exibicao: quadros do jogo a 60 Hz (1 field cada) com a captura variando +-2 ms, tela a 144 Hz; alfa cobre o quadro
-    // inteiro, sem voltar e sem pular
-    TEST(display_clock_spreads_alpha_over_each_frame)
+    // matriz mundo -> tela das particulas trocada para a camera misturada: um ponto parado em relacao a camera cai no mesmo pixel
+    TEST(world_to_screen_follows_the_blended_camera)
     {
-        ip::DisplayClock clock;
-        std::mt19937 rng(7);
-        std::uniform_real_distribution<double> jitter(-0.002, 0.002);
-        const double frame = 1.0 / 60.0, present = 1.0 / 144.0;
-        double nextFrame = 0.0, now = 0.0;
-        uint32_t fieldsA = 0, fieldsB = 0;
-        int frames = 0;
-        std::vector<float> steps;
-        float last = -1.f;
-        uint32_t lastB = 0;
-        while (frames < 600)
+        const ip::Camera cb = cam(100, 50, 10, 25), ci = cam(90, 45, 9, 18);
+        Mat w{};   // projecao qualquer (com perspectiva) da camera B
+        Mat vb, ivb;
+        ip::cameraToWorld(cb, vb);
+        ip::invertRigid(vb, ivb);
+        const Mat proj = {{384.f, 0.f, 0.f, 0.f}, {2048.f, 0.f, 0.f, 1.f}, {0.f, -180.48f, 0.f, 0.f}, {2048.f, 2048.f, 0.f, 0.f}};
+        ip::mul(ivb, proj, w);
+        Mat wi;
+        ip::reprojectToCamera(w, cb, ci, wi);
+        // ponto 30 a frente, 4 a direita e 2 acima da camera B; o mesmo ponto em relacao a camera I
+        auto at = [](const ip::Camera &c, float f, float r, float u, float out[4]) {
+            Mat v;
+            ip::cameraToWorld(c, v);
+            for (int j = 0; j < 3; ++j)
+                out[j] = c.pos[j] + f * v[1][j] + r * v[0][j] + u * v[2][j];
+            out[3] = 1.f;
+        };
+        auto xf = [](const float p[4], const Mat m, float out[4]) {
+            for (int j = 0; j < 4; ++j)
+                out[j] = p[0] * m[0][j] + p[1] * m[1][j] + p[2] * m[2][j] + p[3] * m[3][j];
+        };
+        float pb[4], pi[4], sb[4], si[4];
+        at(cb, 30.f, 4.f, 2.f, pb);
+        at(ci, 30.f, 4.f, 2.f, pi);
+        xf(pb, w, sb);
+        xf(pi, wi, si);
+        bool same = true;
+        for (int j = 0; j < 4; ++j)
+            same = same && near(sb[j], si[j], 1e-3f);
+        CHECK(same);
+    }
+
+    // folga do relogio ajustada pela frequencia de imagens seguradas (quadro do jogo chegou depois do relogio de exibicao)
+    TEST(delay_grows_when_frames_arrive_late_and_shrinks_slowly)
+    {
+        ip::DelayTuner d(6.0, 4.0, 25.0);
+        for (int i = 0; i < 300; ++i)
+            d.onRedraw(i % 10 == 0);   // 10% seguradas
+        CHECK(d.ms() > 6.0);
+        const double up = d.ms();
+        for (int k = 0; k < 20; ++k)
+            for (int i = 0; i < 300; ++i)
+                d.onRedraw(false);
+        CHECK(d.ms() < up && d.ms() >= 4.0);
+        for (int k = 0; k < 200; ++k)
+            for (int i = 0; i < 300; ++i)
+                d.onRedraw(true);
+        CHECK(d.ms() == 25.0);   // teto
+    }
+
+    // relogio de conteudo: passo fixo por apresentacao, puxado devagar para "mais novo - atraso"; quadros do jogo a 60 chegando com
+    // +-5 ms de variacao, tela a 144 Hz
+    TEST(content_clock_steps_evenly_with_jittery_arrivals)
+    {
+        ip::ContentClock c;
+        std::mt19937 rng(3);
+        std::uniform_real_distribution<double> jitter(0.0, 0.010);
+        const double present = 1.0 / 144.0, step = 60.0 / 144.0;
+        std::vector<double> arrivals;
+        for (int f = 0; f < 700; ++f)
+            arrivals.push_back(f / 60.0 + jitter(rng));
+        double newest = 0.0, last = -1.0;
+        size_t next = 0;
+        std::vector<double> steps;
+        int held = 0;
+        for (int k = 0; k < 1600; ++k)
         {
-            if (now >= nextFrame)
+            const double now = k * present;
+            while (next < arrivals.size() && arrivals[next] <= now)
+                newest = static_cast<double>(next++);
+            const double p = c.advance(step, newest, 1.35);
+            if (k > 200)
             {
-                fieldsA = fieldsB;
-                fieldsB = static_cast<uint32_t>(frames + 1);
-                clock.onSnapshot(fieldsB, nextFrame + 0.004 + jitter(rng), 1.0);
-                nextFrame += frame;
-                ++frames;
+                steps.push_back(p - last);
+                held += p >= newest;
             }
-            const double pos = clock.position(now);
-            if (frames > 30)   // depois de assentar o filtro: a posicao do que se mostra anda sem voltar
-            {
-                const float p = static_cast<float>(pos);
-                if (last >= 0.f)
-                    steps.push_back(p - last);
-                last = p;
-            }
-            (void)lastB;
-            now += present;
+            CHECK(p <= newest);   // nunca extrapola
+            last = p;
         }
-        float mn = 1e9f, mx = -1e9f, sum = 0.f;
-        for (float s : steps)
-            mn = std::min(mn, s), mx = std::max(mx, s), sum += s;
-        const float mean = sum / static_cast<float>(steps.size());
-        CHECK(mn >= 0.f);                                   // nunca volta
-        CHECK(near(mean, 60.f / 144.f, 0.02f));             // anda no ritmo do jogo (fields por apresentacao)
-        CHECK(mx < 2.f * mean);                             // sem pulos
+        float mn = 1e9f, mx = -1e9f;
+        for (double s : steps)
+            mn = std::min(mn, static_cast<float>(s)), mx = std::max(mx, static_cast<float>(s));
+        CHECK(mn > 0.30f && mx < 0.55f);   // passo de 0,417 field, sem trancos
+        CHECK(held == 0);
+    }
+
+    TEST(content_clock_holds_on_a_stall_and_resyncs)
+    {
+        ip::ContentClock c;
+        const double step = 60.0 / 144.0;
+        double p = 0.0;
+        for (int k = 0; k < 100; ++k)
+            p = c.advance(step, 10.0 + k * step, 1.35);
+        const double before = p;
+        for (int k = 0; k < 30; ++k)   // o jogo parou: o mais novo nao muda
+            p = c.advance(step, 50.0, 1.35);
+        CHECK(p <= 50.0 && p > before);
+        p = c.advance(step, 200.0, 1.35);   // voltou muito adiante (carga): pula, sem correr atras
+        CHECK(near(static_cast<float>(p), 200.f - 1.35f));
     }
 
     TEST(alpha_is_clamped_and_never_extrapolates)
