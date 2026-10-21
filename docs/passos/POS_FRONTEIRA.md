@@ -266,6 +266,8 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.
+- Base pronta (2026-10-21): `native/wotm_model.hpp` monta qualquer monstro/traje animado direto do disco, sem o Shell
+  (`passos/MODELOS_3D.md`); já usado na lista de saves.
 
 ### 13. Campanha com até 4
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no

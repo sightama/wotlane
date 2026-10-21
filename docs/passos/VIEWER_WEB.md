@@ -11,6 +11,9 @@
 - **Código:** `tools/ngp.py` lê malhas direto do disco (Python; ainda usa o modelo antigo de ADC); `native/viewer.cpp` (raylib) é um
   visualizador com câmera livre, mas parte de **dump da RAM** (texturas por `texInfo` e matrizes de osso calculadas pelo jogo).
 
+**Atualização 2026-10-21:** os itens 1 e 2 abaixo estão resolvidos para os monstros (pose e texturas do disco, sem dump):
+`passos/MODELOS_3D.md`, `tools/pose.py`, `native/wotm_model.hpp`.
+
 ## O que falta para ler só do disco
 1. **Texturas sem dump:** ler os pacotes de pixels do `.TEX` e aplicar o `.PTR` (`TBP0`, ids de textura), em vez de `texInfo` na RAM. Moderado.
 2. **Pose dos monstros:** hoje as matrizes vêm da RAM. Opções: avaliar as curvas offline e montar as matrizes dos `ANIM_XFORM`/`SKEL_BONE`
