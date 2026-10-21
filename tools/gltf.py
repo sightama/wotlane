@@ -94,7 +94,12 @@ def to_y_up(p):
     return (p[0], p[2], -p[1])
 
 
-def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, use_tex=True, unlit=True, quiet=False):
+def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, use_tex=True, unlit=True, quiet=False,
+           items=None, model=None):
+    """items/model: pose do tools/pose.py (lista de OBJECTs com matriz e a paleta de ossos); sem eles, a hierarquia crua."""
+    if model is not None:
+        global pose_mod
+        import pose as pose_mod
     data = ngp.inflate_ngp(ngp_path)
     img = ngp.Image(data, 0)
     img.base = tex.guess_base(img)
@@ -146,7 +151,8 @@ def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, u
 
     seen_obj = set()
 
-    def visit(node, mtx):
+    def visit(node, mtx, ctx=None):
+        mtx = [list(map(float, r)) for r in mtx]
         key = (node, tuple(map(tuple, mtx)))
         if key in seen_obj:
             return
@@ -163,11 +169,13 @@ def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, u
             groups.setdefault(md.tris[k + 2].slot, []).append(md.tris[k:k + 3])
         prims = []
         rot = [r[:3] for r in mtx[:3]]
+        pal = model.palette_of(node, ctx) if (model is not None and md.skinned) else None
         for slot, tris in sorted(groups.items()):
             verts, index, idx = {}, [], []
             for tri in tris:
                 for v in tri:
-                    p = to_y_up(ngp.xform(mtx, (v.x, v.y, v.z)))
+                    sp = tuple(pose_mod.skin(pal, v)) if pal else (v.x, v.y, v.z)
+                    p = to_y_up(ngp.xform(mtx, sp))
                     n = (v.nx * rot[0][0] + v.ny * rot[1][0] + v.nz * rot[2][0], v.nx * rot[0][1] + v.ny * rot[1][1] + v.nz * rot[2][1],
                          v.nx * rot[0][2] + v.ny * rot[1][2] + v.nz * rot[2][2])
                     ln = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]) ** 0.5
@@ -192,8 +200,12 @@ def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, u
         g.j["scenes"][0]["nodes"].append(len(g.j["nodes"]) - 1)
         stats["objetos"] += 1
 
-    for r in img.roots():
-        ngp.walk(img, r, visit, lod=lod)
+    if items is not None:   # pose montada pelo tools/pose.py: (OBJECT, matriz, instancia)
+        for node, mtx, ctx in items:
+            visit(node, mtx, ctx)
+    else:
+        for r in img.roots():
+            ngp.walk(img, r, visit, lod=lod)
     g.write(out)
     if not quiet:
         print("gravado %s: %d objetos, %d triangulos, %d texturas (%d nao achadas); fora: %d skinned, %d sprites" % (
