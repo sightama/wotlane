@@ -67,7 +67,7 @@ constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
 }
 
 // Vista do jogo que a coleta e o desenho em curso seguem (tela dividida: vistas 0 e 1, metades esquerda e direita de 320 x 224 do
-// GS; src/common/view.cpp). Por thread: a coleta roda na thread do EE e o desenho na da janela, cada um liga a sua com ViewScope. Sem
+// GS; src/common/view.cpp; com 3 e 4 jogadores, vistas 0 a 3 em quadrantes de 320 x 112, wotm_split4.inc). Por thread: a coleta roda na thread do EE e o desenho na da janela, cada um liga a sua com ViewScope. Sem
 // ViewScope vale a vista 0 com a tela cheia (640 x 224, centro 2048), como era antes da tela dividida. cx/cy/w/h: centro e tamanho
 // da vista em pixels do GS (viewDef da vista: cx/cy em +0x18/+0x1C, w/h em +4/+6).
 struct ViewCtx {
@@ -508,7 +508,11 @@ inline GameCamera readGameCamera(const Ram &ram, int view = 0) {
         fv = std::sqrt(fv);
     }
     if (f0 > 0.5f && fv > 1.f) {
-        c.fovy = 2.f * std::atan(224.f / (2.f * fv)) * 180.f / 3.14159265f;
+        // altura da vista em linhas do campo: 224, salvo nos quadrantes de 3 e 4 jogadores (112), cujo viewDef mora acima dos 32 MB
+        // do jogo (wotm_split4.inc). Os viewDef do retail ficam com 224 (o do menu tem 448 e o da carga 6, e a conta e a de sempre)
+        const uint32_t def = ram.u32(addr::viewInfo + 0x14 * view + 4) & 0x1FFFFFFFu;
+        const float vh = def >= 0x2000000u && ram.ok(def, 8) && ram.u16(def + 6) ? float(ram.u16(def + 6)) : 224.f;
+        c.fovy = 2.f * std::atan(vh / (2.f * fv)) * 180.f / 3.14159265f;
         // Olho e eixos do que o viewUpdate gravou junto com a matriz (worldCtx[view].eo = -cs->trans, em +0x20), nao do _cs: na
         // introducao da luta o jogo poe outra camera nesse _cs por um instante no meio do quadro, e a leitura pegava esse instante
         // (inteiro ou pela metade: a tela cortava por um quadro para outro canto do mapa).
@@ -759,11 +763,11 @@ struct Snapshot {
     ParaLights lights;
     Fog fog;
     GameCamera cam;
-    ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita)
+    ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita; quadrantes: v & 1 coluna, v >> 1 linha)
     uint32_t g = 0;     // contador de quadros do jogo
     bool valid = false;
-    // Tela dividida: a vista 1 do mesmo quadro (coletada na saida do hier(1, 0)); nullptr = uma vista so
-    std::shared_ptr<Snapshot> view1;
+    // Tela dividida: as vistas 1 a 3 do mesmo quadro (coletadas na saida do hier(v, 0)); views[v - 1] = nullptr: sem a vista v
+    std::shared_ptr<Snapshot> views[3];
 };
 
 class Scene {
@@ -2988,8 +2992,9 @@ public:
                 float shift = 0.f;
                 if (splitEdges) {
                     // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
-                    // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado)
-                    const float half = 0.5f * rw, v = float(r.barView);
+                    // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
+                    // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo
+                    const float half = 0.5f * rw, v = float(r.barView & 1);
                     shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
                     x0 = std::max(x0 + shift, v * half);
                     x1 = std::min(x1 + shift, (v + 1.f) * half);
