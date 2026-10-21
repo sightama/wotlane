@@ -20,6 +20,11 @@ $checks = [ordered]@{
     'volta_4_ia'    = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_CHEATS=vencer=8;PS2X_STATS=1;PS2X_PEEK=2D6458,2E75E8'; Secs = 50
                          Expect = 'vencer a luta: 4 [^\n]*\n(.|\n)*vencer a luta: 4 |||2d6458=00000001|||2e75e8=00000001'
                          Reject = '2d6458=00000002|||2e75e8=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # largada de 4 jogadores (wotm_split4.inc, startPoint): os 4 nascem em 4 lugares diferentes (a lista 1 do StartPoints tem 2 pontos
+    # no Centro; sem a correcao, 3 nasciam no mesmo ponto). Sem IA e sem controle: ninguem morre, so as largadas aparecem
+    'largada_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_SPLITLOG=1'; Secs = 30
+                         Expect = 'largada: m_monsters\[0\]|||largada: m_monsters\[1\]|||largada: m_monsters\[2\]|||largada: m_monsters\[3\]'
+                         Reject = 'largada: m_monsters\[[0-3]\] \(playerNum \d\) em (\S+)\r?\n[\s\S]*?largada: m_monsters\[[0-3]\] \(playerNum \d\) em \1\r?\n|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # regressao: o 2 jogadores continua desenhando a tela dividida (redesenhos com 2 vistas) e nunca a tela em 4
     'tela_2'        = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;PS2X_STATS=1'; Secs = 40
                          Expect = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
@@ -29,7 +34,7 @@ $checks = [ordered]@{
     'tela_4'        = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;WOTM_SPLITLOG=1;WOTM_SHOTS=30'; Secs = 40
                          Expect = '\[split\] g=\d+ vista 3:|||4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]' }
     # vista local (netcode, cada um no seu PC): com WOTM_LOCALPLAYER so a vista desse jogador, em tela cheia (redesenhos com 1 vista,
-    # nunca a tela em 4); foto shot_30.png com o HUD do jogador 3 no canto de cima a esquerda
+    # nunca os quadrantes); foto shot_30.png com a vista do jogador 3 ampliada do quadrante dele, HUD e texto do jogo incluidos
     'local_4'       = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;WOTM_LOCALPLAYER=3;PS2X_STATS=1;WOTM_SHOTS=30'; Secs = 40
                          Expect = 'redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
                          Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
