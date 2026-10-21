@@ -14,6 +14,7 @@
 // imagens ref/nat/diff), foto_NNN_tela.png (o quadro nativo como estava na janela) e uma linha em notas.txt (numero, g_frame,
 // currScreen, recursos carregados, nota). WOTM_FOTOS=1 usa <cwd>/../fotos (o run_live roda no discroot: <runtime>/fotos).
 #include <condition_variable>
+#include "wotm_netstatus.h"   // partida em rede: sem pausa nem foto
 #include "wotm_syms.h"   // wotm::sym: enderecos do ELF por nome
 #include <ctime>
 #include <filesystem>
@@ -123,7 +124,7 @@ bool wotmPauseBlock(PS2Runtime *rt)
 // wotm_overrides.cpp, na entrada de timerWaitForMinUpdateRate: o quadro que acabou teve uma parada (o tempo dela nao conta)
 bool wotmPauseTookFrame() { return wotm_foto::tookFrame.exchange(false, std::memory_order_relaxed); }
 // Vigia (ps2_runtime.cpp): g_frame parado de proposito
-bool wotmPaused() { return wotm_foto::blocked.load(std::memory_order_relaxed); }
+bool wotmPaused() { return wotm_foto::blocked.load(std::memory_order_relaxed) || wotm_netstatus::g_waiting.load(std::memory_order_relaxed); }
 
 // Thread do EE (wotm_vu1check.inc, entrada do hier(0, 0) seguinte ao quadro fotografado): a foto esta gravada; fica pausado aqui.
 static void wotmFotoDone(const uint8_t *rdram, uint32_t frame, const std::string &file)
@@ -147,7 +148,7 @@ static void wotmFotoDone(const uint8_t *rdram, uint32_t frame, const std::string
 static void wotmFotoKeys()
 {
     using namespace wotm_foto;
-    if (noteOpen) return;
+    if (noteOpen || wotm_netstatus::g_active) return;   // em rede a pausa pararia so este PC (e o lockstep, todos)
     std::lock_guard<std::mutex> lk(m);
     if (IsKeyPressed(KEY_F7)) {
         paused = !paused;

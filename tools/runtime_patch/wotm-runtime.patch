@@ -197,7 +197,7 @@ index 0000000..0947e18
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..cc00340 100644
+index 589d768..3f64eb7 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -317,7 +317,7 @@ index 589d768..cc00340 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,81 @@ endif()
+@@ -608,3 +645,84 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -331,6 +331,9 @@ index 589d768..cc00340 100644
 +    message(FATAL_ERROR "WOTM_NATIVE_DIR nao definido: aponte para a pasta native/ do repo WoTM (-DWOTM_NATIVE_DIR=<repo>/native)")
 +endif()
 +target_include_directories(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}" "${WOTM_NATIVE_DIR}/runtime" "${CMAKE_BINARY_DIR}/wotm_gen")
++# netcode (native/net: lockstep e cliente ENet, sem codigo do jogo; o wotm_server e os testes compilam a parte, tools/build_net.bat)
++add_subdirectory("${WOTM_NATIVE_DIR}/net" "${CMAKE_BINARY_DIR}/wotm_net" EXCLUDE_FROM_ALL)
++target_link_libraries(ps2_runtime PRIVATE wotm_net)
 +# main.cpp instala hooks por nome (wotm_syms.h; no runtime cobaia, o wotm_syms_nm.h de wotm_gen troca os enderecos pelos do ELF nmall)
 +target_include_directories(ps2EntryRunner PRIVATE "${WOTM_NATIVE_DIR}" "${CMAKE_BINARY_DIR}/wotm_gen")
 +# icone do executavel (e da janela: o recurso se chama GLFW_ICON)

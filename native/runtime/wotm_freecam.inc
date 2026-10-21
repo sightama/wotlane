@@ -35,7 +35,7 @@ static View update(const wotm::GameCamera &gc)
     if (firstT < 0.0) firstT = GetTime();
     const double autoT = autoAt >= 0.0 ? GetTime() - firstT - autoAt : -1.0;
     static int autoStage = 0;   // 0 esperando, 1 andando, 2 terminado
-    bool toggle = IsKeyPressed(KEY_F5);
+    bool toggle = IsKeyPressed(KEY_F5) && !wotm_netstatus::g_active;   // a camera livre escreve na RAM do jogo: fora da partida em rede
     if (autoAt >= 0.0 && ((autoStage == 0 && autoT >= 0.0) || (autoStage == 1 && autoT >= 10.0)))
     {
         toggle = on == (autoStage == 1);

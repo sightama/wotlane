@@ -262,6 +262,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #if __has_include("wotm_native.hpp")
 #include "wotm_native.hpp"
 #include "wotm_cheats.h"   // menu de debug (F1)
+#include "wotm_netstatus.h"   // partida em rede: mensagem na tela, teclas de debug desligadas
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)
 #define WOTM_HAVE_NATIVE 1
@@ -1619,7 +1620,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     {   // menu de debug (F1 abre/fecha; com ele aberto, 1..6 alternam). Setas e Enter sao do pad (ps2_pad.cpp): nao servem aqui.
         // So escreve g_wotmCheats; quem aplica e a thread do EE (monsterUpdateCheats, wotm_overrides.cpp).
         static bool open = false;
-        if (IsKeyPressed(KEY_F1))
+        if (IsKeyPressed(KEY_F1) && !wotm_netstatus::g_active)   // trapacas mudam o jogo de um PC so: fora da partida em rede
             open = !open;
         uint32_t c = g_wotmCheats.load(std::memory_order_relaxed);
         const uint32_t st = (c & kCheatStaminaMask) / kCheatStamina1;
@@ -1671,6 +1672,23 @@ static bool wotmDrawNative(const uint8_t *rdram)
     }
 
     wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5)
+
+    if (wotm_netstatus::g_active)
+    {   // partida em rede: ping e atraso no canto; esperando alguem ou parada, a mensagem no centro
+        const int fs = 18, sw = GetScreenWidth(), sh = GetScreenHeight();
+        char line[64];
+        std::snprintf(line, sizeof line, "ping %u ms | atraso %u", wotm_netstatus::g_pingMs.load(), wotm_netstatus::g_delay.load());
+        const int lw = MeasureText(line, fs);
+        DrawText(line, sw - lw - 9, 11, fs, BLACK);
+        DrawText(line, sw - lw - 10, 10, fs, LIGHTGRAY);
+        const std::string msg = wotm_netstatus::message();
+        if (!msg.empty())
+        {
+            const int mfs = 28, mw = MeasureText(msg.c_str(), mfs);
+            DrawRectangle((sw - mw) / 2 - 16, sh / 2 - mfs, mw + 32, mfs * 2, Color{0, 0, 0, 190});
+            DrawText(msg.c_str(), (sw - mw) / 2, sh / 2 - mfs / 2, mfs, YELLOW);
+        }
+    }
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),

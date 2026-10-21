@@ -25,7 +25,14 @@
 #include <cstring>
 #include <string>
 
-#include "net/wotm_lockstep.hpp"   // linha do tempo das entradas do modo deterministico e do netcode (wotm_sync.inc)
+#include <memory>
+#include <thread>
+
+#include "net/wotm_lockstep.hpp"     // linha do tempo das entradas do modo deterministico e do netcode (wotm_sync.inc)
+#include "net/wotm_net_client.hpp"   // cliente da partida em rede (wotm_sync.inc)
+#include "wotm_netstatus.h"          // mensagem da rede na tela e teclas de debug desligadas (wotm_live.inc)
+
+extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void *module, char *path, unsigned long size);
 
 namespace ps2_stubs   // Kernel/Stubs/Pad.cpp: estado de controle que o scePadRead devolve no lugar dos dispositivos
 {
