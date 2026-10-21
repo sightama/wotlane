@@ -703,10 +703,10 @@ index ea86a9c..ab90ce3 100644
      std::vector<PendingTransfer> m_pendingVif0Transfers;
      std::vector<PendingTransfer> m_pendingVif1Transfers;
 diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
-index 7755fe6..61163e3 100644
+index 7755fe6..e5ab00d 100644
 --- a/ps2xRuntime/include/runtime/ps2_pad.h
 +++ b/ps2xRuntime/include/runtime/ps2_pad.h
-@@ -4,6 +4,14 @@
+@@ -4,6 +4,15 @@
  #include <cstddef>
  #include <cstdint>
  
@@ -714,8 +714,9 @@ index 7755fe6..61163e3 100644
 +// Mais de um dispositivo na mesma porta: os botoes se somam; em cada eixo vale o mais longe do centro.
 +constexpr uint32_t PS2_PAD_DEV_KEYBOARD = 1u << 8;
 +constexpr int PS2_PAD_MAX_GAMEPADS = 4;
-+// Mapa porta -> dispositivos, consultado a cada leitura. Sem funcao: porta n = gamepad n, e o teclado na porta 0.
-+using PS2PadDeviceMapFn = uint32_t (*)(int port);
++// Mapa controle -> dispositivos, consultado a cada leitura. O controle e port + 2 * slot (multitap: 0 e 1 nas portas, 2 e 3
++// no slot 1 de cada uma). Sem funcao: controle n = gamepad n, e o teclado no controle 0.
++using PS2PadDeviceMapFn = uint32_t (*)(int controller);
 +extern PS2PadDeviceMapFn g_ps2PadDeviceMap;
 +
  class PSPadBackend
@@ -2826,6 +2827,46 @@ index d467c4b..ba6df64 100644
          setReturnS32(ctx, 0);
      }
  
+diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+index b50a4cf..4b3f0ee 100644
+--- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
++++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
+@@ -14,7 +14,7 @@ namespace ps2_stubs
+         constexpr int32_t kPadStateExecCmd = 5;
+         constexpr int32_t kPadStateStable = 6;
+         constexpr size_t kPadPortCount = 2;
+-        constexpr size_t kPadSlotCount = 1;
++        constexpr size_t kPadSlotCount = 4; // multitap: o controle (port, slot) e o de indice port + kPadPortCount * slot
+ 
+         constexpr uint16_t kPadBtnSelect = 1u << 0;
+         constexpr uint16_t kPadBtnL3 = 1u << 1;
+@@ -64,7 +64,7 @@ namespace ps2_stubs
+         std::mutex g_padStateMutex;
+         bool g_padOverrideEnabled = false;
+         PadInputState g_padOverrideState{};
+-        PadPortState g_padPorts[kPadPortCount]{};
++        PadPortState g_padPorts[kPadPortCount * kPadSlotCount]{};
+         int g_padReadLogCount = 0;
+ 
+         uint8_t axisToByte(float axis)
+@@ -210,7 +210,7 @@ namespace ps2_stubs
+             {
+                 return nullptr;
+             }
+-            return &g_padPorts[port];
++            return &g_padPorts[port + static_cast<int>(kPadPortCount) * slot];
+         }
+ 
+         void initializePadPortLocked(PadPortState &portState, uint32_t dmaAddr)
+@@ -818,7 +818,7 @@ namespace ps2_stubs
+             {
+                 for (size_t slot = 0; slot < kPadDebugSlotCount; ++slot)
+                 {
+-                    const PadPortState &src = g_padPorts[port];
++                    const PadPortState &src = g_padPorts[port + kPadPortCount * slot];
+                     PadDebugPortSnapshot &dst = snapshot.ports[port][slot];
+                     dst.open = src.open;
+                     dst.analogMode = src.analogMode;
 diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
 index 2c98016..3751e35 100644
 --- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
@@ -3473,7 +3514,7 @@ index 37b6a4d..a68660f 100644
  int PS2Memory::pollDmaRegisters()
  {
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..635d302 100644
+index 8590f14..0958126 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
 @@ -1,6 +1,14 @@
@@ -3491,7 +3532,7 @@ index 8590f14..635d302 100644
  
  namespace
  {
-@@ -23,9 +31,158 @@ namespace
+@@ -23,10 +31,161 @@ namespace
      constexpr uint16_t PAD_L1 = 0x0400u;
      constexpr uint16_t PAD_R2 = 0x0200u;
      constexpr uint16_t PAD_L2 = 0x0100u;
@@ -3590,7 +3631,7 @@ index 8590f14..635d302 100644
 +    }
 +
 +    // Roteiro de botoes por tempo (teste sem tela): PS2X_PAD="seg:dur:botao;seg:dur:botao;..." (botao: up,down,left,right,cross,
-+    // circle,square,triangle,l1,r1,l2,r2,start,select). Vale para o jogador 1 (porta 0); "botao@2" manda para o jogador 2 (porta 1).
++    // circle,square,triangle,l1,r1,l2,r2,start,select). Vale para o jogador 1; "botao@N" manda para o jogador N (1 a 4; controle N-1).
 +    void applyScript(int port, uint16_t &btns)
 +    {
 +        struct Step { double t0, dur; uint16_t mask; int port; };
@@ -3629,11 +3670,11 @@ index 8590f14..635d302 100644
 +                }
 +            }
 +        }
-+        if (steps.empty() || port < 0 || port > 1)
++        if (steps.empty() || port < 0 || port > 3)
 +            return;
 +        const double now = GetTime();
-+        static uint16_t lastBtns[2] = {0xFFFFu, 0xFFFFu};
-+        static unsigned long calls[2] = {};
++        static uint16_t lastBtns[4] = {0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu};
++        static unsigned long calls[4] = {};
 +        ++calls[port];
 +        for (const Step &st : steps)
 +            if (st.port == port && now >= st.t0 && now < st.t0 + st.dur)
@@ -3647,11 +3688,14 @@ index 8590f14..635d302 100644
  }
  
 -bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
-+bool PSPadBackend::readState(int port, int /*slot*/, uint8_t *data, size_t size)
++bool PSPadBackend::readState(int port, int slot, uint8_t *data, size_t size)
  {
++    // multitap: o controle (port, slot) e o de indice port + 2 * slot (0 e 1 nas portas, 2 e 3 no slot 1 de cada uma)
++    const int controller = port + 2 * slot;
      if (!data || size < 32)
          return false;
-@@ -38,86 +195,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+ 
+@@ -38,86 +197,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
      data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
  
      uint16_t btns = 0xFFFFu;
@@ -3735,13 +3779,13 @@ index 8590f14..635d302 100644
 -        if (IsKeyDown(KEY_TAB))
 -            clearBit(PAD_SELECT);
 -    }
-+    const uint32_t devs = g_ps2PadDeviceMap ? g_ps2PadDeviceMap(port) : defaultDeviceMap(port);
++    const uint32_t devs = g_ps2PadDeviceMap ? g_ps2PadDeviceMap(controller) : defaultDeviceMap(controller);
 +    for (int pad = 0; pad < PS2_PAD_MAX_GAMEPADS; ++pad)
 +        if ((devs & (1u << pad)) && IsGamepadAvailable(pad))
-+            readGamepad(pad, port, btns, data);
++            readGamepad(pad, controller, btns, data);
 +    if (devs & PS2_PAD_DEV_KEYBOARD)
 +        readKeyboard(btns, data);
-+    applyScript(port, btns);
++    applyScript(controller, btns);
  
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
@@ -5469,3 +5513,89 @@ index 563bcbd..c8eaf8e 100644
          runtime.run();
  
  #ifdef _DEBUG
+diff --git a/ps2xTest/src/pad_input_tests.cpp b/ps2xTest/src/pad_input_tests.cpp
+index 07f9b7a..5aa1cb2 100644
+--- a/ps2xTest/src/pad_input_tests.cpp
++++ b/ps2xTest/src/pad_input_tests.cpp
+@@ -2,6 +2,7 @@
+ #include "ps2_stubs.h"
+ #include "ps2_syscalls.h"
+ #include "Stubs/Pad.h"
++#include "runtime/ps2_pad.h"
+ 
+ #include <vector>
+ #include <cstdint>
+@@ -57,6 +58,14 @@ namespace
+         ps2_stubs::scePadRead(rdram.data(), &ctx, nullptr);
+     }
+ 
++    void runPadReadAt(R5900Context &ctx, std::vector<uint8_t> &rdram, uint32_t port, uint32_t slot)
++    {
++        setRegU32(ctx, 4, port);
++        setRegU32(ctx, 5, slot);
++        setRegU32(ctx, 6, kPadDataAddr);
++        ps2_stubs::scePadRead(rdram.data(), &ctx, nullptr);
++    }
++
+     uint16_t readButtons(const std::vector<uint8_t> &rdram)
+     {
+         const uint8_t *data = rdram.data() + kPadDataAddr;
+@@ -529,5 +538,58 @@ void register_pad_input_tests()
+             const char *reqStr = reinterpret_cast<const char *>(rdram.data() + kPadDataAddr + 64);
+             t.IsTrue(std::string(reqStr).find("COMPLETE") != std::string::npos, "req string should include COMPLETE");
+         });
++
++        tc.Run("multitap slots 1-3 open and read like slot 0", [](TestCase &t)
++               {
++            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0);
++            R5900Context ctx;
++
++            ps2_stubs::scePadInit(rdram.data(), &ctx, nullptr);
++            for (uint32_t slot = 1; slot < 4; ++slot)
++            {
++                openPadPort(ctx, rdram, 1u, slot);
++                t.Equals(static_cast<uint32_t>(getRegU32(&ctx, 2)), static_cast<uint32_t>(1), "scePadPortOpen should accept slot " + std::to_string(slot));
++                runPadReadAt(ctx, rdram, 1u, slot);
++                t.Equals(static_cast<uint32_t>(getRegU32(&ctx, 2)), static_cast<uint32_t>(1), "scePadRead should succeed on slot " + std::to_string(slot));
++                closePadPort(ctx, rdram, 1u, slot);
++            }
++        });
++
++        tc.Run("each port and slot keeps its own open state", [](TestCase &t)
++               {
++            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0);
++            R5900Context ctx;
++
++            ps2_stubs::scePadInit(rdram.data(), &ctx, nullptr);
++            openPadPort(ctx, rdram, 0u, 0u);
++            openPadPort(ctx, rdram, 0u, 1u);
++            closePadPort(ctx, rdram, 0u, 0u);
++
++            runPadReadAt(ctx, rdram, 0u, 1u);
++            t.Equals(static_cast<uint32_t>(getRegU32(&ctx, 2)), static_cast<uint32_t>(1), "slot 1 should stay open after slot 0 closes");
++            runPadReadAt(ctx, rdram, 0u, 0u);
++            t.Equals(static_cast<uint32_t>(getRegU32(&ctx, 2)), static_cast<uint32_t>(0), "slot 0 should be closed");
++            closePadPort(ctx, rdram, 0u, 1u);
++        });
++
++        tc.Run("pad backend asks the device map for controller port + 2 * slot", [](TestCase &t)
++               {
++            static std::vector<int> asked;
++            asked.clear();
++            const PS2PadDeviceMapFn saved = g_ps2PadDeviceMap;
++            g_ps2PadDeviceMap = [](int controller) -> uint32_t { asked.push_back(controller); return 0u; };
++
++            PSPadBackend backend;
++            uint8_t data[32]{};
++            const int ports[] = {0, 1, 0, 1};
++            const int slots[] = {0, 0, 1, 1};
++            for (int i = 0; i < 4; ++i)
++                t.IsTrue(backend.readState(ports[i], slots[i], data, sizeof(data)), "readState should succeed");
++
++            g_ps2PadDeviceMap = saved;
++            t.Equals(asked.size(), static_cast<size_t>(4), "device map should be asked once per read");
++            for (int i = 0; i < static_cast<int>(asked.size()); ++i)
++                t.Equals(asked[i], i, "controller index should be port + 2 * slot");
++        });
+     });
+ }
