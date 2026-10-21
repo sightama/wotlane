@@ -191,6 +191,8 @@ struct PVtx {
     // Estado do GS da secao/objeto (Scene::groupState): ALPHA_1 (byte baixo; vale so com PRIM.ABE), limiar do teste de alfa
     // (-1 = sem teste) e ZBUF_1.ZMSK
     uint8_t blend = 0x44, abe = 0, zmsk = 0;
+    uint8_t ztst = 2;    // TEST_1.ZTST do grupo (1 = sem teste de Z)
+    uint8_t cull = 0;    // secao com culling (bit 15 do seletor): o VU1 descarta a face de costas (Scene::backFacing)
     int16_t aref = -1;
 };
 
@@ -200,6 +202,7 @@ struct GsState {
     uint8_t blend = 0x44;
     int16_t aref = -1;
     bool zmsk = false;
+    uint8_t ztst = 2;   // TEST_1.ZTST (bits 17-18): 1 = sempre passa (sem teste de Z), 2/3 = mais perto passa
     // Pacote A+D do ctx: tag em +0x10 (NLOOP), pares (dado, endereco) a partir de +0x20 (como Scene::groupState)
     void apply(const Ram &ram, uint32_t ctx) {
         ctx &= 0x0FFFFFFFu;
@@ -211,6 +214,7 @@ struct GsState {
             if (reg == 0x42) blend = uint8_t(d & 0xFF);
             else if (reg == 0x47) {
                 const uint32_t atst = (d >> 1) & 7, ref = (d >> 4) & 0xFF;
+                ztst = uint8_t((d >> 17) & 3);
                 aref = (!(d & 1) || atst == 1) ? int16_t(-1) : atst == 6 ? int16_t(ref) : atst == 5 ? int16_t(std::max(int(ref) - 1, 0)) : int16_t(8);
             } else if (reg == 0x4E) zmsk = (ram.u32(ctx + 0x24 + 16 * i) & 1) != 0;
         }
@@ -438,9 +442,11 @@ private:
             break;
         }
         case 1: if (ram_.u16(n + 0xA) & 1) kids(n + 0x20, ram_.u16(n + 8), m, si, mi, ctx); break;
-        case 2: {   // LOD: o mais detalhado
+        case 2: {   // LOD: o mais detalhado que o hierLod desenharia de perto (o maior indice com switchOutDis +0x24 > 0; o do traje 3
+                    // do Togera tem um ultimo nivel com 0, nunca desenhado: pegar o ultimo dava a malha grosseira em A-pose)
             const uint32_t nl = ram_.u32(n + 4);
-            if (nl > 0 && nl < 16) visit(ram_.u32(n + 0x20 + 16 * (nl - 1) + 8), m, si, mi, ctx, depth + 1);
+            for (int i = int(std::min<uint32_t>(nl, 16)) - 1; i >= 0; --i)
+                if (ram_.f32(n + 0x24 + 16 * uint32_t(i)) > 0.f) { visit(ram_.u32(n + 0x28 + 16 * uint32_t(i)), m, si, mi, ctx, depth + 1); break; }
             break;
         }
         case 3: {
@@ -615,7 +621,7 @@ private:
                 o.x = p[0]; o.y = p[1]; o.z = p[2];
                 o.nx = nrm[0]; o.ny = nrm[1]; o.nz = nrm[2];
                 o.u = v.u + it.uv[0]; o.v = v.v + it.uv[1];
-                o.blend = it.gs.blend; o.abe = md.abe ? 1 : 0; o.zmsk = it.gs.zmsk ? 1 : 0; o.aref = it.gs.aref;
+                o.blend = it.gs.blend; o.abe = md.abe ? 1 : 0; o.zmsk = it.gs.zmsk ? 1 : 0; o.aref = it.gs.aref; o.cull = v.cull; o.ztst = it.gs.ztst;
                 o.r = v.r; o.g = v.g; o.b = v.b; o.a = v.a;
                 o.tex = v.slot == kSlotNoTex ? int16_t(-1) : texIndex(it.node, v.slot);
                 verts_.push_back(o);
@@ -739,6 +745,7 @@ public:
     }
 
     const RenderTexture2D &target() const { return rt_; }
+    bool skipAbe = false;   // diagnostico: so os opacos
 
     template <class Bg>
     const RenderTexture2D &render(const Model &m, int w, int h, float yawDeg, float pitchDeg, float zoom, Bg &&background) {
@@ -779,7 +786,7 @@ public:
         BeginShaderMode(shader_);
         // passe 0: sem ABE (opaco, grava Z); passe 1: com ABE, na ordem do modelo (o Z segue o ZMSK)
         const auto &vs = m.verts();
-        for (int pass = 0; pass < 2; ++pass) {
+        for (int pass = 0; pass < (skipAbe ? 1 : 2); ++pass) {
             size_t i = 0;
             while (i + 2 < vs.size()) {
                 const PVtx &h0 = vs[i];
@@ -792,6 +799,12 @@ public:
                 rlBegin(RL_TRIANGLES);
                 rlSetTexture(h0.tex >= 0 && size_t(h0.tex) < gpu_.size() ? gpu_[size_t(h0.tex)].id : rlGetTextureIdDefault());
                 for (size_t k = i; k < j; ++k) {
+                    if (k % 3 == 0 && vs[k].cull) {
+                        const PVtx &a = vs[k], &b = vs[k + 1], &c2 = vs[k + 2];
+                        const float p[3][3] = {{a.x, a.y, a.z}, {b.x, b.y, b.z}, {c2.x, c2.y, c2.z}};
+                        const float eye[3] = {cam.position.x, cam.position.y, cam.position.z};
+                        if (backFacing(p, eye)) { k += 2; continue; }
+                    }
                     const PVtx &v = vs[k];
                     const float d = std::max(0.f, v.nx * L[0] + v.ny * L[1] + v.nz * L[2]);
                     const float lit = (v.nx == 0.f && v.ny == 0.f && v.nz == 0.f) ? 1.f : 0.7f + 0.6f * d;
@@ -820,6 +833,14 @@ public:
     }
 
 private:
+    // Face de costas vista de `eye` (como Scene::backFacing do nativo: o VU1 descarta os de area positiva na tela do GS)
+    static bool backFacing(const float p[3][3], const float eye[3]) {
+        const float u[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
+        const float v[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
+        const float n[3] = {u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]};
+        return n[0] * (p[0][0] - eye[0]) + n[1] * (p[0][1] - eye[1]) + n[2] * (p[0][2] - eye[2]) > 0.f;
+    }
+
     // Estado de um lote: fatores do GL que reproduzem a mistura do GS sobre cor pre-multiplicada e a saida do shader
     // (modo 0: (C·a, a); 1: (C·a, 0) — soma ou subtrai sem mexer na cobertura; 2: (0, a) — so escurece o destino)
     void setState(uint8_t blend, bool abe, int16_t aref, bool zmsk) {

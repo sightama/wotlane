@@ -44,7 +44,7 @@ Vetores-linha (`p' = p·M`), filho = `local · pai`. Por nó:
   índice em `+0xC4`). Conferido no Robo-47 (`ram_1100`): 35 remontadas, 5 do arquivo, 0 diferenças; sem a regra as garras
   (índices 27 e 39) saem viradas.
 - **ANIM_SCALE (38):** lê `val` direto (sem olhar se foi escrito); `pre(+0x40) · escala · post(t + 0x50)`; escala zero corta.
-- GROUP (bit 0 de `+0xA`), LOD (o mais detalhado: último índice), TRANSLATE, ROTATE, SCALE, SWITCH, CONTROL/ACTION_DATA,
+- GROUP (bit 0 de `+0xA`), LOD (o mais detalhado que o `hierLod` desenharia de perto: o maior índice com `switchOutDis` (`+0x24 + 16i`) > 0; o traje 3 do Togera tem um último nível com 0, nunca desenhado, e pegar o último dava a malha grosseira em A-pose), TRANSLATE, ROTATE, SCALE, SWITCH, CONTROL/ACTION_DATA,
   INTERACTIVE/DESTRUCTIBLE como no `Scene::walk` do nativo.
 
 ## Esqueleto e paleta

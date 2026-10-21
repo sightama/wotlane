@@ -16,7 +16,8 @@ int main(int argc, char **argv) {
     const std::string disc = argv[1], name = argv[2];
     int anim = wotm::model::kIdle, size = 512;
     float frame = 0.f, yaw = 35.f, pitch = 8.f, zoom = 1.f;
-    const char *shot = nullptr;
+    const char *shot = nullptr, *dumpTex = nullptr;
+    bool noAbe = false;
     for (int i = 3; i + 1 < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--anim") anim = std::atoi(argv[++i]);
@@ -26,6 +27,8 @@ int main(int argc, char **argv) {
         else if (a == "--size") size = std::atoi(argv[++i]);
         else if (a == "--zoom") zoom = float(std::atof(argv[++i]));
         else if (a == "--shot") shot = argv[++i];
+        else if (a == "--dumptex") dumpTex = argv[++i];
+        else if (a == "--noabe") noAbe = true;
     }
     wotm::model::Model m;
     if (!m.load(disc, {}, name)) {
@@ -38,10 +41,39 @@ int main(int argc, char **argv) {
     }
     std::fprintf(stderr, "%s: %zu triangulos, %zu texturas, animacao %d com %.0f quadros\n", name.c_str(), m.verts().size() / 3,
                  m.textures().size(), anim, m.animLength(anim));
+    if (dumpTex) {   // texturas decodificadas (PNG) e o alfa de cada uma, e os estados de desenho: para conferir trajes
+        std::map<std::string, int> st;
+        const auto &vs = m.verts();
+        for (size_t k = 0; k + 2 < vs.size(); k += 3)
+            ++st[TextFormat("tex %d abe %d blend %02x aref %d zmsk %d cull %d ztst %d", vs[k].tex, vs[k].abe, vs[k].blend, vs[k].aref, vs[k].zmsk, vs[k].cull, vs[k].ztst)];
+        for (const auto &e : st) std::fprintf(stderr, "  %s: %d tris\n", e.first.c_str(), e.second);
+        float blo[2][3] = {{1e30f, 1e30f, 1e30f}, {1e30f, 1e30f, 1e30f}}, bhi[2][3] = {{-1e30f, -1e30f, -1e30f}, {-1e30f, -1e30f, -1e30f}};
+        int na[2] = {0, 0}, nalpha0 = 0;
+        for (const auto &v : vs) {
+            const int g = v.abe ? 1 : 0;
+            const float q[3] = {v.x, v.y, v.z};
+            for (int c = 0; c < 3; ++c) { blo[g][c] = std::min(blo[g][c], q[c]); bhi[g][c] = std::max(bhi[g][c], q[c]); }
+            ++na[g];
+            if (g && v.a == 0) ++nalpha0;
+        }
+        for (int g = 0; g < 2; ++g)
+            std::fprintf(stderr, "  caixa %s: (%.0f %.0f %.0f)-(%.0f %.0f %.0f), %d vertices\n", g ? "com ABE" : "opacos", blo[g][0], blo[g][1],
+                         blo[g][2], bhi[g][0], bhi[g][1], bhi[g][2], na[g]);
+        std::fprintf(stderr, "  vertices com ABE e alfa 0: %d\n", nalpha0);
+        for (size_t t = 0; t < m.textures().size(); ++t) {
+            const auto &ti = m.textures()[t];
+            int hist[3] = {0, 0, 0};
+            for (uint32_t c : ti.rgba) ++hist[(c >> 24) == 0 ? 0 : (c >> 24) == 255 ? 2 : 1];
+            std::fprintf(stderr, "tex %zu %dx%d alfa 0: %d, parcial: %d, 255: %d\n", t, ti.w, ti.h, hist[0], hist[1], hist[2]);
+            Image img{const_cast<uint32_t *>(ti.rgba.data()), ti.w, ti.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            ExportImage(img, TextFormat("%s/%s_tex%zu.png", dumpTex, name.c_str(), t));
+        }
+    }
     SetTraceLogLevel(LOG_WARNING);
     if (shot) SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(shot ? 64 : size, shot ? 64 : size, "monview");
     wotm::model::Renderer r;
+    r.skipAbe = noAbe;
     m.computeFraming(anim);
     m.pose(anim, frame);
     const auto bg = [] { DrawRectangle(0, 0, 4096, 4096, Color{40, 44, 52, 255}); };
