@@ -1257,6 +1257,9 @@ namespace
     constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
     constexpr uint32_t kPadFlagsLockA = 0x1658u, kPadFlagsLockB = 0x165Eu, kPadFlagsHoldTweak = 0x16C4u, kPadFlagsConfig = 0x16ECu,
                        kPadFlagsOwner = 0x1810u;
+    // m_monsters (TheGame +0x120380): 4 lugares de jogador e as IAs a partir do [4]; com a luta de ate 8 a IA 7 fica no [10], e o
+    // TheGame tem lugar para 16. Percorrer so 8 deixava as IAs 5 a 7 fora do lock-on.
+    constexpr uint32_t kMonsterSlots = 16u;
     constexpr uint32_t kMonsterCs = 0xCu, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u, kMonsterDying = 0xEFu,
                        kMonsterCameraView = 0x6CD8u;
     constexpr uint32_t kPadL1 = 0x0u, kPadL2 = 0x1u, kPadR1 = 0x3u, kPadR2 = 0x4u, kPadLeft = 0xCu, kPadRight = 0xDu, kPadUp = 0xEu,
@@ -1302,7 +1305,7 @@ namespace
         const uint32_t target = FAST_READ32(owner + kMonsterPinTarget);
         if (!target)
             return false;
-        for (uint32_t i = 0; i < 8; ++i)
+        for (uint32_t i = 0; i < kMonsterSlots; ++i)
             if (FAST_READ32(kGame + 0x120380 + 4 * i) == target)
                 return ramOk(target, kMonsterDead + 1u) && static_cast<int8_t>(rdram[target + kMonsterDead]) != 0;
         return false;   // predio, peca de chefe etc.
@@ -1356,7 +1359,7 @@ namespace
             return;
         uint32_t best = 0;
         float bestD = 0.f;
-        for (uint32_t i = 0; i < 8; ++i)
+        for (uint32_t i = 0; i < kMonsterSlots; ++i)
         {
             const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
             if (!lockCandidate(rdram, m, owner, tp))
@@ -1406,7 +1409,7 @@ namespace
         const float curA = targetPos(rdram, cur, tp) ? screenAngle(tp) : 0.f;
         uint32_t best = 0, wrap = 0;
         float bestD = 1e9f, wrapA = 0.f;
-        for (uint32_t i = 0; i < 8; ++i)
+        for (uint32_t i = 0; i < kMonsterSlots; ++i)
         {
             const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
             if (m == cur || !lockCandidate(rdram, m, owner, tp))
@@ -1531,7 +1534,7 @@ namespace
                 const uint32_t attacker = FAST_READ32(kDbInteractive + 4u * static_cast<uint32_t>(id)) & 0x1FFFFFFFu;
                 float tp[3];
                 bool monster = false;
-                for (uint32_t i = 0; i < 8 && !monster; ++i)
+                for (uint32_t i = 0; i < kMonsterSlots && !monster; ++i)
                     monster = (FAST_READ32(kGame + 0x120380 + 4 * i) & 0x1FFFFFFFu) == attacker;   // m_monsters[i]
                 if (monster && attacker != FAST_READ32(victim + kMonsterPinTarget) && lockCandidate(rdram, attacker, victim, tp))
                 {
