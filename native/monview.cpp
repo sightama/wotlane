@@ -42,8 +42,11 @@ int main(int argc, char **argv) {
     if (shot) SetConfigFlags(FLAG_WINDOW_HIDDEN);
     InitWindow(shot ? 64 : size, shot ? 64 : size, "monview");
     wotm::model::Renderer r;
+    m.computeFraming(anim);
+    m.pose(anim, frame);
+    const auto bg = [] { DrawRectangle(0, 0, 4096, 4096, Color{40, 44, 52, 255}); };
     if (shot) {
-        const RenderTexture2D &rt = r.render(m, size, size, yaw, pitch, zoom);
+        const RenderTexture2D &rt = r.render(m, size, size, yaw, pitch, zoom, bg);
         Image img = LoadImageFromTexture(rt.texture);
         ImageFlipVertical(&img);
         const bool ok = ExportImage(img, shot);
@@ -70,11 +73,12 @@ int main(int argc, char **argv) {
                 if (m.animLength(anim) > 0.f) break;
             }
             t0 = GetTime();
+            m.computeFraming(anim);
             std::fprintf(stderr, "animacao %d (%.0f quadros)\n", anim, m.animLength(anim));
         }
         if (!paused) tp = GetTime() - t0;
         m.pose(anim, frame + float(tp * 60.0));
-        const RenderTexture2D &rt = r.render(m, size, size, yaw, pitch, zoom);
+        const RenderTexture2D &rt = r.render(m, size, size, yaw, pitch, zoom, bg);
         BeginDrawing();
         ClearBackground(Color{40, 44, 52, 255});
         DrawTexturePro(rt.texture, Rectangle{0, 0, float(size), -float(size)}, Rectangle{0, 0, float(GetScreenWidth()), float(GetScreenHeight())},

@@ -231,30 +231,37 @@ class Model:
                     vis = c.val[vidx]
                 if vis == 0.0:
                     return
-                r = [img.f32(n + 0x20), img.f32(n + 0x24), img.f32(n + 0x28)]
-                tr = [img.f32(n + 0x30), img.f32(n + 0x34), img.f32(n + 0x38)]
-                if c:
+                # hierAnimTransNode: so remonta quando um canal do no (firstIdx +0x1E, mascara dirty.animating +0xC1) foi escrito;
+                # senao vale atMat[matrixIdx] (+0xC4), que vem pronta no arquivo (garras do Robo-47)
+                first, mask = img.s16(n + 0x1E), img.u8(n + 0xC1)
+                rebuild = bool(c) and first >= 0 and any((mask >> b) & 1 and (first + b) in c.dirty for b in range(8))
+                if rebuild:
+                    r = [img.f32(n + 0x20), img.f32(n + 0x24), img.f32(n + 0x28)]
+                    tr = [img.f32(n + 0x30), img.f32(n + 0x34), img.f32(n + 0x38)]
                     for j, off in enumerate((0x12, 0x14, 0x16)):
                         i = img.s16(n + off)
-                        if i >= 0 and i in c.dirty:
-                            r[j] = -c.val[i]
+                        if i >= 0:
+                            r[j] = -c.v(i, -r[j])
                     for j, off in enumerate((0x18, 0x1A, 0x1C)):
                         i = img.s16(n + off)
-                        if i >= 0 and i in c.dirty:
-                            tr[j] = c.val[i]
-                L = prh(*r)
-                bits = img.u16(n + 0xC2)
-                pre = np.array(struct.unpack_from("<16f", img.d, n + 0x40 - img.base)).reshape(4, 4)
-                post = np.array(struct.unpack_from("<16f", img.d, n + 0x80 - img.base)).reshape(4, 4)
-                if bits & 1:
-                    L = pre @ L
-                    if bits & 2:
+                        if i >= 0:
+                            tr[j] = c.v(i, tr[j])
+                    L = prh(*r)
+                    bits = img.u16(n + 0xC2)
+                    pre = np.array(struct.unpack_from("<16f", img.d, n + 0x40 - img.base)).reshape(4, 4)
+                    post = np.array(struct.unpack_from("<16f", img.d, n + 0x80 - img.base)).reshape(4, 4)
+                    if bits & 1:
+                        L = pre @ L
+                        if bits & 2:
+                            L = L @ post
+                    elif bits & 2:
                         L = L @ post
-                elif bits & 2:
-                    L = L @ post
-                L[3, :3] += tr
-                L[:3, 3] = 0.0
-                L[3, 3] = 1.0
+                    L[3, :3] += tr
+                    L[:3, 3] = 0.0
+                    L[3, 3] = 1.0
+                else:
+                    at = img.u32(c.ci + 0xC) + 64 * img.u32(n + 0xC4) if c else 0
+                    L = np.array(struct.unpack_from("<16f", img.d, at - img.base)).reshape(4, 4) if c and img.ok(at, 64) else np.eye(4)
                 s2, m2 = skelstep(c, L, si, mi)
                 kids(n + 0xCC, img.u32(n + 4), L @ m, s2, m2)
             elif op == 38:

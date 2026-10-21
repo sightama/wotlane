@@ -39,6 +39,10 @@ Vetores-linha (`p' = p·M`), filho = `local · pai`. Por nó:
   rX/rY/rZ (`+0x12..0x16`; sem canal, o vetor em `+0x20`), matriz `mathfRotMatrixPRH` (= microprograma 0x4D0 do VU0). Bits em
   `+0xC2`: bit 0 `L = pre·L` (`+0x40`), bit 1 `L = L·post` (`+0x80`). Depois `m[3] += translação` (canais `+0x18..0x1C` ou `+0x30`).
   Filhos em `+0xCC`, quantidade em `+4`.
+  **Só remonta se algum canal estiver sujo:** `firstIdx` (s16 `+0x1E`) e máscara `animating` (u8 `+0xC1`); remonta se algum bit
+  `b` da máscara estiver ligado e o canal `firstIdx+b` foi escrito. Senão a matriz é a do arquivo, `atMat[matrixIdx]` (`ci+0xC`,
+  índice em `+0xC4`). Conferido no Robo-47 (`ram_1100`): 35 remontadas, 5 do arquivo, 0 diferenças; sem a regra as garras
+  (índices 27 e 39) saem viradas.
 - **ANIM_SCALE (38):** lê `val` direto (sem olhar se foi escrito); `pre(+0x40) · escala · post(t + 0x50)`; escala zero corta.
 - GROUP (bit 0 de `+0xA`), LOD (o mais detalhado: último índice), TRANSLATE, ROTATE, SCALE, SWITCH, CONTROL/ACTION_DATA,
   INTERACTIVE/DESTRUCTIBLE como no `Scene::walk` do nativo.
@@ -62,6 +66,18 @@ Vetores-linha (`p' = p·M`), filho = `local · pai`. Por nó:
   do Congar), CBP = `tbp` da paleta CT32 do `.RTX`. Deslocamento zero nos 10 monstros e nos trajes (o `tex.Pairing` acha 0/0).
 - Pixels lineares: `.TEX` em `+0x80`; `.RTX` em `+0x80` nos formatos altos (T8H/T4HL/T4HH) e `+0x10` no resto. Paleta 256 com troca
   CSM1 (bits 3 e 4) só nas T8; T4 usa `csa·16 + k` numa paleta de 256. Alfa do GS: `>= 0x80` = 255, senão `·2`; TCC 0 = opaco.
+
+## Estado do GS por nó (mistura, teste de alfa, Z)
+Como `Scene::groupState` do nativo: o contexto está em `+4` (GROUP, TRANSLATE, ROTATE, SCALE) ou `+8` (ANIM_XFORM, ANIM_SCALE); vale
+para a subárvore. Pacote A+D com `+0x14 == 0x10000000`, `+0x18 == 0xE`, NLOOP em `+0x10`, pares a partir de `+0x20`: ALPHA_1 (0x42,
+byte baixo), TEST_1 (0x47: ATE bit 0, ATST bits 1-3, AREF bits 4-11), ZBUF_1 (0x4E, ZMSK). Padrão: `0x44`, sem teste. A mistura só
+vale com PRIM.ABE da malha. Modos vistos: `0x44` comum, `0x48` aditiva (Kineticlops), `0x42` `Cd - Cs·As`, `0x46` `Cd·(1-As)`,
+`0x81` `(Cd-Cs)·As`. O `Renderer` reproduz com cor pré-multiplicada (opacos primeiro, depois os com ABE na ordem do modelo) e
+desenha o fundo dentro do RenderTexture para os modos que dependem do destino. Deslocamento de UV: `+0x20/+0x24` do nó, ou os
+canais `+0x30/+0x32` com o bit 0x800 em `+0xC`.
+
+## Enquadramento
+`Model::computeFraming(id)` amostra a animação inteira e fixa a caixa; sem isso a câmera acompanha o idle (zoom "dançando").
 
 ## Não reproduzido
 Molas do pelo e da cauda (`BoneSpring`: ficam na pose da animação), olhar/cabeça procedural, camadas de mistura de animação e a luz
