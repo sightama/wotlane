@@ -15,7 +15,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <deque>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -419,8 +421,36 @@ public:
         return s32(std::max<long long>(0, 0x1f0000ll - static_cast<long long>(used)));
     }
 
-    // Mixagem: frames estereo s16 a 48 kHz (thread de audio)
+    // Mixagem: frames estereo s16 a 48 kHz (thread de audio). Com o som preso ao quadro (setFrameLocked, modo deterministico do netcode)
+    // a thread de audio so esvazia o que advanceFrame ja mixou; o fim de cada som (playing(), que o jogo consulta) passa a depender so
+    // dos quadros do jogo, nunca do ritmo do dispositivo de audio.
     void mix(s16 *out, unsigned frames) {
+        if (frameLocked_) {
+            std::lock_guard<std::mutex> g(ringM_);
+            for (unsigned i = 0; i < frames; ++i) {
+                const bool have = !ring_.empty();
+                out[2 * i] = have ? ring_.front()[0] : 0;
+                out[2 * i + 1] = have ? ring_.front()[1] : 0;
+                if (have) ring_.pop_front();
+            }
+            return;
+        }
+        render(out, frames);
+    }
+    void setFrameLocked(bool on) { frameLocked_ = on; }
+    // Um quadro do jogo com `fields` fields: mixa 800 frames por field (48000 / 60) na thread do jogo e guarda para a thread de audio
+    // (no maximo ~0,25 s na fila: se o dispositivo parar, o mais antigo sai)
+    void advanceFrame(unsigned fields) {
+        if (!frameLocked_) return;
+        std::vector<s16> buf(size_t(2) * 800u * fields);
+        render(buf.data(), 800u * fields);
+        std::lock_guard<std::mutex> g(ringM_);
+        for (size_t i = 0; i < buf.size(); i += 2) ring_.push_back({buf[i], buf[i + 1]});
+        while (ring_.size() > size_t(kRate / 4)) ring_.pop_front();
+    }
+
+private:
+    void render(s16 *out, unsigned frames) {
         std::lock_guard<std::mutex> g(m_);
         for (unsigned i = 0; i < frames; ++i) {
             if (tickPhase_ == 0) tickAll();
@@ -434,6 +464,7 @@ public:
                       voices_.end());
     }
 
+public:
     bool startOutput();   // AudioStream do raylib (precisa de InitAudioDevice antes)
 
     // --- usados pelos sons
@@ -495,6 +526,9 @@ private:
     bool mono_ = false;
     u32 nextHandle_ = 0, nextBank_ = 1, tick_ = 0, rng_ = 0x989u;
     int tickPhase_ = 0;
+    std::atomic<bool> frameLocked_{false};
+    std::mutex ringM_;
+    std::deque<std::array<s16, 2>> ring_;   // som preso ao quadro: mixado na thread do jogo, esvaziado pela de audio
 };
 
 // ---------------------------------------------------------------- som de banco: executa os grains

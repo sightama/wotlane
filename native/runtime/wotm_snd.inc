@@ -246,6 +246,12 @@ void wotmSndInstall(PS2Runtime &runtime)
     using namespace wotm_snd_hooks;
     g_log = std::getenv("PS2X_SND_LOG") != nullptr;
     Engine::get().setReader(&readLsn);
+    // modo deterministico (WOTM_FIXEDSTEP, netcode): o motor e mixado na thread do jogo, um quadro por vez (wotmSoundFrame)
+    if (const char *e = std::getenv("WOTM_FIXEDSTEP"); e && *e)
+    {
+        Engine::get().setFrameLocked(true);
+        std::fprintf(stderr, "[snd] som preso ao quadro do jogo (WOTM_FIXEDSTEP)\n");
+    }
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction fn; };
     // enderecos de config/status.csv (lib989snd/snd)
     const H hooks[] = {
@@ -275,9 +281,12 @@ void wotmSndInstall(PS2Runtime &runtime)
         runtime.registerFunction(wotm::fn::sceSifLoadModule, hostLeaf<loadModule>);
     std::fprintf(stderr, "[snd] som nativo: %zu funcoes do 989snd trocadas\n", sizeof hooks / sizeof hooks[0]);
 }
+// Fronteira do quadro do jogo no modo deterministico (wotm_sync.inc): o motor anda `fields` fields
+void wotmSoundFrame(unsigned fields) { wotm::snd::Engine::get().advanceFrame(fields); }
 #else
 void wotmSndInstall(PS2Runtime &)
 {
     std::fprintf(stderr, "[snd] som nativo desligado: falta native/wotm_snd.hpp (WOTM_NATIVE_DIR)\n");
 }
+void wotmSoundFrame(unsigned) {}
 #endif

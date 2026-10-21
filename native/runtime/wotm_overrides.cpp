@@ -63,6 +63,8 @@ void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);  
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: retrato
+void wotmBarView(int view);   // wotm_live.inc: vista das barras que vem a seguir
+void wotmSoundFrame(unsigned fields);   // wotm_snd.inc: o som anda um quadro do jogo (modo deterministico)
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
@@ -744,6 +746,8 @@ namespace
     }
 
 
+    void emitPlayerHuds(uint8_t *rdram);   // HUD dos jogadores 3/4, mais abaixo (junto das barras)
+
     void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         // so na entrada: retomada no meio (depois de um sceGsSyncV do laco) ja tem D_006F8DC0 atualizado
@@ -754,6 +758,7 @@ namespace
             if (g_fieldLog)
                 fieldLogFrame(rdram, ctx, runtime);
             // quadro pronto (update, hier, particleDraw) e o seguinte ainda nao comecou: o desenho nativo copia a cena aqui
+            emitPlayerHuds(rdram);
             wotmCaptureFrame(rdram);
             // pausa (F7/F6/F8, wotm_foto.inc): o quadro pronto fica na tela e o seguinte nao comeca. O quadro com parada conta 1 field:
             // o tempo parado nao vira dt (sem isso o updateRate caia ao limite e o jogo dava um passo de 1/30 na volta)
@@ -1738,7 +1743,8 @@ namespace
     // Um bloco por inimigo: retrato a esquerda na altura toda; a direita, vida em cima e, embaixo, o especial e a energia (mais fina e
     // mais curta). Cada celula tem o proprio contorno preto; a faixa cinza entre duas celulas e uma so (o vao entre elas e exatamente
     // preto + cinza + preto), e um contorno preto fecha o bloco. Unidades da tela do jogo, 640 x 224 (1 em y = 2,14 em x na tela).
-    void emitBars(uint8_t *rdram, uint32_t m, const float box[4])
+    // s: escala do bloco (1 = sobre o inimigo; o HUD dos jogadores 3/4 usa um maior, emitPlayerHuds)
+    void emitBars(uint8_t *rdram, uint32_t m, const float box[4], float s = 1.f)
     {
         if (!ramOk(m, kMonsterStamina + 0x24u))
             return;
@@ -1748,11 +1754,11 @@ namespace
         const bool fury = static_cast<int8_t>(FAST_READ8(m + 0xF4u)) != 0;   // m_boostFull: o Hud::update troca a cara do retrato por ele
         const bool special = FAST_READ8(m + 0xF3u) != 0 && FAST_READ32((FAST_READ32(wotm::sym::game) & 0x1FFFFFFFu) + 0x1203C8u) != 9u;   // Monster::isSpecialAvailable (TheGame::m_gameMode)
         const float lag = barLag(m, health);
-        constexpr float kOx = 0.7f, kOy = 0.3f, kGx = 1.3f, kGy = 0.6f, kIx = 1.0f, kIy = 0.45f;   // contorno: preto, cinza, preto
-        constexpr float kDx = 2.f * kIx + kGx, kDy = 2.f * kIy + kGy;                              // vao entre duas celulas
-        constexpr float kAspect = 480.f / 224.f;                                                    // 1 unidade em y em unidades de x
-        constexpr float kW = 44.f, kHealthH = 2.6f, kEnergyH = 1.6f;
-        constexpr float kRowsH = kHealthH + kDy + kEnergyH, kPortraitW = kRowsH * kAspect, kSpecialW = kEnergyH * kAspect;
+        const float kOx = 0.7f * s, kOy = 0.3f * s, kGx = 1.3f * s, kGy = 0.6f * s, kIx = 1.0f * s, kIy = 0.45f * s;   // contorno: preto, cinza, preto
+        const float kDx = 2.f * kIx + kGx, kDy = 2.f * kIy + kGy;                                                      // vao entre duas celulas
+        constexpr float kAspect = 480.f / 224.f;                                                                        // 1 unidade em y em unidades de x
+        const float kW = 44.f * s, kHealthH = 2.6f * s, kEnergyH = 1.6f * s;
+        const float kRowsH = kHealthH + kDy + kEnergyH, kPortraitW = kRowsH * kAspect, kSpecialW = kEnergyH * kAspect;
         const float cx = 0.5f * (box[0] + box[2]), cy = 0.5f * (box[1] + box[3]);
         const float bx0 = cx - 0.5f * (kPortraitW + kDx + kW), ty0 = cy - 0.5f * kRowsH;
         struct Cell { float x0, y0, x1, y1; };
@@ -1794,6 +1800,24 @@ namespace
             else if (over > 0.f)
                 gradBar(st.x0, st.y0, st.x0 + stW * over, st.y1, kOverProf);
         }
+    }
+
+    // HUD dos jogadores 3/4 (wotm_multi.inc): o nivel so tem medidores para dois HUDs (Hud::initAfter monta os das vistas 0 e 1), entao
+    // na vista de cada um sai o bloco do emitBars (retrato, vida, especial, energia) maior, no canto de cima a esquerda, como o do jogador 1.
+    // Uma vez por quadro, na fronteira do quadro (antes da captura).
+    void emitPlayerHuds(uint8_t *rdram)
+    {
+        if (!wotm_multi::perPlayerViews())
+            return;
+        constexpr float kScale = 3.f, kLeft = 18.f, kTop = 10.f, kHalfW = 30.f * kScale, kHalfH = 3.6f * kScale;
+        const float box[4] = {kLeft + kHalfW - 1.f, kTop + kHalfH - 1.f, kLeft + kHalfW + 1.f, kTop + kHalfH + 1.f};
+        for (int i = 2; i < g_matchPlayers && i < 4; ++i)
+            if (const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i))
+            {
+                wotmBarView(i);
+                emitBars(rdram, m, box, kScale);
+            }
+        wotmBarView(0);
     }
 
     void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)

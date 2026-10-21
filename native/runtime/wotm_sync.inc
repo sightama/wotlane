@@ -1,9 +1,9 @@
-// ABOUTME: Ferramentas de determinismo para o netcode: passo fixo do relogio do jogo (WOTM_FIXEDSTEP), hash do estado por quadro
-// ABOUTME: (WOTM_STATEHASH) e copia da RAM num quadro (WOTM_STATEDUMP). Incluido por wotm_overrides.cpp; roda na fronteira do quadro.
+// ABOUTME: Modo deterministico para o netcode: passo fixo e relogio virtual (WOTM_FIXEDSTEP), semente fixa (WOTM_SEED), entrada por
+// ABOUTME: quadro (gravar/repetir), hash do estado por quadro e copia da RAM. Incluido por wotm_overrides.cpp; roda na fronteira do quadro.
 //
 // Fronteira do quadro: entrada do timerWaitForMinUpdateRate (waitMinRateByVblanks), com o quadro do jogo pronto e o seguinte sem
-// comecar. O indice do quadro conta a partir da entrada do Shell::LoadLevelFiles (g_loadGen muda), entao duas execucoes com a mesma
-// WOTM_MATCH comparam o mesmo quadro da luta mesmo com boots de duracao diferente.
+// comecar. O indice do quadro recomeca na entrada do Shell::LoadLevelFiles (levelLoad), entao duas execucoes com a mesma WOTM_MATCH
+// comparam o mesmo quadro da luta mesmo com boots de duracao diferente.
 //   WOTM_FIXEDSTEP=<n>: cada quadro vale exatamente n fields (updateRate = 60 / n, dt = n / 60), em vez dos vblanks medidos pelo relogio
 //     do host. Sem ela o dt depende de quanto o quadro demorou nesta maquina.
 //   WOTM_STATEHASH=<arquivo>: por quadro grava {indice, g_frame, hash total, 256 hashes de blocos de 128 KB} dos 32 MB que o jogo ve
@@ -48,6 +48,62 @@ namespace wotm_sync
         g_origRandInit(rdram, ctx, runtime);
     }
 
+    // Entrada por quadro (base do netcode): o scePadRead(porta, slot, dados) devolve 32 bytes por controle (controle = porta + 2 * slot,
+    // jogadores 1..4) e o jogo le cada controle duas vezes por quadro. Com o passo fixo, a primeira leitura do quadro e guardada e a
+    // segunda devolve a mesma (o que o jogo ve num quadro nao muda no meio dele).
+    //   WOTM_INPUTREC=<arquivo>: grava {quadro, controle, 32 bytes} da entrada guardada de cada quadro.
+    //   WOTM_INPUTPLAY=<arquivo>: o jogo ve a entrada gravada (pelo indice do quadro) em vez da dos dispositivos.
+    constexpr uint32_t kPadRead = wotm::fn::scePadRead;
+    constexpr int kControllers = 4;
+    struct InputRecord
+    {
+        uint32_t index;
+        uint32_t controller;
+        uint8_t data[32];
+    };
+    PS2Runtime::RecompiledFunction g_origPadRead = nullptr;
+    uint8_t g_latch[kControllers][32] = {};
+    bool g_latched[kControllers] = {};
+    FILE *g_inputRec = nullptr;
+    std::vector<InputRecord> g_inputPlay;
+    size_t g_playPos = 0;
+    uint32_t g_index = 0;   // quadro desde a carga da fase (frame)
+
+    const uint8_t *playedInput(uint32_t index, uint32_t controller)
+    {
+        while (g_playPos < g_inputPlay.size() && g_inputPlay[g_playPos].index < index)
+            ++g_playPos;
+        for (size_t i = g_playPos; i < g_inputPlay.size() && g_inputPlay[i].index == index; ++i)
+            if (g_inputPlay[i].controller == controller)
+                return g_inputPlay[i].data;
+        return nullptr;
+    }
+
+    void padReadLatched(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const bool entry = ctx->pc == kPadRead;
+        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu, ra = GPR_U32(ctx, 31);
+        g_origPadRead(rdram, ctx, runtime);
+        const uint32_t c = port + 2u * slot;
+        if (!entry || ctx->pc != ra || port > 1u || slot > 1u || GPR_U32(ctx, 2) == 0u || data + 32u > kGuestRam)
+            return;
+        if (!g_latched[c])
+        {
+            if (const uint8_t *p = g_inputPlay.empty() ? nullptr : playedInput(g_index, c))
+                std::memcpy(g_latch[c], p, 32);
+            else
+                std::memcpy(g_latch[c], rdram + data, 32);
+            g_latched[c] = true;
+            if (g_inputRec)
+            {
+                InputRecord r{g_index, c, {}};
+                std::memcpy(r.data, g_latch[c], 32);
+                std::fwrite(&r, sizeof r, 1, g_inputRec);
+            }
+        }
+        std::memcpy(rdram + data, g_latch[c], 32);
+    }
+
     int g_fixedStep = 0;
     uint32_t g_virtualTics = 0;   // relogio do jogo no passo fixo (ticks do timer 1: 9619 por field), avancado em frame()
     uint32_t g_ticCalls = 0;      // timerGetCurTics do jogo neste quadro
@@ -85,8 +141,19 @@ namespace wotm_sync
     }
     FILE *g_hashFile = nullptr;
     long g_dumpAt = -1;
-    uint32_t g_index = 0;
-    unsigned g_seenLoad = ~0u;
+
+    void loadInputPlay(const char *path)
+    {
+        if (FILE *f = std::fopen(path, "rb"))
+        {
+            InputRecord r;
+            while (std::fread(&r, sizeof r, 1, f) == 1)
+                g_inputPlay.push_back(r);
+            std::fclose(f);
+        }
+        std::stable_sort(g_inputPlay.begin(), g_inputPlay.end(), [](const InputRecord &a, const InputRecord &b) { return a.index < b.index; });
+        std::fprintf(stderr, "[sync] entrada gravada: %zu registros de %s\n", g_inputPlay.size(), path);
+    }
 
     void init(PS2Runtime &runtime)
     {
@@ -101,6 +168,12 @@ namespace wotm_sync
             if ((g_origSyncV = runtime.lookupFunction(kSyncV)))
                 runtime.registerFunction(kSyncV, &syncVParity);
             runtime.registerFunction(kReadClock, &readClockFixed);
+            if ((g_origPadRead = runtime.lookupFunction(kPadRead)))
+                runtime.registerFunction(kPadRead, &padReadLatched);
+            if (const char *r = std::getenv("WOTM_INPUTREC"); r && *r)
+                g_inputRec = std::fopen(r, "wb");
+            if (const char *p = std::getenv("WOTM_INPUTPLAY"); p && *p)
+                loadInputPlay(p);
         }
         if (const char *e = std::getenv("WOTM_STATEHASH"); e && *e)
             g_hashFile = std::fopen(e, "wb");
@@ -110,8 +183,14 @@ namespace wotm_sync
             std::fprintf(stderr, "[sync] passo fixo %d field(s), hash %s, copia no quadro %ld\n", g_fixedStep, g_hashFile ? "ligado" : "desligado", g_dumpAt);
     }
 
-    unsigned g_loads = 0;   // entradas do Shell::LoadLevelFiles (loadLevelFilesTapped)
-    void levelLoad() { ++g_loads; }
+    // Entrada do Shell::LoadLevelFiles (loadLevelFilesTapped): o indice do quadro recomeca ja aqui, antes do primeiro quadro da luta
+    // (as leituras do pad desse quadro usam o indice 0 nas duas execucoes, qualquer que tenha sido a duracao do boot)
+    void levelLoad()
+    {
+        g_index = 0;
+        g_playPos = 0;
+        std::fill(std::begin(g_latched), std::end(g_latched), false);
+    }
 
     // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields desde o timerSetFrameStart)
     void frame(uint8_t *rdram, uint32_t fieldCounter, uint32_t fieldCounterAtStart, uint32_t fieldsForAverage)
@@ -123,13 +202,10 @@ namespace wotm_sync
             Ps2FastWrite32(rdram, fieldsForAverage, Ps2FastRead32(rdram, fieldsForAverage) + step);
             g_virtualTics += step * 9619u;
             g_ticCalls = 0;
-        }
-        if (!g_hashFile && g_dumpAt < 0)
-            return;
-        if (g_loads != g_seenLoad)
-        {
-            g_seenLoad = g_loads;
-            g_index = 0;
+            wotmSoundFrame(step);   // o som anda o mesmo tanto, na thread do jogo (o fim de cada som vira funcao dos quadros)
+            std::fill(std::begin(g_latched), std::end(g_latched), false);
+            if (g_inputRec && (g_index & 63u) == 0u)
+                std::fflush(g_inputRec);
         }
         const uint32_t index = g_index++;
         if (g_hashFile)
