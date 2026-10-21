@@ -47,7 +47,7 @@ if (-not (Test-Path (Join-Path $disc 'SCUS_971.97'))) {
     Get-ChildItem $disc -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
 }
 $sha = (Get-FileHash (Join-Path $disc 'SCUS_971.97') -Algorithm SHA1).Hash.ToLower()
-if ($sha -ne $elfSha1) { Fail "SCUS_971.97 com SHA1 $sha: o port so suporta o disco NTSC-U (SCUS-97197, $elfSha1)" }
+if ($sha -ne $elfSha1) { Fail "SCUS_971.97 com SHA1 ${sha}: o port so suporta o disco NTSC-U (SCUS-97197, $elfSha1)" }
 
 # --- PS2Recomp com os patches do repo
 Step 'PS2Recomp'
