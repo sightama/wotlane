@@ -74,7 +74,9 @@ byte baixo), TEST_1 (0x47: ATE bit 0, ATST bits 1-3, AREF bits 4-11), ZBUF_1 (0x
 vale com PRIM.ABE da malha. Modos vistos: `0x44` comum, `0x48` aditiva (Kineticlops), `0x42` `Cd - Cs·As`, `0x46` `Cd·(1-As)`,
 `0x81` `(Cd-Cs)·As`. O `Renderer` reproduz com cor pré-multiplicada (opacos primeiro, depois os com ABE na ordem do modelo) e
 desenha o fundo dentro do RenderTexture para os modos que dependem do destino. Deslocamento de UV: `+0x20/+0x24` do nó, ou os
-canais `+0x30/+0x32` com o bit 0x800 em `+0xC`.
+canais `+0x30/+0x32` com o bit 0x800 em `+0xC`. No Kineticlops (trajes 0-2) esses canais (142/143) vêm da animação 0x91, que
+só tem essas duas curvas e roda em laço por cima da principal (a idle grava 0 neles): U dá uma volta a cada 80 quadros, V duas.
+Conferido no dump de luta `build/dumps_live/ram_energy_robot.bin` (0,637 e 1,275, proporção 1:2).
 
 ## Enquadramento
 `Model::computeFraming(id)` amostra a animação inteira e fixa a caixa; sem isso a câmera acompanha o idle (zoom "dançando").

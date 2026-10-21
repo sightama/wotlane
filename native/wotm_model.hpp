@@ -22,6 +22,7 @@ namespace wotm::model {
 
 constexpr uint32_t kBase = 0xA00000;   // o .NGP do monstro vem pre-ligado para ca (lido nessa base, dispensa o .PTR)
 constexpr int kIdle = 0x5A;            // StateIdle::chooseBaseIdle
+constexpr int kUvLayer = 0x91;         // camada da textura rolando (so canais de UV; Kineticlops), tocada por cima da principal
 
 // ---------------------------------------------------------------- curvas (src/common/AnimCurve.cpp)
 
@@ -299,6 +300,18 @@ public:
             for (uint32_t k = 0; k < nch; ++k) {
                 const Curve cv(ram_, ram_.u32(an + 0x18 + 4 * k));
                 if (cv.idx < c.val.size()) { c.val[cv.idx] = cv.eval(t); c.dirty[cv.idx] = 1; }
+            }
+            // Camada da textura rolando (Kineticlops: a 0x91 so tem as curvas dos canais de UV dos OBJECTs com uvScroll), tocada em
+            // laco por cima da principal, no tempo dela; na luta (build/dumps_live/ram_energy_robot.bin) os canais 142/143 valem
+            // 0,637/1,275, a proporcao 1:2 dessa camada (a 0 de 240 quadros, a outra com so as duas curvas, e 1:3)
+            if (const uint32_t ul = anim(kUvLayer)) {
+                const float us = ram_.f32(ul + 4), ue = ram_.f32(ul + 8);
+                const float tu = ue > us ? us + std::fmod(frame, ue - us) : us;
+                const uint16_t nu = ram_.u16(ul + 0xC);
+                for (uint32_t k = 0; k < nu; ++k) {
+                    const Curve cv(ram_, ram_.u32(ul + 0x18 + 4 * k));
+                    if (cv.idx < c.val.size()) { c.val[cv.idx] = cv.eval(tu); c.dirty[cv.idx] = 1; }
+                }
             }
         }
         items_.clear();
