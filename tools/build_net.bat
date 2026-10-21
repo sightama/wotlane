@@ -8,6 +8,7 @@ if not exist "%VCVARS%" (
     echo Nao achei o VS 2022 Build Tools em "%VCVARS%".
     exit /b 1
 )
+set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"
 call "%VCVARS%" >nul
 if exist "C:\Program Files\CMake\bin\cmake.exe" set "PATH=C:\Program Files\CMake\bin;%PATH%"
 set "BUILD=%REPO%\native\net\build"
