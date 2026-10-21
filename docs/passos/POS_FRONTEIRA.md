@@ -214,8 +214,14 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - Tela preta no "salvar?" depois da cena final de Tsunopolis (o disco voador leva o monstro e sobram 18 itens na fase): o nativo
   recusava instantâneos com menos de 20 itens. Agora vale também quando há diálogo na lista de alta prioridade (`wotm_live.inc`).
 - A fonte do menu não tem `%` nem `:` (o progresso sai "4 of 11 levels"; nem `/`).
-- Falta: logo do monstro e fundo da fase à esquerda (o espaço já fica livre), depois o monstro 3D. Revisar os textos de memory
-  card que sobram na aventura.
+- **Logo e foto da fase (2026-10-20, `native/wotm_savepics.hpp`):** à esquerda, de cima para baixo e centrados: o logo do monstro,
+  "on <fase>", a foto larga da fase, "Score N" e o resto. As imagens saem do `SHELL/SHELL.TEX` + `SHELL.RTX` do disco (pasta ou
+  ISO; depois da luta o menu não está na memória): logos 256x128 nos texIds 121..129 e 52 (Raptros); fotos de 512x256 em dois
+  pedaços T8 de 256x256 (a foto quadrada no pedaço anterior não é usada). As paletas são entradas 16x16 do `.RTX` alocadas na ordem
+  das texturas (4 por T8, 1 por T4; o `.NGP` não liga essas, o menu as troca por switch). As linhas estão de baixo para cima. O
+  modal posta a lista a cada quadro e a janela desenha entre a moldura (lista de alta prioridade) e o texto, com 0,2 s de entrada.
+  Sem logo (Spider, Ogre...) sai o nome em texto. Foto: `docs/screenshots/2026-10-20/2026-10-20_lista_de_saves_logo_e_fase.png`.
+- Falta: o monstro 3D sobre a foto. Revisar os textos de memory card que sobram na aventura.
 - O `savegame.dat` dos cartões só leva os 20 primeiros slots; os outros só existem no JSON.
 
 ### 6. Ícone de salvamento automático

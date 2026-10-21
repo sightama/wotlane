@@ -11,6 +11,8 @@
 // WOTM_SAVEJSON=0 desliga (so o mc0/, como antes). Layout dos blocos no POS_FRONTEIRA.md; tools/mcsave.py mostra o mesmo JSON.
 
 #include "wotm_json.hpp"
+#define WOTM_SAVEPICS_NO_DRAW
+#include "wotm_savepics.hpp"   // logo do monstro e foto da fase a esquerda da lista de saves (a janela desenha)
 
 #include <algorithm>
 #include <atomic>
@@ -848,6 +850,7 @@ namespace wotm_save
     void modalClose(uint8_t *rdram)
     {
         g_modal.open = false;
+        wotm::savepics::clear();
         w32(rdram, kTextBox + 0xC94, 0);   // setDontFade(false)
     }
 
@@ -875,7 +878,8 @@ namespace wotm_save
         const Row *show = nullptr;
         if (!m.rows.empty())
             show = m.rows[static_cast<size_t>(m.cur)].used ? &m.rows[static_cast<size_t>(m.cur)] : saving;
-        constexpr int kLeftX = 30, kRightX = 318;
+        constexpr int kLeftX = 30, kRightX = 318, kLeftCenter = 164;
+        std::vector<wotm::savepics::Pic> pics;
         if (m.confirm)
         {
             text(rdram, ctx, rt, "Overwrite save file " + std::to_string(m.cur + 1) + "?", kLeftX, Y(40), fName);
@@ -883,13 +887,30 @@ namespace wotm_save
         }
         else if (show)
         {
-            text(rdram, ctx, rt, rowTitle(rdram, *show), kLeftX, Y(40), fName);
-            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, Y(138), fText);
-            text(rdram, ctx, rt, "Adventure progress", kLeftX, Y(158), fText);
-            text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, Y(174), fText);
+            // Centrados na metade esquerda, de cima para baixo: o logo do monstro, "on <fase>", a foto larga da fase (depois o monstro
+            // 3D vai por cima dela), os pontos e o resto. Na tela do jogo um pixel e 1,5 de largura por 720/224 de altura: textura 2:1
+            // na janela = altura de largura * aspect / 2. Na fase a moldura e mais baixa: tudo encolhe junto com o Y. As imagens entram
+            // devagar depois que a moldura abre (o texto nao: setDontFade).
+            const uint32_t mon = show->sel >> 5;
+            const float k = inLevel ? 0.7f : 1.0f, aspect = 1.5f / (720.f / 224.f);
+            const uint8_t a = static_cast<uint8_t>(255.f * std::clamp((static_cast<float>(g_vsyncs - m.openedAt) - 6.f) / 12.f, 0.f, 1.f));
+            const float lw = 170.f * k, lh = lw * aspect * 0.5f, ly0 = static_cast<float>(Y(24));
+            if (wotm::savepics::hasLogo(mon))
+                pics.push_back({wotm::savepics::kLogo, mon, kLeftCenter - lw * 0.5f, ly0, kLeftCenter + lw * 0.5f, ly0 + lh, a});
+            else
+                text(rdram, ctx, rt, mon < std::size(kMonsterTitle) ? kMonsterTitle[mon] : "?", kLeftCenter, Y(40), fName, true);
+            text(rdram, ctx, rt, "on " + levelTitle(rdram, show->level), kLeftCenter, Y(66), fName, true);
+            const float pw = 220.f * k, ph = pw * aspect * 0.5f, px0 = kLeftCenter - pw * 0.5f, py0 = static_cast<float>(Y(82));
+            if (wotm::savepics::hasLevel(show->level))
+                pics.push_back({wotm::savepics::kLevel, show->level, px0, py0, px0 + pw, py0 + ph, a});
+            text(rdram, ctx, rt, "Score " + std::to_string(show->score), kLeftX, Y(140), fText);
+            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, Y(154), fText);
+            text(rdram, ctx, rt, "Adventure progress", kLeftX, Y(168), fText);
+            text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, Y(182), fText);
         }
         else
             text(rdram, ctx, rt, "No saved adventures", kLeftX, Y(40), fName);
+        wotm::savepics::post(std::move(pics));
         // Direita: a lista
         text(rdram, ctx, rt, "Save files", kRightX, Y(40), fTitle);
         for (int i = m.top; i < std::min<int>(m.top + kVisibleRows, static_cast<int>(m.rows.size())); ++i)

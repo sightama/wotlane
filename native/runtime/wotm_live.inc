@@ -1399,6 +1399,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
             S.scene.drawHp(ram);
             EndMode3D();
         }
+        {
+            // Logo do monstro e foto da fase na lista de saves (wotm_savepics.hpp): sobre a moldura, sob o texto
+            static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+            const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
+            wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
+        }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
         if (!split)
