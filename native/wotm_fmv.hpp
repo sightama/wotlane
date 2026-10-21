@@ -442,6 +442,7 @@ public:
 
     Source locate(const std::string &gameName) const {
         const std::string rel = discRelative(gameName);
+        if (std::string p = wotm::mods::Registry::get().hostPath(rel); !p.empty()) return Source{p};   // mods/ (wotm_mods.hpp)
         if (const char *d = std::getenv("WOTM_DISC"))
             if (std::string p = resolveDiscPath(d, rel); !p.empty()) return Source{p};
         if (std::string p = resolveDiscPath(discRoot, rel); !p.empty()) return Source{p};

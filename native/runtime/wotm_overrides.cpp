@@ -85,6 +85,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_menu.inc"
 // Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
 #include "wotm_split4.inc"
+// Pasta mods/ que sobrepoe arquivos do disco (POS_FRONTEIRA.md, item 4): fileCdSearchFile e sceCdRead.
+#include "wotm_mods.inc"
 
 namespace
 {
@@ -2037,6 +2039,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if (name.find("SCUS_971.97") == std::string::npos)
         return;
 
+    wotmModsInstall(runtime, elfPath);
     if (const char *e = std::getenv("WOTM_RATEMIN"))
         g_minRate = std::atoi(e);
     if (std::getenv("WOTM_TURNLOG") && (g_origUpdatePosition = runtime.lookupFunction(kMonsterDynamicsUpdatePosition)))

@@ -25,6 +25,7 @@
 #include "raylib.h"
 #include "rlgl.h"
 #include "wotm_gs.hpp"
+#include "wotm_mods.hpp"   // paletas dos .RTX: mods/ vence o disco (loadResources)
 
 namespace wotm {
 
@@ -834,16 +835,21 @@ public:
         if (root.empty())
             if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
+        // Caminho do disco ("MON/LIZARD0.RTX"): o arquivo de mods/ (wotm_mods.hpp) se houver, senao o da raiz
+        auto path = [&](const std::string &rel) {
+            std::string p = mods::Registry::get().hostPath(rel);
+            return p.empty() ? root + sep + rel : p;
+        };
         rtxPal.clear(); rtxImg.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;
-        bool lvl = loadRtx((root + sep + "LVL/" + names[0] + ".RTX").c_str(), base0);
+        bool lvl = loadRtx(path("LVL/" + names[0] + ".RTX").c_str(), base0);
         // O menu (SHELL) mora em SHELL/SHELL.RTX, nao em LVL/.
-        if (!lvl) lvl = loadRtx((root + sep + names[0] + "/" + names[0] + ".RTX").c_str(), base0);
-        if (!lvl) lvl = loadRtx((root + sep + "SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
+        if (!lvl) lvl = loadRtx(path(names[0] + "/" + names[0] + ".RTX").c_str(), base0);
+        if (!lvl) lvl = loadRtx(path("SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
         if (log) *log = names[0] + (lvl ? "" : " (nao achado)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
-            const bool ok = loadRtx((root + sep + "MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
+            const bool ok = loadRtx(path("MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
                                     ram.u16(fs + 0x168 + 2 * (i - 1)));   // maxTexAddr e maxResAddr do arquivo anterior
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }

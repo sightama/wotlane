@@ -7,6 +7,7 @@
 #include "raylib.h"   // antes do motor: liga Engine::startOutput (AudioStream)
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "wotm_snd.hpp"
+#include "wotm_mods.hpp"   // LSN falsos dos arquivos de mods/
 #include <cctype>
 #include <cstring>
 #include "Kernel/Stubs/CD.h"
@@ -51,6 +52,11 @@ inline bool readLsnRaw(uint32_t lsn, uint32_t sectors, uint8_t *dst, const char 
 {
     from = "discroot";
     const size_t bytes = size_t(sectors) * 2048;
+    if (wotm::mods::Registry::isModLsn(lsn))   // banco ou musica de mods/ (wotm_mods.inc devolveu o LSN falso no fileCdSearchFile)
+    {
+        from = "mods";
+        return wotm::mods::Registry::get().read(lsn, sectors, dst, bytes);
+    }
     std::memset(dst, 0, bytes);
     const ps2_stubs::CdDebugSnapshot snap = ps2_stubs::getCdDebugSnapshot();
     std::filesystem::path path;

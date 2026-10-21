@@ -10,7 +10,7 @@ sabe e o que falta descobrir.
 | 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) — **feito em 2026-10-19** | — | baixo |
 | 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda — **feito em 2026-10-19** | — | baixo (base pronta) |
 | 3 | Save em JSON legível, por nomes — **feito em 2026-10-19** | — | médio |
-| 4 | Pasta `mods/` que sobrepõe arquivos do disco | — | baixo/médio |
+| 4 | Pasta `mods/` que sobrepõe arquivos do disco — **gancho feito em 2026-10-21** (falta o kit e PNG direto) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera | — | alto |
@@ -196,6 +196,32 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - O carregador procura cada arquivo primeiro em `mods/` (mesmo caminho relativo do disco) e, se não achar, lê o da ISO. Trocar skin,
   textura, som ou fase vira mod sem código. Gancho na leitura de arquivos do runtime (CD/`file*`), na camada do host.
 - É o primeiro degrau do item 8: aqui só substitui; acrescentar sem substituir vem lá.
+- **Etapa 1, o gancho (feita em 2026-10-21; `native/wotm_mods.hpp`, `native/runtime/wotm_mods.inc`):** cada subpasta de `mods/`
+  (ao lado do ELF, ou seja, na raiz do disco extraído; `WOTM_MODS=<pasta>` troca, `=0` desliga) é um mod e repete a árvore do disco
+  (`mods/meu_mod/MON/LIZARD0.TEX`). Pasta com `_` ou `.` no começo fica desligada; dois mods com o mesmo arquivo: vence o último
+  em ordem alfabética (o log diz quem perdeu). Sem nenhum arquivo em `mods/` nenhum gancho é instalado.
+  - Todo arquivo que o jogo lê passa pelo `fileCdSearchFile` (fases, monstros, `SHELL`, bancos, músicas, filmes) e depois pelo
+    `sceCdRead` (`fileReadf/a/s`, `zipInflateAll`, `snd_StreamSafeCdRead`). O gancho da busca roda a original e, se o arquivo
+    estiver em `mods/`, devolve um LSN falso (faixa a partir de 0x800000, além de qualquer DVD) e o tamanho do mod; o do
+    `sceCdRead` atende essa faixa lendo do arquivo do PC. O som nativo (`readLsnRaw`) lê bancos e músicas pela mesma faixa. A
+    camada nativa que lê o disco por nome também procura antes em `mods/`: paletas do `.RTX` (`Scene::loadResources`, que lê o
+    arquivo direto e não da RAM), filmes (`wotm_fmv.hpp`), ícone, fotos e monstro da lista de saves (`wotm::disc::readFile`).
+  - Log: `[mods] N arquivo(s) de <mods> em <pasta>` no boot e, na primeira busca de cada arquivo, `[mods] MON/LIZARD0.TEX <-
+    teste_togera (110080 bytes; disco 110080)`, com AVISO quando o do mod é maior: o jogo carrega em regiões de tamanho fixo e
+    pode sobrescrever o que vem depois (abrir espaço fica para o item 8). Arquivo que não existe no disco também é servido
+    ("arquivo novo"), mas ninguém o pede ainda.
+  - Conferido (`WOTM_MATCH=3,1`, IA, fotos aos 12 e 20 s): Togera com a textura 4 do `LIZARD0.TEX` recolorida pelo
+    `tex.py inject --new-palette` (`.TEX` + `.RTX` no mod) sai vermelho, e sem o mod (`WOTM_MODS=0`) verde; com cópias idênticas
+    de `LVL/CENTRAL.NGP` (zip, lido em blocos pelo `fileReads`), `SND/LIZARD_S.BNK` e `VAG/GEN1AMB.VPK`/`GEN1BAT.VPK` (que no
+    `discroot` são vazios: vieram da ISO) a fase, o banco e as duas músicas saem do mod (`sound: LSN 8389878 ... (mods)`). Dois
+    mods juntos. Corpus sem mudança. Fotos: `docs/screenshots/2026-10-21/2026-10-21_mods_togera_vermelho.png` e `..._mods_desligado_togera_verde.png`.
+- **Etapa 2, kit (`tools/modkit.py`, pendente):** extrair para formatos editáveis e voltar ao do jogo dentro de `mods/<mod>/`,
+  sobre os conversores que já existem (`tex.py export/inject`, `snd989.py wav/vpk/vag`; o `.BNK` ainda não volta; `.NGP` só sai).
+- **PNG no lugar do `.TEX`/`.RTX` (pedido do dono, 2026-10-21):** a ideia é o mod trazer só PNG. Caminho preferido: o jogo
+  continua carregando o `.TEX`/`.RTX` do disco (layout da VRAM, ids e paletas do jogo intactos) e o desenho nativo troca a
+  textura na hora de desenhar pela do PNG (cor cheia, qualquer resolução: texturas HD), identificada por arquivo + `texId` como o
+  `tex.py export` nomeia (`lizard0_t0004.png`). A conversão PNG → `.TEX` na carga (paleta de 256/16 cores, mesmo tamanho) fica de
+  reserva para o que o jogo lê dos pixels ou para o executável de teste com o GS emulado.
 
 ### 5. Sem escolha de memory card
 - **Lista de saves (feito em 2026-10-20, merge 4da9c64; `wotm_save.inc`):** as caixas e as fitas saíram (a troca de caixa

@@ -205,6 +205,7 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_HZ=<n>`, `WOTM_VSYNC=0` | taxa de apresentação (padrão: a do monitor da janela) / sem vsync, só o limite por tempo; a lógica continua a 60 e a cena só é redesenhada com quadro novo (seção "Câmera e instantâneo", taxa de apresentação; launcher, grupo Vídeo) |
 | `WOTM_RES=<linhas>`, `WOTM_FULLSCREEN=1` | altura do quadro nativo (padrão 720; 224..4320; o PS2 mostra 448) / tela cheia sem borda ao abrir (F11 alterna a qualquer hora); a janela abre no tamanho do quadro, reduzida para caber no monitor (launcher, grupo Vídeo) |
 | `WOTM_DISC=<pasta>`, `WOTM_ISO=<arquivo>` | forçam a origem dos arquivos do disco (`.RTX`, `.PSS`) em vez de `PS2X_CD_IMAGE`/pasta do ELF |
+| `WOTM_MODS=<pasta>` (`0` desliga) | pasta de mods que sobrepõem arquivos do disco (padrão: `mods/` ao lado do ELF; `wotm_mods.inc`, `POS_FRONTEIRA.md` item 4) |
 | `WOTM_FMV_MUTE=1` | filmes sem áudio |
 | `WOTM_IRX=1` | carrega no IOP emulado os IRX que não são de som (SIO2MAN, PADMAN, MCMAN, MCSERV), como antes de 2026-10-18; sem ela nenhum IRX sobe. Só no `ps2EntryRunner.exe`: o `wotm.exe` não tem IOP emulado e a ignora (`FRONTEIRA.md`, passo 6) |
 | `WOTM_MATCH=<jogador>[,<ia>...],<fase>` (0 a 7 IAs), `WOTM_AIVSAI=1` | partida direta sem menu (grupo "Partida" do launcher, que passa `-Auto 0`) / o jogador também sob a IA (seção "partida direta") |
