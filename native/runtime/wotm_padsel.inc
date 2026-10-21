@@ -1126,9 +1126,9 @@ static bool objectPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
 }
 
 // Textura (de render: V invertido) num retangulo do plano: esquerda/topo e largura/altura nos eixos dele, alfa 0..1; `uv` = parte
-// da textura (x0, y0, x1, y1 em fracao, y de cima para baixo)
+// da textura (x0, y0, x1, y1 em fracao, y de cima para baixo); `tint` multiplica a cor
 static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float top, float wx, float hy, float alpha, float lift,
-                        const float uv[4] = nullptr)
+                        const float uv[4] = nullptr, Color tint = WHITE)
 {
     const float u0 = uv ? uv[0] : 0.f, u1 = uv ? uv[2] : 1.f, vt = uv ? 1.f - uv[1] : 1.f, vb = uv ? 1.f - uv[3] : 0.f;
     const Vector3 off = vscale(pl.n, lift);
@@ -1142,7 +1142,7 @@ static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float
     rlDisableBackfaceCulling();
     rlSetTexture(tex.id);
     rlBegin(RL_QUADS);
-    rlColor4ub(255, 255, 255, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f));
+    rlColor4ub(tint.r, tint.g, tint.b, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f));
     rlTexCoord2f(u0, vt); rlVertex3f(tl.x, tl.y, tl.z);
     rlTexCoord2f(u0, vb); rlVertex3f(bl.x, bl.y, bl.z);
     rlTexCoord2f(u1, vb); rlVertex3f(br.x, br.y, br.z);
@@ -1157,6 +1157,459 @@ static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float
 
 // A escolha no plano do telao (objeto do filme, shell->m_movieScreen), abaixo do logo, e o rotulo do menu principal no retangulo
 // do item. Dentro do BeginMode3D do quadro, depois da cena.
+// ------------------------------------------------------------------ rotulo com as letras do proprio telao
+// "multiplayer" montado com as letras dos outros itens do menu principal, na fonte do jogo. Os itens sao quadros com textura de letras
+// brancas com contorno preto (a cor, apagada ou acesa, e a dos vertices; o filho 0 do switch e o apagado, o 1 o aceso), guardadas de
+// cabeca para baixo: o "1/2 player" usa um atlas com "player", "options" e os digitos, num quadro para o digito e outro para a palavra;
+// "load game", "options" e "unlocks" tem cada um a sua. Aqui: "player" vem do quadro da palavra do proprio "2 player", t e i do
+// "options", m do "load game" e u do "unlocks" (letras separadas pelas colunas sem alfa da regiao de UV de cada quadro). A palavra fica
+// na escala de texel do "player", na linha de base dele e centrada no "2 player" inteiro, com a cor dos vertices de cada estado. Os
+// recortes saem do .RTX na hora (Scene::decodeTex): nada do jogo fica no repo. Se algum recorte nao tiver o numero de letras esperado,
+// fica o rotulo com fonte (renderLabel).
+struct Crop
+{
+    std::vector<uint32_t> px;   // RGBA8, alfa 0..255, linhas de cima para baixo como na tela
+    int w = 0, h = 0;
+    const char *why = "";       // motivo da falha (log)
+};
+struct Seg { int x0, x1; };   // colunas [x0, x1)
+// Quadro de uma malha: regiao da textura (texels) e o mapa texel -> plano do objeto (x = ax * u + bx, y = ay * v + by)
+struct Quad
+{
+    float u0 = 1e30f, u1 = -1e30f, v0 = 1e30f, v1 = -1e30f;
+    float ax = 0.f, bx = 0.f, ay = 0.f, by = 0.f;
+    float x0 = 1e30f, x1 = -1e30f;   // extensao no plano (eixo direita)
+};
+struct GlyphLabel
+{
+    bool ok = false;
+    Texture2D tex{};                 // a palavra em branco com contorno (a cor vai no desenho)
+    int base = 0;                    // linha de base na textura (pixels, de cima)
+    int playerBase = 0;              // linha de base no recorte do "player" do "2 player" (linhas na ordem da tela)
+    float inkCx = 0.f;               // centro das letras do "2 player" no plano dele (medido na montagem)
+};
+static GlyphLabel g_glyph;
+constexpr int kGlyphPad = 4;
+constexpr uint32_t kInk = 200;   // alfa da letra (255); entre duas letras o contorno encostado fica em 170
+
+// Objeto (OBJECT_NODE) do filho `child` do switch do item `item` do menu principal (shell->m_menuItemSw[1][item])
+static uint32_t itemObject(const wotm::Ram &ram, int item, int child)
+{
+    const uint32_t sw = ram.u32(kShell + 0x25C + uint32_t(10 + item) * 4) & 0x1FFFFFFFu;
+    if (!ram.ok(sw, 0x10) || (ram.u8(sw) & 0x3F) != 6 || child >= ram.u8(sw + 0xB))
+        return 0;
+    const uint32_t c = ram.u32(sw + 0xC + 4u * uint32_t(child)) & 0x1FFFFFFFu;
+    if (!ram.ok(c, 0x24))
+        return 0;
+    if ((ram.u8(c) & 0x3F) == 0)
+        return c;
+    if ((ram.u8(c) & 0x3F) == 1 && ram.u16(c + 8) > 0)   // GROUP_NODE: primeiro filho em +0x20
+        if (const uint32_t o = ram.u32(c + 0x20) & 0x1FFFFFFFu; ram.ok(o, 0x60) && (ram.u8(o) & 0x3F) == 0)
+            return o;
+    return 0;
+}
+
+// Quadros da malha do objeto: triangulos agrupados pela regiao de UV (os de um quadro dividem a mesma). UV normalizado e com a textura
+// repetida (os itens usam u -1..0): o periodo e tirado pelo piso do minimo. Com `m` (matriz do item da cena) e `pl`, o mapa para o plano.
+static std::vector<Quad> meshQuads(const wotm::MeshData &md, uint32_t tw, uint32_t th, const wotm::M4 *m = nullptr, const Plane *pl = nullptr)
+{
+    float fu = 1e30f, fv = 1e30f;
+    for (const wotm::Vtx &t : md.tris)
+    {
+        fu = std::min(fu, t.u);
+        fv = std::min(fv, t.v);
+    }
+    fu = std::floor(fu);
+    fv = std::floor(fv);
+    struct P { float u, v, x, y; };
+    std::vector<std::vector<P>> groups;
+    std::vector<Quad> boxes;
+    for (size_t i = 0; i + 2 < md.tris.size(); i += 3)
+    {
+        P p[3];
+        Quad b;
+        for (int k = 0; k < 3; ++k)
+        {
+            const wotm::Vtx &t = md.tris[i + size_t(k)];
+            p[k].u = (t.u - fu) * float(tw);
+            p[k].v = (t.v - fv) * float(th);
+            p[k].x = p[k].y = 0.f;
+            if (m && pl)
+            {
+                float w[3];
+                wotm::xform(*m, t.x, t.y, t.z, w);
+                const Vector3 d = vsub(Vector3{w[0], w[1], w[2]}, pl->c);
+                p[k].x = vdot(d, pl->right);
+                p[k].y = vdot(d, pl->up);
+            }
+            b.u0 = std::min(b.u0, p[k].u); b.u1 = std::max(b.u1, p[k].u); b.v0 = std::min(b.v0, p[k].v); b.v1 = std::max(b.v1, p[k].v);
+        }
+        size_t g = 0;
+        for (; g < boxes.size(); ++g)   // mesma regiao (com folga de 1 texel): mesmo quadro
+            if (b.u0 < boxes[g].u1 + 1.f && boxes[g].u0 < b.u1 + 1.f && b.v0 < boxes[g].v1 + 1.f && boxes[g].v0 < b.v1 + 1.f)
+                break;
+        if (g == boxes.size())
+        {
+            boxes.push_back(b);
+            groups.emplace_back();
+        }
+        Quad &q = boxes[g];
+        q.u0 = std::min(q.u0, b.u0); q.u1 = std::max(q.u1, b.u1); q.v0 = std::min(q.v0, b.v0); q.v1 = std::max(q.v1, b.v1);
+        groups[g].insert(groups[g].end(), p, p + 3);
+    }
+    for (size_t g = 0; g < boxes.size(); ++g)
+    {
+        Quad &q = boxes[g];
+        if (!m || !pl)
+            continue;
+        const P *uMin = nullptr, *uMax = nullptr, *vMin = nullptr, *vMax = nullptr;
+        for (const P &p : groups[g])
+        {
+            if (!uMin || p.u < uMin->u) uMin = &p;
+            if (!uMax || p.u > uMax->u) uMax = &p;
+            if (!vMin || p.v < vMin->v) vMin = &p;
+            if (!vMax || p.v > vMax->v) vMax = &p;
+            q.x0 = std::min(q.x0, p.x);
+            q.x1 = std::max(q.x1, p.x);
+        }
+        if (uMax->u - uMin->u < 1.f || vMax->v - vMin->v < 1.f)
+            continue;
+        q.ax = (uMax->x - uMin->x) / (uMax->u - uMin->u);
+        q.bx = uMin->x - q.ax * uMin->u;
+        q.ay = (vMax->y - vMin->y) / (vMax->v - vMin->v);
+        q.by = vMin->y - q.ay * vMin->v;
+    }
+    return boxes;
+}
+
+// Pixels da regiao de um quadro, com as linhas na ordem da tela (`flip`: a textura esta de cabeca para baixo)
+static bool cropQuad(const std::vector<uint32_t> &px, uint32_t tw, uint32_t th, const Quad &q, bool flip, Crop &c)
+{
+    const int x0 = std::clamp(int(std::floor(q.u0)), 0, int(tw)), x1 = std::clamp(int(std::ceil(q.u1)), 0, int(tw));
+    const int y0 = std::clamp(int(std::floor(q.v0)), 0, int(th)), y1 = std::clamp(int(std::ceil(q.v1)), 0, int(th));
+    if (x1 - x0 < 8 || y1 - y0 < 4)
+    {
+        c.why = "regiao de UV pequena";
+        return false;
+    }
+    c.w = x1 - x0;
+    c.h = y1 - y0;
+    c.px.resize(size_t(c.w) * c.h);
+    for (int y = 0; y < c.h; ++y)
+        std::memcpy(&c.px[size_t(y) * c.w], &px[size_t(flip ? y1 - 1 - y : y0 + y) * tw + x0], size_t(c.w) * 4);
+    return true;
+}
+
+// O maior quadro (em texels) da malha de um objeto, recortado
+static bool cropItem(wotm::Scene &scene, const wotm::Ram &ram, uint32_t obj, bool flip, Crop &c)
+{
+    std::vector<uint32_t> px;
+    uint32_t tw = 0, th = 0;
+    const wotm::MeshData *md = obj ? scene.mesh(ram, obj) : nullptr;
+    if (!md || md->tris.empty())
+    {
+        c.why = "sem malha";
+        return false;
+    }
+    if (!scene.decodeTex(ram, obj, px, tw, th, 0, false) || !tw || !th)
+    {
+        c.why = "textura nao decodificada";
+        return false;
+    }
+    const std::vector<Quad> qs = meshQuads(*md, tw, th);
+    const Quad *best = nullptr;
+    for (const Quad &q : qs)
+        if (!best || (q.u1 - q.u0) > (best->u1 - best->u0))
+            best = &q;
+    return best && cropQuad(px, tw, th, *best, flip, c);
+}
+
+static std::vector<Seg> segments(const Crop &c)
+{
+    std::vector<Seg> s;
+    int start = -1;
+    for (int x = 0; x <= c.w; ++x)
+    {
+        bool ink = false;
+        for (int y = 0; x < c.w && y < c.h && !ink; ++y)
+            ink = (c.px[size_t(y) * c.w + x] >> 24) >= kInk;
+        if (ink && start < 0)
+            start = x;
+        else if (!ink && start >= 0)
+        {
+            if (x - start >= 2)   // menos de 2 colunas: sujeira
+                s.push_back({start, x});
+            start = -1;
+        }
+    }
+    return s;
+}
+
+// Linhas com letra nas colunas [x0, x1): topo e pe (exclusivo)
+static bool rowBox(const Crop &c, int x0, int x1, int &top, int &bottom)
+{
+    top = c.h;
+    bottom = 0;
+    for (int y = 0; y < c.h; ++y)
+        for (int x = x0; x < x1; ++x)
+            if ((c.px[size_t(y) * c.w + x] >> 24) >= kInk)
+            {
+                top = std::min(top, y);
+                bottom = std::max(bottom, y + 1);
+                break;
+            }
+    return bottom > top;
+}
+
+// Linha de base das colunas [x0, x1): a mediana do pe (ultima linha com letra) das colunas com letra; os descendentes (p, y, g) sao
+// minoria e nao a mudam. 0 = sem letra.
+static int baselineOf(const Crop &c, int x0, int x1)
+{
+    std::vector<int> feet;
+    for (int x = x0; x < x1; ++x)
+        for (int y = c.h - 1; y >= 0; --y)
+            if ((c.px[size_t(y) * c.w + x] >> 24) >= kInk)
+            {
+                feet.push_back(y + 1);
+                break;
+            }
+    if (feet.empty())
+        return 0;
+    std::nth_element(feet.begin(), feet.begin() + long(feet.size() / 2), feet.end());
+    return feet[feet.size() / 2];
+}
+
+// Segmentos depois do maior vao (a palavra depois do espaco: "game" de "load game")
+static std::vector<Seg> afterWidestGap(const std::vector<Seg> &s)
+{
+    size_t at = 0;
+    int best = -1;
+    for (size_t i = 1; i < s.size(); ++i)
+        if (s[i].x0 - s[i - 1].x1 > best)
+        {
+            best = s[i].x0 - s[i - 1].x1;
+            at = i;
+        }
+    return best < 0 ? std::vector<Seg>{} : std::vector<Seg>(s.begin() + long(at), s.end());
+}
+
+// "multiplayer" em branco com contorno (a fonte do jogo), com a linha de base em `base`. `P` = o "player" do "2 player".
+static bool buildGlyphWord(wotm::Scene &scene, const wotm::Ram &ram, const Crop &P, bool flip, Texture2D &out, int &outBase, int &outPlayerBase)
+{
+    Crop O, G, U;
+    if (!cropItem(scene, ram, itemObject(ram, 3, 0), flip, O) || !cropItem(scene, ram, itemObject(ram, 4, 0), flip, G) ||
+        !cropItem(scene, ram, itemObject(ram, 5, 0), flip, U))
+    {
+        std::fprintf(stderr, "[padsel] rotulo com as letras do telao: itens sem textura (%s / %s / %s)\n", O.why, G.why, U.why);
+        return false;
+    }
+    const std::vector<Seg> sP = segments(P), sO = segments(O), sG = afterWidestGap(segments(G)), sU = segments(U);
+    // o "player" vai inteiro (no atlas algumas letras dele se encostam sem a coluna de 170): basta ter letra
+    if (sP.empty() || sO.size() != 7 || sG.size() != 4 || sU.size() != 7)
+    {
+        std::fprintf(stderr, "[padsel] rotulo com as letras do telao: segmentos inesperados (player %zu, options %zu, game %zu, unlocks %zu)\n",
+                     sP.size(), sO.size(), sG.size(), sU.size());
+        return false;
+    }
+    int t, b;
+    const int baseP = baselineOf(P, sP.front().x0, sP.back().x1), baseO = baselineOf(O, 0, O.w), baseG = baselineOf(G, 0, G.w),
+              baseU = baselineOf(U, 0, U.w);
+    if (baseP <= 0 || baseO <= 0 || baseG <= 0 || baseU <= 0)
+        return false;
+    int gap = 0;   // vao entre letras: o mediano do "options"
+    {
+        std::vector<int> g;
+        for (size_t i = 1; i < sO.size(); ++i)
+            g.push_back(sO[i].x0 - sO[i - 1].x1);
+        std::sort(g.begin(), g.end());
+        gap = g[g.size() / 2];
+    }
+    struct Piece { const Crop *c; int x0, x1, base; };
+    // m (load game), u, l (unlocks), t, i (options), player
+    const Piece pieces[] = {{&G, sG[2].x0, sG[2].x1, baseG}, {&U, sU[0].x0, sU[0].x1, baseU}, {&U, sU[2].x0, sU[2].x1, baseU},
+                            {&O, sO[2].x0, sO[2].x1, baseO}, {&O, sO[3].x0, sO[3].x1, baseO}, {&P, sP.front().x0, sP.back().x1, baseP}};
+    int asc = 0, desc = 0, w = 0;
+    for (const Piece &p : pieces)
+    {
+        if (!rowBox(*p.c, p.x0, p.x1, t, b))
+            return false;
+        asc = std::max(asc, p.base - t);
+        desc = std::max(desc, b - p.base);
+        w += p.x1 - p.x0;
+    }
+    w += gap * int(std::size(pieces) - 1) + 2 * kGlyphPad;
+    const int h = asc + desc + 2 * kGlyphPad, base = kGlyphPad + asc;
+    std::vector<uint32_t> img(size_t(w) * h, 0u);
+    int x = kGlyphPad;
+    for (const Piece &p : pieces)
+    {
+        for (int sy = 0; sy < p.c->h; ++sy)
+        {
+            const int dy = base + (sy - p.base);
+            if (dy < 0 || dy >= h)
+                continue;
+            // a letra e o contorno encostado de cada lado (a coluna de 170): no encontro de duas fica o pixel mais opaco
+            for (int sx = std::max(0, p.x0 - 1); sx < std::min(p.c->w, p.x1 + 1); ++sx)
+            {
+                const int dx = x + sx - p.x0;
+                if (dx < 0 || dx >= w)
+                    continue;
+                const uint32_t c = p.c->px[size_t(sy) * p.c->w + sx];
+                uint32_t &d = img[size_t(dy) * w + dx];
+                if ((c >> 24) > (d >> 24))
+                    d = c;
+            }
+        }
+        x += p.x1 - p.x0 + gap;
+    }
+    Image im{img.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    out = LoadTextureFromImage(im);
+    if (!out.id)
+        return false;
+    SetTextureFilter(out, TEXTURE_FILTER_BILINEAR);
+    SetTextureWrap(out, TEXTURE_WRAP_CLAMP);
+    outBase = base;
+    outPlayerBase = baseP;
+    return true;
+}
+
+// Quadros do "2 player" no plano dele e o recorte do "player" (o maior quadro); `flip` pela orientacao do mapa (v sobe na tela)
+struct OwnText
+{
+    Quad word;            // quadro do "player"
+    float inkCx = 0.f;    // centro das letras do "2 player" inteiro (o "2" e o "player") no plano
+    Crop P;               // recorte do "player" (so na montagem)
+    bool flip = false;
+};
+// Quadros do "2 player" no plano. `build`: decodifica a textura, recorta o "player" e mede o centro pelas letras (os quadros tem margem
+// vazia, desigual); senao so a geometria, com o tamanho de textura guardado na montagem.
+static bool ownText(wotm::Scene &scene, const wotm::Ram &ram, uint32_t obj, const Plane &pl, bool build, OwnText &o)
+{
+    static uint32_t s_tw = 0, s_th = 0;
+    const wotm::DrawItem *it = nullptr;
+    for (const wotm::DrawItem &i : scene.items)
+        if ((i.node & 0x1FFFFFFFu) == obj) { it = &i; break; }
+    const wotm::MeshData *md = it ? scene.mesh(ram, it->node) : nullptr;
+    std::vector<uint32_t> px;
+    if (!md || md->tris.size() < 3)
+    {
+        o.P.why = "sem malha";
+        return false;
+    }
+    if (build && (!scene.decodeTex(ram, obj, px, s_tw, s_th, 0, false) || !s_tw || !s_th))
+    {
+        o.P.why = "textura nao decodificada";
+        return false;
+    }
+    if (!s_tw || !s_th)
+        return false;
+    const std::vector<Quad> qs = meshQuads(*md, s_tw, s_th, &it->m, &pl);
+    const Quad *word = nullptr;
+    for (const Quad &q : qs)
+        if (!word || (q.u1 - q.u0) > (word->u1 - word->u0))
+            word = &q;
+    if (!word || word->ay == 0.f)
+    {
+        o.P.why = "sem quadro da palavra";
+        return false;
+    }
+    o.word = *word;
+    o.flip = word->ay > 0.f;   // v maior mais acima: a textura esta de cabeca para baixo
+    if (!build)
+        return true;
+    float x0 = 1e30f, x1 = -1e30f;
+    for (const Quad &q : qs)
+    {
+        Crop c;
+        if (!cropQuad(px, s_tw, s_th, q, o.flip, c))
+            continue;
+        const std::vector<Seg> s = segments(c);
+        if (s.empty())
+            continue;
+        const float u0 = std::floor(q.u0);   // coluna 0 do recorte
+        for (const float u : {u0 + float(s.front().x0), u0 + float(s.back().x1)})
+        {
+            x0 = std::min(x0, q.ax * u + q.bx);
+            x1 = std::max(x1, q.ax * u + q.bx);
+        }
+    }
+    if (x1 < x0)
+    {
+        o.P.why = "sem letras";
+        return false;
+    }
+    o.inkCx = 0.5f * (x0 + x1);
+    return cropQuad(px, s_tw, s_th, o.word, o.flip, o.P);
+}
+
+// Cor dos vertices de um objeto (GS: 0x80 = 1,0), a media
+static Color vertexColor(wotm::Scene &scene, const wotm::Ram &ram, uint32_t obj)
+{
+    const wotm::MeshData *md = obj ? scene.mesh(ram, obj) : nullptr;
+    if (!md || md->tris.empty())
+        return WHITE;
+    float r = 0, g = 0, b = 0, a = 0;
+    for (const wotm::Vtx &t : md->tris)
+    {
+        r += t.r;
+        g += t.g;
+        b += t.b;
+        a += t.a;
+    }
+    const float n = float(md->tris.size()), k = 255.f / 128.f;
+    auto c8 = [&](float v) { return static_cast<unsigned char>(std::clamp(v / n * k, 0.f, 255.f)); };
+    return Color{c8(r), c8(g), c8(b), c8(a)};   // o alfa dos itens apagados fica abaixo de 1: escurecem sobre o telao
+}
+
+// Uma vez por sessao (as texturas do telao sao residentes); ate 20 tentativas, uma a cada 30 quadros
+static void buildGlyphLabel(wotm::Scene &scene, const wotm::Ram &ram, uint32_t ownObj, const Plane &pl)
+{
+    static int frames = 0, tries = 0;
+    if (g_glyph.ok || tries >= 20 || frames++ % 30 != 0)
+        return;
+    ++tries;
+    OwnText own;
+    if (!ownText(scene, ram, ownObj, pl, true, own))
+    {
+        if (tries == 1 || tries == 20)
+            std::fprintf(stderr, "[padsel] rotulo com as letras do telao: \"2 player\" (objeto %x) %s; fica a fonte\n", ownObj, own.P.why);
+        return;
+    }
+    Texture2D t{};
+    int base = 0, playerBase = 0;
+    if (!buildGlyphWord(scene, ram, own.P, own.flip, t, base, playerBase))
+        return;
+    g_glyph.tex = t;
+    g_glyph.base = base;
+    g_glyph.playerBase = playerBase;
+    g_glyph.inkCx = own.inkCx;
+    g_glyph.ok = true;
+    std::fprintf(stderr, "[padsel] rotulo com as letras do telao: %dx%d\n", t.width, t.height);
+}
+
+// A palavra no lugar do "2 player": escala de texel e linha de base do quadro do "player", centrada no item inteiro, na cor dos vertices
+static bool drawGlyphLabel(wotm::Scene &scene, const wotm::Ram &ram, const Plane &pl, uint32_t obj, bool lit, float alpha)
+{
+    OwnText own;
+    if (!g_glyph.ok || !ownText(scene, ram, obj, pl, false, own))
+        return false;
+    const Quad &q = own.word;
+    const float sx = std::fabs(q.ax), sy = std::fabs(q.ay);
+    const float wx = float(g_glyph.tex.width) * sx, hy = float(g_glyph.tex.height) * sy;
+    const float cx = g_glyph.inkCx;
+    // pe da palavra montada = pe do "player" original (mesma fonte e escala): a linha do pe do l no recorte, de volta ao v do quadro
+    const float baseV = own.flip ? q.v1 - float(g_glyph.playerBase) : q.v0 + float(g_glyph.playerBase);
+    const float baseY = q.ay * baseV + q.by;
+    const float top = baseY + float(g_glyph.base) * sy;
+    const Color tint = vertexColor(scene, ram, itemObject(ram, 2, lit ? 1 : 0));
+    const float uv[4] = {0.f, 1.f, 1.f, 0.f};   // textura comum (nao de render): V de cima para baixo
+    // o alfa dos vertices escurece o item apagado; medido nas fotos, com ele cru o rotulo saia ~75% do brilho dos outros itens (o
+    // desenho nativo dos objetos mistura de outro jeito): 1,35 x, ate 1
+    const float va = std::min(1.f, 1.35f * float(tint.a) / 255.f);
+    drawOnPlane(pl, g_glyph.tex, cx - wx * 0.5f, top, wx, hy, alpha * va, 0.004f * (pl.x1 - pl.x0), uv, tint);
+    return true;
+}
+
 static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam)
 {
     View v;
@@ -1177,7 +1630,14 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         return got;
     };
     Plane pl, ref;
-    if (v.labelObj[0] && v.labelAlpha > 0.f && g_labelRt.id && textPlane(v.labelObj, pl))
+    const bool labelOn = v.labelObj[0] && v.labelAlpha > 0.f && objectPlane(scene, ram, cam, v.labelObj[0], pl);
+    if (labelOn)
+        buildGlyphLabel(scene, ram, v.labelObj[0], pl);
+    if (labelOn && drawGlyphLabel(scene, ram, pl, v.labelObj[0], v.labelLit, v.labelAlpha))
+    {
+        // letras do telao (drawGlyphLabel)
+    }
+    else if (v.labelObj[0] && v.labelAlpha > 0.f && g_labelRt.id && textPlane(v.labelObj, pl))
     {
         // altura da linha = a do "1 player" (as letras dos itens tem o mesmo corpo); centro na coluna dele (os itens sao centrados), na
         // altura do proprio item
