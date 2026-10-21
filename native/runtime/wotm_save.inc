@@ -14,11 +14,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <initializer_list>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -656,38 +658,34 @@ namespace wotm_save
         (runtime.registerFunction(kSeqHooks[I].fn, &seqReplaced<I>), ...);
     }
 
-    // ---- tela de carregar a aventura sem escolher cartao (POS_FRONTEIRA.md, item 5) ----
+    // ---- lista de saves da aventura, sem caixas nem cartao (POS_FRONTEIRA.md, item 5) ----
     //
-    // updateStoryModeLoad monta McPrepBoxScreen -> McLoadGameBoxes (menu "slot 1 / slot 2": a escolha chama McState::setPlayer,
-    // empurra a caixa daquele cartao para a frente e passa a pagina) -> McSelectReel (as fitas da caixa; esquerda/direita, botoes 8
-    // e 9 do McPageMgr::Input, andam e dao a volta no fim). Aqui:
-    //   - o menu de cartao se escolhe sozinho (cartao 1, ou o 2 se so ele tem aventuras): no update da pagina, a selecao vai para o
-    //     cartao e o X e marcado como apertado; o jogo faz o resto. A pagina fica marcada para ser pulada no "voltar" (+0x268, lido
-    //     pelo shouldSkipOnReturn, que tambem recolhe a caixa): voltar das fitas sai da tela;
-    //   - McSelectReel::refreshSaveData trocado por uma versao que le o savegame.dat do cartao direto (o original le pelo
-    //     McSync::sync, que mostra "procurando memory card" por pelo menos 30 quadros); o resto e o que ele faz depois da leitura;
-    //   - as 20 fitas sao uma lista so, em volta: direita na ultima fita de uma caixa (ou esquerda na primeira), com aventuras na
-    //     outra caixa, recolhe fita e caixa atuais, passa o McState para o outro cartao, traz a outra caixa e mostra a primeira (ou a
-    //     ultima) fita dela. Sem aventuras na outra caixa, a seta da a volta na mesma, como no jogo.
-    // Nada aqui chama funcao do jogo que espere quadro (o McSync::sync desenha quadros): so dados e funcoes curtas.
-    constexpr uint32_t kMgr = wotm::sym::x_9McPageMgr_global, kMcState = kMgr + 0x34;
-    constexpr uint32_t kInputPressed = kMgr + 0x1158;   // McPageMgr::Input: {mascara, apertado} x 10; 2 = X, 8 = esquerda, 9 = direita
-    constexpr uint32_t kBoxes = wotm::sym::x_15McLoadGameBoxes_global;
-    constexpr uint32_t kSetPlayerTable = 0x006EAF00u;   // D_006EAF00 (rodata do McState::setPlayer): {+0x1C, +0x18} por cartao
-    constexpr uint32_t kBoxesUpdate = wotm::fn::update__15McLoadGameBoxesR7McState, kReelUpdate = wotm::fn::update__12McSelectReelR7McState;
-    constexpr uint32_t kRefresh = wotm::fn::refreshSaveData__12McSelectReel;
-    constexpr uint32_t kReelData = 0x280;   // McSelectReel+0x280: o savegame.dat do cartao (0x280 bytes; +0 = numero de fitas)
-    PS2Runtime::RecompiledFunction g_origBoxesUpdate = nullptr, g_origReelUpdate = nullptr;
+    // Carregar: updateStoryModeLoad leva a camera do menu ate as caixas (McPrepBoxScreen) e abre o McLoadGameBoxes (menu "slot 1 /
+    // slot 2"). O update dessa pagina vira um modal com a lista do save.json (ate 99 slots): a esquerda, o save escolhido (monstro,
+    // fase, vidas, progresso da aventura); a direita, a lista. X carrega (MonsterMc::setSaveData de um slot montado aqui e a
+    // sequencia termina com sucesso, como depois da fita escolhida); triangulo/circulo e o "voltar" da pagina (McPage::onBack: sai
+    // da tela, como antes).
+    // Gravar: updateStoryModeSave, depois do "salvar?" (McAskToSave), abre o McChooseSlot (escolha do cartao); o update dele vira o
+    // mesmo modal: X num slot vazio grava ali, num ocupado pede um segundo X (sobrescrever); o slot vai direto para o JSON e a
+    // sequencia termina com sucesso. "Voltar" volta ao "salvar?".
+    // O desenho e o do jogo: a moldura do McBackground e o texto pelo McTextBox (fontes do McPage), montados a cada quadro como o
+    // McPage::drawMenu faz; o McPageMgr::update desenha depois da pagina. Nada aqui espera quadro.
+    constexpr uint32_t kMgr = wotm::sym::x_9McPageMgr_global, kTextBox = kMgr + 0x13C, kBackground = kMgr + 0xDDC;
+    constexpr uint32_t kInputPressed = kMgr + 0x1158;   // McPageMgr::Input: {mascara, apertado} x 10
+    enum : uint32_t { kBtnUp = 0, kBtnDown = 1, kBtnX = 2, kBtnTriangle = 3, kBtnCircle = 4, kBtnLeft = 8, kBtnRight = 9 };
+    constexpr uint32_t kBoxesUpdate = wotm::fn::update__15McLoadGameBoxesR7McState, kChooseUpdate = wotm::fn::update__12McChooseSlotR7McState;
+    // Memoria do jogo que o modal usa: o buffer do savegame.dat do McSelectReel (pagina que nao abre mais): o slot do setSaveData e
+    // as fontes (o McTextBox guarda o ponteiro da fonte de cada linha ate desenhar).
+    constexpr uint32_t kScratch = wotm::sym::x_12McSelectReel_global + 0x280, kSlotBuf = kScratch, kFontsBuf = kScratch + 0x100;
+    constexpr int kMaxSlots = 99, kVisibleRows = 10;
+    constexpr int kStoryLevels = 11;   // Midtown Park (1) .. Capitol (11)
+    const char *const kMonsterTitle[] = {"", "Congar", "Robo-47", "Togera", "Ultra-V", "Preytor", "Spider", "Kineticlops", "Magmo",
+                                         "Raptros", "Agamo", "Zorgulon", "Ogre", "Goliath Prime", "Jelly", "Final", "Temp16"};
 
-    uint32_t cardSlots(int c)
-    {
-        std::vector<uint8_t> a;
-        return readAdventure(g_cards[c], a) ? std::min<uint32_t>(rd(a, 0), kAdvSlots) : 0u;
-    }
-
-    // Funcao do jogo que nao bloqueia, com ate 8 argumentos (a0..a3, t0..t3); o contexto volta como estava. `sp`: pilha da chamada
-    // (0 = a atual).
-    void guestCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, std::initializer_list<uint32_t> args, uint32_t sp = 0)
+    // Funcao do jogo que nao bloqueia, com ate 8 argumentos inteiros (a0..a3, t0..t3) e ate 4 float ($f12..$f15); o contexto volta
+    // como estava. `sp`: pilha da chamada (0 = a atual).
+    void guestCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, std::initializer_list<uint32_t> args, uint32_t sp = 0,
+                   std::initializer_list<float> fargs = {})
     {
         const PS2Runtime::RecompiledFunction f = rt->lookupFunction(fn);
         if (!f)
@@ -696,6 +694,9 @@ namespace wotm_save
         int r = 4;
         for (uint32_t a : args)
             ctx->r[r++] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(a)));
+        int fr = 12;
+        for (float a : fargs)
+            ctx->f[fr++] = a;
         if (sp)
             ctx->r[29] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(sp)));
         ctx->r[31] = _mm_set_epi64x(0, 0);
@@ -703,92 +704,338 @@ namespace wotm_save
         f(rdram, ctx, rt);
         *ctx = saved;
     }
-    void animPush(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t handle, int a, int b, int c)
+
+    struct Row
     {
-        guestCall(rdram, ctx, rt, wotm::fn::Push__9AnimQueueP11_animHandleiii,
-                  {wotm::sym::s_animQueue, handle, static_cast<uint32_t>(a), static_cast<uint32_t>(b), static_cast<uint32_t>(c)});
+        int slot = 0;
+        bool used = false;
+        uint32_t level = 0, sel = 0, lives = 0, score = 0, costume = 0;
+    };
+    struct Modal
+    {
+        bool open = false, saving = false;
+        uint32_t page = 0;   // a pagina (McLoadGameBoxes / McChooseSlot) que o modal ocupa
+        std::vector<Row> rows;
+        int cur = 0, top = 0;
+        bool confirm = false;   // gravar: segundo X sobrescreve
+        uint64_t seen = 0;      // g_vsyncs do ultimo update: um buraco quer dizer que a pagina foi fechada e aberta de novo
+    };
+    Modal g_modal;
+    uint64_t g_vsyncs = 0;   // sceGsSyncV contados pelo poll
+
+    uint32_t savesInt(const Value &s, const char *k)
+    {
+        const Value *v = s.get(k);
+        return v && v->isInt() ? static_cast<uint32_t>(v->asInt()) : 0u;
     }
 
-    void boxesUpdateAuto(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+    // Linhas do modal: os slots do JSON ate o ultimo ocupado, mais um vazio no fim (ate 99).
+    void buildRows(Modal &m)
     {
-        if (ctx->pc == kBoxesUpdate)
+        m.rows.clear();
+        Value j;
+        const Value *saves = loadJson(j) ? j.get("saves") : nullptr;
+        int last = -1;
+        if (saves && saves->type == Value::Arr)
+            for (size_t i = 0; i < saves->arr.size() && i < kMaxSlots; ++i)
+                if (saves->arr[i].type == Value::Obj)
+                    last = static_cast<int>(i);
+        const int n = std::min(kMaxSlots, last + 2);
+        for (int i = 0; i < n; ++i)
         {
-            const uint32_t self = GPR_U32(ctx, 4);
-            const uint32_t card = cardSlots(0) || !cardSlots(1) ? 0u : 1u;
-            w32(rdram, self + 0x224, ramU32(rdram, self + 0x220) + card);
-            w32(rdram, self + 0x268, 1);
-            w32(rdram, kInputPressed + 2 * 8, 1);
-        }
-        g_origBoxesUpdate(rdram, ctx, rt);
-    }
-
-    // McSelectReel::refreshSaveData sem o cartao: le o savegame.dat do cartao do McState e faz o que o original faz depois da
-    // leitura (fitas do cartao no comeco da animacao, so as ocupadas visiveis, rotulos, numSelectablesH, selecao limitada e a fita
-    // escolhida para a frente).
-    void refreshHost(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t self)
-    {
-        const uint32_t sh = ramU32(rdram, wotm::sym::shell), card = ramU32(rdram, kMcState + 0x1C);
-        if (!sh || card > 1)
-            return;
-        std::vector<uint8_t> a;
-        if (!readAdventure(g_cards[card], a))
-            a.assign(kAdvSize, 0);   // sem arquivo: caixa vazia
-        std::memcpy(rdram + ((self + kReelData) & 0x1FFFFFFu), a.data(), kAdvSize);
-        const uint32_t count = std::min<uint32_t>(rd(a, 0), kAdvSlots);
-        w32(rdram, self + kReelData, count);
-        // O original copia cada _animHandle (16 bytes, por valor) para a pilha e passa o endereco; aqui, 0x100 abaixo da pilha atual.
-        const uint32_t sp = (GPR_U32(ctx, 29) - 0x100u) & ~0xFu, copy = sp + 0x40;
-        guestCall(rdram, ctx, rt, wotm::fn::replaceMessage__6McPageii, {wotm::sym::x_9MonsterMc_global + 0x10, 0xE, card + 0xE}, sp);
-        for (uint32_t i = 0; i < kAdvSlots; ++i)
-        {
-            std::memcpy(rdram + (copy & 0x1FFFFFFu), rdram + ((sh + 0x2644 + card * 0xA0 + i * 16) & 0x1FFFFFFu), 16);
-            guestCall(rdram, ctx, rt, wotm::fn::animationSetToBeginning__FG11_animHandleb, {copy, 1}, sp);
-            guestCall(rdram, ctx, rt, wotm::fn::hierSetSwitch__FP11_hierswitchi, {ramU32(rdram, sh + 0x25F4 + card * 0x28 + i * 4), i < count ? 1u : 0u}, sp);
-        }
-        guestCall(rdram, ctx, rt, wotm::fn::setReelSwitches__FiiP13_SaveGameData, {card, count, self + kReelData}, sp);
-        w32(rdram, wotm::sym::numSelectablesH + card * 4, count);
-        int32_t sel = static_cast<int32_t>(ramU32(rdram, self + 0x224));
-        sel = std::max(0, std::min(sel, static_cast<int32_t>(count) - 1));
-        w32(rdram, self + 0x224, static_cast<uint32_t>(sel));
-        animPush(rdram, ctx, rt, sh + 0x2644 + card * 0xA0 + static_cast<uint32_t>(sel) * 16, 1, 0, 1);
-    }
-    void refreshReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
-    {
-        refreshHost(rdram, ctx, rt, GPR_U32(ctx, 4));
-        ctx->pc = GPR_U32(ctx, 31);
-    }
-
-    void reelUpdateAcross(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
-    {
-        if (ctx->pc == kReelUpdate)
-        {
-            const uint32_t self = GPR_U32(ctx, 4), sh = ramU32(rdram, wotm::sym::shell);
-            const uint32_t card = ramU32(rdram, kMcState + 0x1C);
-            const bool left = ramU32(rdram, kInputPressed + 8 * 8) != 0, right = ramU32(rdram, kInputPressed + 9 * 8) != 0;
-            const int32_t count = static_cast<int32_t>(ramU32(rdram, self + kReelData)), sel = static_cast<int32_t>(ramU32(rdram, self + 0x224));
-            const bool atEnd = right && (count <= 0 || sel >= count - 1), atStart = left && (count <= 0 || sel <= 0);
-            const uint32_t to = 1u - card;
-            if (sh && card < 2 && (atEnd || atStart) && cardSlots(static_cast<int>(to)))
+            Row r;
+            r.slot = i;
+            if (saves && i <= last && saves->arr[static_cast<size_t>(i)].type == Value::Obj)
             {
-                w32(rdram, kInputPressed + (atEnd ? 9 : 8) * 8, 0);   // o McPage::update nao anda nem da a volta
-                if (count > 0)
-                    animPush(rdram, ctx, rt, sh + 0x2644 + card * 0xA0 + static_cast<uint32_t>(std::max(sel, 0)) * 16, 0, 0, 1);   // fita volta
-                animPush(rdram, ctx, rt, sh + 0x25D4 + card * 16, 0, 1, 0);   // caixa volta (McLoadGameBoxes::animateBox(false))
-                animPush(rdram, ctx, rt, sh + 0x25D4 + to * 16, 1, 1, 0);     // a outra vem
-                w32(rdram, kMcState + 0x1C, ramU32(rdram, kSetPlayerTable + to * 8));   // McState::setPlayer(to, false)
-                w32(rdram, kMcState + 0x18, ramU32(rdram, kSetPlayerTable + to * 8 + 4));
-                w32(rdram, kBoxes + 0x224, ramU32(rdram, kBoxes + 0x220) + to);   // o "voltar" recolhe a caixa certa
-                w32(rdram, self + 0x224, atEnd ? 0u : static_cast<uint32_t>(kAdvSlots - 1));   // primeira, ou a ultima (limitada)
-                refreshHost(rdram, ctx, rt, self);
-                guestCall(rdram, ctx, rt, wotm::fn::playShellSFXSound__10ShellSoundi, {sh + 0x2918, atEnd ? 4u : 2u});   // som do cursor
+                const Value &s = saves->arr[static_cast<size_t>(i)];
+                r.used = true;
+                r.level = indexOf(kLevels, s.get("level"), 0);
+                const Value *var = s.get("variant");
+                r.sel = (indexOf(kMonsters, s.get("monster"), 0) << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0);
+                r.lives = savesInt(s, "lives");
+                r.score = savesInt(s, "score");
+                r.costume = savesInt(s, "costume");
+            }
+            m.rows.push_back(r);
+        }
+    }
+
+    // Gravar: o slot com o que o MonsterMc::getSaveData poria (fase, monstro, vidas, pontos da campanha, traje).
+    Row rowFromRam(const uint8_t *rdram)
+    {
+        Row r;
+        const uint32_t sh = ramU32(rdram, wotm::sym::shell);
+        if (!sh)
+            return r;
+        r.used = true;
+        r.level = ramU32(rdram, sh + 0x2BB0);
+        r.sel = ramU32(rdram, sh + 0x2938);
+        r.lives = ramU32(rdram, sh + 0x2BBC);
+        r.score = ramU32(rdram, sh + 0x2B28) + ramU32(rdram, sh + 0x2B2C);
+        r.costume = ramU32(rdram, sh + 0x2BE0);
+        return r;
+    }
+
+    std::string levelTitle(const uint8_t *rdram, uint32_t lvl)
+    {
+        if (lvl >= std::size(kLevels))
+            return "?";
+        char b[19] = {};
+        std::memcpy(b, rdram + ((wotm::sym::GameLevelLongNames_006ED120 + lvl * 18) & 0x1FFFFFFu), 18);   // GameLevelLongNames[28][18]
+        return b;
+    }
+    std::string rowTitle(const uint8_t *rdram, const Row &r)
+    {
+        const uint32_t mon = r.sel >> 5;
+        return std::string(mon < std::size(kMonsterTitle) ? kMonsterTitle[mon] : "?") + " at " + levelTitle(rdram, r.level);
+    }
+    // A fase do save e a proxima a jogar (Shell::EvaluateOnePlayerStoryStatus soma 1 antes de perguntar): concluidas = fase - 1.
+    int progressOf(const Row &r)
+    {
+        const int done = std::clamp(static_cast<int>(r.level) - 1, 0, kStoryLevels);
+        return done * 100 / kStoryLevels;
+    }
+
+    void sfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t id)
+    {
+        if (const uint32_t sh = ramU32(rdram, wotm::sym::shell))
+            guestCall(rdram, ctx, rt, wotm::fn::playShellSFXSound__10ShellSoundi, {sh + 0x2918, id});
+    }
+
+    // Uma linha no McTextBox (copiada por ele: o texto vai na pilha, 0x200 abaixo da atual).
+    void text(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, const std::string &s, int x, int y, uint32_t font, bool centered = false)
+    {
+        const uint32_t sp = (GPR_U32(ctx, 29) - 0x200u) & ~0xFu, str = sp + 0x80;
+        const size_t n = std::min<size_t>(s.size(), 0x3F);
+        std::memcpy(rdram + (str & 0x1FFFFFFu), s.data(), n);
+        rdram[(str + n) & 0x1FFFFFFu] = 0;
+        guestCall(rdram, ctx, rt, wotm::fn::addTextString__9McTextBoxPciibPQ26McPage8FontInfo,
+                  {kTextBox, str, static_cast<uint32_t>(x), static_cast<uint32_t>(y), centered ? 1u : 0u, font}, sp);
+    }
+
+    void modalOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t page, bool saving)
+    {
+        Modal &m = g_modal;
+        m = Modal{};
+        m.open = true;
+        m.saving = saving;
+        m.page = page;
+        buildRows(m);
+        // Comeco: carregar, no primeiro ocupado; gravar, no vazio do fim
+        m.cur = 0;
+        if (saving)
+            m.cur = static_cast<int>(m.rows.size()) - 1;
+        else
+            for (size_t i = 0; i < m.rows.size(); ++i)
+                if (m.rows[i].used)
+                {
+                    m.cur = static_cast<int>(i);
+                    break;
+                }
+        m.top = std::max(0, m.cur - kVisibleRows + 1);
+        w32(rdram, kTextBox + 0xC94, 1);   // McTextBox::setDontFade(true): o texto troca sem o cruzamento (como no McAskToSave)
+        guestCall(rdram, ctx, rt, wotm::fn::setDestDims__12McBackgroundfff, {kBackground}, 0, {1.0f, 1.0f, 0.0f});
+        std::fprintf(stderr, "[wotm] save: lista de saves aberta (%s, %zu linhas)\n", saving ? "gravar" : "carregar", m.rows.size());
+    }
+    void modalClose(uint8_t *rdram)
+    {
+        g_modal.open = false;
+        w32(rdram, kTextBox + 0xC94, 0);   // setDontFade(false)
+    }
+
+    void modalDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, const Row *saving)
+    {
+        const Modal &m = g_modal;
+        // A fonte do menu nao tem '%' nem ':' (saem em branco). Fontes do McPage menores (a lista e longa): copias em kFontsBuf com os tamanhos do makeCurrentFont (+0, +4, +8, +0xC, em
+        // subpixels) escalados
+        auto scaled = [&](int idx, uint32_t src, float k) {
+            const uint32_t dst = kFontsBuf + static_cast<uint32_t>(idx) * 0x28;
+            std::memcpy(rdram + (dst & 0x1FFFFFFu), rdram + (src & 0x1FFFFFFu), 0x28);
+            for (uint32_t o : {0u, 4u, 8u, 0xCu})
+                w32(rdram, dst + o, static_cast<uint32_t>(static_cast<int32_t>(std::lround(static_cast<int32_t>(ramU32(rdram, src + o)) * k))));
+            return dst;
+        };
+        const uint32_t fTitle = scaled(0, wotm::sym::x_6McPage_s_titleFont, 0.7f), fText = scaled(1, wotm::sym::x_6McPage_s_font, 0.8f);
+        const uint32_t fName = scaled(4, wotm::sym::x_6McPage_s_titleFont, 0.55f);   // titulo da esquerda: cabe na metade
+        const uint32_t fSel = scaled(2, wotm::sym::x_6McPage_s_selectedFont, 0.62f), fUnsel = scaled(3, wotm::sym::x_6McPage_s_unselectedFont, 0.7f);
+        // Esquerda: o save da linha escolhida (gravar num vazio: o que vai ser gravado)
+        const Row *show = nullptr;
+        if (!m.rows.empty())
+            show = m.rows[static_cast<size_t>(m.cur)].used ? &m.rows[static_cast<size_t>(m.cur)] : saving;
+        constexpr int kLeftX = 30, kRightX = 318;
+        if (m.confirm)
+        {
+            text(rdram, ctx, rt, "Overwrite save file " + std::to_string(m.cur + 1) + "?", kLeftX, 40, fName);
+            text(rdram, ctx, rt, "Press X again to overwrite", kLeftX, 70, fText);
+        }
+        else if (show)
+        {
+            text(rdram, ctx, rt, rowTitle(rdram, *show), kLeftX, 40, fName);
+            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, 150, fText);
+            text(rdram, ctx, rt, "Adventure progress " + std::to_string(progressOf(*show)) + " percent", kLeftX, 170, fText);
+        }
+        else
+            text(rdram, ctx, rt, "No saved adventures", kLeftX, 40, fName);
+        // Direita: a lista
+        text(rdram, ctx, rt, "Save files", kRightX, 40, fTitle);
+        for (int i = m.top; i < std::min<int>(m.top + kVisibleRows, static_cast<int>(m.rows.size())); ++i)
+        {
+            const Row &r = m.rows[static_cast<size_t>(i)];
+            const std::string s = r.used ? std::to_string(i + 1) + ". " + rowTitle(rdram, r) : "-- Empty save file --";
+            text(rdram, ctx, rt, s, kRightX, 60 + (i - m.top) * 14, i == m.cur ? fSel : fUnsel);
+        }
+    }
+
+    // Anda na lista (carregar pula os vazios); devolve true se mexeu
+    bool modalMove(Modal &m, int step)
+    {
+        const int n = static_cast<int>(m.rows.size());
+        int i = m.cur;
+        for (int k = 0; k < n; ++k)
+        {
+            i += step > 0 ? 1 : -1;
+            if (i < 0 || i >= n)
+                return false;   // sem volta no fim, como uma lista
+            if (m.saving || m.rows[static_cast<size_t>(i)].used)
+                break;
+        }
+        if (i == m.cur || !(m.saving || m.rows[static_cast<size_t>(i)].used))
+            return false;
+        m.cur = i;
+        m.top = std::clamp(m.top, std::max(0, m.cur - kVisibleRows + 1), m.cur);
+        return true;
+    }
+
+    // Carregar: o slot escolhido vira o slot 0 de um savegame.dat na memoria e o MonsterMc::setSaveData o aplica.
+    void loadRow(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, const Row &r)
+    {
+        std::memset(rdram + (kSlotBuf & 0x1FFFFFFu), 0, kAdvSlot0 + kAdvStride);
+        w32(rdram, kSlotBuf, 1);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 0, r.level);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 4, r.sel);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 8, r.lives);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 12, r.score);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 16, r.costume);
+        guestCall(rdram, ctx, rt, wotm::fn::setSaveData__9MonsterMcR13_SaveGameDatai, {kSlotBuf, 0});
+        std::fprintf(stderr, "[wotm] save: aventura do slot %d carregada (%s)\n", r.slot + 1, rowTitle(rdram, r).c_str());
+    }
+
+    // Gravar: o slot vai direto para o save.json (o resto do arquivo fica)
+    void saveRow(const uint8_t *rdram, int slot, const Row &r)
+    {
+        Value j;
+        std::error_code ec;
+        if (fs::exists(g_json, ec) && !loadJson(j))
+        {
+            fs::copy_file(g_json, g_json.string() + ".bad", fs::copy_options::overwrite_existing, ec);
+            j = Value();
+            g_badJson = false;
+        }
+        if (j.type != Value::Obj)
+            j = Value::object();
+        if (!j.get("format"))
+            j.at("format") = Value::integer(1);
+        Value &saves = j.at("saves");
+        if (saves.type != Value::Arr)
+            saves = Value::array();
+        if (saves.arr.size() <= static_cast<size_t>(slot))
+            saves.arr.resize(static_cast<size_t>(slot) + 1);
+        Value s = Value::object();
+        s.at("level") = nameOf(kLevels, r.level);
+        s.at("monster") = nameOf(kMonsters, r.sel >> 5);
+        s.at("variant") = Value::integer(r.sel & 31);
+        s.at("lives") = Value::integer(r.lives);
+        s.at("score") = Value::integer(r.score);
+        s.at("costume") = Value::integer(r.costume);
+        saves.arr[static_cast<size_t>(slot)] = s;
+        const std::string why = "aventura no slot " + std::to_string(slot + 1) + " (" + rowTitle(rdram, r) + ")";
+        saveJson(j, why.c_str());
+        g_wotmSaveCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // A sequencia de paginas termina (McPageMgr+0x128) com sucesso ou nao (+0x130), como na ultima pagina / no "voltar" da primeira.
+    void finish(uint8_t *rdram, bool ok)
+    {
+        w32(rdram, kMgr + 0x128, 1);
+        w32(rdram, kMgr + 0x130, ok ? 1u : 0u);
+    }
+
+    void modalUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t self, bool saving)
+    {
+        Modal &m = g_modal;
+        if (!m.open || m.page != self || m.saving != saving || g_vsyncs - m.seen > 10)
+            modalOpen(rdram, ctx, rt, self, saving);
+        m.seen = g_vsyncs;
+        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0; };
+        const Row current = saving ? rowFromRam(rdram) : Row{};
+        if (pressed(kBtnTriangle) || pressed(kBtnCircle))
+        {
+            if (m.confirm)
+                m.confirm = false;
+            else
+            {
+                sfx(rdram, ctx, rt, 6);
+                modalClose(rdram);
+                guestCall(rdram, ctx, rt, wotm::fn::onBack__6McPage, {self});   // como o "voltar" da pagina
+                return;
             }
         }
-        g_origReelUpdate(rdram, ctx, rt);
+        else if (pressed(kBtnUp) || pressed(kBtnDown) || pressed(kBtnLeft) || pressed(kBtnRight))
+        {
+            const bool down = pressed(kBtnDown) || pressed(kBtnRight);
+            const int steps = pressed(kBtnLeft) || pressed(kBtnRight) ? kVisibleRows : 1;
+            bool moved = false;
+            for (int k = 0; k < steps; ++k)
+                moved = modalMove(m, down ? 1 : -1) || moved;
+            if (moved)
+            {
+                m.confirm = false;
+                sfx(rdram, ctx, rt, down ? 2 : 4);
+            }
+        }
+        else if (pressed(kBtnX) && !m.rows.empty())
+        {
+            const Row &r = m.rows[static_cast<size_t>(m.cur)];
+            if (!saving && r.used)
+            {
+                sfx(rdram, ctx, rt, 8);
+                loadRow(rdram, ctx, rt, r);
+                modalClose(rdram);
+                finish(rdram, true);
+                return;
+            }
+            if (saving && r.used && !m.confirm)
+            {
+                m.confirm = true;
+                sfx(rdram, ctx, rt, 4);
+            }
+            else if (saving)
+            {
+                sfx(rdram, ctx, rt, 8);
+                saveRow(rdram, r.slot, current);
+                modalClose(rdram);
+                finish(rdram, true);
+                return;
+            }
+        }
+        modalDraw(rdram, ctx, rt, saving ? &current : nullptr);
+    }
+
+    void boxesReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+    {
+        modalUpdate(rdram, ctx, rt, GPR_U32(ctx, 4), false);
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+    void chooseReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+    {
+        modalUpdate(rdram, ctx, rt, GPR_U32(ctx, 4), true);
+        ctx->pc = GPR_U32(ctx, 31);
     }
 
     // Uma vez por quadro (sceGsSyncV): tokens ou destraves mudaram fora de uma gravacao -> JSON (so eles).
     void poll(const uint8_t *rdram)
     {
+        ++g_vsyncs;
         if (!g_auto || !g_snap.valid)
             return;
         const Snap now = snapOf(rdram);
@@ -837,12 +1084,8 @@ namespace wotm_save
         if (g_auto)
         {
             registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
-            if ((g_origBoxesUpdate = runtime.lookupFunction(kBoxesUpdate)) && (g_origReelUpdate = runtime.lookupFunction(kReelUpdate)))
-            {
-                runtime.registerFunction(kBoxesUpdate, &boxesUpdateAuto);
-                runtime.registerFunction(kReelUpdate, &reelUpdateAcross);
-                runtime.registerFunction(kRefresh, &refreshReplaced);
-            }
+            runtime.registerFunction(kBoxesUpdate, &boxesReplaced);   // lista de saves no lugar das caixas (carregar)
+            runtime.registerFunction(kChooseUpdate, &chooseReplaced); // e no lugar da escolha do cartao (gravar)
         }
         std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); %s\n", g_json.string().c_str(),
                      g_auto ? "opcoes, destraves e tokens gravados sozinhos, sem as telas do cartao (WOTM_SAVEAUTO=0 volta as telas)"

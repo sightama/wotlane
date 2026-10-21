@@ -198,13 +198,18 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - É o primeiro degrau do item 8: aqui só substitui; acrescentar sem substituir vem lá.
 
 ### 5. Sem escolha de memory card
-- **Carregar (em teste, 2026-10-20, branch `save-auto`; `wotm_save.inc`):** o menu de cartão (`McLoadGameBoxes`) se escolhe sozinho e
-  é pulado no "voltar"; o `McSelectReel::refreshSaveData` lê o `savegame.dat` direto (sem o `McSync::sync`, que mostrava "procurando
-  memory card"); as 20 fitas são uma lista só em volta: passar da última fita de uma caixa (ou voltar da primeira) troca de caixa
-  com as animações do jogo. Falta gravar (a escolha de slot do `updateStoryModeSave`).
-- Ganchos nas telas do Shell que perguntam o cartão (achar pelo `screenTransition`, como no `wotm_padsel.inc`) para pular direto.
-- Hoje, ao carregar do cartão 2, o jogo anima a segunda caixa das fitas de vídeo 3D. No lugar do cartão 2, o JSON aceita mais slots no
-  array. **Em aberto:** como o jogador escolhe entre N slots sem a tela do cartão (decidir quando chegar aqui).
+- **Lista de saves (em teste, 2026-10-20, branch `save-auto`; `wotm_save.inc`):** as caixas e as fitas saíram (a troca de caixa
+  não ficou boa; decisão do dono). Carregar continua indo até as caixas no mapa do menu (`McPrepBoxScreen`), e o update do
+  `McLoadGameBoxes` vira um modal com a moldura do `McBackground` e o texto do `McTextBox` (fontes do `McPage` reduzidas, sem
+  cruzamento ao trocar de linha): à direita a lista do `save.json` (até 99 slots, 10 visíveis, cima/baixo e esquerda/direita de
+  10 em 10), à esquerda o save escolhido ("<monstro> at <fase>", vidas, progresso = fases concluídas / 11, sem decimal; a fase do
+  save é a próxima a jogar). X carrega pelo `MonsterMc::setSaveData`; triângulo/círculo é o "voltar" da página. Gravar: o update
+  do `McChooseSlot` (depois do "salvar?") vira o mesmo modal; slot vazio grava direto no JSON, ocupado pede um segundo X. Foto:
+  `docs/screenshots/2026-10-20/2026-10-20_lista_de_saves_carregar.png`.
+- A fonte do menu não tem `%` nem `:` (o progresso sai "45 percent").
+- Falta: logo do monstro e fundo da fase à esquerda (o espaço já fica livre), depois o monstro 3D. Revisar os textos de memory
+  card que sobram na aventura.
+- O `savegame.dat` dos cartões só leva os 20 primeiros slots; os outros só existem no JSON.
 
 ### 6. Ícone de salvamento automático
 - **Feito em 2026-10-20** (`native/wotm_saveicon.hpp`; `WOTM_SAVEICON_TEST=1` mostra a cada 3 s): o ícone é o `MEMCRD/ICON.ICO` do
