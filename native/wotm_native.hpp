@@ -781,6 +781,9 @@ struct Snapshot {
     bool valid = false;
     // Tela dividida e tela em 4: as vistas 1..3 do mesmo quadro (coletadas na saida do hier(v, 0)); nullptr = vista ausente
     std::shared_ptr<Snapshot> extra[3];
+    // Jogadores 5..8 (WOTM_LOCALPLAYER=5..8): o jogo nao tem vista nem camera para eles; a cena inteira, coletada sem o corte das vistas
+    // do jogo, com uma camera de perseguicao nativa atras do monstro do jogador local (wotm_live.inc, wotmCaptureFrame)
+    std::shared_ptr<Snapshot> chase;
 };
 
 // ---------------------------------------------------------------- interpolacao entre dois quadros do jogo (so desenho)
@@ -809,7 +812,8 @@ inline Snapshot blendSnapshots(const Snapshot &A, const Snapshot &B, float t, Bl
     r.cam.fovy = ci.fovy;
     // particulas e destrocos do instantaneo mais perto (meio quadro de erro no maximo), com a camera dele para a troca da matriz
     r.blended = true;
-    r.fxCam = t < 0.5f ? A.cam : B.cam;
+    const Snapshot &near = t < 0.5f ? A : B;
+    r.fxCam = near.blended ? near.fxCam : near.cam;   // vista de perseguicao: a copia das particulas tem a camera da vista 0
     if (t < 0.5f) {
         r.sprites = A.sprites;
         r.fx = A.fx;
@@ -869,6 +873,8 @@ inline Snapshot blendSnapshots(const Snapshot &A, const Snapshot &B, float t, Bl
     for (int v = 0; v < 3; ++v)
         if (A.extra[v] && B.extra[v] && A.extra[v]->valid && B.extra[v]->valid)
             r.extra[v] = std::make_shared<Snapshot>(blendSnapshots(*A.extra[v], *B.extra[v], t, stats));
+    if (A.chase && B.chase && A.chase->valid && B.chase->valid)
+        r.chase = std::make_shared<Snapshot>(blendSnapshots(*A.chase, *B.chase, t, stats));
     return r;
 }
 

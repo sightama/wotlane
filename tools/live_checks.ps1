@@ -37,6 +37,11 @@ $checks = [ordered]@{
     'local_2'       = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;WOTM_LOCALPLAYER=2;PS2X_STATS=1;PS2X_PEEK=6F8AE0,6E191C;WOTM_SHOTS=30'; Secs = 40
                          Expect = '6f8ae0=00000002 6e191c=00000000|||redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
                          Reject = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # jogador 5 (numa IA guiada pelo controle 5) no seu PC: camera de perseguicao nativa atras do monstro dele, com a cena coletada
+    # sem o corte das 4 vistas do jogo (centenas de objetos), e uma vista na tela; foto shot_30.png para conferir
+    'local_5'       = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=5;WOTM_LOCALPLAYER=5;PS2X_STATS=1;WOTM_SHOTS=30'; Secs = 45
+                         Expect = '\[chase\] jogador 5: camera a [2-4]\d\d unidades do monstro, \d{3,} objetos|||redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
+                         Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # padrao sem WOTM_FULLSCREEN/WOTM_RES/WOTM_SSAA: tela cheia sem borda, quadro no dobro da resolucao do monitor (superamostragem 2x;
     # esta maquina: 2560x1440) e reduzido na apresentacao; WOTM_SSAA=1 = quadro na resolucao do monitor
     'tela_nativa'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_SSAA=;WOTM_MATCH=3,1,1'; Secs = 25

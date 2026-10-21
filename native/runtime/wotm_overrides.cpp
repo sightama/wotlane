@@ -1835,6 +1835,14 @@ namespace
                 wotmBarView(i);
                 emitBars(rdram, m, box, kScale);
             }
+        // jogador 5..8 no seu PC (WOTM_LOCALPLAYER): o HUD do proprio monstro (IA m_monsters[4 + k]) na vista de perseguicao (barras 4 + k)
+        static const int local = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); return e ? std::atoi(e) : 0; }();
+        if (local >= 5 && local <= 4 + g_padAIs)
+            if (const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * (local - 1)))
+            {
+                wotmBarView(local - 1);
+                emitBars(rdram, m, box, kScale);
+            }
         wotmBarView(0);
     }
 

@@ -336,10 +336,11 @@ namespace wotm_live
 static bool g_hideFps = false;   // replay (--vu1cmp, wotm_vu1check.inc): imagem nativa sem o contador de FPS
 static bool g_force43 = false;   // replay: quadro 4:3, como a imagem de referencia do GS
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
-// WOTM_LOCALPLAYER=<n> (1..4): vista do jogo do jogador local (n - 1); -1 sem ela (todas as vistas, como o jogo as compoe)
+// WOTM_LOCALPLAYER=<n> (1..8): vista do jogador local (n - 1; 4..7 = jogadores 5..8, camera de perseguicao nativa, Snapshot::chase);
+// -1 sem ela (todas as vistas, como o jogo as compoe)
 static int localView()
 {
-    static const int v = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); const int n = e ? std::atoi(e) : 0; return n >= 1 && n <= 4 ? n - 1 : -1; }();
+    static const int v = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); const int n = e ? std::atoi(e) : 0; return n >= 1 && n <= 8 ? n - 1 : -1; }();
     return v;
 }
 
@@ -982,7 +983,7 @@ void wotmFontDma(const uint8_t *rdram)
     {
         // so a vista do jogador local, no tamanho da tela (a apresentacao mostra so ela)
         gridText[view] = std::move(q);
-        q = gridText[wotm_live::localView()];
+        q = wotm_live::localView() < 4 ? gridText[wotm_live::localView()] : std::vector<wotm::TextQuad>{};   // 5..8: sem vista do jogo
     }
     else if (wotm::readViewCtx(ram, 0).grid && view < 4)
     {
@@ -1056,7 +1057,7 @@ bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd,
     return true;
 }
 static int g_barView = 0;   // vista da barra em montagem (wotmHealthIconShift, wotmBarView)
-void wotmBarView(int view) { g_barView = std::clamp(view, 0, 3); }
+void wotmBarView(int view) { g_barView = std::clamp(view, 0, 7); }
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
     if (wotm_live::g_pendingBars.size() < 512)
@@ -1150,6 +1151,64 @@ static wotm::Scene &captureScene(int view = 0)
 {
     static wotm::Scene cap[kMaxViews];   // so coleta (RAM -> itens); texturas e malhas ficam com a Scene da apresentacao
     return cap[std::clamp(view, 0, kMaxViews - 1)];
+}
+// Jogadores 5..8 no seu PC (localView 4..7): o jogo tem 4 cameras e elas sao estado da simulacao, entao a vista deles e uma camera de
+// perseguicao nativa, so de desenho: atras do monstro (frente = linha 1 da matriz do _cs, no plano) e bem acima dele, olhando 60 acima
+// dele (~55 graus para baixo; o jogo segue a 300..450). Sem a colisao de camera do jogo (consulta-la na captura arriscaria o
+// determinismo), o alto evita entrar nos predios. Posicao e alvo se aproximam do desejado por quadro do jogo (a interpolacao suaviza
+// entre quadros); salto de mais de 1500 (renascer) vai direto. A cena dela e coletada sem o corte das vistas do jogo (chaseScene).
+constexpr float kChaseBack = 260.f, kChaseUp = 380.f;
+static wotm::Scene &chaseScene()
+{
+    static wotm::Scene s;   // so coleta, como captureScene
+    return s;
+}
+static wotm::GameCamera chaseCamera(const wotm::Ram &ram, uint32_t monster, float fovy)
+{
+    static bool init = false;
+    static float pos[3], look[3], dir[2] = {0.f, 1.f};
+    wotm::GameCamera c;
+    const uint32_t cs = ram.u32(monster + 0xC);   // Monster::m_cs
+    if (!ram.ok(cs, 0x60))
+        return c;
+    float p[3];
+    for (int i = 0; i < 3; ++i)
+        p[i] = ram.f32(cs + 0x10 + 4u * uint32_t(i));   // _cs::trans
+    const float fx = ram.f32(cs + 0x30), fy = ram.f32(cs + 0x34), fn = std::sqrt(fx * fx + fy * fy);   // _cs::mat linha 1 (frente)
+    if (fn > 1e-3f)
+        dir[0] = fx / fn, dir[1] = fy / fn;
+    const float want[3] = {p[0] - dir[0] * kChaseBack, p[1] - dir[1] * kChaseBack, p[2] + kChaseUp}, wantLook[3] = {p[0], p[1], p[2] + 60.f};
+    const float jx = want[0] - pos[0], jy = want[1] - pos[1], jz = want[2] - pos[2];
+    if (!init || jx * jx + jy * jy + jz * jz > 1500.f * 1500.f)
+    {
+        std::memcpy(pos, want, sizeof pos);
+        std::memcpy(look, wantLook, sizeof look);
+        init = true;
+    }
+    for (int i = 0; i < 3; ++i)
+    {
+        pos[i] += (want[i] - pos[i]) * 0.2f;
+        look[i] += (wantLook[i] - look[i]) * 0.4f;
+    }
+    float f[3] = {look[0] - pos[0], look[1] - pos[1], look[2] - pos[2]};
+    const float n = std::sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]);
+    if (!(n > 1e-3f))
+        return c;
+    for (int i = 0; i < 3; ++i)
+    {
+        c.pos[i] = pos[i];
+        c.fwd[i] = f[i] / n;
+    }
+    // cima = Z sem a parte na direcao da frente
+    c.up[0] = -c.fwd[2] * c.fwd[0];
+    c.up[1] = -c.fwd[2] * c.fwd[1];
+    c.up[2] = 1.f - c.fwd[2] * c.fwd[2];
+    const float un = std::sqrt(c.up[0] * c.up[0] + c.up[1] * c.up[1] + c.up[2] * c.up[2]);
+    for (float &u : c.up)
+        u /= un;
+    c.fovy = fovy;
+    c.ok = true;
+    return c;
 }
 static wotm::Snapshot g_sceneSnap[kMaxViews];   // cena do ultimo hier(v, 0) ainda nao publicada (thread do EE)
 static bool g_sceneFresh[kMaxViews] = {};
@@ -1276,6 +1335,47 @@ void wotmCaptureFrame(const uint8_t *rdram)
     // rodando (contagem do instantaneo com dados vivos = o fecho do pacote lido como particula; 09_magmo_impacto.md)
     // tela dividida e tela em 4: a matriz de cada vista no particleDraw anterior (viewPrevMat ja tem a deste quadro; a de antes fica
     // guardada aqui)
+    // jogadores 5..8: a cena inteira (sem o corte das vistas do jogo) com a camera de perseguicao; as particulas dela entram na copia de
+    // sombra e projetam com a matriz da vista 0 trocada pela da camera dela (Snapshot::blended/fxCam, FxCameraPatch)
+    if (haveScene && wotm_live::localView() >= 4)
+    {
+        const int k = wotm_live::localView() - 4;
+        const uint32_t m = ram.u32(wotm::sym::shellGame + 0x120380u + 4u * uint32_t(4 + k));   // TheGame::m_monsters[4 + k]
+        if (ram.ok(m, 0x100))
+        {
+            wotm::Scene &cc = wotm_live::chaseScene();
+            cc.wide = cap.wide;
+            cc.fovCull = false;
+            cc.fx.fovCull = false;
+            cc.vctx = wotm::readViewCtx(ram, 0);
+            cc.collect(ram);
+            auto ch = std::make_shared<wotm::Snapshot>(cc.takeSnapshot(ram, sn.g));
+            const wotm::GameCamera v0 = ch->cam;   // a da vista 0, que esta na copia de sombra das particulas
+            ch->cam = wotm_live::chaseCamera(ram, m, v0.ok ? v0.fovy : 63.7f);
+            ch->hud.clear();
+            ch->overlay.clear();
+            ch->hp.clear();
+            ch->hpOverlay.clear();
+            ch->screenPolys.clear();
+            ch->blended = true;
+            ch->fxCam = v0;
+            if (!multi)
+                fxAll = sn.fx;
+            for (const wotm::FxSystem &s : ch->fx)
+                if (std::none_of(fxAll.begin(), fxAll.end(), [&](const wotm::FxSystem &e) { return e.base == s.base; }))
+                    fxAll.push_back(s);
+            multi = true;
+            static unsigned logged = 0;
+            if (ch->cam.ok && ++logged == 300u)
+            {
+                const uint32_t cs = ram.u32(m + 0xC);
+                const float dx = ch->cam.pos[0] - ram.f32(cs + 0x10), dy = ch->cam.pos[1] - ram.f32(cs + 0x14), dz = ch->cam.pos[2] - ram.f32(cs + 0x18);
+                std::fprintf(stderr, "[chase] jogador %d: camera a %.0f unidades do monstro, %zu objetos na cena (sem corte)\n", 5 + k,
+                             std::sqrt(dx * dx + dy * dy + dz * dz), ch->items.size());
+            }
+            sn.chase = std::move(ch);
+        }
+    }
     static float prevMats[wotm_live::kMaxViews][16];
     static bool havePrev = false;
     sn.fxRam = wotm::Particles::shadowRam(ram, multi ? fxAll : sn.fx, multi && havePrev ? &prevMats[0][0] : nullptr);
@@ -1285,6 +1385,8 @@ void wotmCaptureFrame(const uint8_t *rdram)
     for (auto &vs : sn.extra)
         if (vs)
             vs->fxRam = sn.fxRam;
+    if (sn.chase)
+        sn.chase->fxRam = sn.fxRam;
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.fields = ram.u32(wotm::addr::fieldCounterAtStart);
@@ -1292,6 +1394,8 @@ void wotmCaptureFrame(const uint8_t *rdram)
     for (auto &vs : sn.extra)
         if (vs)
             vs->fields = sn.fields, vs->hostT = sn.hostT;
+    if (sn.chase)
+        sn.chase->fields = sn.fields, sn.chase->hostT = sn.hostT;
     std::lock_guard<std::mutex> lk(c.m);
     c.publish(std::move(sn));
 }
@@ -1726,7 +1830,11 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const auto extraOk = [&](int i) { return view->extra[i] && view->extra[i]->valid && view->extra[i]->cam.ok; };
         // WOTM_LOCALPLAYER=<n> (netcode, cada um no seu PC): so a vista do jogador n, em tela cheia, com o HUD dela
         const int localView = wotm_live::localView();
-        const wotm::Snapshot *own = localView > 0 && view->vctx.grid && extraOk(localView - 1) ? view->extra[localView - 1].get() : nullptr;
+        // jogadores 5..8: a vista de perseguicao (Snapshot::chase); sem ela, a do jogador 1
+        const bool chaseOk = localView >= 4 && view->chase && view->chase->valid && view->chase->cam.ok;
+        const wotm::Snapshot *own = chaseOk ? view->chase.get()
+                                    : localView > 0 && localView < 4 && view->vctx.grid && extraOk(localView - 1) ? view->extra[localView - 1].get()
+                                                                                                                 : nullptr;
         const bool split = extraOk(0) && !view->vctx.full() && !freeView.override && localView < 0;
         const bool grid = view->vctx.grid && extraOk(0) && extraOk(1) && !freeView.override && localView < 0;
         {
@@ -1781,8 +1889,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
             gc = S.scene.show(*own);
             S.scene.screenRects = std::move(rects);
             S.scene.screenPolys = std::move(polys);
+            if (chaseOk)   // os quadrados do HUD sao das vistas do jogo; a de perseguicao fica com as barras dela (emitPlayerHuds)
+                S.scene.screenPolys.clear();
         }
-        S.scene.localView = view->vctx.grid ? localView : -1;
+        S.scene.localView = view->vctx.grid || chaseOk ? localView : -1;
         S.scene.gridBars = grid;
         S.snap.cam = gameCam;
         if (freeView.override)
