@@ -833,6 +833,12 @@ namespace wotm_save
         m.top = std::max(0, m.cur - kVisibleRows + 1);
         w32(rdram, kTextBox + 0xC94, 1);   // McTextBox::setDontFade(true): o texto troca sem o cruzamento (como no McAskToSave)
         guestCall(rdram, ctx, rt, wotm::fn::setDestDims__12McBackgroundfff, {kBackground}, 0, {1.0f, 1.0f, 0.0f});
+        if (saving)
+        {
+            // Depois da luta (wonLevelOverlay) o timerGetFieldsLastFrame nao anda: a moldura nao cresce sozinha ate o tamanho novo, e o
+            // McPageMgr::update so le o pad e roda a pagina quando ela chega la. Vai direto (McBackground +0xC/+0x10 = +0x14/+0x18).
+            std::memcpy(rdram + ((kBackground + 0xC) & 0x1FFFFFFu), rdram + ((kBackground + 0x14) & 0x1FFFFFFu), 8);
+        }
         std::fprintf(stderr, "[wotm] save: lista de saves aberta (%s, %zu linhas, pilha 0x%08X)\n", saving ? "gravar" : "carregar",
                      m.rows.size(), GPR_U32(ctx, 29));
     }
@@ -1028,6 +1034,10 @@ namespace wotm_save
     }
     void chooseReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     {
+        // Como o original: +0x274 e o que o McChooseSlot::stateIsOk devolve (sem ele o McPageMgr::update acha a pagina invalida e a
+        // refaz a cada quadro: modal vazio e travado) e McPageMgr+0x114C = 2
+        w32(rdram, GPR_U32(ctx, 4) + 0x274, 1);
+        w32(rdram, kMgr + 0x114C, 2);
         modalUpdate(rdram, ctx, rt, GPR_U32(ctx, 4), true);
         ctx->pc = GPR_U32(ctx, 31);
     }
