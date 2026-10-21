@@ -17,9 +17,15 @@ if(WIN32)
     target_link_libraries(enet PUBLIC ws2_32 winmm)
 endif()
 
-add_library(wotm_net INTERFACE)
-target_include_directories(wotm_net INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}" "${enet_SOURCE_DIR}/include")
-target_link_libraries(wotm_net INTERFACE enet)
+add_library(wotm_net STATIC wotm_net_client.cpp wotm_net_server.cpp)
+target_include_directories(wotm_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${enet_SOURCE_DIR}/include")
+target_link_libraries(wotm_net PUBLIC enet)
+if(WIN32)
+    target_compile_definitions(wotm_net PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 
 add_executable(wotm_net_test wotm_net_test.cpp)
 target_link_libraries(wotm_net_test PRIVATE wotm_net)
+
+add_executable(wotm_server wotm_server.cpp)
+target_link_libraries(wotm_server PRIVATE wotm_net)
