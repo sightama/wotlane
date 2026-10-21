@@ -1158,6 +1158,45 @@ namespace
         }
         g_origParticleEmit(rdram, ctx, runtime);
     }
+
+    // Raio em cadeia do Kineticlops que trava com mais de 4 monstros (desde 2026-10-21; Metro com 8). No StateZapAttack::update, o
+    // laco que passa o raio do alvo para os outros monstros (i de 0 a numMonsters) e o laco que desenha os arcos de cada um (de 0 a
+    // numArcs, float @0x50 do estado) usam a mesma variavel ($s4) no retail: depois de encadear no monstro k, i fica em numArcs + 1.
+    // Com 4 monstros isso so encurta o laco (i passa do fim; o raio pega um monstro a mais por quadro). Com 8 e k >= numArcs + 1,
+    // i volta para tras, o laco encadeia de novo no mesmo k e nunca termina. Correcao: guarda i na chamada do hdLosCSTest do laco
+    // (inicio do teste de cada monstro) e, na primeira chamada depois do laco dos arcos (mathfRand), i = max(i, guardado). Onde o
+    // retail nao trava (i nao volta para tras) o resultado e o mesmo. Uma linha [wotm] por correcao (ate 8).
+    constexpr uint32_t kZapUpdate = wotm::fn::update__14StateZapAttack, kLosCs = wotm::fn::hdLosCSTest__FP8_fvectorT0P9_hdResulti,
+                       kMathfRand = wotm::fn::mathfRand__Fii;
+    constexpr uint32_t kZapRaLos = kZapUpdate + 0xB60, kZapRaAfterArcs = kZapUpdate + 0xC4C;   // retornos das duas chamadas no laco
+    constexpr int kRegS4 = 20;
+    PS2Runtime::RecompiledFunction g_origLosCs = nullptr, g_origMathfRand = nullptr;
+    int32_t g_zapIndex = -1;
+    int g_zapFixes = 0;
+
+    void losCsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kLosCs && GPR_U32(ctx, 31) == kZapRaLos)
+            g_zapIndex = static_cast<int32_t>(GPR_U32(ctx, kRegS4));
+        g_origLosCs(rdram, ctx, runtime);
+    }
+
+    void mathfRandTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kMathfRand && GPR_U32(ctx, 31) == kZapRaAfterArcs && g_zapIndex >= 0)
+        {
+            const int32_t i = static_cast<int32_t>(GPR_U32(ctx, kRegS4));
+            if (i < g_zapIndex)
+            {
+                SET_GPR_U32(ctx, kRegS4, static_cast<uint32_t>(g_zapIndex));
+                if (g_zapFixes < 8 && ++g_zapFixes)
+                    std::fprintf(stderr, "[wotm] raio em cadeia (StateZapAttack): o laco dos arcos levou o indice dos monstros de %d para %d; mantido em %d\n",
+                                 g_zapIndex, i, g_zapIndex);
+            }
+            g_zapIndex = -1;
+        }
+        g_origMathfRand(rdram, ctx, runtime);
+    }
 }
 namespace
 {
@@ -2124,6 +2163,11 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kEmitMatrices, &emitMatricesGuarded);
     if ((g_origParticleEmit = runtime.lookupFunction(kParticleEmit)))
         runtime.registerFunction(kParticleEmit, &particleEmitGuarded);
+    if ((g_origLosCs = runtime.lookupFunction(kLosCs)) && (g_origMathfRand = runtime.lookupFunction(kMathfRand)))   // raio em cadeia com 8
+    {
+        runtime.registerFunction(kLosCs, &losCsTapped);
+        runtime.registerFunction(kMathfRand, &mathfRandTapped);
+    }
     wotm_split4::install(runtime);   // antes dos ganchos do scePadRead (camera livre, lock-on): eles embrulham o dela
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
