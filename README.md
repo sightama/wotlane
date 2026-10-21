@@ -81,7 +81,7 @@ Keyboard controls, environment variables and runtime details: [docs/passos/RUNTI
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md). The rules in [CLAUDE.md](CLAUDE.md) apply to humans too: no game files or game assembly in the repo, issues or PRs, and the ROM must keep matching
-the retail SHA1. Most project documentation is currently written in Portuguese.
+the retail SHA1. Most project documentation is currently written in Portuguese; English translations are in [docs/en/](docs/en/README.md).
 
 ## License
 The code in this repository is [GPL-3.0](LICENSE). It only covers what is here (decompilation, tools, native layer) and grants no rights over the game, which still belongs to its owners.
