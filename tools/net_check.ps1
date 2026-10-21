@@ -10,7 +10,7 @@
 #   Logs e hashes ficam em <runtime>\net\ (servidor.log, jogador<N>.err.log, jogador<N>.hash). Sai com 0 se tudo bater.
 param(
     [int]$Players = 2,
-    [string]$Monsters = '3,1,2,5',
+    [string]$Monsters = '3,1,2,5,3,1,2,5',   # um por jogador, ate 8 (8 monstros diferentes nao cabem: a carga para no disco)
     [int]$Stage = 1,
     [int]$Secs = 70,
     [int]$Port = 7811,
