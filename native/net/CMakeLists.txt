@@ -17,9 +17,11 @@ if(WIN32)
     target_link_libraries(enet PUBLIC ws2_32 winmm)
 endif()
 
+find_package(Threads REQUIRED)   # o cliente roda numa thread; no Linux o g++ precisa do -pthread
+
 add_library(wotm_net STATIC wotm_net_client.cpp wotm_net_server.cpp)
 target_include_directories(wotm_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${enet_SOURCE_DIR}/include")
-target_link_libraries(wotm_net PUBLIC enet)
+target_link_libraries(wotm_net PUBLIC enet Threads::Threads)
 if(WIN32)
     target_compile_definitions(wotm_net PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
