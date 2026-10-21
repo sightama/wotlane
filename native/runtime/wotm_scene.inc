@@ -4,6 +4,7 @@ static std::atomic<bool> g_wotmShotKey{false};   // F8 na janela (wotm_foto.inc)
 #include "wotm_live.inc"
 #include "wotm_foto.inc"   // F7 pausa, F6 avanca um quadro, F8 foto com nota (WOTM_FOTOS)
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
+#include "wotm_saveicon.hpp"   // icone de salvamento automatico
 
 extern bool g_wotmVu1Tap;   // ps2_memory.cpp (checagem VU1 x nativo)
 static void wotmDrawScene(const uint8_t *rdram)
@@ -35,6 +36,43 @@ static void wotmDrawScene(const uint8_t *rdram)
         if (!drew && s_blackGap)
             DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), BLACK);
     }
+    {
+        // Icone de salvamento (POS_FRONTEIRA.md, item 6): 1 s no canto a cada gravacao do save.json (wotm_save.inc)
+        static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        static const std::filesystem::path card =
+            (io.mcRoot.empty() ? (io.elfDirectory.empty() ? std::filesystem::current_path() : io.elfDirectory) / "mc0" : io.mcRoot) / "BASCUS-97197";
+        wotm::saveicon::presenter().present(io.cdRoot, io.cdImage.string(), card);
+    }
     wotmFotoOverlay(drew, rdram);
+    {
+        // WOTM_WINSHOTS=<s>[,<s>...]: a janela inteira (com o que vem por cima do quadro nativo) em win_<s>.png quando o relogio passa
+        // de cada <s> segundos. O WOTM_SHOTS so grava quando a cena nativa e redesenhada; este vale tambem nos lacos do Shell (dialogo
+        // depois da luta, cinemas) e com a tela preta de "sem cena".
+        static std::vector<double> shots = [] {
+            std::vector<double> v;
+            if (const char *s = std::getenv("WOTM_WINSHOTS"))
+                for (const char *p = s; *p;)
+                {
+                    char *e = nullptr;
+                    const double t = std::strtod(p, &e);
+                    if (e == p) break;
+                    v.push_back(t);
+                    p = (*e == ',') ? e + 1 : e;
+                }
+            return v;
+        }();
+        static size_t next = 0;
+        if (next < shots.size() && GetTime() >= shots[next])
+        {
+            char name[64];
+            std::snprintf(name, sizeof name, "win_%g.png", shots[next]);
+            rlDrawRenderBatchActive();   // o lote do raylib ainda nao foi para o quadro
+            Image img = LoadImageFromScreen();
+            if (ExportImage(img, name))
+                std::fprintf(stderr, "[shot] %s (janela, cena nativa %s)\n", name, drew ? "desenhada" : "ausente: preto");
+            UnloadImage(img);
+            ++next;
+        }
+    }
 }
 #include "wotm_vu1check.inc"
