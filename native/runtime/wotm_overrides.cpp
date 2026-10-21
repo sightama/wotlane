@@ -580,7 +580,7 @@ namespace
                         ++killed;
                     }
                 }
-                for (int i = 1; wotm_multi::active() && i < g_matchPlayers; ++i)   // 3+ jogadores: os outros jogadores tambem caem
+                for (int i = 1; i < g_matchPlayers; ++i)   // 2+ jogadores (WOTM_PLAYERS): os outros jogadores tambem caem
                 {
                     const uint32_t other = READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
                     if (other && !READ8(other + 0xE8))

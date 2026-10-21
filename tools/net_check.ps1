@@ -5,6 +5,8 @@
 #   -Exe: um wotm.exe por jogador (separados por virgula; o ultimo vale para os que sobram), para provar que dois builds em pastas
 #     diferentes jogam juntos. Padrao: o build_dev do runtime.
 #   -Drop <s>: fecha o ultimo jogador depois de s segundos e confere que os outros seguem (ele vira neutro no quadro combinado).
+#   -ExtraEnv "A=1;B=2": variaveis a mais para todos os jogadores (iguais em todos, senao o servidor recusa a configuracao).
+#   -Expect "re1|||re2": regexes que tem que aparecer no log de todos os jogadores.
 #   Logs e hashes ficam em <runtime>\net\ (servidor.log, jogador<N>.err.log, jogador<N>.hash). Sai com 0 se tudo bater.
 param(
     [int]$Players = 2,
@@ -13,7 +15,9 @@ param(
     [int]$Secs = 70,
     [int]$Port = 7811,
     [string]$Exe = '',
-    [int]$Drop = 0
+    [int]$Drop = 0,
+    [string]$ExtraEnv = '',
+    [string]$Expect = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -37,6 +41,10 @@ if (-not $env:PS2X_CD_IMAGE) {
 }
 $env:PS2X_NO_VU1 = '1'; $env:PS2X_NO_VIF1 = '1'; $env:PS2X_NO_GS = '1'; $env:PS2X_SCENE = '1'; $env:PS2X_FMV = '1'
 $env:WOTM_MUTE = '1'; $env:WOTM_FULLSCREEN = '0'; $env:WOTM_RES = '360'; $env:WOTM_NOINPUT = '1'; $env:WOTM_REPO = $repo
+foreach ($pair in ($ExtraEnv -split ';' | Where-Object { $_.Trim() })) {
+    $k = $pair.IndexOf('=')
+    [Environment]::SetEnvironmentVariable($pair.Substring(0, $k).Trim(), $pair.Substring($k + 1))
+}
 
 $procs = @()
 $srv = Start-Process -FilePath $server -ArgumentList "--port $Port" -PassThru -WindowStyle Hidden `
@@ -104,6 +112,9 @@ for ($i = 1; $i -le $Players; $i++) {
     if ($log -match '\[net\] parado: [^\r\n]*') { if (-not ($Drop -gt 0 -and $i -eq $Players)) { Fail "jogador ${i}: $($Matches[0])" } }
     if ($log -match '\[CRASH\]|\[vigia\] CONGELOU') { Fail "jogador ${i}: $($Matches[0])" }
     if ($log -notmatch '\[sync\] primeira entrada nao neutra aplicada no quadro') { Fail "jogador ${i}: nenhuma entrada chegou ao jogo" }
+    foreach ($re in ($Expect -split '\|\|\|' | Where-Object { $_ })) {
+        if ($log -notmatch $re) { Fail "jogador ${i}: faltou $re" }
+    }
 }
 if ($Drop -gt 0 -and $srvLog -notmatch "J$Players saiu da partida \(neutro desde o quadro \d+\)") { Fail "servidor nao registrou a saida do jogador $Players" }
 for ($i = 2; $i -le $alive; $i++) {
