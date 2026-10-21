@@ -14,6 +14,9 @@ $ps2recompCommit = '2c5fbb9389e11dd95693385969490c9e8e6f57b4'   # base do tools\
 
 function Step([string]$m) { Write-Host "== $m" -ForegroundColor Cyan }
 function Fail([string]$m) { Write-Host $m -ForegroundColor Red; exit 1 }
+# Comando nativo cuja saida de erro e esperada (sondagens): pelo cmd, sem o stderr. No PowerShell 5.1 com Stop, qualquer linha no stderr
+# de um programa vira erro fatal. Devolve o codigo de saida.
+function Probe([string]$cmdLine) { & $env:ComSpec /c "$cmdLine >nul 2>nul"; return $LASTEXITCODE }
 
 # --- ferramentas
 Step 'ferramentas'
@@ -55,14 +58,12 @@ New-Item -ItemType Directory -Force $rt | Out-Null
 $pr = Join-Path $rt 'PS2Recomp'
 if (-not (Test-Path (Join-Path $pr '.git'))) {
     git clone -q https://github.com/ran-j/PS2Recomp.git $pr
-    git -C $pr checkout -q $ps2recompCommit
+    git -c advice.detachedHead=false -C $pr checkout -q $ps2recompCommit
 }
 foreach ($p in 'wotm-runtime.patch', 'ps2recomp-fpu-sqrt.patch') {
     $patch = Join-Path $repo "tools\runtime_patch\$p"
-    git -C $pr apply --whitespace=nowarn --reverse --check $patch 2>$null
-    if ($LASTEXITCODE -eq 0) { Write-Host "$p ja aplicado"; continue }
-    git -C $pr apply --whitespace=nowarn $patch
-    if ($LASTEXITCODE -ne 0) { Fail "$p nao aplica em $pr (o clone mudou?)" }
+    if ((Probe "git -C `"$pr`" apply --whitespace=nowarn --reverse --check `"$patch`"") -eq 0) { Write-Host "$p ja aplicado"; continue }
+    if ((Probe "git -C `"$pr`" apply --whitespace=nowarn `"$patch`"") -ne 0) { Fail "$p nao aplica em $pr (o clone mudou?)" }
     Write-Host "$p aplicado"
 }
 
@@ -83,7 +84,7 @@ Copy-Item (Join-Path $disc 'SCUS_971.97') (Join-Path $rt 'discroot\SCUS_971.97')
 Step 'jogo traduzido'
 $retail = Join-Path $repo 'recomp\retail'
 if (-not (Test-Path (Join-Path $retail 'register_functions.cpp'))) {
-    & $env:ComSpec /c "`"$rt\build_tools.bat`"" | Select-Object -Last 2
+    & $env:ComSpec /c "`"$rt\build_tools.bat`" 2>&1" | Select-Object -Last 2
     if ($LASTEXITCODE -ne 0) { Fail 'build do analisador/recompilador falhou' }
     $work = Join-Path $repo 'recomp\work'
     New-Item -ItemType Directory -Force $work | Out-Null
@@ -104,10 +105,10 @@ Write-Host "$cpp arquivos traduzidos"
 if (-not $SkipBuild) {
     Step 'configurar e compilar (o primeiro build leva alguns minutos)'
     if (-not (Test-Path (Join-Path $rt 'build_dev\build.ninja'))) {
-        & $env:ComSpec /c "`"$rt\configure_dev.bat`"" | Select-Object -Last 2
+        & $env:ComSpec /c "`"$rt\configure_dev.bat`" 2>&1" | Select-Object -Last 2
         if (-not (Test-Path (Join-Path $rt 'build_dev\build.ninja'))) { Fail 'configure_dev.bat falhou' }
     }
-    & $env:ComSpec /c "`"$repo\build_runtime.bat`""
+    & $env:ComSpec /c "`"$repo\build_runtime.bat`" 2>&1"
     if ($LASTEXITCODE -ne 0) { Fail "build falhou: veja $rt\build_dev.log" }
 }
 Step 'pronto'
