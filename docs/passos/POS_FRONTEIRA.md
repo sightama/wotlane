@@ -328,7 +328,11 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 - **A conferir:** controles de verdade nos jogadores 3 e 4, custo (4 vistas: o redesenho estimado acima passa de 16,7 ms; o vigia
   viu ~24 quadros/s do jogo em trechos), sons por jogador (`m_index` até 3), o `TokenManager m_tokens[2]` (só 2) e a pose de
   vitória com meta de vitórias (não testada: o `WOTM_MATCH` não tem meta).
-- Falta: a escolha de lados com 4 colunas e o menu ("2 players" → "multiplayer").
+- ~~Falta: a escolha de lados com 4 colunas e o menu ("2 players" → "multiplayer").~~ **Feito em 2026-10-21** (`wotm_padsel.inc`;
+  `NATIVO.md`, "Menu multijogador de 2 a 4"): "2 player" vira "multiplayer"; escolha de controles com 4 colunas; com 3 ou 4 o free for
+  all sem CPU, direto ao "first to", e uma seleção de monstros nativa no telão no lugar da tela 6; a tela dividida de 3 e 4 fica sempre
+  instalada. Conferido pelo roteiro de pad do boot à luta de 4. Pendentes: controles de verdade nos jogadores 3 e 4; CPU junto com
+  3 ou 4 jogadores; eliminação e minigames com 3 ou mais. Testado e descartado com o dono: 5 a 8 jogadores (câmera compartilhada).
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.

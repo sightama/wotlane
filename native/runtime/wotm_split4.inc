@@ -1,4 +1,5 @@
-// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11). Incluido pelo wotm_overrides.cpp; ligada por WOTM_PLAYERS=3 ou 4.
+// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11). Incluido pelo wotm_overrides.cpp. Sempre instalada: age quando o Shell
+// tem 3 ou 4 jogadores (m_numPlayers), postos pelo menu multijogador (wotm_padsel.inc) ou pela WOTM_MATCH com WOTM_PLAYERS=3 ou 4.
 //
 // O motor ja tem quase tudo para 4 vistas: viewInfo, worldCtx e viewDb com 5 entradas (a 4 e a da sombra), 4 cameras
 // (Cameras::m_cameras), 4 HUDs, a viewPrevMat das particulas e os pontos de visada com 5, e o viewToggleSplitScreen dos cinemas
@@ -60,7 +61,7 @@ namespace wotm_split4
                                    g_origLoadLevelFiles = nullptr, g_origInitPlayers = nullptr, g_viewCreate = nullptr, g_viewSetFov = nullptr,
                                    g_follow = nullptr, g_setPov = nullptr;
 
-    int g_players = 0;              // WOTM_PLAYERS (3 ou 4); 0 = desligado
+    int g_players = 0;              // teto de jogadores com os ganchos instalados (4); 0 = desligado
     int g_views = 0;                // vistas em quadrante montadas (0 = nenhuma: tela cheia ou metades do retail)
     bool g_wasUnified = false;      // a vista unificada (vitoria) estava ligada no quadro anterior
     bool g_cinemaFull = false;      // cinema em tela cheia (cinemaViews)
@@ -644,10 +645,7 @@ namespace wotm_split4
     // Antes dos ganchos do scePadRead da camera livre e do lock-on alternado: eles embrulham este e veem o slot de verdade
     void install(PS2Runtime &runtime)
     {
-        const char *e = std::getenv("WOTM_PLAYERS");
-        const int n = e ? std::atoi(e) : 0;
-        if (n < 3 || n > 4)
-            return;
+        constexpr int n = 4;   // teto de jogadores (com 1 ou 2 no Shell os ganchos deixam o jogo como no retail)
         g_viewCreate = runtime.lookupFunction(kViewCreate);
         g_viewSetFov = runtime.lookupFunction(kViewSetFov);
         g_follow = runtime.lookupFunction(kFollow);
@@ -676,7 +674,7 @@ namespace wotm_split4
             !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI ||
             !g_origBlurInit || !g_origBlurDraw || !padsOk)
         {
-            std::fprintf(stderr, "[split] WOTM_PLAYERS=%d ignorado: funcao do jogo ou scePad* sem funcao no runtime\n", n);
+            std::fprintf(stderr, "[split] tela dividida de %d desligada: funcao do jogo ou scePad* sem funcao no runtime\n", n);
             return;
         }
         g_players = n;
@@ -700,6 +698,13 @@ namespace wotm_split4
         runtime.registerFunction(wotm::fn::scePadPortClose, &portClose);
         for (size_t i = 0; i < kPadSlotN; ++i)
             runtime.registerFunction(kPadSlotFns[i], kPadSlotHooks[i]);
-        std::fprintf(stderr, "[split] ate %d jogadores: tela em quadrantes, controles 3 e 4 no slot 1 das portas (WOTM_PLAYERS)\n", n);
+        std::fprintf(stderr, "[split] ate %d jogadores: tela em quadrantes, controles 3 e 4 no slot 1 das portas\n", n);
     }
+}
+
+// Selecao de monstros do menu multijogador (wotm_padsel.inc): traje dos jogadores 3 e 4 (o Shell so guarda os dos jogadores 1 e 2)
+void wotmMultiSetCostume(int player, uint32_t costume)
+{
+    if (player >= 2 && player < 4)
+        wotm_split4::g_extraCostume[player - 2] = costume & 3u;
 }
