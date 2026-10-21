@@ -83,7 +83,7 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_save.inc"
 // "Press start" do menu principal: X vale como Start e o botao vale ja durante a transicao.
 #include "wotm_menu.inc"
-// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
+// Multijogador de 3 a 8 (POS_FRONTEIRA.md, item 11): quadrantes com 3 e 4, tela cheia com camera compartilhada de 5 a 8; carga, controles 3 a 8.
 #include "wotm_split4.inc"
 
 namespace
@@ -195,8 +195,8 @@ namespace
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
-    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4: os
-    // tres ou quatro primeiros, com a tela em quadrantes (wotm_split4.inc).
+    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 a 8: os
+    // primeiros como jogadores: quadrantes com 3 e 4, tela cheia com a camera compartilhada de 5 a 8 (sem IA; wotm_split4.inc).
     int g_matchPlayers = 1;
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
@@ -216,7 +216,7 @@ namespace
             const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
-            if (player && i >= 2)   // jogadores 3 e 4: m_costume[2..] e das IAs (wotm_split4.inc os carrega pelo caminho delas)
+            if (player && i >= 2)   // jogadores 3 a 8: m_costume[2..] e das IAs (wotm_split4.inc os carrega pelo caminho delas)
                 wotm_split4::g_extraCostume[i - 2] = costume & 3u;
             else
                 WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
@@ -289,7 +289,7 @@ namespace
             return;
         const int32_t players = static_cast<int32_t>(READ32(kShell + 0x2BB4));
         int32_t n = static_cast<int32_t>(READ32(kGame + 0x1203E0));
-        for (int32_t i = 0; i < players && i < 4; ++i)
+        for (int32_t i = 0; i < players && i < 8; ++i)
         {
             const uint32_t m = READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
             if (m && READ32(m + 0x18) == 2u)                       // m_playerNum
@@ -307,10 +307,10 @@ namespace
 
     void callAsHumans(PS2Runtime::RecompiledFunction orig, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        uint32_t flipped[4];
+        uint32_t flipped[8];
         int n = 0;
         const int32_t players = static_cast<int32_t>(READ32(kShell + 0x2BB4));
-        for (int32_t i = 0; i < players && i < 4; ++i)
+        for (int32_t i = 0; i < players && i < 8; ++i)
         {
             const uint32_t m = READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
             if (m && READ32(m + 0x18) == 2u)
@@ -377,7 +377,7 @@ namespace
     bool isPlayerMonster(uint8_t *rdram, uint32_t m, int *slot = nullptr)
     {
         int32_t players = static_cast<int32_t>(FAST_READ32(kShell + 0x2BB4));   // m_numPlayers
-        if (players < 1 || players > 4)
+        if (players < 1 || players > 8)
             players = 1;
         for (int32_t i = 0; i < players; ++i)
             if (m && FAST_READ32(kGame + 0x120380 + 4 * i) == m)
@@ -2054,14 +2054,19 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 break;
             }
         }
-        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 4)
-            g_matchPlayers = std::atoi(pl);   // 3 e 4: tela em quadrantes (wotm_split4.inc)
+        if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 8)
+            g_matchPlayers = std::atoi(pl);   // 3 e 4: quadrantes; 5 a 8: camera compartilhada, sem IA (wotm_split4.inc)
         if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
             for (int i = 0; i < n - 1; ++i)
                 g_matchMonsters[i] = v[i];
             g_matchLevel = v[n - 1];
+            if (g_matchPlayers > 4 && g_matchAIs > 0)   // de 5 a 8 os jogadores 5 a 8 ocupam o lugar das IAs (wotm_split4.inc)
+            {
+                std::fprintf(stderr, "[wotm] WOTM_PLAYERS=%d nao tem IA: %d IA(s) da WOTM_MATCH ignorada(s)\n", g_matchPlayers, g_matchAIs);
+                g_matchAIs = 0;
+            }
         }
         if (g_matchLevel >= 0)
         {
