@@ -100,6 +100,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_save.inc"
 // "Press start" do menu principal: X vale como Start e o botao vale ja durante a transicao.
 #include "wotm_menu.inc"
+// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
+#include "wotm_split4.inc"
 
 namespace
 {
@@ -218,13 +220,12 @@ namespace
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
     int g_matchAIs = 0, g_matchLevel = -1;
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
-    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4:
-    // os jogadores 3 e 4 (wotm_multi.inc); o shell so tem figurino para 2 jogadores, os deles ficam em g_matchCostume.
-    // WOTM_PLAYERS=5..8: os jogadores 1..4 nos lugares de jogador e os 5..8 nas primeiras IAs (m_monsters[4..7]), que leem os controles
-    // 4..7 no lugar da IA (g_padAIs; wotm_multi.inc, aiUpdateInputsFromPad).
+    // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4: os
+    // tres ou quatro primeiros, com a tela em quadrantes (wotm_split4.inc).
+    // WOTM_PLAYERS=5..8: os jogadores 1..4 nos quadrantes e os 5..8 nas primeiras IAs (m_monsters[4..7]), que leem os controles 4..7
+    // no lugar da IA (g_padAIs; wotm_multi.inc, aiUpdateInputsFromPad).
     int g_matchPlayers = 1;
     int g_padAIs = 0;
-    uint32_t g_matchCostume[4] = {};
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
@@ -243,9 +244,9 @@ namespace
             const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
-            if (player)
-                g_matchCostume[i] = costume & 3u;
-            if (!player || i < 2)
+            if (player && i >= 2)   // jogadores 3 e 4: m_costume[2..] e das IAs (wotm_split4.inc os carrega pelo caminho delas)
+                wotm_split4::g_extraCostume[i - 2] = costume & 3u;
+            else
                 WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
         }
         WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
@@ -277,9 +278,10 @@ namespace
         if (ctx->pc == kEvaluateGameStatus)
         {
             std::fprintf(stderr, "[partida] rodada %u terminou (rtMain devolveu %d):", ++g_rounds, static_cast<int32_t>(GPR_U32(ctx, 5)));
-            for (uint32_t k = 0; k <= static_cast<uint32_t>(kMatchMaxAIs); ++k)   // m_monsters[0] (jogador) e m_monsters[4..] (IAs)
+            for (uint32_t slot = 0; slot < 4u + static_cast<uint32_t>(kMatchMaxAIs); ++slot)   // m_monsters[0..] (jogadores) e [4..] (IAs)
             {
-                const uint32_t slot = k ? 3u + k : 0u;
+                if (slot < 4u && slot >= static_cast<uint32_t>(std::max(g_matchPlayers, 1)))
+                    continue;
                 const uint32_t m = READ32(kGame + 0x120380 + 4 * slot);
                 if (!m)
                     continue;
@@ -728,18 +730,16 @@ namespace
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
             std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
-        std::fprintf(stderr, " vistas=%u hier=", (g_hierViews & 1u) + ((g_hierViews >> 1) & 1u) + ((g_hierViews >> 2) & 1u) + ((g_hierViews >> 3) & 1u));
-        for (int v = 0; v < 4; ++v)
-            if (v < 2 || (g_hierViews >> v) & 1u)
-                std::fprintf(stderr, "%s%.2f", v ? "/" : "", g_hierMs[v]);
-        std::fprintf(stderr, " cap=");
-        for (int v = 0; v < 4; ++v)
-            if (v < 2 || (g_hierViews >> v) & 1u)
-                std::fprintf(stderr, "%s%.2f", v ? "/" : "", g_captureMs[v]);
+        unsigned views = 0;
+        for (unsigned v = 0; v < 4; ++v)
+            views += (g_hierViews >> v) & 1u;
+        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f", views, g_hierMs[0], g_hierMs[1], g_captureMs[0], g_captureMs[1]);
+        if (g_hierViews & 0xCu)   // 3 e 4 jogadores (wotm_split4.inc): vistas 2 e 3
+            std::fprintf(stderr, " hier23=%.2f/%.2f cap23=%.2f/%.2f", g_hierMs[2], g_hierMs[3], g_captureMs[2], g_captureMs[3]);
         std::fprintf(stderr, "\n");
         g_hierViews = 0;
-        std::fill(std::begin(g_hierMs), std::end(g_hierMs), 0.0);
-        std::fill(std::begin(g_captureMs), std::end(g_captureMs), 0.0);
+        for (int v = 0; v < 4; ++v)
+            g_hierMs[v] = g_captureMs[v] = 0.0;
         // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
         if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
         {
@@ -764,7 +764,7 @@ namespace
     }
 
 
-    void emitPlayerHuds(uint8_t *rdram);   // HUD dos jogadores 3/4, mais abaixo (junto das barras)
+    void emitChaseHud(uint8_t *rdram);   // HUD do jogador 5..8 na vista de perseguicao, mais abaixo (junto das barras)
 
     void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -776,7 +776,7 @@ namespace
             if (g_fieldLog)
                 fieldLogFrame(rdram, ctx, runtime);
             // quadro pronto (update, hier, particleDraw) e o seguinte ainda nao comecou: o desenho nativo copia a cena aqui
-            emitPlayerHuds(rdram);
+            emitChaseHud(rdram);
             wotmCaptureFrame(rdram);
             // pausa (F7/F6/F8, wotm_foto.inc): o quadro pronto fica na tela e o seguinte nao comeca. O quadro com parada conta 1 field:
             // o tempo parado nao vira dt (sem isso o updateRate caia ao limite e o jogo dava um passo de 1/30 na volta)
@@ -1031,10 +1031,14 @@ namespace
     // Custo por vista para o [field] (WOTM_FIELDLOG): tempo de host dentro do hier(v, passo) por vista, nos dois passos, e da captura
     // nativa (wotmCaptureScene) na saida do hier(v, 0). So conta as chamadas que voltam pelo envoltorio (uma que bloqueia e e
     // retomada no meio nao passa por aqui).
+    // Vistas 2 e 3 (3 e 4 jogadores, wotm_split4.inc): o rtMain nao roda update entre o hier(v, 0) e o hier(v, 1) delas, entao a
+    // reserva da captura e a entrada do hier(v, 1).
     void hierTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const bool entry = ctx->pc == kHier;
         const uint32_t view = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
+        if (entry && GPR_U32(ctx, 5) != 0u && g_hierSceneRa && g_hierSceneView >= 2)
+            hierSceneExit(rdram);
         if (entry && view < 4u && GPR_U32(ctx, 5) == 0u)
         {
             if (g_hierSceneRa)   // a saida do anterior escapou sem reserva: captura antes de comecar este
@@ -1243,7 +1247,7 @@ namespace
         bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
         uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
     } g_lockToggle[4];
-    uint8_t g_padDir[4] = {};    // por controle (port + 2 * slot = jogador): bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
+    uint8_t g_padDir[4] = {};    // por controle (porta + 2 * slot, o do jogador): bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
 
     bool ramOk(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
     uint16_t rd16(uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + a, 2); return v; }
@@ -1761,7 +1765,7 @@ namespace
     // Um bloco por inimigo: retrato a esquerda na altura toda; a direita, vida em cima e, embaixo, o especial e a energia (mais fina e
     // mais curta). Cada celula tem o proprio contorno preto; a faixa cinza entre duas celulas e uma so (o vao entre elas e exatamente
     // preto + cinza + preto), e um contorno preto fecha o bloco. Unidades da tela do jogo, 640 x 224 (1 em y = 2,14 em x na tela).
-    // s: escala do bloco (1 = sobre o inimigo; o HUD dos jogadores 3/4 usa um maior, emitPlayerHuds)
+    // s: escala do bloco (1 = sobre o inimigo; o HUD da vista de perseguicao usa um maior, emitChaseHud)
     void emitBars(uint8_t *rdram, uint32_t m, const float box[4], float s = 1.f)
     {
         if (!ramOk(m, kMonsterStamina + 0x24u))
@@ -1820,30 +1824,22 @@ namespace
         }
     }
 
-    // HUD dos jogadores 3/4 (wotm_multi.inc): o nivel so tem medidores para dois HUDs (Hud::initAfter monta os das vistas 0 e 1), entao
-    // na vista de cada um sai o bloco do emitBars (retrato, vida, especial, energia) maior, no canto de cima a esquerda, como o do jogador 1.
-    // Uma vez por quadro, na fronteira do quadro (antes da captura).
-    void emitPlayerHuds(uint8_t *rdram)
+    // HUD do jogador 5..8 no seu PC (WOTM_LOCALPLAYER): o jogo nao tem HUD para as IAs, entao na vista de perseguicao (barras 4 + k) sai
+    // o bloco do emitBars (retrato, vida, especial, energia) do proprio monstro (IA m_monsters[4 + k]), maior, no canto de cima a
+    // esquerda, como o do jogador 1. Uma vez por quadro, na fronteira do quadro (antes da captura).
+    void emitChaseHud(uint8_t *rdram)
     {
-        if (!wotm_multi::perPlayerViews())
+        static const int local = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); return e ? std::atoi(e) : 0; }();
+        if (local < 5 || local > 4 + g_padAIs)
             return;
         constexpr float kScale = 3.f, kLeft = 18.f, kTop = 10.f, kHalfW = 30.f * kScale, kHalfH = 3.6f * kScale;
         const float box[4] = {kLeft + kHalfW - 1.f, kTop + kHalfH - 1.f, kLeft + kHalfW + 1.f, kTop + kHalfH + 1.f};
-        for (int i = 2; i < g_matchPlayers && i < 4; ++i)
-            if (const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i))
-            {
-                wotmBarView(i);
-                emitBars(rdram, m, box, kScale);
-            }
-        // jogador 5..8 no seu PC (WOTM_LOCALPLAYER): o HUD do proprio monstro (IA m_monsters[4 + k]) na vista de perseguicao (barras 4 + k)
-        static const int local = [] { const char *e = std::getenv("WOTM_LOCALPLAYER"); return e ? std::atoi(e) : 0; }();
-        if (local >= 5 && local <= 4 + g_padAIs)
-            if (const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * (local - 1)))
-            {
-                wotmBarView(local - 1);
-                emitBars(rdram, m, box, kScale);
-            }
-        wotmBarView(0);
+        if (const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * (local - 1)))
+        {
+            wotmBarView(local - 1);
+            emitBars(rdram, m, box, kScale);
+            wotmBarView(0);
+        }
     }
 
     void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -2089,6 +2085,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             std::fprintf(stderr, "[wotm] monstros carregados embaixo de 32 MB, como no PS2 (WOTM_HIGHRAM=0)\n");
     }
     wotm_save::install(runtime);
+    wotm_split4::install(runtime);   // os ganchos de depois (WOTM_AIVSAI, wotm_multi) embrulham os dela
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))

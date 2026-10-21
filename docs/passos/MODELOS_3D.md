@@ -10,6 +10,8 @@ seleção (item 12) e ao visualizador web (`VIEWER_WEB.md`). Formatos de base (m
 | `tools/animcurve.py` | avaliador de curvas (porte de `src/common/AnimCurve.cpp`) |
 | `tools/pose.py` | pose de um monstro (`Model(ngp).pose(anim, quadro)`), `--list` mostra as animações; grava `.glb` posado |
 | `tools/gltf.py` | exporta `.glb` (texturas do `tex.py`); com `model=` as malhas skinned saem na pose |
+| `tools/monglb.py` | `.glb` animado para o viewer web: joints = ossos com saída (pai = quem gravou a matriz de partida na pilha), inversa de ligação = `restPoseInv`, partes rígidas como nós; curvas amostradas a 60/s; misturas do GS, textura rolando, fogo e lens flare nos extras. `--boss plant|root|mecha` monta os chefes das peças das fases (3-MILE, CAPITOL). Bate com o `pose.py` vértice a vértice |
+| `tools/shellpics.py` | fotos largas das fases e logos dos monstros do `SHELL.TEX/.RTX` em PNG (as mesmas do `wotm_savepics.hpp`) |
 | `native/wotm_model.hpp` | o mesmo em C++: `wotm::model::Model` (carga, pose, triângulos posados, texturas) e `Renderer` (raylib, RenderTexture) |
 | `native/monview.cpp` | `build\monview.exe disc MONKEY0 [--anim 90] [--yaw 35] [--shot x.png]`: janela animada (setas giram, PgUp/PgDn trocam a animação) ou PNG |
 

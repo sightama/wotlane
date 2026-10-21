@@ -67,6 +67,7 @@ class CharCtx:
         self.val = [img.f32(vp + 4 * i) if img.ok(vp + 4 * i) else 0.0 for i in range(self.nch)]
         self.dirty = set()
         self.pal = {}      # endereco da matriz na paleta -> matriz
+        self.bones = {}    # saida do osso (skelOutputMatIdx) -> (no SKEL_BONE, matriz acumulada, saida do osso pai ou None)
         amp = img.u32(ci + 0x14)
         self.outAddr = {}
         if img.ok(amp):
@@ -83,15 +84,65 @@ class CharCtx:
         return self.val[idx] if 0 <= idx < self.nch else fallback
 
 
+class Item(tuple):
+    """(OBJECT, matriz, CharCtx) de pose(), com o estado do GS herdado na travessia (gs: blend = ALPHA_1, aref = limiar do
+    teste de alfa ou -1, zmsk, ztst) e o deslocamento do UV (uv), como o Item do native/wotm_model.hpp."""
+
+    def __new__(cls, node, m, ctx, gs, uv):
+        it = tuple.__new__(cls, (node, m, ctx))
+        it.gs, it.uv = gs, uv
+        return it
+
+
+class PoseList(list):
+    """Lista de Item de pose(), com os nos de efeito percorridos: emitters = [(no op 22, matriz do pai)] (emissores de
+    particula, como o fogo do Agamo) e lights = [(no op 5, matriz do pai)] (HierLight, com lens flare), como o visited_ do
+    native/wotm_model.hpp. Um no so e percorrido quando o canal de visibilidade dos ANIM_XFORM acima dele vale 1."""
+    emitters = ()
+    lights = ()
+
+
+GS_DEFAULT = (0x44, -1, False, 2)   # ctxDef do jogo: ALPHA_1 0x44, sem teste de alfa, grava Z, teste de Z normal
+
+
+def gs_apply(img, gs, ctxp):
+    """Estado do GS depois do pacote A+D do ctx de um no (Scene::groupState; GsState::apply do nativo)."""
+    ctxp &= 0x0FFFFFFF
+    if not ctxp or not img.ok(ctxp, 0x20) or img.u32(ctxp + 0x14) != 0x10000000 or img.u32(ctxp + 0x18) != 0xE:
+        return gs
+    n = min(img.u32(ctxp + 0x10) & 0x7FFF, 8)
+    if not img.ok(ctxp, 0x20 + 16 * n):
+        return gs
+    blend, aref, zmsk, ztst = gs
+    for i in range(n):
+        d, reg = img.u32(ctxp + 0x20 + 16 * i), img.u32(ctxp + 0x28 + 16 * i) & 0xFF
+        if reg == 0x42:
+            blend = d & 0xFF
+        elif reg == 0x47:
+            atst, ref = (d >> 1) & 7, (d >> 4) & 0xFF
+            ztst = (d >> 17) & 3
+            aref = -1 if (not (d & 1) or atst == 1) else ref if atst == 6 else max(ref - 1, 0) if atst == 5 else 8
+        elif reg == 0x4E:
+            zmsk = bool(img.u32(ctxp + 0x24 + 16 * i) & 1)
+    return (blend, aref, zmsk, ztst)
+
+
 class Model:
-    def __init__(self, ngp_path):
+    """Monstro (raiz 0 do .NGP) ou, com parts, um modelo montado de pecas de uma fase (chefes): parts = [(no, matriz de
+    posicao)] percorridas como raizes, main = a instancia de personagem que a animacao escolhida move. switch_on: SWITCHes
+    forcados no filho 1 (o que o jogo liga na luta, ex. hierSetSwitch das cabecas da planta)."""
+
+    def __init__(self, ngp_path, parts=None, main=None, switch_on=()):
         self.img = ngp.Image.load(ngp_path)
-        self.root = self.img.roots()[0]
+        self.parts = parts or [(self.img.roots()[0], np.eye(4))]
+        self.root = self.parts[0][0]
+        self.switch_on = set(switch_on)
         self.cis = []
-        self._find(self.root, 0)
+        for n, _m in self.parts:
+            self._find(n, 0)
         if not self.cis:
             raise ValueError("%s: sem CHAR_INSTANCE na raiz 0" % ngp_path)
-        self.main = max(self.cis, key=lambda c: self.img.u16(self.img.u32(c + 0x20)))
+        self.main = main or max(self.cis, key=lambda c: self.img.u16(self.img.u32(c + 0x20)))
 
     def _find(self, n, depth):
         """CHAR_INSTANCEs alcancaveis da raiz (para achar a principal)."""
@@ -118,6 +169,23 @@ class Model:
             return [(n + a, img.u32(n + c))]
         return []
 
+    def apply_anim(self, ctx, k, frame):
+        """Escreve no ctx os canais da animacao de indice k no quadro frame (a partir do inicio, em laco)."""
+        img = self.img
+        ch = img.u32(ctx.ci + 0x20)
+        if not 0 <= k < img.u16(ch):
+            return
+        an = img.u32(ch + 0xC + 4 * k)
+        st, et, nch = img.f32(an + 4), img.f32(an + 8), img.u16(an + 0xC)
+        t = st + frame
+        if et > st and t > et:
+            t = st + math.fmod(t - st, et - st)
+        for c in range(nch):
+            cv = animcurve.Curve(img, img.u32(an + 0x18 + 4 * c))
+            if 0 <= cv.idx < ctx.nch:
+                ctx.val[cv.idx] = cv.eval(t)
+                ctx.dirty.add(cv.idx)
+
     def anims(self, ci=None):
         """[(id, indice, quadro inicial, quadro final, canais)] da instancia."""
         img = self.img
@@ -129,23 +197,29 @@ class Model:
             out.append((img.u32(a) >> 18, k, img.f32(a + 4), img.f32(a + 8), img.u16(a + 0xC)))
         return out
 
-    def find_anim(self, anim_id, ci=None):
+    def find_anim(self, anim_id, ci=None, k=None):
+        """Animacao pelo id ou, com k, pelo indice na tabela (ids se repetem: o 0 aparece duas vezes no Togera)."""
         for a in self.anims(ci):
-            if a[0] == anim_id:
+            if (a[1] == k) if k is not None else (a[0] == anim_id):
                 return a
         return None
 
-    def pose(self, anim_id=IDLE, frame=0.0, rest=False):
-        """[(OBJECT, matriz 4x4 do objeto, CharCtx ou None)] na pose da animacao `anim_id` no quadro `frame` (a partir do
-        inicio; com laco). rest=True: sem animacao (valores guardados nos nos)."""
+    def pose(self, anim_id=IDLE, frame=0.0, rest=False, k=None, assign=None):
+        """[Item (OBJECT, matriz 4x4 do objeto, CharCtx ou None) com .gs e .uv] na pose da animacao `anim_id` (ou de indice
+        k) no quadro `frame` (a partir do inicio; com laco). rest=True: sem animacao (valores guardados nos nos).
+        assign = {instancia: k}: cada instancia na sua animacao, no mesmo quadro (pecas de um chefe; no lugar de anim_id/k)."""
         img = self.img
         ctxs = {}
         main = CharCtx(img, self.main)
         ctxs[self.main] = main
-        if not rest:
-            a = self.find_anim(anim_id)
+        if assign is not None:
+            for ci, kk in assign.items():
+                c = ctxs.setdefault(ci, CharCtx(img, ci))
+                self.apply_anim(c, kk, frame)
+        elif not rest:
+            a = self.find_anim(anim_id, k=k)
             if a is None:
-                raise ValueError("sem animacao %d" % anim_id)
+                raise ValueError("sem animacao %s" % (anim_id if k is None else "k %d" % k))
             _, k, st, et, nch = a
             t = st + frame
             if et > st and t > et:
@@ -156,16 +230,20 @@ class Model:
                 if 0 <= cv.idx < main.nch:
                     main.val[cv.idx] = cv.eval(t)
                     main.dirty.add(cv.idx)
-        items = []
+        items = PoseList()
+        items.emitters, items.lights = [], []
         smat = {}
         skel = {}
+        owner = {}   # indice da pilha de matrizes -> saida do osso que a gravou (None = identidade de um osso raiz)
 
         def out(ctx, si, mi):
             bone = skel[si]
             o = img.s16(bone + 8)
-            if o >= 0 and ctx is not None and o in ctx.outAddr:
+            owner[mi] = o if o >= 0 and ctx is not None and o in ctx.outAddr else None
+            if owner[mi] is not None:
                 rp = np.array(struct.unpack_from("<16f", img.d, bone + 0x10 - img.base)).reshape(4, 4)
                 ctx.pal[ctx.outAddr[o]] = rp @ smat[mi]
+                ctx.bones[o] = (bone, smat[mi], owner.get(mi - 1))
 
         def skelstep(ctx, local, si, mi):
             if si < 0:
@@ -174,24 +252,41 @@ class Model:
             out(ctx, si, mi + 1)
             return si - 1, mi + 1
 
-        def visit(n, m, si, mi, ctx, depth):
+        def visit(n, m, si, mi, ctx, depth, gs=GS_DEFAULT):
             if depth > 80 or not img.ok(n):
                 return
             op = img.u32(n) & 63
+            # ctx do GS do no (GROUP/TRANSLATE/ROTATE/SCALE em +4, ANIM_XFORM/ANIM_SCALE em +8): vale para os filhos
+            if op in (1, 3, 4, 30):
+                gs = gs_apply(img, gs, img.u32(n + 4))
+            elif op in (17, 38):
+                gs = gs_apply(img, gs, img.u32(n + 8))
 
             def kids(arr, cnt, mm, si2=si, mi2=mi, ctx2=ctx):
                 for q in range(min(cnt, 4096)):
-                    visit(img.u32(arr + 4 * q), mm, si2, mi2, ctx2, depth + 1)
+                    visit(img.u32(arr + 4 * q), mm, si2, mi2, ctx2, depth + 1, gs)
 
             if op == 0:
-                items.append((n, m, ctx))
+                # deslocamento do UV (Scene::objectUvOffset): +0x20/+0x24; com uvScroll (bit 0x800 de +0xC), os canais +0x30/+0x32
+                uv = [img.f32(n + 0x20), img.f32(n + 0x24)]
+                if (img.u16(n + 0xC) & 0x800) and ctx is not None:
+                    uv = [ctx.v(img.s16(n + 0x30 + 2 * j), 0.0) for j in range(2)]
+                items.append(Item(n, m, ctx, gs, tuple(uv)))
+            elif op == 22:
+                items.emitters.append((n, m))
+            elif op == 5:
+                items.lights.append((n, m))
             elif op == 1:
                 if img.u16(n + 0xA) & 1:
                     kids(n + 0x20, img.u16(n + 8), m)
             elif op == 2:
-                nl = img.u32(n + 4)
-                if 0 < nl < 16:   # o mais detalhado (distancia 0 ao LOD)
-                    visit(img.u32(n + 0x20 + 16 * (nl - 1) + 8), m, si, mi, ctx, depth + 1)
+                # o mais detalhado que o hierLod desenharia de perto: o maior indice com switchOutDis (+0x24) > 0 (o traje 3 do
+                # Togera tem um ultimo nivel com 0, nunca desenhado; como o native/wotm_model.hpp)
+                nl = min(img.u32(n + 4), 16)
+                for i in range(nl - 1, -1, -1):
+                    if img.f32(n + 0x24 + 16 * i) > 0.0:
+                        visit(img.u32(n + 0x28 + 16 * i), m, si, mi, ctx, depth + 1, gs)
+                        break
             elif op == 3:
                 L = translate(img.f32(n + 0x10), img.f32(n + 0x14), img.f32(n + 0x18))
                 s2, m2 = skelstep(ctx, L, si, mi)
@@ -206,10 +301,12 @@ class Model:
                 kids(n + 0x2C, img.u32(n + 8), L @ m)
             elif op == 6:
                 w, cnt = img.u8(n + 8), img.u8(n + 0xB)
+                if n in self.switch_on:
+                    w = 1
                 if w < cnt:
-                    visit(img.u32(n + 0xC + 4 * w), m, si, mi, ctx, depth + 1)
+                    visit(img.u32(n + 0xC + 4 * w), m, si, mi, ctx, depth + 1, gs)
             elif op in (8, 23):
-                visit(img.u32(n + 4), m, si, mi, ctx, depth + 1)
+                visit(img.u32(n + 4), m, si, mi, ctx, depth + 1, gs)
             elif op == 35:
                 si2 = si + 1
                 skel[si2] = n
@@ -217,6 +314,7 @@ class Model:
                 if img.u16(n + 0xA):
                     mi2 = mi + 1
                     smat[mi2] = np.eye(4)
+                    owner[mi2] = None
                 kids(n + 0xC, img.u32(n + 4), m, si2, mi2)
             elif op == 25:
                 c = ctxs.get(n)
@@ -284,18 +382,19 @@ class Model:
                 c2 = img.u32(n + 0xC)
                 if img.ok(c2) and (img.u32(c2) & 63) == 31:
                     if img.u16(c2 + 0xA):
-                        visit(img.u32(c2 + 0xC), m, si, mi, ctx, depth + 1)
+                        visit(img.u32(c2 + 0xC), m, si, mi, ctx, depth + 1, gs)
                 else:
-                    visit(c2, m, si, mi, ctx, depth + 1)
+                    visit(c2, m, si, mi, ctx, depth + 1, gs)
             elif op == 31:
                 if img.u16(n + 0xA):
-                    visit(img.u32(n + 0xC), m, si, mi, ctx, depth + 1)
+                    visit(img.u32(n + 0xC), m, si, mi, ctx, depth + 1, gs)
 
-        visit(self.root, np.eye(4), -1, -1, None, 0)
+        for part, pm in self.parts:
+            visit(part, pm, -1, -1, None, 0)
         return items
 
-    def palette_of(self, node, ctx):
-        """{slot: matriz} da paleta do OBJECT skinned (Scene::palette), ou None."""
+    def palette_outs(self, node, ctx):
+        """{slot: saida do osso (skelOutputMatIdx)} da paleta do OBJECT skinned, ou None."""
         img = self.img
         if ctx is None or not img.ok(ctx.animPkt):
             return None
@@ -306,12 +405,20 @@ class Model:
         if not img.ok(chain, 8) or ((img.u32(chain) >> 28) & 7) != 3:
             return None
         block = img.u32(chain + 4) & 0x0FFFFFFF
+        by_addr = {a: o for o, a in ctx.outAddr.items()}
         out = {}
         for s in range(32):
-            a = block + 0x10 + 0x40 * s
-            if a in ctx.pal:
-                out[s] = ctx.pal[a]
+            o = by_addr.get(block + 0x10 + 0x40 * s)
+            if o is not None:
+                out[s] = o
         return out
+
+    def palette_of(self, node, ctx):
+        """{slot: matriz} da paleta do OBJECT skinned (Scene::palette), ou None."""
+        outs = self.palette_outs(node, ctx)
+        if outs is None:
+            return None
+        return {s: ctx.pal[ctx.outAddr[o]] for s, o in outs.items() if ctx.outAddr[o] in ctx.pal}
 
 
 def skin(pal, v):

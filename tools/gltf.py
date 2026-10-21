@@ -94,6 +94,62 @@ def to_y_up(p):
     return (p[0], p[2], -p[1])
 
 
+class Materials:
+    """Um material por (textura do slot da secao, TEX0, mistura), com a imagem do tex.Library embutida no .glb."""
+
+    def __init__(self, g, img, lib, unlit, stats):
+        self.g, self.img, self.lib, self.unlit, self.stats = g, img, lib, unlit, stats
+        self.cache = {}
+
+    def get(self, node, slot, blend, gs=None):
+        """blend: PRIM.ABE da malha. gs: estado do GS herdado (pose.Item.gs: ALPHA_1, aref, zmsk, ztst) ou None (o padrao
+        antigo: recorte de alfa em ~6%). Com gs, o material leva em extras.gs o modo de mistura (com ABE), o limiar do
+        teste de alfa e o ZMSK; o viewer monta a mistura do GS com eles (o glTF so tem OPAQUE/MASK/BLEND)."""
+        img, lib, g, stats = self.img, self.lib, self.g, self.stats
+        gk = None
+        if gs is not None:
+            gk = (gs[0] if blend else None, gs[1], bool(gs[2]) if blend else False)
+        if slot == ngp.SLOT_NOTEX or lib is None:
+            key = ("cor", blend, gk)
+        else:
+            s = slot if slot < min(img.u16(node + 0x5A), 5) else 0
+            tid = img.u16(node + 0x50 + 2 * s)
+            t0 = img.u32(node + 0x70 + 0x30 * s) | (img.u32(node + 0x74 + 0x30 * s) << 32)
+            key = ("tex", tid, t0, blend, gk)
+        if key in self.cache:
+            return self.cache[key]
+        m = {"pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 1.0}, "doubleSided": True}
+        if self.unlit:
+            m["extensions"] = {"KHR_materials_unlit": {}}
+        if blend:
+            m["alphaMode"] = "BLEND"
+        if gk is not None:
+            m["extras"] = {"gs": {"blend": gk[0], "aref": gk[1], "zmsk": gk[2]}}
+        if key[0] == "tex":
+            im = lib.image(key[1], key[2])
+            if im is None:
+                stats["sem_textura"] += 1
+                m["name"] = "tex%d_nao_achada" % key[1]
+            else:
+                w, h, px = im
+                m["name"] = "tex%d" % key[1]
+                m["pbrMetallicRoughness"]["baseColorTexture"] = {"index": g.image(tex.png_bytes(w, h, px), m["name"])}
+                stats["texturas"] += 1
+                if gk is not None:
+                    # como o shader do nativo: so descarta com teste de alfa (As*128 <= aref; As = 1 em 0x80)
+                    if not blend and gk[1] >= 0:
+                        m["alphaMode"] = "MASK"
+                        m["alphaCutoff"] = (gk[1] + 0.5) / 128.0
+                elif not blend and any(a < 255 for (_r, _g, _b, a) in px):
+                    m["alphaMode"] = "MASK"
+                    m["alphaCutoff"] = 0.06   # o shader do nativo descarta abaixo de ~6%
+        else:
+            m["name"] = "cor_de_vertice"
+        g.j["materials"].append(m)
+        self.cache[key] = len(g.j["materials"]) - 1
+        return self.cache[key]
+
+
 def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, use_tex=True, unlit=True, quiet=False,
            items=None, model=None):
     """items/model: pose do tools/pose.py (lista de OBJECTs com matriz e a paleta de ossos); sem eles, a hierarquia crua."""
@@ -110,44 +166,10 @@ def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, u
         if tex_path or rtx_path:
             lib = tex.Library(tex_path, rtx_path, ngp_path)
     g = Glb()
-    mats = {}           # chave -> indice do material
     stats = {"objetos": 0, "triangulos": 0, "skinned_fora": 0, "sprites_fora": 0, "sem_textura": 0, "texturas": 0}
     if unlit:
         g.j["extensionsUsed"] = ["KHR_materials_unlit"]
-
-    def material(node, slot, blend):
-        if slot == ngp.SLOT_NOTEX or lib is None:
-            key = ("cor", blend)
-        else:
-            s = slot if slot < min(img.u16(node + 0x5A), 5) else 0
-            tid = img.u16(node + 0x50 + 2 * s)
-            t0 = img.u32(node + 0x70 + 0x30 * s) | (img.u32(node + 0x74 + 0x30 * s) << 32)
-            key = ("tex", tid, t0, blend)
-        if key in mats:
-            return mats[key]
-        m = {"pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 1.0}, "doubleSided": True}
-        if unlit:
-            m["extensions"] = {"KHR_materials_unlit": {}}
-        if blend:
-            m["alphaMode"] = "BLEND"
-        if key[0] == "tex":
-            im = lib.image(key[1], key[2])
-            if im is None:
-                stats["sem_textura"] += 1
-                m["name"] = "tex%d_nao_achada" % key[1]
-            else:
-                w, h, px = im
-                m["name"] = "tex%d" % key[1]
-                m["pbrMetallicRoughness"]["baseColorTexture"] = {"index": g.image(tex.png_bytes(w, h, px), m["name"])}
-                stats["texturas"] += 1
-                if not blend and any(a < 255 for (_r, _g, _b, a) in px):
-                    m["alphaMode"] = "MASK"
-                    m["alphaCutoff"] = 0.06   # o shader do nativo descarta abaixo de ~6%
-        else:
-            m["name"] = "cor_de_vertice"
-        g.j["materials"].append(m)
-        mats[key] = len(g.j["materials"]) - 1
-        return mats[key]
+    material = Materials(g, img, lib, unlit, stats).get
 
     seen_obj = set()
 
