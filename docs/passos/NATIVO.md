@@ -201,6 +201,10 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_RES=<linhas>`, `WOTM_FULLSCREEN=0` | altura do quadro nativo (padrão: a altura do monitor; 224..4320; o PS2 mostra 448) / janela em vez da tela cheia sem borda, que é o padrão (F11 alterna a qualquer hora); a janela abre no tamanho do quadro, reduzida para caber no monitor (launcher, grupo Vídeo). Linha `[native] quadro LxA, janela LxA` quando um dos dois muda |
 | `WOTM_DISC=<pasta>`, `WOTM_ISO=<arquivo>` | forçam a origem dos arquivos do disco (`.RTX`, `.PSS`) em vez de `PS2X_CD_IMAGE`/pasta do ELF |
 | `WOTM_FMV_MUTE=1` | filmes sem áudio |
+| `WOTM_FIXEDSTEP=<n>` | modo determinístico (netcode, `wotm_sync.inc`): cada quadro vale exatamente `n` fields; `timerGetCurTics` vem de um relógio virtual (base do quadro + quantum por chamada), a paridade do `sceGsSyncV` de uma contagem, o `sceCdReadClock` devolve data fixa e a janela não escreve na RAM do jogo |
+| `WOTM_SEED=<n>` | semente fixa das sortes do jogo (`srand` e `gRand`) no `mathfRandInit`, no lugar da tirada do relógio do CD |
+| `WOTM_STATEHASH=<arquivo>`, `WOTM_STATEDUMP=<quadro>` | hash por quadro dos 32 MB do jogo (256 blocos; `tools/statediff.py` compara duas execuções) / cópia da RAM do quadro em `state_<quadro>.bin`; quadros contados desde o `Shell::LoadLevelFiles`. Teste: `tools/determinism_check.ps1` |
+| `WOTM_NOINPUT=1` | nenhum dispositivo do host chega ao jogo (testes; o `PS2X_PAD` continua valendo) |
 | `WOTM_MUTE=1` | tudo sem som (volume mestre do raylib zerado no `snd_StartSoundSystem`): som do jogo e filmes; o `tools/live_check.ps1` liga |
 | `WOTM_IRX=1` | carrega no IOP emulado os IRX que não são de som (SIO2MAN, PADMAN, MCMAN, MCSERV), como antes de 2026-10-18; sem ela nenhum IRX sobe. Só no `ps2EntryRunner.exe`: o `wotm.exe` não tem IOP emulado e a ignora (`FRONTEIRA.md`, passo 6) |
 | `WOTM_MATCH=<jogador>[,<ia>...],<fase>` (0 a 7 IAs), `WOTM_AIVSAI=1` | partida direta sem menu (grupo "Partida" do launcher, que passa `-Auto 0`) / o jogador também sob a IA (seção "partida direta") |
