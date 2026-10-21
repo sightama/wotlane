@@ -676,7 +676,8 @@ namespace wotm_save
     constexpr uint32_t kBoxesUpdate = wotm::fn::update__15McLoadGameBoxesR7McState, kChooseUpdate = wotm::fn::update__12McChooseSlotR7McState;
     // Memoria do jogo que o modal usa: o buffer do savegame.dat do McSelectReel (pagina que nao abre mais): o slot do setSaveData e
     // as fontes (o McTextBox guarda o ponteiro da fonte de cada linha ate desenhar).
-    constexpr uint32_t kScratch = wotm::sym::x_12McSelectReel_global + 0x280, kSlotBuf = kScratch, kFontsBuf = kScratch + 0x100;
+    constexpr uint32_t kScratch = wotm::sym::x_12McSelectReel_global + 0x280, kSlotBuf = kScratch, kFontsBuf = kScratch + 0x100,
+                       kStrBuf = kScratch + 0x1D0;   // 0x280 + 0x1D0 + 0x40 cabe nos 0x540 do McSelectReel
     constexpr int kMaxSlots = 99, kVisibleRows = 10;
     constexpr int kStoryLevels = 11;   // Midtown Park (1) .. Capitol (11)
     const char *const kMonsterTitle[] = {"", "Congar", "Robo-47", "Togera", "Ultra-V", "Preytor", "Spider", "Kineticlops", "Magmo",
@@ -790,11 +791,7 @@ namespace wotm_save
         return std::string(mon < std::size(kMonsterTitle) ? kMonsterTitle[mon] : "?") + " at " + levelTitle(rdram, r.level);
     }
     // A fase do save e a proxima a jogar (Shell::EvaluateOnePlayerStoryStatus soma 1 antes de perguntar): concluidas = fase - 1.
-    int progressOf(const Row &r)
-    {
-        const int done = std::clamp(static_cast<int>(r.level) - 1, 0, kStoryLevels);
-        return done * 100 / kStoryLevels;
-    }
+    int levelsDone(const Row &r) { return std::clamp(static_cast<int>(r.level) - 1, 0, kStoryLevels); }
 
     void sfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t id)
     {
@@ -802,15 +799,16 @@ namespace wotm_save
             guestCall(rdram, ctx, rt, wotm::fn::playShellSFXSound__10ShellSoundi, {sh + 0x2918, id});
     }
 
-    // Uma linha no McTextBox (copiada por ele: o texto vai na pilha, 0x200 abaixo da atual).
+    // Uma linha no McTextBox (ele copia o texto).
     void text(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, const std::string &s, int x, int y, uint32_t font, bool centered = false)
     {
-        const uint32_t sp = (GPR_U32(ctx, 29) - 0x200u) & ~0xFu, str = sp + 0x80;
+        // Num buffer fixo da RAM, nao na pilha: na fase a pilha do EE fica no scratchpad (0x70000000), fora do rdram
+        const uint32_t str = kStrBuf;
         const size_t n = std::min<size_t>(s.size(), 0x3F);
         std::memcpy(rdram + (str & 0x1FFFFFFu), s.data(), n);
         rdram[(str + n) & 0x1FFFFFFu] = 0;
         guestCall(rdram, ctx, rt, wotm::fn::addTextString__9McTextBoxPciibPQ26McPage8FontInfo,
-                  {kTextBox, str, static_cast<uint32_t>(x), static_cast<uint32_t>(y), centered ? 1u : 0u, font}, sp);
+                  {kTextBox, str, static_cast<uint32_t>(x), static_cast<uint32_t>(y), centered ? 1u : 0u, font});
     }
 
     void modalOpen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t page, bool saving)
@@ -835,7 +833,8 @@ namespace wotm_save
         m.top = std::max(0, m.cur - kVisibleRows + 1);
         w32(rdram, kTextBox + 0xC94, 1);   // McTextBox::setDontFade(true): o texto troca sem o cruzamento (como no McAskToSave)
         guestCall(rdram, ctx, rt, wotm::fn::setDestDims__12McBackgroundfff, {kBackground}, 0, {1.0f, 1.0f, 0.0f});
-        std::fprintf(stderr, "[wotm] save: lista de saves aberta (%s, %zu linhas)\n", saving ? "gravar" : "carregar", m.rows.size());
+        std::fprintf(stderr, "[wotm] save: lista de saves aberta (%s, %zu linhas, pilha 0x%08X)\n", saving ? "gravar" : "carregar",
+                     m.rows.size(), GPR_U32(ctx, 29));
     }
     void modalClose(uint8_t *rdram)
     {
@@ -846,7 +845,7 @@ namespace wotm_save
     void modalDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, const Row *saving)
     {
         const Modal &m = g_modal;
-        // A fonte do menu nao tem '%' nem ':' (saem em branco). Fontes do McPage menores (a lista e longa): copias em kFontsBuf com os tamanhos do makeCurrentFont (+0, +4, +8, +0xC, em
+        // A fonte do menu nao tem '%', ':' nem '/' (saem em branco). Maior linha: "99. Kineticlops at Century Airfield". Fontes do McPage menores (a lista e longa): copias em kFontsBuf com os tamanhos do makeCurrentFont (+0, +4, +8, +0xC, em
         // subpixels) escalados
         auto scaled = [&](int idx, uint32_t src, float k) {
             const uint32_t dst = kFontsBuf + static_cast<uint32_t>(idx) * 0x28;
@@ -857,7 +856,7 @@ namespace wotm_save
         };
         const uint32_t fTitle = scaled(0, wotm::sym::x_6McPage_s_titleFont, 0.7f), fText = scaled(1, wotm::sym::x_6McPage_s_font, 0.8f);
         const uint32_t fName = scaled(4, wotm::sym::x_6McPage_s_titleFont, 0.55f);   // titulo da esquerda: cabe na metade
-        const uint32_t fSel = scaled(2, wotm::sym::x_6McPage_s_selectedFont, 0.62f), fUnsel = scaled(3, wotm::sym::x_6McPage_s_unselectedFont, 0.7f);
+        const uint32_t fSel = scaled(2, wotm::sym::x_6McPage_s_selectedFont, 0.52f), fUnsel = scaled(3, wotm::sym::x_6McPage_s_unselectedFont, 0.7f);
         // Esquerda: o save da linha escolhida (gravar num vazio: o que vai ser gravado)
         const Row *show = nullptr;
         if (!m.rows.empty())
@@ -871,8 +870,9 @@ namespace wotm_save
         else if (show)
         {
             text(rdram, ctx, rt, rowTitle(rdram, *show), kLeftX, 40, fName);
-            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, 150, fText);
-            text(rdram, ctx, rt, "Adventure progress " + std::to_string(progressOf(*show)) + " percent", kLeftX, 170, fText);
+            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, 138, fText);
+            text(rdram, ctx, rt, "Adventure progress", kLeftX, 158, fText);
+            text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, 174, fText);
         }
         else
             text(rdram, ctx, rt, "No saved adventures", kLeftX, 40, fName);

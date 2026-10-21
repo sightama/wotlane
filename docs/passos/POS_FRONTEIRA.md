@@ -203,10 +203,10 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   `McLoadGameBoxes` vira um modal com a moldura do `McBackground` e o texto do `McTextBox` (fontes do `McPage` reduzidas, sem
   cruzamento ao trocar de linha): à direita a lista do `save.json` (até 99 slots, 10 visíveis, cima/baixo e esquerda/direita de
   10 em 10), à esquerda o save escolhido ("<monstro> at <fase>", vidas, progresso = fases concluídas / 11, sem decimal; a fase do
-  save é a próxima a jogar). X carrega pelo `MonsterMc::setSaveData`; triângulo/círculo é o "voltar" da página. Gravar: o update
+  save é a próxima a jogar; "N of 11 levels" na linha de baixo). X carrega pelo `MonsterMc::setSaveData`; triângulo/círculo é o "voltar" da página. Gravar: o update
   do `McChooseSlot` (depois do "salvar?") vira o mesmo modal; slot vazio grava direto no JSON, ocupado pede um segundo X. Foto:
   `docs/screenshots/2026-10-20/2026-10-20_lista_de_saves_carregar.png`.
-- A fonte do menu não tem `%` nem `:` (o progresso sai "45 percent").
+- A fonte do menu não tem `%` nem `:` (o progresso sai "4 of 11 levels"; nem `/`).
 - Falta: logo do monstro e fundo da fase à esquerda (o espaço já fica livre), depois o monstro 3D. Revisar os textos de memory
   card que sobram na aventura.
 - O `savegame.dat` dos cartões só leva os 20 primeiros slots; os outros só existem no JSON.
