@@ -352,13 +352,15 @@ static float viewAspect()
     const float sh = static_cast<float>(GetScreenHeight());
     return sh > 0.f ? std::clamp(static_cast<float>(GetScreenWidth()) / sh, 4.f / 3.f, 32.f / 9.f) : 4.f / 3.f;
 }
-// Altura do quadro nativo em pixels (WOTM_RES=<linhas>, padrao 720; a tela do PS2 tem 448, 224 por campo); a largura sai da proporcao.
-// O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
+// Altura do quadro nativo em pixels (WOTM_RES=<linhas>; sem ela, a altura do monitor da janela; a tela do PS2 tem 448, 224 por campo);
+// a largura sai da proporcao. O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
 static int renderHeight()
 {
     static const int h = []() {
         const char *s = std::getenv("WOTM_RES");
-        const int v = s ? std::atoi(s) : 0;
+        int v = s ? std::atoi(s) : 0;
+        if (v <= 0 && IsWindowReady())
+            v = GetMonitorHeight(GetCurrentMonitor());
         return v > 0 ? std::clamp(v, 224, 4320) : 720;
     }();
     return g_force43 ? 720 : h;
@@ -429,7 +431,7 @@ static void initWindowAspect()
     done = true;
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
         initPresentRate();
-    if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
+    if (const char *s = std::getenv("WOTM_FULLSCREEN"); !s || !*s || *s != '0')   // padrao: tela cheia sem borda; WOTM_FULLSCREEN=0 = janela
         setFullscreen(true);
     else
         fitWindow();
@@ -1137,6 +1139,16 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // quadro nativo: renderHeight de altura (WOTM_RES) na proporcao da tela (wotm_live::viewAspect); a tela do GS e a faixa 4:3 central
     const int RH = wotm_live::renderHeight(), RW = static_cast<int>(std::lround(RH * wotm_live::viewAspect()));
     S.scene.wide = static_cast<float>(RW) / (RH * 4.f / 3.f);
+    {   // uma linha quando o quadro ou a janela mudam de tamanho
+        static int lastRW = 0, lastRH = 0, lastSW = 0, lastSH = 0;
+        const int sw = GetScreenWidth(), sh = GetScreenHeight();
+        if (RW != lastRW || RH != lastRH || sw != lastSW || sh != lastSH)
+        {
+            lastRW = RW; lastRH = RH; lastSW = sw; lastSH = sh;
+            std::fprintf(stderr, "[native] quadro %dx%d, janela %dx%d (%s; WOTM_RES, WOTM_FULLSCREEN)\n", RW, RH, sw, sh,
+                         IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE) ? "tela cheia" : "janela");
+        }
+    }
     wotm_live::Capture &cap = wotm_live::capture();
     cap.wide.store(S.scene.wide, std::memory_order_relaxed);
     cap.on.store(true, std::memory_order_relaxed);

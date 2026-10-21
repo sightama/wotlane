@@ -17,13 +17,16 @@ $repo = Split-Path $PSScriptRoot -Parent
 $runtime = if ($env:WOTM_RECOMP_DIR) { $env:WOTM_RECOMP_DIR } elseif (Test-Path "$repo\.wotm_recomp_dir") { (Get-Content "$repo\.wotm_recomp_dir" -TotalCount 1).Trim() } else { '' }
 if (-not $runtime -or -not (Test-Path "$runtime\run_live.ps1")) { throw "Pasta do runtime nao encontrada: rode run_live.bat uma vez ou defina WOTM_RECOMP_DIR." }
 
+# padroes da checagem (antes de -Env, que pode troca-los; "NOME=" apaga): sem som, janela de 720 linhas que nao cobre a tela
+if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }
+if (-not $env:WOTM_FULLSCREEN) { $env:WOTM_FULLSCREEN = '0' }
+if (-not $env:WOTM_RES) { $env:WOTM_RES = '720' }
 foreach ($pair in ($Env -split ';' | Where-Object { $_.Trim() })) {
     $i = $pair.IndexOf('=')
     if ($i -lt 1) { throw "Par invalido em -Env: $pair" }
     [Environment]::SetEnvironmentVariable($pair.Substring(0, $i).Trim(), $pair.Substring($i + 1))
 }
 $env:WOTM_REPO = $repo
-if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }   # checagem sem som
 
 $log = Join-Path $runtime 'live.err.log'
 if (Test-Path $log) { Remove-Item $log -Force }

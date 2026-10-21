@@ -548,7 +548,7 @@ class Launcher : Form
         if (dynWidth.Checked) psi.EnvironmentVariables.Remove("WOTM_ASPECT");
         else psi.EnvironmentVariables["WOTM_ASPECT"] = Aspects[aspect.SelectedIndex];
         if (fullscreen.Checked) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "1";
-        else psi.EnvironmentVariables.Remove("WOTM_FULLSCREEN");
+        else psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "0";   // sem a variavel o jogo abre em tela cheia
         if (rate.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_HZ"] = Rates[rate.SelectedIndex];
         else psi.EnvironmentVariables.Remove("WOTM_HZ");
         if (vsync.Checked) psi.EnvironmentVariables.Remove("WOTM_VSYNC");

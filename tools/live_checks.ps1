@@ -1,5 +1,5 @@
-# ABOUTME: Checagens ao vivo do multiplayer de ate 4 jogadores (controles 3/4, partida com 4, tela em 4): cada uma roda o jogo
-# ABOUTME: com tools\live_check.ps1 e confere o log. Uso: powershell -File tools\checks_4p.ps1 [-Only <nome>]; sai com 1 se alguma falhar.
+# ABOUTME: Checagens do jogo ao vivo (multiplayer de ate 4, tela, regressoes): cada uma roda o jogo com tools\live_check.ps1 e
+# ABOUTME: confere o log. Uso: powershell -File tools\live_checks.ps1 [-Only <nome>]; sai com 1 se alguma falhar.
 param([string]$Only = '')
 $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'live_check.ps1'
@@ -28,6 +28,9 @@ $checks = [ordered]@{
     # a foto shot_30.png (discroot) fica para conferir os quadrantes a olho
     'tela_4'        = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;WOTM_SPLITLOG=1;WOTM_SHOTS=30'; Secs = 40
                          Expect = '\[split\] g=\d+ vista 3:|||4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]' }
+    # padrao sem WOTM_FULLSCREEN/WOTM_RES: tela cheia sem borda e quadro na resolucao do monitor (esta maquina: 2560x1440)
+    'tela_nativa'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_MATCH=3,1,1'; Secs = 25
+                         Expect = '\[native\] quadro 2560x1440, janela 2560x1440 \(tela cheia' }
     # a vista unificada (todos numa tela so no combate de perto, gUseUnifiedView 0x6F8A8C) nunca liga com 3+ jogadores
     'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
                          Expect = '6f8a8c=00000000'
