@@ -6,6 +6,7 @@ param([string]$Dir, [string]$Bat, [string]$Log)
 
 $ErrorActionPreference = 'Stop'
 $logPath  = Join-Path $Dir $Log
+New-Item -ItemType Directory -Force (Split-Path $logPath -Parent) | Out-Null   # logs\ do runtime: o .bat grava ali
 $timeFile = Join-Path $Dir (".wotm_build_secs_" + [IO.Path]::GetFileNameWithoutExtension($Bat))
 
 $expected = if ($Bat -eq 'build.bat') { 300.0 } else { 90.0 }

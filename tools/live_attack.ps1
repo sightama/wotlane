@@ -1,5 +1,5 @@
 # Partida automatica em que o monstro anda e ataca (soco/chute) depois de chegar na fase: gera eventos de destruicao para testar o desenho nativo.
-# Imprime [destr] (WOTM_DESTRSTAT) e [cam] (WOTM_CAMLOG) em atk.err.log, na pasta do runtime. -Dump "3900,4000" grava ram_<n>.bin/vram_<n>.bin em discroot
+# Imprime [destr] (WOTM_DESTRSTAT) e [cam] (WOTM_CAMLOG) em logs\atk.err.log, na pasta do runtime. -Dump "3900,4000" grava ram_<n>.bin/vram_<n>.bin em discroot
 # (quadros de apresentacao; renderize com build\viewer.exe ram_<n>.bin --disc disc). Uso: powershell -File tools\live_attack.ps1 [-Seconds 140] [-Dump "..."]
 param([int]$Seconds = 130, [string]$Dump = "")
 $repo = Split-Path $PSScriptRoot -Parent
@@ -22,7 +22,8 @@ $env:WOTM_DESTRSTAT = "1"; $env:WOTM_CAMLOG = "1"
 if ($Dump) { $env:PS2X_DUMP_RAM = $Dump; $env:PS2X_GS_UPLOADS = "1" }   # uploads do GS ligados: a VRAM do dump guarda as texturas dos efeitos
 $env:PS2X_CD_IMAGE = "$repo\ISO\SCUS_971.97.War of the Monsters.iso"
 Set-Location $dr
-$p = Start-Process -FilePath "$root\build_dev\ps2xRuntime\ps2EntryRunner.exe" -ArgumentList "`"$dr\SCUS_971.97`"" -WorkingDirectory $dr -PassThru -RedirectStandardOutput "$root\atk.out.log" -RedirectStandardError "$root\atk.err.log"
+New-Item -ItemType Directory -Force "$root\logs" | Out-Null
+$p = Start-Process -FilePath "$root\build_dev\ps2xRuntime\ps2EntryRunner.exe" -ArgumentList "`"$dr\SCUS_971.97`"" -WorkingDirectory $dr -PassThru -RedirectStandardOutput "$root\logs\atk.out.log" -RedirectStandardError "$root\logs\atk.err.log"
 Start-Sleep -Seconds $Seconds
 if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
 "fim"
