@@ -10,9 +10,11 @@ O que sai certo: objetos estaticos (fase, predios, destrutiveis intactos, menu),
 aplicada, a textura de cada secao (Vtx.slot -> texId/gsTexCtx do objeto), UV, cor de vertice e normais. A malha vem do mesmo
 decodificador do nativo (ngp.decode_mesh). Eixos: o jogo usa Z para cima; o glTF, Y para cima (x, z, -y).
 
-O que ainda nao sai: monstros em pose. As malhas skinned guardam as posicoes no espaco de cada osso e as matrizes vem da
-animacao calculada pelo jogo; sem avaliar o esqueleto (SKEL_BONE/ANIM_XFORM e curvas do AnimCurve.cpp) elas ficam de fora, ou
-com --skinned saem cruas, umas sobre as outras. Partes rigidas sob ANIM_XFORM saem na matriz identidade pelo mesmo motivo.
+Monstros (conferido em 2026-10-20 com os 13 monstros, traje 0, e o validador oficial do glTF: 0 erros): com --skinned o corpo
+sai inteiro na pose de base (pose T), porque as posicoes das malhas skinned estao no espaco do modelo em repouso (a paleta do
+jogo e restPoseInv * osso). O que ainda nao sai: animacao e esqueleto (curvas do AnimCurve.cpp, SKEL_BONE/ANIM_XFORM). Partes
+rigidas sob ANIM_XFORM saem na matriz identidade, e entram junto objetos que nao sao o corpo (retratos do HUD, projeteis,
+efeitos), amontoados perto da origem.
 Sprites (halo dos power-ups) tambem ficam de fora. A cor de vertice ja traz a luz pre-calculada das fases, por isso o material
 e "unlit" por padrao.
 
