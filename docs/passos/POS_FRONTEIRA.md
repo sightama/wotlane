@@ -286,6 +286,18 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros já está na fila
   (`PROXIMOS_PASSOS.md`).
+- **Ícones de botão próprios, em 2D** (anotado em 2026-10-21; custo médio, alguns dias): esconder os ícones do jogo (X, O, quadrado,
+  triângulo) e desenhar sprites nossos em posição fixa na tela. Assim eles ficam nítidos e se ajustam ao widescreen, e podem mostrar a
+  tecla real do teclado ou o botão do controle em uso.
+  - Hoje são objetos 3D do `McButtons` (ids `0x1F51..0x1F54`, `0x240E..0x2411`) que o `showButtons(currScreen)` (screen.s) põe uma vez,
+    na troca de tela, à frente da câmera (`uiAlignItemWithCamera`), sem nunca realinhar. Há 21 casos de posição por tela; as páginas do
+    memory card usam outro caminho, o `McButtons::drawButtonsForString` (`McTextBox::update`), que encaixa o ícone no meio do texto. O
+    fade vem do `screenSetButtonAlpha` (+0x4C do filho, `NATIVO.md`).
+  - Bug que motivou: no menu principal, apertando X/Start cedo, o X da legenda anda junto com a câmera. A causa é o nosso
+    `wotm_menu.inc`, que aceita o aperto durante a animação 1 (a câmera recuando do telão). O `showButtons` roda com a câmera ainda em
+    movimento e o ícone fica preso no mundo. O retail ignora o botão até a câmera parar, então lá não acontece. Paliativo barato se
+    precisar antes: realinhar os ícones visíveis a cada quadro enquanto a câmera anima (de novo o `showButtons`, ou rebasear no
+    nativo com `M' = M · V_show⁻¹ · V_agora`, como na interpolação).
 
 ## Fora da ordem
 - **Online:** não é prioridade. Com o multiplayer local de 4 (item 11), o Steam Remote Play Together e o Parsec já permitem jogar
