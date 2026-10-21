@@ -39,3 +39,7 @@ tools/pcsx2_auto/*.bin
 # launcher compilado (tools/launcher/build.bat) e o estado das caixas
 /WotM_Launcher.exe
 /WotM_Launcher.ini
+
+# notas locais (nunca versionar)
+CLAUDE.local.md
+docs/plans/
