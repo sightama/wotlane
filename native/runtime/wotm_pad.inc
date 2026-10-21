@@ -1,7 +1,8 @@
-// wotm_pad.inc: que controles e o teclado alimentam cada porta do jogo (porta 0 = jogador 1, porta 1 = jogador 2).
-// Incluido por wotm_live.inc (escopo global de ps2_runtime.cpp). O runtime (ps2_pad.cpp) consulta g_ps2PadDeviceMap a cada leitura.
-// Os controles conectados entram na ordem do raylib (o primeiro conectado e o jogador 1, o segundo o jogador 2), sem buracos:
-// um controle desplugado passa a vez ao seguinte.
+// wotm_pad.inc: que controles e o teclado alimentam cada controle do jogo (controle n = jogador n + 1, de 0 a 3; o 2 e o 3 sao o
+// slot 1 do multitap nas portas 0 e 1). Incluido por wotm_live.inc (escopo global de ps2_runtime.cpp). O runtime (ps2_pad.cpp)
+// consulta g_ps2PadDeviceMap a cada leitura.
+// Os controles conectados entram na ordem do raylib (o primeiro conectado e o jogador 1, o segundo o jogador 2, ate o quarto),
+// sem buracos: um controle desplugado passa a vez ao seguinte.
 //   Padrao: o teclado e o mesmo jogador do primeiro controle (jogador 1).
 //   WOTM_KBSEPARATE=1: o teclado e um dispositivo a parte, depois dos controles (sem controle, jogador 1; com um, jogador 2;
 //   com dois, sobra).
@@ -32,9 +33,9 @@ static uint32_t deviceMap(int port)
             devs |= PS2_PAD_DEV_KEYBOARD;
     }
 
-    // uma linha por porta quando o que a alimenta muda (inicio, controle plugado ou desplugado)
-    static uint32_t last[2] = {~0u, ~0u};
-    if (port >= 0 && port < 2 && devs != last[port])
+    // uma linha por controle quando o que o alimenta muda (inicio, controle plugado ou desplugado)
+    static uint32_t last[4] = {~0u, ~0u, ~0u, ~0u};
+    if (port >= 0 && port < 4 && devs != last[port])
     {
         last[port] = devs;
         std::string what;

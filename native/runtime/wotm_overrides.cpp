@@ -1185,7 +1185,7 @@ namespace
         bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
         uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
     } g_lockToggle[4];
-    uint8_t g_padDir[2] = {};    // por porta: bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
+    uint8_t g_padDir[4] = {};    // por controle (port + 2 * slot = jogador): bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
 
     bool ramOk(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
     uint16_t rd16(uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + a, 2); return v; }
@@ -1365,7 +1365,7 @@ namespace
         b[kPadR1] = saved[kPadR2];
         b[kPadR2] = saved[kPadL1] ? 0xFF : 0;     // defesa: L1
         b[kPadL2] = 0;
-        const uint8_t dirs = slot < 2 ? g_padDir[slot] : 0;
+        const uint8_t dirs = slot < 4 ? g_padDir[slot] : 0;
         for (int i = 0; i < 2; ++i)
         {
             const bool held = (dirs >> i) & 1u;
@@ -1457,12 +1457,12 @@ namespace
 
     void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t port = GPR_U32(ctx, 4), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
+        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
         g_origPadReadLock(rdram, ctx, runtime);
-        if (port < 2 && GPR_U32(ctx, 2) != 0u && ramOk(data, 32u))
+        if (port < 2 && slot < 2 && GPR_U32(ctx, 2) != 0u && ramOk(data, 32u))
         {
             const uint8_t btn = static_cast<uint8_t>(~rdram[data + 2]);   // ativos em 0: 0x80 esquerda, 0x20 direita
-            g_padDir[port] = static_cast<uint8_t>(((btn >> 7) & 1u) | (((btn >> 5) & 1u) << 1));
+            g_padDir[port + 2 * slot] = static_cast<uint8_t>(((btn >> 7) & 1u) | (((btn >> 5) & 1u) << 1));
         }
     }
 
