@@ -1573,6 +1573,14 @@ namespace
     constexpr uint8_t kLagProf[][3] = {{80, 28, 26}, {118, 40, 38}, {160, 56, 53}, {160, 56, 53}, {187, 103, 104}, {184, 95, 95}};
     constexpr uint8_t kEnergyProf[][3] = {{13, 23, 67},    {37, 55, 133},  {46, 67, 153},  {112, 127, 153}, {146, 150, 153},
                                           {85, 105, 153},  {46, 67, 153},  {28, 43, 112},  {7, 15, 51}};
+    // Energia acima do maximo (ate o maxLevel, a furia): rosa por cima do azul (perfil medido num print da barra do jogador); com a furia
+    // cheia (m_boostFull) a barra toda pisca entre roxo e rosa. Ritmo medido na barra do jogador (gravacao a 60 quadros/s com
+    // WOTM_CHEATS=furia): ciclo de ~6 quadros, ~2 deles em rosa.
+    constexpr uint8_t kOverProf[][3] = {{33, 4, 19},     {108, 19, 70},  {182, 33, 118}, {223, 40, 145}, {255, 56, 201},
+                                        {255, 50, 175},  {182, 33, 118}, {119, 21, 77},  {38, 6, 24}};
+    constexpr uint8_t kFuryDimProf[][3] = {{16, 10, 28},  {42, 22, 91},  {59, 35, 116}, {98, 43, 157}, {98, 55, 197},
+                                           {87, 42, 178}, {51, 31, 115}, {39, 28, 82},  {14, 11, 30}};
+    constexpr uint32_t kFuryBlinkPeriod = 6u, kFuryBlinkOn = 2u;   // quadros
     constexpr uint8_t kExhaustedProf[][3] = {{30, 30, 34},  {60, 60, 68},   {80, 80, 90},   {120, 120, 128}, {140, 140, 146},
                                              {100, 100, 110}, {80, 80, 90},  {55, 55, 62},   {25, 25, 30}};
 
@@ -1737,7 +1745,20 @@ namespace
         if (exhausted)
             gradBar(st.x0, st.y0, st.x0 + stW * energy, st.y1, kExhaustedProf);
         else
+        {
             gradBar(st.x0, st.y0, st.x0 + stW * energy, st.y1, kEnergyProf);
+            // o que passa do maximo, como no Hud::update: (cur - max) / (maxLevel - max)
+            float cur, max, top;
+            std::memcpy(&max, rdram + m + kMonsterStamina, 4);
+            std::memcpy(&top, rdram + m + kMonsterStamina + 0x8u, 4);
+            std::memcpy(&cur, rdram + m + kMonsterStamina + 0x10u, 4);
+            const float over = top > max && std::isfinite(cur) ? std::clamp((cur - max) / (top - max), 0.f, 1.f) : 0.f;
+            if (fury)
+                gradBar(st.x0, st.y0, st.x1, st.y1,
+                        FAST_READ32(wotm::sym::g_frame) % kFuryBlinkPeriod < kFuryBlinkOn ? kOverProf : kFuryDimProf);
+            else if (over > 0.f)
+                gradBar(st.x0, st.y0, st.x0 + stW * over, st.y1, kOverProf);
+        }
     }
 
     void drawHealthIconBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
