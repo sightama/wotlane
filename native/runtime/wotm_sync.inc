@@ -49,9 +49,11 @@ namespace wotm_sync
     }
 
     // Entrada por quadro (base do netcode): o scePadRead(porta, slot, dados) devolve 32 bytes por controle (controle = porta + 2 * slot,
-    // jogadores 1..4) e o jogo le cada controle duas vezes por quadro. Com o passo fixo, a primeira leitura do quadro e guardada e a
-    // segunda devolve a mesma (o que o jogo ve num quadro nao muda no meio dele).
-    //   WOTM_INPUTREC=<arquivo>: grava {quadro, controle, 32 bytes} da entrada guardada de cada quadro.
+    // jogadores 1..4) e o jogo le cada controle duas vezes por quadro. Com o passo fixo, o estado de cada controle (botoes e analogicos,
+    // wotm_net::PadState) vem de uma linha do tempo por quadro (native/net/wotm_lockstep.hpp): os dispositivos locais sao amostrados na
+    // fronteira do quadro e valem WOTM_INPUTDELAY quadros depois (o atraso do lockstep; padrao 0), e as duas leituras do quadro veem o
+    // mesmo estado. O runtime o formata como um controle de verdade (setPadOverrideState: modo e pressao vem do estado da porta).
+    //   WOTM_INPUTREC=<arquivo>: grava {quadro, controle, estado} da entrada aplicada em cada quadro desde a carga da fase.
     //   WOTM_INPUTPLAY=<arquivo>: o jogo ve a entrada gravada (pelo indice do quadro) em vez da dos dispositivos.
     constexpr uint32_t kPadRead = wotm::fn::scePadRead;
     constexpr int kControllers = 4;
@@ -59,49 +61,67 @@ namespace wotm_sync
     {
         uint32_t index;
         uint32_t controller;
-        uint8_t data[32];
+        wotm_net::PadState state;
     };
+    PS2Runtime *g_runtime = nullptr;
     PS2Runtime::RecompiledFunction g_origPadRead = nullptr;
-    uint8_t g_latch[kControllers][32] = {};
-    bool g_latched[kControllers] = {};
+    uint32_t g_inputDelay = 0;
+    wotm_net::InputTimeline g_inputs(kControllers, 0);
     FILE *g_inputRec = nullptr;
     std::vector<InputRecord> g_inputPlay;
-    size_t g_playPos = 0;
-    uint32_t g_index = 0;   // quadro desde a carga da fase (frame)
+    bool g_levelLoaded = false;   // ja houve carga de fase (a gravacao e a repeticao contam os quadros dela)
+    uint32_t g_index = 0;         // quadro desde a carga da fase (frame)
+    bool g_loggedLocal = false, g_loggedApplied = false;
 
-    const uint8_t *playedInput(uint32_t index, uint32_t controller)
+    wotm_net::PadState sampleLocal(int controller)
     {
-        while (g_playPos < g_inputPlay.size() && g_inputPlay[g_playPos].index < index)
-            ++g_playPos;
-        for (size_t i = g_playPos; i < g_inputPlay.size() && g_inputPlay[i].index == index; ++i)
-            if (g_inputPlay[i].controller == controller)
-                return g_inputPlay[i].data;
-        return nullptr;
+        uint8_t d[32];
+        wotm_net::PadState s;
+        if (g_runtime && g_runtime->padBackend().readState(controller & 1, controller >> 1, d, sizeof d))
+        {
+            s.buttons = static_cast<uint16_t>(d[2] | (d[3] << 8));
+            s.rx = d[4];
+            s.ry = d[5];
+            s.lx = d[6];
+            s.ly = d[7];
+        }
+        return s;
+    }
+
+    // comeco do quadro `index`: amostra os controles locais (valem em index + atraso)
+    void sampleInputs(uint32_t index)
+    {
+        if (!g_inputPlay.empty())
+            return;
+        for (int c = 0; c < kControllers; ++c)
+        {
+            const wotm_net::PadState s = sampleLocal(c);
+            const uint32_t at = g_inputs.scheduleLocal(c, index, s);
+            if (g_levelLoaded && !g_loggedLocal && s != wotm_net::PadState{})
+            {
+                g_loggedLocal = true;
+                std::fprintf(stderr, "[sync] primeira entrada local: amostra do quadro %u vale no quadro %u\n", index, at);
+            }
+        }
+        g_inputs.discardBefore(index > 64u ? index - 64u : 0u);
     }
 
     void padReadLatched(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const bool entry = ctx->pc == kPadRead;
-        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu, ra = GPR_U32(ctx, 31);
+        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5);
+        const bool ours = ctx->pc == kPadRead && port <= 1u && slot <= 1u;
+        const wotm_net::PadState s = ours ? g_inputs.get(static_cast<int>(port + 2u * slot), g_index) : wotm_net::PadState{};
+        if (ours)
+            ps2_stubs::setPadOverrideState(s.buttons, s.lx, s.ly, s.rx, s.ry);
         g_origPadRead(rdram, ctx, runtime);
-        const uint32_t c = port + 2u * slot;
-        if (!entry || ctx->pc != ra || port > 1u || slot > 1u || GPR_U32(ctx, 2) == 0u || data + 32u > kGuestRam)
+        if (!ours)
             return;
-        if (!g_latched[c])
+        ps2_stubs::clearPadOverrideState();
+        if (g_levelLoaded && !g_loggedApplied && s != wotm_net::PadState{})
         {
-            if (const uint8_t *p = g_inputPlay.empty() ? nullptr : playedInput(g_index, c))
-                std::memcpy(g_latch[c], p, 32);
-            else
-                std::memcpy(g_latch[c], rdram + data, 32);
-            g_latched[c] = true;
-            if (g_inputRec)
-            {
-                InputRecord r{g_index, c, {}};
-                std::memcpy(r.data, g_latch[c], 32);
-                std::fwrite(&r, sizeof r, 1, g_inputRec);
-            }
+            g_loggedApplied = true;
+            std::fprintf(stderr, "[sync] primeira entrada nao neutra aplicada no quadro %u\n", g_index);
         }
-        std::memcpy(rdram + data, g_latch[c], 32);
     }
 
     int g_fixedStep = 0;
@@ -151,12 +171,12 @@ namespace wotm_sync
                 g_inputPlay.push_back(r);
             std::fclose(f);
         }
-        std::stable_sort(g_inputPlay.begin(), g_inputPlay.end(), [](const InputRecord &a, const InputRecord &b) { return a.index < b.index; });
         std::fprintf(stderr, "[sync] entrada gravada: %zu registros de %s\n", g_inputPlay.size(), path);
     }
 
     void init(PS2Runtime &runtime)
     {
+        g_runtime = &runtime;
         if (const char *e = std::getenv("WOTM_SEED"); e && *e && (g_origRandInit = runtime.lookupFunction(kRandInit)))
         {
             g_seed = std::clamp(std::atoll(e), 1LL, 0x7FFFFFFFLL);   // 0 faria o jogo ler o relogio
@@ -174,6 +194,11 @@ namespace wotm_sync
                 g_inputRec = std::fopen(r, "wb");
             if (const char *p = std::getenv("WOTM_INPUTPLAY"); p && *p)
                 loadInputPlay(p);
+            if (const char *d = std::getenv("WOTM_INPUTDELAY"); d && *d)
+                g_inputDelay = static_cast<uint32_t>(std::clamp(std::atoi(d), 0, 30));
+            g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
+            sampleInputs(0);
+            std::fprintf(stderr, "[sync] atraso de entrada: %u quadro(s)\n", g_inputDelay);
         }
         if (const char *e = std::getenv("WOTM_STATEHASH"); e && *e)
             g_hashFile = std::fopen(e, "wb");
@@ -188,8 +213,13 @@ namespace wotm_sync
     void levelLoad()
     {
         g_index = 0;
-        g_playPos = 0;
-        std::fill(std::begin(g_latched), std::end(g_latched), false);
+        g_levelLoaded = true;
+        if (!g_fixedStep)
+            return;
+        g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
+        for (const InputRecord &r : g_inputPlay)
+            g_inputs.set(static_cast<int>(r.controller), r.index, r.state);
+        sampleInputs(0);
     }
 
     // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields desde o timerSetFrameStart)
@@ -203,9 +233,17 @@ namespace wotm_sync
             g_virtualTics += step * 9619u;
             g_ticCalls = 0;
             wotmSoundFrame(step);   // o som anda o mesmo tanto, na thread do jogo (o fim de cada som vira funcao dos quadros)
-            std::fill(std::begin(g_latched), std::end(g_latched), false);
-            if (g_inputRec && (g_index & 63u) == 0u)
-                std::fflush(g_inputRec);
+            if (g_inputRec && g_levelLoaded)
+            {
+                for (int c = 0; c < kControllers; ++c)
+                {
+                    const InputRecord r{g_index, static_cast<uint32_t>(c), g_inputs.get(c, g_index)};
+                    std::fwrite(&r, sizeof r, 1, g_inputRec);
+                }
+                if ((g_index & 63u) == 0u)
+                    std::fflush(g_inputRec);
+            }
+            sampleInputs(g_index + 1u);
         }
         const uint32_t index = g_index++;
         if (g_hashFile)

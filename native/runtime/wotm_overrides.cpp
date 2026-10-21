@@ -25,6 +25,14 @@
 #include <cstring>
 #include <string>
 
+#include "net/wotm_lockstep.hpp"   // linha do tempo das entradas do modo deterministico e do netcode (wotm_sync.inc)
+
+namespace ps2_stubs   // Kernel/Stubs/Pad.cpp: estado de controle que o scePadRead devolve no lugar dos dispositivos
+{
+    void setPadOverrideState(uint16_t buttons, uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry);
+    void clearPadOverrideState();
+}
+
 extern std::atomic<unsigned long long> g_wotmIdleUs;
 void wotmHostProfWatchThisThread();                            // ps2_hostprof.cpp (PS2X_HOSTPROF)
 void wotmHostProfDump(long long t0, long long t1, const char *tag);
