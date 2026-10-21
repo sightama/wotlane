@@ -158,6 +158,7 @@ class Launcher : Form
         Dictionary<string, string> saved = LoadIni();
         left.Controls.Add(VideoGroup(saved, tips));
         left.Controls.Add(MatchGroup(saved, tips));
+        left.Controls.Add(OnlineGroup(saved, tips));
         left.Controls.Add(CheatsGroup(saved, tips));
         GroupBox gb = null;
         FlowLayoutPanel inner = null;
@@ -340,7 +341,7 @@ class Launcher : Form
     void UpdateMatch()
     {
         bool on = matchOn.Checked;
-        matchPlayer.Enabled = matchLevel.Enabled = on;
+        // monstro e fase valem tambem para a partida em rede (grupo Online); as IAs so na partida direta
         foreach (ComboBox cb in matchAIs) cb.Enabled = on;
         int total = 1 + MatchFoes();
         string txt = total == 1 ? "Solo: just you on the stage." : total + " monsters in the fight.";
@@ -354,6 +355,156 @@ class Launcher : Form
         foreach (ComboBox cb in matchAIs) if (cb.SelectedIndex > 0) parts.Add(MonsterIds[cb.SelectedIndex - 1].ToString());
         parts.Add(LevelIds[matchLevel.SelectedIndex].ToString());
         return string.Join(",", parts.ToArray());
+    }
+
+    // Partida em rede pelo wotm_server (native/net): o launcher fala com o lobby (LobbyClient.cs) e, quando alguem comeca a partida,
+    // abre o jogo com o ambiente da linha MATCH (WOTM_NET, ficha, monstros, fase, semente, passo, jogador local). O monstro e o "Your
+    // monster" e a fase e a "Stage" do grupo Match. "Host server here" roda o wotm_server desta pasta (tools\build_net.bat o compila).
+    readonly TextBox netServer = new TextBox { Width = 200 };
+    readonly TextBox netName = new TextBox { Width = 160 };
+    readonly ComboBox netLobby = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
+    readonly Label netInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
+    readonly Timer netTimer = new Timer { Interval = 200 };
+    LobbyClient lobby;
+    string lobbyHost = "";
+
+    GroupBox OnlineGroup(Dictionary<string, string> saved, ToolTip tips)
+    {
+        var gb = new DarkGroupBox { Text = "Online (wotm_server)", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
+        gb.Controls.Add(inner);
+        string v;
+        netServer.Text = saved.TryGetValue(":NetServer", out v) && v.Length > 0 ? v : "127.0.0.1:7777";
+        tips.SetToolTip(netServer, "host:port of a wotm_server (your own with 'Host server here', a friend's public IP, or a VPN address). " +
+            "The host forwards this port, TCP and UDP, on the router.");
+        inner.Controls.Add(Row("Server", netServer));
+        netName.Text = saved.TryGetValue(":NetName", out v) && v.Length > 0 ? v : LobbyClient.CleanName(Environment.UserName);
+        inner.Controls.Add(Row("Your name", netName));
+        inner.Controls.Add(Row("Lobby", netLobby));
+        int savedLobby = saved.TryGetValue(":NetLobby", out v) ? ParseInt(v) : 0;
+        for (int i = 0; i < 2; ++i) netLobby.Items.Add("Lobby " + (i + 1));
+        netLobby.SelectedIndex = Math.Min(Math.Max(savedLobby, 0), netLobby.Items.Count - 1);
+
+        var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, MaximumSize = new Size(400, 0) };
+        var refresh = new Button { Text = "Refresh", AutoSize = true };
+        var join = new Button { Text = "Join", AutoSize = true };
+        var start = new Button { Text = "Start match", AutoSize = true };
+        var leave = new Button { Text = "Leave", AutoSize = true };
+        var host = new Button { Text = "Host server here", AutoSize = true };
+        tips.SetToolTip(join, "Joins the lobby with your monster (Match group). Everyone in the lobby needs the same wotlane build.");
+        tips.SetToolTip(start, "Starts the match for everyone in your lobby, on the stage of the Match group. The game opens on every PC.");
+        tips.SetToolTip(host, "Runs wotm_server (2 lobbies) on this PC in its own window. Close that window to stop it.");
+        refresh.Click += delegate { NetRefresh(); };
+        join.Click += delegate { NetJoin(); };
+        start.Click += delegate { NetSend("START " + LevelIds[matchLevel.SelectedIndex]); };
+        leave.Click += delegate { NetSend("LEAVE"); netInfo.Text = "Left the lobby."; };
+        host.Click += delegate { NetHost(); };
+        foreach (Button b in new[] { refresh, join, start, leave, host }) row.Controls.Add(b);
+        inner.Controls.Add(row);
+        netInfo.ForeColor = DimColor;
+        netInfo.Text = "Pick your monster and stage in Match, then Join. Online play uses the build in this folder.";
+        inner.Controls.Add(netInfo);
+        netTimer.Tick += delegate { NetPoll(); };
+        FormClosed += delegate { netTimer.Stop(); if (lobby != null) lobby.Dispose(); };
+        return gb;
+    }
+
+    // wotm.buildid ao lado do wotm.exe do runtime (o mesmo que o jogo manda ao servidor)
+    string BuildId()
+    {
+        string rt = RuntimeDir();
+        string f = rt == null ? null : Path.Combine(rt, @"build_dev\ps2xRuntime\wotm.buildid");
+        try { if (f != null && File.Exists(f)) return File.ReadAllText(f).Trim(); } catch (IOException) { }
+        return "sem-buildid";
+    }
+
+    bool NetConnect()
+    {
+        if (lobby != null && !lobby.Closed) return true;
+        string s = netServer.Text.Trim();
+        int colon = s.LastIndexOf(':');
+        string h = colon > 0 ? s.Substring(0, colon) : s;
+        int port = colon > 0 ? ParseInt(s.Substring(colon + 1)) : 7777;
+        try
+        {
+            lobby = new LobbyClient(h, port, BuildId(), 3000);
+            lobbyHost = h;
+            netLobby.Items.Clear();
+            for (int i = 0; i < lobby.Lobbies; ++i) netLobby.Items.Add("Lobby " + (i + 1));
+            netLobby.SelectedIndex = 0;
+            netTimer.Start();
+            return true;
+        }
+        catch (Exception e)
+        {
+            netInfo.Text = "Server: " + e.Message;
+            lobby = null;
+            return false;
+        }
+    }
+
+    void NetSend(string line)
+    {
+        if (!NetConnect()) return;
+        try { lobby.Send(line); } catch (Exception e) { netInfo.Text = "Server: " + e.Message; }
+    }
+
+    void NetRefresh()
+    {
+        int keep = netLobby.SelectedIndex;
+        NetSend("LIST");
+        if (keep >= 0 && keep < netLobby.Items.Count) netLobby.SelectedIndex = keep;
+    }
+
+    void NetJoin()
+    {
+        string name = LobbyClient.CleanName(netName.Text);
+        if (name.Length == 0) { netInfo.Text = "Type a name (letters, digits, _ or -)."; return; }
+        netName.Text = name;
+        NetSend("JOIN " + Math.Max(0, netLobby.SelectedIndex) + " " + name + " " + MonsterIds[matchPlayer.SelectedIndex]);
+    }
+
+    void NetHost()
+    {
+        string exe = Path.Combine(exeDir, @"native\net\build\wotm_server.exe");
+        if (!File.Exists(exe)) { netInfo.Text = "wotm_server.exe not found: run tools\\build_net.bat first."; return; }
+        string s = netServer.Text.Trim();
+        int colon = s.LastIndexOf(':');
+        int port = colon > 0 ? ParseInt(s.Substring(colon + 1)) : 7777;
+        if (port <= 0) port = 7777;
+        try
+        {
+            Process.Start(new ProcessStartInfo(exe, "--port " + port) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(exe) });
+            netServer.Text = "127.0.0.1:" + port;
+            netInfo.Text = "Server running on port " + port + " (its own window). Friends join with your address and this port.";
+        }
+        catch (Exception e) { netInfo.Text = "Failed to start the server: " + e.Message; }
+    }
+
+    // linhas do lobby (Timer da interface): membros, lista, erros e o inicio da partida
+    void NetPoll()
+    {
+        if (lobby == null) return;
+        foreach (string l in lobby.Poll())
+        {
+            if (l.StartsWith("MEMBERS "))
+            {
+                string[] w = l.Split(' ');
+                netInfo.Text = "In lobby " + (ParseInt(w[1]) + 1) + ": " + (w.Length > 2 && w[2] != "-" ? w[2].Replace(",", ", ") : "nobody") +
+                    ". Anyone can press Start match.";
+            }
+            else if (l.StartsWith("LOBBY "))
+            {
+                LobbyClient.LobbyInfo li = LobbyClient.ParseLobby(l);
+                if (li != null && li.Index < netLobby.Items.Count)
+                    netLobby.Items[li.Index] = "Lobby " + (li.Index + 1) + ": " + li.State + " " + li.Count + "/" + li.Max +
+                        (li.Names.Length > 0 ? " (" + string.Join(", ", li.Names) + ")" : "");
+            }
+            else if (l.StartsWith("JOINED ")) netInfo.Text = "Joined lobby " + (ParseInt(l.Substring(7)) + 1) + ".";
+            else if (l.StartsWith("ERROR ")) netInfo.Text = "Server: " + l.Substring(6);
+            else if (l.StartsWith("MATCH ")) { PlayOnline(LobbyClient.MatchEnv(LobbyClient.KeyValues(l), lobbyHost)); return; }
+        }
+        if (lobby.Closed) { netInfo.Text = "Connection to the server closed."; netTimer.Stop(); lobby = null; }
     }
 
     // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
@@ -493,6 +644,9 @@ class Launcher : Form
         for (int i = 0; i < CheatKeys.Length; ++i) lines.Add(":Cheat_" + CheatKeys[i] + "|" + (cheatBoxes[i].Checked ? "1" : "0"));
         lines.Add(":CheatStamina|" + cheatStamina.SelectedIndex);
         lines.Add(":CheatWin|" + (int)cheatWin.Value);
+        lines.Add(":NetServer|" + netServer.Text.Trim());
+        lines.Add(":NetName|" + netName.Text.Trim());
+        lines.Add(":NetLobby|" + Math.Max(0, netLobby.SelectedIndex));
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
@@ -526,12 +680,39 @@ class Launcher : Form
 
     void Play()
     {
+        ProcessStartInfo psi = GameStartInfo(matchOn.Checked);
+        if (psi != null) Launch(psi);
+    }
+
+    // partida em rede: o ambiente da linha MATCH no lugar da partida direta; sem IA no controle e sem trapacas (valeriam so neste PC)
+    void PlayOnline(Dictionary<string, string> env)
+    {
+        ProcessStartInfo psi = GameStartInfo(true);
+        if (psi == null) return;
+        foreach (var kv in env) psi.EnvironmentVariables[kv.Key] = kv.Value;
+        psi.EnvironmentVariables.Remove("WOTM_AIVSAI");
+        psi.EnvironmentVariables.Remove("WOTM_CHEATS");
+        Launch(psi);
+    }
+
+    void Launch(ProcessStartInfo psi)
+    {
+        try
+        {
+            Process.Start(psi);
+            Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
+        }
+        catch (Exception e) { status.Text = "Failed: " + e.Message; }
+    }
+
+    ProcessStartInfo GameStartInfo(bool direct)
+    {
         SaveIni();
         string rt = RuntimeDir();
-        if (rt == null) { status.Text = "Runtime folder not found (run_live.ps1)."; return; }
+        if (rt == null) { status.Text = "Runtime folder not found (run_live.ps1)."; return null; }
         // partida direta pula o menu: o roteiro do pad (-Auto 1) apertaria botoes no meio da luta
         string args = string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Auto {1} -Stats {2} -Build {3}",
-            Path.Combine(rt, "run_live.ps1"), On(":Auto") && !matchOn.Checked ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
+            Path.Combine(rt, "run_live.ps1"), On(":Auto") && !direct ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
         psi.EnvironmentVariables["WOTM_REPO"] = exeDir;
         foreach (var kv in boxes)
@@ -558,12 +739,7 @@ class Launcher : Form
         string cheats = CheatsValue();
         if (cheats.Length > 0) psi.EnvironmentVariables["WOTM_CHEATS"] = cheats;
         else psi.EnvironmentVariables.Remove("WOTM_CHEATS");
-        try
-        {
-            Process.Start(psi);
-            Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
-        }
-        catch (Exception e) { status.Text = "Failed: " + e.Message; }
+        return psi;
     }
 
     void OpenLog()
@@ -621,6 +797,11 @@ class Launcher : Form
             EventHandler theme = delegate { try { SetWindowTheme(cc.Handle, "DarkMode_CFD", null); } catch (Exception) { } };
             if (c.IsHandleCreated) theme(c, EventArgs.Empty);
             else c.HandleCreated += theme;
+        }
+        else if (c is TextBox)
+        {
+            c.BackColor = InputColor;
+            ((TextBox)c).BorderStyle = BorderStyle.FixedSingle;
         }
         else if (c is NumericUpDown)
         {   // a cor tem que ir para a caixa de texto interna (UpDownEdit) tambem
