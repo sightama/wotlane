@@ -1202,6 +1202,7 @@ namespace
         g_origMathfRand(rdram, ctx, runtime);
     }
 }
+#include "wotm_orbit.inc"   // camera moderna (orbital): ganchos chamados pelos da camera livre e do lock-on, abaixo
 namespace
 {
     // Camera livre (F5, wotm_freecam.h). O _cs da vista 0 (viewInfo[0], o mesmo que a camera do jogo move) recebe a pose em dois
@@ -1246,7 +1247,11 @@ namespace
 
     void camerasUpdateFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        const uint32_t ra = GPR_U32(ctx, 31);
+        orbit::pre(rdram);   // camera moderna (wotm_orbit.inc)
         g_origCamerasUpdateFree(rdram, ctx, runtime);
+        if (ctx->pc == ra)
+            orbit::post(rdram);
         freeCamWrite(rdram);
     }
 
@@ -1487,6 +1492,8 @@ namespace
     void interpretInputsLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, gp = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+        // camera moderna (wotm_orbit.inc): configuracao relativa a tela e analogico direito para a orbita, antes do lock-on ler o +0x16E4
+        const int orbitSlot = ctx->pc == kInterpretInputs ? orbit::inputEnter(rdram, pf, gp) : -1;
         LockToggle *t = nullptr;
         int slot = 0;
         if (ctx->pc == kInterpretInputs && wotm::settings::on(wotm::settings::LockToggle) && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
@@ -1498,7 +1505,10 @@ namespace
         }
         if (!t || !t->remap)
         {
+            const uint32_t ra0 = GPR_U32(ctx, 31);
             g_origInterpretInputs(rdram, ctx, runtime);
+            if (ctx->pc == ra0)
+                orbit::inputLeave(rdram, orbitSlot);
             return;
         }
         uint8_t *b = rdram + gp, saved[0x10];
@@ -1533,11 +1543,14 @@ namespace
         const uint32_t ra = GPR_U32(ctx, 31);
         g_origInterpretInputs(rdram, ctx, runtime);
         if (ctx->pc == ra)   // fatia de tempo acabou no meio: o resto ainda le os bytes trocados (o loadPadInputs refaz todos)
+        {
             std::memcpy(b, saved, sizeof saved);
+            orbit::inputLeave(rdram, orbitSlot);
+        }
     }
 
-    // So na configuracao relativa ao monstro (updateInput0ConfigCR, PadFlags +0x16E4 = 0). Na relativa a tela (ConfigSR, +0x16E4 != 0,
-    // o normal na luta; o jogo alterna entre as duas, por exemplo nas cinemas) o proprio jogo, travado, ja projeta o analogico da
+    // So na configuracao relativa ao monstro (updateInput0ConfigCR, PadFlags +0x16E4 = 0). Na relativa a tela (ConfigSR, +0x16E4 != 0;
+    // so na vista unificada e no Crush: na vista normal o humano fica na CR, docs/investigacoes/2026-10-22/camera_controle_cr_sr.md) o proprio jogo, travado, ja projeta o analogico da
     // camera (PadFlags +0x17E0) na direcao do alvo e na perpendicular; converter aqui antes fazia a conversao duas vezes, e o erro
     // era o angulo entre a camera e a direcao do alvo (para cima podia ir para tras ou de lado com a camera fora das costas).
     // Travado, o jogo move o monstro no referencial dele, virado para o alvo (cima/baixo = para o alvo e para tras, esquerda/direita =
@@ -2328,6 +2341,9 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
     }
+    // Camera moderna (wotm_orbit.inc): o Cameras::Update e o interpretInputs ja estao embrulhados acima; aqui o shakeCamera e o
+    // SetOkToUnify (depois do wotm_split4, cujo gancho este embrulha)
+    orbit::install(runtime);
     // Numeros de dano (mod, WOTM_DAMAGEPOP=1): depois das trapacas, que tambem embrulham o Monster::update e o takeHit. Sempre
     // instalados (o acompanhamento da vida e barato); a opcao so decide se o numero sai
     {
