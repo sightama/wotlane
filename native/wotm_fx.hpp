@@ -250,6 +250,12 @@ public:
     float wide = 1.f;   // largura da tela / largura 4:3 (Scene::wide): teste de visao com os planos laterais da tela larga
     bool fovCull = true;     // collect recorta pela vista do jogo (inViewFov); false = camera livre pausada
     bool frameGate = true;   // collect sem particulas em quadro sem particleDraw (flareSlot); false = recoleta da camera livre pausada
+    // Sprites que o jogo pausado nao tem (modo foto, wotm_photo.inc: fogo do Agamo simulado com o wotm_flame.hpp quando o emissor
+    // estava fora da tela na pausa). Mesmo desenho de um sistema sprite (tipo 3): meio-lado size / 2 com teto de 1/4 da profundidade,
+    // cor RGBA com 0x80 = 1, UV espelhada por sel (os 2 bits baixos de pos.w), textura do texInfo, mistura do alphaContext.
+    struct SynthSprite { float p[3]; float size; uint32_t rgba; uint8_t sel; };
+    struct SynthSystem { uint32_t texInfo = 0, alphaContext = 0; std::vector<SynthSprite> sprites; };
+    std::vector<SynthSystem> synth;
 
     // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
     // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
@@ -485,7 +491,11 @@ public:
             const int maxN = int32_t(ram.u32(b + fxoff::maxParticles));
             const bool built = (ram.u32(b + fxoff::infoAttribs) & 0x400) != 0;
             const int minN = s.type == FX_SPRINE ? 2 : 1;
-            if (built && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
+            // O particleDraw so monta o pacote (0x400) dos sistemas na vista. Na recoleta da camera livre pausada (fovCull falso) os
+            // sprites fora da vista da pausa entram tambem (fogo do Agamo atras da camera): eles so leem pos, idade e cores, nao o
+            // pacote; os tipos com cabecalho no pacote (wake, arco, sprine...) continuam so com ele montado
+            const bool plain = s.type == FX_SPRITE || s.type == FX_TEXSPRITE;
+            if ((built || (!fovCull && plain)) && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
                 (!fovCull || inViewFov(ram, b, wide)))
                 systems.push_back(s);
             i = next;
@@ -662,10 +672,12 @@ public:
         const uint32_t pos = ram.u32(p + fxoff::pos), q44 = pos - 0x18, q8 = q44 - 36 * 16;
         const int n = int32_t(ram.u32(kIndex));
         const uint32_t def = ram.u32(kViewDef) & 0x0FFFFFFF;
-        if (n <= 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || !ram.ok(def, 0x20)) return;
+        // n = 0: so a tabela dos sprites e a moldura (o modo foto refaz a lista com a camera livre)
+        if (n < 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || !ram.ok(def, 0x20)) return;
         f.cx = float(int32_t(ram.u32(def + 0x18)));
         f.cy = float(int32_t(ram.u32(def + 0x1C)));
         f.nspr = std::min<int>(18, std::max<int>(0, int32_t(ram.u32(q44 + 8))));
+        if (f.nspr == 0) f.nspr = 18;   // lensFlarePacketBuild ainda nao rodou (fase sem flare ate aqui): a tabela do Init ja esta la
         if (ram.u16(def + 4) && ram.u16(def + 6)) { f.vw = ram.u16(def + 4); f.vh = ram.u16(def + 6); }
         f.zScale = ram.f32(kScreenMats + 0x28);   // viewScreenMats[0][2][2] e [2][3]
         f.zOff = ram.f32(kScreenMats + 0x2C);
@@ -805,8 +817,8 @@ public:
             }
             const float I = fl.intensity * frac;
             if (log)
-                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g | W da luz %.2f, W do mais perto %.2f\n", fl.x, fl.y, cnt, thr, I,
-                             fl.w, zMax && float(zMax) != f.zScale ? f.zOff / (float(zMax) - f.zScale) : 0.f);
+                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g | W da luz %.2f, W do mais perto %.2f | flags %02x dot %.3f bw %.3f\n", fl.x, fl.y, cnt, thr,
+                             I, fl.w, zMax && float(zMax) != f.zScale ? f.zOff / (float(zMax) - f.zScale) : 0.f, fl.flags & 0xFF, fl.dot, fl.bw);
             if (cnt == 0 || I < 1.f / 256.f) continue;
             // o retail ja somou o centroide do GS emulado (visibilidade total: 1,5 - 2 ou 1,5 - 1); troca pelo daqui
             const float shift = 1.5f - (inf ? 2.f : 1.f);
@@ -899,7 +911,7 @@ public:
     // eye: olho da camera (o W da neblina e medido a partir dele, como no VU1)
     void draw(const Ram &ram, const TexFn &texture, const float eye[3]) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;
-        if (off || systems.empty()) return;
+        if (off || (systems.empty() && synth.empty())) return;
         const Matrix mv = rlGetMatrixModelview();
         FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14},
                     {mv.m0, mv.m4, mv.m8, mv.m12}, {mv.m1, mv.m5, mv.m9, mv.m13}};
@@ -917,6 +929,7 @@ public:
         rlDisableDepthMask();
         rlDisableBackfaceCulling();
         for (const FxSystem &s : systems) drawSystem(ram, s, texture, view);
+        for (const SynthSystem &s : synth) drawSynth(ram, s, texture, view);
         rlDrawRenderBatchActive();
         rlNormal3f(0.f, 0.f, 0.f);   // sem neblina para o que vem depois (overlay)
         rlSetBlendMode(BLEND_ALPHA);
@@ -1664,6 +1677,42 @@ public:
     }
 
 private:
+    // Sistema sintetico (synth): o caminho dos sprites do drawSystem/forEachQuad com as particulas daqui
+    void drawSynth(const Ram &ram, const SynthSystem &s, const TexFn &texture, const FxView &view) {
+        if (s.sprites.empty()) return;
+        const uint32_t tinfo = fxaddr::textureInfo + 8 * (s.texInfo & 127);
+        const uint32_t k = ram.u16(tinfo + 2) & 127;
+        const uint32_t id = ram.u16(fxaddr::texId + 2 * k);
+        const uint64_t t0 = uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
+        unsigned tex = (ram.s16(tinfo) > 0 && id) ? texture(id, t0) : 0;
+        if (!tex) tex = blobTexture();
+        rlDrawRenderBatchActive();
+        const uint8_t blend = blendFor(s.alphaContext);
+        gsBlend(blend);
+        shaderNormal(0.f, true, true, gsBlendPremul(blend));
+        rlBegin(RL_QUADS);
+        rlSetTexture(tex);
+        for (const SynthSprite &q : s.sprites) {
+            const float depth = view.depth[0] * q.p[0] + view.depth[1] * q.p[1] + view.depth[2] * q.p[2] + view.depth[3];
+            const float half = 0.5f * std::fabs(q.size), r = depth > 0.f ? std::min(half, 0.25f * depth) : half;
+            float c[4][3];
+            const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
+            for (int k = 0; k < 4; ++k)
+                for (int a = 0; a < 3; ++a) c[k][a] = q.p[a] + r * (view.right[a] * sx[k] + view.up[a] * sy[k]);
+            if (fogged(view, c)) continue;
+            const bool fu = (q.sel & 2) == 0, fv = (q.sel & 1) == 0;
+            const float u0 = fu ? 1.f : 0.f, u1 = 1.f - u0, v0 = fv ? 1.f : 0.f, v1 = 1.f - v0;
+            const float uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
+            for (int j = 0; j < 4; ++j) {
+                vcolor(q.rgba);
+                rlTexCoord2f(uv[j][0], uv[j][1]);
+                rlVertex3f(c[j][0], c[j][1], c[j][2]);
+            }
+        }
+        rlEnd();
+        rlSetTexture(0);
+    }
+
     void drawSystem(const Ram &ram, const FxSystem &s, const TexFn &texture, const FxView &view) {
         const uint32_t b = s.base;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age);

@@ -160,7 +160,7 @@ static int keyCell(const char *name)
 }
 static int padCell(int phys, int style)
 {
-    if (phys <= 0 || phys >= st::kPadButtons) return -1;
+    if (phys <= 0 || phys >= pr::kPadCells) return -1;   // 18 e 19: analogico esquerdo e direito (so na legenda, kStickL/kStickR)
     // face buttons (raylib 5..8: cima, direita, baixo, esquerda) no estilo do PS2: os do jogo
     if (style == st::PromptPs && phys >= 5 && phys <= 8 && loadFace())
     {
@@ -263,19 +263,22 @@ namespace st = wotm::settings;
 // moldura)
 struct Icon { int pad = 0; const char *key = nullptr; };
 struct Item { Icon a, b; const char *text = ""; };
-constexpr int kMax = 6;
+constexpr int kStickL = 18, kStickR = 19;   // Icon::pad dos analogicos (celulas extras do atlas, wotm_prompts.h)
+constexpr int kMax = 10;
 static Item g_items[kMax];
 static int g_n = 0;
 static float g_alpha = 0.f;
+static float g_barAlpha = 1.f;   // opacidade da faixa preta (o modo foto a deixa translucida sobre a cena)
 static std::string g_hint;
 static float g_hintAlpha = 0.f;
 
-static void post(std::initializer_list<Item> items, float alpha)
+static void post(std::initializer_list<Item> items, float alpha, float barAlpha = 1.f)
 {
     g_n = 0;
     for (const Item &i : items)
         if (g_n < kMax) g_items[g_n++] = i;
     g_alpha = alpha;
+    g_barAlpha = barAlpha;
 }
 static void hint(const char *s, float alpha)
 {

@@ -18,12 +18,14 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
     if (!n || a <= 0.f)
         return;
     const wotm::GsScreenRect gr = wotm::gsScreenRect(rw, rh);
-    DrawRectangleRec(Rectangle{0.f, rh * kBarTop, rw, rh * (1.f - kBarTop)}, Color{0, 0, 0, static_cast<unsigned char>(255.f * a)});
+    DrawRectangleRec(Rectangle{0.f, rh * kBarTop, rw, rh * (1.f - kBarTop)},
+                     Color{0, 0, 0, static_cast<unsigned char>(255.f * a * std::clamp(g_barAlpha, 0.f, 1.f))});
     if (!tex0)
         return;
     const int style = wotm_prompts::currentStyle();
-    const float S = rh * 0.05f, th = rh * 0.022f, cy = rh * kBarMid;
-    const float iconGap = S * 0.12f, textGap = S * 0.35f, itemGap = S * 1.2f;
+    float S = rh * 0.05f, th = rh * 0.022f;
+    const float cy = rh * kBarMid;
+    float iconGap = S * 0.12f, textGap = S * 0.35f, itemGap = S * 1.2f;
     const int irw = int(rw), irh = int(rh);
     // celula de um icone no estilo de agora (-1: sem celula; o nome da tecla vai numa moldura)
     auto cellOf = [&](const Icon &ic) {
@@ -38,13 +40,28 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
         return cellOf(ic) >= 0 ? S : 0.f;
     };
     float w[kMax], total = 0.f;
-    for (int i = 0; i < n; ++i)
+    auto measure = [&] {
+        total = 0.f;
+        for (int i = 0; i < n; ++i)
+        {
+            const Item &it = g_items[i];
+            const float ia = iconW(it.a), ib = iconW(it.b);
+            w[i] = ia + (ib > 0.f ? iconGap + ib : 0.f);
+            if (it.text && *it.text) w[i] += (w[i] > 0.f ? textGap : 0.f) + wotm_mainmenu::textWidth(tex0, irw, irh, it.text, th);
+            total += w[i] + (i ? itemGap : 0.f);
+        }
+    };
+    measure();
+    // muitos itens (modo foto): tudo menor ate caber na janela, com folga nas pontas
+    if (const float maxW = rw * 0.96f; total > maxW)
     {
-        const Item &it = g_items[i];
-        const float ia = iconW(it.a), ib = iconW(it.b);
-        w[i] = ia + (ib > 0.f ? iconGap + ib : 0.f);
-        if (it.text && *it.text) w[i] += (w[i] > 0.f ? textGap : 0.f) + wotm_mainmenu::textWidth(tex0, irw, irh, it.text, th);
-        total += w[i] + (i ? itemGap : 0.f);
+        const float k = maxW / total;
+        S *= k;
+        th *= k;
+        iconGap *= k;
+        textGap *= k;
+        itemGap *= k;
+        measure();
     }
     // texto na cor da legenda do jogo (cinza claro), um pouco mais claro para ler
     const Color tc{0x5C, 0x5A, 0x54, static_cast<unsigned char>(0x80 * a)};
@@ -62,7 +79,7 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
             wotm_prompts::drawCell2d(cellOf(ic), x + S * 0.5f, cy, S, a);
         return x + iw;
     };
-    float x = gr.x0 + gr.w * 0.5f - total * 0.5f;
+    float x = std::max(rw * 0.02f, gr.x0 + gr.w * 0.5f - total * 0.5f);
     for (int i = 0; i < n; ++i)
     {
         const Item &it = g_items[i];

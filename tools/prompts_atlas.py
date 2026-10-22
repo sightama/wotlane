@@ -3,7 +3,8 @@
 Uso: python tools/prompts_atlas.py <pasta do pacote extraido, a que tem "Xbox Series/">
 
 Grava native/assets/prompts.png (celulas de 128x128, 16 por linha) e native/wotm_prompts.h (indice da celula de cada botao do
-gamepad por estilo, na ordem do GamepadButton do raylib 1..17, e de cada tecla pelo nome de wotm_settings.hpp). O PNG vai embutido
+gamepad por estilo, na ordem do GamepadButton do raylib 1..17 mais os analogicos em 18 e 19, e de cada tecla pelo nome de
+wotm_settings.hpp, com Esc, F1..F12 e o mouse para a legenda do modo foto). O PNG vai embutido
 nos executaveis pelo native/wotm.rc. Rodar de novo so quando mudar a lista abaixo ou o pacote.
 """
 import os
@@ -36,6 +37,10 @@ STYLES = {
                  S + "/switch_button_minus", S + "/switch_button_home", S + "/switch_button_plus", S + "/switch_stick_l_press",
                  S + "/switch_stick_r_press"],
 }
+# Analogicos (mover), botoes virtuais 18 e 19 depois dos do raylib: o modo foto mostra "analogico esquerdo/direito" na legenda
+STYLES["Xbox"] += [X + "/xbox_stick_l", X + "/xbox_stick_r"]
+STYLES["Ps"] += [P + "/playstation_stick_l", P + "/playstation_stick_r"]
+STYLES["Nintendo"] += [S + "/switch_stick_l", S + "/switch_stick_r"]
 K = "Keyboard & Mouse/keyboard_"
 KEYS = {"SPACE": "space", "APOSTROPHE": "apostrophe", "COMMA": "comma", "MINUS": "minus", "PERIOD": "period",
         "SLASH": "slash_forward", "SEMICOLON": "semicolon", "EQUAL": "equals", "LBRACKET": "bracket_open",
@@ -50,6 +55,13 @@ for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
 for d in "0123456789":
     KEYS[d] = d
     KEYS["KP" + d] = d
+# Fora do mapa de teclas do jogo (so na legenda do modo foto): Esc, F1..F12 e o mouse
+KEYS["ESC"] = "escape"
+for n in range(1, 13):
+    KEYS["F%d" % n] = "f%d" % n
+M = "Keyboard & Mouse/"
+MOUSE = {"MOUSE_LEFT": M + "mouse_left", "MOUSE_RIGHT": M + "mouse_right", "MOUSE_SCROLL": M + "mouse_scroll",
+         "MOUSE_MOVE": M + "mouse_move"}
 
 
 def main():
@@ -70,7 +82,7 @@ def main():
         return index[rel]
 
     styles = {k: [cell(r) for r in v] for k, v in STYLES.items()}
-    keys = sorted((name, cell(K + f)) for name, f in KEYS.items())
+    keys = sorted([(name, cell(K + f)) for name, f in KEYS.items()] + [(name, cell(f)) for name, f in MOUSE.items()])
     rows = (len(files) + COLS - 1) // COLS
     atlas = Image.new("RGBA", (COLS * CELL, rows * CELL), (0, 0, 0, 0))
     for i, path in enumerate(files):
@@ -82,9 +94,10 @@ def main():
     out = ["// Gerado por tools/prompts_atlas.py (nao editar): celulas do native/assets/prompts.png, icones do Kenney \"Input Prompts\" (CC0).",
            "#pragma once", "", "namespace wotm::prompts", "{",
            f"inline constexpr int kCell = {CELL}, kCols = {COLS}, kRows = {rows};",
-           "// GamepadButton do raylib (indice 0 sem icone) -> celula; -1 = sem icone no estilo"]
+           "// GamepadButton do raylib (indice 0 sem icone) -> celula; -1 = sem icone no estilo. 18 e 19: analogico esquerdo e direito",
+           f"inline constexpr int kPadCells = {len(PAD) + 3};"]
     for k, v in styles.items():
-        out.append(f"inline constexpr int k{k}[18] = {{-1, " + ", ".join(str(c) for c in v) + "};")
+        out.append(f"inline constexpr int k{k}[kPadCells] = {{-1, " + ", ".join(str(c) for c in v) + "};")
     out.append("struct KeyCell { const char *name; int cell; };")
     out.append("// Tecla (nome do wotm_settings.hpp) -> celula")
     out.append("inline constexpr KeyCell kKeys[] = {")
