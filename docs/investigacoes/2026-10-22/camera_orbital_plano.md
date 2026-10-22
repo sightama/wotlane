@@ -35,7 +35,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 3 | Chão e prédios (aprovado, na master em 2026-10-22) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições (conferida em 2026-10-22, sem código novo) | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro em 2026-10-22, falta o teste do dono com controles) | estado de órbita por vista, cada uma pelo controle do seu jogador |
-| 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
+| 6 | Painel (feita em 2026-10-22, aba CAMERA; falta o teste do dono) | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
 | 7 | Mouse na câmera | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
 | 8 | Teclado novo | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
 | 9 | Menus com mouse | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
@@ -174,6 +174,13 @@ O estado da órbita já era por câmera (`g_cam[vista]`) e o analógico por joga
 Roteiro: `WOTM_MATCH=3,1,2,7,1 WOTM_PLAYERS=4` (quadrantes), giro de ~170 graus do jogador 1, depois do 2, do 3 e do 4, subir o 2 e
 descer o 3: cada câmera mudou só no passo do seu jogador (log e fotos); a de perto não existe com 3 e 4 jogadores (`wotm_split4.inc`).
 Falta: o dono conferir com controles de verdade (cada analógico direito girando só a sua vista), em 2 e em 3–4 jogadores.
+
+## Etapa 6: painel (2026-10-22)
+Aba nova CAMERA no "Recompiled options", entre FEATURES e CONTROLS (`wotm_mainmenu.inc`): CAMERA STYLE (MODERN/CLASSIC,
+`WOTM_CAMERA`), SENSITIVITY (1 a 10, `WOTM_CAMSENS`, padrão 5 = a velocidade de antes, cada ponto 20%), INVERT Y (`WOTM_CAMINVERT`),
+AUTO CENTER (`WOTM_CAMRECENTER`) e CLOSE-UP CAMERA (`WOTM_CLOSECAM`). Gravadas no `settings.ini` como as outras; a órbita lê a cada
+quadro. Conferido por roteiro: a aba abre e os valores mudam e são registrados (`[settings] SENSITIVITY = 7`); na luta, a sensibilidade
+10 girou 86 graus em 15 quadros (43 com a 5), e com o eixo invertido o mesmo comando para cima desceu a câmera (-8 graus em vez de +14).
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?

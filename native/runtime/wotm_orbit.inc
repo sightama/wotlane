@@ -431,6 +431,10 @@ namespace
                 testStick(frames, slot, sx, sy);
                 const bool moved = std::fabs(sx) > 0.05f || std::fabs(sy) > 0.05f;
                 s.still = moved ? 0 : s.still + 1;
+                // painel, aba CAMERA: sensibilidade (5 = 1x, cada ponto 20%) e inverter o eixo vertical
+                const float sens = float(std::clamp(wotm::settings::get(wotm::settings::CamSens), 1, 10)) * 0.2f;
+                sx *= sens;
+                sy *= wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens;
                 s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 graus/s (a horizontal e ~170)
 
                 // alvo travado (etapa 2): a camera vai depressa para tras do monstro na linha do alvo (os dois na tela); o analogico
@@ -719,10 +723,11 @@ namespace
                 runtime.registerFunction(kOkToUnify, &okToUnifyHook);
             if ((g_origLeaveTask = runtime.lookupFunction(kLeaveTask)))
                 runtime.registerFunction(kLeaveTask, &leaveTaskHook);
-            std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recentralizar %s, camera de perto %s (WOTM_CLOSECAM)%s\n",
+            std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recentralizar %s, camera de perto %s (WOTM_CLOSECAM), sensibilidade %d, eixo Y %s%s\n",
                          wotm::settings::on(wotm::settings::Camera) ? "moderna" : "classica",
                          wotm::settings::on(wotm::settings::CamRecenter) ? "ligado" : "desligado",
                          wotm::settings::on(wotm::settings::CloseCam) ? "ligada" : "desligada",
+                         wotm::settings::get(wotm::settings::CamSens), wotm::settings::on(wotm::settings::CamInvertY) ? "invertido" : "normal",
                          g_aiVsAi ? "; com WOTM_AIVSAI fica a classica" : "");
         }
     }

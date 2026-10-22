@@ -13,7 +13,7 @@
 // fica fora do currentSelection (g_extraRow, como o "quit game"); o X nela abre o painel de opcoes do port no lugar da lista, sem trocar de tela, e o
 // triangulo (ou O) fecha. Com o painel aberto (e 20 quadros depois de fechar) o jogo nao ve entrada nenhuma: o painel le os
 // dispositivos direto (wotm_padsel::readDevice), na thread do EE, dentro do gancho do screenGetInput.
-// Painel: abas VIDEO / FEATURES / CONTROLS (L1/R1), cima/baixo escolhem a linha, esquerda/direita/X
+// Painel: abas VIDEO / FEATURES / CAMERA / CONTROLS (L1/R1), cima/baixo escolhem a linha, esquerda/direita/X
 // trocam o valor, que vale na hora e e gravado no settings.ini (wotm_settings.hpp; o video e aplicado na thread da janela pelo
 // applyVideoSettings do wotm_live.inc). Desenhado numa textura propria no telao inteiro (a faixa visivel abaixo da tarja do menu).
 // Aba CONTROLS (rola): teclado separado, qual mapa a lista mostra (teclado ou gamepads), uma linha por botao do PS2 (X espera a tecla
@@ -90,8 +90,8 @@ static int g_suppress = 0;         // quadros sem entrada do jogo depois de fech
 // Cada opcao e uma chave do wotm_settings.hpp; mudar grava o settings.ini e vale na hora (video na thread da janela, mods e
 // teclado na proxima leitura deles).
 namespace st = wotm::settings;
-enum Tab { TabVideo, TabFeatures, TabControls, kTabs };
-constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CONTROLS"};
+enum Tab { TabVideo, TabFeatures, TabCamera, TabControls, kTabs };
+constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CAMERA", "CONTROLS"};
 constexpr int kMaxOpts = 5;
 struct Opt { st::Key key; const char *label; const char *hint; };
 struct TabDef { int n; Opt opt[kMaxOpts]; };
@@ -106,6 +106,12 @@ constexpr TabDef kTabDefs[kTabs] = {
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"}}},
+    {5,
+     {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
+      {st::CamSens, "SENSITIVITY", "HOW FAST THE RIGHT STICK TURNS THE CAMERA"},
+      {st::CamInvertY, "INVERT Y", "FLIPS UP AND DOWN ON THE RIGHT STICK"},
+      {st::CamRecenter, "AUTO CENTER", "WHILE YOU WALK, THE CAMERA SLOWLY SWINGS BACK BEHIND YOUR MONSTER"},
+      {st::CloseCam, "CLOSE-UP CAMERA", "WHEN TWO MONSTERS FIGHT UP CLOSE, THE GAME CAN SWITCH TO A SHARED VIEW"}}},
     {3,
      {{st::KbSeparate, "KEYBOARD", "SHARE PLAYER 1 WITH THE FIRST GAMEPAD, OR PLAY AS A PLAYER OF ITS OWN"},
       {st::Prompts, "BUTTON ICONS", "AUTO SHOWS THE BUTTONS OF WHATEVER YOU PLAYED WITH LAST"},
@@ -165,7 +171,7 @@ static std::string bindValue(int b, int map)
 }
 
 // Valores que a opcao percorre, em ordem crescente
-static int choices(st::Key k, int out[8])
+static int choices(st::Key k, int out[16])
 {
     switch (k)
     {
@@ -173,6 +179,7 @@ static int choices(st::Key k, int out[8])
     case st::Rate: std::copy(std::begin(st::kRates), std::end(st::kRates), out); return int(std::size(st::kRates));
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
+    case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
     case st::Prompts:   // sem o PLAYSTATION: igual ao ORIGINAL (o AUTO ainda o usa com gamepad de PlayStation)
     {
         int n = 0;
@@ -187,7 +194,7 @@ static int choices(st::Key k, int out[8])
 // lista (variavel de ambiente) vai ao vizinho da lista naquele sentido.
 static int stepValue(st::Key k, int cur, int dir, bool wrap)
 {
-    int c[8];
+    int c[16];
     const int n = choices(k, c);
     int i = -1;
     for (int j = 0; j < n; ++j)
@@ -220,6 +227,8 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
         break;
     }
     case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
+    case st::Camera: std::snprintf(buf, sz, "%s", v ? "MODERN" : "CLASSIC"); break;
+    case st::CamSens: std::snprintf(buf, sz, "%d", v); break;
     default: std::snprintf(buf, sz, "%s", v ? "ON" : "OFF"); break;
     }
 }
@@ -793,9 +802,9 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     std::vector<wotm::TextQuad> q;
     DrawRectangleRounded(Rectangle{4.f, 4.f, W - 8.f, H - 8.f}, 0.06f, 12, Color{0, 0, 0, 175});
 
-    // abas: L1  VIDEO  FEATURES  CONTROLS  R1
+    // abas: L1  VIDEO  FEATURES  CAMERA  CONTROLS  R1
     const float tabY = lineH * 0.7f, tabH = 50.f;
-    const float tabX[kTabs] = {W * 0.265f, W * 0.50f, W * 0.735f};
+    const float tabX[kTabs] = {W * 0.22f, W * 0.40f, W * 0.59f, W * 0.78f};
     for (int t = 0; t < kTabs; ++t)
     {
         const bool on = t == v.tab;
