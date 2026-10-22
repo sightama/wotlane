@@ -1270,7 +1270,7 @@ namespace
 
 namespace
 {
-    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "Mods" do launcher). O lock-on do quadro (PadEntry +0x32) e decidido em
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "QoL features" do launcher). O lock-on do quadro (PadEntry +0x32) e decidido em
     // updateInput{0,1,2}Config{CR,SR} a partir dos contadores de quadros segurados que o updateHistory{0,1,2} da mesma
     // configuracao acabou de atualizar (PadFlags +0x1658 e +0x165E: ++ segurado, 0 solto). Na configuracao 0 trava com os dois
     // acima de PadFlags +0x16C4 (um so anda de lado, PadEntry +0x1A/+0x1C); na 1 e na 2, com +0x1658 diferente de zero. A propria
@@ -1655,7 +1655,7 @@ namespace
 
 namespace
 {
-    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "Mods" do launcher), no lugar do icone de vida (a bolinha
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "QoL features" do launcher), no lugar do icone de vida (a bolinha
     // com o numero do jogador, que muda de cor com a vida). O Hud::drawHealthIcon(monstro, n) projeta a cabeca do monstro e manda dois
     // quadrados ao ScreenPolys::addPoly no mesmo ponto: o numero (branco) e o anel (cor do +0x686C/+0x6870). Aqui o gancho no
     // drawHealthIcon guarda o monstro, e o do addPoly, quando chamado de dentro dele, troca os dois quadrados por duas barras sem
@@ -1951,7 +1951,7 @@ namespace
 
 namespace
 {
-    // Numeros de dano (mod, WOTM_DAMAGEPOP=1; grupo "Mods" do launcher). A vida de cada monstro (m_health, +0x44C) e conferida na
+    // Numeros de dano (mod, WOTM_DAMAGEPOP=1; grupo "QoL features" do launcher). A vida de cada monstro (m_health, +0x44C) e conferida na
     // entrada do Monster::update: o que caiu desde a anterior vira um numero (wotmDamagePopup), o que pega tambem fogo, choque e
     // queda, que nao passam pelo takeHit. O tipo vem do ultimo Monster::takeHit da vitima (ate 2 quadros antes), pelo
     // HitEvent::s_takeHitInfo que o atacante montou: source 1, 5, 6, 12, 14 e 0x14 = especial (Weapon, FireBreath, StateZapAttack,
@@ -2263,7 +2263,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
         std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
-    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "Mods" do launcher): um toque trava, outro solta
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "QoL features" do launcher): um toque trava, outro solta
     if (const char *e = std::getenv("WOTM_LOCKTOGGLE"); e && *e && std::strcmp(e, "0") != 0)
     {
         constexpr PS2Runtime::RecompiledFunction kHooks[3] = {&updateHistoryLockToggle<0>, &updateHistoryLockToggle<1>,
