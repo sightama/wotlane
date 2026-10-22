@@ -394,6 +394,10 @@ namespace
             {
                 in.forced = false;
                 in.stick[0] = in.stick[1] = 0.f;
+                // com a camera moderna o analogico direito e so da camera: na camera de perto (e nos outros POVs, em que a orbita
+                // descansa) ele chegava ao jogo, que o usa para girar o monstro (X) e olhar (Y)
+                if (enabled())
+                    b[0x10] = b[0x11] = b[0x12] = b[0x13] = 0;
                 return -1;
             }
             // analogico direito para a orbita, zerado para o jogo
