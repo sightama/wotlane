@@ -105,7 +105,12 @@ inline bool parse(Key k, const char *s, int &out)
     {
         const int n = k == Prompts ? kPromptStyles : 2;
         for (int i = 0; i < n; ++i)
-            if (!std::strcmp(s, k == Prompts ? kPromptNames[i] : kConfirmNames[i])) { out = i; return true; }
+            if (!std::strcmp(s, k == Prompts ? kPromptNames[i] : kConfirmNames[i]))
+            {
+                // "playstation" saiu da lista (era igual ao original, com os face buttons do jogo): vira "original"
+                out = k == Prompts && i == PromptPs ? int(PromptOriginal) : i;
+                return true;
+            }
         if (*s < '0' || *s > '9') return false;
         out = std::clamp(std::atoi(s), 0, n - 1);
         return true;

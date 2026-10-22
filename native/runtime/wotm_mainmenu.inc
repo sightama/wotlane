@@ -173,7 +173,13 @@ static int choices(st::Key k, int out[8])
     case st::Rate: std::copy(std::begin(st::kRates), std::end(st::kRates), out); return int(std::size(st::kRates));
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
-    case st::Prompts: for (int i = 0; i < st::kPromptStyles; ++i) out[i] = i; return st::kPromptStyles;
+    case st::Prompts:   // sem o PLAYSTATION: igual ao ORIGINAL (o AUTO ainda o usa com gamepad de PlayStation)
+    {
+        int n = 0;
+        for (int i = 0; i < st::kPromptStyles; ++i)
+            if (i != st::PromptPs) out[n++] = i;
+        return n;
+    }
     default: out[0] = 0; out[1] = 1; return 2;
     }
 }
