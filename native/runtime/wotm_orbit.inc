@@ -23,7 +23,7 @@
 // Controle: com a orbita dirigindo a vista do jogador, o interpretInputs roda com PadFlags +0x16E4/+0x16E8 = 1 (configuracao
 // relativa a tela, updateInput*ConfigSR, que le o _cs desta camera) e os valores do jogo voltam na saida; os bytes do analogico
 // direito (GamePad 0x10..0x13: esquerda, direita, cima, baixo) vao para a orbita e chegam zerados ao jogo (na CR girariam o monstro,
-// na SR tambem, quando o esquerdo esta parado). Liga so num quadro com as direcoes paradas, como a troca do proprio jogo.
+// na SR tambem, quando o esquerdo esta parado). Liga na hora, mesmo andando.
 namespace
 {
     namespace orbit
@@ -427,9 +427,8 @@ namespace
                 in.forced = false;   // o jogo ja pediu a SR (Crush, fim do planeio) ou esta trocando: fica com ele
                 return -1;
             }
-            const bool still = !b[0xC] && !b[0xD] && !b[0xE] && !b[0xF];
-            if (!in.forced && !still)
-                return -1;
+            // liga na hora, mesmo andando: esperar o analogico parado deixava o controle de tanque ao sair da camera de perto andando
+            // (o InitCCMonsters volta o jogo a CR) e o monstro girava em vez de andar ate parar
             in.forced = true;
             in.pending = true;
             in.pf = pf;
