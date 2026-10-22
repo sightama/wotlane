@@ -371,8 +371,18 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   Capitólio, 0x1A0) precisam ser revistas.
 
 ## Brechas (baratos, em qualquer momento)
+- **"Recompiled options" no menu principal** (pedido em 2026-10-21): o menu principal em texto (fonte provisória: a do jogo, a da lista
+  de saves; a definitiva o dono escolhe) com um item novo que abre as opções do port. Etapas:
+  1. Menu em texto com o item abrindo um painel vazio: **feito** (`wotm_mainmenu.inc`, `NATIVO.md`, "Menu principal em texto").
+  2. Painel navegável com as opções do launcher ("QoL features") valendo ao vivo e um arquivo de configuração que o launcher também
+     lê e grava (algumas variáveis hoje são lidas uma vez no boot).
+  3. Rebind de teclas e botões: a tabela fixa do `ps2_pad.cpp` do fork vira configurável (costura do PS2Recomp: regerar o patch) e
+     a tela de "aperte a tecla".
+  4. Estilo dos ícones (Xbox, PS, Nintendo) e qual botão confirma e qual cancela nos menus (gancho do `screenGetInput` e páginas do
+     memory card; na luta X e O são golpes), já com os ícones 2D próprios (item abaixo).
+  5. Tirar a configuração de controle do Options do jogo e, em seguida, trocar os ícones 3D do jogo pelos nossos.
 - **Remapear controles no launcher:** pendência do `RUNTIME.md` ("Pendências": gamepad e remapeamento). Os controles já passam pelo
-  mapa por porta do `wotm_pad.inc`.
+  mapa por porta do `wotm_pad.inc`. Vai ser feito no "Recompiled options" (acima, etapa 3).
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros já está na fila
   (`PROXIMOS_PASSOS.md`).

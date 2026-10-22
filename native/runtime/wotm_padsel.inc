@@ -30,6 +30,7 @@
 // Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
 void wotmMultiSetCostume(int player, uint32_t costume);   // wotm_split4.inc: traje dos jogadores 3 e 4 (o Shell so tem lugar para 2)
+bool wotmTextMenuOn();   // wotm_mainmenu.inc: menu principal em texto (sem o rotulo "multiplayer" daqui)
 
 namespace wotm_padsel
 {
@@ -254,6 +255,8 @@ static void forSwitchObjects(uint8_t *rdram, uint32_t sw, F f)
 // Na tela 1 (e no fade de saida dela): esconde o "2 player" e publica o objeto em uso, o aceso e o alfa do fade (o do "1 player")
 static void hideTwoPlayerItem(uint8_t *rdram)
 {
+    if (wotmTextMenuOn())   // os itens sao do wotm_mainmenu.inc
+        return;
     const uint32_t cur = rd32(rdram, wotm::sym::currScreen), last = rd32(rdram, wotm::sym::lastScreen);
     const bool betweenOut = rd32(rdram, wotm::sym::betweenScreens) && last == 1;
     uint32_t obj[4] = {}, ref[4] = {};

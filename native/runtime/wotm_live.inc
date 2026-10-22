@@ -1158,6 +1158,8 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
+// Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)
+#include "wotm_mainmenu.inc"
 
 double wotmThreadCpuMs();   // ps2_hostprof.cpp: CPU da thread atual (usuario + kernel)
 
@@ -1441,6 +1443,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             drawView(S.vrts[0], gc);
         // textura da escolha de lados (fora do BeginTextureMode do quadro); a fonte e o atlas do texto do quadro anterior
         wotm_padsel::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
+        wotm_mainmenu::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
         {   // monstro 3D da lista de saves (wotm_savepics.hpp): no RenderTexture dele, antes do quadro; o draw abaixo o cola
             static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
             const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
@@ -1484,6 +1487,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_live::g_stage = "draw";
             S.scene.draw(ram, false);
             wotm_padsel::drawOnTelao(S.scene, ram, c3);   // escolha de lados do 2 jogadores (so no menu, durante a escolha)
+            wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
             wotm_live::g_stage = "idle";
             EndMode3D();
         }
@@ -1709,4 +1713,5 @@ void wotmLoadFreeze(bool) {}
 void wotmCaptureFadeStep(const uint8_t *) {}
 void wotmPickupHighlights(const uint8_t *) {}
 void wotmPadSelInstall(PS2Runtime &) {}
+void wotmMainMenuInstall(PS2Runtime &) {}
 #endif

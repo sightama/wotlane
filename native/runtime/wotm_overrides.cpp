@@ -66,6 +66,7 @@ void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0,
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
+void wotmMainMenuInstall(PS2Runtime &runtime);   // wotm_mainmenu.inc: menu principal em texto
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -2172,6 +2173,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     wotmPadSelInstall(runtime);
+    wotmMainMenuInstall(runtime);
     wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
