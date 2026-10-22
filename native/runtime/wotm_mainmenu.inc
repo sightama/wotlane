@@ -6,7 +6,7 @@
 //   5 modos do multiplayer (depois da escolha de controles do wotm_padsel.inc): free-for-all, elimination, minigames.
 //
 // Os itens do jogo (shell->m_menuItemSw[tela][1..n]) sao quadros com a palavra em imagem. Aqui todos os objetos dos switches ficam com
-// alfa 0 a cada quadro da tela (e no fade de saida dela) e a lista e desenhada com a fonte do jogo (a mesma da lista de saves) numa
+// alfa 0 a cada quadro da tela (e no fade de saida dela) e a lista e desenhada com as letras das palavras do jogo (wotm_menufont.inc; sem o disco, a fonte da lista de saves) numa
 // textura propria, posta no plano dos itens, do topo do primeiro ao pe do ultimo.
 // O cursor continua sendo o currentSelection[tela] do jogo: o gancho do screenGetInput consome cima/baixo e move o currentSelection;
 // o X e o triangulo seguem para a funcao da tela, que faz o que o item faz, como no retail. Na tela 1 a linha "recompiled options"
@@ -971,6 +971,19 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
     for (int r = 0; r < v.rows; ++r)
         longest = std::max(longest, std::strlen(v.row[r].label));
     const float textH = std::min(rowH * 0.5f, kW * 0.9f / (0.8f * float(longest)));
+    // com as letras do jogo (wotm_menufont.inc): minusculas, altura do x unica, a maior em que a linha mais larga cabe
+    char low[kMaxRows][32] = {};
+    bool own = true;
+    float widest = 0.f;
+    for (int r = 0; r < v.rows && own; ++r)
+    {
+        std::snprintf(low[r], sizeof low[r], "%s", v.row[r].label);
+        for (char *c = low[r]; *c; ++c) *c = static_cast<char>(std::tolower(static_cast<unsigned char>(*c)));
+        const float w = wotm_menufont::width(low[r]);
+        own = w > 0.f;
+        widest = std::max(widest, w);
+    }
+    const float xh = own ? std::min(rowH * 0.56f, kW * 0.9f * wotm_menufont::kRefXh / widest) : 0.f;
     if (list > 0.f)
     {
         const float top = (kH - rowH * float(v.rows)) * 0.5f;
@@ -983,6 +996,8 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
                                      Color{0, 0, 0, static_cast<unsigned char>(110 * list)});
             Color c = on ? lit : dim;
             c.a = static_cast<unsigned char>(0x80 * list);
+            if (own && wotm_menufont::draw(low[r], kW * 0.5f, cy + xh * 0.5f, xh, gsToRgb(c)))
+                continue;
             const char *s = v.row[r].label;
             label(quads, ram, tex0, s, kW * 0.5f, cy, textH, c);
         }

@@ -236,6 +236,33 @@ inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t>
     return true;
 }
 
+// Uma T4 do .TEX com a paleta CT32 8x2 de tbp `palTbp` do .RTX (16 cores, sem a troca do CSM1; nibble baixo primeiro), de cima para
+// baixo
+inline bool decodeT4(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, uint16_t texId, uint16_t palTbp, TexImage &out) {
+    const TexPacket *p = nullptr, *pal = nullptr;
+    const std::vector<TexPacket> tp = parseTex(tex, false), rp = parseTex(rtx, true);
+    for (const TexPacket &k : tp) if (k.texId == texId && k.psm == 0x14) p = &k;
+    for (const TexPacket &k : rp) if (k.isPalette() && k.tbp == palTbp && k.logW == 3) pal = &k;
+    if (!p || !pal) return false;
+    const size_t w = size_t(p->w()), h = size_t(p->h());
+    if (p->data() + (w * h + 1) / 2 > tex.size() || pal->data() + 64 > rtx.size()) return false;
+    uint32_t clut[16];
+    for (uint32_t i = 0; i < 16; ++i) {
+        uint32_t c;
+        std::memcpy(&c, rtx.data() + pal->data() + 4 * i, 4);
+        const uint32_t a = c >> 24;
+        clut[i] = (c & 0xFFFFFFu) | (a >= 0x80 ? 255u : a * 2u) << 24;
+    }
+    out.w = int(w);
+    out.h = int(h);
+    out.rgba.resize(w * h);
+    for (size_t i = 0; i < w * h; ++i) {
+        const uint8_t b = tex[p->data() + i / 2];
+        out.rgba[i] = clut[(i & 1) ? b >> 4 : b & 15];
+    }
+    return true;
+}
+
 inline bool FxTextures::load(const std::filesystem::path &discRoot, const std::string &iso) {
     std::vector<uint8_t> tex, rtx;
     if (!wotm::disc::readFile(discRoot, iso, "LVL/CENTRAL.TEX", tex) || !wotm::disc::readFile(discRoot, iso, "LVL/CENTRAL.RTX", rtx) ||
