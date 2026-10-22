@@ -155,8 +155,10 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
     const float h = size * 0.5f * (128.f / 96.f);
     const float u0 = float(cell % pr::kCols) / float(pr::kCols), v0 = float(cell / pr::kCols) / float(pr::kRows);
     const float u1 = u0 + 1.f / float(pr::kCols), v1 = v0 + 1.f / float(pr::kRows);
+    // o texto da legenda comeca logo depois do icone do jogo; a arte 2D encosta nele, entao o icone anda um pouco para a esquerda
+    const float shift = -size * 0.16f;
     auto corner = [&](float sr, float su, float out[3]) {
-        for (int k = 0; k < 3; ++k) out[k] = mid[k] + right[k] * sr * h + up[k] * su * h;
+        for (int k = 0; k < 3; ++k) out[k] = mid[k] + right[k] * (sr * h + shift) + up[k] * su * h;
     };
     float a[3], b[3], c[3], d[3];
     corner(-1, 1, a); corner(-1, -1, b); corner(1, -1, c); corner(1, 1, d);
