@@ -406,6 +406,40 @@ static bool inFullscreen()
     return IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE) || IsWindowFullscreen();
 }
 
+// Captura pelo OBS na tela cheia sem borda (WOTM_CAPTUREFIX, padrao 1). O GLFW faz a janela sem borda com WS_POPUP e o raylib a poe
+// do tamanho exato do monitor: com o foco, o driver (OpenGL da NVIDIA) promove a janela a "tela cheia" e apresenta direto, fora da
+// composicao do DWM (independent flip). Fora de foco a imagem passa pelo DWM e o OBS grava; com foco a captura nova (Windows Graphics
+// Capture) congela na ultima imagem composta e a antiga (BitBlt) fica preta. 1 = tira o WS_POPUP (fica WS_OVERLAPPED sem moldura, como
+// no relato do Processing/JOGL); 2 = isso e a janela 1 px mais alta que o monitor (o driver so promove a janela que cobre o monitor
+// exato; a linha a mais fica fora da tela); 0 = como o raylib deixa. Sem windows.h (conflita com o raylib).
+extern "C" __declspec(dllimport) long long __stdcall GetWindowLongPtrW(void *hwnd, int index);
+extern "C" __declspec(dllimport) long long __stdcall SetWindowLongPtrW(void *hwnd, int index, long long value);
+extern "C" __declspec(dllimport) int __stdcall SetWindowPos(void *hwnd, void *after, int x, int y, int cx, int cy, unsigned flags);
+static void captureFriendlyBorderless()
+{
+    const char *e = std::getenv("WOTM_CAPTUREFIX");
+    const int mode = e && *e ? std::atoi(e) : 1;
+    void *hwnd = GetWindowHandle();
+    if (mode <= 0 || !hwnd)
+        return;
+    constexpr int kGwlStyle = -16;
+    constexpr long long kWsPopup = 0x80000000LL;
+    constexpr unsigned kSwpNoSize = 0x1, kSwpNoMove = 0x2, kSwpNoZorder = 0x4, kSwpNoActivate = 0x10, kSwpFrameChanged = 0x20;
+    const long long style = GetWindowLongPtrW(hwnd, kGwlStyle);
+    SetWindowLongPtrW(hwnd, kGwlStyle, style & ~kWsPopup);   // WS_OVERLAPPED = 0: sem WS_CAPTION continua sem moldura
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, kSwpNoSize | kSwpNoMove | kSwpNoZorder | kSwpNoActivate | kSwpFrameChanged);
+    if (mode >= 2)
+    {
+        const int mon = GetCurrentMonitor();
+        const Vector2 p = GetMonitorPosition(mon);
+        SetWindowPos(hwnd, nullptr, static_cast<int>(p.x), static_cast<int>(p.y), GetMonitorWidth(mon), GetMonitorHeight(mon) + 1,
+                     kSwpNoZorder | kSwpNoActivate);
+    }
+    std::fprintf(stderr, "[native] tela cheia sem borda: estilo 0x%llx -> 0x%llx%s (WOTM_CAPTUREFIX=%d, para o OBS)\n",
+                 static_cast<unsigned long long>(style), static_cast<unsigned long long>(style & ~kWsPopup), mode >= 2 ? ", +1 px de altura" : "",
+                 mode);
+}
+
 // Tela cheia no monitor da janela (proporcao do monitor; com WOTM_ASPECT fixo o quadro fica com faixas) ou de volta a janela.
 static void setFullscreen(bool on)
 {
@@ -423,6 +457,7 @@ static void setFullscreen(bool on)
     {
         ToggleBorderlessWindowed();
         ClearWindowState(FLAG_WINDOW_TOPMOST);   // o raylib 5.5 poe a janela sem borda sempre por cima (GLFW_FLOATING)
+        captureFriendlyBorderless();
         return;
     }
     if (IsWindowFullscreen())
