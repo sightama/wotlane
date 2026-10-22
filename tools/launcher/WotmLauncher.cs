@@ -129,7 +129,10 @@ class Launcher : Form
     readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox aspect = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
     readonly CheckBox dynWidth = new DarkCheckBox { Text = "Dynamic width (aspect follows the window)", AutoSize = true };
-    readonly CheckBox fullscreen = new DarkCheckBox { Text = "Fullscreen (F11)   [WOTM_FULLSCREEN]", AutoSize = true };
+    // Modo da tela (WOTM_FULLSCREEN): 0 = janela, 1 = tela cheia sem borda, 2 = tela cheia exclusiva (o monitor troca de modo)
+    static readonly string[] DisplayModes = { "0", "1", "2" };
+    static readonly string[] DisplayModeLabels = { "Windowed", "Borderless fullscreen", "Exclusive fullscreen" };
+    readonly ComboBox fullscreen = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
@@ -198,7 +201,7 @@ class Launcher : Form
             vsync.Checked = true;
             aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
             dynWidth.Checked = true;
-            fullscreen.Checked = true;
+            fullscreen.SelectedIndex = 1;
             matchOn.Checked = false;
             matchPlayer.SelectedIndex = 0;
             matchLevel.SelectedIndex = 0;
@@ -248,9 +251,13 @@ class Launcher : Form
         aspect.Enabled = !dynWidth.Checked;
         dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
 
-        fullscreen.Checked = !saved.TryGetValue("WOTM_FULLSCREEN", out v) || v == "1";
-        tips.SetToolTip(fullscreen, "Opens in borderless fullscreen on the window's monitor (F11 toggles at any time). Without it the window opens at the resolution's size (smaller if it does not fit).");
-        inner.Controls.Add(fullscreen);
+        fullscreen.Items.AddRange(DisplayModeLabels);
+        int fi = Array.IndexOf(DisplayModes, saved.TryGetValue("WOTM_FULLSCREEN", out v) ? v : "1");
+        fullscreen.SelectedIndex = fi >= 0 ? fi : 1;
+        tips.SetToolTip(fullscreen, "Borderless: a window the size of the monitor; the desktop keeps its mode, Alt+Tab is instant. " +
+            "Exclusive: the monitor switches to the game (native resolution); Alt+Tab is slower but the compositor stays out of the way. " +
+            "Windowed: the window opens at the resolution's size (smaller if it does not fit). F11 toggles between the window and the chosen fullscreen.");
+        inner.Controls.Add(Row("Display mode (F11)   [WOTM_FULLSCREEN]", fullscreen));
 
         rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");
         for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
@@ -482,7 +489,7 @@ class Launcher : Form
         lines.Add("WOTM_RES|" + Resolutions[res.SelectedIndex]);
         lines.Add("WOTM_ASPECT|" + Aspects[aspect.SelectedIndex]);
         lines.Add(":DynWidth|" + (dynWidth.Checked ? "1" : "0"));
-        lines.Add("WOTM_FULLSCREEN|" + (fullscreen.Checked ? "1" : "0"));
+        lines.Add("WOTM_FULLSCREEN|" + DisplayModes[fullscreen.SelectedIndex]);
         lines.Add("WOTM_HZ|" + Rates[rate.SelectedIndex]);
         lines.Add("WOTM_VSYNC|" + (vsync.Checked ? "1" : "0"));
         lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
@@ -547,7 +554,7 @@ class Launcher : Form
         psi.EnvironmentVariables["WOTM_RES"] = Resolutions[res.SelectedIndex];
         if (dynWidth.Checked) psi.EnvironmentVariables.Remove("WOTM_ASPECT");
         else psi.EnvironmentVariables["WOTM_ASPECT"] = Aspects[aspect.SelectedIndex];
-        if (fullscreen.Checked) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "1";
+        if (fullscreen.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = DisplayModes[fullscreen.SelectedIndex];
         else psi.EnvironmentVariables.Remove("WOTM_FULLSCREEN");
         if (rate.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_HZ"] = Rates[rate.SelectedIndex];
         else psi.EnvironmentVariables.Remove("WOTM_HZ");

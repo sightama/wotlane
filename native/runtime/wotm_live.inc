@@ -363,7 +363,7 @@ static int renderHeight()
     }();
     return g_force43 ? 720 : h;
 }
-// Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): WOTM_FULLSCREEN=1 vai para a tela cheia sem borda (proporcao
+// Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): WOTM_FULLSCREEN=1|2 vai para a tela cheia sem borda ou exclusiva (proporcao
 // do monitor; com WOTM_ASPECT fixo o quadro fica com faixas); senao a janela de 960x720 do runtime vira o tamanho do quadro nativo
 // (renderHeight na proporcao), reduzido para caber no monitor. O quadro nao depende da janela: so a ampliacao final muda.
 // Taxa de apresentacao: WOTM_HZ=<n> (padrao: a do monitor da janela) com o vsync do monitor (WOTM_VSYNC=0 desliga e so limita pelo
@@ -409,16 +409,39 @@ static void fitWindow()
     }
 }
 
-// Tela cheia sem borda no monitor da janela (proporcao do monitor; com WOTM_ASPECT fixo o quadro fica com faixas) ou de volta a janela.
+// Tipo de tela cheia (WOTM_FULLSCREEN): 1 = sem borda (janela do tamanho do monitor, o desktop nao muda de modo), 2 = exclusiva (o
+// monitor troca para o modo da janela, na resolucao nativa dele). O F11 alterna entre a janela e o tipo escolhido (sem a variavel: sem borda).
+static int g_fullscreenKind = 1;
+
+static bool inFullscreen()
+{
+    return IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE) || IsWindowFullscreen();
+}
+
+// Tela cheia no monitor da janela (proporcao do monitor; com WOTM_ASPECT fixo o quadro fica com faixas) ou de volta a janela.
 static void setFullscreen(bool on)
 {
-    if (on == IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE))
+    if (on == inFullscreen())
         return;
-    ToggleBorderlessWindowed();
+    if (on && g_fullscreenKind == 2)
+    {
+        // o ToggleFullscreen do raylib 5.5 pede ao monitor o modo do tamanho atual da janela: antes, a janela vira a resolucao nativa
+        const int mon = GetCurrentMonitor();
+        SetWindowSize(GetMonitorWidth(mon), GetMonitorHeight(mon));
+        ToggleFullscreen();
+        return;
+    }
     if (on)
+    {
+        ToggleBorderlessWindowed();
         ClearWindowState(FLAG_WINDOW_TOPMOST);   // o raylib 5.5 poe a janela sem borda sempre por cima (GLFW_FLOATING)
+        return;
+    }
+    if (IsWindowFullscreen())
+        ToggleFullscreen();   // volta com o tamanho do monitor
     else
-        fitWindow();   // o raylib volta ao tamanho de antes, que e o 960x720 do runtime quando a sessao abriu em tela cheia
+        ToggleBorderlessWindowed();
+    fitWindow();   // o raylib volta ao tamanho de antes, que e o 960x720 do runtime (ou o do monitor) quando a sessao abriu em tela cheia
 }
 
 static void initWindowAspect()
@@ -429,7 +452,11 @@ static void initWindowAspect()
     done = true;
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
         initPresentRate();
-    if (const char *s = std::getenv("WOTM_FULLSCREEN"); s && *s && *s != '0')
+    const char *s = std::getenv("WOTM_FULLSCREEN");
+    const bool on = s && *s && *s != '0';
+    if (on && *s == '2')
+        g_fullscreenKind = 2;
+    if (on)
         setFullscreen(true);
     else
         fitWindow();
@@ -439,7 +466,7 @@ static void initWindowAspect()
 static void fullscreenKey()
 {
     if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
-        setFullscreen(!IsWindowState(FLAG_BORDERLESS_WINDOWED_MODE));
+        setFullscreen(!inFullscreen());
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
