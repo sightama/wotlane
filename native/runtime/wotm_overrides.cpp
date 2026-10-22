@@ -1536,8 +1536,8 @@ namespace
             std::memcpy(b, saved, sizeof saved);
     }
 
-    // So na configuracao relativa ao monstro (updateInput0ConfigCR, PadFlags +0x16E4 = 0). Na relativa a tela (ConfigSR, +0x16E4 != 0,
-    // o normal na luta; o jogo alterna entre as duas, por exemplo nas cinemas) o proprio jogo, travado, ja projeta o analogico da
+    // So na configuracao relativa ao monstro (updateInput0ConfigCR, PadFlags +0x16E4 = 0). Na relativa a tela (ConfigSR, +0x16E4 != 0;
+    // so na vista unificada e no Crush: na vista normal o humano fica na CR, docs/investigacoes/2026-10-22/camera_controle_cr_sr.md) o proprio jogo, travado, ja projeta o analogico da
     // camera (PadFlags +0x17E0) na direcao do alvo e na perpendicular; converter aqui antes fazia a conversao duas vezes, e o erro
     // era o angulo entre a camera e a direcao do alvo (para cima podia ir para tras ou de lado com a camera fora das costas).
     // Travado, o jogo move o monstro no referencial dele, virado para o alvo (cima/baixo = para o alvo e para tras, esquerda/direita =

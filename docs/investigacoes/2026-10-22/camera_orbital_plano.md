@@ -3,11 +3,12 @@
 Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um commit; o dono testa entre elas.
 
 ## O que já se sabe
-- **A entrada já é relativa à câmera na luta.** O jogo usa a configuração relativa à tela (`updateInput0ConfigSR`, `PadFlags +0x16E4`
-  diferente de 0; `NATIVO.md`, linha do `WOTM_LOCKTOGGLE`). A sensação de "esquerda gira a câmera" vem do `Camera::normalUpdate`
-  (1084 instruções, só em asm): ele não lê o controle e vai se ajeitando atrás do monstro, na direção em que ele olha
-  (`smoothEasyInAngle`, `mathfHeadingFromPointToPoint`). O monstro vira para a esquerda, a câmera corre para as costas dele e a tela
-  gira. A etapa 0 confirma.
+- **Na câmera normal o controle é relativo ao monstro** (dono, 2026-10-22): esquerda/direita giram o monstro (tipo tanque); só na
+  vista unificada (câmera de perto) ele anda para onde se aponta (configuração relativa à tela, `updateInput0ConfigSR`, `PadFlags
+  +0x16E4`). A suposição do comentário do mod de lock-on ("ConfigSR é o normal na luta") deve estar errada; a etapa 0 confere. O
+  `Camera::normalUpdate` (1084 instruções, só em asm) não lê o controle e vai se ajeitando atrás do monstro, na direção em que ele
+  olha (`smoothEasyInAngle`, `mathfHeadingFromPointToPoint`). Então a etapa 1 troca as duas coisas: o modo do controle fora da vista
+  unificada e a câmera.
 - **O encanamento existe:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`, `wotm_overrides.cpp`) escreve a pose no `_cs` da vista
   depois do `Cameras::Update` e na entrada do `viewUpdate`, então o jogo inteiro usa a câmera nova (matrizes, recorte, LOD, partículas,
   som, controle relativo). Convenção de eixos pronta (heading em torno de Z, 0 = +Y).
@@ -34,15 +35,41 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 3 | Chão e prédios | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores | estado de órbita por vista, cada uma pelo controle do seu jogador |
-| 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar; `WOTM_CAMERA` etc. |
+| 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
 | 7 | Mouse na câmera | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
 | 8 | Teclado novo | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
 | 9 | Menus com mouse | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
 
 Etapas 7 a 9 podem andar em paralelo à 2–5 (não dependem da órbita além do gancho do mouse).
 
+## Respostas do dono (2026-10-22, segunda rodada)
+- **Zoom:** sem zoom manual; distância automática, como a câmera de qualquer jogo (a que o jogo já calcula, ajustada se preciso).
+- **Vista unificada:** o que for mais fácil (manter a do jogo, se for o caso) e uma **opção para desligar a câmera de perto** de vez.
+- **L2:** o dono não conhecia o `TogglePOV` (POV 0 ↔ 3); a etapa 0 descobre o botão e o que o POV 3 faz.
+
+## Etapa 0: resultado (2026-10-22)
+Relatórios: `camera_controle_cr_sr.md` (controle) e `camera_normalupdate.md` (câmera). Resumo:
+- **Controle:** `PadFlags +0x16E4` = configuração ativa (0 CR, 1 SR), `+0x16E8` = pedida (Monster +0x6724/+0x6728). Só a vista
+  unificada (`InitCCCamera*`), o Crush e o fim do planeio pedem SR; agarrão, morte, saída da vista unificada voltam a CR. A SR usa o
+  `_cs` da câmera da vista do jogador (`rot.z` e linha 0 da matriz), então funciona na câmera normal; o jogo não a usa ali porque o
+  `normalUpdate` corre para as costas e o monstro andaria em círculo. Com a órbita, forçar SR nos humanos dá o controle moderno.
+- **O "L2 da câmera":** o `TogglePOV` é código morto (`updateViewChanges` não tem chamador). L2 segurado é olhar/mirar para cima e para
+  baixo; o analógico direito gira o monstro (X) e olha (Y), e terá de ser zerado no `GamePad` com a órbita.
+- **Câmera normal:** pivô na origem do monstro; distância por coleira de 280 a 320; volta às costas depois de 300 quadros parado ou
+  arrastada; trava de setor traseiro de ±60° que gira a câmera junto quando o monstro gira (é o "correr para as costas"); balanço
+  perto/baixo ou por cima com rampa, escalada, mira e alvo (o único zoom automático); sem teste de chão. Não há campo de heading:
+  o que persiste é a posição do `_cs`.
+- **Câmera de perto:** todas as entradas passam por `m_camUnify`, que o `split4` já zera para 3 e 4 jogadores: a opção de desligar
+  reaproveita isso (efeitos: IA gira mais devagar de perto, tela dividida de 2 nunca vira uma só).
+
+### Desenho da etapa 1
+- Embrulho do `Cameras::Update` (o mesmo da câmera livre): antes do original, ressincroniza o ângulo da órbita quando o POV volta a 0 e
+  neutraliza o jogo (`E60` = 1, `DA4` = `DF4` = 0, `D98`/`D9C` = 0); depois do original, nas câmeras com POV 0, monstro humano e sem vista
+  unificada, refaz a posição com o deslocamento do jogo (`D10` mais o balanço) girado pelo ângulo nosso, `rot.z` para o monstro,
+  `rot.x` do jogo, matriz refeita; recentraliza levando o ângulo para as costas depois de ~1,5 s sem mexer, com o monstro andando.
+- Controle: no gancho do `interpretInputs` (o do lock-on), com a órbita ativa no jogador, `+0x16E4`/`+0x16E8` = 1 durante a chamada e
+  restaurados na saída; os bytes do analógico direito (0x10..0x13 do `GamePad`) zerados e lidos pela órbita.
+- Alvo travado (etapa 2): pose do jogo, com desvio limitado pelo analógico direito.
+
 ## Perguntas em aberto
-- O que o analógico direito e o L2 fazem hoje no jogo (o L2 é a "câmera" do jogo: `TogglePOV` entre POV 0 e 3, `Monster.cpp`); com a
-  órbita, o L2 ainda faz sentido?
-- Zoom (distância) pela roda do mouse ou pelo POV?
-- Vista unificada (os dois monstros perto): fica a do jogo ou também ganha órbita?
+- Com a órbita, o `TogglePOV` ainda faz sentido?
