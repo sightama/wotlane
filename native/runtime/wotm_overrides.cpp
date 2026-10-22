@@ -1299,8 +1299,10 @@ namespace
     // m_monsters (TheGame +0x120380): 4 lugares de jogador e as IAs a partir do [4]; com a luta de ate 8 a IA 7 fica no [10], e o
     // TheGame tem lugar para 16. Percorrer so 8 deixava as IAs 5 a 7 fora do lock-on.
     constexpr uint32_t kMonsterSlots = 16u;
-    constexpr uint32_t kMonsterCs = 0xCu, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u, kMonsterDying = 0xEFu,
-                       kMonsterCameraView = 0x6CD8u;
+    // m_playerNum (+0x18) 0 = lugar alocado mas fora da luta: no Endurance as IAs da fila ficam em m_monsters desde o comeco,
+    // paradas e "vivas", e so a que entrou tem m_playerNum; o getClosestMonster do jogo pula as de 0 (o lock-on travava nelas).
+    constexpr uint32_t kMonsterCs = 0xCu, kMonsterPlayerNum = 0x18u, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u,
+                       kMonsterDying = 0xEFu, kMonsterCameraView = 0x6CD8u;
     constexpr uint32_t kPadL1 = 0x0u, kPadL2 = 0x1u, kPadR1 = 0x3u, kPadR2 = 0x4u, kPadLeft = 0xCu, kPadRight = 0xDu, kPadUp = 0xEu,
                        kPadDown = 0xFu;
     PS2Runtime::RecompiledFunction g_origUpdateHistory[3] = {}, g_origInterpretInputs = nullptr, g_origPadReadLock = nullptr;
@@ -1339,7 +1341,8 @@ namespace
         return nullptr;
     }
 
-    // O alvo travado (m_pinTarget, Monster +0x6C04, do quadro anterior) e um dos m_monsters do TheGame com m_dead (+0xE8)?
+    // O alvo travado (m_pinTarget, Monster +0x6C04, do quadro anterior) e um dos m_monsters do TheGame com m_dead (+0xE8) ou que
+    // saiu da luta (m_playerNum 0)?
     bool lockTargetDead(uint8_t *rdram, uint32_t owner)
     {
         const uint32_t target = FAST_READ32(owner + kMonsterPinTarget);
@@ -1347,7 +1350,8 @@ namespace
             return false;
         for (uint32_t i = 0; i < kMonsterSlots; ++i)
             if (FAST_READ32(kGame + 0x120380 + 4 * i) == target)
-                return ramOk(target, kMonsterDead + 1u) && static_cast<int8_t>(rdram[target + kMonsterDead]) != 0;
+                return ramOk(target, kMonsterDead + 1u) &&
+                       (static_cast<int8_t>(rdram[target + kMonsterDead]) != 0 || FAST_READ32(target + kMonsterPlayerNum) == 0u);
         return false;   // predio, peca de chefe etc.
     }
 
@@ -1385,7 +1389,8 @@ namespace
     // m_monsters[i] serve de alvo para o dono: vivo e alvejavel como no getClosestTargetable(6); posicao em tp
     bool lockCandidate(uint8_t *rdram, uint32_t m, uint32_t owner, float tp[3])
     {
-        if (!m || m == owner || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying])
+        if (!m || m == owner || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying] ||
+            FAST_READ32(m + kMonsterPlayerNum) == 0u)
             return false;
         return (rd16(rdram, m + 4) & 6u) == 6u && targetPos(rdram, m, tp);
     }
@@ -1410,8 +1415,7 @@ namespace
                 bestD = d;
             }
         }
-        if (best)
-            FAST_WRITE32(owner + kMonsterPinTarget, best);
+        FAST_WRITE32(owner + kMonsterPinTarget, best);   // sem candidato, 0: o updateLock escolhe (antes ficava o alvo velho)
     }
 
     // Troca o alvo travado para o monstro vivo mais proximo a esquerda (dir < 0) ou a direita (dir > 0) do atual na tela: angulo
