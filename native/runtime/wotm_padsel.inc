@@ -1145,21 +1145,31 @@ static bool objectPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
 // Textura (de render: V invertido) num retangulo do plano: esquerda/topo e largura/altura nos eixos dele, alfa 0..1; `uv` = parte
 // da textura (x0, y0, x1, y1 em fracao, y de cima para baixo); `tint` multiplica a cor
 static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float top, float wx, float hy, float alpha, float lift,
-                        const float uv[4] = nullptr, Color tint = WHITE)
+                        const float uv[4] = nullptr, Color tint = WHITE, bool premul = false)
 {
+    // premul: textura desenhada com BLEND_CUSTOM_SEPARATE sobre fundo transparente (cor ja multiplicada pelo alfa): sem multiplicar de
+    // novo (a lista do menu tem itens e brilho translucidos)
     const float u0 = uv ? uv[0] : 0.f, u1 = uv ? uv[2] : 1.f, vt = uv ? 1.f - uv[1] : 1.f, vb = uv ? 1.f - uv[3] : 0.f;
     const Vector3 off = vscale(pl.n, lift);
     auto at = [&](float x, float y) { return vadd(vadd(vadd(pl.c, vscale(pl.right, x)), vscale(pl.up, y)), off); };
     const Vector3 tl = at(left, top), tr = at(left + wx, top), bl = at(left, top - hy), br = at(left + wx, top - hy);
     rlDrawRenderBatchActive();
-    BeginBlendMode(BLEND_ALPHA);
+    if (premul)
+    {
+        rlSetBlendFactors(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM);
+    }
+    else
+        BeginBlendMode(BLEND_ALPHA);
     // sem profundidade: os itens com alfa 0 continuam gravando Z na frente do telao (e nada fica entre a area e a camera)
     rlDisableDepthTest();
     rlDisableDepthMask();
     rlDisableBackfaceCulling();
     rlSetTexture(tex.id);
     rlBegin(RL_QUADS);
-    rlColor4ub(tint.r, tint.g, tint.b, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f));
+    const float a = std::clamp(alpha, 0.f, 1.f), k = premul ? a : 1.f;
+    rlColor4ub(static_cast<unsigned char>(tint.r * k), static_cast<unsigned char>(tint.g * k), static_cast<unsigned char>(tint.b * k),
+               static_cast<unsigned char>(a * 255.f));
     rlTexCoord2f(u0, vt); rlVertex3f(tl.x, tl.y, tl.z);
     rlTexCoord2f(u0, vb); rlVertex3f(bl.x, bl.y, bl.z);
     rlTexCoord2f(u1, vb); rlVertex3f(br.x, br.y, br.z);

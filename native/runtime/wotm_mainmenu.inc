@@ -6,7 +6,7 @@
 //   5 modos do multiplayer (depois da escolha de controles do wotm_padsel.inc): free-for-all, elimination, minigames.
 //
 // Os itens do jogo (shell->m_menuItemSw[tela][1..n]) sao quadros com a palavra em imagem. Aqui todos os objetos dos switches ficam com
-// alfa 0 a cada quadro da tela (e no fade de saida dela) e a lista e desenhada com a fonte do jogo (a mesma da lista de saves) numa
+// alfa 0 a cada quadro da tela (e no fade de saida dela) e a lista e desenhada com as letras das palavras do jogo (wotm_menufont.inc; sem o disco, a fonte da lista de saves) numa
 // textura propria, posta no plano dos itens, do topo do primeiro ao pe do ultimo.
 // O cursor continua sendo o currentSelection[tela] do jogo: o gancho do screenGetInput consome cima/baixo e move o currentSelection;
 // o X e o triangulo seguem para a funcao da tela, que faz o que o item faz, como no retail. Na tela 1 a linha "recompiled options"
@@ -700,7 +700,10 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 // ------------------------------------------------------------------ desenho (janela)
 
-constexpr int kW = 1200, kH = 900;   // textura da lista: kMaxRows linhas de kH / kMaxRows
+// textura da lista: kMaxRows linhas, cada uma kSpacing passos dos itens do jogo (um pouco mais folgada que a lista dele), e kPadRows
+// passos de folga em cima e embaixo (o brilho do item escolhido passa da linha). kH acompanha kSteps para manter a densidade.
+constexpr float kSpacing = 1.15f, kPadRows = 0.6f, kSteps = kMaxRows * kSpacing + 2.f * kPadRows;
+constexpr int kW = 1200, kH = 1190;
 static RenderTexture2D g_rt{};
 static Font g_font{};
 static bool g_fontTried = false;
@@ -956,7 +959,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         g_rt = LoadRenderTexture(kW, kH);
         SetTextureFilter(g_rt.texture, TEXTURE_FILTER_BILINEAR);
     }
-    constexpr float rowH = float(kH) / kMaxRows;
+    constexpr float step = float(kH) / kSteps, rowH = step * kSpacing;   // passo dos itens do jogo e o das nossas linhas
     // cores dos itens do telao: aceso creme, apagado laranja terroso (escala do GS)
     constexpr Color lit{121, 118, 111, 0x80}, dim{88, 56, 34, 0x80};
     BeginTextureMode(g_rt);
@@ -970,14 +973,64 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
     size_t longest = 1;
     for (int r = 0; r < v.rows; ++r)
         longest = std::max(longest, std::strlen(v.row[r].label));
-    const float textH = std::min(rowH * 0.5f, kW * 0.9f / (0.8f * float(longest)));
+    const float textH = std::min(step * 0.5f, kW * 0.9f / (0.8f * float(longest)));
+    // com as letras do jogo (wotm_menufont.inc): minusculas, altura do x unica, a maior em que a linha mais larga cabe
+    char low[kMaxRows][32] = {};
+    bool own = true;
+    float widest = 0.f;
+    for (int r = 0; r < v.rows && own; ++r)
+    {
+        std::snprintf(low[r], sizeof low[r], "%s", v.row[r].label);
+        for (char *c = low[r]; *c; ++c) *c = static_cast<char>(std::tolower(static_cast<unsigned char>(*c)));
+        const float w = wotm_menufont::width(low[r]);
+        own = w > 0.f;
+        widest = std::max(widest, w);
+    }
+    const float xh = own ? std::min(step * 0.56f, kW * 0.9f * wotm_menufont::kRefXh / widest) : 0.f;
     if (list > 0.f)
     {
         const float top = (kH - rowH * float(v.rows)) * 0.5f;
+        // brilho atras do item escolhido, como o objeto solto do jogo (m_menuObj, textura 194): miolo com alfa de vertice 19 (x2: ~0,3)
+        // na cor dos itens apagados, caindo a 0 na borda; miolo com ~0,55 do passo dos itens de altura, borda com 1,5 passo de altura e
+        // meio passo de cada lado; miolo da largura do texto (o do jogo tem uma so, a de uma palavra curta)
+        if (own && v.sel >= 0 && v.sel < v.rows)
+        {
+            const float cy = top + rowH * (float(v.sel) + 0.5f), w = wotm_menufont::width(low[v.sel]) * xh / wotm_menufont::kRefXh * 0.95f;
+            const float x0 = kW * 0.5f - w * 0.5f, x1 = kW * 0.5f + w * 0.5f, y0 = cy - step * 0.27f, y1 = cy + step * 0.27f;
+            const float mx = step * 0.5f, my = step * 0.48f;
+            const Color in = gsToRgb(Color{67, 41, 28, static_cast<unsigned char>(19 * 2 * list)}), out{in.r, in.g, in.b, 0};
+            const float xs[4] = {x0 - mx, x0, x1, x1 + mx}, ys[4] = {y0 - my, y0, y1, y1 + my};
+            rlSetTexture(rlGetTextureIdDefault());
+            rlBegin(RL_QUADS);
+            for (int j = 0; j < 3; ++j)
+                for (int i = 0; i < 3; ++i)
+                {
+                    // vertices na ordem do DrawRectangle (cima-esq, baixo-esq, baixo-dir, cima-dir); so os do miolo com alfa
+                    const int vi[4][2] = {{i, j}, {i, j + 1}, {i + 1, j + 1}, {i + 1, j}};
+                    for (const auto &p : vi)
+                    {
+                        const Color &k = p[0] >= 1 && p[0] <= 2 && p[1] >= 1 && p[1] <= 2 ? in : out;
+                        rlColor4ub(k.r, k.g, k.b, k.a);
+                        rlTexCoord2f(0.f, 0.f);
+                        rlVertex2f(xs[p[0]], ys[p[1]]);
+                    }
+                }
+            rlEnd();
+            rlSetTexture(0);
+        }
         for (int r = 0; r < v.rows; ++r)
         {
             const float cy = top + rowH * (float(r) + 0.5f);
             const bool on = r == v.sel;
+            if (own)
+            {
+                // cores dos itens do jogo (cor de vertice dos objetos, escala do GS; alfa x2, como a textura deles): o escolhido cinza
+                // opaco, os outros marrom com ~40% de opacidade
+                Color c = on ? Color{64, 64, 64, 66} : Color{67, 41, 28, 26};
+                c.a = static_cast<unsigned char>(std::min(0x80, c.a * 2) * list);
+                if (wotm_menufont::draw(low[r], kW * 0.5f, cy + xh * 0.5f, xh, gsToRgb(c)))
+                    continue;
+            }
             if (on)
                 DrawRectangleRounded(Rectangle{kW * 0.04f, cy - rowH * 0.42f, kW * 0.92f, rowH * 0.84f}, 0.5f, 8,
                                      Color{0, 0, 0, static_cast<unsigned char>(110 * list)});
@@ -1048,7 +1101,7 @@ static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Came
     cx /= float(n);
     // cada uma das kMaxRows vagas da textura tem a altura do passo dos itens do jogo (o vao dividido por eles); as linhas ficam
     // centradas no vao
-    const float span = top - bottom, hy = span * float(kMaxRows) / float(n), wx = hy * float(kW) / float(kH);
+    const float span = top - bottom, hy = span * kSteps / float(n), wx = hy * float(kW) / float(kH);
     float mid = (top + bottom) * 0.5f;
     // sem o logo (logoFrame), a lista vai para o centro do telao
     if (wotm_padsel::Plane tl; g_logoN && v.screenObj && wotm_padsel::objectPlane(scene, ram, cam, v.screenObj, tl))
@@ -1063,7 +1116,8 @@ static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Came
         logged |= 1 << v.screen;
         std::fprintf(stderr, "[mainmenu] tela %d em texto: %d itens do jogo, vao %.1f, linha %.1f\n", v.screen, n, span, itemH);
     }
-    wotm_padsel::drawOnPlane(base, g_rt.texture, cx - wx * 0.5f, mid + hy * 0.5f, wx, hy, v.alpha, 0.004f * (base.x1 - base.x0));
+    wotm_padsel::drawOnPlane(base, g_rt.texture, cx - wx * 0.5f, mid + hy * 0.5f, wx, hy, v.alpha, 0.004f * (base.x1 - base.x0), nullptr, WHITE,
+                             true);
 }
 
 static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam)

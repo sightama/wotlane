@@ -1185,6 +1185,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 // Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)
+#include "wotm_menufont.inc"   // palavras da lista do menu com as letras do jogo (antes do wotm_mainmenu.inc)
 #include "wotm_mainmenu.inc"
 #include "wotm_optscreen.inc"   // tela de opcoes do jogo com o texto redesenhado (depois do wotm_mainmenu.inc)
 #include "wotm_legend.inc"   // legenda de baixo e dica grande dos menus nativos (depois do wotm_optscreen.inc: fonte)
