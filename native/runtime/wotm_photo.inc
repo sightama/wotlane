@@ -5,17 +5,24 @@
 // translucida. Com a thread do EE parada o jogo nao refaz nada que dependa da camera, entao o desenho leva junto, a cada quadro:
 //  - HUD do hier (Scene::hud, hp, overlay, hpOverlay): objetos 3D que o Hud::update pos na frente da camera do jogo. Cada matriz vai
 //    do espaco do olho do jogo para o da camera livre (com o zoom compensado nos eixos da tela), entao o HUD fica parado na tela;
-//  - lens flare: a lista do quadro ja vem projetada na tela do jogo (x, y do GS e W). Volta ao mundo pela camera do jogo e e
-//    projetada de novo pela livre (luz no infinito: so a direcao); o teste de oclusao do drawFlares roda contra a cena nova. So as
-//    luzes que estavam na tela na hora da pausa existem (o jogo compactou a lista);
+//  - lens flare: a lista e refeita a cada quadro pela camera livre, como o jogo a monta (hierLightNode e particleAddLensFlareToList) e
+//    projeta (particleLensFlareTestZbuffer): luzes do hier com lens flare que a coleta achou (Scene::worldLights, inclusive as que
+//    estavam fora da tela na pausa, como o olho do Robo-47 visto de frente) e sistemas de particula com luz; o teste de oclusao do
+//    drawFlares roda contra a cena nova. Sem nenhuma das duas fontes, a lista do quadro pausado volta ao mundo e e reprojetada;
+//  - fogo da cabeca do Agamo (preset 141): o emissor so solta particulas quando a travessia do jogo passa por ele. Com o Agamo fora
+//    da tela na pausa o fogo ja tinha acabado; aqui ele e simulado (wotm_flame.hpp, aquecido e parado como numa foto) em cada emissor
+//    percorrido sem particulas vivas perto (Particles::synth);
 //  - barras sobre os inimigos e o icone de vida do jogo: o gancho do Hud::drawHealthIcon anota o ponto do mundo (Snapshot::anchors);
 //    aqui o ponto e projetado pelas duas cameras e a diferenca desloca as barras (ScreenRect::anchor) e o icone (ScreenPolys no mesmo
 //    centro). Na tela dividida as barras saem (a camera livre mostra so a vista 0 em tela cheia).
 // O texto do jogo (cronometro, nomes) e os numeros de dano (projetados pelo nativo) ja seguem a tela/a camera. Esconder o HUD tira tudo
 // isso, menos os fades. Salvar grava o quadro nativo sem a legenda em <pasta do settings.ini>/screenshots/WotM_<data>_<hora>.png.
-// Ao sair, o jogo so volta quando os botoes forem soltos (o botao de sair nao chega ao monstro). O som segue tocando, como no F7.
+// Ao sair, a camera do jogo volta na hora e o jogo continua quando o botao usado para sair for solto (no maximo 1 s; o botao nao chega
+// ao monstro). O som segue tocando, como no F7.
 #include <array>
 #include <ctime>
+#include <unordered_map>
+#include "wotm_flame.hpp"
 
 void wotmPhotoPause(bool on);   // wotm_foto.inc: a pausa do F7
 
@@ -27,6 +34,14 @@ using wotm_legend::Icon;
 enum class Phase { Off, Entering, On, Leaving };
 static Phase g_phase = Phase::Off;
 static double g_enterT = 0.0;
+static double g_leaveT = 0.0;
+static bool g_exitHeld[st::kPadButtons] = {};   // botoes do pad apertados ao sair: o jogo espera solta-los
+static std::unordered_map<uint32_t, wotm::flame::Flame> g_flames;   // fogo simulado por no emissor (refeito a cada sessao)
+static bool g_logged = false;    // resumo das luzes e emissores, uma vez por sessao
+static bool g_autoPivotOk = false;   // teste automatico: a meia volta gira em torno da luz mais perto (olho do monstro do jogador)
+static float g_autoPivot[3] = {0, 0, 0}, g_autoBeam[3] = {0, 1, 0};
+static bool g_autoFireOk = false;   // teste automatico: a etapa 3 (sem HUD) olha o fogo do Agamo de perto
+static float g_autoFire[3] = {0, 0, 0};
 static WotmFreeCamPose g_pose, g_start;
 static float g_zoom = 1.f;
 static float g_speed = 220.f;   // unidades do mundo por segundo
@@ -69,6 +84,13 @@ static bool anyPadButton()
     for (int b = 1; b < st::kPadButtons; ++b)
         if (padDown(b)) return true;
     return false;
+}
+// Sai: a vista volta a do jogo ja; o jogo continua quando os botoes apertados agora forem soltos (update)
+static void startLeaving()
+{
+    for (int b = 1; b < st::kPadButtons; ++b) g_exitHeld[b] = padDown(b);
+    g_phase = Phase::Leaving;
+    g_leaveT = GetTime();
 }
 // L3 + R3: os dois apertados, um deles agora
 static bool chord()
@@ -176,12 +198,31 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
     {
         const float dt = std::min(GetFrameTime(), 0.1f);
         if (autoStage == 2)
-        {
-            float r[3], f[3], u[3];
-            wotmFreeCamAxes(g_pose, r, f, u);
-            g_pose.heading -= 0.35f * dt;
-            for (int i = 0; i < 3; ++i) g_pose.pos[i] += 90.f * dt * r[i];
-            g_pose.pos[2] += 25.f * dt;
+        {   // a camera vai ate a frente do feixe da luz mais perto (olho do monstro do jogador), a 70, olhando para ela: o flare tem que
+            // acender mesmo sem estar na tela na pausa. Sem luz: meia volta em torno de um ponto 170 a frente
+            (void)dt;
+            const float a = std::clamp(float(autoT - 0.4) / 2.f, 0.f, 1.f);
+            const float h = g_start.heading;
+            float target[3] = {g_start.pos[0] + 170.f * std::sin(h + 3.14159265f * a), g_start.pos[1] + 170.f * std::cos(h + 3.14159265f * a), g_start.pos[2]};
+            float look[3] = {g_start.pos[0] + 170.f * std::sin(h), g_start.pos[1] + 170.f * std::cos(h), g_start.pos[2]};
+            if (g_autoPivotOk)
+                for (int k = 0; k < 3; ++k) { target[k] = g_autoPivot[k] + 70.f * g_autoBeam[k]; look[k] = g_autoPivot[k]; }
+            for (int k = 0; k < 3; ++k) g_pose.pos[k] = g_start.pos[k] + (target[k] - g_start.pos[k]) * a;
+            const float d[3] = {look[0] - g_pose.pos[0], look[1] - g_pose.pos[1], look[2] - g_pose.pos[2]};
+            if (std::fabs(d[0]) + std::fabs(d[1]) > 1e-3f)
+            {
+                g_pose.heading = std::atan2(d[0], d[1]);
+                g_pose.pitch = std::atan2(d[2], std::hypot(d[0], d[1]));
+            }
+        }
+        if (autoStage == 3 && g_autoFireOk)
+        {   // ao lado do emissor do fogo, um pouco acima, olhando para ele
+            g_pose.pos[0] = g_autoFire[0] + 110.f;
+            g_pose.pos[1] = g_autoFire[1] - 40.f;
+            g_pose.pos[2] = g_autoFire[2] + 30.f;
+            const float d[3] = {g_autoFire[0] - g_pose.pos[0], g_autoFire[1] - g_pose.pos[1], g_autoFire[2] + 25.f - g_pose.pos[2]};
+            g_pose.heading = std::atan2(d[0], d[1]);
+            g_pose.pitch = std::atan2(d[2], std::hypot(d[0], d[1]));
         }
         static const double stageAt[6] = {0.4, 2.5, 3.5, 4.5, 5.5, 6.5};
         if (autoT >= stageAt[autoStage - 1])
@@ -193,7 +234,7 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
             case 3: g_hide = true; g_saveReq = true; break;                    // sem HUD
             case 4: g_hide = false; g_zoom = 0.5f; g_saveReq = true; break;    // zoom
             case 5: g_legendShot = true; break;                                // quadro com a legenda (photo_test_legend.png)
-            case 6: g_phase = Phase::Leaving; break;
+            case 6: startLeaving(); break;
             }
             std::fprintf(stderr, "[photo] teste automatico: etapa %d\n", autoStage);
             ++autoStage;
@@ -213,6 +254,10 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
             g_zoom = 1.f;
             g_hide = false;
             g_saveReq = false;
+            g_flames.clear();
+            g_logged = false;
+            g_autoPivotOk = false;
+            g_autoFireOk = false;
             g_wotmFreeCam = false;   // a camera livre de debug sai: o modo foto nao escreve no _cs do jogo
             wotmPhotoPause(true);
             g_phase = Phase::Entering;
@@ -232,12 +277,21 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
         break;
     case Phase::On:
         if (toggle || IsKeyPressed(KEY_ESCAPE) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT))
-            g_phase = Phase::Leaving;
+            startLeaving();
         break;
     case Phase::Leaving:
         break;
     }
-    if (g_phase == Phase::Leaving && !anyPadButton() && !IsKeyDown(KEY_F9) && !IsKeyDown(KEY_ESCAPE))
+    if (g_phase == Phase::Leaving)
+    {
+        bool held = IsKeyDown(KEY_F9) || IsKeyDown(KEY_ESCAPE);
+        for (int b = 1; b < st::kPadButtons && !held; ++b)
+            if (g_exitHeld[b] && padDown(b)) held = true;
+            else g_exitHeld[b] = false;   // solto uma vez, nao conta mais
+        // um botao que o raylib ve sempre apertado deixava o jogo parado para sempre: depois de 1 s ele continua de qualquer jeito
+        if (held && now - g_leaveT < 1.0) return wotm_freecam::View{};
+    }
+    if (g_phase == Phase::Leaving)
     {
         wotmPhotoPause(false);
         g_phase = Phase::Off;
@@ -387,6 +441,123 @@ static void reprojectFlares(wotm::Particles::FlareFrame &fr, const Eye &g, const
     fr.e.swap(out);
 }
 
+// Lista do lens flare refeita pela camera livre: o que o hierLightNode (luzes do hier) e o particleAddLensFlareToList (sistemas com
+// vis.lightColor & 0x1000000) poem na lista, projetado como o particleLensFlareTestZbuffer (descarta W < 1 e fora da tela; distance
+// = W, ou 100 com a luz no infinito; Z do GS = a + b / W). Sem ID (o drawFlares nao faz a media com o quadro anterior: a camera muda a
+// cada quadro). Falso = sem fonte nenhuma (o chamador reprojeta a lista do quadro pausado).
+static bool rebuildFlares(wotm::Particles::FlareFrame &fr, const wotm::Ram &ram, const std::vector<wotm::WorldLight> &lights,
+                          const std::vector<wotm::FxSystem> &systems, const Eye &f, const Focus &ff)
+{
+    using wotm::Particles;
+    std::vector<uint32_t> lit;   // sistemas de particula com luz
+    for (const wotm::FxSystem &sy : systems)
+        if (ram.u32(sy.base + 0x2EAC) & 0x1000000u) lit.push_back(sy.base);   // vis.lightColor
+    if (lights.empty() && lit.empty()) return false;
+    if (fr.nspr == 0)   // a pausa veio de um quadro sem flare: a tabela dos sprites (lensFlarePacketInit) e a moldura vem da RAM parada
+    {
+        Particles::FlareFrame t;
+        Particles::readFlares(ram, t);
+        t.e.clear();
+        fr = std::move(t);
+        if (fr.nspr == 0) return false;
+    }
+    fr.e.clear();
+    const float x0 = -0.5f * fr.vw, x1 = 0.5f * fr.vw, y0 = -0.5f * fr.vh, y1 = 0.5f * fr.vh;
+    auto add = [&](const float p[3], Particles::Flare fl) {
+        float q[3];
+        toEye(f, p, true, q);
+        if (q[1] < 1.f || fr.e.size() >= 74) return;
+        const float sx = ff.fh * q[0] / q[1], sy = -ff.fv * q[2] / q[1];
+        if (sx < x0 || sx > x1 || sy < y0 || sy > y1) return;
+        const bool inf = (fl.flags & 0x80) != 0;
+        // o particleLensFlareRender soma o centroide das amostras visiveis; o drawFlares o desfaz supondo todas visiveis
+        const float shift = 1.5f - (inf ? 2.f : 1.f);
+        fl.x = fr.cx + sx + shift;
+        fl.y = fr.cy + sy + shift;
+        fl.w = inf ? 100.f : q[1];
+        fl.z = fr.zScale + fr.zOff / q[1];
+        fl.id = 0;
+        fr.e.push_back(fl);
+    };
+    for (const wotm::WorldLight &l : lights)
+    {
+        Particles::Flare fl;
+        fl.flags = l.flags;   // o byte das flags vai no lugar do Zfudge: denormal, vale o minimo (1,5)
+        fl.intensity = l.intensity;
+        for (int k = 0; k < 3; ++k) fl.rgb[k] = l.rgb[k];
+        fl.dot = 1.f;
+        fl.bw = 0.f;
+        if ((l.flags & 0x80) == 0 && (l.flags & 8))
+        {   // dotProd = -(olho -> luz) . feixe
+            const float d[3] = {l.p[0] - f.o[0], l.p[1] - f.o[1], l.p[2] - f.o[2]};
+            const float n = std::sqrt(dot3(d, d));
+            fl.dot = n > 1e-6f ? -dot3(d, l.beam) / n : 1.f;
+            fl.bw = l.bw;
+        }
+        else if (l.flags & 0x80)
+            fl.bw = 1.f;   // no infinito o jogo nao grava dot/bw (ficam os da entrada anterior); aqui feixe inteiro
+        add(l.p, fl);
+    }
+    for (uint32_t b : lit)
+    {
+        Particles::Flare fl;
+        const uint32_t c = ram.u32(b + 0x2EAC);
+        const uint32_t src = (c & 0x8000000u) ? 0x2CA0u : 0x2C80u;   // emit.ParticleToEmitVec ou FOVsphere
+        const float p[3] = {ram.f32(b + src), ram.f32(b + src + 4), ram.f32(b + src + 8)};
+        // o Zfudge (info + 0x1C) vai na palavra +0x10 e o byte baixo dela vira as flags (3)
+        const uint32_t word = (ram.u32(b + 0x2E4C) & ~0xFFu) | 3u;
+        fl.flags = word;
+        std::memcpy(&fl.zfudge, &word, 4);
+        for (int k = 0; k < 3; ++k) fl.rgb[k] = float((c >> (8 * k)) & 0xFF) * 0.0039215684f;
+        const float li = ram.f32(b + 0x2E5C);   // info.lightIntensity
+        fl.intensity = li * li;
+        add(p, fl);
+    }
+    return true;
+}
+
+// Fogo da cabeca do Agamo (preset 141, IdolHeadFlame: textura Fireball, texInfo 8; mistura aditiva 0x48; fogo_agamo.md) nos emissores
+// percorridos que nao tem um sistema com particulas vivas perto: simulado 30 fields com o emissor parado (comeca aquecido, como no jogo
+// ja rodando) e congelado durante a sessao
+static void synthFire(wotm::Scene &scene, const wotm::Ram &ram)
+{
+    wotm::Particles::SynthSystem sys;
+    sys.texInfo = 8;
+    sys.alphaContext = 0x48;
+    for (const wotm::WorldEmitter &em : scene.emitters)
+    {
+        if (em.preset != 141) continue;
+        bool live = false;
+        for (const wotm::FxSystem &sy : scene.fx.systems)
+        {
+            if (sy.n <= 0) continue;
+            const float d[3] = {ram.f32(sy.base + 0x2CA0) - em.e[0], ram.f32(sy.base + 0x2CA4) - em.e[1], ram.f32(sy.base + 0x2CA8) - em.e[2]};
+            if (dot3(d, d) < 20.f * 20.f) { live = true; break; }
+        }
+        if (!g_logged)
+        {
+            std::fprintf(stderr, "[photo] fogo do Agamo no emissor %06x (%.0f %.0f %.0f): %s\n", em.node, em.e[0], em.e[1], em.e[2],
+                         live ? "particulas do jogo" : "simulado");
+            for (int k = 0; k < 3; ++k) g_autoFire[k] = em.e[k];
+            g_autoFireOk = true;
+        }
+        if (live) continue;
+        auto it = g_flames.find(em.node);
+        if (it == g_flames.end())
+        {
+            wotm::flame::Flame fl;
+            uint32_t rng = 0x2545F491u ^ em.node;
+            for (int k = 0; k < 30; ++k) wotm::flame::step(fl, em.e, em.r0, em.r2, true, rng);
+            it = g_flames.emplace(em.node, std::move(fl)).first;
+            std::fprintf(stderr, "[photo] fogo simulado no emissor %06x (%.0f %.0f %.0f): %zu particulas\n", em.node, em.e[0], em.e[1], em.e[2],
+                         it->second.parts.size());
+        }
+        for (const wotm::flame::Part &q : it->second.parts)
+            sys.sprites.push_back({{q.p[0], q.p[1], q.p[2]}, q.size, wotm::flame::color(q.age), q.sel});
+    }
+    if (!sys.sprites.empty()) scene.fx.synth.push_back(std::move(sys));
+}
+
 // Pausado no modo foto, depois do show: o HUD e o resto que o jogo prendeu a camera dele passam para a livre (ou somem com o HUD
 // escondido). split = o quadro pausado era de tela dividida.
 static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::GameCamera &gameCam, const wotm::GameCamera &freeCam,
@@ -395,8 +566,35 @@ static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::G
     const Eye g = eyeOf(gameCam), f = eyeOf(freeCam);
     const Focus fg = gameFocus(ram, gameCam);
     const Focus ff{fg.fh / v.zoom, fg.fv / v.zoom};
-    reprojectFlares(scene.fx.flares, g, f, fg, ff);
+    {
+        wotm::ViewScope vs(scene.vctx);
+        if (!rebuildFlares(scene.fx.flares, ram, scene.worldLights, scene.fx.systems, f, ff))
+            reprojectFlares(scene.fx.flares, g, f, fg, ff);
+    }
     scene.fx.resetFlareDebounce();   // a fracao visivel e a da camera nova, sem media com a da antiga
+    synthFire(scene, ram);
+    if (!g_logged)
+    {
+        g_logged = true;
+        int n141 = 0;
+        for (const wotm::WorldEmitter &em : scene.emitters) n141 += em.preset == 141;
+        std::fprintf(stderr, "[photo] coleta: %zu luzes com lens flare, %zu emissores (%d do fogo 141), %zu sistemas de particula\n",
+                     scene.worldLights.size(), scene.emitters.size(), n141, scene.fx.systems.size());
+        float best = 1e30f;
+        for (const wotm::WorldLight &l : scene.worldLights)
+        {
+            const float d[3] = {l.p[0] - g.o[0], l.p[1] - g.o[1], l.p[2] - g.o[2]};
+            std::fprintf(stderr, "[photo]   luz (%.0f %.0f %.0f) flags %02x I %.0f a %.0f do olho (no %06x, cs %06x)\n", l.p[0], l.p[1], l.p[2], l.flags,
+                         l.intensity, std::sqrt(dot3(d, d)), l.node, l.cs);
+            const float bl = std::sqrt(dot3(l.beam, l.beam));
+            if (dot3(d, d) < best && bl > 1e-6f)
+            {
+                best = dot3(d, d);
+                for (int k = 0; k < 3; ++k) { g_autoPivot[k] = l.p[k]; g_autoBeam[k] = l.beam[k] / bl; }
+                g_autoPivotOk = true;
+            }
+        }
+    }
     auto isBar = [](const wotm::ScreenRect &r) { return r.barView >= 0; };
     if (v.hideHud)
     {

@@ -386,7 +386,9 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
 - **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;
   HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.
-  Falta o dono conferir ao vivo. Limite: só os flares que estavam na tela na hora da pausa.
+  Correções do mesmo dia, depois do primeiro teste do dono: sair não deixa mais o jogo congelado; o lens flare é refeito pela câmera
+  livre (acende o de luzes fora da tela na pausa, como o olho do Robo-47 visto de frente); o fogo do Agamo aparece mesmo com ele fora
+  da tela na pausa. Falta o dono conferir ao vivo.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros está em
   "Pendências contínuas", abaixo.
 - **Ícones de botão presos no mundo: feito em 2026-10-22** (`d9fd7fa`, `wotm_menu.inc`): depois do Start antecipado no menu

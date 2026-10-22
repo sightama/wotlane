@@ -589,6 +589,19 @@ struct HudAnchor {
     int8_t view = 0;
 };
 
+// Luz com lens flare (HierLight, op 5, isOn e hasLensFlare) achada na coleta, no mundo: p = position . matriz do no, beam = beamNormal .
+// a mesma matriz (so a rotacao). O hierLightNode faz igual com a pilha de matrizes e o olho do quadro; o modo foto (wotm_photo.inc)
+// refaz a lista do lens flare com elas pela camera livre, porque o jogo pausado so tem as que estavam na tela.
+struct WorldLight {
+    float p[3] = {0, 0, 0}, beam[3] = {0, 0, 0};
+    uint32_t node = 0, cs = 0;    // no HierLight e _cs em que a coleta o achou (diagnostico)
+    uint32_t flags = 0, id = 0;   // flags da luz (byte baixo: 1 isOn, 2 hasLensFlare, 8 isDirectional, 0x10 bidirecional, 0x80 no infinito)
+    float intensity = 0.f, rgb[3] = {0, 0, 0}, bw = 0.f;
+};
+// Emissor de particula (HierParticleEmitter, op 22) percorrido na coleta: preset e base no mundo, como o Model::emitters da previa
+// (e = position . matriz; r0/r2 = linhas 0 e 2 do StaticMat = mathfMatrixFromNormal(n) levadas pela matriz).
+struct WorldEmitter { uint32_t node = 0, preset = 0; float e[3] = {0, 0, 0}, r0[3] = {0, 0, 0}, r2[3] = {0, 0, 0}; };
+
 // Centro (pixels do GS, viewGetCenter) e tamanho (viewGetWH) da vista `view`, do viewDef dela.
 inline bool viewGeom(const Ram &ram, int view, int &cx, int &cy, int &w, int &h) {
     const uint32_t def = view >= 0 && view < 5 ? ram.u32(addr::viewInfo + 0x14 * uint32_t(view) + 4) & 0x1FFFFFFFu : 0;
@@ -780,6 +793,8 @@ struct Snapshot {
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (readScreenPolys: no takeSnapshot e no hook do dmaData)
     std::vector<HudAnchor> anchors;        // ponto do mundo de cada icone de vida do quadro (barras e icone seguem a camera no modo foto)
+    std::vector<WorldLight> worldLights;   // luzes com lens flare percorridas pela coleta (modo foto)
+    std::vector<WorldEmitter> emitters;    // emissores de particula percorridos pela coleta (modo foto: fogo do Agamo)
     ParaLights lights;
     Fog fog;
     GameCamera cam;
@@ -811,6 +826,8 @@ public:
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawQuads depois da cena 3D e do screenPolys
     std::vector<ScreenRect> screenRects;   // fades (Snapshot::screenRects), desenhados por drawScreenRects por ultimo
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (Snapshot::screenPolys), desenhado por drawScreenPolys antes do texto
+    std::vector<WorldLight> worldLights;   // Snapshot::worldLights (o walk as acha nos nos op 5)
+    std::vector<WorldEmitter> emitters;    // Snapshot::emitters (nos op 22)
     uint32_t visited = 0;
     uint32_t byOp[64] = {};
 
@@ -1630,6 +1647,8 @@ public:
         hp.clear();
         hpOverlay.clear();
         sprites.clear();
+        worldLights.clear();
+        emitters.clear();
         atMat_ = 0;
         animVal_ = 0;
         cs_ = 0;
@@ -1711,6 +1730,8 @@ public:
         sn.sprites = sprites;
         sn.fx = fx.systems;
         sn.flares = fx.flares;
+        sn.worldLights = worldLights;
+        sn.emitters = emitters;
         sn.shadows = shadows;
         sn.lights = lights_;
         sn.fog = fog_;
@@ -1748,6 +1769,9 @@ public:
         fx.systems = s.fx;
         fxRam_ = s.fxRam;
         fx.flares = s.flares;
+        fx.synth.clear();   // sprites do modo foto: refeitos a cada quadro por ele
+        worldLights = s.worldLights;
+        emitters = s.emitters;
         shadows = s.shadows;
         screenRects = s.screenRects;
         screenPolys = s.screenPolys;
@@ -3898,6 +3922,48 @@ private:
                 const uint32_t ch = ram.u32(c + 0xC + 12 * w);
                 if (ram.ok(ch)) walk(ram, ch, m, depth + 1);
             } else walk(ram, c, m, depth + 1);
+            break;
+        }
+        case 5: {                                                                           // LIGHT (HierLight): so as com lens flare
+            const uint32_t fl = ram.u32(node + 4);
+            if ((fl & 3) != 3 || worldLights.size() >= 256) break;
+            // o collectShadows percorre os monstros de novo (silhueta da sombra): a mesma luz no mesmo _cs so conta uma vez
+            if (std::any_of(worldLights.begin(), worldLights.end(), [&](const WorldLight &o) { return o.node == node && o.cs == cs_; })) break;
+            WorldLight l;
+            xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), l.p);
+            const float bx = ram.f32(node + 0x20), by = ram.f32(node + 0x24), bz = ram.f32(node + 0x28);
+            for (int k = 0; k < 3; ++k) l.beam[k] = bx * m.m[0][k] + by * m.m[1][k] + bz * m.m[2][k];
+            l.flags = fl & 0xFF;
+            l.node = node;
+            l.cs = cs_;
+            l.id = (ram.u32(node) >> 7) & 0x7FF;   // head.id2 (bits 7..17)
+            l.intensity = ram.f32(node + 8);
+            for (int k = 0; k < 3; ++k) l.rgb[k] = ram.f32(node + 0x30 + 4 * uint32_t(k));
+            l.bw = ram.f32(node + 0x3C);
+            worldLights.push_back(l);
+            break;
+        }
+        case 22: {                                                                          // PARTICLE_EMITTER (HierParticleEmitter)
+            if (emitters.size() >= 256) break;
+            WorldEmitter em;
+            em.node = node;
+            em.preset = ram.u32(node + 4);
+            xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), em.e);
+            if (std::any_of(emitters.begin(), emitters.end(), [&](const WorldEmitter &o) {   // de novo pelo collectShadows
+                    return o.node == node && std::fabs(o.e[0] - em.e[0]) + std::fabs(o.e[1] - em.e[1]) + std::fabs(o.e[2] - em.e[2]) < 0.01f;
+                }))
+                break;
+            const float h = ram.f32(node + 0x24), pt = ram.f32(node + 0x28);
+            const float nl[3] = {std::cos(pt) * std::sin(h), std::cos(pt) * std::cos(h), std::sin(pt)};
+            float a0[3];   // mathfMatrixFromNormal: com n vertical, linha 0 = +X; no geral, X horizontal perpendicular a n
+            if (std::fabs(nl[2]) > 0.999f) { a0[0] = 1.f; a0[1] = 0.f; a0[2] = 0.f; }
+            else { const float l = std::sqrt(nl[0] * nl[0] + nl[1] * nl[1]); a0[0] = nl[1] / l; a0[1] = -nl[0] / l; a0[2] = 0.f; }
+            const float a2[3] = {a0[1] * nl[2] - a0[2] * nl[1], a0[2] * nl[0] - a0[0] * nl[2], a0[0] * nl[1] - a0[1] * nl[0]};
+            for (int k = 0; k < 3; ++k) {
+                em.r0[k] = a0[0] * m.m[0][k] + a0[1] * m.m[1][k] + a0[2] * m.m[2][k];
+                em.r2[k] = a2[0] * m.m[0][k] + a2[1] * m.m[1][k] + a2[2] * m.m[2][k];
+            }
+            emitters.push_back(em);
             break;
         }
         case 31: {                                                                          // DESTRUCTIBLE: estado 0 (intacto)
