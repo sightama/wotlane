@@ -375,8 +375,9 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   de saves; a definitiva o dono escolhe) com um item novo que abre as opções do port. Etapas:
   1. Menu em texto com o item abrindo um painel vazio: **feito** (`wotm_mainmenu.inc`, `NATIVO.md`, "Menu principal em texto"), junto
      com as telas de modos de 1 jogador e do multiplayer (options, unlocks e load game levam a telas próprias e ficam como estão).
-  2. Painel navegável com as opções do launcher valendo ao vivo e um arquivo de configuração que o launcher também lê e grava:
-     **feito** (abas VIDEO, FEATURES e CONTROLS; `settings.ini`, `wotm_settings.hpp`; `NATIVO.md`, "Painel Recompiled options").
+  2. Painel navegável com as opções do launcher valendo ao vivo, gravadas num arquivo próprio:
+     **feito** (abas VIDEO, FEATURES e CONTROLS; `settings.ini`, `wotm_settings.hpp`; `NATIVO.md`, "Painel Recompiled options"); saíram do
+     launcher.
      Ficaram fora do painel: partida direta, trapaças (o menu F1 já tem), opções de execução e diagnóstico; pular a intro vira opção
      do executável mais tarde. O logo do jogo no telão só aparece na tela de "press start"; nas outras o telão é todo do menu.
   3. Rebind de teclas e botões: a tabela fixa do `ps2_pad.cpp` do fork vira configurável (costura do PS2Recomp: regerar o patch) e

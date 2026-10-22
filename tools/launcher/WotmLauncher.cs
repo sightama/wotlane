@@ -81,22 +81,6 @@ class Launcher : Form
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
-        new Flag("QoL features", "WOTM_LOCKTOGGLE", true, "Toggle lock-on on R1 (D-pad switches target)",
-            "Lock-on is no longer held: one tap on R1 locks onto the nearest monster and it stays locked until the next tap. " +
-            "While locked, the stick moves relative to the camera, getting hit does not change the target, and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
-            "controller setup). Applies to human players; the AI is unchanged. Unchecked: the original game's buttons."),
-        new Flag("QoL features", "WOTM_ENEMYBARS", true, "Health and energy bars over enemies",
-            "Replaces the numbered dot over each enemy, in the style of the player HUD: a health bar (green, recent damage in red) and an energy bar below it " +
-            "(blue; gray while depleted). Also shows every enemy, not only the first 4. Unchecked: the original game's dot."),
-        new Flag("QoL features", "WOTM_DAMAGEPOP", true, "Damage numbers (hits, throws, specials)",
-            "Each hit shows a number at the point of impact that rises and fades: white for hits, orange for thrown objects or " +
-            "monsters, cyan for specials. Applies to every monster, including yours."),
-
-        new Flag("Controls", "WOTM_KBSEPARATE", false, "Keyboard is a separate player",
-            "Connected controllers are players 1 and 2, in connection order. Unchecked: the keyboard is the same player as the first " +
-            "controller (player 1). Checked: the keyboard is its own player after the controllers: player 1 with no controller, " +
-            "player 2 with one controller, unused with two."),
-
         new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
         new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
@@ -113,34 +97,13 @@ class Launcher : Form
         new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Native sound", "989snd calls."),
     };
 
-    // Video: altura do quadro nativo e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
-    static readonly string[] Resolutions = { "448", "720", "1080", "1440", "2160" };
-    static readonly string[] ResolutionLabels = { "448 (original PS2)", "720", "1080", "1440", "2160" };
-    static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
-    const string DefaultRes = "720", DefaultAspect = "16:9";
-    // Taxa de apresentacao: "0" = a do monitor (o runtime detecta sozinho; a variavel nao e passada). A logica do jogo
-    // continua a 60; acima disso a tela so reapresenta o ultimo quadro, com ritmo regular e vsync.
-    static readonly string[] Rates = { "0", "60", "120", "144", "165", "180", "240" };
-
-    readonly ComboBox rate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly CheckBox vsync = new DarkCheckBox { Text = "Vsync", AutoSize = true };
-    readonly int monitorHz, monitorWidth, monitorHeight;   // modo atual do monitor principal, em pixels reais (sem a escala do Windows)
-
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
-    readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly ComboBox aspect = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
-    readonly CheckBox dynWidth = new DarkCheckBox { Text = "Dynamic width (aspect follows the window)", AutoSize = true };
-    // Modo da tela (WOTM_FULLSCREEN): 0 = janela, 1 = tela cheia sem borda, 2 = tela cheia exclusiva (o monitor troca de modo)
-    static readonly string[] DisplayModes = { "0", "1", "2" };
-    static readonly string[] DisplayModeLabels = { "Windowed", "Borderless fullscreen", "Exclusive fullscreen" };
-    readonly ComboBox fullscreen = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
 
     Launcher()
     {
-        MonitorMode(out monitorWidth, out monitorHeight, out monitorHz);
         Text = "WotM - options";
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // o do exe (native\wotm.ico)
         Font = new Font("Segoe UI", 9f);
@@ -152,7 +115,7 @@ class Launcher : Form
 
         var tips = new ToolTip { AutoPopDelay = 30000 };
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
-        // duas colunas: video, partida e trapacas a esquerda; as caixas de Flags a direita
+        // duas colunas: partida e trapacas a esquerda; as caixas de Flags a direita
         var cols = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
         var left = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         var right = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
@@ -160,8 +123,6 @@ class Launcher : Form
         cols.Controls.Add(right);
         root.Controls.Add(cols);
         Dictionary<string, string> saved = LoadIni();
-        MergeSettings(saved);   // o que o jogo mudou no painel "recompiled options" vale mais que o ini do launcher
-        left.Controls.Add(VideoGroup(saved, tips));
         left.Controls.Add(MatchGroup(saved, tips));
         left.Controls.Add(CheatsGroup(saved, tips));
         GroupBox gb = null;
@@ -182,8 +143,6 @@ class Launcher : Form
             inner.Controls.Add(cb);
             boxes[f] = cb;
         }
-        // o aviso dos marcadores depende do mod de barras (caixas criadas depois do grupo da partida)
-        foreach (var kv in boxes) if (kv.Key.Key == "WOTM_ENEMYBARS") kv.Value.CheckedChanged += delegate { UpdateMatch(); };
         UpdateMatch();
         int wide = 0;
         foreach (Control c in right.Controls) wide = Math.Max(wide, c.PreferredSize.Width);
@@ -198,12 +157,6 @@ class Launcher : Form
         reset.Click += delegate
         {
             foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
-            res.SelectedIndex = Array.IndexOf(Resolutions, MonitorRes());
-            rate.SelectedIndex = 0;
-            vsync.Checked = true;
-            aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
-            dynWidth.Checked = true;
-            fullscreen.SelectedIndex = 1;
             matchOn.Checked = false;
             matchPlayer.SelectedIndex = 0;
             matchLevel.SelectedIndex = 0;
@@ -222,58 +175,7 @@ class Launcher : Form
         Controls.Add(root);
         if (Dark) ApplyDark(this);
         AcceptButton = play;
-        FormClosing += delegate { SaveIni(); SaveSettings(false); };
-    }
-
-    GroupBox VideoGroup(Dictionary<string, string> saved, ToolTip tips)
-    {
-        var gb = new DarkGroupBox { Text = "Video", AutoSize = true, Width = 420, Padding = new Padding(8) };
-        var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
-        gb.Controls.Add(inner);
-        string v;
-
-        res.Items.AddRange(ResolutionLabels);
-        // sem configuracao salva: a maior resolucao que cabe no monitor (primeira execucao)
-        int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : MonitorRes());
-        res.SelectedIndex = ri >= 0 ? ri : Array.IndexOf(Resolutions, DefaultRes);
-        tips.SetToolTip(res, "Height of the native frame in pixels; the width comes from the aspect ratio. Independent of the window size: " +
-            "the window only scales the frame up or down.");
-        inner.Controls.Add(Row("Resolution (lines)", res));
-
-        dynWidth.Checked = !saved.TryGetValue(":DynWidth", out v) || v == "1";
-        tips.SetToolTip(dynWidth, "Checked: the width follows the window (or the monitor, in fullscreen), from 4:3 to 32:9. " +
-            "Unchecked: fixed aspect ratio, with black bars if the window does not match.");
-        inner.Controls.Add(dynWidth);
-
-        aspect.Items.AddRange(Aspects);
-        int ai = Array.IndexOf(Aspects, saved.TryGetValue("WOTM_ASPECT", out v) ? v : DefaultAspect);
-        aspect.SelectedIndex = ai >= 0 ? ai : Array.IndexOf(Aspects, DefaultAspect);
-        tips.SetToolTip(aspect, "4:3 = the game's original screen.");
-        inner.Controls.Add(Row("Fixed aspect", aspect));
-        aspect.Enabled = !dynWidth.Checked;
-        dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
-
-        fullscreen.Items.AddRange(DisplayModeLabels);
-        int fi = Array.IndexOf(DisplayModes, saved.TryGetValue("WOTM_FULLSCREEN", out v) ? v : "1");
-        fullscreen.SelectedIndex = fi >= 0 ? fi : 1;
-        tips.SetToolTip(fullscreen, "Borderless: a window the size of the monitor; the desktop keeps its mode, Alt+Tab is instant. " +
-            "Exclusive: the monitor switches to the game (native resolution); Alt+Tab is slower but the compositor stays out of the way. " +
-            "Windowed: the window opens at the resolution's size (smaller if it does not fit). F11 toggles between the window and the chosen fullscreen.");
-        inner.Controls.Add(Row("Display mode (F11)", fullscreen));
-
-        rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");
-        for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
-        int hi = Array.IndexOf(Rates, saved.TryGetValue("WOTM_HZ", out v) ? v : "0");
-        rate.SelectedIndex = hi >= 0 ? hi : 0;
-        tips.SetToolTip(rate, "How many times per second the screen is presented. Game logic stays at 60: above that the frame " +
-            "is repeated, with even pacing and no tearing. 'Monitor' uses the refresh rate of the window's monitor.");
-        inner.Controls.Add(Row("Refresh rate", rate));
-        vsync.Checked = !saved.TryGetValue("WOTM_VSYNC", out v) || v == "1";
-        tips.SetToolTip(vsync, "Syncs with the monitor (no tearing). Unchecked: only limited by the clock.");
-        inner.Controls.Add(vsync);
-        inner.Controls.Add(new Label { Text = "Primary monitor: " + monitorWidth + "x" + monitorHeight +
-            (monitorHz > 0 ? " at " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = DimColor });
-        return gb;
+        FormClosing += delegate { SaveIni(); };
     }
 
     // Partida direta (WOTM_MATCH=<jogador>[,<ia>...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime aceita ate 7 IAs (8 monstros).
@@ -353,7 +255,7 @@ class Launcher : Form
         foreach (ComboBox cb in matchAIs) cb.Enabled = on;
         int total = 1 + MatchFoes();
         string txt = total == 1 ? "Solo: just you on the stage." : total + " monsters in the fight.";
-        if (total > 4 && !On("WOTM_ENEMYBARS")) txt += " Only 4 enemies get an off-screen health marker (the health bars mod shows all of them).";
+        if (total > 4) txt += " Without the enemy bars (Recompiled options, in the main menu), only 4 enemies get an off-screen health marker.";
         matchInfo.Text = txt;
     }
 
@@ -420,47 +322,6 @@ class Launcher : Form
         return k >= 0 ? k : 0;
     }
 
-    // Maior resolucao da lista que cabe na altura do monitor principal.
-    string MonitorRes()
-    {
-        string best = Resolutions[0];
-        foreach (string r in Resolutions) if (int.Parse(r) <= monitorHeight) best = r;
-        return best;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    struct DEVMODE
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
-        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
-        public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
-        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
-        public short dmLogPixels;
-        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
-        public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
-    }
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
-
-    // Modo atual do monitor principal; se nao der para ler, o tamanho do Screen (pode vir reduzido pela escala) e taxa 0.
-    static void MonitorMode(out int width, out int height, out int hz)
-    {
-        var dm = new DEVMODE();
-        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
-        const int ENUM_CURRENT_SETTINGS = -1;
-        if (EnumDisplaySettings(Screen.PrimaryScreen.DeviceName, ENUM_CURRENT_SETTINGS, ref dm) && dm.dmPelsHeight > 0)
-        {
-            width = dm.dmPelsWidth;
-            height = dm.dmPelsHeight;
-            hz = dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0;
-            return;
-        }
-        width = Screen.PrimaryScreen.Bounds.Width;
-        height = Screen.PrimaryScreen.Bounds.Height;
-        hz = 0;
-    }
-
     static FlowLayoutPanel Row(string label, Control c)
     {
         var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
@@ -488,12 +349,6 @@ class Launcher : Form
     {
         var lines = new List<string>();
         foreach (var kv in boxes) lines.Add(kv.Key.Key + "|" + (kv.Value.Checked ? "1" : "0"));
-        lines.Add("WOTM_RES|" + Resolutions[res.SelectedIndex]);
-        lines.Add("WOTM_ASPECT|" + Aspects[aspect.SelectedIndex]);
-        lines.Add(":DynWidth|" + (dynWidth.Checked ? "1" : "0"));
-        lines.Add("WOTM_FULLSCREEN|" + DisplayModes[fullscreen.SelectedIndex]);
-        lines.Add("WOTM_HZ|" + Rates[rate.SelectedIndex]);
-        lines.Add("WOTM_VSYNC|" + (vsync.Checked ? "1" : "0"));
         lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
         lines.Add(":MatchPlayer|" + MonsterIds[matchPlayer.SelectedIndex]);
         lines.Add(":MatchLevel|" + LevelIds[matchLevel.SelectedIndex]);
@@ -505,61 +360,13 @@ class Launcher : Form
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    // Opcoes que o jogo tambem muda ao vivo (painel "recompiled options" do menu principal, native/wotm_settings.hpp): settings.ini
-    // ao lado do save.json (<runtime>\discroot), CHAVE=valor com os nomes das variaveis. O jogo le na abertura; o launcher le ao abrir
-    // (vale mais que o WotM_Launcher.ini) e grava ao jogar e ao fechar. Essas variaveis nao vao mais pelo ambiente.
-    static readonly string[] SharedKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
+    // Video, QoL e teclado separado ficam no painel "Recompiled options" do menu principal (native/wotm_settings.hpp, settings.ini
+    // ao lado do save.json). O launcher nao os passa; uma variavel herdada passaria por cima do arquivo, entao sai do ambiente.
+    static readonly string[] SettingsKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
         "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE" };
 
-    string SettingsPath(bool ask)
-    {
-        string rt = RuntimeDir(ask);
-        return rt == null ? null : Path.Combine(rt, "discroot", "settings.ini");
-    }
-
-    void MergeSettings(Dictionary<string, string> saved)
-    {
-        string p = SettingsPath(false);
-        if (p == null || !File.Exists(p)) return;
-        try
-        {
-            foreach (string raw in File.ReadAllLines(p))
-            {
-                string line = raw.Trim();
-                int i = line.IndexOf('=');
-                if (line.StartsWith("#") || i <= 0) continue;
-                string key = line.Substring(0, i), v = line.Substring(i + 1).Trim();
-                if (Array.IndexOf(SharedKeys, key) < 0) continue;
-                if (key == "WOTM_ASPECT")
-                {
-                    bool dyn = v == "dynamic" || v == "0" || v.Length == 0;
-                    saved[":DynWidth"] = dyn ? "1" : "0";
-                    if (!dyn) saved[key] = v;
-                }
-                else saved[key] = v;
-            }
-        }
-        catch (IOException) { }
-    }
-
-    void SaveSettings(bool ask)
-    {
-        string p = SettingsPath(ask);
-        if (p == null || !Directory.Exists(Path.GetDirectoryName(p))) return;
-        var lines = new List<string> { "# Recompiled options (menu principal) e launcher; mesma chave das variaveis de ambiente" };
-        lines.Add("WOTM_RES=" + Resolutions[res.SelectedIndex]);
-        lines.Add("WOTM_ASPECT=" + (dynWidth.Checked ? "dynamic" : Aspects[aspect.SelectedIndex]));
-        lines.Add("WOTM_FULLSCREEN=" + DisplayModes[fullscreen.SelectedIndex]);
-        lines.Add("WOTM_HZ=" + Rates[rate.SelectedIndex]);
-        lines.Add("WOTM_VSYNC=" + (vsync.Checked ? "1" : "0"));
-        foreach (string k in new[] { "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE" })
-            lines.Add(k + "=" + (On(k) ? "1" : "0"));
-        try { File.WriteAllLines(p, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
-    }
-
-    // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo;
-    // sem elas, pergunta (ask) ou devolve null.
-    string RuntimeDir(bool ask = true)
+    // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
+    string RuntimeDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_RECOMP_DIR");
         if (!string.IsNullOrEmpty(env) && File.Exists(Path.Combine(env, "run_live.ps1"))) return env;
@@ -569,7 +376,6 @@ class Launcher : Form
             string dir = File.ReadAllText(saved).Trim();
             if (File.Exists(Path.Combine(dir, "run_live.ps1"))) return dir;
         }
-        if (!ask) return null;
         using (var dlg = new FolderBrowserDialog { Description = "Runtime folder (the one containing run_live.ps1)" })
         {
             if (dlg.ShowDialog(this) == DialogResult.OK && File.Exists(Path.Combine(dlg.SelectedPath, "run_live.ps1")))
@@ -597,13 +403,11 @@ class Launcher : Form
             Path.Combine(rt, "run_live.ps1"), On(":Auto") && !matchOn.Checked ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
         psi.EnvironmentVariables["WOTM_REPO"] = exeDir;
-        // video e QoL vao pelo settings.ini (o painel do jogo muda e grava o mesmo arquivo); variavel herdada passaria por cima dele
-        SaveSettings(true);
-        foreach (string k in SharedKeys) psi.EnvironmentVariables.Remove(k);
+        foreach (string k in SettingsKeys) psi.EnvironmentVariables.Remove(k);
         foreach (var kv in boxes)
         {
             string key = kv.Key.Key;
-            if (key.StartsWith(":") || Array.IndexOf(SharedKeys, key) >= 0) continue;
+            if (key.StartsWith(":")) continue;
             string name = key, value = "1";
             int eq = key.IndexOf('=');
             if (eq > 0) { name = key.Substring(0, eq); value = key.Substring(eq + 1); }

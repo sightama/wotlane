@@ -1,5 +1,5 @@
-// wotm_settings.hpp: opcoes do jogador que valem ao vivo (painel "recompiled options" do menu principal, wotm_mainmenu.inc) e que o
-// launcher (tools/launcher/WotmLauncher.cs) tambem le e grava.
+// wotm_settings.hpp: opcoes do jogador que valem ao vivo (painel "recompiled options" do menu principal, wotm_mainmenu.inc). O launcher
+// nao as tem: so tira as variaveis do ambiente ao abrir o jogo.
 //
 // Arquivo: settings.ini ao lado do save.json (a pasta acima do mc0/, a do ELF: discroot\ no run_live), uma linha CHAVE=valor por
 // opcao, com o nome da variavel de ambiente de cada uma. Ordem na abertura: padrao (o de antes, sem variavel), depois o arquivo,
@@ -40,7 +40,7 @@ inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",   
                                             "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE"};
 inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0};
 
-// Escolhas que o painel percorre (a do launcher e a mesma lista)
+// Escolhas que o painel percorre
 inline constexpr int kResolutions[] = {448, 720, 1080, 1440, 2160};
 inline constexpr int kRates[] = {0, 60, 120, 144, 165, 180, 240};
 inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10", "21:9", "32:9"};
@@ -112,7 +112,7 @@ inline void save()
         std::fprintf(stderr, "[settings] nao consegui gravar %s\n", g_path.string().c_str());
         return;
     }
-    f << "# Recompiled options (menu principal) e launcher; mesma chave das variaveis de ambiente\n";
+    f << "# Recompiled options (menu principal); mesma chave das variaveis de ambiente\n";
     for (int k = 0; k < kKeys; ++k)
         f << kEnv[k] << '=' << format(Key(k), get(Key(k))) << '\n';
 }
