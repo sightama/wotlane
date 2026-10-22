@@ -627,6 +627,8 @@ inline std::string str(const uint8_t *ram, uint32_t a) {
     return s;
 }
 
+inline bool &skipHold() { static bool v = false; return v; }
+
 // playMpegMovieWithDB(char *name, bool comAudio) (0x20F4B0): comeca o filme de tela cheia; o jogo segue chamando updateMpegMovieDecoding
 inline uint32_t playMpegMovieWithDB(uint8_t *ram, uint32_t name, uint32_t withAudio) {
     wr(ram, ga::movieIsCompletelyFinished, 0);   // initAll
@@ -634,7 +636,26 @@ inline uint32_t playMpegMovieWithDB(uint8_t *ram, uint32_t name, uint32_t withAu
     wr(ram, ga::partialMovie, 0);
     wr(ram, ga::isStarted, 0);
     wr(ram, ga::movieIsPlaying, 1);
-    Player::get().start(Player::Full, str(ram, name), (withAudio & 0xFF) != 0);
+    // WOTM_SKIPINTRO=1: os dois filmes do boot (intro_m e int_main, so a primeira vez de cada; o int_main que volta no menu parado
+    // toca) nao comecam e terminam como um pulo no segundo updateMpegMovieDecoding (Player sem o filme ativo -> termAll). Nao no
+    // primeiro: o uiIntro so marca o filme como comecado se vir movieRequested num quadro, e sem isso o boot parava esperando.
+    static bool skippedBoot[2] = {};
+    const std::string movie = str(ram, name);
+    const char *skipEnv = std::getenv("WOTM_SKIPINTRO");
+    if (skipEnv && *skipEnv && *skipEnv != '0') {
+        std::string rel = discRelative(movie);
+        for (char &c : rel) c = char(std::tolower(static_cast<unsigned char>(c)));
+        const int boot = rel == "mov/intro_m.pss" ? 0 : rel == "mov/int_main.pss" ? 1 : -1;
+        if (boot >= 0 && !skippedBoot[boot]) {
+            skippedBoot[boot] = true;
+            std::fprintf(stderr, "[fmv] tela cheia pulada (WOTM_SKIPINTRO): %s\n", movie.c_str());
+            Player::get().stop(Player::Full);
+            skipHold() = true;
+            wr(ram, ga::movieRequested, 1);
+            return 0;
+        }
+    }
+    Player::get().start(Player::Full, movie, (withAudio & 0xFF) != 0);
     wr(ram, ga::movieRequested, 1);
     return 0;
 }
@@ -655,6 +676,11 @@ inline uint32_t updateMpegMovieDecoding(uint8_t *ram, uint32_t keepGoing) {
     p.padInput(uint16_t(rd(ram, ga::inputPadData) >> 16));
     if (!p.skipAllowed()) keepGoing = 1;   // ignora tambem o Start lido pelo jogo (por nivel) nos primeiros 100 ms
     else if (p.skipRequested()) keepGoing = 0;
+    if (skipHold()) {   // filme do boot pulado (WOTM_SKIPINTRO): fica "pedido" ate o proximo quadro, para o uiIntro o ver
+        skipHold() = false;
+        wr(ram, ga::isStarted, 1);
+        return 0;
+    }
     if (p.finished(Player::Full) || !p.active(Player::Full) || ((keepGoing & 0xFF) == 0 && started)) {
         std::fprintf(stderr, "[fmv] tela cheia encerrada (%s)\n", p.finished(Player::Full) ? "fim" : "pulo");
         wr(ram, ga::isStarted, 0);

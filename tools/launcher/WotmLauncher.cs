@@ -81,14 +81,14 @@ class Launcher : Form
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
-        new Flag("Mods", "WOTM_LOCKTOGGLE", true, "Toggle lock-on on R1 (D-pad switches target)",
+        new Flag("QoL features", "WOTM_LOCKTOGGLE", true, "Toggle lock-on on R1 (D-pad switches target)",
             "Lock-on is no longer held: one tap on R1 locks onto the nearest monster and it stays locked until the next tap. " +
             "While locked, the stick moves relative to the camera, getting hit does not change the target, and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
             "controller setup). Applies to human players; the AI is unchanged. Unchecked: the original game's buttons."),
-        new Flag("Mods", "WOTM_ENEMYBARS", true, "Health and energy bars over enemies",
+        new Flag("QoL features", "WOTM_ENEMYBARS", true, "Health and energy bars over enemies",
             "Replaces the numbered dot over each enemy, in the style of the player HUD: a health bar (green, recent damage in red) and an energy bar below it " +
             "(blue; gray while depleted). Also shows every enemy, not only the first 4. Unchecked: the original game's dot."),
-        new Flag("Mods", "WOTM_DAMAGEPOP", true, "Damage numbers (hits, throws, specials)",
+        new Flag("QoL features", "WOTM_DAMAGEPOP", true, "Damage numbers (hits, throws, specials)",
             "Each hit shows a number at the point of impact that rises and fades: white for hits, orange for thrown objects or " +
             "monsters, cyan for specials. Applies to every monster, including yours."),
 
@@ -102,6 +102,7 @@ class Launcher : Form
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
         new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
+        new Flag("Run", "WOTM_SKIPINTRO", false, "Skip intro movies", "Skips the two movies at boot (the intro and the main menu intro) and goes straight to the title screen."),
 
         new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
         new Flag("Rendering diagnostics", "WOTM_NOSHADOW", false, "No shadows", "Turns off blocker shadows (monsters and the like)."),
