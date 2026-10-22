@@ -2429,7 +2429,8 @@ public:
         // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
         if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
         if (!wire) setAlphaRef(kGsAlphaRef);
-        if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas
+        if (!wire && !deferFlares)   // lens flare: tela, depois das particulas
+            fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
         rlDrawRenderBatchActive();
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
@@ -2440,6 +2441,38 @@ public:
         if (useShader) EndShaderMode();
         g_premulShader = false;
         if (sprites2d) drawButtonSprites(ram, overlay);
+    }
+
+    // Lens flare adiado (deferFlares): o teste de oclusao le a profundidade ja desenhada (glReadPixels), e cada leitura espera a GPU
+    // terminar o que recebeu. Na tela dividida, com o flare dentro do draw de cada vista, a CPU parava a cada vista (redesenho de 3
+    // vistas a ~60 ms). Com o adiamento, todas as vistas sao desenhadas antes e os flares de cada uma vem depois, na textura dela, com
+    // a lista e o contexto da vista (`fl`, `vc`): uma espera so por redesenho. Dentro do BeginMode3D da vista.
+    bool deferFlares = false;
+    // `depth`: a profundidade da vista vai para ele (copia assincrona) e o teste usa a do redesenho anterior (AsyncDepth)
+    void drawFlaresFor(const Ram &ram, const Particles::FlareFrame &fl, const ViewCtx &vc, AsyncDepth *depth = nullptr) {
+        if (depth) {
+            rlDrawRenderBatchActive();
+            depth->swap(rlGetFramebufferWidth(), rlGetFramebufferHeight());
+        }
+        if (fl.e.empty()) return;
+        fx.depthAsync = depth;
+        struct ResetDepth { Particles &p; ~ResetDepth() { p.depthAsync = nullptr; } } resetDepth{fx};
+        const Particles::FlareFrame keepFl = fx.flares;
+        const ViewCtx keepVc = vctx;
+        fx.flares = fl;
+        vctx = vc;
+        {
+            ViewScope vs(vctx);
+            const bool useShader = beginShader(ram, false);
+            rlEnableDepthTest();
+            setAlphaRef(kGsAlphaRef);
+            fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+            rlDrawRenderBatchActive();
+            if (useShader) EndShaderMode();
+            g_premulShader = false;
+        }
+        fx.flares = keepFl;
+        vctx = keepVc;
     }
 
     // Icones de botao 2D (g_buttonIconFn) no lugar dos objetos 3D do McButtons: um por _cs, no centro dos triangulos dele, do tamanho

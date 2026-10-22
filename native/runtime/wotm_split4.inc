@@ -395,6 +395,152 @@ namespace wotm_split4
         const uint32_t cs = FAST_READ32(kGame + kHudStride * i + kHudBarCs) & 0x1FFFFFFFu;
         return cs >= 0x1000u && cs + 0x10u <= PS2_RAM_SIZE ? cs : 0u;
     }
+    // Animacoes do HUD por vista. O HUD 2/3 e uma copia do HUD da coluna: os _animHandle (+0x130..+0x1F0) apontam para os mesmos
+    // _animCharInstance, entao o que um comeca o outro mostra (o flash de furia h180 do jogador 3, posto pelo updateBoostAndRage, e o
+    // fim dele aparecendo e sumindo no HUD do jogador 1). Cada HUD guarda aqui o estado das instancias da coluna: dos nos de controle
+    // (animCtx[k] +0x14..+0x34: inicio, tempo, velocidade, ativo, laco, iteracoes, cache de chave), a arvore principal do AnimPlayer
+    // (+0x8, so no de controle ou nada; o animationStart so troca esse ponteiro) e a saida (animOutput.val). Um so esta na RAM por
+    // coluna (g_hudLive); o hudUse troca, marcando sujo (animOutput.dirty) cada canal cujo valor mudou, para o hier refazer as
+    // matrizes que guardou do outro. As barras (AnimBlend da lista ativa) continuam divididas: cada update reaplica a porcentagem.
+    // Ordem no quadro: update 0 (volta o estado 0), hier 0, animationRunGlobal (avalia o 0), update 1, hier 1, update 2 (guarda o 0,
+    // poe o 2 e o avalia com o UpdateAnimations, como o animationRunGlobal faria), hier 2, update 3, hier 3.
+    constexpr uint32_t kHudHandles = 0x130, kHudHandleN = 13, kCtlState = 0x14, kCtlStateLen = 0x20, kCtlSize = 0x3C;
+    constexpr uint32_t kUpdateAnims = wotm::fn::UpdateAnimations__10AnimPlayer;
+    struct HudAnimState
+    {
+        uint32_t ci[4] = {};
+        int n = 0;
+        std::vector<uint8_t> data;
+    };
+    HudAnimState g_hudAnim[4];
+    uint32_t g_hudLive[2] = {0, 1};   // HUD cujo estado esta na RAM, por coluna
+    PS2Runtime::RecompiledFunction g_updateAnims = nullptr;
+
+    uint32_t ciOk(uint8_t *rdram, uint32_t ci)
+    {
+        ci &= 0x1FFFFFFFu;
+        return ci >= 0x1000u && ci + 0x30u <= PS2_RAM_SIZE ? ci : 0u;
+    }
+    // Instancias distintas dos handles do HUD i
+    int hudInstances(uint8_t *rdram, uint32_t hud, uint32_t out[4])
+    {
+        int n = 0;
+        for (uint32_t k = 0; k < kHudHandleN; ++k)
+        {
+            const uint32_t ci = ciOk(rdram, FAST_READ32(hud + kHudHandles + 0x10u * k));
+            if (!ci || std::find(out, out + n, ci) != out + n)
+                continue;
+            if (n == 4)
+                break;
+            out[n++] = ci;
+        }
+        return n;
+    }
+    // Campos de uma instancia: AnimPlayer, animCtx, val, dirty, animacoes e canais (0 em tudo se algo nao fizer sentido)
+    struct CiFields { uint32_t player = 0, ctx = 0, val = 0, dirty = 0, anims = 0, chans = 0; };
+    CiFields ciFields(uint8_t *rdram, uint32_t ci)
+    {
+        CiFields f;
+        const uint32_t chr = ciOk(rdram, FAST_READ32(ci + 0x20));
+        f.player = ciOk(rdram, FAST_READ32(ci + 0x24));
+        f.ctx = ciOk(rdram, FAST_READ32(ci + 0x10));
+        f.val = ciOk(rdram, FAST_READ32(ci + 4));
+        f.dirty = ciOk(rdram, FAST_READ32(ci + 8));
+        f.anims = chr ? FAST_READ16(chr) : 0u;
+        f.chans = chr ? FAST_READ16(chr + 2) : 0u;
+        if (!chr || !f.player || !f.ctx || !f.val || !f.dirty || f.anims > 64u || f.chans > 512u ||
+            f.ctx + kCtlSize * f.anims > PS2_RAM_SIZE || f.val + 4u * f.chans > PS2_RAM_SIZE)
+            f = CiFields{};
+        return f;
+    }
+    size_t ciBytes(const CiFields &f) { return kCtlStateLen * f.anims + 4u + 4u * f.chans; }
+
+    void hudAnimSave(uint8_t *rdram, uint32_t hud, HudAnimState &s)
+    {
+        s.n = hudInstances(rdram, hud, s.ci);
+        s.data.clear();
+        for (int i = 0; i < s.n; ++i)
+        {
+            const CiFields f = ciFields(rdram, s.ci[i]);
+            const size_t at = s.data.size();
+            s.data.resize(at + ciBytes(f));
+            uint8_t *d = s.data.data() + at;
+            for (uint32_t k = 0; k < f.anims; ++k, d += kCtlStateLen)
+                std::memcpy(d, rdram + f.ctx + kCtlSize * k + kCtlState, kCtlStateLen);
+            if (f.player)
+                std::memcpy(d, rdram + f.player + 8, 4);
+            std::memcpy(d + 4, rdram + f.val, 4u * f.chans);
+        }
+    }
+    // false: as instancias mudaram (outra fase); o estado guardado nao vale
+    bool hudAnimLoad(uint8_t *rdram, uint32_t hud, const HudAnimState &s)
+    {
+        uint32_t ci[4] = {};
+        const int n = hudInstances(rdram, hud, ci);
+        if (n != s.n || !std::equal(ci, ci + n, s.ci))
+            return false;
+        const uint8_t *d = s.data.data(), *end = d + s.data.size();
+        for (int i = 0; i < n; ++i)
+        {
+            const CiFields f = ciFields(rdram, ci[i]);
+            if (d + ciBytes(f) > end)
+                return false;
+            for (uint32_t k = 0; k < f.anims; ++k, d += kCtlStateLen)
+                std::memcpy(rdram + f.ctx + kCtlSize * k + kCtlState, d, kCtlStateLen);
+            if (!f.player)
+            {
+                d += 4u;
+                continue;
+            }
+            // arvore principal: so no de controle desta instancia, ou nada (um no de mistura do pool ficaria em duas arvores)
+            uint32_t main;
+            std::memcpy(&main, d, 4);
+            const uint32_t m = main & 0x1FFFFFFFu, cur = FAST_READ32(f.player + 8) & 0x1FFFFFFFu;
+            const auto ctlNode = [&](uint32_t a) { return !a || (a >= f.ctx && a < f.ctx + kCtlSize * f.anims && (a - f.ctx) % kCtlSize == 0); };
+            if (ctlNode(m) && ctlNode(cur))
+                FAST_WRITE32(f.player + 8, main);
+            for (uint32_t c = 0; c < f.chans; ++c)
+            {
+                const uint32_t a = f.val + 4u * c;
+                if (std::memcmp(rdram + a, d + 4 + 4u * c, 4) != 0)
+                {
+                    std::memcpy(rdram + a, d + 4 + 4u * c, 4);
+                    rdram[f.dirty + c / 8u] |= uint8_t(1u << (c & 7u));
+                }
+            }
+            d += 4u + 4u * f.chans;
+        }
+        return true;
+    }
+    // Poe na RAM o estado das animacoes do HUD `who` (coluna who & 1). Primeira vez do HUD 2/3: parte do estado atual da coluna.
+    void hudUse(uint8_t *rdram, uint32_t who)
+    {
+        const uint32_t col = who & 1u, hud = kGame + kHudStride * col, live = g_hudLive[col];
+        if (live == who)
+            return;
+        hudAnimSave(rdram, hud, g_hudAnim[live]);
+        HudAnimState &s = g_hudAnim[who];
+        if (s.n == 0 || !hudAnimLoad(rdram, hud, s))
+            s = g_hudAnim[live];   // estado novo = o da coluna (ja esta na RAM)
+        g_hudLive[col] = who;
+    }
+    void hudAnimReset()
+    {
+        for (HudAnimState &s : g_hudAnim)
+            s = HudAnimState{};
+        g_hudLive[0] = 0;
+        g_hudLive[1] = 1;
+    }
+    // Avalia as instancias da coluna com o estado em uso (o animationRunGlobal so roda depois do hier da vista 0)
+    void hudEvaluate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t hud)
+    {
+        uint32_t ci[4] = {};
+        const int n = hudInstances(rdram, hud, ci);
+        for (int i = 0; i < n; ++i)
+            if (const CiFields f = ciFields(rdram, ci[i]); f.player && !(FAST_READ32(ci[i] + 0x1C) & 1u))   // lazyEvaluate
+                callGuest(g_updateAnims, kUpdateAnims, rdram, ctx, runtime, f.player);
+    }
+
     void hudUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -407,6 +553,7 @@ namespace wotm_split4
         }
         const uint32_t me = (self - kGame) / kHudStride, p = me & 1u, hudP = kGame + kHudStride * p;
         ++g_hudCalls[me];
+        hudUse(rdram, me);
         uint32_t saved[4] = {};
         if (me >= 2u)
         {
@@ -426,6 +573,7 @@ namespace wotm_split4
             FAST_WRITE32(kViewSlot + 4u * p, saved[1]);
             FAST_WRITE32(camera(int(p)) + kCamCs, saved[2]);
             FAST_WRITE32(hudP + kHudBarCs, saved[3]);
+            hudEvaluate(rdram, ctx, runtime, hudP);
         }
         // a barra deste HUD fica como o jogo a deixou; as outras (por _cs: a do HUD 2 e 3 e a mesma do 0 e 1) apagam
         const uint32_t own = hudBar(rdram, me);
@@ -448,6 +596,8 @@ namespace wotm_split4
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu, i = GPR_U32(ctx, 5);
         const uint32_t ra = ctx->pc == kHudInitAfter ? GPR_U32(ctx, 31) : 0u;
         g_origHudInitAfter(rdram, ctx, runtime);
+        if (ra && ctx->pc == ra && i == 0u)
+            hudAnimReset();   // HUDs novos (o main os inicializa de 0 a 3): o estado guardado das animacoes nao vale mais
         if (!ra || ctx->pc != ra || i < 2u || i >= 4u || self != kGame + kHudStride * i || !g_players)
             return;
         const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers));
@@ -455,6 +605,25 @@ namespace wotm_split4
             return;
         std::memcpy(rdram + self, rdram + kGame + kHudStride * (i & 1u), kHudStride);
         FAST_WRITE32(self, i);
+    }
+
+    // Monster::updateBoostAndRage: com a furia cheia o monstro seguido por camera comeca o flash (h180) do HUD m_cameraView. Durante a
+    // logica (gameUpdate) a RAM tem o estado das animacoes do HUD da coluna; o monstro dos HUDs 2 e 3 usa o dele na chamada.
+    constexpr uint32_t kBoostRage = wotm::fn::updateBoostAndRage__7Monster;
+    PS2Runtime::RecompiledFunction g_origBoostRage = nullptr;
+    void boostAndRage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        const uint32_t view = ctx->pc == kBoostRage && m >= 0x1000u && m + kCameraView + 4u <= PS2_RAM_SIZE ? FAST_READ32(m + kCameraView) : 0u;
+        if (view < 2u || view >= 4u || !g_views || !splitPlayers(rdram))
+        {
+            g_origBoostRage(rdram, ctx, runtime);
+            return;
+        }
+        const uint32_t before = g_hudLive[view & 1u];
+        hudUse(rdram, view);
+        g_origBoostRage(rdram, ctx, runtime);
+        hudUse(rdram, before);
     }
 
     // Fim de rodada do modo 3 (Shell::EvaluateGameStatus -> EvaluateMultiPlayerBattleStatusNoAI ou ...AI, com r = 1 quando alguem
@@ -665,6 +834,8 @@ namespace wotm_split4
         g_origEvalAI = runtime.lookupFunction(kEvalAI);
         g_origBlurInit = runtime.lookupFunction(kBlurInit);
         g_origBlurDraw = runtime.lookupFunction(kBlurDraw);
+        g_origBoostRage = runtime.lookupFunction(kBoostRage);
+        g_updateAnims = runtime.lookupFunction(kUpdateAnims);
         g_origPortOpen = runtime.lookupFunction(wotm::fn::scePadPortOpen);
         g_origPortClose = runtime.lookupFunction(wotm::fn::scePadPortClose);
         bool padsOk = g_origPortOpen && g_origPortClose;
@@ -672,7 +843,7 @@ namespace wotm_split4
             padsOk = padsOk && (g_padOrig[i] = runtime.lookupFunction(kPadSlotFns[i])) != nullptr;
         if (!g_viewCreate || !g_viewSetFov || !g_follow || !g_setPov || !g_origReestablish || !g_origGrapple || !g_origOkToUnify ||
             !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI ||
-            !g_origBlurInit || !g_origBlurDraw || !padsOk)
+            !g_origBlurInit || !g_origBlurDraw || !g_origBoostRage || !g_updateAnims || !padsOk)
         {
             std::fprintf(stderr, "[split] tela dividida de %d desligada: funcao do jogo ou scePad* sem funcao no runtime\n", n);
             return;
@@ -694,6 +865,7 @@ namespace wotm_split4
         runtime.registerFunction(kEvalAI, &evaluateBattle);
         runtime.registerFunction(kBlurInit, &blurInit);
         runtime.registerFunction(kBlurDraw, &blurDraw);
+        runtime.registerFunction(kBoostRage, &boostAndRage);
         runtime.registerFunction(wotm::fn::scePadPortOpen, &portOpen);
         runtime.registerFunction(wotm::fn::scePadPortClose, &portClose);
         for (size_t i = 0; i < kPadSlotN; ++i)
