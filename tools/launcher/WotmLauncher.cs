@@ -106,23 +106,23 @@ class Launcher : Form
         new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
         new Flag("Rendering diagnostics", "WOTM_NOSHADOW", false, "No shadows", "Turns off blocker shadows (monsters and the like)."),
 
-        new Flag("Logs (live.err.log)", ":Stats", false, "Statistics (PS2X_STATS)", "-Stats 1: [native]/[ui]/[time] lines."),
+        new Flag("Logs (live.err.log)", ":Stats", false, "Statistics", "-Stats 1: [native]/[ui]/[time] lines."),
         new Flag("Logs (live.err.log)", "WOTM_FIELDLOG", false, "Fields per frame", "One [field] line per game frame: fields, updateRate, EE cycles, host time and the most expensive loops."),
         new Flag("Logs (live.err.log)", "WOTM_CAMLOG", false, "Camera on every draw", "One [cam] line per draw: t, g_frame, fov, position and direction."),
         new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Native sound", "989snd calls."),
     };
 
-    // Video: altura do quadro nativo (WOTM_RES) e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
+    // Video: altura do quadro nativo e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
     static readonly string[] Resolutions = { "448", "720", "1080", "1440", "2160" };
     static readonly string[] ResolutionLabels = { "448 (original PS2)", "720", "1080", "1440", "2160" };
     static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
     const string DefaultRes = "720", DefaultAspect = "16:9";
-    // Taxa de apresentacao (WOTM_HZ): "0" = a do monitor (o runtime detecta sozinho; a variavel nao e passada). A logica do jogo
+    // Taxa de apresentacao: "0" = a do monitor (o runtime detecta sozinho; a variavel nao e passada). A logica do jogo
     // continua a 60; acima disso a tela so reapresenta o ultimo quadro, com ritmo regular e vsync.
     static readonly string[] Rates = { "0", "60", "120", "144", "165", "180", "240" };
 
     readonly ComboBox rate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly CheckBox vsync = new DarkCheckBox { Text = "Vsync   [WOTM_VSYNC]", AutoSize = true };
+    readonly CheckBox vsync = new DarkCheckBox { Text = "Vsync", AutoSize = true };
     readonly int monitorHz, monitorWidth, monitorHeight;   // modo atual do monitor principal, em pixels reais (sem a escala do Windows)
 
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
@@ -173,7 +173,7 @@ class Launcher : Form
                 gb.Controls.Add(inner);
                 right.Controls.Add(gb);
             }
-            var cb = new DarkCheckBox { Text = f.Label + "   [" + f.Key.TrimStart(':') + "]", AutoSize = true };
+            var cb = new DarkCheckBox { Text = f.Label, AutoSize = true };
             string v;
             cb.Checked = saved.TryGetValue(f.Key, out v) ? v == "1" : f.Default;
             if (f.Tip.Length > 0) tips.SetToolTip(cb, f.Tip);
@@ -234,20 +234,20 @@ class Launcher : Form
         // sem configuracao salva: a maior resolucao que cabe no monitor (primeira execucao)
         int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : MonitorRes());
         res.SelectedIndex = ri >= 0 ? ri : Array.IndexOf(Resolutions, DefaultRes);
-        tips.SetToolTip(res, "Height of the native frame in pixels (WOTM_RES); the width comes from the aspect ratio. Independent of the window size: " +
+        tips.SetToolTip(res, "Height of the native frame in pixels; the width comes from the aspect ratio. Independent of the window size: " +
             "the window only scales the frame up or down.");
-        inner.Controls.Add(Row("Resolution (lines)   [WOTM_RES]", res));
+        inner.Controls.Add(Row("Resolution (lines)", res));
 
         dynWidth.Checked = !saved.TryGetValue(":DynWidth", out v) || v == "1";
         tips.SetToolTip(dynWidth, "Checked: the width follows the window (or the monitor, in fullscreen), from 4:3 to 32:9. " +
-            "Unchecked: fixed aspect ratio (WOTM_ASPECT), with black bars if the window does not match.");
+            "Unchecked: fixed aspect ratio, with black bars if the window does not match.");
         inner.Controls.Add(dynWidth);
 
         aspect.Items.AddRange(Aspects);
         int ai = Array.IndexOf(Aspects, saved.TryGetValue("WOTM_ASPECT", out v) ? v : DefaultAspect);
         aspect.SelectedIndex = ai >= 0 ? ai : Array.IndexOf(Aspects, DefaultAspect);
         tips.SetToolTip(aspect, "4:3 = the game's original screen.");
-        inner.Controls.Add(Row("Fixed aspect   [WOTM_ASPECT]", aspect));
+        inner.Controls.Add(Row("Fixed aspect", aspect));
         aspect.Enabled = !dynWidth.Checked;
         dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
 
@@ -257,15 +257,15 @@ class Launcher : Form
         tips.SetToolTip(fullscreen, "Borderless: a window the size of the monitor; the desktop keeps its mode, Alt+Tab is instant. " +
             "Exclusive: the monitor switches to the game (native resolution); Alt+Tab is slower but the compositor stays out of the way. " +
             "Windowed: the window opens at the resolution's size (smaller if it does not fit). F11 toggles between the window and the chosen fullscreen.");
-        inner.Controls.Add(Row("Display mode (F11)   [WOTM_FULLSCREEN]", fullscreen));
+        inner.Controls.Add(Row("Display mode (F11)", fullscreen));
 
         rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");
         for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
         int hi = Array.IndexOf(Rates, saved.TryGetValue("WOTM_HZ", out v) ? v : "0");
         rate.SelectedIndex = hi >= 0 ? hi : 0;
-        tips.SetToolTip(rate, "How many times per second the screen is presented (WOTM_HZ). Game logic stays at 60: above that the frame " +
+        tips.SetToolTip(rate, "How many times per second the screen is presented. Game logic stays at 60: above that the frame " +
             "is repeated, with even pacing and no tearing. 'Monitor' uses the refresh rate of the window's monitor.");
-        inner.Controls.Add(Row("Refresh rate   [WOTM_HZ]", rate));
+        inner.Controls.Add(Row("Refresh rate", rate));
         vsync.Checked = !saved.TryGetValue("WOTM_VSYNC", out v) || v == "1";
         tips.SetToolTip(vsync, "Syncs with the monitor (no tearing). Unchecked: only limited by the clock.");
         inner.Controls.Add(vsync);
@@ -283,7 +283,7 @@ class Launcher : Form
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7;
 
-    readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu   [WOTM_MATCH]", AutoSize = true };
+    readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
@@ -309,7 +309,7 @@ class Launcher : Form
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
         tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. Every stage fits 8 monsters: the monsters load above 32 MB (64 MB runtime); " +
-            "Metro City with 8 still has ~21 MB to spare. WOTM_HIGHRAM=0 brings back the PS2 32 MB limit (Metro with 8 freezes).");
+            "Metro City with 8 still has ~21 MB to spare.");
         inner.Controls.Add(Row("Stage", matchLevel));
 
         inner.Controls.Add(new Label { Text = "AI opponents (up to 7; none = play solo on the stage):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
@@ -372,14 +372,14 @@ class Launcher : Form
 
     GroupBox CheatsGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new DarkGroupBox { Text = "Cheats from the start   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new DarkGroupBox { Text = "Cheats from the start", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
         inner.Controls.Add(new Label { Text = "Same as the in-fight F1 menu; apply to human players.", AutoSize = true, ForeColor = DimColor });
         for (int i = 0; i < CheatKeys.Length; ++i)
         {
-            var cb = new DarkCheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
+            var cb = new DarkCheckBox { Text = CheatLabels[i], AutoSize = true };
             cb.Checked = saved.TryGetValue(":Cheat_" + CheatKeys[i], out v) && v == "1";
             cheatBoxes[i] = cb;
             inner.Controls.Add(cb);
