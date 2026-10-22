@@ -1557,35 +1557,6 @@ namespace
         b[kPadDown] = static_cast<uint8_t>(std::lround(std::max(-ly, 0.f) * 255.f));
     }
 
-    // Travado, quem acerta o jogador vira o alvo: Monster::takeHit(vitima, pos, dano, id do atacante); o atacante e o
-    // Interactives::s_dbInteractive[id] (getInteractive), quando for um monstro vivo e alvejavel.
-    constexpr uint32_t kTakeHitLock = wotm::fn::takeHit__7MonsterP8_fvectorfi;
-    constexpr uint32_t kNumInteractives = wotm::sym::x_12Interactives_s_numInteractives, kDbInteractive = wotm::sym::x_12Interactives_s_dbInteractive;
-    PS2Runtime::RecompiledFunction g_origTakeHitLock = nullptr;
-
-    void takeHitLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t victim = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
-        const int32_t id = static_cast<int32_t>(GPR_U32(ctx, 6));
-        if (ctx->pc == kTakeHitLock && id > 0 && id < static_cast<int32_t>(FAST_READ32(kNumInteractives)) && ramOk(victim, 0x6C08u))
-            if (LockToggle *t = lockToggleFind(victim + 0x5040u, false); t && t->on && t->owner == victim)   // m_padFlags
-            {
-                const uint32_t attacker = FAST_READ32(kDbInteractive + 4u * static_cast<uint32_t>(id)) & 0x1FFFFFFFu;
-                float tp[3];
-                bool monster = false;
-                for (uint32_t i = 0; i < kMonsterSlots && !monster; ++i)
-                    monster = (FAST_READ32(kGame + 0x120380 + 4 * i) & 0x1FFFFFFFu) == attacker;   // m_monsters[i]
-                if (monster && attacker != FAST_READ32(victim + kMonsterPinTarget) && lockCandidate(rdram, attacker, victim, tp))
-                {
-                    int slot = 0;
-                    isPlayerMonster(rdram, victim, &slot);
-                    FAST_WRITE32(victim + kMonsterPinTarget, attacker);
-                    std::fprintf(stderr, "[lockon] jogador %d: alvo e quem bateu (0x%x)\n", slot + 1, attacker);
-                }
-            }
-        g_origTakeHitLock(rdram, ctx, runtime);
-    }
-
     void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), data = GPR_U32(ctx, 6) & 0x1FFFFFFFu;   // scePadRead(port, slot, rdata)
@@ -2298,9 +2269,6 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 runtime.registerFunction(kScePadRead, &padReadLockToggle);
                 std::fprintf(stderr, "[wotm] lock-on no R1, defesa no L1, andar de lado no L2/R2, setas trocam o alvo (configuracao 0)\n");
             }
-            // travado, quem bate vira o alvo
-            if ((g_origTakeHitLock = runtime.lookupFunction(kTakeHitLock)))
-                runtime.registerFunction(kTakeHitLock, &takeHitLockToggle);
         }
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");

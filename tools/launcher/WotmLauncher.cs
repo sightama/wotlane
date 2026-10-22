@@ -83,7 +83,7 @@ class Launcher : Form
     static readonly Flag[] Flags = {
         new Flag("Mods", "WOTM_LOCKTOGGLE", true, "Toggle lock-on on R1 (D-pad switches target)",
             "Lock-on is no longer held: one tap on R1 locks onto the nearest monster and it stays locked until the next tap. " +
-            "While locked, the stick moves relative to the camera, whoever hits you becomes the target and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
+            "While locked, the stick moves relative to the camera, getting hit does not change the target, and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
             "controller setup). Applies to human players; the AI is unchanged. Unchecked: the original game's buttons."),
         new Flag("Mods", "WOTM_ENEMYBARS", true, "Health and energy bars over enemies",
             "Replaces the numbered dot over each enemy, in the style of the player HUD: a health bar (green, recent damage in red) and an energy bar below it " +
