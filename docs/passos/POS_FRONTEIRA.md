@@ -270,6 +270,9 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   os prédios "fantasma" por linha de visada), transições com cinema e agarrão, e a câmera de cada vista na tela dividida.
 - `Cameras::Update` (tabela `_6Camera$UPDATE_FUNK`) ainda está só em asm; câmera já é superfície de decomp do port. A câmera livre de
   debug (F5, `wotm_freecam.h`/`.inc`) tem a convenção de eixos pronta.
+- **Plano e decisões do dono (2026-10-22):** `investigacoes/2026-10-22/camera_orbital_plano.md` (branch `camera-orbital`): padrão
+  moderna, lock-on enquadra os dois, recentralizar devagar com opção, mouse gira a câmera (pede teclado padrão novo e menus com mouse,
+  etapas 7 a 9).
 
 ### 8. Mods que adicionam skins e monstros
 - Trajes em `m_costume` (o `[2 + j]` atropela `m_mode` a partir da IA 10), tabela de seleção em `monster_select.h` (grupos de 4 por
