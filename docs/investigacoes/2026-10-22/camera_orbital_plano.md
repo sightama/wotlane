@@ -31,7 +31,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 |---|---|---|
 | 0 | Ler o `normalUpdate` | distância, altura e inclinação por POV (`MonsterCameraData`), enquadramento com alvo (`hasPinTarget`), suavizações, colisão; confirma a hipótese acima. Relatório `camera_normalupdate.md` nesta pasta |
 | 1 | Órbita básica (feita, falta o teste do dono) | gancho na saída do `normalUpdate` (vista 0, sem alvo travado): mantém distância e altura do jogo, o ângulo em volta do monstro passa a ser do analógico direito; sem correr atrás das costas; recentralizar devagar |
-| 2 | Alvo travado | enquadramento do jogo, com o analógico direito deslocando um pouco |
+| 2 | Alvo travado (primeira versão, falta o teste do dono) | enquadramento do jogo, com o analógico direito deslocando um pouco |
 | 3 | Chão e prédios | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores | estado de órbita por vista, cada uma pelo controle do seu jogador |
@@ -85,6 +85,29 @@ Conferido no runtime (luta 1P com e sem IA, `WOTM_ORBITLOG`, analógico simulado
 - vista unificada: entra e sai como antes; com `WOTM_CLOSECAM=0` ela não entra e a luta de perto segue na órbita.
 
 Ainda não conferido: agarrão, escalada, planeio, lock-on (etapa 2), tela dividida (etapa 5), sensação com o controle na mão.
+
+### Primeiro teste do dono (2026-10-22) e correções
+Relato: giro vertical rápido demais; a câmera girava sozinha andando devagar de lado; ao soltar o lock-on (ou o alvo morrer)
+andando, a câmera ficava "doida"; ao travar, a câmera demorava a enquadrar o alvo. Teste do dono sugerido para reproduzir: luta de 2
+jogadores, mexendo só no 1 (câmera normal e de perto sem a IA no meio): `WOTM_PLAYERS=2`, `WOTM_MATCH=2,1,1`.
+- **Giro vertical:** 0,03 → 0,012 rad/quadro (~40°/s; o horizontal fica ~170°/s).
+- **Zona morta radial de 0,2 no analógico direito:** o controle do jogador 2, parado, subia a câmera dele sozinho (folga do analógico).
+- **Câmera doida ao soltar o lock-on:** era o recentralizar. Travado, o monstro anda para trás olhando o alvo; solto, ele se vira
+  para onde anda, o recentralizar levava a câmera para as costas dele, o "para trás" mudava e ele virava de novo. Agora o recentralizar
+  só age com o monstro se afastando da câmera (até 60° da direção dela), de frente para onde anda, por pelo menos 20 quadros seguidos:
+  começar a andar de lado vindo de frente para a câmera tem ~1 s de deslocamento da animação de virar (até 2,5 por quadro para longe
+  da câmera), que antes puxava a câmera ~15°.
+- **Câmera subindo com o alvo travado:** o balanço do jogo (`D40`) segue a inclinação até o retículo medida da câmera; com a câmera
+  subindo junto, a inclinação crescia e a câmera ia quase para cima do monstro (distância 42, altura 219). Travado, sem o balanço.
+- **Lock-on (etapa 2, primeira versão):** travado, o ângulo vai para trás do monstro na linha do alvo a 0,25 por quadro (~10
+  quadros); o analógico direito desloca até ~35° e volta ao soltar; a guinada olha para um ponto 30% do caminho até o alvo, até 120; a
+  inclinação é nossa (ponto ~120 acima do pé do monstro, mais 30% da diferença de altura até ±80), com entrada e saída de ~10 quadros,
+  em vez da do jogo, que refaz a rampa de 30 quadros a cada travar. Solto, o ângulo continua de onde estava.
+- O lock-on alternado (`WOTM_LOCKTOGGLE`) já solta quando o alvo morre; segurando L1+R1 (o do jogo), o `updateLock` passa ao monstro
+  mais próximo.
+
+Conferido em lutas de 2 jogadores por roteiro: travar e andar para trás, soltar andando, andar de lado, andar para longe
+(recentraliza), atacar de perto (a vista unificada entra).
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
