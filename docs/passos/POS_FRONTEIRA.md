@@ -388,7 +388,7 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.
   Correções do mesmo dia, depois dos testes do dono: sair não deixa mais o jogo congelado (a volta da pausa esperava o tempo da pausa); o lens flare é refeito pela câmera
   livre (acende o de luzes fora da tela na pausa, como o olho do Robo-47 visto de frente); o fogo do Agamo aparece mesmo com ele fora
-  da tela na pausa. Falta o dono conferir ao vivo.
+  da tela na pausa. Conferido ao vivo pelo dono em 2026-10-22; na master (merge f045a2f).
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros está em
   "Pendências contínuas", abaixo.
 - **Ícones de botão presos no mundo: feito em 2026-10-22** (`d9fd7fa`, `wotm_menu.inc`): depois do Start antecipado no menu
