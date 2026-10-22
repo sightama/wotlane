@@ -33,7 +33,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 1 | Órbita básica (aprovada, na master em 2026-10-22) | gancho na saída do `normalUpdate` (vista 0, sem alvo travado): mantém distância e altura do jogo, o ângulo em volta do monstro passa a ser do analógico direito; sem correr atrás das costas; recentralizar devagar |
 | 2 | Alvo travado (aprovado, na master em 2026-10-22) | enquadramento do jogo, com o analógico direito deslocando um pouco |
 | 3 | Chão e prédios (aprovado, na master em 2026-10-22) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
-| 4 | Transições | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
+| 4 | Transições (conferida em 2026-10-22, sem código novo) | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
 | 7 | Mouse na câmera | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
@@ -147,6 +147,17 @@ parado (`isIdle(7)`) ou travado; no PS2 a troca andando mudaria o controle de re
 controle segue relativo à tela: o gancho do `LeaveUnifiedTask` (`wotm_orbit.inc`) sai na hora (fora de queda livre) pelo próprio
 `LeaveUnifiedView` (com o `+0xE68` zerado ele não remove a tarefa em curso; motivo e alfa do borrão restaurados). Em tela dividida (2
 jogadores) a saída é outra e não esperava. Conferido pelo dono e no log (`camera de perto: saida sem esperar o monstro parar`).
+
+## Etapa 4: transições (conferida em 2026-10-22)
+A entrada suave da etapa 1 já cobre a volta: ao religar, a órbita parte do ângulo em que o jogo deixou a câmera e desliza da pose do
+jogo para a dela em ~20 quadros. Para conferir os dois sentidos, o `WOTM_ORBITLOG` ganhou um medidor de salto (pose final de cada vista,
+quadro a quadro; linha `[orbit] camera N: salto` acima de 60 de distância ou 20 graus). Duas lutas de 150 s, Togera parado contra o
+Congar da IA (`WOTM_MATCH=3,1,1`), moderna e clássica:
+- arremessado (POV 5, ida e volta, 4 vezes), entrada e saída da câmera de perto: nenhum salto na vista do jogador;
+- os saltos que sobram são do próprio jogo e aparecem igual na clássica: a câmera da vista unificada (vista 2) entrando, as câmeras da
+  introdução e o recomeço de rodada (corte do jogo; a órbita recomeça das costas, como planejado).
+
+Não passou no teste: escalada e agarrão do jogador (o medidor fica ligado com o `WOTM_ORBITLOG` para quando o dono notar algo).
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
