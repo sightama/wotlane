@@ -32,7 +32,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 0 | Ler o `normalUpdate` | distância, altura e inclinação por POV (`MonsterCameraData`), enquadramento com alvo (`hasPinTarget`), suavizações, colisão; confirma a hipótese acima. Relatório `camera_normalupdate.md` nesta pasta |
 | 1 | Órbita básica (aprovada, na master em 2026-10-22) | gancho na saída do `normalUpdate` (vista 0, sem alvo travado): mantém distância e altura do jogo, o ângulo em volta do monstro passa a ser do analógico direito; sem correr atrás das costas; recentralizar devagar |
 | 2 | Alvo travado (aprovado, na master em 2026-10-22) | enquadramento do jogo, com o analógico direito deslocando um pouco |
-| 3 | Chão e prédios (feita, falta o teste do dono) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
+| 3 | Chão e prédios (aprovado, na master em 2026-10-22) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
