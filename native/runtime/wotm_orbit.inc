@@ -7,13 +7,12 @@
 //
 // Etapa 1 (orbita basica). Vale para a camera com POV 0 (normalUpdate) que segue o monstro de um jogador humano na vista dele, fora
 // da vista unificada, do modo 9 (Crush), da camera livre e do WOTM_AIVSAI (lotes e corpus ficam com a camera do jogo). O jogo
-// continua rodando o normalUpdate por baixo (inclinacao, balanco de rampa/escalada/mira, tremor, contorno); depois dele a orbita
-// refaz a pose:
-//   - posicao: o deslocamento do jogo (D10 mais o balanco, sqrt(|D40|/90 graus) * D50 ou D60) girado pelo nosso angulo em volta do
-//     monstro (az = rumo do monstro para a camera) em vez do rumo das costas dele; o analogico direito gira az (X) e a elevacao (Y);
-//     o pivo segue o monstro com atraso curto e limitado;
-//   - guinada: rot.z = rumo da camera para o monstro; inclinacao: a do jogo menos o que a elevacao subiu (o monstro fica no mesmo
-//     lugar da tela); a inclinacao pura do jogo volta ao _cs antes do quadro seguinte (senao a suavizacao dele derivaria);
+// continua rodando o normalUpdate por baixo (o tremor dele e aproveitado); depois dele a orbita refaz a pose inteira:
+//   - posicao: o deslocamento do POV (D10, so ele: o balanco e a inclinacao do jogo mudam com o estado do monstro e davam solavancos)
+//     girado pelo nosso angulo em volta do monstro (az = rumo do monstro para a camera) em vez do rumo das costas dele; o analogico
+//     direito gira az (X) e a elevacao (Y); o pivo segue o monstro com atraso curto e limitado;
+//   - guinada e inclinacao: para um ponto ~120 acima do pivo (onde a camera do jogo mira), entao subir a camera inclina na medida
+//     certa; travado, esse ponto anda para o alvo;
 //   - recentralizar (CamRecenter): ~1,5 s sem mexer no analogico direito, com o monstro andando, az volta devagar para as costas;
 //   - o jogo e neutralizado so no que briga com a orbita: trava do setor traseiro (E60 = 1), volta as costas (DA4 = DF4 = 0).
 // Ligando (primeiro quadro, volta de outro POV, da vista unificada ou da camera livre) az sai da posicao que o outro modo deixou e a
@@ -32,8 +31,8 @@ namespace
                            kUnified = wotm::sym::gUseUnifiedView, kGameMode = kGame + 0x1203C8u, kSlots = kGame + 0xB80u,
                            kSlotStride = 0x11190u, kNumSlots = kGame + 0x1203D4u;
         // Camera (docs/investigacoes/2026-10-22/camera_normalupdate.md)
-        constexpr uint32_t kCamCs = 0xCF0u, kCamMonster = 0xCF4u, kCamPov = 0xCF8u, kCamOffset = 0xD10u, kCamSwayUp = 0xD50u,
-                           kCamSwayDown = 0xD60u, kCamPitchExtra = 0xD40u, kCamIdle = 0xDA4u, kCamDrag = 0xDF4u, kCamCut = 0xD98u,
+        constexpr uint32_t kCamCs = 0xCF0u, kCamMonster = 0xCF4u, kCamPov = 0xCF8u, kCamOffset = 0xD10u,
+                           kCamIdle = 0xDA4u, kCamDrag = 0xDF4u, kCamCut = 0xD98u,
                            kCamSectorLock = 0xE60u;
         // Monster
         constexpr uint32_t kMonCs = 0xCu, kMonDead = 0xE8u, kMonPinTarget = 0x6C04u, kMonCameraView = 0x6CD8u, kMonCamUnify = 0x7970u;
@@ -41,6 +40,7 @@ namespace
         constexpr uint32_t kPfOwner = 0x1810u, kPfConfigActive = 0x16E4u, kPfConfigWanted = 0x16E8u;
         constexpr int kMaxCams = 4;
         constexpr float kPi = 3.14159265f;
+        constexpr float kLockRate = 0.15f;   // alvo travado: angulo e mira por quadro (~6 quadros; 0,25 era seco demais para o dono)
 
         struct Cam
         {
@@ -50,7 +50,6 @@ namespace
             float elev = 0.f;        // elevacao somada pelo analogico (radianos)
             float pivot[3] = {};     // ponto em volta do qual gira (segue o monstro com atraso)
             float lastMon[3] = {};
-            float gamePitch = 0.f;   // rot.x do jogo (sem a nossa correcao), devolvido ao _cs antes do quadro seguinte
             float blend = 0.f;       // 1 = pose do jogo, 0 = da orbita (entrada suave)
             int still = 0;           // quadros sem mexer no analogico direito
             bool cutSeen = false;    // D98 ligado na entrada deste quadro
@@ -58,7 +57,8 @@ namespace
             float nudge = 0.f;       // desvio do analogico direito com alvo travado
             bool locked = false;
             int away = 0;            // quadros seguidos com o monstro se afastando da camera
-            float lockW = 0.f, lockPitch = 0.f;   // peso e valor da inclinacao do alvo travado
+            float lockW = 0.f;       // peso da mira no alvo travado (0..1)
+            float lockAim[3] = {};   // desvio da mira para o alvo (o ultimo, enquanto o peso cai ao soltar)
         } g_cam[kMaxCams];
 
         struct Input
@@ -164,10 +164,8 @@ namespace
                 std::memset(s.shake, 0, sizeof s.shake);
                 if (!eligible(rdram, v, mon, slot))
                     continue;
-                const uint32_t c = camAddr(v), cs = FAST_READ32(c + kCamCs) & 0x1FFFFFFFu;
+                const uint32_t c = camAddr(v);
                 s.cutSeen = FAST_READ32(c + kCamCut) != 0u;
-                if (s.active && s.mon == mon)
-                    wrF(rdram, cs + 0x60, s.gamePitch);   // a inclinacao do jogo segue suavizando da dela
                 FAST_WRITE32(c + kCamSectorLock, 1);       // sem a trava do setor traseiro
                 FAST_WRITE32(c + kCamIdle, 0);             // sem a volta as costas
                 FAST_WRITE32(c + kCamDrag, 0);
@@ -241,7 +239,7 @@ namespace
                 {
                     s.nudge = moved ? std::clamp(s.nudge + sx * 0.04f, -0.6f, 0.6f) : s.nudge * 0.9f;
                     const float want = wrapPi(headingTo(mt[0] - tp[0], mt[1] - tp[1]) + s.nudge);
-                    s.az = wrapPi(s.az + wrapPi(want - s.az) * 0.25f);
+                    s.az = wrapPi(s.az + wrapPi(want - s.az) * kLockRate);
                 }
                 else
                 {
@@ -283,14 +281,11 @@ namespace
                     s.pivot[i] = std::clamp(s.pivot[i], mt[i] - lim, mt[i] + lim);
                 }
 
-                // deslocamento do jogo no referencial do monstro (x direita, y frente, z cima): D10 mais o balanco
-                const float pitchExtra = rdF(rdram, c + kCamPitchExtra);
-                // travado, sem o balanco: o jogo inclina para o reticulo medindo da camera, a camera sobe com a inclinacao e mira mais para
-                // baixo, sobe mais... (ia quase para cima do monstro: distancia 42, altura 219)
-                const float k = locked ? 0.f : std::sqrt(std::fabs(pitchExtra) / (kPi * 0.5f));
-                const uint32_t sway = pitchExtra < 0.f ? kCamSwayDown : kCamSwayUp;
-                const float offY = rdF(rdram, c + kCamOffset + 4) + (k != 0.f ? k * rdF(rdram, c + sway + 4) : 0.f);
-                const float offZ = rdF(rdram, c + kCamOffset + 8) + (k != 0.f ? k * rdF(rdram, c + sway + 8) : 0.f);
+                // deslocamento do jogo no referencial do monstro (x direita, y frente, z cima): so o D10 do POV (tela cheia ou
+                // dividida). Sem o balanco nem a inclinacao do jogo: os dois mudam com o estado do monstro (virando no lugar e
+                // comecando a andar para tras o jogo mira direto no monstro; travar/soltar refaz uma rampa; travado, o balanco subia
+                // a camera ate em cima do monstro), e com a camera em outro angulo viravam solavancos
+                const float offY = rdF(rdram, c + kCamOffset + 4), offZ = rdF(rdram, c + kCamOffset + 8);
                 const float back = -offY, len = std::sqrt(back * back + offZ * offZ);
                 const float e0 = std::atan2(offZ, back), e = std::clamp(e0 + s.elev, -0.25f, 1.45f);
                 const float horiz = len * std::cos(e), height = len * std::sin(e);
@@ -309,31 +304,24 @@ namespace
 
                 WotmFreeCamPose p;
                 std::memcpy(p.pos, pos, sizeof pos);
-                // olha para o monstro; travado, para um ponto entre ele e o alvo (os dois no quadro)
-                float look[2] = {mt[0], mt[1]};
+                // Mira: o pivo, ~120 acima do pe (a camera do jogo, 231 atras e 160 acima olhando 10 graus para baixo, mira ai), entao
+                // subir a camera inclina na medida certa e o monstro fica no mesmo lugar da tela. Travado, a mira anda para o alvo (30%
+                // do caminho, ate 120 no chao e 80 na altura; com o alvo longe o monstro saia pela base da tela); o peso entra e sai em
+                // ~6 quadros, sem salto ao travar e soltar
+                s.lockW = locked ? s.lockW + (1.f - s.lockW) * kLockRate : s.lockW * (1.f - kLockRate);
                 if (locked)
                 {
-                    // 30% do caminho, ate 120: com o alvo longe a camera olhava longe e o monstro saia pela base da tela
                     const float dx = tp[0] - mt[0], dy = tp[1] - mt[1], d = std::sqrt(dx * dx + dy * dy);
                     const float f = d > 1.f ? std::min(0.3f * d, 120.f) / d : 0.f;
-                    look[0] += dx * f;
-                    look[1] += dy * f;
+                    s.lockAim[0] = dx * f;
+                    s.lockAim[1] = dy * f;
+                    s.lockAim[2] = std::clamp((tp[2] - mt[2]) * 0.3f, -80.f, 80.f);
                 }
-                p.heading = headingTo(look[0] - pos[0], look[1] - pos[1]);
-                s.gamePitch = rdF(rdram, cs + 0x60);
-                p.pitch = std::clamp(s.gamePitch - (e - e0), -1.55f, 1.55f);
-                // travado: inclinacao nossa, ja no quadro (a do jogo recomeca a rampa de 30 quadros a cada travar/soltar e mira o
-                // reticulo): mira o ponto entre os dois na altura que a camera normal olha acima do pe do monstro (-10 graus de 231 a
-                // 160 de altura: ~120); entra e sai em ~10 quadros
-                s.lockW = locked ? s.lockW + (1.f - s.lockW) * 0.25f : s.lockW * 0.8f;
-                if (locked)
-                {
-                    const float aimZ = mt[2] + 120.f + std::clamp((tp[2] - mt[2]) * 0.3f, -80.f, 80.f);
-                    const float dxy = std::sqrt((look[0] - pos[0]) * (look[0] - pos[0]) + (look[1] - pos[1]) * (look[1] - pos[1]));
-                    s.lockPitch = std::clamp(std::atan2(aimZ - pos[2], std::max(dxy, 1.f)), -1.4f, 1.4f);
-                }
-                if (s.lockW > 0.01f)
-                    p.pitch += (s.lockPitch - p.pitch) * s.lockW;
+                const float aim[3] = {s.pivot[0] + s.lockAim[0] * s.lockW, s.pivot[1] + s.lockAim[1] * s.lockW,
+                                      s.pivot[2] + 120.f + s.lockAim[2] * s.lockW};
+                const float adx = aim[0] - pos[0], ady = aim[1] - pos[1];
+                p.heading = headingTo(adx, ady);
+                p.pitch = std::clamp(std::atan2(aim[2] - pos[2], std::max(std::sqrt(adx * adx + ady * ady), 1.f)), -1.5f, 1.5f);
                 float ax[3][3];
                 wotmFreeCamAxes(p, ax[0], ax[1], ax[2]);
                 for (int i = 0; i < 3; ++i)
@@ -348,7 +336,7 @@ namespace
                 wrF(rdram, cs + 0x64, 0.f);
                 wrF(rdram, cs + 0x68, p.heading);
                 if (log && frames % logEvery == 0)
-                    std::fprintf(stderr, "[orbit] camera %d: az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d\n", v,
+                    std::fprintf(stderr, "[orbit] camera %d: quadro %u az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d\n", v, frames,
                                  s.az * 57.2958f, wrapPi(monHeading + kPi) * 57.2958f, s.elev * 57.2958f, horiz, height, sx, sy, s.still);
             }
             for (int i = 0; i < 4; ++i)

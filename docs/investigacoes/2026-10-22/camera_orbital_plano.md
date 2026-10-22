@@ -109,5 +109,17 @@ jogadores, mexendo só no 1 (câmera normal e de perto sem a IA no meio): `WOTM_
 Conferido em lutas de 2 jogadores por roteiro: travar e andar para trás, soltar andando, andar de lado, andar para longe
 (recentraliza), atacar de perto (a vista unificada entra).
 
+### Segundo teste do dono (2026-10-22)
+Relato: soltar o lock-on andando corrigido; "shift" estranho começando a andar para trás, girando no lugar e ao travar/soltar; com o
+analógico direito para baixo a câmera subiu e ficou mostrando à frente do monstro (foto da janela pausada: olhando quase direto para
+baixo, robô no alto da tela); lock-on um pouco seco.
+- Causa comum: a órbita ainda usava a inclinação e o balanço do `normalUpdate`, que mudam com o estado do monstro (virando no lugar e
+  começando a andar para trás o jogo mira direto no monstro; travar/soltar refaz a rampa de 30 quadros). Agora a pose é toda nossa:
+  distância do `D10` do POV, guinada e inclinação para um ponto ~120 acima do pivô (onde a câmera do jogo mira), que travado anda para
+  o alvo com peso suave. Subir a câmera 27° deixa o monstro no centro.
+- Lock-on: 0,25 → 0,15 por quadro (~50 ms a mais), no ângulo e na mira.
+- Controle relativo à tela liga na hora, mesmo andando (antes esperava o analógico parado e o monstro girava ao sair da câmera de perto).
+- Sem o balanço do jogo, rampa e escalada não aproximam nem inclinam a câmera: conferir escalando.
+
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
