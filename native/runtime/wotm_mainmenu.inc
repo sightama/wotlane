@@ -127,7 +127,9 @@ constexpr int kCtlOpt = -10, kCtlDevice = -2, kCtlReset = -3;   // kCtlOpt - i: 
 constexpr int kMaxCtlRows = kMaxOpts + 2 + st::kBinds;
 constexpr const char *kBindLabels[st::kBinds] = {"D-PAD UP", "D-PAD DOWN", "D-PAD LEFT", "D-PAD RIGHT", "CROSS",     "CIRCLE",     "SQUARE",
                                                  "TRIANGLE", "L1",         "R1",         "L2",          "R2",        "L1 AND R1",  "START",
-                                                 "SELECT",   "L3",         "R3",         "STICK UP",    "STICK DOWN", "STICK LEFT", "STICK RIGHT"};
+                                                 "SELECT",   "L3",         "R3",         "STICK UP",    "STICK DOWN", "STICK LEFT", "STICK RIGHT",
+                                                 "LOCK-ON",  "BLOCK",      "STRAFE LEFT", "STRAFE RIGHT", "NEXT TARGET", "PREVIOUS TARGET",
+                                                 "TRIANGLE AND CIRCLE", "CROSS AND SQUARE", "WALK"};
 static int ctlRows(bool kb, int out[kMaxCtlRows])
 {
     int n = 0;
@@ -161,6 +163,7 @@ static std::string bindValue(int b, int map)
         for (int i = 0; i < 2; ++i)
             if (const char *n = st::keyName(int((v >> (16 * i)) & 0xFFFF)))
                 s += (s.empty() ? "" : " OR ") + std::string(n);   // a fonte do jogo nao tem "/"
+        std::replace(s.begin(), s.end(), '_', ' ');   // MOUSE_LEFT, WHEEL_UP
     }
     else if (const int p = st::pad(st::Bind(b), map); p > 0 && p < st::kPadButtons)
     {
@@ -243,7 +246,7 @@ static bool panelKey(st::Bind b)
 {
     if (st::kb(b)) return wotm_pad::kbDown(b);
     const uint32_t v = st::kDefaultKb[b];
-    return ((v & 0xFFFF) && IsKeyDown(int(v & 0xFFFF))) || ((v >> 16) && IsKeyDown(int(v >> 16)));
+    return wotm_pad::inputDown(int(v & 0xFFFF)) || wotm_pad::inputDown(int(v >> 16));
 }
 static bool panelPad(int d, st::Bind b)
 {
@@ -265,11 +268,14 @@ static void readPanel(bool out[kPanelActs])
             a[PDown] = panelKey(st::BDown) || panelKey(st::BStickDown);
             a[PLeft] = panelKey(st::BLeft) || panelKey(st::BStickLeft);
             a[PRight] = panelKey(st::BRight) || panelKey(st::BStickRight);
-            a[POk] = panelKey(st::BCross);
-            a[PBack] = panelKey(st::BTriangle) || panelKey(st::BCircle);
-            a[PPrev] = panelKey(st::BL1);
-            a[PNext] = panelKey(st::BR1);
-            a[PClear] = panelKey(st::BSquare);
+            // fixas tambem (layout 2 do teclado, sem tecla no L1/R1): Enter confirma, Esc e Backspace voltam, Q/E e Tab (Shift+Tab
+            // volta) trocam a aba, Delete limpa
+            const bool shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT), tab = IsKeyDown(KEY_TAB);
+            a[POk] = panelKey(st::BCross) || IsKeyDown(KEY_ENTER) || IsKeyDown(KEY_KP_ENTER);
+            a[PBack] = panelKey(st::BTriangle) || panelKey(st::BCircle) || IsKeyDown(KEY_ESCAPE) || IsKeyDown(KEY_BACKSPACE);
+            a[PPrev] = panelKey(st::BL1) || IsKeyDown(KEY_Q) || (tab && shift);
+            a[PNext] = panelKey(st::BR1) || IsKeyDown(KEY_E) || (tab && !shift);
+            a[PClear] = panelKey(st::BSquare) || IsKeyDown(KEY_DELETE);
         }
         else if (IsGamepadAvailable(d))
         {
@@ -308,7 +314,7 @@ static void captureInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         for (size_t i = 0; i < std::size(st::kKeyNames); ++i)
         {
-            const bool down = IsKeyDown(st::kKeyNames[i].code);
+            const bool down = wotm_pad::inputDown(st::kKeyNames[i].code);
             if (down && !g_capKeyPrev[i] && !done && st::kKeyNames[i].code != KEY_ESCAPE)   // Esc cancela
             {
                 st::bindKey(b, st::kKeyNames[i].code);
@@ -369,7 +375,7 @@ static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
     {
         g_capture = row;
         g_capT0 = GetTime();
-        for (size_t i = 0; i < std::size(st::kKeyNames); ++i) g_capKeyPrev[i] = IsKeyDown(st::kKeyNames[i].code);
+        for (size_t i = 0; i < std::size(st::kKeyNames); ++i) g_capKeyPrev[i] = wotm_pad::inputDown(st::kKeyNames[i].code);
         for (int p = 0; p < 4; ++p)
             for (int k = 1; k < st::kPadButtons; ++k) g_capPadPrev[p][k] = IsGamepadAvailable(p) && IsGamepadButtonDown(p, k);
         wotm_padsel::sfx(rdram, ctx, runtime, 8);

@@ -1495,6 +1495,15 @@ namespace
         const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, gp = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
         // camera moderna (wotm_orbit.inc): configuracao relativa a tela e analogico direito para a orbita, antes do lock-on ler o +0x16E4
         const int orbitSlot = ctx->pc == kInterpretInputs ? orbit::inputEnter(rdram, pf, gp) : -1;
+        // troca de alvo pedida pelo teclado (Tab, R, rodinha; wotm_mouse.hpp): com alvo travado, com ou sem o lock-on alternado
+        if (int ps = -1; ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) &&
+                         isPlayerMonster(rdram, FAST_READ32(pf + kPadFlagsOwner), &ps) && ps >= 0 && ps < 4)
+            if (const int req = wotm::mouse::g_targetReq[ps].exchange(0, std::memory_order_relaxed); req != 0)
+            {
+                const uint32_t owner = FAST_READ32(pf + kPadFlagsOwner);
+                if (FAST_READ32(owner + kMonsterPinTarget))
+                    lockCycleTarget(rdram, owner, ps, req > 0 ? 1 : -1);   // proximo = o da direita na tela
+            }
         LockToggle *t = nullptr;
         int slot = 0;
         if (ctx->pc == kInterpretInputs && wotm::settings::on(wotm::settings::LockToggle) && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))

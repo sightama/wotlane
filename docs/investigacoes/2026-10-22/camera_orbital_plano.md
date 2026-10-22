@@ -37,7 +37,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro em 2026-10-22, falta o teste do dono com controles) | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel (feita em 2026-10-22, aba CAMERA; falta o teste do dono) | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
 | 7 | Mouse na câmera (feita em 2026-10-22; falta o teste do dono) | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
-| 8 | Teclado novo | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
+| 8 | Teclado novo (feita em 2026-10-22, testada pelo dono) | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
 | 9 | Menus com mouse | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
 
 Etapas 7 a 9 podem andar em paralelo à 2–5 (não dependem da órbita além do gancho do mouse).
@@ -195,6 +195,28 @@ aviso para e o cursor é solto em ~150 ms. `WOTM_MOUSECAM=0` desliga; `WOTM_ORBI
 Conferido por roteiro (1P): 600 pixels para a direita giraram 85,9 graus e 200 para cima levaram a altura a -28,6 graus (o
 previsto); cursor preso na luta, solto no menu de pausa (`PS2X_PAD` com start, foto) e preso de novo ao continuar.
 Falta: o dono jogar com o mouse de verdade (sensação da velocidade padrão).
+
+## Etapa 8: teclado novo (2026-10-22, testada pelo dono)
+Layout 2 do teclado, o do dono (`wotm_settings.hpp`, `kDefaultKb`): WASD anda (analógico esquerdo), mouse gira a câmera, botão
+esquerdo ataque fraco (quadrado), direito forte (triângulo), Espaço pula (X), F ou botão lateral agarra (bola), Shift defende, Q ou
+botão do meio trava, Tab/R ou a rodinha trocam o alvo, Z/X andam de lado, 1 especial triângulo+bola, 2 especial X+quadrado, Alt
+anda devagar, Enter ou Esc pausam (Esc volta nos menus), Ctrl provoca (Select), setas no direcional. Botões do mouse e a rodinha
+entram no mapa (códigos 1000+ e 1010/1011) e podem ser escolhidos na aba CONTROLS.
+Ações só do teclado (linhas novas na aba CONTROLS, mapa do teclado): travar, defender e andar de lado viram botões do PS2 conforme o
+lock-on alternado (ligado: R1, L1, L2/R2, os botões do mod; desligado: L1+R1, R2, L1/R1, os do jogo; supõem o CONTROL TYPE A). A troca
+de alvo não passa pelo direcional (solto, ele andaria): o teclado pede direto ao lock-on (`wotm::mouse::g_targetReq`, consumido no
+gancho do `interpretInputs`, `lockCycleTarget`), com ou sem o lock-on alternado. A rodinha vira um toque por passo, só na luta.
+`settings.ini` de layout anterior: as `KB_` são ignoradas e o arquivo é regravado (`KB_LAYOUT=2`).
+**Andar com a câmera moderna:** o `computeTargetSpeed` pesa a velocidade pela inclinação (PadEntry +0x12/+0x14/+0x1A/+0x1C), mas a
+configuração relativa à tela (SR), que a órbita impõe, grava a direção normalizada (curso todo): o Alt (analógico a ~40%) e o
+analógico do gamepad pela metade corriam. Na saída do `interpretInputs` forçado, os quatro campos do quadro são multiplicados pela
+inclinação do analógico esquerdo (`wotm_orbit.inc`, `inputLeave`). Confirmado pelo dono.
+Painel: Enter confirma, Esc/Backspace voltam, Q/E e Tab (Shift+Tab) trocam a aba, Delete limpa (L1/R1 ficaram sem tecla); ícones
+de teclado mostram Q/E nas abas e a rodinha no botão do meio. `WOTM_KBLOG` registra o que o teclado manda.
+Teste por roteiro (mensagens do Windows na janela): o `[kb]` mostrou os botões certos para todas as teclas e botões do mouse e a troca
+de alvo funcionou, mas o monstro não andou na tela, embora o log da órbita mostrasse posição mudando (o dono viu parado no spawn): esse
+tipo de teste não serve para movimento, e a posição do log precisa ser conferida antes de ser usada de novo. O Shift não dá para
+testar assim (o GLFW solta o Shift que não está fisicamente apertado). Valeu o teste do dono: tudo funcionando.
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?

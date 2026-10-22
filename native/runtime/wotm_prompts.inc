@@ -97,7 +97,7 @@ static void pollDevice()
     if (now == g_lastPoll) return;
     g_lastPoll = now;
     for (const st::KeyName &k : st::kKeyNames)
-        if (IsKeyDown(k.code)) { g_lastPad = -1; return; }
+        if (wotm_pad::inputDown(k.code)) { g_lastPad = -1; return; }   // teclas e botoes do mouse
     for (int p = 0; p < 4; ++p)
     {
         if (!IsGamepadAvailable(p)) continue;
@@ -177,8 +177,12 @@ static int cellFor(st::Bind b)
     const int style = currentStyle();
     if (style == st::PromptKeyboard)
     {
-        const int c = keyCell(st::keyName(int(st::kb(b) & 0xFFFF)));
-        if (c >= 0) return c;   // sem tecla: o simbolo do PS2
+        const char *name = st::keyName(int(st::kb(b) & 0xFFFF));
+        // botao do meio e rodinha: o icone da rodinha; L1/R1 sem tecla (layout 2): Q/E, as abas do painel
+        if (name && (!std::strcmp(name, "MOUSE_MIDDLE") || !std::strncmp(name, "WHEEL", 5))) name = "MOUSE_SCROLL";
+        if (!name && (b == st::BL1 || b == st::BR1)) name = b == st::BL1 ? "Q" : "E";
+        const int c = keyCell(name);
+        if (c >= 0) return c;   // sem tecla (ou tecla sem desenho): o simbolo do PS2
     }
     return padCell(st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(g_lastPad)), style == st::PromptKeyboard ? st::PromptPs : style);
 }

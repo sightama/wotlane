@@ -64,6 +64,7 @@ inline constexpr int kAspects = 6;
 inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0};
 inline std::filesystem::path g_path;   // vazio: sem arquivo (WOTM_SETTINGS=0 ou antes do load)
 inline std::mutex g_fileMutex;
+inline bool g_pathPending = false;   // o load achou teclas de um layout anterior: regrava o arquivo no fim do load
 
 inline int get(Key k) { return g_val[k].load(std::memory_order_relaxed); }
 inline bool on(Key k) { return get(k) != 0; }
@@ -145,6 +146,9 @@ inline std::string format(Key k, int v)
 // Os gamepads tem um mapa por jogador (kPadPlayers): o gamepad usa o do jogador que ele alimenta (wotm_pad::playerOfPad); o teclado
 // tem um so. No arquivo: KB_<BOTAO>=TECLA[,TECLA], PAD_<BOTAO>=BOTAO (jogador 1) e PAD2_/PAD3_/PAD4_<BOTAO>=BOTAO, com os nomes de
 // kKeyNames/kPadButtonNames. Sem variavel de ambiente.
+// Acoes so do teclado (etapa 8 da camera orbital, investigacoes/2026-10-22/camera_orbital_plano.md): viram botoes do PS2 conforme o
+// lock-on alternado (WOTM_LOCKTOGGLE muda quais botoes travam, defendem e andam de lado; wotm_pad.inc, keyboard) ou pedem a troca de
+// alvo direto ao lock-on (wotm_mouse.hpp). Supoem o CONTROL TYPE A (configuracao 0) do jogo.
 enum Bind
 {
     BUp, BDown, BLeft, BRight,                 // direcional
@@ -153,19 +157,32 @@ enum Bind
     BL1R1,                                     // so teclado: L1 e R1 juntos
     BStart, BSelect, BL3, BR3,
     BStickUp, BStickDown, BStickLeft, BStickRight,   // so teclado: analogico esquerdo
+    BLock, BBlock, BStrafeL, BStrafeR,         // so teclado: travar, defender, andar de lado (botoes conforme o lock-on alternado)
+    BTargetNext, BTargetPrev,                  // so teclado: proximo alvo / anterior (com alvo travado)
+    BTriCircle, BCrossSquare,                  // so teclado: triangulo e bola juntos, X e quadrado juntos (especiais)
+    BWalk,                                     // so teclado: segurado, o analogico vai so ate parte do curso (andar)
     kBinds
 };
 inline constexpr const char *kBindNames[kBinds] = {"UP",     "DOWN",   "LEFT",   "RIGHT",    "CROSS",     "CIRCLE",     "SQUARE",
                                                    "TRIANGLE", "L1",   "R1",     "L2",       "R2",        "L1_R1",      "START",
-                                                   "SELECT", "L3",     "R3",     "STICK_UP", "STICK_DOWN", "STICK_LEFT", "STICK_RIGHT"};
+                                                   "SELECT", "L3",     "R3",     "STICK_UP", "STICK_DOWN", "STICK_LEFT", "STICK_RIGHT",
+                                                   "LOCK",   "BLOCK",  "STRAFE_LEFT", "STRAFE_RIGHT", "TARGET_NEXT", "TARGET_PREV",
+                                                   "TRIANGLE_CIRCLE", "CROSS_SQUARE", "WALK"};
 // Bits do scePadRead (1 = o botao)
 inline constexpr uint16_t kBindMask[kBinds] = {0x0010, 0x0040, 0x0080, 0x0020, 0x4000, 0x2000, 0x8000, 0x1000, 0x0400, 0x0800, 0x0100,
-                                               0x0200, 0x0C00, 0x0008, 0x0001, 0x0002, 0x0004, 0,      0,      0,      0};
+                                               0x0200, 0x0C00, 0x0008, 0x0001, 0x0002, 0x0004, 0,      0,      0,      0,
+                                               0,      0,      0,      0,      0,      0,      0x3000, 0xC000, 0};
 inline constexpr bool bindOnPad(Bind b) { return b != BL1R1 && b < BStickUp; }
 
 struct KeyName { int code; const char *name; };
-// Teclas que podem ser escolhidas (Esc cancela a escolha; F1..F12 sao do runtime: menu de debug, camera livre, fotos, tela cheia)
+// Codigos do mouse no mapa do teclado (fora dos KeyboardKey do raylib): botoes 1000 + MouseButton, rodinha 1010 (cima) e 1011 (baixo)
+inline constexpr int kMouseBase = 1000, kWheelUp = 1010, kWheelDown = 1011;
+// Teclas que podem ser escolhidas (Esc cancela a escolha, mas vale no padrao; F1..F12 sao do runtime: menu de debug, camera livre,
+// fotos, tela cheia). Os nomes do mouse e do Esc sao os do atlas de icones (wotm_prompts.h).
 inline constexpr KeyName kKeyNames[] = {
+    {256, "ESC"},
+    {1000, "MOUSE_LEFT"}, {1001, "MOUSE_RIGHT"}, {1002, "MOUSE_MIDDLE"}, {1003, "MOUSE_SIDE"}, {1004, "MOUSE_EXTRA"},
+    {1010, "WHEEL_UP"}, {1011, "WHEEL_DOWN"},
     {32, "SPACE"}, {39, "APOSTROPHE"}, {44, "COMMA"}, {45, "MINUS"}, {46, "PERIOD"}, {47, "SLASH"},
     {48, "0"}, {49, "1"}, {50, "2"}, {51, "3"}, {52, "4"}, {53, "5"}, {54, "6"}, {55, "7"}, {56, "8"}, {57, "9"},
     {59, "SEMICOLON"}, {61, "EQUAL"},
@@ -185,13 +202,21 @@ inline constexpr const char *kPadButtonNames[18] = {"",        "DPAD_UP", "DPAD_
                                                     "R2",      "BACK",    "GUIDE",      "START",     "L3",        "R3"};
 inline constexpr int kPadButtons = 18;
 
-// Padrao = o mapa fixo de antes (ps2_pad.cpp): I/J/K/L direcional, Espaco X, S bola, Z quadrado, X triangulo, Q L1, W R1,
-// Shift L1+R1, A L2, C R2, Enter Start, Backspace Select, setas no analogico
+// Padrao do teclado (layout 2, do dono, 2026-10-22): WASD anda (analogico), mouse gira a camera, botao esquerdo ataque fraco
+// (quadrado), direito forte (triangulo), Espaco pula (X), F ou botao lateral agarra (bola), Shift defende, Q ou botao do meio trava,
+// Tab/R ou a rodinha trocam o alvo, Z/X andam de lado, 1 e 2 os especiais (triangulo+bola, X+quadrado), Alt anda devagar, Enter ou
+// Esc pausam (Esc volta nos menus), Ctrl provoca (Select), setas no direcional. L1, R1, L2, R2 e L1+R1 sem tecla: as acoes cuidam.
 inline constexpr uint32_t kbPair(int a, int b = 0) { return uint32_t(a) | (uint32_t(b) << 16); }
-inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(73), kbPair(75), kbPair(74), kbPair(76), kbPair(32), kbPair(83), kbPair(90),
-                                                kbPair(88), kbPair(81), kbPair(87), kbPair(65), kbPair(67), kbPair(340, 344), kbPair(257),
-                                                kbPair(259), 0, 0, kbPair(265), kbPair(264), kbPair(263), kbPair(262)};
-inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0};
+inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(265), kbPair(264), kbPair(263), kbPair(262),           // direcional: setas
+                                                kbPair(32), kbPair(70, 1003), kbPair(1000), kbPair(1001),    // X, bola, quadrado, triangulo
+                                                0, 0, 0, 0, 0,                                               // L1, R1, L2, R2, L1+R1
+                                                kbPair(257, 256), kbPair(341), 0, 0,                         // Start, Select, L3, R3
+                                                kbPair(87), kbPair(83), kbPair(65), kbPair(68),              // analogico: WASD
+                                                kbPair(81, 1002), kbPair(340), kbPair(90), kbPair(88),       // trava, defende, lados
+                                                kbPair(258, 1011), kbPair(82, 1010),                         // proximo, anterior
+                                                kbPair(49), kbPair(50), kbPair(342)};                        // especiais, andar
+inline constexpr int kKbLayout = 2;   // KB_LAYOUT do settings.ini: as KB_ de um arquivo de layout anterior sao ignoradas
+inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 inline std::atomic<uint32_t> g_kb[kBinds];
 inline constexpr int kPadPlayers = 4;
@@ -299,6 +324,7 @@ inline void save()
     for (int k = 0; k < kKeys; ++k)
         f << kEnv[k] << '=' << format(Key(k), get(Key(k))) << '\n';
     f << "# Teclas (KB_) e botoes de gamepad de cada botao do PS2 (PAD_ = jogador 1, PAD2_..PAD4_ = jogadores 2 a 4): aba CONTROLS\n";
+    f << "KB_LAYOUT=" << kKbLayout << '\n';
     for (int b = 0; b < kBinds; ++b)
         f << "KB_" << kBindNames[b] << '=' << formatKb(kb(Bind(b))) << '\n';
     for (int p = 0; p < kPadPlayers; ++p)
@@ -336,7 +362,9 @@ inline void load(const std::filesystem::path &dir)
     std::call_once(once, [&] {
         const char *off = std::getenv("WOTM_SETTINGS");
         const bool useFile = !(off && off[0] == '0');
-        int fromFile = 0, fromEnv = 0;
+        int fromFile = 0, fromEnv = 0, kbLayout = 0;
+        uint32_t fileKb[kBinds] = {};
+        bool kbSeen[kBinds] = {};
         if (useFile)
         {
             g_path = dir / "settings.ini";
@@ -355,20 +383,40 @@ inline void load(const std::filesystem::path &dir)
                             g_val[k].store(v);
                             ++fromFile;
                         }
+                if (key == "KB_LAYOUT")
+                    kbLayout = std::atoi(val.c_str());
                 for (int b = 0; b < kBinds; ++b)
                 {
                     if (key == std::string("KB_") + kBindNames[b])
-                        g_kb[b].store(parseKb(val)), ++fromFile;
+                        fileKb[b] = parseKb(val), kbSeen[b] = true;
                     else if (bindOnPad(Bind(b)))
                         for (int p = 0; p < kPadPlayers; ++p)
                             if (key == padPrefix(p) + kBindNames[b])
                                 g_pad[p][b].store(parsePad(val)), ++fromFile;
                 }
             }
+            // teclas do arquivo so no layout de agora; de um anterior (o I/J/K/L de antes) fica o padrao novo, e o arquivo e regravado
+            int kbFromFile = 0;
+            for (int b = 0; b < kBinds; ++b)
+                kbFromFile += kbSeen[b];
+            if (kbLayout == kKbLayout)
+            {
+                for (int b = 0; b < kBinds; ++b)
+                    if (kbSeen[b])
+                        g_kb[b].store(fileKb[b]);
+                fromFile += kbFromFile;
+            }
+            else if (kbFromFile)
+            {
+                std::fprintf(stderr, "[settings] teclas do layout %d ignoradas: teclado no layout %d (WASD e mouse)\n", kbLayout, kKbLayout);
+                g_pathPending = true;
+            }
         }
         fromEnv = applyEnv();
         std::fprintf(stderr, "[settings] %s: %d do arquivo, %d do ambiente\n", useFile ? g_path.string().c_str() : "arquivo ignorado (WOTM_SETTINGS=0)",
                      fromFile, fromEnv);
+        if (g_pathPending)
+            save();
     });
 }
 } // namespace wotm::settings

@@ -56,10 +56,41 @@ static uint32_t deviceMap(int port)
 
 // ------------------------------------------------------------------ mapa de teclas e botoes (wotm_settings.hpp, aba CONTROLS)
 namespace st = wotm::settings;
+// Rodinha como botao: cada passo (somado pela janela em mouseFrame) vira um toque de uma leitura do pad, com uma leitura solta
+// depois, para a borda contar uma vez por passo. Avanca uma vez por leitura do teclado (keyboard).
+static int g_wheelHeld = 0;   // +1 / -1 durante o toque, 0 solto
+static int g_wheelGap = 0;
+static void wheelStep()
+{
+    if (g_wheelHeld)
+    {
+        g_wheelHeld = 0;
+        g_wheelGap = 1;
+        return;
+    }
+    if (g_wheelGap > 0)
+    {
+        --g_wheelGap;
+        return;
+    }
+    int w = wotm::mouse::g_wheel.load(std::memory_order_relaxed);
+    while (w != 0 && !wotm::mouse::g_wheel.compare_exchange_weak(w, w > 0 ? w - 1 : w + 1, std::memory_order_relaxed)) {}
+    if (w != 0)
+        g_wheelHeld = w > 0 ? 1 : -1;
+}
+// Tecla, botao do mouse (kMouseBase + MouseButton) ou passo da rodinha (kWheelUp/kWheelDown) do mapa do teclado
+inline bool inputDown(int code)
+{
+    if (code <= 0) return false;
+    if (code == st::kWheelUp) return g_wheelHeld > 0;
+    if (code == st::kWheelDown) return g_wheelHeld < 0;
+    if (code >= st::kMouseBase && code < st::kMouseBase + 7) return IsMouseButtonDown(code - st::kMouseBase);
+    return IsKeyDown(code);
+}
 inline bool kbDown(st::Bind b)
 {
     const uint32_t v = st::kb(b);
-    return ((v & 0xFFFF) && IsKeyDown(int(v & 0xFFFF))) || ((v >> 16) && IsKeyDown(int(v >> 16)));
+    return inputDown(int(v & 0xFFFF)) || inputDown(int(v >> 16));
 }
 // Jogador (0..3) que o gamepad `pad` alimenta, pela regra do deviceMap: na escolha manual, a coluna em que ele entrou; senao, a ordem
 // dos conectados. Fora disso (ou sem gamepad), o jogador 1. Escolhe o mapa de botoes dele (wotm_settings.hpp, um por jogador).
@@ -88,20 +119,69 @@ inline bool padDown(int pad, st::Bind b, int player)
     return btn > 0 && IsGamepadButtonDown(pad, btn);
 }
 
-static void keyboard(uint16_t &btns, uint8_t *data)
-{
-    for (int b = 0; b < st::kBinds; ++b)
-        if (st::kBindMask[b] && kbDown(st::Bind(b)))
-            btns &= static_cast<uint16_t>(~st::kBindMask[b]);
-    // analogico esquerdo (so com alguma das teclas dele apertada; senao fica o valor do gamepad ou o centro)
-    const bool l = kbDown(st::BStickLeft), r = kbDown(st::BStickRight), u = kbDown(st::BStickUp), d = kbDown(st::BStickDown);
-    if (l != r) data[6] = l ? 0x00 : 0xFF;
-    if (u != d) data[7] = u ? 0x00 : 0xFF;
-}
 // Nos menus: o gancho do screenGetInput (wotm_mainmenu.inc) marca a hora a cada quadro de uma tela do menu
 static std::atomic<double> g_menuTime{-1.0};
 inline void markMenuFrame() { g_menuTime.store(GetTime(), std::memory_order_relaxed); }
 inline bool inMenus() { return GetTime() - g_menuTime.load(std::memory_order_relaxed) < 0.25; }
+
+// Teclado -> botoes do PS2 (bits ativos em 0 de btns) e analogico esquerdo (data[6] x, data[7] y), a cada leitura do pad do jogador
+// do teclado. Acoes do teclado (wotm_settings.hpp), na configuracao 0 do jogo (CONTROL TYPE A):
+//   lock-on alternado ligado (WOTM_LOCKTOGGLE, o mod troca os botoes; wotm_overrides.cpp): trava R1, defende L1, lados L2/R2;
+//   desligado (os botoes do jogo): trava L1+R1 segurados, defende R2, lados L1/R1.
+// Troca de alvo: pedido direto ao lock-on (wotm_mouse.hpp), na borda da tecla; o direcional nao entra (solto, ele andaria).
+// Esc no Start: nos menus vale triangulo (voltar). Andar (Alt): o analogico vai a ~40% do curso.
+static void keyboard(uint16_t &btns, uint8_t *data)
+{
+    wheelStep();
+    const bool menus = inMenus();
+    for (int b = 0; b < st::kBinds; ++b)
+        if (st::kBindMask[b] && kbDown(st::Bind(b)))
+        {
+            uint16_t mask = st::kBindMask[b];
+            if (b == st::BStart && menus && IsKeyDown(KEY_ESCAPE))
+            {
+                const uint32_t v = st::kb(st::BStart);   // Esc no Start: so ele apertado vira voltar
+                const bool other = (int(v & 0xFFFF) != KEY_ESCAPE && inputDown(int(v & 0xFFFF))) ||
+                                   (int(v >> 16) != KEY_ESCAPE && inputDown(int(v >> 16)));
+                if (!other) mask = 0x1000;   // triangulo
+            }
+            btns &= static_cast<uint16_t>(~mask);
+        }
+    constexpr uint16_t kL1 = 0x0400, kR1 = 0x0800, kL2 = 0x0100, kR2 = 0x0200;
+    const bool toggle = st::on(st::LockToggle);
+    uint16_t act = 0;
+    if (kbDown(st::BLock)) act |= toggle ? kR1 : uint16_t(kL1 | kR1);
+    if (kbDown(st::BBlock)) act |= toggle ? kL1 : kR2;
+    if (kbDown(st::BStrafeL)) act |= toggle ? kL2 : kL1;
+    if (kbDown(st::BStrafeR)) act |= toggle ? kR2 : kR1;
+    btns &= static_cast<uint16_t>(~act);
+
+    static bool prevNext = false, prevPrev = false;
+    const bool next = kbDown(st::BTargetNext), prev = kbDown(st::BTargetPrev);
+    const int kp = wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed);
+    if (kp >= 0 && kp < 4 && !menus && ((next && !prevNext) || (prev && !prevPrev)))
+        wotm::mouse::g_targetReq[kp].fetch_add(next && !prevNext ? 1 : -1, std::memory_order_relaxed);
+    prevNext = next;
+    prevPrev = prev;
+
+    // analogico esquerdo (so com alguma das teclas dele apertada; senao fica o valor do gamepad ou o centro)
+    const bool l = kbDown(st::BStickLeft), r = kbDown(st::BStickRight), u = kbDown(st::BStickUp), d = kbDown(st::BStickDown);
+    const uint8_t lo = kbDown(st::BWalk) ? 0x4D : 0x00, hi = static_cast<uint8_t>(0xFF - lo);
+    if (l != r) data[6] = l ? lo : hi;
+    if (u != d) data[7] = u ? lo : hi;
+
+    static const bool log = std::getenv("WOTM_KBLOG") != nullptr;   // uma linha por mudanca do que o teclado manda
+    static uint16_t lastB = 0xFFFF;
+    static uint8_t lastX = 0x80, lastY = 0x80;
+    if (log && (btns != lastB || data[6] != lastX || data[7] != lastY))
+    {
+        std::fprintf(stderr, "[kb] t=%.2f botoes %04x analogico %02x,%02x%s\n", GetTime(), unsigned(static_cast<uint16_t>(~btns)), data[6],
+                     data[7], menus ? " (menus)" : "");
+        lastB = btns;
+        lastX = data[6];
+        lastY = data[7];
+    }
+}
 // MenuConfirm = 1 nos menus (gamepads): o botao do X passa a dar triangulo (voltar, no jogo), o da bola da X (confirmar) e o do
 // triangulo da bola. Com o mapa padrao: o da direita confirma e o de baixo volta, como nos consoles da Nintendo.
 inline bool menuSwap() { return st::get(st::MenuConfirm) == 1 && inMenus(); }
@@ -169,7 +249,12 @@ static void mouseFrame()
                      static_cast<long long>(ms::nowMs() - (ms::g_wantUntil.load(std::memory_order_relaxed) - 150)), IsWindowFocused() ? 1 : 0);
     }
     if (!captured)
+    {
+        ms::g_wheel.store(0, std::memory_order_relaxed);   // rodinha so na luta (troca de alvo)
         return;
+    }
+    if (const float w = GetMouseWheelMove(); w != 0.f)
+        ms::g_wheel.fetch_add(w > 0.f ? 1 : -1, std::memory_order_relaxed);
     const Vector2 d = GetMouseDelta();
     if (skip > 0)
     {

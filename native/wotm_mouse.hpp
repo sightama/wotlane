@@ -15,6 +15,10 @@ namespace wotm::mouse
 inline std::atomic<int> g_kbPlayer{0};        // jogador (0..3) que o teclado alimenta; -1 = nenhum (janela escreve)
 inline std::atomic<int64_t> g_wantUntil{0};   // ms do relogio monotono ate quando o cursor pode ficar preso (EE escreve)
 inline std::atomic<bool> g_captured{false};   // cursor preso agora (janela escreve)
+inline std::atomic<int> g_wheel{0};          // passos da rodinha ainda nao usados (+ cima, - baixo; janela soma, teclado consome)
+// Troca de alvo pedida pelo teclado (etapa 8: Tab, R, rodinha), por jogador: +1 proximo, -1 anterior. O teclado (wotm_pad.inc) soma
+// na borda da tecla, o gancho do interpretInputs (wotm_overrides.cpp) consome com o alvo travado, qualquer que seja o lock-on
+inline std::atomic<int> g_targetReq[4] = {};
 inline std::mutex g_m;
 inline float g_dx = 0.f, g_dy = 0.f;          // pixels acumulados desde o ultimo consumo (protegidos por g_m)
 

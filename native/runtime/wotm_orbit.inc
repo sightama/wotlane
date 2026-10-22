@@ -38,7 +38,7 @@ namespace
         // Monster
         constexpr uint32_t kMonCs = 0xCu, kMonDead = 0xE8u, kMonPinTarget = 0x6C04u, kMonCameraView = 0x6CD8u, kMonCamUnify = 0x7970u;
         // PadFlags
-        constexpr uint32_t kPfOwner = 0x1810u, kPfConfigActive = 0x16E4u, kPfConfigWanted = 0x16E8u;
+        constexpr uint32_t kPfOwner = 0x1810u, kPfConfigActive = 0x16E4u, kPfConfigWanted = 0x16E8u, kPfRingIndex = 0x16F0u;
         constexpr int kMaxCams = 4;
         constexpr float kPi = 3.14159265f;
         constexpr float kLockRate = 0.15f;   // alvo travado: angulo e mira por quadro (~6 quadros; 0,25 era seco demais para o dono)
@@ -72,6 +72,7 @@ namespace
             bool pending = false;    // forcado, mas a funcao nao voltou ainda (fatia de tempo): restaurar na proxima entrada
             uint32_t pf = 0, saved4 = 0, saved8 = 0;
             float stick[2] = {};     // analogico direito do ultimo quadro (x direita, y cima), -1..1
+            float tilt = 1.f;        // inclinacao do analogico esquerdo (0..1) na entrada do interpretInputs forcado
         } g_in[4];
 
         float rdF(uint8_t *rdram, uint32_t a) { float v; std::memcpy(&v, rdram + a, 4); return v; }
@@ -606,8 +607,8 @@ namespace
                 wrF(rdram, cs + 0x64, 0.f);
                 wrF(rdram, cs + 0x68, p.heading);
                 if (log && frames % logEvery == 0)
-                    std::fprintf(stderr, "[orbit] camera %d: quadro %u az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d alcance %.2f chao +%.0f\n", v, frames,
-                                 s.az * 57.2958f, wrapPi(monHeading + kPi) * 57.2958f, s.elev * 57.2958f, horiz, height, sx, sy, s.still, s.reach, s.lift);
+                    std::fprintf(stderr, "[orbit] camera %d: quadro %u az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d alcance %.2f chao +%.0f monstro %.0f,%.0f\n", v, frames,
+                                 s.az * 57.2958f, wrapPi(monHeading + kPi) * 57.2958f, s.elev * 57.2958f, horiz, height, sx, sy, s.still, s.reach, s.lift, mt[0], mt[1]);
             }
             for (int i = 0; i < 4; ++i)
                 g_in[i].driving = driving[i];
@@ -703,6 +704,11 @@ namespace
             }
             // liga na hora, mesmo andando: esperar o analogico parado deixava o controle de tanque ao sair da camera de perto andando
             // (o InitCCMonsters volta o jogo a CR) e o monstro girava em vez de andar ate parar
+            {
+                // inclinacao do analogico esquerdo (bytes 0xC..0xF: esquerda, direita, cima, baixo): a SR normaliza a direcao e a perde
+                const float lx = (float(b[0xD]) - float(b[0xC])) / 255.f, ly = (float(b[0xE]) - float(b[0xF])) / 255.f;
+                in.tilt = std::min(1.f, std::sqrt(lx * lx + ly * ly));
+            }
             in.forced = true;
             in.pending = true;
             in.pf = pf;
@@ -725,6 +731,23 @@ namespace
             {
                 FAST_WRITE32(in.pf + kPfConfigActive, in.saved4);
                 FAST_WRITE32(in.pf + kPfConfigWanted, in.saved8);
+                // analogico pela metade (gamepad, ou Alt no teclado): a SR grava frente/tras e os lados com a direcao normalizada (sempre
+                // o curso todo); o computeTargetSpeed pesa a velocidade por eles, como na CR. Aqui voltam a seguir a inclinacao.
+                if (in.tilt < 0.98f)
+                {
+                    const uint32_t ring = FAST_READ32(in.pf + kPfRingIndex);
+                    if (ring < 60u)
+                    {
+                        const uint32_t e = in.pf + ring * 0x5Eu;
+                        for (const uint32_t off : {0x12u, 0x14u, 0x1Au, 0x1Cu})
+                        {
+                            uint16_t v;
+                            std::memcpy(&v, rdram + e + off, 2);
+                            v = static_cast<uint16_t>(std::lround(float(v) * in.tilt));
+                            std::memcpy(rdram + e + off, &v, 2);
+                        }
+                    }
+                }
             }
             else
                 in.forced = false;   // o jogo mudou a configuracao no meio (agarrao, morte): vale a dele
