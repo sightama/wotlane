@@ -441,6 +441,7 @@ static void initWindowAspect()
     if (done)
         return;
     done = true;
+    SetExitKey(KEY_NULL);   // o Esc do raylib fechava o jogo; fechar e com Alt+F4 ou o X da janela (o Esc volta nos menus)
     for (int k = 0; k < wotm::settings::kKeys; ++k)
         g_appliedVideo[k] = wotm::settings::get(wotm::settings::Key(k));
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
@@ -1185,6 +1186,8 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 #include "wotm_padsel.inc"
 // Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)
 #include "wotm_mainmenu.inc"
+#include "wotm_optscreen.inc"   // tela de opcoes do jogo com o texto redesenhado (depois do wotm_mainmenu.inc)
+#include "wotm_legend.inc"   // legenda de baixo e dica grande dos menus nativos (depois do wotm_optscreen.inc: fonte)
 
 double wotmThreadCpuMs();   // ps2_hostprof.cpp: CPU da thread atual (usuario + kernel)
 
@@ -1469,6 +1472,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // textura da escolha de lados (fora do BeginTextureMode do quadro); a fonte e o atlas do texto do quadro anterior
         wotm_padsel::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
         wotm_mainmenu::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
+        wotm_optscreen::renderUi();
+        if (wotm_legend::g_n)   // legenda nativa no lugar da do jogo (wotm_legend.inc): sem os icones de botao dele
+        {
+            S.scene.overlay.clear();
+            S.scene.hpOverlay.clear();
+        }
         {   // monstro 3D da lista de saves (wotm_savepics.hpp): no RenderTexture dele, antes do quadro; o draw abaixo o cola
             static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
             const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
@@ -1483,6 +1492,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         c3.up = {gc.up[0], gc.up[1], gc.up[2]};
         c3.fovy = gc.fovy;
         c3.projection = CAMERA_PERSPECTIVE;
+        if (!split)
+            wotm_mainmenu::frameCamera(S.scene, ram, c3, static_cast<float>(RW) / static_cast<float>(RH));   // painel aberto: telao de frente
         if (split)
         {
             // as metades (ou quadrantes) copiadas como estao (alfa do GS incluido, como na apresentacao) e a faixa preta do
@@ -1513,6 +1524,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             S.scene.draw(ram, false);
             wotm_padsel::drawOnTelao(S.scene, ram, c3);   // escolha de lados do 2 jogadores (so no menu, durante a escolha)
             wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
+            wotm_optscreen::drawOnBoard(S.scene, ram, c3);   // tela de opcoes do jogo
             wotm_live::g_stage = "idle";
             EndMode3D();
         }
@@ -1534,6 +1546,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
+        wotm_legend::draw(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0, RW, RH);   // legenda e dica dos menus nativos
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
         if (!split)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)

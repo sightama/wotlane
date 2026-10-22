@@ -61,9 +61,30 @@ inline bool kbDown(st::Bind b)
     const uint32_t v = st::kb(b);
     return ((v & 0xFFFF) && IsKeyDown(int(v & 0xFFFF))) || ((v >> 16) && IsKeyDown(int(v >> 16)));
 }
-inline bool padDown(int pad, st::Bind b)
+// Jogador (0..3) que o gamepad `pad` alimenta, pela regra do deviceMap: na escolha manual, a coluna em que ele entrou; senao, a ordem
+// dos conectados. Fora disso (ou sem gamepad), o jogador 1. Escolhe o mapa de botoes dele (wotm_settings.hpp, um por jogador).
+inline int playerOfPad(int pad)
 {
-    const int btn = st::pad(b);
+    if (pad < 0 || pad >= PS2_PAD_MAX_GAMEPADS)
+        return 0;
+    if (g_manual.load(std::memory_order_relaxed))
+    {
+        for (int p = 0; p < 4; ++p)
+            if (g_manualDevs[p].load(std::memory_order_relaxed) & (1u << pad)) return std::min(p, st::kPadPlayers - 1);
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
+        if (IsGamepadAvailable(i))
+        {
+            if (i == pad) return std::min(n, st::kPadPlayers - 1);
+            ++n;
+        }
+    return 0;
+}
+inline bool padDown(int pad, st::Bind b, int player)
+{
+    const int btn = st::pad(b, player);
     return btn > 0 && IsGamepadButtonDown(pad, btn);
 }
 
@@ -99,8 +120,9 @@ inline st::Bind sourceBind(st::Bind b)
 static uint16_t gamepadButtons(int pad)
 {
     uint16_t m = 0;
+    const int player = playerOfPad(pad);
     for (int b = 0; b < st::kBinds; ++b)
-        if (st::bindOnPad(st::Bind(b)) && padDown(pad, st::Bind(b)))
+        if (st::bindOnPad(st::Bind(b)) && padDown(pad, st::Bind(b), player))
             m |= st::kBindMask[effectiveBind(st::Bind(b))];
     return m;
 }

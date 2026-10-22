@@ -105,24 +105,39 @@ static int buttonIndex(uint16_t id)
     return -1;
 }
 
-// Celula do atlas para o botao do PS2 b, no estilo de agora
-static int cellFor(st::Bind b)
+// Estilo dos icones agora: o automatico resolvido pelo ultimo dispositivo; o "original" (3D do jogo) vira o do PS2 nos icones 2D que o
+// jogo nao tem (legenda de baixo, wotm_legend.inc)
+static int currentStyle()
 {
     pollDevice();
-    int style = st::get(st::Prompts);
-    if (style == st::PromptAuto) style = g_lastPad < 0 ? st::PromptKeyboard : styleOfPad(g_lastPad);
+    const int s = st::get(st::Prompts);
+    if (s == st::PromptAuto) return g_lastPad < 0 ? st::PromptKeyboard : styleOfPad(g_lastPad);
+    return s == st::PromptOriginal ? st::PromptPs : s;
+}
+static int keyCell(const char *name)
+{
+    if (name)
+        for (const pr::KeyCell &k : pr::kKeys)
+            if (!std::strcmp(k.name, name)) return k.cell;
+    return -1;
+}
+static int padCell(int phys, int style)
+{
+    if (phys <= 0 || phys >= st::kPadButtons) return -1;
+    const int *table = style == st::PromptNintendo ? pr::kNintendo : style == st::PromptXbox ? pr::kXbox : pr::kPs;
+    return table[phys];
+}
+
+// Celula do atlas para o botao do PS2 b, no estilo de agora (gamepad: pelo mapa do jogador do ultimo gamepad usado)
+static int cellFor(st::Bind b)
+{
+    const int style = currentStyle();
     if (style == st::PromptKeyboard)
     {
-        const uint32_t v = st::kb(b);
-        if (const char *name = st::keyName(int(v & 0xFFFF)))
-            for (const pr::KeyCell &k : pr::kKeys)
-                if (!std::strcmp(k.name, name)) return k.cell;
-        style = st::PromptPs;   // sem tecla: o simbolo do PS2
+        const int c = keyCell(st::keyName(int(st::kb(b) & 0xFFFF)));
+        if (c >= 0) return c;   // sem tecla: o simbolo do PS2
     }
-    int phys = st::pad(wotm_pad::sourceBind(b));
-    if (phys <= 0 || phys >= st::kPadButtons) return -1;
-    const int *table = style == st::PromptPs ? pr::kPs : style == st::PromptNintendo ? pr::kNintendo : pr::kXbox;
-    return table[phys];
+    return padCell(st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(g_lastPad)), style == st::PromptKeyboard ? st::PromptPs : style);
 }
 
 static void icon(uint16_t id, const float mid[3], const float right[3], const float up[3], float size, float alpha)
@@ -163,5 +178,51 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
 
 static bool on() { return st::get(st::Prompts) != st::PromptOriginal && loadAtlas(); }
 
+// Celula na tela (no alvo atual), quadrado de lado `size` centrado em (cx, cy); a arte tem folga na celula, como no icon()
+static bool drawCell2d(int cell, float cx, float cy, float size, float alpha)
+{
+    if (cell < 0 || !loadAtlas()) return false;
+    const float h = size * (128.f / 96.f), k = float(pr::kCell);
+    DrawTexturePro(g_atlas, Rectangle{float(cell % pr::kCols) * k, float(cell / pr::kCols) * k, k, k}, Rectangle{cx - h * 0.5f, cy - h * 0.5f, h, h},
+                   Vector2{0.f, 0.f}, 0.f, Color{255, 255, 255, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f)});
+    return true;
+}
+
 static const bool s_installed = (wotm::g_buttonIconFn = &icon, wotm::g_buttonIconsOn = &on, true);
 } // namespace wotm_prompts
+
+// Legenda de baixo (na faixa preta, no lugar da do jogo) e dica grande sobre a cena: quem as quer (escolha de controles do
+// wotm_padsel.inc, painel do wotm_mainmenu.inc) as publica a cada quadro no renderUi dele; o wotm_legend.inc as desenha no quadro e
+// as esvazia. Tudo na thread da janela.
+namespace wotm_legend
+{
+namespace st = wotm::settings;
+// Um icone: o botao do raylib (gamepad, 0 = nenhum) e a tecla (nome do wotm_settings.hpp; sem celula no atlas, sai o nome numa
+// moldura)
+struct Icon { int pad = 0; const char *key = nullptr; };
+struct Item { Icon a, b; const char *text = ""; };
+constexpr int kMax = 6;
+static Item g_items[kMax];
+static int g_n = 0;
+static float g_alpha = 0.f;
+static std::string g_hint;
+static float g_hintAlpha = 0.f;
+
+static void post(std::initializer_list<Item> items, float alpha)
+{
+    g_n = 0;
+    for (const Item &i : items)
+        if (g_n < kMax) g_items[g_n++] = i;
+    g_alpha = alpha;
+}
+static void hint(const char *s, float alpha)
+{
+    g_hint = s ? s : "";
+    g_hintAlpha = alpha;
+}
+// O botao do PS2 b como o jogo o le: a tecla e o botao do mapa (aba CONTROLS), com a troca de confirmar dos menus
+static Icon bind(st::Bind b)
+{
+    return Icon{st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(wotm_prompts::g_lastPad)), st::keyName(int(st::kb(b) & 0xFFFF))};
+}
+} // namespace wotm_legend

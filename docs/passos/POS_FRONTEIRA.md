@@ -383,7 +383,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   3. Rebind de teclas e botões: **feito** (aba CONTROLS; `NATIVO.md`, "Rebind"). Os eixos dos gamepads seguem fixos.
   4. Estilo dos ícones (Xbox, PS, Nintendo) e qual botão confirma nos menus: **feito** (linhas BUTTON ICONS e MENU CONFIRM da aba
      CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
-  5. Tirar a configuração de controle do Options do jogo.
+  5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
+     LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros já está na fila
   (`PROXIMOS_PASSOS.md`).

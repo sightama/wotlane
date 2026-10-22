@@ -168,7 +168,8 @@ static void readDevice(int d, bool out[kActions], bool bound = true)
     else
     {
         const float lx = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_X), ly = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_Y);
-        auto btn = [&](st::Bind b, int fixed) { return bound ? wotm_pad::padDown(d, b) : IsGamepadButtonDown(d, fixed); };
+        const int player = wotm_pad::playerOfPad(d);
+        auto btn = [&](st::Bind b, int fixed) { return bound ? wotm_pad::padDown(d, b, player) : IsGamepadButtonDown(d, fixed); };
         out[Left] = btn(st::BLeft, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || lx < -0.6f;
         out[Right] = btn(st::BRight, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || lx > 0.6f;
         out[Up] = btn(st::BUp, GAMEPAD_BUTTON_LEFT_FACE_UP) || ly < -0.6f;
@@ -1000,12 +1001,16 @@ static void drawJoin(const View &v, std::vector<wotm::TextQuad> &quads, const wo
         text(quads, ram, tex0, kW, kH, label, x, ty + s * 1.05f, fitText(label, s * 0.5f, colW * 0.9f), Color{0x80, 0x7A, 0x6C, 0x80}, 1.f);
     }
     g_posInit = true;
-    const char *hint = v.count < 2 ? "CONNECT A CONTROLLER - X TO JOIN"
-                       : v.players >= 2 ? "START TO CONTINUE - LEFT/RIGHT TO SWAP"
-                                        : "X TO JOIN - LEFT/RIGHT TO SWAP";
-    const bool blink = v.players >= 2 && std::fmod(GetTime(), 1.0) > 0.6;
-    if (!blink)
-        text(quads, ram, tex0, kW, kH, hint, W * 0.5f, H * 0.94f, fitText(hint, H * 0.06f, W * 0.95f), Color{0x80, 0x7A, 0x60, 0x80});
+    // botoes: na legenda de baixo, no lugar da do jogo (wotm_legend.inc), com os do mapa (readDevice)
+    namespace st = wotm::settings;
+    using wotm_legend::bind;
+    if (v.count < 2)
+        wotm_legend::post({{{}, {}, "CONNECT A CONTROLLER"}, {bind(st::BCross), {}, "JOIN"}, {bind(st::BTriangle), {}, "BACK"}}, v.alpha);
+    else if (v.players >= 2)
+        wotm_legend::post({{bind(st::BStart), {}, "CONTINUE"}, {bind(st::BLeft), bind(st::BRight), "SWAP"}, {bind(st::BTriangle), {}, "BACK"}},
+                          v.alpha);
+    else
+        wotm_legend::post({{bind(st::BCross), {}, "JOIN"}, {bind(st::BLeft), bind(st::BRight), "SWAP"}, {bind(st::BTriangle), {}, "BACK"}}, v.alpha);
 }
 
 // Selecao de monstros: um quadro por jogador, lado a lado

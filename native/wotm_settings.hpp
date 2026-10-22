@@ -124,7 +124,9 @@ inline std::string format(Key k, int v)
 
 // ------------------------------------------------------------------ mapa de teclas e botoes (aba CONTROLS do painel)
 // Cada botao do PS2 recebe ate duas teclas do teclado e um botao de gamepad. Codigos do raylib (KeyboardKey, GamepadButton); 0 = nada.
-// No arquivo: KB_<BOTAO>=TECLA[,TECLA] e PAD_<BOTAO>=BOTAO, com os nomes de kKeyNames/kPadButtonNames. Sem variavel de ambiente.
+// Os gamepads tem um mapa por jogador (kPadPlayers): o gamepad usa o do jogador que ele alimenta (wotm_pad::playerOfPad); o teclado
+// tem um so. No arquivo: KB_<BOTAO>=TECLA[,TECLA], PAD_<BOTAO>=BOTAO (jogador 1) e PAD2_/PAD3_/PAD4_<BOTAO>=BOTAO, com os nomes de
+// kKeyNames/kPadButtonNames. Sem variavel de ambiente.
 enum Bind
 {
     BUp, BDown, BLeft, BRight,                 // direcional
@@ -174,18 +176,21 @@ inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(73), kbPair(75), kbPair(7
 inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0};
 
 inline std::atomic<uint32_t> g_kb[kBinds];
-inline std::atomic<int> g_pad[kBinds];
+inline constexpr int kPadPlayers = 4;
+inline std::atomic<int> g_pad[kPadPlayers][kBinds];
 inline const bool g_bindsInit = [] {
     for (int b = 0; b < kBinds; ++b)
     {
         g_kb[b].store(kDefaultKb[b]);
-        g_pad[b].store(kDefaultPad[b]);
+        for (int p = 0; p < kPadPlayers; ++p) g_pad[p][b].store(kDefaultPad[b]);
     }
     return true;
 }();
+// Prefixo do mapa de gamepad do jogador p (0..3) no arquivo
+inline std::string padPrefix(int p) { return p == 0 ? std::string("PAD_") : "PAD" + std::to_string(p + 1) + "_"; }
 
 inline uint32_t kb(Bind b) { return g_kb[b].load(std::memory_order_relaxed); }
-inline int pad(Bind b) { return g_pad[b].load(std::memory_order_relaxed); }
+inline int pad(Bind b, int player = 0) { return g_pad[std::clamp(player, 0, kPadPlayers - 1)][b].load(std::memory_order_relaxed); }
 
 inline const char *keyName(int code)
 {
@@ -238,24 +243,27 @@ inline void bindKey(Bind b, int code)
     g_kb[b].store(kbPair(code));
     save();
 }
-inline void bindPad(Bind b, int button)
+// Botao novo do gamepad para o botao b no mapa do jogador `player` (troca com quem o tinha, como no teclado)
+inline void bindPad(Bind b, int button, int player)
 {
-    const int old = pad(b);
+    player = std::clamp(player, 0, kPadPlayers - 1);
+    const int old = pad(b, player);
     for (int o = 0; o < kBinds; ++o)
-        if (o != b && pad(Bind(o)) == button)
-            g_pad[o].store(old);
-    g_pad[b].store(button);
+        if (o != b && pad(Bind(o), player) == button)
+            g_pad[player][o].store(old);
+    g_pad[player][b].store(button);
     save();
 }
-inline void clearBind(Bind b, bool keyboard)
+// `map`: -1 = teclado, 0..3 = gamepads do jogador
+inline void clearBind(Bind b, int map)
 {
-    (keyboard ? (void)g_kb[b].store(0) : (void)g_pad[b].store(0));
+    (map < 0 ? (void)g_kb[b].store(0) : (void)g_pad[std::clamp(map, 0, kPadPlayers - 1)][b].store(0));
     save();
 }
-inline void resetBinds(bool keyboard)
+inline void resetBinds(int map)
 {
     for (int b = 0; b < kBinds; ++b)
-        keyboard ? g_kb[b].store(kDefaultKb[b]) : g_pad[b].store(kDefaultPad[b]);
+        map < 0 ? g_kb[b].store(kDefaultKb[b]) : g_pad[std::clamp(map, 0, kPadPlayers - 1)][b].store(kDefaultPad[b]);
     save();
 }
 
@@ -272,12 +280,13 @@ inline void save()
     f << "# Recompiled options (menu principal); mesma chave das variaveis de ambiente\n";
     for (int k = 0; k < kKeys; ++k)
         f << kEnv[k] << '=' << format(Key(k), get(Key(k))) << '\n';
-    f << "# Teclas (KB_) e botoes de gamepad (PAD_) de cada botao do PS2: aba CONTROLS\n";
+    f << "# Teclas (KB_) e botoes de gamepad de cada botao do PS2 (PAD_ = jogador 1, PAD2_..PAD4_ = jogadores 2 a 4): aba CONTROLS\n";
     for (int b = 0; b < kBinds; ++b)
         f << "KB_" << kBindNames[b] << '=' << formatKb(kb(Bind(b))) << '\n';
-    for (int b = 0; b < kBinds; ++b)
-        if (bindOnPad(Bind(b)))
-            f << "PAD_" << kBindNames[b] << '=' << kPadButtonNames[std::clamp(pad(Bind(b)), 0, kPadButtons - 1)] << '\n';
+    for (int p = 0; p < kPadPlayers; ++p)
+        for (int b = 0; b < kBinds; ++b)
+            if (bindOnPad(Bind(b)))
+                f << padPrefix(p) << kBindNames[b] << '=' << kPadButtonNames[std::clamp(pad(Bind(b), p), 0, kPadButtons - 1)] << '\n';
 }
 
 inline void set(Key k, int v, bool write = true)
@@ -332,8 +341,10 @@ inline void load(const std::filesystem::path &dir)
                 {
                     if (key == std::string("KB_") + kBindNames[b])
                         g_kb[b].store(parseKb(val)), ++fromFile;
-                    else if (bindOnPad(Bind(b)) && key == std::string("PAD_") + kBindNames[b])
-                        g_pad[b].store(parsePad(val)), ++fromFile;
+                    else if (bindOnPad(Bind(b)))
+                        for (int p = 0; p < kPadPlayers; ++p)
+                            if (key == padPrefix(p) + kBindNames[b])
+                                g_pad[p][b].store(parsePad(val)), ++fromFile;
                 }
             }
         }
