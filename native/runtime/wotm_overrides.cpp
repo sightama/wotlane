@@ -1295,7 +1295,7 @@ namespace
                                             wotm::fn::updateHistory2__8PadFlagsR7GamePad};
     constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
     constexpr uint32_t kPadFlagsLockA = 0x1658u, kPadFlagsLockB = 0x165Eu, kPadFlagsHoldTweak = 0x16C4u, kPadFlagsConfig = 0x16ECu,
-                       kPadFlagsOwner = 0x1810u;
+                       kPadFlagsOwner = 0x1810u, kPadFlagsScreenRel = 0x16E4u;
     // m_monsters (TheGame +0x120380): 4 lugares de jogador e as IAs a partir do [4]; com a luta de ate 8 a IA 7 fica no [10], e o
     // TheGame tem lugar para 16. Percorrer so 8 deixava as IAs 5 a 7 fora do lock-on.
     constexpr uint32_t kMonsterSlots = 16u;
@@ -1314,6 +1314,7 @@ namespace
         bool remap = false;      // botoes do mod neste quadro (configuracao 0): o lock-on e o R1 fisico (lockHeld)
         bool lockHeld = false;
         bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
+        bool screenRel = false;  // PadFlags +0x16E4 neste quadro: updateInput0ConfigSR (o jogo ja faz o analogico relativo a camera)
         uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
     } g_lockToggle[4];
     uint8_t g_padDir[4] = {};    // por controle (porta + 2 * slot, o do jogador): bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
@@ -1483,7 +1484,10 @@ namespace
         if (ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
             t = lockToggleFor(rdram, pf, &slot);
         if (t)
+        {
             t->remap = FAST_READ32(pf + kPadFlagsConfig) == 0u;
+            t->screenRel = FAST_READ32(pf + kPadFlagsScreenRel) != 0u;
+        }
         if (!t || !t->remap)
         {
             g_origInterpretInputs(rdram, ctx, runtime);
@@ -1510,7 +1514,8 @@ namespace
         }
         if (t->on)
         {
-            lockCameraStick(rdram, t->owner, b);
+            if (!t->screenRel)
+                lockCameraStick(rdram, t->owner, b);
             // travado, o jogo anda de lado pela esquerda/direita (PadEntry +0x16/+0x18 -> +0x1A/+0x1C) e ignora os bytes 0/3
             if (saved[kPadL2])
                 b[kPadLeft] = 0xFF;
@@ -1523,6 +1528,10 @@ namespace
             std::memcpy(b, saved, sizeof saved);
     }
 
+    // So na configuracao relativa ao monstro (updateInput0ConfigCR, PadFlags +0x16E4 = 0). Na relativa a tela (ConfigSR, +0x16E4 != 0,
+    // o normal na luta; o jogo alterna entre as duas, por exemplo nas cinemas) o proprio jogo, travado, ja projeta o analogico da
+    // camera (PadFlags +0x17E0) na direcao do alvo e na perpendicular; converter aqui antes fazia a conversao duas vezes, e o erro
+    // era o angulo entre a camera e a direcao do alvo (para cima podia ir para tras ou de lado com a camera fora das costas).
     // Travado, o jogo move o monstro no referencial dele, virado para o alvo (cima/baixo = para o alvo e para tras, esquerda/direita =
     // de lado). Para o analogico (e o direcional) valer em relacao a camera, como solto: a direcao que ele aponta na tela vira um vetor
     // no chao pelos eixos da camera e e reescrita nos bytes cima/baixo/esquerda/direita do GamePad no referencial do monstro (frente =
