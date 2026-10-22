@@ -39,6 +39,7 @@ function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
     $env:PS2X_CD_IMAGE = "$repo\ISO\SCUS_971.97.War of the Monsters.iso"
     $env:WOTM_REPO = $repo
     $env:WOTM_SETTINGS = '0'   # sem o settings.ini do painel/launcher
+    $env:WOTM_PROMPTS = 'original'   # icones 3D do jogo, como na referencia
     $env:WOTM_VU1CHECK = '1'
     $env:WOTM_VU1CHECK_SNAP = Join-Path $Dir "cap_$name"
     $env:WOTM_VU1CHECK_SNAP_MAX = '1024'
@@ -90,6 +91,7 @@ if ($Check) {
     if ($NoPng) { $cmpArgs += ' --nopng' }
     $cmpErr = Join-Path $Dir 'check.err.log'
     Write-Host ("vu1cmp em {0} arquivo(s)..." -f @($files).Count)
+    $env:WOTM_SETTINGS = '0'; $env:WOTM_PROMPTS = 'original'   # sem o settings.ini e com os icones 3D do jogo, como na referencia
     Start-Process -FilePath "$runtime\build_dev\ps2xRuntime\ps2EntryRunner.exe" -ArgumentList $cmpArgs -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait `
         -RedirectStandardError $cmpErr -RedirectStandardOutput (Join-Path $Dir 'check.out.log') | Out-Null
     $byFile = @{}

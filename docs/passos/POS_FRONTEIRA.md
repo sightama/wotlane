@@ -381,24 +381,18 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      Ficaram fora do painel: partida direta, trapaças (o menu F1 já tem), opções de execução e diagnóstico; pular a intro vira opção
      do executável mais tarde. O logo do jogo no telão só aparece na tela de "press start"; nas outras o telão é todo do menu.
   3. Rebind de teclas e botões: **feito** (aba CONTROLS; `NATIVO.md`, "Rebind"). Os eixos dos gamepads seguem fixos.
-  4. Estilo dos ícones (Xbox, PS, Nintendo) e qual botão confirma e qual cancela nos menus (gancho do `screenGetInput` e páginas do
-     memory card; na luta X e O são golpes), já com os ícones 2D próprios (item abaixo).
-  5. Tirar a configuração de controle do Options do jogo e, em seguida, trocar os ícones 3D do jogo pelos nossos.
+  4. Estilo dos ícones (Xbox, PS, Nintendo) e qual botão confirma nos menus: **feito** (linhas BUTTON ICONS e MENU CONFIRM da aba
+     CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
+  5. Tirar a configuração de controle do Options do jogo.
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros já está na fila
   (`PROXIMOS_PASSOS.md`).
-- **Ícones de botão próprios, em 2D** (anotado em 2026-10-21; custo médio, alguns dias): esconder os ícones do jogo (X, O, quadrado,
-  triângulo) e desenhar sprites nossos em posição fixa na tela. Assim eles ficam nítidos e se ajustam ao widescreen, e podem mostrar a
-  tecla real do teclado ou o botão do controle em uso.
-  - Hoje são objetos 3D do `McButtons` (ids `0x1F51..0x1F54`, `0x240E..0x2411`) que o `showButtons(currScreen)` (screen.s) põe uma vez,
-    na troca de tela, à frente da câmera (`uiAlignItemWithCamera`), sem nunca realinhar. Há 21 casos de posição por tela; as páginas do
-    memory card usam outro caminho, o `McButtons::drawButtonsForString` (`McTextBox::update`), que encaixa o ícone no meio do texto. O
-    fade vem do `screenSetButtonAlpha` (+0x4C do filho, `NATIVO.md`).
-  - Bug que motivou: no menu principal, apertando X/Start cedo, o X da legenda anda junto com a câmera. A causa é o nosso
-    `wotm_menu.inc`, que aceita o aperto durante a animação 1 (a câmera recuando do telão). O `showButtons` roda com a câmera ainda em
-    movimento e o ícone fica preso no mundo. O retail ignora o botão até a câmera parar, então lá não acontece. Paliativo barato se
-    precisar antes: realinhar os ícones visíveis a cada quadro enquanto a câmera anima (de novo o `showButtons`, ou rebasear no
-    nativo com `M' = M · V_show⁻¹ · V_agora`, como na interpolação).
+- **Ícones de botão presos no mundo:** os ícones 2D (etapa 4 acima) ficam onde o jogo pôs os 3D (`showButtons`, uma vez por troca de
+  tela, à frente da câmera). No menu principal, apertando X/Start cedo, o ícone da legenda anda junto com a câmera: o nosso
+  `wotm_menu.inc` aceita o aperto durante a animação 1 (a câmera recuando do telão) e o `showButtons` roda com ela em movimento; o
+  retail ignora o botão até a câmera parar. Conserto barato: realinhar os ícones visíveis a cada quadro enquanto a câmera anima
+  (de novo o `showButtons`, ou rebasear no nativo com `M' = M · V_show⁻¹ · V_agora`, como na interpolação), ou desenhar os 2D numa
+  posição fixa da tela por `currScreen`.
 
 ## Fora da ordem
 - **Online:** não é prioridade. Com o multiplayer local de 4 (item 11), o Steam Remote Play Together e o Parsec já permitem jogar

@@ -1,3 +1,6 @@
 // Icone do jogo (ps2EntryRunner.exe), ligado pelo CMake do fork (WOTM_NATIVE_DIR). O nome GLFW_ICON faz o GLFW (raylib) usar o
 // mesmo icone na barra de titulo e na barra de tarefas; no Explorer vale o primeiro grupo de icones do executavel, que e este.
 GLFW_ICON ICON "wotm.ico"
+
+// Icones de botao (Kenney "Input Prompts", CC0; tools/prompts_atlas.py): atlas desenhado no lugar dos icones 3D do jogo (native/runtime/wotm_prompts.inc)
+WOTM_PROMPTS RCDATA "assets/prompts.png"

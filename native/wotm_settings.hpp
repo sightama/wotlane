@@ -34,12 +34,19 @@ enum Key
     EnemyBars,    // QoL: barras de vida e energia sobre os inimigos
     DamagePop,    // QoL: numeros de dano
     KbSeparate,   // teclado e um jogador a parte
+    Prompts,      // icones de botao: kPromptNames (0 = automatico pelo ultimo dispositivo usado; 1 = os 3D do jogo)
+    MenuConfirm,  // nos menus, com gamepad: 0 = o de baixo confirma (o jogo), 1 = o da direita confirma e o de baixo volta
     kKeys
 };
 
 inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",    "WOTM_FULLSCREEN", "WOTM_HZ",        "WOTM_VSYNC",
-                                            "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0};
+                                            "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE",
+                                            "WOTM_PROMPTS",    "WOTM_MENUCONFIRM"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
+inline constexpr int kPromptStyles = 6;
+enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
+inline constexpr const char *kConfirmNames[] = {"bottom", "right"};
 
 // Escolhas que o painel percorre
 inline constexpr int kResolutions[] = {448, 720, 1080, 1440, 2160};
@@ -48,7 +55,7 @@ inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10"
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0};
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
 inline std::filesystem::path g_path;   // vazio: sem arquivo (WOTM_SETTINGS=0 ou antes do load)
 inline std::mutex g_fileMutex;
 
@@ -93,6 +100,16 @@ inline bool parse(Key k, const char *s, int &out)
     case Rate: out = std::max(0, std::atoi(s)); return true;
     case Vsync: out = *s == '0' ? 0 : 1; return true;
     case KbSeparate: out = *s == '1' ? 1 : 0; return true;
+    case Prompts:
+    case MenuConfirm:
+    {
+        const int n = k == Prompts ? kPromptStyles : 2;
+        for (int i = 0; i < n; ++i)
+            if (!std::strcmp(s, k == Prompts ? kPromptNames[i] : kConfirmNames[i])) { out = i; return true; }
+        if (*s < '0' || *s > '9') return false;
+        out = std::clamp(std::atoi(s), 0, n - 1);
+        return true;
+    }
     default: out = (*s && std::strcmp(s, "0") != 0) ? 1 : 0; return true;
     }
 }
@@ -100,6 +117,8 @@ inline bool parse(Key k, const char *s, int &out)
 inline std::string format(Key k, int v)
 {
     if (k == Aspect) return kAspectNames[v > 0 && v < kAspects ? v : 0];
+    if (k == Prompts) return kPromptNames[std::clamp(v, 0, kPromptStyles - 1)];
+    if (k == MenuConfirm) return kConfirmNames[v ? 1 : 0];
     return std::to_string(v);
 }
 

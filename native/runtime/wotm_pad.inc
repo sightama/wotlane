@@ -77,12 +77,31 @@ static void keyboard(uint16_t &btns, uint8_t *data)
     if (l != r) data[6] = l ? 0x00 : 0xFF;
     if (u != d) data[7] = u ? 0x00 : 0xFF;
 }
+// Nos menus: o gancho do screenGetInput (wotm_mainmenu.inc) marca a hora a cada quadro de uma tela do menu
+static std::atomic<double> g_menuTime{-1.0};
+inline void markMenuFrame() { g_menuTime.store(GetTime(), std::memory_order_relaxed); }
+inline bool inMenus() { return GetTime() - g_menuTime.load(std::memory_order_relaxed) < 0.25; }
+// MenuConfirm = 1 nos menus (gamepads): o botao do X passa a dar triangulo (voltar, no jogo), o da bola da X (confirmar) e o do
+// triangulo da bola. Com o mapa padrao: o da direita confirma e o de baixo volta, como nos consoles da Nintendo.
+inline bool menuSwap() { return st::get(st::MenuConfirm) == 1 && inMenus(); }
+// Botao do PS2 que o botao fisico do botao b do mapa produz agora (a troca dos menus)
+inline st::Bind effectiveBind(st::Bind b)
+{
+    if (!menuSwap()) return b;
+    return b == st::BCross ? st::BTriangle : b == st::BCircle ? st::BCross : b == st::BTriangle ? st::BCircle : b;
+}
+// O inverso: qual botao do mapa da o botao do PS2 b agora (os icones mostram esse)
+inline st::Bind sourceBind(st::Bind b)
+{
+    if (!menuSwap()) return b;
+    return b == st::BTriangle ? st::BCross : b == st::BCross ? st::BCircle : b == st::BCircle ? st::BTriangle : b;
+}
 static uint16_t gamepadButtons(int pad)
 {
     uint16_t m = 0;
     for (int b = 0; b < st::kBinds; ++b)
         if (st::bindOnPad(st::Bind(b)) && padDown(pad, st::Bind(b)))
-            m |= st::kBindMask[b];
+            m |= st::kBindMask[effectiveBind(st::Bind(b))];
     return m;
 }
 

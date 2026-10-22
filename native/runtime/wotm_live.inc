@@ -265,6 +265,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_cheats.h"   // menu de debug (F1)
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)
+#include "wotm_prompts.inc"   // icones de botao 2D (Kenney) no lugar dos 3D do jogo
 #define WOTM_HAVE_NATIVE 1
 
 namespace wotm_live

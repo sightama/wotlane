@@ -96,22 +96,26 @@ constexpr TabDef kTabDefs[kTabs] = {
      {{st::LockToggle, "LOCK-ON TOGGLE", "R1 LOCKS AND UNLOCKS - D-PAD SWITCHES TARGET"},
       {st::EnemyBars, "ENEMY BARS", "HEALTH AND ENERGY OVER EVERY ENEMY"},
       {st::DamagePop, "DAMAGE NUMBERS", "A NUMBER ON EVERY HIT"}}},
-    {1, {{st::KbSeparate, "KEYBOARD", "PLAY ALONG WITH PAD 1 OR AS ITS OWN PLAYER"}}},   // e o mapa: ctlRows
+    {3,
+     {{st::KbSeparate, "KEYBOARD", "PLAY ALONG WITH PAD 1 OR AS ITS OWN PLAYER"},
+      {st::Prompts, "BUTTON ICONS", "AUTO FOLLOWS THE LAST DEVICE YOU USED"},
+      {st::MenuConfirm, "MENU CONFIRM", "GAMEPAD BUTTON THAT CONFIRMS IN THE MENUS"}}},   // e o mapa: ctlRows
 };
 static int g_tab = TabVideo;
 static int g_optSel[kTabs] = {};
 constexpr int kVisRows = 5;   // linhas do painel que cabem; a aba CONTROLS rola
 
-// Aba CONTROLS: teclado separado, qual mapa a lista mostra (teclado ou gamepads), um botao do PS2 por linha e a volta ao padrao
-constexpr int kCtlSeparate = -1, kCtlDevice = -2, kCtlReset = -3;
-constexpr int kMaxCtlRows = 3 + st::kBinds;
+// Aba CONTROLS: as opcoes da aba (teclado separado, icones, confirmar nos menus), qual mapa a lista mostra (teclado ou gamepads), um
+// botao do PS2 por linha e a volta ao padrao
+constexpr int kCtlOpt = -10, kCtlDevice = -2, kCtlReset = -3;   // kCtlOpt - i: opcao i da aba
+constexpr int kMaxCtlRows = kMaxOpts + 2 + st::kBinds;
 constexpr const char *kBindLabels[st::kBinds] = {"D-PAD UP", "D-PAD DOWN", "D-PAD LEFT", "D-PAD RIGHT", "CROSS",     "CIRCLE",     "SQUARE",
                                                  "TRIANGLE", "L1",         "R1",         "L2",          "R2",        "L1 AND R1",  "START",
                                                  "SELECT",   "L3",         "R3",         "STICK UP",    "STICK DOWN", "STICK LEFT", "STICK RIGHT"};
 static int ctlRows(bool kb, int out[kMaxCtlRows])
 {
     int n = 0;
-    out[n++] = kCtlSeparate;
+    for (int i = 0; i < kTabDefs[TabControls].n; ++i) out[n++] = kCtlOpt - i;
     out[n++] = kCtlDevice;
     for (int b = 0; b < st::kBinds; ++b)
         if (kb || st::bindOnPad(st::Bind(b))) out[n++] = b;
@@ -157,6 +161,7 @@ static int choices(st::Key k, int out[8])
     case st::Rate: std::copy(std::begin(st::kRates), std::end(st::kRates), out); return int(std::size(st::kRates));
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
+    case st::Prompts: for (int i = 0; i < st::kPromptStyles; ++i) out[i] = i; return st::kPromptStyles;
     default: out[0] = 0; out[1] = 1; return 2;
     }
 }
@@ -190,6 +195,13 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     case st::Display: std::snprintf(buf, sz, "%s", kDisplay[std::clamp(v, 0, 2)]); break;
     case st::Rate: if (v > 0) std::snprintf(buf, sz, "%d HZ", v); else std::snprintf(buf, sz, "MONITOR"); break;
     case st::KbSeparate: std::snprintf(buf, sz, "%s", v ? "OWN PLAYER" : "SAME AS PAD 1"); break;
+    case st::Prompts:
+    {
+        static const char *const kNames[st::kPromptStyles] = {"AUTO", "ORIGINAL", "KEYBOARD", "XBOX", "PLAYSTATION", "NINTENDO"};
+        std::snprintf(buf, sz, "%s", kNames[std::clamp(v, 0, st::kPromptStyles - 1)]);
+        break;
+    }
+    case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
     default: std::snprintf(buf, sz, "%s", v ? "ON" : "OFF"); break;
     }
 }
@@ -371,7 +383,7 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         wotm_padsel::sfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
         return;
     }
-    if (g_tab == TabControls && sel > 0)
+    if (g_tab == TabControls && sel >= t.n)
     {
         controlsInput(rdram, ctx, runtime, e);
         return;
@@ -581,6 +593,8 @@ WOTM_MM_EXIT_HOOK(transitionHook, wotm::fn::screenTransition__Fb, g_origTransiti
 static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const uint32_t cur = rd32(rdram, wotm::sym::currScreen);
+    if (ctx->pc == wotm::fn::screenGetInput__Fi)
+        wotm_pad::markMenuFrame();   // nos menus (MenuConfirm e icones, wotm_pad.inc)
     if (ctx->pc == wotm::fn::screenGetInput__Fi && screenDef(cur))
     {
         g_inRa = GPR_U32(ctx, 31);
@@ -760,7 +774,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         const bool blink = std::fmod(GetTime(), 0.8) < 0.5;
         for (int i = 0; i < m; ++i)
         {
-            if (r[i] == kCtlSeparate) rows[n++] = optRow(t.opt[0]);
+            if (r[i] <= kCtlOpt) rows[n++] = optRow(t.opt[kCtlOpt - r[i]]);
             else if (r[i] == kCtlDevice)
                 rows[n++] = {"BUTTON MAP", v.bindKb ? "KEYBOARD" : "GAMEPADS", "WHICH BUTTONS THE LIST BELOW SHOWS", true};
             else if (r[i] == kCtlReset)
