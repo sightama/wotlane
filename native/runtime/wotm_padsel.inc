@@ -11,16 +11,18 @@
 // os numeros escolhidos sao renumerados em ordem (1, 3, 4 viram 1, 2, 3). Depois disso o mapa porta -> dispositivos do
 // wotm_pad.inc fica manual (wotm_pad::g_manual, g_manualDevs[jogador]) ate o jogo voltar ao menu principal ou ao "press start".
 //   - 2 jogadores: como no retail, os itens "free-for-all / elimination / minigames" aparecem (fade dos objetos da tela).
-//   - 3 e 4 (g_multi): so o free for all (modo 3) existe, sem IA: o gancho faz o que o item free-for-all faz (m_mode e
-//     m_battleMode 3, g_levelList = PO_MPFreeForAll, initSelectSwitches) e vai direto a tela 15 ("first to"), pulando a 13 (CPUs).
-//     A volta da 15 (que iria a 13) vem para a escolha de controles, e a volta desta vai ao menu principal.
+//   - 3 e 4 (g_multi): so o free for all (modo 3) existe: o gancho faz o que o item free-for-all faz (m_mode e m_battleMode 3,
+//     g_levelList = PO_MPFreeForAll, initSelectSwitches, changeScreen(5, 13)). A tela 13 do retail escolhe 0, 1 ou 2 CPUs
+//     (m_numAIs) e segue a 15 ("first to"); a volta da 13 vem para a escolha de controles, e a volta desta vai ao menu principal.
 //
 // Selecao de monstros de 3 e 4 (tela 6, screenCharSelect2P, com g_multi): o screenCharSelect2P roda sem entrada (o filme do telao
-// segue) e com os objetos da tela 6 e os paineis de traje escondidos; o telao mostra um quadro por jogador. Cada jogador, pelos
-// dispositivos dele: esquerda/direita troca de monstro (as colunas destravadas, monsterSelectMode), cima/baixo de traje (os abertos:
-// state 1 e taken 1), X confirma, triangulo desfaz (ou, sem ninguem pronto, volta a tela 15). Todos prontos: m_monsterSel[i] e
-// m_costume[0..1] (os trajes dos jogadores 3 e 4 vao para o wotm_split4.inc, wotmMultiSetCostume), m_numPlayers N, m_numAIs 0, e
-// changeScreen(6, 8) como o retail (selecao de fase).
+// segue) e com os objetos da tela 6 e os paineis de traje escondidos; o telao mostra um quadro por jogador e um por CPU. Cada
+// jogador, pelos dispositivos dele: esquerda/direita troca de monstro (as colunas destravadas, monsterSelectMode), cima/baixo de traje
+// (os abertos: state 1 e taken 1), X confirma, triangulo desfaz (ou, sem ninguem pronto, volta a tela 15). Os quadros das CPUs sao
+// do jogador 1, um de cada vez depois do dele (como o retail, em que o controle 1 escolhe as IAs); o triangulo desfaz o ultimo pronto
+// dessa fila. Todos prontos: m_monsterSel[i] e m_costume[0..1] (os trajes dos jogadores 3 e 4 vao para o wotm_split4.inc,
+// wotmMultiSetCostume), as CPUs em m_monsterSel[4 + j] e m_costume[2 + j], m_numPlayers N, m_numAIs, e changeScreen(6, 8) como o
+// retail (selecao de fase).
 //
 // Thread do EE: ganchos de screenTransition (esconde os itens das telas 5 e 6 e o rotulo do menu, mede o fade), screenGameModes2P,
 // screenCharSelect2P, screenGetInput (sem entrada do jogo durante as escolhas; injeta o "voltar"), changeScreen (as voltas acima) e
@@ -37,6 +39,8 @@ namespace wotm_padsel
 constexpr int kKb = PS2_PAD_MAX_GAMEPADS;   // indice do teclado na lista de dispositivos
 constexpr int kDevs = PS2_PAD_MAX_GAMEPADS + 1;
 constexpr int kMaxPlayers = 4;
+constexpr int kMaxAis = 2;                          // a tela 13 do retail: 0, 1 ou 2 CPUs
+constexpr int kMaxCards = kMaxPlayers + kMaxAis;    // quadros da selecao de 3 e 4: jogadores, depois CPUs
 constexpr uint32_t kShell = wotm::sym::shellInfo;
 constexpr uint32_t kMovieScreen = kShell + 0x160;   // shell->m_movieScreen
 constexpr uint32_t kShellSound = kShell + 0x2918;
@@ -65,10 +69,12 @@ struct View
     int players = 0;        // jogadores distintos escolhidos
     uint32_t screenObj = 0;
     // selecao
-    int selPlayers = 0;
-    uint32_t selMonster[kMaxPlayers] = {};   // m_monsterSel (tipo << 5)
-    int selCostume[kMaxPlayers] = {}, selCostumes[kMaxPlayers] = {};
-    bool selReady[kMaxPlayers] = {};
+    int selPlayers = 0;   // jogadores (quadros 0 .. selPlayers)
+    int selCards = 0;     // jogadores e CPUs
+    uint32_t selMonster[kMaxCards] = {};   // m_monsterSel (tipo << 5)
+    int selCostume[kMaxCards] = {}, selCostumes[kMaxCards] = {};
+    bool selReady[kMaxCards] = {};
+    int selActive = -1;   // quadro que o jogador 1 move (o dele ou o de uma CPU)
     // rotulo do menu principal
     uint32_t labelObj[4] = {};   // objetos do switch do "2 player" em uso ([0] = 0: sem rotulo); o menor e o texto
     uint32_t labelRef[4] = {};   // objetos do "1 player" em uso (texto e brilho): o menor da a coluna e a altura das letras
@@ -100,8 +106,36 @@ struct Pick
 };
 static bool g_selOn = false, g_selPrimed = false;
 static bool g_selLeaving = false;   // escolha feita (ou volta): a tela 6 segue escondida ate o fim do fade de saida
-static int g_pickFor = 0;           // g_multi das escolhas guardadas em g_pick (outro numero: cursores espalhados de novo)
-static Pick g_pick[kMaxPlayers];
+static int g_pickFor = 0;           // quadros das escolhas guardadas em g_pick (outro numero: cursores espalhados de novo)
+static int g_ais = 0;               // CPUs da selecao em curso (m_numAIs da tela 13)
+static Pick g_pick[kMaxCards];
+// Fila de quadros do jogador p: o dele e, no jogador 1, as CPUs depois
+static int cardQueue(int p, int out[kMaxCards])
+{
+    int n = 0;
+    out[n++] = p;
+    if (p == 0)
+        for (int j = 0; j < g_ais; ++j)
+            out[n++] = g_multi + j;
+    return n;
+}
+// Quadro que o jogador p move agora (o primeiro da fila sem pronto) ou -1 (todos prontos)
+static int activeCard(int p)
+{
+    int q[kMaxCards];
+    const int n = cardQueue(p, q);
+    for (int i = 0; i < n; ++i)
+        if (!g_pick[q[i]].ready) return q[i];
+    return -1;
+}
+// O ultimo pronto da fila do jogador p (o que o triangulo desfaz) ou -1
+static int lastReadyCard(int p)
+{
+    int q[kMaxCards];
+    for (int i = cardQueue(p, q) - 1; i >= 0; --i)
+        if (g_pick[q[i]].ready) return q[i];
+    return -1;
+}
 static bool g_selPrev[kMaxPlayers][kActions] = {};
 static int g_selDone = 0;   // quadros desde que todos ficaram prontos
 // Troca de tela pedida por uma escolha: feita na saida da funcao da tela (screenGameModes2P, screenCharSelect2P). O changeScreen so
@@ -324,7 +358,9 @@ static void publish(uint8_t *rdram)
     v.players = distinctPlayers(nullptr);
     v.screenObj = rd32(rdram, kMovieScreen) & 0x1FFFFFFFu;
     v.selPlayers = g_selOn ? g_multi : 0;
-    for (int p = 0; p < v.selPlayers; ++p)
+    v.selCards = g_selOn ? g_multi + g_ais : 0;
+    v.selActive = g_selOn ? activeCard(0) : -1;
+    for (int p = 0; p < v.selCards; ++p)
     {
         v.selMonster[p] = rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(g_pick[p].col - 1));
         v.selCostume[p] = g_pick[p].costume;
@@ -354,7 +390,7 @@ static void setManual(bool on, const int map[kMaxPlayers + 1] = nullptr)
         std::fprintf(stderr, "[padsel] controles %s\n", on ? "escolhidos: mapa manual" : "desligados: mapa padrao");
 }
 
-// 3 e 4: o que o item free-for-all da tela 5 faz, e direto a tela 15 (sem a 13, das CPUs)
+// 3 e 4: o que o item free-for-all da tela 5 faz (a tela 13 escolhe as CPUs)
 static void startMultiFreeForAll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     wr32(rdram, kMode, 3u);
@@ -362,7 +398,7 @@ static void startMultiFreeForAll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *
     wr32(rdram, kNumAIs, 0u);
     wr32(rdram, wotm::sym::g_levelList, wotm::sym::PO_MPFreeForAll);
     callGuest(rdram, ctx, runtime, wotm::fn::hierSetSwitch__FP11_hierswitchi, rd32(rdram, kSw5CC), 0u);
-    changeScreen(rdram, ctx, runtime, 5, 15, 1, 2);
+    changeScreen(rdram, ctx, runtime, 5, 13, 1, 2);
     callGuest(rdram, ctx, runtime, wotm::fn::initSelectSwitches__Fv, 0u);
 }
 
@@ -436,7 +472,7 @@ static void configStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
         g_multi = n;
         g_phase = Leaving;
-        std::fprintf(stderr, "[padsel] %d jogadores: free for all, sem CPU\n", n);
+        std::fprintf(stderr, "[padsel] %d jogadores: free for all\n", n);
         g_after = AfterMultiFfa;   // startMultiFreeForAll na saida do screenGameModes2P
         return;
     }
@@ -483,11 +519,13 @@ static void selectBegin(uint8_t *rdram)
     g_selLeaving = false;
     g_selPrimed = false;
     g_selDone = 0;
+    g_ais = std::clamp(static_cast<int32_t>(rd32(rdram, kNumAIs)), 0, kMaxAis);   // da tela 13
     // cursores espalhados pelas colunas abertas; o que ja foi escolhido (volta da selecao de fase, revanche) fica
-    const bool keep = g_pickFor == g_multi;
-    g_pickFor = g_multi;
+    const int cards = g_multi + g_ais;
+    const bool keep = g_pickFor == cards;
+    g_pickFor = cards;
     int col = stepColumn(rdram, 0, 1);
-    for (int p = 0; p < g_multi; ++p)
+    for (int p = 0; p < cards; ++p)
     {
         if (!keep || !columnOpen(rdram, g_pick[p].col) || !costumeOpen(rdram, g_pick[p].col, g_pick[p].costume))
         {
@@ -497,7 +535,7 @@ static void selectBegin(uint8_t *rdram)
         col = stepColumn(rdram, col, 1);
         g_pick[p].ready = false;
     }
-    std::fprintf(stderr, "[padsel] selecao de monstros de %d jogadores\n", g_multi);
+    std::fprintf(stderr, "[padsel] selecao de monstros de %d jogadores e %d CPUs\n", g_multi, g_ais);
 }
 
 static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -514,8 +552,16 @@ static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     for (int i = g_multi; i < 12; ++i)
         wr32(rdram, kMonsterSel + 4u * uint32_t(i), 0u);
+    for (int j = 0; j < g_ais; ++j)   // CPUs: m_monsterSel[4 + j], m_costume[2 + j] (como o screenCharSelect3P)
+    {
+        const Pick &k = g_pick[g_multi + j];
+        const uint32_t sel = rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(k.col - 1));
+        wr32(rdram, kMonsterSel + 4u * uint32_t(4 + j), sel);
+        wr32(rdram, kCostume + 4u * uint32_t(2 + j), uint32_t(k.costume));
+        std::fprintf(stderr, "[padsel] CPU %d: %s traje %d\n", j + 1, monsterName(sel), k.costume);
+    }
     wr32(rdram, kNumPlayers, uint32_t(g_multi));
-    wr32(rdram, kNumAIs, 0u);
+    wr32(rdram, kNumAIs, uint32_t(g_ais));
     g_selLeaving = true;
     sfx(rdram, ctx, runtime, 8);
     g_after = AfterSelectDone;   // changeScreen(6, 8) na saida do screenCharSelect2P
@@ -549,12 +595,16 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         bool e[kActions];
         for (int a = 0; a < kActions; ++a)
             e[a] = now[p][a] && !g_selPrev[p][a];
-        Pick &k = g_pick[p];
-        if (k.ready)
+        const int card = activeCard(p), undo = lastReadyCard(p);
+        if (e[Back] && undo >= 0)
         {
-            if (e[Back]) { k.ready = false; sound = 6; }
+            g_pick[undo].ready = false;
+            sound = 6;
             continue;
         }
+        if (card < 0)
+            continue;
+        Pick &k = g_pick[card];
         if (e[Left] || e[Right])
         {
             k.col = stepColumn(rdram, k.col, e[Left] ? -1 : 1);
@@ -576,7 +626,7 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     std::memcpy(g_selPrev, now, sizeof g_selPrev);
     bool anyReady = false, allReady = true;
-    for (int p = 0; p < g_multi; ++p)
+    for (int p = 0; p < g_multi + g_ais; ++p)
     {
         anyReady = anyReady || g_pick[p].ready;
         allReady = allReady && g_pick[p].ready;
@@ -628,7 +678,7 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     if (ctx->pc == wotm::fn::screenTransition__Fb)
     {
         const int cur = static_cast<int>(rd32(rdram, wotm::sym::currScreen)), last = static_cast<int>(rd32(rdram, wotm::sym::lastScreen));
-        if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 5 && (last == 1 || (last == 15 && g_multi)))
+        if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 5 && (last == 1 || ((last == 13 || last == 15) && g_multi)))
         {
             g_phase = Config;
             g_primed = false;
@@ -768,18 +818,18 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_origGetInput(rdram, ctx, runtime);
 }
 
-// changeScreen(de, para, sentido, animacao, ...): no multijogador a volta da tela 15 (que iria a 13, as CPUs) vem para a escolha
-// de controles (5), e a volta desta (prevScreen 15) vai ao menu principal
+// changeScreen(de, para, sentido, animacao, ...): no multijogador a volta da escolha de controles (5) vai ao menu principal, mesmo
+// com a pilha de telas apontando a 13 ou a 15 (a volta da 13 vem a 5); com 3 ou 4 jogadores a 15 segue sempre a 6 (a nossa selecao)
 static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc == wotm::fn::changeScreen__Fiiiib)
     {
         const int32_t from = static_cast<int32_t>(GPR_U32(ctx, 4)), to = static_cast<int32_t>(GPR_U32(ctx, 5)),
                       dir = static_cast<int32_t>(GPR_U32(ctx, 6));
-        if (g_multi && from == 15 && to == 13)
-            ctx->r[5] = _mm_set_epi64x(0, 5);
-        else if (from == 5 && to == 15 && dir < 0)
+        if (from == 5 && (to == 13 || to == 15) && dir < 0)
             ctx->r[5] = _mm_set_epi64x(0, 1);
+        else if (g_multi && from == 15 && (to == 18 || to == 19) && dir > 0)   // com CPUs a 15 iria as selecoes de 3 e 4 do retail
+            ctx->r[5] = _mm_set_epi64x(0, 6);
     }
     g_origChangeScreen(rdram, ctx, runtime);
 }
@@ -1080,7 +1130,7 @@ struct SelModel
     double t0 = 0.0;
     bool ready = false;
 };
-static SelModel g_selModel[kMaxPlayers];
+static SelModel g_selModel[kMaxCards];
 static std::map<uint32_t, std::unique_ptr<wotm::model::Model>> g_selCache;
 static wotm::model::FxTextures g_selFx;
 static bool g_selFxTried = false;
@@ -1109,8 +1159,22 @@ static const wotm::model::Model *selModel(uint32_t id)
     return (g_selCache[id] = std::move(m)).get();
 }
 
-// Antes do BeginTextureMode da selecao: o monstro de cada jogador no RenderTexture dele (w x h)
-static void renderSelModels(const View &v, int w, int h)
+// Quadros da selecao no telao: ate 4 numa fileira; 5 e 6 em duas (3 em cima, o resto embaixo, centrado)
+static Rectangle cardRect(int i, int n)
+{
+    constexpr float W = kSelPW, H = kSelPH;
+    n = std::max(1, n);
+    const int rows = n > 4 ? 2 : 1, cols = (n + rows - 1) / rows, row = i / cols, inRow = row + 1 < rows ? cols : n - cols * (rows - 1);
+    const float pad = W * 0.012f, top = H * 0.02f, bottom = H * 0.88f;
+    const float w = (W - pad * float(cols + 1)) / float(cols), h = (bottom - top - pad * float(rows - 1)) / float(rows);
+    const float left = (W - (w * float(inRow) + pad * float(inRow - 1))) * 0.5f;
+    return {left + float(i - row * cols) * (w + pad), top + float(row) * (h + pad), w, h};
+}
+// Area do monstro dentro do quadro
+static Rectangle modelRect(const Rectangle &b) { return {b.x + b.width * 0.03f, b.y + b.height * 0.13f, b.width * 0.94f, b.height * 0.60f}; }
+
+// Antes do BeginTextureMode da selecao: o monstro de cada quadro no RenderTexture dele (~1,3 x o tamanho na textura da selecao)
+static void renderSelModels(const View &v)
 {
     if (!g_selFxTried)
     {
@@ -1119,12 +1183,14 @@ static void renderSelModels(const View &v, int w, int h)
         g_selFx.load(io.cdRoot, io.cdImage.string());
     }
     const double now = GetTime();
-    for (int p = 0; p < kMaxPlayers; ++p)
+    for (int p = 0; p < kMaxCards; ++p)
     {
         SelModel &s = g_selModel[p];
         s.ready = false;
-        if (p >= v.selPlayers)
+        if (p >= v.selCards)
             continue;
+        const Rectangle mr = modelRect(cardRect(p, v.selCards));
+        const int w = int(mr.width * 1.3f), h = int(mr.height * 1.3f);
         const uint32_t id = (v.selMonster[p] >> 5) | uint32_t(v.selCostume[p] & 3) << 8;
         if (id != s.id)
         {
@@ -1144,43 +1210,52 @@ static void renderSelModels(const View &v, int w, int h)
         s.ren.shiftX = fr.shiftX;
         s.ren.shiftY = fr.shiftY;
         // de frente, virado um pouco para o centro da tela (os da esquerda para a direita e vice-versa)
-        const float yaw = v.selPlayers > 1 ? 30.f - 60.f * float(p) / float(v.selPlayers - 1) : 0.f;
+        const float cx = mr.x + mr.width * 0.5f, yaw = 30.f - 60.f * std::clamp(cx / float(kSelPW), 0.f, 1.f);
         s.ren.render(*m, w, h, yaw, 8.f, fr.zoom * 0.95f, [] {});
         s.ready = true;
     }
 }
 
-// Selecao de monstros: um quadro por jogador, lado a lado, no telao inteiro. Cada quadro: o numero do jogador em cima, o monstro 3D,
-// o nome com as setas, os trajes (um ponto por traje aberto) e o "READY".
+// Selecao de monstros: um quadro por jogador e um por CPU (cardRect), no telao inteiro. Cada quadro: "P1".."P4" ou "CPU 1/2" em cima,
+// o monstro 3D, o nome com as setas, os trajes (um ponto por traje aberto) e o "READY". O quadro de CPU que ainda espera a vez do
+// jogador 1 fica apagado.
 static void drawSelect(const View &v)
 {
     constexpr float W = kSelPW, H = kSelPH;
-    const int n = std::max(1, v.selPlayers);
-    const float pad = W * 0.012f, top = H * 0.02f, bottom = H * 0.88f;
-    const float boxW = (W - pad * float(n + 1)) / float(n), boxH = bottom - top;
-    const Color kName{246, 238, 220, 255};
-    for (int p = 0; p < v.selPlayers; ++p)
+    const Color kName{246, 238, 220, 255}, kCpu{165, 160, 150, 255};
+    for (int p = 0; p < v.selCards; ++p)
     {
-        const Color c = kPlayerColors[p];
-        const float x = pad + float(p) * (boxW + pad), y = top, cx = x + boxW * 0.5f;
-        const Rectangle box{x, y, boxW, boxH};
+        const bool cpu = p >= v.selPlayers;
+        const bool waiting = cpu && !v.selReady[p] && v.selActive != p;   // CPU antes da vez dela
+        const Color c = cpu ? kCpu : kPlayerColors[p];
+        const Rectangle box = cardRect(p, v.selCards);
+        const float x = box.x, y = box.y, boxW = box.width, boxH = box.height, cx = x + boxW * 0.5f;
         DrawRectangleRounded(box, 0.06f, 8, Color{0, 0, 0, 200});
-        DrawRectangleRounded(Rectangle{x, y, boxW, boxH * 0.12f}, 0.4f, 8, Color{c.r, c.g, c.b, 220});
-        DrawRectangleRoundedLinesEx(box, 0.06f, 8, v.selReady[p] ? 10.f : 5.f, Color{c.r, c.g, c.b, 240});
+        DrawRectangleRounded(Rectangle{x, y, boxW, boxH * 0.12f}, 0.4f, 8, Color{c.r, c.g, c.b, static_cast<unsigned char>(waiting ? 90 : 220)});
+        DrawRectangleRoundedLinesEx(box, 0.06f, 8, v.selReady[p] || v.selActive == p ? 10.f : 5.f,
+                                    Color{c.r, c.g, c.b, static_cast<unsigned char>(waiting ? 110 : 240)});
         char label[16];
-        std::snprintf(label, sizeof label, "P%d", p + 1);
+        if (cpu)
+            std::snprintf(label, sizeof label, "CPU %d", p - v.selPlayers + 1);
+        else
+            std::snprintf(label, sizeof label, "P%d", p + 1);
         outlined(label, cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
         // monstro: do topo do quadro ate o nome
         const SelModel &s = g_selModel[p];
-        if (s.ready)
+        if (s.ready && !waiting)
         {
             const Texture2D &mt = s.ren.target().texture;
-            const Rectangle dst{x + boxW * 0.03f, y + boxH * 0.13f, boxW * 0.94f, boxH * 0.60f};
+            const Rectangle dst = modelRect(box);
             rlDrawRenderBatchActive();
             BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);   // cor pre-multiplicada (Renderer)
             DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)}, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
             EndBlendMode();
             BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+        }
+        if (waiting)
+        {
+            outlined("P1 PICKS", cx, y + boxH * 0.45f, boxH * 0.08f, boxW * 0.8f, kCpu);
+            continue;
         }
         const char *name = monsterName(v.selMonster[p]);
         const float nameY = y + boxH * 0.79f;
@@ -1206,8 +1281,8 @@ static void drawSelect(const View &v)
             outlined("READY", cx, band.y + band.height * 0.5f, band.height * 0.75f, band.width * 0.9f, kName);
         }
     }
-    bool all = v.selPlayers > 0;
-    for (int p = 0; p < v.selPlayers; ++p)
+    bool all = v.selCards > 0;
+    for (int p = 0; p < v.selCards; ++p)
         all = all && v.selReady[p];
     namespace st = wotm::settings;
     using wotm_legend::bind;
@@ -1243,9 +1318,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
             g_selRt = LoadRenderTexture(kSelPW, kSelPH);
             SetTextureFilter(g_selRt.texture, TEXTURE_FILTER_BILINEAR);
         }
-        const int n = std::max(1, v.selPlayers);
-        // o RenderTexture do monstro com ~1,3 x o tamanho dele na textura da selecao
-        renderSelModels(v, int(float(kSelPW) / float(n) * 0.94f * 1.3f), int(float(kSelPH) * 0.86f * 0.60f * 1.3f));
+        renderSelModels(v);
         BeginTextureMode(g_selRt);
         ClearBackground(Color{0, 0, 0, 0});
         rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);

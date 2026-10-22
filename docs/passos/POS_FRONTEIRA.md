@@ -367,6 +367,34 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   ~21 ms), medido por marcas de tempo no quadro (a captura nativa é ~0,3 ms por vista). Pendente: baratear o `hier` por vista (a
   montagem dos pacotes do VU1 não serve ao desenho nativo) e o desenho nativo por vista (~12 ms de CPU por quadrante, contra ~7 ms
   da tela cheia).
+- **Pendentes fechados em 2026-10-22** (`wotm_split4.inc`, `wotm_padsel.inc`, `ps2_pad.cpp` do patch), cada um conferido por roteiro
+  do boot à luta pelo menu (`PS2X_PAD`, `WOTM_PADSEL_SCRIPT`, `WOTM_SHOTS`; corpus sem nenhuma mudança; o 2 jogadores do retail
+  pelo menu igual):
+  - **Controles dos jogadores 3 e 4 na luta:** o roteiro `PS2X_PAD` ganhou `@3` e `@4` (o slot 1 das portas). Com 3 jogadores, `up@3`
+    andou só com o monstro do quadrante 3; com 4, `up@4` só com o do 4. Isso confere o caminho porta/slot → dispositivos do jogador
+    (o mesmo que um controle de verdade usa); falta alguém jogar com 4 controles físicos.
+  - **CPU junto com 3 ou 4 jogadores:** o menu passa pela tela 13 do retail (0, 1 ou 2 CPUs) e a seleção ganha os quadros das CPUs,
+    escolhidas pelo jogador 1 (`NATIVO.md`). Conferido 3 + 1 e 4 + 2 (6 monstros, 4 quadrantes).
+  - **Pose de vitória com meta de vitórias:** "first to 1" com 4 jogadores e 2 CPUs: a CPU que matou ganha, tela unificada, diálogo
+    "AI WINS / play again". Achados e corrigidos no caminho:
+    - o diálogo 5 é **modal** (roda quadros e cede ao escalonador); o fim de rodada nosso o chamava por `callGuest`, com `ra` 0, e no
+      "play again" a função voltava ao pc 0 e a thread do jogo morria (congelava; o runtime agora avisa: `[resume] thread N terminou
+      em pc 0`, com as últimas retomadas). Agora é chamado como cauda, com o `ra` do chamador do `Evaluate`.
+    - no "play again" todos renascem pela lista 3 (4 pontos): com 6 monstros, dois pares nasciam no mesmo ponto e o empurrão entre
+      eles punha NaN na posição (a câmera do jogador ia junto, quadrante sem imagem). Quem cai a menos de 120 de outro vai à lista 2.
+    - o `LeaveUnifiedView` só trata 2 monstros como tela dividida; com outro número a câmera 0 tomava o lugar da câmera da vitória.
+      Com os quadrantes ele toma o caminho dos 2 jogadores.
+    - Conferido: duas vitórias e dois "play again" seguidos, sem NaN e sem congelar (foto `docs/screenshots/2026-10-22/2026-10-22_multiplayer_vitoria_meta.png`).
+  - **Câmera do jogador 4 e IA:** o `StateThrowBack::handlePreemption` (fim de ser arremessado) punha no POV 0 a câmera `m_cameraView`
+    do dono sem olhar se era humano; a IA tem a vista 3, que com 4 jogadores é a do jogador 4. Com dono IA a câmera 3 não muda. (O
+    `enterSubState` e o `StateButtSlam` já olham `m_playerNum`.)
+  - **Sons e tokens por jogador:** sem trabalho. O `SoundManager::m_events` já é `[4][4]` por `m_index`, e o `TheGame::m_tokens` são
+    **4**: o `InitBeforeDbLoad` inicializa 4 `TokenManager` (0x1004 cada, de 0x11C370 a 0x120380); o `include/game/game.h` diz `[2]`
+    seguido de um pad do tamanho de mais 2 (corrigir o header pede o gate, que não rodou nesta máquina, sem WSL).
+- **Ficam de fora (projetos à parte):** eliminação e minigames com 3 ou mais. A eliminação guarda continues, vitórias e as escolhas
+  em campos de 2 (`m_continues[2]`, `m_wins[2]`, Shell+0x2B84/0x2B88) e troca o monstro do perdedor pelo diálogo 8 no meio da luta, uma
+  interface de 2 jogadores; os minigames têm regras, placar e HUD de 2 (`CrushLevel`: "P1"/"P2", `m_tokens[0..1]`). O custo de 3 e 4
+  vistas (acima) também segue pendente.
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.

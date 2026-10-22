@@ -26,7 +26,11 @@
 //   - HUD: o Hud::initAfter e o Hud::update saem logo com indice >= 2. O HUD 2/3 vira uma copia do HUD da mesma coluna e roda o
 //     update como ele, com monstro, camera e barra da propria vista (hudInitAfter, hudUpdate).
 //   - Camera no POV 3 (estacionada): as cameras 2 e 3 nao tinham posicao de estacionar e iam para a origem (no inicio e na morte).
-//   - Fim de rodada do modo 3: o retail so renasce com 1 ou 0 vivos (2 jogadores); aqui cada morto renasce como o que e.
+//   - Fim de rodada do modo 3: o retail so renasce com 1 ou 0 vivos (2 jogadores); aqui cada morto renasce como o que e. A meta de
+//     vitorias abre o dialogo 5 (modal) como cauda do Evaluate, com o ra de quem o chamou.
+//   - Fim da vitoria (LeaveUnifiedView): o caminho dos 2 jogadores (a camera 0 nao salta para a da vitoria).
+//   - Renascimento de mais de 4 monstros (lista 3 com 4 pontos, "play again"): quem cai em cima de outro vai para a lista 2.
+//   - Fim de arremesso de uma IA (StateThrowBack::handlePreemption): nao mexe na camera 3, que e a do jogador 4.
 //   - Controles: o inputInit abre 2 portas x 4 slots (controle = porta + 2 * slot: o jogador 3 e o slot 1 da porta 0, o 4 o da porta
 //     1), mas o stub do runtime so tem o slot 0. As scePad* com (porta, slot) recebem o slot 1 como 0 (estado, modo e vibracao sao
 //     os da porta), o scePadPortOpen/Close do slot 1 so devolve sucesso, e o scePadRead dele le os dispositivos do jogador porta + 3
@@ -42,7 +46,7 @@ namespace wotm_split4
     constexpr uint32_t kMonsterSel = kShell + 0x2938, kNumPlayers = kShell + 0x2BB4, kNumAIs = kShell + 0x2BB8, kCostume = kShell + 0x2BE0;
     constexpr uint32_t kSlots = kGame + 0xB80, kSlotStride = 0x11190, kMonsters = kGame + 0x120380, kGameMode = kGame + 0x1203C8,
                        kNumSlots = kGame + 0x1203D4;
-    constexpr uint32_t kPlayerNum = 0x18, kCameraView = 0x6CD8, kCamUnify = 0x7970;   // Monster
+    constexpr uint32_t kPlayerNum = 0x18, kNumInits = 0x2C, kCameraView = 0x6CD8, kCamUnify = 0x7970;   // Monster
     constexpr uint32_t kViewInfo = wotm::sym::viewInfo, kViewDef = wotm::sym::viewDef, kViewDb = wotm::sym::viewDb,
                        kNumViews = wotm::sym::viewNumViews, kUnified = wotm::sym::gUseUnifiedView;
     constexpr uint32_t kCameras = wotm::sym::x_7Cameras_m_cameras, kNumCameras = wotm::sym::x_7Cameras_m_numCameras, kCamStride = 0xEB0,
@@ -137,8 +141,15 @@ namespace wotm_split4
         for (int v = 2; v < g_views; ++v)
         {
             const uint32_t m = FAST_READ32(kMonsters + 4u * uint32_t(v));
-            if (!m || FAST_READ32(camera(v) + kCamMonster) == m)
+            if (!m)
                 continue;
+            if (FAST_READ32(camera(v) + kCamMonster) == m)
+            {
+                // o LeaveUnifiedView poe a camera 2 no POV 3 (repouso da unificada): com o jogador 3 vencedor ela ja o segue
+                if (FAST_READ32(camera(v) + kCamPov) == 3u)
+                    callGuest(g_setPov, kSetPov, rdram, ctx, runtime, uint32_t(v), 0u);
+                continue;
+            }
             FAST_WRITE32(camera(v) + kCamPov, 0);   // o SetCameraToFollowMonster recarrega o POV corrente
             callGuest(g_follow, kFollow, rdram, ctx, runtime, uint32_t(v), m);
         }
@@ -184,9 +195,15 @@ namespace wotm_split4
     // o POV 3 numa delas estaciona onde ela esta (_cs->trans), como o DetachCamera, que tambem poe a posicao no _cs antes.
     constexpr uint32_t kCamPark = 0xD20;
     PS2Runtime::RecompiledFunction g_origSetPov = nullptr;
+    bool g_skipPov3 = false;   // throwPreemption de uma IA em curso: o SetCameraPOV da camera 3 (a do jogador 4) nao acontece
     void setCameraPov(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t v = GPR_U32(ctx, 4);
+        if (ctx->pc == kSetPov && v == 3u && g_skipPov3)
+        {
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
         if (ctx->pc == kSetPov && GPR_U32(ctx, 5) == 3u && v >= 2u && v < 4u && g_views > int(v))
         {
             const uint32_t c = camera(int(v)), cs = FAST_READ32(c + kCamCs) & 0x1FFFFFFFu;
@@ -194,6 +211,53 @@ namespace wotm_split4
                 std::memcpy(rdram + c + kCamPark, rdram + cs + 0x10, 16);   // _cs->trans
         }
         g_origSetPov(rdram, ctx, runtime);
+    }
+
+    // Cameras::LeaveUnifiedView (fim da pose de vitoria, "play again", ResetLevel): com m_numMonsters 2 (dois jogadores) o retail so
+    // volta a camera 2 ao POV 3 e esmaece (CCFadeOut); com outro numero (1 jogador) a camera 0 toma o lugar da 2 (a da vitoria) e
+    // refaz a transicao a partir dali: com os quadrantes (m_numMonsters = jogadores e IAs) a camera do jogador 1 saltaria para onde
+    // estava a vitoria. A chamada ve 2 e toma o caminho da tela dividida; o refollow devolve as cameras 2 e 3.
+    constexpr uint32_t kLeaveUnified = wotm::fn::LeaveUnifiedView__7CamerasUi, kNumMonsters = kGame + 0x1203D8;
+    PS2Runtime::RecompiledFunction g_origLeaveUnified = nullptr;
+    void leaveUnified(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kLeaveUnified || !g_views || !splitPlayers(rdram))
+        {
+            g_origLeaveUnified(rdram, ctx, runtime);
+            return;
+        }
+        const uint32_t n = FAST_READ32(kNumMonsters), ra = GPR_U32(ctx, 31);
+        FAST_WRITE32(kNumMonsters, 2u);
+        g_origLeaveUnified(rdram, ctx, runtime);
+        if (ctx->pc == ra && FAST_READ32(kNumMonsters) == 2u)
+            FAST_WRITE32(kNumMonsters, n);
+    }
+
+    // StateThrowBack::handlePreemption (fim de ser arremessado/derrubado): poe a camera m_cameraView do dono no POV 0 e zera +0xD98 e
+    // +0xD9C dela, sem olhar se o dono e humano. Com 4 jogadores a IA tem m_cameraView 3 (initCamera) e mexia na camera do jogador 4
+    // (no retail a camera 3 nao tem vista). Aqui, dono IA com a vista 3: o SetCameraPOV(3) nao acontece e os dois campos voltam.
+    constexpr uint32_t kThrowPreempt = wotm::fn::handlePreemption__14StateThrowBackP12MonsterState, kStateOwner = 0xC;
+    PS2Runtime::RecompiledFunction g_origThrowPreempt = nullptr;
+    void throwPreemption(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        uint32_t owner = 0;
+        if (ctx->pc == kThrowPreempt && self >= 0x1000u && self + 0x10u <= PS2_RAM_SIZE && splitPlayers(rdram) == 4)
+            owner = FAST_READ32(self + kStateOwner) & 0x1FFFFFFFu;
+        bool ai = owner >= 0x1000u && owner + kCameraView + 4u <= PS2_RAM_SIZE && FAST_READ32(owner + kCameraView) == 3u;
+        for (uint32_t i = 0; i < 4 && ai; ++i)
+            ai = (FAST_READ32(kMonsters + 4u * i) & 0x1FFFFFFFu) != owner;
+        if (!ai)
+        {
+            g_origThrowPreempt(rdram, ctx, runtime);
+            return;
+        }
+        const uint32_t c = camera(3), d98 = FAST_READ32(c + 0xD98), d9c = FAST_READ32(c + 0xD9C);
+        g_skipPov3 = true;
+        g_origThrowPreempt(rdram, ctx, runtime);
+        g_skipPov3 = false;
+        FAST_WRITE32(c + 0xD98, d98);
+        FAST_WRITE32(c + 0xD9C, d9c);
     }
 
     // Cinema (ActionDispatch::doCinema, moviePlaying; a apresentacao dos monstros antes da luta): com 2 jogadores o doCinema chama o
@@ -668,8 +732,12 @@ namespace wotm_split4
         if (target > 0 && killer >= 0 && killer < 16 &&
             static_cast<int32_t>(FAST_READ32(kSlots + kSlotStride * uint32_t(killer) + kWins)) >= target)
         {
+            // o displayDialog e modal (roda quadros e cede ao escalonador ate a escolha): chamado como cauda, com o ra de quem chamou o
+            // Evaluate. Pelo callGuest (ra 0) a retomada dele voltava ao pc 0 no fim e a thread do jogo morria ("play again")
             FAST_WRITE32(kGame + 0x12043C, uint32_t(killer));
-            callGuest(runtime->lookupFunction(kDisplayDialog), kDisplayDialog, rdram, ctx, runtime, 5u);
+            ctx->r[4] = _mm_set_epi64x(0, 5);
+            ctx->pc = kDisplayDialog;
+            runtime->lookupFunction(kDisplayDialog)(rdram, ctx, runtime);
             return;
         }
         const int players = splitPlayers(rdram), ais = static_cast<int32_t>(FAST_READ32(kGame + 0x1203E0));
@@ -708,7 +776,7 @@ namespace wotm_split4
     void startPoint(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static const bool log = std::getenv("WOTM_SPLITLOG") != nullptr;
-        const uint32_t m = GPR_U32(ctx, 5) & 0x1FFFFFFFu, ra = ctx->pc == kStartPoint ? GPR_U32(ctx, 31) : 0u;
+        const uint32_t m = GPR_U32(ctx, 5) & 0x1FFFFFFFu, ra = ctx->pc == kStartPoint ? GPR_U32(ctx, 31) : 0u, self = GPR_U32(ctx, 4);
         static bool listed = false;
         if (log && ra && !listed)
         {
@@ -726,6 +794,34 @@ namespace wotm_split4
         g_origStartPoint(rdram, ctx, runtime);
         if (asAi)
             FAST_WRITE32(m + kPlayerNum, 1u);
+        // Renascimento (lista 3, 4 pontos) com mais de 4 monstros: no "play again" todos renascem juntos e o quinto e o sexto caem no
+        // ponto de outro (todos ocupados: fica o ultimo tentado). Dois monstros no mesmo lugar: o empurrao entre eles dava NaN na posicao
+        // (a camera do jogador ia junto). Monstro a menos de 120 de outro: de novo como o primeiro nascimento de uma IA (lista 2, os
+        // cantos, com o mesmo teste de ponto livre).
+        if (ra && ctx->pc == ra && who >= 0 && splitPlayers(rdram))
+        {
+            const uint32_t cs = FAST_READ32(m + 0xC) & 0x1FFFFFFFu;
+            bool near = false;
+            for (int j = 0; j < 12 && cs >= 0x1000u && !near; ++j)
+            {
+                const uint32_t o = FAST_READ32(kMonsters + 4u * uint32_t(j)) & 0x1FFFFFFFu, ocs = o ? FAST_READ32(o + 0xC) & 0x1FFFFFFFu : 0u;
+                if (j == who || ocs < 0x1000u)
+                    continue;
+                const float dx = rdF(rdram, ocs + 0x10) - rdF(rdram, cs + 0x10), dy = rdF(rdram, ocs + 0x14) - rdF(rdram, cs + 0x14);
+                near = dx * dx + dy * dy < 120.f * 120.f;
+            }
+            if (near)
+            {
+                const uint32_t inits = FAST_READ32(m + kNumInits), pn = FAST_READ32(m + kPlayerNum);
+                FAST_WRITE32(m + kNumInits, 0u);
+                FAST_WRITE32(m + kPlayerNum, 2u);
+                callGuest(g_origStartPoint, kStartPoint, rdram, ctx, runtime, self, m);
+                FAST_WRITE32(m + kNumInits, inits);
+                FAST_WRITE32(m + kPlayerNum, pn);
+                if (log)
+                    std::fprintf(stderr, "[split] largada: m_monsters[%d] em cima de outro, de novo pela lista 2\n", who);
+            }
+        }
         if (log && ra && ctx->pc == ra)
         {
             const uint32_t cs = FAST_READ32(m + 0xC) & 0x1FFFFFFFu;
@@ -835,6 +931,8 @@ namespace wotm_split4
         g_origBlurInit = runtime.lookupFunction(kBlurInit);
         g_origBlurDraw = runtime.lookupFunction(kBlurDraw);
         g_origBoostRage = runtime.lookupFunction(kBoostRage);
+        g_origThrowPreempt = runtime.lookupFunction(kThrowPreempt);
+        g_origLeaveUnified = runtime.lookupFunction(kLeaveUnified);
         g_updateAnims = runtime.lookupFunction(kUpdateAnims);
         g_origPortOpen = runtime.lookupFunction(wotm::fn::scePadPortOpen);
         g_origPortClose = runtime.lookupFunction(wotm::fn::scePadPortClose);
@@ -843,7 +941,7 @@ namespace wotm_split4
             padsOk = padsOk && (g_padOrig[i] = runtime.lookupFunction(kPadSlotFns[i])) != nullptr;
         if (!g_viewCreate || !g_viewSetFov || !g_follow || !g_setPov || !g_origReestablish || !g_origGrapple || !g_origOkToUnify ||
             !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI ||
-            !g_origBlurInit || !g_origBlurDraw || !g_origBoostRage || !g_updateAnims || !padsOk)
+            !g_origBlurInit || !g_origBlurDraw || !g_origBoostRage || !g_origThrowPreempt || !g_origLeaveUnified || !g_updateAnims || !padsOk)
         {
             std::fprintf(stderr, "[split] tela dividida de %d desligada: funcao do jogo ou scePad* sem funcao no runtime\n", n);
             return;
@@ -866,6 +964,8 @@ namespace wotm_split4
         runtime.registerFunction(kBlurInit, &blurInit);
         runtime.registerFunction(kBlurDraw, &blurDraw);
         runtime.registerFunction(kBoostRage, &boostAndRage);
+        runtime.registerFunction(kThrowPreempt, &throwPreemption);
+        runtime.registerFunction(kLeaveUnified, &leaveUnified);
         runtime.registerFunction(wotm::fn::scePadPortOpen, &portOpen);
         runtime.registerFunction(wotm::fn::scePadPortClose, &portClose);
         for (size_t i = 0; i < kPadSlotN; ++i)

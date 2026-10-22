@@ -127,7 +127,10 @@ static uint16_t gamepadButtons(int pad)
     return m;
 }
 
-static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons, true);
+static int playerOfPort(int port) { return port + g_portBase.load(std::memory_order_relaxed); }
+
+static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons,
+                                 g_ps2PadPlayerOfPort = &playerOfPort, true);
 }
 
 void wotmPadSetPortBase(int base) { wotm_pad::g_portBase.store(base, std::memory_order_relaxed); }
