@@ -36,13 +36,16 @@ enum Key
     KbSeparate,   // teclado e um jogador a parte
     Prompts,      // icones de botao: kPromptNames (0 = automatico pelo ultimo dispositivo usado; 1 = os 3D do jogo)
     MenuConfirm,  // nos menus, com gamepad: 0 = o de baixo confirma (o jogo), 1 = o da direita confirma e o de baixo volta
+    Camera,       // 0 = classica (a do jogo), 1 = moderna (orbital: analogico direito, controle relativo a tela; wotm_orbit.inc)
+    CamRecenter,  // camera moderna: volta devagar para as costas do monstro depois de ~1,5 s sem mexer, com ele andando
+    CloseCam,     // 1 = a camera de perto do jogo (vista unificada); 0 = nunca entra nela
     kKeys
 };
 
 inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",    "WOTM_FULLSCREEN", "WOTM_HZ",        "WOTM_VSYNC",
                                             "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE",
-                                            "WOTM_PROMPTS",    "WOTM_MENUCONFIRM"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+                                            "WOTM_PROMPTS",    "WOTM_MENUCONFIRM", "WOTM_CAMERA",    "WOTM_CAMRECENTER", "WOTM_CLOSECAM"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1};
 inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
 inline constexpr int kPromptStyles = 6;
 enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
@@ -55,7 +58,7 @@ inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10"
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1};
 inline std::filesystem::path g_path;   // vazio: sem arquivo (WOTM_SETTINGS=0 ou antes do load)
 inline std::mutex g_fileMutex;
 

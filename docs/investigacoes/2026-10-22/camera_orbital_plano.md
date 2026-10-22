@@ -30,7 +30,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | # | Etapa | Entrega |
 |---|---|---|
 | 0 | Ler o `normalUpdate` | distância, altura e inclinação por POV (`MonsterCameraData`), enquadramento com alvo (`hasPinTarget`), suavizações, colisão; confirma a hipótese acima. Relatório `camera_normalupdate.md` nesta pasta |
-| 1 | Órbita básica | gancho na saída do `normalUpdate` (vista 0, sem alvo travado): mantém distância e altura do jogo, o ângulo em volta do monstro passa a ser do analógico direito; sem correr atrás das costas; recentralizar devagar |
+| 1 | Órbita básica (feita, falta o teste do dono) | gancho na saída do `normalUpdate` (vista 0, sem alvo travado): mantém distância e altura do jogo, o ângulo em volta do monstro passa a ser do analógico direito; sem correr atrás das costas; recentralizar devagar |
 | 2 | Alvo travado | enquadramento do jogo, com o analógico direito deslocando um pouco |
 | 3 | Chão e prédios | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
@@ -70,6 +70,21 @@ Relatórios: `camera_controle_cr_sr.md` (controle) e `camera_normalupdate.md` (c
 - Controle: no gancho do `interpretInputs` (o do lock-on), com a órbita ativa no jogador, `+0x16E4`/`+0x16E8` = 1 durante a chamada e
   restaurados na saída; os bytes do analógico direito (0x10..0x13 do `GamePad`) zerados e lidos pela órbita.
 - Alvo travado (etapa 2): pose do jogo, com desvio limitado pelo analógico direito.
+
+## Etapa 1: resultado (2026-10-22, falta o teste do dono)
+`native/runtime/wotm_orbit.inc`, chamado pelos ganchos que já existiam (`Cameras::Update` da câmera livre, `interpretInputs` do
+lock-on) e por dois novos (`shakeCamera`, para manter o tremor, e `SetOkToUnify`, para a opção de desligar a câmera de perto).
+Opções `WOTM_CAMERA` (padrão moderna), `WOTM_CAMRECENTER` (padrão ligado), `WOTM_CLOSECAM` (padrão ligada), ainda sem linha no painel
+(etapa 6). Com `WOTM_AIVSAI` fica a clássica: lotes e corpus continuam comparáveis.
+
+Conferido no runtime (luta 1P com e sem IA, `WOTM_ORBITLOG`, analógico simulado por `WOTM_ORBITSTICK`, pad por `PS2X_PAD`):
+- a órbita liga no começo da rodada atrás do monstro, o analógico gira a câmera e, andando para a frente, o monstro vai para onde a
+  câmera olha (configuração SR forçada funcionando);
+- recentraliza devagar andando, depois de ~1,5 s sem mexer;
+- arremessado (POV 5) a câmera é a do jogo; ao voltar ao POV 0 a órbita retoma de onde o jogo deixou, sem salto;
+- vista unificada: entra e sai como antes; com `WOTM_CLOSECAM=0` ela não entra e a luta de perto segue na órbita.
+
+Ainda não conferido: agarrão, escalada, planeio, lock-on (etapa 2), tela dividida (etapa 5), sensação com o controle na mão.
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
