@@ -6,7 +6,8 @@
 //   - TheGame::SetOkToUnify: CloseCam = 0 zera o m_camUnify de todos (nunca entra na vista unificada), como o wotm_split4.inc.
 //
 // Etapa 1 (orbita basica). Vale para a camera com POV 0 (normalUpdate) que segue o monstro de um jogador humano na vista dele, fora
-// da vista unificada, do modo 9 (Crush), da camera livre e do WOTM_AIVSAI (lotes e corpus ficam com a camera do jogo). O jogo
+// da vista unificada (menos a camera 2 no POV 0, a do agarrao), do modo 9 (Crush), da camera livre e do WOTM_AIVSAI (lotes e corpus
+// ficam com a camera do jogo). O jogo
 // continua rodando o normalUpdate por baixo (o tremor dele e aproveitado); depois dele a orbita refaz a pose inteira:
 //   - posicao: o deslocamento do POV (D10, so ele: o balanco e a inclinacao do jogo mudam com o estado do monstro e davam solavancos)
 //     girado pelo nosso angulo em volta do monstro (az = rumo do monstro para a camera) em vez do rumo das costas dele; o analogico
@@ -61,6 +62,7 @@ namespace
             float lockAim[3] = {};   // desvio da mira para o alvo (o ultimo, enquanto o peso cai ao soltar)
             float reach = 1.f;       // fracao da distancia livre (colisao: encolhe na hora, volta devagar)
             float lift = 0.f;        // altura somada para ficar acima do chao (suavizada na descida)
+            uint32_t lastPin = 0;    // m_pinTarget visto no quadro anterior (log)
         } g_cam[kMaxCams];
 
         struct Input
@@ -89,7 +91,12 @@ namespace
         // Camera v elegivel neste quadro; mon = monstro, slot = jogador
         bool eligible(uint8_t *rdram, int v, uint32_t &mon, int &slot)
         {
-            if (v >= kMaxCams || !enabled() || FAST_READ32(kUnified) || FAST_READ32(kGameMode) == 9u)
+            if (v >= kMaxCams || !enabled() || FAST_READ32(kGameMode) == 9u)
+                return false;
+            // vista unificada: so a camera 2 no POV 0, que e a do agarrao (StateGrappleLift: segue quem agarra). A de perto e o POV 1,
+            // a da vitoria o 7: ficam com o jogo
+            const bool unified = FAST_READ32(kUnified) != 0u;
+            if (unified && v != 2)
                 return false;
             const uint32_t c = camAddr(v);
             if (FAST_READ32(c + kCamPov) != 0u)
@@ -98,8 +105,8 @@ namespace
             const uint32_t cs = FAST_READ32(c + kCamCs) & 0x1FFFFFFFu;
             if (!okAddr(mon, kMonCamUnify + 4u) || !okAddr(cs, 0x70u) || !isPlayerMonster(rdram, FAST_READ32(c + kCamMonster), &slot))
                 return false;
-            if (static_cast<int32_t>(FAST_READ32(mon + kMonCameraView)) != v)
-                return false;   // camera 2 seguindo quem agarra no 1P etc.: a vista do jogador e outra
+            if (!unified && static_cast<int32_t>(FAST_READ32(mon + kMonCameraView)) != v)
+                return false;   // camera 2 seguindo quem agarra fora da unificada (1P sem a de perto etc.): a vista do jogador e outra
             const uint32_t mcs = FAST_READ32(mon + kMonCs) & 0x1FFFFFFFu;
             return okAddr(mcs, 0x70u);
         }
@@ -351,6 +358,9 @@ namespace
             Probe probe(rdram, ctx, rt);
             const int n = numCams(rdram);
             bool driving[4] = {};
+            bool wasActive[kMaxCams];
+            for (int v = 0; v < kMaxCams; ++v)
+                wasActive[v] = g_cam[v].active;
             for (int v = 0; v < kMaxCams; ++v)
             {
                 Cam &s = g_cam[v];
@@ -374,7 +384,26 @@ namespace
                 const float monHeading = rdF(rdram, mcs + 0x68);
                 Input &in = g_in[slot];
                 const bool restart = !s.active || s.mon != mon;
-                if (restart || s.cutSeen)
+                // troca de camera com o mesmo monstro (agarrao: vista 0 -> camera 2 da unificada e de volta): a orbita continua com o
+                // estado da outra, sem entrada suave nem recomeco
+                int from = -1;
+                if (restart)
+                    for (int u = 0; u < kMaxCams; ++u)
+                        if (u != v && wasActive[u] && g_cam[u].mon == mon)
+                            from = u;
+                if (from >= 0)
+                {
+                    const bool cut = s.cutSeen;
+                    float shake[3];
+                    std::memcpy(shake, s.shake, sizeof shake);
+                    s = g_cam[from];
+                    s.cutSeen = cut;
+                    std::memcpy(s.shake, shake, sizeof shake);
+                    g_cam[from].active = false;
+                    if (log)
+                        std::fprintf(stderr, "[orbit] camera %d: continua da camera %d (az %.1f)\n", v, from, s.az * 57.2958f);
+                }
+                else if (restart || s.cutSeen)
                 {
                     // de onde o jogo (ou o corte dele) deixou a camera
                     const float dx = game[0] - mt[0], dy = game[1] - mt[1];
@@ -422,6 +451,13 @@ namespace
                 if (locked != s.locked && log)
                     std::fprintf(stderr, "[orbit] camera %d: %s\n", v, locked ? "alvo travado" : "alvo solto");
                 s.locked = locked;
+                if (const uint32_t pin = FAST_READ32(mon + kMonPinTarget); pin != s.lastPin)
+                {
+                    if (log)
+                        std::fprintf(stderr, "[orbit] camera %d: alvo 0x%x -> 0x%x (unificada %d, travado %d)\n", v, s.lastPin, pin,
+                                     FAST_READ32(kUnified), locked);
+                    s.lastPin = pin;
+                }
 
                 // recentralizar: so com o monstro se afastando da camera (andando para a frente da tela). Andando de lado ou para
                 // tras o monstro se vira para onde anda; levar a camera para as costas dele mudaria o "para tras" e ele giraria sem

@@ -159,5 +159,14 @@ Congar da IA (`WOTM_MATCH=3,1,1`), moderna e clássica:
 
 Não passou no teste: escalada e agarrão do jogador (o medidor fica ligado com o `WOTM_ORBITLOG` para quando o dono notar algo).
 
+### Câmera do agarrão (relato do dono, 2026-10-22)
+Segurando outro monstro, a câmera era a de tanque do jogo: o `StateGrappleLift` liga a vista unificada com a câmera 2 no POV 0
+(`normalUpdate`) seguindo quem agarra, e a órbita se desligava com qualquer vista unificada. Agora, na unificada, a câmera 2 no POV 0
+com monstro humano também é da órbita (a de perto é o POV 1 e a da vitória o 7: continuam com o jogo). Troca de câmera com o mesmo
+monstro (vista 0 para a câmera 2 e de volta) continua o estado da órbita, sem recomeço (`[orbit] camera N: continua da camera M`).
+Isso também resolveu, para o dono, o lock-on perdido no agarrão e a demora para voltar à órbita normal (a saída da unificada do
+agarrão é a do jogo, mas a câmera já é a mesma órbita). O `WOTM_ORBITLOG` ganhou `alvo 0x.. -> 0x..` (troca do `m_pinTarget`).
+Validado pelo dono.
+
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
