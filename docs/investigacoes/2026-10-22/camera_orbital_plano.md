@@ -32,7 +32,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 0 | Ler o `normalUpdate` | distância, altura e inclinação por POV (`MonsterCameraData`), enquadramento com alvo (`hasPinTarget`), suavizações, colisão; confirma a hipótese acima. Relatório `camera_normalupdate.md` nesta pasta |
 | 1 | Órbita básica (aprovada, na master em 2026-10-22) | gancho na saída do `normalUpdate` (vista 0, sem alvo travado): mantém distância e altura do jogo, o ângulo em volta do monstro passa a ser do analógico direito; sem correr atrás das costas; recentralizar devagar |
 | 2 | Alvo travado (aprovado, na master em 2026-10-22) | enquadramento do jogo, com o analógico direito deslocando um pouco |
-| 3 | Chão e prédios | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
+| 3 | Chão e prédios (feita, falta o teste do dono) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
@@ -125,6 +125,18 @@ baixo, robô no alto da tela); lock-on um pouco seco.
 "Funcionando bem agora." Com a câmera de perto religada, o analógico direito girava o monstro (o jogo usa o X no controle relativo à
 tela). Com a câmera moderna, o X do analógico direito não chega mais ao jogo em vista nenhuma; o Y chega fora da órbita e mexe a cabeça.
 Aprovado e levado para a master. Seguem as etapas 3 em diante.
+
+## Etapa 3: chão e prédios (2026-10-22, falta o teste do dono)
+Branch `camera-etapa3`. A órbita chama do próprio código nativo o `hdLosTest` e o `hdHatTest` do jogo (dados e pilha numa área abaixo
+da pilha atual do `Cameras::Update`), `collide` em `wotm_orbit.inc`, opção `WOTM_CAMCOLLIDE`.
+- **Medição** (`WOTM_CAMCOLLIDE=1`, câmera girando sozinha na Midtown, 1P contra IA): com o monstro no telhado e a câmera baixa, ela
+  entrava no prédio (a tela mostrava o teto por baixo); baixando a câmera na rua ela ia até 42 abaixo do chão. A visada da mira até a
+  câmera distingue os casos: atrás de um prédio, por fora, a ida bate na face da frente e a volta (da câmera para a mira) na de trás;
+  dentro do prédio ou abaixo do chão a volta não sai de nada depois do ponto da ida.
+- **Regra:** dentro de algo, a câmera encolhe até 25 antes do contato (na hora; volta devagar, 5% por quadro); por fora, fica, e o
+  jogo deixa o prédio transparente (já basta, nas fotos). Chão: pelo menos 30 acima, descendo no máximo 3 por quadro.
+- Conferido por roteiro (sem crash; câmera parando na beira do telhado, transparência dos prédios do lado de fora). Falta a sensação
+  com o controle, em especial o encolher perto de paredes.
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
