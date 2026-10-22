@@ -887,6 +887,7 @@ public:
     // Texturas dos efeitos (fogo do Agamo, lens flare); sem elas o monstro sai sem os efeitos. O Renderer nao e dono delas.
     void setFx(const FxTextures *fx) { fx_ = fx; }
     bool skipAbe = false;   // diagnostico: so os opacos
+    float shiftX = 0.f, shiftY = 0.f;   // deslocamento do monstro na imagem, fracao da largura/altura (+ = direita/cima); ver render
 
     template <class Bg>
     const RenderTexture2D &render(const Model &m, int w, int h, float yawDeg, float pitchDeg, float zoom, Bg &&background) {
@@ -904,8 +905,15 @@ public:
         const float dist = ext * 0.62f / std::tan(fovy * 0.5f * 3.14159265f / 180.f) / std::max(zoom, 0.05f);
         const float yaw = yawDeg * 3.14159265f / 180.f, pit = pitchDeg * 3.14159265f / 180.f;
         Camera3D cam{};
-        cam.target = {c[0], c[1], c[2]};
-        cam.position = {c[0] + std::sin(yaw) * std::cos(pit) * dist, c[1] + std::cos(yaw) * std::cos(pit) * dist, c[2] + std::sin(pit) * dist};
+        // shiftX/shiftY: move o monstro na imagem (fracao da largura/altura, + = direita/cima) andando com a camera e o alvo juntos
+        // pelos eixos direito R = (-cos yaw, sin yaw, 0) e de cima U = (-sin yaw sin pit, -cos yaw sin pit, cos pit) da camera
+        const float visH = 2.f * dist * std::tan(fovy * 0.5f * 3.14159265f / 180.f), visW = visH * float(w) / float(std::max(h, 1));
+        const float sR = -shiftX * visW, sU = -shiftY * visH;
+        const float o[3] = {-std::cos(yaw) * sR - std::sin(yaw) * std::sin(pit) * sU, std::sin(yaw) * sR - std::cos(yaw) * std::sin(pit) * sU,
+                            std::cos(pit) * sU};
+        cam.target = {c[0] + o[0], c[1] + o[1], c[2] + o[2]};
+        cam.position = {cam.target.x + std::sin(yaw) * std::cos(pit) * dist, cam.target.y + std::cos(yaw) * std::cos(pit) * dist,
+                        cam.target.z + std::sin(pit) * dist};
         cam.up = {0.f, 0.f, 1.f};   // Z para cima no mundo do monstro
         cam.fovy = fovy;
         cam.projection = CAMERA_PERSPECTIVE;

@@ -206,7 +206,10 @@ public:
             if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] lista de saves: LVL/CENTRAL.TEX/.RTX nao achado; sem fogo nem lens flare\n");
             renderer_.setFx(&fx_);
         }
-        renderer_.render(*model_, W, H, kYaw, kPitch, zoomOf(monId_ & 0xFF), [&] {
+        const Framing fr = framingOf(monId_);
+        renderer_.shiftX = fr.shiftX;
+        renderer_.shiftY = fr.shiftY;
+        renderer_.render(*model_, W, H, kYaw, kPitch, fr.zoom, [&] {
             if (!lt) return;
             DrawTexturePro(*lt, Rectangle{0.f, 0.f, float(lt->width), float(lt->height)},
                            Rectangle{(lev.x0 - pic.x0) * kx, (lev.y0 - pic.y0) * ky, (lev.x1 - lev.x0) * kx, (lev.y1 - lev.y0) * ky},
@@ -318,9 +321,28 @@ private:
     bool tried_ = false, ok_ = false;
     // Monstro 3D: virado 3/4 para a direita da tela (yaw 0 = de frente), camera um pouco acima
     static constexpr float kYaw = 35.f, kPitch = 8.f;
-    // Aproximacao por monstro: o enquadramento usa a maior medida da caixa, e a cauda do Togera (3) e as asas do Raptros (9) deixavam
-    // os dois mais longe que os outros
-    static float zoomOf(uint32_t mon) { return mon == 3 ? 1.35f : mon == 9 ? 1.6f : 1.f; }
+    // Correcao do enquadramento por monstro e traje (costume 0-3; -1 = todos). O automatico usa a maior medida da caixa, entao a cauda
+    // do Togera (3) e as asas do Raptros (9) deixavam os dois mais longe; a cauda do Togera tambem o empurrava para a direita do quadro.
+    // O fogo do Magmo traje 3 (o quarto, contando de 1) e o da cabeca do Agamo (10) aumentam a caixa: aproxima e sobe um pouco para os
+    // pes nao sairem por baixo. shiftX/shiftY em fracao do quadro (+ = direita/cima).
+    struct Framing {
+        uint32_t mon;
+        int costume;
+        float zoom, shiftX, shiftY;
+    };
+    static constexpr Framing kFraming[] = {
+        {3, -1, 1.35f, -0.12f, 0.f},   // Togera
+        {8, 3, 1.25f, 0.f, 0.08f},     // Magmo, traje de fogo
+        {9, -1, 1.6f, 0.f, 0.f},       // Raptros
+        {10, -1, 1.15f, 0.f, 0.04f},   // Agamo
+    };
+    static Framing framingOf(uint32_t id) {
+        const uint32_t mon = id & 0xFF;
+        const int costume = int((id >> 8) & 3);
+        for (const Framing &f : kFraming)
+            if (f.mon == mon && (f.costume < 0 || f.costume == costume)) return f;
+        return Framing{mon, -1, 1.f, 0.f, 0.f};
+    }
     std::unique_ptr<model::Model> model_;
     model::Renderer renderer_;
     model::FxTextures fx_;
