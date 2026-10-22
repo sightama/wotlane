@@ -386,12 +386,12 @@ class Launcher : Form
         }
         tips.SetToolTip(cheatBoxes[0], "Health never drops; hits still push you.");
         tips.SetToolTip(cheatBoxes[3], "The game's m_godMode (full health, stamina and special) plus, from us, no hit reaction. A building falling on you still kills.");
-        cheatStamina.Items.AddRange(new object[] { "Normal", "Always full   [stam]", "Rage (130)   [furia]" });
+        cheatStamina.Items.AddRange(new object[] { "Normal", "Always full", "Rage (130)" });
         cheatStamina.SelectedIndex = saved.TryGetValue(":CheatStamina", out v) ? Math.Max(0, Math.Min(2, ParseInt(v))) : 0;
         inner.Controls.Add(Row("Stamina", cheatStamina));
         cheatWin.Value = saved.TryGetValue(":CheatWin", out v) ? Math.Max(0, Math.Min(3600, ParseInt(v))) : 0;
         tips.SetToolTip(cheatWin, "Knocks out every living AI every N seconds of game time (F1's 'win the fight'). 0 = off.");
-        inner.Controls.Add(Row("Win every (s, 0 = off)   [vencer]", cheatWin));
+        inner.Controls.Add(Row("Win every (s, 0 = off)", cheatWin));
         return gb;
     }
 
