@@ -1,6 +1,6 @@
 # Espinha do jogo: cadeia de carga, menu, laço de jogo, estados de monstro
 
-(Dividido de `docs/PROXIMOS_PASSOS.md`; índice lá.) Este arquivo guarda **o que se sabe do fluxo do jogo**, levantado ao decompilar a espinha em 2026-10-08. O que está ou não em C++ é o `config/status.csv` (`grep <função>`), não este arquivo.
+(Índice dos docs no `CLAUDE.md`.) Este arquivo guarda **o que se sabe do fluxo do jogo**, levantado ao decompilar a espinha em 2026-10-08. O que está ou não em C++ é o `config/status.csv` (`grep <função>`), não este arquivo.
 
 ## Cadeia de carga: da `main` ao monstro no mapa
 Fluxo de `main` (comentário em `src/game/Shell.cpp`): boot -> intro/outro -> menus (`userintMain`) -> sessão: `InitRTState`, `BootInitGame`, `InitBeforeDbLoad`, `LoadLevelFiles`, `FinishLoadBar`, `FadeScreen`, `InitAfterDbLoad`, `InitPlayers`, `initAfter` dos 4 `Hud`, init por modo (BigShot/Crush/DodgeBall), `UpdatePadTweaks`, sons, `rtMain` em laço com `EvaluateGameStatus`.

@@ -66,9 +66,11 @@ void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0,
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
+void wotmMainMenuInstall(PS2Runtime &runtime);   // wotm_mainmenu.inc: menu principal em texto
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
+#include "wotm_settings.hpp"   // opcoes ao vivo (painel "recompiled options" e launcher)
 std::atomic<uint32_t> g_wotmCheats{0};
 std::atomic<bool> g_wotmCheatWin{false};
 
@@ -1485,7 +1487,7 @@ namespace
         const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, gp = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
         LockToggle *t = nullptr;
         int slot = 0;
-        if (ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
+        if (ctx->pc == kInterpretInputs && wotm::settings::on(wotm::settings::LockToggle) && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
             t = lockToggleFor(rdram, pf, &slot);
         if (t)
         {
@@ -1649,7 +1651,15 @@ namespace
             }
         g_origUpdateHistory[N](rdram, ctx, runtime);
         if (ok && ctx->pc == ra)
-            lockToggleApply(rdram, pf, N);
+        {
+            if (wotm::settings::on(wotm::settings::LockToggle))
+                lockToggleApply(rdram, pf, N);
+            else if (LockToggle *t = lockToggleFind(pf, false); t && (t->on || t->held))
+            {
+                t->on = t->held = false;   // opcao desligada no meio da luta: solta e volta aos botoes do jogo
+                t->remap = false;
+            }
+        }
     }
 }
 
@@ -1667,7 +1677,6 @@ namespace
     constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
     constexpr uint32_t kXform2d = wotm::fn::mathfTransform3dTo2d__FiP8_fvectorT1;
     PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr, g_origXform2dBars = nullptr;
-    bool g_barsAlways = false;   // WOTM_ENEMYBARS ligada: barras em toda luta (sem ela, so no multijogador de 3 e 4)
     uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon (0 = barras desligadas: o icone do jogo fica)
     bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
     float g_barRawX = 0.f;       // x projetado da cabeca (pixels do GS), antes do limite do drawHealthIcon
@@ -1882,7 +1891,8 @@ namespace
         if (ctx->pc == kDrawHealthIcon)
         {
             // com WOTM_ENEMYBARS sempre; sem ela, so na luta de 3 ou 4 jogadores (tela em quadrantes, wotm_split4.inc)
-            const bool on = g_barsAlways || wotm_split4::splitPlayers(rdram);
+            // opcao ligada: barras em toda luta (sem ela, so no multijogador de 3 e 4)
+            const bool on = wotm::settings::on(wotm::settings::EnemyBars) || wotm_split4::splitPlayers(rdram);
             g_barMonster = on ? GPR_U32(ctx, 5) & 0x1FFFFFFFu : 0u;
             g_barDone = false;
             g_barRawOk = false;
@@ -2048,7 +2058,7 @@ namespace
                             p[2] += 60.f;   // sem ponto de golpe: um pouco acima da origem do monstro
                         else
                             p[0] = p[1] = p[2] = 0.f;
-                        if (p[0] != 0.f || p[1] != 0.f || p[2] != 0.f)
+                        if ((p[0] != 0.f || p[1] != 0.f || p[2] != 0.f) && wotm::settings::on(wotm::settings::DamagePop))
                             wotmDamagePopup(rdram, p, lost, recent ? d->kind : 0);
                     }
                     d->last = h;
@@ -2145,6 +2155,13 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         else
             std::fprintf(stderr, "[wotm] monstros carregados embaixo de 32 MB, como no PS2 (WOTM_HIGHRAM=0)\n");
     }
+    {   // opcoes do jogador (wotm_settings.hpp): settings.ini ao lado do save.json (mesma pasta que o wotm_save::initPaths acha)
+        const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        std::filesystem::path root = io.mcRoot;
+        if (root.empty())
+            root = !io.elfDirectory.empty() ? io.elfDirectory / "mc0" : std::filesystem::current_path() / "mc0";
+        wotm::settings::load(root.lexically_normal().parent_path());
+    }
     wotm_save::install(runtime);
     if ((g_origEmitMatrices = runtime.lookupFunction(kEmitMatrices)))   // emissor que teleporta (8 monstros com o Agamo)
         runtime.registerFunction(kEmitMatrices, &emitMatricesGuarded);
@@ -2172,6 +2189,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     wotmPadSelInstall(runtime);
+    wotmMainMenuInstall(runtime);
     wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
@@ -2263,8 +2281,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
         std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
-    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "QoL features" do launcher): um toque trava, outro solta
-    if (const char *e = std::getenv("WOTM_LOCKTOGGLE"); e && *e && std::strcmp(e, "0") != 0)
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, "QoL features"): um toque trava, outro solta. Ganchos sempre instalados; a opcao
+    // (wotm_settings.hpp) vale ao vivo, desligada eles so passam adiante
     {
         constexpr PS2Runtime::RecompiledFunction kHooks[3] = {&updateHistoryLockToggle<0>, &updateHistoryLockToggle<1>,
                                                               &updateHistoryLockToggle<2>};
@@ -2274,7 +2292,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         {
             for (int i = 0; i < 3; i++)
                 runtime.registerFunction(kUpdateHistory[i], kHooks[i]);
-            std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE): um toque trava, outro solta\n");
+            std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE, agora %s): um toque trava, outro solta\n",
+                         wotm::settings::on(wotm::settings::LockToggle) ? "ligado" : "desligado");
             // botoes do mod na configuracao 0 (depois da camera livre: o scePadRead daqui embrulha o dela)
             if ((g_origInterpretInputs = runtime.lookupFunction(kInterpretInputs)) && (g_origPadReadLock = runtime.lookupFunction(kScePadRead)))
             {
@@ -2286,14 +2305,15 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
     }
-    // Numeros de dano (mod, WOTM_DAMAGEPOP=1): depois das trapacas, que tambem embrulham o Monster::update e o takeHit
-    if (const char *e = std::getenv("WOTM_DAMAGEPOP"); e && *e && std::strcmp(e, "0") != 0)
+    // Numeros de dano (mod, WOTM_DAMAGEPOP=1): depois das trapacas, que tambem embrulham o Monster::update e o takeHit. Sempre
+    // instalados (o acompanhamento da vida e barato); a opcao so decide se o numero sai
     {
         if ((g_origMonsterUpdateDmg = runtime.lookupFunction(kMonsterUpdateDmg)) && (g_origTakeHitDmg = runtime.lookupFunction(kTakeHitDmg)))
         {
             runtime.registerFunction(kMonsterUpdateDmg, &monsterUpdateDamage);
             runtime.registerFunction(kTakeHitDmg, &takeHitDamage);
-            std::fprintf(stderr, "[wotm] numeros de dano (WOTM_DAMAGEPOP): golpe branco, arremesso laranja, especial ciano\n");
+            std::fprintf(stderr, "[wotm] numeros de dano (WOTM_DAMAGEPOP, agora %s): golpe branco, arremesso laranja, especial ciano\n",
+                         wotm::settings::on(wotm::settings::DamagePop) ? "ligados" : "desligados");
         }
         else
             std::fprintf(stderr, "[wotm] numeros de dano indisponiveis: Monster::update ou Monster::takeHit sem funcao no runtime\n");
@@ -2301,15 +2321,13 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon. Ganchos
     // sempre instalados: sem a variavel, as barras valem so na luta de 3 ou 4 jogadores (o HUD do multijogador)
     {
-        const char *e = std::getenv("WOTM_ENEMYBARS");
-        g_barsAlways = e && *e && std::strcmp(e, "0") != 0;
         if ((g_origDrawHealthIcon = runtime.lookupFunction(kDrawHealthIcon)) && (g_origAddPolyBars = runtime.lookupFunction(kAddPoly)))
         {
             runtime.registerFunction(kDrawHealthIcon, &drawHealthIconBars);
             runtime.registerFunction(kAddPoly, &addPolyBars);
             if ((g_origXform2dBars = runtime.lookupFunction(kXform2d)))
                 runtime.registerFunction(kXform2d, &xform2dBars);
-            if (g_barsAlways)
+            if (wotm::settings::on(wotm::settings::EnemyBars))
                 std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
         }
         else

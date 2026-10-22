@@ -1,0 +1,1149 @@
+// wotm_mainmenu.inc: menus de itens do telao em texto (incluido por wotm_live.inc, depois do wotm_padsel.inc, de quem usa o desenho
+// no telao e a fonte do jogo). Telas:
+//   1 menu principal: single player, multiplayer (o "2 player"), options, recompiled options (nosso), load game, unlocks, quit game
+//     (nosso: fecha o jogo na hora, sem confirmacao);
+//   2 modos de 1 jogador: adventure, free-for-all, endurance;
+//   5 modos do multiplayer (depois da escolha de controles do wotm_padsel.inc): free-for-all, elimination, minigames.
+//
+// Os itens do jogo (shell->m_menuItemSw[tela][1..n]) sao quadros com a palavra em imagem. Aqui todos os objetos dos switches ficam com
+// alfa 0 a cada quadro da tela (e no fade de saida dela) e a lista e desenhada com a fonte do jogo (a mesma da lista de saves) numa
+// textura propria, posta no plano dos itens, do topo do primeiro ao pe do ultimo.
+// O cursor continua sendo o currentSelection[tela] do jogo: o gancho do screenGetInput consome cima/baixo e move o currentSelection;
+// o X e o triangulo seguem para a funcao da tela, que faz o que o item faz, como no retail. Na tela 1 a linha "recompiled options"
+// fica fora do currentSelection (g_extraRow, como o "quit game"); o X nela abre o painel de opcoes do port no lugar da lista, sem trocar de tela, e o
+// triangulo (ou O) fecha. Com o painel aberto (e 20 quadros depois de fechar) o jogo nao ve entrada nenhuma: o painel le os
+// dispositivos direto (wotm_padsel::readDevice), na thread do EE, dentro do gancho do screenGetInput.
+// Painel: abas VIDEO / FEATURES / CONTROLS (L1/R1), cima/baixo escolhem a linha, esquerda/direita/X
+// trocam o valor, que vale na hora e e gravado no settings.ini (wotm_settings.hpp; o video e aplicado na thread da janela pelo
+// applyVideoSettings do wotm_live.inc). Desenhado numa textura propria no telao inteiro (a faixa visivel abaixo da tarja do menu).
+// Aba CONTROLS (rola): teclado separado, qual mapa a lista mostra (teclado ou gamepads), uma linha por botao do PS2 (X espera a tecla
+// ou o botao novo, Esc ou 5 s cancelam; quadrado limpa) e a volta ao padrao (mapa em wotm_settings.hpp, lido pelo wotm_pad.inc).
+// Logo do jogo no telao (os dois objetos irmaos do m_movieScreen): alfa 1 so na tela de "press start" (20), 0 nas outras, seguindo o
+// targetAlpha nos fades de/para a 20 (logoFrame, a cada quadro antes da coleta da cena). Sem ele a lista fica centrada no telao.
+// Tela 5: enquanto a escolha de controles esta no telao a lista fica escondida, e aparece junto com o fade que a escolha da aos itens.
+// WOTM_TEXTMENU=0: itens do retail (e o rotulo "multiplayer" do wotm_padsel.inc).
+// tela de opcoes do jogo (wotm_optscreen.inc, incluido depois): chamadas dos ganchos daqui
+namespace wotm_optscreen
+{
+static void frame(uint8_t *rdram);
+static void input(uint8_t *rdram, uint32_t code);
+constexpr uint32_t kScreen = 10;
+}
+
+namespace wotm_mainmenu
+{
+using wotm_padsel::rd32;
+constexpr uint32_t kShell = wotm::sym::shellInfo;
+constexpr int kMaxRows = 7;
+constexpr int kOptionsRow = -1, kQuitRow = -2;   // itens que nao sao do jogo (item < 0)
+
+struct Row { int item; const char *label; };
+struct ScreenDef
+{
+    int screen;
+    uint32_t numSel;   // numSelectables da tela (os itens 1..n do jogo); 0 = todos
+    int rows;
+    Row row[kMaxRows];
+};
+constexpr ScreenDef kScreens[] = {
+    {1, wotm::sym::numSelectables_2784, 7,
+     {{1, "SINGLE PLAYER"}, {2, "MULTIPLAYER"}, {3, "OPTIONS"}, {kOptionsRow, "RECOMPILED OPTIONS"}, {4, "LOAD GAME"}, {5, "UNLOCKS"},
+      {kQuitRow, "QUIT GAME"}}},
+    {2, 0, 3, {{1, "ADVENTURE"}, {2, "FREE-FOR-ALL"}, {3, "ENDURANCE"}}},
+    {5, wotm::sym::numSelectables_2857, 3, {{1, "FREE-FOR-ALL"}, {2, "ELIMINATION"}, {3, "MINIGAMES"}}},
+};
+static const ScreenDef *screenDef(uint32_t s)
+{
+    for (const ScreenDef &d : kScreens)
+        if (uint32_t(d.screen) == s) return &d;
+    return nullptr;
+}
+
+struct View
+{
+    bool on = false;
+    int screen = 0;
+    float alpha = 0.f;     // da tela (fades de entrada e saida)
+    float panel = 0.f;     // 0 lista, 1 painel aberto
+    int sel = 0;
+    int rows = 0;
+    Row row[kMaxRows] = {};
+    uint32_t itemObj[kMaxRows][4] = {};   // objetos do filho em uso de cada item do jogo, na ordem dos itens; posicao da lista
+    int items = 0;
+    int tab = 0, opt = 0;                 // painel: aba e linha
+    int top = 0;                          // painel: primeira linha visivel (aba CONTROLS rola)
+    int bindMap = -1;                     // aba CONTROLS: mapa na lista (-1 teclado, 0..3 gamepads do jogador 1..4)
+    int capture = -1;                     // botao do PS2 esperando a tecla ou o botao novo (-1: nenhum)
+    uint32_t screenObj = 0;               // telao (objeto do filme, shell->m_movieScreen): onde o painel e desenhado
+};
+static std::mutex g_m;
+static View g_view;
+
+// Thread do EE
+static const bool g_enabled = [] { const char *e = std::getenv("WOTM_TEXTMENU"); return !(e && e[0] == '0'); }();
+static int g_extraRow = 0;         // tela 1: cursor num item nosso (kOptionsRow, kQuitRow) ou 0 (no currentSelection)
+static bool g_open = false;        // painel "recompiled options" aberto
+static float g_panel = 0.f;
+static int g_suppress = 0;         // quadros sem entrada do jogo depois de fechar o painel (o triangulo ainda apertado)
+
+// ------------------------------------------------------------------ painel "recompiled options": abas e opcoes
+// Cada opcao e uma chave do wotm_settings.hpp; mudar grava o settings.ini e vale na hora (video na thread da janela, mods e
+// teclado na proxima leitura deles).
+namespace st = wotm::settings;
+enum Tab { TabVideo, TabFeatures, TabControls, kTabs };
+constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CONTROLS"};
+constexpr int kMaxOpts = 5;
+struct Opt { st::Key key; const char *label; const char *hint; };
+struct TabDef { int n; Opt opt[kMaxOpts]; };
+constexpr TabDef kTabDefs[kTabs] = {
+    {5,
+     {{st::Res, "RESOLUTION", "HOW TALL THE PICTURE IS, IN PIXELS. HIGHER LOOKS SHARPER"},
+      {st::Aspect, "ASPECT RATIO", "DYNAMIC MATCHES THE SHAPE OF THE WINDOW"},
+      {st::Display, "DISPLAY MODE", "WINDOW OR FULLSCREEN. F11 SWITCHES AT ANY TIME"},
+      {st::Rate, "REFRESH RATE", "HOW OFTEN THE PICTURE IS DRAWN. THE GAME ITSELF ALWAYS RUNS AT 60"},
+      {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"}}},
+    {3,
+     {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
+      {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
+      {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"}}},
+    {3,
+     {{st::KbSeparate, "KEYBOARD", "SHARE PLAYER 1 WITH THE FIRST GAMEPAD, OR PLAY AS A PLAYER OF ITS OWN"},
+      {st::Prompts, "BUTTON ICONS", "AUTO SHOWS THE BUTTONS OF WHATEVER YOU PLAYED WITH LAST"},
+      {st::MenuConfirm, "MENU CONFIRM", "WHICH GAMEPAD BUTTON ACCEPTS IN THE MENUS"}}},   // e o mapa: ctlRows
+};
+static int g_tab = TabVideo;
+static int g_optSel[kTabs] = {};
+constexpr int kVisRows = 7;   // linhas do painel que cabem; a aba CONTROLS rola
+
+// Aba CONTROLS: as opcoes da aba (teclado separado, icones, confirmar nos menus), qual mapa a lista mostra (teclado ou gamepads), um
+// botao do PS2 por linha e a volta ao padrao
+constexpr int kCtlOpt = -10, kCtlDevice = -2, kCtlReset = -3;   // kCtlOpt - i: opcao i da aba
+constexpr int kMaxCtlRows = kMaxOpts + 2 + st::kBinds;
+constexpr const char *kBindLabels[st::kBinds] = {"D-PAD UP", "D-PAD DOWN", "D-PAD LEFT", "D-PAD RIGHT", "CROSS",     "CIRCLE",     "SQUARE",
+                                                 "TRIANGLE", "L1",         "R1",         "L2",          "R2",        "L1 AND R1",  "START",
+                                                 "SELECT",   "L3",         "R3",         "STICK UP",    "STICK DOWN", "STICK LEFT", "STICK RIGHT"};
+static int ctlRows(bool kb, int out[kMaxCtlRows])
+{
+    int n = 0;
+    for (int i = 0; i < kTabDefs[TabControls].n; ++i) out[n++] = kCtlOpt - i;
+    out[n++] = kCtlDevice;
+    for (int b = 0; b < st::kBinds; ++b)
+        if (kb || st::bindOnPad(st::Bind(b))) out[n++] = b;
+    out[n++] = kCtlReset;
+    return n;
+}
+static int g_bindMap = -1;   // -1 teclado, 0..3 gamepads do jogador 1..4 (um mapa por jogador)
+static constexpr const char *kMapNames[st::kPadPlayers + 1] = {"KEYBOARD", "PLAYER 1 PAD", "PLAYER 2 PAD", "PLAYER 3 PAD", "PLAYER 4 PAD"};
+static std::string mapPrefix(int map) { return map < 0 ? std::string("KB_") : st::padPrefix(map); }
+static int g_capture = -1;   // botao do PS2 esperando a tecla/botao novo
+static double g_capT0 = 0.0;
+static bool g_capKeyPrev[std::size(st::kKeyNames)] = {};
+static bool g_capPadPrev[4][st::kPadButtons] = {};
+static int g_top[kTabs] = {};
+
+static int tabRows(int tab)
+{
+    int r[kMaxCtlRows];
+    return tab == TabControls ? ctlRows(g_bindMap < 0, r) : kTabDefs[tab].n;
+}
+static std::string bindValue(int b, int map)
+{
+    std::string s;
+    if (map < 0)
+    {
+        const uint32_t v = st::kb(st::Bind(b));
+        for (int i = 0; i < 2; ++i)
+            if (const char *n = st::keyName(int((v >> (16 * i)) & 0xFFFF)))
+                s += (s.empty() ? "" : " OR ") + std::string(n);   // a fonte do jogo nao tem "/"
+    }
+    else if (const int p = st::pad(st::Bind(b), map); p > 0 && p < st::kPadButtons)
+    {
+        s = st::kPadButtonNames[p];
+        std::replace(s.begin(), s.end(), '_', ' ');
+    }
+    return s.empty() ? "NONE" : s;
+}
+
+// Valores que a opcao percorre, em ordem crescente
+static int choices(st::Key k, int out[8])
+{
+    switch (k)
+    {
+    case st::Res: std::copy(std::begin(st::kResolutions), std::end(st::kResolutions), out); return int(std::size(st::kResolutions));
+    case st::Rate: std::copy(std::begin(st::kRates), std::end(st::kRates), out); return int(std::size(st::kRates));
+    case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
+    case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
+    case st::Prompts:   // sem o PLAYSTATION: igual ao ORIGINAL (o AUTO ainda o usa com gamepad de PlayStation)
+    {
+        int n = 0;
+        for (int i = 0; i < st::kPromptStyles; ++i)
+            if (i != st::PromptPs) out[n++] = i;
+        return n;
+    }
+    default: out[0] = 0; out[1] = 1; return 2;
+    }
+}
+// Proximo valor no sentido dir (+1/-1); dois valores dao a volta, listas param nas pontas (wrap forca a volta). Um valor fora da
+// lista (variavel de ambiente) vai ao vizinho da lista naquele sentido.
+static int stepValue(st::Key k, int cur, int dir, bool wrap)
+{
+    int c[8];
+    const int n = choices(k, c);
+    int i = -1;
+    for (int j = 0; j < n; ++j)
+        if (c[j] == cur) i = j;
+    if (i < 0)
+    {
+        if (dir > 0) { for (int j = 0; j < n; ++j) if (c[j] > cur) return c[j]; return c[n - 1]; }
+        for (int j = n - 1; j >= 0; --j) if (c[j] < cur) return c[j];
+        return c[0];
+    }
+    i += dir;
+    if (n == 2 || wrap) i = (i + n) % n;
+    return c[std::clamp(i, 0, n - 1)];
+}
+static void valueText(st::Key k, int v, char *buf, size_t sz)
+{
+    static const char *const kDisplay[3] = {"WINDOWED", "BORDERLESS", "EXCLUSIVE"};
+    static const char *const kAspectUi[st::kAspects] = {"DYNAMIC", "4:3", "16:9", "16:10", "21:9", "32:9"};
+    switch (k)
+    {
+    case st::Res: std::snprintf(buf, sz, "%dP", v); break;
+    case st::Aspect: std::snprintf(buf, sz, "%s", kAspectUi[v > 0 && v < st::kAspects ? v : 0]); break;
+    case st::Display: std::snprintf(buf, sz, "%s", kDisplay[std::clamp(v, 0, 2)]); break;
+    case st::Rate: if (v > 0) std::snprintf(buf, sz, "%d HZ", v); else std::snprintf(buf, sz, "MONITOR"); break;
+    case st::KbSeparate: std::snprintf(buf, sz, "%s", v ? "OWN PLAYER" : "SAME AS PAD 1"); break;
+    case st::Prompts:
+    {
+        static const char *const kNames[st::kPromptStyles] = {"AUTO", "ORIGINAL", "KEYBOARD", "XBOX", "PLAYSTATION", "NINTENDO"};
+        std::snprintf(buf, sz, "%s", kNames[std::clamp(v, 0, st::kPromptStyles - 1)]);
+        break;
+    }
+    case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
+    default: std::snprintf(buf, sz, "%s", v ? "ON" : "OFF"); break;
+    }
+}
+
+// Entrada do painel: direto dos dispositivos (todos), como a escolha de controles do wotm_padsel.inc, pelos botoes do PS2 do mapa
+// de teclas e botoes, como o resto do jogo (direcional ou analogico, X ok, triangulo ou bola volta, L1/R1 abas, quadrado limpa; nos
+// gamepads com a troca do MenuConfirm). Botao do PS2 sem tecla ou botao no mapa (limpo na aba CONTROLS) vale pelo padrao, para o
+// painel nunca ficar sem saida. O roteiro de teste WOTM_PADSEL_SCRIPT vale aqui tambem (acoes l1 e r1 para as abas).
+enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, kPanelActs };
+static bool g_panelPrev[kPanelActs] = {};
+static bool panelKey(st::Bind b)
+{
+    if (st::kb(b)) return wotm_pad::kbDown(b);
+    const uint32_t v = st::kDefaultKb[b];
+    return ((v & 0xFFFF) && IsKeyDown(int(v & 0xFFFF))) || ((v >> 16) && IsKeyDown(int(v >> 16)));
+}
+static bool panelPad(int d, st::Bind b)
+{
+    const st::Bind src = wotm_pad::sourceBind(b);
+    const int btn = st::pad(src, wotm_pad::playerOfPad(d));
+    return IsGamepadButtonDown(d, btn > 0 ? btn : st::kDefaultPad[src]);
+}
+static void readPanel(bool out[kPanelActs])
+{
+    using namespace wotm_padsel;
+    std::fill(out, out + kPanelActs, false);
+    for (int d = 0; d < kDevs; ++d)
+    {
+        if (!present(d)) continue;
+        bool a[kPanelActs] = {};
+        if (d == kKb)
+        {
+            a[PUp] = panelKey(st::BUp) || panelKey(st::BStickUp);
+            a[PDown] = panelKey(st::BDown) || panelKey(st::BStickDown);
+            a[PLeft] = panelKey(st::BLeft) || panelKey(st::BStickLeft);
+            a[PRight] = panelKey(st::BRight) || panelKey(st::BStickRight);
+            a[POk] = panelKey(st::BCross);
+            a[PBack] = panelKey(st::BTriangle) || panelKey(st::BCircle);
+            a[PPrev] = panelKey(st::BL1);
+            a[PNext] = panelKey(st::BR1);
+            a[PClear] = panelKey(st::BSquare);
+        }
+        else if (IsGamepadAvailable(d))
+        {
+            const float lx = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_X), ly = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_Y);
+            a[PUp] = panelPad(d, st::BUp) || ly < -0.6f;
+            a[PDown] = panelPad(d, st::BDown) || ly > 0.6f;
+            a[PLeft] = panelPad(d, st::BLeft) || lx < -0.6f;
+            a[PRight] = panelPad(d, st::BRight) || lx > 0.6f;
+            a[POk] = panelPad(d, st::BCross);
+            a[PBack] = panelPad(d, st::BTriangle) || panelPad(d, st::BCircle);
+            a[PPrev] = panelPad(d, st::BL1);
+            a[PNext] = panelPad(d, st::BR1);
+            a[PClear] = panelPad(d, st::BSquare);
+        }
+        // roteiro de teste (acoes do wotm_padsel.inc)
+        const double now = GetTime();
+        static constexpr int kFromScript[kActions] = {PLeft, PRight, POk, PBack, -1, PUp, PDown, PPrev, PNext};
+        for (const ScriptStep &sc : g_script)
+            if (sc.dev == d && now >= sc.t0 && now < sc.t0 + sc.dur && kFromScript[sc.act] >= 0) a[kFromScript[sc.act]] = true;
+        for (int k = 0; k < kPanelActs; ++k) out[k] |= a[k];
+    }
+}
+static void openPanel()
+{
+    g_open = true;
+    readPanel(g_panelPrev);   // o X que abriu ainda esta apertado: so conta o proximo
+}
+// Espera da tecla (teclado) ou do botao (gamepads) novo do botao do PS2 g_capture: vale a primeira que passar a estar apertada.
+// Esc ou 5 s sem nada cancelam. No fim, o que esta apertado agora nao conta como entrada do painel.
+static void captureInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    const st::Bind b = st::Bind(g_capture);
+    const char *what = nullptr;
+    bool done = false;
+    if (g_bindMap < 0)
+    {
+        for (size_t i = 0; i < std::size(st::kKeyNames); ++i)
+        {
+            const bool down = IsKeyDown(st::kKeyNames[i].code);
+            if (down && !g_capKeyPrev[i] && !done && st::kKeyNames[i].code != KEY_ESCAPE)   // Esc cancela
+            {
+                st::bindKey(b, st::kKeyNames[i].code);
+                what = st::kKeyNames[i].name;
+                done = true;
+            }
+            g_capKeyPrev[i] = down;
+        }
+    }
+    else
+    {
+        for (int p = 0; p < 4; ++p)
+            for (int k = 1; k < st::kPadButtons; ++k)
+            {
+                const bool down = IsGamepadAvailable(p) && IsGamepadButtonDown(p, k);
+                if (down && !g_capPadPrev[p][k] && !done)
+                {
+                    st::bindPad(b, k, g_bindMap);   // qualquer gamepad serve: quem esta configurando
+                    what = st::kPadButtonNames[k];
+                    done = true;
+                }
+                g_capPadPrev[p][k] = down;
+            }
+    }
+    const bool cancel = !done && (IsKeyDown(KEY_ESCAPE) || GetTime() - g_capT0 > 5.0);
+    if (!done && !cancel)
+        return;
+    if (done)
+        std::fprintf(stderr, "[settings] %s%s = %s\n", mapPrefix(g_bindMap).c_str(), st::kBindNames[b], what);
+    g_capture = -1;
+    readPanel(g_panelPrev);
+    wotm_padsel::sfx(rdram, ctx, runtime, done ? 8 : 6);
+}
+
+// Aba CONTROLS, da segunda linha em diante: mapa (teclado/gamepads), botoes do PS2 (X: espera a tecla nova; quadrado/Delete: limpa) e
+// volta ao padrao
+static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, const bool e[kPanelActs])
+{
+    int r[kMaxCtlRows];
+    const int n = ctlRows(g_bindMap < 0, r);
+    int &sel = g_optSel[TabControls];
+    const int row = r[std::clamp(sel, 0, n - 1)];
+    if (row == kCtlDevice)
+    {
+        if (!(e[PLeft] || e[PRight] || e[POk])) return;
+        g_bindMap = (g_bindMap + 1 + (e[PLeft] ? st::kPadPlayers : 1)) % (st::kPadPlayers + 1) - 1;
+        sel = std::min(sel, ctlRows(g_bindMap < 0, r) - 1);
+        wotm_padsel::sfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
+    }
+    else if (row == kCtlReset)
+    {
+        if (!e[POk]) return;
+        st::resetBinds(g_bindMap);
+        std::fprintf(stderr, "[settings] mapa %s de volta ao padrao\n", kMapNames[g_bindMap + 1]);
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+    }
+    else if (row >= 0 && e[POk])
+    {
+        g_capture = row;
+        g_capT0 = GetTime();
+        for (size_t i = 0; i < std::size(st::kKeyNames); ++i) g_capKeyPrev[i] = IsKeyDown(st::kKeyNames[i].code);
+        for (int p = 0; p < 4; ++p)
+            for (int k = 1; k < st::kPadButtons; ++k) g_capPadPrev[p][k] = IsGamepadAvailable(p) && IsGamepadButtonDown(p, k);
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+    }
+    else if (row >= 0 && e[PClear])
+    {
+        st::clearBind(st::Bind(row), g_bindMap);
+        std::fprintf(stderr, "[settings] %s%s = (nada)\n", mapPrefix(g_bindMap).c_str(), st::kBindNames[row]);
+        wotm_padsel::sfx(rdram, ctx, runtime, 6);
+    }
+}
+
+// Um quadro do painel aberto (no screenGetInput da tela 1, que o jogo chama a cada quadro dela)
+static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    bool now[kPanelActs], e[kPanelActs];
+    readPanel(now);
+    for (int i = 0; i < kPanelActs; ++i)
+        e[i] = now[i] && !g_panelPrev[i];
+    std::copy(now, now + kPanelActs, g_panelPrev);
+    if (g_capture >= 0)
+    {
+        captureInput(rdram, ctx, runtime);
+        return;
+    }
+    if (e[PBack])
+    {
+        g_open = false;
+        g_suppress = 20;
+        wotm_padsel::sfx(rdram, ctx, runtime, 6);
+        return;
+    }
+    if (e[PPrev] || e[PNext])
+    {
+        g_tab = (g_tab + (e[PNext] ? 1 : kTabs - 1)) % kTabs;
+        wotm_padsel::sfx(rdram, ctx, runtime, e[PNext] ? 4 : 2);
+        return;
+    }
+    const TabDef &t = kTabDefs[g_tab];
+    int &sel = g_optSel[g_tab];
+    const int n = tabRows(g_tab);
+    if (e[PUp] || e[PDown])
+    {
+        sel = (sel + (e[PDown] ? 1 : n - 1)) % n;
+        int &top = g_top[g_tab];
+        if (sel < top) top = sel;
+        if (sel >= top + kVisRows) top = sel - kVisRows + 1;
+        wotm_padsel::sfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
+        return;
+    }
+    if (g_tab == TabControls && sel >= t.n)
+    {
+        controlsInput(rdram, ctx, runtime, e);
+        return;
+    }
+    if (e[PLeft] || e[PRight] || e[POk])
+    {
+        const st::Key k = t.opt[sel].key;
+        const int cur = st::get(k), v = stepValue(k, cur, e[PLeft] ? -1 : 1, e[POk]);
+        if (v == cur)
+            return;
+        st::set(k, v);
+        char buf[32];
+        valueText(k, v, buf, sizeof buf);
+        std::fprintf(stderr, "[settings] %s = %s (%s=%s)\n", t.opt[sel].label, buf, st::kEnv[k], st::format(k, v).c_str());
+        wotm_padsel::sfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
+    }
+}
+static PS2Runtime::RecompiledFunction g_origMain = nullptr, g_origModes1P = nullptr, g_origModes2P = nullptr, g_origTransition = nullptr,
+                                      g_origGetInput = nullptr, g_origOptions = nullptr;
+static uint32_t g_mainRa = 0, g_modes1Ra = 0, g_modes2Ra = 0, g_transRa = 0, g_inRa = 0, g_optionsRa = 0;
+static bool g_mainPending = false, g_modes1Pending = false, g_modes2Pending = false, g_transPending = false, g_inPending = false,
+            g_optionsPending = false;
+
+static uint32_t itemSwitch(uint8_t *rdram, int screen, int item) { return rd32(rdram, kShell + 0x25C + uint32_t(screen * 10 + item) * 4); }
+static uint32_t curSelAddr(int screen) { return wotm::sym::currentSelection + 4u * uint32_t(screen); }
+
+// Linhas com os itens que o jogo oferece na tela (os itens 1..numSelectables)
+static int buildRows(uint8_t *rdram, const ScreenDef &d, Row out[kMaxRows])
+{
+    int n = d.numSel ? static_cast<int>(rd32(rdram, d.numSel)) : d.rows;
+    if (n < 1 || n > d.rows) n = d.rows;
+    int rows = 0;
+    for (int i = 0; i < d.rows; ++i)
+        if (d.row[i].item < 0 || d.row[i].item <= n)
+            out[rows++] = d.row[i];
+    return rows;
+}
+
+// Linha do cursor: a do item em currentSelection[tela] (ou a do "recompiled options")
+static int cursorRow(uint8_t *rdram, int screen, const Row *row, int rows)
+{
+    const int cs = static_cast<int>(rd32(rdram, curSelAddr(screen)));
+    for (int r = 0; r < rows; ++r)
+        if (screen == 1 && g_extraRow ? row[r].item == g_extraRow : row[r].item == cs)
+            return r;
+    return 0;
+}
+
+// Tela cujos itens estao a mostra e o alfa deles: parada numa tela, ela com 1; nas transicoes, o targetAlpha do fade de entrada (a
+// tela nova) ou de saida (a anterior)
+static float screenAlpha(uint8_t *rdram, uint32_t &screen)
+{
+    const uint32_t cur = rd32(rdram, wotm::sym::currScreen), last = rd32(rdram, wotm::sym::lastScreen);
+    screen = cur;
+    if (!rd32(rdram, wotm::sym::betweenScreens))
+        return 1.f;
+    float t;
+    std::memcpy(&t, rdram + wotm::sym::targetAlpha, 4);
+    t = std::clamp(t, 0.f, 1.f);
+    if (rd32(rdram, wotm::sym::fadingIn_2979)) return t;
+    if (rd32(rdram, wotm::sym::fadingOut_2980) && last != cur) { screen = last; return t; }
+    return 0.f;
+}
+
+// Tela 5: o que a escolha de controles deixa dos itens (escondidos durante ela, o fade dela depois)
+static float padSelFactor()
+{
+    using namespace wotm_padsel;
+    if (g_phase == Config || g_phase == Leaving) return 0.f;
+    if (g_phase == Reveal) return std::clamp(g_reveal, 0.f, 1.f);
+    return 1.f;
+}
+
+// ------------------------------------------------------------------ logo do telao so no "press start"
+// O logo "War of the Monsters" do telao sao dois objetos (as duas metades), cada um num grupo de um filho; os dois grupos sao irmaos
+// do objeto do filme (shell->m_movieScreen) num grupo de 3 filhos, alocado logo depois deles. Fora do "press start" (tela 20) o logo
+// fica com alfa 0 e o telao inteiro e da lista e do painel; nas transicoes de/para a tela 20 ele acompanha o fade.
+constexpr uint32_t kPressStart = 20;
+static uint32_t g_logoTelao = 0;   // telao do ultimo achado (outro: procura de novo)
+static uint32_t g_logoObj[4] = {};
+static int g_logoN = 0;
+
+static uint16_t rd16(const uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + (a & 0x1FFFFFFu), 2); return v; }
+
+static void findLogo(uint8_t *rdram, uint32_t telao)
+{
+    g_logoTelao = telao;
+    g_logoN = 0;
+    for (uint32_t a = telao + 0x10; a < telao + 0x4000 && a + 0x40 < PS2_RAM_SIZE; a += 0x10)
+    {
+        if ((rdram[a] & 0x3F) != 1)   // GROUP_NODE: numKids (u16) +8, filhos +0x20
+            continue;
+        const uint32_t n = rd16(rdram, a + 8);
+        if (n < 2 || n > 8)
+            continue;
+        bool has = false;
+        for (uint32_t k = 0; k < n; ++k)
+            has = has || (rd32(rdram, a + 0x20 + 4 * k) & 0x1FFFFFFFu) == telao;
+        if (!has)
+            continue;
+        for (uint32_t k = 0; k < n; ++k)
+        {
+            const uint32_t c = rd32(rdram, a + 0x20 + 4 * k) & 0x1FFFFFFFu;
+            if (c == telao || c < 0x1000u || c + 0x40 >= PS2_RAM_SIZE)
+                continue;
+            if ((rdram[c] & 0x3F) == 0 && g_logoN < 4)
+                g_logoObj[g_logoN++] = c;
+            else if ((rdram[c] & 0x3F) == 1)
+                for (uint32_t g = 0, m = std::min<uint32_t>(rd16(rdram, c + 8), 4u); g < m; ++g)
+                    if (const uint32_t o = rd32(rdram, c + 0x20 + 4 * g) & 0x1FFFFFFFu; o >= 0x1000u && (rdram[o] & 0x3F) == 0 && g_logoN < 4)
+                        g_logoObj[g_logoN++] = o;
+        }
+        break;
+    }
+    std::fprintf(stderr, "[mainmenu] logo do telao: %d objetos%s\n", g_logoN, g_logoN ? " (some fora do press start)" : ", nao achado");
+}
+
+// A cada quadro do jogo (wotmCaptureFrame, antes da coleta da cena)
+static void logoFrame(uint8_t *rdram)
+{
+    if (!g_enabled)
+        return;
+    const uint32_t telao = rd32(rdram, wotm_padsel::kMovieScreen) & 0x1FFFFFFFu;
+    if (telao < 0x1000u || telao + 0x40 >= PS2_RAM_SIZE)
+        return;
+    if (telao != g_logoTelao)
+        findLogo(rdram, telao);
+    const uint32_t cur = rd32(rdram, wotm::sym::currScreen), last = rd32(rdram, wotm::sym::lastScreen);
+    float a = cur == kPressStart ? 1.f : 0.f;
+    if (rd32(rdram, wotm::sym::betweenScreens))
+    {
+        float t;
+        std::memcpy(&t, rdram + wotm::sym::targetAlpha, 4);
+        t = std::clamp(t, 0.f, 1.f);
+        if (rd32(rdram, wotm::sym::fadingIn_2979))
+            a = cur == kPressStart ? t : 0.f;
+        else if (rd32(rdram, wotm::sym::fadingOut_2980))
+            a = last == kPressStart && last != cur ? t : 0.f;
+    }
+    for (int i = 0; i < g_logoN; ++i)
+        std::memcpy(rdram + g_logoObj[i] + 0x4C, &a, 4);
+}
+
+// A cada quadro (saida das funcoes das telas e do screenTransition): esconde os itens do jogo e publica a lista
+static void frame(uint8_t *rdram)
+{
+    uint32_t screen = 0;
+    float alpha = screenAlpha(rdram, screen);
+    const ScreenDef *d = screenDef(screen);
+    View v;
+    if (d && screen == 5) alpha *= padSelFactor();
+    if (d)
+    {
+        v.screen = d->screen;
+        v.rows = buildRows(rdram, *d, v.row);
+        v.sel = cursorRow(rdram, d->screen, v.row, v.rows);
+        for (int item = 1; item <= d->rows; ++item)
+        {
+            // posicao: os objetos do filho em uso (so ele esta na cena)
+            int k = 0;
+            wotm_padsel::forSwitchObjects(rdram, itemSwitch(rdram, d->screen, item), [&](uint32_t o, bool used) {
+                const float zero = 0.f;
+                std::memcpy(rdram + o + 0x4C, &zero, 4);
+                if (used && k < 4 && v.items < kMaxRows) v.itemObj[v.items][k++] = o;
+            });
+            if (k) ++v.items;
+        }
+        // objetos soltos da tela (shell->m_menuObj[tela][..]): o brilho laranja atras do item escolhido da lista antiga
+        int nObj = 0;
+        for (uint32_t i = 0; i < 90; ++i)
+        {
+            const uint32_t o = rd32(rdram, kShell + 0x6DC + (uint32_t(d->screen) * 90u + i) * 4u) & 0x1FFFFFFFu;
+            if (o < 0x1000u || o + 0x50 >= PS2_RAM_SIZE) break;
+            const float zero = 0.f;
+            std::memcpy(rdram + o + 0x4C, &zero, 4);
+            ++nObj;
+        }
+        static int loggedObj = 0;
+        if (!(loggedObj & (1 << d->screen)))
+        {
+            loggedObj |= 1 << d->screen;
+            std::fprintf(stderr, "[mainmenu] tela %d: %d objetos soltos escondidos (m_menuObj)\n", d->screen, nObj);
+        }
+    }
+    v.on = d && alpha > 0.f;
+    if (rd32(rdram, wotm::sym::currScreen) != 1)
+        g_open = false;
+    g_panel = std::clamp(g_panel + (g_open ? 0.1f : -0.1f), 0.f, 1.f);
+    v.alpha = alpha;
+    v.panel = v.screen == 1 ? g_panel : 0.f;
+    v.tab = g_tab;
+    v.opt = g_optSel[g_tab];
+    v.top = g_top[g_tab];
+    v.bindMap = g_bindMap;
+    v.capture = g_capture;
+    v.screenObj = rd32(rdram, wotm_padsel::kMovieScreen) & 0x1FFFFFFFu;
+    std::lock_guard<std::mutex> lk(g_m);
+    g_view = v;
+}
+
+// Saida de uma funcao do jogo -> frame (mesmo padrao para as telas e o screenTransition)
+#define WOTM_MM_EXIT_HOOK(name, fn, orig, ra, pending)                                \
+    static void name(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)          \
+    {                                                                                 \
+        if (ctx->pc == (fn))                                                          \
+        {                                                                             \
+            ra = GPR_U32(ctx, 31);                                                    \
+            pending = true;                                                           \
+        }                                                                             \
+        orig(rdram, ctx, runtime);                                                    \
+        if (!pending || ctx->pc != ra)                                                \
+            return;                                                                   \
+        pending = false;                                                              \
+        frame(rdram);                                                                 \
+        wotm_optscreen::frame(rdram);                                                 \
+    }
+WOTM_MM_EXIT_HOOK(mainHook, wotm::fn::screenMain__Fv, g_origMain, g_mainRa, g_mainPending)
+WOTM_MM_EXIT_HOOK(optionsHook, wotm::fn::screenOptions__Fv, g_origOptions, g_optionsRa, g_optionsPending)
+WOTM_MM_EXIT_HOOK(modes1Hook, wotm::fn::screenGameModes1P__Fv, g_origModes1P, g_modes1Ra, g_modes1Pending)
+WOTM_MM_EXIT_HOOK(modes2Hook, wotm::fn::screenGameModes2P__Fv, g_origModes2P, g_modes2Ra, g_modes2Pending)
+WOTM_MM_EXIT_HOOK(transitionHook, wotm::fn::screenTransition__Fb, g_origTransition, g_transRa, g_transPending)
+#undef WOTM_MM_EXIT_HOOK
+
+// Telas da lista: cima/baixo movem o cursor (o currentSelection da tela, ou o "recompiled options" da 1); X e triangulo seguem para o
+// jogo. No "recompiled options" o X abre o painel; com ele aberto, so o triangulo (fecha) conta.
+static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    const uint32_t cur = rd32(rdram, wotm::sym::currScreen);
+    if (ctx->pc == wotm::fn::screenGetInput__Fi)
+        wotm_pad::markMenuFrame();   // nos menus (MenuConfirm e icones, wotm_pad.inc)
+    // tela de opcoes do jogo: so a leitura do controle 1 (screenGetInput(1)); a do 2 so troca vibracao e controles, que sairam
+    if (ctx->pc == wotm::fn::screenGetInput__Fi && (screenDef(cur) || (cur == wotm_optscreen::kScreen && GPR_U32(ctx, 4) == 1)))
+    {
+        g_inRa = GPR_U32(ctx, 31);
+        g_inPending = true;
+    }
+    g_origGetInput(rdram, ctx, runtime);
+    if (!g_inPending || ctx->pc != g_inRa)
+        return;
+    g_inPending = false;
+    if (cur == wotm_optscreen::kScreen)
+    {
+        wotm_optscreen::input(rdram, GPR_U32(ctx, 2) & 0xFFFFu);
+        return;
+    }
+    const ScreenDef &d = *screenDef(cur);
+    Row row[kMaxRows];
+    const int rows = buildRows(rdram, d, row);
+    if (rows == 0)
+        return;
+    const uint32_t raw = GPR_U32(ctx, 2), code = raw & 0xFFFFu;
+    uint32_t out = raw;
+    if (cur == 1 && (g_open || g_suppress > 0))
+    {
+        // painel aberto: o jogo nao ve nada (a entrada do painel vem dos dispositivos); fechado ha pouco, o triangulo que fechou
+        // ainda nao pode virar o "voltar" do menu principal
+        out = 0;
+        if (g_open)
+            panelInput(rdram, ctx, runtime);
+        else
+            --g_suppress;
+    }
+    else if (code == 1 || code == 2)
+    {
+        const int r = (cursorRow(rdram, d.screen, row, rows) + (code == 1 ? rows - 1 : 1)) % rows;
+        g_extraRow = d.screen == 1 && row[r].item < 0 ? row[r].item : 0;
+        if (row[r].item > 0)
+            wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(row[r].item));
+        wotm_padsel::sfx(rdram, ctx, runtime, code == 1 ? 2 : 4);
+        out = 0;
+    }
+    else if (code == 6 && cur == 1 && g_extraRow == kQuitRow)
+    {
+        runtime->requestStop();   // o mesmo caminho do X da janela
+        out = 0;
+    }
+    else if (code == 6 && cur == 1 && g_extraRow == kOptionsRow)
+    {
+        openPanel();
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+        out = 0;
+    }
+    ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(out)));
+}
+
+
+// ------------------------------------------------------------------ desenho (janela)
+
+constexpr int kW = 1200, kH = 900;   // textura da lista: kMaxRows linhas de kH / kMaxRows
+static RenderTexture2D g_rt{};
+static Font g_font{};
+static bool g_fontTried = false;
+
+static Font &fallbackFont()
+{
+    if (!g_fontTried)
+    {
+        g_fontTried = true;
+        for (const char *path : {"C:/Windows/Fonts/bahnschrift.ttf", "C:/Windows/Fonts/arialbd.ttf"})
+            if (FileExists(path) && (g_font = LoadFontEx(path, 96, nullptr, 0)).texture.id)
+                break;
+        if (!g_font.texture.id) g_font = GetFontDefault();
+        SetTextureFilter(g_font.texture, TEXTURE_FILTER_BILINEAR);
+    }
+    return g_font;
+}
+static Color gsToRgb(Color c)   // cor na escala do GS (0x80 = 1,0) -> a do raylib
+{
+    auto c8 = [](unsigned char v) { return static_cast<unsigned char>(std::min(255, v * 2)); };
+    return Color{c8(c.r), c8(c.g), c8(c.b), c8(c.a)};
+}
+// Passo de uma letra da fonte do jogo, em pixels de uma textura rw x rh (wotm_padsel::text: 1,6 x a altura em unidades da tela do
+// jogo, mais 2 de espaco)
+static float glyphAdvance(int rw, int rh, float h)
+{
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    const float sx = 640.f / gr.w, sy = 224.f / float(rh);
+    return (1.6f * h * sy + 2.f) / sx;
+}
+static float textWidth(uint64_t tex0, int rw, int rh, const char *s, float h)
+{
+    if (tex0)
+        return glyphAdvance(rw, rh, h) * float(std::strlen(s));
+    return MeasureTextEx(fallbackFont(), s, h, 1.f).x;
+}
+
+// Texto com a fonte do jogo (atlas `tex0`) centrado em (cx, cy), numa textura rw x rh; sem atlas, Bahnschrift do Windows (ou a do
+// raylib). `c` na escala do GS (0x80 = 1,0). A fonte do jogo nao tem ':' (o "16:9"): sai como dois pontos desenhados.
+static void label(std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, uint64_t tex0, const char *s, float cx, float cy, float h, Color c,
+                  int rw = kW, int rh = kH)
+{
+    if (tex0)
+    {
+        char buf[96];
+        std::snprintf(buf, sizeof buf, "%s", s);
+        const size_t n = std::strlen(buf);
+        const float adv = glyphAdvance(rw, rh, h), x0 = cx - adv * float(n) * 0.5f;
+        for (size_t i = 0; i < n; ++i)
+            if (buf[i] == ':')
+            {
+                buf[i] = ' ';
+                const float d = h * 0.16f, x = x0 + adv * (float(i) + 0.5f) - d * 0.5f;
+                DrawRectangleRec(Rectangle{x, cy - h * 0.28f, d, d}, gsToRgb(c));
+                DrawRectangleRec(Rectangle{x, cy + h * 0.12f, d, d}, gsToRgb(c));
+            }
+        wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx, cy, h, c);
+        return;
+    }
+    const Vector2 sz = MeasureTextEx(fallbackFont(), s, h, 1.f);
+    DrawTextEx(fallbackFont(), s, Vector2{cx - sz.x * 0.5f, cy - sz.y * 0.5f}, h, 1.f, gsToRgb(c));
+}
+// O mesmo, alinhado a esquerda em x0
+static void labelLeft(std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, uint64_t tex0, const char *s, float x0, float cy, float h, Color c,
+                      int rw, int rh)
+{
+    label(quads, ram, tex0, s, x0 + textWidth(tex0, rw, rh, s, h) * 0.5f, cy, h, c, rw, rh);
+}
+
+// ------------------------------------------------------------------ painel (textura propria, no telao inteiro)
+constexpr int kPW = 1800, kPH = 1100;   // ~1,64:1, a proporcao do telao (204 x 124)
+static RenderTexture2D g_prt{};
+constexpr Color kLit{121, 118, 111, 0x80}, kDim{88, 56, 34, 0x80};   // escala do GS
+
+static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, const View &v)
+{
+    if (g_prt.id == 0)
+    {
+        g_prt = LoadRenderTexture(kPW, kPH);
+        SetTextureFilter(g_prt.texture, TEXTURE_FILTER_BILINEAR);
+    }
+    const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;   // abas, fio e kVisRows linhas
+    BeginTextureMode(g_prt);
+    ClearBackground(Color{0, 0, 0, 0});
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    std::vector<wotm::TextQuad> q;
+    DrawRectangleRounded(Rectangle{4.f, 4.f, W - 8.f, H - 8.f}, 0.06f, 12, Color{0, 0, 0, 175});
+
+    // abas: L1  VIDEO  FEATURES  CONTROLS  R1
+    const float tabY = lineH * 0.7f, tabH = 50.f;
+    const float tabX[kTabs] = {W * 0.265f, W * 0.50f, W * 0.735f};
+    for (int t = 0; t < kTabs; ++t)
+    {
+        const bool on = t == v.tab;
+        label(q, ram, tex0, kTabNames[t], tabX[t], tabY, tabH, on ? kLit : kDim, kPW, kPH);
+        if (on)
+        {
+            const float w = textWidth(tex0, kPW, kPH, kTabNames[t], tabH);
+            DrawRectangleRec(Rectangle{tabX[t] - w * 0.5f, tabY + tabH * 0.75f, w, 5.f}, gsToRgb(kLit));
+        }
+    }
+    // L1 e R1 com os icones do estilo escolhido (BUTTON ICONS), como a legenda; sem icone (tecla sem desenho), o nome numa moldura
+    auto badge = [&](st::Bind b, float cx) {
+        if (wotm_prompts::drawCell2d(wotm_prompts::cellFor(b), cx, tabY, 92.f, 1.f)) return;
+        const char *s = st::keyName(int(st::kb(b) & 0xFFFF));
+        if (!s) s = b == st::BL1 ? "L1" : "R1";
+        const float bh = 76.f, bw = std::max(130.f, textWidth(tex0, kPW, kPH, s, 42.f) + 50.f);
+        DrawRectangleRoundedLinesEx(Rectangle{cx - bw * 0.5f, tabY - bh * 0.5f, bw, bh}, 0.4f, 8, 3.f, gsToRgb(kDim));
+        label(q, ram, tex0, s, cx, tabY, 42.f, kDim, kPW, kPH);
+    };
+    badge(st::BL1, W * 0.08f);
+    badge(st::BR1, W * 0.92f);
+    DrawRectangleRec(Rectangle{W * 0.04f, lineH * 1.4f, W * 0.92f, 3.f}, Color{90, 80, 66, 120});
+
+    // linhas da aba: nome, valor, dica e se o valor tem setas (escolha na lista)
+    enum { KOpt, KDevice, KReset, KBind, KCapture };
+    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; };
+    PRow rows[kMaxCtlRows];
+    int n = 0;
+    const int tab = std::clamp(v.tab, 0, kTabs - 1);
+    const TabDef &t = kTabDefs[tab];
+    auto optRow = [&](const Opt &o) {
+        char buf[32];
+        valueText(o.key, st::get(o.key), buf, sizeof buf);
+        return PRow{o.label, buf, o.hint, true, KOpt};
+    };
+    if (tab != TabControls)
+        for (int i = 0; i < t.n; ++i) rows[n++] = optRow(t.opt[i]);
+    else
+    {
+        int r[kMaxCtlRows];
+        const int m = ctlRows(v.bindMap < 0, r);
+        const bool blink = std::fmod(GetTime(), 0.8) < 0.5;
+        for (int i = 0; i < m; ++i)
+        {
+            if (r[i] <= kCtlOpt) rows[n++] = optRow(t.opt[kCtlOpt - r[i]]);
+            else if (r[i] == kCtlDevice)
+                rows[n++] = {"BUTTON MAP", kMapNames[v.bindMap + 1], "WHOSE CONTROLS TO CHANGE. EACH PLAYER HAS A GAMEPAD LAYOUT OF THEIR OWN", true, KDevice};
+            else if (r[i] == kCtlReset)
+                rows[n++] = {"RESTORE DEFAULTS", "", (v.bindMap < 0) ? "PUTS EVERY KEY BACK THE WAY IT CAME" : "PUTS EVERY BUTTON BACK THE WAY IT CAME", false, KReset};
+            else if (r[i] == v.capture)
+                rows[n++] = {kBindLabels[r[i]], blink ? ((v.bindMap < 0) ? "PRESS A KEY" : "PRESS A BUTTON") : "",
+                             (v.bindMap < 0) ? "PRESS THE KEY YOU WANT FOR THIS BUTTON" : "PRESS THE BUTTON YOU WANT, ON ANY GAMEPAD", false, KCapture, r[i]};
+            else
+                rows[n++] = {kBindLabels[r[i]], bindValue(r[i], v.bindMap),
+                             (v.bindMap < 0) ? "THE KEY YOU PRESS FOR THIS BUTTON" : "THE GAMEPAD BUTTON YOU PRESS FOR THIS ONE", false, KBind, r[i]};
+        }
+    }
+    // nome a esquerda, valor a direita (setas na selecionada); so kVisRows linhas a partir de v.top
+    const float rowH = 54.f, valX = W * 0.66f, labX = W * 0.10f, dx = W * 0.19f;   // o telao e inclinado: valor perto do nome
+    const int top = std::clamp(v.top, 0, std::max(0, n - kVisRows));
+    for (int i = top; i < std::min(n, top + kVisRows); ++i)
+    {
+        const PRow &pr = rows[i];
+        const float cy = lineH * (2.2f + float(i - top));
+        const bool on = i == v.opt;
+        if (on)
+            DrawRectangleRounded(Rectangle{W * 0.03f, cy - lineH * 0.42f, W * 0.94f, lineH * 0.84f}, 0.5f, 8, Color{60, 50, 40, 130});
+        // botao do PS2: o icone dele no estilo do PS2 (os face buttons do jogo); "L1 AND R1" com os dois; sem icone (analogico), o nome
+        float labW = 0.f;
+        if (pr.bind >= 0)
+        {
+            const float S = 86.f, ia = on ? 1.f : 0.6f;
+            if (pr.bind == st::BL1R1)
+            {
+                if (wotm_prompts::drawCell2d(wotm_prompts::padCell(st::kDefaultPad[st::BL1], st::PromptPs), labX + S * 0.5f, cy, S, ia) &&
+                    wotm_prompts::drawCell2d(wotm_prompts::padCell(st::kDefaultPad[st::BR1], st::PromptPs), labX + S * 1.6f, cy, S, ia))
+                    labW = S * 2.1f;
+            }
+            else if (wotm_prompts::drawCell2d(wotm_prompts::padCell(st::kDefaultPad[pr.bind], st::PromptPs), labX + S * 0.5f, cy, S, ia))
+                labW = S;
+        }
+        if (labW <= 0.f)
+        {
+            labelLeft(q, ram, tex0, pr.label.c_str(), labX, cy, rowH, on ? kLit : kDim, kPW, kPH);
+            labW = textWidth(tex0, kPW, kPH, pr.label.c_str(), rowH);
+        }
+        // fio do nome ao valor: com a inclinacao do telao, guia o olho pela linha
+        const float lx1 = labX + labW + 24.f, lx2 = valX - dx - 36.f;
+        if (lx2 > lx1 && !pr.value.empty())
+            DrawRectangleRec(Rectangle{lx1, cy - 1.f, lx2 - lx1, 2.f}, Color{110, 96, 78, static_cast<unsigned char>(on ? 140 : 70)});
+        // valor longo ("LSHIFT / RSHIFT"): letras menores para caber entre as setas
+        const float vw = textWidth(tex0, kPW, kPH, pr.value.c_str(), rowH), maxW = 2.f * dx - 70.f;
+        const float vh = vw > maxW ? rowH * maxW / vw : rowH;
+        // botao do gamepad: o icone dele no estilo escolhido (no teclado, o do PS2)
+        const int phys = pr.kind == KBind && v.bindMap >= 0 ? st::pad(st::Bind(pr.bind), v.bindMap) : 0;
+        const int style = wotm_prompts::currentStyle();
+        const bool valIcon = phys > 0 && wotm_prompts::drawCell2d(wotm_prompts::padCell(phys, style == st::PromptKeyboard ? st::PromptPs : style), valX, cy,
+                                                                  86.f, on ? 1.f : 0.6f);
+        if (!pr.value.empty() && !valIcon)
+            label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on ? kLit : kDim, kPW, kPH);
+        if (on && pr.arrows)
+        {
+            const Color a = gsToRgb(kLit);
+            const float s = 20.f;
+            DrawTriangle(Vector2{valX - dx - s, cy}, Vector2{valX - dx + s * 0.7f, cy + s}, Vector2{valX - dx + s * 0.7f, cy - s}, a);
+            DrawTriangle(Vector2{valX + dx + s, cy}, Vector2{valX + dx - s * 0.7f, cy - s}, Vector2{valX + dx - s * 0.7f, cy + s}, a);
+        }
+    }
+    // rolagem: setinhas na borda direita quando ha linhas acima ou abaixo
+    {
+        const Color a = gsToRgb(kDim);
+        const float x = W * 0.955f, s = 16.f;
+        if (top > 0)
+        {
+            const float y = lineH * 1.75f;
+            DrawTriangle(Vector2{x, y - s}, Vector2{x - s, y + s * 0.6f}, Vector2{x + s, y + s * 0.6f}, a);
+        }
+        if (top + kVisRows < n)
+        {
+            const float y = lineH * (2.2f + float(kVisRows) - 0.45f);
+            DrawTriangle(Vector2{x, y + s}, Vector2{x + s, y - s * 0.6f}, Vector2{x - s, y - s * 0.6f}, a);
+        }
+    }
+    // dica da opcao selecionada (grande, sobre os carros) e os botoes (legenda de baixo, no lugar da do jogo): wotm_legend.inc, pelo
+    // mapa, como o readPanel le
+    using wotm_legend::Icon;
+    const float la = v.alpha * v.panel;
+    const int kind = v.opt >= 0 && v.opt < n ? rows[v.opt].kind : KOpt;
+    if (v.opt >= 0 && v.opt < n)
+        wotm_legend::hint(rows[v.opt].hint, la);
+    using wotm_legend::bind;
+    const Icon tabs1 = bind(st::BL1), tabs2 = bind(st::BR1), left = bind(st::BLeft), right = bind(st::BRight);
+    const Icon ok = bind(st::BCross), back = bind(st::BTriangle), clear = bind(st::BSquare);
+    if (kind == KCapture)
+    {
+        if (v.bindMap < 0) wotm_legend::post({{Icon{0, "ESC"}, {}, "CANCEL"}}, la);
+        else wotm_legend::post({{{}, {}, "WAIT 5 SECONDS TO CANCEL"}}, la);
+    }
+    else if (kind == KBind)
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, v.bindMap < 0 ? "NEW KEY" : "NEW BUTTON"}, {clear, {}, "CLEAR"}, {back, {}, "BACK"}}, la);
+    else if (kind == KReset)
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, "RESTORE"}, {back, {}, "BACK"}}, la);
+    else
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {back, {}, "BACK"}}, la);
+    scene.drawQuads(q, W, H);
+    EndBlendMode();
+    EndTextureMode();
+}
+
+static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_view;
+    }
+    if (!v.on || v.alpha <= 0.f || v.rows == 0)
+        return;
+    if (g_rt.id == 0)
+    {
+        g_rt = LoadRenderTexture(kW, kH);
+        SetTextureFilter(g_rt.texture, TEXTURE_FILTER_BILINEAR);
+    }
+    constexpr float rowH = float(kH) / kMaxRows;
+    // cores dos itens do telao: aceso creme, apagado laranja terroso (escala do GS)
+    constexpr Color lit{121, 118, 111, 0x80}, dim{88, 56, 34, 0x80};
+    BeginTextureMode(g_rt);
+    ClearBackground(Color{0, 0, 0, 0});
+    rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+    BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+    std::vector<wotm::TextQuad> quads;
+    const float list = 1.f - v.panel;
+    // altura unica das letras: a maior em que a linha mais longa cabe (cada letra da fonte do jogo tem ~0,75 x a altura de largura,
+    // nesta textura, mais o espaco)
+    size_t longest = 1;
+    for (int r = 0; r < v.rows; ++r)
+        longest = std::max(longest, std::strlen(v.row[r].label));
+    const float textH = std::min(rowH * 0.5f, kW * 0.9f / (0.8f * float(longest)));
+    if (list > 0.f)
+    {
+        const float top = (kH - rowH * float(v.rows)) * 0.5f;
+        for (int r = 0; r < v.rows; ++r)
+        {
+            const float cy = top + rowH * (float(r) + 0.5f);
+            const bool on = r == v.sel;
+            if (on)
+                DrawRectangleRounded(Rectangle{kW * 0.04f, cy - rowH * 0.42f, kW * 0.92f, rowH * 0.84f}, 0.5f, 8,
+                                     Color{0, 0, 0, static_cast<unsigned char>(110 * list)});
+            Color c = on ? lit : dim;
+            c.a = static_cast<unsigned char>(0x80 * list);
+            const char *s = v.row[r].label;
+            label(quads, ram, tex0, s, kW * 0.5f, cy, textH, c);
+        }
+    }
+    scene.drawQuads(quads, float(kW), float(kH));
+    EndBlendMode();
+    EndTextureMode();
+    if (v.panel > 0.f)
+        renderPanel(scene, ram, tex0, v);
+}
+
+// Plano do texto de um item (de varios objetos, o de menor altura: o texto, nao o brilho)
+static bool itemPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const uint32_t objs[4], wotm_padsel::Plane &out)
+{
+    bool got = false;
+    wotm_padsel::Plane p;
+    for (int i = 0; i < 4 && objs[i]; ++i)
+        if (wotm_padsel::objectPlane(scene, ram, cam, objs[i], p) && (!got || p.y1 - p.y0 < out.y1 - out.y0))
+        {
+            out = p;
+            got = true;
+        }
+    return got;
+}
+
+// O painel no plano do telao, no telao inteiro (o logo so aparece no "press start"), centrado
+static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v)
+{
+    wotm_padsel::Plane pl;
+    if (!v.on || v.panel <= 0.f || v.alpha <= 0.f || g_prt.id == 0 || !v.screenObj || !wotm_padsel::objectPlane(scene, ram, cam, v.screenObj, pl))
+        return;
+    const float fyTop = 0.03f, fyBottom = 0.97f;   // a camera do painel (frameCamera) mostra o telao inteiro
+    const float hy = (pl.y1 - pl.y0) * (fyBottom - fyTop), wx = std::min(hy * float(kPW) / float(kPH), (pl.x1 - pl.x0) * 0.94f);
+    const float h = wx * float(kPH) / float(kPW);   // largura limitada: a altura acompanha (proporcao da textura)
+    wotm_padsel::drawOnPlane(pl, g_prt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f, wx, h,
+                             v.alpha * v.panel, 0.003f * (pl.x1 - pl.x0));
+}
+
+// A lista no plano dos itens do jogo: do topo do primeiro ao pe do ultimo, centrada na coluna deles. Dentro do BeginMode3D do quadro.
+static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v)
+{
+    if (!v.on || v.alpha <= 0.f || v.items == 0 || g_rt.id == 0)
+        return;
+    wotm_padsel::Plane base, p;
+    if (!itemPlane(scene, ram, cam, v.itemObj[0], base))
+        return;
+    float top = -1e30f, bottom = 1e30f, cx = 0.f, itemH = 0.f;
+    int n = 0;
+    for (int i = 0; i < v.items; ++i)
+    {
+        if (!itemPlane(scene, ram, cam, v.itemObj[i], p))
+            continue;
+        const Vector3 d = wotm_padsel::vsub(p.c, base.c);
+        const float y = wotm_padsel::vdot(d, base.up), h = p.y1 - p.y0;
+        top = std::max(top, y + h * 0.5f);
+        bottom = std::min(bottom, y - h * 0.5f);
+        cx += wotm_padsel::vdot(d, base.right);
+        itemH = std::max(itemH, h);
+        ++n;
+    }
+    if (!n || top <= bottom)
+        return;
+    cx /= float(n);
+    // cada uma das kMaxRows vagas da textura tem a altura do passo dos itens do jogo (o vao dividido por eles); as linhas ficam
+    // centradas no vao
+    const float span = top - bottom, hy = span * float(kMaxRows) / float(n), wx = hy * float(kW) / float(kH);
+    float mid = (top + bottom) * 0.5f;
+    // sem o logo (logoFrame), a lista vai para o centro do telao
+    if (wotm_padsel::Plane tl; g_logoN && v.screenObj && wotm_padsel::objectPlane(scene, ram, cam, v.screenObj, tl))
+    {
+        const Vector3 d = wotm_padsel::vsub(tl.c, base.c);
+        mid = wotm_padsel::vdot(d, base.up) - (tl.y1 - tl.y0) * 0.06f;   // centro da parte visivel (o topo some atras da faixa preta)
+        cx = wotm_padsel::vdot(d, base.right);
+    }
+    static int logged = 0;
+    if (!(logged & (1 << v.screen)))
+    {
+        logged |= 1 << v.screen;
+        std::fprintf(stderr, "[mainmenu] tela %d em texto: %d itens do jogo, vao %.1f, linha %.1f\n", v.screen, n, span, itemH);
+    }
+    wotm_padsel::drawOnPlane(base, g_rt.texture, cx - wx * 0.5f, mid + hy * 0.5f, wx, hy, v.alpha, 0.004f * (base.x1 - base.x0));
+}
+
+static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_view;
+    }
+    drawListOnTelao(scene, ram, cam, v);
+    drawPanelOnTelao(scene, ram, cam, v);
+}
+
+// Camera do quadro com o painel aberto: de frente para o telao, que ocupa a parte de cima do espaco entre as faixas pretas; embaixo
+// ficam os carros, onde vai a dica grande (wotm_legend.inc). v.panel (0..1, a animacao de abrir e fechar) leva da camera do jogo a
+// essa e de volta. Antes do BeginMode3D do quadro; so muda a vista (a cena esta em coordenadas do mundo).
+static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam, float aspect)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_view;
+    }
+    // ida e volta em ~0,45 s, no relogio da janela (o v.panel anda 0,1 por quadro do jogo: rapido demais para a camera)
+    static float s_t = 0.f;
+    static double s_last = 0.0;
+    const double now = GetTime();
+    const float dt = std::clamp(float(now - s_last), 0.f, 0.1f);
+    s_last = now;
+    const bool want = v.on && v.alpha > 0.f && v.panel > 0.f && g_open;
+    s_t = std::clamp(s_t + (want ? dt : -dt) / 0.45f, 0.f, 1.f);
+    wotm_padsel::Plane pl;
+    if (!v.on || s_t <= 0.f || v.alpha <= 0.f || !v.screenObj || !wotm_padsel::objectPlane(scene, ram, cam, v.screenObj, pl))
+    {
+        if (!v.on) s_t = 0.f;
+        return;
+    }
+    using namespace wotm_padsel;
+    // os icones de botao do jogo seguem a camera dele (ficariam soltos na cena com esta): fora enquanto ela nao e a do jogo
+    scene.overlay.clear();
+    scene.hpOverlay.clear();
+    const float t = s_t * s_t * (3.f - 2.f * s_t);
+    const float tanY = std::tan(cam.fovy * DEG2RAD * 0.5f);
+    // telao com 58% da altura da tela, o centro dele a 41% do topo (as faixas pretas tomam 10,7% em cima e embaixo); a camera um pouco
+    // abaixo do centro dele, para os carros aparecerem embaixo
+    constexpr float kHeight = 0.58f, kCenter = 0.41f, kDrop = 0.22f;
+    const float h = pl.y1 - pl.y0, w = pl.x1 - pl.x0;
+    const float d = std::max(h * 0.5f / (tanY * kHeight), w * 0.5f / (tanY * aspect * 0.96f));
+    const Vector3 center = vadd(pl.c, vadd(vscale(pl.right, (pl.x0 + pl.x1) * 0.5f), vscale(pl.up, (pl.y0 + pl.y1) * 0.5f)));
+    const Vector3 pos = vsub(vadd(center, vscale(pl.n, d)), vscale(pl.up, h * kDrop));
+    const Vector3 target = vsub(center, vscale(pl.up, (0.5f - kCenter) * 2.f * tanY * d));   // olha abaixo do centro: o telao sobe
+    // posicao e direcao interpoladas a parte (interpolar o alvo fazia o telao sair de quadro no meio do caminho)
+    auto lerp = [&](const Vector3 &a, const Vector3 &b) { return vadd(a, vscale(vsub(b, a), t)); };
+    const Vector3 f0 = vnorm(vsub(cam.target, cam.position)), f1 = vnorm(vsub(target, pos));
+    cam.position = lerp(cam.position, pos);
+    cam.target = vadd(cam.position, vnorm(lerp(f0, f1)));
+    cam.up = vnorm(lerp(cam.up, pl.up));
+}
+} // namespace wotm_mainmenu
+
+bool wotmTextMenuOn() { return wotm_mainmenu::g_enabled; }
+
+void wotmMainMenuInstall(PS2Runtime &runtime)
+{
+    using namespace wotm_mainmenu;
+    if (!g_enabled)
+        return;
+    struct H { uint32_t addr; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; };
+    const H hooks[] = {
+        {wotm::fn::screenMain__Fv, &g_origMain, &mainHook},
+        {wotm::fn::screenGameModes1P__Fv, &g_origModes1P, &modes1Hook},
+        {wotm::fn::screenGameModes2P__Fv, &g_origModes2P, &modes2Hook},
+        {wotm::fn::screenTransition__Fb, &g_origTransition, &transitionHook},
+        {wotm::fn::screenGetInput__Fi, &g_origGetInput, &getInputHook},
+        {wotm::fn::screenOptions__Fv, &g_origOptions, &optionsHook},
+    };
+    for (const H &h : hooks)
+        if ((*h.orig = runtime.lookupFunction(h.addr)))
+            runtime.registerFunction(h.addr, h.fn);
+    std::fprintf(stderr, "[mainmenu] menus de itens em texto: principal, modos de 1 jogador e do multiplayer (WOTM_TEXTMENU=0 volta aos do jogo)\n");
+}
+
+void wotmMainMenuLogoFrame(uint8_t *rdram) { wotm_mainmenu::logoFrame(rdram); }

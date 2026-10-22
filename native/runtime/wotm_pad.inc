@@ -9,6 +9,8 @@
 //   na coluna dele (g_manualDevs[n], mesmos bits do mapa); os que ficaram de fora nao jogam.
 //   3 e 4 jogadores (WOTM_PLAYERS, wotm_split4.inc): o scePadRead do slot 1 de uma porta (jogadores 3 e 4) chega aqui com a porta
 //   do slot 0 e g_portBase 2; o jogador e porta + base, com o controle de mesma ordem.
+// Teclas e botoes de cada botao do PS2: o mapa do wotm_settings.hpp (aba CONTROLS do painel), instalado no ps2_pad.cpp do fork
+// (g_ps2PadKeyboard, g_ps2PadGamepadButtons); os eixos dos gamepads seguem fixos.
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
@@ -17,7 +19,7 @@ static std::atomic<int> g_portBase{0};
 
 static uint32_t deviceMap(int port)
 {
-    static const bool kbSeparate = [] { const char *e = std::getenv("WOTM_KBSEPARATE"); return e && e[0] == '1'; }();
+    const bool kbSeparate = wotm::settings::on(wotm::settings::KbSeparate);   // opcao ao vivo (wotm_settings.hpp)
     port += g_portBase.load(std::memory_order_relaxed);
     int pads[PS2_PAD_MAX_GAMEPADS];
     int n = 0;
@@ -52,7 +54,80 @@ static uint32_t deviceMap(int port)
     return devs;
 }
 
-static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, true);
+// ------------------------------------------------------------------ mapa de teclas e botoes (wotm_settings.hpp, aba CONTROLS)
+namespace st = wotm::settings;
+inline bool kbDown(st::Bind b)
+{
+    const uint32_t v = st::kb(b);
+    return ((v & 0xFFFF) && IsKeyDown(int(v & 0xFFFF))) || ((v >> 16) && IsKeyDown(int(v >> 16)));
+}
+// Jogador (0..3) que o gamepad `pad` alimenta, pela regra do deviceMap: na escolha manual, a coluna em que ele entrou; senao, a ordem
+// dos conectados. Fora disso (ou sem gamepad), o jogador 1. Escolhe o mapa de botoes dele (wotm_settings.hpp, um por jogador).
+inline int playerOfPad(int pad)
+{
+    if (pad < 0 || pad >= PS2_PAD_MAX_GAMEPADS)
+        return 0;
+    if (g_manual.load(std::memory_order_relaxed))
+    {
+        for (int p = 0; p < 4; ++p)
+            if (g_manualDevs[p].load(std::memory_order_relaxed) & (1u << pad)) return std::min(p, st::kPadPlayers - 1);
+        return 0;
+    }
+    int n = 0;
+    for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
+        if (IsGamepadAvailable(i))
+        {
+            if (i == pad) return std::min(n, st::kPadPlayers - 1);
+            ++n;
+        }
+    return 0;
+}
+inline bool padDown(int pad, st::Bind b, int player)
+{
+    const int btn = st::pad(b, player);
+    return btn > 0 && IsGamepadButtonDown(pad, btn);
+}
+
+static void keyboard(uint16_t &btns, uint8_t *data)
+{
+    for (int b = 0; b < st::kBinds; ++b)
+        if (st::kBindMask[b] && kbDown(st::Bind(b)))
+            btns &= static_cast<uint16_t>(~st::kBindMask[b]);
+    // analogico esquerdo (so com alguma das teclas dele apertada; senao fica o valor do gamepad ou o centro)
+    const bool l = kbDown(st::BStickLeft), r = kbDown(st::BStickRight), u = kbDown(st::BStickUp), d = kbDown(st::BStickDown);
+    if (l != r) data[6] = l ? 0x00 : 0xFF;
+    if (u != d) data[7] = u ? 0x00 : 0xFF;
+}
+// Nos menus: o gancho do screenGetInput (wotm_mainmenu.inc) marca a hora a cada quadro de uma tela do menu
+static std::atomic<double> g_menuTime{-1.0};
+inline void markMenuFrame() { g_menuTime.store(GetTime(), std::memory_order_relaxed); }
+inline bool inMenus() { return GetTime() - g_menuTime.load(std::memory_order_relaxed) < 0.25; }
+// MenuConfirm = 1 nos menus (gamepads): o botao do X passa a dar triangulo (voltar, no jogo), o da bola da X (confirmar) e o do
+// triangulo da bola. Com o mapa padrao: o da direita confirma e o de baixo volta, como nos consoles da Nintendo.
+inline bool menuSwap() { return st::get(st::MenuConfirm) == 1 && inMenus(); }
+// Botao do PS2 que o botao fisico do botao b do mapa produz agora (a troca dos menus)
+inline st::Bind effectiveBind(st::Bind b)
+{
+    if (!menuSwap()) return b;
+    return b == st::BCross ? st::BTriangle : b == st::BCircle ? st::BCross : b == st::BTriangle ? st::BCircle : b;
+}
+// O inverso: qual botao do mapa da o botao do PS2 b agora (os icones mostram esse)
+inline st::Bind sourceBind(st::Bind b)
+{
+    if (!menuSwap()) return b;
+    return b == st::BTriangle ? st::BCross : b == st::BCross ? st::BCircle : b == st::BCircle ? st::BTriangle : b;
+}
+static uint16_t gamepadButtons(int pad)
+{
+    uint16_t m = 0;
+    const int player = playerOfPad(pad);
+    for (int b = 0; b < st::kBinds; ++b)
+        if (st::bindOnPad(st::Bind(b)) && padDown(pad, st::Bind(b), player))
+            m |= st::kBindMask[effectiveBind(st::Bind(b))];
+    return m;
+}
+
+static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons, true);
 }
 
 void wotmPadSetPortBase(int base) { wotm_pad::g_portBase.store(base, std::memory_order_relaxed); }

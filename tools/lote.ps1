@@ -61,6 +61,7 @@ Write-Host "Lote: $total combinacoes de $Secs s (~$([math]::Ceiling($total * ($S
 
 $env:WOTM_REPO = $repo
 $env:WOTM_AIVSAI = '1'
+$env:WOTM_SETTINGS = '0'   # sem o settings.ini do painel/launcher: lote igual em toda maquina
 if ($Check -gt 0) { $env:WOTM_VU1CHECK = [string]$Check } else { Remove-Item Env:WOTM_VU1CHECK -ErrorAction SilentlyContinue }
 $n = 0
 foreach ($c in $combos) {

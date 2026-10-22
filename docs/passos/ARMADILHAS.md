@@ -1,6 +1,6 @@
 # Armadilhas já vistas (decomp NM / build / jogo)
 
-(Dividido de `docs/PROXIMOS_PASSOS.md`; índice lá.)
+(Índice dos docs no `CLAUDE.md`.)
 
 ## Armadilhas já vistas
 - Ao reescrever o fim de um `.cpp` com script, conferir que as linhas `INCLUDE_ASM` finais (static init, `__tf`, ctor, `_GLOBAL_$I$`) continuam lá.

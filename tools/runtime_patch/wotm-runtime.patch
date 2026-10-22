@@ -703,10 +703,10 @@ index ea86a9c..ab90ce3 100644
      std::vector<PendingTransfer> m_pendingVif0Transfers;
      std::vector<PendingTransfer> m_pendingVif1Transfers;
 diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
-index 7755fe6..61163e3 100644
+index 7755fe6..6963896 100644
 --- a/ps2xRuntime/include/runtime/ps2_pad.h
 +++ b/ps2xRuntime/include/runtime/ps2_pad.h
-@@ -4,6 +4,14 @@
+@@ -4,6 +4,22 @@
  #include <cstddef>
  #include <cstdint>
  
@@ -717,6 +717,14 @@ index 7755fe6..61163e3 100644
 +// Mapa porta -> dispositivos, consultado a cada leitura. Sem funcao: porta n = gamepad n, e o teclado na porta 0.
 +using PS2PadDeviceMapFn = uint32_t (*)(int port);
 +extern PS2PadDeviceMapFn g_ps2PadDeviceMap;
++// Mapas trocaveis (o jogo pode deixar o jogador escolher as teclas e os botoes). Sem funcao vale a tabela fixa do ps2_pad.cpp.
++// Botoes do PS2 apertados num gamepad (mascara com 1 = apertado, bits do scePadRead: 0x4000 = X etc.); os eixos seguem fixos.
++using PS2PadGamepadButtonsFn = uint16_t (*)(int pad);
++extern PS2PadGamepadButtonsFn g_ps2PadGamepadButtons;
++// Teclado inteiro: limpa os bits dos botoes apertados em btns (0 = apertado, como no scePadRead) e pode escrever os eixos em data
++// (data[4..7]: direito x/y, esquerdo x/y).
++using PS2PadKeyboardFn = void (*)(uint16_t &btns, uint8_t *data);
++extern PS2PadKeyboardFn g_ps2PadKeyboard;
 +
  class PSPadBackend
  {
@@ -3473,10 +3481,10 @@ index 37b6a4d..a68660f 100644
  int PS2Memory::pollDmaRegisters()
  {
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..635d302 100644
+index 8590f14..b6210f9 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
-@@ -1,6 +1,14 @@
+@@ -1,6 +1,16 @@
  #include "runtime/ps2_pad.h"
  #include "ps2_host_backend.h"
 +#include <algorithm>
@@ -3488,10 +3496,12 @@ index 8590f14..635d302 100644
 +#include <vector>
 +
 +PS2PadDeviceMapFn g_ps2PadDeviceMap = nullptr;
++PS2PadGamepadButtonsFn g_ps2PadGamepadButtons = nullptr;
++PS2PadKeyboardFn g_ps2PadKeyboard = nullptr;
  
  namespace
  {
-@@ -23,9 +31,158 @@ namespace
+@@ -23,9 +33,166 @@ namespace
      constexpr uint16_t PAD_L1 = 0x0400u;
      constexpr uint16_t PAD_R2 = 0x0200u;
      constexpr uint16_t PAD_L2 = 0x0100u;
@@ -3523,9 +3533,12 @@ index 8590f14..635d302 100644
 +            {GAMEPAD_BUTTON_MIDDLE_RIGHT, PAD_START}, {GAMEPAD_BUTTON_MIDDLE_LEFT, PAD_SELECT},
 +            {GAMEPAD_BUTTON_LEFT_THUMB, PAD_L3}, {GAMEPAD_BUTTON_RIGHT_THUMB, PAD_R3},
 +        };
-+        for (const auto &m : kMap)
-+            if (IsGamepadButtonDown(pad, m.button))
-+                btns &= ~m.mask;
++        if (g_ps2PadGamepadButtons)
++            btns &= static_cast<uint16_t>(~g_ps2PadGamepadButtons(pad));
++        else
++            for (const auto &m : kMap)
++                if (IsGamepadButtonDown(pad, m.button))
++                    btns &= ~m.mask;
 +
 +        float lx = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_LEFT_X);
 +        float ly = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_LEFT_Y);
@@ -3571,6 +3584,11 @@ index 8590f14..635d302 100644
 +    //   Q = L1   W = R1   Shift = L1+R1   A = L2   C = R2
 +    void readKeyboard(uint16_t &btns, uint8_t *data)
 +    {
++        if (g_ps2PadKeyboard)
++        {
++            g_ps2PadKeyboard(btns, data);
++            return;
++        }
 +        static const struct { int key; uint16_t mask; } kMap[] = {
 +            {KEY_I, PAD_UP}, {KEY_K, PAD_DOWN}, {KEY_J, PAD_LEFT}, {KEY_L, PAD_RIGHT},
 +            {KEY_SPACE, PAD_CROSS}, {KEY_S, PAD_CIRCLE}, {KEY_Z, PAD_SQUARE}, {KEY_X, PAD_TRIANGLE},
@@ -3651,7 +3669,7 @@ index 8590f14..635d302 100644
  {
      if (!data || size < 32)
          return false;
-@@ -38,86 +195,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+@@ -38,86 +205,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
      data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
  
      uint16_t btns = 0xFFFFu;

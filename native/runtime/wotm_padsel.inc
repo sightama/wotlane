@@ -30,6 +30,7 @@
 // Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
 void wotmMultiSetCostume(int player, uint32_t costume);   // wotm_split4.inc: traje dos jogadores 3 e 4 (o Shell so tem lugar para 2)
+bool wotmTextMenuOn();   // wotm_mainmenu.inc: menu principal em texto (sem o rotulo "multiplayer" daqui)
 
 namespace wotm_padsel
 {
@@ -42,7 +43,7 @@ constexpr uint32_t kShellSound = kShell + 0x2918;
 constexpr uint32_t kMonsterSel = kShell + 0x2938, kCostume = kShell + 0x2BE0, kNumPlayers = kShell + 0x2BB4, kNumAIs = kShell + 0x2BB8,
                    kMode = kShell + 0x2C10, kBattleMode = kShell + 0x2B54, kSw5CC = kShell + 0x5CC, kCostumeBox = kShell + 0x88;
 constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +0, state +4; 4 trajes por coluna
-enum Action { Left, Right, Ok, Back, Start, Up, Down, kActions };
+enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc
 enum Phase { Off, Config, Reveal, Leaving };
 
 // Cores dos jogadores 1 a 4
@@ -117,7 +118,7 @@ static void parseScript()
     const char *e = std::getenv("WOTM_PADSEL_SCRIPT");
     if (!e) return;
     std::string s(e);
-    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down"};
+    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down", "l1", "r1"};
     for (size_t pos = 0; pos < s.size();)
     {
         size_t end = s.find(';', pos);
@@ -145,29 +146,39 @@ static bool present(int d)
     return false;
 }
 
-// Acoes do dispositivo agora
-static void readDevice(int d, bool out[kActions])
+// Acoes do dispositivo agora. bound: pelo mapa de teclas e botoes do jogador (wotm_settings.hpp; os botoes do PS2 X, triangulo, Start,
+// L1, R1, direcional e analogico), como o jogo ve; sem ele, os botoes fisicos do mapa padrao (o painel de opcoes, que nao pode
+// depender de um mapa que ele mesmo muda).
+static void readDevice(int d, bool out[kActions], bool bound = true)
 {
+    namespace st = wotm::settings;
+    using wotm_pad::kbDown;
     if (d == kKb)
     {
-        out[Left] = IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_J);
-        out[Right] = IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_L);
-        out[Up] = IsKeyDown(KEY_UP) || IsKeyDown(KEY_I);
-        out[Down] = IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_K);
-        out[Ok] = IsKeyDown(KEY_SPACE);
-        out[Start] = IsKeyDown(KEY_ENTER);
-        out[Back] = IsKeyDown(KEY_X) || IsKeyDown(KEY_BACKSPACE);
+        out[Left] = kbDown(st::BLeft) || kbDown(st::BStickLeft);
+        out[Right] = kbDown(st::BRight) || kbDown(st::BStickRight);
+        out[Up] = kbDown(st::BUp) || kbDown(st::BStickUp);
+        out[Down] = kbDown(st::BDown) || kbDown(st::BStickDown);
+        out[Ok] = kbDown(st::BCross);
+        out[Start] = kbDown(st::BStart);
+        out[Back] = kbDown(st::BTriangle) || kbDown(st::BSelect);
+        out[L1] = kbDown(st::BL1);
+        out[R1] = kbDown(st::BR1);
     }
     else
     {
         const float lx = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_X), ly = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_Y);
-        out[Left] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || lx < -0.6f;
-        out[Right] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || lx > 0.6f;
-        out[Up] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_UP) || ly < -0.6f;
-        out[Down] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || ly > 0.6f;
-        out[Ok] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
-        out[Start] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_MIDDLE_RIGHT);
-        out[Back] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_UP);
+        const int player = wotm_pad::playerOfPad(d);
+        auto btn = [&](st::Bind b, int fixed) { return bound ? wotm_pad::padDown(d, b, player) : IsGamepadButtonDown(d, fixed); };
+        out[Left] = btn(st::BLeft, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || lx < -0.6f;
+        out[Right] = btn(st::BRight, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || lx > 0.6f;
+        out[Up] = btn(st::BUp, GAMEPAD_BUTTON_LEFT_FACE_UP) || ly < -0.6f;
+        out[Down] = btn(st::BDown, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || ly > 0.6f;
+        out[Ok] = btn(st::BCross, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+        out[Start] = btn(st::BStart, GAMEPAD_BUTTON_MIDDLE_RIGHT);
+        out[Back] = btn(st::BTriangle, GAMEPAD_BUTTON_RIGHT_FACE_UP);
+        out[L1] = btn(st::BL1, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
+        out[R1] = btn(st::BR1, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
     }
     const double now = GetTime();
     for (const ScriptStep &st : g_script)
@@ -254,6 +265,8 @@ static void forSwitchObjects(uint8_t *rdram, uint32_t sw, F f)
 // Na tela 1 (e no fade de saida dela): esconde o "2 player" e publica o objeto em uso, o aceso e o alfa do fade (o do "1 player")
 static void hideTwoPlayerItem(uint8_t *rdram)
 {
+    if (wotmTextMenuOn())   // os itens sao do wotm_mainmenu.inc
+        return;
     const uint32_t cur = rd32(rdram, wotm::sym::currScreen), last = rd32(rdram, wotm::sym::lastScreen);
     const bool betweenOut = rd32(rdram, wotm::sym::betweenScreens) && last == 1;
     uint32_t obj[4] = {}, ref[4] = {};
@@ -988,12 +1001,16 @@ static void drawJoin(const View &v, std::vector<wotm::TextQuad> &quads, const wo
         text(quads, ram, tex0, kW, kH, label, x, ty + s * 1.05f, fitText(label, s * 0.5f, colW * 0.9f), Color{0x80, 0x7A, 0x6C, 0x80}, 1.f);
     }
     g_posInit = true;
-    const char *hint = v.count < 2 ? "CONNECT A CONTROLLER - X TO JOIN"
-                       : v.players >= 2 ? "START TO CONTINUE - LEFT/RIGHT TO SWAP"
-                                        : "X TO JOIN - LEFT/RIGHT TO SWAP";
-    const bool blink = v.players >= 2 && std::fmod(GetTime(), 1.0) > 0.6;
-    if (!blink)
-        text(quads, ram, tex0, kW, kH, hint, W * 0.5f, H * 0.94f, fitText(hint, H * 0.06f, W * 0.95f), Color{0x80, 0x7A, 0x60, 0x80});
+    // botoes: na legenda de baixo, no lugar da do jogo (wotm_legend.inc), com os do mapa (readDevice)
+    namespace st = wotm::settings;
+    using wotm_legend::bind;
+    if (v.count < 2)
+        wotm_legend::post({{{}, {}, "CONNECT A CONTROLLER"}, {bind(st::BCross), {}, "JOIN"}, {bind(st::BTriangle), {}, "BACK"}}, v.alpha);
+    else if (v.players >= 2)
+        wotm_legend::post({{bind(st::BStart), {}, "CONTINUE"}, {bind(st::BLeft), bind(st::BRight), "SWAP"}, {bind(st::BTriangle), {}, "BACK"}},
+                          v.alpha);
+    else
+        wotm_legend::post({{bind(st::BCross), {}, "JOIN"}, {bind(st::BLeft), bind(st::BRight), "SWAP"}, {bind(st::BTriangle), {}, "BACK"}}, v.alpha);
 }
 
 // Selecao de monstros: um quadro por jogador, lado a lado
@@ -1661,11 +1678,15 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         std::fprintf(stderr, "[padsel] telao: no %x, %.1f x %.1f, centro %.1f %.1f %.1f\n", v.screenObj, pl.x1 - pl.x0, pl.y1 - pl.y0, pl.c.x, pl.c.y,
                      pl.c.z);
     }
-    // escolha de controles: abaixo do logo (de 44% a 96% da altura); selecao de monstros: em cima (a tela 6 nao tem o logo e tem a
-    // fileira de retratos embaixo); centrada, com a proporcao da textura
-    const float fyTop = v.select ? 0.06f : 0.44f, fyBottom = v.select ? 0.60f : 0.96f;
+    // escolha de controles: abaixo do logo (de 44% a 96% da altura), ou no telao inteiro com o menu em texto (o wotm_mainmenu.inc
+    // tira o logo fora do "press start"); selecao de monstros: em cima (a tela 6 nao tem o logo e tem a fileira de retratos embaixo);
+    // centrada, com a proporcao da textura (largura limitada: a altura acompanha, centrada na faixa)
+    const bool full = !v.select && wotmTextMenuOn();
+    const float fyTop = v.select ? 0.06f : full ? 0.15f : 0.44f, fyBottom = v.select ? 0.60f : full ? 0.97f : 0.96f;
     const float hy = (pl.y1 - pl.y0) * (fyBottom - fyTop), wx = std::min(hy * float(kW) / float(kH), (pl.x1 - pl.x0) * 0.92f);
-    drawOnPlane(pl, g_rt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop, wx, hy, v.alpha, 0.002f * (pl.x1 - pl.x0));
+    const float h = wx * float(kH) / float(kW);
+    drawOnPlane(pl, g_rt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f, wx, h, v.alpha,
+                0.002f * (pl.x1 - pl.x0));
 }
 } // namespace wotm_padsel
 

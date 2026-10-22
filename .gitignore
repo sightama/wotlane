@@ -8,6 +8,8 @@
 # Saída gerada pelo splat (contém código do jogo)
 asm/
 assets/
+# exceção: arte própria do port, não do jogo (ícones de botão do Kenney, CC0; tools/prompts_atlas.py)
+!native/assets/
 build/
 SCUS_971.97.ld
 SCUS_971.97.d

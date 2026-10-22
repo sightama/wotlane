@@ -14,7 +14,7 @@ keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2
 `tools/vu0native.py`). The game executable (`wotm.exe`) has no emulated VU1, VIF0, VIF1, GS or IOP; those only exist in a separate test executable, the VU1/GS as the reference for the renderer check.
 What is still PS2-specific in the game: [docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md).
 
-The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
+The port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)) is finished; what comes next is in [docs/passos/POS_FRONTEIRA.md](docs/passos/POS_FRONTEIRA.md).
 
 8 Monsters brawling: [https://www.youtube.com/watch?v=IvLLuSYORPc](https://www.youtube.com/watch?v=IvLLuSYORPc).
 

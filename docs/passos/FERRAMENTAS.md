@@ -1,6 +1,6 @@
 # Ferramentas, headers compartilhados e teste diferencial
 
-(Dividido de `docs/PROXIMOS_PASSOS.md`; índice lá.)
+(Índice dos docs no `CLAUDE.md`.)
 
 ## Ferramentas (tools/)
 - `wsl/gate.sh` (build + SHA1, sai com erro se falhar), `wsl/scoreall.sh` (pontuação por função com NON_MATCHING), `wsl/convert_tus.sh`, `wsl/check.sh`,

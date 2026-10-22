@@ -1,6 +1,6 @@
 # Testar o C++ novo no PCSX2 (halfcpp) e bugs achados
 
-(Dividido de `docs/PROXIMOS_PASSOS.md`; índice lá.) O halfcpp foi o primeiro jeito de rodar as equivalentes; hoje o caminho previsto é o runtime cobaia (`NATIVO.md`, "Runtime cobaia", incompleto). O que fica aqui é como montar o ELF e as lições.
+(Índice dos docs no `CLAUDE.md`.) O halfcpp foi o primeiro jeito de rodar as equivalentes; hoje o caminho previsto é o runtime cobaia (`NATIVO.md`, "Runtime cobaia", incompleto). O que fica aqui é como montar o ELF e as lições.
 
 ## Como montar e rodar o halfcpp
 - O ROM do build normal é idêntico ao retail (equivalentes ficam como `INCLUDE_ASM`). `sh tools/wsl/build_nm.sh` (WSL) compila uma cópia em `~/wotm_nm` com `-DNON_MATCHING` e grava `build/pcsx2_test/SCUS_971.97_halfcpp.elf` (todas as equivalentes) e `..._control_matching.elf` (controle). Ambos com `p_paddr = p_vaddr` (o PCSX2 carrega por `p_paddr`). Variantes com um subconjunto de TUs/funções: argumentos do `build_nm.sh` (ex.: `a_update` só com `Monster::update`).

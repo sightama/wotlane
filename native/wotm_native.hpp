@@ -439,6 +439,13 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
 // kGsAlphaNoTest: TEST_1 com ATE = 0 (sem teste: o GS desenha todo pixel, inclusive As = 0; os brilhos aditivos 0x5040C dependem disso).
 inline constexpr int16_t kGsAlphaRef = 8, kGsAlphaNoTest = -1;
 
+// Icones de botao 2D no lugar dos objetos 3D do McButtons (Scene::drawButtonSprites; o runtime instala, runtime/wotm_prompts.inc). id = o do
+// objeto (0x1F51.. ou 0x240E..); mid = centro no mundo; right/up = eixos da camera; size = lado no mundo; alpha = fade. Desenha dentro
+// do modo 3D do quadro. g_buttonIconsOn: se os 2D valem agora (opcao do jogador); sem funcao, os 3D do jogo.
+using ButtonIconFn = void (*)(uint16_t id, const float mid[3], const float right[3], const float up[3], float size, float alpha);
+inline ButtonIconFn g_buttonIconFn = nullptr;
+inline bool (*g_buttonIconsOn)() = nullptr;
+
 struct DrawItem {
     M4 m;
     uint32_t node;   // HierObject
@@ -457,6 +464,7 @@ struct DrawItem {
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
+    uint16_t btnId = 0;   // so em overlay/hpOverlay: id do icone de botao (Scene::drawButtonSprites)
     uint32_t cs = 0;      // _cs cuja travessia emitiu o objeto (0 na fase, como o cs_): receptor de sombra (psObjectCull)
     int16_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState; kGsAlphaNoTest = sem teste)
     bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
@@ -2424,12 +2432,55 @@ public:
         if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas
         rlDrawRenderBatchActive();
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
-        drawList(ram, overlay, wire, -1, true);
+        const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
+        if (!sprites2d) drawList(ram, overlay, wire, -1, true);
         drawList(ram, hud, wire, -1);   // HUD por ultimo, na ordem da travessia
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
         g_premulShader = false;
+        if (sprites2d) drawButtonSprites(ram, overlay);
+    }
+
+    // Icones de botao 2D (g_buttonIconFn) no lugar dos objetos 3D do McButtons: um por _cs, no centro dos triangulos dele, do tamanho
+    // do maior lado na tela (eixos da camera), com o fade do screenSetButtonAlpha (+0x4C do objeto, como o fadeByNode). Dentro do modo
+    // 3D do quadro, sem profundidade.
+    void drawButtonSprites(const Ram &ram, const std::vector<DrawItem> &list) {
+        if (list.empty()) return;
+        const Matrix mv = rlGetMatrixModelview();
+        const float right[3] = {mv.m0, mv.m4, mv.m8}, up[3] = {mv.m1, mv.m5, mv.m9};
+        struct Acc { uint32_t cs; uint16_t id; float lo[2], hi[2], c[3]; int n; float alpha; };
+        std::vector<Acc> acc;
+        for (const DrawItem &it : list) {
+            const MeshData *md = mesh(ram, it.node);
+            if (!md || md->tris.empty()) continue;
+            Acc *a = nullptr;
+            for (Acc &x : acc) if (x.cs == it.cs) a = &x;
+            if (!a) { acc.push_back({it.cs, it.btnId, {1e30f, 1e30f}, {-1e30f, -1e30f}, {0, 0, 0}, 0, 0.f}); a = &acc.back(); }
+            a->alpha = std::max(a->alpha, std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) * it.fade);
+            for (const Vtx &v : md->tris) {
+                float w[3];
+                xform(it.m, v.x, v.y, v.z, w);
+                const float pr = w[0] * right[0] + w[1] * right[1] + w[2] * right[2], pu = w[0] * up[0] + w[1] * up[1] + w[2] * up[2];
+                a->lo[0] = std::min(a->lo[0], pr); a->hi[0] = std::max(a->hi[0], pr);
+                a->lo[1] = std::min(a->lo[1], pu); a->hi[1] = std::max(a->hi[1], pu);
+                for (int k = 0; k < 3; ++k) a->c[k] += w[k];
+                ++a->n;
+            }
+        }
+        rlDisableDepthTest();
+        for (const Acc &a : acc) {
+            if (!a.n || a.alpha <= 0.f) continue;
+            const float c[3] = {a.c[0] / float(a.n), a.c[1] / float(a.n), a.c[2] / float(a.n)};
+            // centro: o meio da caixa nos eixos da camera, na profundidade media
+            const float cr = c[0] * right[0] + c[1] * right[1] + c[2] * right[2], cu = c[0] * up[0] + c[1] * up[1] + c[2] * up[2];
+            const float dr = (a.lo[0] + a.hi[0]) * 0.5f - cr, du = (a.lo[1] + a.hi[1]) * 0.5f - cu;
+            const float mid[3] = {c[0] + right[0] * dr + up[0] * du, c[1] + right[1] * dr + up[1] * du, c[2] + right[2] * dr + up[2] * du};
+            const float size = std::max(a.hi[0] - a.lo[0], a.hi[1] - a.lo[1]);
+            g_buttonIconFn(a.id, mid, right, up, size, a.alpha);
+        }
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
     }
 
     // Lista de alta prioridade (`hp`), com a camera 3D do quadro ligada: na frente da camera, por cima do que ja esta na tela, sem
@@ -2440,11 +2491,13 @@ public:
         const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();
         drawList(ram, hp, wire, -1);
-        drawList(ram, hpOverlay, wire, -1, true);
+        const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
+        if (!sprites2d) drawList(ram, hpOverlay, wire, -1, true);
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
         g_premulShader = false;
+        if (sprites2d) drawButtonSprites(ram, hpOverlay);
     }
 
     // Translucido: textura com alfa parcial ou vertices de alfa baixo. Esses vao no segundo passe (tras para frente, sem escrever profundidade).
@@ -3890,9 +3943,12 @@ private:
         cs_ = savedCs;
         if (hpList_ && needDrawMe && !isHud) {   // lista de alta prioridade: passada propria (ver `hp`)
             std::vector<DrawItem> &dst = isButtonId(id) ? hpOverlay : hp;
+            if (isButtonId(id))
+                for (size_t i = before; i < items.size(); ++i) items[i].btnId = uint16_t(id);
             dst.insert(dst.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
         } else if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
+            for (size_t i = before; i < items.size(); ++i) items[i].btnId = uint16_t(id);
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
         } else if (isHud) {   // HUD: por cima da cena (ver `hud`), com o id para a checagem
