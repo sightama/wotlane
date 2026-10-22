@@ -625,6 +625,7 @@ class Launcher : Form
         if (c is ComboBox)
         {   // tema escuro nativo do Windows (o das caixas de arquivo): legivel tambem desabilitado, ao contrario do FlatStyle com cores
             c.BackColor = InputColor;
+            c.ForeColor = FgColor;   // o padrao da ComboBox e WindowText (nao ControlText): os itens da lista aberta saiam pretos
             Control cc = c;
             EventHandler theme = delegate { try { SetWindowTheme(cc.Handle, "DarkMode_CFD", null); } catch (Exception) { } };
             if (c.IsHandleCreated) theme(c, EventArgs.Empty);
