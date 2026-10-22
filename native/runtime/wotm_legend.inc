@@ -1,9 +1,9 @@
 // wotm_legend.inc: desenho da legenda de baixo e da dica grande que o wotm_padsel.inc e o wotm_mainmenu.inc publicam (wotm_legend::post
-// e hint, no wotm_prompts.inc). Incluido por wotm_live.inc depois do wotm_optscreen.inc (fonte Oswald) e chamado no quadro, antes dos
+// e hint, no wotm_prompts.inc). Incluido por wotm_live.inc depois do wotm_optscreen.inc e chamado no quadro, antes dos
 // fades do jogo, em pixels do quadro (rw x rh).
 //   - Legenda: uma faixa preta por cima da do jogo (a legenda dele, "X SELECT  TRIANGULO BACK", some atras) com icones 2D do
 //     atlas do Kenney e o texto na fonte do jogo, centrada como a dele.
-//   - Dica: o texto da opcao selecionada do painel, em Oswald, reto na tela, sobre os carros abaixo do telao (a camera do painel
+//   - Dica: o texto da opcao selecionada do painel, na fonte do jogo, reto na tela, sobre os carros abaixo do telao (a camera do painel
 //     deixa essa faixa livre: wotm_mainmenu::frameCamera).
 namespace wotm_legend
 {
@@ -81,10 +81,10 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
     scene.drawQuads(q, rw, rh);
 }
 
-// Quebra `s` em ate duas linhas que caibam em maxW
-static int wrap(const Font &f, const std::string &s, float size, float maxW, std::string out[2])
+// Quebra `s` em ate duas linhas de no maximo `maxChars` letras (a fonte do jogo e monoespacada), no espaco mais perto do meio
+static int wrap(const std::string &s, size_t maxChars, std::string out[2])
 {
-    if (MeasureTextEx(f, s.c_str(), size, 1.f).x <= maxW)
+    if (s.size() <= maxChars)
     {
         out[0] = s;
         return 1;
@@ -103,41 +103,47 @@ static int wrap(const Font &f, const std::string &s, float size, float maxW, std
     return 2;
 }
 
-static void drawHint(float rw, float rh)
+// A dica com a fonte do jogo (a mesma da lista do menu), centrada na faixa sobre os carros, com uma faixa escura atras
+static void drawHint(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, float rw, float rh)
 {
     const float a = std::clamp(g_hintAlpha, 0.f, 1.f);
     const std::string s = g_hint;
     g_hint.clear();
     g_hintAlpha = 0.f;
-    const Font *f = wotm_optscreen::font();
-    if (s.empty() || a <= 0.f || !f)
+    if (s.empty() || a <= 0.f || !tex0)
         return;
     const wotm::GsScreenRect gr = wotm::gsScreenRect(rw, rh);
+    const int irw = int(rw), irh = int(rh);
     const float maxW = gr.w * 0.86f;
-    float size = rh * 0.05f;
+    float th = rh * 0.03f;
+    const float adv = wotm_mainmenu::glyphAdvance(irw, irh, th);
     std::string line[2];
-    int n = wrap(*f, s, size, maxW, line);
-    for (int i = 0; i < n; ++i)   // linha longa demais mesmo quebrada: letras menores
-        size = std::min(size, size * maxW / std::max(1.f, MeasureTextEx(*f, line[i].c_str(), size, 1.f).x));
-    const float lineH = size * 1.08f, cy = rh * 0.815f, top = cy - lineH * float(n) * 0.5f;
-    // sombra larga atras do texto (os carros sao claros em partes)
+    const int n = wrap(s, size_t(std::max(8.f, maxW / adv)), line);
     float wmax = 0.f;
-    for (int i = 0; i < n; ++i) wmax = std::max(wmax, MeasureTextEx(*f, line[i].c_str(), size, 1.f).x);
-    const float padX = size * 0.8f, padY = size * 0.25f;
+    for (int i = 0; i < n; ++i) wmax = std::max(wmax, wotm_mainmenu::textWidth(tex0, irw, irh, line[i].c_str(), th));
+    if (wmax > maxW)   // linha longa demais mesmo quebrada: letras menores
+    {
+        th *= maxW / wmax;
+        wmax = maxW;
+    }
+    const float lineH = th * 1.9f, cy = rh * 0.815f, top = cy - lineH * float(n) * 0.5f;
+    const float padX = th * 1.6f, padY = th * 0.5f;
     DrawRectangleRounded(Rectangle{gr.x0 + gr.w * 0.5f - wmax * 0.5f - padX, top - padY, wmax + padX * 2.f, lineH * float(n) + padY * 2.f}, 0.35f, 8,
-                         Color{0, 0, 0, static_cast<unsigned char>(150.f * a)});
+                         Color{0, 0, 0, static_cast<unsigned char>(160.f * a)});
+    std::vector<wotm::TextQuad> q;
+    const Color shadow{0, 0, 0, static_cast<unsigned char>(0x70 * a)}, fill{121, 118, 111, static_cast<unsigned char>(0x80 * a)};   // escala do GS
     for (int i = 0; i < n; ++i)
     {
-        const Vector2 sz = MeasureTextEx(*f, line[i].c_str(), size, 1.f);
-        const Vector2 p{gr.x0 + gr.w * 0.5f - sz.x * 0.5f, top + lineH * float(i) + (lineH - sz.y) * 0.5f};
-        DrawTextEx(*f, line[i].c_str(), Vector2{p.x + size * 0.04f, p.y + size * 0.05f}, size, 1.f, Color{0, 0, 0, static_cast<unsigned char>(200.f * a)});
-        DrawTextEx(*f, line[i].c_str(), p, size, 1.f, Color{236, 226, 204, static_cast<unsigned char>(255.f * a)});
+        const float x = gr.x0 + gr.w * 0.5f, y = top + lineH * (float(i) + 0.5f);
+        wotm_padsel::text(q, ram, tex0, irw, irh, line[i].c_str(), x + th * 0.08f, y + th * 0.1f, th, shadow);
+        wotm_padsel::text(q, ram, tex0, irw, irh, line[i].c_str(), x, y, th, fill);
     }
+    scene.drawQuads(q, rw, rh);
 }
 
 static void draw(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, int rw, int rh)
 {
-    drawHint(float(rw), float(rh));
+    drawHint(scene, ram, tex0, float(rw), float(rh));
     drawLegend(scene, ram, tex0, float(rw), float(rh));
 }
 } // namespace wotm_legend

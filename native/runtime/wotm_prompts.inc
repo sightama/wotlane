@@ -80,11 +80,12 @@ static bool loadFace()
     std::fprintf(stderr, "[prompts] face buttons do jogo carregados (SHELL.TEX 163)\n");
     return true;
 }
-// Recorte do face button `cell` (kFaceBase + i) na textura, ja virado
+// Recorte do face button `cell` (kFaceBase + i) na textura, para o DrawTexturePro: altura negativa vira a imagem (o recorte fica no
+// mesmo lugar)
 static Rectangle faceSrc(int cell)
 {
     const int *q = kFaceQuad[cell - kFaceBase];
-    return Rectangle{float(q[0]), float(q[1] + 32), 32.f, -32.f};
+    return Rectangle{float(q[0]), float(q[1]), 32.f, -32.f};
 }
 
 // Ultimo dispositivo usado (thread da janela, uma vez por quadro): teclado ou o gamepad n
@@ -201,7 +202,7 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
     if (face)
     {
         const Rectangle r = faceSrc(cell);
-        u0 = r.x / 64.f; u1 = (r.x + r.width) / 64.f; v0 = r.y / 64.f; v1 = (r.y + r.height) / 64.f;
+        u0 = r.x / 64.f; u1 = (r.x + r.width) / 64.f; v0 = (r.y + 32.f) / 64.f; v1 = r.y / 64.f;   // virado: a linha de baixo em cima
     }
     else
     {
