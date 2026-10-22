@@ -488,6 +488,21 @@ static uint64_t fontTex0(const std::vector<wotm::TextQuad> &text)
 } // namespace wotm_photo
 
 bool wotmPhotoActive() { return wotm_photo::g_phase != wotm_photo::Phase::Off; }
+// Camera livre de debug (F5, wotm_freecam.inc): a mesma legenda de icones no lugar da linha de texto
+static void wotmFreeCamLegend(const wotm_freecam::View &v)
+{
+    using wotm_legend::Icon;
+    if (!v.on || v.photo) return;
+    const bool pad = g_wotmFreeCamPad.load(std::memory_order_relaxed);
+    wotm_legend::post({{Icon{0, "WASD"}, {}, "MOVE"},
+                       {Icon{0, "Q"}, Icon{0, "E"}, "HEIGHT"},
+                       {Icon{0, "MOUSE_RIGHT"}, {}, "LOOK"},
+                       {Icon{0, "LSHIFT"}, Icon{0, "LCTRL"}, "FAST SLOW"},
+                       {Icon{0, "MOUSE_SCROLL"}, {}, "SPEED"},
+                       {Icon{0, "TAB"}, {}, pad ? "PAD TO CAMERA" : "PAD TO GAME"},
+                       {Icon{0, "F5"}, {}, "EXIT"}},
+                      1.f, 0.8f);
+}
 // Apresentacao, todo quadro (wotmFotoKeys): se o desenho nativo parou de chamar o update (tela sem cena nativa), o modo foto sai e o
 // jogo volta, em vez de ficar pausado sem legenda
 void wotmPhotoWatchdog()

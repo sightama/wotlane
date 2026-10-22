@@ -1391,6 +1391,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     wotm_freecam::View freeView = wotm_photo::update(S.snap.cam);
     if (!freeView.on)
         freeView = wotm_freecam::update(S.snap.cam);
+    wotmFreeCamLegend(freeView);   // F5: controles na legenda de icones
     const wotm::GameCamera gameCam = S.snap.cam;
     if (freeView.override)
         S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose, freeView.zoom);
@@ -1735,8 +1736,6 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
     }
 
-    if (!freeView.photo)
-        wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5); o modo foto usa a legenda
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),

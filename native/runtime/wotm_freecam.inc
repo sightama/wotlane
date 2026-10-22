@@ -140,15 +140,5 @@ static wotm::GameCamera camera(const wotm::GameCamera &gc, const WotmFreeCamPose
     return c;
 }
 
-static void overlay(const View &v)
-{
-    if (!v.on)
-        return;
-    char line[200];
-    std::snprintf(line, sizeof line, "FREE CAMERA (F5 exits)  WASD/QE move, Shift/Ctrl, wheel: speed %.0f  |  right button/arrows look  |  Tab: pad %s%s",
-                  speed, g_wotmFreeCamPad.load(std::memory_order_relaxed) ? "GOES TO THE GAME" : "blocked", v.override ? "  |  paused: no HUD" : "");
-    const int fs = 18, x = 10, y = GetScreenHeight() - fs - 10;
-    DrawText(line, x + 1, y + 1, fs, BLACK);
-    DrawText(line, x, y, fs, SKYBLUE);
-}
 } // namespace wotm_freecam
+// Os controles aparecem na legenda de icones de baixo (wotmFreeCamLegend, wotm_photo.inc)
