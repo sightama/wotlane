@@ -547,6 +547,10 @@ static std::vector<wotm::TextQuad> g_pendingPolys;
 // Barras de vida e energia sobre os inimigos (mod WOTM_ENEMYBARS, wotmBarRect) desde a ultima captura: vao para o comeco dos
 // retangulos do quadro (os fades saem por cima).
 static std::vector<wotm::ScreenRect> g_pendingBars;
+// Icones de vida desde a ultima captura (wotmHudAnchor): o ponto do mundo e o centro na tela; g_barAnchor = o do icone cujas barras
+// estao saindo agora (wotmBarRect/wotmBarTex o gravam em ScreenRect::anchor)
+static std::vector<wotm::HudAnchor> g_pendingAnchors;
+static int g_barAnchor = -1;
 // colorQuad dos pick-ups destacados como o enableHighlights os deixou, antes do hier (Scene::csColorAtDraw); a captura os passa a coleta.
 static std::vector<wotm::Scene::CsColorAtDraw> g_pendingCsColor;
 static std::atomic<int> g_shellFade{-1};
@@ -828,14 +832,35 @@ constexpr size_t kMaxPendingBars = 2048;
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a)
 {
     if (wotm_live::g_pendingBars.size() < kMaxPendingBars)
-        wotm_live::g_pendingBars.push_back(wotm::ScreenRect{x0, y0, x1, y1, r, g, b, a, false, static_cast<int8_t>(g_barView)});
+    {
+        wotm::ScreenRect s{x0, y0, x1, y1, r, g, b, a, false, static_cast<int8_t>(g_barView)};
+        s.anchor = static_cast<int16_t>(wotm_live::g_barAnchor);
+        wotm_live::g_pendingBars.push_back(s);
+    }
 }
+// Icone de vida sobre um monstro (thread do EE, gancho do Hud::drawHealthIcon): ponto do mundo projetado (world, nullptr = sem) e
+// centro do icone na tela do jogo. Com bars, as barras que saem a seguir levam o indice (ate wotmHudAnchor(..., false) de novo).
+void wotmHudAnchor(const uint8_t *rdram, float cx, float cy, const float *world, bool bars)
+{
+    wotm_live::g_barAnchor = -1;
+    if (!world || !std::isfinite(world[0]) || !std::isfinite(world[1]) || !std::isfinite(world[2]) || wotm_live::g_pendingAnchors.size() >= 64)
+        return;
+    wotm::HudAnchor h;
+    h.x = cx;
+    h.y = cy;
+    for (int i = 0; i < 3; ++i) h.w[i] = world[i];
+    h.view = static_cast<int8_t>(std::min<uint32_t>(wotm::Ram{rdram, PS2_RAM_SIZE}.u32(wotm::sym::viewCurView), 3u));
+    if (bars) wotm_live::g_barAnchor = static_cast<int>(wotm_live::g_pendingAnchors.size());
+    wotm_live::g_pendingAnchors.push_back(h);
+}
+void wotmHudAnchorEnd() { wotm_live::g_barAnchor = -1; }
 // Retangulo com textura residente do .RTX (retrato do inimigo): tex0 da imagem e o trecho (u0, v0)-(u1, v1) em texels
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1)
 {
     if (wotm_live::g_pendingBars.size() < kMaxPendingBars)
     {
         wotm::ScreenRect s{x0, y0, x1, y1, 255, 255, 255, 0x80, false, static_cast<int8_t>(g_barView)};   // tinta branca, opaco
+        s.anchor = static_cast<int16_t>(wotm_live::g_barAnchor);
         s.tex0 = tex0;
         s.u0 = u0;
         s.v0 = v0;
@@ -989,6 +1014,8 @@ void wotmCaptureFrame(const uint8_t *rdram)
     wotm_live::g_pendingState.clear();
     std::vector<wotm::TextQuad> polys;
     polys.swap(wotm_live::g_pendingPolys);
+    std::vector<wotm::HudAnchor> anchors;
+    anchors.swap(wotm_live::g_pendingAnchors);
     std::vector<wotm::Scene::CsColorAtDraw> csColor;
     csColor.swap(wotm_live::g_pendingCsColor);
     wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
@@ -1060,6 +1087,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
             vs->fxRam = sn.fxRam;
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
+    sn.anchors = std::move(anchors);
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
@@ -1189,6 +1217,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 #include "wotm_mainmenu.inc"
 #include "wotm_optscreen.inc"   // tela de opcoes do jogo com o texto redesenhado (depois do wotm_mainmenu.inc)
 #include "wotm_legend.inc"   // legenda de baixo e dica grande dos menus nativos (depois do wotm_optscreen.inc: fonte)
+#include "wotm_photo.inc"    // modo foto (F9 ou L3 + R3; depois do wotm_legend.inc: legenda)
 
 double wotmThreadCpuMs();   // ps2_hostprof.cpp: CPU da thread atual (usuario + kernel)
 
@@ -1333,7 +1362,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // muda, entao a apresentacao coleta de novo, uma vez por quadro pausado, sem o recorte (o resto do instantaneo fica o mesmo).
     {
         static uint32_t uncullG = ~0u;
-        if (S.snap.valid && g_wotmFreeCam.load(std::memory_order_relaxed) && wotmPaused() && S.snap.g != uncullG)
+        if (S.snap.valid && (g_wotmFreeCam.load(std::memory_order_relaxed) || wotmPhotoActive()) && wotmPaused() && S.snap.g != uncullG)
         {
             uncullG = S.snap.g;
             static wotm::Scene rc;
@@ -1347,6 +1376,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             un.screenRects = S.snap.screenRects;
             un.screenPolys = S.snap.screenPolys;
             un.flares = S.snap.flares;
+            un.anchors = S.snap.anchors;
             un.cam = S.snap.cam;
             S.snap = std::move(un);
             fresh = true;
@@ -1357,10 +1387,15 @@ static bool wotmDrawNative(const uint8_t *rdram)
     if (!S.snap.cam.ok)
         return false;
     // camera livre pausada: o show ja recebe a pose (olho das faces de tras, neblina, sprites), e a cena perde o que segue a camera do jogo
-    const wotm_freecam::View freeView = wotm_freecam::update(S.snap.cam);
+    // modo foto (F9, L3 + R3) no lugar da camera livre de debug enquanto estiver ligado
+    wotm_freecam::View freeView = wotm_photo::update(S.snap.cam);
+    if (!freeView.on)
+        freeView = wotm_freecam::update(S.snap.cam);
     const wotm::GameCamera gameCam = S.snap.cam;
     if (freeView.override)
-        S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose);
+        S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose, freeView.zoom);
+    const wotm::GameCamera freeCam = S.snap.cam;
+    const bool photoHide = freeView.override && freeView.photo && freeView.hideHud;
     // Redesenho: so com quadro novo do jogo (ou instantaneo novo da camera livre), fade do Shell::FadeScreen mudando, camera livre
     // pausada ou janela redimensionada; parado sem quadro novo (pausa, lacos sem captura) volta a redesenhar a ~60/s. Nas outras
     // apresentacoes (monitor acima de 60 Hz, initPresentRate) a ultima imagem e so reapresentada: o custo fica o de 60 e o texId 0
@@ -1445,7 +1480,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 drawView(S.vrts[v], S.scene.show(*S.snap.views[v - 1]));
         gc = S.scene.show(S.snap);
         S.snap.cam = gameCam;
-        if (freeView.override)
+        if (freeView.override && freeView.photo)
+            wotm_photo::applyToScene(S.scene, ram, gameCam, freeCam, freeView, S.snap.anchors, !S.snap.vctx.full());
+        else if (freeView.override)
             wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
         if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(r))
             S.scene.screenRects.push_back(r);
@@ -1532,6 +1569,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.scene.splitEdges = split;
         if (!wotm_live::liveText(S.scene.text))   // texto do jogo (menu de pausa, HUD): ganchos da fonte (wotm::FontText)
             S.scene.updateText(ram);              // replay: sprites do GS lidos do fontPacket do instantaneo
+        const uint64_t fontTex0 = wotm_photo::fontTex0(S.scene.text);   // a legenda escreve com ele mesmo sem texto no quadro
+        if (photoHide)
+            S.scene.text.clear();   // modo foto com o HUD escondido
         S.scene.drawQuads(S.scene.screenPolys, static_cast<float>(RW), static_cast<float>(RH));   // HUD do ScreenPolys (icone de vida)
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH), true);   // fades despachados antes do texto
         if (!split)
@@ -1547,11 +1587,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
-        wotm_legend::draw(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0, RW, RH);   // legenda e dica dos menus nativos
+        wotm_legend::draw(S.scene, ram, fontTex0, RW, RH);   // legenda e dica dos menus nativos e do modo foto
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
-        if (!split)
+        if (!split && !photoHide)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
         EndTextureMode();
+        wotm_photo::afterRender();   // modo foto: grava o quadro pedido (saiu sem a legenda)
         s_drawMs[split ? 1 : 0] += (GetTime() - tDraw0) * 1000.0;
         s_drawCpu[split ? 1 : 0] += wotmThreadCpuMs() - cpuDraw0;   // passos de 15,6 ms no Windows: so vale na media
         ++s_drawN[split ? 1 : 0];
@@ -1694,7 +1735,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
     }
 
-    wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5)
+    if (!freeView.photo)
+        wotm_freecam::overlay(freeView);   // linha de ajuda da camera livre (F5); o modo foto usa a legenda
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
         std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),
@@ -1745,6 +1787,8 @@ bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { retu
 void wotmBarRect(float, float, float, float, uint8_t, uint8_t, uint8_t, uint8_t) {}
 void wotmBarTex(float, float, float, float, uint64_t, float, float, float, float) {}
 float wotmHealthIconShift(const uint8_t *, float) { return 0.f; }
+void wotmHudAnchor(const uint8_t *, float, float, const float *, bool) {}
+void wotmHudAnchorEnd() {}
 void wotmShellFade(const uint8_t *, int, uint32_t, uint32_t, uint32_t, int, int, int, bool) {}
 void wotmShellFadeStep() {}
 void wotmShellFadeStepDone() {}

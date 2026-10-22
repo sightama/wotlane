@@ -577,6 +577,16 @@ struct ScreenRect {
     // Barra com textura residente (retrato do inimigo, wotmBarTex): TEX0 da imagem do .RTX (0 = cor lisa) e o trecho em texels
     uint64_t tex0 = 0;
     float u0 = 0.f, v0 = 0.f, u1 = 0.f, v1 = 0.f;
+    // Barra: indice em Snapshot::anchors do icone de vida que ela substitui (-1 = nenhum); o modo foto a leva junto com a cabeca
+    int16_t anchor = -1;
+};
+
+// Icone de vida sobre um monstro (Hud::drawHealthIcon): o ponto do mundo que o jogo projetou (cabeca) e o centro do icone na tela do
+// jogo (640 x 224) como saiu. O modo foto (wotm_photo.inc) reprojeta o ponto com a camera dele e desloca as barras e o icone.
+struct HudAnchor {
+    float x = 0.f, y = 0.f;   // centro na tela do jogo
+    float w[3] = {0.f, 0.f, 0.f};
+    int8_t view = 0;
 };
 
 // Centro (pixels do GS, viewGetCenter) e tamanho (viewGetWH) da vista `view`, do viewDef dela.
@@ -769,6 +779,7 @@ struct Snapshot {
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (readScreenPolys: no takeSnapshot e no hook do dmaData)
+    std::vector<HudAnchor> anchors;        // ponto do mundo de cada icone de vida do quadro (barras e icone seguem a camera no modo foto)
     ParaLights lights;
     Fog fog;
     GameCamera cam;

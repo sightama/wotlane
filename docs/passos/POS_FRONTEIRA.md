@@ -384,7 +384,9 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
   5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
-- **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
+- **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;
+  HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.
+  Falta o dono conferir ao vivo. Limite: só os flares que estavam na tela na hora da pausa.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros está em
   "Pendências contínuas", abaixo.
 - **Ícones de botão presos no mundo: feito em 2026-10-22** (`d9fd7fa`, `wotm_menu.inc`): depois do Start antecipado no menu

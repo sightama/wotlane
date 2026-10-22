@@ -63,6 +63,8 @@ void wotmScreenPoly(const uint8_t *rdram, int src, int x, int y, uint32_t pd);  
 bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd, float box[4]);   // wotm_live.inc: caixa do quadrado, sem monta-lo
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: retangulo das barras
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: retrato
+void wotmHudAnchor(const uint8_t *rdram, float cx, float cy, const float *world, bool bars);   // wotm_live.inc: icone de vida (modo foto)
+void wotmHudAnchorEnd();
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
@@ -1681,6 +1683,8 @@ namespace
     bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
     float g_barRawX = 0.f;       // x projetado da cabeca (pixels do GS), antes do limite do drawHealthIcon
     bool g_barRawOk = false;
+    float g_barWorld[3] = {};    // o ponto do mundo que o drawHealthIcon projetou (modo foto: barras e icone seguem a camera)
+    bool g_anchorDone = true;    // o icone deste drawHealthIcon ja foi anotado (wotmHudAnchor)
 
     float barFrac(uint8_t *rdram, uint32_t cur, uint32_t max)
     {
@@ -1896,19 +1900,27 @@ namespace
             g_barMonster = on ? GPR_U32(ctx, 5) & 0x1FFFFFFFu : 0u;
             g_barDone = false;
             g_barRawOk = false;
+            g_anchorDone = false;
         }
         g_origDrawHealthIcon(rdram, ctx, runtime);
+        g_anchorDone = true;
+        wotmHudAnchorEnd();
     }
 
     // mathfTransform3dTo2d(vista, ponto, saida) chamado do drawHealthIcon: guarda o x antes do limite da vista 4:3
     void xform2dBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t ra = GPR_U32(ctx, 31), out = GPR_U32(ctx, 6) & 0x1FFFFFFFu;
-        const bool mine = ctx->pc == kXform2d && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize && ramOk(out, 8u);
+        const uint32_t ra = GPR_U32(ctx, 31), out = GPR_U32(ctx, 6) & 0x1FFFFFFFu, in = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+        const bool mine = ctx->pc == kXform2d && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize && ramOk(out, 8u) &&
+                          ramOk(in, 12u);
+        float world[3] = {};
+        if (mine)
+            std::memcpy(world, rdram + in, 12);   // antes da chamada: a saida pode ser o mesmo vetor
         g_origXform2dBars(rdram, ctx, runtime);
         if (mine && ctx->pc == ra)
         {
             std::memcpy(&g_barRawX, rdram + out, 4);
+            std::memcpy(g_barWorld, world, 12);
             g_barRawOk = true;
         }
     }
@@ -1916,8 +1928,16 @@ namespace
     void addPolyBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t ra = GPR_U32(ctx, 31);
-        if (ctx->pc != kAddPoly || ra < kDrawHealthIcon || ra >= kDrawHealthIcon + kDrawHealthIconSize || !g_barMonster)
+        const bool fromIcon = ctx->pc == kAddPoly && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize;
+        if (!fromIcon || !g_barMonster)
         {
+            // icone do jogo (sem barras): anota o centro e o ponto do mundo, para o modo foto o levar junto com a camera
+            float box[4];
+            if (fromIcon && !g_anchorDone && g_barRawOk &&
+                wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)), static_cast<int>(GPR_U32(ctx, 6)),
+                                  GPR_U32(ctx, 7), box))
+                wotmHudAnchor(rdram, 0.5f * (box[0] + box[2]), 0.5f * (box[1] + box[3]), g_barWorld, false);
+            if (fromIcon) g_anchorDone = true;
             g_origAddPolyBars(rdram, ctx, runtime);
             return;
         }
@@ -1952,7 +1972,10 @@ namespace
                     box[2] -= x0;
                 }
             }
+            wotmHudAnchor(rdram, 0.5f * (box[0] + box[2]), 0.5f * (box[1] + box[3]), g_barRawOk ? g_barWorld : nullptr, true);
+            g_anchorDone = true;
             emitBars(rdram, g_barMonster, box);
+            wotmHudAnchorEnd();
         }
         g_barDone = true;
         ctx->pc = ra;   // o quadrado do icone nao e montado
