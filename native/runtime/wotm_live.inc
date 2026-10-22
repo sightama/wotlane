@@ -1476,10 +1476,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_live::g_stage = "idle";
             EndTextureMode();
         };
+        // tela dividida: os flares de cada vista depois de todas desenhadas (Scene::deferFlares; o teste de oclusao espera a GPU)
+        wotm::GameCamera viewCam[4]{};
+        S.scene.deferFlares = split;
         for (int v = 1; v < 4; ++v)
             if (viewOk[v])
-                drawView(S.vrts[v], S.scene.show(*S.snap.views[v - 1]));
+                drawView(S.vrts[v], viewCam[v] = S.scene.show(*S.snap.views[v - 1]));
         gc = S.scene.show(S.snap);
+        viewCam[0] = gc;
         S.snap.cam = gameCam;
         if (freeView.override && freeView.photo)
             wotm_photo::applyToScene(S.scene, ram, gameCam, freeCam, freeView, S.snap.anchors, !S.snap.vctx.full());
@@ -1507,7 +1511,30 @@ static bool wotmDrawNative(const uint8_t *rdram)
         RenderTexture2D &rt = S.rts[S.cur];
 
         if (split)
+        {
             drawView(S.vrts[0], gc);
+            for (int v = 0; v < 4; ++v)
+            {
+                if (!viewOk[v])
+                    continue;
+                const wotm::Snapshot &sn = v ? *S.snap.views[v - 1] : S.snap;
+                const wotm::GameCamera &vc = viewCam[v];
+                BeginTextureMode(S.vrts[v]);
+                rlSetClipPlanes(0.5, 30000.0);
+                Camera3D vc3{};
+                vc3.position = {vc.pos[0], vc.pos[1], vc.pos[2]};
+                vc3.target = {vc.pos[0] + vc.fwd[0], vc.pos[1] + vc.fwd[1], vc.pos[2] + vc.fwd[2]};
+                vc3.up = {vc.up[0], vc.up[1], vc.up[2]};
+                vc3.fovy = vc.fovy;
+                vc3.projection = CAMERA_PERSPECTIVE;
+                BeginMode3D(vc3);
+                static wotm::AsyncDepth depth[4];   // profundidade da vista sem esperar a GPU (a do redesenho anterior)
+                S.scene.drawFlaresFor(ram, sn.flares, sn.vctx, &depth[v]);
+                EndMode3D();
+                EndTextureMode();
+            }
+        }
+        S.scene.deferFlares = false;
         // textura da escolha de lados (fora do BeginTextureMode do quadro); a fonte e o atlas do texto do quadro anterior
         wotm_padsel::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
         wotm_mainmenu::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
@@ -1532,7 +1559,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
         c3.fovy = gc.fovy;
         c3.projection = CAMERA_PERSPECTIVE;
         if (!split)
+        {
             wotm_mainmenu::frameCamera(S.scene, ram, c3, static_cast<float>(RW) / static_cast<float>(RH));   // painel aberto: telao de frente
+            wotm_padsel::frameCamera(S.scene, ram, c3, static_cast<float>(RW) / static_cast<float>(RH));     // selecao de 3 e 4: idem
+        }
         if (split)
         {
             // as metades (ou quadrantes) copiadas como estao (alfa do GS incluido, como na apresentacao) e a faixa preta do

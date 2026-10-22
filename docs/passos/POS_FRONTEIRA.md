@@ -358,6 +358,15 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   all sem CPU, direto ao "first to", e uma seleção de monstros nativa no telão no lugar da tela 6; a tela dividida de 3 e 4 fica sempre
   instalada. Conferido pelo roteiro de pad do boot à luta de 4. Pendentes: controles de verdade nos jogadores 3 e 4; CPU junto com
   3 ou 4 jogadores; eliminação e minigames com 3 ou mais. Testado e descartado com o dono: 5 a 8 jogadores (câmera compartilhada).
+- **Relato de 2026-10-22 (colaborador, jogando com 3):** corrigidos o indicador de fúria/special do jogador 3 no HUD do jogador 1
+  (animações do HUD por vista, `wotm_split4.inc`), a volta da seleção de monstros que prendia na tela 6, e a seleção redesenhada com o
+  monstro 3D de cada jogador e texto legível (`NATIVO.md`, "Menu multijogador de 2 a 4"). **Custo, medido num Ryzen 3 3200G + RX 570:**
+  o redesenho nativo de 3 vistas caiu de ~60 para ~36 ms (o teste de oclusão do lens flare lia a profundidade com `glReadPixels`
+  síncrono em cada vista; agora os flares das vistas vêm depois de todas, com a profundidade do redesenho anterior por PBO). A lógica
+  continua a 30 com 3 e 4 jogadores nessa CPU: o `hier(v, 0)` do jogo custa ~4 ms por vista (2P: quadro de ~17 ms, já no limite; 3P:
+  ~21 ms), medido por marcas de tempo no quadro (a captura nativa é ~0,3 ms por vista). Pendente: baratear o `hier` por vista (a
+  montagem dos pacotes do VU1 não serve ao desenho nativo) e o desenho nativo por vista (~12 ms de CPU por quadrante, contra ~7 ms
+  da tela cheia).
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.

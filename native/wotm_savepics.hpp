@@ -319,6 +319,8 @@ private:
     std::vector<detail::Packet> texPk_, rtxPk_;
     Texture2D level_[std::size(kLevelPics)]{}, logo_[std::size(kLogoPics)]{};
     bool tried_ = false, ok_ = false;
+
+public:   // enquadramento tambem usado pela selecao de monstros de 3 e 4 jogadores (wotm_padsel.inc)
     // Monstro 3D: virado 3/4 para a direita da tela (yaw 0 = de frente), camera um pouco acima
     static constexpr float kYaw = 35.f, kPitch = 8.f;
     // Correcao do enquadramento por monstro e traje (costume 0-3; -1 = todos). O automatico usa a maior medida da caixa, entao a cauda
@@ -343,6 +345,8 @@ private:
             if (f.mon == mon && (f.costume < 0 || f.costume == costume)) return f;
         return Framing{mon, -1, 1.f, 0.f, 0.f};
     }
+
+private:
     std::unique_ptr<model::Model> model_;
     model::Renderer renderer_;
     model::FxTextures fx_;

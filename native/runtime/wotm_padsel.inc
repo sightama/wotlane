@@ -639,7 +639,8 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
             setManual(false);
             std::fprintf(stderr, "[padsel] escolha de controles\n");
         }
-        if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 6 && g_multi && !g_selOn)
+        // de volta a tela 6 (do "first to" ou da selecao de fase): uma selecao anterior que ainda constava como saindo recomeca
+        if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 6 && g_multi && (!g_selOn || g_selLeaving))
             selectBegin(rdram);
         g_transRa = GPR_U32(ctx, 31);
         g_transPending = true;
@@ -741,6 +742,13 @@ static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const uint32_t cur = rd32(rdram, wotm::sym::currScreen);
+    // a selecao de 3 e 4 terminou de sair: a tela seguinte (o "first to" ou a selecao de fase) ja le a entrada. O screenTransition nao
+    // ve o fim da transicao (o betweenScreens zera fora dele) e a selecao ficava como "saindo" (na volta a tela 6 nao recomecava).
+    if (ctx->pc == wotm::fn::screenGetInput__Fi && g_selOn && g_selLeaving && cur != 6 && rd32(rdram, wotm::sym::betweenScreens) == 0)
+    {
+        g_selOn = g_selLeaving = false;
+        publish(rdram);
+    }
     if (ctx->pc == wotm::fn::screenGetInput__Fi && (cur == 5 || cur == 6))
     {
         if (cur == 5 && g_inject)
@@ -1013,46 +1021,203 @@ static void drawJoin(const View &v, std::vector<wotm::TextQuad> &quads, const wo
         wotm_legend::post({{bind(st::BCross), {}, "JOIN"}, {bind(st::BLeft), bind(st::BRight), "SWAP"}, {bind(st::BTriangle), {}, "BACK"}}, v.alpha);
 }
 
-// Selecao de monstros: um quadro por jogador, lado a lado
-static void drawSelect(const View &v, std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, uint64_t tex0)
+// Fonte da selecao: a Oswald embutida no executavel (recurso FONT_OSWALD do native/wotm.rc, a da tela de opcoes); sem ela, a do raylib
+static Font g_uiFont{};
+static bool g_uiFontTried = false;
+static const Font &uiFont()
 {
-    constexpr float W = kW, H = kH;
-    const int n = v.selPlayers, cols = n > 4 ? (n + 1) / 2 : n, rows = n > 4 ? 2 : 1;
-    const float pad = W * 0.012f, boxW = (W - pad * float(cols + 1)) / float(cols), boxH = (H * 0.86f - pad * float(rows + 1)) / float(rows);
-    for (int p = 0; p < n; ++p)
+    if (!g_uiFontTried)
     {
-        const Color c = kPlayerColors[p];
-        const float x = pad + float(p % cols) * (boxW + pad), y = pad + float(p / cols) * (boxH + pad);
-        const Rectangle box{x, y, boxW, boxH};
-        DrawRectangleRounded(box, 0.1f, 8, Color{0, 0, 0, 150});
-        DrawRectangleRoundedLinesEx(box, 0.1f, 8, v.selReady[p] ? 7.f : 4.f, Color{c.r, c.g, c.b, 230});
-        const float cx = x + boxW * 0.5f;
-        char label[32];
-        std::snprintf(label, sizeof label, "PLAYER %d", p + 1);
-        text(quads, ram, tex0, kW, kH, label, cx, y + boxH * 0.13f, fitText(label, boxH * 0.11f, boxW * 0.9f), gsColor(c));
-        const char *name = monsterName(v.selMonster[p]);
-        text(quads, ram, tex0, kW, kH, name, cx, y + boxH * 0.40f, fitText(name, boxH * 0.17f, boxW * 0.7f), Color{0x80, 0x7A, 0x6C, 0x80});
-        if (!v.selReady[p])
+        g_uiFontTried = true;
+        void *mod = GetModuleHandleA(nullptr);
+        void *res = FindResourceA(mod, "FONT_OSWALD", reinterpret_cast<const char *>(static_cast<uintptr_t>(10)));   // RT_RCDATA
+        void *h = res ? LoadResource(mod, res) : nullptr;
+        const unsigned char *data = h ? static_cast<const unsigned char *>(LockResource(h)) : nullptr;
+        const int size = res ? static_cast<int>(SizeofResource(mod, res)) : 0;
+        if (data && size > 0)
+            g_uiFont = LoadFontFromMemory(".ttf", data, size, 128, nullptr, 0);
+        if (g_uiFont.texture.id)
         {
-            const float ah = boxH * 0.12f;
-            text(quads, ram, tex0, kW, kH, "<", x + boxW * 0.08f, y + boxH * 0.40f, ah, gsColor(c));
-            text(quads, ram, tex0, kW, kH, ">", x + boxW * 0.92f, y + boxH * 0.40f, ah, gsColor(c));
+            GenTextureMipmaps(&g_uiFont.texture);
+            SetTextureFilter(g_uiFont.texture, TEXTURE_FILTER_TRILINEAR);
         }
-        // trajes: um ponto por traje aberto, o escolhido cheio
-        char cos[24];
-        std::snprintf(cos, sizeof cos, "COSTUME %d", v.selCostume[p] + 1);
-        text(quads, ram, tex0, kW, kH, cos, cx, y + boxH * 0.62f, fitText(cos, boxH * 0.08f, boxW * 0.9f), Color{0x70, 0x68, 0x58, 0x80}, 1.f);
-        if (v.selReady[p])
+        else
         {
-            DrawRectangleRounded(Rectangle{x + boxW * 0.15f, y + boxH * 0.74f, boxW * 0.7f, boxH * 0.17f}, 0.4f, 6, Color{c.r, c.g, c.b, 200});
-            text(quads, ram, tex0, kW, kH, "READY", cx, y + boxH * 0.825f, fitText("READY", boxH * 0.1f, boxW * 0.6f), Color{0x10, 0x10, 0x10, 0x80});
+            std::fprintf(stderr, "[padsel] fonte FONT_OSWALD nao esta no executavel: selecao com a fonte do raylib\n");
+            g_uiFont = GetFontDefault();
         }
     }
-    bool all = n > 0;
-    for (int p = 0; p < n; ++p)
+    return g_uiFont;
+}
+// Texto centrado em (cx, cy) com contorno escuro, encolhido para caber em `maxW`
+static void outlined(const char *s, float cx, float cy, float size, float maxW, Color fill, float alpha = 1.f)
+{
+    const Font &f = uiFont();
+    Vector2 sz = MeasureTextEx(f, s, size, size * 0.04f);
+    if (sz.x > maxW && sz.x > 0.f)
+    {
+        size *= maxW / sz.x;
+        sz = MeasureTextEx(f, s, size, size * 0.04f);
+    }
+    const Vector2 at{cx - sz.x * 0.5f, cy - sz.y * 0.5f};
+    const unsigned char a = static_cast<unsigned char>(255.f * std::clamp(alpha, 0.f, 1.f));
+    const float o = std::max(2.f, size * 0.05f);
+    for (int k = 0; k < 8; ++k)
+    {
+        const float ang = float(k) * 0.785398f;
+        DrawTextEx(f, s, Vector2{at.x + std::cos(ang) * o, at.y + std::sin(ang) * o}, size, size * 0.04f, Color{12, 8, 4, a});
+    }
+    DrawTextEx(f, s, at, size, size * 0.04f, Color{fill.r, fill.g, fill.b, a});
+}
+
+// Monstro 3D de cada jogador na selecao (o mesmo desenho da lista de saves: wotm_model.hpp, enquadramento do wotm_savepics.hpp), no
+// RenderTexture do proprio Renderer, animado no idle desde a ultima troca. Os modelos ficam guardados por monstro e traje (trocar de
+// volta nao rele o disco).
+struct SelModel
+{
+    wotm::model::Renderer ren;
+    uint32_t id = ~0u;   // monstro | traje << 8
+    double t0 = 0.0;
+    bool ready = false;
+};
+static SelModel g_selModel[kMaxPlayers];
+static std::map<uint32_t, std::unique_ptr<wotm::model::Model>> g_selCache;
+static wotm::model::FxTextures g_selFx;
+static bool g_selFxTried = false;
+constexpr int kSelPW = 1800, kSelPH = 1100;   // textura da selecao: o telao inteiro (~1,64:1), visto de frente (frameCamera)
+static RenderTexture2D g_selRt{};
+
+static const wotm::model::Model *selModel(uint32_t id)
+{
+    if (auto it = g_selCache.find(id); it != g_selCache.end())
+        return it->second.get();
+    static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    const char *pre = wotm::savepics::monsterFile(id & 0xFF);
+    std::unique_ptr<wotm::model::Model> m;
+    if (pre)
+    {
+        m = std::make_unique<wotm::model::Model>();
+        const std::string iso = io.cdImage.string();
+        if (m->load(io.cdRoot, iso, pre + std::to_string((id >> 8) & 3)) || m->load(io.cdRoot, iso, std::string(pre) + "0"))
+            m->computeFraming(wotm::model::kIdle);   // caixa fixa: a camera nao acompanha o idle
+        else
+        {
+            std::fprintf(stderr, "[padsel] MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, (id >> 8) & 3);
+            m.reset();
+        }
+    }
+    return (g_selCache[id] = std::move(m)).get();
+}
+
+// Antes do BeginTextureMode da selecao: o monstro de cada jogador no RenderTexture dele (w x h)
+static void renderSelModels(const View &v, int w, int h)
+{
+    if (!g_selFxTried)
+    {
+        g_selFxTried = true;
+        static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        g_selFx.load(io.cdRoot, io.cdImage.string());
+    }
+    const double now = GetTime();
+    for (int p = 0; p < kMaxPlayers; ++p)
+    {
+        SelModel &s = g_selModel[p];
+        s.ready = false;
+        if (p >= v.selPlayers)
+            continue;
+        const uint32_t id = (v.selMonster[p] >> 5) | uint32_t(v.selCostume[p] & 3) << 8;
+        if (id != s.id)
+        {
+            s.id = id;
+            s.t0 = now;
+        }
+        const wotm::model::Model *m = selModel(id);
+        if (!m)
+            continue;
+        auto *mm = const_cast<wotm::model::Model *>(m);
+        const float frame = float((now - s.t0) * 60.0);
+        if (!mm->pose(wotm::model::kIdle, frame))
+            mm->pose(-1, 0.f);
+        using D = wotm::savepics::Drawer;
+        const D::Framing fr = D::framingOf(id);
+        s.ren.setFx(&g_selFx);
+        s.ren.shiftX = fr.shiftX;
+        s.ren.shiftY = fr.shiftY;
+        // de frente, virado um pouco para o centro da tela (os da esquerda para a direita e vice-versa)
+        const float yaw = v.selPlayers > 1 ? 30.f - 60.f * float(p) / float(v.selPlayers - 1) : 0.f;
+        s.ren.render(*m, w, h, yaw, 8.f, fr.zoom * 0.95f, [] {});
+        s.ready = true;
+    }
+}
+
+// Selecao de monstros: um quadro por jogador, lado a lado, no telao inteiro. Cada quadro: o numero do jogador em cima, o monstro 3D,
+// o nome com as setas, os trajes (um ponto por traje aberto) e o "READY".
+static void drawSelect(const View &v)
+{
+    constexpr float W = kSelPW, H = kSelPH;
+    const int n = std::max(1, v.selPlayers);
+    const float pad = W * 0.012f, top = H * 0.02f, bottom = H * 0.88f;
+    const float boxW = (W - pad * float(n + 1)) / float(n), boxH = bottom - top;
+    const Color kName{246, 238, 220, 255};
+    for (int p = 0; p < v.selPlayers; ++p)
+    {
+        const Color c = kPlayerColors[p];
+        const float x = pad + float(p) * (boxW + pad), y = top, cx = x + boxW * 0.5f;
+        const Rectangle box{x, y, boxW, boxH};
+        DrawRectangleRounded(box, 0.06f, 8, Color{0, 0, 0, 200});
+        DrawRectangleRounded(Rectangle{x, y, boxW, boxH * 0.12f}, 0.4f, 8, Color{c.r, c.g, c.b, 220});
+        DrawRectangleRoundedLinesEx(box, 0.06f, 8, v.selReady[p] ? 10.f : 5.f, Color{c.r, c.g, c.b, 240});
+        char label[16];
+        std::snprintf(label, sizeof label, "P%d", p + 1);
+        outlined(label, cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
+        // monstro: do topo do quadro ate o nome
+        const SelModel &s = g_selModel[p];
+        if (s.ready)
+        {
+            const Texture2D &mt = s.ren.target().texture;
+            const Rectangle dst{x + boxW * 0.03f, y + boxH * 0.13f, boxW * 0.94f, boxH * 0.60f};
+            rlDrawRenderBatchActive();
+            BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);   // cor pre-multiplicada (Renderer)
+            DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)}, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
+            EndBlendMode();
+            BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+        }
+        const char *name = monsterName(v.selMonster[p]);
+        const float nameY = y + boxH * 0.79f;
+        outlined(name, cx, nameY, boxH * 0.085f, boxW * (v.selReady[p] ? 0.94f : 0.72f), kName);
+        if (!v.selReady[p])
+        {
+            outlined("<", x + boxW * 0.08f, nameY, boxH * 0.09f, boxW, c);
+            outlined(">", x + boxW * 0.92f, nameY, boxH * 0.09f, boxW, c);
+        }
+        // trajes: um ponto por traje aberto, o escolhido cheio
+        const int open = std::max(1, v.selCostumes[p]);
+        const float r = std::min(boxH * 0.018f, boxW * 0.04f), step = r * 3.2f, dotsY = y + boxH * 0.885f;
+        for (int k = 0; k < open; ++k)
+        {
+            const Vector2 at{cx + (float(k) - 0.5f * float(open - 1)) * step, dotsY};
+            DrawCircleV(at, r + 3.f, Color{12, 8, 4, 255});
+            DrawCircleV(at, r, k == v.selCostume[p] ? kName : Color{90, 80, 70, 255});
+        }
+        if (v.selReady[p])
+        {
+            const Rectangle band{x + boxW * 0.08f, y + boxH * 0.40f, boxW * 0.84f, boxH * 0.13f};
+            DrawRectangleRounded(band, 0.4f, 6, Color{c.r, c.g, c.b, 235});
+            outlined("READY", cx, band.y + band.height * 0.5f, band.height * 0.75f, band.width * 0.9f, kName);
+        }
+    }
+    bool all = v.selPlayers > 0;
+    for (int p = 0; p < v.selPlayers; ++p)
         all = all && v.selReady[p];
-    const char *hint = all ? "GET READY" : "LEFT/RIGHT MONSTER - UP/DOWN COSTUME - X READY";
-    text(quads, ram, tex0, kW, kH, hint, W * 0.5f, H * 0.94f, fitText(hint, H * 0.06f, W * 0.95f), Color{0x80, 0x7A, 0x60, 0x80});
+    namespace st = wotm::settings;
+    using wotm_legend::bind;
+    if (all)
+        outlined("GET READY", W * 0.5f, H * 0.94f, H * 0.07f, W * 0.9f, Color{246, 238, 220, 255});
+    wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"},
+                       {bind(st::BUp), bind(st::BDown), "COSTUME"},
+                       {bind(st::BCross), {}, "READY"},
+                       {bind(st::BTriangle), {}, "BACK"}},
+                      v.alpha);
 }
 
 // Escolha desenhada na textura propria (antes do BeginTextureMode do quadro). `tex0` = atlas da fonte do quadro anterior.
@@ -1071,6 +1236,25 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         g_posInit = false;
         return;
     }
+    if (v.select)
+    {
+        if (g_selRt.id == 0)
+        {
+            g_selRt = LoadRenderTexture(kSelPW, kSelPH);
+            SetTextureFilter(g_selRt.texture, TEXTURE_FILTER_BILINEAR);
+        }
+        const int n = std::max(1, v.selPlayers);
+        // o RenderTexture do monstro com ~1,3 x o tamanho dele na textura da selecao
+        renderSelModels(v, int(float(kSelPW) / float(n) * 0.94f * 1.3f), int(float(kSelPH) * 0.86f * 0.60f * 1.3f));
+        BeginTextureMode(g_selRt);
+        ClearBackground(Color{0, 0, 0, 0});
+        rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+        drawSelect(v);
+        EndBlendMode();
+        EndTextureMode();
+        return;
+    }
     if (g_rt.id == 0)
     {
         g_rt = LoadRenderTexture(kW, kH);
@@ -1082,10 +1266,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
     rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
     BeginBlendMode(BLEND_CUSTOM_SEPARATE);
     std::vector<wotm::TextQuad> quads;
-    if (v.select)
-        drawSelect(v, quads, ram, tex0);
-    else
-        drawJoin(v, quads, ram, tex0, dt);
+    drawJoin(v, quads, ram, tex0, dt);
     scene.drawQuads(quads, float(kW), float(kH));
     EndBlendMode();
     EndTextureMode();
@@ -1180,6 +1361,51 @@ static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float
     rlEnableDepthMask();
     rlEnableDepthTest();
     EndBlendMode();
+}
+
+// Camera de frente para o telao `pl`, a fracao `s` (0..1, suavizada) do caminho entre a do jogo e ela: telao com 58% da altura da
+// tela, o centro dele a 41% do topo (as faixas pretas tomam 10,7% em cima e embaixo); a camera um pouco abaixo do centro dele, para os
+// carros aparecerem embaixo. Painel "recompiled options" (wotm_mainmenu.inc) e selecao de monstros de 3 e 4.
+static void telaoCamera(Camera3D &cam, const Plane &pl, float aspect, float s)
+{
+    const float t = s * s * (3.f - 2.f * s);
+    const float tanY = std::tan(cam.fovy * DEG2RAD * 0.5f);
+    constexpr float kHeight = 0.58f, kCenter = 0.41f, kDrop = 0.22f;
+    const float h = pl.y1 - pl.y0, w = pl.x1 - pl.x0;
+    const float d = std::max(h * 0.5f / (tanY * kHeight), w * 0.5f / (tanY * aspect * 0.96f));
+    const Vector3 center = vadd(pl.c, vadd(vscale(pl.right, (pl.x0 + pl.x1) * 0.5f), vscale(pl.up, (pl.y0 + pl.y1) * 0.5f)));
+    const Vector3 pos = vsub(vadd(center, vscale(pl.n, d)), vscale(pl.up, h * kDrop));
+    const Vector3 target = vsub(center, vscale(pl.up, (0.5f - kCenter) * 2.f * tanY * d));   // olha abaixo do centro: o telao sobe
+    // posicao e direcao interpoladas a parte (interpolar o alvo fazia o telao sair de quadro no meio do caminho)
+    auto lerp = [&](const Vector3 &a, const Vector3 &b) { return vadd(a, vscale(vsub(b, a), t)); };
+    const Vector3 f0 = vnorm(vsub(cam.target, cam.position)), f1 = vnorm(vsub(target, pos));
+    cam.position = lerp(cam.position, pos);
+    cam.target = vadd(cam.position, vnorm(lerp(f0, f1)));
+    cam.up = vnorm(lerp(cam.up, pl.up));
+}
+
+// Selecao de monstros de 3 e 4: a camera vai ao telao em ~0,45 s (no fade de entrada) e volta na saida, como a do painel. Antes do
+// BeginMode3D do quadro (wotm_live.inc).
+static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam, float aspect)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_view;
+    }
+    static float s_t = 0.f;
+    static double s_last = 0.0;
+    const double now = GetTime();
+    const float dt = std::clamp(float(now - s_last), 0.f, 0.1f);
+    s_last = now;
+    const bool want = v.select && v.alpha > 0.f;
+    s_t = std::clamp(s_t + (want ? dt : -dt) / 0.45f, 0.f, 1.f);
+    Plane pl;
+    if (s_t <= 0.f || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
+        return;
+    scene.overlay.clear();   // icones de botao 3D do jogo: seguem a camera dele
+    scene.hpOverlay.clear();
+    telaoCamera(cam, pl, aspect, s_t);
 }
 
 // A escolha no plano do telao (objeto do filme, shell->m_movieScreen), abaixo do logo, e o rotulo do menu principal no retangulo
@@ -1679,7 +1905,21 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         const float hy = 0.74f * refH * texH / (texH - 2.f * kLabelPad), wx = hy * texW / texH;
         drawOnPlane(pl, g_labelRt.texture, cx - wx * 0.5f, (pl.y0 + pl.y1) * 0.5f + hy * 0.5f, wx, hy, v.labelAlpha, 0.004f * (pl.x1 - pl.x0));
     }
-    if ((!v.on && !v.select) || v.alpha <= 0.f || g_rt.id == 0 || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
+    if ((!v.on && !v.select) || v.alpha <= 0.f || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
+        return;
+    if (v.select)
+    {
+        // selecao de monstros: o telao inteiro, visto de frente (frameCamera)
+        if (g_selRt.id == 0)
+            return;
+        const float fyTop = 0.03f, fyBottom = 0.97f;
+        const float hy = (pl.y1 - pl.y0) * (fyBottom - fyTop), wx = std::min(hy * float(kSelPW) / float(kSelPH), (pl.x1 - pl.x0) * 0.96f);
+        const float h = wx * float(kSelPH) / float(kSelPW);
+        drawOnPlane(pl, g_selRt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f, wx, h, v.alpha,
+                    0.002f * (pl.x1 - pl.x0), nullptr, WHITE, true);
+        return;
+    }
+    if (g_rt.id == 0)
         return;
     static bool logged = false;
     if (!logged)

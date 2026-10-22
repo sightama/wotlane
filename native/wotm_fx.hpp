@@ -58,6 +58,85 @@ extern "C" void glReadPixels(int x, int y, int w, int h, unsigned format, unsign
 
 namespace wotm {
 
+// Profundidade de uma vista lida sem esperar a GPU (tela dividida, Scene::drawFlaresFor): o glReadPixels vai para um pixel buffer
+// object (copia assincrona) e o resultado e lido na vez seguinte, quando a GPU ja terminou: o teste de oclusao do lens flare usa a
+// profundidade do redesenho anterior (~16 ms). O glReadPixels direto parava a CPU ate a GPU acabar tudo o que tinha recebido, uma
+// vez por vista. Sem as funcoes de buffer do GL (wglGetProcAddress), ok() fica false e o flare volta a leitura direta.
+#ifdef _WIN32
+extern "C" __declspec(dllimport) void *__stdcall wglGetProcAddress(const char *);
+#define WOTM_GLAPI __stdcall
+#else
+#define WOTM_GLAPI
+#endif
+class AsyncDepth {
+public:
+    bool ok() {
+        if (!tried_) {
+            tried_ = true;
+#ifdef _WIN32
+            gen_ = reinterpret_cast<GenBuf>(wglGetProcAddress("glGenBuffers"));
+            bind_ = reinterpret_cast<BindBuf>(wglGetProcAddress("glBindBuffer"));
+            data_ = reinterpret_cast<BufData>(wglGetProcAddress("glBufferData"));
+            map_ = reinterpret_cast<MapBuf>(wglGetProcAddress("glMapBuffer"));
+            unmap_ = reinterpret_cast<UnmapBuf>(wglGetProcAddress("glUnmapBuffer"));
+#endif
+            ok_ = gen_ && bind_ && data_ && map_ && unmap_;
+            if (!ok_) std::fprintf(stderr, "[flare] sem glMapBuffer: oclusao do lens flare com leitura direta na tela dividida\n");
+        }
+        return ok_;
+    }
+    // Copia a profundidade do framebuffer atual (w x h) para o PBO da vez e pega a copia anterior (se tiver o mesmo tamanho) em cpu
+    void swap(int w, int h) {
+        if (!ok() || w <= 0 || h <= 0) return;
+        if (!pbo_[0]) gen_(2, pbo_);
+        const size_t bytes = size_t(w) * size_t(h) * 4;
+        const int old = cur_ ^ 1;
+        valid = false;
+        if (sz_[old] == bytes && w_[old] == w) {
+            bind_(kPack, pbo_[old]);
+            if (const void *p = map_(kPack, kReadOnly)) {
+                cpu.resize(size_t(w) * size_t(h));
+                std::memcpy(cpu.data(), p, bytes);
+                cw = w;
+                ch = h;
+                valid = true;
+                unmap_(kPack);
+            }
+            bind_(kPack, 0);
+        }
+        bind_(kPack, pbo_[cur_]);
+        if (sz_[cur_] != bytes) {
+            data_(kPack, ptrdiff_t(bytes), nullptr, kStreamRead);
+            sz_[cur_] = bytes;
+        }
+        w_[cur_] = w;
+        glReadPixels(0, 0, w, h, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, nullptr);
+        bind_(kPack, 0);
+        cur_ ^= 1;
+    }
+    std::vector<float> cpu;   // profundidade (0..1) do redesenho anterior, linhas de baixo para cima como o GL
+    int cw = 0, ch = 0;
+    bool valid = false;
+
+private:
+    using GenBuf = void(WOTM_GLAPI *)(int, unsigned *);
+    using BindBuf = void(WOTM_GLAPI *)(unsigned, unsigned);
+    using BufData = void(WOTM_GLAPI *)(unsigned, ptrdiff_t, const void *, unsigned);
+    using MapBuf = void *(WOTM_GLAPI *)(unsigned, unsigned);
+    using UnmapBuf = unsigned char(WOTM_GLAPI *)(unsigned);
+    static constexpr unsigned kPack = 0x88EB, kReadOnly = 0x88B8, kStreamRead = 0x88E1;   // GL_PIXEL_PACK_BUFFER, GL_READ_ONLY, GL_STREAM_READ
+    GenBuf gen_ = nullptr;
+    BindBuf bind_ = nullptr;
+    BufData data_ = nullptr;
+    MapBuf map_ = nullptr;
+    UnmapBuf unmap_ = nullptr;
+    bool tried_ = false, ok_ = false;
+    unsigned pbo_[2] = {0, 0};
+    size_t sz_[2] = {0, 0};
+    int w_[2] = {0, 0};
+    int cur_ = 0;
+};
+
 // Normal do vertice para o shader do Scene::draw: (fogBurnThru, 1, FGE + 2 * GS). O rlNormal3f normaliza; o shader le as razoes
 // por y. FGE = neblina; GS = alfa cru do GS na textura e no vertice (As = At * Av / 16384). rlNormal3f(0, 0, 0) desliga os dois.
 // PM (+4): a mistura e aditiva ou subtrativa e o shader devolve a cor ja vezes o As inteiro (gsBlend usa fator 1 na origem). O As do
@@ -548,6 +627,7 @@ public:
         std::vector<Flare> e;
     };
     FlareFrame flares;
+    const AsyncDepth *depthAsync = nullptr;   // drawFlares: profundidade assincrona da vista (tela dividida); nullptr = glReadPixels direto
 
     // A lista so esta pronta (projetada, com a fracao visivel) entre o fim do particleDraw e o hier do quadro seguinte. A apresentacao
     // roda em outra thread e quase sempre a pega ja refeita pelo hier (em coordenadas de mundo, sem os flares de particula, que o
@@ -773,10 +853,15 @@ public:
         const float sx = gr.w / f.vw, sy = gr.h / f.vh, x0 = gr.x0;
         const double zn = rlGetCullDistanceNear(), zf = rlGetCullDistanceFar();
         // Z do GS (24 bits) que o retail leria no pixel (gx, gy) da tela do GS: a + b / W da profundidade nativa; vazio (fundo) = 0
+        // tela dividida: profundidade do redesenho anterior, sem esperar a GPU (AsyncDepth); senao a leitura direta
+        const AsyncDepth *ad = depthAsync && depthAsync->valid && depthAsync->cw == fbw && depthAsync->ch == fbh ? depthAsync : nullptr;
         auto gsZ = [&](int gx, int gy) -> uint32_t {
             const int px = std::clamp(int(x0 + (float(gx) + 0.5f) * sx), 0, fbw - 1), py = std::clamp(int((float(gy) + 0.5f) * sy), 0, fbh - 1);
             float d = 1.f;
-            glReadPixels(px, fbh - 1 - py, 1, 1, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, &d);
+            if (ad)
+                d = ad->cpu[size_t(fbh - 1 - py) * size_t(fbw) + size_t(px)];
+            else
+                glReadPixels(px, fbh - 1 - py, 1, 1, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, &d);
             if (d >= 1.f) return 0u;
             const double ndc = 2.0 * d - 1.0, W = 2.0 * zn * zf / (zf + zn - ndc * (zf - zn));
             const double z = double(f.zScale) + double(f.zOff) / std::max(W, 1e-3);

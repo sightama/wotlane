@@ -1155,26 +1155,10 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
         if (!v.on) s_t = 0.f;
         return;
     }
-    using namespace wotm_padsel;
     // os icones de botao do jogo seguem a camera dele (ficariam soltos na cena com esta): fora enquanto ela nao e a do jogo
     scene.overlay.clear();
     scene.hpOverlay.clear();
-    const float t = s_t * s_t * (3.f - 2.f * s_t);
-    const float tanY = std::tan(cam.fovy * DEG2RAD * 0.5f);
-    // telao com 58% da altura da tela, o centro dele a 41% do topo (as faixas pretas tomam 10,7% em cima e embaixo); a camera um pouco
-    // abaixo do centro dele, para os carros aparecerem embaixo
-    constexpr float kHeight = 0.58f, kCenter = 0.41f, kDrop = 0.22f;
-    const float h = pl.y1 - pl.y0, w = pl.x1 - pl.x0;
-    const float d = std::max(h * 0.5f / (tanY * kHeight), w * 0.5f / (tanY * aspect * 0.96f));
-    const Vector3 center = vadd(pl.c, vadd(vscale(pl.right, (pl.x0 + pl.x1) * 0.5f), vscale(pl.up, (pl.y0 + pl.y1) * 0.5f)));
-    const Vector3 pos = vsub(vadd(center, vscale(pl.n, d)), vscale(pl.up, h * kDrop));
-    const Vector3 target = vsub(center, vscale(pl.up, (0.5f - kCenter) * 2.f * tanY * d));   // olha abaixo do centro: o telao sobe
-    // posicao e direcao interpoladas a parte (interpolar o alvo fazia o telao sair de quadro no meio do caminho)
-    auto lerp = [&](const Vector3 &a, const Vector3 &b) { return vadd(a, vscale(vsub(b, a), t)); };
-    const Vector3 f0 = vnorm(vsub(cam.target, cam.position)), f1 = vnorm(vsub(target, pos));
-    cam.position = lerp(cam.position, pos);
-    cam.target = vadd(cam.position, vnorm(lerp(f0, f1)));
-    cam.up = vnorm(lerp(cam.up, pl.up));
+    wotm_padsel::telaoCamera(cam, pl, aspect, s_t);
 }
 } // namespace wotm_mainmenu
 
