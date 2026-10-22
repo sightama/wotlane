@@ -1,14 +1,17 @@
-// wotm_mainmenu.inc: menu principal (tela 1) em texto, com o item "Recompiled options" (incluido por wotm_live.inc, depois do
-// wotm_padsel.inc, de quem usa o desenho no telao e a fonte do jogo).
+// wotm_mainmenu.inc: menus de itens do telao em texto (incluido por wotm_live.inc, depois do wotm_padsel.inc, de quem usa o desenho
+// no telao e a fonte do jogo). Telas:
+//   1 menu principal: 1 player, multiplayer (o "2 player"), options, recompiled options (nosso), load game, unlocks;
+//   2 modos de 1 jogador: adventure, free-for-all, endurance;
+//   5 modos do multiplayer (depois da escolha de controles do wotm_padsel.inc): free-for-all, elimination, minigames.
 //
-// Os itens do jogo (shell->m_menuItemSw[1][1..5]: 1 player, 2 player, options, load game, unlocks) sao quadros com a palavra em
-// imagem. Aqui todos os objetos dos switches ficam com alfa 0 a cada quadro da tela 1 (e no fade de saida dela) e a lista e desenhada
-// com a fonte do jogo (a mesma da lista de saves) numa textura propria, posta no plano dos itens, do topo do primeiro ao pe do
-// ultimo. O "2 player" vira "multiplayer" e, depois de "options", entra "recompiled options".
-// O cursor e nosso: o gancho do screenGetInput (tela 1) consome cima/baixo e, no X, poe o currentSelection[1] no item do jogo
-// escolhido e deixa o codigo 6 seguir (o screenMain faz o que o item faz, como no retail). No "recompiled options" o X abre o
-// painel (por enquanto vazio) sobre a lista, sem trocar de tela; triangulo (codigo 5) fecha. Com o painel aberto o jogo nao ve
-// entrada nenhuma.
+// Os itens do jogo (shell->m_menuItemSw[tela][1..n]) sao quadros com a palavra em imagem. Aqui todos os objetos dos switches ficam com
+// alfa 0 a cada quadro da tela (e no fade de saida dela) e a lista e desenhada com a fonte do jogo (a mesma da lista de saves) numa
+// textura propria, posta no plano dos itens, do topo do primeiro ao pe do ultimo.
+// O cursor continua sendo o currentSelection[tela] do jogo: o gancho do screenGetInput consome cima/baixo e move o currentSelection;
+// o X e o triangulo seguem para a funcao da tela, que faz o que o item faz, como no retail. Na tela 1 a linha "recompiled options"
+// fica fora do currentSelection (g_onOptions); o X nela abre o painel (por enquanto vazio) sobre a lista, sem trocar de tela, e o
+// triangulo fecha. Com o painel aberto o jogo nao ve entrada nenhuma.
+// Tela 5: enquanto a escolha de controles esta no telao a lista fica escondida, e aparece junto com o fade que a escolha da aos itens.
 // WOTM_TEXTMENU=0: itens do retail (e o rotulo "multiplayer" do wotm_padsel.inc).
 namespace wotm_mainmenu
 {
@@ -18,19 +21,36 @@ constexpr int kMaxRows = 6;
 constexpr int kOptionsRow = -1;   // item que nao e do jogo
 
 struct Row { int item; const char *label; };
-// Ordem da lista: os itens do jogo (1..5) e o nosso depois de "options"
-constexpr Row kAllRows[kMaxRows] = {{1, "1 PLAYER"}, {2, "MULTIPLAYER"},  {3, "OPTIONS"},
-                                    {kOptionsRow, "RECOMPILED OPTIONS"}, {4, "LOAD GAME"}, {5, "UNLOCKS"}};
+struct ScreenDef
+{
+    int screen;
+    uint32_t numSel;   // numSelectables da tela (os itens 1..n do jogo); 0 = todos
+    int rows;
+    Row row[kMaxRows];
+};
+constexpr ScreenDef kScreens[] = {
+    {1, wotm::sym::numSelectables_2784, 6,
+     {{1, "1 PLAYER"}, {2, "MULTIPLAYER"}, {3, "OPTIONS"}, {kOptionsRow, "RECOMPILED OPTIONS"}, {4, "LOAD GAME"}, {5, "UNLOCKS"}}},
+    {2, 0, 3, {{1, "ADVENTURE"}, {2, "FREE-FOR-ALL"}, {3, "ENDURANCE"}}},
+    {5, wotm::sym::numSelectables_2857, 3, {{1, "FREE-FOR-ALL"}, {2, "ELIMINATION"}, {3, "MINIGAMES"}}},
+};
+static const ScreenDef *screenDef(uint32_t s)
+{
+    for (const ScreenDef &d : kScreens)
+        if (uint32_t(d.screen) == s) return &d;
+    return nullptr;
+}
 
 struct View
 {
     bool on = false;
-    float alpha = 0.f;     // da tela 1 (fades de entrada e saida)
+    int screen = 0;
+    float alpha = 0.f;     // da tela (fades de entrada e saida)
     float panel = 0.f;     // 0 lista, 1 painel aberto
     int sel = 0;
     int rows = 0;
     Row row[kMaxRows] = {};
-    uint32_t itemObj[kMaxRows][4] = {};   // objetos do filho 0 (apagado) de cada item do jogo, na ordem dos itens; posicao da lista
+    uint32_t itemObj[kMaxRows][4] = {};   // objetos do filho em uso de cada item do jogo, na ordem dos itens; posicao da lista
     int items = 0;
 };
 static std::mutex g_m;
@@ -38,116 +58,126 @@ static View g_view;
 
 // Thread do EE
 static const bool g_enabled = [] { const char *e = std::getenv("WOTM_TEXTMENU"); return !(e && e[0] == '0'); }();
-static int g_sel = -1;           // linha do cursor (-1: tirar do currentSelection[1] na primeira vez)
-static bool g_open = false;      // painel "recompiled options" aberto
+static bool g_onOptions = false;   // tela 1: cursor no "recompiled options"
+static bool g_open = false;        // painel "recompiled options" aberto
 static float g_panel = 0.f;
-static int g_rows = 0;
-static Row g_row[kMaxRows] = {};
-static PS2Runtime::RecompiledFunction g_origMain = nullptr, g_origTransition = nullptr, g_origGetInput = nullptr;
-static uint32_t g_mainRa = 0, g_transRa = 0, g_inRa = 0;
-static bool g_mainPending = false, g_transPending = false, g_inPending = false;
+static PS2Runtime::RecompiledFunction g_origMain = nullptr, g_origModes1P = nullptr, g_origModes2P = nullptr, g_origTransition = nullptr,
+                                      g_origGetInput = nullptr;
+static uint32_t g_mainRa = 0, g_modes1Ra = 0, g_modes2Ra = 0, g_transRa = 0, g_inRa = 0;
+static bool g_mainPending = false, g_modes1Pending = false, g_modes2Pending = false, g_transPending = false, g_inPending = false;
 
-static uint32_t itemSwitch(uint8_t *rdram, int item) { return rd32(rdram, kShell + 0x25C + uint32_t(10 + item) * 4); }
+static uint32_t itemSwitch(uint8_t *rdram, int screen, int item) { return rd32(rdram, kShell + 0x25C + uint32_t(screen * 10 + item) * 4); }
+static uint32_t curSelAddr(int screen) { return wotm::sym::currentSelection + 4u * uint32_t(screen); }
 
-// Linhas com os itens que o jogo oferece (numSelectables da tela 1: os itens 1..n)
-static void buildRows(uint8_t *rdram)
+// Linhas com os itens que o jogo oferece na tela (os itens 1..numSelectables)
+static int buildRows(uint8_t *rdram, const ScreenDef &d, Row out[kMaxRows])
 {
-    int n = static_cast<int>(rd32(rdram, wotm::sym::numSelectables_2784));
-    if (n < 1 || n > 5) n = 5;
-    g_rows = 0;
-    for (const Row &r : kAllRows)
-        if (r.item == kOptionsRow || r.item <= n)
-            g_row[g_rows++] = r;
-    if (g_sel >= g_rows) g_sel = g_rows - 1;
+    int n = d.numSel ? static_cast<int>(rd32(rdram, d.numSel)) : d.rows;
+    if (n < 1 || n > d.rows) n = d.rows;
+    int rows = 0;
+    for (int i = 0; i < d.rows; ++i)
+        if (d.row[i].item == kOptionsRow || d.row[i].item <= n)
+            out[rows++] = d.row[i];
+    return rows;
 }
 
-// Alfa da tela 1: 1 parada nela; nas transicoes, o targetAlpha do fade de entrada (para a 1) ou de saida (vindo dela)
-static float screenAlpha(uint8_t *rdram)
+// Linha do cursor: a do item em currentSelection[tela] (ou a do "recompiled options")
+static int cursorRow(uint8_t *rdram, int screen, const Row *row, int rows)
+{
+    const int cs = static_cast<int>(rd32(rdram, curSelAddr(screen)));
+    for (int r = 0; r < rows; ++r)
+        if (screen == 1 && g_onOptions ? row[r].item == kOptionsRow : row[r].item == cs)
+            return r;
+    return 0;
+}
+
+// Tela cujos itens estao a mostra e o alfa deles: parada numa tela, ela com 1; nas transicoes, o targetAlpha do fade de entrada (a
+// tela nova) ou de saida (a anterior)
+static float screenAlpha(uint8_t *rdram, uint32_t &screen)
 {
     const uint32_t cur = rd32(rdram, wotm::sym::currScreen), last = rd32(rdram, wotm::sym::lastScreen);
+    screen = cur;
     if (!rd32(rdram, wotm::sym::betweenScreens))
-        return cur == 1 ? 1.f : 0.f;
+        return 1.f;
     float t;
     std::memcpy(&t, rdram + wotm::sym::targetAlpha, 4);
     t = std::clamp(t, 0.f, 1.f);
-    if (cur == 1 && rd32(rdram, wotm::sym::fadingIn_2979)) return t;
-    if (last == 1 && cur != 1 && rd32(rdram, wotm::sym::fadingOut_2980)) return t;
+    if (rd32(rdram, wotm::sym::fadingIn_2979)) return t;
+    if (rd32(rdram, wotm::sym::fadingOut_2980) && last != cur) { screen = last; return t; }
     return 0.f;
 }
 
-// A cada quadro (saida do screenMain e do screenTransition): esconde os itens do jogo e publica a lista
+// Tela 5: o que a escolha de controles deixa dos itens (escondidos durante ela, o fade dela depois)
+static float padSelFactor()
+{
+    using namespace wotm_padsel;
+    if (g_phase == Config || g_phase == Leaving) return 0.f;
+    if (g_phase == Reveal) return std::clamp(g_reveal, 0.f, 1.f);
+    return 1.f;
+}
+
+// A cada quadro (saida das funcoes das telas e do screenTransition): esconde os itens do jogo e publica a lista
 static void frame(uint8_t *rdram)
 {
-    const float alpha = screenAlpha(rdram);
+    uint32_t screen = 0;
+    float alpha = screenAlpha(rdram, screen);
+    const ScreenDef *d = screenDef(screen);
     View v;
-    v.on = alpha > 0.f;
-    if (v.on)
+    if (d && screen == 5) alpha *= padSelFactor();
+    if (d)
     {
-        buildRows(rdram);
-        if (g_sel < 0)
-        {
-            const int cs = static_cast<int>(rd32(rdram, wotm::sym::currentSelection + 4));   // currentSelection[1]
-            g_sel = 0;
-            for (int r = 0; r < g_rows; ++r)
-                if (g_row[r].item == cs) g_sel = r;
-        }
-        for (int item = 1; item <= 5; ++item)
+        v.screen = d->screen;
+        v.rows = buildRows(rdram, *d, v.row);
+        v.sel = cursorRow(rdram, d->screen, v.row, v.rows);
+        for (int item = 1; item <= d->rows; ++item)
         {
             // posicao: os objetos do filho em uso (so ele esta na cena)
             int k = 0;
-            wotm_padsel::forSwitchObjects(rdram, itemSwitch(rdram, item), [&](uint32_t o, bool used) {
+            wotm_padsel::forSwitchObjects(rdram, itemSwitch(rdram, d->screen, item), [&](uint32_t o, bool used) {
                 const float zero = 0.f;
                 std::memcpy(rdram + o + 0x4C, &zero, 4);
-                if (used && k < 4) v.itemObj[v.items][k++] = o;
+                if (used && k < 4 && v.items < kMaxRows) v.itemObj[v.items][k++] = o;
             });
             if (k) ++v.items;
         }
     }
-    else if (rd32(rdram, wotm::sym::currScreen) != 1)
+    v.on = d && alpha > 0.f;
+    if (rd32(rdram, wotm::sym::currScreen) != 1)
         g_open = false;
     g_panel = std::clamp(g_panel + (g_open ? 0.1f : -0.1f), 0.f, 1.f);
     v.alpha = alpha;
-    v.panel = g_panel;
-    v.sel = std::max(0, g_sel);
-    v.rows = g_rows;
-    std::copy(g_row, g_row + kMaxRows, v.row);
+    v.panel = v.screen == 1 ? g_panel : 0.f;
     std::lock_guard<std::mutex> lk(g_m);
     g_view = v;
 }
 
-static void mainHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-{
-    if (ctx->pc == wotm::fn::screenMain__Fv)
-    {
-        g_mainRa = GPR_U32(ctx, 31);
-        g_mainPending = true;
+// Saida de uma funcao do jogo -> frame (mesmo padrao para as telas e o screenTransition)
+#define WOTM_MM_EXIT_HOOK(name, fn, orig, ra, pending)                                \
+    static void name(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)          \
+    {                                                                                 \
+        if (ctx->pc == (fn))                                                          \
+        {                                                                             \
+            ra = GPR_U32(ctx, 31);                                                    \
+            pending = true;                                                           \
+        }                                                                             \
+        orig(rdram, ctx, runtime);                                                    \
+        if (!pending || ctx->pc != ra)                                                \
+            return;                                                                   \
+        pending = false;                                                              \
+        frame(rdram);                                                                 \
     }
-    g_origMain(rdram, ctx, runtime);
-    if (!g_mainPending || ctx->pc != g_mainRa)
-        return;
-    g_mainPending = false;
-    frame(rdram);
-}
+WOTM_MM_EXIT_HOOK(mainHook, wotm::fn::screenMain__Fv, g_origMain, g_mainRa, g_mainPending)
+WOTM_MM_EXIT_HOOK(modes1Hook, wotm::fn::screenGameModes1P__Fv, g_origModes1P, g_modes1Ra, g_modes1Pending)
+WOTM_MM_EXIT_HOOK(modes2Hook, wotm::fn::screenGameModes2P__Fv, g_origModes2P, g_modes2Ra, g_modes2Pending)
+WOTM_MM_EXIT_HOOK(transitionHook, wotm::fn::screenTransition__Fb, g_origTransition, g_transRa, g_transPending)
+#undef WOTM_MM_EXIT_HOOK
 
-static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-{
-    if (ctx->pc == wotm::fn::screenTransition__Fb)
-    {
-        g_transRa = GPR_U32(ctx, 31);
-        g_transPending = true;
-    }
-    g_origTransition(rdram, ctx, runtime);
-    if (!g_transPending || ctx->pc != g_transRa)
-        return;
-    g_transPending = false;
-    frame(rdram);
-}
-
-// Tela 1: cima/baixo movem o nosso cursor; X num item do jogo segue como o X do retail com o currentSelection[1] dele; X no nosso
-// abre o painel. Com o painel aberto, so o triangulo (fecha) conta.
+// Telas da lista: cima/baixo movem o cursor (o currentSelection da tela, ou o "recompiled options" da 1); X e triangulo seguem para o
+// jogo. No "recompiled options" o X abre o painel; com ele aberto, so o triangulo (fecha) conta.
 static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == wotm::fn::screenGetInput__Fi && rd32(rdram, wotm::sym::currScreen) == 1 && g_rows > 0)
+    const uint32_t cur = rd32(rdram, wotm::sym::currScreen);
+    if (ctx->pc == wotm::fn::screenGetInput__Fi && screenDef(cur))
     {
         g_inRa = GPR_U32(ctx, 31);
         g_inPending = true;
@@ -156,9 +186,14 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (!g_inPending || ctx->pc != g_inRa)
         return;
     g_inPending = false;
+    const ScreenDef &d = *screenDef(cur);
+    Row row[kMaxRows];
+    const int rows = buildRows(rdram, d, row);
+    if (rows == 0)
+        return;
     const uint32_t raw = GPR_U32(ctx, 2), code = raw & 0xFFFFu;
     uint32_t out = raw;
-    if (g_open)
+    if (cur == 1 && g_open)
     {
         out = 0;
         if (code == 5)
@@ -169,24 +204,22 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     else if (code == 1 || code == 2)
     {
-        g_sel = (std::max(0, g_sel) + (code == 1 ? g_rows - 1 : 1)) % g_rows;
+        const int r = (cursorRow(rdram, d.screen, row, rows) + (code == 1 ? rows - 1 : 1)) % rows;
+        g_onOptions = d.screen == 1 && row[r].item == kOptionsRow;
+        if (row[r].item != kOptionsRow)
+            wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(row[r].item));
         wotm_padsel::sfx(rdram, ctx, runtime, code == 1 ? 2 : 4);
         out = 0;
     }
-    else if (code == 6)
+    else if (code == 6 && cur == 1 && g_onOptions)
     {
-        const Row &r = g_row[std::clamp(g_sel, 0, g_rows - 1)];
-        if (r.item == kOptionsRow)
-        {
-            g_open = true;
-            wotm_padsel::sfx(rdram, ctx, runtime, 8);
-            out = 0;
-        }
-        else
-            wotm_padsel::wr32(rdram, wotm::sym::currentSelection + 4, static_cast<uint32_t>(r.item));
+        g_open = true;
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+        out = 0;
     }
     ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(out)));
 }
+
 
 // ------------------------------------------------------------------ desenho (janela)
 
@@ -320,15 +353,15 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
     if (!n || top <= bottom)
         return;
     cx /= float(n);
-    // a lista inteira (kMaxRows linhas) cobre o vao dos itens com uma linha de folga em cima e embaixo quando ha menos itens
-    const float span = top - bottom, rowsSpan = span * float(kMaxRows) / float(std::max(1, n));
-    const float hy = std::max(span, std::min(rowsSpan, span + 2.f * itemH)), wx = hy * float(kW) / float(kH);
+    // cada uma das kMaxRows vagas da textura tem a altura do passo dos itens do jogo (o vao dividido por eles); as linhas ficam
+    // centradas no vao
+    const float span = top - bottom, hy = span * float(kMaxRows) / float(n), wx = hy * float(kW) / float(kH);
     const float mid = (top + bottom) * 0.5f;
-    static bool logged = false;
-    if (!logged)
+    static int logged = 0;
+    if (!(logged & (1 << v.screen)))
     {
-        logged = true;
-        std::fprintf(stderr, "[mainmenu] lista em texto: %d itens do jogo, vao %.1f, linha %.1f\n", n, span, itemH);
+        logged |= 1 << v.screen;
+        std::fprintf(stderr, "[mainmenu] tela %d em texto: %d itens do jogo, vao %.1f, linha %.1f\n", v.screen, n, span, itemH);
     }
     wotm_padsel::drawOnPlane(base, g_rt.texture, cx - wx * 0.5f, mid + hy * 0.5f, wx, hy, v.alpha, 0.004f * (base.x1 - base.x0));
 }
@@ -344,11 +377,13 @@ void wotmMainMenuInstall(PS2Runtime &runtime)
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; };
     const H hooks[] = {
         {wotm::fn::screenMain__Fv, &g_origMain, &mainHook},
+        {wotm::fn::screenGameModes1P__Fv, &g_origModes1P, &modes1Hook},
+        {wotm::fn::screenGameModes2P__Fv, &g_origModes2P, &modes2Hook},
         {wotm::fn::screenTransition__Fb, &g_origTransition, &transitionHook},
         {wotm::fn::screenGetInput__Fi, &g_origGetInput, &getInputHook},
     };
     for (const H &h : hooks)
         if ((*h.orig = runtime.lookupFunction(h.addr)))
             runtime.registerFunction(h.addr, h.fn);
-    std::fprintf(stderr, "[mainmenu] menu principal em texto (WOTM_TEXTMENU=0 volta aos itens do jogo)\n");
+    std::fprintf(stderr, "[mainmenu] menus de itens em texto: principal, modos de 1 jogador e do multiplayer (WOTM_TEXTMENU=0 volta aos do jogo)\n");
 }

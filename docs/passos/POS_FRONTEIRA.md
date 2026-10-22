@@ -373,7 +373,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 ## Brechas (baratos, em qualquer momento)
 - **"Recompiled options" no menu principal** (pedido em 2026-10-21): o menu principal em texto (fonte provisória: a do jogo, a da lista
   de saves; a definitiva o dono escolhe) com um item novo que abre as opções do port. Etapas:
-  1. Menu em texto com o item abrindo um painel vazio: **feito** (`wotm_mainmenu.inc`, `NATIVO.md`, "Menu principal em texto").
+  1. Menu em texto com o item abrindo um painel vazio: **feito** (`wotm_mainmenu.inc`, `NATIVO.md`, "Menu principal em texto"), junto
+     com as telas de modos de 1 jogador e do multiplayer (options, unlocks e load game levam a telas próprias e ficam como estão).
   2. Painel navegável com as opções do launcher ("QoL features") valendo ao vivo e um arquivo de configuração que o launcher também
      lê e grava (algumas variáveis hoje são lidas uma vez no boot).
   3. Rebind de teclas e botões: a tabela fixa do `ps2_pad.cpp` do fork vira configurável (costura do PS2Recomp: regerar o patch) e
