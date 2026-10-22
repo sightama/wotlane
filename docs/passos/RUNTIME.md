@@ -1,6 +1,6 @@
 # Runtime recompilado (PS2Recomp): como rodar e o que saber
 
-(Dividido de `docs/PROXIMOS_PASSOS.md`; índice lá.) Este arquivo guarda o que se usa hoje. O diário das investigações de desempenho (IOP em lotes, timers adiados, relógio virtual, VU0 nativo) está em `NATIVO.md` ("Física com `dt`") e no histórico do git (`git log -- docs/passos/RUNTIME.md`).
+(Índice dos docs no `CLAUDE.md`.) Este arquivo guarda o que se usa hoje. O diário das investigações de desempenho (IOP em lotes, timers adiados, relógio virtual, VU0 nativo) está em `NATIVO.md` ("Física com `dt`") e no histórico do git (`git log -- docs/passos/RUNTIME.md`).
 
 ## Onde está o código
 - Clone do runtime (fora do repo): `C:\Users\TwistZero\wotm-recomp-win` (submódulo `third_party/PS2Recomp`, branch `wotm` do fork `yanm1103/PS2Recomp`). O código gerado (`register_functions.cpp` etc.) nunca vai ao repo.

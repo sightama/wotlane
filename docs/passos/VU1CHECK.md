@@ -1,6 +1,6 @@
 # Checagem VU1 x nativo
 
-Estado, pistas e correções da checagem. Índice em `docs/PROXIMOS_PASSOS.md`; o método (coleta por cadeia, faces de costas, formato da saída) está em `NATIVO.md`, "Runtime: checagem VU1 x nativo". Microcódigo desmontado em `build/vu1/` (`tools/vu1dis.py`; código do jogo, fora do repo).
+Estado, pistas e correções da checagem. Índice dos docs no `CLAUDE.md`; o método (coleta por cadeia, faces de costas, formato da saída) está em `NATIVO.md`, "Runtime: checagem VU1 x nativo". Microcódigo desmontado em `build/vu1/` (`tools/vu1dis.py`; código do jogo, fora do repo).
 
 <details>
 <summary>Como funciona</summary>

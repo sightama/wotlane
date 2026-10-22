@@ -1,6 +1,6 @@
 # Visualizador de modelos 3D no navegador (ideia, avaliada em 2026-10-14)
 
-(Índice em `docs/PROXIMOS_PASSOS.md`.) Só a avaliação de viabilidade; nada foi implementado ainda.
+(Índice dos docs no `CLAUDE.md`.) Só a avaliação de viabilidade; nada foi implementado ainda.
 
 ## O que já existe
 - **Formato resolvido** (`docs/FORMATOS.md`, `NATIVO.md`): `.NGP` (zip `IE\3\4` na fase, cru no monstro; imagem pré-ligada em

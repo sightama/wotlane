@@ -5,10 +5,18 @@ Projeto de decompilação do executável `SCUS_971.97`. O objetivo final é um p
 **Direção atual (decidida em 2026-10-09, confirmada em 2026-10-16): port primeiro.** A base é o jogo recompilado com o PS2Recomp (fora do repo; o C++ gerado é código do jogo) mais a camada nativa deste repo
 (`native/`: desenho com GPU, som, filmes, teclado), que já roda a luta a 60 fps. A decompilação (`src/`) é a camada legível que substitui, por hook, só o que importa para modar (`Shell::Load*`, `MonsterParse`,
 câmera); o runtime cobaia com as equivalentes está parado. **Byte match não é requisito por função** (`equivalent` basta; `matched` quando sai barato; o `gate.sh` continua obrigatório). O VU1/GS emulado do
-runtime é só a referência da checagem (`docs/passos/VU1CHECK.md`); o destino é renderização nativa na fronteira da engine. Ordem do port: widescreen como primeiro mod, depois HUD, fades, iluminação e bugs
-gráficos na ordem do inventário. Detalhes em `docs/PROXIMOS_PASSOS.md`. As regras abaixo continuam valendo; onde disserem "matching", leia "matching quando for o objetivo da função".
+runtime é só a referência da checagem (`docs/passos/VU1CHECK.md`). As regras abaixo continuam valendo; onde disserem "matching", leia "matching quando for o objetivo da função".
 
-Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe do ELF e as convenções de status) e `docs/PROXIMOS_PASSOS.md` (como retomar e índice; ferramentas, headers e armadilhas em `docs/passos/`).
+**Onde estamos (2026-10-22):** a fronteira de hardware caiu em 2026-10-19 (`docs/passos/FRONTEIRA.md`) e o inventário do port terminou (widescreen, HUD, fades, iluminação, partículas e sombras como o VU1;
+nenhum bug gráfico aberto no `VU1CHECK.md`). O trabalho segue a lista do dono em **`docs/passos/POS_FRONTEIRA.md`** (ordem, brechas e pendências); os relatos de bug do dono têm prioridade sobre ela.
+
+Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe do ELF e as convenções de status) e `docs/passos/POS_FRONTEIRA.md` (o que fazer). Índice de `docs/passos/`:
+- `NATIVO.md`: camada nativa (desenho, texturas, monstros, partículas, sombras, menus, painel "Recompiled options", ícones), hooks de host, vigia, lote, tabela de variáveis `WOTM_*`.
+- `VU1CHECK.md`: checagem VU1 x nativo, corpus, fotos do dono, bugs abertos.
+- `RUNTIME.md`: runtime recompilado no Windows (build, `PS2X_*`, teclado, endereços úteis). `FRONTEIRA.md`: o que do PS2 o port deixou de emular.
+- `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (pegadinhas do gcc 2.95 e do build NM), `ESPINHA.md` (fluxo do jogo), `TESTE_PCSX2.md` (halfcpp no PCSX2).
+- `MODELOS_3D.md` (monstro animado direto do disco), `VIEWER_WEB.md` (ideia de viewer no navegador).
+- Investigações datadas em `docs/investigacoes/<data>/`.
 
 ## Fluxo do port (mudança em `native/`)
 1. Antes de mexer: `tools\corpus.ps1 -Check` guarda a base (`<runtime>\corpus\resumo_<data>.csv`; capture o corpus uma vez com `-Capture`). O que está errado ou faltando vem do inventário (`VU1CHECK.md`, "Inventário do port"), não de lembrança.

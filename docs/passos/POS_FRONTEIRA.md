@@ -1,8 +1,8 @@
 # Depois da fronteira de hardware: prioridades (dono, 2026-10-19)
 
-Vale quando a fronteira de hardware cair (`FRONTEIRA.md`, trabalho em outra sessão). Até lá continua a ordem do `PROXIMOS_PASSOS.md`
-(inventário do port). A lista é do dono; a ordem e as notas foram combinadas com ele na mesma conversa. Cada item diz o que o repo já
-sabe e o que falta descobrir.
+É a lista que guia o trabalho (a fronteira de hardware caiu em 2026-10-19, `FRONTEIRA.md`, e o inventário do port terminou; o antigo
+`PROXIMOS_PASSOS.md` foi apagado em 2026-10-22, o índice dos docs está no `CLAUDE.md`). A lista é do dono; a ordem e as notas foram
+combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir. Relatos de bug do dono passam na frente.
 
 ## Ordem
 | # | Item | Depende de | Custo estimado |
@@ -386,14 +386,25 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
-- **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros já está na fila
-  (`PROXIMOS_PASSOS.md`).
+- **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros está em
+  "Pendências contínuas", abaixo.
 - **Ícones de botão presos no mundo:** os ícones 2D (etapa 4 acima) ficam onde o jogo pôs os 3D (`showButtons`, uma vez por troca de
   tela, à frente da câmera). No menu principal, apertando X/Start cedo, o ícone da legenda anda junto com a câmera: o nosso
   `wotm_menu.inc` aceita o aperto durante a animação 1 (a câmera recuando do telão) e o `showButtons` roda com ela em movimento; o
   retail ignora o botão até a câmera parar. Conserto barato: realinhar os ícones visíveis a cada quadro enquanto a câmera anima
   (de novo o `showButtons`, ou rebasear no nativo com `M' = M · V_show⁻¹ · V_agora`, como na interpolação), ou desenhar os 2D numa
   posição fixa da tela por `currScreen`.
+
+## Pendências contínuas (vieram do `PROXIMOS_PASSOS.md`)
+- **Interpolação de quadros (escolhida pelo dono em 2026-10-18):** a apresentação já vai na taxa do monitor (`NATIVO.md`, "Taxa de
+  apresentação"), mas repete o quadro do jogo. Para quadros intermediários, o nativo desenharia a mistura dos dois últimos instantâneos
+  (câmera, matrizes dos objetos, paleta de ossos), com um quadro de atraso; partículas e objetos que nascem ou somem entre os dois pedem
+  tratamento à parte. Rodar a lógica acima de 60 não serve: o `updateRate` sai de 60/fields e muita coisa conta em quadros. Estudo em
+  `docs/investigacoes/2026-10-19/interpolacao.md`.
+- **Decomp só na superfície de mod** (`Shell::Load*`, `MonsterParse`, câmera); fora dela, a fila é `config/boot_coverage_asm.csv`.
+  Verificação: `tools/verify_tu.py`; funções com VU0 ou `min/max/madd`, `tools/recomp_oracle` (só folhas).
+- **Fora do caminho crítico:** PR #277 no PS2Recomp (`SQRT.S`/`RSQRT.S`); oracle para funções com chamadas; cobertura com gameplay para
+  realimentar o `boot_coverage_asm.csv` (`docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`).
 
 ## Fora da ordem
 - **Online:** não é prioridade. Com o multiplayer local de 4 (item 11), o Steam Remote Play Together e o Parsec já permitem jogar
