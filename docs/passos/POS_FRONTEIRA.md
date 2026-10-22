@@ -13,7 +13,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco — **gancho feito em 2026-10-21** (falta o kit e PNG direto) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
-| 7 | Câmera moderna (orbital) com movimento relativo à câmera | — | alto |
+| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **próximo** | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
@@ -188,8 +188,7 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   únicas escritas em `Shell+0x2B24` fora do cartão, do endurance e do construtor) são pegos por uma vigia no `sceGsSyncV`: tokens ou
   destraves diferentes da última gravação vão para o JSON (só eles: as opções do arquivo ficam, o menu de opções pode estar com valores
   não aceitos). A aventura (`updateStoryModeSave`/`Load`) segue com as telas e os binários, como antes (item 5).
-- Próximo: a campanha como a única escolha de slot (20 fitas), que é o item 5, junto com a revisão dos textos de memory card que
-  sobram nela.
+- A campanha como a única escolha de slot e a revisão dos textos de memory card viraram o item 5 (feito).
 - Em aberto: o que é `Shell+0x2A40` e `TheGame+0x1204B0..B8`; o que exatamente o `McScrambleIcon` muda no `icon.sys`.
 
 ### 4. Pasta `mods/`
@@ -253,7 +252,7 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   traje 3), o fogo da cabeça do Agamo (emissor op 22, preset 141) e o lens flare (HierLight op 5: olhos do Robo-47 e do Congar).
   Togera e Raptros têm a câmera mais perto (cauda e asas). Regras em `passos/MODELOS_3D.md`. Não reproduzido: molas do pelo/cauda,
   oclusão do flare, os outros presets de fogo. Foto: `docs/screenshots/2026-10-21/2026-10-21_saves_agamo_fogo.png`.
-- Falta: revisar os textos de memory card que sobram na aventura.
+- Textos de memory card na aventura: **conferido pelo dono em 2026-10-22**, nenhuma mensagem de memory card aparece mais no jogo.
 - O `savegame.dat` dos cartões só leva os 20 primeiros slots; os outros só existem no JSON.
 
 ### 6. Ícone de salvamento automático
@@ -388,12 +387,9 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros está em
   "Pendências contínuas", abaixo.
-- **Ícones de botão presos no mundo:** os ícones 2D (etapa 4 acima) ficam onde o jogo pôs os 3D (`showButtons`, uma vez por troca de
-  tela, à frente da câmera). No menu principal, apertando X/Start cedo, o ícone da legenda anda junto com a câmera: o nosso
-  `wotm_menu.inc` aceita o aperto durante a animação 1 (a câmera recuando do telão) e o `showButtons` roda com ela em movimento; o
-  retail ignora o botão até a câmera parar. Conserto barato: realinhar os ícones visíveis a cada quadro enquanto a câmera anima
-  (de novo o `showButtons`, ou rebasear no nativo com `M' = M · V_show⁻¹ · V_agora`, como na interpolação), ou desenhar os 2D numa
-  posição fixa da tela por `currScreen`.
+- **Ícones de botão presos no mundo: feito em 2026-10-22** (`d9fd7fa`, `wotm_menu.inc`): depois do Start antecipado no menu
+  principal, os ícones da legenda são realinhados à câmera a cada quadro enquanto a animação 1 anda (o `showButtons` só alinhava nos
+  quadros do fade).
 
 ## Pendências contínuas (vieram do `PROXIMOS_PASSOS.md`)
 - **Interpolação de quadros (escolhida pelo dono em 2026-10-18):** a apresentação já vai na taxa do monitor (`NATIVO.md`, "Taxa de
