@@ -141,6 +141,36 @@ namespace
                 }
         }
 
+        // Teste sem mouse: WOTM_ORBITMOUSE="quadro:quadros:dx:dy;..." soma (dx, dy) pixels por quadro (y para baixo, como o mouse) ao
+        // mouse do jogador do teclado, do quadro dado por tantos quadros
+        void testMouse(unsigned frame, float &mx, float &my)
+        {
+            struct Step { unsigned f0, n; float x, y; };
+            static std::vector<Step> steps;
+            static bool parsed = false;
+            if (!parsed)
+            {
+                parsed = true;
+                if (const char *e = std::getenv("WOTM_ORBITMOUSE"))
+                    for (const char *p = e; *p;)
+                    {
+                        Step s{};
+                        if (std::sscanf(p, "%u:%u:%f:%f", &s.f0, &s.n, &s.x, &s.y) == 4)
+                            steps.push_back(s);
+                        const char *semi = std::strchr(p, ';');
+                        if (!semi)
+                            break;
+                        p = semi + 1;
+                    }
+            }
+            for (const Step &s : steps)
+                if (frame >= s.f0 && frame < s.f0 + s.n)
+                {
+                    mx += s.x;
+                    my += s.y;
+                }
+        }
+
         // Monster::hasPinTarget (m_pinTarget com o bit 2 do +4) e a posicao do alvo (o _cs fica no +0xC de monstro e predio)
         bool pinTarget(uint8_t *rdram, uint32_t mon, float tp[3])
         {
@@ -361,6 +391,13 @@ namespace
             bool wasActive[kMaxCams];
             for (int v = 0; v < kMaxCams; ++v)
                 wasActive[v] = g_cam[v].active;
+            // mouse: o cursor fica preso enquanto alguma camera segue o monstro do jogador do teclado (inclusive as do jogo: queda,
+            // arremesso), fora da pausa
+            if (enabled() && FAST_READ32(wotm::sym::isPaused) == 0u)
+                for (int v = 0; v < n && v < kMaxCams; ++v)
+                    if (int ks = -1; isPlayerMonster(rdram, FAST_READ32(camAddr(v) + kCamMonster), &ks) &&
+                                     ks == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
+                        wotm::mouse::want();
             for (int v = 0; v < kMaxCams; ++v)
             {
                 Cam &s = g_cam[v];
@@ -429,13 +466,32 @@ namespace
                 // analogico direito: ~170 graus/s no maximo, a 60 quadros/s
                 float sx = in.stick[0], sy = in.stick[1];
                 testStick(frames, slot, sx, sy);
-                const bool moved = std::fabs(sx) > 0.05f || std::fabs(sy) > 0.05f;
-                s.still = moved ? 0 : s.still + 1;
+                const bool stickMoved = std::fabs(sx) > 0.05f || std::fabs(sy) > 0.05f;
+                s.still = stickMoved ? 0 : s.still + 1;
                 // painel, aba CAMERA: sensibilidade (5 = 1x, cada ponto 20%) e inverter o eixo vertical
                 const float sens = float(std::clamp(wotm::settings::get(wotm::settings::CamSens), 1, 10)) * 0.2f;
                 sx *= sens;
                 sy *= wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens;
                 s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 graus/s (a horizontal e ~170)
+
+                // mouse (etapa 7, wotm_mouse.hpp): so na orbita do jogador do teclado. Deslocamento direto (angulo por pixel, ~1000
+                // pixels por 140 graus na sensibilidade 5), somado depois do analogico; para cima olha para cima, como o analogico.
+                float mx = 0.f, my = 0.f;
+                if (slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
+                {
+                    if (FAST_READ32(wotm::sym::isPaused) == 0u)
+                        wotm::mouse::want();
+                    wotm::mouse::take(mx, my);
+                    testMouse(frames, mx, my);
+                    mx *= 0.0025f * sens;
+                    my *= 0.0025f * (wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens);
+                    if (mx != 0.f || my != 0.f)
+                    {
+                        s.still = 0;
+                        s.elev = std::clamp(s.elev + my, -0.6f, 0.9f);
+                    }
+                }
+                const bool moved = stickMoved || mx != 0.f || my != 0.f;
 
                 // alvo travado (etapa 2): a camera vai depressa para tras do monstro na linha do alvo (os dois na tela); o analogico
                 // direito so desloca um pouco (ate ~35 graus) e volta ao soltar. Solto, o angulo continua de onde estava.
@@ -443,14 +499,14 @@ namespace
                 const bool locked = pinTarget(rdram, mon, tp) && (tp[0] - mt[0]) * (tp[0] - mt[0]) + (tp[1] - mt[1]) * (tp[1] - mt[1]) > 1.f;
                 if (locked)
                 {
-                    s.nudge = moved ? std::clamp(s.nudge + sx * 0.04f, -0.6f, 0.6f) : s.nudge * 0.9f;
+                    s.nudge = moved ? std::clamp(s.nudge + sx * 0.04f + mx, -0.6f, 0.6f) : s.nudge * 0.9f;
                     const float want = wrapPi(headingTo(mt[0] - tp[0], mt[1] - tp[1]) + s.nudge);
                     s.az = wrapPi(s.az + wrapPi(want - s.az) * kLockRate);
                 }
                 else
                 {
                     s.nudge = 0.f;
-                    s.az = wrapPi(s.az + sx * 0.05f);
+                    s.az = wrapPi(s.az + sx * 0.05f + mx);
                 }
                 if (locked != s.locked && log)
                     std::fprintf(stderr, "[orbit] camera %d: %s\n", v, locked ? "alvo travado" : "alvo solto");
@@ -606,6 +662,16 @@ namespace
                 return -1;
             Input &in = g_in[slot];
             uint8_t *b = rdram + gp;
+            // mouse (wotm_mouse.hpp): o cursor fica preso durante a luta inteira do jogador do teclado (fora da pausa), mesmo quando
+            // outra camera do jogo assume por um instante (queda, arremesso); sem a orbita dirigindo, o deslocamento e descartado
+            if (enabled() && slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
+            {
+                // na pausa do jogo o interpretInputs e o Cameras::Update param: sem aviso, a janela solta o cursor em ~150 ms
+                if (FAST_READ32(wotm::sym::isPaused) == 0u)
+                    wotm::mouse::want();
+                if (!in.driving)
+                    wotm::mouse::clear();
+            }
             if (!in.driving || !enabled())
             {
                 in.forced = false;

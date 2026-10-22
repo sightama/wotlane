@@ -36,7 +36,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 4 | Transições (conferida em 2026-10-22, sem código novo) | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro em 2026-10-22, falta o teste do dono com controles) | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel (feita em 2026-10-22, aba CAMERA; falta o teste do dono) | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
-| 7 | Mouse na câmera | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
+| 7 | Mouse na câmera (feita em 2026-10-22; falta o teste do dono) | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
 | 8 | Teclado novo | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
 | 9 | Menus com mouse | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
 
@@ -181,6 +181,20 @@ Aba nova CAMERA no "Recompiled options", entre FEATURES e CONTROLS (`wotm_mainme
 AUTO CENTER (`WOTM_CAMRECENTER`) e CLOSE-UP CAMERA (`WOTM_CLOSECAM`). Gravadas no `settings.ini` como as outras; a órbita lê a cada
 quadro. Conferido por roteiro: a aba abre e os valores mudam e são registrados (`[settings] SENSITIVITY = 7`); na luta, a sensibilidade
 10 girou 86 graus em 15 quadros (43 com a 5), e com o eixo invertido o mesmo comando para cima desceu a câmera (-8 graus em vez de +14).
+
+
+## Etapa 7: mouse na câmera (2026-10-22)
+`native/wotm_mouse.hpp` liga os dois lados. A janela (`wotm_pad::mouseFrame`, a cada apresentação) publica o jogador do teclado (a
+regra do `deviceMap`: o 1 com o teclado junto do primeiro controle; com `WOTM_KBSEPARATE`, o seguinte aos controles; na escolha de
+controles do multijogador, a coluna em que o teclado entrou), prende o cursor (`DisableCursor`) enquanto a thread do EE avisa e a
+janela tem o foco, e acumula o deslocamento. A thread do EE avisa a cada quadro em que alguma câmera segue o monstro do jogador do
+teclado (inclusive as do jogo: queda, arremesso, para o cursor não piscar) e no `interpretInputs` dele; a órbita consome o acumulado
+na câmera desse jogador: ~0,0025 rad por pixel na sensibilidade 5 (1000 pixels ≈ 140 graus), para cima olha para cima, inverter e
+sensibilidade do painel valem; com alvo travado o mouse só desloca, como o analógico. Na pausa, nos menus, no F7 e no modo foto o
+aviso para e o cursor é solto em ~150 ms. `WOTM_MOUSECAM=0` desliga; `WOTM_ORBITMOUSE` simula o mouse nos testes.
+Conferido por roteiro (1P): 600 pixels para a direita giraram 85,9 graus e 200 para cima levaram a altura a -28,6 graus (o
+previsto); cursor preso na luta, solto no menu de pausa (`PS2X_PAD` com start, foto) e preso de novo ao continuar.
+Falta: o dono jogar com o mouse de verdade (sensação da velocidade padrão).
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?

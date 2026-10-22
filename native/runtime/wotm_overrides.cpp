@@ -78,6 +78,7 @@ std::atomic<bool> g_wotmCheatWin{false};
 
 // Camera livre de debug (F5): a janela (wotm_freecam.inc) move a pose, a thread do EE a poe no _cs da vista 0 (freeCamWrite).
 #include "wotm_freecam.h"
+#include "wotm_mouse.hpp"   // mouse na camera moderna (wotm_orbit.inc consome, a janela acumula)
 std::atomic<bool> g_wotmFreeCam{false};
 std::atomic<bool> g_wotmFreeCamPad{false};
 std::mutex g_wotmFreeCamM;

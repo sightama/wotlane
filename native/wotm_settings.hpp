@@ -40,7 +40,7 @@ enum Key
     CamRecenter,  // camera moderna: volta devagar para as costas do monstro depois de ~1,5 s sem mexer, com ele andando
     CloseCam,     // 1 = a camera de perto do jogo (vista unificada); 0 = nunca entra nela
     CamSens,      // camera moderna: velocidade do analogico direito, 1..10 (5 = a de antes; cada ponto e 20%)
-    CamInvertY,   // camera moderna: 1 = inverte o eixo vertical do analogico direito (padrao: para cima sobe a camera)
+    CamInvertY,   // camera moderna: 1 = inverte o eixo vertical do analogico direito e do mouse (padrao: para cima olha para cima, a camera desce)
     kKeys
 };
 

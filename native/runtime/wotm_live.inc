@@ -258,6 +258,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 
 // Controles e teclado por jogador (mapa porta -> dispositivos do ps2_pad.cpp), sempre ligado
 #include "../wotm_settings.hpp"   // opcoes ao vivo (painel "recompiled options")
+#include "../wotm_mouse.hpp"   // mouse na camera moderna (cursor preso, deslocamento para a orbita)
 #include "wotm_pad.inc"
 
 #if __has_include("wotm_native.hpp")
@@ -524,6 +525,8 @@ static void applyVideoSettings()
 static void fullscreenKey()
 {
     applyVideoSettings();
+    if (!g_localCollect)
+        wotm_pad::mouseFrame();   // mouse na camera moderna (wotm_mouse.hpp)
     if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
         setFullscreen(!inFullscreen());
 }

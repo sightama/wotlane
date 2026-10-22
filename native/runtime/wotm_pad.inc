@@ -127,6 +127,59 @@ static uint16_t gamepadButtons(int pad)
     return m;
 }
 
+// Jogador (0..3) que o teclado alimenta, pela regra do deviceMap (-1: nenhum, na escolha manual sem o teclado ou com ele sobrando)
+inline int keyboardPlayer()
+{
+    if (g_manual.load(std::memory_order_relaxed))
+    {
+        for (int p = 0; p < 4; ++p)
+            if (g_manualDevs[p].load(std::memory_order_relaxed) & PS2_PAD_DEV_KEYBOARD) return p;
+        return -1;
+    }
+    if (!st::on(st::KbSeparate)) return 0;
+    int n = 0;
+    for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
+        if (IsGamepadAvailable(i)) ++n;
+    return n < 4 ? n : -1;
+}
+
+// Mouse na camera moderna (wotm_mouse.hpp), a cada apresentacao na thread da janela: cursor preso enquanto a orbita do jogador do
+// teclado dirige (aviso da thread do EE) e a janela tem o foco; preso, o deslocamento vai para a orbita. WOTM_MOUSECAM=0 desliga.
+static void mouseFrame()
+{
+    namespace ms = wotm::mouse;
+    static const bool off = [] { const char *e = std::getenv("WOTM_MOUSECAM"); return e && e[0] == '0'; }();
+    ms::g_kbPlayer.store(keyboardPlayer(), std::memory_order_relaxed);
+    const bool want = !off && ms::wanted() && IsWindowFocused();
+    static bool captured = false;
+    static int skip = 0;
+    if (want != captured)
+    {
+        captured = want;
+        if (want)
+        {
+            DisableCursor();
+            skip = 2;   // o DisableCursor recentra o cursor: o primeiro deslocamento e esse salto
+        }
+        else
+            EnableCursor();
+        ms::clear();
+        ms::g_captured.store(want, std::memory_order_relaxed);
+        std::fprintf(stderr, "[mouse] cursor %s (aviso ha %lld ms, foco %d)\n", want ? "preso (camera)" : "solto",
+                     static_cast<long long>(ms::nowMs() - (ms::g_wantUntil.load(std::memory_order_relaxed) - 150)), IsWindowFocused() ? 1 : 0);
+    }
+    if (!captured)
+        return;
+    const Vector2 d = GetMouseDelta();
+    if (skip > 0)
+    {
+        --skip;
+        return;
+    }
+    if (d.x != 0.f || d.y != 0.f)
+        ms::add(d.x, d.y);
+}
+
 static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons, true);
 }
 
