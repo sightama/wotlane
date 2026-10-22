@@ -114,8 +114,11 @@ bool wotmPauseBlock(PS2Runtime *rt)
         cv.wait_for(lk, std::chrono::milliseconds(50));
     if (steps > 0 && !photoRun) --steps;
     lk.unlock();
-    // o relogio virtual do EE fica parado junto: os prazos dos vsyncs pulam o tempo da pausa (senao venciam todos na volta)
-    if (rt) rt->eeScheduler().shiftHostDeadlines(std::chrono::steady_clock::now() - t0);
+    // Os vblanks contados durante a pausa nao vencem na volta (shiftHostDeadlines zera o vblankDue). O prazo do proximo vblank NAO
+    // anda: o relogio do vblank (EeSchedulerGame.cpp) segue rodando na pausa e o mantem perto de agora; somar a duracao da pausa
+    // deixava o jogo parado por esse mesmo tempo depois de soltar (modo foto de um minuto = um minuto "congelado")
+    (void)t0;
+    if (rt) rt->eeScheduler().shiftHostDeadlines(std::chrono::steady_clock::duration::zero());
     blocked.store(false, std::memory_order_relaxed);
     tookFrame.store(true, std::memory_order_relaxed);
     return true;

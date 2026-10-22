@@ -706,7 +706,7 @@ static void wotmFreeCamLegend(const wotm_freecam::View &v)
 void wotmPhotoWatchdog()
 {
     using namespace wotm_photo;
-    if (g_phase != Phase::Off && GetTime() - g_lastUpdate > 1.0)
+    if (g_phase != Phase::Off && GetTime() - g_lastUpdate > 3.0)
     {
         wotmPhotoPause(false);
         g_phase = Phase::Off;
