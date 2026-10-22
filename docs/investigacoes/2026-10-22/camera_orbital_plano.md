@@ -138,5 +138,15 @@ da pilha atual do `Cameras::Update`), `collide` em `wotm_orbit.inc`, opção `WO
 - Conferido por roteiro (sem crash; câmera parando na beira do telhado, transparência dos prédios do lado de fora). Falta a sensação
   com o controle, em especial o encolher perto de paredes.
 
+Teste do dono: a câmera não entra mais no telhado nem no chão (aprovado).
+
+### Saída da câmera de perto andando (relato do dono, 2026-10-22)
+Contra a IA, afastando-se do outro monstro, a câmera de perto só voltava à normal quando o jogador parava. Não era regressão: o
+`closeCombatUpdate` (1P, nenhuma IA a menos de `E00` por `DA8` quadros) agenda o `Cameras::LeaveUnifiedTask`, que só sai com o monstro
+parado (`isIdle(7)`) ou travado; no PS2 a troca andando mudaria o controle de relativo à tela para tanque. Com a câmera moderna o
+controle segue relativo à tela: o gancho do `LeaveUnifiedTask` (`wotm_orbit.inc`) sai na hora (fora de queda livre) pelo próprio
+`LeaveUnifiedView` (com o `+0xE68` zerado ele não remove a tarefa em curso; motivo e alfa do borrão restaurados). Em tela dividida (2
+jogadores) a saída é outra e não esperava. Conferido pelo dono e no log (`camera de perto: saida sem esperar o monstro parar`).
+
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?

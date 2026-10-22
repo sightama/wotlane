@@ -592,13 +592,51 @@ namespace
                 FAST_WRITE32(kSlots + kSlotStride * i + kMonCamUnify, 0);
         }
 
+        // Cameras::LeaveUnifiedTask (a0 = Cameras): com o par separado (1P, nenhuma IA perto), o jogo agenda a saida da camera de
+        // perto, mas a tarefa so sai com o monstro parado (isIdle) ou travado: trocar para a camera normal andando mudaria o controle
+        // de relativo a tela para tanque. Com a camera moderna o controle continua relativo a tela, entao sai na hora (fora de queda
+        // livre), pelo proprio LeaveUnifiedView, como a tarefa faria (com o +0xE68 zerado ele nao remove a tarefa que esta rodando)
+        PS2Runtime::RecompiledFunction g_origLeaveTask = nullptr;
+        void leaveTaskHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31), self = GPR_U32(ctx, 4);
+            g_origLeaveTask(rdram, ctx, runtime);
+            if (ctx->pc != ra || GPR_U32(ctx, 2) == 0u || !enabled() || !FAST_READ32(kUnified))
+                return;
+            const uint32_t c2 = camAddr(2), mon = FAST_READ32(c2 + kCamMonster) & 0x1FFFFFFFu;
+            if (!okAddr(mon, 0x284u) || rdram[mon + 0x280] != 0)   // m_freeFalling
+                return;
+            constexpr uint32_t kReason = wotm::sym::x_7Cameras_m_leaveReason, kAlpha = wotm::sym::x_7Cameras_m_currentFadeAlpha;
+            const uint32_t reason = FAST_READ32(kReason), alpha = FAST_READ32(kAlpha), task = FAST_READ32(c2 + 0xE68u);
+            FAST_WRITE32(c2 + 0xE68u, 0);
+            Probe pr(rdram, ctx, runtime);
+            uint32_t v0 = 0;
+            float f0 = 0.f;
+            const bool back = pr.call(wotm::fn::LeaveUnifiedView__7CamerasUi, {self, 0xBu}, {}, v0, f0);
+            FAST_WRITE32(kReason, reason);
+            FAST_WRITE32(kAlpha, alpha);
+            if (!back || FAST_READ32(kUnified))
+            {
+                FAST_WRITE32(c2 + 0xE68u, task);   // nao saiu (modo 8): a tarefa continua esperando
+                return;
+            }
+            FAST_WRITE32(wotm::sym::x_7Cameras_m_leaveTriggered, 0);
+            ctx->r[2] = _mm_set_epi64x(0, 0);   // tarefa terminada
+            static const bool log = std::getenv("WOTM_ORBITLOG") != nullptr;
+            if (log)
+                std::fprintf(stderr, "[orbit] camera de perto: saida sem esperar o monstro parar\n");
+        }
+
         void install(PS2Runtime &runtime)
         {
-            constexpr uint32_t kShake = wotm::fn::shakeCamera__6Camera, kOkToUnify = wotm::fn::SetOkToUnify__7TheGame;
+            constexpr uint32_t kShake = wotm::fn::shakeCamera__6Camera, kOkToUnify = wotm::fn::SetOkToUnify__7TheGame,
+                               kLeaveTask = wotm::fn::LeaveUnifiedTask__7Cameras;
             if ((g_origShake = runtime.lookupFunction(kShake)))
                 runtime.registerFunction(kShake, &shakeHook);
             if ((g_origOkToUnify = runtime.lookupFunction(kOkToUnify)))
                 runtime.registerFunction(kOkToUnify, &okToUnifyHook);
+            if ((g_origLeaveTask = runtime.lookupFunction(kLeaveTask)))
+                runtime.registerFunction(kLeaveTask, &leaveTaskHook);
             std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recentralizar %s, camera de perto %s (WOTM_CLOSECAM)%s\n",
                          wotm::settings::on(wotm::settings::Camera) ? "moderna" : "classica",
                          wotm::settings::on(wotm::settings::CamRecenter) ? "ligado" : "desligado",
