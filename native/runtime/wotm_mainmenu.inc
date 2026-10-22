@@ -700,7 +700,10 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 
 // ------------------------------------------------------------------ desenho (janela)
 
-constexpr int kW = 1200, kH = 900;   // textura da lista: kMaxRows linhas de kH / kMaxRows
+// textura da lista: kMaxRows linhas, cada uma kSpacing passos dos itens do jogo (um pouco mais folgada que a lista dele), e kPadRows
+// passos de folga em cima e embaixo (o brilho do item escolhido passa da linha). kH acompanha kSteps para manter a densidade.
+constexpr float kSpacing = 1.15f, kPadRows = 0.6f, kSteps = kMaxRows * kSpacing + 2.f * kPadRows;
+constexpr int kW = 1200, kH = 1190;
 static RenderTexture2D g_rt{};
 static Font g_font{};
 static bool g_fontTried = false;
@@ -956,7 +959,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         g_rt = LoadRenderTexture(kW, kH);
         SetTextureFilter(g_rt.texture, TEXTURE_FILTER_BILINEAR);
     }
-    constexpr float rowH = float(kH) / kMaxRows;
+    constexpr float step = float(kH) / kSteps, rowH = step * kSpacing;   // passo dos itens do jogo e o das nossas linhas
     // cores dos itens do telao: aceso creme, apagado laranja terroso (escala do GS)
     constexpr Color lit{121, 118, 111, 0x80}, dim{88, 56, 34, 0x80};
     BeginTextureMode(g_rt);
@@ -970,7 +973,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
     size_t longest = 1;
     for (int r = 0; r < v.rows; ++r)
         longest = std::max(longest, std::strlen(v.row[r].label));
-    const float textH = std::min(rowH * 0.5f, kW * 0.9f / (0.8f * float(longest)));
+    const float textH = std::min(step * 0.5f, kW * 0.9f / (0.8f * float(longest)));
     // com as letras do jogo (wotm_menufont.inc): minusculas, altura do x unica, a maior em que a linha mais larga cabe
     char low[kMaxRows][32] = {};
     bool own = true;
@@ -983,7 +986,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         own = w > 0.f;
         widest = std::max(widest, w);
     }
-    const float xh = own ? std::min(rowH * 0.56f, kW * 0.9f * wotm_menufont::kRefXh / widest) : 0.f;
+    const float xh = own ? std::min(step * 0.56f, kW * 0.9f * wotm_menufont::kRefXh / widest) : 0.f;
     if (list > 0.f)
     {
         const float top = (kH - rowH * float(v.rows)) * 0.5f;
@@ -993,8 +996,8 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         if (own && v.sel >= 0 && v.sel < v.rows)
         {
             const float cy = top + rowH * (float(v.sel) + 0.5f), w = wotm_menufont::width(low[v.sel]) * xh / wotm_menufont::kRefXh * 0.95f;
-            const float x0 = kW * 0.5f - w * 0.5f, x1 = kW * 0.5f + w * 0.5f, y0 = cy - rowH * 0.27f, y1 = cy + rowH * 0.27f;
-            const float mx = rowH * 0.5f, my = rowH * 0.48f;
+            const float x0 = kW * 0.5f - w * 0.5f, x1 = kW * 0.5f + w * 0.5f, y0 = cy - step * 0.27f, y1 = cy + step * 0.27f;
+            const float mx = step * 0.5f, my = step * 0.48f;
             const Color in = gsToRgb(Color{67, 41, 28, static_cast<unsigned char>(19 * 2 * list)}), out{in.r, in.g, in.b, 0};
             const float xs[4] = {x0 - mx, x0, x1, x1 + mx}, ys[4] = {y0 - my, y0, y1, y1 + my};
             rlSetTexture(rlGetTextureIdDefault());
@@ -1098,7 +1101,7 @@ static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Came
     cx /= float(n);
     // cada uma das kMaxRows vagas da textura tem a altura do passo dos itens do jogo (o vao dividido por eles); as linhas ficam
     // centradas no vao
-    const float span = top - bottom, hy = span * float(kMaxRows) / float(n), wx = hy * float(kW) / float(kH);
+    const float span = top - bottom, hy = span * kSteps / float(n), wx = hy * float(kW) / float(kH);
     float mid = (top + bottom) * 0.5f;
     // sem o logo (logoFrame), a lista vai para o centro do telao
     if (wotm_padsel::Plane tl; g_logoN && v.screenObj && wotm_padsel::objectPlane(scene, ram, cam, v.screenObj, tl))
