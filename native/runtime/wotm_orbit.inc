@@ -111,11 +111,11 @@ namespace
             return okAddr(mcs, 0x70u);
         }
 
-        // Teste sem controle: WOTM_ORBITSTICK="quadro:quadros:x:y;..." poe o analogico direito em (x, y) (-1..1, y para cima) do
+        // Teste sem controle: WOTM_ORBITSTICK="quadro:quadros:x:y[@jogador];..." poe o analogico direito em (x, y) (-1..1, y para cima) do
         // quadro dado (contado nas chamadas do Cameras::Update) por tantos quadros
-        void testStick(unsigned frame, float &sx, float &sy)
+        void testStick(unsigned frame, int slot, float &sx, float &sy)
         {
-            struct Step { unsigned f0, n; float x, y; };
+            struct Step { unsigned f0, n; float x, y; int player; };   // player 0 = todos
             static std::vector<Step> steps;
             static bool parsed = false;
             if (!parsed)
@@ -125,7 +125,7 @@ namespace
                     for (const char *p = e; *p;)
                     {
                         Step s{};
-                        if (std::sscanf(p, "%u:%u:%f:%f", &s.f0, &s.n, &s.x, &s.y) == 4)
+                        if (std::sscanf(p, "%u:%u:%f:%f@%d", &s.f0, &s.n, &s.x, &s.y, &s.player) >= 4)
                             steps.push_back(s);
                         const char *semi = std::strchr(p, ';');
                         if (!semi)
@@ -134,7 +134,7 @@ namespace
                     }
             }
             for (const Step &s : steps)
-                if (frame >= s.f0 && frame < s.f0 + s.n)
+                if (frame >= s.f0 && frame < s.f0 + s.n && (s.player == 0 || s.player == slot + 1))
                 {
                     sx = s.x;
                     sy = s.y;
@@ -428,7 +428,7 @@ namespace
 
                 // analogico direito: ~170 graus/s no maximo, a 60 quadros/s
                 float sx = in.stick[0], sy = in.stick[1];
-                testStick(frames, sx, sy);
+                testStick(frames, slot, sx, sy);
                 const bool moved = std::fabs(sx) > 0.05f || std::fabs(sy) > 0.05f;
                 s.still = moved ? 0 : s.still + 1;
                 s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 graus/s (a horizontal e ~170)

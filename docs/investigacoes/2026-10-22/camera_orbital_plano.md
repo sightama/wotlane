@@ -34,7 +34,7 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 2 | Alvo travado (aprovado, na master em 2026-10-22) | enquadramento do jogo, com o analógico direito deslocando um pouco |
 | 3 | Chão e prédios (aprovado, na master em 2026-10-22) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições (conferida em 2026-10-22, sem código novo) | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
-| 5 | Tela dividida, 3 e 4 jogadores | estado de órbita por vista, cada uma pelo controle do seu jogador |
+| 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro em 2026-10-22, falta o teste do dono com controles) | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
 | 7 | Mouse na câmera | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
 | 8 | Teclado novo | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
@@ -167,6 +167,13 @@ monstro (vista 0 para a câmera 2 e de volta) continua o estado da órbita, sem 
 Isso também resolveu, para o dono, o lock-on perdido no agarrão e a demora para voltar à órbita normal (a saída da unificada do
 agarrão é a do jogo, mas a câmera já é a mesma órbita). O `WOTM_ORBITLOG` ganhou `alvo 0x.. -> 0x..` (troca do `m_pinTarget`).
 Validado pelo dono.
+
+## Etapa 5: tela dividida, 3 e 4 jogadores (2026-10-22)
+O estado da órbita já era por câmera (`g_cam[vista]`) e o analógico por jogador (`g_in[jogador]`, do `PadFlags` dono do
+`interpretInputs`): não precisou de código novo. Para conferir sem controles, o `WOTM_ORBITSTICK` aceita `@jogador` em cada passo.
+Roteiro: `WOTM_MATCH=3,1,2,7,1 WOTM_PLAYERS=4` (quadrantes), giro de ~170 graus do jogador 1, depois do 2, do 3 e do 4, subir o 2 e
+descer o 3: cada câmera mudou só no passo do seu jogador (log e fotos); a de perto não existe com 3 e 4 jogadores (`wotm_split4.inc`).
+Falta: o dono conferir com controles de verdade (cada analógico direito girando só a sua vista), em 2 e em 3–4 jogadores.
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?
