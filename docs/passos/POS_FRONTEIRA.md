@@ -13,7 +13,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco — **gancho feito em 2026-10-21** (falta o kit e PNG direto) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
-| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **próximo** | — | alto |
+| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **em andamento** (órbita e lock-on na master em 2026-10-22; faltam etapas 3–9 do `investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
