@@ -25,7 +25,7 @@ namespace wotm::settings
 {
 enum Key
 {
-    Res,          // altura do quadro nativo (linhas)
+    Res,          // altura do quadro nativo (linhas); 0 = a da janela
     Aspect,       // 0 = dinamica (segue a janela); 1.. = kAspectNames[i]
     Display,      // 0 janela, 1 tela cheia sem borda, 2 tela cheia exclusiva
     Rate,         // Hz da apresentacao; 0 = a do monitor
@@ -41,27 +41,33 @@ enum Key
     CloseCam,     // 1 = a camera de perto do jogo (vista unificada); 0 = nunca entra nela
     CamSens,      // camera moderna: velocidade do analogico direito, 1..10 (5 = a de antes; cada ponto e 20%)
     CamInvertY,   // camera moderna: 1 = inverte o eixo vertical do analogico direito e do mouse (padrao: para cima olha para cima, a camera desce)
+    RenderScale,  // escala do quadro nativo sobre a Res, em %: 50..200 (acima de 100 = supersampling)
+    Msaa,         // amostras do MSAA do quadro nativo: 0 (desligado), 2, 4, 8
+    TexFilter,    // filtro das texturas do jogo: 0 bilinear (o do GS), 1 trilinear (mipmaps), 2/4/8/16 anisotropico
     kKeys
 };
 
 inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",    "WOTM_FULLSCREEN", "WOTM_HZ",        "WOTM_VSYNC",
                                             "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE",
                                             "WOTM_PROMPTS",    "WOTM_MENUCONFIRM", "WOTM_CAMERA",    "WOTM_CAMRECENTER", "WOTM_CLOSECAM",
-                                            "WOTM_CAMSENS",    "WOTM_CAMINVERT"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0};
+                                            "WOTM_CAMSENS",    "WOTM_CAMINVERT",   "WOTM_RENDERSCALE", "WOTM_MSAA",      "WOTM_TEXFILTER"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0};
 inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
 inline constexpr int kPromptStyles = 6;
 enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
 inline constexpr const char *kConfirmNames[] = {"bottom", "right"};
 
 // Escolhas que o painel percorre
-inline constexpr int kResolutions[] = {448, 720, 1080, 1440, 2160};
+inline constexpr int kResolutions[] = {0, 448, 720, 1080, 1440, 2160};   // 0 = a da janela
+inline constexpr int kRenderScales[] = {50, 75, 100, 125, 150, 200};
+inline constexpr int kMsaaLevels[] = {0, 2, 4, 8};
+inline constexpr int kTexFilters[] = {0, 1, 2, 4, 8, 16};
 inline constexpr int kRates[] = {0, 60, 120, 144, 165, 180, 240};
 inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10", "21:9", "32:9"};
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0};
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0};
 inline std::filesystem::path g_path;   // vazio: sem arquivo (WOTM_SETTINGS=0 ou antes do load)
 inline std::mutex g_fileMutex;
 inline bool g_pathPending = false;   // o load achou teclas de um layout anterior: regrava o arquivo no fim do load
@@ -85,9 +91,31 @@ inline bool parse(Key k, const char *s, int &out)
     {
     case Res:
     {
+        if (!std::strcmp(s, "window")) { out = 0; return true; }
+        if (*s < '0' || *s > '9') return false;
+        const int v = std::atoi(s);
+        out = v <= 0 ? 0 : std::clamp(v, 224, 4320);
+        return true;
+    }
+    case RenderScale:
+    {
         const int v = std::atoi(s);
         if (v <= 0) return false;
-        out = std::clamp(v, 224, 4320);
+        out = std::clamp(v, 25, 400);
+        return true;
+    }
+    case Msaa:
+    {
+        const int v = std::atoi(s);
+        out = v >= 8 ? 8 : v >= 4 ? 4 : v >= 2 ? 2 : 0;
+        return true;
+    }
+    case TexFilter:
+    {
+        if (!std::strcmp(s, "bilinear")) { out = 0; return true; }
+        if (!std::strcmp(s, "trilinear")) { out = 1; return true; }
+        const int v = std::atoi(s);   // "16x" = 16
+        out = v >= 16 ? 16 : v >= 8 ? 8 : v >= 4 ? 4 : v >= 2 ? 2 : v == 1 ? 1 : 0;
         return true;
     }
     case Aspect:
@@ -138,6 +166,8 @@ inline std::string format(Key k, int v)
     if (k == Aspect) return kAspectNames[v > 0 && v < kAspects ? v : 0];
     if (k == Prompts) return kPromptNames[std::clamp(v, 0, kPromptStyles - 1)];
     if (k == MenuConfirm) return kConfirmNames[v ? 1 : 0];
+    if (k == Res && v <= 0) return "window";
+    if (k == TexFilter) return v <= 0 ? "bilinear" : v == 1 ? "trilinear" : std::to_string(v) + "x";
     return std::to_string(v);
 }
 

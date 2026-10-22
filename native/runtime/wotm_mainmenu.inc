@@ -104,16 +104,19 @@ static int g_suppress = 0;         // quadros sem entrada do jogo depois de fech
 namespace st = wotm::settings;
 enum Tab { TabVideo, TabFeatures, TabCamera, TabControls, kTabs };
 constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CAMERA", "CONTROLS"};
-constexpr int kMaxOpts = 5;
+constexpr int kMaxOpts = 8;
 struct Opt { st::Key key; const char *label; const char *hint; };
 struct TabDef { int n; Opt opt[kMaxOpts]; };
 constexpr TabDef kTabDefs[kTabs] = {
-    {5,
-     {{st::Res, "RESOLUTION", "HOW TALL THE PICTURE IS, IN PIXELS. HIGHER LOOKS SHARPER"},
+    {8,
+     {{st::Res, "RESOLUTION", "HEIGHT OF THE PICTURE IN PIXELS. WINDOW FOLLOWS THE WINDOW OR SCREEN"},
+      {st::RenderScale, "RENDER SCALE", "DRAWS BIGGER OR SMALLER, THEN FITS THE SCREEN. ABOVE 1X SMOOTHS EDGES"},
       {st::Aspect, "ASPECT RATIO", "DYNAMIC MATCHES THE SHAPE OF THE WINDOW"},
       {st::Display, "DISPLAY MODE", "WINDOW OR FULLSCREEN. F11 SWITCHES AT ANY TIME"},
       {st::Rate, "REFRESH RATE", "HOW OFTEN THE PICTURE IS DRAWN. THE GAME ITSELF ALWAYS RUNS AT 60"},
-      {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"}}},
+      {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"},
+      {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
+      {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
     {3,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
@@ -192,6 +195,9 @@ static int choices(st::Key k, int out[16])
     {
     case st::Res: std::copy(std::begin(st::kResolutions), std::end(st::kResolutions), out); return int(std::size(st::kResolutions));
     case st::Rate: std::copy(std::begin(st::kRates), std::end(st::kRates), out); return int(std::size(st::kRates));
+    case st::RenderScale: std::copy(std::begin(st::kRenderScales), std::end(st::kRenderScales), out); return int(std::size(st::kRenderScales));
+    case st::Msaa: std::copy(std::begin(st::kMsaaLevels), std::end(st::kMsaaLevels), out); return int(std::size(st::kMsaaLevels));
+    case st::TexFilter: std::copy(std::begin(st::kTexFilters), std::end(st::kTexFilters), out); return int(std::size(st::kTexFilters));
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
@@ -230,7 +236,23 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     static const char *const kAspectUi[st::kAspects] = {"DYNAMIC", "4:3", "16:9", "16:10", "21:9", "32:9"};
     switch (k)
     {
-    case st::Res: std::snprintf(buf, sz, "%dP", v); break;
+    case st::Res: if (v > 0) std::snprintf(buf, sz, "%dP", v); else std::snprintf(buf, sz, "WINDOW"); break;
+    case st::RenderScale:   // a fonte do jogo nao tem %: 1.5X
+    {
+        char num[16];
+        std::snprintf(num, sizeof num, "%.2f", v / 100.0);
+        size_t n = std::strlen(num);
+        while (n && num[n - 1] == '0') num[--n] = 0;
+        if (n && num[n - 1] == '.') num[--n] = 0;
+        std::snprintf(buf, sz, "%sX", num);
+        break;
+    }
+    case st::Msaa: if (v > 0) std::snprintf(buf, sz, "MSAA %dX", v); else std::snprintf(buf, sz, "OFF"); break;
+    case st::TexFilter:
+        if (v <= 0) std::snprintf(buf, sz, "BILINEAR");
+        else if (v == 1) std::snprintf(buf, sz, "TRILINEAR");
+        else std::snprintf(buf, sz, "ANISOTROPIC %dX", v);
+        break;
     case st::Aspect: std::snprintf(buf, sz, "%s", kAspectUi[v > 0 && v < st::kAspects ? v : 0]); break;
     case st::Display: std::snprintf(buf, sz, "%s", kDisplay[std::clamp(v, 0, 2)]); break;
     case st::Rate: if (v > 0) std::snprintf(buf, sz, "%d HZ", v); else std::snprintf(buf, sz, "MONITOR"); break;

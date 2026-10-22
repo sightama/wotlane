@@ -1025,6 +1025,15 @@ public:
         return added > 0;
     }
 
+    // Filtro das texturas do jogo (opcao TEXTURE FILTER, WOTM_TEXFILTER): 0 bilinear sem mipmaps (o do GS), 1 trilinear (mipmaps), 2..16
+    // anisotropico com trilinear. Vale para as que existem e para as que vierem; o desenho chama a cada quadro e so age quando muda.
+    void setTexFilter(int f) {
+        if (f == texFilter_) return;
+        texFilter_ = f;
+        for (auto &kv : tex_) applyTexFilter(kv.second);
+        std::fprintf(stderr, "[native] filtro de texturas: %s (%zu texturas)\n", f <= 0 ? "bilinear" : f == 1 ? "trilinear" : "anisotropico", tex_.size());
+    }
+
     void invalidate() {
         cache_.clear();
         for (auto &kv : tex_) if (kv.second.id) UnloadTexture(kv.second);
@@ -1176,6 +1185,7 @@ public:
             t = LoadTextureFromImage(img);
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
         }
+        applyTexFilter(t);
         tex_[key] = t;
         return t.id;
     }
@@ -1701,6 +1711,7 @@ public:
             else if (t.id) SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
             if (t.id) SetTextureWrap(t, TEXTURE_WRAP_REPEAT);
         }
+        applyTexFilter(t);
         tex_[key] = t;
         return t.id;
     }
@@ -1982,6 +1993,7 @@ public:
             // BILINEAR como o GS (as gotas do Plantboss saiam em blocos de texel e pareciam maiores: foto 2026-10-19_003247/001)
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
         }
+        applyTexFilter(t);
         tex_[key] = t;
         w = t.width; h = t.height;
         return t.id;
@@ -3250,6 +3262,25 @@ private:
 
     std::unordered_map<uint32_t, std::shared_ptr<MeshData>> cache_;
     std::unordered_map<uint64_t, Texture2D> tex_;
+    int texFilter_ = 0;
+    bool anisoSet_ = false;   // algum anisotropico ja foi pedido (sem ele, nada a desfazer; sem a extensao o raylib avisa a cada chamada)
+    // Filtro atual numa textura do tex_ (feita ou refeita): mipmaps na primeira vez que o filtro pede
+    void applyTexFilter(Texture2D &t) {
+        if (!t.id) return;
+        if (texFilter_ <= 0) {
+            rlTextureParameters(t.id, RL_TEXTURE_MIN_FILTER, RL_TEXTURE_FILTER_LINEAR);
+            rlTextureParameters(t.id, RL_TEXTURE_MAG_FILTER, RL_TEXTURE_FILTER_LINEAR);
+            if (anisoSet_) rlTextureParameters(t.id, RL_TEXTURE_FILTER_ANISOTROPIC, 1);
+            return;
+        }
+        if (t.mipmaps <= 1) GenTextureMipmaps(&t);
+        rlTextureParameters(t.id, RL_TEXTURE_MIN_FILTER, t.mipmaps > 1 ? RL_TEXTURE_FILTER_MIP_LINEAR : RL_TEXTURE_FILTER_LINEAR);
+        rlTextureParameters(t.id, RL_TEXTURE_MAG_FILTER, RL_TEXTURE_FILTER_LINEAR);
+        if (texFilter_ >= 2 || anisoSet_) {
+            rlTextureParameters(t.id, RL_TEXTURE_FILTER_ANISOTROPIC, texFilter_ >= 2 ? texFilter_ : 1);
+            anisoSet_ = true;
+        }
+    }
     std::vector<uint32_t> seen_;   // nos ja visitados neste quadro (ciclos / DAG)
     int lod_ = -1;
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual

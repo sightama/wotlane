@@ -58,6 +58,10 @@ extern "C" void glReadPixels(int x, int y, int w, int h, unsigned format, unsign
 
 namespace wotm {
 
+// Antes do glReadPixels da profundidade (teste de oclusao do lens flare): com MSAA (wotm_msaa.hpp) o desenho vai a um framebuffer
+// multiamostra, que o glReadPixels nao le; quem o usa poe aqui a resolucao da profundidade. Nulo: le o framebuffer em uso.
+inline void (*g_beforeDepthRead)() = nullptr;
+
 // Profundidade de uma vista lida sem esperar a GPU (tela dividida, Scene::drawFlaresFor): o glReadPixels vai para um pixel buffer
 // object (copia assincrona) e o resultado e lido na vez seguinte, quando a GPU ja terminou: o teste de oclusao do lens flare usa a
 // profundidade do redesenho anterior (~16 ms). O glReadPixels direto parava a CPU ate a GPU acabar tudo o que tinha recebido, uma
@@ -110,6 +114,7 @@ public:
             sz_[cur_] = bytes;
         }
         w_[cur_] = w;
+        if (g_beforeDepthRead) g_beforeDepthRead();   // MSAA: le a profundidade resolvida
         glReadPixels(0, 0, w, h, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, nullptr);
         bind_(kPack, 0);
         cur_ ^= 1;
@@ -847,6 +852,7 @@ public:
         if (off || flares.e.empty() || flares.nspr == 0) return;
         const FlareFrame &f = flares;
         rlDrawRenderBatchActive();
+        if (g_beforeDepthRead) g_beforeDepthRead();
         const int fbw = rlGetFramebufferWidth(), fbh = rlGetFramebufferHeight();
         if (fbw <= 0 || fbh <= 0) return;
         const GsScreenRect gr = gsScreenRect(float(fbw), float(fbh));   // px do GS -> px do nativo (faixa 4:3 central em widescreen)
