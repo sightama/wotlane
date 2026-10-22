@@ -4,7 +4,8 @@
 // O jogo grava cada item do menu como uma palavra pronta nas texturas T4 81, 142 e 162 do SHELL/SHELL.TEX (paletas tbp 239, 480 e 518
 // do SHELL.RTX). As palavras que o jogo tem ("options", "load game", "unlocks", "adventure", "free-for-all", "minigames") saem
 // inteiras; as nossas ("single player", "multiplayer", "recompiled options", "quit game", e "endurance"/"elimination", que no jogo so
-// existem em cinza) saem de trechos dessas palavras: em cada passo, o maior trecho de alguma palavra que casa com o que falta. A fonte
+// existem em cinza) saem de trechos dessas palavras: em cada passo, o maior trecho de alguma palavra que casa com o que falta (as
+// frases "sudden death" e "unlimited play", que o jogo apertou, so quando a letra nao existe em outra). A fonte
 // nao tem b, j, q, x nem z; o q e o p espelhado.
 //
 // kLines: cada palavra (ou par de palavras) das texturas, ja virada para leitura: textura, faixa de y, linha de base, altura do x e o
@@ -20,6 +21,7 @@ struct Line
     float base, xh;    // linha de base e altura do x (mediana das letras sem haste)
     const char *text;  // as letras, na ordem (espaco separa palavras e nao conta como letra)
     int seg[14][2];    // x do branco de cada letra
+    bool narrow = false;   // frase apertada pelo jogo (letras mais estreitas)
 };
 constexpr uint16_t kTexIds[3] = {81, 142, 162}, kPalTbp[3] = {239, 480, 518};
 constexpr Line kLines[] = {
@@ -29,8 +31,8 @@ constexpr Line kLines[] = {
     {1, 122, 179, 164.0f, 29.0f, "options", {{13, 31}, {38, 57}, {63, 80}, {88, 94}, {101, 119}, {125, 146}, {152, 168}}},
     {1, 189, 248, 231.0f, 29.0f, "player", {{14, 33}, {40, 48}, {54, 72}, {78, 103}, {109, 128}, {135, 150}}},
     {2, 3, 51, 47.0f, 29.0f, "adventure", {{16, 33}, {41, 60}, {67, 89}, {95, 112}, {121, 141}, {147, 163}, {171, 192}, {200, 214}, {221, 238}}},
-    {2, 67, 115, 111.0f, 29.0f, "sudden death", {{7, 20}, {26, 44}, {50, 66}, {71, 87}, {94, 109}, {114, 131}, {150, 166}, {173, 187}, {192, 207}, {212, 226}, {231, 247}}},
-    {2, 132, 192, 176.0f, 29.0f, "unlimited play", {{7, 23}, {29, 44}, {49, 55}, {61, 65}, {71, 96}, {102, 107}, {112, 125}, {130, 144}, {149, 164}, {182, 197}, {202, 208}, {213, 226}, {231, 250}}},
+    {2, 67, 115, 111.0f, 29.0f, "sudden death", {{7, 20}, {26, 44}, {50, 66}, {71, 87}, {94, 109}, {114, 131}, {150, 166}, {173, 187}, {192, 207}, {212, 226}, {231, 247}}, true},
+    {2, 132, 192, 176.0f, 29.0f, "unlimited play", {{7, 23}, {29, 44}, {49, 55}, {61, 65}, {71, 96}, {102, 107}, {112, 125}, {130, 144}, {149, 164}, {182, 197}, {202, 208}, {213, 226}, {231, 250}}, true},
     {2, 195, 243, 238.0f, 29.0f, "unlocks", {{13, 36}, {42, 63}, {69, 77}, {84, 102}, {108, 125}, {131, 153}, {160, 176}}},
 };
 constexpr float kRefXh = 30.f;   // unidades das pecas: altura do x = kRefXh
@@ -99,8 +101,12 @@ static bool compose(const char *s, std::vector<Piece> &out, float &width)
     {
         if (s[k] == ' ') { x += kWordGap; ++k; continue; }
         int bestL = -1, bestA = 0, bestN = 0;
+        // primeiro as linhas de letra normal; "sudden death" e "unlimited play" (frases que o jogo apertou: o e tem 14 px, nas outras 17)
+        // so para letra que nao existe nelas
+        for (int pass = 0; pass < 2 && bestL < 0; ++pass)
         for (int li = 0; li < int(std::size(kLines)); ++li)
         {
+            if (kLines[li].narrow != (pass == 1)) continue;
             // trechos de uma palavra so da linha; a = indice da letra sem contar espacos
             const char *t = kLines[li].text;
             int idx = 0;
