@@ -38,6 +38,7 @@ function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
     $env:PS2X_NO_VU1 = '1'; $env:PS2X_NO_VIF1 = '1'; $env:PS2X_NO_GS = '1'; $env:PS2X_SCENE = '1'
     $env:PS2X_CD_IMAGE = "$repo\ISO\SCUS_971.97.War of the Monsters.iso"
     $env:WOTM_REPO = $repo
+    $env:WOTM_SETTINGS = '0'   # sem o settings.ini do painel/launcher
     $env:WOTM_VU1CHECK = '1'
     $env:WOTM_VU1CHECK_SNAP = Join-Path $Dir "cap_$name"
     $env:WOTM_VU1CHECK_SNAP_MAX = '1024'

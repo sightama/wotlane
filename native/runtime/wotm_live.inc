@@ -257,6 +257,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_snd.inc"
 
 // Controles e teclado por jogador (mapa porta -> dispositivos do ps2_pad.cpp), sempre ligado
+#include "../wotm_settings.hpp"   // opcoes ao vivo (painel "recompiled options" e launcher)
 #include "wotm_pad.inc"
 
 #if __has_include("wotm_native.hpp")
@@ -330,19 +331,10 @@ static bool g_hideFps = false;   // replay (--vu1cmp, wotm_vu1check.inc): imagem
 static bool g_force43 = false;   // replay: quadro 4:3, como a imagem de referencia do GS
 static bool g_localCollect = false;   // replay (--vu1cmp): sem jogo rodando, a apresentacao le a RAM do instantaneo ela mesma
 
-// Widescreen (Hor+): o FOV vertical e o do jogo e a largura acompanha a proporcao. WOTM_ASPECT=L:A fixa a proporcao (4:3 = tela
-// original, com faixas nas laterais); sem ela a proporcao segue a janela (entre 4:3 e 32:9), que abre em 16:9.
-static float fixedAspect()
-{
-    static const float a = []() {
-        const char *s = std::getenv("WOTM_ASPECT");
-        float w = 0.f, h = 0.f;
-        if (s && std::sscanf(s, "%f:%f", &w, &h) == 2 && w > 0.f && h > 0.f)
-            return std::clamp(w / h, 4.f / 3.f, 32.f / 9.f);
-        return 0.f;
-    }();
-    return a;
-}
+// Widescreen (Hor+): o FOV vertical e o do jogo e a largura acompanha a proporcao. A opcao Aspect (WOTM_ASPECT=L:A, wotm_settings.hpp,
+// ao vivo) fixa a proporcao (4:3 = tela original, com faixas nas laterais); dinamica, a proporcao segue a janela (entre 4:3 e 32:9),
+// que abre em 16:9.
+static float fixedAspect() { return wotm::settings::aspectRatio(); }
 static float viewAspect()
 {
     if (g_force43)
@@ -352,17 +344,10 @@ static float viewAspect()
     const float sh = static_cast<float>(GetScreenHeight());
     return sh > 0.f ? std::clamp(static_cast<float>(GetScreenWidth()) / sh, 4.f / 3.f, 32.f / 9.f) : 4.f / 3.f;
 }
-// Altura do quadro nativo em pixels (WOTM_RES=<linhas>, padrao 720; a tela do PS2 tem 448, 224 por campo); a largura sai da proporcao.
-// O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
-static int renderHeight()
-{
-    static const int h = []() {
-        const char *s = std::getenv("WOTM_RES");
-        const int v = s ? std::atoi(s) : 0;
-        return v > 0 ? std::clamp(v, 224, 4320) : 720;
-    }();
-    return g_force43 ? 720 : h;
-}
+// Altura do quadro nativo em pixels (opcao Res, WOTM_RES=<linhas>, padrao 720, ao vivo; a tela do PS2 tem 448, 224 por campo); a
+// largura sai da proporcao. Mudou: o desenho refaz as texturas do quadro (wotmDrawNative, sizeOk). O replay (--vu1cmp) fica em 720,
+// como as comparacoes ja gravadas.
+static int renderHeight() { return g_force43 ? 720 : wotm::settings::get(wotm::settings::Res); }
 // Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): WOTM_FULLSCREEN=1|2 vai para a tela cheia sem borda ou exclusiva (proporcao
 // do monitor; com WOTM_ASPECT fixo o quadro fica com faixas); senao a janela de 960x720 do runtime vira o tamanho do quadro nativo
 // (renderHeight na proporcao), reduzido para caber no monitor. O quadro nao depende da janela: so a ampliacao final muda.
@@ -370,18 +355,19 @@ static int renderHeight()
 // relogio). A logica do jogo continua a 60: a apresentacao so redesenha a cena quando chega quadro novo (wotmDrawNative, "redesenho")
 // e nas outras reapresenta a ultima imagem. Ganho: ritmo regular (sem a batida entre os 60 do raylib e o monitor), sem tearing.
 // O runtime abria com SetTargetFPS(60) fixo (ps2_runtime.cpp); aqui e trocado na primeira apresentacao.
+// Opcoes Rate e Vsync (wotm_settings.hpp), ao vivo: applyVideoSettings chama de novo quando mudam.
 static void initPresentRate()
 {
     const int mon = GetCurrentMonitor(), monHz = GetMonitorRefreshRate(mon);
-    const char *e = std::getenv("WOTM_HZ");
-    int hz = e ? std::atoi(e) : 0;
+    int hz = wotm::settings::get(wotm::settings::Rate);
     if (hz <= 0)
         hz = monHz > 0 ? monHz : 60;
     hz = std::clamp(hz, 30, 1000);
-    const char *v = std::getenv("WOTM_VSYNC");
-    const bool vsync = !(v && *v == '0');
+    const bool vsync = wotm::settings::on(wotm::settings::Vsync);
     if (vsync)
         SetWindowState(FLAG_VSYNC_HINT);
+    else
+        ClearWindowState(FLAG_VSYNC_HINT);
     // com vsync na taxa do monitor quem segura e a troca de buffers; abaixo dela o limite por tempo divide (60 num de 180 = 1 em 3)
     SetTargetFPS(vsync && hz >= monHz ? 0 : hz);
     std::fprintf(stderr, "[native] apresentacao: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", vsync && monHz > 0 ? std::min(hz, monHz) : hz,
@@ -409,8 +395,9 @@ static void fitWindow()
     }
 }
 
-// Tipo de tela cheia (WOTM_FULLSCREEN): 1 = sem borda (janela do tamanho do monitor, o desktop nao muda de modo), 2 = exclusiva (o
-// monitor troca para o modo da janela, na resolucao nativa dele). O F11 alterna entre a janela e o tipo escolhido (sem a variavel: sem borda).
+// Tipo de tela cheia (opcao Display, WOTM_FULLSCREEN): 1 = sem borda (janela do tamanho do monitor, o desktop nao muda de modo), 2 =
+// exclusiva (o monitor troca para o modo da janela, na resolucao nativa dele). O F11 alterna entre a janela e o tipo escolhido (com a
+// opcao em janela: sem borda); ele nao muda a opcao.
 static int g_fullscreenKind = 1;
 
 static bool inFullscreen()
@@ -444,27 +431,62 @@ static void setFullscreen(bool on)
     fitWindow();   // o raylib volta ao tamanho de antes, que e o 960x720 do runtime (ou o do monitor) quando a sessao abriu em tela cheia
 }
 
+// Opcoes de video ja aplicadas a janela (a thread da janela compara com as atuais a cada apresentacao)
+static int g_appliedVideo[wotm::settings::kKeys] = {};
+
 static void initWindowAspect()
 {
     static bool done = false;
     if (done)
         return;
     done = true;
+    for (int k = 0; k < wotm::settings::kKeys; ++k)
+        g_appliedVideo[k] = wotm::settings::get(wotm::settings::Key(k));
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
         initPresentRate();
-    const char *s = std::getenv("WOTM_FULLSCREEN");
-    const bool on = s && *s && *s != '0';
-    if (on && *s == '2')
+    const int disp = wotm::settings::get(wotm::settings::Display);
+    if (disp == 2)
         g_fullscreenKind = 2;
-    if (on)
+    if (disp)
         setFullscreen(true);
     else
         fitWindow();
 }
 
+// Opcoes de video mudadas ao vivo (painel "recompiled options", thread do EE): aplicadas aqui, na thread da janela, a cada
+// apresentacao. Display: janela, sem borda ou exclusiva (troca de tipo passa pela janela); Rate/Vsync: o ritmo da apresentacao;
+// Res/Aspect: o quadro se refaz sozinho no proximo desenho, e a janela (fora da tela cheia) volta ao tamanho do quadro.
+static void applyVideoSettings()
+{
+    using namespace wotm::settings;
+    if (g_localCollect || g_hideFps)
+        return;
+    int now[kKeys];
+    for (int k = 0; k < kKeys; ++k)
+        now[k] = get(Key(k));
+    if (now[Display] != g_appliedVideo[Display])
+    {
+        if (inFullscreen())
+            setFullscreen(false);
+        g_fullscreenKind = now[Display] == 2 ? 2 : 1;
+        if (now[Display])
+            setFullscreen(true);
+        std::fprintf(stderr, "[settings] tela: %s\n", now[Display] == 2 ? "cheia exclusiva" : now[Display] ? "cheia sem borda" : "janela");
+    }
+    if (now[Rate] != g_appliedVideo[Rate] || now[Vsync] != g_appliedVideo[Vsync])
+        initPresentRate();
+    if ((now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect]) && !inFullscreen())
+        fitWindow();
+    if (now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect])
+        std::fprintf(stderr, "[settings] quadro: %d linhas, proporcao %s\n", now[Res], format(Aspect, now[Aspect]).c_str());
+    for (int k = 0; k < kKeys; ++k)
+        g_appliedVideo[k] = now[k];
+}
+
 // F11 alterna entre tela cheia e janela (a cada apresentacao, na thread da janela; vale no menu, nos filmes e na luta).
 static void fullscreenKey()
 {
+    applyVideoSettings();
     if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
         setFullscreen(!inFullscreen());
 }
@@ -951,8 +973,10 @@ void wotmCaptureFadeStep(const uint8_t *rdram)
     c.fresh = true;
 }
 
+void wotmMainMenuLogoFrame(uint8_t *rdram);   // wotm_mainmenu.inc: logo do telao so no "press start"
 void wotmCaptureFrame(const uint8_t *rdram)
 {
+    wotmMainMenuLogoFrame(const_cast<uint8_t *>(rdram));   // antes da coleta: o quadro ja sai sem o logo
     // a copia do lens flare vale so para este quadro: o seguinte sem particleDraw (menu, LOAD) sai sem flares
     struct ConsumeFlares { ~ConsumeFlares() { wotm::Particles::consumeFlares(); } } consumeFlares;
     wotm_live::Capture &c = wotm_live::capture();

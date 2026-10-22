@@ -160,6 +160,7 @@ class Launcher : Form
         cols.Controls.Add(right);
         root.Controls.Add(cols);
         Dictionary<string, string> saved = LoadIni();
+        MergeSettings(saved);   // o que o jogo mudou no painel "recompiled options" vale mais que o ini do launcher
         left.Controls.Add(VideoGroup(saved, tips));
         left.Controls.Add(MatchGroup(saved, tips));
         left.Controls.Add(CheatsGroup(saved, tips));
@@ -221,7 +222,7 @@ class Launcher : Form
         Controls.Add(root);
         if (Dark) ApplyDark(this);
         AcceptButton = play;
-        FormClosing += delegate { SaveIni(); };
+        FormClosing += delegate { SaveIni(); SaveSettings(false); };
     }
 
     GroupBox VideoGroup(Dictionary<string, string> saved, ToolTip tips)
@@ -504,8 +505,61 @@ class Launcher : Form
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
-    string RuntimeDir()
+    // Opcoes que o jogo tambem muda ao vivo (painel "recompiled options" do menu principal, native/wotm_settings.hpp): settings.ini
+    // ao lado do save.json (<runtime>\discroot), CHAVE=valor com os nomes das variaveis. O jogo le na abertura; o launcher le ao abrir
+    // (vale mais que o WotM_Launcher.ini) e grava ao jogar e ao fechar. Essas variaveis nao vao mais pelo ambiente.
+    static readonly string[] SharedKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
+        "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE" };
+
+    string SettingsPath(bool ask)
+    {
+        string rt = RuntimeDir(ask);
+        return rt == null ? null : Path.Combine(rt, "discroot", "settings.ini");
+    }
+
+    void MergeSettings(Dictionary<string, string> saved)
+    {
+        string p = SettingsPath(false);
+        if (p == null || !File.Exists(p)) return;
+        try
+        {
+            foreach (string raw in File.ReadAllLines(p))
+            {
+                string line = raw.Trim();
+                int i = line.IndexOf('=');
+                if (line.StartsWith("#") || i <= 0) continue;
+                string key = line.Substring(0, i), v = line.Substring(i + 1).Trim();
+                if (Array.IndexOf(SharedKeys, key) < 0) continue;
+                if (key == "WOTM_ASPECT")
+                {
+                    bool dyn = v == "dynamic" || v == "0" || v.Length == 0;
+                    saved[":DynWidth"] = dyn ? "1" : "0";
+                    if (!dyn) saved[key] = v;
+                }
+                else saved[key] = v;
+            }
+        }
+        catch (IOException) { }
+    }
+
+    void SaveSettings(bool ask)
+    {
+        string p = SettingsPath(ask);
+        if (p == null || !Directory.Exists(Path.GetDirectoryName(p))) return;
+        var lines = new List<string> { "# Recompiled options (menu principal) e launcher; mesma chave das variaveis de ambiente" };
+        lines.Add("WOTM_RES=" + Resolutions[res.SelectedIndex]);
+        lines.Add("WOTM_ASPECT=" + (dynWidth.Checked ? "dynamic" : Aspects[aspect.SelectedIndex]));
+        lines.Add("WOTM_FULLSCREEN=" + DisplayModes[fullscreen.SelectedIndex]);
+        lines.Add("WOTM_HZ=" + Rates[rate.SelectedIndex]);
+        lines.Add("WOTM_VSYNC=" + (vsync.Checked ? "1" : "0"));
+        foreach (string k in new[] { "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE" })
+            lines.Add(k + "=" + (On(k) ? "1" : "0"));
+        try { File.WriteAllLines(p, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+    }
+
+    // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo;
+    // sem elas, pergunta (ask) ou devolve null.
+    string RuntimeDir(bool ask = true)
     {
         string env = Environment.GetEnvironmentVariable("WOTM_RECOMP_DIR");
         if (!string.IsNullOrEmpty(env) && File.Exists(Path.Combine(env, "run_live.ps1"))) return env;
@@ -515,6 +569,7 @@ class Launcher : Form
             string dir = File.ReadAllText(saved).Trim();
             if (File.Exists(Path.Combine(dir, "run_live.ps1"))) return dir;
         }
+        if (!ask) return null;
         using (var dlg = new FolderBrowserDialog { Description = "Runtime folder (the one containing run_live.ps1)" })
         {
             if (dlg.ShowDialog(this) == DialogResult.OK && File.Exists(Path.Combine(dlg.SelectedPath, "run_live.ps1")))
@@ -542,25 +597,19 @@ class Launcher : Form
             Path.Combine(rt, "run_live.ps1"), On(":Auto") && !matchOn.Checked ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
         psi.EnvironmentVariables["WOTM_REPO"] = exeDir;
+        // video e QoL vao pelo settings.ini (o painel do jogo muda e grava o mesmo arquivo); variavel herdada passaria por cima dele
+        SaveSettings(true);
+        foreach (string k in SharedKeys) psi.EnvironmentVariables.Remove(k);
         foreach (var kv in boxes)
         {
             string key = kv.Key.Key;
-            if (key.StartsWith(":")) continue;
+            if (key.StartsWith(":") || Array.IndexOf(SharedKeys, key) >= 0) continue;
             string name = key, value = "1";
             int eq = key.IndexOf('=');
             if (eq > 0) { name = key.Substring(0, eq); value = key.Substring(eq + 1); }
             if (kv.Value.Checked) psi.EnvironmentVariables[name] = value;
             else psi.EnvironmentVariables.Remove(name);
         }
-        psi.EnvironmentVariables["WOTM_RES"] = Resolutions[res.SelectedIndex];
-        if (dynWidth.Checked) psi.EnvironmentVariables.Remove("WOTM_ASPECT");
-        else psi.EnvironmentVariables["WOTM_ASPECT"] = Aspects[aspect.SelectedIndex];
-        if (fullscreen.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = DisplayModes[fullscreen.SelectedIndex];
-        else psi.EnvironmentVariables.Remove("WOTM_FULLSCREEN");
-        if (rate.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_HZ"] = Rates[rate.SelectedIndex];
-        else psi.EnvironmentVariables.Remove("WOTM_HZ");
-        if (vsync.Checked) psi.EnvironmentVariables.Remove("WOTM_VSYNC");
-        else psi.EnvironmentVariables["WOTM_VSYNC"] = "0";
         if (matchOn.Checked) psi.EnvironmentVariables["WOTM_MATCH"] = MatchValue();
         else psi.EnvironmentVariables.Remove("WOTM_MATCH");
         string cheats = CheatsValue();

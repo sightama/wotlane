@@ -17,7 +17,7 @@ static std::atomic<int> g_portBase{0};
 
 static uint32_t deviceMap(int port)
 {
-    static const bool kbSeparate = [] { const char *e = std::getenv("WOTM_KBSEPARATE"); return e && e[0] == '1'; }();
+    const bool kbSeparate = wotm::settings::on(wotm::settings::KbSeparate);   // opcao ao vivo (wotm_settings.hpp)
     port += g_portBase.load(std::memory_order_relaxed);
     int pads[PS2_PAD_MAX_GAMEPADS];
     int n = 0;

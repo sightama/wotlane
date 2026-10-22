@@ -43,7 +43,7 @@ constexpr uint32_t kShellSound = kShell + 0x2918;
 constexpr uint32_t kMonsterSel = kShell + 0x2938, kCostume = kShell + 0x2BE0, kNumPlayers = kShell + 0x2BB4, kNumAIs = kShell + 0x2BB8,
                    kMode = kShell + 0x2C10, kBattleMode = kShell + 0x2B54, kSw5CC = kShell + 0x5CC, kCostumeBox = kShell + 0x88;
 constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +0, state +4; 4 trajes por coluna
-enum Action { Left, Right, Ok, Back, Start, Up, Down, kActions };
+enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc
 enum Phase { Off, Config, Reveal, Leaving };
 
 // Cores dos jogadores 1 a 4
@@ -118,7 +118,7 @@ static void parseScript()
     const char *e = std::getenv("WOTM_PADSEL_SCRIPT");
     if (!e) return;
     std::string s(e);
-    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down"};
+    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down", "l1", "r1"};
     for (size_t pos = 0; pos < s.size();)
     {
         size_t end = s.find(';', pos);
@@ -158,6 +158,8 @@ static void readDevice(int d, bool out[kActions])
         out[Ok] = IsKeyDown(KEY_SPACE);
         out[Start] = IsKeyDown(KEY_ENTER);
         out[Back] = IsKeyDown(KEY_X) || IsKeyDown(KEY_BACKSPACE);
+        out[L1] = IsKeyDown(KEY_Q);   // as teclas do L1/R1 no ps2_pad.cpp
+        out[R1] = IsKeyDown(KEY_E);
     }
     else
     {
@@ -169,6 +171,8 @@ static void readDevice(int d, bool out[kActions])
         out[Ok] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
         out[Start] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_MIDDLE_RIGHT);
         out[Back] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_UP);
+        out[L1] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
+        out[R1] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
     }
     const double now = GetTime();
     for (const ScriptStep &st : g_script)
@@ -1664,11 +1668,15 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         std::fprintf(stderr, "[padsel] telao: no %x, %.1f x %.1f, centro %.1f %.1f %.1f\n", v.screenObj, pl.x1 - pl.x0, pl.y1 - pl.y0, pl.c.x, pl.c.y,
                      pl.c.z);
     }
-    // escolha de controles: abaixo do logo (de 44% a 96% da altura); selecao de monstros: em cima (a tela 6 nao tem o logo e tem a
-    // fileira de retratos embaixo); centrada, com a proporcao da textura
-    const float fyTop = v.select ? 0.06f : 0.44f, fyBottom = v.select ? 0.60f : 0.96f;
+    // escolha de controles: abaixo do logo (de 44% a 96% da altura), ou no telao inteiro com o menu em texto (o wotm_mainmenu.inc
+    // tira o logo fora do "press start"); selecao de monstros: em cima (a tela 6 nao tem o logo e tem a fileira de retratos embaixo);
+    // centrada, com a proporcao da textura (largura limitada: a altura acompanha, centrada na faixa)
+    const bool full = !v.select && wotmTextMenuOn();
+    const float fyTop = v.select ? 0.06f : full ? 0.15f : 0.44f, fyBottom = v.select ? 0.60f : full ? 0.97f : 0.96f;
     const float hy = (pl.y1 - pl.y0) * (fyBottom - fyTop), wx = std::min(hy * float(kW) / float(kH), (pl.x1 - pl.x0) * 0.92f);
-    drawOnPlane(pl, g_rt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop, wx, hy, v.alpha, 0.002f * (pl.x1 - pl.x0));
+    const float h = wx * float(kH) / float(kW);
+    drawOnPlane(pl, g_rt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f, wx, h, v.alpha,
+                0.002f * (pl.x1 - pl.x0));
 }
 } // namespace wotm_padsel
 
