@@ -6,7 +6,10 @@
 // CONTROLS) e pela troca de confirmar dos menus (MenuConfirm, wotm_pad.inc). Estilo (opcao Prompts): automatico = o ultimo dispositivo
 // usado (teclado: a tecla; gamepad: pelo nome dele, Xbox, PlayStation ou Nintendo), ou fixo; "original" deixa os 3D do jogo.
 // O atlas (native/assets/prompts.png, tools/prompts_atlas.py) vem embutido nos executaveis (recurso WOTM_PROMPTS do native/wotm.rc).
+// Face buttons no estilo PlayStation (e no "original", nos icones 2D): os do proprio jogo, a textura 163 do SHELL/SHELL.TEX do disco
+// (T8 64x64, paleta tbp 519 do SHELL.RTX; bola, quadrado, triangulo e X em quadrantes de 32), no lugar dos do Kenney.
 #include "../wotm_prompts.h"
+#include "wotm_model.hpp"   // decodeT8, unzipIe
 
 // Sem windows.h (briga com os nomes do raylib): so o que le um recurso do proprio executavel
 extern "C" __declspec(dllimport) void *__stdcall GetModuleHandleA(const char *);
@@ -49,6 +52,39 @@ static bool loadAtlas()
     SetTextureFilter(g_atlas, TEXTURE_FILTER_TRILINEAR);
     std::fprintf(stderr, "[prompts] atlas %dx%d\n", g_atlas.width, g_atlas.height);
     return true;
+}
+
+// Face buttons do jogo (thread da janela). Celulas virtuais kFaceBase + 0..3 (triangulo, bola, X, quadrado); o quadrante de cada um
+// na textura como o disco a guarda (linhas de baixo para cima: o recorte vira na hora de desenhar).
+constexpr int kFaceBase = 1000;
+static Texture2D g_face{};
+static bool g_faceTried = false;
+static constexpr int kFaceQuad[4][2] = {{0, 32}, {0, 0}, {32, 32}, {32, 0}};
+static bool loadFace()
+{
+    if (g_faceTried) return g_face.id != 0;
+    g_faceTried = true;
+    const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    std::vector<uint8_t> tex, rtx;
+    wotm::model::TexImage im;
+    if (!wotm::disc::readFile(io.cdRoot, io.cdImage.string(), "SHELL/SHELL.TEX", tex) ||
+        !wotm::disc::readFile(io.cdRoot, io.cdImage.string(), "SHELL/SHELL.RTX", rtx) || !wotm::model::unzipIe(tex) ||
+        !wotm::model::unzipIe(rtx) || !wotm::model::decodeT8(tex, rtx, 163, 519, im) || im.w != 64 || im.h != 64)
+    {
+        std::fprintf(stderr, "[prompts] face buttons do jogo (SHELL.TEX 163) nao lidos: ficam os do Kenney\n");
+        return false;
+    }
+    Image img{im.rgba.data(), im.w, im.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    g_face = LoadTextureFromImage(img);
+    SetTextureFilter(g_face, TEXTURE_FILTER_BILINEAR);
+    std::fprintf(stderr, "[prompts] face buttons do jogo carregados (SHELL.TEX 163)\n");
+    return true;
+}
+// Recorte do face button `cell` (kFaceBase + i) na textura, ja virado
+static Rectangle faceSrc(int cell)
+{
+    const int *q = kFaceQuad[cell - kFaceBase];
+    return Rectangle{float(q[0]), float(q[1] + 32), 32.f, -32.f};
 }
 
 // Ultimo dispositivo usado (thread da janela, uma vez por quadro): teclado ou o gamepad n
@@ -124,6 +160,12 @@ static int keyCell(const char *name)
 static int padCell(int phys, int style)
 {
     if (phys <= 0 || phys >= st::kPadButtons) return -1;
+    // face buttons (raylib 5..8: cima, direita, baixo, esquerda) no estilo do PS2: os do jogo
+    if (style == st::PromptPs && phys >= 5 && phys <= 8 && loadFace())
+    {
+        static constexpr int kFace[4] = {0, 1, 2, 3};   // triangulo, bola, X, quadrado
+        return kFaceBase + kFace[phys - 5];
+    }
     const int *table = style == st::PromptNintendo ? pr::kNintendo : style == st::PromptXbox ? pr::kXbox : pr::kPs;
     return table[phys];
 }
@@ -151,10 +193,21 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
     }
     const int cell = idx >= 0 ? cellFor(kIndexBind[idx]) : -1;
     if (cell < 0 || !loadAtlas()) return;
-    // a arte do Kenney tem folga na celula (o circulo ocupa ~3/4): o lado do quadrado e maior que o do icone do jogo
-    const float h = size * 0.5f * (128.f / 96.f);
-    const float u0 = float(cell % pr::kCols) / float(pr::kCols), v0 = float(cell / pr::kCols) / float(pr::kRows);
-    const float u1 = u0 + 1.f / float(pr::kCols), v1 = v0 + 1.f / float(pr::kRows);
+    const bool face = cell >= kFaceBase;
+    // a arte do Kenney tem folga na celula (o circulo ocupa ~3/4): o lado do quadrado e maior que o do icone do jogo; o do jogo enche
+    // o quadrante
+    const float h = size * 0.5f * (face ? 1.f : 128.f / 96.f);
+    float u0, v0, u1, v1;
+    if (face)
+    {
+        const Rectangle r = faceSrc(cell);
+        u0 = r.x / 64.f; u1 = (r.x + r.width) / 64.f; v0 = r.y / 64.f; v1 = (r.y + r.height) / 64.f;
+    }
+    else
+    {
+        u0 = float(cell % pr::kCols) / float(pr::kCols); v0 = float(cell / pr::kCols) / float(pr::kRows);
+        u1 = u0 + 1.f / float(pr::kCols); v1 = v0 + 1.f / float(pr::kRows);
+    }
     // o texto da legenda comeca logo depois do icone do jogo; a arte 2D encosta nele, entao o icone anda um pouco para a esquerda
     const float shift = -size * 0.16f;
     auto corner = [&](float sr, float su, float out[3]) {
@@ -164,7 +217,7 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
     corner(-1, 1, a); corner(-1, -1, b); corner(1, -1, c); corner(1, 1, d);
     BeginBlendMode(BLEND_ALPHA);
     rlDisableBackfaceCulling();
-    rlSetTexture(g_atlas.id);
+    rlSetTexture(face ? g_face.id : g_atlas.id);
     rlBegin(RL_QUADS);
     rlColor4ub(255, 255, 255, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f));
     rlTexCoord2f(u0, v0); rlVertex3f(a[0], a[1], a[2]);
@@ -184,6 +237,12 @@ static bool on() { return st::get(st::Prompts) != st::PromptOriginal && loadAtla
 static bool drawCell2d(int cell, float cx, float cy, float size, float alpha)
 {
     if (cell < 0 || !loadAtlas()) return false;
+    if (cell >= kFaceBase)
+    {
+        DrawTexturePro(g_face, faceSrc(cell), Rectangle{cx - size * 0.5f, cy - size * 0.5f, size, size}, Vector2{0.f, 0.f}, 0.f,
+                       Color{255, 255, 255, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f)});
+        return true;
+    }
     const float h = size * (128.f / 96.f), k = float(pr::kCell);
     DrawTexturePro(g_atlas, Rectangle{float(cell % pr::kCols) * k, float(cell / pr::kCols) * k, k, k}, Rectangle{cx - h * 0.5f, cy - h * 0.5f, h, h},
                    Vector2{0.f, 0.f}, 0.f, Color{255, 255, 255, static_cast<unsigned char>(std::clamp(alpha, 0.f, 1.f) * 255.f)});
