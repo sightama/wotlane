@@ -59,6 +59,8 @@ namespace
             int away = 0;            // quadros seguidos com o monstro se afastando da camera
             float lockW = 0.f;       // peso da mira no alvo travado (0..1)
             float lockAim[3] = {};   // desvio da mira para o alvo (o ultimo, enquanto o peso cai ao soltar)
+            float reach = 1.f;       // fracao da distancia livre (colisao: encolhe na hora, volta devagar)
+            float lift = 0.f;        // altura somada para ficar acima do chao (suavizada na descida)
         } g_cam[kMaxCams];
 
         struct Input
@@ -152,6 +154,85 @@ namespace
 
         int numCams(uint8_t *rdram) { return std::clamp(static_cast<int32_t>(FAST_READ32(kNumCameras)), 0, kMaxCams); }
 
+        // Colisao (etapa 3) pelas funcoes do proprio jogo, chamadas daqui com os dados numa area abaixo da pilha atual:
+        //   hdLosTest(from, to, _hdResult *res, bool) -> v0 = 1 livre; res: hit +0, surface +2, ids +4, point +0x10, normal +0x20
+        //   hdHatTest(pos, normal, $f12 up, bool, $f13 down) -> $f0 = pos.z - chao (0 sem chao)
+        struct Probe
+        {
+            uint8_t *rdram;
+            R5900Context *ctx;
+            PS2Runtime *rt;
+            uint32_t base = 0;   // 0x100 bytes de dados; a pilha das chamadas comeca logo abaixo
+            bool ok = false;
+            Probe(uint8_t *r, R5900Context *c, PS2Runtime *p) : rdram(r), ctx(c), rt(p)
+            {
+                const uint32_t sp = GPR_U32(ctx, 29) & 0x1FFFFFFFu;
+                base = (sp - 0x1000u) & ~0xFu;
+                ok = rt && sp > 0x10000u && okAddr(base - 0x1000u, 0x1100u);
+            }
+            bool call(uint32_t fn, std::initializer_list<uint32_t> a, std::initializer_list<float> f, uint32_t &v0, float &f0)
+            {
+                const PS2Runtime::RecompiledFunction fp = ok ? rt->lookupFunction(fn) : nullptr;
+                if (!fp)
+                    return false;
+                const R5900Context saved = *ctx;
+                int r = 4;
+                for (uint32_t x : a)
+                    ctx->r[r++] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(x)));
+                int fr = 12;
+                for (float x : f)
+                    ctx->f[fr++] = x;
+                ctx->r[29] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(base - 0x10u)));
+                ctx->r[31] = _mm_set_epi64x(0, 0);
+                ctx->pc = fn;
+                fp(rdram, ctx, rt);
+                const bool back = ctx->pc == 0u;
+                v0 = GPR_U32(ctx, 2);
+                f0 = ctx->f[0];
+                *ctx = saved;
+                return back;
+            }
+            void put(uint32_t a, const float v[3])
+            {
+                for (int i = 0; i < 3; ++i)
+                    wrF(rdram, a + 4 * i, v[i]);
+                wrF(rdram, a + 12, 0.f);
+            }
+            // segmento a -> b; true se bateu (pt, nrm, ids, surface do primeiro contato)
+            bool los(const float a[3], const float b[3], float pt[3], float nrm[3], uint32_t &ids, uint32_t &surf)
+            {
+                put(base, a);
+                put(base + 0x10, b);
+                std::memset(rdram + base + 0x20, 0, 0x30);
+                uint32_t v0 = 1;
+                float f0 = 0.f;
+                if (!call(wotm::fn::hdLosTest__FP8_fvectorT0P9_hdResultb, {base, base + 0x10, base + 0x20, 0}, {}, v0, f0) || v0 != 0u ||
+                    !rdram[base + 0x20])
+                    return false;
+                for (int i = 0; i < 3; ++i)
+                {
+                    pt[i] = rdF(rdram, base + 0x30 + 4 * i);
+                    nrm[i] = rdF(rdram, base + 0x40 + 4 * i);
+                }
+                uint16_t s16;
+                std::memcpy(&s16, rdram + base + 0x22, 2);
+                surf = s16;
+                ids = FAST_READ32(base + 0x24);
+                return true;
+            }
+            // altura de p acima do chao logo abaixo (procura de `up` acima a 4096 abaixo); false sem chao
+            bool hat(const float p[3], float up, float &above)
+            {
+                put(base, p);
+                uint32_t v0 = 0;
+                float f0 = 0.f;
+                if (!call(wotm::fn::hdHatTest__FP8_fvectorT0fbf, {base, base + 0x10, 0}, {up, 4096.f}, v0, f0))
+                    return false;
+                above = f0;
+                return f0 != 0.f || rdF(rdram, base + 0x18) != 1.f;   // sem chao: 0 com a normal (0, 0, 1)
+            }
+        };
+
         void pre(uint8_t *rdram)
         {
             const int n = numCams(rdram);
@@ -172,12 +253,58 @@ namespace
             }
         }
 
-        void post(uint8_t *rdram)
+        // Chao e predios (etapa 3). pos = onde a orbita quer a camera; o ponto de visada e o pivo 120 acima (a mira)
+        void collide(Probe &pr, Cam &s, int v, float pos[3], bool logNow)
+        {
+            static const int mode = [] { const char *e = std::getenv("WOTM_CAMCOLLIDE"); return e ? std::atoi(e) : 2; }();
+            if (!mode || !pr.ok)
+                return;
+            const float a[3] = {s.pivot[0], s.pivot[1], s.pivot[2] + 120.f};
+            float pt[3], nrm[3], rpt[3], rnrm[3];
+            uint32_t ids = 0, surf = 0, rids = 0, rsurf = 0;
+            const bool fwd = pr.los(a, pos, pt, nrm, ids, surf);
+            const bool rev = fwd && pr.los(pos, a, rpt, rnrm, rids, rsurf);
+            float d[3], len2 = 0.f;
+            for (int i = 0; i < 3; ++i)
+            {
+                d[i] = pos[i] - a[i];
+                len2 += d[i] * d[i];
+            }
+            const float len = std::sqrt(std::max(len2, 1.f));
+            float tHit = 1.f, tRev = 0.f;
+            if (fwd)
+                tHit = ((pt[0] - a[0]) * d[0] + (pt[1] - a[1]) * d[1] + (pt[2] - a[2]) * d[2]) / (len * len);
+            if (rev)
+                tRev = ((rpt[0] - a[0]) * d[0] + (rpt[1] - a[1]) * d[1] + (rpt[2] - a[2]) * d[2]) / (len * len);
+            float above = 0.f;
+            const bool ground = pr.hat(pos, 60.f, above);
+            if (logNow || (fwd && std::getenv("WOTM_ORBITLOG") && std::atoi(std::getenv("WOTM_ORBITLOG")) >= 3))
+                std::fprintf(stderr, "[orbit] camera %d: colisao ida %d t %.2f n %.2f,%.2f,%.2f ids %08X sup %04X | volta %d t %.2f ids %08X | chao %d %.0f\n",
+                             v, fwd, tHit, nrm[0], nrm[1], nrm[2], ids, surf, rev, tRev, rids, ground, above);
+            if (mode < 2)
+                return;   // =1 so mede (temporario, ate decidir com o log)
+            // Dentro de algo: a ida bate e a volta (da camera para a mira) nao sai de nada depois do ponto da ida. Atras de um predio,
+            // com a camera do lado de fora, a volta bate na face de tras (t maior que o da ida): fica, e o jogo deixa o predio
+            // transparente (hierSetCameraLosPoint). Dentro de predio ou abaixo do chao: encolhe ate antes do contato.
+            const bool inside = fwd && (!rev || tRev <= tHit + 0.01f);
+            const float want = inside ? std::max((tHit * len - 25.f) / len, 0.15f) : 1.f;
+            s.reach = want < s.reach ? want : s.reach + (want - s.reach) * 0.05f;   // encolhe na hora, volta devagar
+            for (int i = 0; i < 3; ++i)
+                pos[i] = a[i] + d[i] * s.reach;
+            // chao: pelo menos 30 acima; desce devagar quando o chao baixa
+            float above2 = 0.f;
+            const float need = pr.hat(pos, 60.f, above2) ? std::max(0.f, 30.f - above2) : 0.f;
+            s.lift = std::max(need, s.lift - 3.f);
+            pos[2] += s.lift;
+        }
+
+        void post(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
         {
             static const bool log = std::getenv("WOTM_ORBITLOG") != nullptr;
             static const unsigned logEvery = log && std::atoi(std::getenv("WOTM_ORBITLOG")) >= 2 ? 15u : 60u;   // =2: quatro por segundo
             static unsigned frames = 0;
             ++frames;
+            Probe probe(rdram, ctx, rt);
             const int n = numCams(rdram);
             bool driving[4] = {};
             for (int v = 0; v < kMaxCams; ++v)
@@ -215,6 +342,8 @@ namespace
                     s.still = 0;
                     s.nudge = 0.f;
                     s.locked = false;
+                    s.reach = 1.f;
+                    s.lift = 0.f;
                     s.mon = mon;
                     in.stick[0] = in.stick[1] = 0.f;
                     if (log)
@@ -291,6 +420,7 @@ namespace
                 const float horiz = len * std::cos(e), height = len * std::sin(e);
 
                 float pos[3] = {s.pivot[0] + std::sin(s.az) * horiz, s.pivot[1] + std::cos(s.az) * horiz, s.pivot[2] + height};
+                collide(probe, s, v, pos, log && frames % logEvery == 0);
                 if (s.blend > 0.001f)
                 {
                     for (int i = 0; i < 3; ++i)
@@ -336,8 +466,8 @@ namespace
                 wrF(rdram, cs + 0x64, 0.f);
                 wrF(rdram, cs + 0x68, p.heading);
                 if (log && frames % logEvery == 0)
-                    std::fprintf(stderr, "[orbit] camera %d: quadro %u az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d\n", v, frames,
-                                 s.az * 57.2958f, wrapPi(monHeading + kPi) * 57.2958f, s.elev * 57.2958f, horiz, height, sx, sy, s.still);
+                    std::fprintf(stderr, "[orbit] camera %d: quadro %u az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d alcance %.2f chao +%.0f\n", v, frames,
+                                 s.az * 57.2958f, wrapPi(monHeading + kPi) * 57.2958f, s.elev * 57.2958f, horiz, height, sx, sy, s.still, s.reach, s.lift);
             }
             for (int i = 0; i < 4; ++i)
                 g_in[i].driving = driving[i];
@@ -462,13 +592,51 @@ namespace
                 FAST_WRITE32(kSlots + kSlotStride * i + kMonCamUnify, 0);
         }
 
+        // Cameras::LeaveUnifiedTask (a0 = Cameras): com o par separado (1P, nenhuma IA perto), o jogo agenda a saida da camera de
+        // perto, mas a tarefa so sai com o monstro parado (isIdle) ou travado: trocar para a camera normal andando mudaria o controle
+        // de relativo a tela para tanque. Com a camera moderna o controle continua relativo a tela, entao sai na hora (fora de queda
+        // livre), pelo proprio LeaveUnifiedView, como a tarefa faria (com o +0xE68 zerado ele nao remove a tarefa que esta rodando)
+        PS2Runtime::RecompiledFunction g_origLeaveTask = nullptr;
+        void leaveTaskHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31), self = GPR_U32(ctx, 4);
+            g_origLeaveTask(rdram, ctx, runtime);
+            if (ctx->pc != ra || GPR_U32(ctx, 2) == 0u || !enabled() || !FAST_READ32(kUnified))
+                return;
+            const uint32_t c2 = camAddr(2), mon = FAST_READ32(c2 + kCamMonster) & 0x1FFFFFFFu;
+            if (!okAddr(mon, 0x284u) || rdram[mon + 0x280] != 0)   // m_freeFalling
+                return;
+            constexpr uint32_t kReason = wotm::sym::x_7Cameras_m_leaveReason, kAlpha = wotm::sym::x_7Cameras_m_currentFadeAlpha;
+            const uint32_t reason = FAST_READ32(kReason), alpha = FAST_READ32(kAlpha), task = FAST_READ32(c2 + 0xE68u);
+            FAST_WRITE32(c2 + 0xE68u, 0);
+            Probe pr(rdram, ctx, runtime);
+            uint32_t v0 = 0;
+            float f0 = 0.f;
+            const bool back = pr.call(wotm::fn::LeaveUnifiedView__7CamerasUi, {self, 0xBu}, {}, v0, f0);
+            FAST_WRITE32(kReason, reason);
+            FAST_WRITE32(kAlpha, alpha);
+            if (!back || FAST_READ32(kUnified))
+            {
+                FAST_WRITE32(c2 + 0xE68u, task);   // nao saiu (modo 8): a tarefa continua esperando
+                return;
+            }
+            FAST_WRITE32(wotm::sym::x_7Cameras_m_leaveTriggered, 0);
+            ctx->r[2] = _mm_set_epi64x(0, 0);   // tarefa terminada
+            static const bool log = std::getenv("WOTM_ORBITLOG") != nullptr;
+            if (log)
+                std::fprintf(stderr, "[orbit] camera de perto: saida sem esperar o monstro parar\n");
+        }
+
         void install(PS2Runtime &runtime)
         {
-            constexpr uint32_t kShake = wotm::fn::shakeCamera__6Camera, kOkToUnify = wotm::fn::SetOkToUnify__7TheGame;
+            constexpr uint32_t kShake = wotm::fn::shakeCamera__6Camera, kOkToUnify = wotm::fn::SetOkToUnify__7TheGame,
+                               kLeaveTask = wotm::fn::LeaveUnifiedTask__7Cameras;
             if ((g_origShake = runtime.lookupFunction(kShake)))
                 runtime.registerFunction(kShake, &shakeHook);
             if ((g_origOkToUnify = runtime.lookupFunction(kOkToUnify)))
                 runtime.registerFunction(kOkToUnify, &okToUnifyHook);
+            if ((g_origLeaveTask = runtime.lookupFunction(kLeaveTask)))
+                runtime.registerFunction(kLeaveTask, &leaveTaskHook);
             std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recentralizar %s, camera de perto %s (WOTM_CLOSECAM)%s\n",
                          wotm::settings::on(wotm::settings::Camera) ? "moderna" : "classica",
                          wotm::settings::on(wotm::settings::CamRecenter) ? "ligado" : "desligado",

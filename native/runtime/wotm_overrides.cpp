@@ -1251,7 +1251,7 @@ namespace
         orbit::pre(rdram);   // camera moderna (wotm_orbit.inc)
         g_origCamerasUpdateFree(rdram, ctx, runtime);
         if (ctx->pc == ra)
-            orbit::post(rdram);
+            orbit::post(rdram, ctx, runtime);
         freeCamWrite(rdram);
     }
 
