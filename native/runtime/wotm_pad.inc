@@ -9,6 +9,8 @@
 //   na coluna dele (g_manualDevs[n], mesmos bits do mapa); os que ficaram de fora nao jogam.
 //   3 e 4 jogadores (WOTM_PLAYERS, wotm_split4.inc): o scePadRead do slot 1 de uma porta (jogadores 3 e 4) chega aqui com a porta
 //   do slot 0 e g_portBase 2; o jogador e porta + base, com o controle de mesma ordem.
+// Teclas e botoes de cada botao do PS2: o mapa do wotm_settings.hpp (aba CONTROLS do painel), instalado no ps2_pad.cpp do fork
+// (g_ps2PadKeyboard, g_ps2PadGamepadButtons); os eixos dos gamepads seguem fixos.
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
@@ -52,7 +54,39 @@ static uint32_t deviceMap(int port)
     return devs;
 }
 
-static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, true);
+// ------------------------------------------------------------------ mapa de teclas e botoes (wotm_settings.hpp, aba CONTROLS)
+namespace st = wotm::settings;
+inline bool kbDown(st::Bind b)
+{
+    const uint32_t v = st::kb(b);
+    return ((v & 0xFFFF) && IsKeyDown(int(v & 0xFFFF))) || ((v >> 16) && IsKeyDown(int(v >> 16)));
+}
+inline bool padDown(int pad, st::Bind b)
+{
+    const int btn = st::pad(b);
+    return btn > 0 && IsGamepadButtonDown(pad, btn);
+}
+
+static void keyboard(uint16_t &btns, uint8_t *data)
+{
+    for (int b = 0; b < st::kBinds; ++b)
+        if (st::kBindMask[b] && kbDown(st::Bind(b)))
+            btns &= static_cast<uint16_t>(~st::kBindMask[b]);
+    // analogico esquerdo (so com alguma das teclas dele apertada; senao fica o valor do gamepad ou o centro)
+    const bool l = kbDown(st::BStickLeft), r = kbDown(st::BStickRight), u = kbDown(st::BStickUp), d = kbDown(st::BStickDown);
+    if (l != r) data[6] = l ? 0x00 : 0xFF;
+    if (u != d) data[7] = u ? 0x00 : 0xFF;
+}
+static uint16_t gamepadButtons(int pad)
+{
+    uint16_t m = 0;
+    for (int b = 0; b < st::kBinds; ++b)
+        if (st::bindOnPad(st::Bind(b)) && padDown(pad, st::Bind(b)))
+            m |= st::kBindMask[b];
+    return m;
+}
+
+static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons, true);
 }
 
 void wotmPadSetPortBase(int base) { wotm_pad::g_portBase.store(base, std::memory_order_relaxed); }

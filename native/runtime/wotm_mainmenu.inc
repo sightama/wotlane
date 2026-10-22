@@ -15,6 +15,8 @@
 // Painel: abas VIDEO / FEATURES / CONTROLS (L1/R1, Q/E ou Tab; Shift+Tab volta), cima/baixo escolhem a linha, esquerda/direita/X
 // trocam o valor, que vale na hora e e gravado no settings.ini (wotm_settings.hpp; o video e aplicado na thread da janela pelo
 // applyVideoSettings do wotm_live.inc). Desenhado numa textura propria no telao inteiro (a faixa visivel abaixo da tarja do menu).
+// Aba CONTROLS (rola): teclado separado, qual mapa a lista mostra (teclado ou gamepads), uma linha por botao do PS2 (X espera a tecla
+// ou o botao novo, Esc ou 5 s cancelam; Delete/quadrado limpa) e a volta ao padrao (mapa em wotm_settings.hpp, lido pelo wotm_pad.inc).
 // Logo do jogo no telao (os dois objetos irmaos do m_movieScreen): alfa 1 so na tela de "press start" (20), 0 nas outras, seguindo o
 // targetAlpha nos fades de/para a 20 (logoFrame, a cada quadro antes da coleta da cena). Sem ele a lista fica centrada no telao.
 // Tela 5: enquanto a escolha de controles esta no telao a lista fica escondida, e aparece junto com o fade que a escolha da aos itens.
@@ -59,6 +61,9 @@ struct View
     uint32_t itemObj[kMaxRows][4] = {};   // objetos do filho em uso de cada item do jogo, na ordem dos itens; posicao da lista
     int items = 0;
     int tab = 0, opt = 0;                 // painel: aba e linha
+    int top = 0;                          // painel: primeira linha visivel (aba CONTROLS rola)
+    bool bindKb = true;                   // aba CONTROLS: mapa do teclado (ou dos gamepads) na lista
+    int capture = -1;                     // botao do PS2 esperando a tecla ou o botao novo (-1: nenhum)
     uint32_t screenObj = 0;               // telao (objeto do filme, shell->m_movieScreen): onde o painel e desenhado
 };
 static std::mutex g_m;
@@ -91,10 +96,57 @@ constexpr TabDef kTabDefs[kTabs] = {
      {{st::LockToggle, "LOCK-ON TOGGLE", "R1 LOCKS AND UNLOCKS - D-PAD SWITCHES TARGET"},
       {st::EnemyBars, "ENEMY BARS", "HEALTH AND ENERGY OVER EVERY ENEMY"},
       {st::DamagePop, "DAMAGE NUMBERS", "A NUMBER ON EVERY HIT"}}},
-    {1, {{st::KbSeparate, "KEYBOARD", "PLAY ALONG WITH PAD 1 OR AS ITS OWN PLAYER"}}},
+    {1, {{st::KbSeparate, "KEYBOARD", "PLAY ALONG WITH PAD 1 OR AS ITS OWN PLAYER"}}},   // e o mapa: ctlRows
 };
 static int g_tab = TabVideo;
 static int g_optSel[kTabs] = {};
+constexpr int kVisRows = 5;   // linhas do painel que cabem; a aba CONTROLS rola
+
+// Aba CONTROLS: teclado separado, qual mapa a lista mostra (teclado ou gamepads), um botao do PS2 por linha e a volta ao padrao
+constexpr int kCtlSeparate = -1, kCtlDevice = -2, kCtlReset = -3;
+constexpr int kMaxCtlRows = 3 + st::kBinds;
+constexpr const char *kBindLabels[st::kBinds] = {"D-PAD UP", "D-PAD DOWN", "D-PAD LEFT", "D-PAD RIGHT", "CROSS",     "CIRCLE",     "SQUARE",
+                                                 "TRIANGLE", "L1",         "R1",         "L2",          "R2",        "L1 AND R1",  "START",
+                                                 "SELECT",   "L3",         "R3",         "STICK UP",    "STICK DOWN", "STICK LEFT", "STICK RIGHT"};
+static int ctlRows(bool kb, int out[kMaxCtlRows])
+{
+    int n = 0;
+    out[n++] = kCtlSeparate;
+    out[n++] = kCtlDevice;
+    for (int b = 0; b < st::kBinds; ++b)
+        if (kb || st::bindOnPad(st::Bind(b))) out[n++] = b;
+    out[n++] = kCtlReset;
+    return n;
+}
+static bool g_bindKb = true;
+static int g_capture = -1;   // botao do PS2 esperando a tecla/botao novo
+static double g_capT0 = 0.0;
+static bool g_capKeyPrev[std::size(st::kKeyNames)] = {};
+static bool g_capPadPrev[4][st::kPadButtons] = {};
+static int g_top[kTabs] = {};
+
+static int tabRows(int tab)
+{
+    int r[kMaxCtlRows];
+    return tab == TabControls ? ctlRows(g_bindKb, r) : kTabDefs[tab].n;
+}
+static std::string bindValue(int b, bool kb)
+{
+    std::string s;
+    if (kb)
+    {
+        const uint32_t v = st::kb(st::Bind(b));
+        for (int i = 0; i < 2; ++i)
+            if (const char *n = st::keyName(int((v >> (16 * i)) & 0xFFFF)))
+                s += (s.empty() ? "" : " OR ") + std::string(n);   // a fonte do jogo nao tem "/"
+    }
+    else if (const int p = st::pad(st::Bind(b)); p > 0 && p < st::kPadButtons)
+    {
+        s = st::kPadButtonNames[p];
+        std::replace(s.begin(), s.end(), '_', ' ');
+    }
+    return s.empty() ? "NONE" : s;
+}
 
 // Valores que a opcao percorre, em ordem crescente
 static int choices(st::Key k, int out[8])
@@ -145,7 +197,7 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
 // Entrada do painel: direto dos dispositivos (todos), como a escolha de controles do wotm_padsel.inc, com as teclas do jogo no
 // teclado (ps2_pad.cpp: setas/WASD, X/Espaco = X, V/C/Esc = triangulo/bola, Q/E = L1/R1) e o Tab (Shift+Tab volta). O roteiro de
 // teste WOTM_PADSEL_SCRIPT vale aqui tambem (acoes l1 e r1 para as abas).
-enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, kPanelActs };
+enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, kPanelActs };   // PClear: Delete / quadrado
 static bool g_panelPrev[kPanelActs] = {};
 static void readPanel(bool out[kPanelActs])
 {
@@ -155,7 +207,7 @@ static void readPanel(bool out[kPanelActs])
     {
         if (!present(d)) continue;
         bool a[kActions] = {};
-        bool back2 = false, next2 = false, prev2 = false;
+        bool back2 = false, next2 = false, prev2 = false, clear = false;
         if (d == kKb)
         {
             a[Up] = IsKeyDown(KEY_UP) || IsKeyDown(KEY_W);
@@ -169,15 +221,18 @@ static void readPanel(bool out[kPanelActs])
             const bool shift = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
             next2 = IsKeyDown(KEY_TAB) && !shift;
             prev2 = IsKeyDown(KEY_TAB) && shift;
+            clear = IsKeyDown(KEY_DELETE);
             const double now = GetTime();
             for (const ScriptStep &s : g_script)
                 if (s.dev == kKb && now >= s.t0 && now < s.t0 + s.dur) a[s.act] = true;
         }
         else
         {
-            readDevice(d, a);
+            readDevice(d, a, false);   // botoes fisicos: o painel nao depende do mapa que ele muda
             back2 = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);   // bola tambem volta
+            clear = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_LEFT);
         }
+        out[PClear] |= clear;
         out[PUp] |= a[Up];
         out[PDown] |= a[Down];
         out[PLeft] |= a[Left];
@@ -193,6 +248,91 @@ static void openPanel()
     g_open = true;
     readPanel(g_panelPrev);   // o X que abriu ainda esta apertado: so conta o proximo
 }
+// Espera da tecla (teclado) ou do botao (gamepads) novo do botao do PS2 g_capture: vale a primeira que passar a estar apertada.
+// Esc ou 5 s sem nada cancelam. No fim, o que esta apertado agora nao conta como entrada do painel.
+static void captureInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    const st::Bind b = st::Bind(g_capture);
+    const char *what = nullptr;
+    bool done = false;
+    if (g_bindKb)
+    {
+        for (size_t i = 0; i < std::size(st::kKeyNames); ++i)
+        {
+            const bool down = IsKeyDown(st::kKeyNames[i].code);
+            if (down && !g_capKeyPrev[i] && !done)
+            {
+                st::bindKey(b, st::kKeyNames[i].code);
+                what = st::kKeyNames[i].name;
+                done = true;
+            }
+            g_capKeyPrev[i] = down;
+        }
+    }
+    else
+    {
+        for (int p = 0; p < 4; ++p)
+            for (int k = 1; k < st::kPadButtons; ++k)
+            {
+                const bool down = IsGamepadAvailable(p) && IsGamepadButtonDown(p, k);
+                if (down && !g_capPadPrev[p][k] && !done)
+                {
+                    st::bindPad(b, k);
+                    what = st::kPadButtonNames[k];
+                    done = true;
+                }
+                g_capPadPrev[p][k] = down;
+            }
+    }
+    const bool cancel = !done && (IsKeyDown(KEY_ESCAPE) || GetTime() - g_capT0 > 5.0);
+    if (!done && !cancel)
+        return;
+    if (done)
+        std::fprintf(stderr, "[settings] %s%s = %s\n", g_bindKb ? "KB_" : "PAD_", st::kBindNames[b], what);
+    g_capture = -1;
+    readPanel(g_panelPrev);
+    wotm_padsel::sfx(rdram, ctx, runtime, done ? 8 : 6);
+}
+
+// Aba CONTROLS, da segunda linha em diante: mapa (teclado/gamepads), botoes do PS2 (X: espera a tecla nova; quadrado/Delete: limpa) e
+// volta ao padrao
+static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, const bool e[kPanelActs])
+{
+    int r[kMaxCtlRows];
+    const int n = ctlRows(g_bindKb, r);
+    int &sel = g_optSel[TabControls];
+    const int row = r[std::clamp(sel, 0, n - 1)];
+    if (row == kCtlDevice)
+    {
+        if (!(e[PLeft] || e[PRight] || e[POk])) return;
+        g_bindKb = !g_bindKb;
+        sel = std::min(sel, ctlRows(g_bindKb, r) - 1);
+        wotm_padsel::sfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
+    }
+    else if (row == kCtlReset)
+    {
+        if (!e[POk]) return;
+        st::resetBinds(g_bindKb);
+        std::fprintf(stderr, "[settings] mapa %s de volta ao padrao\n", g_bindKb ? "do teclado" : "dos gamepads");
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+    }
+    else if (row >= 0 && e[POk])
+    {
+        g_capture = row;
+        g_capT0 = GetTime();
+        for (size_t i = 0; i < std::size(st::kKeyNames); ++i) g_capKeyPrev[i] = IsKeyDown(st::kKeyNames[i].code);
+        for (int p = 0; p < 4; ++p)
+            for (int k = 1; k < st::kPadButtons; ++k) g_capPadPrev[p][k] = IsGamepadAvailable(p) && IsGamepadButtonDown(p, k);
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+    }
+    else if (row >= 0 && e[PClear])
+    {
+        st::clearBind(st::Bind(row), g_bindKb);
+        std::fprintf(stderr, "[settings] %s%s = (nada)\n", g_bindKb ? "KB_" : "PAD_", st::kBindNames[row]);
+        wotm_padsel::sfx(rdram, ctx, runtime, 6);
+    }
+}
+
 // Um quadro do painel aberto (no screenGetInput da tela 1, que o jogo chama a cada quadro dela)
 static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
@@ -201,6 +341,11 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     for (int i = 0; i < kPanelActs; ++i)
         e[i] = now[i] && !g_panelPrev[i];
     std::copy(now, now + kPanelActs, g_panelPrev);
+    if (g_capture >= 0)
+    {
+        captureInput(rdram, ctx, runtime);
+        return;
+    }
     if (e[PBack])
     {
         g_open = false;
@@ -216,10 +361,19 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     const TabDef &t = kTabDefs[g_tab];
     int &sel = g_optSel[g_tab];
+    const int n = tabRows(g_tab);
     if (e[PUp] || e[PDown])
     {
-        sel = (sel + (e[PDown] ? 1 : t.n - 1)) % t.n;
+        sel = (sel + (e[PDown] ? 1 : n - 1)) % n;
+        int &top = g_top[g_tab];
+        if (sel < top) top = sel;
+        if (sel >= top + kVisRows) top = sel - kVisRows + 1;
         wotm_padsel::sfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
+        return;
+    }
+    if (g_tab == TabControls && sel > 0)
+    {
+        controlsInput(rdram, ctx, runtime, e);
         return;
     }
     if (e[PLeft] || e[PRight] || e[POk])
@@ -393,6 +547,9 @@ static void frame(uint8_t *rdram)
     v.panel = v.screen == 1 ? g_panel : 0.f;
     v.tab = g_tab;
     v.opt = g_optSel[g_tab];
+    v.top = g_top[g_tab];
+    v.bindKb = g_bindKb;
+    v.capture = g_capture;
     v.screenObj = rd32(rdram, wotm_padsel::kMovieScreen) & 0x1FFFFFFFu;
     std::lock_guard<std::mutex> lk(g_m);
     g_view = v;
@@ -583,34 +740,85 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     badge("R1", W * 0.92f);
     DrawRectangleRec(Rectangle{W * 0.04f, lineH * 1.4f, W * 0.92f, 3.f}, Color{90, 80, 66, 120});
 
-    // opcoes da aba: nome a esquerda, valor a direita (setas na selecionada)
-    const TabDef &t = kTabDefs[std::clamp(v.tab, 0, kTabs - 1)];
-    const float rowH = 54.f, valX = W * 0.66f, labX = W * 0.10f;   // o telao e inclinado: valor perto do nome
-    for (int i = 0; i < t.n; ++i)
+    // linhas da aba: nome, valor, dica e se o valor tem setas (escolha na lista)
+    struct PRow { std::string label, value; const char *hint; bool arrows; };
+    PRow rows[kMaxCtlRows];
+    int n = 0;
+    const int tab = std::clamp(v.tab, 0, kTabs - 1);
+    const TabDef &t = kTabDefs[tab];
+    auto optRow = [&](const Opt &o) {
+        char buf[32];
+        valueText(o.key, st::get(o.key), buf, sizeof buf);
+        return PRow{o.label, buf, o.hint, true};
+    };
+    if (tab != TabControls)
+        for (int i = 0; i < t.n; ++i) rows[n++] = optRow(t.opt[i]);
+    else
     {
-        const float cy = lineH * (2.2f + float(i));
+        int r[kMaxCtlRows];
+        const int m = ctlRows(v.bindKb, r);
+        const bool blink = std::fmod(GetTime(), 0.8) < 0.5;
+        for (int i = 0; i < m; ++i)
+        {
+            if (r[i] == kCtlSeparate) rows[n++] = optRow(t.opt[0]);
+            else if (r[i] == kCtlDevice)
+                rows[n++] = {"BUTTON MAP", v.bindKb ? "KEYBOARD" : "GAMEPADS", "WHICH BUTTONS THE LIST BELOW SHOWS", true};
+            else if (r[i] == kCtlReset)
+                rows[n++] = {"RESTORE DEFAULTS", "", v.bindKb ? "BACK TO THE DEFAULT KEYS" : "BACK TO THE DEFAULT GAMEPAD BUTTONS", false};
+            else if (r[i] == v.capture)
+                rows[n++] = {kBindLabels[r[i]], blink ? (v.bindKb ? "PRESS A KEY" : "PRESS A BUTTON") : "",
+                             v.bindKb ? "PRESS THE NEW KEY - ESC CANCELS" : "PRESS THE NEW BUTTON - WAIT 5 SECONDS TO CANCEL", false};
+            else
+                rows[n++] = {kBindLabels[r[i]], bindValue(r[i], v.bindKb),
+                             v.bindKb ? "X - NEW KEY      DELETE - CLEAR" : "X - NEW BUTTON      SQUARE - CLEAR", false};
+        }
+    }
+    // nome a esquerda, valor a direita (setas na selecionada); so kVisRows linhas a partir de v.top
+    const float rowH = 54.f, valX = W * 0.66f, labX = W * 0.10f, dx = W * 0.19f;   // o telao e inclinado: valor perto do nome
+    const int top = std::clamp(v.top, 0, std::max(0, n - kVisRows));
+    for (int i = top; i < std::min(n, top + kVisRows); ++i)
+    {
+        const PRow &pr = rows[i];
+        const float cy = lineH * (2.2f + float(i - top));
         const bool on = i == v.opt;
         if (on)
             DrawRectangleRounded(Rectangle{W * 0.03f, cy - lineH * 0.42f, W * 0.94f, lineH * 0.84f}, 0.5f, 8, Color{60, 50, 40, 130});
-        labelLeft(q, ram, tex0, t.opt[i].label, labX, cy, rowH, on ? kLit : kDim, kPW, kPH);
+        labelLeft(q, ram, tex0, pr.label.c_str(), labX, cy, rowH, on ? kLit : kDim, kPW, kPH);
         // fio do nome ao valor: com a inclinacao do telao, guia o olho pela linha
-        const float lx1 = labX + textWidth(tex0, kPW, kPH, t.opt[i].label, rowH) + 24.f, lx2 = valX - W * 0.19f - 36.f;
-        if (lx2 > lx1)
+        const float lx1 = labX + textWidth(tex0, kPW, kPH, pr.label.c_str(), rowH) + 24.f, lx2 = valX - dx - 36.f;
+        if (lx2 > lx1 && !pr.value.empty())
             DrawRectangleRec(Rectangle{lx1, cy - 1.f, lx2 - lx1, 2.f}, Color{110, 96, 78, static_cast<unsigned char>(on ? 140 : 70)});
-        char buf[32];
-        valueText(t.opt[i].key, st::get(t.opt[i].key), buf, sizeof buf);
-        label(q, ram, tex0, buf, valX, cy, rowH, on ? kLit : kDim, kPW, kPH);
-        if (on)
+        // valor longo ("LSHIFT / RSHIFT"): letras menores para caber entre as setas
+        const float vw = textWidth(tex0, kPW, kPH, pr.value.c_str(), rowH), maxW = 2.f * dx - 70.f;
+        const float vh = vw > maxW ? rowH * maxW / vw : rowH;
+        if (!pr.value.empty())
+            label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on ? kLit : kDim, kPW, kPH);
+        if (on && pr.arrows)
         {
             const Color a = gsToRgb(kLit);
-            const float s = 20.f, dx = W * 0.19f;
+            const float s = 20.f;
             DrawTriangle(Vector2{valX - dx - s, cy}, Vector2{valX - dx + s * 0.7f, cy + s}, Vector2{valX - dx + s * 0.7f, cy - s}, a);
             DrawTriangle(Vector2{valX + dx + s, cy}, Vector2{valX + dx - s * 0.7f, cy - s}, Vector2{valX + dx - s * 0.7f, cy + s}, a);
         }
     }
+    // rolagem: setinhas na borda direita quando ha linhas acima ou abaixo
+    {
+        const Color a = gsToRgb(kDim);
+        const float x = W * 0.955f, s = 16.f;
+        if (top > 0)
+        {
+            const float y = lineH * 1.75f;
+            DrawTriangle(Vector2{x, y - s}, Vector2{x - s, y + s * 0.6f}, Vector2{x + s, y + s * 0.6f}, a);
+        }
+        if (top + kVisRows < n)
+        {
+            const float y = lineH * 6.55f;
+            DrawTriangle(Vector2{x, y + s}, Vector2{x + s, y - s * 0.6f}, Vector2{x - s, y - s * 0.6f}, a);
+        }
+    }
     // dica da opcao selecionada e os botoes
-    if (v.opt >= 0 && v.opt < t.n)
-        label(q, ram, tex0, t.opt[v.opt].hint, W * 0.5f, lineH * 6.95f, 38.f, kHintC, kPW, kPH);
+    if (v.opt >= 0 && v.opt < n)
+        label(q, ram, tex0, rows[v.opt].hint, W * 0.5f, lineH * 6.95f, 38.f, kHintC, kPW, kPH);
     label(q, ram, tex0, "L1 R1 - TABS      X - CHANGE      TRIANGLE - BACK", W * 0.5f, lineH * 7.6f, 34.f, kHintC, kPW, kPH);
     scene.drawQuads(q, W, H);
     EndBlendMode();

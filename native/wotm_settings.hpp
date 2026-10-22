@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -102,6 +103,143 @@ inline std::string format(Key k, int v)
     return std::to_string(v);
 }
 
+// ------------------------------------------------------------------ mapa de teclas e botoes (aba CONTROLS do painel)
+// Cada botao do PS2 recebe ate duas teclas do teclado e um botao de gamepad. Codigos do raylib (KeyboardKey, GamepadButton); 0 = nada.
+// No arquivo: KB_<BOTAO>=TECLA[,TECLA] e PAD_<BOTAO>=BOTAO, com os nomes de kKeyNames/kPadButtonNames. Sem variavel de ambiente.
+enum Bind
+{
+    BUp, BDown, BLeft, BRight,                 // direcional
+    BCross, BCircle, BSquare, BTriangle,
+    BL1, BR1, BL2, BR2,
+    BL1R1,                                     // so teclado: L1 e R1 juntos
+    BStart, BSelect, BL3, BR3,
+    BStickUp, BStickDown, BStickLeft, BStickRight,   // so teclado: analogico esquerdo
+    kBinds
+};
+inline constexpr const char *kBindNames[kBinds] = {"UP",     "DOWN",   "LEFT",   "RIGHT",    "CROSS",     "CIRCLE",     "SQUARE",
+                                                   "TRIANGLE", "L1",   "R1",     "L2",       "R2",        "L1_R1",      "START",
+                                                   "SELECT", "L3",     "R3",     "STICK_UP", "STICK_DOWN", "STICK_LEFT", "STICK_RIGHT"};
+// Bits do scePadRead (1 = o botao)
+inline constexpr uint16_t kBindMask[kBinds] = {0x0010, 0x0040, 0x0080, 0x0020, 0x4000, 0x2000, 0x8000, 0x1000, 0x0400, 0x0800, 0x0100,
+                                               0x0200, 0x0C00, 0x0008, 0x0001, 0x0002, 0x0004, 0,      0,      0,      0};
+inline constexpr bool bindOnPad(Bind b) { return b != BL1R1 && b < BStickUp; }
+
+struct KeyName { int code; const char *name; };
+// Teclas que podem ser escolhidas (Esc cancela a escolha; F1..F12 sao do runtime: menu de debug, camera livre, fotos, tela cheia)
+inline constexpr KeyName kKeyNames[] = {
+    {32, "SPACE"}, {39, "APOSTROPHE"}, {44, "COMMA"}, {45, "MINUS"}, {46, "PERIOD"}, {47, "SLASH"},
+    {48, "0"}, {49, "1"}, {50, "2"}, {51, "3"}, {52, "4"}, {53, "5"}, {54, "6"}, {55, "7"}, {56, "8"}, {57, "9"},
+    {59, "SEMICOLON"}, {61, "EQUAL"},
+    {65, "A"}, {66, "B"}, {67, "C"}, {68, "D"}, {69, "E"}, {70, "F"}, {71, "G"}, {72, "H"}, {73, "I"}, {74, "J"}, {75, "K"}, {76, "L"},
+    {77, "M"}, {78, "N"}, {79, "O"}, {80, "P"}, {81, "Q"}, {82, "R"}, {83, "S"}, {84, "T"}, {85, "U"}, {86, "V"}, {87, "W"}, {88, "X"},
+    {89, "Y"}, {90, "Z"},
+    {91, "LBRACKET"}, {92, "BACKSLASH"}, {93, "RBRACKET"}, {96, "GRAVE"},
+    {257, "ENTER"}, {258, "TAB"}, {259, "BACKSPACE"}, {260, "INSERT"}, {261, "DELETE"}, {262, "RIGHT"}, {263, "LEFT"}, {264, "DOWN"},
+    {265, "UP"}, {266, "PGUP"}, {267, "PGDN"}, {268, "HOME"}, {269, "END"}, {280, "CAPSLOCK"},
+    {320, "KP0"}, {321, "KP1"}, {322, "KP2"}, {323, "KP3"}, {324, "KP4"}, {325, "KP5"}, {326, "KP6"}, {327, "KP7"}, {328, "KP8"},
+    {329, "KP9"}, {330, "KPDECIMAL"}, {331, "KPDIVIDE"}, {332, "KPMULTIPLY"}, {333, "KPMINUS"}, {334, "KPPLUS"}, {335, "KPENTER"},
+    {340, "LSHIFT"}, {341, "LCTRL"}, {342, "LALT"}, {344, "RSHIFT"}, {345, "RCTRL"}, {346, "RALT"},
+};
+// GamepadButton do raylib 1..17, pela posicao no controle (os icones por estilo vem depois)
+inline constexpr const char *kPadButtonNames[18] = {"",        "DPAD_UP", "DPAD_RIGHT", "DPAD_DOWN", "DPAD_LEFT", "FACE_UP",
+                                                    "FACE_RIGHT", "FACE_DOWN", "FACE_LEFT", "L1",    "L2",        "R1",
+                                                    "R2",      "BACK",    "GUIDE",      "START",     "L3",        "R3"};
+inline constexpr int kPadButtons = 18;
+
+// Padrao = o mapa fixo de antes (ps2_pad.cpp): I/J/K/L direcional, Espaco X, S bola, Z quadrado, X triangulo, Q L1, W R1,
+// Shift L1+R1, A L2, C R2, Enter Start, Backspace Select, setas no analogico
+inline constexpr uint32_t kbPair(int a, int b = 0) { return uint32_t(a) | (uint32_t(b) << 16); }
+inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(73), kbPair(75), kbPair(74), kbPair(76), kbPair(32), kbPair(83), kbPair(90),
+                                                kbPair(88), kbPair(81), kbPair(87), kbPair(65), kbPair(67), kbPair(340, 344), kbPair(257),
+                                                kbPair(259), 0, 0, kbPair(265), kbPair(264), kbPair(263), kbPair(262)};
+inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0};
+
+inline std::atomic<uint32_t> g_kb[kBinds];
+inline std::atomic<int> g_pad[kBinds];
+inline const bool g_bindsInit = [] {
+    for (int b = 0; b < kBinds; ++b)
+    {
+        g_kb[b].store(kDefaultKb[b]);
+        g_pad[b].store(kDefaultPad[b]);
+    }
+    return true;
+}();
+
+inline uint32_t kb(Bind b) { return g_kb[b].load(std::memory_order_relaxed); }
+inline int pad(Bind b) { return g_pad[b].load(std::memory_order_relaxed); }
+
+inline const char *keyName(int code)
+{
+    for (const KeyName &k : kKeyNames)
+        if (k.code == code) return k.name;
+    return nullptr;
+}
+inline int keyCode(const std::string &name)
+{
+    for (const KeyName &k : kKeyNames)
+        if (name == k.name) return k.code;
+    return 0;
+}
+inline std::string formatKb(uint32_t v)
+{
+    std::string s;
+    for (int i = 0; i < 2; ++i)
+        if (const char *n = keyName(int((v >> (16 * i)) & 0xFFFF)))
+            s += (s.empty() ? "" : ",") + std::string(n);
+    return s;
+}
+inline uint32_t parseKb(const std::string &s)
+{
+    const size_t c = s.find(',');
+    const int a = keyCode(s.substr(0, c)), b = c == std::string::npos ? 0 : keyCode(s.substr(c + 1));
+    return a ? kbPair(a, b != a ? b : 0) : kbPair(b);
+}
+inline int parsePad(const std::string &s)
+{
+    for (int i = 1; i < kPadButtons; ++i)
+        if (s == kPadButtonNames[i]) return i;
+    return 0;
+}
+
+inline void save();
+// Tecla nova para o botao b (a anterior sai); se ela era de outro botao, ele fica com a que b tinha (troca)
+inline void bindKey(Bind b, int code)
+{
+    const uint32_t old = kb(b);
+    for (int o = 0; o < kBinds; ++o)
+    {
+        if (o == b) continue;
+        uint32_t v = kb(Bind(o));
+        const int k1 = int(v & 0xFFFF), k2 = int(v >> 16);
+        if (k1 != code && k2 != code) continue;
+        const int give = int(old & 0xFFFF);
+        const int n1 = k1 == code ? give : k1, n2 = k2 == code ? (k1 == code ? 0 : give) : k2;
+        g_kb[o].store(n1 ? kbPair(n1, n2 != n1 ? n2 : 0) : kbPair(n2));
+    }
+    g_kb[b].store(kbPair(code));
+    save();
+}
+inline void bindPad(Bind b, int button)
+{
+    const int old = pad(b);
+    for (int o = 0; o < kBinds; ++o)
+        if (o != b && pad(Bind(o)) == button)
+            g_pad[o].store(old);
+    g_pad[b].store(button);
+    save();
+}
+inline void clearBind(Bind b, bool keyboard)
+{
+    (keyboard ? (void)g_kb[b].store(0) : (void)g_pad[b].store(0));
+    save();
+}
+inline void resetBinds(bool keyboard)
+{
+    for (int b = 0; b < kBinds; ++b)
+        keyboard ? g_kb[b].store(kDefaultKb[b]) : g_pad[b].store(kDefaultPad[b]);
+    save();
+}
+
 inline void save()
 {
     std::lock_guard<std::mutex> lk(g_fileMutex);
@@ -115,6 +253,12 @@ inline void save()
     f << "# Recompiled options (menu principal); mesma chave das variaveis de ambiente\n";
     for (int k = 0; k < kKeys; ++k)
         f << kEnv[k] << '=' << format(Key(k), get(Key(k))) << '\n';
+    f << "# Teclas (KB_) e botoes de gamepad (PAD_) de cada botao do PS2: aba CONTROLS\n";
+    for (int b = 0; b < kBinds; ++b)
+        f << "KB_" << kBindNames[b] << '=' << formatKb(kb(Bind(b))) << '\n';
+    for (int b = 0; b < kBinds; ++b)
+        if (bindOnPad(Bind(b)))
+            f << "PAD_" << kBindNames[b] << '=' << kPadButtonNames[std::clamp(pad(Bind(b)), 0, kPadButtons - 1)] << '\n';
 }
 
 inline void set(Key k, int v, bool write = true)
@@ -165,6 +309,13 @@ inline void load(const std::filesystem::path &dir)
                             g_val[k].store(v);
                             ++fromFile;
                         }
+                for (int b = 0; b < kBinds; ++b)
+                {
+                    if (key == std::string("KB_") + kBindNames[b])
+                        g_kb[b].store(parseKb(val)), ++fromFile;
+                    else if (bindOnPad(Bind(b)) && key == std::string("PAD_") + kBindNames[b])
+                        g_pad[b].store(parsePad(val)), ++fromFile;
+                }
             }
         }
         fromEnv = applyEnv();

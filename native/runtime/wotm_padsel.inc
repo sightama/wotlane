@@ -146,33 +146,38 @@ static bool present(int d)
     return false;
 }
 
-// Acoes do dispositivo agora
-static void readDevice(int d, bool out[kActions])
+// Acoes do dispositivo agora. bound: pelo mapa de teclas e botoes do jogador (wotm_settings.hpp; os botoes do PS2 X, triangulo, Start,
+// L1, R1, direcional e analogico), como o jogo ve; sem ele, os botoes fisicos do mapa padrao (o painel de opcoes, que nao pode
+// depender de um mapa que ele mesmo muda).
+static void readDevice(int d, bool out[kActions], bool bound = true)
 {
+    namespace st = wotm::settings;
+    using wotm_pad::kbDown;
     if (d == kKb)
     {
-        out[Left] = IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_J);
-        out[Right] = IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_L);
-        out[Up] = IsKeyDown(KEY_UP) || IsKeyDown(KEY_I);
-        out[Down] = IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_K);
-        out[Ok] = IsKeyDown(KEY_SPACE);
-        out[Start] = IsKeyDown(KEY_ENTER);
-        out[Back] = IsKeyDown(KEY_X) || IsKeyDown(KEY_BACKSPACE);
-        out[L1] = IsKeyDown(KEY_Q);   // as teclas do L1/R1 no ps2_pad.cpp
-        out[R1] = IsKeyDown(KEY_E);
+        out[Left] = kbDown(st::BLeft) || kbDown(st::BStickLeft);
+        out[Right] = kbDown(st::BRight) || kbDown(st::BStickRight);
+        out[Up] = kbDown(st::BUp) || kbDown(st::BStickUp);
+        out[Down] = kbDown(st::BDown) || kbDown(st::BStickDown);
+        out[Ok] = kbDown(st::BCross);
+        out[Start] = kbDown(st::BStart);
+        out[Back] = kbDown(st::BTriangle) || kbDown(st::BSelect);
+        out[L1] = kbDown(st::BL1);
+        out[R1] = kbDown(st::BR1);
     }
     else
     {
         const float lx = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_X), ly = GetGamepadAxisMovement(d, GAMEPAD_AXIS_LEFT_Y);
-        out[Left] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || lx < -0.6f;
-        out[Right] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || lx > 0.6f;
-        out[Up] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_UP) || ly < -0.6f;
-        out[Down] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || ly > 0.6f;
-        out[Ok] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
-        out[Start] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_MIDDLE_RIGHT);
-        out[Back] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_FACE_UP);
-        out[L1] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
-        out[R1] = IsGamepadButtonDown(d, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
+        auto btn = [&](st::Bind b, int fixed) { return bound ? wotm_pad::padDown(d, b) : IsGamepadButtonDown(d, fixed); };
+        out[Left] = btn(st::BLeft, GAMEPAD_BUTTON_LEFT_FACE_LEFT) || lx < -0.6f;
+        out[Right] = btn(st::BRight, GAMEPAD_BUTTON_LEFT_FACE_RIGHT) || lx > 0.6f;
+        out[Up] = btn(st::BUp, GAMEPAD_BUTTON_LEFT_FACE_UP) || ly < -0.6f;
+        out[Down] = btn(st::BDown, GAMEPAD_BUTTON_LEFT_FACE_DOWN) || ly > 0.6f;
+        out[Ok] = btn(st::BCross, GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+        out[Start] = btn(st::BStart, GAMEPAD_BUTTON_MIDDLE_RIGHT);
+        out[Back] = btn(st::BTriangle, GAMEPAD_BUTTON_RIGHT_FACE_UP);
+        out[L1] = btn(st::BL1, GAMEPAD_BUTTON_LEFT_TRIGGER_1);
+        out[R1] = btn(st::BR1, GAMEPAD_BUTTON_RIGHT_TRIGGER_1);
     }
     const double now = GetTime();
     for (const ScriptStep &st : g_script)

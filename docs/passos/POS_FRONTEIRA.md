@@ -380,13 +380,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      launcher.
      Ficaram fora do painel: partida direta, trapaças (o menu F1 já tem), opções de execução e diagnóstico; pular a intro vira opção
      do executável mais tarde. O logo do jogo no telão só aparece na tela de "press start"; nas outras o telão é todo do menu.
-  3. Rebind de teclas e botões: a tabela fixa do `ps2_pad.cpp` do fork vira configurável (costura do PS2Recomp: regerar o patch) e
-     a tela de "aperte a tecla".
+  3. Rebind de teclas e botões: **feito** (aba CONTROLS; `NATIVO.md`, "Rebind"). Os eixos dos gamepads seguem fixos.
   4. Estilo dos ícones (Xbox, PS, Nintendo) e qual botão confirma e qual cancela nos menus (gancho do `screenGetInput` e páginas do
      memory card; na luta X e O são golpes), já com os ícones 2D próprios (item abaixo).
   5. Tirar a configuração de controle do Options do jogo e, em seguida, trocar os ícones 3D do jogo pelos nossos.
-- **Remapear controles no launcher:** pendência do `RUNTIME.md` ("Pendências": gamepad e remapeamento). Os controles já passam pelo
-  mapa por porta do `wotm_pad.inc`. Vai ser feito no "Recompiled options" (acima, etapa 3).
 - **Modo foto:** a câmera livre do F5 (`wotm_freecam.h`/`.inc`) já existe; falta pausar o jogo e esconder o HUD.
 - **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros já está na fila
   (`PROXIMOS_PASSOS.md`).
