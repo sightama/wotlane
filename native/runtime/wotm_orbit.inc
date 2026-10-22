@@ -298,6 +298,50 @@ namespace
             pos[2] += s.lift;
         }
 
+        // Medidor de salto (etapa 4, com WOTM_ORBITLOG): a pose final de cada vista, quadro a quadro; um pulo grande (posicao ou
+        // guinada) vira uma linha com o POV, a orbita e a vista unificada antes e depois. Vale tambem com a camera classica (base).
+        void jumpMeter(uint8_t *rdram, int n, unsigned frames)
+        {
+            struct Last { bool ok = false; float pos[3] = {}, heading = 0.f; uint32_t pov = 0; bool orbit = false; uint32_t unified = 0; };
+            static Last last[kMaxCams];
+            for (int v = 0; v < kMaxCams; ++v)
+            {
+                Last &l = last[v];
+                if (v >= n)
+                {
+                    l.ok = false;
+                    continue;
+                }
+                const uint32_t c = camAddr(v), cs = FAST_READ32(c + kCamCs) & 0x1FFFFFFFu;
+                if (!okAddr(cs, 0x70u))
+                {
+                    l.ok = false;
+                    continue;
+                }
+                float pos[3];
+                for (int i = 0; i < 3; ++i)
+                    pos[i] = rdF(rdram, cs + 0x10 + 4 * i);
+                const float heading = rdF(rdram, cs + 0x68);
+                const uint32_t pov = FAST_READ32(c + kCamPov), unified = FAST_READ32(kUnified);
+                const bool orbit = g_cam[v].active;
+                if (l.ok)
+                {
+                    const float dx = pos[0] - l.pos[0], dy = pos[1] - l.pos[1], dz = pos[2] - l.pos[2];
+                    const float d = std::sqrt(dx * dx + dy * dy + dz * dz), dh = std::fabs(wrapPi(heading - l.heading)) * 57.2958f;
+                    if (d > 60.f || dh > 20.f)
+                        std::fprintf(stderr, "[orbit] camera %d: salto quadro %u: %.0f de distancia, %.0f graus (pov %d->%d, orbita %d->%d, unificada %d->%d, corte %d)\n",
+                                     v, frames, d, dh, static_cast<int32_t>(l.pov), static_cast<int32_t>(pov), l.orbit, orbit, l.unified, unified,
+                                     FAST_READ32(c + kCamCut) != 0u);
+                }
+                l.ok = true;
+                std::memcpy(l.pos, pos, sizeof pos);
+                l.heading = heading;
+                l.pov = pov;
+                l.orbit = orbit;
+                l.unified = unified;
+            }
+        }
+
         void post(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
         {
             static const bool log = std::getenv("WOTM_ORBITLOG") != nullptr;
@@ -471,6 +515,8 @@ namespace
             }
             for (int i = 0; i < 4; ++i)
                 g_in[i].driving = driving[i];
+            if (log)
+                jumpMeter(rdram, n, frames);
         }
 
         // Camera::shakeCamera (a0 = camera): o tremor do quadro e o que ele somou ao cs->trans
