@@ -457,6 +457,9 @@ public:
         const Source src = locate(gameName);
         std::lock_guard<std::mutex> lk(m_);
         Req &r = req_[s];
+        // segurado (setHold) e ja tocando o mesmo filme: continua (a volta da selecao nativa ao menu chama Play de novo, e reabrir
+        // deixava o telao preto ate o primeiro quadro)
+        if (hold_[s].load() && active_[s].load() && !done_[s].load() && r.name == gameName) return;
         r.src = src;
         r.name = gameName;
         r.audio = audio;

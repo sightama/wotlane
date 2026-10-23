@@ -2515,7 +2515,10 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
     // telas de opcoes antes da selecao (11 eliminacao, 12 CPUs de 1 jogador, 13 CPUs do multijogador, 15 "first to"): a fileira do
     // jogo so prepara a selecao do jogo, que a nativa substitui
     const uint32_t cur = ram.u32(wotm::sym::currScreen);
-    const bool optionsScreen = soloEnabled() && (cur == 11 || cur == 12 || cur == 13 || cur == 15);
+    // tambem as telas da selecao (3, 6, 7, 18, 19): o changeScreen ja trocou a tela antes de o transitionHook publicar a selecao, e a
+    // fileira do jogo aparecia por um quadro (ex.: "sudden death" na tela 15)
+    const bool optionsScreen = soloEnabled() && (cur == 11 || cur == 12 || cur == 13 || cur == 15 || cur == 3 || cur == 6 || cur == 7 ||
+                                                 cur == 18 || cur == 19);
     if (v.select || s_t > 0.f || optionsScreen)
         hideStrip(scene, ram);   // a barra nativa (drawBar2d) faz o papel da fileira de retratos (ate a camera voltar)
     Plane pl;
