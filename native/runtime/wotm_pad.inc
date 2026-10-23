@@ -236,6 +236,8 @@ static uint16_t gamepadButtons(int pad)
     return m;
 }
 
+static int playerOfPort(int port) { return port + g_portBase.load(std::memory_order_relaxed); }
+
 // Jogador (0..3) que o teclado alimenta, pela regra do deviceMap (-1: nenhum, na escolha manual sem o teclado ou com ele sobrando)
 inline int keyboardPlayer()
 {
@@ -331,7 +333,8 @@ static void pointerFrame(const Rectangle &dst, int rw, int rh)
         ms::g_wheel.fetch_add(w > 0.f ? 1 : -1, std::memory_order_relaxed);
 }
 
-static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons, true);
+static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons,
+                                 g_ps2PadPlayerOfPort = &playerOfPort, true);
 }
 
 void wotmPadSetPortBase(int base) { wotm_pad::g_portBase.store(base, std::memory_order_relaxed); }
