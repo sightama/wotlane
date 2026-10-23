@@ -490,6 +490,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   também dar sombra com a pose de outro quadro); constantes por item; lista de comandos própria no lugar do modo imediato do rlgl;
   cache de vértices entre vistas; malhas estáticas da fase na GPU; threads. Corte por vista já existe (`Scene::walk`); o corte dos
   pacotes do VU1 no `hier` rende pouco (~20% dele) e tem risco alto. Os "12 ms contra 7 ms" acima vêm de máquinas diferentes.
+  **Feito em 2026-10-23** (passo 0, sombras uma vez por redesenho com o LOD da sombra como o `hierShadow`, e o `VtxStream` no lugar do
+  modo imediato no `drawList`; detalhes no mesmo arquivo): no 3200G, redesenho de 4 vistas ~47 → ~32 ms, 2 vistas 18,7 → 14,9 ms, 1
+  vista 11,1 → 7,7 ms, corpus idêntico. Falta: partículas, cache de vértices entre vistas, malhas estáticas na GPU e o lado do EE
+  (~31 ms de CPU por quadro com 4 vistas no 3200G).
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.

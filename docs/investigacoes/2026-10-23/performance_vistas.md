@@ -1,5 +1,33 @@
 # Custo da tela dividida de 3 e 4 jogadores: investigação
 
+## Feito em 2026-10-23 (branch `perf-vistas`; medido no Ryzen 3 3200G + RX 570)
+- **Passo 0:** `WOTM_DRAWSTATS=1` (com `PS2X_STATS`): o redesenho sai separado por 1, 2, 3 e 4 vistas, e uma linha
+  `[native] desenho por vista` dá a média de cada fase do `Scene::draw` (céu, travessia, OT de alfa, sombras e silhuetas, destroços,
+  partículas, HUD, descargas de lote), os lotes, os vértices e as silhuetas refeitas e reaproveitadas (`wotm::DrawProf`). Base com 4
+  vistas: ~48 ms por redesenho; por vista, travessia ~7 ms (~87 mil vértices emitidos, ~750 lotes; só ~1,5 ms disso é descarga),
+  sombras ~2,2 ms (quase tudo a rasterização das silhuetas), partículas ~1,9 ms. Medida com o rlgl sem emitir: a travessia cai para
+  ~3,7 ms, então **metade dela era o custo das quatro chamadas do rlgl por vértice**, não a matemática.
+- **A (sombras):** silhueta reaproveitada pela chave das entradas (redesenho sem quadro novo) e, na tela dividida, de outra vista do
+  mesmo redesenho com tolerância de 1,5 unidade (`Scene::shadowNear`). A chave exata quase nunca batia: o `hier` de cada vista
+  reavalia a pose e os membros andam décimas de unidade entre as vistas. Para a lista dos que projetam ser a mesma em todas as vistas,
+  a coleta da sombra passou a escolher o LOD como o `hierShadow` (distância fixa do bloqueador em `psBlkLst + 0x28`) e a não cortar
+  pela vista (o jogo percorre pela câmera da luz); antes era pelo olho de cada vista, o desvio que o `lod_fixo.md` registrava, e um
+  monstro meio fora da vista perdia parte da sombra. Silhuetas por `forEachTriPos` (sem cor nem normal, paleta do instantâneo, que
+  agora inclui os que projetam). Sombras: ~2,2 → ~0,5 ms por vista. `WOTM_SHADOWNOCACHE` e `WOTM_SHADOWEYELOD` voltam ao de antes.
+- **C (parte):** `VtxStream` (`wotm_fx.hpp`) no `drawList`: os mesmos atributos num buffer próprio, desenhados como o
+  `rlDrawRenderBatch` (mesmo shader, MVP, uniformes e posições de atributo); lotes que só trocam de textura viram comandos da mesma
+  subida, e a fila só é descarregada antes de uma mudança de estado do GL (mistura, teste de alfa, máscara de Z, CLAMP).
+  `WOTM_NOVTXSTREAM` volta ao modo imediato. Armadilhas achadas: o shader padrão não tem normal (as posições de atributo são as
+  fixas do `rlLoadShaderProgram`); e no driver da RX 570 o `glBufferData` já com os dados deixava os quadrantes 3 e 4 sem a fase de
+  vez em quando (uma leitura de estado do GL escondia): buffer órfão vazio + `glBufferSubData`.
+- **B (parte):** comprimento das linhas da matriz da luz uma vez por item; a normal do shader (os flags) só é normalizada quando muda.
+- **Conferido:** corpus idêntico byte a byte ao modo imediato com a sombra nova (34 quadros; a sombra nova muda poucos pixels contra
+  a de antes); fotos das 4 vistas em duas fases. **Resultado**, médias de corridas de 70 s (IA x IA, Centro): 4 vistas ~47 → ~32 ms;
+  2 vistas 18,7 → 14,9 ms; 1 vista 11,1 → 7,7 ms. A lógica do jogo não mudou (30 q/s em ~90% dos quadros com 4 vistas).
+- **Sobra:** partículas (~1,3 ms por vista, ainda no modo imediato; o custo é sobretudo a conta por quadrado), D/E/H abaixo, e o EE:
+  com 4 vistas a thread do jogo gasta ~31 ms de CPU por quadro nesta máquina (o `[field]`), e o amostrador `PS2X_HOSTPROF` só tem
+  símbolos públicos (os nomes dentro do código gerado saem errados); ~19% do tempo dela é espera (`ZwWaitForAlertByThreadId`).
+
 2026-10-23. Só leitura (código, docs e medidas já registradas); nada foi compilado, aberto nem medido de novo. Pergunta: como baratear
 a tela dividida de 3 e 4 jogadores no port, onde cada vista a mais custa caro nas duas threads (`POS_FRONTEIRA.md`, item 1, "Custo
 por vista", e item 11, relato de 2026-10-22). O documento é para quem for pegar o trabalho: onde está cada coisa, o que medir antes e

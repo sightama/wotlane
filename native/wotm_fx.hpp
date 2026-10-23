@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -152,9 +153,15 @@ private:
 inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
 // O burn fica limitado a +-4096: o F satura (0 ou 255) muito antes, e o domo do ceu da AIRPORT tem fogBurnThru 1e7, que deixava o y
 // normalizado abaixo do limite do shader (1e-6) e apagava todos os flags (o domo saia sem o modo GS, ~0,13 da cor).
+inline void shaderNormalVals(float burn, bool fge, bool gs, bool pm, int mode, float out[3]) {
+    out[0] = burn > 4096.f ? 4096.f : (burn < -4096.f ? -4096.f : burn);
+    out[1] = 1.f;
+    out[2] = (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f) + (g_premulShader ? 8.f * float(mode) : 0.f);
+}
 inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false, int mode = 0) {
-    burn = burn > 4096.f ? 4096.f : (burn < -4096.f ? -4096.f : burn);
-    rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f) + (g_premulShader ? 8.f * float(mode) : 0.f));
+    float n[3];
+    shaderNormalVals(burn, fge, gs, pm, mode, n);
+    rlNormal3f(n[0], n[1], n[2]);
 }
 // Mistura do GS pelo byte baixo do registrador ALPHA: cor = (A - B) * C + D, campos de 2 bits A, B, D (0 Cs, 1 Cd, 2 zero) e C (0 As,
 // 1 Ad, 2 FIX; Ad e FIX nao aparecem nos objetos medidos e ficam como As). Vira Cs * (as * As + ks) + Cd * (ad * As + kd) no GL:
@@ -227,6 +234,147 @@ inline unsigned gsWhiteTexture() {
     }
     return id;
 }
+
+// ---------------------------------------------------------------- vertices sem o modo imediato do rlgl
+// O drawList emitia cada vertice com rlColor4ub, rlTexCoord2f, rlNormal3f (que normaliza com uma raiz) e rlVertex3f: quatro chamadas
+// ao raylib por vertice, ~40 ns cada vertice no Ryzen 3 3200G, metade do tempo da travessia. O VtxStream guarda os mesmos atributos
+// num vetor proprio, intercalados, e na descarga sobe tudo de uma vez (glBufferData, buffer novo a cada descarga, sem esperar a GPU)
+// e desenha como o rlDrawRenderBatch: o mesmo shader (o que o chamador diz que o rlgl tem ligado), o MVP (modelview x projecao, a conta
+// do rlMatrixMultiply), colDiffuse 1 e texture0 na unidade 0, os atributos nas posicoes do lote do rlgl, um glDrawArrays por comando
+// (modo e textura). O estado do GL (mistura, mascara de Z, uniform do teste de alfa, CLAMP) vale no momento da descarga, como no rlgl:
+// quem usa descarrega antes de muda-lo. Sem as funcoes do GL 3 (glad), ok() e false e o chamador volta ao rlgl.
+extern "C" {
+extern void (*glad_glGenVertexArrays)(int, unsigned *);
+extern void (*glad_glBindVertexArray)(unsigned);
+extern void (*glad_glGenBuffers)(int, unsigned *);
+extern void (*glad_glBindBuffer)(unsigned, unsigned);
+extern void (*glad_glBufferData)(unsigned, ptrdiff_t, const void *, unsigned);
+extern void (*glad_glVertexAttribPointer)(unsigned, int, unsigned, unsigned char, int, const void *);
+extern void (*glad_glEnableVertexAttribArray)(unsigned);
+extern void (*glad_glUseProgram)(unsigned);
+extern void (*glad_glUniformMatrix4fv)(int, int, unsigned char, const float *);
+extern void (*glad_glUniform4f)(int, float, float, float, float);
+extern void (*glad_glUniform1i)(int, int);
+extern void (*glad_glActiveTexture)(unsigned);
+extern void (*glad_glBindTexture)(unsigned, unsigned);
+extern void (*glad_glDrawArrays)(unsigned, int, int);
+extern void (*glad_glBufferSubData)(unsigned, ptrdiff_t, ptrdiff_t, const void *);
+}
+class VtxStream {
+public:
+    struct V { float x, y, z, u, v, nx, ny, nz; uint8_t c[4]; };
+    static_assert(sizeof(V) == 36, "layout intercalado: posicao, UV, normal, cor");
+
+    bool ok() {
+        if (!tried_) {
+            tried_ = true;
+            ok_ = glad_glGenVertexArrays && glad_glBindVertexArray && glad_glGenBuffers && glad_glBindBuffer && glad_glBufferData && glad_glBufferSubData &&
+                  glad_glVertexAttribPointer && glad_glEnableVertexAttribArray && glad_glUseProgram && glad_glUniformMatrix4fv &&
+                  glad_glUniform4f && glad_glUniform1i && glad_glActiveTexture && glad_glBindTexture && glad_glDrawArrays;
+            if (ok_) {
+                glad_glGenVertexArrays(1, &vao_);
+                glad_glGenBuffers(1, &vbo_);
+                glad_glBindVertexArray(vao_);
+                glad_glBindBuffer(kArrayBuffer, vbo_);
+                // as posicoes fixas que o rlLoadShaderProgram amarra nos shaders (glBindAttribLocation): o shader padrao nao tem
+                // normal (posicao -1) e a do alphaShader_ e a 2
+                const int loc[4] = {RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD,
+                                    RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL, RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR};
+                const int size[4] = {3, 2, 3, 4};
+                const size_t off[4] = {offsetof(V, x), offsetof(V, u), offsetof(V, nx), offsetof(V, c)};
+                for (int a = 0; a < 4; ++a) {
+                    if (loc[a] < 0) continue;
+                    glad_glVertexAttribPointer(unsigned(loc[a]), size[a], a == 3 ? kUByte : kFloat, a == 3 ? 1 : 0, int(sizeof(V)),
+                                               reinterpret_cast<const void *>(off[a]));
+                    glad_glEnableVertexAttribArray(unsigned(loc[a]));
+                }
+                glad_glBindVertexArray(0);
+                glad_glBindBuffer(kArrayBuffer, 0);
+            } else {
+                std::fprintf(stderr, "[native] sem as funcoes do GL 3: vertices pelo modo imediato do rlgl\n");
+            }
+        }
+        return ok_;
+    }
+    // Shader que o rlgl tem ligado agora (BeginShaderMode do chamador, ou o padrao): o da descarga
+    void setShader(unsigned id, const int *locs) { shader_ = id; locs_ = locs; }
+
+    // Comeco de um comando (como rlBegin + rlSetTexture): RL_TRIANGLES ou RL_LINES
+    void begin(int mode, unsigned tex) {
+        if (!cmds_.empty() && cmds_.back().count == 0) { cmds_.back().mode = mode; cmds_.back().tex = tex; return; }
+        cmds_.push_back({mode, tex, int(v_.size()), 0});
+    }
+    void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { cur_.c[0] = r; cur_.c[1] = g; cur_.c[2] = b; cur_.c[3] = a; }
+    void texcoord(float u, float v) { cur_.u = u; cur_.v = v; }
+    void normal(float x, float y, float z) {   // como o rlNormal3f (sem transformacao: o modo 3D nao usa rlPushMatrix aqui)
+        if (x == lastIn_[0] && y == lastIn_[1] && z == lastIn_[2]) return;   // a mesma de antes (quase sempre: e por item, nao por vertice)
+        lastIn_[0] = x; lastIn_[1] = y; lastIn_[2] = z;
+        const float length = sqrtf(x * x + y * y + z * z);
+        if (length != 0.0f) { const float il = 1.0f / length; x *= il; y *= il; z *= il; }
+        cur_.nx = x; cur_.ny = y; cur_.nz = z;
+    }
+    void vertex(float x, float y, float z) {
+        cur_.x = x; cur_.y = y; cur_.z = z;
+        v_.push_back(cur_);
+        ++cmds_.back().count;
+    }
+    bool empty() const { return v_.empty(); }
+    size_t vertices() const { return v_.size(); }
+
+    // Sobe e desenha o que acumulou, com o estado do GL de agora; zera a fila
+    void flush() {
+        if (v_.empty() || !ok_) { v_.clear(); cmds_.clear(); return; }
+        rlDrawRenderBatchActive();   // o que o rlgl tiver na fila sai antes (ordem)
+        // buffer novo vazio (orfao: a GPU ainda pode ler o anterior) e os dados por glBufferSubData. Com o glBufferData ja com os
+        // dados (varios MB por descarga), no driver da RX 570 os quadrantes 3 e 4 da tela dividida saiam sem a fase de vez em quando
+        // (qualquer leitura de estado do GL, que sincroniza o driver, escondia o defeito)
+        glad_glBindBuffer(kArrayBuffer, vbo_);
+        glad_glBufferData(kArrayBuffer, ptrdiff_t(v_.size() * sizeof(V)), nullptr, kStreamDraw);
+        glad_glBufferSubData(kArrayBuffer, 0, ptrdiff_t(v_.size() * sizeof(V)), v_.data());
+        glad_glBindBuffer(kArrayBuffer, 0);
+        const unsigned prog = shader_ ? shader_ : rlGetShaderIdDefault();
+        const int *locs = locs_ ? locs_ : rlGetShaderLocsDefault();
+        glad_glUseProgram(prog);
+        const Matrix a = rlGetMatrixModelview(), b = rlGetMatrixProjection();
+        const float mvp[16] = {   // rlMatrixMultiply(modelview, projection), na ordem do rlMatrixToFloat
+            a.m0 * b.m0 + a.m1 * b.m4 + a.m2 * b.m8 + a.m3 * b.m12,     a.m0 * b.m1 + a.m1 * b.m5 + a.m2 * b.m9 + a.m3 * b.m13,
+            a.m0 * b.m2 + a.m1 * b.m6 + a.m2 * b.m10 + a.m3 * b.m14,    a.m0 * b.m3 + a.m1 * b.m7 + a.m2 * b.m11 + a.m3 * b.m15,
+            a.m4 * b.m0 + a.m5 * b.m4 + a.m6 * b.m8 + a.m7 * b.m12,     a.m4 * b.m1 + a.m5 * b.m5 + a.m6 * b.m9 + a.m7 * b.m13,
+            a.m4 * b.m2 + a.m5 * b.m6 + a.m6 * b.m10 + a.m7 * b.m14,    a.m4 * b.m3 + a.m5 * b.m7 + a.m6 * b.m11 + a.m7 * b.m15,
+            a.m8 * b.m0 + a.m9 * b.m4 + a.m10 * b.m8 + a.m11 * b.m12,   a.m8 * b.m1 + a.m9 * b.m5 + a.m10 * b.m9 + a.m11 * b.m13,
+            a.m8 * b.m2 + a.m9 * b.m6 + a.m10 * b.m10 + a.m11 * b.m14,  a.m8 * b.m3 + a.m9 * b.m7 + a.m10 * b.m11 + a.m11 * b.m15,
+            a.m12 * b.m0 + a.m13 * b.m4 + a.m14 * b.m8 + a.m15 * b.m12, a.m12 * b.m1 + a.m13 * b.m5 + a.m14 * b.m9 + a.m15 * b.m13,
+            a.m12 * b.m2 + a.m13 * b.m6 + a.m14 * b.m10 + a.m15 * b.m14, a.m12 * b.m3 + a.m13 * b.m7 + a.m14 * b.m11 + a.m15 * b.m15};
+        glad_glUniformMatrix4fv(locs[RL_SHADER_LOC_MATRIX_MVP], 1, 0, mvp);
+        // (matProjection/matView/matModel/matNormal: os shaders do desenho nao os tem)
+        glad_glUniform4f(locs[RL_SHADER_LOC_COLOR_DIFFUSE], 1.0f, 1.0f, 1.0f, 1.0f);
+        glad_glUniform1i(locs[RL_SHADER_LOC_MAP_DIFFUSE], 0);
+        glad_glBindVertexArray(vao_);
+        glad_glActiveTexture(kTexture0);
+        for (const Cmd &c : cmds_) {
+            if (!c.count) continue;
+            glad_glBindTexture(kTexture2D, c.tex);
+            glad_glDrawArrays(unsigned(c.mode), c.first, c.count);
+        }
+        glad_glBindTexture(kTexture2D, 0);
+        glad_glBindVertexArray(0);
+        glad_glUseProgram(0);
+        v_.clear();
+        cmds_.clear();
+    }
+
+private:
+    struct Cmd { int mode; unsigned tex; int first, count; };
+    static constexpr unsigned kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kFloat = 0x1406, kUByte = 0x1401, kTexture2D = 0x0DE1,
+                              kTexture0 = 0x84C0;
+    std::vector<V> v_;
+    std::vector<Cmd> cmds_;
+    V cur_{};
+    float lastIn_[3] = {0.f, 0.f, 0.f};   // normal de entrada que deu a cur_ (a inicial 0,0,0 da 0,0,0, como no rlgl)
+    unsigned vao_ = 0, vbo_ = 0, shader_ = 0;
+    const int *locs_ = nullptr;
+    bool tried_ = false, ok_ = false;
+};
 
 // Tela do GS (640 x 224, exibida em 4:3) dentro do quadro nativo de fbw x fbh: a faixa central com a altura toda. Em widescreen
 // (Hor+: o FOV vertical do jogo fica, a largura cresce) as sobras sao as laterais; o que o jogo poe em pixels do GS (texto, lens
