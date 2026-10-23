@@ -693,7 +693,7 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 // passam, depois da ultima coluna aberta, pelo aleatorio e pelo personalizado (casas so nossas, g_soloExtra). A fileira de retratos
 // do jogo da lugar a barra 2D (drawBar2d, hideStrip) e o telao fica preto com o sheldemo (selectMovie).
 // WOTM_NATSEL=0 volta as telas do jogo.
-static int g_solo = 0;   // 3 ou 6: a tela do jogo que a selecao nativa mostra
+static int g_solo = 0;   // 3, 6, 18 ou 19: a tela do jogo que a selecao nativa mostra
 static bool g_soloLeaving = false;
 
 static bool soloEnabled()
@@ -713,7 +713,7 @@ struct SoloPanel
     bool ai;        // a CPU do modo 2 (o jogador 1 escolhe por ela)
     bool waiting;   // CPU antes de o jogador 1 escolher o dele
 };
-static int soloPanels(uint8_t *rdram, SoloPanel out[2], bool &noCostume)
+static int soloPanels(uint8_t *rdram, SoloPanel out[kMaxPlayers], bool &noCostume)
 {
     using namespace wotm::sym;
     noCostume = false;
@@ -724,6 +724,36 @@ static int soloPanels(uint8_t *rdram, SoloPanel out[2], bool &noCostume)
     }
     const uint32_t mode = rd32(rdram, kMode);
     noCostume = mode == 6;   // eliminacao: o jogo poe o traje 0
+    auto on = [&](uint32_t a) { return rd32(rdram, a) != 0; };
+    if (g_solo == 18 || g_solo == 19)
+    {
+        // Telas 18 (screenCharSelect3P, 3 monstros) e 19 (screenCharSelect4P, 4), vindas do "first to" com CPUs. Modo 2 (1 jogador):
+        // o controle 1 escolhe o dele e depois cada CPU, uma por vez, na mesma coluna. Senao (2 jogadores): cada controle escolhe o
+        // seu; na 18 o controle 1 escolhe a CPU depois dos dois; na 19 o 1 escolhe a 1a CPU depois dos dois e o 2, a 2a depois do dele.
+        const bool four = g_solo == 19;
+        const uint32_t c1 = currentSelection + 4u * uint32_t(g_solo), c2 = currentSelection + 4u * uint32_t(22 + g_solo);
+        const uint32_t cur[4] = {four ? curCostume1_3007 : curCostume1_2868, four ? curCostume2_3008 : curCostume2_2869,
+                                 four ? curCostume3_3009 : curCostume3_2870, curCostume4_3010};
+        const uint32_t p1 = four ? playerOneIsDone_3011 : playerOneIsDone_2871, p2 = four ? playerTwoIsDone_3012 : playerTwoIsDone_2872,
+                       a1 = four ? aiOneIsDone_3013 : aiOneIsDone_2873, a2 = four ? aiTwoIsDone_3014 : aiTwoIsDone_2874,
+                       a3 = aiThreeIsDone_3015;
+        if (mode == 2)
+        {
+            const int n = four ? 4 : 3;
+            const uint32_t done[4] = {p1, a1, a2, a3};
+            out[0] = {c1, cur[0], p1, kCostume, kMonsterSel, 1, false, false};
+            for (int i = 1; i < n; ++i)   // CPU i: m_costume[1 + i], m_monsterSel[3 + i]
+                out[i] = {c1, cur[i], done[i], kCostume + 4u * uint32_t(1 + i), kMonsterSel + 4u * uint32_t(3 + i), 1, true, !on(done[i - 1])};
+            return n;
+        }
+        out[0] = {c1, cur[0], p1, kCostume, kMonsterSel, 1, false, false};
+        out[1] = {c2, cur[1], p2, kCostume + 4u, kMonsterSel + 4u, 2, false, false};
+        out[2] = {c1, cur[2], a1, kCostume + 8u, kMonsterSel + 16u, 1, true, !(on(p1) && on(p2))};
+        if (!four)
+            return 3;
+        out[3] = {c2, cur[3], a2, kCostume + 12u, kMonsterSel + 20u, 2, true, !on(p2)};
+        return 4;
+    }
     // currentSelection: a coluna do jogador 1 de cada tela, e a do jogador 2 a partir do indice 22
     out[0] = {currentSelection + 4u * 6u, curCostume1_2894, playerOneIsDone_2896, kCostume, kMonsterSel, 1, false, false};
     if (mode == 2)   // 1 jogador e 1 CPU: o controle 1 escolhe a CPU na mesma coluna, depois do dele
@@ -739,12 +769,12 @@ static int colOfMonster(uint8_t *rdram, uint32_t sel)
         if (monsterOfCol(rdram, c) == int(sel >> 5)) return c;
     return 0;
 }
-static int g_soloSel[2] = {}, g_soloCol[2] = {-1, -1};   // traje escolhido (0..3 ou skin) e a coluna em que foi escolhido
-static bool g_soloDonePrev[2] = {};
+static int g_soloSel[kMaxPlayers] = {}, g_soloCol[kMaxPlayers] = {-1, -1, -1, -1};   // traje escolhido (0..3 ou skin) e a coluna em que foi escolhido
+static bool g_soloDonePrev[kMaxPlayers] = {};
 static bool g_soloPrimed = false;   // primeiro soloSync da tela: um "pronto" que ja vinha marcado nao chama o narrador
 static uint32_t g_soloTick = 0;
 // Casa extra em que o quadro esta (0: a coluna do jogo; kCellRandom, kCellCustom: o cursor do jogo fica parado na coluna de onde saiu)
-static int g_soloExtra[2] = {};
+static int g_soloExtra[kMaxPlayers] = {};
 // Codigo do screenGetInput ja decidido neste quadro, por controle (a tela 3 le o controle duas vezes por quadro)
 static uint32_t g_soloCodeTick[3] = {}, g_soloCodeIn[3] = {}, g_soloCodeOut[3] = {};
 
@@ -753,7 +783,7 @@ static void soloBegin(int screen)
     g_solo = screen;
     g_soloLeaving = false;
     g_soloPrimed = false;
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < kMaxPlayers; ++i)
     {
         g_soloCol[i] = -1;
         g_soloDonePrev[i] = false;
@@ -762,10 +792,26 @@ static void soloBegin(int screen)
     std::fprintf(stderr, "[padsel] selecao nativa da tela %d\n", screen);
 }
 
+// Rotulo do quadro i: P1, P2, CPU (ou CPU1, CPU2... com mais de uma)
+static const char *soloLabel(const SoloPanel *pn, int n, int i)
+{
+    static char buf[kMaxPlayers][8];
+    if (!pn[i].ai)
+        return pn[i].pad == 2 ? "P2" : "P1";
+    int cpus = 0, k = 0;
+    for (int j = 0; j < n; ++j)
+        if (pn[j].ai)
+            ++cpus, k += j < i;
+    if (cpus == 1)
+        return "CPU";
+    std::snprintf(buf[i], sizeof buf[i], "CPU%d", k + 1);
+    return buf[i];
+}
+
 // Saida da funcao da tela, a cada quadro: acompanha o cursor do jogo e, na confirmacao com uma skin, grava o traje dela
 static void soloSync(uint8_t *rdram)
 {
-    SoloPanel pn[2];
+    SoloPanel pn[kMaxPlayers];
     bool noCostume;
     const int n = soloPanels(rdram, pn, noCostume);
     for (int i = 0; i < n; ++i)
@@ -793,12 +839,12 @@ static void soloSync(uint8_t *rdram)
             // o jogo marcou o procurador como levado (taken 0); ele continua livre para o outro quadro
             wr32(rdram, wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4 + cur) * kSlotSize, 1u);
             const int mon = monsterOfCol(rdram, col);
-            std::fprintf(stderr, "[padsel] %s: %s traje %d (%s)\n", pn[i].ai ? "CPU" : (i ? "jogador 2" : "jogador 1"), kMonsterNames[mon],
+            std::fprintf(stderr, "[padsel] %s: %s traje %d (%s)\n", soloLabel(pn, n, i), kMonsterNames[mon],
                          g_soloSel[i], costumeName(mon, g_soloSel[i]).c_str());
         }
         if (done && !g_soloDonePrev[i])
         {
-            std::fprintf(stderr, "[padsel] pronto (%s): coluna %d, m_monsterSel %s, traje %u\n", pn[i].ai ? "CPU" : (i ? "jogador 2" : "jogador 1"), col,
+            std::fprintf(stderr, "[padsel] pronto (%s): coluna %d, m_monsterSel %s, traje %u\n", soloLabel(pn, n, i), col,
                          monsterName(rd32(rdram, pn[i].monsterDst)), rd32(rdram, pn[i].costumeDst));
             if (g_soloPrimed)
                 wotm_narrator::announce(col >= 1 && col <= 10 ? monsterOfCol(rdram, col) : int(rd32(rdram, pn[i].monsterDst) >> 5));
@@ -826,7 +872,7 @@ static void soloSetCursor(uint8_t *rdram, const SoloPanel &p, int who, int col, 
 //  - X (6) no aleatorio sorteia monstro e traje, poe o cursor do jogo neles e deixa o X seguir; no personalizado nao faz nada.
 static uint32_t soloDecide(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int pad, uint32_t code)
 {
-    SoloPanel pn[2];
+    SoloPanel pn[kMaxPlayers];
     bool noCostume;
     const int n = soloPanels(rdram, pn, noCostume);
     int who = -1;
@@ -907,7 +953,7 @@ static void fillCostume(View &v, int p, const CostumeList &l)
 
 static void publishSolo(uint8_t *rdram, View &v)
 {
-    SoloPanel pn[2];
+    SoloPanel pn[kMaxPlayers];
     bool noCostume;
     const int n = soloPanels(rdram, pn, noCostume);
     v.selPlayers = n;
@@ -917,8 +963,8 @@ static void publishSolo(uint8_t *rdram, View &v)
         const bool done = !pn[i].waiting && rd32(rdram, pn[i].done) != 0;
         v.selReady[i] = done;
         v.selWaiting[i] = pn[i].waiting;
-        v.selColor[i] = pn[i].ai ? -1 : i;
-        std::snprintf(v.selLabel[i], sizeof v.selLabel[i], "%s", pn[i].ai ? "CPU" : i ? "P2" : "P1");
+        v.selColor[i] = pn[i].ai ? -1 : pn[i].pad - 1;
+        std::snprintf(v.selLabel[i], sizeof v.selLabel[i], "%s", soloLabel(pn, n, i));
         int col;
         if (done)
         {
@@ -1001,6 +1047,15 @@ static void hideSelect2P(uint8_t *rdram, int screen = 6)
     for (uint32_t i = 0; i < 2; ++i)   // m_costumeBoxCs, m_costumeBoxCs2: drawMe (+0xC)
         if (const uint32_t cs = rd32(rdram, kCostumeBox + 4 * i) & 0x1FFFFFFFu; cs >= 0x1000u)
             rdram[cs + 0xC] = 0;
+    if (screen == 18 || screen == 19)
+    {
+        for (uint32_t i = 0; i < 3; ++i)   // m_cs7C[0..2]: os outros paineis de traje das telas de 3 e 4 monstros
+            if (const uint32_t cs = rd32(rdram, kShell + 0x7C + 4 * i) & 0x1FFFFFFFu; cs >= 0x1000u)
+                rdram[cs + 0xC] = 0;
+        for (uint32_t off = 0x1C0; off <= 0x1D8; off += 4)   // cursores de monstro (m_monsterCursorSw[0..2] e os da tela 19 depois)
+            if (const uint32_t sw = rd32(rdram, kShell + off) & 0x1FFFFFFFu; sw >= 0x1000u)
+                rdram[sw + 8] = 0;
+    }
     // marcas "1"/"2" dos jogadores do retail nos retratos (shell->m_selectSw[coluna]: 1, 2 ou 3 = os dois; 4 = travado, fica)
     for (uint32_t i = 0; i < 10; ++i)
         if (const uint32_t sw = rd32(rdram, kShell + 0x168 + 4 * i) & 0x1FFFFFFFu; sw >= 0x1000u && rdram[sw + 8] >= 1 && rdram[sw + 8] <= 3)
@@ -1030,7 +1085,8 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 6 && g_multi && (!g_selOn || g_selLeaving))
             selectBegin(rdram);
         // telas 3 e 6 de 1 e 2 jogadores: a selecao do jogo vista no telao
-        if (rd32(rdram, wotm::sym::screenFirstPass) && (cur == 3 || (cur == 6 && !g_multi)) && soloEnabled() && (g_solo != cur || g_soloLeaving))
+        if (rd32(rdram, wotm::sym::screenFirstPass) && (cur == 3 || cur == 18 || cur == 19 || (cur == 6 && !g_multi)) && soloEnabled() &&
+            (g_solo != cur || g_soloLeaving))
             soloBegin(cur);
         g_transRa = GPR_U32(ctx, 31);
         g_transPending = true;
@@ -1049,7 +1105,7 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         const bool ended = rd32(rdram, wotm::sym::betweenScreens) == 0;
         g_uiAlpha = fading ? std::min(1.f, std::max(0.f, itemsAlpha(rdram, hidden))) : (entering && ended ? 1.f : 0.f);
         setItemsAlpha(rdram, hidden, 0.f);
-        if (hidden == 6 || hidden == 3)
+        if (hidden == 6 || hidden == 3 || hidden == 18 || hidden == 19)
             hideSelect2P(rdram, hidden);
         if (g_phase == Leaving && ended)
             g_phase = Off;
@@ -1128,7 +1184,14 @@ static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if (done)
             changeScreen(rdram, ctx, runtime, 6, 8, 1, 3);
         else
+        {
+            // como a volta do jogo: o filme do menu de volta ao telao. Sem o continueDecoding o "first to" (que chama Play a cada
+            // quadro) encerrava o filme logo no primeiro quadro, e o telao ficava preto
+            callGuest(rdram, ctx, runtime, wotm::fn::moviesReadyScreenObject__FP11_hierobjectii, rd32(rdram, kMovieScreen), 8, 7);
+            callGuest(rdram, ctx, runtime, wotm::fn::Play__6CMoviebPc, wotm::sym::myMovie, 0, wotm::sym::MainMovie);
+            wr32(rdram, wotm::sym::continueDecoding, 1);
             changeScreen(rdram, ctx, runtime, 6, 15, -1, 0);
+        }
     }
     if (g_selOn)
         hideSelect2P(rdram);
@@ -1166,6 +1229,30 @@ static void select1PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         soloExit(rdram);
     publish(rdram);
 }
+
+// Telas 18 e 19 (3 e 4 monstros, com CPUs): a mesma selecao nativa das telas 3 e 6
+static PS2Runtime::RecompiledFunction g_origSelect3P = nullptr, g_origSelect4P = nullptr;
+static uint32_t g_selectNRa[2] = {};
+static bool g_selectNPending[2] = {};
+static void selectNHook(int k, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    const int screen = 18 + k;
+    if (ctx->pc == (k ? wotm::fn::screenCharSelect4P__Fv : wotm::fn::screenCharSelect3P__Fv) && g_solo == screen)
+    {
+        g_selectNRa[k] = GPR_U32(ctx, 31);
+        g_selectNPending[k] = true;
+        ++g_soloTick;
+    }
+    (k ? g_origSelect4P : g_origSelect3P)(rdram, ctx, runtime);
+    if (!g_selectNPending[k] || ctx->pc != g_selectNRa[k])
+        return;
+    g_selectNPending[k] = false;
+    if (g_solo == screen)
+        soloExit(rdram);
+    publish(rdram);
+}
+static void select3PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { selectNHook(0, rdram, ctx, runtime); }
+static void select4PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { selectNHook(1, rdram, ctx, runtime); }
 
 static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
@@ -2152,7 +2239,11 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
     s_last = now;
     const bool want = v.select && v.alpha > 0.f;
     s_t = std::clamp(s_t + (want ? dt : -dt) / 0.45f, 0.f, 1.f);
-    if (v.select || s_t > 0.f)
+    // telas de opcoes antes da selecao (11 eliminacao, 12 CPUs de 1 jogador, 13 CPUs do multijogador, 15 "first to"): a fileira do
+    // jogo so prepara a selecao do jogo, que a nativa substitui
+    const uint32_t cur = ram.u32(wotm::sym::currScreen);
+    const bool optionsScreen = soloEnabled() && (cur == 11 || cur == 12 || cur == 13 || cur == 15);
+    if (v.select || s_t > 0.f || optionsScreen)
         hideStrip(scene, ram);   // a barra nativa (drawBar2d) faz o papel da fileira de retratos (ate a camera voltar)
     Plane pl;
     if (s_t <= 0.f || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
@@ -2743,6 +2834,8 @@ void wotmPadSelInstall(PS2Runtime &runtime)
         {wotm::fn::screenGameModes2P__Fv, &g_origModes2P, &modes2PHook},
         {wotm::fn::screenCharSelect2P__Fv, &g_origSelect2P, &select2PHook},
         {wotm::fn::screenCharSelect1P__Fv, &g_origSelect1P, &select1PHook},
+        {wotm::fn::screenCharSelect3P__Fv, &g_origSelect3P, &select3PHook},
+        {wotm::fn::screenCharSelect4P__Fv, &g_origSelect4P, &select4PHook},
         {wotm::fn::screenGetInput__Fi, &g_origGetInput, &getInputHook},
         {wotm::fn::changeScreen__Fiiiib, &g_origChangeScreen, &changeScreenHook},
         {wotm::fn::screenMain__Fv, &g_origMain, &mainHook},

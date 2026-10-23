@@ -19,16 +19,18 @@ disco). Pistas: o que o Robo-47 desenha a mais que os outros (laser, brilho, par
 profundidade ou no alfa do céu; comparar com a checagem VU1 (`docs/passos/VU1CHECK.md`, `WOTM_VU1CHECK`) numa luta
 `WOTM_MATCH` com o Robo-47.
 
-## 4. Free-for-All com 2 ou 3 CPUs não mostra a seleção nativa
+## 4. Free-for-All com 2 ou 3 CPUs não mostra a seleção nativa (feito em 2026-10-23, falta o dono conferir o de 2 jogadores)
 
-- Single player > Free-for-All: com 0 e 1 "CPU monsters" a seleção nativa aparece; com 2 e 3 aparece a tela do jogo.
-- Multiplayer > Free-for-All com 2 jogadores: o mesmo com 1 ou 2 CPU players.
-
-Provável causa: com mais monstros do que cabem nas telas 3/6, o jogo usa outra tela (ou outro modo da tela 6, cf.
-`currentPlayMode` e os `AIplayerIsDone`) que o `transitionHook` não reconhece (`soloBegin` só entra em `cur==3` ou `cur==6 && !g_multi`)
-ou que `soloPanels` não sabe descrever (só monta 1 ou 2 quadros, e no modo 2 o quadro da CPU). Descobrir que tela/estado o jogo usa
-nesses casos e qual endereço guarda o monstro/traje de cada CPU; depois estender `soloPanels` para N quadros (a CPU escolhida
-pelo jogador 1, em sequência, como no modo 2).
+Com mais monstros do que cabem na tela 6, o "first to" (tela 15) manda à tela 18 (`screenCharSelect3P`, 3 monstros) ou 19
+(`screenCharSelect4P`, 4): 1 jogador com 2 CPUs → 18, com 3 → 19; 2 jogadores com 1 CPU → 18, com 2 → 19. As duas agora usam a
+seleção nativa (`soloPanels` monta até 4 quadros; ganchos `select3PHook`/`select4PHook`). Quadros, tirados do C++ da 18 e do asm
+da 19: modo 2 (1 jogador), o controle 1 escolhe o dele e depois cada CPU na mesma coluna (`curCostume2/3/4`, `aiOne/Two/ThreeIsDone`,
+`m_costume[2..4]`, `m_monsterSel[4..6]`); 2 jogadores, cada controle o seu, e a CPU 1 é do controle 1 depois dos dois prontos; na 19
+a CPU 2 é do controle 2 (coluna dele, `curCostume4.3010`) depois do pronto dele. Rótulos CPU1, CPU2... com mais de uma CPU. Escondidos
+também os painéis `m_cs7C[0..2]` e os cursores de monstro (`shell + 0x1C0..0x1D8`). Conferido por roteiro (`PS2X_PAD`,
+`WOTM_SHOTS`) no single player com 2 e 3 CPUs até a seleção de fase; o multiplayer de 2 com CPUs precisa de dois controles.
+Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_nativa_tela19_3cpus.png`. A tela 17 (`screenSelect1AI`) não aparece nesses
+caminhos e continua sem a nativa.
 
 ## 5. Transição esquisita ao confirmar em modos com seleção de fase
 
