@@ -1284,6 +1284,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
     scene.drawQuads(quads, float(rw), float(rh));
 }
 
+#include "wotm_narrator.inc"   // nome do monstro escolhido na selecao (antes do wotm_padsel.inc, que o chama)
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 // Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)

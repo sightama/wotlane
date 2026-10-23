@@ -643,6 +643,7 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
                 randomPick(rdram, k.col, k.costume, false);
                 k.ready = true;
                 sound = 8;
+                wotm_narrator::announce(monsterOfCol(rdram, k.col));
             }
             if (e[Back]) back = true;
             continue;
@@ -654,7 +655,12 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             k.costume = list.c[at < 0 ? 0 : (at + dir + list.n) % list.n];
             sound = dir < 0 ? 2 : 4;
         }
-        if (e[Ok] && list.find(k.costume) >= 0) { k.ready = true; sound = 8; }
+        if (e[Ok] && list.find(k.costume) >= 0)
+        {
+            k.ready = true;
+            sound = 8;
+            wotm_narrator::announce(monsterOfCol(rdram, k.col));
+        }
         if (e[Back]) back = true;
     }
     std::memcpy(g_selPrev, now, sizeof g_selPrev);
@@ -735,6 +741,7 @@ static int colOfMonster(uint8_t *rdram, uint32_t sel)
 }
 static int g_soloSel[2] = {}, g_soloCol[2] = {-1, -1};   // traje escolhido (0..3 ou skin) e a coluna em que foi escolhido
 static bool g_soloDonePrev[2] = {};
+static bool g_soloPrimed = false;   // primeiro soloSync da tela: um "pronto" que ja vinha marcado nao chama o narrador
 static uint32_t g_soloTick = 0;
 // Casa extra em que o quadro esta (0: a coluna do jogo; kCellRandom, kCellCustom: o cursor do jogo fica parado na coluna de onde saiu)
 static int g_soloExtra[2] = {};
@@ -745,6 +752,7 @@ static void soloBegin(int screen)
 {
     g_solo = screen;
     g_soloLeaving = false;
+    g_soloPrimed = false;
     for (int i = 0; i < 2; ++i)
     {
         g_soloCol[i] = -1;
@@ -789,10 +797,15 @@ static void soloSync(uint8_t *rdram)
                          g_soloSel[i], costumeName(mon, g_soloSel[i]).c_str());
         }
         if (done && !g_soloDonePrev[i])
+        {
             std::fprintf(stderr, "[padsel] pronto (%s): coluna %d, m_monsterSel %s, traje %u\n", pn[i].ai ? "CPU" : (i ? "jogador 2" : "jogador 1"), col,
                          monsterName(rd32(rdram, pn[i].monsterDst)), rd32(rdram, pn[i].costumeDst));
+            if (g_soloPrimed)
+                wotm_narrator::announce(col >= 1 && col <= 10 ? monsterOfCol(rdram, col) : int(rd32(rdram, pn[i].monsterDst) >> 5));
+        }
         g_soloDonePrev[i] = done;
     }
+    g_soloPrimed = true;
 }
 
 // Poe o cursor do jogo do quadro na coluna `col` com o traje `sel` (0..3 ou skin; numa skin, o primeiro traje do disco aberto faz as
