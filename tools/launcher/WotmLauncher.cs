@@ -86,7 +86,6 @@ class Launcher : Form
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
         new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
-        new Flag("Run", "WOTM_SKIPINTRO", false, "Skip intro movies", "Skips the two movies at boot (the intro and the main menu intro) and goes straight to the title screen."),
 
         new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
         new Flag("Rendering diagnostics", "WOTM_NOSHADOW", false, "No shadows", "Turns off blocker shadows (monsters and the like)."),
@@ -513,7 +512,7 @@ class Launcher : Form
     // Video, QoL e teclado separado ficam no painel "Recompiled options" do menu principal (native/wotm_settings.hpp, settings.ini
     // ao lado do save.json). O launcher nao os passa; uma variavel herdada passaria por cima do arquivo, entao sai do ambiente.
     static readonly string[] SettingsKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
-        "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE" };
+        "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE", "WOTM_SKIPINTRO" };
 
     // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
     string KnownRuntimeDir()

@@ -26,6 +26,7 @@
 #pragma once
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "wotm_disc.hpp"
+#include "wotm_settings.hpp"   // SkipIntro
 
 #include <algorithm>
 #include <atomic>
@@ -643,19 +644,19 @@ inline uint32_t playMpegMovieWithDB(uint8_t *ram, uint32_t name, uint32_t withAu
     wr(ram, ga::partialMovie, 0);
     wr(ram, ga::isStarted, 0);
     wr(ram, ga::movieIsPlaying, 1);
-    // WOTM_SKIPINTRO=1: os dois filmes do boot (intro_m e int_main, so a primeira vez de cada; o int_main que volta no menu parado
-    // toca) nao comecam e terminam como um pulo no segundo updateMpegMovieDecoding (Player sem o filme ativo -> termAll). Nao no
+    // SKIP INTRO MOVIES (aba FEATURES do painel; WOTM_SKIPINTRO no settings.ini ou no ambiente): os dois filmes do boot (intro_m e
+    // int_main, so a primeira vez de cada; o int_main que volta no menu parado toca) nao comecam e terminam como um pulo no segundo updateMpegMovieDecoding (Player sem o filme ativo -> termAll). Nao no
     // primeiro: o uiIntro so marca o filme como comecado se vir movieRequested num quadro, e sem isso o boot parava esperando.
     static bool skippedBoot[2] = {};
     const std::string movie = str(ram, name);
-    const char *skipEnv = std::getenv("WOTM_SKIPINTRO");
-    if (skipEnv && *skipEnv && *skipEnv != '0') {
+    static const bool skipIntro = wotm::settings::on(wotm::settings::SkipIntro);   // lido no primeiro filme: mudar no painel vale no proximo boot
+    if (skipIntro) {
         std::string rel = discRelative(movie);
         for (char &c : rel) c = char(std::tolower(static_cast<unsigned char>(c)));
         const int boot = rel == "mov/intro_m.pss" ? 0 : rel == "mov/int_main.pss" ? 1 : -1;
         if (boot >= 0 && !skippedBoot[boot]) {
             skippedBoot[boot] = true;
-            std::fprintf(stderr, "[fmv] tela cheia pulada (WOTM_SKIPINTRO): %s\n", movie.c_str());
+            std::fprintf(stderr, "[fmv] tela cheia pulada (SKIP INTRO MOVIES): %s\n", movie.c_str());
             Player::get().stop(Player::Full);
             skipHold() = true;
             wr(ram, ga::movieRequested, 1);
