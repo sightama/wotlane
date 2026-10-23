@@ -26,6 +26,7 @@
 #include "rlgl.h"
 #include "wotm_gs.hpp"
 #include "wotm_mods.hpp"   // paletas dos .RTX: mods/ vence o disco (loadResources)
+#include "wotm_texmods.hpp"   // texturas de mod em PNG (textureId, residentTexture)
 
 namespace wotm {
 
@@ -844,7 +845,79 @@ public:
     // arquivos de monstro o DBP e relativo: o texmResRelocate soma o fim da area residente do arquivo anterior (`resBase`).
     std::unordered_map<uint32_t, std::vector<uint8_t>> rtxImg;
 
-    void clearRtx() { rtxPal.clear(); rtxImg.clear(); }
+    void clearRtx() { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
+
+    // ---- texturas de mod em PNG (wotm_texmods.hpp)
+    struct ImgSrc { std::string stem; uint32_t texId; };
+    std::unordered_map<uint32_t, ImgSrc> rtxImgSrc_;   // chave do rtxImg -> arquivo e texId do disco
+    std::string discRoot_;                              // raiz do disco extraido, com a barra (loadResources)
+    std::map<std::string, std::map<uint32_t, uint32_t>> texPackets_;   // ARQUIVO -> deslocamento do pacote no .TEX -> texId do disco
+
+    // Caminho do disco ("MON/LIZARD0.RTX"): o arquivo de mods/ (wotm_mods.hpp) se houver, senao o da raiz
+    std::string discPath(const std::string &rel) const {
+        std::string p = mods::Registry::get().hostPath(rel);
+        return p.empty() ? discRoot_ + rel : p;
+    }
+
+    // PNG de mod no lugar da textura do objeto (texId do texInfo global + TEX0). Residentes (T8H/4HL/4HH): pelo DBP, como o
+    // decodeResident. As outras: o pacote de upload em texInfo[texId] esta dentro do .TEX carregado em fileStatus.texAddr[i]; o
+    // deslocamento nele da o texId do disco (o pacote na RAM ja tem o id relocado). O nome do arquivo i e fileStatus.names[i].
+    bool modTexture(const Ram &ram, uint32_t texId, const gs::Tex0 &t0, bool tcc, bool rawAlpha, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h) {
+        texmods::Index &ix = texmods::Index::get();
+        if (ix.empty()) return false;
+        char what[64];
+        if (t0.psm == gs::T8H || t0.psm == gs::T4HL || t0.psm == gs::T4HH) {
+            const auto it = rtxImgSrc_.find((t0.psm << 16) | t0.tbp0);
+            if (it == rtxImgSrc_.end()) return false;
+            const texmods::Png *png = ix.find(it->second.stem, true, it->second.texId);
+            std::snprintf(what, sizeof what, "%s.RTX t%u", it->second.stem.c_str(), it->second.texId);
+            return png && texmods::loadPng(*png, what, 1u << t0.tw, 1u << t0.th, rawAlpha, tcc, px, w, h);
+        }
+        if (!texId || texId >= 1000) return false;
+        const uint32_t fs = addr::fileStatus;
+        const uint32_t ptr = ram.u32(addr::texInfo + 16 * texId) & 0x0FFFFFFF;
+        const int nNames = ram.u8(fs + 0x74);
+        // .TEX (texAddr @0x00, texLoaded @0x38) e, para as texturas comuns que moram no .RTX, resAddr @0x78 / resLoaded @0xB0
+        for (const bool rtx : {false, true}) {
+            const uint32_t tab = rtx ? fs + 0x78 : fs;
+            const int n = std::min<int>(ram.u8(rtx ? fs + 0xB0 : fs + 0x38), std::min(nNames, 14));
+            for (int i = 0; i < n; ++i) {
+                const uint32_t a = ram.u32(tab + 4 * uint32_t(i)) & 0x0FFFFFFF, b = ram.u32(tab + 4 * uint32_t(i + 1)) & 0x0FFFFFFF;
+                if (ptr < a || ptr >= b) continue;
+                std::string stem;
+                for (int c = 0; c < 8; ++c) {
+                    const char ch = char(ram.u8(fs + 0xB1 + 9 * uint32_t(i) + uint32_t(c)));
+                    if (!ch) break;
+                    stem += char(std::toupper(static_cast<unsigned char>(ch)));
+                }
+                if (stem.empty()) return false;
+                const std::string file = stem + (rtx ? ".RTX" : ".TEX");
+                auto pk = texPackets_.find(file);
+                if (pk == texPackets_.end()) {
+                    std::vector<uint8_t> d;
+                    for (const char *dir : {"LVL/", "MON/", "SHELL/", ""}) {
+                        d = texmods::readUnzipped(discPath(*dir ? dir + file : stem + "/" + file));
+                        if (!d.empty()) break;
+                    }
+                    pk = texPackets_.emplace(file, texmods::packetIds(d)).first;
+                }
+                const auto id = pk->second.find(ptr - a);
+                if (id == pk->second.end()) return false;
+                const texmods::Png *png = ix.find(stem, rtx, id->second);
+                if (!png) return false;
+                const UploadHdr hd = UploadHdr::read(ram, ptr);
+                std::snprintf(what, sizeof what, "%s t%u", file.c_str(), id->second);
+                return texmods::loadPng(*png, what, hd.w, hd.h, rawAlpha, tcc, px, w, h);
+            }
+        }
+        return false;
+    }
+    // Trecho em texels (u0, v0, largura, altura) da textura original na textura carregada, que pode ser um PNG de outro tamanho
+    static Rectangle texelRect(const Texture2D &t, uint64_t tex0, Rectangle r) {
+        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
+        const float kx = float(t.width) / float(1u << t0.tw), ky = float(t.height) / float(1u << t0.th);
+        return Rectangle{r.x * kx, r.y * ky, r.width * kx, r.height * ky};
+    }
 
     // Carrega o nivel e os monstros do jogo atual a partir do disco extraido (`root` contem LVL/ e MON/). Idempotente: so refaz quando
     // os nomes/bases em fileStatus mudam. Devolve verdadeiro se achou ao menos o arquivo do nivel.
@@ -871,12 +944,9 @@ public:
         if (root.empty())
             if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
-        // Caminho do disco ("MON/LIZARD0.RTX"): o arquivo de mods/ (wotm_mods.hpp) se houver, senao o da raiz
-        auto path = [&](const std::string &rel) {
-            std::string p = mods::Registry::get().hostPath(rel);
-            return p.empty() ? root + sep + rel : p;
-        };
-        rtxPal.clear(); rtxImg.clear();
+        discRoot_ = root + sep;
+        auto path = [&](const std::string &rel) { return discPath(rel); };
+        rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;
         bool lvl = loadRtx(path("LVL/" + names[0] + ".RTX").c_str(), base0);
         // O menu (SHELL) mora em SHELL/SHELL.RTX, nao em LVL/.
@@ -897,7 +967,11 @@ public:
     // base: soma no DBP das paletas (base do arquivo); resBase: soma no DBP das imagens residentes (0 na fase e no menu; num monstro,
     // fileStatus.maxResAddr do arquivo anterior, como no texmResRelocate).
     bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
-        if (!append) { rtxPal.clear(); rtxImg.clear(); }
+        if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
+        std::string stem = path;   // "LIZARD0": nome das imagens residentes de mod (texmods, <arquivo>_rtx_t<id>.png)
+        stem = stem.substr(stem.find_last_of("/\\") + 1);
+        stem = stem.substr(0, stem.find('.'));
+        for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
         std::vector<uint8_t> raw;
         if (FILE *f = std::fopen(path, "rb")) {
             std::fseek(f, 0, SEEK_END);
@@ -942,7 +1016,9 @@ public:
                 rtxPal[base + ((w[2] >> 16) & 0xFFFF)] = std::move(p);
                 ++added;
             } else if ((psm == gs::T8H || psm == gs::T4HL || psm == gs::T4HH) && sz > 0x80) {
-                rtxImg[(psm << 16) | ((resBase + ((w[2] >> 16) & 0xFFFF)) & 0xFFFF)].assign(data.begin() + long(off) + 0x80, data.begin() + long(off + sz));
+                const uint32_t key = (psm << 16) | ((resBase + ((w[2] >> 16) & 0xFFFF)) & 0xFFFF);
+                rtxImg[key].assign(data.begin() + long(off) + 0x80, data.begin() + long(off + sz));
+                rtxImgSrc_[key] = {stem, w[2] & 0xFFFF};
             }
             off += sz;
         }
@@ -1576,7 +1652,9 @@ public:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
-        if (decodeTex(ram, node, px, w, h, slot, true)) {   // alfa cru do GS: o shader do draw mistura As = At * Av / 16384
+        const uint64_t t0v = objectTex0(ram, node, slot);
+        const bool fromMod = modTexture(ram, objectTexId(ram, node, slot), gs::Tex0::decode(t0v), (t0v >> 34) & 1, true, px, w, h);
+        if (fromMod || decodeTex(ram, node, px, w, h, slot, true)) {   // alfa cru do GS: o shader do draw mistura As = At * Av / 16384
             if (std::getenv("WOTM_ALPHASTAT")) {
                 size_t a0 = 0, am = 0;
                 for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++a0; else if (a < 255) ++am; }
@@ -1619,7 +1697,9 @@ public:
             img.data = px.data(); img.width = int(w); img.height = int(h); img.mipmaps = 1;
             img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
             t = LoadTextureFromImage(img);
-            if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_REPEAT); }
+            if (t.id && fromMod) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); }   // PNG em alta: sem serrilhado de longe
+            else if (t.id) SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+            if (t.id) SetTextureWrap(t, TEXTURE_WRAP_REPEAT);
         }
         tex_[key] = t;
         return t.id;
@@ -3093,7 +3173,7 @@ public:
             const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
             // UV invertido (u1 < u0, v1 < v0: o ScreenPolys espelha e o polyBuildPrim grava V = 0x80 - v): o GS anda de u0 para u1. O
             // DrawTexturePro com largura negativa espelha a faixa [x, x + |w|], entao a origem e o menor dos dois.
-            DrawTexturePro(tex, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0},
+            DrawTexturePro(tex, texelRect(tex, t.tex0, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0}),
                            Rectangle{gr.x0 + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
         }
         if (textShader_.id > 0) EndShaderMode();
@@ -3132,7 +3212,7 @@ public:
                     if (!t.id || fw <= 0.f) continue;
                     const float du = (r.u1 - r.u0) / fw;
                     const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
-                    DrawTexturePro(t, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}, Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
+                    DrawTexturePro(t, texelRect(t, r.tex0, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}), Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
                                    Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
                     continue;
                 }
@@ -3158,7 +3238,8 @@ private:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t pal[256] = {}, w = 0, h = 0;
-        if (decodeResident(gs::Tex0::decode(tex0), px, w, h, false, pal)) {
+        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
+        if (modTexture(Ram{}, 0, t0, (tex0 >> 34) & 1, false, px, w, h) || decodeResident(t0, px, w, h, false, pal)) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }

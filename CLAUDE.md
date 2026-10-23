@@ -15,7 +15,7 @@ Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe d
 - `VU1CHECK.md`: checagem VU1 x nativo, corpus, fotos do dono, bugs abertos.
 - `RUNTIME.md`: runtime recompilado no Windows (build, `PS2X_*`, teclado, endereços úteis). `FRONTEIRA.md`: o que do PS2 o port deixou de emular.
 - `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (pegadinhas do gcc 2.95 e do build NM), `ESPINHA.md` (fluxo do jogo), `TESTE_PCSX2.md` (halfcpp no PCSX2).
-- `MODELOS_3D.md` (monstro animado direto do disco), `VIEWER_WEB.md` (ideia de viewer no navegador).
+- `MODS.md` (pasta `mods/`, texturas em PNG, `tools/modkit.py`), `MODELOS_3D.md` (monstro animado direto do disco), `VIEWER_WEB.md` (ideia de viewer no navegador).
 - Investigações datadas em `docs/investigacoes/<data>/`.
 
 ## Fluxo do port (mudança em `native/`)

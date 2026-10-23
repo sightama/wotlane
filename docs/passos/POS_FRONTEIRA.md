@@ -10,7 +10,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) — **feito em 2026-10-19** | — | baixo |
 | 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda — **feito em 2026-10-19** | — | baixo (base pronta) |
 | 3 | Save em JSON legível, por nomes — **feito em 2026-10-19** | — | médio |
-| 4 | Pasta `mods/` que sobrepõe arquivos do disco — **gancho feito em 2026-10-21** (falta o kit e PNG direto) | — | baixo/médio |
+| 4 | Pasta `mods/` que sobrepõe arquivos do disco — **feito em 2026-10-22** (gancho, kit e PNG direto; guia em `MODS.md`) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
@@ -214,13 +214,20 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
     de `LVL/CENTRAL.NGP` (zip, lido em blocos pelo `fileReads`), `SND/LIZARD_S.BNK` e `VAG/GEN1AMB.VPK`/`GEN1BAT.VPK` (que no
     `discroot` são vazios: vieram da ISO) a fase, o banco e as duas músicas saem do mod (`sound: LSN 8389878 ... (mods)`). Dois
     mods juntos. Corpus sem mudança. Fotos: `docs/screenshots/2026-10-21/2026-10-21_mods_togera_vermelho.png` e `..._mods_desligado_togera_verde.png`.
-- **Etapa 2, kit (`tools/modkit.py`, pendente):** extrair para formatos editáveis e voltar ao do jogo dentro de `mods/<mod>/`,
-  sobre os conversores que já existem (`tex.py export/inject`, `snd989.py wav/vpk/vag`; o `.BNK` ainda não volta; `.NGP` só sai).
-- **PNG no lugar do `.TEX`/`.RTX` (pedido do dono, 2026-10-21):** a ideia é o mod trazer só PNG. Caminho preferido: o jogo
-  continua carregando o `.TEX`/`.RTX` do disco (layout da VRAM, ids e paletas do jogo intactos) e o desenho nativo troca a
-  textura na hora de desenhar pela do PNG (cor cheia, qualquer resolução: texturas HD), identificada por arquivo + `texId` como o
-  `tex.py export` nomeia (`lizard0_t0004.png`). A conversão PNG → `.TEX` na carga (paleta de 256/16 cores, mesmo tamanho) fica de
-  reserva para o que o jogo lê dos pixels ou para o executável de teste com o GS emulado.
+- **Etapa 2, PNG direto e kit (feitos em 2026-10-22; como usar em `MODS.md`):**
+  - **PNG:** `<arquivo>_tNNNN.png` (do `.TEX`) e `<arquivo>_rtx_tNNNN.png` (do `.RTX`) em qualquer pasta do mod. O jogo segue
+    carregando o `.TEX`/`.RTX` do disco; o desenho nativo (`native/wotm_texmods.hpp`, `Scene::modTexture`) troca a imagem no
+    `textureId` (objetos) e no `residentTexture` (quadrados de tela: barras dos inimigos, fonte), em qualquer resolução. O texId
+    do disco sai do deslocamento do pacote de `texInfo[id]` dentro do arquivo carregado (`fileStatus.texAddr`/`resAddr`, nome em
+    `names`); as residentes, pelo DBP. PNG maior que a original ganha mipmaps. Fora: partículas, monstro da lista de saves e
+    o GS emulado (para esse, `modkit.py pack --inject`).
+  - **Kit:** `tools/modkit.py export/pack/check` sobre o `tex.py` e o `snd989.py` (o `.BNK` volta pelo `bnk-replace`, vários sons
+    num banco só). O `pack` só leva o que mudou (sha1); o re-export não atropela edição. O `tex.py export` de um `.RTX` passou a
+    nomear `<arquivo>_rtx_tNNNN.png` (e `<arquivo>_rtx_manifest.json`), sem colidir com o `.TEX` na mesma pasta.
+  - Conferido: Togera com a pele em PNG 4x (grade fina visível) e retrato 2x no HUD do jogador e na barra do inimigo (fotos
+    `docs/screenshots/2026-10-22/2026-10-22_mods_png_*`); kit com PNG, `.VAG` e um som do `SHELL_S.BNK`.
+  - Em aberto: `.NGP` só sai (modelo novo é o item 8); PNG nas partículas (as UVs dos sprites são em texels); o monstro 3D da
+    lista de saves ler o PNG.
 
 ### 5. Sem escolha de memory card
 - **Lista de saves (feito em 2026-10-20, merge 4da9c64; `wotm_save.inc`):** as caixas e as fitas saíram (a troca de caixa
