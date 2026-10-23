@@ -5,7 +5,7 @@
 //   <arquivo>_rtx_t<texId>.png   imagem residente do <arquivo>.RTX (retratos, telas e fontes do menu)
 // texId e o do arquivo no disco (antes da relocacao da carga). Qualquer resolucao: os UVs do desenho sao normalizados (u / 4096) e
 // os quadrados de tela (fonte, retratos) escalam o trecho pela razao entre o PNG e a textura original. Vale para todas as paletas
-// que usam a textura. Alfa do PNG: 255 = opaco (0x80 do GS). Nao vale na imagem do GS emulado do ps2EntryRunner (a referencia da
+// que usam a textura. Alfa do PNG: 255 = opaco (0x80 do GS); se a textura original passa de 0x80, 255 = 0xFF (loadPng). Nao vale na imagem do GS emulado do ps2EntryRunner (a referencia da
 // checagem VU1) nem nas particulas: essas seguem lendo o .TEX. O monstro 3D das telas (wotm_model.hpp) tambem usa o PNG.
 #pragma once
 #include <algorithm>
@@ -110,8 +110,10 @@ private:
 
 // Le o PNG em RGBA (r | g << 8 | b << 16 | a << 24). rawAlpha: alfa como o GS (255 -> 0x80, resto / 2), para o que o Scene::draw
 // mistura como o GS; senao, 0..255. tcc = false: so RGB (TEX0.TCC = 0), alfa sempre 1,0. Loga a primeira carga de cada PNG.
+// hiAlpha: a textura original usa alfa acima de 0x80 (a maioria das do jogo vai de 0 a 0xFF; o logo do titulo e desenhado com o
+// vertice em meia opacidade e conta com o 0xFF). O PNG entao vale cru: 255 = 0xFF, como o tools/tex.py export o grava (fix_alpha).
 inline bool loadPng(const Png &png, const std::string &what, uint32_t origW, uint32_t origH, bool rawAlpha, bool tcc,
-                    std::vector<uint32_t> &px, uint32_t &w, uint32_t &h) {
+                    std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, bool hiAlpha = false) {
     Image img = LoadImage(png.host.c_str());
     if (!img.data || img.width <= 0 || img.height <= 0) {
         std::fprintf(stderr, "[mods] png %s (%s): nao abriu\n", png.rel.c_str(), png.mod.c_str());
@@ -124,13 +126,14 @@ inline bool loadPng(const Png &png, const std::string &what, uint32_t origW, uin
     std::memcpy(px.data(), img.data, px.size() * 4);
     UnloadImage(img);
     for (uint32_t &c : px) {
-        uint32_t a = tcc ? c >> 24 : 255;
-        if (rawAlpha) a = a >= 255 ? 0x80 : a / 2;
+        uint32_t a = tcc ? c >> 24 : (hiAlpha && rawAlpha ? 0x80 : 255);
+        if (hiAlpha) { if (tcc && !rawAlpha) a = std::min(255u, a * 2); }   // cru; 0..255 com 0x80 saturado, como o gs::fixAlpha
+        else if (rawAlpha) a = a >= 255 ? 0x80 : a / 2;
         c = (c & 0x00FFFFFFu) | (a << 24);
     }
     const bool ratio = uint64_t(w) * origH == uint64_t(h) * origW;
-    std::fprintf(stderr, "[mods] %s <- %s/%s (%ux%u; jogo %ux%u)%s\n", what.c_str(), png.mod.c_str(), png.rel.c_str(), w, h, origW, origH,
-                 ratio ? "" : " AVISO: proporcao diferente da original, a imagem sai esticada");
+    std::fprintf(stderr, "[mods] %s <- %s/%s (%ux%u; jogo %ux%u%s)%s\n", what.c_str(), png.mod.c_str(), png.rel.c_str(), w, h, origW, origH,
+                 hiAlpha ? "; alfa cru, 255 = 0xFF" : "", ratio ? "" : " AVISO: proporcao diferente da original, a imagem sai esticada");
     return true;
 }
 

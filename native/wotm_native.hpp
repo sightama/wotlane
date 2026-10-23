@@ -884,7 +884,9 @@ public:
     // PNG de mod no lugar da textura do objeto (texId do texInfo global + TEX0). Residentes (T8H/4HL/4HH): pelo DBP, como o
     // decodeResident. As outras: o pacote de upload em texInfo[texId] esta dentro do .TEX carregado em fileStatus.texAddr[i]; o
     // deslocamento nele da o texId do disco (o pacote na RAM ja tem o id relocado). O nome do arquivo i e fileStatus.names[i].
-    bool modTexture(const Ram &ram, uint32_t texId, const gs::Tex0 &t0, bool tcc, bool rawAlpha, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h) {
+    // hiAlpha: a textura original passa de 0x80 (texmods::loadPng)
+    bool modTexture(const Ram &ram, uint32_t texId, const gs::Tex0 &t0, bool tcc, bool rawAlpha, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h,
+                    bool hiAlpha) {
         texmods::Index &ix = texmods::Index::get();
         if (ix.empty()) return false;
         char what[64];
@@ -893,7 +895,7 @@ public:
             if (it == rtxImgSrc_.end()) return false;
             const texmods::Png *png = ix.find(it->second.stem, true, it->second.texId);
             std::snprintf(what, sizeof what, "%s.RTX t%u", it->second.stem.c_str(), it->second.texId);
-            return png && texmods::loadPng(*png, what, 1u << t0.tw, 1u << t0.th, rawAlpha, tcc, px, w, h);
+            return png && texmods::loadPng(*png, what, 1u << t0.tw, 1u << t0.th, rawAlpha, tcc, px, w, h, hiAlpha);
         }
         if (!texId || texId >= 1000) return false;
         const uint32_t fs = addr::fileStatus;
@@ -929,7 +931,7 @@ public:
                 if (!png) return false;
                 const UploadHdr hd = UploadHdr::read(ram, ptr);
                 std::snprintf(what, sizeof what, "%s t%u", file.c_str(), id->second);
-                return texmods::loadPng(*png, what, hd.w, hd.h, rawAlpha, tcc, px, w, h);
+                return texmods::loadPng(*png, what, hd.w, hd.h, rawAlpha, tcc, px, w, h, hiAlpha);
             }
         }
         return false;
@@ -1828,8 +1830,17 @@ public:
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
         const uint64_t t0v = objectTex0(ram, node, slot);
-        const bool fromMod = modTexture(ram, objectTexId(ram, node, slot), gs::Tex0::decode(t0v), (t0v >> 34) & 1, true, px, w, h);
-        if (fromMod || decodeTex(ram, node, px, w, h, slot, true)) {   // alfa cru do GS: o shader do draw mistura As = At * Av / 16384
+        // alfa cru do GS: o shader do draw mistura As = At * Av / 16384. A original vem antes: o PNG de mod le o alfa na escala dela
+        const bool orig = decodeTex(ram, node, px, w, h, slot, true);
+        uint32_t origAmax = 0;
+        if (orig)
+            for (uint32_t c : px) origAmax = std::max(origAmax, c >> 24);
+        std::vector<uint32_t> mpx;
+        uint32_t mw = 0, mh = 0;
+        const bool fromMod = modTexture(ram, objectTexId(ram, node, slot), gs::Tex0::decode(t0v), (t0v >> 34) & 1, true, mpx, mw, mh,
+                                        origAmax > 0x80);
+        if (fromMod) { px.swap(mpx); w = mw; h = mh; }
+        if (fromMod || orig) {
             if (std::getenv("WOTM_ALPHASTAT")) {
                 size_t a0 = 0, am = 0;
                 for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++a0; else if (a < 255) ++am; }
@@ -3477,7 +3488,10 @@ private:
         std::vector<uint32_t> px;
         uint32_t pal[256] = {}, w = 0, h = 0;
         const gs::Tex0 t0 = gs::Tex0::decode(tex0);
-        if (modTexture(Ram{}, 0, t0, (tex0 >> 34) & 1, false, px, w, h) || decodeResident(t0, px, w, h, false, pal)) {
+        uint32_t origAmax = 0;   // alfa cru da original: o PNG de mod le o alfa na escala dela (texmods::loadPng)
+        if (!texmods::Index::get().empty() && decodeResident(t0, px, w, h, true, pal))
+            for (uint32_t c : px) origAmax = std::max(origAmax, c >> 24);
+        if (modTexture(Ram{}, 0, t0, (tex0 >> 34) & 1, false, px, w, h, origAmax > 0x80) || decodeResident(t0, px, w, h, false, pal)) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }

@@ -71,7 +71,15 @@ python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da 
   quadrados de tela (retratos das barras, fonte) escalam o trecho pela razão entre o PNG e a textura original. Mantenha a
   proporção da original (o `check` avisa).
 - Vale em qualquer pasta do mod (o nome do arquivo basta) e para todas as paletas que usam a textura.
-- Alfa: 255 é opaco. Texturas sem alfa no jogo (TEX0.TCC = 0) ignoram o alfa do PNG.
+- Alfa: o PNG usa a mesma escala da textura original, como o export a grava. A maioria das texturas do jogo vai de 0 a 0xFF (o dobro
+  do opaco 0x80 do GS); nelas o alfa do PNG vale cru, 255 = 0xFF, e o log diz "alfa cru, 255 = 0xFF". Nas que param em 0x80,
+  255 = 0x80 (o resto / 2). Na prática: 255 é o opaco que o jogo usa, e o export e o `pack --inject` vão e voltam sem perder nada.
+  Até 2026-10-23 o export achatava tudo acima de 0x80 em 255 e o jogo lia 255 como 0x80: o logo do título (SHELL t140/t141, que o
+  jogo desenha com o vértice em meia opacidade e conta com o 0xFF) saía com metade da opacidade. PNG antigo opaco continua igual;
+  PNG antigo com semitransparência em textura de escala 0xFF sai mais opaco (exporte de novo). Texturas sem alfa no jogo
+  (TEX0.TCC = 0) ignoram o alfa do PNG.
+- Imagem dividida em várias texturas (o logo do título são duas de 256 × 256 lado a lado, de cabeça para baixo): escale a imagem
+  inteira uma vez e corte no meio exato, sem sobreposição; cortes feitos à mão com sobra repetem um pedaço na emenda.
 - Não vale: nas partículas (fogo, fumaça, poeira), no monstro 3D da lista de saves e na imagem do GS emulado
   do `ps2EntryRunner` (a referência da checagem VU1; a janela dele usa o PNG). Para essa, `pack --inject` também regrava o `.TEX`/`.RTX` do mod quando o PNG tem o
   tamanho original (as cores vão para a paleta atual).

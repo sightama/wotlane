@@ -814,17 +814,26 @@ private:
         const std::vector<uint8_t> &d = p.rtx ? rtxData_ : texData_;
         const int w = p.w(), h = p.h();
         const uint32_t cbp = uint32_t(t0 >> 37) & 0x3FFF, csa = uint32_t(t0 >> 56) & 31, tcc = uint32_t(t0 >> 34) & 1;
-        // textura de mod em PNG (wotm_texmods.hpp; nas skins, a do traje novo): o mesmo texId do disco que o desenho da luta usa
+        // A original primeiro; o PNG de mod (wotm_texmods.hpp; nas skins, o do traje novo, mesmo texId do disco que o desenho da luta
+        // usa) le o alfa na escala dela: cru se ela passa de 0x80 (texmods::loadPng)
+        uint32_t rawAmax = 0;
+        const bool orig = decodeOrig(p, d, w, h, cbp, csa, tcc, out, rawAmax);
         if (const texmods::Png *png = texmods::Index::get().find(name_, p.rtx, id)) {
             std::vector<uint32_t> px;
             uint32_t pw = 0, ph = 0;
             if (texmods::loadPng(*png, name_ + (p.rtx ? ".RTX t" : ".TEX t") + std::to_string(id) + " (modelo)", uint32_t(w), uint32_t(h),
-                                 false, tcc != 0, px, pw, ph)) {
+                                 false, tcc != 0, px, pw, ph, rawAmax > 0x80)) {
                 out.w = int(pw); out.h = int(ph);
                 out.rgba = std::move(px);
                 return true;
             }
         }
+        return orig;
+    }
+
+    // Pixels da textura do disco em RGBA (alfa 0..255 com 0x80 saturado); rawAmax: o maior alfa cru dos texels
+    bool decodeOrig(const TexPacket &p, const std::vector<uint8_t> &d, int w, int h, uint32_t cbp, uint32_t csa, uint32_t tcc,
+                    TexImage &out, uint32_t &rawAmax) const {
         auto fixA = [](uint32_t a) { return a >= 128 ? 255u : a * 2; };
         auto rd32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= d.size()) std::memcpy(&v, &d[o], 4); return v; };
         out.w = w; out.h = h;
@@ -837,6 +846,7 @@ private:
             const TexPacket &e = pe->second;
             const size_t np = size_t(e.w()) * size_t(e.h());
             std::vector<uint32_t> pal(np);
+            std::vector<uint8_t> palRawA(np);
             for (size_t i = 0; i < np; ++i) {
                 size_t j = i;
                 if (np >= 256 && t8) j = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);   // CSM1
@@ -844,6 +854,7 @@ private:
                 uint32_t c = 0;
                 if (o + 4 <= rtxData_.size()) std::memcpy(&c, &rtxData_[o], 4);
                 pal[i] = (c & 0xFFFFFFu) | (fixA(c >> 24) << 24);
+                palRawA[i] = uint8_t(c >> 24);
             }
             for (size_t i = 0; i < out.rgba.size(); ++i) {
                 uint32_t k;
@@ -855,11 +866,13 @@ private:
                     if (np >= 256 && ix < np) k = ix;
                 }
                 out.rgba[i] = k < np ? pal[k] : 0;
+                if (k < np) rawAmax = std::max<uint32_t>(rawAmax, palRawA[k]);
             }
         } else if (p.psm == 0 || p.psm == 1) {
             for (size_t i = 0; i < out.rgba.size(); ++i) {
                 const uint32_t c = rd32(base + 4 * i);
                 out.rgba[i] = (c & 0xFFFFFFu) | ((p.psm == 1 ? 255u : fixA(c >> 24)) << 24);
+                if (p.psm == 0) rawAmax = std::max(rawAmax, c >> 24);
             }
         } else if (p.psm == 2 || p.psm == 0xA) {
             for (size_t i = 0; i < out.rgba.size(); ++i) {
