@@ -39,7 +39,7 @@ import snd989   # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEX_DIRS = ("LVL", "MON", "SHELL")
-PNG_RE = re.compile(r"^(.+?)(_rtx)?_t(\d+)\.png$", re.I)
+PNG_RE = re.compile(r"^(.+?)(_rtx)?_t(\d+)(?:_sempaleta)?\.png$", re.I)   # _sempaleta: o export nao achou a paleta (cinza)
 BNK_RE = re.compile(r"^(.+)_s(\d+)\.wav$", re.I)
 
 
@@ -209,8 +209,10 @@ def pack(disc, work, mods, mod, inject=False):
         if m:
             stem, rtx, tid = m.group(1), bool(m.group(2)), int(m.group(3))
             os.makedirs(os.path.join(dst, *d.split("/")) if d else dst, exist_ok=True)
-            shutil.copy2(p, os.path.join(dst, *rel.split("/")))
-            print("texture %s -> %s/%s" % (n, mod, rel))
+            name = "%s%s_t%04d.png" % (stem, "_rtx" if rtx else "", tid)   # sem o _sempaleta: o nome que o jogo procura
+            out_rel = (d + "/" if d else "") + name
+            shutil.copy2(p, os.path.join(dst, *out_rel.split("/")))
+            print("texture %s -> %s/%s" % (n, mod, out_rel))
             if inject:
                 inject_png(disc, dst, stem, rtx, tid, p)
             continue

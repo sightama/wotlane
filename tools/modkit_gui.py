@@ -323,19 +323,53 @@ class App:
         n = len(pats)
         if n > 12 and not messagebox.askyesno("Extract", "Extract %d files? This can take a few minutes." % n, parent=self.root):
             return
-        self.run("Extracting %d file(s)..." % n, lambda: modkit.export(self.disc.get(), self.work(), pats), self.refresh_work)
+        self.run("Extracting %d file(s)..." % n, lambda: modkit.export(self.disc.get(), self.work(), pats),
+                 lambda: self.refresh_work(focus=pats))
 
     # ------------------------------------------------------------ pasta de trabalho
-    def refresh_work(self):
+    # Grupo da pasta de trabalho = arquivo do disco de onde o item saiu ("MON/MONKEY0": .TEX e .RTX juntos; "SND/SHELL_S.BNK")
+    @staticmethod
+    def group_of(rel):
+        d, n = os.path.split(rel)
+        pre = d + "/" if d else ""
+        m = modkit.PNG_RE.match(n)
+        if m:
+            return pre + m.group(1).upper()
+        mb = modkit.BNK_RE.match(n)
+        if mb:
+            return pre + mb.group(1).upper() + ".BNK"
+        return pre + os.path.splitext(n)[0].upper()
+
+    @staticmethod
+    def group_of_pat(pat):
+        stem, ext = os.path.splitext(pat.replace("\\", "/"))
+        d, n = os.path.split(stem)
+        return (d + "/" if d else "") + n.upper() + (".BNK" if ext.upper() == ".BNK" else "")
+
+    def group_label(self, key):
+        n = key.split("/")[-1]
+        for prefix, name, banks in MONSTERS + BOSSES:
+            if n[:-1] == prefix and n[-1:].isdigit():
+                return "%s  (%s, %s %d)" % (key, name, "costume" if (prefix, name, banks) in MONSTERS else "form", int(n[-1]) + 1)
+            if n.endswith(".BNK") and n[:-4] in banks:
+                return "%s  (%s sounds)" % (key, name)
+        for f, name in LEVELS + SHELL:
+            if n == f:
+                return "%s  (%s)" % (key, name)
+        return key
+
+    def refresh_work(self, focus=None):
+        """focus: padroes do export que acabou de rodar; os grupos deles abrem (os outros fecham) e a lista rola ate o primeiro."""
         t = self.work_tree
         sel = set(t.selection())
+        was_open = {i for i in t.get_children() if t.item(i, "open")}
         t.delete(*t.get_children())
         work = self.work()
         if not os.path.isdir(work):
             self.status.configure(text="work folder is empty")
             return
         state = modkit.load_state(work)["files"]
-        dirs = {}
+        groups = {}   # chave -> [(rel, p, edited)]
         edited_total = total = 0
         for root, ds, files in os.walk(work):
             ds[:] = sorted(d for d in ds if not d.startswith("."))
@@ -349,16 +383,39 @@ class App:
                 edited_total += edited
                 if self.only_edited.get() and not edited:
                     continue
-                d = os.path.dirname(rel) or "."
-                if d not in dirs:
-                    dirs[d] = t.insert("", "end", iid="dir:" + d, text=d, open=True)
+                groups.setdefault(self.group_of(rel), []).append((rel, p, edited))
+        want = {self.group_of_pat(p) for p in focus} if focus else None
+        first_new = None
+        for key in sorted(groups):
+            items = groups[key]
+            gid = "grp:" + key
+            if want is not None:
+                is_open = key in want
+            elif was_open or sel:
+                is_open = gid in was_open
+            else:
+                is_open = len(groups) == 1
+            ne = sum(1 for _, _, e in items if e)
+            t.insert("", "end", iid=gid, text="%s   [%d file(s)%s]" % (self.group_label(key), len(items), ", %d edited" % ne if ne else ""),
+                     open=is_open, tags=("edited",) if ne else ())
+            for rel, p, edited in items:
                 img = self.thumb(p)
                 kw = {"image": img} if img else {}
-                t.insert(dirs[d], "end", iid=rel, text=" " + n, values=(self.info(p), "edited" if edited else "original"),
+                t.insert(gid, "end", iid=rel, text=" " + os.path.basename(rel), values=(self.info(p), "edited" if edited else "original"),
                          tags=("edited",) if edited else (), **kw)
-        keep = [i for i in sel if t.exists(i)]
-        if keep:
-            t.selection_set(keep)
+            if want is not None and key in want and first_new is None:
+                first_new = gid
+        if first_new:   # seleciona a primeira textura, nao o grupo (um Remove logo depois nao pega o grupo inteiro)
+            kids = t.get_children(first_new)
+            t.selection_set([kids[0]] if kids else [first_new])
+            if kids:
+                t.see(kids[min(len(kids) - 1, 3)])
+            t.see(first_new)
+        else:
+            keep = [i for i in sel if t.exists(i)]
+            if keep:
+                t.selection_set(keep)
+                t.see(keep[0])
         self.status.configure(text="%d file(s), %d edited" % (total, edited_total))
 
     def thumb(self, p):
@@ -394,7 +451,13 @@ class App:
         return "%d KB" % max(1, os.path.getsize(p) // 1024)
 
     def selected_files(self):
-        return [os.path.join(self.work(), *i.split("/")) for i in self.work_tree.selection() if not i.startswith("dir:")]
+        t, out = self.work_tree, []
+        for i in t.selection():   # um grupo selecionado vale por todos os arquivos dele
+            for r in (t.get_children(i) if i.startswith("grp:") else (i,)):
+                p = os.path.join(self.work(), *r.split("/"))
+                if p not in out:
+                    out.append(p)
+        return out
 
     def show_preview(self):
         c = self.canvas
@@ -512,6 +575,7 @@ class App:
     # ------------------------------------------------------------ execucao em segundo plano
     def run(self, title, fn, done=None):
         if self.busy:
+            self.say("Still working on the previous task; try again when it finishes.\n", "warn")
             return
         self.busy = True
         for b in (self.btn_export, self.btn_pack, self.btn_check):
@@ -564,7 +628,9 @@ def main():
             root.iconbitmap(ico)
     except tk.TclError:
         pass
-    App(root)
+    app = App(root)
+    # com pythonw nao ha console: erro dentro da janela vai para o log dela
+    root.report_callback_exception = lambda *a: app.say("Error: %s\n" % "".join(traceback.format_exception(*a)), "err")
     root.mainloop()
 
 

@@ -23,7 +23,9 @@ log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[
 
 1. **Pick from the disc** (esquerda): monstros por nome e traje (Togera › Costume 1, e os bancos de som dele), chefes, fases pelo nome do
    jogo, menu e telas, bancos de som, músicas e falas. Campo de busca; Ctrl/Shift escolhem vários; duplo clique ou "Extract selected".
-2. **Edit in the work folder** (direita): miniaturas, tamanho e estado ("edited" = mudou desde a extração). Prévia
+2. **Edit in the work folder** (direita): um grupo por arquivo do disco ("MON/MONKEY0 (Congar, costume 1)"); depois de extrair, o
+   grupo novo abre e os outros fecham. Miniaturas, tamanho e estado ("edited" = mudou desde a extração). Textura que o export não
+   conseguiu colorir sai em cinza com `_sempaleta` no nome; o `pack` grava sem o sufixo (o jogo aceita os dois). Prévia
    da imagem (com xadrez atrás do alfa) ou "Play" para o som. Duplo clique abre no programa padrão do Windows; "Show in folder"
    abre o Explorer no arquivo; "Remove" apaga da pasta de trabalho.
 3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods"; o log aparece embaixo.

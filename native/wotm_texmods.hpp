@@ -46,6 +46,8 @@ public:
         std::string n = upper(file);
         if (n.size() < 7 || n.compare(n.size() - 4, 4, ".PNG") != 0) return false;
         n.resize(n.size() - 4);
+        static const std::string kGray = "_SEMPALETA";   // tools/tex.py export sem a paleta achada (sai em cinza); o nome vale igual
+        if (n.size() > kGray.size() && n.compare(n.size() - kGray.size(), kGray.size(), kGray) == 0) n.resize(n.size() - kGray.size());
         const size_t t = n.rfind("_T");
         if (t == std::string::npos || t == 0 || t + 2 >= n.size()) return false;
         uint32_t v = 0;
