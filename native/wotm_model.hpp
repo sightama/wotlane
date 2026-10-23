@@ -1234,8 +1234,9 @@ private:
         setGain(1.f);
         EndShaderMode();
         EndBlendMode();
-        rlEnableDepthTest();
-        // o setState(.., zmsk) desligou a escrita de Z: sem religar, o ClearBackground dos quadros seguintes nao limpava a
+        // Sai como o EndMode3D deixou (antes do flare): teste de Z desligado, para o 2D que vem depois. Religado, o desenho da selecao
+        // nativa depois de dois Robo-47 falhava no teste (quadros vazios a partir do segundo monstro).
+        // O setState(.., zmsk) desligou a escrita de Z: sem religar, o ClearBackground dos quadros seguintes nao limpava a
         // profundidade e o ceu do menu (e o da luta) falhava no teste (manchas pretas so com monstro de luzes, o Robo-47)
         rlEnableDepthMask();
     }

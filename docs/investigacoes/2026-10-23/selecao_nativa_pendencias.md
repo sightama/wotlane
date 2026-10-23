@@ -19,6 +19,12 @@ profundidade desligada (`setState(.., zmsk = true)`). Com ela desligada o `Clear
 modelo 3D da seleção ou da lista de saves. Agora o `drawFlares` religa a escrita no fim. Conferido no menu (céu atrás do telão com o
 Robo-47 na seleção); a luta depois da seleção falta o dono conferir.
 
+Segundo bug do mesmo flare (relato do dono, 2026-10-23): com dois Robo-47 na seleção de 4 (um pronto e o cursor de outro quadro
+sobre ele) os quadros esvaziavam a partir do segundo monstro (sem modelo, nome nem READY). O `drawFlares` roda depois do `EndMode3D`,
+que desliga o teste de profundidade para o 2D, e o religava no fim; o desenho 2D dos quadros (`drawSelect`) ficava com o teste ligado.
+Com um Robo só não aparecia. Agora o flare deixa o teste desligado, como o `EndMode3D` deixou. Conferido por roteiro (P1, CPU1
+Ultra-V, CPU2 e CPU3 Robo-47 na tela 19).
+
 ## 4. Free-for-All com 2 ou 3 CPUs não mostra a seleção nativa (feito em 2026-10-23, falta o dono conferir o de 2 jogadores)
 
 Com mais monstros do que cabem na tela 6, o "first to" (tela 15) manda à tela 18 (`screenCharSelect3P`, 3 monstros) ou 19

@@ -130,7 +130,8 @@ static int g_selDone = 0;   // quadros desde que todos ficaram prontos
 enum After { AfterNone, AfterMultiFfa, AfterSelectDone, AfterSelectBack };
 static After g_after = AfterNone;
 
-struct ScriptStep { double t0, dur; int dev, act; };
+struct ScriptStep { double t0, dur; int dev, act; bool fired = false; };
+constexpr int kScriptMouse = -2;   // `mouse` no roteiro: act = casa da barra sob o cursor (cellN) ou clique nela (100 + N, clickN)
 static std::vector<ScriptStep> g_script;
 
 static void parseScript()
@@ -148,6 +149,12 @@ static void parseScript()
         double t0 = 0, dur = 0;
         char dev[8] = {}, act[8] = {};
         if (std::sscanf(item.c_str(), "%lf:%lf:%7[^:]:%7s", &t0, &dur, dev, act) != 4) continue;
+        int cell = 0;
+        if (!std::strcmp(dev, "mouse") && (std::sscanf(act, "cell%d", &cell) == 1 || std::sscanf(act, "click%d", &cell) == 1))
+        {
+            g_script.push_back({t0, dur, kScriptMouse, (act[1] == 'l' ? 100 : 0) + cell});
+            continue;
+        }
         const int d = std::strcmp(dev, "kb") == 0 ? kKb : std::atoi(dev);
         int a = -1;
         for (int i = 0; i < kActions; ++i)
@@ -187,7 +194,7 @@ static void readDevice(int d, bool out[kActions], bool bound = true)
         // mouse (etapa 9, cursor solto): esquerdo confirma, direito volta, rodinha sobe e desce
         if (!wotm::mouse::g_captured.load(std::memory_order_relaxed))
         {
-            out[Ok] = out[Ok] || IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            out[Ok] = out[Ok] || (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !wotm::mouse::claimed());   // na barra: mouseStep
             out[Back] = out[Back] || IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
             out[Up] = out[Up] || wotm_pad::g_wheelHeld > 0;
             out[Down] = out[Down] || wotm_pad::g_wheelHeld < 0;
@@ -596,6 +603,42 @@ static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_after = AfterSelectDone;   // changeScreen(6, 8) na saida do screenCharSelect2P
 }
 
+// Mouse na barra de monstros (cursor solto): a janela (drawBar2d) poe aqui a casa sob o cursor (1..12, so as abertas; 0 = nenhuma) e
+// avisa (claim) que o clique esquerdo e dela; a thread do EE anda o quadro do jogador do teclado ate a casa, uma casa por quadro, quando
+// o mouse anda ou clica, e o clique confirma ao chegar (no aleatorio, sorteia). Tecla ou botao derruba o alvo.
+static std::atomic<int> g_mouseCell{0};
+struct MouseGoal
+{
+    int cell = 0;
+    bool confirm = false;
+};
+static MouseGoal g_mouseGoal;
+static uint32_t g_mouseSeq = 0;
+static void mouseDrop()
+{
+    g_mouseGoal = MouseGoal{};
+    g_mouseSeq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+}
+// Passo do mouse para o quadro na casa `cur`: 3 esquerda, 4 direita, 6 confirma, 0 nada
+static int mouseStep(int cur)
+{
+    namespace ms = wotm::mouse;
+    const uint32_t seq = ms::g_moveSeq.load(std::memory_order_relaxed);
+    const bool moved = seq != g_mouseSeq;
+    g_mouseSeq = seq;
+    const int h = g_mouseCell.load(std::memory_order_relaxed);
+    const bool click = h && ms::takeClick(ms::g_clickL);
+    if (h && (moved || click))
+        g_mouseGoal = MouseGoal{h, click || (g_mouseGoal.confirm && g_mouseGoal.cell == h)};
+    if (!g_mouseGoal.cell)
+        return 0;
+    if (g_mouseGoal.cell != cur)
+        return g_mouseGoal.cell > cur ? 4 : 3;
+    const bool ok = g_mouseGoal.confirm;
+    mouseDrop();
+    return ok ? 6 : 0;
+}
+
 static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     bool now[kMaxPlayers][kActions] = {};
@@ -625,6 +668,16 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         for (int a = 0; a < kActions; ++a)
             e[a] = now[p][a] && !g_selPrev[p][a];
         Pick &k = g_pick[p];
+        const bool kb = (wotm_pad::g_manualDevs[p].load(std::memory_order_relaxed) & PS2_PAD_DEV_KEYBOARD) != 0;
+        if (kb && (k.ready || e[Left] || e[Right] || e[Up] || e[Down] || e[Ok] || e[Back]))
+            mouseDrop();
+        else if (kb)
+        {
+            const int m = mouseStep(k.col);
+            e[Left] = m == 3;
+            e[Right] = m == 4;
+            e[Ok] = m == 6;
+        }
         if (k.ready)
         {
             if (e[Back]) { k.ready = false; sound = 6; }
@@ -927,6 +980,31 @@ static uint32_t soloDecide(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
 // screenGetInput(pad) nas telas 3 e 6 (a tela 3 le o controle duas vezes por quadro: a segunda leitura recebe a mesma decisao)
 static uint32_t soloInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int pad, uint32_t code)
 {
+    // mouse na barra: o controle do jogador do teclado parado vira o passo do mouse (uma vez por quadro; a segunda leitura repete)
+    if (pad >= 1 && pad <= 2 && pad == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed) + 1)
+    {
+        static uint32_t s_tick = ~0u, s_code = 0;
+        if (code != 0)
+            mouseDrop();
+        else if (s_tick == g_soloTick)
+            code = s_code;
+        else
+        {
+            SoloPanel pn[kMaxPlayers];
+            bool noCostume;
+            const int n = soloPanels(rdram, pn, noCostume);
+            int who = -1;
+            for (int i = 0; i < n && who < 0; ++i)
+                if (pn[i].pad == pad && !pn[i].waiting && !rd32(rdram, pn[i].done))
+                    who = i;
+            if (who < 0)
+                mouseDrop();
+            else
+                code = uint32_t(mouseStep(g_soloExtra[who] ? g_soloExtra[who] : int(rd32(rdram, pn[who].col))));
+            s_tick = g_soloTick;
+            s_code = code;
+        }
+    }
     if (code < 1 || code > 6 || code == 5 || pad < 1 || pad > 2)
         return code;
     if (g_soloCodeTick[pad] == g_soloTick && g_soloCodeIn[pad] == code)
@@ -1943,7 +2021,10 @@ static void drawBar2d(int RW, int RH)
         v = g_view;
     }
     if (!v.select || v.alpha <= 0.f)
+    {
+        g_mouseCell.store(0, std::memory_order_relaxed);
         return;
+    }
     loadPortraits();
     const float W = float(RW), H = float(RH), band = H * 24.f / 224.f;
     const float barH = H * 0.15f, barY = H - band - barH;
@@ -1962,6 +2043,32 @@ static void drawBar2d(int RW, int RH)
     const float x0 = (W - total) * 0.5f, cy = barY + barH * 0.56f, top = cy - cell * 0.5f;
     auto cellX = [&](int c) { return x0 + float(c - 1) * (cell + gap) + (c > 10 ? extraGap : 0.f); };   // c 1..12
     const Color kName{246, 238, 220, 255}, kCpu{150, 150, 160, 255};
+    // casa sob o mouse (cursor solto; so as abertas, com a selecao ja na tela): o EE anda ate ela (mouseStep)
+    int hover = 0;
+    if (const wotm::mouse::Pointer &mp = wotm::mouse::g_ptr; mp.in && mp.rw > 0 && mp.rh > 0 && v.alpha > 0.5f)
+    {
+        const float px = mp.x * W / float(mp.rw), py = mp.y * H / float(mp.rh);
+        for (int c = 1; c <= kCells && !hover; ++c)
+            if (px >= cellX(c) && px < cellX(c) + cell && py >= top && py < top + cell && (c > 10 || v.barOpen[c - 1]))
+                hover = c;
+    }
+    // roteiro de teste (`mouse:cellN`, `mouse:clickN`): o cursor de mentira na casa N
+    const double now = GetTime();
+    for (ScriptStep &st : g_script)
+        if (st.dev == kScriptMouse && now >= st.t0 && now < st.t0 + st.dur)
+        {
+            hover = st.act % 100;
+            if (!st.fired)
+            {
+                st.fired = true;
+                wotm::mouse::g_moveSeq.fetch_add(1, std::memory_order_relaxed);
+                if (st.act >= 100)
+                    wotm::mouse::click(wotm::mouse::g_clickL);
+            }
+        }
+    g_mouseCell.store(hover, std::memory_order_relaxed);
+    if (hover)
+        wotm::mouse::claim();
     // quem esta em cada casa
     for (int c = 1; c <= kCells; ++c)
     {
@@ -1970,7 +2077,7 @@ static void drawBar2d(int RW, int RH)
         bool here = false;
         for (int p = 0; p < v.selPlayers; ++p)
             here = here || (!v.selWaiting[p] && v.selCell[p] == c);
-        DrawRectangleRec(Rectangle{r.x - 2.f, r.y - 2.f, r.width + 4.f, r.height + 4.f}, fade(Color{10, 6, 2, 255}));
+        DrawRectangleRec(Rectangle{r.x - 2.f, r.y - 2.f, r.width + 4.f, r.height + 4.f}, fade(c == hover ? Color{200, 180, 140, 255} : Color{10, 6, 2, 255}));
         if (c <= 10)
         {
             const int mon = v.barMon[c - 1];
