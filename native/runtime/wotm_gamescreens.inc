@@ -14,7 +14,12 @@ enum : uint32_t { kUp = 1, kDown = 2, kLeft = 3, kRight = 4, kCross = 6 };
 
 // Telas com mouse proprio ou sem ele: preparacao, principal e modos (texto), configuracao de controle (fora), opcoes (texto), 3 e 4
 // jogadores (wotm_padsel.inc), "press start", saida, 17 (inalcancavel)
-static bool handled(uint32_t s) { return s == 0 || s == 1 || s == 2 || s == 4 || s == 5 || s == 9 || s == 10 || s == 16 || s == 17 || s >= 18 && s <= 20 || s > 21; }
+static bool handled(uint32_t s)
+{
+    if ((s == 3 || s == 6) && wotm_padsel::g_solo == int(s))   // selecao nativa de 1 e 2 jogadores (wotm_padsel.inc): sem as caixas do jogo
+        return true;
+    return s == 0 || s == 1 || s == 2 || s == 4 || s == 5 || s == 9 || s == 10 || s == 16 || s == 17 || s >= 18 && s <= 20 || s > 21;
+}
 
 // Tela 21 (screenUnlocker): so texto 2D, linha i com o topo em y 82 + 11 i (nome em x 230, estado em x 450); cursor em s_2990 (e a
 // copia currentMenuSelection_2985, feita antes do screenGetInput), items_2992 linhas, fade_2991 ate 0x80. Passar por cima escolhe,

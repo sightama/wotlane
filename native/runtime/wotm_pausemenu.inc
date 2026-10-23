@@ -190,7 +190,7 @@ static int dialogSel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int
     if (wotm::mouse::takeClick(wotm::mouse::g_clickL))
     {
         sel = h;
-        wotm::mouse::g_crossReq.store(2, std::memory_order_relaxed);
+        wotm::mouse::requestCross(2);
     }
     return sel;
 }
@@ -257,7 +257,7 @@ static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             if (wotm::mouse::takeClick(wotm::mouse::g_clickL))
             {
                 sel = h;
-                wotm::mouse::g_crossReq.store(2, std::memory_order_relaxed);
+                wotm::mouse::requestCross(2);
             }
         }
     }
