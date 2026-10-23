@@ -709,6 +709,8 @@ class App:
             m.add_command(label="Open in %s" % (os.path.splitext(os.path.basename(exe))[0] if exe else "default program"),
                           command=self.open_selected)
             m.add_command(label="Open with...", command=self.open_with_dialog)
+            if len(files) == 1:
+                m.add_command(label="Replace with...", command=self.replace_selected)
             m.add_command(label="Show in folder", command=self.reveal_selected)
             m.add_separator()
             m.add_command(label="Save to folder... (%d file%s)" % (n, "" if n == 1 else "s"), command=self.save_to_folder)
@@ -716,6 +718,75 @@ class App:
             m.add_command(label="Remove from work folder", command=self.remove_selected)
         m.tk_popup(e.x_root, e.y_root)
         m.grab_release()
+
+    IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".tif", ".tiff", ".webp", ".dds")
+
+    def replace_selected(self):
+        """Troca um asset da pasta de trabalho por um arquivo escolhido, gravado com o nome certo. Imagem de outro formato vira PNG."""
+        files = self.selected_files()
+        if len(files) != 1:
+            return
+        dst = files[0]
+        ext = self.ext_of(dst)
+        if ext == ".png":
+            types = [("Images", " ".join("*" + e for e in self.IMG_EXT)), ("All files", "*.*")]
+        elif ext == ".wav":
+            types = [("WAV sound", "*.wav"), ("All files", "*.*")]
+        else:
+            types = [("All files", "*.*")]
+        src = filedialog.askopenfilename(parent=self.root, title="Replace %s with" % os.path.basename(dst), filetypes=types,
+                                         initialdir=self.conf.get("replace_dir") or self.conf.get("save_dir") or os.path.expanduser("~"))
+        if not src:
+            return
+        src = os.path.normpath(src)
+        self.conf["replace_dir"] = os.path.dirname(src)
+        sext = self.ext_of(src)
+        if os.path.normcase(src) == os.path.normcase(os.path.normpath(dst)):
+            return
+        orig = self.orig_size(dst)
+        try:
+            if ext == ".png" and sext != ".png":
+                if Image is None:
+                    raise OSError("converting %s to PNG needs Pillow (pip install pillow)" % sext)
+                with Image.open(src) as im:
+                    im.convert("RGBA").save(dst, "PNG")
+            elif ext == ".wav" and sext != ".wav":
+                raise OSError("pick a .wav file (the kit converts WAV to the game's format when packing)")
+            elif ext not in (".png", ".wav") and sext != ext:
+                raise OSError("pick a %s file" % ext)
+            else:
+                if ext == ".wav":
+                    with wave.open(src):   # confere que e um WAV que o pack consegue ler
+                        pass
+                shutil.copyfile(src, dst)   # copyfile: mtime novo, a miniatura atualiza
+        except Exception as ex:
+            self.say("Could not replace %s: %s\n" % (os.path.basename(dst), ex), "err")
+            return
+        self.stop_sound()
+        msg = "Replaced %s with %s" % (os.path.basename(dst), os.path.basename(src))
+        new = modkit.png_size(dst) if ext == ".png" else None
+        if new:
+            msg += " (%dx%d)" % new
+        self.say(msg + "\n")
+        if new and orig and new[0] * orig[1] != new[1] * orig[0]:
+            self.say("WARNING: the game texture is %dx%d; a different aspect ratio looks stretched in the game\n" % orig, "warn")
+        self.save_conf()
+        self.refresh_work()
+        rel = os.path.relpath(dst, self.work()).replace("\\", "/")
+        if self.work_tree.exists(rel):
+            self.work_tree.selection_set([rel])
+            self.work_tree.see(rel)
+        self.show_preview()
+
+    def orig_size(self, p):
+        """Tamanho da textura no jogo (largura, altura): o que o export guardou ou, em export antigo, o do proprio arquivo enquanto
+        ele nao foi editado. None se nao der para saber."""
+        st = modkit.load_state(self.work())["files"].get(os.path.relpath(p, self.work()).replace("\\", "/")) or {}
+        if st.get("size"):
+            return tuple(st["size"])
+        if st.get("sha1") and os.path.exists(p) and modkit.sha1(p) == st["sha1"]:
+            return modkit.png_size(p)
+        return None
 
     def save_to_folder(self):
         files = self.selected_files(groups=True)

@@ -159,12 +159,28 @@ def export(disc, work, pats):
                 continue
             os.replace(p, q)
             if not n.endswith(".json"):
-                state["files"].setdefault(key, {})["sha1"] = sha1(q)
+                ent = state["files"].setdefault(key, {})
+                ent["sha1"] = sha1(q)
+                sz = png_size(q)
+                if sz:
+                    ent["size"] = list(sz)   # tamanho no jogo (a interface avisa se o substituto muda a proporcao)
         shutil.rmtree(out, ignore_errors=True)
         if kept:
             print("  %d file(s) already edited in the work folder were kept" % kept)
         save_state(work, state)
     print("work folder: %s (edit there, then pack into a mod: modkit.py pack <mod>, or the Pack button)" % work)
+
+
+def png_size(p):
+    """(largura, altura) do cabecalho IHDR de um PNG; None se nao for PNG."""
+    try:
+        with open(p, "rb") as f:
+            h = f.read(24)
+    except OSError:
+        return None
+    if len(h) < 24 or h[:8] != b"\x89PNG\r\n\x1a\n" or h[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", h[16:24])
 
 
 def load_state(work):

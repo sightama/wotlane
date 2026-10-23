@@ -301,19 +301,22 @@ def bnk_replace(path, sound, wav, out):
         raise SystemExit("o som %d nao tem TONE" % sound)
     rate_in, chans = read_wav_any(wav)
     chans = to_channels(chans, len(targets)) if len(chans) > 1 else [chans[0]] * len(targets)
-    new = {}
+    new, extra = {}, {}   # extra: amostra que outro som tambem usa -> copia nova no fim do chunk, so para este som
     for k, (_, _, off, go) in enumerate(targets):
-        if off in new:
+        if off in new or off in extra:
             continue
         note, fine = struct.unpack_from("<bb", blk, go + 8 + 2)
         rate = round(tone_rate(note, fine))
         end = sample_end(smp, off)
         others = [r for r in refs if r[0] != sound and off <= r[2] < end]
-        if others:
-            raise SystemExit("a amostra em %#x tambem e usada pelo som %d; troque os dois juntos" % (off, others[0][0]))
         loop = sample_loop(smp, off, end)
         pcm = resample(chans[k], rate_in, rate)
-        new[off] = (end, adpcm_encode(pcm, 0 if loop is not None else None))
+        data = adpcm_encode(pcm, 0 if loop is not None else None)
+        if others:
+            print("som %d: a amostra em %#x tambem e do som %d, que fica com a original" % (sound, off, others[0][0]))
+            extra[off] = data
+        else:
+            new[off] = (end, data)
     # remonta o chunk de amostras com o mapa de offsets
     pieces, cur, omap = [], 0, []
     for off in sorted(new):
@@ -335,6 +338,16 @@ def bnk_replace(path, sound, wav, out):
         return o + delta
     for (_, pos, off, _) in refs:
         struct.pack_into("<I", blk, pos, remap(off))
+    if extra:
+        if len(smp2) % 16:
+            smp2 += bytes(16 - len(smp2) % 16)
+        at = {}
+        for off, data in extra.items():
+            at[off] = len(smp2)
+            smp2 += data
+        for (i, pos, off, _) in refs:
+            if i == sound and off in at:
+                struct.pack_into("<I", blk, pos, at[off])
     grow = len(smp2) - len(smp)
     vag_size, sram = struct.unpack_from("<II", blk, 0x28)
     if vag_size == len(smp):

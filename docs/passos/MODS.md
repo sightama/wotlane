@@ -29,7 +29,9 @@ log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[
    da imagem (com xadrez atrás do alfa) ou a forma de onda do som. Som toca na própria janela ao clicar ("play sounds on click"
    desliga) ou no duplo clique; "Stop" para. Duplo clique numa textura abre no editor escolhido em **Editors...** (um programa por
    tipo, `.png` e `.wav`; vazio = programa padrão do Windows; com editor de `.wav` definido, o duplo clique no som abre nele).
-   Botão direito na lista: Play, Open in ..., **Open with...** (escolhe o programa e pergunta se vira o padrão), Show in folder,
+   Botão direito na lista: Play, Open in ..., **Open with...** (escolhe o programa e pergunta se vira o padrão), **Replace with...** (só com um arquivo
+   escolhido: troca pelo arquivo que você escolher e grava com o nome certo; JPG, BMP, TGA etc. viram PNG; avisa se a proporção
+   muda; som só aceita WAV), Show in folder,
    **Save to folder...** (copia os selecionados, ou o grupo inteiro, para uma pasta) e Remove (tecla Del também). Clicar numa
    seção só a seleciona: abrir e tocar valem só para arquivos escolhidos um a um; na seção, o botão direito salva ou remove tudo.
 3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods". O log fica embaixo, com
@@ -57,7 +59,7 @@ python tools/modkit.py check                              # confere nomes, taman
 | `.TEX` | `<arquivo>_tNNNN.png` (um por textura) | o PNG como está |
 | `.RTX` | `<arquivo>_rtx_tNNNN.png` (retratos, telas, fontes) | o PNG como está |
 | `.VPK` / `.VAG` | `<arquivo>.wav` | `.VPK`/`.VAG` (mesma taxa e volumes do original) |
-| `.BNK` | `<banco>_sNNN.wav` (um por som com amostra) | o banco com todos os sons editados trocados |
+| `.BNK` | `<banco>_sNNN.wav` (um por som com amostra) | o banco com todos os sons editados trocados (amostra que outro som também usa: o editado ganha uma cópia própria e o outro fica com a original) |
 | outros | cópia | cópia |
 
 ## Texturas em PNG
