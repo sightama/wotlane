@@ -92,6 +92,9 @@ struct View
     uint32_t labelRef[4] = {};   // objetos do "1 player" em uso (texto e brilho): o menor da a coluna e a altura das letras
     bool labelLit = false;
     float labelAlpha = 0.f;
+    // transicao de tela com animacao de camera (changeScreen com anim != 0): progresso 0..1 no sentido em que ela toca
+    bool transMoving = false;
+    float transProg = 0.f;
 };
 static std::mutex g_m;
 static View g_view;
@@ -99,6 +102,8 @@ static View g_view;
 // Thread do EE
 static Phase g_phase = Off;
 static float g_uiAlpha = 0.f, g_reveal = 0.f;
+static bool g_transMoving = false;   // a camera do jogo anda na transicao em curso (transitionHook)
+static float g_transProg = 0.f;
 static int g_slot[kDevs] = {};
 static bool g_prev[kDevs][kActions] = {};
 static bool g_primed = false;
@@ -1105,6 +1110,8 @@ static void publish(uint8_t *rdram)
         if (v.mgUsed[0] && v.mgUsed[1])
             v.screenObj = v.mgUsed[0];
     }
+    v.transMoving = g_transMoving && rd32(rdram, wotm::sym::betweenScreens) != 0;
+    v.transProg = g_transProg;
     v.selPlayers = g_selOn ? g_multi : 0;
     v.selNoCostume = false;
     for (int c = 1; c <= 10; ++c)
@@ -1171,6 +1178,32 @@ static void hideSelect2P(uint8_t *rdram, int screen = 6)
             rdram[sw + 8] = 0;
 }
 
+// Progresso (0..1, no sentido em que toca) da animacao de camera da transicao em curso, shell->m_screenAnim[currAnimationIndex]
+// (_animHandle de 16 bytes, que as funcoes recebem por ponteiro em a0). -1 sem animacao.
+static float transitionProgress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+{
+    const uint32_t idx = rd32(rdram, wotm::sym::currAnimationIndex);
+    if (idx == 0 || idx >= 12) return -1.f;
+    const uint32_t h = kShell + 0x61C + 16u * idx;
+    const PS2Runtime::RecompiledFunction fp = rt->lookupFunction(wotm::fn::animationGetCurrentPercent__FG11_animHandle),
+                                         fd = rt->lookupFunction(wotm::fn::animationGetDirection__FG11_animHandle);
+    if (!fp || !fd) return -1.f;
+    const R5900Context saved = *ctx;
+    auto call = [&](uint32_t fn, PS2Runtime::RecompiledFunction f) {
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(h));
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->pc = fn;
+        f(rdram, ctx, rt);
+    };
+    call(wotm::fn::animationGetCurrentPercent__FG11_animHandle, fp);
+    const float pct = ctx->f[0];
+    call(wotm::fn::animationGetDirection__FG11_animHandle, fd);
+    const bool fwd = GPR_U32(ctx, 2) != 0;
+    *ctx = saved;
+    if (!(pct >= 0.f && pct <= 1.f)) return -1.f;
+    return fwd ? pct : 1.f - pct;
+}
+
 // screenTransition: entrada vinda do menu principal (ou da volta da tela 15 no multijogador) comeca a escolha de controles; a
 // entrada na tela 6 com o multijogador comeca a selecao. Enquanto uma delas vale, os itens da tela ficam com alfa 0 e o alfa que a
 // transicao lhes daria vira o da escolha.
@@ -1204,6 +1237,11 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     if (!g_transPending || ctx->pc != g_transRa)
         return;
     g_transPending = false;
+    {
+        const float p = transitionProgress(rdram, ctx, runtime);
+        g_transMoving = p >= 0.f;
+        g_transProg = g_transMoving ? p : 0.f;
+    }
     const int hidden = hiddenScreen();
     if (hidden >= 0)
     {
@@ -2432,6 +2470,47 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
     const float dt = std::clamp(float(now - s_last), 0.f, 0.1f);
     s_last = now;
     const bool want = v.select && v.alpha > 0.f;
+    // Saida para uma tela com animacao de camera (voltar da adventure a tela 2, confirmar e ir a selecao de fase): a camera do jogo
+    // ja anda de onde ficaria a selecao original ate a tela seguinte. Voltar ao jogo em 0,45 s por fora somava os dois movimentos;
+    // aqui a do quadro e a do jogo mais a diferenca para o telao no inicio da saida, que some com o progresso da animacao do jogo
+    // (um movimento so, do telao ate a tela seguinte, no ritmo do jogo).
+    static bool s_follow = false;
+    static float s_q0 = 0.f;
+    static Vector3 s_dPos{}, s_dFwd{}, s_dUp{};
+    if (!want && s_t > 0.f && !s_follow && v.transMoving && v.transProg < 0.95f)
+    {
+        Plane pl0;
+        if (v.screenObj && selectPlane(scene, ram, cam, v, pl0))
+        {
+            Camera3D t = cam;
+            telaoCamera(t, pl0, aspect, s_t);   // a camera mostrada agora
+            s_dPos = vsub(t.position, cam.position);
+            s_dFwd = vsub(vnorm(vsub(t.target, t.position)), vnorm(vsub(cam.target, cam.position)));
+            s_dUp = vsub(t.up, cam.up);
+            s_q0 = v.transProg;
+            s_follow = true;
+        }
+    }
+    if (s_follow)
+    {
+        if (want || !v.transMoving)
+        {
+            s_follow = false;
+            if (!want) s_t = 0.f;
+        }
+        else
+        {
+            const float k = 1.f - std::clamp((v.transProg - s_q0) / std::max(1.f - s_q0, 1e-3f), 0.f, 1.f);
+            hideStrip(scene, ram);
+            scene.overlay.clear();
+            scene.hpOverlay.clear();
+            const Vector3 fwd = vnorm(vadd(vnorm(vsub(cam.target, cam.position)), vscale(s_dFwd, k)));
+            cam.position = vadd(cam.position, vscale(s_dPos, k));
+            cam.target = vadd(cam.position, fwd);
+            cam.up = vnorm(vadd(cam.up, vscale(s_dUp, k)));
+            return;
+        }
+    }
     s_t = std::clamp(s_t + (want ? dt : -dt) / 0.45f, 0.f, 1.f);
     // telas de opcoes antes da selecao (11 eliminacao, 12 CPUs de 1 jogador, 13 CPUs do multijogador, 15 "first to"): a fileira do
     // jogo so prepara a selecao do jogo, que a nativa substitui
