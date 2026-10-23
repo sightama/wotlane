@@ -38,12 +38,6 @@ também os painéis `m_cs7C[0..2]` e os cursores de monstro (`shell + 0x1C0..0x1
 Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_nativa_tela19_3cpus.png`. A tela 17 (`screenSelect1AI`) não aparece nesses
 caminhos e continua sem a nativa.
 
-## 5. Transição esquisita ao confirmar em modos com seleção de fase
-
-Fora do adventure, ao confirmar os monstros a câmera do menu tenta voltar à posição padrão e, ao mesmo tempo, ir para a tela de
-seleção de fase. Conferir o que o `soloExit` / o fim do `transitionHook` fazem com a câmera e com o alfa quando a tela seguinte não
-é a carga da luta (no adventure ela vai direto para a carga), e comparar com a mesma transição com `WOTM_NATSEL=0`.
-
 ## 6. Togera desalinhado para a esquerda no adventure
 
 O Togera 3D aparece deslocado para a esquerda no quadro único do adventure (tela 3). O enquadramento vem de

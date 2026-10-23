@@ -327,7 +327,7 @@ guia em `MODS.md`, "Skins"):
 - Conferido: `WOTM_MATCH=4:roxo,4:3,1` (sons do traje 3 no log, 337 de 1000 texIds); `save.json` com `"congar/naoexiste"` e
   `"ultra-v/roxo"`: o binário do cartão sai com o traje 0 e com o índice da sessão, e o JSON fica intacto. **Conferido pelo
   dono no menu:** gravar e carregar uma aventura com skin, a lista de saves com o monstro da skin e, com o mod apagado, o traje 0 e
-  "skin missing", o sorteio da resistência e o launcher (lista as skins em maiúsculas).
+  "skin missing", o sorteio da resistência e o launcher (nomes das skins só com as iniciais maiúsculas).
 
 - **Tela 7 (minigames de 2) com a seleção nativa e skins** (`wotm_padsel.inc`, `minigames2PHook`): os quadros vão na tela do
   fliperama, no lugar dos dois retratos grandes. Conferido por roteiro (Dodge Ball destravado só no teste): skin `togera/lima` na
@@ -343,7 +343,7 @@ guia em `MODS.md`, "Skins"):
 2. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
 
 Fora, por decisão do dono: tela de destrave (skin de mod sempre aberta), som próprio por skin. Pendências da seleção para o contribuinte (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`,
-itens 5 a 8): transição esquisita ao confirmar em modos com seleção de fase (talvez resolvida pela câmera da saída acima; conferir), Togera desalinhado no quadro único do adventure, skins
+itens 6 a 8; o 5, a transição ao confirmar com seleção de fase, saiu com a câmera da saída acima): Togera desalinhado no quadro único do adventure, skins
 no elimination (modo 6 esconde o traje) e os quadros dos monstros fora do telão.
 
 ### 9. Modo treino
