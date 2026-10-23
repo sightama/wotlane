@@ -97,7 +97,7 @@ static void pollDevice()
     if (now == g_lastPoll) return;
     g_lastPoll = now;
     for (const st::KeyName &k : st::kKeyNames)
-        if (IsKeyDown(k.code)) { g_lastPad = -1; return; }
+        if (wotm_pad::inputDown(k.code)) { g_lastPad = -1; return; }   // teclas e botoes do mouse
     for (int p = 0; p < 4; ++p)
     {
         if (!IsGamepadAvailable(p)) continue;
@@ -177,8 +177,12 @@ static int cellFor(st::Bind b)
     const int style = currentStyle();
     if (style == st::PromptKeyboard)
     {
-        const int c = keyCell(st::keyName(int(st::kb(b) & 0xFFFF)));
-        if (c >= 0) return c;   // sem tecla: o simbolo do PS2
+        const char *name = st::keyName(int(st::kb(b) & 0xFFFF));
+        // botao do meio e rodinha: o icone da rodinha; L1/R1 sem tecla (layout 2): Q/E, as abas do painel
+        if (name && (!std::strcmp(name, "MOUSE_MIDDLE") || !std::strncmp(name, "WHEEL", 5))) name = "MOUSE_SCROLL";
+        if (!name && (b == st::BL1 || b == st::BR1)) name = b == st::BL1 ? "Q" : "E";
+        const int c = keyCell(name);
+        if (c >= 0) return c;   // sem tecla (ou tecla sem desenho): o simbolo do PS2
     }
     return padCell(st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(g_lastPad)), style == st::PromptKeyboard ? st::PromptPs : style);
 }
@@ -260,8 +264,8 @@ namespace wotm_legend
 {
 namespace st = wotm::settings;
 // Um icone: o botao do raylib (gamepad, 0 = nenhum) e a tecla (nome do wotm_settings.hpp; sem celula no atlas, sai o nome numa
-// moldura)
-struct Icon { int pad = 0; const char *key = nullptr; };
+// moldura); key2 = a segunda tecla do mesmo botao (o mapa do teclado tem duas por botao), lado a lado com a primeira
+struct Icon { int pad = 0; const char *key = nullptr; const char *key2 = nullptr; };
 struct Item { Icon a, b; const char *text = ""; };
 constexpr int kStickL = 18, kStickR = 19;   // Icon::pad dos analogicos (celulas extras do atlas, wotm_prompts.h)
 constexpr int kMax = 10;
@@ -288,6 +292,9 @@ static void hint(const char *s, float alpha)
 // O botao do PS2 b como o jogo o le: a tecla e o botao do mapa (aba CONTROLS), com a troca de confirmar dos menus
 static Icon bind(st::Bind b)
 {
-    return Icon{st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(wotm_prompts::g_lastPad)), st::keyName(int(st::kb(b) & 0xFFFF))};
+    const uint32_t k = st::kb(b);
+    const char *k1 = st::keyName(int(k & 0xFFFF)), *k2 = st::keyName(int(k >> 16));
+    if (!k1) { k1 = k2; k2 = nullptr; }
+    return Icon{st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(wotm_prompts::g_lastPad)), k1, k2};
 }
 } // namespace wotm_legend

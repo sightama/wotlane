@@ -85,8 +85,8 @@ Conferido no dump de luta `build/dumps_live/ram_energy_robot.bin` (0,637 e 1,275
 
 ## Fogo e lens flare
 Texturas dos efeitos vêm de `LVL/CENTRAL.TEX/.RTX` (`FxTextures`): Fireball = texId 5 (paleta tbp 13); flare = texIds 54/4/55/56
-(paletas 203/9/207/211, texInfo 15/17/18/19). Detalhes da engenharia reversa em `docs/investigacoes/2026-10-21/fogo_agamo.md` e
-`lens_flare_monstros.md`.
+(paletas 203/9/207/211, texInfo 15/17/18/19). Detalhes da engenharia reversa em `75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md` e
+`75f5be1:docs/investigacoes/2026-10-21/lens_flare_monstros.md`.
 - **Fogo (nó op 22, HierParticleEmitter, preset +4 = 141 IdolHeadFlame).** Emissor E = posição(+0x10)·m. Partícula sprite aditiva,
   vida 20 fields, tamanho 7 + 8U, crescimento 1 − 1,5·min(idade/10, 1), vento (0,0,3,2), arrasto 0,0390625, 2 por field, cor por
   tabela de 16 (idade·3072 em 4.12), UV espelhado por 2 bits. Sistema novo começa com 30 passos de aquecimento. O enquadramento

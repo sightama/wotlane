@@ -10,10 +10,10 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 1 | RAM do convidado acima de 32 MB (+ medir 4 vistas) — **feito em 2026-10-19** | — | baixo |
 | 2 | HUD dos inimigos: vida e energia juntas, retrato à esquerda — **feito em 2026-10-19** | — | baixo (base pronta) |
 | 3 | Save em JSON legível, por nomes — **feito em 2026-10-19** | — | médio |
-| 4 | Pasta `mods/` que sobrepõe arquivos do disco — **gancho feito em 2026-10-21** (falta o kit e PNG direto) | — | baixo/médio |
+| 4 | Pasta `mods/` que sobrepõe arquivos do disco — **feito em 2026-10-22** (gancho, kit e PNG direto; guia em `MODS.md`) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
-| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **próximo** | — | alto |
+| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
@@ -214,13 +214,21 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
     de `LVL/CENTRAL.NGP` (zip, lido em blocos pelo `fileReads`), `SND/LIZARD_S.BNK` e `VAG/GEN1AMB.VPK`/`GEN1BAT.VPK` (que no
     `discroot` são vazios: vieram da ISO) a fase, o banco e as duas músicas saem do mod (`sound: LSN 8389878 ... (mods)`). Dois
     mods juntos. Corpus sem mudança. Fotos: `docs/screenshots/2026-10-21/2026-10-21_mods_togera_vermelho.png` e `..._mods_desligado_togera_verde.png`.
-- **Etapa 2, kit (`tools/modkit.py`, pendente):** extrair para formatos editáveis e voltar ao do jogo dentro de `mods/<mod>/`,
-  sobre os conversores que já existem (`tex.py export/inject`, `snd989.py wav/vpk/vag`; o `.BNK` ainda não volta; `.NGP` só sai).
-- **PNG no lugar do `.TEX`/`.RTX` (pedido do dono, 2026-10-21):** a ideia é o mod trazer só PNG. Caminho preferido: o jogo
-  continua carregando o `.TEX`/`.RTX` do disco (layout da VRAM, ids e paletas do jogo intactos) e o desenho nativo troca a
-  textura na hora de desenhar pela do PNG (cor cheia, qualquer resolução: texturas HD), identificada por arquivo + `texId` como o
-  `tex.py export` nomeia (`lizard0_t0004.png`). A conversão PNG → `.TEX` na carga (paleta de 256/16 cores, mesmo tamanho) fica de
-  reserva para o que o jogo lê dos pixels ou para o executável de teste com o GS emulado.
+- **Etapa 2, PNG direto e kit (feitos em 2026-10-22; como usar em `MODS.md`):**
+  - **PNG:** `<arquivo>_tNNNN.png` (do `.TEX`) e `<arquivo>_rtx_tNNNN.png` (do `.RTX`) em qualquer pasta do mod. O jogo segue
+    carregando o `.TEX`/`.RTX` do disco; o desenho nativo (`native/wotm_texmods.hpp`, `Scene::modTexture`) troca a imagem no
+    `textureId` (objetos) e no `residentTexture` (quadrados de tela: barras dos inimigos, fonte), em qualquer resolução. O texId
+    do disco sai do deslocamento do pacote de `texInfo[id]` dentro do arquivo carregado (`fileStatus.texAddr`/`resAddr`, nome em
+    `names`); as residentes, pelo DBP. PNG maior que a original ganha mipmaps. Fora: partículas, monstro da lista de saves e
+    o GS emulado (para esse, `modkit.py pack --inject`).
+  - **Kit:** `tools/modkit.py export/pack/check` sobre o `tex.py` e o `snd989.py` (o `.BNK` volta pelo `bnk-replace`, vários sons
+    num banco só). O `pack` só leva o que mudou (sha1); o re-export não atropela edição. Interface: `tools/modkit_gui.py`
+    (botão "Mod kit" do launcher). O `tex.py export` de um `.RTX` passou a
+    nomear `<arquivo>_rtx_tNNNN.png` (e `<arquivo>_rtx_manifest.json`), sem colidir com o `.TEX` na mesma pasta.
+  - Conferido: Togera com a pele em PNG 4x (grade fina visível) e retrato 2x no HUD do jogador e na barra do inimigo (fotos
+    `docs/screenshots/2026-10-22/2026-10-22_mods_png_*`); kit com PNG, `.VAG` e um som do `SHELL_S.BNK`.
+  - Em aberto: `.NGP` só sai (modelo novo é o item 8); PNG nas partículas (as UVs dos sprites são em texels); o monstro 3D da
+    lista de saves ler o PNG.
 
 ### 5. Sem escolha de memory card
 - **Lista de saves (feito em 2026-10-20, merge 4da9c64; `wotm_save.inc`):** as caixas e as fitas saíram (a troca de caixa
@@ -270,6 +278,18 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   os prédios "fantasma" por linha de visada), transições com cinema e agarrão, e a câmera de cada vista na tela dividida.
 - `Cameras::Update` (tabela `_6Camera$UPDATE_FUNK`) ainda está só em asm; câmera já é superfície de decomp do port. A câmera livre de
   debug (F5, `wotm_freecam.h`/`.inc`) tem a convenção de eixos pronta.
+- **Feito (2026-10-22), plano e decisões do dono:** `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`: padrão
+  moderna, lock-on enquadra os dois, recentralizar devagar com opção, mouse gira a câmera (pede teclado padrão novo e menus com mouse,
+  etapas 7 a 9).
+- **Pendências (vieram do plano, apagado em 2026-10-23):**
+  - Escalada, rampa e planeio: sem o balanço do jogo (segundo teste da etapa 1), a câmera moderna não aproxima nem inclina ao escalar
+    ou na rampa. Ninguém conferiu ainda; o medidor de salto do `WOTM_ORBITLOG` ajuda quando o dono notar algo.
+  - Aba CAMERA (etapa 6): conferida só por roteiro.
+  - Páginas do cartão com `WOTM_SAVEAUTO=0`: sem mouse (o gancho do `McPage::updateMenuPos` só é instalado com o salvamento
+    automático, onde a única página com menu é o "salvar?" da aventura).
+  - Legenda da lista de saves ao gravar (na fase): de fora de propósito, porque a faixa preta de baixo cobriria a luta; só ao carregar.
+  - Jogadores 3 e 4: leem o esquema de controle do `m_vibration`; sem a linha CONTROL SCHEME na pausa ninguém muda mais esse valor,
+    mas a leitura continua vindo dali.
 
 ### 8. Mods que adicionam skins e monstros
 - Trajes em `m_costume` (o `[2 + j]` atropela `m_mode` a partir da IA 10), tabela de seleção em `monster_select.h` (grupos de 4 por
@@ -395,6 +415,12 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   em campos de 2 (`m_continues[2]`, `m_wins[2]`, Shell+0x2B84/0x2B88) e troca o monstro do perdedor pelo diálogo 8 no meio da luta, uma
   interface de 2 jogadores; os minigames têm regras, placar e HUD de 2 (`CrushLevel`: "P1"/"P2", `m_tokens[0..1]`). O custo de 3 e 4
   vistas (acima) também segue pendente.
+- **Plano de performance da tela dividida (2026-10-23, pendência para o colaborador do modo de 4):**
+  `investigacoes/2026-10-23/performance_vistas.md`. Ordem: medir antes (baldes por número de vistas, contadores por passe, build com
+  LTCG); sombras uma vez por redesenho (hoje cada vista rasteriza na CPU a silhueta de cada monstro, e lendo a RAM viva, o que pode
+  também dar sombra com a pose de outro quadro); constantes por item; lista de comandos própria no lugar do modo imediato do rlgl;
+  cache de vértices entre vistas; malhas estáticas da fase na GPU; threads. Corte por vista já existe (`Scene::walk`); o corte dos
+  pacotes do VU1 no `hier` rende pouco (~20% dele) e tem risco alto. Os "12 ms contra 7 ms" acima vêm de máquinas diferentes.
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.
@@ -421,13 +447,19 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
   5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
+  6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **feito e conferido ao vivo pelo dono em 2026-10-23** (na master, branch
+     `painel-pausa`). Investigação encerrada. Plano e decisões em
+     `75f5be1:docs/investigacoes/2026-10-23/painel_na_pausa.md`; o que ficou em `NATIVO.md`, "Painel na pausa". Sons: os do menu (decisão do dono),
+     de uma cópia do banco do Shell carregada pelo som nativo só para o painel. Texto da linha cabendo: caixa da pausa 1,4x mais larga.
 - **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;
   HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.
   Correções do mesmo dia, depois dos testes do dono: sair não deixa mais o jogo congelado (a volta da pausa esperava o tempo da pausa); o lens flare é refeito pela câmera
   livre (acende o de luzes fora da tela na pausa, como o olho do Robo-47 visto de frente); o fogo do Agamo aparece mesmo com ele fora
   da tela na pausa. Conferido ao vivo pelo dono em 2026-10-22; na master (merge f045a2f).
-- **Gráficos de PC:** escala de resolução, MSAA e filtro anisotrópico no desenho nativo. A interpolação de quadros está em
-  "Pendências contínuas", abaixo.
+- **Gráficos de PC: feito em 2026-10-22, conferido pelo dono e na master em 2026-10-23** (`NATIVO.md`, "Gráficos de PC"; F11 agora muda a opção DISPLAY MODE): na aba VIDEO,
+  RENDER SCALE (0.5X a 2X, supersampling acima de 1X), ANTI-ALIASING (MSAA 2X, 4X, 8X), TEXTURE FILTER (bilinear, trilinear,
+  anisotrópico 2X a 16X) e WINDOW na RESOLUTION (o quadro segue a janela). Em 2026-10-23, prévias em imagem ao lado das
+  opções da VIDEO (a mesma quina de prédio com o AA ou a resolução escolhida, o chão com o filtro escolhido etc.; `wotm_preview.hpp`). A interpolação de quadros está em "Pendências contínuas", abaixo.
 - **Ícones de botão presos no mundo: feito em 2026-10-22** (`d9fd7fa`, `wotm_menu.inc`): depois do Start antecipado no menu
   principal, os ícones da legenda são realinhados à câmera a cada quadro enquanto a animação 1 anda (o `showButtons` só alinhava nos
   quadros do fade).
@@ -451,6 +483,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   partir da ISO dele; nada extraído vai para o repo (regra 1 do `CLAUDE.md`).
 
 ## Ideias do dono ("viagens")
+- **LOD fixo / mod low-poly (2026-10-23):** uma opção no painel para fixar o LOD foi investigada
+  (`investigacoes/2026-10-23/lod_fixo.md`: a escolha é só por distância, refeita no desenhista nativo, e a lógica não depende dela) e
+  **descartada pelo dono**; ela também pouco ajudaria na tela dividida, cujo custo é por objeto, não por triângulo. Em vez dela, mais
+  tarde, um mod que deixa os modelos low-poly; o documento serve de base (onde o nível é escolhido, quais modelos têm níveis baixos).
 - **Modo Nintendo DS:** LOD sempre no nível mais alto (o LOD é escolhido no nativo, `NATIVO.md`); filtro de áudio em tempo real no motor
   de som nativo (`wotm_snd.hpp`); talvez duas telas, jogo em cima e HUD embaixo com o retrato (o HUD do `hier` já é desenhado no nativo,
   então dá para mandá-lo para outra área da janela).

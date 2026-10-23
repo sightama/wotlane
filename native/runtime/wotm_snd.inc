@@ -8,6 +8,7 @@
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "wotm_snd.hpp"
 #include "wotm_mods.hpp"   // LSN falsos dos arquivos de mods/
+#include "wotm_disc.hpp"   // banco do Shell do painel na pausa (panelShellBank)
 #include <cctype>
 #include <cstring>
 #include "Kernel/Stubs/CD.h"
@@ -240,6 +241,37 @@ void loadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     g_origLoadModule(rdram, ctx, rt);
 }
 #undef SND_LOG
+// Banco de efeitos do Shell (SND/SHELL_S.BNK) so no motor nativo, fora dos gSoundBanks do jogo: o painel do port na pausa da luta
+// (wotm_mainmenu.inc) toca os sons do menu, e na luta o jogo nao tem esse banco carregado. Lido do disco (ou de mods/) na primeira
+// vez e mantido; o jogo nao o ve nem o descarrega. Os sons dele vao para o grupo 2, o dos sons da pausa (playPauseMenuSound, banco
+// de ambiente): na pausa o jogo baixa o volume mestre dos grupos 0 e 1 a zero (SoundManager::updatePauseAllSounds), e o Shell e todo
+// do grupo 0.
+constexpr int kPanelGroup = 2;
+inline uint32_t panelShellBank()
+{
+    static uint32_t s_h = 0;
+    static bool s_tried = false;
+    if (!s_tried)
+    {
+        s_tried = true;
+        const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        std::vector<uint8_t> f;
+        if (wotm::disc::readFile(io.cdRoot, io.cdImage.string(), "SND/SHELL_S.BNK", f))
+            s_h = Engine::get().loadBankData(f, kPanelGroup);
+        std::fprintf(stderr, "[snd] banco do Shell para o painel na pausa: %s\n", s_h ? "carregado (SND/SHELL_S.BNK)" : "falhou");
+    }
+    return s_h;
+}
+inline void playPanelSfx(int sound)
+{
+    if (const uint32_t h = panelShellBank())
+    {
+        const uint32_t v = Engine::get().play(h, sound, 0x400, 0, 0, 0);   // como o ShellSound::playShellSFXSound
+        if (g_log)
+            std::fprintf(stderr, "[snd] painel: som %d do Shell -> %u (grupo %d, volume mestre %#x)\n", sound, v, kPanelGroup,
+                         Engine::get().masterVolume(kPanelGroup));
+    }
+}
 } // namespace wotm_snd_hooks
 
 void wotmSndInstall(PS2Runtime &runtime)

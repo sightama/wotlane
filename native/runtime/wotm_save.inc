@@ -721,6 +721,7 @@ namespace wotm_save
         std::vector<Row> rows;
         int cur = 0, top = 0;
         bool confirm = false;   // gravar: segundo X sobrescreve
+        bool confirmByMouse = false;   // o primeiro X foi um clique (o texto pede outro clique)
         uint64_t openedAt = 0;  // g_vsyncs da abertura
         Row pending;            // gravar: o que vai ser gravado (so para o desenho dos primeiros quadros)
         uint64_t seen = 0;      // g_vsyncs do ultimo update: um buraco quer dizer que a pagina foi fechada e aberta de novo
@@ -824,6 +825,10 @@ namespace wotm_save
         m.page = page;
         m.openedAt = g_vsyncs;
         buildRows(m);
+        // mouse (etapa 9): o clique que abriu (o "YES" do "salvar?") nao vale aqui
+        wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        wotm::mouse::takeClick(wotm::mouse::g_clickR);
+        wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
         // Comeco: carregar, no primeiro ocupado; gravar, no vazio do fim
         m.cur = 0;
         if (saving)
@@ -883,7 +888,9 @@ namespace wotm_save
         if (m.confirm)
         {
             text(rdram, ctx, rt, "Overwrite save file " + std::to_string(m.cur + 1) + "?", kLeftX, Y(40), fName);
-            text(rdram, ctx, rt, "Press X again to overwrite", kLeftX, Y(70), fText);
+            // o botao de confirmar do dispositivo de agora (a janela publica o nome: wotm_live.inc), ou o clique
+            const std::string again = m.confirmByMouse ? "Click again to overwrite" : "Press " + wotm::mouse::confirmLabel() + " again to overwrite";
+            text(rdram, ctx, rt, again, kLeftX, Y(70), fText);
         }
         else if (show)
         {
@@ -1019,7 +1026,38 @@ namespace wotm_save
             modalDraw(rdram, ctx, rt, saving ? &(m.pending = rowFromRam(rdram)) : nullptr);
             return;
         }
-        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0; };
+        // mouse (etapa 9): a linha da lista sob ele (texto do McTextBox: x 318, y do topo 60 + 14 por linha, comprimido na fase);
+        // passar por cima escolhe, clique esquerdo vale X nela; direito e rodinha chegam pelo pad (wotm_pad.inc, gameMenu)
+        wotm::mouse::gameMenu();
+        wotm::mouse::claim();
+        wotm::mouse::saveList(m.confirm ? 3 : saving ? 2 : 1);   // legenda de baixo (wotm_live.inc)
+        bool mouseX = false;
+        {
+            static uint32_t s_seq = 0;
+            const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+            const bool moved = seq != s_seq;
+            s_seq = seq;
+            const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+            auto Y = [&](int y) { return saving ? static_cast<int>(std::lround(58 + (y - 25) * 0.7f)) : y; };
+            float gx, gy;
+            int hover = -1;
+            if (wotm::mouse::gsPointer(gx, gy) && gx >= 310.f && gx < 630.f)
+                for (int i = m.top; i < std::min<int>(m.top + kVisibleRows, static_cast<int>(m.rows.size())); ++i)
+                {
+                    const float y0 = static_cast<float>(Y(60 + (i - m.top) * 14)), y1 = static_cast<float>(Y(60 + (i - m.top + 1) * 14));
+                    if (gy >= y0 - 1.f && gy < y1 - 1.f) hover = i;
+                }
+            const bool pickable = hover >= 0 && (saving || m.rows[static_cast<size_t>(hover)].used);
+            if (pickable && (moved || click) && hover != m.cur)
+            {
+                const bool down = hover > m.cur;
+                m.cur = hover;
+                m.confirm = false;
+                if (!click) sfx(rdram, ctx, rt, down ? 2 : 4);
+            }
+            mouseX = click && pickable;
+        }
+        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0 || (b == kBtnX && mouseX); };
         const Row current = saving ? rowFromRam(rdram) : Row{};
         if (pressed(kBtnTriangle) || pressed(kBtnCircle))
         {
@@ -1060,6 +1098,7 @@ namespace wotm_save
             if (saving && r.used && !m.confirm)
             {
                 m.confirm = true;
+                m.confirmByMouse = mouseX;
                 sfx(rdram, ctx, rt, 4);
             }
             else if (saving)
@@ -1072,6 +1111,84 @@ namespace wotm_save
             }
         }
         modalDraw(rdram, ctx, rt, saving ? &current : nullptr);
+    }
+
+    // ---- mouse nas paginas do cartao com menu (McPage: o "salvar?" depois de vencer na aventura) ----
+    // Saida do McPage::updateMenuPos (a0 = pagina): itens pg+0x21C, escolhido pg+0x224, item i escolhivel se a palavra em
+    // pg + 0x14 + 0x24 i nao e 0; centrados em x 320, topo em pg+0x24C + i * pg+0x250 mais o +0x10 da fonte (a do escolhido ou a dos
+    // outros), altura = +0x04 da fonte / 16. Passar por cima escolhe, clique escreve o X do McPageMgr (+0x1168, lido pelo
+    // checkForSelection do mesmo quadro). 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md, secao 4
+    PS2Runtime::RecompiledFunction g_origMenuPos = nullptr;
+    uint32_t g_menuPosRa = 0, g_menuPosPage = 0;
+    bool g_menuPosPending = false;
+    void pageMouse(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t pg)
+    {
+        static uint32_t s_page = 0, s_seq = 0;
+        static uint64_t s_last = 0;
+        const bool fresh = pg != s_page || g_vsyncs - s_last > 10;
+        s_page = pg;
+        s_last = g_vsyncs;
+        wotm::mouse::gameMenu();
+        wotm::mouse::claim();
+        const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+        const bool moved = seq != s_seq;
+        s_seq = seq;
+        if (fresh)   // o clique que abriu a pagina nao vale nela
+        {
+            wotm::mouse::takeClick(wotm::mouse::g_clickL);
+            wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
+            return;
+        }
+        const int n = static_cast<int>(ramU32(rdram, pg + 0x21C)), cur = static_cast<int>(ramU32(rdram, pg + 0x224));
+        if (n <= 0 || n > 10)
+            return;
+        const int y0 = static_cast<int>(ramU32(rdram, pg + 0x24C)), dy = static_cast<int>(ramU32(rdram, pg + 0x250));
+        float gx = -1.f, gy = -1.f;
+        int hover = -1;
+        if (wotm::mouse::gsPointer(gx, gy) && std::fabs(gx - 320.f) < 140.f)
+            for (int i = 0; i < n; ++i)
+            {
+                if (!ramU32(rdram, pg + 0x14 + 0x24 * static_cast<uint32_t>(i)))
+                    continue;
+                const uint32_t f = i == cur ? wotm::sym::x_6McPage_s_selectedFont : wotm::sym::x_6McPage_s_unselectedFont;
+                const int y = y0 + i * dy + static_cast<int>(ramU32(rdram, f + 0x10));
+                const int h = std::max(8, static_cast<int>(ramU32(rdram, f + 4)) / 16);
+                if (gy >= static_cast<float>(y) - 2.f && gy < static_cast<float>(y + h) + 1.f) hover = i;
+            }
+        static const bool log = std::getenv("WOTM_MENUMOUSELOG") != nullptr;
+        static int s_logged = -2;
+        if (log && hover != s_logged)
+        {
+            std::fprintf(stderr, "[menumouse] pagina do cartao 0x%08X: %d itens, topo %d passo %d, cursor %.0f,%.0f, item %d\n", pg, n, y0, dy,
+                         gx, gy, hover);
+            s_logged = hover;
+        }
+        if (hover < 0)
+            return;
+        if (moved && hover != cur)
+        {
+            w32(rdram, pg + 0x224, static_cast<uint32_t>(hover));
+            sfx(rdram, ctx, rt, hover > cur ? 2 : 4);
+        }
+        if (wotm::mouse::takeClick(wotm::mouse::g_clickL))
+        {
+            w32(rdram, pg + 0x224, static_cast<uint32_t>(hover));
+            w32(rdram, kMgr + 0x1168, 1);
+        }
+    }
+    void menuPosTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+    {
+        if (ctx->pc == wotm::fn::updateMenuPos__6McPageR7McState)
+        {
+            g_menuPosRa = GPR_U32(ctx, 31);
+            g_menuPosPage = GPR_U32(ctx, 4);
+            g_menuPosPending = true;
+        }
+        g_origMenuPos(rdram, ctx, rt);
+        if (!g_menuPosPending || ctx->pc != g_menuPosRa)
+            return;
+        g_menuPosPending = false;
+        pageMouse(rdram, ctx, rt, g_menuPosPage);
     }
 
     void boxesReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
@@ -1141,6 +1258,8 @@ namespace wotm_save
         if (g_auto)
         {
             registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
+            if ((g_origMenuPos = runtime.lookupFunction(wotm::fn::updateMenuPos__6McPageR7McState)))
+                runtime.registerFunction(wotm::fn::updateMenuPos__6McPageR7McState, &menuPosTapped);   // mouse no "salvar?"
             runtime.registerFunction(kBoxesUpdate, &boxesReplaced);   // lista de saves no lugar das caixas (carregar)
             runtime.registerFunction(kChooseUpdate, &chooseReplaced); // e no lugar da escolha do cartao (gravar)
         }

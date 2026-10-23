@@ -47,7 +47,7 @@ constexpr uint32_t kShellSound = kShell + 0x2918;
 constexpr uint32_t kMonsterSel = kShell + 0x2938, kCostume = kShell + 0x2BE0, kNumPlayers = kShell + 0x2BB4, kNumAIs = kShell + 0x2BB8,
                    kMode = kShell + 0x2C10, kBattleMode = kShell + 0x2B54, kSw5CC = kShell + 0x5CC, kCostumeBox = kShell + 0x88;
 constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +0, state +4; 4 trajes por coluna
-enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc
+enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, Square, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc; Square: so no roteiro (previa da aba VIDEO)
 enum Phase { Off, Config, Reveal, Leaving };
 
 // Cores dos jogadores 1 a 4
@@ -152,7 +152,7 @@ static void parseScript()
     const char *e = std::getenv("WOTM_PADSEL_SCRIPT");
     if (!e) return;
     std::string s(e);
-    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down", "l1", "r1"};
+    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down", "l1", "r1", "square"};
     for (size_t pos = 0; pos < s.size();)
     {
         size_t end = s.find(';', pos);
@@ -198,6 +198,14 @@ static void readDevice(int d, bool out[kActions], bool bound = true)
         out[Back] = kbDown(st::BTriangle) || kbDown(st::BSelect);
         out[L1] = kbDown(st::BL1);
         out[R1] = kbDown(st::BR1);
+        // mouse (etapa 9, cursor solto): esquerdo confirma, direito volta, rodinha sobe e desce
+        if (!wotm::mouse::g_captured.load(std::memory_order_relaxed))
+        {
+            out[Ok] = out[Ok] || IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            out[Back] = out[Back] || IsMouseButtonDown(MOUSE_BUTTON_RIGHT);
+            out[Up] = out[Up] || wotm_pad::g_wheelHeld > 0;
+            out[Down] = out[Down] || wotm_pad::g_wheelHeld < 0;
+        }
     }
     else
     {
@@ -1434,6 +1442,26 @@ static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float
     rlEnableDepthMask();
     rlEnableDepthTest();
     EndBlendMode();
+}
+
+// Onde o mouse (wotm_mouse.hpp, cursor solto) cai no retangulo do plano em que drawOnPlane poe uma textura (mesmos left/top/wx/hy):
+// u e v em 0..1, v de cima para baixo. Na thread da janela, com a camera do quadro (`cam`, a do BeginMode3D).
+static bool hitOnPlane(const Camera3D &cam, const Plane &pl, float left, float top, float wx, float hy, float &u, float &v)
+{
+    const wotm::mouse::Pointer &p = wotm::mouse::g_ptr;
+    if (!p.in || p.rw <= 0 || p.rh <= 0 || wx <= 0.f || hy <= 0.f)
+        return false;
+    const Ray r = GetScreenToWorldRayEx(Vector2{p.x, p.y}, cam, p.rw, p.rh);
+    const float dn = vdot(r.direction, pl.n);
+    if (std::fabs(dn) < 1e-6f)
+        return false;
+    const float t = vdot(vsub(pl.c, r.position), pl.n) / dn;
+    if (t <= 0.f)
+        return false;
+    const Vector3 q = vsub(vadd(r.position, vscale(r.direction, t)), pl.c);
+    u = (vdot(q, pl.right) - left) / wx;
+    v = (top - vdot(q, pl.up)) / hy;
+    return u >= 0.f && u <= 1.f && v >= 0.f && v <= 1.f;
 }
 
 // Camera de frente para o telao `pl`, a fracao `s` (0..1, suavizada) do caminho entre a do jogo e ela: telao com 58% da altura da

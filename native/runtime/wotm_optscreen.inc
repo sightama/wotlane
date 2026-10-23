@@ -37,6 +37,9 @@ struct View
 };
 static std::mutex g_m;
 static View g_view;
+// Mouse (etapa 9): linha sob ele e onde, na largura da textura (0..1); janela escreve, o input le (g_m)
+struct Hover { int row = -1; float x = 0.f; };
+static Hover g_hover;
 static std::atomic<bool> g_ready{false};   // fonte carregada (janela): so entao a tela do jogo e escondida
 
 static uint16_t rd16(const uint8_t *rdram, uint32_t a) { uint16_t v; std::memcpy(&v, rdram + (a & 0x1FFFFFFu), 2); return v; }
@@ -110,11 +113,88 @@ static void frame(uint8_t *rdram)
     g_view = v;
 }
 
-// screenGetInput(1) da tela 10, depois do jogo ler o codigo e antes do screenOptions trata-lo: cima/baixo pulam as linhas que sairam
-static void input(uint8_t *rdram, uint32_t code)
+// Medidas do renderUi que o mouse usa: colunas da dificuldade e do audio, barras de volume
+constexpr float kDiffX[3] = {0.49f, 0.69f, 0.89f}, kStereoX = 0.56f, kMonoX = 0.80f, kBarX0 = 0.40f, kBarX1 = 0.96f;
+
+// Mouse (etapa 9): passar por cima escolhe a linha; clique no valor da dificuldade ou do audio anda ate ele (um passo por quadro, com
+// esquerda/direita), segurar numa barra de volume a leva ate o cursor; clique no "save settings and return" confirma. Devolve o codigo
+// que o screenOptions vai tratar.
+static uint32_t mouseInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t code)
 {
-    if (!g_ready.load(std::memory_order_relaxed) || (code != 1 && code != 2))
-        return;
+    static uint32_t s_seq = 0;
+    static int s_drag = -1, s_lastDir = 0;        // barra segurada (linha) e o ultimo passo dado nela
+    static int s_target = -1, s_targetRow = -1;   // valor pedido por clique na dificuldade (0..2) ou no audio (0 estereo, 1 mono)
+    const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+    const bool moved = seq != s_seq;
+    s_seq = seq;
+    Hover hv;
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        hv = g_hover;
+        v = g_view;
+    }
+    const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+    const bool held = IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !wotm::mouse::g_captured.load(std::memory_order_relaxed);
+    const uint32_t selAddr = wotm::sym::currentSelection + 4 * kScreen;
+    if (code != 0)
+    {
+        s_target = s_drag = -1;   // teclado ou controle: eles mandam
+        return code;
+    }
+    if (hv.row >= 0 && (moved || click) && hv.row != v.sel && s_drag < 0)
+    {
+        wotm_padsel::wr32(rdram, selAddr, static_cast<uint32_t>(kKeep[hv.row]));
+        if (!click) wotm_padsel::sfx(rdram, ctx, runtime, 4);
+        if (!click) return 0;
+        v.sel = hv.row;
+    }
+    if (click && hv.row == kRows - 1) return 6;
+    if (click && hv.row == 0)
+    {
+        int best = 0;
+        for (int i = 1; i < 3; ++i)
+            if (std::fabs(hv.x - kDiffX[i]) < std::fabs(hv.x - kDiffX[best])) best = i;
+        s_target = best;
+        s_targetRow = 0;
+    }
+    if (click && hv.row == 1)
+    {
+        s_target = std::fabs(hv.x - kMonoX) < std::fabs(hv.x - kStereoX) ? 1 : 0;
+        s_targetRow = 1;
+    }
+    if (click && (hv.row == 2 || hv.row == 3))
+    {
+        s_drag = hv.row;
+        s_lastDir = 0;
+    }
+    if (s_target >= 0)
+    {
+        if (v.sel != s_targetRow) { s_target = -1; return 0; }
+        const int cur = s_targetRow == 0 ? v.difficulty : int(v.mono);
+        if (cur == s_target) { s_target = -1; return 0; }
+        return s_target > cur ? 4 : 3;
+    }
+    if (s_drag >= 0)
+    {
+        if (!held || v.sel != s_drag) { s_drag = -1; return 0; }
+        const float want = std::clamp((hv.x - kBarX0) / (kBarX1 - kBarX0), 0.f, 1.f), cur = s_drag == 2 ? v.sfx : v.music;
+        const int dir = want > cur + 0.02f ? 1 : want < cur - 0.02f ? -1 : 0;
+        if (dir == 0 || (s_lastDir && dir != s_lastDir && !moved)) { s_lastDir = 0; return 0; }   // chegou (ou passou: espera o mouse)
+        s_lastDir = dir;
+        return dir > 0 ? 4 : 3;
+    }
+    return 0;
+}
+
+// screenGetInput(1) da tela 10, depois do jogo ler o codigo e antes do screenOptions trata-lo: cima/baixo pulam as linhas que sairam
+static uint32_t input(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t code)
+{
+    if (!g_ready.load(std::memory_order_relaxed))
+        return code;
+    code = mouseInput(rdram, ctx, runtime, code);
+    if (code != 1 && code != 2)
+        return code;
     const uint32_t selAddr = wotm::sym::currentSelection + 4 * kScreen;
     const int numSel = static_cast<int>(rd32(rdram, wotm::sym::numSelectables_2938));   // ultimo item (o jogo vai de 0 a ele)
     int r = rowOfItem(static_cast<int>(rd32(rdram, selAddr)));
@@ -125,6 +205,7 @@ static void input(uint8_t *rdram, uint32_t code)
     if (code == 2 && target == 0) from = numSel;
     if (code == 1 && target == numSel) from = 0;
     wotm_padsel::wr32(rdram, selAddr, static_cast<uint32_t>(from));
+    return code;
 }
 
 // ------------------------------------------------------------------ desenho (janela)
@@ -201,12 +282,12 @@ static void renderUi()
     text(*f, kLabels[kRows - 1], W * 0.5f, kRowY[kRows - 1] * H, kFont, kRows - 1 == v.sel ? selInk : ink, true);
     // valores: o atual em vermelho, os outros apagados
     static const char *const kDiff[3] = {"EASY", "MEDIUM", "HARD"};
-    const float diffX[3] = {W * 0.49f, W * 0.69f, W * 0.89f};
+    const float diffX[3] = {W * kDiffX[0], W * kDiffX[1], W * kDiffX[2]};
     for (int i = 0; i < 3; ++i) text(*f, kDiff[i], diffX[i], kRowY[0] * H, kFont, i == v.difficulty ? red : dim, true);
-    text(*f, "STEREO", W * 0.56f, kRowY[1] * H, kFont, v.mono ? dim : red, true);
-    text(*f, "MONO", W * 0.80f, kRowY[1] * H, kFont, v.mono ? red : dim, true);
+    text(*f, "STEREO", W * kStereoX, kRowY[1] * H, kFont, v.mono ? dim : red, true);
+    text(*f, "MONO", W * kMonoX, kRowY[1] * H, kFont, v.mono ? red : dim, true);
     // barras: trilho escuro, parte cheia vermelha e o cursor
-    const float bx0 = W * 0.40f, bx1 = W * 0.96f, bh = H * 0.05f;
+    const float bx0 = W * kBarX0, bx1 = W * kBarX1, bh = H * 0.05f;
     for (int i = 0; i < 2; ++i)
     {
         const float cy = kRowY[2 + i] * H, val = i == 0 ? v.sfx : v.music;
@@ -233,5 +314,21 @@ static void drawOnBoard(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
     const float bw = pl.x1 - pl.x0, bh = pl.y1 - pl.y0;
     const float wx = bw * 0.72f, hy = wx * float(kH) / float(kW);
     wotm_padsel::drawOnPlane(pl, g_rt.texture, pl.x0 + bw * 0.265f, pl.y1 - bh * 0.215f, wx, hy, v.alpha, 0.004f * bw);
+    // mouse: a linha sob ele (faixas de kRowY) e o x na textura
+    Hover hv;
+    float u, w;
+    wotm::mouse::claim();
+    if (v.alpha >= 1.f && wotm_padsel::hitOnPlane(cam, pl, pl.x0 + bw * 0.265f, pl.y1 - bh * 0.215f, wx, hy, u, w))
+        for (int r = 0; r < kRows; ++r)
+            if (std::fabs(w - kRowY[r]) < 0.085f) { hv.row = r; hv.x = u; }
+    static const bool log = std::getenv("WOTM_MENUMOUSELOG") != nullptr;
+    static int lastRow = -2;
+    if (log && hv.row != lastRow)
+    {
+        std::fprintf(stderr, "[menumouse] t=%.2f opcoes linha %d x %.2f\n", GetTime(), hv.row, hv.x);
+        lastRow = hv.row;
+    }
+    std::lock_guard<std::mutex> lk(g_m);
+    g_hover = hv;
 }
 } // namespace wotm_optscreen

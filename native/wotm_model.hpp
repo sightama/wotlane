@@ -207,7 +207,7 @@ inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t>
 // Texturas das particulas que os efeitos dos monstros usam. No jogo vem da fase (nos de particula com id1 0x1B58 + FxTextureId, lidos
 // pelo particleParseTexture no dbProcInteractive): nenhum .NGP de monstro nem do menu as traz. Aqui saem direto de LVL/CENTRAL.TEX/.RTX
 // (iguais nas outras fases, menos CANYON1/TOKYODM): FxTextureId 8 Fireball (texId 5, paleta tbp 13) e as do lens flare 15/17/18/19
-// (texIds 54/4/55/56, paletas 203/9/207/211). docs/investigacoes/2026-10-21/fogo_agamo.md e lens_flare_monstros.md.
+// (texIds 54/4/55/56, paletas 203/9/207/211). 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md e 75f5be1:docs/investigacoes/2026-10-21/lens_flare_monstros.md.
 struct FxTextures {
     bool ok = false;
     std::vector<TexImage> fireball, flare;   // flare[texInfo - 15]; o 16 nao e usado (fica vazio)

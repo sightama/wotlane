@@ -1,5 +1,5 @@
 // wotm_flame.hpp: fogo da cabeca do Agamo (preset 141 IdolHeadFlame) simulado sem o jogo, por field, como o particleEmit/particleMove
-// (docs/investigacoes/2026-10-21/fogo_agamo.md; conferido num dump de luta da ISLAND). Usado pela previa do monstro (wotm_model.hpp) e
+// (75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md; conferido num dump de luta da ISLAND). Usado pela previa do monstro (wotm_model.hpp) e
 // pelo modo foto (o jogo pausado nao emite: com o Agamo fora da tela na pausa, as particulas ja tinham acabado).
 #pragma once
 #include <algorithm>

@@ -159,14 +159,19 @@ class Launcher : Form
             foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
             matchOn.Checked = false;
             matchPlayer.SelectedIndex = 0;
+            matchPlayerSkin.SelectedIndex = 0;
             matchLevel.SelectedIndex = 0;
-            for (int i = 0; i < matchAIs.Length; ++i) matchAIs[i].SelectedIndex = i == 0 ? 1 : 0;
+            for (int i = 0; i < matchAIs.Length; ++i) { matchAIs[i].SelectedIndex = i == 0 ? 1 : 0; matchAISkins[i].SelectedIndex = 0; }
             foreach (CheckBox c in cheatBoxes) c.Checked = false;
             cheatStamina.SelectedIndex = 0;
             cheatWin.Value = 0;
         };
         buttons.Controls.Add(play);
         buttons.Controls.Add(log);
+        var modkit = new Button { Text = "Mod kit", AutoSize = true };
+        modkit.Click += delegate { OpenModKit(); };
+        tips.SetToolTip(modkit, "Extract textures and sounds from the disc, edit them and pack them into mods\\<mod>\\ (docs\\passos\\MODS.md).");
+        buttons.Controls.Add(modkit);
         buttons.Controls.Add(reset);
         root.Controls.Add(buttons);
         status.AutoSize = true;
@@ -178,7 +183,8 @@ class Launcher : Form
         FormClosing += delegate { SaveIni(); };
     }
 
-    // Partida direta (WOTM_MATCH=<jogador>[,<ia>...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime aceita ate 7 IAs (8 monstros).
+    // Partida direta (WOTM_MATCH=<jogador>[:<skin>][,<ia>[:<skin>]...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime
+    // aceita ate 7 IAs (8 monstros). Skin = figurino 0..3 (arquivos <PREFIXO>0-3 em disc\MON); "Random" (monstro ou skin) e sorteado no Play.
     // Fora da lista: Spider (6) e Ogre (12), cortados, e os chefes (13..15).
     static readonly int[] MonsterIds = { 1, 2, 3, 4, 5, 7, 8, 9, 10, 11 };
     static readonly string[] MonsterNames = { "Congar", "Robo-47", "Togera", "Ultra V", "Preytor", "Kineticlops", "Magmo", "Raptros", "Agamo", "Zorgulon" };
@@ -186,11 +192,35 @@ class Launcher : Form
     static readonly string[] LevelNames = { "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City", "Century Airfield", "Atomic Island",
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7;
+    const int RandomId = -1;   // id salvo no ini para "Random" (monstro e skin)
+    static readonly string[] SkinNames = { "Skin 1", "Skin 2", "Skin 3", "Skin 4", "Random" };
+    static readonly Random rng = new Random();
 
     readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
+    readonly ComboBox matchPlayerSkin = SkinBox(90);
+    readonly ComboBox[] matchAISkins = new ComboBox[MatchMaxAIs];
+
+    static ComboBox SkinBox(int width)
+    {
+        var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width };
+        cb.Items.AddRange(SkinNames);
+        cb.SelectedIndex = 0;
+        return cb;
+    }
+
+    // indice da skin salva (0..3, RandomId = ultimo item)
+    static int SkinIndex(Dictionary<string, string> saved, string key)
+    {
+        string v;
+        if (!saved.TryGetValue(key, out v)) return 0;
+        int n = ParseInt(v);
+        return n == RandomId ? SkinNames.Length - 1 : Math.Max(0, Math.Min(3, n));
+    }
+
+    static int SkinId(ComboBox cb) { return cb.SelectedIndex == SkinNames.Length - 1 ? RandomId : cb.SelectedIndex; }
     readonly Label matchInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
 
     GroupBox MatchGroup(Dictionary<string, string> saved, ToolTip tips)
@@ -207,8 +237,15 @@ class Launcher : Form
         inner.Controls.Add(matchOn);
 
         matchPlayer.Items.AddRange(MonsterNames);
-        matchPlayer.SelectedIndex = IndexOrZero(MonsterIds, saved, ":MatchPlayer");
-        inner.Controls.Add(Row("Your monster", matchPlayer));
+        matchPlayer.Items.Add("Random");
+        matchPlayer.SelectedIndex = saved.TryGetValue(":MatchPlayer", out v) && ParseInt(v) == RandomId ? MonsterNames.Length
+            : IndexOrZero(MonsterIds, saved, ":MatchPlayer");
+        tips.SetToolTip(matchPlayer, "'Random' draws one of the ten monsters when you press Play.");
+        matchPlayerSkin.SelectedIndex = SkinIndex(saved, ":MatchPlayerSkin");
+        tips.SetToolTip(matchPlayerSkin, SkinTip);
+        var you = Row("Your monster", matchPlayer);
+        you.Controls.Add(matchPlayerSkin);
+        inner.Controls.Add(you);
 
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
@@ -217,19 +254,27 @@ class Launcher : Form
         inner.Controls.Add(Row("Stage", matchLevel));
 
         inner.Controls.Add(new Label { Text = "AI opponents (up to 7; none = play solo on the stage):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
-        var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(400, 0), WrapContents = true };
+        var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(420, 0), WrapContents = true };
         for (int i = 0; i < MatchMaxAIs; ++i)
         {
-            var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 122 };
+            var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 112 };
             cb.Items.Add("-");
             cb.Items.AddRange(MonsterNames);
+            cb.Items.Add("Random");
             int id = saved.TryGetValue(":MatchAI" + (i + 1), out v) ? ParseInt(v) : (i == 0 ? MonsterIds[0] : 0);
             int k = Array.IndexOf(MonsterIds, id);
-            cb.SelectedIndex = k >= 0 ? k + 1 : 0;
+            cb.SelectedIndex = id == RandomId ? MonsterNames.Length + 1 : (k >= 0 ? k + 1 : 0);
             cb.SelectedIndexChanged += delegate { UpdateMatch(); };
-            tips.SetToolTip(cb, "A repeated monster gets the next costume, as in the menu. '-' = empty slot.");
+            tips.SetToolTip(cb, "'-' = empty slot. 'Random' draws one of the ten monsters when you press Play.");
             matchAIs[i] = cb;
-            foes.Controls.Add(cb);
+            var sk = SkinBox(80);
+            sk.SelectedIndex = SkinIndex(saved, ":MatchAI" + (i + 1) + "Skin");
+            tips.SetToolTip(sk, SkinTip);
+            matchAISkins[i] = sk;
+            var pair = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 6, 0) };
+            pair.Controls.Add(cb);
+            pair.Controls.Add(sk);
+            foes.Controls.Add(pair);
         }
         inner.Controls.Add(foes);
         matchInfo.ForeColor = DimColor;
@@ -241,6 +286,9 @@ class Launcher : Form
         return gb;
     }
 
+    const string SkinTip = "Costume (the game's 4 per monster; Agamo's Skin 4 is Mecha Sweet Tooth). Locked costumes work too. " +
+        "If the same monster already has that skin in the fight, it gets the next free one, as in the menu. 'Random' is drawn when you press Play.";
+
     int MatchFoes()
     {
         int n = 0;
@@ -251,21 +299,36 @@ class Launcher : Form
     void UpdateMatch()
     {
         bool on = matchOn.Checked;
-        matchPlayer.Enabled = matchLevel.Enabled = on;
-        foreach (ComboBox cb in matchAIs) cb.Enabled = on;
+        matchPlayer.Enabled = matchPlayerSkin.Enabled = matchLevel.Enabled = on;
+        for (int i = 0; i < matchAIs.Length; ++i)
+        {
+            matchAIs[i].Enabled = on;
+            if (matchAISkins[i] != null) matchAISkins[i].Enabled = on && matchAIs[i].SelectedIndex > 0;
+        }
         int total = 1 + MatchFoes();
         string txt = total == 1 ? "Solo: just you on the stage." : total + " monsters in the fight.";
         if (total > 4) txt += " Without the enemy bars (Recompiled options, in the main menu), only 4 enemies get an off-screen health marker.";
         matchInfo.Text = txt;
     }
 
+    // "<monstro>:<skin>", com os "Random" sorteados aqui (k = indice em MonsterIds, MonsterIds.Length = Random)
+    static string MatchEntry(int k, ComboBox skin)
+    {
+        if (k >= MonsterIds.Length) k = rng.Next(MonsterIds.Length);
+        int s = skin.SelectedIndex >= 4 ? rng.Next(4) : skin.SelectedIndex;
+        return MonsterIds[k] + ":" + s;
+    }
+
     string MatchValue()
     {
-        var parts = new List<string> { MonsterIds[matchPlayer.SelectedIndex].ToString() };
-        foreach (ComboBox cb in matchAIs) if (cb.SelectedIndex > 0) parts.Add(MonsterIds[cb.SelectedIndex - 1].ToString());
+        var parts = new List<string> { MatchEntry(matchPlayer.SelectedIndex, matchPlayerSkin) };
+        for (int i = 0; i < matchAIs.Length; ++i)
+            if (matchAIs[i].SelectedIndex > 0) parts.Add(MatchEntry(matchAIs[i].SelectedIndex - 1, matchAISkins[i]));
         parts.Add(LevelIds[matchLevel.SelectedIndex].ToString());
         return string.Join(",", parts.ToArray());
     }
+
+    static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
 
     // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
     static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
@@ -350,10 +413,14 @@ class Launcher : Form
         var lines = new List<string>();
         foreach (var kv in boxes) lines.Add(kv.Key.Key + "|" + (kv.Value.Checked ? "1" : "0"));
         lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
-        lines.Add(":MatchPlayer|" + MonsterIds[matchPlayer.SelectedIndex]);
+        lines.Add(":MatchPlayer|" + MonsterId(matchPlayer.SelectedIndex));
+        lines.Add(":MatchPlayerSkin|" + SkinId(matchPlayerSkin));
         lines.Add(":MatchLevel|" + LevelIds[matchLevel.SelectedIndex]);
         for (int i = 0; i < matchAIs.Length; ++i)
-            lines.Add(":MatchAI" + (i + 1) + "|" + (matchAIs[i].SelectedIndex > 0 ? MonsterIds[matchAIs[i].SelectedIndex - 1] : 0));
+        {
+            lines.Add(":MatchAI" + (i + 1) + "|" + (matchAIs[i].SelectedIndex > 0 ? MonsterId(matchAIs[i].SelectedIndex - 1) : 0));
+            lines.Add(":MatchAI" + (i + 1) + "Skin|" + SkinId(matchAISkins[i]));
+        }
         for (int i = 0; i < CheatKeys.Length; ++i) lines.Add(":Cheat_" + CheatKeys[i] + "|" + (cheatBoxes[i].Checked ? "1" : "0"));
         lines.Add(":CheatStamina|" + cheatStamina.SelectedIndex);
         lines.Add(":CheatWin|" + (int)cheatWin.Value);
@@ -425,6 +492,24 @@ class Launcher : Form
             Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
         }
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
+    }
+
+    // Kit de mods (tools\modkit_gui.py, docs\passos\MODS.md): pythonw sem console; sem ele, python
+    void OpenModKit()
+    {
+        string script = Path.Combine(exeDir, "tools", "modkit_gui.py");
+        if (!File.Exists(script)) { status.Text = "tools\\modkit_gui.py not found next to the launcher."; return; }
+        foreach (string py in new[] { "pythonw.exe", "pyw.exe", "python.exe", "py.exe" })
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(py, "\"" + script + "\"") { WorkingDirectory = exeDir, UseShellExecute = false });
+                status.Text = "Mod kit opened.";
+                return;
+            }
+            catch (Exception) { }
+        }
+        status.Text = "Python not found: install Python 3 (with Pillow: pip install pillow) to use the mod kit.";
     }
 
     void OpenLog()
