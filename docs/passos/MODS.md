@@ -26,11 +26,16 @@ log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[
 2. **Edit in the work folder** (direita): um grupo por arquivo do disco ("MON/MONKEY0 (Congar, costume 1)"); depois de extrair, o
    grupo novo abre e os outros fecham. Miniaturas, tamanho e estado ("edited" = mudou desde a extração). Textura que o export não
    conseguiu colorir sai em cinza com `_sempaleta` no nome; o `pack` grava sem o sufixo (o jogo aceita os dois). Prévia
-   da imagem (com xadrez atrás do alfa) ou "Play" para o som. Duplo clique abre no programa padrão do Windows; "Show in folder"
-   abre o Explorer no arquivo; "Remove" apaga da pasta de trabalho.
-3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods"; o log aparece embaixo.
+   da imagem (com xadrez atrás do alfa) ou a forma de onda do som. Som toca na própria janela ao clicar ("play sounds on click"
+   desliga) ou no duplo clique; "Stop" para. Duplo clique numa textura abre no editor escolhido em **Editors...** (um programa por
+   tipo, `.png` e `.wav`; vazio = programa padrão do Windows; com editor de `.wav` definido, o duplo clique no som abre nele).
+   Botão direito na lista: Play, Open in ..., **Open with...** (escolhe o programa e pergunta se vira o padrão), Show in folder,
+   **Save to folder...** (copia os selecionados, ou o grupo inteiro, para uma pasta) e Remove (tecla Del também).
+3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods". O log fica embaixo, com
+   divisória arrastável para cima e para baixo.
 
-As pastas (disco e mods) e o último mod ficam em `~/.wotm_modkit.json`. Por baixo são as mesmas funções do `modkit.py` abaixo.
+As pastas (disco e mods), o último mod, os editores, a altura do log e a última pasta do "Save to folder" ficam em
+`~/.wotm_modkit.json`. Por baixo são as mesmas funções do `modkit.py` abaixo.
 
 ## O kit na linha de comando (`tools/modkit.py`)
 

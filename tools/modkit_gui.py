@@ -5,9 +5,10 @@
 
 Textos da janela em ingles (pedido do dono). Esquerda: o disco por nome (monstros e trajes, fases, menu, bancos de som, musicas);
 duplo clique ou "Extract selected" manda para a pasta de trabalho (<mods>/_work). Direita: a pasta de trabalho com miniaturas;
-"edited" = mudou desde a extracao (vai no proximo pacote). Duplo clique abre no programa padrao do Windows. Embaixo: o nome do mod,
-"Pack edited files into mod" (modkit pack) e "Check mods" (modkit check). As pastas ficam em ~/.wotm_modkit.json. Precisa do
-Pillow (pip install pillow) para as miniaturas.
+"edited" = mudou desde a extracao (vai no proximo pacote). Duplo clique abre a textura no editor escolhido em "Editors..." (ou no
+programa padrao do Windows) e toca o som na propria janela; botao direito: Play, Open with..., Save to folder..., Remove. Embaixo:
+o nome do mod, "Pack edited files into mod" (modkit pack) e "Check mods" (modkit check); o log tem divisoria arrastavel. Pastas,
+editores e altura do log ficam em ~/.wotm_modkit.json. Precisa do Pillow (pip install pillow) para as miniaturas.
 """
 import io
 import json
@@ -15,9 +16,11 @@ import os
 import queue
 import subprocess
 import sys
+import shutil
 import threading
 import traceback
 import wave
+from array import array
 from contextlib import redirect_stderr, redirect_stdout
 
 import tkinter as tk
@@ -76,6 +79,9 @@ class App:
         self.mod = tk.StringVar(value=self.conf.get("mod", "my_mod"))
         self.only_edited = tk.BooleanVar(value=False)
         self.filter = tk.StringVar()
+        self.autoplay = tk.BooleanVar(value=self.conf.get("autoplay", True))
+        self.editors = dict(self.conf.get("editors") or {})   # ".png" -> executavel; sem entrada: programa padrao do Windows
+        self.last_played = None
         self.log_q = queue.Queue()
         self.busy = False
         self.thumbs = {}      # caminho -> (mtime, PhotoImage)
@@ -125,7 +131,13 @@ class App:
         self.disc.trace_add("write", lambda *_: self.on_paths())
         self.mods.trace_add("write", lambda *_: self.on_paths())
 
-        panes = ttk.PanedWindow(self.root, orient="horizontal")
+        # divisoria vertical: em cima o trabalho, embaixo o log (arrastar a borda muda a altura do log)
+        vsplit = ttk.PanedWindow(self.root, orient="vertical")
+        vsplit.pack(fill="both", expand=True)
+        upper = ttk.Frame(vsplit)
+        vsplit.add(upper, weight=5)
+        self.vsplit = vsplit
+        panes = ttk.PanedWindow(upper, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=10, pady=4)
 
         # esquerda: disco
@@ -143,7 +155,7 @@ class App:
         self.disc_tree.pack(fill="both", expand=True)
         self.disc_tree.bind("<Double-1>", lambda e: self.export_selected())
         b = ttk.Frame(left)
-        b.pack(fill="x", pady=(6, 0))
+        b.pack(fill="x", pady=(6, 0), side="bottom", before=self.disc_tree)
         self.btn_export = ttk.Button(b, text="Extract selected  >>", style="Accent.TButton", command=self.export_selected)
         self.btn_export.pack(side="right")
 
@@ -171,17 +183,21 @@ class App:
         self.work_tree.configure(yscrollcommand=sb.set)
         self.work_tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
-        self.work_tree.bind("<<TreeviewSelect>>", lambda e: self.show_preview())
-        self.work_tree.bind("<Double-1>", lambda e: self.open_selected())
+        self.work_tree.bind("<<TreeviewSelect>>", lambda e: self.on_select())
+        self.work_tree.bind("<Double-1>", self.on_double)
+        self.work_tree.bind("<Button-3>", self.context_menu)
+        self.work_tree.bind("<Delete>", lambda e: self.remove_selected())
+        self.menu = tk.Menu(self.root, tearoff=0, bg=BG2, fg=FG, activebackground=ACC, activeforeground="white", bd=0)
 
         pv = ttk.Frame(body, padding=(8, 0, 0, 0))
         body.add(pv, weight=2)
         self.canvas = tk.Canvas(pv, bg=BG2, highlightthickness=0, height=300)
-        self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Configure>", lambda e: self.show_preview())
-        self.pv_label = ttk.Label(pv, text="", style="Dim.TLabel", wraplength=360, justify="left")
+        foot = ttk.Frame(pv)   # legenda e botoes presos embaixo; a previa fica com o que sobra
+        foot.pack(side="bottom", fill="x")
+        self.pv_label = ttk.Label(foot, text="", style="Dim.TLabel", wraplength=360, justify="left")
         self.pv_label.pack(fill="x", pady=4)
-        pb = ttk.Frame(pv)
+        pb = ttk.Frame(foot)
         pb.pack(fill="x")
         ttk.Button(pb, text="Open in editor", command=self.open_selected).pack(side="left")
         ttk.Button(pb, text="Show in folder", command=self.reveal_selected).pack(side="left", padx=4)
@@ -189,10 +205,16 @@ class App:
         self.btn_play.pack(side="left")
         ttk.Button(pb, text="Stop", command=self.stop_sound).pack(side="left", padx=4)
         ttk.Button(pb, text="Remove", command=self.remove_selected).pack(side="right")
+        pb2 = ttk.Frame(foot)
+        pb2.pack(fill="x", pady=(4, 0))
+        ttk.Checkbutton(pb2, text="play sounds on click", variable=self.autoplay).pack(side="left")
+        ttk.Button(pb2, text="Editors...", command=self.editors_dialog).pack(side="right")
+        # a previa por ultimo: com pouca altura ela encolhe e os botoes ficam
+        self.canvas.pack(fill="both", expand=True)
 
         # embaixo: mod + log
-        bot = ttk.Frame(self.root, padding=(10, 4, 10, 8))
-        bot.pack(fill="x")
+        bot = ttk.Frame(upper, padding=(10, 4, 10, 8))
+        bot.pack(fill="x", side="bottom", before=panes)   # antes da area elastica: nao some com o log alto
         ttk.Label(bot, text="3. Mod", style="Head.TLabel").pack(side="left")
         self.mod_box = ttk.Combobox(bot, textvariable=self.mod, width=28)
         self.mod_box.pack(side="left", padx=8)
@@ -204,11 +226,17 @@ class App:
         self.status = ttk.Label(bot, text="", style="Dim.TLabel")
         self.status.pack(side="right")
 
-        lf = ttk.Frame(self.root, padding=(10, 0, 10, 10))
-        lf.pack(fill="x")
-        self.log = tk.Text(lf, height=9, bg="#141414", fg="#cfcfcf", insertbackground=FG, relief="flat", font=("Consolas", 9),
+        lf = ttk.Frame(vsplit, padding=(10, 0, 10, 10))
+        vsplit.add(lf, weight=1)
+        self.log = tk.Text(lf, height=4, bg="#141414", fg="#cfcfcf", insertbackground=FG, relief="flat", font=("Consolas", 9),
                            wrap="none")
-        self.log.pack(fill="x")
+        lsb = ttk.Scrollbar(lf, orient="vertical", command=self.log.yview)
+        self.log.configure(yscrollcommand=lsb.set)
+        self.log.pack(side="left", fill="both", expand=True)
+        lsb.pack(side="right", fill="y")
+        vsplit.bind("<ButtonRelease-1>", lambda e: self.clamp_log())
+        # altura do log da ultima vez (ou ~9 linhas)
+        self.root.after(50, lambda: (self.vsplit.sashpos(0, self.vsplit.winfo_height() - int(self.conf.get("log_height", 170))), self.clamp_log()))
         self.log.tag_configure("warn", foreground=EDIT)
         self.log.tag_configure("err", foreground="#ff6b6b")
         self.say("Mod kit. Extract something from the disc, edit it in the work folder and pack it into a mod. No game files go into the repo.\n")
@@ -234,12 +262,29 @@ class App:
         except (OSError, ValueError):
             return {}
 
-    def close(self):
+    def clamp_log(self):
+        """Divisoria do log: no minimo ~3 linhas de log e espaco para as listas e os botoes em cima."""
+        try:
+            h = self.vsplit.winfo_height()
+            self.vsplit.sashpos(0, min(max(self.vsplit.sashpos(0), 360), h - 60))
+        except tk.TclError:
+            pass
+
+    def save_conf(self):
+        c = self.conf
+        c.update(disc=self.disc.get(), mods=self.mods.get(), mod=self.mod.get(), autoplay=self.autoplay.get(), editors=self.editors)
+        try:
+            c["log_height"] = max(60, self.vsplit.winfo_height() - self.vsplit.sashpos(0))
+        except tk.TclError:
+            pass
         try:
             with open(CONF, "w", encoding="utf-8") as f:
-                json.dump({"disc": self.disc.get(), "mods": self.mods.get(), "mod": self.mod.get()}, f, indent=1)
+                json.dump(c, f, indent=1)
         except OSError:
             pass
+
+    def close(self):
+        self.save_conf()
         self.stop_sound()
         self.root.destroy()
 
@@ -464,7 +509,8 @@ class App:
         c.delete("all")
         files = self.selected_files()
         if not files:
-            self.pv_label.configure(text="Select a file in the work folder. Double-click opens it in the default Windows editor.")
+            self.pv_label.configure(text="Select a file in the work folder. Double-click opens a texture in its editor (\"Editors...\") "
+                                         "and plays a sound; right-click for more (Save to folder...).")
             return
         p = files[0]
         w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
@@ -493,16 +539,190 @@ class App:
                     int(m.group(3)), m.group(1).upper(), ".RTX" if m.group(2) else ".TEX")
         elif p.lower().endswith(".wav"):
             text += "  " + self.info(p)
-            c.create_text(w // 2, h // 2, text="sound", fill=DIM, font=("Segoe UI", 20))
+            if not self.waveform(p, w, h):
+                c.create_text(w // 2, h // 2, text="sound", fill=DIM, font=("Segoe UI", 20))
             mb = modkit.BNK_RE.match(os.path.basename(p))
             text += "\n%s" % ("Sound %d of bank %s.BNK" % (int(mb.group(2)), mb.group(1).upper()) if mb else "Music or voice (.VPK/.VAG)")
         if len(files) > 1:
             text += "\n(%d selected)" % len(files)
         self.pv_label.configure(text=text)
 
+    def on_select(self):
+        self.show_preview()
+        files = self.selected_files()
+        if self.autoplay.get() and len(files) == 1 and files[0].lower().endswith(".wav") and files[0] != self.last_played:
+            self.play_selected()
+
+    def on_double(self, e):
+        row = self.work_tree.identify_row(e.y)
+        if not row or row.startswith("grp:"):
+            return   # duplo clique no grupo so abre/fecha
+        if row.lower().endswith(".wav") and not self.editors.get(".wav"):
+            self.play_selected()   # som toca aqui; com editor de .wav definido, abre nele
+        else:
+            self.open_selected()
+
+    @staticmethod
+    def ext_of(p):
+        return os.path.splitext(p)[1].lower()
+
+    def waveform(self, p, w, h):
+        """Desenha a forma de onda do WAV (PCM 8/16 bits) na previa. False se nao deu."""
+        try:
+            with wave.open(p) as wf:
+                sw, ch, n = wf.getsampwidth(), wf.getnchannels(), wf.getnframes()
+                raw = wf.readframes(min(n, 4_000_000))
+        except Exception:
+            return False
+        if sw == 2:
+            a = array("h")
+            a.frombytes(raw[:len(raw) // 2 * 2])
+            if sys.byteorder == "big":
+                a.byteswap()
+            full = 32768.0
+        elif sw == 1:
+            a = [b - 128 for b in raw]
+            full = 128.0
+        else:
+            return False
+        a = a[::ch]   # so o primeiro canal
+        if not len(a):
+            return False
+        cols = max(1, w - 16)
+        step = max(1, len(a) // cols)
+        mid, amp = h / 2, (h - 24) / 2
+        c = self.canvas
+        c.create_line(8, mid, w - 8, mid, fill="#444")
+        for x in range(cols):
+            seg = a[x * step:(x + 1) * step]
+            if not len(seg):
+                break
+            lo, hi = min(seg), max(seg)
+            c.create_line(8 + x, mid - hi / full * amp, 8 + x, mid - lo / full * amp + 1, fill=ACC)
+        return True
+
     def open_selected(self):
         for p in self.selected_files()[:8]:
-            self.open_path(p)
+            exe = self.editors.get(self.ext_of(p))
+            if exe:
+                self.open_with(p, exe)
+            else:
+                self.open_path(p)
+
+    def open_with(self, p, exe):
+        try:
+            subprocess.Popen([exe, os.path.normpath(p)])
+        except OSError as ex:
+            self.say("Could not start %s: %s\n" % (exe, ex), "err")
+
+    def pick_exe(self, ext):
+        exe = filedialog.askopenfilename(parent=self.root, title="Program to open %s files" % ext,
+                                         filetypes=[("Programs", "*.exe"), ("All files", "*.*")],
+                                         initialdir=os.path.dirname(self.editors.get(ext, "")) or os.environ.get("ProgramFiles", "C:\\"))
+        return os.path.normpath(exe) if exe else None
+
+    def open_with_dialog(self):
+        files = self.selected_files()
+        if not files:
+            return
+        ext = self.ext_of(files[0])
+        exe = self.pick_exe(ext)
+        if not exe:
+            return
+        if messagebox.askyesno("Open with", "Always open %s files with %s?" % (ext, os.path.basename(exe)), parent=self.root):
+            self.editors[ext] = exe
+            self.save_conf()
+        for p in files[:8]:
+            self.open_with(p, exe)
+
+    def editors_dialog(self):
+        d = tk.Toplevel(self.root, bg=BG)
+        d.title("Editors")
+        d.transient(self.root)
+        d.resizable(True, False)
+        fr = ttk.Frame(d, padding=12)
+        fr.pack(fill="both", expand=True)
+        ttk.Label(fr, text="Program used by \"Open in editor\" and double-click, per file type.\nEmpty = the Windows default "
+                           "(for sounds: play here in the kit).", style="Dim.TLabel", justify="left").grid(row=0, column=0, columnspan=4,
+                                                                                                         sticky="w", pady=(0, 8))
+        rows = {}
+        exts = [".png", ".wav"] + sorted(e for e in self.editors if e not in (".png", ".wav"))
+        for r, ext in enumerate(exts, 1):
+            v = tk.StringVar(value=self.editors.get(ext, ""))
+            rows[ext] = v
+            ttk.Label(fr, text={".png": "Textures (.png)", ".wav": "Sounds (.wav)"}.get(ext, ext)).grid(row=r, column=0, sticky="w", padx=(0, 8))
+            ttk.Entry(fr, textvariable=v, width=60).grid(row=r, column=1, sticky="ew", pady=2)
+            ttk.Button(fr, text="...", width=3, command=lambda e=ext, v=v: v.set(self.pick_exe(e) or v.get())).grid(row=r, column=2, padx=4)
+            ttk.Button(fr, text="Clear", command=lambda v=v: v.set("")).grid(row=r, column=3)
+        fr.columnconfigure(1, weight=1)
+
+        def ok():
+            for ext, v in rows.items():
+                exe = v.get().strip().strip('"')
+                if exe:
+                    self.editors[ext] = exe
+                else:
+                    self.editors.pop(ext, None)
+            self.save_conf()
+            d.destroy()
+
+        b = ttk.Frame(fr)
+        b.grid(row=len(exts) + 1, column=0, columnspan=4, sticky="e", pady=(10, 0))
+        ttk.Button(b, text="OK", style="Accent.TButton", command=ok).pack(side="left")
+        ttk.Button(b, text="Cancel", command=d.destroy).pack(side="left", padx=(6, 0))
+        d.grab_set()
+
+    def context_menu(self, e):
+        t = self.work_tree
+        row = t.identify_row(e.y)
+        if row and row not in t.selection():
+            t.selection_set(row)
+            t.focus(row)
+        files = self.selected_files()
+        m = self.menu
+        m.delete(0, "end")
+        if not files:
+            m.add_command(label="Open work folder", command=lambda: self.open_path(self.work()))
+        else:
+            n = len(files)
+            wav = any(p.lower().endswith(".wav") for p in files)
+            if wav:
+                m.add_command(label="Play", command=self.play_selected)
+            exe = self.editors.get(self.ext_of(files[0]))
+            m.add_command(label="Open in %s" % (os.path.splitext(os.path.basename(exe))[0] if exe else "default program"),
+                          command=self.open_selected)
+            m.add_command(label="Open with...", command=self.open_with_dialog)
+            m.add_command(label="Show in folder", command=self.reveal_selected)
+            m.add_separator()
+            m.add_command(label="Save to folder... (%d file%s)" % (n, "" if n == 1 else "s"), command=self.save_to_folder)
+            m.add_separator()
+            m.add_command(label="Remove from work folder", command=self.remove_selected)
+        m.tk_popup(e.x_root, e.y_root)
+        m.grab_release()
+
+    def save_to_folder(self):
+        files = self.selected_files()
+        if not files:
+            return
+        d = filedialog.askdirectory(parent=self.root, title="Save %d file(s) to" % len(files),
+                                    initialdir=self.conf.get("save_dir") or os.path.expanduser("~"))
+        if not d:
+            return
+        d = os.path.normpath(d)
+        self.conf["save_dir"] = d
+        exist = [p for p in files if os.path.exists(os.path.join(d, os.path.basename(p)))]
+        if exist and not messagebox.askyesno("Save to folder", "%d file(s) already exist in %s. Overwrite?" % (len(exist), d),
+                                             parent=self.root):
+            files = [p for p in files if p not in exist]
+        n = 0
+        for p in files:
+            try:
+                shutil.copy2(p, os.path.join(d, os.path.basename(p)))
+                n += 1
+            except OSError as ex:
+                self.say("%s\n" % ex, "err")
+        self.say("Saved %d file(s) to %s\n" % (n, d))
+        self.save_conf()
 
     def reveal_selected(self):
         files = self.selected_files()
@@ -524,14 +744,15 @@ class App:
         wavs = [p for p in self.selected_files() if p.lower().endswith(".wav")]
         if not wavs:
             return
+        self.last_played = wavs[0]
         try:
             import winsound
-            winsound.PlaySound(wavs[0], winsound.SND_FILENAME | winsound.SND_ASYNC)
+            winsound.PlaySound(wavs[0], winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
         except Exception as ex:
             self.say("Could not play: %s\n" % ex, "err")
 
-    @staticmethod
-    def stop_sound():
+    def stop_sound(self):
+        self.last_played = None
         try:
             import winsound
             winsound.PlaySound(None, 0)
