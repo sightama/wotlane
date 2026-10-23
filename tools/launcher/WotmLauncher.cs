@@ -193,34 +193,109 @@ class Launcher : Form
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7;
     const int RandomId = -1;   // id salvo no ini para "Random" (monstro e skin)
-    static readonly string[] SkinNames = { "Skin 1", "Skin 2", "Skin 3", "Skin 4", "Random" };
     static readonly Random rng = new Random();
+    // Nome do jogo e prefixo dos arquivos em MON\ de cada monstro de MonsterIds (o skin.json aceita os dois)
+    static readonly string[] MonsterGameNames = { "congar", "robo-47", "togera", "ultra-v", "preytor", "kineticlops", "magmo", "raptros", "agamo", "zorgulon" };
+    static readonly string[] MonsterPrefixes = { "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN" };
 
     readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
-    readonly ComboBox matchPlayerSkin = SkinBox(90);
+    readonly ComboBox matchPlayerSkin = SkinBox(120);
     readonly ComboBox[] matchAISkins = new ComboBox[MatchMaxAIs];
+
+    // Item da caixa de skin: o texto e o valor do WOTM_MATCH ("0".."3", o id da skin de mod, "random")
+    class SkinItem
+    {
+        public string Label, Value;
+        public SkinItem(string label, string value) { Label = label; Value = value; }
+        public override string ToString() { return Label; }
+    }
+    const string RandomSkin = "random";
+
+    // Skins de mod (discroot\mods\<mod>\skins\<pasta>\skin.json, MODS.md) por indice em MonsterIds: (nome, id)
+    readonly List<KeyValuePair<string, string>>[] modSkins = new List<KeyValuePair<string, string>>[10];
+
+    static string Norm(string s)
+    {
+        var b = new System.Text.StringBuilder();
+        foreach (char c in s) if (char.IsLetterOrDigit(c)) b.Append(char.ToLowerInvariant(c));
+        return b.ToString();
+    }
+    static string JsonString(string json, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(json, "\"" + key + "\"\\s*:\\s*\"([^\"]*)\"");
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    // Mesma regra do runtime (wotm_mods.hpp): pastas com '_' ou '.' no comeco ficam de fora; sem id, o nome da pasta; mesmo
+    // monstro e id em dois mods, vale o ultimo em ordem alfabetica.
+    void LoadModSkins()
+    {
+        for (int k = 0; k < modSkins.Length; ++k) modSkins[k] = new List<KeyValuePair<string, string>>();
+        string rt = KnownRuntimeDir();
+        if (rt == null) return;
+        string mods = Path.Combine(Path.Combine(rt, "discroot"), "mods");
+        if (!Directory.Exists(mods)) return;
+        var dirs = new List<string>(Directory.GetDirectories(mods));
+        dirs.Sort(StringComparer.OrdinalIgnoreCase);
+        var byKey = new SortedDictionary<string, KeyValuePair<int, KeyValuePair<string, string>>>(StringComparer.Ordinal);
+        foreach (string mod in dirs)
+        {
+            string n = Path.GetFileName(mod);
+            if (n.StartsWith("_") || n.StartsWith(".")) continue;
+            string skinsDir = Path.Combine(mod, "skins");
+            if (!Directory.Exists(skinsDir)) continue;
+            foreach (string dir in Directory.GetDirectories(skinsDir))
+            {
+                string js = Path.Combine(dir, "skin.json");
+                if (!File.Exists(js)) continue;
+                string text;
+                try { text = File.ReadAllText(js); } catch (IOException) { continue; }
+                string mon = JsonString(text, "monster");
+                if (mon == null) continue;
+                int k = -1;
+                for (int i = 0; i < MonsterGameNames.Length; ++i)
+                    if (Norm(mon) == Norm(MonsterGameNames[i]) || Norm(mon) == Norm(MonsterPrefixes[i])) k = i;
+                if (k < 0) continue;
+                string id = (JsonString(text, "id") ?? Path.GetFileName(dir)).ToLowerInvariant();
+                string name = JsonString(text, "name") ?? id.ToUpperInvariant();
+                byKey[k + "/" + id] = new KeyValuePair<int, KeyValuePair<string, string>>(k, new KeyValuePair<string, string>(name, id));
+            }
+        }
+        foreach (var kv in byKey) modSkins[kv.Value.Key].Add(kv.Value.Value);
+    }
 
     static ComboBox SkinBox(int width)
     {
-        var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width };
-        cb.Items.AddRange(SkinNames);
-        cb.SelectedIndex = 0;
-        return cb;
+        return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width, DropDownWidth = 180 };
     }
 
-    // indice da skin salva (0..3, RandomId = ultimo item)
-    static int SkinIndex(Dictionary<string, string> saved, string key)
+    // Itens da caixa de skin para o monstro k (indice em MonsterIds; fora dele = Random: so os 4 do disco)
+    void FillSkins(ComboBox cb, int k, string keep)
     {
-        string v;
-        if (!saved.TryGetValue(key, out v)) return 0;
-        int n = ParseInt(v);
-        return n == RandomId ? SkinNames.Length - 1 : Math.Max(0, Math.Min(3, n));
+        cb.BeginUpdate();
+        cb.Items.Clear();
+        for (int i = 0; i < 4; ++i) cb.Items.Add(new SkinItem("Skin " + (i + 1), i.ToString()));
+        if (k >= 0 && k < modSkins.Length && modSkins[k] != null)
+            foreach (var s in modSkins[k]) cb.Items.Add(new SkinItem(s.Key, s.Value));
+        cb.Items.Add(new SkinItem("Random", RandomSkin));
+        cb.EndUpdate();
+        cb.SelectedIndex = 0;
+        if (keep == RandomId.ToString()) keep = RandomSkin;   // ini de antes das skins de mod
+        for (int i = 0; i < cb.Items.Count; ++i)
+            if (((SkinItem)cb.Items[i]).Value == keep) cb.SelectedIndex = i;
     }
 
-    static int SkinId(ComboBox cb) { return cb.SelectedIndex == SkinNames.Length - 1 ? RandomId : cb.SelectedIndex; }
+    static string SkinId(ComboBox cb) { return cb.SelectedItem == null ? "0" : ((SkinItem)cb.SelectedItem).Value; }
+
+    // Monstro escolhido numa caixa (indice em MonsterIds; Random = MonsterIds.Length)
+    void WireSkins(ComboBox monster, ComboBox skin, int offset, string saved)
+    {
+        FillSkins(skin, monster.SelectedIndex - offset, saved);
+        monster.SelectedIndexChanged += delegate { FillSkins(skin, monster.SelectedIndex - offset, SkinId(skin)); };
+    }
     readonly Label matchInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
 
     GroupBox MatchGroup(Dictionary<string, string> saved, ToolTip tips)
@@ -241,7 +316,8 @@ class Launcher : Form
         matchPlayer.SelectedIndex = saved.TryGetValue(":MatchPlayer", out v) && ParseInt(v) == RandomId ? MonsterNames.Length
             : IndexOrZero(MonsterIds, saved, ":MatchPlayer");
         tips.SetToolTip(matchPlayer, "'Random' draws one of the ten monsters when you press Play.");
-        matchPlayerSkin.SelectedIndex = SkinIndex(saved, ":MatchPlayerSkin");
+        LoadModSkins();
+        WireSkins(matchPlayer, matchPlayerSkin, 0, saved.TryGetValue(":MatchPlayerSkin", out v) ? v : "0");
         tips.SetToolTip(matchPlayerSkin, SkinTip);
         var you = Row("Your monster", matchPlayer);
         you.Controls.Add(matchPlayerSkin);
@@ -268,7 +344,7 @@ class Launcher : Form
             tips.SetToolTip(cb, "'-' = empty slot. 'Random' draws one of the ten monsters when you press Play.");
             matchAIs[i] = cb;
             var sk = SkinBox(80);
-            sk.SelectedIndex = SkinIndex(saved, ":MatchAI" + (i + 1) + "Skin");
+            WireSkins(cb, sk, 1, saved.TryGetValue(":MatchAI" + (i + 1) + "Skin", out v) ? v : "0");
             tips.SetToolTip(sk, SkinTip);
             matchAISkins[i] = sk;
             var pair = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 6, 0) };
@@ -286,8 +362,9 @@ class Launcher : Form
         return gb;
     }
 
-    const string SkinTip = "Costume (the game's 4 per monster; Agamo's Skin 4 is Mecha Sweet Tooth). Locked costumes work too. " +
-        "If the same monster already has that skin in the fight, it gets the next free one, as in the menu. 'Random' is drawn when you press Play.";
+    const string SkinTip = "Costume (the game's 4 per monster; Agamo's Skin 4 is Mecha Sweet Tooth), then the mod skins of that monster " +
+        "(discroot\\mods\\<mod>\\skins\\, MODS.md). Locked costumes work too. If the same monster already has a disc skin in the fight, it gets " +
+        "the next free one, as in the menu; mod skins can repeat. 'Random' is drawn when you press Play.";
 
     int MatchFoes()
     {
@@ -311,11 +388,17 @@ class Launcher : Form
         matchInfo.Text = txt;
     }
 
-    // "<monstro>:<skin>", com os "Random" sorteados aqui (k = indice em MonsterIds, MonsterIds.Length = Random)
-    static string MatchEntry(int k, ComboBox skin)
+    // "<monstro>:<skin>", com os "Random" sorteados aqui (k = indice em MonsterIds, MonsterIds.Length = Random). Skin aleatoria:
+    // entre os 4 do disco e as skins de mod do monstro sorteado.
+    string MatchEntry(int k, ComboBox skin)
     {
         if (k >= MonsterIds.Length) k = rng.Next(MonsterIds.Length);
-        int s = skin.SelectedIndex >= 4 ? rng.Next(4) : skin.SelectedIndex;
+        string s = SkinId(skin);
+        if (s == RandomSkin)
+        {
+            int n = rng.Next(4 + modSkins[k].Count);
+            s = n < 4 ? n.ToString() : modSkins[k][n - 4].Value;
+        }
         return MonsterIds[k] + ":" + s;
     }
 
@@ -433,7 +516,7 @@ class Launcher : Form
         "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE" };
 
     // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
-    string RuntimeDir()
+    string KnownRuntimeDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_RECOMP_DIR");
         if (!string.IsNullOrEmpty(env) && File.Exists(Path.Combine(env, "run_live.ps1"))) return env;
@@ -443,6 +526,14 @@ class Launcher : Form
             string dir = File.ReadAllText(saved).Trim();
             if (File.Exists(Path.Combine(dir, "run_live.ps1"))) return dir;
         }
+        return null;
+    }
+    // Como o KnownRuntimeDir; sem pasta conhecida, pergunta
+    string RuntimeDir()
+    {
+        string known = KnownRuntimeDir();
+        if (known != null) return known;
+        string saved = Path.Combine(exeDir, ".wotm_recomp_dir");
         using (var dlg = new FolderBrowserDialog { Description = "Runtime folder (the one containing run_live.ps1)" })
         {
             if (dlg.ShowDialog(this) == DialogResult.OK && File.Exists(Path.Combine(dlg.SelectedPath, "run_live.ps1")))

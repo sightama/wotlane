@@ -92,6 +92,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_split4.inc"
 // Pasta mods/ que sobrepoe arquivos do disco (POS_FRONTEIRA.md, item 4): fileCdSearchFile e sceCdRead.
 #include "wotm_mods.inc"
+// Skins de mod na luta (item 8): sons do traje base e IAs sorteadas com skin
+#include "wotm_skins.inc"
 
 namespace
 {
@@ -956,6 +958,16 @@ namespace
         if (end == g_lastLoadEnd || end < kLoadBase)
             return;
         g_lastLoadEnd = end;
+        {
+            // Tetos que nao dependem da RAM (item 8: skins e arquivos de mod maiores que o do disco): texInfo tem 1000 entradas e o
+            // jogo so imprime "Texture count" ao passar (escreve depois do array); a VRAM residente (.RTX) estourada ja sai do jogo
+            // com "TRYING TO LOAD TOO MUCH TEXTURE". fileStatus.maxTexId (0x130) e o maior texId de cada arquivo, acumulado.
+            uint32_t maxTex = 0;
+            for (uint32_t i = 0; i < std::max(texN, resN); ++i)
+                maxTex = std::max<uint32_t>(maxTex, FAST_READ16(kFileStatus + 0x130 + 2 * i));
+            std::fprintf(stderr, "[wotm] carga da fase: %u de 1000 texIds%s\n", maxTex,
+                         maxTex >= 1000 ? " -- ALEM DO texInfo, espere corrupcao" : maxTex >= 900 ? " -- perto do teto do texInfo" : "");
+        }
         if (end > kHighBase)
         {   // area de cima: embaixo fica so o NGP da fase (fileStatus.ngpAddr[0] ate o fim do arquivo, guardado no log da carga)
             const double used = (end - kHighBase) / 1048576.0, left = (int64_t(PS2_RAM_SIZE) - end) / 1048576.0;
@@ -2428,6 +2440,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmVu1CheckInstall(runtime);
     extern void wotmVu0UcodeInstall(PS2Runtime &);   // wotm_live.inc: microcodigo do VU0 sem VIF0 no executavel do jogo
     wotmVu0UcodeInstall(runtime);
+    wotmSkinsInstall(runtime);   // por ultimo: embrulha os ganchos do SetPlayerMonster/SetAIMonster (split4, WOTM_AIVSAI)
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else
