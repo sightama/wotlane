@@ -552,14 +552,19 @@ static void applyVideoSettings()
         g_appliedVideo[k] = now[k];
 }
 
-// F11 alterna entre tela cheia e janela (a cada apresentacao, na thread da janela; vale no menu, nos filmes e na luta).
+// F11 alterna entre tela cheia e janela (a cada apresentacao, na thread da janela; vale no menu, nos filmes e na luta). Muda a
+// opcao DISPLAY MODE (e o settings.ini), que o applyVideoSettings aplica: o painel e o arquivo acompanham. A tela cheia volta a
+// ser a do ultimo tipo usado (sem borda ou exclusiva).
 static void fullscreenKey()
 {
+    if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
+    {
+        namespace st = wotm::settings;
+        st::set(st::Display, inFullscreen() ? 0 : g_fullscreenKind);
+    }
     applyVideoSettings();
     if (!g_localCollect)
         wotm_pad::mouseFrame();   // mouse na camera moderna (wotm_mouse.hpp)
-    if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
-        setFullscreen(!inFullscreen());
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
