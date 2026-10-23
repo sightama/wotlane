@@ -495,9 +495,13 @@ class App:
             pass
         return "%d KB" % max(1, os.path.getsize(p) // 1024)
 
-    def selected_files(self):
+    def selected_files(self, groups=False):
+        """Arquivos escolhidos na lista. groups=True: um grupo selecionado vale por todos os arquivos dele (Save to folder,
+        Remove); senao so as linhas de arquivo (abrir, tocar, previa: clicar numa secao nao abre tudo dela)."""
         t, out = self.work_tree, []
-        for i in t.selection():   # um grupo selecionado vale por todos os arquivos dele
+        for i in t.selection():
+            if i.startswith("grp:") and not groups:
+                continue
             for r in (t.get_children(i) if i.startswith("grp:") else (i,)):
                 p = os.path.join(self.work(), *r.split("/"))
                 if p not in out:
@@ -508,6 +512,11 @@ class App:
         c = self.canvas
         c.delete("all")
         files = self.selected_files()
+        allf = self.selected_files(groups=True)
+        if not files and allf:
+            self.pv_label.configure(text="%d file(s) in the selected section. Open it (arrow or double-click) and pick a file; "
+                                         "right-click saves or removes the whole section." % len(allf))
+            return
         if not files:
             self.pv_label.configure(text="Select a file in the work folder. Double-click opens a texture in its editor (\"Editors...\") "
                                          "and plays a sound; right-click for more (Save to folder...).")
@@ -679,12 +688,20 @@ class App:
             t.selection_set(row)
             t.focus(row)
         files = self.selected_files()
+        allf = self.selected_files(groups=True)
         m = self.menu
         m.delete(0, "end")
-        if not files:
+        if not allf:
             m.add_command(label="Open work folder", command=lambda: self.open_path(self.work()))
+        elif not files:   # so secoes: nada de abrir/tocar tudo de uma vez
+            n = len(allf)
+            m.add_command(label="Show in folder", command=self.reveal_selected)
+            m.add_separator()
+            m.add_command(label="Save to folder... (%d file%s)" % (n, "" if n == 1 else "s"), command=self.save_to_folder)
+            m.add_separator()
+            m.add_command(label="Remove from work folder (%d file%s)" % (n, "" if n == 1 else "s"), command=self.remove_selected)
         else:
-            n = len(files)
+            n = len(allf)
             wav = any(p.lower().endswith(".wav") for p in files)
             if wav:
                 m.add_command(label="Play", command=self.play_selected)
@@ -701,7 +718,7 @@ class App:
         m.grab_release()
 
     def save_to_folder(self):
-        files = self.selected_files()
+        files = self.selected_files(groups=True)
         if not files:
             return
         d = filedialog.askdirectory(parent=self.root, title="Save %d file(s) to" % len(files),
@@ -725,7 +742,7 @@ class App:
         self.save_conf()
 
     def reveal_selected(self):
-        files = self.selected_files()
+        files = self.selected_files(groups=True)
         if files:
             subprocess.Popen(["explorer", "/select,", os.path.normpath(files[0])])
         else:
@@ -760,7 +777,7 @@ class App:
             pass
 
     def remove_selected(self):
-        files = self.selected_files()
+        files = self.selected_files(groups=True)
         if not files or not messagebox.askyesno("Remove", "Delete %d file(s) from the work folder?\n(the disc and the mods do not change)"
                                                 % len(files), parent=self.root):
             return
