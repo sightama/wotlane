@@ -1637,6 +1637,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // textura da escolha de lados (fora do BeginTextureMode do quadro); a fonte e o atlas do texto do quadro anterior
         wotm_padsel::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
         wotm_mainmenu::renderUi(S.scene, ram, S.scene.text.empty() ? 0ull : S.scene.text.front().tex0);
+        // painel na pausa da luta: o atlas do ultimo quadro com texto (com o painel aberto o jogo nao escreve a lista da pausa)
+        wotm_mainmenu::renderPauseUi(S.scene, ram, wotm_photo::fontTex0(S.scene.text));
         wotm_optscreen::renderUi();
         if (wotm_legend::g_n)   // legenda nativa no lugar da do jogo (wotm_legend.inc): sem os icones de botao dele
         {
@@ -1720,6 +1722,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
+        wotm_mainmenu::drawPausePanel2d(RW, RH);   // painel "recompiled options" na pausa da luta (wotm_pausemenu.inc)
         {
             // Lista de saves (wotm_save.inc, na thread do EE): o nome do botao de confirmar no dispositivo de agora, para o "press ...
             // again to overwrite", e a legenda de baixo ao carregar (no menu; ao gravar, na fase, a faixa preta cobriria a luta)

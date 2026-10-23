@@ -1,7 +1,11 @@
 // wotm_pausemenu.inc: menu de pausa da luta (pauseLevelOverlay), incluido por wotm_live.inc depois do wotm_mainmenu.inc.
-//  - Sem o CONTROL SCHEME (CONTROL TYPE A/B/C): o teclado, o lock-on alternado e a troca de alvo supoem o tipo A, e com 3 ou 4
-//    jogadores a escolha gravava fora do m_ctlrCfg[2] (no m_vibration). A linha some (o texto dela nao e desenhado), o QUIT sobe para
-//    o lugar dela e o cursor a pula; o m_ctlrCfg fica no tipo A (wotm_mainmenu.inc, frame).
+//  - A linha do CONTROL SCHEME (CONTROL TYPE A/B/C) virou RECOMPILED OPTIONS: o X nela (ou o clique) abre o painel de opcoes do port
+//    (wotm_mainmenu.inc) no meio da luta. O esquema nao muda mais (esquerda/direita nessa linha nao chegam ao jogo): o teclado, o
+//    lock-on alternado e a troca de alvo supoem o tipo A, e com 3 ou 4 jogadores a escolha gravava fora do m_ctlrCfg[2] (no
+//    m_vibration).
+//  - Com o painel aberto o pauseLevelOverlay nao roda: o gancho dele roda o painel (wotm_mainmenu::pauseFrame) e devolve 0 ("continua
+//    na pausa"). O jogo nao le o pad nem desenha a lista; a luta continua desenhada atras do painel (2D, na janela). Depois de fechar,
+//    a entrada do jogo na pausa fica bloqueada ate soltarem o que fechou.
 //  - Mouse (etapa 9 da camera): passar por cima de um item escolhe, clique esquerdo confirma (X), direito e rodinha pelo wotm_pad.inc.
 //    O mesmo nos dialogos do displayDialog (ARE YOU SURE?, fins de luta, minigames), pelos itens que o setMenuFont marca.
 // O texto da pausa e do jogo (fontSpritePrintCenteredXY, unidades da tela do PS2: 640 x 224, x 0x140 no centro).
@@ -9,14 +13,18 @@ namespace wotm_pausemenu
 {
 using wotm_padsel::rd32;
 using wotm_padsel::wr32;
-constexpr int kItems = 5;                       // CONTINUE, RESTART, VIBRATION, CONTROL SCHEME, QUIT
-constexpr int kScheme = 3, kQuit = 4;
+constexpr int kItems = 5;                       // CONTINUE, RESTART, VIBRATION, RECOMPILED OPTIONS (o CONTROL SCHEME), QUIT
+constexpr int kOptions = 3;
 constexpr int kLineY[kItems] = {0x55, 0x5E, 0x67, 0x70, 0x79};   // y de cada linha no pauseLevelOverlay
+constexpr uint32_t kCross = 0x4000, kStart = 0x08, kLeft = 0x80, kRight = 0x20;   // mascaras do inputGetInput
 static PS2Runtime::RecompiledFunction g_origOverlay = nullptr, g_origPrint = nullptr, g_origSel = nullptr, g_origDialog = nullptr,
-                                      g_origMenuFont = nullptr, g_origTitleFont = nullptr, g_origDefSize = nullptr;
+                                      g_origMenuFont = nullptr, g_origTitleFont = nullptr, g_origDefSize = nullptr, g_origInput = nullptr,
+                                      g_origExit = nullptr;
 static uint32_t g_overlayRa = 0, g_selRa = 0, g_dialogRa = 0;
 static bool g_inOverlay = false, g_selPending = false, g_inDialog = false;
 static int g_selPrev = 0, g_selN = 0;
+// Dentro do checkInputForExit da pausa: o que as leituras do X e do Start deram (o bool "foi Start" dele fica na pilha, no scratchpad)
+static bool g_inExit = false, g_sawCross = false, g_sawStart = false;
 
 // Diálogos do displayDialog (ARE YOU SURE?, fins de luta, minigames): cada item sai como setMenuFont(i) e depois
 // fontSpritePrintCenteredXY(0, x, y, texto); a tabela guarda onde cada item foi escrito no ultimo quadro desenhado
@@ -32,6 +40,14 @@ static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_overlayRa = GPR_U32(ctx, 31);
         g_inOverlay = true;
         wotm::mouse::gameMenu();   // pausa: o mouse nao passa pelo mapa de teclas (wotm_pad.inc)
+        if (wotm_mainmenu::pauseFrame(rdram, ctx, runtime))
+        {
+            // painel aberto: a original nao roda (nenhuma leitura do pad, lista escondida); 0 = o displayDialog continua na pausa
+            g_inOverlay = false;
+            ctx->r[2] = _mm_set_epi64x(0, 0);
+            ctx->pc = g_overlayRa;
+            return;
+        }
     }
     g_origOverlay(rdram, ctx, runtime);
     if (g_inOverlay && ctx->pc == g_overlayRa)
@@ -46,18 +62,18 @@ static bool startsWith(const uint8_t *rdram, uint32_t a, const char *s)
     return true;
 }
 
-// fontSpritePrintCenteredXY(fonte, x, y, texto) dentro do pauseLevelOverlay: a linha do esquema nao sai, o QUIT sobe para ela
+// fontSpritePrintCenteredXY(fonte, x, y, texto) dentro do pauseLevelOverlay: a linha do esquema sai como RECOMPILED OPTIONS. O texto
+// dela e um buffer de 24 bytes do rodata que o jogo reescreve com sprintf a cada quadro ("CONTROL TYPE A"): escrever no proprio buffer
+// (19 bytes com o NUL) dispensa o endereco dele.
 static void printHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == wotm::fn::fontSpritePrintCenteredXY__FiiiPc && g_inOverlay)
+    if (ctx->pc == wotm::fn::fontSpritePrintCenteredXY__FiiiPc && g_inOverlay && startsWith(rdram, GPR_U32(ctx, 7), "CONTROL"))
     {
-        if (startsWith(rdram, GPR_U32(ctx, 7), "CONTROL"))
-        {
-            ctx->pc = GPR_U32(ctx, 31);   // nao desenha
-            return;
-        }
-        if (static_cast<int>(GPR_U32(ctx, 6)) == kLineY[kQuit])
-            ctx->r[6] = _mm_set_epi64x(0, kLineY[kScheme]);
+        static constexpr char kText[] = "RECOMPILED OPTIONS";
+        static_assert(sizeof kText <= 24);
+        const uint32_t raw = GPR_U32(ctx, 7), a = raw & 0x1FFFFFFu;
+        if ((raw >> 28) != 7u && a + sizeof kText <= PS2_RAM_SIZE)   // nunca no scratchpad (0x70000000, fora do rdram)
+            std::memcpy(rdram + a, kText, sizeof kText);
     }
     if (ctx->pc == wotm::fn::fontSpritePrintCenteredXY__FiiiPc && g_inDialog && !g_inOverlay && g_mark >= 0 && g_mark < kMaxDlgItems)
     {
@@ -78,7 +94,10 @@ static void dialogHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     g_origDialog(rdram, ctx, runtime);
     if (g_inDialog && ctx->pc == g_dialogRa)
+    {
         g_inDialog = false;
+        wotm_mainmenu::pauseDialogEnd();   // o painel da pausa (se ficou aberto) some com ela
+    }
 }
 // setMenuFont(i): o proximo texto e o item i; setTitleFont e fontSetDefaultSize: o proximo texto e titulo
 static void menuFontHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -153,25 +172,26 @@ static int dialogSel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int
     return sel;
 }
 
-// Item da pausa sob o mouse (-1: nenhum), pelas linhas que ficaram (o QUIT na altura do esquema)
+// Item da pausa sob o mouse (-1: nenhum). Meia largura de 130: o RECOMPILED OPTIONS tem 18 letras
 static int hoverItem()
 {
     float gx, gy;
-    if (!wotm::mouse::gsPointer(gx, gy) || std::fabs(gx - 320.f) > 100.f)
+    if (!wotm::mouse::gsPointer(gx, gy) || std::fabs(gx - 320.f) > 130.f)
         return -1;
     for (int i = 0; i < kItems; ++i)
-    {
-        if (i == kScheme) continue;
-        const int ly = i == kQuit ? kLineY[kScheme] : kLineY[i];
-        if (gy >= float(ly) - 1.f && gy < float(ly) + 8.f) return i;   // y do texto e o topo da linha (passo de 9)
-    }
+        if (gy >= float(kLineY[i]) - 1.f && gy < float(kLineY[i]) + 8.f) return i;   // y do texto e o topo da linha (passo de 9)
     return -1;
 }
 
-// getCurrentMenuSelection(5, jogador) da pausa: o cursor pula o esquema (descendo vai ao QUIT, subindo a VIBRATION) e o mouse
-// escolhe o item sob ele
+// getCurrentMenuSelection(5, jogador) da pausa: o mouse escolhe o item sob ele. Logo depois de fechar o painel, o cursor nao anda
 static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
+    if (ctx->pc == wotm::fn::getCurrentMenuSelection__Fii && g_inOverlay && GPR_U32(ctx, 4) == uint32_t(kItems) && wotm_mainmenu::pauseBlocked())
+    {
+        ctx->r[2] = _mm_set_epi64x(0, static_cast<int32_t>(rd32(rdram, wotm::sym::gCurrentMenuSelection)));
+        ctx->pc = GPR_U32(ctx, 31);
+        return;
+    }
     if (ctx->pc == wotm::fn::getCurrentMenuSelection__Fii &&
         ((g_inOverlay && GPR_U32(ctx, 4) == uint32_t(kItems)) || (g_inDialog && !g_inOverlay && GPR_U32(ctx, 4) - 1u < uint32_t(kMaxDlgItems))))
     {
@@ -195,8 +215,6 @@ static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
         return;
     }
-    if (sel == kScheme)
-        sel = g_selPrev == kQuit ? kScheme - 1 : kQuit;
     // mouse: so com a lista na tela (gDrawOverlay; o "ARE YOU SURE?" do QUIT e outra caixa)
     static uint32_t s_seq = 0;
     const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
@@ -224,6 +242,60 @@ static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     ctx->r[2] = _mm_set_epi64x(0, sel);
 }
 
+// inputGetInput(mascara, jogador) dentro do pauseLevelOverlay:
+//  - esquerda/direita no RECOMPILED OPTIONS dao 0 (o jogo trocaria o m_ctlrCfg e o Monster+0x672C); so essas mascaras: o
+//    checkInputForExit le o X (0x4000) e o Start (0x08) pela mesma funcao;
+//  - logo depois de fechar o painel, tudo da 0;
+//  - dentro do checkInputForExit, anota se o X e o Start deram verdade (g_sawCross, g_sawStart).
+static void inputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc != wotm::fn::inputGetInput__Fii || !g_inOverlay)
+    {
+        g_origInput(rdram, ctx, runtime);
+        return;
+    }
+    const uint32_t mask = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
+    const bool lr = (mask == kLeft || mask == kRight) && rd32(rdram, wotm::sym::gCurrentMenuSelection) == uint32_t(kOptions);
+    if (lr || wotm_mainmenu::pauseBlocked())
+    {
+        ctx->r[2] = _mm_set_epi64x(0, 0);
+        ctx->pc = ra;
+        return;
+    }
+    const bool track = g_inExit && (mask == kCross || mask == kStart);
+    g_origInput(rdram, ctx, runtime);
+    if (track && ctx->pc == ra && GPR_U32(ctx, 2))
+        (mask == kCross ? g_sawCross : g_sawStart) = true;
+}
+
+// checkInputForExit(jogador, &start) dentro do pauseLevelOverlay: o X (nao o Start) no RECOMPILED OPTIONS abre o painel e devolve 0
+// (no retail o X nessa linha nao fazia nada). O Start continua tirando da pausa, como no retail. Logo depois de fechar o painel, 0.
+static void exitHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc != wotm::fn::checkInputForExit__FiPb || !g_inOverlay)
+    {
+        g_origExit(rdram, ctx, runtime);
+        return;
+    }
+    const uint32_t ra = GPR_U32(ctx, 31);
+    if (wotm_mainmenu::pauseBlocked())
+    {
+        ctx->r[2] = _mm_set_epi64x(0, 0);
+        ctx->pc = ra;
+        return;
+    }
+    g_inExit = true;
+    g_sawCross = g_sawStart = false;
+    g_origExit(rdram, ctx, runtime);
+    g_inExit = false;
+    if (ctx->pc == ra && GPR_U32(ctx, 2) && g_sawCross && !g_sawStart &&
+        rd32(rdram, wotm::sym::gCurrentMenuSelection) == uint32_t(kOptions))
+    {
+        wotm_mainmenu::openPausePanel(rdram, ctx, runtime);
+        ctx->r[2] = _mm_set_epi64x(0, 0);
+    }
+}
+
 static void install(PS2Runtime &runtime)
 {
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; };
@@ -235,10 +307,12 @@ static void install(PS2Runtime &runtime)
         {wotm::fn::setMenuFont__Fi, &g_origMenuFont, &menuFontHook},
         {wotm::fn::setTitleFont__Fv, &g_origTitleFont, &titleFontHook},
         {wotm::fn::fontSetDefaultSize__Fi, &g_origDefSize, &defSizeHook},
+        {wotm::fn::inputGetInput__Fii, &g_origInput, &inputHook},
+        {wotm::fn::checkInputForExit__FiPb, &g_origExit, &exitHook},
     };
     for (const H &h : hooks)
         if ((*h.orig = runtime.lookupFunction(h.addr)))
             runtime.registerFunction(h.addr, h.fn);
-    std::fprintf(stderr, "[pausa] menu de pausa sem o CONTROL SCHEME (tipo A fixo); mouse na pausa e nos dialogos\n");
+    std::fprintf(stderr, "[pausa] menu de pausa com RECOMPILED OPTIONS no lugar do CONTROL SCHEME (tipo A fixo); mouse na pausa e nos dialogos\n");
 }
 } // namespace wotm_pausemenu

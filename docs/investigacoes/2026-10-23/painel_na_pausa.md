@@ -1,5 +1,10 @@
 # Painel "Recompiled options" no menu de pausa da luta (2026-10-23)
 
+> **Implementado no mesmo dia** (branch `painel-pausa`; resumo em `NATIVO.md`, "Painel na pausa"). Diferenças do plano: a caixa 3D da
+> pausa é desligada com `hierSetCsDrawMe(shell->m_cs610, 0)` enquanto o painel está aberto (em vez de mexer no `gDrawOverlay`); o
+> banco de sons do Shell **não** está carregado na luta (conferido: `gSoundBanks[14]` é 0), então o painel fica mudo na pausa até o
+> dono decidir pelos sons da pausa; o painel aceita todos os dispositivos, como no menu.
+
 Pedido do dono: mexer nas opções do port (vídeo, features, câmera, controles) no meio da luta, sem voltar ao menu principal. Só leitura
 do código; nada foi implementado nem compilado. Fontes: `native/runtime/wotm_mainmenu.inc` (painel), `wotm_pausemenu.inc` (ganchos da
 pausa), `wotm_legend.inc` e `wotm_prompts.inc` (legenda e dica), `wotm_live.inc` (integração na janela, `applyVideoSettings`),

@@ -91,6 +91,10 @@ struct Hover
     int part = HNone, tab = -1, prow = -1;   // painel: parte, aba (HTab) e linha (HRow*)
 };
 static Hover g_hover;
+// Painel na pausa da luta (wotm_pausemenu.inc): a View publicada pela thread do EE e o que esta sob o mouse no painel em 2D. A parte
+// da janela grava o g_pauseHover, nao o g_hover (o drawOnTelao grava este vazio a cada quadro da luta). Protegidos por g_m.
+static View g_pauseView;
+static Hover g_pauseHover;
 
 // Thread do EE
 static const bool g_enabled = [] { const char *e = std::getenv("WOTM_TEXTMENU"); return !(e && e[0] == '0'); }();
@@ -98,6 +102,13 @@ static int g_extraRow = 0;         // tela 1: cursor num item nosso (kOptionsRow
 static bool g_open = false;        // painel "recompiled options" aberto
 static float g_panel = 0.f;
 static int g_suppress = 0;         // quadros sem entrada do jogo depois de fechar o painel (o triangulo ainda apertado)
+// O mesmo painel no menu de pausa da luta: estado proprio para abrir, animar e esperar soltar; aba, linha, mapa e captura sao os
+// mesmos do menu (os dois nunca estao abertos juntos, e o painel lembra a ultima aba)
+enum Where { InMenu, InPause };
+static Where g_where = InMenu;     // de quem e o quadro do panelInput de agora (sons, mouse, trava do KEYBOARD)
+static bool g_pauseOpen = false;
+static float g_pausePanel = 0.f;
+static int g_pauseSuppress = 0;
 
 // ------------------------------------------------------------------ painel "recompiled options": abas e opcoes
 // Cada opcao e uma chave do wotm_settings.hpp; mudar grava o settings.ini e vale na hora (video na thread da janela, mods e
@@ -347,6 +358,29 @@ static void openPanel()
     g_showPreview = true;
     readPanel(g_panelPrev);   // o X que abriu ainda esta apertado: so conta o proximo
 }
+// Sons do painel: os do Shell (2/4 cursor, 6 voltar, 8 ok), no menu e na pausa (decisao do dono). Na luta o banco do Shell
+// (gSoundBanks[14], Shell_s.bnk) pode nao estar na RAM de som: sem ele, sem som (o openPausePanel diz no log qual e o caso)
+constexpr uint32_t kShellBank = wotm::sym::gSoundBanks + 4u * 14u;
+static void panelSfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int id)
+{
+    if (g_where == InPause && !rd32(rdram, kShellBank))
+        return;
+    wotm_padsel::sfx(rdram, ctx, runtime, id);
+}
+// X no RECOMPILED OPTIONS da pausa (wotm_pausemenu.inc, saida do checkInputForExit)
+static void openPausePanel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    g_where = InPause;
+    g_pauseOpen = true;
+    g_pauseSuppress = 0;
+    g_showPreview = true;
+    readPanel(g_panelPrev);
+    wotm::mouse::takeClick(wotm::mouse::g_clickL);   // o clique que abriu nao conta no painel
+    wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
+    std::fprintf(stderr, "[pausa] painel aberto (jogador %u; banco de sons do Shell %s)\n", rd32(rdram, wotm::sym::gPlayerThatPaused) + 1,
+                 rd32(rdram, kShellBank) ? "carregado" : "fora da RAM de som: painel sem som");
+    panelSfx(rdram, ctx, runtime, 8);
+}
 // Espera da tecla (teclado) ou do botao (gamepads) novo do botao do PS2 g_capture: vale a primeira que passar a estar apertada.
 // Esc ou 5 s sem nada cancelam. No fim, o que esta apertado agora nao conta como entrada do painel.
 static void captureInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -392,7 +426,7 @@ static void captureInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     wotm::mouse::takeClick(wotm::mouse::g_clickL);   // o clique que virou a tecla nova nao conta no painel
     wotm::mouse::takeClick(wotm::mouse::g_clickR);
     readPanel(g_panelPrev);
-    wotm_padsel::sfx(rdram, ctx, runtime, done ? 8 : 6);
+    panelSfx(rdram, ctx, runtime, done ? 8 : 6);
 }
 
 // Aba CONTROLS, da segunda linha em diante: mapa (teclado/gamepads), botoes do PS2 (X: espera a tecla nova; quadrado/Delete: limpa) e
@@ -408,14 +442,14 @@ static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
         if (!(e[PLeft] || e[PRight] || e[POk])) return;
         g_bindMap = (g_bindMap + 1 + (e[PLeft] ? st::kPadPlayers : 1)) % (st::kPadPlayers + 1) - 1;
         sel = std::min(sel, ctlRows(g_bindMap < 0, r) - 1);
-        wotm_padsel::sfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
+        panelSfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
     }
     else if (row == kCtlReset)
     {
         if (!e[POk]) return;
         st::resetBinds(g_bindMap);
         std::fprintf(stderr, "[settings] mapa %s de volta ao padrao\n", kMapNames[g_bindMap + 1]);
-        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+        panelSfx(rdram, ctx, runtime, 8);
     }
     else if (row >= 0 && e[POk])
     {
@@ -424,18 +458,23 @@ static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
         for (size_t i = 0; i < std::size(st::kKeyNames); ++i) g_capKeyPrev[i] = wotm_pad::inputDown(st::kKeyNames[i].code);
         for (int p = 0; p < 4; ++p)
             for (int k = 1; k < st::kPadButtons; ++k) g_capPadPrev[p][k] = IsGamepadAvailable(p) && IsGamepadButtonDown(p, k);
-        wotm_padsel::sfx(rdram, ctx, runtime, 8);
+        panelSfx(rdram, ctx, runtime, 8);
     }
     else if (row >= 0 && e[PClear])
     {
         st::clearBind(st::Bind(row), g_bindMap);
         std::fprintf(stderr, "[settings] %s%s = (nada)\n", mapPrefix(g_bindMap).c_str(), st::kBindNames[row]);
-        wotm_padsel::sfx(rdram, ctx, runtime, 6);
+        panelSfx(rdram, ctx, runtime, 6);
     }
 }
 
-// Um quadro do painel aberto (no screenGetInput da tela 1, que o jogo chama a cada quadro dela)
-static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+// KEYBOARD (teclado separado) na pausa: travado. Numa luta de 1 jogador, OWN PLAYER mandaria o teclado para o jogador 2, que nao
+// existe, e quem joga no teclado perderia o monstro e a saida da pausa
+static bool lockedOpt(st::Key k, bool inPause) { return inPause && k == st::KbSeparate; }
+
+// Um quadro do painel aberto (no menu: screenGetInput da tela 1, que o jogo chama a cada quadro dela; na pausa: no lugar do
+// pauseLevelOverlay). Devolve true quando o painel fecha (quem chamou fecha o seu: g_open ou g_pauseOpen).
+static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     bool now[kPanelActs], e[kPanelActs];
     readPanel(now);
@@ -445,7 +484,7 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (g_capture >= 0)
     {
         captureInput(rdram, ctx, runtime);
-        return;
+        return false;
     }
     // mouse (etapa 9): passar por cima escolhe a linha; clique esquerdo na aba troca, em L1/R1 anda uma aba, na linha confirma (nas
     // setas do valor, diminui ou aumenta); clique direito volta. A rodinha vem como cima/baixo (readPanel).
@@ -457,7 +496,7 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         Hover hv;
         {
             std::lock_guard<std::mutex> lk(g_m);
-            hv = g_hover;
+            hv = g_where == InPause ? g_pauseHover : g_hover;
         }
         const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
         e[PBack] |= wotm::mouse::takeClick(wotm::mouse::g_clickR);
@@ -466,13 +505,13 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
             g_optSel[g_tab] = hv.prow;
             if (!click)
-                wotm_padsel::sfx(rdram, ctx, runtime, 4);
+                panelSfx(rdram, ctx, runtime, 4);
         }
         if (click && hv.part == HTab && hv.tab >= 0 && hv.tab != g_tab)
         {
             g_tab = hv.tab;
-            wotm_padsel::sfx(rdram, ctx, runtime, 4);
-            return;
+            panelSfx(rdram, ctx, runtime, 4);
+            return false;
         }
         if (click)
         {
@@ -485,22 +524,20 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     if (e[PBack])
     {
-        g_open = false;
-        g_suppress = 20;
-        wotm_padsel::sfx(rdram, ctx, runtime, 6);
-        return;
+        panelSfx(rdram, ctx, runtime, 6);
+        return true;
     }
     if (e[PPrev] || e[PNext])
     {
         g_tab = (g_tab + (e[PNext] ? 1 : kTabs - 1)) % kTabs;
-        wotm_padsel::sfx(rdram, ctx, runtime, e[PNext] ? 4 : 2);
-        return;
+        panelSfx(rdram, ctx, runtime, e[PNext] ? 4 : 2);
+        return false;
     }
     if (g_tab == TabVideo && e[PPreview])
     {
         g_showPreview = !g_showPreview;
-        wotm_padsel::sfx(rdram, ctx, runtime, g_showPreview ? 4 : 2);
-        return;
+        panelSfx(rdram, ctx, runtime, g_showPreview ? 4 : 2);
+        return false;
     }
     const TabDef &t = kTabDefs[g_tab];
     int &sel = g_optSel[g_tab];
@@ -511,26 +548,92 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         int &top = g_top[g_tab];
         if (sel < top) top = sel;
         if (sel >= top + visRows(g_tab)) top = sel - visRows(g_tab) + 1;
-        wotm_padsel::sfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
-        return;
+        panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
+        return false;
     }
     if (g_tab == TabControls && sel >= t.n)
     {
         controlsInput(rdram, ctx, runtime, e);
-        return;
+        return false;
     }
     if (e[PLeft] || e[PRight] || e[POk])
     {
         const st::Key k = t.opt[sel].key;
+        if (lockedOpt(k, g_where == InPause))
+            return false;
         const int cur = st::get(k), v = stepValue(k, cur, e[PLeft] ? -1 : 1, e[POk]);
         if (v == cur)
-            return;
+            return false;
         st::set(k, v);
         char buf[32];
         valueText(k, v, buf, sizeof buf);
         std::fprintf(stderr, "[settings] %s = %s (%s=%s)\n", t.opt[sel].label, buf, st::kEnv[k], st::format(k, v).c_str());
-        wotm_padsel::sfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
+        panelSfx(rdram, ctx, runtime, e[POk] ? 8 : (e[PLeft] ? 2 : 4));
     }
+    return false;
+}
+
+// ------------------------------------------------------------------ painel na pausa da luta (thread do EE)
+// Publica a View da pausa: o painel em 2D no centro do quadro (drawPausePanel2d), sem lista nem telao
+static void publishPause()
+{
+    View v;
+    v.on = g_pausePanel > 0.f;
+    v.screen = -1;   // pausa (renderPanel: legenda translucida, KEYBOARD travado)
+    v.alpha = 1.f;
+    v.panel = g_pausePanel;
+    v.tab = g_tab;
+    v.opt = g_optSel[g_tab];
+    v.top = g_top[g_tab];
+    v.bindMap = g_bindMap;
+    v.capture = g_capture;
+    v.preview = g_showPreview;
+    std::lock_guard<std::mutex> lk(g_m);
+    g_pauseView = v;
+}
+// Entrada do pauseLevelOverlay, a cada quadro do laco do displayDialog (wotm_pausemenu.inc). Com o painel aberto ele roda aqui e a
+// original e pulada (true): o jogo nao le o pad nem desenha a lista da pausa. Fechado ha pouco, a entrada do jogo fica bloqueada
+// (pauseBlocked) ate soltarem o que fechou: Esc e Enter sao Start no mapa do teclado, e o X e o triangulo confirmam na pausa.
+static bool pauseFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (g_pauseOpen)
+    {
+        g_where = InPause;
+        wotm_pad::markMenuFrame();   // troca do MENU CONFIRM e legenda como no menu; o modo foto (F9) fica de fora
+        // a caixa 3D da pausa (shell->m_cs610, posta na frente da camera pelo overlay) sai de tras do painel; ao fechar, o overlay
+        // a religa sozinho (hierSetCsDrawMe(cs, gDrawOverlay) a cada quadro)
+        if (const uint32_t cs = rd32(rdram, kShell + 0x610))
+            wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::hierSetCsDrawMe__FP3_csUc, cs, 0u);
+        if (panelInput(rdram, ctx, runtime))
+        {
+            g_pauseOpen = false;
+            g_pauseSuppress = 20;
+            std::fprintf(stderr, "[pausa] painel fechado\n");
+        }
+    }
+    else if (g_pauseSuppress > 0)
+    {
+        bool now[kPanelActs];
+        readPanel(now);
+        const bool held = std::any_of(now, now + kPanelActs, [](bool b) { return b; });
+        if (--g_pauseSuppress == 0 && held)
+            g_pauseSuppress = 1;
+    }
+    g_pausePanel = std::clamp(g_pausePanel + (g_pauseOpen ? 0.1f : -0.1f), 0.f, 1.f);
+    publishPause();
+    return g_pauseOpen;
+}
+static bool pauseBlocked() { return g_pauseOpen || g_pauseSuppress > 0; }
+// Saida do displayDialog: o painel nao deveria estar aberto (com ele o overlay nao sai), mas se estiver, fecha e some
+static void pauseDialogEnd()
+{
+    if (g_pauseOpen)
+        std::fprintf(stderr, "[pausa] aviso: a pausa terminou com o painel aberto; fechado\n");
+    g_pauseOpen = false;
+    g_pauseSuppress = 0;
+    g_pausePanel = 0.f;
+    g_where = InMenu;
+    publishPause();
 }
 static PS2Runtime::RecompiledFunction g_origMain = nullptr, g_origModes1P = nullptr, g_origModes2P = nullptr, g_origTransition = nullptr,
                                       g_origGetInput = nullptr, g_origOptions = nullptr;
@@ -817,9 +920,13 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         // painel aberto: o jogo nao ve nada (a entrada do painel vem dos dispositivos); fechado ha pouco, o triangulo que fechou
         // ainda nao pode virar o "voltar" do menu principal
         out = 0;
-        if (g_open)
-            panelInput(rdram, ctx, runtime);
-        else
+        g_where = InMenu;
+        if (g_open && panelInput(rdram, ctx, runtime))
+        {
+            g_open = false;
+            g_suppress = 20;
+        }
+        else if (!g_open)
             --g_suppress;
     }
     else if (code == 1 || code == 2)
@@ -838,6 +945,7 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     else if (code == 6 && cur == 1 && g_extraRow == kOptionsRow)
     {
+        g_where = InMenu;
         openPanel();
         wotm_padsel::sfx(rdram, ctx, runtime, 8);
         out = 0;
@@ -964,13 +1072,14 @@ static wotm::preview::Kind previewKind(st::Key k)
     default: return None;   // REFRESH RATE: o jogo continua a 60, nao ha o que mostrar
     }
 }
-static wotm::preview::Params previewParams(const Rectangle &box)
+constexpr float kTelaoFrac = 0.55f, kPauseFrac = 0.60f;   // fracao da altura da janela que o painel ocupa: telao, pausa (2D)
+static wotm::preview::Params previewParams(const Rectangle &box, float frac)
 {
     wotm::preview::Params p;
     p.frameRows = wotm_live::renderHeight();
     p.winRows = std::max(1, GetScreenHeight());
-    // o painel ocupa ~55% da altura da janela no telao (camera do painel, frameCamera)
-    p.boxScreenRows = box.height / float(kPH) * 0.55f * float(p.winRows);
+    // o painel ocupa ~55% da altura da janela no telao (camera do painel, frameCamera), 60% na pausa
+    p.boxScreenRows = box.height / float(kPH) * frac * float(p.winRows);
     p.samples = std::min(st::get(st::Msaa), wotm::msaa::maxSamples());
     p.filter = st::get(st::TexFilter);
     p.winAspect = GetScreenHeight() > 0 ? float(GetScreenWidth()) / float(GetScreenHeight()) : 16.f / 9.f;
@@ -999,7 +1108,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     if (L.preview && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
     {
         pk = previewKind(kTabDefs[TabVideo].opt[v.opt].key);
-        pp = previewParams(L.box);
+        pp = previewParams(L.box, v.screen < 0 ? kPauseFrac : kTelaoFrac);
         g_preview.prepare(pk, pp, L.box.width, L.box.height);
     }
     BeginTextureMode(g_prt);
@@ -1037,14 +1146,17 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
 
     // linhas da aba: nome, valor, dica e se o valor tem setas (escolha na lista)
     enum { KOpt, KDevice, KReset, KBind, KCapture };
-    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; };
+    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; bool locked = false; };
     PRow rows[kMaxCtlRows];
     int n = 0;
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
     const TabDef &t = kTabDefs[tab];
+    const bool inPause = v.screen < 0;
     auto optRow = [&](const Opt &o) {
         char buf[32];
         valueText(o.key, st::get(o.key), buf, sizeof buf);
+        if (lockedOpt(o.key, inPause))   // apagada, sem setas
+            return PRow{o.label, buf, "CHANGE IT IN THE MAIN MENU", false, KOpt, -1, true};
         return PRow{o.label, buf, o.hint, true, KOpt};
     };
     if (tab != TabControls)
@@ -1111,7 +1223,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         const bool valIcon = phys > 0 && wotm_prompts::drawCell2d(wotm_prompts::padCell(phys, style == st::PromptKeyboard ? st::PromptPs : style), valX, cy,
                                                                   86.f, on ? 1.f : 0.6f);
         if (!pr.value.empty() && !valIcon)
-            label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on ? kLit : kDim, kPW, kPH);
+            label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on && !pr.locked ? kLit : kDim, kPW, kPH);
         if (on && pr.arrows)
         {
             const Color a = gsToRgb(kLit);
@@ -1147,6 +1259,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     // mapa, como o readPanel le
     using wotm_legend::Icon;
     const float la = v.alpha * v.panel;
+    const float bar = inPause ? 0.55f : 1.f;   // na pausa, faixa translucida (a luta continua atras, como no modo foto)
     const int kind = v.opt >= 0 && v.opt < n ? rows[v.opt].kind : KOpt;
     if (v.opt >= 0 && v.opt < n)
         wotm_legend::hint(rows[v.opt].hint, la);
@@ -1158,22 +1271,24 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     const Icon ok = bind(st::BCross), back = bind(st::BTriangle), clear = bind(st::BSquare);
     if (kind == KCapture)
     {
-        if (v.bindMap < 0) wotm_legend::post({{Icon{0, "ESC"}, {}, "CANCEL"}}, la);
-        else wotm_legend::post({{{}, {}, "WAIT 5 SECONDS TO CANCEL"}}, la);
+        if (v.bindMap < 0) wotm_legend::post({{Icon{0, "ESC"}, {}, "CANCEL"}}, la, bar);
+        else wotm_legend::post({{{}, {}, "WAIT 5 SECONDS TO CANCEL"}}, la, bar);
     }
     else if (kind == KBind)
-        wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, v.bindMap < 0 ? "NEW KEY" : "NEW BUTTON"}, {clear, {}, "CLEAR"}, {back, {}, "BACK"}}, la);
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, v.bindMap < 0 ? "NEW KEY" : "NEW BUTTON"}, {clear, {}, "CLEAR"}, {back, {}, "BACK"}}, la, bar);
     else if (kind == KReset)
-        wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, "RESTORE"}, {back, {}, "BACK"}}, la);
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, "RESTORE"}, {back, {}, "BACK"}}, la, bar);
+    else if (v.opt >= 0 && v.opt < n && rows[v.opt].locked)
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {back, {}, "BACK"}}, la, bar);
     else if (v.tab == TabVideo)
     {
         Icon pv = clear;   // quadrado no controle, P no teclado (readPanel)
         pv.key = "P";
         pv.key2 = nullptr;
-        wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {pv, {}, v.preview ? "HIDE PREVIEW" : "SHOW PREVIEW"}, {back, {}, "BACK"}}, la);
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {pv, {}, v.preview ? "HIDE PREVIEW" : "SHOW PREVIEW"}, {back, {}, "BACK"}}, la, bar);
     }
     else
-        wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {back, {}, "BACK"}}, la);
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {back, {}, "BACK"}}, la, bar);
     scene.drawQuads(q, W, H);
     EndBlendMode();
     EndTextureMode();
@@ -1295,6 +1410,7 @@ static bool itemPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &
     return got;
 }
 
+static void panelHit(float u, float w, const View &v, Hover &hv);
 // O painel no plano do telao, no telao inteiro (o logo so aparece no "press start"), centrado
 static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v, Hover &hv)
 {
@@ -1306,9 +1422,63 @@ static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Cam
     const float h = wx * float(kPH) / float(kPW);   // largura limitada: a altura acompanha (proporcao da textura)
     const float left = (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, top = pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f;
     wotm_padsel::drawOnPlane(pl, g_prt.texture, left, top, wx, h, v.alpha * v.panel, 0.003f * (pl.x1 - pl.x0));
-    // mouse: as mesmas medidas do renderPanel (abas, L1/R1, linhas e as setas do valor)
     float u, w;
-    if (v.panel < 1.f || !wotm_padsel::hitOnPlane(cam, pl, left, top, wx, h, u, w))
+    if (v.panel >= 1.f && wotm_padsel::hitOnPlane(cam, pl, left, top, wx, h, u, w))
+        panelHit(u, w, v, hv);
+}
+
+// Painel da pausa: reto no centro do quadro (rw x rh), com um veu escuro leve (a luta fica visivel para comparar as opcoes de video).
+// Altura 0,60 do quadro, topo em 0,09: livres embaixo a dica (0,74..0,89) e a legenda (0,893). Dentro do BeginTextureMode do quadro,
+// depois do texto do jogo e antes do wotm_legend::draw; grava o que esta sob o mouse no g_pauseHover.
+static void drawPausePanel2d(int rw, int rh)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_pauseView;
+    }
+    Hover hv;
+    if (v.on && v.panel > 0.f && g_prt.id != 0)
+    {
+        const float RW = float(rw), RH = float(rh);
+        float h = kPauseFrac * RH, w = h * float(kPW) / float(kPH);
+        if (w > 0.96f * RW)
+        {
+            w = 0.96f * RW;
+            h = w * float(kPH) / float(kPW);
+        }
+        const float left = (RW - w) * 0.5f, top = 0.09f * RH + (kPauseFrac * RH - h) * 0.5f;
+        rlDrawRenderBatchActive();
+        BeginBlendMode(BLEND_ALPHA);
+        DrawRectangleRec(Rectangle{0.f, 0.f, RW, RH}, Color{0, 0, 0, static_cast<unsigned char>(60.f * v.panel)});
+        DrawTexturePro(g_prt.texture, Rectangle{0.f, 0.f, float(kPW), -float(kPH)}, Rectangle{left, top, w, h}, Vector2{0.f, 0.f}, 0.f,
+                       Color{255, 255, 255, static_cast<unsigned char>(255.f * std::clamp(v.panel, 0.f, 1.f))});
+        EndBlendMode();
+        wotm::mouse::claim();   // o clique esquerdo e do painel (nao um quadrado do jogo)
+        const wotm::mouse::Pointer &p = wotm::mouse::g_ptr;
+        if (v.panel >= 1.f && p.in)
+            panelHit((p.x - left) / w, (p.y - top) / h, v, hv);
+    }
+    std::lock_guard<std::mutex> lk(g_m);
+    g_pauseHover = hv;
+}
+// Textura do painel da pausa (fora do BeginTextureMode do quadro, junto do renderUi)
+static void renderPauseUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_pauseView;
+    }
+    if (v.on && v.panel > 0.f)
+        renderPanel(scene, ram, tex0, v);
+}
+
+// Parte do painel sob o mouse, em coordenadas da textura (u, w de 0 a 1): as mesmas medidas do renderPanel (abas, L1/R1, linhas e as
+// setas do valor). No telao e na pausa.
+static void panelHit(float u, float w, const View &v, Hover &hv)
+{
+    if (u < 0.f || u > 1.f || w < 0.f || w > 1.f)
         return;
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f, X = u * W, Y = w * H;
     if (std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
