@@ -698,6 +698,7 @@ class App:
             m.add_command(label="Show in folder", command=self.reveal_selected)
             m.add_separator()
             m.add_command(label="Save to folder... (%d file%s)" % (n, "" if n == 1 else "s"), command=self.save_to_folder)
+            self.add_revert(m)
             m.add_separator()
             m.add_command(label="Remove from work folder (%d file%s)" % (n, "" if n == 1 else "s"), command=self.remove_selected)
         else:
@@ -714,6 +715,7 @@ class App:
             m.add_command(label="Show in folder", command=self.reveal_selected)
             m.add_separator()
             m.add_command(label="Save to folder... (%d file%s)" % (n, "" if n == 1 else "s"), command=self.save_to_folder)
+            self.add_revert(m)
             m.add_separator()
             m.add_command(label="Remove from work folder", command=self.remove_selected)
         m.tk_popup(e.x_root, e.y_root)
@@ -846,6 +848,45 @@ class App:
             winsound.PlaySound(None, 0)
         except Exception:
             pass
+
+    def edited_selected(self):
+        """Arquivos editados na selecao (um grupo vale pelos editados dele)."""
+        work = self.work()
+        st = modkit.load_state(work)["files"]
+        out = []
+        for p in self.selected_files(groups=True):
+            old = st.get(os.path.relpath(p, work).replace("\\", "/"), {}).get("sha1")
+            if not old or not os.path.exists(p) or modkit.sha1(p) != old:
+                out.append(p)
+        return out
+
+    def add_revert(self, m):
+        n = len(self.edited_selected())
+        if n:
+            m.add_command(label="Revert to original" + (" (%d edited)" % n if n > 1 else ""), command=self.revert_selected)
+
+    def revert_selected(self):
+        files = self.edited_selected()
+        if not files:
+            self.say("Nothing to revert: the selected files are as extracted.\n")
+            return
+        names = "\n".join(os.path.basename(p) for p in files[:10]) + ("\n..." if len(files) > 10 else "")
+        if not messagebox.askyesno("Revert to original", "Put %d file(s) back as they are on the disc?\nYour changes to them are lost.\n\n%s"
+                                   % (len(files), names), parent=self.root):
+            return
+        self.stop_sound()
+        work = self.work()
+        rels = [os.path.relpath(p, work).replace("\\", "/") for p in files]
+        sel = self.work_tree.selection()
+
+        def done():
+            self.refresh_work()
+            keep = [i for i in sel if self.work_tree.exists(i)]
+            if keep:
+                self.work_tree.selection_set(keep)
+            self.show_preview()
+
+        self.run("Reverting %d file(s)..." % len(rels), lambda: modkit.revert(self.disc.get(), work, rels), done)
 
     def remove_selected(self):
         files = self.selected_files(groups=True)

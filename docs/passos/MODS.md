@@ -31,7 +31,8 @@ log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[
    tipo, `.png` e `.wav`; vazio = programa padrão do Windows; com editor de `.wav` definido, o duplo clique no som abre nele).
    Botão direito na lista: Play, Open in ..., **Open with...** (escolhe o programa e pergunta se vira o padrão), **Replace with...** (só com um arquivo
    escolhido: troca pelo arquivo que você escolher e grava com o nome certo; JPG, BMP, TGA etc. viram PNG; avisa se a proporção
-   muda; som só aceita WAV), Show in folder,
+   muda; som só aceita WAV), Show in folder, **Revert to original** (só aparece se há editados na seleção; num grupo, volta os
+   editados dele; extrai de novo do disco e confirma antes),
    **Save to folder...** (copia os selecionados, ou o grupo inteiro, para uma pasta) e Remove (tecla Del também). Clicar numa
    seção só a seleciona: abrir e tocar valem só para arquivos escolhidos um a um; na seção, o botão direito salva ou remove tudo.
 3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods". O log fica embaixo, com
@@ -48,6 +49,7 @@ python tools/modkit.py export SND/LIZARD_S.BNK VAG/CITYAMB.VPK
   (edite os arquivos em mods/_work/)
 python tools/modkit.py pack my_mod                        # leva o que mudou para mods/my_mod/
 python tools/modkit.py check                              # confere nomes, tamanhos e texIds de todos os mods
+python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da pasta de trabalho ao original do disco
 ```
 
 - Lê o disco extraído do repo (`disc/`, ou `--disc`/`WOTM_DISC`) e grava nos mods do runtime (`.wotm_recomp_dir` + `discroot\mods`,

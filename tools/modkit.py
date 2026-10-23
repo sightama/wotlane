@@ -6,6 +6,7 @@ de trabalho e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/
   python tools/modkit.py export SND/SHELL_S.BNK VAG/CITYAMB.VPK   # sons do banco e a musica em WAV
   python tools/modkit.py pack my_mod                         # o que foi editado vai para mods/my_mod/
   python tools/modkit.py check [my_mod]                      # confere os mods (nomes, tamanhos, texIds)
+  python tools/modkit.py revert MON/lizard0_t0004.png        # volta um arquivo da pasta de trabalho ao original do disco
   python tools/modkit_gui.py                                 # o mesmo com interface (botao "Mod kit" do launcher)
 
 Opcoes: --disc <pasta> (disco extraido; padrao WOTM_DISC ou disc/ do repo), --mods <pasta> (padrao: <runtime>/discroot/mods, o
@@ -169,6 +170,63 @@ def export(disc, work, pats):
             print("  %d file(s) already edited in the work folder were kept" % kept)
         save_state(work, state)
     print("work folder: %s (edit there, then pack into a mod: modkit.py pack <mod>, or the Pack button)" % work)
+
+
+def source_of(disc, rel):
+    """Arquivo do disco de onde saiu um arquivo da pasta de trabalho ("MON/lizard0_t0004.png" -> "MON/LIZARD0.TEX"); None se nao achou."""
+    d, n = os.path.split(rel.replace("\\", "/"))
+    pre = d + "/" if d else ""
+    m = PNG_RE.match(n)
+    stem, ext = os.path.splitext(n)
+    if m:
+        cands = [m.group(1).upper() + (".RTX" if m.group(2) else ".TEX")]
+    elif ext.lower() == ".wav":
+        mb = BNK_RE.match(n)
+        cands = [mb.group(1).upper() + ".BNK"] if mb else [stem.upper() + ".VPK", stem.upper() + ".VAG"]
+    else:
+        cands = [n]
+    for c in cands:
+        if disc_file(disc, pre + c):
+            return pre + c
+    return None
+
+
+def revert(disc, work, rels):
+    """Volta arquivos da pasta de trabalho ao original: extrai de novo o arquivo do disco numa pasta temporaria e copia so esses."""
+    state = load_state(work)
+    by_src = {}
+    for rel in rels:
+        rel = rel.replace("\\", "/")
+        src = source_of(disc, rel)
+        if not src:
+            print("%s: source file not found on the disc" % rel)
+            continue
+        by_src.setdefault(src, []).append(rel)
+    tmp = os.path.join(work, ".revert_tmp")
+    n = 0
+    for src, items in sorted(by_src.items()):
+        shutil.rmtree(tmp, ignore_errors=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            export(disc, tmp, [src])
+        for rel in items:
+            fresh = os.path.join(tmp, *rel.split("/"))
+            dst = os.path.join(work, *rel.split("/"))
+            if not os.path.exists(fresh):
+                print("%s: not produced by a new export of %s" % (rel, src))
+                continue
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(fresh, dst)
+            ent = state["files"].setdefault(rel, {})
+            ent["sha1"] = sha1(dst)
+            sz = png_size(dst)
+            if sz:
+                ent["size"] = list(sz)
+            print("reverted %s (from %s)" % (rel, src))
+            n += 1
+    shutil.rmtree(tmp, ignore_errors=True)
+    save_state(work, state)
+    print("%d file(s) back to the original" % n)
+    return n
 
 
 def png_size(p):
@@ -373,7 +431,7 @@ def main(argv):
         else:
             args.append(argv[i])
             i += 1
-    if not args or args[0] not in ("export", "pack", "check"):
+    if not args or args[0] not in ("export", "pack", "check", "revert"):
         print(__doc__)
         return 1
     disc = opts.get("disc") or default_disc()
@@ -389,6 +447,10 @@ def main(argv):
         if len(args) != 2 or args[1][0] in "_.":
             raise SystemExit("pack: one mod name (not starting with '_' or '.')")
         pack(disc, work, mods, args[1], opts.get("inject", False))
+    elif args[0] == "revert":
+        if len(args) < 2:
+            raise SystemExit("revert: files of the work folder (e.g. MON/lizard0_t0004.png)")
+        revert(disc, work, args[1:])
     else:
         return check(disc, mods, args[1] if len(args) > 1 else None)
     return 0
