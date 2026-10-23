@@ -37,7 +37,7 @@ pausa), `wotm_legend.inc` e `wotm_prompts.inc` (legenda e dica), `wotm_live.inc`
   lista da pausa. Véu escuro leve ou nenhum, para não atrapalhar a comparação (conferir com o dono).
 - **Teclado separado (KEYBOARD, primeira linha da aba CONTROLS): travado na pausa** (decidido). Ligar essa opção no meio de uma luta
   de 1 jogador manda o teclado para o jogador 2, que não existe; quem joga pelo teclado perde o monstro e não sai mais da pausa pelo
-  teclado. Na pausa a linha aparece apagada, sem setas, e não muda; a dica diz "CHANGE IT IN THE MAIN MENU". O resto da aba fica livre.
+  teclado. Na pausa a linha aparece apagada, sem setas, e não muda; a dica diz "CAN ONLY BE CHANGED IN THE MAIN MENU". O resto da aba fica livre.
 
 ## 1. O que o jogo faz na pausa (retail)
 

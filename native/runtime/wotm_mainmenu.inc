@@ -1161,7 +1161,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         char buf[32];
         valueText(o.key, st::get(o.key), buf, sizeof buf);
         if (lockedOpt(o.key, inPause))   // apagada, sem setas
-            return PRow{o.label, buf, "CHANGE IT IN THE MAIN MENU", false, KOpt, -1, true};
+            return PRow{o.label, buf, "CAN ONLY BE CHANGED IN THE MAIN MENU", false, KOpt, -1, true};
         return PRow{o.label, buf, o.hint, true, KOpt};
     };
     if (tab != TabControls)
