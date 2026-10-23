@@ -11,13 +11,13 @@ Contexto do código:
 - 3 e 4 jogadores humanos usam a outra seleção nativa (`selectStep`, `g_multi`), que já existia antes das skins.
 - `WOTM_NATSEL=0` desliga a nativa das telas 3 e 6 (volta a tela do jogo).
 
-## 3. Robo-47: glitches pretos no céu atrás do mapa
+## 3. Robo-47: glitches pretos no céu atrás do mapa (corrigido em 2026-10-23)
 
-Só com o Robo-47 (ROBOT) na luta, o céu atrás do mapa ganha manchas pretas. Não foi testado com Zorgulon (ALIEN) nem Raptros
-(DRAGON): desbloqueie os dois no `save.json` (destraves) para conferir se é só o Robo-47. Não tem relação com as skins (traje do
-disco). Pistas: o que o Robo-47 desenha a mais que os outros (laser, brilho, partículas aditivas) e se algo dele escreve na
-profundidade ou no alfa do céu; comparar com a checagem VU1 (`docs/passos/VU1CHECK.md`, `WOTM_VU1CHECK`) numa luta
-`WOTM_MATCH` com o Robo-47.
+Causa: o `Renderer::drawFlares` do `native/wotm_model.hpp` (lens flare das luzes do monstro: só o Robo-47 tem) deixava a escrita de
+profundidade desligada (`setState(.., zmsk = true)`). Com ela desligada o `ClearBackground` dos quadros seguintes não limpa o Z, e o céu
+(o do menu atrás do telão e, depois da seleção, o da luta) falhava no teste de profundidade. Bastava o Robo-47 aparecer uma vez no
+modelo 3D da seleção ou da lista de saves. Agora o `drawFlares` religa a escrita no fim. Conferido no menu (céu atrás do telão com o
+Robo-47 na seleção); a luta depois da seleção falta o dono conferir.
 
 ## 4. Free-for-All com 2 ou 3 CPUs não mostra a seleção nativa (feito em 2026-10-23, falta o dono conferir o de 2 jogadores)
 

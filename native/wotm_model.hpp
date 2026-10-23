@@ -1235,6 +1235,9 @@ private:
         EndShaderMode();
         EndBlendMode();
         rlEnableDepthTest();
+        // o setState(.., zmsk) desligou a escrita de Z: sem religar, o ClearBackground dos quadros seguintes nao limpava a
+        // profundidade e o ceu do menu (e o da luta) falhava no teste (manchas pretas so com monstro de luzes, o Robo-47)
+        rlEnableDepthMask();
     }
 };
 
