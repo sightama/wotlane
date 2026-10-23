@@ -13,7 +13,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco — **gancho feito em 2026-10-21** (falta o kit e PNG direto) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
-| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **em andamento** (órbita e lock-on na master em 2026-10-22; faltam etapas 3–9 do `investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
+| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
@@ -270,7 +270,7 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   os prédios "fantasma" por linha de visada), transições com cinema e agarrão, e a câmera de cada vista na tela dividida.
 - `Cameras::Update` (tabela `_6Camera$UPDATE_FUNK`) ainda está só em asm; câmera já é superfície de decomp do port. A câmera livre de
   debug (F5, `wotm_freecam.h`/`.inc`) tem a convenção de eixos pronta.
-- **Plano e decisões do dono (2026-10-22):** `investigacoes/2026-10-22/camera_orbital_plano.md` (branch `camera-orbital`): padrão
+- **Feito (2026-10-22), plano, decisões do dono e pendências:** `investigacoes/2026-10-22/camera_orbital_plano.md`: padrão
   moderna, lock-on enquadra os dois, recentralizar devagar com opção, mouse gira a câmera (pede teclado padrão novo e menus com mouse,
   etapas 7 a 9).
 

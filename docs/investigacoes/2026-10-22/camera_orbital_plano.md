@@ -1,6 +1,11 @@
 # Câmera moderna (orbital): plano (item 7 do `POS_FRONTEIRA.md`)
 
-Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um commit; o dono testa entre elas.
+Combinado com o dono em 2026-10-22. Cada etapa virou um commit (branches `camera-orbital`, `camera-etapa3`...`camera-etapa9`), testada
+pelo dono entre elas.
+
+**Estado (revisto em 2026-10-22): concluído.** As etapas 0 a 9 estão na master (a última junção é o `bc18048`): câmera moderna
+orbital por padrão (a clássica no painel), lock-on, colisão com chão e prédios, tela dividida, aba CAMERA, mouse na câmera, teclado
+novo (layout 2) e mouse nos menus nativos e nas telas do jogo. O que ficou de fora está em **Pendências**, no fim.
 
 ## O que já se sabe
 - **Na câmera normal o controle é relativo ao monstro** (dono, 2026-10-22): esquerda/direita giram o monstro (tipo tanque); só na
@@ -21,8 +26,8 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 ## Decisões do dono (2026-10-22)
 - **Alvo travado:** enquadra os dois, como o jogo já faz; o analógico direito só desloca um pouco.
 - **Recentralizar:** sim, devagar (depois de ~1,5 s sem mexer na câmera e com o monstro andando), com opção para desligar.
-- **Padrão:** câmera **moderna**. A clássica fica no painel. (Lote e testes automáticos: decidir se fixam a clássica para continuar
-  comparáveis.)
+- **Padrão:** câmera **moderna**. A clássica fica no painel. Com `WOTM_AIVSAI` (lotes, corpus) fica a clássica, para os testes
+  automáticos continuarem comparáveis.
 - **Teclado e mouse:** o mouse mexe a câmera sempre (cursor preso na janela durante a luta). Isso pede um **layout padrão novo do
   teclado** (a mão direita vai para o mouse) e **menus selecionáveis com o mouse**.
 
@@ -35,12 +40,10 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 3 | Chão e prédios (aprovado, na master em 2026-10-22) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições (conferida em 2026-10-22, sem código novo) | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
 | 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro e testada pelo dono em 2026-10-22) | estado de órbita por vista, cada uma pelo controle do seu jogador |
-| 6 | Painel (feita em 2026-10-22, aba CAMERA; falta o teste do dono) | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
+| 6 | Painel (na master em 2026-10-22, aba CAMERA) | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
 | 7 | Mouse na câmera (feita e testada pelo dono em 2026-10-22) | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
 | 8 | Teclado novo (feita em 2026-10-22, testada pelo dono) | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
-| 9 | Menus com mouse | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
-
-Etapas 7 a 9 podem andar em paralelo à 2–5 (não dependem da órbita além do gancho do mouse).
+| 9 | Menus com mouse (testada pelo dono e na master em 2026-10-22) | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
 
 ## Respostas do dono (2026-10-22, segunda rodada)
 - **Zoom:** sem zoom manual; distância automática, como a câmera de qualquer jogo (a que o jogo já calcula, ajustada se preciso).
@@ -71,7 +74,7 @@ Relatórios: `camera_controle_cr_sr.md` (controle) e `camera_normalupdate.md` (c
   restaurados na saída; os bytes do analógico direito (0x10..0x13 do `GamePad`) zerados e lidos pela órbita.
 - Alvo travado (etapa 2): pose do jogo, com desvio limitado pelo analógico direito.
 
-## Etapa 1: resultado (2026-10-22, falta o teste do dono)
+## Etapa 1: resultado (2026-10-22)
 `native/runtime/wotm_orbit.inc`, chamado pelos ganchos que já existiam (`Cameras::Update` da câmera livre, `interpretInputs` do
 lock-on) e por dois novos (`shakeCamera`, para manter o tremor, e `SetOkToUnify`, para a opção de desligar a câmera de perto).
 Opções `WOTM_CAMERA` (padrão moderna), `WOTM_CAMRECENTER` (padrão ligado), `WOTM_CLOSECAM` (padrão ligada), ainda sem linha no painel
@@ -84,7 +87,8 @@ Conferido no runtime (luta 1P com e sem IA, `WOTM_ORBITLOG`, analógico simulado
 - arremessado (POV 5) a câmera é a do jogo; ao voltar ao POV 0 a órbita retoma de onde o jogo deixou, sem salto;
 - vista unificada: entra e sai como antes; com `WOTM_CLOSECAM=0` ela não entra e a luta de perto segue na órbita.
 
-Ainda não conferido: agarrão, escalada, planeio, lock-on (etapa 2), tela dividida (etapa 5), sensação com o controle na mão.
+Na entrega ficaram sem conferir: agarrão (resolvido depois, na etapa 4), escalada e planeio (Pendências), lock-on (etapa 2) e tela
+dividida (etapa 5).
 
 ### Primeiro teste do dono (2026-10-22) e correções
 Relato: giro vertical rápido demais; a câmera girava sozinha andando devagar de lado; ao soltar o lock-on (ou o alvo morrer)
@@ -126,7 +130,7 @@ baixo, robô no alto da tela); lock-on um pouco seco.
 tela). Com a câmera moderna, o X do analógico direito não chega mais ao jogo em vista nenhuma; o Y chega fora da órbita e mexe a cabeça.
 Aprovado e levado para a master. Seguem as etapas 3 em diante.
 
-## Etapa 3: chão e prédios (2026-10-22, falta o teste do dono)
+## Etapa 3: chão e prédios (2026-10-22, aprovada pelo dono)
 Branch `camera-etapa3`. A órbita chama do próprio código nativo o `hdLosTest` e o `hdHatTest` do jogo (dados e pilha numa área abaixo
 da pilha atual do `Cameras::Update`), `collide` em `wotm_orbit.inc`, opção `WOTM_CAMCOLLIDE`.
 - **Medição** (`WOTM_CAMCOLLIDE=1`, câmera girando sozinha na Midtown, 1P contra IA): com o monstro no telhado e a câmera baixa, ela
@@ -173,7 +177,7 @@ O estado da órbita já era por câmera (`g_cam[vista]`) e o analógico por joga
 `interpretInputs`): não precisou de código novo. Para conferir sem controles, o `WOTM_ORBITSTICK` aceita `@jogador` em cada passo.
 Roteiro: `WOTM_MATCH=3,1,2,7,1 WOTM_PLAYERS=4` (quadrantes), giro de ~170 graus do jogador 1, depois do 2, do 3 e do 4, subir o 2 e
 descer o 3: cada câmera mudou só no passo do seu jogador (log e fotos); a de perto não existe com 3 e 4 jogadores (`wotm_split4.inc`).
-Falta: o dono conferir com controles de verdade (cada analógico direito girando só a sua vista), em 2 e em 3–4 jogadores.
+Conferida pelo dono com controles de verdade (2026-10-22).
 
 ## Etapa 6: painel (2026-10-22)
 Aba nova CAMERA no "Recompiled options", entre FEATURES e CONTROLS (`wotm_mainmenu.inc`): CAMERA STYLE (MODERN/CLASSIC,
@@ -181,7 +185,7 @@ Aba nova CAMERA no "Recompiled options", entre FEATURES e CONTROLS (`wotm_mainme
 AUTO CENTER (`WOTM_CAMRECENTER`) e CLOSE-UP CAMERA (`WOTM_CLOSECAM`). Gravadas no `settings.ini` como as outras; a órbita lê a cada
 quadro. Conferido por roteiro: a aba abre e os valores mudam e são registrados (`[settings] SENSITIVITY = 7`); na luta, a sensibilidade
 10 girou 86 graus em 15 quadros (43 com a 5), e com o eixo invertido o mesmo comando para cima desceu a câmera (-8 graus em vez de +14).
-
+Sem teste dedicado do dono registrado (Pendências).
 
 ## Etapa 7: mouse na câmera (2026-10-22)
 `native/wotm_mouse.hpp` liga os dois lados. A janela (`wotm_pad::mouseFrame`, a cada apresentação) publica o jogador do teclado (a
@@ -194,7 +198,7 @@ sensibilidade do painel valem; com alvo travado o mouse só desloca, como o anal
 aviso para e o cursor é solto em ~150 ms. `WOTM_MOUSECAM=0` desliga; `WOTM_ORBITMOUSE` simula o mouse nos testes.
 Conferido por roteiro (1P): 600 pixels para a direita giraram 85,9 graus e 200 para cima levaram a altura a -28,6 graus (o
 previsto); cursor preso na luta, solto no menu de pausa (`PS2X_PAD` com start, foto) e preso de novo ao continuar.
-Falta: o dono jogar com o mouse de verdade (sensação da velocidade padrão).
+Testada pelo dono (2026-10-22).
 
 ## Etapa 8: teclado novo (2026-10-22, testada pelo dono)
 Layout 2 do teclado, o do dono (`wotm_settings.hpp`, `kDefaultKb`): WASD anda (analógico esquerdo), mouse gira a câmera, botão
@@ -237,8 +241,16 @@ testar assim (o GLFW solta o Shift que não está fisicamente apertado). Valeu o
   depois do instante de espera); legenda na lista de saves ao carregar; mouse no "salvar?" da aventura (gancho do
   `McPage::updateMenuPos`; o cursor é solto em menu do jogo na fase); "Press X again" com o nome do botão do dispositivo de agora
   (ou "Click again").
-- **Falta:** teste do dono (mouse é conferido à mão; o roteiro de pad só mostrou que a tela 3 acha os retratos e que a pausa e o
-  ARE YOU SURE continuam no pad). Fora por ora: páginas `McPage` do cartão (o "salvar?" depois da aventura, com `WOTM_SAVEAUTO=0`).
+- **Segundo teste do dono (2026-10-22): aprovado** ("deu tudo certo") e levado à master. O mouse é conferido à mão pelo dono: teste
+  por mensagens do Windows na janela não registra os cliques, e o cursor de verdade sobre a janela atrapalha os roteiros de pad.
 
-## Perguntas em aberto
-- Com a órbita, o `TogglePOV` ainda faz sentido?
+## Pendências
+- **Escalada, rampa e planeio:** sem o balanço do jogo (segundo teste da etapa 1), a câmera moderna não aproxima nem inclina ao escalar
+  ou na rampa. Ninguém conferiu ainda; o medidor de salto do `WOTM_ORBITLOG` ajuda quando o dono notar algo.
+- **Aba CAMERA (etapa 6):** conferida só por roteiro.
+- **Páginas do cartão com `WOTM_SAVEAUTO=0`:** sem mouse (o gancho do `McPage::updateMenuPos` só é instalado com o salvamento
+  automático, onde a única página com menu é o "salvar?" da aventura).
+- **Legenda da lista de saves ao gravar** (na fase): de fora de propósito, porque a faixa preta de baixo cobriria a luta; só ao carregar.
+- **Jogadores 3 e 4:** leem o esquema de controle do `m_vibration` (anotado no `POS_FRONTEIRA.md`); sem a linha CONTROL SCHEME na pausa
+  ninguém muda mais esse valor, mas a leitura continua vindo dali.
+- O `TogglePOV` (pergunta antiga) é código morto (etapa 0): nada a fazer.
