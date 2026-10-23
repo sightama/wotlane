@@ -379,7 +379,15 @@ static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, 
         std::lock_guard<std::mutex> lk(g_m);
         v = g_view;
     }
-    const bool click = v.any && wotm::mouse::takeClick(wotm::mouse::g_clickL);
+    const bool click = (v.any || s == 21) && wotm::mouse::takeClick(wotm::mouse::g_clickL);
+    // telas que andam para os lados: Q/E (e a rodinha, menos nos unlocks, onde ela anda nas linhas) viram esquerda/direita no teclado
+    // (wotm_pad.inc); L1/R1 do controle tambem
+    const bool side = s == 8 || (s >= 11 && s <= 14) || s == 21;
+    if (side)
+    {
+        wotm::mouse::sideScreen(s != 21);
+        if (code == 9 || code == 0xC) code = code == 9 ? kLeft : kRight;
+    }
     if (s == 21)
         return unlocker(rdram, ctx, runtime, code, moved, click);
     if (s != s_screen || v.screen != s || handled(s) || rd32(rdram, wotm::sym::betweenScreens))
@@ -398,9 +406,14 @@ static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, 
     case 3: case 6: case 7: {
         if (monsterDone(rdram, s)) { s_goal = Goal{}; return 0; }
         const int col = colOf(rdram, s), cost = costumeOf(rdram, s);
-        if (v.costume >= 0 && (moved || click) && (v.costume != cost || click))
+        // o retrato so aparece na View depois do instante parado nele (frame): a chegada dele conta como movimento
+        static int s_vcol = -1, s_vcost = -1;
+        const bool newCol = v.col != s_vcol, newCost = v.costume != s_vcost;
+        s_vcol = v.col;
+        s_vcost = v.costume;
+        if (v.costume >= 0 && (moved || newCost || click) && (v.costume != cost || click))
             s_goal = Goal{2, v.costume, -999, 0, click};
-        else if (v.col >= 0 && (moved || click) && (v.col != col || click) && columnValid(rdram, s, v.col))
+        else if (v.col >= 0 && (moved || newCol || click) && (v.col != col || click) && columnValid(rdram, s, v.col))
             s_goal = Goal{1, v.col, -999, 0, click};
         return stepGoal(s_goal, s_goal.kind == 2 ? cost : col);
     }

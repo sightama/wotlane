@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 namespace wotm::mouse
 {
@@ -110,6 +111,34 @@ inline std::atomic<int> g_crossReq{0};
 inline std::atomic<int64_t> g_gameMenuUntil{0};   // ate quando (ms) a tela do jogo com mouse esta aberta (a pausa nao e menu do shell)
 inline void gameMenu() { g_gameMenuUntil.store(nowMs() + 150, std::memory_order_relaxed); }
 inline bool inGameMenu() { return nowMs() < g_gameMenuUntil.load(std::memory_order_relaxed); }
+
+// Telas do jogo que andam para os lados (fase, numero de CPUs, minigame, unlocks): o EE avisa e o teclado (wotm_pad.inc) manda Q/E como
+// esquerda/direita; com `wheel`, a rodinha tambem (senao ela continua cima/baixo)
+inline std::atomic<int64_t> g_sideUntil{0};
+inline std::atomic<bool> g_sideWheel{false};
+inline void sideScreen(bool wheel)
+{
+    g_sideWheel.store(wheel, std::memory_order_relaxed);
+    g_sideUntil.store(nowMs() + 150, std::memory_order_relaxed);
+}
+inline bool sideActive() { return nowMs() < g_sideUntil.load(std::memory_order_relaxed); }
+// Lista de saves aberta (EE, wotm_save.inc): 1 carregar, 2 gravar, 3 confirmar a troca; a janela poe a legenda de baixo
+inline std::atomic<int64_t> g_saveListUntil{0};
+inline std::atomic<int> g_saveListMode{0};
+inline void saveList(int mode)
+{
+    g_saveListMode.store(mode, std::memory_order_relaxed);
+    g_saveListUntil.store(nowMs() + 150, std::memory_order_relaxed);
+}
+inline int saveListMode() { return nowMs() < g_saveListUntil.load(std::memory_order_relaxed) ? g_saveListMode.load(std::memory_order_relaxed) : 0; }
+// Nome do botao de confirmar no dispositivo de agora ("ENTER", "A", "CROSS"...), para o texto do jogo (a janela escreve)
+inline std::mutex g_lblM;
+inline std::string g_confirmLabel = "X";
+inline std::string confirmLabel()
+{
+    std::lock_guard<std::mutex> lk(g_lblM);
+    return g_confirmLabel;
+}
 } // namespace wotm::mouse
 
 // O ponteiro em unidades da tela do PS2 (640 x 224, as do texto do jogo), publicado pela janela junto da apresentacao

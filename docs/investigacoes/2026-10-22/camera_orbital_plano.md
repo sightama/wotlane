@@ -231,6 +231,12 @@ testar assim (o GLFW solta o Shift que não está fisicamente apertado). Valeu o
   O mouse anda pelos códigos de pad (um passo por quadro, até 10) e confirma com X ao chegar, sem escrever as variáveis do jogo, salvo
   na 21 (só texto). Retrato só conta depois de ~0,1 s parado nele (a caminho das caixas de traje). Na tela 8 a segunda leitura do
   controle no mesmo quadro recebe o mesmo código. Modal de saves e unlocks por coordenadas do texto.
+- **Primeiro teste do dono (2026-10-22), correções:** legenda do painel com Q/E quando L1/R1 não têm tecla; unlocks com Q/E e L1/R1
+  trocando o grupo e com clique (o clique era descartado); fase, número de CPUs e minigame com rodinha, Q/E e L1/R1 para os lados
+  (`wotm::mouse::sideScreen`); retrato da escolha de monstro escolhido ao parar nele (antes só respondia se o mouse ainda andasse
+  depois do instante de espera); legenda na lista de saves ao carregar; mouse no "salvar?" da aventura (gancho do
+  `McPage::updateMenuPos`; o cursor é solto em menu do jogo na fase); "Press X again" com o nome do botão do dispositivo de agora
+  (ou "Click again").
 - **Falta:** teste do dono (mouse é conferido à mão; o roteiro de pad só mostrou que a tela 3 acha os retratos e que a pausa e o
   ARE YOU SURE continuam no pad). Fora por ora: páginas `McPage` do cartão (o "salvar?" depois da aventura, com `WOTM_SAVEAUTO=0`).
 

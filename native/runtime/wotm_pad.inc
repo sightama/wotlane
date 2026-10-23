@@ -165,7 +165,13 @@ static void keyboard(uint16_t &btns, uint8_t *data)
         if (req > 0) m |= 0x4000;
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) m |= 0x1000;                                  // triangulo
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !wotm::mouse::claimed()) m |= 0x4000;        // X
-        if (g_wheelHeld) m |= g_wheelHeld > 0 ? 0x0010 : 0x0040;                                 // cima / baixo
+        const bool side = wotm::mouse::sideActive();   // tela que anda para os lados (wotm_gamescreens.inc)
+        if (g_wheelHeld && side && wotm::mouse::g_sideWheel.load(std::memory_order_relaxed))
+            m |= g_wheelHeld > 0 ? 0x0080 : 0x0020;                                              // esquerda / direita
+        else if (g_wheelHeld)
+            m |= g_wheelHeld > 0 ? 0x0010 : 0x0040;                                              // cima / baixo
+        if (side && IsKeyDown(KEY_Q)) m |= 0x0080;                                               // Q / E: esquerda / direita
+        if (side && IsKeyDown(KEY_E)) m |= 0x0020;
         btns &= static_cast<uint16_t>(~m);
     }
     constexpr uint16_t kL1 = 0x0400, kR1 = 0x0800, kL2 = 0x0100, kR2 = 0x0200;
@@ -251,7 +257,7 @@ static void mouseFrame()
     namespace ms = wotm::mouse;
     static const bool off = [] { const char *e = std::getenv("WOTM_MOUSECAM"); return e && e[0] == '0'; }();
     ms::g_kbPlayer.store(keyboardPlayer(), std::memory_order_relaxed);
-    const bool want = !off && ms::wanted() && IsWindowFocused();
+    const bool want = !off && ms::wanted() && !ms::inGameMenu() && IsWindowFocused();   // menu do jogo na fase (pausa, "salvar?"): solto
     static bool captured = false;
     static int skip = 0;
     if (want != captured)

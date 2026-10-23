@@ -1037,7 +1037,10 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     if (v.opt >= 0 && v.opt < n)
         wotm_legend::hint(rows[v.opt].hint, la);
     using wotm_legend::bind;
-    const Icon tabs1 = bind(st::BL1), tabs2 = bind(st::BR1), left = bind(st::BLeft), right = bind(st::BRight);
+    Icon tabs1 = bind(st::BL1), tabs2 = bind(st::BR1);
+    const Icon left = bind(st::BLeft), right = bind(st::BRight);
+    if (!tabs1.key) tabs1.key = "Q";   // L1/R1 sem tecla (layout 2): o painel troca a aba com Q/E (readPanel)
+    if (!tabs2.key) tabs2.key = "E";
     const Icon ok = bind(st::BCross), back = bind(st::BTriangle), clear = bind(st::BSquare);
     if (kind == KCapture)
     {

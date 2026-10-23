@@ -1659,6 +1659,31 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
+        {
+            // Lista de saves (wotm_save.inc, na thread do EE): o nome do botao de confirmar no dispositivo de agora, para o "press ...
+            // again to overwrite", e a legenda de baixo ao carregar (no menu; ao gravar, na fase, a faixa preta cobriria a luta)
+            namespace st = wotm::settings;
+            using wotm_legend::bind;
+            const wotm_legend::Icon ok = bind(st::BCross);
+            const int style = wotm_prompts::currentStyle();
+            std::string lbl = "X";
+            if (style == st::PromptKeyboard && ok.key)
+            {
+                lbl = ok.key;
+                std::replace(lbl.begin(), lbl.end(), '_', ' ');
+            }
+            else if (ok.pad >= GAMEPAD_BUTTON_RIGHT_FACE_UP && ok.pad <= GAMEPAD_BUTTON_RIGHT_FACE_LEFT)
+            {
+                static const char *const kNames[3][4] = {{"Y", "B", "A", "X"}, {"TRIANGLE", "CIRCLE", "CROSS", "SQUARE"}, {"X", "A", "B", "Y"}};
+                lbl = kNames[style == st::PromptXbox ? 0 : style == st::PromptNintendo ? 2 : 1][ok.pad - GAMEPAD_BUTTON_RIGHT_FACE_UP];
+            }
+            {
+                std::lock_guard<std::mutex> lk(wotm::mouse::g_lblM);
+                wotm::mouse::g_confirmLabel = lbl;
+            }
+            if (wotm::mouse::saveListMode() == 1)
+                wotm_legend::post({{bind(st::BUp), bind(st::BDown), "SELECT"}, {ok, {}, "LOAD"}, {bind(st::BTriangle), {}, "BACK"}}, 1.f);
+        }
         wotm_legend::draw(S.scene, ram, fontTex0, RW, RH);   // legenda e dica dos menus nativos e do modo foto
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
         if (!split && !photoHide)
