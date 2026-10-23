@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cctype>
@@ -86,6 +88,26 @@ struct ViewScope {
     ~ViewScope() { curView() = prev; }
     ViewScope(const ViewScope &) = delete;
     ViewScope &operator=(const ViewScope &) = delete;
+};
+
+// Medida do desenho (WOTM_DRAWSTATS=1, com PS2X_STATS): tempo de cada fase do Scene::draw, lotes descarregados e vertices emitidos,
+// somados na thread da janela; o wotm_live.inc imprime a media por vista desenhada na linha [native] e zera
+struct DrawProf {
+    enum Phase { Sky, Trav, AlphaOT, Shadows, ShadowTex, Sprites, Fx, Hud, Flush, kN };   // Flush: descargas de lote do drawList (dentro das outras)
+    double ms[kN] = {};
+    long batches = 0, verts = 0, views = 0;
+    long shadowHit = 0, shadowMiss = 0;   // silhuetas reaproveitadas e refeitas (Scene::shadowTexture)
+    long emitted = 0;                     // vertices de fato emitidos pelo drawList (depois do corte de faces e dos slots)
+};
+inline DrawProf &drawProf() { static DrawProf p; return p; }
+inline bool drawProfOn() { static const bool on = std::getenv("WOTM_DRAWSTATS") != nullptr; return on; }
+inline double profNowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+// Soma o tempo do escopo na fase `ph` (so com WOTM_DRAWSTATS)
+struct ProfScope {
+    DrawProf::Phase ph;
+    double t0;
+    explicit ProfScope(DrawProf::Phase p) : ph(p), t0(drawProfOn() ? profNowMs() : 0.0) {}
+    ~ProfScope() { if (drawProfOn()) drawProf().ms[ph] += profNowMs() - t0; }
 };
 // Enderecos da vista corrente: worldToScreenMat[v], worldCtx[v], viewInfo[v]
 inline uint32_t viewW2S() { return addr::worldToScreenMat + 0x40u * uint32_t(curView().view); }
@@ -1396,9 +1418,17 @@ public:
             b.shadowCs = ram.u32(e + 0x14);
             std::vector<DrawItem> keep;
             keep.swap(items);
+            // LOD como o hierShadow: a distancia fixa do bloqueador (lodRangeSq em +0x28, 1200^2 no psBlockerAdd; o chefe final usa
+            // 20000^2), nao a do olho da vista; e sem o corte pela vista (o jogo percorre pela camera da luz, que abrange o bloqueador).
+            // Assim a silhueta e a mesma em todas as vistas da tela dividida (Scene::shadowTexture a reaproveita) e um monstro meio fora
+            // da vista nao perde parte da sombra. Sem valor util na entrada: o olho, como antes.
+            const float lodD2 = ram.f32(e + 0x28);
+            static const bool eyeLod = std::getenv("WOTM_SHADOWEYELOD") != nullptr;   // diagnostico: LOD e corte pelo olho (como antes)
+            shadowLodD2_ = !eyeLod && std::isfinite(lodD2) && lodD2 > 0.f ? lodD2 : -1.f;
             drawCs(ram, cs, false);
             const uint32_t cs2 = ram.u32(e + 0x18);   // segundo cs (psBlockerSet2ndCs: o que o monstro segura, por exemplo)
             if (ram.ok(cs2, 0xB0) && ram.u8(cs2 + 0xC)) drawCs(ram, cs2, false);
+            shadowLodD2_ = -1.f;
             b.casters.swap(items);
             items.swap(keep);
             for (const DrawItem &it : b.casters) b.casterNodes.push_back(it.node);   // todos (receptor excluido), antes do filtro
@@ -1437,7 +1467,8 @@ public:
         rlSetBlendMode(BLEND_ALPHA);
         for (size_t k = 0; k < shadows.size(); ++k) {
             const ShadowBlocker &b = shadows[k];
-            if (std::getenv("WOTM_SHADOWLOG")) {
+            static const bool shadowLog = std::getenv("WOTM_SHADOWLOG") != nullptr;   // uma vez: getenv e lento no Windows
+            if (shadowLog) {
                 std::fprintf(stderr, "[shadow] bloqueador %d origem %.1f %.1f %.1f extent %.1f luz %.3f %.3f %.3f cs receptor %x (0 = fase), %zu projetam:\n", b.index,
                              b.origin[0], b.origin[1], b.origin[2], b.extent, L[0], L[1], L[2], b.shadowCs, b.casters.size());
                 for (const DrawItem &it : b.casters) {
@@ -1446,7 +1477,11 @@ public:
                                  ram.u32(it.node + 0xC), it.lodIdx, it.fade, it.m.m[3][0], it.m.m[3][1], it.m.m[3][2], md ? md->tris.size() / 3 : size_t(0), md ? int(md->skinned) : -1);
                 }
             }
-            const unsigned tex = shadowTexture(ram, k, b, R, U);
+            unsigned tex = 0;
+            {
+                ProfScope ps(DrawProf::ShadowTex);
+                tex = shadowTexture(ram, k, b, R, U);
+            }
             if (!tex) continue;
             const float E = b.extent;
             auto lightUV = [&](const float p[3], float &u, float &v, float &h) {
@@ -1486,7 +1521,7 @@ public:
                     const float fz = ram.f32(it.node + 0x28);
                     const bool fudge = it.cs != 0 && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
                     if (fudge && slog) std::fprintf(stderr, "[shadow]   fudge %.4f no %x\n", fz, it.node);
-                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
+                    forEachTriPos(ram, it, [&](const float p[3][3]) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -1556,14 +1591,124 @@ public:
         }
     }
 
+    // So as posicoes no mundo (com skinning) dos triangulos de um item, sem cor nem normal: o que as sombras usam. A paleta e a do
+    // instantaneo (DrawItem::pal, a mesma do drawList); sem ela, a da RAM.
+    template <class F> void forEachTriPos(const Ram &ram, const DrawItem &it, F &&f) {
+        const MeshData *md = mesh(ram, it.node);
+        if (!md || !md->valid) return;
+        std::vector<M4> tmp;
+        const M4 *pm = nullptr;
+        if (md->skinned) {
+            if (it.pal && it.pal->size() >= 32) pm = it.pal->data();
+            else if (const uint32_t pal = palette(ram, it)) {
+                for (uint32_t s = 0; s < 32; ++s) tmp.push_back(readM4(ram, pal + 0x10 + 0x40 * s));
+                pm = tmp.data();
+            }
+        }
+        const auto &t = md->tris;
+        float p[3][3];
+        for (size_t k = 0; k + 2 < t.size(); k += 3) {
+            for (int c = 0; c < 3; ++c) {
+                if (pm) skinVertexPM(pm, it.m, t[k + c], p[c]);
+                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+            }
+            f(p);
+        }
+    }
+
+    // Chave da silhueta: tudo o que entra nela (bloqueador, quadro de luz e, de cada um que projeta, no, matriz e paleta), com as
+    // posicoes em 1/4 de unidade e as rotacoes em 1/1024. O hier de cada vista reavalia a pose e os ultimos bits das matrizes mudam de
+    // uma vista para a outra (mesmo quadro do jogo, mesmos numeros a vista); a silhueta tem ~2 unidades por texel, entao isso nao a
+    // muda. As vistas 1 a 3 da tela dividida passam a dividir a textura; a 0 (antes do TheGame::Update) cai na dela quando ha movimento.
+    static uint64_t shadowKey(const ShadowBlocker &b, const float R[3], const float U[3]) {
+        uint64_t h = 1469598103934665603ull;
+        auto mixI = [&](int64_t v) {
+            for (int i = 0; i < 8; ++i) h = (h ^ uint8_t(v >> (8 * i))) * 1099511628211ull;
+        };
+        auto q = [](float f, float s) { return std::isfinite(f) ? int64_t(std::llround(double(f) * s)) : INT64_MIN; };
+        auto mixM = [&](const M4 &m) {
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c) mixI(q(m.m[r][c], r == 3 ? 4.f : 1024.f));
+        };
+        mixI(b.index);
+        for (int c = 0; c < 3; ++c) mixI(q(b.origin[c], 4.f));
+        mixI(q(b.extent, 4.f));
+        for (int c = 0; c < 3; ++c) mixI(q(R[c], 1024.f)), mixI(q(U[c], 1024.f));
+        for (const DrawItem &it : b.casters) {
+            mixI(it.node);
+            mixM(it.m);
+            if (it.pal) for (const M4 &m : *it.pal) mixM(m);
+            else mixI(it.animPkt);   // sem copia (viewer): le a RAM, sem cache entre vistas
+        }
+        return h;
+    }
+
+    // Silhueta guardada (Scene::shadowCache_)
+    struct ShadowCacheEntry {
+        uint64_t key = 0, used = 0, redraw = ~0ull;
+        Texture2D tex{};
+        int index = -1;
+        float origin[3] = {}, extent = 0.f, R[3] = {};
+        std::vector<uint32_t> nodes;
+        std::vector<float> pos;   // translacao (m[3]) de cada no que projeta
+    };
+
+    // A silhueta de outra vista do mesmo redesenho serve para esta? Mesmo bloqueador, mesma luz, mesmos nos projetando, e origem,
+    // extensao e posicao de cada no dentro do que a silhueta (~2 unidades por texel) nao mostra. O hier de cada vista reavalia a pose,
+    // e os membros andam algumas decimas de unidade de uma vista para outra no mesmo quadro: a chave exata quase nunca batia.
+    bool shadowNear(const ShadowCacheEntry &e, const ShadowBlocker &b, const float R[3]) const {
+        if (e.redraw != redrawId || e.index != b.index || e.nodes.size() != b.casters.size()) return false;
+        if (std::fabs(e.extent - b.extent) > 0.02f * b.extent) return false;
+        for (int c = 0; c < 3; ++c)
+            if (std::fabs(e.origin[c] - b.origin[c]) > kShadowTol || std::fabs(e.R[c] - R[c]) > 1e-3f) return false;
+        for (size_t i = 0; i < b.casters.size(); ++i) {
+            const DrawItem &it = b.casters[i];
+            if (e.nodes[i] != it.node) return false;
+            for (int c = 0; c < 3; ++c)
+                if (std::fabs(e.pos[3 * i + c] - it.m.m[3][c]) > kShadowTol) return false;
+        }
+        return true;
+    }
+
     // Silhueta do bloqueador no quadro de luz: rasterizada na CPU (kShadowRes^2), borrada (o retail filtra com sprites) e enviada
-    // como textura preta com alfa = cobertura. Uma textura por posicao em `shadows`, reaproveitada entre quadros.
+    // como textura preta com alfa = cobertura. Reaproveitada pela chave das entradas (shadowKey: um redesenho sem quadro novo) ou de
+    // outra vista do mesmo redesenho (shadowNear: tela dividida). Os itens sem copia da paleta (viewer) refazem sempre.
     unsigned shadowTexture(const Ram &ram, size_t slot, const ShadowBlocker &b, const float R[3], const float U[3]) {
         constexpr int N = kShadowRes;
-        std::vector<float> cov(size_t(N * N), 0.f);
+        bool cacheable = true;
+        for (const DrawItem &it : b.casters) cacheable = cacheable && (!it.animPkt || it.pal);
+        const uint64_t key = cacheable ? shadowKey(b, R, U) : 0;
+        ++shadowTick_;
+        static const bool slogTex = std::getenv("WOTM_SHADOWLOG") != nullptr;
+        static const bool noReuse = std::getenv("WOTM_SHADOWNOCACHE") != nullptr;   // diagnostico: refaz toda silhueta (como antes)
+        if (cacheable && !slogTex && !noReuse)
+            for (ShadowCacheEntry &e : shadowCache_)
+                if (e.tex.id && (e.key == key || shadowNear(e, b, R))) {
+                    e.used = shadowTick_;
+                    if (drawProfOn()) ++drawProf().shadowHit;
+                    return e.tex.id;
+                }
+        if (drawProfOn()) ++drawProf().shadowMiss;
+        static const bool keyLog = std::getenv("WOTM_SHADOWKEYLOG") != nullptr;   // diagnostico: o que entra na chave de cada silhueta
+        if (keyLog) {
+            std::fprintf(stderr, "[shadowkey] bloqueador %d chave %016llx origem %.3f %.3f %.3f extent %.3f casters", b.index, (unsigned long long)key,
+                         b.origin[0], b.origin[1], b.origin[2], b.extent);
+            for (const DrawItem &it : b.casters) {
+                ShadowBlocker one;
+                one.casters.push_back(it);
+                const uint64_t hm = shadowKey(one, R, U);   // so este (matriz e paleta)
+                one.casters.back().pal.reset();
+                std::fprintf(stderr, " %x(lod %d, pal %d, x %.3f, m+pal %04llx, m %04llx)", it.node, it.lodIdx, it.pal ? 1 : 0, it.m.m[3][0],
+                             (unsigned long long)(hm & 0xFFFF), (unsigned long long)(shadowKey(one, R, U) & 0xFFFF));
+            }
+            std::fprintf(stderr, "\n");
+        }
+        (void)slot;
+        std::vector<float> &cov = shadowCov_;
+        cov.assign(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
+            forEachTriPos(ram, it, [&](const float p[3][3]) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -1585,7 +1730,8 @@ public:
             });
         }
         for (int pass = 0; pass < 2; ++pass) {   // caixa 3x3 duas vezes; a borda fica em 0 (CLAMP nao estende sombra)
-            std::vector<float> o(cov.size(), 0.f);
+            std::vector<float> &o = shadowTmp_;
+            o.assign(cov.size(), 0.f);
             for (int y = 1; y < N - 1; ++y)
                 for (int x = 1; x < N - 1; ++x) {
                     float s = 0;
@@ -1595,9 +1741,10 @@ public:
                 }
             cov.swap(o);
         }
-        std::vector<uint32_t> px(cov.size());
+        std::vector<uint32_t> &px = shadowPx_;
+        px.resize(cov.size());
         for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
-        if (std::getenv("WOTM_SHADOWLOG")) {   // diagnostico: silhueta em shadow_<slot>.png (branco = sombra) no diretorio atual
+        if (slogTex) {   // diagnostico: silhueta em shadow_<slot>.png (branco = sombra) no diretorio atual
             std::vector<uint32_t> vis(px.size());
             for (size_t i = 0; i < px.size(); ++i) { const uint32_t a = px[i] >> 24; vis[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
             Image img{vis.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
@@ -1605,8 +1752,26 @@ public:
             std::snprintf(name, sizeof name, "shadow_%zu.png", slot);
             ExportImage(img, name);
         }
-        if (shadowTex_.size() <= slot) shadowTex_.resize(slot + 1);
-        Texture2D &t = shadowTex_[slot];
+        // entrada a reusar: a menos usada recentemente (no maximo kShadowCacheN texturas; 10 bloqueadores x 4 vistas cabem)
+        ShadowCacheEntry *e = nullptr;
+        if (shadowCache_.size() < kShadowCacheN) e = &shadowCache_.emplace_back();
+        else
+            for (ShadowCacheEntry &c : shadowCache_)
+                if (!e || c.used < e->used) e = &c;
+        e->key = cacheable ? key : 0;
+        e->used = shadowTick_;
+        e->redraw = cacheable ? redrawId : ~0ull;
+        e->index = b.index;
+        e->extent = b.extent;
+        std::copy(b.origin, b.origin + 3, e->origin);
+        std::copy(R, R + 3, e->R);
+        e->nodes.clear();
+        e->pos.clear();
+        for (const DrawItem &it : b.casters) {
+            e->nodes.push_back(it.node);
+            for (int c = 0; c < 3; ++c) e->pos.push_back(it.m.m[3][c]);
+        }
+        Texture2D &t = e->tex;
         if (!t.id) {
             Image img{px.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
@@ -1832,7 +1997,9 @@ public:
         sn.g = g;
         sn.valid = true;
         std::unordered_map<uint32_t, std::shared_ptr<std::vector<M4>>> byBlock;
-        for (std::vector<DrawItem> *list : {&sn.items, &sn.sky})
+        std::vector<std::vector<DrawItem> *> lists = {&sn.items, &sn.sky};
+        for (ShadowBlocker &b : sn.shadows) lists.push_back(&b.casters);   // a silhueta com a mesma pose do monstro desenhado
+        for (std::vector<DrawItem> *list : lists)
             for (DrawItem &it : *list) {
                 if (!it.animPkt) continue;
                 const uint32_t blk = palette(ram, it);
@@ -2524,41 +2691,54 @@ public:
             BeginShaderMode(alphaShader_);
             g_premulShader = true;
         }
+        vs_.setShader(useShader ? alphaShader_.id : 0u, useShader ? alphaShader_.locs : nullptr);   // o do rlgl agora (0 = o padrao)
         return useShader;
     }
 
     void draw(const Ram &ram, bool wire = false) {
         ViewScope vs(vctx);
+        if (drawProfOn()) ++drawProf().views;
         const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();   // o ceu e desenhado primeiro, sem profundidade
-        drawList(ram, sky, wire);
-        rlDrawRenderBatchActive();
+        {
+            ProfScope ps(DrawProf::Sky);
+            drawList(ram, sky, wire);
+            rlDrawRenderBatchActive();
+        }
         rlEnableDepthTest();
         static const bool onePass = std::getenv("WOTM_ONEPASS") != nullptr;   // diagnostico: tudo num passe so (sem separar translucidos)
         // Como o hier: fora da OT de alfa, opacos e translucidos juntos na ordem da travessia (gravando Z conforme o ZMSK do GROUP); a
         // OT de alfa (passe 1) depois. Com dois passes (opacos primeiro), a previa da fase (tex 102, As ~ 1) saia antes do logo do
         // telao (tex 140/141, sem gravar Z) e o logo ficava por cima; no GS a previa vem depois e o cobre.
-        drawList(ram, items, wire, (wire || onePass) ? -1 : 2);
-        if (!wire && !onePass) {
+        {
+            ProfScope ps(DrawProf::Trav);
+            drawList(ram, items, wire, (wire || onePass) ? -1 : 2);
             rlDrawRenderBatchActive();
+        }
+        if (!wire && !onePass) {
+            ProfScope ps(DrawProf::AlphaOT);
             rlDisableDepthMask();   // translucidos: o drawList grava profundidade item a item pelo ZBUF_1.ZMSK (DrawItem::zmsk)
             drawList(ram, items, wire, 1);
             rlDrawRenderBatchActive();
             rlEnableDepthMask();
         }
         // sombras projetadas depois da OT de alfa: no XGKICK os receptores redesenhados com a textura da sombra vem depois dela
-        if (!wire) drawShadows(ram);
+        if (!wire) { ProfScope ps(DrawProf::Shadows); drawShadows(ram); }
         // particulas por ultimo (testam profundidade, nao escrevem): destroços (drawSprites), depois os demais tipos na ordem de particleDraw
-        if (!wire) drawSprites(ram);
-        // Teste de alfa das particulas: os pacotes translucidos nao mexem no TEST e herdam o 0x7000D (As > 0) do restoreScreenDrawEnv;
-        // os destroços trazem o proprio TEST e fecham com o setClosingContext (0x5004B: As >= 4). Medido pela checagem (TEST do XGKICK).
-        if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
-        // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
-        if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
-        if (!wire) setAlphaRef(kGsAlphaRef);
-        if (!wire && !deferFlares)   // lens flare: tela, depois das particulas
-            fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
-        rlDrawRenderBatchActive();
+        if (!wire) { ProfScope ps(DrawProf::Sprites); drawSprites(ram); }
+        {
+            ProfScope ps(DrawProf::Fx);
+            // Teste de alfa das particulas: os pacotes translucidos nao mexem no TEST e herdam o 0x7000D (As > 0) do restoreScreenDrawEnv;
+            // os destroços trazem o proprio TEST e fecham com o setClosingContext (0x5004B: As >= 4). Medido pela checagem (TEST do XGKICK).
+            if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
+            // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
+            if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
+            if (!wire) setAlphaRef(kGsAlphaRef);
+            if (!wire && !deferFlares)   // lens flare: tela, depois das particulas
+                fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+            rlDrawRenderBatchActive();
+        }
+        ProfScope psHud(DrawProf::Hud);
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
         if (!sprites2d) drawList(ram, overlay, wire, -1, true);
@@ -2575,6 +2755,7 @@ public:
     // vistas a ~60 ms). Com o adiamento, todas as vistas sao desenhadas antes e os flares de cada uma vem depois, na textura dela, com
     // a lista e o contexto da vista (`fl`, `vc`): uma espera so por redesenho. Dentro do BeginMode3D da vista.
     bool deferFlares = false;
+    uint64_t redrawId = 0;   // redesenho em curso (o chamador incrementa antes das vistas): silhuetas de sombra divididas entre elas
     // `depth`: a profundidade da vista vai para ele (copia assincrona) e o teste usa a do redesenho anterior (AsyncDepth)
     void drawFlaresFor(const Ram &ram, const Particles::FlareFrame &fl, const ViewCtx &vc, AsyncDepth *depth = nullptr) {
         if (depth) {
@@ -2847,8 +3028,20 @@ public:
         uint8_t curItBlend = 0;
         int16_t curItRef = 0;   // estado do item do lote aberto (passe da travessia: lote so com o mesmo estado)
         bool curItZ = false, curItAbe = false;
+        // Vertices pelo VtxStream (o mesmo que o rlgl mandaria, sem as quatro chamadas por vertice); o arame e WOTM_NOVTXSTREAM=1
+        // usam o modo imediato do rlgl. No stream, um lote novo que so troca a textura vira outro comando da mesma subida; a fila e
+        // descarregada so antes de uma mudanca de estado do GL (mistura, teste de alfa, mascara de Z, CLAMP), que vale na descarga.
+        static const bool noStream = std::getenv("WOTM_NOVTXSTREAM") != nullptr;
+        const bool stream = !wire && !noStream && vs_.ok();
+        auto flushStream = [&] {
+            if (!stream || vs_.empty()) return;
+            ProfScope ps(DrawProf::Flush);
+            vs_.flush();
+            if (drawProfOn()) ++drawProf().batches;
+        };
         auto setBlend = [&](uint8_t b) {
             if (b == curBlend) return;
+            flushStream();
             curBlend = b;
             curPremul = gsBlendPremul(b);
             gsBlend(b);
@@ -2856,9 +3049,27 @@ public:
         int16_t curRef = kGsAlphaRef;   // DrawItem::aref no uniform do shader (idem)
         auto setRef = [&](int16_t r) {
             if (r == curRef) return;
+            flushStream();
             curRef = r;
             setAlphaRef(r);
         };
+        int curZm = -1;   // mascara de Z posta aqui (-1: a do chamador)
+        auto setZm = [&](bool on) {
+            if (int(on) == curZm) return;
+            flushStream();
+            curZm = int(on);
+            if (on) rlEnableDepthMask();
+            else rlDisableDepthMask();
+        };
+        auto vColor = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a) { if (stream) vs_.color(r, g, b, a); else rlColor4ub(r, g, b, a); };
+        auto vTex = [&](float u, float v) { if (stream) vs_.texcoord(u, v); else rlTexCoord2f(u, v); };
+        auto vNormal = [&](float burn, bool fge, bool gs, bool pm, int mode) {
+            if (!stream) { shaderNormal(burn, fge, gs, pm, mode); return; }
+            float n[3];
+            shaderNormalVals(burn, fge, gs, pm, mode, n);
+            vs_.normal(n[0], n[1], n[2]);
+        };
+        auto vVertex = [&](float x, float y, float z) { if (stream) vs_.vertex(x, y, z); else rlVertex3f(x, y, z); };
         for (const auto &o : order) {
             const DrawItem &it = list[o.item];
             const MeshData *md = mesh(ram, it.node);
@@ -2910,11 +3121,16 @@ public:
             const bool travState = trav && open && (it.blend != curItBlend || it.aref != curItRef || it.zmsk != curItZ || md->abe != curItAbe);
             if (o.key != cur || !open || far2near || travState || envClamp != curClamp || passK != curPass) {
                 curItBlend = it.blend; curItRef = it.aref; curItZ = it.zmsk; curItAbe = md->abe;
-                if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
-                if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
-                if (!wire && dbl) { gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire && passK == kSlotOver1) { gsBlendOver1(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire && passK == kSlotOver2) { gsBlendOver2(); curBlend = kBlendDouble; curPremul = false; }
+                if (open && !stream) {   // um lote por textura (evita o alinhamento automatico do rlgl)
+                    ProfScope ps(DrawProf::Flush);
+                    rlEnd();
+                    rlDrawRenderBatchActive();
+                    if (drawProfOn()) ++drawProf().batches;
+                }
+                if (clampedId) { flushStream(); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
+                if (!wire && dbl) { flushStream(); gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver1) { flushStream(); gsBlendOver1(); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver2) { flushStream(); gsBlendOver2(); curBlend = kBlendDouble; curPremul = false; }
                 // sem ABE o GS grava a cor da fonte sem misturar (o alfa, com o fade do LOD, so vale para o teste): o predio 133 do
                 // luta_hud em cross-fade saia meio transparente e deixava ver o predio de tras
                 else if (!wire) {
@@ -2924,14 +3140,17 @@ public:
                 curPass = passK;
                 if (!wire) setRef(it.aref);
                 // passe translucido: grava profundidade como o GS, a menos que o GROUP ligue o ZMSK (o chamador volta a mascara ao fim)
-                if (far2near || trav) { if (it.zmsk) rlDisableDepthMask(); else rlEnableDepthMask(); }
+                if (far2near || trav) setZm(!it.zmsk);
                 cur = o.key;
                 curClamp = envClamp;
                 const unsigned id = wire ? 0 : textureId(ram, it, texRemap(slot));
-                if (envClamp && id && id != screenId_) { rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); clampedId = id; }
-                rlBegin(wire ? RL_LINES : RL_TRIANGLES);   // rlBegin com outro modo reseta a textura do lote: setar depois
+                if (envClamp && id && id != screenId_) { flushStream(); rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); clampedId = id; }
                 static const bool idc = std::getenv("WOTM_IDCOLOR") != nullptr;   // diagnostico: cor = texId do objeto (leia o pixel para achar o id)
-                rlSetTexture((id && !idc) ? id : white);
+                if (stream) vs_.begin(RL_TRIANGLES, (id && !idc) ? id : white);
+                else {
+                    rlBegin(wire ? RL_LINES : RL_TRIANGLES);   // rlBegin com outro modo reseta a textura do lote: setar depois
+                    rlSetTexture((id && !idc) ? id : white);
+                }
                 open = true;
             }
             // modo por item (vai no vertice): um item com As > 1 pode cair num lote aberto por outro sem
@@ -2943,6 +3162,7 @@ public:
             // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
             const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
+            if (drawProfOn()) drawProf().verts += long(t.size());
             {   // diagnostico: WOTM_TEXINFO=<id> imprime (ate WOTM_TEXINFO_N vezes, padrao 6) os objetos com esse texId: mistura, cor, fudge, textura e vertices
                 static const int ti = std::getenv("WOTM_TEXINFO") ? std::atoi(std::getenv("WOTM_TEXINFO")) : -1;
                 static int printed = 0;
@@ -3011,6 +3231,8 @@ public:
             const float fz = ram.f32(it.node + 0x28);
             const bool fudge = !wire && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
             const float fzScale = 1.f / fz;   // zBufferFudge > 1 = mais perto (no raio do olho)
+            float rowLen[3];   // linhas da matriz da luz (vertexRgb), uma vez por item
+            rowLengths(pm ? skinM : it.m, rowLen);
             {   // diagnostico: WOTM_SKINBOX=1 imprime a caixa (mundo) dos vertices skinned de cada no, por osso x
                 static const bool sb = std::getenv("WOTM_SKINBOX") != nullptr;
                 if (sb && pm && md->skinned && !wire) {
@@ -3059,26 +3281,27 @@ public:
                     for (int e = 0; e < (wire ? 2 : 1); ++e) {
                         const Vtx &v = t[k + cs[e]];
                         bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
-                        if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; rlColor4ub(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
-                        else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
-                        else if (v.isAdc) { gsV = false; rlColor4ub(255, 0, 0, 255); }   // WOTM_SHOWADC
-                        else if (noVcol && md->skinned) { gsV = false; rlColor4ub(255, 255, 255, 255); }   // diagnostico
+                        if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; vColor(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
+                        else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); vColor(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
+                        else if (v.isAdc) { gsV = false; vColor(255, 0, 0, 255); }   // WOTM_SHOWADC
+                        else if (noVcol && md->skinned) { gsV = false; vColor(255, 255, 255, 255); }   // diagnostico
                         else {
                             uint8_t rgb[3];
-                            vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
+                            vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb, rowLen);
                             // cor e alfa crus no modo GS (o shader faz texel * Cv / 128 e At * Av / 16384); no quadro anterior e no filme,
                             // o antigo (cor dobrada e limitada a 1,0, alfa 4a/255)
                             const float va = v.a * fade * (gsA ? 1.f : 4.f);
                             const int k = gsA ? 1 : 2;
-                            rlColor4ub(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
+                            vColor(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
                         }
                         const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
                         // texels do GS na tela 640x224, que em widescreen e a faixa 4:3 central do quadro anterior (gsScreenRect)
-                        if (tid && tid == screenId_) rlTexCoord2f(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
-                        else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
-                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        shaderNormal(fogBurn, v.fge && !idcNode, gsV, curPremul, curMode);   // neblina e modulacao do GS no shader do draw
-                        rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
+                        if (tid && tid == screenId_) vTex(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
+                        else if (tid && envOk[cs[e]]) vTex(tu, tv);
+                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; vTex(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+                        vNormal(fogBurn, v.fge && !idcNode, gsV, curPremul, curMode);   // neblina e modulacao do GS no shader do draw
+                        vVertex(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
+                        if (drawProfOn()) ++drawProf().emitted;
                     }
                 }
             }
@@ -3098,14 +3321,17 @@ public:
                 const int *ix = wire ? edgeIdx : triIdx;
                 for (int q = 0; q < (wire ? 8 : 6); ++q) {
                     const int k = ix[q];
-                    rlColor4ub(cr, cg, cb, ca);
-                    if (tid) rlTexCoord2f(cu[k], cv[k]);
-                    shaderNormal(fogBurn, s.fge, gsA, curPremul, curMode);
-                    rlVertex3f(c[k][0], c[k][1], c[k][2]);
+                    vColor(cr, cg, cb, ca);
+                    if (tid) vTex(cu[k], cv[k]);
+                    vNormal(fogBurn, s.fge, gsA, curPremul, curMode);
+                    vVertex(c[k][0], c[k][1], c[k][2]);
                 }
             }
         }
-        if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+        if (open) {   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+            if (stream) flushStream();
+            else { rlEnd(); rlDrawRenderBatchActive(); }
+        }
         if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); }
         rlNormal3f(0.f, 0.f, 0.f);   // o que vier depois (sombras, particulas) sai sem neblina
         setBlend(kGsAlphaNormal);
@@ -3283,14 +3509,21 @@ private:
     }
     std::vector<uint32_t> seen_;   // nos ja visitados neste quadro (ciclos / DAG)
     int lod_ = -1;
+    float shadowLodD2_ = -1.f;   // >= 0: travessia de uma sombra (collectShadows): LOD por esta distancia ao quadrado e sem o corte da vista
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual
     Shader alphaShader_{};
+    VtxStream vs_;   // vertices do drawList sem o modo imediato do rlgl (wotm_fx.hpp)
     int alphaRefLoc_ = -1;   // uniform do teste de alfa (DrawItem::aref) no alphaShader_
     int fogLoc_[5] = {-1, -1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor, fogSplit
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
     std::unordered_map<uint64_t, uint8_t> texAmax_;   // maior alfa cru da textura (texKey): 0x80 = 1,0, ate 0xFF
-    std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
+    static constexpr size_t kShadowCacheN = 48;
+    static constexpr float kShadowTol = 1.5f;   // unidades do mundo (a silhueta tem ~2 por texel)
+    std::vector<ShadowCacheEntry> shadowCache_;   // silhuetas das sombras pela chave das entradas (shadowKey), a menos usada sai
+    uint64_t shadowTick_ = 0;
+    std::vector<float> shadowCov_, shadowTmp_;    // cobertura e borrao da silhueta (reusados)
+    std::vector<uint32_t> shadowPx_;
     static constexpr int kShadowRes = 128;
     uint32_t resSig_ = 0;   // assinatura dos recursos em fileStatus ja carregados (loadResources)
     GameCamera cam_;   // camera do ultimo collect/blend (eixos para os sprites)
@@ -3702,7 +3935,12 @@ private:
 
     // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
     // iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
-    void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
+    // Comprimento de cada linha 0-2 de m (o vertexRgb normaliza as linhas com ele): por item, fora do laco dos vertices
+    static void rowLengths(const M4 &m, float len[3]) {
+        for (int r = 0; r < 3; ++r) len[r] = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+    }
+    // rowLen: rowLengths(m) ja calculado (mesmo resultado; sem ele, calcula aqui)
+    void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3], const float *rowLen = nullptr) const {
         const float vc[3] = {v.r * mul[0], v.g * mul[1], v.b * mul[2]};
         if (ol.pt) {
             pointRgb(*ol.pt, vc, v, out);
@@ -3723,7 +3961,7 @@ private:
         } else {
             float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (sem SCALE no caminho, a matriz e uma rotacao)
             for (int r = 0; r < 3; ++r) {
-                const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+                const float len = rowLen ? rowLen[r] : std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
                 if (len > 1e-6f)
                     for (int c = 0; c < 3; ++c) w[c] += n[r] * m.m[r][c] / len;
             }
@@ -3886,7 +4124,7 @@ private:
         ++byOp[op];
         switch (op) {
         case 0:                                                                                                 // OBJECT
-            if (!(ram.u16(node + 0xC) & 1) && outOfView(ram, node, m)) break;
+            if (!(ram.u16(node + 0xC) & 1) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) break;
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
             items.back().cs = cs_;
             // O pktAddVu1ObjAsm so grava o qword 20 (especular, specIntensity +0x6C) com specLightMe (0x2000); sem ele o programa de
@@ -3909,7 +4147,7 @@ private:
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 e TEST_1 dos filhos)
             const uint16_t gflags = ram.u16(node + 0xA);                                    // visual (bit 0), noFOV (bit 2)
             if (!(gflags & 1)) break;
-            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && outOfView(ram, node, m)) break;
+            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) break;
             const CtxScope cs(*this, ram, ram.u32(node + 4));
             kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
             break;
@@ -3920,9 +4158,11 @@ private:
                 int pick = -1;
                 if (lod_ >= 0) pick = int(std::min<uint32_t>(uint32_t(lod_), n - 1));
                 else {
-                    // hierLod: o MAIOR indice cujo switchOutDis (distancia ao quadrado) > distancia ao centro do LOD; nenhum = nao desenha
+                    // hierLod: o MAIOR indice cujo switchOutDis (distancia ao quadrado) > distancia ao centro do LOD; nenhum = nao desenha.
+                    // Na travessia da sombra (collectShadows) a distancia e a fixa do bloqueador (shadowLodRangeSq do jogo)
                     float d2 = 0.f;
-                    if (eyeOk_) {
+                    if (shadowLodD2_ >= 0.f) d2 = shadowLodD2_;
+                    else if (eyeOk_) {
                         float c[3];
                         xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), c);
                         d2 = (c[0] - eye_[0]) * (c[0] - eye_[0]) + (c[1] - eye_[1]) * (c[1] - eye_[1]) + (c[2] - eye_[2]) * (c[2] - eye_[2]);
@@ -3940,7 +4180,7 @@ private:
                 // senao i - 1 inteiro e i com alfa 2t; sem i - 1, i com alfa t. Sem isso o nativo trocava de LOD de uma vez (checagem
                 // VU1, pista 7: o VU1 desenhava uma instancia "a mais", o LOD vizinho no mesmo lugar).
                 float fi = 1.f, fprev = 0.f;
-                const float fd = lod_ < 0 && eyeOk_ ? ram.f32(node + 0x20 + 16 * i) : 0.f;
+                const float fd = lod_ < 0 && eyeOk_ && shadowLodD2_ < 0.f ? ram.f32(node + 0x20 + 16 * i) : 0.f;
                 const bool savedX = lodX_;
                 if (fd > 0.f) {
                     float d2 = 0.f, cc[3];

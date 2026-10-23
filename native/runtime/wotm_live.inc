@@ -1483,8 +1483,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const double nowT = GetTime();
     static double lastFreshT = 0.0, lastRenderT = 0.0;
     static long s_renders = 0;   // redesenhos (PS2X_STATS, linha [native])
-    static double s_drawMs[2] = {}, s_drawCpu[2] = {};   // redesenhos com 1 e 2 vistas desde a ultima linha [native]: parede e CPU da thread
-    static long s_drawN[2] = {};
+    static double s_drawMs[5] = {}, s_drawCpu[5] = {};   // redesenhos com 1 a 4 vistas desde a ultima linha [native]: parede e CPU da thread
+    static long s_drawN[5] = {};
+    int nViews = 1;
     if (fresh)
         lastFreshT = nowT;
     wotm::ScreenRect fadeNow{};
@@ -1515,6 +1516,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             const auto &vs = S.snap.views[v - 1];
             viewOk[v] = vs && vs->valid && vs->cam.ok && !S.snap.vctx.full() && !freeView.override;
             split = split || viewOk[v];
+            nViews += viewOk[v];
         }
         const bool quad = split && S.snap.vctx.h < 224.f;
         {
@@ -1572,6 +1574,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // tela dividida: os flares de cada vista depois de todas desenhadas (Scene::deferFlares; o teste de oclusao espera a GPU)
         wotm::GameCamera viewCam[4]{};
         S.scene.deferFlares = split;
+        ++S.scene.redrawId;
         for (int v = 1; v < 4; ++v)
             if (viewOk[v])
                 drawView(S.vrts[v], viewCam[v] = S.scene.show(*S.snap.views[v - 1]));
@@ -1757,9 +1760,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (msOn)
             S.ms.resolve(rt.id);
         wotm_photo::afterRender();   // modo foto: grava o quadro pedido (saiu sem a legenda)
-        s_drawMs[split ? 1 : 0] += (GetTime() - tDraw0) * 1000.0;
-        s_drawCpu[split ? 1 : 0] += wotmThreadCpuMs() - cpuDraw0;   // passos de 15,6 ms no Windows: so vale na media
-        ++s_drawN[split ? 1 : 0];
+        s_drawMs[nViews] += (GetTime() - tDraw0) * 1000.0;
+        s_drawCpu[nViews] += wotmThreadCpuMs() - cpuDraw0;   // passos de 15,6 ms no Windows: so vale na media
+        ++s_drawN[nViews];
 
         {   // WOTM_SHOTS=<s>[,<s>...]: grava o quadro nativo em shot_<s>.png (pasta atual) quando o relogio da janela passa de cada <s>
             // segundos; para conferir telas ao vivo com um roteiro de pad (PS2X_PAD), sem tecla
@@ -1911,11 +1914,28 @@ static bool wotmDrawNative(const uint8_t *rdram)
                      S.scene.items.size(), S.scene.sky.size(), S.rtxPath.c_str());
     if (S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
     {
-        std::fprintf(stderr, "[native] redesenho: 1 vista %.2f ms (CPU %.2f) x %ld, 2 vistas %.2f ms (CPU %.2f) x %ld\n", s_drawN[0] ? s_drawMs[0] / s_drawN[0] : 0.0,
-                     s_drawN[0] ? s_drawCpu[0] / s_drawN[0] : 0.0, s_drawN[0], s_drawN[1] ? s_drawMs[1] / s_drawN[1] : 0.0,
-                     s_drawN[1] ? s_drawCpu[1] / s_drawN[1] : 0.0, s_drawN[1]);
-        s_drawMs[0] = s_drawMs[1] = s_drawCpu[0] = s_drawCpu[1] = 0.0;
-        s_drawN[0] = s_drawN[1] = 0;
+        std::fprintf(stderr, "[native] redesenho:");
+        for (int n = 1; n <= 4; ++n)
+            if (s_drawN[n])
+                std::fprintf(stderr, " %d vista%s %.2f ms (CPU %.2f) x %ld;", n, n > 1 ? "s" : "", s_drawMs[n] / s_drawN[n], s_drawCpu[n] / s_drawN[n], s_drawN[n]);
+        std::fprintf(stderr, "\n");
+        for (int n = 0; n < 5; ++n)
+        {
+            s_drawMs[n] = s_drawCpu[n] = 0.0;
+            s_drawN[n] = 0;
+        }
+        if (wotm::drawProfOn())   // WOTM_DRAWSTATS: media por vista desenhada de cada fase do Scene::draw
+        {
+            wotm::DrawProf &p = wotm::drawProf();
+            const double k = p.views ? 1.0 / double(p.views) : 0.0;
+            std::fprintf(stderr, "[native] desenho por vista (x %ld): ceu %.2f travessia %.2f OT %.2f sombras %.2f (silhuetas %.2f) sprites %.2f "
+                         "particulas %.2f HUD %.2f ms (descargas de lote %.2f); %.0f lotes, %.0f vertices (%.0f emitidos); silhuetas %ld refeitas, %ld reaproveitadas\n", p.views, p.ms[wotm::DrawProf::Sky] * k, p.ms[wotm::DrawProf::Trav] * k,
+                         p.ms[wotm::DrawProf::AlphaOT] * k, p.ms[wotm::DrawProf::Shadows] * k, p.ms[wotm::DrawProf::ShadowTex] * k,
+                         p.ms[wotm::DrawProf::Sprites] * k, p.ms[wotm::DrawProf::Fx] * k, p.ms[wotm::DrawProf::Hud] * k, p.ms[wotm::DrawProf::Flush] * k,
+                         double(p.batches) * k,
+                         double(p.verts) * k, double(p.emitted) * k, p.shadowMiss, p.shadowHit);
+            p = wotm::DrawProf{};
+        }
     }
     return true;
 }
