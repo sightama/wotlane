@@ -48,6 +48,33 @@ inline const MonsterInfo *monsterInfo(int type) {
     return nullptr;
 }
 
+// Tipos que um monstro custom pode usar de base: os jogaveis e os chefes que o port ja deixa jogar (runtime/wotm_custom.inc)
+inline constexpr MonsterInfo kCustomBases[] = {{13, "assboss", "ASSBOSS"}};
+inline const MonsterInfo *customBase(const std::string &s) {
+    if (const MonsterInfo *m = monsterInfo(s)) return m;
+    for (const MonsterInfo &m : kCustomBases)
+        if (s == m.name || s == m.prefix) return &m;
+    return nullptr;
+}
+
+// Monstro custom (mods/<mod>/monsters/<pasta>/monster.json; MODS.md, "Monstros custom"): um monstro novo na selecao (casa
+// CUSTOM), que hoje usa o codigo, o modelo e os arquivos de um tipo do jogo (`base`). Arquivos proprios (outro prefixo, tipo
+// livre) ficam para depois; o formato ja reserva "files".
+struct Custom {
+    std::string id;             // "goliath" (WOTM_MATCH=goliath, o save)
+    std::string name;           // o que a selecao e a tela mostram ("GOLIATH")
+    int type = 0;               // tipo do jogo (13 = assboss)
+    std::string typeName;       // "assboss"
+    std::string prefix;         // "ASSBOSS"
+    int costume = 0;            // traje do disco
+    std::string cameraFrom;     // MonsterLongNames do .CHR da camera ("lizard"); vazio = a do proprio tipo
+    float cameraScale = 1.f;    // distancias da camera emprestada
+    std::string narrator;       // narrator/<nome>.mp3 (vazio = o do tipo)
+    bool ai = false;            // as IAs sorteadas podem usar (ainda sem efeito)
+    std::string mod;
+    std::filesystem::path dir;
+};
+
 // Traje de mod (mods/<mod>/skins/<pasta>/skin.json)
 struct Skin {
     int monster = 0;            // tipo do monstro
@@ -114,6 +141,7 @@ public:
                 const uint64_t size = it->file_size(ec);
                 if (rel.empty() || ec) continue;
                 if (rel.rfind("SKINS/", 0) == 0) continue;   // skins/<id>/: trajes novos (scanSkins), nao sobrepoem o disco
+                if (rel.rfind("MONSTERS/", 0) == 0) continue;   // monsters/<id>/: monstros custom (scanCustoms)
                 if (size > kMaxSize) { std::fprintf(stderr, "[mods] %s/%s ignorado: maior que 256 MB\n", m_mods.back().c_str(), rel.c_str()); continue; }
                 File &f = m_files[rel];
                 if (!f.mod.empty()) std::fprintf(stderr, "[mods] %s: %s vence %s\n", rel.c_str(), m_mods.back().c_str(), f.mod.c_str());
@@ -124,6 +152,7 @@ public:
             }
         }
         scanSkins(mods);
+        scanCustoms(mods);
         // Faixas de setores na ordem dos nomes (estavel entre execucoes), com um setor de folga entre arquivos
         uint32_t next = kFirstLsn;
         for (auto &[rel, f] : m_files) {
@@ -174,6 +203,20 @@ public:
         return nullptr;
     }
     const std::vector<SkinPng> &skinPngs() const { return m_skinPngs; }
+
+    // ---- monstros custom ----
+    const std::vector<Custom> &customs() const { return m_customs; }
+    const Custom *custom(const std::string &id) const {
+        for (const Custom &c : m_customs)
+            if (c.id == lower(id)) return &c;
+        return nullptr;
+    }
+    // O custom que usa esse tipo e traje (o primeiro), para os ganchos da luta
+    const Custom *customByType(int type, int costume = -1) const {
+        for (const Custom &c : m_customs)
+            if (c.type == type && (costume < 0 || c.costume == costume)) return &c;
+        return nullptr;
+    }
     static bool isModLsn(uint32_t lsn) { return lsn >= kFirstLsn; }
     const File *findLsn(uint32_t lsn) const {
         if (!isModLsn(lsn)) return nullptr;
@@ -205,6 +248,7 @@ private:
     std::map<std::string, std::string> m_alias;   // "MON/LIZARD4.NGP" -> "MON/LIZARD1.NGP"
     std::vector<Skin> m_skins;
     std::vector<SkinPng> m_skinPngs;
+    std::vector<Custom> m_customs;
     std::atomic<bool> m_ready{false};
 
     static std::string lower(std::string s) {
@@ -332,6 +376,82 @@ private:
         }
         m_skins = std::move(kept);
     }
+
+    // mods/<mod>/monsters/<pasta>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai"}.
+    // Mesmo id em dois mods: vence o ultimo em ordem alfabetica, como os arquivos.
+    void scanCustoms(const std::vector<std::filesystem::path> &mods) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        std::map<std::string, Custom> byId;
+        for (const fs::path &m : mods) {
+            const fs::path dir = child(m, "monsters");
+            if (dir.empty() || !fs::is_directory(dir, ec)) continue;
+            std::vector<fs::path> subs;
+            for (const auto &e : fs::directory_iterator(dir, ec))
+                if (e.is_directory(ec)) subs.push_back(e.path());
+            std::sort(subs.begin(), subs.end());
+            for (const fs::path &s : subs) {
+                const std::string where = m.filename().string() + "/monsters/" + s.filename().string();
+                const fs::path js = child(s, "monster.json");
+                std::string text;
+                if (!js.empty()) {
+                    std::ifstream in(js, std::ios::binary);
+                    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                }
+                json::Value v;
+                std::string err;
+                if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
+                    std::fprintf(stderr, "[mods] monstro %s ignorado: %s\n", where.c_str(), js.empty() ? "sem monster.json" : ("monster.json invalido: " + err).c_str());
+                    continue;
+                }
+                Custom c;
+                const json::Value *base = v.get("base");
+                const MonsterInfo *mi = base && base->type == json::Value::Str ? customBase(lower(base->s)) : nullptr;
+                if (!mi) {
+                    std::fprintf(stderr, "[mods] monstro %s ignorado: \"base\" nao e um tipo aceito (togera, congar, ..., assboss)\n", where.c_str());
+                    continue;
+                }
+                c.type = mi->type;
+                c.typeName = mi->name;
+                c.prefix = mi->prefix;
+                const json::Value *id = v.get("id");
+                c.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
+                if (c.id.empty() || c.id.size() > 32 || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos ||
+                    std::isdigit(static_cast<unsigned char>(c.id[0]))) {
+                    std::fprintf(stderr, "[mods] monstro %s ignorado: \"id\" so com letras, digitos e _ (ate 32, comeca com letra)\n", where.c_str());
+                    continue;
+                }
+                const json::Value *nm = v.get("name");
+                c.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : c.id;
+                const json::Value *co = v.get("costume");
+                c.costume = co ? int(co->asInt(0)) : 0;
+                if (c.costume < 0 || c.costume > 3) c.costume = 0;
+                if (const json::Value *cam = v.get("camera"); cam && cam->type == json::Value::Obj) {
+                    if (const json::Value *f = cam->get("from"); f && f->type == json::Value::Str)
+                        if (const MonsterInfo *b = customBase(lower(f->s))) c.cameraFrom = kLongNames[b->type];
+                    if (const json::Value *sc = cam->get("scale"); sc && sc->type == json::Value::Int && sc->i >= 10 && sc->i <= 1000)   // em %
+                        c.cameraScale = float(sc->i) / 100.f;
+                }
+                if (const json::Value *na = v.get("narrator"); na && na->type == json::Value::Str) c.narrator = lower(na->s);
+                const json::Value *ai = v.get("ai");
+                c.ai = ai && ai->asBool(false);
+                c.mod = m.filename().string();
+                c.dir = s;
+                Custom &slot = byId[c.id];
+                if (!slot.id.empty())
+                    std::fprintf(stderr, "[mods] monstro %s: %s vence %s\n", c.id.c_str(), c.mod.c_str(), slot.mod.c_str());
+                slot = c;
+            }
+        }
+        for (auto &[id, c] : byId) {
+            std::fprintf(stderr, "[mods] monstro custom %s (\"%s\", %s): base %s traje %d%s%s\n", c.id.c_str(), c.name.c_str(), c.mod.c_str(),
+                         c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera do ", c.cameraFrom.c_str());
+            m_customs.push_back(c);
+        }
+    }
+    // MonsterLongNames (prefixo do .CHR em RST/ e dos arquivos em MON/, minusculas), indice = tipo
+    static constexpr const char *kLongNames[] = {"null", "monkey", "robot", "lizard", "shogun", "mantis", "spider", "energy", "lava",
+                                                 "dragon", "rock", "alien", "ogre", "assboss", "jelly", "final", nullptr};
 };
 
 } // namespace wotm::mods

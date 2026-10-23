@@ -95,13 +95,27 @@ namespace wotm_custom
         if (ctx->pc == entry && GPR_U32(ctx, 5) == kGoliath && READ32(kGameObj + kGameMode) != 1u && g_loadMech)
         {
             std::fprintf(stderr, "[custom] banco de som do Goliath (Assemb_s.bnk, loadMechBossSoundBank)\n");
-            // nome na tela ("%s CRUSHED", "%s WINS"): a entrada 13 das 5 copias do MonsterNewNames[17][12] diz "assboss"
+            // nome na tela ("%s CRUSHED", "%s WINS"): a entrada 13 das 5 copias do MonsterNewNames[17][12] diz "assboss"; fica o
+            // "name" do monster.json (ate 11 letras, minusculas como as do jogo) ou "goliath"
+            std::string shown = "goliath";
+            if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().customByType(13))
+            {
+                std::string n = cu->name;
+                if (n.size() > 11)   // "GOLIATH PRIME" -> "goliath": corta na ultima palavra que cabe
+                {
+                    const size_t sp = n.rfind(' ', 11);
+                    n = n.substr(0, sp != std::string::npos && sp > 0 ? sp : 11);
+                }
+                shown.clear();
+                for (char ch : n)
+                    shown += char(std::tolower(static_cast<unsigned char>(ch)));
+            }
             for (const uint32_t names : {wotm::sym::MonsterNewNames_006E8958, wotm::sym::MonsterNewNames_006E8D90, wotm::sym::MonsterNewNames_006EAA78,
                                          wotm::sym::MonsterNewNames_006ED318, wotm::sym::MonsterNewNames_006EFEC8})
             {
                 char *e = reinterpret_cast<char *>(rdram + ((names + 13 * 12) & 0x01FFFFFFu));
                 std::memset(e, 0, 12);
-                std::memcpy(e, "goliath", 7);
+                std::memcpy(e, shown.data(), shown.size());
             }
             ctx->pc = kLoadMech;
             g_loadMech(rdram, ctx, runtime);
@@ -120,24 +134,29 @@ namespace wotm_custom
     constexpr uint32_t kSetActive = wotm::fn::setActiveMonster__13MonsterTweaksP7Monsterb;
     constexpr uint32_t kLongNames = wotm::sym::MonsterLongNames_006E8BC8;   // [17][8], a copia do charreset
     constexpr uint32_t kCamTable = 0x6CF0, kCamPovs = 20, kCamPov = 0xA0;
-    constexpr const char *kCamBase = "lizard";   // Togera
-    constexpr float kCamScale = 2.0f;
+    // Sem monster.json (WOTM_MATCH=13): a do Togera em dobro. Com ele, a do "camera" do mod ({"from", "scale"}).
+    constexpr const char *kCamBaseDefault = "lizard";
+    constexpr float kCamScaleDefault = 2.0f;
     PS2Runtime::RecompiledFunction g_origSetActive = nullptr;
 
     void setActive(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4);
-        if (ctx->pc != kSetActive || READ32(m + kTypeBits) != kGoliath)
+        const uint32_t type = ctx->pc == kSetActive ? READ32(m + kTypeBits) >> 5 : 0;
+        const wotm::mods::Custom *cu = type ? wotm::mods::Registry::get().customByType(int(type)) : nullptr;
+        const char *kCamBase = cu && !cu->cameraFrom.empty() ? cu->cameraFrom.c_str() : type == 13 && !cu ? kCamBaseDefault : nullptr;
+        const float kCamScale = cu && !cu->cameraFrom.empty() ? cu->cameraScale : kCamScaleDefault;
+        if (!kCamBase || type >= 17)
         {
             g_origSetActive(rdram, ctx, runtime);
             return;
         }
         const R5900Context entry = *ctx;
-        char *name = reinterpret_cast<char *>(rdram + ((kLongNames + 13 * 8) & 0x01FFFFFFu));
+        char *name = reinterpret_cast<char *>(rdram + ((kLongNames + type * 8) & 0x01FFFFFFu));
         char own[8];
         std::memcpy(own, name, 8);
         std::memset(name, 0, 8);
-        std::memcpy(name, kCamBase, std::strlen(kCamBase));
+        std::memcpy(name, kCamBase, std::min<size_t>(7, std::strlen(kCamBase)));
         g_origSetActive(rdram, ctx, runtime);
         std::vector<uint8_t> cam(kCamPovs * kCamPov);
         std::memcpy(cam.data(), rdram + ((m + kCamTable) & 0x01FFFFFFu), cam.size());
@@ -154,7 +173,7 @@ namespace wotm_custom
                     std::memcpy(&cam[p * kCamPov + v * 16 + c * 4], &f, 4);
                 }
         std::memcpy(rdram + ((m + kCamTable) & 0x01FFFFFFu), cam.data(), cam.size());
-        std::fprintf(stderr, "[custom] Goliath: camera do %s.CHR, distancias x%.1f\n", kCamBase, kCamScale);
+        std::fprintf(stderr, "[custom] %s: camera do %s.CHR, distancias x%.2f\n", cu ? cu->id.c_str() : own, kCamBase, kCamScale);
     }
 } // namespace wotm_custom
 

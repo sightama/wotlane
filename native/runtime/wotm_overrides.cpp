@@ -2311,6 +2311,21 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         {
             c[n] = -1;
             v[n++] = static_cast<int>(std::strtol(p, &end, 10));
+            if (end == p && std::isalpha(static_cast<unsigned char>(*p)))   // "<id do monstro custom>" (mods/<mod>/monsters/, wotm_custom.inc)
+            {
+                const char *t = p;
+                while (*t && *t != ',' && *t != ':')
+                    ++t;
+                const std::string id(p, t);
+                if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().custom(id))
+                {
+                    v[n - 1] = cu->type;
+                    c[n - 1] = cu->costume;
+                    end = const_cast<char *>(t);
+                }
+                else
+                    std::fprintf(stderr, "[wotm] WOTM_MATCH: monstro custom \"%s\" nao achado em mods/\n", id.c_str());
+            }
             if (end != p && *end == ':')   // "<monstro>:<figurino>"
             {
                 const char *q = end + 1;
