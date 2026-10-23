@@ -43,7 +43,7 @@ constexpr uint32_t kShellSound = kShell + 0x2918;
 constexpr uint32_t kMonsterSel = kShell + 0x2938, kCostume = kShell + 0x2BE0, kNumPlayers = kShell + 0x2BB4, kNumAIs = kShell + 0x2BB8,
                    kMode = kShell + 0x2C10, kBattleMode = kShell + 0x2B54, kSw5CC = kShell + 0x5CC, kCostumeBox = kShell + 0x88;
 constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +0, state +4; 4 trajes por coluna
-enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc
+enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, Square, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc; Square: so no roteiro (previa da aba VIDEO)
 enum Phase { Off, Config, Reveal, Leaving };
 
 // Cores dos jogadores 1 a 4
@@ -118,7 +118,7 @@ static void parseScript()
     const char *e = std::getenv("WOTM_PADSEL_SCRIPT");
     if (!e) return;
     std::string s(e);
-    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down", "l1", "r1"};
+    static const char *const names[kActions] = {"left", "right", "ok", "back", "start", "up", "down", "l1", "r1", "square"};
     for (size_t pos = 0; pos < s.size();)
     {
         size_t end = s.find(';', pos);
