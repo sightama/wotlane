@@ -83,7 +83,7 @@ class Launcher : Form
     static readonly Flag[] Flags = {
         new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
         new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
-        new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
+        new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
         new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
         new Flag("Run", "WOTM_SKIPINTRO", false, "Skip intro movies", "Skips the two movies at boot (the intro and the main menu intro) and goes straight to the title screen."),
@@ -308,7 +308,7 @@ class Launcher : Form
         matchOn.Checked = saved.TryGetValue(":MatchOn", out v) && v == "1";
         tips.SetToolTip(matchOn, "Skips the menu and goes straight to the fight (1 player against the CPU, 3 lives, no win target: " +
             "the fight goes on without the end-of-match dialog). With no AI you play alone on the stage. Forces -Auto 0, since the scripted pad would press buttons mid-fight. " +
-            "With 'Player controlled by the game's AI' (Run) it becomes AI vs AI.");
+            "With 'Player controlled by AI' (Run) it becomes AI vs AI.");
         inner.Controls.Add(matchOn);
 
         matchPlayer.Items.AddRange(MonsterNames);

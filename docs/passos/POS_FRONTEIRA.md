@@ -14,7 +14,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
-| 8 | Mods que adicionam skins e monstros (sem substituir) — **skins, parte 1, na master em 2026-10-23**; save, sons, IAs, tela 7, launcher e kit na branch `skins-etapa2` (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
+| 8 | Mods que adicionam skins e monstros (sem substituir) — **skins (partes 1 a 4) na master em 2026-10-23** (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
@@ -312,7 +312,7 @@ Depois do merge, no mesmo dia (`wotm_padsel.inc`; `NATIVO.md`, seleção de 1 e 
   telão e, depois, na luta) e, com dois Robo-47 na seleção de 4, o teste de Z ficava ligado e esvaziava os quadros seguintes.
   Conferido pelo dono (menu e luta).
 
-**Etapas 2 a 4, na branch `skins-etapa2` em 2026-10-23** (revisão das investigações `skins_mod_carga/save/telas.md` contra o código;
+**Etapas 2 a 4 na master em 2026-10-23** (merge da branch `skins-etapa2`; revisão das investigações `skins_mod_carga/save/telas.md` contra o código;
 guia em `MODS.md`, "Skins"):
 - **Save por nome:** o slot da aventura guarda `"costume": "ultra-v/roxo"`; uma `resolveCostume` só (`wotm_save.inc`) serve o
   `jsonToAdventure`, a lista de saves e o monstro 3D. Skin ausente: traje 0 (decisão do dono), log e "skin missing" na lista; gravar
@@ -325,13 +325,17 @@ guia em `MODS.md`, "Skins"):
 - **Launcher:** a caixa de skin de cada monstro lista as skins de mod dele; Random sorteia entre todas.
 - **Kit:** `modkit.py skin new <mod> <monstro> <id> --base N`.
 - Conferido: `WOTM_MATCH=4:roxo,4:3,1` (sons do traje 3 no log, 337 de 1000 texIds); `save.json` com `"congar/naoexiste"` e
-  `"ultra-v/roxo"`: o binário do cartão sai com o traje 0 e com o índice da sessão, e o JSON fica intacto. **Falta o dono conferir pelo
-  menu:** gravar e carregar uma aventura com skin, a lista de saves com o monstro da skin e com "skin missing", o sorteio da
-  resistência e o launcher.
+  `"ultra-v/roxo"`: o binário do cartão sai com o traje 0 e com o índice da sessão, e o JSON fica intacto. **Conferido pelo
+  dono no menu:** gravar e carregar uma aventura com skin, a lista de saves com o monstro da skin e, com o mod apagado, o traje 0 e
+  "skin missing", o sorteio da resistência e o launcher (lista as skins em maiúsculas).
 
 - **Tela 7 (minigames de 2) com a seleção nativa e skins** (`wotm_padsel.inc`, `minigames2PHook`): os quadros vão na tela do
   fliperama, no lugar dos dois retratos grandes. Conferido por roteiro (Dodge Ball destravado só no teste): skin `togera/lima` na
   seleção e no minigame, triângulo de volta à tela 14 e reentrada. Fotos: `docs/screenshots/2026-10-23/2026-10-23_minigames2p_*.png`.
+- **Transições da seleção nativa** (`wotm_padsel.inc`, `wotm_fmv.hpp`; conferidas pelo dono): a saída para uma tela com animação de
+  câmera (volta da adventure, ida à seleção de fase) segue a câmera do jogo pelo progresso da animação, num movimento só; o filme do
+  telão não recomeça na entrada (o End da tela 3 não vale com `Player::setHold`) nem fica preto na volta (o Play do mesmo filme
+  continua); a fileira de retratos do jogo não aparece no quadro em que a tela já trocou (vindo do sudden death).
 
 **Falta:**
 1. **Elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez e os jogadores trocam de monstro entre
@@ -339,7 +343,7 @@ guia em `MODS.md`, "Skins"):
 2. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
 
 Fora, por decisão do dono: tela de destrave (skin de mod sempre aberta), som próprio por skin. Pendências da seleção para o contribuinte (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`,
-itens 5 a 8): transição esquisita ao confirmar em modos com seleção de fase, Togera desalinhado no quadro único do adventure, skins
+itens 5 a 8): transição esquisita ao confirmar em modos com seleção de fase (talvez resolvida pela câmera da saída acima; conferir), Togera desalinhado no quadro único do adventure, skins
 no elimination (modo 6 esconde o traje) e os quadros dos monstros fora do telão.
 
 ### 9. Modo treino
