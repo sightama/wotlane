@@ -266,6 +266,41 @@ class Launcher : Form
         foreach (var kv in byKey) modSkins[kv.Value.Key].Add(kv.Value.Value);
     }
 
+    // Monstros custom (discroot\mods\<mod>\monsters\<pasta>\monster.json, MODS.md): (nome, id), em ordem de id. So para o jogador: um
+    // custom de chefe como IA rodaria a IA do chefe, que precisa da fase dele.
+    readonly List<KeyValuePair<string, string>> modCustoms = new List<KeyValuePair<string, string>>();
+    void LoadModCustoms()
+    {
+        modCustoms.Clear();
+        string rt = KnownRuntimeDir();
+        if (rt == null) return;
+        string mods = Path.Combine(Path.Combine(rt, "discroot"), "mods");
+        if (!Directory.Exists(mods)) return;
+        var dirs = new List<string>(Directory.GetDirectories(mods));
+        dirs.Sort(StringComparer.OrdinalIgnoreCase);
+        var byId = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (string mod in dirs)
+        {
+            string n = Path.GetFileName(mod);
+            if (n.StartsWith("_") || n.StartsWith(".")) continue;
+            string monDir = Path.Combine(mod, "monsters");
+            if (!Directory.Exists(monDir)) continue;
+            foreach (string dir in Directory.GetDirectories(monDir))
+            {
+                string js = Path.Combine(dir, "monster.json");
+                if (!File.Exists(js)) continue;
+                string text;
+                try { text = File.ReadAllText(js); } catch (IOException) { continue; }
+                if (JsonString(text, "base") == null) continue;
+                string id = (JsonString(text, "id") ?? Path.GetFileName(dir)).ToLowerInvariant();
+                byId[id] = JsonString(text, "name") ?? id.ToUpperInvariant();
+            }
+        }
+        foreach (var kv in byId) modCustoms.Add(new KeyValuePair<string, string>(kv.Value, kv.Key));
+    }
+    // Indice do custom na caixa do jogador (depois dos 10 e do Random), ou -1
+    int CustomIndex(int sel) { int c = sel - MonsterIds.Length - 1; return c >= 0 && c < modCustoms.Count ? c : -1; }
+
     static ComboBox SkinBox(int width)
     {
         return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width, DropDownWidth = 180 };
@@ -312,9 +347,15 @@ class Launcher : Form
 
         matchPlayer.Items.AddRange(MonsterNames);
         matchPlayer.Items.Add("Random");
+        LoadModCustoms();
+        foreach (var c in modCustoms) matchPlayer.Items.Add(c.Key + " (mod)");
         matchPlayer.SelectedIndex = saved.TryGetValue(":MatchPlayer", out v) && ParseInt(v) == RandomId ? MonsterNames.Length
             : IndexOrZero(MonsterIds, saved, ":MatchPlayer");
-        tips.SetToolTip(matchPlayer, "'Random' draws one of the ten monsters when you press Play.");
+        if (v != null)
+            for (int i = 0; i < modCustoms.Count; ++i)
+                if (modCustoms[i].Value == v) matchPlayer.SelectedIndex = MonsterNames.Length + 1 + i;
+        tips.SetToolTip(matchPlayer, "'Random' draws one of the ten monsters when you press Play. After it, the custom monsters of " +
+            "discroot\\mods\\<mod>\\monsters\\ (MODS.md), with their own costume.");
         LoadModSkins();
         WireSkins(matchPlayer, matchPlayerSkin, 0, saved.TryGetValue(":MatchPlayerSkin", out v) ? v : "0");
         tips.SetToolTip(matchPlayerSkin, SkinTip);
@@ -356,6 +397,7 @@ class Launcher : Form
         inner.Controls.Add(matchInfo);
 
         matchOn.CheckedChanged += delegate { UpdateMatch(); };
+        matchPlayer.SelectedIndexChanged += delegate { UpdateMatch(); };
         matchLevel.SelectedIndexChanged += delegate { UpdateMatch(); };
         UpdateMatch();
         return gb;
@@ -375,7 +417,8 @@ class Launcher : Form
     void UpdateMatch()
     {
         bool on = matchOn.Checked;
-        matchPlayer.Enabled = matchPlayerSkin.Enabled = matchLevel.Enabled = on;
+        matchPlayer.Enabled = matchLevel.Enabled = on;
+        matchPlayerSkin.Enabled = on && CustomIndex(matchPlayer.SelectedIndex) < 0;   // o custom tem o traje dele
         for (int i = 0; i < matchAIs.Length; ++i)
         {
             matchAIs[i].Enabled = on;
@@ -391,6 +434,8 @@ class Launcher : Form
     // entre os 4 do disco e as skins de mod do monstro sorteado.
     string MatchEntry(int k, ComboBox skin)
     {
+        int c = CustomIndex(k);
+        if (c >= 0) return modCustoms[c].Value;   // o runtime le o id (WOTM_MATCH=goliath,...)
         if (k >= MonsterIds.Length) k = rng.Next(MonsterIds.Length);
         string s = SkinId(skin);
         if (s == RandomSkin)
@@ -495,7 +540,8 @@ class Launcher : Form
         var lines = new List<string>();
         foreach (var kv in boxes) lines.Add(kv.Key.Key + "|" + (kv.Value.Checked ? "1" : "0"));
         lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
-        lines.Add(":MatchPlayer|" + MonsterId(matchPlayer.SelectedIndex));
+        int cu = CustomIndex(matchPlayer.SelectedIndex);
+        lines.Add(":MatchPlayer|" + (cu >= 0 ? modCustoms[cu].Value : MonsterId(matchPlayer.SelectedIndex).ToString()));
         lines.Add(":MatchPlayerSkin|" + SkinId(matchPlayerSkin));
         lines.Add(":MatchLevel|" + LevelIds[matchLevel.SelectedIndex]);
         for (int i = 0; i < matchAIs.Length; ++i)

@@ -340,7 +340,10 @@ guia em `MODS.md`, "Skins"):
 **Falta:**
 1. **Elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez e os jogadores trocam de monstro entre
    as rodadas sem recarregar. Escolher traje ali pede mudar a carga (um arquivo por monstro escolhido), não só a tela.
-2. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
+2. ~~O botão CUSTOM da barra de monstros~~ (branch `goliath-custom`, 2026-10-23; `MODS.md`, "Monstros custom"): monstro custom com
+   base num tipo do jogo, o Goliath Prime jogável (seleção nativa e `WOTM_MATCH=goliath,...`). Falta: monstros com arquivos próprios
+   (campo `files`, um tipo livre: 6, 12 ou 16, ou remapear), a casa na seleção de 3 e 4 jogadores, custom como CPU (`"ai"`; a IA do
+   chefe precisa da fase dele), retrato do Goliath (provisório no disco) e as animações que o ASSBOSS não tem.
 
 Fora, por decisão do dono: tela de destrave (skin de mod sempre aberta), som próprio por skin. Pendências da seleção para o contribuinte (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`,
 itens 6 a 8; o 5, a transição ao confirmar com seleção de fase, saiu com a câmera da saída acima): Togera desalinhado no quadro único do adventure, skins

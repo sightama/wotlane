@@ -949,9 +949,17 @@ static void soloSync(uint8_t *rdram)
         {
             std::fprintf(stderr, "[padsel] pronto (%s): coluna %d, m_monsterSel %s, traje %u\n", soloLabel(pn, n, i), col,
                          monsterName(rd32(rdram, pn[i].monsterDst)), rd32(rdram, pn[i].costumeDst));
-            if (g_soloPrimed)
-                wotm_narrator::announce(col >= 1 && col <= 10 && !g_soloCustomPick[i] ? monsterOfCol(rdram, col)
-                                                                                      : int(rd32(rdram, pn[i].monsterDst) >> 5));
+            const uint32_t msel = rd32(rdram, pn[i].monsterDst);
+            if (!g_soloPrimed)
+                ;
+            else if (g_soloCustomPick[i] && !wotm::mods::Registry::get().customs().empty())
+            {
+                const auto &cs = wotm::mods::Registry::get().customs();
+                const wotm::mods::Custom &cu = cs[size_t(g_soloCustomPick[i] - 1) % cs.size()];
+                wotm_narrator::announce(cu.narrator, cu.type);
+            }
+            else
+                wotm_narrator::announce(col >= 1 && col <= 10 ? monsterOfCol(rdram, col) : int(msel >> 5));
         }
         g_soloDonePrev[i] = done;
     }

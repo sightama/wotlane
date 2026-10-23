@@ -110,6 +110,14 @@ static void play(const char *const *names)
 
 // Nome do monstro (indice do jogo, m_monsterSel >> 5)
 static void announce(int monster) { play(namesOf(monster)); }
+// Monstro custom: o "narrator" do monster.json e, sem o arquivo, o do tipo
+static void announce(const std::string &name, int monster)
+{
+    const char *const *t = namesOf(monster);
+    const char *names[4] = {name.empty() ? nullptr : name.c_str(), nullptr, nullptr, nullptr};
+    for (int i = 0, k = names[0] ? 1 : 0; t[i] && k < 3; ++i) names[k++] = t[i];
+    play(names);
+}
 
 // introsound.mp3 na tela de "press start" (20), uma vez por abertura do jogo: na primeira chamada do screenWaitForStart, que o
 // uiMain so faz quando a transicao termina (animacao da camera e fade, betweenScreens 0). Voltar ao titulo depois nao repete.
