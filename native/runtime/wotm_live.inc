@@ -264,6 +264,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #if __has_include("wotm_native.hpp")
 #include "wotm_native.hpp"
 #include "wotm_msaa.hpp"   // MSAA do quadro (opcao ANTI-ALIASING)
+#include "wotm_preview.hpp"   // previas das opcoes da aba VIDEO (wotm_mainmenu.inc)
 #include "wotm_cheats.h"   // menu de debug (F1)
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)

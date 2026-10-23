@@ -411,7 +411,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   da tela na pausa. Conferido ao vivo pelo dono em 2026-10-22; na master (merge f045a2f).
 - **Gráficos de PC: feito em 2026-10-22, falta o teste do dono** (branch `graficos-pc`; `NATIVO.md`, "Gráficos de PC"): na aba VIDEO,
   RENDER SCALE (0.5X a 2X, supersampling acima de 1X), ANTI-ALIASING (MSAA 2X, 4X, 8X), TEXTURE FILTER (bilinear, trilinear,
-  anisotrópico 2X a 16X) e WINDOW na RESOLUTION (o quadro segue a janela). A interpolação de quadros está em "Pendências contínuas", abaixo.
+  anisotrópico 2X a 16X) e WINDOW na RESOLUTION (o quadro segue a janela). Em 2026-10-23, prévias em imagem ao lado das
+  opções da VIDEO (a mesma quina de prédio com o AA ou a resolução escolhida, o chão com o filtro escolhido etc.; `wotm_preview.hpp`). A interpolação de quadros está em "Pendências contínuas", abaixo.
 - **Ícones de botão presos no mundo: feito em 2026-10-22** (`d9fd7fa`, `wotm_menu.inc`): depois do Start antecipado no menu
   principal, os ícones da legenda são realinhados à câmera a cada quadro enquanto a animação 1 anda (o `showButtons` só alinhava nos
   quadros do fade).

@@ -64,7 +64,7 @@ struct Target
         *this = Target{};
     }
     // Pronto para w x h com `samples` amostras (limitado ao do driver); samples <= 1 libera e devolve false
-    bool ensure(int nw, int nh, int ns)
+    bool ensure(int nw, int nh, int ns, const char *what = "quadro")
     {
         ns = std::min(ns, maxSamples());
         if (ns <= 1 || nw <= 0 || nh <= 0 || !glad_glRenderbufferStorageMultisample || !glad_glBlitFramebuffer)
@@ -101,7 +101,7 @@ struct Target
         w = nw;
         h = nh;
         samples = ns;
-        std::fprintf(stderr, "[msaa] quadro %dx%d com %d amostras%s\n", nw, nh, ns, ok && dok ? "" : ": framebuffer incompleto, sem MSAA");
+        std::fprintf(stderr, "[msaa] %s %dx%d com %d amostras%s\n", what, nw, nh, ns, ok && dok ? "" : ": framebuffer incompleto, sem MSAA");
         if (!ok || !dok)
         {
             release();
