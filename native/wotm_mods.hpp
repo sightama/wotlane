@@ -15,11 +15,54 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "wotm_json.hpp"
+
 namespace wotm::mods {
+
+// Monstros jogaveis: tipo (MonsterNewNames, m_monsterSel >> 5), nome do jogo e prefixo dos arquivos em MON/
+struct MonsterInfo { int type; const char *name; const char *prefix; };
+inline constexpr MonsterInfo kMonsters[] = {
+    {1, "congar", "MONKEY"}, {2, "robo-47", "ROBOT"}, {3, "togera", "LIZARD"}, {4, "ultra-v", "SHOGUN"}, {5, "preytor", "MANTIS"},
+    {7, "kineticlops", "ENERGY"}, {8, "magmo", "LAVA"}, {9, "raptros", "DRAGON"}, {10, "agamo", "ROCK"}, {11, "zorgulon", "ALIEN"},
+};
+// Pelo nome ("togera", "Robo-47", "robo47") ou pelo prefixo ("LIZARD")
+inline const MonsterInfo *monsterInfo(std::string s) {
+    auto norm = [](std::string t) {
+        std::string o;
+        for (char c : t) if (std::isalnum(static_cast<unsigned char>(c))) o += char(std::tolower(static_cast<unsigned char>(c)));
+        return o;
+    };
+    s = norm(s);
+    for (const MonsterInfo &m : kMonsters)
+        if (s == norm(m.name) || s == norm(m.prefix)) return &m;
+    return nullptr;
+}
+inline const MonsterInfo *monsterInfo(int type) {
+    for (const MonsterInfo &m : kMonsters)
+        if (m.type == type) return &m;
+    return nullptr;
+}
+
+// Traje de mod (mods/<mod>/skins/<pasta>/skin.json)
+struct Skin {
+    int monster = 0;            // tipo do monstro
+    std::string monsterName;    // "togera"
+    std::string prefix;         // "LIZARD"
+    std::string id;             // "green" (o save guarda "togera/green")
+    std::string name;           // o que a selecao mostra
+    int base = 0;               // traje do disco que da o que falta (e os sons do traje)
+    bool ai = false;            // as IAs sorteadas podem usar
+    int index = 0;              // traje no jogo (4..99), so nesta execucao
+    std::string mod;
+    std::filesystem::path dir;
+};
+// PNG de uma skin: vale so para o arquivo do traje dela (stem "LIZARD4"), nunca para o traje base
+struct SkinPng { std::string stem; std::filesystem::path host; std::string mod, rel; };
 
 struct File {
     std::string rel;              // "MON/CONGAR1.TEX" (maiusculas, '/')
@@ -70,6 +113,7 @@ public:
                 const std::string rel = key(fs::relative(it->path(), m, ec).generic_string());
                 const uint64_t size = it->file_size(ec);
                 if (rel.empty() || ec) continue;
+                if (rel.rfind("SKINS/", 0) == 0) continue;   // skins/<id>/: trajes novos (scanSkins), nao sobrepoem o disco
                 if (size > kMaxSize) { std::fprintf(stderr, "[mods] %s/%s ignorado: maior que 256 MB\n", m_mods.back().c_str(), rel.c_str()); continue; }
                 File &f = m_files[rel];
                 if (!f.mod.empty()) std::fprintf(stderr, "[mods] %s: %s vence %s\n", rel.c_str(), m_mods.back().c_str(), f.mod.c_str());
@@ -79,6 +123,7 @@ public:
                 f.size = size;
             }
         }
+        scanSkins(mods);
         // Faixas de setores na ordem dos nomes (estavel entre execucoes), com um setor de folga entre arquivos
         uint32_t next = kFirstLsn;
         for (auto &[rel, f] : m_files) {
@@ -88,7 +133,7 @@ public:
             m_byLsn.push_back(&f);
         }
         m_ready = true;
-        return m_files.size();
+        return m_files.size() + m_alias.size();
     }
 
     bool ready() const { return m_ready; }
@@ -102,10 +147,33 @@ public:
         const auto it = m_files.find(key(rel));
         return it == m_files.end() ? nullptr : &it->second;
     }
+    // Arquivo do traje base que um traje de mod usa no lugar do que a pasta da skin nao trouxe ("MON/LIZARD4.NGP" ->
+    // "MON/LIZARD1.NGP"); senao o proprio nome. O que se le do disco e sempre aliasOf(rel).
+    std::string aliasOf(const std::string &rel) const {
+        if (!m_ready || m_alias.empty()) return key(rel);
+        const auto it = m_alias.find(key(rel));
+        return it == m_alias.end() ? key(rel) : it->second;
+    }
     std::string hostPath(const std::string &rel) const {
-        const File *f = find(rel);
+        const File *f = find(aliasOf(rel));
         return f ? f->host.string() : std::string{};
     }
+
+    // ---- skins de mod (trajes 4 em diante) ----
+    const std::vector<Skin> &skins() const { return m_skins; }
+    // Skin pelo tipo do monstro (MonsterNewNames) e pelo id ("green") ou "monstro/id"; nullptr se nao ha.
+    const Skin *skin(int monster, std::string id) const {
+        if (const auto s = id.find('/'); s != std::string::npos) id = id.substr(s + 1);
+        for (const Skin &k : m_skins)
+            if (k.monster == monster && k.id == lower(id)) return &k;
+        return nullptr;
+    }
+    const Skin *skinByIndex(int monster, int index) const {
+        for (const Skin &k : m_skins)
+            if (k.monster == monster && k.index == index) return &k;
+        return nullptr;
+    }
+    const std::vector<SkinPng> &skinPngs() const { return m_skinPngs; }
     static bool isModLsn(uint32_t lsn) { return lsn >= kFirstLsn; }
     const File *findLsn(uint32_t lsn) const {
         if (!isModLsn(lsn)) return nullptr;
@@ -134,7 +202,136 @@ private:
     std::vector<std::string> m_mods;
     std::map<std::string, File> m_files;
     std::vector<const File *> m_byLsn;   // em ordem de LSN (o map ja vem em ordem de nome, e os LSN seguem essa ordem)
+    std::map<std::string, std::string> m_alias;   // "MON/LIZARD4.NGP" -> "MON/LIZARD1.NGP"
+    std::vector<Skin> m_skins;
+    std::vector<SkinPng> m_skinPngs;
     std::atomic<bool> m_ready{false};
+
+    static std::string lower(std::string s) {
+        for (char &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    }
+    // Filho de `dir` com esse nome, sem olhar maiusculas
+    static std::filesystem::path child(const std::filesystem::path &dir, const std::string &name) {
+        std::error_code ec;
+        for (const auto &e : std::filesystem::directory_iterator(dir, ec))
+            if (key(e.path().filename().string()) == key(name)) return e.path();
+        return {};
+    }
+
+    // mods/<mod>/skins/<pasta>/skin.json (MODS.md, "Skins"): {"monster", "id", "name", "base", "ai"}. Cada skin vira o traje
+    // <PREFIXO><n> (n = 4, 5, ... por monstro, na ordem mod/id; so nesta execucao: o save guarda "monstro/id"). O que a pasta traz
+    // (.NGP+.PTR, .TEX, .RTX, PNGs) e dela; o que falta e o arquivo do traje base (m_alias).
+    void scanSkins(const std::vector<std::filesystem::path> &mods) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        std::map<std::string, Skin> byKey;   // "togera/green"
+        for (const fs::path &m : mods) {
+            const fs::path dir = child(m, "skins");
+            if (dir.empty() || !fs::is_directory(dir, ec)) continue;
+            std::vector<fs::path> subs;
+            for (const auto &e : fs::directory_iterator(dir, ec))
+                if (e.is_directory(ec)) subs.push_back(e.path());
+            std::sort(subs.begin(), subs.end());
+            for (const fs::path &s : subs) {
+                const std::string where = m.filename().string() + "/skins/" + s.filename().string();
+                const fs::path js = child(s, "skin.json");
+                std::string text;
+                if (!js.empty()) {
+                    std::ifstream in(js, std::ios::binary);
+                    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                }
+                json::Value v;
+                std::string err;
+                if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
+                    std::fprintf(stderr, "[mods] skin %s ignorada: %s\n", where.c_str(), js.empty() ? "sem skin.json" : ("skin.json invalido: " + err).c_str());
+                    continue;
+                }
+                Skin k;
+                const json::Value *mon = v.get("monster");
+                const MonsterInfo *mi = mon && mon->type == json::Value::Str ? monsterInfo(mon->s) : nullptr;
+                if (!mi) {
+                    std::fprintf(stderr, "[mods] skin %s ignorada: \"monster\" nao e um monstro jogavel (togera, congar, ...)\n", where.c_str());
+                    continue;
+                }
+                k.monster = mi->type;
+                k.monsterName = mi->name;
+                k.prefix = mi->prefix;
+                const json::Value *id = v.get("id");
+                k.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
+                if (k.id.empty() || k.id.size() > 32 || k.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
+                    std::fprintf(stderr, "[mods] skin %s ignorada: \"id\" so com letras, digitos e _ (ate 32)\n", where.c_str());
+                    continue;
+                }
+                const json::Value *nm = v.get("name");
+                k.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : k.id;
+                const json::Value *base = v.get("base");
+                k.base = base ? int(base->asInt(0)) : 0;
+                if (k.base < 0 || k.base > 3) {
+                    std::fprintf(stderr, "[mods] skin %s: \"base\" %d fora de 0..3, usando 0\n", where.c_str(), k.base);
+                    k.base = 0;
+                }
+                const json::Value *ai = v.get("ai");
+                k.ai = ai && ai->asBool(false);
+                k.mod = m.filename().string();
+                k.dir = s;
+                Skin &slot = byKey[k.monsterName + "/" + k.id];
+                if (!slot.id.empty())
+                    std::fprintf(stderr, "[mods] skin %s/%s: %s vence %s\n", k.monsterName.c_str(), k.id.c_str(), k.mod.c_str(), slot.mod.c_str());
+                slot = k;
+            }
+        }
+        for (auto &[name, k] : byKey) m_skins.push_back(k);
+        std::stable_sort(m_skins.begin(), m_skins.end(), [](const Skin &a, const Skin &b) {
+            return a.monster != b.monster ? a.monster < b.monster : key(a.mod) != key(b.mod) ? key(a.mod) < key(b.mod) : a.id < b.id;
+        });
+        std::map<int, int> next;
+        std::vector<Skin> kept;
+        for (Skin &k : m_skins) {
+            int &n = next.emplace(k.monster, 4).first->second;
+            const std::string stem = k.prefix + std::to_string(n);
+            if (n > 99 || stem.size() > 8) {   // o fileStatus guarda nomes de ate 8 letras
+                std::fprintf(stderr, "[mods] skin %s/%s ignorada: trajes demais para %s\n", k.monsterName.c_str(), k.id.c_str(), k.monsterName.c_str());
+                continue;
+            }
+            std::map<std::string, fs::path> own;   // extensao -> arquivo da pasta
+            std::vector<fs::path> pngs;
+            for (auto it = fs::recursive_directory_iterator(k.dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                if (!it->is_regular_file(ec)) continue;
+                const std::string ext = key(it->path().extension().string());
+                if (ext == ".PNG") pngs.push_back(it->path());
+                else if (ext == ".NGP" || ext == ".PTR" || ext == ".TEX" || ext == ".RTX") {
+                    auto &o = own[ext.substr(1)];
+                    if (!o.empty()) std::fprintf(stderr, "[mods] skin %s/%s: dois .%s, usando %s\n", k.monsterName.c_str(), k.id.c_str(), ext.c_str() + 1, o.filename().string().c_str());
+                    else o = it->path();
+                }
+            }
+            if (own.count("NGP") != own.count("PTR")) {
+                std::fprintf(stderr, "[mods] skin %s/%s ignorada: .NGP e .PTR andam juntos (o .PTR relocava o .NGP)\n", k.monsterName.c_str(), k.id.c_str());
+                continue;
+            }
+            k.index = n++;
+            std::string brought;
+            for (const char *ext : {"NGP", "PTR", "TEX", "RTX"}) {
+                const std::string rel = "MON/" + stem + "." + ext;
+                if (const auto o = own.find(ext); o != own.end()) {
+                    File &f = m_files[rel];
+                    f.rel = rel;
+                    f.host = o->second;
+                    f.mod = k.mod;
+                    f.size = fs::file_size(o->second, ec);
+                    brought += std::string(brought.empty() ? "" : " ") + ext;
+                } else
+                    m_alias[rel] = "MON/" + k.prefix + std::to_string(k.base) + "." + ext;
+            }
+            for (const fs::path &p : pngs) m_skinPngs.push_back(SkinPng{stem, p, k.mod, k.monsterName + "/" + k.id + "/" + p.filename().string()});
+            std::fprintf(stderr, "[mods] skin %s/%s (\"%s\", %s) = traje %d (%s); base %d%s%s, %zu png\n", k.monsterName.c_str(), k.id.c_str(),
+                         k.name.c_str(), k.mod.c_str(), k.index, stem.c_str(), k.base, brought.empty() ? "" : "; da pasta: ", brought.c_str(), pngs.size());
+            kept.push_back(k);
+        }
+        m_skins = std::move(kept);
+    }
 };
 
 } // namespace wotm::mods

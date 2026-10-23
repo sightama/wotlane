@@ -2268,7 +2268,20 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             if (end != p && *end == ':')   // "<monstro>:<figurino>"
             {
                 const char *q = end + 1;
-                c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
+                if (*q && !std::isdigit(static_cast<unsigned char>(*q)))   // "<monstro>:<skin>": traje de mod pelo id (mods/<mod>/skins/)
+                {
+                    const char *t = q;
+                    while (*t && *t != ',')
+                        ++t;
+                    const std::string id(q, t);
+                    const wotm::mods::Skin *sk = wotm::mods::Registry::get().skin(v[n - 1], id);
+                    if (!sk)
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" do monstro %d nao achada em mods/; traje 0\n", id.c_str(), v[n - 1]);
+                    c[n - 1] = sk ? sk->index : 0;
+                    end = const_cast<char *>(t);
+                }
+                else
+                    c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
                 if (end == q || c[n - 1] < 0 || c[n - 1] > 99)   // 4..99: trajes de mod (nome do arquivo ate 8 letras)
                 {
                     p = nullptr;

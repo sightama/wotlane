@@ -8,6 +8,7 @@
 // Arquivo de mod maior que o do disco: o jogo carrega em regioes de tamanho fixo e pode sobrescrever o que vem depois (o log
 // avisa; abrir espaco fica para o item 8). WOTM_MODS=<pasta> troca a pasta (padrao: mods/ ao lado do ELF); WOTM_MODS=0 desliga.
 #include "wotm_mods.hpp"
+#include <set>
 
 namespace wotm_mods_hooks
 {
@@ -24,8 +25,31 @@ void searchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     const uint32_t fAddr = getRegU32(ctx, 4), pAddr = getRegU32(ctx, 5);
     const char *p = reinterpret_cast<const char *>(rdram + (pAddr & PS2_RAM_MASK));
     const std::string rel = Registry::keyFromGame(std::string(p, strnlen(p, 256)));
-    const wotm::mods::File *m = Registry::get().find(rel);
-    g_origSearch(rdram, ctx, rt);
+    const std::string target = Registry::get().aliasOf(rel);
+    const wotm::mods::File *m = Registry::get().find(target);
+    if (target != rel)
+    {
+        // Traje de mod sem esse arquivo na pasta da skin: busca o do traje base ("LIZARD4" -> "LIZARD1"), trocando o nome no
+        // proprio texto do jogo durante a chamada (o nome do base nunca e mais longo: o numero do traje base tem um digito)
+        char *s = reinterpret_cast<char *>(rdram + (pAddr & PS2_RAM_MASK));
+        const size_t len = strnlen(s, 256);
+        const std::string saved(s, len + 1);
+        const std::string from = rel.substr(rel.find_last_of('/') + 1), to = target.substr(target.find_last_of('/') + 1);
+        std::string up(saved);
+        for (char &c : up) c = char(std::toupper(static_cast<unsigned char>(c)));
+        if (const size_t at = up.find(from); at != std::string::npos && to.size() <= from.size())
+        {
+            std::string repl = saved.substr(0, at) + to + saved.substr(at + from.size());
+            std::memcpy(s, repl.c_str(), repl.size() + 1);
+        }
+        g_origSearch(rdram, ctx, rt);
+        std::memcpy(s, saved.data(), saved.size());
+        static std::set<std::string> logged;
+        if (logged.insert(rel).second)
+            std::fprintf(stderr, "[mods] %s = %s (skin: arquivo do traje base)%s\n", rel.c_str(), target.c_str(), getRegU32(ctx, 2) ? "" : " NAO ACHADO");
+    }
+    else
+        g_origSearch(rdram, ctx, rt);
     if (!m)
         return;
     const bool onDisc = getRegU32(ctx, 2) != 0;

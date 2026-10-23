@@ -89,6 +89,21 @@ private:
             p.mod = f.mod;
             p.rel = rel;
         }
+        // PNGs das skins (mods/<mod>/skins/<pasta>/): o numero do nome vale, o arquivo e o do traje da skin. Aceita o nome do
+        // export do traje base ("lizard1_t0004.png", "lizard1_rtx_t0011.png") ou so "t0004.png"/"rtx_t0011.png".
+        for (const mods::SkinPng &sp : reg.skinPngs()) {
+            const std::string base = sp.host.filename().string();
+            std::string stem; bool rtx = false; uint32_t id = 0;
+            if (!parseName(base, stem, rtx, id) && !parseName("X_" + base, stem, rtx, id)) {
+                std::fprintf(stderr, "[mods] png %s: nome sem _tNNNN, ignorado\n", sp.rel.c_str());
+                continue;
+            }
+            if (upper(base).rfind("RTX_T", 0) == 0) rtx = true;
+            Png &p = m_png[Key{sp.stem, rtx, id}];
+            p.host = sp.host.string();
+            p.mod = sp.mod;
+            p.rel = sp.rel;
+        }
         if (!m_png.empty()) std::fprintf(stderr, "[mods] %zu textura(s) em PNG\n", m_png.size());
     }
 };
