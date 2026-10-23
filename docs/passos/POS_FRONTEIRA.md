@@ -296,6 +296,13 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   monstro), `texInfo` com 1000 entradas, nomes internos em `MonsterNames.h` (17 entradas). Monstro novo passa por `MonsterParse` e
   `Shell::Load*`, que já são a superfície de decomp do port.
 
+**Skins, parte 1 na master em 2026-10-23** (merge `b32e520`; `MODS.md`, `NATIVO.md`): `mods/<mod>/skins/<pasta>/skin.json` vira traje
+4+ do monstro, escolhido pelo menu (seleção nativa das telas 3 e 6 e de 3 e 4 jogadores, sempre aberto e repetível) e pelo
+`WOTM_MATCH`. A seleção ganhou a barra de monstros com RANDOM e CUSTOM. Falta (plano em
+`docs/investigacoes/2026-10-23/skins_mod_plano.md`, etapa 2 em diante): o save guardar a skin (nome, com volta ao traje 0 se o mod
+sumir; máscaras `& 3` no `wotm_save.inc` e no `wotm_savepics.hpp`), as telas 7/18/19, as IAs sorteadas com skin, o botão CUSTOM e
+monstros novos. Pendências da seleção para o contribuinte: `docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`.
+
 ### 9. Modo treino
 - Hitboxes e volumes de colisão desenhados no nativo, dano de cada golpe na tela. Ajuda a balancear os chefes jogáveis (10) e os
   monstros de mods (8): quem mexe em `MonsterParse` vê o efeito na hora. Os modos de debug que já existem (`NATIVO.md`: modo deus,
