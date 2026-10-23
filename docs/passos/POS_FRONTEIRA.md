@@ -409,7 +409,7 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   Correções do mesmo dia, depois dos testes do dono: sair não deixa mais o jogo congelado (a volta da pausa esperava o tempo da pausa); o lens flare é refeito pela câmera
   livre (acende o de luzes fora da tela na pausa, como o olho do Robo-47 visto de frente); o fogo do Agamo aparece mesmo com ele fora
   da tela na pausa. Conferido ao vivo pelo dono em 2026-10-22; na master (merge f045a2f).
-- **Gráficos de PC: feito em 2026-10-22, falta o teste do dono** (branch `graficos-pc`; `NATIVO.md`, "Gráficos de PC"): na aba VIDEO,
+- **Gráficos de PC: feito em 2026-10-22, conferido pelo dono e na master em 2026-10-23** (`NATIVO.md`, "Gráficos de PC"; F11 agora muda a opção DISPLAY MODE): na aba VIDEO,
   RENDER SCALE (0.5X a 2X, supersampling acima de 1X), ANTI-ALIASING (MSAA 2X, 4X, 8X), TEXTURE FILTER (bilinear, trilinear,
   anisotrópico 2X a 16X) e WINDOW na RESOLUTION (o quadro segue a janela). Em 2026-10-23, prévias em imagem ao lado das
   opções da VIDEO (a mesma quina de prédio com o AA ou a resolução escolhida, o chão com o filtro escolhido etc.; `wotm_preview.hpp`). A interpolação de quadros está em "Pendências contínuas", abaixo.
