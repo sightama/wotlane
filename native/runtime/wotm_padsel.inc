@@ -10,19 +10,21 @@
 // de quem esta fora volta ao menu principal (o screenGetInput devolve o codigo 5). Start (Enter) com 2 ou mais jogadores confirma;
 // os numeros escolhidos sao renumerados em ordem (1, 3, 4 viram 1, 2, 3). Depois disso o mapa porta -> dispositivos do
 // wotm_pad.inc fica manual (wotm_pad::g_manual, g_manualDevs[jogador]) ate o jogo voltar ao menu principal ou ao "press start".
-//   - 2 jogadores: como no retail, os itens "free-for-all / elimination / minigames" aparecem (fade dos objetos da tela).
-//   - 3 e 4 (g_multi): so o free for all (modo 3) existe: o gancho faz o que o item free-for-all faz (m_mode e m_battleMode 3,
-//     g_levelList = PO_MPFreeForAll, initSelectSwitches, changeScreen(5, 13)). A tela 13 do retail escolhe 0, 1 ou 2 CPUs
-//     (m_numAIs) e segue a 15 ("first to"); a volta da 13 vem para a escolha de controles, e a volta desta vai ao menu principal.
+//   - 2, 3 ou 4 jogadores: como no retail, os itens "free-for-all / elimination / minigames" aparecem (fade dos objetos da tela);
+//     com 3 e 4 (g_multi) as telas do retail seguem iguais (13 CPUs e 15 "first to"; 11 continues da eliminacao; 14 escolha do
+//     minigame) e so as selecoes de monstros sao nossas. A volta dessas telas mostra a lista de novo; a volta da lista vai ao menu
+//     principal. As regras de 3 e 4 na eliminacao e nos minigames estao no wotm_modes4.inc.
 //
-// Selecao de monstros de 3 e 4 (tela 6, screenCharSelect2P, com g_multi): o screenCharSelect2P roda sem entrada (o filme do telao
-// segue) e com os objetos da tela 6 e os paineis de traje escondidos; o telao mostra um quadro por jogador e um por CPU. Cada
+// Selecao de monstros de 3 e 4 (tela 6, screenCharSelect2P, com g_multi; nos minigames a escolha da tela 14 vem para ca no lugar da
+// tela 7, o fliperama, que nao tem o telao): o screenCharSelect2P roda sem entrada (o filme do telao segue) e com os objetos da tela
+// 6 e os paineis de traje escondidos; o telao mostra um quadro por jogador e um por CPU. Na eliminacao (modo 6) o traje e sempre o 0 e cada monstro so vai a um jogador (SelectSlot taken 0, como o retail; as
+// escolhas vao a Shell+0x2B84/0x2B88 e, dos jogadores 3 e 4, ao wotm_modes4.inc para o "play again"). Cada
 // jogador, pelos dispositivos dele: esquerda/direita troca de monstro (as colunas destravadas, monsterSelectMode), cima/baixo de traje
-// (os abertos: state 1 e taken 1), X confirma, triangulo desfaz (ou, sem ninguem pronto, volta a tela 15). Os quadros das CPUs sao
+// (os abertos: state 1 e taken 1), X confirma, triangulo desfaz (ou, sem ninguem pronto, volta a tela anterior). Os quadros das CPUs sao
 // do jogador 1, um de cada vez depois do dele (como o retail, em que o controle 1 escolhe as IAs); o triangulo desfaz o ultimo pronto
 // dessa fila. Todos prontos: m_monsterSel[i] e m_costume[0..1] (os trajes dos jogadores 3 e 4 vao para o wotm_split4.inc,
 // wotmMultiSetCostume), as CPUs em m_monsterSel[4 + j] e m_costume[2 + j], m_numPlayers N, m_numAIs, e changeScreen(6, 8) como o
-// retail (selecao de fase).
+// retail (selecao de fase); num minigame, changeScreen(6, 0x63) (carga, como o screenMinigames2P).
 //
 // Thread do EE: ganchos de screenTransition (esconde os itens das telas 5 e 6 e o rotulo do menu, mede o fade), screenGameModes2P,
 // screenCharSelect2P, screenGetInput (sem entrada do jogo durante as escolhas; injeta o "voltar"), changeScreen (as voltas acima) e
@@ -32,6 +34,7 @@
 // Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
 void wotmMultiSetCostume(int player, uint32_t costume);   // wotm_split4.inc: traje dos jogadores 3 e 4 (o Shell so tem lugar para 2)
+void wotmElimSetStart(int player, uint32_t sel);          // wotm_modes4.inc: monstro inicial de cada jogador na eliminacao
 bool wotmTextMenuOn();   // wotm_mainmenu.inc: menu principal em texto (sem o rotulo "multiplayer" daqui)
 
 namespace wotm_padsel
@@ -75,6 +78,7 @@ struct View
     int selCostume[kMaxCards] = {}, selCostumes[kMaxCards] = {};
     bool selReady[kMaxCards] = {};
     int selActive = -1;   // quadro que o jogador 1 move (o dele ou o de uma CPU)
+    bool selElim = false; // eliminacao: sem troca de traje
     // rotulo do menu principal
     uint32_t labelObj[4] = {};   // objetos do switch do "2 player" em uso ([0] = 0: sem rotulo); o menor e o texto
     uint32_t labelRef[4] = {};   // objetos do "1 player" em uso (texto e brilho): o menor da a coluna e a altura das letras
@@ -141,7 +145,7 @@ static int g_selDone = 0;   // quadros desde que todos ficaram prontos
 // Troca de tela pedida por uma escolha: feita na saida da funcao da tela (screenGameModes2P, screenCharSelect2P). O changeScreen so
 // grava currScreen e screenFirstPass = 1; chamado antes da funcao original, ela rodava a "primeira passada" da tela nova no lugar
 // dela (e a zerava), e a troca as vezes nao acontecia.
-enum After { AfterNone, AfterMultiFfa, AfterSelectDone, AfterSelectBack };
+enum After { AfterNone, AfterSelectDone, AfterSelectBack };
 static After g_after = AfterNone;
 
 struct ScriptStep { double t0, dur; int dev, act; };
@@ -252,6 +256,14 @@ static void changeScreen(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, int 
     callGuest(rdram, ctx, rt, wotm::fn::changeScreen__Fiiiib, uint32_t(from), uint32_t(to), uint32_t(dir), uint32_t(anim), 1u);
 }
 
+static uint32_t rd32(const uint8_t *rdram, uint32_t a);
+// Animacao de camera do menu (shell->m_screenAnim[anim]), como o changeScreen a toca, para a frente ou ao contrario
+static void menuAnim(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, int anim, bool reverse)
+{
+    callGuest(rdram, ctx, rt, reverse ? wotm::fn::animationStartReverse__FG11_animHandleb : wotm::fn::animationStart__FG11_animHandleb,
+              kShell + 0x61C + 0x10u * uint32_t(anim), 1u);
+    std::memcpy(rdram + wotm::sym::currAnimationIndex, &anim, 4);
+}
 static uint32_t rd32(const uint8_t *rdram, uint32_t a)
 {
     uint32_t v;
@@ -259,6 +271,8 @@ static uint32_t rd32(const uint8_t *rdram, uint32_t a)
     return v;
 }
 static void wr32(uint8_t *rdram, uint32_t a, uint32_t v) { std::memcpy(rdram + (a & 0x1FFFFFFu), &v, 4); }
+// Eliminacao (modo 6): traje 0 e monstro exclusivo de um jogador
+static bool elimination(uint8_t *rdram) { return rd32(rdram, kMode) == 6u; }
 static uint32_t menuObj(int screen, uint32_t i) { return kShell + 0x6DC + (uint32_t(screen) * 90u + i) * 4u; }   // shell->m_menuObj[s][i]
 
 static void setItemsAlpha(uint8_t *rdram, int screen, float a)
@@ -368,6 +382,7 @@ static void publish(uint8_t *rdram)
     v.selPlayers = g_selOn ? g_multi : 0;
     v.selCards = g_selOn ? g_multi + g_ais : 0;
     v.selActive = g_selOn ? activeCard(0) : -1;
+    v.selElim = elimination(rdram);
     for (int p = 0; p < v.selCards; ++p)
     {
         v.selMonster[p] = rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(g_pick[p].col - 1));
@@ -379,7 +394,7 @@ static void publish(uint8_t *rdram)
             const uint32_t s = wotm::sym::monsterSelectMode + uint32_t((g_pick[p].col - 1) * 4 + c) * kSlotSize;
             open += rd32(rdram, s + 4) == 1u && rd32(rdram, s) == 1u;
         }
-        v.selCostumes[p] = open;
+        v.selCostumes[p] = elimination(rdram) ? 1 : open;   // eliminacao: so o traje 0
     }
 }
 
@@ -396,18 +411,6 @@ static void setManual(bool on, const int map[kMaxPlayers + 1] = nullptr)
     }
     if (wotm_pad::g_manual.exchange(on) != on)
         std::fprintf(stderr, "[padsel] controles %s\n", on ? "escolhidos: mapa manual" : "desligados: mapa padrao");
-}
-
-// 3 e 4: o que o item free-for-all da tela 5 faz (a tela 13 escolhe as CPUs)
-static void startMultiFreeForAll(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-{
-    wr32(rdram, kMode, 3u);
-    wr32(rdram, kBattleMode, 3u);
-    wr32(rdram, kNumAIs, 0u);
-    wr32(rdram, wotm::sym::g_levelList, wotm::sym::PO_MPFreeForAll);
-    callGuest(rdram, ctx, runtime, wotm::fn::hierSetSwitch__FP11_hierswitchi, rd32(rdram, kSw5CC), 0u);
-    changeScreen(rdram, ctx, runtime, 5, 13, 1, 2);
-    callGuest(rdram, ctx, runtime, wotm::fn::initSelectSwitches__Fv, 0u);
 }
 
 static void configStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -471,17 +474,12 @@ static void configStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         for (int d = 0; d < kDevs; ++d)
             if (present(d) && g_slot[d] > 0)
                 std::fprintf(stderr, "[padsel] jogador %d: %s %d\n", map[g_slot[d]], d == kKb ? "teclado" : "controle", d == kKb ? 0 : d);
-        if (n == 2)
-        {
-            g_multi = 0;
-            g_phase = Reveal;
-            g_reveal = 0.f;
-            return;
-        }
-        g_multi = n;
-        g_phase = Leaving;
-        std::fprintf(stderr, "[padsel] %d jogadores: free for all\n", n);
-        g_after = AfterMultiFfa;   // startMultiFreeForAll na saida do screenGameModes2P
+        // a lista de modos do retail aparece com 2, 3 ou 4 (com 3 e 4 as selecoes de monstros sao as nossas)
+        g_multi = n >= 3 ? n : 0;
+        g_phase = Reveal;
+        g_reveal = 0.f;
+        if (g_multi)
+            std::fprintf(stderr, "[padsel] %d jogadores: lista de modos\n", n);
         return;
     }
     if (moved)
@@ -498,9 +496,10 @@ static bool columnOpen(uint8_t *rdram, int col)
         return rd32(rdram, wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4) * kSlotSize + 4) == 1u;
     return true;
 }
+static uint32_t selectSlot(int col, int c) { return wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4 + c) * kSlotSize; }
 static bool costumeOpen(uint8_t *rdram, int col, int c)
 {
-    const uint32_t s = wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4 + c) * kSlotSize;
+    const uint32_t s = selectSlot(col, c);
     return rd32(rdram, s + 4) == 1u && rd32(rdram, s) == 1u;
 }
 static int firstCostume(uint8_t *rdram, int col)
@@ -532,18 +531,21 @@ static void selectBegin(uint8_t *rdram)
     const int cards = g_multi + g_ais;
     const bool keep = g_pickFor == cards;
     g_pickFor = cards;
+    const bool elim = elimination(rdram);
     int col = stepColumn(rdram, 0, 1);
     for (int p = 0; p < cards; ++p)
     {
         if (!keep || !columnOpen(rdram, g_pick[p].col) || !costumeOpen(rdram, g_pick[p].col, g_pick[p].costume))
         {
             g_pick[p].col = col;
-            g_pick[p].costume = firstCostume(rdram, col);
+            g_pick[p].costume = elim ? 0 : firstCostume(rdram, col);
         }
+        if (elim)
+            g_pick[p].costume = 0;
         col = stepColumn(rdram, col, 1);
         g_pick[p].ready = false;
     }
-    std::fprintf(stderr, "[padsel] selecao de monstros de %d jogadores e %d CPUs\n", g_multi, g_ais);
+    std::fprintf(stderr, "[padsel] selecao de monstros (modo %u) de %d jogadores e %d CPUs\n", rd32(rdram, kMode), g_multi, g_ais);
 }
 
 static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -557,6 +559,12 @@ static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         else
             wotmMultiSetCostume(p, uint32_t(g_pick[p].costume));
         std::fprintf(stderr, "[padsel] jogador %d: %s traje %d\n", p + 1, monsterName(sel), g_pick[p].costume);
+        if (elimination(rdram))   // o "play again" do dialogo 0xB volta a estes (Shell+0x2B84/0x2B88 como o retail; 3 e 4 no modes4)
+        {
+            if (p < 2)
+                wr32(rdram, kShell + 0x2B84 + 4u * uint32_t(p), sel);
+            wotmElimSetStart(p, sel);
+        }
     }
     for (int i = g_multi; i < 12; ++i)
         wr32(rdram, kMonsterSel + 4u * uint32_t(i), 0u);
@@ -598,6 +606,7 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     int sound = 0;
     bool back = false;
+    const bool elim = elimination(rdram);
     for (int p = 0; p < g_multi; ++p)
     {
         bool e[kActions];
@@ -607,6 +616,8 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if (e[Back] && undo >= 0)
         {
             g_pick[undo].ready = false;
+            if (elim)   // o monstro volta a ficar livre para os outros
+                wr32(rdram, selectSlot(g_pick[undo].col, 0), 1u);
             sound = 6;
             continue;
         }
@@ -616,10 +627,20 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if (e[Left] || e[Right])
         {
             k.col = stepColumn(rdram, k.col, e[Left] ? -1 : 1);
-            k.costume = firstCostume(rdram, k.col);
+            k.costume = elim ? 0 : firstCostume(rdram, k.col);
             sound = e[Left] ? 2 : 4;
         }
-        if (e[Up] || e[Down])
+        if (elim && e[Ok])
+        {
+            if (costumeOpen(rdram, k.col, 0))   // livre: fica com ele (taken 0, como o screenCharSelect2P no modo 6)
+            {
+                wr32(rdram, selectSlot(k.col, 0), 0u);
+                k.ready = true;
+                sound = 8;
+            }
+            e[Ok] = false;
+        }
+        if ((e[Up] || e[Down]) && !elim)
         {
             const int dir = e[Up] ? -1 : 1;
             for (int i = 0; i < 4; ++i)
@@ -643,8 +664,8 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_selLeaving = true;
         sfx(rdram, ctx, runtime, 6);
-        g_after = AfterSelectBack;   // changeScreen(6, 15) na saida do screenCharSelect2P
-        std::fprintf(stderr, "[padsel] selecao: volta ao \"first to\"\n");
+        g_after = AfterSelectBack;   // changeScreen para a tela anterior na saida da funcao da tela (selectExit)
+        std::fprintf(stderr, "[padsel] selecao: volta a tela anterior\n");
         return;
     }
     if (sound)
@@ -686,7 +707,8 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     if (ctx->pc == wotm::fn::screenTransition__Fb)
     {
         const int cur = static_cast<int>(rd32(rdram, wotm::sym::currScreen)), last = static_cast<int>(rd32(rdram, wotm::sym::lastScreen));
-        if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 5 && (last == 1 || ((last == 13 || last == 15) && g_multi)))
+        // a volta das telas seguintes (13, 15, 11, 14) mostra a lista de modos, com os mesmos jogadores
+        if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 5 && last == 1)
         {
             g_phase = Config;
             g_primed = false;
@@ -697,7 +719,8 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
             setManual(false);
             std::fprintf(stderr, "[padsel] escolha de controles\n");
         }
-        // de volta a tela 6 (do "first to" ou da selecao de fase): uma selecao anterior que ainda constava como saindo recomeca
+        // de volta a tela 6 (do "first to", dos continues, da escolha do minigame ou da selecao de fase): uma selecao anterior que
+        // ainda constava como saindo recomeca
         if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 6 && g_multi && (!g_selOn || g_selLeaving))
             selectBegin(rdram);
         g_transRa = GPR_U32(ctx, 31);
@@ -749,11 +772,6 @@ static void modes2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (!g_modesPending || ctx->pc != g_modesRa)
         return;
     g_modesPending = false;
-    if (g_after == AfterMultiFfa)
-    {
-        g_after = AfterNone;
-        startMultiFreeForAll(rdram, ctx, runtime);
-    }
     if (g_phase == Config || g_phase == Leaving)
         setItemsAlpha(rdram, 5, 0.f);
     else if (g_phase == Reveal)
@@ -766,6 +784,8 @@ static void modes2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     publish(rdram);
 }
 
+// screenCharSelect2P com a selecao de 3 e 4 por cima: o passo antes, a troca de tela pedida depois (6 -> 8 selecao de fase; num
+// minigame, 6 -> 0x63 carga, como o screenMinigames2P; a volta: 15 "first to", 11 continues da eliminacao ou 14 escolha do minigame)
 static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const bool entry = ctx->pc == wotm::fn::screenCharSelect2P__Fv;
@@ -787,10 +807,18 @@ static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const bool done = g_after == AfterSelectDone;
         g_after = AfterNone;
-        if (done)
+        if (const uint32_t mode = rd32(rdram, kMode); mode >= 7u && mode <= 9u)   // minigame (vindo da tela 14): carga ou volta
+        {
+            if (done)
+                wr32(rdram, wotm::sym::continueDecoding, 0u);
+            changeScreen(rdram, ctx, runtime, 6, done ? 0x63 : 14, done ? 1 : -1, 0);
+            if (!done)
+                menuAnim(rdram, ctx, runtime, 8, false);   // do telao ao fliperama
+        }
+        else if (done)
             changeScreen(rdram, ctx, runtime, 6, 8, 1, 3);
         else
-            changeScreen(rdram, ctx, runtime, 6, 15, -1, 0);
+            changeScreen(rdram, ctx, runtime, 6, elimination(rdram) ? 11 : 15, -1, 0);
     }
     if (g_selOn)
         hideSelect2P(rdram);
@@ -838,6 +866,15 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
             ctx->r[5] = _mm_set_epi64x(0, 1);
         else if (g_multi && from == 15 && (to == 18 || to == 19) && dir > 0)   // com CPUs a 15 iria as selecoes de 3 e 4 do retail
             ctx->r[5] = _mm_set_epi64x(0, 6);
+        else if (g_multi && from == 14 && to == 7 && dir > 0)   // minigame: a selecao de 3 e 4 e a do telao (a tela 7 e o fliperama)
+        {
+            ctx->r[5] = _mm_set_epi64x(0, 6);
+            const uint32_t ra = GPR_U32(ctx, 31);
+            g_origChangeScreen(rdram, ctx, runtime);
+            if (ctx->pc == ra)
+                menuAnim(rdram, ctx, runtime, 8, true);   // a camera volta do fliperama ao telao (a ida da tela 5 a 14 e a 8)
+            return;
+        }
     }
     g_origChangeScreen(rdram, ctx, runtime);
 }
@@ -1296,11 +1333,15 @@ static void drawSelect(const View &v)
     using wotm_legend::bind;
     if (all)
         outlined("GET READY", W * 0.5f, H * 0.94f, H * 0.07f, W * 0.9f, Color{246, 238, 220, 255});
-    wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"},
-                       {bind(st::BUp), bind(st::BDown), "COSTUME"},
-                       {bind(st::BCross), {}, "READY"},
-                       {bind(st::BTriangle), {}, "BACK"}},
-                      v.alpha);
+    if (v.selElim)   // eliminacao: traje fixo
+        wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"}, {bind(st::BCross), {}, "READY"}, {bind(st::BTriangle), {}, "BACK"}},
+                          v.alpha);
+    else
+        wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"},
+                           {bind(st::BUp), bind(st::BDown), "COSTUME"},
+                           {bind(st::BCross), {}, "READY"},
+                           {bind(st::BTriangle), {}, "BACK"}},
+                          v.alpha);
 }
 
 // Escolha desenhada na textura propria (antes do BeginTextureMode do quadro). `tex0` = atlas da fonte do quadro anterior.

@@ -90,6 +90,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_menu.inc"
 // Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
 #include "wotm_split4.inc"
+// Eliminacao e minigames com 3 e 4 jogadores (por cima dos ganchos do wotm_split4.inc)
+#include "wotm_modes4.inc"
 // Pasta mods/ que sobrepoe arquivos do disco (POS_FRONTEIRA.md, item 4): fileCdSearchFile e sceCdRead.
 #include "wotm_mods.inc"
 
@@ -207,6 +209,7 @@ namespace
     // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4: os
     // tres ou quatro primeiros, com a tela em quadrantes (wotm_split4.inc).
     int g_matchPlayers = 1;
+    int g_matchMode = 0, g_matchContinues = 2;   // WOTM_MODE=<modo>[:<continues>] (6 eliminacao, 7 dodgeball, 8 big shot, 9 crush)
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
@@ -254,9 +257,37 @@ namespace
             WRITE32(kShell + 0x2BBC + 4 * i, 3);                         // m_lives
         // m_mode: free for all de 1 jogador (2) ou batalha multijogador (3: o TheGame::gameReestablishViews cria as duas vistas da tela
         // dividida nos modos 3, 6 e 7; com o 2 a luta ficava numa vista so e as cenas de cinema, que alternam a divisao, a ligavam)
-        const uint32_t mode = g_matchPlayers > 1 ? 3u : 2u;
+        // WOTM_MODE (com 2 ou mais jogadores): eliminacao (6, continues em m_elimination e nos dois m_continues, monstros do comeco
+        // usados como a selecao do retail os deixa) ou um minigame (7 dodgeball, 8 big shot, 9 crush; a fase e a 25, 26 ou 27)
+        const uint32_t mode = g_matchPlayers > 1 && g_matchMode ? uint32_t(g_matchMode) : g_matchPlayers > 1 ? 3u : 2u;
         WRITE32(kShell + 0x2C10, mode);
+        WRITE32(kShell + 0x2B54, mode);                                   // m_battleMode
         WRITE32(kGame + 0x1203C8, mode);                                  // TheGame::m_gameMode
+        if (mode == 6u)
+        {
+            WRITE32(kShell + 0x2B48, static_cast<uint32_t>(g_matchContinues));   // m_elimination
+            WRITE32(kShell + 0x2B40, static_cast<uint32_t>(g_matchContinues));   // m_continues[0..1]
+            WRITE32(kShell + 0x2B44, static_cast<uint32_t>(g_matchContinues));
+            WRITE32(kShell + 0x2B4C, 0);                                          // m_wins[0..1]
+            WRITE32(kShell + 0x2B50, 0);
+            for (uint32_t c = 0; c < 10; ++c)   // sem o menu: os 10 monstros da eliminacao livres (SelectSlot traje 0: taken 1, state 1)
+            {
+                WRITE32(wotm::sym::monsterSelectMode + 0xB0u * c, 1);
+                WRITE32(wotm::sym::monsterSelectMode + 0xB0u * c + 4, 1);
+            }
+            for (int i = 0; i < g_matchPlayers; ++i)
+            {
+                const uint32_t sel = static_cast<uint32_t>(g_matchMonsters[i] << 5);
+                if (i < 2)
+                    WRITE32(kShell + 0x2B84 + 4 * i, sel);
+                wotmElimSetStart(i, sel);
+                WRITE32(wotm::sym::monsterSelectMode + 0xB0u * static_cast<uint32_t>(wotm_modes4::monsterSlot(sel)), 0);   // taken: usado
+                if (i < 2)
+                    WRITE32(kShell + 0x2BE0 + 4 * i, 0);   // traje 0, como o retail na eliminacao
+                else
+                    wotm_split4::g_extraCostume[i - 2] = 0;
+            }
+        }
         std::fprintf(stderr, "[partida] %u: monstro %d:%d (jogador%s)", ++g_matchCount, g_matchMonsters[0], costumes[0], g_aiVsAi ? " sob IA" : "");
         for (int i = 1; i < g_matchPlayers; ++i)
             std::fprintf(stderr, " e %d:%d (jogador %d)", g_matchMonsters[i], costumes[i], i + 1);
@@ -2237,6 +2268,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kMathfRand, &mathfRandTapped);
     }
     wotm_split4::install(runtime);   // antes dos ganchos do scePadRead (camera livre, lock-on): eles embrulham o dela
+    wotm_modes4::install(runtime);   // embrulha o fim de rodada e o InitPlayers do split4; o takeDamage das trapacas embrulha o dele
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
@@ -2283,6 +2315,13 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         }
         if (const char *pl = std::getenv("WOTM_PLAYERS"); pl && std::atoi(pl) >= 2 && std::atoi(pl) <= 4)
             g_matchPlayers = std::atoi(pl);   // 3 e 4: tela em quadrantes (wotm_split4.inc)
+        if (const char *md = std::getenv("WOTM_MODE"))   // "<modo>[:<continues>]" (wotm_modes4.inc)
+        {
+            const int m = std::atoi(md);
+            g_matchMode = m >= 6 && m <= 9 ? m : 0;
+            if (const char *k = std::strchr(md, ':'))
+                g_matchContinues = std::clamp(std::atoi(k + 1), 0, 9);
+        }
         if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;

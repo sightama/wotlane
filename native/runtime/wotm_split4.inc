@@ -773,6 +773,58 @@ namespace wotm_split4
             std::fprintf(stderr, "\n");
         }
     }
+    // Algum outro dos m_monsters a menos de 120 (no plano) do m_monsters[who]
+    bool nearOther(uint8_t *rdram, int who)
+    {
+        const uint32_t m = FAST_READ32(kMonsters + 4u * uint32_t(who)) & 0x1FFFFFFFu, cs = m ? FAST_READ32(m + 0xC) & 0x1FFFFFFFu : 0u;
+        for (int j = 0; j < 12 && cs >= 0x1000u; ++j)
+        {
+            const uint32_t o = FAST_READ32(kMonsters + 4u * uint32_t(j)) & 0x1FFFFFFFu, ocs = o ? FAST_READ32(o + 0xC) & 0x1FFFFFFFu : 0u;
+            if (j == who || ocs < 0x1000u)
+                continue;
+            const float dx = rdF(rdram, ocs + 0x10) - rdF(rdram, cs + 0x10), dy = rdF(rdram, ocs + 0x14) - rdF(rdram, cs + 0x14);
+            if (dx * dx + dy * dy < 120.f * 120.f)
+                return true;
+        }
+        return false;
+    }
+    // Ainda em cima de outro depois da lista 2 (o dodgeball, modo 7, so usa a lista 1, de 2 pontos, e a arena nao tem outras): o
+    // ponto onde caiu girado em torno do centro dos pontos da lista 1, 90 graus para o jogador 3 e -90 para o 4 (ou 180), um pouco
+    // acima; o Monster::setTrans e o hdReparentCsGrid como o gameGetStartPoint faz, e a gravidade assenta.
+    constexpr uint32_t kStartVec = PS2_RAM_SIZE - 0x400;   // _fvector para o setTrans (abaixo dos textos do wotm_modes4.inc)
+    void rotatedStart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int who, bool log)
+    {
+        const uint32_t pts = FAST_READ32(kPointTypes + 16u) & 0x1FFFFFFFu, n = FAST_READ32(kPointTypes + 16u + 4u);
+        const uint32_t cs = FAST_READ32(m + 0xC) & 0x1FFFFFFFu;
+        if (pts < 0x1000u || n == 0 || n > 32 || cs < 0x1000u)
+            return;
+        float cx = 0.f, cy = 0.f;
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            cx += rdF(rdram, pts + 0x20u * i);
+            cy += rdF(rdram, pts + 0x20u * i + 4);
+        }
+        cx /= float(n);
+        cy /= float(n);
+        for (int k = 0; k < 3; ++k)   // 90, -90, 180 graus: o primeiro livre
+        {
+            const float s = k == 0 ? (who & 1 ? -1.f : 1.f) : k == 1 ? (who & 1 ? 1.f : -1.f) : 0.f, c = k == 2 ? -1.f : 0.f;
+            const float x = rdF(rdram, cs + 0x10) - cx, y = rdF(rdram, cs + 0x14) - cy;
+            wrF(rdram, kStartVec, cx + x * c - y * s);
+            wrF(rdram, kStartVec + 4, cy + x * s + y * c);
+            wrF(rdram, kStartVec + 8, rdF(rdram, cs + 0x18) + 50.f);
+            wrF(rdram, kStartVec + 12, 0.f);
+            callGuest(runtime->lookupFunction(wotm::fn::setTrans__7MonsterR8_fvector), wotm::fn::setTrans__7MonsterR8_fvector, rdram, ctx, runtime,
+                      m, kStartVec);
+            callGuest(runtime->lookupFunction(wotm::fn::hdReparentCsGrid__FP3_cs), wotm::fn::hdReparentCsGrid__FP3_cs, rdram, ctx, runtime, cs);
+            if (!nearOther(rdram, who))
+                break;
+        }
+        if (log)
+            std::fprintf(stderr, "[split] largada: m_monsters[%d] no ponto girado em torno de %.0f,%.0f: %.0f,%.0f\n", who, cx, cy,
+                         rdF(rdram, cs + 0x10), rdF(rdram, cs + 0x14));
+    }
+
     void startPoint(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         static const bool log = std::getenv("WOTM_SPLITLOG") != nullptr;
@@ -820,6 +872,8 @@ namespace wotm_split4
                 FAST_WRITE32(m + kPlayerNum, pn);
                 if (log)
                     std::fprintf(stderr, "[split] largada: m_monsters[%d] em cima de outro, de novo pela lista 2\n", who);
+                if (nearOther(rdram, who))
+                    rotatedStart(rdram, ctx, runtime, m, who, log);
             }
         }
         if (log && ra && ctx->pc == ra)
