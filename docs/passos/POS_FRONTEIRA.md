@@ -222,7 +222,8 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
     `names`); as residentes, pelo DBP. PNG maior que a original ganha mipmaps. Fora: partículas, monstro da lista de saves e
     o GS emulado (para esse, `modkit.py pack --inject`).
   - **Kit:** `tools/modkit.py export/pack/check` sobre o `tex.py` e o `snd989.py` (o `.BNK` volta pelo `bnk-replace`, vários sons
-    num banco só). O `pack` só leva o que mudou (sha1); o re-export não atropela edição. O `tex.py export` de um `.RTX` passou a
+    num banco só). O `pack` só leva o que mudou (sha1); o re-export não atropela edição. Interface: `tools/modkit_gui.py`
+    (botão "Mod kit" do launcher). O `tex.py export` de um `.RTX` passou a
     nomear `<arquivo>_rtx_tNNNN.png` (e `<arquivo>_rtx_manifest.json`), sem colidir com o `.TEX` na mesma pasta.
   - Conferido: Togera com a pele em PNG 4x (grade fina visível) e retrato 2x no HUD do jogador e na barra do inimigo (fotos
     `docs/screenshots/2026-10-22/2026-10-22_mods_png_*`); kit com PNG, `.VAG` e um som do `SHELL_S.BNK`.

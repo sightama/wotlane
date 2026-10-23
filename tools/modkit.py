@@ -6,6 +6,7 @@ de trabalho e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/
   python tools/modkit.py export SND/SHELL_S.BNK VAG/CITYAMB.VPK   # sons do banco e a musica em WAV
   python tools/modkit.py pack meu_mod                        # o que foi editado vai para mods/meu_mod/
   python tools/modkit.py check [meu_mod]                     # confere os mods (nomes, tamanhos, texIds)
+  python tools/modkit_gui.py                                 # o mesmo com interface (botao "Mod kit" do launcher)
 
 Opcoes: --disc <pasta> (disco extraido; padrao WOTM_DISC ou disc/ do repo), --mods <pasta> (padrao: <runtime>/discroot/mods, o
 runtime de .wotm_recomp_dir; sem ele, <disco>/mods), --work <pasta> (padrao: <mods>/_trabalho; pasta com '_' o jogo nao le).
@@ -20,7 +21,9 @@ O que cada tipo vira:
 O pack so leva o que mudou desde o export (sha1 em modkit.json na pasta de trabalho). Nada do jogo vai para o repo: o kit le o
 disco do usuario e grava nas pastas dele.
 """
+import contextlib
 import fnmatch
+import io
 import glob
 import hashlib
 import json
@@ -119,7 +122,11 @@ def export(disc, work, pats):
         os.makedirs(out)
         ext = os.path.splitext(rel)[1].upper()
         if ext in (".TEX", ".RTX"):
-            tex.cmd_export(src, out)
+            with contextlib.redirect_stdout(io.StringIO()):   # o tex.py fala da pasta temporaria
+                man = tex.cmd_export(src, out)
+            n = sum(1 for e in man["textures"] if "png" in e)
+            print("%s -> %d textura(s) em PNG (%s)" % (rel, n, (os.path.splitext(os.path.basename(rel))[0].lower() +
+                                                                 ("_rtx" if ext == ".RTX" else "") + "_tNNNN.png")))
         elif ext in (".VPK", ".VAG"):
             rate, chans = snd989.read_vpk(src)
             name = os.path.splitext(os.path.basename(rel))[0].lower() + ".wav"
@@ -157,7 +164,7 @@ def export(disc, work, pats):
         if kept:
             print("  %d arquivo(s) ja editado(s) na pasta de trabalho ficaram como estavam" % kept)
         save_state(work, state)
-    print("pasta de trabalho: %s (edite e rode: python tools/modkit.py pack <mod>)" % work)
+    print("pasta de trabalho: %s (edite la e empacote no mod: modkit.py pack <mod>, ou o botao Empacotar)" % work)
 
 
 def load_state(work):

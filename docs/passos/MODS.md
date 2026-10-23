@@ -17,7 +17,20 @@ Regras do carregador (`native/wotm_mods.hpp`): pasta que começa com `_` ou `.` 
 último em ordem alfabética (dá para usar `10_base`, `20_extra`); `WOTM_MODS=<pasta>` troca a pasta e `WOTM_MODS=0` desliga tudo. O
 log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[mods] ...`).
 
-## O kit (`tools/modkit.py`)
+## Interface (`tools/modkit_gui.py`, botão "Mod kit" do launcher)
+
+`pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`).
+
+1. **Escolha no disco** (esquerda): monstros por nome e traje (Togera › Traje 1, e os bancos de som dele), chefes, fases pelo nome do
+   jogo, menu e telas, bancos de som, músicas e falas. Campo de busca; Ctrl/Shift escolhem vários; duplo clique ou "Extrair".
+2. **Edite na pasta de trabalho** (direita): miniaturas, tamanho e estado ("editado" em amarelo = mudou desde a extração). Prévia
+   da imagem (com xadrez atrás do alfa) ou "Tocar" para o som. Duplo clique abre no programa padrão do Windows; "Mostrar na pasta"
+   abre o Explorer no arquivo; "Remover" apaga da pasta de trabalho.
+3. **Mod** (embaixo): nome do mod (os existentes na lista), "Empacotar editados no mod" e "Conferir mods"; o log aparece embaixo.
+
+As pastas (disco e mods) e o último mod ficam em `~/.wotm_modkit.json`. Por baixo são as mesmas funções do `modkit.py` abaixo.
+
+## O kit na linha de comando (`tools/modkit.py`)
 
 ```
 python tools/modkit.py export MON/LIZARD0                 # .TEX e .RTX do Togera em PNG
