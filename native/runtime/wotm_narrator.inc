@@ -1,9 +1,10 @@
-// wotm_narrator.inc: narrador da selecao de monstros (incluido por wotm_live.inc, antes do wotm_padsel.inc). Ao confirmar um monstro
-// (telas 3 e 6 nativas, selecao de 3 e 4 jogadores) toca o MP3 com o nome dele, junto com o som de confirmar do jogo (nao no lugar).
+// wotm_narrator.inc: narrador das selecoes (incluido por wotm_live.inc, antes do wotm_padsel.inc). Ao confirmar um monstro (telas 3 e
+// 6 nativas, selecao de 3 e 4 jogadores) ou uma fase (tela 8 do jogo: o changeScreen(8, 99) da confirmacao, gancho no wotm_padsel.inc)
+// toca o MP3 com o nome dele, junto com o som de confirmar do jogo (nao no lugar).
 // Opcao ANNOUNCER da aba FEATURES do "Recompiled options" (WOTM_ANNOUNCER, ligada por padrao).
 //
-// Arquivos <nome>.mp3 (congar, robo47, togera, ultrav, preytor, kineticlops, magmo, raptros, agamo, zorgulon, goliathprime,
-// cerebulon), procurados nesta ordem: mods/<mod>/narrator/ (pasta mods/ de sempre: um mod pode trocar a voz), narrator/ ao lado do
+// Arquivos <nome>.mp3: monstros (congar, robo47, togera, ultrav, preytor, kineticlops, magmo, raptros, agamo, zorgulon,
+// goliathprime, cerebulon) e fases (levelName: midtownpark, gamblersgulch, rosdalecanyon, metrocity, ...), procurados nesta ordem: mods/<mod>/narrator/ (pasta mods/ de sempre: um mod pode trocar a voz), narrator/ ao lado do
 // ELF e narrator/ na raiz do repo (a do build). Arquivo que falta: silencio e uma linha no log.
 // Toca pelo raylib (LoadSound/PlaySound, MP3 ligado no build do raylib), no volume mestre dos efeitos do jogo (grupo 0 do som nativo,
 // a mesma curva quadratica do 989snd). Um narrador por vez: o nome novo corta o anterior.
@@ -78,14 +79,25 @@ static float effectsVolume()
 #endif
 }
 
-// Diz o nome do monstro (indice do jogo). Chamado da thread do EE.
-static void announce(int monster)
+// Arquivo de cada fase (Shell::m_levelNum, GameLevelNames; GLOSSARIO.md, "Fases"). As de teste da equipe (17..24) nao tem.
+static const char *levelName(int level)
+{
+    static const char *const kLevels[28] = {
+        nullptr,         "midtownpark",     "gamblersgulch", "rosdalecanyon", "metrocity",  "centuryairfield", "atomicisland",
+        "baytown",       "clubcaldera",     "tsunopolis",    "ufo",           "capitol",    "training",        "lakepowell",
+        "minibaytown",   "volcano",         "tokyodeathmatch", nullptr,       nullptr,      nullptr,           nullptr,
+        nullptr,         nullptr,           nullptr,         nullptr,         "dodgeball",  "bigshot",         "crushorama"};
+    return level >= 0 && level < 28 ? kLevels[level] : nullptr;
+}
+
+// Toca o primeiro arquivo achado da lista (terminada em nullptr). Chamado da thread do EE.
+static void play(const char *const *names)
 {
     if (!wotm::settings::on(wotm::settings::Announcer) || !IsAudioDeviceReady())
         return;
     std::lock_guard<std::mutex> lk(g_m);
     Sound *s = nullptr;
-    for (const char *const *n = namesOf(monster); *n && !s; ++n)
+    for (const char *const *n = names; *n && !s; ++n)
         s = soundOf(*n);
     if (!s)
         return;
@@ -94,5 +106,16 @@ static void announce(int monster)
     SetSoundVolume(*s, effectsVolume());
     PlaySound(*s);
     g_playing = s;
+}
+
+// Nome do monstro (indice do jogo, m_monsterSel >> 5)
+static void announce(int monster) { play(namesOf(monster)); }
+
+// Nome da fase (m_levelNum), na confirmacao da selecao de fase
+static void announceLevel(int level)
+{
+    const char *const names[] = {levelName(level), nullptr};
+    if (names[0])
+        play(names);
 }
 } // namespace wotm_narrator
