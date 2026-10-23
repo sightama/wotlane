@@ -426,7 +426,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   `NATIVO.md`, "Menu multijogador de 2 a 4"): "2 player" vira "multiplayer"; escolha de controles com 4 colunas; com 3 ou 4 o free for
   all sem CPU, direto ao "first to", e uma seleção de monstros nativa no telão no lugar da tela 6; a tela dividida de 3 e 4 fica sempre
   instalada. Conferido pelo roteiro de pad do boot à luta de 4. Pendentes: controles de verdade nos jogadores 3 e 4; CPU junto com
-  3 ou 4 jogadores; eliminação e minigames com 3 ou mais. Testado e descartado com o dono: 5 a 8 jogadores (câmera compartilhada).
+  3 ou 4 jogadores; eliminação e minigames com 3 ou mais (feitos em 2026-10-22 e 2026-10-23, abaixo). Testado e descartado com o
+  dono: 5 a 8 jogadores (câmera compartilhada).
 - **Relato de 2026-10-22 (colaborador, jogando com 3):** corrigidos o indicador de fúria/special do jogador 3 no HUD do jogador 1
   (animações do HUD por vista, `wotm_split4.inc`), a volta da seleção de monstros que prendia na tela 6, e a seleção redesenhada com o
   monstro 3D de cada jogador e texto legível (`NATIVO.md`, "Menu multijogador de 2 a 4"). **Custo, medido num Ryzen 3 3200G + RX 570:**
@@ -460,10 +461,29 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   - **Sons e tokens por jogador:** sem trabalho. O `SoundManager::m_events` já é `[4][4]` por `m_index`, e o `TheGame::m_tokens` são
     **4**: o `InitBeforeDbLoad` inicializa 4 `TokenManager` (0x1004 cada, de 0x11C370 a 0x120380); o `include/game/game.h` diz `[2]`
     seguido de um pad do tamanho de mais 2 (corrigir o header pede o gate, que não rodou nesta máquina, sem WSL).
-- **Ficam de fora (projetos à parte):** eliminação e minigames com 3 ou mais. A eliminação guarda continues, vitórias e as escolhas
-  em campos de 2 (`m_continues[2]`, `m_wins[2]`, Shell+0x2B84/0x2B88) e troca o monstro do perdedor pelo diálogo 8 no meio da luta, uma
-  interface de 2 jogadores; os minigames têm regras, placar e HUD de 2 (`CrushLevel`: "P1"/"P2", `m_tokens[0..1]`). O custo de 3 e 4
-  vistas (acima) também segue pendente.
+- **Eliminação e minigames com 3 e 4 (2026-10-23, `wotm_modes4.inc`, `wotm_padsel.inc`):** com 3 ou 4 jogadores a tela 5 mostra a
+  lista do retail (free for all, eliminação, minigames) e só as seleções de monstros são nossas (a do telão; nos minigames a escolha
+  da tela 14 vem à tela 6 no lugar do fliperama, com a animação 8 da câmera ao contrário). As regras, por gancho:
+  - **Eliminação (modo 6):** continues e vitórias por jogador; os dois `m_continues` do Shell valem 0 ou 1 durante o
+    `StateDeath::transitionInto` e o `StateVictory::transitionOK` (fim só quando sobra um). Morte com continue: diálogo 8 do retail
+    para aquele jogador (`m_won[1]`), `SetPlayerMonster` e `playerInit`; os diálogos são modais e voltam por um trampolim
+    (`EvaluateOnlineBattleStatus + 4`, que o jogo nunca executa) que faz o resto e retoma o `EvaluateGameStatus`, também quando a
+    thread cedeu no meio. Sem continue e com mais de um na luta: o jogador sai (monstro escondido, a câmera dele segue quem continua).
+    Sobrou um: diálogo 0xB; o "play again" volta os jogadores 3 e 4 ao monstro do começo. Seleção: traje 0, monstro exclusivo.
+  - **Dodgeball (7):** acertos dos jogadores 3 e 4 fora do `DodgeBallLevel` (o contador do retail tem 2 e o 3º escreveria na
+    contagem da bola); "P3"/"P4" nas vistas 2 e 3. A arena só tem 2 pontos de largada: o jogador extra nasce no ponto girado 90°
+    em torno do centro deles (`wotm_split4.inc`; antes três monstros no mesmo ponto davam NaN).
+  - **Crush (9):** placar de 4, vencedor pelo maior dos 4 `TokenManager`, empate no topo vai à morte súbita com todos; a câmera
+    enquadra o par mais distante.
+  - **Big Shot (8):** rodízio nas 2 vagas do `BigShotLevel` (3 turnos por jogador); no último, os dois melhores nas vagas para a
+    comparação do retail (empate: o "king of the hill" entre eles) e os outros parados no ponto de espera.
+  - Diálogos de fim dos minigames com "Player 3/4 - scored".
+  - **Conferido** com `WOTM_MATCH` + `WOTM_PLAYERS=4` + `WOTM_MODE` (novo; `WOTM_AIVSAI` nas lutas): eliminação com 1 continue (diálogo
+    8 três vezes, um jogador fora) e com 0 (duas partidas até o fim e dois "play again"); dodgeball até o 3º acerto e o diálogo com os
+    4 placares; crush até a morte súbita; big shot com os 12 turnos e a morte súbita. Pelo menu (roteiro de pad): 4 jogadores até a
+    luta de eliminação e até o dodgeball. Corpus sem piora; 2 jogadores do retail pelo menu igual. **Falta:** pontos de verdade no
+    big shot e no crush (a IA não joga os minigames e o roteiro só caiu da rampa) e alguém jogar com 4 controles.
+- **Pendente:** o custo de 3 e 4 vistas (acima).
 - **Plano de performance da tela dividida (2026-10-23, pendência para o colaborador do modo de 4):**
   `investigacoes/2026-10-23/performance_vistas.md`. Ordem: medir antes (baldes por número de vistas, contadores por passe, build com
   LTCG); sombras uma vez por redesenho (hoje cada vista rasteriza na CPU a silhueta de cada monstro, e lendo a RAM viva, o que pode
