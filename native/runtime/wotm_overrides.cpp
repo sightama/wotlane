@@ -186,8 +186,9 @@ namespace
     // Partida direta, WOTM_MATCH="<monstro do jogador>[,<IA>...ate 7],<fase>" (indices de MonsterLongNames e GameLevelNames;
     // "3,1,1" = lizard contra monkey em central; "3,1,2,5,1" = lizard contra monkey, robot e mantis): userintMain (0x1D9868) nao abre
     // o menu e devolve 0 (comecar a sessao) com o shell como o menu o deixa em "1 jogador contra a CPU" (medido com dumps no fim do
-    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 0 a 7 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas; monstro
-    // repetido ganha o proximo figurino (o menu nao deixa dois iguais no mesmo figurino). A diferenca e m_killTarget 0 (o menu poe 1): sem
+    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 0 a 7 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas. Cada monstro
+    // aceita o figurino como "<monstro>:<0-3>" ("3:2,1:1,1"); sem ":" ou com um figurino ja usado pelo mesmo monstro, fica com o menor
+    // livre (o menu nao deixa dois iguais no mesmo figurino). A diferenca e m_killTarget 0 (o menu poe 1): sem
     // meta de vitorias, EvaluateOnePlayerChallengeStatus so reergue o monstro derrubado e a luta segue, sem o dialogo "PLAY AGAIN"
     // que esperaria o pad. O filme de abertura (uiMain, 0x1D93D8) vira no-op. Cada fim de rodada (entrada de
     // Shell::EvaluateGameStatus, 0x1A7960) sai no log como [partida] com a vida e as vitorias dos dois monstros.
@@ -200,6 +201,7 @@ namespace
     // e fase + 8 monstros ocupam 9 dos 13 arquivos do fileStatus. O teto pratico e a RAM: veja wotmCheckLoadEnd.
     constexpr int kMatchMaxAIs = 7;
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
+    int g_matchCostumes[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // -1: o menor figurino livre
     int g_matchAIs = 0, g_matchLevel = -1;
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
     // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4: os
@@ -214,11 +216,27 @@ namespace
             WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel (4 jogadores + ate 12 IAs, ate 0x2978)
         for (uint32_t i = 0; i < 12; ++i)
             WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume (ate 0x2C10, onde mora m_mode)
-        for (int i = 0; i < g_matchPlayers + g_matchAIs; ++i)
+        // figurinos: primeiro os pedidos (o primeiro a pedir fica com ele), depois os automaticos no menor livre do mesmo monstro
+        const int total = g_matchPlayers + g_matchAIs;
+        int costumes[kMatchMaxAIs + 1];
+        auto taken = [&](int i, int c) {
+            for (int j = 0; j < total; ++j)
+                if (j != i && costumes[j] == c && g_matchMonsters[j] == g_matchMonsters[i])
+                    return true;
+            return false;
+        };
+        for (int i = 0; i < total; ++i)
+            costumes[i] = -1;
+        for (int i = 0; i < total; ++i)
+            if (g_matchCostumes[i] >= 0 && !taken(i, g_matchCostumes[i] & 3))
+                costumes[i] = g_matchCostumes[i] & 3;
+        for (int i = 0; i < total; ++i)
+            for (int c = 0; costumes[i] < 0; ++c)
+                if (c > 3 || !taken(i, c))
+                    costumes[i] = c & 3;   // mais de 4 iguais: repete (o menu nao chega nisso)
+        for (int i = 0; i < total; ++i)
         {
-            uint32_t costume = 0;
-            for (int j = 0; j < i; ++j)
-                costume += g_matchMonsters[j] == g_matchMonsters[i];
+            const uint32_t costume = static_cast<uint32_t>(costumes[i]);
             const bool player = i < g_matchPlayers;
             const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
@@ -239,12 +257,12 @@ namespace
         const uint32_t mode = g_matchPlayers > 1 ? 3u : 2u;
         WRITE32(kShell + 0x2C10, mode);
         WRITE32(kGame + 0x1203C8, mode);                                  // TheGame::m_gameMode
-        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s)", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
+        std::fprintf(stderr, "[partida] %u: monstro %d:%d (jogador%s)", ++g_matchCount, g_matchMonsters[0], costumes[0], g_aiVsAi ? " sob IA" : "");
         for (int i = 1; i < g_matchPlayers; ++i)
-            std::fprintf(stderr, " e %d (jogador %d)", g_matchMonsters[i], i + 1);
+            std::fprintf(stderr, " e %d:%d (jogador %d)", g_matchMonsters[i], costumes[i], i + 1);
         std::fprintf(stderr, " %s", g_matchAIs ? "contra" : (g_matchPlayers > 1 ? "sem IA" : "sozinho"));
         for (int i = g_matchPlayers; i < g_matchPlayers + g_matchAIs; ++i)
-            std::fprintf(stderr, " %d", g_matchMonsters[i]);
+            std::fprintf(stderr, " %d:%d", g_matchMonsters[i], costumes[i]);
         std::fprintf(stderr, "%s, fase %d\n", g_matchAIs ? " (IA)" : "", g_matchLevel);
         SET_GPR_S32(ctx, 2, 0);
         ctx->pc = GPR_U32(ctx, 31);
@@ -2241,11 +2259,22 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
-        int v[kMatchMaxAIs + 2], n = 0;
+        int v[kMatchMaxAIs + 2], c[kMatchMaxAIs + 2], n = 0;
         const char *p = e;
         for (char *end; n < kMatchMaxAIs + 2; p = end + 1)
         {
+            c[n] = -1;
             v[n++] = static_cast<int>(std::strtol(p, &end, 10));
+            if (end != p && *end == ':')   // "<monstro>:<figurino>"
+            {
+                const char *q = end + 1;
+                c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
+                if (end == q || c[n - 1] < 0 || c[n - 1] > 3)
+                {
+                    p = nullptr;
+                    break;
+                }
+            }
             if (end == p || *end != ',')
             {
                 p = end == p ? nullptr : end;
@@ -2258,7 +2287,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
             for (int i = 0; i < n - 1; ++i)
-                g_matchMonsters[i] = v[i];
+                g_matchMonsters[i] = v[i], g_matchCostumes[i] = c[i];
             g_matchLevel = v[n - 1];
         }
         if (g_matchLevel >= 0)
@@ -2271,7 +2300,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                          g_matchMonsters[0], g_matchAIs, g_matchLevel);
         }
         else
-            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[,<IA>...ate 7],<fase>)\n", e);
+            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[:<figurino 0-3>][,<IA>[:<figurino>]...ate 7],<fase>)\n", e);
     }
     if (std::getenv("WOTM_AIVSAI") && (g_aiInit = runtime.lookupFunction(kAiInit)) &&
         (g_origSetAIMonster = runtime.lookupFunction(kSetAIMonster)))
