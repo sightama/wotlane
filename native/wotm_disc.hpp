@@ -113,8 +113,8 @@ inline std::string resolveDiscPath(const std::filesystem::path &root, const std:
 inline bool readFile(const std::filesystem::path &root, const std::string &iso, const std::string &rel, std::vector<uint8_t> &out) {
     Source src;
     if (std::string p = wotm::mods::Registry::get().hostPath(rel); !p.empty()) src = Source{p};   // mods/ vence o disco
-    else if (std::string p = resolveDiscPath(root, rel); !p.empty()) src = Source{p};
-    else if (!iso.empty()) src = isoFind(iso, rel);
+    else if (std::string p = resolveDiscPath(root, wotm::mods::Registry::get().aliasOf(rel)); !p.empty()) src = Source{p};   // traje de mod: o do base
+    else if (!iso.empty()) src = isoFind(iso, wotm::mods::Registry::get().aliasOf(rel));
     if (!src.ok()) return false;
     FILE *f = std::fopen(src.path.c_str(), "rb");
     if (!f) return false;

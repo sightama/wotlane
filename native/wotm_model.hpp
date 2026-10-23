@@ -814,6 +814,17 @@ private:
         const std::vector<uint8_t> &d = p.rtx ? rtxData_ : texData_;
         const int w = p.w(), h = p.h();
         const uint32_t cbp = uint32_t(t0 >> 37) & 0x3FFF, csa = uint32_t(t0 >> 56) & 31, tcc = uint32_t(t0 >> 34) & 1;
+        // textura de mod em PNG (wotm_texmods.hpp; nas skins, a do traje novo): o mesmo texId do disco que o desenho da luta usa
+        if (const texmods::Png *png = texmods::Index::get().find(name_, p.rtx, id)) {
+            std::vector<uint32_t> px;
+            uint32_t pw = 0, ph = 0;
+            if (texmods::loadPng(*png, name_ + (p.rtx ? ".RTX t" : ".TEX t") + std::to_string(id) + " (modelo)", uint32_t(w), uint32_t(h),
+                                 false, tcc != 0, px, pw, ph)) {
+                out.w = int(pw); out.h = int(ph);
+                out.rgba = std::move(px);
+                return true;
+            }
+        }
         auto fixA = [](uint32_t a) { return a >= 128 ? 255u : a * 2; };
         auto rd32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= d.size()) std::memcpy(&v, &d[o], 4); return v; };
         out.w = w; out.h = h;
