@@ -29,9 +29,9 @@ pausa), `wotm_legend.inc` e `wotm_prompts.inc` (legenda e dica), `wotm_live.inc`
   como no menu.
 - **Fundo:** a luta continua desenhada atrás do painel, justamente para comparar as mudanças ao vivo (resolução, AA, filtro). Some só a
   lista da pausa. Véu escuro leve ou nenhum, para não atrapalhar a comparação (conferir com o dono).
-- **Teclado separado (KEYBOARD, aba CONTROLS):** **em aberto.** Explicado ao dono assim: ligar essa opção no meio de uma luta de 1
-  jogador manda o teclado para o jogador 2, que não existe; quem joga pelo teclado perde o monstro e não sai mais da pausa pelo teclado.
-  Proposta: na pausa a linha aparece apagada, com a dica "CHANGE IT IN THE MAIN MENU".
+- **Teclado separado (KEYBOARD, primeira linha da aba CONTROLS): travado na pausa** (decidido). Ligar essa opção no meio de uma luta
+  de 1 jogador manda o teclado para o jogador 2, que não existe; quem joga pelo teclado perde o monstro e não sai mais da pausa pelo
+  teclado. Na pausa a linha aparece apagada, sem setas, e não muda; a dica diz "CHANGE IT IN THE MAIN MENU". O resto da aba fica livre.
 
 ## 1. O que o jogo faz na pausa (retail)
 
