@@ -21,6 +21,18 @@ pausa), `wotm_legend.inc` e `wotm_prompts.inc` (legenda e dica), `wotm_live.inc`
 - Estimativa: ~350 a 450 linhas, quase tudo em `wotm_pausemenu.inc` e `wotm_mainmenu.inc`; uma sessão para escrever e outra para conferir
   com o dono (seção 9).
 
+## Decisões do dono (2026-10-23)
+
+- **Sons:** os mesmos do painel no menu principal (`wotm_padsel::sfx`). A seção 1 ("Sons") diz que o banco do Shell provavelmente não está
+  carregado na fase: conferir na etapa 2. Se não tocar, avisar o dono antes de trocar pelo banco da pausa (`playPauseMenuSound`).
+- **Tela dividida:** a pausa mostra só a vista de quem pausou, e tudo bem. Quem controla o painel não importa: qualquer dispositivo,
+  como no menu.
+- **Fundo:** a luta continua desenhada atrás do painel, justamente para comparar as mudanças ao vivo (resolução, AA, filtro). Some só a
+  lista da pausa. Véu escuro leve ou nenhum, para não atrapalhar a comparação (conferir com o dono).
+- **Teclado separado (KEYBOARD, aba CONTROLS):** **em aberto.** Explicado ao dono assim: ligar essa opção no meio de uma luta de 1
+  jogador manda o teclado para o jogador 2, que não existe; quem joga pelo teclado perde o monstro e não sai mais da pausa pelo teclado.
+  Proposta: na pausa a linha aparece apagada, com a dica "CHANGE IT IN THE MAIN MENU".
+
 ## 1. O que o jogo faz na pausa (retail)
 
 ### `displayDialog__Fi` (`wotm::fn::displayDialog__Fi`)

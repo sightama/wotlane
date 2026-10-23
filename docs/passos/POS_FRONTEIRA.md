@@ -378,6 +378,12 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   ~21 ms), medido por marcas de tempo no quadro (a captura nativa é ~0,3 ms por vista). Pendente: baratear o `hier` por vista (a
   montagem dos pacotes do VU1 não serve ao desenho nativo) e o desenho nativo por vista (~12 ms de CPU por quadrante, contra ~7 ms
   da tela cheia).
+- **Plano de performance da tela dividida (2026-10-23, pendência para o colaborador do modo de 4):**
+  `investigacoes/2026-10-23/performance_vistas.md`. Ordem: medir antes (baldes por número de vistas, contadores por passe, build com
+  LTCG); sombras uma vez por redesenho (hoje cada vista rasteriza na CPU a silhueta de cada monstro, e lendo a RAM viva, o que pode
+  também dar sombra com a pose de outro quadro); constantes por item; lista de comandos própria no lugar do modo imediato do rlgl;
+  cache de vértices entre vistas; malhas estáticas da fase na GPU; threads. Corte por vista já existe (`Scene::walk`); o corte dos
+  pacotes do VU1 no `hier` rende pouco (~20% dele) e tem risco alto. Os "12 ms contra 7 ms" acima vêm de máquinas diferentes.
 
 ### 12. Prévia 3D na seleção
 - Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.
@@ -404,6 +410,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
   5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
+  6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **planejado**, não implementado. Plano, etapas e decisões do dono em
+     `investigacoes/2026-10-23/painel_na_pausa.md` (a linha CONTROL SCHEME da pausa vira RECOMPILED OPTIONS; painel em 2D sobre a
+     luta, que continua desenhada atrás para comparar as mudanças ao vivo; sons iguais aos do menu). Falta o dono decidir a trava do
+     teclado separado na pausa.
 - **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;
   HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.
   Correções do mesmo dia, depois dos testes do dono: sair não deixa mais o jogo congelado (a volta da pausa esperava o tempo da pausa); o lens flare é refeito pela câmera
@@ -436,6 +446,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   partir da ISO dele; nada extraído vai para o repo (regra 1 do `CLAUDE.md`).
 
 ## Ideias do dono ("viagens")
+- **LOD fixo / mod low-poly (2026-10-23):** uma opção no painel para fixar o LOD foi investigada
+  (`investigacoes/2026-10-23/lod_fixo.md`: a escolha é só por distância, refeita no desenhista nativo, e a lógica não depende dela) e
+  **descartada pelo dono**; ela também pouco ajudaria na tela dividida, cujo custo é por objeto, não por triângulo. Em vez dela, mais
+  tarde, um mod que deixa os modelos low-poly; o documento serve de base (onde o nível é escolhido, quais modelos têm níveis baixos).
 - **Modo Nintendo DS:** LOD sempre no nível mais alto (o LOD é escolhido no nativo, `NATIVO.md`); filtro de áudio em tempo real no motor
   de som nativo (`wotm_snd.hpp`); talvez duas telas, jogo em cima e HUD embaixo com o retrato (o HUD do `hier` já é desenhado no nativo,
   então dá para mandá-lo para outra área da janela).

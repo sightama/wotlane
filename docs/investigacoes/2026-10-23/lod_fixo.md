@@ -9,6 +9,11 @@ confirmado (código + dado ou doc já validada), **[H]** hipótese a conferir.
 dela. A opção vira um modo da `Scene` (automático / alto / baixo) passado só nas coletas ao vivo. O `Scene` até já tem o gancho
 (`collect(ram, maxLod)`, usado pelo `viewer --lod n` e pela tecla L), mas com duas falhas que a opção precisa corrigir (abaixo).
 
+**Decisão do dono (2026-10-23): não fazer a opção.** Nem "sempre alto" nem um nível fixo vão para o painel. Fica para depois um
+mod que deixa os modelos low-poly; este documento serve de base para ele (onde o nível é escolhido, quais modelos têm níveis
+baixos, armadilhas do skinning dos níveis não escolhidos). Para a tela dividida, ver `performance_vistas.md`: o custo lá é por
+objeto, não por triângulo.
+
 ## Contexto
 - A cena desenhada no PC é coletada da RAM do EE a cada quadro pelo `Scene::collect` (`native/wotm_native.hpp`), na thread do EE
   (`wotmCaptureFrame`, `native/runtime/wotm_live.inc`), e desenhada pela GPU. O jogo recompilado continua percorrendo a hierarquia
