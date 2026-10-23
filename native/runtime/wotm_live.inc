@@ -1251,9 +1251,11 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 // Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)
+#include "wotm_gamescreens.inc"   // mouse nas telas do menu que continuam as do jogo (antes do wotm_mainmenu.inc, que o chama)
 #include "wotm_menufont.inc"   // palavras da lista do menu com as letras do jogo (antes do wotm_mainmenu.inc)
 #include "wotm_mainmenu.inc"
 #include "wotm_optscreen.inc"   // tela de opcoes do jogo com o texto redesenhado (depois do wotm_mainmenu.inc)
+#include "wotm_pausemenu.inc"   // menu de pausa: sem o CONTROL SCHEME, com mouse
 #include "wotm_legend.inc"   // legenda de baixo e dica grande dos menus nativos (depois do wotm_optscreen.inc: fonte)
 #include "wotm_photo.inc"    // modo foto (F9 ou L3 + R3; depois do wotm_legend.inc: legenda)
 
@@ -1631,6 +1633,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             S.scene.draw(ram, false);
             wotm_padsel::drawOnTelao(S.scene, ram, c3);   // escolha de lados do 2 jogadores (so no menu, durante a escolha)
             wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
+            wotm_gamescreens::frame(S.scene, ram, c3, RW, RH);   // mouse nas telas do jogo: retangulo de cada item
             wotm_optscreen::drawOnBoard(S.scene, ram, c3);   // tela de opcoes do jogo
             wotm_live::g_stage = "idle";
             EndMode3D();
@@ -1696,6 +1699,11 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const Rectangle src{0.f, 0.f, static_cast<float>(RW), -static_cast<float>(RH)};
     const Rectangle dst{(sw - RW * k) * 0.5f, (sh - RH * k) * 0.5f, RW * k, RH * k};
     wotm_pad::pointerFrame(dst, RW, RH);   // mouse nos menus: posicao no quadro nativo, cliques e rodinha (wotm_mouse.hpp)
+    {   // e em unidades da tela do PS2 (texto do jogo), para a thread do EE
+        const wotm::mouse::Pointer &p = wotm::mouse::g_ptr;
+        const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
+        wotm::mouse::publishGs(p.in, (p.x - gr.x0) * 640.f / gr.w, p.y * 224.f / static_cast<float>(RH));
+    }
     // Sem mistura: o alfa do quadro e o que as misturas do GS deixaram (o comum baixa, o aditivo sobe para 1,0), nao opacidade. Com
     // BLEND_ALPHA sobre o preto a cena saia escurecida pelo alfa, e os quadrados aditivos (halo dos power-ups) viravam retangulos claros.
     rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);

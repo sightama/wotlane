@@ -824,6 +824,10 @@ namespace wotm_save
         m.page = page;
         m.openedAt = g_vsyncs;
         buildRows(m);
+        // mouse (etapa 9): o clique que abriu (o "YES" do "salvar?") nao vale aqui
+        wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        wotm::mouse::takeClick(wotm::mouse::g_clickR);
+        wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
         // Comeco: carregar, no primeiro ocupado; gravar, no vazio do fim
         m.cur = 0;
         if (saving)
@@ -1019,7 +1023,37 @@ namespace wotm_save
             modalDraw(rdram, ctx, rt, saving ? &(m.pending = rowFromRam(rdram)) : nullptr);
             return;
         }
-        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0; };
+        // mouse (etapa 9): a linha da lista sob ele (texto do McTextBox: x 318, y do topo 60 + 14 por linha, comprimido na fase);
+        // passar por cima escolhe, clique esquerdo vale X nela; direito e rodinha chegam pelo pad (wotm_pad.inc, gameMenu)
+        wotm::mouse::gameMenu();
+        wotm::mouse::claim();
+        bool mouseX = false;
+        {
+            static uint32_t s_seq = 0;
+            const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+            const bool moved = seq != s_seq;
+            s_seq = seq;
+            const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+            auto Y = [&](int y) { return saving ? static_cast<int>(std::lround(58 + (y - 25) * 0.7f)) : y; };
+            float gx, gy;
+            int hover = -1;
+            if (wotm::mouse::gsPointer(gx, gy) && gx >= 310.f && gx < 630.f)
+                for (int i = m.top; i < std::min<int>(m.top + kVisibleRows, static_cast<int>(m.rows.size())); ++i)
+                {
+                    const float y0 = static_cast<float>(Y(60 + (i - m.top) * 14)), y1 = static_cast<float>(Y(60 + (i - m.top + 1) * 14));
+                    if (gy >= y0 - 1.f && gy < y1 - 1.f) hover = i;
+                }
+            const bool pickable = hover >= 0 && (saving || m.rows[static_cast<size_t>(hover)].used);
+            if (pickable && (moved || click) && hover != m.cur)
+            {
+                const bool down = hover > m.cur;
+                m.cur = hover;
+                m.confirm = false;
+                if (!click) sfx(rdram, ctx, rt, down ? 2 : 4);
+            }
+            mouseX = click && pickable;
+        }
+        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0 || (b == kBtnX && mouseX); };
         const Row current = saving ? rowFromRam(rdram) : Row{};
         if (pressed(kBtnTriangle) || pressed(kBtnCircle))
         {

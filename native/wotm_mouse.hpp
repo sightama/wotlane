@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 
 namespace wotm::mouse
@@ -75,5 +76,62 @@ inline bool takeClick(std::atomic<int64_t> &c)
 {
     const int64_t t = c.exchange(0, std::memory_order_relaxed);
     return t != 0 && nowMs() - t < 300;
+}
+} // namespace wotm::mouse
+
+// O ponteiro para a thread do EE (as telas do jogo sabem onde escrevem o texto, em unidades da tela do PS2): x, y no quadro nativo
+// (bits de float empacotados) e o tamanho dele; 0 = fora do quadro ou cursor preso
+namespace wotm::mouse
+{
+inline std::atomic<uint64_t> g_ptrXY{0};
+inline std::atomic<uint32_t> g_ptrWH{0};   // rw << 16 | rh
+inline void publishPointer(bool in, float x, float y, int rw, int rh)
+{
+    uint32_t a, b;
+    std::memcpy(&a, &x, 4);
+    std::memcpy(&b, &y, 4);
+    g_ptrXY.store(in ? (uint64_t(a) << 32 | b) : 0, std::memory_order_relaxed);
+    g_ptrWH.store(uint32_t(rw) << 16 | uint32_t(rh & 0xFFFF), std::memory_order_relaxed);
+}
+inline bool pointer(float &x, float &y, int &rw, int &rh)
+{
+    const uint64_t v = g_ptrXY.load(std::memory_order_relaxed);
+    const uint32_t wh = g_ptrWH.load(std::memory_order_relaxed);
+    if (!v || !wh) return false;
+    const uint32_t a = uint32_t(v >> 32), b = uint32_t(v);
+    std::memcpy(&x, &a, 4);
+    std::memcpy(&y, &b, 4);
+    rw = int(wh >> 16);
+    rh = int(wh & 0xFFFF);
+    return rw > 0 && rh > 0;
+}
+// Menu do jogo com itens sob o mouse (pausa e outras telas do jogo): o EE pede um X por algumas leituras do pad (clique num item)
+inline std::atomic<int> g_crossReq{0};
+inline std::atomic<int64_t> g_gameMenuUntil{0};   // ate quando (ms) a tela do jogo com mouse esta aberta (a pausa nao e menu do shell)
+inline void gameMenu() { g_gameMenuUntil.store(nowMs() + 150, std::memory_order_relaxed); }
+inline bool inGameMenu() { return nowMs() < g_gameMenuUntil.load(std::memory_order_relaxed); }
+} // namespace wotm::mouse
+
+// O ponteiro em unidades da tela do PS2 (640 x 224, as do texto do jogo), publicado pela janela junto da apresentacao
+namespace wotm::mouse
+{
+inline std::atomic<uint64_t> g_gsXY{0};
+inline std::atomic<bool> g_gsIn{false};
+inline void publishGs(bool in, float gx, float gy)
+{
+    uint32_t a, b;
+    std::memcpy(&a, &gx, 4);
+    std::memcpy(&b, &gy, 4);
+    g_gsXY.store(uint64_t(a) << 32 | b, std::memory_order_relaxed);
+    g_gsIn.store(in, std::memory_order_relaxed);
+}
+inline bool gsPointer(float &gx, float &gy)
+{
+    if (!g_gsIn.load(std::memory_order_relaxed)) return false;
+    const uint64_t v = g_gsXY.load(std::memory_order_relaxed);
+    const uint32_t a = uint32_t(v >> 32), b = uint32_t(v);
+    std::memcpy(&gx, &a, 4);
+    std::memcpy(&gy, &b, 4);
+    return true;
 }
 } // namespace wotm::mouse

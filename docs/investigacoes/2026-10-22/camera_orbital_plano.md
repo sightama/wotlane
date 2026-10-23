@@ -34,9 +34,9 @@ Combinado com o dono em 2026-10-22. Branch `camera-orbital`. Cada etapa vira um 
 | 2 | Alvo travado (aprovado, na master em 2026-10-22) | enquadramento do jogo, com o analógico direito deslocando um pouco |
 | 3 | Chão e prédios (aprovado, na master em 2026-10-22) | câmera não entra no chão nem em prédio; conferir se os prédios transparentes bastam |
 | 4 | Transições (conferida em 2026-10-22, sem código novo) | ao voltar de agarrão, cena, aproximação (vista unificada), levantar etc., a órbita recomeça do ângulo atual, sem salto |
-| 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro em 2026-10-22, falta o teste do dono com controles) | estado de órbita por vista, cada uma pelo controle do seu jogador |
+| 5 | Tela dividida, 3 e 4 jogadores (conferida por roteiro e testada pelo dono em 2026-10-22) | estado de órbita por vista, cada uma pelo controle do seu jogador |
 | 6 | Painel (feita em 2026-10-22, aba CAMERA; falta o teste do dono) | aba nova ou FEATURES: CAMERA (MODERN/CLASSIC), sensibilidade, inverter Y, recentralizar, CLOSE-UP CAMERA (ligar/desligar a vista unificada); `WOTM_CAMERA` etc. |
-| 7 | Mouse na câmera (feita em 2026-10-22; falta o teste do dono) | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
+| 7 | Mouse na câmera (feita e testada pelo dono em 2026-10-22) | mouse gira a câmera do jogador do teclado; cursor preso na luta, solto nos menus e na pausa |
 | 8 | Teclado novo (feita em 2026-10-22, testada pelo dono) | layout padrão com WASD e ataques nos botões do mouse; botões do mouse no rebind (`wotm_settings.hpp`, aba CONTROLS); proposta de layout para o dono aprovar antes |
 | 9 | Menus com mouse | primeiro os nativos (menu principal em texto, painel, escolha de controles do multiplayer); depois as telas do jogo (options, saves, pausa, seleção de monstros), que precisam da posição de cada item na tela |
 
@@ -217,6 +217,22 @@ Teste por roteiro (mensagens do Windows na janela): o `[kb]` mostrou os botões 
 de alvo funcionou, mas o monstro não andou na tela, embora o log da órbita mostrasse posição mudando (o dono viu parado no spawn): esse
 tipo de teste não serve para movimento, e a posição do log precisa ser conferida antes de ser usada de novo. O Shift não dá para
 testar assim (o GLFW solta o Shift que não está fisicamente apertado). Valeu o teste do dono: tudo funcionando.
+
+## Etapa 9: menus com mouse (2026-10-22)
+
+- **Menus nativos** (testados pelo dono): lista do menu principal, painel "Recompiled options", tela de opções, escolha de controles
+  do multiplayer. Com o cursor solto: passar por cima escolhe, clique esquerdo confirma, direito volta, rodinha sobe e desce. Modo foto
+  desligado nos menus; a legenda mostra as duas teclas quando um comando tem duas.
+- **Pausa:** sem o CONTROL SCHEME (o jogo nativo supõe o tipo A; com 3 e 4 jogadores a escolha caía no `m_vibration`), decidido pelo
+  dono. Mouse nos itens; o mesmo nos diálogos do `displayDialog` (ARE YOU SURE?, fins de luta, minigames), pelos itens que o
+  `setMenuFont` marca. No primeiro quadro de um diálogo, clique e X pendentes caem (o clique no QUIT não confirma o YES).
+- **Telas do jogo** (`wotm_gamescreens.inc`, investigações `mouse_telas_monstro.md`, `mouse_telas_opcoes.md`, `mouse_telas_save.md`):
+  retângulos dos objetos de cada elemento projetados com a câmera do quadro (caminho ativo da hierarquia, sem o brilho; setas à parte).
+  O mouse anda pelos códigos de pad (um passo por quadro, até 10) e confirma com X ao chegar, sem escrever as variáveis do jogo, salvo
+  na 21 (só texto). Retrato só conta depois de ~0,1 s parado nele (a caminho das caixas de traje). Na tela 8 a segunda leitura do
+  controle no mesmo quadro recebe o mesmo código. Modal de saves e unlocks por coordenadas do texto.
+- **Falta:** teste do dono (mouse é conferido à mão; o roteiro de pad só mostrou que a tela 3 acha os retratos e que a pausa e o
+  ARE YOU SURE continuam no pad). Fora por ora: páginas `McPage` do cartão (o "salvar?" depois da aventura, com `WOTM_SAVEAUTO=0`).
 
 ## Perguntas em aberto
 - Com a órbita, o `TogglePOV` ainda faz sentido?

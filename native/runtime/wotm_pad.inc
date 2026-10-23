@@ -136,8 +136,9 @@ static void keyboard(uint16_t &btns, uint8_t *data)
 {
     wheelStep();
     const bool menus = inMenus();
-    auto down = [menus](st::Bind b) {
-        if (!menus) return kbDown(b);
+    const bool mouseMenu = menus || wotm::mouse::inGameMenu();   // menus do shell ou tela do jogo com mouse (pausa)
+    auto down = [mouseMenu](st::Bind b) {
+        if (!mouseMenu) return kbDown(b);
         const uint32_t v = st::kb(b);
         const int a = int(v & 0xFFFF), c = int(v >> 16);
         return (a < st::kMouseBase && inputDown(a)) || (c < st::kMouseBase && inputDown(c));
@@ -155,9 +156,13 @@ static void keyboard(uint16_t &btns, uint8_t *data)
             }
             btns &= static_cast<uint16_t>(~mask);
         }
-    if (menus && !wotm::mouse::g_captured.load(std::memory_order_relaxed))
+    if (mouseMenu && !wotm::mouse::g_captured.load(std::memory_order_relaxed))
     {
         uint16_t m = 0;
+        // clique num item de uma tela do jogo (wotm_pausemenu.inc): o X por duas leituras, com o item ja escolhido
+        int req = wotm::mouse::g_crossReq.load(std::memory_order_relaxed);
+        while (req > 0 && !wotm::mouse::g_crossReq.compare_exchange_weak(req, req - 1, std::memory_order_relaxed)) {}
+        if (req > 0) m |= 0x4000;
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) m |= 0x1000;                                  // triangulo
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !wotm::mouse::claimed()) m |= 0x4000;        // X
         if (g_wheelHeld) m |= g_wheelHeld > 0 ? 0x0010 : 0x0040;                                 // cima / baixo
@@ -294,6 +299,7 @@ static void pointerFrame(const Rectangle &dst, int rw, int rh)
             std::fprintf(stderr, "[menumouse] ponteiro desligado (%s)\n", why == 1 ? "cursor preso" : why == 2 ? "janela sem foco" : "sem quadro");
         lastWhy = why;
         p.in = false;
+        ms::publishPointer(false, 0.f, 0.f, rw, rh);
         return;
     }
     const Vector2 m = GetMousePosition();
@@ -308,6 +314,7 @@ static void pointerFrame(const Rectangle &dst, int rw, int rh)
     p.x = x;
     p.y = y;
     p.in = in;
+    ms::publishPointer(in, x, y, rw, rh);
     if (!in)
         return;
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ms::click(ms::g_clickL);

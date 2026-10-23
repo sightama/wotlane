@@ -29,6 +29,10 @@ static void frame(uint8_t *rdram);
 static uint32_t input(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t code);
 constexpr uint32_t kScreen = 10;
 }
+namespace wotm_pausemenu   // wotm_pausemenu.inc (incluido depois)
+{
+static void install(PS2Runtime &runtime);
+}
 
 namespace wotm_mainmenu
 {
@@ -620,6 +624,10 @@ static void logoFrame(uint8_t *rdram)
 // A cada quadro (saida das funcoes das telas e do screenTransition): esconde os itens do jogo e publica a lista
 static void frame(uint8_t *rdram)
 {
+    // esquema de controle fixo no tipo A (o teclado e o lock-on alternado supoem ele; a pausa nao oferece mais a troca,
+    // wotm_pausemenu.inc): m_ctlrCfg (1 = A; 0 = ainda nao escolhido, o jogo poe 1)
+    for (uint32_t i = 0; i < 2; ++i)
+        if (const uint32_t a = kShell + 0x2B8C + 4 * i; rd32(rdram, a) > 1) wotm_padsel::wr32(rdram, a, 1);
     uint32_t screen = 0;
     float alpha = screenAlpha(rdram, screen);
     const ScreenDef *d = screenDef(screen);
@@ -705,7 +713,8 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (ctx->pc == wotm::fn::screenGetInput__Fi)
         wotm_pad::markMenuFrame();   // nos menus (MenuConfirm e icones, wotm_pad.inc)
     // tela de opcoes do jogo: so a leitura do controle 1 (screenGetInput(1)); a do 2 so troca vibracao e controles, que sairam
-    if (ctx->pc == wotm::fn::screenGetInput__Fi && (screenDef(cur) || (cur == wotm_optscreen::kScreen && GPR_U32(ctx, 4) == 1)))
+    if (ctx->pc == wotm::fn::screenGetInput__Fi &&
+        (screenDef(cur) || ((cur == wotm_optscreen::kScreen || !wotm_gamescreens::handled(cur) || cur == 21) && GPR_U32(ctx, 4) == 1)))
     {
         g_inRa = GPR_U32(ctx, 31);
         g_inPending = true;
@@ -714,6 +723,13 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (!g_inPending || ctx->pc != g_inRa)
         return;
     g_inPending = false;
+    if (!screenDef(cur) && cur != wotm_optscreen::kScreen)
+    {
+        const uint32_t raw = GPR_U32(ctx, 2), nc = wotm_gamescreens::input(rdram, ctx, runtime, cur, raw & 0xFFFFu);
+        if (nc != (raw & 0xFFFFu))   // mouse: o passo ate o item sob ele, ou o X nele
+            ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>((raw & ~0xFFFFu) | nc)));
+        return;
+    }
     if (cur == wotm_optscreen::kScreen)
     {
         const uint32_t raw = GPR_U32(ctx, 2), nc = wotm_optscreen::input(rdram, ctx, runtime, raw & 0xFFFFu);
@@ -1308,6 +1324,7 @@ bool wotmTextMenuOn() { return wotm_mainmenu::g_enabled; }
 void wotmMainMenuInstall(PS2Runtime &runtime)
 {
     using namespace wotm_mainmenu;
+    wotm_pausemenu::install(runtime);   // com ou sem os menus em texto
     if (!g_enabled)
         return;
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; };
