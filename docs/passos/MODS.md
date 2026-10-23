@@ -79,11 +79,44 @@ python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da 
   `fileStatus.texAddr[i]` (`resAddr[i]`); o deslocamento dentro dele dá o texId do disco, e o nome é `fileStatus.names[i]`. As
   residentes (T8H/T4HL/T4HH) vêm pelo DBP, como no `decodeResident`.
 
+## Skins (trajes a mais, sem substituir)
+
+Uma skin é uma pasta em `mods/<mod>/skins/<pasta>/` com um `skin.json`:
+
+```json
+{ "monster": "ultra-v", "id": "roxo", "name": "PURPLE ULTRA V", "base": 3, "ai": true }
+```
+
+- `monster`: nome do monstro jogável (`congar`, `robo-47`, `togera`, `ultra-v`, `preytor`, `kineticlops`, `magmo`, `raptros`,
+  `agamo`, `zorgulon`) ou o prefixo do arquivo (`SHOGUN`).
+- `id`: letras minúsculas, dígitos e `_` (sem ele, o nome da pasta). O save guarda `"ultra-v/roxo"`.
+- `name`: o que a seleção mostra. `base`: traje do disco (0 a 3) que dá o que a pasta não trouxer, e os sons do traje.
+  `ai`: se as IAs sorteadas podem usar (padrão não).
+- Skin de mod é sempre aberta: não passa pela tela de destrave.
+- O que vai na pasta, do mais simples ao mais completo:
+  - **só PNGs**: modelo e texturas do traje base; os PNGs trocam as texturas. Nome como o export do traje base
+    (`shogun3_t0010.png`, `shogun3_rtx_t0011.png`) ou só `t0010.png`/`rtx_t0011.png`. Valem **só para a skin**: o traje 3 de verdade
+    continua com a textura dele, mesmo na mesma luta.
+  - **`.TEX` e/ou `.RTX`** (qualquer nome, pela extensão): texturas próprias, com os mesmos texIds do base (o `modkit pack --inject`
+    grava assim).
+  - **`.NGP` + `.PTR`** (sempre os dois): modelo próprio, com o mesmo esqueleto e animações do traje 0.
+- O jogo vê cada skin como mais um traje do monstro (`MON/SHOGUN4.*`, `SHOGUN5.*`...; números dados a cada boot, na ordem
+  mod/id). Mesmo monstro e id em dois mods: vence o último em ordem alfabética. O log diz o que entrou:
+  `[mods] skin ultra-v/roxo ("PURPLE ULTRA V", meu_mod) = traje 4 (SHOGUN4); base 3, 2 png`.
+- No menu (seleção nativa das telas 3 e 6 e de 3 e 4 jogadores): cima/baixo passa pelos trajes do disco e depois pelas skins do
+  monstro, sempre abertas, e mais de um jogador pode escolher a mesma. Pelo `WOTM_MATCH` também (`WOTM_MATCH=4:roxo,...`).
+  O modelo 3D da seleção já mostra os PNGs da skin.
+- Ainda não: o save da aventura com skin e as IAs sorteadas (plano em `docs/investigacoes/2026-10-23/skins_mod_plano.md`).
+
+Conferido em 2026-10-23 (`WOTM_MATCH=4:roxo,4:3,1`, IA): a skin com o PNG recolorido sai verde e o traje 3 ao lado continua roxo;
+skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3. Foto:
+`docs/screenshots/2026-10-23/2026-10-23_skin_mod_png_so_na_skin.png`.
+
 ## Cuidados
 
 - Arquivo de mod maior que o do disco (`.TEX`, `.RTX`, `.NGP`, `.BNK`): o jogo carrega em regiões de tamanho fixo e pode sobrescrever
   o que vem depois (o log e o `check` avisam). Com PNG isso não acontece: a textura do jogo não muda de tamanho.
-- Monstros e skins novos (sem substituir) são o item 8.
+- Monstros novos (sem substituir) são o item 8, parte 2.
 
 Conferido em 2026-10-22 (`WOTM_MATCH=3,1`, `3,1,2,5,1` e `1,3,1` com IA): a pele do Togera em PNG 4x (1024 × 1024 no lugar de 256)
 e o retrato 2x no HUD do jogador e na barra do inimigo; kit com export, edição, pack (PNG, `.VAG`, um som do `SHELL_S.BNK`),

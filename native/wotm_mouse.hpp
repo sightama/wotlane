@@ -108,6 +108,14 @@ inline bool pointer(float &x, float &y, int &rw, int &rh)
 }
 // Menu do jogo com itens sob o mouse (pausa e outras telas do jogo): o EE pede um X por algumas leituras do pad (clique num item)
 inline std::atomic<int> g_crossReq{0};
+// O pedido vale por pouco tempo: o jogo costuma agir ja na primeira leitura (o QUIT da pausa sai da fase), e a segunda, sem menu com
+// mouse durante a carga, ficava pendurada ate o menu principal, onde virava um X no item sob o cursor
+inline std::atomic<int64_t> g_crossReqUntil{0};
+inline void requestCross(int reads)
+{
+    g_crossReqUntil.store(nowMs() + 200, std::memory_order_relaxed);
+    g_crossReq.store(reads, std::memory_order_relaxed);
+}
 inline std::atomic<int64_t> g_gameMenuUntil{0};   // ate quando (ms) a tela do jogo com mouse esta aberta (a pausa nao e menu do shell)
 inline void gameMenu() { g_gameMenuUntil.store(nowMs() + 150, std::memory_order_relaxed); }
 inline bool inGameMenu() { return nowMs() < g_gameMenuUntil.load(std::memory_order_relaxed); }

@@ -6,7 +6,7 @@
 // texId e o do arquivo no disco (antes da relocacao da carga). Qualquer resolucao: os UVs do desenho sao normalizados (u / 4096) e
 // os quadrados de tela (fonte, retratos) escalam o trecho pela razao entre o PNG e a textura original. Vale para todas as paletas
 // que usam a textura. Alfa do PNG: 255 = opaco (0x80 do GS). Nao vale na imagem do GS emulado do ps2EntryRunner (a referencia da
-// checagem VU1), nas particulas nem no monstro 3D da lista de saves (wotm_model.hpp): esses seguem lendo o .TEX.
+// checagem VU1) nem nas particulas: essas seguem lendo o .TEX. O monstro 3D das telas (wotm_model.hpp) tambem usa o PNG.
 #pragma once
 #include <algorithm>
 #include <cctype>
@@ -88,6 +88,21 @@ private:
             p.host = f.host.string();
             p.mod = f.mod;
             p.rel = rel;
+        }
+        // PNGs das skins (mods/<mod>/skins/<pasta>/): o numero do nome vale, o arquivo e o do traje da skin. Aceita o nome do
+        // export do traje base ("lizard1_t0004.png", "lizard1_rtx_t0011.png") ou so "t0004.png"/"rtx_t0011.png".
+        for (const mods::SkinPng &sp : reg.skinPngs()) {
+            const std::string base = sp.host.filename().string();
+            std::string stem; bool rtx = false; uint32_t id = 0;
+            if (!parseName(base, stem, rtx, id) && !parseName("X_" + base, stem, rtx, id)) {
+                std::fprintf(stderr, "[mods] png %s: nome sem _tNNNN, ignorado\n", sp.rel.c_str());
+                continue;
+            }
+            if (upper(base).rfind("RTX_T", 0) == 0) rtx = true;
+            Png &p = m_png[Key{sp.stem, rtx, id}];
+            p.host = sp.host.string();
+            p.mod = sp.mod;
+            p.rel = sp.rel;
         }
         if (!m_png.empty()) std::fprintf(stderr, "[mods] %zu textura(s) em PNG\n", m_png.size());
     }
