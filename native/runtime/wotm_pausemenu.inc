@@ -33,6 +33,26 @@ struct DlgItem { bool ok; int x, y, chars; };
 static DlgItem g_dlg[kMaxDlgItems] = {};
 static int g_mark = -1;   // o proximo texto e o item g_mark (-1: titulo ou outro texto)
 
+// Caixa da pausa (shell->m_cs610, posta na frente da camera pelo overlay a cada quadro: _cs::mat em +0x20 copiada da camera) mais
+// larga: o RECOMPILED OPTIONS escolhido (fonte 20, 18 letras, ~267 unidades da tela do PS2) passava da caixa (~213). A linha 0 da
+// matriz e o eixo x do objeto (o overlay faz x*linha0 + y*linha1 + z*linha2). So escala a linha que o overlay acabou de escrever:
+// se ela ainda e a que deixamos (quadro sem reescrita), nao escala de novo.
+constexpr float kBoxWiden = 1.4f;
+static void widenBox(uint8_t *rdram)
+{
+    static float s_written[3] = {};
+    const uint32_t cs = rd32(rdram, wotm::sym::shellInfo + 0x610) & 0x1FFFFFFu;
+    if (cs < 0x1000u || cs + 0x30 > PS2_RAM_SIZE)
+        return;
+    float row[3];
+    std::memcpy(row, rdram + cs + 0x20, sizeof row);
+    if (std::memcmp(row, s_written, sizeof row) == 0)
+        return;
+    for (float &f : row) f *= kBoxWiden;
+    std::memcpy(rdram + cs + 0x20, row, sizeof row);
+    std::memcpy(s_written, row, sizeof row);
+}
+
 static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc == wotm::fn::pauseLevelOverlay__FRi)
@@ -51,7 +71,10 @@ static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     g_origOverlay(rdram, ctx, runtime);
     if (g_inOverlay && ctx->pc == g_overlayRa)
+    {
         g_inOverlay = false;
+        widenBox(rdram);
+    }
 }
 
 static bool startsWith(const uint8_t *rdram, uint32_t a, const char *s)
