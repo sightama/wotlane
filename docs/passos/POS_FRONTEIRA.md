@@ -410,8 +410,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
   5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
-  6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **feito na branch `painel-pausa`**, conferido por roteiro; falta o dono
-     conferir ao vivo (mouse, troca de resolução/AA/modo de tela, CAMERA STYLE e a volta à luta). Plano e decisões em
+  6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **feito e conferido ao vivo pelo dono em 2026-10-23** (na master, branch
+     `painel-pausa`). Investigação encerrada. Plano e decisões em
      `investigacoes/2026-10-23/painel_na_pausa.md`; o que ficou em `NATIVO.md`, "Painel na pausa". Sons: os do menu (decisão do dono),
      de uma cópia do banco do Shell carregada pelo som nativo só para o painel. Texto da linha cabendo: caixa da pausa 1,4x mais larga.
 - **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;

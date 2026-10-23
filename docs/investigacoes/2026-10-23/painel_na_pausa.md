@@ -1,6 +1,6 @@
 # Painel "Recompiled options" no menu de pausa da luta (2026-10-23)
 
-> **Implementado no mesmo dia** (branch `painel-pausa`; resumo em `NATIVO.md`, "Painel na pausa"). Diferenças do plano: a caixa 3D da
+> **Implementado e conferido pelo dono no mesmo dia; investigação encerrada** (branch `painel-pausa`, na master; resumo em `NATIVO.md`, "Painel na pausa"). Diferenças do plano: a caixa 3D da
 > pausa é desligada com `hierSetCsDrawMe(shell->m_cs610, 0)` enquanto o painel está aberto (em vez de mexer no `gDrawOverlay`); o
 > banco de sons do Shell **não** está carregado na luta (conferido: `gSoundBanks[14]` é 0), então o som nativo carrega uma cópia
 > do `SHELL_S.BNK` só para o painel, no grupo 2 (o jogo silencia os grupos 0 e 1 na pausa); a caixa da pausa ficou 1,4x mais larga para
