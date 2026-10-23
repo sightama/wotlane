@@ -228,8 +228,8 @@ namespace
         for (int i = 0; i < total; ++i)
             costumes[i] = -1;
         for (int i = 0; i < total; ++i)
-            if (g_matchCostumes[i] >= 0 && !taken(i, g_matchCostumes[i] & 3))
-                costumes[i] = g_matchCostumes[i] & 3;
+            if (g_matchCostumes[i] >= 0 && !taken(i, g_matchCostumes[i]))
+                costumes[i] = g_matchCostumes[i];   // 4 ou mais: traje de mod (MON/<PREFIXO><n>.* servido por mods/)
         for (int i = 0; i < total; ++i)
             for (int c = 0; costumes[i] < 0; ++c)
                 if (c > 3 || !taken(i, c))
@@ -242,9 +242,9 @@ namespace
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
             if (player && i >= 2)   // jogadores 3 e 4: m_costume[2..] e das IAs (wotm_split4.inc os carrega pelo caminho delas)
-                wotm_split4::g_extraCostume[i - 2] = costume & 3u;
+                wotm_split4::g_extraCostume[i - 2] = costume;
             else
-                WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
+                WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume);
         }
         WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
@@ -2268,8 +2268,21 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             if (end != p && *end == ':')   // "<monstro>:<figurino>"
             {
                 const char *q = end + 1;
-                c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
-                if (end == q || c[n - 1] < 0 || c[n - 1] > 3)
+                if (*q && !std::isdigit(static_cast<unsigned char>(*q)))   // "<monstro>:<skin>": traje de mod pelo id (mods/<mod>/skins/)
+                {
+                    const char *t = q;
+                    while (*t && *t != ',')
+                        ++t;
+                    const std::string id(q, t);
+                    const wotm::mods::Skin *sk = wotm::mods::Registry::get().skin(v[n - 1], id);
+                    if (!sk)
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" do monstro %d nao achada em mods/; traje 0\n", id.c_str(), v[n - 1]);
+                    c[n - 1] = sk ? sk->index : 0;
+                    end = const_cast<char *>(t);
+                }
+                else
+                    c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
+                if (end == q || c[n - 1] < 0 || c[n - 1] > 99)   // 4..99: trajes de mod (nome do arquivo ate 8 letras)
                 {
                     p = nullptr;
                     break;

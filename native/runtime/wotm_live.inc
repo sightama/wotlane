@@ -1284,6 +1284,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
     scene.drawQuads(quads, float(rw), float(rh));
 }
 
+#include "wotm_narrator.inc"   // nome do monstro escolhido na selecao (antes do wotm_padsel.inc, que o chama)
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 // Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)
@@ -1723,6 +1724,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
         wotm_mainmenu::drawPausePanel2d(RW, RH);   // painel "recompiled options" na pausa da luta (wotm_pausemenu.inc)
+        wotm_padsel::drawBar2d(RW, RH);            // barra de monstros da selecao nativa (acima da faixa preta de baixo)
         {
             // Lista de saves (wotm_save.inc, na thread do EE): o nome do botao de confirmar no dispositivo de agora, para o "press ...
             // again to overwrite", e a legenda de baixo ao carregar (no menu; ao gravar, na fase, a faixa preta cobriria a luta)

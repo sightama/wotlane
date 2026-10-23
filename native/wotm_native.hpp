@@ -856,7 +856,7 @@ public:
     // Caminho do disco ("MON/LIZARD0.RTX"): o arquivo de mods/ (wotm_mods.hpp) se houver, senao o da raiz
     std::string discPath(const std::string &rel) const {
         std::string p = mods::Registry::get().hostPath(rel);
-        return p.empty() ? discRoot_ + rel : p;
+        return p.empty() ? discRoot_ + mods::Registry::get().aliasOf(rel) : p;   // traje de mod: o arquivo do traje base
     }
 
     // PNG de mod no lugar da textura do objeto (texId do texInfo global + TEX0). Residentes (T8H/4HL/4HH): pelo DBP, como o
