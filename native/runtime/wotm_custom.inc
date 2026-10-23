@@ -81,6 +81,81 @@ namespace wotm_custom
         if (p1)
             WRITE32(p1 + kId, oldId);
     }
+
+    // Som: o SoundManager::loadMonsterBank (e o de baixa resolucao) nao tem caso para o 0x1A0; os sons do Goliath sao do banco do
+    // chefe (gSoundBanks[BANK_MECH], Assemb_s.bnk), que o retail so carrega na cena do chefe em canyon2 (canyon2BossIntro). Fora da
+    // aventura, o pedido do banco do 0x1A0 vira o SoundManager::loadMechBossSoundBank (mesmo this), como um salto.
+    constexpr uint32_t kLoadBank = wotm::fn::loadMonsterBank__12SoundManagerii, kLoadLoBank = wotm::fn::loadLoResMonsterBank__12SoundManagerii,
+                       kLoadMech = wotm::fn::loadMechBossSoundBank__12SoundManager;
+    constexpr uint32_t kGameMode = 0x1203C8;
+    PS2Runtime::RecompiledFunction g_origLoadBank = nullptr, g_origLoadLoBank = nullptr, g_loadMech = nullptr;
+
+    void loadBankCommon(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t entry, PS2Runtime::RecompiledFunction orig)
+    {
+        if (ctx->pc == entry && GPR_U32(ctx, 5) == kGoliath && READ32(kGameObj + kGameMode) != 1u && g_loadMech)
+        {
+            std::fprintf(stderr, "[custom] banco de som do Goliath (Assemb_s.bnk, loadMechBossSoundBank)\n");
+            // nome na tela ("%s CRUSHED", "%s WINS"): a entrada 13 das 5 copias do MonsterNewNames[17][12] diz "assboss"
+            for (const uint32_t names : {wotm::sym::MonsterNewNames_006E8958, wotm::sym::MonsterNewNames_006E8D90, wotm::sym::MonsterNewNames_006EAA78,
+                                         wotm::sym::MonsterNewNames_006ED318, wotm::sym::MonsterNewNames_006EFEC8})
+            {
+                char *e = reinterpret_cast<char *>(rdram + ((names + 13 * 12) & 0x01FFFFFFu));
+                std::memset(e, 0, 12);
+                std::memcpy(e, "goliath", 7);
+            }
+            ctx->pc = kLoadMech;
+            g_loadMech(rdram, ctx, runtime);
+            return;
+        }
+        orig(rdram, ctx, runtime);
+    }
+    void loadBank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { loadBankCommon(rdram, ctx, runtime, kLoadBank, g_origLoadBank); }
+    void loadLoBank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { loadBankCommon(rdram, ctx, runtime, kLoadLoBank, g_origLoadLoBank); }
+
+    // Camera: o RST/ASSBOSS.CHR traz parametros de camera que o retail nunca usou (no POV 0 a camera fica na frente e baixa:
+    // m_00 = (-70, 336, 90) contra (0, -255, 150) do Togera). No Monster::initAfterDbLoad -> MonsterTweaks::setActiveMonster(m, true),
+    // que le o RST/<MonsterLongNames[tipo]>.CHR (charreset::setCharacter monta o nome), o Goliath le antes o .CHR do monstro base da
+    // camera, guarda a tabela de camera (+0x6CF0: 10 POVs de 0xA0, mais 10 da tela dividida), le o proprio .CHR de novo e fica com
+    // a tabela guardada, com as tres distancias de cada POV (m_00, m_10, m_20) escaladas.
+    constexpr uint32_t kSetActive = wotm::fn::setActiveMonster__13MonsterTweaksP7Monsterb;
+    constexpr uint32_t kLongNames = wotm::sym::MonsterLongNames_006E8BC8;   // [17][8], a copia do charreset
+    constexpr uint32_t kCamTable = 0x6CF0, kCamPovs = 20, kCamPov = 0xA0;
+    constexpr const char *kCamBase = "lizard";   // Togera
+    constexpr float kCamScale = 2.0f;
+    PS2Runtime::RecompiledFunction g_origSetActive = nullptr;
+
+    void setActive(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        if (ctx->pc != kSetActive || READ32(m + kTypeBits) != kGoliath)
+        {
+            g_origSetActive(rdram, ctx, runtime);
+            return;
+        }
+        const R5900Context entry = *ctx;
+        char *name = reinterpret_cast<char *>(rdram + ((kLongNames + 13 * 8) & 0x01FFFFFFu));
+        char own[8];
+        std::memcpy(own, name, 8);
+        std::memset(name, 0, 8);
+        std::memcpy(name, kCamBase, std::strlen(kCamBase));
+        g_origSetActive(rdram, ctx, runtime);
+        std::vector<uint8_t> cam(kCamPovs * kCamPov);
+        std::memcpy(cam.data(), rdram + ((m + kCamTable) & 0x01FFFFFFu), cam.size());
+        std::memcpy(name, own, 8);
+        *ctx = entry;
+        g_origSetActive(rdram, ctx, runtime);
+        for (uint32_t p = 0; p < kCamPovs; ++p)
+            for (uint32_t v = 0; v < 3; ++v)
+                for (uint32_t c = 0; c < 3; ++c)
+                {
+                    float f;
+                    std::memcpy(&f, &cam[p * kCamPov + v * 16 + c * 4], 4);
+                    f *= kCamScale;
+                    std::memcpy(&cam[p * kCamPov + v * 16 + c * 4], &f, 4);
+                }
+        std::memcpy(rdram + ((m + kCamTable) & 0x01FFFFFFu), cam.data(), cam.size());
+        std::fprintf(stderr, "[custom] Goliath: camera do %s.CHR, distancias x%.1f\n", kCamBase, kCamScale);
+    }
 } // namespace wotm_custom
 
 // Depois do wotmSkinsInstall: embrulha os ganchos do SetAIMonster que ja estiverem registrados (WOTM_AIVSAI, skins).
@@ -91,6 +166,13 @@ void wotmCustomInstall(PS2Runtime &runtime)
         runtime.registerFunction(kSetAI, &setAI);
     if ((g_origTakeHit = runtime.lookupFunction(kTakeHit)))
         runtime.registerFunction(kTakeHit, &takeHit);
+    if ((g_origSetActive = runtime.lookupFunction(kSetActive)))
+        runtime.registerFunction(kSetActive, &setActive);
+    g_loadMech = runtime.lookupFunction(kLoadMech);
+    if ((g_origLoadBank = runtime.lookupFunction(kLoadBank)))
+        runtime.registerFunction(kLoadBank, &loadBank);
+    if ((g_origLoadLoBank = runtime.lookupFunction(kLoadLoBank)))
+        runtime.registerFunction(kLoadLoBank, &loadLoBank);
     std::fprintf(stderr, "[custom] Goliath Prime jogavel: %s, %s\n", g_origSetAI ? "visivel com IAs" : "SEM gancho do SetAIMonster",
                  g_origTakeHit ? "toma dano das IAs" : "SEM gancho do takeHit");
 }
