@@ -29,6 +29,10 @@
 // vai no retangulo do item.
 // Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
+#include "wotm_mods.hpp"   // skins de mod na lista de trajes
+#include <chrono>
+#include <random>
+
 void wotmMultiSetCostume(int player, uint32_t costume);   // wotm_split4.inc: traje dos jogadores 3 e 4 (o Shell so tem lugar para 2)
 bool wotmTextMenuOn();   // wotm_mainmenu.inc: menu principal em texto (sem o rotulo "multiplayer" daqui)
 
@@ -45,6 +49,8 @@ constexpr uint32_t kMonsterSel = kShell + 0x2938, kCostume = kShell + 0x2BE0, kN
 constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +0, state +4; 4 trajes por coluna
 enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, Square, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc; Square: so no roteiro (previa da aba VIDEO)
 enum Phase { Off, Config, Reveal, Leaving };
+// Casas da barra de monstros alem das 10 colunas: monstro aleatorio e personalizado (por enquanto nao faz nada)
+constexpr int kCellRandom = 11, kCellCustom = 12;
 
 // Cores dos jogadores 1 a 4
 constexpr Color kPlayerColors[kMaxPlayers] = {{230, 120, 50, 255}, {70, 140, 235, 255}, {90, 190, 80, 255}, {230, 200, 60, 255}};
@@ -68,7 +74,18 @@ struct View
     int selPlayers = 0;
     uint32_t selMonster[kMaxPlayers] = {};   // m_monsterSel (tipo << 5)
     int selCostume[kMaxPlayers] = {}, selCostumes[kMaxPlayers] = {};
+    int selCostumeIdx[kMaxPlayers] = {};   // posicao do traje na lista da coluna (-1: fora dela)
+    int selBase[kMaxPlayers] = {};         // traje do disco do enquadramento (o base da skin)
+    int selModCount[kMaxPlayers] = {};     // skins de mod no fim da lista
+    char selCostumeName[kMaxPlayers][40] = {};
+    char selLabel[kMaxPlayers][8] = {};    // "P1", "CPU"
+    int selColor[kMaxPlayers] = {};        // indice em kPlayerColors
+    bool selWaiting[kMaxPlayers] = {};     // quadro da CPU antes de o jogador escolher o dele (modo 2)
+    bool selNoCostume = false;             // eliminacao: sem escolha de traje
     bool selReady[kMaxPlayers] = {};
+    int selCell[kMaxPlayers] = {};         // casa da barra de monstros: 1..10 coluna, kCellRandom, kCellCustom
+    int barMon[10] = {};                   // monstro (tipo) de cada coluna da selecao
+    bool barOpen[10] = {};                 // coluna destravada
     // rotulo do menu principal
     uint32_t labelObj[4] = {};   // objetos do switch do "2 player" em uso ([0] = 0: sem rotulo); o menor e o texto
     uint32_t labelRef[4] = {};   // objetos do "1 player" em uso (texto e brilho): o menor da a coluna e a altura das letras
@@ -88,7 +105,10 @@ static int g_inject = 0;   // codigo para o proximo screenGetInput (5 = voltar)
 static int g_multi = 0;    // 3 ou 4: jogadores da partida multijogador escolhida (0 = 1 ou 2 jogadores, retail)
 static PS2Runtime::RecompiledFunction g_origTransition = nullptr, g_origModes2P = nullptr, g_origGetInput = nullptr, g_origMain = nullptr,
                                       g_origWaitStart = nullptr, g_origSelect2P = nullptr, g_origChangeScreen = nullptr;
-static uint32_t g_transRa = 0, g_modesRa = 0, g_selectRa = 0, g_mainRa = 0;
+static uint32_t g_transRa = 0, g_modesRa = 0, g_selectRa = 0, g_mainRa = 0, g_select1Ra = 0, g_soloInRa = 0;
+static int g_soloInPad = 0;
+static bool g_select1Pending = false, g_soloInPending = false;
+static PS2Runtime::RecompiledFunction g_origSelect1P = nullptr;
 static bool g_transPending = false, g_modesPending = false, g_selectPending = false, g_mainPending = false;
 
 // Selecao de monstros (thread do EE)
@@ -315,38 +335,6 @@ static int distinctPlayers(int map[kMaxPlayers + 1])
     return n;
 }
 
-static void publish(uint8_t *rdram)
-{
-    std::lock_guard<std::mutex> lk(g_m);
-    View &v = g_view;
-    v.on = g_phase != Off;
-    v.select = g_selOn;
-    v.alpha = std::min(1.f, std::max(0.f, g_uiAlpha));
-    v.count = 0;
-    for (int d = 0; d < kDevs; ++d)
-    {
-        v.present[d] = present(d);
-        v.slot[d] = g_slot[d];
-        v.count += v.present[d];
-    }
-    v.players = distinctPlayers(nullptr);
-    v.screenObj = rd32(rdram, kMovieScreen) & 0x1FFFFFFFu;
-    v.selPlayers = g_selOn ? g_multi : 0;
-    for (int p = 0; p < v.selPlayers; ++p)
-    {
-        v.selMonster[p] = rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(g_pick[p].col - 1));
-        v.selCostume[p] = g_pick[p].costume;
-        v.selReady[p] = g_pick[p].ready;
-        int open = 0;
-        for (int c = 0; c < 4; ++c)
-        {
-            const uint32_t s = wotm::sym::monsterSelectMode + uint32_t((g_pick[p].col - 1) * 4 + c) * kSlotSize;
-            open += rd32(rdram, s + 4) == 1u && rd32(rdram, s) == 1u;
-        }
-        v.selCostumes[p] = open;
-    }
-}
-
 static void setManual(bool on, const int map[kMaxPlayers + 1] = nullptr)
 {
     if (on)
@@ -473,6 +461,62 @@ static int firstCostume(uint8_t *rdram, int col)
         if (costumeOpen(rdram, col, c)) return c;
     return 0;
 }
+static int monsterOfCol(uint8_t *rdram, int col)
+{
+    return col >= 1 && col <= 10 ? int(rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(col - 1)) >> 5) : 0;
+}
+
+// Trajes de uma coluna na selecao: os do disco abertos (state 1 e taken 1, como o isSlotOpen) e depois as skins de mod do monstro
+// (mods/<mod>/skins/, sempre abertas), menos as que outro jogador pronto ja levou (`taken`: pares monstro, traje). `noMods`: so os
+// do disco (eliminacao: traje sempre 0).
+constexpr int kMaxCostumes = 64;
+struct CostumeList
+{
+    int n = 0;
+    int c[kMaxCostumes] = {};
+    int find(int costume) const
+    {
+        for (int i = 0; i < n; ++i)
+            if (c[i] == costume) return i;
+        return -1;
+    }
+};
+// Trajes da coluna: os do disco que o jogo deixa escolher (abertos e nao levados) e as skins de mod do monstro (sempre abertas, repetiveis)
+static CostumeList costumeList(uint8_t *rdram, int col, bool noMods = false)
+{
+    CostumeList l;
+    if (col < 1 || col > 10)   // aleatorio, personalizado
+        return l;
+    for (int c = 0; c < 4; ++c)
+        if (costumeOpen(rdram, col, c)) l.c[l.n++] = c;
+    if (noMods)
+        return l;
+    const int mon = monsterOfCol(rdram, col);
+    for (const wotm::mods::Skin &s : wotm::mods::Registry::get().skins())
+    {
+        if (s.monster != mon || l.n >= kMaxCostumes) continue;
+        l.c[l.n++] = s.index;   // skin de mod: aberta e livre para qualquer numero de jogadores
+    }
+    return l;
+}
+// Nome do traje: "COSTUME n" (os do disco) ou o da skin
+static std::string costumeName(int monster, int costume)
+{
+    if (costume < 4)
+        return "COSTUME " + std::to_string(costume + 1);
+    const wotm::mods::Skin *s = wotm::mods::Registry::get().skinByIndex(monster, costume);
+    std::string n = s ? s->name : "COSTUME " + std::to_string(costume + 1);
+    for (char &ch : n) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+    return n;
+}
+// Traje do disco que da o enquadramento e o modelo de reserva de um traje de mod (o "base" da skin)
+static int baseCostume(int monster, int costume)
+{
+    if (costume < 4)
+        return costume;
+    const wotm::mods::Skin *s = wotm::mods::Registry::get().skinByIndex(monster, costume);
+    return s ? s->base : 0;
+}
 static int stepColumn(uint8_t *rdram, int col, int dir)
 {
     for (int i = 0; i < 10; ++i)
@@ -483,6 +527,29 @@ static int stepColumn(uint8_t *rdram, int col, int dir)
         if (columnOpen(rdram, col)) return col;
     }
     return col;
+}
+// Casa vizinha na barra: as colunas abertas, depois o aleatorio e o personalizado, em laco
+static int stepCell(uint8_t *rdram, int cell, int dir)
+{
+    for (int i = 0; i < kCellCustom; ++i)
+    {
+        cell += dir;
+        if (cell < 1) cell = kCellCustom;
+        if (cell > kCellCustom) cell = 1;
+        if (cell > 10 || columnOpen(rdram, cell)) return cell;
+    }
+    return cell;
+}
+// Monstro aleatorio: uma coluna aberta e um traje da lista dela (skins de mod incluidas; so os do disco com `noMods`)
+static void randomPick(uint8_t *rdram, int &col, int &costume, bool noMods)
+{
+    static std::mt19937 rng(static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+    int open[10], n = 0;
+    for (int c = 1; c <= 10; ++c)
+        if (columnOpen(rdram, c)) open[n++] = c;
+    col = n ? open[rng() % uint32_t(n)] : 1;
+    const CostumeList l = costumeList(rdram, col, noMods);
+    costume = l.n ? l.c[rng() % uint32_t(l.n)] : firstCostume(rdram, col);
 }
 
 static void selectBegin(uint8_t *rdram)
@@ -497,7 +564,7 @@ static void selectBegin(uint8_t *rdram)
     int col = stepColumn(rdram, 0, 1);
     for (int p = 0; p < g_multi; ++p)
     {
-        if (!keep || !columnOpen(rdram, g_pick[p].col) || !costumeOpen(rdram, g_pick[p].col, g_pick[p].costume))
+        if (!keep || !columnOpen(rdram, g_pick[p].col) || costumeList(rdram, g_pick[p].col).find(g_pick[p].costume) < 0)
         {
             g_pick[p].col = col;
             g_pick[p].costume = firstCostume(rdram, col);
@@ -565,21 +632,29 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
         if (e[Left] || e[Right])
         {
-            k.col = stepColumn(rdram, k.col, e[Left] ? -1 : 1);
-            k.costume = firstCostume(rdram, k.col);
+            k.col = stepCell(rdram, k.col, e[Left] ? -1 : 1);
+            k.costume = k.col <= 10 ? firstCostume(rdram, k.col) : 0;
             sound = e[Left] ? 2 : 4;
         }
-        if (e[Up] || e[Down])
+        if (k.col > 10)   // aleatorio (X sorteia monstro e traje e fica pronto) ou personalizado (nada, por enquanto)
         {
-            const int dir = e[Up] ? -1 : 1;
-            for (int i = 0; i < 4; ++i)
+            if (e[Ok] && k.col == kCellRandom)
             {
-                k.costume = (k.costume + dir + 4) % 4;
-                if (costumeOpen(rdram, k.col, k.costume)) break;
+                randomPick(rdram, k.col, k.costume, false);
+                k.ready = true;
+                sound = 8;
             }
+            if (e[Back]) back = true;
+            continue;
+        }
+        const CostumeList list = costumeList(rdram, k.col);
+        if ((e[Up] || e[Down]) && list.n > 0)
+        {
+            const int dir = e[Up] ? -1 : 1, at = list.find(k.costume);
+            k.costume = list.c[at < 0 ? 0 : (at + dir + list.n) % list.n];
             sound = dir < 0 ? 2 : 4;
         }
-        if (e[Ok] && costumeOpen(rdram, k.col, k.costume)) { k.ready = true; sound = 8; }
+        if (e[Ok] && list.find(k.costume) >= 0) { k.ready = true; sound = 8; }
         if (e[Back]) back = true;
     }
     std::memcpy(g_selPrev, now, sizeof g_selPrev);
@@ -604,6 +679,295 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         selectFinish(rdram, ctx, runtime);
 }
 
+// ------------------------------------------------------------------ selecao de 1 e 2 jogadores (telas 3 e 6)
+// A logica e a do jogo (screenCharSelect1P / screenCharSelect2P: modos, CPU, eliminacao, o que acontece ao confirmar); o nativo
+// esconde a tela, mostra os quadros no telao como na selecao de 3 e 4 e cuida do traje: cima/baixo andam por uma lista com os trajes
+// do disco abertos e as skins de mod. O cursor de traje do jogo fica no traje escolhido (0..3) ou, numa skin, no primeiro traje do
+// disco aberto (o "procurador": o jogo confirma por ele); na confirmacao o m_costume do quadro recebe o traje da skin. Esquerda/direita
+// passam, depois da ultima coluna aberta, pelo aleatorio e pelo personalizado (casas so nossas, g_soloExtra). A fileira de retratos
+// do jogo da lugar a barra 2D (drawBar2d, hideStrip) e o telao fica preto com o sheldemo (selectMovie).
+// WOTM_NATSEL=0 volta as telas do jogo.
+static int g_solo = 0;   // 3 ou 6: a tela do jogo que a selecao nativa mostra
+static bool g_soloLeaving = false;
+
+static bool soloEnabled()
+{
+    static const bool on = [] {
+        const char *e = std::getenv("WOTM_NATSEL");
+        return !(e && std::strcmp(e, "0") == 0);
+    }();
+    return on;
+}
+
+// Um quadro da selecao do jogo: onde a tela guarda a coluna, o cursor de traje e o "pronto", e para onde vai a escolha
+struct SoloPanel
+{
+    uint32_t col, cur, done, costumeDst, monsterDst;
+    int pad;        // screenGetInput(pad) que o controla
+    bool ai;        // a CPU do modo 2 (o jogador 1 escolhe por ela)
+    bool waiting;   // CPU antes de o jogador 1 escolher o dele
+};
+static int soloPanels(uint8_t *rdram, SoloPanel out[2], bool &noCostume)
+{
+    using namespace wotm::sym;
+    noCostume = false;
+    if (g_solo == 3)
+    {
+        out[0] = {currentSelection + 4u * 3u, curCostume1_2833, monsterIsSelected_2829, kCostume, kMonsterSel, 1, false, false};
+        return 1;
+    }
+    const uint32_t mode = rd32(rdram, kMode);
+    noCostume = mode == 6;   // eliminacao: o jogo poe o traje 0
+    // currentSelection: a coluna do jogador 1 de cada tela, e a do jogador 2 a partir do indice 22
+    out[0] = {currentSelection + 4u * 6u, curCostume1_2894, playerOneIsDone_2896, kCostume, kMonsterSel, 1, false, false};
+    if (mode == 2)   // 1 jogador e 1 CPU: o controle 1 escolhe a CPU na mesma coluna, depois do dele
+        out[1] = {currentSelection + 4u * 6u, curCostume2_2895, AIplayerIsDone_2898, kCostume + 8u, kMonsterSel + 16u, 1, true,
+                  rd32(rdram, playerOneIsDone_2896) == 0};
+    else
+        out[1] = {currentSelection + 4u * 28u, curCostume2_2895, playerTwoIsDone_2897, kCostume + 4u, kMonsterSel + 4u, 2, false, false};
+    return 2;
+}
+static int colOfMonster(uint8_t *rdram, uint32_t sel)
+{
+    for (int c = 1; c <= 10; ++c)
+        if (monsterOfCol(rdram, c) == int(sel >> 5)) return c;
+    return 0;
+}
+static int g_soloSel[2] = {}, g_soloCol[2] = {-1, -1};   // traje escolhido (0..3 ou skin) e a coluna em que foi escolhido
+static bool g_soloDonePrev[2] = {};
+static uint32_t g_soloTick = 0;
+// Casa extra em que o quadro esta (0: a coluna do jogo; kCellRandom, kCellCustom: o cursor do jogo fica parado na coluna de onde saiu)
+static int g_soloExtra[2] = {};
+// Codigo do screenGetInput ja decidido neste quadro, por controle (a tela 3 le o controle duas vezes por quadro)
+static uint32_t g_soloCodeTick[3] = {}, g_soloCodeIn[3] = {}, g_soloCodeOut[3] = {};
+
+static void soloBegin(int screen)
+{
+    g_solo = screen;
+    g_soloLeaving = false;
+    for (int i = 0; i < 2; ++i)
+    {
+        g_soloCol[i] = -1;
+        g_soloDonePrev[i] = false;
+        g_soloExtra[i] = 0;
+    }
+    std::fprintf(stderr, "[padsel] selecao nativa da tela %d\n", screen);
+}
+
+// Saida da funcao da tela, a cada quadro: acompanha o cursor do jogo e, na confirmacao com uma skin, grava o traje dela
+static void soloSync(uint8_t *rdram)
+{
+    SoloPanel pn[2];
+    bool noCostume;
+    const int n = soloPanels(rdram, pn, noCostume);
+    for (int i = 0; i < n; ++i)
+    {
+        if (pn[i].waiting)
+        {
+            g_soloCol[i] = -1;
+            g_soloDonePrev[i] = false;
+            continue;
+        }
+        const bool done = rd32(rdram, pn[i].done) != 0;
+        const int col = int(rd32(rdram, pn[i].col)), cur = int(rd32(rdram, pn[i].cur));
+        if (!done)
+        {
+            if (col != g_soloCol[i] || noCostume)
+                g_soloSel[i] = cur, g_soloCol[i] = col;
+            else if (g_soloSel[i] < 4 && g_soloSel[i] != cur)   // o jogo mexeu no cursor (troca de coluna, traje que deixou de valer)
+                g_soloSel[i] = cur;
+            else if (g_soloSel[i] >= 4 && costumeList(rdram, col).find(g_soloSel[i]) < 0)
+                g_soloSel[i] = cur;
+        }
+        else if (!g_soloDonePrev[i] && g_soloSel[i] >= 4 && !noCostume && g_soloCol[i] == col)
+        {
+            wr32(rdram, pn[i].costumeDst, uint32_t(g_soloSel[i]));
+            // o jogo marcou o procurador como levado (taken 0); ele continua livre para o outro quadro
+            wr32(rdram, wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4 + cur) * kSlotSize, 1u);
+            const int mon = monsterOfCol(rdram, col);
+            std::fprintf(stderr, "[padsel] %s: %s traje %d (%s)\n", pn[i].ai ? "CPU" : (i ? "jogador 2" : "jogador 1"), kMonsterNames[mon],
+                         g_soloSel[i], costumeName(mon, g_soloSel[i]).c_str());
+        }
+        if (done && !g_soloDonePrev[i])
+            std::fprintf(stderr, "[padsel] pronto (%s): coluna %d, m_monsterSel %s, traje %u\n", pn[i].ai ? "CPU" : (i ? "jogador 2" : "jogador 1"), col,
+                         monsterName(rd32(rdram, pn[i].monsterDst)), rd32(rdram, pn[i].costumeDst));
+        g_soloDonePrev[i] = done;
+    }
+}
+
+// Poe o cursor do jogo do quadro na coluna `col` com o traje `sel` (0..3 ou skin; numa skin, o primeiro traje do disco aberto faz as
+// vezes dela)
+static void soloSetCursor(uint8_t *rdram, const SoloPanel &p, int who, int col, int sel)
+{
+    const CostumeList l = costumeList(rdram, col);
+    wr32(rdram, p.col, uint32_t(col));
+    wr32(rdram, p.cur, uint32_t(sel < 4 ? sel : (l.n ? l.c[0] : firstCostume(rdram, col))));
+    g_soloCol[who] = col;
+    g_soloSel[who] = sel;
+}
+
+// Decide o codigo de um toque no quadro que o controle esta escolhendo:
+//  - cima/baixo (1/2) andam pela lista de trajes (o jogo recebe 0);
+//  - esquerda/direita (3/4) andam pelas colunas do jogo e, depois da ultima aberta, pelo aleatorio e o personalizado (casas nossas:
+//    o cursor do jogo fica parado; ao sair delas o nativo poe o cursor na primeira ou na ultima coluna);
+//  - X (6) no aleatorio sorteia monstro e traje, poe o cursor do jogo neles e deixa o X seguir; no personalizado nao faz nada.
+static uint32_t soloDecide(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int pad, uint32_t code)
+{
+    SoloPanel pn[2];
+    bool noCostume;
+    const int n = soloPanels(rdram, pn, noCostume);
+    int who = -1;
+    for (int i = 0; i < n && who < 0; ++i)
+        if (pn[i].pad == pad && !pn[i].waiting && !rd32(rdram, pn[i].done))
+            who = i;
+    if (who < 0)
+        return code;   // pronto: o jogo so toca o som
+    const SoloPanel &p = pn[who];
+    const int col = int(rd32(rdram, p.col));
+    if (g_soloCol[who] != col)
+        g_soloCol[who] = col, g_soloSel[who] = int(rd32(rdram, p.cur));
+    int &ex = g_soloExtra[who];
+    const int first = stepColumn(rdram, 0, 1), last = stepColumn(rdram, 11, -1);
+    if (code == 3 || code == 4)
+    {
+        const int dir = code == 3 ? -1 : 1, from = ex ? ex : col, to = stepCell(rdram, from, dir);
+        if (to <= 10 && from <= 10 && !(dir > 0 && from == last) && !(dir < 0 && from == first))
+            return code;   // de coluna em coluna: o jogo anda (e toca o som)
+        ex = to > 10 ? to : 0;
+        if (to <= 10)
+            soloSetCursor(rdram, p, who, to, firstCostume(rdram, to));   // volta das casas extras para a primeira ou a ultima coluna
+        sfx(rdram, ctx, runtime, dir < 0 ? 2 : 4);
+        return 0;
+    }
+    if (code == 6)
+    {
+        if (ex == kCellCustom)
+            return 0;
+        if (ex == kCellRandom)
+        {
+            int c, s;
+            randomPick(rdram, c, s, noCostume);
+            ex = 0;
+            soloSetCursor(rdram, p, who, c, s);
+            std::fprintf(stderr, "[padsel] aleatorio: %s traje %d\n", kMonsterNames[monsterOfCol(rdram, c)], s);
+        }
+        return code;
+    }
+    // cima/baixo
+    if (ex || noCostume)
+        return ex ? 0 : code;
+    const CostumeList l = costumeList(rdram, col);
+    if (l.n <= 1)
+        return 0;
+    const int at = l.find(g_soloSel[who]);
+    soloSetCursor(rdram, p, who, col, l.c[at < 0 ? 0 : (at + (code == 1 ? -1 : 1) + l.n) % l.n]);
+    sfx(rdram, ctx, runtime, code == 1 ? 2 : 4);
+    return 0;
+}
+
+// screenGetInput(pad) nas telas 3 e 6 (a tela 3 le o controle duas vezes por quadro: a segunda leitura recebe a mesma decisao)
+static uint32_t soloInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int pad, uint32_t code)
+{
+    if (code < 1 || code > 6 || code == 5 || pad < 1 || pad > 2)
+        return code;
+    if (g_soloCodeTick[pad] == g_soloTick && g_soloCodeIn[pad] == code)
+        return g_soloCodeOut[pad];
+    const uint32_t out = soloDecide(rdram, ctx, runtime, pad, code);
+    g_soloCodeTick[pad] = g_soloTick;
+    g_soloCodeIn[pad] = code;
+    g_soloCodeOut[pad] = out;
+    return out;
+}
+
+// Traje do quadro p na View (lista da coluna, nome, base)
+static void fillCostume(View &v, int p, const CostumeList &l)
+{
+    const int mon = int(v.selMonster[p] >> 5);
+    v.selCostumes[p] = l.n;
+    v.selModCount[p] = 0;
+    for (int i = 0; i < l.n; ++i)
+        v.selModCount[p] += l.c[i] >= 4;
+    v.selCostumeIdx[p] = l.find(v.selCostume[p]);
+    v.selBase[p] = baseCostume(mon, v.selCostume[p]);
+    std::snprintf(v.selCostumeName[p], sizeof v.selCostumeName[p], "%s", costumeName(mon, v.selCostume[p]).c_str());
+}
+
+static void publishSolo(uint8_t *rdram, View &v)
+{
+    SoloPanel pn[2];
+    bool noCostume;
+    const int n = soloPanels(rdram, pn, noCostume);
+    v.selPlayers = n;
+    v.selNoCostume = noCostume;
+    for (int i = 0; i < n; ++i)
+    {
+        const bool done = !pn[i].waiting && rd32(rdram, pn[i].done) != 0;
+        v.selReady[i] = done;
+        v.selWaiting[i] = pn[i].waiting;
+        v.selColor[i] = pn[i].ai ? -1 : i;
+        std::snprintf(v.selLabel[i], sizeof v.selLabel[i], "%s", pn[i].ai ? "CPU" : i ? "P2" : "P1");
+        int col;
+        if (done)
+        {
+            v.selMonster[i] = rd32(rdram, pn[i].monsterDst);
+            v.selCostume[i] = int(rd32(rdram, pn[i].costumeDst));
+            col = colOfMonster(rdram, v.selMonster[i]);
+        }
+        else
+        {
+            col = int(rd32(rdram, pn[i].col));
+            v.selMonster[i] = col >= 1 && col <= 10 ? rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(col - 1)) : 0u;
+            v.selCostume[i] = g_soloCol[i] == col ? g_soloSel[i] : int(rd32(rdram, pn[i].cur));
+        }
+        v.selCell[i] = done ? col : g_soloExtra[i] ? g_soloExtra[i] : col;
+        if (pn[i].waiting || v.selCell[i] > 10)
+        {
+            v.selMonster[i] = 0;
+            col = 0;   // lista vazia
+        }
+        fillCostume(v, i, costumeList(rdram, col, noCostume));
+    }
+}
+
+static void publish(uint8_t *rdram)
+{
+    std::lock_guard<std::mutex> lk(g_m);
+    View &v = g_view;
+    v.on = g_phase != Off;
+    v.select = g_selOn || g_solo;
+    v.alpha = std::min(1.f, std::max(0.f, g_uiAlpha));
+    v.count = 0;
+    for (int d = 0; d < kDevs; ++d)
+    {
+        v.present[d] = present(d);
+        v.slot[d] = g_slot[d];
+        v.count += v.present[d];
+    }
+    v.players = distinctPlayers(nullptr);
+    v.screenObj = rd32(rdram, kMovieScreen) & 0x1FFFFFFFu;
+    v.selPlayers = g_selOn ? g_multi : 0;
+    v.selNoCostume = false;
+    for (int c = 1; c <= 10; ++c)
+    {
+        v.barMon[c - 1] = monsterOfCol(rdram, c);
+        v.barOpen[c - 1] = columnOpen(rdram, c);
+    }
+    for (int p = 0; p < v.selPlayers; ++p)
+    {
+        const int col = g_pick[p].col;
+        v.selCell[p] = col;
+        v.selMonster[p] = col <= 10 ? rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(col - 1)) : 0u;
+        v.selCostume[p] = g_pick[p].costume;
+        v.selReady[p] = g_pick[p].ready;
+        v.selWaiting[p] = false;
+        v.selColor[p] = p;
+        std::snprintf(v.selLabel[p], sizeof v.selLabel[p], "P%d", p + 1);
+        fillCostume(v, p, costumeList(rdram, g_pick[p].col));
+    }
+    if (g_solo && !g_selOn)
+        publishSolo(rdram, v);
+}
+
 // ------------------------------------------------------------------ ganchos
 
 // Tela escondida pela escolha em curso (5: controles; 6: selecao de monstros), ou -1
@@ -613,12 +977,14 @@ static int hiddenScreen()
         return 5;
     if (g_selOn)
         return 6;
+    if (g_solo)
+        return g_solo;
     return -1;
 }
 
-static void hideSelect2P(uint8_t *rdram)
+static void hideSelect2P(uint8_t *rdram, int screen = 6)
 {
-    setItemsAlpha(rdram, 6, 0.f);
+    setItemsAlpha(rdram, screen, 0.f);
     for (uint32_t i = 0; i < 2; ++i)   // m_costumeBoxCs, m_costumeBoxCs2: drawMe (+0xC)
         if (const uint32_t cs = rd32(rdram, kCostumeBox + 4 * i) & 0x1FFFFFFFu; cs >= 0x1000u)
             rdram[cs + 0xC] = 0;
@@ -650,6 +1016,9 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         // de volta a tela 6 (do "first to" ou da selecao de fase): uma selecao anterior que ainda constava como saindo recomeca
         if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 6 && g_multi && (!g_selOn || g_selLeaving))
             selectBegin(rdram);
+        // telas 3 e 6 de 1 e 2 jogadores: a selecao do jogo vista no telao
+        if (rd32(rdram, wotm::sym::screenFirstPass) && (cur == 3 || (cur == 6 && !g_multi)) && soloEnabled() && (g_solo != cur || g_soloLeaving))
+            soloBegin(cur);
         g_transRa = GPR_U32(ctx, 31);
         g_transPending = true;
     }
@@ -661,17 +1030,20 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     if (hidden >= 0)
     {
         // entrando: so na fase de fade-in (antes disso o alfa e o resto da tela anterior); saindo: o fade-out da tela
-        const bool entering = (hidden == 5 && g_phase == Config) || (hidden == 6 && !g_selLeaving);
+        const bool entering = (hidden == 5 && g_phase == Config) || (hidden == 6 && g_selOn && !g_selLeaving) ||
+                              (g_solo && !g_selOn && hidden == g_solo && !g_soloLeaving);
         const bool fading = entering ? rd32(rdram, wotm::sym::fadingIn_2979) != 0 : rd32(rdram, wotm::sym::fadingOut_2980) != 0;
         const bool ended = rd32(rdram, wotm::sym::betweenScreens) == 0;
         g_uiAlpha = fading ? std::min(1.f, std::max(0.f, itemsAlpha(rdram, hidden))) : (entering && ended ? 1.f : 0.f);
         setItemsAlpha(rdram, hidden, 0.f);
-        if (hidden == 6)
-            hideSelect2P(rdram);
+        if (hidden == 6 || hidden == 3)
+            hideSelect2P(rdram, hidden);
         if (g_phase == Leaving && ended)
             g_phase = Off;
-        if (hidden == 6 && g_selLeaving && ended && rd32(rdram, wotm::sym::currScreen) != 6)
+        if (hidden == 6 && g_selOn && g_selLeaving && ended && rd32(rdram, wotm::sym::currScreen) != 6)
             g_selOn = g_selLeaving = false;
+        if (!g_selOn && g_solo && hidden == g_solo && g_soloLeaving && ended && rd32(rdram, wotm::sym::currScreen) != uint32_t(g_solo))
+            g_solo = 0, g_soloLeaving = false;
     }
     hideTwoPlayerItem(rdram);
     publish(rdram);
@@ -716,6 +1088,8 @@ static void modes2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     publish(rdram);
 }
 
+static void soloExit(uint8_t *rdram);
+
 static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const bool entry = ctx->pc == wotm::fn::screenCharSelect2P__Fv;
@@ -724,10 +1098,11 @@ static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_uiAlpha = 1.f;
         selectStep(rdram, ctx, runtime);
     }
-    if (entry && (g_selOn || g_multi))
+    if (entry && (g_selOn || g_multi || g_solo == 6))
     {
         g_selectRa = GPR_U32(ctx, 31);
         g_selectPending = true;
+        ++g_soloTick;
     }
     g_origSelect2P(rdram, ctx, runtime);
     if (!g_selectPending || ctx->pc != g_selectRa)
@@ -744,6 +1119,38 @@ static void select2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     if (g_selOn)
         hideSelect2P(rdram);
+    else if (g_solo == 6)
+        soloExit(rdram);
+    publish(rdram);
+}
+
+// Saida das telas 3 e 6 com a selecao nativa: segue o jogo, esconde a tela e, se ela trocou de tela, comeca a sair
+static void soloExit(uint8_t *rdram)
+{
+    if (!g_soloLeaving)
+    {
+        g_uiAlpha = rd32(rdram, wotm::sym::betweenScreens) == 0 ? 1.f : g_uiAlpha;
+        soloSync(rdram);
+    }
+    hideSelect2P(rdram, g_solo);
+    if (rd32(rdram, wotm::sym::currScreen) != uint32_t(g_solo))
+        g_soloLeaving = true;
+}
+
+static void select1PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc == wotm::fn::screenCharSelect1P__Fv && g_solo == 3)
+    {
+        g_select1Ra = GPR_U32(ctx, 31);
+        g_select1Pending = true;
+        ++g_soloTick;
+    }
+    g_origSelect1P(rdram, ctx, runtime);
+    if (!g_select1Pending || ctx->pc != g_select1Ra)
+        return;
+    g_select1Pending = false;
+    if (g_solo == 3)
+        soloExit(rdram);
     publish(rdram);
 }
 
@@ -773,7 +1180,27 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             return;
         }
     }
+    // selecao nativa de 1 e 2 jogadores: a que terminou de sair; cima/baixo da que esta na tela
+    if (ctx->pc == wotm::fn::screenGetInput__Fi && g_solo && !g_selOn && g_soloLeaving && cur != uint32_t(g_solo) &&
+        rd32(rdram, wotm::sym::betweenScreens) == 0)
+    {
+        g_solo = 0;
+        g_soloLeaving = false;
+        publish(rdram);
+    }
+    if (ctx->pc == wotm::fn::screenGetInput__Fi && g_solo && !g_selOn && !g_soloLeaving && cur == uint32_t(g_solo))
+    {
+        g_soloInRa = GPR_U32(ctx, 31);
+        g_soloInPad = static_cast<int>(GPR_U32(ctx, 4));
+        g_soloInPending = true;
+    }
     g_origGetInput(rdram, ctx, runtime);
+    if (!g_soloInPending || ctx->pc != g_soloInRa)
+        return;
+    g_soloInPending = false;
+    const uint32_t raw = GPR_U32(ctx, 2), nc = soloInput(rdram, ctx, runtime, g_soloInPad, raw & 0xFFFFu);
+    if (nc != (raw & 0xFFFFu))
+        ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>((raw & ~0xFFFFu) | nc)));
 }
 
 // changeScreen(de, para, sentido, animacao, ...): no multijogador a volta da tela 15 (que iria a 13, as CPUs) vem para a escolha
@@ -1095,26 +1522,45 @@ static bool g_selFxTried = false;
 constexpr int kSelPW = 1800, kSelPH = 1100;   // textura da selecao: o telao inteiro (~1,64:1), visto de frente (frameCamera)
 static RenderTexture2D g_selRt{};
 
+// Chave do cache: monstro | traje << 8 | traje do disco de reserva (o base da skin) << 16
 static const wotm::model::Model *selModel(uint32_t id)
 {
     if (auto it = g_selCache.find(id); it != g_selCache.end())
         return it->second.get();
     static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
     const char *pre = wotm::savepics::monsterFile(id & 0xFF);
+    const uint32_t costume = (id >> 8) & 0xFF, base = (id >> 16) & 3;
     std::unique_ptr<wotm::model::Model> m;
     if (pre)
     {
         m = std::make_unique<wotm::model::Model>();
         const std::string iso = io.cdImage.string();
-        if (m->load(io.cdRoot, iso, pre + std::to_string((id >> 8) & 3)) || m->load(io.cdRoot, iso, std::string(pre) + "0"))
+        // traje de mod: MON/<PREFIXO><n>.* vem de mods/ (ou do traje base, wotm_mods.hpp)
+        if (m->load(io.cdRoot, iso, pre + std::to_string(costume)) || m->load(io.cdRoot, iso, pre + std::to_string(base)) ||
+            m->load(io.cdRoot, iso, std::string(pre) + "0"))
             m->computeFraming(wotm::model::kIdle);   // caixa fixa: a camera nao acompanha o idle
         else
         {
-            std::fprintf(stderr, "[padsel] MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, (id >> 8) & 3);
+            std::fprintf(stderr, "[padsel] MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, costume);
             m.reset();
         }
     }
     return (g_selCache[id] = std::move(m)).get();
+}
+
+// Largura e posicao dos quadros na textura da selecao: lado a lado; um so (1 jogador) no meio, sem ocupar o telao inteiro
+static float selBoxW(int n)
+{
+    const float pad = float(kSelPW) * 0.012f;
+    const float w = (float(kSelPW) - pad * float(n + 1)) / float(n);
+    return n == 1 ? std::min(w, float(kSelPW) * 0.46f) : w;
+}
+static float selBoxX(int n, int p)
+{
+    const float pad = float(kSelPW) * 0.012f, w = selBoxW(n);
+    if (n == 1)
+        return (float(kSelPW) - w) * 0.5f;
+    return pad + float(p) * (w + pad);
 }
 
 // Antes do BeginTextureMode da selecao: o monstro de cada jogador no RenderTexture dele (w x h)
@@ -1131,9 +1577,10 @@ static void renderSelModels(const View &v, int w, int h)
     {
         SelModel &s = g_selModel[p];
         s.ready = false;
-        if (p >= v.selPlayers)
+        if (p >= v.selPlayers || v.selWaiting[p] || (v.selMonster[p] >> 5) == 0)
             continue;
-        const uint32_t id = (v.selMonster[p] >> 5) | uint32_t(v.selCostume[p] & 3) << 8;
+        const uint32_t mon = v.selMonster[p] >> 5;
+        const uint32_t id = mon | uint32_t(v.selCostume[p] & 0xFF) << 8 | uint32_t(v.selBase[p] & 3) << 16;
         if (id != s.id)
         {
             s.id = id;
@@ -1147,7 +1594,7 @@ static void renderSelModels(const View &v, int w, int h)
         if (!mm->pose(wotm::model::kIdle, frame))
             mm->pose(-1, 0.f);
         using D = wotm::savepics::Drawer;
-        const D::Framing fr = D::framingOf(id);
+        const D::Framing fr = D::framingOf(mon | uint32_t(v.selBase[p] & 3) << 8);   // enquadramento do traje do disco
         s.ren.setFx(&g_selFx);
         s.ren.shiftX = fr.shiftX;
         s.ren.shiftY = fr.shiftY;
@@ -1158,32 +1605,49 @@ static void renderSelModels(const View &v, int w, int h)
     }
 }
 
-// Selecao de monstros: um quadro por jogador, lado a lado, no telao inteiro. Cada quadro: o numero do jogador em cima, o monstro 3D,
-// o nome com as setas, os trajes (um ponto por traje aberto) e o "READY".
+// Selecao de monstros: um quadro por jogador (ou CPU), lado a lado, no telao. Cada quadro: o rotulo em cima, o monstro 3D, o nome com
+// as setas, o nome do traje e a faixa de trajes (um segmento por traje; os de mod em dourado; o escolhido mais largo e aceso) e o
+// "READY".
 static void drawSelect(const View &v)
 {
     constexpr float W = kSelPW, H = kSelPH;
     const int n = std::max(1, v.selPlayers);
-    const float pad = W * 0.012f, top = H * 0.02f, bottom = H * 0.88f;
-    const float boxW = (W - pad * float(n + 1)) / float(n), boxH = bottom - top;
-    const Color kName{246, 238, 220, 255};
+    const float top = H * 0.02f, bottom = H * 0.88f;
+    const float boxW = selBoxW(n), boxH = bottom - top;
+    const Color kName{246, 238, 220, 255}, kGold{236, 190, 70, 255}, kCpu{150, 150, 160, 255};
     for (int p = 0; p < v.selPlayers; ++p)
     {
-        const Color c = kPlayerColors[p];
-        const float x = pad + float(p) * (boxW + pad), y = top, cx = x + boxW * 0.5f;
+        const Color c = v.selColor[p] >= 0 ? kPlayerColors[v.selColor[p] % kMaxPlayers] : kCpu;
+        const float x = selBoxX(n, p), y = top, cx = x + boxW * 0.5f;
         const Rectangle box{x, y, boxW, boxH};
         DrawRectangleRounded(box, 0.06f, 8, Color{0, 0, 0, 200});
         DrawRectangleRounded(Rectangle{x, y, boxW, boxH * 0.12f}, 0.4f, 8, Color{c.r, c.g, c.b, 220});
         DrawRectangleRoundedLinesEx(box, 0.06f, 8, v.selReady[p] ? 10.f : 5.f, Color{c.r, c.g, c.b, 240});
-        char label[16];
-        std::snprintf(label, sizeof label, "P%d", p + 1);
-        outlined(label, cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
+        outlined(v.selLabel[p], cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
+        if (v.selWaiting[p])   // CPU do modo 2: o jogador 1 escolhe por ela depois do dele
+        {
+            outlined("?", cx, y + boxH * 0.42f, boxH * 0.30f, boxW * 0.8f, Color{c.r, c.g, c.b, 255});
+            outlined("WAITING", cx, y + boxH * 0.79f, boxH * 0.07f, boxW * 0.8f, kName);
+            continue;
+        }
+        if (v.selCell[p] > 10 && !v.selReady[p])   // aleatorio ou personalizado
+        {
+            const bool rnd = v.selCell[p] == kCellRandom;
+            outlined(rnd ? "?" : "+", cx, y + boxH * 0.42f, boxH * 0.34f, boxW * 0.8f, Color{c.r, c.g, c.b, 255});
+            const float nameY = y + boxH * 0.76f;
+            outlined(rnd ? "RANDOM" : "CUSTOM", cx, nameY, boxH * 0.085f, boxW * 0.72f, kName);
+            outlined("<", x + boxW * 0.08f, nameY, boxH * 0.09f, boxW, c);
+            outlined(">", x + boxW * 0.92f, nameY, boxH * 0.09f, boxW, c);
+            outlined(rnd ? "MONSTER AND COSTUME AT RANDOM" : "COMING SOON", cx, y + boxH * 0.855f, boxH * 0.05f, boxW * 0.86f,
+                     Color{205, 195, 175, 255});
+            continue;
+        }
         // monstro: do topo do quadro ate o nome
         const SelModel &s = g_selModel[p];
         if (s.ready)
         {
             const Texture2D &mt = s.ren.target().texture;
-            const Rectangle dst{x + boxW * 0.03f, y + boxH * 0.13f, boxW * 0.94f, boxH * 0.60f};
+            const Rectangle dst{x + boxW * 0.03f, y + boxH * 0.13f, boxW * 0.94f, boxH * 0.58f};
             rlDrawRenderBatchActive();
             BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);   // cor pre-multiplicada (Renderer)
             DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)}, dst, Vector2{0.f, 0.f}, 0.f, WHITE);
@@ -1191,21 +1655,58 @@ static void drawSelect(const View &v)
             BeginBlendMode(BLEND_CUSTOM_SEPARATE);
         }
         const char *name = monsterName(v.selMonster[p]);
-        const float nameY = y + boxH * 0.79f;
+        const float nameY = y + boxH * (v.selNoCostume ? 0.82f : 0.76f);
         outlined(name, cx, nameY, boxH * 0.085f, boxW * (v.selReady[p] ? 0.94f : 0.72f), kName);
         if (!v.selReady[p])
         {
             outlined("<", x + boxW * 0.08f, nameY, boxH * 0.09f, boxW, c);
             outlined(">", x + boxW * 0.92f, nameY, boxH * 0.09f, boxW, c);
         }
-        // trajes: um ponto por traje aberto, o escolhido cheio
-        const int open = std::max(1, v.selCostumes[p]);
-        const float r = std::min(boxH * 0.018f, boxW * 0.04f), step = r * 3.2f, dotsY = y + boxH * 0.885f;
-        for (int k = 0; k < open; ++k)
+        if (!v.selNoCostume)
         {
-            const Vector2 at{cx + (float(k) - 0.5f * float(open - 1)) * step, dotsY};
-            DrawCircleV(at, r + 3.f, Color{12, 8, 4, 255});
-            DrawCircleV(at, r, k == v.selCostume[p] ? kName : Color{90, 80, 70, 255});
+            // traje: o nome e a faixa (um segmento por traje da lista; os de mod em dourado)
+            const bool mod = v.selCostume[p] >= 4;
+            outlined(v.selCostumeName[p], cx, y + boxH * 0.855f, boxH * 0.05f, boxW * 0.86f, mod ? kGold : Color{205, 195, 175, 255});
+            const int cnt = std::max(1, v.selCostumes[p]);
+            if (cnt > 1 && !v.selReady[p])
+            {
+                // faixa vertical na beira direita do quadro, um segmento por traje de cima para baixo (cima/baixo trocam). Com muitos
+                // trajes os segmentos afinam ate um minimo; dai em diante a faixa mostra uma janela em volta do escolhido, com setas
+                // nas pontas indicando que ha mais. Embaixo, "n/total".
+                const float tx = x + boxW * 0.925f, top = y + boxH * 0.17f, bot = y + boxH * 0.68f, avail = bot - top;
+                const float gap = boxH * 0.007f, want = boxH * 0.045f, minH = boxH * 0.012f, segW = boxW * 0.028f;
+                const int sel = std::max(0, v.selCostumeIdx[p]);
+                int first = 0, shown = cnt;
+                float segH = std::min(want, avail / float(cnt) - gap);
+                const float arrow = boxH * 0.03f;
+                if (segH < minH)
+                {
+                    segH = minH;
+                    shown = std::max(3, int((avail - 2.f * arrow) / (minH + gap)));
+                    first = std::clamp(sel - shown / 2, 0, cnt - shown);
+                }
+                const float used = float(shown) * (segH + gap) - gap;
+                float sy = top + (avail - used) * 0.5f;
+                const Color dim{90, 80, 70, 255}, modDim{120, 96, 40, 255};
+                if (first > 0)
+                    DrawTriangle(Vector2{tx, sy - arrow * 1.1f}, Vector2{tx - arrow * 0.6f, sy - arrow * 0.25f},
+                                 Vector2{tx + arrow * 0.6f, sy - arrow * 0.25f}, kName);
+                for (int k = first; k < first + shown; ++k, sy += segH + gap)
+                {
+                    const bool on = k == sel;
+                    const float w = on ? segW * 1.8f : segW;
+                    const Rectangle seg{tx - w * 0.5f, sy, w, segH};
+                    DrawRectangleRounded(Rectangle{seg.x - 3.f, seg.y - 3.f, seg.width + 6.f, seg.height + 6.f}, 0.5f, 4, Color{12, 8, 4, 255});
+                    const bool modSeg = k >= cnt - v.selModCount[p];   // os de mod vem depois dos do disco na lista
+                    DrawRectangleRounded(seg, 0.5f, 4, on ? (mod ? kGold : kName) : modSeg ? modDim : dim);
+                }
+                if (first + shown < cnt)
+                    DrawTriangle(Vector2{tx - arrow * 0.6f, sy + arrow * 0.25f - gap}, Vector2{tx, sy + arrow * 1.1f - gap},
+                                 Vector2{tx + arrow * 0.6f, sy + arrow * 0.25f - gap}, kName);
+                char num[16];
+                std::snprintf(num, sizeof num, "%d/%d", sel + 1, cnt);
+                outlined(num, tx, bot + boxH * 0.04f, boxH * 0.035f, boxW * 0.12f, Color{205, 195, 175, 255});
+            }
         }
         if (v.selReady[p])
         {
@@ -1221,11 +1722,216 @@ static void drawSelect(const View &v)
     using wotm_legend::bind;
     if (all)
         outlined("GET READY", W * 0.5f, H * 0.94f, H * 0.07f, W * 0.9f, Color{246, 238, 220, 255});
-    wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"},
-                       {bind(st::BUp), bind(st::BDown), "COSTUME"},
-                       {bind(st::BCross), {}, "READY"},
-                       {bind(st::BTriangle), {}, "BACK"}},
-                      v.alpha);
+    if (v.selNoCostume)
+        wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"}, {bind(st::BCross), {}, "READY"}, {bind(st::BTriangle), {}, "BACK"}},
+                          v.alpha);
+    else
+        wotm_legend::post({{bind(st::BLeft), bind(st::BRight), "MONSTER"},
+                           {bind(st::BUp), bind(st::BDown), "COSTUME"},
+                           {bind(st::BCross), {}, "READY"},
+                           {bind(st::BTriangle), {}, "BACK"}},
+                          v.alpha);
+}
+
+// ------------------------------------------------------------------ barra de monstros (2D, acima da faixa preta de baixo)
+// Os retratos das colunas sao os da fileira do jogo (que fica escondida, hideStrip): texturas 64x64 do SHELL/SHELL.RTX (T8H) e do
+// SHELL.TEX (T8), com as paletas CT32 do .RTX (16x16; 8x2 nas silhuetas T4 dos travados). Lidos do disco uma vez, como as fotos da
+// lista de saves (wotm_savepics.hpp). Mapa conferido exportando com o tools/tex.py e no objeto de cada retrato na cena.
+struct PortraitTex
+{
+    int monster;            // tipo (kMonsterNames)
+    uint16_t texId, palTbp; // retrato
+    bool rtx;               // no .RTX (senao no .TEX)
+    uint16_t lockId, lockPal; // silhueta do travado (0: nao tem)
+};
+constexpr PortraitTex kPortraits[] = {
+    {1, 67, 201, true, 0, 0},     // Congar
+    {2, 64, 189, true, 0, 0},     // Robo-47
+    {3, 65, 193, true, 0, 0},     // Togera
+    {4, 68, 205, false, 0, 0},    // Ultra-V
+    {5, 66, 197, true, 0, 0},     // Preytor
+    {7, 61, 177, false, 0, 0},    // Kineticlops
+    {8, 63, 185, true, 0, 0},     // Magmo
+    {9, 59, 172, true, 60, 176},  // Raptros
+    {10, 62, 181, true, 0, 0},    // Agamo
+    {11, 57, 167, true, 58, 171}, // Zorgulon
+};
+static Texture2D g_portrait[17]{}, g_portraitLock[17]{};
+static bool g_portraitsTried = false;
+
+// Uma textura 64x64 paletizada (T8/T8H com CLUT 16x16 em CSM1, T4HL/T4HH com CLUT 8x2) de cima para baixo (no arquivo as linhas estao
+// de baixo para cima)
+static Texture2D decodePortrait(const std::vector<uint8_t> &file, const std::vector<wotm::savepics::detail::Packet> &pk,
+                                const std::vector<uint8_t> &rtx, const std::vector<wotm::savepics::detail::Packet> &rtxPk, uint16_t texId,
+                                uint16_t palTbp)
+{
+    const wotm::savepics::detail::Packet *p = nullptr, *pal = nullptr;
+    for (const auto &k : pk)
+        if (k.texId == texId && k.psm != 0) p = &k;
+    for (const auto &k : rtxPk)
+        if (k.tbp == palTbp && k.psm == 0) pal = &k;
+    if (!p || !pal)
+        return Texture2D{};
+    const bool t8 = p->psm == 0x13 || p->psm == 0x1B, t4 = p->psm == 0x14 || p->psm == 0x24 || p->psm == 0x2C;
+    const uint32_t np = pal->w * pal->h, w = p->w, h = p->h;
+    const size_t data = p->off + 0x80, need = t8 ? size_t(w) * h : size_t(w) * h / 2;
+    if ((!t8 && !t4) || data + need > file.size() || pal->off + 0x10 + 4 * size_t(np) > rtx.size())
+        return Texture2D{};
+    std::vector<uint32_t> clut(np), px(size_t(w) * h);
+    for (uint32_t i = 0; i < np; ++i)
+    {
+        const uint32_t j = (np >= 256) ? ((i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)) : i;   // CSM1: bits 3 e 4 trocados
+        uint32_t c;
+        std::memcpy(&c, rtx.data() + pal->off + 0x10 + 4 * j, 4);
+        const uint32_t a = c >> 24;
+        clut[i] = (c & 0xFFFFFFu) | (a >= 0x80 ? 255u : a * 2u) << 24;
+    }
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x)
+        {
+            const size_t i = size_t(y) * w + x;
+            uint32_t k = t8 ? file[data + i] : ((i & 1) ? file[data + i / 2] >> 4 : file[data + i / 2] & 15);
+            px[size_t(h - 1 - y) * w + x] = k < np ? clut[k] : 0u;
+        }
+    Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    Texture2D t = LoadTextureFromImage(img);
+    SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+    SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
+    return t;
+}
+
+static void loadPortraits()
+{
+    if (g_portraitsTried)
+        return;
+    g_portraitsTried = true;
+    namespace sd = wotm::savepics::detail;
+    static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    const std::string iso = io.cdImage.string();
+    std::vector<uint8_t> tex, rtx;
+    if (!wotm::disc::readFile(io.cdRoot, iso, "SHELL/SHELL.TEX", tex) || !wotm::disc::readFile(io.cdRoot, iso, "SHELL/SHELL.RTX", rtx) ||
+        !sd::unzipIe(tex) || !sd::unzipIe(rtx))
+    {
+        std::fprintf(stderr, "[padsel] barra de monstros: SHELL/SHELL.TEX ou .RTX nao achado; sem retratos\n");
+        return;
+    }
+    const std::vector<sd::Packet> texPk = sd::packets(tex), rtxPk = sd::packets(rtx);
+    int n = 0;
+    for (const PortraitTex &p : kPortraits)
+    {
+        g_portrait[p.monster] = p.rtx ? decodePortrait(rtx, rtxPk, rtx, rtxPk, p.texId, p.palTbp) : decodePortrait(tex, texPk, rtx, rtxPk, p.texId, p.palTbp);
+        n += g_portrait[p.monster].id != 0;
+        if (p.lockId)
+            g_portraitLock[p.monster] = decodePortrait(rtx, rtxPk, rtx, rtxPk, p.lockId, p.lockPal);
+    }
+    std::fprintf(stderr, "[padsel] barra de monstros: %d de %zu retratos\n", n, std::size(kPortraits));
+}
+
+// A barra: as 10 colunas da selecao (retrato; silhueta se travada), o aleatorio (?) e o personalizado, de lado a lado da janela, logo
+// acima da faixa preta de baixo do menu (24 de 224 linhas). A casa de cada jogador fica com a moldura na cor dele e a etiqueta (P1, P2,
+// CPU) em cima; pronto, a etiqueta fica cheia. Depois da cena e do texto do jogo, antes da legenda (wotm_live.inc).
+static void drawBar2d(int RW, int RH)
+{
+    View v;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        v = g_view;
+    }
+    if (!v.select || v.alpha <= 0.f)
+        return;
+    loadPortraits();
+    const float W = float(RW), H = float(RH), band = H * 24.f / 224.f;
+    const float barH = H * 0.15f, barY = H - band - barH;
+    const unsigned char A = static_cast<unsigned char>(255.f * std::clamp(v.alpha, 0.f, 1.f));
+    auto fade = [&](Color c) { return Color{c.r, c.g, c.b, static_cast<unsigned char>(c.a * A / 255)}; };
+    DrawRectangleGradientV(0, int(barY), RW, int(barH), fade(Color{0, 0, 0, 120}), fade(Color{0, 0, 0, 230}));
+    DrawRectangle(0, int(barY), RW, std::max(2, int(H * 0.003f)), fade(Color{150, 110, 60, 200}));
+    constexpr int kCells = 12;
+    float cell = barH * 0.70f, gap = cell * 0.12f, extraGap = cell * 0.35f;
+    float total = kCells * cell + (kCells - 1) * gap + extraGap;
+    if (total > W * 0.96f)
+    {
+        const float k = W * 0.96f / total;
+        cell *= k; gap *= k; extraGap *= k; total *= k;
+    }
+    const float x0 = (W - total) * 0.5f, cy = barY + barH * 0.56f, top = cy - cell * 0.5f;
+    auto cellX = [&](int c) { return x0 + float(c - 1) * (cell + gap) + (c > 10 ? extraGap : 0.f); };   // c 1..12
+    const Color kName{246, 238, 220, 255}, kCpu{150, 150, 160, 255};
+    // quem esta em cada casa
+    for (int c = 1; c <= kCells; ++c)
+    {
+        const float x = cellX(c);
+        const Rectangle r{x, top, cell, cell};
+        bool here = false;
+        for (int p = 0; p < v.selPlayers; ++p)
+            here = here || (!v.selWaiting[p] && v.selCell[p] == c);
+        DrawRectangleRec(Rectangle{r.x - 2.f, r.y - 2.f, r.width + 4.f, r.height + 4.f}, fade(Color{10, 6, 2, 255}));
+        if (c <= 10)
+        {
+            const int mon = v.barMon[c - 1];
+            const bool open = v.barOpen[c - 1];
+            const Texture2D &t = open || !g_portraitLock[mon].id ? g_portrait[mon] : g_portraitLock[mon];
+            if (t.id)
+                DrawTexturePro(t, Rectangle{0.f, 0.f, float(t.width), float(t.height)}, r, Vector2{0.f, 0.f}, 0.f,
+                               fade(!open ? Color{70, 60, 60, 255} : here ? WHITE : Color{150, 140, 130, 255}));
+            else
+                outlined(open ? kMonsterNames[mon] : "?", r.x + cell * 0.5f, cy, cell * 0.2f, cell * 0.9f, kName, v.alpha);
+        }
+        else
+        {
+            DrawRectangleGradientV(int(r.x), int(r.y), int(r.width), int(r.height), fade(Color{60, 40, 28, 255}), fade(Color{24, 14, 8, 255}));
+            const Color txt = here ? kName : Color{170, 150, 120, 255};
+            if (c == kCellRandom)
+                outlined("?", r.x + cell * 0.5f, cy, cell * 0.75f, cell * 0.8f, txt, v.alpha);
+            else
+            {
+                outlined("+", r.x + cell * 0.5f, cy - cell * 0.12f, cell * 0.5f, cell * 0.8f, txt, v.alpha);
+                outlined("CUSTOM", r.x + cell * 0.5f, cy + cell * 0.3f, cell * 0.2f, cell * 0.9f, txt, v.alpha);
+            }
+        }
+    }
+    // molduras e etiquetas dos jogadores (varios na mesma casa: molduras de fora para dentro, etiquetas lado a lado)
+    int stack[kCells + 1] = {};
+    for (int p = 0; p < v.selPlayers; ++p)
+    {
+        const int c = v.selCell[p];
+        if (v.selWaiting[p] || c < 1 || c > kCells)
+            continue;
+        const int k = stack[c]++;
+        const Color col = v.selColor[p] >= 0 ? kPlayerColors[v.selColor[p] % kMaxPlayers] : kCpu;
+        const float x = cellX(c), o = 3.f + float(k) * cell * 0.06f;
+        DrawRectangleLinesEx(Rectangle{x - o, top - o, cell + 2.f * o, cell + 2.f * o}, std::max(3.f, cell * 0.05f), fade(col));
+        const float tw = cell * 0.46f, th = cell * 0.24f, tx = x + float(k) * (tw + 2.f), ty = top - o - th * 0.9f;
+        const Rectangle tag{tx, ty, tw, th};
+        if (v.selReady[p])
+            DrawRectangleRec(tag, fade(col));
+        else
+        {
+            DrawRectangleRec(tag, fade(Color{10, 6, 2, 230}));
+            DrawRectangleLinesEx(tag, 2.f, fade(col));
+        }
+        outlined(v.selLabel[p], tx + tw * 0.5f, ty + th * 0.5f, th * 0.85f, tw * 0.9f, v.selReady[p] ? kName : col, v.alpha);
+    }
+}
+
+// Fileira de retratos do jogo (o painel de baixo da selecao): sai da cena enquanto a selecao nativa esta na tela. Os objetos sao achados
+// pela textura (retratos, molduras e marcas de jogador do SHELL); so durante a selecao, entao nao pega nada de outra tela.
+static void hideStrip(wotm::Scene &scene, const wotm::Ram &ram)
+{
+    auto stripTex = [](uint32_t id) { return id == 54 || (id >= 57 && id <= 68) || (id >= 177 && id <= 185); };
+    auto &items = scene.items;
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [&](const wotm::DrawItem &it) {
+                                   const uint32_t n = it.node & 0x1FFFFFFFu;
+                                   if (!ram.ok(n, 0x60) || (ram.u8(n) & 0x3F) != 0)
+                                       return false;
+                                   const uint32_t ns = std::min<uint32_t>(5, ram.u16(n + 0x5A));   // texId[5] em +0x50 (Scene::objectTexId)
+                                   for (uint32_t s = 0; s < ns; ++s)
+                                       if (stripTex(ram.u16(n + 0x50 + 2 * s)))
+                                           return true;
+                                   return false;
+                               }),
+                items.end());
 }
 
 // Escolha desenhada na textura propria (antes do BeginTextureMode do quadro). `tex0` = atlas da fonte do quadro anterior.
@@ -1253,7 +1959,7 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         }
         const int n = std::max(1, v.selPlayers);
         // o RenderTexture do monstro com ~1,3 x o tamanho dele na textura da selecao
-        renderSelModels(v, int(float(kSelPW) / float(n) * 0.94f * 1.3f), int(float(kSelPH) * 0.86f * 0.60f * 1.3f));
+        renderSelModels(v, int(selBoxW(n) * 0.94f * 1.3f), int(float(kSelPH) * 0.86f * 0.58f * 1.3f));
         BeginTextureMode(g_selRt);
         ClearBackground(Color{0, 0, 0, 0});
         rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
@@ -1428,6 +2134,8 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
     s_last = now;
     const bool want = v.select && v.alpha > 0.f;
     s_t = std::clamp(s_t + (want ? dt : -dt) / 0.45f, 0.f, 1.f);
+    if (v.select || s_t > 0.f)
+        hideStrip(scene, ram);   // a barra nativa (drawBar2d) faz o papel da fileira de retratos (ate a camera voltar)
     Plane pl;
     if (s_t <= 0.f || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
         return;
@@ -1891,6 +2599,32 @@ static bool drawGlyphLabel(wotm::Scene &scene, const wotm::Ram &ram, const Plane
     return true;
 }
 
+// Filme do telao na selecao: a tela 3 encerra o myMovie do jogo (o sheldemo do menu anterior); a selecao nativa toca o mesmo filme na
+// textura do menu (Player::Screen), em laco, e o para na saida se o jogo nao tiver posto outro (myMovie +0x94 = 1: parado para o jogo).
+// Thread da janela.
+static void selectMovie(const wotm::Ram &ram, bool select)
+{
+#ifdef WOTM_HAVE_FMV
+    static bool s_own = false;
+    wotm::fmv::Player &p = wotm::fmv::Player::get();
+    const bool gameStopped = ram.u32(wotm::sym::myMovie + 0x94) != 0;
+    if (select && gameStopped && (!p.active(wotm::fmv::Player::Screen) || p.finished(wotm::fmv::Player::Screen)))
+    {
+        p.start(wotm::fmv::Player::Screen, "mov/sheldemo.pss", false);
+        s_own = true;
+    }
+    else if (!select && s_own)
+    {
+        if (gameStopped)
+            p.stop(wotm::fmv::Player::Screen);
+        s_own = false;
+    }
+#else
+    (void)ram;
+    (void)select;
+#endif
+}
+
 static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam)
 {
     View v;
@@ -1898,6 +2632,7 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         std::lock_guard<std::mutex> lk(g_m);
         v = g_view;
     }
+    selectMovie(ram, v.select);
     // de varios objetos em uso de um item (o texto e o brilho, maior), o de menor altura
     auto textPlane = [&](const uint32_t objs[4], Plane &out) {
         bool got = false;
@@ -1938,6 +2673,18 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
     if (v.select)
     {
         // selecao de monstros: o telao inteiro, visto de frente (frameCamera)
+        // fundo: o telao preto com o filme do menu anterior (sheldemo, preto e branco) por cima, de ponta a ponta
+        {
+            const Texture2D white{rlGetTextureIdDefault(), 1, 1, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            drawOnPlane(pl, white, pl.x0, pl.y1, pl.x1 - pl.x0, pl.y1 - pl.y0, v.alpha, 0.001f * (pl.x1 - pl.x0), nullptr, BLACK);
+            if (scene.movieTexture)
+                if (const unsigned id = scene.movieTexture())
+                {
+                    static const float uvMovie[4] = {0.f, 1.f, 1.f, 0.f};
+                    const Texture2D mv{id, 256, 128, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                    drawOnPlane(pl, mv, pl.x0, pl.y1, pl.x1 - pl.x0, pl.y1 - pl.y0, v.alpha, 0.0015f * (pl.x1 - pl.x0), uvMovie);
+                }
+        }
         if (g_selRt.id == 0)
             return;
         const float fyTop = 0.03f, fyBottom = 0.97f;
@@ -1977,6 +2724,7 @@ void wotmPadSelInstall(PS2Runtime &runtime)
         {wotm::fn::screenTransition__Fb, &g_origTransition, &transitionHook},
         {wotm::fn::screenGameModes2P__Fv, &g_origModes2P, &modes2PHook},
         {wotm::fn::screenCharSelect2P__Fv, &g_origSelect2P, &select2PHook},
+        {wotm::fn::screenCharSelect1P__Fv, &g_origSelect1P, &select1PHook},
         {wotm::fn::screenGetInput__Fi, &g_origGetInput, &getInputHook},
         {wotm::fn::changeScreen__Fiiiib, &g_origChangeScreen, &changeScreenHook},
         {wotm::fn::screenMain__Fv, &g_origMain, &mainHook},

@@ -103,8 +103,10 @@ Uma skin é uma pasta em `mods/<mod>/skins/<pasta>/` com um `skin.json`:
 - O jogo vê cada skin como mais um traje do monstro (`MON/SHOGUN4.*`, `SHOGUN5.*`...; números dados a cada boot, na ordem
   mod/id). Mesmo monstro e id em dois mods: vence o último em ordem alfabética. O log diz o que entrou:
   `[mods] skin ultra-v/roxo ("PURPLE ULTRA V", meu_mod) = traje 4 (SHOGUN4); base 3, 2 png`.
-- Ainda não: escolher a skin pelo menu (por enquanto só `WOTM_MATCH=4:roxo,...`), o save da aventura com skin e as IAs sorteadas
-  (plano em `docs/investigacoes/2026-10-23/skins_mod_plano.md`).
+- No menu (seleção nativa das telas 3 e 6 e de 3 e 4 jogadores): cima/baixo passa pelos trajes do disco e depois pelas skins do
+  monstro, sempre abertas, e mais de um jogador pode escolher a mesma. Pelo `WOTM_MATCH` também (`WOTM_MATCH=4:roxo,...`).
+  O modelo 3D da seleção já mostra os PNGs da skin.
+- Ainda não: o save da aventura com skin e as IAs sorteadas (plano em `docs/investigacoes/2026-10-23/skins_mod_plano.md`).
 
 Conferido em 2026-10-23 (`WOTM_MATCH=4:roxo,4:3,1`, IA): a skin com o PNG recolorido sai verde e o traje 3 ao lado continua roxo;
 skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3. Foto:

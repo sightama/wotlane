@@ -1723,6 +1723,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
         wotm_mainmenu::drawPausePanel2d(RW, RH);   // painel "recompiled options" na pausa da luta (wotm_pausemenu.inc)
+        wotm_padsel::drawBar2d(RW, RH);            // barra de monstros da selecao nativa (acima da faixa preta de baixo)
         {
             // Lista de saves (wotm_save.inc, na thread do EE): o nome do botao de confirmar no dispositivo de agora, para o "press ...
             // again to overwrite", e a legenda de baixo ao carregar (no menu; ao gravar, na fase, a faixa preta cobriria a luta)
