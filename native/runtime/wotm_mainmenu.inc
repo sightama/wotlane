@@ -358,13 +358,18 @@ static void openPanel()
     g_showPreview = true;
     readPanel(g_panelPrev);   // o X que abriu ainda esta apertado: so conta o proximo
 }
-// Sons do painel: os do Shell (2/4 cursor, 6 voltar, 8 ok), no menu e na pausa (decisao do dono). Na luta o banco do Shell
-// (gSoundBanks[14], Shell_s.bnk) pode nao estar na RAM de som: sem ele, sem som (o openPausePanel diz no log qual e o caso)
+// Sons do painel: os do Shell (2/4 cursor, 6 voltar, 8 ok), no menu e na pausa (decisao do dono). Na luta o jogo nao tem o banco do
+// Shell (gSoundBanks[14], Shell_s.bnk): o som nativo carrega uma copia so para o painel (wotm_snd_hooks::panelShellBank)
 constexpr uint32_t kShellBank = wotm::sym::gSoundBanks + 4u * 14u;
 static void panelSfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int id)
 {
     if (g_where == InPause && !rd32(rdram, kShellBank))
+    {
+#ifdef WOTM_HAVE_SND
+        wotm_snd_hooks::playPanelSfx(id);
+#endif
         return;
+    }
     wotm_padsel::sfx(rdram, ctx, runtime, id);
 }
 // X no RECOMPILED OPTIONS da pausa (wotm_pausemenu.inc, saida do checkInputForExit)
@@ -378,7 +383,7 @@ static void openPausePanel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     wotm::mouse::takeClick(wotm::mouse::g_clickL);   // o clique que abriu nao conta no painel
     wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
     std::fprintf(stderr, "[pausa] painel aberto (jogador %u; banco de sons do Shell %s)\n", rd32(rdram, wotm::sym::gPlayerThatPaused) + 1,
-                 rd32(rdram, kShellBank) ? "carregado" : "fora da RAM de som: painel sem som");
+                 rd32(rdram, kShellBank) ? "do jogo" : "fora da luta: copia do som nativo");
     panelSfx(rdram, ctx, runtime, 8);
 }
 // Espera da tecla (teclado) ou do botao (gamepads) novo do botao do PS2 g_capture: vale a primeira que passar a estar apertada.
