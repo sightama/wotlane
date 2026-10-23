@@ -1260,6 +1260,7 @@ static void waitStartHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
             setManual(false);
         g_multi = 0;
         g_selOn = false;
+        wotm_narrator::announceIntro();   // a camera do titulo acabou de parar (so roda depois da transicao)
     }
     g_origWaitStart(rdram, ctx, runtime);
 }

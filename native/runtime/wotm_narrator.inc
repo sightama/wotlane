@@ -111,6 +111,18 @@ static void play(const char *const *names)
 // Nome do monstro (indice do jogo, m_monsterSel >> 5)
 static void announce(int monster) { play(namesOf(monster)); }
 
+// introsound.mp3 na tela de "press start" (20), uma vez por abertura do jogo: na primeira chamada do screenWaitForStart, que o
+// uiMain so faz quando a transicao termina (animacao da camera e fade, betweenScreens 0). Voltar ao titulo depois nao repete.
+static void announceIntro()
+{
+    static bool done = false;
+    if (done)
+        return;
+    done = true;
+    static const char *const names[] = {"introsound", nullptr};
+    play(names);
+}
+
 // Nome da fase (m_levelNum), na confirmacao da selecao de fase
 static void announceLevel(int level)
 {
