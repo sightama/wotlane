@@ -2990,9 +2990,13 @@ static void selectMovie(const wotm::Ram &ram, bool select)
     static bool s_own = false;
     wotm::fmv::Player &p = wotm::fmv::Player::get();
     const bool gameStopped = ram.u32(wotm::sym::myMovie + 0x94) != 0;
-    if (select && gameStopped && (!p.active(wotm::fmv::Player::Screen) || p.finished(wotm::fmv::Player::Screen)))
+    // enquanto a selecao esta na tela, o End do jogo nao para o filme: ele segue de onde estava (recomecar mostrava de novo o fade
+    // do preto do comeco do sheldemo, um segundo fade-in logo depois do da transicao)
+    p.setHold(wotm::fmv::Player::Screen, select);
+    if (select && gameStopped)
     {
-        p.start(wotm::fmv::Player::Screen, "mov/sheldemo.pss", false);
+        if (!p.active(wotm::fmv::Player::Screen) || p.finished(wotm::fmv::Player::Screen))
+            p.start(wotm::fmv::Player::Screen, "mov/sheldemo.pss", false);   // em laco
         s_own = true;
     }
     else if (!select && s_own)
