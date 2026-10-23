@@ -176,7 +176,7 @@ inline std::string format(Key k, int v)
 // Os gamepads tem um mapa por jogador (kPadPlayers): o gamepad usa o do jogador que ele alimenta (wotm_pad::playerOfPad); o teclado
 // tem um so. No arquivo: KB_<BOTAO>=TECLA[,TECLA], PAD_<BOTAO>=BOTAO (jogador 1) e PAD2_/PAD3_/PAD4_<BOTAO>=BOTAO, com os nomes de
 // kKeyNames/kPadButtonNames. Sem variavel de ambiente.
-// Acoes so do teclado (etapa 8 da camera orbital, investigacoes/2026-10-22/camera_orbital_plano.md): viram botoes do PS2 conforme o
+// Acoes so do teclado (etapa 8 da camera orbital, 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md): viram botoes do PS2 conforme o
 // lock-on alternado (WOTM_LOCKTOGGLE muda quais botoes travam, defendem e andam de lado; wotm_pad.inc, keyboard) ou pedem a troca de
 // alvo direto ao lock-on (wotm_mouse.hpp). Supoem o CONTROL TYPE A (configuracao 0) do jogo.
 enum Bind

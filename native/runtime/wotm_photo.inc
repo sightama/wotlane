@@ -521,7 +521,7 @@ static bool rebuildFlares(wotm::Particles::FlareFrame &fr, const wotm::Ram &ram,
     return true;
 }
 
-// Fogo da cabeca do Agamo (preset 141, IdolHeadFlame: textura Fireball, texInfo 8; mistura aditiva 0x48; fogo_agamo.md) nos emissores
+// Fogo da cabeca do Agamo (preset 141, IdolHeadFlame: textura Fireball, texInfo 8; mistura aditiva 0x48; 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md) nos emissores
 // percorridos que nao tem um sistema com particulas vivas perto: simulado 30 fields com o emissor parado (comeca aquecido, como no jogo
 // ja rodando) e congelado durante a sessao
 static void synthFire(wotm::Scene &scene, const wotm::Ram &ram)

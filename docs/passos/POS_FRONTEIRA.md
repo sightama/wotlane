@@ -13,7 +13,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 4 | Pasta `mods/` que sobrepõe arquivos do disco — **feito em 2026-10-22** (gancho, kit e PNG direto; guia em `MODS.md`) | — | baixo/médio |
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
-| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
+| 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
@@ -278,9 +278,18 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   os prédios "fantasma" por linha de visada), transições com cinema e agarrão, e a câmera de cada vista na tela dividida.
 - `Cameras::Update` (tabela `_6Camera$UPDATE_FUNK`) ainda está só em asm; câmera já é superfície de decomp do port. A câmera livre de
   debug (F5, `wotm_freecam.h`/`.inc`) tem a convenção de eixos pronta.
-- **Feito (2026-10-22), plano, decisões do dono e pendências:** `investigacoes/2026-10-22/camera_orbital_plano.md`: padrão
+- **Feito (2026-10-22), plano e decisões do dono:** `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`: padrão
   moderna, lock-on enquadra os dois, recentralizar devagar com opção, mouse gira a câmera (pede teclado padrão novo e menus com mouse,
   etapas 7 a 9).
+- **Pendências (vieram do plano, apagado em 2026-10-23):**
+  - Escalada, rampa e planeio: sem o balanço do jogo (segundo teste da etapa 1), a câmera moderna não aproxima nem inclina ao escalar
+    ou na rampa. Ninguém conferiu ainda; o medidor de salto do `WOTM_ORBITLOG` ajuda quando o dono notar algo.
+  - Aba CAMERA (etapa 6): conferida só por roteiro.
+  - Páginas do cartão com `WOTM_SAVEAUTO=0`: sem mouse (o gancho do `McPage::updateMenuPos` só é instalado com o salvamento
+    automático, onde a única página com menu é o "salvar?" da aventura).
+  - Legenda da lista de saves ao gravar (na fase): de fora de propósito, porque a faixa preta de baixo cobriria a luta; só ao carregar.
+  - Jogadores 3 e 4: leem o esquema de controle do `m_vibration`; sem a linha CONTROL SCHEME na pausa ninguém muda mais esse valor,
+    mas a leitura continua vindo dali.
 
 ### 8. Mods que adicionam skins e monstros
 - Trajes em `m_costume` (o `[2 + j]` atropela `m_mode` a partir da IA 10), tabela de seleção em `monster_select.h` (grupos de 4 por
@@ -412,7 +421,7 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
   6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **feito e conferido ao vivo pelo dono em 2026-10-23** (na master, branch
      `painel-pausa`). Investigação encerrada. Plano e decisões em
-     `investigacoes/2026-10-23/painel_na_pausa.md`; o que ficou em `NATIVO.md`, "Painel na pausa". Sons: os do menu (decisão do dono),
+     `75f5be1:docs/investigacoes/2026-10-23/painel_na_pausa.md`; o que ficou em `NATIVO.md`, "Painel na pausa". Sons: os do menu (decisão do dono),
      de uma cópia do banco do Shell carregada pelo som nativo só para o painel. Texto da linha cabendo: caixa da pausa 1,4x mais larga.
 - **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;
   HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.

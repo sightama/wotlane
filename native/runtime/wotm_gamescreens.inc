@@ -5,7 +5,7 @@
 //    dele, projetados com a camera do quadro) e o que esta sob o cursor (View);
 //  - thread do EE (input, saida do screenGetInput(1) da tela, wotm_mainmenu.inc): o codigo que a tela vai tratar. O mouse nunca escreve
 //    as variaveis do jogo (salvo a tela 21, so texto): anda pelos codigos de pad, um passo por quadro, e confere no quadro seguinte.
-// Achados: docs/investigacoes/2026-10-22/mouse_telas_monstro.md, mouse_telas_opcoes.md e mouse_telas_save.md.
+// Achados: 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_monstro.md, 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_opcoes.md e 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md.
 namespace wotm_gamescreens
 {
 using wotm_padsel::rd32;
@@ -18,7 +18,7 @@ static bool handled(uint32_t s) { return s == 0 || s == 1 || s == 2 || s == 4 ||
 
 // Tela 21 (screenUnlocker): so texto 2D, linha i com o topo em y 82 + 11 i (nome em x 230, estado em x 450); cursor em s_2990 (e a
 // copia currentMenuSelection_2985, feita antes do screenGetInput), items_2992 linhas, fade_2991 ate 0x80. Passar por cima escolhe,
-// clique esquerdo compra (o X do jogo, no mesmo quadro). docs/investigacoes/2026-10-22/mouse_telas_save.md
+// clique esquerdo compra (o X do jogo, no mesmo quadro). 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md
 static uint32_t unlocker(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t code, bool moved, bool click)
 {
     if (static_cast<int32_t>(rd32(rdram, wotm::sym::fade_2991)) < 0x80)

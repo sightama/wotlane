@@ -1117,7 +1117,7 @@ namespace wotm_save
     // Saida do McPage::updateMenuPos (a0 = pagina): itens pg+0x21C, escolhido pg+0x224, item i escolhivel se a palavra em
     // pg + 0x14 + 0x24 i nao e 0; centrados em x 320, topo em pg+0x24C + i * pg+0x250 mais o +0x10 da fonte (a do escolhido ou a dos
     // outros), altura = +0x04 da fonte / 16. Passar por cima escolhe, clique escreve o X do McPageMgr (+0x1168, lido pelo
-    // checkForSelection do mesmo quadro). docs/investigacoes/2026-10-22/mouse_telas_save.md, secao 4
+    // checkForSelection do mesmo quadro). 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md, secao 4
     PS2Runtime::RecompiledFunction g_origMenuPos = nullptr;
     uint32_t g_menuPosRa = 0, g_menuPosPage = 0;
     bool g_menuPosPending = false;

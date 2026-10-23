@@ -1,4 +1,4 @@
-// wotm_mouse.hpp: mouse na camera moderna (etapa 7 da camera orbital, investigacoes/2026-10-22/camera_orbital_plano.md). Dois lados:
+// wotm_mouse.hpp: mouse na camera moderna (etapa 7 da camera orbital, 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md). Dois lados:
 //  - janela (wotm_live.inc, a cada apresentacao): diz qual jogador o teclado alimenta, prende o cursor enquanto a orbita desse
 //    jogador esta dirigindo (e a janela tem o foco) e acumula o deslocamento do mouse;
 //  - thread do EE (wotm_orbit.inc, depois do Cameras::Update): consome o acumulado na orbita do jogador do teclado e avisa, a cada

@@ -16,7 +16,7 @@ Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe d
 - `RUNTIME.md`: runtime recompilado no Windows (build, `PS2X_*`, teclado, endereços úteis). `FRONTEIRA.md`: o que do PS2 o port deixou de emular.
 - `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (pegadinhas do gcc 2.95 e do build NM), `ESPINHA.md` (fluxo do jogo), `TESTE_PCSX2.md` (halfcpp no PCSX2).
 - `MODS.md` (pasta `mods/`, texturas em PNG, `tools/modkit.py`), `MODELOS_3D.md` (monstro animado direto do disco), `VIEWER_WEB.md` (ideia de viewer no navegador).
-- Investigações datadas em `docs/investigacoes/<data>/`.
+- Investigações datadas em `docs/investigacoes/<data>/`. Encerrada (implementada e na master) é apagada; o que ficar pendente vai para o `POS_FRONTEIRA.md`, e as referências viram `<commit>:docs/investigacoes/...` (ler com `git show`).
 
 ## Fluxo do port (mudança em `native/`)
 1. Antes de mexer: `tools\corpus.ps1 -Check` guarda a base (`<runtime>\corpus\resumo_<data>.csv`; capture o corpus uma vez com `-Capture`). O que está errado ou faltando vem do inventário (`VU1CHECK.md`, "Inventário do port"), não de lembrança.

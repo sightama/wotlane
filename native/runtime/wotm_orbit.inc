@@ -1,5 +1,5 @@
 // wotm_orbit.inc: camera moderna (orbital), item 7 do POS_FRONTEIRA.md; plano e etapas em
-// docs/investigacoes/2026-10-22/camera_orbital_plano.md. Incluido no wotm_overrides.cpp, que chama daqui os ganchos que ja tem:
+// 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md. Incluido no wotm_overrides.cpp, que chama daqui os ganchos que ja tem:
 //   - Cameras::Update (o embrulho da camera livre): orbitPre antes do original, orbitPost depois;
 //   - PadFlags::interpretInputs (o do lock-on): orbitInputEnter na entrada, orbitInputLeave quando a funcao de fato voltou;
 //   - Camera::shakeCamera: guarda o tremor do quadro, que a orbita soma a posicao dela;
@@ -31,7 +31,7 @@ namespace
         constexpr uint32_t kCameras = wotm::sym::x_7Cameras_m_cameras, kNumCameras = wotm::sym::x_7Cameras_m_numCameras, kCamStride = 0xEB0u,
                            kUnified = wotm::sym::gUseUnifiedView, kGameMode = kGame + 0x1203C8u, kSlots = kGame + 0xB80u,
                            kSlotStride = 0x11190u, kNumSlots = kGame + 0x1203D4u;
-        // Camera (docs/investigacoes/2026-10-22/camera_normalupdate.md)
+        // Camera (75f5be1:docs/investigacoes/2026-10-22/camera_normalupdate.md)
         constexpr uint32_t kCamCs = 0xCF0u, kCamMonster = 0xCF4u, kCamPov = 0xCF8u, kCamOffset = 0xD10u,
                            kCamIdle = 0xDA4u, kCamDrag = 0xDF4u, kCamCut = 0xD98u,
                            kCamSectorLock = 0xE60u;
