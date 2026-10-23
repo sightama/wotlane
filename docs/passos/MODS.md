@@ -5,12 +5,12 @@ repete a árvore do disco e o que estiver lá vale no lugar do arquivo do disco.
 
 ```
 discroot/mods/
-  meu_mod/
+  my_mod/
     MON/lizard0_t0004.png      textura do Togera em PNG (qualquer resolução)
     MON/lizard0_rtx_t0003.png  retrato do Togera no HUD
     VAG/CITYAMB.VPK            música trocada
     SND/LIZARD_S.BNK           banco de sons trocado
-  _trabalho/                   pasta de trabalho do kit (começa com '_': o jogo não lê)
+  _work/                       pasta de trabalho do kit (começa com '_': o jogo não lê)
 ```
 
 Regras do carregador (`native/wotm_mods.hpp`): pasta que começa com `_` ou `.` fica desligada; dois mods com o mesmo arquivo, vence o
@@ -19,14 +19,14 @@ log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[
 
 ## Interface (`tools/modkit_gui.py`, botão "Mod kit" do launcher)
 
-`pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`).
+`pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`). A janela é em inglês.
 
-1. **Escolha no disco** (esquerda): monstros por nome e traje (Togera › Traje 1, e os bancos de som dele), chefes, fases pelo nome do
-   jogo, menu e telas, bancos de som, músicas e falas. Campo de busca; Ctrl/Shift escolhem vários; duplo clique ou "Extrair".
-2. **Edite na pasta de trabalho** (direita): miniaturas, tamanho e estado ("editado" em amarelo = mudou desde a extração). Prévia
-   da imagem (com xadrez atrás do alfa) ou "Tocar" para o som. Duplo clique abre no programa padrão do Windows; "Mostrar na pasta"
-   abre o Explorer no arquivo; "Remover" apaga da pasta de trabalho.
-3. **Mod** (embaixo): nome do mod (os existentes na lista), "Empacotar editados no mod" e "Conferir mods"; o log aparece embaixo.
+1. **Pick from the disc** (esquerda): monstros por nome e traje (Togera › Costume 1, e os bancos de som dele), chefes, fases pelo nome do
+   jogo, menu e telas, bancos de som, músicas e falas. Campo de busca; Ctrl/Shift escolhem vários; duplo clique ou "Extract selected".
+2. **Edit in the work folder** (direita): miniaturas, tamanho e estado ("edited" = mudou desde a extração). Prévia
+   da imagem (com xadrez atrás do alfa) ou "Play" para o som. Duplo clique abre no programa padrão do Windows; "Show in folder"
+   abre o Explorer no arquivo; "Remove" apaga da pasta de trabalho.
+3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods"; o log aparece embaixo.
 
 As pastas (disco e mods) e o último mod ficam em `~/.wotm_modkit.json`. Por baixo são as mesmas funções do `modkit.py` abaixo.
 
@@ -35,14 +35,14 @@ As pastas (disco e mods) e o último mod ficam em `~/.wotm_modkit.json`. Por bai
 ```
 python tools/modkit.py export MON/LIZARD0                 # .TEX e .RTX do Togera em PNG
 python tools/modkit.py export SND/LIZARD_S.BNK VAG/CITYAMB.VPK
-  (edite os arquivos em mods/_trabalho/)
-python tools/modkit.py pack meu_mod                       # leva o que mudou para mods/meu_mod/
+  (edite os arquivos em mods/_work/)
+python tools/modkit.py pack my_mod                        # leva o que mudou para mods/my_mod/
 python tools/modkit.py check                              # confere nomes, tamanhos e texIds de todos os mods
 ```
 
 - Lê o disco extraído do repo (`disc/`, ou `--disc`/`WOTM_DISC`) e grava nos mods do runtime (`.wotm_recomp_dir` + `discroot\mods`,
   ou `--mods`). Curingas valem (`MON/LIZARD*`); sem extensão pega `.TEX` e `.RTX`.
-- O `pack` só leva o que mudou desde o export (sha1 em `_trabalho/modkit.json`). Exportar de novo não sobrescreve o que já foi editado.
+- O `pack` só leva o que mudou desde o export (sha1 em `_work/modkit.json`). Exportar de novo não sobrescreve o que já foi editado.
 
 | No disco | Na pasta de trabalho | O `pack` grava |
 |---|---|---|

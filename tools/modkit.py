@@ -4,12 +4,12 @@ de trabalho e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/
 
   python tools/modkit.py export MON/LIZARD0                  # .TEX e .RTX do Togera em PNG (pasta de trabalho)
   python tools/modkit.py export SND/SHELL_S.BNK VAG/CITYAMB.VPK   # sons do banco e a musica em WAV
-  python tools/modkit.py pack meu_mod                        # o que foi editado vai para mods/meu_mod/
-  python tools/modkit.py check [meu_mod]                     # confere os mods (nomes, tamanhos, texIds)
+  python tools/modkit.py pack my_mod                         # o que foi editado vai para mods/my_mod/
+  python tools/modkit.py check [my_mod]                      # confere os mods (nomes, tamanhos, texIds)
   python tools/modkit_gui.py                                 # o mesmo com interface (botao "Mod kit" do launcher)
 
 Opcoes: --disc <pasta> (disco extraido; padrao WOTM_DISC ou disc/ do repo), --mods <pasta> (padrao: <runtime>/discroot/mods, o
-runtime de .wotm_recomp_dir; sem ele, <disco>/mods), --work <pasta> (padrao: <mods>/_trabalho; pasta com '_' o jogo nao le).
+runtime de .wotm_recomp_dir; sem ele, <disco>/mods), --work <pasta> (padrao: <mods>/_work; pasta com '_' o jogo nao le).
 Arquivos do export podem ter curinga (MON/LIZARD*) e sem extensao pegam .TEX e .RTX.
 
 O que cada tipo vira:
@@ -105,7 +105,7 @@ def expand(disc, pats):
                 if fnmatch.fnmatch(n.upper(), base.upper()):
                     out.append((d + "/" if d else "") + n)
     if not out:
-        raise SystemExit("nada achado no disco (%s) para %s" % (disc, " ".join(pats)))
+        raise SystemExit("nothing found on the disc (%s) for %s" % (disc, " ".join(pats)))
     return list(dict.fromkeys(out))
 
 
@@ -125,13 +125,13 @@ def export(disc, work, pats):
             with contextlib.redirect_stdout(io.StringIO()):   # o tex.py fala da pasta temporaria
                 man = tex.cmd_export(src, out)
             n = sum(1 for e in man["textures"] if "png" in e)
-            print("%s -> %d textura(s) em PNG (%s)" % (rel, n, (os.path.splitext(os.path.basename(rel))[0].lower() +
+            print("%s -> %d texture(s) as PNG (%s)" % (rel, n, (os.path.splitext(os.path.basename(rel))[0].lower() +
                                                                  ("_rtx" if ext == ".RTX" else "") + "_tNNNN.png")))
         elif ext in (".VPK", ".VAG"):
             rate, chans = snd989.read_vpk(src)
             name = os.path.splitext(os.path.basename(rel))[0].lower() + ".wav"
             snd989.write_wav(os.path.join(out, name), rate, chans)
-            print("%s -> %s (%d Hz, %d canais)" % (rel, name, rate, len(chans)))
+            print("%s -> %s (%d Hz, %d channels)" % (rel, name, rate, len(chans)))
         elif ext == ".BNK":
             b = snd989.read_bnk(src)
             stem = os.path.splitext(os.path.basename(rel))[0].lower()
@@ -144,9 +144,9 @@ def export(disc, work, pats):
                 rate = round(snd989.tone_rate(tones[0]["note"], tones[0]["fine"]))
                 snd989.write_wav(os.path.join(out, "%s_s%03d.wav" % (stem, i)), rate, chans)
                 n += 1
-            print("%s -> %d sons em WAV (%s_sNNN.wav)" % (rel, n, stem))
+            print("%s -> %d sounds as WAV (%s_sNNN.wav)" % (rel, n, stem))
         else:
-            print("%s: tipo sem conversor; copiado como esta" % rel)
+            print("%s: no converter for this type; copied as is" % rel)
             shutil.copy2(src, os.path.join(out, os.path.basename(rel)))
         os.makedirs(final, exist_ok=True)
         kept = 0
@@ -162,9 +162,9 @@ def export(disc, work, pats):
                 state["files"].setdefault(key, {})["sha1"] = sha1(q)
         shutil.rmtree(out, ignore_errors=True)
         if kept:
-            print("  %d arquivo(s) ja editado(s) na pasta de trabalho ficaram como estavam" % kept)
+            print("  %d file(s) already edited in the work folder were kept" % kept)
         save_state(work, state)
-    print("pasta de trabalho: %s (edite la e empacote no mod: modkit.py pack <mod>, ou o botao Empacotar)" % work)
+    print("work folder: %s (edit there, then pack into a mod: modkit.py pack <mod>, or the Pack button)" % work)
 
 
 def load_state(work):
@@ -199,7 +199,7 @@ def pack(disc, work, mods, mod, inject=False):
                 continue
             changed.append(rel)
     if not changed:
-        print("nada mudou em %s desde o export" % work)
+        print("nothing changed in %s since the export" % work)
         return
     banks = {}
     for rel in sorted(changed):
@@ -210,7 +210,7 @@ def pack(disc, work, mods, mod, inject=False):
             stem, rtx, tid = m.group(1), bool(m.group(2)), int(m.group(3))
             os.makedirs(os.path.join(dst, *d.split("/")) if d else dst, exist_ok=True)
             shutil.copy2(p, os.path.join(dst, *rel.split("/")))
-            print("textura %s -> %s/%s" % (n, mod, rel))
+            print("texture %s -> %s/%s" % (n, mod, rel))
             if inject:
                 inject_png(disc, dst, stem, rtx, tid, p)
             continue
@@ -234,15 +234,15 @@ def pack(disc, work, mods, mod, inject=False):
                         snd989.write_vpk(out, orate, chans, vols)
                     else:
                         snd989.write_vag(out, rate, snd989.to_channels(chans, 1)[0])
-                    print("som %s -> %s/%s" % (n, mod, os.path.relpath(out, dst).replace("\\", "/")))
+                    print("sound %s -> %s/%s" % (n, mod, os.path.relpath(out, dst).replace("\\", "/")))
                     break
             else:
-                print("AVISO: %s nao corresponde a nenhum .VPK/.VAG/.BNK do disco; ignorado" % rel)
+                print("WARNING: %s does not match any .VPK/.VAG/.BNK on the disc; skipped" % rel)
             continue
         out = os.path.join(dst, *rel.split("/"))
         os.makedirs(os.path.dirname(out), exist_ok=True)
         shutil.copy2(p, out)
-        print("arquivo %s -> %s/%s (como esta)" % (rel, mod, rel))
+        print("file %s -> %s/%s (as is)" % (rel, mod, rel))
     for (d, stem), sounds in sorted(banks.items()):
         src = find_disc_ext(disc, d, stem, ".BNK")
         out = os.path.join(dst, *d.split("/"), stem.upper() + ".BNK")
@@ -253,8 +253,8 @@ def pack(disc, work, mods, mod, inject=False):
             snd989.bnk_replace(cur, i, wav, tmp)
             os.replace(tmp, out)
             cur = out
-        print("banco %s.BNK: %d som(ns) trocado(s) -> %s" % (stem.upper(), len(sounds), os.path.relpath(out, mods)))
-    print("mod em %s" % dst)
+        print("bank %s.BNK: %d sound(s) replaced -> %s" % (stem.upper(), len(sounds), os.path.relpath(out, mods)))
+    print("mod in %s" % dst)
 
 
 def find_disc_ext(disc, d, stem, ext):
@@ -266,14 +266,14 @@ def inject_png(disc, dst, stem, rtx, tid, png):
     ext = ".RTX" if rtx else ".TEX"
     rel = find_texfile(disc, stem, ext)
     if not rel:
-        print("  --inject: %s%s nao achado no disco" % (stem, ext))
+        print("  --inject: %s%s not found on the disc" % (stem, ext))
         return
     out = os.path.join(dst, *rel.split("/"))
     src = out if os.path.exists(out) else disc_file(disc, rel)
     w, h, _ = tex.read_image(png)
     pk = next((p for p in tex.parse(tex.read_file(src)[0])["packets"] if p.texId == tid), None)
     if pk is None or (w, h) != (pk.w, pk.h):
-        print("  --inject: %s pulado (precisa de %dx%d, mesmo tamanho da original)" % (os.path.basename(png), pk.w if pk else 0,
+        print("  --inject: %s skipped (needs %dx%d, the original size)" % (os.path.basename(png), pk.w if pk else 0,
                                                                                          pk.h if pk else 0))
         return
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -287,7 +287,7 @@ def inject_png(disc, dst, stem, rtx, tid, png):
 
 def check(disc, mods, only=None):
     if not os.path.isdir(mods):
-        raise SystemExit("sem pasta de mods em %s" % mods)
+        raise SystemExit("no mods folder at %s" % mods)
     names = sorted(n for n in os.listdir(mods) if os.path.isdir(os.path.join(mods, n)))
     seen = {}
     problems = 0
@@ -295,7 +295,7 @@ def check(disc, mods, only=None):
         if only and mod != only:
             continue
         off = mod[0] in "_."
-        print("%s%s" % (mod, " (desligado: comeca com '_' ou '.')" if off else ""))
+        print("%s%s" % (mod, " (disabled: starts with '_' or '.')" if off else ""))
         if off and not only:
             continue
         for root, _dirs, files in os.walk(os.path.join(mods, mod)):
@@ -309,18 +309,18 @@ def check(disc, mods, only=None):
                     key = ("png", stem.upper(), rtx, tid)
                     trel = find_texfile(disc, stem, ".RTX" if rtx else ".TEX")
                     if not trel:
-                        note, problems = "ERRO: %s%s nao existe no disco" % (stem.upper(), ".RTX" if rtx else ".TEX"), problems + 1
+                        note, problems = "ERROR: %s%s is not on the disc" % (stem.upper(), ".RTX" if rtx else ".TEX"), problems + 1
                     else:
                         modded = os.path.join(mods, mod, *trel.split("/"))
                         pk = next((q for q in tex.parse(tex.read_file(modded if os.path.exists(modded) else disc_file(disc, trel))[0])["packets"]
                                    if q.texId == tid and not (rtx and q.is_palette())), None)
                         if pk is None:
-                            note, problems = "ERRO: %s nao tem texId %d" % (trel, tid), problems + 1
+                            note, problems = "ERROR: %s has no texId %d" % (trel, tid), problems + 1
                         else:
                             w, h, _ = tex.read_image(p) if n.lower().endswith(".png") else (0, 0, None)
                             ratio = w * pk.h == h * pk.w
-                            note = "textura de %s, %dx%d (jogo %dx%d)%s" % (trel, w, h, pk.w, pk.h,
-                                                                            "" if ratio else " AVISO: proporcao diferente, sai esticada")
+                            note = "texture of %s, %dx%d (game %dx%d)%s" % (trel, w, h, pk.w, pk.h,
+                                                                            "" if ratio else " WARNING: different aspect ratio, it will look stretched")
                 else:
                     key = ("file", rel.upper())
                     orig = disc_file(disc, rel)
@@ -328,18 +328,18 @@ def check(disc, mods, only=None):
                     if n.lower() == "modkit.json":
                         continue
                     if not orig:
-                        note = "arquivo novo (nao esta no disco; ninguem o pede ainda)"
+                        note = "new file (not on the disc; nothing asks for it yet)"
                     else:
                         osz = os.path.getsize(orig)
-                        note = "%d bytes (disco %d)" % (size, osz)
+                        note = "%d bytes (disc %d)" % (size, osz)
                         if size > osz and os.path.splitext(n)[1].upper() in (".TEX", ".RTX", ".NGP", ".BNK"):
-                            note += " AVISO: maior que o do disco, o jogo carrega em regioes fixas e pode sobrescrever o que vem depois"
+                            note += " WARNING: larger than the disc file; the game loads into fixed regions and may overwrite what comes next"
                 if not off:
                     if key in seen:
-                        note += " (vence %s)" % seen[key]
+                        note += " (overrides %s)" % seen[key]
                     seen[key] = mod
                 print("  %-40s %s" % (rel, note))
-    print("%d erro(s)" % problems)
+    print("%d error(s)" % problems)
     return 1 if problems else 0
 
 
@@ -360,16 +360,16 @@ def main(argv):
         return 1
     disc = opts.get("disc") or default_disc()
     mods = opts.get("mods") or default_mods(disc)
-    work = opts.get("work") or os.path.join(mods, "_trabalho")
+    work = opts.get("work") or os.path.join(mods, "_work")
     if not os.path.isdir(disc):
-        raise SystemExit("disco extraido nao achado em %s (--disc ou WOTM_DISC)" % disc)
+        raise SystemExit("extracted disc not found at %s (--disc or WOTM_DISC)" % disc)
     if args[0] == "export":
         if len(args) < 2:
-            raise SystemExit("export: diga o que extrair (ex.: MON/LIZARD0)")
+            raise SystemExit("export: say what to extract (e.g. MON/LIZARD0)")
         export(disc, work, args[1:])
     elif args[0] == "pack":
         if len(args) != 2 or args[1][0] in "_.":
-            raise SystemExit("pack: um nome de mod (sem '_' ou '.' no comeco)")
+            raise SystemExit("pack: one mod name (not starting with '_' or '.')")
         pack(disc, work, mods, args[1], opts.get("inject", False))
     else:
         return check(disc, mods, args[1] if len(args) > 1 else None)

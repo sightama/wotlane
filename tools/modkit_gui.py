@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Interface do kit de mods (tools/modkit.py): escolher no disco o que extrair, ver e abrir o que foi extraido, empacotar no mod.
 
-  python tools/modkit_gui.py        (ou pythonw, sem console; o launcher tem o botao "Kit de mods")
+  python tools/modkit_gui.py        (ou pythonw, sem console; o launcher tem o botao "Mod kit")
 
-Esquerda: o disco por nome (monstros e trajes, fases, menu, bancos de som, musicas); duplo clique ou "Extrair" manda para a pasta de
-trabalho. Direita: a pasta de trabalho com miniaturas; "editado" = mudou desde a extracao (vai no proximo pacote). Duplo clique abre
-no programa padrao do Windows (o editor de imagem ou de audio). Embaixo: o nome do mod, "Empacotar" (modkit pack) e "Conferir"
-(modkit check). As pastas ficam em ~/.wotm_modkit.json. Precisa do Pillow (pip install pillow) para as miniaturas.
+Textos da janela em ingles (pedido do dono). Esquerda: o disco por nome (monstros e trajes, fases, menu, bancos de som, musicas);
+duplo clique ou "Extract selected" manda para a pasta de trabalho (<mods>/_work). Direita: a pasta de trabalho com miniaturas;
+"edited" = mudou desde a extracao (vai no proximo pacote). Duplo clique abre no programa padrao do Windows. Embaixo: o nome do mod,
+"Pack edited files into mod" (modkit pack) e "Check mods" (modkit check). As pastas ficam em ~/.wotm_modkit.json. Precisa do
+Pillow (pip install pillow) para as miniaturas.
 """
 import io
 import json
@@ -40,14 +41,14 @@ MONSTERS = [
     ("LAVA", "Magmo", ("LAVA_S", "LAVA_LS")), ("DRAGON", "Raptros", ("DRAGON_S", "DRAGN_LS")),
     ("ROCK", "Agamo", ("ROKMAN_S", "ROKMN_LS")), ("ALIEN", "Zorgulon", ("ALIEN_S", "ALIEN_LS")),
 ]
-BOSSES = [("ASSBOSS", "Goliath Prime", ("ASSEMB_S",)), ("JELLY", "Jelly (chefe final)", ()), ("FINAL", "Chefe final", ("FINAL_S",))]
+BOSSES = [("ASSBOSS", "Goliath Prime", ("ASSEMB_S",)), ("JELLY", "Jelly (final boss)", ()), ("FINAL", "Final boss", ("FINAL_S",))]
 LEVELS = [("CENTRAL", "Midtown Park"), ("VEGAS", "Gamblers Gulch"), ("CANYON2", "Rosdale Canyon"), ("METRO", "Metro City"),
           ("AIRPORT", "Century Airfield"), ("3-MILE", "Atomic Island"), ("SANFRAN", "Baytown"), ("ISLAND", "Club Caldera"),
           ("TOKYO", "Tsunopolis"), ("UFO", "UFO"), ("CAPITOL", "Capitol"), ("TRAINING", "Training"), ("CANYON1", "Lake Powell"),
           ("MINISF", "Mini Baytown"), ("VOLCANO", "Volcano"), ("TOKYODM", "Tokyo Deathmatch"), ("DBALL", "Dodge Ball"),
           ("BIGSHOT", "Big Shot"), ("CRUSH", "Crush")]
-SHELL = [("SHELL", "Menu principal"), ("SHELL2", "Menu (2)"), ("UI", "Interface"), ("LOAD", "Tela de carregamento"),
-         ("PRESHELL", "Antes do menu")]
+SHELL = [("SHELL", "Main menu"), ("SHELL2", "Menu (2)"), ("UI", "Interface"), ("LOAD", "Loading screen"),
+         ("PRESHELL", "Before the menu")]
 
 BG, BG2, FG, DIM, ACC, EDIT = "#1e1e1e", "#2b2b2b", "#e6e6e6", "#9a9a9a", "#2f6fd6", "#f0b030"
 
@@ -65,14 +66,14 @@ class QueueWriter(io.TextIOBase):
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("WotM - Kit de mods")
+        root.title("WotM - Mod kit")
         root.geometry("1280x800")
         root.minsize(900, 560)
         root.configure(bg=BG)
         self.conf = self.load_conf()
         self.disc = tk.StringVar(value=self.conf.get("disc") or modkit.default_disc())
         self.mods = tk.StringVar(value=self.conf.get("mods") or modkit.default_mods(self.disc.get()))
-        self.mod = tk.StringVar(value=self.conf.get("mod", "meu_mod"))
+        self.mod = tk.StringVar(value=self.conf.get("mod", "my_mod"))
         self.only_edited = tk.BooleanVar(value=False)
         self.filter = tk.StringVar()
         self.log_q = queue.Queue()
@@ -116,7 +117,7 @@ class App:
     def build(self):
         top = ttk.Frame(self.root, padding=(10, 8, 10, 4))
         top.pack(fill="x")
-        for r, (label, var) in enumerate((("Disco extraído", self.disc), ("Pasta de mods", self.mods))):
+        for r, (label, var) in enumerate((("Extracted disc", self.disc), ("Mods folder", self.mods))):
             ttk.Label(top, text=label).grid(row=r, column=0, sticky="w", padx=(0, 8), pady=2)
             ttk.Entry(top, textvariable=var).grid(row=r, column=1, sticky="ew", pady=2)
             ttk.Button(top, text="...", width=3, command=lambda v=var: self.pick_dir(v)).grid(row=r, column=2, padx=(4, 0))
@@ -130,20 +131,20 @@ class App:
         # esquerda: disco
         left = ttk.Frame(panes)
         panes.add(left, weight=3)
-        ttk.Label(left, text="1. Escolha no disco", style="Head.TLabel").pack(anchor="w")
+        ttk.Label(left, text="1. Pick from the disc", style="Head.TLabel").pack(anchor="w")
         f = ttk.Frame(left)
         f.pack(fill="x", pady=(4, 4))
-        ttk.Label(f, text="Procurar").pack(side="left")
+        ttk.Label(f, text="Search").pack(side="left")
         e = ttk.Entry(f, textvariable=self.filter)
         e.pack(side="left", fill="x", expand=True, padx=(6, 0))
         self.filter.trace_add("write", lambda *_: self.fill_disc())
-        ttk.Label(left, text="Ctrl ou Shift para escolher vários; duplo clique extrai", style="Dim.TLabel").pack(anchor="w", pady=(0, 2))
+        ttk.Label(left, text="Ctrl or Shift to pick several; double-click extracts", style="Dim.TLabel", wraplength=230).pack(anchor="w", pady=(0, 2))
         self.disc_tree = ttk.Treeview(left, show="tree", selectmode="extended")
         self.disc_tree.pack(fill="both", expand=True)
         self.disc_tree.bind("<Double-1>", lambda e: self.export_selected())
         b = ttk.Frame(left)
         b.pack(fill="x", pady=(6, 0))
-        self.btn_export = ttk.Button(b, text="Extrair selecionados  >>", style="Accent.TButton", command=self.export_selected)
+        self.btn_export = ttk.Button(b, text="Extract selected  >>", style="Accent.TButton", command=self.export_selected)
         self.btn_export.pack(side="right")
 
         # direita: pasta de trabalho + previa
@@ -151,17 +152,17 @@ class App:
         panes.add(right, weight=5)
         h = ttk.Frame(right)
         h.pack(fill="x")
-        ttk.Label(h, text="2. Edite na pasta de trabalho", style="Head.TLabel").pack(side="left")
-        ttk.Checkbutton(h, text="só editados", variable=self.only_edited, command=self.refresh_work).pack(side="right")
-        ttk.Button(h, text="Atualizar", command=self.refresh_work).pack(side="right", padx=6)
+        ttk.Label(h, text="2. Edit in the work folder", style="Head.TLabel").pack(side="left")
+        ttk.Checkbutton(h, text="edited only", variable=self.only_edited, command=self.refresh_work).pack(side="right")
+        ttk.Button(h, text="Refresh", command=self.refresh_work).pack(side="right", padx=6)
         body = ttk.PanedWindow(right, orient="horizontal")
         body.pack(fill="both", expand=True, pady=(4, 0))
         wf = ttk.Frame(body)
         body.add(wf, weight=3)
         self.work_tree = ttk.Treeview(wf, style="Work.Treeview", columns=("info", "state"), selectmode="extended")
-        self.work_tree.heading("#0", text="Arquivo")
-        self.work_tree.heading("info", text="Tamanho")
-        self.work_tree.heading("state", text="Estado")
+        self.work_tree.heading("#0", text="File")
+        self.work_tree.heading("info", text="Size")
+        self.work_tree.heading("state", text="State")
         self.work_tree.column("#0", width=300)
         self.work_tree.column("info", width=110, anchor="center")
         self.work_tree.column("state", width=80, anchor="center")
@@ -182,12 +183,12 @@ class App:
         self.pv_label.pack(fill="x", pady=4)
         pb = ttk.Frame(pv)
         pb.pack(fill="x")
-        ttk.Button(pb, text="Abrir no editor", command=self.open_selected).pack(side="left")
-        ttk.Button(pb, text="Mostrar na pasta", command=self.reveal_selected).pack(side="left", padx=4)
-        self.btn_play = ttk.Button(pb, text="Tocar", command=self.play_selected)
+        ttk.Button(pb, text="Open in editor", command=self.open_selected).pack(side="left")
+        ttk.Button(pb, text="Show in folder", command=self.reveal_selected).pack(side="left", padx=4)
+        self.btn_play = ttk.Button(pb, text="Play", command=self.play_selected)
         self.btn_play.pack(side="left")
-        ttk.Button(pb, text="Parar", command=self.stop_sound).pack(side="left", padx=4)
-        ttk.Button(pb, text="Remover", command=self.remove_selected).pack(side="right")
+        ttk.Button(pb, text="Stop", command=self.stop_sound).pack(side="left", padx=4)
+        ttk.Button(pb, text="Remove", command=self.remove_selected).pack(side="right")
 
         # embaixo: mod + log
         bot = ttk.Frame(self.root, padding=(10, 4, 10, 8))
@@ -195,11 +196,11 @@ class App:
         ttk.Label(bot, text="3. Mod", style="Head.TLabel").pack(side="left")
         self.mod_box = ttk.Combobox(bot, textvariable=self.mod, width=28)
         self.mod_box.pack(side="left", padx=8)
-        self.btn_pack = ttk.Button(bot, text="Empacotar editados no mod", style="Accent.TButton", command=self.pack)
+        self.btn_pack = ttk.Button(bot, text="Pack edited files into mod", style="Accent.TButton", command=self.pack)
         self.btn_pack.pack(side="left")
-        self.btn_check = ttk.Button(bot, text="Conferir mods", command=self.check)
+        self.btn_check = ttk.Button(bot, text="Check mods", command=self.check)
         self.btn_check.pack(side="left", padx=6)
-        ttk.Button(bot, text="Abrir pasta de mods", command=lambda: self.open_path(self.mods.get())).pack(side="left")
+        ttk.Button(bot, text="Open mods folder", command=lambda: self.open_path(self.mods.get())).pack(side="left")
         self.status = ttk.Label(bot, text="", style="Dim.TLabel")
         self.status.pack(side="right")
 
@@ -210,11 +211,11 @@ class App:
         self.log.pack(fill="x")
         self.log.tag_configure("warn", foreground=EDIT)
         self.log.tag_configure("err", foreground="#ff6b6b")
-        self.say("Kit de mods. Extraia algo do disco, edite na pasta de trabalho e empacote no mod. Nada do jogo vai para o repo.\n")
+        self.say("Mod kit. Extract something from the disc, edit it in the work folder and pack it into a mod. No game files go into the repo.\n")
 
     # ------------------------------------------------------------ caminhos
     def work(self):
-        return os.path.join(self.mods.get(), "_trabalho")
+        return os.path.join(self.mods.get(), "_work")
 
     def pick_dir(self, var):
         d = filedialog.askdirectory(initialdir=var.get() or os.getcwd(), parent=self.root)
@@ -248,7 +249,7 @@ class App:
         t.delete(*t.get_children())
         disc = self.disc.get()
         if not os.path.isdir(disc):
-            t.insert("", "end", text="(disco extraído não achado: escolha a pasta acima)")
+            t.insert("", "end", text="(extracted disc not found: pick the folder above)")
             return
         q = self.filter.get().strip().lower()
 
@@ -263,31 +264,31 @@ class App:
         def group(text):
             return t.insert("", "end", text=text, open=bool(q))
 
-        g = group("Monstros")
+        g = group("Monsters")
         for prefix, name, banks in MONSTERS:
-            items = [("Traje %d  (%s%d)" % (k + 1, prefix, k), ["MON/%s%d" % (prefix, k)]) for k in range(4) if has("MON/%s%d.TEX" % (prefix, k))]
-            items += [("Sons  (%s.BNK)" % b, ["SND/%s.BNK" % b]) for b in banks if has("SND/%s.BNK" % b)]
+            items = [("Costume %d  (%s%d)" % (k + 1, prefix, k), ["MON/%s%d" % (prefix, k)]) for k in range(4) if has("MON/%s%d.TEX" % (prefix, k))]
+            items += [("Sounds  (%s.BNK)" % b, ["SND/%s.BNK" % b]) for b in banks if has("SND/%s.BNK" % b)]
             self.add_node(t, g, name, items, q, add)
-        g = group("Chefes")
+        g = group("Bosses")
         for prefix, name, banks in BOSSES:
-            items = [("Forma %d  (%s%d)" % (k + 1, prefix, k), ["MON/%s%d" % (prefix, k)]) for k in range(4) if has("MON/%s%d.TEX" % (prefix, k))]
-            items += [("Sons  (%s.BNK)" % b, ["SND/%s.BNK" % b]) for b in banks if has("SND/%s.BNK" % b)]
+            items = [("Form %d  (%s%d)" % (k + 1, prefix, k), ["MON/%s%d" % (prefix, k)]) for k in range(4) if has("MON/%s%d.TEX" % (prefix, k))]
+            items += [("Sounds  (%s.BNK)" % b, ["SND/%s.BNK" % b]) for b in banks if has("SND/%s.BNK" % b)]
             self.add_node(t, g, name, items, q, add)
-        g = group("Fases")
+        g = group("Levels")
         for f, name in LEVELS:
             if has("LVL/%s.TEX" % f):
                 add(g, "%s  (%s)" % (name, f), ["LVL/%s" % f])
-        g = group("Menu e telas")
+        g = group("Menus and screens")
         for f, name in SHELL:
             if has("SHELL/%s.TEX" % f):
                 add(g, "%s  (%s)" % (name, f), ["SHELL/%s" % f])
         used = {b for _, _, bs in MONSTERS + BOSSES for b in bs}
-        g = group("Bancos de som")
+        g = group("Sound banks")
         sd = modkit.disc_file(disc, "SND")
         for n in sorted(os.listdir(sd)) if sd else []:
             if n.upper().endswith(".BNK") and os.path.splitext(n)[0].upper() not in used:
                 add(g, n.upper(), ["SND/" + n])
-        g = group("Músicas e falas")
+        g = group("Music and voices")
         vd = modkit.disc_file(disc, "VAG")
         for n in sorted(os.listdir(vd)) if vd else []:
             if n.upper().endswith((".VPK", ".VAG")):
@@ -317,12 +318,12 @@ class App:
     def export_selected(self):
         pats = self.selected_pats()
         if not pats:
-            self.say("Escolha um monstro, traje, fase ou som na lista da esquerda.\n", "warn")
+            self.say("Pick a monster, costume, level or sound in the list on the left.\n", "warn")
             return
         n = len(pats)
-        if n > 12 and not messagebox.askyesno("Extrair", "Extrair %d arquivos? Pode demorar alguns minutos." % n, parent=self.root):
+        if n > 12 and not messagebox.askyesno("Extract", "Extract %d files? This can take a few minutes." % n, parent=self.root):
             return
-        self.run("Extraindo %d arquivo(s)..." % n, lambda: modkit.export(self.disc.get(), self.work(), pats), self.refresh_work)
+        self.run("Extracting %d file(s)..." % n, lambda: modkit.export(self.disc.get(), self.work(), pats), self.refresh_work)
 
     # ------------------------------------------------------------ pasta de trabalho
     def refresh_work(self):
@@ -331,7 +332,7 @@ class App:
         t.delete(*t.get_children())
         work = self.work()
         if not os.path.isdir(work):
-            self.status.configure(text="pasta de trabalho vazia")
+            self.status.configure(text="work folder is empty")
             return
         state = modkit.load_state(work)["files"]
         dirs = {}
@@ -353,12 +354,12 @@ class App:
                     dirs[d] = t.insert("", "end", iid="dir:" + d, text=d, open=True)
                 img = self.thumb(p)
                 kw = {"image": img} if img else {}
-                t.insert(dirs[d], "end", iid=rel, text=" " + n, values=(self.info(p), "editado" if edited else "original"),
+                t.insert(dirs[d], "end", iid=rel, text=" " + n, values=(self.info(p), "edited" if edited else "original"),
                          tags=("edited",) if edited else (), **kw)
         keep = [i for i in sel if t.exists(i)]
         if keep:
             t.selection_set(keep)
-        self.status.configure(text="%d arquivo(s), %d editado(s)" % (total, edited_total))
+        self.status.configure(text="%d file(s), %d edited" % (total, edited_total))
 
     def thumb(self, p):
         if Image is None or not p.lower().endswith(".png"):
@@ -400,7 +401,7 @@ class App:
         c.delete("all")
         files = self.selected_files()
         if not files:
-            self.pv_label.configure(text="Selecione um arquivo da pasta de trabalho. Duplo clique abre no editor padrão do Windows.")
+            self.pv_label.configure(text="Select a file in the work folder. Double-click opens it in the default Windows editor.")
             return
         p = files[0]
         w, h = max(c.winfo_width(), 50), max(c.winfo_height(), 50)
@@ -422,18 +423,18 @@ class App:
                 self.preview_img = ImageTk.PhotoImage(chk)
                 c.create_image(w // 2, h // 2, image=self.preview_img)
             except Exception as ex:
-                text += "  (não abriu: %s)" % ex
+                text += "  (could not open: %s)" % ex
             m = modkit.PNG_RE.match(os.path.basename(p))
             if m:
-                text += "\nTextura %d do %s%s. Pode salvar em qualquer resolução, na mesma proporção." % (
+                text += "\nTexture %d of %s%s. Save it at any resolution, keeping the aspect ratio." % (
                     int(m.group(3)), m.group(1).upper(), ".RTX" if m.group(2) else ".TEX")
         elif p.lower().endswith(".wav"):
             text += "  " + self.info(p)
-            c.create_text(w // 2, h // 2, text="som", fill=DIM, font=("Segoe UI", 20))
+            c.create_text(w // 2, h // 2, text="sound", fill=DIM, font=("Segoe UI", 20))
             mb = modkit.BNK_RE.match(os.path.basename(p))
-            text += "\n%s" % ("Som %d do banco %s.BNK" % (int(mb.group(2)), mb.group(1).upper()) if mb else "Música ou fala (.VPK/.VAG)")
+            text += "\n%s" % ("Sound %d of bank %s.BNK" % (int(mb.group(2)), mb.group(1).upper()) if mb else "Music or voice (.VPK/.VAG)")
         if len(files) > 1:
-            text += "\n(%d selecionados)" % len(files)
+            text += "\n(%d selected)" % len(files)
         self.pv_label.configure(text=text)
 
     def open_selected(self):
@@ -454,7 +455,7 @@ class App:
         try:
             os.startfile(os.path.normpath(p))
         except (OSError, AttributeError) as ex:
-            messagebox.showerror("Abrir", str(ex))
+            messagebox.showerror("Open", str(ex))
 
     def play_selected(self):
         wavs = [p for p in self.selected_files() if p.lower().endswith(".wav")]
@@ -464,7 +465,7 @@ class App:
             import winsound
             winsound.PlaySound(wavs[0], winsound.SND_FILENAME | winsound.SND_ASYNC)
         except Exception as ex:
-            self.say("Não tocou: %s\n" % ex, "err")
+            self.say("Could not play: %s\n" % ex, "err")
 
     @staticmethod
     def stop_sound():
@@ -476,7 +477,7 @@ class App:
 
     def remove_selected(self):
         files = self.selected_files()
-        if not files or not messagebox.askyesno("Remover", "Apagar %d arquivo(s) da pasta de trabalho?\n(o disco e os mods não mudam)"
+        if not files or not messagebox.askyesno("Remove", "Delete %d file(s) from the work folder?\n(the disc and the mods do not change)"
                                                 % len(files), parent=self.root):
             return
         self.stop_sound()
@@ -500,13 +501,13 @@ class App:
     def pack(self):
         mod = self.mod.get().strip()
         if not mod or mod[0] in "_." or any(ch in mod for ch in '\\/:*?"<>|'):
-            messagebox.showwarning("Mod", "Dê um nome ao mod (letras, números, '_' ou '-'; sem '_' ou '.' no começo).", parent=self.root)
+            messagebox.showwarning("Mod", "Give the mod a name (letters, digits, '_' or '-'; not starting with '_' or '.').", parent=self.root)
             return
-        self.run("Empacotando em %s..." % mod, lambda: modkit.pack(self.disc.get(), self.work(), self.mods.get(), mod),
-                 lambda: (self.refresh_mods(), self.say("Pronto. Abra o jogo: o log mostra [mods] para cada arquivo e textura do mod.\n")))
+        self.run("Packing into %s..." % mod, lambda: modkit.pack(self.disc.get(), self.work(), self.mods.get(), mod),
+                 lambda: (self.refresh_mods(), self.say("Done. Start the game: the log shows a [mods] line for each file and texture of the mod.\n")))
 
     def check(self):
-        self.run("Conferindo...", lambda: modkit.check(self.disc.get(), self.mods.get()))
+        self.run("Checking...", lambda: modkit.check(self.disc.get(), self.mods.get()))
 
     # ------------------------------------------------------------ execucao em segundo plano
     def run(self, title, fn, done=None):
@@ -545,7 +546,7 @@ class App:
                         continue
                     self.say(val, "err")
                 else:
-                    self.say(item, "warn" if ("AVISO" in item or "ERRO" in item) else None)
+                    self.say(item, "warn" if ("WARNING" in item or "ERROR" in item) else None)
         except queue.Empty:
             pass
         self.root.after(100, self.pump_log)
