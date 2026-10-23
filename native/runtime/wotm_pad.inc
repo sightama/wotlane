@@ -130,12 +130,20 @@ inline bool inMenus() { return GetTime() - g_menuTime.load(std::memory_order_rel
 //   desligado (os botoes do jogo): trava L1+R1 segurados, defende R2, lados L1/R1.
 // Troca de alvo: pedido direto ao lock-on (wotm_mouse.hpp), na borda da tecla; o direcional nao entra (solto, ele andaria).
 // Esc no Start: nos menus vale triangulo (voltar). Andar (Alt): o analogico vai a ~40% do curso.
+// Nos menus o mouse nao passa pelo mapa (etapa 9): direito volta (triangulo), rodinha sobe e desce (direcional), esquerdo confirma (X),
+// menos sobre um menu nativo que acha o item sob o cursor (wotm_mainmenu.inc: o clique e dele).
 static void keyboard(uint16_t &btns, uint8_t *data)
 {
     wheelStep();
     const bool menus = inMenus();
+    auto down = [menus](st::Bind b) {
+        if (!menus) return kbDown(b);
+        const uint32_t v = st::kb(b);
+        const int a = int(v & 0xFFFF), c = int(v >> 16);
+        return (a < st::kMouseBase && inputDown(a)) || (c < st::kMouseBase && inputDown(c));
+    };
     for (int b = 0; b < st::kBinds; ++b)
-        if (st::kBindMask[b] && kbDown(st::Bind(b)))
+        if (st::kBindMask[b] && down(st::Bind(b)))
         {
             uint16_t mask = st::kBindMask[b];
             if (b == st::BStart && menus && IsKeyDown(KEY_ESCAPE))
@@ -147,13 +155,21 @@ static void keyboard(uint16_t &btns, uint8_t *data)
             }
             btns &= static_cast<uint16_t>(~mask);
         }
+    if (menus && !wotm::mouse::g_captured.load(std::memory_order_relaxed))
+    {
+        uint16_t m = 0;
+        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) m |= 0x1000;                                  // triangulo
+        if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !wotm::mouse::claimed()) m |= 0x4000;        // X
+        if (g_wheelHeld) m |= g_wheelHeld > 0 ? 0x0010 : 0x0040;                                 // cima / baixo
+        btns &= static_cast<uint16_t>(~m);
+    }
     constexpr uint16_t kL1 = 0x0400, kR1 = 0x0800, kL2 = 0x0100, kR2 = 0x0200;
     const bool toggle = st::on(st::LockToggle);
     uint16_t act = 0;
-    if (kbDown(st::BLock)) act |= toggle ? kR1 : uint16_t(kL1 | kR1);
-    if (kbDown(st::BBlock)) act |= toggle ? kL1 : kR2;
-    if (kbDown(st::BStrafeL)) act |= toggle ? kL2 : kL1;
-    if (kbDown(st::BStrafeR)) act |= toggle ? kR2 : kR1;
+    if (down(st::BLock)) act |= toggle ? kR1 : uint16_t(kL1 | kR1);
+    if (down(st::BBlock)) act |= toggle ? kL1 : kR2;
+    if (down(st::BStrafeL)) act |= toggle ? kL2 : kL1;
+    if (down(st::BStrafeR)) act |= toggle ? kR2 : kR1;
     btns &= static_cast<uint16_t>(~act);
 
     static bool prevNext = false, prevPrev = false;
@@ -165,8 +181,8 @@ static void keyboard(uint16_t &btns, uint8_t *data)
     prevPrev = prev;
 
     // analogico esquerdo (so com alguma das teclas dele apertada; senao fica o valor do gamepad ou o centro)
-    const bool l = kbDown(st::BStickLeft), r = kbDown(st::BStickRight), u = kbDown(st::BStickUp), d = kbDown(st::BStickDown);
-    const uint8_t lo = kbDown(st::BWalk) ? 0x4D : 0x00, hi = static_cast<uint8_t>(0xFF - lo);
+    const bool l = down(st::BStickLeft), r = down(st::BStickRight), u = down(st::BStickUp), d = down(st::BStickDown);
+    const uint8_t lo = down(st::BWalk) ? 0x4D : 0x00, hi = static_cast<uint8_t>(0xFF - lo);
     if (l != r) data[6] = l ? lo : hi;
     if (u != d) data[7] = u ? lo : hi;
 
@@ -249,10 +265,7 @@ static void mouseFrame()
                      static_cast<long long>(ms::nowMs() - (ms::g_wantUntil.load(std::memory_order_relaxed) - 150)), IsWindowFocused() ? 1 : 0);
     }
     if (!captured)
-    {
-        ms::g_wheel.store(0, std::memory_order_relaxed);   // rodinha so na luta (troca de alvo)
-        return;
-    }
+        return;   // solto: rodinha e cliques no pointerFrame (menus)
     if (const float w = GetMouseWheelMove(); w != 0.f)
         ms::g_wheel.fetch_add(w > 0.f ? 1 : -1, std::memory_order_relaxed);
     const Vector2 d = GetMouseDelta();
@@ -263,6 +276,44 @@ static void mouseFrame()
     }
     if (d.x != 0.f || d.y != 0.f)
         ms::add(d.x, d.y);
+}
+
+// Mouse nos menus (wotm_mouse.hpp), a cada apresentacao, com o retangulo `dst` em que o quadro nativo (rw x rh) foi para a janela:
+// com o cursor solto e a janela com o foco, onde ele esta no quadro, se andou, os cliques (esquerdo e direito) e a rodinha.
+static void pointerFrame(const Rectangle &dst, int rw, int rh)
+{
+    namespace ms = wotm::mouse;
+    ms::Pointer &p = ms::g_ptr;
+    p.rw = rw;
+    p.rh = rh;
+    if (ms::g_captured.load(std::memory_order_relaxed) || !IsWindowFocused() || dst.width <= 0.f || dst.height <= 0.f)
+    {
+        static int lastWhy = -1;
+        const int why = ms::g_captured.load(std::memory_order_relaxed) ? 1 : !IsWindowFocused() ? 2 : 3;
+        if (std::getenv("WOTM_MENUMOUSELOG") && why != lastWhy)
+            std::fprintf(stderr, "[menumouse] ponteiro desligado (%s)\n", why == 1 ? "cursor preso" : why == 2 ? "janela sem foco" : "sem quadro");
+        lastWhy = why;
+        p.in = false;
+        return;
+    }
+    const Vector2 m = GetMousePosition();
+    const float x = (m.x - dst.x) * float(rw) / dst.width, y = (m.y - dst.y) * float(rh) / dst.height;
+    const bool in = x >= 0.f && y >= 0.f && x < float(rw) && y < float(rh);
+    static const bool log = std::getenv("WOTM_MENUMOUSELOG") != nullptr;
+    if (log && in != p.in)
+        std::fprintf(stderr, "[menumouse] cursor %s do quadro (janela %.0f,%.0f, quadro %.0f,%.0f de %dx%d)\n", in ? "dentro" : "fora", m.x, m.y,
+                     x, y, rw, rh);
+    if (in && p.in && (std::fabs(x - p.x) > 0.5f || std::fabs(y - p.y) > 0.5f))
+        ms::g_moveSeq.fetch_add(1, std::memory_order_relaxed);
+    p.x = x;
+    p.y = y;
+    p.in = in;
+    if (!in)
+        return;
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) ms::click(ms::g_clickL);
+    if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) ms::click(ms::g_clickR);
+    if (const float w = GetMouseWheelMove(); w != 0.f)
+        ms::g_wheel.fetch_add(w > 0.f ? 1 : -1, std::memory_order_relaxed);
 }
 
 static const bool s_installed = (g_ps2PadDeviceMap = &deviceMap, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons, true);

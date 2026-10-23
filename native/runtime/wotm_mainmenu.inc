@@ -26,7 +26,7 @@
 namespace wotm_optscreen
 {
 static void frame(uint8_t *rdram);
-static void input(uint8_t *rdram, uint32_t code);
+static uint32_t input(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t code);
 constexpr uint32_t kScreen = 10;
 }
 
@@ -78,6 +78,14 @@ struct View
 };
 static std::mutex g_m;
 static View g_view;
+// O que esta sob o mouse (etapa 9; janela escreve a cada quadro desenhado, o gancho da tela le), protegido por g_m
+enum HoverPart { HNone, HTab, HPrevTab, HNextTab, HRow, HRowLeft, HRowRight };
+struct Hover
+{
+    int screen = -1, row = -1;   // lista: tela e linha (indice em View::row)
+    int part = HNone, tab = -1, prow = -1;   // painel: parte, aba (HTab) e linha (HRow*)
+};
+static Hover g_hover;
 
 // Thread do EE
 static const bool g_enabled = [] { const char *e = std::getenv("WOTM_TEXTMENU"); return !(e && e[0] == '0'); }();
@@ -244,9 +252,10 @@ enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, kPa
 static bool g_panelPrev[kPanelActs] = {};
 static bool panelKey(st::Bind b)
 {
-    if (st::kb(b)) return wotm_pad::kbDown(b);
-    const uint32_t v = st::kDefaultKb[b];
-    return wotm_pad::inputDown(int(v & 0xFFFF)) || wotm_pad::inputDown(int(v >> 16));
+    // so teclas: o mouse no painel e pelo que esta sob ele (panelInput), nao pelo mapa (o esquerdo e o quadrado, que limparia)
+    const uint32_t v = st::kb(b) ? st::kb(b) : st::kDefaultKb[b];
+    const int a = int(v & 0xFFFF), c = int(v >> 16);
+    return (a < st::kMouseBase && wotm_pad::inputDown(a)) || (c < st::kMouseBase && wotm_pad::inputDown(c));
 }
 static bool panelPad(int d, st::Bind b)
 {
@@ -264,8 +273,8 @@ static void readPanel(bool out[kPanelActs])
         bool a[kPanelActs] = {};
         if (d == kKb)
         {
-            a[PUp] = panelKey(st::BUp) || panelKey(st::BStickUp);
-            a[PDown] = panelKey(st::BDown) || panelKey(st::BStickDown);
+            a[PUp] = panelKey(st::BUp) || panelKey(st::BStickUp) || wotm_pad::g_wheelHeld > 0;   // rodinha do mouse tambem
+            a[PDown] = panelKey(st::BDown) || panelKey(st::BStickDown) || wotm_pad::g_wheelHeld < 0;
             a[PLeft] = panelKey(st::BLeft) || panelKey(st::BStickLeft);
             a[PRight] = panelKey(st::BRight) || panelKey(st::BStickRight);
             // fixas tambem (layout 2 do teclado, sem tecla no L1/R1): Enter confirma, Esc e Backspace voltam, Q/E e Tab (Shift+Tab
@@ -345,6 +354,8 @@ static void captureInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (done)
         std::fprintf(stderr, "[settings] %s%s = %s\n", mapPrefix(g_bindMap).c_str(), st::kBindNames[b], what);
     g_capture = -1;
+    wotm::mouse::takeClick(wotm::mouse::g_clickL);   // o clique que virou a tecla nova nao conta no painel
+    wotm::mouse::takeClick(wotm::mouse::g_clickR);
     readPanel(g_panelPrev);
     wotm_padsel::sfx(rdram, ctx, runtime, done ? 8 : 6);
 }
@@ -400,6 +411,42 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         captureInput(rdram, ctx, runtime);
         return;
+    }
+    // mouse (etapa 9): passar por cima escolhe a linha; clique esquerdo na aba troca, em L1/R1 anda uma aba, na linha confirma (nas
+    // setas do valor, diminui ou aumenta); clique direito volta. A rodinha vem como cima/baixo (readPanel).
+    {
+        static uint32_t s_seq = 0;
+        const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+        const bool moved = seq != s_seq;
+        s_seq = seq;
+        Hover hv;
+        {
+            std::lock_guard<std::mutex> lk(g_m);
+            hv = g_hover;
+        }
+        const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        e[PBack] |= wotm::mouse::takeClick(wotm::mouse::g_clickR);
+        const bool onRow = hv.part == HRow || hv.part == HRowLeft || hv.part == HRowRight;
+        if (onRow && (moved || click) && hv.prow >= 0 && hv.prow < tabRows(g_tab) && hv.prow != g_optSel[g_tab])
+        {
+            g_optSel[g_tab] = hv.prow;
+            if (!click)
+                wotm_padsel::sfx(rdram, ctx, runtime, 4);
+        }
+        if (click && hv.part == HTab && hv.tab >= 0 && hv.tab != g_tab)
+        {
+            g_tab = hv.tab;
+            wotm_padsel::sfx(rdram, ctx, runtime, 4);
+            return;
+        }
+        if (click)
+        {
+            e[PPrev] |= hv.part == HPrevTab;
+            e[PNext] |= hv.part == HNextTab;
+            e[PLeft] |= hv.part == HRowLeft;
+            e[PRight] |= hv.part == HRowRight;
+            e[POk] |= hv.part == HRow;
+        }
     }
     if (e[PBack])
     {
@@ -669,7 +716,9 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_inPending = false;
     if (cur == wotm_optscreen::kScreen)
     {
-        wotm_optscreen::input(rdram, GPR_U32(ctx, 2) & 0xFFFFu);
+        const uint32_t raw = GPR_U32(ctx, 2), nc = wotm_optscreen::input(rdram, ctx, runtime, raw & 0xFFFFu);
+        if (nc != (raw & 0xFFFFu))   // mouse: o codigo do item sob ele (wotm_optscreen.inc)
+            ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>((raw & ~0xFFFFu) | nc)));
         return;
     }
     const ScreenDef &d = *screenDef(cur);
@@ -677,8 +726,38 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     const int rows = buildRows(rdram, d, row);
     if (rows == 0)
         return;
-    const uint32_t raw = GPR_U32(ctx, 2), code = raw & 0xFFFFu;
-    uint32_t out = raw;
+    const uint32_t raw = GPR_U32(ctx, 2);
+    uint32_t code = raw & 0xFFFFu, out = raw;
+    // mouse (etapa 9): a linha sob o cursor vira a escolhida quando ele anda; o clique esquerdo nela confirma (como o X)
+    static uint32_t s_seq = 0;
+    const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+    const bool moved = seq != s_seq;
+    s_seq = seq;
+    if (!(cur == 1 && (g_open || g_suppress > 0)))
+    {
+        Hover hv;
+        {
+            std::lock_guard<std::mutex> lk(g_m);
+            hv = g_hover;
+        }
+        const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        if (hv.screen == d.screen && hv.row >= 0 && hv.row < rows && (moved || click) && (code == 0 || click))
+        {
+            if (hv.row != cursorRow(rdram, d.screen, row, rows))
+            {
+                g_extraRow = d.screen == 1 && row[hv.row].item < 0 ? row[hv.row].item : 0;
+                if (row[hv.row].item > 0)
+                    wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(row[hv.row].item));
+                if (!click)
+                    wotm_padsel::sfx(rdram, ctx, runtime, 4);
+            }
+            if (click)
+            {
+                code = 6;
+                out = (raw & ~0xFFFFu) | 6u;
+            }
+        }
+    }
     if (cur == 1 && (g_open || g_suppress > 0))
     {
         // painel aberto: o jogo nao ve nada (a entrada do painel vem dos dispositivos); fechado ha pouco, o triangulo que fechou
@@ -1077,7 +1156,7 @@ static bool itemPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &
 }
 
 // O painel no plano do telao, no telao inteiro (o logo so aparece no "press start"), centrado
-static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v)
+static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v, Hover &hv)
 {
     wotm_padsel::Plane pl;
     if (!v.on || v.panel <= 0.f || v.alpha <= 0.f || g_prt.id == 0 || !v.screenObj || !wotm_padsel::objectPlane(scene, ram, cam, v.screenObj, pl))
@@ -1085,12 +1164,34 @@ static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Cam
     const float fyTop = 0.03f, fyBottom = 0.97f;   // a camera do painel (frameCamera) mostra o telao inteiro
     const float hy = (pl.y1 - pl.y0) * (fyBottom - fyTop), wx = std::min(hy * float(kPW) / float(kPH), (pl.x1 - pl.x0) * 0.94f);
     const float h = wx * float(kPH) / float(kPW);   // largura limitada: a altura acompanha (proporcao da textura)
-    wotm_padsel::drawOnPlane(pl, g_prt.texture, (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f, wx, h,
-                             v.alpha * v.panel, 0.003f * (pl.x1 - pl.x0));
+    const float left = (pl.x0 + pl.x1) * 0.5f - wx * 0.5f, top = pl.y1 - (pl.y1 - pl.y0) * fyTop - (hy - h) * 0.5f;
+    wotm_padsel::drawOnPlane(pl, g_prt.texture, left, top, wx, h, v.alpha * v.panel, 0.003f * (pl.x1 - pl.x0));
+    // mouse: as mesmas medidas do renderPanel (abas, L1/R1, linhas e as setas do valor)
+    float u, w;
+    if (v.panel < 1.f || !wotm_padsel::hitOnPlane(cam, pl, left, top, wx, h, u, w))
+        return;
+    const float W = float(kPW), H = float(kPH), lineH = H / 8.9f, X = u * W, Y = w * H;
+    if (std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
+    {
+        const float tabX[kTabs] = {W * 0.22f, W * 0.40f, W * 0.59f, W * 0.78f};
+        if (X < W * 0.14f) hv.part = HPrevTab;
+        else if (X > W * 0.86f) hv.part = HNextTab;
+        else
+            for (int t = 0; t < kTabs; ++t)
+                if (std::fabs(X - tabX[t]) < W * 0.09f) { hv.part = HTab; hv.tab = t; }
+        return;
+    }
+    const int n = tabRows(std::clamp(v.tab, 0, kTabs - 1)), first = std::clamp(v.top, 0, std::max(0, n - kVisRows));
+    const int i = int(std::floor(Y / lineH - 2.2f + 0.5f));
+    if (i < 0 || i >= kVisRows || first + i >= n || X < W * 0.03f || X > W * 0.97f)
+        return;
+    hv.prow = first + i;
+    const float valX = W * 0.66f, dx = W * 0.19f;
+    hv.part = X > valX - dx - 70.f && X < valX - dx * 0.45f ? HRowLeft : X > valX + dx * 0.45f && X < valX + dx + 70.f ? HRowRight : HRow;
 }
 
 // A lista no plano dos itens do jogo: do topo do primeiro ao pe do ultimo, centrada na coluna deles. Dentro do BeginMode3D do quadro.
-static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v)
+static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v, Hover &hv)
 {
     if (!v.on || v.alpha <= 0.f || v.items == 0 || g_rt.id == 0)
         return;
@@ -1133,6 +1234,18 @@ static void drawListOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Came
     }
     wotm_padsel::drawOnPlane(base, g_rt.texture, cx - wx * 0.5f, mid + hy * 0.5f, wx, hy, v.alpha, 0.004f * (base.x1 - base.x0), nullptr, WHITE,
                              true);
+    // mouse: a linha sob ele (as vagas do renderUi), no miolo da coluna
+    wotm::mouse::claim();
+    float u, w;
+    if (v.panel > 0.f || !wotm_padsel::hitOnPlane(cam, base, cx - wx * 0.5f, mid + hy * 0.5f, wx, hy, u, w) || u < 0.12f || u > 0.88f)
+        return;
+    const float step = float(kH) / kSteps, rowH = step * kSpacing, y = w * float(kH) - (kH - rowH * float(v.rows)) * 0.5f;
+    const int r = int(std::floor(y / rowH));
+    if (y >= 0.f && r >= 0 && r < v.rows)
+    {
+        hv.screen = v.screen;
+        hv.row = r;
+    }
 }
 
 static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam)
@@ -1142,8 +1255,21 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         std::lock_guard<std::mutex> lk(g_m);
         v = g_view;
     }
-    drawListOnTelao(scene, ram, cam, v);
-    drawPanelOnTelao(scene, ram, cam, v);
+    Hover hv;
+    drawListOnTelao(scene, ram, cam, v, hv);
+    drawPanelOnTelao(scene, ram, cam, v, hv);
+    if (v.on && v.panel > 0.f) wotm::mouse::claim();
+    static const bool log = std::getenv("WOTM_MENUMOUSELOG") != nullptr;   // uma linha por mudanca do que esta sob o mouse
+    static Hover last;
+    if (log && (hv.screen != last.screen || hv.row != last.row || hv.part != last.part || hv.tab != last.tab || hv.prow != last.prow))
+    {
+        const wotm::mouse::Pointer &p = wotm::mouse::g_ptr;
+        std::fprintf(stderr, "[menumouse] t=%.2f cursor %.0f,%.0f (janela %.0f,%.0f) tela %d linha %d painel parte %d aba %d linha %d\n", GetTime(), p.x, p.y, GetMousePosition().x,
+                     GetMousePosition().y, hv.screen, hv.row, hv.part, hv.tab, hv.prow);
+        last = hv;
+    }
+    std::lock_guard<std::mutex> lk(g_m);
+    g_hover = hv;
 }
 
 // Camera do quadro com o painel aberto: de frente para o telao, que ocupa a parte de cima do espaco entre as faixas pretas; embaixo

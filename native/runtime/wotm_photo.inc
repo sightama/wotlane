@@ -181,6 +181,11 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
     const double now = GetTime();
     g_lastUpdate = now;
     bool toggle = IsKeyPressed(KEY_F9) || chord();
+    if (toggle && g_phase == Phase::Off && wotm_pad::inMenus())   // so na luta: nos menus do jogo (telas do shell) nao liga
+    {
+        toggle = false;
+        std::fprintf(stderr, "[photo] ignorado nos menus\n");
+    }
     // Teste sem teclado (WOTM_PHOTO=<s>): s segundos depois da primeira cena liga, gira e anda de lado, salva (HUD, sem HUD, com zoom)
     // e sai; as fotos vao para a pasta screenshots
     static const double autoAt = std::getenv("WOTM_PHOTO") ? std::atof(std::getenv("WOTM_PHOTO")) : -1.0;

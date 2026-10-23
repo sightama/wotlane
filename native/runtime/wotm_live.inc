@@ -1695,6 +1695,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const float k = std::min(sw / RW, sh / RH);
     const Rectangle src{0.f, 0.f, static_cast<float>(RW), -static_cast<float>(RH)};
     const Rectangle dst{(sw - RW * k) * 0.5f, (sh - RH * k) * 0.5f, RW * k, RH * k};
+    wotm_pad::pointerFrame(dst, RW, RH);   // mouse nos menus: posicao no quadro nativo, cliques e rodinha (wotm_mouse.hpp)
     // Sem mistura: o alfa do quadro e o que as misturas do GS deixaram (o comum baixa, o aditivo sobe para 1,0), nao opacidade. Com
     // BLEND_ALPHA sobre o preto a cena saia escurecida pelo alfa, e os quadrados aditivos (halo dos power-ups) viravam retangulos claros.
     rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD);

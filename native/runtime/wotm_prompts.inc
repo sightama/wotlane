@@ -264,8 +264,8 @@ namespace wotm_legend
 {
 namespace st = wotm::settings;
 // Um icone: o botao do raylib (gamepad, 0 = nenhum) e a tecla (nome do wotm_settings.hpp; sem celula no atlas, sai o nome numa
-// moldura)
-struct Icon { int pad = 0; const char *key = nullptr; };
+// moldura); key2 = a segunda tecla do mesmo botao (o mapa do teclado tem duas por botao), lado a lado com a primeira
+struct Icon { int pad = 0; const char *key = nullptr; const char *key2 = nullptr; };
 struct Item { Icon a, b; const char *text = ""; };
 constexpr int kStickL = 18, kStickR = 19;   // Icon::pad dos analogicos (celulas extras do atlas, wotm_prompts.h)
 constexpr int kMax = 10;
@@ -292,6 +292,9 @@ static void hint(const char *s, float alpha)
 // O botao do PS2 b como o jogo o le: a tecla e o botao do mapa (aba CONTROLS), com a troca de confirmar dos menus
 static Icon bind(st::Bind b)
 {
-    return Icon{st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(wotm_prompts::g_lastPad)), st::keyName(int(st::kb(b) & 0xFFFF))};
+    const uint32_t k = st::kb(b);
+    const char *k1 = st::keyName(int(k & 0xFFFF)), *k2 = st::keyName(int(k >> 16));
+    if (!k1) { k1 = k2; k2 = nullptr; }
+    return Icon{st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(wotm_prompts::g_lastPad)), k1, k2};
 }
 } // namespace wotm_legend

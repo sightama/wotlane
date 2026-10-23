@@ -50,3 +50,30 @@ inline void clear()
     g_dx = g_dy = 0.f;
 }
 } // namespace wotm::mouse
+
+// Mouse nos menus (etapa 9): com o cursor solto, a janela (wotm_pad.inc, pointerFrame) guarda onde ele esta no quadro nativo e conta
+// os cliques; quem desenha um menu nativo no telao (wotm_mainmenu.inc) acha o item sob ele e o gancho da tela, na thread do EE,
+// consome os cliques. Menu nativo com itens sob o mouse avisa (claim) que o clique esquerdo e dele; sem aviso, o clique esquerdo vale X
+// (confirma o item escolhido) nas telas do jogo.
+namespace wotm::mouse
+{
+struct Pointer
+{
+    float x = -1.f, y = -1.f;   // no quadro nativo (RW x RH), so com o cursor solto e dentro dele
+    int rw = 0, rh = 0;
+    bool in = false;
+};
+inline Pointer g_ptr;                          // so a thread da janela
+inline std::atomic<uint32_t> g_moveSeq{0};     // sobe a cada quadro em que o cursor solto andou (o EE so escolhe pelo mouse depois disso)
+inline std::atomic<int64_t> g_clickL{0}, g_clickR{0};   // hora (ms) do ultimo clique nao consumido (cursor solto), 0 = nenhum
+inline std::atomic<int64_t> g_claimUntil{0};
+inline void claim() { g_claimUntil.store(nowMs() + 150, std::memory_order_relaxed); }
+inline bool claimed() { return nowMs() < g_claimUntil.load(std::memory_order_relaxed); }
+inline void click(std::atomic<int64_t> &c) { c.store(nowMs(), std::memory_order_relaxed); }
+// Clique de ate 300 ms atras (um antigo, de fora dos menus, nao vale)
+inline bool takeClick(std::atomic<int64_t> &c)
+{
+    const int64_t t = c.exchange(0, std::memory_order_relaxed);
+    return t != 0 && nowMs() - t < 300;
+}
+} // namespace wotm::mouse

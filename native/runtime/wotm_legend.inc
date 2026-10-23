@@ -35,9 +35,15 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
         return c >= 0 ? c : wotm_prompts::keyCell(ic.key);
     };
     auto boxed = [&](const Icon &ic) { return cellOf(ic) < 0 && ic.key && (style == st::PromptKeyboard || ic.pad <= 0); };
-    auto iconW = [&](const Icon &ic) {
+    auto iconW1 = [&](const Icon &ic) {
         if (boxed(ic)) return wotm_mainmenu::textWidth(tex0, irw, irh, ic.key, th) + S * 0.5f;
         return cellOf(ic) >= 0 ? S : 0.f;
+    };
+    // segunda tecla do botao (so quando a legenda mostra teclas): lado a lado com a primeira
+    auto second = [&](const Icon &ic) { return ic.key2 && (style == st::PromptKeyboard || ic.pad <= 0) ? Icon{0, ic.key2} : Icon{}; };
+    auto iconW = [&](const Icon &ic) {
+        const float w1 = iconW1(ic), w2 = iconW1(second(ic));
+        return w2 > 0.f ? w1 + (w1 > 0.f ? iconGap : 0.f) + w2 : w1;
     };
     float w[kMax], total = 0.f;
     auto measure = [&] {
@@ -66,8 +72,8 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
     // texto na cor da legenda do jogo (cinza claro), um pouco mais claro para ler
     const Color tc{0x5C, 0x5A, 0x54, static_cast<unsigned char>(0x80 * a)};
     std::vector<wotm::TextQuad> q;
-    auto drawIcon = [&](const Icon &ic, float x) {
-        const float iw = iconW(ic);
+    auto drawIcon1 = [&](const Icon &ic, float x) {
+        const float iw = iconW1(ic);
         if (iw <= 0.f) return x;
         if (boxed(ic))
         {
@@ -78,6 +84,13 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
         else
             wotm_prompts::drawCell2d(cellOf(ic), x + S * 0.5f, cy, S, a);
         return x + iw;
+    };
+    auto drawIcon = [&](const Icon &ic, float x) {
+        const float x0 = x;
+        x = drawIcon1(ic, x);
+        const Icon k = second(ic);
+        if (iconW1(k) > 0.f) x = drawIcon1(k, x > x0 ? x + iconGap : x);
+        return x;
     };
     float x = std::max(rw * 0.02f, gr.x0 + gr.w * 0.5f - total * 0.5f);
     for (int i = 0; i < n; ++i)
