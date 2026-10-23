@@ -260,8 +260,7 @@ class Launcher : Form
                     if (Norm(mon) == Norm(MonsterGameNames[i]) || Norm(mon) == Norm(MonsterPrefixes[i])) k = i;
                 if (k < 0) continue;
                 string id = (JsonString(text, "id") ?? Path.GetFileName(dir)).ToLowerInvariant();
-                // o "name" vem em maiusculas (a fonte do menu do jogo so tem elas); aqui so as iniciais, como "Skin 1"
-                string name = System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase((JsonString(text, "name") ?? id).ToLowerInvariant());
+                string name = JsonString(text, "name") ?? id.ToUpperInvariant();
                 byKey[k + "/" + id] = new KeyValuePair<int, KeyValuePair<string, string>>(k, new KeyValuePair<string, string>(name, id));
             }
         }

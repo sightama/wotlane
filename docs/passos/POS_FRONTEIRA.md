@@ -327,7 +327,7 @@ guia em `MODS.md`, "Skins"):
 - Conferido: `WOTM_MATCH=4:roxo,4:3,1` (sons do traje 3 no log, 337 de 1000 texIds); `save.json` com `"congar/naoexiste"` e
   `"ultra-v/roxo"`: o binário do cartão sai com o traje 0 e com o índice da sessão, e o JSON fica intacto. **Conferido pelo
   dono no menu:** gravar e carregar uma aventura com skin, a lista de saves com o monstro da skin e, com o mod apagado, o traje 0 e
-  "skin missing", o sorteio da resistência e o launcher (nomes das skins só com as iniciais maiúsculas).
+  "skin missing", o sorteio da resistência e o launcher.
 
 - **Tela 7 (minigames de 2) com a seleção nativa e skins** (`wotm_padsel.inc`, `minigames2PHook`): os quadros vão na tela do
   fliperama, no lugar dos dois retratos grandes. Conferido por roteiro (Dodge Ball destravado só no teste): skin `togera/lima` na
