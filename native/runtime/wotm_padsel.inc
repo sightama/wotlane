@@ -1230,6 +1230,8 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
             ctx->r[5] = _mm_set_epi64x(0, 1);
         else if (from == 8 && to == 99)   // selecao de fase confirmada (o jogo ja gravou o m_levelNum)
             wotm_narrator::announceLevel(int(rd32(rdram, kShell + 0x2BB0)));
+        else if (from == 20 && to == 1)   // Start no titulo
+            wotm_narrator::stopIntro();
     }
     g_origChangeScreen(rdram, ctx, runtime);
 }

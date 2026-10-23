@@ -160,6 +160,8 @@ static void keyboard(uint16_t &btns, uint8_t *data)
     {
         uint16_t m = 0;
         // clique num item de uma tela do jogo (wotm_pausemenu.inc): o X por duas leituras, com o item ja escolhido
+        if (wotm::mouse::nowMs() > wotm::mouse::g_crossReqUntil.load(std::memory_order_relaxed))
+            wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);   // pedido velho (wotm_mouse.hpp, requestCross)
         int req = wotm::mouse::g_crossReq.load(std::memory_order_relaxed);
         while (req > 0 && !wotm::mouse::g_crossReq.compare_exchange_weak(req, req - 1, std::memory_order_relaxed)) {}
         if (req > 0) m |= 0x4000;

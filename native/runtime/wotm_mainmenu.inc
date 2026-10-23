@@ -133,7 +133,7 @@ constexpr TabDef kTabDefs[kTabs] = {
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
-      {st::Announcer, "ANNOUNCER", "A VOICE CALLS OUT THE MONSTER YOU PICK"}}},
+      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE TITLE, THE MONSTER AND THE LEVEL YOU PICK"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
       {st::CamSens, "SENSITIVITY", "HOW FAST THE RIGHT STICK TURNS THE CAMERA"},
@@ -281,6 +281,7 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
     case st::Camera: std::snprintf(buf, sz, "%s", v ? "MODERN" : "CLASSIC"); break;
     case st::CamSens: std::snprintf(buf, sz, "%d", v); break;
+    case st::Announcer: std::snprintf(buf, sz, "%s", v ? "GODZILLA SAVE THE EARTH" : "OFF"); break;   // a voz do narrador (narrator/)
     default: std::snprintf(buf, sz, "%s", v ? "ON" : "OFF"); break;
     }
 }

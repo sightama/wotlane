@@ -123,6 +123,18 @@ static void announceIntro()
     play(names);
 }
 
+// Start no titulo (changeScreen(20, 1)): corta o introsound se ele ainda estiver tocando
+static void stopIntro()
+{
+    std::lock_guard<std::mutex> lk(g_m);
+    const auto it = g_sounds.find("introsound");
+    if (it != g_sounds.end() && it->second.frameCount && IsSoundPlaying(it->second))
+    {
+        StopSound(it->second);
+        std::fprintf(stderr, "[narrador] introsound cortado pelo Start\n");
+    }
+}
+
 // Nome da fase (m_levelNum), na confirmacao da selecao de fase
 static void announceLevel(int level)
 {
