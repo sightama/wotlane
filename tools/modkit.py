@@ -7,6 +7,7 @@ de trabalho e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/
   python tools/modkit.py pack my_mod                         # o que foi editado vai para mods/my_mod/
   python tools/modkit.py check [my_mod]                      # confere os mods (nomes, tamanhos, texIds)
   python tools/modkit.py revert MON/lizard0_t0004.png        # volta um arquivo da pasta de trabalho ao original do disco
+  python tools/modkit.py skin new my_mod togera green --base 1 --name "GREEN TOGERA"   # skin nova: skin.json + PNGs do traje base
   python tools/modkit_gui.py                                 # o mesmo com interface (botao "Mod kit" do launcher)
 
 Opcoes: --disc <pasta> (disco extraido; padrao WOTM_DISC ou disc/ do repo), --mods <pasta> (padrao: <runtime>/discroot/mods, o
@@ -112,11 +113,12 @@ def expand(disc, pats):
 
 # ---------------------------------------------------------------- export
 
-def export(disc, work, pats):
+def export(disc, work, pats, dest=None):
+    """dest: subpasta da pasta de trabalho no lugar da pasta do disco (skin new: skins/<id>)."""
     state = load_state(work)
     for rel in expand(disc, pats):
         src = disc_file(disc, rel)
-        d = os.path.dirname(rel)
+        d = dest if dest else os.path.dirname(rel)
         final = os.path.join(work, *d.split("/")) if d else work
         out = os.path.join(work, ".export_tmp")   # grava aqui e depois move, sem atropelar o que ja foi editado
         shutil.rmtree(out, ignore_errors=True)
@@ -287,7 +289,7 @@ def pack(disc, work, mods, mod, inject=False):
             out_rel = (d + "/" if d else "") + name
             shutil.copy2(p, os.path.join(dst, *out_rel.split("/")))
             print("texture %s -> %s/%s" % (n, mod, out_rel))
-            if inject:
+            if inject and not d.startswith("skins/"):   # PNG de skin vale so para ela: nada a regravar no .TEX do disco
                 inject_png(disc, dst, stem, rtx, tid, p)
             continue
         if n.lower().endswith(".wav"):
@@ -331,6 +333,42 @@ def pack(disc, work, mods, mod, inject=False):
             cur = out
         print("bank %s.BNK: %d sound(s) replaced -> %s" % (stem.upper(), len(sounds), os.path.relpath(out, mods)))
     print("mod in %s" % dst)
+
+
+# ---------------------------------------------------------------- skins de mod (MODS.md, "Skins")
+
+MONSTERS = {"congar": "MONKEY", "robo-47": "ROBOT", "togera": "LIZARD", "ultra-v": "SHOGUN", "preytor": "MANTIS",
+            "kineticlops": "ENERGY", "magmo": "LAVA", "raptros": "DRAGON", "agamo": "ROCK", "zorgulon": "ALIEN"}
+
+
+def norm(s):
+    return "".join(c for c in s.lower() if c.isalnum())
+
+
+def skin_new(disc, work, mods, mod, monster, sid, base, name=None, ai=False):
+    """Cria mods/<mod>/skins/<id>/skin.json e exporta as texturas do traje base para <work>/skins/<id>/; o pack leva os PNGs
+    editados para a pasta da skin (valem so para ela)."""
+    game = next((g for g, p in MONSTERS.items() if norm(monster) in (norm(g), norm(p))), None)
+    if not game:
+        raise SystemExit("skin new: unknown monster %r (one of: %s)" % (monster, ", ".join(MONSTERS)))
+    if not re.fullmatch(r"[a-z0-9_]{1,32}", sid):
+        raise SystemExit("skin new: the id takes only lowercase letters, digits and _ (up to 32)")
+    if base not in range(4):
+        raise SystemExit("skin new: --base is a disc costume, 0 to 3")
+    if mod[0] in "_.":
+        raise SystemExit("skin new: the mod name cannot start with '_' or '.'")
+    folder = os.path.join(mods, mod, "skins", sid)
+    os.makedirs(folder, exist_ok=True)
+    js = os.path.join(folder, "skin.json")
+    if os.path.exists(js):
+        print("%s already exists; kept" % js)
+    else:
+        with open(js, "w", encoding="utf-8") as f:
+            json.dump({"monster": game, "id": sid, "name": (name or "%s %s" % (sid, game)).upper(), "base": base, "ai": ai}, f, indent=2)
+            f.write("\n")
+        print("skin %s/%s: %s" % (game, sid, js))
+    export(disc, work, ["MON/%s%d" % (MONSTERS[game], base)], dest="skins/" + sid)
+    print("edit the PNGs in %s, then: modkit.py pack %s" % (os.path.join(work, "skins", sid), mod))
 
 
 def find_disc_ext(disc, d, stem, ext):
@@ -422,16 +460,16 @@ def check(disc, mods, only=None):
 def main(argv):
     opts, args, i = {}, [], 0
     while i < len(argv):
-        if argv[i] in ("--disc", "--mods", "--work"):
+        if argv[i] in ("--disc", "--mods", "--work", "--base", "--name"):
             opts[argv[i][2:]] = argv[i + 1]
             i += 2
-        elif argv[i] == "--inject":
-            opts["inject"] = True
+        elif argv[i] in ("--inject", "--ai"):
+            opts[argv[i][2:]] = True
             i += 1
         else:
             args.append(argv[i])
             i += 1
-    if not args or args[0] not in ("export", "pack", "check", "revert"):
+    if not args or args[0] not in ("export", "pack", "check", "revert", "skin"):
         print(__doc__)
         return 1
     disc = opts.get("disc") or default_disc()
@@ -447,6 +485,10 @@ def main(argv):
         if len(args) != 2 or args[1][0] in "_.":
             raise SystemExit("pack: one mod name (not starting with '_' or '.')")
         pack(disc, work, mods, args[1], opts.get("inject", False))
+    elif args[0] == "skin":
+        if len(args) != 5 or args[1] != "new":
+            raise SystemExit("skin new <mod> <monster> <id> [--base N] [--name \"GREEN TOGERA\"] [--ai]")
+        skin_new(disc, work, mods, args[2], args[3], args[4], int(opts.get("base", 0)), opts.get("name"), opts.get("ai", False))
     elif args[0] == "revert":
         if len(args) < 2:
             raise SystemExit("revert: files of the work folder (e.g. MON/lizard0_t0004.png)")

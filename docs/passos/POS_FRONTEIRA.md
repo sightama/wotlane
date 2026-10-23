@@ -14,7 +14,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
-| 8 | Mods que adicionam skins e monstros (sem substituir) — **skins, parte 1, na master em 2026-10-23** (falta save, sons do base, IAs, tela 7, CUSTOM e monstros novos) | 3, 4 | médio/alto |
+| 8 | Mods que adicionam skins e monstros (sem substituir) — **skins (partes 1 a 4) na master em 2026-10-23** (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
@@ -312,37 +312,38 @@ Depois do merge, no mesmo dia (`wotm_padsel.inc`; `NATIVO.md`, seleção de 1 e 
   telão e, depois, na luta) e, com dois Robo-47 na seleção de 4, o teste de Z ficava ligado e esvaziava os quadros seguintes.
   Conferido pelo dono (menu e luta).
 
-**Falta** (plano em `docs/investigacoes/2026-10-23/skins_mod_plano.md` e nos três relatórios `skins_mod_carga/save/telas.md`; revisto
-contra o código em 2026-10-23):
-1. **Save da aventura com skin (etapa 2), com risco hoje:** a tela 3 já deixa escolher skin no adventure, e o slot grava o índice da
-   sessão (`"costume": 4`). Se o mod sumir ou as skins mudarem de ordem, a carga pede um `MON/<PREFIXO>4.*` que não existe (ou outro
-   traje): `.PTR` não lido, relocação com lixo, travamento provável (`skins_mod_save.md`, "Traje >= 4 no binário"). O que o plano pede:
-   string `"togera/green"` no JSON; uma `resolveCostume` só, chamada no `jsonToAdventure`, `buildRows`/`loadRow` e no monstro 3D da
-   lista, antes do `setSaveData`; fallback traje 0 (o dono sugeriu aleatório; **decisão pendente**), com log e "skin missing" na lista;
-   guardar a string original para regravá-la se o mod voltar; tirar os `& 3` (`wotm_save.inc:918`, `wotm_savepics.hpp:182, :343`).
-   Opcional: `"costumeBase"` no slot.
-2. **Bug que já existe sem skins:** o `adventureToJson` (`wotm_save.inc:174`) zera cada slot e o refaz, perdendo chaves desconhecidas
-   do slot sempre que o jogo grava o `savegame.dat` (`WOTM_SAVEAUTO=0` ou importação de cartão). Trocar por "só reescreve se os
-   números mudaram"; entra junto com o item 1.
-3. **Sons do traje base:** o `MODS.md` diz que o `base` dá os sons do traje, mas nada põe `m_skinNum = base`: a skin chega à luta com
-   `m_skinNum` 4+ e cai no som padrão. Só muda algo com base 1 do Preytor (formigas) e base 3 do Agamo (Mecha Sweet Tooth). Gancho
-   na saída do `SetPlayerMonster`/`SetAIMonster` (Monster+0x30).
-4. **IAs sorteadas com skin** (resistência, modo 4): o `"ai"` do `skin.json` é lido e ninguém o usa. Gancho depois do
-   `Shell::RandomlySelectAI`, sorteando entre os trajes destravados e as skins com `"ai": true`, evitando o traje do jogador no mesmo
-   monstro. As IAs da aventura (`levelMonsterModels`) ficam de fora (decisão).
-5. **Telas sem skin:** a 7 (`screenMinigames2P`, minigames de 2) segue com o painel de 4 do jogo; o elimination (modo 6) esconde o
-   traje (item 7 de `selecao_nativa_pendencias.md`); a 17 é inalcançável.
-6. **Avisos de carga contra os tetos reais** (etapa 4): `texInfo[1000]` e VRAM residente do `.RTX` (o jogo sai com "TRYING TO LOAD
-   TOO MUCH TEXTURE") num log com o `maxTexId` e a VRAM usada. E o AVISO do `wotm_mods.inc:8`/`:75` ("regiões de tamanho fixo") não
-   vale para `MON/*` com a RAM alta (a carga é contígua): reescrever o texto.
-7. **Launcher:** a partida direta só oferece "Skin 1..4" e Random (`WotmLauncher.cs:196`); o `WOTM_MATCH` já aceita `togera/green`,
-   falta listar as skins de mod no combo.
-8. **Kit:** `modkit.py skin new <monstro> <id> --base N` (exporta o base e o `pack` grava em `mods/<mod>/skins/<id>/` com o
-   `skin.json`). Opcional.
-9. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
+**Etapas 2 a 4 na master em 2026-10-23** (merge da branch `skins-etapa2`; revisão das investigações `skins_mod_carga/save/telas.md` contra o código;
+guia em `MODS.md`, "Skins"):
+- **Save por nome:** o slot da aventura guarda `"costume": "ultra-v/roxo"`; uma `resolveCostume` só (`wotm_save.inc`) serve o
+  `jsonToAdventure`, a lista de saves e o monstro 3D. Skin ausente: traje 0 (decisão do dono), log e "skin missing" na lista; gravar
+  a mesma aventura devolve o nome ao JSON (esquecido quando uma tela de seleção de monstro abre). Os `& 3` da lista de saves saíram.
+- **`adventureToJson`:** slot que diz o mesmo que o binário fica como está (antes zerava e perdia chaves de fora e o nome da skin).
+- **Sons do traje base** (`wotm_skins.inc`): o `SetPlayerMonster`/`SetAIMonster` recebe o `base` da skin como `m_skinNum`.
+- **IAs sorteadas** (resistência): depois do `Shell::RandomlySelectAI`, o traje da IA sai entre o do jogo e as skins `"ai": true`.
+- **Log da carga:** `[wotm] carga da fase: N de 1000 texIds` (aviso perto e além do teto do `texInfo`); o AVISO de arquivo maior que
+  o do disco não assusta mais para `MON/*` (a carga é contígua acima de 32 MB).
+- **Launcher:** a caixa de skin de cada monstro lista as skins de mod dele; Random sorteia entre todas.
+- **Kit:** `modkit.py skin new <mod> <monstro> <id> --base N`.
+- Conferido: `WOTM_MATCH=4:roxo,4:3,1` (sons do traje 3 no log, 337 de 1000 texIds); `save.json` com `"congar/naoexiste"` e
+  `"ultra-v/roxo"`: o binário do cartão sai com o traje 0 e com o índice da sessão, e o JSON fica intacto. **Conferido pelo
+  dono no menu:** gravar e carregar uma aventura com skin, a lista de saves com o monstro da skin e, com o mod apagado, o traje 0 e
+  "skin missing", o sorteio da resistência e o launcher (lista as skins em maiúsculas).
+
+- **Tela 7 (minigames de 2) com a seleção nativa e skins** (`wotm_padsel.inc`, `minigames2PHook`): os quadros vão na tela do
+  fliperama, no lugar dos dois retratos grandes. Conferido por roteiro (Dodge Ball destravado só no teste): skin `togera/lima` na
+  seleção e no minigame, triângulo de volta à tela 14 e reentrada. Fotos: `docs/screenshots/2026-10-23/2026-10-23_minigames2p_*.png`.
+- **Transições da seleção nativa** (`wotm_padsel.inc`, `wotm_fmv.hpp`; conferidas pelo dono): a saída para uma tela com animação de
+  câmera (volta da adventure, ida à seleção de fase) segue a câmera do jogo pelo progresso da animação, num movimento só; o filme do
+  telão não recomeça na entrada (o End da tela 3 não vale com `Player::setHold`) nem fica preto na volta (o Play do mesmo filme
+  continua); a fileira de retratos do jogo não aparece no quadro em que a tela já trocou (vindo do sudden death).
+
+**Falta:**
+1. **Elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez e os jogadores trocam de monstro entre
+   as rodadas sem recarregar. Escolher traje ali pede mudar a carga (um arquivo por monstro escolhido), não só a tela.
+2. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
 
 Fora, por decisão do dono: tela de destrave (skin de mod sempre aberta), som próprio por skin. Pendências da seleção para o contribuinte (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`,
-itens 5 a 8): transição esquisita ao confirmar em modos com seleção de fase, Togera desalinhado no quadro único do adventure, skins
+itens 5 a 8): transição esquisita ao confirmar em modos com seleção de fase (talvez resolvida pela câmera da saída acima; conferir), Togera desalinhado no quadro único do adventure, skins
 no elimination (modo 6 esconde o traje) e os quadros dos monstros fora do telão.
 
 ### 9. Modo treino

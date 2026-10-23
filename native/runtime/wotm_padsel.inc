@@ -70,6 +70,7 @@ struct View
     int count = 0;          // dispositivos presentes
     int players = 0;        // jogadores distintos escolhidos
     uint32_t screenObj = 0;
+    uint32_t mgObj[24] = {}, mgUsed[2] = {};   // tela 7: objetos dos retratos grandes e o em uso de cada jogador (publish)
     // selecao
     int selPlayers = 0;
     uint32_t selMonster[kMaxPlayers] = {};   // m_monsterSel (tipo << 5)
@@ -91,6 +92,9 @@ struct View
     uint32_t labelRef[4] = {};   // objetos do "1 player" em uso (texto e brilho): o menor da a coluna e a altura das letras
     bool labelLit = false;
     float labelAlpha = 0.f;
+    // transicao de tela com animacao de camera (changeScreen com anim != 0): progresso 0..1 no sentido em que ela toca
+    bool transMoving = false;
+    float transProg = 0.f;
 };
 static std::mutex g_m;
 static View g_view;
@@ -98,6 +102,8 @@ static View g_view;
 // Thread do EE
 static Phase g_phase = Off;
 static float g_uiAlpha = 0.f, g_reveal = 0.f;
+static bool g_transMoving = false;   // a camera do jogo anda na transicao em curso (transitionHook)
+static float g_transProg = 0.f;
 static int g_slot[kDevs] = {};
 static bool g_prev[kDevs][kActions] = {};
 static bool g_primed = false;
@@ -282,7 +288,7 @@ static void forSwitchObjects(uint8_t *rdram, uint32_t sw, F f)
     if (sw < 0x1000u || (rdram[sw] & 0x3F) != 6)   // SWITCH_NODE
         return;
     const uint32_t kids = rdram[sw + 0xB], which = rdram[sw + 8];
-    for (uint32_t k = 0; k < kids && k < 8; ++k)
+    for (uint32_t k = 0; k < kids && k < 16; ++k)
     {
         const uint32_t c = rd32(rdram, sw + 0xC + 4 * k) & 0x1FFFFFFFu;
         if (c < 0x1000u)
@@ -746,7 +752,7 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 // passam, depois da ultima coluna aberta, pelo aleatorio e pelo personalizado (casas so nossas, g_soloExtra). A fileira de retratos
 // do jogo da lugar a barra 2D (drawBar2d, hideStrip) e o telao fica preto com o sheldemo (selectMovie).
 // WOTM_NATSEL=0 volta as telas do jogo.
-static int g_solo = 0;   // 3, 6, 18 ou 19: a tela do jogo que a selecao nativa mostra
+static int g_solo = 0;   // 3, 6, 7, 18 ou 19: a tela do jogo que a selecao nativa mostra
 static bool g_soloLeaving = false;
 
 static bool soloEnabled()
@@ -774,6 +780,13 @@ static int soloPanels(uint8_t *rdram, SoloPanel out[kMaxPlayers], bool &noCostum
     {
         out[0] = {currentSelection + 4u * 3u, curCostume1_2833, monsterIsSelected_2829, kCostume, kMonsterSel, 1, false, false};
         return 1;
+    }
+    if (g_solo == 7)
+    {
+        // Tela 7 (screenMinigames2P): cada controle escolhe o seu; a carga dos minigames usa o m_costume de cada jogador
+        out[0] = {currentSelection + 4u * 7u, curCostume1_2912, playerOneIsDone_2914, kCostume, kMonsterSel, 1, false, false};
+        out[1] = {currentSelection + 4u * 29u, curCostume2_2913, playerTwoIsDone_2915, kCostume + 4u, kMonsterSel + 4u, 2, false, false};
+        return 2;
     }
     const uint32_t mode = rd32(rdram, kMode);
     noCostume = mode == 6;   // eliminacao: o jogo poe o traje 0
@@ -1082,6 +1095,23 @@ static void publish(uint8_t *rdram)
     }
     v.players = distinctPlayers(nullptr);
     v.screenObj = rd32(rdram, kMovieScreen) & 0x1FFFFFFFu;
+    // minigames de 2 (tela 7, no fliperama, sem o telao): os retratos grandes dos dois jogadores (switches Shell+0x1EC e +0x1F0, um
+    // filho por coluna, com o "player N") saem da cena e o plano da selecao e o deles (mgPlane)
+    std::fill(std::begin(v.mgObj), std::end(v.mgObj), 0u);
+    v.mgUsed[0] = v.mgUsed[1] = 0;
+    if (g_solo == 7 && !g_selOn)
+    {
+        int k = 0;
+        for (int p = 0; p < 2; ++p)
+            forSwitchObjects(rdram, rd32(rdram, kShell + (p ? 0x1F0u : 0x1ECu)), [&](uint32_t o, bool used) {
+                if (k < int(std::size(v.mgObj))) v.mgObj[k++] = o;
+                if (used) v.mgUsed[p] = o;
+            });
+        if (v.mgUsed[0] && v.mgUsed[1])
+            v.screenObj = v.mgUsed[0];
+    }
+    v.transMoving = g_transMoving && rd32(rdram, wotm::sym::betweenScreens) != 0;
+    v.transProg = g_transProg;
     v.selPlayers = g_selOn ? g_multi : 0;
     v.selNoCostume = false;
     for (int c = 1; c <= 10; ++c)
@@ -1134,10 +1164,44 @@ static void hideSelect2P(uint8_t *rdram, int screen = 6)
             if (const uint32_t sw = rd32(rdram, kShell + off) & 0x1FFFFFFFu; sw >= 0x1000u)
                 rdram[sw + 8] = 0;
     }
-    // marcas "1"/"2" dos jogadores do retail nos retratos (shell->m_selectSw[coluna]: 1, 2 ou 3 = os dois; 4 = travado, fica)
+    if (screen == 7)
+    {
+        for (uint32_t i = 0; i < 2; ++i)   // m_costumeBoxCsMG[0..1]: os paineis de traje da selecao dos minigames
+            if (const uint32_t cs = rd32(rdram, kShell + 0xB0 + 4 * i) & 0x1FFFFFFFu; cs >= 0x1000u)
+                rdram[cs + 0xC] = 0;
+    }
+    // marcas "1"/"2" dos jogadores do retail nos retratos (shell->m_selectSw[coluna], m_selectSwMG na tela 7: 1, 2 ou 3 = os dois;
+    // 4 = travado, fica)
+    const uint32_t marks = screen == 7 ? 0x194u : 0x168u;
     for (uint32_t i = 0; i < 10; ++i)
-        if (const uint32_t sw = rd32(rdram, kShell + 0x168 + 4 * i) & 0x1FFFFFFFu; sw >= 0x1000u && rdram[sw + 8] >= 1 && rdram[sw + 8] <= 3)
+        if (const uint32_t sw = rd32(rdram, kShell + marks + 4 * i) & 0x1FFFFFFFu; sw >= 0x1000u && rdram[sw + 8] >= 1 && rdram[sw + 8] <= 3)
             rdram[sw + 8] = 0;
+}
+
+// Progresso (0..1, no sentido em que toca) da animacao de camera da transicao em curso, shell->m_screenAnim[currAnimationIndex]
+// (_animHandle de 16 bytes, que as funcoes recebem por ponteiro em a0). -1 sem animacao.
+static float transitionProgress(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+{
+    const uint32_t idx = rd32(rdram, wotm::sym::currAnimationIndex);
+    if (idx == 0 || idx >= 12) return -1.f;
+    const uint32_t h = kShell + 0x61C + 16u * idx;
+    const PS2Runtime::RecompiledFunction fp = rt->lookupFunction(wotm::fn::animationGetCurrentPercent__FG11_animHandle),
+                                         fd = rt->lookupFunction(wotm::fn::animationGetDirection__FG11_animHandle);
+    if (!fp || !fd) return -1.f;
+    const R5900Context saved = *ctx;
+    auto call = [&](uint32_t fn, PS2Runtime::RecompiledFunction f) {
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(h));
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->pc = fn;
+        f(rdram, ctx, rt);
+    };
+    call(wotm::fn::animationGetCurrentPercent__FG11_animHandle, fp);
+    const float pct = ctx->f[0];
+    call(wotm::fn::animationGetDirection__FG11_animHandle, fd);
+    const bool fwd = GPR_U32(ctx, 2) != 0;
+    *ctx = saved;
+    if (!(pct >= 0.f && pct <= 1.f)) return -1.f;
+    return fwd ? pct : 1.f - pct;
 }
 
 // screenTransition: entrada vinda do menu principal (ou da volta da tela 15 no multijogador) comeca a escolha de controles; a
@@ -1163,7 +1227,7 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         if (rd32(rdram, wotm::sym::screenFirstPass) && cur == 6 && g_multi && (!g_selOn || g_selLeaving))
             selectBegin(rdram);
         // telas 3 e 6 de 1 e 2 jogadores: a selecao do jogo vista no telao
-        if (rd32(rdram, wotm::sym::screenFirstPass) && (cur == 3 || cur == 18 || cur == 19 || (cur == 6 && !g_multi)) && soloEnabled() &&
+        if (rd32(rdram, wotm::sym::screenFirstPass) && (cur == 3 || cur == 7 || cur == 18 || cur == 19 || (cur == 6 && !g_multi)) && soloEnabled() &&
             (g_solo != cur || g_soloLeaving))
             soloBegin(cur);
         g_transRa = GPR_U32(ctx, 31);
@@ -1173,6 +1237,11 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     if (!g_transPending || ctx->pc != g_transRa)
         return;
     g_transPending = false;
+    {
+        const float p = transitionProgress(rdram, ctx, runtime);
+        g_transMoving = p >= 0.f;
+        g_transProg = g_transMoving ? p : 0.f;
+    }
     const int hidden = hiddenScreen();
     if (hidden >= 0)
     {
@@ -1183,7 +1252,7 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         const bool ended = rd32(rdram, wotm::sym::betweenScreens) == 0;
         g_uiAlpha = fading ? std::min(1.f, std::max(0.f, itemsAlpha(rdram, hidden))) : (entering && ended ? 1.f : 0.f);
         setItemsAlpha(rdram, hidden, 0.f);
-        if (hidden == 6 || hidden == 3 || hidden == 18 || hidden == 19)
+        if (hidden == 6 || hidden == 3 || hidden == 7 || hidden == 18 || hidden == 19)
             hideSelect2P(rdram, hidden);
         if (g_phase == Leaving && ended)
             g_phase = Off;
@@ -1326,6 +1395,26 @@ static void selectNHook(int k, uint8_t *rdram, R5900Context *ctx, PS2Runtime *ru
         return;
     g_selectNPending[k] = false;
     if (g_solo == screen)
+        soloExit(rdram);
+    publish(rdram);
+}
+// Tela 7 (minigames de 2): a mesma selecao nativa
+static PS2Runtime::RecompiledFunction g_origMinigames2P = nullptr;
+static uint32_t g_minigamesRa = 0;
+static bool g_minigamesPending = false;
+static void minigames2PHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc == wotm::fn::screenMinigames2P__Fv && g_solo == 7)
+    {
+        g_minigamesRa = GPR_U32(ctx, 31);
+        g_minigamesPending = true;
+        ++g_soloTick;
+    }
+    g_origMinigames2P(rdram, ctx, runtime);
+    if (!g_minigamesPending || ctx->pc != g_minigamesRa)
+        return;
+    g_minigamesPending = false;
+    if (g_solo == 7)
         soloExit(rdram);
     publish(rdram);
 }
@@ -2249,6 +2338,42 @@ static bool objectPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
     return true;
 }
 
+// Plano da selecao: o telao ou, na tela 7, os dois retratos grandes do fliperama juntos (no plano do P1, com a faixa de baixo da tela
+// dele: ~30% a mais), que saem da cena. Guardado para o drawOnTelao, que desenha depois que os objetos ja sairam.
+static Plane g_mgPlane;
+static bool g_mgPlaneOk = false;
+static bool selectPlane(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, const View &v, Plane &out)
+{
+    if (!v.mgUsed[0])
+        return objectPlane(scene, ram, cam, v.screenObj, out);
+    Plane a, b;
+    if (objectPlane(scene, ram, cam, v.mgUsed[0], a) && objectPlane(scene, ram, cam, v.mgUsed[1], b))
+    {
+        for (const float x : {b.x0, b.x1})
+            for (const float y : {b.y0, b.y1})
+            {
+                const Vector3 q = vadd(vadd(b.c, vscale(b.right, x)), vscale(b.up, y)), d = vsub(q, a.c);
+                const float px = vdot(d, a.right), py = vdot(d, a.up);
+                a.x0 = std::min(a.x0, px); a.x1 = std::max(a.x1, px); a.y0 = std::min(a.y0, py); a.y1 = std::max(a.y1, py);
+            }
+        const float w = a.x1 - a.x0, h = a.y1 - a.y0;
+        a.x0 -= 0.02f * w, a.x1 += 0.02f * w, a.y1 += 0.03f * h, a.y0 -= 0.30f * h;
+        g_mgPlane = a;
+        if (!g_mgPlaneOk)
+            std::fprintf(stderr, "[padsel] tela 7: plano dos retratos %.1f x %.1f\n", a.x1 - a.x0, a.y1 - a.y0);
+        g_mgPlaneOk = true;
+    }
+    auto &items = scene.items;
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [&](const wotm::DrawItem &it) {
+                                   const uint32_t n = it.node & 0x1FFFFFFFu;
+                                   return std::find(std::begin(v.mgObj), std::end(v.mgObj), n) != std::end(v.mgObj);
+                               }),
+                items.end());
+    out = g_mgPlane;
+    return g_mgPlaneOk;
+}
+
 // Textura (de render: V invertido) num retangulo do plano: esquerda/topo e largura/altura nos eixos dele, alfa 0..1; `uv` = parte
 // da textura (x0, y0, x1, y1 em fracao, y de cima para baixo); `tint` multiplica a cor
 static void drawOnPlane(const Plane &pl, const Texture2D &tex, float left, float top, float wx, float hy, float alpha, float lift,
@@ -2345,15 +2470,59 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
     const float dt = std::clamp(float(now - s_last), 0.f, 0.1f);
     s_last = now;
     const bool want = v.select && v.alpha > 0.f;
+    // Saida para uma tela com animacao de camera (voltar da adventure a tela 2, confirmar e ir a selecao de fase): a camera do jogo
+    // ja anda de onde ficaria a selecao original ate a tela seguinte. Voltar ao jogo em 0,45 s por fora somava os dois movimentos;
+    // aqui a do quadro e a do jogo mais a diferenca para o telao no inicio da saida, que some com o progresso da animacao do jogo
+    // (um movimento so, do telao ate a tela seguinte, no ritmo do jogo).
+    static bool s_follow = false;
+    static float s_q0 = 0.f;
+    static Vector3 s_dPos{}, s_dFwd{}, s_dUp{};
+    if (!want && s_t > 0.f && !s_follow && v.transMoving && v.transProg < 0.95f)
+    {
+        Plane pl0;
+        if (v.screenObj && selectPlane(scene, ram, cam, v, pl0))
+        {
+            Camera3D t = cam;
+            telaoCamera(t, pl0, aspect, s_t);   // a camera mostrada agora
+            s_dPos = vsub(t.position, cam.position);
+            s_dFwd = vsub(vnorm(vsub(t.target, t.position)), vnorm(vsub(cam.target, cam.position)));
+            s_dUp = vsub(t.up, cam.up);
+            s_q0 = v.transProg;
+            s_follow = true;
+        }
+    }
+    if (s_follow)
+    {
+        if (want || !v.transMoving)
+        {
+            s_follow = false;
+            if (!want) s_t = 0.f;
+        }
+        else
+        {
+            const float k = 1.f - std::clamp((v.transProg - s_q0) / std::max(1.f - s_q0, 1e-3f), 0.f, 1.f);
+            hideStrip(scene, ram);
+            scene.overlay.clear();
+            scene.hpOverlay.clear();
+            const Vector3 fwd = vnorm(vadd(vnorm(vsub(cam.target, cam.position)), vscale(s_dFwd, k)));
+            cam.position = vadd(cam.position, vscale(s_dPos, k));
+            cam.target = vadd(cam.position, fwd);
+            cam.up = vnorm(vadd(cam.up, vscale(s_dUp, k)));
+            return;
+        }
+    }
     s_t = std::clamp(s_t + (want ? dt : -dt) / 0.45f, 0.f, 1.f);
     // telas de opcoes antes da selecao (11 eliminacao, 12 CPUs de 1 jogador, 13 CPUs do multijogador, 15 "first to"): a fileira do
     // jogo so prepara a selecao do jogo, que a nativa substitui
     const uint32_t cur = ram.u32(wotm::sym::currScreen);
-    const bool optionsScreen = soloEnabled() && (cur == 11 || cur == 12 || cur == 13 || cur == 15);
+    // tambem as telas da selecao (3, 6, 7, 18, 19): o changeScreen ja trocou a tela antes de o transitionHook publicar a selecao, e a
+    // fileira do jogo aparecia por um quadro (ex.: "sudden death" na tela 15)
+    const bool optionsScreen = soloEnabled() && (cur == 11 || cur == 12 || cur == 13 || cur == 15 || cur == 3 || cur == 6 || cur == 7 ||
+                                                 cur == 18 || cur == 19);
     if (v.select || s_t > 0.f || optionsScreen)
         hideStrip(scene, ram);   // a barra nativa (drawBar2d) faz o papel da fileira de retratos (ate a camera voltar)
     Plane pl;
-    if (s_t <= 0.f || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
+    if (s_t <= 0.f || !v.screenObj || !selectPlane(scene, ram, cam, v, pl))
         return;
     scene.overlay.clear();   // icones de botao 3D do jogo: seguem a camera dele
     scene.hpOverlay.clear();
@@ -2824,9 +2993,13 @@ static void selectMovie(const wotm::Ram &ram, bool select)
     static bool s_own = false;
     wotm::fmv::Player &p = wotm::fmv::Player::get();
     const bool gameStopped = ram.u32(wotm::sym::myMovie + 0x94) != 0;
-    if (select && gameStopped && (!p.active(wotm::fmv::Player::Screen) || p.finished(wotm::fmv::Player::Screen)))
+    // enquanto a selecao esta na tela, o End do jogo nao para o filme: ele segue de onde estava (recomecar mostrava de novo o fade
+    // do preto do comeco do sheldemo, um segundo fade-in logo depois do da transicao)
+    p.setHold(wotm::fmv::Player::Screen, select);
+    if (select && gameStopped)
     {
-        p.start(wotm::fmv::Player::Screen, "mov/sheldemo.pss", false);
+        if (!p.active(wotm::fmv::Player::Screen) || p.finished(wotm::fmv::Player::Screen))
+            p.start(wotm::fmv::Player::Screen, "mov/sheldemo.pss", false);   // em laco
         s_own = true;
     }
     else if (!select && s_own)
@@ -2884,8 +3057,12 @@ static void drawOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D
         const float hy = 0.74f * refH * texH / (texH - 2.f * kLabelPad), wx = hy * texW / texH;
         drawOnPlane(pl, g_labelRt.texture, cx - wx * 0.5f, (pl.y0 + pl.y1) * 0.5f + hy * 0.5f, wx, hy, v.labelAlpha, 0.004f * (pl.x1 - pl.x0));
     }
-    if ((!v.on && !v.select) || v.alpha <= 0.f || !v.screenObj || !objectPlane(scene, ram, cam, v.screenObj, pl))
+    if ((!v.on && !v.select) || v.alpha <= 0.f || !v.screenObj)
         return;
+    if (v.mgUsed[0] ? !g_mgPlaneOk : !objectPlane(scene, ram, cam, v.screenObj, pl))
+        return;
+    if (v.mgUsed[0])
+        pl = g_mgPlane;
     if (v.select)
     {
         // selecao de monstros: o telao inteiro, visto de frente (frameCamera)
@@ -2943,6 +3120,7 @@ void wotmPadSelInstall(PS2Runtime &runtime)
         {wotm::fn::screenCharSelect1P__Fv, &g_origSelect1P, &select1PHook},
         {wotm::fn::screenCharSelect3P__Fv, &g_origSelect3P, &select3PHook},
         {wotm::fn::screenCharSelect4P__Fv, &g_origSelect4P, &select4PHook},
+        {wotm::fn::screenMinigames2P__Fv, &g_origMinigames2P, &minigames2PHook},
         {wotm::fn::screenGetInput__Fi, &g_origGetInput, &getInputHook},
         {wotm::fn::changeScreen__Fiiiib, &g_origChangeScreen, &changeScreenHook},
         {wotm::fn::screenMain__Fv, &g_origMain, &mainHook},

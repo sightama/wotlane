@@ -457,6 +457,9 @@ public:
         const Source src = locate(gameName);
         std::lock_guard<std::mutex> lk(m_);
         Req &r = req_[s];
+        // segurado (setHold) e ja tocando o mesmo filme: continua (a volta da selecao nativa ao menu chama Play de novo, e reabrir
+        // deixava o telao preto ate o primeiro quadro)
+        if (hold_[s].load() && active_[s].load() && !done_[s].load() && r.name == gameName) return;
         r.src = src;
         r.name = gameName;
         r.audio = audio;
@@ -472,11 +475,15 @@ public:
                      (unsigned long long)src.offset);
     }
     void stop(Slot s) {
+        if (hold_[s].load()) return;   // setHold: o jogo encerra o filme, mas quem segura continua tocando
         std::lock_guard<std::mutex> lk(m_);
         req_[s].stop = true;
         req_[s].open = false;
         active_[s].store(false);
     }
+    // Segura o filme do slot: stop() nao vale enquanto ligado (selecao nativa: a tela 3 do jogo encerra o filme do telao, que ela
+    // continua mostrando sem recomecar). Desligar nao para nada.
+    void setHold(Slot s, bool on) { hold_[s].store(on); }
     bool finished(Slot s) const { return done_[s].load(); }
     bool active(Slot s) const { return active_[s].load(); }
     bool hasFrame(Slot s) const { return shown_[s].load(); }
@@ -565,7 +572,7 @@ private:
     struct Req { Source src; std::string name; bool audio = false, open = false, stop = false; };
     std::mutex m_;
     Req req_[2];
-    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{};
+    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{}, hold_[2]{};
     uint16_t padDown_ = 0;   // X/Start do pad no quadro anterior (so a thread do EE)
     std::atomic<std::chrono::steady_clock::rep> startedAt_{};
     std::atomic<uint32_t> screenW_{256}, screenH_{128};

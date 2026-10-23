@@ -11,6 +11,7 @@
 // WOTM_SAVEJSON=0 desliga (so o mc0/, como antes). Layout dos blocos no POS_FRONTEIRA.md; tools/mcsave.py mostra o mesmo JSON.
 
 #include "wotm_json.hpp"
+#include "wotm_mods.hpp"   // skins de mod: traje do slot por nome
 #define WOTM_SAVEPICS_NO_DRAW
 #include "wotm_savepics.hpp"   // logo do monstro e foto da fase a esquerda da lista de saves (a janela desenha)
 
@@ -157,8 +158,81 @@ namespace wotm_save
     }
 
     bool isNull(const Value &v) { return v.type == Value::Null; }
+    uint32_t savesIntOf(const Value &s, const char *k)
+    {
+        const Value *v = s.get(k);
+        return v && v->isInt() ? static_cast<uint32_t>(v->asInt()) : 0u;
+    }
 
-    // Slots do cartao `card` (10 a partir de card * 10) em j.saves; o array termina no ultimo slot nao nulo.
+    // ---- traje do slot da aventura (POS_FRONTEIRA.md, item 8) ----
+    // Trajes do disco (0..3) ficam como inteiro; skin de mod, como "monstro/id" ("togera/green"). O indice de uma skin (4, 5...) so
+    // vale nesta execucao (wotm_mods.hpp) e nunca vai para o JSON. Um indice que nao existe nesta sessao nunca vai para o binario nem
+    // para o m_costume (o jogo pediria um MON/<PREFIXO>N.* que nao existe e relocaria com lixo): sem a skin, traje 0.
+    struct Costume
+    {
+        uint32_t index = 0;
+        std::string skin;   // "togera/green" quando o slot traz uma skin de mod (achada ou nao)
+        bool missing = false;
+    };
+    Costume resolveCostume(uint32_t monster, const Value *v, bool log)
+    {
+        Costume c;
+        if (!v)
+            return c;
+        const wotm::mods::Registry &reg = wotm::mods::Registry::get();
+        if (v->type == Value::Str)
+        {
+            c.skin = v->s;
+            if (const wotm::mods::Skin *k = reg.skin(static_cast<int>(monster), v->s))
+                c.index = static_cast<uint32_t>(k->index);
+            else
+                c.missing = true;
+        }
+        else if (v->isInt())
+        {
+            const int64_t n = v->asInt();
+            if (n >= 0 && n <= 3)
+                c.index = static_cast<uint32_t>(n);
+            else if (const wotm::mods::Skin *k = reg.skinByIndex(static_cast<int>(monster), static_cast<int>(n)))
+                c.index = static_cast<uint32_t>(n), c.skin = k->monsterName + "/" + k->id;   // save de antes do nome no JSON
+            else
+                c.missing = true;
+        }
+        if (c.missing && log)
+            std::fprintf(stderr, "[wotm] save: traje %s nao achado (mod ausente?); usando traje 0\n",
+                         c.skin.empty() ? std::to_string(v->asInt()).c_str() : c.skin.c_str());
+        return c;
+    }
+    // Indice do jogo -> valor do JSON
+    Value costumeValue(uint32_t monster, uint32_t index)
+    {
+        if (index <= 3)
+            return Value::integer(index);
+        if (const wotm::mods::Skin *k = wotm::mods::Registry::get().skinByIndex(static_cast<int>(monster), static_cast<int>(index)))
+            return Value::string(k->monsterName + "/" + k->id);
+        return Value::integer(0);
+    }
+    // Traje do disco que da o modelo de reserva (e o enquadramento) do monstro 3D da lista: o base da skin
+    uint32_t modelBase(uint32_t monster, uint32_t index)
+    {
+        if (index <= 3)
+            return index;
+        const wotm::mods::Skin *k = wotm::mods::Registry::get().skinByIndex(static_cast<int>(monster), static_cast<int>(index));
+        return k ? static_cast<uint32_t>(k->base) & 3u : 0u;
+    }
+    // Slot carregado com uma skin que nao existe nesta sessao (jogado com o traje 0): ao gravar a mesma aventura, o nome volta ao
+    // JSON no lugar do 0 (o mod pode voltar). Esquecido quando uma tela de selecao de monstro abre (poll) ou outro slot carrega.
+    struct MissingSkin { bool valid = false; uint32_t monster = 0; std::string skin; };
+    MissingSkin g_missing;
+    Value savedCostume(uint32_t monster, uint32_t index)
+    {
+        if (index == 0 && g_missing.valid && g_missing.monster == monster)
+            return Value::string(g_missing.skin);
+        return costumeValue(monster, index);
+    }
+
+    // Slots do cartao `card` (10 a partir de card * 10) em j.saves; o array termina no ultimo slot nao nulo. Um slot do JSON que ja
+    // diz o mesmo que o binario fica como esta (com as chaves que nao sao nossas e o nome da skin).
     void adventureToJson(const std::vector<uint8_t> &b, Value &j, int card)
     {
         Value &saves = j.at("saves");
@@ -171,20 +245,30 @@ namespace wotm_save
         for (uint32_t i = 0; i < kAdvSlots; ++i)
         {
             Value &dst = saves.arr[base + i];
-            dst = Value();   // slot alem do contador ou nunca gravado: null
-            if (i >= n)
-                continue;
             const size_t o = kAdvSlot0 + i * kAdvStride;
-            const uint32_t lvl = rd(b, o), sel = rd(b, o + 4), lives = rd(b, o + 8), score = rd(b, o + 12), cos = rd(b, o + 16);
-            if (!lvl && !sel && !lives && !score && !cos)
+            const uint32_t lvl = i < n ? rd(b, o) : 0, sel = i < n ? rd(b, o + 4) : 0, lives = i < n ? rd(b, o + 8) : 0,
+                           score = i < n ? rd(b, o + 12) : 0, cos = i < n ? rd(b, o + 16) : 0;
+            if (i >= n || (!lvl && !sel && !lives && !score && !cos))
+            {
+                dst = Value();   // slot alem do contador ou nunca gravado: null
                 continue;
+            }
+            if (dst.type == Value::Obj)
+            {
+                const Value *var = dst.get("variant");
+                const uint32_t mon = indexOf(kMonsters, dst.get("monster"), 0);
+                if (indexOf(kLevels, dst.get("level"), 0) == lvl &&
+                    ((mon << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0)) == sel && savesIntOf(dst, "lives") == lives &&
+                    savesIntOf(dst, "score") == score && resolveCostume(mon, dst.get("costume"), false).index == cos)
+                    continue;   // o jogo regravou o mesmo slot
+            }
             dst = Value::object();
             dst.at("level") = nameOf(kLevels, lvl);            // Shell+0x2BB0
             dst.at("monster") = nameOf(kMonsters, sel >> 5);   // Shell+0x2938 (m_monsterSel[0])
             dst.at("variant") = Value::integer(sel & 31);
             dst.at("lives") = Value::integer(lives);           // Shell+0x2BBC
             dst.at("score") = Value::integer(score);           // Shell+0x2B28 + 0x2B2C
-            dst.at("costume") = Value::integer(cos);           // Shell+0x2BE0
+            dst.at("costume") = savedCostume(sel >> 5, cos);   // Shell+0x2BE0
         }
         while (!saves.arr.empty() && isNull(saves.arr.back()))
             saves.arr.pop_back();
@@ -259,10 +343,11 @@ namespace wotm_save
             const size_t o = kAdvSlot0 + i * kAdvStride;
             wr(b, o, indexOf(kLevels, s.get("level"), 0));
             const Value *var = s.get("variant");
-            wr(b, o + 4, (indexOf(kMonsters, s.get("monster"), 0) << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0));
+            const uint32_t mon = indexOf(kMonsters, s.get("monster"), 0);
+            wr(b, o + 4, (mon << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0));
             wrField(b, o + 8, s.get("lives"));
             wrField(b, o + 12, s.get("score"));
-            wrField(b, o + 16, s.get("costume"));
+            wr(b, o + 16, resolveCostume(mon, s.get("costume"), true).index);   // skin de mod ausente: traje 0
         }
         wr(b, kAdvMagic, kMagic);
     }
@@ -713,6 +798,8 @@ namespace wotm_save
         int slot = 0;
         bool used = false;
         uint32_t level = 0, sel = 0, lives = 0, score = 0, costume = 0;
+        std::string skin;           // skin de mod do slot ("togera/green"), achada ou nao
+        bool skinMissing = false;   // a skin nao existe nesta sessao: carrega com o traje 0
     };
     struct Modal
     {
@@ -728,12 +815,6 @@ namespace wotm_save
     };
     Modal g_modal;
     uint64_t g_vsyncs = 0;   // sceGsSyncV contados pelo poll
-
-    uint32_t savesInt(const Value &s, const char *k)
-    {
-        const Value *v = s.get(k);
-        return v && v->isInt() ? static_cast<uint32_t>(v->asInt()) : 0u;
-    }
 
     // Linhas do modal: os slots do JSON ate o ultimo ocupado, mais um vazio no fim (ate 99).
     void buildRows(Modal &m)
@@ -758,9 +839,10 @@ namespace wotm_save
                 r.level = indexOf(kLevels, s.get("level"), 0);
                 const Value *var = s.get("variant");
                 r.sel = (indexOf(kMonsters, s.get("monster"), 0) << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0);
-                r.lives = savesInt(s, "lives");
-                r.score = savesInt(s, "score");
-                r.costume = savesInt(s, "costume");
+                r.lives = savesIntOf(s, "lives");
+                r.score = savesIntOf(s, "score");
+                const Costume c = resolveCostume(r.sel >> 5, s.get("costume"), false);
+                r.costume = c.index, r.skin = c.skin, r.skinMissing = c.missing;
             }
             m.rows.push_back(r);
         }
@@ -915,10 +997,11 @@ namespace wotm_save
                 // Monstro 3D em idle por cima da foto, com os pes perto da borda de baixo dela. Quadrado na janela: largura da tela
                 // do jogo = altura * (720 / 224) / 1,5.
                 const float mh = ph * 1.32f, mw = mh / aspect, mcx = kLeftCenter, my1 = py0 + ph + 3.f * k;
-                pics.push_back({wotm::savepics::kMonster, mon | (show->costume & 3) << 8, mcx - mw * 0.5f, my1 - mh, mcx + mw * 0.5f, my1, a});
+                pics.push_back({wotm::savepics::kMonster, mon | (show->costume & 0xFF) << 8 | modelBase(mon, show->costume) << 16, mcx - mw * 0.5f, my1 - mh, mcx + mw * 0.5f, my1, a});
             }
             text(rdram, ctx, rt, "Score " + std::to_string(show->score), kLeftX, Y(140), fText);
-            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, Y(154), fText);
+            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives") + (show->skinMissing ? "  -  skin missing" : ""),
+                 kLeftX, Y(154), fText);
             text(rdram, ctx, rt, "Adventure progress", kLeftX, Y(168), fText);
             text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, Y(182), fText);
         }
@@ -969,7 +1052,10 @@ namespace wotm_save
         w32(rdram, kSlotBuf + kAdvSlot0 + 4, r.sel);
         w32(rdram, kSlotBuf + kAdvSlot0 + 8, r.lives);
         w32(rdram, kSlotBuf + kAdvSlot0 + 12, r.score);
-        w32(rdram, kSlotBuf + kAdvSlot0 + 16, r.costume);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 16, r.costume);   // ja resolvido: skin ausente = traje 0
+        g_missing = MissingSkin{r.skinMissing, r.sel >> 5, r.skin};
+        if (r.skinMissing)
+            std::fprintf(stderr, "[wotm] save: traje %s nao achado (mod ausente?); usando traje 0\n", r.skin.c_str());
         guestCall(rdram, ctx, rt, wotm::fn::setSaveData__9MonsterMcR13_SaveGameDatai, {kSlotBuf, 0});
         std::fprintf(stderr, "[wotm] save: aventura do slot %d carregada (%s)\n", r.slot + 1, rowTitle(rdram, r).c_str());
     }
@@ -1000,7 +1086,7 @@ namespace wotm_save
         s.at("variant") = Value::integer(r.sel & 31);
         s.at("lives") = Value::integer(r.lives);
         s.at("score") = Value::integer(r.score);
-        s.at("costume") = Value::integer(r.costume);
+        s.at("costume") = savedCostume(r.sel >> 5, r.costume);
         saves.arr[static_cast<size_t>(slot)] = s;
         const std::string why = "aventura no slot " + std::to_string(slot + 1) + " (" + rowTitle(rdram, r) + ")";
         saveJson(j, why.c_str());
@@ -1210,6 +1296,16 @@ namespace wotm_save
     void poll(const uint8_t *rdram)
     {
         ++g_vsyncs;
+        // Selecao de monstro (telas 3, 6, 7, 17, 18, 19): outra aventura vai comecar; o nome da skin ausente do slot carregado sai
+        if (g_missing.valid)
+            switch (ramU32(rdram, wotm::sym::currScreen))
+            {
+            case 3: case 6: case 7: case 17: case 18: case 19:
+                g_missing = MissingSkin{};
+                break;
+            default:
+                break;
+            }
         if (!g_auto || !g_snap.valid)
             return;
         const Snap now = snapOf(rdram);

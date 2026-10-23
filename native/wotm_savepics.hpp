@@ -179,10 +179,12 @@ public:
             monT0_ = GetTime();
             model_.reset();
             const char *pre = monsterFile(pic.id & 0xFF);
-            const uint32_t costume = (pic.id >> 8) & 3;
+            // traje (4+ = skin de mod: MON/<PREFIXO><n>.* vem de mods/, wotm_mods.hpp) e o traje do disco de reserva (o base da skin)
+            const uint32_t costume = (pic.id >> 8) & 0xFF, base = (pic.id >> 16) & 3;
             if (pre) {
                 auto m = std::make_unique<model::Model>();
-                if (m->load(discRoot, iso, pre + std::to_string(costume)) || m->load(discRoot, iso, std::string(pre) + "0"))
+                if (m->load(discRoot, iso, pre + std::to_string(costume)) || m->load(discRoot, iso, pre + std::to_string(base)) ||
+                    m->load(discRoot, iso, std::string(pre) + "0"))
                     model_ = std::move(m), model_->computeFraming(model::kIdle);   // caixa fixa: a camera nao acompanha o idle
                 else
                     std::fprintf(stderr, "[wotm] lista de saves: MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, costume);
@@ -206,7 +208,7 @@ public:
             if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] lista de saves: LVL/CENTRAL.TEX/.RTX nao achado; sem fogo nem lens flare\n");
             renderer_.setFx(&fx_);
         }
-        const Framing fr = framingOf(monId_);
+        const Framing fr = framingOf((monId_ & 0xFF) | ((monId_ >> 16) & 3) << 8);   // enquadramento do traje do disco (o base)
         renderer_.shiftX = fr.shiftX;
         renderer_.shiftY = fr.shiftY;
         renderer_.render(*model_, W, H, kYaw, kPitch, fr.zoom, [&] {

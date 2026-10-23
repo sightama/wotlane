@@ -103,10 +103,20 @@ Uma skin é uma pasta em `mods/<mod>/skins/<pasta>/` com um `skin.json`:
 - O jogo vê cada skin como mais um traje do monstro (`MON/SHOGUN4.*`, `SHOGUN5.*`...; números dados a cada boot, na ordem
   mod/id). Mesmo monstro e id em dois mods: vence o último em ordem alfabética. O log diz o que entrou:
   `[mods] skin ultra-v/roxo ("PURPLE ULTRA V", meu_mod) = traje 4 (SHOGUN4); base 3, 2 png`.
-- No menu (seleção nativa das telas 3 e 6 e de 3 e 4 jogadores): cima/baixo passa pelos trajes do disco e depois pelas skins do
-  monstro, sempre abertas, e mais de um jogador pode escolher a mesma. Pelo `WOTM_MATCH` também (`WOTM_MATCH=4:roxo,...`).
-  O modelo 3D da seleção já mostra os PNGs da skin.
-- Ainda não: o save da aventura com skin e as IAs sorteadas (plano em `docs/investigacoes/2026-10-23/skins_mod_plano.md`).
+- No menu (seleção nativa das telas 3, 6, 7 (minigames de 2), 18 e 19 e de 3 e 4 jogadores): cima/baixo passa pelos trajes do disco e depois pelas skins do
+  monstro, sempre abertas, e mais de um jogador pode escolher a mesma. Pelo `WOTM_MATCH` também (`WOTM_MATCH=4:roxo,...`) e pelo
+  launcher (a caixa de skin de cada monstro lista as skins de mod dele). O modelo 3D da seleção e da lista de saves mostra os PNGs da skin.
+- Na luta a skin usa os sons do traje `base` (o Preytor base 1 e o Agamo base 3 têm sons próprios). Log:
+  `[mods] skin ultra-v/roxo (traje 4) na luta com os sons do traje 3`.
+- **Save:** a aventura guarda a skin pelo nome (`"costume": "ultra-v/roxo"`; os trajes do disco seguem como 0 a 3). Sem o mod, o slot
+  carrega com o traje 0 (log `[wotm] save: traje ... não achado (mod ausente?); usando traje 0`, e "skin missing" na lista de saves);
+  gravar a mesma aventura mantém o nome, e a skin volta quando o mod voltar.
+- **IAs sorteadas** (resistência): com `"ai": true`, a skin entra no sorteio do traje da IA daquele monstro, junto com o traje que o
+  jogo escolheria (log `[mods] IA N sorteada com a skin ...`). As IAs da aventura ficam com os trajes do jogo.
+- **Kit:** `python tools/modkit.py skin new <mod> <monstro> <id> --base N [--name "GREEN TOGERA"] [--ai]` cria o `skin.json` e exporta as
+  texturas do traje base para `mods/_work/skins/<id>/`; edite os PNGs e rode `modkit.py pack <mod>`: só os editados vão para a pasta da skin.
+- Ainda não: o elimination. Nele o jogo carrega o traje 0 de todos os monstros uma vez só e os
+  jogadores trocam de monstro entre as rodadas sem recarregar: escolher traje ali pede mudar a carga, não só a tela.
 
 Conferido em 2026-10-23 (`WOTM_MATCH=4:roxo,4:3,1`, IA): a skin com o PNG recolorido sai verde e o traje 3 ao lado continua roxo;
 skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3. Foto:

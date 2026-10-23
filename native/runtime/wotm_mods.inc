@@ -5,8 +5,10 @@
 //   e o tamanho do mod.
 // - sceCdRead (stub do runtime): fileReadf/fileReada/fileReads e o snd_StreamSafeCdRead leem por ele; o LSN falso vem do mod.
 // O som nativo (wotm_snd.inc, readLsnRaw) le bancos e musicas pelo LSN e consulta o registro antes do disco.
-// Arquivo de mod maior que o do disco: o jogo carrega em regioes de tamanho fixo e pode sobrescrever o que vem depois (o log
-// avisa; abrir espaco fica para o item 8). WOTM_MODS=<pasta> troca a pasta (padrao: mods/ ao lado do ELF); WOTM_MODS=0 desliga.
+// Arquivo de mod maior que o do disco: os monstros (MON/*) e as texturas da fase carregam em sequencia acima de 32 MB (RAM alta),
+// entao so empurram o que vem depois; o log da carga ("[wotm] carga da fase") diz a folga de RAM e os texIds usados. Com
+// WOTM_HIGHRAM=0, e para os outros arquivos (fase, SHELL, bancos de som), o jogo carrega em regioes de tamanho fixo e um arquivo
+// maior pode sobrescrever o que vem depois (o log avisa). WOTM_MODS=<pasta> troca a pasta (padrao: mods/ ao lado do ELF); =0 desliga.
 #include "wotm_mods.hpp"
 #include <set>
 
@@ -72,7 +74,9 @@ void searchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
                          (unsigned long long)m->size);
         else
             std::fprintf(stderr, "[mods] %s <- %s (%llu bytes; disco %u)%s\n", m->rel.c_str(), m->mod.c_str(), (unsigned long long)m->size,
-                         discSize, m->size > discSize ? " AVISO: maior que o do disco, pode sobrescrever o que o jogo carrega depois" : "");
+                         discSize, m->size <= discSize ? ""
+                                   : m->rel.rfind("MON/", 0) == 0 ? " (maior que o do disco: confira a folga no log da carga da fase)"
+                                                                   : " AVISO: maior que o do disco, pode sobrescrever o que o jogo carrega depois");
     }
 }
 
