@@ -555,14 +555,16 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
             ent["error"] = "formato nao suportado"
             man["textures"].append(ent)
             continue
-        name = "%s_t%04d%s.png" % (stem, p.texId, "" if ent.get("palette", True) is not None else "_sempaleta")
+        # Mesmo nome que o desenho nativo procura em mods/ (native/wotm_texmods.hpp): <arquivo>_t<id> do .TEX, <arquivo>_rtx_t<id> do .RTX
+        name = "%s%s_t%04d%s.png" % (stem, "_rtx" if is_rtx_main else "", p.texId,
+                                     "" if ent.get("palette", True) is not None else "_sempaleta")
         write_png(os.path.join(outdir, name), p.w, p.h, px)
         ent["png"] = name
         man["textures"].append(ent)
         done += 1
     if rtx is not None and not is_rtx_main:
         man["palettes"] = [{"tbp": e.tbp, "colors": e.w * e.h} for e in rtx["packets"] if e.is_palette()]
-    with open(os.path.join(outdir, stem + "_manifest.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(outdir, stem + ("_rtx" if is_rtx_main else "") + "_manifest.json"), "w", encoding="utf-8") as f:
         json.dump(man, f, indent=1, ensure_ascii=False)
     print("%d texturas em %s (%d sem paleta: em tons de cinza)%s" % (done, outdir, semp,
                                                                      "" if refs else "; sem .NGP, paletas so por arquivo de uma paleta"))

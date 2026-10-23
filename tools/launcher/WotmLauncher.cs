@@ -167,6 +167,10 @@ class Launcher : Form
         };
         buttons.Controls.Add(play);
         buttons.Controls.Add(log);
+        var modkit = new Button { Text = "Mod kit", AutoSize = true };
+        modkit.Click += delegate { OpenModKit(); };
+        tips.SetToolTip(modkit, "Extract textures and sounds from the disc, edit them and pack them into mods\\<mod>\\ (docs\\passos\\MODS.md).");
+        buttons.Controls.Add(modkit);
         buttons.Controls.Add(reset);
         root.Controls.Add(buttons);
         status.AutoSize = true;
@@ -425,6 +429,24 @@ class Launcher : Form
             Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
         }
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
+    }
+
+    // Kit de mods (tools\modkit_gui.py, docs\passos\MODS.md): pythonw sem console; sem ele, python
+    void OpenModKit()
+    {
+        string script = Path.Combine(exeDir, "tools", "modkit_gui.py");
+        if (!File.Exists(script)) { status.Text = "tools\\modkit_gui.py not found next to the launcher."; return; }
+        foreach (string py in new[] { "pythonw.exe", "pyw.exe", "python.exe", "py.exe" })
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(py, "\"" + script + "\"") { WorkingDirectory = exeDir, UseShellExecute = false });
+                status.Text = "Mod kit opened.";
+                return;
+            }
+            catch (Exception) { }
+        }
+        status.Text = "Python not found: install Python 3 (with Pillow: pip install pillow) to use the mod kit.";
     }
 
     void OpenLog()

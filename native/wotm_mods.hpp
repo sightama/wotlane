@@ -95,6 +95,7 @@ public:
     const std::filesystem::path &dir() const { return m_dir; }
     const std::vector<std::string> &modNames() const { return m_mods; }
     size_t count() const { return m_files.size(); }
+    const std::map<std::string, File> &files() const { return m_files; }
 
     const File *find(const std::string &rel) const {
         if (!m_ready || m_files.empty()) return nullptr;
