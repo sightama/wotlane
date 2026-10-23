@@ -16,7 +16,7 @@ enum : uint32_t { kUp = 1, kDown = 2, kLeft = 3, kRight = 4, kCross = 6 };
 // jogadores (wotm_padsel.inc), "press start", saida, 17 (inalcancavel)
 static bool handled(uint32_t s)
 {
-    if ((s == 3 || s == 6) && wotm_padsel::g_solo == int(s))   // selecao nativa de 1 e 2 jogadores (wotm_padsel.inc): sem as caixas do jogo
+    if ((s == 3 || s == 6 || s == 7) && wotm_padsel::g_solo == int(s))   // selecao nativa de 1 e 2 jogadores (wotm_padsel.inc): sem as caixas do jogo
         return true;
     return s == 0 || s == 1 || s == 2 || s == 4 || s == 5 || s == 9 || s == 10 || s == 16 || s == 17 || s >= 18 && s <= 20 || s > 21;
 }

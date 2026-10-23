@@ -14,7 +14,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 5 | Sem tela de "memory card 1 ou 2"; slots extras no JSON — **feito em 2026-10-21** (monstro 3D incluído) | 3 | baixo/médio |
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
-| 8 | Mods que adicionam skins e monstros (sem substituir) — **skins, parte 1, na master em 2026-10-23**; save, sons, IAs, launcher e kit na branch `skins-etapa2` (falta tela 7, elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
+| 8 | Mods que adicionam skins e monstros (sem substituir) — **skins, parte 1, na master em 2026-10-23**; save, sons, IAs, tela 7, launcher e kit na branch `skins-etapa2` (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
 | 9 | Modo treino com hitboxes e dano na tela | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
@@ -329,13 +329,14 @@ guia em `MODS.md`, "Skins"):
   menu:** gravar e carregar uma aventura com skin, a lista de saves com o monstro da skin e com "skin missing", o sorteio da
   resistência e o launcher.
 
+- **Tela 7 (minigames de 2) com a seleção nativa e skins** (`wotm_padsel.inc`, `minigames2PHook`): os quadros vão na tela do
+  fliperama, no lugar dos dois retratos grandes. Conferido por roteiro (Dodge Ball destravado só no teste): skin `togera/lima` na
+  seleção e no minigame, triângulo de volta à tela 14 e reentrada. Fotos: `docs/screenshots/2026-10-23/2026-10-23_minigames2p_*.png`.
+
 **Falta:**
-1. **Tela 7** (`screenMinigames2P`, minigames de 2): segue com o painel de 4 do jogo; precisa da seleção nativa (como as 18 e 19:
-   `soloPanels` com `curCostume1/2.2912/2913`, `playerOne/TwoIsDone.2914/2915`, colunas em `currentSelection[7]` e `[29]`; esconder
-   `m_costumeBoxCsMG[0..1]`, Shell+0xB0). A carga dos minigames usa o `m_costume` de cada jogador, então a skin funcionaria.
-2. **Elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez e os jogadores trocam de monstro entre
+1. **Elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez e os jogadores trocam de monstro entre
    as rodadas sem recarregar. Escolher traje ali pede mudar a carga (um arquivo por monstro escolhido), não só a tela.
-3. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
+2. O botão CUSTOM da barra de monstros e os monstros novos (parte 2).
 
 Fora, por decisão do dono: tela de destrave (skin de mod sempre aberta), som próprio por skin. Pendências da seleção para o contribuinte (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`,
 itens 5 a 8): transição esquisita ao confirmar em modos com seleção de fase, Togera desalinhado no quadro único do adventure, skins
