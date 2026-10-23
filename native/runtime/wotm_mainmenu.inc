@@ -76,6 +76,7 @@ struct View
     int items = 0;
     int tab = 0, opt = 0;                 // painel: aba e linha
     int top = 0;                          // painel: primeira linha visivel (aba CONTROLS rola)
+    bool preview = true;                  // painel: previa da aba VIDEO visivel (quadrado / P)
     int bindMap = -1;                     // aba CONTROLS: mapa na lista (-1 teclado, 0..3 gamepads do jogador 1..4)
     int capture = -1;                     // botao do PS2 esperando a tecla ou o botao novo (-1: nenhum)
     uint32_t screenObj = 0;               // telao (objeto do filme, shell->m_movieScreen): onde o painel e desenhado
@@ -104,16 +105,19 @@ static int g_suppress = 0;         // quadros sem entrada do jogo depois de fech
 namespace st = wotm::settings;
 enum Tab { TabVideo, TabFeatures, TabCamera, TabControls, kTabs };
 constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CAMERA", "CONTROLS"};
-constexpr int kMaxOpts = 5;
+constexpr int kMaxOpts = 8;
 struct Opt { st::Key key; const char *label; const char *hint; };
 struct TabDef { int n; Opt opt[kMaxOpts]; };
 constexpr TabDef kTabDefs[kTabs] = {
-    {5,
-     {{st::Res, "RESOLUTION", "HOW TALL THE PICTURE IS, IN PIXELS. HIGHER LOOKS SHARPER"},
+    {8,
+     {{st::Res, "RESOLUTION", "HEIGHT OF THE PICTURE IN PIXELS. WINDOW FOLLOWS THE WINDOW OR SCREEN"},
+      {st::RenderScale, "RENDER SCALE", "DRAWS BIGGER OR SMALLER, THEN FITS THE SCREEN. ABOVE 1X SMOOTHS EDGES"},
       {st::Aspect, "ASPECT RATIO", "DYNAMIC MATCHES THE SHAPE OF THE WINDOW"},
       {st::Display, "DISPLAY MODE", "WINDOW OR FULLSCREEN. F11 SWITCHES AT ANY TIME"},
       {st::Rate, "REFRESH RATE", "HOW OFTEN THE PICTURE IS DRAWN. THE GAME ITSELF ALWAYS RUNS AT 60"},
-      {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"}}},
+      {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"},
+      {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
+      {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
     {3,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
@@ -132,6 +136,8 @@ constexpr TabDef kTabDefs[kTabs] = {
 static int g_tab = TabVideo;
 static int g_optSel[kTabs] = {};
 constexpr int kVisRows = 7;   // linhas do painel que cabem; a aba CONTROLS rola
+// aba VIDEO: linhas mais baixas e juntas, as 8 ao lado da previa da opcao (panelLayout, wotm_preview.hpp)
+static int visRows(int tab) { return tab == TabVideo ? 8 : kVisRows; }
 
 // Aba CONTROLS: as opcoes da aba (teclado separado, icones, confirmar nos menus), qual mapa a lista mostra (teclado ou gamepads), um
 // botao do PS2 por linha e a volta ao padrao
@@ -192,6 +198,9 @@ static int choices(st::Key k, int out[16])
     {
     case st::Res: std::copy(std::begin(st::kResolutions), std::end(st::kResolutions), out); return int(std::size(st::kResolutions));
     case st::Rate: std::copy(std::begin(st::kRates), std::end(st::kRates), out); return int(std::size(st::kRates));
+    case st::RenderScale: std::copy(std::begin(st::kRenderScales), std::end(st::kRenderScales), out); return int(std::size(st::kRenderScales));
+    case st::Msaa: std::copy(std::begin(st::kMsaaLevels), std::end(st::kMsaaLevels), out); return int(std::size(st::kMsaaLevels));
+    case st::TexFilter: std::copy(std::begin(st::kTexFilters), std::end(st::kTexFilters), out); return int(std::size(st::kTexFilters));
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
@@ -230,7 +239,23 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     static const char *const kAspectUi[st::kAspects] = {"DYNAMIC", "4:3", "16:9", "16:10", "21:9", "32:9"};
     switch (k)
     {
-    case st::Res: std::snprintf(buf, sz, "%dP", v); break;
+    case st::Res: if (v > 0) std::snprintf(buf, sz, "%dP", v); else std::snprintf(buf, sz, "WINDOW"); break;
+    case st::RenderScale:   // a fonte do jogo nao tem %: 1.5X
+    {
+        char num[16];
+        std::snprintf(num, sizeof num, "%.2f", v / 100.0);
+        size_t n = std::strlen(num);
+        while (n && num[n - 1] == '0') num[--n] = 0;
+        if (n && num[n - 1] == '.') num[--n] = 0;
+        std::snprintf(buf, sz, "%sX", num);
+        break;
+    }
+    case st::Msaa: if (v > 0) std::snprintf(buf, sz, "MSAA %dX", v); else std::snprintf(buf, sz, "OFF"); break;
+    case st::TexFilter:
+        if (v <= 0) std::snprintf(buf, sz, "BILINEAR");
+        else if (v == 1) std::snprintf(buf, sz, "TRILINEAR");
+        else std::snprintf(buf, sz, "%dX ANISO", v);
+        break;
     case st::Aspect: std::snprintf(buf, sz, "%s", kAspectUi[v > 0 && v < st::kAspects ? v : 0]); break;
     case st::Display: std::snprintf(buf, sz, "%s", kDisplay[std::clamp(v, 0, 2)]); break;
     case st::Rate: if (v > 0) std::snprintf(buf, sz, "%d HZ", v); else std::snprintf(buf, sz, "MONITOR"); break;
@@ -252,7 +277,10 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
 // de teclas e botoes, como o resto do jogo (direcional ou analogico, X ok, triangulo ou bola volta, L1/R1 abas, quadrado limpa; nos
 // gamepads com a troca do MenuConfirm). Botao do PS2 sem tecla ou botao no mapa (limpo na aba CONTROLS) vale pelo padrao, para o
 // painel nunca ficar sem saida. O roteiro de teste WOTM_PADSEL_SCRIPT vale aqui tambem (acoes l1 e r1 para as abas).
-enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, kPanelActs };
+enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, PPreview, kPanelActs };
+// Previa da aba VIDEO (wotm_preview.hpp): quadrado no controle, P no teclado (o quadrado do teclado e o clique esquerdo, que escolhe
+// a linha). Volta a ligada toda vez que o painel abre.
+static bool g_showPreview = true;
 static bool g_panelPrev[kPanelActs] = {};
 static bool panelKey(st::Bind b)
 {
@@ -289,6 +317,7 @@ static void readPanel(bool out[kPanelActs])
             a[PPrev] = panelKey(st::BL1) || IsKeyDown(KEY_Q) || (tab && shift);
             a[PNext] = panelKey(st::BR1) || IsKeyDown(KEY_E) || (tab && !shift);
             a[PClear] = panelKey(st::BSquare) || IsKeyDown(KEY_DELETE);
+            a[PPreview] = IsKeyDown(KEY_P);
         }
         else if (IsGamepadAvailable(d))
         {
@@ -302,10 +331,11 @@ static void readPanel(bool out[kPanelActs])
             a[PPrev] = panelPad(d, st::BL1);
             a[PNext] = panelPad(d, st::BR1);
             a[PClear] = panelPad(d, st::BSquare);
+            a[PPreview] = a[PClear];
         }
         // roteiro de teste (acoes do wotm_padsel.inc)
         const double now = GetTime();
-        static constexpr int kFromScript[kActions] = {PLeft, PRight, POk, PBack, -1, PUp, PDown, PPrev, PNext};
+        static constexpr int kFromScript[kActions] = {PLeft, PRight, POk, PBack, -1, PUp, PDown, PPrev, PNext, PPreview};
         for (const ScriptStep &sc : g_script)
             if (sc.dev == d && now >= sc.t0 && now < sc.t0 + sc.dur && kFromScript[sc.act] >= 0) a[kFromScript[sc.act]] = true;
         for (int k = 0; k < kPanelActs; ++k) out[k] |= a[k];
@@ -314,6 +344,7 @@ static void readPanel(bool out[kPanelActs])
 static void openPanel()
 {
     g_open = true;
+    g_showPreview = true;
     readPanel(g_panelPrev);   // o X que abriu ainda esta apertado: so conta o proximo
 }
 // Espera da tecla (teclado) ou do botao (gamepads) novo do botao do PS2 g_capture: vale a primeira que passar a estar apertada.
@@ -465,6 +496,12 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         wotm_padsel::sfx(rdram, ctx, runtime, e[PNext] ? 4 : 2);
         return;
     }
+    if (g_tab == TabVideo && e[PPreview])
+    {
+        g_showPreview = !g_showPreview;
+        wotm_padsel::sfx(rdram, ctx, runtime, g_showPreview ? 4 : 2);
+        return;
+    }
     const TabDef &t = kTabDefs[g_tab];
     int &sel = g_optSel[g_tab];
     const int n = tabRows(g_tab);
@@ -473,7 +510,7 @@ static void panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         sel = (sel + (e[PDown] ? 1 : n - 1)) % n;
         int &top = g_top[g_tab];
         if (sel < top) top = sel;
-        if (sel >= top + kVisRows) top = sel - kVisRows + 1;
+        if (sel >= top + visRows(g_tab)) top = sel - visRows(g_tab) + 1;
         wotm_padsel::sfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
         return;
     }
@@ -677,6 +714,7 @@ static void frame(uint8_t *rdram)
     v.top = g_top[g_tab];
     v.bindMap = g_bindMap;
     v.capture = g_capture;
+    v.preview = g_showPreview;
     v.screenObj = rd32(rdram, wotm_padsel::kMovieScreen) & 0x1FFFFFFFu;
     std::lock_guard<std::mutex> lk(g_m);
     g_view = v;
@@ -886,6 +924,64 @@ static void labelLeft(std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, 
 // ------------------------------------------------------------------ painel (textura propria, no telao inteiro)
 constexpr int kPW = 1800, kPH = 1100;   // ~1,64:1, a proporcao do telao (204 x 124)
 static RenderTexture2D g_prt{};
+
+// Medidas das linhas de uma aba (desenho e mouse). Na VIDEO as linhas sao mais baixas e juntas (as 8 cabem sem rolar) e ficam a
+// esquerda; a direita, a previa da opcao selecionada (wotm_preview.hpp).
+struct PanelLayout
+{
+    float step, rowH, labX, valX, dx, rowRight;   // passo entre linhas, altura das letras, nome, valor (+- dx: setas), fim da faixa
+    int vis;                                      // linhas visiveis
+    bool preview;
+    Rectangle box;                                // caixa da previa
+};
+static PanelLayout panelLayout(int tab, bool preview)
+{
+    const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;
+    if (tab == TabVideo && !preview)   // previa escondida: as 8 linhas com as colunas das outras abas
+        return {lineH * 0.86f, 46.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
+    if (tab == TabVideo)
+    {
+        // caixa em 4:3, centrada na altura das 8 linhas
+        const float bw = W * 0.30f, bh = bw * 0.75f, mid = lineH * 2.2f + lineH * 0.86f * 3.5f;
+        return {lineH * 0.86f, 46.f, W * 0.06f, W * 0.51f, W * 0.12f, W * 0.645f, visRows(tab), true,
+                Rectangle{W * 0.665f, mid - bh * 0.5f - 20.f, bw, bh}};
+    }
+    return {lineH, 54.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
+}
+
+// Previa da opcao (so na aba VIDEO): qual desenho cada opcao usa
+static wotm::preview::Renderer g_preview;
+static wotm::preview::Kind previewKind(st::Key k)
+{
+    using namespace wotm::preview;
+    switch (k)
+    {
+    case st::Res: case st::RenderScale: case st::Msaa: return Sharpness;
+    case st::TexFilter: return Filter;
+    case st::Aspect: return Aspect;
+    case st::Display: return Display;
+    case st::Vsync: return Vsync;
+    default: return None;   // REFRESH RATE: o jogo continua a 60, nao ha o que mostrar
+    }
+}
+static wotm::preview::Params previewParams(const Rectangle &box)
+{
+    wotm::preview::Params p;
+    p.frameRows = wotm_live::renderHeight();
+    p.winRows = std::max(1, GetScreenHeight());
+    // o painel ocupa ~55% da altura da janela no telao (camera do painel, frameCamera)
+    p.boxScreenRows = box.height / float(kPH) * 0.55f * float(p.winRows);
+    p.samples = std::min(st::get(st::Msaa), wotm::msaa::maxSamples());
+    p.filter = st::get(st::TexFilter);
+    p.winAspect = GetScreenHeight() > 0 ? float(GetScreenWidth()) / float(GetScreenHeight()) : 16.f / 9.f;
+    p.fixedAspect = st::aspectRatio();
+    p.display = st::get(st::Display);
+    const int mon = GetCurrentMonitor();
+    p.monAspect = GetMonitorHeight(mon) > 0 ? float(GetMonitorWidth(mon)) / float(GetMonitorHeight(mon)) : 16.f / 9.f;
+    p.vsync = st::on(st::Vsync);
+    p.time = GetTime();
+    return p;
+}
 constexpr Color kLit{121, 118, 111, 0x80}, kDim{88, 56, 34, 0x80};   // escala do GS
 
 static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, const View &v)
@@ -896,6 +992,16 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         SetTextureFilter(g_prt.texture, TEXTURE_FILTER_BILINEAR);
     }
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;   // abas, fio e kVisRows linhas
+    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview);
+    // previa da opcao selecionada, nas texturas dela (antes do BeginTextureMode do painel)
+    wotm::preview::Kind pk = wotm::preview::None;
+    wotm::preview::Params pp;
+    if (L.preview && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
+    {
+        pk = previewKind(kTabDefs[TabVideo].opt[v.opt].key);
+        pp = previewParams(L.box);
+        g_preview.prepare(pk, pp, L.box.width, L.box.height);
+    }
     BeginTextureMode(g_prt);
     ClearBackground(Color{0, 0, 0, 0});
     rlSetBlendFactorsSeparate(RL_SRC_ALPHA, RL_ONE_MINUS_SRC_ALPHA, RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD, RL_FUNC_ADD);
@@ -964,15 +1070,15 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         }
     }
     // nome a esquerda, valor a direita (setas na selecionada); so kVisRows linhas a partir de v.top
-    const float rowH = 54.f, valX = W * 0.66f, labX = W * 0.10f, dx = W * 0.19f;   // o telao e inclinado: valor perto do nome
-    const int top = std::clamp(v.top, 0, std::max(0, n - kVisRows));
-    for (int i = top; i < std::min(n, top + kVisRows); ++i)
+    const float rowH = L.rowH, valX = L.valX, labX = L.labX, dx = L.dx;   // o telao e inclinado: valor perto do nome
+    const int top = std::clamp(v.top, 0, std::max(0, n - L.vis));
+    for (int i = top; i < std::min(n, top + L.vis); ++i)
     {
         const PRow &pr = rows[i];
-        const float cy = lineH * (2.2f + float(i - top));
+        const float cy = lineH * 2.2f + L.step * float(i - top);
         const bool on = i == v.opt;
         if (on)
-            DrawRectangleRounded(Rectangle{W * 0.03f, cy - lineH * 0.42f, W * 0.94f, lineH * 0.84f}, 0.5f, 8, Color{60, 50, 40, 130});
+            DrawRectangleRounded(Rectangle{W * 0.03f, cy - L.step * 0.42f, L.rowRight - W * 0.03f, L.step * 0.84f}, 0.5f, 8, Color{60, 50, 40, 130});
         // botao do PS2: o icone dele no estilo do PS2 (os face buttons do jogo); "L1 AND R1" com os dois; sem icone (analogico), o nome
         float labW = 0.f;
         if (pr.bind >= 0)
@@ -1023,11 +1129,19 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
             const float y = lineH * 1.75f;
             DrawTriangle(Vector2{x, y - s}, Vector2{x - s, y + s * 0.6f}, Vector2{x + s, y + s * 0.6f}, a);
         }
-        if (top + kVisRows < n)
+        if (top + L.vis < n)
         {
-            const float y = lineH * (2.2f + float(kVisRows) - 0.45f);
+            const float y = lineH * 2.2f + L.step * (float(L.vis) - 0.45f);
             DrawTriangle(Vector2{x, y + s}, Vector2{x + s, y - s * 0.6f}, Vector2{x - s, y - s * 0.6f}, a);
         }
+    }
+    // previa da opcao selecionada (aba VIDEO), com uma legenda curta embaixo na lupa
+    if (pk != wotm::preview::None)
+    {
+        g_preview.draw(pk, pp, L.box, 255);
+        if (pk == wotm::preview::Sharpness || pk == wotm::preview::Filter)
+            label(q, ram, tex0, pk == wotm::preview::Sharpness ? "4X ZOOM" : "2X ZOOM", L.box.x + L.box.width * 0.5f, L.box.y + L.box.height + 40.f,
+                  34.f, kDim, kPW, kPH);
     }
     // dica da opcao selecionada (grande, sobre os carros) e os botoes (legenda de baixo, no lugar da do jogo): wotm_legend.inc, pelo
     // mapa, como o readPanel le
@@ -1051,6 +1165,13 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, v.bindMap < 0 ? "NEW KEY" : "NEW BUTTON"}, {clear, {}, "CLEAR"}, {back, {}, "BACK"}}, la);
     else if (kind == KReset)
         wotm_legend::post({{tabs1, tabs2, "TABS"}, {ok, {}, "RESTORE"}, {back, {}, "BACK"}}, la);
+    else if (v.tab == TabVideo)
+    {
+        Icon pv = clear;   // quadrado no controle, P no teclado (readPanel)
+        pv.key = "P";
+        pv.key2 = nullptr;
+        wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {pv, {}, v.preview ? "HIDE PREVIEW" : "SHOW PREVIEW"}, {back, {}, "BACK"}}, la);
+    }
     else
         wotm_legend::post({{tabs1, tabs2, "TABS"}, {left, right, "CHANGE"}, {back, {}, "BACK"}}, la);
     scene.drawQuads(q, W, H);
@@ -1200,12 +1321,14 @@ static void drawPanelOnTelao(wotm::Scene &scene, const wotm::Ram &ram, const Cam
                 if (std::fabs(X - tabX[t]) < W * 0.09f) { hv.part = HTab; hv.tab = t; }
         return;
     }
-    const int n = tabRows(std::clamp(v.tab, 0, kTabs - 1)), first = std::clamp(v.top, 0, std::max(0, n - kVisRows));
-    const int i = int(std::floor(Y / lineH - 2.2f + 0.5f));
-    if (i < 0 || i >= kVisRows || first + i >= n || X < W * 0.03f || X > W * 0.97f)
+    const int tab = std::clamp(v.tab, 0, kTabs - 1);
+    const PanelLayout L = panelLayout(tab, v.preview);
+    const int n = tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
+    const int i = int(std::floor((Y - lineH * 2.2f) / L.step + 0.5f));
+    if (i < 0 || i >= L.vis || first + i >= n || X < W * 0.03f || X > L.rowRight)
         return;
     hv.prow = first + i;
-    const float valX = W * 0.66f, dx = W * 0.19f;
+    const float valX = L.valX, dx = L.dx;
     hv.part = X > valX - dx - 70.f && X < valX - dx * 0.45f ? HRowLeft : X > valX + dx * 0.45f && X < valX + dx + 70.f ? HRowRight : HRow;
 }
 

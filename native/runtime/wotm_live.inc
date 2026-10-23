@@ -263,6 +263,8 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 
 #if __has_include("wotm_native.hpp")
 #include "wotm_native.hpp"
+#include "wotm_msaa.hpp"   // MSAA do quadro (opcao ANTI-ALIASING)
+#include "wotm_preview.hpp"   // previas das opcoes da aba VIDEO (wotm_mainmenu.inc)
 #include "wotm_cheats.h"   // menu de debug (F1)
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)
@@ -304,6 +306,7 @@ struct State
     wotm::Scene scene;
     RenderTexture2D rts[2]{};   // alternadas: a do quadro anterior e a textura do texId 0 (o jogo amostra o buffer em exibicao)
     RenderTexture2D vrts[4]{};  // tela dividida: uma por vista (metade ou quadrante do quadro), compostas em rts[cur]
+    wotm::msaa::Target ms, vms[4];   // com MSAA: onde o quadro e as vistas sao desenhados antes de resolvidos em rts/vrts
     int cur = 0;
     uint32_t levelSig = 0;
     bool rtxChosen = false;
@@ -346,10 +349,34 @@ static float viewAspect()
     const float sh = static_cast<float>(GetScreenHeight());
     return sh > 0.f ? std::clamp(static_cast<float>(GetScreenWidth()) / sh, 4.f / 3.f, 32.f / 9.f) : 4.f / 3.f;
 }
-// Altura do quadro nativo em pixels (opcao Res, WOTM_RES=<linhas>, padrao 720, ao vivo; a tela do PS2 tem 448, 224 por campo); a
-// largura sai da proporcao. Mudou: o desenho refaz as texturas do quadro (wotmDrawNative, sizeOk). O replay (--vu1cmp) fica em 720,
-// como as comparacoes ja gravadas.
-static int renderHeight() { return g_force43 ? 720 : wotm::settings::get(wotm::settings::Res); }
+// Altura do quadro nativo em pixels (opcao Res, WOTM_RES=<linhas>, padrao 720, ao vivo; a tela do PS2 tem 448, 224 por campo; 0 = a
+// altura da janela ou da tela cheia, em pixels) vezes a escala (opcao RenderScale, WOTM_RENDERSCALE=<%>: acima de 100 e supersampling,
+// a apresentacao reduz com filtro bilinear); a largura sai da proporcao, com no maximo 16384. Mudou: o desenho refaz as texturas do
+// quadro (wotmDrawNative, sizeOk). O replay (--vu1cmp) fica em 720, como as comparacoes ja gravadas.
+static int baseHeight()
+{
+    const int res = wotm::settings::get(wotm::settings::Res);
+    if (res > 0)
+        return res;
+    const int h = GetRenderHeight();
+    static int logged = -1;
+    if (h != logged)
+    {
+        logged = h;
+        std::fprintf(stderr, "[native] quadro pela janela: %d linhas (janela %dx%d, framebuffer %dx%d)\n", h, GetScreenWidth(), GetScreenHeight(),
+                     GetRenderWidth(), h);
+    }
+    return h > 0 ? h : 720;
+}
+static float viewAspect();
+static int renderHeight()
+{
+    if (g_force43)
+        return 720;
+    const int scale = std::clamp(wotm::settings::get(wotm::settings::RenderScale), 25, 400);
+    const int h = static_cast<int>(std::lround(baseHeight() * (scale / 100.0)));
+    return std::clamp(h, 112, std::min(8640, static_cast<int>(16384.f / viewAspect())));
+}
 // Uma vez, na primeira apresentacao (wotmDrawScene, antes da abertura): WOTM_FULLSCREEN=1|2 vai para a tela cheia sem borda ou exclusiva (proporcao
 // do monitor; com WOTM_ASPECT fixo o quadro fica com faixas); senao a janela de 960x720 do runtime vira o tamanho do quadro nativo
 // (renderHeight na proporcao), reduzido para caber no monitor. O quadro nao depende da janela: so a ampliacao final muda.
@@ -377,10 +404,11 @@ static void initPresentRate()
 }
 
 // Janela no tamanho do quadro nativo (renderHeight na proporcao fixa, ou 16:9), reduzida para caber em 90% do monitor e centrada.
-static void fitWindow()
+static void fitWindow(bool keepHeight = false)
 {
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
-    float h = static_cast<float>(renderHeight()), w = h * a;
+    const int res = wotm::settings::get(wotm::settings::Res);   // 0 (a da janela): 720, ou a altura de agora (keepHeight)
+    float h = static_cast<float>(res > 0 ? res : keepHeight && GetScreenHeight() > 0 ? GetScreenHeight() : 720), w = h * a;
     const int mon = GetCurrentMonitor();
     const float mw = 0.9f * GetMonitorWidth(mon), mh = 0.9f * GetMonitorHeight(mon);
     if (mw > 0.f && mh > 0.f)
@@ -513,22 +541,30 @@ static void applyVideoSettings()
     }
     if (now[Rate] != g_appliedVideo[Rate] || now[Vsync] != g_appliedVideo[Vsync])
         initPresentRate();
-    if ((now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect]) && !inFullscreen())
-        fitWindow();
-    if (now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect])
-        std::fprintf(stderr, "[settings] quadro: %d linhas, proporcao %s\n", now[Res], format(Aspect, now[Aspect]).c_str());
+    if (((now[Res] != g_appliedVideo[Res] && now[Res] > 0) || now[Aspect] != g_appliedVideo[Aspect]) && !inFullscreen())
+        fitWindow(true);
+    if (now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect] || now[RenderScale] != g_appliedVideo[RenderScale])
+        std::fprintf(stderr, "[settings] quadro: %s linhas x %d%% = %d, proporcao %s\n", format(Res, now[Res]).c_str(), now[RenderScale], renderHeight(),
+                     format(Aspect, now[Aspect]).c_str());
+    if (now[Msaa] != g_appliedVideo[Msaa])
+        std::fprintf(stderr, "[settings] MSAA: %d amostras (o driver aceita ate %d)\n", now[Msaa], wotm::msaa::maxSamples());
     for (int k = 0; k < kKeys; ++k)
         g_appliedVideo[k] = now[k];
 }
 
-// F11 alterna entre tela cheia e janela (a cada apresentacao, na thread da janela; vale no menu, nos filmes e na luta).
+// F11 alterna entre tela cheia e janela (a cada apresentacao, na thread da janela; vale no menu, nos filmes e na luta). Muda a
+// opcao DISPLAY MODE (e o settings.ini), que o applyVideoSettings aplica: o painel e o arquivo acompanham. A tela cheia volta a
+// ser a do ultimo tipo usado (sem borda ou exclusiva).
 static void fullscreenKey()
 {
+    if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
+    {
+        namespace st = wotm::settings;
+        st::set(st::Display, inFullscreen() ? 0 : g_fullscreenKind);
+    }
     applyVideoSettings();
     if (!g_localCollect)
         wotm_pad::mouseFrame();   // mouse na camera moderna (wotm_mouse.hpp)
-    if (!g_localCollect && !g_hideFps && IsKeyPressed(KEY_F11))
-        setFullscreen(!inFullscreen());
 }
 
 // Captura do quadro do jogo na thread do EE (wotmCaptureFrame, chamada pelo wotm_overrides.cpp na entrada de
@@ -1274,6 +1310,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         for (RenderTexture2D &r : S.vrts)
             if (r.id != 0)
                 UnloadRenderTexture(r);
+        S.ms.release();
+        for (wotm::msaa::Target &t : S.vms)
+            t.release();
         S.~State();
         new (&S) wotm_live::State();
     }
@@ -1485,6 +1524,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
                              S.snap.vctx.full(), split, quad ? " (quadrantes)" : "");
         }
         const int VW = RW / 2, VH = quad ? RH / 2 : RH;
+        // MSAA (opcao ANTI-ALIASING, WOTM_MSAA): desenho num framebuffer multiamostra, resolvido na textura de sempre (wotm_msaa.hpp)
+        const int msaaSamples = wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::Msaa);
+        wotm::g_beforeDepthRead = wotm::msaa::readDepthIfMsaa;
+        S.scene.setTexFilter(wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::TexFilter));
+        if (msaaSamples <= 1)
+            for (wotm::msaa::Target &t : S.vms)
+                if (t.on())
+                    t.release();
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
             if (vrt.id != 0 && (vrt.texture.width != VW || vrt.texture.height != VH))
             {
@@ -1497,7 +1544,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 SetTextureFilter(vrt.texture, TEXTURE_FILTER_BILINEAR);
                 SetTextureWrap(vrt.texture, TEXTURE_WRAP_CLAMP);
             }
-            BeginTextureMode(vrt);
+            wotm::msaa::Target &vms = S.vms[&vrt - S.vrts];
+            const bool vmsOn = vms.ensure(VW, VH, msaaSamples);
+            BeginTextureMode(vmsOn ? vms.render() : vrt);
+            wotm::msaa::g_current = vmsOn ? &vms : nullptr;
             ClearBackground(BLACK);
             rlSetClipPlanes(0.5, 30000.0);
             Camera3D vc3{};
@@ -1515,6 +1565,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
             EndMode3D();
             wotm_live::g_stage = "idle";
             EndTextureMode();
+            wotm::msaa::g_current = nullptr;
+            if (vmsOn)
+                vms.resolve(vrt.id);
         };
         // tela dividida: os flares de cada vista depois de todas desenhadas (Scene::deferFlares; o teste de oclusao espera a GPU)
         wotm::GameCamera viewCam[4]{};
@@ -1559,7 +1612,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
                     continue;
                 const wotm::Snapshot &sn = v ? *S.snap.views[v - 1] : S.snap;
                 const wotm::GameCamera &vc = viewCam[v];
-                BeginTextureMode(S.vrts[v]);
+                // com MSAA a profundidade da vista so existe no multiamostra: os flares vao nele e a cor e resolvida de novo
+                const bool vmsOn = S.vms[v].on();
+                BeginTextureMode(vmsOn ? S.vms[v].render() : S.vrts[v]);
+                wotm::msaa::g_current = vmsOn ? &S.vms[v] : nullptr;
                 rlSetClipPlanes(0.5, 30000.0);
                 Camera3D vc3{};
                 vc3.position = {vc.pos[0], vc.pos[1], vc.pos[2]};
@@ -1572,6 +1628,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 S.scene.drawFlaresFor(ram, sn.flares, sn.vctx, &depth[v]);
                 EndMode3D();
                 EndTextureMode();
+                wotm::msaa::g_current = nullptr;
+                if (vmsOn)
+                    S.vms[v].resolve(S.vrts[v].id);
             }
         }
         S.scene.deferFlares = false;
@@ -1589,7 +1648,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
             const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
             wotm::savepics::drawer().prepare(io.cdRoot, io.cdImage.string(), gr.w, static_cast<float>(RH));
         }
-        BeginTextureMode(rt);
+        const bool msOn = S.ms.ensure(RW, RH, msaaSamples);
+        BeginTextureMode(msOn ? S.ms.render() : rt);
+        wotm::msaa::g_current = msOn ? &S.ms : nullptr;
         ClearBackground(BLACK);
         rlSetClipPlanes(0.5, 30000.0);
         Camera3D c3{};
@@ -1689,6 +1750,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (!split && !photoHide)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
         EndTextureMode();
+        wotm::msaa::g_current = nullptr;
+        if (msOn)
+            S.ms.resolve(rt.id);
         wotm_photo::afterRender();   // modo foto: grava o quadro pedido (saiu sem a legenda)
         s_drawMs[split ? 1 : 0] += (GetTime() - tDraw0) * 1000.0;
         s_drawCpu[split ? 1 : 0] += wotmThreadCpuMs() - cpuDraw0;   // passos de 15,6 ms no Windows: so vale na media
