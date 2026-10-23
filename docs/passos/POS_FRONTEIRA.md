@@ -410,10 +410,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
      CONTROLS; ícones 2D do Kenney no lugar dos 3D; `NATIVO.md`, "Ícones de botão 2D").
   5. Tirar a configuração de controle do Options do jogo: **feito** (2026-10-22; o Options foi redesenhado sem controle, vibração e
      LOAD SETTINGS; `NATIVO.md`, "Retorno do dono sobre os menus").
-  6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **planejado**, não implementado. Plano, etapas e decisões do dono em
-     `investigacoes/2026-10-23/painel_na_pausa.md` (a linha CONTROL SCHEME da pausa vira RECOMPILED OPTIONS; painel em 2D sobre a
-     luta, que continua desenhada atrás para comparar as mudanças ao vivo; sons iguais aos do menu; a linha KEYBOARD,
-     teclado separado, fica apagada na pausa). Todas as decisões tomadas: pronto para implementar.
+  6. Abrir o painel na pausa da luta (pedido em 2026-10-23): **feito e conferido ao vivo pelo dono em 2026-10-23** (na master, branch
+     `painel-pausa`). Investigação encerrada. Plano e decisões em
+     `investigacoes/2026-10-23/painel_na_pausa.md`; o que ficou em `NATIVO.md`, "Painel na pausa". Sons: os do menu (decisão do dono),
+     de uma cópia do banco do Shell carregada pelo som nativo só para o painel. Texto da linha cabendo: caixa da pausa 1,4x mais larga.
 - **Modo foto: feito em 2026-10-22** (`wotm_photo.inc`; `NATIVO.md`, "Modo foto"): F9 ou L3 + R3 pausa e solta a câmera com zoom;
   HUD, lens flare e barras dos inimigos seguem a câmera com o jogo parado; controles na legenda de ícones; esconder o HUD e salvar PNG.
   Correções do mesmo dia, depois dos testes do dono: sair não deixa mais o jogo congelado (a volta da pausa esperava o tempo da pausa); o lens flare é refeito pela câmera

@@ -1,5 +1,11 @@
 # Painel "Recompiled options" no menu de pausa da luta (2026-10-23)
 
+> **Implementado e conferido pelo dono no mesmo dia; investigação encerrada** (branch `painel-pausa`, na master; resumo em `NATIVO.md`, "Painel na pausa"). Diferenças do plano: a caixa 3D da
+> pausa é desligada com `hierSetCsDrawMe(shell->m_cs610, 0)` enquanto o painel está aberto (em vez de mexer no `gDrawOverlay`); o
+> banco de sons do Shell **não** está carregado na luta (conferido: `gSoundBanks[14]` é 0), então o som nativo carrega uma cópia
+> do `SHELL_S.BNK` só para o painel, no grupo 2 (o jogo silencia os grupos 0 e 1 na pausa); a caixa da pausa ficou 1,4x mais larga para
+> o RECOMPILED OPTIONS caber; o painel aceita todos os dispositivos, como no menu.
+
 Pedido do dono: mexer nas opções do port (vídeo, features, câmera, controles) no meio da luta, sem voltar ao menu principal. Só leitura
 do código; nada foi implementado nem compilado. Fontes: `native/runtime/wotm_mainmenu.inc` (painel), `wotm_pausemenu.inc` (ganchos da
 pausa), `wotm_legend.inc` e `wotm_prompts.inc` (legenda e dica), `wotm_live.inc` (integração na janela, `applyVideoSettings`),
@@ -31,7 +37,7 @@ pausa), `wotm_legend.inc` e `wotm_prompts.inc` (legenda e dica), `wotm_live.inc`
   lista da pausa. Véu escuro leve ou nenhum, para não atrapalhar a comparação (conferir com o dono).
 - **Teclado separado (KEYBOARD, primeira linha da aba CONTROLS): travado na pausa** (decidido). Ligar essa opção no meio de uma luta
   de 1 jogador manda o teclado para o jogador 2, que não existe; quem joga pelo teclado perde o monstro e não sai mais da pausa pelo
-  teclado. Na pausa a linha aparece apagada, sem setas, e não muda; a dica diz "CHANGE IT IN THE MAIN MENU". O resto da aba fica livre.
+  teclado. Na pausa a linha aparece apagada, sem setas, e não muda; a dica diz "CAN ONLY BE CHANGED IN THE MAIN MENU". O resto da aba fica livre.
 
 ## 1. O que o jogo faz na pausa (retail)
 

@@ -366,7 +366,13 @@ public:
         if (!rd(lsn, u32(file.size() / 2048), file.data())) return log("[snd] banco no LSN %u: leitura falhou\n", lsn), 0u;
         return addBank(Bank::parse(file.data(), file.size()), lsn);
     }
-    u32 loadBankData(const std::vector<u8> &file) { return addBank(Bank::parse(file.data(), file.size()), 0); }
+    // forceGroup >= 0: todos os sons do banco tocam nesse grupo (volume mestre e pausa por grupo), nao no que o banco diz
+    u32 loadBankData(const std::vector<u8> &file, int forceGroup = -1) {
+        auto b = Bank::parse(file.data(), file.size());
+        if (b && forceGroup >= 0)
+            for (Sfx &s : b->sounds) s.group = s8(forceGroup);
+        return addBank(std::move(b), 0);
+    }
     void unloadBank(u32 h) {
         std::lock_guard<std::mutex> g(m_);
         auto it = banks_.find(h);
