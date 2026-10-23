@@ -96,6 +96,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_mods.inc"
 // Skins de mod na luta (item 8): sons do traje base e IAs sorteadas com skin
 #include "wotm_skins.inc"
+// Monstros custom (item 8, parte 2): Goliath Prime jogavel (visivel com IAs, toma dano delas)
+#include "wotm_custom.inc"
 
 namespace
 {
@@ -236,7 +238,7 @@ namespace
             if (g_matchCostumes[i] >= 0 && !taken(i, g_matchCostumes[i]))
                 costumes[i] = g_matchCostumes[i];   // 4 ou mais: traje de mod (MON/<PREFIXO><n>.* servido por mods/)
         for (int i = 0; i < total; ++i)
-            for (int c = 0; costumes[i] < 0; ++c)
+            for (int c = g_matchMonsters[i] == 13 ? 1 : 0; costumes[i] < 0; ++c)   // Goliath: o traje 0 e um prototipo (wotm_custom.inc)
                 if (c > 3 || !taken(i, c))
                     costumes[i] = c & 3;   // mais de 4 iguais: repete (o menu nao chega nisso)
         for (int i = 0; i < total; ++i)
@@ -2480,6 +2482,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     extern void wotmVu0UcodeInstall(PS2Runtime &);   // wotm_live.inc: microcodigo do VU0 sem VIF0 no executavel do jogo
     wotmVu0UcodeInstall(runtime);
     wotmSkinsInstall(runtime);   // por ultimo: embrulha os ganchos do SetPlayerMonster/SetAIMonster (split4, WOTM_AIVSAI)
+    wotmCustomInstall(runtime);  // depois das skins: embrulha o SetAIMonster delas
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else
