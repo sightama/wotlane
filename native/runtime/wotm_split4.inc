@@ -878,5 +878,5 @@ namespace wotm_split4
 void wotmMultiSetCostume(int player, uint32_t costume)
 {
     if (player >= 2 && player < 4)
-        wotm_split4::g_extraCostume[player - 2] = costume & 3u;
+        wotm_split4::g_extraCostume[player - 2] = costume;
 }
