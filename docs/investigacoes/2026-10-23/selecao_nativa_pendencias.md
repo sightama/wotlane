@@ -17,7 +17,7 @@ Causa: o `Renderer::drawFlares` do `native/wotm_model.hpp` (lens flare das luzes
 profundidade desligada (`setState(.., zmsk = true)`). Com ela desligada o `ClearBackground` dos quadros seguintes não limpa o Z, e o céu
 (o do menu atrás do telão e, depois da seleção, o da luta) falhava no teste de profundidade. Bastava o Robo-47 aparecer uma vez no
 modelo 3D da seleção ou da lista de saves. Agora o `drawFlares` religa a escrita no fim. Conferido no menu (céu atrás do telão com o
-Robo-47 na seleção); a luta depois da seleção falta o dono conferir.
+Robo-47 na seleção); a luta depois da seleção, conferida pelo dono.
 
 Segundo bug do mesmo flare (relato do dono, 2026-10-23): com dois Robo-47 na seleção de 4 (um pronto e o cursor de outro quadro
 sobre ele) os quadros esvaziavam a partir do segundo monstro (sem modelo, nome nem READY). O `drawFlares` roda depois do `EndMode3D`,
@@ -25,7 +25,7 @@ que desliga o teste de profundidade para o 2D, e o religava no fim; o desenho 2D
 Com um Robo só não aparecia. Agora o flare deixa o teste desligado, como o `EndMode3D` deixou. Conferido por roteiro (P1, CPU1
 Ultra-V, CPU2 e CPU3 Robo-47 na tela 19).
 
-## 4. Free-for-All com 2 ou 3 CPUs não mostra a seleção nativa (feito em 2026-10-23, falta o dono conferir o de 2 jogadores)
+## 4. Free-for-All com 2 ou 3 CPUs não mostra a seleção nativa (feito em 2026-10-23, conferido pelo dono)
 
 Com mais monstros do que cabem na tela 6, o "first to" (tela 15) manda à tela 18 (`screenCharSelect3P`, 3 monstros) ou 19
 (`screenCharSelect4P`, 4): 1 jogador com 2 CPUs → 18, com 3 → 19; 2 jogadores com 1 CPU → 18, com 2 → 19. As duas agora usam a
