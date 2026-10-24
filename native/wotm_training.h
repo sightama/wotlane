@@ -1,6 +1,6 @@
 // Modo treino (POS_FRONTEIRA.md, item 9): estado compartilhado entre a thread do EE (ganchos em native/runtime/wotm_training.inc,
 // incluido pelo wotm_overrides.cpp; captura dos volumes no wotmCaptureFrame do wotm_live.inc) e a janela (desenho no
-// wotm_live.inc). Guia em docs/passos/NATIVO.md, "Modo treino"; investigacoes em docs/investigacoes/2026-10-23/treino_*.md.
+// wotm_live.inc). Guia em docs/passos/NATIVO.md, "Modo treino"; investigacoes em git show 635fd3c:docs/investigacoes/2026-10-23/treino_*.md.
 #pragma once
 #include <atomic>
 #include <chrono>

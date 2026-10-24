@@ -15,7 +15,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) — **skins (partes 1 a 4) na master em 2026-10-23** (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
-| 9 | Modo treino com hitboxes e dano na tela — **primeira versão na branch `modo-treino` em 2026-10-23** (falta o dono testar a terceira leva: TRAINING no menu, opções no pause, HUD do boneco) | — | médio |
+| 9 | Modo treino com hitboxes e dano na tela — **na master em 2026-10-24** (aprovado pelo dono; faltam os extras da seção 9) | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
 | 12 | Seleção com prévia 3D de todos os selecionados | 1, 11 | médio |
@@ -355,7 +355,7 @@ no elimination (modo 6 esconde o traje) e os quadros dos monstros fora do telão
   vencer a luta, `WOTM_AIVSAI`) são a base para um adversário parado ou controlado.
 
 **Primeira versão em 2026-10-23** (branch `modo-treino`; `NATIVO.md`, "Runtime: modo treino"; investigações
-`docs/investigacoes/2026-10-23/treino_hitboxes.md` e `treino_dano.md`): `WOTM_TRAINING=1` ou F2 na luta. Esferas varridas que os golpes
+`635fd3c:docs/investigacoes/2026-10-23/treino_hitboxes.md` e `treino_dano.md`, encerradas): `WOTM_TRAINING=1` ou F2 na luta. Esferas varridas que os golpes
 testam (soco, objeto, ataque ao levantar, projéteis, onda do butt slam), caixas de colisão do corpo, cápsula de empurrão, painel com o
 dano exato (vida antes e depois do `takeDamage`), combo e vida; CPUs paradas (ou lutando) e vida recarregada. Conferido por fotos sem
 teclado.
@@ -371,6 +371,10 @@ depois de um golpe e o dano do bloqueio só ao vivo (a IA do P1 não ataca bonec
 fase (1 CPU, sem regras, luta sem fim); o menu principal desliga; as opções saíram do F2 para o pause (item TRAINING OPTIONS, painel
 nativo); medidores normal/cheios/fúria (fúria também para o jogador); HUD do boneco espelhado à direita e números nas barras de vida
 e stamina dos dois (`NATIVO.md`, "Runtime: modo treino"). Compilado e conferido por foto sem teclado; o menu e o pause são com o dono.
+
+**Quarta leva e merge em 2026-10-24** (aprovada pelo dono): RESET POSITIONS no pause, TRAINING OPTIONS antes do QUIT, caixa do pause
+nativa, janelas escondidas no pause e no QUIT, fonte do jogo nos textos do treino, intro pulada, dificuldade da CPU, HUD do boneco
+pelo HUD 1 do próprio jogo (o nativo saiu), "WINS" escondido. Merge na master (`4c575d8`); investigações encerradas e apagadas.
 
 **Falta:**
 1. Desenho do pisão e do agarrão (sem geometria: vítima por distância/cone, `getClosestMonsterToPunch`), da investida (esferas do corpo,

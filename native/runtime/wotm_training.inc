@@ -1,7 +1,7 @@
 // Modo treino (POS_FRONTEIRA.md, item 9; WOTM_TRAINING=1 ou a linha TRAINING do menu): ganchos na thread do EE que gravam o que o jogo testa nos
 // golpes e o dano de cada um. Incluido pelo wotm_overrides.cpp; estado compartilhado em native/wotm_training.h; os volumes do corpo
 // sao lidos no wotmCaptureFrame (wotm_live.inc) e o desenho e o painel de opcoes (menu de pausa) estao no wotm_live.inc. Investigacoes:
-// docs/investigacoes/2026-10-23/treino_hitboxes.md e treino_dano.md.
+// git show 635fd3c:docs/investigacoes/2026-10-23/treino_hitboxes.md e treino_dano.md.
 //
 // - Golpes: o jogo nao tem caixa de golpe. Cada teste e uma esfera varrida (hdSphereTest, do ponto do osso no quadro anterior ate o
 //   atual) contra os cascos de colisao. Os ganchos marcam o "teste de golpe em curso" (soco/combo: collisTestCloseRangeAttack; golpe
@@ -513,7 +513,7 @@ namespace wotm_train
     }
 
 
-    // Pular a intro (docs/investigacoes/2026-10-24/treino_intro.md): o mesmo caminho do START no Monster::updateCinema (movieAborted,
+    // Pular a intro (635fd3c:docs/investigacoes/2026-10-24/treino_intro.md): o mesmo caminho do START no Monster::updateCinema (movieAborted,
     // fadeOutAndIn(4) e ActionDispatch::stopAllActiveActions pelo TaskManager::global), so na intro: armado pelo rtMain(first) da luta
     // (g_introMs), vale por 10 s e desarma no primeiro uso. O RESET POSITIONS (rtMain(0)) nao arma.
     PS2Runtime::RecompiledFunction g_origCinema = nullptr;

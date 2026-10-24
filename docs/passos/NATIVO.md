@@ -79,13 +79,13 @@ Na luta (só onde o desenho nativo roda), **F1** abre e fecha o menu; com ele ab
 - **`WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N`** liga desde o início; `vencer=N` repete o "vencer" a cada N segundos de jogo (lote, avançar sozinho). Conferido em 2026-10-17 com `WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_CHEATS=inv,esp,vencer=25`: dano bloqueado, vida do jogador cheia (117) e 4 rodadas vencidas em 150 s.
 
 ## Runtime: modo treino (TRAINING no menu, `WOTM_TRAINING`)
-Item 9 do `POS_FRONTEIRA.md` (branch `modo-treino`, 2026-10-23). Investigações: `docs/investigacoes/2026-10-23/treino_hitboxes.md`
+Item 9 do `POS_FRONTEIRA.md` (na master em 2026-10-24). Investigações (encerradas): `git show 635fd3c:docs/investigacoes/2026-10-23/treino_hitboxes.md`
 (como o golpe acerta, offsets do `StatePunch`, valores do `.CHR`) e `treino_dano.md` (volumes do corpo, caminho do dano, boneco,
 fase TRAINING). Código: ganchos na thread do EE em `native/runtime/wotm_training.inc` (incluído pelo `wotm_overrides.cpp`, instalado
 por último: é o gancho mais de fora do `update`/`takeHit`/`takeDamage`), desenho, painel e números do HUD em
-`native/runtime/wotm_trainview.inc` (incluído pelo `wotm_live.inc`), HUD do boneco no `wotm_overrides.cpp` (`wotmTrainHud`), opções no
+`native/runtime/wotm_trainview.inc` (incluído pelo `wotm_live.inc`), HUD do boneco no `wotm_split4.inc` (`trainingHud`), opções no
 painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do menu no `wotm_padsel.inc`, estado compartilhado em
-`native/wotm_training.h`. Investigações do menu, do pause e do HUD: `treino_menu_fluxo.md`, `treino_pausa.md`, `treino_hud.md`.
+`native/wotm_training.h`. Investigações do menu, do pause e do HUD (mesmo commit): `treino_menu_fluxo.md`, `treino_pausa.md`, `treino_hud.md`.
 - **Ligar:** linha **TRAINING** na tela de modos de 1 jogador (tela 2, embaixo de ENDURANCE). Ela arma o modo e o fluxo pula a
   escolha do número de CPUs (tela 12) e das regras (tela 15): vai direto à seleção (1 CPU, `m_killTarget` 0, luta sem fim), depois à
   fase, e o `rtMain(first)` da luta liga o modo. Voltar ao menu principal (ou escolher outro modo) desarma e desliga. Também
@@ -111,7 +111,7 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
 - **Intro pulada:** no `rtMain(first)` o treino arma o pulo (10 s); o gancho do `Monster::updateCinema` faz o caminho do START do
   jogo (`movieAborted` 1, `fadeOutAndIn(4)`, `stopAllActiveActions` pelo `TaskManager::global` em 10 fields), então posições
   iniciais, letterbox, música e câmera ficam como o jogo deixa. O RESET POSITIONS não arma. Log `[treino] intro pulada`.
-  Investigação: `docs/investigacoes/2026-10-24/treino_intro.md`.
+  Investigação: `635fd3c:docs/investigacoes/2026-10-24/treino_intro.md`.
 - **Fonte:** os textos do treino (painel, comandos, números do HUD) saem com os glifos do jogo (`wotm_padsel::text`, atlas do
   quadro) pelo `scene.drawQuads`, com a célula estreitada para 78% (a fonte deixa uma letra de vão; células sobrepostas se cortam). O
   atlas não tem `/`, `>` e `+`: saem como traços desenhados. Linhas do painel curtas, em maiúsculas. Foto:
@@ -156,7 +156,7 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   lido na saída do `update` (o `clearInputs` é no começo do próximo; o lock-on alternado devolve os bytes originais na saída) do P1 e
   do primeiro boneco (slot 4; escondido com o boneco parado). Histórico de 12 linhas no lado esquerdo da faixa 4:3, a mais nova em
   cima: quadros segurados, seta (relativa ao monstro, frente para cima) e os botões nos ícones do dispositivo do jogador
-  (`wotm_prompts::cellFor`). Investigação: `docs/investigacoes/2026-10-23/treino_entradas.md`.
+  (`wotm_prompts::cellFor`). Investigação: `635fd3c:docs/investigacoes/2026-10-23/treino_entradas.md`.
 - **Boneco (`WOTM_TRAINING_DUMMY`):** as IAs (slots a partir de `m_numPlayers`). 0 parado: pad desligado (Monster +0xF9, o
   `setPadEnabled`), regravado a cada quadro; não andam nem atacam, mas recuam, caem e são agarradas. 1 CPU: a IA do jogo. 2 sempre
   bloqueia e 3 bloqueia depois do 1º acerto: o gancho do `Ai::updateInputs` (0x101788, a0 = Monster +0x4E0; só roda com o pad
