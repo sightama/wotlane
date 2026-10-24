@@ -104,6 +104,16 @@ private:
             p.mod = sp.mod;
             p.rel = sp.rel;
         }
+        // Retrato dos monstros custom ("portrait" do monster.json): a imagem do .RTX do traje que eles usam
+        for (const mods::Custom &cu : reg.customs()) {
+            if (cu.portrait.empty() || cu.portraitTex < 0) continue;
+            Png &p = m_png[Key{upper(cu.prefix + std::to_string(cu.costume)), true, uint32_t(cu.portraitTex)}];
+            p.host = cu.portrait.string();
+            p.mod = cu.mod;
+            std::error_code ec;   // caminho no mod, para o log
+            p.rel = std::filesystem::relative(cu.portrait, cu.dir.parent_path().parent_path(), ec).generic_string();
+            if (ec || p.rel.empty()) p.rel = cu.portrait.filename().string();
+        }
         if (!m_png.empty()) std::fprintf(stderr, "[mods] %zu textura(s) em PNG\n", m_png.size());
     }
 };

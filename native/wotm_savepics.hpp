@@ -86,7 +86,8 @@ inline bool hasLogo(uint32_t monster) {
 }
 // Monstro (indice de kMonsters) -> prefixo do arquivo em MON/ (MONKEY0.NGP...: o numero e o traje, Shell::m_costume)
 inline const char *monsterFile(uint32_t monster) {
-    static const char *const k[] = {nullptr, "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", nullptr, "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN"};
+    static const char *const k[] = {nullptr, "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", nullptr, "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN",
+                                           nullptr, "ASSBOSS"};   // 13: Goliath, base de monstro custom (wotm_mods.hpp)
     return monster < std::size(k) ? k[monster] : nullptr;
 }
 

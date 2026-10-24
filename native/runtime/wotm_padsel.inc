@@ -57,7 +57,22 @@ constexpr Color kPlayerColors[kMaxPlayers] = {{230, 120, 50, 255}, {70, 140, 235
 // Nomes do MonsterNames.h (tipo = m_typeBits >> 5)
 constexpr const char *kMonsterNames[17] = {"",        "CONGAR", "ROBO-47",  "TOGERA", "ULTRA-V", "PREYTOR", "SPIDER", "KINETICLOPS", "MAGMO",
                                            "RAPTROS", "AGAMO",  "ZORGULON", "OGRE",   "ASSBOSS", "JELLY",   "FINAL",  ""};
-inline const char *monsterName(uint32_t sel) { return (sel >> 5) < 17 ? kMonsterNames[sel >> 5] : ""; }
+// Monstro custom (mods/<mod>/monsters/, wotm_mods.hpp) que usa o tipo de `sel` fora das colunas (o Goliath: 13); nullptr nos jogaveis
+inline const wotm::mods::Custom *customOfSel(uint32_t sel)
+{
+    return wotm::mods::monsterInfo(int(sel >> 5)) ? nullptr : wotm::mods::Registry::get().customByType(int(sel >> 5));
+}
+inline const char *monsterName(uint32_t sel)
+{
+    if (const wotm::mods::Custom *cu = customOfSel(sel))
+    {
+        static thread_local char buf[48];
+        std::snprintf(buf, sizeof buf, "%s", cu->name.c_str());
+        for (char *q = buf; *q; ++q) *q = char(std::toupper(static_cast<unsigned char>(*q)));
+        return buf;
+    }
+    return (sel >> 5) < 17 ? kMonsterNames[sel >> 5] : "";
+}
 
 // Estado que a janela desenha (copiado sob g_m)
 struct View
@@ -841,6 +856,15 @@ static bool g_soloPrimed = false;   // primeiro soloSync da tela: um "pronto" qu
 static uint32_t g_soloTick = 0;
 // Casa extra em que o quadro esta (0: a coluna do jogo; kCellRandom, kCellCustom: o cursor do jogo fica parado na coluna de onde saiu)
 static int g_soloExtra[kMaxPlayers] = {};
+// Casa CUSTOM: o monstro custom mostrado (indice em Registry::customs()) e o que o X confirmou (indice + 1; 0 = nenhum). No X o cursor
+// do jogo fica na coluna de onde o quadro saiu (procuradora, com o primeiro traje livre) e o jogo confirma; o soloSync troca o
+// m_monsterSel e o m_costume pelos do custom e devolve a vaga da procuradora, como nas skins.
+static int g_soloCustom[kMaxPlayers] = {}, g_soloCustomPick[kMaxPlayers] = {};
+static const wotm::mods::Custom *soloCustom(int who)
+{
+    const auto &cs = wotm::mods::Registry::get().customs();
+    return cs.empty() ? nullptr : &cs[size_t(g_soloCustom[who]) % cs.size()];
+}
 // Codigo do screenGetInput ja decidido neste quadro, por controle (a tela 3 le o controle duas vezes por quadro)
 static uint32_t g_soloCodeTick[3] = {}, g_soloCodeIn[3] = {}, g_soloCodeOut[3] = {};
 
@@ -854,6 +878,7 @@ static void soloBegin(int screen)
         g_soloCol[i] = -1;
         g_soloDonePrev[i] = false;
         g_soloExtra[i] = 0;
+        g_soloCustomPick[i] = 0;
     }
     std::fprintf(stderr, "[padsel] selecao nativa da tela %d\n", screen);
 }
@@ -890,6 +915,18 @@ static void soloSync(uint8_t *rdram)
         }
         const bool done = rd32(rdram, pn[i].done) != 0;
         const int col = int(rd32(rdram, pn[i].col)), cur = int(rd32(rdram, pn[i].cur));
+        if (done && !g_soloDonePrev[i] && g_soloCustomPick[i] && g_soloCol[i] == col)
+        {
+            // casa CUSTOM: o jogo confirmou a coluna procuradora; vale o tipo e o traje do custom, e a vaga dela volta a ficar livre
+            const auto &cs = wotm::mods::Registry::get().customs();
+            const wotm::mods::Custom &cu = cs[size_t(g_soloCustomPick[i] - 1) % cs.size()];
+            wr32(rdram, pn[i].monsterDst, uint32_t(cu.type) << 5);
+            wr32(rdram, pn[i].costumeDst, uint32_t(cu.costume));
+            wr32(rdram, wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4 + cur) * kSlotSize, 1u);
+            std::fprintf(stderr, "[padsel] %s: custom %s (tipo %d traje %d)\n", soloLabel(pn, n, i), cu.id.c_str(), cu.type, cu.costume);
+        }
+        else if (!done && g_soloDonePrev[i])
+            g_soloCustomPick[i] = 0;   // desistiu (voltou do pronto)
         if (!done)
         {
             if (col != g_soloCol[i] || noCostume)
@@ -899,7 +936,7 @@ static void soloSync(uint8_t *rdram)
             else if (g_soloSel[i] >= 4 && costumeList(rdram, col).find(g_soloSel[i]) < 0)
                 g_soloSel[i] = cur;
         }
-        else if (!g_soloDonePrev[i] && g_soloSel[i] >= 4 && !noCostume && g_soloCol[i] == col)
+        else if (!g_soloDonePrev[i] && !g_soloCustomPick[i] && g_soloSel[i] >= 4 && !noCostume && g_soloCol[i] == col)
         {
             wr32(rdram, pn[i].costumeDst, uint32_t(g_soloSel[i]));
             // o jogo marcou o procurador como levado (taken 0); ele continua livre para o outro quadro
@@ -912,8 +949,17 @@ static void soloSync(uint8_t *rdram)
         {
             std::fprintf(stderr, "[padsel] pronto (%s): coluna %d, m_monsterSel %s, traje %u\n", soloLabel(pn, n, i), col,
                          monsterName(rd32(rdram, pn[i].monsterDst)), rd32(rdram, pn[i].costumeDst));
-            if (g_soloPrimed)
-                wotm_narrator::announce(col >= 1 && col <= 10 ? monsterOfCol(rdram, col) : int(rd32(rdram, pn[i].monsterDst) >> 5));
+            const uint32_t msel = rd32(rdram, pn[i].monsterDst);
+            if (!g_soloPrimed)
+                ;
+            else if (g_soloCustomPick[i] && !wotm::mods::Registry::get().customs().empty())
+            {
+                const auto &cs = wotm::mods::Registry::get().customs();
+                const wotm::mods::Custom &cu = cs[size_t(g_soloCustomPick[i] - 1) % cs.size()];
+                wotm_narrator::announce(cu.narrator, cu.type);
+            }
+            else
+                wotm_narrator::announce(col >= 1 && col <= 10 ? monsterOfCol(rdram, col) : int(msel >> 5));
         }
         g_soloDonePrev[i] = done;
     }
@@ -955,6 +1001,7 @@ static uint32_t soloDecide(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     const int first = stepColumn(rdram, 0, 1), last = stepColumn(rdram, 11, -1);
     if (code == 3 || code == 4)
     {
+        g_soloCustomPick[who] = 0;
         const int dir = code == 3 ? -1 : 1, from = ex ? ex : col, to = stepCell(rdram, from, dir);
         if (to <= 10 && from <= 10 && !(dir > 0 && from == last) && !(dir < 0 && from == first))
             return code;   // de coluna em coluna: o jogo anda (e toca o som)
@@ -967,7 +1014,15 @@ static uint32_t soloDecide(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     if (code == 6)
     {
         if (ex == kCellCustom)
-            return 0;
+        {
+            const wotm::mods::Custom *cu = soloCustom(who);
+            if (!cu || (p.ai && !cu->ai))   // sem custom, ou quadro de CPU (a IA do chefe precisa da fase dele)
+                return 0;
+            g_soloCustomPick[who] = g_soloCustom[who] % int(wotm::mods::Registry::get().customs().size()) + 1;
+            soloSetCursor(rdram, p, who, col, firstCostume(rdram, col));   // a coluna procuradora, com um traje livre
+            std::fprintf(stderr, "[padsel] custom: %s (base %s, traje %d)\n", cu->id.c_str(), cu->typeName.c_str(), cu->costume);
+            return code;
+        }
         if (ex == kCellRandom)
         {
             int c, s;
@@ -979,6 +1034,15 @@ static uint32_t soloDecide(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         return code;
     }
     // cima/baixo
+    if (ex == kCellCustom)
+    {
+        const int nc = int(wotm::mods::Registry::get().customs().size());
+        if (nc <= 1)
+            return 0;
+        g_soloCustom[who] = (g_soloCustom[who] + (code == 1 ? -1 : 1) + nc) % nc;
+        sfx(rdram, ctx, runtime, code == 1 ? 2 : 4);
+        return 0;
+    }
     if (ex || noCostume)
         return ex ? 0 : code;
     const CostumeList l = costumeList(rdram, col);
@@ -1069,7 +1133,27 @@ static void publishSolo(uint8_t *rdram, View &v)
             v.selMonster[i] = col >= 1 && col <= 10 ? rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(col - 1)) : 0u;
             v.selCostume[i] = g_soloCol[i] == col ? g_soloSel[i] : int(rd32(rdram, pn[i].cur));
         }
-        v.selCell[i] = done ? col : g_soloExtra[i] ? g_soloExtra[i] : col;
+        v.selCell[i] = done ? (col ? col : customOfSel(v.selMonster[i]) ? kCellCustom : 0) : g_soloExtra[i] ? g_soloExtra[i] : col;
+        if (!pn[i].waiting && v.selCell[i] == kCellCustom)
+        {
+            // casa CUSTOM: o monstro custom mostrado (ou o confirmado); a fileira de trajes percorre os customs
+            const auto &cs = wotm::mods::Registry::get().customs();
+            if (!cs.empty())
+            {
+                const int k = done && g_soloCustomPick[i] ? g_soloCustomPick[i] - 1 : g_soloCustom[i] % int(cs.size());
+                const wotm::mods::Custom &cu = cs[size_t(k)];
+                if (!done)
+                    v.selMonster[i] = uint32_t(cu.type) << 5, v.selCostume[i] = cu.costume;
+                v.selCostumes[i] = int(cs.size());
+                v.selModCount[i] = int(cs.size());
+                v.selCostumeIdx[i] = k;
+                v.selBase[i] = v.selCostume[i] < 4 ? v.selCostume[i] : 0;
+                std::snprintf(v.selCostumeName[i], sizeof v.selCostumeName[i], "%s",
+                              pn[i].ai && !cu.ai ? "PLAYERS ONLY" : ("FROM MOD " + cu.mod).c_str());
+                for (char *q = v.selCostumeName[i]; *q; ++q) *q = char(std::toupper(static_cast<unsigned char>(*q)));
+                continue;
+            }
+        }
         if (pn[i].waiting || v.selCell[i] > 10)
         {
             v.selMonster[i] = 0;
@@ -1902,7 +1986,7 @@ static void drawSelect(const View &v)
             outlined("WAITING", cx, y + boxH * 0.79f, boxH * 0.07f, boxW * 0.8f, kName);
             continue;
         }
-        if (v.selCell[p] > 10 && !v.selReady[p])   // aleatorio ou personalizado
+        if (v.selCell[p] > 10 && !v.selReady[p] && (v.selMonster[p] >> 5) == 0)   // aleatorio ou personalizado sem custom
         {
             const bool rnd = v.selCell[p] == kCellRandom;
             outlined(rnd ? "?" : "+", cx, y + boxH * 0.42f, boxH * 0.34f, boxW * 0.8f, Color{c.r, c.g, c.b, 255});
@@ -1910,7 +1994,7 @@ static void drawSelect(const View &v)
             outlined(rnd ? "RANDOM" : "CUSTOM", cx, nameY, boxH * 0.085f, boxW * 0.72f, kName);
             outlined("<", x + boxW * 0.08f, nameY, boxH * 0.09f, boxW, c);
             outlined(">", x + boxW * 0.92f, nameY, boxH * 0.09f, boxW, c);
-            outlined(rnd ? "MONSTER AND COSTUME AT RANDOM" : "COMING SOON", cx, y + boxH * 0.855f, boxH * 0.05f, boxW * 0.86f,
+            outlined(rnd ? "MONSTER AND COSTUME AT RANDOM" : "NO CUSTOM MONSTERS IN MODS", cx, y + boxH * 0.855f, boxH * 0.05f, boxW * 0.86f,
                      Color{205, 195, 175, 255});
             continue;
         }

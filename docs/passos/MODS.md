@@ -130,11 +130,55 @@ Conferido em 2026-10-23 (`WOTM_MATCH=4:roxo,4:3,1`, IA): a skin com o PNG recolo
 skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3. Foto:
 `docs/screenshots/2026-10-23/2026-10-23_skin_mod_png_so_na_skin.png`.
 
+## Monstros custom (um monstro a mais na seleção)
+
+Um monstro custom é uma pasta em `mods/<mod>/monsters/<pasta>/` com um `monster.json`. Hoje ele usa o código, o modelo e os arquivos
+de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tipo livre do jogo) ficam para depois, e o formato reserva
+`files` para isso. O primeiro é o Goliath Prime (`mods/goliath/monsters/goliath/`, fora do repo):
+
+```json
+{ "id": "goliath", "name": "GOLIATH PRIME", "base": "assboss", "costume": 1,
+  "camera": { "from": "togera", "scale": 200 }, "narrator": "goliathprime",
+  "portrait": "goliathprime.png" }
+```
+
+- `id`: letras minúsculas, dígitos e `_` (sem ele, o nome da pasta). É o que o `WOTM_MATCH` aceita (`WOTM_MATCH=goliath,3,1`).
+- `name`: o que a seleção e o HUD mostram. O HUD tem 11 letras: vale a última palavra que couber, em minúsculas ("goliath").
+- `base`: o tipo do jogo. Por enquanto só `assboss` (13, o Goliath; `kCustomBases` em `native/wotm_mods.hpp`); os jogáveis entram
+  quando houver motivo (para trocar só a aparência, use uma skin).
+- `costume`: o traje do disco (`ASSBOSS1`; o `ASSBOSS0` é um protótipo com metade das animações e o retrato pequeno).
+- `camera`: a câmera de outro monstro (`from`, pelo nome do jogo) com as distâncias escaladas (`scale` em %, 10 a 1000; o JSON do
+  port só lê inteiros). O `ASSBOSS.CHR` nunca foi usado pelo jogo (na aventura a câmera é a da fase) e deixa a câmera em cima do
+  monstro; a do Togera 2x fica como a de um monstro comum.
+- `narrator`: `narrator/<nome>.mp3` dito na confirmação (vazio = o do tipo).
+- `ai`: se uma CPU pode usá-lo (padrão não). Um custom de chefe como CPU rodaria a IA do chefe (`Ai::updateAssBoss`), que precisa
+  dos pontos da fase dele; a seleção mostra "PLAYERS ONLY" no quadro da CPU.
+- **Na seleção** (telas 3, 6, 7, 18 e 19): a casa CUSTOM da barra de monstros. Cima e baixo percorrem os customs, X confirma. O
+  cursor do jogo fica na coluna de onde o quadro saiu, que faz as vezes dele (a vaga dela não é tomada). A seleção de 3 e 4
+  jogadores ainda não tem a casa.
+- **Launcher:** os customs aparecem em "Your monster", depois do Random (só para o jogador).
+- **O que o port faz pelo Goliath** (`native/runtime/wotm_custom.inc`): ele fica visível e controlável com IAs na luta (o
+  `SetAIMonster` o desligava), toma dano delas (o `takeHit` só aceitava golpe do jogador 1), carrega o banco de som do chefe fora
+  da aventura e põe o nome no HUD. Também: X+Quadrado faz o giro do chefe (`StateTopSpin`, no lugar do `StateCrowdControl` dos
+  comuns; o golpe cheio vale contra a IA mais perto), a torre não segue mais o inimigo o tempo todo (o "olhar" do chefe gira o
+  tronco inteiro; com o lock ela mira) e o dardo (empalar) vira um golpe comum em quem não tem as animações de empalado (antes
+  travava). Investigações (encerradas): `git show 18bb1d2:docs/investigacoes/2026-10-23/goliath_topspin.md`, `goliath_lockon.md`, `goliath_impale.md`.
+- **Retrato do HUD:** o do `ASSBOSS1.RTX` (texId 6) é provisório, com a cara do Congar. `"portrait": "goliathprime.png"` (na pasta
+  do monstro ou na raiz do mod; 128 × 64 ou maior na mesma proporção, ex. 512 × 256) troca a imagem do retrato do traje do custom
+  (`"portraitTex"`: o texId no `.RTX`; padrão 6 para o `ASSBOSS1`). Vale também para o chefe da aventura, que usa o mesmo arquivo.
+  Log: `[mods] ASSBOSS1.RTX t6 <- Goliath Prime/goliathprime.png`.
+- Ainda não: animações que o ASSBOSS não tem (escalar, alguns bloqueios e contra-ataques; `18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md`,
+  seção 3) fazem o jogo segurar a pose anterior; elimination e minigames não foram testados com ele; o save da aventura não guarda
+  custom (a aventura não oferece a casa).
+
+Conferido em 2026-10-23 por roteiro: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,
+luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
+
 ## Cuidados
 
 - Arquivo de mod maior que o do disco (`.TEX`, `.RTX`, `.NGP`, `.BNK`): o jogo carrega em regiões de tamanho fixo e pode sobrescrever
   o que vem depois (o log e o `check` avisam). Com PNG isso não acontece: a textura do jogo não muda de tamanho.
-- Monstros novos (sem substituir) são o item 8, parte 2.
+- Monstros novos com arquivos próprios (sem base do jogo) são o item 8 do `POS_FRONTEIRA.md`; os custom de hoje usam um tipo do jogo.
 
 Conferido em 2026-10-22 (`WOTM_MATCH=3,1`, `3,1,2,5,1` e `1,3,1` com IA): a pele do Togera em PNG 4x (1024 × 1024 no lugar de 256)
 e o retrato 2x no HUD do jogador e na barra do inimigo; kit com export, edição, pack (PNG, `.VAG`, um som do `SHELL_S.BNK`),
