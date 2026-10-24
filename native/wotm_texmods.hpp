@@ -1,4 +1,4 @@
-// Texturas de mod em PNG (POS_FRONTEIRA.md, item 4): o mod traz so a imagem e o desenho nativo a usa no lugar da textura do jogo.
+// Texturas de mod em PNG (MODS.md): o mod traz so a imagem e o desenho nativo a usa no lugar da textura do jogo.
 // O jogo continua carregando o .TEX/.RTX do disco (VRAM, ids e paletas intactos); so o que a janela desenha muda.
 // Nome do arquivo, em qualquer pasta do mod, como o tools/tex.py export (e o tools/modkit.py) os grava:
 //   <arquivo>_t<texId>.png       textura do <arquivo>.TEX       (mods/meu_mod/MON/lizard0_t0004.png)

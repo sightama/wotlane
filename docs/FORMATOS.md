@@ -226,3 +226,70 @@ também gravado nos bits 7..17 da primeira palavra do `INTERACTIVE_STATE`), `hit
 4. Voltar para um estado menor grava `whichChild` direto: é o que `rebuildCanyon2Pillars`/`rebuildCapitolPillars` fazem com `ChangeState(0, 1, 0)` (reconstroem os pilares).
 5. Com o terceiro argumento de `ChangeState` ligado, o jogo também põe em 1 o `whichChild` de um `SWITCH` no começo do novo estado (o próprio `child` ou o primeiro filho de um `GROUP`), e
    a vida vai para `damageThreshold[i] * vidaMáxima / 65535 - 0,001`.
+
+## Save do memory card (`BASCUS-97197`, `savegame.dat`)
+Pasta `BASCUS-97197` no cartão (título "War of the Monsters"). O stub `sceMc*` do runtime grava em `mc0/` do host (porta 2 em
+`mc1/`). Quem monta os blocos é o `game/MonsterMc`; o `game/McFile` (`McLoadFile`/`McSaveFile`/`McSetupGameDir`/`McScrambleIcon`) e
+o `game/McPage` (menus) são plataforma. `python tools/mcsave.py <pasta>` mostra os dois cartões como JSON por nome (só lê). No PC o
+jogo usa o `save.json` (`docs/passos/NATIVO.md`, "Save em JSON").
+
+| Arquivo | Bytes | Conteúdo | Monta / aplica |
+|---|---|---|---|
+| `BASCUS-97197` | 0x380 | opções, battle tokens e destraves (`_SettingsData`) | `MonsterMc::getSettingsData` / `setSettingsData` |
+| `savegame.dat` | 0x280 | 10 slots da aventura (`_SaveGameData`) | `MonsterMc::getSaveData(slot)` / `setSaveData(slot)` |
+| `icon.sys`, `ICON.ICO` | 964, 61120 | ícone do PS2 | `McSetupGameDir`; o `McScrambleIcon` zera o `icon.sys` durante a gravação das opções e o refaz igual depois |
+
+**Sem checksum.** As duas leituras (`McLoadSettings::update`, `McSelectReel::refreshSaveData`) só conferem a marca `0x12345678` no fim
+do bloco; marca errada vira erro do cartão. Nenhum ponteiro: tudo é `int` de 32 bits, little-endian.
+
+**`BASCUS-97197` (opções):**
+
+| Off | Origem |
+|---|---|
+| 0x00 | `TheGame+0x1203CC` (`m_matchMode`; o `Shell` acende `m_difficultySw[valor]`: é a dificuldade) |
+| 0x04, 0x08 | `Shell::m_sfxVolume`, `m_musicVolume` (0..0x400) |
+| 0x0C | `Shell+0x2A40`: o construtor põe 50 e ninguém mais lê (opção morta; provável slider cortado do menu de opções) |
+| 0x10 | `Shell::m_mono` (ao carregar vira 0/1) |
+| 0x14, 0x18 | `Shell::m_ctlrCfg[2]` |
+| 0x1C, 0x20 | `Shell::m_vibration[2]` |
+| 0x24 | battle tokens (`Shell+0x2B24`) |
+| 0x28..0xE7 | `monsterSelectMode[i].state` dos 48 `SelectSlot` (só o `state`; `taken`, preço e nomes ficam no ELF) |
+| 0xE8..0xF3 | `TheGame+0x1204B0..B8`, 3 ints: recorde do endurance por dificuldade (gravado, o jogo nunca o mostra) |
+| 0xF4..0x34B | **não é escrito**: o buffer é da pilha e esse trecho grava lixo |
+| 0x34C | marca `0x12345678` |
+
+Os 48 flags são 12 grupos de 4. Grupos 0 a 9 são os monstros na ordem do `aiMonsters` de `Shell::RandomlySelectAI` (Raptros, Togera,
+Preytor, Congar, Robo-47, Agamo, Ultra V, Magmo, Kineticlops, Zorgulon), e a entrada `j` do grupo é o traje `j`. Os grupos 10 e 11 são
+as fases do `levelUnlocked`: entrada 40 Volcano, 41 Mini Baytown, 42 Capitol, 43 UFO, 44 Dodge Ball, 45 Big Shot, 46 Crush; a 47 é
+uma "Level 4" de 5000 tokens que nenhum código lê. Os nomes e preços estão na própria tabela (`SelectSlot::name`/`cost` no ELF) e
+confirmam a ordem. O `McCheckForSweetTooth` do boot procura o `BASCUS-97101/globalFile` (save do Twisted Metal: Black) no cartão e,
+se achar, liga a entrada 23 ("Agamo Costume 4", o Mecha Sweet Tooth; `ROCK3`) e toca `ShellSound::playSweetUnlockedSound`.
+
+**`savegame.dat` (aventura):** +0 número de slots usados (o maior índice gravado + 1); slots em `0x10 + i*0x3C`; marca em 0x268; o resto
+é zero. Cada slot usa só 0x14 dos 0x3C bytes:
+
+| Off no slot | Origem | Ao carregar (`setSaveData`) |
+|---|---|---|
+| +0x00 | `Shell::m_levelNum` (fase onde parou) | idem; as IAs vêm de `m_levelNumAIs[fase]` e `levelMonsters[fase]` |
+| +0x04 | `Shell::m_monsterSel[0]` (`monstro << 5 \| variante`) | idem |
+| +0x08 | `Shell::m_lives[0]` | idem |
+| +0x0C | `Shell+0x2B28 + Shell+0x2B2C` (pontos da fase + acumulado) | tudo em `+0x2B2C` |
+| +0x10 | `Shell::m_costume[0]` | idem; e `m_numPlayers = 1`, `m_mode = 1` |
+
+Gravar um slot (`McSaveAdventure::onEnter`) lê o `savegame.dat` inteiro, troca só aquele slot (`copySaveData`) e grava os 0x280 de
+novo; com o arquivo ausente (`McSaveAdventureBlank`) começa de um bloco zerado com a marca. Os 10 slots são as "fitas" da tela de
+carregar (`McSelectReel`, `McLoadGameBoxes`); o cartão 2 dá outros 10.
+
+**Quando o jogo grava** (sequências de páginas montadas em `MonsterMc::update*`): `updateBootLoad` (boot: `McBootPage` →
+`McLoadSettings` → `McCheckForSweetTooth`), `updateSettingsLoad`/`updateSettingsSave` (menu de opções), `updateUnlockSave` (depois de
+comprar na tela de destrave: `McAskToSave` e grava as opções, onde ficam os destraves), `updateEndOfStorySave`, `updateStoryModeSave`/
+`updateStoryModeLoad` (aventura) e `updateEndureSave`. Toda gravação passa por `McChooseSlot` (cartão 1 ou 2), `McCheckSpace`,
+`McCheckFormat` e `McCheckOverwrite` e grava as opções (`McSaveSettings`); as de opções, destrave, endurance e fim de história também
+criam o `savegame.dat` em branco se faltar (`McSaveAdventureBlank`), e a da aventura escolhe o slot (`McSelectSaveSlot`) e grava o
+slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qualquer gravação. A compra da tela de destrave só é
+efetivada dentro do `McSaveSettings::update` (`g_monsterToUnlock`/`g_skinToUnlock`: liga o `state` e desconta o preço; a tela põe -1
+nos dois logo depois). Fora dessas sequências, os tokens só mudam no `Shell::EvaluateOnePlayerStoryStatus` (fim de fase da
+história), no endurance e no construtor.
+
+**`MEMCRD/ICON.ICO`** (o ícone, também no disco): uma fita de filme, 1158 vértices, uma forma, textura 128x128 comprimida; o formato
+está no cabeçalho do arquivo (`native/wotm_saveicon.hpp`).

@@ -6,7 +6,7 @@ A decompilation and recompilation project for **War of the Monsters** (PS2, NTSC
 
 You need your own copy of the game. No game files are, or ever will be, in this repository.
 
-## Status (2026-10-19)
+## Status
 The game runs on Windows at 60 fps with native rendering: stages, monsters, particles, shadows, fog, menu text, HUD, screen fades and Hor+ widescreen. Fights are playable with the
 keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
 
@@ -14,7 +14,7 @@ keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2
 `tools/vu0native.py`). The game executable (`wotm.exe`) has no emulated VU1, VIF0, VIF1, GS or IOP; those only exist in a separate test executable, the VU1/GS as the reference for the renderer check.
 What is still PS2-specific in the game: [docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md).
 
-The port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)) is finished; what comes next is in [docs/passos/POS_FRONTEIRA.md](docs/passos/POS_FRONTEIRA.md).
+The port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)) is finished; what comes next is in [TODO.md](TODO.md).
 
 8 Monsters brawling: [https://www.youtube.com/watch?v=IvLLuSYORPc](https://www.youtube.com/watch?v=IvLLuSYORPc).
 

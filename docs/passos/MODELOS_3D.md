@@ -1,7 +1,7 @@
 # Monstros 3D direto do disco (pose, esqueleto, texturas)
 
 (Índice dos docs no `CLAUDE.md`.) Como montar um monstro animado só com os arquivos de `MON/`, sem o jogo nem dump de RAM. Foi
-feito em 2026-10-20/21 para a lista de saves (monstro em idle sobre a foto da fase, `POS_FRONTEIRA.md` item 5) e serve à prévia 3D da
+feito em 2026-10-20/21 para a lista de saves (monstro em idle sobre a foto da fase, `NATIVO.md`, "Save em JSON") e serve à prévia 3D da
 seleção (item 12) e ao visualizador web (`VIEWER_WEB.md`). Formatos de base (malha, curvas) em `docs/FORMATOS.md`.
 
 ## Código

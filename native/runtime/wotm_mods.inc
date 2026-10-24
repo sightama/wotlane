@@ -1,4 +1,4 @@
-// wotm_mods.inc: pasta mods/ (POS_FRONTEIRA.md, item 4; registro em native/wotm_mods.hpp). Incluido por wotm_overrides.cpp.
+// wotm_mods.inc: pasta mods/ (MODS.md; registro em native/wotm_mods.hpp). Incluido por wotm_overrides.cpp.
 // Dois ganchos atendem todo arquivo que o jogo le do disco:
 // - fileCdSearchFile (src/common/file.cpp): fases, monstros, SHELL, bancos de som, musicas e filmes acham o arquivo por ele
 //   (setor e tamanho). Com o arquivo em mods/ a original roda (para o log comparar o tamanho) e o sceCdlFILE sai com o LSN falso

@@ -1,4 +1,4 @@
-// Skins de mod na luta (POS_FRONTEIRA.md, item 8; MODS.md, "Skins"). Incluido pelo wotm_overrides.cpp, depois do wotm_mods.inc.
+// Skins de mod na luta (MODS.md, "Skins"). Incluido pelo wotm_overrides.cpp, depois do wotm_mods.inc.
 //
 // - Sons do traje base: o traje so escolhe arquivo e vira o m_skinNum do Monster (+0x30), que so o som le, por igualdade (Preytor
 //   traje 1, as formigas; Agamo traje 3, o Mecha Sweet Tooth: Sound.cpp). Uma skin chega com o indice dela (4+) e cairia no som

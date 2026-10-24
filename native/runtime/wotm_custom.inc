@@ -1,4 +1,4 @@
-// Monstros custom (POS_FRONTEIRA.md, item 8, parte 2): monstros que o jogo nao oferece na selecao, jogados numa luta comum. O
+// Monstros custom (MODS.md, "Monstros custom"): monstros que o jogo nao oferece na selecao, jogados numa luta comum. O
 // primeiro e o Goliath Prime (tipo 13, "assboss", MON/ASSBOSS1.*), chefe da aventura em canyon2. Incluido pelo wotm_overrides.cpp,
 // depois do wotm_skins.inc. Investigacao: git show 18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md (e goliath_selecao.md).
 //

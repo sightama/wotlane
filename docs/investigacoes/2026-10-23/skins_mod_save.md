@@ -1,6 +1,6 @@
 # Skins de mod que acrescentam (item 8): save, destraves e formato do mod
 
-Investigação de 2026-10-23, sem código mudado. Escopo: o primeiro degrau do item 8 do `POS_FRONTEIRA.md` (trajes novos sem substituir);
+Investigação de 2026-10-23, sem código mudado. Escopo: o primeiro degrau do item 8 do `92af448:docs/passos/POS_FRONTEIRA.md` (trajes novos sem substituir);
 monstros novos ficam para depois. Decisão do dono que serve de base: trajes 0–3 por posição; traje de mod referido por string; string
 não achada cai num padrão.
 

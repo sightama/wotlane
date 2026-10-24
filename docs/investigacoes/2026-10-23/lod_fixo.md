@@ -19,7 +19,7 @@ objeto, não por triângulo.
   (`wotmCaptureFrame`, `native/runtime/wotm_live.inc`), e desenhada pela GPU. O jogo recompilado continua percorrendo a hierarquia
   (`hier`) e montando os pacotes do VU1, que no `wotm.exe` (`PS2X_HW_EMU=0`) ninguém desenha; no `ps2EntryRunner.exe` eles são a
   referência da checagem VU1 x nativo (`docs/passos/VU1CHECK.md`).
-- O `POS_FRONTEIRA.md` já registra a ideia ("Modo Nintendo DS: LOD sempre no nível mais alto; o LOD é escolhido no nativo").
+- O `92af448:docs/passos/POS_FRONTEIRA.md` já registra a ideia ("Modo Nintendo DS: LOD sempre no nível mais alto; o LOD é escolhido no nativo").
 - Opções do painel: chave em `native/wotm_settings.hpp` (`enum Key`, `kEnv`, `kDefault`, `g_val`, linha no `settings.ini`), linha
   na aba em `kTabDefs` e valores em `choices()` no `native/runtime/wotm_mainmenu.inc`.
 
@@ -134,7 +134,7 @@ Outros consumidores do nível no nativo:
    os objetos têm o mesmo mapa de ossos.
 2. Modo na `Scene` (regras acima) + chave nas settings + `WOTM_LOD` na tabela do `NATIVO.md` (`python tools/wotm_env.py`).
 3. Painel (aba e prévia, conforme a decisão).
-4. Docs: `NATIVO.md` (LOD, corrigir a frase do fade), `POS_FRONTEIRA.md`.
+4. Docs: `NATIVO.md` (LOD, corrigir a frase do fade), `92af448:docs/passos/POS_FRONTEIRA.md`.
 
 ## Armadilhas
 - `numLods - 1` não é "o mais detalhado" (Togera traje 3). Usar `switchOutDis > 0`.

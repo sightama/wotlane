@@ -1,6 +1,6 @@
 # Skins de mod (traje >= 4): do `m_costume` à luta, regiões de carga e o que muda entre trajes
 
-Investigação de 2026-10-23 para o item 8 do `POS_FRONTEIRA.md` (mods que **adicionam** trajes). Só leitura: nada foi mudado nem
+Investigação de 2026-10-23 para o item 8 do `92af448:docs/passos/POS_FRONTEIRA.md` (mods que **adicionam** trajes). Só leitura: nada foi mudado nem
 rodado. Relatórios irmãos do mesmo dia: `skins_mod_save.md` (save/JSON) e `skins_mod_telas.md` (menus).
 
 ## Resumo

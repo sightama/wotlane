@@ -84,15 +84,15 @@ std::atomic<bool> g_wotmFreeCamPad{false};
 std::mutex g_wotmFreeCamM;
 WotmFreeCamPose g_wotmFreeCamPose;
 
-// Save em JSON ao lado do mc0/ (POS_FRONTEIRA.md, item 3): ganchos no MonsterMc::stdInit/stdExit.
+// Save em JSON ao lado do mc0/ (NATIVO.md, "Save em JSON"): ganchos no MonsterMc::stdInit/stdExit.
 #include "wotm_save.inc"
 // "Press start" do menu principal: X vale como Start e o botao vale ja durante a transicao.
 #include "wotm_menu.inc"
-// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
+// Tela dividida de 3 e 4 jogadores (NATIVO.md, "Tela dividida de 3 e 4 jogadores"; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
 #include "wotm_split4.inc"
 // Eliminacao e minigames com 3 e 4 jogadores (por cima dos ganchos do wotm_split4.inc)
 #include "wotm_modes4.inc"
-// Pasta mods/ que sobrepoe arquivos do disco (POS_FRONTEIRA.md, item 4): fileCdSearchFile e sceCdRead.
+// Pasta mods/ que sobrepoe arquivos do disco (MODS.md): fileCdSearchFile e sceCdRead.
 #include "wotm_mods.inc"
 // Skins de mod na luta (item 8): sons do traje base e IAs sorteadas com skin
 #include "wotm_skins.inc"
@@ -962,7 +962,7 @@ namespace
     // confere o teto. Acima de ~0x1F10000 ha dados vivos (e o buffer do zip em 0x1F7F840); medido em 2026-10-18, o bloco em 0x1B70000
     // e sobra do menu e pode ser sobrescrito (o Metro com 2 monstros vai ate 0x1D0C380). Loga quando muda e avisa perto do teto.
     constexpr uint32_t kFileStatus = wotm::sym::fileStatus, kLoadBase = 0xA00000u, kLoadCeiling = 0x1F10000u;
-    // RAM acima de 32 MB (POS_FRONTEIRA item 1): o runtime tem 64 MB (PS2_RAM_SIZE) e o jogo ve 32 (PS2_GUEST_RAM_SIZE: pilha, heap e
+    // RAM acima de 32 MB (NATIVO.md, "RAM de 64 MB"): o runtime tem 64 MB (PS2_RAM_SIZE) e o jogo ve 32 (PS2_GUEST_RAM_SIZE: pilha, heap e
     // GetMemorySize iguais aos do PS2). Na entrada do Shell::LoadMonstersDB o proximo endereco de carga (fileStatus.ngpAddr[ngpLoaded],
     // logo depois do NGP da fase) pula para 0x2000000: os NGP dos monstros e, atras deles, os RTX e TEX da fase e dos monstros moram na
     // area de cima, e embaixo fica so o NGP da fase. A relocacao (dbsRelocateViaPtrListFile) soma "endereco - 0xA00000" em 32 bits, entao

@@ -57,7 +57,7 @@ No jogo (C++ em `screen.cpp`; a 19 tem as mesmas no asm):
 - Unlock: `unlockItems = 4` (3 nos grupos ≥ 11), cursor com volta 0..3, confirmação só aceita `sel` 0..3 (`:4327`, `:4400-4421`,
   `:4424`). "FREEBIE" para trajes 0 e 1 dos monstros 1..8 (`:4356`).
 - Dados: `SelectSlot` (`include/game/monster_select.h`) tem `taken`, `state`, `cost`, `costText`, `name` só para 48 entradas; o save
-  binário guarda 48 `state` (`docs/passos/POS_FRONTEIRA.md:120-131`), o JSON `"<monstro>": {"skins": [4 bools]}` (`wotm_save.inc:133-139`).
+  binário guarda 48 `state` (`92af448:docs/passos/POS_FRONTEIRA.md`:120-131`), o JSON `"<monstro>": {"skins": [4 bools]}` (`wotm_save.inc:133-139`).
 
 No nativo:
 - `wotm_padsel.inc`: `firstCostume` `c < 4` (`:470-475`), `(costume + dir + 4) % 4` (`:575-578`), contagem `c < 4` (`:341-346`),
@@ -97,7 +97,7 @@ gancho do `screenGetInput` que já existe.
 - **Descoberta:** um traje de mod é `MON/<PREFIXO><n>.NGP/.PTR/.RTX/.TEX` com n ≥ 4 no registro de mods (`wotm::mods::Registry`;
   prefixos de `wotm::savepics::monsterFile`/`MonsterLongNames`). Opcional: `skins.json` no mod (nome, preço, "grátis") para a tela 21.
 - **Estado por (monstro, n ≥ 4):** `unlocked` (JSON: `"togera": {"skins": [...4], "modSkins": {"LIZARD4": true}}`, por nome,
-  como o save já prevê, `POS_FRONTEIRA.md:163-168`) e `taken` (espelho do `SelectSlot::taken`, zerado onde o jogo chama
+  como o save já prevê, `92af448:docs/passos/POS_FRONTEIRA.md`:163-168`) e `taken` (espelho do `SelectSlot::taken`, zerado onde o jogo chama
   `resetSelectables`: gancho de saída dele).
 - **Índice:** o `m_costume[p]` final recebe n (4, 5, …); o `formatFilename1` já gera `LIZARD4` (e `LIZARD10` com `%d`).
 

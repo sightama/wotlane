@@ -2,21 +2,27 @@
 
 Projeto de decompilação do executável `SCUS_971.97`. O objetivo final é um port nativo de PC fácil de modar. O dono do projeto escreve em português; responda em português.
 
-**Direção atual (decidida em 2026-10-09, confirmada em 2026-10-16): port primeiro.** A base é o jogo recompilado com o PS2Recomp (fora do repo; o C++ gerado é código do jogo) mais a camada nativa deste repo
+**Direção: port primeiro.** A base é o jogo recompilado com o PS2Recomp (fora do repo; o C++ gerado é código do jogo) mais a camada nativa deste repo
 (`native/`: desenho com GPU, som, filmes, teclado), que já roda a luta a 60 fps. A decompilação (`src/`) é a camada legível que substitui, por hook, só o que importa para modar (`Shell::Load*`, `MonsterParse`,
 câmera); o runtime cobaia com as equivalentes está parado. **Byte match não é requisito por função** (`equivalent` basta; `matched` quando sai barato; o `gate.sh` continua obrigatório). O VU1/GS emulado do
 runtime é só a referência da checagem (`docs/passos/VU1CHECK.md`). As regras abaixo continuam valendo; onde disserem "matching", leia "matching quando for o objetivo da função".
 
-**Onde estamos (2026-10-22):** a fronteira de hardware caiu em 2026-10-19 (`docs/passos/FRONTEIRA.md`) e o inventário do port terminou (widescreen, HUD, fades, iluminação, partículas e sombras como o VU1;
-nenhum bug gráfico aberto no `VU1CHECK.md`). O trabalho segue a lista do dono em **`docs/passos/POS_FRONTEIRA.md`** (ordem, brechas e pendências); os relatos de bug do dono têm prioridade sobre ela.
+**O que fazer:** **`TODO.md`** na raiz (a lista e a ordem são do dono); os relatos de bug do dono têm prioridade sobre ela.
 
-Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe do ELF e as convenções de status) e `docs/passos/POS_FRONTEIRA.md` (o que fazer). Índice de `docs/passos/`:
+Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe do ELF e as convenções de status), `docs/PLANO.md` (arquitetura) e `TODO.md`. Índice de `docs/passos/`:
 - `NATIVO.md`: camada nativa (desenho, texturas, monstros, partículas, sombras, menus, painel "Recompiled options", ícones), hooks de host, vigia, lote, tabela de variáveis `WOTM_*`.
 - `VU1CHECK.md`: checagem VU1 x nativo, corpus, fotos do dono, bugs abertos.
 - `RUNTIME.md`: runtime recompilado no Windows (build, `PS2X_*`, teclado, endereços úteis). `FRONTEIRA.md`: o que do PS2 o port deixou de emular.
 - `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (pegadinhas do gcc 2.95 e do build NM), `ESPINHA.md` (fluxo do jogo), `TESTE_PCSX2.md` (halfcpp no PCSX2).
 - `MODS.md` (pasta `mods/`, texturas em PNG, `tools/modkit.py`), `MODELOS_3D.md` (monstro animado direto do disco), `VIEWER_WEB.md` (avaliação do viewer no navegador; o viewer está pronto em https://yanm1103.github.io/wotm-model-museum/).
-- Investigações datadas em `docs/investigacoes/<data>/`. Encerrada (implementada e na master) é apagada; o que ficar pendente vai para o `POS_FRONTEIRA.md`, e as referências viram `<commit>:docs/investigacoes/...` (ler com `git show`).
+- Investigações datadas em `docs/investigacoes/<data>/`. Encerrada (o que ela pedia já está no código) é apagada; o que ficar pendente vai para o `TODO.md`, e as referências viram `<commit>:docs/investigacoes/...` (ler com `git show`).
+- `docs/FORMATOS.md`: formatos de arquivo do jogo (fase, monstro, som, filme, save do memory card).
+
+## Documentação: três tipos de texto, cada um no seu lugar
+- **Referência** (`README.md`, este arquivo, `docs/*.md`, `docs/passos/*.md`): como as coisas são hoje, no presente. Sem datas, sem "antes era", sem "feito/corrigido em", sem contar como foi testado. Um número medido só entra se for usado (ex.: "9619 ticks por field").
+- **A fazer** (`TODO.md`): só o que está aberto, cada item curto (o que é, por onde começar, onde está o contexto). Terminou: a linha sai, sem "feito" nem riscado; o que passou a existir vai para a referência. Decisões do dono de não fazer algo ficam em "Descartado".
+- **Diário** (o que aconteceu, por quê, como foi medido e testado): a mensagem do commit e `docs/investigacoes/<data>/`.
+- `python tools/doclint.py` confere as linhas que o commit acrescenta e o `TODO.md` inteiro; o pre-commit do git o roda sozinho (ligar uma vez por clone: `git config core.hooksPath tools/githooks`). Linha antiga só editada não é cobrada pelo que já tinha; `--all` lista o que ainda falta migrar.
 
 ## Fluxo do port (mudança em `native/`)
 1. Antes de mexer: `tools\corpus.ps1 -Check` guarda a base (`<runtime>\corpus\resumo_<data>.csv`; capture o corpus uma vez com `-Capture`). O que está errado ou faltando vem do inventário (`VU1CHECK.md`, "Inventário do port"), não de lembrança.
@@ -36,7 +42,7 @@ Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe d
 - Windows, com o build rodando em **WSL Ubuntu**: use `wsl -d Ubuntu` (a distro padrão é a `docker-desktop`, que não serve). Venv: `~/.venvs/wotm/bin/python`. Raiz do repo no WSL: `/mnt/c/Users/<você>/WoTM`.
 - Compilador: ee-gcc 2.95.2 (SN ProDG), baixado por `tools/setup_toolchain.sh` em `tools/cc/`. Requer a sua própria ISO em `ISO/`, extraída para `disc/`.
 - Scripts `.sh` precisam de LF. Gravar com Python no Windows deixa CRLF e o `sh` do WSL quebra (`sed -i 's/\r$//'` conserta).
-- `config/status.csv` (estado de cada função) é gerado por `python3 tools/progress.py`; só o dono o commita. **Colaboradores não commitam esse arquivo**, para não gerar conflito em todo PR. O README não tem mais bloco de progresso (removido em 2026-10-19 com o hook e o `update_readme.py`).
+- `config/status.csv` (estado de cada função) é gerado por `python3 tools/progress.py`; só o dono o commita. **Colaboradores não commitam esse arquivo**, para não gerar conflito em todo PR. O README não tem bloco de progresso.
 - Ao escrever arquivos com regex ou `\n`, use as ferramentas Edit/Write. Heredoc de Python transforma `\n` em quebra de linha real.
 - **Nunca rode Python inline** (`python3 - <<EOF`, `python -c "...\..."`): caminhos do Windows (`C:\Users\...`) e `\n` quebram. Um hook (`.claude/hooks/block_python_heredoc.py`, ligado em `.claude/settings.json`) recusa esses comandos. Grave o script com Write (pasta de rascunho) e rode `python arquivo.py`; use Edit/Write para alterar arquivos do repo.
 

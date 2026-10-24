@@ -1,4 +1,4 @@
-// Pasta mods/ (POS_FRONTEIRA.md, item 4): arquivos que sobrepoem os do disco, sem mexer na ISO.
+// Pasta mods/ (MODS.md): arquivos que sobrepoem os do disco, sem mexer na ISO.
 // Cada subpasta de mods/ e um mod e repete a arvore do disco (mods/meu_mod/MON/CONGAR1.TEX troca o \MON\CONGAR1.TEX). Pastas
 // que comecam com '_' ou '.' ficam desligadas. Com dois mods trocando o mesmo arquivo vence o ultimo em ordem alfabetica (como
 // camadas: "10_base", "20_extra"); o log diz quem perdeu.

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Barra o commit que mistura história com referência ou deixa item feito no TODO.md (tools/doclint.py; regra no CLAUDE.md,
+# "Documentação"). Ligar uma vez por clone: git config core.hooksPath tools/githooks
+# Só olha os .md que o commit muda; sem Python, deixa passar.
+git diff --cached --name-only -- '*.md' | grep -q . || exit 0
+root=$(git rev-parse --show-toplevel)
+for py in python python3; do
+    if "$py" -c "import sys" >/dev/null 2>&1; then
+        exec "$py" "$root/tools/doclint.py"
+    fi
+done
+exit 0

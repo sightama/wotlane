@@ -1,4 +1,4 @@
-// wotm_orbit.inc: camera moderna (orbital), item 7 do POS_FRONTEIRA.md; plano e etapas em
+// wotm_orbit.inc: camera moderna (orbital); plano e etapas em
 // 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md. Incluido no wotm_overrides.cpp, que chama daqui os ganchos que ja tem:
 //   - Cameras::Update (o embrulho da camera livre): orbitPre antes do original, orbitPost depois;
 //   - PadFlags::interpretInputs (o do lock-on): orbitInputEnter na entrada, orbitInputLeave quando a funcao de fato voltou;

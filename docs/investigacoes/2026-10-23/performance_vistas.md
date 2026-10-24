@@ -29,7 +29,7 @@
   símbolos públicos (os nomes dentro do código gerado saem errados); ~19% do tempo dela é espera (`ZwWaitForAlertByThreadId`).
 
 2026-10-23. Só leitura (código, docs e medidas já registradas); nada foi compilado, aberto nem medido de novo. Pergunta: como baratear
-a tela dividida de 3 e 4 jogadores no port, onde cada vista a mais custa caro nas duas threads (`POS_FRONTEIRA.md`, item 1, "Custo
+a tela dividida de 3 e 4 jogadores no port, onde cada vista a mais custa caro nas duas threads (`92af448:docs/passos/POS_FRONTEIRA.md`, item 1, "Custo
 por vista", e item 11, relato de 2026-10-22). O documento é para quem for pegar o trabalho: onde está cada coisa, o que medir antes e
 depois, e uma ordem de ataque com ganho e risco. Legenda: **[C]** confirmado (código, ou medida já registrada nos docs), **[H]**
 hipótese a conferir com a medida indicada.
@@ -67,7 +67,7 @@ hipótese a conferir com a medida indicada.
 ## O que se sabe (medidas já registradas)
 
 ### Thread da janela [C]
-`POS_FRONTEIRA.md`, item 1 (máquina do dono, monitor de 180 Hz, luta IA x IA no Centro, `wotm.exe`, `PS2X_STATS`):
+`92af448:docs/passos/POS_FRONTEIRA.md`, item 1 (máquina do dono, monitor de 180 Hz, luta IA x IA no Centro, `wotm.exe`, `PS2X_STATS`):
 
 | Monstros | Vistas | Redesenho (parede / CPU) |
 |---|---|---|
@@ -78,7 +78,7 @@ hipótese a conferir com a medida indicada.
 
 Um modelo simples que fecha com a tabela: **CPU ≈ V × (B + M × n)**, com V vistas, n monstros, **B ≈ 6 ms** (fase, céu, HUD,
 partículas e o fixo por vista) e **M ≈ 0,55 ms por monstro por vista** (deformação, desenho, sombra do monstro e os receptores dela).
-4 vistas e 4 monstros: ~33 ms; com 2 monstros, ~29 ms (o `POS_FRONTEIRA.md` estimou ~27). A meta de 16,7 ms (com folga, ~14 ms)
+4 vistas e 4 monstros: ~33 ms; com 2 monstros, ~29 ms (o `92af448:docs/passos/POS_FRONTEIRA.md` estimou ~27). A meta de 16,7 ms (com folga, ~14 ms)
 pede **B perto de 2,5 ms e o custo dos monstros dividido entre as vistas**.
 
 Item 11 (colaborador, Ryzen 3 3200G + RX 570): 3 vistas ~36 ms depois da correção do lens flare, "~12 ms de CPU por quadrante contra
@@ -142,7 +142,7 @@ Por vista, para cada item visível, em cada passe em que ele entra:
 O que **não** pesa: a GPU (a meia largura e o quadrante não barateiam, e a RX 570 sobra), a coleta (fica na thread do EE, ~0,3 ms
 por vista), o `Scene::show` (cópia de vetores) e os flares (já adiados, com profundidade por PBO).
 
-**[H] Por objeto ou por vértice?** O `POS_FRONTEIRA.md` diz "envio de cada objeto"; o código mostra as duas coisas: um custo por
+**[H] Por objeto ou por vértice?** O `92af448:docs/passos/POS_FRONTEIRA.md` diz "envio de cada objeto"; o código mostra as duas coisas: um custo por
 lote (descarregamento a cada troca de estado) e um custo por vértice (matemática + quatro chamadas do rlgl). Nenhuma medida separou
 os dois. É o primeiro número a tirar (passo 0), porque decide entre o item C (os dois) e o E (só o por vértice).
 
@@ -304,7 +304,7 @@ Cada item: onde mexe, ganho esperado (no PC do dono, 4 vistas e 4 monstros, base
 Com 0 + A + B + C (3 a 4 dias), a estimativa é a janela de 4 vistas sair de ~30 para ~15 ms no PC do dono **[H]**, o suficiente
 para 60 lá (o EE já cabe com ~13 ms). No 3200G a janela ainda ficaria em ~25 ms e o EE em ~21 a 25 ms: para ele, D + E (+ H) na
 janela e G1/G2/G3 no EE, mais 1 a 2 semanas, e mesmo assim o EE pode continuar acima de 16,7 ms com 4 vistas. Se ficar, o caminho é
-aceitar a lógica a 30 com 3 e 4 jogadores nessa classe de CPU, ou a apresentação interpolada que o `POS_FRONTEIRA.md` já lista como
+aceitar a lógica a 30 com 3 e 4 jogadores nessa classe de CPU, ou a apresentação interpolada que o `92af448:docs/passos/POS_FRONTEIRA.md` já lista como
 pendente.
 
 ## Como medir (protocolo)
@@ -315,7 +315,7 @@ pendente.
   no Centro; a fase é o último número, `NATIVO.md`). `WOTM_SPLITLOG=1` uma vez para confirmar que as vistas vieram em quadrantes.
 - **Números a guardar:** da linha `[native] redesenho:` (depois do passo 0, um por número de vistas) a parede e a CPU médias; do
   `[field]`, mediana e p99 do host menos ócio, `hier=`/`hier23=`, `cap=`/`cap23=` e a fração de quadros em 1 field. Três corridas de
-  cada, alternadas, como no `FRONTEIRA.md`; numa tabela no fim deste arquivo ou no `POS_FRONTEIRA.md`.
+  cada, alternadas, como no `FRONTEIRA.md`; numa tabela no fim deste arquivo ou no `92af448:docs/passos/POS_FRONTEIRA.md`.
 - **Mesma máquina** para o antes e o depois; anotar CPU e monitor. Não comparar o PC do dono com o 3200G.
 - **Regressão visual:** `tools\corpus.ps1 -Check` antes (base) e `-Check -Baseline <csv>` depois de cada item; A, B e C têm de sair
   sem diferença. Para as vistas 1 a 3, que o corpus não cobre, comparar as fotos do passo 0.

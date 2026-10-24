@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kit de mods do WotM (POS_FRONTEIRA.md, item 4; docs/passos/MODS.md). Extrai arquivos do disco para formatos editaveis numa pasta
+"""Kit de mods do WotM (docs/passos/MODS.md). Extrai arquivos do disco para formatos editaveis numa pasta
 de trabalho e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/.
 
   python tools/modkit.py export MON/LIZARD0                  # .TEX e .RTX do Togera em PNG (pasta de trabalho)

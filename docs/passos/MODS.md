@@ -1,4 +1,4 @@
-# Mods: como fazer (POS_FRONTEIRA.md, item 4)
+# Mods: como fazer
 
 Um mod é uma pasta dentro de `mods/` (ao lado do ELF, na raiz do disco extraído que o jogo usa: `<runtime>\discroot\mods\`). Ela
 repete a árvore do disco e o que estiver lá vale no lugar do arquivo do disco. Nada do jogo é alterado nem vai para o repo.
@@ -176,11 +176,30 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 Conferido em 2026-10-23 por roteiro: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,
 luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
 
+## Por dentro (para quem mexe no código)
+
+- **Arquivos** (`native/wotm_mods.hpp`, `native/runtime/wotm_mods.inc`): todo arquivo que o jogo lê passa pelo `fileCdSearchFile`
+  (fases, monstros, `SHELL`, bancos, músicas, filmes) e depois pelo `sceCdRead` (`fileReadf/a/s`, `zipInflateAll`,
+  `snd_StreamSafeCdRead`). O gancho da busca roda a original e, se o arquivo estiver em `mods/`, devolve um LSN falso (faixa a partir
+  de 0x800000, além de qualquer DVD) e o tamanho do mod; o do `sceCdRead` atende essa faixa lendo do arquivo do PC. O som nativo
+  (`readLsnRaw`) lê bancos e músicas pela mesma faixa. A camada nativa que lê o disco por nome também procura antes em `mods/`:
+  paletas do `.RTX` (`Scene::loadResources`, que lê o arquivo direto e não da RAM), filmes (`wotm_fmv.hpp`), ícone, fotos e monstro
+  da lista de saves (`wotm::disc::readFile`). Sem nenhum arquivo em `mods/` nenhum gancho é instalado. Arquivo que não existe no disco
+  também é servido ("arquivo novo").
+- **Log:** `[mods] N arquivo(s) de <mods> em <pasta>` no boot e, na primeira busca de cada arquivo, `[mods] MON/LIZARD0.TEX <-
+  teste_togera (110080 bytes; disco 110080)`, com AVISO quando o do mod é maior (fora de `MON/*`, cuja carga é contígua acima de
+  32 MB).
+- **PNG** (`native/wotm_texmods.hpp`, `Scene::modTexture`): o jogo segue carregando o `.TEX`/`.RTX` do disco; o desenho nativo troca a
+  imagem no `textureId` (objetos) e no `residentTexture` (quadrados de tela: barras dos inimigos, fonte). O texId do disco sai do
+  deslocamento do pacote de `texInfo[id]` dentro do arquivo carregado (`fileStatus.texAddr`/`resAddr`, nome em `names`); as
+  residentes, pelo DBP. PNG maior que a original ganha mipmaps. Fora: partículas, monstro da lista de saves e o GS emulado (para
+  esse, `modkit.py pack --inject`).
+
 ## Cuidados
 
 - Arquivo de mod maior que o do disco (`.TEX`, `.RTX`, `.NGP`, `.BNK`): o jogo carrega em regiões de tamanho fixo e pode sobrescrever
   o que vem depois (o log e o `check` avisam). Com PNG isso não acontece: a textura do jogo não muda de tamanho.
-- Monstros novos com arquivos próprios (sem base do jogo) são o item 8 do `POS_FRONTEIRA.md`; os custom de hoje usam um tipo do jogo.
+- Os monstros custom usam um tipo do jogo; monstros com arquivos próprios ainda não existem (`TODO.md`, item 8).
 
 Conferido em 2026-10-22 (`WOTM_MATCH=3,1`, `3,1,2,5,1` e `1,3,1` com IA): a pele do Togera em PNG 4x (1024 × 1024 no lugar de 256)
 e o retrato 2x no HUD do jogador e na barra do inimigo; kit com export, edição, pack (PNG, `.VAG`, um som do `SHELL_S.BNK`),
