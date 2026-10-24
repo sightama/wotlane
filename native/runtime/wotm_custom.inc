@@ -175,6 +175,145 @@ namespace wotm_custom
         std::memcpy(rdram + ((m + kCamTable) & 0x01FFFFFFu), cam.data(), cam.size());
         std::fprintf(stderr, "[custom] %s: camera do %s.CHR, distancias x%.2f\n", cu ? cu->id.c_str() : own, kCamBase, kCamScale);
     }
+    // Dardo (StateJavelin): o Weapon::DetonateWeapon chama o Monster::attachPickupImpaler na vitima, que entra no StateImpaled pelo
+    // enterNewState sem o transitionOK (o que barraria quem nao tem as anims 0x8E..0x90). O StateImpaled::update so sai com a anim
+    // 0x90 no fim; sem ela (ASSBOSS0/1) a vitima travava para sempre. Sem essas anims, o gancho faz o que o retail faz com pickup
+    // invalido: killPickup(it, 1) e volta. O golpe do objeto (dispatchHit) chega como um comum. Investigacao: goliath_impale.md.
+    constexpr uint32_t kImpale = wotm::fn::attachPickupImpaler__7MonsterGQ2t10LinkedList1ZP6Pickup8IteratorP8_fvector,
+                       kKillPickup = wotm::fn::killPickup__12LevelPickupsGQ2t10LinkedList1ZP6Pickup8Iteratori;
+    constexpr uint32_t kAnims = 0x1CF0, kAnimStride = 0x10;   // Monster::m_anims[id].ci
+    PS2Runtime::RecompiledFunction g_origImpale = nullptr, g_killPickup = nullptr;
+
+    void impale(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        bool has = true;
+        if (ctx->pc == kImpale && g_killPickup)
+            for (uint32_t id = 0x8E; id <= 0x90; ++id)
+                has = has && READ32(m + kAnims + id * kAnimStride) != 0;
+        if (has)
+        {
+            g_origImpale(rdram, ctx, runtime);
+            return;
+        }
+        std::fprintf(stderr, "[custom] dardo: monstro tipo %u sem as anims de empalado; vira golpe comum\n", READ32(m + kTypeBits) >> 5);
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(GPR_U32(ctx, 5))));
+        ctx->r[5] = _mm_set_epi64x(0, 1);
+        ctx->pc = kKillPickup;
+        g_killPickup(rdram, ctx, runtime);
+    }
+    // Giro (StateTopSpin, Monster+0x10EBC; investigacao goliath_topspin.md). Nos monstros comuns X+Quadrado (PadFlags +0x38) e o
+    // StateCrowdControl (+0xF3F0), que no Goliath nunca comeca (pede a anim de efeito do tipo, que ele nao tem). So a IA do chefe
+    // entrava no TopSpin, pelo setAssBossState(12). Com o Goliath jogador:
+    //  - StateCrowdControl::transitionOK: X+Quadrado no chao (Idle ou Run), com ataques ligados, sem objeto grande e o
+    //    transitionOK do TopSpin aceito;
+    //  - Monster::enterNewState: o CrowdControl vira o TopSpin;
+    //  - StateTopSpin::update: o golpe cheio (dano, empurrao, som) so acerta m_monsters[0], que e ele mesmo; durante a chamada vale a
+    //    IA viva mais perto;
+    //  - Ai::setAssBossState (chamado pelo update a cada batida): so faz algo para o chefe da aventura (o dono e o assBoss).
+    constexpr uint32_t kCrowdOK = wotm::fn::transitionOK__17StateCrowdControl, kEnterState = wotm::fn::enterNewState__7MonsterP12MonsterState,
+                       kSpinUpdate = wotm::fn::update__12StateTopSpin, kSpinOK = wotm::fn::transitionOK__12StateTopSpin,
+                       kSetBossState = wotm::fn::setAssBossState__2Aii, kHoldingLarge = wotm::fn::isHoldingLarge__7Monster,
+                       kPadFrame = wotm::fn::x__vc__8PadFlagsi;
+    constexpr uint32_t kStateOwner = 0xC, kCurState = 0x34, kIdle = 0x7984, kRun = 0x79AC, kCrowd = 0xF3F0, kSpin = 0x10EBC;
+    constexpr uint32_t kAttacksOn = 0x4A, kPad = 0x5040, kPadSpin = 0x38, kDead = 0xE8, kNumMonsters = 0x1203D8, kTrans = 0x10;
+    PS2Runtime::RecompiledFunction g_origCrowdOK = nullptr, g_origEnterState = nullptr, g_origSpinUpdate = nullptr, g_origSetBossState = nullptr;
+
+    bool goliathPlayer(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m)
+    {
+        return m && READ32(m + kTypeBits) == kGoliath && isPlayerSlot(rdram, ctx, runtime, m);
+    }
+    void ret(R5900Context *ctx, uint32_t v0)
+    {
+        ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(v0)));
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    void crowdOK(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = ctx->pc == kCrowdOK ? READ32(GPR_U32(ctx, 4) + kStateOwner) : 0;
+        if (!goliathPlayer(rdram, ctx, runtime, m))
+        {
+            g_origCrowdOK(rdram, ctx, runtime);
+            return;
+        }
+        using wotm_modes4::call;
+        const uint32_t st = READ32(m + kCurState);
+        bool ok = READ8(m + kAttacksOn) != 0 && (st == m + kIdle || st == m + kRun);
+        ok = ok && READ16(call(rdram, ctx, runtime, kPadFrame, {m + kPad, 0u}) + kPadSpin) != 0;
+        ok = ok && call(rdram, ctx, runtime, kHoldingLarge, {m}) == 0 && call(rdram, ctx, runtime, kSpinOK, {m + kSpin}) != 0;
+        ret(ctx, ok ? 1u : 0u);
+    }
+
+    void enterState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        if (ctx->pc == kEnterState && GPR_U32(ctx, 5) == m + kCrowd && goliathPlayer(rdram, ctx, runtime, m))
+        {
+            ctx->r[5] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(m + kSpin)));
+            std::fprintf(stderr, "[custom] Goliath: giro (X+Quadrado)\n");
+        }
+        g_origEnterState(rdram, ctx, runtime);
+    }
+
+    void spinUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = ctx->pc == kSpinUpdate ? READ32(GPR_U32(ctx, 4) + kStateOwner) : 0;
+        uint32_t near = 0;
+        if (goliathPlayer(rdram, ctx, runtime, m))
+        {
+            const uint32_t cs = READ32(m + kCs), n = std::min(8u, READ32(kGameObj + kNumMonsters));
+            float best = 1e30f, p[3], q[3];
+            std::memcpy(p, rdram + ((cs + kTrans) & 0x01FFFFFFu), 12);
+            for (uint32_t i = 0; i < n && cs; ++i)
+            {
+                const uint32_t o = READ32(kGameObj + kMonsters + 4 * i), ocs = o ? READ32(o + kCs) : 0;
+                if (!ocs || o == m || READ32(o + kPlayerNum) != 2u || READ8(o + kDead))
+                    continue;
+                std::memcpy(q, rdram + ((ocs + kTrans) & 0x01FFFFFFu), 12);
+                const float d = (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) + (q[2] - p[2]) * (q[2] - p[2]);
+                if (d < best)
+                    best = d, near = o;
+            }
+        }
+        const uint32_t p1 = near ? READ32(kGameObj + kMonsters) : 0;
+        if (near)
+            WRITE32(kGameObj + kMonsters, near);
+        g_origSpinUpdate(rdram, ctx, runtime);
+        if (near)
+            WRITE32(kGameObj + kMonsters, p1);
+    }
+
+    void setBossState(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kSetBossState)
+        {
+            const uint32_t boss = READ32(wotm::sym::assBoss);
+            if (!boss || READ32(GPR_U32(ctx, 4)) != boss)
+            {
+                ctx->pc = GPR_U32(ctx, 31);   // void: so o chefe da aventura (ou o WOTM_AIVSAI, que roda o initAssBoss)
+                return;
+            }
+        }
+        g_origSetBossState(rdram, ctx, runtime);
+    }
+    // Olhar (investigacao goliath_lockon.md): o Monster::updateLookAt vira a cabeca para o inimigo mais perto
+    // (getLookAtTarget) pelas anims 154/155. No ASSBOSS elas giram a torre inteira (28 das 30 pecas) em ate 90 graus, o que parece
+    // um lock-on permanente. No Goliath jogador, sem alvo de olhar: a torre fica no centro; com o lock (os dois gatilhos) ela mira
+    // pelo getTarget, como num monstro comum. O chefe da aventura e o Goliath sob IA seguem o retail.
+    constexpr uint32_t kLookAt = wotm::fn::getLookAtTarget__7Monster;
+    PS2Runtime::RecompiledFunction g_origLookAt = nullptr;
+
+    void lookAt(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4);
+        if (ctx->pc == kLookAt && goliathPlayer(rdram, ctx, runtime, m) && READ32(m + kPlayerNum) != 2u)
+        {
+            ret(ctx, 0);
+            return;
+        }
+        g_origLookAt(rdram, ctx, runtime);
+    }
 } // namespace wotm_custom
 
 // Depois do wotmSkinsInstall: embrulha os ganchos do SetAIMonster que ja estiverem registrados (WOTM_AIVSAI, skins).
@@ -188,6 +327,19 @@ void wotmCustomInstall(PS2Runtime &runtime)
     if ((g_origSetActive = runtime.lookupFunction(kSetActive)))
         runtime.registerFunction(kSetActive, &setActive);
     g_loadMech = runtime.lookupFunction(kLoadMech);
+    g_killPickup = runtime.lookupFunction(kKillPickup);
+    if ((g_origImpale = runtime.lookupFunction(kImpale)))
+        runtime.registerFunction(kImpale, &impale);
+    if ((g_origLookAt = runtime.lookupFunction(kLookAt)))
+        runtime.registerFunction(kLookAt, &lookAt);
+    if ((g_origCrowdOK = runtime.lookupFunction(kCrowdOK)))
+        runtime.registerFunction(kCrowdOK, &crowdOK);
+    if ((g_origEnterState = runtime.lookupFunction(kEnterState)))
+        runtime.registerFunction(kEnterState, &enterState);
+    if ((g_origSpinUpdate = runtime.lookupFunction(kSpinUpdate)))
+        runtime.registerFunction(kSpinUpdate, &spinUpdate);
+    if ((g_origSetBossState = runtime.lookupFunction(kSetBossState)))
+        runtime.registerFunction(kSetBossState, &setBossState);
     if ((g_origLoadBank = runtime.lookupFunction(kLoadBank)))
         runtime.registerFunction(kLoadBank, &loadBank);
     if ((g_origLoadLoBank = runtime.lookupFunction(kLoadLoBank)))

@@ -158,7 +158,10 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 - **Launcher:** os customs aparecem em "Your monster", depois do Random (só para o jogador).
 - **O que o port faz pelo Goliath** (`native/runtime/wotm_custom.inc`): ele fica visível e controlável com IAs na luta (o
   `SetAIMonster` o desligava), toma dano delas (o `takeHit` só aceitava golpe do jogador 1), carrega o banco de som do chefe fora
-  da aventura e põe o nome no HUD.
+  da aventura e põe o nome no HUD. Também: X+Quadrado faz o giro do chefe (`StateTopSpin`, no lugar do `StateCrowdControl` dos
+  comuns; o golpe cheio vale contra a IA mais perto), a torre não segue mais o inimigo o tempo todo (o "olhar" do chefe gira o
+  tronco inteiro; com o lock ela mira) e o dardo (empalar) vira um golpe comum em quem não tem as animações de empalado (antes
+  travava). Investigações: `goliath_topspin.md`, `goliath_lockon.md`, `goliath_impale.md`.
 - **Retrato do HUD:** o do `ASSBOSS1.RTX` (texId 6) é provisório, com a cara do Congar. Troque por PNG como qualquer textura
   (`assboss1_rtx_t0006.png` em qualquer pasta do mod, seção "Texturas em PNG"); vale também para o chefe da aventura.
 - Ainda não: animações que o ASSBOSS não tem (escalar, alguns bloqueios e contra-ataques; `docs/investigacoes/2026-10-23/goliath_codigo.md`,
