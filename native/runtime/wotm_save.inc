@@ -46,6 +46,7 @@ namespace wotm_save
     const char *const kGroupMonsters[10] = {"raptros", "togera", "preytor", "congar", "robo-47", "agamo", "ultra-v", "magmo", "kineticlops", "zorgulon"};
     constexpr int kSweetToothSlot = 23;   // "Agamo Costume 4", ligado pelo McCheckForSweetTooth
     struct LevelSlot { int slot; const char *name; };
+    const char *const kDifficultyNames[3] = {"easy", "medium", "hard"};   // options.difficulty (TheGame+0x1203CC)
     const LevelSlot kLevelSlots[] = {{40, "volcano"}, {41, "minisf"}, {42, "capitol"}, {43, "ufo"}, {44, "dball"}, {45, "bigshot"}, {46, "crush"}};
     // MonsterNewNames (indice em m_monsterSel >> 5) e GameLevelNames (m_levelNum).
     const char *const kMonsters[] = {"null", "congar", "robo-47", "togera", "ultra-v", "preytor", "spider", "kineticlops", "magmo", "raptros",
@@ -147,14 +148,23 @@ namespace wotm_save
         if (!un.get("mechaSweetTooth"))
             un.at("mechaSweetTooth") = Value::boolean(rd(b, 0x28 + kSweetToothSlot * 4) != 0);
 
-        // Campos que o jogo grava e ainda nao se sabe para que servem: guardados como estao.
+        // Recorde do endurance (monstros derrotados pelo jogador 1), um por dificuldade: TheGame+0x1204B0..B8. O jogo grava e nunca
+        // mostra (docs/investigacoes/2026-10-24/save_campos_abertos.md). Antes ficava em unknown.game1204B0, que sai na reescrita.
+        Value &end = j.at("records").at("enduranceBest");
+        for (int k = 0; k < 3; ++k)
+            end.at(kDifficultyNames[k]) = Value::integer(rd(b, 0xE8 + k * 4));
+
+        // Campos que o jogo grava e ninguem usa: guardados como estao (0x0C: opcao cortada do menu de opcoes, 50 no construtor).
         Value &unk = j.at("unknown");
         unk.at("shell2A40") = Value::integer(rd(b, 0x0C));
         unk.at("slot47") = Value::integer(rd(b, 0x28 + 47 * 4));
-        Value g4 = Value::array();
-        for (int k = 0; k < 3; ++k)
-            g4.arr.push_back(Value::integer(rd(b, 0xE8 + k * 4)));   // TheGame+0x1204B0..B8
-        unk.at("game1204B0") = g4;
+        auto &uo = unk.obj;
+        for (size_t k = 0; k < uo.size(); ++k)
+            if (uo[k].first == "game1204B0")
+            {
+                uo.erase(uo.begin() + static_cast<std::ptrdiff_t>(k));
+                break;
+            }
     }
 
     bool isNull(const Value &v) { return v.type == Value::Null; }
@@ -316,10 +326,14 @@ namespace wotm_save
         {
             wrField(b, 0x0C, unk->get("shell2A40"));
             wrField(b, 0x28 + 47 * 4, unk->get("slot47"));
-            if (const Value *g4 = unk->get("game1204B0"))
+            if (const Value *g4 = unk->get("game1204B0"))   // nome antigo do recorde do endurance
                 for (size_t k = 0; k < 3 && k < g4->arr.size(); ++k)
                     wrField(b, 0xE8 + k * 4, &g4->arr[k]);
         }
+        if (const Value *rec = j.get("records"))
+            if (const Value *end = rec->get("enduranceBest"))
+                for (int k = 0; k < 3; ++k)
+                    wrField(b, 0xE8 + k * 4, end->get(kDifficultyNames[k]));
         wr(b, kSettingsMagic, kMagic);
     }
 
@@ -711,6 +725,29 @@ namespace wotm_save
         w32(rdram, e + kSelState, 1);
     }
 
+    // Fim do endurance: o McSaveSettings::update do retail (com a flag +0x280, que so o updateEndureSave liga) grava o
+    // m_winsThisGame do jogador 1 no recorde da dificuldade se for maior. A troca da sequencia pulava isso e o recorde ficava no valor
+    // do boot. Aqui o maior vai tambem para a RAM (o retail nao a atualizava: uma 2a corrida pior na mesma sessao sobrescrevia a 1a).
+    constexpr uint32_t kGameMonsters = 0x120380, kMonsterWins = 0x3C;   // TheGame::m_monsters[0], Monster::m_winsThisGame
+    void updateEnduranceRecord(uint8_t *rdram)
+    {
+        const uint32_t gm = ramU32(rdram, wotm::sym::game);
+        if (!gm)
+            return;
+        const uint32_t d = ramU32(rdram, gm + kGameMatchMode);
+        const uint32_t m = ramU32(rdram, gm + kGameMonsters);
+        if (d > 2 || !m)
+            return;
+        const int32_t wins = static_cast<int32_t>(ramU32(rdram, m + kMonsterWins));
+        const uint32_t a = gm + kGameUnk + d * 4;
+        const int32_t best = static_cast<int32_t>(ramU32(rdram, a));
+        if (wins > best)
+        {
+            w32(rdram, a, static_cast<uint32_t>(wins));
+            std::fprintf(stderr, "[wotm] save: recorde do endurance (%s): %d -> %d\n", kDifficultyNames[d], best, wins);
+        }
+    }
+
     enum class Seq { BootLoad, SettingsLoad, SettingsSave, UnlockSave, EndOfStorySave, EndureSave };
     struct SeqHook { uint32_t fn; Seq seq; const char *why; };
     const SeqHook kSeqHooks[] = {
@@ -731,6 +768,8 @@ namespace wotm_save
         else
         {
             applyPendingUnlock(rdram);
+            if (h.seq == Seq::EndureSave)
+                updateEnduranceRecord(rdram);
             ramToJson(rdram, true, h.why);
         }
         // Como o stdExit: MonsterMc+0 (montar na proxima) e +4 (pronto, o laco do chamador sai). McPageMgr+0x130: a sequencia chegou

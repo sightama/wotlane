@@ -119,7 +119,7 @@ do bloco; marca errada vira erro do cartão. Nenhum ponteiro: tudo é `int` de 3
 | 0x1C, 0x20 | `Shell::m_vibration[2]` | 1, 1 |
 | 0x24 | battle tokens (`Shell+0x2B24`) | 55975 |
 | 0x28..0xE7 | `monsterSelectMode[i].state` dos 48 `SelectSlot` (só o `state`; `taken`, preço e nomes ficam no ELF) | ver abaixo |
-| 0xE8..0xF3 | `TheGame+0x1204B0..B8`, 3 ints: não identificado (o `game.h` põe aí o fim de `m_actuator`, inferido; o `Weapon` lê vizinhos como tweaks) | 0, 0, 0 |
+| 0xE8..0xF3 | `TheGame+0x1204B0..B8`, 3 ints: recorde do endurance por dificuldade (JSON `records.enduranceBest`; 2026-10-24) | 0, 0, 0 |
 | 0xF4..0x34B | **não é escrito**: o buffer é da pilha e esse trecho grava lixo (32 palavras não nulas no exemplo) | — |
 | 0x34C | marca `0x12345678` | |
 
@@ -191,9 +191,11 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
 - A campanha como a única escolha de slot e a revisão dos textos de memory card viraram o item 5 (feito).
 - **Campos abertos investigados em 2026-10-24** (`docs/investigacoes/2026-10-24/save_campos_abertos.md`): `Shell+0x2A40` é uma opção
   morta (provável slider cortado do menu de opções); `TheGame+0x1204B0..B8` é o recorde do endurance por dificuldade (gravado, nunca
-  mostrado); o `McScrambleIcon` só zera o `icon.sys` durante a gravação e o refaz igual depois (nada a fazer). **Bug do port em
-  aberto:** com o salvamento automático, o `EndureSave` trocado copia o recorde da RAM, que ninguém atualiza, e o recorde fica no
-  valor do boot; a correção sugerida (e a chave `records.enduranceBest`) está no relatório.
+  mostrado); o `McScrambleIcon` só zera o `icon.sys` durante a gravação e o refaz igual depois (nada a fazer). **Bug do port corrigido
+  no mesmo dia:** com o salvamento automático, o `EndureSave` trocado copiava o recorde da RAM, que ninguém atualizava, e o recorde
+  ficava no valor do boot. Agora o fim do endurance grava o maior entre o recorde e os monstros derrotados pelo jogador 1, na RAM e no
+  JSON (chave `records.enduranceBest` com `easy`/`medium`/`hard`; a antiga `unknown.game1204B0` ainda é lida e sai na reescrita). Log
+  `[wotm] save: recorde do endurance (medium): 0 -> 5`. Conferido pelo dono (5 inimigos no médio).
 
 ### 4. Pasta `mods/`
 - O carregador procura cada arquivo primeiro em `mods/` (mesmo caminho relativo do disco) e, se não achar, lê o da ISO. Trocar skin,
@@ -539,6 +541,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   jogadores, `wotm_padsel.inc`) desenha o monstro 3D animado de cada jogador com o `native/wotm_model.hpp` (o mesmo da lista de saves,
   `passos/MODELOS_3D.md`), um `Renderer` por jogador e os modelos guardados por monstro e traje (`g_selModel`, `g_selCache`).
 - O que sobra: a luz é a do desenhista do modelo, não a da cena do jogo (o monstro na seleção não fica iluminado como na luta).
+  Investigado em 2026-10-24 (`docs/investigacoes/2026-10-24/luz_selecao_3d.md`): o retail não tinha monstro 3D na seleção; a luz da
+  luta são 3 luzes paralelas da chave 5 do `RST/<FASE>.MRS`, só nos objetos com `dirLight`. Caminho recomendado: ler um `.MRS` do
+  disco (fase fixa na seleção, a do save na lista de saves) e usar a fórmula do `Scene::vertexRgb`. Decisões do dono: ângulo das
+  luzes, brilho, Kineticlops (quase sem `dirLight`, muda visivelmente).
 
 ### 13. Campanha com até 4
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no
