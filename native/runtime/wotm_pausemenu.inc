@@ -6,6 +6,12 @@
 //  - Com o painel aberto o pauseLevelOverlay nao roda: o gancho dele roda o painel (wotm_mainmenu::pauseFrame) e devolve 0 ("continua
 //    na pausa"). O jogo nao le o pad nem desenha a lista; a luta continua desenhada atras do painel (2D, na janela). Depois de fechar,
 //    a entrada do jogo na pausa fica bloqueada ate soltarem o que fechou.
+//  - Com o modo treino ligado (wotm_training.h), um sexto item, TRAINING OPTIONS, antes do QUIT: o getCurrentMenuSelection passa a
+//    contar 6 e o cursor (gCurrentMenuSelection) anda pelas linhas da tela; o jogo recebe o item logico (linha 4 = item 5, que o
+//    retail ignora; linha 5 = item 4, o QUIT). O QUIT do jogo (setMenuFont(4)) sai na linha 5 e o TRAINING OPTIONS na 4, pelas
+//    funcoes de fonte do jogo na saida do overlay; a lista sobe meia linha e a caixa fica 18% mais alta. O X nele abre o painel do
+//    treino (wotm_mainmenu.inc, kTrainDefs). O RESTART vira RESET POSITIONS e confirma sozinho o ARE YOU SURE (o "sim" do
+//    areYouSure, refeito aqui): o rtMain sai, o TheGame::ResetLevel e o rtMain(0) poem monstros e fase como no comeco, sem recarregar.
 //  - Mouse (etapa 9 da camera): passar por cima de um item escolhe, clique esquerdo confirma (X), direito e rodinha pelo wotm_pad.inc.
 //    O mesmo nos dialogos do displayDialog (ARE YOU SURE?, fins de luta, minigames), pelos itens que o setMenuFont marca.
 // O texto da pausa e do jogo (fontSpritePrintCenteredXY, unidades da tela do PS2: 640 x 224, x 0x140 no centro).
@@ -15,7 +21,16 @@ using wotm_padsel::rd32;
 using wotm_padsel::wr32;
 constexpr int kItems = 5;                       // CONTINUE, RESTART, VIBRATION, RECOMPILED OPTIONS (o CONTROL SCHEME), QUIT
 constexpr int kOptions = 3;
-constexpr int kLineY[kItems] = {0x55, 0x5E, 0x67, 0x70, 0x79};   // y de cada linha no pauseLevelOverlay
+constexpr int kLineY[kItems + 1] = {0x55, 0x5E, 0x67, 0x70, 0x79, 0x82};   // y de cada linha no pauseLevelOverlay (+ a do treino)
+constexpr uint32_t kTrainText = PS2_RAM_SIZE - 0x380;   // "TRAINING OPTIONS" para o fontSpritePrintCenteredXY (as outras vagas do topo: -0x800..-0x3E0)
+constexpr uint32_t kResetText = PS2_RAM_SIZE - 0x360;   // "RESET POSITIONS" no lugar do RESTART
+static int items() { return wotm_training::g_on.load(std::memory_order_relaxed) ? kItems + 1 : kItems; }
+static bool training() { return items() > kItems; }
+constexpr int kRestart = 1, kQuit = 4, kTrainRow = 4, kQuitRow = 5;   // com o treino: linha 4 = TRAINING OPTIONS, 5 = QUIT
+constexpr int kTrainShift = 4;   // a lista de 6 sobe meia linha (o centro da caixa nao muda)
+static int logicalItem(int row) { return training() && (row == kTrainRow || row == kQuitRow) ? kTrainRow + kQuitRow - row : row; }
+static int lineY(int row) { return kLineY[row] - (training() ? kTrainShift : 0); }
+static bool g_ownDraw = false, g_quitNext = false, g_autoYes = false;
 constexpr uint32_t kCross = 0x4000, kStart = 0x08, kLeft = 0x80, kRight = 0x20;   // mascaras do inputGetInput
 static PS2Runtime::RecompiledFunction g_origOverlay = nullptr, g_origPrint = nullptr, g_origSel = nullptr, g_origDialog = nullptr,
                                       g_origMenuFont = nullptr, g_origTitleFont = nullptr, g_origDefSize = nullptr, g_origInput = nullptr,
@@ -33,24 +48,26 @@ struct DlgItem { bool ok; int x, y, chars; };
 static DlgItem g_dlg[kMaxDlgItems] = {};
 static int g_mark = -1;   // o proximo texto e o item g_mark (-1: titulo ou outro texto)
 
-// Caixa da pausa (shell->m_cs610, posta na frente da camera pelo overlay a cada quadro: _cs::mat em +0x20 copiada da camera) mais
-// larga: o RECOMPILED OPTIONS escolhido (fonte 20, 18 letras, ~267 unidades da tela do PS2) passava da caixa (~213). A linha 0 da
-// matriz e o eixo x do objeto (o overlay faz x*linha0 + y*linha1 + z*linha2). So escala a linha que o overlay acabou de escrever:
-// se ela ainda e a que deixamos (quadro sem reescrita), nao escala de novo.
-constexpr float kBoxWiden = 1.4f;
-static void widenBox(uint8_t *rdram)
+// Caixa da lista da pausa desenhada pelo nativo, do tamanho da lista (5 ou 6 itens): a do jogo (shell->m_cs610, um modelo 3D posto
+// na frente da camera pelo overlay) tem altura fixa para 5 linhas e era estreita para o RECOMPILED OPTIONS (~267 unidades da tela do
+// PS2 contra ~213). No laco do displayDialog o hier desenha antes do overlay: escondida na saida do overlay (hierSetCsDrawMe 0), ela
+// some do quadro seguinte (o ARE YOU SURE religa a dele). A janela desenha a nativa sob o texto enquanto o overlay roda (g_boxMs) e o
+// texto da pausa esta no quadro. Medidas da do jogo num print 720p: x 168..472, y do topo da 1a linha - 3,5 ao topo da ultima + 10,5.
+static std::atomic<int64_t> g_boxMs{-100000};
+static std::atomic<int> g_boxRows{kItems};
+static void drawBox2d(int rw, int rh, bool hasText)
 {
-    static float s_written[3] = {};
-    const uint32_t cs = rd32(rdram, wotm::sym::shellInfo + 0x610) & 0x1FFFFFFu;
-    if (cs < 0x1000u || cs + 0x30 > PS2_RAM_SIZE)
+    if (!hasText || wotm_training::nowMs() - g_boxMs.load(std::memory_order_relaxed) > 150)
         return;
-    float row[3];
-    std::memcpy(row, rdram + cs + 0x20, sizeof row);
-    if (std::memcmp(row, s_written, sizeof row) == 0)
-        return;
-    for (float &f : row) f *= kBoxWiden;
-    std::memcpy(rdram + cs + 0x20, row, sizeof row);
-    std::memcpy(s_written, row, sizeof row);
+    const int n = g_boxRows.load(std::memory_order_relaxed);
+    const int shift = n > kItems ? kTrainShift : 0;
+    const float top = float(kLineY[0] - shift) - 3.5f, bot = float(kLineY[n - 1] - shift) + 10.5f;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    const float sx = gr.w / 640.f, sy = float(rh) / 224.f;
+    const Rectangle r{gr.x0 + 168.f * sx, top * sy, 304.f * sx, (bot - top) * sy};
+    const float rad = float(rh) / 80.f, round = std::min(1.f, 2.f * rad / std::min(r.width, r.height));
+    DrawRectangleRounded(r, round, 8, Color{0, 0, 0, 120});
+    DrawRectangleRoundedLinesEx(r, round, 8, std::max(2.f, float(rh) / 360.f), Color{175, 175, 175, 215});
 }
 
 static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -59,6 +76,7 @@ static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_overlayRa = GPR_U32(ctx, 31);
         g_inOverlay = true;
+        wotm_training::g_dialogMs = wotm_training::nowMs();   // a cada quadro da pausa: as janelas do treino somem
         wotm::mouse::gameMenu();   // pausa: o mouse nao passa pelo mapa de teclas (wotm_pad.inc)
         if (wotm_mainmenu::pauseFrame(rdram, ctx, runtime))
         {
@@ -72,8 +90,30 @@ static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_origOverlay(rdram, ctx, runtime);
     if (g_inOverlay && ctx->pc == g_overlayRa)
     {
+        if (training() && rd32(rdram, wotm::sym::gDrawOverlay))
+        {   // o sexto item na linha 4, com a fonte do menu (setMenuFont acende a linha escolhida), ainda dentro do overlay (nao vira
+            // item de dialogo); o printHook sobe a linha como as outras
+            static constexpr char kText[] = "TRAINING OPTIONS";
+            std::memcpy(rdram + kTrainText, kText, sizeof kText);
+            const uint32_t ret = GPR_U32(ctx, 2);
+            g_ownDraw = true;
+            wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::setMenuFont__Fi, uint32_t(kTrainRow));
+            wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::fontSpritePrintCenteredXY__FiiiPc, 0u, 0x140u, uint32_t(kLineY[kTrainRow]),
+                                   kTrainText);
+            g_ownDraw = false;
+            ctx->r[2] = _mm_set_epi64x(0, static_cast<int32_t>(ret));
+        }
+        g_quitNext = false;
         g_inOverlay = false;
-        widenBox(rdram);
+        if (rd32(rdram, wotm::sym::gDrawOverlay) && ctx->pc == g_overlayRa)
+        {
+            const uint32_t ret = GPR_U32(ctx, 2);
+            if (const uint32_t cs = rd32(rdram, wotm::sym::shellInfo + 0x610))
+                wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::hierSetCsDrawMe__FP3_csUc, cs, 0u);
+            ctx->r[2] = _mm_set_epi64x(0, static_cast<int32_t>(ret));
+            g_boxRows = items();
+            g_boxMs = wotm_training::nowMs();
+        }
     }
 }
 
@@ -98,6 +138,22 @@ static void printHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if ((raw >> 28) != 7u && a + sizeof kText <= PS2_RAM_SIZE)   // nunca no scratchpad (0x70000000, fora do rdram)
             std::memcpy(rdram + a, kText, sizeof kText);
     }
+    if (ctx->pc == wotm::fn::fontSpritePrintCenteredXY__FiiiPc && g_inOverlay && training())
+    {
+        if (startsWith(rdram, GPR_U32(ctx, 7), "RESTART"))
+        {
+            static constexpr char kText[] = "RESET POSITIONS";
+            std::memcpy(rdram + kResetText, kText, sizeof kText);
+            ctx->r[7] = _mm_set_epi64x(0, kResetText);
+        }
+        int y = static_cast<int>(GPR_U32(ctx, 6));
+        if (g_quitNext)   // o QUIT do jogo desce para a linha 5
+        {
+            y = kLineY[kQuitRow];
+            g_quitNext = false;
+        }
+        ctx->r[6] = _mm_set_epi64x(0, y - kTrainShift);
+    }
     if (ctx->pc == wotm::fn::fontSpritePrintCenteredXY__FiiiPc && g_inDialog && !g_inOverlay && g_mark >= 0 && g_mark < kMaxDlgItems)
     {
         int n = 0;
@@ -112,6 +168,7 @@ static void dialogHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc == wotm::fn::displayDialog__Fi)
     {
+        wotm_training::g_dialogMs = wotm_training::nowMs();   // pausa (ou dialogo de fim): as janelas do treino somem
         g_dialogRa = GPR_U32(ctx, 31);
         g_inDialog = true;
     }
@@ -125,6 +182,11 @@ static void dialogHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 // setMenuFont(i): o proximo texto e o item i; setTitleFont e fontSetDefaultSize: o proximo texto e titulo
 static void menuFontHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
+    if (ctx->pc == wotm::fn::setMenuFont__Fi && g_inOverlay && !g_ownDraw && training() && GPR_U32(ctx, 4) == uint32_t(kQuit))
+    {   // o QUIT do jogo acende na linha 5 (o cursor anda pelas linhas da tela)
+        ctx->r[4] = _mm_set_epi64x(0, kQuitRow);
+        g_quitNext = true;
+    }
     if (ctx->pc == wotm::fn::setMenuFont__Fi) g_mark = static_cast<int>(GPR_U32(ctx, 4));
     g_origMenuFont(rdram, ctx, runtime);
 }
@@ -201,22 +263,25 @@ static int hoverItem()
     float gx, gy;
     if (!wotm::mouse::gsPointer(gx, gy) || std::fabs(gx - 320.f) > 130.f)
         return -1;
-    for (int i = 0; i < kItems; ++i)
-        if (gy >= float(kLineY[i]) - 1.f && gy < float(kLineY[i]) + 8.f) return i;   // y do texto e o topo da linha (passo de 9)
+    for (int i = 0; i < items(); ++i)
+        if (gy >= float(lineY(i)) - 1.f && gy < float(lineY(i)) + 8.f) return i;   // y do texto e o topo da linha (passo de 9)
     return -1;
 }
 
 // getCurrentMenuSelection(5, jogador) da pausa: o mouse escolhe o item sob ele. Logo depois de fechar o painel, o cursor nao anda
 static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == wotm::fn::getCurrentMenuSelection__Fii && g_inOverlay && GPR_U32(ctx, 4) == uint32_t(kItems) && wotm_mainmenu::pauseBlocked())
+    // com o treino, a lista da pausa tem 6 itens (o cursor anda e da a volta ate o TRAINING OPTIONS)
+    if (ctx->pc == wotm::fn::getCurrentMenuSelection__Fii && g_inOverlay && GPR_U32(ctx, 4) == uint32_t(kItems) && items() > kItems)
+        ctx->r[4] = _mm_set_epi64x(0, items());
+    if (ctx->pc == wotm::fn::getCurrentMenuSelection__Fii && g_inOverlay && GPR_U32(ctx, 4) == uint32_t(items()) && wotm_mainmenu::pauseBlocked())
     {
-        ctx->r[2] = _mm_set_epi64x(0, static_cast<int32_t>(rd32(rdram, wotm::sym::gCurrentMenuSelection)));
+        ctx->r[2] = _mm_set_epi64x(0, logicalItem(static_cast<int>(rd32(rdram, wotm::sym::gCurrentMenuSelection))));
         ctx->pc = GPR_U32(ctx, 31);
         return;
     }
     if (ctx->pc == wotm::fn::getCurrentMenuSelection__Fii &&
-        ((g_inOverlay && GPR_U32(ctx, 4) == uint32_t(kItems)) || (g_inDialog && !g_inOverlay && GPR_U32(ctx, 4) - 1u < uint32_t(kMaxDlgItems))))
+        ((g_inOverlay && GPR_U32(ctx, 4) == uint32_t(items())) || (g_inDialog && !g_inOverlay && GPR_U32(ctx, 4) - 1u < uint32_t(kMaxDlgItems))))
     {
         g_selRa = GPR_U32(ctx, 31);
         g_selPending = true;
@@ -261,8 +326,8 @@ static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             }
         }
     }
-    wr32(rdram, wotm::sym::gCurrentMenuSelection, static_cast<uint32_t>(sel));
-    ctx->r[2] = _mm_set_epi64x(0, sel);
+    wr32(rdram, wotm::sym::gCurrentMenuSelection, static_cast<uint32_t>(sel));   // a linha da tela (o setMenuFont acende por ela)
+    ctx->r[2] = _mm_set_epi64x(0, logicalItem(sel));                            // o item que o jogo decide
 }
 
 // inputGetInput(mascara, jogador) dentro do pauseLevelOverlay:
@@ -311,11 +376,56 @@ static void exitHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_sawCross = g_sawStart = false;
     g_origExit(rdram, ctx, runtime);
     g_inExit = false;
-    if (ctx->pc == ra && GPR_U32(ctx, 2) && g_sawCross && !g_sawStart &&
-        rd32(rdram, wotm::sym::gCurrentMenuSelection) == uint32_t(kOptions))
+    const uint32_t sel = rd32(rdram, wotm::sym::gCurrentMenuSelection);
+    const bool cross = ctx->pc == ra && GPR_U32(ctx, 2) && g_sawCross && !g_sawStart;
+    if (cross && (sel == uint32_t(kOptions) || (sel == uint32_t(kTrainRow) && training())))
     {
-        wotm_mainmenu::openPausePanel(rdram, ctx, runtime);
+        wotm_mainmenu::openPausePanel(rdram, ctx, runtime, sel == uint32_t(kTrainRow));
         ctx->r[2] = _mm_set_epi64x(0, 0);
+    }
+    else if (cross && sel == uint32_t(kRestart) && training())
+        g_autoYes = true;   // RESET POSITIONS: o jogo segue para o ARE YOU SURE, que o sureHook responde
+}
+
+// areYouSure (o ARE YOU SURE do RESTART e do QUIT):
+//  - depois do RESET POSITIONS: nao desenha nem le o pad; faz o que o "sim" faz (asm game/ShellFinished, areYouSure, s2 == 0) e
+//    devolve 1: o rtMain sai com o m_restart que o overlay ja pos;
+//  - o "nao" volta o cursor ao item guardado (gLastMenuSelection, o logico): com o treino, o QUIT (item 4) esta na linha 5;
+//  - qualquer "sim" esconde as janelas do treino na hora (wotm_training::g_inFight).
+static PS2Runtime::RecompiledFunction g_origSure = nullptr;
+static void sureHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc != wotm::fn::areYouSure__FRi)
+    {
+        g_origSure(rdram, ctx, runtime);
+        return;
+    }
+    const uint32_t ra = GPR_U32(ctx, 31);
+    if (training() && rd32(rdram, wotm::sym::gLastMenuSelection) == uint32_t(kQuit))
+        wr32(rdram, wotm::sym::gLastMenuSelection, kQuitRow);
+    if (g_autoYes)
+    {
+        g_autoYes = false;
+        constexpr uint32_t sh = wotm::sym::shellInfo;
+        wr32(rdram, sh + 0x2BA4, 0);
+        const uint32_t cont = rd32(rdram, sh + 0x2B48);
+        wr32(rdram, sh + 0x2B44, cont);
+        wr32(rdram, sh + 0x2B40, cont);
+        if (!rd32(rdram, wotm::sym::shellGame + 0x1204C0 + 0x109C))
+            wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::snd_StopAllSounds, 0u);
+        wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::playPauseMenuSound__10ShellSoundi, wotm_padsel::kShellSound, 0x4Fu);
+        wr32(rdram, wotm::sym::gExitDialog, 0);
+        wotm_training::g_inFight = false;
+        std::fprintf(stderr, "[treino] reset positions (restart da luta sem o ARE YOU SURE)\n");
+        ctx->r[2] = _mm_set_epi64x(0, 1);
+        ctx->pc = ra;
+        return;
+    }
+    g_origSure(rdram, ctx, runtime);
+    if (ctx->pc == ra && GPR_U32(ctx, 2))
+    {
+        wotm_training::g_inFight = false;
+        wotm_training::restoreDifficulty(rdram, wotm::sym::shellGame + wotm_training::kDifficulty);   // QUIT: a do jogo volta (o save nao a ve)
     }
 }
 
@@ -332,6 +442,7 @@ static void install(PS2Runtime &runtime)
         {wotm::fn::fontSetDefaultSize__Fi, &g_origDefSize, &defSizeHook},
         {wotm::fn::inputGetInput__Fii, &g_origInput, &inputHook},
         {wotm::fn::checkInputForExit__FiPb, &g_origExit, &exitHook},
+        {wotm::fn::areYouSure__FRi, &g_origSure, &sureHook},
     };
     for (const H &h : hooks)
         if ((*h.orig = runtime.lookupFunction(h.addr)))

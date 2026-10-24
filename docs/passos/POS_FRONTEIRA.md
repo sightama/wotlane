@@ -15,7 +15,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) — **skins (partes 1 a 4) na master em 2026-10-23** (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
-| 9 | Modo treino com hitboxes e dano na tela — **primeira versão na branch `modo-treino` em 2026-10-23** (falta o dono conferir o F2) | — | médio |
+| 9 | Modo treino com hitboxes e dano na tela — **primeira versão na branch `modo-treino` em 2026-10-23** (falta o dono testar a terceira leva: TRAINING no menu, opções no pause, HUD do boneco) | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
 | 12 | Seleção com prévia 3D de todos os selecionados | 1, 11 | médio |
@@ -358,7 +358,7 @@ no elimination (modo 6 esconde o traje) e os quadros dos monstros fora do telão
 `docs/investigacoes/2026-10-23/treino_hitboxes.md` e `treino_dano.md`): `WOTM_TRAINING=1` ou F2 na luta. Esferas varridas que os golpes
 testam (soco, objeto, ataque ao levantar, projéteis, onda do butt slam), caixas de colisão do corpo, cápsula de empurrão, painel com o
 dano exato (vida antes e depois do `takeDamage`), combo e vida; CPUs paradas (ou lutando) e vida recarregada. Conferido por fotos sem
-teclado; falta o dono testar o F2 ao vivo.
+teclado.
 
 **Segunda leva em 2026-10-23**, na ordem do dono (obrigatório: medidores e comandos na tela; muito útil: dados de quadro; útil: IA
 do boneco, "always block", "block after first hit", dano total do combo; **não quer**: gravar e reproduzir, câmera lenta e quadro a
@@ -366,6 +366,11 @@ quadro): dados de quadro medidos (início, ativo, total, reação da vítima e v
 comandos do P1 e do boneco com os ícones do dispositivo, boneco parado/CPU/sempre bloqueia/bloqueia depois do 1º acerto, vida do
 boneco em %, stamina e especial sempre cheios. Investigação das entradas: `treino_entradas.md`. Conferido por log e fotos; o modo 3
 depois de um golpe e o dano do bloqueio só ao vivo (a IA do P1 não ataca boneco parado).
+
+**Terceira leva em 2026-10-23** (lista de 10 pontos do dono): linha TRAINING na tela de 1 jogador, com o fluxo direto à seleção e à
+fase (1 CPU, sem regras, luta sem fim); o menu principal desliga; as opções saíram do F2 para o pause (item TRAINING OPTIONS, painel
+nativo); medidores normal/cheios/fúria (fúria também para o jogador); HUD do boneco espelhado à direita e números nas barras de vida
+e stamina dos dois (`NATIVO.md`, "Runtime: modo treino"). Compilado e conferido por foto sem teclado; o menu e o pause são com o dono.
 
 **Falta:**
 1. Desenho do pisão e do agarrão (sem geometria: vítima por distância/cone, `getClosestMonsterToPunch`), da investida (esferas do corpo,
@@ -375,7 +380,7 @@ depois de um golpe e o dano do bloqueio só ao vivo (a IA do P1 não ataca bonec
    recuo bloqueado).
 3. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; o script de rascunho da
    investigação vira `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
-4. Entrada pelo menu (single player) e pelo launcher; o Goliath (casco lido com 0 planos no `.NGP`, conferir ao vivo).
+4. Entrada pelo launcher; o Goliath (casco lido com 0 planos no `.NGP`, conferir ao vivo).
 
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção hoje vai de 1 a 9

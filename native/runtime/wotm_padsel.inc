@@ -30,6 +30,7 @@
 // Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
 #include "wotm_mods.hpp"   // skins de mod na lista de trajes
+#include "wotm_training.h"   // TRAINING: telas 12 e 15 puladas (changeScreenHook)
 #include <chrono>
 #include <random>
 
@@ -1562,7 +1563,24 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
     {
         const int32_t from = static_cast<int32_t>(GPR_U32(ctx, 4)), to = static_cast<int32_t>(GPR_U32(ctx, 5)),
                       dir = static_cast<int32_t>(GPR_U32(ctx, 6));
-        if (g_multi && from == 15 && to == 13)
+        if (from == 2 && to == 12 && wotm_training::g_menuArmed.load())
+        {
+            // TRAINING (wotm_mainmenu.inc): sem a tela 12 (numero de CPUs) e a 15 (regras), direto a selecao (6) de 1 CPU, luta sem fim
+            // (m_killTarget 0: quem cai levanta). O que as duas fariam: zerar os monstros das CPUs e o switch da coluna da CPU 2+
+            // (primeira passada da 12) e o resetSelectables (15). A animacao 2 ja leva a camera ao lugar das telas 12/15/6.
+            wr32(rdram, kNumAIs, 1);
+            wr32(rdram, kShell + 0x2A44, 0);   // m_killTarget
+            for (uint32_t a = kShell + 0x2948; a <= kShell + 0x2950; a += 4)
+                wr32(rdram, a, 0);             // m_monsterSel[4..6]
+            if (const uint32_t sw = rd32(rdram, kShell + 0x1E0))
+                callGuest(rdram, ctx, runtime, wotm::fn::hierSetSwitch__FP11_hierswitchi, sw, 0u);
+            callGuest(rdram, ctx, runtime, wotm::fn::resetSelectables__Fv, 0u);
+            ctx->r[5] = _mm_set_epi64x(0, 6);
+            std::fprintf(stderr, "[treino] fluxo: tela 2 -> 6 (1 CPU, sem fim)\n");
+        }
+        else if (from == 6 && to == 2 && dir < 0 && wotm_training::g_menuArmed.load())
+            ctx->r[7] = _mm_set_epi64x(0, 2);   // a volta da selecao a tela 2 (o prevScreen) com a camera, nao o corte seco da 6
+        else if (g_multi && from == 15 && to == 13)
             ctx->r[5] = _mm_set_epi64x(0, 5);
         else if (from == 5 && to == 15 && dir < 0)
             ctx->r[5] = _mm_set_epi64x(0, 1);
@@ -1583,6 +1601,8 @@ static void mainHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             setManual(false);
         g_multi = 0;
         g_selOn = false;
+        wotm_training::menuDisarm("menu principal");   // a luta de treino acabou (ou a escolha voltou ate aqui)
+        wotm_training::restoreDifficulty(rdram, wotm::sym::shellGame + wotm_training::kDifficulty);
         g_mainRa = GPR_U32(ctx, 31);
         g_mainPending = true;
     }

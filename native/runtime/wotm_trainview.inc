@@ -1,13 +1,20 @@
 // Modo treino, lado do desenho (incluido pelo wotm_live.inc): volumes do corpo lidos na thread do EE (capture, chamada pelo
 // wotmCaptureFrame), esferas dos golpes e dano vindos dos ganchos (native/runtime/wotm_training.inc), desenho por cima da cena (sem
-// teste de profundidade), painel de dano e menu F2. Estado compartilhado em native/wotm_training.h.
+// teste de profundidade), painel de dano e numeros das barras do HUD. Estado compartilhado em native/wotm_training.h.
 
 #include "wotm_training.h"
+
+namespace wotm_padsel   // wotm_padsel.inc (incluido depois): glifos da fonte do jogo
+{
+static void text(std::vector<wotm::TextQuad> &out, const wotm::Ram &ram, uint64_t tex0, int rw, int rh, const char *s, float cx, float cy, float h,
+                 Color c, float spacing);
+}
 
 namespace wotm_trainview
 {
 using namespace wotm_training;
 constexpr uint32_t kSlots = 0x120380u;
+constexpr float kPanelTop = 0.43f;   // topo do painel e dos comandos (fracao da altura): abaixo dos dois HUDs, que vao ate y 91 de 224
 
 // ---- cascos de colisao do corpo (nos op 10 do hier do monstro): planos {n, d} no espaco do no, dentro = n.p <= d
 
@@ -226,6 +233,7 @@ void capture(const wotm::Ram &ram)
     std::memcpy(sh.stamina, stamina, sizeof stamina);
     std::memcpy(sh.staminaMax, staminaMax, sizeof staminaMax);
     sh.players = int8_t(players);
+    sh.hudShown = ram.u32(wotm::sym::gHudEnable) && !ram.u32(wotm::sym::x_3Hud_m_letterbox + 0x2Cu);
 }
 
 // ---- janela
@@ -241,6 +249,7 @@ struct View
     uint32_t frame = 0;
     float health[16] = {}, maxHealth[16] = {}, stamina[16] = {}, staminaMax[16] = {};
     int players = 1;
+    bool hudShown = false;
     Combo combo;
     float bestCombo = 0.f;
     int bestHits = 0;
@@ -282,6 +291,7 @@ View snapshot()
     std::memcpy(v.stamina, sh.stamina, sizeof v.stamina);
     std::memcpy(v.staminaMax, sh.staminaMax, sizeof v.staminaMax);
     v.players = sh.players;
+    v.hudShown = sh.hudShown;
     v.combo = sh.combo;
     v.bestCombo = sh.bestCombo;
     v.bestHits = sh.bestHits;
@@ -302,7 +312,7 @@ Color ownerColor(int owner, int players, unsigned char a)
 // Dentro do BeginMode3D da vista cheia, depois da cena
 void draw3d()
 {
-    if (!g_on.load(std::memory_order_relaxed))
+    if (!g_on.load(std::memory_order_relaxed) || windowsHidden())
         return;
     const uint32_t opts = g_opts.load(std::memory_order_relaxed);
     const View v = snapshot();
@@ -342,14 +352,14 @@ const char *sourceName(int s)
     switch (s)
     {
     // HitEvent::source (s_takeHitInfo +0x10), os vistos no treino e nas investigacoes
-    case -1: return "over time (fire, shock, fall)";
-    case 2: case 11: return "melee";
-    case 3: return "object swing";
-    case 1: return "projectile";
-    case 7: return "butt slam";
-    case 8: case 13: return "throw";
-    case 5: case 6: case 12: case 14: case 20: return "special";
-    default: return "other";
+    case -1: return "OVER TIME";
+    case 2: case 11: return "MELEE";
+    case 3: return "OBJECT";
+    case 1: return "PROJECTILE";
+    case 7: return "BUTT SLAM";
+    case 8: case 13: return "THROW";
+    case 5: case 6: case 12: case 14: case 20: return "SPECIAL";
+    default: return "OTHER";
     }
 }
 
@@ -365,81 +375,6 @@ std::string slotName(int s, int players)
     else
         std::snprintf(b, sizeof b, "#%d", s);
     return b;
-}
-
-// Menu F2 e painel de dano (na janela, por cima do quadro). `f1Open` fecha o menu F1 quando o F2 abre (as teclas 1..8 sao dos dois).
-void draw2d(bool &f1Open)
-{
-    static bool open = false;
-    if (IsKeyPressed(KEY_F2))
-    {
-        if (!g_on.load())
-        {
-            g_on = true;
-            open = true;
-            std::fprintf(stderr, "[treino] modo treino ligado (F2)\n");
-        }
-        else
-            open = !open;
-        if (open)
-            f1Open = false;
-    }
-    if (f1Open)
-        open = false;
-    const int fs = 20, pad = 6;
-    if (open)
-    {
-        uint32_t o = g_opts.load();
-        const uint32_t o0 = o;
-        if (IsKeyPressed(KEY_ONE)) { g_on = !g_on.load(); std::fprintf(stderr, "[treino] modo treino %s\n", g_on.load() ? "ligado" : "desligado"); }
-        if (IsKeyPressed(KEY_TWO)) o ^= kShowAttacks;
-        if (IsKeyPressed(KEY_THREE)) o ^= kShowHulls;
-        if (IsKeyPressed(KEY_FOUR)) o ^= kShowCapsule;
-        if (IsKeyPressed(KEY_FIVE)) g_dummy = (g_dummy.load() + 1) % DCount;
-        if (IsKeyPressed(KEY_SIX))
-        {   // recarga: desligada, 100, 75, 50, 25, 10 % (a vida do boneco; o jogador volta sempre cheio)
-            static constexpr int kPct[] = {100, 75, 50, 25, 10};
-            if (!(o & kRefill)) { o |= kRefill; g_dummyHealth = 100; }
-            else
-            {
-                int i = 0;
-                while (i < 5 && kPct[i] != g_dummyHealth.load()) ++i;
-                if (i >= 4) o &= ~kRefill;
-                else g_dummyHealth = kPct[i + 1];
-            }
-        }
-        if (IsKeyPressed(KEY_SEVEN)) o ^= kMeters;
-        if (IsKeyPressed(KEY_EIGHT)) o ^= kShowInputs;
-        if (IsKeyPressed(KEY_NINE)) o ^= kPanel;
-        if (IsKeyPressed(KEY_ZERO)) g_resetStats = true;
-        if (o != o0)
-            g_opts = o;
-        const bool on = g_on.load();
-        static const char *const kDummy[DCount] = {"STAND STILL", "CPU FIGHTS", "ALWAYS BLOCK", "BLOCK AFTER 1ST HIT"};
-        char hp[16];
-        if (o & kRefill) std::snprintf(hp, sizeof hp, "%d%%", g_dummyHealth.load());
-        else std::snprintf(hp, sizeof hp, "OFF");
-        char lines[12][72];
-        int nl = 0;
-        std::snprintf(lines[nl++], 72, "TRAINING (F2 closes)");
-        std::snprintf(lines[nl++], 72, "1  Training mode     %s", on ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "2  Attack spheres    %s", (o & kShowAttacks) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "3  Body boxes        %s", (o & kShowHulls) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "4  Push capsules     %s", (o & kShowCapsule) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "5  Dummy             %s", kDummy[std::clamp(g_dummy.load(), 0, DCount - 1)]);
-        std::snprintf(lines[nl++], 72, "6  Health refill     %s", hp);
-        std::snprintf(lines[nl++], 72, "7  Stamina, special  %s", (o & kMeters) ? "ALWAYS FULL" : "-");
-        std::snprintf(lines[nl++], 72, "8  Input display     %s", (o & kShowInputs) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "9  Damage panel      %s", (o & kPanel) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "0  Reset damage log");
-        int w = 0;
-        for (int i = 0; i < nl; ++i)
-            w = std::max(w, MeasureText(lines[i], fs));
-        const int x = 10, top = 40;
-        DrawRectangle(x - pad, top - pad, w + 2 * pad, nl * (fs + 4) + 2 * pad, Color{0, 0, 0, 170});
-        for (int i = 0; i < nl; ++i)
-            DrawText(lines[i], x, top + i * (fs + 4), fs, i == 0 ? Color{120, 255, 160, 255} : RAYWHITE);
-    }
 }
 
 // Seta da direcao (notacao do teclado numerico; 5 = neutro, um ponto) num quadrado de lado `sz` centrado em (cx, cy)
@@ -461,30 +396,109 @@ void drawDir(int dir, float cx, float cy, float sz, Color c)
     DrawTriangle(tip, p2, p1, c);
 }
 
-// Historico dos comandos (P1 e o primeiro boneco), no lado esquerdo da faixa 4:3, de cima para baixo do mais novo para o mais velho:
-// quadros segurados, direcao (relativa ao monstro: 8 frente) e botoes, nos icones do dispositivo do jogador (wotm_prompts.inc)
-void drawInputs(int rw, int rh, const View &v)
+// Texto com a fonte do jogo (os glifos do atlas do quadro, wotm_padsel::text) num quadro rw x rh: cor do raylib (255 = 1,0), contorno
+// preto opcional. Sem atlas (nenhum texto do jogo ainda), a fonte do raylib.
+struct GameText
+{
+    const wotm::Ram &ram;
+    uint64_t tex0;
+    int rw, rh;
+    std::vector<wotm::TextQuad> quads;
+
+    // A fonte do jogo deixa uma letra de vao (o passo do wotm_padsel::text e a celula inteira, 1,6 x a altura): aqui a celula e
+    // estreitada para 78% e o passo e esse (celulas sobrepostas se cortam no drawQuads). Sem '/', '>' e '+' no atlas: tracos desenhados.
+    static constexpr float kTight = 0.78f;
+    float wv(float h) const { return 1.6f * h * 224.f / float(rh); }   // largura da celula em unidades da tela do jogo
+    float adv(float h) const
+    {
+        const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+        return kTight * wv(h) * gr.w / 640.f;
+    }
+    float width(const char *s, float h) const { return tex0 ? adv(h) * float(std::strlen(s)) : float(MeasureText(s, int(h))); }
+    // os sinais que faltam no atlas, numa celula de largura a (centro cx, cy), altura h
+    static void glyphLines(char ch, float cx, float cy, float a, float h, float t, Color c)
+    {
+        const float hw = a * 0.32f, hh = h * 0.38f;
+        if (ch == '/')
+            DrawLineEx(Vector2{cx - hw, cy + hh}, Vector2{cx + hw, cy - hh}, t, c);
+        else if (ch == '>')
+        {
+            DrawLineEx(Vector2{cx - hw, cy - hh * 0.8f}, Vector2{cx + hw, cy}, t, c);
+            DrawLineEx(Vector2{cx + hw, cy}, Vector2{cx - hw, cy + hh * 0.8f}, t, c);
+        }
+        else if (ch == '+')
+        {
+            DrawLineEx(Vector2{cx - hw, cy}, Vector2{cx + hw, cy}, t, c);
+            DrawLineEx(Vector2{cx, cy - hw}, Vector2{cx, cy + hw}, t, c);
+        }
+    }
+    // texto com o canto esquerdo em x0 e o meio da altura em cy
+    void put(const char *s, float x0, float cy, float h, Color c, bool outline = false)
+    {
+        if (!tex0)
+        {
+            DrawText(s, int(x0), int(cy - h * 0.5f), int(h), c);
+            return;
+        }
+        char buf[128];
+        std::snprintf(buf, sizeof buf, "%s", s);
+        const float a = adv(h), t = std::max(1.5f, h * 0.13f), o = std::max(1.f, h * 0.09f);
+        for (size_t i = 0; buf[i]; ++i)
+            if (buf[i] == '/' || buf[i] == '>' || buf[i] == '+')
+            {
+                const float gx = x0 + a * (float(i) + 0.5f);
+                if (outline)
+                    glyphLines(buf[i], gx, cy, a, h, t + 2.f * o, Color{0, 0, 0, c.a});
+                glyphLines(buf[i], gx, cy, a, h, t, c);
+                buf[i] = ' ';
+            }
+        const float cx = x0 + width(buf, h) * 0.5f, sp = (kTight - 1.f) * wv(h);
+        auto gs = [](Color k) { return Color{uint8_t(k.r / 2), uint8_t(k.g / 2), uint8_t(k.b / 2), uint8_t(k.a / 2)}; };
+        const size_t first = quads.size();
+        if (outline)
+            for (int k = 0; k < 4; ++k)
+                wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx + (k & 1 ? o : -o), cy + (k & 2 ? o : -o), h, gs(Color{0, 0, 0, c.a}), sp);
+        wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx, cy, h, gs(c), sp);
+        for (size_t i = first; i < quads.size(); ++i)
+            quads[i].x1 = quads[i].x0 + kTight * wv(h);   // celula estreitada, sem sobrepor a vizinha
+    }
+    void center(const char *s, float cx, float cy, float h, Color c, bool outline = false) { put(s, cx - width(s, h) * 0.5f, cy, h, c, outline); }
+    void flush(wotm::Scene &scene)
+    {
+        if (!quads.empty())
+            scene.drawQuads(quads, float(rw), float(rh));
+        quads.clear();
+    }
+};
+
+// Historico dos comandos (P1 e o primeiro boneco), no lado esquerdo da faixa 4:3, abaixo do HUD, de cima para baixo do mais novo para
+// o mais velho: quadros segurados, direcao (relativa ao monstro: 8 frente) e botoes, nos icones do dispositivo do jogador
+// (wotm_prompts.inc)
+void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
 {
     namespace st = wotm::settings;
-    const int fs = std::max(14, rh / 55);
-    const float isz = float(fs) * 1.15f, rowH = isz + 4.f;
+    const int rw = gt.rw, rh = gt.rh;
+    const float fh = std::max(12.f, float(rh) / 50.f);
+    const float isz = fh * 1.1f, rowH = isz + 4.f;
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
     struct B { uint16_t bit; st::Bind bind; const char *txt; };
     static constexpr B kB[] = {{kBtnSquare, st::BSquare, "SQ"}, {kBtnTriangle, st::BTriangle, "TRI"}, {kBtnX, st::BCross, "X"},
                                {kBtnCircle, st::BCircle, "O"}, {kBtnL1, st::BL1, "L1"}, {kBtnR1, st::BR1, "R1"},
                                {kBtnL2, st::BL2, "L2"}, {kBtnR2, st::BR2, "R2"}};
     const int rows = 12;
-    float x = gr.x0 + float(fs);
-    const float top = float(rh) / 6.f;
+    float x = gr.x0 + fh;
+    const float top = float(rh) * kPanelTop;
+    const float numW = gt.width("999", fh);
     for (int k = 0; k < 2; ++k)
     {
         const std::vector<PadRec> &h = v.pad[k];
         if (k == 1 && (h.empty() || g_dummy.load() == DStand))
             continue;
-        const float w = float(MeasureText("999", fs)) + isz * 6.f;
+        const char *title = k == 0 ? "P1 INPUTS" : "DUMMY INPUTS";
+        const float w = std::max(gt.width(title, fh), numW + isz * 6.f);
         const int n = std::min<int>(rows, int(h.size()));
-        DrawRectangle(int(x) - 4, int(top) - 4, int(w) + 8, int(rowH * float(n + 1)) + 8, Color{0, 0, 0, 130});
-        DrawText(k == 0 ? "P1 inputs" : "Dummy inputs", int(x), int(top), fs, Color{120, 255, 160, 255});
+        DrawRectangle(int(x) - 6, int(top) - 6, int(w) + 12, int(rowH * float(n + 1)) + 12, Color{0, 0, 0, 130});
+        gt.put(title, x, top + isz * 0.5f, fh, Color{120, 255, 160, 255});
         for (int i = 0; i < n; ++i)
         {
             const PadRec &r = h[h.size() - 1 - size_t(i)];
@@ -492,89 +506,132 @@ void drawInputs(int rw, int rh, const View &v)
             const unsigned char a = static_cast<unsigned char>(255 - i * 12);
             char fr[8];
             std::snprintf(fr, sizeof fr, "%u", r.frames);
-            DrawText(fr, int(x), int(y + (isz - float(fs)) * 0.5f), fs, Color{200, 200, 200, a});
-            float bx = x + float(MeasureText("999", fs)) + 6.f;
+            gt.put(fr, x + numW - gt.width(fr, fh), y + isz * 0.5f, fh, Color{210, 210, 210, a});
+            float bx = x + numW + 8.f;
             drawDir(r.dir, bx + isz * 0.5f, y + isz * 0.5f, isz, Color{255, 255, 255, a});
             bx += isz + 4.f;
             for (const B &b : kB)
                 if (r.btn & b.bit)
                 {
                     if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(b.bind), bx + isz * 0.5f, y + isz * 0.5f, isz, float(a) / 255.f))
-                        DrawText(b.txt, int(bx), int(y), fs, Color{255, 230, 120, a});
+                        gt.put(b.txt, bx, y + isz * 0.5f, fh, Color{255, 230, 120, a});
                     bx += isz + 2.f;
                 }
         }
-        x += w + float(fs);
+        x += w + fh * 1.5f;
+    }
+    gt.flush(scene);
+}
+
+// Numeros por cima das barras do HUD (o do jogador 1 e o do boneco, o HUD 1 do jogo: trainingHud no wotm_split4.inc): vida "atual / maxima"
+// no meio da barra e, na stamina vertical, o valor atual com os algarismos empilhados dentro dela; contorno preto para ler sobre a cor
+void drawHudNumbers(GameText &gt, const View &v)
+{
+    if (!(g_opts.load() & kTrainHud) || v.players != 1 || !v.hudShown)
+        return;
+    namespace th = wotm_training::hud;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(gt.rw), float(gt.rh));
+    const float sx = gr.w / 640.f, sy = float(gt.rh) / 224.f;
+    auto mid = [&](const th::Box &b) { return Vector2{gr.x0 + 0.5f * (b.x0 + b.x1) * sx, 0.5f * (b.y0 + b.y1) * sy}; };
+    const float hh = 5.2f * sy, sh = 4.4f * sy;   // altura das letras: a barra de vida tem 5,4 de 224; a stamina, 11 de 640 de largura
+    int cpu = -1;
+    for (int i = 1; i < 16 && cpu < 0; ++i)
+        if (v.maxHealth[i] > 0.f)
+            cpu = i;
+    for (int i : {0, cpu})
+    {
+        if (i < 0 || !(v.maxHealth[i] > 0.f))
+            continue;
+        const bool mir = i != 0;
+        char b[48];
+        std::snprintf(b, sizeof b, "%.0f / %.0f", std::max(0.f, std::ceil(v.health[i])), v.maxHealth[i]);
+        const Vector2 hc = mid(mir ? th::mirror(th::kHealth) : th::kHealth);
+        gt.center(b, hc.x, hc.y, hh, RAYWHITE, true);
+        std::snprintf(b, sizeof b, "%.0f", std::max(0.f, v.stamina[i]));
+        const Vector2 sc = mid(mir ? th::mirror(th::kStamina) : th::kStamina);
+        const int n = int(std::strlen(b));
+        const float step = sh * 1.2f;
+        for (int k = 0; k < n; ++k)
+        {
+            const char d[2] = {b[k], 0};
+            gt.center(d, sc.x, sc.y + (float(k) - 0.5f * float(n - 1)) * step, sh, RAYWHITE, true);
+        }
     }
 }
 
-// Painel de dano, dentro do quadro nativo (rw x rh; sai nas fotos do WOTM_SHOTS, some no modo foto); tambem os comandos
-void drawPanel(int rw, int rh)
+// Painel de dano, dentro do quadro nativo (rw x rh; sai nas fotos do WOTM_SHOTS, some no modo foto, na pausa e fora da luta); tambem
+// os comandos e os numeros do HUD. Linhas curtas: a fonte do jogo e larga.
+void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int rw, int rh)
 {
-    if (!g_on.load())
+    // atlas do fontSetTexId (a luta nao escreve texto do jogo); sem ele ainda, o do ultimo quadro com texto
+    const uint64_t known = g_fontTex0.load(std::memory_order_relaxed), tex0 = known ? known : frameTex0;
+    if (!g_on.load() || windowsHidden() || !tex0)
         return;
     const View v = snapshot();
+    GameText gt{ram, tex0, rw, rh, {}};
+    drawHudNumbers(gt, v);
+    gt.flush(scene);
     if (g_opts.load() & kShowInputs)
-        drawInputs(rw, rh, v);
+        drawInputs(scene, gt, v);
     if (!(g_opts.load() & kPanel))
         return;
-    const int fs = std::max(14, rh / 55), pad = fs / 3;
-    // combo: o da thread do EE (golpes que a vitima levou sem se recuperar, wotm_training.inc, takeDamage)
-    std::vector<std::string> lines;
-    lines.push_back("TRAINING  (F2 options)");
+    const float fh = std::max(12.f, float(rh) / 50.f), lineH = fh * 1.35f, pad = fh * 0.6f;
+    const Color kTitle{120, 255, 160, 255}, kText{235, 235, 235, 255}, kDimText{150, 150, 150, 255};
+    struct Line { std::string s; Color c; };
+    std::vector<Line> lines;
+    lines.push_back({"TRAINING", kTitle});
+    char b[128];
     if (!v.hits.empty())
     {
         const Hit &last = v.hits.back();
-        char b[128];
-        if (last.base >= 0.f)
-            std::snprintf(b, sizeof b, "Last: %.1f  (asked %.1f, %s)", last.applied, last.base, sourceName(last.source));
+        // o dano pedido pelo golpe (base) so aparece quando o aplicado foi outro (bloqueio, furia, dificuldade)
+        if (last.base >= 0.f && std::fabs(last.base - last.applied) > 0.05f)
+            std::snprintf(b, sizeof b, "LAST %.1f %s  BASE %.1f", last.applied, sourceName(last.source), last.base);
         else
-            std::snprintf(b, sizeof b, "Last: %.1f  (%s)", last.applied, sourceName(last.source));
-        lines.push_back(b);
-        // terminou: a reacao que a vitima teve depois do ultimo golpe ja fechou (o StunRec so entra no fim dela), ou 3 s sem golpe
+            std::snprintf(b, sizeof b, "LAST %.1f %s", last.applied, sourceName(last.source));
+        lines.push_back({b, kText});
+        // combo: o da thread do EE (golpes que a vitima levou sem se recuperar, wotm_training.inc, takeDamage); terminou quando a reacao
+        // depois do ultimo golpe fechou (o StunRec so entra no fim dela) ou 3 s sem golpe
         const Combo &c = v.combo;
         bool ended = v.frame - c.last > 180u;
         for (const StunRec &s : v.stuns)
             if (s.victim == c.victim && s.end > c.last + 1)
                 ended = true;
-        const bool open = !ended;
-        std::snprintf(b, sizeof b, "Combo: %d hit%s, %.1f damage%s", c.hits, c.hits == 1 ? "" : "s", c.damage, open ? "" : "  (ended)");
-        lines.push_back(b);
-        std::snprintf(b, sizeof b, "Best combo: %.1f damage (%d hit%s)", v.bestCombo, v.bestHits, v.bestHits == 1 ? "" : "s");
-        lines.push_back(b);
-        lines.push_back("");
+        std::snprintf(b, sizeof b, "COMBO %d HIT%s %.1f", c.hits, c.hits == 1 ? "" : "S", c.damage);
+        lines.push_back({b, ended ? kDimText : kText});
+        std::snprintf(b, sizeof b, "BEST %.1f  %d HIT%s", v.bestCombo, v.bestHits, v.bestHits == 1 ? "" : "S");
+        lines.push_back({b, kText});
+        lines.push_back({"", kText});
         int shown = 0;
-        for (auto it = v.hits.rbegin(); it != v.hits.rend() && shown < 6; ++it, ++shown)
+        for (auto it = v.hits.rbegin(); it != v.hits.rend() && shown < 4; ++it, ++shown)
         {
-            std::snprintf(b, sizeof b, "%5.1f  %s -> %s  %s", it->applied, slotName(it->attacker, v.players).c_str(),
+            std::snprintf(b, sizeof b, "%5.1f %s > %s %s", it->applied, slotName(it->attacker, v.players).c_str(),
                           slotName(it->victim, v.players).c_str(), sourceName(it->source));
-            lines.push_back(b);
+            lines.push_back({b, kDimText});
         }
     }
-    else
-        lines.push_back("Hit someone: the damage shows here");
     // dados de quadro: os ultimos golpes (inicio = primeiro quadro com teste de golpe; ativo = quadros com teste; total = o estado inteiro)
     // e, no que acertou, quanto a vitima ficou sem agir (reacoes seguidas somadas) e a vantagem (fim da reacao - fim do golpe)
     if (!v.moves.empty())
     {
-        lines.push_back("");
-        lines.push_back("Frame data (frames, 60 per second)");
+        lines.push_back({"", kText});
+        lines.push_back({"FRAME DATA", kTitle});
         int shown = 0;
-        for (auto it = v.moves.rbegin(); it != v.moves.rend() && shown < 4; ++it, ++shown)
+        for (auto it = v.moves.rbegin(); it != v.moves.rend() && shown < 3; ++it, ++shown)
         {
             const MoveRec &mv = *it;
-            char nm[40], b[160];
             if (mv.chain >= 0)
-                std::snprintf(nm, sizeof nm, "%s %s c%d.%d", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain, mv.step);
+                std::snprintf(b, sizeof b, "%s %s %d.%d", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain, mv.step);
             else
-                std::snprintf(nm, sizeof nm, "%s %s", slotName(mv.owner, v.players).c_str(), mv.name);
+                std::snprintf(b, sizeof b, "%s %s", slotName(mv.owner, v.players).c_str(), mv.name);
+            lines.push_back({b, kText});
             char st[8];
             if (mv.startup > 0)
                 std::snprintf(st, sizeof st, "%d", mv.startup);
             else
                 std::snprintf(st, sizeof st, "-");
-            std::snprintf(b, sizeof b, "%s: startup %s, active %d, total %u", nm, st, mv.active, mv.end - mv.start);
-            lines.push_back(b);
+            std::snprintf(b, sizeof b, "  STARTUP %s ACTIVE %d TOTAL %u", st, mv.active, mv.end - mv.start);
+            lines.push_back({b, kDimText});
             if (mv.hitVictim >= 0)
             {
                 uint32_t s0 = 0, s1 = 0;
@@ -593,33 +650,23 @@ void drawPanel(int rw, int rh)
                         s1 = s.end;
                 }
                 if (sname)
-                {
-                    const int adv = int(s1) - int(mv.end);
-                    std::snprintf(b, sizeof b, "   hit %s: %s for %u, advantage %+d", slotName(mv.hitVictim, v.players).c_str(), sname, s1 - s0, adv);
-                }
+                    std::snprintf(b, sizeof b, "  %s %u  ADV %+d", sname, s1 - s0, int(s1) - int(mv.end));
                 else
-                    std::snprintf(b, sizeof b, "   hit %s (no reaction yet)", slotName(mv.hitVictim, v.players).c_str());
-                lines.push_back(b);
+                    std::snprintf(b, sizeof b, "  HIT %s", slotName(mv.hitVictim, v.players).c_str());
+                lines.push_back({b, kDimText});
             }
         }
     }
-    lines.push_back("");
-    for (int i = 0; i < 16; ++i)
-        if (v.maxHealth[i] > 0.f)
-        {
-            char b[96];
-            std::snprintf(b, sizeof b, "%s health %.1f / %.0f, stamina %.0f / %.0f", slotName(i, v.players).c_str(), v.health[i], v.maxHealth[i],
-                          v.stamina[i], v.staminaMax[i]);
-            lines.push_back(b);
-        }
-    int w = 0;
-    for (const std::string &s : lines)
-        w = std::max(w, MeasureText(s.c_str(), fs));
-    // canto de cima a direita, dentro da faixa 4:3 do jogo (abaixo da barra de vida do inimigo, que fica no alto)
+    float w = 0.f;
+    for (const Line &l : lines)
+        w = std::max(w, gt.width(l.s.c_str(), fh));
+    // a direita, dentro da faixa 4:3 do jogo, abaixo do HUD do boneco (que desce ate ~40% da altura)
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
-    const int x = int(gr.x0 + gr.w) - w - 2 * pad, top = rh / 6;
-    DrawRectangle(x - pad, top - pad, w + 2 * pad, int(lines.size()) * (fs + 4) + 2 * pad, Color{0, 0, 0, 150});
+    const float x = gr.x0 + gr.w - w - 2.f * pad - fh, top = float(rh) * kPanelTop;
+    DrawRectangle(int(x - pad), int(top - pad), int(w + 2.f * pad), int(float(lines.size()) * lineH + 2.f * pad), Color{0, 0, 0, 150});
     for (size_t i = 0; i < lines.size(); ++i)
-        DrawText(lines[i].c_str(), x, top + int(i) * (fs + 4), fs, i == 0 ? Color{120, 255, 160, 255} : RAYWHITE);
+        if (!lines[i].s.empty())
+            gt.put(lines[i].s.c_str(), x, top + lineH * (float(i) + 0.5f), fh, lines[i].c);
+    gt.flush(scene);
 }
 }

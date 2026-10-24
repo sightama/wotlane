@@ -78,18 +78,52 @@ Na luta (só onde o desenho nativo roda), **F1** abre e fecha o menu; com ele ab
 - **Vencer a luta:** `takeDamage(100000, force, jogador)` em cada IA viva (`m_monsters[4 + i]`, `i < m_numAIs`); o jogo segue o fluxo dele (morte, vitória, contagem de rodadas). Chefes que não são `Monster` comum ainda não foram conferidos.
 - **`WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N`** liga desde o início; `vencer=N` repete o "vencer" a cada N segundos de jogo (lote, avançar sozinho). Conferido em 2026-10-17 com `WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_CHEATS=inv,esp,vencer=25`: dano bloqueado, vida do jogador cheia (117) e 4 rodadas vencidas em 150 s.
 
-## Runtime: modo treino (F2, `WOTM_TRAINING`)
+## Runtime: modo treino (TRAINING no menu, `WOTM_TRAINING`)
 Item 9 do `POS_FRONTEIRA.md` (branch `modo-treino`, 2026-10-23). Investigações: `docs/investigacoes/2026-10-23/treino_hitboxes.md`
 (como o golpe acerta, offsets do `StatePunch`, valores do `.CHR`) e `treino_dano.md` (volumes do corpo, caminho do dano, boneco,
 fase TRAINING). Código: ganchos na thread do EE em `native/runtime/wotm_training.inc` (incluído pelo `wotm_overrides.cpp`, instalado
-por último: é o gancho mais de fora do `update`/`takeHit`/`takeDamage`), desenho, painel e menu em `native/runtime/wotm_trainview.inc`
-(incluído pelo `wotm_live.inc`), estado compartilhado em `native/wotm_training.h`.
-- **Ligar:** `WOTM_TRAINING=1` desde o início, ou **F2** na luta (liga e abre o menu). Com o menu F2 aberto: **1** liga e desliga o
-  modo, **2** esferas dos golpes, **3** caixas do corpo, **4** cápsulas de empurrão (desligadas por padrão), **5** boneco (parado,
-  CPU, sempre bloqueia, bloqueia depois do 1º acerto), **6** recarga de vida (desligada, 100, 75, 50, 25 ou 10% da vida do boneco),
-  **7** stamina e especial sempre cheios, **8** comandos na tela, **9** painel de dano, **0** limpa a lista e o maior combo. O F1 e o F2
-  se fecham um ao outro (as teclas numéricas são dos dois). Uma luta qualquer serve (`WOTM_MATCH=3,1,1` = Togera contra Congar no Centro); a fase 12 (`training`, `WOTM_MATCH=3,1,12`)
+por último: é o gancho mais de fora do `update`/`takeHit`/`takeDamage`), desenho, painel e números do HUD em
+`native/runtime/wotm_trainview.inc` (incluído pelo `wotm_live.inc`), HUD do boneco no `wotm_overrides.cpp` (`wotmTrainHud`), opções no
+painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do menu no `wotm_padsel.inc`, estado compartilhado em
+`native/wotm_training.h`. Investigações do menu, do pause e do HUD: `treino_menu_fluxo.md`, `treino_pausa.md`, `treino_hud.md`.
+- **Ligar:** linha **TRAINING** na tela de modos de 1 jogador (tela 2, embaixo de ENDURANCE). Ela arma o modo e o fluxo pula a
+  escolha do número de CPUs (tela 12) e das regras (tela 15): vai direto à seleção (1 CPU, `m_killTarget` 0, luta sem fim), depois à
+  fase, e o `rtMain(first)` da luta liga o modo. Voltar ao menu principal (ou escolher outro modo) desarma e desliga. Também
+  `WOTM_TRAINING=1` desde o início (qualquer luta, por exemplo `WOTM_MATCH=3,1,1`). A fase 12 (`training`, `WOTM_MATCH=3,1,12`)
   carrega, mas é uma arena quase toda preta que o jogo não usa.
+- **Opções:** no pause (START), com o modo ligado, a lista fica CONTINUE, RESET POSITIONS, VIBRATION, RECOMPILED OPTIONS, **TRAINING
+  OPTIONS**, QUIT (`wotm_pausemenu.inc`: o cursor anda pelas linhas da tela e o jogo recebe o item lógico, linha 4 = item 5, que o
+  retail ignora, linha 5 = item 4, o QUIT; a lista sobe meia linha). A caixa 3D do jogo (`m_cs610`, tamanho fixo) é escondida
+  (`hierSetCsDrawMe`) e a do pause passa a ser nativa (`wotm_pausemenu::drawBox2d`, debaixo do texto, do tamanho da lista), em todo
+  pause. TRAINING OPTIONS abre o painel nativo do menu com as linhas: esferas dos golpes, caixas do corpo, cápsulas de empurrão
+  (desligadas por padrão), boneco (parado, CPU, sempre bloqueia, bloqueia depois do 1º acerto), **dificuldade da CPU** (a do jogo,
+  fácil, médio, difícil: escrita em TheGame +0x1203CC no `Monster::update` enquanto não é "a do jogo"; a original volta no "sim" do
+  QUIT e no menu principal, para não ir ao save), recarga de vida (100, 75, 50, 25, 10% ou sem recarga), medidores
+  (normal, sempre cheios, sempre na fúria), comandos na tela, painel de dano e limpar a lista e o maior combo. O menu F2 de antes saiu.
+- **RESET POSITIONS:** é o RESTART do jogo renomeado, com o ARE YOU SURE respondido sozinho (gancho do `areYouSure`, que refaz o
+  "sim": `shell` +0x2BA4 = 0, +0x2B40/+0x2B44 = +0x2B48, `snd_StopAllSounds`, som 0x4F, `gExitDialog` 0, devolve 1). O `rtMain` sai
+  com o `m_restart` que o overlay pôs, e o `TheGame::ResetLevel` + `rtMain(0)` põem monstros e fase (prédios) como no começo, sem
+  recarregar arquivos. Log `[treino] reset positions`.
+- **Janelas escondidas:** painel, comandos, esferas e caixas só com a luta rodando (`wotm_training::windowsHidden`): somem na pausa
+  (o `displayDialog` rodou há menos de 200 ms), no "sim" de qualquer ARE YOU SURE (QUIT ou reset: `g_inFight` falso na hora) e voltam
+  na entrada do `rtMain`. O atlas da fonte vem do último `fontSetTexId` (`wotm_training::g_fontTex0`): a luta do treino não escreve
+  texto do jogo, e o do último quadro com texto era o do menu até o primeiro pause (janelas vazias ou só depois do pause).
+- **Intro pulada:** no `rtMain(first)` o treino arma o pulo (10 s); o gancho do `Monster::updateCinema` faz o caminho do START do
+  jogo (`movieAborted` 1, `fadeOutAndIn(4)`, `stopAllActiveActions` pelo `TaskManager::global` em 10 fields), então posições
+  iniciais, letterbox, música e câmera ficam como o jogo deixa. O RESET POSITIONS não arma. Log `[treino] intro pulada`.
+  Investigação: `docs/investigacoes/2026-10-24/treino_intro.md`.
+- **Fonte:** os textos do treino (painel, comandos, números do HUD) saem com os glifos do jogo (`wotm_padsel::text`, atlas do
+  quadro) pelo `scene.drawQuads`, com a célula estreitada para 78% (a fonte deixa uma letra de vão; células sobrepostas se cortam). O
+  atlas não tem `/`, `>` e `+`: saem como traços desenhados. Linhas do painel curtas, em maiúsculas. Foto:
+  `docs/screenshots/2026-10-23/2026-10-23_modo_treino_fonte_do_jogo.png`.
+- **HUD do boneco:** o HUD 1 do próprio jogo (o do jogador 2, à direita), `trainingHud` no `wotm_split4.inc`: na saída do
+  `Hud::update` do HUD 0, o update do HUD 1 com `m_viewSlot[1]` trocado pelo slot do boneco e o `_cs` da câmera 1 trocado pelo da 0
+  (fora da vista unificada, no modo de entrada do versus, o HUD i fica preso à câmera i, e a 1 segue o boneco: sem a troca o HUD
+  aparecia no mundo, preso ao Congar). O "WINS n" que o `Hud::update` escreve no versus (modos 2 a 6) não sai no treino (ganchos do
+  `fontSpritePrint(Right)XY` com os dois buffers do Hud). Medidas do HUD do P1 em `wotm_training::hud`. Por cima das barras de vida e de stamina do P1 e
+  do boneco, os números (vida atual / máxima; na stamina, o valor atual com os algarismos empilhados dentro da barra). Só na luta de 1 jogador em tela cheia com o HUD do jogo
+  à mostra (sem letterbox). O painel de dano e os comandos ficam abaixo dos HUDs (43% da altura). Foto:
+  `docs/screenshots/2026-10-23/2026-10-23_modo_treino_hud_boneco.png`.
 - **Golpes:** o jogo não tem caixa de golpe; cada teste é uma esfera varrida do ponto do osso no quadro anterior até o atual
   (`hdSphereTest`) contra os cascos de colisão. Os ganchos marcam o teste de golpe em curso (`collisTestCloseRangeAttack`: soco e combo;
   `Pickup::collisTestBatAttack`: objeto longo; `StateGetupAttack::update`; `Weapon::WeaponHD`: projéteis e objetos arremessados;
@@ -106,7 +140,7 @@ por último: é o gancho mais de fora do `update`/`takeHit`/`takeDamage`), desen
 - **Dano:** o `takeHit` guarda o dano pedido e o `source` do `HitEvent::s_takeHitInfo`; o `takeDamage` mede a vida antes e depois (o
   valor exato, com bloqueio, fúria e dificuldade). Fogo e choque (sem `takeHit`, um pouco por quadro) viram um registro só enquanto
   continuam. O painel (canto de cima à direita, dentro do quadro: sai nas fotos do `WOTM_SHOTS`, some no modo foto) mostra o último dano
-  com o pedido e o tipo, o combo e o maior combo, os 6 últimos, os dados de quadro e a vida e a stamina de cada um. O combo são os
+  com o tipo (e o BASE, o dano que o golpe pediu, quando o aplicado foi outro), o combo e o maior combo, os 4 últimos e os 3 últimos golpes nos dados de quadro. O combo são os
   golpes que a vítima levou sem se recuperar: emenda quando ela ainda estava num estado de reação na entrada do `takeHit` (ou o dano
   veio até 3 quadros depois do anterior), e termina quando a reação depois do último golpe fecha. Tipos
   pelo `source`: 2 e 11 corpo a corpo, 3 objeto na mão, 1 projétil, 7 butt slam, 8 e 13 arremesso, 5, 6, 12, 14 e 20 especial. Com o
@@ -118,12 +152,12 @@ por último: é o gancho mais de fora do `update`/`takeHit`/`takeDamage`), desen
   vítima (Recoil, KnockBack, Grappled, BeingThrown, Stunned...) com a duração. No painel, o golpe que acertou mostra a reação (as
   emendadas somadas) e a vantagem (fim da reação − fim do golpe). Golpes sem esfera (arremesso, especiais de cone, Counter sem acerto)
   aparecem com início "-" e ativo 0. Log: `[treino] golpe ...` e `[treino] reacao ...` nos 40 primeiros.
-- **Comandos na tela (tecla 8):** o `GamePad` do monstro (Monster +0x5024, um byte por botão; 0xC..0xF esquerda, direita, frente, trás)
+- **Comandos na tela:** o `GamePad` do monstro (Monster +0x5024, um byte por botão; 0xC..0xF esquerda, direita, frente, trás)
   lido na saída do `update` (o `clearInputs` é no começo do próximo; o lock-on alternado devolve os bytes originais na saída) do P1 e
   do primeiro boneco (slot 4; escondido com o boneco parado). Histórico de 12 linhas no lado esquerdo da faixa 4:3, a mais nova em
   cima: quadros segurados, seta (relativa ao monstro, frente para cima) e os botões nos ícones do dispositivo do jogador
   (`wotm_prompts::cellFor`). Investigação: `docs/investigacoes/2026-10-23/treino_entradas.md`.
-- **Boneco (tecla 5, `WOTM_TRAINING_DUMMY`):** as IAs (slots a partir de `m_numPlayers`). 0 parado: pad desligado (Monster +0xF9, o
+- **Boneco (`WOTM_TRAINING_DUMMY`):** as IAs (slots a partir de `m_numPlayers`). 0 parado: pad desligado (Monster +0xF9, o
   `setPadEnabled`), regravado a cada quadro; não andam nem atacam, mas recuam, caem e são agarradas. 1 CPU: a IA do jogo. 2 sempre
   bloqueia e 3 bloqueia depois do 1º acerto: o gancho do `Ai::updateInputs` (0x101788, a0 = Monster +0x4E0; só roda com o pad
   ligado, depois do `clearInputs`) não chama a IA e segura L1+R1 (lock-on, virado para o alvo) e R2 (defesa, `StateBlock`); no 3, só
@@ -131,8 +165,8 @@ por último: é o gancho mais de fora do `update`/`takeHit`/`takeDamage`), desen
   no 1500 do gancho.
 - **Recarga e medidores:** recarga (padrão ligada, 100%): depois de 1,5 s sem dano o jogador volta cheio e o boneco ao % escolhido
   (`WOTM_TRAINING_HEALTH`; a vida acima do % também baixa); um golpe que mataria (até 1,35 x o pedido, a escala do difícil) enche a
-  vida antes; o "vencer a luta" do F1 (100000) passa. Medidores (tecla 7, padrão ligado): como as trapaças do F1, em todos os
-  monstros, stamina cheia (StaminaMeter +0x460, sem exaustão) e especial liberado (`m_specialWeapon` +0xF3).
+  vida antes; o "vencer a luta" do F1 (100000) passa. Medidores (padrão sempre cheios): em todos os monstros, stamina
+  cheia (StaminaMeter +0x460, sem exaustão) ou na fúria (o maxLevel, +0x468) e especial liberado (`m_specialWeapon` +0xF3).
 - Conferido em 2026-10-23 sem teclado (`WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_TRAINING=1`, com e sem `WOTM_TRAINING_DUMMY=1`, fotos
   `WOTM_SHOTS`): caixas dos dois monstros, esferas dos socos do Congar (vermelhas no acerto) e dos tiros dos helicópteros, painel com
   dano, combo e vida recarregada, 10 de 10 ganchos, 60 quadros/s. Foto: `docs/screenshots/2026-10-23/2026-10-23_modo_treino_painel.png`.
@@ -312,9 +346,9 @@ A tabela é conferida contra o código por `python tools/wotm_env.py` (lista o q
 | `WOTM_LOCKTOGGLE=1` | lock-on alternado (mod; aba FEATURES do "Recompiled options"): um toque trava, outro solta, em vez de segurar. Gancho na saída dos `PadFlags::updateHistory{0,1,2}`: os contadores de quadros segurados do lock-on (`PadFlags` +0x1658/+0x165E) passam a valer "segurando" ou "solto" conforme o estado alternado de cada jogador humano, antes de a configuração do controle decidir o lock-on e o mapeamento do movimento (regravar só o lock-on do quadro depois deixava o movimento de solto); os reais voltam antes do próximo `updateHistory`; alvo travado (`m_pinTarget`) morto desliga o estado; ao travar, o `m_pinTarget` já recebe o monstro vivo mais perto (distância 3D; o `getClosestTargetable` do `updateLock` pesa também a direção do monstro) e o `updateLock` o mantém. Na configuração 0 do controle (`PadFlags` +0x16EC), gancho no `interpretInputs` troca os bytes do `GamePad`: R1 físico só alterna o lock-on, L1 vira a defesa (byte do R2), L2/R2 andam de lado (bytes do L1/R1; travado, entram como esquerda/direita, que o jogo já converte em andar de lado), o L2 do jogo (câmera) fica sem botão; travado, esquerda/direita do direcional (cruas no `scePadRead`, porta = jogador) trocam o `m_pinTarget` para o monstro vivo seguinte na tela e não movem; travado, o analógico (e o direcional) vale em relação à câmera: a direção na tela vira um vetor no chão pelos eixos do `_cs` da vista (o "cima" dele quando a câmera olha quase de cima) e é reescrita nos bytes cima/baixo/esquerda/direita do `GamePad` no referencial do monstro (frente = para o alvo), só na configuração relativa ao monstro (`updateInput0ConfigCR`, `PadFlags` +0x16E4 = 0); na relativa à tela (`ConfigSR`, que o jogo só liga na vista unificada e no Crush; na vista normal o humano fica na CR, `75f5be1:docs/investigacoes/2026-10-22/camera_controle_cr_sr.md`) o próprio jogo já faz essa projeção, e convertê-la de novo fazia "para cima" ir para trás ou de lado com a câmera fora das costas do monstro; levar dano não troca o alvo travado (o retail não mexe no `m_pinTarget` no `takeHit`); linhas `[lockon]` |
 | `WOTM_ENEMYBARS=1` | barras de vida e energia sobre os inimigos (mod; aba FEATURES do "Recompiled options") no lugar do ícone de vida (bolinha com o número). **Sem a variável, ligadas sozinhas na luta de 3 ou 4 jogadores** (o HUD do multijogador, desde 2026-10-21): nos quadrantes o ícone das vistas de baixo vinha com o deslocamento do quadrante duas vezes no y (e o da coluna da direita no x), abaixo da tela; o gancho volta esse deslocamento, prende o bloco dentro da vista e não usa o ajuste de widescreen do x; o teto de retângulos de barra por quadro passou de 512 a 2048 (com 4 vistas a vista 3 ficava sem). Foto em `docs/screenshots/2026-10-21/2026-10-21_luta_4_jogadores_barras_inimigos.png`. Gancho no `Hud::drawHealthIcon` guarda o monstro; o do `ScreenPolys::addPoly`, chamado de dentro dele, não monta o número nem o anel e manda, centradas onde o primeiro quadrado ficaria, duas barras sem textura (retângulos de tela, `wotmBarRect`): no estilo das barras do HUD do jogador (moldura preta, cinza e preta; faixas de cor medidas num print; vazio escurece o fundo): vida (`m_health`/`m_maxHealth`, +0x44C/+0x448; verde, dano recente em vermelho que segura ~0,5 s e escoa) e energia (`StaminaMeter` em +0x460, `cur`/`max`; azul, cinza esgotada). Desde 2026-10-19 é um bloco só por inimigo (`POS_FRONTEIRA.md`, item 2): retrato à esquerda na altura toda (a cara da fúria quando `m_boostFull`, +0xF4, como o `hierSetSwitch` do `Hud::update`), vida em cima e, embaixo, o botão do especial (aceso com `m_specialWeapon`, +0xF3, como o `isSpecialAvailable`, no vermelho do ícone do HUD do jogador) e a energia, mais fina e mais curta; cada peça com o próprio contorno preto, a faixa cinza entre elas compartilhada e um contorno preto por fora. O retrato é a última entrada do `.RTX` do monstro (T8H 128x64, normal à esquerda e fúria à direita), desenhado com o TEX0 que o próprio NGP do monstro guarda (`wotmBarTex`); V vai de 64 a 0, como o jogo desenha (V = 0x80 - v). Desde 2026-10-20 a energia acima de 100% sai como na barra do jogador (`Hud::update`): rosa por cima do azul na fração `(cur - max) / (maxLevel - max)` (`StaminaMeter` +0x10, +0 e +0x8) e, com a fúria cheia (`m_boostFull`), a barra toda pisca entre roxo e rosa, ciclo de 6 quadros com 2 em rosa (cores e ritmo medidos numa gravação a 60 quadros/s da barra do jogador com `WOTM_CHEATS=furia`) |
 | `WOTM_DAMAGEPOP=1` | números de dano (mod; aba FEATURES do "Recompiled options"). Na entrada do `Monster::update`, o que a vida (`m_health`) caiu desde a anterior vira um número (`wotmDamagePopup`), que a janela projeta com a câmera da cena nativa (`GetWorldToScreenEx`), sobe e some em ~1 s; os dígitos são glifos da fonte do jogo (a do "WINS": célula e tamanho de `fonts[]`, modo do atlas e TEX0 copiados na chegada; mesma conta do `FontText::glyph`), tingidos pela cor do GS. O tipo vem do último `Monster::takeHit` da vítima, pelo `source` do `HitEvent::s_takeHitInfo` (+0x10): 1, 5, 6, 12, 14 e 0x14 = especial (ciano), 8 e 13 = arremesso (laranja; vale até 45 quadros, a batida no cenário vem depois), o resto = golpe (branco); sem `takeHit` recente (fogo, choque, queda), branco. Lugar: o ponto do golpe (`s_takeHitInfo.pos`) ou o monstro um pouco acima |
-| `WOTM_TRAINING=1` | modo treino desde o início (seção "Runtime: modo treino"; o F2 na luta também liga): esferas dos golpes, caixas do corpo, painel de dano, CPUs paradas e vida recarregada |
-| `WOTM_TRAINING_DUMMY=<n>` | modo treino, o boneco (as CPUs): 0 parado (padrão, o pad desligado), 1 a IA do jogo, 2 sempre bloqueia, 3 bloqueia depois do 1º acerto (tecla 5 do menu F2) |
-| `WOTM_TRAINING_HEALTH=<%>` | modo treino: % da vida máxima a que a recarga leva o boneco (padrão 100; tecla 6 do menu F2) |
+| `WOTM_TRAINING=1` | modo treino desde o início (seção "Runtime: modo treino"; a linha TRAINING do menu também liga): esferas dos golpes, caixas do corpo, painel de dano, CPUs paradas e vida recarregada |
+| `WOTM_TRAINING_DUMMY=<n>` | modo treino, o boneco (as CPUs): 0 parado (padrão, o pad desligado), 1 a IA do jogo, 2 sempre bloqueia, 3 bloqueia depois do 1º acerto (linha do boneco nas opções do pause) |
+| `WOTM_TRAINING_HEALTH=<%>` | modo treino: % da vida máxima a que a recarga leva o boneco (padrão 100; linha da recarga nas opções do pause) |
 | `WOTM_ANNOUNCER=0` | desliga o narrador (padrão ligado; opção NARRATOR da aba FEATURES do "Recompiled options": OFF ou GODZILLA SAVE THE EARTH, a voz de `narrator/`). Na tela de "press start", uma vez por abertura do jogo, `introsound.mp3` quando a câmera para (primeira chamada do `screenWaitForStart`, que só roda no fim da transição); o Start (`changeScreen(20, 1)`) o corta. Ao confirmar uma fase (tela 8 do jogo, no `changeScreen(8, 99)`: `midtownpark`, `gamblersgulch`, `rosdalecanyon`, `metrocity`, `centuryairfield`, `atomicisland`, `baytown`, `clubcaldera`, `tsunopolis`, `ufo`, `capitol`, `training`, `lakepowell`, `minibaytown`, `volcano`, `tokyodeathmatch`, `dodgeball`, `bigshot`, `crushorama`) ou um monstro (telas 3 e 6 nativas e seleção de 3 e 4 jogadores) toca `<nome>.mp3` (`congar`, `robo47`, `togera`, `ultrav`, `preytor`, `kineticlops`, `magmo`, `raptros`, `agamo`, `zorgulon`, `goliathprime`/`assboss`, `cerebulon`) junto com o som de confirmar do jogo, no volume mestre dos efeitos; procura em `mods/<mod>/narrator/`, `narrator/` ao lado do ELF e `narrator/` na raiz do repo (`wotm_narrator.inc`). Na seleção de monstros com `WOTM_NATSEL=0` (tela do jogo) não toca |
 | `WOTM_ASPECT=L:A` | proporção fixa do quadro nativo (`16:9`, `21:9`, `4:3` = original); sem ela segue a janela, que abre em 16:9 (seção "Câmera e instantâneo") |
 | `WOTM_CAPTUREFIX=0`/`1`/`2` | tela cheia sem borda e captura do OBS (`wotm_live.inc`, `captureFriendlyBorderless`): com o foco, a janela WS_POPUP do tamanho exato do monitor era promovida pelo driver a tela cheia fora do DWM (OBS congelava na captura nova e ficava preto no BitBlt). 1 (padrão) tira o WS_POPUP; 2 também deixa a janela 1 px mais alta que o monitor; 0 como o raylib deixa |

@@ -1021,6 +1021,11 @@ namespace
         {
             wotmLoadFreeze(false);
             wotmCheckLoadEnd(rdram, ctx, runtime);
+            if (GPR_U32(ctx, 4) && wotm_training::g_menuArmed.load() && !wotm_training::g_on.exchange(true))   // rtMain(first): a luta comecou
+                std::fprintf(stderr, "[treino] modo treino ligado (luta do TRAINING)\n");
+            wotm_training::g_inFight = true;   // tambem a volta do RESET POSITIONS (rtMain(0))
+            if (GPR_U32(ctx, 4))
+                wotm_training::g_introMs = wotm_training::nowMs();   // a intro desta luta pode ser pulada (wotm_training.inc)
         }
         g_origRtMain(rdram, ctx, runtime);
     }

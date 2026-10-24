@@ -1,6 +1,6 @@
-// Modo treino (POS_FRONTEIRA.md, item 9; WOTM_TRAINING=1 ou F2 na luta): ganchos na thread do EE que gravam o que o jogo testa nos
+// Modo treino (POS_FRONTEIRA.md, item 9; WOTM_TRAINING=1 ou a linha TRAINING do menu): ganchos na thread do EE que gravam o que o jogo testa nos
 // golpes e o dano de cada um. Incluido pelo wotm_overrides.cpp; estado compartilhado em native/wotm_training.h; os volumes do corpo
-// sao lidos no wotmCaptureFrame (wotm_live.inc) e o desenho e o menu F2 estao no wotm_live.inc. Investigacoes:
+// sao lidos no wotmCaptureFrame (wotm_live.inc) e o desenho e o painel de opcoes (menu de pausa) estao no wotm_live.inc. Investigacoes:
 // docs/investigacoes/2026-10-23/treino_hitboxes.md e treino_dano.md.
 //
 // - Golpes: o jogo nao tem caixa de golpe. Cada teste e uma esfera varrida (hdSphereTest, do ponto do osso no quadro anterior ate o
@@ -465,6 +465,8 @@ namespace wotm_train
         }
         const int slot = slotOf(rdram, m);
         const bool on = g_on.load(std::memory_order_relaxed);
+        if (on)
+            applyDifficulty(rdram, kGameObj + kDifficulty);   // dificuldade da CPU escolhida no painel (ou a do jogo de volta)
         if (slot >= 0)
         {
             const uint32_t bit = 1u << slot;
@@ -490,9 +492,9 @@ namespace wotm_train
                 if (std::isfinite(h) && mx > 0.f && h > 0.f && std::fabs(h - target) > 0.01f && frameNow(rdram) - g_lastDamage[slot] > 90u)
                     wrf(rdram, m + kHealth, target);
             }
-            if (on && (opts & kMeters))
-            {   // como as trapacas do F1 (wotm_overrides.cpp, monsterUpdateCheats), em todos: stamina cheia e especial liberado
-                std::memcpy(rdram + m + 0x470, rdram + m + 0x460, 4);   // StaminaMeter (+0x460): cur = max
+            if (const int meters = g_meters.load(std::memory_order_relaxed); on && meters != MOff)
+            {   // como as trapacas do F1 (wotm_overrides.cpp, monsterUpdateCheats), em todos: stamina cheia ou na furia, especial liberado
+                std::memcpy(rdram + m + 0x470, rdram + m + (meters == MRage ? 0x468 : 0x460), 4);   // StaminaMeter: cur = max ou maxLevel
                 std::memset(rdram + m + 0x474, 0, 8);                    // recoverPool, exhaustTimer
                 std::memset(rdram + m + 0x480, 0, 4);                    // exhausted
                 rdram[m + 0xF3] = 1;                                     // m_specialWeapon
@@ -510,6 +512,67 @@ namespace wotm_train
         }
     }
 
+
+    // Pular a intro (docs/investigacoes/2026-10-24/treino_intro.md): o mesmo caminho do START no Monster::updateCinema (movieAborted,
+    // fadeOutAndIn(4) e ActionDispatch::stopAllActiveActions pelo TaskManager::global), so na intro: armado pelo rtMain(first) da luta
+    // (g_introMs), vale por 10 s e desarma no primeiro uso. O RESET POSITIONS (rtMain(0)) nao arma.
+    PS2Runtime::RecompiledFunction g_origCinema = nullptr;
+    void callFn(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2)
+    {
+        const PS2Runtime::RecompiledFunction f = rt->lookupFunction(fn);
+        if (!f) return;
+        const R5900Context saved = *ctx;
+        const uint32_t a[3] = {a0, a1, a2};
+        for (int i = 0; i < 3; ++i)
+            ctx->r[4 + i] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(a[i])));
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->pc = fn;
+        f(rdram, ctx, rt);
+        *ctx = saved;
+    }
+    void cinemaUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_origCinema(rdram, ctx, runtime);
+        if (!g_on.load(std::memory_order_relaxed) || !g_skipIntro.load(std::memory_order_relaxed))
+            return;
+        const int64_t armed = g_introMs.load(std::memory_order_relaxed);
+        if (armed < 0 || nowMs() - armed > 10000)
+            return;
+        if (!rd32(rdram, wotm::sym::moviePlaying) || rd32(rdram, wotm::sym::movieAborted) || rd32(rdram, kGameObj + 0x120454u) ||
+            rd32(rdram, kGameObj + 0x120458u))
+            return;
+        g_introMs = -1;
+        const uint32_t one = 1;
+        std::memcpy(rdram + wotm::sym::movieAborted, &one, 4);
+        callFn(rdram, ctx, runtime, wotm::fn::fadeOutAndIn__7TheGamei, kGameObj, 4u, 0u);
+        callFn(rdram, ctx, runtime, wotm::fn::add__11TaskManagerPFv_Uii, wotm::sym::x_11TaskManager_global,
+               wotm::fn::stopAllActiveActions__14ActionDispatchv, 10u);
+        std::fprintf(stderr, "[treino] intro pulada\n");
+    }
+
+    // "WINS n" do Hud::update (m_gameMode 2..6, o versus do treino): no treino nao conta nada e o do boneco cai sob o painel. O Hud
+    // escreve com sprintf em dois buffers do .rodata do Hud (sem simbolo no ELF: o da esquerda e o da direita) e os passa ao
+    // fontSpritePrint(Right)XY; com o treino ligado esses dois nao saem
+    constexpr uint32_t kWinsLeft = 0x006EA920u, kWinsRight = 0x006EA938u;
+    PS2Runtime::RecompiledFunction g_origPrint = nullptr, g_origPrintRight = nullptr;
+    bool skipWins(R5900Context *ctx)
+    {
+        const uint32_t s = GPR_U32(ctx, 7) & 0x1FFFFFFFu;
+        if (!g_on.load(std::memory_order_relaxed) || (s != kWinsLeft && s != kWinsRight))
+            return false;
+        ctx->pc = GPR_U32(ctx, 31);
+        return true;
+    }
+    void printXY(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != wotm::fn::fontSpritePrintXY__FiiiPc || !skipWins(ctx))
+            g_origPrint(rdram, ctx, runtime);
+    }
+    void printRightXY(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != wotm::fn::fontSpritePrintRightXY__FiiiPc || !skipWins(ctx))
+            g_origPrintRight(rdram, ctx, runtime);
+    }
     // Boneco que bloqueia: no lugar da IA (o Ai::updateInputs so roda com o pad ligado, depois do clearInputs do GamePad), segura
     // L1+R1 (lock-on: fica virado para o alvo) e R2 (defesa). "Depois do 1o acerto": enquanto esta numa reacao e ate 1 s depois do
     // ultimo golpe que levou (defendido ou nao).
@@ -570,6 +633,9 @@ void wotmTrainingInstall(PS2Runtime &runtime)
         {kSphereSwept, &g_origSwept, &sphereSwept, "hdSphereTest (varrido)"},
         {kSphereStatic, &g_origStatic, &sphereStatic, "hdSphereTest (parado)"},
         {kAiInputs, &g_origAi, &aiInputs, "Ai::updateInputs"},
+        {wotm::fn::updateCinema__7Monster, &g_origCinema, &cinemaUpdate, "Monster::updateCinema"},
+        {wotm::fn::fontSpritePrintXY__FiiiPc, &g_origPrint, &printXY, "fontSpritePrintXY (WINS)"},
+        {wotm::fn::fontSpritePrintRightXY__FiiiPc, &g_origPrintRight, &printRightXY, "fontSpritePrintRightXY (WINS)"},
     };
     int n = 0;
     for (const H &h : hooks)
@@ -580,6 +646,6 @@ void wotmTrainingInstall(PS2Runtime &runtime)
         }
         else
             std::fprintf(stderr, "[treino] sem gancho: %s\n", h.name);
-    std::fprintf(stderr, "[treino] %d de %zu ganchos; modo treino %s (WOTM_TRAINING ou F2 na luta)\n", n, sizeof hooks / sizeof hooks[0],
+    std::fprintf(stderr, "[treino] %d de %zu ganchos; modo treino %s (WOTM_TRAINING ou TRAINING no menu)\n", n, sizeof hooks / sizeof hooks[0],
                  g_on.load() ? "LIGADO" : "desligado");
 }
