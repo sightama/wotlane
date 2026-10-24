@@ -18,7 +18,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 9 | Modo treino com hitboxes e dano na tela — **na master em 2026-10-24** (aprovado pelo dono; faltam os extras da seção 9) | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
-| 12 | Seleção com prévia 3D de todos os selecionados | 1, 11 | médio |
+| 12 | Seleção com prévia 3D de todos os selecionados — **feito pelos itens 8 e 11** (sobra a luz da cena) | 1, 11 | médio |
 | 13 | Campanha (adventure) com até 4 jogadores | 11, 7 | o mais alto |
 
 **Em qualquer brecha** (baratos, sem dependência): remapear controles no launcher, modo foto, gráficos de PC (seção "Brechas").
@@ -282,9 +282,8 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   moderna, lock-on enquadra os dois, recentralizar devagar com opção, mouse gira a câmera (pede teclado padrão novo e menus com mouse,
   etapas 7 a 9).
 - **Pendências (vieram do plano, apagado em 2026-10-23):**
-  - Escalada, rampa e planeio: sem o balanço do jogo (segundo teste da etapa 1), a câmera moderna não aproxima nem inclina ao escalar
-    ou na rampa. Ninguém conferiu ainda; o medidor de salto do `WOTM_ORBITLOG` ajuda quando o dono notar algo.
-  - Aba CAMERA (etapa 6): conferida só por roteiro.
+  - Escalada, rampa e planeio sem o balanço do jogo e a aba CAMERA: saíram em 2026-10-24 (o dono acha a câmera boa como está e
+    conferiu a aba à mão).
   - Páginas do cartão com `WOTM_SAVEAUTO=0`: sem mouse (o gancho do `McPage::updateMenuPos` só é instalado com o salvamento
     automático, onde a única página com menu é o "salvar?" da aventura).
   - Legenda da lista de saves ao gravar (na fase): de fora de propósito, porque a faixa preta de baixo cobriria a luta; só ao carregar.
@@ -532,10 +531,10 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   (~31 ms de CPU por quadro com 4 vistas no 3200G).
 
 ### 12. Prévia 3D na seleção
-- Hoje a seleção mostra o monstro de cada jogador; com 4 são 4 modelos carregados no Shell ao mesmo tempo.
-- Base pronta (2026-10-21): `native/wotm_model.hpp` monta qualquer monstro/traje animado direto do disco, sem o Shell
-  (`passos/MODELOS_3D.md`), com misturas do GS, textura rolando, LOD, fogo do Agamo e lens flare; já usado na lista de saves
-  (item 5). Para a seleção falta: um `Renderer` por jogador, trocar de traje recarregando o `.NGP` e a luz do jogo.
+- **Feito, na prática, pelos itens 8 e 11** (texto revisto em 2026-10-24): a seleção nativa (telas 3, 6, 7, 18, 19 e a de 3 e 4
+  jogadores, `wotm_padsel.inc`) desenha o monstro 3D animado de cada jogador com o `native/wotm_model.hpp` (o mesmo da lista de saves,
+  `passos/MODELOS_3D.md`), um `Renderer` por jogador e os modelos guardados por monstro e traje (`g_selModel`, `g_selCache`).
+- O que sobra: a luz é a do desenhista do modelo, não a da cena do jogo (o monstro na seleção não fica iluminado como na luta).
 
 ### 13. Campanha com até 4
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no
@@ -593,8 +592,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 - **Online:** não é prioridade. Com o multiplayer local de 4 (item 11), o Steam Remote Play Together e o Parsec já permitem jogar
   online sem netcode: só testar e documentar. Netcode próprio (rollback) fica descartado por ora: exigiria provar que a lógica dá
   sempre o mesmo resultado com os mesmos comandos.
-- **Viewer web de monstros com várias skins:** ideia em `VIEWER_WEB.md`. Exige extrair assets: a extração roda na máquina do usuário a
-  partir da ISO dele; nada extraído vai para o repo (regra 1 do `CLAUDE.md`).
+- **Viewer web de monstros com várias skins: pronto** (2026-10-24, projeto à parte): https://yanm1103.github.io/wotm-model-museum/.
+  A avaliação original está em `VIEWER_WEB.md`.
 
 ## Ideias do dono ("viagens")
 - **LOD fixo / mod low-poly (2026-10-23):** uma opção no painel para fixar o LOD foi investigada

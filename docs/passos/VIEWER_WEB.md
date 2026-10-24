@@ -1,6 +1,7 @@
 # Visualizador de modelos 3D no navegador (ideia, avaliada em 2026-10-14)
 
-(Índice dos docs no `CLAUDE.md`.) Só a avaliação de viabilidade; nada foi implementado ainda.
+(Índice dos docs no `CLAUDE.md`.) **Pronto em 2026-10-24, em projeto à parte:** https://yanm1103.github.io/wotm-model-museum/. O
+que segue é a avaliação de viabilidade de 2026-10-14, guardada como histórico.
 
 ## O que já existe
 - **Formato resolvido** (`docs/FORMATOS.md`, `NATIVO.md`): `.NGP` (zip `IE\3\4` na fase, cru no monstro; imagem pré-ligada em
