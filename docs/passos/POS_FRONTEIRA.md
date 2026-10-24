@@ -15,7 +15,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 6 | Ícone de salvamento automático — **feito em 2026-10-20** | 3 | baixo |
 | 7 | Câmera moderna (orbital) com movimento relativo à câmera — **feito em 2026-10-22** (etapas 0 a 9 na master, com teclado novo e menus com mouse: `75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md`) | — | alto |
 | 8 | Mods que adicionam skins e monstros (sem substituir) — **skins (partes 1 a 4) na master em 2026-10-23** (falta elimination, CUSTOM e monstros novos) | 3, 4 | médio/alto |
-| 9 | Modo treino com hitboxes e dano na tela | — | médio |
+| 9 | Modo treino com hitboxes e dano na tela — **primeira versão na branch `modo-treino` em 2026-10-23** (falta o dono conferir o F2) | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
 | 12 | Seleção com prévia 3D de todos os selecionados | 1, 11 | médio |
@@ -354,6 +354,20 @@ no elimination (modo 6 esconde o traje) e os quadros dos monstros fora do telão
   monstros de mods (8): quem mexe em `MonsterParse` vê o efeito na hora. Os modos de debug que já existem (`NATIVO.md`: modo deus,
   vencer a luta, `WOTM_AIVSAI`) são a base para um adversário parado ou controlado.
 
+**Primeira versão em 2026-10-23** (branch `modo-treino`; `NATIVO.md`, "Runtime: modo treino"; investigações
+`docs/investigacoes/2026-10-23/treino_hitboxes.md` e `treino_dano.md`): `WOTM_TRAINING=1` ou F2 na luta. Esferas varridas que os golpes
+testam (soco, objeto, ataque ao levantar, projéteis, onda do butt slam), caixas de colisão do corpo, cápsula de empurrão, painel com o
+dano exato (vida antes e depois do `takeDamage`), combo e vida; CPUs paradas (ou lutando) e vida recarregada. Conferido por fotos sem
+teclado; falta o dono testar o F2 ao vivo.
+
+**Falta:**
+1. Desenho do pisão e do agarrão (sem geometria: vítima por distância/cone, `getClosestMonsterToPunch`), da investida (esferas do corpo,
+   Monster +0x2B0), do fogo (`FireBreath::TestCollis`, `hdLosCSTest`) e dos especiais de cone (`StateSonicRoar::testConeCollis`).
+2. Boneco que bloqueia sempre, pula ou agacha: gancho no `Ai::updateInputs` com entrada fixa no `GamePad` (+0x5024).
+3. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; o script de rascunho da
+   investigação vira `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
+4. Entrada pelo menu (single player) e pelo launcher; o Goliath (casco lido com 0 planos no `.NGP`, conferir ao vivo).
+
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção hoje vai de 1 a 9
   (até 10 com o bônus, `findAvailableMonster`).
@@ -575,3 +589,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 - **Pedestres do GTA SA e o CJ jogável em tamanho real:** os pedestres de hoje são partículas (fx 91–99, `VU1CHECK.md`), então trocar
   por NPCs 3D é desenho e animação novos. O CJ depende do item 8. Assets de outro jogo não entram no repo: viriam dos arquivos do
   próprio usuário, carregados como mod.
+- **"Build your own city" (2026-10-23):** montar a própria fase. O jogo não tem editor: a fase é o `LVL/<fase>.NGP` (hier com os
+  interativos, lidos por `dbInitDb`/`dbProcInteractive`; formatos em `docs/FORMATOS.md`), com colisão, os caminhos da IA (`PathNode`)
+  e os prédios destrutíveis. Primeiro degrau viável: um mod (pasta `mods/`) que muda de lugar, tira ou duplica prédios de uma fase
+  existente, documentando o formato pelo caminho; um editor visual (no nativo, com a câmera livre do F5) vem depois. Custo mais alto que
+  o dos chefes jogáveis; fica fora da ordem até o dono escolher.

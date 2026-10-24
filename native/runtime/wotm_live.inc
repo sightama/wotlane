@@ -269,6 +269,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)
 #include "wotm_prompts.inc"   // icones de botao 2D (Kenney) no lugar dos 3D do jogo
+#include "wotm_trainview.inc"   // modo treino: volumes, esferas dos golpes, painel de dano e menu F2
 #define WOTM_HAVE_NATIVE 1
 
 namespace wotm_live
@@ -1162,6 +1163,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.anchors = std::move(anchors);
+    wotm_trainview::capture(ram);   // modo treino: cascos e capsulas do corpo e vida deste quadro
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
@@ -1702,6 +1704,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
             wotm_gamescreens::frame(S.scene, ram, c3, RW, RH);   // mouse nas telas do jogo: retangulo de cada item
             wotm_optscreen::drawOnBoard(S.scene, ram, c3);   // tela de opcoes do jogo
+            wotm_trainview::draw3d();   // modo treino: por cima da cena, sem teste de profundidade
             wotm_live::g_stage = "idle";
             EndMode3D();
         }
@@ -1757,6 +1760,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
         if (!split && !photoHide)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
+        if (!photoHide)
+            wotm_trainview::drawPanel(RW, RH);   // modo treino: painel de dano (vazio desligado)
         EndTextureMode();
         wotm::msaa::g_current = nullptr;
         if (msOn)
@@ -1861,6 +1866,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         static bool open = false;
         if (IsKeyPressed(KEY_F1))
             open = !open;
+        wotm_trainview::draw2d(open);   // modo treino: menu F2 (fecha o F1 ao abrir; as teclas 1..8 sao dos dois) e painel de dano
         uint32_t c = g_wotmCheats.load(std::memory_order_relaxed);
         const uint32_t st = (c & kCheatStaminaMask) / kCheatStamina1;
         if (open)
