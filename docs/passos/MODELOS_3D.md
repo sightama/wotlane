@@ -1,8 +1,7 @@
 # Monstros 3D direto do disco (pose, esqueleto, texturas)
 
-(Índice dos docs no `CLAUDE.md`.) Como montar um monstro animado só com os arquivos de `MON/`, sem o jogo nem dump de RAM. Foi
-feito em 2026-10-20/21 para a lista de saves (monstro em idle sobre a foto da fase, `NATIVO.md`, "Save em JSON") e serve à prévia 3D da
-seleção (item 12) e ao visualizador web (`VIEWER_WEB.md`). Formatos de base (malha, curvas) em `docs/FORMATOS.md`.
+(Índice dos docs no `CLAUDE.md`.) Como montar um monstro animado só com os arquivos de `MON/`, sem o jogo nem dump de RAM. Serve à lista de saves
+(monstro em idle sobre a foto da fase, `NATIVO.md`, "Save em JSON"), à prévia 3D da seleção (item 12) e ao visualizador web (`VIEWER_WEB.md`). Formatos de base (malha, curvas) em `docs/FORMATOS.md`.
 
 ## Código
 | Onde | O quê |
@@ -32,8 +31,7 @@ desenha o monstro no RenderTexture antes do quadro (o `wotm_live.inc` chama), e 
 - Animação `id` = a de `animations[k]` com `head >> 18 == id` (o Monster guarda a k-ésima como `m_anims[id]`, ids 0..299,
   `Monster::initAfterDbLoad`). `startTime` @4, `endTime` @8, `numChannels` u16 @0xC, curvas @0x18. **Idle = 90 (0x5A)**
   (`StateIdle::chooseBaseIdle`; 0x5F cansado, 0x60 com especial). Tempo em quadros de 60/s; o idle do Congar tem 160.
-- Cada curva escreve `val[dataIdx]` (FORMATOS.md, "Animação"). Conferido contra `animOutput.val` de uma luta: 128 de 130 canais
-  iguais (os 2 restantes, 0,007, vêm de uma camada de mistura).
+- Cada curva escreve `val[dataIdx]` (FORMATOS.md, "Animação"). Bate com `animOutput.val` de uma luta em 128 de 130 canais (os 2 restantes, 0,007, vêm de uma camada de mistura).
 
 ## Travessia (matrizes das partes)
 Vetores-linha (`p' = p·M`), filho = `local · pai`. Por nó:
@@ -43,7 +41,7 @@ Vetores-linha (`p' = p·M`), filho = `local · pai`. Por nó:
   Filhos em `+0xCC`, quantidade em `+4`.
   **Só remonta se algum canal estiver sujo:** `firstIdx` (s16 `+0x1E`) e máscara `animating` (u8 `+0xC1`); remonta se algum bit
   `b` da máscara estiver ligado e o canal `firstIdx+b` foi escrito. Senão a matriz é a do arquivo, `atMat[matrixIdx]` (`ci+0xC`,
-  índice em `+0xC4`). Conferido no Robo-47 (`ram_1100`): 35 remontadas, 5 do arquivo, 0 diferenças; sem a regra as garras
+  índice em `+0xC4`). No Robo-47 (`ram_1100`) são 35 remontadas e 5 do arquivo; sem a regra as garras
   (índices 27 e 39) saem viradas.
 - **ANIM_SCALE (38):** lê `val` direto (sem olhar se foi escrito); `pre(+0x40) · escala · post(t + 0x50)`; escala zero corta.
 - GROUP (bit 0 de `+0xA`), LOD (o mais detalhado que o `hierLod` desenharia de perto: o maior índice com `switchOutDis` (`+0x24 + 16i`) > 0; o traje 3 do Togera tem um último nível com 0, nunca desenhado, e pegar o último dava a malha grosseira em A-pose), TRANSLATE, ROTATE, SCALE, SWITCH, CONTROL/ACTION_DATA,
@@ -58,7 +56,7 @@ Vetores-linha (`p' = p·M`), filho = `local · pai`. Por nó:
   `[OBJECT+0x68]` (tag DMA ref, +4 = bloco), matriz do slot `s` em `bloco + 0x10 + 0x40·s`.
 - **Skinning:** 3 ossos por vértice, `w1 = w`, `w2 = frac(w·2048)`, `w3 = 1 - w1 - w2`, slot = `(código & 0x7F) / 4`; depois a matriz
   do objeto. A normal gira só pelo osso x.
-- Conferido contra a paleta de um dump de luta (`ram_1500`): igual. Em outros quadros a paleta da RAM está um quadro atrás do
+- A paleta montada é igual à de um dump de luta (`ram_1500`). Em outros quadros a paleta da RAM está um quadro atrás do
   `atMat` (não é erro do modelo).
 
 ## Texturas
@@ -78,7 +76,7 @@ vale com PRIM.ABE da malha. Modos vistos: `0x44` comum, `0x48` aditiva (Kineticl
 desenha o fundo dentro do RenderTexture para os modos que dependem do destino. Deslocamento de UV: `+0x20/+0x24` do nó, ou os
 canais `+0x30/+0x32` com o bit 0x800 em `+0xC`. No Kineticlops (trajes 0-2) esses canais (142/143) vêm da animação 0x91, que
 só tem essas duas curvas e roda em laço por cima da principal (a idle grava 0 neles): U dá uma volta a cada 80 quadros, V duas.
-Conferido no dump de luta `build/dumps_live/ram_energy_robot.bin` (0,637 e 1,275, proporção 1:2).
+No dump de luta `build/dumps_live/ram_energy_robot.bin`, U e V valem 0,637 e 1,275 (proporção 1:2).
 
 ## Enquadramento
 `Model::computeFraming(id)` amostra a animação inteira e fixa a caixa; sem isso a câmera acompanha o idle (zoom "dançando").

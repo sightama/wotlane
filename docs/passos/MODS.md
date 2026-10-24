@@ -74,9 +74,8 @@ python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da 
 - Alfa: o PNG usa a mesma escala da textura original, como o export a grava. A maioria das texturas do jogo vai de 0 a 0xFF (o dobro
   do opaco 0x80 do GS); nelas o alfa do PNG vale cru, 255 = 0xFF, e o log diz "alfa cru, 255 = 0xFF". Nas que param em 0x80,
   255 = 0x80 (o resto / 2). Na prática: 255 é o opaco que o jogo usa, e o export e o `pack --inject` vão e voltam sem perder nada.
-  Até 2026-10-23 o export achatava tudo acima de 0x80 em 255 e o jogo lia 255 como 0x80: o logo do título (SHELL t140/t141, que o
-  jogo desenha com o vértice em meia opacidade e conta com o 0xFF) saía com metade da opacidade. PNG antigo opaco continua igual;
-  PNG antigo com semitransparência em textura de escala 0xFF sai mais opaco (exporte de novo). Texturas sem alfa no jogo
+  Isso importa em texturas como o logo do título (SHELL t140/t141), que o jogo desenha com o vértice em meia opacidade e contando
+  com o 0xFF. PNG semitransparente de uma versão antiga do kit pode sair mais opaco: exporte de novo. Texturas sem alfa no jogo
   (TEX0.TCC = 0) ignoram o alfa do PNG.
 - Imagem dividida em várias texturas (o logo do título são duas de 256 × 256 lado a lado, de cabeça para baixo): escale a imagem
   inteira uma vez e corte no meio exato, sem sobreposição; cortes feitos à mão com sobra repetem um pedaço na emenda.
@@ -126,7 +125,7 @@ Uma skin é uma pasta em `mods/<mod>/skins/<pasta>/` com um `skin.json`:
 - Ainda não: o elimination. Nele o jogo carrega o traje 0 de todos os monstros uma vez só e os
   jogadores trocam de monstro entre as rodadas sem recarregar: escolher traje ali pede mudar a carga, não só a tela.
 
-Conferido em 2026-10-23 (`WOTM_MATCH=4:roxo,4:3,1`, IA): a skin com o PNG recolorido sai verde e o traje 3 ao lado continua roxo;
+Exemplo (`WOTM_MATCH=4:roxo,4:3,1`, IA): a skin com o PNG recolorido sai verde e o traje 3 ao lado continua roxo;
 skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3. Foto:
 `docs/screenshots/2026-10-23/2026-10-23_skin_mod_png_so_na_skin.png`.
 
@@ -173,7 +172,7 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
   seção 3) fazem o jogo segurar a pose anterior; elimination e minigames não foram testados com ele; o save da aventura não guarda
   custom (a aventura não oferece a casa).
 
-Conferido em 2026-10-23 por roteiro: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,
+Exemplo: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,
 luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
 
 ## Por dentro (para quem mexe no código)
@@ -201,6 +200,6 @@ luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23
   o que vem depois (o log e o `check` avisam). Com PNG isso não acontece: a textura do jogo não muda de tamanho.
 - Os monstros custom usam um tipo do jogo; monstros com arquivos próprios ainda não existem (`TODO.md`, item 8).
 
-Conferido em 2026-10-22 (`WOTM_MATCH=3,1`, `3,1,2,5,1` e `1,3,1` com IA): a pele do Togera em PNG 4x (1024 × 1024 no lugar de 256)
-e o retrato 2x no HUD do jogador e na barra do inimigo; kit com export, edição, pack (PNG, `.VAG`, um som do `SHELL_S.BNK`),
+Exemplo (`WOTM_MATCH=3,1`, `3,1,2,5,1` e `1,3,1` com IA): a pele do Togera em PNG 4x (1024 × 1024 no lugar de 256)
+e o retrato 2x no HUD do jogador e na barra do inimigo; o kit faz export, edição, pack (PNG, `.VAG`, um som do `SHELL_S.BNK`),
 re-export sem perder edição e check. Fotos: `docs/screenshots/2026-10-22/2026-10-22_mods_png_*`.

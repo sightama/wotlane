@@ -34,7 +34,7 @@ def tira_caminhos(linha):
 
 HISTORIA = re.compile(
     r"\b(feit[oa]s? em|corrigid[oa]s? (em|no|na|de passagem)|antes (era|ficava|saía|vinha|dava|zerava|ia|não)|"
-    r"na master|merge\b|conferid[oa]s?\b|relato de)",
+    r"na master|(depois|antes|desde) d[oe] merge\b|conferid[oa]s?\b|relato de)",
     re.IGNORECASE,
 )
 CITACAO = re.compile(r'"[^"\n]*"')  # palavra entre aspas é citada (ex.: a própria regra), não é história
@@ -84,6 +84,8 @@ def checa_todo(texto):
             if inicio and n > MAX_LINHAS_ITEM:
                 erros.append((inicio, f"item com {n} linhas (máximo {MAX_LINHAS_ITEM}): o detalhe vai no doc de referência"))
             inicio, n = None, 0
+    if inicio and n > MAX_LINHAS_ITEM:  # último item do arquivo
+        erros.append((inicio, f"item com {n} linhas (máximo {MAX_LINHAS_ITEM}): o detalhe vai no doc de referência"))
     return erros
 
 
@@ -117,7 +119,7 @@ def main():
     tiradas = {}
     if args == ["--all"]:
         arquivos = [p.relative_to(RAIZ).as_posix() for p in
-                    [RAIZ / "README.md", RAIZ / "CLAUDE.md", *sorted((RAIZ / "docs").glob("*.md")),
+                    [RAIZ / "README.md", RAIZ / "CLAUDE.md", RAIZ / "CONTRIBUTING.md", *sorted((RAIZ / "docs").glob("*.md")),
                      *sorted((RAIZ / "docs/passos").glob("*.md"))] if p.exists()]
         alvo = {a: list(enumerate((RAIZ / a).read_text("utf-8").split("\n"), 1)) for a in arquivos}
     elif args:

@@ -1,7 +1,7 @@
-# Arquitetura e plano (decidido em 2026-10-09; estado em 2026-10-16)
+# Arquitetura e plano
 
 Objetivo: um **port nativo de PC fácil de modar** de War of the Monsters (PS2, NTSC-U). Este documento diz o que cada peça faz, o que mora no repo e o que se gera localmente.
-Direção confirmada em 2026-10-16: **port primeiro**; a decomp só avança na superfície de mod.
+Direção: **port primeiro**; a decomp só avança na superfície de mod.
 
 ## As camadas
 1. **Base: o jogo recompilado.** O [PS2Recomp](https://github.com/ran-j/PS2Recomp) traduz o executável inteiro (5.382 funções, 0 falhas de decodificação, VU0 incluso) para C++ literal
@@ -41,15 +41,15 @@ Direção confirmada em 2026-10-16: **port primeiro**; a decomp só avança na s
    **Estado:** a cadeia existe, mas o cobaia ainda quebra na luta (`docs/passos/NATIVO.md`, "Runtime cobaia"); está parado até o port ter HUD e widescreen.
 
 ## Marcos
-| # | Marco | Estado (2026-10-17) |
+| # | Marco | Estado |
 |---|---|---|
-| 0 | Jogo inteiro recompilado, compila e roda no runtime até o menu | feito |
-| 1 | Filmes (FFmpeg) | feito: `native/wotm_fmv.hpp` toca os `.PSS` de tela cheia e o telão do menu; falta sincronizar o áudio com o relógio do jogo |
-| 2 | Travessia nativa da hierarquia de cena (`world`, céu, listas de `Cs`) | feito: rígidos, skinned, LOD, destrutíveis, prédios fantasma, mapa de ambiente, luz paralela, neblina |
-| 3 | Chegar a uma fase e desenhar objetos e modelos nativos | feito: `WOTM_MATCH` entra direto na luta; geometria 99%+ casada com o VU1 |
-| 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | feito, inclusive o HUD (`hier`, `ScreenPolys`) e os fades de tela (2026-10-16) |
-| 5 | Controle completo, som, FMVs | teclado e som nativos feitos (`wotm_snd.hpp`); gamepad e remapeamento ficam para depois |
-| 6 | Widescreen (primeiro mod), HUD, fades, iluminação e bugs gráficos na ordem do inventário | widescreen, HUD e fades feitos em 2026-10-16; bugs gráficos em andamento; falta a iluminação (`VU1CHECK.md`, "Inventário do port") |
+| 0 | Jogo inteiro recompilado, compila e roda no runtime até o menu | pronto |
+| 1 | Filmes (FFmpeg) | `native/wotm_fmv.hpp` toca os `.PSS` de tela cheia e o telão do menu; falta sincronizar o áudio com o relógio do jogo |
+| 2 | Travessia nativa da hierarquia de cena (`world`, céu, listas de `Cs`) | pronto: rígidos, skinned, LOD, destrutíveis, prédios fantasma, mapa de ambiente, luz paralela, neblina |
+| 3 | Chegar a uma fase e desenhar objetos e modelos nativos | pronto: `WOTM_MATCH` entra direto na luta; geometria 99%+ casada com o VU1 |
+| 4 | Partículas, fonte, `ScreenPolys`, luz, névoa | pronto, inclusive o HUD (`hier`, `ScreenPolys`) e os fades de tela |
+| 5 | Controle completo, som, FMVs | teclado, gamepads (mapa de botões por jogador) e som nativos (`wotm_snd.hpp`, `wotm_pad.inc`) |
+| 6 | Widescreen (primeiro mod), HUD, fades, iluminação e bugs gráficos na ordem do inventário | widescreen, HUD e fades prontos; bugs gráficos em andamento; falta a iluminação (`VU1CHECK.md`, "Inventário do port") |
 | 7 | Mods de exemplo com verificação pelo oracle e pelo cobaia | depois do 6 |
 
 ## Armadilhas já pagas
