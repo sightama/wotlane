@@ -138,7 +138,8 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 
 ```json
 { "id": "goliath", "name": "GOLIATH PRIME", "base": "assboss", "costume": 1,
-  "camera": { "from": "togera", "scale": 200 }, "narrator": "goliathprime" }
+  "camera": { "from": "togera", "scale": 200 }, "narrator": "goliathprime",
+  "portrait": "goliathprime.png" }
 ```
 
 - `id`: letras minúsculas, dígitos e `_` (sem ele, o nome da pasta). É o que o `WOTM_MATCH` aceita (`WOTM_MATCH=goliath,3,1`).
@@ -162,8 +163,10 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
   comuns; o golpe cheio vale contra a IA mais perto), a torre não segue mais o inimigo o tempo todo (o "olhar" do chefe gira o
   tronco inteiro; com o lock ela mira) e o dardo (empalar) vira um golpe comum em quem não tem as animações de empalado (antes
   travava). Investigações: `goliath_topspin.md`, `goliath_lockon.md`, `goliath_impale.md`.
-- **Retrato do HUD:** o do `ASSBOSS1.RTX` (texId 6) é provisório, com a cara do Congar. Troque por PNG como qualquer textura
-  (`assboss1_rtx_t0006.png` em qualquer pasta do mod, seção "Texturas em PNG"); vale também para o chefe da aventura.
+- **Retrato do HUD:** o do `ASSBOSS1.RTX` (texId 6) é provisório, com a cara do Congar. `"portrait": "goliathprime.png"` (na pasta
+  do monstro ou na raiz do mod; 128 × 64 ou maior na mesma proporção, ex. 512 × 256) troca a imagem do retrato do traje do custom
+  (`"portraitTex"`: o texId no `.RTX`; padrão 6 para o `ASSBOSS1`). Vale também para o chefe da aventura, que usa o mesmo arquivo.
+  Log: `[mods] ASSBOSS1.RTX t6 <- Goliath Prime/goliathprime.png`.
 - Ainda não: animações que o ASSBOSS não tem (escalar, alguns bloqueios e contra-ataques; `docs/investigacoes/2026-10-23/goliath_codigo.md`,
   seção 3) fazem o jogo segurar a pose anterior; elimination e minigames não foram testados com ele; o save da aventura não guarda
   custom (a aventura não oferece a casa).

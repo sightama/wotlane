@@ -71,6 +71,8 @@ struct Custom {
     float cameraScale = 1.f;    // distancias da camera emprestada
     std::string narrator;       // narrator/<nome>.mp3 (vazio = o do tipo)
     bool ai = false;            // as IAs sorteadas podem usar (ainda sem efeito)
+    std::filesystem::path portrait;   // PNG do retrato do HUD (vazio = o do .RTX)
+    int portraitTex = -1;       // texId do retrato no <PREFIXO><traje>.RTX
     std::string mod;
     std::filesystem::path dir;
 };
@@ -433,6 +435,20 @@ private:
                         c.cameraScale = float(sc->i) / 100.f;
                 }
                 if (const json::Value *na = v.get("narrator"); na && na->type == json::Value::Str) c.narrator = lower(na->s);
+                // "portrait": PNG do retrato do HUD (na pasta do monstro ou na raiz do mod), no lugar da imagem <PREFIXO><traje>.RTX
+                // de texId "portraitTex" (padrao: o do ASSBOSS1, 6; a ultima entrada do .RTX, 128x64)
+                if (const json::Value *po = v.get("portrait"); po && po->type == json::Value::Str && !po->s.empty()) {
+                    fs::path p = s / fs::u8path(po->s);
+                    if (!fs::is_regular_file(p, ec)) p = m / fs::u8path(po->s);
+                    const json::Value *pt = v.get("portraitTex");
+                    c.portraitTex = pt && pt->type == json::Value::Int ? int(pt->i) : (c.type == 13 && c.costume == 1 ? 6 : -1);
+                    if (!fs::is_regular_file(p, ec))
+                        std::fprintf(stderr, "[mods] monstro %s: \"portrait\" %s nao achado\n", where.c_str(), po->s.c_str());
+                    else if (c.portraitTex < 0)
+                        std::fprintf(stderr, "[mods] monstro %s: \"portrait\" sem \"portraitTex\" (texId do retrato no .RTX)\n", where.c_str());
+                    else
+                        c.portrait = p;
+                }
                 const json::Value *ai = v.get("ai");
                 c.ai = ai && ai->asBool(false);
                 c.mod = m.filename().string();
