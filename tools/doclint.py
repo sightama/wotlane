@@ -24,7 +24,14 @@ RAIZ = Path(__file__).resolve().parent.parent
 TODO = "TODO.md"
 
 DATA = re.compile(r"\b20\d\d-\d\d-\d\d\b")
-CODIGO_COM_CAMINHO = re.compile(r"`[^`]*/[^`]*`")
+CODIGO = re.compile(r"`[^`]*`")  # crases em pares, da esquerda para a direita
+
+
+def tira_caminhos(linha):
+    """Apaga os trechos entre crases que são caminhos (têm "/"): data dentro de caminho vale."""
+    return CODIGO.sub(lambda m: "``" if "/" in m.group(0) else m.group(0), linha)
+
+
 HISTORIA = re.compile(
     r"\b(feit[oa]s? em|corrigid[oa]s? (em|no|na|de passagem)|antes (era|ficava|saía|vinha|dava|zerava|ia|não)|"
     r"na master|merge\b|conferid[oa]s?\b|relato de)",
@@ -47,7 +54,7 @@ def e_referencia(rel):
 
 def problemas_referencia(linha):
     """[(chave, mensagem)]; a chave é o texto achado, para comparar com a linha que o commit tirou."""
-    sem_caminhos = CODIGO_COM_CAMINHO.sub("``", linha)
+    sem_caminhos = tira_caminhos(linha)
     achados = []
     for d in DATA.findall(sem_caminhos):
         achados.append((d, f"data ({d})"))
@@ -61,7 +68,7 @@ def checa_todo(texto):
     linhas = texto.split("\n")
     inicio, n = None, 0
     for i, linha in enumerate(linhas, 1):
-        sem_caminhos = CODIGO_COM_CAMINHO.sub("``", linha)
+        sem_caminhos = tira_caminhos(linha)
         if DATA.search(sem_caminhos):
             erros.append((i, "data no TODO (a data é do commit)"))
         m = FEITO.search(sem_caminhos)
