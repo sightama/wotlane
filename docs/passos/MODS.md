@@ -162,12 +162,12 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
   da aventura e põe o nome no HUD. Também: X+Quadrado faz o giro do chefe (`StateTopSpin`, no lugar do `StateCrowdControl` dos
   comuns; o golpe cheio vale contra a IA mais perto), a torre não segue mais o inimigo o tempo todo (o "olhar" do chefe gira o
   tronco inteiro; com o lock ela mira) e o dardo (empalar) vira um golpe comum em quem não tem as animações de empalado (antes
-  travava). Investigações: `goliath_topspin.md`, `goliath_lockon.md`, `goliath_impale.md`.
+  travava). Investigações (encerradas): `git show 18bb1d2:docs/investigacoes/2026-10-23/goliath_topspin.md`, `goliath_lockon.md`, `goliath_impale.md`.
 - **Retrato do HUD:** o do `ASSBOSS1.RTX` (texId 6) é provisório, com a cara do Congar. `"portrait": "goliathprime.png"` (na pasta
   do monstro ou na raiz do mod; 128 × 64 ou maior na mesma proporção, ex. 512 × 256) troca a imagem do retrato do traje do custom
   (`"portraitTex"`: o texId no `.RTX`; padrão 6 para o `ASSBOSS1`). Vale também para o chefe da aventura, que usa o mesmo arquivo.
   Log: `[mods] ASSBOSS1.RTX t6 <- Goliath Prime/goliathprime.png`.
-- Ainda não: animações que o ASSBOSS não tem (escalar, alguns bloqueios e contra-ataques; `docs/investigacoes/2026-10-23/goliath_codigo.md`,
+- Ainda não: animações que o ASSBOSS não tem (escalar, alguns bloqueios e contra-ataques; `18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md`,
   seção 3) fazem o jogo segurar a pose anterior; elimination e minigames não foram testados com ele; o save da aventura não guarda
   custom (a aventura não oferece a casa).
 

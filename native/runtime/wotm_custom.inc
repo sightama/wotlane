@@ -1,6 +1,6 @@
 // Monstros custom (POS_FRONTEIRA.md, item 8, parte 2): monstros que o jogo nao oferece na selecao, jogados numa luta comum. O
 // primeiro e o Goliath Prime (tipo 13, "assboss", MON/ASSBOSS1.*), chefe da aventura em canyon2. Incluido pelo wotm_overrides.cpp,
-// depois do wotm_skins.inc. Investigacao: docs/investigacoes/2026-10-23/goliath_codigo.md.
+// depois do wotm_skins.inc. Investigacao: git show 18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md (e goliath_selecao.md).
 //
 // - TheGame::SetAIMonster: a cada IA que entra, o retail desliga todo slot do tipo 0x1A0 (disableMonster: m_playerNum 0 e drawMe 0
 //   no m_cs, na sombra e nos _cs de +0x71F8/+0x71FC; na aventura e o que esconde o chefe ate a cena). Com o Goliath como jogador
@@ -178,7 +178,7 @@ namespace wotm_custom
     // Dardo (StateJavelin): o Weapon::DetonateWeapon chama o Monster::attachPickupImpaler na vitima, que entra no StateImpaled pelo
     // enterNewState sem o transitionOK (o que barraria quem nao tem as anims 0x8E..0x90). O StateImpaled::update so sai com a anim
     // 0x90 no fim; sem ela (ASSBOSS0/1) a vitima travava para sempre. Sem essas anims, o gancho faz o que o retail faz com pickup
-    // invalido: killPickup(it, 1) e volta. O golpe do objeto (dispatchHit) chega como um comum. Investigacao: goliath_impale.md.
+    // invalido: killPickup(it, 1) e volta. O golpe do objeto (dispatchHit) chega como um comum. Investigacao: 18bb1d2:docs/investigacoes/2026-10-23/goliath_impale.md.
     constexpr uint32_t kImpale = wotm::fn::attachPickupImpaler__7MonsterGQ2t10LinkedList1ZP6Pickup8IteratorP8_fvector,
                        kKillPickup = wotm::fn::killPickup__12LevelPickupsGQ2t10LinkedList1ZP6Pickup8Iteratori;
     constexpr uint32_t kAnims = 0x1CF0, kAnimStride = 0x10;   // Monster::m_anims[id].ci
@@ -202,7 +202,7 @@ namespace wotm_custom
         ctx->pc = kKillPickup;
         g_killPickup(rdram, ctx, runtime);
     }
-    // Giro (StateTopSpin, Monster+0x10EBC; investigacao goliath_topspin.md). Nos monstros comuns X+Quadrado (PadFlags +0x38) e o
+    // Giro (StateTopSpin, Monster+0x10EBC; investigacao 18bb1d2:docs/investigacoes/2026-10-23/goliath_topspin.md). Nos monstros comuns X+Quadrado (PadFlags +0x38) e o
     // StateCrowdControl (+0xF3F0), que no Goliath nunca comeca (pede a anim de efeito do tipo, que ele nao tem). So a IA do chefe
     // entrava no TopSpin, pelo setAssBossState(12). Com o Goliath jogador:
     //  - StateCrowdControl::transitionOK: X+Quadrado no chao (Idle ou Run), com ataques ligados, sem objeto grande e o
@@ -297,7 +297,7 @@ namespace wotm_custom
         }
         g_origSetBossState(rdram, ctx, runtime);
     }
-    // Olhar (investigacao goliath_lockon.md): o Monster::updateLookAt vira a cabeca para o inimigo mais perto
+    // Olhar (18bb1d2:docs/investigacoes/2026-10-23/goliath_lockon.md): o Monster::updateLookAt vira a cabeca para o inimigo mais perto
     // (getLookAtTarget) pelas anims 154/155. No ASSBOSS elas giram a torre inteira (28 das 30 pecas) em ate 90 graus, o que parece
     // um lock-on permanente. No Goliath jogador, sem alvo de olhar: a torre fica no centro; com o lock (os dois gatilhos) ela mira
     // pelo getTarget, como num monstro comum. O chefe da aventura e o Goliath sob IA seguem o retail.
