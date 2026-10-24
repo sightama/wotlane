@@ -189,7 +189,11 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   destraves diferentes da última gravação vão para o JSON (só eles: as opções do arquivo ficam, o menu de opções pode estar com valores
   não aceitos). A aventura (`updateStoryModeSave`/`Load`) segue com as telas e os binários, como antes (item 5).
 - A campanha como a única escolha de slot e a revisão dos textos de memory card viraram o item 5 (feito).
-- Em aberto: o que é `Shell+0x2A40` e `TheGame+0x1204B0..B8`; o que exatamente o `McScrambleIcon` muda no `icon.sys`.
+- **Campos abertos investigados em 2026-10-24** (`docs/investigacoes/2026-10-24/save_campos_abertos.md`): `Shell+0x2A40` é uma opção
+  morta (provável slider cortado do menu de opções); `TheGame+0x1204B0..B8` é o recorde do endurance por dificuldade (gravado, nunca
+  mostrado); o `McScrambleIcon` só zera o `icon.sys` durante a gravação e o refaz igual depois (nada a fazer). **Bug do port em
+  aberto:** com o salvamento automático, o `EndureSave` trocado copia o recorde da RAM, que ninguém atualiza, e o recorde fica no
+  valor do boot; a correção sugerida (e a chave `records.enduranceBest`) está no relatório.
 
 ### 4. Pasta `mods/`
 - O carregador procura cada arquivo primeiro em `mods/` (mesmo caminho relativo do disco) e, se não achar, lê o da ISO. Trocar skin,
