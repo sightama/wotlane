@@ -144,15 +144,17 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 
 - `id`: letras minúsculas, dígitos e `_` (sem ele, o nome da pasta). É o que o `WOTM_MATCH` aceita (`WOTM_MATCH=goliath,3,1`).
 - `name`: o que a seleção e o HUD mostram. O HUD tem 11 letras: vale a última palavra que couber, em minúsculas ("goliath").
-- `base`: o tipo do jogo. Por enquanto só `assboss` (13, o Goliath; `kCustomBases` em `native/wotm_mods.hpp`); os jogáveis entram
-  quando houver motivo (para trocar só a aparência, use uma skin).
+- `base`: o tipo do jogo, pelo nome ou prefixo: os dez jogáveis (`togera`, `LIZARD`...) ou o `assboss` (13, o Goliath; o único chefe
+  em `kCustomBases`, `native/wotm_mods.hpp`). Um custom de base jogável roda o código e a IA desse monstro; só o Goliath foi testado
+  (para trocar só a aparência, use uma skin).
 - `costume`: o traje do disco (`ASSBOSS1`; o `ASSBOSS0` é um protótipo com metade das animações e o retrato pequeno).
 - `camera`: a câmera de outro monstro (`from`, pelo nome do jogo) com as distâncias escaladas (`scale` em %, 10 a 1000; o JSON do
   port só lê inteiros). O `ASSBOSS.CHR` nunca foi usado pelo jogo (na aventura a câmera é a da fase) e deixa a câmera em cima do
   monstro; a do Togera 2x fica como a de um monstro comum.
 - `narrator`: `narrator/<nome>.mp3` dito na confirmação (vazio = o do tipo).
 - `ai`: se uma CPU pode usá-lo (padrão não). Um custom de chefe como CPU rodaria a IA do chefe (`Ai::updateAssBoss`), que precisa
-  dos pontos da fase dele; a seleção mostra "PLAYERS ONLY" no quadro da CPU.
+  dos pontos da fase dele; a seleção mostra "PLAYERS ONLY" no quadro da CPU. Com `"ai": true` (pensado para base jogável) a CPU
+  pode escolhê-lo na casa CUSTOM da seleção; isso ainda não foi testado numa luta, e o launcher só oferece customs ao jogador.
 - **Na seleção** (telas 3, 6, 7, 18 e 19): a casa CUSTOM da barra de monstros. Cima e baixo percorrem os customs, X confirma. O
   cursor do jogo fica na coluna de onde o quadro saiu, que faz as vezes dele (a vaga dela não é tomada). A seleção de 3 e 4
   jogadores ainda não tem a casa.
