@@ -98,6 +98,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_skins.inc"
 // Monstros custom (item 8, parte 2): Goliath Prime jogavel (visivel com IAs, toma dano delas)
 #include "wotm_custom.inc"
+// Modo treino (item 9): esferas dos golpes, dano exato e boneco (WOTM_TRAINING, menu F2)
+#include "wotm_training.inc"
 
 namespace
 {
@@ -1019,6 +1021,11 @@ namespace
         {
             wotmLoadFreeze(false);
             wotmCheckLoadEnd(rdram, ctx, runtime);
+            if (GPR_U32(ctx, 4) && wotm_training::g_menuArmed.load() && !wotm_training::g_on.exchange(true))   // rtMain(first): a luta comecou
+                std::fprintf(stderr, "[treino] modo treino ligado (luta do TRAINING)\n");
+            wotm_training::g_inFight = true;   // tambem a volta do RESET POSITIONS (rtMain(0))
+            if (GPR_U32(ctx, 4))
+                wotm_training::g_introMs = wotm_training::nowMs();   // a intro desta luta pode ser pulada (wotm_training.inc)
         }
         g_origRtMain(rdram, ctx, runtime);
     }
@@ -2167,7 +2174,8 @@ namespace
                             p[2] += 60.f;   // sem ponto de golpe: um pouco acima da origem do monstro
                         else
                             p[0] = p[1] = p[2] = 0.f;
-                        if ((p[0] != 0.f || p[1] != 0.f || p[2] != 0.f) && wotm::settings::on(wotm::settings::DamagePop))
+                        if ((p[0] != 0.f || p[1] != 0.f || p[2] != 0.f) &&
+                            (wotm::settings::on(wotm::settings::DamagePop) || wotm_training::g_on.load(std::memory_order_relaxed)))
                             wotmDamagePopup(rdram, p, lost, recent ? d->kind : 0);
                     }
                     d->last = h;
@@ -2498,6 +2506,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmVu0UcodeInstall(runtime);
     wotmSkinsInstall(runtime);   // por ultimo: embrulha os ganchos do SetPlayerMonster/SetAIMonster (split4, WOTM_AIVSAI)
     wotmCustomInstall(runtime);  // depois das skins: embrulha o SetAIMonster delas
+    wotmTrainingInstall(runtime);   // por ultimo: o gancho mais de fora do update/takeHit/takeDamage (ve o dano que as trapacas deixam)
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else

@@ -269,6 +269,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include <filesystem>
 #include "wotm_freecam.inc"   // camera livre de debug (F5)
 #include "wotm_prompts.inc"   // icones de botao 2D (Kenney) no lugar dos 3D do jogo
+#include "wotm_trainview.inc"   // modo treino: volumes, esferas dos golpes, painel de dano e numeros do HUD
 #define WOTM_HAVE_NATIVE 1
 
 namespace wotm_live
@@ -809,7 +810,11 @@ void wotmFontSent()
 void wotmFontInitPacket(uint32_t vram) { wotm_live::g_font.initPacket(vram); }
 void wotmFontSetTexId(const uint8_t *rdram, uint32_t node)
 {
-    if (rdram) wotm_live::g_font.setTexId(wotm::Ram{rdram, PS2_RAM_SIZE}, node);
+    if (!rdram) return;
+    wotm_live::g_font.setTexId(wotm::Ram{rdram, PS2_RAM_SIZE}, node);
+    // atlas da fonte para o painel do treino, que o usa sem texto do jogo no quadro (a luta nao escreve nada)
+    if (wotm_training::g_fontTex0.exchange(wotm_live::g_font.tex0) != wotm_live::g_font.tex0)
+        std::fprintf(stderr, "[treino] atlas da fonte %016llX\n", static_cast<unsigned long long>(wotm_live::g_font.tex0));
 }
 void wotmFontColor(const uint8_t *rdram, int font)
 {
@@ -1162,6 +1167,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.anchors = std::move(anchors);
+    wotm_trainview::capture(ram);   // modo treino: cascos e capsulas do corpo e vida deste quadro
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
@@ -1702,6 +1708,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
             wotm_gamescreens::frame(S.scene, ram, c3, RW, RH);   // mouse nas telas do jogo: retangulo de cada item
             wotm_optscreen::drawOnBoard(S.scene, ram, c3);   // tela de opcoes do jogo
+            wotm_trainview::draw3d();   // modo treino: por cima da cena, sem teste de profundidade
             wotm_live::g_stage = "idle";
             EndMode3D();
         }
@@ -1725,6 +1732,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
             wotm::savepics::drawer().draw(io.cdRoot, io.cdImage.string(), gr.x0, gr.w, static_cast<float>(RH));
         }
+        wotm_pausemenu::drawBox2d(RW, RH, !S.scene.text.empty());   // caixa da lista da pausa (sob o texto dela)
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
         wotm_mainmenu::drawPausePanel2d(RW, RH);   // painel "recompiled options" na pausa da luta (wotm_pausemenu.inc)
         wotm_padsel::drawBar2d(RW, RH);            // barra de monstros da selecao nativa (acima da faixa preta de baixo)
@@ -1757,6 +1765,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.scene.drawScreenRects(static_cast<float>(RW), static_cast<float>(RH));   // os demais fades, por cima de tudo
         if (!split && !photoHide)
             drawDamagePopups(S.scene, c3, RW, RH);   // numeros de dano (mod WOTM_DAMAGEPOP; vazio sem ele)
+        if (!photoHide)
+            wotm_trainview::drawPanel(S.scene, ram, fontTex0, RW, RH);   // modo treino: painel de dano (vazio desligado)
         EndTextureMode();
         wotm::msaa::g_current = nullptr;
         if (msOn)

@@ -1,0 +1,672 @@
+// Modo treino, lado do desenho (incluido pelo wotm_live.inc): volumes do corpo lidos na thread do EE (capture, chamada pelo
+// wotmCaptureFrame), esferas dos golpes e dano vindos dos ganchos (native/runtime/wotm_training.inc), desenho por cima da cena (sem
+// teste de profundidade), painel de dano e numeros das barras do HUD. Estado compartilhado em native/wotm_training.h.
+
+#include "wotm_training.h"
+
+namespace wotm_padsel   // wotm_padsel.inc (incluido depois): glifos da fonte do jogo
+{
+static void text(std::vector<wotm::TextQuad> &out, const wotm::Ram &ram, uint64_t tex0, int rw, int rh, const char *s, float cx, float cy, float h,
+                 Color c, float spacing);
+}
+
+namespace wotm_trainview
+{
+using namespace wotm_training;
+constexpr uint32_t kSlots = 0x120380u;
+constexpr float kPanelTop = 0.43f;   // topo do painel e dos comandos (fracao da altura): abaixo dos dois HUDs, que vao ate y 91 de 224
+
+// ---- cascos de colisao do corpo (nos op 10 do hier do monstro): planos {n, d} no espaco do no, dentro = n.p <= d
+
+void hullSegments(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, std::vector<float> &seg)
+{
+    const int np = int16_t(ram.u16(node + 4));
+    if (np < 4 || np > 24 || !ram.ok(node + 0x20, 16u * uint32_t(np)))
+        return;
+    float n[24][3], d[24];
+    for (int i = 0; i < np; ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+            n[i][k] = ram.f32(node + 0x20 + 16 * i + 4 * k);
+        d[i] = ram.f32(node + 0x20 + 16 * i + 12);
+    }
+    for (int sign = 1; sign >= -1; sign -= 2)   // se nenhum vertice fica dentro com n.p <= d, tenta a outra convencao
+    {
+        struct V { float p[3]; uint32_t tight; };
+        std::vector<V> vs;
+        for (int i = 0; i < np; ++i)
+            for (int j = i + 1; j < np; ++j)
+                for (int k = j + 1; k < np; ++k)
+                {
+                    const float *a = n[i], *b = n[j], *c = n[k];
+                    const float bc[3] = {b[1] * c[2] - b[2] * c[1], b[2] * c[0] - b[0] * c[2], b[0] * c[1] - b[1] * c[0]};
+                    const float det = a[0] * bc[0] + a[1] * bc[1] + a[2] * bc[2];
+                    if (std::fabs(det) < 1e-6f)
+                        continue;
+                    const float ca[3] = {c[1] * a[2] - c[2] * a[1], c[2] * a[0] - c[0] * a[2], c[0] * a[1] - c[1] * a[0]};
+                    const float ab[3] = {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+                    V v{};
+                    for (int q = 0; q < 3; ++q)
+                        v.p[q] = (d[i] * bc[q] + d[j] * ca[q] + d[k] * ab[q]) / det;
+                    bool in = std::isfinite(v.p[0] + v.p[1] + v.p[2]);
+                    for (int t = 0; t < np && in; ++t)
+                    {
+                        const float s = n[t][0] * v.p[0] + n[t][1] * v.p[1] + n[t][2] * v.p[2] - d[t];
+                        if (sign * s > 0.05f)
+                            in = false;
+                        else if (std::fabs(s) <= 0.05f)
+                            v.tight |= 1u << t;
+                    }
+                    if (!in)
+                        continue;
+                    bool dup = false;
+                    for (V &o : vs)
+                        if (std::fabs(o.p[0] - v.p[0]) + std::fabs(o.p[1] - v.p[1]) + std::fabs(o.p[2] - v.p[2]) < 0.05f)
+                        {
+                            o.tight |= v.tight;
+                            dup = true;
+                            break;
+                        }
+                    if (!dup && vs.size() < 64)
+                        vs.push_back(v);
+                }
+        if (vs.size() < 4)
+            continue;
+        for (size_t i = 0; i < vs.size(); ++i)
+            for (size_t j = i + 1; j < vs.size(); ++j)
+            {
+                const uint32_t both = vs[i].tight & vs[j].tight;
+                if ((both & (both - 1)) == 0)   // menos de dois planos em comum: nao e aresta
+                    continue;
+                float a[3], b[3];
+                wotm::xform(m, vs[i].p[0], vs[i].p[1], vs[i].p[2], a);
+                wotm::xform(m, vs[j].p[0], vs[j].p[1], vs[j].p[2], b);
+                seg.insert(seg.end(), {a[0], a[1], a[2], b[0], b[1], b[2]});
+            }
+        return;
+    }
+}
+
+// Percurso so do que leva aos cascos (o mesmo caminho de matrizes do Scene::walk, sem LOD por distancia: o filho 0)
+void hullWalk(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, uint32_t atMat, int depth, int &budget, std::vector<float> &seg)
+{
+    using namespace wotm;
+    if (depth > 48 || --budget < 0 || !ram.ok(node, 0x10))
+        return;
+    auto kids = [&](uint32_t arr, uint32_t n, const M4 &mm, uint32_t at) {
+        n = std::min<uint32_t>(n, 256);
+        for (uint32_t i = 0; i < n; ++i)
+            if (const uint32_t c = ram.u32(arr + 4 * i); ram.ok(c))
+                hullWalk(ram, c, mm, at, depth + 1, budget, seg);
+    };
+    switch (ram.u32(node) & 0x3F)
+    {
+    case 10:   // COLLISION_VOLUME
+        hullSegments(ram, node, m, seg);
+        break;
+    case 1:    // GROUP: visual (bit 0) e colisao (bit 1)
+        if (ram.u16(node + 0xA) & 3)
+            kids(node + 0x20, ram.u16(node + 8), m, atMat);
+        break;
+    case 2:    // LOD: o mais detalhado
+        if (ram.u32(node + 4) > 0 && ram.u32(node + 4) < 16)
+            if (const uint32_t c = ram.u32(node + 0x28); ram.ok(c))
+                hullWalk(ram, c, m, atMat, depth + 1, budget, seg);
+        break;
+    case 3:
+        kids(node + 0x1C, ram.u32(node + 8), mul(translateM(ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18)), m), atMat);
+        break;
+    case 4:
+        kids(node + 0x50, ram.u32(node + 8), mul(readM4(ram, node + 0x10), m), atMat);
+        break;
+    case 30:
+        kids(node + 0x2C, ram.u32(node + 8),
+             mul(mul(scaleM(ram.f32(node + 0x20), ram.f32(node + 0x24), ram.f32(node + 0x28)),
+                     translateM(ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18))), m), atMat);
+        break;
+    case 6:
+        if (const uint32_t w = ram.u8(node + 8); w < ram.u8(node + 0xB))
+            if (const uint32_t c = ram.u32(node + 0xC + 4 * w); ram.ok(c))
+                hullWalk(ram, c, m, atMat, depth + 1, budget, seg);
+        break;
+    case 23:
+        if (const uint32_t c = ram.u32(node + 4); ram.ok(c))
+            hullWalk(ram, c, m, atMat, depth + 1, budget, seg);
+        break;
+    case 35:
+        kids(node + 0xC, ram.u32(node + 4), m, atMat);
+        break;
+    case 25:   // CHAR_INSTANCE: matrizes da animacao
+        kids(node + 0x2C, ram.u32(node + 0x28), m, ram.u32(node + 0xC));
+        break;
+    case 17: { // ANIM_XFORM
+        if (ram.f32(node + 0xC) == 0.f)
+            break;
+        M4 local = ident();
+        const uint32_t idx = ram.u32(node + 0xC4);
+        if (atMat && idx < 4096 && ram.ok(atMat + idx * 64, 64))
+            local = readM4(ram, atMat + idx * 64);
+        local.m[0][3] = local.m[1][3] = local.m[2][3] = 0.f;
+        local.m[3][3] = 1.f;
+        kids(node + 0xCC, ram.u32(node + 4), mul(local, m), atMat);
+        break;
+    }
+    case 38: { // ANIM_SCALE
+        const float sx = ram.f32(node + 0x20), sy = ram.f32(node + 0x24), sz = ram.f32(node + 0x28);
+        if (sx == 0.f && sy == 0.f && sz == 0.f)
+            break;
+        const M4 pre = translateM(ram.f32(node + 0x40), ram.f32(node + 0x44), ram.f32(node + 0x48));
+        const M4 post = translateM(ram.f32(node + 0x30) + ram.f32(node + 0x50), ram.f32(node + 0x34) + ram.f32(node + 0x54),
+                                   ram.f32(node + 0x38) + ram.f32(node + 0x58));
+        kids(node + 0x60, ram.u32(node + 4), mul(mul(mul(pre, scaleM(sx, sy, sz)), post), m), atMat);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+// Na thread do EE (wotmCaptureFrame): cascos, capsulas e vida de cada monstro deste quadro
+void capture(const wotm::Ram &ram)
+{
+    if (!g_on.load(std::memory_order_relaxed))
+        return;
+    const uint32_t opts = g_opts.load(std::memory_order_relaxed);
+    std::vector<Hull> hulls;
+    std::vector<Capsule> caps;
+    float health[16] = {}, maxHealth[16] = {}, stamina[16] = {}, staminaMax[16] = {};
+    for (uint32_t i = 0; i < 16; ++i)
+    {
+        const uint32_t mon = ram.u32(wotm::sym::shellGame + kSlots + 4 * i) & 0x1FFFFFFFu;
+        if (!mon || !ram.ok(mon, 0x450))
+            continue;
+        health[i] = ram.f32(mon + 0x44C);
+        maxHealth[i] = ram.f32(mon + 0x448);
+        stamina[i] = ram.f32(mon + 0x470);      // StaminaMeter (+0x460): cur
+        staminaMax[i] = ram.f32(mon + 0x460);   // max (a furia passa dele ate o maxLevel, +0x468)
+        const uint32_t cs = ram.u32(mon + 0xC) & 0x1FFFFFFFu;
+        if (!ram.ok(cs, 0xB0) || !ram.u8(cs + 0xC))   // drawMe: monstro escondido (fora da luta, desligado)
+            continue;
+        wotm::M4 m = wotm::readM4(ram, cs + 0x20);
+        m.m[3][0] = ram.f32(cs + 0x10);
+        m.m[3][1] = ram.f32(cs + 0x14);
+        m.m[3][2] = ram.f32(cs + 0x18);
+        m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.f;
+        m.m[3][3] = 1.f;
+        if (opts & kShowCapsule)
+        {
+            // capsula do collisResolveCsToCsCollisions: ponto +0x3F0 no espaco do cs, eixo = z do cs, comprimento +0x400, raio +0x404
+            Capsule c{};
+            c.owner = int8_t(i);
+            wotm::xform(m, ram.f32(mon + 0x3F0), ram.f32(mon + 0x3F4), ram.f32(mon + 0x3F8), c.a);
+            const float len = ram.f32(mon + 0x400);
+            for (int k = 0; k < 3; ++k)
+                c.b[k] = c.a[k] + m.m[2][k] * len;
+            c.r = ram.f32(mon + 0x404);
+            if (std::isfinite(c.r + len) && c.r > 0.f && c.r < 2000.f)
+                caps.push_back(c);
+        }
+        if (opts & kShowHulls)
+        {
+            if (ram.u8(cs + 0xF))   // scaleMe
+                m = wotm::mul(wotm::scaleM(ram.f32(cs + 0x80), ram.f32(cs + 0x84), ram.f32(cs + 0x88)), m);
+            Hull h{};
+            h.owner = int8_t(i);
+            int budget = 4000;
+            const uint32_t ep = ram.u32(cs) & 0x1FFFFFFFu;
+            if (ram.ok(ep))
+                hullWalk(ram, ep, m, 0, 0, budget, h.seg);
+            if (!h.seg.empty())
+                hulls.push_back(std::move(h));
+        }
+    }
+    int32_t players = static_cast<int32_t>(ram.u32(wotm::sym::shellInfo + 0x2BB4));
+    if (players < 1 || players > 4)
+        players = 1;
+    Shared &sh = shared();
+    std::lock_guard<std::mutex> lk(sh.m);
+    sh.hulls = std::move(hulls);
+    sh.caps = std::move(caps);
+    sh.frame = ram.u32(wotm::sym::g_frame);
+    std::memcpy(sh.health, health, sizeof health);
+    std::memcpy(sh.maxHealth, maxHealth, sizeof maxHealth);
+    std::memcpy(sh.stamina, stamina, sizeof stamina);
+    std::memcpy(sh.staminaMax, staminaMax, sizeof staminaMax);
+    sh.players = int8_t(players);
+    sh.hudShown = ram.u32(wotm::sym::gHudEnable) && !ram.u32(wotm::sym::x_3Hud_m_letterbox + 0x2Cu);
+}
+
+// ---- janela
+
+struct View
+{
+    std::vector<Sweep> sweeps;
+    std::vector<Hit> hits;
+    std::vector<Hull> hulls;
+    std::vector<Capsule> caps;
+    std::vector<MoveRec> moves;
+    std::vector<StunRec> stuns;
+    uint32_t frame = 0;
+    float health[16] = {}, maxHealth[16] = {}, stamina[16] = {}, staminaMax[16] = {};
+    int players = 1;
+    bool hudShown = false;
+    Combo combo;
+    float bestCombo = 0.f;
+    int bestHits = 0;
+    std::vector<PadRec> pad[2];
+};
+
+// copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
+View snapshot()
+{
+    constexpr uint32_t kSweepLife = 10, kHitsKept = 64;
+    Shared &sh = shared();
+    View v;
+    std::lock_guard<std::mutex> lk(sh.m);
+    const uint32_t f = sh.frame;
+    if (g_resetStats.exchange(false))
+    {
+        sh.hits.clear();
+        sh.moves.clear();
+        sh.stuns.clear();
+        sh.combo = Combo{};
+        sh.bestCombo = 0.f;
+        sh.bestHits = 0;
+    }
+    v.moves = sh.moves;
+    v.stuns = sh.stuns;
+    sh.sweeps.erase(std::remove_if(sh.sweeps.begin(), sh.sweeps.end(),
+                                   [&](const Sweep &s) { return s.frame + kSweepLife < f || s.frame > f + 600; }),
+                    sh.sweeps.end());
+    if (sh.hits.size() > kHitsKept)
+        sh.hits.erase(sh.hits.begin(), sh.hits.end() - kHitsKept);
+    sh.hits.erase(std::remove_if(sh.hits.begin(), sh.hits.end(), [&](const Hit &h) { return h.frame > f + 600; }), sh.hits.end());
+    v.sweeps = sh.sweeps;
+    v.hits = sh.hits;
+    v.hulls = sh.hulls;
+    v.caps = sh.caps;
+    v.frame = f;
+    std::memcpy(v.health, sh.health, sizeof v.health);
+    std::memcpy(v.maxHealth, sh.maxHealth, sizeof v.maxHealth);
+    std::memcpy(v.stamina, sh.stamina, sizeof v.stamina);
+    std::memcpy(v.staminaMax, sh.staminaMax, sizeof v.staminaMax);
+    v.players = sh.players;
+    v.hudShown = sh.hudShown;
+    v.combo = sh.combo;
+    v.bestCombo = sh.bestCombo;
+    v.bestHits = sh.bestHits;
+    v.pad[0] = sh.pad[0];
+    v.pad[1] = sh.pad[1];
+    return v;
+}
+
+Color ownerColor(int owner, int players, unsigned char a)
+{
+    if (owner >= 0 && owner < players)
+        return Color{80, 200, 255, a};   // jogador: azul claro
+    if (owner >= 0)
+        return Color{255, 150, 40, a};   // IA: laranja
+    return Color{220, 220, 220, a};
+}
+
+// Dentro do BeginMode3D da vista cheia, depois da cena
+void draw3d()
+{
+    if (!g_on.load(std::memory_order_relaxed) || windowsHidden())
+        return;
+    const uint32_t opts = g_opts.load(std::memory_order_relaxed);
+    const View v = snapshot();
+    rlDrawRenderBatchActive();
+    rlDisableDepthTest();
+    rlDisableBackfaceCulling();
+    if (opts & kShowHulls)
+        for (const Hull &h : v.hulls)
+        {
+            const Color c = h.owner < v.players ? Color{60, 255, 120, 230} : Color{255, 60, 220, 230};
+            for (size_t i = 0; i + 5 < h.seg.size(); i += 6)
+                DrawLine3D(Vector3{h.seg[i], h.seg[i + 1], h.seg[i + 2]}, Vector3{h.seg[i + 3], h.seg[i + 4], h.seg[i + 5]}, c);
+        }
+    if (opts & kShowCapsule)
+        for (const Capsule &c : v.caps)
+            DrawCapsuleWires(Vector3{c.a[0], c.a[1], c.a[2]}, Vector3{c.b[0], c.b[1], c.b[2]}, c.r, 10, 3, Color{200, 200, 200, 120});
+    if (opts & kShowAttacks)
+        for (const Sweep &s : v.sweeps)
+        {
+            const uint32_t age = v.frame >= s.frame ? v.frame - s.frame : 0;
+            const unsigned char a = static_cast<unsigned char>(255 - std::min<uint32_t>(age, 10) * 20);
+            Color c = s.hit == 2 ? Color{255, 40, 40, a} : s.hit == 1 ? Color{255, 230, 40, a} : ownerColor(s.owner, v.players, a);
+            const Vector3 pa{s.a[0], s.a[1], s.a[2]}, pb{s.b[0], s.b[1], s.b[2]};
+            const float r = std::max(s.r, 2.f);
+            if (s.a[0] == s.b[0] && s.a[1] == s.b[1] && s.a[2] == s.b[2])
+                DrawSphereWires(pa, r, 6, 10, c);
+            else
+                DrawCapsuleWires(pa, pb, r, 10, 3, c);
+        }
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
+    rlEnableDepthTest();
+}
+
+const char *sourceName(int s)
+{
+    switch (s)
+    {
+    // HitEvent::source (s_takeHitInfo +0x10), os vistos no treino e nas investigacoes
+    case -1: return "OVER TIME";
+    case 2: case 11: return "MELEE";
+    case 3: return "OBJECT";
+    case 1: return "PROJECTILE";
+    case 7: return "BUTT SLAM";
+    case 8: case 13: return "THROW";
+    case 5: case 6: case 12: case 14: case 20: return "SPECIAL";
+    default: return "OTHER";
+    }
+}
+
+std::string slotName(int s, int players)
+{
+    if (s < 0)
+        return "?";
+    char b[16];
+    if (s < players)
+        std::snprintf(b, sizeof b, "P%d", s + 1);
+    else if (s >= 4)   // as IAs ficam em m_monsters[4 + i]
+        std::snprintf(b, sizeof b, "CPU%d", s - 3);
+    else
+        std::snprintf(b, sizeof b, "#%d", s);
+    return b;
+}
+
+// Seta da direcao (notacao do teclado numerico; 5 = neutro, um ponto) num quadrado de lado `sz` centrado em (cx, cy)
+void drawDir(int dir, float cx, float cy, float sz, Color c)
+{
+    const float dx = float((dir - 1) % 3 - 1), dy = -float((dir - 1) / 3 - 1);   // tela: y para baixo
+    if (dx == 0.f && dy == 0.f)
+    {
+        DrawCircleV(Vector2{cx, cy}, sz * 0.12f, Color{c.r, c.g, c.b, 140});
+        return;
+    }
+    const float l = std::sqrt(dx * dx + dy * dy), ux = dx / l, uy = dy / l, h = sz * 0.42f;
+    const Vector2 tail{cx - ux * h, cy - uy * h}, tip{cx + ux * h, cy + uy * h};
+    const Vector2 base{tip.x - ux * sz * 0.35f, tip.y - uy * sz * 0.35f};
+    DrawLineEx(tail, base, sz * 0.14f, c);
+    const Vector2 p1{base.x - uy * sz * 0.28f, base.y + ux * sz * 0.28f}, p2{base.x + uy * sz * 0.28f, base.y - ux * sz * 0.28f};
+    // o raylib so desenha um dos sentidos (o outro e descartado): manda os dois
+    DrawTriangle(tip, p1, p2, c);
+    DrawTriangle(tip, p2, p1, c);
+}
+
+// Texto com a fonte do jogo (os glifos do atlas do quadro, wotm_padsel::text) num quadro rw x rh: cor do raylib (255 = 1,0), contorno
+// preto opcional. Sem atlas (nenhum texto do jogo ainda), a fonte do raylib.
+struct GameText
+{
+    const wotm::Ram &ram;
+    uint64_t tex0;
+    int rw, rh;
+    std::vector<wotm::TextQuad> quads;
+
+    // A fonte do jogo deixa uma letra de vao (o passo do wotm_padsel::text e a celula inteira, 1,6 x a altura): aqui a celula e
+    // estreitada para 78% e o passo e esse (celulas sobrepostas se cortam no drawQuads). Sem '/', '>' e '+' no atlas: tracos desenhados.
+    static constexpr float kTight = 0.78f;
+    float wv(float h) const { return 1.6f * h * 224.f / float(rh); }   // largura da celula em unidades da tela do jogo
+    float adv(float h) const
+    {
+        const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+        return kTight * wv(h) * gr.w / 640.f;
+    }
+    float width(const char *s, float h) const { return tex0 ? adv(h) * float(std::strlen(s)) : float(MeasureText(s, int(h))); }
+    // os sinais que faltam no atlas, numa celula de largura a (centro cx, cy), altura h
+    static void glyphLines(char ch, float cx, float cy, float a, float h, float t, Color c)
+    {
+        const float hw = a * 0.32f, hh = h * 0.38f;
+        if (ch == '/')
+            DrawLineEx(Vector2{cx - hw, cy + hh}, Vector2{cx + hw, cy - hh}, t, c);
+        else if (ch == '>')
+        {
+            DrawLineEx(Vector2{cx - hw, cy - hh * 0.8f}, Vector2{cx + hw, cy}, t, c);
+            DrawLineEx(Vector2{cx + hw, cy}, Vector2{cx - hw, cy + hh * 0.8f}, t, c);
+        }
+        else if (ch == '+')
+        {
+            DrawLineEx(Vector2{cx - hw, cy}, Vector2{cx + hw, cy}, t, c);
+            DrawLineEx(Vector2{cx, cy - hw}, Vector2{cx, cy + hw}, t, c);
+        }
+    }
+    // texto com o canto esquerdo em x0 e o meio da altura em cy
+    void put(const char *s, float x0, float cy, float h, Color c, bool outline = false)
+    {
+        if (!tex0)
+        {
+            DrawText(s, int(x0), int(cy - h * 0.5f), int(h), c);
+            return;
+        }
+        char buf[128];
+        std::snprintf(buf, sizeof buf, "%s", s);
+        const float a = adv(h), t = std::max(1.5f, h * 0.13f), o = std::max(1.f, h * 0.09f);
+        for (size_t i = 0; buf[i]; ++i)
+            if (buf[i] == '/' || buf[i] == '>' || buf[i] == '+')
+            {
+                const float gx = x0 + a * (float(i) + 0.5f);
+                if (outline)
+                    glyphLines(buf[i], gx, cy, a, h, t + 2.f * o, Color{0, 0, 0, c.a});
+                glyphLines(buf[i], gx, cy, a, h, t, c);
+                buf[i] = ' ';
+            }
+        const float cx = x0 + width(buf, h) * 0.5f, sp = (kTight - 1.f) * wv(h);
+        auto gs = [](Color k) { return Color{uint8_t(k.r / 2), uint8_t(k.g / 2), uint8_t(k.b / 2), uint8_t(k.a / 2)}; };
+        const size_t first = quads.size();
+        if (outline)
+            for (int k = 0; k < 4; ++k)
+                wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx + (k & 1 ? o : -o), cy + (k & 2 ? o : -o), h, gs(Color{0, 0, 0, c.a}), sp);
+        wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx, cy, h, gs(c), sp);
+        for (size_t i = first; i < quads.size(); ++i)
+            quads[i].x1 = quads[i].x0 + kTight * wv(h);   // celula estreitada, sem sobrepor a vizinha
+    }
+    void center(const char *s, float cx, float cy, float h, Color c, bool outline = false) { put(s, cx - width(s, h) * 0.5f, cy, h, c, outline); }
+    void flush(wotm::Scene &scene)
+    {
+        if (!quads.empty())
+            scene.drawQuads(quads, float(rw), float(rh));
+        quads.clear();
+    }
+};
+
+// Historico dos comandos (P1 e o primeiro boneco), no lado esquerdo da faixa 4:3, abaixo do HUD, de cima para baixo do mais novo para
+// o mais velho: quadros segurados, direcao (relativa ao monstro: 8 frente) e botoes, nos icones do dispositivo do jogador
+// (wotm_prompts.inc)
+void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
+{
+    namespace st = wotm::settings;
+    const int rw = gt.rw, rh = gt.rh;
+    const float fh = std::max(12.f, float(rh) / 50.f);
+    const float isz = fh * 1.1f, rowH = isz + 4.f;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    struct B { uint16_t bit; st::Bind bind; const char *txt; };
+    static constexpr B kB[] = {{kBtnSquare, st::BSquare, "SQ"}, {kBtnTriangle, st::BTriangle, "TRI"}, {kBtnX, st::BCross, "X"},
+                               {kBtnCircle, st::BCircle, "O"}, {kBtnL1, st::BL1, "L1"}, {kBtnR1, st::BR1, "R1"},
+                               {kBtnL2, st::BL2, "L2"}, {kBtnR2, st::BR2, "R2"}};
+    const int rows = 12;
+    float x = gr.x0 + fh;
+    const float top = float(rh) * kPanelTop;
+    const float numW = gt.width("999", fh);
+    for (int k = 0; k < 2; ++k)
+    {
+        const std::vector<PadRec> &h = v.pad[k];
+        if (k == 1 && (h.empty() || g_dummy.load() == DStand))
+            continue;
+        const char *title = k == 0 ? "P1 INPUTS" : "DUMMY INPUTS";
+        const float w = std::max(gt.width(title, fh), numW + isz * 6.f);
+        const int n = std::min<int>(rows, int(h.size()));
+        DrawRectangle(int(x) - 6, int(top) - 6, int(w) + 12, int(rowH * float(n + 1)) + 12, Color{0, 0, 0, 130});
+        gt.put(title, x, top + isz * 0.5f, fh, Color{120, 255, 160, 255});
+        for (int i = 0; i < n; ++i)
+        {
+            const PadRec &r = h[h.size() - 1 - size_t(i)];
+            const float y = top + rowH * float(i + 1);
+            const unsigned char a = static_cast<unsigned char>(255 - i * 12);
+            char fr[8];
+            std::snprintf(fr, sizeof fr, "%u", r.frames);
+            gt.put(fr, x + numW - gt.width(fr, fh), y + isz * 0.5f, fh, Color{210, 210, 210, a});
+            float bx = x + numW + 8.f;
+            drawDir(r.dir, bx + isz * 0.5f, y + isz * 0.5f, isz, Color{255, 255, 255, a});
+            bx += isz + 4.f;
+            for (const B &b : kB)
+                if (r.btn & b.bit)
+                {
+                    if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(b.bind), bx + isz * 0.5f, y + isz * 0.5f, isz, float(a) / 255.f))
+                        gt.put(b.txt, bx, y + isz * 0.5f, fh, Color{255, 230, 120, a});
+                    bx += isz + 2.f;
+                }
+        }
+        x += w + fh * 1.5f;
+    }
+    gt.flush(scene);
+}
+
+// Numeros por cima das barras do HUD (o do jogador 1 e o do boneco, o HUD 1 do jogo: trainingHud no wotm_split4.inc): vida "atual / maxima"
+// no meio da barra e, na stamina vertical, o valor atual com os algarismos empilhados dentro dela; contorno preto para ler sobre a cor
+void drawHudNumbers(GameText &gt, const View &v)
+{
+    if (!(g_opts.load() & kTrainHud) || v.players != 1 || !v.hudShown)
+        return;
+    namespace th = wotm_training::hud;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(gt.rw), float(gt.rh));
+    const float sx = gr.w / 640.f, sy = float(gt.rh) / 224.f;
+    auto mid = [&](const th::Box &b) { return Vector2{gr.x0 + 0.5f * (b.x0 + b.x1) * sx, 0.5f * (b.y0 + b.y1) * sy}; };
+    const float hh = 5.2f * sy, sh = 4.4f * sy;   // altura das letras: a barra de vida tem 5,4 de 224; a stamina, 11 de 640 de largura
+    int cpu = -1;
+    for (int i = 1; i < 16 && cpu < 0; ++i)
+        if (v.maxHealth[i] > 0.f)
+            cpu = i;
+    for (int i : {0, cpu})
+    {
+        if (i < 0 || !(v.maxHealth[i] > 0.f))
+            continue;
+        const bool mir = i != 0;
+        char b[48];
+        std::snprintf(b, sizeof b, "%.0f / %.0f", std::max(0.f, std::ceil(v.health[i])), v.maxHealth[i]);
+        const Vector2 hc = mid(mir ? th::mirror(th::kHealth) : th::kHealth);
+        gt.center(b, hc.x, hc.y, hh, RAYWHITE, true);
+        std::snprintf(b, sizeof b, "%.0f", std::max(0.f, v.stamina[i]));
+        const Vector2 sc = mid(mir ? th::mirror(th::kStamina) : th::kStamina);
+        const int n = int(std::strlen(b));
+        const float step = sh * 1.2f;
+        for (int k = 0; k < n; ++k)
+        {
+            const char d[2] = {b[k], 0};
+            gt.center(d, sc.x, sc.y + (float(k) - 0.5f * float(n - 1)) * step, sh, RAYWHITE, true);
+        }
+    }
+}
+
+// Painel de dano, dentro do quadro nativo (rw x rh; sai nas fotos do WOTM_SHOTS, some no modo foto, na pausa e fora da luta); tambem
+// os comandos e os numeros do HUD. Linhas curtas: a fonte do jogo e larga.
+void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int rw, int rh)
+{
+    // atlas do fontSetTexId (a luta nao escreve texto do jogo); sem ele ainda, o do ultimo quadro com texto
+    const uint64_t known = g_fontTex0.load(std::memory_order_relaxed), tex0 = known ? known : frameTex0;
+    if (!g_on.load() || windowsHidden() || !tex0)
+        return;
+    const View v = snapshot();
+    GameText gt{ram, tex0, rw, rh, {}};
+    drawHudNumbers(gt, v);
+    gt.flush(scene);
+    if (g_opts.load() & kShowInputs)
+        drawInputs(scene, gt, v);
+    if (!(g_opts.load() & kPanel))
+        return;
+    const float fh = std::max(12.f, float(rh) / 50.f), lineH = fh * 1.35f, pad = fh * 0.6f;
+    const Color kTitle{120, 255, 160, 255}, kText{235, 235, 235, 255}, kDimText{150, 150, 150, 255};
+    struct Line { std::string s; Color c; };
+    std::vector<Line> lines;
+    lines.push_back({"TRAINING", kTitle});
+    char b[128];
+    if (!v.hits.empty())
+    {
+        const Hit &last = v.hits.back();
+        // o dano pedido pelo golpe (base) so aparece quando o aplicado foi outro (bloqueio, furia, dificuldade)
+        if (last.base >= 0.f && std::fabs(last.base - last.applied) > 0.05f)
+            std::snprintf(b, sizeof b, "LAST %.1f %s  BASE %.1f", last.applied, sourceName(last.source), last.base);
+        else
+            std::snprintf(b, sizeof b, "LAST %.1f %s", last.applied, sourceName(last.source));
+        lines.push_back({b, kText});
+        // combo: o da thread do EE (golpes que a vitima levou sem se recuperar, wotm_training.inc, takeDamage); terminou quando a reacao
+        // depois do ultimo golpe fechou (o StunRec so entra no fim dela) ou 3 s sem golpe
+        const Combo &c = v.combo;
+        bool ended = v.frame - c.last > 180u;
+        for (const StunRec &s : v.stuns)
+            if (s.victim == c.victim && s.end > c.last + 1)
+                ended = true;
+        std::snprintf(b, sizeof b, "COMBO %d HIT%s %.1f", c.hits, c.hits == 1 ? "" : "S", c.damage);
+        lines.push_back({b, ended ? kDimText : kText});
+        std::snprintf(b, sizeof b, "BEST %.1f  %d HIT%s", v.bestCombo, v.bestHits, v.bestHits == 1 ? "" : "S");
+        lines.push_back({b, kText});
+        lines.push_back({"", kText});
+        int shown = 0;
+        for (auto it = v.hits.rbegin(); it != v.hits.rend() && shown < 4; ++it, ++shown)
+        {
+            std::snprintf(b, sizeof b, "%5.1f %s > %s %s", it->applied, slotName(it->attacker, v.players).c_str(),
+                          slotName(it->victim, v.players).c_str(), sourceName(it->source));
+            lines.push_back({b, kDimText});
+        }
+    }
+    // dados de quadro: os ultimos golpes (inicio = primeiro quadro com teste de golpe; ativo = quadros com teste; total = o estado inteiro)
+    // e, no que acertou, quanto a vitima ficou sem agir (reacoes seguidas somadas) e a vantagem (fim da reacao - fim do golpe)
+    if (!v.moves.empty())
+    {
+        lines.push_back({"", kText});
+        lines.push_back({"FRAME DATA", kTitle});
+        int shown = 0;
+        for (auto it = v.moves.rbegin(); it != v.moves.rend() && shown < 3; ++it, ++shown)
+        {
+            const MoveRec &mv = *it;
+            if (mv.chain >= 0)
+                std::snprintf(b, sizeof b, "%s %s %d.%d", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain, mv.step);
+            else
+                std::snprintf(b, sizeof b, "%s %s", slotName(mv.owner, v.players).c_str(), mv.name);
+            lines.push_back({b, kText});
+            char st[8];
+            if (mv.startup > 0)
+                std::snprintf(st, sizeof st, "%d", mv.startup);
+            else
+                std::snprintf(st, sizeof st, "-");
+            std::snprintf(b, sizeof b, "  STARTUP %s ACTIVE %d TOTAL %u", st, mv.active, mv.end - mv.start);
+            lines.push_back({b, kDimText});
+            if (mv.hitVictim >= 0)
+            {
+                uint32_t s0 = 0, s1 = 0;
+                const char *sname = nullptr;
+                for (const StunRec &s : v.stuns)
+                {
+                    if (s.victim != mv.hitVictim)
+                        continue;
+                    if (!sname && s.start >= mv.start && s.start <= mv.end + 1)
+                    {
+                        s0 = s.start;
+                        s1 = s.end;
+                        sname = s.name;
+                    }
+                    else if (sname && s.start == s1)   // reacao emendada (recuo -> derrubado)
+                        s1 = s.end;
+                }
+                if (sname)
+                    std::snprintf(b, sizeof b, "  %s %u  ADV %+d", sname, s1 - s0, int(s1) - int(mv.end));
+                else
+                    std::snprintf(b, sizeof b, "  HIT %s", slotName(mv.hitVictim, v.players).c_str());
+                lines.push_back({b, kDimText});
+            }
+        }
+    }
+    float w = 0.f;
+    for (const Line &l : lines)
+        w = std::max(w, gt.width(l.s.c_str(), fh));
+    // a direita, dentro da faixa 4:3 do jogo, abaixo do HUD do boneco (que desce ate ~40% da altura)
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    const float x = gr.x0 + gr.w - w - 2.f * pad - fh, top = float(rh) * kPanelTop;
+    DrawRectangle(int(x - pad), int(top - pad), int(w + 2.f * pad), int(float(lines.size()) * lineH + 2.f * pad), Color{0, 0, 0, 150});
+    for (size_t i = 0; i < lines.size(); ++i)
+        if (!lines[i].s.empty())
+            gt.put(lines[i].s.c_str(), x, top + lineH * (float(i) + 0.5f), fh, lines[i].c);
+    gt.flush(scene);
+}
+}

@@ -38,6 +38,8 @@
 
 void wotmPadSetPortBase(int base);   // wotm_pad.inc: o scePadRead em curso le os dispositivos da porta + base
 
+#include "wotm_training.h"   // modo treino: HUD do boneco (trainingHud)
+
 namespace wotm_split4
 {
     static_assert(PS2_RAM_SIZE > PS2_GUEST_RAM_SIZE, "os viewDef dos quadrantes moram acima da RAM do jogo");
@@ -605,6 +607,46 @@ namespace wotm_split4
                 callGuest(g_updateAnims, kUpdateAnims, rdram, ctx, runtime, f.player);
     }
 
+    // Modo treino (wotm_training.h) na luta de 1 jogador: o HUD do boneco e o HUD 1 do proprio jogo (o do jogador 2, espelhado a
+    // direita, que o banco do HUD ja traz e o initAfter ja ligou). Na saida do Hud::update do HUD 0, o update do HUD 1 com o
+    // m_viewSlot[1] trocado pelo slot do boneco (o primeiro m_monsters[i >= 1] vivo) durante a chamada. Fora da vista unificada e no modo de entrada do
+    // versus o update prende o HUD i ao _cs da camera i (m_cameras[i]); a 1 segue o boneco, entao a chamada usa o _cs da camera 0.
+    void trainingHud(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (!wotm_training::g_on.load(std::memory_order_relaxed) || !(wotm_training::g_opts.load(std::memory_order_relaxed) & wotm_training::kTrainHud) ||
+            FAST_READ32(kNumPlayers) != 1u || splitPlayers(rdram))
+            return;
+        uint32_t slot = ~0u;
+        for (uint32_t i = 1; i < 16 && slot == ~0u; ++i)
+        {
+            const uint32_t m = FAST_READ32(kMonsters + 4u * i) & 0x1FFFFFFFu;
+            if (m >= kSlots && (m - kSlots) % kSlotStride == 0 && (m - kSlots) / kSlotStride < 16u)
+                slot = (m - kSlots) / kSlotStride;
+        }
+        if (slot == ~0u)
+            return;
+        static bool s_logged = false;
+        if (!s_logged)
+        {
+            s_logged = true;
+            std::fprintf(stderr, "[treino] HUD do boneco: HUD 1 do jogo no slot %u (cs %08X)\n", slot, FAST_READ32(kGame + kHudStride + kHudBarCs));
+        }
+        // o HUD i fica preso ao _cs da camera i; com 1 jogador a camera 1 nao e a da tela (segue o boneco), entao nesta chamada o
+        // HUD 1 usa o _cs da camera 0, como os HUDs 2 e 3 na tela em quadrantes (hudUpdate)
+        const uint32_t saved = FAST_READ32(kViewSlot + 4u), savedCs = FAST_READ32(camera(1) + kCamCs);
+        FAST_WRITE32(kViewSlot + 4u, slot);
+        FAST_WRITE32(camera(1) + kCamCs, FAST_READ32(camera(0) + kCamCs));
+        // fora da vista unificada o update do HUD 1 age como na tela dividida: liga a barra dele e apaga a do HUD 0 (+0xC do _cs da
+        // barra, o drawMe); a do HUD 0 volta como o update dele a deixou
+        const uint32_t bar0 = FAST_READ32(kGame + kHudBarCs) & 0x1FFFFFFFu;
+        const uint8_t draw0 = bar0 ? FAST_READ8(bar0 + 0xC) : 0;
+        callGuest(g_origHudUpdate, kHudUpdate, rdram, ctx, runtime, kGame + kHudStride);
+        if (bar0)
+            FAST_WRITE8(bar0 + 0xC, draw0);
+        FAST_WRITE32(kViewSlot + 4u, saved);
+        FAST_WRITE32(camera(1) + kCamCs, savedCs);
+    }
+
     void hudUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -612,7 +654,11 @@ namespace wotm_split4
                            (self - kGame) / kHudStride < 4u;
         if (!split)
         {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            const bool entry = ctx->pc == kHudUpdate;
             g_origHudUpdate(rdram, ctx, runtime);
+            if (entry && ctx->pc == ra && self == kGame)
+                trainingHud(rdram, ctx, runtime);
             return;
         }
         const uint32_t me = (self - kGame) / kHudStride, p = me & 1u, hudP = kGame + kHudStride * p;
