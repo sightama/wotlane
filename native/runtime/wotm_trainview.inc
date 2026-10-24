@@ -167,7 +167,7 @@ void capture(const wotm::Ram &ram)
     const uint32_t opts = g_opts.load(std::memory_order_relaxed);
     std::vector<Hull> hulls;
     std::vector<Capsule> caps;
-    float health[16] = {}, maxHealth[16] = {};
+    float health[16] = {}, maxHealth[16] = {}, stamina[16] = {}, staminaMax[16] = {};
     for (uint32_t i = 0; i < 16; ++i)
     {
         const uint32_t mon = ram.u32(wotm::sym::shellGame + kSlots + 4 * i) & 0x1FFFFFFFu;
@@ -175,6 +175,8 @@ void capture(const wotm::Ram &ram)
             continue;
         health[i] = ram.f32(mon + 0x44C);
         maxHealth[i] = ram.f32(mon + 0x448);
+        stamina[i] = ram.f32(mon + 0x470);      // StaminaMeter (+0x460): cur
+        staminaMax[i] = ram.f32(mon + 0x460);   // max (a furia passa dele ate o maxLevel, +0x468)
         const uint32_t cs = ram.u32(mon + 0xC) & 0x1FFFFFFFu;
         if (!ram.ok(cs, 0xB0) || !ram.u8(cs + 0xC))   // drawMe: monstro escondido (fora da luta, desligado)
             continue;
@@ -221,6 +223,8 @@ void capture(const wotm::Ram &ram)
     sh.frame = ram.u32(wotm::sym::g_frame);
     std::memcpy(sh.health, health, sizeof health);
     std::memcpy(sh.maxHealth, maxHealth, sizeof maxHealth);
+    std::memcpy(sh.stamina, stamina, sizeof stamina);
+    std::memcpy(sh.staminaMax, staminaMax, sizeof staminaMax);
     sh.players = int8_t(players);
 }
 
@@ -232,9 +236,15 @@ struct View
     std::vector<Hit> hits;
     std::vector<Hull> hulls;
     std::vector<Capsule> caps;
+    std::vector<MoveRec> moves;
+    std::vector<StunRec> stuns;
     uint32_t frame = 0;
-    float health[16] = {}, maxHealth[16] = {};
+    float health[16] = {}, maxHealth[16] = {}, stamina[16] = {}, staminaMax[16] = {};
     int players = 1;
+    Combo combo;
+    float bestCombo = 0.f;
+    int bestHits = 0;
+    std::vector<PadRec> pad[2];
 };
 
 // copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
@@ -246,7 +256,16 @@ View snapshot()
     std::lock_guard<std::mutex> lk(sh.m);
     const uint32_t f = sh.frame;
     if (g_resetStats.exchange(false))
+    {
         sh.hits.clear();
+        sh.moves.clear();
+        sh.stuns.clear();
+        sh.combo = Combo{};
+        sh.bestCombo = 0.f;
+        sh.bestHits = 0;
+    }
+    v.moves = sh.moves;
+    v.stuns = sh.stuns;
     sh.sweeps.erase(std::remove_if(sh.sweeps.begin(), sh.sweeps.end(),
                                    [&](const Sweep &s) { return s.frame + kSweepLife < f || s.frame > f + 600; }),
                     sh.sweeps.end());
@@ -260,7 +279,14 @@ View snapshot()
     v.frame = f;
     std::memcpy(v.health, sh.health, sizeof v.health);
     std::memcpy(v.maxHealth, sh.maxHealth, sizeof v.maxHealth);
+    std::memcpy(v.stamina, sh.stamina, sizeof v.stamina);
+    std::memcpy(v.staminaMax, sh.staminaMax, sizeof v.staminaMax);
     v.players = sh.players;
+    v.combo = sh.combo;
+    v.bestCombo = sh.bestCombo;
+    v.bestHits = sh.bestHits;
+    v.pad[0] = sh.pad[0];
+    v.pad[1] = sh.pad[1];
     return v;
 }
 
@@ -369,24 +395,43 @@ void draw2d(bool &f1Open)
         if (IsKeyPressed(KEY_TWO)) o ^= kShowAttacks;
         if (IsKeyPressed(KEY_THREE)) o ^= kShowHulls;
         if (IsKeyPressed(KEY_FOUR)) o ^= kShowCapsule;
-        if (IsKeyPressed(KEY_FIVE)) g_dummy = g_dummy.load() ? 0 : 1;
-        if (IsKeyPressed(KEY_SIX)) o ^= kRefill;
-        if (IsKeyPressed(KEY_SEVEN)) o ^= kPanel;
-        if (IsKeyPressed(KEY_EIGHT)) g_resetStats = true;
+        if (IsKeyPressed(KEY_FIVE)) g_dummy = (g_dummy.load() + 1) % DCount;
+        if (IsKeyPressed(KEY_SIX))
+        {   // recarga: desligada, 100, 75, 50, 25, 10 % (a vida do boneco; o jogador volta sempre cheio)
+            static constexpr int kPct[] = {100, 75, 50, 25, 10};
+            if (!(o & kRefill)) { o |= kRefill; g_dummyHealth = 100; }
+            else
+            {
+                int i = 0;
+                while (i < 5 && kPct[i] != g_dummyHealth.load()) ++i;
+                if (i >= 4) o &= ~kRefill;
+                else g_dummyHealth = kPct[i + 1];
+            }
+        }
+        if (IsKeyPressed(KEY_SEVEN)) o ^= kMeters;
+        if (IsKeyPressed(KEY_EIGHT)) o ^= kShowInputs;
+        if (IsKeyPressed(KEY_NINE)) o ^= kPanel;
+        if (IsKeyPressed(KEY_ZERO)) g_resetStats = true;
         if (o != o0)
             g_opts = o;
         const bool on = g_on.load();
-        char lines[10][72];
+        static const char *const kDummy[DCount] = {"STAND STILL", "CPU FIGHTS", "ALWAYS BLOCK", "BLOCK AFTER 1ST HIT"};
+        char hp[16];
+        if (o & kRefill) std::snprintf(hp, sizeof hp, "%d%%", g_dummyHealth.load());
+        else std::snprintf(hp, sizeof hp, "OFF");
+        char lines[12][72];
         int nl = 0;
         std::snprintf(lines[nl++], 72, "TRAINING (F2 closes)");
         std::snprintf(lines[nl++], 72, "1  Training mode     %s", on ? "ON" : "-");
         std::snprintf(lines[nl++], 72, "2  Attack spheres    %s", (o & kShowAttacks) ? "ON" : "-");
         std::snprintf(lines[nl++], 72, "3  Body boxes        %s", (o & kShowHulls) ? "ON" : "-");
         std::snprintf(lines[nl++], 72, "4  Push capsules     %s", (o & kShowCapsule) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "5  CPU opponents     %s", g_dummy.load() ? "FIGHT" : "STAND STILL");
-        std::snprintf(lines[nl++], 72, "6  Health refill     %s", (o & kRefill) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "7  Damage panel      %s", (o & kPanel) ? "ON" : "-");
-        std::snprintf(lines[nl++], 72, "8  Reset damage log");
+        std::snprintf(lines[nl++], 72, "5  Dummy             %s", kDummy[std::clamp(g_dummy.load(), 0, DCount - 1)]);
+        std::snprintf(lines[nl++], 72, "6  Health refill     %s", hp);
+        std::snprintf(lines[nl++], 72, "7  Stamina, special  %s", (o & kMeters) ? "ALWAYS FULL" : "-");
+        std::snprintf(lines[nl++], 72, "8  Input display     %s", (o & kShowInputs) ? "ON" : "-");
+        std::snprintf(lines[nl++], 72, "9  Damage panel      %s", (o & kPanel) ? "ON" : "-");
+        std::snprintf(lines[nl++], 72, "0  Reset damage log");
         int w = 0;
         for (int i = 0; i < nl; ++i)
             w = std::max(w, MeasureText(lines[i], fs));
@@ -397,37 +442,105 @@ void draw2d(bool &f1Open)
     }
 }
 
-// Painel de dano, dentro do quadro nativo (rw x rh; sai nas fotos do WOTM_SHOTS, some no modo foto)
+// Seta da direcao (notacao do teclado numerico; 5 = neutro, um ponto) num quadrado de lado `sz` centrado em (cx, cy)
+void drawDir(int dir, float cx, float cy, float sz, Color c)
+{
+    const float dx = float((dir - 1) % 3 - 1), dy = -float((dir - 1) / 3 - 1);   // tela: y para baixo
+    if (dx == 0.f && dy == 0.f)
+    {
+        DrawCircleV(Vector2{cx, cy}, sz * 0.12f, Color{c.r, c.g, c.b, 140});
+        return;
+    }
+    const float l = std::sqrt(dx * dx + dy * dy), ux = dx / l, uy = dy / l, h = sz * 0.42f;
+    const Vector2 tail{cx - ux * h, cy - uy * h}, tip{cx + ux * h, cy + uy * h};
+    const Vector2 base{tip.x - ux * sz * 0.35f, tip.y - uy * sz * 0.35f};
+    DrawLineEx(tail, base, sz * 0.14f, c);
+    const Vector2 p1{base.x - uy * sz * 0.28f, base.y + ux * sz * 0.28f}, p2{base.x + uy * sz * 0.28f, base.y - ux * sz * 0.28f};
+    // o raylib so desenha um dos sentidos (o outro e descartado): manda os dois
+    DrawTriangle(tip, p1, p2, c);
+    DrawTriangle(tip, p2, p1, c);
+}
+
+// Historico dos comandos (P1 e o primeiro boneco), no lado esquerdo da faixa 4:3, de cima para baixo do mais novo para o mais velho:
+// quadros segurados, direcao (relativa ao monstro: 8 frente) e botoes, nos icones do dispositivo do jogador (wotm_prompts.inc)
+void drawInputs(int rw, int rh, const View &v)
+{
+    namespace st = wotm::settings;
+    const int fs = std::max(14, rh / 55);
+    const float isz = float(fs) * 1.15f, rowH = isz + 4.f;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    struct B { uint16_t bit; st::Bind bind; const char *txt; };
+    static constexpr B kB[] = {{kBtnSquare, st::BSquare, "SQ"}, {kBtnTriangle, st::BTriangle, "TRI"}, {kBtnX, st::BCross, "X"},
+                               {kBtnCircle, st::BCircle, "O"}, {kBtnL1, st::BL1, "L1"}, {kBtnR1, st::BR1, "R1"},
+                               {kBtnL2, st::BL2, "L2"}, {kBtnR2, st::BR2, "R2"}};
+    const int rows = 12;
+    float x = gr.x0 + float(fs);
+    const float top = float(rh) / 6.f;
+    for (int k = 0; k < 2; ++k)
+    {
+        const std::vector<PadRec> &h = v.pad[k];
+        if (k == 1 && (h.empty() || g_dummy.load() == DStand))
+            continue;
+        const float w = float(MeasureText("999", fs)) + isz * 6.f;
+        const int n = std::min<int>(rows, int(h.size()));
+        DrawRectangle(int(x) - 4, int(top) - 4, int(w) + 8, int(rowH * float(n + 1)) + 8, Color{0, 0, 0, 130});
+        DrawText(k == 0 ? "P1 inputs" : "Dummy inputs", int(x), int(top), fs, Color{120, 255, 160, 255});
+        for (int i = 0; i < n; ++i)
+        {
+            const PadRec &r = h[h.size() - 1 - size_t(i)];
+            const float y = top + rowH * float(i + 1);
+            const unsigned char a = static_cast<unsigned char>(255 - i * 12);
+            char fr[8];
+            std::snprintf(fr, sizeof fr, "%u", r.frames);
+            DrawText(fr, int(x), int(y + (isz - float(fs)) * 0.5f), fs, Color{200, 200, 200, a});
+            float bx = x + float(MeasureText("999", fs)) + 6.f;
+            drawDir(r.dir, bx + isz * 0.5f, y + isz * 0.5f, isz, Color{255, 255, 255, a});
+            bx += isz + 4.f;
+            for (const B &b : kB)
+                if (r.btn & b.bit)
+                {
+                    if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(b.bind), bx + isz * 0.5f, y + isz * 0.5f, isz, float(a) / 255.f))
+                        DrawText(b.txt, int(bx), int(y), fs, Color{255, 230, 120, a});
+                    bx += isz + 2.f;
+                }
+        }
+        x += w + float(fs);
+    }
+}
+
+// Painel de dano, dentro do quadro nativo (rw x rh; sai nas fotos do WOTM_SHOTS, some no modo foto); tambem os comandos
 void drawPanel(int rw, int rh)
 {
-    if (!g_on.load() || !(g_opts.load() & kPanel))
+    if (!g_on.load())
+        return;
+    const View v = snapshot();
+    if (g_opts.load() & kShowInputs)
+        drawInputs(rw, rh, v);
+    if (!(g_opts.load() & kPanel))
         return;
     const int fs = std::max(14, rh / 55), pad = fs / 3;
-    const View v = snapshot();
-    // combo: os golpes seguidos do ultimo atacante na mesma vitima, com menos de 1 s entre eles
+    // combo: o da thread do EE (golpes que a vitima levou sem se recuperar, wotm_training.inc, takeDamage)
     std::vector<std::string> lines;
     lines.push_back("TRAINING  (F2 options)");
     if (!v.hits.empty())
     {
         const Hit &last = v.hits.back();
-        int n = 0;
-        float total = 0.f;
-        uint32_t prev = last.frame;
-        for (auto it = v.hits.rbegin(); it != v.hits.rend(); ++it)
-        {
-            if (it->victim != last.victim || prev - it->frame > 60u)
-                break;
-            ++n;
-            total += it->applied;
-            prev = it->frame;
-        }
         char b[128];
         if (last.base >= 0.f)
             std::snprintf(b, sizeof b, "Last: %.1f  (asked %.1f, %s)", last.applied, last.base, sourceName(last.source));
         else
             std::snprintf(b, sizeof b, "Last: %.1f  (%s)", last.applied, sourceName(last.source));
         lines.push_back(b);
-        std::snprintf(b, sizeof b, "Combo: %d hit%s, %.1f damage%s", n, n == 1 ? "" : "s", total, v.frame - last.frame <= 60u ? "" : "  (ended)");
+        // terminou: a reacao que a vitima teve depois do ultimo golpe ja fechou (o StunRec so entra no fim dela), ou 3 s sem golpe
+        const Combo &c = v.combo;
+        bool ended = v.frame - c.last > 180u;
+        for (const StunRec &s : v.stuns)
+            if (s.victim == c.victim && s.end > c.last + 1)
+                ended = true;
+        const bool open = !ended;
+        std::snprintf(b, sizeof b, "Combo: %d hit%s, %.1f damage%s", c.hits, c.hits == 1 ? "" : "s", c.damage, open ? "" : "  (ended)");
+        lines.push_back(b);
+        std::snprintf(b, sizeof b, "Best combo: %.1f damage (%d hit%s)", v.bestCombo, v.bestHits, v.bestHits == 1 ? "" : "s");
         lines.push_back(b);
         lines.push_back("");
         int shown = 0;
@@ -440,12 +553,63 @@ void drawPanel(int rw, int rh)
     }
     else
         lines.push_back("Hit someone: the damage shows here");
+    // dados de quadro: os ultimos golpes (inicio = primeiro quadro com teste de golpe; ativo = quadros com teste; total = o estado inteiro)
+    // e, no que acertou, quanto a vitima ficou sem agir (reacoes seguidas somadas) e a vantagem (fim da reacao - fim do golpe)
+    if (!v.moves.empty())
+    {
+        lines.push_back("");
+        lines.push_back("Frame data (frames, 60 per second)");
+        int shown = 0;
+        for (auto it = v.moves.rbegin(); it != v.moves.rend() && shown < 4; ++it, ++shown)
+        {
+            const MoveRec &mv = *it;
+            char nm[40], b[160];
+            if (mv.chain >= 0)
+                std::snprintf(nm, sizeof nm, "%s %s c%d.%d", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain, mv.step);
+            else
+                std::snprintf(nm, sizeof nm, "%s %s", slotName(mv.owner, v.players).c_str(), mv.name);
+            char st[8];
+            if (mv.startup > 0)
+                std::snprintf(st, sizeof st, "%d", mv.startup);
+            else
+                std::snprintf(st, sizeof st, "-");
+            std::snprintf(b, sizeof b, "%s: startup %s, active %d, total %u", nm, st, mv.active, mv.end - mv.start);
+            lines.push_back(b);
+            if (mv.hitVictim >= 0)
+            {
+                uint32_t s0 = 0, s1 = 0;
+                const char *sname = nullptr;
+                for (const StunRec &s : v.stuns)
+                {
+                    if (s.victim != mv.hitVictim)
+                        continue;
+                    if (!sname && s.start >= mv.start && s.start <= mv.end + 1)
+                    {
+                        s0 = s.start;
+                        s1 = s.end;
+                        sname = s.name;
+                    }
+                    else if (sname && s.start == s1)   // reacao emendada (recuo -> derrubado)
+                        s1 = s.end;
+                }
+                if (sname)
+                {
+                    const int adv = int(s1) - int(mv.end);
+                    std::snprintf(b, sizeof b, "   hit %s: %s for %u, advantage %+d", slotName(mv.hitVictim, v.players).c_str(), sname, s1 - s0, adv);
+                }
+                else
+                    std::snprintf(b, sizeof b, "   hit %s (no reaction yet)", slotName(mv.hitVictim, v.players).c_str());
+                lines.push_back(b);
+            }
+        }
+    }
     lines.push_back("");
     for (int i = 0; i < 16; ++i)
         if (v.maxHealth[i] > 0.f)
         {
-            char b[64];
-            std::snprintf(b, sizeof b, "%s health %.1f / %.0f", slotName(i, v.players).c_str(), v.health[i], v.maxHealth[i]);
+            char b[96];
+            std::snprintf(b, sizeof b, "%s health %.1f / %.0f, stamina %.0f / %.0f", slotName(i, v.players).c_str(), v.health[i], v.maxHealth[i],
+                          v.stamina[i], v.staminaMax[i]);
             lines.push_back(b);
         }
     int w = 0;

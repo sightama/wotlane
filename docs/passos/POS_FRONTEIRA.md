@@ -360,10 +360,19 @@ testam (soco, objeto, ataque ao levantar, projéteis, onda do butt slam), caixas
 dano exato (vida antes e depois do `takeDamage`), combo e vida; CPUs paradas (ou lutando) e vida recarregada. Conferido por fotos sem
 teclado; falta o dono testar o F2 ao vivo.
 
+**Segunda leva em 2026-10-23**, na ordem do dono (obrigatório: medidores e comandos na tela; muito útil: dados de quadro; útil: IA
+do boneco, "always block", "block after first hit", dano total do combo; **não quer**: gravar e reproduzir, câmera lenta e quadro a
+quadro): dados de quadro medidos (início, ativo, total, reação da vítima e vantagem), combo pela recuperação da vítima e maior combo,
+comandos do P1 e do boneco com os ícones do dispositivo, boneco parado/CPU/sempre bloqueia/bloqueia depois do 1º acerto, vida do
+boneco em %, stamina e especial sempre cheios. Investigação das entradas: `treino_entradas.md`. Conferido por log e fotos; o modo 3
+depois de um golpe e o dano do bloqueio só ao vivo (a IA do P1 não ataca boneco parado).
+
 **Falta:**
 1. Desenho do pisão e do agarrão (sem geometria: vítima por distância/cone, `getClosestMonsterToPunch`), da investida (esferas do corpo,
    Monster +0x2B0), do fogo (`FireBreath::TestCollis`, `hdLosCSTest`) e dos especiais de cone (`StateSonicRoar::testConeCollis`).
-2. Boneco que bloqueia sempre, pula ou agacha: gancho no `Ai::updateInputs` com entrada fixa no `GamePad` (+0x5024).
+2. Boneco que pula (X em ciclos; agachar não existe no jogo). Voltar à posição (tecla: `Monster::setTrans`, `setRot`,
+   `hdReparentCsGrid` na thread do EE), se o dono quiser. Dados de quadro do bloqueio (vantagem no bloqueio: reação 0x1C com o flag de
+   recuo bloqueado).
 3. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; o script de rascunho da
    investigação vira `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
 4. Entrada pelo menu (single player) e pelo launcher; o Goliath (casco lido com 0 planos no `.NGP`, conferir ao vivo).
