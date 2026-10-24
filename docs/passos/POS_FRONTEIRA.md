@@ -18,7 +18,7 @@ combinadas com ele. Cada item diz o que o repo já sabe e o que falta descobrir.
 | 9 | Modo treino com hitboxes e dano na tela — **na master em 2026-10-24** (aprovado pelo dono; faltam os extras da seção 9) | — | médio |
 | 10 | Chefes jogáveis | 8, 9 | alto |
 | 11 | "2 players" vira "multiplayer", até 4 jogadores | 1 | alto |
-| 12 | Seleção com prévia 3D de todos os selecionados — **feito pelos itens 8 e 11** (sobra a luz da cena) | 1, 11 | médio |
+| 12 | Seleção com prévia 3D de todos os selecionados — **feito pelos itens 8 e 11** | 1, 11 | médio |
 | 13 | Campanha (adventure) com até 4 jogadores | 11, 7 | o mais alto |
 
 **Em qualquer brecha** (baratos, sem dependência): remapear controles no launcher, modo foto, gráficos de PC (seção "Brechas").
@@ -189,7 +189,7 @@ slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qua
   destraves diferentes da última gravação vão para o JSON (só eles: as opções do arquivo ficam, o menu de opções pode estar com valores
   não aceitos). A aventura (`updateStoryModeSave`/`Load`) segue com as telas e os binários, como antes (item 5).
 - A campanha como a única escolha de slot e a revisão dos textos de memory card viraram o item 5 (feito).
-- **Campos abertos investigados em 2026-10-24** (`docs/investigacoes/2026-10-24/save_campos_abertos.md`): `Shell+0x2A40` é uma opção
+- **Campos abertos investigados em 2026-10-24** (`8498ce0:docs/investigacoes/2026-10-24/save_campos_abertos.md`): `Shell+0x2A40` é uma opção
   morta (provável slider cortado do menu de opções); `TheGame+0x1204B0..B8` é o recorde do endurance por dificuldade (gravado, nunca
   mostrado); o `McScrambleIcon` só zera o `icon.sys` durante a gravação e o refaz igual depois (nada a fazer). **Bug do port corrigido
   no mesmo dia:** com o salvamento automático, o `EndureSave` trocado copiava o recorde da RAM, que ninguém atualizava, e o recorde
@@ -540,11 +540,8 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
 - **Feito, na prática, pelos itens 8 e 11** (texto revisto em 2026-10-24): a seleção nativa (telas 3, 6, 7, 18, 19 e a de 3 e 4
   jogadores, `wotm_padsel.inc`) desenha o monstro 3D animado de cada jogador com o `native/wotm_model.hpp` (o mesmo da lista de saves,
   `passos/MODELOS_3D.md`), um `Renderer` por jogador e os modelos guardados por monstro e traje (`g_selModel`, `g_selCache`).
-- O que sobra: a luz é a do desenhista do modelo, não a da cena do jogo (o monstro na seleção não fica iluminado como na luta).
-  Investigado em 2026-10-24 (`docs/investigacoes/2026-10-24/luz_selecao_3d.md`): o retail não tinha monstro 3D na seleção; a luz da
-  luta são 3 luzes paralelas da chave 5 do `RST/<FASE>.MRS`, só nos objetos com `dirLight`. Caminho recomendado: ler um `.MRS` do
-  disco (fase fixa na seleção, a do save na lista de saves) e usar a fórmula do `Scene::vertexRgb`. Decisões do dono: ângulo das
-  luzes, brilho, Kineticlops (quase sem `dirLight`, muda visivelmente).
+- A luz do modelo é a do desenhista, não a da fase (o retail não tinha monstro 3D na seleção): o dono a aprovou como está em
+  2026-10-24. Se um dia mudar, o caminho está em `8498ce0:docs/investigacoes/2026-10-24/luz_selecao_3d.md`.
 
 ### 13. Campanha com até 4
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no

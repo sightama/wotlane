@@ -48,7 +48,7 @@ def settings(b, j):
         "levels": {lv: flag(i) != 0 for i, lv in LEVEL_SLOTS},
         "mechaSweetTooth": flag(23) != 0,   # Agamo traje 4; no runtime a chave vale mais que agamo.skins[3]
     }
-    # TheGame+0x1204B0..B8: recorde do endurance por dificuldade (docs/investigacoes/2026-10-24/save_campos_abertos.md)
+    # TheGame+0x1204B0..B8: recorde do endurance por dificuldade (8498ce0:docs/investigacoes/2026-10-24/save_campos_abertos.md)
     j["records"] = {"enduranceBest": {d: u32(b, 0xE8 + k * 4) for k, d in enumerate(("easy", "medium", "hard"))}}
     j["unknown"] = {"shell2A40": u32(b, 0x0C), "slot47": flag(47)}
 

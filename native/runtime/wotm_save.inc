@@ -149,7 +149,7 @@ namespace wotm_save
             un.at("mechaSweetTooth") = Value::boolean(rd(b, 0x28 + kSweetToothSlot * 4) != 0);
 
         // Recorde do endurance (monstros derrotados pelo jogador 1), um por dificuldade: TheGame+0x1204B0..B8. O jogo grava e nunca
-        // mostra (docs/investigacoes/2026-10-24/save_campos_abertos.md). Antes ficava em unknown.game1204B0, que sai na reescrita.
+        // mostra (8498ce0:docs/investigacoes/2026-10-24/save_campos_abertos.md). Antes ficava em unknown.game1204B0, que sai na reescrita.
         Value &end = j.at("records").at("enduranceBest");
         for (int k = 0; k < 3; ++k)
             end.at(kDifficultyNames[k]) = Value::integer(rd(b, 0xE8 + k * 4));
