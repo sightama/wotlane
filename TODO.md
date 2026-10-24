@@ -50,6 +50,7 @@ Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" 
 - Páginas do cartão com `WOTM_SAVEAUTO=0` sem mouse (o gancho do `McPage::updateMenuPos` só é instalado com o salvamento automático).
 - Jogadores 3 e 4 leem o esquema de controle do `m_vibration[0..1]`; sem a linha CONTROL SCHEME na pausa, ninguém muda esse valor.
 - Pular a intro como opção do executável.
+- **Narrador: opção OWN MONSTER CRY** na linha NARRATOR (aba FEATURES do "Recompiled options", hoje OFF ou GODZILLA SAVE THE EARTH): ao confirmar um monstro, tocar o grito do próprio monstro (o som do jogo) em vez do `<nome>.mp3`. Por onde começar: `native/runtime/wotm_narrator.inc` e a opção `Announcer` em `native/wotm_settings.hpp`; falta achar no banco de som do monstro qual é o grito (`wotm_snd.hpp`). As fases continuam com o MP3 ou ficam em silêncio nessa opção (o dono decide).
 
 ## Contínuas
 - **Interpolação de quadros (escolhida pelo dono):** a apresentação já vai na taxa do monitor (`NATIVO.md`, "Taxa de apresentação"), mas repete o quadro do jogo. Para quadros intermediários, o nativo desenharia a mistura dos dois últimos instantâneos (câmera, matrizes dos objetos, paleta de ossos), com um quadro de atraso; partículas e objetos que nascem ou somem entre os dois pedem tratamento à parte. Rodar a lógica acima de 60 não serve: o `updateRate` sai de 60/fields e muita coisa conta em quadros. Estudo em `docs/investigacoes/2026-10-19/interpolacao.md`.
