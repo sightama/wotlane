@@ -216,6 +216,7 @@ static const char *const kMoveTypeNames[tr::kPunchTypes] = {"TRIANGLE", "FORWARD
 static std::string moveLabel(const tr::Move &m)
 {
     const char *t = m.type >= 0 && m.type < tr::kPunchTypes ? kMoveTypeNames[m.type] : "?";
+    if (m.kind == tr::MkOther) return m.name;
     if (m.kind == tr::MkCombo) return std::string("COMBO: ") + t + " X " + std::to_string(int(m.len));
     if (m.kind == tr::MkWeapon) return std::string("WEAPON: ") + t;
     return t;
@@ -224,6 +225,7 @@ static std::string moveHint(const tr::Move &m)
 {
     char b[160];
     const char *eff = m.stun > 100.f ? ", STUNS" : m.kb != 0.f ? ", KNOCKS DOWN" : "";
+    if (m.kind == tr::MkOther) return m.hint;
     if (m.kind == tr::MkCombo)
         std::snprintf(b, sizeof b, "%d HITS, %.0f DAMAGE IN TOTAL. LAST HIT: WINDOW %.0f-%.0f, RADIUS %.0f%s", int(m.len), m.dmg, m.ini * 100.f, m.fim * 100.f, m.radius, eff);
     else if (m.kind == tr::MkWeapon)

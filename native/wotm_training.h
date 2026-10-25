@@ -239,7 +239,10 @@ constexpr int kPunchTiers = 10, kPunchTypes = 6;
 // Lista de golpes (MOVE LIST da pausa) do monstro do P1, montada das configs na RAM: os 6 socos da primeira posicao, as sequencias
 // do mesmo botao (o proximo tipo e permitido pelo float +0x94 + tipo*4 da config e a casa seguinte existe) com o dano somado, e os 6
 // golpes com objeto. id: "P<tipo>", "C<tipo>x<n>", "W<tipo>" (o que o arquivo de favoritos guarda)
-enum MoveKind : uint8_t { MkPunch, MkCombo, MkWeapon };
+// MkOther: os outros golpes (butt slam, investida, agarrao, levantar, crowd control, arremesso, especiais), com nome, dica pronta e o
+// offset do estado no Monster (a linha acende quando o P1 esta nele); numeros lidos da RAM nos offsets de
+// docs/investigacoes/2026-10-25/move_list_comuns.md e move_list_especiais.md
+enum MoveKind : uint8_t { MkPunch, MkCombo, MkWeapon, MkOther };
 struct Move
 {
     uint8_t kind = MkPunch;
@@ -249,6 +252,9 @@ struct Move
     float dmg = 0.f;             // soma (combo); multiplicador do dano do objeto (objeto)
     float ini = 0.f, fim = 0.f;  // janela do ultimo golpe
     float radius = 0.f, stun = 0.f, kb = 0.f;   // do ultimo golpe
+    uint32_t state = 0;          // MkOther: offset do estado no Monster
+    char name[16] = {};          // MkOther: nome curto (caixa in-game e painel)
+    char hint[176] = {};         // MkOther: comando e numeros (dica do painel)
 };
 constexpr int kFavMax = 8;
 
@@ -258,6 +264,7 @@ struct Shared
     int movesType = -1;
     std::vector<std::string> fav;   // ids favoritos do monstro movesType (ate kFavMax); a caixa in-game mostra estes
     bool favDirty = false;          // o painel mudou os favoritos: o wotm_training.inc grava o arquivo
+    uint32_t p1State = 0;           // offset do estado do P1 no Monster (acende a linha MkOther da caixa)
     std::mutex m;
     PunchLive live[16];          // o soco em curso por slot (frame antigo = nao esta socando)
     PunchCfg table[kPunchTypes]; // os 6 tipos da posicao do combo em que o P1 esta (0 fora do soco)

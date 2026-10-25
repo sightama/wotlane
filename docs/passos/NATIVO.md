@@ -178,8 +178,12 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   soma) e os 6 golpes com objeto (WEAPON). A dica de cada linha traz dano, janela, raio, atordoamento e se derruba. O X favorita (até 8,
   "FAVORITE" na linha); os favoritos ficam por tipo de monstro em `training_moves.ini` ao lado do `settings.ini` (ids `P<tipo>`,
   `C<tipo>x<n>`, `W<tipo>`). Com favoritos, a tabela in-game (PUNCH TABLE) mostra esses golpes (FAVORITES HIT n, "x n" nos combos, "W"
-  nos de objeto) no lugar dos 6 tipos da posição; a linha acende quando o golpe em curso é esse botão. Especiais e golpes sem config de
-  soco ainda não entram. Log: `[treino] move list do tipo ...`.
+  nos de objeto) no lugar dos 6 tipos da posição; a linha acende quando o golpe em curso é esse botão. Os outros golpes (`MkOther`: butt
+  slam, investida, agarrão com o golpe de quadrado, o de triângulo e o arremesso, levantar atacando, crowd control, arremesso de objeto e
+  o especial do monstro, achado pelo ponteiro `Monster` +0x7980) têm nome curto e a dica pronta com os números lidos da RAM nos offsets de
+  `docs/investigacoes/2026-10-25/move_list_comuns.md` e `move_list_especiais.md`; na caixa, a linha acende quando o P1 está nesse estado.
+  Sem número: o dano do arremesso de objeto (é do objeto) e o do bug do Preytor (estáticos só na RAM). Log: `[treino] move list do tipo ...`
+  com uma linha por golpe desses.
 - **Dados de quadro:** na saída do `Monster::update` de cada slot, o estado (`m_state` +0x34, nome pela tabela do `game.h`; no
   `StatePunch` e no `BatSwipe` também a cadeia e o passo do combo). Cada troca fecha um registro: golpe (estado de ataque, ou qualquer
   um com teste de golpe) com início (quadro do primeiro teste, o primeiro do estado = 1), ativo (quadros com teste) e total; reação da

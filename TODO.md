@@ -24,9 +24,9 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
-1. **Teste do dono: tabela dos socos** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele; com um objeto na mão ela vira WEAPON HIT n (multiplicador "x1.5" no dano); o gancho do Ultra-V sai como linha. Depois do teste, merge do branch.
+1. **Teste do dono** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele; com um objeto na mão ela vira WEAPON HIT n (multiplicador "x1.5" no dano); o gancho do Ultra-V sai como linha; a pausa tem 7 itens e o MOVE LIST abre, favorita (X) e a caixa in-game vira FAVORITES. Depois do teste, merge do branch.
+2. **MOVE LIST, o que falta:** dano do arremesso de objeto (depende do objeto: ler `LevelPickups::s_info` do que está na mão) e do bug do Preytor (estáticos do `HomingBug`, só na RAM); dano do arremesso de corpo rígido do TwoHandedThrow e do Counter (`move_list_comuns.md`, "Em aberto"); ícones dos botões nas linhas do painel (hoje texto).
 
-2. **MOVE LIST na pausa:** nova linha ao lado de TRAINING OPTIONS. Painel nativo com uma linha por golpe (comando com ícones, nome, dano, janela, alcance), agrupado em socos, combos (sequência do mesmo botão com o dano somado, mais os finalizadores que derrubam), especiais, agarrão e objeto. Favoritar até 8 ou 9 golpes (salvo por monstro); a caixa in-game mostra os favoritos e, sem favoritos, os 6 socos da posição. Primeira leva: socos, combos e os golpes comuns (butt slam, investida, arremesso, agarrão); depois os especiais de cada monstro (dano e janela vêm do asm de cada estado: `docs/investigacoes/2026-10-25/move_list_*.md`).
 
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).

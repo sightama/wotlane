@@ -260,6 +260,7 @@ struct View
     int tableTier = 0;
     bool tableWeapon = false;
     std::vector<Move> fav;   // golpes favoritos da MOVE LIST, na ordem em que foram marcados (vazio: a caixa mostra os 6 da posicao)
+    uint32_t p1State = 0;    // offset do estado do P1 (acende a linha MkOther)
 };
 
 // copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
@@ -314,6 +315,7 @@ View snapshot()
     for (const std::string &id : sh.fav)
         for (const Move &m : sh.moveList)
             if (id == m.id) { v.fav.push_back(m); break; }
+    v.p1State = sh.p1State;
     return v;
 }
 
@@ -683,18 +685,43 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
             favCfg.valid = true; favCfg.weapon = mv->kind == MkWeapon; favCfg.ini = mv->ini; favCfg.fim = mv->fim; favCfg.dmg = mv->dmg;
             favCfg.radius = mv->radius; favCfg.stun = mv->stun; favCfg.kb = mv->kb;
         }
-        const Row &row = mv ? rowOf(mv->type) : kRows[r];
+        const bool otherMv = mv && mv->kind == MkOther;
+        const Row &row = mv ? rowOf(otherMv ? 5 : mv->type) : kRows[r];
         const PunchCfg &c = mv ? favCfg : v.table[row.type];
         const float y = top + rowH * float(r + 2), cy = y + isz * 0.5f;
-        bool cur = now && p.type == row.type;
-        if (mv && cur)
+        bool cur = otherMv ? (v.p1State != 0 && v.p1State == mv->state) : (now && p.type == row.type);
+        if (mv && !otherMv && cur)
             cur = mv->kind == MkWeapon ? p.cfg.weapon : (!p.cfg.weapon && (mv->kind == MkCombo ? p.tier < int(mv->len) : p.tier == 0));
         const unsigned char al = c.valid ? 255 : 90;
         if (cur)
             DrawRectangle(int(x) - 4, int(y) - 1, int(right - x) + 8, int(rowH), Color{255, 230, 120, 50});
-        drawDir(row.dir, cIcons + isz * 0.5f, cy, isz, Color{255, 255, 255, al});
-        if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(row.bind), cIcons + isz * 1.5f + 2.f, cy, isz, float(al) / 255.f))
-            gt.put(row.txt, cIcons + isz + 2.f, cy, fh, Color{255, 230, 120, al});
+        if (otherMv)
+        {   // nome curto no lugar dos icones (letras menores para caber ate a coluna da janela)
+            const float nw = gt.width(mv->name, fh), avail = cWin - cIcons - 6.f, nh = nw > avail ? fh * avail / nw : fh * 0.9f;
+            gt.put(mv->name, cIcons, cy, nh, Color{255, 230, 120, al});
+        }
+        else
+        {
+            drawDir(row.dir, cIcons + isz * 0.5f, cy, isz, Color{255, 255, 255, al});
+            if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(row.bind), cIcons + isz * 1.5f + 2.f, cy, isz, float(al) / 255.f))
+                gt.put(row.txt, cIcons + isz + 2.f, cy, fh, Color{255, 230, 120, al});
+        }
+        if (otherMv)
+        {   // janela so quando existe (levantar); dano, raio ou alcance, atordoamento como os outros
+            const Color t = cur ? Color{255, 240, 150, 255} : Color{235, 235, 235, 255};
+            if (c.fim > 0.f) std::snprintf(b, sizeof b, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
+            else std::snprintf(b, sizeof b, "-");
+            gt.put(b, cWin, cy, fh, t);
+            if (c.dmg > 0.f) std::snprintf(b, sizeof b, c.dmg < 10.f && c.dmg != float(int(c.dmg)) ? "%.1f" : "%.0f", c.dmg);
+            else std::snprintf(b, sizeof b, "-");
+            gt.put(b, cDmg, cy, fh, t);
+            if (c.radius > 0.f) std::snprintf(b, sizeof b, "%.0f", c.radius);
+            else std::snprintf(b, sizeof b, "-");
+            gt.put(b, cRad, cy, fh, t);
+            std::snprintf(b, sizeof b, "%.0f%s", c.stun, c.kb != 0.f ? " K" : "");
+            gt.put(b, cStun, cy, fh, c.stun > 100.f ? Color{255, 150, 40, 255} : t);
+            continue;
+        }
         if (mv && mv->kind != MkPunch)
         {
             char tag[8];
