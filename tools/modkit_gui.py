@@ -198,6 +198,9 @@ class App:
         self.btn_new_skin = ttk.Button(h, text="New skin...", command=self.new_skin)
         self.btn_new_skin.pack(side="right")
         self.mod_buttons.append(self.btn_new_skin)
+        # so liga com um grupo de traje de monstro jogavel selecionado (MON/SHOGUN3): vira skin com os PNGs dele
+        self.btn_turn_skin = ttk.Button(h, text="Turn into skin...", command=self.turn_selected_into_skin, state="disabled")
+        self.btn_turn_skin.pack(side="right", padx=6)
         body = ttk.PanedWindow(right, orient="horizontal")
         body.pack(fill="both", expand=True, pady=(4, 0))
         wf = ttk.Frame(body)
@@ -296,6 +299,15 @@ class App:
         """Trocou o mod: a area de trabalho inteira passa a ser a dele."""
         self.stop_sound()
         self.update_mod_state()
+        mod = self.cur_mod()
+        if mod and not os.path.exists(os.path.join(self.work(), "modkit.json")):
+            # mod feito antes de ter pasta de trabalho (ou a mao): os arquivos dele entram na pasta como editados
+            try:
+                n = modkit.adopt_mod(self.disc.get(), self.mods.get(), mod, self.work())
+                if n:
+                    self.say("%d file(s) of %s copied into its work folder; they show as edited and go back on Build.\n" % (n, mod))
+            except Exception as ex:
+                self.say("Could not copy %s's files into the work folder: %s\n" % (mod, ex), "err")
         self.refresh_work()
         self.show_preview()
         self.save_conf()
@@ -311,12 +323,12 @@ class App:
     def new_mod(self):
         mods = self.mods.get()
         while True:
-            n = simpledialog.askstring("New mod", "Name of the new mod (letters, digits, '_' or '-'; not starting with '_' or '.'):",
-                                       parent=self.root)
+            n = simpledialog.askstring("New mod", "Name of the new mod: letters, digits, '_' and '-' only, starting with a letter or digit\n"
+                                       "(no spaces; e.g. green_togera or Robo47-skins):", parent=self.root)
             if n is None:
                 return
             n = n.strip()
-            err = modkit.mod_name_error(n)
+            err = modkit.new_mod_name_error(n)
             if not err:
                 break
             messagebox.showwarning("New mod", "\"%s\": %s." % (n, err), parent=self.root)
@@ -708,6 +720,8 @@ class App:
 
     def on_select(self):
         self.show_preview()
+        key = self.selected_group()
+        self.btn_turn_skin.state(["!disabled"] if (key and self.costume_of_group(key) and not self.busy) else ["disabled"])
         files = self.selected_files()
         if self.autoplay.get() and len(files) == 1 and files[0].lower().endswith(".wav") and files[0] != self.last_played:
             self.play_selected()
@@ -1360,6 +1374,13 @@ class App:
                      lambda: self.refresh_work(focus=["skins/" + sid]))
 
         self.skin_dialog("New skin", ok)
+
+    def turn_selected_into_skin(self):
+        key = self.selected_group()
+        if key and self.costume_of_group(key):
+            self.turn_into_skin(key)
+        else:
+            self.say("Select a monster costume group in the list first (e.g. MON/SHOGUN3).\n", "warn")
 
     def turn_into_skin(self, key):
         """Traje extraido (MON/SHOGUN3) vira skin: skin.json novo e os PNGs do grupo (todos, com o estado) para skins/<id>/."""

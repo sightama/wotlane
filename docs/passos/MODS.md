@@ -30,7 +30,9 @@ espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como
 `pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`). A janela é em inglês.
 
 Um mod é um projeto: no topo, **Mod: [lista] [New mod...]** escolhe o mod (New mod cria a pasta do mod e a de trabalho dele,
-`<mods>/_work/<mod>/`). O mod escolhido governa o Extract, a lista da direita e o Build; trocar o mod troca a área de trabalho
+`<mods>/_work/<mod>/`; nome só com letras, dígitos, `_` e `-`, começando por letra ou dígito). Mod que ainda não tem pasta de
+trabalho (feito antes ou à mão) entra nela ao ser escolhido: os arquivos dele são copiados e aparecem como editados, e o Build
+os leva de volta. O mod escolhido governa o Extract, a lista da direita e o Build; trocar o mod troca a área de trabalho
 inteira. Sem mod, a lista da direita fica vazia e os botões ligados a ele ficam desligados, com a dica "Pick or create a mod first".
 
 1. **Pick from the disc** (esquerda): monstros por nome e traje (Togera › Costume 1, e os bancos de som dele), chefes, fases pelo nome do
@@ -60,8 +62,8 @@ custom o padrão é o `costume` do `monster.json`), *Name*, *Id* (sai do nome, e
 `skin.json` em `mods/<mod>/skins/<id>/` e extrai as texturas do traje base para a pasta de trabalho. Na lista, a skin é um grupo
 próprio no topo ("Skin: NAME (monster/id, base N)"); selecionado, a prévia vira o painel de propriedades (Name, Base, CPUs may pick,
 **Save** regrava o `skin.json`). Botão direito no grupo: **Duplicate skin...** (copia a skin no mod e na pasta de trabalho com o id
-novo) e **Delete skin**. Num grupo de traje de monstro jogável (ex. "MON/SHOGUN3"), **Turn into skin...** cria a skin com esse
-monstro e traje e move os PNGs do grupo para a pasta dela, de modo que o traje original fica intocado no Build; se o mod já tem
+novo) e **Delete skin**. Com um grupo de traje de monstro jogável selecionado (ex. "MON/SHOGUN3"), o botão **Turn into skin...** do cabeçalho (também
+no botão direito) cria a skin com esse monstro e traje e move os PNGs do grupo para a pasta dela, de modo que o traje original fica intocado no Build; se o mod já tem
 esses PNGs empacotados em `MON/`, a janela avisa e oferece apagá-los.
 
 ## O kit na linha de comando (`tools/modkit.py`)

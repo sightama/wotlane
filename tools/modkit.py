@@ -86,6 +86,57 @@ def mod_name_error(mod):
     return None
 
 
+NEW_MOD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def new_mod_name_error(mod):
+    """Regra estrita para um mod novo (a interface e o 'New mod...'): letras, digitos, '_' e '-', comecando por letra ou digito,
+    ate 64. Mods ja existentes com outros nomes continuam valendo (mod_name_error)."""
+    if not mod:
+        return "the mod needs a name"
+    if not NEW_MOD_RE.match(mod):
+        return "use only letters, digits, '_' and '-', starting with a letter or digit (no spaces), up to 64"
+    return None
+
+
+def adopt_mod(disc, mods, mod, work=None):
+    """Mod feito antes de ter pasta de trabalho (ou feito a mao): copia os arquivos de mods/<mod>/ para a pasta de trabalho dele,
+    marcados como editados (sha1 vazio no estado), para a janela mostra-los e o pack leva-los de volta. skin.json e monster.json
+    ficam so no mod. Devolve quantos copiou; 0 se a pasta de trabalho ja tem estado ou o mod esta vazio."""
+    if work is None:
+        work = work_dir(mods, mod)
+    src = os.path.join(mods, mod)
+    if os.path.exists(os.path.join(work, "modkit.json")) or not os.path.isdir(src):
+        return 0
+    state = load_state(work)
+    n = 0
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [x for x in dirs if not x.startswith(".")]
+        for name in sorted(files):
+            if name.lower() in ("skin.json", "monster.json", "modkit.json") or name.startswith("."):
+                continue
+            p = os.path.join(root, name)
+            rel = os.path.relpath(p, src).replace("\\", "/")
+            q = os.path.join(work, *rel.split("/"))
+            os.makedirs(os.path.dirname(q), exist_ok=True)
+            shutil.copy2(p, q)
+            ent = {"sha1": ""}   # nunca igual ao sha1 do arquivo: conta como editado
+            m = PNG_RE.match(name)
+            if m:
+                trel = find_texfile(disc, m.group(1), ".RTX" if m.group(2) else ".TEX")
+                if trel:
+                    pk = next((k for k in tex.parse(tex.read_file(disc_file(disc, trel))[0])["packets"]
+                               if k.texId == int(m.group(3)) and not (m.group(2) and k.is_palette())), None)
+                    if pk is not None:
+                        ent["size"] = [pk.w, pk.h]
+            state["files"][rel] = ent
+            n += 1
+    if n:
+        save_state(work, state)
+        print("%d file(s) of %s copied into its work folder (they count as edited)" % (n, mod))
+    return n
+
+
 def validate_mod_name(mod, what=""):
     """O nome do mod, ou SystemExit com a mensagem (prefixada por what: "pack: ...")."""
     err = mod_name_error(mod)
@@ -821,7 +872,9 @@ def main(argv):
 
     def work_of(cmd, mod):
         validate_mod_name(mod, cmd)
-        return opts.get("work") or work_dir(mods, mod)
+        w = opts.get("work") or work_dir(mods, mod)
+        adopt_mod(disc, mods, mod, w)   # mod feito antes de ter pasta de trabalho: entra nela como editado
+        return w
 
     if args[0] == "export":
         if len(args) < 3:
