@@ -25,9 +25,8 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
 1. **Teste do dono: tabela dos socos** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele. Depois do teste, merge do branch.
-2. Entrada pelo launcher.
 3. Golpes com objeto na tabela dos socos: decodificar as configs do `StateBatSwipe` (chaves 0xFA4/0xFAC/0xFD7/0xFE3 do `.CHR`; `FORMATOS.md`, "Personagem") e mostrá-las como as do `StatePunch` (`wotm_training.inc`, `trackPunch`).
-4. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
+3. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
 
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).
@@ -68,6 +67,7 @@ Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" 
 - Tela de destrave para skins de mod (skin de mod fica sempre aberta) e som próprio por skin.
 - 5 a 8 jogadores (câmera compartilhada).
 - Opção no painel para fixar o LOD.
+- Entrada no modo treino pelo launcher (a linha TRAINING do menu e `WOTM_TRAINING=1` bastam).
 - Netcode próprio (rollback): exigiria provar que a lógica dá sempre o mesmo resultado com os mesmos comandos.
 - Fazer o Goliath Prime funcionar por inteiro (CPU, colisão, animações que o ASSBOSS não tem): monstros custom são mods
   experimentais do dono, sem garantia de funcionar.
