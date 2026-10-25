@@ -212,10 +212,9 @@ static bool g_pauseTraining = false;   // o painel aberto (ou fechando) e o do t
 static bool g_pauseMoves = false;
 static int g_moveSel = 0, g_moveTop = 0;
 constexpr int kMoveVis = 11;   // linhas visiveis (o layout do treino)
-static const char *const kMoveTypeNames[tr::kPunchTypes] = {"HEAVY", "FORWARD + HEAVY", "BACK + HEAVY", "FORWARD + LIGHT", "BACK + LIGHT", "LIGHT"};
 static std::string moveLabel(const tr::Move &m)
 {
-    const char *t = m.type >= 0 && m.type < tr::kPunchTypes ? kMoveTypeNames[m.type] : "?";
+    const char *t = m.type >= 0 && m.type < tr::kPunchTypes ? tr::kMoveTypeNames[m.type] : "?";
     if (m.kind == tr::MkOther) return m.name;
     if (m.kind == tr::MkCombo) return std::string("COMBO: ") + t + " X " + std::to_string(int(m.len));
     if (m.kind == tr::MkWeapon) return std::string("WEAPON: ") + t;

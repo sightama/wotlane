@@ -867,8 +867,9 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
         for (auto it = v.moves.rbegin(); it != v.moves.rend() && shown < 3; ++it, ++shown)
         {
             const MoveRec &mv = *it;
-            if (mv.chain >= 0)
-                std::snprintf(b, sizeof b, "%s %s %d.%d", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain, mv.step);
+            if (mv.chain >= 0)   // cadeia = posicao na sequencia (0-based), passo = tipo do soco (tabela kMoveTypeNames)
+                std::snprintf(b, sizeof b, "%s %s HIT %d %s", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain + 1,
+                              mv.step >= 0 && mv.step < kPunchTypes ? kMoveTypeNames[mv.step] : "?");
             else
                 std::snprintf(b, sizeof b, "%s %s", slotName(mv.owner, v.players).c_str(), mv.name);
             lines.push_back({b, kText});

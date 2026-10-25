@@ -235,6 +235,8 @@ struct PunchLive
     PunchCfg cfg;
 };
 constexpr int kPunchTiers = 10, kPunchTypes = 6;
+// nome de cada tipo (passo) de soco/golpe com objeto, na ordem das configs do .CHR
+inline const char *const kMoveTypeNames[kPunchTypes] = {"HEAVY", "FORWARD + HEAVY", "BACK + HEAVY", "FORWARD + LIGHT", "BACK + LIGHT", "LIGHT"};
 
 // Lista de golpes (MOVE LIST da pausa) do monstro do P1, montada das configs na RAM: os 6 socos da primeira posicao, as sequencias
 // do mesmo botao (o proximo tipo e permitido pelo float +0x94 + tipo*4 da config e a casa seguinte existe) com o dano somado, e os 6
