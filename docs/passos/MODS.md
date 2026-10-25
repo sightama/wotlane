@@ -17,6 +17,13 @@ Regras do carregador (`native/wotm_mods.hpp`): pasta que começa com `_` ou `.` 
 último em ordem alfabética (dá para usar `10_base`, `20_extra`); `WOTM_MODS=<pasta>` troca a pasta e `WOTM_MODS=0` desliga tudo. O
 log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[mods] ...`).
 
+**Mods do projeto** ficam em `mods/<mod>/` na raiz do repo e são só arte e configuração próprias (JSON, PNG desenhado): o Goliath
+Prime (`mods/Goliath Prime/`) e o logo "Recompiled" da abertura (`mods/recompiled_logo/`). O jogo nunca lê o repo: o
+`tools/sync_mods.ps1` espelha cada pasta de `mods/` para `<runtime>\discroot\mods\` (o `run_live.ps1` o chama a cada boot e o
+`setup_runtime.ps1` na instalação; `WOTM_RECOMP_DIR` ou `.wotm_recomp_dir` dizem o runtime). Só as pastas que existem no repo são
+espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como estão. Textura do disco editada (PNG saído do
+`modkit.py`) é arte do jogo e não entra no repo, a não ser como arte nova por cima (caso do logo).
+
 ## Interface (`tools/modkit_gui.py`, botão "Mod kit" do launcher)
 
 `pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`). A janela é em inglês.
@@ -149,7 +156,7 @@ skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3.
 Monstros custom são experimentais: mods do dono para o próprio jogo, sem garantia de que tudo funcione (o Goliath não tem
 animações de escalar nem IA fora da fase dele). Um monstro custom é uma pasta em `mods/<mod>/monsters/<pasta>/` com um `monster.json`. Hoje ele usa o código, o modelo e os arquivos
 de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tipo livre do jogo) ficam para depois, e o formato reserva
-`files` para isso. O primeiro é o Goliath Prime (`mods/goliath/monsters/goliath/`, fora do repo):
+`files` para isso. O primeiro é o Goliath Prime (`mods/Goliath Prime/monsters/goliath/monster.json`, no repo):
 
 ```json
 { "id": "goliath", "name": "GOLIATH PRIME", "base": "assboss", "costume": 1,

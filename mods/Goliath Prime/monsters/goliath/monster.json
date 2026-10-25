@@ -1,0 +1,9 @@
+{
+  "id": "goliath",
+  "name": "GOLIATH PRIME",
+  "base": "assboss",
+  "costume": 1,
+  "camera": { "from": "togera", "scale": 200 },
+  "narrator": "goliathprime",
+  "portrait": "goliathprime.png"
+}

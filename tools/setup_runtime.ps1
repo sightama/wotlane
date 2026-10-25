@@ -79,6 +79,7 @@ foreach ($f in 'configure_dev.bat', 'build_dev.bat', 'build_tools.bat', 'run_liv
 Set-Content (Join-Path $repo '.wotm_recomp_dir') $rt -Encoding ascii
 New-Item -ItemType Directory -Force (Join-Path $rt 'discroot') | Out-Null
 Copy-Item (Join-Path $disc 'SCUS_971.97') (Join-Path $rt 'discroot\SCUS_971.97') -Force   # o resto do disco vem da ISO (PS2X_CD_IMAGE)
+& (Join-Path $PSScriptRoot 'sync_mods.ps1') -Runtime $rt -Repo $repo   # mods do repo (mods\<mod>\) para discroot\mods\
 
 # --- jogo traduzido (codigo do jogo: so local, recomp\ no .gitignore)
 Step 'jogo traduzido'
