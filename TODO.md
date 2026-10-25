@@ -18,8 +18,6 @@ monstro" (8). A campanha com 4 fica por último: cinema, chefes e regras foram f
 Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 - **Monstros com arquivos próprios:** campo `files` no `monster.json`, com um tipo livre (6, 12 ou 16) ou remapeando um tipo. Hoje o custom usa o tipo de um monstro do jogo. Modelo novo depende de o `.NGP` voltar pelo kit (hoje ele só sai).
 - **Custom na seleção de 3 e 4 jogadores** (a casa CUSTOM só existe nas seleções de 1 e 2).
-- **Custom como CPU** (`"ai"`): a IA do chefe precisa da fase dele.
-- **Animações que o ASSBOSS não tem** para o Goliath Prime (giro, olhar, dardo e retrato por PNG já existem).
 - **Skins no elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez, e os jogadores trocam de monstro entre as rodadas sem recarregar. Escolher traje ali exige mudar a carga (um arquivo por monstro escolhido), não só a tela.
 - **Seleção nativa, pendências para colaborador** (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`, itens 6 a 8): Togera desalinhado no quadro único do adventure; quadros dos monstros fora do telão; a tela 17 (`screenSelect1AI`) sem a seleção nativa.
 - **PNG de mod** nas partículas (as UVs dos sprites são em texels) e no monstro 3D da lista de saves.
@@ -30,7 +28,7 @@ Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
 1. Desenho do pisão e do agarrão (sem geometria: vítima por distância/cone, `getClosestMonsterToPunch`), da investida (esferas do  corpo, Monster +0x2B0), do fogo (`FireBreath::TestCollis`, `hdLosCSTest`) e dos especiais de cone (`StateSonicRoar::testConeCollis`).
 2. Boneco que pula (X em ciclos; agachar não existe no jogo). Dados de quadro do bloqueio (vantagem no bloqueio: reação 0x1C com o  flag de recuo bloqueado).
 3. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; virar  `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
-4. Entrada pelo launcher. Goliath: o casco sai com 0 planos no `.NGP` (conferir ao vivo).
+4. Entrada pelo launcher.
 
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).
@@ -67,4 +65,6 @@ Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" 
 - 5 a 8 jogadores (câmera compartilhada).
 - Opção no painel para fixar o LOD.
 - Netcode próprio (rollback): exigiria provar que a lógica dá sempre o mesmo resultado com os mesmos comandos.
+- Fazer o Goliath Prime funcionar por inteiro (CPU, colisão, animações que o ASSBOSS não tem): monstros custom são mods
+  experimentais do dono, sem garantia de funcionar.
 - Mudar a luz do monstro 3D da seleção (aprovada como está; caminho em `8498ce0:docs/investigacoes/2026-10-24/luz_selecao_3d.md`).

@@ -132,7 +132,8 @@ skin só com `skin.json` (`togera/demonio`, base 3) carrega o modelo do traje 3.
 
 ## Monstros custom (um monstro a mais na seleção)
 
-Um monstro custom é uma pasta em `mods/<mod>/monsters/<pasta>/` com um `monster.json`. Hoje ele usa o código, o modelo e os arquivos
+Monstros custom são experimentais: mods do dono para o próprio jogo, sem garantia de que tudo funcione (o Goliath não tem
+animações de escalar nem IA fora da fase dele). Um monstro custom é uma pasta em `mods/<mod>/monsters/<pasta>/` com um `monster.json`. Hoje ele usa o código, o modelo e os arquivos
 de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tipo livre do jogo) ficam para depois, e o formato reserva
 `files` para isso. O primeiro é o Goliath Prime (`mods/goliath/monsters/goliath/`, fora do repo):
 
@@ -154,7 +155,8 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 - `narrator`: `narrator/<nome>.mp3` dito na confirmação (vazio = o do tipo).
 - `ai`: se uma CPU pode usá-lo (padrão não). Um custom de chefe como CPU rodaria a IA do chefe (`Ai::updateAssBoss`), que precisa
   dos pontos da fase dele; a seleção mostra "PLAYERS ONLY" no quadro da CPU. Com `"ai": true` (pensado para base jogável) a CPU
-  pode escolhê-lo na casa CUSTOM da seleção; isso ainda não foi testado numa luta, e o launcher só oferece customs ao jogador.
+  pode escolhê-lo na casa CUSTOM da seleção; o launcher só oferece customs ao jogador. Um custom de base jogável luta como CPU
+  (`WOTM_MATCH=1,moddedtogera,1`, com `"base": "togera"`: anda, ataca, solta fogo e perde a rodada como um Togera). O Goliath como CPU (`WOTM_MATCH=3,goliath,1`) carrega mas não aparece na luta.
 - **Na seleção** (telas 3, 6, 7, 18 e 19): a casa CUSTOM da barra de monstros. Cima e baixo percorrem os customs, X confirma. O
   cursor do jogo fica na coluna de onde o quadro saiu, que faz as vezes dele (a vaga dela não é tomada). A seleção de 3 e 4
   jogadores ainda não tem a casa.
