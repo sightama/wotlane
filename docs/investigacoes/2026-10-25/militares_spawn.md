@@ -36,8 +36,15 @@ pickup), procurando os ids que o `LevelPickups::createPickup` (`src/game/Pickup.
 
 ## Dependências de cada veículo
 - **Navegação:** `TankPickup` e `MissileTruckPickup` montam o `VehicleNavigator` sobre `PathNet::fodder` (a rede dos carros e
-  pedestres; `lui %hi(_7PathNet$fodder)` no construtor). Fase sem essa rede não tem como andar tanque; o helicóptero usa
-  `HeliVehicle` + `HeliVehicleNav` (voo livre).
+  pedestres; `lui %hi(_7PathNet$fodder)` no construtor). O helicóptero também: o `HeliPickup` passa `&PathNet::fodder` ao
+  `HeliVehicleNav(HeliVehicle&, PathNet*)`, que tem `followPath`, `getRandPath`, `getSeekPath` e `getFleePath` sobre ela (não é voo
+  livre). Os carros (`CarPickup`) e o disco voador (`UfoPickup`) usam a mesma rede.
+- **De onde vem a rede:** `TheGame::InitBeforeDbLoad` inicia o `PathTool::instance` (nome `fop`, pasta `pts`), que lê
+  `disc/PTS/<FASE>.FOP` e o `exportPoints` copia para `PathNet::fodder` (até 256 nós). Há `.FOP` em 13 fases: 3-MILE, AIRPORT,
+  CANYON2, CAPITOL, CENTRAL, ISLAND, METRO, MINISF, SANFRAN, TOKYO, TOKYODM, UFO e VEGAS. Sem `.FOP`: BIGSHOT, CANYON1, CRUSH,
+  DBALL, TRAINING e VOLCANO. Com zero pontos o `exportPoints` monta uma rede de reserva de 2 nós, (-100, 0, 250) e (100, 0, 250),
+  ligados entre si (não conferido se o `PointToolKit::loadPoints` deixa zero pontos quando o arquivo falta). Nessas 6 fases um
+  veículo solto andaria só nesse segmento; o mod precisaria trazer um `.FOP` próprio (o formato é o do `PathTool::exportPoints`).
 - **Tiro:** `TankVehicle::updateControls` dispara com `Weapons::CreateStaticWeapon` (tipo no campo +0x60 do veículo). Nenhuma arma
   (ids 0xFA0..0x11F7) é exclusiva de Vegas: os modelos de projétil estão em quase todas as fases.
 - **Som:** `TankSound::updateTankSound` toca o som 0xAA do banco de índice 5 (`gSoundBanks`). Não conferido se o 5 é o banco da
