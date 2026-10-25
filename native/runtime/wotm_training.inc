@@ -28,7 +28,8 @@ namespace wotm_train
                        kPunchTest = wotm::fn::collisTestCloseRangeAttack__20PunchSwipeConfigBaseiP7MonsterR10HitHistoryi,
                        kBatTest = wotm::fn::collisTestBatAttack__6PickupfUi11MonsterAnimR10HitHistoryfff,
                        kGetupUpdate = wotm::fn::update__16StateGetupAttack, kWeaponHD = wotm::fn::WeaponHD__6Weapon,
-                       kShockUpdate = wotm::fn::update__9ShockWave, kSphereSwept = wotm::fn::hdSphereTest__FP8_fvectorT0fP9_hdResultUii,
+                       kShockUpdate = wotm::fn::update__9ShockWave, kHookTest = wotm::fn::testCollis__16StateGrappleHook,
+                       kHookState = 0x10600u, kSphereSwept = wotm::fn::hdSphereTest__FP8_fvectorT0fP9_hdResultUii,
                        kSphereStatic = wotm::fn::hdSphereTest__FP8_fvectorfP9_hdResultUii, kAiInputs = wotm::fn::updateInputs__2Ai;
     constexpr uint32_t kAiInMonster = 0x4E0u, kGamePad = 0x5024u;   // Ai embutido no Monster; GamePad do Monster (um byte por botao)
     // golpes sem esfera (fogo, cone, corpo, pisao, agarrao)
@@ -50,7 +51,7 @@ namespace wotm_train
                                    g_origSwept = nullptr, g_origStatic = nullptr, g_origAi = nullptr, g_origFire = nullptr,
                                    g_origLos = nullptr, g_origCone = nullptr, g_origPunchSearch = nullptr, g_origFovSearch = nullptr,
                                    g_origEnv = nullptr, g_origBundle = nullptr, g_origStomp = nullptr, g_origGrabOH = nullptr,
-                                   g_origMonkeyOH = nullptr;
+                                   g_origMonkeyOH = nullptr, g_origHook = nullptr;
 
     // estado da thread do EE
     int g_ctxKind = -1;         // teste de golpe em curso (Kind) ou -1
@@ -141,7 +142,7 @@ namespace wotm_train
     uint32_t g_kindLog = 0;   // tipos ja anunciados no log (um aviso por tipo)
     void logKind(int kind)
     {
-        static const char *const names[KKinds] = {"soco", "objeto", "levantar", "projetil", "onda", "outro", "fogo", "corpo", "pisao", "agarrao", "cone"};
+        static const char *const names[KKinds] = {"soco", "objeto", "levantar", "projetil", "onda", "gancho", "outro", "fogo", "corpo", "pisao", "agarrao", "cone"};
         if (kind < 0 || kind >= KKinds || (g_kindLog & (1u << kind)))
             return;
         g_kindLog |= 1u << kind;
@@ -293,6 +294,13 @@ namespace wotm_train
     {
         if (ctx->pc != kWeaponHD || !g_on.load(std::memory_order_relaxed)) { g_origWeapon(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origWeapon, KWeapon, -1);
+    }
+    // StateGrappleHook::testCollis (a0 = o estado, Monster +0x10600): o unico hdSphereTest do gancho do Ultra-V, raio 0 (uma linha) do ponto
+    // anterior ao atual da ponta (+0x90 -> +0xA0)
+    void hookTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kHookTest || !g_on.load(std::memory_order_relaxed)) { g_origHook(rdram, ctx, runtime); return; }
+        withCtx(rdram, ctx, runtime, g_origHook, KHook, slotOf(rdram, (GPR_U32(ctx, 4) & 0x1FFFFFFFu) - kHookState));
     }
     void shockUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)  // +0x20: o dono (Monster), quando e um dos slots
     {
@@ -716,6 +724,447 @@ namespace wotm_train
             h.erase(h.begin());
     }
 
+    // ---- tabela dos socos (configs do StatePunch, os valores do .CHR ja na RAM)
+    constexpr uint32_t kAnims = 0x1CF0u, kNumAnims = 0x12Cu;   // Monster::m_anims (um _animHandle de 0x10 por MonsterAnim)
+    constexpr uint32_t kPunchCfgs = 0x20u, kTierStride = 0x420u, kTypeStride = 0xB0u, kFistDefault = 0x2980u, kPunchTier = 0x2988u,
+                       kPunchType = 0x298Cu, kPunchInWindow = 0x2A00u;
+
+    PunchCfg readPunchCfg(const uint8_t *rdram, uint32_t m, int tier, int type)
+    {
+        PunchCfg p;
+        if (tier < 0 || tier >= kPunchTiers || type < 0 || type >= kPunchTypes)
+            return p;
+        const uint32_t c = m + kPunch + kPunchCfgs + uint32_t(tier) * kTierStride + uint32_t(type) * kTypeStride;
+        p.anim = int(rd32(rdram, c));
+        p.ini = rdf(rdram, c + 0x0C);
+        p.fim = rdf(rdram, c + 0x10);
+        p.kb = rdf(rdram, c + 0x64);
+        p.stun = rdf(rdram, c + 0x6C);
+        p.radius = rdf(rdram, c + 0x74);
+        if (!(p.radius > 0.f))
+            p.radius = rdf(rdram, m + kPunch + kFistDefault);
+        p.loc[0] = int(rd32(rdram, c + 0x7C));
+        p.loc[1] = int(rd32(rdram, c + 0x80));
+        p.dmg = rdf(rdram, c + 0x90);
+        // a mesma regra do chr_dump.py: sem animacao e sem dano = casa vazia
+        p.valid = std::isfinite(p.ini + p.fim + p.dmg + p.radius) && !(p.anim <= 0 && p.dmg == 0.f);
+        return p;
+    }
+
+    // Golpes com objeto (StateBatSwipe, Monster +0xAE90): configs em +0x20 + pos*0x480 + tipo*0xC0 (SwipeConfig de 0xC0, o mesmo
+    // comeco de layout da PunchConfig), pos +0x2D48, tipo +0x2D4C, inCollisionWindow +0x2DC0. O tipo vem do mesmo curMappedAction do
+    // soco (StateBatSwipe::transitionOK). O dano e um multiplicador do dano do objeto (LevelPickups::s_info): +0x90 quando o objeto e
+    // um bastao (Pickup +0xA0 == 8, collisTestBatAttack), +0xB0 nos outros (getDamageMod, pelo collisTestCloseRangeAttack).
+    constexpr uint32_t kSwipeCfgs = 0x20u, kSwipeTierStride = 0x480u, kSwipeTypeStride = 0xC0u, kSwipeTier = 0x2D48u, kSwipeType = 0x2D4Cu,
+                       kSwipeInWindow = 0x2DC0u, kMonsterPickup = 0x68A4u, kPickupKind = 0xA0u, kPickupKindBat = 8u;
+
+    // o Pickup que o monstro segura (m_pickup aponta para o no da lista cujo primeiro campo e o Pickup*), ou 0
+    uint32_t heldPickup(const uint8_t *rdram, uint32_t m)
+    {
+        const uint32_t node = rd32(rdram, m + kMonsterPickup) & 0x1FFFFFFFu;
+        if (!ok(node, 4u))
+            return 0;
+        const uint32_t p = rd32(rdram, node) & 0x1FFFFFFFu;
+        return ok(p, kPickupKind + 4u) ? p : 0;
+    }
+
+    PunchCfg readSwipeCfg(const uint8_t *rdram, uint32_t m, int tier, int type, bool bat)
+    {
+        PunchCfg p;
+        if (tier < 0 || tier >= kPunchTiers || type < 0 || type >= kPunchTypes)
+            return p;
+        const uint32_t c = m + kBat + kSwipeCfgs + uint32_t(tier) * kSwipeTierStride + uint32_t(type) * kSwipeTypeStride;
+        p.weapon = true;
+        p.anim = int(rd32(rdram, c));
+        p.ini = rdf(rdram, c + 0x0C);
+        p.fim = rdf(rdram, c + 0x10);
+        p.kb = rdf(rdram, c + 0x64);
+        p.stun = rdf(rdram, c + 0x6C);
+        p.radius = rdf(rdram, c + 0x74);
+        p.loc[0] = int(rd32(rdram, c + 0x7C));
+        p.dmg = rdf(rdram, c + (bat ? 0x90u : 0xB0u));
+        p.valid = std::isfinite(p.ini + p.fim + p.dmg + p.radius) && !(p.anim <= 0 && p.dmg == 0.f);
+        return p;
+    }
+
+    // animationGetCurrentPercent(&m_anims[anim]) (o a0 e o endereco do _animHandle; devolve em $f0), com o contexto de volta como estava
+    float animPercent(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int anim)
+    {
+        static const PS2Runtime::RecompiledFunction f = runtime->lookupFunction(wotm::fn::animationGetCurrentPercent__FG11_animHandle);
+        if (!f || anim < 0 || uint32_t(anim) >= kNumAnims)
+            return -1.f;
+        const uint32_t h = m + kAnims + uint32_t(anim) * 0x10u;
+        if (!(rd32(rdram, h) & 0x1FFFFFFFu))   // ci nulo: o monstro nao tem essa animacao
+            return -1.f;
+        const R5900Context saved = *ctx;
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(h)));
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->pc = wotm::fn::animationGetCurrentPercent__FG11_animHandle;
+        f(rdram, ctx, runtime);
+        const float pct = ctx->f[0];
+        *ctx = saved;
+        return std::isfinite(pct) ? pct : -1.f;
+    }
+
+    // ---- MOVE LIST (wotm_mainmenu.inc): a lista do monstro do P1 e os favoritos dele. Arquivo de favoritos: training_moves.ini ao
+    // lado do settings.ini (uma linha "<tipo>=<id>,<id>..." por monstro; sem settings.ini, so na memoria)
+    constexpr uint32_t kPunchNext = 0x94u;   // PunchConfig: 6 floats, > 0 = o proximo tipo e permitido
+    std::filesystem::path favPath()
+    {
+        const std::filesystem::path &p = wotm::settings::g_path;
+        return p.empty() ? std::filesystem::path() : p.parent_path() / "training_moves.ini";
+    }
+    std::vector<std::string> loadFav(int type)
+    {
+        std::vector<std::string> out;
+        const std::filesystem::path p = favPath();
+        if (p.empty()) return out;
+        std::ifstream f(p);
+        std::string line;
+        const std::string key = std::to_string(type) + "=";
+        while (f && std::getline(f, line))
+        {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.rfind(key, 0) != 0) continue;
+            std::string rest = line.substr(key.size()), id;
+            for (char c : rest + ",")
+            {
+                if (c == ',') { if (!id.empty() && int(out.size()) < kFavMax) out.push_back(id); id.clear(); }
+                else if (c != ' ') id += c;
+            }
+        }
+        return out;
+    }
+    void saveFav(int type, const std::vector<std::string> &fav)
+    {
+        const std::filesystem::path p = favPath();
+        if (p.empty()) return;
+        std::vector<std::string> lines;
+        {
+            std::ifstream f(p);
+            std::string line;
+            const std::string key = std::to_string(type) + "=";
+            while (f && std::getline(f, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (!line.empty() && line.rfind(key, 0) != 0) lines.push_back(line);
+            }
+        }
+        std::string mine = std::to_string(type) + "=";
+        for (size_t i = 0; i < fav.size(); ++i) mine += (i ? "," : "") + fav[i];
+        lines.push_back(mine);
+        std::ofstream f(p, std::ios::trunc);
+        f << "# MOVE LIST do modo treino: favoritos por tipo de monstro (m_typeBits >> 5); ids P<tipo>, C<tipo>x<n>, W<tipo>\n";
+        for (const std::string &l : lines)
+            if (l[0] != '#') f << l << '\n';
+    }
+    // monta a lista do monstro m (socos da posicao 1, sequencias do mesmo botao, golpes com objeto) e publica com os favoritos dele
+    void buildMoves(const uint8_t *rdram, uint32_t m, int type, bool bat)
+    {
+        std::vector<Move> list;
+        auto fill = [](Move &mv, const PunchCfg &c) {
+            mv.ini = c.ini; mv.fim = c.fim; mv.radius = c.radius; mv.stun = c.stun; mv.kb = c.kb;
+        };
+        for (int k = 0; k < kPunchTypes; ++k)
+        {
+            const PunchCfg c = readPunchCfg(rdram, m, 0, k);
+            if (!c.valid) continue;
+            Move mv;
+            mv.kind = MkPunch; mv.type = int8_t(k); mv.len = 1; mv.dmg = c.dmg;
+            fill(mv, c);
+            std::snprintf(mv.id, sizeof mv.id, "P%d", k);
+            list.push_back(mv);
+        }
+        for (int k = 0; k < kPunchTypes; ++k)
+        {
+            PunchCfg c = readPunchCfg(rdram, m, 0, k);
+            if (!c.valid) continue;
+            float total = c.dmg;
+            int n = 1;
+            for (int t = 0; t + 1 < kPunchTiers; ++t)
+            {
+                const uint32_t cfg = m + kPunch + kPunchCfgs + uint32_t(t) * kTierStride + uint32_t(k) * kTypeStride;
+                if (!(rdf(rdram, cfg + kPunchNext + uint32_t(k) * 4u) > 0.f)) break;
+                const PunchCfg nx = readPunchCfg(rdram, m, t + 1, k);
+                if (!nx.valid) break;
+                c = nx;
+                total += c.dmg;
+                ++n;
+            }
+            if (n < 2) continue;
+            Move mv;
+            mv.kind = MkCombo; mv.type = int8_t(k); mv.len = uint8_t(n); mv.dmg = total;
+            fill(mv, c);
+            std::snprintf(mv.id, sizeof mv.id, "C%dx%d", k, n);
+            list.push_back(mv);
+        }
+        for (int k = 0; k < kPunchTypes; ++k)
+        {
+            const PunchCfg c = readSwipeCfg(rdram, m, 0, k, bat);
+            if (!c.valid) continue;
+            Move mv;
+            mv.kind = MkWeapon; mv.type = int8_t(k); mv.len = 1; mv.dmg = c.dmg;
+            fill(mv, c);
+            std::snprintf(mv.id, sizeof mv.id, "W%d", k);
+            list.push_back(mv);
+        }
+        // os outros golpes comuns (move_list_comuns.md): numeros da RAM do proprio monstro
+        auto other = [&](const char *id, const char *name, uint32_t state, float dmg, const char *hint) {
+            Move mv;
+            mv.kind = MkOther; mv.state = state; mv.dmg = std::isfinite(dmg) ? dmg : 0.f;
+            std::snprintf(mv.id, sizeof mv.id, "%s", id);
+            std::snprintf(mv.name, sizeof mv.name, "%s", name);
+            std::snprintf(mv.hint, sizeof mv.hint, "%s", hint);
+            list.push_back(mv);
+            return list.size() - 1;
+        };
+        char h[176];
+        {   // butt slam: anel 0 direto dentro de reach[0], depois a onda ate reach[n-1]
+            const int n = std::clamp(int(rd32(rdram, m + 0xFA84u)), 0, 8);
+            const float d0 = rdf(rdram, m + 0xFAA8u), r0 = rdf(rdram, m + 0xFCD4u), rn = n > 0 ? rdf(rdram, m + 0xFCD4u + 4u * uint32_t(n - 1)) : 0.f;
+            const float cost = rdf(rdram, m + 0xFA68u);
+            std::snprintf(h, sizeof h, "IN THE AIR: UP + HEAVY. %.0f DAMAGE WITHIN %.0f, THEN A SHOCKWAVE UP TO %.0f (%d RINGS). STAMINA %.0f. KNOCKS DOWN", d0, r0, rn, n, cost);
+            const size_t i = other("Obutt", "BUTT SLAM", 0xFA1Cu, d0, h);
+            list[i].kb = rdf(rdram, m + 0xFAB0u); list[i].stun = rdf(rdram, m + 0xFAB8u); list[i].radius = r0;
+        }
+        {   // investida: dano base + velocidade x fator
+            const float base = rdf(rdram, m + 0xFD80u), per = rdf(rdram, m + 0xFD84u), cost = rdf(rdram, m + 0xFD88u);
+            char sp[40] = "";
+            if (per > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", per);   // fator 0 em todos os monstros vistos
+            std::snprintf(h, sizeof h, "RUN (TAP FORWARD TWICE) + HEAVY, HOLD TO CHARGE. %.0f DAMAGE%s. STAMINA %.0f. KNOCKS DOWN", base, sp, cost);
+            const size_t i = other("Oram", "RAM ATTACK", 0xFD40u, base, h);
+            list[i].kb = 1.f;
+        }
+        {   // agarrao: alcance do cone; golpes no agarrao (Congar usa o MonkeyOHAttack); arremesso (dano do impacto no chao, da vitima)
+            const float range = rdf(rdram, m + 0xDD04u);
+            std::snprintf(h, sizeof h, "GRAB NEAR THE OPPONENT (RANGE %.0f). THEN LIGHT OR HEAVY TO HIT, GRAB OR UP + GRAB TO THROW", range);
+            const size_t g = other("Ograb", "GRAB", 0xDCE0u, 0.f, h);
+            list[g].radius = range;
+            const bool monkey = type == 1;   // Congar (kMonsterNames: tipo = m_typeBits >> 5)
+            const uint32_t st = monkey ? 0x10B34u : 0x10AE0u;
+            const float dSq = rdf(rdram, m + (monkey ? 0x10B5Cu : 0x10B08u)), cSq = rdf(rdram, m + (monkey ? 0x10B60u : 0x10B0Cu));
+            const float dTri = rdf(rdram, m + (monkey ? 0x10B70u : 0x10B1Cu)), cTri = rdf(rdram, m + (monkey ? 0x10B74u : 0x10B20u));
+            std::snprintf(h, sizeof h, "LIGHT WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. STOPS THE OPPONENT FROM STRUGGLING FOR A MOMENT", dSq, cSq);
+            other("Ograbsq", "GRAB: LIGHT", st, dSq, h);
+            std::snprintf(h, sizeof h, "HEAVY WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. LETS THE OPPONENT GO", dTri, cTri);
+            other("Ograbtri", "GRAB: HEAVY", st, dTri, h);
+            const float ground = rdf(rdram, m + 0xE430u), perV = rdf(rdram, m + 0xE434u), wall = rdf(rdram, m + 0xE400u);
+            char sp[40] = "";
+            if (perV > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", perV);
+            std::snprintf(h, sizeof h, "GRAB AGAIN WHILE GRABBING (UP + GRAB THROWS UP). LANDING %.0f%s, WALL %.0f; WHOEVER IT HITS TAKES THE SAME", ground, sp, wall);
+            const size_t t = other("Ograbthrow", "GRAB: THROW", 0xDD74u, ground, h);
+            list[t].kb = 1.f;
+        }
+        for (int i = 0; i < 2; ++i)   // levantar atacando: entradas de 0x24 (de costas / de brucos)
+        {
+            const uint32_t e = m + 0x10C40u + uint32_t(i) * 0x24u;
+            const int anim = int(rd32(rdram, e + 0x20u));
+            const float d = rdf(rdram, e + 0x34u);
+            if (anim <= 0 || !(d > 0.f)) continue;
+            char id[12], nm[16];
+            std::snprintf(id, sizeof id, "Ogetup%d", i);
+            std::snprintf(nm, sizeof nm, "GETUP %d", i + 1);
+            std::snprintf(h, sizeof h, "WHILE KNOCKED DOWN, HOLD AN ATTACK BUTTON TO GET UP SWINGING. %.0f DAMAGE, WINDOW %.0f-%.0f", d, rdf(rdram, e + 0x14u) * 100.f, rdf(rdram, e + 0x18u) * 100.f);
+            const size_t k = other(id, nm, 0x10C40u, d, h);
+            list[k].ini = rdf(rdram, e + 0x14u); list[k].fim = rdf(rdram, e + 0x18u);
+            list[k].kb = rdf(rdram, e + 0x28u); list[k].stun = rdf(rdram, e + 0x30u);
+        }
+        {   // crowd control: onda com o medidor de especial
+            const int n = std::clamp(int(rd32(rdram, m + 0xF42Cu)), 0, 8);
+            const float d0 = rdf(rdram, m + 0xF450u), rn = n > 0 ? rdf(rdram, m + 0xF67Cu + 4u * uint32_t(n - 1)) : 0.f;
+            std::snprintf(h, sizeof h, "LIGHT + JUMP TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST. USES THE WHOLE METER", rn, n, d0);
+            const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h);
+            list[i].radius = rn; list[i].kb = rdf(rdram, m + 0xF458u); list[i].stun = rdf(rdram, m + 0xF460u);
+        }
+        other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "GRAB WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT");
+        {   // o especial do monstro (move_list_especiais.md): Monster +0x7980 aponta o estado; circulo + triangulo com o medidor
+            const uint32_t sp = rd32(rdram, m + 0x7980u) & 0x1FFFFFFFu;
+            const uint32_t so = sp > m && sp - m < 0x11190u ? sp - m : 0;
+            // onda de choque (ShockWaveConfig): n em +0, aneis em +0x20 (0x1C cada, dano +4), alcances em +0x250 + 4i
+            auto wave = [&](uint32_t cfg, float &d0, float &rn, int &n) {
+                n = std::clamp(int(rd32(rdram, cfg)), 0, 8);
+                d0 = rdf(rdram, cfg + 0x24u);
+                rn = n > 0 ? rdf(rdram, cfg + 0x250u + 4u * uint32_t(n - 1)) : 0.f;
+            };
+            float d0 = 0.f, rn = 0.f;
+            int n = 0;
+            const char *cmd = "GRAB + HEAVY TOGETHER WITH THE SPECIAL METER";
+            switch (so)
+            {
+            case 0xF6F4u:   // SonicRoar (Congar)
+            {
+                const float d = rdf(rdram, m + so + 0x3Cu), rng = rdf(rdram, m + so + 0x34u), loop = rdf(rdram, m + so + 0x2Cu);
+                std::snprintf(h, sizeof h, "%s. SONIC ROAR: %.0f DAMAGE PER TARGET IN THE CONE, RANGE %.0f, %.0f FRAMES. KNOCKS DOWN", cmd, d, rng, loop);
+                const size_t i = other("Ospecial", "SONIC ROAR", so, d, h);
+                list[i].radius = rng; list[i].kb = 1.f;
+                break;
+            }
+            case 0xF974u:   // FireBreath (Togera, Raptros)
+            {
+                const float dps = rdf(rdram, m + so + 0x24u), scen = rdf(rdram, m + so + 0x28u), rng = rdf(rdram, m + so + 0x20u), fr = rdf(rdram, m + so + 0x1Cu);
+                std::snprintf(h, sizeof h, "%s. FIRE BREATH: %.0f DAMAGE PER SECOND TO MONSTERS (%.0f TO BUILDINGS), RANGE %.0f, %.0f FRAMES", cmd, dps, scen, rng, fr);
+                const size_t i = other("Ospecial", "FIRE BREATH", so, dps, h);
+                list[i].radius = rng;
+                break;
+            }
+            case 0xF9D8u:   // BugAttack (Preytor)
+                other("Ospecial", "BUG ATTACK", so, 0.f, "GRAB + HEAVY TOGETHER WITH THE SPECIAL METER. HOMING BUG THAT LATCHES ON AND DRAINS HEALTH OVER TIME");
+                break;
+            case 0xFE5Cu:   // RobotSpecial (Robo-47): missil que explode em onda
+            {
+                wave(m + so + 0x58u, d0, rn, n);
+                std::snprintf(h, sizeof h, "%s. HOLD TO AIM, RELEASE TO FIRE A HOMING MISSILE: SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE AT THE CENTER. KNOCKS DOWN", cmd, rn, n, d0);
+                const size_t i = other("Ospecial", "MISSILE", so, d0, h);
+                list[i].radius = rn; list[i].kb = 1.f;
+                break;
+            }
+            case 0x102A8u:   // RockSpecial (Agamo): cabeca-bomba
+            {
+                wave(m + so + 0x44u, d0, rn, n);
+                std::snprintf(h, sizeof h, "%s. THROWS THE HEAD; PRESS AGAIN TO DETONATE: SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE AT THE CENTER. KNOCKS DOWN", cmd, rn, n, d0);
+                const size_t i = other("Ospecial", "ROCK BOMB", so, d0, h);
+                list[i].radius = rn; list[i].kb = 1.f;
+                break;
+            }
+            case 0x1059Cu:   // ZapAttack (Kineticlops)
+            {
+                const float dps = rdf(rdram, m + so + 0x38u), rng = rdf(rdram, m + so + 0x34u), loop = rdf(rdram, m + so + 0x2Cu);
+                std::snprintf(h, sizeof h, "%s. LIGHTNING ON THE LOCKED TARGET: %.1f DAMAGE PER SECOND PLUS SHOCK, RANGE %.0f, %.0f FRAMES, CHAINS TO OTHERS. KNOCKS DOWN AT THE END", cmd, dps, rng, loop);
+                const size_t i = other("Ospecial", "LIGHTNING", so, dps, h);
+                list[i].radius = rng; list[i].kb = 1.f;
+                break;
+            }
+            case 0x10600u:   // GrappleHook (Ultra-V)
+            {
+                const float d = rdf(rdram, m + so + 0x34u), rng = rdf(rdram, m + so + 0x30u);
+                std::snprintf(h, sizeof h, "%s. GRAPPLE HOOK: %.0f DAMAGE PLUS THE HELD OBJECT'S, RANGE %.0f, THEN PULLS THE TARGET IN", cmd, d, rng);
+                const size_t i = other("Ospecial", "HOOK", so, d, h);
+                list[i].radius = rng;
+                break;
+            }
+            case 0x10790u:   // AirStrike (Zorgulon)
+            {
+                const float d = rdf(rdram, m + so + 0x174u), fr = rdf(rdram, m + so + 0x178u);
+                std::snprintf(h, sizeof h, "%s. FLARE, THEN SAUCERS STRAFE THE TARGET FOR %.0f FIELDS, %.1f DAMAGE PER SHOT", cmd, fr, d);
+                other("Ospecial", "AIR STRIKE", so, d, h);
+                break;
+            }
+            case 0x10930u:   // LavaBlast (Magmo)
+            {
+                const float d = rdf(rdram, m + so + 0x19Cu);
+                const int balls = int(rd32(rdram, m + so + 0x190u));
+                std::snprintf(h, sizeof h, "%s. LAVA BLAST: %d BALLS OF %.0f DAMAGE EACH, PLUS FIRE. KNOCKS DOWN", cmd, balls, d);
+                const size_t i = other("Ospecial", "LAVA BLAST", so, d, h);
+                list[i].kb = 1.f;
+                break;
+            }
+            case 0x10F60u:   // CannonHands (Goliath)
+            {
+                const float d = rdf(rdram, m + 0x69ACu);
+                std::snprintf(h, sizeof h, "%s. CANNON HANDS: 36 HOMING SHOTS OF %.0f DAMAGE", cmd, d);
+                other("Ospecial", "CANNON", so, d, h);
+                break;
+            }
+            default:
+                if (so) other("Ospecial", "SPECIAL", so, 0.f, cmd);
+                break;
+            }
+        }
+        Shared &sh = shared();
+        std::lock_guard<std::mutex> lk(sh.m);
+        sh.moveList = std::move(list);
+        if (sh.movesType != type)   // monstro novo: os favoritos dele vem do arquivo (os mudados no painel ja foram gravados)
+        {
+            sh.fav = loadFav(type);
+            sh.favDirty = false;
+            std::fprintf(stderr, "[treino] move list do tipo %d: %zu golpes, %zu favorito(s)\n", type, sh.moveList.size(), sh.fav.size());
+            for (const Move &mv : sh.moveList)
+                if (mv.kind == MkOther)
+                    std::fprintf(stderr, "[treino]   %-11s dano %.1f raio %.0f kb %.0f atord %.0f: %s\n", mv.name, mv.dmg, mv.radius, mv.kb, mv.stun, mv.hint);
+        }
+        sh.movesType = type;
+    }
+    // a cada 64 quadros no P1: lista nova quando o monstro muda; favoritos mudados pelo painel vao para o arquivo
+    void updateMoves(const uint8_t *rdram, uint32_t m, bool bat)
+    {
+        const int type = int(rd32(rdram, m + 0x14) >> 5);
+        bool rebuild = false, save = false;
+        std::vector<std::string> fav;
+        {
+            Shared &sh = shared();
+            std::lock_guard<std::mutex> lk(sh.m);
+            rebuild = sh.movesType != type;
+            if (sh.favDirty) { save = true; fav = sh.fav; sh.favDirty = false; }
+        }
+        if (save) saveFav(type, fav);
+        if (rebuild || (frameNow(rdram) % 64u) == 0) buildMoves(rdram, m, type, bat);
+    }
+
+    // Na saida do Monster::update: o golpe em curso (soco ou golpe com objeto: config, % da animacao, localizadores) e, no P1, os 6
+    // tipos da posicao do combo (as SwipeConfig enquanto ele segura um objeto, as PunchConfig sem)
+    void trackPunch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int slot)
+    {
+        const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
+        const bool swiping = st == m + kBat;
+        const bool punching = st == m + kPunch || swiping;
+        if (!punching && slot != 0)
+            return;
+        const uint32_t pickup = heldPickup(rdram, m);
+        const bool weapon = swiping || (pickup != 0 && st != m + kPunch);
+        const bool bat = pickup != 0 && rd32(rdram, pickup + kPickupKind) == kPickupKindBat;
+        const uint32_t base = swiping ? kBat : kPunch, offTier = swiping ? kSwipeTier : kPunchTier, offType = swiping ? kSwipeType : kPunchType;
+        const int tier = punching ? int(rd32(rdram, m + base + offTier)) : 0;
+        const int type = punching ? int(rd32(rdram, m + base + offType)) : -1;
+        PunchLive live;
+        if (punching)
+        {
+            live.frame = frameNow(rdram);
+            live.tier = int8_t(tier);
+            live.type = int8_t(type);
+            live.cfg = swiping ? readSwipeCfg(rdram, m, tier, type, bat) : readPunchCfg(rdram, m, tier, type);
+            live.inWindow = rd32(rdram, m + base + (swiping ? kSwipeInWindow : kPunchInWindow)) != 0;
+            live.pct = live.cfg.valid ? animPercent(rdram, ctx, runtime, m, live.cfg.anim) : -1.f;
+            for (int id : live.cfg.loc)
+            {
+                if (id < 0x802 || id > 0x832)
+                    continue;
+                float *p = live.loc[live.nloc];
+                readVec(rdram, m + uint32_t(id) * 16u - 0x4260u, p);   // getLocatorTrans: translacao atual em mundo
+                if (std::isfinite(p[0] + p[1] + p[2]))
+                    ++live.nloc;
+            }
+        }
+        if (punching)
+        {
+            static uint32_t nlog = 0;
+            if (nlog < 12 && live.cfg.valid && !live.inWindow)
+            {
+                ++nlog;
+                std::fprintf(stderr, "[treino] %s slot %d pos %d tipo %d: %.0f%% da animacao, janela %.0f-%.0f, %d localizador(es), raio %.1f%s%.1f\n",
+                             swiping ? "golpe com objeto" : "soco", slot, tier, type, live.pct * 100.f, live.cfg.ini * 100.f, live.cfg.fim * 100.f,
+                             live.nloc, live.cfg.radius, swiping ? (bat ? ", bastao x" : ", objeto x") : ", dano ", live.cfg.dmg);
+            }
+        }
+        PunchCfg table[kPunchTypes];
+        if (slot == 0)
+        {
+            for (int k = 0; k < kPunchTypes; ++k)
+                table[k] = weapon ? readSwipeCfg(rdram, m, tier, k, bat) : readPunchCfg(rdram, m, tier, k);
+            updateMoves(rdram, m, bat);
+        }
+        Shared &sh = shared();
+        std::lock_guard<std::mutex> lk(sh.m);
+        if (punching)
+            sh.live[slot] = live;
+        if (slot == 0)
+        {
+            std::copy(std::begin(table), std::end(table), std::begin(sh.table));
+            sh.tableTier = int8_t(tier);
+            sh.tableWeapon = weapon;
+            sh.p1State = st > m && st - m < 0x11190u ? st - m : 0;
+        }
+    }
+
     void monsterUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -768,6 +1217,8 @@ namespace wotm_train
         if (on && slot >= 0 && returned(ctx, ra))
         {
             trackState(rdram, m, slot);
+            if (g_opts.load(std::memory_order_relaxed) & kMoveTable)
+                trackPunch(rdram, ctx, runtime, m, slot);
             if (slot == 0 || slot == 4)
                 recordPad(rdram, m, slot == 0 ? 0 : 1);
         }
@@ -906,6 +1357,7 @@ void wotmTrainingInstall(PS2Runtime &runtime)
         {kStompUpdate, &g_origStomp, &stompUpdate, "StateStompAttack::update"},
         {kGrabOH, &g_origGrabOH, &grabOHUpdate, "StateGrappleOHAttack::update"},
         {kMonkeyOH, &g_origMonkeyOH, &monkeyOHUpdate, "StateMonkeyOHAttack::update"},
+        {kHookTest, &g_origHook, &hookTest, "StateGrappleHook::testCollis"},
         {wotm::fn::updateCinema__7Monster, &g_origCinema, &cinemaUpdate, "Monster::updateCinema"},
         {wotm::fn::fontSpritePrintXY__FiiiPc, &g_origPrint, &printXY, "fontSpritePrintXY (WINS)"},
         {wotm::fn::fontSpritePrintRightXY__FiiiPc, &g_origPrintRight, &printRightXY, "fontSpritePrintRightXY (WINS)"},

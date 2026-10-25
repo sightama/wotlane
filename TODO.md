@@ -24,9 +24,9 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
-1. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; virar  `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
-2. Entrada pelo launcher.
-3. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
+1. **Teste do dono** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele; com um objeto na mão ela vira WEAPON HIT n (multiplicador "x1.5" no dano); o gancho do Ultra-V sai como linha; a pausa tem 7 itens e o MOVE LIST abre, favorita (X) e a caixa in-game vira FAVORITES. Depois do teste, merge do branch.
+2. **MOVE LIST, o que falta:** dano do arremesso de objeto (depende do objeto: ler `LevelPickups::s_info` do que está na mão) e do bug do Preytor (estáticos do `HomingBug`, só na RAM); dano do arremesso de corpo rígido do TwoHandedThrow e do Counter (`move_list_comuns.md`, "Em aberto"); ícones dos botões nas linhas do painel (hoje texto).
+
 
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).
@@ -67,6 +67,7 @@ Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" 
 - Tela de destrave para skins de mod (skin de mod fica sempre aberta) e som próprio por skin.
 - 5 a 8 jogadores (câmera compartilhada).
 - Opção no painel para fixar o LOD.
+- Entrada no modo treino pelo launcher (a linha TRAINING do menu e `WOTM_TRAINING=1` bastam).
 - Netcode próprio (rollback): exigiria provar que a lógica dá sempre o mesmo resultado com os mesmos comandos.
 - Fazer o Goliath Prime funcionar por inteiro (CPU, colisão, animações que o ASSBOSS não tem): monstros custom são mods
   experimentais do dono, sem garantia de funcionar.

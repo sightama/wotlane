@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace wotm_training
@@ -20,7 +21,8 @@ constexpr uint32_t kRefill = 1u << 3;        // vida volta cheia depois de um te
 constexpr uint32_t kPanel = 1u << 4;         // painel de dano
 constexpr uint32_t kShowInputs = 1u << 6;    // historico dos comandos (P1 e o boneco)
 constexpr uint32_t kTrainHud = 1u << 7;      // HUD do boneco a direita e os numeros por cima das barras (P1 e boneco)
-constexpr uint32_t kDefault = kShowAttacks | kShowHulls | kRefill | kPanel | kShowInputs | kTrainHud;
+constexpr uint32_t kMoveTable = 1u << 8;     // tabela dos socos do P1 (configs do StatePunch) e a esfera antes da janela do golpe
+constexpr uint32_t kDefault = kShowAttacks | kShowHulls | kRefill | kPanel | kShowInputs | kTrainHud | kMoveTable;
 
 // Celulas do HUD do jogador 1 em unidades da tela do GS (640 x 224, faixa 4:3), medidas num print (investigacao 2026-10-23,
 // treino_hud.md): o do boneco e o espelho (x' = 640 - x), como o jogo desenha o do jogador 2
@@ -116,8 +118,9 @@ inline bool windowsHidden() { return !g_inFight.load(std::memory_order_relaxed) 
 // Tipo do teste de golpe que gravou a esfera (ou o cone). KFire: a linha do FireBreath::TestCollis (hdLosCSTest); KBody: as esferas
 // do corpo na investida e no arremessado (hdBundledSphereTest do collisTestEnvironmentCollisions); KStomp e KGrab: a area de busca
 // da vitima (getClosestMonsterToPunch no pisao, getClosestMonsterInFOV no agarrao) e a marca na vitima quando o golpe tira vida;
-// KCone: o cone do StateSonicRoar::testConeCollis
-enum Kind : uint8_t { KPunch, KBat, KGetup, KWeapon, KShock, KOther, KFire, KBody, KStomp, KGrab, KCone, KKinds };
+// KCone: o cone do StateSonicRoar::testConeCollis; KHook: a linha do gancho do Ultra-V (StateGrappleHook::testCollis, hdSphereTest
+// de raio 0 do ponto anterior ao atual da ponta)
+enum Kind : uint8_t { KPunch, KBat, KGetup, KWeapon, KShock, KHook, KOther, KFire, KBody, KStomp, KGrab, KCone, KKinds };
 
 // Uma esfera varrida (de a ate b, raio r) que o jogo testou num quadro; a == b na esfera parada
 struct Sweep
@@ -204,9 +207,69 @@ struct PadRec
     uint32_t frames;
 };
 
+// Tabela dos socos: uma PunchConfig do StatePunch (Monster +0x8470 +0x20 + pos*0x420 + tipo*0xB0; os valores do RST/<MONSTRO>.CHR,
+// chave 0xFCC, que o tools/chr_dump.py tambem le). pos = posicao no combo (StatePunch +0x2988), tipo = qual golpe (+0x298C).
+// Com um objeto na mao, uma SwipeConfig do StateBatSwipe (Monster +0xAE90 +0x20 + pos*0x480 + tipo*0xC0; pos +0x2D48, tipo +0x2D4C):
+// o mesmo comeco de layout, e o dano e um multiplicador do dano do objeto (weapon = true, dmg = o multiplicador)
+struct PunchCfg
+{
+    bool valid = false;
+    bool weapon = false;         // SwipeConfig: dmg multiplica o dano do objeto (+0x90 com bastao, +0xB0 nos outros)
+    int anim = -1;               // MonsterAnim (+0x00)
+    float ini = 0.f, fim = 0.f;  // janela do teste de golpe, fracao da animacao (+0x0C, +0x10)
+    float dmg = 0.f;             // dano pedido (+0x90)
+    float radius = 0.f;          // raio da esfera do punho (+0x74; 0 = o padrao, StatePunch +0x2980)
+    float stun = 0.f;            // atordoamento (+0x6C; > 100 atordoa)
+    float kb = 0.f;              // forca de knockback (+0x64; != 0 derruba)
+    int loc[2] = {-1, -1};       // localizadores testados (+0x7C, +0x80; < 0x7D0 nenhum; a SwipeConfig so tem o +0x7C)
+};
+// O soco em curso de um monstro, na saida do Monster::update: config, ponto da animacao e onde estao os localizadores agora
+struct PunchLive
+{
+    uint32_t frame = 0;          // g_frame da leitura (0 = nunca)
+    int8_t tier = -1, type = -1;
+    float pct = -1.f;            // animationGetCurrentPercent da animacao do golpe
+    bool inWindow = false;       // StatePunch +0x2A00 (inCollisionWindow; StateBatSwipe +0x2DC0)
+    uint8_t nloc = 0;
+    float loc[2][3] = {};
+    PunchCfg cfg;
+};
+constexpr int kPunchTiers = 10, kPunchTypes = 6;
+
+// Lista de golpes (MOVE LIST da pausa) do monstro do P1, montada das configs na RAM: os 6 socos da primeira posicao, as sequencias
+// do mesmo botao (o proximo tipo e permitido pelo float +0x94 + tipo*4 da config e a casa seguinte existe) com o dano somado, e os 6
+// golpes com objeto. id: "P<tipo>", "C<tipo>x<n>", "W<tipo>" (o que o arquivo de favoritos guarda)
+// MkOther: os outros golpes (butt slam, investida, agarrao, levantar, crowd control, arremesso, especiais), com nome, dica pronta e o
+// offset do estado no Monster (a linha acende quando o P1 esta nele); numeros lidos da RAM nos offsets de
+// docs/investigacoes/2026-10-25/move_list_comuns.md e move_list_especiais.md
+enum MoveKind : uint8_t { MkPunch, MkCombo, MkWeapon, MkOther };
+struct Move
+{
+    uint8_t kind = MkPunch;
+    int8_t type = -1;            // tipo do PadFlags (0 triangulo ... 5 quadrado), o botao de cada golpe da sequencia
+    uint8_t len = 1;             // golpes na sequencia
+    char id[12] = {};
+    float dmg = 0.f;             // soma (combo); multiplicador do dano do objeto (objeto)
+    float ini = 0.f, fim = 0.f;  // janela do ultimo golpe
+    float radius = 0.f, stun = 0.f, kb = 0.f;   // do ultimo golpe
+    uint32_t state = 0;          // MkOther: offset do estado no Monster
+    char name[16] = {};          // MkOther: nome curto (caixa in-game e painel)
+    char hint[176] = {};         // MkOther: comando e numeros (dica do painel)
+};
+constexpr int kFavMax = 8;
+
 struct Shared
 {
+    std::vector<Move> moveList;  // a lista do monstro do P1 (movesType = m_typeBits >> 5; -1 = ainda nao montada)
+    int movesType = -1;
+    std::vector<std::string> fav;   // ids favoritos do monstro movesType (ate kFavMax); a caixa in-game mostra estes
+    bool favDirty = false;          // o painel mudou os favoritos: o wotm_training.inc grava o arquivo
+    uint32_t p1State = 0;           // offset do estado do P1 no Monster (acende a linha MkOther da caixa)
     std::mutex m;
+    PunchLive live[16];          // o soco em curso por slot (frame antigo = nao esta socando)
+    PunchCfg table[kPunchTypes]; // os 6 tipos da posicao do combo em que o P1 esta (0 fora do soco)
+    int8_t tableTier = 0;
+    bool tableWeapon = false;    // a tabela e a dos golpes com objeto (o P1 segura um; StateBatSwipe)
     std::vector<Sweep> sweeps;   // acumuladas; a janela descarta as velhas
     std::vector<Cone> cones;     // idem
     std::vector<Hit> hits;       // idem

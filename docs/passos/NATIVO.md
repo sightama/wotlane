@@ -92,14 +92,14 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   `WOTM_TRAINING=1` desde o início (qualquer luta, por exemplo `WOTM_MATCH=3,1,1`). A fase 12 (`training`, `WOTM_MATCH=3,1,12`)
   carrega, mas é uma arena quase toda preta que o jogo não usa.
 - **Opções:** no pause (START), com o modo ligado, a lista fica CONTINUE, RESET POSITIONS, VIBRATION, RECOMPILED OPTIONS, **TRAINING
-  OPTIONS**, QUIT (`wotm_pausemenu.inc`: o cursor anda pelas linhas da tela e o jogo recebe o item lógico, linha 4 = item 5, que o
-  retail ignora, linha 5 = item 4, o QUIT; a lista sobe meia linha). A caixa 3D do jogo (`m_cs610`, tamanho fixo) é escondida
+  OPTIONS**, **MOVE LIST**, QUIT (`wotm_pausemenu.inc`: o cursor anda pelas linhas da tela e o jogo recebe o item lógico, linhas 4 e 5 = itens 5 e 6, que o
+  retail ignora, linha 6 = item 4, o QUIT; a lista sobe uma linha). A caixa 3D do jogo (`m_cs610`, tamanho fixo) é escondida
   (`hierSetCsDrawMe`) e a do pause passa a ser nativa (`wotm_pausemenu::drawBox2d`, debaixo do texto, do tamanho da lista), em todo
   pause. TRAINING OPTIONS abre o painel nativo do menu com as linhas: esferas dos golpes, caixas do corpo, cápsulas de empurrão
   (desligadas por padrão), boneco (parado, CPU, sempre bloqueia, bloqueia depois do 1º acerto, pula), **dificuldade da CPU** (a do jogo,
   fácil, médio, difícil: escrita em TheGame +0x1203CC no `Monster::update` enquanto não é "a do jogo"; a original volta no "sim" do
   QUIT e no menu principal, para não ir ao save), recarga de vida (100, 75, 50, 25, 10% ou sem recarga), medidores
-  (normal, sempre cheios, sempre na fúria), comandos na tela, painel de dano e limpar a lista e o maior combo. O menu F2 de antes saiu.
+  (normal, sempre cheios, sempre na fúria), comandos na tela, painel de dano, tabela dos socos e limpar a lista e o maior combo. O menu F2 de antes saiu.
 - **RESET POSITIONS:** é o RESTART do jogo renomeado, com o ARE YOU SURE respondido sozinho (gancho do `areYouSure`, que refaz o
   "sim": `shell` +0x2BA4 = 0, +0x2B40/+0x2B44 = +0x2B48, `snd_StopAllSounds`, som 0x4F, `gExitDialog` 0, devolve 1). O `rtMain` sai
   com o `m_restart` que o overlay pôs, e o `TheGame::ResetLevel` + `rtMain(0)` põem monstros e fase (prédios) como no começo, sem
@@ -127,7 +127,8 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
 - **Golpes:** o jogo não tem caixa de golpe; cada teste é uma esfera varrida do ponto do osso no quadro anterior até o atual
   (`hdSphereTest`) contra os cascos de colisão. Os ganchos marcam o teste de golpe em curso (`collisTestCloseRangeAttack`: soco e combo;
   `Pickup::collisTestBatAttack`: objeto longo; `StateGetupAttack::update`; `Weapon::WeaponHD`: projéteis e objetos arremessados;
-  `ShockWave::update`: onda do butt slam) e, só com a marca, o `hdSphereTest` (varrido e parado) guarda a esfera e o que ela pegou. Cor:
+  `ShockWave::update`: onda do butt slam; `StateGrappleHook::testCollis`: o gancho do Ultra-V, uma linha de raio 0 do ponto anterior ao
+  atual da ponta) e, só com a marca, o `hdSphereTest` (varrido e parado) guarda a esfera e o que ela pegou. Cor:
   azul claro do jogador, laranja da IA, branco sem dono (projétil), amarelo quando raspa o cenário, vermelho quando pega objeto ou
   monstro; cada uma some em ~10 quadros. Fora da marca, o `hdSphereTest` (câmera, física) fica de fora. Golpes sem esfera:
   - **Fogo:** `FireBreath::TestCollis` marca, e o `hdLosCSTest` dele (uma linha da boca, Monster +0x3E50, até o alcance no eixo
@@ -157,6 +158,32 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   pelo `source`: 2 e 11 corpo a corpo, 3 objeto na mão, 1 projétil, 7 butt slam, 8 e 13 arremesso, 5, 6, 12, 14 e 20 especial. Com o
   modo ligado, os números de dano (`WOTM_DAMAGEPOP`) saem mesmo com a opção desligada. Log: `[treino] dano ...` nos 30 primeiros e a
   cada 100.
+- **Tabela dos socos** (linha PUNCH TABLE, ligada por padrão): na saída do `Monster::update`, com o monstro no `StatePunch`, a config do
+  soco em curso (a `PunchConfig` da posição e do tipo, os valores do `.CHR`; `FORMATOS.md`, "Personagem"), o ponto da animação
+  (`animationGetCurrentPercent` do jogo, chamado com o contexto guardado e devolvido), o `inCollisionWindow` (+0x2A00) e a posição dos
+  localizadores; no P1, também os 6 tipos da posição do combo em que ele está (a primeira fora do soco). No lado esquerdo, abaixo dos
+  comandos (que passam a 8 linhas): PUNCHES HIT n e uma linha por tipo (quadrado, frente/trás + quadrado, triângulo, frente/trás +
+  triângulo, com os ícones do dispositivo) com a janela em % da animação, o dano pedido, o raio, o atordoamento (laranja acima de 100,
+  "K" quando derruba); a linha do soco em curso fica destacada e a barra embaixo mostra a janela (azul, vermelha durante o teste) e o
+  ponto da animação. Antes da janela abrir, a esfera do punho sai apagada em cada localizador do golpe, na cor do dono, de qualquer monstro.
+  **Com um objeto na mão** (`Monster::m_pickup`), a tabela passa a ser a dos golpes com objeto (`StateBatSwipe`, as `SwipeConfig` em
+  Monster +0xAE90 +0x20 + pos·0x480 + tipo·0xC0, mesmos botões e mesmo começo de layout; posição +0x2D48, tipo +0x2D4C, janela +0x2DC0):
+  WEAPON HIT n, e a coluna do dano traz o multiplicador do dano do objeto ("x1.5": +0x90 quando o objeto é um bastão, `Pickup` +0xA0 == 8,
+  `collisTestBatAttack`; +0xB0 nos outros, `getDamageMod`). Especiais não entram. Log: `[treino] soco slot ...` ou
+  `[treino] golpe com objeto slot ...` nas 12 primeiras leituras antes da janela.
+  Foto: `docs/screenshots/2026-10-25/2026-10-25_modo_treino_tabela_socos.png`.
+- **MOVE LIST** (item da pausa, `wotm_mainmenu.inc`): painel nativo com a lista de golpes do monstro do P1, montada das configs na RAM
+  (`wotm_training.inc`, `buildMoves`, a cada 64 quadros e quando o monstro muda): os 6 socos da primeira posição, as sequências do mesmo
+  botão (COMBO: SQUARE X 4; o próximo tipo é permitido pelo float +0x94 + tipo·4 da `PunchConfig` e a casa seguinte existe; o dano é a
+  soma) e os 6 golpes com objeto (WEAPON). A dica de cada linha traz dano, janela, raio, atordoamento e se derruba. O X favorita (até 8;
+  estrela na borda direita da linha); os favoritos ficam por tipo de monstro em `training_moves.ini` ao lado do `settings.ini` (ids `P<tipo>`,
+  `C<tipo>x<n>`, `W<tipo>`); o favorito aparece como uma estrela na borda direita da linha. Com favoritos, a tabela in-game (PUNCH TABLE) mostra esses golpes (título FAVORITES, "x n" nos combos, "W"
+  nos de objeto) no lugar dos 6 tipos da posição; a linha acende quando o golpe em curso é esse botão. Os outros golpes (`MkOther`: butt
+  slam, investida, agarrão com o golpe de quadrado, o de triângulo e o arremesso, levantar atacando, crowd control, arremesso de objeto e
+  o especial do monstro, achado pelo ponteiro `Monster` +0x7980) têm nome curto e a dica pronta com os números lidos da RAM nos offsets de
+  `docs/investigacoes/2026-10-25/move_list_comuns.md` e `move_list_especiais.md`; na caixa, a linha acende quando o P1 está nesse estado.
+  Sem número: o dano do arremesso de objeto (é do objeto) e o do bug do Preytor (estáticos só na RAM). Log: `[treino] move list do tipo ...`
+  com uma linha por golpe desses.
 - **Dados de quadro:** na saída do `Monster::update` de cada slot, o estado (`m_state` +0x34, nome pela tabela do `game.h`; no
   `StatePunch` e no `BatSwipe` também a cadeia e o passo do combo). Cada troca fecha um registro: golpe (estado de ataque, ou qualquer
   um com teste de golpe) com início (quadro do primeiro teste, o primeiro do estado = 1), ativo (quadros com teste) e total; reação da

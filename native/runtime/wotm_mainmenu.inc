@@ -84,6 +84,7 @@ struct View
     int capture = -1;                     // botao do PS2 esperando a tecla ou o botao novo (-1: nenhum)
     uint32_t screenObj = 0;               // telao (objeto do filme, shell->m_movieScreen): onde o painel e desenhado
     bool training = false;                // pausa: o painel do modo treino (TRAINING OPTIONS) no lugar das abas
+    bool moves = false;                   // pausa: a lista de golpes (MOVE LIST), tambem sem abas
 };
 static std::mutex g_m;
 static View g_view;
@@ -188,7 +189,7 @@ static int g_top[kTabs] = {};
 // Painel do modo treino (item TRAINING OPTIONS da pausa, wotm_pausemenu.inc): as opcoes sao os atomicos do wotm_training.h (nao vao
 // para o settings.ini), escritos so aqui, na thread do EE; os ganchos do treino e o desenho os leem
 namespace tr = wotm_training;
-enum TrainRow { TrSpheres, TrHulls, TrCapsules, TrDummy, TrDifficulty, TrHealth, TrMeters, TrInputs, TrPanel, TrClear, kTrainRows };
+enum TrainRow { TrSpheres, TrHulls, TrCapsules, TrDummy, TrDifficulty, TrHealth, TrMeters, TrInputs, TrPanel, TrMoves, TrClear, kTrainRows };
 struct TrainDef { const char *label, *hint; };
 constexpr TrainDef kTrainDefs[kTrainRows] = {
     {"ATTACK SPHERES", "SHOWS WHERE EACH ATTACK CHECKS FOR A HIT. RED WHEN IT CONNECTS"},
@@ -197,14 +198,63 @@ constexpr TrainDef kTrainDefs[kTrainRows] = {
     {"DUMMY", "WHAT THE OPPONENT DOES"},
     {"CPU DIFFICULTY", "HOW WELL THE CPU FIGHTS WHEN THE DUMMY IS SET TO CPU. GAME SETTING USES THE OPTIONS MENU"},
     {"DUMMY HEALTH", "HEALTH THE DUMMY GOES BACK TO AFTER A MOMENT WITHOUT DAMAGE. NO REFILL LETS ANYONE LOSE"},
-    {"STAMINA AND SPECIAL", "KEEPS THE STAMINA OF EVERY MONSTER FULL OR IN RAGE, WITH THE SPECIAL ATTACK READY"},
-    {"INPUT DISPLAY", "SHOWS THE BUTTONS YOU AND THE DUMMY PRESS, AND FOR HOW MANY FRAMES"},
-    {"DAMAGE PANEL", "SHOWS THE DAMAGE, THE COMBOS AND THE FRAME DATA OF EACH ATTACK"},
+    {"STAMINA AND SPECIAL", "CHANGE THE STAMINA OF EVERY MONSTER. FULL OR IN RAGE, WITH THE SPECIAL ATTACK READY"},
+    {"INPUT DISPLAY", "DISPLAYS BUTTONS PRESSED BY YOU OR THE CPU, AND FOR HOW MANY FRAMES"},
+    {"DAMAGE PANEL", "SHOWS DAMAGE, COMBOS AND FRAME DATA FOR EACH ATTACK"},
+    {"PUNCH TABLE", "WINDOW, DAMAGE, RADIUS AND STUN OF ATTACKS. A FAINT SPHERE SHOWS WHERE THE NEXT HIT CHECKS"},
     {"CLEAR DAMAGE LOG", "EMPTIES THE DAMAGE LIST AND THE BEST COMBO"},
 };
 constexpr int kTrainHealth[] = {100, 75, 50, 25, 10};   // DUMMY HEALTH: 0 sem recarga, 1..5 estes %
 static int g_trainSel = 0, g_trainTop = 0;
 static bool g_pauseTraining = false;   // o painel aberto (ou fechando) e o do treino
+// MOVE LIST da pausa: a lista do wotm_training::Shared (montada na thread do EE pelo wotm_training.inc), uma linha por golpe; o X
+// favorita (ate kFavMax, por monstro, gravado pelo wotm_training.inc), e a caixa in-game passa a mostrar os favoritos
+static bool g_pauseMoves = false;
+static int g_moveSel = 0, g_moveTop = 0;
+constexpr int kMoveVis = 11;   // linhas visiveis (o layout do treino)
+static const char *const kMoveTypeNames[tr::kPunchTypes] = {"HEAVY", "FORWARD + HEAVY", "BACK + HEAVY", "FORWARD + LIGHT", "BACK + LIGHT", "LIGHT"};
+static std::string moveLabel(const tr::Move &m)
+{
+    const char *t = m.type >= 0 && m.type < tr::kPunchTypes ? kMoveTypeNames[m.type] : "?";
+    if (m.kind == tr::MkOther) return m.name;
+    if (m.kind == tr::MkCombo) return std::string("COMBO: ") + t + " X " + std::to_string(int(m.len));
+    if (m.kind == tr::MkWeapon) return std::string("WEAPON: ") + t;
+    return t;
+}
+static std::string moveHint(const tr::Move &m)
+{
+    char b[160];
+    const char *eff = m.stun > 100.f ? ", STUNS" : m.kb != 0.f ? ", KNOCKS DOWN" : "";
+    if (m.kind == tr::MkOther) return m.hint;
+    if (m.kind == tr::MkCombo)
+        std::snprintf(b, sizeof b, "%d HITS, %.0f DAMAGE IN TOTAL. LAST HIT: WINDOW %.0f-%.0f, RADIUS %.0f%s", int(m.len), m.dmg, m.ini * 100.f, m.fim * 100.f, m.radius, eff);
+    else if (m.kind == tr::MkWeapon)
+        std::snprintf(b, sizeof b, "X%.1f THE OBJECT DAMAGE. WINDOW %.0f-%.0f, RADIUS %.0f, STUN %.0f%s", m.dmg, m.ini * 100.f, m.fim * 100.f, m.radius, m.stun, eff);
+    else
+        std::snprintf(b, sizeof b, "DAMAGE %.0f. WINDOW %.0f-%.0f OF THE ANIMATION, RADIUS %.0f, STUN %.0f%s", m.dmg, m.ini * 100.f, m.fim * 100.f, m.radius, m.stun, eff);
+    return b;
+}
+static bool isFav(const tr::Shared &sh, const tr::Move &m) { return std::find(sh.fav.begin(), sh.fav.end(), std::string(m.id)) != sh.fav.end(); }
+// X na linha: entra ou sai dos favoritos (cheio: nao entra). Devolve 1 entrou, -1 saiu, 0 nada
+static int toggleFav(int row)
+{
+    tr::Shared &sh = tr::shared();
+    std::lock_guard<std::mutex> lk(sh.m);
+    if (row < 0 || row >= int(sh.moveList.size())) return 0;
+    const std::string id = sh.moveList[row].id;
+    const auto it = std::find(sh.fav.begin(), sh.fav.end(), id);
+    if (it != sh.fav.end()) { sh.fav.erase(it); sh.favDirty = true; return -1; }
+    if (int(sh.fav.size()) >= tr::kFavMax) return 0;
+    sh.fav.push_back(id);
+    sh.favDirty = true;
+    return 1;
+}
+static int moveRows()
+{
+    tr::Shared &sh = tr::shared();
+    std::lock_guard<std::mutex> lk(sh.m);
+    return int(sh.moveList.size());
+}
 static int trainHealthIndex()
 {
     if (!(tr::g_opts.load() & tr::kRefill)) return 0;
@@ -230,6 +280,7 @@ static std::string trainValue(int r)
     case TrMeters: return kMeters[std::clamp(tr::g_meters.load(), 0, tr::MCount - 1)];
     case TrInputs: return onOff(tr::kShowInputs);
     case TrPanel: return onOff(tr::kPanel);
+    case TrMoves: return onOff(tr::kMoveTable);
     default: return std::string();
     }
 }
@@ -254,6 +305,7 @@ static bool trainStep(int r, int dir, bool wrap)
     case TrCapsules: return flag(tr::kShowCapsule);
     case TrInputs: return flag(tr::kShowInputs);
     case TrPanel: return flag(tr::kPanel);
+    case TrMoves: return flag(tr::kMoveTable);
     case TrDummy:
     {
         const int cur = std::clamp(tr::g_dummy.load(), 0, tr::DCount - 1), v = step(cur, tr::DCount);
@@ -488,11 +540,14 @@ static void panelSfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int
     wotm_padsel::sfx(rdram, ctx, runtime, id);
 }
 // X no RECOMPILED OPTIONS da pausa (wotm_pausemenu.inc, saida do checkInputForExit)
-static void openPausePanel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, bool training = false)
+static void openPausePanel(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, bool training = false, bool moves = false)
 {
     g_where = InPause;
     g_pauseOpen = true;
     g_pauseTraining = training;
+    g_pauseMoves = moves;
+    if (moves)
+        g_moveSel = std::clamp(g_moveSel, 0, std::max(0, moveRows() - 1));
     g_pauseSuppress = 0;
     g_showPreview = true;
     readPanel(g_panelPrev);
@@ -609,8 +664,10 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     // painel do treino (pausa): as linhas do kTrainDefs, sem abas
     const bool training = g_where == InPause && g_pauseTraining;
-    int &selRef = training ? g_trainSel : g_optSel[g_tab];
-    const int selRows = training ? int(kTrainRows) : tabRows(g_tab);
+    const bool moves = g_where == InPause && g_pauseMoves;
+    const int nMoves = moves ? moveRows() : 0;
+    int &selRef = moves ? g_moveSel : training ? g_trainSel : g_optSel[g_tab];
+    const int selRows = moves ? nMoves : training ? int(kTrainRows) : tabRows(g_tab);
     // mouse (etapa 9): passar por cima escolhe a linha; clique esquerdo na aba troca, em L1/R1 anda uma aba, na linha confirma (nas
     // setas do valor, diminui ou aumenta); clique direito volta. A rodinha vem como cima/baixo (readPanel).
     {
@@ -632,7 +689,7 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             if (!click)
                 panelSfx(rdram, ctx, runtime, 4);
         }
-        if (click && !training && hv.part == HTab && hv.tab >= 0 && hv.tab != g_tab)
+        if (click && !training && !moves && hv.part == HTab && hv.tab >= 0 && hv.tab != g_tab)
         {
             g_tab = hv.tab;
             panelSfx(rdram, ctx, runtime, 4);
@@ -652,12 +709,31 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         panelSfx(rdram, ctx, runtime, 6);
         return true;
     }
+    if (moves)
+    {
+        if (nMoves <= 0)
+            return false;
+        if (e[PUp] || e[PDown])
+        {
+            g_moveSel = (g_moveSel + (e[PDown] ? 1 : nMoves - 1)) % nMoves;
+            if (g_moveSel < g_moveTop) g_moveTop = g_moveSel;
+            if (g_moveSel >= g_moveTop + kMoveVis) g_moveTop = g_moveSel - kMoveVis + 1;
+            panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
+        }
+        else if (e[POk])
+        {
+            const int r = toggleFav(g_moveSel);
+            std::fprintf(stderr, "[treino] move list: linha %d %s\n", g_moveSel, r > 0 ? "favoritada" : r < 0 ? "tirada dos favoritos" : "sem mudanca (favoritos cheios)");
+            panelSfx(rdram, ctx, runtime, r ? 8 : 6);
+        }
+        return false;
+    }
     if (training)
     {
         if (e[PUp] || e[PDown])
         {
             g_trainSel = (g_trainSel + (e[PDown] ? 1 : kTrainRows - 1)) % kTrainRows;
-            const int vis = kTrainRows;   // panelLayout(.., training): as 10 cabem
+            const int vis = kTrainRows;   // panelLayout(.., training): as 11 cabem
             if (g_trainSel < g_trainTop) g_trainTop = g_trainSel;
             if (g_trainSel >= g_trainTop + vis) g_trainTop = g_trainSel - vis + 1;
             panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
@@ -731,10 +807,16 @@ static void publishPause()
     v.capture = g_capture;
     v.preview = g_showPreview;
     v.training = g_pauseTraining;
+    v.moves = g_pauseMoves;
     if (v.training)
     {
         v.opt = g_trainSel;
         v.top = g_trainTop;
+    }
+    if (v.moves)
+    {
+        v.opt = g_moveSel;
+        v.top = g_moveTop;
     }
     std::lock_guard<std::mutex> lk(g_m);
     g_pauseView = v;
@@ -1217,8 +1299,8 @@ struct PanelLayout
 static PanelLayout panelLayout(int tab, bool preview, bool training = false)
 {
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;
-    if (training)   // sem abas: o titulo e as 10 linhas, mais juntas, comecando mais acima
-        return {lineH * 0.69f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
+    if (training)   // sem abas: o titulo e as 11 linhas, mais juntas, comecando mais acima
+        return {lineH * 0.63f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
     if (tab == TabVideo && !preview)   // previa escondida: as 8 linhas com as colunas das outras abas
         return {lineH * 0.86f, 46.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
     if (tab == TabVideo)
@@ -1275,11 +1357,11 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         SetTextureFilter(g_prt.texture, TEXTURE_FILTER_BILINEAR);
     }
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;   // abas, fio e kVisRows linhas
-    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview, v.training);
+    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview, v.training || v.moves);
     // previa da opcao selecionada, nas texturas dela (antes do BeginTextureMode do painel)
     wotm::preview::Kind pk = wotm::preview::None;
     wotm::preview::Params pp;
-    if (L.preview && !v.training && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
+    if (L.preview && !v.training && !v.moves && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
     {
         pk = previewKind(kTabDefs[TabVideo].opt[v.opt].key);
         pp = previewParams(L.box, v.screen < 0 ? kPauseFrac : kTelaoFrac);
@@ -1295,9 +1377,9 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     // abas: L1  VIDEO  FEATURES  CAMERA  CONTROLS  R1
     const float tabY = lineH * 0.7f, tabH = 50.f;
     const float tabX[kTabs] = {W * 0.22f, W * 0.40f, W * 0.59f, W * 0.78f};
-    if (v.training)   // treino: so o titulo
-        label(q, ram, tex0, "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
-    for (int t = 0; t < kTabs && !v.training; ++t)
+    if (v.training || v.moves)   // treino: so o titulo
+        label(q, ram, tex0, v.moves ? "MOVE LIST" : "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
+    for (int t = 0; t < kTabs && !v.training && !v.moves; ++t)
     {
         const bool on = t == v.tab;
         label(q, ram, tex0, kTabNames[t], tabX[t], tabY, tabH, on ? kLit : kDim, kPW, kPH);
@@ -1316,7 +1398,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         DrawRectangleRoundedLinesEx(Rectangle{cx - bw * 0.5f, tabY - bh * 0.5f, bw, bh}, 0.4f, 8, 3.f, gsToRgb(kDim));
         label(q, ram, tex0, s, cx, tabY, 42.f, kDim, kPW, kPH);
     };
-    if (!v.training)
+    if (!v.training && !v.moves)
     {
         badge(st::BL1, W * 0.08f);
         badge(st::BR1, W * 0.92f);
@@ -1338,7 +1420,25 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
             return PRow{o.label, buf, "CAN ONLY BE CHANGED IN THE MAIN MENU", false, KOpt, -1, true};
         return PRow{o.label, buf, o.hint, true, KOpt};
     };
-    if (v.training)
+    std::vector<std::string> moveHints;   // as dicas da MOVE LIST (o PRow guarda so o ponteiro)
+    if (v.moves)
+    {
+        tr::Shared &sh = tr::shared();
+        std::lock_guard<std::mutex> lk(sh.m);
+        moveHints.reserve(sh.moveList.size() + 1);
+        for (const tr::Move &m : sh.moveList)
+        {
+            if (n >= kMaxCtlRows) break;
+            moveHints.push_back(moveHint(m));
+            rows[n++] = PRow{moveLabel(m), isFav(sh, m) ? "*" : "", moveHints.back().c_str(), false, KReset};   // "*": estrela na borda direita
+        }
+        if (n == 0)
+        {
+            moveHints.push_back("THE LIST IS BUILT FROM YOUR MONSTER ONCE THE FIGHT STARTS");
+            rows[n++] = PRow{"NO MOVES YET", "", moveHints.back().c_str(), false, KReset};
+        }
+    }
+    else if (v.training)
         for (int i = 0; i < kTrainRows; ++i)
             rows[n++] = i == TrClear ? PRow{kTrainDefs[i].label, "", kTrainDefs[i].hint, false, KReset}
                                      : PRow{kTrainDefs[i].label, trainValue(i), kTrainDefs[i].hint, true, KOpt};
@@ -1395,7 +1495,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         }
         // fio do nome ao valor: com a inclinacao do telao, guia o olho pela linha
         const float lx1 = labX + labW + 24.f, lx2 = valX - dx - 36.f;
-        if (lx2 > lx1 && !pr.value.empty())
+        if (lx2 > lx1 && !pr.value.empty() && !v.moves)
             DrawRectangleRec(Rectangle{lx1, cy - 1.f, lx2 - lx1, 2.f}, Color{110, 96, 78, static_cast<unsigned char>(on ? 140 : 70)});
         // valor longo ("LSHIFT / RSHIFT"): letras menores para caber entre as setas
         const float vw = textWidth(tex0, kPW, kPH, pr.value.c_str(), rowH), maxW = 2.f * dx - 70.f;
@@ -1405,7 +1505,23 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         const int style = wotm_prompts::currentStyle();
         const bool valIcon = phys > 0 && wotm_prompts::drawCell2d(wotm_prompts::padCell(phys, style == st::PromptKeyboard ? st::PromptPs : style), valX, cy,
                                                                   86.f, on ? 1.f : 0.6f);
-        if (!pr.value.empty() && !valIcon)
+        if (v.moves && pr.value == "*")
+        {   // favorito da MOVE LIST: estrela de cinco pontas alinhada a direita (a fonte do jogo nao tem o simbolo)
+            const float cx = L.rowRight - 40.f, R = rowH * 0.55f, r = R * 0.42f;
+            const Color sc = on ? Color{255, 220, 90, 255} : Color{230, 190, 70, 220};
+            Vector2 pts[10];
+            for (int k = 0; k < 10; ++k)
+            {
+                const float ang = -PI * 0.5f + float(k) * PI / 5.f, rad = (k & 1) ? r : R;
+                pts[k] = Vector2{cx + std::cos(ang) * rad, cy + std::sin(ang) * rad};
+            }
+            for (int k = 0; k < 10; ++k)
+            {   // nas duas ordens: o raylib descarta a face de tras
+                DrawTriangle(Vector2{cx, cy}, pts[(k + 1) % 10], pts[k], sc);
+                DrawTriangle(Vector2{cx, cy}, pts[k], pts[(k + 1) % 10], sc);
+            }
+        }
+        else if (!pr.value.empty() && !valIcon)
             label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on && !pr.locked ? kLit : kDim, kPW, kPH);
         if (on && pr.arrows)
         {
@@ -1452,7 +1568,9 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     if (!tabs1.key) tabs1.key = "Q";   // L1/R1 sem tecla (layout 2): o painel troca a aba com Q/E (readPanel)
     if (!tabs2.key) tabs2.key = "E";
     const Icon ok = bind(st::BCross), back = bind(st::BTriangle), clear = bind(st::BSquare);
-    if (v.training)
+    if (v.moves)
+        wotm_legend::post({{ok, {}, "FAVORITE"}, {back, {}, "BACK"}}, la, bar);
+    else if (v.training)
     {
         if (kind == KReset) wotm_legend::post({{ok, {}, "CLEAR"}, {back, {}, "BACK"}}, la, bar);
         else wotm_legend::post({{left, right, "CHANGE"}, {back, {}, "BACK"}}, la, bar);
@@ -1669,7 +1787,7 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
     if (u < 0.f || u > 1.f || w < 0.f || w > 1.f)
         return;
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f, X = u * W, Y = w * H;
-    if (!v.training && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
+    if (!v.training && !v.moves && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
     {
         const float tabX[kTabs] = {W * 0.22f, W * 0.40f, W * 0.59f, W * 0.78f};
         if (X < W * 0.14f) hv.part = HPrevTab;
@@ -1680,8 +1798,8 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
         return;
     }
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
-    const PanelLayout L = panelLayout(tab, v.preview, v.training);
-    const int n = v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
+    const PanelLayout L = panelLayout(tab, v.preview, v.training || v.moves);
+    const int n = v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
     const int i = int(std::floor((Y - L.y0) / L.step + 0.5f));
     if (i < 0 || i >= L.vis || first + i >= n || X < W * 0.03f || X > L.rowRight)
         return;
