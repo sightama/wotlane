@@ -1,6 +1,6 @@
 # Espinha do jogo: cadeia de carga, menu, laço de jogo, estados de monstro
 
-(Índice dos docs no `CLAUDE.md`.) Este arquivo guarda **o que se sabe do fluxo do jogo**, levantado ao decompilar a espinha em 2026-10-08. O que está ou não em C++ é o `config/status.csv` (`grep <função>`), não este arquivo.
+(Índice dos docs no `CLAUDE.md`.) Este arquivo guarda **o que se sabe do fluxo do jogo**, levantado ao decompilar a espinha. O que está ou não em C++ é o `config/status.csv` (`grep <função>`), não este arquivo.
 
 ## Cadeia de carga: da `main` ao monstro no mapa
 Fluxo de `main` (comentário em `src/game/Shell.cpp`): boot -> intro/outro -> menus (`userintMain`) -> sessão: `InitRTState`, `BootInitGame`, `InitBeforeDbLoad`, `LoadLevelFiles`, `FinishLoadBar`, `FadeScreen`, `InitAfterDbLoad`, `InitPlayers`, `initAfter` dos 4 `Hud`, init por modo (BigShot/Crush/DodgeBall), `UpdatePadTweaks`, sons, `rtMain` em laço com `EvaluateGameStatus`.
@@ -27,6 +27,6 @@ Fluxo de `main` (comentário em `src/game/Shell.cpp`): boot -> intro/outro -> me
 - **IA:** `AiReflex` e `AiSeek` dependem de `AiBrain`/`AiNavigator` (já em C++); a navegação (A*, `seek/arrive/tag`) já está. Layout do `AiNavigator`: `monster` 0x0, `turn` 0xC, `strafe` 0x14, `mode` 0x18, `status` 0x1C, `ObstacleSensor` 0x30 (0x130 bytes), `AiPathFinder` 0x160 (0x28), alvo 0x188..0x19C, `PathInfo` 0x220/0x240 (0x20 cada).
 - Truques de codegen vistos nesses TUs: `(int)(bits >> n) & 1` gera o `dsll/dsra32` do retail; para testar um bit de `unsigned long long` num `if`, guardar `bits & m` num `unsigned long long` local; `lq/sq` por `asm volatile` com `$2` fixo; `fabsf` (extern "C") gera `abs.s`; `max.s`/`rsqrt.s` só por `asm`; `permute.py` precisa de N <= nº de ordens possíveis (senão trava).
 
-## Observações de jogo ainda sem causa (halfcpp, 2026-10-08)
+## Observações de jogo ainda sem causa (halfcpp)
 - A IA às vezes repete a mesma ação sem parar (pode ser comportamento do jogo original).
 - Dois casos de "teleporte" depois de um golpe forte que arremessa o monstro: o último `HitEvent` era tipo 3 / subtipo 30, tratado só com dano (igual ao retail); a causa pode ser o knockback/física fora da `takeHit`. Não confirmado.

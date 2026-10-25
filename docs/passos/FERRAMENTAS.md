@@ -5,16 +5,16 @@
 ## Ferramentas (tools/)
 - `wsl/gate.sh` (build + SHA1, sai com erro se falhar), `wsl/scoreall.sh` (pontuação por função com NON_MATCHING), `wsl/convert_tus.sh`, `wsl/check.sh`,
   `ccmatch.py`, `nm_wrap.py`, `new_tu.py`, `place_data.py`, `progress.py` (escreve `config/status.csv`), `callgraph.py`, `m2c.sh`, `wsl/variants.py`, `wsl/permute.py`.
-- Verificação por TU num comando (2026-10-15): `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU> [...] [--runs N] [--no-nm] [-v]` roda a pontuação (`ccmatch`), o `difftest_all`, o `nm_retvals` e, salvo com `--no-nm`, um `build_nm.sh verify` só com essas TUs para o `nm_calls` e o `nm_audit`; imprime uma tabela por função (score, difftest, chamadas, layout, retorno) e sai com erro se alguma equivalente difere no difftest, nas chamadas ou tem retorno `void` consumido. Com o ELF leva ~4,5 min (o `build_nm`); sem, segundos. `sh tools/m2c_batch.sh [csv | tu...]` gera os rascunhos do m2c de toda a fila (`config/boot_coverage_asm.csv` por padrão) em `build/m2c/<tu>/<função>.c`, em paralelo e só o que falta.
+- Verificação por TU num comando: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU> [...] [--runs N] [--no-nm] [-v]` roda a pontuação (`ccmatch`), o `difftest_all`, o `nm_retvals` e, salvo com `--no-nm`, um `build_nm.sh verify` só com essas TUs para o `nm_calls` e o `nm_audit`; imprime uma tabela por função (score, difftest, chamadas, layout, retorno) e sai com erro se alguma equivalente difere no difftest, nas chamadas ou tem retorno `void` consumido. Com o ELF leva ~4,5 min (o `build_nm`); sem, segundos. `sh tools/m2c_batch.sh [csv | tu...]` gera os rascunhos do m2c de toda a fila (`config/boot_coverage_asm.csv` por padrão) em `build/m2c/<tu>/<função>.c`, em paralelo e só o que falta.
 - Camada nativa e runtime: `native_syms.py` (`--gen` grava `native/wotm_syms.h` com `wotm::sym::<dado>` e `wotm::fn::<função>` a partir de `symbol_addrs.txt`; `--audit` lista os literais hex de `native/` que batem com um símbolo, caem dentro de um ou não casam; `--apply` troca os exatos por nome, só no código, e inclui o header onde faltar), `vu1cmp.ps1` (checagem VU1 x nativo e imagens a partir de instantâneos), `corpus.ps1` (corpus de regressão: `-Capture` grava menus e lutas em `<runtime>\corpus`, `-Check -Baseline <csv>` diz o que piorou depois de uma mudança em `native/`), `build_runtime.ps1` (ou `build_runtime.bat` na raiz), `lote.ps1`, `wotm_env.py` (confere a tabela de variáveis `WOTM_*` do `NATIVO.md` contra o código), `vu0native.py`, `vu1dis.py`, `fx.py`.
 - Save do memory card: `python tools/mcsave.py <pasta com mc0/ e mc1/>` (o `discroot` do runtime) mostra os dois cartões como um JSON só, no formato do `save.json` que o runtime grava (`native/runtime/wotm_save.inc`); só lê. Layout em `FORMATOS.md`, "Save do memory card".
-- Assets para formatos comuns e de volta (2026-10-20; formatos em `docs/FORMATOS.md`; leem o `disc/` do usuário, nada extraído vai ao repo; conferidos contra o código do nativo compilado e com arquivos sintéticos, ainda sem o disco):
+- Assets para formatos comuns e de volta (formatos em `docs/FORMATOS.md`; leem o `disc/` do usuário, nada extraído vai ao repo; testados contra o código do nativo e com arquivos sintéticos, falta testar com o disco):
   - `tex.py list|export|inject`: texturas `.TEX`/`.RTX` para PNG com `manifest.json` (paleta achada pelos objetos do `.NGP`) e PNG/TGA de volta, do mesmo tamanho (paleta atual ou `--new-palette`).
   - `snd989.py wav|vpk|vag|bnk-replace`: som para WAV e WAV de volta para `.VPK`, `.VAG` e sons dentro de um `.BNK` (codificador ADPCM que simula o decodificador do jogo).
   - `gltf.py <arquivo.NGP> <saida.glb>`: geometria estática com texturas em glTF binário (Blender, three.js, viewer web). Monstros em pose ainda não: falta avaliar o esqueleto e as curvas de animação (ver a docstring).
   - `ngp.decode_mesh`: porte do `decodeObject` do nativo (textura por seção, ADC como o GS, sprites), usado pelo `gltf.py`.
 - Scripts `.sh` devem ser criados por heredoc no bash; gravar com Python no Windows deixa CRLF e o `sh` do WSL quebra (`sed -i 's/\r$//'` conserta).
-- O bloco de progresso do README, o `docs/progress.svg`, o `tools/update_readme.py` e o hook `.githooks/pre-commit` foram removidos em 2026-10-19. O estado por função continua em `config/status.csv` (`python3 tools/progress.py`, ~12 s via WSL, precisa de `disc/`).
+- O estado por função fica em `config/status.csv` (`python3 tools/progress.py`, ~12 s via WSL, precisa de `disc/`); o README não tem bloco de progresso.
 - Mod `/wotm` (HUD) carrega com `startup_command.bat` (no `.gitignore`), que inicia o Claude com `--plugin-dir ~/.claude/my-plugins/wotm-hud`.
 
 ## Headers compartilhados (include/)
@@ -33,7 +33,7 @@ Regra: uma classe/API usada por mais de um TU mora num header; não redeclarar p
 
 ## Estado da decomp em `TheGame` (fonte: `config/status.csv`)
 - `src/game/TheGame.cpp` convertido. Equivalentes: `Update`, `InitAfterDbLoad`, `ResetLevel`, `UpdatePadTweaks`, `gameResolveLifeAndDeath`; matched: `Update2`, `SetGravity`, `SetOkToUnify`, `GetNumAIsAlive`. Ainda em asm: `InitBeforeDbLoad` e `gameCheckForCloseCombat`.
-- A decomp só avança na superfície de mod (direção de 2026-10-16): `Shell::Load*`, `MonsterParse`, câmera. Para o que falta em cada TU, `grep -c INCLUDE_ASM` ou o `status.csv`.
+- A decomp só avança na superfície de mod: `Shell::Load*`, `MonsterParse`, câmera. Para o que falta em cada TU, `grep -c INCLUDE_ASM` ou o `status.csv`.
 
 ## Teste diferencial (tools/difftest.py, tools/difftest_all.py)
 Roda a função retail e a nossa (compilada com `-DNON_MATCHING`) num emulador MIPS (unicorn), com o mesmo estado aleatório, e compara retorno, chamadas a outras funções
@@ -42,7 +42,7 @@ que o próprio TU define (alias para a cópia do retail). Serve para validar as 
 - Uma função: `~/.venvs/wotm/bin/python tools/difftest.py game/Monster isFullHealth__7Monster --args this --ret int --runs 60 [--objsize 0x122000]`
   (`--args` aceita `this,p,i,b,f`; `--alt OUTRAFUNC` é o controle negativo, deve dar MISMATCH; `--objsize` mantém ponteiros aleatórios fora do objeto, use 0x122000 para `TheGame`).
 - Todas as equivalentes de TUs: `python3 tools/difftest_all.py game/Monster game/TheGame ... --runs 30` (adivinha a assinatura pelo nome mangled e o retorno pela definição).
-- Resultado de 2026-10-07: ~95 funções equivalentes concordam; o teste achou e corrigimos 7 erros reais (Vehicle::setCs/setPos, StaminaMeter::credit, UpdatePadTweaks, TheGame::Update (2º TaskManager),
+- Tipo de erro que ele pega (exemplos de equivalentes que divergiam do retail: Vehicle::setCs/setPos, StaminaMeter::credit, UpdatePadTweaks, TheGame::Update (2º TaskManager),
   MonkeyChains::init (FxTextureId é enum), AnimContact).
 - Limites: não executa VU0/COP2 nem `min.s`/`madd.s`; funções com métodos virtuais ou estruturas encadeadas válidas são puladas ("skipped"); mais de 4 args inteiros ou 2 floats não são suportados;
   é evidência (só os caminhos que o estado aleatório alcança), não prova. Rodar em toda função equivalente nova antes de commitar.

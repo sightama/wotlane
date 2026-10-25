@@ -80,7 +80,7 @@
 - TUs em `config/decomp_tus.txt` usam `.rodata` (com ponto): a rodata usada por uma única função migra
   para o `.s` da função (INCLUDE_ASM), e a rodata compartilhada precisa ser definida no C/C++.
 
-## Piloto de descompilação (2026-10-05)
+## Piloto de descompilação
 | TU | Funções | Match | Tempo | Observação |
 |---|---|---|---|---|
 | `common/zip` | 14 (7.100 B) | 12 (6.840 B) | ~50 min | fonte de referência conhecida (gzip / Info-ZIP); inclui ~15-20 min de descobertas de toolchain |
@@ -128,21 +128,20 @@ Visão dinâmica (o que roda por quadro no port e a ordem para tirar o código d
 - `long long` e `long128` têm 128 bits no ee-gcc (`long` tem 64).
 - Cobrem só a engine em `common/hier*`; o resto do jogo (`game/`) segue sem tipos.
 
-## Recompilação estática (experimento de 2026-10-09)
+## Recompilação estática
 Feita com o [PS2Recomp](https://github.com/ran-j/PS2Recomp) (commit 2c5fbb9), **fora do repo** (o C++ gerado é código do jogo: ~90 MB, 5.385 arquivos).
 - O ELF tem símbolos, então o analisador acha 5.382 funções com nome e tamanho. Recompila em ~1,4 s: 5.042 recompiladas, 340 trocadas por handlers do runtime
   (SDK/libc/libm), **0 falhas de decodificação, 0 instruções não tratadas** (COP2/VU0 macro-mode incluso). 432 funções têm `jr`/`jalr` indireto (`switch`) que o analisador não resolve
   (0 jump tables detectadas); o recompilador as cobre com "fallback entries" (60.604).
-- Todo o C++ compila e linka com o runtime. No runtime de teste o jogo inicializa: carrega os 7 IRX no IOP emulado (989snd incluso), passa do init de som e entra no laço de
-  interface (`userintMain`). Os filmes ficam presos porque o decodificador do jogo (`decBs0`/`videoDec*`) espera a IPU, que o runtime não emula; nos testes foram pulados por hook
-  (`playMpegMovie*` e a thread `updateMpegMovieDecoding`). Desde 2026-10-10 o jogo roda no Windows (MSVC) com desenho, som, filmes e teclado nativos (`native/`; estado em `docs/passos/NATIVO.md`, o que falta em `TODO.md`).
+- Todo o C++ compila e linka com o runtime. O jogo carrega os 7 IRX no IOP emulado (989snd incluso), passa do init de som e entra no laço de interface (`userintMain`).
+  O decodificador de filmes do jogo (`decBs0`/`videoDec*`) espera a IPU, que o runtime não emula; o port troca `playMpegMovie*` e a thread `updateMpegMovieDecoding` pelo
+  tocador nativo. O jogo roda no Windows (MSVC) com desenho, som, filmes e teclado nativos (`native/`; estado em `docs/passos/NATIVO.md`, o que falta em `TODO.md`).
 - O runtime já traz GS em CPU, interpretadores de VU e VIF1 e um IOP emulado; é a ponte, não o destino (o destino é renderização nativa na fronteira da engine). O VU1 emulado serve de referência para a checagem VU1 x nativo (`docs/passos/VU1CHECK.md`).
-- **Bug do PS2Recomp achado**: `SQRT.S fd, ft` lê a fonte em `ft` (usa |ft|) e `RSQRT.S fd, fs, ft` é `fs / sqrt(|ft|)`; o upstream usava `fs`. Afeta 108 funções (`sqrt.s`) e 76 (`rsqrt.s`).
-  **`div.s` e `rsqrt.s` por zero** (confirmado em 2026-10-18 pelos pedestres da METRO; análise no commit 7c1c24e): o gerador emitia ±Inf
-  (o EE satura em ±FLT_MAX) e o VU0 transformava em NaN (0 × Inf). Corrigido no gerador do WSL (`~/wotm-recomp`, `fpu_translator.cpp`: `FPU_DIV_S`/`FPU_RSQRT_S`) e no
-  runtime (`ps2_fpu_rsqrt` no patch); 746 `div.s` e 134 `rsqrt.s` regenerados no `runner/`. O upstream corrigiu o mesmo no PR #272. Ainda **não verificado**: `min/max` com NaN.
-- **Bug do stub `rand` do PS2Recomp** (2026-10-18; o upstream também tem): `std::rand() & 0x7FFF` em vez do LCG da newlib (31 bits). O `mathfRandf` usa os 23 bits baixos de `rand()` como mantissa e saía em [lo, lo + 0,004·(hi − lo)). Corrigido no `LibC.cpp` do patch.
-- **Bug nosso achado pelo oracle**: o gas codifica `sqrt.s` na forma MIPS32 (fonte em `fs`); no EE isso lê `$f0`. Corrigido com `eeSqrtf` (`include/vecmath.h`).
+- **Bug do PS2Recomp**: `SQRT.S fd, ft` lê a fonte em `ft` (usa |ft|) e `RSQRT.S fd, fs, ft` é `fs / sqrt(|ft|)`; o upstream usa `fs` (PR #277 aberto). Afeta 108 funções (`sqrt.s`) e 76 (`rsqrt.s`).
+  **`div.s` e `rsqrt.s` por zero**: o EE satura em ±FLT_MAX, não em ±Inf (com ±Inf, o VU0 faz 0 × Inf = NaN; análise no commit 7c1c24e). O gerador do WSL
+  (`~/wotm-recomp`, `fpu_translator.cpp`: `FPU_DIV_S`/`FPU_RSQRT_S`) e o runtime (`ps2_fpu_rsqrt` no patch) saturam; o upstream faz o mesmo (PR #272). Não verificado: `min/max` com NaN.
+- **Stub `rand` do PS2Recomp** (o upstream tem o mesmo bug): usa `std::rand() & 0x7FFF` em vez do LCG da newlib (31 bits). O `mathfRandf` usa os 23 bits baixos de `rand()` como mantissa, então com 15 bits só sairia em [lo, lo + 0,004·(hi − lo)). O `LibC.cpp` do patch usa o LCG da newlib.
+- **`sqrt.s` no gas**: o gas codifica `sqrt.s` na forma MIPS32 (fonte em `fs`); no EE isso lê `$f0`. O C++ NM usa `eeSqrtf` (`include/vecmath.h`).
 - Cobertura do boot até a interface (3 min, filmes pulados): 786 funções distintas (97 matched, 31 equivalent, 601 asm, 57 hw). Lista das 601 em `config/boot_coverage_asm.csv`.
 
 ## Convenções de status das funções
