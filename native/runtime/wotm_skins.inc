@@ -68,7 +68,7 @@ namespace wotm_skins
             const uint32_t mon = READ32(kShellObj + kShellMonsterSel + (4 + i) * 4) >> 5;
             std::vector<const Skin *> pool;
             for (const Skin &k : Registry::get().skins())
-                if (k.ai && k.monster == static_cast<int>(mon))
+                if (k.ai && k.custom.empty() && k.monster == static_cast<int>(mon))
                     pool.push_back(&k);
             if (pool.empty())
                 continue;
