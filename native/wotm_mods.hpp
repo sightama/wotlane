@@ -70,7 +70,7 @@ struct Custom {
     std::string cameraFrom;     // MonsterLongNames do .CHR da camera ("lizard"); vazio = a do proprio tipo
     float cameraScale = 1.f;    // distancias da camera emprestada
     std::string narrator;       // narrator/<nome>.mp3 (vazio = o do tipo)
-    bool ai = false;            // as IAs sorteadas podem usar (ainda sem efeito)
+    bool ai = false;            // uma CPU pode usar (quadro de CPU da selecao)
     std::filesystem::path portrait;   // PNG do retrato do HUD (vazio = o do .RTX)
     int portraitTex = -1;       // texId do retrato no <PREFIXO><traje>.RTX
     std::string mod;
@@ -80,7 +80,8 @@ struct Custom {
 // Traje de mod (mods/<mod>/skins/<pasta>/skin.json)
 struct Skin {
     int monster = 0;            // tipo do monstro
-    std::string monsterName;    // "togera"
+    std::string monsterName;    // "togera" (numa skin de custom, o id dele)
+    std::string custom;         // id do monstro custom dono da skin (vazio: skin de monstro do jogo); so aparece na lista dele
     std::string prefix;         // "LIZARD"
     std::string id;             // "green" (o save guarda "togera/green")
     std::string name;           // o que a selecao mostra
@@ -153,8 +154,8 @@ public:
                 f.size = size;
             }
         }
+        scanCustoms(mods);   // antes das skins: uma skin pode ser de um custom
         scanSkins(mods);
-        scanCustoms(mods);
         // Faixas de setores na ordem dos nomes (estavel entre execucoes), com um setor de folga entre arquivos
         uint32_t next = kFirstLsn;
         for (auto &[rel, f] : m_files) {
@@ -193,11 +194,20 @@ public:
     // ---- skins de mod (trajes 4 em diante) ----
     const std::vector<Skin> &skins() const { return m_skins; }
     // Skin pelo tipo do monstro (MonsterNewNames) e pelo id ("green") ou "monstro/id"; nullptr se nao ha.
+    // Com "monstro/id", o monstro tem de bater (o mesmo id pode existir no Togera e num custom de base Togera).
     const Skin *skin(int monster, std::string id) const {
-        if (const auto s = id.find('/'); s != std::string::npos) id = id.substr(s + 1);
+        std::string owner;
+        if (const auto s = id.find('/'); s != std::string::npos) owner = lower(id.substr(0, s)), id = id.substr(s + 1);
         for (const Skin &k : m_skins)
-            if (k.monster == monster && k.id == lower(id)) return &k;
+            if (k.monster == monster && k.id == lower(id) && (owner.empty() || owner == k.monsterName)) return &k;
         return nullptr;
+    }
+    // Trajes de um monstro custom: o do monster.json e as skins dele, nessa ordem
+    std::vector<int> customCostumes(const Custom &c) const {
+        std::vector<int> v{c.costume};
+        for (const Skin &k : m_skins)
+            if (k.custom == c.id) v.push_back(k.index);
+        return v;
     }
     const Skin *skinByIndex(int monster, int index) const {
         for (const Skin &k : m_skins)
@@ -296,13 +306,21 @@ private:
                 Skin k;
                 const json::Value *mon = v.get("monster");
                 const MonsterInfo *mi = mon && mon->type == json::Value::Str ? monsterInfo(mon->s) : nullptr;
-                if (!mi) {
-                    std::fprintf(stderr, "[mods] skin %s ignorada: \"monster\" nao e um monstro jogavel (togera, congar, ...)\n", where.c_str());
+                const Custom *cu = !mi && mon && mon->type == json::Value::Str ? custom(mon->s) : nullptr;
+                if (!mi && !cu) {
+                    std::fprintf(stderr, "[mods] skin %s ignorada: \"monster\" nao e um monstro jogavel (togera, congar, ...) nem o id de um monstro custom\n", where.c_str());
                     continue;
                 }
-                k.monster = mi->type;
-                k.monsterName = mi->name;
-                k.prefix = mi->prefix;
+                if (cu) {   // skin de custom: um traje do tipo base, que so a lista do custom oferece
+                    k.monster = cu->type;
+                    k.monsterName = cu->id;
+                    k.custom = cu->id;
+                    k.prefix = cu->prefix;
+                } else {
+                    k.monster = mi->type;
+                    k.monsterName = mi->name;
+                    k.prefix = mi->prefix;
+                }
                 const json::Value *id = v.get("id");
                 k.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
                 if (k.id.empty() || k.id.size() > 32 || k.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
@@ -312,7 +330,7 @@ private:
                 const json::Value *nm = v.get("name");
                 k.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : k.id;
                 const json::Value *base = v.get("base");
-                k.base = base ? int(base->asInt(0)) : 0;
+                k.base = base ? int(base->asInt(0)) : cu ? cu->costume : 0;
                 if (k.base < 0 || k.base > 3) {
                     std::fprintf(stderr, "[mods] skin %s: \"base\" %d fora de 0..3, usando 0\n", where.c_str(), k.base);
                     k.base = 0;
