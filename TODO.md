@@ -25,7 +25,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
 1. **Teste do dono: tabela dos socos** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele. Depois do teste, merge do branch.
-3. Golpes com objeto na tabela dos socos: decodificar as configs do `StateBatSwipe` (chaves 0xFA4/0xFAC/0xFD7/0xFE3 do `.CHR`; `FORMATOS.md`, "Personagem") e mostrá-las como as do `StatePunch` (`wotm_training.inc`, `trackPunch`).
+2. **Golpes com objeto na tabela dos socos:** decodificar as configs do `StateBatSwipe` (chaves 0xFA4/0xFAC/0xFD7/0xFE3 do `.CHR`; `FORMATOS.md`, "Personagem") e mostrá-las como as do `StatePunch` (`wotm_training.inc`, `trackPunch`).
 3. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
 
 ### 10. Chefes jogáveis
