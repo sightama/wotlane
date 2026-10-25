@@ -21,14 +21,20 @@ using wotm_padsel::rd32;
 using wotm_padsel::wr32;
 constexpr int kItems = 5;                       // CONTINUE, RESTART, VIBRATION, RECOMPILED OPTIONS (o CONTROL SCHEME), QUIT
 constexpr int kOptions = 3;
-constexpr int kLineY[kItems + 1] = {0x55, 0x5E, 0x67, 0x70, 0x79, 0x82};   // y de cada linha no pauseLevelOverlay (+ a do treino)
+constexpr int kLineY[kItems + 2] = {0x55, 0x5E, 0x67, 0x70, 0x79, 0x82, 0x8B};   // y de cada linha no pauseLevelOverlay (+ as do treino)
 constexpr uint32_t kTrainText = PS2_RAM_SIZE - 0x380;   // "TRAINING OPTIONS" para o fontSpritePrintCenteredXY (as outras vagas do topo: -0x800..-0x3E0)
 constexpr uint32_t kResetText = PS2_RAM_SIZE - 0x360;   // "RESET POSITIONS" no lugar do RESTART
-static int items() { return wotm_training::g_on.load(std::memory_order_relaxed) ? kItems + 1 : kItems; }
+constexpr uint32_t kMoveText = PS2_RAM_SIZE - 0x3A0;    // "MOVE LIST" (entre o _fvector de -0x3E0 e o TRAINING OPTIONS)
+static int items() { return wotm_training::g_on.load(std::memory_order_relaxed) ? kItems + 2 : kItems; }
 static bool training() { return items() > kItems; }
-constexpr int kRestart = 1, kQuit = 4, kTrainRow = 4, kQuitRow = 5;   // com o treino: linha 4 = TRAINING OPTIONS, 5 = QUIT
-constexpr int kTrainShift = 4;   // a lista de 6 sobe meia linha (o centro da caixa nao muda)
-static int logicalItem(int row) { return training() && (row == kTrainRow || row == kQuitRow) ? kTrainRow + kQuitRow - row : row; }
+// com o treino: linha 4 = TRAINING OPTIONS, 5 = MOVE LIST, 6 = QUIT (itens logicos 5 e 6, que o retail ignora, e 4)
+constexpr int kRestart = 1, kQuit = 4, kTrainRow = 4, kMoveRow = 5, kQuitRow = 6;
+constexpr int kTrainShift = 9;   // a lista de 7 sobe uma linha (o centro da caixa nao muda)
+static int logicalItem(int row)
+{
+    if (!training()) return row;
+    return row == kQuitRow ? kQuit : row == kTrainRow ? kQuitRow - 1 : row == kMoveRow ? kQuitRow : row;
+}
 static int lineY(int row) { return kLineY[row] - (training() ? kTrainShift : 0); }
 static bool g_ownDraw = false, g_quitNext = false, g_autoYes = false;
 constexpr uint32_t kCross = 0x4000, kStart = 0x08, kLeft = 0x80, kRight = 0x20;   // mascaras do inputGetInput
@@ -93,13 +99,17 @@ static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if (training() && rd32(rdram, wotm::sym::gDrawOverlay))
         {   // o sexto item na linha 4, com a fonte do menu (setMenuFont acende a linha escolhida), ainda dentro do overlay (nao vira
             // item de dialogo); o printHook sobe a linha como as outras
-            static constexpr char kText[] = "TRAINING OPTIONS";
+            static constexpr char kText[] = "TRAINING OPTIONS", kMove[] = "MOVE LIST";
             std::memcpy(rdram + kTrainText, kText, sizeof kText);
+            std::memcpy(rdram + kMoveText, kMove, sizeof kMove);
             const uint32_t ret = GPR_U32(ctx, 2);
             g_ownDraw = true;
             wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::setMenuFont__Fi, uint32_t(kTrainRow));
             wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::fontSpritePrintCenteredXY__FiiiPc, 0u, 0x140u, uint32_t(kLineY[kTrainRow]),
                                    kTrainText);
+            wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::setMenuFont__Fi, uint32_t(kMoveRow));
+            wotm_padsel::callGuest(rdram, ctx, runtime, wotm::fn::fontSpritePrintCenteredXY__FiiiPc, 0u, 0x140u, uint32_t(kLineY[kMoveRow]),
+                                   kMoveText);
             g_ownDraw = false;
             ctx->r[2] = _mm_set_epi64x(0, static_cast<int32_t>(ret));
         }
@@ -378,9 +388,9 @@ static void exitHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_inExit = false;
     const uint32_t sel = rd32(rdram, wotm::sym::gCurrentMenuSelection);
     const bool cross = ctx->pc == ra && GPR_U32(ctx, 2) && g_sawCross && !g_sawStart;
-    if (cross && (sel == uint32_t(kOptions) || (sel == uint32_t(kTrainRow) && training())))
+    if (cross && (sel == uint32_t(kOptions) || ((sel == uint32_t(kTrainRow) || sel == uint32_t(kMoveRow)) && training())))
     {
-        wotm_mainmenu::openPausePanel(rdram, ctx, runtime, sel == uint32_t(kTrainRow));
+        wotm_mainmenu::openPausePanel(rdram, ctx, runtime, sel == uint32_t(kTrainRow), sel == uint32_t(kMoveRow));
         ctx->r[2] = _mm_set_epi64x(0, 0);
     }
     else if (cross && sel == uint32_t(kRestart) && training())

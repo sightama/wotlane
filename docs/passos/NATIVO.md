@@ -92,8 +92,8 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   `WOTM_TRAINING=1` desde o início (qualquer luta, por exemplo `WOTM_MATCH=3,1,1`). A fase 12 (`training`, `WOTM_MATCH=3,1,12`)
   carrega, mas é uma arena quase toda preta que o jogo não usa.
 - **Opções:** no pause (START), com o modo ligado, a lista fica CONTINUE, RESET POSITIONS, VIBRATION, RECOMPILED OPTIONS, **TRAINING
-  OPTIONS**, QUIT (`wotm_pausemenu.inc`: o cursor anda pelas linhas da tela e o jogo recebe o item lógico, linha 4 = item 5, que o
-  retail ignora, linha 5 = item 4, o QUIT; a lista sobe meia linha). A caixa 3D do jogo (`m_cs610`, tamanho fixo) é escondida
+  OPTIONS**, **MOVE LIST**, QUIT (`wotm_pausemenu.inc`: o cursor anda pelas linhas da tela e o jogo recebe o item lógico, linhas 4 e 5 = itens 5 e 6, que o
+  retail ignora, linha 6 = item 4, o QUIT; a lista sobe uma linha). A caixa 3D do jogo (`m_cs610`, tamanho fixo) é escondida
   (`hierSetCsDrawMe`) e a do pause passa a ser nativa (`wotm_pausemenu::drawBox2d`, debaixo do texto, do tamanho da lista), em todo
   pause. TRAINING OPTIONS abre o painel nativo do menu com as linhas: esferas dos golpes, caixas do corpo, cápsulas de empurrão
   (desligadas por padrão), boneco (parado, CPU, sempre bloqueia, bloqueia depois do 1º acerto, pula), **dificuldade da CPU** (a do jogo,
@@ -172,6 +172,14 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   `collisTestBatAttack`; +0xB0 nos outros, `getDamageMod`). Especiais não entram. Log: `[treino] soco slot ...` ou
   `[treino] golpe com objeto slot ...` nas 12 primeiras leituras antes da janela.
   Foto: `docs/screenshots/2026-10-25/2026-10-25_modo_treino_tabela_socos.png`.
+- **MOVE LIST** (item da pausa, `wotm_mainmenu.inc`): painel nativo com a lista de golpes do monstro do P1, montada das configs na RAM
+  (`wotm_training.inc`, `buildMoves`, a cada 64 quadros e quando o monstro muda): os 6 socos da primeira posição, as sequências do mesmo
+  botão (COMBO: SQUARE X 4; o próximo tipo é permitido pelo float +0x94 + tipo·4 da `PunchConfig` e a casa seguinte existe; o dano é a
+  soma) e os 6 golpes com objeto (WEAPON). A dica de cada linha traz dano, janela, raio, atordoamento e se derruba. O X favorita (até 8,
+  "FAVORITE" na linha); os favoritos ficam por tipo de monstro em `training_moves.ini` ao lado do `settings.ini` (ids `P<tipo>`,
+  `C<tipo>x<n>`, `W<tipo>`). Com favoritos, a tabela in-game (PUNCH TABLE) mostra esses golpes (FAVORITES HIT n, "x n" nos combos, "W"
+  nos de objeto) no lugar dos 6 tipos da posição; a linha acende quando o golpe em curso é esse botão. Especiais e golpes sem config de
+  soco ainda não entram. Log: `[treino] move list do tipo ...`.
 - **Dados de quadro:** na saída do `Monster::update` de cada slot, o estado (`m_state` +0x34, nome pela tabela do `game.h`; no
   `StatePunch` e no `BatSwipe` também a cadeia e o passo do combo). Cada troca fecha um registro: golpe (estado de ataque, ou qualquer
   um com teste de golpe) com início (quadro do primeiro teste, o primeiro do estado = 1), ativo (quadros com teste) e total; reação da

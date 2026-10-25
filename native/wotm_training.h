@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace wotm_training
@@ -235,8 +236,28 @@ struct PunchLive
 };
 constexpr int kPunchTiers = 10, kPunchTypes = 6;
 
+// Lista de golpes (MOVE LIST da pausa) do monstro do P1, montada das configs na RAM: os 6 socos da primeira posicao, as sequencias
+// do mesmo botao (o proximo tipo e permitido pelo float +0x94 + tipo*4 da config e a casa seguinte existe) com o dano somado, e os 6
+// golpes com objeto. id: "P<tipo>", "C<tipo>x<n>", "W<tipo>" (o que o arquivo de favoritos guarda)
+enum MoveKind : uint8_t { MkPunch, MkCombo, MkWeapon };
+struct Move
+{
+    uint8_t kind = MkPunch;
+    int8_t type = -1;            // tipo do PadFlags (0 triangulo ... 5 quadrado), o botao de cada golpe da sequencia
+    uint8_t len = 1;             // golpes na sequencia
+    char id[12] = {};
+    float dmg = 0.f;             // soma (combo); multiplicador do dano do objeto (objeto)
+    float ini = 0.f, fim = 0.f;  // janela do ultimo golpe
+    float radius = 0.f, stun = 0.f, kb = 0.f;   // do ultimo golpe
+};
+constexpr int kFavMax = 8;
+
 struct Shared
 {
+    std::vector<Move> moveList;  // a lista do monstro do P1 (movesType = m_typeBits >> 5; -1 = ainda nao montada)
+    int movesType = -1;
+    std::vector<std::string> fav;   // ids favoritos do monstro movesType (ate kFavMax); a caixa in-game mostra estes
+    bool favDirty = false;          // o painel mudou os favoritos: o wotm_training.inc grava o arquivo
     std::mutex m;
     PunchLive live[16];          // o soco em curso por slot (frame antigo = nao esta socando)
     PunchCfg table[kPunchTypes]; // os 6 tipos da posicao do combo em que o P1 esta (0 fora do soco)

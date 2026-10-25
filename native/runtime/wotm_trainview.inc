@@ -259,6 +259,7 @@ struct View
     PunchCfg table[kPunchTypes];
     int tableTier = 0;
     bool tableWeapon = false;
+    std::vector<Move> fav;   // golpes favoritos da MOVE LIST, na ordem em que foram marcados (vazio: a caixa mostra os 6 da posicao)
 };
 
 // copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
@@ -310,6 +311,9 @@ View snapshot()
     std::copy(std::begin(sh.table), std::end(sh.table), std::begin(v.table));
     v.tableTier = sh.tableTier;
     v.tableWeapon = sh.tableWeapon;
+    for (const std::string &id : sh.fav)
+        for (const Move &m : sh.moveList)
+            if (id == m.id) { v.fav.push_back(m); break; }
     return v;
 }
 
@@ -643,14 +647,21 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     struct Row { int type, dir; st::Bind bind; const char *txt; };
     static constexpr Row kRows[kPunchTypes] = {{5, 5, st::BSquare, "SQ"}, {3, 8, st::BSquare, "SQ"}, {4, 2, st::BSquare, "SQ"},
                                                {0, 5, st::BTriangle, "TRI"}, {1, 8, st::BTriangle, "TRI"}, {2, 2, st::BTriangle, "TRI"}};
-    const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f;
+    const bool favs = !v.fav.empty();
+    const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f + (favs ? a * 2.6f : 0.f);   // com favoritos, lugar do "x n"/"W"
     const float cDmg = cWin + a * 6.f, cRad = cDmg + a * 4.f, cStun = cRad + a * 4.f, right = cStun + a * 5.f;
     const PunchLive &p = v.live[0];
     const bool now = p.frame && v.frame - p.frame <= 1u && p.cfg.valid;
-    const int rows = kPunchTypes + 2;
+    // com favoritos da MOVE LIST, a caixa mostra esses golpes (icone do botao, "x n" nos combos, "W" nos de objeto) no lugar dos 6
+    // tipos da posicao; a linha acende quando o golpe em curso e esse botao (no combo, enquanto a posicao nao passar do fim dele)
+    const int nRows = favs ? int(v.fav.size()) : kPunchTypes;
+    const int rows = nRows + 2;
     DrawRectangle(int(x) - 6, int(top) - 6, int(right - x) + 12, int(rowH * float(rows) + fh * 1.2f) + 12, Color{0, 0, 0, 130});
     char b[48];
-    std::snprintf(b, sizeof b, "%s  HIT %d", v.tableWeapon ? "WEAPON" : "PUNCHES", v.tableTier + 1);
+    if (favs)
+        std::snprintf(b, sizeof b, "FAVORITES  HIT %d", v.tableTier + 1);
+    else
+        std::snprintf(b, sizeof b, "%s  HIT %d", v.tableWeapon ? "WEAPON" : "PUNCHES", v.tableTier + 1);
     gt.put(b, x, top + isz * 0.5f, fh, Color{120, 255, 160, 255});
     const Color kHead{150, 150, 150, 255};
     const float hy = top + rowH + isz * 0.5f;
@@ -658,18 +669,39 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     gt.put("DMG", cDmg, hy, fh, kHead);
     gt.put("RAD", cRad, hy, fh, kHead);
     gt.put("STUN", cStun, hy, fh, kHead);
-    for (int r = 0; r < kPunchTypes; ++r)
+    auto rowOf = [&](int type) -> const Row & {
+        for (const Row &r : kRows)
+            if (r.type == type) return r;
+        return kRows[0];
+    };
+    for (int r = 0; r < nRows; ++r)
     {
-        const Row &row = kRows[r];
-        const PunchCfg &c = v.table[row.type];
+        PunchCfg favCfg;
+        const Move *mv = favs ? &v.fav[r] : nullptr;
+        if (mv)
+        {
+            favCfg.valid = true; favCfg.weapon = mv->kind == MkWeapon; favCfg.ini = mv->ini; favCfg.fim = mv->fim; favCfg.dmg = mv->dmg;
+            favCfg.radius = mv->radius; favCfg.stun = mv->stun; favCfg.kb = mv->kb;
+        }
+        const Row &row = mv ? rowOf(mv->type) : kRows[r];
+        const PunchCfg &c = mv ? favCfg : v.table[row.type];
         const float y = top + rowH * float(r + 2), cy = y + isz * 0.5f;
-        const bool cur = now && p.type == row.type;
+        bool cur = now && p.type == row.type;
+        if (mv && cur)
+            cur = mv->kind == MkWeapon ? p.cfg.weapon : (!p.cfg.weapon && (mv->kind == MkCombo ? p.tier < int(mv->len) : p.tier == 0));
         const unsigned char al = c.valid ? 255 : 90;
         if (cur)
             DrawRectangle(int(x) - 4, int(y) - 1, int(right - x) + 8, int(rowH), Color{255, 230, 120, 50});
         drawDir(row.dir, cIcons + isz * 0.5f, cy, isz, Color{255, 255, 255, al});
         if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(row.bind), cIcons + isz * 1.5f + 2.f, cy, isz, float(al) / 255.f))
             gt.put(row.txt, cIcons + isz + 2.f, cy, fh, Color{255, 230, 120, al});
+        if (mv && mv->kind != MkPunch)
+        {
+            char tag[8];
+            if (mv->kind == MkCombo) std::snprintf(tag, sizeof tag, "x%d", int(mv->len));
+            else std::snprintf(tag, sizeof tag, "W");
+            gt.put(tag, cIcons + isz * 2.f + 6.f, cy, fh * 0.8f, Color{255, 230, 120, al});
+        }
         if (!c.valid)
         {
             gt.put("-", cWin, cy, fh, Color{150, 150, 150, al});

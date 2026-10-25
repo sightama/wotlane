@@ -806,6 +806,135 @@ namespace wotm_train
         return std::isfinite(pct) ? pct : -1.f;
     }
 
+    // ---- MOVE LIST (wotm_mainmenu.inc): a lista do monstro do P1 e os favoritos dele. Arquivo de favoritos: training_moves.ini ao
+    // lado do settings.ini (uma linha "<tipo>=<id>,<id>..." por monstro; sem settings.ini, so na memoria)
+    constexpr uint32_t kPunchNext = 0x94u;   // PunchConfig: 6 floats, > 0 = o proximo tipo e permitido
+    std::filesystem::path favPath()
+    {
+        const std::filesystem::path &p = wotm::settings::g_path;
+        return p.empty() ? std::filesystem::path() : p.parent_path() / "training_moves.ini";
+    }
+    std::vector<std::string> loadFav(int type)
+    {
+        std::vector<std::string> out;
+        const std::filesystem::path p = favPath();
+        if (p.empty()) return out;
+        std::ifstream f(p);
+        std::string line;
+        const std::string key = std::to_string(type) + "=";
+        while (f && std::getline(f, line))
+        {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.rfind(key, 0) != 0) continue;
+            std::string rest = line.substr(key.size()), id;
+            for (char c : rest + ",")
+            {
+                if (c == ',') { if (!id.empty() && int(out.size()) < kFavMax) out.push_back(id); id.clear(); }
+                else if (c != ' ') id += c;
+            }
+        }
+        return out;
+    }
+    void saveFav(int type, const std::vector<std::string> &fav)
+    {
+        const std::filesystem::path p = favPath();
+        if (p.empty()) return;
+        std::vector<std::string> lines;
+        {
+            std::ifstream f(p);
+            std::string line;
+            const std::string key = std::to_string(type) + "=";
+            while (f && std::getline(f, line))
+            {
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (!line.empty() && line.rfind(key, 0) != 0) lines.push_back(line);
+            }
+        }
+        std::string mine = std::to_string(type) + "=";
+        for (size_t i = 0; i < fav.size(); ++i) mine += (i ? "," : "") + fav[i];
+        lines.push_back(mine);
+        std::ofstream f(p, std::ios::trunc);
+        f << "# MOVE LIST do modo treino: favoritos por tipo de monstro (m_typeBits >> 5); ids P<tipo>, C<tipo>x<n>, W<tipo>\n";
+        for (const std::string &l : lines)
+            if (l[0] != '#') f << l << '\n';
+    }
+    // monta a lista do monstro m (socos da posicao 1, sequencias do mesmo botao, golpes com objeto) e publica com os favoritos dele
+    void buildMoves(const uint8_t *rdram, uint32_t m, int type, bool bat)
+    {
+        std::vector<Move> list;
+        auto fill = [](Move &mv, const PunchCfg &c) {
+            mv.ini = c.ini; mv.fim = c.fim; mv.radius = c.radius; mv.stun = c.stun; mv.kb = c.kb;
+        };
+        for (int k = 0; k < kPunchTypes; ++k)
+        {
+            const PunchCfg c = readPunchCfg(rdram, m, 0, k);
+            if (!c.valid) continue;
+            Move mv;
+            mv.kind = MkPunch; mv.type = int8_t(k); mv.len = 1; mv.dmg = c.dmg;
+            fill(mv, c);
+            std::snprintf(mv.id, sizeof mv.id, "P%d", k);
+            list.push_back(mv);
+        }
+        for (int k = 0; k < kPunchTypes; ++k)
+        {
+            PunchCfg c = readPunchCfg(rdram, m, 0, k);
+            if (!c.valid) continue;
+            float total = c.dmg;
+            int n = 1;
+            for (int t = 0; t + 1 < kPunchTiers; ++t)
+            {
+                const uint32_t cfg = m + kPunch + kPunchCfgs + uint32_t(t) * kTierStride + uint32_t(k) * kTypeStride;
+                if (!(rdf(rdram, cfg + kPunchNext + uint32_t(k) * 4u) > 0.f)) break;
+                const PunchCfg nx = readPunchCfg(rdram, m, t + 1, k);
+                if (!nx.valid) break;
+                c = nx;
+                total += c.dmg;
+                ++n;
+            }
+            if (n < 2) continue;
+            Move mv;
+            mv.kind = MkCombo; mv.type = int8_t(k); mv.len = uint8_t(n); mv.dmg = total;
+            fill(mv, c);
+            std::snprintf(mv.id, sizeof mv.id, "C%dx%d", k, n);
+            list.push_back(mv);
+        }
+        for (int k = 0; k < kPunchTypes; ++k)
+        {
+            const PunchCfg c = readSwipeCfg(rdram, m, 0, k, bat);
+            if (!c.valid) continue;
+            Move mv;
+            mv.kind = MkWeapon; mv.type = int8_t(k); mv.len = 1; mv.dmg = c.dmg;
+            fill(mv, c);
+            std::snprintf(mv.id, sizeof mv.id, "W%d", k);
+            list.push_back(mv);
+        }
+        Shared &sh = shared();
+        std::lock_guard<std::mutex> lk(sh.m);
+        sh.moveList = std::move(list);
+        if (sh.movesType != type)   // monstro novo: os favoritos dele vem do arquivo (os mudados no painel ja foram gravados)
+        {
+            sh.fav = loadFav(type);
+            sh.favDirty = false;
+            std::fprintf(stderr, "[treino] move list do tipo %d: %zu golpes, %zu favorito(s)\n", type, sh.moveList.size(), sh.fav.size());
+        }
+        sh.movesType = type;
+    }
+    // a cada 64 quadros no P1: lista nova quando o monstro muda; favoritos mudados pelo painel vao para o arquivo
+    void updateMoves(const uint8_t *rdram, uint32_t m, bool bat)
+    {
+        const int type = int(rd32(rdram, m + 0x14) >> 5);
+        bool rebuild = false, save = false;
+        std::vector<std::string> fav;
+        {
+            Shared &sh = shared();
+            std::lock_guard<std::mutex> lk(sh.m);
+            rebuild = sh.movesType != type;
+            if (sh.favDirty) { save = true; fav = sh.fav; sh.favDirty = false; }
+        }
+        if (save) saveFav(type, fav);
+        if (rebuild || (frameNow(rdram) % 64u) == 0) buildMoves(rdram, m, type, bat);
+    }
+
     // Na saida do Monster::update: o golpe em curso (soco ou golpe com objeto: config, % da animacao, localizadores) e, no P1, os 6
     // tipos da posicao do combo (as SwipeConfig enquanto ele segura um objeto, as PunchConfig sem)
     void trackPunch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int slot)
@@ -853,8 +982,11 @@ namespace wotm_train
         }
         PunchCfg table[kPunchTypes];
         if (slot == 0)
+        {
             for (int k = 0; k < kPunchTypes; ++k)
                 table[k] = weapon ? readSwipeCfg(rdram, m, tier, k, bat) : readPunchCfg(rdram, m, tier, k);
+            updateMoves(rdram, m, bat);
+        }
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
         if (punching)

@@ -26,6 +26,8 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
 1. **Teste do dono: tabela dos socos** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele; com um objeto na mão ela vira WEAPON HIT n (multiplicador "x1.5" no dano); o gancho do Ultra-V sai como linha. Depois do teste, merge do branch.
 
+2. **MOVE LIST na pausa:** nova linha ao lado de TRAINING OPTIONS. Painel nativo com uma linha por golpe (comando com ícones, nome, dano, janela, alcance), agrupado em socos, combos (sequência do mesmo botão com o dano somado, mais os finalizadores que derrubam), especiais, agarrão e objeto. Favoritar até 8 ou 9 golpes (salvo por monstro); a caixa in-game mostra os favoritos e, sem favoritos, os 6 socos da posição. Primeira leva: socos, combos e os golpes comuns (butt slam, investida, arremesso, agarrão); depois os especiais de cada monstro (dano e janela vêm do asm de cada estado: `docs/investigacoes/2026-10-25/move_list_*.md`).
+
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).
 - Alguns chefes não são `Monster` comum (`NATIVO.md`, "Vencer a luta"; câmera própria em `InitPlantBossCamera`): precisam de estados de controle, golpes e escala que caibam numa luta normal. Entram na seleção pelo caminho do item 8 (o Goliath Prime é o primeiro).
