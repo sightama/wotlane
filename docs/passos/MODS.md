@@ -92,7 +92,7 @@ python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da 
     (`docs/screenshots/2026-10-25/2026-10-25_mods_png_pedestres_upscale.png`,
     `docs/screenshots/2026-10-25/2026-10-25_pedestres_folha_original_e_animesharp.png`). Para partículas menores ou mais nítidas,
     redesenhe: o desenho menor no centro, com mais borda transparente, aparece menor.
-- Não vale: na poeira/fumaça composta (o jogo a monta na VRAM a cada quadro), no monstro 3D da lista de saves e na imagem do GS emulado
+- Não vale: na poeira/fumaça composta (o jogo a monta na VRAM a cada quadro) e na imagem do GS emulado
   do `ps2EntryRunner` (a referência da checagem VU1; a janela dele usa o PNG). Para essa, `pack --inject` também regrava o `.TEX`/`.RTX` do mod quando o PNG tem o
   tamanho original (as cores vão para a paleta atual).
 - Como o nativo acha o arquivo: o pacote de upload de `texInfo[texId]` está dentro do `.TEX` (ou `.RTX`) carregado em
@@ -211,7 +211,7 @@ luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23
 - **PNG** (`native/wotm_texmods.hpp`, `Scene::modTexture`): o jogo segue carregando o `.TEX`/`.RTX` do disco; o desenho nativo troca a
   imagem no `textureId` (objetos) e no `residentTexture` (quadrados de tela: barras dos inimigos, fonte). O texId do disco sai do
   deslocamento do pacote de `texInfo[id]` dentro do arquivo carregado (`fileStatus.texAddr`/`resAddr`, nome em `names`); as
-  residentes, pelo DBP. PNG maior que a original ganha mipmaps. Partículas: `Scene::modParticle` no `particleTexture` e no `fxTexture`. Fora: poeira composta, monstro da lista de saves e o GS emulado (para
+  residentes, pelo DBP. PNG maior que a original ganha mipmaps. Partículas: `Scene::modParticle` no `particleTexture` e no `fxTexture`. Monstro 3D da seleção e da lista de saves: `model::Model::decodeTex` (`wotm_model.hpp`). Fora: poeira composta e o GS emulado (para
   esse, `modkit.py pack --inject`).
 
 ## Cuidados
