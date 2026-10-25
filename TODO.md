@@ -24,8 +24,8 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
-1. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; virar  `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
-2. Entrada pelo launcher.
+1. Entrada pelo launcher.
+2. Golpes com objeto na tabela dos socos: decodificar as configs do `StateBatSwipe` (chaves 0xFA4/0xFAC/0xFD7/0xFE3 do `.CHR`; `FORMATOS.md`, "Personagem") e mostrá-las como as do `StatePunch` (`wotm_training.inc`, `trackPunch`).
 3. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
 
 ### 10. Chefes jogáveis

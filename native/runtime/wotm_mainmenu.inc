@@ -188,7 +188,7 @@ static int g_top[kTabs] = {};
 // Painel do modo treino (item TRAINING OPTIONS da pausa, wotm_pausemenu.inc): as opcoes sao os atomicos do wotm_training.h (nao vao
 // para o settings.ini), escritos so aqui, na thread do EE; os ganchos do treino e o desenho os leem
 namespace tr = wotm_training;
-enum TrainRow { TrSpheres, TrHulls, TrCapsules, TrDummy, TrDifficulty, TrHealth, TrMeters, TrInputs, TrPanel, TrClear, kTrainRows };
+enum TrainRow { TrSpheres, TrHulls, TrCapsules, TrDummy, TrDifficulty, TrHealth, TrMeters, TrInputs, TrPanel, TrMoves, TrClear, kTrainRows };
 struct TrainDef { const char *label, *hint; };
 constexpr TrainDef kTrainDefs[kTrainRows] = {
     {"ATTACK SPHERES", "SHOWS WHERE EACH ATTACK CHECKS FOR A HIT. RED WHEN IT CONNECTS"},
@@ -200,6 +200,7 @@ constexpr TrainDef kTrainDefs[kTrainRows] = {
     {"STAMINA AND SPECIAL", "KEEPS THE STAMINA OF EVERY MONSTER FULL OR IN RAGE, WITH THE SPECIAL ATTACK READY"},
     {"INPUT DISPLAY", "SHOWS THE BUTTONS YOU AND THE DUMMY PRESS, AND FOR HOW MANY FRAMES"},
     {"DAMAGE PANEL", "SHOWS THE DAMAGE, THE COMBOS AND THE FRAME DATA OF EACH ATTACK"},
+    {"PUNCH TABLE", "WINDOW, DAMAGE, RADIUS AND STUN OF YOUR PUNCHES. A FAINT SPHERE SHOWS WHERE THE NEXT HIT CHECKS"},
     {"CLEAR DAMAGE LOG", "EMPTIES THE DAMAGE LIST AND THE BEST COMBO"},
 };
 constexpr int kTrainHealth[] = {100, 75, 50, 25, 10};   // DUMMY HEALTH: 0 sem recarga, 1..5 estes %
@@ -230,6 +231,7 @@ static std::string trainValue(int r)
     case TrMeters: return kMeters[std::clamp(tr::g_meters.load(), 0, tr::MCount - 1)];
     case TrInputs: return onOff(tr::kShowInputs);
     case TrPanel: return onOff(tr::kPanel);
+    case TrMoves: return onOff(tr::kMoveTable);
     default: return std::string();
     }
 }
@@ -254,6 +256,7 @@ static bool trainStep(int r, int dir, bool wrap)
     case TrCapsules: return flag(tr::kShowCapsule);
     case TrInputs: return flag(tr::kShowInputs);
     case TrPanel: return flag(tr::kPanel);
+    case TrMoves: return flag(tr::kMoveTable);
     case TrDummy:
     {
         const int cur = std::clamp(tr::g_dummy.load(), 0, tr::DCount - 1), v = step(cur, tr::DCount);
@@ -657,7 +660,7 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if (e[PUp] || e[PDown])
         {
             g_trainSel = (g_trainSel + (e[PDown] ? 1 : kTrainRows - 1)) % kTrainRows;
-            const int vis = kTrainRows;   // panelLayout(.., training): as 10 cabem
+            const int vis = kTrainRows;   // panelLayout(.., training): as 11 cabem
             if (g_trainSel < g_trainTop) g_trainTop = g_trainSel;
             if (g_trainSel >= g_trainTop + vis) g_trainTop = g_trainSel - vis + 1;
             panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
@@ -1217,8 +1220,8 @@ struct PanelLayout
 static PanelLayout panelLayout(int tab, bool preview, bool training = false)
 {
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;
-    if (training)   // sem abas: o titulo e as 10 linhas, mais juntas, comecando mais acima
-        return {lineH * 0.69f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
+    if (training)   // sem abas: o titulo e as 11 linhas, mais juntas, comecando mais acima
+        return {lineH * 0.63f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
     if (tab == TabVideo && !preview)   // previa escondida: as 8 linhas com as colunas das outras abas
         return {lineH * 0.86f, 46.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
     if (tab == TabVideo)

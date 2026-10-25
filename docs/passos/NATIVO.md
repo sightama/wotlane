@@ -99,7 +99,7 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   (desligadas por padrão), boneco (parado, CPU, sempre bloqueia, bloqueia depois do 1º acerto, pula), **dificuldade da CPU** (a do jogo,
   fácil, médio, difícil: escrita em TheGame +0x1203CC no `Monster::update` enquanto não é "a do jogo"; a original volta no "sim" do
   QUIT e no menu principal, para não ir ao save), recarga de vida (100, 75, 50, 25, 10% ou sem recarga), medidores
-  (normal, sempre cheios, sempre na fúria), comandos na tela, painel de dano e limpar a lista e o maior combo. O menu F2 de antes saiu.
+  (normal, sempre cheios, sempre na fúria), comandos na tela, painel de dano, tabela dos socos e limpar a lista e o maior combo. O menu F2 de antes saiu.
 - **RESET POSITIONS:** é o RESTART do jogo renomeado, com o ARE YOU SURE respondido sozinho (gancho do `areYouSure`, que refaz o
   "sim": `shell` +0x2BA4 = 0, +0x2B40/+0x2B44 = +0x2B48, `snd_StopAllSounds`, som 0x4F, `gExitDialog` 0, devolve 1). O `rtMain` sai
   com o `m_restart` que o overlay pôs, e o `TheGame::ResetLevel` + `rtMain(0)` põem monstros e fase (prédios) como no começo, sem
@@ -157,6 +157,16 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   pelo `source`: 2 e 11 corpo a corpo, 3 objeto na mão, 1 projétil, 7 butt slam, 8 e 13 arremesso, 5, 6, 12, 14 e 20 especial. Com o
   modo ligado, os números de dano (`WOTM_DAMAGEPOP`) saem mesmo com a opção desligada. Log: `[treino] dano ...` nos 30 primeiros e a
   cada 100.
+- **Tabela dos socos** (linha PUNCH TABLE, ligada por padrão): na saída do `Monster::update`, com o monstro no `StatePunch`, a config do
+  soco em curso (a `PunchConfig` da posição e do tipo, os valores do `.CHR`; `FORMATOS.md`, "Personagem"), o ponto da animação
+  (`animationGetCurrentPercent` do jogo, chamado com o contexto guardado e devolvido), o `inCollisionWindow` (+0x2A00) e a posição dos
+  localizadores; no P1, também os 6 tipos da posição do combo em que ele está (a primeira fora do soco). No lado esquerdo, abaixo dos
+  comandos (que passam a 8 linhas): PUNCHES HIT n e uma linha por tipo (quadrado, frente/trás + quadrado, triângulo, frente/trás +
+  triângulo, com os ícones do dispositivo) com a janela em % da animação, o dano pedido, o raio, o atordoamento (laranja acima de 100,
+  "K" quando derruba); a linha do soco em curso fica destacada e a barra embaixo mostra a janela (azul, vermelha durante o teste) e o
+  ponto da animação. Antes da janela abrir, a esfera do punho sai apagada em cada localizador do golpe, na cor do dono, de qualquer monstro.
+  Golpes com objeto (`BatSwipe`) e especiais não entram. Log: `[treino] soco slot ...` nas 12 primeiras leituras antes da janela.
+  Foto: `docs/screenshots/2026-10-25/2026-10-25_modo_treino_tabela_socos.png`.
 - **Dados de quadro:** na saída do `Monster::update` de cada slot, o estado (`m_state` +0x34, nome pela tabela do `game.h`; no
   `StatePunch` e no `BatSwipe` também a cadeia e o passo do combo). Cada troca fecha um registro: golpe (estado de ataque, ou qualquer
   um com teste de golpe) com início (quadro do primeiro teste, o primeiro do estado = 1), ativo (quadros com teste) e total; reação da

@@ -20,7 +20,8 @@ constexpr uint32_t kRefill = 1u << 3;        // vida volta cheia depois de um te
 constexpr uint32_t kPanel = 1u << 4;         // painel de dano
 constexpr uint32_t kShowInputs = 1u << 6;    // historico dos comandos (P1 e o boneco)
 constexpr uint32_t kTrainHud = 1u << 7;      // HUD do boneco a direita e os numeros por cima das barras (P1 e boneco)
-constexpr uint32_t kDefault = kShowAttacks | kShowHulls | kRefill | kPanel | kShowInputs | kTrainHud;
+constexpr uint32_t kMoveTable = 1u << 8;     // tabela dos socos do P1 (configs do StatePunch) e a esfera antes da janela do golpe
+constexpr uint32_t kDefault = kShowAttacks | kShowHulls | kRefill | kPanel | kShowInputs | kTrainHud | kMoveTable;
 
 // Celulas do HUD do jogador 1 em unidades da tela do GS (640 x 224, faixa 4:3), medidas num print (investigacao 2026-10-23,
 // treino_hud.md): o do boneco e o espelho (x' = 640 - x), como o jogo desenha o do jogador 2
@@ -204,9 +205,38 @@ struct PadRec
     uint32_t frames;
 };
 
+// Tabela dos socos: uma PunchConfig do StatePunch (Monster +0x8470 +0x20 + pos*0x420 + tipo*0xB0; os valores do RST/<MONSTRO>.CHR,
+// chave 0xFCC, que o tools/chr_dump.py tambem le). pos = posicao no combo (StatePunch +0x2988), tipo = qual golpe (+0x298C)
+struct PunchCfg
+{
+    bool valid = false;
+    int anim = -1;               // MonsterAnim (+0x00)
+    float ini = 0.f, fim = 0.f;  // janela do teste de golpe, fracao da animacao (+0x0C, +0x10)
+    float dmg = 0.f;             // dano pedido (+0x90)
+    float radius = 0.f;          // raio da esfera do punho (+0x74; 0 = o padrao, StatePunch +0x2980)
+    float stun = 0.f;            // atordoamento (+0x6C; > 100 atordoa)
+    float kb = 0.f;              // forca de knockback (+0x64; != 0 derruba)
+    int loc[2] = {-1, -1};       // localizadores testados (+0x7C, +0x80; < 0x7D0 nenhum)
+};
+// O soco em curso de um monstro, na saida do Monster::update: config, ponto da animacao e onde estao os localizadores agora
+struct PunchLive
+{
+    uint32_t frame = 0;          // g_frame da leitura (0 = nunca)
+    int8_t tier = -1, type = -1;
+    float pct = -1.f;            // animationGetCurrentPercent da animacao do golpe
+    bool inWindow = false;       // StatePunch +0x2A00 (inCollisionWindow)
+    uint8_t nloc = 0;
+    float loc[2][3] = {};
+    PunchCfg cfg;
+};
+constexpr int kPunchTiers = 10, kPunchTypes = 6;
+
 struct Shared
 {
     std::mutex m;
+    PunchLive live[16];          // o soco em curso por slot (frame antigo = nao esta socando)
+    PunchCfg table[kPunchTypes]; // os 6 tipos da posicao do combo em que o P1 esta (0 fora do soco)
+    int8_t tableTier = 0;
     std::vector<Sweep> sweeps;   // acumuladas; a janela descarta as velhas
     std::vector<Cone> cones;     // idem
     std::vector<Hit> hits;       // idem

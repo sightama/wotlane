@@ -195,6 +195,22 @@ frente; `animationSetTotalRunFrames(h, n)` faz durar `n` fields). Ao passar do f
 - Busca de animação: `animationGetHandle(id1, id2, animId)` percorre os gerenciadores de animação de cada `.NGP` carregado (`ANIMATION_MGR`, `charInstance[]`), acha a instância pelos ids do
   `HierHead` e a animação cujo `head.id1 == animId`. O handle (`ci`, `ctrl`, `proc`, `animIdx`) é o que o código de jogo guarda (os monstros têm uma tabela deles, ver `Monster::m_anims` em `include/game/game.h`).
 
+## Personagem (`RST/<MONSTRO>.CHR`)
+Os números de jogo de cada monstro (golpes, alcances, tempos), lidos pelo `charreset::readKey` (0x126620). Leitor: `python tools/chr_dump.py
+disc/RST/<MONSTRO>.CHR [--keys] [--csv]` (tabela dos socos; `--keys` lista as chaves).
+- Cabeçalho de 0xC bytes, depois chaves `{u32 id; u32 tamanho com estes 8 bytes; dados}` até um id 0 ou o fim. O `OGRE.CHR` (monstro não usado) traz outro conjunto de chaves.
+- **0xFCC, socos (`StatePunch`):** 10 posições no combo × 6 tipos, cada config com 0xA0 bytes em `chave + 0x10 + pos*0x3C0 + tipo*0xA0`.
+  O jogo as copia para as `PunchConfig` do `StatePunch` (Monster +0x8470 +0x20 + pos*0x420 + tipo*0xB0; offsets da config entre parênteses):
+  +0x10/+0x14 localizadores testados (+0x7C/+0x80; 0x802/0x803 mãos, 0x804/0x805 pés, < 0x7D0 nenhum), +0x20 dano (+0x90), +0x28 animação
+  (+0x00, índice em `Monster::m_anims`), +0x2C/+0x30 janela do teste em fração da animação (+0x0C/+0x10), +0x34/+0x38 janela de contra-ataque
+  (+0x14/+0x18), +0x8C/+0x90 knockback (+0x64/+0x68; ≠ 0 derruba), +0x94 atordoamento (+0x6C; > 100 atordoa), +0x98 pausa ao acertar em ms
+  (+0x70), +0xA8 raio da esfera do punho (+0x74; 0 usa o padrão, chave 0xFA1 +0x30, `StatePunch` +0x2980). Casa sem animação e sem dano é vazia.
+- **Posição e tipo:** a posição (`StatePunch` +0x2988) começa em 0 e sobe a cada golpe emendado (até 9). O tipo (+0x298C) vem do
+  `PadFlags::curMappedAction` aceito pelo `StatePunch::transitionOK`: 5 → 0 triângulo, 6 → 1 frente + triângulo, 7 → 2 trás + triângulo,
+  1 → 3 frente + quadrado, 2 → 4 trás + quadrado, 0 → 5 quadrado (no esquema de controle 0; a direção é um toque recente no direcional).
+  O próximo tipo do combo é o apertado dentro da janela de entrada (+0x28/+0x2C da config), se o float `+0x94 + próximo*4` da config atual é > 0.
+- A chave 0xFD8 tem o mesmo layout sem os 0x10 iniciais; 0xFA4/0xFAC/0xFD7/0xFE3 são os golpes com objeto (`StateBatSwipe`), não decodificados.
+
 ## Destrutíveis (`INTERACTIVE_STATE` + `DESTRUCTIBLE`)
 Fonte: `game/Destructible` (`Destructibles::AddDestruct`, `Destructible::takeHit`, `GenericTakeHit`, `ChangeState`, `SwitchState`; o TU ainda está em asm, lido à mão) e a travessia `hierTraverseAsm`
 (asm manuscrito, em `asm/common/texm.s`). A estrutura dos nós vale para as 19 fases de `LVL/`.

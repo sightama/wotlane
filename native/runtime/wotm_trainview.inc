@@ -255,6 +255,9 @@ struct View
     float bestCombo = 0.f;
     int bestHits = 0;
     std::vector<PadRec> pad[2];
+    PunchLive live[16];
+    PunchCfg table[kPunchTypes];
+    int tableTier = 0;
 };
 
 // copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
@@ -302,6 +305,9 @@ View snapshot()
     v.bestHits = sh.bestHits;
     v.pad[0] = sh.pad[0];
     v.pad[1] = sh.pad[1];
+    std::copy(std::begin(sh.live), std::end(sh.live), std::begin(v.live));
+    std::copy(std::begin(sh.table), std::end(sh.table), std::begin(v.table));
+    v.tableTier = sh.tableTier;
     return v;
 }
 
@@ -416,6 +422,17 @@ void draw3d()
                 DrawLine3D(pa, pb, c);
             else
                 DrawCapsuleWires(pa, pb, r, 10, 3, c);
+        }
+    // o soco que ainda vai testar: a esfera do punho em cada localizador, apagada, ate a janela abrir (dai saem as esferas do teste)
+    if (opts & kMoveTable)
+        for (int i = 0; i < 16; ++i)
+        {
+            const PunchLive &p = v.live[i];
+            if (!p.frame || v.frame - p.frame > 1u || !p.cfg.valid || p.inWindow || p.pct > p.cfg.ini)
+                continue;
+            const Color c = ownerColor(i, v.players, 110);
+            for (int k = 0; k < p.nloc; ++k)
+                DrawSphereWires(Vector3{p.loc[k][0], p.loc[k][1], p.loc[k][2]}, std::max(p.cfg.radius, 2.f), 4, 8, c);
         }
     if (opts & kShowAttacks)
         for (const Cone &k : v.cones)
@@ -553,6 +570,9 @@ struct GameText
     }
 };
 
+// linhas do historico dos comandos: 12, ou 8 com a tabela dos socos embaixo (as duas cabem na altura)
+inline int inputRows() { return (g_opts.load(std::memory_order_relaxed) & kMoveTable) ? 8 : 12; }
+
 // Historico dos comandos (P1 e o primeiro boneco), no lado esquerdo da faixa 4:3, abaixo do HUD, de cima para baixo do mais novo para
 // o mais velho: quadros segurados, direcao (relativa ao monstro: 8 frente) e botoes, nos icones do dispositivo do jogador
 // (wotm_prompts.inc)
@@ -567,7 +587,7 @@ void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
     static constexpr B kB[] = {{kBtnSquare, st::BSquare, "SQ"}, {kBtnTriangle, st::BTriangle, "TRI"}, {kBtnX, st::BCross, "X"},
                                {kBtnCircle, st::BCircle, "O"}, {kBtnL1, st::BL1, "L1"}, {kBtnR1, st::BR1, "R1"},
                                {kBtnL2, st::BL2, "L2"}, {kBtnR2, st::BR2, "R2"}};
-    const int rows = 12;
+    const int rows = inputRows();
     float x = gr.x0 + fh;
     const float top = float(rh) * kPanelTop;
     const float numW = gt.width("999", fh);
@@ -601,6 +621,76 @@ void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
                 }
         }
         x += w + fh * 1.5f;
+    }
+    gt.flush(scene);
+}
+
+// Tabela dos socos do P1, no lado esquerdo abaixo dos comandos: os 6 tipos da posicao do combo em que ele esta (HIT 1 fora do soco),
+// com a janela do teste (% da animacao), o dano pedido, o raio da esfera e o atordoamento (> 100 atordoa; K: derruba). Tipos pelo
+// PadFlags::curMappedAction que o StatePunch::transitionOK aceita: 5 quadrado, 3 frente + quadrado, 4 tras + quadrado, 0 triangulo,
+// 1 frente + triangulo, 2 tras + triangulo. Embaixo, o soco em curso: a janela na barra e o ponto da animacao.
+void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
+{
+    namespace st = wotm::settings;
+    const int rh = gt.rh;
+    const float fh = std::max(11.f, float(rh) / 50.f) * 0.9f, isz = fh * 1.2f, rowH = isz + 3.f;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(gt.rw), float(rh));
+    const float x = gr.x0 + fh * 1.25f;
+    struct Row { int type, dir; st::Bind bind; const char *txt; };
+    static constexpr Row kRows[kPunchTypes] = {{5, 5, st::BSquare, "SQ"}, {3, 8, st::BSquare, "SQ"}, {4, 2, st::BSquare, "SQ"},
+                                               {0, 5, st::BTriangle, "TRI"}, {1, 8, st::BTriangle, "TRI"}, {2, 2, st::BTriangle, "TRI"}};
+    const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f;
+    const float cDmg = cWin + a * 6.f, cRad = cDmg + a * 4.f, cStun = cRad + a * 4.f, right = cStun + a * 5.f;
+    const PunchLive &p = v.live[0];
+    const bool now = p.frame && v.frame - p.frame <= 1u && p.cfg.valid;
+    const int rows = kPunchTypes + 2;
+    DrawRectangle(int(x) - 6, int(top) - 6, int(right - x) + 12, int(rowH * float(rows) + fh * 1.2f) + 12, Color{0, 0, 0, 130});
+    char b[48];
+    std::snprintf(b, sizeof b, "PUNCHES  HIT %d", v.tableTier + 1);
+    gt.put(b, x, top + isz * 0.5f, fh, Color{120, 255, 160, 255});
+    const Color kHead{150, 150, 150, 255};
+    const float hy = top + rowH + isz * 0.5f;
+    gt.put("WIN", cWin, hy, fh, kHead);
+    gt.put("DMG", cDmg, hy, fh, kHead);
+    gt.put("RAD", cRad, hy, fh, kHead);
+    gt.put("STUN", cStun, hy, fh, kHead);
+    for (int r = 0; r < kPunchTypes; ++r)
+    {
+        const Row &row = kRows[r];
+        const PunchCfg &c = v.table[row.type];
+        const float y = top + rowH * float(r + 2), cy = y + isz * 0.5f;
+        const bool cur = now && p.type == row.type;
+        const unsigned char al = c.valid ? 255 : 90;
+        if (cur)
+            DrawRectangle(int(x) - 4, int(y) - 1, int(right - x) + 8, int(rowH), Color{255, 230, 120, 50});
+        drawDir(row.dir, cIcons + isz * 0.5f, cy, isz, Color{255, 255, 255, al});
+        if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(row.bind), cIcons + isz * 1.5f + 2.f, cy, isz, float(al) / 255.f))
+            gt.put(row.txt, cIcons + isz + 2.f, cy, fh, Color{255, 230, 120, al});
+        if (!c.valid)
+        {
+            gt.put("-", cWin, cy, fh, Color{150, 150, 150, al});
+            continue;
+        }
+        const Color t = cur ? Color{255, 240, 150, 255} : Color{235, 235, 235, 255};
+        std::snprintf(b, sizeof b, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
+        gt.put(b, cWin, cy, fh, t);
+        std::snprintf(b, sizeof b, "%.0f", c.dmg);
+        gt.put(b, cDmg, cy, fh, t);
+        std::snprintf(b, sizeof b, "%.0f", c.radius);
+        gt.put(b, cRad, cy, fh, t);
+        std::snprintf(b, sizeof b, "%.0f%s", c.stun, c.kb != 0.f ? " K" : "");
+        gt.put(b, cStun, cy, fh, c.stun > 100.f ? Color{255, 150, 40, 255} : t);
+    }
+    // barra do soco em curso: a janela (azul) e o ponto da animacao (branco); vazia fora do soco
+    const float by = top + rowH * float(rows) + fh * 0.2f, bw = right - x, bh = fh * 0.6f;
+    DrawRectangle(int(x), int(by), int(bw), int(bh), Color{70, 70, 70, 200});
+    if (now)
+    {
+        const float w0 = std::clamp(p.cfg.ini, 0.f, 1.f), w1 = std::clamp(p.cfg.fim, 0.f, 1.f);
+        DrawRectangle(int(x + bw * w0), int(by), std::max(1, int(bw * (w1 - w0))), int(bh),
+                      p.inWindow ? Color{255, 60, 60, 230} : Color{80, 200, 255, 200});
+        if (p.pct >= 0.f)
+            DrawRectangle(int(x + bw * std::clamp(p.pct, 0.f, 1.f)) - 1, int(by) - 2, 3, int(bh) + 4, RAYWHITE);
     }
     gt.flush(scene);
 }
@@ -655,6 +745,15 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
     gt.flush(scene);
     if (g_opts.load() & kShowInputs)
         drawInputs(scene, gt, v);
+    if (g_opts.load() & kMoveTable)
+    {
+        // abaixo da caixa dos comandos (as linhas todas, cheia), ou no lugar dela
+        const float ifh = std::max(12.f, float(rh) / 50.f);
+        float top = float(rh) * kPanelTop;
+        if (g_opts.load() & kShowInputs)
+            top += (ifh * 1.1f + 4.f) * float(inputRows() + 1) + 12.f + ifh;
+        drawMoveTable(scene, gt, v, top);
+    }
     if (!(g_opts.load() & kPanel))
         return;
     const float fh = std::max(12.f, float(rh) / 50.f), lineH = fh * 1.35f, pad = fh * 0.6f;

@@ -716,6 +716,105 @@ namespace wotm_train
             h.erase(h.begin());
     }
 
+    // ---- tabela dos socos (configs do StatePunch, os valores do .CHR ja na RAM)
+    constexpr uint32_t kAnims = 0x1CF0u, kNumAnims = 0x12Cu;   // Monster::m_anims (um _animHandle de 0x10 por MonsterAnim)
+    constexpr uint32_t kPunchCfgs = 0x20u, kTierStride = 0x420u, kTypeStride = 0xB0u, kFistDefault = 0x2980u, kPunchTier = 0x2988u,
+                       kPunchType = 0x298Cu, kPunchInWindow = 0x2A00u;
+
+    PunchCfg readPunchCfg(const uint8_t *rdram, uint32_t m, int tier, int type)
+    {
+        PunchCfg p;
+        if (tier < 0 || tier >= kPunchTiers || type < 0 || type >= kPunchTypes)
+            return p;
+        const uint32_t c = m + kPunch + kPunchCfgs + uint32_t(tier) * kTierStride + uint32_t(type) * kTypeStride;
+        p.anim = int(rd32(rdram, c));
+        p.ini = rdf(rdram, c + 0x0C);
+        p.fim = rdf(rdram, c + 0x10);
+        p.kb = rdf(rdram, c + 0x64);
+        p.stun = rdf(rdram, c + 0x6C);
+        p.radius = rdf(rdram, c + 0x74);
+        if (!(p.radius > 0.f))
+            p.radius = rdf(rdram, m + kPunch + kFistDefault);
+        p.loc[0] = int(rd32(rdram, c + 0x7C));
+        p.loc[1] = int(rd32(rdram, c + 0x80));
+        p.dmg = rdf(rdram, c + 0x90);
+        // a mesma regra do chr_dump.py: sem animacao e sem dano = casa vazia
+        p.valid = std::isfinite(p.ini + p.fim + p.dmg + p.radius) && !(p.anim <= 0 && p.dmg == 0.f);
+        return p;
+    }
+
+    // animationGetCurrentPercent(&m_anims[anim]) (o a0 e o endereco do _animHandle; devolve em $f0), com o contexto de volta como estava
+    float animPercent(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int anim)
+    {
+        static const PS2Runtime::RecompiledFunction f = runtime->lookupFunction(wotm::fn::animationGetCurrentPercent__FG11_animHandle);
+        if (!f || anim < 0 || uint32_t(anim) >= kNumAnims)
+            return -1.f;
+        const uint32_t h = m + kAnims + uint32_t(anim) * 0x10u;
+        if (!(rd32(rdram, h) & 0x1FFFFFFFu))   // ci nulo: o monstro nao tem essa animacao
+            return -1.f;
+        const R5900Context saved = *ctx;
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(h)));
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->pc = wotm::fn::animationGetCurrentPercent__FG11_animHandle;
+        f(rdram, ctx, runtime);
+        const float pct = ctx->f[0];
+        *ctx = saved;
+        return std::isfinite(pct) ? pct : -1.f;
+    }
+
+    // Na saida do Monster::update: o soco em curso (config, % da animacao, localizadores) e, no P1, os 6 tipos da posicao do combo
+    void trackPunch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int slot)
+    {
+        const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
+        const bool punching = st == m + kPunch;
+        if (!punching && slot != 0)
+            return;
+        const int tier = punching ? int(rd32(rdram, m + kPunch + kPunchTier)) : 0;
+        const int type = punching ? int(rd32(rdram, m + kPunch + kPunchType)) : -1;
+        PunchLive live;
+        if (punching)
+        {
+            live.frame = frameNow(rdram);
+            live.tier = int8_t(tier);
+            live.type = int8_t(type);
+            live.cfg = readPunchCfg(rdram, m, tier, type);
+            live.inWindow = rd32(rdram, m + kPunch + kPunchInWindow) != 0;
+            live.pct = live.cfg.valid ? animPercent(rdram, ctx, runtime, m, live.cfg.anim) : -1.f;
+            for (int id : live.cfg.loc)
+            {
+                if (id < 0x802 || id > 0x832)
+                    continue;
+                float *p = live.loc[live.nloc];
+                readVec(rdram, m + uint32_t(id) * 16u - 0x4260u, p);   // getLocatorTrans: translacao atual em mundo
+                if (std::isfinite(p[0] + p[1] + p[2]))
+                    ++live.nloc;
+            }
+        }
+        if (punching)
+        {
+            static uint32_t nlog = 0;
+            if (nlog < 12 && live.cfg.valid && !live.inWindow)
+            {
+                ++nlog;
+                std::fprintf(stderr, "[treino] soco slot %d pos %d tipo %d: %.0f%% da animacao, janela %.0f-%.0f, %d localizador(es), raio %.1f\n",
+                             slot, tier, type, live.pct * 100.f, live.cfg.ini * 100.f, live.cfg.fim * 100.f, live.nloc, live.cfg.radius);
+            }
+        }
+        PunchCfg table[kPunchTypes];
+        if (slot == 0)
+            for (int k = 0; k < kPunchTypes; ++k)
+                table[k] = readPunchCfg(rdram, m, tier, k);
+        Shared &sh = shared();
+        std::lock_guard<std::mutex> lk(sh.m);
+        if (punching)
+            sh.live[slot] = live;
+        if (slot == 0)
+        {
+            std::copy(std::begin(table), std::end(table), std::begin(sh.table));
+            sh.tableTier = int8_t(tier);
+        }
+    }
+
     void monsterUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -768,6 +867,8 @@ namespace wotm_train
         if (on && slot >= 0 && returned(ctx, ra))
         {
             trackState(rdram, m, slot);
+            if (g_opts.load(std::memory_order_relaxed) & kMoveTable)
+                trackPunch(rdram, ctx, runtime, m, slot);
             if (slot == 0 || slot == 4)
                 recordPad(rdram, m, slot == 0 ? 0 : 1);
         }
