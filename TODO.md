@@ -24,10 +24,9 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
-1. Boneco que pula (X em ciclos; agachar não existe no jogo). Dados de quadro do bloqueio (vantagem no bloqueio: reação 0x1C com o  flag de recuo bloqueado).
-2. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; virar  `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
-3. Entrada pelo launcher.
-4. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
+1. Tabela dos golpes do monstro (raio, janela, dano, atordoamento) lida do `RST/<MONSTRO>.CHR` (chave 0xFCC; virar  `tools/chr_dump.py`) e, com a janela do golpe em curso (`StatePunch` +0x2A00), mostrar a esfera antes do teste.
+2. Entrada pelo launcher.
+3. Desenho do GrappleHook (`StateGrappleHook::testCollis`, 0x1C78E8), o único golpe que ainda não sai na tela.
 
 ### 10. Chefes jogáveis
 - Os chefes já estão na tabela de tipos (`assboss`, `jelly`, `final` em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).

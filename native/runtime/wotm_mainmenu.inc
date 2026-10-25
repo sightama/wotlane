@@ -217,7 +217,7 @@ static std::string trainValue(int r)
 {
     const uint32_t o = tr::g_opts.load();
     auto onOff = [&](uint32_t bit) { return std::string((o & bit) ? "ON" : "OFF"); };
-    static const char *const kDummy[tr::DCount] = {"STAND STILL", "CPU", "ALWAYS BLOCK", "BLOCK AFTER FIRST HIT"};
+    static const char *const kDummy[tr::DCount] = {"STAND STILL", "CPU", "ALWAYS BLOCK", "BLOCK AFTER FIRST HIT", "JUMP"};
     static const char *const kMeters[tr::MCount] = {"NORMAL", "ALWAYS FULL", "ALWAYS RAGE"};
     switch (r)
     {

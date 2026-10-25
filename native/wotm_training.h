@@ -39,7 +39,9 @@ constexpr Box mirror(const Box &b) { return Box{640.f - b.x1, b.y0, 640.f - b.x0
 
 // Boneco (as IAs): parado (pad desligado), CPU (a IA do jogo), sempre bloqueia, bloqueia depois do 1o acerto (ate se recuperar e
 // ficar 1 s sem apanhar). Nos dois de bloqueio a IA nao roda: o gancho do Ai::updateInputs segura o R2 do GamePad.
-enum Dummy : int { DStand, DCpu, DBlock, DBlockAfter, DCount };
+// Pula: X apertado em ciclos (agachar nao existe no jogo).
+enum Dummy : int { DStand, DCpu, DBlock, DBlockAfter, DJump, DCount };
+constexpr uint32_t kJumpPeriod = 50, kJumpHold = 4;   // quadros do ciclo do boneco que pula e quantos com o X apertado
 
 inline std::atomic<bool> g_on{false};                 // WOTM_TRAINING=1, ou a luta que comecou com o treino armado
 // Armado pela linha TRAINING da tela 2 (wotm_mainmenu.inc): o fluxo pula as telas 12 e 15 (wotm_padsel.inc, changeScreenHook), o
@@ -181,6 +183,7 @@ struct StunRec
     int8_t victim;
     const char *name;
     uint32_t start, end;
+    bool blocked = false;   // recuo de um golpe defendido (StateRecoil +0x64, o isBlocking do recuo)
 };
 
 // Combo: os golpes que uma vitima levou sem se recuperar (cada um chegou com ela ainda numa reacao, ou ate 3 quadros depois do outro)

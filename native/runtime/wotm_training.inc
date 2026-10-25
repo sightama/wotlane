@@ -100,7 +100,9 @@ namespace wotm_train
     {
         uint32_t off = 0, start = 0, lastActive = 0, firstActive = 0;
         int chain = -1, step = -1, active = 0, hitVictim = -1;
+        bool blocked = false;   // no recuo: o golpe foi defendido
     } g_track[16];
+    constexpr uint32_t kRecoilState = 0x7E30u, kRecoilBlocked = kRecoilState + 0x64u;
     uint32_t g_activeFrame[16] = {};   // ultimo quadro com teste de golpe do slot
     struct HitMark
     {
@@ -496,6 +498,14 @@ namespace wotm_train
             g_lastHit[vs] = frameNow(rdram);
         if (g_ctxKind == KCone)
             g_ctxHit = true;
+        // dados de quadro: o golpe que encostou conta como acerto mesmo sem dano (defendido), para a vantagem no bloqueio sair. O
+        // atacante: o dono do teste de golpe em curso, ou o monstro cujo update esta rodando
+        if (const int vs = slotOf(rdram, g_hitCtx.victim); vs >= 0)
+        {
+            const int att = g_ctxOwner >= 0 ? g_ctxOwner : slotOf(rdram, g_curMonster);
+            if (att >= 0 && att < 16 && att != vs && g_hitMark[att].victim < 0)
+                g_hitMark[att] = HitMark{frameNow(rdram), int8_t(vs)};
+        }
         g_origTakeHit(rdram, ctx, runtime);
         g_hitCtx = saved;
     }
@@ -608,6 +618,8 @@ namespace wotm_train
         const uint32_t f = frameNow(rdram);
         // atividade do quadro (esferas, dano causado) no estado de agora
         auto absorb = [&](Track &tr) {
+            if (off == kRecoilState && rd32(rdram, m + kRecoilBlocked))
+                tr.blocked = true;
             if (g_activeFrame[slot] == f && tr.lastActive != f)
             {
                 ++tr.active;
@@ -657,8 +669,9 @@ namespace wotm_train
             {
                 static uint32_t nlog = 0;
                 if (++nlog <= 40)
-                    std::fprintf(stderr, "[treino] reacao slot %d %s: %u quadros (%u..%u)\n", slot, sn->name, f - t.start, t.start, f);
-                sh.stuns.push_back(StunRec{int8_t(slot), sn->name, t.start, f});
+                    std::fprintf(stderr, "[treino] reacao slot %d %s%s: %u quadros (%u..%u)\n", slot, sn->name,
+                                 t.blocked ? " (defendido)" : "", f - t.start, t.start, f);
+                sh.stuns.push_back(StunRec{int8_t(slot), t.blocked ? "BLOCKSTUN" : sn->name, t.start, f, t.blocked});
                 if (sh.stuns.size() > 64)
                     sh.stuns.erase(sh.stuns.begin());
             }
@@ -827,7 +840,7 @@ namespace wotm_train
     void aiInputs(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)   // a0 = Monster + 0x4E0
     {
         const int mode = g_dummy.load(std::memory_order_relaxed);
-        if (ctx->pc != kAiInputs || !g_on.load(std::memory_order_relaxed) || (mode != DBlock && mode != DBlockAfter))
+        if (ctx->pc != kAiInputs || !g_on.load(std::memory_order_relaxed) || (mode != DBlock && mode != DBlockAfter && mode != DJump))
         {
             g_origAi(rdram, ctx, runtime);
             return;
@@ -840,8 +853,8 @@ namespace wotm_train
             return;
         }
         const uint32_t f = frameNow(rdram);
-        const bool block = mode == DBlock || stateCls(rdram, m) == 2 || (g_lastHit[slot] && f - g_lastHit[slot] <= 60u) ||
-                           (g_lastDamage[slot] && f - g_lastDamage[slot] <= 60u);
+        const bool block = mode != DJump && (mode == DBlock || stateCls(rdram, m) == 2 || (g_lastHit[slot] && f - g_lastHit[slot] <= 60u) ||
+                           (g_lastDamage[slot] && f - g_lastDamage[slot] <= 60u));
         static uint32_t nlog = 0;
         if (++nlog == 300 || nlog == 1500)
         {
@@ -849,6 +862,8 @@ namespace wotm_train
             const StateName *sn = st > m && st - m < 0x11190u ? stateName(st - m) : nullptr;
             std::fprintf(stderr, "[treino] boneco slot %d modo %d: estado %s, segurando defesa %d\n", slot, mode, sn ? sn->name : "?", int(block));
         }
+        if (mode == DJump && (f % kJumpPeriod) < kJumpHold)
+            rdram[m + kGamePad + 6] = 0xFF;   // X: pula
         if (block)
         {
             rdram[m + kGamePad + 0] = 0xFF;   // L1
@@ -864,7 +879,7 @@ void wotmTrainingInstall(PS2Runtime &runtime)
     using namespace wotm_train;
     if (const char *e = std::getenv("WOTM_TRAINING"); e && *e && *e != '0')
         g_on = true;
-    if (const char *e = std::getenv("WOTM_TRAINING_DUMMY"); e && *e)   // 0 parado, 1 CPU, 2 sempre bloqueia, 3 bloqueia depois do 1o acerto
+    if (const char *e = std::getenv("WOTM_TRAINING_DUMMY"); e && *e)   // 0 parado, 1 CPU, 2 sempre bloqueia, 3 bloqueia depois do 1o acerto, 4 pula
         g_dummy = std::clamp(std::atoi(e), 0, DCount - 1);
     if (const char *e = std::getenv("WOTM_TRAINING_HEALTH"); e && *e)  // % da vida do boneco na recarga
         g_dummyHealth = std::clamp(std::atoi(e), 1, 100);
