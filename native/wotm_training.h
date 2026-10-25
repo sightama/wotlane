@@ -111,8 +111,11 @@ inline int64_t nowMs()
 }
 inline bool windowsHidden() { return !g_inFight.load(std::memory_order_relaxed) || nowMs() - g_dialogMs.load(std::memory_order_relaxed) < 200; }
 
-// Tipo do teste de golpe que gravou a esfera
-enum Kind : uint8_t { KPunch, KBat, KGetup, KWeapon, KShock, KOther };
+// Tipo do teste de golpe que gravou a esfera (ou o cone). KFire: a linha do FireBreath::TestCollis (hdLosCSTest); KBody: as esferas
+// do corpo na investida e no arremessado (hdBundledSphereTest do collisTestEnvironmentCollisions); KStomp e KGrab: a area de busca
+// da vitima (getClosestMonsterToPunch no pisao, getClosestMonsterInFOV no agarrao) e a marca na vitima quando o golpe tira vida;
+// KCone: o cone do StateSonicRoar::testConeCollis
+enum Kind : uint8_t { KPunch, KBat, KGetup, KWeapon, KShock, KOther, KFire, KBody, KStomp, KGrab, KCone, KKinds };
 
 // Uma esfera varrida (de a ate b, raio r) que o jogo testou num quadro; a == b na esfera parada
 struct Sweep
@@ -123,6 +126,19 @@ struct Sweep
     uint8_t kind;
     int8_t owner;     // slot em m_monsters (-1 desconhecido)
     uint8_t hit;      // 0 nada, 1 cenario, 2 objeto ou monstro
+};
+
+// Um cone testado num quadro: vertice, eixo (unitario), alcance, cosseno do meio-angulo. flat: setor no plano perpendicular a `up`
+// (o pisao: a busca do getClosestMonsterToPunch e no plano do chao)
+struct Cone
+{
+    float apex[3], axis[3], up[3];
+    float len, cosHalf;
+    uint32_t frame;
+    uint8_t kind;
+    int8_t owner;
+    uint8_t hit;   // 2: o teste tirou vida ou achou a vitima
+    bool flat;
 };
 
 // Um dano aplicado (Monster::takeDamage): vida antes e depois
@@ -189,6 +205,7 @@ struct Shared
 {
     std::mutex m;
     std::vector<Sweep> sweeps;   // acumuladas; a janela descarta as velhas
+    std::vector<Cone> cones;     // idem
     std::vector<Hit> hits;       // idem
     std::vector<MoveRec> moves;  // ultimos golpes terminados
     std::vector<StunRec> stuns;  // ultimas reacoes terminadas

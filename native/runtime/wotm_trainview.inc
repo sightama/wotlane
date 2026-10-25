@@ -241,6 +241,7 @@ void capture(const wotm::Ram &ram)
 struct View
 {
     std::vector<Sweep> sweeps;
+    std::vector<Cone> cones;
     std::vector<Hit> hits;
     std::vector<Hull> hulls;
     std::vector<Capsule> caps;
@@ -278,6 +279,10 @@ View snapshot()
     sh.sweeps.erase(std::remove_if(sh.sweeps.begin(), sh.sweeps.end(),
                                    [&](const Sweep &s) { return s.frame + kSweepLife < f || s.frame > f + 600; }),
                     sh.sweeps.end());
+    sh.cones.erase(std::remove_if(sh.cones.begin(), sh.cones.end(),
+                                  [&](const Cone &c) { return c.frame + kSweepLife < f || c.frame > f + 600; }),
+                   sh.cones.end());
+    v.cones = sh.cones;
     if (sh.hits.size() > kHitsKept)
         sh.hits.erase(sh.hits.begin(), sh.hits.end() - kHitsKept);
     sh.hits.erase(std::remove_if(sh.hits.begin(), sh.hits.end(), [&](const Hit &h) { return h.frame > f + 600; }), sh.hits.end());
@@ -307,6 +312,74 @@ Color ownerColor(int owner, int players, unsigned char a)
     if (owner >= 0)
         return Color{255, 150, 40, a};   // IA: laranja
     return Color{220, 220, 220, a};
+}
+
+// Cone de golpe em arame: arestas, aro e a calota (o alcance e uma distancia do vertice). flat: setor no plano do chao (perpendicular
+// a k.up), com o eixo projetado nele
+void drawCone(const Cone &k, Color c)
+{
+    auto v3 = [](float x, float y, float z) { return Vector3{x, y, z}; };
+    auto add = [](Vector3 p, Vector3 q, float s) { return Vector3{p.x + q.x * s, p.y + q.y * s, p.z + q.z * s}; };
+    auto cross = [](Vector3 p, Vector3 q) { return Vector3{p.y * q.z - p.z * q.y, p.z * q.x - p.x * q.z, p.x * q.y - p.y * q.x}; };
+    auto norm = [](Vector3 p) {
+        const float l = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+        return l > 1e-6f ? Vector3{p.x / l, p.y / l, p.z / l} : Vector3{0.f, 0.f, 0.f};
+    };
+    const Vector3 apex = v3(k.apex[0], k.apex[1], k.apex[2]);
+    Vector3 ax = v3(k.axis[0], k.axis[1], k.axis[2]), up = norm(v3(k.up[0], k.up[1], k.up[2]));
+    const float th = std::acos(k.cosHalf);
+    if (k.flat)
+    {
+        const float d = ax.x * up.x + ax.y * up.y + ax.z * up.z;
+        ax = norm(add(ax, up, -d));
+        const Vector3 side = norm(cross(up, ax));
+        if (side.x == 0.f && side.y == 0.f && side.z == 0.f)
+            return;
+        constexpr int kSeg = 16;
+        Vector3 prev{};
+        for (int i = 0; i <= kSeg; ++i)
+        {
+            const float t = -th + 2.f * th * float(i) / kSeg;
+            const Vector3 p = add(add(apex, ax, k.len * std::cos(t)), side, k.len * std::sin(t));
+            if (i == 0 || i == kSeg)
+                DrawLine3D(apex, p, c);
+            if (i)
+                DrawLine3D(prev, p, c);
+            prev = p;
+        }
+        return;
+    }
+    Vector3 ref = std::fabs(ax.z) < 0.9f ? Vector3{0.f, 0.f, 1.f} : Vector3{1.f, 0.f, 0.f};
+    const Vector3 u = norm(cross(ax, ref)), w = cross(ax, u);
+    constexpr int kRim = 20, kEdges = 8, kCap = 6;
+    const float rc = k.len * std::cos(th), rs = k.len * std::sin(th);
+    auto onSphere = [&](float t, float phi) {   // ponto a angulo t do eixo, phi em volta dele, a distancia len do vertice
+        const float s = k.len * std::sin(t), cc = k.len * std::cos(t);
+        return add(add(add(apex, ax, cc), u, s * std::cos(phi)), w, s * std::sin(phi));
+    };
+    Vector3 prev{};
+    for (int i = 0; i <= kRim; ++i)
+    {
+        const float phi = 6.2831853f * float(i) / kRim;
+        const Vector3 p = add(add(add(apex, ax, rc), u, rs * std::cos(phi)), w, rs * std::sin(phi));
+        if (i)
+            DrawLine3D(prev, p, c);
+        prev = p;
+    }
+    for (int e = 0; e < kEdges; ++e)
+    {
+        const float phi = 6.2831853f * float(e) / kEdges;
+        DrawLine3D(apex, onSphere(th, phi), c);
+        if (e % 2)
+            continue;
+        Vector3 q = onSphere(0.f, phi);   // meridiano da calota, do eixo ate o aro
+        for (int j = 1; j <= kCap; ++j)
+        {
+            const Vector3 p = onSphere(th * float(j) / kCap, phi);
+            DrawLine3D(q, p, c);
+            q = p;
+        }
+    }
 }
 
 // Dentro do BeginMode3D da vista cheia, depois da cena
@@ -339,8 +412,17 @@ void draw3d()
             const float r = std::max(s.r, 2.f);
             if (s.a[0] == s.b[0] && s.a[1] == s.b[1] && s.a[2] == s.b[2])
                 DrawSphereWires(pa, r, 6, 10, c);
+            else if (s.r <= 0.f)   // linha de visada (fogo, cone): sem raio
+                DrawLine3D(pa, pb, c);
             else
                 DrawCapsuleWires(pa, pb, r, 10, 3, c);
+        }
+    if (opts & kShowAttacks)
+        for (const Cone &k : v.cones)
+        {
+            const uint32_t age = v.frame >= k.frame ? v.frame - k.frame : 0;
+            const unsigned char a = static_cast<unsigned char>(220 - std::min<uint32_t>(age, 10) * 18);
+            drawCone(k, k.hit == 2 ? Color{255, 40, 40, a} : ownerColor(k.owner, v.players, a));
         }
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();

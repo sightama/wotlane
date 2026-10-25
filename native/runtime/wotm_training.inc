@@ -31,14 +31,31 @@ namespace wotm_train
                        kShockUpdate = wotm::fn::update__9ShockWave, kSphereSwept = wotm::fn::hdSphereTest__FP8_fvectorT0fP9_hdResultUii,
                        kSphereStatic = wotm::fn::hdSphereTest__FP8_fvectorfP9_hdResultUii, kAiInputs = wotm::fn::updateInputs__2Ai;
     constexpr uint32_t kAiInMonster = 0x4E0u, kGamePad = 0x5024u;   // Ai embutido no Monster; GamePad do Monster (um byte por botao)
+    // golpes sem esfera (fogo, cone, corpo, pisao, agarrao)
+    constexpr uint32_t kFireTest = wotm::fn::TestCollis__10FireBreath, kLos = wotm::fn::hdLosCSTest__FP8_fvectorT0P9_hdResulti,
+                       kConeTest = wotm::fn::testConeCollis__14StateSonicRoar, kPunchSearch = wotm::fn::getClosestMonsterToPunch__7Monsterfff,
+                       kFovSearch = wotm::fn::getClosestMonsterInFOV__7MonsterR8_fvectorfT1fRf,
+                       kEnvTest = wotm::fn::collisTestEnvironmentCollisions__7Monster,
+                       kBundle = wotm::fn::hdBundledSphereTest__FP19_hdSphereBundleTestii, kStompUpdate = wotm::fn::update__16StateStompAttack,
+                       kStompInto = wotm::fn::transitionInto__16StateStompAttack, kGrabOH = wotm::fn::update__20StateGrappleOHAttack,
+                       kMonkeyOH = wotm::fn::update__19StateMonkeyOHAttack;
+    constexpr uint32_t kStompIntoSize = 0x54u;          // o getClosestMonsterToPunch do pisao: chamado do transitionInto
+    // o getClosestMonsterInFOV do agarrao: so o do StateGrapple::update (a janela de pegar); o do transitionFeasible e a pergunta "da
+    // para agarrar?" que a IA e o pad fazem a cada quadro
+    constexpr uint32_t kGrabUpdate = wotm::fn::update__12StateGrapple, kGrabUpdateSize = 0x390u;
+    constexpr uint32_t kRamState = 0xFD40u, kThrownState = 0xE3E0u, kPinTrans = 0x3E30u;
 
     PS2Runtime::RecompiledFunction g_origUpdate = nullptr, g_origTakeHit = nullptr, g_origTakeDamage = nullptr, g_origPunch = nullptr,
                                    g_origBat = nullptr, g_origGetup = nullptr, g_origWeapon = nullptr, g_origShock = nullptr,
-                                   g_origSwept = nullptr, g_origStatic = nullptr, g_origAi = nullptr;
+                                   g_origSwept = nullptr, g_origStatic = nullptr, g_origAi = nullptr, g_origFire = nullptr,
+                                   g_origLos = nullptr, g_origCone = nullptr, g_origPunchSearch = nullptr, g_origFovSearch = nullptr,
+                                   g_origEnv = nullptr, g_origBundle = nullptr, g_origStomp = nullptr, g_origGrabOH = nullptr,
+                                   g_origMonkeyOH = nullptr;
 
     // estado da thread do EE
     int g_ctxKind = -1;         // teste de golpe em curso (Kind) ou -1
     int g_ctxOwner = -1;
+    bool g_ctxHit = false;      // o teste em curso levou a um takeHit/dano (cone do SonicRoar)
     uint32_t g_curMonster = 0;  // Monster::update em curso
     bool g_inStatic = false;
     struct HitCtx
@@ -119,7 +136,17 @@ namespace wotm_train
 
     // ---- golpes
 
-    void pushSweep(const uint8_t *rdram, const float a[3], const float b[3], float r, uint8_t hit)
+    uint32_t g_kindLog = 0;   // tipos ja anunciados no log (um aviso por tipo)
+    void logKind(int kind)
+    {
+        static const char *const names[KKinds] = {"soco", "objeto", "levantar", "projetil", "onda", "outro", "fogo", "corpo", "pisao", "agarrao", "cone"};
+        if (kind < 0 || kind >= KKinds || (g_kindLog & (1u << kind)))
+            return;
+        g_kindLog |= 1u << kind;
+        std::fprintf(stderr, "[treino] primeiro teste de golpe do tipo %s\n", names[kind]);
+    }
+
+    void pushSweepK(const uint8_t *rdram, const float a[3], const float b[3], float r, uint8_t hit, int kind, int owner)
     {
         if (!std::isfinite(a[0] + a[1] + a[2] + b[0] + b[1] + b[2] + r) || r < 0.f || r > 5000.f)
             return;
@@ -128,16 +155,52 @@ namespace wotm_train
         std::memcpy(s.b, b, sizeof s.b);
         s.r = r;
         s.frame = frameNow(rdram);
-        s.kind = uint8_t(g_ctxKind);
-        s.owner = int8_t(g_ctxOwner);
+        s.kind = uint8_t(kind);
+        s.owner = int8_t(owner);
         s.hit = hit;
-        if (g_ctxOwner >= 0 && g_ctxOwner < 16)
-            g_activeFrame[g_ctxOwner] = s.frame;   // contado no estado em que o monstro termina o quadro (trackState)
+        if (owner >= 0 && owner < 16)
+            g_activeFrame[owner] = s.frame;   // contado no estado em que o monstro termina o quadro (trackState)
+        logKind(kind);
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
         if (sh.sweeps.size() < 4096)
             sh.sweeps.push_back(s);
     }
+    void pushSweep(const uint8_t *rdram, const float a[3], const float b[3], float r, uint8_t hit)
+    {
+        pushSweepK(rdram, a, b, r, hit, g_ctxKind, g_ctxOwner);
+    }
+
+    void pushCone(const uint8_t *rdram, const float apex[3], const float axis[3], const float up[3], float len, float cosHalf, bool flat,
+                  uint8_t hit, int kind, int owner)
+    {
+        const float al = std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+        if (!std::isfinite(apex[0] + apex[1] + apex[2] + al + len + cosHalf) || al < 1e-4f || len <= 0.f || len > 20000.f)
+            return;
+        Cone c{};
+        std::memcpy(c.apex, apex, sizeof c.apex);
+        for (int k = 0; k < 3; ++k)
+        {
+            c.axis[k] = axis[k] / al;
+            c.up[k] = up[k];
+        }
+        c.len = len;
+        c.cosHalf = std::clamp(cosHalf, -1.f, 1.f);
+        c.frame = frameNow(rdram);
+        c.kind = uint8_t(kind);
+        c.owner = int8_t(owner);
+        c.hit = hit;
+        c.flat = flat;
+        if (owner >= 0 && owner < 16)
+            g_activeFrame[owner] = c.frame;
+        logKind(kind);
+        Shared &sh = shared();
+        std::lock_guard<std::mutex> lk(sh.m);
+        if (sh.cones.size() < 512)
+            sh.cones.push_back(c);
+    }
+    // so os testes de golpe por esfera gravam pelo hdSphereTest (os de cone, corpo e busca gravam a propria forma)
+    inline bool sphereCtx() { return g_ctxKind >= 0 && g_ctxKind <= KOther; }
 
     uint8_t classify(const uint8_t *rdram, uint32_t res, int n)
     {
@@ -164,7 +227,7 @@ namespace wotm_train
     // hdSphereTest(from, to, r, res, skipId, max): esfera varrida
     void sphereSwept(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc != kSphereSwept || g_ctxKind < 0 || g_inStatic || !g_on.load(std::memory_order_relaxed))
+        if (ctx->pc != kSphereSwept || !sphereCtx() || g_inStatic || !g_on.load(std::memory_order_relaxed))
         {
             g_origSwept(rdram, ctx, runtime);
             return;
@@ -182,7 +245,7 @@ namespace wotm_train
     // hdSphereTest(pos, r, res, skipId, max): esfera parada
     void sphereStatic(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc != kSphereStatic || g_ctxKind < 0 || !g_on.load(std::memory_order_relaxed))
+        if (ctx->pc != kSphereStatic || !sphereCtx() || !g_on.load(std::memory_order_relaxed))
         {
             g_origStatic(rdram, ctx, runtime);
             return;
@@ -236,6 +299,181 @@ namespace wotm_train
         withCtx(rdram, ctx, runtime, g_origShock, KShock, ok(self, 0x24) ? slotOf(rdram, rd32(rdram, self + 0x20)) : -1);
     }
 
+    // ---- golpes sem esfera: fogo, cone, corpo, pisao e agarrao
+
+    // offset do estado atual (m_state, +0x34) dentro do Monster; 0 se fora
+    uint32_t stateOff(const uint8_t *rdram, uint32_t m)
+    {
+        const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
+        return st > m && st - m < 0x11190u ? st - m : 0;
+    }
+    // _cs do monstro (+0xC): translacao +0x10, linhas da matriz +0x20 (x), +0x30 (frente), +0x40 (cima)
+    bool monsterCs(const uint8_t *rdram, uint32_t m, float trans[3], float fwd[3], float up[3])
+    {
+        const uint32_t cs = rd32(rdram, m + 0xC) & 0x1FFFFFFFu;
+        if (!ok(cs, 0x50))
+            return false;
+        readVec(rdram, cs + 0x10, trans);
+        readVec(rdram, cs + 0x30, fwd);
+        readVec(rdram, cs + 0x40, up);
+        return true;
+    }
+
+    // FireBreath::TestCollis (a0 = o FireBreath, +4 o Monster): uma linha de visada da boca ate o alcance (hdLosCSTest)
+    void fireTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kFireTest || !g_on.load(std::memory_order_relaxed)) { g_origFire(rdram, ctx, runtime); return; }
+        const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        withCtx(rdram, ctx, runtime, g_origFire, KFire, ok(self, 8) ? slotOf(rdram, rd32(rdram, self + 4)) : -1);
+    }
+    // hdLosCSTest(from, to, res, skipId): so no fogo e no cone, a linha (raio 0) e se pegou cenario ou monstro
+    void losTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kLos || (g_ctxKind != KFire && g_ctxKind != KCone) || !g_on.load(std::memory_order_relaxed))
+        {
+            g_origLos(rdram, ctx, runtime);
+            return;
+        }
+        float a[3], b[3];
+        readVec(rdram, GPR_U32(ctx, 4), a);
+        readVec(rdram, GPR_U32(ctx, 5), b);
+        const uint32_t res = GPR_U32(ctx, 6), ra = GPR_U32(ctx, 31);
+        g_origLos(rdram, ctx, runtime);
+        pushSweep(rdram, a, b, 0.f, returned(ctx, ra) ? classify(rdram, res, 1) : 0);
+    }
+
+    // StateSonicRoar::testConeCollis (a0 = o estado, +0xC o Monster): cone da boca (+0x3E50) no eixo +0x33D0, alcance +0x264 (1000 no
+    // Monster Island com a cratera trocada, como o jogo), cosseno do meio-angulo +0x268; vermelho se alguem levou o golpe
+    void coneTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        if (ctx->pc != kConeTest || !g_on.load(std::memory_order_relaxed) || !ok(self, 0x270))
+        {
+            g_origCone(rdram, ctx, runtime);
+            return;
+        }
+        const uint32_t m = rd32(rdram, self + 0xC) & 0x1FFFFFFFu;
+        float apex[3], axis[3], trans[3], fwd[3], up[3] = {0.f, 0.f, 1.f};
+        const bool have = ok(m, 0x3E60) && monsterCs(rdram, m, trans, fwd, up);
+        readVec(rdram, m + 0x3E50, apex);
+        readVec(rdram, m + 0x33D0, axis);
+        float len = rdf(rdram, self + 0x264);
+        if (rd32(rdram, kGameObj + 0x1203C8u) == 1 && rd32(rdram, kGameObj + 0x1203D0u) == 6 && rd32(rdram, wotm::sym::craterSwitched))
+            len = 1000.f;
+        const float cosHalf = rdf(rdram, self + 0x268);
+        const int owner = slotOf(rdram, m);
+        const bool savedHit = g_ctxHit;
+        g_ctxHit = false;
+        withCtx(rdram, ctx, runtime, g_origCone, KCone, owner);
+        const bool hit = g_ctxHit;
+        g_ctxHit = savedHit;
+        if (have)
+            pushCone(rdram, apex, axis, up, len, cosHalf, false, hit ? 2 : 0, KCone, owner);
+    }
+
+    // getClosestMonsterToPunch(maxDist f12, angle f13, reach f14): no pisao (chamado do StateStompAttack::transitionInto) a busca da
+    // vitima, um setor no chao a partir do monstro, na frente dele, meio-angulo angle/2, raio reach
+    void punchSearch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31), m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        if (ctx->pc != kPunchSearch || !g_on.load(std::memory_order_relaxed) || ra < kStompInto || ra >= kStompInto + kStompIntoSize ||
+            !ok(m, 0x450))
+        {
+            g_origPunchSearch(rdram, ctx, runtime);
+            return;
+        }
+        const float angle = ctx->f[13], reach = ctx->f[14];
+        float trans[3], fwd[3], up[3];
+        const bool have = monsterCs(rdram, m, trans, fwd, up);
+        g_origPunchSearch(rdram, ctx, runtime);
+        if (have && returned(ctx, ra))
+            pushCone(rdram, trans, fwd, up, reach, std::cos(angle * 0.5f), true, GPR_U32(ctx, 2) ? 2 : 0, KStomp, slotOf(rdram, m));
+    }
+
+    // getClosestMonsterInFOV(from a1, maxDist f12, eye a2, cosAngle f13, distSq a3), so do StateGrapple::update: o ponto de mira da vitima a
+    // menos de maxDist do `from` (a esfera) e dentro do cone visto do `eye` em volta da frente do monstro (o cone, ate o fim da esfera)
+    void fovSearch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31), m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        if (ctx->pc != kFovSearch || !g_on.load(std::memory_order_relaxed) || !ok(m, 0x450) || ra < kGrabUpdate ||
+            ra >= kGrabUpdate + kGrabUpdateSize)
+        {
+            g_origFovSearch(rdram, ctx, runtime);
+            return;
+        }
+        float from[3], eye[3], trans[3], fwd[3], up[3];
+        readVec(rdram, GPR_U32(ctx, 5), from);
+        readVec(rdram, GPR_U32(ctx, 6), eye);
+        const float maxDist = ctx->f[12], cosAngle = ctx->f[13];
+        const bool have = monsterCs(rdram, m, trans, fwd, up);
+        g_origFovSearch(rdram, ctx, runtime);
+        if (!have || !returned(ctx, ra))
+            return;
+        const uint8_t hit = GPR_U32(ctx, 2) ? 2 : 0;
+        const int owner = slotOf(rdram, m);
+        const float dx = from[0] - eye[0], dy = from[1] - eye[1], dz = from[2] - eye[2];
+        pushCone(rdram, eye, fwd, up, std::sqrt(dx * dx + dy * dy + dz * dz) + maxDist, cosAngle, false, hit, KGrab, owner);
+        pushSweepK(rdram, from, from, maxDist, hit, KGrab, owner);
+    }
+
+    // collisTestEnvironmentCollisions (a0 = Monster): na investida e no monstro arremessado, as esferas do corpo sao o golpe
+    void envTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        const uint32_t st = ctx->pc == kEnvTest && g_on.load(std::memory_order_relaxed) && ok(m, 0x450) ? stateOff(rdram, m) : 0;
+        if (st != kRamState && st != kThrownState)
+        {
+            g_origEnv(rdram, ctx, runtime);
+            return;
+        }
+        withCtx(rdram, ctx, runtime, g_origEnv, KBody, slotOf(rdram, m));
+    }
+    // hdBundledSphereTest(tests a0, n a1, skipId a2): testes de 0x18 bytes {from*, to*, raio, max, resultados*, quantos}
+    void bundleTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t tests = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        const int n = int(GPR_S32(ctx, 5));
+        if (ctx->pc != kBundle || g_ctxKind != KBody || n <= 0 || n > 16 || !ok(tests, 0x18u * uint32_t(n)))
+        {
+            g_origBundle(rdram, ctx, runtime);
+            return;
+        }
+        float a[16][3], b[16][3], r[16];
+        for (int i = 0; i < n; ++i)
+        {
+            const uint32_t t = tests + 0x18u * uint32_t(i);
+            readVec(rdram, rd32(rdram, t), a[i]);
+            readVec(rdram, rd32(rdram, t + 4), b[i]);
+            r[i] = rdf(rdram, t + 8);
+        }
+        const uint32_t ra = GPR_U32(ctx, 31);
+        g_origBundle(rdram, ctx, runtime);
+        const bool done = returned(ctx, ra);
+        for (int i = 0; i < n; ++i)
+        {
+            const uint32_t t = tests + 0x18u * uint32_t(i);
+            pushSweep(rdram, a[i], b[i], r[i], done ? classify(rdram, rd32(rdram, t + 0x10), int(rd32(rdram, t + 0x14))) : 0);
+        }
+    }
+
+    // StateStompAttack::update, StateGrappleOHAttack::update, StateMonkeyOHAttack::update (dentro do Monster::update de quem ataca): o
+    // dano vai direto ao takeDamage da vitima, que ganha uma marca (takeDamage, mais abaixo)
+    void stompUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kStompUpdate || !g_on.load(std::memory_order_relaxed)) { g_origStomp(rdram, ctx, runtime); return; }
+        withCtx(rdram, ctx, runtime, g_origStomp, KStomp, slotOf(rdram, g_curMonster));
+    }
+    void grabOHUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kGrabOH || !g_on.load(std::memory_order_relaxed)) { g_origGrabOH(rdram, ctx, runtime); return; }
+        withCtx(rdram, ctx, runtime, g_origGrabOH, KGrab, slotOf(rdram, g_curMonster));
+    }
+    void monkeyOHUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kMonkeyOH || !g_on.load(std::memory_order_relaxed)) { g_origMonkeyOH(rdram, ctx, runtime); return; }
+        withCtx(rdram, ctx, runtime, g_origMonkeyOH, KGrab, slotOf(rdram, g_curMonster));
+    }
+
     // ---- dano e boneco
 
     // classe do estado em que o monstro esta (cls da kStates; 0 sem nome)
@@ -256,6 +494,8 @@ namespace wotm_train
         g_hitCtx.cls = ok(g_hitCtx.victim, 0x450u) ? stateCls(rdram, g_hitCtx.victim) : 0;
         if (const int vs = slotOf(rdram, g_hitCtx.victim); vs >= 0)
             g_lastHit[vs] = frameNow(rdram);
+        if (g_ctxKind == KCone)
+            g_ctxHit = true;
         g_origTakeHit(rdram, ctx, runtime);
         g_hitCtx = saved;
     }
@@ -285,6 +525,14 @@ namespace wotm_train
         const float after = rdf(rdram, m + kHealth);
         if (!std::isfinite(before) || !std::isfinite(after) || before - after < 0.001f)
             return;
+        if (g_ctxKind == KCone)
+            g_ctxHit = true;
+        if (g_ctxKind == KStomp || g_ctxKind == KGrab)
+        {   // pisao e agarrao nao tem geometria: uma esfera vermelha no ponto de mira da vitima (+0x3E30) marca o golpe que tirou vida
+            float p[3];
+            readVec(rdram, m + kPinTrans, p);
+            pushSweep(rdram, p, p, 25.f, 2);
+        }
         Hit h{};
         h.frame = frameNow(rdram);
         h.victim = int8_t(slot);
@@ -633,6 +881,16 @@ void wotmTrainingInstall(PS2Runtime &runtime)
         {kSphereSwept, &g_origSwept, &sphereSwept, "hdSphereTest (varrido)"},
         {kSphereStatic, &g_origStatic, &sphereStatic, "hdSphereTest (parado)"},
         {kAiInputs, &g_origAi, &aiInputs, "Ai::updateInputs"},
+        {kFireTest, &g_origFire, &fireTest, "FireBreath::TestCollis"},
+        {kLos, &g_origLos, &losTest, "hdLosCSTest"},
+        {kConeTest, &g_origCone, &coneTest, "StateSonicRoar::testConeCollis"},
+        {kPunchSearch, &g_origPunchSearch, &punchSearch, "getClosestMonsterToPunch"},
+        {kFovSearch, &g_origFovSearch, &fovSearch, "getClosestMonsterInFOV"},
+        {kEnvTest, &g_origEnv, &envTest, "collisTestEnvironmentCollisions"},
+        {kBundle, &g_origBundle, &bundleTest, "hdBundledSphereTest"},
+        {kStompUpdate, &g_origStomp, &stompUpdate, "StateStompAttack::update"},
+        {kGrabOH, &g_origGrabOH, &grabOHUpdate, "StateGrappleOHAttack::update"},
+        {kMonkeyOH, &g_origMonkeyOH, &monkeyOHUpdate, "StateMonkeyOHAttack::update"},
         {wotm::fn::updateCinema__7Monster, &g_origCinema, &cinemaUpdate, "Monster::updateCinema"},
         {wotm::fn::fontSpritePrintXY__FiiiPc, &g_origPrint, &printXY, "fontSpritePrintXY (WINS)"},
         {wotm::fn::fontSpritePrintRightXY__FiiiPc, &g_origPrintRight, &printRightXY, "fontSpritePrintRightXY (WINS)"},

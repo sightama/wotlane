@@ -129,9 +129,20 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   `Pickup::collisTestBatAttack`: objeto longo; `StateGetupAttack::update`; `Weapon::WeaponHD`: projéteis e objetos arremessados;
   `ShockWave::update`: onda do butt slam) e, só com a marca, o `hdSphereTest` (varrido e parado) guarda a esfera e o que ela pegou. Cor:
   azul claro do jogador, laranja da IA, branco sem dono (projétil), amarelo quando raspa o cenário, vermelho quando pega objeto ou
-  monstro; cada uma some em ~10 quadros. Fora da marca, o `hdSphereTest` (câmera, física) fica de fora. Ainda sem desenho: pisão e
-  agarrão (não têm geometria: a vítima é escolhida por distância), investida (usa as esferas do corpo), fogo (`hdLosCSTest`) e os
-  especiais de cone (SonicRoar).
+  monstro; cada uma some em ~10 quadros. Fora da marca, o `hdSphereTest` (câmera, física) fica de fora. Golpes sem esfera:
+  - **Fogo:** `FireBreath::TestCollis` marca, e o `hdLosCSTest` dele (uma linha da boca, Monster +0x3E50, até o alcance no eixo
+    +0x33D0) sai como linha, nas mesmas cores.
+  - **Cone (SonicRoar):** `StateSonicRoar::testConeCollis` sai como cone em arame (vértice na boca, eixo +0x33D0, alcance +0x264 do
+    estado, 1000 no Monster Island com a cratera trocada, cosseno do meio-ângulo +0x268) e a linha de visada dele; vermelho quando
+    alguém levou o golpe (`takeHit` ou dano dentro do teste).
+  - **Investida e arremessado:** com o monstro em `StateRamAttack` ou `StateBeingThrown`, o `collisTestEnvironmentCollisions` marca e
+    o `hdBundledSphereTest` dele grava as esferas do corpo (testes de 0x18 bytes: de, até, raio, máximo, resultados, quantos).
+  - **Pisão:** o `getClosestMonsterToPunch` chamado do `StateStompAttack::transitionInto` sai como setor no chão (frente do monstro,
+    meio-ângulo e raio dos argumentos), vermelho se achou vítima. **Agarrão:** o `getClosestMonsterInFOV` do `StateGrapple::update`
+    (a janela de pegar; o do `transitionFeasible` é a pergunta que a IA faz a cada quadro e fica de fora) sai como a esfera de busca
+    em volta do ponto à frente e o cone visto do olho. Dano do pisão e dos golpes do agarrão (`StateGrappleOHAttack`,
+    `StateMonkeyOHAttack`), que vai direto ao `takeDamage`: esfera vermelha no ponto de mira da vítima (+0x3E30).
+  - O log avisa o primeiro teste de cada tipo (`[treino] primeiro teste de golpe do tipo ...`).
 - **Corpo:** as caixas verdes (jogador) e magenta (IA) são os cascos op 10 (`COLLISION_VOLUME`) do hier do monstro, o que os golpes
   acertam: um percurso próprio a partir do `_cs` de cada `m_monsters[i]` no `wotmCaptureFrame` (mesmas matrizes do `Scene::walk`, LOD 0),
   planos `{n, d}` cortados três a três em vértices e arestas. Togera tem 2, quase todos têm 1. A cápsula cinza (opção 4) é a do
