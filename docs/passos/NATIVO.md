@@ -127,7 +127,8 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
 - **Golpes:** o jogo não tem caixa de golpe; cada teste é uma esfera varrida do ponto do osso no quadro anterior até o atual
   (`hdSphereTest`) contra os cascos de colisão. Os ganchos marcam o teste de golpe em curso (`collisTestCloseRangeAttack`: soco e combo;
   `Pickup::collisTestBatAttack`: objeto longo; `StateGetupAttack::update`; `Weapon::WeaponHD`: projéteis e objetos arremessados;
-  `ShockWave::update`: onda do butt slam) e, só com a marca, o `hdSphereTest` (varrido e parado) guarda a esfera e o que ela pegou. Cor:
+  `ShockWave::update`: onda do butt slam; `StateGrappleHook::testCollis`: o gancho do Ultra-V, uma linha de raio 0 do ponto anterior ao
+  atual da ponta) e, só com a marca, o `hdSphereTest` (varrido e parado) guarda a esfera e o que ela pegou. Cor:
   azul claro do jogador, laranja da IA, branco sem dono (projétil), amarelo quando raspa o cenário, vermelho quando pega objeto ou
   monstro; cada uma some em ~10 quadros. Fora da marca, o `hdSphereTest` (câmera, física) fica de fora. Golpes sem esfera:
   - **Fogo:** `FireBreath::TestCollis` marca, e o `hdLosCSTest` dele (uma linha da boca, Monster +0x3E50, até o alcance no eixo

@@ -28,7 +28,8 @@ namespace wotm_train
                        kPunchTest = wotm::fn::collisTestCloseRangeAttack__20PunchSwipeConfigBaseiP7MonsterR10HitHistoryi,
                        kBatTest = wotm::fn::collisTestBatAttack__6PickupfUi11MonsterAnimR10HitHistoryfff,
                        kGetupUpdate = wotm::fn::update__16StateGetupAttack, kWeaponHD = wotm::fn::WeaponHD__6Weapon,
-                       kShockUpdate = wotm::fn::update__9ShockWave, kSphereSwept = wotm::fn::hdSphereTest__FP8_fvectorT0fP9_hdResultUii,
+                       kShockUpdate = wotm::fn::update__9ShockWave, kHookTest = wotm::fn::testCollis__16StateGrappleHook,
+                       kHookState = 0x10600u, kSphereSwept = wotm::fn::hdSphereTest__FP8_fvectorT0fP9_hdResultUii,
                        kSphereStatic = wotm::fn::hdSphereTest__FP8_fvectorfP9_hdResultUii, kAiInputs = wotm::fn::updateInputs__2Ai;
     constexpr uint32_t kAiInMonster = 0x4E0u, kGamePad = 0x5024u;   // Ai embutido no Monster; GamePad do Monster (um byte por botao)
     // golpes sem esfera (fogo, cone, corpo, pisao, agarrao)
@@ -50,7 +51,7 @@ namespace wotm_train
                                    g_origSwept = nullptr, g_origStatic = nullptr, g_origAi = nullptr, g_origFire = nullptr,
                                    g_origLos = nullptr, g_origCone = nullptr, g_origPunchSearch = nullptr, g_origFovSearch = nullptr,
                                    g_origEnv = nullptr, g_origBundle = nullptr, g_origStomp = nullptr, g_origGrabOH = nullptr,
-                                   g_origMonkeyOH = nullptr;
+                                   g_origMonkeyOH = nullptr, g_origHook = nullptr;
 
     // estado da thread do EE
     int g_ctxKind = -1;         // teste de golpe em curso (Kind) ou -1
@@ -141,7 +142,7 @@ namespace wotm_train
     uint32_t g_kindLog = 0;   // tipos ja anunciados no log (um aviso por tipo)
     void logKind(int kind)
     {
-        static const char *const names[KKinds] = {"soco", "objeto", "levantar", "projetil", "onda", "outro", "fogo", "corpo", "pisao", "agarrao", "cone"};
+        static const char *const names[KKinds] = {"soco", "objeto", "levantar", "projetil", "onda", "gancho", "outro", "fogo", "corpo", "pisao", "agarrao", "cone"};
         if (kind < 0 || kind >= KKinds || (g_kindLog & (1u << kind)))
             return;
         g_kindLog |= 1u << kind;
@@ -293,6 +294,13 @@ namespace wotm_train
     {
         if (ctx->pc != kWeaponHD || !g_on.load(std::memory_order_relaxed)) { g_origWeapon(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origWeapon, KWeapon, -1);
+    }
+    // StateGrappleHook::testCollis (a0 = o estado, Monster +0x10600): o unico hdSphereTest do gancho do Ultra-V, raio 0 (uma linha) do ponto
+    // anterior ao atual da ponta (+0x90 -> +0xA0)
+    void hookTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc != kHookTest || !g_on.load(std::memory_order_relaxed)) { g_origHook(rdram, ctx, runtime); return; }
+        withCtx(rdram, ctx, runtime, g_origHook, KHook, slotOf(rdram, (GPR_U32(ctx, 4) & 0x1FFFFFFFu) - kHookState));
     }
     void shockUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)  // +0x20: o dono (Monster), quando e um dos slots
     {
@@ -1051,6 +1059,7 @@ void wotmTrainingInstall(PS2Runtime &runtime)
         {kStompUpdate, &g_origStomp, &stompUpdate, "StateStompAttack::update"},
         {kGrabOH, &g_origGrabOH, &grabOHUpdate, "StateGrappleOHAttack::update"},
         {kMonkeyOH, &g_origMonkeyOH, &monkeyOHUpdate, "StateMonkeyOHAttack::update"},
+        {kHookTest, &g_origHook, &hookTest, "StateGrappleHook::testCollis"},
         {wotm::fn::updateCinema__7Monster, &g_origCinema, &cinemaUpdate, "Monster::updateCinema"},
         {wotm::fn::fontSpritePrintXY__FiiiPc, &g_origPrint, &printXY, "fontSpritePrintXY (WINS)"},
         {wotm::fn::fontSpritePrintRightXY__FiiiPc, &g_origPrintRight, &printRightXY, "fontSpritePrintRightXY (WINS)"},

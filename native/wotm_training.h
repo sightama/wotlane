@@ -117,8 +117,9 @@ inline bool windowsHidden() { return !g_inFight.load(std::memory_order_relaxed) 
 // Tipo do teste de golpe que gravou a esfera (ou o cone). KFire: a linha do FireBreath::TestCollis (hdLosCSTest); KBody: as esferas
 // do corpo na investida e no arremessado (hdBundledSphereTest do collisTestEnvironmentCollisions); KStomp e KGrab: a area de busca
 // da vitima (getClosestMonsterToPunch no pisao, getClosestMonsterInFOV no agarrao) e a marca na vitima quando o golpe tira vida;
-// KCone: o cone do StateSonicRoar::testConeCollis
-enum Kind : uint8_t { KPunch, KBat, KGetup, KWeapon, KShock, KOther, KFire, KBody, KStomp, KGrab, KCone, KKinds };
+// KCone: o cone do StateSonicRoar::testConeCollis; KHook: a linha do gancho do Ultra-V (StateGrappleHook::testCollis, hdSphereTest
+// de raio 0 do ponto anterior ao atual da ponta)
+enum Kind : uint8_t { KPunch, KBat, KGetup, KWeapon, KShock, KHook, KOther, KFire, KBody, KStomp, KGrab, KCone, KKinds };
 
 // Uma esfera varrida (de a ate b, raio r) que o jogo testou num quadro; a == b na esfera parada
 struct Sweep
