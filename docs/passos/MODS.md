@@ -79,10 +79,19 @@ python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da 
   (TEX0.TCC = 0) ignoram o alfa do PNG.
 - Imagem dividida em várias texturas (o logo do título são duas de 256 × 256 lado a lado, de cabeça para baixo): escale a imagem
   inteira uma vez e corte no meio exato, sem sobreposição; cortes feitos à mão com sobra repetem um pedaço na emenda.
-- Partículas (fogo, faíscas, explosões, destroços, lens flare): as texturas delas moram no `.TEX` da fase (no Midtown Park,
-  `central_t0004` a `t0059` e `t0289`), então o PNG vai com o nome da fase e vale só nela; para trocar em todas, um PNG por fase.
-  Os UVs das partículas também são normalizados: qualquer resolução serve. Foto do fogo em verde no dobro da resolução:
+- Partículas (fogo, faíscas, explosões, destroços, pedestres, lens flare): as texturas delas moram no `.TEX` da fase (no Midtown
+  Park, `central_t0004` a `t0059` e `t0289`), então o PNG vai com o nome da fase e vale só nela; para trocar em todas, um PNG por
+  fase. Os UVs das partículas também são normalizados: qualquer resolução serve. Foto do fogo em verde no dobro da resolução:
   `docs/screenshots/2026-10-25/2026-10-25_mods_png_particulas.png`.
+  - No Midtown Park: explosão = `t0008` a `t0039` (32 quadros de 64 × 64); arco elétrico (raio do Kineticlops, calota do Robo-47)
+    = `t0057` (128 × 64); pedestres = `t0289` (folha de 128 × 128, bonecos de ~8 × 16 de cabeça para baixo).
+  - O tamanho na tela vem do efeito do jogo, não do PNG: um PNG maior só tem mais pixels no mesmo quadrado. Upscale (Real-ESRGAN
+    e parecidos) só aparece quando a partícula fica na tela maior que a textura original. No raio e na explosão vistos na luta
+    não se nota (`docs/screenshots/2026-10-25/2026-10-25_mods_png_raio_sem_e_com_upscale.png`); nos pedestres de perto se nota,
+    mas os modelos inventam forma onde a original tem poucos pixels
+    (`docs/screenshots/2026-10-25/2026-10-25_mods_png_pedestres_upscale.png`,
+    `docs/screenshots/2026-10-25/2026-10-25_pedestres_folha_original_e_animesharp.png`). Para partículas menores ou mais nítidas,
+    redesenhe: o desenho menor no centro, com mais borda transparente, aparece menor.
 - Não vale: na poeira/fumaça composta (o jogo a monta na VRAM a cada quadro), no monstro 3D da lista de saves e na imagem do GS emulado
   do `ps2EntryRunner` (a referência da checagem VU1; a janela dele usa o PNG). Para essa, `pack --inject` também regrava o `.TEX`/`.RTX` do mod quando o PNG tem o
   tamanho original (as cores vão para a paleta atual).
