@@ -24,8 +24,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 9. Modo treino: extras
 Como funciona hoje: `docs/passos/NATIVO.md`, "Runtime: modo treino".
-1. **Teste do dono** (branch `treino-tabela-socos`): START → TRAINING OPTIONS, as 11 linhas cabem e a PUNCH TABLE liga e desliga; socando, a tabela se lê na resolução dele; com um objeto na mão ela vira WEAPON HIT n (multiplicador "x1.5" no dano); o gancho do Ultra-V sai como linha; a pausa tem 7 itens e o MOVE LIST abre, favorita (X) e a caixa in-game vira FAVORITES. Depois do teste, merge do branch.
-2. **MOVE LIST, o que falta:** dano do arremesso de objeto (depende do objeto: ler `LevelPickups::s_info` do que está na mão) e do bug do Preytor (estáticos do `HomingBug`, só na RAM); dano do arremesso de corpo rígido do TwoHandedThrow e do Counter (`move_list_comuns.md`, "Em aberto"); ícones dos botões nas linhas do painel (hoje texto).
+1. **MOVE LIST, o que falta:** dano do arremesso de objeto (depende do objeto: ler `LevelPickups::s_info` do que está na mão) e do bug do Preytor (estáticos do `HomingBug`, só na RAM); dano do arremesso de corpo rígido do TwoHandedThrow e do Counter (`move_list_comuns.md`, "Em aberto"); ícones dos botões nas linhas do painel (hoje texto).
 
 
 ### 10. Chefes jogáveis
