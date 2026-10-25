@@ -592,9 +592,9 @@ void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
     const float isz = fh * 1.1f, rowH = isz + 4.f;
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
     struct B { uint16_t bit; st::Bind bind; const char *txt; };
-    static constexpr B kB[] = {{kBtnSquare, st::BSquare, "SQ"}, {kBtnTriangle, st::BTriangle, "TRI"}, {kBtnX, st::BCross, "X"},
-                               {kBtnCircle, st::BCircle, "O"}, {kBtnL1, st::BL1, "L1"}, {kBtnR1, st::BR1, "R1"},
-                               {kBtnL2, st::BL2, "L2"}, {kBtnR2, st::BR2, "R2"}};
+    static constexpr B kB[] = {{kBtnSquare, st::BSquare, "LT"}, {kBtnTriangle, st::BTriangle, "HV"}, {kBtnX, st::BCross, "JP"},
+                               {kBtnCircle, st::BCircle, "GR"}, {kBtnL1, st::BL1, "LK"}, {kBtnR1, st::BR1, "LK"},
+                               {kBtnL2, st::BL2, "CAM"}, {kBtnR2, st::BR2, "BLK"}};
     const int rows = inputRows();
     float x = gr.x0 + fh;
     const float top = float(rh) * kPanelTop;
@@ -647,8 +647,8 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(gt.rw), float(rh));
     const float x = gr.x0 + fh * 1.25f;
     struct Row { int type, dir; st::Bind bind; const char *txt; };
-    static constexpr Row kRows[kPunchTypes] = {{5, 5, st::BSquare, "SQ"}, {3, 8, st::BSquare, "SQ"}, {4, 2, st::BSquare, "SQ"},
-                                               {0, 5, st::BTriangle, "TRI"}, {1, 8, st::BTriangle, "TRI"}, {2, 2, st::BTriangle, "TRI"}};
+    static constexpr Row kRows[kPunchTypes] = {{5, 5, st::BSquare, "LT"}, {3, 8, st::BSquare, "LT"}, {4, 2, st::BSquare, "LT"},
+                                               {0, 5, st::BTriangle, "HV"}, {1, 8, st::BTriangle, "HV"}, {2, 2, st::BTriangle, "HV"}};
     const bool favs = !v.fav.empty();
     const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f + (favs ? a * 2.6f : 0.f);   // com favoritos, lugar do "x n"/"W"
     const float cDmg = cWin + a * 6.f, cRad = cDmg + a * 4.f, cStun = cRad + a * 4.f, right = cStun + a * 5.f;

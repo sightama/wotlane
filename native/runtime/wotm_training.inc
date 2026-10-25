@@ -923,7 +923,7 @@ namespace wotm_train
             const int n = std::clamp(int(rd32(rdram, m + 0xFA84u)), 0, 8);
             const float d0 = rdf(rdram, m + 0xFAA8u), r0 = rdf(rdram, m + 0xFCD4u), rn = n > 0 ? rdf(rdram, m + 0xFCD4u + 4u * uint32_t(n - 1)) : 0.f;
             const float cost = rdf(rdram, m + 0xFA68u);
-            std::snprintf(h, sizeof h, "IN THE AIR: UP + TRIANGLE. %.0f DAMAGE WITHIN %.0f, THEN A SHOCKWAVE UP TO %.0f (%d RINGS). STAMINA %.0f. KNOCKS DOWN", d0, r0, rn, n, cost);
+            std::snprintf(h, sizeof h, "IN THE AIR: UP + HEAVY. %.0f DAMAGE WITHIN %.0f, THEN A SHOCKWAVE UP TO %.0f (%d RINGS). STAMINA %.0f. KNOCKS DOWN", d0, r0, rn, n, cost);
             const size_t i = other("Obutt", "BUTT SLAM", 0xFA1Cu, d0, h);
             list[i].kb = rdf(rdram, m + 0xFAB0u); list[i].stun = rdf(rdram, m + 0xFAB8u); list[i].radius = r0;
         }
@@ -931,27 +931,27 @@ namespace wotm_train
             const float base = rdf(rdram, m + 0xFD80u), per = rdf(rdram, m + 0xFD84u), cost = rdf(rdram, m + 0xFD88u);
             char sp[40] = "";
             if (per > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", per);   // fator 0 em todos os monstros vistos
-            std::snprintf(h, sizeof h, "RUN (TAP FORWARD TWICE) + TRIANGLE, HOLD TO CHARGE. %.0f DAMAGE%s. STAMINA %.0f. KNOCKS DOWN", base, sp, cost);
+            std::snprintf(h, sizeof h, "RUN (TAP FORWARD TWICE) + HEAVY, HOLD TO CHARGE. %.0f DAMAGE%s. STAMINA %.0f. KNOCKS DOWN", base, sp, cost);
             const size_t i = other("Oram", "RAM ATTACK", 0xFD40u, base, h);
             list[i].kb = 1.f;
         }
         {   // agarrao: alcance do cone; golpes no agarrao (Congar usa o MonkeyOHAttack); arremesso (dano do impacto no chao, da vitima)
             const float range = rdf(rdram, m + 0xDD04u);
-            std::snprintf(h, sizeof h, "CIRCLE NEAR THE OPPONENT (RANGE %.0f). THEN SQUARE OR TRIANGLE TO HIT, CIRCLE OR UP + CIRCLE TO THROW", range);
+            std::snprintf(h, sizeof h, "GRAB NEAR THE OPPONENT (RANGE %.0f). THEN LIGHT OR HEAVY TO HIT, GRAB OR UP + GRAB TO THROW", range);
             const size_t g = other("Ograb", "GRAB", 0xDCE0u, 0.f, h);
             list[g].radius = range;
             const bool monkey = type == 1;   // Congar (kMonsterNames: tipo = m_typeBits >> 5)
             const uint32_t st = monkey ? 0x10B34u : 0x10AE0u;
             const float dSq = rdf(rdram, m + (monkey ? 0x10B5Cu : 0x10B08u)), cSq = rdf(rdram, m + (monkey ? 0x10B60u : 0x10B0Cu));
             const float dTri = rdf(rdram, m + (monkey ? 0x10B70u : 0x10B1Cu)), cTri = rdf(rdram, m + (monkey ? 0x10B74u : 0x10B20u));
-            std::snprintf(h, sizeof h, "SQUARE WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. STOPS THE OPPONENT FROM STRUGGLING FOR A MOMENT", dSq, cSq);
-            other("Ograbsq", "GRAB: SQ", st, dSq, h);
-            std::snprintf(h, sizeof h, "TRIANGLE WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. LETS THE OPPONENT GO", dTri, cTri);
-            other("Ograbtri", "GRAB: TRI", st, dTri, h);
+            std::snprintf(h, sizeof h, "LIGHT WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. STOPS THE OPPONENT FROM STRUGGLING FOR A MOMENT", dSq, cSq);
+            other("Ograbsq", "GRAB: LIGHT", st, dSq, h);
+            std::snprintf(h, sizeof h, "HEAVY WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. LETS THE OPPONENT GO", dTri, cTri);
+            other("Ograbtri", "GRAB: HEAVY", st, dTri, h);
             const float ground = rdf(rdram, m + 0xE430u), perV = rdf(rdram, m + 0xE434u), wall = rdf(rdram, m + 0xE400u);
             char sp[40] = "";
             if (perV > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", perV);
-            std::snprintf(h, sizeof h, "CIRCLE WHILE GRABBING (UP + CIRCLE THROWS UP). LANDING %.0f%s, WALL %.0f; WHOEVER IT HITS TAKES THE SAME", ground, sp, wall);
+            std::snprintf(h, sizeof h, "GRAB AGAIN WHILE GRABBING (UP + GRAB THROWS UP). LANDING %.0f%s, WALL %.0f; WHOEVER IT HITS TAKES THE SAME", ground, sp, wall);
             const size_t t = other("Ograbthrow", "GRAB: THROW", 0xDD74u, ground, h);
             list[t].kb = 1.f;
         }
@@ -972,11 +972,11 @@ namespace wotm_train
         {   // crowd control: onda com o medidor de especial
             const int n = std::clamp(int(rd32(rdram, m + 0xF42Cu)), 0, 8);
             const float d0 = rdf(rdram, m + 0xF450u), rn = n > 0 ? rdf(rdram, m + 0xF67Cu + 4u * uint32_t(n - 1)) : 0.f;
-            std::snprintf(h, sizeof h, "SQUARE + X TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST. USES THE WHOLE METER", rn, n, d0);
+            std::snprintf(h, sizeof h, "LIGHT + JUMP TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST. USES THE WHOLE METER", rn, n, d0);
             const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h);
             list[i].radius = rn; list[i].kb = rdf(rdram, m + 0xF458u); list[i].stun = rdf(rdram, m + 0xF460u);
         }
-        other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "CIRCLE WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT");
+        other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "GRAB WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT");
         {   // o especial do monstro (move_list_especiais.md): Monster +0x7980 aponta o estado; circulo + triangulo com o medidor
             const uint32_t sp = rd32(rdram, m + 0x7980u) & 0x1FFFFFFFu;
             const uint32_t so = sp > m && sp - m < 0x11190u ? sp - m : 0;
@@ -988,7 +988,7 @@ namespace wotm_train
             };
             float d0 = 0.f, rn = 0.f;
             int n = 0;
-            const char *cmd = "CIRCLE + TRIANGLE TOGETHER WITH THE SPECIAL METER";
+            const char *cmd = "GRAB + HEAVY TOGETHER WITH THE SPECIAL METER";
             switch (so)
             {
             case 0xF6F4u:   // SonicRoar (Congar)
@@ -1008,7 +1008,7 @@ namespace wotm_train
                 break;
             }
             case 0xF9D8u:   // BugAttack (Preytor)
-                other("Ospecial", "BUG ATTACK", so, 0.f, "CIRCLE + TRIANGLE TOGETHER WITH THE SPECIAL METER. HOMING BUG THAT LATCHES ON AND DRAINS HEALTH OVER TIME");
+                other("Ospecial", "BUG ATTACK", so, 0.f, "GRAB + HEAVY TOGETHER WITH THE SPECIAL METER. HOMING BUG THAT LATCHES ON AND DRAINS HEALTH OVER TIME");
                 break;
             case 0xFE5Cu:   // RobotSpecial (Robo-47): missil que explode em onda
             {
