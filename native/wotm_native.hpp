@@ -1204,7 +1204,9 @@ public:
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
         Texture2D t{};
-        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray, true) && w && h && px.size() >= size_t(w) * h) {
+        bool ok = decodeUploadTex(ram, ptr, t0, px, w, h, gray, true) && w && h && px.size() >= size_t(w) * h;
+        modParticle(ram, texId, tex0, ok, px, w, h);
+        if (ok) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
@@ -1784,6 +1786,19 @@ public:
         return t.id;
     }
 
+    // PNG de mod numa textura de particula (alfa cru do GS, como a original). Os UVs das particulas sao normalizados pelo TEX0, entao
+    // qualquer resolucao serve. Sem a original (paleta ausente), o PNG entra sozinho, com o alfa na escala 0..0x80.
+    void modParticle(const Ram &ram, uint32_t texId, uint64_t tex0, bool &ok, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h) {
+        if (texmods::Index::get().empty()) return;
+        uint32_t amax = 0;
+        if (ok) for (uint32_t c : px) amax = std::max(amax, c >> 24);
+        std::vector<uint32_t> mpx;
+        uint32_t mw = 0, mh = 0;
+        if (modTexture(ram, texId, gs::Tex0::decode(tex0), (tex0 >> 34) & 1, true, mpx, mw, mh, amax > 0x80)) {
+            px.swap(mpx); w = mw; h = mh; ok = true;
+        }
+    }
+
     // Textura de efeito (particulas): `texInfo[id]` guarda o pacote (como nos objetos) e o TEX0 do efeito (fx[i].TEX0ptr) traz psm e CBP da paleta.
     bool decodeFxTex(const Ram &ram, uint32_t id, uint64_t tex0, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h) const {
         const gs::Tex0 t0 = gs::Tex0::decode(tex0);
@@ -2165,7 +2180,9 @@ public:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t tw = 0, th = 0;
-        if (decodeFxTex(ram, texId, tex0, px, tw, th)) {
+        bool ok = decodeFxTex(ram, texId, tex0, px, tw, th);
+        modParticle(ram, texId, tex0, ok, px, tw, th);
+        if (ok) {
             Image img{px.data(), int(tw), int(th), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             // BILINEAR como o GS (as gotas do Plantboss saiam em blocos de texel e pareciam maiores: foto 2026-10-19_003247/001)

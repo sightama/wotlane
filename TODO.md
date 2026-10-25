@@ -20,7 +20,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 - **Custom na seleção de 3 e 4 jogadores** (a casa CUSTOM só existe nas seleções de 1 e 2).
 - **Skins no elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez, e os jogadores trocam de monstro entre as rodadas sem recarregar. Escolher traje ali exige mudar a carga (um arquivo por monstro escolhido), não só a tela.
 - **Seleção nativa, pendências para colaborador** (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`, itens 6 a 8): Togera desalinhado no quadro único do adventure; quadros dos monstros fora do telão; a tela 17 (`screenSelect1AI`) sem a seleção nativa.
-- **PNG de mod** nas partículas (as UVs dos sprites são em texels) e no monstro 3D da lista de saves.
+- **PNG de mod** no monstro 3D da lista de saves.
 - **Arquivo de mod maior que o do disco** fora de `MON/*`: o jogo carrega em regiões de tamanho fixo e pode sobrescrever o que vem depois (o log avisa). Abrir espaço por tipo de arquivo.
 
 ### 9. Modo treino: extras

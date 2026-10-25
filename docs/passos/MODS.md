@@ -79,7 +79,11 @@ python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da 
   (TEX0.TCC = 0) ignoram o alfa do PNG.
 - Imagem dividida em várias texturas (o logo do título são duas de 256 × 256 lado a lado, de cabeça para baixo): escale a imagem
   inteira uma vez e corte no meio exato, sem sobreposição; cortes feitos à mão com sobra repetem um pedaço na emenda.
-- Não vale: nas partículas (fogo, fumaça, poeira), no monstro 3D da lista de saves e na imagem do GS emulado
+- Partículas (fogo, faíscas, explosões, destroços, lens flare): as texturas delas moram no `.TEX` da fase (no Midtown Park,
+  `central_t0004` a `t0059` e `t0289`), então o PNG vai com o nome da fase e vale só nela; para trocar em todas, um PNG por fase.
+  Os UVs das partículas também são normalizados: qualquer resolução serve. Foto do fogo em verde no dobro da resolução:
+  `docs/screenshots/2026-10-25/2026-10-25_mods_png_particulas.png`.
+- Não vale: na poeira/fumaça composta (o jogo a monta na VRAM a cada quadro), no monstro 3D da lista de saves e na imagem do GS emulado
   do `ps2EntryRunner` (a referência da checagem VU1; a janela dele usa o PNG). Para essa, `pack --inject` também regrava o `.TEX`/`.RTX` do mod quando o PNG tem o
   tamanho original (as cores vão para a paleta atual).
 - Como o nativo acha o arquivo: o pacote de upload de `texInfo[texId]` está dentro do `.TEX` (ou `.RTX`) carregado em
@@ -198,7 +202,7 @@ luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23
 - **PNG** (`native/wotm_texmods.hpp`, `Scene::modTexture`): o jogo segue carregando o `.TEX`/`.RTX` do disco; o desenho nativo troca a
   imagem no `textureId` (objetos) e no `residentTexture` (quadrados de tela: barras dos inimigos, fonte). O texId do disco sai do
   deslocamento do pacote de `texInfo[id]` dentro do arquivo carregado (`fileStatus.texAddr`/`resAddr`, nome em `names`); as
-  residentes, pelo DBP. PNG maior que a original ganha mipmaps. Fora: partículas, monstro da lista de saves e o GS emulado (para
+  residentes, pelo DBP. PNG maior que a original ganha mipmaps. Partículas: `Scene::modParticle` no `particleTexture` e no `fxTexture`. Fora: poeira composta, monstro da lista de saves e o GS emulado (para
   esse, `modkit.py pack --inject`).
 
 ## Cuidados

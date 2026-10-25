@@ -6,7 +6,7 @@
 // texId e o do arquivo no disco (antes da relocacao da carga). Qualquer resolucao: os UVs do desenho sao normalizados (u / 4096) e
 // os quadrados de tela (fonte, retratos) escalam o trecho pela razao entre o PNG e a textura original. Vale para todas as paletas
 // que usam a textura. Alfa do PNG: 255 = opaco (0x80 do GS); se a textura original passa de 0x80, 255 = 0xFF (loadPng). Nao vale na imagem do GS emulado do ps2EntryRunner (a referencia da
-// checagem VU1) nem nas particulas: essas seguem lendo o .TEX. O monstro 3D das telas (wotm_model.hpp) tambem usa o PNG.
+// checagem VU1) nem na poeira composta (montada na VRAM). Particulas (Scene::modParticle) e o monstro 3D das telas (wotm_model.hpp) usam o PNG.
 #pragma once
 #include <algorithm>
 #include <cctype>
