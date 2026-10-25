@@ -177,7 +177,7 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   botão (COMBO: SQUARE X 4; o próximo tipo é permitido pelo float +0x94 + tipo·4 da `PunchConfig` e a casa seguinte existe; o dano é a
   soma) e os 6 golpes com objeto (WEAPON). A dica de cada linha traz dano, janela, raio, atordoamento e se derruba. O X favorita (até 8;
   estrela na borda direita da linha); os favoritos ficam por tipo de monstro em `training_moves.ini` ao lado do `settings.ini` (ids `P<tipo>`,
-  `C<tipo>x<n>`, `W<tipo>`); o favorito aparece como uma estrela na borda direita da linha. Com favoritos, a tabela in-game (PUNCH TABLE) mostra esses golpes (FAVORITES HIT n, "x n" nos combos, "W"
+  `C<tipo>x<n>`, `W<tipo>`); o favorito aparece como uma estrela na borda direita da linha. Com favoritos, a tabela in-game (PUNCH TABLE) mostra esses golpes (título FAVORITES, "x n" nos combos, "W"
   nos de objeto) no lugar dos 6 tipos da posição; a linha acende quando o golpe em curso é esse botão. Os outros golpes (`MkOther`: butt
   slam, investida, agarrão com o golpe de quadrado, o de triângulo e o arremesso, levantar atacando, crowd control, arremesso de objeto e
   o especial do monstro, achado pelo ponteiro `Monster` +0x7980) têm nome curto e a dica pronta com os números lidos da RAM nos offsets de

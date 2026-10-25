@@ -661,7 +661,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     DrawRectangle(int(x) - 6, int(top) - 6, int(right - x) + 12, int(rowH * float(rows) + fh * 1.2f) + 12, Color{0, 0, 0, 130});
     char b[48];
     if (favs)
-        std::snprintf(b, sizeof b, "FAVORITES  HIT %d", v.tableTier + 1);
+        std::snprintf(b, sizeof b, "FAVORITES");
     else
         std::snprintf(b, sizeof b, "%s  HIT %d", v.tableWeapon ? "WEAPON" : "PUNCHES", v.tableTier + 1);
     gt.put(b, x, top + isz * 0.5f, fh, Color{120, 255, 160, 255});
