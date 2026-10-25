@@ -182,8 +182,17 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   slam, investida, agarrão com o golpe de quadrado, o de triângulo e o arremesso, levantar atacando, crowd control, arremesso de objeto e
   o especial do monstro, achado pelo ponteiro `Monster` +0x7980) têm nome curto e a dica pronta com os números lidos da RAM nos offsets de
   `docs/investigacoes/2026-10-25/move_list_comuns.md` e `move_list_especiais.md`; na caixa, a linha acende quando o P1 está nesse estado.
-  Sem número: o dano do arremesso de objeto (é do objeto) e o do bug do Preytor (estáticos só na RAM). Log: `[treino] move list do tipo ...`
-  com uma linha por golpe desses.
+  Também COUNTER (sem dano: o `counterSuccess` só cancela o golpe e manda a vítima para Countered; a dica traz os fields da janela, +0x3C/+0x40,
+  e se rouba o objeto, +0x4C) e BUG ATTACK com os estáticos do `HomingBug` (`wotm::sym::x_9HomingBug_*`: dano por segundo, teto, fields,
+  alcances, vida do bug). **Arremesso de objeto** com um objeto na mão (`heldPickup`; a lista é remontada quando ele muda): THROW OBJ com o
+  dano `s_info[tipo].damage` (+0x08, tipo = `Pickup` +0xA0) × multiplicador do monstro (+0x6A38 + 4·tipo), raio, mph e stamina ao acertar;
+  estado Throw ou TwoHandedThrow (bit 1 do `Pickup` +0x50). Com objeto corpo rígido (bit 2) entra HURL OBJ (cima + bola): ângulo e
+  velocidade do TwoHandedThrow (+0x2C/+0x30) e o dano do impacto do `RigidPickup::createCollisEvents`: `RigidPickup` +0x444 +
+  |velocidade do contato| × +0x448 + `s_info[tipo].damage`. Sem objeto, a dica só explica. Cada linha do painel começa pela seta da
+  direção (ponto quando não há) e pelos ícones dos botões do comando (`Move::btns`/`dir`), depois o texto ("LIGHT", "HEAVY X 4", "LIGHT WITH
+  OBJECT", o nome curto); a caixa in-game dimensiona as colunas pelo maior texto. GRAB: LIGHT e GRAB: HEAVY usam o mesmo estado
+  (`GrappleOHAttack`/`MonkeyOHAttack`): a linha acende pela animação em +0x50 do estado (0xBA = o especial; `Move::variant`). Log: `[treino] move
+  list do tipo ...` com uma linha por golpe desses, e as linhas do arremesso quando o objeto na mão muda.
 - **Dados de quadro:** na saída do `Monster::update` de cada slot, o estado (`m_state` +0x34, nome pela tabela do `game.h`; no
   `StatePunch` e no `BatSwipe` também a cadeia e o passo do combo). Cada troca fecha um registro: golpe (estado de ataque, ou qualquer
   um com teste de golpe) com início (quadro do primeiro teste, o primeiro do estado = 1), ativo (quadros com teste) e total; reação da

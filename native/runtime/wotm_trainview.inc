@@ -261,6 +261,7 @@ struct View
     bool tableWeapon = false;
     std::vector<Move> fav;   // golpes favoritos da MOVE LIST, na ordem em que foram marcados (vazio: a caixa mostra os 6 da posicao)
     uint32_t p1State = 0;    // offset do estado do P1 (acende a linha MkOther)
+    uint32_t p1StateAnim = 0;   // +0x50 do estado (Move::variant dos golpes do agarrao)
 };
 
 // copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
@@ -316,6 +317,7 @@ View snapshot()
         for (const Move &m : sh.moveList)
             if (id == m.id) { v.fav.push_back(m); break; }
     v.p1State = sh.p1State;
+    v.p1StateAnim = sh.p1StateAnim;
     return v;
 }
 
@@ -651,7 +653,42 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
                                                {0, 5, st::BTriangle, "HV"}, {1, 8, st::BTriangle, "HV"}, {2, 2, st::BTriangle, "HV"}};
     const bool favs = !v.fav.empty();
     const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f + (favs ? a * 2.6f : 0.f);   // com favoritos, lugar do "x n"/"W"
-    const float cDmg = cWin + a * 6.f, cRad = cDmg + a * 4.f, cStun = cRad + a * 4.f, right = cStun + a * 5.f;
+    // os textos das 4 colunas de cada linha antes de desenhar: a largura de cada coluna e a do maior texto dela (os favoritos trazem
+    // alcances de 4 algarismos e danos com decimal, que nao cabem numa largura fixa)
+    struct Cell { char win[16], dmg[16], rad[16], stun[16]; PunchCfg cfg; };
+    Cell cells[16];
+    const int nFav = favs ? std::min(int(v.fav.size()), 16) : kPunchTypes;
+    for (int r = 0; r < nFav; ++r)
+    {
+        Cell &ce = cells[r];
+        const Move *mv = favs ? &v.fav[r] : nullptr;
+        if (mv)
+        {
+            ce.cfg.valid = true; ce.cfg.weapon = mv->kind == MkWeapon; ce.cfg.ini = mv->ini; ce.cfg.fim = mv->fim; ce.cfg.dmg = mv->dmg;
+            ce.cfg.radius = mv->radius; ce.cfg.stun = mv->stun; ce.cfg.kb = mv->kb;
+        }
+        else
+            ce.cfg = v.table[kRows[r].type];
+        const PunchCfg &c = ce.cfg;
+        const bool otherMv = mv && mv->kind == MkOther;
+        if (!c.valid) { std::snprintf(ce.win, sizeof ce.win, "-"); ce.dmg[0] = ce.rad[0] = ce.stun[0] = 0; continue; }
+        if (otherMv && !(c.fim > 0.f)) std::snprintf(ce.win, sizeof ce.win, "-");   // janela so quando existe (levantar)
+        else std::snprintf(ce.win, sizeof ce.win, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
+        if (c.weapon) std::snprintf(ce.dmg, sizeof ce.dmg, "x%.1f", c.dmg);
+        else if (otherMv && !(c.dmg > 0.f)) std::snprintf(ce.dmg, sizeof ce.dmg, "-");
+        else std::snprintf(ce.dmg, sizeof ce.dmg, c.dmg < 10.f && c.dmg != float(int(c.dmg)) ? "%.1f" : "%.0f", c.dmg);
+        if (otherMv && !(c.radius > 0.f)) std::snprintf(ce.rad, sizeof ce.rad, "-");
+        else std::snprintf(ce.rad, sizeof ce.rad, "%.0f", c.radius);
+        std::snprintf(ce.stun, sizeof ce.stun, "%.0f%s", c.stun, c.kb != 0.f ? " K" : "");
+    }
+    float wWin = gt.width("WIN", fh), wDmg = gt.width("DMG", fh), wRad = gt.width("RAD", fh), wStun = gt.width("STUN", fh);
+    for (int r = 0; r < nFav; ++r)
+    {
+        wWin = std::max(wWin, gt.width(cells[r].win, fh)); wDmg = std::max(wDmg, gt.width(cells[r].dmg, fh));
+        wRad = std::max(wRad, gt.width(cells[r].rad, fh)); wStun = std::max(wStun, gt.width(cells[r].stun, fh));
+    }
+    const float gap = a * 1.3f;
+    const float cDmg = cWin + wWin + gap, cRad = cDmg + wDmg + gap, cStun = cRad + wRad + gap, right = cStun + wStun + gap * 0.5f;
     const PunchLive &p = v.live[0];
     const bool now = p.frame && v.frame - p.frame <= 1u && p.cfg.valid;
     // com favoritos da MOVE LIST, a caixa mostra esses golpes (icone do botao, "x n" nos combos, "W" nos de objeto) no lugar dos 6
@@ -678,18 +715,15 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     };
     for (int r = 0; r < nRows; ++r)
     {
-        PunchCfg favCfg;
         const Move *mv = favs ? &v.fav[r] : nullptr;
-        if (mv)
-        {
-            favCfg.valid = true; favCfg.weapon = mv->kind == MkWeapon; favCfg.ini = mv->ini; favCfg.fim = mv->fim; favCfg.dmg = mv->dmg;
-            favCfg.radius = mv->radius; favCfg.stun = mv->stun; favCfg.kb = mv->kb;
-        }
         const bool otherMv = mv && mv->kind == MkOther;
         const Row &row = mv ? rowOf(otherMv ? 5 : mv->type) : kRows[r];
-        const PunchCfg &c = mv ? favCfg : v.table[row.type];
+        const Cell &ce = cells[r];
+        const PunchCfg &c = ce.cfg;
         const float y = top + rowH * float(r + 2), cy = y + isz * 0.5f;
-        bool cur = otherMv ? (v.p1State != 0 && v.p1State == mv->state) : (now && p.type == row.type);
+        // MkOther: o estado do P1 e, nos golpes do agarrao (mesmo estado), a animacao +0x50 (0xBA = o especial, GRAB: HEAVY)
+        bool cur = otherMv ? (v.p1State != 0 && v.p1State == mv->state && (mv->variant == 0 || (mv->variant == 2) == (v.p1StateAnim == 0xBAu)))
+                           : (now && p.type == row.type);
         if (mv && !otherMv && cur)
             cur = mv->kind == MkWeapon ? p.cfg.weapon : (!p.cfg.weapon && (mv->kind == MkCombo ? p.tier < int(mv->len) : p.tier == 0));
         const unsigned char al = c.valid ? 255 : 90;
@@ -706,23 +740,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
             if (!wotm_prompts::drawCell2d(wotm_prompts::cellFor(row.bind), cIcons + isz * 1.5f + 2.f, cy, isz, float(al) / 255.f))
                 gt.put(row.txt, cIcons + isz + 2.f, cy, fh, Color{255, 230, 120, al});
         }
-        if (otherMv)
-        {   // janela so quando existe (levantar); dano, raio ou alcance, atordoamento como os outros
-            const Color t = cur ? Color{255, 240, 150, 255} : Color{235, 235, 235, 255};
-            if (c.fim > 0.f) std::snprintf(b, sizeof b, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
-            else std::snprintf(b, sizeof b, "-");
-            gt.put(b, cWin, cy, fh, t);
-            if (c.dmg > 0.f) std::snprintf(b, sizeof b, c.dmg < 10.f && c.dmg != float(int(c.dmg)) ? "%.1f" : "%.0f", c.dmg);
-            else std::snprintf(b, sizeof b, "-");
-            gt.put(b, cDmg, cy, fh, t);
-            if (c.radius > 0.f) std::snprintf(b, sizeof b, "%.0f", c.radius);
-            else std::snprintf(b, sizeof b, "-");
-            gt.put(b, cRad, cy, fh, t);
-            std::snprintf(b, sizeof b, "%.0f%s", c.stun, c.kb != 0.f ? " K" : "");
-            gt.put(b, cStun, cy, fh, c.stun > 100.f ? Color{255, 150, 40, 255} : t);
-            continue;
-        }
-        if (mv && mv->kind != MkPunch)
+        if (mv && !otherMv && mv->kind != MkPunch)
         {
             char tag[8];
             if (mv->kind == MkCombo) std::snprintf(tag, sizeof tag, "x%d", int(mv->len));
@@ -735,17 +753,10 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
             continue;
         }
         const Color t = cur ? Color{255, 240, 150, 255} : Color{235, 235, 235, 255};
-        std::snprintf(b, sizeof b, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
-        gt.put(b, cWin, cy, fh, t);
-        if (c.weapon)
-            std::snprintf(b, sizeof b, "x%.1f", c.dmg);
-        else
-            std::snprintf(b, sizeof b, "%.0f", c.dmg);
-        gt.put(b, cDmg, cy, fh, t);
-        std::snprintf(b, sizeof b, "%.0f", c.radius);
-        gt.put(b, cRad, cy, fh, t);
-        std::snprintf(b, sizeof b, "%.0f%s", c.stun, c.kb != 0.f ? " K" : "");
-        gt.put(b, cStun, cy, fh, c.stun > 100.f ? Color{255, 150, 40, 255} : t);
+        gt.put(ce.win, cWin, cy, fh, t);
+        gt.put(ce.dmg, cDmg, cy, fh, t);
+        gt.put(ce.rad, cRad, cy, fh, t);
+        gt.put(ce.stun, cStun, cy, fh, c.stun > 100.f ? Color{255, 150, 40, 255} : t);
     }
     // barra do soco em curso: a janela (azul) e o ponto da animacao (branco); vazia fora do soco
     const float by = top + rowH * float(rows) + fh * 0.2f, bw = right - x, bh = fh * 0.6f;

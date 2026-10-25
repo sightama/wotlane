@@ -859,7 +859,7 @@ namespace wotm_train
             if (l[0] != '#') f << l << '\n';
     }
     // monta a lista do monstro m (socos da posicao 1, sequencias do mesmo botao, golpes com objeto) e publica com os favoritos dele
-    void buildMoves(const uint8_t *rdram, uint32_t m, int type, bool bat)
+    void buildMoves(const uint8_t *rdram, uint32_t m, int type, bool bat, uint32_t pickup)
     {
         std::vector<Move> list;
         auto fill = [](Move &mv, const PunchCfg &c) {
@@ -909,22 +909,25 @@ namespace wotm_train
             list.push_back(mv);
         }
         // os outros golpes comuns (move_list_comuns.md): numeros da RAM do proprio monstro
-        auto other = [&](const char *id, const char *name, uint32_t state, float dmg, const char *hint) {
+        // btns e dir: o comando (icones da linha do painel): bits kBtn* e a direcao no teclado numerico (8 frente/cima, 2 tras, 5 nenhuma)
+        auto other = [&](const char *id, const char *name, uint32_t state, float dmg, const char *hint, uint8_t btns, int dir = 5) {
             Move mv;
             mv.kind = MkOther; mv.state = state; mv.dmg = std::isfinite(dmg) ? dmg : 0.f;
+            mv.btns = btns; mv.dir = int8_t(dir);
             std::snprintf(mv.id, sizeof mv.id, "%s", id);
             std::snprintf(mv.name, sizeof mv.name, "%s", name);
             std::snprintf(mv.hint, sizeof mv.hint, "%s", hint);
             list.push_back(mv);
             return list.size() - 1;
         };
-        char h[176];
+        constexpr uint8_t kSq = uint8_t(kBtnSquare), kTri = uint8_t(kBtnTriangle), kCir = uint8_t(kBtnCircle), kX = uint8_t(kBtnX), kR2 = uint8_t(kBtnR2), kSpecialBtn = uint8_t(kCir | kTri);
+        char h[200];
         {   // butt slam: anel 0 direto dentro de reach[0], depois a onda ate reach[n-1]
             const int n = std::clamp(int(rd32(rdram, m + 0xFA84u)), 0, 8);
             const float d0 = rdf(rdram, m + 0xFAA8u), r0 = rdf(rdram, m + 0xFCD4u), rn = n > 0 ? rdf(rdram, m + 0xFCD4u + 4u * uint32_t(n - 1)) : 0.f;
             const float cost = rdf(rdram, m + 0xFA68u);
             std::snprintf(h, sizeof h, "IN THE AIR: UP + HEAVY. %.0f DAMAGE WITHIN %.0f, THEN A SHOCKWAVE UP TO %.0f (%d RINGS). STAMINA %.0f. KNOCKS DOWN", d0, r0, rn, n, cost);
-            const size_t i = other("Obutt", "BUTT SLAM", 0xFA1Cu, d0, h);
+            const size_t i = other("Obutt", "BUTT SLAM", 0xFA1Cu, d0, h, kTri, 8);
             list[i].kb = rdf(rdram, m + 0xFAB0u); list[i].stun = rdf(rdram, m + 0xFAB8u); list[i].radius = r0;
         }
         {   // investida: dano base + velocidade x fator
@@ -932,27 +935,27 @@ namespace wotm_train
             char sp[40] = "";
             if (per > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", per);   // fator 0 em todos os monstros vistos
             std::snprintf(h, sizeof h, "RUN (TAP FORWARD TWICE) + HEAVY, HOLD TO CHARGE. %.0f DAMAGE%s. STAMINA %.0f. KNOCKS DOWN", base, sp, cost);
-            const size_t i = other("Oram", "RAM ATTACK", 0xFD40u, base, h);
+            const size_t i = other("Oram", "RAM ATTACK", 0xFD40u, base, h, kTri, 8);
             list[i].kb = 1.f;
         }
         {   // agarrao: alcance do cone; golpes no agarrao (Congar usa o MonkeyOHAttack); arremesso (dano do impacto no chao, da vitima)
             const float range = rdf(rdram, m + 0xDD04u);
             std::snprintf(h, sizeof h, "GRAB NEAR THE OPPONENT (RANGE %.0f). THEN LIGHT OR HEAVY TO HIT, GRAB OR UP + GRAB TO THROW", range);
-            const size_t g = other("Ograb", "GRAB", 0xDCE0u, 0.f, h);
+            const size_t g = other("Ograb", "GRAB", 0xDCE0u, 0.f, h, kCir);
             list[g].radius = range;
             const bool monkey = type == 1;   // Congar (kMonsterNames: tipo = m_typeBits >> 5)
             const uint32_t st = monkey ? 0x10B34u : 0x10AE0u;
             const float dSq = rdf(rdram, m + (monkey ? 0x10B5Cu : 0x10B08u)), cSq = rdf(rdram, m + (monkey ? 0x10B60u : 0x10B0Cu));
             const float dTri = rdf(rdram, m + (monkey ? 0x10B70u : 0x10B1Cu)), cTri = rdf(rdram, m + (monkey ? 0x10B74u : 0x10B20u));
             std::snprintf(h, sizeof h, "LIGHT WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. STOPS THE OPPONENT FROM STRUGGLING FOR A MOMENT", dSq, cSq);
-            other("Ograbsq", "GRAB: LIGHT", st, dSq, h);
+            list[other("Ograbsq", "GRAB: LIGHT", st, dSq, h, kSq)].variant = 1;   // o mesmo estado: a animacao +0x50 (0xBA = especial) distingue
             std::snprintf(h, sizeof h, "HEAVY WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. LETS THE OPPONENT GO", dTri, cTri);
-            other("Ograbtri", "GRAB: HEAVY", st, dTri, h);
+            list[other("Ograbtri", "GRAB: HEAVY", st, dTri, h, kTri)].variant = 2;
             const float ground = rdf(rdram, m + 0xE430u), perV = rdf(rdram, m + 0xE434u), wall = rdf(rdram, m + 0xE400u);
             char sp[40] = "";
             if (perV > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", perV);
             std::snprintf(h, sizeof h, "GRAB AGAIN WHILE GRABBING (UP + GRAB THROWS UP). LANDING %.0f%s, WALL %.0f; WHOEVER IT HITS TAKES THE SAME", ground, sp, wall);
-            const size_t t = other("Ograbthrow", "GRAB: THROW", 0xDD74u, ground, h);
+            const size_t t = other("Ograbthrow", "GRAB: THROW", 0xDD74u, ground, h, kCir);
             list[t].kb = 1.f;
         }
         for (int i = 0; i < 2; ++i)   // levantar atacando: entradas de 0x24 (de costas / de brucos)
@@ -965,7 +968,7 @@ namespace wotm_train
             std::snprintf(id, sizeof id, "Ogetup%d", i);
             std::snprintf(nm, sizeof nm, "GETUP %d", i + 1);
             std::snprintf(h, sizeof h, "WHILE KNOCKED DOWN, HOLD AN ATTACK BUTTON TO GET UP SWINGING. %.0f DAMAGE, WINDOW %.0f-%.0f", d, rdf(rdram, e + 0x14u) * 100.f, rdf(rdram, e + 0x18u) * 100.f);
-            const size_t k = other(id, nm, 0x10C40u, d, h);
+            const size_t k = other(id, nm, 0x10C40u, d, h, uint8_t(kSq | kTri));
             list[k].ini = rdf(rdram, e + 0x14u); list[k].fim = rdf(rdram, e + 0x18u);
             list[k].kb = rdf(rdram, e + 0x28u); list[k].stun = rdf(rdram, e + 0x30u);
         }
@@ -973,10 +976,49 @@ namespace wotm_train
             const int n = std::clamp(int(rd32(rdram, m + 0xF42Cu)), 0, 8);
             const float d0 = rdf(rdram, m + 0xF450u), rn = n > 0 ? rdf(rdram, m + 0xF67Cu + 4u * uint32_t(n - 1)) : 0.f;
             std::snprintf(h, sizeof h, "LIGHT + JUMP TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST. USES THE WHOLE METER", rn, n, d0);
-            const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h);
+            const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h, uint8_t(kSq | kX));
             list[i].radius = rn; list[i].kb = rdf(rdram, m + 0xF458u); list[i].stun = rdf(rdram, m + 0xF460u);
         }
-        other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "GRAB WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT");
+        {   // Counter (move_list_comuns.md, 7): de dentro do Block, R2 + quadrado/triangulo; sem dano (o counterSuccess so cancela o
+            // golpe e manda a vitima para Countered; collisTestBatAttack devolve 0); janela em fields +0x3C/+0x40, rouba o objeto +0x4C
+            const float f0 = rdf(rdram, m + 0x7E14u), f1 = rdf(rdram, m + 0x7E18u);
+            const bool steals = rd32(rdram, m + 0x7E24u) != 0;
+            std::snprintf(h, sizeof h, "WHILE BLOCKING, LIGHT OR HEAVY. NO DAMAGE: CANCELS THE HIT AND LEAVES THE OPPONENT OPEN%s. WORKS FROM FIELD %.0f TO %.0f",
+                          steals ? ", TAKING THEIR OBJECT" : "", f0, f1);
+            const size_t i = other("Ocounter", "COUNTER", 0x7DD8u, 0.f, h, uint8_t(kR2 | kSq | kTri));
+            list[i].ini = f0; list[i].fim = f1;
+        }
+        {   // arremesso de objeto (move_list_comuns.md, 4): Throw (uma mao) ou TwoHandedThrow (duas maos, bit 1 do Pickup +0x50); o dano e o
+            // do objeto (s_info[tipo] +0x08, tipo = Pickup +0xA0) vezes o multiplicador do monstro (+0x6A38 + 4*tipo), raio +0x0C,
+            // velocidade +0x34 (mph), stamina ao acertar +0x30. Sem objeto na mao, a dica so explica.
+            const int t = pickup ? int(rd32(rdram, pickup + kPickupKind)) : -1;
+            const uint32_t flags = pickup ? rd32(rdram, pickup + 0x50u) : 0;
+            const bool twoHanded = (flags & 2u) != 0, rigid = (flags & 4u) != 0;
+            if (t >= 0 && t < 28)
+            {
+                const uint32_t info = wotm::sym::x_12LevelPickups_s_info + uint32_t(t) * 0x54u;
+                const float od = rdf(rdram, info + 0x08u), orad = rdf(rdram, info + 0x0Cu), ospd = rdf(rdram, info + 0x34u), ogain = rdf(rdram, info + 0x30u);
+                const float mod = rdf(rdram, m + 0x6A38u + 4u * uint32_t(t));
+                const float d = od * (std::isfinite(mod) ? mod : 1.f);
+                std::snprintf(h, sizeof h, "GRAB WHILE HOLDING THIS OBJECT (TYPE %d%s). %.0f DAMAGE (%.0f X %.2f), RADIUS %.0f, %.0f MPH. STAMINA +%.0f ON A HIT",
+                              t, twoHanded ? ", TWO-HANDED" : "", d, od, mod, orad, ospd, ogain);
+                const size_t i = other("Othrow", "THROW OBJ", twoHanded ? 0x1074Cu : 0xEF40u, d, h, kCir);
+                list[i].radius = orad;
+                if (rigid)
+                {   // cima + bola com objeto corpo rigido: LevelPickups::throwRBPickup, angulo +0x2C e velocidade +0x30 do TwoHandedThrow; o
+                    // dano vem da colisao do proprio corpo (RigidPickup::createCollisEvents): +0x444 + |velocidade do contato| x +0x448 + o
+                    // dano do objeto (s_info +0x08), HitEvent source 0xB; quem arremessou ganha s_info +0x30 de stamina
+                    const float base = rdf(rdram, pickup + 0x444u), per = rdf(rdram, pickup + 0x448u);
+                    const float ang = rdf(rdram, m + 0x10778u), spd = rdf(rdram, m + 0x1077Cu);
+                    std::snprintf(h, sizeof h, "UP + GRAB WITH THIS OBJECT: HURLS IT AT %.0f DEGREES, %.0f MPH. ON IMPACT %.0f + %.2f PER UNIT OF SPEED + THE OBJECT'S %.0f",
+                                  ang, spd, base, per, od);
+                    const size_t r = other("Othrowrb", "HURL OBJ", 0x1074Cu, base + od, h, kCir, 8);
+                    list[r].kb = 1.f;
+                }
+            }
+            else
+                other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "GRAB WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT: PICK ONE UP TO SEE THE NUMBERS", kCir);
+        }
         {   // o especial do monstro (move_list_especiais.md): Monster +0x7980 aponta o estado; circulo + triangulo com o medidor
             const uint32_t sp = rd32(rdram, m + 0x7980u) & 0x1FFFFFFFu;
             const uint32_t so = sp > m && sp - m < 0x11190u ? sp - m : 0;
@@ -995,7 +1037,7 @@ namespace wotm_train
             {
                 const float d = rdf(rdram, m + so + 0x3Cu), rng = rdf(rdram, m + so + 0x34u), loop = rdf(rdram, m + so + 0x2Cu);
                 std::snprintf(h, sizeof h, "%s. SONIC ROAR: %.0f DAMAGE PER TARGET IN THE CONE, RANGE %.0f, %.0f FRAMES. KNOCKS DOWN", cmd, d, rng, loop);
-                const size_t i = other("Ospecial", "SONIC ROAR", so, d, h);
+                const size_t i = other("Ospecial", "SONIC ROAR", so, d, h, kSpecialBtn);
                 list[i].radius = rng; list[i].kb = 1.f;
                 break;
             }
@@ -1003,18 +1045,27 @@ namespace wotm_train
             {
                 const float dps = rdf(rdram, m + so + 0x24u), scen = rdf(rdram, m + so + 0x28u), rng = rdf(rdram, m + so + 0x20u), fr = rdf(rdram, m + so + 0x1Cu);
                 std::snprintf(h, sizeof h, "%s. FIRE BREATH: %.0f DAMAGE PER SECOND TO MONSTERS (%.0f TO BUILDINGS), RANGE %.0f, %.0f FRAMES", cmd, dps, scen, rng, fr);
-                const size_t i = other("Ospecial", "FIRE BREATH", so, dps, h);
+                const size_t i = other("Ospecial", "FIRE BREATH", so, dps, h, kSpecialBtn);
                 list[i].radius = rng;
                 break;
             }
-            case 0xF9D8u:   // BugAttack (Preytor)
-                other("Ospecial", "BUG ATTACK", so, 0.f, "GRAB + HEAVY TOGETHER WITH THE SPECIAL METER. HOMING BUG THAT LATCHES ON AND DRAINS HEALTH OVER TIME");
+            case 0xF9D8u:   // BugAttack (Preytor): estaticos do HomingBug (.sbss, chave 0xFAA do MANTIS.CHR), lidos pelos simbolos
+            {
+                using namespace wotm::sym;
+                const float dps = rdf(rdram, x_9HomingBug_s_damagePerSecond), maxD = rdf(rdram, x_9HomingBug_s_maxMonsterDamage);
+                const float fields = rdf(rdram, x_9HomingBug_s_attachFields), lock = rdf(rdram, x_9HomingBug_s_targetLockMaxRange);
+                const float latch = rdf(rdram, x_9HomingBug_s_attachRange), hp = rdf(rdram, x_9HomingBug_s_initialHealth);
+                std::snprintf(h, sizeof h, "%s. HOMING BUG: LATCHES ON AND DRAINS %.1f PER SECOND, UP TO %.0f OR %.0f FIELDS. LOCKS ON WITHIN %.0f, LATCHES AT %.0f. %.0f HP",
+                              cmd, dps, maxD, fields, lock, latch, hp);
+                const size_t i = other("Ospecial", "BUG ATTACK", so, maxD, h, kSpecialBtn);
+                list[i].radius = lock;
                 break;
+            }
             case 0xFE5Cu:   // RobotSpecial (Robo-47): missil que explode em onda
             {
                 wave(m + so + 0x58u, d0, rn, n);
                 std::snprintf(h, sizeof h, "%s. HOLD TO AIM, RELEASE TO FIRE A HOMING MISSILE: SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE AT THE CENTER. KNOCKS DOWN", cmd, rn, n, d0);
-                const size_t i = other("Ospecial", "MISSILE", so, d0, h);
+                const size_t i = other("Ospecial", "MISSILE", so, d0, h, kSpecialBtn);
                 list[i].radius = rn; list[i].kb = 1.f;
                 break;
             }
@@ -1022,7 +1073,7 @@ namespace wotm_train
             {
                 wave(m + so + 0x44u, d0, rn, n);
                 std::snprintf(h, sizeof h, "%s. THROWS THE HEAD; PRESS AGAIN TO DETONATE: SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE AT THE CENTER. KNOCKS DOWN", cmd, rn, n, d0);
-                const size_t i = other("Ospecial", "ROCK BOMB", so, d0, h);
+                const size_t i = other("Ospecial", "ROCK BOMB", so, d0, h, kSpecialBtn);
                 list[i].radius = rn; list[i].kb = 1.f;
                 break;
             }
@@ -1030,7 +1081,7 @@ namespace wotm_train
             {
                 const float dps = rdf(rdram, m + so + 0x38u), rng = rdf(rdram, m + so + 0x34u), loop = rdf(rdram, m + so + 0x2Cu);
                 std::snprintf(h, sizeof h, "%s. LIGHTNING ON THE LOCKED TARGET: %.1f DAMAGE PER SECOND PLUS SHOCK, RANGE %.0f, %.0f FRAMES, CHAINS TO OTHERS. KNOCKS DOWN AT THE END", cmd, dps, rng, loop);
-                const size_t i = other("Ospecial", "LIGHTNING", so, dps, h);
+                const size_t i = other("Ospecial", "LIGHTNING", so, dps, h, kSpecialBtn);
                 list[i].radius = rng; list[i].kb = 1.f;
                 break;
             }
@@ -1038,7 +1089,7 @@ namespace wotm_train
             {
                 const float d = rdf(rdram, m + so + 0x34u), rng = rdf(rdram, m + so + 0x30u);
                 std::snprintf(h, sizeof h, "%s. GRAPPLE HOOK: %.0f DAMAGE PLUS THE HELD OBJECT'S, RANGE %.0f, THEN PULLS THE TARGET IN", cmd, d, rng);
-                const size_t i = other("Ospecial", "HOOK", so, d, h);
+                const size_t i = other("Ospecial", "HOOK", so, d, h, kSpecialBtn);
                 list[i].radius = rng;
                 break;
             }
@@ -1046,7 +1097,7 @@ namespace wotm_train
             {
                 const float d = rdf(rdram, m + so + 0x174u), fr = rdf(rdram, m + so + 0x178u);
                 std::snprintf(h, sizeof h, "%s. FLARE, THEN SAUCERS STRAFE THE TARGET FOR %.0f FIELDS, %.1f DAMAGE PER SHOT", cmd, fr, d);
-                other("Ospecial", "AIR STRIKE", so, d, h);
+                other("Ospecial", "AIR STRIKE", so, d, h, kSpecialBtn);
                 break;
             }
             case 0x10930u:   // LavaBlast (Magmo)
@@ -1054,7 +1105,7 @@ namespace wotm_train
                 const float d = rdf(rdram, m + so + 0x19Cu);
                 const int balls = int(rd32(rdram, m + so + 0x190u));
                 std::snprintf(h, sizeof h, "%s. LAVA BLAST: %d BALLS OF %.0f DAMAGE EACH, PLUS FIRE. KNOCKS DOWN", cmd, balls, d);
-                const size_t i = other("Ospecial", "LAVA BLAST", so, d, h);
+                const size_t i = other("Ospecial", "LAVA BLAST", so, d, h, kSpecialBtn);
                 list[i].kb = 1.f;
                 break;
             }
@@ -1062,11 +1113,11 @@ namespace wotm_train
             {
                 const float d = rdf(rdram, m + 0x69ACu);
                 std::snprintf(h, sizeof h, "%s. CANNON HANDS: 36 HOMING SHOTS OF %.0f DAMAGE", cmd, d);
-                other("Ospecial", "CANNON", so, d, h);
+                other("Ospecial", "CANNON", so, d, h, kSpecialBtn);
                 break;
             }
             default:
-                if (so) other("Ospecial", "SPECIAL", so, 0.f, cmd);
+                if (so) other("Ospecial", "SPECIAL", so, 0.f, cmd, kSpecialBtn);
                 break;
             }
         }
@@ -1085,19 +1136,30 @@ namespace wotm_train
         sh.movesType = type;
     }
     // a cada 64 quadros no P1: lista nova quando o monstro muda; favoritos mudados pelo painel vao para o arquivo
-    void updateMoves(const uint8_t *rdram, uint32_t m, bool bat)
+    void updateMoves(const uint8_t *rdram, uint32_t m, bool bat, uint32_t pickup)
     {
+        static uint32_t lastPickup = 0, lastLogged = 0;   // o objeto na mao muda a linha do arremesso: lista nova na hora
         const int type = int(rd32(rdram, m + 0x14) >> 5);
-        bool rebuild = false, save = false;
+        bool rebuild = pickup != lastPickup, save = false;
+        lastPickup = pickup;
         std::vector<std::string> fav;
         {
             Shared &sh = shared();
             std::lock_guard<std::mutex> lk(sh.m);
-            rebuild = sh.movesType != type;
+            rebuild = rebuild || sh.movesType != type;
             if (sh.favDirty) { save = true; fav = sh.fav; sh.favDirty = false; }
         }
         if (save) saveFav(type, fav);
-        if (rebuild || (frameNow(rdram) % 64u) == 0) buildMoves(rdram, m, type, bat);
+        if (rebuild || (frameNow(rdram) % 64u) == 0) buildMoves(rdram, m, type, bat, pickup);
+        if (pickup && pickup != lastLogged)
+        {   // objeto novo na mao: as linhas do arremesso com os numeros dele (conferencia sem abrir o painel)
+            lastLogged = pickup;
+            Shared &sh = shared();
+            std::lock_guard<std::mutex> lk(sh.m);
+            for (const Move &mv : sh.moveList)
+                if (mv.kind == MkOther && !std::strncmp(mv.id, "Othrow", 6))
+                    std::fprintf(stderr, "[treino]   %-11s dano %.1f raio %.0f: %s\n", mv.name, mv.dmg, mv.radius, mv.hint);
+        }
     }
 
     // Na saida do Monster::update: o golpe em curso (soco ou golpe com objeto: config, % da animacao, localizadores) e, no P1, os 6
@@ -1150,7 +1212,7 @@ namespace wotm_train
         {
             for (int k = 0; k < kPunchTypes; ++k)
                 table[k] = weapon ? readSwipeCfg(rdram, m, tier, k, bat) : readPunchCfg(rdram, m, tier, k);
-            updateMoves(rdram, m, bat);
+            updateMoves(rdram, m, bat, pickup);
         }
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
@@ -1162,6 +1224,7 @@ namespace wotm_train
             sh.tableTier = int8_t(tier);
             sh.tableWeapon = weapon;
             sh.p1State = st > m && st - m < 0x11190u ? st - m : 0;
+            sh.p1StateAnim = sh.p1State ? rd32(rdram, st + 0x50u) : 0;
         }
     }
 

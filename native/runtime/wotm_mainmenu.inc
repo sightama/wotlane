@@ -1406,7 +1406,8 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
 
     // linhas da aba: nome, valor, dica e se o valor tem setas (escolha na lista)
     enum { KOpt, KDevice, KReset, KBind, KCapture };
-    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; bool locked = false; };
+    // mdir/mbtn/mtail: linha da MOVE LIST: direcao (teclado numerico) e botoes do comando saem como icones, mtail e o texto depois deles
+    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; bool locked = false; int8_t mdir = 0; uint8_t mbtn = 0; std::string mtail; };
     PRow rows[kMaxCtlRows];
     int n = 0;
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
@@ -1429,7 +1430,15 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         {
             if (n >= kMaxCtlRows) break;
             moveHints.push_back(moveHint(m));
-            rows[n++] = PRow{moveLabel(m), isFav(sh, m) ? "*" : "", moveHints.back().c_str(), false, KReset};   // "*": estrela na borda direita
+            PRow &pr = rows[n++];
+            pr = PRow{moveLabel(m), isFav(sh, m) ? "*" : "", moveHints.back().c_str(), false, KReset};   // "*": estrela na borda direita
+            if (m.kind == tr::MkOther) { pr.mdir = m.dir; pr.mbtn = m.btns; pr.mtail = m.name; }
+            else
+            {
+                pr.mdir = int8_t(tr::moveTypeDir(m.type)); pr.mbtn = tr::moveTypeBtn(m.type);
+                const std::string btn = m.type <= 2 ? "HEAVY" : "LIGHT";   // a direcao ja esta na seta
+                pr.mtail = m.kind == tr::MkCombo ? btn + " X " + std::to_string(int(m.len)) : m.kind == tr::MkWeapon ? btn + " WITH OBJECT" : btn;
+            }
         }
         if (n == 0)
         {
@@ -1475,7 +1484,36 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
             DrawRectangleRounded(Rectangle{W * 0.03f, cy - L.step * 0.42f, L.rowRight - W * 0.03f, L.step * 0.84f}, 0.5f, 8, Color{60, 50, 40, 130});
         // botao do PS2: o icone dele no estilo do PS2 (os face buttons do jogo); "L1 AND R1" com os dois; sem icone (analogico), o nome
         float labW = 0.f;
-        if (pr.bind >= 0)
+        if (pr.mbtn)
+        {   // MOVE LIST: a direcao (seta, ponto quando nao ha) e os botoes do comando nos icones do dispositivo do jogador, como na
+            // tabela in-game; depois, o resto do nome. Sem icone (atlas ausente), o nome inteiro em texto
+            const float S = 64.f, ia = on ? 1.f : 0.6f;   // menores que os da aba de controles: ate 3 botoes + seta antes do texto
+            static constexpr struct { uint16_t bit; st::Bind b; } kIc[] = {{tr::kBtnR2, st::BR2}, {tr::kBtnSquare, st::BSquare}, {tr::kBtnTriangle, st::BTriangle},
+                                                                           {tr::kBtnX, st::BCross}, {tr::kBtnCircle, st::BCircle}};
+            float bx = labX;
+            bool drew = true;
+            for (const auto &ic : kIc)
+                if ((pr.mbtn & ic.bit) && (wotm_prompts::cellFor(ic.b) < 0 || !wotm_prompts::loadAtlas())) { drew = false; break; }
+            if (drew)
+            {
+                wotm_trainview::drawDir(pr.mdir, bx + S * 0.4f, cy, S * 0.8f, Color{255, 255, 255, static_cast<unsigned char>(ia * 255.f)});
+                bx += S * 0.85f;
+                for (const auto &ic : kIc)
+                    if (pr.mbtn & ic.bit)
+                    {
+                        wotm_prompts::drawCell2d(wotm_prompts::cellFor(ic.b), bx + S * 0.5f, cy, S, ia);
+                        bx += S * 1.02f;
+                    }
+                if (!pr.mtail.empty())
+                {
+                    bx += 14.f;
+                    labelLeft(q, ram, tex0, pr.mtail.c_str(), bx, cy, rowH, on ? kLit : kDim, kPW, kPH);
+                    bx += textWidth(tex0, kPW, kPH, pr.mtail.c_str(), rowH);
+                }
+                labW = bx - labX;
+            }
+        }
+        else if (pr.bind >= 0)
         {
             const float S = 86.f, ia = on ? 1.f : 0.6f;
             if (pr.bind == st::BL1R1)

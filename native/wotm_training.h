@@ -256,8 +256,14 @@ struct Move
     float radius = 0.f, stun = 0.f, kb = 0.f;   // do ultimo golpe
     uint32_t state = 0;          // MkOther: offset do estado no Monster
     char name[16] = {};          // MkOther: nome curto (caixa in-game e painel)
-    char hint[176] = {};         // MkOther: comando e numeros (dica do painel)
+    char hint[200] = {};         // MkOther: comando e numeros (dica do painel)
+    uint8_t btns = 0;            // MkOther: botoes do comando (bits kBtn*; os icones da linha do painel)
+    int8_t dir = 5;              // MkOther: direcao do comando (teclado numerico: 5 nenhuma, 8 frente/cima, 2 tras)
+    int8_t variant = 0;          // MkOther: 0 acende pelo estado; 1 so com a animacao do estado (+0x50) != 0xBA (golpe normal do agarrao), 2 so == 0xBA (especial)
 };
+// direcao e botao de cada tipo de soco (as linhas da tabela in-game e do painel): 1 e 3 sao frente + botao, 2 e 4 tras + botao
+inline int moveTypeDir(int type) { return type == 1 || type == 3 ? 8 : type == 2 || type == 4 ? 2 : 5; }
+inline uint8_t moveTypeBtn(int type) { return type <= 2 ? uint8_t(kBtnTriangle) : uint8_t(kBtnSquare); }
 constexpr int kFavMax = 8;
 
 struct Shared
@@ -267,6 +273,7 @@ struct Shared
     std::vector<std::string> fav;   // ids favoritos do monstro movesType (ate kFavMax); a caixa in-game mostra estes
     bool favDirty = false;          // o painel mudou os favoritos: o wotm_training.inc grava o arquivo
     uint32_t p1State = 0;           // offset do estado do P1 no Monster (acende a linha MkOther da caixa)
+    uint32_t p1StateAnim = 0;       // a palavra +0x50 do estado do P1 (a animacao, nos golpes do agarrao: Move::variant)
     std::mutex m;
     PunchLive live[16];          // o soco em curso por slot (frame antigo = nao esta socando)
     PunchCfg table[kPunchTypes]; // os 6 tipos da posicao do combo em que o P1 esta (0 fora do soco)

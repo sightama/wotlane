@@ -183,10 +183,10 @@ estado em que a vítima está.
 | GrappleThrow 0xDD74 | bola (0xA) | impacto da vítima: ThrowBack 0xE3E0: chão 0xE430 + v·0xE434; parede 0xE400 + v·0xE404; monstro 0xE44C + v·0xE450; + 0xE464 se caiu > 0xE468 | solta em 0xDD94 da anim 0x37 | balística ao alvo da mira: 0xDD9C vel., clamp 0xDD98 | vítima em BeingThrown; quem ela acerta leva o mesmo dano (objeto: 0xE45C/0xE460) | alta (fórmula); média (valores por monstro: ler da RAM) |
 | GrappleThrow1 0xDDA0 | cima + bola (0xB) | idem | 0xDDC0 da anim 0x38 | reta: vel. do agarrador + frente × 0xDDC8 + cima × 0xDDC4 | idem | alta |
 | Throw 0xEF40 | toque novo de bola com objeto de uma mão (≠ tipo 7) | `s_info[t]` (0x7C9B90 + 0x54·t) +0x08 × Monster +0x6A38 + 4t; `Weapon +0x10` já calculado | solta em 0xEFD8 da anim 0x34 | esfera varrida do `Weapon` com raio `s_info +0x0C` | HitEvent tipo 3 source 0xB; ganho stamina `s_info +0x30` | alta |
-| TwoHandedThrow 0x1074C | bola (0xA) anim 0x37 / cima + bola (0xB) só corpo rígido, anim 0x38 | 0xA: igual ao Throw; 0xB: corpo rígido (não decodificado) | 0x1076C / 0x10774 | idem / `throwRBPickup` ângulo 0x10778, vel. 0x1077C mph | idem | alta (0xA) / baixa (0xB) |
+| TwoHandedThrow 0x1074C | bola (0xA) anim 0x37 / cima + bola (0xB) só corpo rígido, anim 0x38 | 0xA: igual ao Throw; 0xB: `RigidPickup` +0x444 + \|v\| × +0x448 + `s_info[t]` +0x08 (ver "Fechados depois") | 0x1076C / 0x10774 | idem / `throwRBPickup` ângulo 0x10778, vel. 0x1077C mph | idem | alta |
 | GetupAttack 0x10C40 | deitado, esperneio com botão de ataque segurado (ThrowBack +0x558) | entrada i (`+0x64`): dano em 0x10C74 + 0x24·i | 0x10C54/0x10C58 + 0x24·i da anim 0x10C60 + 0x24·i | esfera varrida do localizador 0x10C5C + 0x24·i, raio `getFistSize` | knockback 0x10C68/6C, atordoa 0x10C70 (+0x24·i); tipo 2/1, source 0x12 | alta (offsets); média (botão) |
 | CrowdControl 0xF3F0 | quadrado + X juntos (`PadEntry` 0x38) com especial disponível | onda: anéis 0xF44C + 0x1C·i, dano +4 | dispara em 0xF428 da anim 0xA4 | onda até `reach[n−1]` = 0xF67C + 4(n−1), `timeScale` 0xF6CC | gasta o especial (`drainSpecial`) | alta |
-| Counter 0x7DD8 | R2 + quadrado/triângulo (`PadEntry` 0x46), vindo do Block | nenhum dano numérico encontrado | campos 0x7E14..0x7E18 | `counterSuccess` (asm não lido) | vítima → Countered 0x11114; rouba objeto (0x7E24) | média |
+| Counter 0x7DD8 | R2 + quadrado/triângulo (`PadEntry` 0x46), vindo do Block | nenhum (confirmado no asm do `counterSuccess`) | campos 0x7E14..0x7E18 | cancela o golpe (o teste devolve 0) | vítima → Countered 0x11114; rouba objeto (0x7E24) | alta |
 | Block 0x7DA0 | R2 segurado (`PadEntry` 0x34) | reduz dano recebido: × 0x7DC0 (ou 0x7DC4 armado/travado) | ativo após 0x7DCC quadros | — | sem custo de stamina; permite Counter | alta |
 | Taunt 0xFE20 | `m_wantsTaunt` (Monster +0xF0) via `checkTaunt` | — | anim 0x5C | — | nenhum | alta (efeito) / baixa (comando) |
 | Climb 0xEFE0 | toque novo de bola junto a parede | — | — | — | não é ataque | alta |
@@ -195,6 +195,16 @@ estado em que a vítima está.
 ## Em aberto
 
 - Botão exato que marca `getupAttack` (ThrowBack +0x558) e a combinação do `checkTaunt`.
-- `counterSuccess` (VU0) e o dano, se houver, do contra-ataque; `StaminaMeter::drain` continua em asm (só o valor passado importa).
-- Dano do arremesso de corpo rígido (`throwRBPickup`, ação 0xB do TwoHandedThrow).
+- `StaminaMeter::drain` continua em asm (só o valor passado importa).
+
+## Fechados depois (2026-10-25, à noite)
+
+- **Counter não tem dano.** O asm do `counterSuccess` (0x152480) só chama `animationGetCurrentPercent`, um virtual da vítima, `mathfMulVec`
+  e dois `particleCreateFx`; nenhum `takeDamage`/`dispatchHit`. Quem o chama (`collisTestBatAttack`, `collisTestCloseRangeAttack`) encerra o
+  teste devolvendo 0 quando ele marca `landed`: o golpe é cancelado e a vítima vai para Countered.
+- **Dano do corpo rígido arremessado** (`RigidPickup::createCollisEvents`, 0x18CA38): para cada contato, `v` = normal (`_hdResult` +0x20) ·
+  `RigidBody::getPointVelocity`; `dmg` = `RigidPickup` +0x444 − v × +0x448 (v é negativo entrando na superfície); se o bit 2 de +0x4A0
+  (voando) está ligado e o `HitHistory` +0x458 aceita o alvo, soma `s_info[Pickup +0xA0].damage` (+0x08) e, quando alvo e dono (+0xE4) são
+  monstros, `creditStamina(s_info +0x30)` ao dono. Com `dmg` > 0: `HitEvent` source 0xB (tipo 2 se +0x174 == 4, senão 0) e
+  `dispatchHit(dir, dmg, id do dono pelo `_cs` +0xC, alvo)`. Em contato com o cenário (primeiro bloco) o mesmo cálculo, sem a stamina.
 - Chave do `.CHR` dos anéis do CrowdControl (o case 0xFE0/0xFE2 foi lido só até +0x38) e das stamina (+0x14/+0x18) dos `AttackState`.
