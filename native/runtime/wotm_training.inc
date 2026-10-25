@@ -743,6 +743,42 @@ namespace wotm_train
         return p;
     }
 
+    // Golpes com objeto (StateBatSwipe, Monster +0xAE90): configs em +0x20 + pos*0x480 + tipo*0xC0 (SwipeConfig de 0xC0, o mesmo
+    // comeco de layout da PunchConfig), pos +0x2D48, tipo +0x2D4C, inCollisionWindow +0x2DC0. O tipo vem do mesmo curMappedAction do
+    // soco (StateBatSwipe::transitionOK). O dano e um multiplicador do dano do objeto (LevelPickups::s_info): +0x90 quando o objeto e
+    // um bastao (Pickup +0xA0 == 8, collisTestBatAttack), +0xB0 nos outros (getDamageMod, pelo collisTestCloseRangeAttack).
+    constexpr uint32_t kSwipeCfgs = 0x20u, kSwipeTierStride = 0x480u, kSwipeTypeStride = 0xC0u, kSwipeTier = 0x2D48u, kSwipeType = 0x2D4Cu,
+                       kSwipeInWindow = 0x2DC0u, kMonsterPickup = 0x68A4u, kPickupKind = 0xA0u, kPickupKindBat = 8u;
+
+    // o Pickup que o monstro segura (m_pickup aponta para o no da lista cujo primeiro campo e o Pickup*), ou 0
+    uint32_t heldPickup(const uint8_t *rdram, uint32_t m)
+    {
+        const uint32_t node = rd32(rdram, m + kMonsterPickup) & 0x1FFFFFFFu;
+        if (!ok(node, 4u))
+            return 0;
+        const uint32_t p = rd32(rdram, node) & 0x1FFFFFFFu;
+        return ok(p, kPickupKind + 4u) ? p : 0;
+    }
+
+    PunchCfg readSwipeCfg(const uint8_t *rdram, uint32_t m, int tier, int type, bool bat)
+    {
+        PunchCfg p;
+        if (tier < 0 || tier >= kPunchTiers || type < 0 || type >= kPunchTypes)
+            return p;
+        const uint32_t c = m + kBat + kSwipeCfgs + uint32_t(tier) * kSwipeTierStride + uint32_t(type) * kSwipeTypeStride;
+        p.weapon = true;
+        p.anim = int(rd32(rdram, c));
+        p.ini = rdf(rdram, c + 0x0C);
+        p.fim = rdf(rdram, c + 0x10);
+        p.kb = rdf(rdram, c + 0x64);
+        p.stun = rdf(rdram, c + 0x6C);
+        p.radius = rdf(rdram, c + 0x74);
+        p.loc[0] = int(rd32(rdram, c + 0x7C));
+        p.dmg = rdf(rdram, c + (bat ? 0x90u : 0xB0u));
+        p.valid = std::isfinite(p.ini + p.fim + p.dmg + p.radius) && !(p.anim <= 0 && p.dmg == 0.f);
+        return p;
+    }
+
     // animationGetCurrentPercent(&m_anims[anim]) (o a0 e o endereco do _animHandle; devolve em $f0), com o contexto de volta como estava
     float animPercent(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int anim)
     {
@@ -762,23 +798,29 @@ namespace wotm_train
         return std::isfinite(pct) ? pct : -1.f;
     }
 
-    // Na saida do Monster::update: o soco em curso (config, % da animacao, localizadores) e, no P1, os 6 tipos da posicao do combo
+    // Na saida do Monster::update: o golpe em curso (soco ou golpe com objeto: config, % da animacao, localizadores) e, no P1, os 6
+    // tipos da posicao do combo (as SwipeConfig enquanto ele segura um objeto, as PunchConfig sem)
     void trackPunch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int slot)
     {
         const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
-        const bool punching = st == m + kPunch;
+        const bool swiping = st == m + kBat;
+        const bool punching = st == m + kPunch || swiping;
         if (!punching && slot != 0)
             return;
-        const int tier = punching ? int(rd32(rdram, m + kPunch + kPunchTier)) : 0;
-        const int type = punching ? int(rd32(rdram, m + kPunch + kPunchType)) : -1;
+        const uint32_t pickup = heldPickup(rdram, m);
+        const bool weapon = swiping || (pickup != 0 && st != m + kPunch);
+        const bool bat = pickup != 0 && rd32(rdram, pickup + kPickupKind) == kPickupKindBat;
+        const uint32_t base = swiping ? kBat : kPunch, offTier = swiping ? kSwipeTier : kPunchTier, offType = swiping ? kSwipeType : kPunchType;
+        const int tier = punching ? int(rd32(rdram, m + base + offTier)) : 0;
+        const int type = punching ? int(rd32(rdram, m + base + offType)) : -1;
         PunchLive live;
         if (punching)
         {
             live.frame = frameNow(rdram);
             live.tier = int8_t(tier);
             live.type = int8_t(type);
-            live.cfg = readPunchCfg(rdram, m, tier, type);
-            live.inWindow = rd32(rdram, m + kPunch + kPunchInWindow) != 0;
+            live.cfg = swiping ? readSwipeCfg(rdram, m, tier, type, bat) : readPunchCfg(rdram, m, tier, type);
+            live.inWindow = rd32(rdram, m + base + (swiping ? kSwipeInWindow : kPunchInWindow)) != 0;
             live.pct = live.cfg.valid ? animPercent(rdram, ctx, runtime, m, live.cfg.anim) : -1.f;
             for (int id : live.cfg.loc)
             {
@@ -796,14 +838,15 @@ namespace wotm_train
             if (nlog < 12 && live.cfg.valid && !live.inWindow)
             {
                 ++nlog;
-                std::fprintf(stderr, "[treino] soco slot %d pos %d tipo %d: %.0f%% da animacao, janela %.0f-%.0f, %d localizador(es), raio %.1f\n",
-                             slot, tier, type, live.pct * 100.f, live.cfg.ini * 100.f, live.cfg.fim * 100.f, live.nloc, live.cfg.radius);
+                std::fprintf(stderr, "[treino] %s slot %d pos %d tipo %d: %.0f%% da animacao, janela %.0f-%.0f, %d localizador(es), raio %.1f%s%.1f\n",
+                             swiping ? "golpe com objeto" : "soco", slot, tier, type, live.pct * 100.f, live.cfg.ini * 100.f, live.cfg.fim * 100.f,
+                             live.nloc, live.cfg.radius, swiping ? (bat ? ", bastao x" : ", objeto x") : ", dano ", live.cfg.dmg);
             }
         }
         PunchCfg table[kPunchTypes];
         if (slot == 0)
             for (int k = 0; k < kPunchTypes; ++k)
-                table[k] = readPunchCfg(rdram, m, tier, k);
+                table[k] = weapon ? readSwipeCfg(rdram, m, tier, k, bat) : readPunchCfg(rdram, m, tier, k);
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
         if (punching)
@@ -812,6 +855,7 @@ namespace wotm_train
         {
             std::copy(std::begin(table), std::end(table), std::begin(sh.table));
             sh.tableTier = int8_t(tier);
+            sh.tableWeapon = weapon;
         }
     }
 

@@ -258,6 +258,7 @@ struct View
     PunchLive live[16];
     PunchCfg table[kPunchTypes];
     int tableTier = 0;
+    bool tableWeapon = false;
 };
 
 // copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
@@ -308,6 +309,7 @@ View snapshot()
     std::copy(std::begin(sh.live), std::end(sh.live), std::begin(v.live));
     std::copy(std::begin(sh.table), std::end(sh.table), std::begin(v.table));
     v.tableTier = sh.tableTier;
+    v.tableWeapon = sh.tableWeapon;
     return v;
 }
 
@@ -629,6 +631,8 @@ void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
 // com a janela do teste (% da animacao), o dano pedido, o raio da esfera e o atordoamento (> 100 atordoa; K: derruba). Tipos pelo
 // PadFlags::curMappedAction que o StatePunch::transitionOK aceita: 5 quadrado, 3 frente + quadrado, 4 tras + quadrado, 0 triangulo,
 // 1 frente + triangulo, 2 tras + triangulo. Embaixo, o soco em curso: a janela na barra e o ponto da animacao.
+// Com um objeto na mao, a tabela e a dos golpes com objeto (StateBatSwipe, mesmos botoes): WEAPON HIT n, e a coluna do dano traz o
+// multiplicador do dano do objeto ("x1.5").
 void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
 {
     namespace st = wotm::settings;
@@ -646,7 +650,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     const int rows = kPunchTypes + 2;
     DrawRectangle(int(x) - 6, int(top) - 6, int(right - x) + 12, int(rowH * float(rows) + fh * 1.2f) + 12, Color{0, 0, 0, 130});
     char b[48];
-    std::snprintf(b, sizeof b, "PUNCHES  HIT %d", v.tableTier + 1);
+    std::snprintf(b, sizeof b, "%s  HIT %d", v.tableWeapon ? "WEAPON" : "PUNCHES", v.tableTier + 1);
     gt.put(b, x, top + isz * 0.5f, fh, Color{120, 255, 160, 255});
     const Color kHead{150, 150, 150, 255};
     const float hy = top + rowH + isz * 0.5f;
@@ -674,7 +678,10 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
         const Color t = cur ? Color{255, 240, 150, 255} : Color{235, 235, 235, 255};
         std::snprintf(b, sizeof b, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
         gt.put(b, cWin, cy, fh, t);
-        std::snprintf(b, sizeof b, "%.0f", c.dmg);
+        if (c.weapon)
+            std::snprintf(b, sizeof b, "x%.1f", c.dmg);
+        else
+            std::snprintf(b, sizeof b, "%.0f", c.dmg);
         gt.put(b, cDmg, cy, fh, t);
         std::snprintf(b, sizeof b, "%.0f", c.radius);
         gt.put(b, cRad, cy, fh, t);

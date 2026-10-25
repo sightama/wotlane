@@ -165,7 +165,11 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   triângulo, com os ícones do dispositivo) com a janela em % da animação, o dano pedido, o raio, o atordoamento (laranja acima de 100,
   "K" quando derruba); a linha do soco em curso fica destacada e a barra embaixo mostra a janela (azul, vermelha durante o teste) e o
   ponto da animação. Antes da janela abrir, a esfera do punho sai apagada em cada localizador do golpe, na cor do dono, de qualquer monstro.
-  Golpes com objeto (`BatSwipe`) e especiais não entram. Log: `[treino] soco slot ...` nas 12 primeiras leituras antes da janela.
+  **Com um objeto na mão** (`Monster::m_pickup`), a tabela passa a ser a dos golpes com objeto (`StateBatSwipe`, as `SwipeConfig` em
+  Monster +0xAE90 +0x20 + pos·0x480 + tipo·0xC0, mesmos botões e mesmo começo de layout; posição +0x2D48, tipo +0x2D4C, janela +0x2DC0):
+  WEAPON HIT n, e a coluna do dano traz o multiplicador do dano do objeto ("x1.5": +0x90 quando o objeto é um bastão, `Pickup` +0xA0 == 8,
+  `collisTestBatAttack`; +0xB0 nos outros, `getDamageMod`). Especiais não entram. Log: `[treino] soco slot ...` ou
+  `[treino] golpe com objeto slot ...` nas 12 primeiras leituras antes da janela.
   Foto: `docs/screenshots/2026-10-25/2026-10-25_modo_treino_tabela_socos.png`.
 - **Dados de quadro:** na saída do `Monster::update` de cada slot, o estado (`m_state` +0x34, nome pela tabela do `game.h`; no
   `StatePunch` e no `BatSwipe` também a cadeia e o passo do combo). Cada troca fecha um registro: golpe (estado de ataque, ou qualquer

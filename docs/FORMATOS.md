@@ -209,7 +209,7 @@ disc/RST/<MONSTRO>.CHR [--keys] [--csv]` (tabela dos socos; `--keys` lista as ch
   `PadFlags::curMappedAction` aceito pelo `StatePunch::transitionOK`: 5 → 0 triângulo, 6 → 1 frente + triângulo, 7 → 2 trás + triângulo,
   1 → 3 frente + quadrado, 2 → 4 trás + quadrado, 0 → 5 quadrado (no esquema de controle 0; a direção é um toque recente no direcional).
   O próximo tipo do combo é o apertado dentro da janela de entrada (+0x28/+0x2C da config), se o float `+0x94 + próximo*4` da config atual é > 0.
-- A chave 0xFD8 tem o mesmo layout sem os 0x10 iniciais; 0xFA4/0xFAC/0xFD7/0xFE3 são os golpes com objeto (`StateBatSwipe`), não decodificados.
+- A chave 0xFD8 tem o mesmo layout sem os 0x10 iniciais. 0xFA4/0xFAC/0xFD7/0xFE3 são os golpes com objeto (`StateBatSwipe`): a posição delas no arquivo não está decodificada, mas na RAM as `SwipeConfig` (0xC0 cada, Monster +0xAE90 +0x20 + pos·0x480 + tipo·0xC0) repetem o começo da `PunchConfig` (animação +0x00, janela +0x0C/+0x10, knockback +0x64/+0x68, atordoamento +0x6C, pausa +0x70, raio +0x74, um localizador +0x7C); o dano é um multiplicador do dano do objeto (`LevelPickups::s_info`): +0x90 com bastão (`Pickup` +0xA0 == 8), +0xB0 nos outros (`getDamageMod`). O modo treino lê de lá (`NATIVO.md`, "Tabela dos socos").
 
 ## Destrutíveis (`INTERACTIVE_STATE` + `DESTRUCTIBLE`)
 Fonte: `game/Destructible` (`Destructibles::AddDestruct`, `Destructible::takeHit`, `GenericTakeHit`, `ChangeState`, `SwitchState`; o TU ainda está em asm, lido à mão) e a travessia `hierTraverseAsm`

@@ -206,17 +206,20 @@ struct PadRec
 };
 
 // Tabela dos socos: uma PunchConfig do StatePunch (Monster +0x8470 +0x20 + pos*0x420 + tipo*0xB0; os valores do RST/<MONSTRO>.CHR,
-// chave 0xFCC, que o tools/chr_dump.py tambem le). pos = posicao no combo (StatePunch +0x2988), tipo = qual golpe (+0x298C)
+// chave 0xFCC, que o tools/chr_dump.py tambem le). pos = posicao no combo (StatePunch +0x2988), tipo = qual golpe (+0x298C).
+// Com um objeto na mao, uma SwipeConfig do StateBatSwipe (Monster +0xAE90 +0x20 + pos*0x480 + tipo*0xC0; pos +0x2D48, tipo +0x2D4C):
+// o mesmo comeco de layout, e o dano e um multiplicador do dano do objeto (weapon = true, dmg = o multiplicador)
 struct PunchCfg
 {
     bool valid = false;
+    bool weapon = false;         // SwipeConfig: dmg multiplica o dano do objeto (+0x90 com bastao, +0xB0 nos outros)
     int anim = -1;               // MonsterAnim (+0x00)
     float ini = 0.f, fim = 0.f;  // janela do teste de golpe, fracao da animacao (+0x0C, +0x10)
     float dmg = 0.f;             // dano pedido (+0x90)
     float radius = 0.f;          // raio da esfera do punho (+0x74; 0 = o padrao, StatePunch +0x2980)
     float stun = 0.f;            // atordoamento (+0x6C; > 100 atordoa)
     float kb = 0.f;              // forca de knockback (+0x64; != 0 derruba)
-    int loc[2] = {-1, -1};       // localizadores testados (+0x7C, +0x80; < 0x7D0 nenhum)
+    int loc[2] = {-1, -1};       // localizadores testados (+0x7C, +0x80; < 0x7D0 nenhum; a SwipeConfig so tem o +0x7C)
 };
 // O soco em curso de um monstro, na saida do Monster::update: config, ponto da animacao e onde estao os localizadores agora
 struct PunchLive
@@ -224,7 +227,7 @@ struct PunchLive
     uint32_t frame = 0;          // g_frame da leitura (0 = nunca)
     int8_t tier = -1, type = -1;
     float pct = -1.f;            // animationGetCurrentPercent da animacao do golpe
-    bool inWindow = false;       // StatePunch +0x2A00 (inCollisionWindow)
+    bool inWindow = false;       // StatePunch +0x2A00 (inCollisionWindow; StateBatSwipe +0x2DC0)
     uint8_t nloc = 0;
     float loc[2][3] = {};
     PunchCfg cfg;
@@ -237,6 +240,7 @@ struct Shared
     PunchLive live[16];          // o soco em curso por slot (frame antigo = nao esta socando)
     PunchCfg table[kPunchTypes]; // os 6 tipos da posicao do combo em que o P1 esta (0 fora do soco)
     int8_t tableTier = 0;
+    bool tableWeapon = false;    // a tabela e a dos golpes com objeto (o P1 segura um; StateBatSwipe)
     std::vector<Sweep> sweeps;   // acumuladas; a janela descarta as velhas
     std::vector<Cone> cones;     // idem
     std::vector<Hit> hits;       // idem
