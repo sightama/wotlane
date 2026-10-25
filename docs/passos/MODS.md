@@ -10,7 +10,8 @@ discroot/mods/
     MON/lizard0_rtx_t0003.png  retrato do Togera no HUD
     VAG/CITYAMB.VPK            música trocada
     SND/LIZARD_S.BNK           banco de sons trocado
-  _work/                       pasta de trabalho do kit (começa com '_': o jogo não lê)
+  _work/                       pastas de trabalho do kit, uma por mod (começa com '_': o jogo não lê)
+    my_mod/                    PNGs e WAVs em edição do my_mod, com o modkit.json dela
 ```
 
 Regras do carregador (`native/wotm_mods.hpp`): pasta que começa com `_` ou `.` fica desligada; dois mods com o mesmo arquivo, vence o
@@ -28,9 +29,15 @@ espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como
 
 `pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`). A janela é em inglês.
 
+Um mod é um projeto: no topo, **Mod: [lista] [New mod...]** escolhe o mod (New mod cria a pasta do mod e a de trabalho dele,
+`<mods>/_work/<mod>/`; nome só com letras, dígitos, `_` e `-`, começando por letra ou dígito). Mod que ainda não tem pasta de
+trabalho (feito antes ou à mão) entra nela ao ser escolhido: os arquivos dele são copiados e aparecem como editados, e o Build
+os leva de volta. O mod escolhido governa o Extract, a lista da direita e o Build; trocar o mod troca a área de trabalho
+inteira. Sem mod, a lista da direita fica vazia e os botões ligados a ele ficam desligados, com a dica "Pick or create a mod first".
+
 1. **Pick from the disc** (esquerda): monstros por nome e traje (Togera › Costume 1, e os bancos de som dele), chefes, fases pelo nome do
    jogo, menu e telas, bancos de som, músicas e falas. Campo de busca; Ctrl/Shift escolhem vários; duplo clique ou "Extract selected".
-2. **Edit in the work folder** (direita): um grupo por arquivo do disco ("MON/MONKEY0 (Congar, costume 1)"); depois de extrair, o
+2. **Edit <mod>'s work folder** (direita): um grupo por arquivo do disco ("MON/MONKEY0 (Congar, costume 1)"); depois de extrair, o
    grupo novo abre e os outros fecham. Miniaturas, tamanho e estado ("edited" = mudou desde a extração). Textura que o export não
    conseguiu colorir sai em cinza com `_sempaleta` no nome; o `pack` grava sem o sufixo (o jogo aceita os dois). Prévia
    da imagem (com xadrez atrás do alfa) ou a forma de onda do som. Som toca na própria janela ao clicar ("play sounds on click"
@@ -42,26 +49,44 @@ espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como
    editados dele; extrai de novo do disco e confirma antes),
    **Save to folder...** (copia os selecionados, ou o grupo inteiro, para uma pasta) e Remove (tecla Del também). Clicar numa
    seção só a seleciona: abrir e tocar valem só para arquivos escolhidos um a um; na seção, o botão direito salva ou remove tudo.
-3. **Mod** (embaixo): nome do mod (os existentes na lista), "Pack edited files into mod" e "Check mods". O log fica embaixo, com
-   divisória arrastável para cima e para baixo.
+3. **Build** (embaixo): **Build mod** (o `pack` do mod escolhido), **Check mods**, **Open mods folder** e **Open work folder**. O log
+   fica embaixo, com divisória arrastável para cima e para baixo.
 
 As pastas (disco e mods), o último mod, os editores, a altura do log e a última pasta do "Save to folder" ficam em
 `~/.wotm_modkit.json`. Por baixo são as mesmas funções do `modkit.py` abaixo.
 
+**Skins pela janela.** **New skin...** (no cabeçalho da lista, ao lado de Refresh) abre um diálogo: *Monster* (lista com os dez
+jogáveis e os monstros custom conhecidos; aceita também um id digitado, que vale como id de monstro custom: sem texturas extraídas
+e `skin.json` sem `base`), *Base costume* (0 a 3, com o retrato de cada traje; traje que não está no disco fica desligado; para um
+custom o padrão é o `costume` do `monster.json`), *Name*, *Id* (sai do nome, editável) e "CPUs may pick this skin". Cria o
+`skin.json` em `mods/<mod>/skins/<id>/` e extrai as texturas do traje base para a pasta de trabalho. Na lista, a skin é um grupo
+próprio no topo ("Skin: NAME (monster/id, base N)"); selecionado, a prévia vira o painel de propriedades (Name, Base, CPUs may pick,
+**Save** regrava o `skin.json`). Botão direito no grupo: **Duplicate skin...** (copia a skin no mod e na pasta de trabalho com o id
+novo) e **Delete skin**. Com um grupo de traje de monstro jogável selecionado (ex. "MON/SHOGUN3"), o botão **Turn into skin...** do cabeçalho (também
+no botão direito) cria a skin com esse monstro e traje e move os PNGs do grupo para a pasta dela, de modo que o traje original fica intocado no Build; se o mod já tem
+esses PNGs empacotados em `MON/`, a janela avisa e oferece apagá-los.
+
 ## O kit na linha de comando (`tools/modkit.py`)
 
 ```
-python tools/modkit.py export MON/LIZARD0                 # .TEX e .RTX do Togera em PNG
-python tools/modkit.py export SND/LIZARD_S.BNK VAG/CITYAMB.VPK
-  (edite os arquivos em mods/_work/)
-python tools/modkit.py pack my_mod                        # leva o que mudou para mods/my_mod/
-python tools/modkit.py check                              # confere nomes, tamanhos e texIds de todos os mods
-python tools/modkit.py revert MON/lizard0_t0004.png       # volta um arquivo da pasta de trabalho ao original do disco
+python tools/modkit.py export my_mod MON/LIZARD0          # .TEX e .RTX do Togera em PNG, na pasta de trabalho do my_mod
+python tools/modkit.py export my_mod SND/LIZARD_S.BNK VAG/CITYAMB.VPK
+  (edite os arquivos em mods/_work/my_mod/)
+python tools/modkit.py pack my_mod [--inject]             # leva o que mudou para mods/my_mod/
+python tools/modkit.py check [my_mod]                     # confere nomes, tamanhos e texIds dos mods e os conflitos entre eles
+python tools/modkit.py revert my_mod MON/lizard0_t0004.png   # volta um arquivo da pasta de trabalho ao original do disco
 ```
 
+- Um mod é um projeto: a pasta de trabalho é `<mods>/_work/<mod>/`, com o `modkit.json` dela, e o `pack` de um mod nunca leva o que
+  foi editado para outro. `--work <pasta>` troca a pasta de trabalho.
 - Lê o disco extraído do repo (`disc/`, ou `--disc`/`WOTM_DISC`) e grava nos mods do runtime (`.wotm_recomp_dir` + `discroot\mods`,
   ou `--mods`). Curingas valem (`MON/LIZARD*`); sem extensão pega `.TEX` e `.RTX`.
-- O `pack` só leva o que mudou desde o export (sha1 em `_work/modkit.json`). Exportar de novo não sobrescreve o que já foi editado.
+- O `pack` só leva o que mudou desde o export (sha1 em `_work/<mod>/modkit.json`). Exportar de novo não sobrescreve o que já foi editado.
+- O `check` ignora `_work`. Cada linha de arquivo, PNG, skin ou monstro marca "(overrides X)" ou "(overridden by Y)" quando outro
+  mod ligado tem a mesma chave, e a saída termina com a seção "conflicts between enabled mods": uma linha por chave repetida (PNG
+  por stem/rtx/texId, arquivo por caminho, skin por `monster/id`, monstro custom por id) com os mods e quem vence (o último em
+  ordem alfabética). `check <mod>` mostra só os conflitos que envolvem esse mod. Também avisa a skin cujo `monster` não é jogável
+  nem custom conhecido.
 
 | No disco | Na pasta de trabalho | O `pack` grava |
 |---|---|---|
@@ -142,8 +167,12 @@ Uma skin é uma pasta em `mods/<mod>/skins/<pasta>/` com um `skin.json`:
   gravar a mesma aventura mantém o nome, e a skin volta quando o mod voltar.
 - **IAs sorteadas** (resistência): com `"ai": true`, a skin entra no sorteio do traje da IA daquele monstro, junto com o traje que o
   jogo escolheria (log `[mods] IA N sorteada com a skin ...`). As IAs da aventura ficam com os trajes do jogo.
-- **Kit:** `python tools/modkit.py skin new <mod> <monstro> <id> --base N [--name "GREEN TOGERA"] [--ai]` cria o `skin.json` e exporta as
-  texturas do traje base para `mods/_work/skins/<id>/`; edite os PNGs e rode `modkit.py pack <mod>`: só os editados vão para a pasta da skin.
+- **Kit:** `python tools/modkit.py skin new <mod> <monstro> <id> [--base N] [--name "GREEN TOGERA"] [--ai]` cria o `skin.json` e exporta as
+  texturas do traje base para `mods/_work/<mod>/skins/<id>/`; edite os PNGs e rode `modkit.py pack <mod>`: só os editados vão para a
+  pasta da skin. `<monstro>` também pode ser o id de um monstro custom: se o kit acha o `monster.json` dele (em `mods/` do repo ou na
+  pasta de mods), exporta as texturas do tipo base no `costume` do custom (ou no `--base`), e o `skin.json` sai sem `base` quando o
+  `--base` não é dado. Id desconhecido cria só o `skin.json`, com aviso.
+  Na janela, o mesmo com **New skin...**, o painel de propriedades da skin e **Turn into skin...** (seção "Interface").
 - Ainda não: o elimination. Nele o jogo carrega o traje 0 de todos os monstros uma vez só e os
   jogadores trocam de monstro entre as rodadas sem recarregar: escolher traje ali pede mudar a carga, não só a tela.
 

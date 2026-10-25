@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Kit de mods do WotM (docs/passos/MODS.md). Extrai arquivos do disco para formatos editaveis numa pasta
-de trabalho e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/.
+"""Kit de mods do WotM (docs/passos/MODS.md). Extrai arquivos do disco para formatos editaveis na pasta
+de trabalho do mod e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/. Um mod = um projeto: cada mod tem a sua
+pasta de trabalho (<mods>/_work/<mod>/, com o modkit.json dela), e o pack de um mod nunca leva o que foi editado para outro.
 
-  python tools/modkit.py export MON/LIZARD0                  # .TEX e .RTX do Togera em PNG (pasta de trabalho)
-  python tools/modkit.py export SND/SHELL_S.BNK VAG/CITYAMB.VPK   # sons do banco e a musica em WAV
+  python tools/modkit.py export my_mod MON/LIZARD0           # .TEX e .RTX do Togera em PNG (pasta de trabalho do my_mod)
+  python tools/modkit.py export my_mod SND/SHELL_S.BNK VAG/CITYAMB.VPK   # sons do banco e a musica em WAV
   python tools/modkit.py pack my_mod                         # o que foi editado vai para mods/my_mod/
-  python tools/modkit.py check [my_mod]                      # confere os mods (nomes, tamanhos, texIds)
-  python tools/modkit.py revert MON/lizard0_t0004.png        # volta um arquivo da pasta de trabalho ao original do disco
+  python tools/modkit.py check [my_mod]                      # confere os mods (nomes, tamanhos, texIds) e os conflitos entre eles
+  python tools/modkit.py revert my_mod MON/lizard0_t0004.png # volta um arquivo da pasta de trabalho ao original do disco
   python tools/modkit.py skin new my_mod togera green --base 1 --name "GREEN TOGERA"   # skin nova: skin.json + PNGs do traje base
+  python tools/modkit.py skin new my_mod goliath gold        # skin de um monstro custom (id do monster.json)
   python tools/modkit_gui.py                                 # o mesmo com interface (botao "Mod kit" do launcher)
 
 Opcoes: --disc <pasta> (disco extraido; padrao WOTM_DISC ou disc/ do repo), --mods <pasta> (padrao: <runtime>/discroot/mods, o
-runtime de .wotm_recomp_dir; sem ele, <disco>/mods), --work <pasta> (padrao: <mods>/_work; pasta com '_' o jogo nao le).
+runtime de .wotm_recomp_dir; sem ele, <disco>/mods), --work <pasta> (padrao: <mods>/_work/<mod>; pasta com '_' o jogo nao le).
+Nome de mod: nao comeca com '_' nem '.', sem \\ / : * ? " < > |.
 Arquivos do export podem ter curinga (MON/LIZARD*) e sem extensao pegam .TEX e .RTX.
 
 O que cada tipo vira:
@@ -63,6 +66,88 @@ def default_mods(disc):
     except OSError:
         pass
     return os.path.join(disc, "mods")
+
+
+WORK = "_work"                  # pasta das pastas de trabalho, dentro de <mods> (com '_': o jogo nao le)
+BAD_MOD_CHARS = '\\/:*?"<>|'
+
+
+def mod_name_error(mod):
+    """Mensagem de erro (em ingles, a interface mostra) se o nome nao serve para um mod; None se serve."""
+    if not mod or not mod.strip():
+        return "the mod needs a name"
+    if mod != mod.strip():
+        return "the mod name cannot start or end with spaces"
+    if mod[0] in "_.":
+        return "the mod name cannot start with '_' or '.' (the game skips those folders)"
+    bad = sorted(set(c for c in mod if c in BAD_MOD_CHARS or ord(c) < 32))
+    if bad:
+        return "the mod name cannot have %s" % " ".join(repr(c) for c in bad)
+    return None
+
+
+NEW_MOD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def new_mod_name_error(mod):
+    """Regra estrita para um mod novo (a interface e o 'New mod...'): letras, digitos, '_' e '-', comecando por letra ou digito,
+    ate 64. Mods ja existentes com outros nomes continuam valendo (mod_name_error)."""
+    if not mod:
+        return "the mod needs a name"
+    if not NEW_MOD_RE.match(mod):
+        return "use only letters, digits, '_' and '-', starting with a letter or digit (no spaces), up to 64"
+    return None
+
+
+def adopt_mod(disc, mods, mod, work=None):
+    """Mod feito antes de ter pasta de trabalho (ou feito a mao): copia os arquivos de mods/<mod>/ para a pasta de trabalho dele,
+    marcados como editados (sha1 vazio no estado), para a janela mostra-los e o pack leva-los de volta. skin.json e monster.json
+    ficam so no mod. Devolve quantos copiou; 0 se a pasta de trabalho ja tem estado ou o mod esta vazio."""
+    if work is None:
+        work = work_dir(mods, mod)
+    src = os.path.join(mods, mod)
+    if os.path.exists(os.path.join(work, "modkit.json")) or not os.path.isdir(src):
+        return 0
+    state = load_state(work)
+    n = 0
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [x for x in dirs if not x.startswith(".")]
+        for name in sorted(files):
+            if name.lower() in ("skin.json", "monster.json", "modkit.json") or name.startswith("."):
+                continue
+            p = os.path.join(root, name)
+            rel = os.path.relpath(p, src).replace("\\", "/")
+            q = os.path.join(work, *rel.split("/"))
+            os.makedirs(os.path.dirname(q), exist_ok=True)
+            shutil.copy2(p, q)
+            ent = {"sha1": ""}   # nunca igual ao sha1 do arquivo: conta como editado
+            m = PNG_RE.match(name)
+            if m:
+                trel = find_texfile(disc, m.group(1), ".RTX" if m.group(2) else ".TEX")
+                if trel:
+                    pk = next((k for k in tex.parse(tex.read_file(disc_file(disc, trel))[0])["packets"]
+                               if k.texId == int(m.group(3)) and not (m.group(2) and k.is_palette())), None)
+                    if pk is not None:
+                        ent["size"] = [pk.w, pk.h]
+            state["files"][rel] = ent
+            n += 1
+    if n:
+        save_state(work, state)
+        print("%d file(s) of %s copied into its work folder (they count as edited)" % (n, mod))
+    return n
+
+
+def validate_mod_name(mod, what=""):
+    """O nome do mod, ou SystemExit com a mensagem (prefixada por what: "pack: ...")."""
+    err = mod_name_error(mod)
+    if err:
+        raise SystemExit("%s%s: %r" % (what + ": " if what else "", err, mod))
+    return mod
+
+
+def work_dir(mods, mod):
+    """Pasta de trabalho do mod: <mods>/_work/<mod>/ (o modkit.json do estado fica nela)."""
+    return os.path.join(mods, WORK, validate_mod_name(mod))
 
 
 def disc_file(disc, rel):
@@ -177,6 +262,8 @@ def export(disc, work, pats, dest=None):
 def source_of(disc, rel):
     """Arquivo do disco de onde saiu um arquivo da pasta de trabalho ("MON/lizard0_t0004.png" -> "MON/LIZARD0.TEX"); None se nao achou."""
     d, n = os.path.split(rel.replace("\\", "/"))
+    if d.startswith("skins/"):   # PNG de skin (skins/<id>/shogun3_t0010.png): saiu do traje base em MON/
+        d = "MON"
     pre = d + "/" if d else ""
     m = PNG_RE.match(n)
     stem, ext = os.path.splitext(n)
@@ -211,7 +298,7 @@ def revert(disc, work, rels):
         with contextlib.redirect_stdout(io.StringIO()):
             export(disc, tmp, [src])
         for rel in items:
-            fresh = os.path.join(tmp, *rel.split("/"))
+            fresh = os.path.join(tmp, *(os.path.dirname(src).split("/") + [os.path.basename(rel)]))
             dst = os.path.join(work, *rel.split("/"))
             if not os.path.exists(fresh):
                 print("%s: not produced by a new export of %s" % (rel, src))
@@ -260,6 +347,10 @@ def save_state(work, state):
 # ---------------------------------------------------------------- pack
 
 def pack(disc, work, mods, mod, inject=False):
+    """Leva o que mudou na pasta de trabalho (work None = work_dir(mods, mod)) para mods/<mod>/."""
+    validate_mod_name(mod, "pack")
+    if work is None:
+        work = work_dir(mods, mod)
     state = load_state(work)
     dst = os.path.join(mods, mod)
     changed = []
@@ -341,33 +432,255 @@ MONSTERS = {"congar": "MONKEY", "robo-47": "ROBOT", "togera": "LIZARD", "ultra-v
             "kineticlops": "ENERGY", "magmo": "LAVA", "raptros": "DRAGON", "agamo": "ROCK", "zorgulon": "ALIEN"}
 
 
+# Chefes que um monstro custom pode usar de base (kCustomBases em native/wotm_mods.hpp)
+CUSTOM_BASES = {"assboss": "ASSBOSS"}
+
+
 def norm(s):
     return "".join(c for c in s.lower() if c.isalnum())
 
 
-def skin_new(disc, work, mods, mod, monster, sid, base, name=None, ai=False):
+def game_monster(s):
+    """Nome do jogo ("togera") de um monstro jogavel pelo nome ou prefixo ("LIZARD", "Robo-47"); None se nao for."""
+    return next((g for g, p in MONSTERS.items() if norm(s) in (norm(g), norm(p))), None)
+
+
+def base_prefix(s):
+    """Prefixo em MON/ do base de um custom (jogaveis e kCustomBases); None se o port nao aceita esse base."""
+    g = game_monster(s)
+    if g:
+        return MONSTERS[g]
+    return next((p for g, p in CUSTOM_BASES.items() if norm(s) in (norm(g), norm(p))), None)
+
+
+def mod_folders(mods):
+    """{nome: pasta} dos mods ligados: os do repo (REPO/mods, que o sync_mods espelha) e os da pasta de mods, que vence no mesmo nome."""
+    out = {}
+    for root in (os.path.join(REPO, "mods"), mods):
+        if not root or not os.path.isdir(root):
+            continue
+        for n in os.listdir(root):
+            p = os.path.join(root, n)
+            if os.path.isdir(p) and n[0] not in "_.":
+                out[n] = p
+    return out
+
+
+def find_customs(mods):
+    """Monstros custom (mods/<mod>/monsters/<pasta>/monster.json) dos mods ligados, por id: {id: {"id", "name", "base", "prefix",
+    "costume", "mod", "path"}}. Mesmo id em dois mods: vence o ultimo em ordem alfabetica, como no carregador."""
+    by_id = {}
+    for mod, folder in sorted(mod_folders(mods).items()):
+        mdir = os.path.join(folder, "monsters")
+        if not os.path.isdir(mdir):
+            continue
+        for sub in sorted(os.listdir(mdir)):
+            js = os.path.join(mdir, sub, "monster.json")
+            try:
+                with open(js, encoding="utf-8") as f:
+                    v = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if not isinstance(v, dict):
+                continue
+            pre = base_prefix(v.get("base")) if isinstance(v.get("base"), str) else None
+            cid = (v.get("id") if isinstance(v.get("id"), str) else sub).lower()
+            if not pre or not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", cid):
+                continue
+            co = v.get("costume", 0)
+            co = co if isinstance(co, int) and 0 <= co <= 3 else 0
+            by_id[cid] = {"id": cid, "name": v.get("name") or cid, "base": v.get("base"), "prefix": pre, "costume": co,
+                          "mod": mod, "path": js}
+    return by_id
+
+
+def list_monsters(mods):
+    """Monstros para uma skin: jogaveis do disco [(nome_do_jogo, prefixo, None)] e customs [(id, prefixo_do_base, costume)]."""
+    out = [(g, p, None) for g, p in MONSTERS.items()]
+    out += [(c["id"], c["prefix"], c["costume"]) for c in sorted(find_customs(mods).values(), key=lambda c: c["id"])]
+    return out
+
+
+SKIN_ID_RE = re.compile(r"[a-z0-9_]{1,32}")
+CUSTOM_ID_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
+
+
+def skin_id_error(sid):
+    """Mensagem (em ingles) se o id nao serve para uma skin; None se serve."""
+    if not SKIN_ID_RE.fullmatch(sid or ""):
+        return "the id takes only lowercase letters, digits and _ (1 to 32)"
+    return None
+
+
+def skin_slug(name):
+    """Id de skin a partir do nome ("GREEN TOGERA" -> "green_togera")."""
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", (name or "").lower())).strip("_")[:32].strip("_")
+
+
+def skin_dir(mods, mod, sid):
+    return os.path.join(mods, mod, "skins", sid)
+
+
+def list_skins(mods, mod):
+    """{pasta: skin.json} das skins de mods/<mod>/skins/ (pasta = id do skin_new)."""
+    d = os.path.join(mods, mod, "skins")
+    out = {}
+    for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+        js = os.path.join(d, n, "skin.json")
+        if os.path.isfile(js):
+            out[n] = _json_obj(js)
+    return out
+
+
+def write_skin_json(mods, mod, sid, data):
+    with open(os.path.join(skin_dir(mods, mod, sid), "skin.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+
+
+def portrait_png(disc, prefix, costume, out_png):
+    """Grava em out_png o retrato do traje (a ultima textura 128x64 do MON/<PREFIXO><traje>.RTX), decodificado como o export
+    (tex.cmd_export) faz, sem escrever nada no stdout (roda numa thread da interface). False se nao deu."""
+    src = disc_file(disc, "MON/%s%d.RTX" % (prefix, costume))
+    if not src:
+        return False
+    try:
+        data, _ = tex.read_file(src)
+        t = tex.parse(data)
+        pks = [p for p in t["packets"] if not p.is_palette()]
+        pks = [p for p in pks if (p.w, p.h) == (128, 64)] or pks
+        if not pks:
+            return False
+        p = pks[-1]
+        ngp = tex.sibling(src, ".NGP")
+        pair = tex.Pairing(t, data, t, tex.ngp_texrefs(ngp) if ngp else [])
+        off = p.data_off(True)
+        if p.psm in (tex.T8, tex.T4, tex.T8H, tex.T4HL, tex.T4HH):
+            pal, _cbp, csa, _ = pair.palette(p, hi=True)
+            if pal is None:
+                return False
+            if p.psm in (tex.T4, tex.T4HL, tex.T4HH) and len(pal) < 256:
+                csa = 0
+            psm = p.psm if p.psm not in tex.HIGH else (tex.T8 if p.psm == tex.T8H else tex.T4)
+            px = tex.decode(data, off, psm, p.w, p.h, pal, csa)
+            fix = not tex.raw_hi(px)
+        elif p.psm in (tex.CT32, tex.CT24, tex.CT16, tex.CT16S):
+            px = tex.decode(data, off, p.psm, p.w, p.h, hi=True)
+            fix = p.psm == tex.CT32 and not tex.raw_hi(px)
+        else:
+            return False
+        if fix:
+            px = [(r, g, b, tex.fix_alpha(a)) for (r, g, b, a) in px]
+        tex.write_png(out_png, p.w, p.h, px)
+        return True
+    except Exception:
+        return False
+
+
+def skin_duplicate(mods, mod, work, sid, new):
+    """Copia a skin sid para new: a pasta no mod (skin.json com o id novo), a pasta de trabalho e o estado dos PNGs."""
+    err = skin_id_error(new)
+    if err:
+        raise SystemExit("duplicate skin: " + err)
+    src, dst = skin_dir(mods, mod, sid), skin_dir(mods, mod, new)
+    if os.path.exists(dst) or os.path.exists(os.path.join(work, "skins", new)):
+        raise SystemExit("duplicate skin: there is already a skin %r in the mod" % new)
+    shutil.copytree(src, dst)
+    data = _json_obj(os.path.join(dst, "skin.json"))
+    data["id"] = new
+    write_skin_json(mods, mod, new, data)
+    wsrc = os.path.join(work, "skins", sid)
+    if os.path.isdir(wsrc):
+        shutil.copytree(wsrc, os.path.join(work, "skins", new))
+    st = load_state(work)
+    pre = "skins/%s/" % sid
+    for k, v in list(st["files"].items()):
+        if k.startswith(pre):
+            st["files"]["skins/%s/%s" % (new, k[len(pre):])] = dict(v)
+    save_state(work, st)
+    print("skin %s copied to %s (%s)" % (sid, new, dst))
+
+
+def skin_delete(mods, mod, work, sid):
+    """Apaga a skin: a pasta no mod, a pasta de trabalho e as chaves dela no estado."""
+    shutil.rmtree(skin_dir(mods, mod, sid), ignore_errors=True)
+    shutil.rmtree(os.path.join(work, "skins", sid), ignore_errors=True)
+    st = load_state(work)
+    pre = "skins/%s/" % sid
+    st["files"] = {k: v for k, v in st["files"].items() if not k.startswith(pre)}
+    save_state(work, st)
+    print("skin %s deleted" % sid)
+
+
+def skin_adopt(work, d, stem, sid):
+    """Move para <work>/skins/<sid>/ os PNGs (e manifestos) de <work>/<d>/ que sairam de <STEM>.TEX/.RTX, com o sha1 do estado
+    junto (os editados continuam editados). O traje original fica intocado no proximo pack. Devolve quantos PNGs moveu."""
+    src = os.path.join(work, *d.split("/"))
+    dst = os.path.join(work, "skins", sid)
+    os.makedirs(dst, exist_ok=True)
+    st = load_state(work)
+    n = 0
+    mans = {(stem + "_manifest.json").lower(), (stem + "_rtx_manifest.json").lower()}
+    for name in sorted(os.listdir(src)) if os.path.isdir(src) else []:
+        m = PNG_RE.match(name)
+        if not (m and m.group(1).lower() == stem.lower()) and name.lower() not in mans:
+            continue
+        os.replace(os.path.join(src, name), os.path.join(dst, name))
+        ent = st["files"].pop("%s/%s" % (d, name), None)
+        if ent is not None:
+            st["files"]["skins/%s/%s" % (sid, name)] = ent
+        n += bool(m)
+    save_state(work, st)
+    print("%d texture(s) of %s/%s moved to skins/%s" % (n, d, stem.upper(), sid))
+    return n
+
+
+def skin_new(disc, work, mods, mod, monster, sid, base=None, name=None, ai=False, textures=True):
     """Cria mods/<mod>/skins/<id>/skin.json e exporta as texturas do traje base para <work>/skins/<id>/; o pack leva os PNGs
-    editados para a pasta da skin (valem so para ela)."""
-    game = next((g for g, p in MONSTERS.items() if norm(monster) in (norm(g), norm(p))), None)
-    if not game:
-        raise SystemExit("skin new: unknown monster %r (one of: %s)" % (monster, ", ".join(MONSTERS)))
-    if not re.fullmatch(r"[a-z0-9_]{1,32}", sid):
-        raise SystemExit("skin new: the id takes only lowercase letters, digits and _ (up to 32)")
-    if base not in range(4):
+    editados para a pasta da skin (valem so para ela). monster: um jogavel (nome ou prefixo) ou o id de um monstro custom; base
+    None = traje 0 (jogavel) ou o costume do monster.json (custom). work None = work_dir(mods, mod). textures=False: so o
+    skin.json (a interface move para a skin os PNGs de um traje ja extraido, skin_adopt)."""
+    validate_mod_name(mod, "skin new")
+    if work is None:
+        work = work_dir(mods, mod)
+    if skin_id_error(sid):
+        raise SystemExit("skin new: " + skin_id_error(sid))
+    if base is not None and base not in range(4):
         raise SystemExit("skin new: --base is a disc costume, 0 to 3")
-    if mod[0] in "_.":
-        raise SystemExit("skin new: the mod name cannot start with '_' or '.'")
+    game = game_monster(monster)
+    custom = None
+    if game:
+        key, prefix, costume = game, MONSTERS[game], base if base is not None else 0
+    else:
+        key = monster.strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", key):
+            raise SystemExit("skin new: unknown monster %r (one of: %s, or the id of a custom monster)" % (monster, ", ".join(MONSTERS)))
+        custom = find_customs(mods).get(key)
+        prefix = custom["prefix"] if custom else None
+        costume = base if base is not None else (custom["costume"] if custom else None)
     folder = os.path.join(mods, mod, "skins", sid)
     os.makedirs(folder, exist_ok=True)
     js = os.path.join(folder, "skin.json")
     if os.path.exists(js):
         print("%s already exists; kept" % js)
     else:
+        data = {"monster": key, "id": sid, "name": (name or "%s %s" % (sid, key)).upper()}
+        if game or base is not None:   # skin de custom sem --base: o jogo usa o costume do monster.json
+            data["base"] = costume
+        data["ai"] = ai
         with open(js, "w", encoding="utf-8") as f:
-            json.dump({"monster": game, "id": sid, "name": (name or "%s %s" % (sid, game)).upper(), "base": base, "ai": ai}, f, indent=2)
+            json.dump(data, f, indent=2)
             f.write("\n")
-        print("skin %s/%s: %s" % (game, sid, js))
-    export(disc, work, ["MON/%s%d" % (MONSTERS[game], base)], dest="skins/" + sid)
+        print("skin %s/%s: %s" % (key, sid, js))
+    if custom:
+        print("custom monster %s (%s, mod %s): base %s, costume %d" % (key, custom["name"], custom["mod"], custom["base"], costume))
+    elif not game:
+        print("WARNING: no monster.json with id %r in the mods (%s, %s); skin.json created, but no textures exported "
+              "(the base type is unknown)" % (key, mods, os.path.join(REPO, "mods")))
+        return
+    if not textures:
+        return
+    export(disc, work, ["MON/%s%d" % (prefix, costume)], dest="skins/" + sid)
     print("edit the PNGs in %s, then: modkit.py pack %s" % (os.path.join(work, "skins", sid), mod))
 
 
@@ -399,11 +712,78 @@ def inject_png(disc, dst, stem, rtx, tid, png):
 
 # ---------------------------------------------------------------- check
 
+def _json_obj(p):
+    try:
+        with open(p, encoding="utf-8") as f:
+            v = json.load(f)
+        return v if isinstance(v, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def conflict_key(mod_dir, rel):
+    """Chave do que o arquivo troca no jogo, para achar dois mods trocando a mesma coisa; None se nao tem uma propria.
+    PNG: (stem, rtx, texId); skin: monster/id (a pasta da skin vale inteira); monstro custom: id; o resto: o caminho."""
+    parts = rel.split("/")
+    n = parts[-1]
+    if len(parts) >= 3 and parts[0].lower() == "skins":
+        if len(parts) == 3 and n.lower() == "skin.json":
+            v = _json_obj(os.path.join(mod_dir, *parts))
+            mon = v.get("monster") if isinstance(v.get("monster"), str) else ""
+            mon = game_monster(mon) or mon.lower()
+            sid = (v.get("id") if isinstance(v.get("id"), str) else parts[1]).lower()
+            return ("skin", "%s/%s" % (mon, sid))
+        return None
+    if len(parts) >= 3 and parts[0].lower() == "monsters":
+        if len(parts) == 3 and n.lower() == "monster.json":
+            v = _json_obj(os.path.join(mod_dir, *parts))
+            return ("custom", (v.get("id") if isinstance(v.get("id"), str) else parts[1]).lower())
+        return None
+    m = PNG_RE.match(n)
+    if m:
+        return ("png", m.group(1).upper(), bool(m.group(2)), int(m.group(3)))
+    if n.lower() == "modkit.json":
+        return None
+    return ("file", rel.upper())
+
+
+def key_label(key):
+    if key[0] == "png":
+        return "texture %s%s t%d" % (key[1], ".RTX" if key[2] else ".TEX", key[3])
+    if key[0] == "skin":
+        return "skin %s" % key[1]
+    if key[0] == "custom":
+        return "custom monster %s" % key[1]
+    return "file %s" % key[1]
+
+
+def mod_files(mods, mod):
+    """[(rel, caminho)] dos arquivos de mods/<mod>/, em ordem."""
+    out = []
+    base = os.path.join(mods, mod)
+    for root, dirs, files in os.walk(base):
+        dirs.sort()
+        for n in sorted(files):
+            p = os.path.join(root, n)
+            out.append((os.path.relpath(p, base).replace("\\", "/"), p))
+    return out
+
+
 def check(disc, mods, only=None):
     if not os.path.isdir(mods):
         raise SystemExit("no mods folder at %s" % mods)
-    names = sorted(n for n in os.listdir(mods) if os.path.isdir(os.path.join(mods, n)))
-    seen = {}
+    names = sorted(n for n in os.listdir(mods) if os.path.isdir(os.path.join(mods, n)) and n != WORK)
+    if only and only not in names:
+        raise SystemExit("check: no mod %r in %s" % (only, mods))
+    owners = {}   # chave -> mods ligados que a trocam, em ordem alfabetica (vence o ultimo)
+    for mod in names:
+        if mod[0] in "_.":
+            continue
+        for rel, _p in mod_files(mods, mod):
+            key = conflict_key(os.path.join(mods, mod), rel)
+            if key and mod not in owners.setdefault(key, []):
+                owners[key].append(mod)
+    customs = find_customs(mods)
     problems = 0
     for mod in names:
         if only and mod != only:
@@ -412,47 +792,60 @@ def check(disc, mods, only=None):
         print("%s%s" % (mod, " (disabled: starts with '_' or '.')" if off else ""))
         if off and not only:
             continue
-        for root, _dirs, files in os.walk(os.path.join(mods, mod)):
-            for n in sorted(files):
-                p = os.path.join(root, n)
-                rel = os.path.relpath(p, os.path.join(mods, mod)).replace("\\", "/")
-                note = ""
-                m = PNG_RE.match(n)
-                if m:
-                    stem, rtx, tid = m.group(1), bool(m.group(2)), int(m.group(3))
-                    key = ("png", stem.upper(), rtx, tid)
-                    trel = find_texfile(disc, stem, ".RTX" if rtx else ".TEX")
-                    if not trel:
-                        note, problems = "ERROR: %s%s is not on the disc" % (stem.upper(), ".RTX" if rtx else ".TEX"), problems + 1
-                    else:
-                        modded = os.path.join(mods, mod, *trel.split("/"))
-                        pk = next((q for q in tex.parse(tex.read_file(modded if os.path.exists(modded) else disc_file(disc, trel))[0])["packets"]
-                                   if q.texId == tid and not (rtx and q.is_palette())), None)
-                        if pk is None:
-                            note, problems = "ERROR: %s has no texId %d" % (trel, tid), problems + 1
-                        else:
-                            w, h, _ = tex.read_image(p) if n.lower().endswith(".png") else (0, 0, None)
-                            ratio = w * pk.h == h * pk.w
-                            note = "texture of %s, %dx%d (game %dx%d)%s" % (trel, w, h, pk.w, pk.h,
-                                                                            "" if ratio else " WARNING: different aspect ratio, it will look stretched")
+        for rel, p in mod_files(mods, mod):
+            n = os.path.basename(p)
+            key = conflict_key(os.path.join(mods, mod), rel)
+            if n.lower() == "modkit.json":
+                continue
+            note = ""
+            m = PNG_RE.match(n)
+            if key and key[0] in ("skin", "custom"):
+                note = key_label(key)
+                mon = key[1].split("/")[0]
+                if key[0] == "skin" and mon not in MONSTERS and mon not in customs:
+                    note += " WARNING: %r is not a playable monster nor the id of a custom monster; the game skips it" % mon
+            elif m:
+                stem, rtx, tid = m.group(1), bool(m.group(2)), int(m.group(3))
+                trel = find_texfile(disc, stem, ".RTX" if rtx else ".TEX")
+                if not trel:
+                    note, problems = "ERROR: %s%s is not on the disc" % (stem.upper(), ".RTX" if rtx else ".TEX"), problems + 1
                 else:
-                    key = ("file", rel.upper())
-                    orig = disc_file(disc, rel)
-                    size = os.path.getsize(p)
-                    if n.lower() == "modkit.json":
-                        continue
-                    if not orig:
-                        note = "new file (not on the disc; nothing asks for it yet)"
+                    modded = os.path.join(mods, mod, *trel.split("/"))
+                    pk = next((q for q in tex.parse(tex.read_file(modded if os.path.exists(modded) else disc_file(disc, trel))[0])["packets"]
+                               if q.texId == tid and not (rtx and q.is_palette())), None)
+                    if pk is None:
+                        note, problems = "ERROR: %s has no texId %d" % (trel, tid), problems + 1
                     else:
-                        osz = os.path.getsize(orig)
-                        note = "%d bytes (disc %d)" % (size, osz)
-                        if size > osz and os.path.splitext(n)[1].upper() in (".TEX", ".RTX", ".NGP", ".BNK"):
-                            note += " WARNING: larger than the disc file; the game loads into fixed regions and may overwrite what comes next"
-                if not off:
-                    if key in seen:
-                        note += " (overrides %s)" % seen[key]
-                    seen[key] = mod
-                print("  %-40s %s" % (rel, note))
+                        w, h, _ = tex.read_image(p) if n.lower().endswith(".png") else (0, 0, None)
+                        ratio = w * pk.h == h * pk.w
+                        note = "texture of %s, %dx%d (game %dx%d)%s" % (trel, w, h, pk.w, pk.h,
+                                                                        "" if ratio else " WARNING: different aspect ratio, it will look stretched")
+            else:
+                orig = disc_file(disc, rel)
+                size = os.path.getsize(p)
+                if not orig:
+                    note = "new file (not on the disc; nothing asks for it yet)" if key else "part of the %s" % rel.split("/")[0][:-1]
+                else:
+                    osz = os.path.getsize(orig)
+                    note = "%d bytes (disc %d)" % (size, osz)
+                    if size > osz and os.path.splitext(n)[1].upper() in (".TEX", ".RTX", ".NGP", ".BNK"):
+                        note += " WARNING: larger than the disc file; the game loads into fixed regions and may overwrite what comes next"
+            if not off and key:
+                own = owners.get(key, [])
+                i = own.index(mod)
+                if i > 0:
+                    note += " (overrides %s)" % own[i - 1]
+                if i < len(own) - 1:
+                    note += " (overridden by %s)" % own[-1]
+            print("  %-40s %s" % (rel, note))
+    clash = sorted((k, own) for k, own in owners.items() if len(own) > 1 and (not only or only in own))
+    print()
+    if clash:
+        print("conflicts between enabled mods (%d; the last in alphabetical order wins, as the game loads them):" % len(clash))
+        for k, own in clash:
+            print("  %-40s %s -> %s wins" % (key_label(k), ", ".join(own), own[-1]))
+    else:
+        print("no conflicts between enabled mods")
     print("%d error(s)" % problems)
     return 1 if problems else 0
 
@@ -474,26 +867,40 @@ def main(argv):
         return 1
     disc = opts.get("disc") or default_disc()
     mods = opts.get("mods") or default_mods(disc)
-    work = opts.get("work") or os.path.join(mods, "_work")
     if not os.path.isdir(disc):
         raise SystemExit("extracted disc not found at %s (--disc or WOTM_DISC)" % disc)
+
+    def work_of(cmd, mod):
+        validate_mod_name(mod, cmd)
+        w = opts.get("work") or work_dir(mods, mod)
+        adopt_mod(disc, mods, mod, w)   # mod feito antes de ter pasta de trabalho: entra nela como editado
+        return w
+
     if args[0] == "export":
-        if len(args) < 2:
-            raise SystemExit("export: say what to extract (e.g. MON/LIZARD0)")
-        export(disc, work, args[1:])
+        if len(args) < 3:
+            raise SystemExit("export <mod> <files...>: the mod and what to extract (e.g. export my_mod MON/LIZARD0)")
+        export(disc, work_of("export", args[1]), args[2:])
     elif args[0] == "pack":
-        if len(args) != 2 or args[1][0] in "_.":
-            raise SystemExit("pack: one mod name (not starting with '_' or '.')")
-        pack(disc, work, mods, args[1], opts.get("inject", False))
+        if len(args) != 2:
+            raise SystemExit("pack <mod>: one mod name (not starting with '_' or '.')")
+        pack(disc, work_of("pack", args[1]), mods, args[1], opts.get("inject", False))
     elif args[0] == "skin":
         if len(args) != 5 or args[1] != "new":
             raise SystemExit("skin new <mod> <monster> <id> [--base N] [--name \"GREEN TOGERA\"] [--ai]")
-        skin_new(disc, work, mods, args[2], args[3], args[4], int(opts.get("base", 0)), opts.get("name"), opts.get("ai", False))
+        base = opts.get("base")
+        if base is not None:
+            try:
+                base = int(base)
+            except ValueError:
+                raise SystemExit("skin new: --base is a disc costume, 0 to 3")
+        skin_new(disc, work_of("skin new", args[2]), mods, args[2], args[3], args[4], base, opts.get("name"), opts.get("ai", False))
     elif args[0] == "revert":
-        if len(args) < 2:
-            raise SystemExit("revert: files of the work folder (e.g. MON/lizard0_t0004.png)")
-        revert(disc, work, args[1:])
+        if len(args) < 3:
+            raise SystemExit("revert <mod> <files...>: the mod and files of its work folder (e.g. revert my_mod MON/lizard0_t0004.png)")
+        revert(disc, work_of("revert", args[1]), args[2:])
     else:
+        if len(args) > 2:
+            raise SystemExit("check [mod]: all mods, or one")
         return check(disc, mods, args[1] if len(args) > 1 else None)
     return 0
 
