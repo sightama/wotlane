@@ -1430,7 +1430,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         {
             if (n >= kMaxCtlRows) break;
             moveHints.push_back(moveHint(m));
-            rows[n++] = PRow{moveLabel(m), isFav(sh, m) ? "FAVORITE" : "", moveHints.back().c_str(), false, KReset};
+            rows[n++] = PRow{moveLabel(m), isFav(sh, m) ? "*" : "", moveHints.back().c_str(), false, KReset};   // "*": estrela na borda direita
         }
         if (n == 0)
         {
@@ -1495,7 +1495,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         }
         // fio do nome ao valor: com a inclinacao do telao, guia o olho pela linha
         const float lx1 = labX + labW + 24.f, lx2 = valX - dx - 36.f;
-        if (lx2 > lx1 && !pr.value.empty())
+        if (lx2 > lx1 && !pr.value.empty() && !v.moves)
             DrawRectangleRec(Rectangle{lx1, cy - 1.f, lx2 - lx1, 2.f}, Color{110, 96, 78, static_cast<unsigned char>(on ? 140 : 70)});
         // valor longo ("LSHIFT / RSHIFT"): letras menores para caber entre as setas
         const float vw = textWidth(tex0, kPW, kPH, pr.value.c_str(), rowH), maxW = 2.f * dx - 70.f;
@@ -1505,7 +1505,23 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         const int style = wotm_prompts::currentStyle();
         const bool valIcon = phys > 0 && wotm_prompts::drawCell2d(wotm_prompts::padCell(phys, style == st::PromptKeyboard ? st::PromptPs : style), valX, cy,
                                                                   86.f, on ? 1.f : 0.6f);
-        if (!pr.value.empty() && !valIcon)
+        if (v.moves && pr.value == "*")
+        {   // favorito da MOVE LIST: estrela de cinco pontas alinhada a direita (a fonte do jogo nao tem o simbolo)
+            const float cx = L.rowRight - 40.f, R = rowH * 0.55f, r = R * 0.42f;
+            const Color sc = on ? Color{255, 220, 90, 255} : Color{230, 190, 70, 220};
+            Vector2 pts[10];
+            for (int k = 0; k < 10; ++k)
+            {
+                const float ang = -PI * 0.5f + float(k) * PI / 5.f, rad = (k & 1) ? r : R;
+                pts[k] = Vector2{cx + std::cos(ang) * rad, cy + std::sin(ang) * rad};
+            }
+            for (int k = 0; k < 10; ++k)
+            {   // nas duas ordens: o raylib descarta a face de tras
+                DrawTriangle(Vector2{cx, cy}, pts[(k + 1) % 10], pts[k], sc);
+                DrawTriangle(Vector2{cx, cy}, pts[k], pts[(k + 1) % 10], sc);
+            }
+        }
+        else if (!pr.value.empty() && !valIcon)
             label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on && !pr.locked ? kLit : kDim, kPW, kPH);
         if (on && pr.arrows)
         {
