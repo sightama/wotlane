@@ -181,7 +181,7 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   nos de objeto) no lugar dos 6 tipos da posição; a linha acende quando o golpe em curso é esse botão. Os outros golpes (`MkOther`: butt
   slam, investida, agarrão com o golpe de quadrado, o de triângulo e o arremesso, levantar atacando, crowd control, arremesso de objeto e
   o especial do monstro, achado pelo ponteiro `Monster` +0x7980) têm nome curto e a dica pronta com os números lidos da RAM nos offsets de
-  `docs/investigacoes/2026-10-25/move_list_comuns.md` e `move_list_especiais.md`; na caixa, a linha acende quando o P1 está nesse estado.
+  `80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md` e `move_list_especiais.md`; na caixa, a linha acende quando o P1 está nesse estado.
   Também COUNTER (sem dano: o `counterSuccess` só cancela o golpe e manda a vítima para Countered; a dica traz os fields da janela, +0x3C/+0x40,
   e se rouba o objeto, +0x4C) e BUG ATTACK com os estáticos do `HomingBug` (`wotm::sym::x_9HomingBug_*`: dano por segundo, teto, fields,
   alcances, vida do bug). **Arremesso de objeto** com um objeto na mão (`heldPickup`; a lista é remontada quando ele muda): THROW OBJ com o

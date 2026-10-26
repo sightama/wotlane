@@ -243,7 +243,7 @@ inline const char *const kMoveTypeNames[kPunchTypes] = {"HEAVY", "FORWARD + HEAV
 // golpes com objeto. id: "P<tipo>", "C<tipo>x<n>", "W<tipo>" (o que o arquivo de favoritos guarda)
 // MkOther: os outros golpes (butt slam, investida, agarrao, levantar, crowd control, arremesso, especiais), com nome, dica pronta e o
 // offset do estado no Monster (a linha acende quando o P1 esta nele); numeros lidos da RAM nos offsets de
-// docs/investigacoes/2026-10-25/move_list_comuns.md e move_list_especiais.md
+// 80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md e move_list_especiais.md
 enum MoveKind : uint8_t { MkPunch, MkCombo, MkWeapon, MkOther };
 struct Move
 {

@@ -908,7 +908,7 @@ namespace wotm_train
             std::snprintf(mv.id, sizeof mv.id, "W%d", k);
             list.push_back(mv);
         }
-        // os outros golpes comuns (move_list_comuns.md): numeros da RAM do proprio monstro
+        // os outros golpes comuns (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md): numeros da RAM do proprio monstro
         // btns e dir: o comando (icones da linha do painel): bits kBtn* e a direcao no teclado numerico (8 frente/cima, 2 tras, 5 nenhuma)
         auto other = [&](const char *id, const char *name, uint32_t state, float dmg, const char *hint, uint8_t btns, int dir = 5) {
             Move mv;
@@ -979,7 +979,7 @@ namespace wotm_train
             const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h, uint8_t(kSq | kX));
             list[i].radius = rn; list[i].kb = rdf(rdram, m + 0xF458u); list[i].stun = rdf(rdram, m + 0xF460u);
         }
-        {   // Counter (move_list_comuns.md, 7): de dentro do Block, R2 + quadrado/triangulo; sem dano (o counterSuccess so cancela o
+        {   // Counter (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 7): de dentro do Block, R2 + quadrado/triangulo; sem dano (o counterSuccess so cancela o
             // golpe e manda a vitima para Countered; collisTestBatAttack devolve 0); janela em fields +0x3C/+0x40, rouba o objeto +0x4C
             const float f0 = rdf(rdram, m + 0x7E14u), f1 = rdf(rdram, m + 0x7E18u);
             const bool steals = rd32(rdram, m + 0x7E24u) != 0;
@@ -988,7 +988,7 @@ namespace wotm_train
             const size_t i = other("Ocounter", "COUNTER", 0x7DD8u, 0.f, h, uint8_t(kR2 | kSq | kTri));
             list[i].ini = f0; list[i].fim = f1;
         }
-        {   // arremesso de objeto (move_list_comuns.md, 4): Throw (uma mao) ou TwoHandedThrow (duas maos, bit 1 do Pickup +0x50); o dano e o
+        {   // arremesso de objeto (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 4): Throw (uma mao) ou TwoHandedThrow (duas maos, bit 1 do Pickup +0x50); o dano e o
             // do objeto (s_info[tipo] +0x08, tipo = Pickup +0xA0) vezes o multiplicador do monstro (+0x6A38 + 4*tipo), raio +0x0C,
             // velocidade +0x34 (mph), stamina ao acertar +0x30. Sem objeto na mao, a dica so explica.
             const int t = pickup ? int(rd32(rdram, pickup + kPickupKind)) : -1;
@@ -1019,7 +1019,7 @@ namespace wotm_train
             else
                 other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "GRAB WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT: PICK ONE UP TO SEE THE NUMBERS", kCir);
         }
-        {   // o especial do monstro (move_list_especiais.md): Monster +0x7980 aponta o estado; circulo + triangulo com o medidor
+        {   // o especial do monstro (80b3802:docs/investigacoes/2026-10-25/move_list_especiais.md): Monster +0x7980 aponta o estado; circulo + triangulo com o medidor
             const uint32_t sp = rd32(rdram, m + 0x7980u) & 0x1FFFFFFFu;
             const uint32_t so = sp > m && sp - m < 0x11190u ? sp - m : 0;
             // onda de choque (ShockWaveConfig): n em +0, aneis em +0x20 (0x1C cada, dano +4), alcances em +0x250 + 4i
