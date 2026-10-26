@@ -514,8 +514,9 @@ direta: `WOTM_MODE`. As regras, por gancho:
   `WOTM_HIGHRAM=0` a eliminação (os 10 monstros carregados de uma vez) fica só com as fases do retail e a RANDOM. Log `[fases]`.
 - **RANDOM:** é a fase 17 (`dylan`, de teste da equipe, sem arquivos): o switch da foto (`Shell+0x5D0`) tem 24 filhos e o
   `levelUnlocked` a deixa aberta. O nome dela na tabela do `screenLevelSelect` (`GameLevelLongNames_006EEEF8`) vira "Random". No
-  `changeScreen(8, 99)` vira uma fase sorteada da lista, entre as destravadas e sem a quarta entrada quando o jogo a pula (modo 2 com
-  2 ou mais CPUs, modo 3 com CPU), antes do narrador e da carga.
+  `changeScreen(8, 99)` vira uma fase sorteada da lista, entre as destravadas, sem Training e Tokyo Deathmatch (fases de teste da
+  equipe) e sem a quarta entrada quando o jogo a pula (modo 2 com 2 ou mais CPUs, modo 3 com CPU), antes da carga. O narrador não
+  anuncia a fase sorteada.
 - **Fotos:** o `SHELL.TEX` não tem foto de Training, Lake Powell e Tokyo Deathmatch; os filhos do switch dessas fases (e da 17) usam a
   de outra (Midtown Park, metade de Rosdale Canyon, metade de Tsunopolis). O objeto da foto desenha com a textura própria
   (`Scene::nodeTexture`), na ordem da cena, então o grão e o filme do telão passam por cima como nas outras fases. As fotos:

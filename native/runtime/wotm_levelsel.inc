@@ -8,7 +8,8 @@
 // screenLevelSelect (GameLevelLongNames_006EEEF8) vira "Random". O resto e o codigo do jogo: cursor, trava, sons, confirmacao.
 // Com WOTM_HIGHRAM=0 a eliminacao (10 monstros carregados de uma vez) fica so com as fases do retail e a RANDOM.
 // No changeScreen(8, 99) (wotm_padsel.inc) a RANDOM vira uma fase sorteada da lista, entre as destravadas (e sem a quarta entrada
-// quando o jogo a pula: modo 2 com 2+ CPUs, modo 3 com CPU), antes do narrador e da carga.
+// quando o jogo a pula: modo 2 com 2+ CPUs, modo 3 com CPU; sem Training e Tokyo Deathmatch, fases de teste), antes da carga e sem
+// o narrador anunciar a fase (surpresa).
 //
 // Thread da janela (prepare, antes do desenho da cena): o switch da foto mostra, para as fases sem arte no SHELL.TEX, a foto de outra
 // (12 Training: Midtown Park; 13 Lake Powell: metade de Rosdale Canyon; 16 Tokyo Deathmatch e 17: metade de Tsunopolis). O objeto da
@@ -90,11 +91,12 @@ static void levelSelectHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runti
     g_origLevelSelect(rdram, ctx, runtime);
 }
 
-// changeScreen(8, 99): a RANDOM vira uma fase sorteada (o jogo ja gravou o m_levelNum). Chamado do wotm_padsel.inc, antes do narrador.
-void resolveRandom(uint8_t *rdram)
+// changeScreen(8, 99): a RANDOM vira uma fase sorteada (o jogo ja gravou o m_levelNum). Chamado do wotm_padsel.inc, antes do narrador;
+// devolve true quando sorteou (o narrador nao anuncia a fase).
+bool resolveRandom(uint8_t *rdram)
 {
     if (int(rd32(rdram, kLevelNum)) != kRandom)
-        return;
+        return false;
     const uint32_t ll = rd32(rdram, wotm::sym::g_levelList);
     const uint32_t mode = rd32(rdram, kMode), ais = rd32(rdram, kNumAIs);
     const bool skip3 = (mode == 2 && ais >= 2) || (mode == 3 && ais > 0);   // o screenLevelSelect pula a quarta entrada
@@ -105,7 +107,7 @@ void resolveRandom(uint8_t *rdram)
         for (uint32_t i = 0; i < n; ++i)
         {
             const int l = int(rd32(rdram, kListLevels + 4 * i));
-            if (l != kRandom && !(skip3 && i == 3) && unlocked(rdram, l))
+            if (l != kRandom && l != 12 && l != 16 && !(skip3 && i == 3) && unlocked(rdram, l))   // 12 Training, 16 Tokyo Deathmatch: de teste
                 pool.push_back(l);
         }
     }
@@ -115,6 +117,7 @@ void resolveRandom(uint8_t *rdram)
     const int pick = pool[std::uniform_int_distribution<size_t>(0, pool.size() - 1)(rng)];
     wr32(rdram, kLevelNum, uint32_t(pick));
     std::fprintf(stderr, "[fases] RANDOM: fase %d (de %zu)\n", pick, pool.size());
+    return true;
 }
 
 // ------------------------------------------------------------------ janela: foto propria por cima da emprestada

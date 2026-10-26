@@ -1333,7 +1333,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 }
 
 #include "wotm_narrator.inc"   // nome do monstro escolhido na selecao (antes do wotm_padsel.inc, que o chama)
-namespace wotm_levelsel { void resolveRandom(uint8_t *rdram); }   // wotm_levelsel.inc: RANDOM da selecao de fase (o padsel a chama)
+namespace wotm_levelsel { bool resolveRandom(uint8_t *rdram); }   // wotm_levelsel.inc: RANDOM da selecao de fase (o padsel a chama)
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 #include "wotm_levelsel.inc"   // selecao de fase com as fases escondidas e a RANDOM (depois do wotm_padsel.inc: plano do telao)
