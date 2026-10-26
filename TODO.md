@@ -7,7 +7,7 @@ O que falta fazer, e só isso. Relatos de bug passam na frente. Item terminado s
 |---|---|---|---|
 | 8 | Mods que adicionam monstros (as skins já existem) | — | médio/alto |
 | 10 | Chefes jogáveis | 8 | alto |
-| 11 | Multiplayer de 4: custo das vistas e testes com controles físicos | — | alto |
+| 11 | Multiplayer de 4: testes com controles físicos e HUD por cima das barras | — | baixo |
 | 13 | Campanha (adventure) com até 4 jogadores | 11 | o mais alto |
 | 14 | Adicionar os mapas não listados nas seleções de fases | ? | médio? |
 
@@ -33,9 +33,6 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 11. Multiplayer de 4
 Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" e "Menu multijogador de 2 a 4".
-- **Custo de 3 e 4 vistas:** a lógica de 4 jogadores fica a 60 em ~80% dos quadros (o resto a 30); quem segura é o EE (trabalho mediano ~14 ms, p90 ~17,5 ms). A janela cabe (~16 ms por redesenho de 4 vistas no Centro, com a arena residente). Medir com `WOTM_FIELDLOG=1` (EE), `WOTM_DRAWSTATS=1` (janela) e `PS2X_HOSTPROF=2` + `_RAW=1` (`_WIN=1` para a janela; `RUNTIME.md`), resolvendo os endereços pelo `wotm.map` do mesmo build; a luta IA x IA não se repete, então comparar alternando na mesma corrida (como o `WOTM_DRAWTHREADS_AB`). Plano e perfis em `723b110:docs/investigacoes/2026-10-23/performance_vistas.md`. Abertos:
-  - EE (amostras dentro do exe): `hierTraverseAsm` (~14%); microprogramas do VU0 traduzidos (~13%, `vu0_01a8` e `vu0_0000` à frente) e o envoltório por chamada (`executeVU0Microprogram` copia ~1 KB de estado em cada sentido, ~3%); `checkpointDue` fora de linha (~3%); a captura nativa (`Scene::walk` e o corte por esfera, ~6%, presos a falta de cache ao ler os nós); a montagem do pacote do VU1 que o `wotm.exe` descarta (`pktAddVu1ObjAsm`, ~4%, arriscado: item G3 do plano). Envoltório e `checkpointDue` são costura do PS2Recomp (regenerar o patch).
-  - Janela: partículas pelo `VtxStream` (ainda no modo imediato do rlgl, ~0,6 ms por vista); monstros com ossos (`vertexRgb`) seguem na CPU em cada vista.
 - **Teste que falta:** alguém jogar com 4 controles físicos.
 - **HUD do jogador por cima das barras dos inimigos:** a barra de um inimigo perto do topo da tela (a posição vem da cabeça) pode cobrir o HUD do jogador; o HUD do jogador deveria ser desenhado depois.
 
@@ -67,6 +64,7 @@ Cada mapa precisaria de um screenshot se eles já não tiverem. O random precisa
 ## Fora da ordem (até o dono escolher)
 - **Seleção nativa com a cara do jogo:** a seleção de monstros nativa (telas 3, 6, 7, 18, 19 e a de 3 e 4; `wotm_padsel.inc`, `NATIVO.md`, "Seleção de monstros de 1 e 2 jogadores") ficar mais parecida com a tela do retail (molduras, cores, fonte, posição dos quadros). Comparar com `WOTM_NATSEL=0` (a tela do jogo) e as fotos de `docs/screenshots/2026-10-23/`.
 - **Logos dos monstros na seleção nativa:** onde hoje sai só o nome do monstro em texto, desenhar o logo do jogo (recortado do `SHELL/SHELL.RTX`, como os retratos de `kPortraits`; achar quais texIds são os logos). Nada do jogo vai para o repo: o recorte sai do `.RTX` na hora. Monstros custom e de mod: campo `"logo"` no `monster.json` (PNG, como o `"portrait"`; `MODS.md`, "Monstros custom"), e sem ele fica o nome em texto.
+- **4 jogadores sempre a 60:** com 4 vistas, ~80% dos quadros saem a 60 e o resto a 30; quem segura é o EE (mediana ~14 ms, p90 ~17,5 ms). Candidatos, pelo perfil das amostras do EE (`PS2X_HOSTPROF=2` + `_RAW=1`, resolvido pelo `wotm.map` do mesmo build): o envoltório do VU0 traduzido (`executeVU0Microprogram` copia ~1 KB de estado em cada sentido, ~3%) e o `checkpointDue` fora de linha (~3%), ambos costura do PS2Recomp; a montagem do pacote do VU1 que o `wotm.exe` descarta (`pktAddVu1ObjAsm`, ~4%, arriscado: item G3 de `723b110:docs/investigacoes/2026-10-23/performance_vistas.md`). Na janela, as partículas ainda no modo imediato do rlgl (~0,6 ms por vista). Comparar alternando na mesma corrida (a luta IA x IA não se repete).
 
 
 
