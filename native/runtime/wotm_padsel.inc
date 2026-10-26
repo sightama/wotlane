@@ -1648,7 +1648,7 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 }
 
 // changeScreen(de, para, sentido, animacao, ...): no multijogador a volta da tela 15 (que iria a 13, as CPUs) vem para a escolha
-// de controles (5), e a volta desta (prevScreen 15) vai ao menu principal
+// de controles (5), com a camera de volta ao telao, e a volta desta (prevScreen 15) vai ao menu principal
 static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc == wotm::fn::changeScreen__Fiiiib)
@@ -1673,7 +1673,12 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
         else if (from == 6 && to == 2 && dir < 0 && wotm_training::g_menuArmed.load())
             ctx->r[7] = _mm_set_epi64x(0, 2);   // a volta da selecao a tela 2 (o prevScreen) com a camera, nao o corte seco da 6
         else if (g_multi && from == 15 && to == 13)
+        {
+            // a 15 e a 13 dividem a camera (o retail vai com a animacao 0); a camera volta ao telao na 13 -> 5 (animacao 2, como a
+            // ida 5 -> 15 do startMultiFreeForAll). Sem ela a escolha de controles e o menu principal ficavam com a camera da 15
             ctx->r[5] = _mm_set_epi64x(0, 5);
+            ctx->r[7] = _mm_set_epi64x(0, 2);
+        }
         else if (from == 5 && to == 15 && dir < 0)
             ctx->r[5] = _mm_set_epi64x(0, 1);
         else if (from == 8 && to == 99)   // selecao de fase confirmada (o jogo ja gravou o m_levelNum)
