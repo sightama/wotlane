@@ -951,6 +951,11 @@ void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0,
 // Barras sobre o inimigo: o Hud::drawHealthIcon prende o x projetado (rx, pixels do GS) entre centro - w/2 + 8 e centro + w/2 - 16 da
 // vista, a largura 4:3 dela; em widescreen a barra parava antes da borda (fotos 2026-10-19_132149). Devolve quanto o x muda com o
 // mesmo limite na largura da janela (w/2 * wide) e grava a vista corrente para os retangulos que vem a seguir.
+// Largura da janela sobre a da tela 4:3 do jogo (1 em 4:3; ~1,33 em 16:9)
+float wotmScreenWide()
+{
+    return std::max(1.f, wotm_live::capture().wide.load(std::memory_order_relaxed));
+}
 float wotmHealthIconShift(const uint8_t *rdram, float rx)
 {
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
@@ -1515,7 +1520,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // Tela dividida (Snapshot::views): cada vista e desenhada numa textura da metade do quadro, com a camera dela, como se fosse a
         // tela inteira (o que mede o framebuffer, como os flares e a proporcao da camera, vale sem mudar), e as duas sao compostas lado
         // a lado. Com 3 e 4 jogadores (vistas de 320 x 112, wotm_split4.inc) as texturas sao quadrantes: a vista v na coluna v & 1 e
-        // na linha v >> 1; com 3, o quadrante de baixo a direita fica preto. A camera livre (F5) mostra so a vista 0 em tela cheia.
+        // na linha v >> 1; com 3, a vista 2 e a linha de baixo inteira (viewDef de 640 x 112, strip). A camera livre (F5) mostra so a
+        // vista 0 em tela cheia.
         bool viewOk[4] = {true, false, false, false};
         bool split = false;
         for (int v = 1; v < 4; ++v)
@@ -1532,7 +1538,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 std::fprintf(stderr, "[split] desenho g=%u vistas %d%d%d full=%d -> %d%s\n", S.snap.g, viewOk[1], viewOk[2], viewOk[3],
                              S.snap.vctx.full(), split, quad ? " (quadrantes)" : "");
         }
+        const bool strip = quad && viewOk[2] && !viewOk[3] && S.snap.views[1]->vctx.w >= 640.f;
         const int VW = RW / 2, VH = quad ? RH / 2 : RH;
+        auto viewW = [&](int v) { return strip && v == 2 ? RW : VW; };   // largura da textura da vista v
         // MSAA (opcao ANTI-ALIASING, WOTM_MSAA): desenho num framebuffer multiamostra, resolvido na textura de sempre (wotm_msaa.hpp)
         const int msaaSamples = wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::Msaa);
         wotm::g_beforeDepthRead = wotm::msaa::readDepthIfMsaa;
@@ -1542,19 +1550,20 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 if (t.on())
                     t.release();
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
-            if (vrt.id != 0 && (vrt.texture.width != VW || vrt.texture.height != VH))
+            const int W = viewW(static_cast<int>(&vrt - S.vrts));
+            if (vrt.id != 0 && (vrt.texture.width != W || vrt.texture.height != VH))
             {
                 UnloadRenderTexture(vrt);
                 vrt = RenderTexture2D{};
             }
             if (vrt.id == 0)
             {
-                vrt = LoadRenderTexture(VW, VH);
+                vrt = LoadRenderTexture(W, VH);
                 SetTextureFilter(vrt.texture, TEXTURE_FILTER_BILINEAR);
                 SetTextureWrap(vrt.texture, TEXTURE_WRAP_CLAMP);
             }
             wotm::msaa::Target &vms = S.vms[&vrt - S.vrts];
-            const bool vmsOn = vms.ensure(VW, VH, msaaSamples);
+            const bool vmsOn = vms.ensure(W, VH, msaaSamples);
             BeginTextureMode(vmsOn ? vms.render() : vrt);
             wotm::msaa::g_current = vmsOn ? &vms : nullptr;
             ClearBackground(BLACK);
@@ -1685,14 +1694,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
             BeginBlendMode(BLEND_CUSTOM);
             for (int v = 0; v < (quad ? 4 : 2); ++v)
                 if (viewOk[v])
-                    DrawTexturePro(S.vrts[v].texture, Rectangle{0.f, 0.f, static_cast<float>(VW), -static_cast<float>(VH)},
+                    DrawTexturePro(S.vrts[v].texture, Rectangle{0.f, 0.f, static_cast<float>(viewW(v)), -static_cast<float>(VH)},
                                    Rectangle{static_cast<float>((v & 1) * (RW - VW)), static_cast<float>((v >> 1) * (RH - VH)),
-                                             static_cast<float>(VW), static_cast<float>(VH)},
+                                             static_cast<float>(viewW(v)), static_cast<float>(VH)},
                                    Vector2{0.f, 0.f}, 0.f, WHITE);
             EndBlendMode();
             const wotm::GsScreenRect gr = wotm::gsScreenRect(static_cast<float>(RW), static_cast<float>(RH));
             const float sepW = std::max(1.f, 6.f * gr.w / 640.f);
-            DrawRectangleRec(Rectangle{gr.x0 + gr.w * 0.5f - sepW, 0.f, sepW, static_cast<float>(RH)}, BLACK);
+            DrawRectangleRec(Rectangle{gr.x0 + gr.w * 0.5f - sepW, 0.f, sepW, static_cast<float>(strip ? RH / 2 : RH)}, BLACK);
             if (quad)
             {
                 const float sepH = std::max(1.f, 3.f * static_cast<float>(RH) / 224.f);
@@ -1713,6 +1722,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             EndMode3D();
         }
         S.scene.splitEdges = split;
+        S.scene.stripView = strip ? 2 : -1;
         if (!wotm_live::liveText(S.scene.text))   // texto do jogo (menu de pausa, HUD): ganchos da fonte (wotm::FontText)
             S.scene.updateText(ram);              // replay: sprites do GS lidos do fontPacket do instantaneo
         const uint64_t fontTex0 = wotm_photo::fontTex0(S.scene.text);   // a legenda escreve com ele mesmo sem texto no quadro

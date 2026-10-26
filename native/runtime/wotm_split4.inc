@@ -5,9 +5,11 @@
 // (Cameras::m_cameras), 4 HUDs, a viewPrevMat das particulas e os pontos de visada com 5, e o viewToggleSplitScreen dos cinemas
 // nao mexe com 3 ou mais vistas. O que falta, por gancho:
 //   - Vistas (saida do TheGame::gameReestablishViews nos modos 3, 6 e 7 com 3 ou 4 jogadores): quadrantes de 320 x 112 do GS, a
-//     vista v na coluna v & 1 e na linha v >> 1 (com 3 jogadores o quadrante de baixo a direita fica preto). Os viewDef do retail sao
-//     8 (cheio, metades, menus, unificada, sombra, carga); os dos quadrantes moram no fim da RAM de cima (kQuadDefs), copiados da
-//     metade do mesmo lado com altura, origem e centro da linha e a distancia de tela da tela cheia pela metade (o FOV dos 640 x 224).
+//     vista v na coluna v & 1 e na linha v >> 1. Com 3 jogadores a vista 2 e a linha de baixo inteira (640 x 112). Os viewDef do
+//     retail sao 8 (cheio, metades, menus, unificada, sombra, carga); os dos quadrantes moram no fim da RAM de cima (kQuadDefs),
+//     copiados da metade do mesmo lado com altura, origem e centro da linha e a distancia de tela da tela cheia pela metade (o FOV dos
+//     640 x 224). A faixa de 640 x 112 vem do viewDef[0] com a mesma conta da altura e distancia de tela kStripFov (entre a dos
+//     quadrantes, que daria ~118 graus na horizontal, e a da tela cheia, que cortaria o monstro pela metade na vertical).
 //     O viewSetFov refaz planos e matrizes; a tesoura do viewDb vai junto (so o GS emulado a usa). viewInfo[v].viewport fica 1 ou 2:
 //     o viewGetScreenDisplay continua dizendo "tela dividida" (as cameras usam a tabela de POV dela). m_numCameras = jogadores.
 //   - viewGrappleConfig (fim do rtMain e troca da vista unificada) devolve a vista 0 ao viewDef[viewport]; na saida o quadrante volta.
@@ -37,6 +39,7 @@
 //     (wotmPadSetPortBase, wotm_pad.inc). Decidido na instalacao: o inputInit roda no boot.
 
 void wotmPadSetPortBase(int base);   // wotm_pad.inc: o scePadRead em curso le os dispositivos da porta + base
+float wotmScreenWide();              // wotm_live.inc: largura da janela sobre a da tela 4:3 do jogo
 
 #include "wotm_training.h"   // modo treino: HUD do boneco (trainingHud)
 
@@ -105,19 +108,22 @@ namespace wotm_split4
         return g_players && n >= 3 && n <= 4 && (mode == 3 || mode == 6 || mode == 7) ? n : 0;
     }
 
-    void writeQuadDefs(uint8_t *rdram)
+    constexpr float kStripFov = 2.f / 3.f;   // distancia de tela da faixa de 640 x 112 (3 jogadores), em fracao da tela cheia
+
+    void writeQuadDefs(uint8_t *rdram, int n)
     {
-        const float fov = rdF(rdram, kViewDef) * 0.5f;   // viewDef[0]: 384 em 640 de largura; o quadrante tem 320
+        const float full = rdF(rdram, kViewDef);   // viewDef[0]: 384 em 640 de largura; o quadrante tem 320
         for (uint32_t v = 0; v < 4; ++v)
         {
-            const uint32_t src = kViewDef + kDefSize * (1u + (v & 1u)), dst = kQuadDefs + kDefSize * v;   // metade esquerda ou direita
+            const bool strip = n == 3 && v == 2;   // 3 jogadores: a vista 2 ocupa a linha de baixo inteira
+            const uint32_t src = strip ? kViewDef : kViewDef + kDefSize * (1u + (v & 1u)), dst = kQuadDefs + kDefSize * v;   // metade esquerda ou direita
             std::memcpy(rdram + dst, rdram + src, kDefSize);
             const int32_t h = FAST_READ16(src + 6) / 2, sign = (v >> 1) ? 1 : -1;
             FAST_WRITE16(dst + 6, static_cast<uint16_t>(h));                          // h
             FAST_WRITE16(dst + 0xE, static_cast<uint16_t>((v >> 1) * uint32_t(h)));   // y da tesoura
             wrF(rdram, dst + 0x14, rdF(rdram, src + 0x14) + float(sign * h / 2));    // offY: 2048 -/+ 56
             FAST_WRITE32(dst + 0x1C, static_cast<uint32_t>(static_cast<int32_t>(FAST_READ32(src + 0x1C)) + sign * h / 2));   // cy
-            wrF(rdram, dst, fov);
+            wrF(rdram, dst, strip ? full * kStripFov : full * 0.5f);
         }
     }
 
@@ -169,7 +175,7 @@ namespace wotm_split4
             g_views = 0;
             return;
         }
-        writeQuadDefs(rdram);
+        writeQuadDefs(rdram, n);
         FAST_WRITE32(kNumViews, 4u);   // o viewCreate pinta o fundo de viewNumViews viewDb
         callGuest(g_viewCreate, kViewCreate, rdram, ctx, runtime, 1u, 2u);   // vista 2: o retail a deixa na viewport 5 (unificada)
         if (n == 4)
@@ -647,6 +653,44 @@ namespace wotm_split4
         FAST_WRITE32(camera(1) + kCamCs, savedCs);
     }
 
+    // Barra do HUD na faixa de baixo dos 3 jogadores (vista 2, 640 x 112). O Hud::update poe o _cs da barra na frente da camera com um
+    // deslocamento fixo nos eixos dela (direita, frente, cima: HUD +0x100), feito para a projecao do quadrante; com o foco da faixa
+    // (kStripFov) e a largura dela a barra saia maior, no meio e cortada em cima. Aqui ela vai para a profundidade vezes fs / fq (o
+    // tamanho na tela volta ao do quadrante) e 160 pixels do GS vezes a largura widescreen para a esquerda (a faixa 4:3 da janela
+    // inteira comeca 160 * (wide - 1) pixels do GS depois da do quadrante): fica onde estaria no quadrante da esquerda.
+    // A barra e a mesma do HUD 0 (hudInitAfter), que o update dele refaz antes do hier da vista 0; g_stripBarPos evita somar duas vezes
+    // se o update nao a reposicionou.
+    float g_stripBarPos[3] = {};
+    void stripHudBar(uint8_t *rdram, uint32_t bar)
+    {
+        const uint32_t cs = FAST_READ32(camera(2) + kCamCs) & 0x1FFFFFFFu;
+        const float fq = rdF(rdram, kQuadDefs), fs = rdF(rdram, kQuadDefs + 2u * kDefSize);
+        if (!bar || cs < 0x1000u || cs + 0x50u > PS2_RAM_SIZE || !(fq > 1.f) || !(fs > 1.f))
+            return;
+        float p[3], t[3], ax[3][3];
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            p[i] = rdF(rdram, bar + 0x10u + 4u * i);
+            t[i] = rdF(rdram, cs + 0x10u + 4u * i);
+            for (uint32_t r = 0; r < 3; ++r)
+                ax[r][i] = rdF(rdram, cs + 0x20u + 0x10u * r + 4u * i);
+        }
+        if (std::memcmp(p, g_stripBarPos, sizeof p) == 0)
+            return;
+        float l[3] = {};   // direita, frente, cima
+        for (int r = 0; r < 3; ++r)
+            for (int i = 0; i < 3; ++i)
+                l[r] += ax[r][i] * (p[i] - t[i]);
+        if (!(l[1] > 0.f))
+            return;
+        const float right = l[0] - 160.f * wotmScreenWide() / fq * l[1], depth = l[1] * fs / fq;
+        for (int i = 0; i < 3; ++i)
+        {
+            g_stripBarPos[i] = t[i] + ax[0][i] * right + ax[1][i] * depth + ax[2][i] * l[2];
+            wrF(rdram, bar + 0x10u + 4u * uint32_t(i), g_stripBarPos[i]);
+        }
+    }
+
     void hudUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -693,6 +737,8 @@ namespace wotm_split4
                 FAST_WRITE8(b + 0xC, 0);
         if (own)
             FAST_WRITE8(own + 0xC, on);
+        if (me == 2u && g_views == 3 && !g_cinemaFull && !FAST_READ32(kUnified))
+            stripHudBar(rdram, own);
     }
 
     // Hud::initAfter(i) tambem nao faz nada com i >= 2 (sem _cs da barra nem animacoes; o no do HUD em +0xE4 so existe nos HUDs 0 e

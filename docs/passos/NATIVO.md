@@ -428,8 +428,13 @@ já tem `viewInfo`, `worldCtx`, `viewDb`, pontos de visada e a `viewPrevMat` das
 `m_monsters[0..3]` para jogadores e 4 `TokenManager`; o `inputInit` abre 2 portas × 4 slots (controle = porta + 2 × slot); o
 `SoundManager::m_events` é `[4][4]` por `m_index`. O `viewToggleSplitScreen` dos cinemas não mexe com 3 ou mais vistas. Os ganchos:
 - **Vistas:** na saída do `gameReestablishViews` (modos 3, 6, 7) as vistas 0 a 3 viram quadrantes de 320 × 112 (coluna `v & 1`, linha
-  `v >> 1`; com 3 o de baixo à direita fica preto). Os 4 `ViewDef` moram no fim da RAM de cima (o retail só tem 8, nenhum em
-  quadrante), com a distância de tela da tela cheia pela metade (mesmo FOV dos 640 × 224); `viewSetFov` refaz planos e matrizes.
+  `v >> 1`). Com 3 jogadores a vista 2 é a linha de baixo inteira, 640 × 112, com distância de tela de 2/3 da tela cheia
+  (`kStripFov`: a dos quadrantes daria ~118 graus na horizontal; a da tela cheia cortaria o monstro na vertical); o desenho nativo
+  dá a ela uma textura da largura da janela (`stripView` na `Scene`, para as barras sobre os inimigos), e a barra do HUD dela, presa
+  à câmera para a projeção do quadrante, vai para a profundidade × foco da faixa / foco do quadrante e 160 × wide pixels do GS para a
+  esquerda (`stripHudBar`): fica onde estaria no quadrante da esquerda. Os 4 `ViewDef` moram no fim da RAM de cima (o retail só tem
+  8, nenhum em quadrante), com a distância de tela da tela cheia pela metade (mesmo FOV dos 640 × 224); `viewSetFov` refaz planos e
+  matrizes.
   `viewInfo[v].viewport` fica 1/2 (as câmeras usam a tabela de POV da tela dividida). `m_numCameras` = jogadores. O
   `viewGrappleConfig` devolve a vista 0 ao `viewDef` da metade: o gancho reaplica o quadrante.
 - **Sem vista unificada:** a câmera 2 (a unificada do retail) é a do jogador 3. O `SetOkToUnify` de cada quadro zera o `m_camUnify`

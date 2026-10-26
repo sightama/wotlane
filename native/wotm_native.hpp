@@ -3451,6 +3451,7 @@ public:
     // widescreen o fade escurece a janela toda); um menor fica na faixa 4:3 central, como o texto. Na tela dividida (splitEdges) cada
     // borda vale por si: o fade e as faixas de cinema de uma vista (0..320 ou 320..640) vao ate a borda da janela do lado dela.
     bool splitEdges = false;
+    int stripView = -1;   // tela dividida de 3 jogadores: a vista que ocupa a linha de baixo inteira (2), -1 = nenhuma
     void drawScreenRects(float rw, float rh, bool underText = false) {
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sy = rh / 224.f;
@@ -3463,7 +3464,11 @@ public:
                 float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
                 const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
                 float shift = 0.f;
-                if (splitEdges) {
+                if (splitEdges && r.barView == stripView) {
+                    // faixa de baixo dos 3 jogadores: a vista tem a largura da tela, como fora da tela dividida
+                    x0 = std::max(x0, 0.f);
+                    x1 = std::min(x1, rw);
+                } else if (splitEdges) {
                     // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
                     // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
                     // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo

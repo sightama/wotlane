@@ -579,7 +579,7 @@ public:
         }
         if (!ram.ok(pm - 16, 80)) return false;
         bool any = false;
-        if (!curView().full()) {
+        if (curView().view > 0 || !curView().full()) {   // a faixa de baixo dos 3 jogadores (vista 2) tem 640 de largura
             const uint32_t vm = fxaddr::viewPrevMat + 64u * uint32_t(std::clamp(curView().view, 0, 3));
             for (int k = 0; k < 16; ++k) { P[k] = ram.f32(vm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
         }
