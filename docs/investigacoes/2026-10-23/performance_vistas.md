@@ -11,7 +11,7 @@
   mesmo redesenho com tolerância de 1,5 unidade (`Scene::shadowNear`). A chave exata quase nunca batia: o `hier` de cada vista
   reavalia a pose e os membros andam décimas de unidade entre as vistas. Para a lista dos que projetam ser a mesma em todas as vistas,
   a coleta da sombra passou a escolher o LOD como o `hierShadow` (distância fixa do bloqueador em `psBlkLst + 0x28`) e a não cortar
-  pela vista (o jogo percorre pela câmera da luz); antes era pelo olho de cada vista, o desvio que o `lod_fixo.md` registrava, e um
+  pela vista (o jogo percorre pela câmera da luz); antes era pelo olho de cada vista, o desvio que o `74221f4:docs/investigacoes/2026-10-23/lod_fixo.md` registrava, e um
   monstro meio fora da vista perdia parte da sombra. Silhuetas por `forEachTriPos` (sem cor nem normal, paleta do instantâneo, que
   agora inclui os que projetam). Sombras: ~2,2 → ~0,5 ms por vista. `WOTM_SHADOWNOCACHE` e `WOTM_SHADOWEYELOD` voltam ao de antes.
 - **C (parte):** `VtxStream` (`wotm_fx.hpp`) no `drawList`: os mesmos atributos num buffer próprio, desenhados como o
@@ -175,7 +175,7 @@ Cada item: onde mexe, ganho esperado (no PC do dono, 4 vistas e 4 monstros, base
 - **Ganho [H]:** a parte "sombra" do M; estimativa 2 a 4 ms em 4 vistas e 4 monstros no PC do dono (a medida do passo 0 diz quanto
   do 0,55 ms por monstro é sombra). Em 1 vista também ganha um pouco (o `vertexRgb` e as leituras da RAM somem).
 - **Risco:** baixo. A silhueta das vistas 1 a 3 fica idêntica à de hoje (mesma entrada); o desvio de LOD da sombra (pelo olho da
-  vista, não pela `shadowLodRangeSq` do jogo; `lod_fixo.md`) continua igual. Trocar a RAM viva pela cópia muda a sombra só quando
+  vista, não pela `shadowLodRangeSq` do jogo; `74221f4:docs/investigacoes/2026-10-23/lod_fixo.md`) continua igual. Trocar a RAM viva pela cópia muda a sombra só quando
   hoje ela sai errada (pose de outro quadro).
 - **Como medir:** tempo de `drawShadows` por vista (passo 0); corpus `-Check -Baseline` sem piora; olho nas sombras dos 4 monstros
   em movimento.
@@ -244,7 +244,7 @@ Cada item: onde mexe, ganho esperado (no PC do dono, 4 vistas e 4 monstros, base
 - **O que sobra:** (1) os receptores de sombra já vêm da lista cortada, mas o teste esfera x cilindro roda para todos os itens da vista
   por bloqueador: um corte prévio pela caixa de cada bloqueador é barato (entra junto com A). (2) Uma **distância máxima de desenho
   por vista** ou um corte de objetos pequenos nos quadrantes muda o que aparece: só como opção do painel (aba VIDEO cheia, ver
-  `lod_fixo.md`), nunca como padrão. Ganho proporcional ao que some; baixa prioridade.
+  `74221f4:docs/investigacoes/2026-10-23/lod_fixo.md`), nunca como padrão. Ganho proporcional ao que some; baixa prioridade.
 
 ### G. Lado do EE
 - **G1. Build com LTCG (só medir, 1 h + ~30 min de link):** `build_runtime.bat build` liga `/GL` + `/LTCG` (`RUNTIME.md`); o
