@@ -427,7 +427,7 @@ index 92ef0d5..8d7346f 100644
          target_compile_options(${TargetName} PRIVATE
              $<$<CONFIG:Release>:
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
-index 4b9242c..e49a1b4 100644
+index 4b9242c..2efd4d5 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
 +++ b/ps2xRuntime/include/ps2_runtime.h
 @@ -375,7 +375,7 @@ public:
@@ -439,7 +439,32 @@ index 4b9242c..e49a1b4 100644
      uint32_t guestMalloc(uint32_t size, uint32_t alignment = 16u);
      uint32_t guestCalloc(uint32_t count, uint32_t size, uint32_t alignment = 16u);
      uint32_t guestRealloc(uint32_t guestAddr, uint32_t newSize, uint32_t alignment = 16u);
-@@ -438,14 +438,18 @@ public:
+@@ -386,6 +386,12 @@ public:
+     uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment = 16u);
+ 
+     void drainCompletedDmacHandlers(uint8_t *rdram);
++    // o mesmo, com a checagem em linha (escrita de 32 bits no scratchpad pelo atalho dos macros)
++    void drainCompletedDmacHandlersIfPending(uint8_t *rdram)
++    {
++        if (m_memory.hasCompletedDmacCauses())
++            drainCompletedDmacHandlers(rdram);
++    }
+ 
+     void requestStop();
+     bool isStopRequested() const;
+@@ -426,7 +432,11 @@ public:
+                                  uint32_t tadr,
+                                  uint32_t chcr);
+ 
++#if defined(_MSC_VER)
++    static __forceinline bool isSpecialAddress(uint32_t addr)
++#else
+     static inline bool isSpecialAddress(uint32_t addr)
++#endif
+     {
+         return Ps2IsSpecialAddress(addr);
+     }
+@@ -438,14 +448,18 @@ public:
      inline PS2Memory &memory() { return m_memory; }
      inline const PS2Memory &memory() const { return m_memory; }
  
@@ -458,7 +483,7 @@ index 4b9242c..e49a1b4 100644
  
      inline PS2AudioBackend &audioBackend() { return m_audioBackend; }
      inline const PS2AudioBackend &audioBackend() const { return m_audioBackend; }
-@@ -489,16 +493,22 @@ private:
+@@ -489,16 +503,22 @@ private:
  
  private:
      PS2Memory m_memory;
@@ -482,7 +507,7 @@ index 4b9242c..e49a1b4 100644
      R5900Context m_cpuContext;
      std::unique_ptr<EeScheduler> m_eeScheduler;
      mutable std::mutex m_eeKernelStateMutex;
-@@ -510,11 +520,11 @@ private:
+@@ -510,11 +530,11 @@ private:
      std::vector<GuestHeapBlock> m_guestHeapBlocks;
      uint32_t m_guestHeapBase = 0x00100000u;
      uint32_t m_guestHeapEnd = 0x00100000u;
@@ -496,7 +521,7 @@ index 4b9242c..e49a1b4 100644
  
      std::atomic<uint32_t> m_missingFunctionPolicy{static_cast<uint32_t>(MissingFunctionPolicy::ContinueToTarget)};
      std::atomic<bool> m_missingFunctionReported{false};
-@@ -551,4 +561,18 @@ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
+@@ -551,4 +571,18 @@ extern const uint32_t g_ps2RecompiledFunctionTableEnd;
  extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
  extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
  
@@ -516,17 +541,376 @@ index 4b9242c..e49a1b4 100644
 +
  #endif // PS2_RUNTIME_H
 diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
-index 0f19c9f..b6f38e6 100644
+index 0f19c9f..5e030f1 100644
 --- a/ps2xRuntime/include/ps2_runtime_macros.h
 +++ b/ps2xRuntime/include/ps2_runtime_macros.h
-@@ -604,11 +604,68 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
+@@ -14,7 +14,17 @@
+ 
+ #include "ps2_runtime.h"
+ 
+-static inline int32_t Ps2ExtractEpi32(__m128i v, int index)
++// Os ajudantes de cada instrucao (registrador, memoria, FPU) tem de virar codigo em linha: nas funcoes traduzidas, que sao enormes,
++// o MSVC desiste do inline comum e cada leitura de registrador ou da RAM virava uma chamada.
++#if defined(_MSC_VER)
++#define PS2_FORCEINLINE __forceinline
++#define PS2_NOINLINE __declspec(noinline)
++#else
++#define PS2_FORCEINLINE inline __attribute__((always_inline))
++#define PS2_NOINLINE __attribute__((noinline))
++#endif
++
++static PS2_FORCEINLINE int32_t Ps2ExtractEpi32(__m128i v, int index)
+ {
+     switch (index & 3)
+     {
+@@ -29,7 +39,7 @@ static inline int32_t Ps2ExtractEpi32(__m128i v, int index)
+     }
+ }
+ 
+-static inline int64_t Ps2ExtractEpi64(__m128i v, int index)
++static PS2_FORCEINLINE int64_t Ps2ExtractEpi64(__m128i v, int index)
+ {
+     if ((index & 1) == 0)
+     {
+@@ -152,165 +162,79 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
+ // Fast path: Direct RDRAM access (masked).
+ // Slow path: Full runtime->Load/Store
+ 
+-static inline bool Ps2FastRangeIsContiguous(uint32_t offset, uint32_t bytes)
++static PS2_FORCEINLINE bool Ps2FastRangeIsContiguous(uint32_t offset, uint32_t bytes)
+ {
+     return offset <= (PS2_RAM_SIZE - bytes);
+ }
+ 
+-static inline uint8_t Ps2FastRead8(const uint8_t *rdram, uint32_t addr)
++// Caminho raro (o acesso passa do fim da RAM e da a volta): fora de linha, para o rapido caber inteiro em cada uso.
++template <typename T>
++static PS2_NOINLINE T Ps2FastReadWrapped(const uint8_t *rdram, uint32_t offset)
+ {
+-    return rdram[addr & PS2_RAM_MASK];
+-}
+-
+-static inline uint16_t Ps2FastRead16(const uint8_t *rdram, uint32_t addr)
+-{
+-    const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint16_t)))
++    alignas(16) uint8_t wrapped[sizeof(T)];
++    for (uint32_t i = 0; i < sizeof(T); ++i)
+     {
+-        uint8_t wrapped[sizeof(uint16_t)];
+-        for (uint32_t i = 0; i < sizeof(uint16_t); ++i)
+-        {
+-            wrapped[i] = rdram[(offset + i) & PS2_RAM_MASK];
+-        }
+-        uint16_t value;
+-        std::memcpy(&value, wrapped, sizeof(value));
+-        return value;
++        wrapped[i] = rdram[(offset + i) & PS2_RAM_MASK];
+     }
+-
+-    uint16_t value;
+-    std::memcpy(&value, rdram + offset, sizeof(value));
++    T value;
++    std::memcpy(&value, wrapped, sizeof(value));
+     return value;
+ }
+ 
+-static inline uint32_t Ps2FastRead32(const uint8_t *rdram, uint32_t addr)
++template <typename T>
++static PS2_NOINLINE void Ps2FastWriteWrapped(uint8_t *rdram, uint32_t offset, T value)
+ {
+-    const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint32_t)))
++    alignas(16) uint8_t wrapped[sizeof(T)];
++    std::memcpy(wrapped, &value, sizeof(value));
++    for (uint32_t i = 0; i < sizeof(T); ++i)
+     {
+-        uint8_t wrapped[sizeof(uint32_t)];
+-        for (uint32_t i = 0; i < sizeof(uint32_t); ++i)
+-        {
+-            wrapped[i] = rdram[(offset + i) & PS2_RAM_MASK];
+-        }
+-        uint32_t value;
+-        std::memcpy(&value, wrapped, sizeof(value));
+-        return value;
++        rdram[(offset + i) & PS2_RAM_MASK] = wrapped[i];
+     }
+-
+-    uint32_t value;
+-    std::memcpy(&value, rdram + offset, sizeof(value));
+-    return value;
+ }
+ 
+-static inline uint64_t Ps2FastRead64(const uint8_t *rdram, uint32_t addr)
++template <typename T>
++static PS2_FORCEINLINE T Ps2FastReadT(const uint8_t *rdram, uint32_t addr)
+ {
+     const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint64_t)))
+-    {
+-        uint8_t wrapped[sizeof(uint64_t)];
+-        for (uint32_t i = 0; i < sizeof(uint64_t); ++i)
+-        {
+-            wrapped[i] = rdram[(offset + i) & PS2_RAM_MASK];
+-        }
+-        uint64_t value;
+-        std::memcpy(&value, wrapped, sizeof(value));
+-        return value;
+-    }
+-
+-    uint64_t value;
++    if (!Ps2FastRangeIsContiguous(offset, sizeof(T)))
++        return Ps2FastReadWrapped<T>(rdram, offset);
++    T value;
+     std::memcpy(&value, rdram + offset, sizeof(value));
+     return value;
+ }
+ 
+-static inline __m128i Ps2FastRead128(const uint8_t *rdram, uint32_t addr)
++template <typename T>
++static PS2_FORCEINLINE void Ps2FastWriteT(uint8_t *rdram, uint32_t addr, T value)
+ {
+     const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(__m128i)))
++    if (!Ps2FastRangeIsContiguous(offset, sizeof(T)))
+     {
+-        alignas(16) uint8_t wrapped[sizeof(__m128i)];
+-        for (uint32_t i = 0; i < sizeof(__m128i); ++i)
+-        {
+-            wrapped[i] = rdram[(offset + i) & PS2_RAM_MASK];
+-        }
+-        __m128i value;
+-        std::memcpy(&value, wrapped, sizeof(value));
+-        return value;
+-    }
+-
+-    __m128i value;
+-    std::memcpy(&value, rdram + offset, sizeof(value));
+-    return value;
+-}
+-
+-static inline void Ps2FastWrite8(uint8_t *rdram, uint32_t addr, uint8_t value)
+-{
+-    rdram[addr & PS2_RAM_MASK] = value;
+-}
+-
+-static inline void Ps2FastWrite16(uint8_t *rdram, uint32_t addr, uint16_t value)
+-{
+-    const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint16_t)))
+-    {
+-        uint8_t wrapped[sizeof(uint16_t)];
+-        std::memcpy(wrapped, &value, sizeof(value));
+-        for (uint32_t i = 0; i < sizeof(uint16_t); ++i)
+-        {
+-            rdram[(offset + i) & PS2_RAM_MASK] = wrapped[i];
+-        }
++        Ps2FastWriteWrapped<T>(rdram, offset, value);
+         return;
+     }
+     std::memcpy(rdram + offset, &value, sizeof(value));
+ }
+ 
+-static inline void Ps2FastWrite32(uint8_t *rdram, uint32_t addr, uint32_t value)
++static PS2_FORCEINLINE uint8_t Ps2FastRead8(const uint8_t *rdram, uint32_t addr)
+ {
+-    const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint32_t)))
+-    {
+-        uint8_t wrapped[sizeof(uint32_t)];
+-        std::memcpy(wrapped, &value, sizeof(value));
+-        for (uint32_t i = 0; i < sizeof(uint32_t); ++i)
+-        {
+-            rdram[(offset + i) & PS2_RAM_MASK] = wrapped[i];
+-        }
+-        return;
+-    }
+-    std::memcpy(rdram + offset, &value, sizeof(value));
++    return rdram[addr & PS2_RAM_MASK];
+ }
+ 
+-static inline void Ps2FastWrite64(uint8_t *rdram, uint32_t addr, uint64_t value)
+-{
+-    const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint64_t)))
+-    {
+-        uint8_t wrapped[sizeof(uint64_t)];
+-        std::memcpy(wrapped, &value, sizeof(value));
+-        for (uint32_t i = 0; i < sizeof(uint64_t); ++i)
+-        {
+-            rdram[(offset + i) & PS2_RAM_MASK] = wrapped[i];
+-        }
+-        return;
+-    }
+-    std::memcpy(rdram + offset, &value, sizeof(value));
+-}
++static PS2_FORCEINLINE uint16_t Ps2FastRead16(const uint8_t *rdram, uint32_t addr) { return Ps2FastReadT<uint16_t>(rdram, addr); }
++static PS2_FORCEINLINE uint32_t Ps2FastRead32(const uint8_t *rdram, uint32_t addr) { return Ps2FastReadT<uint32_t>(rdram, addr); }
++static PS2_FORCEINLINE uint64_t Ps2FastRead64(const uint8_t *rdram, uint32_t addr) { return Ps2FastReadT<uint64_t>(rdram, addr); }
++static PS2_FORCEINLINE __m128i Ps2FastRead128(const uint8_t *rdram, uint32_t addr) { return Ps2FastReadT<__m128i>(rdram, addr); }
+ 
+-static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
++static PS2_FORCEINLINE void Ps2FastWrite8(uint8_t *rdram, uint32_t addr, uint8_t value)
+ {
+-    const uint32_t offset = addr & PS2_RAM_MASK;
+-    if (!Ps2FastRangeIsContiguous(offset, sizeof(__m128i)))
+-    {
+-        alignas(16) uint8_t wrapped[sizeof(__m128i)];
+-        std::memcpy(wrapped, &value, sizeof(value));
+-        for (uint32_t i = 0; i < sizeof(__m128i); ++i)
+-        {
+-            rdram[(offset + i) & PS2_RAM_MASK] = wrapped[i];
+-        }
+-        return;
+-    }
+-    std::memcpy(rdram + offset, &value, sizeof(value));
++    rdram[addr & PS2_RAM_MASK] = value;
+ }
+ 
++static PS2_FORCEINLINE void Ps2FastWrite16(uint8_t *rdram, uint32_t addr, uint16_t value) { Ps2FastWriteT<uint16_t>(rdram, addr, value); }
++static PS2_FORCEINLINE void Ps2FastWrite32(uint8_t *rdram, uint32_t addr, uint32_t value) { Ps2FastWriteT<uint32_t>(rdram, addr, value); }
++static PS2_FORCEINLINE void Ps2FastWrite64(uint8_t *rdram, uint32_t addr, uint64_t value) { Ps2FastWriteT<uint64_t>(rdram, addr, value); }
++static PS2_FORCEINLINE void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value) { Ps2FastWriteT<__m128i>(rdram, addr, value); }
++
+ #define FAST_READ8(addr) Ps2FastRead8(rdram, (uint32_t)(addr))
+ #define FAST_READ16(addr) Ps2FastRead16(rdram, (uint32_t)(addr))
+ #define FAST_READ32(addr) Ps2FastRead32(rdram, (uint32_t)(addr))
+@@ -323,32 +247,62 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+ #define FAST_WRITE64(addr, val) Ps2FastWrite64(rdram, (uint32_t)(addr), (uint64_t)(val))
+ #define FAST_WRITE128(addr, val) Ps2FastWrite128(rdram, (uint32_t)(addr), (val))
+ 
++// Scratchpad (16 KB em 0x70000000, e o espelho em 0xF0000000 como ps2IsScratchpadAddress): a travessia do hier vive nele. O acesso
++// alinhado vai direto ao buffer, sem Load/Store do runtime (try/catch, traducao, faixas); desalinhado segue o caminho lento (excecao).
++template <typename T>
++static PS2_FORCEINLINE bool Ps2SprFast(uint32_t addr)
++{
++    return (addr & 0x7FFFC000u) == 0x70000000u && (addr & (sizeof(T) - 1u)) == 0u;
++}
++template <typename T>
++static PS2_FORCEINLINE T Ps2SprRead(uint32_t addr)
++{
++    T value;
++    std::memcpy(&value, ps2GetScratchpadHostPtr() + (addr & 0x3FFFu), sizeof(T));
++    return value;
++}
++template <typename T>
++static PS2_FORCEINLINE void Ps2SprWrite(uint32_t addr, T value)
++{
++    std::memcpy(ps2GetScratchpadHostPtr() + (addr & 0x3FFFu), &value, sizeof(T));
++}
++
+ #define READ8(addr) ([&]() -> uint8_t {                       \
+     uint32_t _addr = (uint32_t)(addr);                        \
++    if (Ps2SprFast<uint8_t>(_addr))                              \
++        return Ps2SprRead<uint8_t>(_addr);                       \
+     return PS2Runtime::isSpecialAddress(_addr)                \
+         ? runtime->Load8(rdram, ctx, _addr)                   \
+         : FAST_READ8(_addr); }())
+ 
+ #define READ16(addr) ([&]() -> uint16_t {                     \
+     uint32_t _addr = (uint32_t)(addr);                        \
++    if (Ps2SprFast<uint16_t>(_addr))                              \
++        return Ps2SprRead<uint16_t>(_addr);                       \
+     return PS2Runtime::isSpecialAddress(_addr)                \
+         ? runtime->Load16(rdram, ctx, _addr)                  \
+         : FAST_READ16(_addr); }())
+ 
+ #define READ32(addr) ([&]() -> uint32_t {                     \
+     uint32_t _addr = (uint32_t)(addr);                        \
++    if (Ps2SprFast<uint32_t>(_addr))                              \
++        return Ps2SprRead<uint32_t>(_addr);                       \
+     return PS2Runtime::isSpecialAddress(_addr)                \
+         ? runtime->Load32(rdram, ctx, _addr)                  \
+         : FAST_READ32(_addr); }())
+ 
+ #define READ64(addr) ([&]() -> uint64_t {                     \
+     uint32_t _addr = (uint32_t)(addr);                        \
++    if (Ps2SprFast<uint64_t>(_addr))                              \
++        return Ps2SprRead<uint64_t>(_addr);                       \
+     return PS2Runtime::isSpecialAddress(_addr)                \
+         ? runtime->Load64(rdram, ctx, _addr)                  \
+         : FAST_READ64(_addr); }())
+ 
+ #define READ128(addr) ([&]() -> __m128i {                     \
+     uint32_t _addr = (uint32_t)(addr);                        \
++    if (Ps2SprFast<__m128i>(_addr))                              \
++        return Ps2SprRead<__m128i>(_addr);                       \
+     return PS2Runtime::isSpecialAddress(_addr)                \
+         ? runtime->Load128(rdram, ctx, _addr)                 \
+         : FAST_READ128(_addr); }())
+@@ -356,8 +310,12 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+ #define WRITE8(addr, val)                                                            \
+     do                                                                               \
+     {                                                                                \
+-        uint32_t _addr = (addr);                                                     \
+-        if (PS2Runtime::isSpecialAddress(_addr))                                     \
++        uint32_t _addr = (addr);                                                       \
++        if (Ps2SprFast<uint8_t>(_addr))                                                   \
++        {                                                                              \
++            Ps2SprWrite<uint8_t>(_addr, (uint8_t)(val));                                \
++        }                                                                              \
++        else if (PS2Runtime::isSpecialAddress(_addr))                                  \
+             runtime->Store8(rdram, ctx, _addr, (val));                               \
+         else                                                                         \
+         {                                                                            \
+@@ -370,7 +328,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+     do                                                                                 \
+     {                                                                                  \
+         uint32_t _addr = (addr);                                                       \
+-        if (PS2Runtime::isSpecialAddress(_addr))                                       \
++        if (Ps2SprFast<uint16_t>(_addr))                                                   \
++        {                                                                              \
++            Ps2SprWrite<uint16_t>(_addr, (uint16_t)(val));                                \
++        }                                                                              \
++        else if (PS2Runtime::isSpecialAddress(_addr))                                  \
+             runtime->Store16(rdram, ctx, _addr, (val));                                \
+         else                                                                           \
+         {                                                                              \
+@@ -383,7 +345,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+     do                                                                                 \
+     {                                                                                  \
+         uint32_t _addr = (addr);                                                       \
+-        if (PS2Runtime::isSpecialAddress(_addr))                                       \
++        if (Ps2SprFast<uint32_t>(_addr))                                                   \
++        {                                                                              \
++            Ps2SprWrite<uint32_t>(_addr, (uint32_t)(val)); runtime->drainCompletedDmacHandlersIfPending(rdram);                                \
++        }                                                                              \
++        else if (PS2Runtime::isSpecialAddress(_addr))                                  \
+             runtime->Store32(rdram, ctx, _addr, (val));                                \
+         else                                                                           \
+         {                                                                              \
+@@ -396,7 +362,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+     do                                                                                 \
+     {                                                                                  \
+         uint32_t _addr = (addr);                                                       \
+-        if (PS2Runtime::isSpecialAddress(_addr))                                       \
++        if (Ps2SprFast<uint64_t>(_addr))                                                   \
++        {                                                                              \
++            Ps2SprWrite<uint64_t>(_addr, (uint64_t)(val));                                \
++        }                                                                              \
++        else if (PS2Runtime::isSpecialAddress(_addr))                                  \
+             runtime->Store64(rdram, ctx, _addr, (val));                                \
+         else                                                                           \
+         {                                                                              \
+@@ -410,7 +380,9 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+     {                                                                                \
+         uint32_t _addr = (addr);                                                     \
+         __m128i _value = (val);                                                      \
+-        if (PS2Runtime::isSpecialAddress(_addr))                                     \
++        if (Ps2SprFast<__m128i>(_addr))                                              \
++            Ps2SprWrite<__m128i>(_addr, _value);                                     \
++        else if (PS2Runtime::isSpecialAddress(_addr))                                \
+             runtime->Store128(rdram, ctx, _addr, _value);                            \
+         else                                                                         \
+         {                                                                            \
+@@ -604,11 +576,68 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
  #define PS2_PMFHL_SH(hi, lo) _mm_shufflehi_epi16(_mm_shufflelo_epi16(_mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi)), _MM_SHUFFLE(3, 1, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
  
  // FPU (COP1) operations
 +// O FPU do R5900 nao tem infinito nem NaN nem denormais: estouro, divisao por zero e operacoes invalidas dao +-Fmax (0x7F7FFFFF), denormais
 +// viram +-0, e cvt.w.s TRUNCA (nao arredonda) e satura em 0x7FFFFFFF/0x80000000. O IEEE do PC (inf/NaN) fazia o iterador de grade da
 +// colisao (HdItGridLine) nunca terminar: x/0 = inf -> cvt.w.s = INT_MIN.
-+static inline float ps2_fpu_fix(float v)
++static PS2_FORCEINLINE float ps2_fpu_fix(float v)
 +{
 +    uint32_t b;
 +    std::memcpy(&b, &v, sizeof(b));
@@ -592,7 +976,7 @@ index 0f19c9f..b6f38e6 100644
  #define FPU_SQRT_S(a) sqrtf((float)(a))
  #define FPU_ABS_S(a) fabsf((float)(a))
  #define FPU_MOV_S(a) ((float)(a))
-@@ -618,12 +675,12 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
+@@ -618,12 +647,12 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
  #define FPU_CEIL_L_S(a) ((int64_t)ceilf((float)(a)))
  #define FPU_FLOOR_L_S(a) ((int64_t)floorf((float)(a)))
  #define FPU_ROUND_W_S(a) ((int32_t)nearbyintf((float)(a)))
@@ -607,6 +991,15 @@ index 0f19c9f..b6f38e6 100644
  #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
+@@ -739,7 +768,7 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
+ #define GPR_S64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0LL : PS2_EXTRACT_EPI64_0(ctx_ptr->r[reg_idx]))
+ #define GPR_VEC(ctx_ptr, reg_idx) ((reg_idx == 0) ? _mm_setzero_si128() : ctx_ptr->r[reg_idx])
+ 
+-static inline void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
++static PS2_FORCEINLINE void Ps2SetGprLow64(R5900Context *ctx, int reg, __m128i new_low)
+ {
+     if (reg != 0)
+     {
 diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
 index f247ff9..3a3c5bf 100644
 --- a/ps2xRuntime/include/runtime/ee_scheduler.h
@@ -655,8 +1048,79 @@ index f247ff9..3a3c5bf 100644
  
      mutable std::mutex m_snapshotMutex;
      EeKernelSnapshot m_snapshot;
+diff --git a/ps2xRuntime/include/runtime/ps2_address.h b/ps2xRuntime/include/runtime/ps2_address.h
+index f7689e0..f67735a 100644
+--- a/ps2xRuntime/include/runtime/ps2_address.h
++++ b/ps2xRuntime/include/runtime/ps2_address.h
+@@ -5,43 +5,50 @@
+ 
+ #include "runtime/ps2_memory.h"
+ 
++// chamadas em todo acesso a memoria do codigo traduzido: sempre em linha
++#if defined(_MSC_VER)
++#define PS2_ADDR_FORCEINLINE __forceinline
++#else
++#define PS2_ADDR_FORCEINLINE inline __attribute__((always_inline))
++#endif
++
+ static inline constexpr uint32_t PS2_EE_UNCACHED_RAM_MIRROR_BASE = 0x20000000u;
+ static inline constexpr uint32_t PS2_EE_UNCACHED_RAM_MIRROR_SIZE = 0x20000000u;
+ static inline constexpr uint32_t PS2_KSEG0_BASE = 0x80000000u;
+ static inline constexpr uint32_t PS2_KSEG0_KSEG1_SIZE = 0x40000000u;
+ static inline constexpr uint32_t PS2_KSEG2_BASE = 0xC0000000u;
+ 
+-static inline constexpr bool Ps2AddressInRange(uint32_t value, uint32_t base, uint32_t size)
++static PS2_ADDR_FORCEINLINE constexpr bool Ps2AddressInRange(uint32_t value, uint32_t base, uint32_t size)
+ {
+     return (value - base) < size;
+ }
+ 
+-static inline constexpr bool Ps2IsUncachedRamMirrorAddress(uint32_t addr)
++static PS2_ADDR_FORCEINLINE constexpr bool Ps2IsUncachedRamMirrorAddress(uint32_t addr)
+ {
+     return Ps2AddressInRange(addr, PS2_EE_UNCACHED_RAM_MIRROR_BASE, PS2_EE_UNCACHED_RAM_MIRROR_SIZE);
+ }
+ 
+-static inline constexpr bool Ps2IsKseg01Address(uint32_t addr)
++static PS2_ADDR_FORCEINLINE constexpr bool Ps2IsKseg01Address(uint32_t addr)
+ {
+     return Ps2AddressInRange(addr, PS2_KSEG0_BASE, PS2_KSEG0_KSEG1_SIZE);
+ }
+ 
+-static inline constexpr bool Ps2IsKseg23Address(uint32_t addr)
++static PS2_ADDR_FORCEINLINE constexpr bool Ps2IsKseg23Address(uint32_t addr)
+ {
+     return addr >= PS2_KSEG2_BASE;
+ }
+ 
+-static inline constexpr uint32_t Ps2DirectMappedPhysicalAddress(uint32_t addr)
++static PS2_ADDR_FORCEINLINE constexpr uint32_t Ps2DirectMappedPhysicalAddress(uint32_t addr)
+ {
+     return addr & 0x1FFFFFFFu;
+ }
+ 
+-static inline constexpr uint32_t Ps2PhysicalAddress(uint32_t addr)
++static PS2_ADDR_FORCEINLINE constexpr uint32_t Ps2PhysicalAddress(uint32_t addr)
+ {
+     return (addr >= PS2_KSEG0_BASE) ? Ps2DirectMappedPhysicalAddress(addr) : addr;
+ }
+ 
+-static inline constexpr bool Ps2IsPhysicalSpecialAddress(uint32_t physAddr)
++static PS2_ADDR_FORCEINLINE constexpr bool Ps2IsPhysicalSpecialAddress(uint32_t physAddr)
+ {
+     return Ps2AddressInRange(physAddr, PS2_BIOS_BASE, PS2_BIOS_SIZE) ||
+            Ps2AddressInRange(physAddr, PS2_SCRATCHPAD_BASE, PS2_SCRATCHPAD_SIZE) ||
+@@ -50,7 +57,7 @@ static inline constexpr bool Ps2IsPhysicalSpecialAddress(uint32_t physAddr)
+            (physAddr >= PS2_VU0_DATA_BASE && physAddr < (PS2_VU1_CODE_BASE + PS2_VU1_CODE_SIZE));
+ }
+ 
+-static inline constexpr bool Ps2IsSpecialAddress(uint32_t addr)
++static PS2_ADDR_FORCEINLINE constexpr bool Ps2IsSpecialAddress(uint32_t addr)
+ {
+     if (Ps2IsKseg23Address(addr))
+         return true;
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..ab90ce3 100644
+index ea86a9c..b2e75d2 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
 @@ -23,8 +23,30 @@
@@ -692,7 +1156,15 @@ index ea86a9c..ab90ce3 100644
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
  constexpr uint32_t PS2_SCRATCHPAD_BASE = 0x70000000;
  constexpr uint32_t PS2_SCRATCHPAD_ALIAS_BASE = 0xF0000000;
-@@ -417,7 +439,9 @@ public:
+@@ -345,6 +367,7 @@ public:
+     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
+     void processPendingTransfers();
+     std::vector<uint32_t> consumeCompletedDmacCauses();
++    bool hasCompletedDmacCauses() const noexcept { return m_completedDmacPending.load(std::memory_order_acquire); }
+ 
+     int pollDmaRegisters();
+ 
+@@ -417,12 +440,15 @@ public:
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
@@ -702,6 +1174,12 @@ index ea86a9c..ab90ce3 100644
      std::vector<PendingTransfer> m_pendingGifTransfers;
      std::vector<PendingTransfer> m_pendingVif0Transfers;
      std::vector<PendingTransfer> m_pendingVif1Transfers;
+     std::mutex m_completedDmacMutex;
+     std::vector<uint32_t> m_completedDmacCauses;
++    std::atomic<bool> m_completedDmacPending{false};   // m_completedDmacCauses nao vazia (lida sem o mutex)
+ 
+     struct CodeRegion
+     {
 diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
 index 7755fe6..3747ad1 100644
 --- a/ps2xRuntime/include/runtime/ps2_pad.h
@@ -3007,10 +3485,10 @@ index 5658928..d968780 100644
          updatePreferredDisplaySourceForDraw(batch);
 diff --git a/ps2xRuntime/src/lib/ps2_hostprof.cpp b/ps2xRuntime/src/lib/ps2_hostprof.cpp
 new file mode 100644
-index 0000000..962064b
+index 0000000..9b4c98a
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/ps2_hostprof.cpp
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,348 @@
 +// Amostrador de perfil do HOST (Windows): com PS2X_HOSTPROF=1 uma thread suspende cada thread do processo a cada ~1 ms, le o RIP e
 +// faz um histograma por funcao (via dbghelp + PDB). Grava hostprof.txt a cada 10 s. Diagnostico do projeto WotM, nao e codigo do jogo.
 +#ifdef _WIN32
@@ -3150,6 +3628,11 @@ index 0000000..962064b
 +    const char *modeEnv = std::getenv("PS2X_HOSTPROF");
 +    const bool slowOnly = modeEnv && modeEnv[0] == '3';
 +    const bool onlyWatched = modeEnv && (modeEnv[0] == '2' || slowOnly);
++    FILE *rawFile = std::getenv("PS2X_HOSTPROF_RAW") ? std::fopen("hostprof_raw.txt", "w") : nullptr;
++    const unsigned long long exeBase = reinterpret_cast<unsigned long long>(GetModuleHandleW(nullptr));
++    const unsigned long long exeSize = 0x10000000ull;
++    std::vector<unsigned long long> rawOutside;   // RIPs fora do exe desde o ultimo flush (nome resolvido no flush, "#sym")
++    std::unordered_map<unsigned long long, bool> rawNamed;
 +    for (;;)
 +    {
 +        if (onlyWatched)
@@ -3203,6 +3686,22 @@ index 0000000..962064b
 +                    std::lock_guard<std::mutex> lk(g_ringMutex);
 +                    g_ring[g_ringNext++ % kRing] = cur;
 +                }
++                // PS2X_HOSTPROF_RAW: cada amostra da thread vigiada vira uma linha "rip w1 w2 ..." (RVA em hex; as palavras da pilha
++                // que caem no executavel), para resolver pelo .map (que tem as funcoes estaticas) e somar o tempo inclusivo.
++                if (watched && rawFile && skipDone)
++                {
++                    const unsigned long long n = read / sizeof(unsigned long long);
++                    std::fprintf(rawFile, "%llx", rip - exeBase);
++                    if (rip < exeBase || rip - exeBase >= exeSize)
++                        rawOutside.push_back(rip);
++                    for (unsigned long long i = 0, k = 0; i < n && k < 48; ++i)
++                        if (cur.stk[i] > exeBase && cur.stk[i] - exeBase < exeSize)
++                        {
++                            std::fprintf(rawFile, " %llx", cur.stk[i] - exeBase);
++                            ++k;
++                        }
++                    std::fputc(10, rawFile);
++                }
 +                if (got)
 +                {
 +                    Hist &h = hist[tid];
@@ -3222,6 +3721,29 @@ index 0000000..962064b
 +        if (now - lastReport > std::chrono::seconds(10))
 +        {
 +            lastReport = now;
++            if (rawFile)
++            {
++                // nome (modulo!funcao pelos exports/PDB do sistema) de cada RIP de fora do exe: "#sym <rva igual ao da linha> <nome>"
++                std::lock_guard<std::mutex> symLock(g_symMutex);
++                for (const unsigned long long r : rawOutside)
++                {
++                    if (rawNamed.count(r))
++                        continue;
++                    rawNamed[r] = true;
++                    alignas(SYMBOL_INFO) char buf[sizeof(SYMBOL_INFO) + 256];
++                    SYMBOL_INFO *sym = reinterpret_cast<SYMBOL_INFO *>(buf);
++                    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
++                    sym->MaxNameLen = 255;
++                    DWORD64 disp = 0;
++                    IMAGEHLP_MODULE64 mod{};
++                    mod.SizeOfStruct = sizeof(mod);
++                    const char *mname = SymGetModuleInfo64(proc, r, &mod) ? mod.ModuleName : "?";
++                    const char *fname = SymFromAddr(proc, r, &disp, sym) ? sym->Name : "?";
++                    std::fprintf(rawFile, "#sym %llx %s!%s%c", r - exeBase, mname, fname, 10);
++                }
++                rawOutside.clear();
++                std::fflush(rawFile);
++            }
 +            report(hist, proc);
 +        }
 +    }
@@ -3332,7 +3854,7 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..a68660f 100644
+index 37b6a4d..387e481 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
 @@ -9,7 +9,19 @@
@@ -3370,21 +3892,39 @@ index 37b6a4d..a68660f 100644
  
          // Initialize I/O registers
          m_ioRegisters.clear();
-@@ -1346,9 +1360,13 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1346,9 +1360,23 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                      const bool tieEnabled = (chcr & (1u << 7)) != 0u;
                      const int kMaxChainTags = 4096;
                      std::vector<uint8_t> chainBuf;
 +                    std::vector<std::pair<uint32_t, uint32_t>> chainSrc;   // WotM: origem de cada trecho (so com g_wotmVu1Tap no VIF1)
 +                    const bool recordSrc = g_wotmVu1Tap && channelBase == 0x10009000u;
++                    // WotM: o jogo sem VIF1 (wotm) descarta a cadeia do VIF1 inteira (processPendingTransfers); copiar os pacotes do
++                    // VU1 para o vetor custava ~1 ms por quadro na tela dividida. So anda pelas tags; a transferencia pendente (um
++                    // marcador de 16 bytes) continua saindo nas mesmas condicoes, para a conclusao do DMA ser a mesma.
++                    const bool skipVif1Copy = !PS2X_HW_EMU && channelBase == 0x10009000u && !recordSrc;
++                    bool skippedVif1Copy = false;
  
                      auto appendData = [&](uint32_t srcAddr, uint32_t qwCount)
                      {
++                        if (skipVif1Copy)
++                        {
++                            skippedVif1Copy = skippedVif1Copy || qwCount > 0u;
++                            return;
++                        }
 +                        if (recordSrc)
 +                            chainSrc.emplace_back(static_cast<uint32_t>(chainBuf.size()), srcAddr);
                          const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                          uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
                          const bool scratch = isScratchpad(srcAddr);
-@@ -1395,6 +1413,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1392,9 +1420,16 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                         const uint32_t localMax = tagScratch ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+                         if (tagPhys + 16u > localMax)
+                             return;
++                        if (skipVif1Copy)
++                        {
++                            skippedVif1Copy = true;
++                            return;
++                        }
  
                          // CHCR.TTE sends the DMAtag's upper 64 bits to the channel before
                          // the tag payload. VIF chains use those bytes for two VIFcodes.
@@ -3393,7 +3933,7 @@ index 37b6a4d..a68660f 100644
                          chainBuf.insert(chainBuf.end(), localBase + tagPhys + 8u, localBase + tagPhys + 16u);
                      };
  
-@@ -1446,6 +1466,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1446,6 +1481,43 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          bool hasPayload = (tagQwc > 0);
                          bool endChain = false;
  
@@ -3437,7 +3977,16 @@ index 37b6a4d..a68660f 100644
                          switch (id)
                          {
                          case 0:
-@@ -1535,6 +1592,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+@@ -1528,6 +1600,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
+                     chcr = (chcr & 0x0000FFFFu) | (lastTagUpper << 16);
+                     m_ioRegisters[channelBase + 0x00] = chcr;
+ 
++                    if (skippedVif1Copy && chainBuf.empty())
++                        chainBuf.resize(16u);
+                     if (!chainBuf.empty())
+                     {
+                         PendingTransfer pt;
+@@ -1535,6 +1609,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                          pt.srcAddr = 0;
                          pt.qwc = 0;
                          pt.chainData = std::move(chainBuf);
@@ -3445,7 +3994,7 @@ index 37b6a4d..a68660f 100644
                          if (channelBase == 0x1000A000)
                          {
                              m_pendingGifTransfers.push_back(std::move(pt));
-@@ -1671,7 +1729,8 @@ void PS2Memory::processPendingTransfers()
+@@ -1671,7 +1746,8 @@ void PS2Memory::processPendingTransfers()
                                           : transfer.qwc;
          observedGifQwc = static_cast<uint32_t>(std::min<uint64_t>(16u, static_cast<uint64_t>(observedGifQwc) + transferQwc));
      }
@@ -3455,7 +4004,7 @@ index 37b6a4d..a68660f 100644
      {
          constexpr uint32_t kGifStat = 0x10003020u;
          constexpr uint32_t kGifFqcMask = 0x1F000000u;
-@@ -1802,11 +1861,19 @@ void PS2Memory::processPendingTransfers()
+@@ -1802,11 +1878,19 @@ void PS2Memory::processPendingTransfers()
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
@@ -3475,7 +4024,23 @@ index 37b6a4d..a68660f 100644
          }
          else if (p.qwc > 0)
          {
-@@ -1956,6 +2023,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
+@@ -1909,6 +1993,7 @@ void PS2Memory::queueCompletedDmacCause(uint32_t cause)
+ {
+     std::lock_guard<std::mutex> lock(m_completedDmacMutex);
+     m_completedDmacCauses.push_back(cause);
++    m_completedDmacPending.store(true, std::memory_order_release);
+ }
+ 
+ std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
+@@ -1916,6 +2001,7 @@ std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
+     std::lock_guard<std::mutex> lock(m_completedDmacMutex);
+     std::vector<uint32_t> causes;
+     causes.swap(m_completedDmacCauses);
++    m_completedDmacPending.store(false, std::memory_order_release);
+     return causes;
+ }
+ 
+@@ -1956,6 +2042,8 @@ void PS2Memory::submitGifPacket(GifPathId pathId, const uint8_t *data, uint32_t
              return;
          }
          flushMaskedPath3Packets(false);
@@ -3484,7 +4049,7 @@ index 37b6a4d..a68660f 100644
      }
  
      if (m_gifArbiter)
-@@ -2001,6 +2070,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
+@@ -2001,6 +2089,7 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
          m_gifPacketCallback(data, sizeBytes);
  }
  
@@ -3492,7 +4057,7 @@ index 37b6a4d..a68660f 100644
  bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
  {
      static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-@@ -2272,6 +2342,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
+@@ -2272,6 +2361,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
      queueCompletedDmacCause(2u);
      return true;
  }
@@ -3786,7 +4351,7 @@ index 8590f14..2ef205d 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..e2f41e7 100644
+index 45cb9d2..cef4e9d 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -3968,13 +4533,14 @@ index 45cb9d2..e2f41e7 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1383,13 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1383,14 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
 +#include "rlgl.h"
 +#include "wotm_scene.inc"
 +static std::vector<uint32_t> g_wotmCov(0x1000000u >> 2, 0);
++static const bool g_wotmCovOn = std::getenv("PS2X_COVERAGE") != nullptr;   // contar so quando vai gravar
 +
 +std::atomic<R5900Context *> g_wotmLiveCtx{nullptr};
 +// Quantas vezes um checkpoint mandou o codigo gerado desenrolar ate o escalonador (so a thread executora do EE mexe).
@@ -3982,13 +4548,13 @@ index 45cb9d2..e2f41e7 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1399,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1400,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
 +    g_wotmLiveCtx.store(ctx, std::memory_order_relaxed);
      const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
-+    if (targetPc < 0x1000000u)
++    if (g_wotmCovOn && targetPc < 0x1000000u)
 +        ++g_wotmCov[targetPc >> 2];
  
      // Every inter-function transfer is also a deterministic EE safe point.
@@ -4000,7 +4566,7 @@ index 45cb9d2..e2f41e7 100644
          return false;
      }
  
-@@ -1396,6 +1448,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1449,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -4008,7 +4574,7 @@ index 45cb9d2..e2f41e7 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1456,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1457,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -4020,7 +4586,7 @@ index 45cb9d2..e2f41e7 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1479,36 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1480,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -4040,24 +4606,34 @@ index 45cb9d2..e2f41e7 100644
      (void)rdram;
 +    static const bool hostProfInit = (wotmHostProfInit(), true);
 +    (void)hostProfInit;
++    // Tempo e chamadas por microprograma (linha "[time] vu0" do PS2X_STATS): sempre no executavel de teste; no do jogo so com
++    // PS2X_VU0PROF (sao ~12 mil chamadas por quadro na tela dividida, e os dois relogios e quatro atomicos custavam ~0,1 us cada)
++    static const bool vu0Prof = PS2X_HW_EMU || std::getenv("PS2X_VU0PROF") != nullptr;
 +    struct Vu0Timer
 +    {
-+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
++        bool on;
++        std::chrono::steady_clock::time_point t0;
 +        uint32_t slot;
-+        explicit Vu0Timer(uint32_t pc) : slot((pc >> 3) & 511u) {}
++        Vu0Timer(uint32_t pc, bool enabled) : on(enabled), slot((pc >> 3) & 511u)
++        {
++            if (on)
++                t0 = std::chrono::steady_clock::now();
++        }
 +        ~Vu0Timer()
 +        {
++            if (!on)
++                return;
 +            const auto us = (unsigned long long)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
 +            g_wotmVu0Us += us;
 +            ++g_wotmVu0Calls;
 +            g_wotmVu0PcUs[slot] += us;
 +            ++g_wotmVu0PcCalls[slot];
 +        }
-+    } vu0Timer(address);
++    } vu0Timer(address, vu0Prof);
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1520,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1531,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -4179,7 +4755,16 @@ index 45cb9d2..e2f41e7 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -2165,6 +2356,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -1485,6 +1687,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
+ 
+ void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
+ {
++    if (!m_memory.hasCompletedDmacCauses())
++        return;
+     for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
+     {
+         ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
+@@ -2165,6 +2369,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
      ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
      m_memory.writeIORegister(GIF_TADR, tadr);
      ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
@@ -4187,7 +4772,7 @@ index 45cb9d2..e2f41e7 100644
      if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
      {
          drainCompletedDmacHandlers(rdram);
-@@ -2175,6 +2367,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2175,6 +2380,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
          drainCompletedDmacHandlers(rdram);
          return;
      }
@@ -4195,7 +4780,7 @@ index 45cb9d2..e2f41e7 100644
      m_memory.writeIORegister(GIF_CHCR, chcr);
      m_memory.processPendingTransfers();
      drainCompletedDmacHandlers(rdram);
-@@ -2211,7 +2404,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2417,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -4207,7 +4792,7 @@ index 45cb9d2..e2f41e7 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2356,6 +2552,7 @@ void PS2Runtime::run()
+@@ -2356,6 +2565,7 @@ void PS2Runtime::run()
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -4215,7 +4800,7 @@ index 45cb9d2..e2f41e7 100644
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-@@ -2422,7 +2619,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2632,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -4227,7 +4812,7 @@ index 45cb9d2..e2f41e7 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2645,268 @@ void PS2Runtime::run()
+@@ -2444,7 +2658,268 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }

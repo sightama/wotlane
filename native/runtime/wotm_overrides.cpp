@@ -127,6 +127,9 @@ namespace
     PS2Runtime::RecompiledFunction g_origWaitMinRate = nullptr, g_origGetCurTics = nullptr;
     uint64_t g_frameStartVsync = 0;
     bool g_frameStartValid = false;
+    std::chrono::steady_clock::time_point g_frameStartHost;   // [field] sv=: inicio do quadro no relogio do host
+    double g_svAtMs = -1.0;                                   // [field] sv=: 1a chamada a sceGsSyncV (ms desde o inicio do quadro)
+    int g_svVblanks = -1;                                     // vblanks entregues entre o inicio do quadro e essa chamada
 
     void getCurTicsMarked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -172,6 +175,7 @@ namespace
             g_t1Zero = now;
             g_frameStartVsync = runtime->eeScheduler().currentVSyncTick();
             g_frameStartValid = true;
+            g_frameStartHost = std::chrono::steady_clock::now();
         }
     }
 
@@ -763,6 +767,12 @@ namespace
             {
                 if (g_syncVCalls < 4)
                     g_syncVRa[g_syncVCalls] = ra;
+                if (g_syncVCalls == 0 && g_frameStartValid)
+                {
+                    const auto t = std::chrono::steady_clock::now();
+                    g_svAtMs = std::chrono::duration<double, std::milli>(t - g_frameStartHost).count();
+                    g_svVblanks = static_cast<int>(runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync);
+                }
                 ++g_syncVCalls;
             }
             if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
@@ -826,6 +836,10 @@ namespace
             if (top[k] >= 0)
                 std::fprintf(stderr, " %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
         std::fprintf(stderr, " syncv=%u", g_syncVCalls);
+        if (g_svAtMs >= 0.0)   // sv=<ms ate a 1a chamada>@<vblanks ja entregues>/<ms ate aqui, o fim do quadro>
+            std::fprintf(stderr, " sv=%.1f@%d/%.1f", g_svAtMs, g_svVblanks,
+                         std::chrono::duration<double, std::milli>(now - g_frameStartHost).count());
+        g_svAtMs = -1.0;
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
             std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
@@ -860,6 +874,20 @@ namespace
         g_lastHost = now;
         g_lastIdleUs = idleUs;
         lastTics = tics;
+    }
+
+    // 3 e 4 jogadores a 60: o jogo liga um "modo 30 Hz" com 3+ jogadores (Shell::Use30HzMode: m_numPlayers >= 3), e o
+    // Shell::BootInitGame faz timerInit(30), que poe o teto do updateRate (D_006F8DD8) em 30: o timerWaitForMinUpdateRate espera
+    // um vsync a mais em todo quadro que coube em 1 field. Aqui o timerInit desse ponto recebe 60; o resto do modo (layout da VRAM
+    // do getVramAddr) fica. WOTM_30HZ=1 volta ao original.
+    constexpr uint32_t kTimerInit = wotm::fn::timerInit__Fi;
+    constexpr uint32_t kBootInitGameTimerRa = wotm::fn::BootInitGame__5Shell + 0x24u;   // retorno do jal timerInit
+    PS2Runtime::RecompiledFunction g_origTimerInit = nullptr;
+    void timerInit60(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTimerInit && GPR_U32(ctx, 31) == kBootInitGameTimerRa && GPR_U32(ctx, 4) == 30u)
+            SET_GPR_U32(ctx, 4, 60u);
+        g_origTimerInit(rdram, ctx, runtime);
     }
 
     void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -2325,6 +2353,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         g_nativeTimer = true;
     }
 #endif
+    if (std::getenv("WOTM_30HZ") == nullptr && (g_origTimerInit = runtime.lookupFunction(kTimerInit)))
+        runtime.registerFunction(kTimerInit, &timerInit60);
     if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
         (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)) &&
         (g_origTimer1 = runtime.lookupFunction(kTimer1Handler)))
