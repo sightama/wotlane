@@ -714,6 +714,20 @@ namespace wotm_split4
 
     void hudUpdateDone(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t self, uint32_t me, const uint32_t saved[4]);
 
+    // Modo treino: o update do HUD 0 pausado no meio (a fatia de tempo acabou dentro dele). A retomada nao passa por este gancho e,
+    // no fim dela, o HUD 0 apaga a barra do HUD 1: o do boneco (trainingHud) fica para trainingHudLate, antes da captura do quadro.
+    // Sem isso a barra do boneco sumia nesses quadros (piscava).
+    bool g_trainPending = false;
+
+    // Gancho do timerWaitForMinUpdateRate (wotm_overrides.cpp), antes do wotmCaptureFrame: o update do quadro ja terminou
+    void trainingHudLate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (!g_trainPending)
+            return;
+        g_trainPending = false;
+        trainingHud(rdram, ctx, runtime);
+    }
+
     void hudUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (g_hudPending.on && ctx->pc != kHudUpdate)
@@ -736,8 +750,12 @@ namespace wotm_split4
             const uint32_t ra = GPR_U32(ctx, 31);
             const bool entry = ctx->pc == kHudUpdate;
             g_origHudUpdate(rdram, ctx, runtime);
-            if (entry && ctx->pc == ra && self == kGame)
-                trainingHud(rdram, ctx, runtime);
+            if (entry && self == kGame)
+            {
+                g_trainPending = ctx->pc != ra;
+                if (!g_trainPending)
+                    trainingHud(rdram, ctx, runtime);
+            }
             return;
         }
         if (g_hudPending.on)

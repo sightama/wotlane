@@ -104,6 +104,10 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
   "sim": `shell` +0x2BA4 = 0, +0x2B40/+0x2B44 = +0x2B48, `snd_StopAllSounds`, som 0x4F, `gExitDialog` 0, devolve 1). O `rtMain` sai
   com o `m_restart` que o overlay pôs, e o `TheGame::ResetLevel` + `rtMain(0)` põem monstros e fase (prédios) como no começo, sem
   recarregar arquivos. Log `[treino] reset positions`.
+- **ARE YOU SURE na Lake Powell** (fase 13, CANYON1, fora das listas do retail; vale com ou sem o treino): o `.NGP` dela traz uma versão
+  antiga da caixa dos diálogos (`m_cs610`, nó 770), com o logo do jogo em cada filho do switch e a caixa do ARE YOU SURE abaixo do
+  título. O gancho do `areYouSure` (`wotm_pausemenu::lakePowellDialogBox`) tira o logo e sobe essa caixa para o centro das outras
+  fases. A fonte de título da fase não tem o `?` e fica assim.
 - **Janelas escondidas:** painel, comandos, esferas e caixas só com a luta rodando (`wotm_training::windowsHidden`): somem na pausa
   (o `displayDialog` rodou há menos de 200 ms), no "sim" de qualquer ARE YOU SURE (QUIT ou reset: `g_inFight` falso na hora) e voltam
   na entrada do `rtMain`. O atlas da fonte vem do último `fontSetTexId` (`wotm_training::g_fontTex0`): a luta do treino não escreve
@@ -119,7 +123,9 @@ painel do `wotm_mainmenu.inc`, item do pause no `wotm_pausemenu.inc`, fluxo do m
 - **HUD do boneco:** o HUD 1 do próprio jogo (o do jogador 2, à direita), `trainingHud` no `wotm_split4.inc`: na saída do
   `Hud::update` do HUD 0, o update do HUD 1 com `m_viewSlot[1]` trocado pelo slot do boneco e o `_cs` da câmera 1 trocado pelo da 0
   (fora da vista unificada, no modo de entrada do versus, o HUD i fica preso à câmera i, e a 1 segue o boneco: sem a troca o HUD
-  aparecia no mundo, preso ao Congar). O "WINS n" que o `Hud::update` escreve no versus (modos 2 a 6) não sai no treino (ganchos do
+  aparecia no mundo, preso ao Congar). Quando o update do HUD 0 é pausado no meio (fim da fatia de tempo; a retomada não passa pelo
+  gancho e termina apagando a barra do HUD 1), o do boneco roda no gancho do `timerWaitForMinUpdateRate`, antes do `wotmCaptureFrame`
+  (`trainingHudLate`). O "WINS n" que o `Hud::update` escreve no versus (modos 2 a 6) não sai no treino (ganchos do
   `fontSpritePrint(Right)XY` com os dois buffers do Hud). Medidas do HUD do P1 em `wotm_training::hud`. Por cima das barras de vida e de stamina do P1 e
   do boneco, os números (vida atual / máxima; na stamina, o valor atual com os algarismos empilhados dentro da barra). Só na luta de 1 jogador em tela cheia com o HUD do jogo
   à mostra (sem letterbox). O painel de dano e os comandos ficam abaixo dos HUDs (43% da altura). Foto:

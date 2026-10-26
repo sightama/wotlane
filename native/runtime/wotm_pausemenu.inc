@@ -421,6 +421,48 @@ static void exitHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 //  - o "nao" volta o cursor ao item guardado (gLastMenuSelection, o logico): o QUIT (item 4) esta na ultima linha (quitRow);
 //  - qualquer "sim" esconde as janelas do treino na hora (wotm_training::g_inFight).
 static PS2Runtime::RecompiledFunction g_origSure = nullptr;
+
+// Lake Powell (fase 13, CANYON1, que o retail nao oferece): o .NGP dela traz uma versao antiga da caixa dos dialogos (shell->m_cs610,
+// no 770: GROUP -> SWITCH). Cada filho do switch e um GROUP com o logo do jogo (TRANSLATE -> OBJECT de 2 triangulos, ja na
+// profundidade 34,85) e a caixa (TRANSLATE (0, 35, z) -> OBJECT); a do ARE YOU SURE (filho 1) fica em z -4,23..7,46, abaixo do
+// titulo, que o areYouSure escreve em y 0x42. Nas outras fases o filho 1 e so a caixa, em z -1,59..10,46. Aqui o logo sai (TRANSLATE
+// sem filhos) e a caixa do filho 1 sobe para o mesmo centro (z local -2,71..8,98: translacao 1,30). Escritas absolutas: repetir e
+// inofensivo. A fonte do titulo e a da fase (menor e sem o '?') e fica.
+static void lakePowellDialogBox(uint8_t *rdram)
+{
+    constexpr uint32_t sh = wotm::sym::shellInfo;
+    constexpr float kBoxZ = 1.30f;
+    auto op = [&](uint32_t n) { return rd32(rdram, n) & 0x3Fu; };
+    auto ok = [](uint32_t a) { return a >= 0x100000u && a + 0x40u < PS2_GUEST_RAM_SIZE; };
+    if (rd32(rdram, sh + 0x2BB0) != 13u)
+        return;
+    const uint32_t cs = rd32(rdram, sh + 0x610) & 0x1FFFFFFFu;
+    const uint32_t ep = ok(cs) ? rd32(rdram, cs) & 0x1FFFFFFFu : 0u;
+    if (!ok(ep) || op(ep) != 1u || (FAST_READ16(ep + 8) & 0xFFFFu) < 1u)
+        return;
+    const uint32_t sw = rd32(rdram, ep + 0x20) & 0x1FFFFFFFu;
+    if (!ok(sw) || op(sw) != 6u)
+        return;
+    const uint32_t n = FAST_READ8(sw + 0xB);
+    for (uint32_t k = 0; k < n && k < 8; ++k)
+    {
+        const uint32_t g = rd32(rdram, sw + 0xC + 4 * k) & 0x1FFFFFFFu;
+        if (!ok(g) || op(g) != 1u || FAST_READ16(g + 8) != 2u)
+            continue;
+        const uint32_t logo = rd32(rdram, g + 0x20) & 0x1FFFFFFFu, box = rd32(rdram, g + 0x24) & 0x1FFFFFFFu;
+        if (!ok(logo) || !ok(box) || op(logo) != 3u || op(box) != 3u)
+            continue;
+        float ly, by;
+        std::memcpy(&ly, rdram + logo + 0x14, 4);
+        std::memcpy(&by, rdram + box + 0x14, 4);
+        if (ly != 0.f || by != 35.f)   // o logo vem com a profundidade no objeto; a caixa, na translacao
+            continue;
+        wr32(rdram, logo + 8, 0);
+        if (k == 1)
+            std::memcpy(rdram + box + 0x18, &kBoxZ, 4);
+    }
+}
+
 static void sureHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc != wotm::fn::areYouSure__FRi)
@@ -429,6 +471,7 @@ static void sureHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         return;
     }
     const uint32_t ra = GPR_U32(ctx, 31);
+    lakePowellDialogBox(rdram);
     if (rd32(rdram, wotm::sym::gLastMenuSelection) == uint32_t(kQuit))
         wr32(rdram, wotm::sym::gLastMenuSelection, uint32_t(quitRow()));
     if (g_autoYes)

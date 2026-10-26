@@ -910,6 +910,7 @@ namespace
             if (g_fieldLog)
                 fieldLogFrame(rdram, ctx, runtime);
             // quadro pronto (update, hier, particleDraw) e o seguinte ainda nao comecou: o desenho nativo copia a cena aqui
+            wotm_split4::trainingHudLate(rdram, ctx, runtime);   // modo treino: HUD do boneco se o update do HUD 0 foi pausado
             wotmCaptureFrame(rdram);
             // pausa (F7/F6/F8, wotm_foto.inc): o quadro pronto fica na tela e o seguinte nao comeca. O quadro com parada conta 1 field:
             // o tempo parado nao vira dt (sem isso o updateRate caia ao limite e o jogo dava um passo de 1/30 na volta)
