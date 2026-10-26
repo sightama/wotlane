@@ -1236,10 +1236,21 @@ void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int k
     if (wotm_live::g_damageNew.size() < 64)
         wotm_live::g_damageNew.push_back(wotm_live::DamagePopup{{p[0], p[1], p[2]}, amount, kind, float(int(n++ % 5) - 2), 0.0, f});
 }
+double wotmDamageIdleSeconds();   // wotm_overrides.cpp: tempo desde o ultimo Monster::update
+bool wotmPaused();                // wotm_foto.inc: a thread do EE esta segura pelo F7 (ou modo foto)
+// O relogio dos numeros so anda enquanto o jogo roda os Monster::update: na pausa da luta (o menu nao liga o isPaused), nos dialogos
+// e no F7 eles param no ar e seguem de onde estavam na volta. No menu de pausa e nos dialogos ficam escondidos (cobririam a lista);
+// no F7 continuam a vista, para a foto.
 static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, int rh)
 {
+    const bool frozen = wotmDamageIdleSeconds() > 0.1;
     using namespace wotm_live;
-    const double now = GetTime();
+    static double s_clock = 0.0, s_real = -1.0;
+    const double real = GetTime();
+    if (s_real >= 0.0 && !frozen)
+        s_clock += std::min(real - s_real, 0.1);
+    s_real = real;
+    const double now = s_clock;
     {
         std::lock_guard<std::mutex> lk(g_damageM);
         for (DamagePopup &d : g_damageNew)
@@ -1252,7 +1263,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
     constexpr double kLife = 1.1;
     g_damageLive.erase(std::remove_if(g_damageLive.begin(), g_damageLive.end(), [&](const DamagePopup &d) { return now - d.t0 > kLife; }),
                        g_damageLive.end());
-    if (g_damageLive.empty())
+    if (g_damageLive.empty() || (frozen && !wotmPaused()))
         return;
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
     std::vector<wotm::TextQuad> quads;

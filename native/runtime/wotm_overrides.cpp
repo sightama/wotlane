@@ -1091,6 +1091,8 @@ namespace
                      used, left, kLoadCeiling, left < 0.5 ? " -- PERTO OU ALEM DO TETO, espere corrupcao" : "");
     }
 
+    bool g_damageNewFight = true;   // rtMain(first): os numeros de dano esquecem os monstros da luta anterior (monsterUpdateDamage)
+
     void rtMainTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kRtMain)
@@ -1101,7 +1103,10 @@ namespace
                 std::fprintf(stderr, "[treino] modo treino ligado (luta do TRAINING)\n");
             wotm_training::g_inFight = true;   // tambem a volta do RESET POSITIONS (rtMain(0))
             if (GPR_U32(ctx, 4))
+            {
                 wotm_training::g_introMs = wotm_training::nowMs();   // a intro desta luta pode ser pulada (wotm_training.inc)
+                g_damageNewFight = true;
+            }
         }
         g_origRtMain(rdram, ctx, runtime);
     }
@@ -2160,7 +2165,9 @@ namespace
     // StateSonicRoar, StateGrappleHook, StateUltraTazer, StateTazerAttack, StateTopSpin; 6 e 0x14 sao os que o StateBlock trata junto
     // do 5, e o especial do Togera chega com 6), 8 e 13 = arremesso (MonsterState::handleCollis de objeto em voo, StateThrowBack de
     // monstro jogado; vale ate 45 quadros, o dano da batida no cenario vem depois), o resto = golpe. Lugar: o ponto do golpe
-    // (s_takeHitInfo.pos) quando houver, senao o monstro um pouco acima.
+    // (s_takeHitInfo.pos) quando houver, senao o monstro um pouco acima. Nada sai durante uma cena (ActCinema: shell->m_inCinema,
+    // moviePlaying) nem nos primeiros 30 updates de cada monstro na luta, quando o jogo ainda acerta a vida inicial; o rtMain(first)
+    // esquece os monstros da luta anterior (o g_frame nao serve: o rtMain o zera tambem na volta da pausa).
     constexpr uint32_t kMonsterUpdateDmg = wotm::fn::update__7Monster, kTakeHitDmg = wotm::fn::takeHit__7MonsterP8_fvectorfi;
     constexpr uint32_t kTakeHitInfo = wotm::sym::x_8HitEvent_s_takeHitInfo;   // HitEvent: pos* +0, source +0x10
     PS2Runtime::RecompiledFunction g_origMonsterUpdateDmg = nullptr, g_origTakeHitDmg = nullptr;
@@ -2172,7 +2179,9 @@ namespace
         uint32_t hitFrame = 0;
         bool havePos = false;
         float pos[3] = {};
+        uint32_t seen = 0;   // updates desde que o monstro entrou na fase
     } g_damageTrack[16];
+    std::atomic<int64_t> g_damageUpdateMs{0};   // relogio (steady_clock) do ultimo Monster::update: parado = jogo pausado
 
     // Um dos m_monsters do TheGame (lugar para 16)
     bool isMonsterSlot(uint8_t *rdram, uint32_t m)
@@ -2231,8 +2240,22 @@ namespace
     {
         const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
         if (ctx->pc == kMonsterUpdateDmg && ramOk(m, 0x450u) && isMonsterSlot(rdram, m))
+        {
+            if (g_damageNewFight)
+            {
+                g_damageNewFight = false;
+                for (DamageTrack &t : g_damageTrack)
+                    t = DamageTrack{};
+            }
+            g_damageUpdateMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                   std::memory_order_relaxed);
             if (DamageTrack *d = damageTrack(rdram, m))
             {
+                const uint32_t sh = FAST_READ32(wotm::sym::shell) & 0x1FFFFFFFu;
+                const bool cinema = FAST_READ32(wotm::sym::moviePlaying) != 0u || (ramOk(sh, 0x2BA8u) && FAST_READ32(sh + 0x2BA4u) != 0u);
+                const bool quiet = cinema || d->seen < 30u;
+                if (d->seen < 30u)
+                    ++d->seen;
                 float h;
                 std::memcpy(&h, rdram + m + 0x44Cu, 4);
                 if (std::isfinite(h))
@@ -2250,15 +2273,23 @@ namespace
                             p[2] += 60.f;   // sem ponto de golpe: um pouco acima da origem do monstro
                         else
                             p[0] = p[1] = p[2] = 0.f;
-                        if ((p[0] != 0.f || p[1] != 0.f || p[2] != 0.f) &&
+                        if (!quiet && (p[0] != 0.f || p[1] != 0.f || p[2] != 0.f) &&
                             (wotm::settings::on(wotm::settings::DamagePop) || wotm_training::g_on.load(std::memory_order_relaxed)))
                             wotmDamagePopup(rdram, p, lost, recent ? d->kind : 0);
                     }
                     d->last = h;
                 }
             }
+        }
         g_origMonsterUpdateDmg(rdram, ctx, runtime);
     }
+}
+
+// Janela (drawDamagePopups): ha quanto tempo o jogo nao roda um Monster::update. Na pausa da luta, nos dialogos e no F7 eles param.
+double wotmDamageIdleSeconds()
+{
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return double(now - g_damageUpdateMs.load(std::memory_order_relaxed)) / 1000.0;
 }
 
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
