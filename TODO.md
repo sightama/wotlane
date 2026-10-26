@@ -7,8 +7,7 @@ O que falta fazer, e só isso. Relatos de bug passam na frente. Item terminado s
 |---|---|---|---|
 | 8 | Mods que adicionam monstros (as skins já existem) | — | médio/alto |
 | 10 | Chefes jogáveis | 8 | alto |
-| 11 | Multiplayer de 4: HUD do jogador por cima das barras dos inimigos | — | baixo |
-| 13 | Campanha (adventure) com até 4 jogadores | 11 | o mais alto |
+| 13 | Campanha (adventure) com até 4 jogadores | — | o mais alto |
 | 14 | Adicionar os mapas não listados nas seleções de fases | ? | médio? |
 
 10 é um caso particular de "adicionar monstro" (8). A campanha com 4 fica por último: cinema, chefes e regras foram feitos para 1 jogador.
@@ -30,10 +29,6 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 - Os chefes já estão na tabela de tipos (em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).
 - Alguns chefes não são `Monster` comum (`NATIVO.md`, "Vencer a luta"): precisam de estados de controle, golpes e escala que caibam numa luta normal. Entram na seleção pelo caminho do item 8.
 - Goliath Prime já está feito, restam as 3 fases de Cerebulon. Plantboss não é viável.
-
-### 11. Multiplayer de 4
-Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" e "Menu multijogador de 2 a 4".
-- **HUD do jogador por cima das barras dos inimigos:** a barra de um inimigo perto do topo da tela (a posição vem da cabeça) pode cobrir o HUD do jogador; o HUD do jogador deveria ser desenhado depois.
 
 ### 13. Campanha com até 4 jogadores
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no Capitólio, 0x1A0) precisam ser revistas.

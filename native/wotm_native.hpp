@@ -2838,6 +2838,13 @@ public:
             rlDrawRenderBatchActive();
         }
         ProfScope psHud(DrawProf::Hud);
+        if (!wire && barPass.rects) {   // barras sobre os inimigos sob o HUD do jogador (barPass), fora do shader do GS
+            rlDrawRenderBatchActive();
+            if (useShader) { EndShaderMode(); g_premulShader = false; vs_.setShader(0u, nullptr); }
+            drawBarPass();
+            if (useShader) { BeginShaderMode(alphaShader_); g_premulShader = true; vs_.setShader(alphaShader_.id, alphaShader_.locs); }
+            gsBlend(kGsAlphaNormal);   // o drawList comeca supondo a mistura comum do GS (o EndBlendMode deixou a do raylib)
+        }
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
         const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
         if (!sprites2d) drawList(ram, overlay, wire, -1, true);
@@ -3511,6 +3518,84 @@ public:
     // borda vale por si: o fade e as faixas de cinema de uma vista (0..320 ou 320..640) vao ate a borda da janela do lado dela.
     bool splitEdges = false;
     int stripView = -1;   // tela dividida de 3 jogadores: a vista que ocupa a linha de baixo inteira (2), -1 = nenhuma
+    // Barras sobre os inimigos sob o HUD do jogador: com `rects`, o draw as desenha em 2D logo antes da lista `hud`, na textura em que
+    // desenha (tw x th, com o canto (ox, oy) da janela de rw x rh), so as da vista `view` (-1 = todas, tela cheia); com barsUnderHud o
+    // drawScreenRects as pula. Sem `rects` (replay, corpus) elas saem no drawScreenRects, por cima de tudo.
+    struct BarPass {
+        const std::vector<ScreenRect> *rects = nullptr;
+        float rw = 0.f, rh = 0.f;
+        int view = -1;
+        float ox = 0.f, oy = 0.f, tw = 0.f, th = 0.f;
+    };
+    BarPass barPass;
+    bool barsUnderHud = false;
+
+    void drawBarPass() {
+        const BarPass &p = barPass;
+        auto mine = [&](const ScreenRect &r) { return r.barView >= 0 && (p.view < 0 || r.barView == p.view); };
+        if (!p.rects || std::none_of(p.rects->begin(), p.rects->end(), mine)) return;
+        rlDrawRenderBatchActive();
+        rlDisableDepthTest();
+        // matrizes trocadas e devolvidas direto: a pilha do rlgl e uma so para as duas (e o push da modelview liga a transformacao
+        // na CPU), e o BeginMode3D do chamador ja empilhou a projecao. Ortografica da textura (tw x th), com a janela deslocada de (ox, oy)
+        const Matrix keepProj = rlGetMatrixProjection(), keepView = rlGetMatrixModelview();
+        Matrix ortho{};
+        ortho.m0 = 2.f / p.tw;
+        ortho.m5 = -2.f / p.th;
+        ortho.m10 = -2.f;
+        ortho.m12 = -1.f - 2.f * p.ox / p.tw;
+        ortho.m13 = 1.f + 2.f * p.oy / p.th;
+        ortho.m14 = -1.f;
+        ortho.m15 = 1.f;
+        Matrix ident{};
+        ident.m0 = ident.m5 = ident.m10 = ident.m15 = 1.f;
+        rlSetMatrixProjection(ortho);
+        rlSetMatrixModelview(ident);
+        BeginBlendMode(BLEND_ALPHA);
+        const GsScreenRect gr = gsScreenRect(p.rw, p.rh);
+        for (const ScreenRect &r : *p.rects)
+            if (mine(r)) drawBar(gr, p.rw, p.rh, r);
+        EndBlendMode();
+        rlDrawRenderBatchActive();
+        rlSetMatrixProjection(keepProj);
+        rlSetMatrixModelview(keepView);
+    }
+
+    // Uma barra sobre o inimigo, em pixels da janela de rw x rh
+    void drawBar(const GsScreenRect &gr, float rw, float rh, const ScreenRect &r) {
+        const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
+        if (!a) return;
+        const float sy = rh / 224.f;
+        const float k = gr.w / 640.f;
+        float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
+        const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
+        float shift = 0.f;
+        if (splitEdges && r.barView == stripView) {
+            // faixa de baixo dos 3 jogadores: a vista tem a largura da tela, como fora da tela dividida
+            x0 = std::max(x0, 0.f);
+            x1 = std::min(x1, rw);
+        } else if (splitEdges) {
+            // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
+            // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
+            // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo
+            const float half = 0.5f * rw, v = float(r.barView & 1);
+            shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
+            x0 = std::max(x0 + shift, v * half);
+            x1 = std::min(x1 + shift, (v + 1.f) * half);
+        }
+        if (x1 <= x0) return;
+        if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte na metade da vista
+            const Texture2D t = residentTexture(r.tex0);
+            if (!t.id || fw <= 0.f) return;
+            const float du = (r.u1 - r.u0) / fw;
+            const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
+            DrawTexturePro(t, texelRect(t, r.tex0, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}), Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
+                           Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
+            return;
+        }
+        DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
+    }
+
     void drawScreenRects(float rw, float rh, bool underText = false) {
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sy = rh / 224.f;
@@ -3518,35 +3603,8 @@ public:
             if (r.underText != underText) continue;
             const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
             if (!a) continue;
-            if (r.barView >= 0) {   // barra sobre o inimigo
-                const float k = gr.w / 640.f;
-                float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
-                const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
-                float shift = 0.f;
-                if (splitEdges && r.barView == stripView) {
-                    // faixa de baixo dos 3 jogadores: a vista tem a largura da tela, como fora da tela dividida
-                    x0 = std::max(x0, 0.f);
-                    x1 = std::min(x1, rw);
-                } else if (splitEdges) {
-                    // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
-                    // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
-                    // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo
-                    const float half = 0.5f * rw, v = float(r.barView & 1);
-                    shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
-                    x0 = std::max(x0 + shift, v * half);
-                    x1 = std::min(x1 + shift, (v + 1.f) * half);
-                }
-                if (x1 <= x0) continue;
-                if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte na metade da vista
-                    const Texture2D t = residentTexture(r.tex0);
-                    if (!t.id || fw <= 0.f) continue;
-                    const float du = (r.u1 - r.u0) / fw;
-                    const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
-                    DrawTexturePro(t, texelRect(t, r.tex0, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}), Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
-                                   Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
-                    continue;
-                }
-                DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
+            if (r.barView >= 0) {   // barra sobre o inimigo (com barsUnderHud ja saiu no draw, sob o HUD)
+                if (!barsUnderHud) drawBar(gr, rw, rh, r);
                 continue;
             }
             const bool full = r.x0 <= 0.f && r.x1 >= 640.f;

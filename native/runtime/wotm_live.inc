@@ -1580,6 +1580,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const bool strip = quad && viewOk[2] && !viewOk[3] && S.snap.views[1]->vctx.w >= 640.f;
         const int VW = RW / 2, VH = quad ? RH / 2 : RH;
         auto viewW = [&](int v) { return strip && v == 2 ? RW : VW; };   // largura da textura da vista v
+        // barras sobre os inimigos: no draw de cada vista, antes do HUD (Scene::barPass); o drawBar ja quer os cortes da tela dividida
+        S.scene.splitEdges = split;
+        S.scene.stripView = strip ? 2 : -1;
+        S.scene.barsUnderHud = true;
         // MSAA (opcao ANTI-ALIASING, WOTM_MSAA): desenho num framebuffer multiamostra, resolvido na textura de sempre (wotm_msaa.hpp)
         const int msaaSamples = wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::Msaa);
         wotm::g_beforeDepthRead = wotm::msaa::readDepthIfMsaa;
@@ -1621,7 +1625,15 @@ static bool wotmDrawNative(const uint8_t *rdram)
             vc3.projection = CAMERA_PERSPECTIVE;
             BeginMode3D(vc3);
             wotm_live::g_stage = "draw (vista)";
+            {
+                // barras desta vista (estao no instantaneo da vista 0), no canto da textura dela na janela
+                const int v = static_cast<int>(&vrt - S.vrts);
+                S.scene.barPass = {&S.snap.screenRects, static_cast<float>(RW), static_cast<float>(RH), v,
+                                   static_cast<float>((v & 1) * (RW - VW)), static_cast<float>((v >> 1) * (RH - VH)),
+                                   static_cast<float>(W), static_cast<float>(VH)};
+            }
             S.scene.draw(ram, false);
+            S.scene.barPass = {};
             wotm::endMode3DInTexture();
             BeginMode3D(vc3);   // lista de alta prioridade da vista (no rtMain, o hier(v, 1) dela vem antes do texto)
             S.scene.drawHp(ram);
@@ -1778,7 +1790,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_live::g_stage = "draw";
             S.scene.fullDepth = flareSync ? nullptr : &depth[0];
             S.scene.fullDepthFbo = msOn ? S.ms.render().id : rt.id;
+            S.scene.barPass = {&S.scene.screenRects, static_cast<float>(RW), static_cast<float>(RH), -1, 0.f, 0.f,
+                               static_cast<float>(RW), static_cast<float>(RH)};   // ja com o deslocamento do modo foto
             S.scene.draw(ram, false);
+            S.scene.barPass = {};
             S.scene.fullDepth = nullptr;
             wotm_padsel::drawOnTelao(S.scene, ram, c3);   // escolha de lados do 2 jogadores (so no menu, durante a escolha)
             wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
