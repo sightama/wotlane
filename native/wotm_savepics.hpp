@@ -38,7 +38,8 @@ struct Pic {
 struct Tile {
     uint16_t texId, palTbp;
 };
-// Fase -> foto larga (esquerda, direita). Indices de kLevels: 1 central .. 11 capitol.
+// Fase -> foto larga (esquerda, direita). Indices de kLevels (Shell::m_levelNum): 1 central .. 11 capitol, 14 minisf, 15 volcano
+// (as 12, 13 e 16 nao tem foto no SHELL.TEX: a selecao de fase mostra a de outra; wotm_levelsel.inc).
 struct LevelPic {
     uint32_t level;
     Tile l, r;
@@ -55,6 +56,8 @@ constexpr LevelPic kLevelPics[] = {
     {9, {114, 368}, {115, 372}},   // Tsunopolis
     {10, {88, 264}, {89, 268}},    // UFO
     {11, {96, 296}, {97, 300}},    // Capitol
+    {14, {86, 256}, {87, 260}},    // Mini Baytown
+    {15, {90, 272}, {91, 276}},    // Volcano
 };
 // Monstro (indice de kMonsters) -> logo
 struct LogoPic {
@@ -258,6 +261,14 @@ public:
                            Rectangle{x0 + p.x0 * sx, p.y0 * sy, (p.x1 - p.x0) * sx, (p.y1 - p.y0) * sy}, Vector2{0.f, 0.f}, 0.f,
                            Color{255, 255, 255, p.a});
         }
+    }
+
+    // Foto larga da fase (512x256, de cima para baixo) ou nullptr; o mosaico da RANDOM da selecao de fase (wotm_levelsel.inc)
+    const Texture2D *levelTexture(const std::filesystem::path &discRoot, const std::string &iso, uint32_t level) {
+        if (!load(discRoot, iso)) return nullptr;
+        for (size_t i = 0; i < std::size(kLevelPics); ++i)
+            if (kLevelPics[i].level == level && level_[i].id) return &level_[i];
+        return nullptr;
     }
 
 private:

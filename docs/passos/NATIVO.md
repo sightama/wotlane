@@ -506,6 +506,26 @@ direta: `WOTM_MODE`. As regras, por gancho:
   comparação do retail (empate: o "king of the hill" entre eles) e os outros parados no ponto de espera.
 - Diálogos de fim dos minigames com "Player 3/4 - scored".
 
+## Seleção de fase (`wotm_levelsel.inc`)
+- **Listas:** o gancho do `screenLevelSelect` (tela 8) troca o `g_levelList` das quatro listas do retail (`PO_1PFreeForAll`,
+  `PO_MPFreeForAll`, `PO_1PEndurance`, `PO_MPElimination`) por uma cópia no topo da RAM (`PS2_RAM_SIZE - 0x300`): as fases do retail
+  na ordem dele, depois as que faltam de 1 a 16 (Training 12, Lake Powell 13, Tokyo Deathmatch 16 e, onde não estão, Mini Baytown
+  14 e Volcano 15) e por último RANDOM. Cursor, trava (`levelUnlocked`), sons e confirmação continuam sendo o código do jogo. Com
+  `WOTM_HIGHRAM=0` a eliminação (os 10 monstros carregados de uma vez) fica só com as fases do retail e a RANDOM. Log `[fases]`.
+- **RANDOM:** é a fase 17 (`dylan`, de teste da equipe, sem arquivos): o switch da foto (`Shell+0x5D0`) tem 24 filhos e o
+  `levelUnlocked` a deixa aberta. O nome dela na tabela do `screenLevelSelect` (`GameLevelLongNames_006EEEF8`) vira "Random". No
+  `changeScreen(8, 99)` vira uma fase sorteada da lista, entre as destravadas e sem a quarta entrada quando o jogo a pula (modo 2 com
+  2 ou mais CPUs, modo 3 com CPU), antes do narrador e da carga.
+- **Fotos:** o `SHELL.TEX` não tem foto de Training, Lake Powell e Tokyo Deathmatch; os filhos do switch dessas fases (e da 17) usam a
+  de outra (Midtown Park, metade de Rosdale Canyon, metade de Tsunopolis). O objeto da foto desenha com a textura própria
+  (`Scene::nodeTexture`), na ordem da cena, então o grão e o filme do telão passam por cima como nas outras fases. As fotos:
+  `levelpics/<nome>.png` (`training`, `lakepowell`, `tokyodeathmatch`, `random`; 2:1, fotos tiradas no modo foto do port), procuradas
+  em `mods/<mod>/levelpics/`, `levelpics/` ao lado do ELF e `levelpics/` na raiz do repo. Sem PNG fica a foto do jogo; a RANDOM sem PNG
+  é um mosaico das fotos de fase do `SHELL.TEX` (`savepics::Drawer::levelTexture`), escurecido, com um "?". A textura vai como as do
+  jogo: linhas de baixo para cima, alfa 0xFF (o das paletas das fotos do SHELL, que o desenho leva acima de 1) e repetição (o UV do
+  objeto vai de -1 a 0). O objeto com uma textura só (13, 16, 17) mapeia a mesma textura nas duas metades: o U é refeito pela posição
+  na largura (`Scene::patchMesh`, uma cópia da malha no cache, porque a arena residente guarda os vértices pelo ponteiro).
+
 ## Diagnósticos (variáveis de ambiente do viewer e do runtime)
 O `python tools/wotm_env.py` compara a tabela com o código (lista o que falta e o que sobrou; `--write` acrescenta as que faltam com descrição vazia, para preencher à mão). Variável que vira "volta ao comportamento antigo" depois de uma correção validada deve ser apagada do código, não documentada.
 
@@ -539,6 +559,7 @@ O `python tools/wotm_env.py` compara a tabela com o código (lista o que falta e
 | `WOTM_GSFRAME=1` | sem cena nativa (carregamento, troca de tela), mostra o quadro do GS; o padrão com `PS2X_NO_GS` é tela preta (o GS não desenha, e a área exibida só tinha uploads de textura: a VRAM crua aparecia entre o pulo da abertura e o menu e entre lutas) |
 | `WOTM_SHOTS=<s>[,<s>...]` | grava o quadro nativo em `shot_<s>.png` (pasta atual, o `discroot`) quando o relógio da janela passa de cada `<s>` segundos: conferir telas ao vivo com um roteiro de pad (`PS2X_PAD`), sem tecla |
 | `WOTM_WINSHOTS=<s>[,<s>...]` | como o `WOTM_SHOTS`, mas grava a janela inteira em `win_<s>.png` (com o ícone e o que vem por cima) e vale também quando a cena nativa não é redesenhada (diálogos depois da luta, tela preta de "sem cena"; `wotm_scene.inc`) |
+| `WOTM_NOHUD=1` | sem HUD nem texto do jogo em todo quadro, como o modo foto com o HUD escondido (fotos de fase com `WOTM_SHOTS`) |
 | `WOTM_PTLOG=1` | imprime a tabela de luzes pontuais (`pointLights`: `closest[]`, posição, alcance, cor, falloff) a cada `collect` e cada teste de esfera do `objectPointLights` |
 | `WOTM_FLARELOG=1`, `WOTM_FLARESHOT=<png>` | imprime as entradas da lista de lens flare, a entrada do `drawFlares` e o teste de Z (amostras visíveis, W da luz e W da amostra mais perto) / grava a imagem do teste de profundidade do flare |
 | `WOTM_FLARESYNC=1` | o teste de oclusão do lens flare volta à leitura direta da profundidade (`glReadPixels` na thread da janela, que espera o driver) em vez da cópia assíncrona (`wotm::AsyncDepth`, tela cheia e tela dividida); para comparar imagem e tempo |

@@ -8,7 +8,6 @@ O que falta fazer, e só isso. Relatos de bug passam na frente. Item terminado s
 | 8 | Mods que adicionam monstros (as skins já existem) | — | médio/alto |
 | 10 | Chefes jogáveis | 8 | alto |
 | 13 | Campanha (adventure) com até 4 jogadores | — | o mais alto |
-| 14 | Adicionar os mapas não listados nas seleções de fases | ? | médio? |
 
 10 é um caso particular de "adicionar monstro" (8). A campanha com 4 fica por último: cinema, chefes e regras foram feitos para 1 jogador.
 
@@ -32,10 +31,6 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 13. Campanha com até 4 jogadores
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no Capitólio, 0x1A0) precisam ser revistas.
-
-### 14. Adicionar os mapas não listados nas seleções de fases
-Atualmente tem vários mapas (e.g. minibaytown) que não são selecinoáveis pela interface. Precisamos adicioná-los como opções a mais na seleção de fases, além de uma opção Random.
-Cada mapa precisaria de um screenshot se eles já não tiverem. O random precisa de uma arte própria.
 
 ## Brechas (baratas, em qualquer momento)
 - Páginas do cartão com `WOTM_SAVEAUTO=0` sem mouse (o gancho do `McPage::updateMenuPos` só é instalado com o salvamento automático). Na verdade SAVEAUTO=0 parece ser resquício de debugging. Não há porque não ter autosave ligado.

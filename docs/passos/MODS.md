@@ -231,6 +231,11 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 Exemplo: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,
 luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
 
+## Fotos da seleção de fase
+`mods/<mod>/levelpics/<nome>.png` troca a foto das fases que o `SHELL.TEX` não tem (`training`, `lakepowell`, `tokyodeathmatch`) e
+a da entrada RANDOM (`random`; sem ela, um mosaico das fotos do jogo). Proporção 2:1, qualquer resolução. Ganha da pasta
+`levelpics/` do repo (`NATIVO.md`, "Seleção de fase").
+
 ## Por dentro (para quem mexe no código)
 
 - **Arquivos** (`native/wotm_mods.hpp`, `native/runtime/wotm_mods.inc`): todo arquivo que o jogo lê passa pelo `fileCdSearchFile`

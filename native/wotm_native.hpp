@@ -248,6 +248,7 @@ struct MeshData {
     bool abe = false;        // PRIM.ABE da tag GIF: so entao o alfa de vertice vale (blend); senao opaco
     uint8_t maxA = 0;        // maior alfa de vertice (tris e sprites, cru: 0x80 = 1,0); com o da textura diz se o As passa de 1
     uint32_t slotMask = 0;   // slots de textura usados pelas secoes (bit i = gsTexCtx[i])
+    bool patched = false;    // copia alterada por Scene::patchMesh (o decodificado de novo volta sem)
     uint8_t curSub = 0;   // sub-pacote em decodificacao (diagnostico)
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
     uint8_t curTme = 1;   // PRIM.TME em vigor (tag GIF com PRE; sem PRE o GS mantem o PRIM anterior)
@@ -1892,7 +1893,13 @@ public:
         if (texKey(ram, it, slot) == kScreenKey) return screenId_ = screenTexture ? screenTexture() : 0;
         return textureId(ram, it.node, slot);
     }
+    // textura no lugar da do objeto `node` (slot de textura), com alfa cru e linhas de baixo para cima como as do jogo; 0 = a do
+    // objeto. Preenche: wotm_levelsel.inc (foto das fases sem arte no SHELL)
+    unsigned (*nodeTexture)(uint32_t node, uint32_t slot) = nullptr;
+
     unsigned textureId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
+        if (nodeTexture)
+            if (const unsigned id = nodeTexture(node & 0x1FFFFFFFu, slot)) return id;
         // filme do menu: moviesSetScreenObject poe texId 999 no objeto (wotm_fmv.hpp); a textura vem do tocador, quadro a quadro
         if (movieTexture && objectTexId(ram, node, slot) == 999)
             if (const unsigned id = movieTexture()) return id;
@@ -2660,6 +2667,20 @@ public:
         cache_[pp] = md;
         lastMesh_ = md;
         return md.get();
+    }
+    // Troca a malha do objeto no cache por uma copia alterada por f (uma vez por decodificacao). Copia nova, nao a mesma alterada: a
+    // arena residente guarda os vertices pelo ponteiro da malha. Usado pelo wotm_levelsel.inc (UV da foto das fases sem arte no SHELL).
+    template <class F> bool patchMesh(const Ram &ram, uint32_t node, F &&f) {
+        if (!mesh(ram, node)) return false;
+        auto it = cache_.find(ram.u32(node + 4) & 0x0FFFFFFF);
+        if (it == cache_.end()) return false;
+        if (it->second->patched) return true;
+        auto md = std::make_shared<MeshData>(*it->second);
+        f(*md);
+        md->patched = true;
+        it->second = md;
+        lastMesh_ = md;
+        return true;
     }
     std::shared_ptr<const MeshData> lastMesh_;   // a malha do ultimo mesh() (drawList: o pedaco adiado a segura)
 

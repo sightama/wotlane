@@ -2000,6 +2000,7 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
         }
         else if (from == 8 && to == 99)   // selecao de fase confirmada (o jogo ja gravou o m_levelNum)
         {
+            wotm_levelsel::resolveRandom(rdram);   // RANDOM: a fase sorteada (wotm_levelsel.inc), antes do narrador e da carga
             wotm_narrator::announceLevel(int(rd32(rdram, kShell + 0x2BB0)));
             extraCpus(rdram);
         }

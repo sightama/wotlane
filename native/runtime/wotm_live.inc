@@ -1333,8 +1333,10 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 }
 
 #include "wotm_narrator.inc"   // nome do monstro escolhido na selecao (antes do wotm_padsel.inc, que o chama)
+namespace wotm_levelsel { void resolveRandom(uint8_t *rdram); }   // wotm_levelsel.inc: RANDOM da selecao de fase (o padsel a chama)
 // Escolha de lados do 2 jogadores no telao do menu (ganchos do menu + desenho; wotmPadSelInstall, chamado do wotm_overrides.cpp)
 #include "wotm_padsel.inc"
+#include "wotm_levelsel.inc"   // selecao de fase com as fases escondidas e a RANDOM (depois do wotm_padsel.inc: plano do telao)
 // Menu principal em texto, com o "Recompiled options" (wotmMainMenuInstall, chamado do wotm_overrides.cpp)
 #include "wotm_gamescreens.inc"   // mouse nas telas do menu que continuam as do jogo (antes do wotm_mainmenu.inc, que o chama)
 #include "wotm_menufont.inc"   // palavras da lista do menu com as letras do jogo (antes do wotm_mainmenu.inc)
@@ -1526,7 +1528,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
     if (freeView.override)
         S.snap.cam = wotm_freecam::camera(gameCam, freeView.pose, freeView.zoom);
     const wotm::GameCamera freeCam = S.snap.cam;
-    const bool photoHide = freeView.override && freeView.photo && freeView.hideHud;
+    // WOTM_NOHUD=1: sempre sem HUD nem texto do jogo, como o modo foto com o HUD escondido (fotos de fase com WOTM_SHOTS)
+    static const bool noHud = [] { const char *e = std::getenv("WOTM_NOHUD"); return e && e[0] == '1'; }();
+    const bool photoHide = (freeView.override && freeView.photo && freeView.hideHud) || noHud;
     // Redesenho: so com quadro novo do jogo (ou instantaneo novo da camera livre), fade do Shell::FadeScreen mudando, camera livre
     // pausada ou janela redimensionada; parado sem quadro novo (pausa, lacos sem captura) volta a redesenhar a ~60/s. Nas outras
     // apresentacoes (monitor acima de 60 Hz, initPresentRate) a ultima imagem e so reapresentada: o custo fica o de 60 e o texId 0
@@ -1658,6 +1662,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 if (viewOk[v])
                     depth[v].fetch(S.scene.redrawId);   // sem flare tambem: o valid acompanha a idade
         }
+        wotm_levelsel::prepare(S.scene, ram);   // foto propria das fases sem arte no SHELL (Scene::nodeTexture); fora do menu, nenhuma
         for (int v = 1; v < 4; ++v)
             if (viewOk[v])
             {
@@ -1671,12 +1676,23 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::ProfScope ps(wotm::DrawProf::RShow);
             gc = S.scene.show(S.snap);
         }
+        wotm_levelsel::prepare(S.scene, ram);   // com os objetos deste quadro
         viewCam[0] = gc;
         S.snap.cam = gameCam;
         if (freeView.override && freeView.photo)
             wotm_photo::applyToScene(S.scene, ram, gameCam, freeCam, freeView, S.snap.anchors, !S.snap.vctx.full());
         else if (freeView.override)
             wotm_freecam::applyToScene(S.scene, gameCam, freeView.pose);
+        if (noHud)
+        {
+            S.scene.hud.clear();
+            S.scene.hp.clear();
+            S.scene.hpOverlay.clear();
+            S.scene.overlay.clear();
+            S.scene.screenPolys.clear();
+            auto &rects = S.scene.screenRects;
+            rects.erase(std::remove_if(rects.begin(), rects.end(), [](const wotm::ScreenRect &r) { return r.barView >= 0; }), rects.end());
+        }
         if (wotm::ScreenRect r{}; wotm_live::shellFadeRect(r))
             S.scene.screenRects.push_back(r);
 
@@ -2102,5 +2118,6 @@ void wotmLoadFreeze(bool) {}
 void wotmCaptureFadeStep(const uint8_t *) {}
 void wotmPickupHighlights(const uint8_t *) {}
 void wotmPadSelInstall(PS2Runtime &) {}
+void wotmLevelSelInstall(PS2Runtime &) {}
 void wotmMainMenuInstall(PS2Runtime &) {}
 #endif
