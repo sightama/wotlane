@@ -2509,6 +2509,14 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             if (const char *k = std::strchr(md, ':'))
                 g_matchContinues = std::clamp(std::atoi(k + 1), 0, 9);
         }
+        // Tipos sem arquivos em MON/ (0 "null", 6 spider, 12 ogre, 16 e 17): a carga le arquivos que nao existem, sem erro, e o
+        // texmResRelocate percorre lixo (com 3 jogadores e o 0 nao sai mais do laco).
+        for (int i = 0; p && *p == '\0' && i < n - 1; ++i)
+            if (v[i] < 1 || v[i] > 15 || v[i] == 6 || v[i] == 12)
+            {
+                std::fprintf(stderr, "[wotm] WOTM_MATCH: monstro %d nao existe no disco (use 1-5, 7-11, 13-15)\n", v[i]);
+                p = nullptr;
+            }
         if (p && *p == '\0' && n >= 1 + g_matchPlayers)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
