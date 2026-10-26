@@ -403,8 +403,10 @@ Formato dos binários do cartão: `docs/FORMATOS.md`, "Save do memory card". `WO
   quadrada no pedaço anterior não é usada). As paletas são entradas 16x16 do `.RTX` alocadas na ordem das texturas (4 por T8, 1 por
   T4; o `.NGP` não liga essas, o menu as troca por switch). As linhas estão de baixo para cima. O modal posta a lista a cada quadro e a
   janela desenha entre a moldura (lista de alta prioridade) e o texto, com 0,2 s de entrada. Sem logo (Spider, Ogre...) sai o nome em
-  texto. O monstro 3D é o do `wotm_model.hpp` (`MODELOS_3D.md`). O nativo aceita instantâneos com menos de 20 itens quando há diálogo
-  na lista de alta prioridade (o "salvar?" depois da cena final de Tsunopolis).
+  texto. O monstro 3D é o do `wotm_model.hpp` (`MODELOS_3D.md`). Instantâneo com menos de 20 itens conta como "sem fase" (tela
+  preta), salvo com diálogo na lista de alta prioridade (o "salvar?" depois da cena final de Tsunopolis). A conta soma o que o
+  `collect` recortou pela vista (`Snapshot::culled`): só os visíveis davam menos de 20 com a câmera virada para o espaço no UFO ou
+  colada numa parede, e a luta inteira ficava preta.
 - **Ícone de salvamento** (`native/wotm_saveicon.hpp`; `WOTM_SAVEICON_TEST=1` mostra a cada 3 s): o `MEMCRD/ICON.ICO` do disco (formato
   em `FORMATOS.md`). Cada gravação do `save.json` soma `g_wotmSaveCount`, e o `wotmDrawScene` desenha a fita girando no canto inferior
   direito por 1 s (0,15 s de fade). Lê da pasta do disco, da ISO (`native/wotm_disc.hpp`) ou da cópia que o jogo gravou no cartão. As

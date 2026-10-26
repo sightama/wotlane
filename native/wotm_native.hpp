@@ -829,6 +829,7 @@ struct Snapshot {
     GameCamera cam;
     ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita; quadrantes: v & 1 coluna, v >> 1 linha)
     uint32_t g = 0;     // contador de quadros do jogo
+    uint32_t culled = 0;   // OBJECTs e GROUPs que o collect recortou pela vista (a fase existe mesmo com poucos itens na tela)
     bool valid = false;
     // Tela dividida: as vistas 1 a 3 do mesmo quadro (coletadas na saida do hier(v, 0)); views[v - 1] = nullptr: sem a vista v
     std::shared_ptr<Snapshot> views[3];
@@ -858,6 +859,7 @@ public:
     std::vector<WorldLight> worldLights;   // Snapshot::worldLights (o walk as acha nos nos op 5)
     std::vector<WorldEmitter> emitters;    // Snapshot::emitters (nos op 22)
     uint32_t visited = 0;
+    uint32_t culled = 0;   // OBJECTs e GROUPs fora da vista no collect (Snapshot::culled)
     uint32_t byOp[64] = {};
 
     gs::Vram vram;   // so para depuracao: a VRAM do dump guarda paletas velhas (restos do menu)
@@ -2007,6 +2009,7 @@ public:
         spec_ = 0.f;
         lightOwn_ = false;
         visited = 0;
+        culled = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
         std::memset(byOp, 0, sizeof byOp);
         seen_.clear();
@@ -2076,6 +2079,7 @@ public:
         sn.fog = fog_;
         sn.cam = readGameCamera(ram, vctx.view);
         sn.vctx = vctx;
+        sn.culled = culled;
         readScreenPolys(ram, sn.screenPolys);
         sn.g = g;
         sn.valid = true;
@@ -4235,7 +4239,7 @@ private:
         ++byOp[op];
         switch (op) {
         case 0:                                                                                                 // OBJECT
-            if (!(ram.u16(node + 0xC) & 1) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) break;
+            if (!(ram.u16(node + 0xC) & 1) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) { ++culled; break; }
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
             items.back().cs = cs_;
             // O pktAddVu1ObjAsm so grava o qword 20 (especular, specIntensity +0x6C) com specLightMe (0x2000); sem ele o programa de
@@ -4258,7 +4262,7 @@ private:
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 e TEST_1 dos filhos)
             const uint16_t gflags = ram.u16(node + 0xA);                                    // visual (bit 0), noFOV (bit 2)
             if (!(gflags & 1)) break;
-            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) break;
+            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) { ++culled; break; }
             const CtxScope cs(*this, ram, ram.u32(node + 4));
             kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
             break;

@@ -1467,7 +1467,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // Sem fase de verdade (carregando, tela vazia): fica o quadro do GS. Com dialogo na lista de alta prioridade (moldura do
         // McBackground: "salvar?", lista de saves) vale mesmo com a fase quase vazia: em Tsunopolis, depois do disco voador levar o
         // monstro na cena final, sobram 18 itens e a pergunta de salvar saia toda preta.
-        if ((sn.items.size() < 20 && sn.hp.empty()) || !sn.cam.ok)
+        // A conta inclui o que o collect recortou pela vista (Snapshot::culled): olhando para o espaco no UFO, ou com a camera
+        // colada numa parede, sobravam menos de 20 itens visiveis e a luta inteira (HUD junto) ficava preta.
+        if ((sn.items.size() + sn.culled < 20 && sn.hp.empty()) || !sn.cam.ok)
         {            S.snap = wotm::Snapshot{};
             return false;
         }
