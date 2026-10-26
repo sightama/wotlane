@@ -958,7 +958,9 @@ namespace wotm_train
             const size_t t = other("Ograbthrow", "GRAB: THROW", 0xDD74u, ground, h, kCir);
             list[t].kb = 1.f;
         }
-        for (int i = 0; i < 2; ++i)   // levantar atacando: entradas de 0x24 (de costas / de brucos)
+        // levantar atacando (docs/investigacoes/2026-10-26/move_list_getup_taunt.md): deitado, cada toque de botao de face regrava o
+        // getupAttack (ThrowBack +0x558) com "LIGHT ou HEAVY apertado"; entrada 0 ou 1 pela orientacao do localizador 0x809 (+0x3358)
+        for (int i = 0; i < 2; ++i)   // entradas de 0x24
         {
             const uint32_t e = m + 0x10C40u + uint32_t(i) * 0x24u;
             const int anim = int(rd32(rdram, e + 0x20u));
@@ -967,7 +969,7 @@ namespace wotm_train
             char id[12], nm[16];
             std::snprintf(id, sizeof id, "Ogetup%d", i);
             std::snprintf(nm, sizeof nm, "GETUP %d", i + 1);
-            std::snprintf(h, sizeof h, "WHILE KNOCKED DOWN, HOLD AN ATTACK BUTTON TO GET UP SWINGING. %.0f DAMAGE, WINDOW %.0f-%.0f", d, rdf(rdram, e + 0x14u) * 100.f, rdf(rdram, e + 0x18u) * 100.f);
+            std::snprintf(h, sizeof h, "WHILE KNOCKED DOWN, PRESS LIGHT OR HEAVY (THE LAST BUTTON MASHED DECIDES; HOLDING IT AS YOU LAND COUNTS) TO GET UP SWINGING. %.0f DAMAGE, WINDOW %.0f-%.0f", d, rdf(rdram, e + 0x14u) * 100.f, rdf(rdram, e + 0x18u) * 100.f);
             const size_t k = other(id, nm, 0x10C40u, d, h, uint8_t(kSq | kTri));
             list[k].ini = rdf(rdram, e + 0x14u); list[k].fim = rdf(rdram, e + 0x18u);
             list[k].kb = rdf(rdram, e + 0x28u); list[k].stun = rdf(rdram, e + 0x30u);
@@ -975,9 +977,21 @@ namespace wotm_train
         {   // crowd control: onda com o medidor de especial
             const int n = std::clamp(int(rd32(rdram, m + 0xF42Cu)), 0, 8);
             const float d0 = rdf(rdram, m + 0xF450u), rn = n > 0 ? rdf(rdram, m + 0xF67Cu + 4u * uint32_t(n - 1)) : 0.f;
-            std::snprintf(h, sizeof h, "LIGHT + JUMP TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST. USES THE WHOLE METER", rn, n, d0);
+            // anel sem forca (+0xC e +0x10 zero) so faz recuar (HitEvent tipo 1; move_list_campos_especiais.md): o ultimo, no crowd control
+            const uint32_t last = m + 0xF44Cu + uint32_t(n > 0 ? n - 1 : 0) * 0x1Cu;
+            const bool edge = n > 1 && rdf(rdram, last + 0xCu) == 0.f && rdf(rdram, last + 0x10u) == 0.f;
+            std::snprintf(h, sizeof h, "LIGHT + JUMP TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST%s. USES THE WHOLE METER", rn, n, d0,
+                          edge ? "; THE OUTER EDGE ONLY STAGGERS" : "");
             const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h, uint8_t(kSq | kX));
             list[i].radius = rn; list[i].kb = rdf(rdram, m + 0xF458u); list[i].stun = rdf(rdram, m + 0xF460u);
+        }
+        {   // provocacao (move_list_getup_taunt.md): Select parado (StateIdle) ou ao pousar; com o medidor de especial cheio (+0xF4) liga a
+            // furia aos 95% da animacao: dano x +0x48C x +0x49C (cada um so se > 0), velocidade x +0x4A0, drena o medidor em +0x494 s (20 se 0)
+            const float a = rdf(rdram, m + 0x48Cu), b = rdf(rdram, m + 0x49Cu), spd = rdf(rdram, m + 0x4A0u), dur0 = rdf(rdram, m + 0x494u);
+            const float dmgX = (a > 0.f ? a : 1.f) * (b > 0.f ? b : 1.f), dur = dur0 > 0.f ? dur0 : 20.f;
+            std::snprintf(h, sizeof h, "SELECT, STANDING STILL. WITH THE SPECIAL METER FULL IT STARTS RAGE: DAMAGE X%.2f, SPEED X%.2f FOR %.0f SECONDS, DRAINING THE METER. OTHERWISE IT IS JUST A TAUNT",
+                          dmgX, spd > 0.f ? spd : 1.f, dur);
+            other("Otaunt", "TAUNT", 0xFE20u, 0.f, h, 0);
         }
         {   // Counter (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 7): de dentro do Block, R2 + quadrado/triangulo; sem dano (o counterSuccess so cancela o
             // golpe e manda a vitima para Countered; collisTestBatAttack devolve 0); janela em fields +0x3C/+0x40, rouba o objeto +0x4C
@@ -1095,8 +1109,9 @@ namespace wotm_train
             }
             case 0x10790u:   // AirStrike (Zorgulon)
             {
-                const float d = rdf(rdram, m + so + 0x174u), fr = rdf(rdram, m + so + 0x178u);
-                std::snprintf(h, sizeof h, "%s. FLARE, THEN SAUCERS STRAFE THE TARGET FOR %.0f FIELDS, %.1f DAMAGE PER SHOT", cmd, fr, d);
+                const float d = rdf(rdram, m + so + 0x174u);
+                const int fr = int(rd32(rdram, m + so + 0x178u));   // inteiro (720 no ALIEN.CHR)
+                std::snprintf(h, sizeof h, "%s. FLARE, THEN SAUCERS STRAFE THE TARGET FOR %d FIELDS, %.1f DAMAGE PER SHOT", cmd, fr, d);
                 other("Ospecial", "AIR STRIKE", so, d, h, kSpecialBtn);
                 break;
             }
@@ -1104,7 +1119,7 @@ namespace wotm_train
             {
                 const float d = rdf(rdram, m + so + 0x19Cu);
                 const int balls = int(rd32(rdram, m + so + 0x190u));
-                std::snprintf(h, sizeof h, "%s. LAVA BLAST: %d BALLS OF %.0f DAMAGE EACH, PLUS FIRE. KNOCKS DOWN", cmd, balls, d);
+                std::snprintf(h, sizeof h, "%s. LAVA BLAST: %d BALLS OF %.1f DAMAGE EACH, PLUS FIRE. KNOCKS DOWN", cmd, balls, d);
                 const size_t i = other("Ospecial", "LAVA BLAST", so, d, h, kSpecialBtn);
                 list[i].kb = 1.f;
                 break;

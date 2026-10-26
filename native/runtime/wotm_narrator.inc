@@ -1,7 +1,9 @@
 // wotm_narrator.inc: narrador das selecoes (incluido por wotm_live.inc, antes do wotm_padsel.inc). Ao confirmar um monstro (telas 3 e
 // 6 nativas, selecao de 3 e 4 jogadores) ou uma fase (tela 8 do jogo: o changeScreen(8, 99) da confirmacao, gancho no wotm_padsel.inc)
 // toca o MP3 com o nome dele, junto com o som de confirmar do jogo (nao no lugar).
-// Opcao ANNOUNCER da aba FEATURES do "Recompiled options" (WOTM_ANNOUNCER, ligada por padrao).
+// Opcao NARRATOR da aba FEATURES do "Recompiled options" (WOTM_ANNOUNCER): 0 OFF, 1 GODZILLA SAVE THE EARTH (padrao, os MP3), 2 MONSTER
+// CRY: no lugar do nome do monstro, o grito dele (o som do cinema de entrada da luta, do banco do monstro; playMonsterCry no
+// wotm_snd.inc); monstro sem grito (Goliath Prime) fica em silencio; as fases e o titulo continuam com o MP3.
 //
 // Arquivos <nome>.mp3: monstros (congar, robo47, togera, ultrav, preytor, kineticlops, magmo, raptros, agamo, zorgulon,
 // goliathprime, cerebulon) e fases (levelName: midtownpark, gamblersgulch, rosdalecanyon, metrocity, ...), procurados nesta ordem: mods/<mod>/narrator/ (pasta mods/ de sempre: um mod pode trocar a voz), narrator/ ao lado do
@@ -108,11 +110,33 @@ static void play(const char *const *names)
     g_playing = s;
 }
 
+// MONSTER CRY: o grito do monstro no lugar do nome (corta o MP3 que estiver tocando; sem grito, silencio). false = outra opcao, vale o MP3
+static bool cry(int monster)
+{
+    if (wotm::settings::get(wotm::settings::Announcer) != 2)
+        return false;
+    std::lock_guard<std::mutex> lk(g_m);
+    if (g_playing && IsSoundPlaying(*g_playing))
+        StopSound(*g_playing);
+#if defined(WOTM_HAVE_SND)
+    wotm_snd_hooks::playMonsterCry(monster);
+#else
+    (void)monster;
+#endif
+    return true;
+}
+
 // Nome do monstro (indice do jogo, m_monsterSel >> 5)
-static void announce(int monster) { play(namesOf(monster)); }
-// Monstro custom: o "narrator" do monster.json e, sem o arquivo, o do tipo
+static void announce(int monster)
+{
+    if (!cry(monster))
+        play(namesOf(monster));
+}
+// Monstro custom: o "narrator" do monster.json e, sem o arquivo, o do tipo (com MONSTER CRY, o grito do tipo)
 static void announce(const std::string &name, int monster)
 {
+    if (cry(monster))
+        return;
     const char *const *t = namesOf(monster);
     const char *names[4] = {name.empty() ? nullptr : name.c_str(), nullptr, nullptr, nullptr};
     for (int i = 0, k = names[0] ? 1 : 0; t[i] && k < 3; ++i) names[k++] = t[i];

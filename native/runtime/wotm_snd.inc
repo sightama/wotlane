@@ -105,13 +105,26 @@ void startSoundSystem(uint8_t *, R5900Context *ctx, PS2Runtime *)
 void stopSoundSystem(uint8_t *, R5900Context *, PS2Runtime *) { Engine::get().stopAll(); }
 void ret0(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 0); }   // FlushSoundCommands, ResolveBankXREFS...
 void getTick(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnU32(ctx, Engine::get().tickCount()); }
+// Banco do grito do narrador (playMonsterCry, abaixo): fora dos do jogo, sai quando o jogo carrega um banco dele (o jogo confere a
+// SRAM livre, que conta todos os bancos do motor, antes de carregar os da luta)
+static uint32_t g_cryBank = 0;
+static std::string g_cryFile;
+static void dropCryBank()
+{
+    if (!g_cryBank) return;
+    Engine::get().unloadBank(g_cryBank);
+    g_cryBank = 0;
+    g_cryFile.clear();
+}
 void bankLoadByLoc(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
+    dropCryBank();
     const uint32_t h = Engine::get().loadBank(arg(ctx, 0), arg(ctx, 1));
     setReturnU32(ctx, h);
 }
 void bankLoadByLocCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 {
+    dropCryBank();
     const uint32_t h = Engine::get().loadBank(arg(ctx, 0), arg(ctx, 1));
     callGuest(rdram, ctx, rt, arg(ctx, 2), h, arg(ctx, 3));
 }
@@ -271,6 +284,38 @@ inline void playPanelSfx(int sound)
             std::fprintf(stderr, "[snd] painel: som %d do Shell -> %u (grupo %d, volume mestre %#x)\n", sound, v, kPanelGroup,
                          Engine::get().masterVolume(kPanelGroup));
     }
+}
+// Grito do monstro `monster` (indice do jogo, tipo >> 5) para o narrador (opcao MONSTER CRY, wotm_narrator.inc): o som do
+// MonsterSound::playSignatureSound (o do cinema de entrada da luta), do banco do proprio monstro (o do SoundManager::loadMonsterBank;
+// o Final_s.bnk e o banco da fase final, carregado pelo loadRTSoundBanks). Trajes com outro som no jogo (Preytor 1, Agamo 3) usam o
+// do traje 0. Um banco por vez, no grupo 0 (efeitos: o volume mestre do menu); false = sem grito (Goliath Prime, 13, nao tem).
+inline bool playMonsterCry(int monster)
+{
+    struct Cry { const char *bank; int sound; };
+    static const Cry kCry[16] = {{nullptr, 0},       {"SND/APE_S.BNK", 0},    {"SND/ROBOT_S.BNK", 4},   {"SND/LIZARD_S.BNK", 2},
+                                 {"SND/SHOGUN_S.BNK", 7}, {"SND/MANTIS_S.BNK", 5}, {nullptr, 0},           {"SND/ENERGY_S.BNK", 0},
+                                 {"SND/LAVA_S.BNK", 6},  {"SND/DRAGON_S.BNK", 4}, {"SND/ROKMAN_S.BNK", 0}, {"SND/ALIEN_S.BNK", 6},
+                                 {nullptr, 0},       {nullptr, 0},            {"SND/FINAL_S.BNK", 8},   {"SND/FINAL_S.BNK", 0x11}};
+    if (monster < 0 || monster >= 16 || !kCry[monster].bank)
+        return false;
+    const Cry &c = kCry[monster];
+    if (g_cryFile != c.bank)
+    {
+        dropCryBank();   // corta o grito anterior
+        const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        std::vector<uint8_t> f;
+        if (wotm::disc::readFile(io.cdRoot, io.cdImage.string(), c.bank, f))
+            g_cryBank = Engine::get().loadBankData(f, 0);
+        if (!g_cryBank)
+        {
+            std::fprintf(stderr, "[narrador] grito: banco %s nao carregou\n", c.bank);
+            return false;
+        }
+        g_cryFile = c.bank;
+    }
+    const uint32_t v = Engine::get().play(g_cryBank, c.sound, 0x400, 0, 0, 0);
+    std::fprintf(stderr, "[narrador] grito do monstro %d: som %d de %s%s\n", monster, c.sound, c.bank, v ? "" : " (nao tocou)");
+    return v != 0;
 }
 } // namespace wotm_snd_hooks
 

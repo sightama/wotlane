@@ -17,10 +17,10 @@ static std::atomic<bool> g_manual{false};
 static std::atomic<uint32_t> g_manualDevs[4] = {};
 static std::atomic<int> g_portBase{0};
 
-static uint32_t deviceMap(int port)
+// Dispositivos do jogador `port` (0..3)
+static uint32_t devicesOf(int port)
 {
     const bool kbSeparate = wotm::settings::on(wotm::settings::KbSeparate);   // opcao ao vivo (wotm_settings.hpp)
-    port += g_portBase.load(std::memory_order_relaxed);
     int pads[PS2_PAD_MAX_GAMEPADS];
     int n = 0;
     for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
@@ -53,6 +53,7 @@ static uint32_t deviceMap(int port)
     }
     return devs;
 }
+static uint32_t deviceMap(int port) { return devicesOf(port + g_portBase.load(std::memory_order_relaxed)); }
 
 // ------------------------------------------------------------------ mapa de teclas e botoes (wotm_settings.hpp, aba CONTROLS)
 namespace st = wotm::settings;

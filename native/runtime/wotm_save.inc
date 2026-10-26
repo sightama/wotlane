@@ -581,7 +581,7 @@ namespace wotm_save
     // Boot, opcoes, destrave, endurance e fim da historia nao abrem mais o cartao: o MonsterMc::update* de cada um (chamado num laco
     // ate MonsterMc+4) vira uma copia direta entre a RAM e o JSON e termina na mesma chamada. A aventura (updateStoryModeSave/Load)
     // continua com as paginas e os binarios (item 5). Os tokens que o jogo soma fora dessas gravacoes (fim de fase da historia, em
-    // Shell::EvaluateOnePlayerStoryStatus) sao pegos pela vigia por quadro (poll). WOTM_SAVEAUTO=0 volta as paginas do cartao.
+    // Shell::EvaluateOnePlayerStoryStatus) sao pegos pela vigia por quadro (poll).
 
     void w32(uint8_t *rdram, uint32_t a, uint32_t v) { std::memcpy(rdram + (a & 0x1FFFFFFu), &v, 4); }
     constexpr uint32_t kSelStride = 0x2C, kSelState = 4, kSelCost = 8;   // SelectSlot (12 grupos de 4, 0xB0 por grupo)
@@ -646,7 +646,6 @@ namespace wotm_save
         bool operator==(const Snap &o) const { return valid == o.valid && std::memcmp(v, o.v, sizeof v) == 0; }
     };
     Snap g_snap;
-    bool g_auto = false;
     // cada gravacao do JSON soma g_wotmSaveCount (definido antes do namespace; o icone de salvamento, wotm_saveicon.hpp, le)
 
     Snap snapOf(const uint8_t *rdram)
@@ -1345,7 +1344,7 @@ namespace wotm_save
             default:
                 break;
             }
-        if (!g_auto || !g_snap.valid)
+        if (!g_snap.valid)
             return;
         const Snap now = snapOf(rdram);
         if (now.valid && !(now == g_snap))
@@ -1388,18 +1387,12 @@ namespace wotm_save
         runtime.registerFunction(kStdInit, &stdInitTapped);
         runtime.registerFunction(kStdExit, &stdExitTapped);
         g_on = true;
-        const char *a = std::getenv("WOTM_SAVEAUTO");
-        g_auto = !(a && a[0] == '0');
-        if (g_auto)
-        {
-            registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
-            if ((g_origMenuPos = runtime.lookupFunction(wotm::fn::updateMenuPos__6McPageR7McState)))
-                runtime.registerFunction(wotm::fn::updateMenuPos__6McPageR7McState, &menuPosTapped);   // mouse no "salvar?"
-            runtime.registerFunction(kBoxesUpdate, &boxesReplaced);   // lista de saves no lugar das caixas (carregar)
-            runtime.registerFunction(kChooseUpdate, &chooseReplaced); // e no lugar da escolha do cartao (gravar)
-        }
-        std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); %s\n", g_json.string().c_str(),
-                     g_auto ? "opcoes, destraves e tokens gravados sozinhos, sem as telas do cartao (WOTM_SAVEAUTO=0 volta as telas)"
-                            : "telas do cartao como no PS2 (WOTM_SAVEAUTO=0)");
+        registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
+        if ((g_origMenuPos = runtime.lookupFunction(wotm::fn::updateMenuPos__6McPageR7McState)))
+            runtime.registerFunction(wotm::fn::updateMenuPos__6McPageR7McState, &menuPosTapped);   // mouse no "salvar?"
+        runtime.registerFunction(kBoxesUpdate, &boxesReplaced);   // lista de saves no lugar das caixas (carregar)
+        runtime.registerFunction(kChooseUpdate, &chooseReplaced); // e no lugar da escolha do cartao (gravar)
+        std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); opcoes, destraves e tokens gravados sozinhos, sem as "
+                     "telas do cartao\n", g_json.string().c_str());
     }
 }

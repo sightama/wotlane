@@ -139,7 +139,7 @@ constexpr TabDef kTabDefs[kTabs] = {
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
-      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE TITLE, THE MONSTER AND THE LEVEL YOU PICK"},
+      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"},
       {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
@@ -147,10 +147,11 @@ constexpr TabDef kTabDefs[kTabs] = {
       {st::CamInvertY, "INVERT Y", "FLIPS UP AND DOWN ON THE RIGHT STICK"},
       {st::CamRecenter, "AUTO CENTER", "WHILE YOU WALK, THE CAMERA SLOWLY SWINGS BACK BEHIND YOUR MONSTER"},
       {st::CloseCam, "CLOSE-UP CAMERA", "WHEN TWO MONSTERS FIGHT UP CLOSE, THE GAME CAN SWITCH TO A SHARED VIEW"}}},
-    {3,
+    {4,
      {{st::KbSeparate, "KEYBOARD", "SHARE PLAYER 1 WITH THE FIRST GAMEPAD, OR PLAY AS A PLAYER OF ITS OWN"},
       {st::Prompts, "BUTTON ICONS", "AUTO SHOWS THE BUTTONS OF WHATEVER YOU PLAYED WITH LAST"},
-      {st::MenuConfirm, "MENU CONFIRM", "WHICH GAMEPAD BUTTON ACCEPTS IN THE MENUS"}}},   // e o mapa: ctlRows
+      {st::MenuConfirm, "MENU CONFIRM", "WHICH GAMEPAD BUTTON ACCEPTS IN THE MENUS"},
+      {st::Vibration, "VIBRATION", "THE GAMEPAD SHAKES WITH HITS AND CRASHES. XINPUT GAMEPADS ONLY"}}},   // e o mapa: ctlRows
 };
 static int g_tab = TabVideo;
 static int g_optSel[kTabs] = {};
@@ -158,7 +159,7 @@ constexpr int kVisRows = 7;   // linhas do painel que cabem; a aba CONTROLS rola
 // aba VIDEO: linhas mais baixas e juntas, as 8 ao lado da previa da opcao (panelLayout, wotm_preview.hpp)
 static int visRows(int tab) { return tab == TabVideo ? 8 : kVisRows; }
 
-// Aba CONTROLS: as opcoes da aba (teclado separado, icones, confirmar nos menus), qual mapa a lista mostra (teclado ou gamepads), um
+// Aba CONTROLS: as opcoes da aba (teclado separado, icones, confirmar nos menus, vibracao), qual mapa a lista mostra (teclado ou gamepads), um
 // botao do PS2 por linha e a volta ao padrao
 constexpr int kCtlOpt = -10, kCtlDevice = -2, kCtlReset = -3;   // kCtlOpt - i: opcao i da aba
 constexpr int kMaxCtlRows = kMaxOpts + 2 + st::kBinds;
@@ -380,6 +381,7 @@ static int choices(st::Key k, int out[16])
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
+    case st::Announcer: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::Prompts:   // sem o PLAYSTATION: igual ao ORIGINAL (o AUTO ainda o usa com gamepad de PlayStation)
     {
         int n = 0;
@@ -445,7 +447,9 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
     case st::Camera: std::snprintf(buf, sz, "%s", v ? "MODERN" : "CLASSIC"); break;
     case st::CamSens: std::snprintf(buf, sz, "%d", v); break;
-    case st::Announcer: std::snprintf(buf, sz, "%s", v ? "GODZILLA SAVE THE EARTH" : "OFF"); break;   // a voz do narrador (narrator/)
+    case st::Announcer:   // a voz do narrador (narrator/) ou o grito do monstro escolhido
+        std::snprintf(buf, sz, "%s", v == 2 ? "MONSTER CRY" : v ? "GODZILLA SAVE THE EARTH" : "OFF");
+        break;
     default: std::snprintf(buf, sz, "%s", v ? "ON" : "OFF"); break;
     }
 }
@@ -782,6 +786,7 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         if (v == cur)
             return false;
         st::set(k, v);
+        if (k == st::Vibration) wotm_rumble::poll();   // desligada: os motores param na hora
         char buf[32];
         valueText(k, v, buf, sizeof buf);
         std::fprintf(stderr, "[settings] %s = %s (%s=%s)\n", t.opt[sel].label, buf, st::kEnv[k], st::format(k, v).c_str());
@@ -1964,6 +1969,7 @@ void wotmMainMenuInstall(PS2Runtime &runtime)
 {
     using namespace wotm_mainmenu;
     wotm_pausemenu::install(runtime);   // com ou sem os menus em texto
+    wotm_rumble::install(runtime);
     if (!g_enabled)
         return;
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; };

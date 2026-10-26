@@ -381,7 +381,10 @@ void elimAfterDialog(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int
     call(rdram, ctx, runtime, fn::SetPlayerMonster__7TheGameiiiii, {kGame, uint32_t(i), sel, 0u, uint32_t(i), i == 0 ? rd32(rdram, kShell + 0x2BE0) : 0u});
     // o playerInit do jogo, guardado na instalacao: o do WOTM_AIVSAI (aiInit) deixava sem estado o monstro trocado no meio da luta
     if (const uint32_t m = monster(rdram, i))
+    {
         callOrigWith(g_playerInit, rdram, ctx, runtime, {m});
+        wr32(rdram, m + 0x672C, 0);   // esquema de controle tipo A (o do jogo, para os jogadores 3 e 4, vinha do m_vibration; wotm_pausemenu.inc)
+    }
     refreshWins(rdram, players(rdram));
     std::fprintf(stderr, "[modes4] eliminacao: jogador %d volta com o monstro %x (%d continues)\n", i + 1, sel, g_cont[i]);
 }
