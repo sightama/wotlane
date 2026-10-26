@@ -15,7 +15,7 @@ StatePunch do Monster (Monster + 0x8470 + 0x20 + pos*0x420 + tipo*0xB0, a PunchC
 
 --specials: as chaves dos estados especiais (SPECIAL_KEYS: offset na chave -> offset no estado, que fica em Monster + base) e
 a onda de choque do CrowdControl e do RobotSpecial (anel na chave: alcance e os campos +0x4..+0x18 do anel; papel de cada um
-em 2026-10-26/move_list_campos_especiais.md, "ShockWaveConfig"). O ganho de stamina dos
+em b4e810b:docs/investigacoes/2026-10-26/move_list_campos_especiais.md, "ShockWaveConfig"). O ganho de stamina dos
 AttackState (estado +0x14/+0x18, creditStaminaForAttack) nao esta no arquivo: nenhuma chave o escreve e o construtor zera.
 OGRE e SPIDER usam outra numeracao de chaves (formato antigo, sem a 0xFCC de 0x26B0 bytes) e ficam de fora.
 """
