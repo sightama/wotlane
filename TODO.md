@@ -29,7 +29,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 11. Multiplayer de 4
 Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" e "Menu multijogador de 2 a 4".
-- **Seleção de 3 e 4 perdida em merges:** CPUs (tela 13) e a lista de modos (eliminação, minigames) com 3 e 4 sumiram do `wotm_padsel.inc`; refazer em cima do arquivo atual e corrigir o `NATIVO.md`, que as descreve como existentes (`docs/investigacoes/2026-10-25/multiplayer_merges_perdidos.md`).
+- **Lista de modos com 3 e 4 perdida em merges:** a lista "free-for-all / elimination / minigames" com 3 e 4 jogadores (eliminação e minigames pelo menu) sumiu do `wotm_padsel.inc` (hoje o free for all vai direto à tela 13); refazer em cima do arquivo atual (`git show 7f83bf5 -- native/runtime/wotm_padsel.inc`) e corrigir o `NATIVO.md`, "Escolha de controles", que a descreve como existente (`docs/investigacoes/2026-10-25/multiplayer_merges_perdidos.md`).
 - **Custo de 3 e 4 vistas:** plano em `docs/investigacoes/2026-10-23/performance_vistas.md`. Falta: partículas uma vez por redesenho, cache de vértices entre vistas, malhas estáticas da fase na GPU e o lado do EE (o `hier(v, 0)` custa ~4 ms por vista; a montagem dos pacotes do VU1 não serve ao desenho nativo). Num Ryzen 3 3200G a lógica fica a 30 com 3 e 4 jogadores.
 - **Testes que faltam:** alguém jogar com 4 controles físicos; pontos de verdade no big shot e no crush (a IA não joga os minigames).
 - **`TheGame::m_tokens`:** o `include/game/game.h` diz `[2]` seguido de um pad, mas são 4 `TokenManager` (0x1004 cada, de 0x11C370 a 0x120380, inicializados no `InitBeforeDbLoad`). Corrigir o header pede o gate.
@@ -56,7 +56,6 @@ Cada mapa precisaria de um screenshot se eles já não tiverem. O random precisa
 ## Fora da ordem (até o dono escolher)
 - **Seleção nativa com a cara do jogo:** a seleção de monstros nativa (telas 3, 6, 7, 18, 19 e a de 3 e 4; `wotm_padsel.inc`, `NATIVO.md`, "Seleção de monstros de 1 e 2 jogadores") ficar mais parecida com a tela do retail (molduras, cores, fonte, posição dos quadros). Comparar com `WOTM_NATSEL=0` (a tela do jogo) e as fotos de `docs/screenshots/2026-10-23/`.
 - **Logos dos monstros na seleção nativa:** onde hoje sai só o nome do monstro em texto, desenhar o logo do jogo (recortado do `SHELL/SHELL.RTX`, como os retratos de `kPortraits`; achar quais texIds são os logos). Nada do jogo vai para o repo: o recorte sai do `.RTX` na hora. Monstros custom e de mod: campo `"logo"` no `monster.json` (PNG, como o `"portrait"`; `MODS.md`, "Monstros custom"), e sem ele fica o nome em texto.
-- **Até 7 CPUs pelo menu:** no single player a tela 12 já vai até 7 (`NATIVO.md`, "Até 7 CPUs pelo menu"), mas as CPUs 4 a 7 saem sorteadas: a seleção (tela 19, `soloPanels` do `wotm_padsel.inc`, `kMaxPlayers` 4) precisa de até 8 quadros para o jogador escolher todas (os `curCostume`/`aiNIsDone` do retail só cobrem 3 CPUs: as extras precisam de estado nativo; trocar o sorteio do `extraCpus` pelo que foi escolhido). No multiplayer (tela 13), calcular quantas CPUs cabem com 2, 3 e 4 jogadores (RAM da carga: a linha `[wotm] carga da fase`; custo das vistas: item 11) e limitar o menu a esse número.
 
 
 

@@ -1,11 +1,15 @@
-// CPUs de 4 a 7 no free for all de 1 jogador (tela 12; NATIVO.md, "Ate 7 CPUs pelo menu"). O gancho da tela 12 (wotm_overrides.cpp)
-// guarda o numero escolhido; o menu segue com 3 CPUs (telas 15, 19 e 8 do retail), e o changeScreenHook do wotm_padsel.inc grava o
-// numero de verdade e sorteia as CPUs extras quando a fase e confirmada.
+// Mais CPUs no free for all do que o menu do jogo deixa (NATIVO.md, "Mais CPUs pelo menu"): ate 8 monstros na luta, 0 a 7 CPUs com
+// 1 jogador (tela 12) e 0 a 8 - N com N = 2 a 4 (tela 13). Os ganchos das telas (wotm_overrides.cpp) guardam o numero escolhido; o
+// menu segue com o que o jogo conhece (3 CPUs com 1 jogador, 2 com 2, nenhuma com 3 e 4), e o wotm_padsel.inc poe as CPUs a mais na
+// selecao e grava o numero de verdade quando a fase e confirmada (1 e 2 jogadores) ou na saida da selecao (3 e 4).
 #pragma once
 #include <atomic>
 
 namespace wotm_menucpus
 {
-constexpr int kMax = 7;           // 1 jogador + 7 IAs: o teto da WOTM_MATCH (8 monstros)
-inline std::atomic<int> g_want{0};   // 4..7: CPUs pedidas na tela 12; 0: o que o retail guarda em m_numAIs vale
+constexpr int kMonsters = 8;          // o teto da WOTM_MATCH (8 monstros na luta)
+constexpr int kMax = kMonsters - 1;   // 1 jogador + 7 IAs
+constexpr int maxFor(int players) { return kMonsters - players; }
+inline std::atomic<int> g_want{0};          // CPUs pedidas acima do que o jogo conhece; 0: vale o m_numAIs
+inline std::atomic<int> g_menuPlayers{2};   // jogadores do multijogador (2 a 4, escolha de controles): o maximo da tela 13
 }

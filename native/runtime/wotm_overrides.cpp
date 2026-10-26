@@ -446,6 +446,57 @@ namespace
             WRITE8(sw + 8, uint8_t(want));                              // whichChild
     }
 
+    // Free for all de 2 a 4 jogadores com 0 a 8 - N IAs (8 monstros): o mesmo da tela 12 na screenFreeForAllOptions2P (tela 13), que
+    // anda o cursor por 0..2 (esquerda: > 0 desce 1, senao vai a 2; direita: < 2 sobe 1, senao vai a 0) e confirma 0..2 em m_numAIs,
+    // indo ao "first to" (15). O switch do numero (shell +0x464) tem os mesmos 11 filhos. Com o cursor acima do que o jogo conhece
+    // (2 com 2 jogadores; nenhuma com 3 e 4, que o retail nao tem: a selecao de 3 e 4 do wotm_padsel.inc poe as CPUs) a original roda
+    // com esse maximo, e a confirmacao guarda o numero em wotm_menucpus::g_want.
+    constexpr uint32_t kFfaOptions2P = wotm::fn::screenFreeForAllOptions2P__Fv;
+    constexpr uint32_t kFfa2Cursor = wotm::sym::currentSelection + 13 * 4;   // currentSelection[13]
+    PS2Runtime::RecompiledFunction g_origFfaOptions2P = nullptr;
+    uint32_t g_ffa2Ra = 0, g_ffa2Before = 0;
+    bool g_ffa2Pending = false, g_ffa2Fake = false;
+    int g_ffa2Game = 2;
+
+    void ffaOptions2PMore(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        constexpr int kGame = 2;   // o passo da original anda em 0..2
+        const int players = std::clamp(wotm_menucpus::g_menuPlayers.load(), 2, 4), kMax = wotm_menucpus::maxFor(players);
+        if (ctx->pc == kFfaOptions2P)
+        {
+            g_ffa2Ra = GPR_U32(ctx, 31);
+            g_ffa2Before = std::min(READ32(kFfa2Cursor), uint32_t(kMax));   // o cursor que ficou de outro numero de jogadores
+            WRITE32(kFfa2Cursor, g_ffa2Before);
+            g_ffa2Pending = true;
+            g_ffa2Game = players == 2 ? kGame : 0;   // o maior numero que o jogo confirma por si
+            g_ffa2Fake = g_ffa2Before > uint32_t(g_ffa2Game) && g_ffa2Before <= uint32_t(kMax);
+            if (g_ffa2Fake)
+                WRITE32(kFfa2Cursor, uint32_t(g_ffa2Game));
+        }
+        g_origFfaOptions2P(rdram, ctx, runtime);
+        if (!g_ffa2Pending || ctx->pc != g_ffa2Ra)
+            return;
+        g_ffa2Pending = false;
+        const int before = int(g_ffa2Before), eff = g_ffa2Fake ? g_ffa2Game : before, after = int(READ32(kFfa2Cursor));
+        const bool confirmed = READ32(wotm::sym::currScreen) == 15u;
+        if (g_ffa2Fake && confirmed)
+        {
+            wotm_menucpus::g_want.store(before);
+            std::fprintf(stderr, "[wotm] tela 13: %d jogadores e %d CPUs (o menu segue com %d)\n", players, before, g_ffa2Game);
+        }
+        else if (confirmed || after != eff)
+            wotm_menucpus::g_want.store(0);
+        const bool dec = (eff >= 1 && after == eff - 1) || (eff == 0 && after == kGame);
+        const bool inc = (eff < kGame && after == eff + 1) || (eff == kGame && after == 0);
+        const int want = dec ? (before + kMax) % (kMax + 1) : inc ? (before + 1) % (kMax + 1) : before;
+        if (want == after)
+            return;
+        WRITE32(kFfa2Cursor, uint32_t(want));
+        const uint32_t sw = READ32(kShell + 0x464);
+        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > want)
+            WRITE8(sw + 8, uint8_t(want));
+    }
+
     // Trapacas de debug (menu F1 do wotm_live.inc, ou WOTM_CHEATS no inicio): aplicadas na thread do EE, na entrada de Monster::update
     // (0x15B488) de cada jogador (m_monsters[0 .. m_numPlayers-1]), antes da logica do quadro dele. A janela so escreve g_wotmCheats.
     //   invencivel: Monster::takeDamage (0x15FE40) volta na entrada quando a vitima e um jogador (nem o dano forcado passa).
@@ -2430,6 +2481,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
         runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
+    if ((g_origFfaOptions2P = runtime.lookupFunction(kFfaOptions2P)))
+        runtime.registerFunction(kFfaOptions2P, &ffaOptions2PMore);
     // Trapacas de debug (menu F1): sempre instaladas; WOTM_CHEATS=inv,stam,furia,esp,cloak,deus liga desde o inicio
     if ((g_origMonsterUpdate = runtime.lookupFunction(kMonsterUpdate)) && (g_origTakeDamage = runtime.lookupFunction(kTakeDamage)))
     {
