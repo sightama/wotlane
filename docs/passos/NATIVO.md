@@ -457,7 +457,9 @@ já tem `viewInfo`, `worldCtx`, `viewDb`, pontos de visada e a `viewPrevMat` das
   (`i & 1`) e roda o update como ele, com o `m_viewSlot`, o `_cs` da câmera e a barra trocados pelos da própria vista durante a
   chamada (com o update pausado no meio pelo escalonador, a troca vale até a retomada chegar ao `ra`: o `updateMessage` escreve o
   "WINS" do HUD de índice 0 alinhado à esquerda e o dos outros à direita); os dois dividem o `_cs` e as animações da barra, que cada vista refaz logo antes do seu `hier` ("Animações do HUD por
-  vista": os `_animHandle` da cópia apontam para as mesmas instâncias). Com `m_numMonsters` ≠ 2 a barra fica na posição da tela
+  vista": os `_animHandle` da cópia apontam para as mesmas instâncias). A barra de fúria é uma camada (`AnimBlend` em +0x268) cujo nó
+  de mistura mora dentro do HUD: o da cópia fica marcado ativo e nunca entra na lista do `AnimPlayer` (senão as duas vistas mostram a
+  camada de cima); o tempo dele (`toTime`) vai para o nó da coluna antes da avaliação e entra no estado guardado por HUD. Com `m_numMonsters` ≠ 2 a barra fica na posição da tela
   cheia, que é a forma do quadrante. O texto do HUD é posto como numa vista de 224 linhas a partir do topo do quadrante: no nativo, o
   que cai na metade de baixo (o "WINS") sobe 112 (só quando mais de uma vista manda texto; o diálogo de pausa fica como está). As
   barras dos inimigos ficam ligadas sozinhas com 3 ou 4 jogadores.

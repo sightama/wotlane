@@ -478,13 +478,20 @@ namespace wotm_split4
     // matrizes que guardou do outro. As barras (AnimBlend da lista ativa) continuam divididas: cada update reaplica a porcentagem.
     // Ordem no quadro: update 0 (volta o estado 0), hier 0, animationRunGlobal (avalia o 0), update 1, hier 1, update 2 (guarda o 0,
     // poe o 2 e o avalia com o UpdateAnimations, como o animationRunGlobal faria), hier 2, update 3, hier 3.
+    // Barra de furia (AnimBlend em +0x268, sobre o handle +0x170): o no de mistura mora dentro do HUD. O update faz rampIn quando o no
+    // nao esta ativo (+0x274) e reaplica o tempo dele (toTime, +0x2A0: porcentagem da furia, ou velocidade 1 com ela cheia). Na copia do
+    // HUD 2/3 o no e outro, mas o handle e o do HUD da coluna: o rampIn dela punha um segundo no na lista ativa do mesmo AnimPlayer, e
+    // as duas vistas mostravam a camada de cima (a furia do jogador 3 na barra do 1 e vice-versa). O no da copia fica marcado ativo
+    // (nunca entra na lista); o toTime dele vai para o no da coluna antes da avaliacao, e o do no da coluna entra no estado por HUD.
     constexpr uint32_t kHudHandles = 0x130, kHudHandleN = 13, kCtlState = 0x14, kCtlStateLen = 0x20, kCtlSize = 0x3C;
+    constexpr uint32_t kHudRageActive = 0x268 + 0x8 + 0x4, kHudRageTime = 0x268 + 0x8 + 0x30, kAnimTimeLen = 0x10;
     constexpr uint32_t kUpdateAnims = wotm::fn::UpdateAnimations__10AnimPlayer;
     struct HudAnimState
     {
         uint32_t ci[4] = {};
         int n = 0;
         std::vector<uint8_t> data;
+        uint8_t rageTime[kAnimTimeLen] = {};   // toTime do no de mistura da barra de furia da coluna
     };
     HudAnimState g_hudAnim[4];
     uint32_t g_hudLive[2] = {0, 1};   // HUD cujo estado esta na RAM, por coluna
@@ -532,6 +539,7 @@ namespace wotm_split4
     void hudAnimSave(uint8_t *rdram, uint32_t hud, HudAnimState &s)
     {
         s.n = hudInstances(rdram, hud, s.ci);
+        std::memcpy(s.rageTime, rdram + hud + kHudRageTime, kAnimTimeLen);
         s.data.clear();
         for (int i = 0; i < s.n; ++i)
         {
@@ -553,6 +561,7 @@ namespace wotm_split4
         const int n = hudInstances(rdram, hud, ci);
         if (n != s.n || !std::equal(ci, ci + n, s.ci))
             return false;
+        std::memcpy(rdram + hud + kHudRageTime, s.rageTime, kAnimTimeLen);
         const uint8_t *d = s.data.data(), *end = d + s.data.size();
         for (int i = 0; i < n; ++i)
         {
@@ -752,6 +761,7 @@ namespace wotm_split4
             FAST_WRITE32(kViewSlot + 4u * p, FAST_READ32(kViewSlot + 4u * me));
             FAST_WRITE32(camera(int(p)) + kCamCs, FAST_READ32(camera(int(me)) + kCamCs));
             FAST_WRITE32(hudP + kHudBarCs, FAST_READ32(self + kHudBarCs));
+            FAST_WRITE8(self + kHudRageActive, 1);   // sem rampIn: o no da coluna e o unico na lista ativa
         }
         g_origHudUpdate(rdram, ctx, runtime);
         if (ctx->pc != ra)
@@ -776,6 +786,7 @@ namespace wotm_split4
             FAST_WRITE32(kViewSlot + 4u * p, saved[1]);
             FAST_WRITE32(camera(int(p)) + kCamCs, saved[2]);
             FAST_WRITE32(hudP + kHudBarCs, saved[3]);
+            std::memcpy(rdram + hudP + kHudRageTime, rdram + self + kHudRageTime, kAnimTimeLen);
             hudEvaluate(rdram, ctx, runtime, hudP);
         }
         // a barra deste HUD fica como o jogo a deixou; as outras (por _cs: a do HUD 2 e 3 e a mesma do 0 e 1) apagam
