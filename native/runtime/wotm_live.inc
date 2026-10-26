@@ -521,6 +521,12 @@ static void initWindowAspect()
             std::fprintf(stderr, "[native] janela no monitor %d de %d (WOTM_MONITOR)\n", mon, GetMonitorCount());
         }
     }
+    // PS2X_HOSTPROF_WIN=1 (com PS2X_HOSTPROF): o amostrador vigia esta thread (a da janela) em vez da do EE
+    if (std::getenv("PS2X_HOSTPROF") && std::getenv("PS2X_HOSTPROF_WIN"))
+    {
+        void wotmHostProfWatchThisThread();
+        wotmHostProfWatchThisThread();
+    }
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
         initPresentRate();
     const int disp = wotm::settings::get(wotm::settings::Display);

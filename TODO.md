@@ -33,7 +33,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 11. Multiplayer de 4
 Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" e "Menu multijogador de 2 a 4".
-- **Custo de 3 e 4 vistas:** plano em `docs/investigacoes/2026-10-23/performance_vistas.md`. Com o teto de 60 liberado, a lógica de 4 jogadores fica a 60 em ~80% dos quadros, e quem segura agora é a janela (~20 ms por redesenho de 4 vistas). Falta: partículas pelo `VtxStream` e uma vez por redesenho (~1,5 ms por vista), cache de vértices entre vistas, malhas estáticas da fase na GPU; no EE, o resto do `hier` e o VU0 traduzido (~12 mil chamadas por quadro, cada uma copia o estado inteiro).
+- **Custo de 3 e 4 vistas:** plano em `docs/investigacoes/2026-10-23/performance_vistas.md`. Com o teto de 60 liberado, a lógica de 4 jogadores fica a 60 em ~80% dos quadros, e quem segura agora é a janela (~17–20 ms por redesenho de 4 vistas; o perfil dela, `PS2X_HOSTPROF_WIN=1`, põe ~36% no `drawList` e ~15% na luz por vértice, `vertexRgb`). Falta: partículas pelo `VtxStream` e uma vez por redesenho (~0,6 ms por vista), cache de vértices entre vistas, malhas estáticas da fase na GPU; no EE, o resto do `hier` e o VU0 traduzido (~12 mil chamadas por quadro, cada uma copia o estado inteiro).
 - **Testes que faltam:** alguém jogar com 4 controles físicos; pontos de verdade no big shot e no crush (a IA não joga os minigames).
 - **`TheGame::m_tokens`:** o `include/game/game.h` diz `[2]` seguido de um pad, mas são 4 `TokenManager` (0x1004 cada, de 0x11C370 a 0x120380, inicializados no `InitBeforeDbLoad`). Corrigir o header pede o gate.
 - **Barras dos inimigos:** um bloco perto do topo da tela pode ficar por cima do HUD do jogador (a posição vem da cabeça).

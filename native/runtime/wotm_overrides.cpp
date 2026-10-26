@@ -854,7 +854,7 @@ namespace
         for (int v = 0; v < 4; ++v)
             g_hierMs[v] = g_captureMs[v] = 0.0;
         // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
-        if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
+        if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF") && !std::getenv("PS2X_HOSTPROF_WIN"))
         {
             g_hostProfWatch = true;
             wotmHostProfWatchThisThread();

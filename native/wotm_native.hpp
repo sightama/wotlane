@@ -23,6 +23,9 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#if defined(_M_X64) || defined(__SSE4_1__)
+#include <smmintrin.h>   // dustTexture: rasterizacao com SSE4.1
+#endif
 
 #include "raylib.h"
 #include "rlgl.h"
@@ -1068,7 +1071,7 @@ public:
         for (auto &kv : fontTex_) if (kv.second.id) UnloadTexture(kv.second);
         fontTex_.clear();
         for (DustSrc &s : dustSrc_) s.ok = false;
-        dustHash_ = 0;
+        for (uint64_t &h : dustHash_) h = 0;
         fx.resetFlareDebounce();   // fracao visivel do quadro anterior e do nivel velho
     }
 
@@ -1234,7 +1237,7 @@ public:
     unsigned dustTexture(const Ram &ram) {
         constexpr uint32_t kPkt = 0x0078F6E0u, kParams = 0x006F8DA4u, kNormals = 0x006F8D9Cu, kColors = 0x006F8DA0u, kCtx = 0x00256B90u;
         const uint32_t pa = ram.u32(kParams), na = ram.u32(kNormals), ca = ram.u32(kColors);
-        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustTex_.id;
+        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustTex_[dustLast_].id;
         float P[8], L[3][4], C[5][3], ctx[8][4];
         for (int i = 0; i < 8; ++i) P[i] = ram.f32(pa + 4 * uint32_t(i));
         for (int r = 0; r < 3; ++r) for (int i = 0; i < 4; ++i) L[r][i] = ram.f32(na + 16 * uint32_t(r) + 4 * uint32_t(i));
@@ -1244,7 +1247,8 @@ public:
         uint64_t hash = 1469598103934665603ull;
         auto mix = [&](const void *d, size_t n) { for (size_t i = 0; i < n; ++i) hash = (hash ^ static_cast<const uint8_t *>(d)[i]) * 1099511628211ull; };
         mix(P, sizeof P); mix(L, sizeof L); mix(C, sizeof C); mix(ctx, sizeof ctx); mix(&nloop, 4); mix(&seed, 4);
-        if (dustTex_.id && hash == dustHash_) return dustTex_.id;
+        for (int i = 0; i < kDustSlots; ++i)
+            if (dustTex_[i].id && hash == dustHash_[i]) return dustTex_[dustLast_ = i].id;
 
         auto source = [&](uint32_t ti, DustSrc &s) {   // decodificada uma vez por (texId, TEX0)
             const uint32_t k = ram.u16(fxaddr::textureInfo + 8 * ti + 2) & 127, id = ram.u16(fxaddr::texId + 2 * k);
@@ -1257,7 +1261,7 @@ public:
             return s.ok;
         };
         DustSrc &src1 = dustSrc_[0], &src2 = dustSrc_[1];
-        if (!source(32, src1) || !source(33, src2)) return dustTex_.id;
+        if (!source(32, src1) || !source(33, src2)) return dustTex_[dustLast_].id;
         const double startTime = GetTime();   // diagnostico (WOTM_DUSTLOG): custo da conta, sem a decodificacao das fontes
 
         // ---- passe 1: lista de sprites
@@ -1331,71 +1335,121 @@ public:
         for (DSpr &s : spr) { light(s.n, s.rgb2); s.a2 = int(float(s.a1) * P[5]); }
 
         // ---- rasterizacao como o GS (bilinear com CLAMP na fonte; regra do canto superior esquerdo)
-        auto sample = [](const DustSrc &src, float u, float v, int out[4]) {
-            u -= 0.5f; v -= 0.5f;
-            const int i0 = int(std::floor(u)), j0 = int(std::floor(v));
-            const float fu = u - float(i0), fv = v - float(j0);
-            float acc[4] = {0, 0, 0, 0};
-            for (int dj = 0; dj < 2; ++dj)
-                for (int di = 0; di < 2; ++di) {
-                    const float wgt = (di ? fu : 1.f - fu) * (dj ? fv : 1.f - fv);
-                    const int x = std::min(std::max(i0 + di, 0), int(src.w) - 1), y = std::min(std::max(j0 + dj, 0), int(src.h) - 1);
-                    const uint32_t p = src.px[size_t(y) * src.w + size_t(x)];
-                    for (int c = 0; c < 4; ++c) acc[c] += float((p >> (8 * c)) & 255) * wgt;
-                }
-            for (int c = 0; c < 4; ++c) out[c] = int(acc[c]);
+        // A amostra bilinear separa em coluna e linha: indice ja com o CLAMP e peso de cada lado, calculados uma vez por coluna e
+        // por linha do sprite com as mesmas contas em float (o resultado e o mesmo da amostra feita por pixel).
+        struct Tap { int i0, i1; float w0, w1; };
+        auto taps = [](float u, int n) {
+            u -= 0.5f;
+            const int i = int(std::floor(u));
+            const float f = u - float(i);
+            return Tap{std::min(std::max(i, 0), n - 1), std::min(std::max(i + 1, 0), n - 1), 1.f - f, f};
         };
         std::vector<std::array<int, 4>> fb(64 * 64, std::array<int, 4>{0, 0, 0, 0});
-        auto draw = [&](const DSpr &s, const DustSrc &src, const int rgb[3], int a, bool additive) {
+        // greenOnly (passe 1): so G e A da fonte contam; R e B do quadro sao trocados pelo fundo antes do passe 2
+        auto draw = [&](const DSpr &s, const DustSrc &src, const int rgb[3], int a, bool additive, bool greenOnly) {
             const float u0 = s.uv[0] / 16.f, v0 = s.uv[1] / 16.f, u1 = s.uv[2] / 16.f, v1 = s.uv[3] / 16.f;
             if (s.x1 <= s.x0 || s.y1 <= s.y0) return;
-            for (int py = std::max(0, (s.y0 + 15) >> 4); py < std::min(64, (s.y1 + 15) >> 4); ++py)
-                for (int px = std::max(0, (s.x0 + 15) >> 4); px < std::min(64, (s.x1 + 15) >> 4); ++px) {
-                    int t[4];
-                    sample(src, u0 + (u1 - u0) * float(px * 16 - s.x0) / float(s.x1 - s.x0), v0 + (v1 - v0) * float(py * 16 - s.y0) / float(s.y1 - s.y0), t);
-                    const int as = (a * t[3]) >> 7;
+            const int pxa = std::max(0, (s.x0 + 15) >> 4), pxb = std::min(64, (s.x1 + 15) >> 4);
+            const int pya = std::max(0, (s.y0 + 15) >> 4), pyb = std::min(64, (s.y1 + 15) >> 4);
+            if (pxa >= pxb || pya >= pyb) return;
+            Tap cx[64];
+            for (int px = pxa; px < pxb; ++px)
+                cx[px] = taps(u0 + (u1 - u0) * float(px * 16 - s.x0) / float(s.x1 - s.x0), int(src.w));
+            const int c0 = greenOnly ? 1 : 0, c1 = greenOnly ? 2 : 3;
+            for (int py = pya; py < pyb; ++py) {
+                const Tap ry = taps(v0 + (v1 - v0) * float(py * 16 - s.y0) / float(s.y1 - s.y0), int(src.h));
+                const uint32_t *row[2] = {src.px.data() + size_t(ry.i0) * src.w, src.px.data() + size_t(ry.i1) * src.w};
+                const float wy[2] = {ry.w0, ry.w1};
+#if defined(_M_X64) || defined(__SSE4_1__)
+                // os 4 canais de uma vez (RGBA em lanes): mesma soma e mesmas contas inteiras da versao escalar abaixo
+                const __m128i vrgb = _mm_setr_epi32(rgb[0], rgb[1], rgb[2], 0), v255 = _mm_set1_epi32(255), vzero = _mm_setzero_si128();
+                (void)c0; (void)c1;
+                auto texel = [](uint32_t p) { return _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(int(p)))); };
+                for (int px = pxa; px < pxb; ++px) {
+                    const Tap &tx = cx[px];
+                    __m128 acc = _mm_setzero_ps();
+                    for (int dj = 0; dj < 2; ++dj) {
+                        acc = _mm_add_ps(acc, _mm_mul_ps(texel(row[dj][tx.i0]), _mm_set1_ps(tx.w0 * wy[dj])));
+                        acc = _mm_add_ps(acc, _mm_mul_ps(texel(row[dj][tx.i1]), _mm_set1_ps(tx.w1 * wy[dj])));
+                    }
+                    const __m128i t = _mm_cvttps_epi32(acc);
+                    const __m128i as = _mm_set1_epi32((a * _mm_extract_epi32(t, 3)) >> 7);
+                    int *dp = fb[size_t(py) * 64 + size_t(px)].data();
+                    const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i *>(dp));
+                    const __m128i cs = _mm_srai_epi32(_mm_mullo_epi32(vrgb, t), 7);
+                    __m128i r;
+                    if (additive)
+                        r = _mm_min_epi32(v255, _mm_add_epi32(_mm_srai_epi32(_mm_mullo_epi32(cs, as), 7), d));
+                    else
+                        r = _mm_max_epi32(vzero, _mm_min_epi32(v255, _mm_add_epi32(_mm_srai_epi32(_mm_mullo_epi32(_mm_sub_epi32(cs, d), as), 7), d)));
+                    r = _mm_blend_epi16(r, d, 0xC0);   // o alfa do quadro nao muda
+                    _mm_storeu_si128(reinterpret_cast<__m128i *>(dp), r);
+                }
+#else
+                for (int px = pxa; px < pxb; ++px) {
+                    const Tap &tx = cx[px];
+                    float acc[4] = {0, 0, 0, 0};
+                    for (int dj = 0; dj < 2; ++dj) {   // mesma ordem de soma da amostra por pixel
+                        const float wa = tx.w0 * wy[dj], wb = tx.w1 * wy[dj];
+                        const uint32_t pa = row[dj][tx.i0], pb = row[dj][tx.i1];
+                        for (int c = c0; c < c1; ++c) acc[c] += float((pa >> (8 * c)) & 255) * wa;
+                        acc[3] += float(pa >> 24) * wa;
+                        for (int c = c0; c < c1; ++c) acc[c] += float((pb >> (8 * c)) & 255) * wb;
+                        acc[3] += float(pb >> 24) * wb;
+                    }
+                    const int as = (a * int(acc[3])) >> 7;
                     auto &d = fb[size_t(py) * 64 + size_t(px)];
-                    for (int c = 0; c < 3; ++c) {
-                        const int cs = (rgb[c] * t[c]) >> 7;
+                    for (int c = c0; c < c1; ++c) {
+                        const int cs = (rgb[c] * int(acc[c])) >> 7;
                         d[c] = additive ? std::min(255, ((cs * as) >> 7) + d[c]) : std::max(0, std::min(255, (((cs - d[c]) * as) >> 7) + d[c]));
                     }
                 }
+#endif
+            }
         };
         const int rgb1[3] = {1, int(P[4]), 1};
-        for (const DSpr &s : spr) draw(s, src1, rgb1, s.a1, true);
+        for (const DSpr &s : spr) draw(s, src1, rgb1, s.a1, true, true);
         for (auto &p : fb) {
             for (int c = 0; c < 3; ++c) p[c] >>= 1;          // sprite (0, 0, 0, 64) em (Cs - Cd) * As + Cd: ((-Cd * 64) >> 7) + Cd
             p[3] = p[1] & 0x7F;                            // copyGreenChannelToAlpha (o bit 15 do CT16 sai 0)
             for (int c = 0; c < 3; ++c) p[c] = bg[c];      // passe 2: fundo
         }
-        for (const DSpr &s : spr) draw(s, src2, s.rgb2, s.a2, false);
+        for (const DSpr &s : spr) draw(s, src2, s.rgb2, s.a2, false, false);
 
         std::vector<uint32_t> px(64 * 64);   // alfa cru do GS (0x80 = 1,0), como as outras texturas de particula
         for (size_t i = 0; i < px.size(); ++i)
             px[i] = uint32_t(fb[i][0]) | (uint32_t(fb[i][1]) << 8) | (uint32_t(fb[i][2]) << 16) | (uint32_t(fb[i][3]) << 24);
-        if (!dustTex_.id) {
+        const double mathEnd = GetTime();
+        const int slot = dustNext_;
+        dustNext_ = (dustNext_ + 1) % kDustSlots;
+        Texture2D &dt = dustTex_[slot];
+        if (!dt.id) {
             Image img{px.data(), 64, 64, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-            dustTex_ = LoadTextureFromImage(img);
-            if (dustTex_.id) { SetTextureFilter(dustTex_, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dustTex_, TEXTURE_WRAP_CLAMP); }
+            dt = LoadTextureFromImage(img);
+            if (dt.id) { SetTextureFilter(dt, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dt, TEXTURE_WRAP_CLAMP); }
         } else {
-            UpdateTexture(dustTex_, px.data());
+            UpdateTexture(dt, px.data());
         }
-        dustHash_ = hash;
+        dustHash_[slot] = hash;
+        dustLast_ = slot;
         {   // diagnostico: WOTM_DUSTLOG=1 imprime o resumo a cada regeneracao
             static const bool lg = std::getenv("WOTM_DUSTLOG") != nullptr;
             if (lg) {
                 int amax = 0; double asum = 0, cw[3] = {0, 0, 0};
                 for (const auto &p : fb) { amax = std::max(amax, p[3]); asum += p[3]; for (int c = 0; c < 3; ++c) cw[c] += double(p[c]) * p[3]; }
-                std::fprintf(stderr, "[dust] fase %.4f sprites %zu fundo %d %d %d alfa max %d media %.1f cor ponderada %.0f %.0f %.0f (%.2f ms)\n", P[3], spr.size(), bg[0], bg[1], bg[2],
-                             amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0, (GetTime() - startTime) * 1000.0);
+                std::fprintf(stderr, "[dust] fase %.4f sprites %zu fundo %d %d %d alfa max %d media %.1f cor ponderada %.0f %.0f %.0f (%.2f ms, envio %.2f ms)\n", P[3], spr.size(), bg[0], bg[1], bg[2],
+                             amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0, (mathEnd - startTime) * 1000.0, (GetTime() - mathEnd) * 1000.0);
             }
         }
-        return dustTex_.id;
+        return dt.id;
     }
     struct DustSrc { std::vector<uint32_t> px; uint32_t w = 0, h = 0, id = 0; uint64_t tex0 = 0; bool ok = false; };
     DustSrc dustSrc_[2];   // fontes 1 e 2 (TextureInfo[32] e [33]) decodificadas
-    Texture2D dustTex_{};
-    uint64_t dustHash_ = 0;
+    // uma por vista (a conta depende da camera): cada vista desenha com a sua, e o redesenho do mesmo quadro do jogo reaproveita
+    static constexpr int kDustSlots = 4;
+    Texture2D dustTex_[kDustSlots]{};
+    uint64_t dustHash_[kDustSlots]{};
+    int dustNext_ = 0, dustLast_ = 0;
 
     Particles fx;   // sistemas de particulas do quadro (collect junto com a cena, draw depois dos translucidos)
 
