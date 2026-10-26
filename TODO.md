@@ -7,7 +7,7 @@ O que falta fazer, e só isso. Relatos de bug passam na frente. Item terminado s
 |---|---|---|---|
 | 8 | Mods que adicionam monstros (as skins já existem) | — | médio/alto |
 | 10 | Chefes jogáveis | 8 | alto |
-| 11 | Multiplayer de 4: testes com controles físicos e HUD por cima das barras | — | baixo |
+| 11 | Multiplayer de 4: HUD do jogador por cima das barras dos inimigos | — | baixo |
 | 13 | Campanha (adventure) com até 4 jogadores | 11 | o mais alto |
 | 14 | Adicionar os mapas não listados nas seleções de fases | ? | médio? |
 
@@ -33,7 +33,6 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 11. Multiplayer de 4
 Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" e "Menu multijogador de 2 a 4".
-- **Teste que falta:** alguém jogar com 4 controles físicos.
 - **HUD do jogador por cima das barras dos inimigos:** a barra de um inimigo perto do topo da tela (a posição vem da cabeça) pode cobrir o HUD do jogador; o HUD do jogador deveria ser desenhado depois.
 
 ### 13. Campanha com até 4 jogadores
