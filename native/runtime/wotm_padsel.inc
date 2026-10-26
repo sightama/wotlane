@@ -2465,6 +2465,9 @@ static void drawCustomList(const View &v, int p, float x, float y, float boxW, f
     outlined(num, cx, y + boxH * 0.945f, boxH * 0.035f, boxW * 0.2f, kSub);
 }
 
+static Texture2D g_logo[17]{};   // logo de cada monstro (256x128 do SHELL.TEX, os da lista de saves; loadPortraits)
+static void loadPortraits();
+
 // Selecao de monstros: um quadro por jogador (ou CPU), lado a lado, no telao. Cada quadro: o rotulo em cima, o monstro 3D, o nome com
 // as setas, o nome do traje e a faixa de trajes (um segmento por traje; os de mod em dourado; o escolhido mais largo e aceso) e o
 // "READY".
@@ -2473,15 +2476,18 @@ static void drawSelect(const View &v)
     constexpr float W = kSelPW, H = kSelPH;
     const int n = std::max(1, v.selPlayers);
     const Color kName{246, 238, 220, 255}, kGold{236, 190, 70, 255}, kCpu{150, 150, 160, 255};
+    // fundo do quadro como o do jogo: reto, 80% opaco, de #1B0E0C em cima a #6F372B embaixo
+    const Color kBoxTop{0x1B, 0x0E, 0x0C, 204}, kBoxBottom{0x6F, 0x37, 0x2B, 204};
+    loadPortraits();
     for (int p = 0; p < v.selPlayers; ++p)
     {
         const Color c = v.selColor[p] >= 0 ? kPlayerColors[v.selColor[p] % kMaxPlayers] : kCpu;
         const SelBox b = selBox(n, p);
         const float boxW = b.w, boxH = b.h, x = b.x, y = b.y, cx = x + boxW * 0.5f;
         const Rectangle box{x, y, boxW, boxH};
-        DrawRectangleRounded(box, 0.06f, 8, Color{0, 0, 0, 200});
-        DrawRectangleRounded(Rectangle{x, y, boxW, boxH * 0.12f}, 0.4f, 8, Color{c.r, c.g, c.b, 220});
-        DrawRectangleRoundedLinesEx(box, 0.06f, 8, v.selReady[p] ? 10.f : 5.f, Color{c.r, c.g, c.b, 240});
+        DrawRectangleGradientV(int(x), int(y), int(boxW), int(boxH), kBoxTop, kBoxBottom);
+        DrawRectangleRec(Rectangle{x, y, boxW, boxH * 0.12f}, Color{c.r, c.g, c.b, 220});
+        DrawRectangleLinesEx(box, v.selReady[p] ? 10.f : 5.f, Color{c.r, c.g, c.b, 240});
         outlined(v.selLabel[p], cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
         if (v.selWaiting[p])   // CPU do modo 2: o jogador 1 escolhe por ela depois do dele
         {
@@ -2524,7 +2530,18 @@ static void drawSelect(const View &v)
         }
         const char *name = v.selCustom[p] >= 0 ? customName(v.selCustom[p]) : monsterName(v.selMonster[p]);
         const float nameY = y + boxH * (v.selNoCostume ? 0.82f : 0.76f);
-        outlined(name, cx, nameY, boxH * 0.085f, boxW * (v.selReady[p] ? 0.94f : 0.72f), kName);
+        const uint32_t lmon = v.selMonster[p] >> 5;
+        const Texture2D *logo = v.selCustom[p] < 0 && lmon < std::size(g_logo) && g_logo[lmon].id ? &g_logo[lmon] : nullptr;
+        if (logo)   // o logo do jogo (2:1) no lugar do nome; sem logo (custom, chefes), o nome em texto
+        {
+            // o Congar (1), o Agamo (10) e o Ultra-V (4) tem mais margem vazia em volta do desenho: maiores para ficarem do tamanho dos outros
+            const float big = lmon == 1 || lmon == 10 ? 1.35f : lmon == 4 ? 1.15f : 1.f;
+            const float lw = std::min(boxW * (v.selReady[p] ? 0.94f : 0.72f) * big, boxH * 0.34f * big), lh = lw * 0.5f;
+            DrawTexturePro(*logo, Rectangle{0.f, 0.f, float(logo->width), float(logo->height)},
+                           Rectangle{cx - lw * 0.5f, nameY - lh * 0.5f, lw, lh}, Vector2{0.f, 0.f}, 0.f, WHITE);
+        }
+        else
+            outlined(name, cx, nameY, boxH * 0.085f, boxW * (v.selReady[p] ? 0.94f : 0.72f), kName);
         if (!v.selReady[p])
         {
             outlined("<", x + boxW * 0.08f, nameY, boxH * 0.09f, boxW, c);
@@ -2579,7 +2596,7 @@ static void drawSelect(const View &v)
         if (v.selReady[p])
         {
             const Rectangle band{x + boxW * 0.08f, y + boxH * 0.40f, boxW * 0.84f, boxH * 0.13f};
-            DrawRectangleRounded(band, 0.4f, 6, Color{c.r, c.g, c.b, 235});
+            DrawRectangleRec(band, Color{c.r, c.g, c.b, 235});
             outlined("READY", cx, band.y + band.height * 0.5f, band.height * 0.75f, band.width * 0.9f, kName);
         }
     }
@@ -2698,6 +2715,11 @@ static void loadPortraits()
         if (p.lockId)
             g_portraitLock[p.monster] = decodePortrait(rtx, rtxPk, rtx, rtxPk, p.lockId, p.lockPal);
     }
+    int nl = 0;
+    for (const wotm::savepics::LogoPic &l : wotm::savepics::kLogoPics)
+        if (l.monster < std::size(g_logo))
+            nl += (g_logo[l.monster] = decodePortrait(tex, texPk, rtx, rtxPk, l.t.texId, l.t.palTbp)).id != 0;
+    std::fprintf(stderr, "[padsel] selecao: %d de %zu logos\n", nl, std::size(wotm::savepics::kLogoPics));
     std::fprintf(stderr, "[padsel] barra de monstros: %d de %zu retratos\n", n, std::size(kPortraits));
 }
 
