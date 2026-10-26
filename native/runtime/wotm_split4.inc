@@ -75,6 +75,7 @@ namespace wotm_split4
     bool g_wasUnified = false;      // a vista unificada (vitoria) estava ligada no quadro anterior
     bool g_cinemaFull = false;      // cinema em tela cheia (cinemaViews)
     unsigned g_hudCalls[4] = {};    // diagnostico (WOTM_SPLITLOG): Hud::update de cada HUD desde a ultima linha
+    unsigned g_hudPaused = 0;       // diagnostico (WOTM_SPLITLOG): updates do HUD 2/3 pausados no meio desde a ultima linha
     int g_loadExtra = 0;            // jogadores 3 e 4 no caminho das IAs (do LoadLevelFiles ao InitPlayers)
     uint32_t g_extraCostume[2] = {0, 0};   // trajes dos jogadores 3 e 4 (o Shell nao tem lugar para eles)
 
@@ -332,7 +333,8 @@ namespace wotm_split4
                              FAST_READ32(kMonsters + 4u * uint32_t(v)), static_cast<int32_t>(FAST_READ32(camera(v) + kCamPov)), cs, vcs,
                              rdF(rdram, (vcs & 0x1FFFFFFFu) + 0x10), rdF(rdram, (vcs & 0x1FFFFFFFu) + 0x14), rdF(rdram, (vcs & 0x1FFFFFFFu) + 0x18));
             }
-            std::fprintf(stderr, " hud.update %u/%u/%u/%u\n", g_hudCalls[0], g_hudCalls[1], g_hudCalls[2], g_hudCalls[3]);
+            std::fprintf(stderr, " hud.update %u/%u/%u/%u (pausados %u)\n", g_hudCalls[0], g_hudCalls[1], g_hudCalls[2], g_hudCalls[3], g_hudPaused);
+            g_hudPaused = 0;
             for (unsigned &n : g_hudCalls)
                 n = 0;
         }
@@ -691,8 +693,32 @@ namespace wotm_split4
         }
     }
 
+    // Update do HUD 2/3 pausado no meio (a fatia de tempo do escalonador acabou dentro dele): a troca do indice, do m_viewSlot, do _cs
+    // da camera e da barra fica valendo ate a retomada terminar (pc no ra). Desfeita na saida da primeira chamada, o resto do update
+    // rodava com o indice 2: o updateMessage escreve o "WINS" do HUD 0 com fontSpritePrintXY e o dos outros com
+    // fontSpritePrintRightXY, entao o do jogador 3 pulava para a direita por um quadro (o do 4 ja e do lado direito).
+    struct HudPending
+    {
+        bool on = false;
+        uint32_t ra = 0, self = 0, me = 0, saved[4] = {};
+    } g_hudPending;
+
+    void hudUpdateDone(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t self, uint32_t me, const uint32_t saved[4]);
+
     void hudUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (g_hudPending.on && ctx->pc != kHudUpdate)
+        {
+            // retomada do update pausado
+            const HudPending pend = g_hudPending;
+            g_origHudUpdate(rdram, ctx, runtime);
+            if (ctx->pc == pend.ra)
+            {
+                g_hudPending.on = false;
+                hudUpdateDone(rdram, ctx, runtime, pend.self, pend.me, pend.saved);
+            }
+            return;
+        }
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
         const bool split = ctx->pc == kHudUpdate && g_views && splitPlayers(rdram) && self >= kGame && (self - kGame) % kHudStride == 0 &&
                            (self - kGame) / kHudStride < 4u;
@@ -705,7 +731,14 @@ namespace wotm_split4
                 trainingHud(rdram, ctx, runtime);
             return;
         }
+        if (g_hudPending.on)
+        {
+            // outro update comecou sem a retomada do pausado terminar: desfaz a troca dele antes
+            g_hudPending.on = false;
+            hudUpdateDone(rdram, ctx, runtime, g_hudPending.self, g_hudPending.me, g_hudPending.saved);
+        }
         const uint32_t me = (self - kGame) / kHudStride, p = me & 1u, hudP = kGame + kHudStride * p;
+        const uint32_t ra = GPR_U32(ctx, 31);
         ++g_hudCalls[me];
         hudUse(rdram, me);
         uint32_t saved[4] = {};
@@ -721,6 +754,22 @@ namespace wotm_split4
             FAST_WRITE32(hudP + kHudBarCs, FAST_READ32(self + kHudBarCs));
         }
         g_origHudUpdate(rdram, ctx, runtime);
+        if (ctx->pc != ra)
+        {
+            ++g_hudPaused;
+            g_hudPending.on = true;
+            g_hudPending.ra = ra;
+            g_hudPending.self = self;
+            g_hudPending.me = me;
+            std::memcpy(g_hudPending.saved, saved, sizeof saved);
+            return;
+        }
+        hudUpdateDone(rdram, ctx, runtime, self, me, saved);
+    }
+
+    void hudUpdateDone(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t self, uint32_t me, const uint32_t saved[4])
+    {
+        const uint32_t p = me & 1u, hudP = kGame + kHudStride * p;
         if (me >= 2u)
         {
             FAST_WRITE32(self, saved[0]);

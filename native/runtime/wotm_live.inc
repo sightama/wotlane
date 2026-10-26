@@ -855,12 +855,20 @@ void wotmFontDma(const uint8_t *rdram)
         if (const wotm::ViewCtx vc = wotm::readViewCtx(ram, int(view)); vc.h < 224.f)
         {
             const float top = vc.cy - 2048.f + 112.f - 0.5f * vc.h;
+            float lowX = 1e9f;   // x do texto da metade de baixo (o "WINS"), para o log
             for (wotm::TextQuad &t : q)
                 if (std::min(t.y0, t.y1) - top >= vc.h)
                 {
                     t.y0 -= 224.f - vc.h;
                     t.y1 -= 224.f - vc.h;
+                    lowX = std::min(lowX, std::min(t.x0, t.x1));
                 }
+            static float lastLowX[4] = {-1.f, -1.f, -1.f, -1.f};
+            if (splitLog && lowX < 1e9f && lowX != lastLowX[view])
+            {
+                std::fprintf(stderr, "[split] wins vista %u: x %.1f (antes %.1f)\n", view, lowX, lastLowX[view]);
+                lastLowX[view] = lowX;
+            }
         }
     if (!wotm::readViewCtx(ram, 0).full() && view < 4)
     {
