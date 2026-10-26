@@ -49,6 +49,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -422,6 +423,80 @@ extern void (*glad_glBindTexture)(unsigned, unsigned);
 extern void (*glad_glDrawArrays)(unsigned, int, int);
 extern void (*glad_glBufferSubData)(unsigned, ptrdiff_t, ptrdiff_t, const void *);
 }
+// Threads auxiliares do desenho: parallelFor(n, fn) chama fn(i) para i em [0, n) dividido entre elas e quem chama, e volta quando todas
+// terminaram. fn so pode ler o que ninguem escreve durante a chamada (nada de GL nem dos caches da Scene). Quantas: WOTM_DRAWTHREADS
+// (0 = nenhuma, tudo em quem chama; o padrao: as threads auxiliares baixam o clock do nucleo do EE e ele perde mais do que a janela ganha).
+class JobPool {
+public:
+    static JobPool &get() { static JobPool *p = new JobPool; return *p; }   // nunca destruido: as threads morrem com o processo
+    int workers() const { return int(th_.size()); }
+    // Usar as threads agora? Com WOTM_DRAWTHREADS_AB=<s> (medida), alterna a cada s segundos entre com e sem, com uma linha
+    // "[native] JobPool: com|sem threads" a cada troca, para comparar as duas metades da mesma luta
+    bool active() {
+        if (th_.empty()) return false;
+        static const double ab = std::getenv("WOTM_DRAWTHREADS_AB") ? std::atof(std::getenv("WOTM_DRAWTHREADS_AB")) : 0.0;
+        if (ab <= 0.0) return true;
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool on = (long long)(t / ab) % 2 == 0;
+        if (on != abLast_) { abLast_ = on; std::fprintf(stderr, "[native] JobPool: %s threads\n", on ? "com" : "sem"); }
+        return on;
+    }
+    template <class F> void parallelFor(int n, F &&fn) {
+        if (n <= 0) return;
+        if (th_.empty() || n == 1) { for (int i = 0; i < n; ++i) fn(i); return; }
+        std::function<void(int)> f = std::forward<F>(fn);
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            fn_ = &f;
+            n_ = n;
+            next_.store(0, std::memory_order_relaxed);
+            busy_ = int(th_.size());
+            ++gen_;
+        }
+        cv_.notify_all();
+        run();
+        std::unique_lock<std::mutex> lk(m_);
+        while (!done_.wait_for(lk, std::chrono::seconds(2), [&] { return busy_ == 0; }))
+            std::fprintf(stderr, "[native] JobPool: esperando %d threads ha mais de 2 s (n %d, proximo %d, geracao %llu)\n", busy_, n_,
+                         next_.load(), (unsigned long long)gen_);
+        fn_ = nullptr;
+    }
+private:
+    JobPool() {
+        int k;
+        if (const char *e = std::getenv("WOTM_DRAWTHREADS")) k = std::atoi(e);
+        else k = 0;
+        for (int i = 0; i < k; ++i) { th_.emplace_back([this] { loop(); }); th_.back().detach(); }
+        if (k > 0) std::fprintf(stderr, "[native] desenho: %d threads auxiliares (WOTM_DRAWTHREADS)\n", k);
+    }
+    void run() {
+        for (int i; (i = next_.fetch_add(1, std::memory_order_relaxed)) < n_;) (*fn_)(i);
+    }
+    void loop() {
+        uint64_t seen = 0;
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lk(m_);
+                cv_.wait(lk, [&] { return gen_ != seen; });
+                seen = gen_;
+                if (quit_) return;
+            }
+            run();
+            std::lock_guard<std::mutex> lk(m_);
+            if (--busy_ == 0) done_.notify_one();
+        }
+    }
+    std::vector<std::thread> th_;
+    std::mutex m_;
+    std::condition_variable cv_, done_;
+    std::function<void(int)> *fn_ = nullptr;
+    int n_ = 0, busy_ = 0;
+    std::atomic<int> next_{0};
+    uint64_t gen_ = 0;
+    bool quit_ = false;
+    bool abLast_ = false;
+};
+
 class VtxStream {
 public:
     struct V { float x, y, z, u, v, nx, ny, nz; uint8_t c[4]; };
@@ -434,24 +509,7 @@ public:
                   glad_glVertexAttribPointer && glad_glEnableVertexAttribArray && glad_glUseProgram && glad_glUniformMatrix4fv &&
                   glad_glUniform4f && glad_glUniform1i && glad_glActiveTexture && glad_glBindTexture && glad_glDrawArrays;
             if (ok_) {
-                glad_glGenVertexArrays(1, &vao_);
-                glad_glGenBuffers(1, &vbo_);
-                glad_glBindVertexArray(vao_);
-                glad_glBindBuffer(kArrayBuffer, vbo_);
-                // as posicoes fixas que o rlLoadShaderProgram amarra nos shaders (glBindAttribLocation): o shader padrao nao tem
-                // normal (posicao -1) e a do alphaShader_ e a 2
-                const int loc[4] = {RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD,
-                                    RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL, RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR};
-                const int size[4] = {3, 2, 3, 4};
-                const size_t off[4] = {offsetof(V, x), offsetof(V, u), offsetof(V, nx), offsetof(V, c)};
-                for (int a = 0; a < 4; ++a) {
-                    if (loc[a] < 0) continue;
-                    glad_glVertexAttribPointer(unsigned(loc[a]), size[a], a == 3 ? kUByte : kFloat, a == 3 ? 1 : 0, int(sizeof(V)),
-                                               reinterpret_cast<const void *>(off[a]));
-                    glad_glEnableVertexAttribArray(unsigned(loc[a]));
-                }
-                glad_glBindVertexArray(0);
-                glad_glBindBuffer(kArrayBuffer, 0);
+                makeVao(vao_, vbo_);
             } else {
                 std::fprintf(stderr, "[native] sem as funcoes do GL 3: vertices pelo modo imediato do rlgl\n");
             }
@@ -465,21 +523,75 @@ public:
     // vir depois de o chamador mudar as matrizes)
     void begin(int mode, unsigned tex) {
         const int m = curMvp();
-        if (!cmds_.empty() && cmds_.back().kind == Cmd::Draw && cmds_.back().count == 0) {
+        if (!cmds_.empty() && cmds_.back().kind == Cmd::Draw && cmds_.back().count == 0 && cmds_.back().job < 0 && !cmds_.back().res) {
             Cmd &c = cmds_.back();
             c.mode = mode; c.tex = tex; c.mvp = m; c.shader = shader_; c.locs = locs_;
             return;
         }
-        cmds_.push_back({Cmd::Draw, mode, tex, int(v_.size()), 0, m, shader_, locs_, -1});
+        cmds_.push_back({Cmd::Draw, mode, tex, int(v_.size()), 0, m, shader_, locs_, -1, -1});
     }
     // Mudanca de estado do GL (mistura, teste de alfa, mascara de Z, CLAMP) na ordem dos vertices: sem nada na fila, roda agora;
     // senao entra na fila e roda na descarga, entre os desenhos de antes e os de depois. Uma subida so por descarga em vez de uma por
     // mudanca de estado (centenas por vista na travessia).
     template <class F> void state(F &&fn) {
-        if (v_.empty()) { fn(); return; }
+        if (empty()) { fn(); return; }
         ops_.emplace_back(std::forward<F>(fn));
-        cmds_.push_back({Cmd::State, 0, 0, int(v_.size()), 0, -1, 0, nullptr, int(ops_.size()) - 1});
+        cmds_.push_back({Cmd::State, 0, 0, int(v_.size()), 0, -1, 0, nullptr, int(ops_.size()) - 1, -1});
     }
+    // Pedaco adiado: os vertices deste ponto do desenho aberto saem depois, no buffer deferBuf(j) (preenchido por quem pediu, em
+    // qualquer thread, antes da descarga); a descarga os poe neste lugar, na ordem. Devolve j.
+    int defer() {
+        if (cmds_.empty() || cmds_.back().kind != Cmd::Draw || cmds_.back().count != 0 || cmds_.back().job >= 0 || cmds_.back().res) reopen();
+        const int j = nDefer_++;
+        if (bufs_.size() < size_t(nDefer_)) bufs_.resize(size_t(nDefer_));
+        bufs_[size_t(j)].clear();
+        cmds_.back().job = j;
+        return j;
+    }
+    std::vector<V> &deferBuf(int j) { return bufs_[size_t(j)]; }
+
+    // Arena residente: vertices que ficam na GPU entre vistas e quadros (geometria que nao mudou; Scene::drawList). arenaAlloc da a
+    // posicao de n vertices (-1 = cheia: o chamador zera com arenaReset, que orfana o buffer, fora de uma lista com desenhos da arena
+    // na fila); arenaUpload os grava; resident desenha uma faixa no ponto atual da fila, com o comando aberto (textura, shader, MVP) e,
+    // com cull, o GL_CULL_FACE ligado (a mesma regra do Scene::backFacing: frente no sentido anti-horario).
+    long arenaAlloc(size_t n) {
+        if (!ok_) return -1;
+        if (!arenaVao_) {
+            makeVao(arenaVao_, arenaVbo_);
+            glad_glBindBuffer(kArrayBuffer, arenaVbo_);
+            glad_glBufferData(kArrayBuffer, ptrdiff_t(kArenaCap * sizeof(V)), nullptr, kStaticDraw);
+            glad_glBindBuffer(kArrayBuffer, 0);
+        }
+        if (arenaUsed_ + n > kArenaCap) return -1;
+        const long off = long(arenaUsed_);
+        arenaUsed_ += n;
+        return off;
+    }
+    void arenaUpload(long off, const V *data, size_t n) {
+        if (!n) return;
+        glad_glBindBuffer(kArrayBuffer, arenaVbo_);
+        glad_glBufferSubData(kArrayBuffer, ptrdiff_t(size_t(off) * sizeof(V)), ptrdiff_t(n * sizeof(V)), data);
+        glad_glBindBuffer(kArrayBuffer, 0);
+        arenaUpBytes += double(n * sizeof(V));
+    }
+    void arenaReset() {
+        arenaUsed_ = 0;
+        if (!arenaVbo_) return;
+        glad_glBindBuffer(kArrayBuffer, arenaVbo_);
+        glad_glBufferData(kArrayBuffer, ptrdiff_t(kArenaCap * sizeof(V)), nullptr, kStaticDraw);
+        glad_glBindBuffer(kArrayBuffer, 0);
+    }
+    void resident(long off, int count, bool cull) {
+        if (count <= 0) return;
+        Cmd d{};
+        for (size_t i = cmds_.size(); i-- > 0;)
+            if (cmds_[i].kind == Cmd::Draw) { d = cmds_[i]; break; }
+        d.kind = Cmd::Draw; d.first = int(off); d.count = count; d.job = -1; d.res = 1; d.cull = cull ? 1 : 0;
+        cmds_.push_back(d);
+        ++nRes_;
+    }
+    static constexpr size_t kArenaCap = size_t(1) << 20;   // vertices (36 MB)
+    static inline double arenaUpBytes = 0.0;               // WOTM_DRAWSTATS: subida para a arena
     // Comandos de desenho com vertices desde o ultimo zerar (WOTM_DRAWSTATS)
     long draws() const { return draws_; }
     void resetDraws() { draws_ = 0; }
@@ -494,35 +606,64 @@ public:
     }
     void vertex(float x, float y, float z) {
         cur_.x = x; cur_.y = y; cur_.z = z;
-        if (cmds_.back().kind != Cmd::Draw) reopen();   // vertices depois de uma mudanca de estado: o mesmo desenho continua
+        if (cmds_.back().kind != Cmd::Draw || cmds_.back().job >= 0 || cmds_.back().res) reopen();   // depois de uma mudanca de estado, de um pedaco adiado ou da arena: o mesmo desenho continua
         v_.push_back(cur_);
         ++cmds_.back().count;
     }
-    bool empty() const { return v_.empty(); }
+    bool empty() const { return v_.empty() && nDefer_ == 0 && nRes_ == 0; }
     size_t vertices() const { return v_.size(); }
 
     // Sobe e desenha o que acumulou, com as mudancas de estado da fila no meio; zera a fila
     void flush() {
-        if (v_.empty() || !ok_) {   // sem vertices: so as mudancas de estado (na ordem)
+        const V *up = v_.data();   // o que sobe: v_, ou a juncao com os pedacos adiados (mbuf_)
+        size_t upN = v_.size();
+        if (nDefer_) {   // os pedacos adiados no lugar deles (os comandos de desenho estao na ordem dos vertices); a copia em paralelo
+            copies_.clear();
+            size_t total = 0;
+            for (Cmd &c : cmds_) {
+                if (c.kind != Cmd::Draw) { c.first = int(total); continue; }
+                if (c.res) continue;   // faixa da arena: fora da juncao
+                const V *src = c.job >= 0 ? bufs_[size_t(c.job)].data() : v_.data() + c.first;
+                if (c.job >= 0) c.count = int(bufs_[size_t(c.job)].size());
+                c.job = -1;
+                c.first = int(total);
+                if (c.count) copies_.push_back({src, size_t(c.count), total});
+                total += size_t(c.count);
+            }
+            if (total > mcap_) { mcap_ = total + total / 4; mbuf_.reset(new V[mcap_]); }   // sem zerar (o vector zeraria ~10 MB)
+            V *dst = mbuf_.get();
+            JobPool::get().parallelFor(int(copies_.size()), [this, dst](int i) {
+                const Copy &k = copies_[size_t(i)];
+                std::memcpy(dst + k.dst, k.src, k.n * sizeof(V));
+            });
+            up = dst;
+            upN = total;
+            nDefer_ = 0;
+        }
+        if ((!upN && !nRes_) || !ok_) {   // sem vertices: so as mudancas de estado (na ordem)
             for (const Cmd &c : cmds_) if (c.kind == Cmd::State) ops_[size_t(c.op)]();
             v_.clear(); cmds_.clear(); ops_.clear(); mvps_.clear();
+            nRes_ = 0;
             return;
         }
         rlDrawRenderBatchActive();   // o que o rlgl tiver na fila sai antes (ordem)
         const auto t0 = std::chrono::steady_clock::now();
+        if (upN) {
         // buffer novo vazio (orfao: a GPU ainda pode ler o anterior) e os dados por glBufferSubData. Com o glBufferData ja com os
         // dados (varios MB por descarga), no driver da RX 570 os quadrantes 3 e 4 da tela dividida saiam sem a fase de vez em quando
         // (qualquer leitura de estado do GL, que sincroniza o driver, escondia o defeito)
         glad_glBindBuffer(kArrayBuffer, vbo_);
-        glad_glBufferData(kArrayBuffer, ptrdiff_t(v_.size() * sizeof(V)), nullptr, kStreamDraw);
-        glad_glBufferSubData(kArrayBuffer, 0, ptrdiff_t(v_.size() * sizeof(V)), v_.data());
+        glad_glBufferData(kArrayBuffer, ptrdiff_t(upN * sizeof(V)), nullptr, kStreamDraw);
+        glad_glBufferSubData(kArrayBuffer, 0, ptrdiff_t(upN * sizeof(V)), up);
         glad_glBindBuffer(kArrayBuffer, 0);
+        }
         const auto t1 = std::chrono::steady_clock::now();
-        upBytes += double(v_.size() * sizeof(V));
+        upBytes += double(upN * sizeof(V));
         // estado do GL que os desenhos daqui usam; uma mudanca de estado da fila (funcoes do rlgl) pode trocar o programa e o VAO
         bool bound = false;
-        unsigned prog = 0;
+        unsigned prog = 0, vao = 0;
         int mvp = -1;
+        bool cullOn = false;   // o drawList desliga o GL_CULL_FACE; so as faixas da arena com cull o ligam
         for (const Cmd &c : cmds_) {
             if (c.kind == Cmd::State) {
                 ops_[size_t(c.op)]();
@@ -539,10 +680,13 @@ public:
                 // (matProjection/matView/matModel/matNormal: os shaders do desenho nao os tem)
                 glad_glUniform4f(locs[RL_SHADER_LOC_COLOR_DIFFUSE], 1.0f, 1.0f, 1.0f, 1.0f);
                 glad_glUniform1i(locs[RL_SHADER_LOC_MAP_DIFFUSE], 0);
-                glad_glBindVertexArray(vao_);
+                vao = 0;
                 glad_glActiveTexture(kTexture0);
                 bound = true;
             }
+            const unsigned wantVao = c.res ? arenaVao_ : vao_;
+            if (vao != wantVao) { glad_glBindVertexArray(wantVao); vao = wantVao; }
+            if (bool(c.cull) != cullOn) { cullOn = c.cull != 0; if (cullOn) rlEnableBackfaceCulling(); else rlDisableBackfaceCulling(); }
             if (c.mvp != mvp) {
                 glad_glUniformMatrix4fv(locs[RL_SHADER_LOC_MATRIX_MVP], 1, 0, mvps_[size_t(c.mvp)].m);
                 mvp = c.mvp;
@@ -551,9 +695,11 @@ public:
             glad_glDrawArrays(unsigned(c.mode), c.first, c.count);
             ++draws_;
         }
+        if (cullOn) rlDisableBackfaceCulling();
         glad_glBindTexture(kTexture2D, 0);
         glad_glBindVertexArray(0);
         glad_glUseProgram(0);
+        nRes_ = 0;
         const auto t2 = std::chrono::steady_clock::now();
         upMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
         drawMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
@@ -571,13 +717,16 @@ private:
         int mvp;              // indice em mvps_
         unsigned shader; const int *locs;
         int op;               // indice em ops_ (State)
+        int job;              // pedaco adiado (defer): indice em bufs_, -1 = vertices em v_
+        uint8_t res = 0;      // faixa da arena residente (first na arena)
+        uint8_t cull = 0;     // com GL_CULL_FACE (faixa da arena de secao com culling)
     };
     struct Mvp { float m[16]; };
     void reopen() {
         for (size_t i = cmds_.size(); i-- > 0;)
             if (cmds_[i].kind == Cmd::Draw) {
                 Cmd d = cmds_[i];
-                d.first = int(v_.size()); d.count = 0;
+                d.first = int(v_.size()); d.count = 0; d.job = -1; d.res = 0; d.cull = 0;
                 cmds_.push_back(d);
                 return;
             }
@@ -599,9 +748,37 @@ private:
         mvps_.push_back(x);
         return int(mvps_.size()) - 1;
     }
-    static constexpr unsigned kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kFloat = 0x1406, kUByte = 0x1401, kTexture2D = 0x0DE1,
+    void makeVao(unsigned &vao, unsigned &vbo) {
+        glad_glGenVertexArrays(1, &vao);
+        glad_glGenBuffers(1, &vbo);
+        glad_glBindVertexArray(vao);
+        glad_glBindBuffer(kArrayBuffer, vbo);
+        // as posicoes fixas que o rlLoadShaderProgram amarra nos shaders (glBindAttribLocation): o shader padrao nao tem
+        // normal (posicao -1) e a do alphaShader_ e a 2
+        const int loc[4] = {RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD,
+                            RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL, RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR};
+        const int size[4] = {3, 2, 3, 4};
+        const size_t off[4] = {offsetof(V, x), offsetof(V, u), offsetof(V, nx), offsetof(V, c)};
+        for (int a = 0; a < 4; ++a) {
+            if (loc[a] < 0) continue;
+            glad_glVertexAttribPointer(unsigned(loc[a]), size[a], a == 3 ? kUByte : kFloat, a == 3 ? 1 : 0, int(sizeof(V)),
+                                       reinterpret_cast<const void *>(off[a]));
+            glad_glEnableVertexAttribArray(unsigned(loc[a]));
+        }
+        glad_glBindVertexArray(0);
+        glad_glBindBuffer(kArrayBuffer, 0);
+    }
+    static constexpr unsigned kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kStaticDraw = 0x88E8, kFloat = 0x1406, kUByte = 0x1401, kTexture2D = 0x0DE1,
                               kTexture0 = 0x84C0;
     std::vector<V> v_;
+    std::unique_ptr<V[]> mbuf_;   // juncao de v_ com os pedacos adiados (flush)
+    size_t mcap_ = 0;
+    std::vector<std::vector<V>> bufs_;   // pedacos adiados (defer), reaproveitados entre descargas
+    struct Copy { const V *src; size_t n, dst; };
+    std::vector<Copy> copies_;
+    int nDefer_ = 0, nRes_ = 0;
+    unsigned arenaVao_ = 0, arenaVbo_ = 0;
+    size_t arenaUsed_ = 0;
     std::vector<Cmd> cmds_;
     std::vector<std::function<void()>> ops_;
     std::vector<Mvp> mvps_;

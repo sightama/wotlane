@@ -2018,11 +2018,11 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::DrawProf &p = wotm::drawProf();
             const double k = p.views ? 1.0 / double(p.views) : 0.0;
             std::fprintf(stderr, "[native] desenho por vista (x %ld): ceu %.2f travessia %.2f OT %.2f sombras %.2f (silhuetas %.2f) sprites %.2f "
-                         "particulas %.2f HUD %.2f ms (descargas de lote %.2f); %.0f lotes (%.0f desenhos), %.0f vertices (%.0f emitidos); silhuetas %ld refeitas, %ld reaproveitadas\n", p.views, p.ms[wotm::DrawProf::Sky] * k, p.ms[wotm::DrawProf::Trav] * k,
+                         "particulas %.2f HUD %.2f ms (descargas de lote %.2f, vertices nas threads %.2f); %.0f lotes (%.0f desenhos), %.0f vertices (%.0f emitidos, %.0f da arena, %.0f subidos a ela); silhuetas %ld refeitas, %ld reaproveitadas\n", p.views, p.ms[wotm::DrawProf::Sky] * k, p.ms[wotm::DrawProf::Trav] * k,
                          p.ms[wotm::DrawProf::AlphaOT] * k, p.ms[wotm::DrawProf::Shadows] * k, p.ms[wotm::DrawProf::ShadowTex] * k,
-                         p.ms[wotm::DrawProf::Sprites] * k, p.ms[wotm::DrawProf::Fx] * k, p.ms[wotm::DrawProf::Hud] * k, p.ms[wotm::DrawProf::Flush] * k,
+                         p.ms[wotm::DrawProf::Sprites] * k, p.ms[wotm::DrawProf::Fx] * k, p.ms[wotm::DrawProf::Hud] * k, p.ms[wotm::DrawProf::Flush] * k, p.ms[wotm::DrawProf::Jobs] * k,
                          double(p.batches) * k, double(p.draws) * k,
-                         double(p.verts) * k, double(p.emitted) * k, p.shadowMiss, p.shadowHit);
+                         double(p.verts) * k, double(p.emitted) * k, double(p.resident) * k, double(p.resUp) * k, p.shadowMiss, p.shadowHit);
             const double r = p.redraws ? 1.0 / double(p.redraws) : 0.0;
             {
                 wotm::GpuTimer &g = wotm::GpuTimer::get();

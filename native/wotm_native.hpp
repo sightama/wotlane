@@ -96,7 +96,7 @@ struct ViewScope {
 // Medida do desenho (WOTM_DRAWSTATS=1, com PS2X_STATS): tempo de cada fase do Scene::draw, lotes descarregados e vertices emitidos,
 // somados na thread da janela; o wotm_live.inc imprime a media por vista desenhada na linha [native] e zera
 struct DrawProf {
-    enum Phase { Sky, Trav, AlphaOT, Shadows, ShadowTex, Sprites, Fx, Hud, Flush,   // Flush: descargas de lote do drawList (dentro das outras)
+    enum Phase { Sky, Trav, AlphaOT, Shadows, ShadowTex, Sprites, Fx, Hud, Flush, Jobs,   // Flush e Jobs (vertices nas threads auxiliares): dentro das outras
                  RShow, RView, RFlares, RFrame, kN };   // por redesenho (wotmDrawNative): Scene::show, drawView inteiro, flares adiados, o redesenho todo
     long redraws = 0;
     double ms[kN] = {};
@@ -104,6 +104,7 @@ struct DrawProf {
     long draws = 0;                           // desenhos (glDrawArrays) das descargas do VtxStream
     long shadowHit = 0, shadowMiss = 0;   // silhuetas reaproveitadas e refeitas (Scene::shadowTexture)
     long emitted = 0;                     // vertices de fato emitidos pelo drawList (depois do corte de faces e dos slots)
+    long resident = 0, resUp = 0;         // vertices desenhados da arena residente e subidos para ela (Scene::residentDraw)
 };
 inline DrawProf &drawProf() { static DrawProf p; return p; }
 inline bool drawProfOn() { static const bool on = std::getenv("WOTM_DRAWSTATS") != nullptr; return on; }
@@ -2653,12 +2654,14 @@ public:
         auto it = cache_.find(pp);
         if (it != cache_.end()) {
             // revalida a assinatura (a RAM do nivel pode ter sido reaproveitada)
-            if (it->second->sig == packetSig(ram, skipZeroQwords(ram, pp))) return it->second.get();
+            if (it->second->sig == packetSig(ram, skipZeroQwords(ram, pp))) { lastMesh_ = it->second; return it->second.get(); }
         }
         auto md = std::make_shared<MeshData>(decodeObject(ram, node));
         cache_[pp] = md;
+        lastMesh_ = md;
         return md.get();
     }
+    std::shared_ptr<const MeshData> lastMesh_;   // a malha do ultimo mesh() (drawList: o pedaco adiado a segura)
 
     // Limiar do teste de alfa no shader do draw (DrawItem::aref, unidades do alfa do GS: 0x80 = 1,0). Descarrega o lote antes: o
     // uniform vale para o que for desenhado depois.
@@ -3134,6 +3137,14 @@ public:
         // descarregada so antes de uma mudanca de estado do GL (mistura, teste de alfa, mascara de Z, CLAMP), que vale na descarga.
         static const bool noStream = std::getenv("WOTM_NOVTXSTREAM") != nullptr;
         const bool stream = !wire && !noStream && vs_.ok();
+        // no stream, a conta dos vertices de cada pedaco (transformacao, ossos, luz) vai para as threads auxiliares (JobPool): o
+        // estado e os comandos saem aqui, na ordem, e os vertices entram no lugar deles na descarga
+        const bool deferVerts = stream && JobPool::get().active();
+        if (resReset_ && stream && vs_.empty()) {   // arena cheia: tudo de novo (orfana o buffer; os desenhos ja enviados seguem com o antigo)
+            vs_.arenaReset();
+            resChunks_.clear();
+            resReset_ = false;
+        }
         auto flushStream = [&] {
             if (!stream || vs_.empty()) return;
             ProfScope ps(DrawProf::Flush);
@@ -3173,6 +3184,7 @@ public:
         for (const auto &o : order) {
             const DrawItem &it = list[o.item];
             const MeshData *md = mesh(ram, it.node);
+            std::shared_ptr<const MeshData> mdKeep = lastMesh_;   // o pedaco adiado segura a malha (o cache pode troca-la antes da descarga)
             {   // diagnostico: WOTM_LISTSKIN=1 lista os itens skinned desenhados (no, LOD, animPkt, posicao do objeto)
                 static const bool ls = std::getenv("WOTM_LISTSKIN") != nullptr;
                 if (ls && md && md->skinned && !wire)
@@ -3358,82 +3370,50 @@ public:
                     std::fprintf(stderr, "[skinbox] node %x mundo x[%.1f %.1f] y[%.1f %.1f] z[%.1f %.1f] | cru x[%.1f %.1f] y[%.1f %.1f] z[%.1f %.1f]\n", it.node, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], rlo[0], rhi[0], rlo[1], rhi[1], rlo[2], rhi[2]);
                 }
             }
-            for (size_t k = 0; k + 2 < t.size(); k += 3) {
-                if (multi && t[k].slot != slot) continue;   // so as secoes deste slot
-                { static const int onlySub = std::getenv("WOTM_SUBPKT") ? std::atoi(std::getenv("WOTM_SUBPKT")) : -1; if (onlySub >= 0 && md->skinned && t[k].sub != onlySub) continue; }
-                float p[3][3];
-                for (int c = 0; c < 3; ++c) {
-                    if (pm) skinVertexPM(pm, skinM, t[k + c], p[c]);
-                    else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
-                    if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fzScale;
-                }
-                if (t[k].cull && !wire && backFacing(p, eye_)) continue;
-                float eu[3], ev[3];   // UV do mapa de ambiente por vertice
-                bool envOk[3] = {false, false, false};
-                if (it.env && tid) {
-                    if (!envV.ok && eyeOk_) {
-                        float W[4][4];
-                        for (int r = 0; r < 4; ++r)
-                            for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(viewW2S() + 16 * r + 4 * c);
-                        envV = envView(ram, W, eye_);
-                    }
-                    for (int c = 0; c < 3; ++c) {
-                        float nw[3];
-                        envNormal(t[k + c], pm ? &pm[(t[k + c].cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, nw);
-                        envOk[c] = envUv(it.env, it.envK, envV, p[c], nw, eu[c], ev[c]);
-                    }
-                }
-                for (int c = 0; c < 3; ++c) {
-                    const int cs[2] = {c, (c + 1) % 3};
-                    for (int e = 0; e < (wire ? 2 : 1); ++e) {
-                        const Vtx &v = t[k + cs[e]];
-                        bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
-                        if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; vColor(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
-                        else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); vColor(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
-                        else if (v.isAdc) { gsV = false; vColor(255, 0, 0, 255); }   // WOTM_SHOWADC
-                        else if (noVcol && md->skinned) { gsV = false; vColor(255, 255, 255, 255); }   // diagnostico
-                        else {
-                            uint8_t rgb[3];
-                            vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb, rowLen);
-                            // cor e alfa crus no modo GS (o shader faz texel * Cv / 128 e At * Av / 16384); no quadro anterior e no filme,
-                            // o antigo (cor dobrada e limitada a 1,0, alfa 4a/255)
-                            const float va = v.a * fade * (gsA ? 1.f : 4.f);
-                            const int k = gsA ? 1 : 2;
-                            vColor(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
-                        }
-                        const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
-                        // texels do GS na tela 640x224, que em widescreen e a faixa 4:3 central do quadro anterior (gsScreenRect)
-                        if (tid && tid == screenId_) vTex(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
-                        else if (tid && envOk[cs[e]]) vTex(tu, tv);
-                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; vTex(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        vNormal(fogBurn, v.fge && !idcNode, gsV, curPremul, curMode);   // neblina e modulacao do GS no shader do draw
-                        vVertex(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
-                        if (drawProfOn()) ++drawProf().emitted;
-                    }
-                }
+            // camera do mapa de ambiente e eixos dos sprites: uma vez por lista, aqui (lidos da RAM), antes dos vertices
+            if (it.env && tid && !envV.ok && eyeOk_) {
+                float W[4][4];
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(viewW2S() + 16 * r + 4 * c);
+                envV = envView(ram, W, eye_);
             }
             if (!md->sprites.empty() && !sprView.ok) sprView = SpriteView::make(ram, eye_);
-            for (const ObjSprite &s : md->sprites) {
-                if (multi && s.slot != slot) continue;
-                float c[4][3];
-                if (!objSpriteCorners(sprView, it.m, s, c)) continue;
-                if (fudge) for (auto &q : c) for (int a = 0; a < 3; ++a) q[a] = eye_[a] + (q[a] - eye_[a]) * fzScale;
-                const uint8_t cr = uint8_t(std::min(255.f, s.r * it.color[0])), cg = uint8_t(std::min(255.f, s.g * it.color[1])),
-                              cb = uint8_t(std::min(255.f, s.b * it.color[2])), ca = uint8_t(std::min(255.f, s.a * fade));
-                // ST como o GS (repete): desloca o par para >= 0, para nao depender do modo de repeticao da textura do raylib
-                const float u0 = s.u0 + it.uvOff[0], u1 = s.u1 + it.uvOff[0], v0 = s.v0 + it.uvOff[1], v1 = s.v1 + it.uvOff[1];
-                const float du = std::floor(std::min(u0, u1)), dv = std::floor(std::min(v0, v1));
-                const float cu[4] = {u0 - du, u1 - du, u1 - du, u0 - du}, cv[4] = {v0 - dv, v0 - dv, v1 - dv, v1 - dv};
-                static const int triIdx[6] = {0, 1, 2, 0, 2, 3}, edgeIdx[8] = {0, 1, 1, 2, 2, 3, 3, 0};
-                const int *ix = wire ? edgeIdx : triIdx;
-                for (int q = 0; q < (wire ? 8 : 6); ++q) {
-                    const int k = ix[q];
-                    vColor(cr, cg, cb, ca);
-                    if (tid) vTex(cu[k], cv[k]);
-                    vNormal(fogBurn, s.fge, gsA, curPremul, curMode);
-                    vVertex(c[k][0], c[k][1], c[k][2]);
-                }
+            EmitIn in{&it, md, slot, multi, pm, skinM, fudge, fzScale, {rowLen[0], rowLen[1], rowLen[2]}, ol, fade, fogBurn, tid, gsA,
+                      forceOpaque, curPremul, curMode, wire};
+            // Geometria parada (sem ossos, mapa de ambiente, zBufferFudge nem sprites; a mesma chave de um redesenho
+            // anterior): os vertices ficam na arena da GPU e as vistas e quadros seguintes so desenham a faixa (residentDraw)
+            if (stream && !pm && !md->skinned && !fudge && !it.env && md->sprites.empty() && gsA && tid != screenId_ &&
+                mdKeep.get() == md && residentDraw(in, mdKeep))
+                continue;
+            if (deferVerts && mdKeep.get() == md) {   // os vertices deste pedaco saem nas threads auxiliares (abaixo), no lugar dele no VtxStream
+                if (nJobs_ == jobs_.size()) jobs_.emplace_back();
+                EmitJob &j = jobs_[nJobs_++];
+                j.keep = mdKeep;
+                if (!pmTmp.empty()) { j.pmOwn.swap(pmTmp); in.pm = j.pmOwn.data(); }
+                j.in = in;
+                j.buf = vs_.defer();
+            } else {
+                struct Direct {
+                    decltype(vColor) &c; decltype(vTex) &t; decltype(vNormal) &n; decltype(vVertex) &v;
+                    void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { c(r, g, b, a); }
+                    void tex(float u, float w) { t(u, w); }
+                    void shaderN(float burn, bool fge, bool gs, bool pm, int mode) { n(burn, fge, gs, pm, mode); }
+                    void vertex(float x, float y, float z) { v(x, y, z); if (drawProfOn()) ++drawProf().emitted; }
+                    void tri(bool) {}
+                } sink{vColor, vTex, vNormal, vVertex};
+                emitVerts(ram, in, envV, sprView, sink);
             }
+        }
+        if (nJobs_) {   // os pedacos adiados, em paralelo; cada um no seu buffer
+            ProfScope ps(DrawProf::Jobs);
+            JobPool::get().parallelFor(int(nJobs_), [&](int i) {
+                EmitJob &j = jobs_[size_t(i)];
+                BufSink sink{vs_.deferBuf(j.buf)};
+                emitVerts(ram, j.in, envV, sprView, sink);
+            });
+            if (drawProfOn()) for (size_t i = 0; i < nJobs_; ++i) drawProf().emitted += long(vs_.deferBuf(jobs_[i].buf).size());
+            for (size_t i = 0; i < nJobs_; ++i) { jobs_[i].keep.reset(); jobs_[i].pmOwn.clear(); }
+            nJobs_ = 0;
         }
         if (open) {   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
             if (stream) flushStream();
@@ -4016,6 +3996,213 @@ private:
 
     // obj: luzes no espaco do objeto (DrawItem::lightObj) quando ele as tem; nulo = paraL girado pela matriz do objeto
     struct ObjLight { bool lit = false; float spec = 0.f; const DrawItem *pt = nullptr; const float (*obj)[3] = nullptr; };
+
+    // Entrada da conta dos vertices de um pedaco do drawList (item + slot + passe), tudo ja resolvido na thread da janela
+    struct EmitIn {
+        const DrawItem *it; const MeshData *md; uint32_t slot; bool multi;
+        const M4 *pm; M4 skinM; bool fudge; float fzScale; float rowLen[3];
+        ObjLight ol; float fade, fogBurn; unsigned tid; bool gsA, forceOpaque, premul; int mode; bool wire;
+        bool gpuCull = false;   // todas as faces, com Sink::tri marcando as de culling (a GPU corta: arena residente)
+    };
+    struct EmitJob { EmitIn in; std::shared_ptr<const MeshData> keep; std::vector<M4> pmOwn; int buf = -1; };
+    std::deque<EmitJob> jobs_;   // pedacos adiados do drawList em curso (reaproveitados)
+    size_t nJobs_ = 0;
+    // Destino dos vertices de um pedaco adiado: o mesmo que o VtxStream faria (cor, UV e normal correntes; a normal normalizada como o
+    // rlNormal3f), num buffer proprio
+    struct BufSink {
+        std::vector<VtxStream::V> &out;
+        VtxStream::V cur{};
+        float last[3] = {0.f, 0.f, 0.f};
+        void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { cur.c[0] = r; cur.c[1] = g; cur.c[2] = b; cur.c[3] = a; }
+        void tex(float u, float v) { cur.u = u; cur.v = v; }
+        void shaderN(float burn, bool fge, bool gs, bool pm, int mode) {
+            float n[3];
+            shaderNormalVals(burn, fge, gs, pm, mode, n);
+            if (n[0] == last[0] && n[1] == last[1] && n[2] == last[2]) return;
+            last[0] = n[0]; last[1] = n[1]; last[2] = n[2];
+            const float length = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (length != 0.0f) { const float il = 1.0f / length; n[0] *= il; n[1] *= il; n[2] *= il; }
+            cur.nx = n[0]; cur.ny = n[1]; cur.nz = n[2];
+        }
+        void vertex(float x, float y, float z) { cur.x = x; cur.y = y; cur.z = z; out.push_back(cur); }
+        void tri(bool) {}
+    };
+
+    // ---- arena residente (VtxStream::arenaAlloc): pedacos do drawList que nao mudam entre vistas e quadros
+    // Tudo o que entra na conta dos vertices de um pedaco parado (emitVerts sem ossos, mapa de ambiente, fudge nem
+    // sprites). Bytes zerados antes de preencher (comparado com memcmp).
+    struct ResKey {
+        const MeshData *md; uint32_t sig, node, slot; int32_t mode;
+        float m[16], color[4], fade, fogBurn, uvOff[2], spec;
+        float lobj[4][3], ldir[4][3], lcol[3][3];
+        float ptRel[3][3], ptCol[3][3], ptFall[3];   // luzes pontuais (pointRgb)
+        uint8_t lit, ownLight, forceOpaque, premul, premulShader, texOn, multi, ptN;
+    };
+    struct ResRun { uint32_t start, n; bool cull; };
+    struct ResChunk { ResKey key; long off = 0; std::vector<ResRun> runs; std::shared_ptr<const MeshData> keep; };
+    // Sink da arena: como o BufSink, com as faixas de faces com e sem culling na ordem
+    struct ResSink : BufSink {
+        std::vector<ResRun> &runs;
+        ResSink(std::vector<VtxStream::V> &o, std::vector<ResRun> &r) : BufSink{o}, runs(r) {}
+        void tri(bool cull) {
+            if (runs.empty() || runs.back().cull != cull) runs.push_back({uint32_t(out.size()), 0, cull});
+            runs.back().n += 3;
+        }
+    };
+    std::unordered_map<uint64_t, ResChunk> resChunks_;
+    std::unordered_map<uint64_t, uint64_t> resSeen_;   // chave -> redesenho em que apareceu (pedaco so depois de repetir num redesenho seguinte)
+    std::vector<VtxStream::V> resTmp_;
+    bool resReset_ = false;   // arena cheia: zera no comeco do proximo drawList (com a fila vazia)
+    // Desenha o pedaco pela arena (true) ou deixa para o caminho comum (false: chave nova, arena cheia, WOTM_RESIDENT=0)
+    bool residentDraw(const EmitIn &in, const std::shared_ptr<const MeshData> &keep) {
+        // WOTM_RESIDENT=0 desliga; =2 poe na arena ja na primeira vez (replay e corpus, que nao repetem redesenhos)
+        static const int mode = [] { const char *e = std::getenv("WOTM_RESIDENT"); return e ? std::atoi(e) : 1; }();
+        static const bool diag = std::getenv("WOTM_IDCOLOR") || std::getenv("WOTM_NOVCOL") || std::getenv("WOTM_SUBPKT") || std::getenv("WOTM_UVNEG");
+        if (mode == 0 || diag) return false;
+        ResKey k;
+        std::memset(&k, 0, sizeof k);
+        const DrawItem &it = *in.it;
+        k.md = in.md; k.sig = in.md->sig; k.node = it.node; k.slot = in.slot; k.mode = in.mode;
+        std::memcpy(k.m, &it.m, sizeof k.m);
+        std::memcpy(k.color, it.color, sizeof k.color);
+        k.fade = in.fade; k.fogBurn = in.fogBurn; k.uvOff[0] = it.uvOff[0]; k.uvOff[1] = it.uvOff[1];
+        k.lit = in.ol.lit; k.forceOpaque = in.forceOpaque; k.premul = in.premul; k.premulShader = g_premulShader;
+        k.texOn = in.tid != 0; k.multi = in.multi;
+        if (in.ol.pt) {
+            const DrawItem &p = *in.ol.pt;
+            k.ptN = p.ptN;
+            std::memcpy(k.ptRel, p.ptRel, sizeof k.ptRel);
+            std::memcpy(k.ptCol, p.ptCol, sizeof k.ptCol);
+            std::memcpy(k.ptFall, p.ptFall, sizeof k.ptFall);
+        } else if (in.ol.lit) {
+            k.spec = in.ol.spec;
+            if (in.ol.obj) { k.ownLight = 1; std::memcpy(k.lobj, in.ol.obj, sizeof k.lobj); }
+            else { std::memcpy(k.ldir, lights_.dir, sizeof k.ldir); std::memcpy(k.lcol, lights_.col, sizeof k.lcol); }
+        }
+        static_assert(sizeof(ResKey) % 8 == 0, "ResKey em palavras de 8 bytes");
+        uint64_t h = 0x243F6A8885A308D3ull;   // de 8 em 8 bytes
+        for (size_t i = 0; i < sizeof k; i += 8) {
+            uint64_t w;
+            std::memcpy(&w, reinterpret_cast<const uint8_t *>(&k) + i, 8);
+            h = (h ^ w) * 0x9E3779B97F4A7C15ull;
+            h ^= h >> 29;
+        }
+        auto f = resChunks_.find(h);
+        if (f == resChunks_.end() || std::memcmp(&f->second.key, &k, sizeof k) != 0) {
+            auto s = resSeen_.find(h);
+            if (mode != 2 && (s == resSeen_.end() || s->second == redrawId)) {   // primeira vez (ou so neste redesenho): caminho comum
+                if (s == resSeen_.end()) {
+                    if (resSeen_.size() > 200000) resSeen_.clear();
+                    resSeen_.emplace(h, redrawId);
+                }
+                return false;
+            }
+            resTmp_.clear();
+            ResChunk c;
+            c.key = k;
+            c.keep = keep;
+            EmitIn ein = in;
+            ein.gpuCull = true;
+            ResSink sink(resTmp_, c.runs);
+            emitVerts(Ram{}, ein, EnvView{}, SpriteView{}, sink);
+            c.off = vs_.arenaAlloc(resTmp_.size());
+            if (c.off < 0) { resReset_ = true; return false; }
+            vs_.arenaUpload(c.off, resTmp_.data(), resTmp_.size());
+            if (drawProfOn()) drawProf().resUp += long(resTmp_.size());
+            f = resChunks_.insert_or_assign(h, std::move(c)).first;
+        }
+        for (const ResRun &r : f->second.runs) {
+            vs_.resident(f->second.off + long(r.start), int(r.n), r.cull);
+            if (drawProfOn()) drawProf().resident += long(r.n);
+        }
+        return true;
+    }
+    // Vertices de um pedaco do drawList (triangulos do slot e sprites do objeto). So le: roda nas threads auxiliares (JobPool)
+    template <class Sink> void emitVerts(const Ram &ram, const EmitIn &in, const EnvView &envV, const SpriteView &sprView, Sink &sink) const {
+        const DrawItem &it = *in.it;
+        const MeshData *md = in.md;
+        const auto &t = md->tris;
+        const uint32_t slot = in.slot;
+        const M4 *pm = in.pm;
+        const M4 &skinM = in.skinM;
+        const bool wire = in.wire, gsA = in.gsA;
+        const unsigned tid = in.tid;
+        static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
+        static const bool idcNode = idcMode && std::atoi(std::getenv("WOTM_IDCOLOR")) == 2;   // =2: no >> 4 em RGB, sem mistura nem neblina
+        static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
+        static const int onlySub = std::getenv("WOTM_SUBPKT") ? std::atoi(std::getenv("WOTM_SUBPKT")) : -1;
+        static const char *un = std::getenv("WOTM_UVNEG");   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+        for (size_t k = 0; k + 2 < t.size(); k += 3) {
+            if (in.multi && t[k].slot != slot) continue;   // so as secoes deste slot
+            if (onlySub >= 0 && md->skinned && t[k].sub != onlySub) continue;
+            float p[3][3];
+            for (int c = 0; c < 3; ++c) {
+                if (pm) skinVertexPM(pm, skinM, t[k + c], p[c]);
+                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+                if (in.fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * in.fzScale;
+            }
+            if (t[k].cull && !wire && !in.gpuCull && backFacing(p, eye_)) continue;
+            sink.tri(t[k].cull != 0);
+            float eu[3], ev[3];   // UV do mapa de ambiente por vertice
+            bool envOk[3] = {false, false, false};
+            if (it.env && tid) {
+                for (int c = 0; c < 3; ++c) {
+                    float nw[3];
+                    envNormal(t[k + c], pm ? &pm[(t[k + c].cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, nw);
+                    envOk[c] = envUv(it.env, it.envK, envV, p[c], nw, eu[c], ev[c]);
+                }
+            }
+            for (int c = 0; c < 3; ++c) {
+                const int cs[2] = {c, (c + 1) % 3};
+                for (int e = 0; e < (wire ? 2 : 1); ++e) {
+                    const Vtx &v = t[k + cs[e]];
+                    bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
+                    if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; sink.color(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
+                    else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); sink.color(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
+                    else if (v.isAdc) { gsV = false; sink.color(255, 0, 0, 255); }   // WOTM_SHOWADC
+                    else if (noVcol && md->skinned) { gsV = false; sink.color(255, 255, 255, 255); }   // diagnostico
+                    else {
+                        uint8_t rgb[3];
+                        vertexRgb(in.ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb, in.rowLen);
+                        // cor e alfa crus no modo GS (o shader faz texel * Cv / 128 e At * Av / 16384); no quadro anterior e no filme,
+                        // o antigo (cor dobrada e limitada a 1,0, alfa 4a/255)
+                        const float va = v.a * in.fade * (gsA ? 1.f : 4.f);
+                        const int kk = gsA ? 1 : 2;
+                        sink.color(uint8_t(std::min(255, rgb[0] * kk)), uint8_t(std::min(255, rgb[1] * kk)), uint8_t(std::min(255, rgb[2] * kk)),
+                                   in.forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
+                    }
+                    const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
+                    // texels do GS na tela 640x224, que em widescreen e a faixa 4:3 central do quadro anterior (gsScreenRect)
+                    if (tid && tid == screenId_) sink.tex(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
+                    else if (tid && envOk[cs[e]]) sink.tex(tu, tv);
+                    else if (tid) { const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; sink.tex(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }
+                    sink.shaderN(in.fogBurn, v.fge && !idcNode, gsV, in.premul, in.mode);   // neblina e modulacao do GS no shader do draw
+                    sink.vertex(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
+                }
+            }
+        }
+        for (const ObjSprite &s : md->sprites) {
+            if (in.multi && s.slot != slot) continue;
+            float c[4][3];
+            if (!objSpriteCorners(sprView, it.m, s, c)) continue;
+            if (in.fudge) for (auto &q : c) for (int a = 0; a < 3; ++a) q[a] = eye_[a] + (q[a] - eye_[a]) * in.fzScale;
+            const uint8_t cr = uint8_t(std::min(255.f, s.r * it.color[0])), cg = uint8_t(std::min(255.f, s.g * it.color[1])),
+                          cb = uint8_t(std::min(255.f, s.b * it.color[2])), ca = uint8_t(std::min(255.f, s.a * in.fade));
+            // ST como o GS (repete): desloca o par para >= 0, para nao depender do modo de repeticao da textura do raylib
+            const float u0 = s.u0 + it.uvOff[0], u1 = s.u1 + it.uvOff[0], v0 = s.v0 + it.uvOff[1], v1 = s.v1 + it.uvOff[1];
+            const float du = std::floor(std::min(u0, u1)), dv = std::floor(std::min(v0, v1));
+            const float cu[4] = {u0 - du, u1 - du, u1 - du, u0 - du}, cv[4] = {v0 - dv, v0 - dv, v1 - dv, v1 - dv};
+            static const int triIdx[6] = {0, 1, 2, 0, 2, 3}, edgeIdx[8] = {0, 1, 1, 2, 2, 3, 3, 0};
+            const int *ix = wire ? edgeIdx : triIdx;
+            for (int q = 0; q < (wire ? 8 : 6); ++q) {
+                const int k = ix[q];
+                sink.color(cr, cg, cb, ca);
+                if (tid) sink.tex(cu[k], cv[k]);
+                sink.shaderN(in.fogBurn, s.fge, gsA, in.premul, in.mode);
+                sink.vertex(c[k][0], c[k][1], c[k][2]);
+            }
+        }
+    }
     // O programa do mapa de ambiente (DrawItem::env) nao aplica a luz paralela, mesmo com dirLight. O pktAddVu1ObjAsm escolhe o programa
     // das luzes pontuais (0x15D8, tabela +0x16C) antes do da luz paralela: com luz pontual, a paralela nao entra.
     static ObjLight objectLight(const Ram &ram, const DrawItem &it) {

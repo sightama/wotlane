@@ -825,7 +825,14 @@ namespace
         const uint32_t tics = g_nativeTimer ? hostTics() : READ32(0x6F8DC4u);
         static double lastCpuMs = 0.0;   // CPU da thread do EE (usuario + kernel): quadro lento com pouca CPU = bloqueado fora do ocio
         const double cpuMs = wotmThreadCpuMs();
-        std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms cpu=%.1fms top",
+        // a linha numa escrita so: o stderr nao tem buffer, e cada fprintf seria uma chamada ao sistema na thread do EE
+        char line[512];
+        int len = 0;
+        auto add = [&](const char *fmt, auto... a) {
+            if (len < int(sizeof(line)))
+                len += std::snprintf(line + len, sizeof(line) - size_t(len), fmt, a...);
+        };
+        add("[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms cpu=%.1fms top",
                      READ32(wotm::sym::g_frame), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
                      (tics - lastTics) / 9619.0,
                      (g_wotmEeCycle - g_lastCycle) / field, g_wotmIdleCycles / field,
@@ -834,22 +841,24 @@ namespace
         lastCpuMs = cpuMs;
         for (int k = 0; k < 3; ++k)
             if (top[k] >= 0)
-                std::fprintf(stderr, " %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
-        std::fprintf(stderr, " syncv=%u", g_syncVCalls);
+                add(" %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
+        add(" syncv=%u", g_syncVCalls);
         if (g_svAtMs >= 0.0)   // sv=<ms ate a 1a chamada>@<vblanks ja entregues>/<ms ate aqui, o fim do quadro>
-            std::fprintf(stderr, " sv=%.1f@%d/%.1f", g_svAtMs, g_svVblanks,
+            add(" sv=%.1f@%d/%.1f", g_svAtMs, g_svVblanks,
                          std::chrono::duration<double, std::milli>(now - g_frameStartHost).count());
         g_svAtMs = -1.0;
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
-            std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
+            add("%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
         unsigned views = 0;
         for (unsigned v = 0; v < 4; ++v)
             views += (g_hierViews >> v) & 1u;
-        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f", views, g_hierMs[0], g_hierMs[1], g_captureMs[0], g_captureMs[1]);
+        add(" vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f", views, g_hierMs[0], g_hierMs[1], g_captureMs[0], g_captureMs[1]);
         if (g_hierViews & 0xCu)   // 3 e 4 jogadores (wotm_split4.inc): vistas 2 e 3
-            std::fprintf(stderr, " hier23=%.2f/%.2f cap23=%.2f/%.2f", g_hierMs[2], g_hierMs[3], g_captureMs[2], g_captureMs[3]);
-        std::fprintf(stderr, "\n");
+            add(" hier23=%.2f/%.2f cap23=%.2f/%.2f", g_hierMs[2], g_hierMs[3], g_captureMs[2], g_captureMs[3]);
+        len = std::min(len, int(sizeof(line)) - 2);
+        line[len++] = 10;
+        std::fwrite(line, 1, size_t(len), stderr);
         g_hierViews = 0;
         for (int v = 0; v < 4; ++v)
             g_hierMs[v] = g_captureMs[v] = 0.0;
