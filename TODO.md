@@ -20,6 +20,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 - **Skins no elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez, e os jogadores trocam de monstro entre as rodadas sem recarregar. Escolher traje ali exige mudar a carga (um arquivo por monstro escolhido), não só a tela.
 - **Seleção nativa, pendências para colaborador** (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`, itens 6 a 8): Togera desalinhado no quadro único do adventure; quadros dos monstros fora do telão; a tela 17 (`screenSelect1AI`) sem a seleção nativa.
 - **Arquivo de mod maior que o do disco** fora de `MON/*`: o jogo carrega em regiões de tamanho fixo e pode sobrescrever o que vem depois (o log avisa). Abrir espaço por tipo de arquivo.
+- **Aviso dos tetos para skin com `.TEX`/`.RTX`/`.PTR` próprios:** a skin não tem original para comparar, então hoje nada avisa. O log de carga deveria comparar com os tetos reais: `texInfo[1000]` (`maxTexId` final), VRAM residente do `.RTX` e o buffer de 0x30D40 do `.PTR` (`0f091a4:docs/investigacoes/2026-10-23/skins_mod_carga.md`, item 8).
 
 
 ### 10. Chefes jogáveis
