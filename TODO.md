@@ -18,7 +18,10 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 - **Monstros com arquivos próprios:** campo `files` no `monster.json`, com um tipo livre (6, 12 ou 16) ou remapeando um tipo. Hoje o custom usa o tipo de um monstro do jogo. Modelo novo depende de o `.NGP` voltar pelo kit (hoje ele só sai).
 - **Custom na seleção de 3 e 4 jogadores** (a casa CUSTOM só existe nas seleções de 1 e 2).
 - **Skins no elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez, e os jogadores trocam de monstro entre as rodadas sem recarregar. Escolher traje ali exige mudar a carga (um arquivo por monstro escolhido), não só a tela.
-- **Seleção nativa, pendências para colaborador** (`docs/investigacoes/2026-10-23/selecao_nativa_pendencias.md`, itens 6 a 8): Togera desalinhado no quadro único do adventure; quadros dos monstros fora do telão; a tela 17 (`screenSelect1AI`) sem a seleção nativa.
+- **Seleção nativa, pendências para colaborador** (`wotm_padsel.inc`; `NATIVO.md`, "Seleção de monstros de 1 e 2 jogadores"):
+  - Togera desalinhado para a esquerda no quadro único do adventure (tela 3): o enquadramento (`wotm::savepics::Drawer::framingOf`, `shiftX`/`shiftY`/`zoom`) é o dos quadros da lista de saves, e o da seleção tem outra proporção (`selBoxW`, até 46% da largura). Conferir os outros monstros; `shiftX` pela proporção do quadro ou enquadramento próprio da seleção.
+  - Quadros dos jogadores fora do telão: hoje vão numa textura colada nele (`drawSelect` -> `g_rt`), pequenos e inclinados. O dono os quer em 2D sobre a imagem, entre a faixa preta de cima e a barra de monstros. Nas duas seleções nativas (telas 3/6 e 3 e 4 jogadores).
+  - Tela 17 (`screenSelect1AI`) sem a seleção nativa (não aparece nos caminhos das telas 18 e 19).
 - **Arquivo de mod maior que o do disco** fora de `MON/*`: o jogo carrega em regiões de tamanho fixo e pode sobrescrever o que vem depois (o log avisa). Abrir espaço por tipo de arquivo.
 - **Aviso dos tetos para skin com `.TEX`/`.RTX`/`.PTR` próprios:** a skin não tem original para comparar, então hoje nada avisa. O log de carga deveria comparar com os tetos reais: `texInfo[1000]` (`maxTexId` final), VRAM residente do `.RTX` e o buffer de 0x30D40 do `.PTR` (`0f091a4:docs/investigacoes/2026-10-23/skins_mod_carga.md`, item 8).
 
