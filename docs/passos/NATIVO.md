@@ -525,6 +525,9 @@ direta: `WOTM_MODE`. As regras, por gancho:
   jogo: linhas de baixo para cima, alfa 0xFF (o das paletas das fotos do SHELL, que o desenho leva acima de 1) e repetição (o UV do
   objeto vai de -1 a 0). O objeto com uma textura só (13, 16, 17) mapeia a mesma textura nas duas metades: o U é refeito pela posição
   na largura (`Scene::patchMesh`, uma cópia da malha no cache, porque a arena residente guarda os vértices pelo ponteiro).
+- **Selo UNUSED:** nas fases 12, 13 e 16 (não na RANDOM), um selo vermelho com borda e letras brancas à direita do nome da fase, que o
+  `screenWriteInstructions` escreve centrado em y 10. Posição, altura e alfa vêm dos glifos do título no quadro (`Scene::text`, os do
+  alto da tela); desenhado depois do texto do jogo (`drawBadge`).
 
 ## Diagnósticos (variáveis de ambiente do viewer e do runtime)
 O `python tools/wotm_env.py` compara a tabela com o código (lista o que falta e o que sobrou; `--write` acrescenta as que faltam com descrição vazia, para preencher à mão). Variável que vira "volta ao comportamento antigo" depois de uma correção validada deve ser apagada do código, não documentada.

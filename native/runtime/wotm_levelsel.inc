@@ -341,6 +341,39 @@ void prepare(wotm::Scene &scene, const wotm::Ram &ram)
         picOf(l);
     }
 }
+// Selo "UNUSED" a direita do nome da fase (o screenWriteInstructions o escreve centrado em y 10 da tela do jogo) nas fases que o
+// retail nao oferece (12, 13 e 16; a RANDOM nao). Pelos glifos do quadro (Scene::text) no alto da tela; alfa e altura os deles.
+// Thread da janela, depois do texto do jogo.
+void drawBadge(const std::vector<wotm::TextQuad> &text, const wotm::Ram &ram, int rw, int rh)
+{
+    if (ram.u32(wotm::sym::currScreen) != 8 || !(g_obj[12] || g_obj[13] || g_obj[16]))
+        return;
+    float x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
+    int a = 0;
+    for (const wotm::TextQuad &t : text)
+        if (t.y1 < 60.f)
+        {
+            x1 = std::max(x1, std::max(t.x0, t.x1));
+            y0 = std::min(y0, std::min(t.y0, t.y1));
+            y1 = std::max(y1, std::max(t.y0, t.y1));
+            a = std::max(a, int(t.a));
+        }
+    if (x1 < -1e29f || a == 0)
+        return;
+    const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
+    const float sx = gr.w / 640.f, sy = gr.h / 224.f;
+    const float h = (y1 - y0) * sy * 0.62f, cy = (y0 + y1) * 0.5f * sy;
+    const float size = h * 0.78f;
+    const Font &f = wotm_padsel::uiFont();
+    const char *label = "UNUSED";
+    const Vector2 ts = MeasureTextEx(f, label, size, size * 0.08f);
+    const float w = ts.x + h * 0.7f, x = gr.x0 + x1 * sx + h * 0.45f;
+    const unsigned char al = static_cast<unsigned char>(std::min(255, a * 2));
+    const Rectangle r{x, cy - h * 0.5f, w, h};
+    DrawRectangleRounded(r, 0.35f, 6, Color{196, 52, 28, al});
+    DrawRectangleRoundedLinesEx(r, 0.35f, 6, std::max(1.f, h * 0.07f), Color{255, 255, 255, al});
+    DrawTextEx(f, label, Vector2{x + (w - ts.x) * 0.5f, cy - ts.y * 0.5f}, size, size * 0.08f, Color{255, 255, 255, al});
+}
 } // namespace wotm_levelsel
 
 void wotmLevelSelInstall(PS2Runtime &runtime)

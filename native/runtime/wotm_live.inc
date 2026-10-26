@@ -1842,6 +1842,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         wotm_pausemenu::drawBox2d(RW, RH, !S.scene.text.empty());   // caixa da lista da pausa (sob o texto dela)
         S.scene.drawQuads(S.scene.text, static_cast<float>(RW), static_cast<float>(RH));
+        wotm_levelsel::drawBadge(S.scene.text, ram, RW, RH);   // selo UNUSED ao lado do nome das fases que o retail nao oferece
         wotm_mainmenu::drawPausePanel2d(RW, RH);   // painel "recompiled options" na pausa da luta (wotm_pausemenu.inc)
         wotm_padsel::drawBar2d(RW, RH);            // barra de monstros da selecao nativa (acima da faixa preta de baixo)
         {
