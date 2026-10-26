@@ -11,6 +11,7 @@
 // um pouco mais devagar em vez de pular, e todo integrador fica na margem para a qual foi feito. Nada muda quando o rate
 // ja e >= 30 (retail). Substitui os limites pontuais anteriores (WOTM_SPRINGMIN na mola, WOTM_TURNMIN no giro).
 #include "ps2_runtime.h"
+#include "wotm_menucpus.h"   // CPUs 4..7 da tela 12
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "ps2_runtime_macros.h"
 #include "runtime/ee_scheduler.h"
@@ -391,36 +392,58 @@ namespace
     void startPointAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origStartPoint, rdram, ctx, runtime); }
     void camerasUpdateAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origCamerasUpdate, rdram, ctx, runtime); }
 
-    // Free for all de 1 jogador sem IA (mod, sempre ligado): screenFreeForAllOptions1P (tela 12) anda o cursor so por 1..3 IAs, mas
-    // o retail ja trata o item 0 na confirmacao (m_numAIs 0, pula o "first to" e vai direto a escolha do monstro, tela 3, que sem IA
-    // segue para a fase; na luta EvaluateOnePlayerChallengeStatus so reergue o jogador). Aqui o cursor passa a dar a volta por 0..3:
-    // depois da original, cima de 1 (que ia para 3) e baixo de 3 (que ia para 1) param no 0. O switch do menu (shell +0x43C) recebe
-    // o mesmo valor, como o hierSetSwitch faria (whichChild, se o switch tiver esse filho).
+    // Free for all de 1 jogador com 0 a 7 IAs (mod, sempre ligado): screenFreeForAllOptions1P (tela 12) anda o cursor so por 1..3
+    // IAs. O retail ja trata o item 0 na confirmacao (m_numAIs 0, pula o "first to" e vai direto a escolha do monstro, tela 3, que sem
+    // IA segue para a fase; na luta EvaluateOnePlayerChallengeStatus so reergue o jogador), e o switch do numero (shell +0x43C) tem
+    // 11 filhos, os digitos 0 a 10 do proprio jogo. Aqui o cursor da a volta por 0..7: depois da original, o passo que ela deu (que
+    // so conhece 1..3) vira um passo de 1 em 0..7, e o switch recebe o mesmo valor (whichChild, como o hierSetSwitch faria). Com o
+    // cursor em 4..7 a original roda com 3 (ela nao aceita mais e so loga um erro na confirmacao): a confirmacao grava 3 em m_numAIs
+    // e vai ao "first to"; o numero pedido fica em wotm_menucpus::g_want, e o menu segue como com 3 CPUs ate a fase ser confirmada
+    // (changeScreenHook do wotm_padsel.inc).
     constexpr uint32_t kFfaOptions1P = wotm::fn::screenFreeForAllOptions1P__Fv;
     constexpr uint32_t kFfaCursor = wotm::sym::currentSelection + 12 * 4;   // currentSelection[12]
+    constexpr uint32_t kFfaNumAIs = kShell + 0x2BB8;                         // m_numAIs
     PS2Runtime::RecompiledFunction g_origFfaOptions1P = nullptr;
     uint32_t g_ffaRa = 0, g_ffaBefore = 0;
-    bool g_ffaPending = false;
+    bool g_ffaPending = false, g_ffaFake = false;
 
     void ffaOptions1PWithZero(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        constexpr int kMax = wotm_menucpus::kMax;
         if (ctx->pc == kFfaOptions1P)
         {
             g_ffaRa = GPR_U32(ctx, 31);
             g_ffaBefore = READ32(kFfaCursor);
             g_ffaPending = true;
+            g_ffaFake = g_ffaBefore > 3u && g_ffaBefore <= uint32_t(kMax);
+            if (g_ffaFake)
+            {
+                WRITE32(kFfaCursor, 3);
+                WRITE32(kFfaNumAIs, 0);   // a confirmacao o poe em 3 (a tela nao le o m_numAIs; a volta o zera)
+            }
         }
         g_origFfaOptions1P(rdram, ctx, runtime);
         if (!g_ffaPending || ctx->pc != g_ffaRa)
             return;   // parou no meio (retomada cai aqui de novo e termina o servico)
         g_ffaPending = false;
-        const uint32_t after = READ32(kFfaCursor);
-        if (!((g_ffaBefore == 1 && after == 3) || (g_ffaBefore == 3 && after == 1)))
+        const int before = int(g_ffaBefore), eff = g_ffaFake ? 3 : before, after = int(READ32(kFfaCursor));
+        if (g_ffaFake && READ32(kFfaNumAIs) == 3u)
+        {
+            wotm_menucpus::g_want.store(before);
+            std::fprintf(stderr, "[wotm] tela 12: %d CPUs (o menu segue com 3; a fase confirmada grava %d)\n", before, before);
+        }
+        else if (READ32(kFfaNumAIs) != 0u || after != eff)
+            wotm_menucpus::g_want.store(0);   // confirmou 1..3 (ou mexeu no cursor)
+        // passo da original (cima: >= 2 desce 1, senao vai a 3; baixo: < 3 sobe 1, senao vai a 1)
+        const bool dec = (eff >= 2 && after == eff - 1) || (eff <= 1 && after == 3);
+        const bool inc = (eff < 3 && after == eff + 1) || (eff >= 3 && after == 1);
+        const int want = dec ? (before + kMax) % (kMax + 1) : inc ? (before + 1) % (kMax + 1) : before;
+        if (want == after)
             return;
-        WRITE32(kFfaCursor, 0);
+        WRITE32(kFfaCursor, uint32_t(want));
         const uint32_t sw = READ32(kShell + 0x43C);
-        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > 0)   // SWITCH_NODE, numKids
-            WRITE8(sw + 8, 0);                                        // whichChild
+        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > want)   // SWITCH_NODE, numKids
+            WRITE8(sw + 8, uint8_t(want));                              // whichChild
     }
 
     // Trapacas de debug (menu F1 do wotm_live.inc, ou WOTM_CHEATS no inicio): aplicadas na thread do EE, na entrada de Monster::update

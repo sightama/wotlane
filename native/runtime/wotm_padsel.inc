@@ -30,6 +30,7 @@
 // Teste sem tela: WOTM_PADSEL_SCRIPT="seg:dur:disp:acao;..." (disp 0..3 = controle, kb = teclado; acao left, right, up, down, ok,
 // back, start).
 #include "wotm_mods.hpp"   // skins de mod na lista de trajes
+#include "wotm_menucpus.h"   // CPUs 4..7 da tela 12 (extraCpus)
 #include "wotm_training.h"   // TRAINING: telas 12 e 15 puladas (changeScreenHook)
 #include <chrono>
 #include <random>
@@ -1647,6 +1648,50 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         ctx->r[2] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>((raw & ~0xFFFFu) | nc)));
 }
 
+// CPUs 4 a 7 do free for all de 1 jogador (wotm_menucpus.h): a tela 12 guardou o numero, o menu seguiu com 3 (first to, selecao de
+// 4 quadros, fase). Com a fase confirmada, m_numAIs recebe o numero pedido e cada CPU extra (m_monsterSel[4 + i], m_costume[2 + i],
+// i de 3 em diante) sai sorteada entre as colunas abertas, com o menor traje do disco destravado que ninguem do mesmo monstro tem
+// (mais de 4 iguais: repete, como a WOTM_MATCH).
+static void extraCpus(uint8_t *rdram)
+{
+    const int want = wotm_menucpus::g_want.load();
+    if (want <= 3 || want > wotm_menucpus::kMax || rd32(rdram, kMode) != 2u || rd32(rdram, kNumAIs) != 3u)
+        return;
+    static std::mt19937 rng(static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+    int open[10], nOpen = 0;
+    for (int c = 1; c <= 10; ++c)
+        if (columnOpen(rdram, c)) open[nOpen++] = c;
+    if (!nOpen)
+        return;
+    int mon[1 + wotm_menucpus::kMax], cos[1 + wotm_menucpus::kMax];   // jogador e CPUs
+    mon[0] = int(rd32(rdram, kMonsterSel) >> 5), cos[0] = int(rd32(rdram, kCostume));
+    for (int i = 0; i < 3; ++i)
+        mon[1 + i] = int(rd32(rdram, kMonsterSel + 4u * uint32_t(4 + i)) >> 5), cos[1 + i] = int(rd32(rdram, kCostume + 4u * uint32_t(2 + i)));
+    std::fprintf(stderr, "[padsel] %d CPUs: sorteio das CPUs 4 a %d:", want, want);
+    for (int i = 3; i < want; ++i)
+    {
+        const int col = open[rng() % uint32_t(nOpen)], m = monsterOfCol(rdram, col);
+        int costume = -1;
+        for (int c = 0; c < 4 && costume < 0; ++c)
+        {
+            const bool unlocked = rd32(rdram, wotm::sym::monsterSelectMode + uint32_t((col - 1) * 4 + c) * kSlotSize + 4) == 1u;
+            bool used = false;
+            for (int j = 0; j < 1 + i; ++j)
+                used = used || (mon[j] == m && cos[j] == c);
+            if (unlocked && !used)
+                costume = c;
+        }
+        if (costume < 0)
+            costume = firstCostume(rdram, col);
+        mon[1 + i] = m, cos[1 + i] = costume;
+        wr32(rdram, kMonsterSel + 4u * uint32_t(4 + i), uint32_t(m) << 5);
+        wr32(rdram, kCostume + 4u * uint32_t(2 + i), uint32_t(costume));
+        std::fprintf(stderr, " %s:%d", kMonsterNames[m], costume);
+    }
+    std::fprintf(stderr, "\n");
+    wr32(rdram, kNumAIs, uint32_t(want));
+}
+
 // changeScreen(de, para, sentido, animacao, ...): no multijogador a volta da tela 15 (que iria a 13, as CPUs) vem para a escolha
 // de controles (5), com a camera de volta ao telao, e a volta desta (prevScreen 15) vai ao menu principal
 static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1655,6 +1700,10 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
     {
         const int32_t from = static_cast<int32_t>(GPR_U32(ctx, 4)), to = static_cast<int32_t>(GPR_U32(ctx, 5)),
                       dir = static_cast<int32_t>(GPR_U32(ctx, 6));
+        if (to == 12)
+            wotm_menucpus::g_want.store(0);   // a tela 12 escolhe de novo
+        else if ((to == 15 || to == 19) && rd32(rdram, kMode) == 2u && rd32(rdram, kNumAIs) > 3u)
+            wr32(rdram, kNumAIs, 3);   // volta da luta com 4..7 CPUs: o retail so conhece 3 nessas telas (g_want continua)
         if (from == 2 && to == 12 && wotm_training::g_menuArmed.load())
         {
             // TRAINING (wotm_mainmenu.inc): sem a tela 12 (numero de CPUs) e a 15 (regras), direto a selecao (6) de 1 CPU, luta sem fim
@@ -1682,7 +1731,10 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
         else if (from == 5 && to == 15 && dir < 0)
             ctx->r[5] = _mm_set_epi64x(0, 1);
         else if (from == 8 && to == 99)   // selecao de fase confirmada (o jogo ja gravou o m_levelNum)
+        {
             wotm_narrator::announceLevel(int(rd32(rdram, kShell + 0x2BB0)));
+            extraCpus(rdram);
+        }
         else if (from == 20 && to == 1)   // Start no titulo
             wotm_narrator::stopIntro();
     }
