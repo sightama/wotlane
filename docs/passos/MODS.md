@@ -30,9 +30,9 @@ espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como
 `pythonw tools/modkit_gui.py`, ou o botão **Mod kit** do `WotM_Launcher.exe`. Precisa do Python 3 com Pillow (`pip install pillow`). A janela é em inglês.
 
 Um mod é um projeto: no topo, **Mod: [lista] [New mod...]** escolhe o mod (New mod cria a pasta do mod e a de trabalho dele,
-`<mods>/_work/<mod>/`; nome só com letras, dígitos, `_` e `-`, começando por letra ou dígito). Mod que ainda não tem pasta de
-trabalho (feito antes ou à mão) entra nela ao ser escolhido: os arquivos dele são copiados e aparecem como editados, e o Build
-os leva de volta. O mod escolhido governa o Extract, a lista da direita e o Build; trocar o mod troca a área de trabalho
+`<mods>/_work/<mod>/`; nome só com letras, dígitos, `_` e `-`, começando por letra ou dígito). Ao escolher o mod, os arquivos dele
+que a pasta de trabalho não tem (mod feito antes ou à mão) são copiados para ela e aparecem como editados; o Build os leva de volta.
+Arquivo removido da pasta de trabalho de propósito não volta. O mod escolhido governa o Extract, a lista da direita e o Build; trocar o mod troca a área de trabalho
 inteira. Sem mod, a lista da direita fica vazia e os botões ligados a ele ficam desligados, com a dica "Pick or create a mod first".
 
 1. **Pick from the disc** (esquerda): monstros por nome e traje (Togera › Costume 1, e os bancos de som dele), chefes, fases pelo nome do

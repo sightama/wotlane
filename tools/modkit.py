@@ -102,11 +102,12 @@ def new_mod_name_error(mod):
 def adopt_mod(disc, mods, mod, work=None):
     """Mod feito antes de ter pasta de trabalho (ou feito a mao): copia os arquivos de mods/<mod>/ para a pasta de trabalho dele,
     marcados como editados (sha1 vazio no estado), para a janela mostra-los e o pack leva-los de volta. skin.json e monster.json
-    ficam so no mod. Devolve quantos copiou; 0 se a pasta de trabalho ja tem estado ou o mod esta vazio."""
+    ficam so no mod. Roda a cada escolha do mod: so entra o que a pasta de trabalho nao tem e o estado nunca viu (arquivo removido
+    de proposito nao volta). Devolve quantos copiou."""
     if work is None:
         work = work_dir(mods, mod)
     src = os.path.join(mods, mod)
-    if os.path.exists(os.path.join(work, "modkit.json")) or not os.path.isdir(src):
+    if not os.path.isdir(src):
         return 0
     state = load_state(work)
     n = 0
@@ -118,9 +119,11 @@ def adopt_mod(disc, mods, mod, work=None):
             p = os.path.join(root, name)
             rel = os.path.relpath(p, src).replace("\\", "/")
             q = os.path.join(work, *rel.split("/"))
+            if os.path.exists(q) or rel in state["files"]:
+                continue
             os.makedirs(os.path.dirname(q), exist_ok=True)
             shutil.copy2(p, q)
-            ent = {"sha1": ""}   # nunca igual ao sha1 do arquivo: conta como editado
+            ent = {"sha1": "", "adopted": True}   # sha1 vazio nunca bate: conta como editado
             m = PNG_RE.match(name)
             if m:
                 trel = find_texfile(disc, m.group(1), ".RTX" if m.group(2) else ".TEX")

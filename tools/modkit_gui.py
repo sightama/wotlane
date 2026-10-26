@@ -300,8 +300,8 @@ class App:
         self.stop_sound()
         self.update_mod_state()
         mod = self.cur_mod()
-        if mod and not os.path.exists(os.path.join(self.work(), "modkit.json")):
-            # mod feito antes de ter pasta de trabalho (ou a mao): os arquivos dele entram na pasta como editados
+        if mod:
+            # arquivos do mod que a pasta de trabalho nao tem (mod antigo ou feito a mao) entram nela como editados
             try:
                 n = modkit.adopt_mod(self.disc.get(), self.mods.get(), mod, self.work())
                 if n:
