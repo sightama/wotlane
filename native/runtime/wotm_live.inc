@@ -509,6 +509,18 @@ static void initWindowAspect()
     SetExitKey(KEY_NULL);   // o Esc do raylib fechava o jogo; fechar e com Alt+F4 ou o X da janela (o Esc volta nos menus)
     for (int k = 0; k < wotm::settings::kKeys; ++k)
         g_appliedVideo[k] = wotm::settings::get(wotm::settings::Key(k));
+    // WOTM_MONITOR=<n>: a janela abre no monitor n (0 = o principal), para testar sem cobrir a tela de quem esta trabalhando; o
+    // fitWindow e a tela cheia seguem o monitor em que a janela esta
+    if (const char *m = std::getenv("WOTM_MONITOR"); m && *m && !g_localCollect)
+    {
+        const int mon = std::atoi(m);
+        if (mon >= 0 && mon < GetMonitorCount())
+        {
+            const Vector2 p = GetMonitorPosition(mon);
+            SetWindowPosition(static_cast<int>(p.x) + 40, static_cast<int>(p.y) + 40);
+            std::fprintf(stderr, "[native] janela no monitor %d de %d (WOTM_MONITOR)\n", mon, GetMonitorCount());
+        }
+    }
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
         initPresentRate();
     const int disp = wotm::settings::get(wotm::settings::Display);
@@ -1563,12 +1575,18 @@ static bool wotmDrawNative(const uint8_t *rdram)
         // MSAA (opcao ANTI-ALIASING, WOTM_MSAA): desenho num framebuffer multiamostra, resolvido na textura de sempre (wotm_msaa.hpp)
         const int msaaSamples = wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::Msaa);
         wotm::g_beforeDepthRead = wotm::msaa::readDepthIfMsaa;
+        wotm::g_depthReadIsMsaa = [] { return wotm::msaa::g_current != nullptr; };
         S.scene.setTexFilter(wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::TexFilter));
         if (msaaSamples <= 1)
             for (wotm::msaa::Target &t : S.vms)
                 if (t.on())
                     t.release();
+        if (wotm::drawProfOn())
+            ++wotm::drawProf().redraws;
+        wotm::ProfScope psFrame(wotm::DrawProf::RFrame);
+        wotm::GpuTimer::Scope gpuScope;
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
+            wotm::ProfScope psView(wotm::DrawProf::RView);
             const int W = viewW(static_cast<int>(&vrt - S.vrts));
             if (vrt.id != 0 && (vrt.texture.width != W || vrt.texture.height != VH))
             {
@@ -1596,10 +1614,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
             BeginMode3D(vc3);
             wotm_live::g_stage = "draw (vista)";
             S.scene.draw(ram, false);
-            EndMode3D();
+            wotm::endMode3DInTexture();
             BeginMode3D(vc3);   // lista de alta prioridade da vista (no rtMain, o hier(v, 1) dela vem antes do texto)
             S.scene.drawHp(ram);
-            EndMode3D();
+            wotm::endMode3DInTexture();
             wotm_live::g_stage = "idle";
             EndTextureMode();
             wotm::msaa::g_current = nullptr;
@@ -1610,10 +1628,29 @@ static bool wotmDrawNative(const uint8_t *rdram)
         wotm::GameCamera viewCam[4]{};
         S.scene.deferFlares = split;
         ++S.scene.redrawId;
+        // profundidade de cada vista sem esperar a GPU (a copia pronta mais nova, AsyncDepth; Scene::drawFlaresFor pede a desta vez).
+        // Na tela cheia, a da vista 0 serve ao flare do Scene::draw (Scene::fullDepth).
+        static wotm::AsyncDepth depth[4];
+        static const bool flareSync = std::getenv("WOTM_FLARESYNC") != nullptr;   // a leitura direta, para comparar
+        {
+            wotm::ProfScope ps(wotm::DrawProf::RFlares);
+            for (int v = 0; v < (split ? 4 : 1); ++v)
+                if (viewOk[v])
+                    depth[v].fetch(S.scene.redrawId);   // sem flare tambem: o valid acompanha a idade
+        }
         for (int v = 1; v < 4; ++v)
             if (viewOk[v])
-                drawView(S.vrts[v], viewCam[v] = S.scene.show(*S.snap.views[v - 1]));
-        gc = S.scene.show(S.snap);
+            {
+                {
+                    wotm::ProfScope ps(wotm::DrawProf::RShow);
+                    viewCam[v] = S.scene.show(*S.snap.views[v - 1]);
+                }
+                drawView(S.vrts[v], viewCam[v]);
+            }
+        {
+            wotm::ProfScope ps(wotm::DrawProf::RShow);
+            gc = S.scene.show(S.snap);
+        }
         viewCam[0] = gc;
         S.snap.cam = gameCam;
         if (freeView.override && freeView.photo)
@@ -1644,6 +1681,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         if (split)
         {
             drawView(S.vrts[0], gc);
+            wotm::ProfScope psFl(wotm::DrawProf::RFlares);
             for (int v = 0; v < 4; ++v)
             {
                 if (!viewOk[v])
@@ -1662,9 +1700,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 vc3.fovy = vc.fovy;
                 vc3.projection = CAMERA_PERSPECTIVE;
                 BeginMode3D(vc3);
-                static wotm::AsyncDepth depth[4];   // profundidade da vista sem esperar a GPU (a do redesenho anterior)
-                S.scene.drawFlaresFor(ram, sn.flares, sn.vctx, &depth[v]);
-                EndMode3D();
+                S.scene.drawFlaresFor(ram, sn.flares, sn.vctx, flareSync ? nullptr : &depth[v], vmsOn ? S.vms[v].render().id : S.vrts[v].id);
+                wotm::endMode3DInTexture();
                 EndTextureMode();
                 wotm::msaa::g_current = nullptr;
                 if (vmsOn)
@@ -1731,14 +1768,17 @@ static bool wotmDrawNative(const uint8_t *rdram)
         {
             BeginMode3D(c3);
             wotm_live::g_stage = "draw";
+            S.scene.fullDepth = flareSync ? nullptr : &depth[0];
+            S.scene.fullDepthFbo = msOn ? S.ms.render().id : rt.id;
             S.scene.draw(ram, false);
+            S.scene.fullDepth = nullptr;
             wotm_padsel::drawOnTelao(S.scene, ram, c3);   // escolha de lados do 2 jogadores (so no menu, durante a escolha)
             wotm_mainmenu::drawOnTelao(S.scene, ram, c3);   // lista do menu principal em texto
             wotm_gamescreens::frame(S.scene, ram, c3, RW, RH);   // mouse nas telas do jogo: retangulo de cada item
             wotm_optscreen::drawOnBoard(S.scene, ram, c3);   // tela de opcoes do jogo
             wotm_trainview::draw3d();   // modo treino: por cima da cena, sem teste de profundidade
             wotm_live::g_stage = "idle";
-            EndMode3D();
+            wotm::endMode3DInTexture();
         }
         S.scene.splitEdges = split;
         S.scene.stripView = strip ? 2 : -1;
@@ -1753,7 +1793,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         {
             BeginMode3D(c3);   // lista de alta prioridade: depois desses fades (ShellRtLoop::endField), antes do texto
             S.scene.drawHp(ram);
-            EndMode3D();
+            wotm::endMode3DInTexture();
         }
         {
             // Logo do monstro e foto da fase na lista de saves (wotm_savepics.hpp): sobre a moldura, sob o texto
@@ -1970,11 +2010,25 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm::DrawProf &p = wotm::drawProf();
             const double k = p.views ? 1.0 / double(p.views) : 0.0;
             std::fprintf(stderr, "[native] desenho por vista (x %ld): ceu %.2f travessia %.2f OT %.2f sombras %.2f (silhuetas %.2f) sprites %.2f "
-                         "particulas %.2f HUD %.2f ms (descargas de lote %.2f); %.0f lotes, %.0f vertices (%.0f emitidos); silhuetas %ld refeitas, %ld reaproveitadas\n", p.views, p.ms[wotm::DrawProf::Sky] * k, p.ms[wotm::DrawProf::Trav] * k,
+                         "particulas %.2f HUD %.2f ms (descargas de lote %.2f); %.0f lotes (%.0f desenhos), %.0f vertices (%.0f emitidos); silhuetas %ld refeitas, %ld reaproveitadas\n", p.views, p.ms[wotm::DrawProf::Sky] * k, p.ms[wotm::DrawProf::Trav] * k,
                          p.ms[wotm::DrawProf::AlphaOT] * k, p.ms[wotm::DrawProf::Shadows] * k, p.ms[wotm::DrawProf::ShadowTex] * k,
                          p.ms[wotm::DrawProf::Sprites] * k, p.ms[wotm::DrawProf::Fx] * k, p.ms[wotm::DrawProf::Hud] * k, p.ms[wotm::DrawProf::Flush] * k,
-                         double(p.batches) * k,
+                         double(p.batches) * k, double(p.draws) * k,
                          double(p.verts) * k, double(p.emitted) * k, p.shadowMiss, p.shadowHit);
+            const double r = p.redraws ? 1.0 / double(p.redraws) : 0.0;
+            {
+                wotm::GpuTimer &g = wotm::GpuTimer::get();
+                std::fprintf(stderr, "[native] GPU por redesenho: %.2f ms (x %ld)\n", g.n ? g.ms / double(g.n) : 0.0, g.n);
+                g.ms = 0.0;
+                g.n = 0;
+                std::fprintf(stderr, "[native] VtxStream por redesenho: subida %.2f ms (%.2f MB), desenhos e estados %.2f ms\n", wotm::VtxStream::upMs * r,
+                             wotm::VtxStream::upBytes * r / 1048576.0, wotm::VtxStream::drawMs * r);
+                wotm::VtxStream::upMs = wotm::VtxStream::drawMs = wotm::VtxStream::upBytes = 0.0;
+            }
+            std::fprintf(stderr, "[native] por redesenho (x %ld): todo %.2f, show %.2f, vistas %.2f, flares adiados %.2f, resto %.2f ms\n", p.redraws,
+                         p.ms[wotm::DrawProf::RFrame] * r, p.ms[wotm::DrawProf::RShow] * r, p.ms[wotm::DrawProf::RView] * r,
+                         p.ms[wotm::DrawProf::RFlares] * r,
+                         (p.ms[wotm::DrawProf::RFrame] - p.ms[wotm::DrawProf::RShow] - p.ms[wotm::DrawProf::RView] - p.ms[wotm::DrawProf::RFlares]) * r);
             p = wotm::DrawProf{};
         }
     }

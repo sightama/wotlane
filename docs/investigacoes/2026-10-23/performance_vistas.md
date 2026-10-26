@@ -1,5 +1,11 @@
 # Custo da tela dividida de 3 e 4 jogadores: investigação
 
+## Feito em 2026-10-26 (master; Ryzen 5 5500 + placa NVIDIA, monitor 1, IA x IA no Centro, 4 vistas)
+- **Achado:** o redesenho de 4 vistas ficava em ~25 ms de parede com ~20 ms de CPU, e sem nenhuma leitura do GL caía para ~16 ms. Com a otimização em thread do driver da NVIDIA, toda leitura de estado ou espera (`glGetIntegerv`, `glMapBuffer`, `glClientWaitSync`, `glReadPixels` para PBO) faz a janela esperar o driver esvaziar a fila (~6 ms atrás com 4 vistas), e o paralelismo entre janela, driver e GPU some. Leituras achadas: o `EndMode3D` do raylib (`rlGetActiveFramebuffer`, ~1,5 ms por vista) e o `AsyncDepth` do flare (mesmo com 3 PBOs e cerca, o `glClientWaitSync(…, 0)` de checar já espera).
+- **Feito:** fila de estados no `VtxStream` (mudança de estado vira comando, com a MVP dele; ~32 → ~20 ms de CPU); `endMode3DInTexture`; `AsyncDepth` com cópia na GPU (`glBlitFramebuffer` para renderbuffer próprio) e leitura numa thread auxiliar com contexto compartilhado (janela GLFW escondida). `WOTM_MONITOR` para abrir a janela no segundo monitor nos testes.
+- **Resultado:** 4 vistas ~33 → ~17 ms por redesenho (CPU ~16; GPU ~8–9 ms); 98,7% dos testes de flare na tela dividida usam a cópia assíncrona (o resto, a leitura direta, quando o flare acaba de aparecer numa vista). Na tela cheia o flare lia a profundidade direto (5 a 8 ms de espera por redesenho); com a mesma cópia, 1 vista ~10–13 → ~6–7 ms. Conferido: a cópia que chega bate exatamente com uma leitura direta feita no mesmo redesenho (0 diferenças em ~294 mil pontos, 1 e 4 vistas, com e sem MSAA); a diferença que sobra é a idade de 1 ou 2 redesenhos. Corpus: nada piorou, as 78 imagens nativas idênticas à base. O jogo fecha pelo X normalmente com a thread e a janela auxiliares.
+- **Sobra:** partículas no modo imediato do rlgl (`RL_QUADS`; ~1 ms por vista), D/E/H e o EE.
+
 ## Feito em 2026-10-23 (branch `perf-vistas`; medido no Ryzen 3 3200G + RX 570)
 - **Passo 0:** `WOTM_DRAWSTATS=1` (com `PS2X_STATS`): o redesenho sai separado por 1, 2, 3 e 4 vistas, e uma linha
   `[native] desenho por vista` dá a média de cada fase do `Scene::draw` (céu, travessia, OT de alfa, sombras e silhuetas, destroços,

@@ -93,9 +93,12 @@ struct ViewScope {
 // Medida do desenho (WOTM_DRAWSTATS=1, com PS2X_STATS): tempo de cada fase do Scene::draw, lotes descarregados e vertices emitidos,
 // somados na thread da janela; o wotm_live.inc imprime a media por vista desenhada na linha [native] e zera
 struct DrawProf {
-    enum Phase { Sky, Trav, AlphaOT, Shadows, ShadowTex, Sprites, Fx, Hud, Flush, kN };   // Flush: descargas de lote do drawList (dentro das outras)
+    enum Phase { Sky, Trav, AlphaOT, Shadows, ShadowTex, Sprites, Fx, Hud, Flush,   // Flush: descargas de lote do drawList (dentro das outras)
+                 RShow, RView, RFlares, RFrame, kN };   // por redesenho (wotmDrawNative): Scene::show, drawView inteiro, flares adiados, o redesenho todo
+    long redraws = 0;
     double ms[kN] = {};
-    long batches = 0, verts = 0, views = 0;
+    long batches = 0, verts = 0, views = 0;   // batches: descargas (uma subida de vertices cada)
+    long draws = 0;                           // desenhos (glDrawArrays) das descargas do VtxStream
     long shadowHit = 0, shadowMiss = 0;   // silhuetas reaproveitadas e refeitas (Scene::shadowTexture)
     long emitted = 0;                     // vertices de fato emitidos pelo drawList (depois do corte de faces e dos slots)
 };
@@ -2762,8 +2765,15 @@ public:
             // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
             if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
             if (!wire) setAlphaRef(kGsAlphaRef);
-            if (!wire && !deferFlares)   // lens flare: tela, depois das particulas
+            if (!wire && !deferFlares && !fx.flares.e.empty()) {   // lens flare: tela, depois das particulas
+                if (fullDepth) {   // profundidade sem esperar a GPU, como na tela dividida (drawFlaresFor)
+                    rlDrawRenderBatchActive();
+                    fullDepth->issue(rlGetFramebufferWidth(), rlGetFramebufferHeight(), fullDepthFbo, redrawId);
+                    fx.depthAsync = fullDepth;
+                }
                 fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+                fx.depthAsync = nullptr;
+            }
             rlDrawRenderBatchActive();
         }
         ProfScope psHud(DrawProf::Hud);
@@ -2783,14 +2793,19 @@ public:
     // vistas a ~60 ms). Com o adiamento, todas as vistas sao desenhadas antes e os flares de cada uma vem depois, na textura dela, com
     // a lista e o contexto da vista (`fl`, `vc`): uma espera so por redesenho. Dentro do BeginMode3D da vista.
     bool deferFlares = false;
+    // Tela cheia ao vivo: o flare do Scene::draw usa a profundidade de um redesenho recente (AsyncDepth; o chamador faz o fetch no
+    // comeco do redesenho), copiada do framebuffer `fullDepthFbo` em que o quadro desenha. Nulo (replay, corpus): a leitura direta.
+    AsyncDepth *fullDepth = nullptr;
+    unsigned fullDepthFbo = 0;
     uint64_t redrawId = 0;   // redesenho em curso (o chamador incrementa antes das vistas): silhuetas de sombra divididas entre elas
-    // `depth`: a profundidade da vista vai para ele (copia assincrona) e o teste usa a do redesenho anterior (AsyncDepth)
-    void drawFlaresFor(const Ram &ram, const Particles::FlareFrame &fl, const ViewCtx &vc, AsyncDepth *depth = nullptr) {
+    // `depth`: profundidade da vista sem esperar a GPU (AsyncDepth; o chamador fez o fetch no comeco do redesenho); aqui vai o pedido
+    // da copia desta vez, do framebuffer `depthFbo` em que a vista desenha
+    void drawFlaresFor(const Ram &ram, const Particles::FlareFrame &fl, const ViewCtx &vc, AsyncDepth *depth = nullptr, unsigned depthFbo = 0) {
+        if (fl.e.empty()) return;
         if (depth) {
             rlDrawRenderBatchActive();
-            depth->swap(rlGetFramebufferWidth(), rlGetFramebufferHeight());
+            depth->issue(rlGetFramebufferWidth(), rlGetFramebufferHeight(), depthFbo, redrawId);
         }
-        if (fl.e.empty()) return;
         fx.depthAsync = depth;
         struct ResetDepth { Particles &p; ~ResetDepth() { p.depthAsync = nullptr; } } resetDepth{fx};
         const Particles::FlareFrame keepFl = fx.flares;
@@ -3065,29 +3080,28 @@ public:
             if (!stream || vs_.empty()) return;
             ProfScope ps(DrawProf::Flush);
             vs_.flush();
-            if (drawProfOn()) ++drawProf().batches;
+            if (drawProfOn()) { ++drawProf().batches; drawProf().draws += vs_.draws(); }
+            vs_.resetDraws();
         };
+        // mudanca de estado do GL: no stream entra na fila do VtxStream (na ordem dos vertices, sem descarregar); senao agora
+        auto glState = [&](auto &&fn) { if (stream) vs_.state(fn); else fn(); };
         auto setBlend = [&](uint8_t b) {
             if (b == curBlend) return;
-            flushStream();
             curBlend = b;
             curPremul = gsBlendPremul(b);
-            gsBlend(b);
+            glState([b] { gsBlend(b); });
         };
         int16_t curRef = kGsAlphaRef;   // DrawItem::aref no uniform do shader (idem)
         auto setRef = [&](int16_t r) {
             if (r == curRef) return;
-            flushStream();
             curRef = r;
-            setAlphaRef(r);
+            glState([this, r] { setAlphaRef(r); });
         };
         int curZm = -1;   // mascara de Z posta aqui (-1: a do chamador)
         auto setZm = [&](bool on) {
             if (int(on) == curZm) return;
-            flushStream();
             curZm = int(on);
-            if (on) rlEnableDepthMask();
-            else rlDisableDepthMask();
+            glState([on] { if (on) rlEnableDepthMask(); else rlDisableDepthMask(); });
         };
         auto vColor = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a) { if (stream) vs_.color(r, g, b, a); else rlColor4ub(r, g, b, a); };
         auto vTex = [&](float u, float v) { if (stream) vs_.texcoord(u, v); else rlTexCoord2f(u, v); };
@@ -3155,10 +3169,14 @@ public:
                     rlDrawRenderBatchActive();
                     if (drawProfOn()) ++drawProf().batches;
                 }
-                if (clampedId) { flushStream(); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
-                if (!wire && dbl) { flushStream(); gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire && passK == kSlotOver1) { flushStream(); gsBlendOver1(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire && passK == kSlotOver2) { flushStream(); gsBlendOver2(); curBlend = kBlendDouble; curPremul = false; }
+                if (clampedId) {
+                    const unsigned t = clampedId;
+                    glState([t] { rlTextureParameters(t, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(t, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); });
+                    clampedId = 0;
+                }
+                if (!wire && dbl) { glState([] { gsBlendDouble(); }); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver1) { glState([] { gsBlendOver1(); }); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver2) { glState([] { gsBlendOver2(); }); curBlend = kBlendDouble; curPremul = false; }
                 // sem ABE o GS grava a cor da fonte sem misturar (o alfa, com o fade do LOD, so vale para o teste): o predio 133 do
                 // luta_hud em cross-fade saia meio transparente e deixava ver o predio de tras
                 else if (!wire) {
@@ -3172,7 +3190,10 @@ public:
                 cur = o.key;
                 curClamp = envClamp;
                 const unsigned id = wire ? 0 : textureId(ram, it, texRemap(slot));
-                if (envClamp && id && id != screenId_) { flushStream(); rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); clampedId = id; }
+                if (envClamp && id && id != screenId_) {
+                    glState([id] { rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); });
+                    clampedId = id;
+                }
                 static const bool idc = std::getenv("WOTM_IDCOLOR") != nullptr;   // diagnostico: cor = texId do objeto (leia o pixel para achar o id)
                 if (stream) vs_.begin(RL_TRIANGLES, (id && !idc) ? id : white);
                 else {

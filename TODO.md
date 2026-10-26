@@ -33,7 +33,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 ### 11. Multiplayer de 4
 Como funciona hoje: `docs/passos/NATIVO.md`, "Tela dividida de 3 e 4 jogadores" e "Menu multijogador de 2 a 4".
-- **Custo de 3 e 4 vistas:** plano em `docs/investigacoes/2026-10-23/performance_vistas.md`. Falta: partículas uma vez por redesenho, cache de vértices entre vistas, malhas estáticas da fase na GPU e o lado do EE (o `hier(v, 0)` custa ~4 ms por vista; a montagem dos pacotes do VU1 não serve ao desenho nativo). Num Ryzen 3 3200G a lógica fica a 30 com 3 e 4 jogadores.
+- **Custo de 3 e 4 vistas:** plano em `docs/investigacoes/2026-10-23/performance_vistas.md`. Falta: partículas pelo `VtxStream` e uma vez por redesenho, cache de vértices entre vistas, malhas estáticas da fase na GPU e o lado do EE (o `hier(v, 0)` custa ~4 ms por vista; a montagem dos pacotes do VU1 não serve ao desenho nativo). Num Ryzen 3 3200G a lógica fica a 30 com 3 e 4 jogadores.
 - **Testes que faltam:** alguém jogar com 4 controles físicos; pontos de verdade no big shot e no crush (a IA não joga os minigames).
 - **`TheGame::m_tokens`:** o `include/game/game.h` diz `[2]` seguido de um pad, mas são 4 `TokenManager` (0x1004 cada, de 0x11C370 a 0x120380, inicializados no `InitBeforeDbLoad`). Corrigir o header pede o gate.
 - **Barras dos inimigos:** um bloco perto do topo da tela pode ficar por cima do HUD do jogador (a posição vem da cabeça).
