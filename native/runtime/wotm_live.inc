@@ -1551,7 +1551,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const bool fadeChanged = hasFade != lastHasFade || (hasFade && std::memcmp(&fadeNow, &lastFade, offsetof(wotm::ScreenRect, underText)) != 0);
     const RenderTexture2D &shown = S.rts[S.cur];
     const bool sizeOk = shown.id != 0 && shown.texture.width == RW && shown.texture.height == RH;
-    const bool rerender = fresh || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect ||
+    // WOTM_INTERP=redraw: redesenha em toda apresentacao (etapa 0 da interpolacao: mede o custo de redesenhar na taxa do monitor)
+    static const bool s_redrawAll = [] {
+        const char *e = std::getenv("WOTM_INTERP");
+        return e && std::strstr(e, "redraw") != nullptr;
+    }();
+    const bool rerender = s_redrawAll || fresh || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect ||
                           (nowT - lastFreshT >= 0.04 && nowT - lastRenderT >= 1.0 / 60.0 - 0.001);
     wotm::GameCamera gc = S.snap.cam;
     if (rerender)

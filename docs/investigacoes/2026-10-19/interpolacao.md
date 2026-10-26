@@ -199,3 +199,24 @@ Cada etapa liga por variável e fica desligada por padrão até o dono aprovar n
 - **Leituras vivas no desenho** (`node + 0x4C` no menu, `+0x28`, `+0x2C`, texturas): não mudam com a interpolação, mas fazem o teste
   α = 0/1 não ser bit a bit em algumas telas.
 - **texId 0**: efeitos que realimentam o quadro anterior mudariam de intensidade com mais redesenhos por segundo.
+
+## 7. Etapa 0 medida (2026-10-26)
+
+`WOTM_INTERP=redraw` (wotm_live.inc) redesenha a cena em toda apresentação, sem mistura. Luta IA x IA (`WOTM_MATCH=3,1,1
+WOTM_AIVSAI=1`, Congar x Togera na fase 1), 50 s por rodada, `PS2X_STATS` + `WOTM_DRAWSTATS`, janela no monitor de 75 Hz; 180 e 240 por
+`WOTM_HZ` com `WOTM_VSYNC=0`. "2 vistas" = começo da luta com `WOTM_PLAYERS=2` (depois os monstros ficam perto e a vista unifica).
+
+| Rodada | Apresentações/s | Redesenhos/s | Redesenho 1 vista (ms) | 2 vistas (ms) | GPU por redesenho (ms) | CPU do processo em 50 s |
+|---|---|---|---|---|---|---|
+| 75 Hz, hoje | 75 | 60 | 3,6 | 6,0 | 4,3 | 29 s |
+| 75 Hz, redraw | 75 | 75 | 3,1 | 5,3 | 3,7 | 31 s |
+| 180, hoje | 172 | 60 | 3,6 | 6,1 | 4,2 | 33 s |
+| 180, redraw | 173 | 173 | 2,4 | 4,3 | 2,2 | 47 s |
+| 240, hoje | 232 | 60 | 3,2 | 4,8 | 2,2 | 35 s |
+| 240, redraw | 223 | 223 | 2,1 | 3,7 | 2,6 | 54 s |
+
+- O redesenho cabe: a 180 o período é 5,5 ms e o redesenho de 1 vista fica em 2–3,5 ms (pior média de 300: 5,9 ms, num trecho de 60/s);
+  a taxa de apresentação não caiu. A 240 (4,2 ms) uma vista cabe e duas ficam no limite (perde ~4% das apresentações).
+- O custo é CPU: +45% no processo a 180 (~0,3 núcleo a mais), +55% a 240.
+- O tempo por redesenho cai com mais redesenhos por segundo (relógio da CPU/GPU mais alto); não é ganho do método.
+- Não medido: a mistura em si (estimada abaixo de 0,5 ms), 3 e 4 jogadores (4 vistas), monitor de verdade acima de 60 Hz com vsync.

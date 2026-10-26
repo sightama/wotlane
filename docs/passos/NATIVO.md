@@ -610,6 +610,7 @@ O `python tools/wotm_env.py` compara a tabela com o código (lista o que falta e
 | `WOTM_FMV_MUTE=1` | filmes sem áudio |
 | `WOTM_SKIPINTRO=1` | pula os dois filmes do boot (`intro_m` e `int_main`, só a primeira vez de cada; `playMpegMovieWithDB` em `wotm_fmv.hpp`), direto para a tela de título. Opção SKIP INTRO MOVIES da aba FEATURES do "Recompiled options" (`settings.ini`); lida no primeiro filme, então mudar no painel vale no próximo boot |
 | `WOTM_VIBRATION=0` | desliga a vibração dos gamepads XInput (padrão ligada; opção VIBRATION da aba CONTROLS do "Recompiled options", `settings.ini`; `wotm_rumble.inc`, "Vibração") |
+| `WOTM_INTERP=redraw` | redesenha a cena em toda apresentação, não só com quadro novo (mede com `PS2X_STATS` o custo de desenhar na taxa do monitor, base da interpolação de quadros); o texId 0 passa a ser a apresentação anterior |
 | `WOTM_IRX=1` | carrega no IOP emulado os IRX que não são de som (SIO2MAN, PADMAN, MCMAN, MCSERV); sem ela nenhum IRX sobe. Só no `ps2EntryRunner.exe`: o `wotm.exe` não tem IOP emulado e a ignora (`FRONTEIRA.md`, passo 6) |
 | `WOTM_MATCH=<jogador>[:<figurino>][,<ia>[:<figurino>]...],<fase>` (0 a 7 IAs, figurino 0 a 3), `WOTM_AIVSAI=1` | partida direta sem menu (grupo "Partida" do launcher, que passa `-Auto 0`) / o jogador também sob a IA (seção "partida direta") |
 | `WOTM_MODE=<modo>[:<continues>]` | com `WOTM_MATCH`: modo da partida direta (6 eliminação, 7 dodgeball, 8 big shot, 9 crush; continues 0 a 9, padrão 2; `wotm_modes4.inc`) |
