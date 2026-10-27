@@ -1440,10 +1440,23 @@ void wotmCaptureFrame(const uint8_t *rdram)
             cc.fovCull = false;
             cc.fx.fovCull = false;
             cc.vctx = wotm::readViewCtx(ram, 0);
+            // a camera antes da coleta: o olho dela e o segmento ate o monstro escolhem os predios transparentes (Scene::nativeEye)
+            const wotm::GameCamera v0g = wotm::readGameCamera(ram, 0);
+            const wotm::GameCamera chaseCam = wotm_live::chaseCamera(ram, m, v0g.ok ? v0g.fovy : 63.7f);
+            cc.nativeEye.on = chaseCam.ok;
+            if (chaseCam.ok)
+            {
+                const uint32_t mcs = ram.u32(m + 0xC);
+                for (int i = 0; i < 3; ++i)
+                {
+                    cc.nativeEye.eye[i] = chaseCam.pos[i];
+                    cc.nativeEye.target[i] = ram.f32(mcs + 0x10 + 4u * uint32_t(i)) + (i == 2 ? 60.f : 0.f);   // o ponto que ela olha
+                }
+            }
             cc.collect(ram);
             auto ch = std::make_shared<wotm::Snapshot>(cc.takeSnapshot(ram, sn.g));
             const wotm::GameCamera v0 = ch->cam;   // a da vista 0, que esta na copia de sombra das particulas
-            ch->cam = wotm_live::chaseCamera(ram, m, v0.ok ? v0.fovy : 63.7f);
+            ch->cam = chaseCam;
             ch->hud.clear();
             ch->overlay.clear();
             ch->hp.clear();
@@ -1458,12 +1471,15 @@ void wotmCaptureFrame(const uint8_t *rdram)
                     fxAll.push_back(s);
             multi = true;
             static unsigned logged = 0;
-            if (ch->cam.ok && ++logged == 300u)
+            static unsigned ghostFrames = 0;   // quadros com algum predio transparente para a camera de perseguicao
+            ghostFrames += cc.ghosted > 0;
+            if (ch->cam.ok && ++logged % 300u == 0)
             {
                 const uint32_t cs = ram.u32(m + 0xC);
                 const float dx = ch->cam.pos[0] - ram.f32(cs + 0x10), dy = ch->cam.pos[1] - ram.f32(cs + 0x14), dz = ch->cam.pos[2] - ram.f32(cs + 0x18);
-                std::fprintf(stderr, "[chase] jogador %d: camera a %.0f unidades do monstro, %zu objetos na cena (sem corte)\n", 5 + k,
-                             std::sqrt(dx * dx + dy * dy + dz * dz), ch->items.size());
+                std::fprintf(stderr, "[chase] jogador %d: camera a %.0f unidades do monstro, %zu objetos na cena (sem corte), predio transparente em %u de 300 quadros\n",
+                             5 + k, std::sqrt(dx * dx + dy * dy + dz * dz), ch->items.size(), ghostFrames);
+                ghostFrames = 0;
             }
             sn.chase = std::move(ch);
         }

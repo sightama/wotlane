@@ -914,6 +914,12 @@ public:
     // Raio da esfera do corte multiplicado: com interpolacao a camera desenhada fica atras da do quadro coletado, e o que ela ainda ve na
     // borda nao pode ter sido cortado (wotm_live.inc liga 1,25 na coleta quando a interpolacao esta ligada)
     float cullMargin = 1.f;
+    // Camera nativa na coleta (vista de perseguicao dos jogadores 5..8, wotm_live.inc): o olho (LOD, predios transparentes do CONTROL)
+    // e o ponto de visada vem dela e do monstro dela, nao da camera da vista do jogo. Assim o predio entre ela e o monstro (ou com ela
+    // dentro) usa a versao transparente, como o jogo faz com as cameras dele.
+    struct NativeEye { bool on = false; float eye[3] = {}; float target[3] = {}; };
+    NativeEye nativeEye;
+    mutable int ghosted = 0;   // CONTROL que trocaram para a versao transparente na ultima coleta
     // Vista do jogo que collect segue e que draw desenha (tela dividida; ViewCtx). A coleta a recebe de quem chama; o show a copia do
     // instantaneo.
     ViewCtx vctx;
@@ -1767,11 +1773,13 @@ public:
         seen_.clear();
         lod_ = maxLod;
         eyeOk_ = false;
+        ghosted = 0;
         {
             const GameCamera gc = readGameCamera(ram, vctx.view);
             cam_ = gc;
             eyeOk_ = gc.ok;
-            for (int c = 0; c < 3; ++c) eye_[c] = gc.pos[c];
+            for (int c = 0; c < 3; ++c) eye_[c] = nativeEye.on ? nativeEye.eye[c] : gc.pos[c];
+            eyeOk_ = eyeOk_ || nativeEye.on;
         }
         const uint32_t wc = ram.u32(addr::world);
         if (ram.ok(wc, 0x40)) {
@@ -3736,6 +3744,11 @@ private:
         if (vtype == 0) {
             for (uint32_t i = 0; i < nvol && visible; ++i)
                 if (bspPoint(ram, ram.u32(node + 0x20 + 4 * i), eyeL) != 0x200) visible = false;
+        } else if (nativeEye.on) {   // camera nativa: o segmento do olho ao monstro dela
+            float pl[3];
+            toLocal(m, nativeEye.target, pl);
+            for (uint32_t i = 0; i < nvol && visible; ++i)
+                if (bspSegHit(ram, ram.u32(node + 0x20 + 4 * i), eyeL, pl)) visible = false;
         } else {
             const uint32_t v = uint32_t(curView().view);
             const int nlos = std::min<int>(int(ram.u32(kLosPerView + 4 * v)), 2);
@@ -3750,6 +3763,7 @@ private:
                     if (bspSegHit(ram, ram.u32(node + 0x20 + 4 * i), eyeL, pl)) visible = false;
             }
         }
+        if (!visible) ++ghosted;
         return visible ? c1 : c2;
     }
 
