@@ -613,7 +613,7 @@ static Capture &capture()
     static Capture c;
     return c;
 }
-// Interpolacao de quadros (opcao INTERPOLATE FRAMES, WOTM_INTERP=1; docs/investigacoes/2026-10-19/interpolacao.md): relogio comum as
+// Interpolacao de quadros (opcao INTERPOLATE FRAMES, WOTM_INTERP; NATIVO.md, "Taxa de apresentacao"): relogio comum as
 // duas threads (carimbo Snapshot::hostT) e a margem do corte por esfera, que a janela liga e a captura le (Scene::cullMargin)
 static double hostNow()
 {
@@ -1605,7 +1605,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const char *e = std::getenv("WOTM_INTERP");
         return e && std::strstr(e, "redraw") != nullptr;
     }();
-    // Interpolacao de quadros (opcao INTERPOLATE FRAMES, ligada por padrao; docs/investigacoes/2026-10-19/interpolacao.md): com a
+    // Interpolacao de quadros (opcao INTERPOLATE FRAMES, ligada por padrao; NATIVO.md, "Taxa de apresentacao"): com a
     // apresentacao acima de 60 Hz (ou ate 60 com o jogo a 30: slowGame), cada apresentacao desenha a mistura de A (S.prev) e B
     // (S.snap) no instante D do relogio de exibicao, um quadro
     // do jogo atras do mais novo (mais uma margem, para a captura atrasada ainda chegar antes do alfa bater em 1). Sem quadro novo o
