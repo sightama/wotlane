@@ -232,3 +232,23 @@ Monitor principal de 180 Hz com vsync (mesmas lutas, `WOTM_MONITOR=0`):
 
 - Com vsync o redesenho também cabe: perde 1,5% das apresentações com 1 vista e 2,5% com a tela dividida (4,6 ms de 5,5).
 - A CPU sobe mais que na simulação: +75% com 1 jogador e +90% com 2 (~0,45 e 0,65 núcleo a mais).
+
+## 8. Etapa 1 implementada (2026-10-26)
+
+Opção INTERPOLATE FRAMES (`WOTM_INTERP=1`): `Scene::showBlend` (wotm_native.hpp), relógio e par em `wotmDrawNative` (wotm_live.inc).
+Diferenças em relação ao plano: o par passa a ter três instantâneos (P, A, B; P sem a cópia das partículas): com a margem de 3 ms, o
+quadro novo chegava antes do instante exibido em ~22% das apresentações e o alfa ficava preso em 0 (o quadro anterior parado por uma
+apresentação, passo do tempo exibido variando 0,7 a 0,9 field a 75 Hz); agora esse instante mistura P e A. A margem no corte por esfera
+é o raio × 1,2. O teste de imagem bit a bit (`WOTM_INTERP_SELFTEST`) não foi feito.
+
+Luta IA x IA (`WOTM_MATCH=3,1,1 WOTM_AIVSAI=1`), 35 s, `WOTM_INTERPLOG=1` (análise: passo do instante exibido entre apresentações,
+comparado com o relógio):
+
+| Rodada | Passo esperado (fields) | Passo medido | Erro p90 / p99 (fields) | Alfa preso em 1 | Cortes de câmera |
+|---|---|---|---|---|---|
+| 75 Hz, vsync | 0,8 | 0,8 em 95% | 0,03 / 0,38 | 4 de 2332 | 3 (intro) |
+| 180 Hz, sem vsync | 0,34 | 0,3–0,4 em 99% | 0,05 / 0,10 | 10 de 5439 | — |
+| 180 Hz, 2 jogadores | 0,34 | 0,3–0,4 em 93% | 0,09 / 0,25 | 11 de 4363 | — |
+
+Redesenho de 1 vista a 180 Hz com a mistura: 2,8–3,4 ms (sem ela, etapa 0: 2,3–2,7). `tools\corpus.ps1 -Check` sem mudança (o replay
+não interpola). Tela dividida com a mistura: `docs/screenshots/2026-10-26/2026-10-26_interpolacao_tela_dividida.png`.

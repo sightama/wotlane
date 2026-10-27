@@ -135,12 +135,13 @@ constexpr TabDef kTabDefs[kTabs] = {
       {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"},
       {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
       {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
-    {5,
+    {6,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
       {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"},
-      {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"}}},
+      {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"},
+      {st::Interp, "INTERPOLATE FRAMES", "SMOOTHER MOTION ON MONITORS ABOVE 60 HZ. MAY ADD INPUT DELAY"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
       {st::CamSens, "SENSITIVITY", "HOW FAST THE RIGHT STICK TURNS THE CAMERA"},
@@ -649,7 +650,9 @@ static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
 
 // KEYBOARD (teclado separado) na pausa: travado. Numa luta de 1 jogador, OWN PLAYER mandaria o teclado para o jogador 2, que nao
 // existe, e quem joga no teclado perderia o monstro e a saida da pausa
-static bool lockedOpt(st::Key k, bool inPause) { return inPause && k == st::KbSeparate; }
+// INTERPOLATE FRAMES: so com a apresentacao acima de 60 Hz (a 60 so somaria o atraso de um quadro)
+static bool interpLocked() { return st::g_presentHz.load(std::memory_order_relaxed) <= 60; }
+static bool lockedOpt(st::Key k, bool inPause) { return (inPause && k == st::KbSeparate) || (k == st::Interp && interpLocked()); }
 
 // Um quadro do painel aberto (no menu: screenGetInput da tela 1, que o jogo chama a cada quadro dela; na pausa: no lugar do
 // pauseLevelOverlay). Devolve true quando o painel fecha (quem chamou fecha o seu: g_open ou g_pauseOpen).
@@ -1422,7 +1425,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         char buf[32];
         valueText(o.key, st::get(o.key), buf, sizeof buf);
         if (lockedOpt(o.key, inPause))   // apagada, sem setas
-            return PRow{o.label, buf, "CAN ONLY BE CHANGED IN THE MAIN MENU", false, KOpt, -1, true};
+            return PRow{o.label, buf, o.key == st::Interp ? "NEEDS A REFRESH RATE ABOVE 60 HZ" : "CAN ONLY BE CHANGED IN THE MAIN MENU", false, KOpt, -1, true};
         return PRow{o.label, buf, o.hint, true, KOpt};
     };
     std::vector<std::string> moveHints;   // as dicas da MOVE LIST (o PRow guarda so o ponteiro)
