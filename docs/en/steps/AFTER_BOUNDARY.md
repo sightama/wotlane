@@ -1,8 +1,8 @@
-*English translation of [docs/passos/POS_FRONTEIRA.md](../../passos/POS_FRONTEIRA.md). The original is authoritative; this copy may lag behind it.*
+*English translation of `92af448:docs/passos/POS_FRONTEIRA.md`, which upstream deleted: its open items are in [TODO.md](../TODO.md) and the finished ones in [NATIVE.md](NATIVE.md), [MODS.md](MODS.md) and [FORMATS.md](../FORMATS.md). Kept only for the parts that have no other home.*
 
 # After the hardware boundary: priorities (owner, 2026-10-19)
 
-Applies once the hardware boundary falls ([`BOUNDARY.md`](BOUNDARY.md), work in another session). Until then the order in [`NEXT_STEPS.md`](../NEXT_STEPS.md)
+Applies once the hardware boundary falls ([`BOUNDARY.md`](BOUNDARY.md), work in another session). Until then the order in `docs/PROXIMOS_PASSOS.md` (deleted upstream)
 (port inventory) still holds. The list is the owner's; the order and the notes were agreed with him in the same conversation. Each item says what the repo already
 knows and what is still to be found out.
 
@@ -340,7 +340,7 @@ views. The hooks:
   per-port map of `wotm_pad.inc`.
 - **Photo mode:** the F5 free camera (`wotm_freecam.h`/`.inc`) already exists; what is missing is pausing the game and hiding the HUD.
 - **PC graphics:** resolution scale, MSAA and anisotropic filtering in native drawing. Frame interpolation is already in the queue
-  ([`NEXT_STEPS.md`](../NEXT_STEPS.md)).
+  (`docs/PROXIMOS_PASSOS.md` (deleted upstream)).
 
 ## Out of the order
 - **Online:** not a priority. With 4-player local multiplayer (item 11), Steam Remote Play Together and Parsec already allow playing

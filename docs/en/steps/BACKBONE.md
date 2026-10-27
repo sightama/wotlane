@@ -2,7 +2,7 @@
 
 # Game backbone: load chain, menu, game loop, monster states
 
-(Split from [NEXT_STEPS.md](../NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`); index there.) This file keeps **what is known about the game flow**, gathered while decompiling the backbone on 2026-10-08. What is or is not in C++ is `config/status.csv` (`grep <função>` (function)), not this file.
+(Docs index in [CLAUDE.md](../CLAUDE.md).) This file keeps **what is known about the game flow**, gathered while decompiling the backbone on 2026-10-08. What is or is not in C++ is `config/status.csv` (`grep <função>` (function)), not this file.
 
 ## Load chain: from `main` to the monster on the map
 Flow of `main` (comment in `src/game/Shell.cpp`): boot -> intro/outro -> menus (`userintMain`) -> session: `InitRTState`, `BootInitGame`, `InitBeforeDbLoad`, `LoadLevelFiles`, `FinishLoadBar`, `FadeScreen`, `InitAfterDbLoad`, `InitPlayers`, `initAfter` of the 4 `Hud`s, per-mode init (BigShot/Crush/DodgeBall), `UpdatePadTweaks`, sounds, `rtMain` in a loop with `EvaluateGameStatus`.

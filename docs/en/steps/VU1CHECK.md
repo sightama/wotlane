@@ -2,7 +2,7 @@
 
 # VU1 x native check
 
-State, leads and fixes of the check. Index in [`NEXT_STEPS.md`](../NEXT_STEPS.md); the method (per-chain collection, back faces, output format) is in [`NATIVE.md`](NATIVE.md), "Runtime: checagem VU1 x nativo" (Runtime: VU1 x native check). Disassembled microcode in `build/vu1/` (`tools/vu1dis.py`; game code, outside the repo).
+State, leads and fixes of the check. Docs index in [CLAUDE.md](../CLAUDE.md); the method (per-chain collection, back faces, output format) is in [`NATIVE.md`](NATIVE.md), "Runtime: checagem VU1 x nativo" (Runtime: VU1 x native check). Disassembled microcode in `build/vu1/` (`tools/vu1dis.py`; game code, outside the repo).
 
 <details>
 <summary>How it works</summary>

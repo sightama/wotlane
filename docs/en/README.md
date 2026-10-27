@@ -13,12 +13,13 @@ sense; our changes may be offered to upstream later as pull requests, as a court
 | [CONTRIBUTING.md](CONTRIBUTING.md) | [CONTRIBUTING.md](../../CONTRIBUTING.md) | How to contribute: priorities, setup checks, PR workflow |
 | [pull_request_template.md](pull_request_template.md) | [.github/pull_request_template.md](../../.github/pull_request_template.md) | Pull request checklist template |
 | [GLOSSARY.md](GLOSSARY.md) | [GLOSSARIO.md](../../GLOSSARIO.md) | Monster and level names (in-game vs internal), cut monsters and bosses |
+| [ONLINE.md](ONLINE.md) | (wotlane only, no original) | Playing online with friends: build, host the server, join, what changes online, troubleshooting |
 
 ## Plans and status
 | English | Original | Description |
 |---|---|---|
 | [PLAN.md](PLAN.md) | [docs/PLANO.md](../PLANO.md) | Architecture (recompiled base, runtime, native layer, decomp), licensing and milestones |
-| [NEXT_STEPS.md](NEXT_STEPS.md) | [docs/PROXIMOS_PASSOS.md](../PROXIMOS_PASSOS.md) | Current direction, where the project stands, how to resume, index of the step docs |
+| [TODO.md](TODO.md) | [TODO.md](../../TODO.md) | What is left to do, in the owner's order, and what the owner ruled out |
 | [ANALYSIS.md](ANALYSIS.md) | [docs/ANALYSIS.md](../ANALYSIS.md) | What is known about the disc and ELF, toolchain, TU/data split, function status conventions |
 | [FORMATS.md](FORMATS.md) | [docs/FORMATOS.md](../FORMATOS.md) | Game file formats as revealed by the decompiled loaders |
 | [screenshots.md](screenshots.md) | [docs/screenshots/README.md](../screenshots/README.md) | Conventions for the native-drawing screenshot history |
@@ -30,7 +31,8 @@ sense; our changes may be offered to upstream later as pull requests, as a court
 | [steps/VU1CHECK.md](steps/VU1CHECK.md) | [docs/passos/VU1CHECK.md](../passos/VU1CHECK.md) | VU1 vs native check: method, port inventory, open residues |
 | [steps/RUNTIME.md](steps/RUNTIME.md) | [docs/passos/RUNTIME.md](../passos/RUNTIME.md) | Recompiled runtime on Windows: fast build, running, keyboard, boot trace, useful addresses |
 | [steps/BOUNDARY.md](steps/BOUNDARY.md) | [docs/passos/FRONTEIRA.md](../passos/FRONTEIRA.md) | Hardware boundary: what of the PS2 the port still uses per frame and the plan to remove it |
-| [steps/AFTER_BOUNDARY.md](steps/AFTER_BOUNDARY.md) | [docs/passos/POS_FRONTEIRA.md](../passos/POS_FRONTEIRA.md) | Priorities after the hardware boundary (RAM, HUD, JSON saves, camera, mods, multiplayer) |
+| [steps/AFTER_BOUNDARY.md](steps/AFTER_BOUNDARY.md) | `92af448:docs/passos/POS_FRONTEIRA.md` (deleted upstream) | Old priority list after the hardware boundary; open items now in [TODO.md](TODO.md), finished ones in the step docs |
+| [steps/MODS.md](steps/MODS.md) | [docs/passos/MODS.md](../passos/MODS.md) | `mods/` folder, textures as PNG, skins, custom monsters, `tools/modkit.py` |
 | [steps/TOOLS.md](steps/TOOLS.md) | [docs/passos/FERRAMENTAS.md](../passos/FERRAMENTAS.md) | Tools, shared headers, `TheGame` decomp status, differential testing |
 | [steps/PITFALLS.md](steps/PITFALLS.md) | [docs/passos/ARMADILHAS.md](../passos/ARMADILHAS.md) | Pitfalls already seen in the NM decomp, build and game |
 | [steps/PCSX2_TESTING.md](steps/PCSX2_TESTING.md) | [docs/passos/TESTE_PCSX2.md](../passos/TESTE_PCSX2.md) | Running the halfcpp ELF in PCSX2 and behavior bugs found while playing it |
@@ -41,8 +43,6 @@ sense; our changes may be offered to upstream later as pull requests, as a court
 | English | Original | Description |
 |---|---|---|
 | [investigations/2026-10-18/16_monsters.md](investigations/2026-10-18/16_monsters.md) | [docs/investigacoes/2026-10-18/16_monstros.md](../investigacoes/2026-10-18/16_monstros.md) | Feasibility of 16 monsters in one fight, and results with 8 |
-| [investigations/2026-10-19/interpolation.md](investigations/2026-10-19/interpolation.md) | [docs/investigacoes/2026-10-19/interpolacao.md](../investigacoes/2026-10-19/interpolacao.md) | Frame interpolation survey and staged plan |
-| [investigations/2026-10-19/oracle_coverage_followups.md](investigations/2026-10-19/oracle_coverage_followups.md) | [docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md](../investigacoes/2026-10-19/pendencias_oracle_cobertura.md) | PS2Recomp PR #277 status, oracle for functions with calls, gameplay coverage |
 
 ## Tools
 | English | Original | Description |

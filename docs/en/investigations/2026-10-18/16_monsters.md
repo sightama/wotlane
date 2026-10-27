@@ -62,7 +62,7 @@ Also proven in retail: Endurance keeps 6 monsters loaded and the Shell's `m_mode
 ## Suggested plan (in steps, each testable)
 1. **6..8 monsters without touching RAM:** hook in `Shell::LoadMonstersDB/LoadTexture/LoadResTexture/InitPlayers` reading the lineup
    from a variable (e.g. `WOTM_LINEUP`), free-for-all mode, light level (Central). Proves `m_monsters[>8]`, `pad2958`, AI and camera.
-2. **64 MB RAM** in the runtime fork + loading the monsters above 32 MB; regenerate `tools/runtime_patch/wotm-runtime.patch`. **Done on 2026-10-19** ([AFTER_BOUNDARY.md](../../steps/AFTER_BOUNDARY.md), `docs/passos/POS_FRONTEIRA.md`, item 1): Metro with 8 monsters runs.
+2. **64 MB RAM** in the runtime fork + loading the monsters above 32 MB; regenerate `tools/runtime_patch/wotm-runtime.patch`. **Done on 2026-10-19** (`92af448:docs/passos/POS_FRONTEIRA.md`, item 1): Metro with 8 monsters runs.
 3. **Native `fileStatus`** (32 slots) and AI costumes outside the Shell. From there, 16.
 4. Measure frame time and sound with 16; optimize `EnemyInfo` if it is the culprit.
 

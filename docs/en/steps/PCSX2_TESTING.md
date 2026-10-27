@@ -2,7 +2,7 @@
 
 # Testing the new C++ in PCSX2 (halfcpp) and bugs found
 
-(Split from [NEXT_STEPS.md](../NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`); index there.) halfcpp was the first way to run the equivalents; today the intended path is the guinea-pig runtime ([NATIVE.md](NATIVE.md) (`NATIVO.md`), "Runtime cobaia" (guinea-pig runtime), incomplete). What stays here is how to build the ELF and the lessons.
+(Docs index in [CLAUDE.md](../CLAUDE.md).) halfcpp was the first way to run the equivalents; today the intended path is the guinea-pig runtime ([NATIVE.md](NATIVE.md) (`NATIVO.md`), "Runtime cobaia" (guinea-pig runtime), incomplete). What stays here is how to build the ELF and the lessons.
 
 ## How to build and run halfcpp
 - The normal build's ROM is identical to retail (equivalents stay as `INCLUDE_ASM`). `sh tools/wsl/build_nm.sh` (WSL) compiles a copy in `~/wotm_nm` with `-DNON_MATCHING` and writes `build/pcsx2_test/SCUS_971.97_halfcpp.elf` (all the equivalents) and `..._control_matching.elf` (control). Both with `p_paddr = p_vaddr` (PCSX2 loads by `p_paddr`). Variants with a subset of TUs/functions: arguments to `build_nm.sh` (e.g. `a_update` with only `Monster::update`).

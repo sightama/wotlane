@@ -2,7 +2,7 @@
 
 # 3D model viewer in the browser (idea, evaluated on 2026-10-14)
 
-(Index in [NEXT_STEPS.md](../NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`).) Only the feasibility evaluation; nothing has been implemented yet.
+(Docs index in [CLAUDE.md](../CLAUDE.md).) Only the feasibility evaluation; nothing has been implemented yet.
 
 ## What already exists
 - **Format solved** ([FORMATS.md](../FORMATS.md) (`docs/FORMATOS.md`), [NATIVE.md](NATIVE.md) (`NATIVO.md`)): `.NGP` (zip `IE\3\4` in the level, raw in the monster; pre-linked image at

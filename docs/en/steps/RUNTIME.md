@@ -2,7 +2,7 @@
 
 # Recompiled runtime (PS2Recomp): how to run it and what to know
 
-(Split from [NEXT_STEPS.md](../NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`); index there.) This file keeps what is used today. The diary of the performance investigations (batched IOP, deferred timers, virtual clock, native VU0) is in [NATIVE.md](NATIVE.md) (`NATIVO.md`, "Física com `dt`" (physics with `dt`)) and in the git history (`git log -- docs/passos/RUNTIME.md`).
+(Docs index in [CLAUDE.md](../CLAUDE.md).) This file keeps what is used today. The diary of the performance investigations (batched IOP, deferred timers, virtual clock, native VU0) is in [NATIVE.md](NATIVE.md) (`NATIVO.md`, "Física com `dt`" (physics with `dt`)) and in the git history (`git log -- docs/passos/RUNTIME.md`).
 
 ## Where the code is
 - Runtime clone (outside the repo): `C:\Users\TwistZero\wotm-recomp-win` (submodule `third_party/PS2Recomp`, branch `wotm` of the fork `yanm1103/PS2Recomp`). The generated code (`register_functions.cpp` etc.) never goes to the repo.

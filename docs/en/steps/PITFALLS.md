@@ -2,7 +2,7 @@
 
 # Pitfalls already seen (NM decomp / build / game)
 
-(Split from [NEXT_STEPS.md](../NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`); index there.)
+(Docs index in [CLAUDE.md](../CLAUDE.md).)
 
 ## Pitfalls already seen
 - When rewriting the end of a `.cpp` with a script, check that the final `INCLUDE_ASM` lines (static init, `__tf`, ctor, `_GLOBAL_$I$`) are still there.

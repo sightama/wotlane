@@ -137,7 +137,7 @@ Done with [PS2Recomp](https://github.com/ran-j/PS2Recomp) (commit 2c5fbb9), **ou
   (0 jump tables detected); the recompiler covers them with "fallback entries" (60,604).
 - All the C++ compiles and links with the runtime. In the test runtime the game initializes: it loads the 7 IRX into the emulated IOP (989snd included), gets past the sound init and enters the
   menu loop (`userintMain`). The movies get stuck because the game's decoder (`decBs0`/`videoDec*`) waits for the IPU, which the runtime does not emulate; in the tests they were skipped by a hook
-  (`playMpegMovie*` and the `updateMpegMovieDecoding` thread). Since 2026-10-10 the game runs on Windows (MSVC) with native drawing, sound, movies and keyboard (`native/`; status in [NEXT_STEPS.md](NEXT_STEPS.md)).
+  (`playMpegMovie*` and the `updateMpegMovieDecoding` thread). Since 2026-10-10 the game runs on Windows (MSVC) with native drawing, sound, movies and keyboard (`native/`; status in [steps/NATIVE.md](steps/NATIVE.md), what is missing in [TODO.md](TODO.md)).
 - The runtime already brings a CPU GS, VU and VIF1 interpreters and an emulated IOP; it is the bridge, not the destination (the destination is native rendering at the engine boundary). The emulated VU1 serves as the reference for the VU1 vs native check ([steps/VU1CHECK.md](steps/VU1CHECK.md)).
 - **PS2Recomp bug found**: `SQRT.S fd, ft` reads the source from `ft` (uses |ft|) and `RSQRT.S fd, fs, ft` is `fs / sqrt(|ft|)`; upstream used `fs`. Affects 108 functions (`sqrt.s`) and 76 (`rsqrt.s`).
   **`div.s` and `rsqrt.s` by zero** (confirmed on 2026-10-18 by the METRO pedestrians; analysis in commit 7c1c24e): the generator emitted ±Inf

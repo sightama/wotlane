@@ -4,13 +4,27 @@
 
 Decompilation project for the `SCUS_971.97` executable. The final goal is a native PC port that is easy to mod. The project owner writes in Portuguese; reply in Portuguese.
 
-**Current direction (decided on 2026-10-09, confirmed on 2026-10-16): port first.** The base is the game recompiled with PS2Recomp (outside the repo; the generated C++ is game code) plus this repo's native layer
+**Direction: port first.** The base is the game recompiled with PS2Recomp (outside the repo; the generated C++ is game code) plus this repo's native layer
 (`native/`: GPU drawing, sound, movies, keyboard), which already runs the fight at 60 fps. The decompilation (`src/`) is the readable layer that replaces, via hooks, only what matters for modding (`Shell::Load*`, `MonsterParse`,
-camera); the guinea-pig runtime with the equivalents is on hold. **Byte match is not a per-function requirement** (`equivalent` is enough; `matched` when it comes cheap; `gate.sh` is still mandatory). The emulated VU1/GS of the
-runtime is only the reference for the check ([steps/VU1CHECK.md](steps/VU1CHECK.md), `docs/passos/VU1CHECK.md`); the destination is native rendering at the engine boundary. Port order: widescreen as the first mod, then HUD, fades, lighting and graphics
-bugs in inventory order. Details in [NEXT_STEPS.md](NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`). The rules below still apply; where they say "matching", read "matching when that is the function's goal".
+camera); the test-subject runtime with the equivalents is on hold. **Byte match is not a per-function requirement** (`equivalent` is enough; `matched` when it comes cheap; `gate.sh` is still mandatory). The emulated VU1/GS of the
+runtime is only the reference for the check ([steps/VU1CHECK.md](steps/VU1CHECK.md), `docs/passos/VU1CHECK.md`). The rules below still apply; where they say "matching", read "matching when that is the function's goal".
 
-Read before starting: [README.md](../../README.md) (setup), [ANALYSIS.md](ANALYSIS.md) (`docs/ANALYSIS.md`: what is known about the ELF and the status conventions) and [NEXT_STEPS.md](NEXT_STEPS.md) (`docs/PROXIMOS_PASSOS.md`: how to resume, and index; tools, headers and pitfalls in `docs/passos/`, English in [steps/](steps/)).
+**What to do:** **[TODO.md](TODO.md)** (`TODO.md` at the root; the list and the order are the owner's); the owner's bug reports take priority over it.
+
+Read before starting: [README.md](../../README.md) (setup), [ANALYSIS.md](ANALYSIS.md) (`docs/ANALYSIS.md`: what is known about the ELF and the status conventions), [PLAN.md](PLAN.md) (`docs/PLANO.md`: architecture) and [TODO.md](TODO.md). Index of `docs/passos/` (English in [steps/](steps/)):
+- [NATIVE.md](steps/NATIVE.md) (`NATIVO.md`): native layer (drawing, textures, monsters, particles, shadows, menus, the "Recompiled options" panel, icons), host hooks, watchdog (vigia), batch (lote), table of `WOTM_*` variables.
+- [VU1CHECK.md](steps/VU1CHECK.md): VU1 vs native check, corpus, the owner's photos, open bugs.
+- [RUNTIME.md](steps/RUNTIME.md): recompiled runtime on Windows (build, `PS2X_*`, keyboard, useful addresses). [BOUNDARY.md](steps/BOUNDARY.md) (`FRONTEIRA.md`): what of the PS2 the port no longer emulates.
+- [TOOLS.md](steps/TOOLS.md) (`FERRAMENTAS.md`: `tools/`, headers, difftest), [PITFALLS.md](steps/PITFALLS.md) (`ARMADILHAS.md`: gcc 2.95 and NM build gotchas), [BACKBONE.md](steps/BACKBONE.md) (`ESPINHA.md`: game flow), [PCSX2_TESTING.md](steps/PCSX2_TESTING.md) (`TESTE_PCSX2.md`: halfcpp in PCSX2).
+- [MODS.md](steps/MODS.md) (`mods/` folder, textures as PNG, `tools/modkit.py`), [MODELOS_3D.md](../passos/MODELOS_3D.md) (animated monster straight from the disc; no English copy), [WEB_VIEWER.md](steps/WEB_VIEWER.md) (`VIEWER_WEB.md`: evaluation of the in-browser viewer; the viewer is ready at https://yanm1103.github.io/wotm-model-museum/).
+- Dated investigations in `docs/investigacoes/<data>/` (`<data>` = date; English in [investigations/](investigations/)). A closed one (what it asked for is already in the code) is deleted; whatever stays pending goes to `TODO.md`, and references become `<commit>:docs/investigacoes/...` (read with `git show`).
+- [FORMATS.md](FORMATS.md) (`docs/FORMATOS.md`): the game's file formats (level, monster, sound, movie, memory card save).
+
+## Documentation: three kinds of text, each in its place
+- **Reference** (`README.md`, this file, `docs/*.md`, `docs/passos/*.md`): how things are today, in the present tense. No dates, no "it used to be", no "done/fixed on", no account of how it was tested. A measured number only goes in if it is used (e.g. "9619 ticks per field").
+- **To do** (`TODO.md`): only what is open, each item short (what it is, where to start, where the context is). Finished: the line goes away, with no "done" and no strikethrough; what came to exist goes into the reference. The owner's decisions not to do something go under "Descartado" (ruled out).
+- **Diary** (what happened, why, how it was measured and tested): the commit message and `docs/investigacoes/<data>/`.
+- `python tools/doclint.py` checks the lines the commit adds and the whole `TODO.md`; git's pre-commit runs it on its own (turn it on once per clone: `git config core.hooksPath tools/githooks`). An old line that is only edited is not charged for what it already had; `--all` lists what still needs migrating.
 
 ## Port workflow (change in `native/`)
 1. Before touching anything: `tools\corpus.ps1 -Check` saves the baseline (`<runtime>\corpus\resumo_<data>.csv`; capture the corpus once with `-Capture`). What is wrong or missing comes from the inventory ([VU1CHECK.md](steps/VU1CHECK.md), "Inventário do port" (port inventory)), not from memory.
@@ -30,7 +44,7 @@ Read before starting: [README.md](../../README.md) (setup), [ANALYSIS.md](ANALYS
 - Windows, with the build running in **WSL Ubuntu**: use `wsl -d Ubuntu` (the default distro is `docker-desktop`, which does not work). Venv: `~/.venvs/wotm/bin/python`. Repo root in WSL: `/mnt/c/Users/<você>/WoTM` (`<você>` = you).
 - Compiler: ee-gcc 2.95.2 (SN ProDG), downloaded by `tools/setup_toolchain.sh` into `tools/cc/`. Requires your own ISO in `ISO/`, extracted to `disc/`.
 - `.sh` scripts need LF. Writing with Python on Windows leaves CRLF and WSL's `sh` breaks (`sed -i 's/\r$//'` fixes it).
-- `config/status.csv` (the state of each function) is generated by `python3 tools/progress.py`; only the owner commits it. **Collaborators do not commit this file**, to avoid conflicts in every PR. The README no longer has a progress block (removed on 2026-10-19 together with the hook and `update_readme.py`).
+- `config/status.csv` (the state of each function) is generated by `python3 tools/progress.py`; only the owner commits it. **Collaborators do not commit this file**, to avoid conflicts in every PR. The README has no progress block.
 - When writing files with regex or `\n`, use the Edit/Write tools. A Python heredoc turns `\n` into a real line break.
 - **Never run inline Python** (`python3 - <<EOF`, `python -c "...\..."`): Windows paths (`C:\Users\...`) and `\n` break. A hook (`.claude/hooks/block_python_heredoc.py`, enabled in `.claude/settings.json`) rejects these commands. Save the script with Write (scratch folder) and run `python arquivo.py` (`arquivo` = file); use Edit/Write to change repo files.
 
