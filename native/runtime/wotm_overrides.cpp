@@ -29,6 +29,7 @@
 #include <thread>
 
 #include "net/wotm_lockstep.hpp"     // linha do tempo das entradas do modo deterministico e do netcode (wotm_sync.inc)
+#include "net/wotm_monsters.hpp"     // monstros e trajes que existem no disco (WOTM_MATCH)
 #include "net/wotm_net_client.hpp"   // cliente da partida em rede (wotm_sync.inc)
 #include "wotm_netstatus.h"          // mensagem da rede na tela e teclas de debug desligadas (wotm_live.inc)
 
@@ -2123,7 +2124,11 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             g_matchPlayers = std::min(std::atoi(pl), 4);
             g_padAIs = std::atoi(pl) - g_matchPlayers;
         }
-        if (p && *p == '\0' && n >= 1 + g_matchPlayers + g_padAIs)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
+        int bad = -1;
+        if (p && *p == '\0' && n >= 2 && !wotm_monsters::fits(v, n - 1, &bad))   // monstro sem arquivo no disco: a carga travaria
+            std::fprintf(stderr, "[wotm] WOTM_MATCH recusada: o monstro %d (%do da lista) nao tem arquivo no disco (traje %s); validos: 1-5, 7-11, "
+                                 "13 (2 trajes), 14 e 15 (1 traje)\n", v[bad], bad + 1, wotm_monsters::costumes(v[bad]) ? "repetido demais" : "nenhum");
+        else if (p && *p == '\0' && n >= 1 + g_matchPlayers + g_padAIs)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
             for (int i = 0; i < n - 1; ++i)

@@ -29,6 +29,10 @@ $checks = [ordered]@{
     'borrao_4'      = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8578'; Secs = 35
                          Expect = '6f8578=00000004'
                          Reject = '6f8578=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # monstro sem arquivo no disco (6 = spider, cortado): a WOTM_MATCH e recusada com aviso, em vez de travar a carga da fase
+    # (native/net/wotm_monsters.hpp)
+    'monstro_sem_arquivo' = @{ Env = 'WOTM_MATCH=3,6,7,1;WOTM_AIVSAI=1'; Secs = 25
+                         Expect = 'WOTM_MATCH recusada: o monstro 6 \(2o da lista\) nao tem arquivo no disco' }
     # regressao: o 2 jogadores continua desenhando a tela dividida (redesenhos com 2 vistas) e nunca a tela em 4
     'tela_2'        = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;PS2X_STATS=1'; Secs = 40
                          Expect = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]'

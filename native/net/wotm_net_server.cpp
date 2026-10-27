@@ -1,6 +1,7 @@
 // ABOUTME: Implementacao do servidor do netcode: lobby TCP (linhas de texto) e partidas ENet em lockstep (repasse das entradas,
 // ABOUTME: atraso pelo ping, hashes de estado, quedas). Nenhum codigo do jogo; roda no wotm_server e nos testes.
 #include "wotm_net_server.hpp"
+#include "wotm_monsters.hpp"
 
 #include <enet/enet.h>
 
@@ -175,10 +176,15 @@ namespace wotm_net
                 return void(c.socket.sendLine("ERROR lobby inexistente"));
             if (name.empty())
                 return void(c.socket.sendLine("ERROR nome vazio (use letras, digitos, _ ou -)"));
-            if (monster < 0 || monster > 63)
-                return void(c.socket.sendLine("ERROR monstro invalido"));
+            if (wotm_monsters::costumes(monster) == 0)
+                return void(c.socket.sendLine("ERROR monstro invalido (sem arquivos no disco)"));
             leaveLobby(ci);
             Lobby &l = lobbies_[static_cast<size_t>(li)];
+            int same = 0;   // cada repetido leva o traje seguinte
+            for (int m : l.members)
+                same += conns_[static_cast<size_t>(m)]->monster == monster;
+            if (same >= wotm_monsters::costumes(monster))
+                return void(c.socket.sendLine("ERROR monstro sem traje livre no lobby (todos os trajes dele ja escolhidos)"));
             if (l.match)
                 return void(c.socket.sendLine("ERROR lobby em partida; espere acabar"));
             if (static_cast<int>(l.members.size()) >= cfg_.maxPlayers)

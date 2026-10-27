@@ -414,6 +414,34 @@ namespace
         CHECK(readUntil(b, "ERROR").find("cheio") != std::string::npos);
     }
 
+    // monstro sem arquivo no disco (spider 6, ogre 12, fora da tabela) ou sem traje livre (jelly so tem 1) nao entra: a carga do jogo
+    // travaria em todos os PCs
+    TEST(lobby_refuses_monsters_the_disc_does_not_have)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b;
+        for (LineSocket *s : {&a, &b})
+        {
+            CHECK(s->connect("127.0.0.1", cfg.port, 2000));
+            s->sendLine("HELLO 1 b1");
+        }
+        for (const char *bad : {"6", "12", "0", "16"})
+        {
+            a.sendLine(std::string("JOIN 0 Ana ") + bad);
+            CHECK(readUntil(a, "ERROR").find("monstro") != std::string::npos);
+        }
+        a.sendLine("JOIN 0 Ana 14");
+        CHECK(readUntil(a, "JOINED") == "JOINED 0");
+        b.sendLine("JOIN 0 Bia 14");
+        CHECK(readUntil(b, "ERROR").find("traje") != std::string::npos);
+        b.sendLine("JOIN 0 Bia 3");
+        CHECK(readUntil(b, "JOINED") == "JOINED 0");
+        a.sendLine("LEAVE");
+        a.sendLine("JOIN 0 Ana 3");
+        CHECK(readUntil(a, "JOINED") == "JOINED 0");
+    }
+
     // dois clientes da partida trocam 100 quadros de entrada e veem a mesma linha do tempo
     void exchange(MatchClient &a, MatchClient &b, uint32_t frames)
     {
