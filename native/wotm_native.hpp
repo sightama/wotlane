@@ -701,6 +701,9 @@ struct Sprite {
     int16_t aref = 8;       // destroço: limiar do teste de alfa (Scene::setAlphaRef); kGsAlphaRef = padrao
     bool opaque = false;    // destroço sem ABE com alphaContext 0: grava profundidade (ZBUF do setOpeningContext)
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
+    // Passo do particleMove (Particles::stepBack): pos_B - pos_A = f (step - (0, 0, grav f)) em f fields; zero na que nasceu no passo
+    float step[3] = {0, 0, 0};
+    float grav = 0.f;
 };
 
 // Glifo do texto do jogo (fontSpritePrint*): um sprite do GS. UV em texels do atlas, XY em pixels da tela do jogo (640 x 224, campo).
@@ -937,6 +940,7 @@ struct Snapshot {
     std::vector<DrawItem> items, sky, overlay, hud, hp, hpOverlay;
     std::vector<FxSystem> fx;
     std::shared_ptr<const uint8_t> fxRam;  // copia de sombra da RAM das particulas (Particles::shadowRam, ao vivo); nullptr = ler a RAM passada ao draw
+    size_t fxRamSize = 0;                  // tamanho do buffer de fxRam (o da RAM)
     Particles::FlareFrame flares;       // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
@@ -2266,7 +2270,8 @@ public:
     // com as matrizes misturadas com as de A em alpha (0 = A, 1 = B). Casamento por (cs, no, ocorrencia); salto de translacao grande
     // ou LOD diferente = B sem mistura. HUD, icones e lista de alta prioridade, que o jogo poe na frente da camera a cada quadro, nao
     // sao misturados: vao para a camera misturada pela posicao relativa a camera de B (misturar a matriz deles tremia contra a cena).
-    // Particulas, flares, texto e fades ficam os de B. Corte de camera = show(B). Devolve a camera desenhada; cut diz se houve corte.
+    // Particulas e destroços recuam pela velocidade (etapa 2; Particles::stepBack). Flares, texto e fades ficam os de B. Corte de
+    // camera = show(B). Devolve a camera desenhada; cut diz se houve corte.
     GameCamera showBlend(const Snapshot &A, const Snapshot &B, float alpha, bool *cut = nullptr) {
         const GameCamera cb = show(B);
         if (cut) *cut = false;
@@ -2322,10 +2327,119 @@ public:
         const M4 rebase = mul(interp::rigidInverse(interp::cameraToWorld(B.cam)), interp::cameraToWorld(c));
         for (std::vector<DrawItem> *l : {&hud, &overlay, &hp, &hpOverlay})
             for (DrawItem &it : *l) it.m = mul(it.m, rebase);
+        // Particulas: recuadas pela velocidade (1 - alpha) do passo de B (Particles::stepBack); as que nasceram no passo ficam em B
+        const uint32_t gap = B.fields - A.fields;
+        static const bool fxOff = std::getenv("WOTM_INTERP_NOFX") != nullptr;   // diagnostico: particulas de B, como na etapa 1
+        if (!fxOff && A.fields && gap >= 1 && gap <= 4) {
+            const float f = float(gap), back = 1.f - alpha;
+            static const bool log = std::getenv("WOTM_INTERPLOG") != nullptr;
+            static uint32_t loggedG = 0;
+            if (log && B.g != loggedG && A.fxRam && A.fxRamSize && B.fxRam && B.fxRamSize) {   // uma vez por par
+                loggedG = B.g;
+                logStepBack(A, B, f);
+            }
+            for (Sprite &sp : sprites) {   // destroços
+                const float d[3] = {f * sp.step[0], f * sp.step[1], f * (sp.step[2] - sp.grav * f)};
+                if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.f * 400.f) continue;
+                for (int k = 0; k < 3; ++k) sp.pos[k] -= back * d[k];
+            }
+            if (B.fxRam && B.fxRamSize) {
+                if (!fxMix_ || fxMixSize_ != B.fxRamSize) {
+                    fxMix_.reset(new uint8_t[B.fxRamSize], std::default_delete<uint8_t[]>());
+                    fxMixSize_ = B.fxRamSize;
+                }
+                uint8_t *dst = fxMix_.get();
+                Particles::blendRam(dst, Ram{B.fxRam.get(), B.fxRamSize}, fx.systems, back, f);
+                // worldToScreenMat da vista com a camera misturada (strite, linha e neblina a leem): os eixos de B trocados pelos
+                // misturados, M' = M_B C_B^T C_I nas colunas 0-2 (C = linhas direita, frente, cima; d = p - olho); o olho em worldCtx.eo
+                const uint32_t v = uint32_t(std::clamp(B.vctx.view, 0, 4));
+                const M4 CB = interp::cameraToWorld(B.cam), CI = interp::cameraToWorld(c);
+                float T[3][3];
+                for (int j = 0; j < 3; ++j)
+                    for (int k = 0; k < 3; ++k) T[j][k] = CB.m[0][j] * CI.m[0][k] + CB.m[1][j] * CI.m[1][k] + CB.m[2][j] * CI.m[2][k];
+                float M[16], eo[3];
+                std::memcpy(M, dst + addr::worldToScreenMat + 0x40 * v, sizeof M);
+                for (int r = 0; r < 4; ++r) {
+                    float row[3];
+                    for (int k = 0; k < 3; ++k) row[k] = M[4 * r] * T[0][k] + M[4 * r + 1] * T[1][k] + M[4 * r + 2] * T[2][k];
+                    for (int k = 0; k < 3; ++k) M[4 * r + k] = row[k];
+                }
+                std::memcpy(dst + addr::worldToScreenMat + 0x40 * v, M, sizeof M);
+                for (int k = 0; k < 3; ++k) eo[k] = -c.pos[k];
+                std::memcpy(dst + addr::worldCtx + 0x1F0 * v + 0x20, eo, sizeof eo);
+                fxRam_ = fxMix_;
+            }
+        }
         cam_ = c;
         eyeOk_ = c.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = c.pos[i];
         return c;
+    }
+
+    // Diagnostico do recuo (WOTM_INTERPLOG): cada particula que andou, recuada um passo inteiro (alfa 0), contra a mais proxima do
+    // mesmo sistema em A; "sem" = a mesma distancia sem recuo. Destroços pelo passo guardado no Sprite, contra os do mesmo fx em A.
+    static void logStepBack(const Snapshot &A, const Snapshot &B, float f) {
+        const Ram ra{A.fxRam.get(), A.fxRamSize}, rb{B.fxRam.get(), B.fxRamSize};
+        double eR = 0, eS = 0;
+        long cnt = 0;
+        auto nearest = [](const float p[3], const std::vector<std::array<float, 3>> &pts) {
+            float best = 1e30f;
+            for (const auto &q : pts) best = std::min(best, (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) + (p[2] - q[2]) * (p[2] - q[2]));
+            return std::sqrt(best);
+        };
+        for (const FxSystem &s : B.fx) {
+            if (std::none_of(A.fx.begin(), A.fx.end(), [&](const FxSystem &x) { return x.index == s.index; })) continue;
+            Particles::StepBack o;
+            if (!Particles::stepBack(rb, s.base, s.n, o) || !o.moved) continue;
+            const int nA = int32_t(ra.u32(s.base + fxoff::numParticles));
+            const uint32_t pa = ra.u32(s.base + fxoff::pos), pb = rb.u32(s.base + fxoff::pos), vb = rb.u32(s.base + fxoff::vel);
+            if (nA <= 0 || nA > 1024 || !ra.ok(pa, 16 * uint32_t(nA)) || !rb.ok(pb, 16 * uint32_t(o.moved)) || !rb.ok(vb, 16 * uint32_t(o.moved))) continue;
+            std::vector<std::array<float, 3>> pts(static_cast<size_t>(nA));
+            for (int j = 0; j < nA; ++j)
+                for (int k = 0; k < 3; ++k) pts[size_t(j)][size_t(k)] = ra.f32(pa + 16 * uint32_t(j) + 4 * uint32_t(k));
+            for (int i = 0; i < o.moved; ++i) {
+                float p[3], v[3], d[3], r[3];
+                for (int k = 0; k < 3; ++k) { p[k] = rb.f32(pb + 16 * uint32_t(i) + 4 * uint32_t(k)); v[k] = rb.f32(vb + 16 * uint32_t(i) + 4 * uint32_t(k)); }
+                Particles::stepOffset(o, v, f, d);
+                for (int k = 0; k < 3; ++k) r[k] = p[k] - d[k];
+                eR += nearest(r, pts);
+                eS += nearest(p, pts);
+                ++cnt;
+            }
+        }
+        double sR = 0, sS = 0;
+        long sc = 0;
+        for (const Sprite &sp : B.sprites) {
+            if (sp.step[0] == 0.f && sp.step[1] == 0.f && sp.step[2] == 0.f) continue;
+            std::vector<std::array<float, 3>> pts;
+            for (const Sprite &a : A.sprites)
+                if ((a.key >> 12) == (sp.key >> 12)) pts.push_back({a.pos[0], a.pos[1], a.pos[2]});
+            if (pts.empty()) continue;
+            const float r[3] = {sp.pos[0] - f * sp.step[0], sp.pos[1] - f * sp.step[1], sp.pos[2] - f * (sp.step[2] - sp.grav * f)};
+            sR += nearest(r, pts);
+            sS += nearest(sp.pos, pts);
+            ++sc;
+        }
+        // worldToScreenMat refeita com a camera de A (a do alfa 0, como no showBlend) contra a gravada em A: maior diferenca relativa
+        float matErr = 0.f;
+        {
+            const uint32_t v = uint32_t(std::clamp(B.vctx.view, 0, 4)), wa = addr::worldToScreenMat + 0x40 * v;
+            const M4 CB = interp::cameraToWorld(B.cam), CA = interp::cameraToWorld(A.cam);
+            float T[3][3], scale = 0.f;
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k) T[j][k] = CB.m[0][j] * CA.m[0][k] + CB.m[1][j] * CA.m[1][k] + CB.m[2][j] * CA.m[2][k];
+            for (int r = 0; r < 4; ++r)
+                for (int k = 0; k < 3; ++k) {
+                    const float m = rb.f32(wa + 16 * uint32_t(r)) * T[0][k] + rb.f32(wa + 16 * uint32_t(r) + 4) * T[1][k] + rb.f32(wa + 16 * uint32_t(r) + 8) * T[2][k];
+                    const float a = ra.f32(wa + 16 * uint32_t(r) + 4 * uint32_t(k));
+                    matErr = std::max(matErr, std::fabs(m - a));
+                    scale = std::max(scale, std::fabs(a));
+                }
+            matErr = scale > 0.f ? matErr / scale : 0.f;
+        }
+        if (cnt || sc)
+            std::fprintf(stderr, "[interp] recuo g=%u f=%.0f: %ld particulas, erro medio %.2f (sem recuo %.2f); %ld destroços, %.2f (sem %.2f); matriz %.5f\n", B.g, f, cnt,
+                         cnt ? eR / double(cnt) : 0.0, cnt ? eS / double(cnt) : 0.0, sc, sc ? sR / double(sc) : 0.0, sc ? sS / double(sc) : 0.0, matErr);
     }
 
     // ---- Particulas (fx[], 0x5BA280: 98 x 0x2EE0 bytes; o VU1 monta os quadrados, aqui viram sprites voltados para a camera) ----
@@ -2348,6 +2462,9 @@ public:
             if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b, wide)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
+            Particles::StepBack sb;   // interpolacao (showBlend): o passo de cada destroço
+            const uint32_t velp = ram.u32(b + fxoff::vel);
+            const bool haveStep = Particles::stepBack(ram, b, int(np), sb) && ram.ok(velp, 16 * uint32_t(sb.moved));
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));
             const float minS = ram.f32(b + 0x2E30 + 8), maxS = ram.f32(b + 0x2E30 + 0xC);
             const uint32_t texLoad = ram.u16(b + 0x2C40);
@@ -2381,6 +2498,11 @@ public:
                 if (a < 0 || (life > 0 && a >= life)) continue;
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
                 s.key = i * 4096u + k;
+                if (haveStep && int(k) < sb.moved) {
+                    for (int c = 0; c < 3; ++c) s.step[c] = ram.f32(velp + 16 * k + 4 * uint32_t(c)) + sb.wind[c];
+                    s.grav = sb.grav;
+                    if (sb.keepZ) { s.step[2] = 0.f; s.grav = 0.f; }
+                }
                 if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild, microprograma 0x1180)
                     // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os bits baixos sorteados.
                     //  - lado = max(minSize, |w| maxSize / 2) (q330 = (minSize, contador, 128, maxSize / 2)), sem giro;
@@ -3894,7 +4016,9 @@ private:
     GameCamera cam_;   // camera do ultimo collect/blend (eixos para os sprites)
     bool eyeOk_ = false;
     float eye_[3] = {0, 0, 0};
-    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado
+    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado (ou fxMix_ na interpolacao)
+    std::shared_ptr<uint8_t> fxMix_;         // copia de sombra das particulas no instante misturado (showBlend, Particles::blendRam)
+    size_t fxMixSize_ = 0;
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual

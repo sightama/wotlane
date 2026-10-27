@@ -252,3 +252,30 @@ comparado com o relógio):
 
 Redesenho de 1 vista a 180 Hz com a mistura: 2,8–3,4 ms (sem ela, etapa 0: 2,3–2,7). `tools\corpus.ps1 -Check` sem mudança (o replay
 não interpola). Tela dividida com a mistura: `docs/screenshots/2026-10-26/2026-10-26_interpolacao_tela_dividida.png`.
+
+## 9. Etapa 2 implementada (2026-10-26)
+
+`Particles::stepBack`/`blendRam` (wotm_fx.hpp) e o bloco de partículas do `Scene::showBlend`. Diferenças em relação ao plano da seção 5:
+- **Tamanho:** o plano recuava `pos.w` por `vel.w`, mas no `particleMove` o `vel.w` é o passo da cor (vis 1 e 6), e o tamanho cresce
+  pelas taxas de expansão. `pos.w` fica o de B.
+- **Gravidade:** entra na velocidade depois do movimento, então sai do recuo (`f·(vel − (0, 0, g·f))`). O vento (`accel`, com o `Gusts`)
+  entra.
+- **Nascidas no passo:** o critério é o `newParticles` (+0x2EDE), não a idade. As do fim da lista ficam em B.
+- **Destroços:** guardam o passo no `Sprite` na coleta, porque a chave `fx·4096 + índice` não casa entre quadros.
+- **Matriz:** a `worldToScreenMat` da cópia vira `M_B·C_Bᵀ·C_I`, e não uma matriz refeita do zero com 384 e 180,48: assim vale para
+  qualquer foco e vista.
+
+Checagem embutida no `WOTM_INTERPLOG` (`[interp] recuo`). Cada partícula que andou é recuada um passo inteiro (α = 0) e comparada com a
+mais próxima do mesmo sistema em A; a matriz é refeita com a câmera de A e comparada com a de A. Lutas IA x IA de 45 s
+(`WOTM_MATCH=3,1,1`, 180 Hz):
+
+| Rodada | Partículas (erro médio / sem recuo) | Destroços (idem) | Matriz (dif. relativa máx.) |
+|---|---|---|---|
+| 1 jogador | 430 mil: 0,001 / 1,05 | 616 mil: 0,002 / 2,68 | 0,00000 |
+| 2 jogadores | 523 mil: 0,001 / 1,42 | 594 mil: 0,000 / 3,15 | 0,00000 |
+
+Os poucos pares com erro de 0,4 a 4,7 têm atração, órbita ou caixa (forças somadas depois do movimento), ou são o vizinho errado da
+busca. Custo: o `show` sobe ~0,1 ms por redesenho (a cópia de ~1,3 MB de `fx[]` e das tabelas), de 0,05–0,08 para 0,13–0,18 ms. O
+redesenho todo fica nos mesmos 2–4,5 ms da etapa 1. A checagem do log é quadrática e custa até ~0,7 ms, então tempo se mede sem ela.
+`tools\corpus.ps1 -Check` sem mudança. Foto: `docs/screenshots/2026-10-26/2026-10-26_interpolacao_particulas.png` (sopro de fogo
+com a mistura). Ficam para conferir na tela: o fogo preso ao monstro andando (o emissor não recua) e o tiro do Robo-47.

@@ -35,7 +35,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 ## Brechas (baratas, em qualquer momento)
 
 ## Contínuas
-- **Interpolação de quadros (escolhida pelo dono):** câmera, objetos, ossos, céu e sombras já misturam (opção INTERPOLATE FRAMES, desligada por padrão; `NATIVO.md`, "Taxa de apresentação"); falta o dono conferir na tela (monitor de 180 Hz: giro rápido de câmera, agarrão, intro da luta, HUD parado). Etapas seguintes do estudo (`docs/investigacoes/2026-10-19/interpolacao.md`, seção 5): partículas e destroços recuados pela velocidade (2), lens flare, barras do inimigo e ícone de vida reprojetados (3), texId 0 e tela dividida com o par anterior (4), ligar por padrão acima de 60 Hz (5).
+- **Interpolação de quadros (escolhida pelo dono):** câmera, objetos, ossos, céu, sombras, partículas e destroços já misturam (opção INTERPOLATE FRAMES, desligada por padrão; `NATIVO.md`, "Taxa de apresentação"); falta o dono conferir na tela (monitor de 180 Hz: giro rápido de câmera, agarrão, intro da luta, HUD parado, sopro do Magmo, tiro do Robo-47, destroços de prédio, fogo no monstro andando). Etapas seguintes do estudo (`docs/investigacoes/2026-10-19/interpolacao.md`, seção 5): lens flare, barras do inimigo e ícone de vida reprojetados (3), texId 0 e tela dividida com o par anterior (4), ligar por padrão acima de 60 Hz (5).
 - **Fora do caminho crítico:** oracle para funções com chamadas; cobertura com gameplay para realimentar o `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, seções 2 e 3).
 
 ## Fora da ordem (até o dono escolher)

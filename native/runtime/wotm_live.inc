@@ -1206,12 +1206,16 @@ void wotmCaptureFrame(const uint8_t *rdram)
     static float prevMats[wotm_live::kMaxViews][16];
     static bool havePrev = false;
     sn.fxRam = wotm::Particles::shadowRam(ram, split ? fxAll : sn.fx, split && havePrev ? &prevMats[0][0] : nullptr);
+    sn.fxRamSize = sn.fxRam ? ram.size : 0;
     for (int k = 0; k < 16 * wotm_live::kMaxViews; ++k)
         prevMats[k / 16][k % 16] = ram.f32(wotm::fxaddr::viewPrevMat + 4u * uint32_t(k));
     havePrev = true;
     for (auto &vs : sn.views)
         if (vs)
+        {
             vs->fxRam = sn.fxRam;
+            vs->fxRamSize = sn.fxRamSize;
+        }
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.anchors = std::move(anchors);
