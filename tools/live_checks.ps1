@@ -13,7 +13,7 @@ $checks = [ordered]@{
     # monstros antes da luta fica numa vista so (wotm_split4.inc, cinemaViews) ate o quadro ~520 do jogo: 60 s para a amostra passar dela
     'partida_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=3D3978,3D3920,3D3924,3D3928,3D392C,6F8AE0,6F8E30'; Secs = 60
                          Expect = '\[native\] recursos: CENTRAL \S+ \S+ \S+ \S+\r?\n|||3d3978=00000004|||3d3928=(?!00000000)[0-9a-f]{8}|||3d392c=(?!00000000)[0-9a-f]{8}|||6f8ae0=00000004|||6f8e30=00000004' }
-    # jogadores derrubados voltam: a cada 8 s de jogo (16 s reais: com 3+ jogadores o jogo roda a 30 quadros/s) o "vencer" derruba os
+    # jogadores derrubados voltam: a cada 8 s de jogo o "vencer" derruba os
     # jogadores 2..4 (e as IAs); se todos voltaram, a segunda vez derruba todos de novo (3 sem IA; antes, so o jogador 2 voltava). Com IA, o m_playerNum (+0x18) dos jogadores 3/4 (monstros em 0x2D6440 e 0x2E75D0, slots 2 e 3)
     # continua 1 (humano), nunca 2 (IA)
     'volta_4'       = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_CHEATS=vencer=8'; Secs = 50
@@ -26,7 +26,7 @@ $checks = [ordered]@{
     'largada_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_SPLITLOG=1'; Secs = 30
                          Expect = 'largada: m_monsters\[0\]|||largada: m_monsters\[1\]|||largada: m_monsters\[2\]|||largada: m_monsters\[3\]'
                          Reject = 'largada: m_monsters\[[0-3]\] \(playerNum \d\) em (\S+)\r?\n[\s\S]*?largada: m_monsters\[[0-3]\] \(playerNum \d\) em \1\r?\n|||\[CRASH\]|||\[vigia\] CONGELOU' }
-    # motion blur com 4 vistas: o MotionBlurAA::init recebe as 4 (vistas em 0x6F8578; o bss dele tem lugar para 4, POS_FRONTEIRA.md item 11)
+    # motion blur com 4 vistas: o MotionBlurAA::init recebe as 4 (vistas em 0x6F8578; o bss dele tem lugar para 4, NATIVO.md, "Tela dividida de 3 e 4 jogadores")
     'borrao_4'      = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8578'; Secs = 35
                          Expect = '6f8578=00000004'
                          Reject = '6f8578=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
@@ -37,7 +37,7 @@ $checks = [ordered]@{
     # regressao: o 2 jogadores continua desenhando a tela dividida (redesenhos com 2 vistas) e nunca a tela em 4
     'tela_2'        = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;PS2X_STATS=1'; Secs = 40
                          Expect = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
-                         Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
+                         Reject = '[34] vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # tela em 4: a camada nativa captura as 4 vistas (linhas [split] da vista 3) e redesenha com 4 vistas (linha [native] redesenho);
     # a foto shot_30.png (discroot) fica para conferir os quadrantes a olho
     'tela_4'        = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;WOTM_SPLITLOG=1;WOTM_SHOTS=30'; Secs = 40
@@ -46,7 +46,7 @@ $checks = [ordered]@{
     # nunca os quadrantes); foto shot_30.png com a vista do jogador 3 ampliada do quadrante dele, HUD e texto do jogo incluidos
     'local_4'       = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;WOTM_LOCALPLAYER=3;PS2X_STATS=1;WOTM_SHOTS=30'; Secs = 40
                          Expect = 'redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
-                         Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
+                         Reject = '[34] vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # 2 jogadores com vista local: as duas vistas no viewport 0 (viewInfo[1].viewport em 0x6E191C = 0), sem a metade 2:3
     'local_2'       = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;WOTM_LOCALPLAYER=2;PS2X_STATS=1;PS2X_PEEK=6F8AE0,6E191C;WOTM_SHOTS=30'; Secs = 40
                          Expect = '6f8ae0=00000002 6e191c=00000000|||redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
@@ -55,14 +55,13 @@ $checks = [ordered]@{
     # sem o corte das 4 vistas do jogo (centenas de objetos), e uma vista na tela; foto shot_30.png para conferir
     'local_5'       = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=5;WOTM_LOCALPLAYER=5;PS2X_STATS=1;WOTM_SHOTS=30'; Secs = 45
                          Expect = '\[chase\] jogador 5: camera a [2-4]\d\d unidades do monstro, \d{3,} objetos|||redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
-                         Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
-    # padrao sem WOTM_FULLSCREEN/WOTM_RES/WOTM_SSAA: tela cheia sem borda, quadro no dobro da resolucao do monitor (superamostragem 2x;
-    # no monitor 1 desta maquina, WOTM_MONITOR padrao do live_check: 1920x1080) e reduzido na apresentacao; WOTM_SSAA=1 = quadro na
-    # resolucao do monitor
-    'tela_nativa'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_SSAA=;WOTM_MATCH=3,1,1'; Secs = 25
-                         Expect = '\[native\] quadro 3840x2160, janela 1920x1080 \(tela cheia' }
-    'tela_sem_ssaa' = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_SSAA=1;WOTM_MATCH=3,1,1'; Secs = 25
-                         Expect = '\[native\] quadro 1920x1080, janela 1920x1080 \(tela cheia' }
+                         Reject = '[34] vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # padrao sem WOTM_FULLSCREEN/WOTM_RES/WOTM_RENDERSCALE (opcoes do painel; settings.ini ignorado): janela de 720 linhas em 16:9 e o
+    # quadro do mesmo tamanho; WOTM_RENDERSCALE=200 = quadro no dobro (supersampling), reduzido na apresentacao
+    'tela_padrao'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_RENDERSCALE=;WOTM_MATCH=3,1,1'; Secs = 25
+                         Expect = '\[native\] quadro 1280x720, janela 1280x720 \(janela' }
+    'tela_escala'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_RENDERSCALE=200;WOTM_MATCH=3,1,1'; Secs = 25
+                         Expect = '\[native\] quadro 2560x1440, janela 1280x720 \(janela' }
     # a vista unificada (todos numa tela so no combate de perto, gUseUnifiedView 0x6F8A8C) nunca liga com 3+ jogadores
     'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
                          Expect = '6f8a8c=00000000'

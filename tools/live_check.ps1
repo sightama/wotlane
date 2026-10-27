@@ -22,6 +22,7 @@ if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }
 if (-not $env:WOTM_FULLSCREEN) { $env:WOTM_FULLSCREEN = '0' }
 if (-not $env:WOTM_MONITOR) { $env:WOTM_MONITOR = '1' }   # fora do monitor principal (raylib 0); este PC: 1 = o da esquerda
 if (-not $env:WOTM_RES) { $env:WOTM_RES = '720' }
+if (-not $env:WOTM_SETTINGS) { $env:WOTM_SETTINGS = '0' }   # o settings.ini deste PC (painel do jogo) nao muda a checagem
 foreach ($pair in ($Env -split ';' | Where-Object { $_.Trim() })) {
     $i = $pair.IndexOf('=')
     if ($i -lt 1) { throw "Par invalido em -Env: $pair" }
