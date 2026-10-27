@@ -250,7 +250,11 @@ base `final`), os dois com `"ai": true` e o narrador `cerebulon`. A primeira fas
   do jogo não pede botão (na fase final o roteiro do `FinalBoss::updateJelly` decide), e com o Jelly jogador o choque saía
   sozinho; o port só o deixa começar com os dois botões apertados no controle do jogador. O choque gasta o especial, e o Jelly
   jogador pega o item de especial como um monstro comum (o retail o recusa aos tipos 0x1C0/0x1E0). Jelly CPU: como no retail.
-  Log: `[custom] Jelly: choque (Triangulo+Circulo)`.
+  **Alvo:** o `StateUltraTazer::update` mira o `game->m_monsters[0]` (na fase final, o jogador), sem limite de distância; com o
+  Jelly jogador, durante o choque esse alvo é o inimigo vivo mais perto (qualquer monstro ativo, jogador ou CPU). O choque só
+  começa com um inimigo a até 1200 (o Jelly é enorme: na luta o inimigo fica a ~700–1100) e acaba se nenhum ficar a até 1500.
+  Log: `[custom] Jelly: alvo do choque tipo 1 a 787`, `[custom] Jelly: choque (Triangulo+Circulo)`, ou
+  `[custom] Jelly: choque sem inimigo a 1200 (o mais perto a 1250)`.
 - O retrato do HUD fica cinza (sem `"portrait"`).
 
 Exemplo: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,

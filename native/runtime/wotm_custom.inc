@@ -443,7 +443,34 @@ namespace wotm_custom
     // segue sendo consultado). O Jelly sob a IA (m_playerNum 2) e o da aventura seguem o retail.
     constexpr uint32_t kTazerOK = wotm::fn::transitionOK__15StateUltraTazer, kPadButtons = wotm::fn::inputGetPadButtons__Fi;
     constexpr uint32_t kBtnTriangle = 0x1000, kBtnCircle = 0x2000;   // libpad (inputGetPadButtons ja inverte os ativos em 0)
-    PS2Runtime::RecompiledFunction g_origTazerOK = nullptr;
+    constexpr uint32_t kTazerUpdate = wotm::fn::update__15StateUltraTazer;
+    constexpr float kTazerReach = 1200.f, kTazerKeep = 1500.f;   // inimigo mais perto para comecar e para continuar o choque
+    PS2Runtime::RecompiledFunction g_origTazerOK = nullptr, g_origTazerUpdate = nullptr;
+    bool g_tazerHeld[4] = {};   // Triangulo+Circulo ja apertados na chamada anterior do transitionOK sem alvo (por jogador)
+
+    // Monstro vivo e ativo (m_playerNum 1 ou 2) de outro slot mais perto de `m`, a no maximo `maxDist`; 0 sem nenhum
+    uint32_t nearestEnemy(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, float maxDist, float *dist)
+    {
+        const uint32_t cs = READ32(m + kCs), slots = std::min(16u, READ32(kGameObj + kNumSlots));
+        if (!cs)
+            return 0;
+        float p[3], q[3], best = maxDist * maxDist;
+        uint32_t near = 0;
+        std::memcpy(p, rdram + ((cs + kTrans) & 0x01FFFFFFu), 12);
+        for (uint32_t i = 0; i < slots; ++i)
+        {
+            const uint32_t o = kGameObj + kSlots + i * kSlotStride, ocs = READ32(o + kCs), pn = READ32(o + kPlayerNum);
+            if (o == m || !ocs || (pn != 1u && pn != 2u) || READ8(o + kDead))
+                continue;
+            std::memcpy(q, rdram + ((ocs + kTrans) & 0x01FFFFFFu), 12);
+            const float d = (q[0] - p[0]) * (q[0] - p[0]) + (q[1] - p[1]) * (q[1] - p[1]) + (q[2] - p[2]) * (q[2] - p[2]);
+            if (d < best)
+                best = d, near = o;
+        }
+        if (dist)
+            *dist = std::sqrt(best);
+        return near;
+    }
 
     void tazerOK(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -455,13 +482,50 @@ namespace wotm_custom
         if (player >= 0 && READ32(m + kTypeBits) == kJelly && READ32(m + kPlayerNum) != 2u)
         {
             const uint32_t b = wotm_modes4::call(rdram, ctx, runtime, kPadButtons, {uint32_t(player)});
-            if ((b & (kBtnTriangle | kBtnCircle)) != (kBtnTriangle | kBtnCircle))
+            float d = 0.f;
+            const uint32_t target = (b & (kBtnTriangle | kBtnCircle)) == (kBtnTriangle | kBtnCircle) ? nearestEnemy(rdram, ctx, runtime, m, kTazerReach, &d) : 0;
+            if (!target)
             {
+                const bool pressed = (b & (kBtnTriangle | kBtnCircle)) == (kBtnTriangle | kBtnCircle);
+                if (pressed && !g_tazerHeld[player])   // um aviso por aperto (o transitionOK roda a cada quadro)
+                {
+                    float far = 0.f;
+                    nearestEnemy(rdram, ctx, runtime, m, 1e6f, &far);
+                    std::fprintf(stderr, "[custom] Jelly: choque sem inimigo a %.0f (o mais perto a %.0f)\n", kTazerReach, far);
+                }
+                g_tazerHeld[player] = pressed;
                 ret(ctx, 0);
                 return;
             }
+            g_origTazerOK(rdram, ctx, runtime);
+            if (GPR_U32(ctx, 2))
+                std::fprintf(stderr, "[custom] Jelly: alvo do choque tipo %u a %.0f\n", READ32(target + kTypeBits) >> 5, d);
+            return;
         }
         g_origTazerOK(rdram, ctx, runtime);
+    }
+
+    // Alvo do choque: o StateUltraTazer::update mira game->m_monsters[0] (na fase final, o jogador), sem limite de distancia:
+    // raios dos locators do Jelly aos dele, empurrao e golpe (dispatchHit). Com o Jelly jogador o alvo era ele mesmo. Durante a
+    // chamada, m_monsters[0] vale o inimigo vivo mais perto (qualquer slot ativo, jogador ou IA); sem ninguem a kTazerKeep, vale
+    // o proprio Jelly com m_dead ligado, e o update sai para o Idle como faz com o alvo morto.
+    void tazerUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = ctx->pc == kTazerUpdate ? READ32(GPR_U32(ctx, 4) + kStateOwner) : 0;
+        if (!m || READ32(m + kTypeBits) != kJelly || !isPlayerSlot(rdram, ctx, runtime, m) || READ32(m + kPlayerNum) == 2u)
+        {
+            g_origTazerUpdate(rdram, ctx, runtime);
+            return;
+        }
+        const uint32_t target = nearestEnemy(rdram, ctx, runtime, m, kTazerKeep, nullptr), p1 = READ32(kGameObj + kMonsters);
+        const uint8_t dead = READ8(m + kDead);
+        WRITE32(kGameObj + kMonsters, target ? target : m);
+        if (!target)
+            WRITE8(m + kDead, 1);
+        g_origTazerUpdate(rdram, ctx, runtime);
+        WRITE32(kGameObj + kMonsters, p1);
+        if (!target)
+            WRITE8(m + kDead, dead);
     }
     // O choque gasta o especial (o StateUltraTazer::update zera o m_specialWeapon), e o PowerUps::TakeHit nao deixa os tipos
     // 0x1C0/0x1E0 pegarem o item de especial (na fase final o roteiro e quem o liga). Com o Jelly jogador, durante a chamada o tipo
@@ -497,6 +561,8 @@ void wotmCustomInstall(PS2Runtime &runtime)
         runtime.registerFunction(kImpale, &impale);
     if ((g_origTazerOK = runtime.lookupFunction(kTazerOK)))
         runtime.registerFunction(kTazerOK, &tazerOK);
+    if ((g_origTazerUpdate = runtime.lookupFunction(kTazerUpdate)))
+        runtime.registerFunction(kTazerUpdate, &tazerUpdate);
     if ((g_origPowerUpHit = runtime.lookupFunction(kPowerUpHit)))
         runtime.registerFunction(kPowerUpHit, &powerUpHit);
     if ((g_origLookAt = runtime.lookupFunction(kLookAt)))
