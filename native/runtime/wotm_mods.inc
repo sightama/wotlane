@@ -8,7 +8,7 @@
 // Arquivo de mod maior que o do disco: os monstros (MON/*) e as texturas da fase carregam em sequencia acima de 32 MB (RAM alta),
 // entao so empurram o que vem depois; o log da carga ("[wotm] carga da fase") diz a folga de RAM e os texIds usados. Com
 // WOTM_HIGHRAM=0, e para os outros arquivos (fase, SHELL, bancos de som), o jogo carrega em regioes de tamanho fixo e um arquivo
-// maior pode sobrescrever o que vem depois (o log avisa). WOTM_MODS=<pasta> troca a pasta (padrao: mods/ ao lado do ELF); =0 desliga.
+// maior pode sobrescrever o que vem depois (o log avisa). WOTM_MODS=<pasta> troca a pasta (padrao: mods/ ao lado do ELF, senao a do repo); =0 desliga.
 #include "wotm_mods.hpp"
 #include <set>
 
@@ -117,7 +117,22 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
         dir = e;
     }
     else
+    {
+        // mods/ com esse nome exato: no Windows o caminho "mods" ao lado do ELF da pasta do disco cai no MOD/ do jogo (os IRX)
+        auto modsIn = [](const fs::path &parent) {
+            std::error_code ec;
+            for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))
+                if (it->path().filename() == "mods" && it->is_directory(ec))
+                    return true;
+            return false;
+        };
         dir = fs::path(elfPath).parent_path() / "mods";
+        // sem ela, a do repo (WOTM_REPO, que o run_live.bat e o launcher passam): os mods que vem no repo (Goliath Prime,
+        // Cerebulon) valem sem copiar nada
+        const char *repo = std::getenv("WOTM_REPO");
+        if (!modsIn(fs::path(elfPath).parent_path()) && repo && *repo && modsIn(fs::path(repo)))
+            dir = fs::path(repo) / "mods";
+    }
     const size_t n = Registry::get().scan(dir);
     if (n == 0)
         return;   // sem arquivos de mod: nenhum gancho, o jogo le o disco como sempre

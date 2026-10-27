@@ -25,9 +25,9 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 
 
 ### 10. Chefes jogáveis
-- Os chefes já estão na tabela de tipos (em `MonsterNames.h`, índices 13 a 15); a seleção vai de 1 a 9 (até 10 com o bônus, `findAvailableMonster`).
-- Alguns chefes não são `Monster` comum (`NATIVO.md`, "Vencer a luta"): precisam de estados de controle, golpes e escala que caibam numa luta normal. Entram na seleção pelo caminho do item 8.
-- Goliath Prime já está feito, restam as 3 fases de Cerebulon. Plantboss não é viável.
+- Como estão: `MODS.md`, "Monstros custom" (Goliath, Jelly e Cerebulon; mod `mods/Cerebulon/`). Plantboss não é viável.
+- **Mecha** (primeira fase do Cerebulon): é peça da fase final (`FinalBoss::updateMecha`, hier 0x27A6..0x27A9), não `Monster`, como o Plantboss. Jogável só como monstro novo montado das peças (`tools/monglb.py --boss mecha` já as junta para o viewer). Decisão do dono.
+- Seleção nativa: conferir o enquadramento do Jelly e do Cerebulon na casa CUSTOM (`wotm_savepics.hpp`, `kFraming`).
 
 ### 13. Campanha com até 4 jogadores
 - A campanha é de 1 jogador: o modo de jogo (`m_gameMode`), as cenas de cinema e as fases com chefes (slots extras 0x1C0/0x1E0 no Capitólio, 0x1A0) precisam ser revistas.

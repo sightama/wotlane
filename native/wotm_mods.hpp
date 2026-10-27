@@ -49,7 +49,7 @@ inline const MonsterInfo *monsterInfo(int type) {
 }
 
 // Tipos que um monstro custom pode usar de base: os jogaveis e os chefes que o port ja deixa jogar (runtime/wotm_custom.inc)
-inline constexpr MonsterInfo kCustomBases[] = {{13, "assboss", "ASSBOSS"}};
+inline constexpr MonsterInfo kCustomBases[] = {{13, "assboss", "ASSBOSS"}, {14, "jelly", "JELLY"}, {15, "final", "FINAL"}};
 inline const MonsterInfo *customBase(const std::string &s) {
     if (const MonsterInfo *m = monsterInfo(s)) return m;
     for (const MonsterInfo &m : kCustomBases)
@@ -428,7 +428,7 @@ private:
                 const json::Value *base = v.get("base");
                 const MonsterInfo *mi = base && base->type == json::Value::Str ? customBase(lower(base->s)) : nullptr;
                 if (!mi) {
-                    std::fprintf(stderr, "[mods] monstro %s ignorado: \"base\" nao e um tipo aceito (togera, congar, ..., assboss)\n", where.c_str());
+                    std::fprintf(stderr, "[mods] monstro %s ignorado: \"base\" nao e um tipo aceito (togera, congar, ..., assboss, jelly, final)\n", where.c_str());
                     continue;
                 }
                 c.type = mi->type;

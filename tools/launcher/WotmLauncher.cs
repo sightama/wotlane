@@ -233,10 +233,8 @@ class Launcher : Form
     void LoadModSkins()
     {
         for (int k = 0; k < modSkins.Length; ++k) modSkins[k] = new List<KeyValuePair<string, string>>();
-        string rt = KnownRuntimeDir();
-        if (rt == null) return;
-        string mods = Path.Combine(Path.Combine(rt, "discroot"), "mods");
-        if (!Directory.Exists(mods)) return;
+        string mods = ModsDir();
+        if (mods == null) return;
         var dirs = new List<string>(Directory.GetDirectories(mods));
         dirs.Sort(StringComparer.OrdinalIgnoreCase);
         var byKey = new SortedDictionary<string, KeyValuePair<int, KeyValuePair<string, string>>>(StringComparer.Ordinal);
@@ -272,10 +270,8 @@ class Launcher : Form
     void LoadModCustoms()
     {
         modCustoms.Clear();
-        string rt = KnownRuntimeDir();
-        if (rt == null) return;
-        string mods = Path.Combine(Path.Combine(rt, "discroot"), "mods");
-        if (!Directory.Exists(mods)) return;
+        string mods = ModsDir();
+        if (mods == null) return;
         var dirs = new List<string>(Directory.GetDirectories(mods));
         dirs.Sort(StringComparer.OrdinalIgnoreCase);
         var byId = new SortedDictionary<string, string>(StringComparer.Ordinal);
@@ -570,6 +566,27 @@ class Launcher : Form
         {
             string dir = File.ReadAllText(saved).Trim();
             if (File.Exists(Path.Combine(dir, "run_live.ps1"))) return dir;
+        }
+        return null;
+    }
+    // A pasta mods que o jogo le (wotm_mods.inc): WOTM_MODS; senao mods\ ao lado do ELF (WOTM_DISC ou disc\ do repo, como o
+    // run_live.ps1); sem ela, mods\ do repo. null sem nenhuma.
+    string ModsDir()
+    {
+        string env = Environment.GetEnvironmentVariable("WOTM_MODS");
+        if (env == "0") return null;
+        if (!string.IsNullOrEmpty(env)) return Directory.Exists(env) ? env : null;
+        var dirs = new List<string>();
+        string disc = Environment.GetEnvironmentVariable("WOTM_DISC");
+        if (!string.IsNullOrEmpty(disc)) dirs.Add(Path.Combine(disc, "mods"));
+        dirs.Add(Path.Combine(Path.Combine(exeDir, "disc"), "mods"));
+        dirs.Add(Path.Combine(exeDir, "mods"));
+        foreach (string d in dirs)
+        {
+            string parent = Path.GetDirectoryName(d);
+            if (!Directory.Exists(parent)) continue;
+            foreach (string sub in Directory.GetDirectories(parent))
+                if (Path.GetFileName(sub) == "mods") return sub;   // nome exato: "mods" casaria com o MOD\ do disco
         }
         return null;
     }
