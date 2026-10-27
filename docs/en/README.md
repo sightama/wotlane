@@ -31,7 +31,6 @@ sense; our changes may be offered to upstream later as pull requests, as a court
 | [steps/VU1CHECK.md](steps/VU1CHECK.md) | [docs/passos/VU1CHECK.md](../passos/VU1CHECK.md) | VU1 vs native check: method, port inventory, open residues |
 | [steps/RUNTIME.md](steps/RUNTIME.md) | [docs/passos/RUNTIME.md](../passos/RUNTIME.md) | Recompiled runtime on Windows: fast build, running, keyboard, boot trace, useful addresses |
 | [steps/BOUNDARY.md](steps/BOUNDARY.md) | [docs/passos/FRONTEIRA.md](../passos/FRONTEIRA.md) | Hardware boundary: what of the PS2 the port still uses per frame and the plan to remove it |
-| [steps/AFTER_BOUNDARY.md](steps/AFTER_BOUNDARY.md) | `92af448:docs/passos/POS_FRONTEIRA.md` (deleted upstream) | Old priority list after the hardware boundary; open items now in [TODO.md](TODO.md), finished ones in the step docs |
 | [steps/MODS.md](steps/MODS.md) | [docs/passos/MODS.md](../passos/MODS.md) | `mods/` folder, textures as PNG, skins, custom monsters, `tools/modkit.py` |
 | [steps/TOOLS.md](steps/TOOLS.md) | [docs/passos/FERRAMENTAS.md](../passos/FERRAMENTAS.md) | Tools, shared headers, `TheGame` decomp status, differential testing |
 | [steps/PITFALLS.md](steps/PITFALLS.md) | [docs/passos/ARMADILHAS.md](../passos/ARMADILHAS.md) | Pitfalls already seen in the NM decomp, build and game |
