@@ -287,6 +287,8 @@ namespace wotm_sync
                 return netFail(g_net->message());
             wotm_netstatus::setMessage(s == Status::Connecting ? g_net->message() : "Esperando os outros jogadores chegarem a partida");
         }
+        if (stopRequested())
+            return;   // janela fechada antes de a partida comecar
         wotm_netstatus::g_waiting = false;
         wotm_netstatus::setMessage("");
         g_inputDelay = g_net->delay();
