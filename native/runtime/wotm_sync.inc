@@ -416,6 +416,22 @@ namespace wotm_sync
                      c.buildId.c_str(), c.configHash.c_str());
     }
 
+    // rtPauseRT (Start ou controle desligado) chama rtReturnToShell(2, campo) com o bit FIELD do CSR do GS, que o escalonador do
+    // runtime vira a cada vblank do host: no mesmo quadro, um PC guardava 1 e o outro 0 (gRtReturn + 4) e a pausa seguia diferente.
+    // No passo fixo o campo vem da paridade virtual, a mesma que o sceGsSyncV devolve (syncVParity). E o unico leitor do bit que
+    // guarda o valor na RAM do jogo (os outros so programam o GS: ieGsPutDispEnv, setPMODE, filmes)
+    constexpr uint32_t kRtReturnToShell = wotm::fn::rtReturnToShell__Fii, kRtPauseRT = wotm::fn::rtPauseRT__FUi;
+    constexpr uint32_t kRtPauseRTSize = 0x278u;
+    PS2Runtime::RecompiledFunction g_origRtReturn = nullptr;
+
+    void rtReturnFixedField(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t ra = GPR_U32(ctx, 31);
+        if (ctx->pc == kRtReturnToShell && ra - kRtPauseRT < kRtPauseRTSize)
+            SET_GPR_U32(ctx, 5, g_syncCalls & 1u);
+        g_origRtReturn(rdram, ctx, runtime);
+    }
+
     void init(PS2Runtime &runtime)
     {
         g_runtime = &runtime;
@@ -429,6 +445,8 @@ namespace wotm_sync
             g_fixedStep = std::clamp(std::atoi(e), 1, 4);
             if ((g_origSyncV = runtime.lookupFunction(kSyncV)))
                 runtime.registerFunction(kSyncV, &syncVParity);
+            if ((g_origRtReturn = runtime.lookupFunction(kRtReturnToShell)))
+                runtime.registerFunction(kRtReturnToShell, &rtReturnFixedField);
             runtime.registerFunction(kReadClock, &readClockFixed);
             if ((g_origPadRead = runtime.lookupFunction(kPadRead)))
                 runtime.registerFunction(kPadRead, &padReadLatched);
