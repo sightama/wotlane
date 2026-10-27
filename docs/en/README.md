@@ -2,6 +2,10 @@
 
 English translations of the project's Brazilian Portuguese docs. In every case the Portuguese original is authoritative; a translation may lag behind it. The main [README.md](../../README.md) is already in English and is not duplicated here.
 
+This repository ([sightama/wotlane](https://github.com/sightama/wotlane)) is a fork of
+[yanm1103/War_of_the_Monsters_recomp](https://github.com/yanm1103/War_of_the_Monsters_recomp) and the primary home of our work. We merge upstream changes wherever they make
+sense; our changes may be offered to upstream later as pull requests, as a courtesy, if the upstream owner wants them.
+
 ## Project
 | English | Original | Description |
 |---|---|---|

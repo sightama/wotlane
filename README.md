@@ -6,6 +6,11 @@ A decompilation and recompilation project for **War of the Monsters** (PS2, NTSC
 
 You need your own copy of the game. No game files are, or ever will be, in this repository.
 
+## About this fork
+This repository ([sightama/wotlane](https://github.com/sightama/wotlane)) is a fork of
+[yanm1103/War_of_the_Monsters_recomp](https://github.com/yanm1103/War_of_the_Monsters_recomp) and the primary home of our work, mainly online play with friends on separate
+PCs. We merge upstream changes wherever they make sense. Our changes may be offered to upstream later as pull requests, as a courtesy, if the upstream owner wants them.
+
 ## Status
 The game runs on Windows at 60 fps with native rendering: stages, monsters, particles, shadows, fog, menu text, HUD, screen fades and Hor+ widescreen. Fights are playable with the
 keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
