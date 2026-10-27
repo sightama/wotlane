@@ -35,7 +35,7 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 ## Brechas (baratas, em qualquer momento)
 
 ## Contínuas
-- **Interpolação de quadros (escolhida pelo dono):** a apresentação já vai na taxa do monitor (`NATIVO.md`, "Taxa de apresentação"), mas repete o quadro do jogo. Para quadros intermediários, o nativo desenharia a mistura dos dois últimos instantâneos (câmera, matrizes dos objetos, paleta de ossos), com um quadro de atraso; partículas e objetos que nascem ou somem entre os dois pedem tratamento à parte. Rodar a lógica acima de 60 não serve: o `updateRate` sai de 60/fields e muita coisa conta em quadros. Estudo em `docs/investigacoes/2026-10-19/interpolacao.md`.
+- **Interpolação de quadros (escolhida pelo dono):** câmera, objetos, ossos, céu, sombras, partículas, destroços, lens flare, barras sobre o inimigo, ícone de vida e fades misturam (opção INTERPOLATE FRAMES, ligada por padrão; `NATIVO.md`, "Taxa de apresentação"); falta o dono conferir na tela (monitor de 180 Hz: giro rápido de câmera, agarrão, intro da luta, HUD parado, sopro do Magmo, tiro do Robo-47, destroços de prédio, fogo no monstro andando, flare dos olhos e das luzes num giro, barras sobre o inimigo com `WOTM_ENEMYBARS`, transições de câmera do menu, tela dividida ligando e desligando, tela dividida a 180 Hz, onde a trava do redesenho pode suspender a mistura).
 - **Fora do caminho crítico:** oracle para funções com chamadas; cobertura com gameplay para realimentar o `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, seções 2 e 3).
 
 ## Fora da ordem (até o dono escolher)

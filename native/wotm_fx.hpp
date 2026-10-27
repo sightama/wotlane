@@ -1306,6 +1306,14 @@ public:
             buf = pool.back();
         }
         uint8_t *dst = buf.get();
+        copyRanges(dst, ram, systems);
+        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 4 * 64);
+        else std::memset(dst + fxaddr::viewPrevMat, 0, 4 * 64);
+        return std::shared_ptr<const uint8_t>(buf, buf.get());
+    }
+
+    // As faixas que o draw le (shadowRam), copiadas de src (a RAM viva ou outra copia de sombra) para dst, do mesmo tamanho
+    static void copyRanges(uint8_t *dst, const Ram &ram, const std::vector<FxSystem> &systems) {
         auto copy = [&](uint32_t a, uint32_t n) {
             if (a < 0x1000 || a >= ram.size) return;
             n = uint32_t(std::min<uint64_t>(n, ram.size - a));
@@ -1318,8 +1326,8 @@ public:
         copy(addr::worldToScreenMat, 5 * 0x40);
         copy(addr::worldCtx, 5 * 0x1F0);
         copy(addr::vu1FogParams, 16);
-        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 4 * 64);
-        else std::memset(dst + fxaddr::viewPrevMat, 0, 4 * 64);
+        copy(fxaddr::viewPrevMat, 4 * 64);
+        copy(wotm::sym::Gusts, 16);   // rajadas do vento (stepBack)
         const uint32_t lo = fxaddr::fx, hi = fxaddr::fx + fxaddr::count * fxaddr::stride;
         auto outside = [&](uint32_t a, uint32_t n) { return a < lo || uint64_t(a) + n > hi; };
         for (const FxSystem &s : systems) {
@@ -1335,7 +1343,61 @@ public:
             if (outside(age, 4 * n)) copy(age, 4 * n);
             if (pm && outside(pm, 64)) copy(pm, 64);
         }
-        return std::shared_ptr<const uint8_t>(buf, buf.get());
+    }
+
+    // Um passo do particleMove ao contrario (interpolacao de quadros, Scene::showBlend). O particleMove faz, com f = fields do passo,
+    // pos_B = pos_A + v f + vento f, e so depois soma a gravidade a velocidade (v_B = v + (0, 0, gravidade f)); o arrasto ja esta em
+    // v_B. Entao pos_A = pos_B - f (v_B + vento - (0, 0, gravidade f)). Por sistema: vento por field (field.wind; com o bit 0x400 do
+    // field.attribs, xyz + Gusts xyz * wind.w, senao so o z), gravidade (field.gravity; poeira, wake e pipa andam pelo dustMove e pelo
+    // wakeAndKiteMove, sem ela), quantas andaram (as primeiras n - newParticles: as do fim nasceram no passo e ficam onde estao) e z
+    // preso ao nivel da agua (wake e pipa com o bit 0x8000000 do emit.info.attribs). Falso = o sistema nao anda assim: arcos, sprine,
+    // corrente e rastro (pontos postos pelo jogo) e field.attribs 0x1000 (parado). O emissor que se move (fogo preso ao monstro) nao
+    // entra: a particula recua so pela propria velocidade.
+    struct StepBack { float wind[3] = {0, 0, 0}; float grav = 0.f; int moved = 0; bool keepZ = false; };
+    static bool stepBack(const Ram &ram, uint32_t b, int n, StepBack &o) {
+        constexpr uint32_t kField = 0x2DE0, kEmitAttribs = 0x2D80, kNewParticles = 0x2EDE;
+        const uint32_t type = ram.u32(b + fxoff::type), fa = ram.u32(b + kField);
+        if (type == FX_SWEEPTRAIL || type == FX_ARC || type == FX_ARC2 || type == FX_SPRINE || type == FX_CHAIN || (fa & 0x1000)) return false;
+        const float ww = ram.f32(b + kField + 0x1C);
+        o.wind[0] = o.wind[1] = 0.f;
+        o.wind[2] = ram.f32(b + kField + 0x18);
+        if (fa & 0x400)
+            for (int k = 0; k < 3; ++k) o.wind[k] = ram.f32(b + kField + 0x10 + 4 * uint32_t(k)) + ram.f32(wotm::sym::Gusts + 4 * uint32_t(k)) * ww;
+        const bool own = type == FX_DUSTTRAIL || type == FX_WAKE || type == FX_KITE;
+        o.grav = own ? 0.f : ram.f32(b + kField + 4);
+        o.keepZ = (type == FX_WAKE || type == FX_KITE) && (ram.u32(b + kEmitAttribs) & 0x8000000);
+        o.moved = std::clamp(n - int(ram.s16(b + kNewParticles)), 0, n);
+        for (float v : {o.wind[0], o.wind[1], o.wind[2], o.grav})
+            if (!std::isfinite(v)) return false;
+        return true;
+    }
+    // Deslocamento do passo (pos_B - pos_A) da particula de velocidade v
+    static void stepOffset(const StepBack &o, const float v[3], float f, float out[3]) {
+        for (int k = 0; k < 3; ++k) out[k] = f * (v[k] + o.wind[k]);
+        out[2] -= o.grav * f * f;
+        if (o.keepZ) out[2] = 0.f;
+    }
+
+    // Copia de sombra no instante entre A e B: as faixas de B (copyRanges) com as posicoes recuadas por back (1 - alfa) passos de
+    // `fields`. So xyz: pos.w (tamanho, com os bits baixos que escolhem a UV; idade na poeira e no wake) e a idade ficam as de B.
+    // Recuo maior que 400 unidades (velocidade lixo) fica em B.
+    static void blendRam(uint8_t *dst, const Ram &B, const std::vector<FxSystem> &systems, float back, float fields) {
+        copyRanges(dst, B, systems);
+        const Ram out{dst, B.size};
+        for (const FxSystem &s : systems) {
+            StepBack o;
+            if (!stepBack(out, s.base, s.n, o) || !o.moved) continue;
+            const uint32_t pos = out.u32(s.base + fxoff::pos), vel = out.u32(s.base + fxoff::vel);
+            if (!out.ok(pos, 16 * uint32_t(o.moved)) || !out.ok(vel, 16 * uint32_t(o.moved))) continue;
+            for (int i = 0; i < o.moved; ++i) {
+                float v[3], d[3];
+                std::memcpy(v, dst + vel + 16 * uint32_t(i), 12);
+                stepOffset(o, v, fields, d);
+                if (!std::isfinite(d[0] + d[1] + d[2]) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.f * 400.f) continue;
+                float *p = reinterpret_cast<float *>(dst + pos + 16 * uint32_t(i));
+                for (int k = 0; k < 3; ++k) p[k] -= back * d[k];
+            }
+        }
     }
 
     void collectFlares(const Ram &ram) {

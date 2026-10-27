@@ -199,3 +199,155 @@ Cada etapa liga por variável e fica desligada por padrão até o dono aprovar n
 - **Leituras vivas no desenho** (`node + 0x4C` no menu, `+0x28`, `+0x2C`, texturas): não mudam com a interpolação, mas fazem o teste
   α = 0/1 não ser bit a bit em algumas telas.
 - **texId 0**: efeitos que realimentam o quadro anterior mudariam de intensidade com mais redesenhos por segundo.
+
+## 7. Etapa 0 medida (2026-10-26)
+
+`WOTM_INTERP=redraw` (wotm_live.inc) redesenha a cena em toda apresentação, sem mistura. Luta IA x IA (`WOTM_MATCH=3,1,1
+WOTM_AIVSAI=1`, Congar x Togera na fase 1), 50 s por rodada, `PS2X_STATS` + `WOTM_DRAWSTATS`, janela no monitor de 75 Hz; 180 e 240 por
+`WOTM_HZ` com `WOTM_VSYNC=0`. "2 vistas" = começo da luta com `WOTM_PLAYERS=2` (depois os monstros ficam perto e a vista unifica).
+
+| Rodada | Apresentações/s | Redesenhos/s | Redesenho 1 vista (ms) | 2 vistas (ms) | GPU por redesenho (ms) | CPU do processo em 50 s |
+|---|---|---|---|---|---|---|
+| 75 Hz, hoje | 75 | 60 | 3,6 | 6,0 | 4,3 | 29 s |
+| 75 Hz, redraw | 75 | 75 | 3,1 | 5,3 | 3,7 | 31 s |
+| 180, hoje | 172 | 60 | 3,6 | 6,1 | 4,2 | 33 s |
+| 180, redraw | 173 | 173 | 2,4 | 4,3 | 2,2 | 47 s |
+| 240, hoje | 232 | 60 | 3,2 | 4,8 | 2,2 | 35 s |
+| 240, redraw | 223 | 223 | 2,1 | 3,7 | 2,6 | 54 s |
+
+- O redesenho cabe: a 180 o período é 5,5 ms e o redesenho de 1 vista fica em 2–3,5 ms (pior média de 300: 5,9 ms, num trecho de 60/s);
+  a taxa de apresentação não caiu. A 240 (4,2 ms) uma vista cabe e duas ficam no limite (perde ~4% das apresentações).
+- O custo é CPU: +45% no processo a 180 (~0,3 núcleo a mais), +55% a 240.
+- O tempo por redesenho cai com mais redesenhos por segundo (relógio da CPU/GPU mais alto); não é ganho do método.
+- Não medido: a mistura em si (estimada abaixo de 0,5 ms), 3 e 4 jogadores (4 vistas).
+
+Monitor principal de 180 Hz com vsync (mesmas lutas, `WOTM_MONITOR=0`):
+
+| Rodada | Apresentações/s | Redesenhos/s | Redesenho 1 vista (ms) | 2 vistas (ms) | GPU por redesenho (ms) | CPU do processo em 50 s |
+|---|---|---|---|---|---|---|
+| 1 jogador, hoje | 179,6 | 60 | 3,0 | — | 2,7 | 30 s |
+| 1 jogador, redraw | 177,1 | 177 | 2,7 | — | 2,4 | 52 s |
+| 2 jogadores, hoje | 180,2 | 60 | 2,8 | 4,7 | 3,3 | 35 s |
+| 2 jogadores, redraw | 175,9 | 176 | 2,3 | 4,6 | 3,2 | 68 s |
+
+- Com vsync o redesenho também cabe: perde 1,5% das apresentações com 1 vista e 2,5% com a tela dividida (4,6 ms de 5,5).
+- A CPU sobe mais que na simulação: +75% com 1 jogador e +90% com 2 (~0,45 e 0,65 núcleo a mais).
+
+## 8. Etapa 1 implementada (2026-10-26)
+
+Opção INTERPOLATE FRAMES (`WOTM_INTERP=1`): `Scene::showBlend` (wotm_native.hpp), relógio e par em `wotmDrawNative` (wotm_live.inc).
+Diferenças em relação ao plano: o par passa a ter três instantâneos (P, A, B; P sem a cópia das partículas): com a margem de 3 ms, o
+quadro novo chegava antes do instante exibido em ~22% das apresentações e o alfa ficava preso em 0 (o quadro anterior parado por uma
+apresentação, passo do tempo exibido variando 0,7 a 0,9 field a 75 Hz); agora esse instante mistura P e A. A margem no corte por esfera
+é o raio × 1,2. O teste de imagem bit a bit (`WOTM_INTERP_SELFTEST`) não foi feito.
+
+Luta IA x IA (`WOTM_MATCH=3,1,1 WOTM_AIVSAI=1`), 35 s, `WOTM_INTERPLOG=1` (análise: passo do instante exibido entre apresentações,
+comparado com o relógio):
+
+| Rodada | Passo esperado (fields) | Passo medido | Erro p90 / p99 (fields) | Alfa preso em 1 | Cortes de câmera |
+|---|---|---|---|---|---|
+| 75 Hz, vsync | 0,8 | 0,8 em 95% | 0,03 / 0,38 | 4 de 2332 | 3 (intro) |
+| 180 Hz, sem vsync | 0,34 | 0,3–0,4 em 99% | 0,05 / 0,10 | 10 de 5439 | — |
+| 180 Hz, 2 jogadores | 0,34 | 0,3–0,4 em 93% | 0,09 / 0,25 | 11 de 4363 | — |
+
+Redesenho de 1 vista a 180 Hz com a mistura: 2,8–3,4 ms (sem ela, etapa 0: 2,3–2,7). `tools\corpus.ps1 -Check` sem mudança (o replay
+não interpola). Tela dividida com a mistura: `docs/screenshots/2026-10-26/2026-10-26_interpolacao_tela_dividida.png`.
+
+## 9. Etapa 2 implementada (2026-10-26)
+
+`Particles::stepBack`/`blendRam` (wotm_fx.hpp) e o bloco de partículas do `Scene::showBlend`. Diferenças em relação ao plano da seção 5:
+- **Tamanho:** o plano recuava `pos.w` por `vel.w`, mas no `particleMove` o `vel.w` é o passo da cor (vis 1 e 6), e o tamanho cresce
+  pelas taxas de expansão. `pos.w` fica o de B.
+- **Gravidade:** entra na velocidade depois do movimento, então sai do recuo (`f·(vel − (0, 0, g·f))`). O vento (`accel`, com o `Gusts`)
+  entra.
+- **Nascidas no passo:** o critério é o `newParticles` (+0x2EDE), não a idade. As do fim da lista ficam em B.
+- **Destroços:** guardam o passo no `Sprite` na coleta, porque a chave `fx·4096 + índice` não casa entre quadros.
+- **Matriz:** a `worldToScreenMat` da cópia vira `M_B·C_Bᵀ·C_I`, e não uma matriz refeita do zero com 384 e 180,48: assim vale para
+  qualquer foco e vista.
+
+Checagem embutida no `WOTM_INTERPLOG` (`[interp] recuo`). Cada partícula que andou é recuada um passo inteiro (α = 0) e comparada com a
+mais próxima do mesmo sistema em A; a matriz é refeita com a câmera de A e comparada com a de A. Lutas IA x IA de 45 s
+(`WOTM_MATCH=3,1,1`, 180 Hz):
+
+| Rodada | Partículas (erro médio / sem recuo) | Destroços (idem) | Matriz (dif. relativa máx.) |
+|---|---|---|---|
+| 1 jogador | 430 mil: 0,001 / 1,05 | 616 mil: 0,002 / 2,68 | 0,00000 |
+| 2 jogadores | 523 mil: 0,001 / 1,42 | 594 mil: 0,000 / 3,15 | 0,00000 |
+
+Os poucos pares com erro de 0,4 a 4,7 têm atração, órbita ou caixa (forças somadas depois do movimento), ou são o vizinho errado da
+busca. Custo: o `show` sobe ~0,1 ms por redesenho (a cópia de ~1,3 MB de `fx[]` e das tabelas), de 0,05–0,08 para 0,13–0,18 ms. O
+redesenho todo fica nos mesmos 2–4,5 ms da etapa 1. A checagem do log é quadrática e custa até ~0,7 ms, então tempo se mede sem ela.
+`tools\corpus.ps1 -Check` sem mudança. Foto: `docs/screenshots/2026-10-26/2026-10-26_interpolacao_particulas.png` (sopro de fogo
+com a mistura). Ficam para conferir na tela: o fogo preso ao monstro andando (o emissor não recua) e o tiro do Robo-47.
+
+## 10. Etapa 3 implementada (2026-10-26)
+
+`Scene::blendFlares`, `anchorShift`/`blendAnchors` e o fim do `Scene::showBlend` (wotm_native.hpp); na tela dividida, as cópias
+`barsMix`/`flaresMix` do laço da apresentação (wotm_live.inc). Diferenças em relação ao plano da seção 5:
+- **Foco:** vem da `worldToScreenMat` da vista na cópia de sombra de B (parte das linhas 0 e 1 perpendicular à frente), escalado pela
+  razão das tangentes do FOV para a câmera misturada. Sem a cópia (`WOTM_FXLIVE`), pelo FOV.
+- **Ícone de vida:** reprojetar só a câmera não bastou. Ele segue a cabeça do monstro, que anda entre A e B, e a câmera o persegue: o
+  erro ficou em 7,0 px, igual a não fazer nada. O ponto do mundo passou a ser misturado com o do ícone de A mais próximo. Sobrou o
+  ícone que o jogo prende na borda da tela (inimigo fora da vista), que não é projeção: o critério é a diferença entre o ícone e a
+  projeção do seu ponto ser a mesma em A e em B (até 3 px); se não for, mistura a posição na tela.
+- **Fades:** o k-ésimo retângulo que não é barra, com o mesmo lugar, cor e textura em A e B, mistura o alfa. O `Shell::FadeScreen` é
+  um laço sem captura e fica de fora.
+
+Checagem embutida no `WOTM_INTERPLOG` (`[interp] hud`): os flares e ícones de B levados para a câmera de A (α = 0) contra os que o
+jogo pôs em A. Lutas IA x IA de 45 s (`WOTM_MATCH=3,1,1`, 180 Hz):
+
+| Rodada | Flares (erro médio / sem reprojetar) | Ícones de vida reprojetados (idem) | Ícones pela tela |
+|---|---|---|---|
+| 1 jogador | 61: 0,005 / 2,65 px | 1284: 0,58 / 4,39 px | 434 |
+| 2 jogadores | 57: 0,003 / 1,98 px | 2252: 0,52 / 2,80 px | 0 |
+
+O meio pixel dos ícones é o arredondamento do jogo (o centro do ícone sai em px inteiros). No ícone, a checagem é em parte
+construída: o critério dos 3 px já escolhe os que batem; ela mostra que o foco e as câmeras estão certos. Custo: o `show` fica em
+0,14–0,19 ms, o mesmo da etapa 2; redesenho todo de 3,2–3,6 ms na tela dividida. `tools\corpus.ps1 -Check` sem mudança. Foto:
+`docs/screenshots/2026-10-26/2026-10-26_interpolacao_barras.png` (barras com `WOTM_ENEMYBARS=1` e a mistura). Fica para a etapa 4 o
+ícone do jogo (sem barras) na tela dividida, que sai na lista de polígonos da janela inteira.
+
+## 11. Etapa 4 implementada (2026-10-26)
+
+Boa parte da lista da etapa 4 já tinha caído na etapa 1: cada vista da tela dividida mistura com o próprio par (`S.prev.views`); a
+vista sem par (divisão ligando, vista unificada do agarrão: `vctx` diferente) sai como B; pausa (F7), câmera livre, foto, diálogos
+(buraco de fields), carga (`g_loadFreeze`, sem captura) e `Shell::FadeScreen` (laço sem captura: alfa para em 1) desligam a mistura
+ou a deixam em B. O que entrou agora:
+- **Ícone de vida do jogo na tela dividida:** sai nos polígonos da janela inteira, montados do instantâneo da vista 0; o laço desloca
+  uma cópia (`polysMix`) vista a vista, como as barras, e a devolve à `Scene` depois da vista 0.
+- **Presos à câmera fora das listas do HUD** (risco da seção 6): em vez de listar os `_cs` no log e tratá-los à mão, o `mix` do
+  `showBlend` testa a pose relativa à câmera (`M·C⁻¹`) em A e em B; igual (1e-3 nos eixos, 0,02 + 1e-4·|t| na posição), vai com a
+  câmera misturada. É exato para o que está preso e não muda o resto (a pose relativa só bate se o objeto anda junto com a câmera).
+  Contagem no `[interp] hud` ("objetos presos à câmera"): na luta, 15–20% dos pares têm alguns (até 27 em tela cheia, 49 com dois
+  jogadores); na tela de título, 2 por quadro.
+- **texId 0:** fica a apresentação anterior. O CLOAK e o mapa de ambiente de vídeo não acumulam além do que o PS2 já acumula, e a
+  apresentação anterior está mais perto no tempo que o quadro anterior do jogo.
+
+Conferido: lutas IA x IA de 45 s a 180 Hz com 1 e 2 jogadores (flares 0,005 / 0,003 px, ícones 0,54 / 0,51 px, como na etapa 3);
+menu com `WOTM_SKIPINTRO=1` e a mistura (9089 apresentações, sem corte, fotos normais). O roteiro `PS2X_PAD` não passa do menu
+principal nativo, então as transições de câmera entre as telas do telão e a escolha de lados ficam para o dono conferir.
+`tools\corpus.ps1 -Check` sem mudança.
+
+## 12. Etapa 5 implementada (2026-10-26)
+
+A opção INTERPOLATE FRAMES vem ligada (`wotm_settings.hpp`, `kDefault`). Diferenças em relação ao plano da seção 5:
+- **Caixa no launcher:** não entrou. As opções de vídeo moram no painel (aba VIDEO); o launcher só tira do ambiente as variáveis
+  delas, e o `WOTM_INTERP` passou a estar nessa lista. No painel a linha deixou de ficar apagada a 60 Hz, porque agora vale também
+  com o jogo a 30.
+- **Jogo a 30:** com a apresentação até 60 Hz, liga quando metade ou mais dos últimos 64 quadros novos tiveram vão de 2 fields e
+  desliga com até 8. Nas lutas e no menu medidos aqui o jogo não cai para 30 (99,6–99,8% dos quadros com vão de 1; nenhuma
+  sequência de vãos de 2), então a regra não foi vista agindo.
+- **Desenho que não cabe:** média móvel (5%) do tempo do bloco de redesenho, que termina antes do `EndDrawing` (sem a espera do
+  vsync), com cada amostra limitada a dois períodos; acima de 85% do período suspende, abaixo de 60% volta. A primeira versão
+  partia do primeiro redesenho (~100 ms, as texturas) e suspendia no começo de toda luta; a média agora parte de zero.
+
+Conferido sem `WOTM_INTERP` no ambiente, `WOTM_SETTINGS=0` (lutas IA x IA de 45 s):
+
+| Rodada | Redesenhos misturados | Suspensões |
+|---|---|---|
+| 180 Hz, 1 jogador | 6895 de 6897 | nenhuma |
+| 180 Hz, 2 jogadores | 2512 de 4041 | uma, de ~8 s: a tela dividida desenhou em 4–5,7 ms nesse trecho (período de 5,56) |
+| 60 Hz, 1 jogador | 0 (o jogo a 60) | — |
+| 1000 Hz, 1 jogador | 0 | suspensa logo no começo (período de 1 ms) |
+
+`tools\corpus.ps1 -Check` sem mudança (o replay não interpola).

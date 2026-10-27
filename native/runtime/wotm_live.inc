@@ -134,6 +134,7 @@ void wotmVu0UcodeInstall(PS2Runtime &) {}
 // Rastro do boot: da abertura do processo ao primeiro filme ou quadro do jogo, cada etapa vai ao stderr com o tempo desde o inicio
 // ("[boot]  3.21 s  disco: ...") e aparece escrita na tela preta. Etapa parada ha mais de 3 s repete no log com o PC do EE, para
 // achar o gargalo em maquinas onde a tela preta demora. Chamado do main.cpp, de initialize/run, do sceCdSearchFile e do log do IOP.
+#include <chrono>
 #include <cstdarg>
 #include <mutex>
 namespace wotm_boot
@@ -314,6 +315,12 @@ struct State
     std::string rtxPath;
     long frame = 0;
     wotm::Snapshot snap;   // ultimo quadro do jogo (desenhado ate o proximo)
+    // Interpolacao de quadros (wotmDrawNative): o quadro anterior a snap (A; snap e B), o anterior a ele (P, sem a copia das
+    // particulas: so as matrizes e a camera, para o instante antes de A quando B chega adiantado) e o relogio de exibicao
+    wotm::Snapshot prev, prev2;
+    double interpO = 0.0;      // relogio do host (s) em que o jogo estaria no field 0, filtrado (interpTarget)
+    bool interpHaveO = false;
+    float lastAlpha = -1.f;    // alfa do ultimo redesenho (-1: sem mistura)
 };
 
 // Fase carregada: so o cabecalho da imagem do nivel em 0xA00000 (N e os N ponteiros dos nos-raiz, docs/FORMATOS.md) e o endereco
@@ -400,8 +407,9 @@ static void initPresentRate()
         ClearWindowState(FLAG_VSYNC_HINT);
     // com vsync na taxa do monitor quem segura e a troca de buffers; abaixo dela o limite por tempo divide (60 num de 180 = 1 em 3)
     SetTargetFPS(vsync && hz >= monHz ? 0 : hz);
-    std::fprintf(stderr, "[native] apresentacao: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", vsync && monHz > 0 ? std::min(hz, monHz) : hz,
-                 monHz, vsync ? "ligado" : "desligado");
+    const int eff = vsync && monHz > 0 ? std::min(hz, monHz) : hz;
+    wotm::settings::g_presentHz.store(eff, std::memory_order_relaxed);
+    std::fprintf(stderr, "[native] apresentacao: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", eff, monHz, vsync ? "ligado" : "desligado");
 }
 
 // Janela no tamanho do quadro nativo (renderHeight na proporcao fixa, ou 16:9), reduzida para caber em 90% do monitor e centrada.
@@ -605,6 +613,14 @@ static Capture &capture()
     static Capture c;
     return c;
 }
+// Interpolacao de quadros (opcao INTERPOLATE FRAMES, WOTM_INTERP=1; docs/investigacoes/2026-10-19/interpolacao.md): relogio comum as
+// duas threads (carimbo Snapshot::hostT) e a margem do corte por esfera, que a janela liga e a captura le (Scene::cullMargin)
+static double hostNow()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+static std::atomic<bool> g_interpCull{false};
+static constexpr double kFieldSec = 1.001 / 60.0;   // um field do NTSC (o relogio de exibicao segue a cadencia real pelo filtro)
 // replay com varios arquivos numa execucao: o proximo wotmDrawNative recomeca a apresentacao do zero (cena, recursos, quadro anterior),
 // como num processo novo; sem isso um arquivo herdava o estado do anterior quando a fase era a mesma
 static bool g_replayFresh = false;
@@ -673,6 +689,8 @@ static bool liveText(std::vector<wotm::TextQuad> &out)
 // textura qualquer do nivel, como o brilho verde do power-up no CENTRAL). Enquanto vale, a captura nao publica nada e a
 // apresentacao repete o ultimo quadro desenhado, com o fade do Shell::FadeScreen por cima (wotmDrawFrozen).
 static std::atomic<bool> g_loadFreeze{false};
+// Media movel do tempo de um redesenho na apresentacao (ms, a partir de 0): a interpolacao se suspende se nao couber no periodo
+static double g_drawMs = 0.0;
 
 // Fade do Shell::FadeScreen em curso (g_shellFade): o retangulo da entrada com o alfa do passo atual; com acumulo, o alfa
 // equivalente no buffer da vez.
@@ -1081,6 +1099,7 @@ void wotmCaptureScene(const uint8_t *rdram, int view)
                      gc.fovy);
     }
     cap.csColorAtDraw = wotm_live::g_pendingCsColor;   // tom do pick-up gravado pelo enableHighlights deste quadro (o mesmo da RAM agora)
+    cap.cullMargin = wotm_live::g_interpCull.load(std::memory_order_relaxed) ? 1.2f : 1.f;
     cap.collect(ram);
     wotm_live::g_sceneSnap[view] = cap.takeSnapshot(ram, ram.u32(wotm::sym::g_frame));
     wotm_live::g_sceneFresh[view] = true;
@@ -1189,16 +1208,28 @@ void wotmCaptureFrame(const uint8_t *rdram)
     static float prevMats[wotm_live::kMaxViews][16];
     static bool havePrev = false;
     sn.fxRam = wotm::Particles::shadowRam(ram, split ? fxAll : sn.fx, split && havePrev ? &prevMats[0][0] : nullptr);
+    sn.fxRamSize = sn.fxRam ? ram.size : 0;
     for (int k = 0; k < 16 * wotm_live::kMaxViews; ++k)
         prevMats[k / 16][k % 16] = ram.f32(wotm::fxaddr::viewPrevMat + 4u * uint32_t(k));
     havePrev = true;
     for (auto &vs : sn.views)
         if (vs)
+        {
             vs->fxRam = sn.fxRam;
+            vs->fxRamSize = sn.fxRamSize;
+        }
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.anchors = std::move(anchors);
     wotm_trainview::capture(ram);   // modo treino: cascos e capsulas do corpo e vida deste quadro
+    sn.fields = ram.u32(wotm::addr::fieldsAtFrameStart);   // carimbo da interpolacao (Snapshot::fields/hostT)
+    sn.hostT = wotm_live::hostNow();
+    for (auto &vs : sn.views)
+        if (vs)
+        {
+            vs->fields = sn.fields;
+            vs->hostT = sn.hostT;
+        }
     std::lock_guard<std::mutex> lk(c.m);
     c.snap = std::move(sn);
     c.fresh = true;
@@ -1441,6 +1472,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.levelSig = sig;
         S.rtxChosen = false;
         S.snap = wotm::Snapshot{};
+        S.prev = wotm::Snapshot{};
+        S.prev2 = wotm::Snapshot{};
     }
     // Quadro novo do jogo: o instantaneo capturado na thread do EE (wotmCaptureFrame). No replay (--vu1cmp) nao ha jogo rodando e a
     // RAM do instantaneo e fixa: a coleta e aqui mesmo. Os desenhos seguintes repetem o instantaneo.
@@ -1488,8 +1521,24 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 wotmBootDone("stage on screen");
             }
         }
+        S.prev2 = std::move(S.prev);   // P e A da interpolacao
+        S.prev2.fxRam.reset();         // devolve a copia das particulas ao pool (Particles::shadowRam)
+        for (auto &vs : S.prev2.views)
+            if (vs)
+                vs.reset();
+        S.prev = std::move(S.snap);
         S.snap = std::move(sn);
         fresh = true;
+        if (S.snap.hostT > 0.0)
+        {
+            // relogio de exibicao: O = hostT - fields * periodo, filtrado (a captura varia alguns ms com o trabalho do EE no quadro)
+            const double target = S.snap.hostT - double(S.snap.fields) * wotm_live::kFieldSec;
+            if (!S.interpHaveO || std::fabs(target - S.interpO) > 2.0 * wotm_live::kFieldSec)
+                S.interpO = target;
+            else
+                S.interpO += 0.05 * (target - S.interpO);
+            S.interpHaveO = true;
+        }
     }
     // Camera livre com o jogo pausado (F7): a coleta da captura recortou pela vista congelada. Com a thread do EE parada a RAM nao
     // muda, entao a apresentacao coleta de novo, uma vez por quadro pausado, sem o recorte (o resto do instantaneo fica o mesmo).
@@ -1538,7 +1587,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // (quadro anterior, mapa de ambiente/CLOAK) continua sendo o desenho anterior, nao uma copia do mesmo quadro.
     const double nowT = GetTime();
     static double lastFreshT = 0.0, lastRenderT = 0.0;
-    static long s_renders = 0;   // redesenhos (PS2X_STATS, linha [native])
+    static long s_renders = 0, s_blends = 0;   // redesenhos e, deles, os misturados pela interpolacao (PS2X_STATS, linha [native])
     static double s_drawMs[5] = {}, s_drawCpu[5] = {};   // redesenhos com 1 a 4 vistas desde a ultima linha [native]: parede e CPU da thread
     static long s_drawN[5] = {};
     int nViews = 1;
@@ -1551,12 +1600,111 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const bool fadeChanged = hasFade != lastHasFade || (hasFade && std::memcmp(&fadeNow, &lastFade, offsetof(wotm::ScreenRect, underText)) != 0);
     const RenderTexture2D &shown = S.rts[S.cur];
     const bool sizeOk = shown.id != 0 && shown.texture.width == RW && shown.texture.height == RH;
-    const bool rerender = fresh || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect ||
-                          (nowT - lastFreshT >= 0.04 && nowT - lastRenderT >= 1.0 / 60.0 - 0.001);
+    // WOTM_INTERP=redraw: redesenha em toda apresentacao (etapa 0 da interpolacao: mede o custo de redesenhar na taxa do monitor)
+    static const bool s_redrawAll = [] {
+        const char *e = std::getenv("WOTM_INTERP");
+        return e && std::strstr(e, "redraw") != nullptr;
+    }();
+    // Interpolacao de quadros (opcao INTERPOLATE FRAMES, ligada por padrao; docs/investigacoes/2026-10-19/interpolacao.md): com a
+    // apresentacao acima de 60 Hz (ou ate 60 com o jogo a 30: slowGame), cada apresentacao desenha a mistura de A (S.prev) e B
+    // (S.snap) no instante D do relogio de exibicao, um quadro
+    // do jogo atras do mais novo (mais uma margem, para a captura atrasada ainda chegar antes do alfa bater em 1). Sem quadro novo o
+    // alfa para em 1 (B; sem extrapolar). Fora: replay, camera livre ou foto, pausa, A sem carimbo, buraco de fields ou de relogio
+    // (dialogo, carga), e no treino com esferas ou contornos (desenhados com a pose de B).
+    float alpha = 1.f;
+    bool interpOn = false, interpOld = false;   // interpOld: o par e (P, A), nao (A, B)
+    {
+        static const float fixedAlpha = [] { const char *e = std::getenv("WOTM_INTERP_ALPHA"); return e && *e ? std::clamp(float(std::atof(e)), 0.f, 1.f) : -1.f; }();
+        static const double marginSec = [] { const char *e = std::getenv("WOTM_INTERP_DELAY"); return (e && *e ? std::atof(e) : 3.0) / 1000.0; }();
+        // Jogo a 30 (quadros de 2 fields): metade ou mais dos ultimos 64 pares com vao >= 2 liga, ate 1/8 desliga. Com a apresentacao
+        // ate 60 Hz a mistura so vale nesse caso (com o jogo a 60 ela so somaria um quadro de atraso).
+        static bool slowGame = false;
+        static uint64_t gapBits = 0;   // 1 = par com vao >= 2, um bit por quadro novo
+        static uint32_t lastGapG = 0;
+        if (S.snap.g != lastGapG && S.prev.valid && S.snap.fields > S.prev.fields)
+        {
+            lastGapG = S.snap.g;
+            gapBits = (gapBits << 1) | (S.snap.fields - S.prev.fields >= 2 ? 1u : 0u);
+            int slow = 0;
+            for (uint64_t b = gapBits; b; b &= b - 1)
+                ++slow;
+            if (!slowGame && slow >= 32)
+                slowGame = true;
+            else if (slowGame && slow <= 8)
+                slowGame = false;
+        }
+        const int presentHz = wotm::settings::g_presentHz.load(std::memory_order_relaxed);
+        // Desenho que nao cabe no periodo da apresentacao (wotm_live::g_drawMs, media do redesenho): com a mistura o vsync cairia para a
+        // metade, pior que sem ela. Acima de 85% do periodo suspende; volta abaixo de 60%.
+        static bool tooSlow = false;
+        if (presentHz > 0)
+        {
+            const double periodMs = 1000.0 / presentHz, ms = wotm_live::g_drawMs;
+            const bool was = tooSlow;
+            if (!tooSlow && ms > 0.85 * periodMs)
+                tooSlow = true;
+            else if (tooSlow && ms < 0.6 * periodMs)
+                tooSlow = false;
+            if (tooSlow != was)
+                std::fprintf(stderr, "[interp] redesenho de %.2f ms para um periodo de %.2f ms: mistura %s\n", ms, periodMs, tooSlow ? "suspensa" : "de volta");
+        }
+        const bool want = wotm::settings::on(wotm::settings::Interp) && (presentHz > 60 || (presentHz > 0 && slowGame)) && !tooSlow &&
+                          !wotm_live::g_localCollect;
+        wotm_live::g_interpCull.store(want, std::memory_order_relaxed);
+        const bool trainOverlay = wotm_training::g_on.load(std::memory_order_relaxed) &&
+                                  (wotm_training::g_opts.load(std::memory_order_relaxed) &
+                                   (wotm_training::kShowAttacks | wotm_training::kShowHulls | wotm_training::kShowCapsule));
+        // par (x, y) misturavel: os dois carimbados, vao de 1 a 4 fields, sem buraco de relogio
+        auto pairOk = [](const wotm::Snapshot &x, const wotm::Snapshot &y) {
+            const int gap = int(y.fields - x.fields);
+            return x.valid && y.valid && x.hostT > 0.0 && y.hostT > 0.0 && gap > 0 && gap <= 4 && y.hostT - x.hostT < 0.1;
+        };
+        const wotm::Snapshot &A = S.prev, &B = S.snap;
+        if (want && !freeView.override && !wotmPaused() && !trainOverlay && S.interpHaveO && pairOk(A, B))
+        {
+            interpOn = true;
+            // instante exibido, em fields: um quadro (o vao de A a B) atras do relogio do jogo, menos a margem
+            const int gap = int(B.fields - A.fields);
+            const double D = (wotm_live::hostNow() - S.interpO - marginSec) / wotm_live::kFieldSec - double(gap);
+            if (fixedAlpha >= 0.f)
+                alpha = fixedAlpha;
+            else if (D < double(A.fields) && !B.views[0] && !B.views[1] && !B.views[2] && pairOk(S.prev2, A) && D >= double(S.prev2.fields))
+            {
+                // B chegou adiantado: o instante ainda e entre P e A
+                interpOld = true;
+                alpha = float((D - double(S.prev2.fields)) / double(A.fields - S.prev2.fields));
+            }
+            else
+                alpha = float(std::clamp((D - double(A.fields)) / double(gap), 0.0, 1.0));
+        }
+        static const bool interpLog = std::getenv("WOTM_INTERPLOG") != nullptr;
+        if (interpLog && want)
+            std::fprintf(stderr, "[interp] t=%.4f g=%u fA=%u fB=%u alfa=%.3f%s%s%s\n", wotm_live::hostNow(), B.g, interpOld ? S.prev2.fields : A.fields,
+                         interpOld ? A.fields : B.fields, alpha, interpOn ? "" : " (desligada)", interpOld ? " (P-A)" : "", fresh ? " novo" : "");
+    }
+    const bool rerender = s_redrawAll || fresh || fadeChanged || freeView.override || !sizeOk || wotm_live::g_localCollect ||
+                          (interpOn && alpha - (interpOld ? 2.f : 0.f) != S.lastAlpha) || (nowT - lastFreshT >= 0.04 && nowT - lastRenderT >= 1.0 / 60.0 - 0.001);
+    if (rerender)
+    {
+        S.lastAlpha = interpOn ? alpha - (interpOld ? 2.f : 0.f) : -1.f;   // o par (P, A) fica abaixo de -1
+        s_blends += interpOn && alpha < 1.f;
+    }
     wotm::GameCamera gc = S.snap.cam;
     if (rerender)
     {
         lastRenderT = nowT;
+        // tempo do redesenho (CPU, ate o fim deste bloco), media movel: a trava da interpolacao (tooSlow) o le
+        struct DrawTimer
+        {
+            double t0 = wotm_live::hostNow();
+            ~DrawTimer()
+            {
+                // cada amostra vale no maximo dois periodos: um redesenho isolado (carga de texturas, troca de fase) nao suspende sozinho
+                const int hz = wotm::settings::g_presentHz.load(std::memory_order_relaxed);
+                const double ms = std::min((wotm_live::hostNow() - t0) * 1000.0, hz > 0 ? 2000.0 / hz : 1000.0);
+                wotm_live::g_drawMs += (ms - wotm_live::g_drawMs) * 0.05;   // parte de 0: o primeiro redesenho (texturas) nao pesa sozinho
+            }
+        } drawTimer;
         ++s_renders;
         const double tDraw0 = GetTime(), cpuDraw0 = wotmThreadCpuMs();   // custo do redesenho por numero de vistas (PS2X_STATS)
         lastFade = fadeNow;
@@ -1602,6 +1750,18 @@ static bool wotmDrawNative(const uint8_t *rdram)
             ++wotm::drawProf().redraws;
         wotm::ProfScope psFrame(wotm::DrawProf::RFrame);
         wotm::GpuTimer::Scope gpuScope;
+        // interpolacao na tela dividida: as barras e o icone de vida do jogo (no instantaneo da vista 0) e os flares de cada vista vao
+        // para a camera misturada dela (Scene::blendAnchors, blendFlares no showBlend), numa copia feita vista a vista antes do desenho
+        // dela; o icone (polys da janela inteira) volta a Scene depois da vista 0
+        static std::vector<wotm::ScreenRect> barsMix;
+        static std::vector<wotm::TextQuad> polysMix;
+        static wotm::Particles::FlareFrame flaresMix[4];
+        const bool splitMix = interpOn && split;
+        if (splitMix)
+        {
+            barsMix = S.snap.screenRects;
+            polysMix = S.snap.screenPolys;
+        }
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
             wotm::ProfScope psView(wotm::DrawProf::RView);
             const int W = viewW(static_cast<int>(&vrt - S.vrts));
@@ -1633,7 +1793,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             {
                 // barras desta vista (estao no instantaneo da vista 0), no canto da textura dela na janela
                 const int v = static_cast<int>(&vrt - S.vrts);
-                S.scene.barPass = {&S.snap.screenRects, static_cast<float>(RW), static_cast<float>(RH), v,
+                S.scene.barPass = {splitMix ? &barsMix : &S.snap.screenRects, static_cast<float>(RW), static_cast<float>(RH), v,
                                    static_cast<float>((v & 1) * (RW - VW)), static_cast<float>((v >> 1) * (RH - VH)),
                                    static_cast<float>(W), static_cast<float>(VH)};
             }
@@ -1669,13 +1829,34 @@ static bool wotmDrawNative(const uint8_t *rdram)
             {
                 {
                     wotm::ProfScope ps(wotm::DrawProf::RShow);
-                    viewCam[v] = S.scene.show(*S.snap.views[v - 1]);
+                    const auto &va = S.prev.views[v - 1];
+                    viewCam[v] = interpOn && va && va->valid ? S.scene.showBlend(*va, *S.snap.views[v - 1], alpha)
+                                                             : S.scene.show(*S.snap.views[v - 1]);
+                    if (splitMix)
+                    {
+                        S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, &polysMix);
+                        flaresMix[v] = S.scene.fx.flares;
+                    }
                 }
                 drawView(S.vrts[v], viewCam[v]);
             }
         {
             wotm::ProfScope ps(wotm::DrawProf::RShow);
-            gc = S.scene.show(S.snap);
+            static long s_cuts = 0;
+            bool cut = false;
+            gc = !interpOn ? S.scene.show(S.snap) : interpOld ? S.scene.showBlend(S.prev2, S.prev, alpha, &cut) : S.scene.showBlend(S.prev, S.snap, alpha, &cut);
+            static const bool interpLog = std::getenv("WOTM_INTERPLOG") != nullptr;
+            if (cut && interpLog)
+                std::fprintf(stderr, "[interp] corte de camera g=%u (%ld)\n", S.snap.g, ++s_cuts);
+            if (splitMix)
+            {
+                if (!interpOld)   // no par (P, A) as ancoras de A nao casam com as barras de B
+                {
+                    S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, &polysMix);
+                    S.scene.screenPolys = polysMix;
+                }
+                flaresMix[0] = S.scene.fx.flares;
+            }
         }
         wotm_levelsel::prepare(S.scene, ram);   // com os objetos deste quadro
         viewCam[0] = gc;
@@ -1737,7 +1918,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 vc3.fovy = vc.fovy;
                 vc3.projection = CAMERA_PERSPECTIVE;
                 BeginMode3D(vc3);
-                S.scene.drawFlaresFor(ram, sn.flares, sn.vctx, flareSync ? nullptr : &depth[v], vmsOn ? S.vms[v].render().id : S.vrts[v].id);
+                S.scene.drawFlaresFor(ram, splitMix ? flaresMix[v] : sn.flares, sn.vctx, flareSync ? nullptr : &depth[v], vmsOn ? S.vms[v].render().id : S.vrts[v].id);
                 wotm::endMode3DInTexture();
                 EndTextureMode();
                 wotm::msaa::g_current = nullptr;
@@ -2032,7 +2213,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
 
 
     if (++S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
-        std::fprintf(stderr, "[native] frame %ld redesenhos=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, GetTime(),
+        std::fprintf(stderr, "[native] frame %ld redesenhos=%ld misturados=%ld t=%.1f itens=%zu ceu=%zu rtx=%s\n", S.frame, s_renders, s_blends, GetTime(),
                      S.scene.items.size(), S.scene.sky.size(), S.rtxPath.c_str());
     if (S.frame % 300 == 0 && std::getenv("PS2X_STATS"))
     {

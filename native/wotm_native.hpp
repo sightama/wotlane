@@ -61,6 +61,7 @@ constexpr uint32_t paraL = wotm::sym::paraL;            // float[4][4]: linhas x
 constexpr uint32_t vu1FogParams = 0x0025B280;     // float[4] (D_0025B280, qword 21 do VU1): fogFA, fogMaxVal, 1, fogFB (fogUpdate)
 constexpr uint32_t fogColorCtx = wotm::sym::fogColorCtx;      // u64[6]: pacote do FOGCOL que o fogUpdate manda ao GS; [4] = R | G << 8 | B << 16
 constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): cor/128 das luzes 0-2 (linhas); a linha 3 e o ambiente/especular
+constexpr uint32_t fieldsAtFrameStart = 0x006F8DC0;   // u32 (D_006F8DC0): contagem de fields no inicio do quadro (timerWaitForMinUpdateRate)
 constexpr uint32_t csActiveList = wotm::sym::x_6CsPool_m_activeList;     // CsPool::m_activeList (CsNode: cs@0, next@4)
 constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // CsPool::m_HPActiveList
 constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
@@ -570,6 +571,160 @@ inline GameCamera readGameCamera(const Ram &ram, int view = 0) {
     return c;
 }
 
+// ---------------------------------------------------------------- interpolacao de quadros (Scene::showBlend)
+// A logica roda a 60 e a apresentacao na taxa do monitor: entre dois quadros do jogo o desenho mistura os dois ultimos instantaneos
+// (A anterior, B mais novo). Matriz: escala por linha (a convencao do codigo: scaleM antes), rotacao por slerp, translacao linear.
+namespace interp {
+struct Quat { float w, x, y, z; };
+
+// Linhas 0-2 = eixos com escala. Falso se as linhas normalizadas nao forem ortogonais (cisalhamento): ai o chamador faz lerp simples.
+// det < 0 (espelho): a linha 2 entra com escala negativa.
+inline bool decompose(const M4 &m, Quat &q, float s[3]) {
+    float R[3][3];
+    for (int i = 0; i < 3; ++i) {
+        s[i] = std::sqrt(m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
+        if (!(s[i] > 1e-6f)) return false;
+        for (int j = 0; j < 3; ++j) R[i][j] = m.m[i][j] / s[i];
+    }
+    for (int i = 0; i < 3; ++i) {
+        const int j = (i + 1) % 3;
+        if (std::fabs(R[i][0] * R[j][0] + R[i][1] * R[j][1] + R[i][2] * R[j][2]) > 0.02f) return false;
+    }
+    const float det = R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) - R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +
+                      R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]);
+    if (det < 0.f) {
+        s[2] = -s[2];
+        for (int j = 0; j < 3; ++j) R[2][j] = -R[2][j];
+    }
+    // A = R^T (matriz-coluna): A[r][c] = R[c][r]
+    auto A = [&](int r, int c) { return R[c][r]; };
+    const float tr = A(0, 0) + A(1, 1) + A(2, 2);
+    if (tr > 0.f) { const float t = std::sqrt(tr + 1.f) * 2.f; q = {0.25f * t, (A(2, 1) - A(1, 2)) / t, (A(0, 2) - A(2, 0)) / t, (A(1, 0) - A(0, 1)) / t}; }
+    else if (A(0, 0) > A(1, 1) && A(0, 0) > A(2, 2)) { const float t = std::sqrt(1.f + A(0, 0) - A(1, 1) - A(2, 2)) * 2.f; q = {(A(2, 1) - A(1, 2)) / t, 0.25f * t, (A(0, 1) + A(1, 0)) / t, (A(0, 2) + A(2, 0)) / t}; }
+    else if (A(1, 1) > A(2, 2)) { const float t = std::sqrt(1.f + A(1, 1) - A(0, 0) - A(2, 2)) * 2.f; q = {(A(0, 2) - A(2, 0)) / t, (A(0, 1) + A(1, 0)) / t, 0.25f * t, (A(1, 2) + A(2, 1)) / t}; }
+    else { const float t = std::sqrt(1.f + A(2, 2) - A(0, 0) - A(1, 1)) * 2.f; q = {(A(1, 0) - A(0, 1)) / t, (A(0, 2) + A(2, 0)) / t, (A(1, 2) + A(2, 1)) / t, 0.25f * t}; }
+    return true;
+}
+
+inline Quat slerp(Quat a, Quat b, float t) {
+    float d = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+    if (d < 0.f) { b = {-b.w, -b.x, -b.y, -b.z}; d = -d; }
+    float ka, kb;
+    if (d > 0.9995f) { ka = 1.f - t; kb = t; }
+    else { const float th = std::acos(d), sn = std::sin(th); ka = std::sin((1.f - t) * th) / sn; kb = std::sin(t * th) / sn; }
+    Quat r{ka * a.w + kb * b.w, ka * a.x + kb * b.x, ka * a.y + kb * b.y, ka * a.z + kb * b.z};
+    const float n = std::sqrt(r.w * r.w + r.x * r.x + r.y * r.y + r.z * r.z);
+    if (n > 0.f) { r.w /= n; r.x /= n; r.y /= n; r.z /= n; }
+    return r;
+}
+
+inline M4 lerpM4(const M4 &a, const M4 &b, float t) {
+    M4 r;
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j] + (b.m[i][j] - a.m[i][j]) * t;   // translacao, coluna 3 e o caso sem decomposicao
+    Quat qa, qb;
+    float sa[3], sb[3];
+    if (decompose(a, qa, sa) && decompose(b, qb, sb) && (sa[2] < 0.f) == (sb[2] < 0.f)) {
+        const Quat q = slerp(qa, qb, t);
+        const float x = q.x, y = q.y, z = q.z, w = q.w;
+        const float A[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)},
+                               {2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)},
+                               {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}};
+        for (int i = 0; i < 3; ++i) {
+            const float s = sa[i] + (sb[i] - sa[i]) * t;
+            for (int j = 0; j < 3; ++j) r.m[i][j] = A[j][i] * s;   // volta para vetores-linha
+        }
+    }
+    return r;
+}
+
+inline void orthonormal(float fwd[3], float up[3]) {
+    float n = std::sqrt(fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]);
+    if (n > 1e-6f) for (int i = 0; i < 3; ++i) fwd[i] /= n;
+    const float d = up[0] * fwd[0] + up[1] * fwd[1] + up[2] * fwd[2];
+    for (int i = 0; i < 3; ++i) up[i] -= d * fwd[i];
+    n = std::sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+    if (n > 1e-6f) for (int i = 0; i < 3; ++i) up[i] /= n;
+}
+
+// Corte de camera entre A e B (sem mistura): teleporte, giro brusco, FOV mudando
+inline bool cameraCut(const GameCamera &a, const GameCamera &b) {
+    if (!a.ok || !b.ok) return true;
+    const float dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
+    const float dotf = a.fwd[0] * b.fwd[0] + a.fwd[1] * b.fwd[1] + a.fwd[2] * b.fwd[2];
+    return dx * dx + dy * dy + dz * dz > 400.f * 400.f || dotf < 0.7f || std::fabs(a.fovy - b.fovy) > 5.f;
+}
+
+// Posicao e FOV lineares, eixos por nlerp e reortonormalizados (basta para o giro de um quadro)
+inline GameCamera lerpCamera(const GameCamera &a, const GameCamera &b, float t) {
+    GameCamera r = b;
+    for (int i = 0; i < 3; ++i) {
+        r.pos[i] = a.pos[i] + (b.pos[i] - a.pos[i]) * t;
+        r.fwd[i] = a.fwd[i] + (b.fwd[i] - a.fwd[i]) * t;
+        r.up[i] = a.up[i] + (b.up[i] - a.up[i]) * t;
+    }
+    orthonormal(r.fwd, r.up);
+    r.fovy = a.fovy + (b.fovy - a.fovy) * t;
+    return r;
+}
+
+// Camera -> mundo (vetores-linha): linhas = direita, frente, cima, olho
+inline M4 cameraToWorld(const GameCamera &c) {
+    float f[3] = {c.fwd[0], c.fwd[1], c.fwd[2]}, u[3] = {c.up[0], c.up[1], c.up[2]};
+    orthonormal(f, u);
+    M4 m = ident();
+    const float r[3] = {f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
+    for (int i = 0; i < 3; ++i) { m.m[0][i] = r[i]; m.m[1][i] = f[i]; m.m[2][i] = u[i]; m.m[3][i] = c.pos[i]; }
+    return m;
+}
+
+// Inversa de uma matriz rigida (rotacao ortonormal + translacao, vetores-linha)
+inline M4 rigidInverse(const M4 &m) {
+    M4 r = ident();
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) r.m[i][j] = m.m[j][i];
+    for (int j = 0; j < 3; ++j) r.m[3][j] = -(m.m[3][0] * r.m[0][j] + m.m[3][1] * r.m[1][j] + m.m[3][2] * r.m[2][j]);
+    return r;
+}
+
+// Foco da projecao do jogo: px do GS (horizontal) e linhas (vertical) por unidade de tangente. Da worldToScreenMat (16 floats, linhas):
+// linha 0 = fh*direita + c*frente, linha 1 = -fv*cima + c*frente, linha 3 = frente; o foco e a parte perpendicular a linha 3.
+struct Focus { float fh = 384.f, fv = 180.48f; };
+inline bool focusOf(const float *M, Focus &f) {
+    const float *r3 = M + 12;
+    const float n3 = r3[0] * r3[0] + r3[1] * r3[1] + r3[2] * r3[2];
+    if (!(n3 > 0.5f) || !std::isfinite(n3)) return false;
+    auto perp = [&](const float *r) {
+        const float k = (r[0] * r3[0] + r[1] * r3[1] + r[2] * r3[2]) / n3;
+        float s = 0.f;
+        for (int i = 0; i < 3; ++i) s += (r[i] - k * r3[i]) * (r[i] - k * r3[i]);
+        return std::sqrt(s);
+    };
+    const float fh = perp(M), fv = perp(M + 4);
+    if (!(fh > 1.f && fv > 1.f) || !std::isfinite(fh) || !std::isfinite(fv)) return false;
+    f.fh = fh;
+    f.fv = fv;
+    return true;
+}
+// mundo -> camera (direita, frente, cima) pela cameraToWorld C; point = com a translacao
+inline void toCam(const M4 &C, const float p[3], bool point, float q[3]) {
+    const float d[3] = {p[0] - (point ? C.m[3][0] : 0.f), p[1] - (point ? C.m[3][1] : 0.f), p[2] - (point ? C.m[3][2] : 0.f)};
+    for (int k = 0; k < 3; ++k) q[k] = d[0] * C.m[k][0] + d[1] * C.m[k][1] + d[2] * C.m[k][2];
+}
+inline void fromCam(const M4 &C, const float q[3], bool point, float p[3]) {
+    for (int i = 0; i < 3; ++i) p[i] = (point ? C.m[3][i] : 0.f) + q[0] * C.m[0][i] + q[1] * C.m[1][i] + q[2] * C.m[2][i];
+}
+// Ponto do mundo -> deslocamento do centro da tela (px do GS, linhas); falso atras da camera
+inline bool project(const M4 &C, const Focus &f, const float w[3], float &x, float &y) {
+    float q[3];
+    toCam(C, w, true, q);
+    if (q[1] < 1.f) return false;
+    x = f.fh * q[0] / q[1];
+    y = -f.fv * q[2] / q[1];
+    return true;
+}
+}   // namespace interp
+
 // Particula desenhada como sprite voltado para a camera (destroços, poeira...). Lida de fx[] (0x5BA280, 98 x 12000 bytes).
 struct Sprite {
     float pos[3] = {0, 0, 0};
@@ -583,6 +738,9 @@ struct Sprite {
     int16_t aref = 8;       // destroço: limiar do teste de alfa (Scene::setAlphaRef); kGsAlphaRef = padrao
     bool opaque = false;    // destroço sem ABE com alphaContext 0: grava profundidade (ZBUF do setOpeningContext)
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
+    // Passo do particleMove (Particles::stepBack): pos_B - pos_A = f (step - (0, 0, grav f)) em f fields; zero na que nasceu no passo
+    float step[3] = {0, 0, 0};
+    float grav = 0.f;
 };
 
 // Glifo do texto do jogo (fontSpritePrint*): um sprite do GS. UV em texels do atlas, XY em pixels da tela do jogo (640 x 224, campo).
@@ -819,6 +977,7 @@ struct Snapshot {
     std::vector<DrawItem> items, sky, overlay, hud, hp, hpOverlay;
     std::vector<FxSystem> fx;
     std::shared_ptr<const uint8_t> fxRam;  // copia de sombra da RAM das particulas (Particles::shadowRam, ao vivo); nullptr = ler a RAM passada ao draw
+    size_t fxRamSize = 0;                  // tamanho do buffer de fxRam (o da RAM)
     Particles::FlareFrame flares;       // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
@@ -831,7 +990,11 @@ struct Snapshot {
     GameCamera cam;
     ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita; quadrantes: v & 1 coluna, v >> 1 linha)
     uint32_t g = 0;     // contador de quadros do jogo
-    uint32_t culled = 0;   // OBJECTs e GROUPs que o collect recortou pela vista (a fase existe mesmo com poucos itens na tela)
+    // Carimbo para a interpolacao (Scene::showBlend): contagem de fields do inicio do quadro (D_006F8DC0; quadro de 2 fields = vao de 2)
+    // e relogio do host na captura (segundos, steady_clock). fields = 0: sem carimbo (replay, coleta local)
+    uint32_t fields = 0;
+    double hostT = 0.0;
+    uint32_t culled = 0;  // OBJECTs e GROUPs que o collect recortou pela vista (a fase existe mesmo com poucos itens na tela)
     bool valid = false;
     // Tela dividida: as vistas 1 a 3 do mesmo quadro (coletadas na saida do hier(v, 0)); views[v - 1] = nullptr: sem a vista v
     std::shared_ptr<Snapshot> views[3];
@@ -843,6 +1006,9 @@ public:
     float wide = 1.f;
     // Corte por esfera contra a vista do jogo, como o hierTraverseAsm (Scene::outOfView); o viewer com camera livre o desliga.
     bool fovCull = true;
+    // Raio da esfera no corte multiplicado por isto: com a interpolacao a vista desenhada fica ate um quadro atras da do corte (a de
+    // B), e o que B cortou na borda sumiria durante um giro (wotm_live.inc liga 1,2 com a interpolacao)
+    float cullMargin = 1.f;
     // Vista do jogo que collect segue e que draw desenha (tela dividida; ViewCtx). A coleta a recebe de quem chama; o show a copia do
     // instantaneo.
     ViewCtx vctx;
@@ -2134,7 +2300,398 @@ public:
         vctx = s.vctx;
         eyeOk_ = s.cam.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = s.cam.pos[i];
+        hudMix_.on = false;
         return s.cam;
+    }
+
+    // Interpolacao de quadros (etapa 1: camera, objetos, paleta de ossos, ceu e sombras; wotm_live.inc, "interpolacao"): o show de B
+    // com as matrizes misturadas com as de A em alpha (0 = A, 1 = B). Casamento por (cs, no, ocorrencia); salto de translacao grande
+    // ou LOD diferente = B sem mistura. HUD, icones e lista de alta prioridade, que o jogo poe na frente da camera a cada quadro, nao
+    // sao misturados: vao para a camera misturada pela posicao relativa a camera de B (misturar a matriz deles tremia contra a cena).
+    // Particulas e destroços recuam pela velocidade (etapa 2; Particles::stepBack). Lens flare, barras sobre o inimigo e icone de vida,
+    // que o jogo projetou com a camera de B, vao para a misturada (etapa 3; blendFlares, blendAnchors); o alfa dos fades mistura com o
+    // de A quando o retangulo e o mesmo. Texto fica o de B. Corte de camera = show(B). Devolve a camera desenhada; cut diz se houve corte.
+    GameCamera showBlend(const Snapshot &A, const Snapshot &B, float alpha, bool *cut = nullptr) {
+        const GameCamera cb = show(B);
+        if (cut) *cut = false;
+        if (alpha >= 1.f) return cb;
+        alpha = std::max(alpha, 0.f);
+        if (interp::cameraCut(A.cam, B.cam) || !(A.vctx.view == B.vctx.view && A.vctx.w == B.vctx.w && A.vctx.h == B.vctx.h)) {
+            if (cut) *cut = true;
+            return cb;
+        }
+        const GameCamera c = interp::lerpCamera(A.cam, B.cam, alpha);
+        std::map<std::pair<const void *, const void *>, std::shared_ptr<std::vector<M4>>> palCache;
+        // presos a camera: M' = M_B . (camera B -> mundo)^-1 . (camera misturada -> mundo)
+        const M4 invA = interp::rigidInverse(interp::cameraToWorld(A.cam)), invB = interp::rigidInverse(interp::cameraToWorld(B.cam));
+        const M4 rebase = mul(invB, interp::cameraToWorld(c));
+        // Objeto com a mesma pose relativa a camera em A e em B (o jogo o pos na frente dela: paineis do menu, objetos do AlignCsWithView
+        // fora das listas do HUD): vai com a camera misturada, como o HUD, em vez de misturar a matriz no mundo
+        attached_ = 0;
+        auto sameRel = [&](const M4 &ma, const M4 &mb) {
+            const M4 ra = mul(ma, invA), rb = mul(mb, invB);
+            for (int i = 0; i < 4; ++i) {
+                const float n = std::fabs(rb.m[i][0]) + std::fabs(rb.m[i][1]) + std::fabs(rb.m[i][2]);
+                const float tol = i < 3 ? 1e-3f * (n + 1.f) : 0.02f + 1e-4f * n;
+                for (int j = 0; j < 3; ++j)
+                    if (!(std::fabs(ra.m[i][j] - rb.m[i][j]) <= tol)) return false;
+            }
+            return true;
+        };
+        auto mix = [&](const std::vector<DrawItem> &la, std::vector<DrawItem> &out) {
+            // A: cadeia por (cs, no) na ordem da lista; B anda a cadeia na mesma ordem (ocorrencia)
+            std::unordered_map<uint64_t, int> head;
+            head.reserve(la.size() * 2);
+            std::vector<int> next(la.size(), -1);
+            for (int i = int(la.size()) - 1; i >= 0; --i) {
+                const uint64_t k = (uint64_t(la[size_t(i)].cs) << 32) | la[size_t(i)].node;
+                auto [it, ins] = head.try_emplace(k, i);
+                if (!ins) { next[size_t(i)] = it->second; it->second = i; }
+            }
+            for (DrawItem &r : out) {
+                const auto f = head.find((uint64_t(r.cs) << 32) | r.node);
+                if (f == head.end() || f->second < 0) continue;
+                const DrawItem &a = la[size_t(f->second)];
+                f->second = next[size_t(f->second)];
+                if (a.lodIdx != r.lodIdx) continue;
+                const float dx = r.m.m[3][0] - a.m.m[3][0], dy = r.m.m[3][1] - a.m.m[3][1], dz = r.m.m[3][2] - a.m.m[3][2];
+                if (dx * dx + dy * dy + dz * dz > 150.f * 150.f) continue;   // teleporte, _cs reaproveitado
+                if (std::memcmp(&a.m, &r.m, sizeof(M4)) != 0) {
+                    if (sameRel(a.m, r.m)) {
+                        r.m = mul(r.m, rebase);
+                        ++attached_;
+                    } else
+                        r.m = interp::lerpM4(a.m, r.m, alpha);
+                }
+                if (a.pal && r.pal && a.pal != r.pal && a.pal->size() == r.pal->size()) {
+                    auto &sp = palCache[{a.pal.get(), r.pal.get()}];
+                    if (!sp) {
+                        sp = std::make_shared<std::vector<M4>>(*r.pal);
+                        for (size_t k = 0; k < sp->size(); ++k)
+                            if (std::memcmp(&(*a.pal)[k], &(*r.pal)[k], sizeof(M4)) != 0) (*sp)[k] = interp::lerpM4((*a.pal)[k], (*r.pal)[k], alpha);
+                    }
+                    r.pal = sp;
+                }
+                r.fade = a.fade + (r.fade - a.fade) * alpha;
+            }
+        };
+        mix(A.items, items);
+        mix(A.sky, sky);
+        for (ShadowBlocker &sb : shadows)
+            for (const ShadowBlocker &sa : A.shadows)
+                if (sa.index == sb.index) {
+                    for (int i = 0; i < 3; ++i) sb.origin[i] = sa.origin[i] + (sb.origin[i] - sa.origin[i]) * alpha;
+                    mix(sa.casters, sb.casters);
+                    break;
+                }
+        for (std::vector<DrawItem> *l : {&hud, &overlay, &hp, &hpOverlay})
+            for (DrawItem &it : *l) it.m = mul(it.m, rebase);
+        // Particulas: recuadas pela velocidade (1 - alpha) do passo de B (Particles::stepBack); as que nasceram no passo ficam em B
+        const uint32_t gap = B.fields - A.fields;
+        static const bool fxOff = std::getenv("WOTM_INTERP_NOFX") != nullptr;   // diagnostico: particulas de B, como na etapa 1
+        if (!fxOff && A.fields && gap >= 1 && gap <= 4) {
+            const float f = float(gap), back = 1.f - alpha;
+            static const bool log = std::getenv("WOTM_INTERPLOG") != nullptr;
+            static uint32_t loggedG = 0;
+            if (log && B.g != loggedG && A.fxRam && A.fxRamSize && B.fxRam && B.fxRamSize) {   // uma vez por par
+                loggedG = B.g;
+                logStepBack(A, B, f);
+            }
+            for (Sprite &sp : sprites) {   // destroços
+                const float d[3] = {f * sp.step[0], f * sp.step[1], f * (sp.step[2] - sp.grav * f)};
+                if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.f * 400.f) continue;
+                for (int k = 0; k < 3; ++k) sp.pos[k] -= back * d[k];
+            }
+            if (B.fxRam && B.fxRamSize) {
+                if (!fxMix_ || fxMixSize_ != B.fxRamSize) {
+                    fxMix_.reset(new uint8_t[B.fxRamSize], std::default_delete<uint8_t[]>());
+                    fxMixSize_ = B.fxRamSize;
+                }
+                uint8_t *dst = fxMix_.get();
+                Particles::blendRam(dst, Ram{B.fxRam.get(), B.fxRamSize}, fx.systems, back, f);
+                // worldToScreenMat da vista com a camera misturada (strite, linha e neblina a leem): os eixos de B trocados pelos
+                // misturados, M' = M_B C_B^T C_I nas colunas 0-2 (C = linhas direita, frente, cima; d = p - olho); o olho em worldCtx.eo
+                const uint32_t v = uint32_t(std::clamp(B.vctx.view, 0, 4));
+                const M4 CB = interp::cameraToWorld(B.cam), CI = interp::cameraToWorld(c);
+                float T[3][3];
+                for (int j = 0; j < 3; ++j)
+                    for (int k = 0; k < 3; ++k) T[j][k] = CB.m[0][j] * CI.m[0][k] + CB.m[1][j] * CI.m[1][k] + CB.m[2][j] * CI.m[2][k];
+                float M[16], eo[3];
+                std::memcpy(M, dst + addr::worldToScreenMat + 0x40 * v, sizeof M);
+                for (int r = 0; r < 4; ++r) {
+                    float row[3];
+                    for (int k = 0; k < 3; ++k) row[k] = M[4 * r] * T[0][k] + M[4 * r + 1] * T[1][k] + M[4 * r + 2] * T[2][k];
+                    for (int k = 0; k < 3; ++k) M[4 * r + k] = row[k];
+                }
+                std::memcpy(dst + addr::worldToScreenMat + 0x40 * v, M, sizeof M);
+                for (int k = 0; k < 3; ++k) eo[k] = -c.pos[k];
+                std::memcpy(dst + addr::worldCtx + 0x1F0 * v + 0x20, eo, sizeof eo);
+                fxRam_ = fxMix_;
+            }
+        }
+        // 2D presos ao 3D: da tela de B para a da camera misturada (foco de B da worldToScreenMat da vista; o FOV misturado o escala)
+        static const bool hudOff = std::getenv("WOTM_INTERP_NOHUD") != nullptr;   // diagnostico: flares, barras e fades de B
+        if (!hudOff) {
+            hudMix_.on = true;
+            hudMix_.view = B.vctx.view;
+            hudMix_.alpha = alpha;
+            hudMix_.CB = interp::cameraToWorld(B.cam);
+            hudMix_.CI = interp::cameraToWorld(c);
+            interp::Focus fb;
+            float M[16];
+            const uint32_t wm = addr::worldToScreenMat + 0x40 * uint32_t(std::clamp(B.vctx.view, 0, 4));
+            if (B.fxRam && B.fxRamSize >= wm + sizeof M) {
+                std::memcpy(M, B.fxRam.get() + wm, sizeof M);
+                if (!interp::focusOf(M, fb)) fb = {};
+            } else {   // sem a copia de sombra (WOTM_FXLIVE): pelo FOV, na vista de 224 linhas
+                fb.fv = 112.f / std::tan(B.cam.fovy * 3.14159265f / 360.f);
+                fb.fh = fb.fv * (384.f / 180.48f);
+            }
+            auto scaled = [&](const GameCamera &o) {   // foco de outra camera: o de B escalado pelo FOV
+                float k = std::tan(B.cam.fovy * 3.14159265f / 360.f) / std::tan(o.fovy * 3.14159265f / 360.f);
+                if (!(std::isfinite(k) && k > 0.f)) k = 1.f;
+                return interp::Focus{fb.fh * k, fb.fv * k};
+            };
+            hudMix_.CA = interp::cameraToWorld(A.cam);
+            hudMix_.fb = fb;
+            hudMix_.fa = scaled(A.cam);
+            hudMix_.fi = scaled(c);
+            static const bool log = std::getenv("WOTM_INTERPLOG") != nullptr;
+            static uint32_t loggedG = 0;
+            if (log && B.g != loggedG) {   // uma vez por par
+                loggedG = B.g;
+                logHudBack(A, B);
+            }
+            blendFlares(fx.flares);
+            blendAnchors(B.anchors, &A.anchors, screenRects, &screenPolys);
+            // fades: o k-esimo retangulo que nao e barra, mesmo lugar e cor em A e B
+            size_t ia = 0;
+            for (ScreenRect &r : screenRects) {
+                if (r.barView >= 0) continue;
+                while (ia < A.screenRects.size() && A.screenRects[ia].barView >= 0) ++ia;
+                if (ia >= A.screenRects.size()) break;
+                const ScreenRect &a = A.screenRects[ia++];
+                if (a.x0 == r.x0 && a.y0 == r.y0 && a.x1 == r.x1 && a.y1 == r.y1 && a.r == r.r && a.g == r.g && a.b == r.b && a.tex0 == r.tex0 &&
+                    a.underText == r.underText)
+                    r.a = static_cast<uint8_t>(std::lround(a.a + (float(r.a) - a.a) * alpha));
+            }
+        }
+        cam_ = c;
+        eyeOk_ = c.ok;
+        for (int i = 0; i < 3; ++i) eye_[i] = c.pos[i];
+        return c;
+    }
+
+    // Diagnostico da etapa 3 (WOTM_INTERPLOG): flares e icones de vida de B levados para a camera de A (alfa 0) contra os que o jogo
+    // projetou em A (o mais proximo, com o mesmo id no flare); "sem" = a mesma distancia sem reprojetar. Em px do GS. Icones: so os
+    // reprojetados (os presos na borda da tela vao pela posicao na tela de A e B, sem erro a medir), e quantos foram pela tela.
+    void logHudBack(const Snapshot &A, const Snapshot &B) {
+        const BlendView keep = hudMix_;
+        hudMix_.CI = hudMix_.CA;
+        hudMix_.fi = hudMix_.fa;
+        hudMix_.alpha = 0.f;
+        Particles::FlareFrame fr = B.flares;
+        blendFlares(fr);
+        auto nearest = [](float x, float y, const auto &list, auto same) {
+            float best = 1e30f;
+            for (const auto &o : list)
+                if (same(o)) best = std::min(best, std::hypot(o.x - x, o.y - y));
+            return best;
+        };
+        int nf = 0;
+        double ef = 0, sf = 0;
+        for (const Particles::Flare &fl : fr.e) {
+            auto same = [&](const Particles::Flare &o) { return o.id == fl.id; };
+            const float e = nearest(fl.x, fl.y, A.flares.e, same);
+            const Particles::Flare *orig = nullptr;
+            for (const Particles::Flare &o : B.flares.e)
+                if (o.id == fl.id) { orig = &o; break; }
+            if (e > 60.f || !orig) continue;   // sem par em A
+            ++nf;
+            ef += e;
+            sf += nearest(orig->x, orig->y, A.flares.e, same);
+        }
+        int na = 0, ns = 0;
+        double ea = 0, sa = 0;
+        for (const HudAnchor &b : B.anchors) {
+            float dx, dy;
+            int mode = 0;
+            if (b.view != hudMix_.view || !anchorShift(b, &A.anchors, dx, dy, &mode)) continue;
+            if (mode == 2) { ++ns; continue; }
+            auto same = [&](const HudAnchor &o) { return o.view == b.view; };
+            const float e = nearest(b.x + dx, b.y + dy, A.anchors, same);
+            if (e > 60.f) continue;
+            ++na;
+            ea += e;
+            sa += nearest(b.x, b.y, A.anchors, same);
+        }
+        std::fprintf(stderr, "[interp] hud g=%u: %d flares, erro medio %.2f px (sem reprojetar %.2f); %d icones de vida, %.2f (sem %.2f), %d pela tela; "
+                     "%d objetos presos a camera\n",
+                     B.g, nf, nf ? ef / nf : 0., nf ? sf / nf : 0., na, na ? ea / na : 0., na ? sa / na : 0., ns, attached_);
+        hudMix_ = keep;
+    }
+
+    // Interpolacao (etapa 3): lens flare da tela de B para a da camera misturada do ultimo showBlend (o do infinito so pela direcao;
+    // a profundidade W e o Z do GS refeitos). Sai o que ficou atras da camera ou fora da tela. Sem showBlend em vigor, nada.
+    void blendFlares(Particles::FlareFrame &fr) const {
+        if (!hudMix_.on) return;
+        const interp::Focus &fb = hudMix_.fb, &fi = hudMix_.fi;
+        const float x0 = -0.5f * fr.vw - 3.f, x1 = 0.5f * fr.vw + 3.f, y0 = -0.5f * fr.vh - 3.f, y1 = 0.5f * fr.vh + 3.f;
+        std::vector<Particles::Flare> out;
+        out.reserve(fr.e.size());
+        for (Particles::Flare fl : fr.e) {
+            const bool inf = (fl.flags & 0x80) != 0;
+            const float dx = (fl.x - fr.cx) / fb.fh, dy = (fl.y - fr.cy) / fb.fv;
+            float w[3], q[3];
+            if (inf) {
+                const float qb[3] = {dx, 1.f, -dy};
+                interp::fromCam(hudMix_.CB, qb, false, w);
+                interp::toCam(hudMix_.CI, w, false, q);
+                if (q[1] <= 1e-4f) continue;
+            } else {
+                if (!(fl.w > 0.f)) { out.push_back(fl); continue; }
+                const float qb[3] = {dx * fl.w, fl.w, -dy * fl.w};
+                interp::fromCam(hudMix_.CB, qb, true, w);
+                interp::toCam(hudMix_.CI, w, true, q);
+                if (q[1] < 1.f) continue;
+                fl.w = q[1];
+                fl.z = fr.zScale + fr.zOff / fl.w;
+            }
+            const float sx = fi.fh * q[0] / q[1], sy = -fi.fv * q[2] / q[1];
+            if (sx < x0 || sx > x1 || sy < y0 || sy > y1) continue;
+            fl.x = fr.cx + sx;
+            fl.y = fr.cy + sy;
+            out.push_back(fl);
+        }
+        fr.e.swap(out);
+    }
+
+    // Deslocamento na tela de um icone de vida de B no instante misturado do ultimo showBlend (falso = fica onde B o pos). Casa com o
+    // icone de A mais proximo no mundo (prev; mesma vista, ate 100 unidades: o monstro anda entre A e B). Se o icone fica a mesma
+    // distancia da projecao do seu ponto em A e em B (o jogo o pos sobre o monstro), o ponto misturado vai pela camera misturada
+    // (mode 1); senao (o jogo o prendeu na borda da tela) mistura a posicao na tela de A e B (mode 2).
+    bool anchorShift(const HudAnchor &b, const std::vector<HudAnchor> *prev, float &dx, float &dy, int *mode = nullptr) const {
+        const HudAnchor *a = nullptr;
+        float bd = 100.f * 100.f;
+        if (prev)
+            for (const HudAnchor &o : *prev) {
+                const float d = (o.w[0] - b.w[0]) * (o.w[0] - b.w[0]) + (o.w[1] - b.w[1]) * (o.w[1] - b.w[1]) + (o.w[2] - b.w[2]) * (o.w[2] - b.w[2]);
+                if (o.view == b.view && d < bd) { bd = d; a = &o; }
+            }
+        if (!a) return false;
+        const float t = hudMix_.alpha;
+        float xb, yb, xa, ya, xi, yi, w[3];
+        for (int k = 0; k < 3; ++k) w[k] = a->w[k] + (b.w[k] - a->w[k]) * t;
+        if (interp::project(hudMix_.CB, hudMix_.fb, b.w, xb, yb) && interp::project(hudMix_.CA, hudMix_.fa, a->w, xa, ya) &&
+            std::fabs((b.x - xb) - (a->x - xa)) < 3.f && std::fabs((b.y - yb) - (a->y - ya)) < 3.f &&
+            interp::project(hudMix_.CI, hudMix_.fi, w, xi, yi)) {
+            dx = xi - xb;
+            dy = yi - yb;
+            if (mode) *mode = 1;
+        } else {
+            dx = (a->x - b.x) * (1.f - t);
+            dy = (a->y - b.y) * (1.f - t);
+            if (mode) *mode = 2;
+        }
+        return std::fabs(dx) < 200.f && std::fabs(dy) < 200.f;
+    }
+
+    // Interpolacao (etapa 3): barras sobre o inimigo (ScreenRect::anchor) e icone de vida (polys centrados no ponto anotado) da vista do
+    // ultimo showBlend, levados para o instante misturado pelo anchorShift do ponto do mundo que o jogo projetou (HudAnchor; prev = os
+    // de A).
+    void blendAnchors(const std::vector<HudAnchor> &anchors, const std::vector<HudAnchor> *prev, std::vector<ScreenRect> &rects,
+                      std::vector<TextQuad> *polys) const {
+        if (!hudMix_.on || anchors.empty()) return;
+        std::vector<std::array<float, 2>> shift(anchors.size(), {NAN, NAN});
+        bool any = false;
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            float dx, dy;
+            if (anchors[i].view == hudMix_.view && anchorShift(anchors[i], prev, dx, dy)) {
+                shift[i] = {dx, dy};
+                any = true;
+            }
+        }
+        if (!any) return;
+        for (ScreenRect &r : rects) {
+            if (r.barView != hudMix_.view || r.anchor < 0 || size_t(r.anchor) >= shift.size() || std::isnan(shift[size_t(r.anchor)][0])) continue;
+            const auto &sh = shift[size_t(r.anchor)];
+            r.x0 += sh[0]; r.x1 += sh[0]; r.y0 += sh[1]; r.y1 += sh[1];
+        }
+        if (!polys) return;
+        for (TextQuad &t : *polys) {
+            const float cx = 0.5f * (t.x0 + t.x1), cy = 0.5f * (t.y0 + t.y1);
+            for (size_t i = 0; i < anchors.size(); ++i)
+                if (!std::isnan(shift[i][0]) && std::fabs(anchors[i].x - cx) < 1.5f && std::fabs(anchors[i].y - cy) < 1.5f) {
+                    t.x0 += shift[i][0]; t.x1 += shift[i][0]; t.y0 += shift[i][1]; t.y1 += shift[i][1];
+                    break;
+                }
+        }
+    }
+
+    // Diagnostico do recuo (WOTM_INTERPLOG): cada particula que andou, recuada um passo inteiro (alfa 0), contra a mais proxima do
+    // mesmo sistema em A; "sem" = a mesma distancia sem recuo. Destroços pelo passo guardado no Sprite, contra os do mesmo fx em A.
+    static void logStepBack(const Snapshot &A, const Snapshot &B, float f) {
+        const Ram ra{A.fxRam.get(), A.fxRamSize}, rb{B.fxRam.get(), B.fxRamSize};
+        double eR = 0, eS = 0;
+        long cnt = 0;
+        auto nearest = [](const float p[3], const std::vector<std::array<float, 3>> &pts) {
+            float best = 1e30f;
+            for (const auto &q : pts) best = std::min(best, (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) + (p[2] - q[2]) * (p[2] - q[2]));
+            return std::sqrt(best);
+        };
+        for (const FxSystem &s : B.fx) {
+            if (std::none_of(A.fx.begin(), A.fx.end(), [&](const FxSystem &x) { return x.index == s.index; })) continue;
+            Particles::StepBack o;
+            if (!Particles::stepBack(rb, s.base, s.n, o) || !o.moved) continue;
+            const int nA = int32_t(ra.u32(s.base + fxoff::numParticles));
+            const uint32_t pa = ra.u32(s.base + fxoff::pos), pb = rb.u32(s.base + fxoff::pos), vb = rb.u32(s.base + fxoff::vel);
+            if (nA <= 0 || nA > 1024 || !ra.ok(pa, 16 * uint32_t(nA)) || !rb.ok(pb, 16 * uint32_t(o.moved)) || !rb.ok(vb, 16 * uint32_t(o.moved))) continue;
+            std::vector<std::array<float, 3>> pts(static_cast<size_t>(nA));
+            for (int j = 0; j < nA; ++j)
+                for (int k = 0; k < 3; ++k) pts[size_t(j)][size_t(k)] = ra.f32(pa + 16 * uint32_t(j) + 4 * uint32_t(k));
+            for (int i = 0; i < o.moved; ++i) {
+                float p[3], v[3], d[3], r[3];
+                for (int k = 0; k < 3; ++k) { p[k] = rb.f32(pb + 16 * uint32_t(i) + 4 * uint32_t(k)); v[k] = rb.f32(vb + 16 * uint32_t(i) + 4 * uint32_t(k)); }
+                Particles::stepOffset(o, v, f, d);
+                for (int k = 0; k < 3; ++k) r[k] = p[k] - d[k];
+                eR += nearest(r, pts);
+                eS += nearest(p, pts);
+                ++cnt;
+            }
+        }
+        double sR = 0, sS = 0;
+        long sc = 0;
+        for (const Sprite &sp : B.sprites) {
+            if (sp.step[0] == 0.f && sp.step[1] == 0.f && sp.step[2] == 0.f) continue;
+            std::vector<std::array<float, 3>> pts;
+            for (const Sprite &a : A.sprites)
+                if ((a.key >> 12) == (sp.key >> 12)) pts.push_back({a.pos[0], a.pos[1], a.pos[2]});
+            if (pts.empty()) continue;
+            const float r[3] = {sp.pos[0] - f * sp.step[0], sp.pos[1] - f * sp.step[1], sp.pos[2] - f * (sp.step[2] - sp.grav * f)};
+            sR += nearest(r, pts);
+            sS += nearest(sp.pos, pts);
+            ++sc;
+        }
+        // worldToScreenMat refeita com a camera de A (a do alfa 0, como no showBlend) contra a gravada em A: maior diferenca relativa
+        float matErr = 0.f;
+        {
+            const uint32_t v = uint32_t(std::clamp(B.vctx.view, 0, 4)), wa = addr::worldToScreenMat + 0x40 * v;
+            const M4 CB = interp::cameraToWorld(B.cam), CA = interp::cameraToWorld(A.cam);
+            float T[3][3], scale = 0.f;
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k) T[j][k] = CB.m[0][j] * CA.m[0][k] + CB.m[1][j] * CA.m[1][k] + CB.m[2][j] * CA.m[2][k];
+            for (int r = 0; r < 4; ++r)
+                for (int k = 0; k < 3; ++k) {
+                    const float m = rb.f32(wa + 16 * uint32_t(r)) * T[0][k] + rb.f32(wa + 16 * uint32_t(r) + 4) * T[1][k] + rb.f32(wa + 16 * uint32_t(r) + 8) * T[2][k];
+                    const float a = ra.f32(wa + 16 * uint32_t(r) + 4 * uint32_t(k));
+                    matErr = std::max(matErr, std::fabs(m - a));
+                    scale = std::max(scale, std::fabs(a));
+                }
+            matErr = scale > 0.f ? matErr / scale : 0.f;
+        }
+        if (cnt || sc)
+            std::fprintf(stderr, "[interp] recuo g=%u f=%.0f: %ld particulas, erro medio %.2f (sem recuo %.2f); %ld destroços, %.2f (sem %.2f); matriz %.5f\n", B.g, f, cnt,
+                         cnt ? eR / double(cnt) : 0.0, cnt ? eS / double(cnt) : 0.0, sc, sc ? sR / double(sc) : 0.0, sc ? sS / double(sc) : 0.0, matErr);
     }
 
     // ---- Particulas (fx[], 0x5BA280: 98 x 0x2EE0 bytes; o VU1 monta os quadrados, aqui viram sprites voltados para a camera) ----
@@ -2157,6 +2714,9 @@ public:
             if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b, wide)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
+            Particles::StepBack sb;   // interpolacao (showBlend): o passo de cada destroço
+            const uint32_t velp = ram.u32(b + fxoff::vel);
+            const bool haveStep = Particles::stepBack(ram, b, int(np), sb) && ram.ok(velp, 16 * uint32_t(sb.moved));
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));
             const float minS = ram.f32(b + 0x2E30 + 8), maxS = ram.f32(b + 0x2E30 + 0xC);
             const uint32_t texLoad = ram.u16(b + 0x2C40);
@@ -2190,6 +2750,11 @@ public:
                 if (a < 0 || (life > 0 && a >= life)) continue;
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
                 s.key = i * 4096u + k;
+                if (haveStep && int(k) < sb.moved) {
+                    for (int c = 0; c < 3; ++c) s.step[c] = ram.f32(velp + 16 * k + 4 * uint32_t(c)) + sb.wind[c];
+                    s.grav = sb.grav;
+                    if (sb.keepZ) { s.step[2] = 0.f; s.grav = 0.f; }
+                }
                 if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild, microprograma 0x1180)
                     // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os bits baixos sorteados.
                     //  - lado = max(minSize, |w| maxSize / 2) (q330 = (minSize, contador, 128, maxSize / 2)), sem giro;
@@ -3574,42 +4139,78 @@ public:
         rlSetMatrixModelview(ident);
         BeginBlendMode(BLEND_ALPHA);
         const GsScreenRect gr = gsScreenRect(p.rw, p.rh);
-        for (const ScreenRect &r : *p.rects)
-            if (mine(r)) drawBar(gr, p.rw, p.rh, r);
+        // O jogo prende o centro do icone a 8-16 px da borda da vista, e a barra e mais larga que o icone: em vez de cortada na borda,
+        // a barra inteira (todos os retangulos do mesmo icone, ScreenRect::anchor) e empurrada para dentro da area dela
+        struct Span { float x0 = 1e30f, x1 = -1e30f, lo = 0.f, hi = 0.f; };
+        std::vector<Span> spans;
+        for (const ScreenRect &r : *p.rects) {
+            if (!mine(r) || r.anchor < 0) continue;
+            if (size_t(r.anchor) >= spans.size()) spans.resize(size_t(r.anchor) + 1);
+            Span &sp = spans[size_t(r.anchor)];
+            float x0, x1;
+            barSpan(gr, p.rw, r, x0, x1, sp.lo, sp.hi);
+            sp.x0 = std::min(sp.x0, x0);
+            sp.x1 = std::max(sp.x1, x1);
+        }
+        for (const ScreenRect &r : *p.rects) {
+            if (!mine(r)) continue;
+            float nudge = 0.f;
+            if (r.anchor >= 0 && size_t(r.anchor) < spans.size()) {
+                const Span &sp = spans[size_t(r.anchor)];
+                if (sp.x0 < sp.lo) nudge = sp.lo - sp.x0;
+                else if (sp.x1 > sp.hi) nudge = std::max(sp.hi - sp.x1, sp.lo - sp.x0);
+            }
+            drawBar(gr, p.rw, p.rh, r, nudge);
+        }
         EndBlendMode();
         rlDrawRenderBatchActive();
         rlSetMatrixProjection(keepProj);
         rlSetMatrixModelview(keepView);
     }
 
-    // Uma barra sobre o inimigo, em pixels da janela de rw x rh
-    void drawBar(const GsScreenRect &gr, float rw, float rh, const ScreenRect &r) {
+    // Barra sobre o inimigo: x na janela (rw de largura) antes do corte e a area em que ela sai (lo, hi: a metade da vista na tela
+    // dividida, a janela fora dela)
+    void barSpan(const GsScreenRect &gr, float rw, const ScreenRect &r, float &x0, float &x1, float &lo, float &hi) const {
+        // px da janela por px do GS: a faixa da vista (gsScreenRect, na proporcao dela) sobre a largura dela, com a altura da vista na
+        // conta (quadrantes: 112 linhas na faixa da janela inteira). Na tela dividida a faixa e a da metade (2:3, 320 px do GS)
+        const ViewCtx &cv = curView();
+        const float k = cv.w > 0.f && cv.h > 0.f ? gr.w / cv.w * (cv.h / 224.f) : gr.w / 640.f;
+        x0 = gr.x0 + r.x0 * k;
+        x1 = gr.x0 + r.x1 * k;
+        lo = 0.f;
+        hi = rw;
+        if (splitEdges && r.barView != stripView) {
+            // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
+            // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
+            // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo. A faixa de baixo dos 3 jogadores (stripView) tem
+            // a largura da tela, como fora da tela dividida
+            const float half = 0.5f * rw, v = float(r.barView & 1);
+            const float shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
+            x0 += shift;
+            x1 += shift;
+            lo = v * half;
+            hi = (v + 1.f) * half;
+        }
+    }
+
+    // Uma barra sobre o inimigo, em pixels da janela de rw x rh; nudge = deslocamento da barra inteira para caber na area (drawBarPass)
+    void drawBar(const GsScreenRect &gr, float rw, float rh, const ScreenRect &r, float nudge = 0.f) {
         const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
         if (!a) return;
         const float sy = rh / 224.f;
-        const float k = gr.w / 640.f;
-        float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
+        float x0, x1, lo, hi;
+        barSpan(gr, rw, r, x0, x1, lo, hi);
+        x0 += nudge;
+        x1 += nudge;
         const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
-        float shift = 0.f;
-        if (splitEdges && r.barView == stripView) {
-            // faixa de baixo dos 3 jogadores: a vista tem a largura da tela, como fora da tela dividida
-            x0 = std::max(x0, 0.f);
-            x1 = std::min(x1, rw);
-        } else if (splitEdges) {
-            // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
-            // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
-            // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo
-            const float half = 0.5f * rw, v = float(r.barView & 1);
-            shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
-            x0 = std::max(x0 + shift, v * half);
-            x1 = std::min(x1 + shift, (v + 1.f) * half);
-        }
+        x0 = std::max(x0, lo);
+        x1 = std::min(x1, hi);
         if (x1 <= x0) return;
-        if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte na metade da vista
+        if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte
             const Texture2D t = residentTexture(r.tex0);
             if (!t.id || fw <= 0.f) return;
             const float du = (r.u1 - r.u0) / fw;
-            const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
+            const float u0 = r.u0 + (x0 - fx0) * du, u1 = u0 + (x1 - x0) * du;
             DrawTexturePro(t, texelRect(t, r.tex0, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}), Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
                            Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
             return;
@@ -3703,7 +4304,12 @@ private:
     GameCamera cam_;   // camera do ultimo collect/blend (eixos para os sprites)
     bool eyeOk_ = false;
     float eye_[3] = {0, 0, 0};
-    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado
+    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado (ou fxMix_ na interpolacao)
+    std::shared_ptr<uint8_t> fxMix_;         // copia de sombra das particulas no instante misturado (showBlend, Particles::blendRam)
+    // cameras de A, B e a misturada do ultimo showBlend (sem corte), com o foco de cada uma: blendFlares e blendAnchors; o show desliga
+    int attached_ = 0;   // objetos que o ultimo showBlend levou com a camera (pose relativa igual em A e B)
+    struct BlendView { bool on = false; int view = 0; float alpha = 1.f; M4 CA, CB, CI; interp::Focus fa, fb, fi; } hudMix_;
+    size_t fxMixSize_ = 0;
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
@@ -4478,7 +5084,7 @@ private:
         xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), c);
         for (int i = 0; i < 3; ++i) s2 = std::max(s2, m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
         static constexpr float kNoBox[3] = {0.f, 0.f, 0.f};
-        return !Particles::inViewVolume(ram, c, kNoBox, ram.f32(node + 0x1C) * std::sqrt(s2), wide);
+        return !Particles::inViewVolume(ram, c, kNoBox, ram.f32(node + 0x1C) * std::sqrt(s2) * cullMargin, wide);
     }
 
     bool already(uint32_t n) {

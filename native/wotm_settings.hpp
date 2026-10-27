@@ -47,6 +47,7 @@ enum Key
     Announcer,    // narrador da selecao (wotm_narrator.inc): 0 desligado, 1 a voz (MP3 com o nome), 2 o grito do proprio monstro
     SkipIntro,    // pula os dois filmes do boot (wotm_fmv.hpp); lido uma vez, no primeiro filme: vale no proximo boot
     Vibration,    // vibracao dos gamepads (wotm_rumble.inc)
+    Interp,       // interpolacao de quadros (wotm_live.inc, "interpolacao"), ligada por padrao: acima de 60 Hz (g_presentHz) ou com o jogo a 30
     kKeys
 };
 
@@ -54,8 +55,8 @@ inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",   
                                             "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE",
                                             "WOTM_PROMPTS",    "WOTM_MENUCONFIRM", "WOTM_CAMERA",    "WOTM_CAMRECENTER", "WOTM_CLOSECAM",
                                             "WOTM_CAMSENS",    "WOTM_CAMINVERT",   "WOTM_RENDERSCALE", "WOTM_MSAA",      "WOTM_TEXFILTER",
-                                            "WOTM_ANNOUNCER",  "WOTM_SKIPINTRO",   "WOTM_VIBRATION"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1};
+                                            "WOTM_ANNOUNCER",  "WOTM_SKIPINTRO",   "WOTM_VIBRATION",   "WOTM_INTERP"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1};
 inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
 inline constexpr int kPromptStyles = 6;
 enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
@@ -71,10 +72,12 @@ inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10"
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1};
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1};
 inline std::filesystem::path g_path;   // vazio: sem arquivo (WOTM_SETTINGS=0 ou antes do load)
 inline std::mutex g_fileMutex;
 inline bool g_pathPending = false;   // o load achou teclas de um layout anterior: regrava o arquivo no fim do load
+// Taxa de apresentacao em vigor (initPresentRate, wotm_live.inc; 0 = ainda nao aberta): a opcao Interp so vale acima de 60
+inline std::atomic<int> g_presentHz{0};
 
 inline int get(Key k) { return g_val[k].load(std::memory_order_relaxed); }
 inline bool on(Key k) { return get(k) != 0; }
@@ -146,6 +149,7 @@ inline bool parse(Key k, const char *s, int &out)
     }
     case Vsync: out = *s == '0' ? 0 : 1; return true;
     case Announcer: out = std::clamp(std::atoi(s), 0, 2); return true;
+    case Interp: out = std::atoi(s) > 0 || !std::strcmp(s, "on") ? 1 : 0; return true;   // "redraw" (diagnostico da etapa 0) nao liga
     case KbSeparate: out = *s == '1' ? 1 : 0; return true;
     case Prompts:
     case MenuConfirm:
