@@ -25,6 +25,14 @@ $checks = [ordered]@{
     # comeca e termina igual nos dois. O laco do dialogo anda em lockstep (sem isso o indice do quadro parava e o menu nao andava)
     'meta_rede'     = @{ ExtraEnv = 'WOTM_KILLTARGET=1;WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 60
                          Expect = '\[dialogo\] 5 aberto|||rodada 2 terminou' }
+    # REBUILD LEVEL no dialogo 5 (baixo, X): o ResetLevel refaz a fase sem recarregar; a rodada 2 joga e termina igual nos dois
+    'rebuild_rede'  = @{ ExtraEnv = 'WOTM_KILLTARGET=1;WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.2:down;35:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 60
+                         Expect = '\[dialogo\] 5 aberto|||rodada 2 terminou' }
+    # QUIT no dialogo 5 (baixo, baixo, X; no ARE YOU SURE o NO vem marcado: cima, X): fora da rede o jogo volta ao userintMain e a
+    # partida direta recomecaria (segunda carga da fase, que dessincroniza); na rede a partida acaba e o jogo fecha em todos os PCs
+    # (o launcher volta ao lobby)
+    'sair_rede'     = @{ ExtraEnv = 'WOTM_KILLTARGET=1;WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.2:down;35:0.2:down;36:0.3:cross;38:0.2:up;39:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 55
+                         Expect = '\[net\] partida encerrada pelo QUIT'; Reject = 'segunda carga de fase' }
     # mods diferentes (o jogador 2 sem os mods do repo): o digest dos mods entra no hash da configuracao e o servidor recusa
     'mods_diferentes' = @{ PlayerEnv = '2:WOTM_MODS=0'; Secs = 30; ExpectRefused = 'configuracao do jogo diferente' }
 }

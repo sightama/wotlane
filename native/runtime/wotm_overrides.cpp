@@ -259,6 +259,17 @@ namespace
 
     void userintMainDirect(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        // partida em rede: depois da primeira partida o jogo so volta aqui pelo QUIT (fim de luta ou pausa, ARE YOU SURE: YES). A
+        // partida direta recomecaria com uma segunda carga da fase, que dessincroniza; aqui ela acaba e o jogo fecha em todos os PCs
+        // no mesmo quadro (o QUIT veio da entrada trocada pela rede) e o launcher volta ao lobby
+        if (g_matchCount > 0 && wotm_sync::g_net)
+        {
+            std::fprintf(stderr, "[net] partida encerrada pelo QUIT\n");
+            runtime->requestStop();   // o mesmo caminho do X da janela
+            SET_GPR_S32(ctx, 2, 0);
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
         for (uint32_t i = 0; i < 16; ++i)
             WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel (4 jogadores + ate 12 IAs, ate 0x2978)
         for (uint32_t i = 0; i < 12; ++i)
