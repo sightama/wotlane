@@ -195,18 +195,23 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 
 - `id`: letras minúsculas, dígitos e `_` (sem ele, o nome da pasta). É o que o `WOTM_MATCH` aceita (`WOTM_MATCH=goliath,3,1`).
 - `name`: o que a seleção e o HUD mostram. O HUD tem 11 letras: vale a última palavra que couber, em minúsculas ("goliath").
-- `base`: o tipo do jogo, pelo nome ou prefixo: os dez jogáveis (`togera`, `LIZARD`...) ou o `assboss` (13, o Goliath; o único chefe
-  em `kCustomBases`, `native/wotm_mods.hpp`). Um custom de base jogável roda o código e a IA desse monstro; só o Goliath foi testado
-  (para trocar só a aparência, use uma skin).
-- `costume`: o traje do disco (`ASSBOSS1`; o `ASSBOSS0` é um protótipo com metade das animações e o retrato pequeno).
+- `base`: o tipo do jogo, pelo nome ou prefixo: os dez jogáveis (`togera`, `LIZARD`...) ou um chefe que é `Monster` (`kCustomBases`,
+  `native/wotm_mods.hpp`): `assboss` (13, o Goliath), `jelly` (14, a segunda fase do Cerebulon) e `final` (15, o Cerebulon, a última
+  fase). Um custom de base jogável roda o código e a IA desse monstro; só o Goliath foi testado (para trocar só a aparência, use
+  uma skin).
+- `costume`: o traje do disco (`ASSBOSS1`; o `ASSBOSS0` é um protótipo com metade das animações e o retrato pequeno; `JELLY0` e
+  `FINAL0` só têm o traje 0).
 - `camera`: a câmera de outro monstro (`from`, pelo nome do jogo) com as distâncias escaladas (`scale` em %, 10 a 1000; o JSON do
   port só lê inteiros). O `ASSBOSS.CHR` nunca foi usado pelo jogo (na aventura a câmera é a da fase) e deixa a câmera em cima do
-  monstro; a do Togera 2x fica como a de um monstro comum.
+  monstro, e a do `JELLY.CHR` fica entre as pernas do Jelly; a do Togera 2x (Goliath) e 3x (Jelly) fica como a de um monstro
+  comum. A do `FINAL.CHR` já serve. O port lê a câmera do `.CHR` do `from` (de `mods/` ou do disco) e a põe no monstro a cada troca
+  de POV (log `[custom] jelly: camera do RST/LIZARD.CHR, distancias x3.00 (POV 0: ...)`).
 - `narrator`: `narrator/<nome>.mp3` dito na confirmação (vazio = o do tipo).
-- `ai`: se uma CPU pode usá-lo (padrão não). Um custom de chefe como CPU rodaria a IA do chefe (`Ai::updateAssBoss`), que precisa
-  dos pontos da fase dele; a seleção mostra "PLAYERS ONLY" no quadro da CPU. Com `"ai": true` (pensado para base jogável) a CPU
-  pode escolhê-lo na casa CUSTOM da seleção; o launcher só oferece customs ao jogador. Um custom de base jogável luta como CPU
-  (`WOTM_MATCH=1,moddedtogera,1`, com `"base": "togera"`: anda, ataca, solta fogo e perde a rodada como um Togera). O Goliath como CPU (`WOTM_MATCH=3,goliath,1`) carrega mas não aparece na luta.
+- `ai`: se uma CPU pode usá-lo (padrão não); sem ele a seleção mostra "PLAYERS ONLY" no quadro da CPU. Com `"ai": true` a CPU pode
+  escolhê-lo na casa CUSTOM da seleção; o launcher só oferece customs ao jogador. Um custom de base jogável luta como CPU
+  (`WOTM_MATCH=1,moddedtogera,1`, com `"base": "togera"`: anda, ataca, solta fogo e perde a rodada como um Togera), e o Jelly e o
+  Cerebulon também (`WOTM_MATCH=1,cerebulon,1`: a IA comum do jogo, a mesma que move o Cerebulon na fase final). O Goliath não: a IA
+  dele (`Ai::updateAssBoss`) precisa dos pontos da fase dele, e como CPU (`WOTM_MATCH=3,goliath,1`) carrega mas não aparece na luta.
 - **Na seleção** (telas 3, 6, 7, 18 e 19): a casa CUSTOM da barra de monstros. X abre a lista dos customs dentro do quadro do
   jogador (nome, mod, quantas skins; no quadro de CPU, "PLAYERS ONLY" nos sem `"ai"`): cima e baixo percorrem, X escolhe, triângulo
   fecha. Escolhido, o quadro mostra o monstro como os do jogo: cima e baixo trocam de traje (o `costume` do `monster.json` e as
@@ -227,6 +232,19 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
 - Ainda não: animações que o ASSBOSS não tem (escalar, alguns bloqueios e contra-ataques; `18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md`,
   seção 3) fazem o jogo segurar a pose anterior; elimination e minigames não foram testados com ele; o save da aventura não guarda
   custom (a aventura não oferece a casa).
+
+### Cerebulon (o mod `mods/Cerebulon/`, no repo)
+As duas fases do chefe final que são `Monster`: `jelly` ("JELLY", base `jelly`, câmera do Togera 3x) e `cerebulon` ("CEREBULON",
+base `final`), os dois com `"ai": true` e o narrador `cerebulon`. A primeira fase, o Mecha, é peça da fase final
+(`FinalBoss::updateMecha`), não `Monster`, e não entra.
+- **O que o port faz por eles** (`wotm_custom.inc`): visíveis e controláveis com IAs (o `SetAIMonster` desligava os tipos 0x1C0 e
+  0x1E0 e os contava como IA), visíveis também como CPU fora da aventura, banco de som `Final_s.bnk` fora da fase final e nome no
+  HUD ("JELLY WINS", "CEREBULON CRUSHED").
+- **Como o jogo os trata** (do retail, valem para o jogador): o Jelly não tem fúria (`Monster.cpp`, rage), não agarra nem é agarrado
+  (`Grapple.cpp`) e nenhum dos dois pega a arma especial dos itens (`PowerUps.cpp`). O choque do Jelly na fase final
+  (`StateUltraTazer`) é o roteiro do `FinalBoss::updateJelly` que liga; numa luta comum o jogo não o oferece. Os golpes, pulo e
+  arremessos vêm das animações do `JELLY0`/`FINAL0`.
+- O retrato do HUD fica cinza (sem `"portrait"`).
 
 Exemplo: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,
 luta em Midtown Park com câmera, som e nome. Foto: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
