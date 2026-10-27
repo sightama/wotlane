@@ -373,7 +373,7 @@ namespace wotm_custom
             std::fprintf(stderr, "[custom] Goliath: giro (X+Quadrado)\n");
         }
         if (ctx->pc == kEnterState && GPR_U32(ctx, 5) == m + kTazer && READ32(m + kTypeBits) == kJelly && isPlayerSlot(rdram, ctx, runtime, m))
-            std::fprintf(stderr, "[custom] Jelly: choque (%s)\n", READ32(m + kPlayerNum) == 2u ? "IA" : "Triangulo+Quadrado");
+            std::fprintf(stderr, "[custom] Jelly: choque (%s)\n", READ32(m + kPlayerNum) == 2u ? "IA" : "Triangulo+Circulo");
         g_origEnterState(rdram, ctx, runtime);
     }
 
@@ -437,11 +437,12 @@ namespace wotm_custom
     }
     // Choque do Jelly (StateUltraTazer, Monster+0x11130): o transitionOK do retail so confere as anims e o isSpecialAvailable
     // (m_specialWeapon), sem botao; na fase final quem decide e o roteiro do FinalBoss::updateJelly. Com o Jelly jogador o choque
-    // saia sozinho: aqui ele so comeca com Triangulo+Quadrado apertados no controle do jogador (inputGetPadButtons do pad da
-    // posicao em m_monsters[0..3]; Triangulo+Quadrado nao e combinacao do jogo, entao o Jelly continua parado e o transitionOK
+    // saia sozinho: aqui ele so comeca com Triangulo+Circulo apertados no controle do jogador (inputGetPadButtons do pad da
+    // posicao em m_monsters[0..3]; e a combinacao do especial dos monstros comuns no tipo A, PadEntry +0x36, entao o Jelly
+    // continua parado e o transitionOK
     // segue sendo consultado). O Jelly sob a IA (m_playerNum 2) e o da aventura seguem o retail.
     constexpr uint32_t kTazerOK = wotm::fn::transitionOK__15StateUltraTazer, kPadButtons = wotm::fn::inputGetPadButtons__Fi;
-    constexpr uint32_t kBtnTriangle = 0x1000, kBtnSquare = 0x8000;   // libpad (inputGetPadButtons ja inverte os ativos em 0)
+    constexpr uint32_t kBtnTriangle = 0x1000, kBtnCircle = 0x2000;   // libpad (inputGetPadButtons ja inverte os ativos em 0)
     PS2Runtime::RecompiledFunction g_origTazerOK = nullptr;
 
     void tazerOK(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -454,7 +455,7 @@ namespace wotm_custom
         if (player >= 0 && READ32(m + kTypeBits) == kJelly && READ32(m + kPlayerNum) != 2u)
         {
             const uint32_t b = wotm_modes4::call(rdram, ctx, runtime, kPadButtons, {uint32_t(player)});
-            if ((b & (kBtnTriangle | kBtnSquare)) != (kBtnTriangle | kBtnSquare))
+            if ((b & (kBtnTriangle | kBtnCircle)) != (kBtnTriangle | kBtnCircle))
             {
                 ret(ctx, 0);
                 return;
