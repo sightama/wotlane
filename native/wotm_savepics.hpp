@@ -215,6 +215,7 @@ public:
         const Framing fr = framingOf((monId_ & 0xFF) | ((monId_ >> 16) & 3) << 8);   // enquadramento do traje do disco (o base)
         renderer_.shiftX = fr.shiftX;
         renderer_.shiftY = fr.shiftY;
+        renderer_.fwd = fr.fwd;
         renderer_.render(*model_, W, H, kYaw, kPitch, fr.zoom, [&] {
             if (!lt) return;
             DrawTexturePro(*lt, Rectangle{0.f, 0.f, float(lt->width), float(lt->height)},
@@ -338,19 +339,20 @@ public:   // enquadramento tambem usado pela selecao de monstros de 3 e 4 jogado
     // Monstro 3D: virado 3/4 para a direita da tela (yaw 0 = de frente), camera um pouco acima
     static constexpr float kYaw = 35.f, kPitch = 8.f;
     // Correcao do enquadramento por monstro e traje (costume 0-3; -1 = todos). O automatico usa a maior medida da caixa, entao a cauda
-    // do Togera (3) e as asas do Raptros (9) deixavam os dois mais longe; a cauda do Togera tambem o empurrava para a direita do quadro.
+    // do Togera (3) e as asas do Raptros (9) deixavam os dois mais longe; a cauda do Togera tambem tira o centro da caixa do corpo:
+    // `fwd` anda o centro para a frente do monstro (model::Renderer::fwd), o que vale em qualquer angulo e proporcao de quadro.
     // O fogo do Magmo traje 3 (o quarto, contando de 1) e o da cabeca do Agamo (10) aumentam a caixa: aproxima e sobe um pouco para os
     // pes nao sairem por baixo. shiftX/shiftY em fracao do quadro (+ = direita/cima).
     struct Framing {
         uint32_t mon;
         int costume;
-        float zoom, shiftX, shiftY;
+        float zoom, shiftX, shiftY, fwd = 0.f;
     };
     static constexpr Framing kFraming[] = {
-        {3, -1, 1.35f, -0.12f, 0.f},   // Togera
-        {8, 3, 1.25f, 0.f, 0.08f},     // Magmo, traje de fogo
-        {9, -1, 1.6f, 0.f, 0.f},       // Raptros
-        {10, -1, 1.15f, 0.f, 0.04f},   // Agamo
+        {3, -1, 1.35f, 0.f, 0.f, 0.18f},   // Togera
+        {8, 3, 1.25f, 0.f, 0.08f},         // Magmo, traje de fogo
+        {9, -1, 1.6f, 0.f, 0.f},           // Raptros
+        {10, -1, 1.15f, 0.f, 0.04f},       // Agamo
     };
     static Framing framingOf(uint32_t id) {
         const uint32_t mon = id & 0xFF;

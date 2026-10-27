@@ -940,6 +940,10 @@ public:
     void setFx(const FxTextures *fx) { fx_ = fx; }
     bool skipAbe = false;   // diagnostico: so os opacos
     float shiftX = 0.f, shiftY = 0.f;   // deslocamento do monstro na imagem, fracao da largura/altura (+ = direita/cima); ver render
+    // Centro do enquadramento andado para a frente do monstro (+Y do modelo), em fracao da maior medida da caixa, so no eixo lateral
+    // da camera (o tamanho nao muda): tira o peso da cauda do centro da caixa em qualquer angulo e proporcao (shiftX so vale para
+    // um angulo e uma proporcao; de frente, fwd nao desloca nada)
+    float fwd = 0.f;
 
     template <class Bg>
     const RenderTexture2D &render(const Model &m, int w, int h, float yawDeg, float pitchDeg, float zoom, Bg &&background) {
@@ -951,8 +955,8 @@ public:
         upload(m);
         float lo[3], hi[3];
         m.framing(lo, hi);
-        const float c[3] = {(lo[0] + hi[0]) * .5f, (lo[1] + hi[1]) * .5f, (lo[2] + hi[2]) * .5f};
         const float ext = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-3f});
+        const float c[3] = {(lo[0] + hi[0]) * .5f, (lo[1] + hi[1]) * .5f, (lo[2] + hi[2]) * .5f};
         const float fovy = 30.f;
         const float dist = ext * 0.62f / std::tan(fovy * 0.5f * 3.14159265f / 180.f) / std::max(zoom, 0.05f);
         const float yaw = yawDeg * 3.14159265f / 180.f, pit = pitchDeg * 3.14159265f / 180.f;
@@ -960,7 +964,7 @@ public:
         // shiftX/shiftY: move o monstro na imagem (fracao da largura/altura, + = direita/cima) andando com a camera e o alvo juntos
         // pelos eixos direito R = (-cos yaw, sin yaw, 0) e de cima U = (-sin yaw sin pit, -cos yaw sin pit, cos pit) da camera
         const float visH = 2.f * dist * std::tan(fovy * 0.5f * 3.14159265f / 180.f), visW = visH * float(w) / float(std::max(h, 1));
-        const float sR = -shiftX * visW, sU = -shiftY * visH;
+        const float sR = -shiftX * visW + fwd * ext * std::sin(yaw), sU = -shiftY * visH;
         const float o[3] = {-std::cos(yaw) * sR - std::sin(yaw) * std::sin(pit) * sU, std::sin(yaw) * sR - std::cos(yaw) * std::sin(pit) * sU,
                             std::cos(pit) * sU};
         cam.target = {c[0] + o[0], c[1] + o[1], c[2] + o[2]};

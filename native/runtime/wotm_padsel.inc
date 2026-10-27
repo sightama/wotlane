@@ -2519,6 +2519,7 @@ static void renderSelModels(const View &v, int w, int h)
         s.ren.setFx(&g_selFx);
         s.ren.shiftX = fr.shiftX;
         s.ren.shiftY = fr.shiftY;
+        s.ren.fwd = fr.fwd;
         // de frente, virado um pouco para o centro da tela (os da esquerda para a direita e vice-versa)
         const SelBox b = selBox(v.selPlayers, p);
         const float yaw = b.cols > 1 ? 30.f - 60.f * float(b.col) / float(b.cols - 1) : 0.f;

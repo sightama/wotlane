@@ -15,8 +15,6 @@ O que falta fazer, e só isso. Relatos de bug passam na frente. Item terminado s
 Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 - **Monstros com arquivos próprios:** campo `files` no `monster.json`, com um tipo livre (6, 12 ou 16) ou remapeando um tipo. Hoje o custom usa o tipo de um monstro do jogo. Modelo novo depende de o `.NGP` voltar pelo kit (hoje ele só sai).
 - **Skins no elimination (modo 6):** o `Shell::LoadMonstersDB` carrega o traje 0 dos 10 monstros uma vez, e os jogadores trocam de monstro entre as rodadas sem recarregar. Escolher traje ali exige mudar a carga (um arquivo por monstro escolhido), não só a tela.
-- **Seleção nativa, pendências para colaborador** (`wotm_padsel.inc`; `NATIVO.md`, "Seleção de monstros de 1 e 2 jogadores"):
-  - Togera desalinhado para a esquerda no quadro único do adventure (tela 3): o enquadramento (`wotm::savepics::Drawer::framingOf`, `shiftX`/`shiftY`/`zoom`) é o dos quadros da lista de saves, e o da seleção tem outra proporção (`selBoxW`, até 46% da largura). Conferir os outros monstros; `shiftX` pela proporção do quadro ou enquadramento próprio da seleção.
 - **Arquivo de mod maior que o do disco** fora de `MON/*`: o jogo carrega em regiões de tamanho fixo e pode sobrescrever o que vem depois (o log avisa). Abrir espaço por tipo de arquivo.
 - **Aviso dos tetos para skin com `.TEX`/`.RTX`/`.PTR` próprios:** a skin não tem original para comparar, então hoje nada avisa. O log de carga deveria comparar com os tetos reais: `texInfo[1000]` (`maxTexId` final), VRAM residente do `.RTX` e o buffer de 0x30D40 do `.PTR` (`0f091a4:docs/investigacoes/2026-10-23/skins_mod_carga.md`, item 8).
 
