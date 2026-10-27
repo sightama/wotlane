@@ -40,7 +40,7 @@ if (-not $env:PS2X_CD_IMAGE) {
     $env:PS2X_CD_IMAGE = $iso.FullName
 }
 $env:PS2X_NO_VU1 = '1'; $env:PS2X_NO_VIF1 = '1'; $env:PS2X_NO_GS = '1'; $env:PS2X_SCENE = '1'; $env:PS2X_FMV = '1'
-$env:WOTM_MUTE = '1'; $env:WOTM_FULLSCREEN = '0'; $env:WOTM_RES = '360'; $env:WOTM_NOINPUT = '1'; $env:WOTM_REPO = $repo
+$env:WOTM_MUTE = '1'; $env:WOTM_FULLSCREEN = '0'; $env:WOTM_RES = '360'; if (-not $env:WOTM_MONITOR) { $env:WOTM_MONITOR = '1' }; $env:WOTM_NOINPUT = '1'; $env:WOTM_REPO = $repo
 foreach ($pair in ($ExtraEnv -split ';' | Where-Object { $_.Trim() })) {
     $k = $pair.IndexOf('=')
     [Environment]::SetEnvironmentVariable($pair.Substring(0, $k).Trim(), $pair.Substring($k + 1))

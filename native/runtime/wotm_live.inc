@@ -682,6 +682,31 @@ static void setFullscreen(bool on)
         fitWindow();   // o raylib volta ao tamanho de antes, que e o 960x720 do runtime quando a sessao abriu em tela cheia
 }
 
+// WOTM_MONITOR=<n>: a janela (e a tela cheia) vai para o monitor n do raylib; sem ela, o monitor em que a janela abriu. Antes de tudo o
+// que le o monitor atual (taxa de apresentacao, altura do quadro, tela cheia). Os monitores saem no log para achar o numero.
+static void moveToChosenMonitor()
+{
+    const char *e = std::getenv("WOTM_MONITOR");
+    const int n = GetMonitorCount();
+    for (int i = 0; i < n; ++i)
+    {
+        const Vector2 p = GetMonitorPosition(i);
+        std::fprintf(stderr, "[native] monitor %d: %s %dx%d em %.0f,%.0f%s\n", i, GetMonitorName(i), GetMonitorWidth(i), GetMonitorHeight(i), p.x, p.y,
+                     i == GetCurrentMonitor() ? " (atual)" : "");
+    }
+    if (!e || !*e)
+        return;
+    const int m = std::atoi(e);
+    if (m < 0 || m >= n)
+    {
+        std::fprintf(stderr, "[native] WOTM_MONITOR=%d ignorado: ha %d monitor(es)\n", m, n);
+        return;
+    }
+    const Vector2 p = GetMonitorPosition(m);
+    SetWindowPosition(static_cast<int>(p.x) + 40, static_cast<int>(p.y) + 40);
+    std::fprintf(stderr, "[native] janela no monitor %d (WOTM_MONITOR)\n", m);
+}
+
 static void initWindowAspect()
 {
     static bool done = false;
@@ -689,7 +714,10 @@ static void initWindowAspect()
         return;
     done = true;
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
+    {
+        moveToChosenMonitor();
         initPresentRate();
+    }
     if (const char *s = std::getenv("WOTM_FULLSCREEN"); !s || !*s || *s != '0')   // padrao: tela cheia sem borda; WOTM_FULLSCREEN=0 = janela
         setFullscreen(true);
     else

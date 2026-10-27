@@ -52,11 +52,12 @@ $checks = [ordered]@{
                          Expect = '\[chase\] jogador 5: camera a [2-4]\d\d unidades do monstro, \d{3,} objetos|||redesenho: 1 vista [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
                          Reject = '3-4 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # padrao sem WOTM_FULLSCREEN/WOTM_RES/WOTM_SSAA: tela cheia sem borda, quadro no dobro da resolucao do monitor (superamostragem 2x;
-    # esta maquina: 2560x1440) e reduzido na apresentacao; WOTM_SSAA=1 = quadro na resolucao do monitor
+    # no monitor 1 desta maquina, WOTM_MONITOR padrao do live_check: 1920x1080) e reduzido na apresentacao; WOTM_SSAA=1 = quadro na
+    # resolucao do monitor
     'tela_nativa'   = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_SSAA=;WOTM_MATCH=3,1,1'; Secs = 25
-                         Expect = '\[native\] quadro 5120x2880, janela 2560x1440 \(tela cheia' }
+                         Expect = '\[native\] quadro 3840x2160, janela 1920x1080 \(tela cheia' }
     'tela_sem_ssaa' = @{ Env = 'WOTM_FULLSCREEN=;WOTM_RES=;WOTM_SSAA=1;WOTM_MATCH=3,1,1'; Secs = 25
-                         Expect = '\[native\] quadro 2560x1440, janela 2560x1440 \(tela cheia' }
+                         Expect = '\[native\] quadro 1920x1080, janela 1920x1080 \(tela cheia' }
     # a vista unificada (todos numa tela so no combate de perto, gUseUnifiedView 0x6F8A8C) nunca liga com 3+ jogadores
     'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
                          Expect = '6f8a8c=00000000'
