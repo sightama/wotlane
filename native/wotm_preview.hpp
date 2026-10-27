@@ -11,6 +11,8 @@
 //   - Display (DISPLAY MODE): o monitor com a janela sobre a area de trabalho, ou o quadro na tela inteira.
 //   - Vsync (VSYNC): a cena andando de lado; sem vsync a imagem rasga numa linha que muda de lugar (metade de cima e de baixo de
 //     momentos diferentes).
+//   - Interp (INTERPOLATE FRAMES): a cena andando de lado, mais rapido; desligada, a camera anda em degraus de 30 por segundo,
+//     ligada, continua (ilustracao: no jogo e 60 contra a taxa do monitor; o menu redesenha a 60, que basta para ver a diferenca).
 // Thread da janela: prepare() fora de qualquer BeginTextureMode (desenha nas texturas proprias), draw() dentro do do painel.
 #pragma once
 
@@ -25,7 +27,7 @@
 
 namespace wotm::preview
 {
-enum Kind { None, Sharpness, Filter, Aspect, Display, Vsync };
+enum Kind { None, Sharpness, Filter, Aspect, Display, Vsync, Interp };
 
 struct Params
 {
@@ -39,6 +41,7 @@ struct Params
     int display = 0;            // 0 janela, 1 sem borda, 2 exclusiva
     float monAspect = 16.f / 9.f;
     bool vsync = true;
+    bool interp = false;        // INTERPOLATE FRAMES
     double time = 0.0;
 };
 
@@ -126,6 +129,20 @@ public:
             EndTextureMode();
             break;
         }
+        case Interp:
+        {
+            const int h = std::clamp(int(std::lround(p.boxScreenRows * 0.8f)), 32, 720), w = std::max(8, int(std::lround(h * boxAspect)));
+            ensureRt(win_, w, h, TEXTURE_FILTER_BILINEAR);
+            applyFilter(0);
+            // vai e volta de lado, o dobro da velocidade da do VSYNC (o degrau aparece no movimento rapido); desligada, o instante
+            // so muda 30 vezes por segundo
+            const double t = p.interp ? p.time : std::floor(p.time * 30.0) / 30.0;
+            const double u = t * 0.5 - std::floor(t * 0.5);
+            BeginTextureMode(win_);
+            drawWorld(streetCamera(float(u < 0.5 ? -12.0 + 48.0 * u : 36.0 - 48.0 * u)), 0);
+            EndTextureMode();
+            break;
+        }
         default: break;
         }
     }
@@ -146,6 +163,7 @@ public:
         {
         case Sharpness:
         case Filter:
+        case Interp:
             blit(win_, all, box);
             DrawRectangleLinesEx(Rectangle{box.x - 3.f, box.y - 3.f, box.width + 6.f, box.height + 6.f}, 3.f, frame);
             break;

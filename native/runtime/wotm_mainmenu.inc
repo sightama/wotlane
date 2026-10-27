@@ -1333,6 +1333,7 @@ static wotm::preview::Kind previewKind(st::Key k)
     case st::Aspect: return Aspect;
     case st::Display: return Display;
     case st::Vsync: return Vsync;
+    case st::Interp: return Interp;
     default: return None;   // REFRESH RATE: o jogo continua a 60, nao ha o que mostrar
     }
 }
@@ -1352,6 +1353,7 @@ static wotm::preview::Params previewParams(const Rectangle &box, float frac)
     const int mon = GetCurrentMonitor();
     p.monAspect = GetMonitorHeight(mon) > 0 ? float(GetMonitorWidth(mon)) / float(GetMonitorHeight(mon)) : 16.f / 9.f;
     p.vsync = st::on(st::Vsync);
+    p.interp = st::on(st::Interp);
     p.time = GetTime();
     return p;
 }
