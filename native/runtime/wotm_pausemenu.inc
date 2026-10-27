@@ -199,6 +199,7 @@ static void dialogHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         wotm_training::g_dialogMs = wotm_training::nowMs();   // pausa (ou dialogo de fim): as janelas do treino somem
         g_dialogRa = GPR_U32(ctx, 31);
         g_inDialog = true;
+        std::fprintf(stderr, "[dialogo] %u aberto\n", GPR_U32(ctx, 4));
     }
     g_origDialog(rdram, ctx, runtime);
     if (g_inDialog && ctx->pc == g_dialogRa)

@@ -253,6 +253,7 @@ namespace
     int g_matchPlayers = 1;
     int g_padAIs = 0;
     int g_matchMode = 0, g_matchContinues = 2;   // WOTM_MODE=<modo>[:<continues>] (6 eliminacao, 7 dodgeball, 8 big shot, 9 crush)
+    int g_matchKillTarget = 0;                   // WOTM_KILLTARGET=<n>: vitorias para acabar a partida (0: sem fim)
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
@@ -292,7 +293,7 @@ namespace
             else
                 WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume);
         }
-        WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
+        WRITE32(kShell + 0x2A44, static_cast<uint32_t>(g_matchKillTarget));   // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
         WRITE32(kShell + 0x2BB4, static_cast<uint32_t>(g_matchPlayers));  // m_numPlayers
         WRITE32(kShell + 0x2BB8, static_cast<uint32_t>(g_matchAIs));     // m_numAIs
@@ -818,6 +819,11 @@ namespace
             }
             if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
                 wotmCaptureFrame(rdram);
+            // cada volta do laco do dialogo e um quadro do passo fixo: le o controle (inputUpdate) e espera o vsync sem passar pelo
+            // timerWaitForMinUpdateRate. Sem isso o indice do quadro parava e, em rede, todos os PCs liam para sempre a entrada do
+            // quadro em que o dialogo abriu (o menu nao andava). Aqui o indice anda, a entrada local e trocada e o estado entra no hash
+            if (ra == kDialogLoopSyncVRa && wotm_sync::g_fixedStep)
+                wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);
             else if (ra == kFadeStepSyncVRa[0] || ra == kFadeStepSyncVRa[1])
             {
                 wotmCaptureFadeStep(rdram);
@@ -2589,6 +2595,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             if (const char *k = std::strchr(md, ':'))
                 g_matchContinues = std::clamp(std::atoi(k + 1), 0, 9);
         }
+        if (const char *kt = std::getenv("WOTM_KILLTARGET"))
+            g_matchKillTarget = std::clamp(std::atoi(kt), 0, 99);
         int bad = -1;
         if (p && *p == '\0' && n >= 2 && !wotm_monsters::fits(v, c, n - 1, &bad))   // monstro sem arquivo no disco: a carga travaria
             std::fprintf(stderr, "[wotm] WOTM_MATCH recusada: o monstro %d (%do da lista) nao tem arquivo no disco (traje %s); validos: 1-5, 7-11, "
