@@ -6,7 +6,9 @@
 #     diferentes jogam juntos. Padrao: o build_dev do runtime.
 #   -Drop <s>: fecha o ultimo jogador depois de s segundos e confere que os outros seguem (ele vira neutro no quadro combinado).
 #   -ExtraEnv "A=1;B=2": variaveis a mais para todos os jogadores (iguais em todos, senao o servidor recusa a configuracao).
-#   -Expect "re1|||re2": regexes que tem que aparecer no log de todos os jogadores.
+#   -PlayerEnv "2:A=1;B=2|||3:C=1": variaveis so para o jogador N (o que muda num PC so: mouse, opcoes deste PC).
+#   -Expect "re1|||re2": regexes que tem que aparecer no log de todos os jogadores. -Reject: as que nao podem aparecer em nenhum.
+#   -ExpectRefused "<regex>": a partida tem que ser recusada pelo servidor com esse motivo (configuracao, build) e ninguem comecar.
 #   Logs e hashes ficam em <runtime>\net\ (servidor.log, jogador<N>.err.log, jogador<N>.hash). Sai com 0 se tudo bater.
 param(
     [int]$Players = 2,
@@ -17,7 +19,10 @@ param(
     [string]$Exe = '',
     [int]$Drop = 0,
     [string]$ExtraEnv = '',
-    [string]$Expect = ''
+    [string]$PlayerEnv = '',
+    [string]$Expect = '',
+    [string]$Reject = '',
+    [string]$ExpectRefused = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
@@ -70,6 +75,19 @@ try {
         }
         $env:WOTM_STATEHASH = Join-Path $out "jogador$i.hash"
         $env:PS2X_PAD = $scripts[($i - 1) % $scripts.Count]
+        $own = @()   # as do -PlayerEnv vem por ultimo (podem trocar o roteiro de pad deste jogador) e saem depois que ele abre
+        foreach ($spec in ($PlayerEnv -split '\|\|\|' | Where-Object { $_ -match "^$i`:" })) {
+            # NOME=valor separados por ';'; um pedaco sem '=' continua o valor anterior (o roteiro do PS2X_PAD usa ';')
+            $pairs = @()
+            foreach ($part in ($spec.Substring($spec.IndexOf(':') + 1) -split ';')) {
+                if ($part -match '^\s*[A-Z0-9_]+=' -or $pairs.Count -eq 0) { $pairs += $part } else { $pairs[-1] += ";$part" }
+            }
+            foreach ($pair in ($pairs | Where-Object { $_.Trim() })) {
+                $k = $pair.IndexOf('=')
+                [Environment]::SetEnvironmentVariable($pair.Substring(0, $k).Trim(), $pair.Substring($k + 1))
+                $own += $pair.Substring(0, $k).Trim()
+            }
+        }
         $exePath = $exes[[Math]::Min($i - 1, $exes.Count - 1)]
         # cada jogador na sua pasta, como em PCs diferentes: o ELF, o cartao (mc0) e o save.json dele; o resto do disco vem da ISO.
         # Do segundo em diante o save tem outras opcoes (dificuldade, volumes, controle, tokens): a partida em rede nao pode le-lo.
@@ -82,6 +100,8 @@ try {
         }
         $procs += Start-Process -FilePath $exePath -ArgumentList "`"$(Join-Path $pdir 'SCUS_971.97')`"" -WorkingDirectory $pdir -PassThru -WindowStyle Minimized `
             -RedirectStandardError (Join-Path $out "jogador$i.err.log") -RedirectStandardOutput (Join-Path $out "jogador$i.out.log")
+        foreach ($k in $own) { [Environment]::SetEnvironmentVariable($k, $null) }
+        $env:PS2X_PAD = $null
     }
     if ($Drop -gt 0) {
         Start-Sleep -Seconds $Drop
@@ -103,6 +123,19 @@ try {
 $failed = $false
 function Fail([string]$why) { Write-Host "FALHOU  $why" -ForegroundColor Red; $script:failed = $true }
 $srvLog = Get-Content (Join-Path $out 'servidor.log') -Raw
+if ($ExpectRefused) {
+    # a partida nao pode comecar: algum jogador recebe a recusa do servidor com este motivo, e nenhum chega ao inicio
+    $refused = $false
+    for ($i = 1; $i -le $Players; $i++) {
+        $log = Get-Content (Join-Path $out "jogador$i.err.log") -Raw
+        if ($log -match "\[net\] parado: [^\r\n]*$ExpectRefused[^\r\n]*") { $refused = $true; Write-Host "ok      jogador ${i}: $($Matches[0])" }
+        if ($log -match "\[net\] inicio: jogador") { Fail "jogador $i comecou a partida" }
+    }
+    if (-not $refused) { Fail "ninguem foi recusado por '$ExpectRefused'" }
+    if ($failed) { Write-Host 'FALHOU'; exit 1 }
+    Write-Host 'PASSOU'
+    exit 0
+}
 if ($srvLog -match 'DESSINCRONIA[^\r\n]*') { Fail "servidor: $($Matches[0])" }
 if ($srvLog -notmatch 'inicio, atraso (\d+)') { Fail 'servidor nunca comecou a partida' } else { Write-Host "ok      servidor comecou a partida (atraso $($Matches[1]))" }
 $alive = if ($Drop -gt 0) { $Players - 1 } else { $Players }
@@ -112,6 +145,9 @@ for ($i = 1; $i -le $Players; $i++) {
     if ($log -match '\[net\] parado: [^\r\n]*') { if (-not ($Drop -gt 0 -and $i -eq $Players)) { Fail "jogador ${i}: $($Matches[0])" } }
     if ($log -match '\[CRASH\]|\[vigia\] CONGELOU') { Fail "jogador ${i}: $($Matches[0])" }
     if ($log -notmatch '\[sync\] primeira entrada nao neutra aplicada no quadro') { Fail "jogador ${i}: nenhuma entrada chegou ao jogo" }
+    foreach ($re in ($Reject -split '\|\|\|' | Where-Object { $_ })) {
+        if ($log -match $re) { Fail "jogador ${i}: apareceu $($Matches[0])" }
+    }
     foreach ($re in ($Expect -split '\|\|\|' | Where-Object { $_ })) {
         if ($log -notmatch $re) { Fail "jogador ${i}: faltou $re" }
     }

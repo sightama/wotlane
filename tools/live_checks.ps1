@@ -30,6 +30,11 @@ $checks = [ordered]@{
     'borrao_4'      = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8578'; Secs = 35
                          Expect = '6f8578=00000004'
                          Reject = '6f8578=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # meta de vitorias da partida direta (WOTM_KILLTARGET): o "vencer" derruba o jogador 2 aos 8 s, o jogador 1 chega a 1 vitoria e o
+    # Evaluate abre o dialogo 5 (vencedor, PLAY AGAIN / REBUILD LEVEL / QUIT). Sem a meta (m_killTarget 0) o derrubado so levanta
+    'meta_vitorias' = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_KILLTARGET=1;WOTM_CHEATS=vencer=8'; Secs = 40
+                         Expect = 'vencer a luta: |||\[dialogo\] 5 aberto'
+                         Reject = '\[CRASH\]|||\[vigia\] CONGELOU' }
     # monstro sem arquivo no disco (6 = spider, cortado): a WOTM_MATCH e recusada com aviso, em vez de travar a carga da fase
     # (native/net/wotm_monsters.hpp)
     'monstro_sem_arquivo' = @{ Env = 'WOTM_MATCH=3,6,7,1;WOTM_AIVSAI=1'; Secs = 25
