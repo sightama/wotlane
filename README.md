@@ -59,6 +59,8 @@ sh tools/setup_toolchain.sh        # downloads ee-gcc 2.95.2 (SN ProDG) into too
 Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build + SHA1 check).
 
 ### Notes for a fresh clone
+- `configure.py` needs Python 3.10 or newer in the venv. On Ubuntu 20.04, whose `python3` is 3.8 and whose apt has no 3.10, `uv python install 3.12` gives a user-space
+  Python to build the venv from.
 - `tools/cc.sh` runs the compiler (a Win32 binary) through `wine`, which needs the i386 architecture enabled **before** installing it:
   ```sh
   sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine wine32:i386

@@ -78,7 +78,7 @@ def main():
         '',
         # The retail PT_LOAD ends right after .sdata; splat's ALIGN(128) after the last section adds padding.
         'rule objcopy',
-        f'  command = ${{cross}}objcopy -O binary --gap-fill=0x00 $in $out && truncate -s {RETAIL_ROM_SIZE:#x} $out',
+        f'  command = ${{cross}}objcopy -O binary --gap-fill=0x00 $in $out && truncate -s {RETAIL_ROM_SIZE} $out',
         '  description = OBJCOPY $out',
         '',
         'rule check',
