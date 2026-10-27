@@ -52,9 +52,19 @@ for `wotm.exe` once someone starts the match (`--start <stage>` starts it); `--l
 
 ## What is different online
 
-- Endless free-for-all: knocked-out monsters get back up, no end-of-match screen. Close the window to leave.
+- Endless free-for-all by default: knocked-out monsters get back up, no end-of-match screen. Close the window to leave. With a wins
+  target (`WOTM_KILLTARGET`, the same on every PC) the first to reach it ends the match with the game's PLAY AGAIN / REBUILD LEVEL /
+  QUIT screen; any player's controller moves the cursor and confirms, and every PC follows the same choice.
+- Pausing works for everyone: whoever presses Start pauses every PC, and the pause menu moves the same everywhere. RECOMPILED OPTIONS
+  does nothing online.
 - Everyone plays with the game's default options (difficulty, volumes, controller layout): local saves are neither read nor written
   online, because they live in game memory and would make the PCs drift apart.
+- Gameplay settings are fixed online: classic camera (no modern orbit camera, no mouse camera), the game's own lock-on (no lock-on
+  toggle), close-up camera on, default sensitivity. Your own settings are kept and come back offline. Video settings (resolution,
+  render scale, interpolation, enemy bars, damage numbers, button prompts) stay yours. Mouse clicks in menus, photo mode and switching
+  targets with the keyboard are off online (they come from your PC only and would make the PCs drift apart).
+- Mods: everyone needs the same active mods (same files, same contents). Otherwise the server refuses the join with
+  "configuracao do jogo diferente".
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
 - Input delay: 2 frames on a LAN, about 4 to 6 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
   runs its own 30 Hz mode). It is fixed for the whole match.
@@ -72,7 +82,9 @@ for `wotm.exe` once someone starts the match (`--start <stage>` starts it); `--l
 ## Troubleshooting
 
 - "build diferente": someone is on another commit or compiler. Compare `python tools\build_id.py`; `git pull` and rebuild.
-- "configuracao do jogo diferente": someone launched with different game options (mods such as the lock-on toggle or enemy bars, cheats,
-  `WOTM_RATEMIN`). Use the same launcher checkboxes in the Mods group.
+- "configuracao do jogo diferente": someone launched with different game options (enemy bars, cheats, `WOTM_RATEMIN`, wins target)
+  or a different set of mods in `mods\`. Use the same launcher checkboxes in the Mods group and copy the same mod folders (folders whose
+  name starts with `_` are off and do not count).
 - "sem resposta do servidor": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
-- Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical.
+- Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
+  `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
