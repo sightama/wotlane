@@ -306,3 +306,24 @@ construída: o critério dos 3 px já escolhe os que batem; ela mostra que o foc
 0,14–0,19 ms, o mesmo da etapa 2; redesenho todo de 3,2–3,6 ms na tela dividida. `tools\corpus.ps1 -Check` sem mudança. Foto:
 `docs/screenshots/2026-10-26/2026-10-26_interpolacao_barras.png` (barras com `WOTM_ENEMYBARS=1` e a mistura). Fica para a etapa 4 o
 ícone do jogo (sem barras) na tela dividida, que sai na lista de polígonos da janela inteira.
+
+## 11. Etapa 4 implementada (2026-10-26)
+
+Boa parte da lista da etapa 4 já tinha caído na etapa 1: cada vista da tela dividida mistura com o próprio par (`S.prev.views`); a
+vista sem par (divisão ligando, vista unificada do agarrão: `vctx` diferente) sai como B; pausa (F7), câmera livre, foto, diálogos
+(buraco de fields), carga (`g_loadFreeze`, sem captura) e `Shell::FadeScreen` (laço sem captura: alfa para em 1) desligam a mistura
+ou a deixam em B. O que entrou agora:
+- **Ícone de vida do jogo na tela dividida:** sai nos polígonos da janela inteira, montados do instantâneo da vista 0; o laço desloca
+  uma cópia (`polysMix`) vista a vista, como as barras, e a devolve à `Scene` depois da vista 0.
+- **Presos à câmera fora das listas do HUD** (risco da seção 6): em vez de listar os `_cs` no log e tratá-los à mão, o `mix` do
+  `showBlend` testa a pose relativa à câmera (`M·C⁻¹`) em A e em B; igual (1e-3 nos eixos, 0,02 + 1e-4·|t| na posição), vai com a
+  câmera misturada. É exato para o que está preso e não muda o resto (a pose relativa só bate se o objeto anda junto com a câmera).
+  Contagem no `[interp] hud` ("objetos presos à câmera"): na luta, 15–20% dos pares têm alguns (até 27 em tela cheia, 49 com dois
+  jogadores); na tela de título, 2 por quadro.
+- **texId 0:** fica a apresentação anterior. O CLOAK e o mapa de ambiente de vídeo não acumulam além do que o PS2 já acumula, e a
+  apresentação anterior está mais perto no tempo que o quadro anterior do jogo.
+
+Conferido: lutas IA x IA de 45 s a 180 Hz com 1 e 2 jogadores (flares 0,005 / 0,003 px, ícones 0,54 / 0,51 px, como na etapa 3);
+menu com `WOTM_SKIPINTRO=1` e a mistura (9089 apresentações, sem corte, fotos normais). O roteiro `PS2X_PAD` não passa do menu
+principal nativo, então as transições de câmera entre as telas do telão e a escolha de lados ficam para o dono conferir.
+`tools\corpus.ps1 -Check` sem mudança.

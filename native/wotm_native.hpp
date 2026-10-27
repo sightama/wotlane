@@ -2322,6 +2322,22 @@ public:
         }
         const GameCamera c = interp::lerpCamera(A.cam, B.cam, alpha);
         std::map<std::pair<const void *, const void *>, std::shared_ptr<std::vector<M4>>> palCache;
+        // presos a camera: M' = M_B . (camera B -> mundo)^-1 . (camera misturada -> mundo)
+        const M4 invA = interp::rigidInverse(interp::cameraToWorld(A.cam)), invB = interp::rigidInverse(interp::cameraToWorld(B.cam));
+        const M4 rebase = mul(invB, interp::cameraToWorld(c));
+        // Objeto com a mesma pose relativa a camera em A e em B (o jogo o pos na frente dela: paineis do menu, objetos do AlignCsWithView
+        // fora das listas do HUD): vai com a camera misturada, como o HUD, em vez de misturar a matriz no mundo
+        attached_ = 0;
+        auto sameRel = [&](const M4 &ma, const M4 &mb) {
+            const M4 ra = mul(ma, invA), rb = mul(mb, invB);
+            for (int i = 0; i < 4; ++i) {
+                const float n = std::fabs(rb.m[i][0]) + std::fabs(rb.m[i][1]) + std::fabs(rb.m[i][2]);
+                const float tol = i < 3 ? 1e-3f * (n + 1.f) : 0.02f + 1e-4f * n;
+                for (int j = 0; j < 3; ++j)
+                    if (!(std::fabs(ra.m[i][j] - rb.m[i][j]) <= tol)) return false;
+            }
+            return true;
+        };
         auto mix = [&](const std::vector<DrawItem> &la, std::vector<DrawItem> &out) {
             // A: cadeia por (cs, no) na ordem da lista; B anda a cadeia na mesma ordem (ocorrencia)
             std::unordered_map<uint64_t, int> head;
@@ -2340,7 +2356,13 @@ public:
                 if (a.lodIdx != r.lodIdx) continue;
                 const float dx = r.m.m[3][0] - a.m.m[3][0], dy = r.m.m[3][1] - a.m.m[3][1], dz = r.m.m[3][2] - a.m.m[3][2];
                 if (dx * dx + dy * dy + dz * dz > 150.f * 150.f) continue;   // teleporte, _cs reaproveitado
-                if (std::memcmp(&a.m, &r.m, sizeof(M4)) != 0) r.m = interp::lerpM4(a.m, r.m, alpha);
+                if (std::memcmp(&a.m, &r.m, sizeof(M4)) != 0) {
+                    if (sameRel(a.m, r.m)) {
+                        r.m = mul(r.m, rebase);
+                        ++attached_;
+                    } else
+                        r.m = interp::lerpM4(a.m, r.m, alpha);
+                }
                 if (a.pal && r.pal && a.pal != r.pal && a.pal->size() == r.pal->size()) {
                     auto &sp = palCache[{a.pal.get(), r.pal.get()}];
                     if (!sp) {
@@ -2362,8 +2384,6 @@ public:
                     mix(sa.casters, sb.casters);
                     break;
                 }
-        // presos a camera: M' = M_B . (camera B -> mundo)^-1 . (camera misturada -> mundo)
-        const M4 rebase = mul(interp::rigidInverse(interp::cameraToWorld(B.cam)), interp::cameraToWorld(c));
         for (std::vector<DrawItem> *l : {&hud, &overlay, &hp, &hpOverlay})
             for (DrawItem &it : *l) it.m = mul(it.m, rebase);
         // Particulas: recuadas pela velocidade (1 - alpha) do passo de B (Particles::stepBack); as que nasceram no passo ficam em B
@@ -2505,8 +2525,9 @@ public:
             ea += e;
             sa += nearest(b.x, b.y, A.anchors, same);
         }
-        std::fprintf(stderr, "[interp] hud g=%u: %d flares, erro medio %.2f px (sem reprojetar %.2f); %d icones de vida, %.2f (sem %.2f), %d pela tela\n",
-                     B.g, nf, nf ? ef / nf : 0., nf ? sf / nf : 0., na, na ? ea / na : 0., na ? sa / na : 0., ns);
+        std::fprintf(stderr, "[interp] hud g=%u: %d flares, erro medio %.2f px (sem reprojetar %.2f); %d icones de vida, %.2f (sem %.2f), %d pela tela; "
+                     "%d objetos presos a camera\n",
+                     B.g, nf, nf ? ef / nf : 0., nf ? sf / nf : 0., na, na ? ea / na : 0., na ? sa / na : 0., ns, attached_);
         hudMix_ = keep;
     }
 
@@ -4250,6 +4271,7 @@ private:
     std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado (ou fxMix_ na interpolacao)
     std::shared_ptr<uint8_t> fxMix_;         // copia de sombra das particulas no instante misturado (showBlend, Particles::blendRam)
     // cameras de A, B e a misturada do ultimo showBlend (sem corte), com o foco de cada uma: blendFlares e blendAnchors; o show desliga
+    int attached_ = 0;   // objetos que o ultimo showBlend levou com a camera (pose relativa igual em A e B)
     struct BlendView { bool on = false; int view = 0; float alpha = 1.f; M4 CA, CB, CI; interp::Focus fa, fb, fi; } hudMix_;
     size_t fxMixSize_ = 0;
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual

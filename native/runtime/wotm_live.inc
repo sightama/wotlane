@@ -1703,13 +1703,18 @@ static bool wotmDrawNative(const uint8_t *rdram)
             ++wotm::drawProf().redraws;
         wotm::ProfScope psFrame(wotm::DrawProf::RFrame);
         wotm::GpuTimer::Scope gpuScope;
-        // interpolacao na tela dividida: as barras (no instantaneo da vista 0) e os flares de cada vista vao para a camera misturada dela
-        // (Scene::blendAnchors, blendFlares no showBlend), numa copia feita vista a vista antes do desenho dela
+        // interpolacao na tela dividida: as barras e o icone de vida do jogo (no instantaneo da vista 0) e os flares de cada vista vao
+        // para a camera misturada dela (Scene::blendAnchors, blendFlares no showBlend), numa copia feita vista a vista antes do desenho
+        // dela; o icone (polys da janela inteira) volta a Scene depois da vista 0
         static std::vector<wotm::ScreenRect> barsMix;
+        static std::vector<wotm::TextQuad> polysMix;
         static wotm::Particles::FlareFrame flaresMix[4];
         const bool splitMix = interpOn && split;
         if (splitMix)
+        {
             barsMix = S.snap.screenRects;
+            polysMix = S.snap.screenPolys;
+        }
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
             wotm::ProfScope psView(wotm::DrawProf::RView);
             const int W = viewW(static_cast<int>(&vrt - S.vrts));
@@ -1782,7 +1787,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
                                                              : S.scene.show(*S.snap.views[v - 1]);
                     if (splitMix)
                     {
-                        S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, nullptr);
+                        S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, &polysMix);
                         flaresMix[v] = S.scene.fx.flares;
                     }
                 }
@@ -1799,7 +1804,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
             if (splitMix)
             {
                 if (!interpOld)   // no par (P, A) as ancoras de A nao casam com as barras de B
-                    S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, nullptr);
+                {
+                    S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, &polysMix);
+                    S.scene.screenPolys = polysMix;
+                }
                 flaresMix[0] = S.scene.fx.flares;
             }
         }
