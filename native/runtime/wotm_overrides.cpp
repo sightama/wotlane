@@ -1730,8 +1730,9 @@ namespace
         const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, gp = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
         // camera moderna (wotm_orbit.inc): configuracao relativa a tela e analogico direito para a orbita, antes do lock-on ler o +0x16E4
         const int orbitSlot = ctx->pc == kInterpretInputs ? orbit::inputEnter(rdram, pf, gp) : -1;
-        // troca de alvo pedida pelo teclado (Tab, R, rodinha; wotm_mouse.hpp): com alvo travado, com ou sem o lock-on alternado
-        if (int ps = -1; ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) &&
+        // troca de alvo pedida pelo teclado (Tab, R, rodinha; wotm_mouse.hpp): com alvo travado, com ou sem o lock-on alternado. Na
+        // partida em rede nao: o pedido vem da janela deste PC, fora da entrada trocada pela rede (a troca fica no direcional do controle)
+        if (int ps = -1; ctx->pc == kInterpretInputs && !wotm::settings::g_netProfile.load(std::memory_order_relaxed) && ramOk(pf, kPadFlagsOwner + 4u) &&
                          isPlayerMonster(rdram, FAST_READ32(pf + kPadFlagsOwner), &ps) && ps >= 0 && ps < 4)
             if (const int req = wotm::mouse::g_targetReq[ps].exchange(0, std::memory_order_relaxed); req != 0)
             {

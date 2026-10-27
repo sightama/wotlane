@@ -61,7 +61,11 @@ namespace wotm_skins
         g_origRandomAI(rdram, ctx, runtime);
         if (!entry)
             return;
-        static std::mt19937 rng{std::random_device{}()};
+        // com WOTM_SEED (partida em rede, testes de determinismo) o sorteio sai da semente, igual em todos os PCs
+        static std::mt19937 rng{[] {
+            const char *e = std::getenv("WOTM_SEED");
+            return e && *e ? static_cast<uint32_t>(std::atoll(e)) : std::random_device{}();
+        }()};
         const int32_t n = static_cast<int32_t>(READ32(kShellObj + kShellNumAIs));
         for (int32_t i = 0; i < n && i < 6; ++i)
         {

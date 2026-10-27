@@ -103,6 +103,34 @@ struct File {
     mutable bool logged = false;     // primeira busca do jogo ja saiu no log
 };
 
+// Digest dos mods ligados em `dir` (subpastas que nao comecam com '_' ou '.'): caminho e conteudo de cada arquivo, em ordem de nome.
+// A partida em rede o poe no hash da configuracao (todos os PCs com os mesmos mods). 0 = nenhum arquivo de mod.
+inline uint64_t digest(const std::filesystem::path &dir) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (dir.empty() || !fs::is_directory(dir, ec)) return 0;
+    std::vector<std::pair<std::string, fs::path>> files;
+    for (const auto &e : fs::directory_iterator(dir, ec)) {
+        const std::string n = e.path().filename().string();
+        if (!e.is_directory(ec) || n.empty() || n[0] == '_' || n[0] == '.') continue;
+        for (auto it = fs::recursive_directory_iterator(e.path(), ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+            if (it->is_regular_file(ec))
+                files.emplace_back(fs::relative(it->path(), dir, ec).generic_string(), it->path());
+    }
+    if (files.empty()) return 0;
+    std::sort(files.begin(), files.end());
+    uint64_t h = 0xcbf29ce484222325ull;   // FNV-1a
+    auto mix = [&h](const char *p, size_t n) { for (size_t i = 0; i < n; ++i) h = (h ^ uint8_t(p[i])) * 0x100000001b3ull; };
+    char buf[1 << 16];
+    for (const auto &[rel, host] : files) {
+        mix(rel.c_str(), rel.size() + 1);
+        std::ifstream in(host, std::ios::binary);
+        while (in.read(buf, sizeof buf) || in.gcount() > 0) mix(buf, size_t(in.gcount()));
+        mix("\0", 1);
+    }
+    return h ? h : 1;
+}
+
 class Registry {
 public:
     static constexpr uint32_t kFirstLsn = 0x00800000u;   // 16 GB em setores de 2 KB: alem de qualquer DVD (~2,3 M setores)

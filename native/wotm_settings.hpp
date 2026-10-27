@@ -79,7 +79,24 @@ inline bool g_pathPending = false;   // o load achou teclas de um layout anterio
 // Taxa de apresentacao em vigor (initPresentRate, wotm_live.inc; 0 = ainda nao aberta): a opcao Interp so vale acima de 60
 inline std::atomic<int> g_presentHz{0};
 
-inline int get(Key k) { return g_val[k].load(std::memory_order_relaxed); }
+// Partida em rede (WOTM_NET; ligado no load): as opcoes que mudam o estado do jogo valem um perfil fixo, igual em todos os PCs. A
+// camera moderna escreve a camera do jogo com o mouse, a sensibilidade e a inversao deste PC, e o lock-on alternado muda o que os
+// botoes fazem. O arquivo e o painel continuam com as do jogador (o painel as mostra travadas), que voltam fora da rede.
+inline constexpr Key kNetKeys[] = {LockToggle, Camera, CamRecenter, CloseCam, CamSens, CamInvertY};
+inline constexpr int kNetValues[] = {0, 0, 1, 1, 5, 0};
+inline std::atomic<bool> g_netProfile{false};
+
+// Valor do perfil da rede para `k`, ou -1 se a opcao e livre
+inline int netValue(Key k)
+{
+    for (size_t i = 0; i < sizeof kNetKeys / sizeof kNetKeys[0]; ++i)
+        if (kNetKeys[i] == k)
+            return kNetValues[i];
+    return -1;
+}
+inline bool forced(Key k) { return g_netProfile.load(std::memory_order_relaxed) && netValue(k) >= 0; }
+
+inline int get(Key k) { return forced(k) ? netValue(k) : g_val[k].load(std::memory_order_relaxed); }
 inline bool on(Key k) { return get(k) != 0; }
 
 // Proporcao fixa da opcao Aspect (0 = dinamica)
@@ -454,6 +471,11 @@ inline void load(const std::filesystem::path &dir)
         fromEnv = applyEnv();
         std::fprintf(stderr, "[settings] %s: %d do arquivo, %d do ambiente\n", useFile ? g_path.string().c_str() : "arquivo ignorado (WOTM_SETTINGS=0)",
                      fromFile, fromEnv);
+        if (const char *net = std::getenv("WOTM_NET"); net && *net)
+        {
+            g_netProfile.store(true);
+            std::fprintf(stderr, "[settings] partida em rede: perfil fixo (camera classica, lock-on do jogo, camera de perto, sem mouse)\n");
+        }
         if (g_pathPending)
             save();
     });

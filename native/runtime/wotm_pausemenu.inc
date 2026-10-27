@@ -321,6 +321,10 @@ static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         return;
     g_selPending = false;
     int sel = static_cast<int>(GPR_U32(ctx, 2));
+    // partida em rede: o item vem so do controle (o mouse e deste PC, fora da entrada trocada pela rede)
+    const bool net = wotm::settings::g_netProfile.load(std::memory_order_relaxed);
+    if (g_selN > 0 && net)
+        return;
     if (g_selN > 0)   // dialogo
     {
         const int d = dialogSel(rdram, ctx, runtime, g_selN, sel);
@@ -336,7 +340,7 @@ static void selHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
     const bool moved = seq != s_seq;
     s_seq = seq;
-    if (rd32(rdram, wotm::sym::gDrawOverlay))
+    if (rd32(rdram, wotm::sym::gDrawOverlay) && !net)
     {
         const int h = hoverItem();
         if (h >= 0)
@@ -406,7 +410,14 @@ static void exitHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_inExit = false;
     const uint32_t sel = rd32(rdram, wotm::sym::gCurrentMenuSelection);
     const bool cross = ctx->pc == ra && GPR_U32(ctx, 2) && g_sawCross && !g_sawStart;
-    if (cross && (sel == uint32_t(kOptRow) || ((sel == uint32_t(kTrainRow) || sel == uint32_t(kMoveRow)) && training())))
+    // partida em rede: o painel le o teclado e o mouse deste PC (fora da entrada trocada pela rede) e cada PC o fecharia num quadro
+    // diferente; a linha fica sem efeito e a pausa segue igual em todos
+    if (cross && sel == uint32_t(kOptRow) && wotm::settings::g_netProfile.load(std::memory_order_relaxed))
+    {
+        std::fprintf(stderr, "[pausa] painel fora da partida em rede\n");
+        ctx->r[2] = _mm_set_epi64x(0, 0);
+    }
+    else if (cross && (sel == uint32_t(kOptRow) || ((sel == uint32_t(kTrainRow) || sel == uint32_t(kMoveRow)) && training())))
     {
         wotm_mainmenu::openPausePanel(rdram, ctx, runtime, sel == uint32_t(kTrainRow), sel == uint32_t(kMoveRow));
         ctx->r[2] = _mm_set_epi64x(0, 0);

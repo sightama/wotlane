@@ -650,7 +650,7 @@ static void controlsInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime
 
 // KEYBOARD (teclado separado) na pausa: travado. Numa luta de 1 jogador, OWN PLAYER mandaria o teclado para o jogador 2, que nao
 // existe, e quem joga no teclado perderia o monstro e a saida da pausa
-static bool lockedOpt(st::Key k, bool inPause) { return inPause && k == st::KbSeparate; }
+static bool lockedOpt(st::Key k, bool inPause) { return (inPause && k == st::KbSeparate) || st::forced(k); }
 
 // Um quadro do painel aberto (no menu: screenGetInput da tela 1, que o jogo chama a cada quadro dela; na pausa: no lugar do
 // pauseLevelOverlay). Devolve true quando o painel fecha (quem chamou fecha o seu: g_open ou g_pauseOpen).

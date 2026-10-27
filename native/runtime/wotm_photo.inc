@@ -186,6 +186,19 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
         toggle = false;
         std::fprintf(stderr, "[photo] ignorado nos menus\n");
     }
+    // partida em rede: a pausa do modo foto pararia so este PC (os outros esperariam por ele)
+    static const bool s_net = [] { const char *e = std::getenv("WOTM_NET"); return e && *e; }();
+    const bool autoDue = std::getenv("WOTM_PHOTO") != nullptr;
+    if (s_net && (toggle || autoDue))
+    {
+        static bool said = false;
+        if (!said && (toggle || gc.ok))
+        {
+            said = true;
+            std::fprintf(stderr, "[photo] desligado na partida em rede\n");
+        }
+        return {};
+    }
     // Teste sem teclado (WOTM_PHOTO=<s>): s segundos depois da primeira cena liga, gira e anda de lado, salva (HUD, sem HUD, com zoom)
     // e sai; as fotos vao para a pasta screenshots
     static const double autoAt = std::getenv("WOTM_PHOTO") ? std::atof(std::getenv("WOTM_PHOTO")) : -1.0;

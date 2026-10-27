@@ -371,14 +371,19 @@ namespace wotm_sync
     std::string netConfigHash()
     {
         static const char *const kVars[] = {"WOTM_MATCH", "WOTM_PLAYERS", "WOTM_AIVSAI", "WOTM_RATEMIN", "WOTM_FIXEDSTEP", "WOTM_SEED",
-                                            "WOTM_HIGHRAM", "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_CHEATS", "WOTM_CLOAK", "WOTM_SAVEJSON",
-                                            "WOTM_FREECAM", "PS2X_FMV", "PS2X_SKIP_MOVIES", "PS2X_SKIP_CMOVIE", "PS2X_NOOP"};
+                                            "WOTM_HIGHRAM", "WOTM_ENEMYBARS", "WOTM_CHEATS", "WOTM_CLOAK", "WOTM_SAVEJSON",
+                                            "WOTM_FREECAM", "WOTM_KILLTARGET", "WOTM_30HZ", "WOTM_MODE", "PS2X_FMV", "PS2X_SKIP_MOVIES", "PS2X_SKIP_CMOVIE", "PS2X_NOOP"};
         std::string all;
         for (const char *v : kVars)
         {
             const char *e = std::getenv(v);
             all += std::string(v) + "=" + (e ? e : "") + ";";
         }
+        // os mods ligados mudam os dados do jogo: o mesmo conjunto (nomes e conteudo) em todos os PCs, ou o servidor recusa
+        char mods[17];
+        std::snprintf(mods, sizeof mods, "%016llx", static_cast<unsigned long long>(wotm::mods::digest(wotm::mods::Registry::get().dir())));
+        all += std::string("mods=") + mods + ";";
+        std::fprintf(stderr, "[net] mods: %s\n", mods);
         all.resize((all.size() + 7u) & ~size_t(7), '\0');   // hashBytes le palavras de 8 bytes
         char out[17];
         std::snprintf(out, sizeof out, "%016llx", static_cast<unsigned long long>(hashBytes(reinterpret_cast<const uint8_t *>(all.data()), all.size())));

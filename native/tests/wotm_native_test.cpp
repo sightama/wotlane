@@ -1,6 +1,8 @@
-// ABOUTME: Testes de unidade das partes puras da camada nativa (sem jogo, sem janela): por enquanto a interpolacao de quadros
-// ABOUTME: (matrizes, camera, corte, relogio de exibicao, HUD rebaseado). Compilar e rodar: tools\test_native.bat
+// ABOUTME: Testes de unidade das partes puras da camada nativa (sem jogo, sem janela): interpolacao de quadros (matrizes, camera,
+// ABOUTME: corte, relogio de exibicao, HUD rebaseado) e o perfil das opcoes na partida em rede. Compilar e rodar: tools\test_native.bat
 #include "wotm_interp.hpp"
+#include "wotm_settings.hpp"
+#include "wotm_mods.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -298,6 +300,65 @@ namespace
         CHECK(ip::alphaBetween(12.0, 10, 11) == 1.f);
         CHECK(ip::alphaBetween(11.0, 10, 12) == 0.5f);   // quadro de 2 fields (modo de 30 Hz)
         CHECK(ip::alphaBetween(11.0, 10, 10) == 1.f);
+    }
+
+    // Perfil da partida em rede (wotm_settings.hpp): as opcoes que mudam o estado do jogo valem o perfil fixo em todos os PCs, as
+    // do jogador ficam guardadas e voltam fora da rede; as de video seguem livres
+    TEST(netplay_profile_forces_gameplay_settings_only)
+    {
+        namespace st = wotm::settings;
+        st::g_val[st::Camera].store(1);
+        st::g_val[st::CamSens].store(9);
+        st::g_val[st::LockToggle].store(1);
+        st::g_val[st::RenderScale].store(150);
+        st::g_netProfile.store(false);
+        CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9 && st::get(st::LockToggle) == 1);
+        CHECK(!st::forced(st::Camera));
+        st::g_netProfile.store(true);
+        CHECK(st::get(st::Camera) == 0);
+        CHECK(st::get(st::CamSens) == 5);
+        CHECK(st::get(st::LockToggle) == 0);
+        CHECK(st::get(st::CloseCam) == 1);
+        CHECK(st::get(st::CamInvertY) == 0);
+        CHECK(st::forced(st::Camera) && st::forced(st::CamSens));
+        CHECK(st::get(st::RenderScale) == 150 && !st::forced(st::RenderScale));
+        CHECK(st::g_val[st::Camera].load() == 1 && st::g_val[st::CamSens].load() == 9);   // as do jogador continuam guardadas
+        st::g_netProfile.store(false);
+        CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9);
+    }
+
+    // Digest dos mods ligados (wotm_mods.hpp), que entra no hash da configuracao da partida em rede: o mesmo conjunto de arquivos da o
+    // mesmo valor em qualquer ordem de criacao; mudar o conteudo, o nome ou acrescentar um mod muda; pasta desligada ('_') nao conta
+    TEST(mod_digest_covers_active_mods_only)
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "wotm_modtest";
+        auto put = [](const fs::path &p, const std::string &s) {
+            fs::create_directories(p.parent_path());
+            std::ofstream(p, std::ios::binary) << s;
+        };
+        fs::remove_all(root);
+        const fs::path a = root / "a" / "mods", b = root / "b" / "mods";
+        CHECK(wotm::mods::digest(a) == 0);   // sem pasta: sem mods
+        put(a / "skin" / "MON" / "LIZARD1.TEX", "tex");
+        put(a / "skin" / "MON" / "LIZARD1.NGP", "ngp");
+        put(b / "skin" / "MON" / "LIZARD1.NGP", "ngp");
+        put(b / "skin" / "MON" / "LIZARD1.TEX", "tex");
+        const uint64_t base = wotm::mods::digest(a);
+        CHECK(base != 0);
+        CHECK(wotm::mods::digest(b) == base);
+        put(b / "_off" / "MON" / "MONKEY1.TEX", "x");
+        CHECK(wotm::mods::digest(b) == base);
+        put(b / "skin" / "MON" / "LIZARD1.TEX", "teX");
+        CHECK(wotm::mods::digest(b) != base);
+        put(b / "skin" / "MON" / "LIZARD1.TEX", "tex");
+        CHECK(wotm::mods::digest(b) == base);
+        put(b / "extra" / "MON" / "MONKEY1.TEX", "x");
+        CHECK(wotm::mods::digest(b) != base);
+        fs::remove_all(b / "extra");
+        fs::rename(b / "skin" / "MON" / "LIZARD1.NGP", b / "skin" / "MON" / "LIZARD2.NGP");
+        CHECK(wotm::mods::digest(b) != base);
+        fs::remove_all(root);
     }
 }
 
