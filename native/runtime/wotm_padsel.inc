@@ -20,6 +20,8 @@
 // e os paineis de traje escondidos; o telao mostra um quadro por jogador e um por CPU (as da tela 13, wotm_menucpus::g_want; so no
 // free for all). Cada jogador, pelos dispositivos dele: esquerda/direita troca de monstro (as colunas destravadas, monsterSelectMode),
 // cima/baixo de traje (os abertos: state 1 e taken 1), X confirma, triangulo desfaz (ou, sem ninguem pronto, volta a tela anterior).
+// Depois das colunas, as casas RANDOM e CUSTOM (customStep: a lista dos monstros custom, como nas telas 3 e 6; quadro de CPU so com
+// os de "ai"; o tipo do custom vai ao m_monsterSel e o traje dele ao do quadro).
 // Depois do dele, cada jogador escolhe as CPUs que lhe cabem, uma por vez (a CPU c e do jogador c % N: com 3 jogadores e 5 CPUs, o 1
 // escolhe a 1 e a 4); o triangulo numa CPU volta para a escolha anterior do mesmo jogador. Na eliminacao (modo 6) o traje e sempre o
 // 0, sem CUSTOM, e cada monstro so vai a um jogador (na saida o SelectSlot do traje 0 fica com taken 0, como o retail; as escolhas
@@ -59,7 +61,7 @@ constexpr uint32_t kMonsterSel = kShell + 0x2938, kCostume = kShell + 0x2BE0, kN
 constexpr uint32_t kSlotSize = 0x2C;   // SelectSlot (monster_select.h): taken +0, state +4; 4 trajes por coluna
 enum Action { Left, Right, Ok, Back, Start, Up, Down, L1, R1, Square, kActions };   // L1/R1: abas do painel do wotm_mainmenu.inc; Square: so no roteiro (previa da aba VIDEO)
 enum Phase { Off, Config, Reveal, Leaving };
-// Casas da barra de monstros alem das 10 colunas: monstro aleatorio e personalizado (por enquanto nao faz nada)
+// Casas da barra de monstros alem das 10 colunas: monstro aleatorio e personalizado (os monstros custom dos mods)
 constexpr int kCellRandom = 11, kCellCustom = 12;
 
 // Cores dos jogadores 1 a 4
@@ -149,9 +151,14 @@ static bool g_transPending = false, g_modesPending = false, g_selectPending = fa
 // Selecao de monstros (thread do EE)
 struct Pick
 {
-    int col = 1;       // coluna da tela de selecao (1..10)
-    int costume = 0;   // 0..3
+    int col = 1;       // casa da barra: coluna da tela de selecao (1..10), kCellRandom ou kCellCustom
+    int costume = 0;   // 0..3 ou skin (no custom, o traje dele)
     bool ready = false;
+    // casa CUSTOM (fechada, lista aberta, custom escolhido; como a das telas 3 e 6)
+    int custom = 0;     // custom escolhido (indice em Registry::customs() + 1; 0 = nenhum)
+    int customHl = 0;   // linha acesa da lista (fica para a proxima vez que ela abrir)
+    int customSkin = 0; // posicao do traje em customCostumes
+    bool list = false;  // lista aberta
 };
 static bool g_selOn = false, g_selPrimed = false;
 static bool g_selLeaving = false;   // escolha feita (ou volta): a tela 6 segue escondida ate o fim do fade de saida
@@ -590,6 +597,14 @@ static void randomPick(uint8_t *rdram, int &col, int &costume, bool noMods)
     costume = l.n ? l.c[rng() % uint32_t(l.n)] : firstCostume(rdram, col);
 }
 
+// Monstros custom da casa CUSTOM (mods/<mod>/monsters/, em Registry::customs())
+static int customCount() { return int(wotm::mods::Registry::get().customs().size()); }
+static const wotm::mods::Custom *customAt(int k)
+{
+    const auto &cs = wotm::mods::Registry::get().customs();
+    return cs.empty() || k < 0 ? nullptr : &cs[size_t(k) % cs.size()];
+}
+
 // Eliminacao de 3 e 4: cada monstro com um jogador so. Durante a escolha vale o "pronto" dos outros quadros; na saida o traje 0 das
 // colunas escolhidas fica com taken 0 (o que o screenCharSelect2P faz no modo 6; o wotm_modes4.inc tira dali o monstro seguinte de
 // quem cai). g_elimTaken guarda o que a saida marcou, para a volta da selecao de fase soltar.
@@ -639,10 +654,14 @@ static void selectBegin(uint8_t *rdram)
     int col = stepColumn(rdram, 0, 1);
     for (int p = 0; p < g_multi + g_selCpus; ++p)
     {
-        if (!keep || !columnOpen(rdram, g_pick[p].col) || costumeList(rdram, g_pick[p].col, elim).find(elim ? 0 : g_pick[p].costume) < 0)
+        Pick &k = g_pick[p];
+        k.list = false;
+        const bool keepCustom = keep && !elim && k.col == kCellCustom && k.custom && customAt(k.custom - 1);   // custom escolhido fica
+        if (!keepCustom && (!keep || !columnOpen(rdram, k.col) || costumeList(rdram, k.col, elim).find(elim ? 0 : k.costume) < 0))
         {
-            g_pick[p].col = col;
-            g_pick[p].costume = firstCostume(rdram, col);
+            k.col = col;
+            k.costume = firstCostume(rdram, col);
+            k.custom = k.customSkin = 0;
         }
         if (elim)
             g_pick[p].costume = 0;
@@ -652,11 +671,20 @@ static void selectBegin(uint8_t *rdram)
     std::fprintf(stderr, "[padsel] selecao de monstros (modo %u) de %d jogadores e %d CPUs\n", gameMode(rdram), g_multi, g_selCpus);
 }
 
+// m_monsterSel da escolha: o da coluna ou o tipo do custom (o traje dele ja esta em Pick::costume)
+static uint32_t pickSel(uint8_t *rdram, const Pick &k)
+{
+    if (k.col == kCellCustom)
+        if (const wotm::mods::Custom *cu = customAt(k.custom - 1))
+            return uint32_t(cu->type) << 5;
+    return rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(k.col - 1));
+}
+
 static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     for (int p = 0; p < g_multi; ++p)
     {
-        const uint32_t sel = rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(g_pick[p].col - 1));
+        const uint32_t sel = pickSel(rdram, g_pick[p]);
         wr32(rdram, kMonsterSel + 4u * uint32_t(p), sel);   // jogadores em m_monsterSel[0 .. N) (com 5 a 8 nao ha IA)
         if (p < 2)
             wr32(rdram, kCostume + 4u * uint32_t(p), uint32_t(g_pick[p].costume));
@@ -677,7 +705,7 @@ static void selectFinish(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     for (int c = 0; c < g_selCpus; ++c)   // CPUs em m_monsterSel[4 + c], m_costume[2 + c] (o wotm_split4.inc as afasta na carga)
     {
         const Pick &k = g_pick[g_multi + c];
-        const uint32_t sel = rd32(rdram, wotm::sym::monsterNametomonsterId + 4u * uint32_t(k.col - 1));
+        const uint32_t sel = pickSel(rdram, k);
         wr32(rdram, kMonsterSel + 4u * uint32_t(4 + c), sel);
         wr32(rdram, kCostume + 4u * uint32_t(2 + c), uint32_t(k.costume));
         std::fprintf(stderr, "[padsel] CPU%d: %s traje %d\n", c + 1, monsterName(sel), k.costume);
@@ -725,6 +753,69 @@ static int mouseStep(int cur)
     return ok ? 6 : 0;
 }
 
+// Toque na casa CUSTOM de um quadro da selecao de 3 e 4, em tres passos como nas telas 3 e 6 (customDecide): fechada, X abre a
+// lista (cima/baixo, X escolhe, triangulo fecha); escolhido, cima/baixo trocam de traje (o do monster.json e as skins dele), X
+// confirma e triangulo volta para a casa fechada. `cpu`: quadro de CPU (so os customs com "ai"). Devolve o som (0: nada feito).
+static int customStep(Pick &k, const bool *e, bool cpu)
+{
+    const int nc = customCount();
+    if (nc <= 0)
+        return 0;
+    if (k.list)
+    {
+        if (e[Up] || e[Down])
+        {
+            if (nc < 2)
+                return 0;
+            k.customHl = (k.customHl + (e[Up] ? -1 : 1) + nc) % nc;
+            return e[Up] ? 2 : 4;
+        }
+        if (e[Back])
+        {
+            k.list = false;
+            return 6;
+        }
+        const wotm::mods::Custom *cu = customAt(k.customHl);
+        if (!e[Ok] || !cu || (cpu && !cu->ai))   // a IA de um chefe precisa da fase dele
+            return 0;
+        k.list = false;
+        k.custom = k.customHl % nc + 1;
+        k.customSkin = 0;
+        k.costume = cu->costume;   // o primeiro de customCostumes
+        std::fprintf(stderr, "[padsel] custom na lista: %s (base %s, %zu trajes)\n", cu->id.c_str(), cu->typeName.c_str(),
+                     wotm::mods::Registry::get().customCostumes(*cu).size());
+        return 8;
+    }
+    if (const wotm::mods::Custom *cu = customAt(k.custom - 1))
+    {
+        if (e[Up] || e[Down])
+        {
+            const std::vector<int> l = wotm::mods::Registry::get().customCostumes(*cu);
+            if (l.size() < 2)
+                return 0;
+            const int n = int(l.size());
+            k.customSkin = (k.customSkin + (e[Up] ? -1 : 1) + n) % n;
+            k.costume = l[size_t(k.customSkin)];
+            return e[Up] ? 2 : 4;
+        }
+        if (e[Back])
+        {
+            k.custom = k.customSkin = 0;
+            return 6;
+        }
+        if (!e[Ok])
+            return 0;
+        k.ready = true;
+        std::fprintf(stderr, "[padsel] custom: %s (base %s, traje %d)\n", cu->id.c_str(), cu->typeName.c_str(), k.costume);
+        return 8;
+    }
+    if (!e[Ok])
+        return 0;
+    k.list = true;
+    k.customHl %= nc;
+    return 8;
+}
+
 static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     bool now[kMaxPlayers][kActions] = {};
@@ -762,7 +853,9 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         int at = 0;
         while (at < nq - 1 && g_pick[q[at]].ready)
             ++at;
-        if (at > 0 && !g_pick[q[at]].ready && e[Back])
+        const Pick &cur = g_pick[q[at]];
+        const bool customOpen = cur.col == kCellCustom && (cur.list || cur.custom);   // o triangulo e da casa CUSTOM
+        if (at > 0 && !cur.ready && e[Back] && !customOpen)
         {
             g_pick[q[at - 1]].ready = false;   // CPU: o triangulo desfaz a escolha anterior do mesmo jogador
             sound = 6;
@@ -784,13 +877,22 @@ static void selectStep(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             if (e[Back]) { k.ready = false; sound = 6; }
             continue;
         }
-        if (e[Left] || e[Right])
+        if ((e[Left] || e[Right]) && !(k.col == kCellCustom && k.list))   // lista aberta: so cima/baixo, X e triangulo
         {
             k.col = stepCell(rdram, k.col, e[Left] ? -1 : 1, elim);
             k.costume = k.col <= 10 && !elim ? firstCostume(rdram, k.col) : 0;
+            k.custom = k.customSkin = 0;
             sound = e[Left] ? 2 : 4;
         }
-        if (k.col > 10)   // aleatorio (X sorteia monstro e traje e fica pronto) ou personalizado (nada, por enquanto)
+        if (k.col == kCellCustom)
+        {
+            if (const int s = customStep(k, e, q[at] >= g_multi))
+                sound = s;
+            else if (e[Back] && !k.custom && !k.list)
+                back = true;   // casa fechada: o triangulo volta de tela, como nas colunas
+            continue;
+        }
+        if (k.col > 10)   // aleatorio: X sorteia monstro e traje e fica pronto
         {
             if (e[Ok] && k.col == kCellRandom)
             {
@@ -1034,12 +1136,6 @@ static int g_soloExtra[kMaxPanels] = {};
 static int g_soloCustom[kMaxPanels] = {}, g_soloCustomPick[kMaxPanels] = {}, g_soloChosen[kMaxPanels] = {},
            g_soloCustomSkin[kMaxPanels] = {}, g_soloCustomCostume[kMaxPanels] = {};
 static bool g_soloList[kMaxPanels] = {};
-static int customCount() { return int(wotm::mods::Registry::get().customs().size()); }
-static const wotm::mods::Custom *customAt(int k)
-{
-    const auto &cs = wotm::mods::Registry::get().customs();
-    return cs.empty() || k < 0 ? nullptr : &cs[size_t(k) % cs.size()];
-}
 // Traje escolhido do custom do quadro (o do monster.json se a posicao saiu da lista)
 static int chosenCostume(int who)
 {
@@ -1405,6 +1501,26 @@ static void fillCostume(View &v, int p, const CostumeList &l)
     std::snprintf(v.selCostumeName[p], sizeof v.selCostumeName[p], "%s", costumeName(mon, v.selCostume[p]).c_str());
 }
 
+// Custom `k` (indice em Registry::customs()) no quadro p da View, com o traje `costume` (o monstro e a faixa dos trajes dele); nada
+// com k fora da lista
+static void fillCustom(View &v, int p, int k, int costume)
+{
+    const wotm::mods::Custom *cu = customAt(k);
+    if (!cu)
+        return;
+    const std::vector<int> l = wotm::mods::Registry::get().customCostumes(*cu);
+    v.selCustom[p] = k;
+    v.selMonster[p] = uint32_t(cu->type) << 5;
+    v.selCostume[p] = costume;
+    v.selCostumes[p] = int(l.size());
+    v.selModCount[p] = int(l.size()) - 1;
+    v.selCostumeIdx[p] = int(std::find(l.begin(), l.end(), costume) - l.begin());
+    v.selBase[p] = baseCostume(cu->type, costume);
+    const std::string nm = costume == cu->costume ? "FROM MOD " + cu->mod : costumeName(cu->type, costume);
+    std::snprintf(v.selCostumeName[p], sizeof v.selCostumeName[p], "%s", nm.c_str());
+    for (char *q = v.selCostumeName[p]; *q; ++q) *q = char(std::toupper(static_cast<unsigned char>(*q)));
+}
+
 static void publishSolo(uint8_t *rdram, View &v)
 {
     SoloPanel pn[kMaxPanels];
@@ -1448,21 +1564,7 @@ static void publishSolo(uint8_t *rdram, View &v)
             const int k = customDone ? g_soloCustomPick[i] - 1 : !done && !g_soloList[i] ? g_soloChosen[i] - 1 : -1;
             v.selList[i] = !done && g_soloList[i];
             v.selMonster[i] = 0;
-            if (const wotm::mods::Custom *cu = customAt(k))
-            {
-                const std::vector<int> l = wotm::mods::Registry::get().customCostumes(*cu);
-                const int costume = customDone ? g_soloCustomCostume[i] : chosenCostume(i);
-                v.selCustom[i] = k;
-                v.selMonster[i] = uint32_t(cu->type) << 5;
-                v.selCostume[i] = costume;
-                v.selCostumes[i] = int(l.size());
-                v.selModCount[i] = int(l.size()) - 1;
-                v.selCostumeIdx[i] = int(std::find(l.begin(), l.end(), costume) - l.begin());
-                v.selBase[i] = baseCostume(cu->type, costume);
-                const std::string nm = costume == cu->costume ? "FROM MOD " + cu->mod : costumeName(cu->type, costume);
-                std::snprintf(v.selCostumeName[i], sizeof v.selCostumeName[i], "%s", nm.c_str());
-                for (char *q = v.selCostumeName[i]; *q; ++q) *q = char(std::toupper(static_cast<unsigned char>(*q)));
-            }
+            fillCustom(v, i, k, customDone ? g_soloCustomCostume[i] : chosenCostume(i));
             continue;
         }
         if (pn[i].waiting || v.selCell[i] > 10)
@@ -1535,7 +1637,16 @@ static void publish(uint8_t *rdram)
             std::snprintf(v.selLabel[p], sizeof v.selLabel[p], "CPU%d", p - g_multi + 1);
         else
             std::snprintf(v.selLabel[p], sizeof v.selLabel[p], "P%d", p + 1);
-        fillCostume(v, p, costumeList(rdram, g_pick[p].col, v.selNoCostume));
+        const Pick &k = g_pick[p];
+        if (!waiting && col == kCellCustom && customCount() > 0)
+        {
+            // casa CUSTOM: lista aberta (sem monstro no quadro), custom escolhido ou confirmado, ou fechada ("+ CUSTOM")
+            v.selListHl[p] = k.customHl % customCount();
+            v.selList[p] = !k.ready && k.list;
+            fillCustom(v, p, k.list ? -1 : k.custom - 1, k.costume);
+            continue;
+        }
+        fillCostume(v, p, costumeList(rdram, k.col, v.selNoCostume));
     }
     if (g_solo && !g_selOn)
         publishSolo(rdram, v);

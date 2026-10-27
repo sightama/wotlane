@@ -214,12 +214,13 @@ de um tipo do jogo (`base`); arquivos próprios (outro prefixo em `MON/`, um tip
   (`WOTM_MATCH=1,moddedtogera,1`, com `"base": "togera"`: anda, ataca, solta fogo e perde a rodada como um Togera), e o Jelly e o
   Cerebulon também (`WOTM_MATCH=1,cerebulon,1`: a IA comum do jogo, a mesma que move o Cerebulon na fase final). O Goliath não: a IA
   dele (`Ai::updateAssBoss`) precisa dos pontos da fase dele, e como CPU (`WOTM_MATCH=3,goliath,1`) carrega mas não aparece na luta.
-- **Na seleção** (telas 3, 6, 7, 18 e 19): a casa CUSTOM da barra de monstros. X abre a lista dos customs dentro do quadro do
+- **Na seleção** (telas 3, 6, 7, 18 e 19 e a de 3 e 4 jogadores, fora da eliminação): a casa CUSTOM da barra de monstros. X abre a lista dos customs dentro do quadro do
   jogador (nome, mod, quantas skins; no quadro de CPU, "PLAYERS ONLY" nos sem `"ai"`): cima e baixo percorrem, X escolhe, triângulo
   fecha. Escolhido, o quadro mostra o monstro como os do jogo: cima e baixo trocam de traje (o `costume` do `monster.json` e as
   skins do custom, em dourado), X confirma, triângulo volta para a casa fechada. Com a lista aberta, esquerda e direita não saem da
-  casa. Na confirmação o cursor do jogo fica na coluna de onde o quadro saiu, que faz as vezes dele (a vaga dela não é tomada). A
-  seleção de 3 e 4 jogadores ainda não tem a casa.
+  casa. Nas telas do jogo, na confirmação o cursor do jogo fica na coluna de onde o quadro saiu, que faz as vezes dele (a vaga dela
+  não é tomada). Na de 3 e 4 (`customStep` no `wotm_padsel.inc`) a escolha é toda nossa: o tipo do custom vai ao `m_monsterSel` do
+  quadro e o traje ao dele (jogadores 3 e 4 pelo `wotmMultiSetCostume`, CPUs no `m_costume[2 + c]`).
 - **Launcher:** os customs aparecem em "Your monster", depois do Random (só para o jogador).
 - **O que o port faz pelo Goliath** (`native/runtime/wotm_custom.inc`): ele fica visível e controlável com IAs na luta (o
   `SetAIMonster` o desligava), toma dano delas (o `takeHit` só aceitava golpe do jogador 1), carrega o banco de som do chefe fora
