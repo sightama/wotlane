@@ -188,6 +188,56 @@ namespace wotm_sync
     }
     FILE *g_hashFile = nullptr;
     long g_dumpAt = -1;
+    // WOTM_STATERING=<n>: copia da RAM dos ultimos n quadros, gravada (state_<indice>.bin) quando a partida em rede para; a
+    // dessincronia so e vista no hash seguinte (ate 32 quadros depois), entao a copia do primeiro quadro diferente ainda esta aqui
+    // WOTM_STATERING=<n>:<inicio>+<tamanho>,...: so essas faixas (o resto do arquivo sai zerado); copiar os 32 MB por quadro muda o
+    // tempo do quadro o bastante para esconder uma dessincronia que depende dele
+    std::vector<std::vector<uint8_t>> g_ring;
+    std::vector<uint32_t> g_ringIndex;
+    std::vector<std::pair<uint32_t, uint32_t>> g_ringRanges;   // {inicio, tamanho}
+
+    void ringKeep(const uint8_t *rdram, uint32_t index)
+    {
+        const size_t k = index % g_ring.size();
+        g_ring[k].resize(kGuestRam);
+        for (const auto &[at, size] : g_ringRanges)
+            std::memcpy(g_ring[k].data() + at, rdram + at, size);
+        g_ringIndex[k] = index;
+    }
+
+    void ringInit(const char *spec)
+    {
+        g_ring.resize(static_cast<size_t>(std::clamp(std::atoi(spec), 1, 64)));
+        g_ringIndex.assign(g_ring.size(), 0u);
+        for (const char *p = std::strchr(spec, ':'); p && *p; p = std::strchr(p, ','))
+        {
+            char *end = nullptr;
+            const uint32_t at = static_cast<uint32_t>(std::strtoul(p + 1, &end, 0));
+            const uint32_t size = end && *end == '+' ? static_cast<uint32_t>(std::strtoul(end + 1, &end, 0)) : 0u;
+            if (size && at < kGuestRam)
+                g_ringRanges.emplace_back(at, std::min(size, kGuestRam - at));
+            p = end;
+        }
+        if (g_ringRanges.empty())
+            g_ringRanges.emplace_back(0u, kGuestRam);
+    }
+
+    void ringWrite()
+    {
+        for (size_t k = 0; k < g_ring.size(); ++k)
+        {
+            if (g_ring[k].empty())
+                continue;
+            const std::string name = "state_" + std::to_string(g_ringIndex[k]) + ".bin";
+            if (FILE *f = std::fopen(name.c_str(), "wb"))
+            {
+                std::fwrite(g_ring[k].data(), 1, g_ring[k].size(), f);
+                std::fclose(f);
+            }
+        }
+        std::fprintf(stderr, "[sync] RAM dos ultimos %zu quadros gravada (state_<indice>.bin)\n", g_ring.size());
+        g_ring.clear();
+    }
 
     void loadInputPlay(const char *path)
     {
@@ -210,6 +260,8 @@ namespace wotm_sync
         std::fprintf(stderr, "[net] parado: %s\n", why.c_str());
         wotm_netstatus::setMessage(why + "  (feche a janela)");
         wotm_netstatus::g_waiting = true;
+        if (!g_ring.empty())
+            ringWrite();
         while (!stopRequested())
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -396,6 +448,8 @@ namespace wotm_sync
             g_hashFile = std::fopen(e, "wb");
         if (const char *e = std::getenv("WOTM_STATEDUMP"); e && *e)
             g_dumpAt = std::atol(e);
+        if (const char *e = std::getenv("WOTM_STATERING"); e && *e)
+            ringInit(e);
         if (g_fixedStep || g_hashFile || g_dumpAt >= 0)
             std::fprintf(stderr, "[sync] passo fixo %d field(s), hash %s, copia no quadro %ld\n", g_fixedStep, g_hashFile ? "ligado" : "desligado", g_dumpAt);
     }
@@ -454,6 +508,8 @@ namespace wotm_sync
             if ((index & 63u) == 0u)
                 std::fflush(g_hashFile);
         }
+        if (!g_ring.empty() && g_levelLoaded)
+            ringKeep(rdram, index);
         if (g_dumpAt >= 0 && index == static_cast<uint32_t>(g_dumpAt))
         {
             const std::string name = "state_" + std::to_string(index) + ".bin";
