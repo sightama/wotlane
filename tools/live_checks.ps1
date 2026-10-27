@@ -9,8 +9,9 @@ $checks = [ordered]@{
     'controles_3_4' = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1'; Secs = 25
                          Expect = '\[pad\] jogador 1: |||\[pad\] jogador 3: |||\[pad\] jogador 4: |||\[partida\]' }
     # partida com 4 jogadores (IA no controle): 4 modelos carregados, TheGame::m_numMonsters (0x3D3978) 4, m_monsters[0..3]
-    # (0x3D3920..0x3D392C) preenchidos, 4 vistas (viewNumViews 0x6F8AE0) e 4 cameras (Cameras::m_numCameras 0x6F8E30)
-    'partida_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=3D3978,3D3920,3D3924,3D3928,3D392C,6F8AE0,6F8E30'; Secs = 35
+    # (0x3D3920..0x3D392C) preenchidos, 4 vistas (viewNumViews 0x6F8AE0) e 4 cameras (Cameras::m_numCameras 0x6F8E30). A apresentacao dos
+    # monstros antes da luta fica numa vista so (wotm_split4.inc, cinemaViews) ate o quadro ~520 do jogo: 60 s para a amostra passar dela
+    'partida_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=3D3978,3D3920,3D3924,3D3928,3D392C,6F8AE0,6F8E30'; Secs = 60
                          Expect = '\[native\] recursos: CENTRAL \S+ \S+ \S+ \S+\r?\n|||3d3978=00000004|||3d3928=(?!00000000)[0-9a-f]{8}|||3d392c=(?!00000000)[0-9a-f]{8}|||6f8ae0=00000004|||6f8e30=00000004' }
     # jogadores derrubados voltam: a cada 8 s de jogo (16 s reais: com 3+ jogadores o jogo roda a 30 quadros/s) o "vencer" derruba os
     # jogadores 2..4 (e as IAs); se todos voltaram, a segunda vez derruba todos de novo (3 sem IA; antes, so o jogador 2 voltava). Com IA, o m_playerNum (+0x18) dos jogadores 3/4 (monstros em 0x2D6440 e 0x2E75D0, slots 2 e 3)
