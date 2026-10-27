@@ -327,3 +327,27 @@ Conferido: lutas IA x IA de 45 s a 180 Hz com 1 e 2 jogadores (flares 0,005 / 0,
 menu com `WOTM_SKIPINTRO=1` e a mistura (9089 apresentações, sem corte, fotos normais). O roteiro `PS2X_PAD` não passa do menu
 principal nativo, então as transições de câmera entre as telas do telão e a escolha de lados ficam para o dono conferir.
 `tools\corpus.ps1 -Check` sem mudança.
+
+## 12. Etapa 5 implementada (2026-10-26)
+
+A opção INTERPOLATE FRAMES vem ligada (`wotm_settings.hpp`, `kDefault`). Diferenças em relação ao plano da seção 5:
+- **Caixa no launcher:** não entrou. As opções de vídeo moram no painel (aba VIDEO); o launcher só tira do ambiente as variáveis
+  delas, e o `WOTM_INTERP` passou a estar nessa lista. No painel a linha deixou de ficar apagada a 60 Hz, porque agora vale também
+  com o jogo a 30.
+- **Jogo a 30:** com a apresentação até 60 Hz, liga quando metade ou mais dos últimos 64 quadros novos tiveram vão de 2 fields e
+  desliga com até 8. Nas lutas e no menu medidos aqui o jogo não cai para 30 (99,6–99,8% dos quadros com vão de 1; nenhuma
+  sequência de vãos de 2), então a regra não foi vista agindo.
+- **Desenho que não cabe:** média móvel (5%) do tempo do bloco de redesenho, que termina antes do `EndDrawing` (sem a espera do
+  vsync), com cada amostra limitada a dois períodos; acima de 85% do período suspende, abaixo de 60% volta. A primeira versão
+  partia do primeiro redesenho (~100 ms, as texturas) e suspendia no começo de toda luta; a média agora parte de zero.
+
+Conferido sem `WOTM_INTERP` no ambiente, `WOTM_SETTINGS=0` (lutas IA x IA de 45 s):
+
+| Rodada | Redesenhos misturados | Suspensões |
+|---|---|---|
+| 180 Hz, 1 jogador | 6895 de 6897 | nenhuma |
+| 180 Hz, 2 jogadores | 2512 de 4041 | uma, de ~8 s: a tela dividida desenhou em 4–5,7 ms nesse trecho (período de 5,56) |
+| 60 Hz, 1 jogador | 0 (o jogo a 60) | — |
+| 1000 Hz, 1 jogador | 0 | suspensa logo no começo (período de 1 ms) |
+
+`tools\corpus.ps1 -Check` sem mudança (o replay não interpola).

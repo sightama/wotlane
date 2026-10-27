@@ -689,6 +689,8 @@ static bool liveText(std::vector<wotm::TextQuad> &out)
 // textura qualquer do nivel, como o brilho verde do power-up no CENTRAL). Enquanto vale, a captura nao publica nada e a
 // apresentacao repete o ultimo quadro desenhado, com o fade do Shell::FadeScreen por cima (wotmDrawFrozen).
 static std::atomic<bool> g_loadFreeze{false};
+// Media movel do tempo de um redesenho na apresentacao (ms, a partir de 0): a interpolacao se suspende se nao couber no periodo
+static double g_drawMs = 0.0;
 
 // Fade do Shell::FadeScreen em curso (g_shellFade): o retangulo da entrada com o alfa do passo atual; com acumulo, o alfa
 // equivalente no buffer da vez.
@@ -1603,8 +1605,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const char *e = std::getenv("WOTM_INTERP");
         return e && std::strstr(e, "redraw") != nullptr;
     }();
-    // Interpolacao de quadros (opcao INTERPOLATE FRAMES; etapa 1 de docs/investigacoes/2026-10-19/interpolacao.md): com a apresentacao
-    // acima de 60 Hz, cada apresentacao desenha a mistura de A (S.prev) e B (S.snap) no instante D do relogio de exibicao, um quadro
+    // Interpolacao de quadros (opcao INTERPOLATE FRAMES, ligada por padrao; docs/investigacoes/2026-10-19/interpolacao.md): com a
+    // apresentacao acima de 60 Hz (ou ate 60 com o jogo a 30: slowGame), cada apresentacao desenha a mistura de A (S.prev) e B
+    // (S.snap) no instante D do relogio de exibicao, um quadro
     // do jogo atras do mais novo (mais uma margem, para a captura atrasada ainda chegar antes do alfa bater em 1). Sem quadro novo o
     // alfa para em 1 (B; sem extrapolar). Fora: replay, camera livre ou foto, pausa, A sem carimbo, buraco de fields ou de relogio
     // (dialogo, carga), e no treino com esferas ou contornos (desenhados com a pose de B).
@@ -1613,7 +1616,39 @@ static bool wotmDrawNative(const uint8_t *rdram)
     {
         static const float fixedAlpha = [] { const char *e = std::getenv("WOTM_INTERP_ALPHA"); return e && *e ? std::clamp(float(std::atof(e)), 0.f, 1.f) : -1.f; }();
         static const double marginSec = [] { const char *e = std::getenv("WOTM_INTERP_DELAY"); return (e && *e ? std::atof(e) : 3.0) / 1000.0; }();
-        const bool want = wotm::settings::on(wotm::settings::Interp) && wotm::settings::g_presentHz.load(std::memory_order_relaxed) > 60 &&
+        // Jogo a 30 (quadros de 2 fields): metade ou mais dos ultimos 64 pares com vao >= 2 liga, ate 1/8 desliga. Com a apresentacao
+        // ate 60 Hz a mistura so vale nesse caso (com o jogo a 60 ela so somaria um quadro de atraso).
+        static bool slowGame = false;
+        static uint64_t gapBits = 0;   // 1 = par com vao >= 2, um bit por quadro novo
+        static uint32_t lastGapG = 0;
+        if (S.snap.g != lastGapG && S.prev.valid && S.snap.fields > S.prev.fields)
+        {
+            lastGapG = S.snap.g;
+            gapBits = (gapBits << 1) | (S.snap.fields - S.prev.fields >= 2 ? 1u : 0u);
+            int slow = 0;
+            for (uint64_t b = gapBits; b; b &= b - 1)
+                ++slow;
+            if (!slowGame && slow >= 32)
+                slowGame = true;
+            else if (slowGame && slow <= 8)
+                slowGame = false;
+        }
+        const int presentHz = wotm::settings::g_presentHz.load(std::memory_order_relaxed);
+        // Desenho que nao cabe no periodo da apresentacao (wotm_live::g_drawMs, media do redesenho): com a mistura o vsync cairia para a
+        // metade, pior que sem ela. Acima de 85% do periodo suspende; volta abaixo de 60%.
+        static bool tooSlow = false;
+        if (presentHz > 0)
+        {
+            const double periodMs = 1000.0 / presentHz, ms = wotm_live::g_drawMs;
+            const bool was = tooSlow;
+            if (!tooSlow && ms > 0.85 * periodMs)
+                tooSlow = true;
+            else if (tooSlow && ms < 0.6 * periodMs)
+                tooSlow = false;
+            if (tooSlow != was)
+                std::fprintf(stderr, "[interp] redesenho de %.2f ms para um periodo de %.2f ms: mistura %s\n", ms, periodMs, tooSlow ? "suspensa" : "de volta");
+        }
+        const bool want = wotm::settings::on(wotm::settings::Interp) && (presentHz > 60 || (presentHz > 0 && slowGame)) && !tooSlow &&
                           !wotm_live::g_localCollect;
         wotm_live::g_interpCull.store(want, std::memory_order_relaxed);
         const bool trainOverlay = wotm_training::g_on.load(std::memory_order_relaxed) &&
@@ -1658,6 +1693,18 @@ static bool wotmDrawNative(const uint8_t *rdram)
     if (rerender)
     {
         lastRenderT = nowT;
+        // tempo do redesenho (CPU, ate o fim deste bloco), media movel: a trava da interpolacao (tooSlow) o le
+        struct DrawTimer
+        {
+            double t0 = wotm_live::hostNow();
+            ~DrawTimer()
+            {
+                // cada amostra vale no maximo dois periodos: um redesenho isolado (carga de texturas, troca de fase) nao suspende sozinho
+                const int hz = wotm::settings::g_presentHz.load(std::memory_order_relaxed);
+                const double ms = std::min((wotm_live::hostNow() - t0) * 1000.0, hz > 0 ? 2000.0 / hz : 1000.0);
+                wotm_live::g_drawMs += (ms - wotm_live::g_drawMs) * 0.05;   // parte de 0: o primeiro redesenho (texturas) nao pesa sozinho
+            }
+        } drawTimer;
         ++s_renders;
         const double tDraw0 = GetTime(), cpuDraw0 = wotmThreadCpuMs();   // custo do redesenho por numero de vistas (PS2X_STATS)
         lastFade = fadeNow;
