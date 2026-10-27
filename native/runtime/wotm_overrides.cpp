@@ -2589,9 +2589,10 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 g_matchContinues = std::clamp(std::atoi(k + 1), 0, 9);
         }
         int bad = -1;
-        if (p && *p == '\0' && n >= 2 && !wotm_monsters::fits(v, n - 1, &bad))   // monstro sem arquivo no disco: a carga travaria
+        if (p && *p == '\0' && n >= 2 && !wotm_monsters::fits(v, c, n - 1, &bad))   // monstro sem arquivo no disco: a carga travaria
             std::fprintf(stderr, "[wotm] WOTM_MATCH recusada: o monstro %d (%do da lista) nao tem arquivo no disco (traje %s); validos: 1-5, 7-11, "
-                                 "13 (2 trajes), 14 e 15 (1 traje)\n", v[bad], bad + 1, wotm_monsters::costumes(v[bad]) ? "repetido demais" : "nenhum");
+                                 "13 (traje 1; o 0 so pedido), 14 e 15 (1 traje)\n", v[bad], bad + 1,
+                         wotm_monsters::costumes(v[bad]) ? "repetido demais ou pedido sem arquivo" : "nenhum");
         else if (p && *p == '\0' && n >= 1 + g_matchPlayers + g_padAIs)   // "<monstro>,<fase>" = sozinho na fase, sem IA (como o free for all de 0 IAs do menu)
         {
             g_matchAIs = n - 1 - g_matchPlayers;

@@ -1,6 +1,7 @@
 // ABOUTME: Testes do netcode sem o jogo: linha do tempo das entradas (lockstep), codificacao das mensagens, servidor e cliente ENet
 // ABOUTME: de verdade em localhost. Sai com 0 se tudo passar; cada falha imprime arquivo, linha e a expressao.
 #include "wotm_lockstep.hpp"
+#include "wotm_monsters.hpp"
 #include "wotm_net_client.hpp"
 #include "wotm_net_proto.hpp"
 #include "wotm_net_server.hpp"
@@ -442,6 +443,47 @@ namespace
         CHECK(readUntil(a, "JOINED") == "JOINED 0");
     }
 
+    // trajes como o userintMainDirect os da: os pedidos primeiro, depois o menor livre (o Goliath, 13, comeca no 1: o 0 e um prototipo)
+    TEST(monster_list_fits_with_the_game_costume_rule)
+    {
+        int bad = -1;
+        const int goliaths[] = {13, 13};
+        CHECK(wotm_monsters::fits(goliaths, nullptr, 1));
+        CHECK(!wotm_monsters::fits(goliaths, nullptr, 2, &bad));
+        CHECK(bad == 1);
+        const int goliathProto[] = {0, -1};
+        CHECK(wotm_monsters::fits(goliaths, goliathProto, 2));   // o prototipo pedido e o 1 automatico
+        const int jellies[] = {14, 14};
+        CHECK(!wotm_monsters::fits(jellies, nullptr, 2));
+        const int monkeys[] = {1, 1, 1, 1, 1};
+        CHECK(wotm_monsters::fits(monkeys, nullptr, 5));   // o quinto repete o traje 0
+        const int asked[] = {3, -1, -1};
+        const int lizards[] = {3, 3, 3};
+        CHECK(wotm_monsters::fits(lizards, asked, 3));   // 3 pedido, os outros 0 e 1
+        const int missing[] = {1, -1};
+        const int jellyAsked[] = {14, 14};
+        CHECK(!wotm_monsters::fits(jellyAsked, missing, 2, &bad));   // jelly so tem o traje 0
+        CHECK(bad == 0);
+        const int spider[] = {6};
+        CHECK(!wotm_monsters::fits(spider, nullptr, 1));
+    }
+
+    TEST(lobby_refuses_a_second_goliath)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b;
+        for (LineSocket *s : {&a, &b})
+        {
+            CHECK(s->connect("127.0.0.1", cfg.port, 2000));
+            s->sendLine("HELLO 1 b1");
+        }
+        a.sendLine("JOIN 0 Ana 13");
+        CHECK(readUntil(a, "JOINED") == "JOINED 0");
+        b.sendLine("JOIN 0 Bia 13");
+        CHECK(readUntil(b, "ERROR").find("traje") != std::string::npos);
+    }
+
     // dois clientes da partida trocam 100 quadros de entrada e veem a mesma linha do tempo
     void exchange(MatchClient &a, MatchClient &b, uint32_t frames)
     {
@@ -551,6 +593,11 @@ namespace
 
         MatchClient a, b;
         CHECK(a.start(clientFor(cfg.port, *ms[0], "cfgA"), err));
+        // o servidor guarda a configuracao de quem entrou primeiro: o b so sai depois que o a entrou
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (a.status() != Status::Waiting && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Waiting);
         CHECK(b.start(clientFor(cfg.port, *ms[1], "cfgB"), err));
         CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
         CHECK(b.message().find("configura") != std::string::npos);

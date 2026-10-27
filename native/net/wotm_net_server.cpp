@@ -180,10 +180,12 @@ namespace wotm_net
                 return void(c.socket.sendLine("ERROR monstro invalido (sem arquivos no disco)"));
             leaveLobby(ci);
             Lobby &l = lobbies_[static_cast<size_t>(li)];
-            int same = 0;   // cada repetido leva o traje seguinte
+            int list[wotm_monsters::kMaxList], n = 0;   // trajes como a partida os da (wotm_monsters::fits)
             for (int m : l.members)
-                same += conns_[static_cast<size_t>(m)]->monster == monster;
-            if (same >= wotm_monsters::costumes(monster))
+                if (n < wotm_monsters::kMaxList - 1)
+                    list[n++] = conns_[static_cast<size_t>(m)]->monster;
+            list[n++] = monster;
+            if (!wotm_monsters::fits(list, nullptr, n))
                 return void(c.socket.sendLine("ERROR monstro sem traje livre no lobby (todos os trajes dele ja escolhidos)"));
             if (l.match)
                 return void(c.socket.sendLine("ERROR lobby em partida; espere acabar"));
