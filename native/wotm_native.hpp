@@ -4139,42 +4139,78 @@ public:
         rlSetMatrixModelview(ident);
         BeginBlendMode(BLEND_ALPHA);
         const GsScreenRect gr = gsScreenRect(p.rw, p.rh);
-        for (const ScreenRect &r : *p.rects)
-            if (mine(r)) drawBar(gr, p.rw, p.rh, r);
+        // O jogo prende o centro do icone a 8-16 px da borda da vista, e a barra e mais larga que o icone: em vez de cortada na borda,
+        // a barra inteira (todos os retangulos do mesmo icone, ScreenRect::anchor) e empurrada para dentro da area dela
+        struct Span { float x0 = 1e30f, x1 = -1e30f, lo = 0.f, hi = 0.f; };
+        std::vector<Span> spans;
+        for (const ScreenRect &r : *p.rects) {
+            if (!mine(r) || r.anchor < 0) continue;
+            if (size_t(r.anchor) >= spans.size()) spans.resize(size_t(r.anchor) + 1);
+            Span &sp = spans[size_t(r.anchor)];
+            float x0, x1;
+            barSpan(gr, p.rw, r, x0, x1, sp.lo, sp.hi);
+            sp.x0 = std::min(sp.x0, x0);
+            sp.x1 = std::max(sp.x1, x1);
+        }
+        for (const ScreenRect &r : *p.rects) {
+            if (!mine(r)) continue;
+            float nudge = 0.f;
+            if (r.anchor >= 0 && size_t(r.anchor) < spans.size()) {
+                const Span &sp = spans[size_t(r.anchor)];
+                if (sp.x0 < sp.lo) nudge = sp.lo - sp.x0;
+                else if (sp.x1 > sp.hi) nudge = std::max(sp.hi - sp.x1, sp.lo - sp.x0);
+            }
+            drawBar(gr, p.rw, p.rh, r, nudge);
+        }
         EndBlendMode();
         rlDrawRenderBatchActive();
         rlSetMatrixProjection(keepProj);
         rlSetMatrixModelview(keepView);
     }
 
-    // Uma barra sobre o inimigo, em pixels da janela de rw x rh
-    void drawBar(const GsScreenRect &gr, float rw, float rh, const ScreenRect &r) {
+    // Barra sobre o inimigo: x na janela (rw de largura) antes do corte e a area em que ela sai (lo, hi: a metade da vista na tela
+    // dividida, a janela fora dela)
+    void barSpan(const GsScreenRect &gr, float rw, const ScreenRect &r, float &x0, float &x1, float &lo, float &hi) const {
+        // px da janela por px do GS: a faixa da vista (gsScreenRect, na proporcao dela) sobre a largura dela, com a altura da vista na
+        // conta (quadrantes: 112 linhas na faixa da janela inteira). Na tela dividida a faixa e a da metade (2:3, 320 px do GS)
+        const ViewCtx &cv = curView();
+        const float k = cv.w > 0.f && cv.h > 0.f ? gr.w / cv.w * (cv.h / 224.f) : gr.w / 640.f;
+        x0 = gr.x0 + r.x0 * k;
+        x1 = gr.x0 + r.x1 * k;
+        lo = 0.f;
+        hi = rw;
+        if (splitEdges && r.barView != stripView) {
+            // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
+            // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
+            // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo. A faixa de baixo dos 3 jogadores (stripView) tem
+            // a largura da tela, como fora da tela dividida
+            const float half = 0.5f * rw, v = float(r.barView & 1);
+            const float shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
+            x0 += shift;
+            x1 += shift;
+            lo = v * half;
+            hi = (v + 1.f) * half;
+        }
+    }
+
+    // Uma barra sobre o inimigo, em pixels da janela de rw x rh; nudge = deslocamento da barra inteira para caber na area (drawBarPass)
+    void drawBar(const GsScreenRect &gr, float rw, float rh, const ScreenRect &r, float nudge = 0.f) {
         const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
         if (!a) return;
         const float sy = rh / 224.f;
-        const float k = gr.w / 640.f;
-        float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
+        float x0, x1, lo, hi;
+        barSpan(gr, rw, r, x0, x1, lo, hi);
+        x0 += nudge;
+        x1 += nudge;
         const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
-        float shift = 0.f;
-        if (splitEdges && r.barView == stripView) {
-            // faixa de baixo dos 3 jogadores: a vista tem a largura da tela, como fora da tela dividida
-            x0 = std::max(x0, 0.f);
-            x1 = std::min(x1, rw);
-        } else if (splitEdges) {
-            // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
-            // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
-            // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo
-            const float half = 0.5f * rw, v = float(r.barView & 1);
-            shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
-            x0 = std::max(x0 + shift, v * half);
-            x1 = std::min(x1 + shift, (v + 1.f) * half);
-        }
+        x0 = std::max(x0, lo);
+        x1 = std::min(x1, hi);
         if (x1 <= x0) return;
-        if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte na metade da vista
+        if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte
             const Texture2D t = residentTexture(r.tex0);
             if (!t.id || fw <= 0.f) return;
             const float du = (r.u1 - r.u0) / fw;
-            const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
+            const float u0 = r.u0 + (x0 - fx0) * du, u1 = u0 + (x1 - x0) * du;
             DrawTexturePro(t, texelRect(t, r.tex0, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}), Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
                            Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
             return;
