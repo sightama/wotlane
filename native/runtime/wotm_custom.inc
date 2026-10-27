@@ -334,7 +334,7 @@ namespace wotm_custom
                        kSpinUpdate = wotm::fn::update__12StateTopSpin, kSpinOK = wotm::fn::transitionOK__12StateTopSpin,
                        kSetBossState = wotm::fn::setAssBossState__2Aii, kHoldingLarge = wotm::fn::isHoldingLarge__7Monster,
                        kPadFrame = wotm::fn::x__vc__8PadFlagsi;
-    constexpr uint32_t kStateOwner = 0xC, kCurState = 0x34, kIdle = 0x7984, kRun = 0x79AC, kCrowd = 0xF3F0, kSpin = 0x10EBC;
+    constexpr uint32_t kStateOwner = 0xC, kCurState = 0x34, kIdle = 0x7984, kRun = 0x79AC, kCrowd = 0xF3F0, kSpin = 0x10EBC, kTazer = 0x11130;
     constexpr uint32_t kAttacksOn = 0x4A, kPad = 0x5040, kPadSpin = 0x38, kDead = 0xE8, kNumMonsters = 0x1203D8, kTrans = 0x10;
     PS2Runtime::RecompiledFunction g_origCrowdOK = nullptr, g_origEnterState = nullptr, g_origSpinUpdate = nullptr, g_origSetBossState = nullptr;
 
@@ -372,6 +372,8 @@ namespace wotm_custom
             ctx->r[5] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(m + kSpin)));
             std::fprintf(stderr, "[custom] Goliath: giro (X+Quadrado)\n");
         }
+        if (ctx->pc == kEnterState && GPR_U32(ctx, 5) == m + kTazer && READ32(m + kTypeBits) == kJelly && isPlayerSlot(rdram, ctx, runtime, m))
+            std::fprintf(stderr, "[custom] Jelly: choque (%s)\n", READ32(m + kPlayerNum) == 2u ? "IA" : "Triangulo+Quadrado");
         g_origEnterState(rdram, ctx, runtime);
     }
 
@@ -433,6 +435,49 @@ namespace wotm_custom
         }
         g_origLookAt(rdram, ctx, runtime);
     }
+    // Choque do Jelly (StateUltraTazer, Monster+0x11130): o transitionOK do retail so confere as anims e o isSpecialAvailable
+    // (m_specialWeapon), sem botao; na fase final quem decide e o roteiro do FinalBoss::updateJelly. Com o Jelly jogador o choque
+    // saia sozinho: aqui ele so comeca com Triangulo+Quadrado apertados no controle do jogador (inputGetPadButtons do pad da
+    // posicao em m_monsters[0..3]; Triangulo+Quadrado nao e combinacao do jogo, entao o Jelly continua parado e o transitionOK
+    // segue sendo consultado). O Jelly sob a IA (m_playerNum 2) e o da aventura seguem o retail.
+    constexpr uint32_t kTazerOK = wotm::fn::transitionOK__15StateUltraTazer, kPadButtons = wotm::fn::inputGetPadButtons__Fi;
+    constexpr uint32_t kBtnTriangle = 0x1000, kBtnSquare = 0x8000;   // libpad (inputGetPadButtons ja inverte os ativos em 0)
+    PS2Runtime::RecompiledFunction g_origTazerOK = nullptr;
+
+    void tazerOK(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = ctx->pc == kTazerOK ? READ32(GPR_U32(ctx, 4) + kStateOwner) : 0;
+        int player = -1;
+        for (uint32_t i = 0; m && i < 4 && player < 0; ++i)
+            if (READ32(kGameObj + kMonsters + 4 * i) == m)
+                player = int(i);
+        if (player >= 0 && READ32(m + kTypeBits) == kJelly && READ32(m + kPlayerNum) != 2u)
+        {
+            const uint32_t b = wotm_modes4::call(rdram, ctx, runtime, kPadButtons, {uint32_t(player)});
+            if ((b & (kBtnTriangle | kBtnSquare)) != (kBtnTriangle | kBtnSquare))
+            {
+                ret(ctx, 0);
+                return;
+            }
+        }
+        g_origTazerOK(rdram, ctx, runtime);
+    }
+    // O choque gasta o especial (o StateUltraTazer::update zera o m_specialWeapon), e o PowerUps::TakeHit nao deixa os tipos
+    // 0x1C0/0x1E0 pegarem o item de especial (na fase final o roteiro e quem o liga). Com o Jelly jogador, durante a chamada o tipo
+    // vale o do Togera (0x60): pega o item como um monstro comum. A funcao so le o tipo nesses testes (vida, stamina, especial).
+    constexpr uint32_t kPowerUpHit = wotm::fn::TakeHit__8PowerUpsP7MonsterP3_cs, kTypeStandIn = 3u << 5;
+    PS2Runtime::RecompiledFunction g_origPowerUpHit = nullptr;
+
+    void powerUpHit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t m = ctx->pc == kPowerUpHit ? GPR_U32(ctx, 4) : 0;
+        const bool jelly = m && READ32(m + kTypeBits) == kJelly && isPlayerSlot(rdram, ctx, runtime, m) && READ32(m + kPlayerNum) != 2u;
+        if (jelly)
+            WRITE32(m + kTypeBits, kTypeStandIn);
+        g_origPowerUpHit(rdram, ctx, runtime);
+        if (jelly)
+            WRITE32(m + kTypeBits, kJelly);
+    }
 } // namespace wotm_custom
 
 // Depois do wotmSkinsInstall: embrulha os ganchos do SetAIMonster que ja estiverem registrados (WOTM_AIVSAI, skins).
@@ -449,6 +494,10 @@ void wotmCustomInstall(PS2Runtime &runtime)
     g_killPickup = runtime.lookupFunction(kKillPickup);
     if ((g_origImpale = runtime.lookupFunction(kImpale)))
         runtime.registerFunction(kImpale, &impale);
+    if ((g_origTazerOK = runtime.lookupFunction(kTazerOK)))
+        runtime.registerFunction(kTazerOK, &tazerOK);
+    if ((g_origPowerUpHit = runtime.lookupFunction(kPowerUpHit)))
+        runtime.registerFunction(kPowerUpHit, &powerUpHit);
     if ((g_origLookAt = runtime.lookupFunction(kLookAt)))
         runtime.registerFunction(kLookAt, &lookAt);
     if ((g_origCrowdOK = runtime.lookupFunction(kCrowdOK)))

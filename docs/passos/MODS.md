@@ -243,9 +243,13 @@ base `final`), os dois com `"ai": true` e o narrador `cerebulon`. A primeira fas
   0x1E0 e os contava como IA), visíveis também como CPU fora da aventura, banco de som `Final_s.bnk` fora da fase final e nome no
   HUD ("JELLY WINS", "CEREBULON CRUSHED").
 - **Como o jogo os trata** (do retail, valem para o jogador): o Jelly não tem fúria (`Monster.cpp`, rage), não agarra nem é agarrado
-  (`Grapple.cpp`) e nenhum dos dois pega a arma especial dos itens (`PowerUps.cpp`). O choque do Jelly na fase final
-  (`StateUltraTazer`) é o roteiro do `FinalBoss::updateJelly` que liga; numa luta comum o jogo não o oferece. Os golpes, pulo e
-  arremessos vêm das animações do `JELLY0`/`FINAL0`.
+  (`Grapple.cpp`) e o Cerebulon não pega o item de especial (`PowerUps.cpp`). Os golpes, pulo e arremessos vêm das animações do
+  `JELLY0`/`FINAL0`.
+- **Choque do Jelly** (`StateUltraTazer`, o especial dele): **Triângulo + Quadrado**, com o especial disponível. O `transitionOK`
+  do jogo não pede botão (na fase final o roteiro do `FinalBoss::updateJelly` decide), e com o Jelly jogador o choque saía
+  sozinho; o port só o deixa começar com os dois botões apertados no controle do jogador. O choque gasta o especial, e o Jelly
+  jogador pega o item de especial como um monstro comum (o retail o recusa aos tipos 0x1C0/0x1E0). Jelly CPU: como no retail.
+  Log: `[custom] Jelly: choque (Triangulo+Quadrado)`.
 - O retrato do HUD fica cinza (sem `"portrait"`).
 
 Exemplo: seleção da tela 6 (1 jogador contra CPU), CUSTOM → GOLIATH PRIME, a CPU recusada na casa,

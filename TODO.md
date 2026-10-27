@@ -27,7 +27,6 @@ Como funciona hoje: `docs/passos/MODS.md` ("Skins", "Monstros custom").
 ### 10. Chefes jogáveis
 - Como estão: `MODS.md`, "Monstros custom" (Goliath, Jelly e Cerebulon; mod `mods/Cerebulon/`). Plantboss não é viável.
 - **Mecha** (primeira fase do Cerebulon): é peça da fase final (`FinalBoss::updateMecha`, hier 0x27A6..0x27A9), não `Monster`, como o Plantboss. Jogável só como monstro novo montado das peças (`tools/monglb.py --boss mecha` já as junta para o viewer). Decisão do dono.
-- **Choque do Jelly** (`StateUltraTazer`): na fase final é o roteiro do `FinalBoss::updateJelly` que o liga (`m_specialWeapon` = 1); com o Jelly jogador, ligar por um botão (como o giro do Goliath no X+Quadrado, `wotm_custom.inc`).
 - Seleção nativa: conferir o enquadramento do Jelly e do Cerebulon na casa CUSTOM (`wotm_savepics.hpp`, `kFraming`).
 
 ### 13. Campanha com até 4 jogadores
