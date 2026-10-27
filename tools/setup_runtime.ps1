@@ -125,7 +125,7 @@ if (-not $SkipBuild) {
         if (-not (Test-Path (Join-Path $rt 'build_dev\build.ninja'))) { Fail 'configure_dev.bat falhou' }
     }
     & $env:ComSpec /c "`"$repo\build_runtime.bat`" 2>&1"
-    if ($LASTEXITCODE -ne 0) { Fail "build falhou: veja $rt\build_dev.log" }
+    if ($LASTEXITCODE -ne 0) { Fail "build falhou: veja $rt\logs\build_dev.log" }
 }
 Step 'pronto'
 Write-Host "Jogar: run_live.bat -Auto 0   (ou tools\launcher\build.bat para o launcher)"
