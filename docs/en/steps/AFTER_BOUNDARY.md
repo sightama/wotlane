@@ -312,8 +312,7 @@ views. The hooks:
   respawns use list 3. List 1 only has the retail's 2 player points (Centro: 2; lists 2 and 3 have 4, one in each corner), and players
   2, 3 and 4 spawned on the same point. A player beyond list 1's points spawns as an AI (`m_playerNum` 2 during the call), on list 2
   (checked in Centro: 3 and 4 in two corners of the map). Live check `largada_4`.
-- **Motion blur:** `MotionBlurAA::init` keeps 2 views and `drawOverlay` of views 2 and 3 sends nothing (the native renderer does not draw
-  the blur). It was not an overrun: `drawOverlay(field, odd, view)` addresses `0x7319F0 + field * 0x400 + odd * 0x800 + view * 0x100` and
+- **Motion blur:** no hook, `MotionBlurAA::init` gets the 3 or 4 views (check `borrao_4`). They fit: `drawOverlay(field, odd, view)` addresses `0x7319F0 + field * 0x400 + odd * 0x800 + view * 0x100` and
   the TU's bss is 0x1000 bytes (the next one, `common/animation`, starts at 0x7329F0), that is `[2][2][4 views][0x100]`; with 4 views
   init writes up to base + 0xBD4 (checked on 2026-10-21).
 - **Controls:** the runtime's pad stub has the multitap slots (`tools/runtime_patch/wotm-runtime.patch`: controller = port + 2 × slot,

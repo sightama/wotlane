@@ -21,7 +21,7 @@
 //     o mesmo arquivo) e voltam a jogadores no InitPlayers; a ordem de carga e a da contagem de duplicatas dele (jogadores, depois IAs).
 //     Os trajes dos jogadores 3 e 4 nao tem lugar no Shell: ficam em g_extraCostume, e o SetPlayerMonster os recebe no lugar do
 //     m_costume[1] que o InitPlayers manda a todo jogador depois do 1.
-//   - Motion blur: o buffer de pacotes do MotionBlurAA so tem lugar para 2 vistas; o init fica com 2 e as vistas 2 e 3 sem borrao.
+//   - Motion blur: sem gancho; o bss do MotionBlurAA tem os pacotes de 4 vistas ([2][2][4][0x100] em 0x7319F0, POS_FRONTEIRA.md item 11).
 //   - HUD: o Hud::initAfter e o Hud::update saem logo com indice >= 2. O HUD 2/3 vira uma copia do HUD da mesma coluna e roda o
 //     update como ele, com monstro, camera e barra da propria vista (hudInitAfter, hudUpdate).
 //   - Camera no POV 3 (estacionada): as cameras 2 e 3 nao tinham posicao de estacionar e iam para a origem (no inicio e na morte).
@@ -561,27 +561,6 @@ namespace wotm_split4
         }
     }
 
-    // MotionBlurAA::init(vistas, ...) monta um pacote de 0x100 bytes por vista a partir de D_007319F0 + 0x8D0, num bloco de 0xB30: so
-    // cabem 2 (a terceira passaria do fim do bss). Com os quadrantes o init fica com 2 vistas e o drawOverlay(campo, impar, vista) das
-    // vistas 2 e 3 nao manda nada (o nativo nao desenha o borrao; so o GS emulado o veria).
-    constexpr uint32_t kBlurInit = wotm::fn::init__12MotionBlurAAiff, kBlurDraw = wotm::fn::drawOverlay__12MotionBlurAAiii;
-    PS2Runtime::RecompiledFunction g_origBlurInit = nullptr, g_origBlurDraw = nullptr;
-    void blurInit(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        if (ctx->pc == kBlurInit && static_cast<int32_t>(GPR_U32(ctx, 4)) > 2 && splitPlayers(rdram))
-            ctx->r[4] = _mm_set_epi64x(0, 2);
-        g_origBlurInit(rdram, ctx, runtime);
-    }
-    void blurDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        if (ctx->pc == kBlurDraw && GPR_U32(ctx, 6) >= 2u && splitPlayers(rdram))
-        {
-            ctx->pc = GPR_U32(ctx, 31);
-            return;
-        }
-        g_origBlurDraw(rdram, ctx, runtime);
-    }
-
     // WOTM_PLAYERS=3..8: os quadrantes sao dos jogadores 1 a 4 (de 5 a 8, os outros ficam em IAs, wotm_multi.inc)
     void install(PS2Runtime &runtime)
     {
@@ -606,11 +585,8 @@ namespace wotm_split4
         g_origHudInitAfter = runtime.lookupFunction(kHudInitAfter);
         g_origEvalNoAI = runtime.lookupFunction(kEvalNoAI);
         g_origEvalAI = runtime.lookupFunction(kEvalAI);
-        g_origBlurInit = runtime.lookupFunction(kBlurInit);
-        g_origBlurDraw = runtime.lookupFunction(kBlurDraw);
         if (!g_viewCreate || !g_viewSetFov || !g_follow || !g_setPov || !g_origReestablish || !g_origGrapple || !g_origOkToUnify ||
-            !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI ||
-            !g_origBlurInit || !g_origBlurDraw)
+            !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI)
         {
             std::fprintf(stderr, "[split] WOTM_PLAYERS=%d ignorado: funcao do jogo sem funcao no runtime\n", n);
             return;
@@ -630,8 +606,6 @@ namespace wotm_split4
         runtime.registerFunction(kHudInitAfter, &hudInitAfter);
         runtime.registerFunction(kEvalNoAI, &evaluateBattle);
         runtime.registerFunction(kEvalAI, &evaluateBattle);
-        runtime.registerFunction(kBlurInit, &blurInit);
-        runtime.registerFunction(kBlurDraw, &blurDraw);
         std::fprintf(stderr, "[split] ate %d jogadores: tela em quadrantes, controles 3 e 4 no slot 1 das portas (WOTM_PLAYERS)\n", n);
     }
 }

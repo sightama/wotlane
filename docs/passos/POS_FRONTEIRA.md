@@ -317,8 +317,7 @@ slots (controle = porta + 2 × slot). O `viewToggleSplitScreen` dos cinemas não
   lista 2, em rodízio; os renascimentos, a lista 3. A lista 1 só tem os pontos dos 2 jogadores do retail (Centro: 2; as listas 2 e
   3 têm 4, um em cada canto), e os jogadores 2, 3 e 4 nasciam no mesmo ponto. O jogador além dos pontos da lista 1 nasce como IA
   (`m_playerNum` 2 durante a chamada), na lista 2 (conferido no Centro: 3 e 4 em dois cantos do mapa).
-- **Motion blur:** o `MotionBlurAA::init` fica com 2 vistas e o `drawOverlay` das vistas 2 e 3 não manda nada (o nativo não desenha
-  o borrão). Não era estouro: o `drawOverlay(campo, ímpar, vista)` endereça `0x7319F0 + campo * 0x400 + ímpar * 0x800 + vista * 0x100`
+- **Motion blur:** sem gancho, o `MotionBlurAA::init` recebe as 3 ou 4 vistas (checagem `borrao_4`). Cabem: o `drawOverlay(campo, ímpar, vista)` endereça `0x7319F0 + campo * 0x400 + ímpar * 0x800 + vista * 0x100`
   e o bss do TU tem 0x1000 bytes (o seguinte, `common/animation`, começa em 0x7329F0), isto é, `[2][2][4 vistas][0x100]`; com 4
   vistas o init escreve até a base + 0xBD4 (conferido em 2026-10-21).
 - **Controles:** o stub de controle do runtime tem os slots do multitap (`tools/runtime_patch/wotm-runtime.patch`: controle =

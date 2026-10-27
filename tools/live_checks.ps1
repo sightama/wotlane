@@ -25,6 +25,10 @@ $checks = [ordered]@{
     'largada_4'     = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_SPLITLOG=1'; Secs = 30
                          Expect = 'largada: m_monsters\[0\]|||largada: m_monsters\[1\]|||largada: m_monsters\[2\]|||largada: m_monsters\[3\]'
                          Reject = 'largada: m_monsters\[[0-3]\] \(playerNum \d\) em (\S+)\r?\n[\s\S]*?largada: m_monsters\[[0-3]\] \(playerNum \d\) em \1\r?\n|||\[CRASH\]|||\[vigia\] CONGELOU' }
+    # motion blur com 4 vistas: o MotionBlurAA::init recebe as 4 (vistas em 0x6F8578; o bss dele tem lugar para 4, POS_FRONTEIRA.md item 11)
+    'borrao_4'      = @{ Env = 'WOTM_MATCH=3,1,2,5,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8578'; Secs = 35
+                         Expect = '6f8578=00000004'
+                         Reject = '6f8578=00000002|||\[CRASH\]|||\[vigia\] CONGELOU' }
     # regressao: o 2 jogadores continua desenhando a tela dividida (redesenhos com 2 vistas) e nunca a tela em 4
     'tela_2'        = @{ Env = 'WOTM_MATCH=3,1,1;WOTM_PLAYERS=2;WOTM_AIVSAI=1;PS2X_STATS=1'; Secs = 40
                          Expect = '2 vistas [\d.]+ ms \(CPU [\d.]+\) x [1-9]'
