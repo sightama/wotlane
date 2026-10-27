@@ -219,4 +219,16 @@ WOTM_AIVSAI=1`, Congar x Togera na fase 1), 50 s por rodada, `PS2X_STATS` + `WOT
   a taxa de apresentação não caiu. A 240 (4,2 ms) uma vista cabe e duas ficam no limite (perde ~4% das apresentações).
 - O custo é CPU: +45% no processo a 180 (~0,3 núcleo a mais), +55% a 240.
 - O tempo por redesenho cai com mais redesenhos por segundo (relógio da CPU/GPU mais alto); não é ganho do método.
-- Não medido: a mistura em si (estimada abaixo de 0,5 ms), 3 e 4 jogadores (4 vistas), monitor de verdade acima de 60 Hz com vsync.
+- Não medido: a mistura em si (estimada abaixo de 0,5 ms), 3 e 4 jogadores (4 vistas).
+
+Monitor principal de 180 Hz com vsync (mesmas lutas, `WOTM_MONITOR=0`):
+
+| Rodada | Apresentações/s | Redesenhos/s | Redesenho 1 vista (ms) | 2 vistas (ms) | GPU por redesenho (ms) | CPU do processo em 50 s |
+|---|---|---|---|---|---|---|
+| 1 jogador, hoje | 179,6 | 60 | 3,0 | — | 2,7 | 30 s |
+| 1 jogador, redraw | 177,1 | 177 | 2,7 | — | 2,4 | 52 s |
+| 2 jogadores, hoje | 180,2 | 60 | 2,8 | 4,7 | 3,3 | 35 s |
+| 2 jogadores, redraw | 175,9 | 176 | 2,3 | 4,6 | 3,2 | 68 s |
+
+- Com vsync o redesenho também cabe: perde 1,5% das apresentações com 1 vista e 2,5% com a tela dividida (4,6 ms de 5,5).
+- A CPU sobe mais que na simulação: +75% com 1 jogador e +90% com 2 (~0,45 e 0,65 núcleo a mais).
