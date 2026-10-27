@@ -2468,6 +2468,7 @@ static void drawCustomList(const View &v, int p, float x, float y, float boxW, f
 
 static Texture2D g_logo[17]{};   // logo de cada monstro (256x128 do SHELL.TEX, os da lista de saves; loadPortraits)
 static void loadPortraits();
+static Texture2D menuLabel(const char *label);
 
 // Selecao de monstros: um quadro por jogador (ou CPU), lado a lado, no telao. Cada quadro: o rotulo em cima, o monstro 3D, o nome com
 // as setas, o nome do traje e a faixa de trajes (um segmento por traje; os de mod em dourado; o escolhido mais largo e aceso) e o
@@ -2489,7 +2490,17 @@ static void drawSelect(const View &v)
         DrawRectangleGradientV(int(x), int(y), int(boxW), int(boxH), kBoxTop, kBoxBottom);
         DrawRectangleRec(Rectangle{x, y, boxW, boxH * 0.12f}, Color{c.r, c.g, c.b, 220});
         DrawRectangleLinesEx(box, v.selReady[p] ? 10.f : 5.f, Color{c.r, c.g, c.b, 240});
-        outlined(v.selLabel[p], cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
+        if (const Texture2D lt = menuLabel(v.selLabel[p]); lt.id)   // "1", "cpu 2": a fonte do menu principal (menuLabel)
+        {
+            const float band = boxH * 0.12f;
+            float th = band * 0.8f, tw = th * float(lt.width) / float(lt.height);
+            if (tw > boxW * 0.9f)
+                th *= boxW * 0.9f / tw, tw = boxW * 0.9f;
+            DrawTexturePro(lt, Rectangle{0.f, 0.f, float(lt.width), float(lt.height)},
+                           Rectangle{cx - tw * 0.5f, y + (band - th) * 0.5f, tw, th}, Vector2{0.f, 0.f}, 0.f, WHITE);
+        }
+        else
+            outlined(v.selLabel[p], cx, y + boxH * 0.06f, boxH * 0.10f, boxW * 0.9f, kName);
         if (v.selWaiting[p])   // CPU do modo 2: o jogador 1 escolhe por ela depois do dele
         {
             outlined("?", cx, y + boxH * 0.42f, boxH * 0.30f, boxW * 0.8f, Color{c.r, c.g, c.b, 255});
@@ -2651,11 +2662,29 @@ constexpr PortraitTex kPortraits[] = {
 static Texture2D g_portrait[17]{}, g_portraitLock[17]{};
 static bool g_portraitsTried = false;
 
+// Rotulo dos quadros na fonte do menu principal (a das marcas "1", "2", "cpu 1" da fileira do jogo, t178..t185, que sao placas com
+// moldura): os digitos da t142 (a dos numeros da tela 12, "7 cpu monsters") e o "cpu" de "cpu monsters" da t051, as duas T4 com a
+// paleta 480 do .RTX. Retangulos medidos na imagem ja de cima para baixo: x0, y0, x1, y1 (exclusivos) e a linha de base.
+struct Pixels
+{
+    std::vector<uint32_t> px;   // RGBA8, de cima para baixo
+    int w = 0, h = 0;
+};
+struct InkRect { int x0, y0, x1, y1, base; };
+constexpr uint16_t kMenuDigitsTex = 142, kMenuCpuTex = 51, kMenuFontPal = 480;
+constexpr InkRect kMenuDigit[10] = {{6, 15, 31, 55, 55},     {46, 13, 62, 54, 54},   {77, 13, 102, 54, 54},  {116, 13, 141, 55, 55},
+                                    {156, 12, 184, 55, 55},  {199, 12, 223, 56, 56}, {9, 64, 37, 111, 111},  {53, 63, 82, 110, 110},
+                                    {98, 65, 126, 112, 112}, {142, 64, 171, 111, 111}};
+constexpr InkRect kMenuCpu{2, 15, 68, 63, 51};   // o "p" desce 12 linhas abaixo da base
+constexpr InkRect kMenuP{21, 15, 45, 63, 51};     // so o "p" do "cpu" (jogadores: "p1")
+static Pixels g_menuDigits, g_menuCpu;
+static std::map<std::string, Texture2D> g_menuLabels;
+
 // Uma textura 64x64 paletizada (T8/T8H com CLUT 16x16 em CSM1, T4HL/T4HH com CLUT 8x2) de cima para baixo (no arquivo as linhas estao
 // de baixo para cima)
-static Texture2D decodePortrait(const std::vector<uint8_t> &file, const std::vector<wotm::savepics::detail::Packet> &pk,
-                                const std::vector<uint8_t> &rtx, const std::vector<wotm::savepics::detail::Packet> &rtxPk, uint16_t texId,
-                                uint16_t palTbp)
+static Pixels decodePixels(const std::vector<uint8_t> &file, const std::vector<wotm::savepics::detail::Packet> &pk,
+                           const std::vector<uint8_t> &rtx, const std::vector<wotm::savepics::detail::Packet> &rtxPk, uint16_t texId,
+                           uint16_t palTbp)
 {
     const wotm::savepics::detail::Packet *p = nullptr, *pal = nullptr;
     for (const auto &k : pk)
@@ -2663,12 +2692,12 @@ static Texture2D decodePortrait(const std::vector<uint8_t> &file, const std::vec
     for (const auto &k : rtxPk)
         if (k.tbp == palTbp && k.psm == 0) pal = &k;
     if (!p || !pal)
-        return Texture2D{};
+        return {};
     const bool t8 = p->psm == 0x13 || p->psm == 0x1B, t4 = p->psm == 0x14 || p->psm == 0x24 || p->psm == 0x2C;
     const uint32_t np = pal->w * pal->h, w = p->w, h = p->h;
     const size_t data = p->off + 0x80, need = t8 ? size_t(w) * h : size_t(w) * h / 2;
     if ((!t8 && !t4) || data + need > file.size() || pal->off + 0x10 + 4 * size_t(np) > rtx.size())
-        return Texture2D{};
+        return {};
     std::vector<uint32_t> clut(np), px(size_t(w) * h);
     for (uint32_t i = 0; i < np; ++i)
     {
@@ -2685,7 +2714,16 @@ static Texture2D decodePortrait(const std::vector<uint8_t> &file, const std::vec
             uint32_t k = t8 ? file[data + i] : ((i & 1) ? file[data + i / 2] >> 4 : file[data + i / 2] & 15);
             px[size_t(h - 1 - y) * w + x] = k < np ? clut[k] : 0u;
         }
-    Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    return Pixels{std::move(px), int(w), int(h)};
+}
+static Texture2D decodePortrait(const std::vector<uint8_t> &file, const std::vector<wotm::savepics::detail::Packet> &pk,
+                                const std::vector<uint8_t> &rtx, const std::vector<wotm::savepics::detail::Packet> &rtxPk, uint16_t texId,
+                                uint16_t palTbp)
+{
+    Pixels d = decodePixels(file, pk, rtx, rtxPk, texId, palTbp);
+    if (d.px.empty())
+        return Texture2D{};
+    Image img{d.px.data(), d.w, d.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
     Texture2D t = LoadTextureFromImage(img);
     SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
     SetTextureWrap(t, TEXTURE_WRAP_CLAMP);
@@ -2721,7 +2759,66 @@ static void loadPortraits()
         if (l.monster < std::size(g_logo))
             nl += (g_logo[l.monster] = decodePortrait(tex, texPk, rtx, rtxPk, l.t.texId, l.t.palTbp)).id != 0;
     std::fprintf(stderr, "[padsel] selecao: %d de %zu logos\n", nl, std::size(wotm::savepics::kLogoPics));
+    g_menuDigits = decodePixels(tex, texPk, rtx, rtxPk, kMenuDigitsTex, kMenuFontPal);
+    g_menuCpu = decodePixels(tex, texPk, rtx, rtxPk, kMenuCpuTex, kMenuFontPal);
+    if (g_menuDigits.px.empty() || g_menuCpu.px.empty())
+        std::fprintf(stderr, "[padsel] selecao: letras do menu (SHELL t%d/t%d) nao lidas; rotulos em texto\n", kMenuDigitsTex, kMenuCpuTex);
     std::fprintf(stderr, "[padsel] barra de monstros: %d de %zu retratos\n", n, std::size(kPortraits));
+}
+
+// Textura do rotulo: "P<n>" vira "p" e o digito, "CPU" e "CPU<n>" o "cpu" e o digito com um espaco, na mesma linha de base. Outro
+// texto (ou as letras sem ler): Texture2D vazia, e o quadro escreve com a fonte da selecao.
+static Texture2D menuLabel(const char *label)
+{
+    loadPortraits();
+    if (const auto it = g_menuLabels.find(label); it != g_menuLabels.end())
+        return it->second;
+    Texture2D &out = g_menuLabels[label];
+    if (g_menuDigits.px.empty() || g_menuCpu.px.empty())
+        return out;
+    constexpr int kPad = 2, kWordGap = 12, kLetterGap = 2;
+    struct Piece { const Pixels *src; InkRect r; int gap; };   // gap: espaco antes da peca seguinte
+    std::vector<Piece> pieces;
+    const char *d = label;
+    if (label[0] == 'P' && label[1])
+        pieces.push_back({&g_menuCpu, kMenuP, kLetterGap}), d = label + 1;
+    else if (std::strncmp(label, "CPU", 3) == 0)
+        pieces.push_back({&g_menuCpu, kMenuCpu, kWordGap}), d = label + 3;
+    else
+        return out;
+    for (; *d; ++d)
+    {
+        if (*d < '0' || *d > '9')
+            return out;
+        pieces.push_back({&g_menuDigits, kMenuDigit[*d - '0'], kLetterGap});
+    }
+    int asc = 0, desc = 0, w = 2 * kPad;
+    for (size_t i = 0; i < pieces.size(); ++i)
+    {
+        const InkRect &r = pieces[i].r;
+        asc = std::max(asc, r.base - r.y0);
+        desc = std::max(desc, r.y1 - r.base);
+        w += r.x1 - r.x0 + (i ? pieces[i - 1].gap : 0);
+    }
+    const int h = asc + desc + 2 * kPad, base = kPad + asc;
+    std::vector<uint32_t> px(size_t(w) * h, 0u);
+    int x = kPad;
+    for (size_t i = 0; i < pieces.size(); ++i)
+    {
+        const Pixels &s = *pieces[i].src;
+        const InkRect &r = pieces[i].r;
+        if (i)
+            x += pieces[i - 1].gap;
+        for (int sy = r.y0; sy < r.y1 && sy < s.h; ++sy)
+            for (int sx = r.x0; sx < r.x1 && sx < s.w; ++sx)
+                px[size_t(base - r.base + sy) * w + size_t(x + sx - r.x0)] = s.px[size_t(sy) * s.w + sx];
+        x += r.x1 - r.x0;
+    }
+    Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    out = LoadTextureFromImage(img);
+    SetTextureFilter(out, TEXTURE_FILTER_BILINEAR);
+    SetTextureWrap(out, TEXTURE_WRAP_CLAMP);
+    return out;
 }
 
 // A barra: as 10 colunas da selecao (retrato; silhueta se travada), o aleatorio (?) e o personalizado, de lado a lado da janela, logo
