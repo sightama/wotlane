@@ -19,10 +19,12 @@ Regras do carregador (`native/wotm_mods.hpp`): pasta que começa com `_` ou `.` 
 log (`logs\live.err.log`) diz cada arquivo e cada textura que veio de um mod (`[mods] ...`).
 
 **Mods do projeto** ficam em `mods/<mod>/` na raiz do repo e são só arte e configuração próprias (JSON, PNG desenhado): o Goliath
-Prime (`mods/Goliath Prime/`) e o logo "Recompiled" da abertura (`mods/recompiled_logo/`). O jogo nunca lê o repo: o
+Prime (`mods/Goliath Prime/`), o Cerebulon (`mods/Cerebulon/`) e o logo "Recompiled" da abertura (`mods/recompiled_logo/`). O
 `tools/sync_mods.ps1` espelha cada pasta de `mods/` para `<runtime>\discroot\mods\` (o `run_live.ps1` o chama a cada boot e o
 `setup_runtime.ps1` na instalação; `WOTM_RECOMP_DIR` ou `.wotm_recomp_dir` dizem o runtime). Só as pastas que existem no repo são
-espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como estão. Textura do disco editada (PNG saído do
+espelhadas; as que só existem no `discroot\mods\` (as suas, `_work`) ficam como estão. Sem uma pasta `mods` (nesse nome exato: no
+Windows o caminho `mods` cai no `MOD\` do disco, a dos IRX) ao lado do ELF, o jogo e o launcher leem a `mods/` do repo
+(`WOTM_REPO`, que o `run_live.bat` e o launcher passam). Textura do disco editada (PNG saído do
 `modkit.py`) é arte do jogo e não entra no repo, a não ser como arte nova por cima (caso do logo).
 
 ## Interface (`tools/modkit_gui.py`, botão "Mod kit" do launcher)
