@@ -94,6 +94,7 @@ $elfDst = Join-Path $rt 'discroot\SCUS_971.97'   # o resto do disco vem da ISO (
 if (-not (Test-Path $elfDst) -or (Get-FileHash $elfDst -Algorithm SHA1).Hash.ToLower() -ne $elfSha1) {
     Copy-Item (Join-Path $disc 'SCUS_971.97') $elfDst -Force
 }
+& (Join-Path $PSScriptRoot 'sync_mods.ps1') -Runtime $rt -Repo $repo   # mods do repo (mods\<mod>\) para discroot\mods\
 
 # --- jogo traduzido (codigo do jogo: so local, recomp\ no .gitignore)
 Step 'jogo traduzido'

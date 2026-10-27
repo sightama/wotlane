@@ -10,7 +10,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <cctype>
@@ -21,11 +23,15 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#if defined(_M_X64) || defined(__SSE4_1__)
+#include <smmintrin.h>   // dustTexture: rasterizacao com SSE4.1
+#endif
 
 #include "raylib.h"
 #include "rlgl.h"
 #include "wotm_gs.hpp"
-#include "wotm_interp.hpp"   // interpolacao de quadros (blendSnapshots)
+#include "wotm_mods.hpp"   // paletas dos .RTX: mods/ vence o disco (loadResources)
+#include "wotm_texmods.hpp"   // texturas de mod em PNG (textureId, residentTexture)
 
 namespace wotm {
 
@@ -55,6 +61,7 @@ constexpr uint32_t paraL = wotm::sym::paraL;            // float[4][4]: linhas x
 constexpr uint32_t vu1FogParams = 0x0025B280;     // float[4] (D_0025B280, qword 21 do VU1): fogFA, fogMaxVal, 1, fogFB (fogUpdate)
 constexpr uint32_t fogColorCtx = wotm::sym::fogColorCtx;      // u64[6]: pacote do FOGCOL que o fogUpdate manda ao GS; [4] = R | G << 8 | B << 16
 constexpr uint32_t vu1LightColor = 0x0025B238;    // float[4][4] (D_0025B238): cor/128 das luzes 0-2 (linhas); a linha 3 e o ambiente/especular
+constexpr uint32_t fieldsAtFrameStart = 0x006F8DC0;   // u32 (D_006F8DC0): contagem de fields no inicio do quadro (timerWaitForMinUpdateRate)
 constexpr uint32_t csActiveList = wotm::sym::x_6CsPool_m_activeList;     // CsPool::m_activeList (CsNode: cs@0, next@4)
 constexpr uint32_t csHPActiveList = wotm::sym::x_6CsPool_m_HPActiveList;   // CsPool::m_HPActiveList
 constexpr uint32_t tempVramTexAddr = wotm::sym::tempVramTexAddr;  // fim dos recursos (.RTX) na VRAM, em palavras; >> 6 = bloco base das paletas
@@ -65,7 +72,6 @@ constexpr uint32_t psBlkLst = wotm::sym::psBlkLst;        // _pshadowblocker[10]
 constexpr uint32_t psLitDirWs = wotm::sym::psLitDirWs;      // direcao da luz das sombras (da cena para a luz), mundo
 constexpr uint32_t psShadowIntens = wotm::sym::psShadowIntens;  // float, 80 = 0,625 (escala do GS)
 constexpr uint32_t psShadowOn = 0x006F8D7C;      // psSetShadowOnOff
-constexpr uint32_t fieldCounterAtStart = 0x006F8DC0;   // D_006F8DC0: fields no comeco do quadro (timerWaitForMinUpdateRate); carimbo da interpolacao
 }
 
 // Vista do jogo que a coleta e o desenho em curso seguem (tela dividida: vistas 0 e 1, metades esquerda e direita de 320 x 224 do
@@ -115,6 +121,30 @@ struct ViewScope {
     ~ViewScope() { curView() = prev; }
     ViewScope(const ViewScope &) = delete;
     ViewScope &operator=(const ViewScope &) = delete;
+};
+
+// Medida do desenho (WOTM_DRAWSTATS=1, com PS2X_STATS): tempo de cada fase do Scene::draw, lotes descarregados e vertices emitidos,
+// somados na thread da janela; o wotm_live.inc imprime a media por vista desenhada na linha [native] e zera
+struct DrawProf {
+    enum Phase { Sky, Trav, AlphaOT, Shadows, ShadowTex, Sprites, Fx, Hud, Flush, Jobs,   // Flush e Jobs (vertices nas threads auxiliares): dentro das outras
+                 RShow, RView, RFlares, RFrame, kN };   // por redesenho (wotmDrawNative): Scene::show, drawView inteiro, flares adiados, o redesenho todo
+    long redraws = 0;
+    double ms[kN] = {};
+    long batches = 0, verts = 0, views = 0;   // batches: descargas (uma subida de vertices cada)
+    long draws = 0;                           // desenhos (glDrawArrays) das descargas do VtxStream
+    long shadowHit = 0, shadowMiss = 0;   // silhuetas reaproveitadas e refeitas (Scene::shadowTexture)
+    long emitted = 0;                     // vertices de fato emitidos pelo drawList (depois do corte de faces e dos slots)
+    long resident = 0, resUp = 0;         // vertices desenhados da arena residente e subidos para ela (Scene::residentDraw)
+};
+inline DrawProf &drawProf() { static DrawProf p; return p; }
+inline bool drawProfOn() { static const bool on = std::getenv("WOTM_DRAWSTATS") != nullptr; return on; }
+inline double profNowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+// Soma o tempo do escopo na fase `ph` (so com WOTM_DRAWSTATS)
+struct ProfScope {
+    DrawProf::Phase ph;
+    double t0;
+    explicit ProfScope(DrawProf::Phase p) : ph(p), t0(drawProfOn() ? profNowMs() : 0.0) {}
+    ~ProfScope() { if (drawProfOn()) drawProf().ms[ph] += profNowMs() - t0; }
 };
 // Enderecos da vista corrente: worldToScreenMat[v], worldCtx[v], viewInfo[v]
 inline uint32_t viewW2S() { return addr::worldToScreenMat + 0x40u * uint32_t(curView().view); }
@@ -250,6 +280,7 @@ struct MeshData {
     bool abe = false;        // PRIM.ABE da tag GIF: so entao o alfa de vertice vale (blend); senao opaco
     uint8_t maxA = 0;        // maior alfa de vertice (tris e sprites, cru: 0x80 = 1,0); com o da textura diz se o As passa de 1
     uint32_t slotMask = 0;   // slots de textura usados pelas secoes (bit i = gsTexCtx[i])
+    bool patched = false;    // copia alterada por Scene::patchMesh (o decodificado de novo volta sem)
     uint8_t curSub = 0;   // sub-pacote em decodificacao (diagnostico)
     uint8_t curSlot = 0;  // textura corrente do GS: seletor 0 na tag = nao troca o contexto (herda o da secao anterior)
     uint8_t curTme = 1;   // PRIM.TME em vigor (tag GIF com PRE; sem PRE o GS mantem o PRIM anterior)
@@ -471,6 +502,13 @@ inline MeshData decodeObject(const Ram &ram, uint32_t node) {
 // kGsAlphaNoTest: TEST_1 com ATE = 0 (sem teste: o GS desenha todo pixel, inclusive As = 0; os brilhos aditivos 0x5040C dependem disso).
 inline constexpr int16_t kGsAlphaRef = 8, kGsAlphaNoTest = -1;
 
+// Icones de botao 2D no lugar dos objetos 3D do McButtons (Scene::drawButtonSprites; o runtime instala, runtime/wotm_prompts.inc). id = o do
+// objeto (0x1F51.. ou 0x240E..); mid = centro no mundo; right/up = eixos da camera; size = lado no mundo; alpha = fade. Desenha dentro
+// do modo 3D do quadro. g_buttonIconsOn: se os 2D valem agora (opcao do jogador); sem funcao, os 3D do jogo.
+using ButtonIconFn = void (*)(uint16_t id, const float mid[3], const float right[3], const float up[3], float size, float alpha);
+inline ButtonIconFn g_buttonIconFn = nullptr;
+inline bool (*g_buttonIconsOn)() = nullptr;
+
 struct DrawItem {
     M4 m;
     uint32_t node;   // HierObject
@@ -489,6 +527,7 @@ struct DrawItem {
     uint8_t env = 0;   // mapa de ambiente (Scene::objectEnv): 0 = UV do pacote, 1 = mapa comum, 2 = video/quadro anterior, 3 = CLOAK
     float envK = 0.f;  // peso da normal no UV do mapa de ambiente (envMapWeight ou o do CLOAK)
     uint16_t hudId = 0;   // so em Scene::hud: id do elemento de HUD (do epNode do _cs)
+    uint16_t btnId = 0;   // so em overlay/hpOverlay: id do icone de botao (Scene::drawButtonSprites)
     uint32_t cs = 0;      // _cs cuja travessia emitiu o objeto (0 na fase, como o cs_): receptor de sombra (psObjectCull)
     int16_t aref = kGsAlphaRef;   // teste de alfa do TEST_1 do GROUP que contem o objeto: descarta As * 128 <= aref (Scene::groupState; kGsAlphaNoTest = sem teste)
     bool zmsk = false;   // ZBUF_1.ZMSK do GROUP que contem o objeto: nao grava profundidade (so vale no passe translucido; Scene::groupState)
@@ -564,6 +603,160 @@ inline GameCamera readGameCamera(const Ram &ram, int view = 0) {
     return c;
 }
 
+// ---------------------------------------------------------------- interpolacao de quadros (Scene::showBlend)
+// A logica roda a 60 e a apresentacao na taxa do monitor: entre dois quadros do jogo o desenho mistura os dois ultimos instantaneos
+// (A anterior, B mais novo). Matriz: escala por linha (a convencao do codigo: scaleM antes), rotacao por slerp, translacao linear.
+namespace interp {
+struct Quat { float w, x, y, z; };
+
+// Linhas 0-2 = eixos com escala. Falso se as linhas normalizadas nao forem ortogonais (cisalhamento): ai o chamador faz lerp simples.
+// det < 0 (espelho): a linha 2 entra com escala negativa.
+inline bool decompose(const M4 &m, Quat &q, float s[3]) {
+    float R[3][3];
+    for (int i = 0; i < 3; ++i) {
+        s[i] = std::sqrt(m.m[i][0] * m.m[i][0] + m.m[i][1] * m.m[i][1] + m.m[i][2] * m.m[i][2]);
+        if (!(s[i] > 1e-6f)) return false;
+        for (int j = 0; j < 3; ++j) R[i][j] = m.m[i][j] / s[i];
+    }
+    for (int i = 0; i < 3; ++i) {
+        const int j = (i + 1) % 3;
+        if (std::fabs(R[i][0] * R[j][0] + R[i][1] * R[j][1] + R[i][2] * R[j][2]) > 0.02f) return false;
+    }
+    const float det = R[0][0] * (R[1][1] * R[2][2] - R[1][2] * R[2][1]) - R[0][1] * (R[1][0] * R[2][2] - R[1][2] * R[2][0]) +
+                      R[0][2] * (R[1][0] * R[2][1] - R[1][1] * R[2][0]);
+    if (det < 0.f) {
+        s[2] = -s[2];
+        for (int j = 0; j < 3; ++j) R[2][j] = -R[2][j];
+    }
+    // A = R^T (matriz-coluna): A[r][c] = R[c][r]
+    auto A = [&](int r, int c) { return R[c][r]; };
+    const float tr = A(0, 0) + A(1, 1) + A(2, 2);
+    if (tr > 0.f) { const float t = std::sqrt(tr + 1.f) * 2.f; q = {0.25f * t, (A(2, 1) - A(1, 2)) / t, (A(0, 2) - A(2, 0)) / t, (A(1, 0) - A(0, 1)) / t}; }
+    else if (A(0, 0) > A(1, 1) && A(0, 0) > A(2, 2)) { const float t = std::sqrt(1.f + A(0, 0) - A(1, 1) - A(2, 2)) * 2.f; q = {(A(2, 1) - A(1, 2)) / t, 0.25f * t, (A(0, 1) + A(1, 0)) / t, (A(0, 2) + A(2, 0)) / t}; }
+    else if (A(1, 1) > A(2, 2)) { const float t = std::sqrt(1.f + A(1, 1) - A(0, 0) - A(2, 2)) * 2.f; q = {(A(0, 2) - A(2, 0)) / t, (A(0, 1) + A(1, 0)) / t, 0.25f * t, (A(1, 2) + A(2, 1)) / t}; }
+    else { const float t = std::sqrt(1.f + A(2, 2) - A(0, 0) - A(1, 1)) * 2.f; q = {(A(1, 0) - A(0, 1)) / t, (A(0, 2) + A(2, 0)) / t, (A(1, 2) + A(2, 1)) / t, 0.25f * t}; }
+    return true;
+}
+
+inline Quat slerp(Quat a, Quat b, float t) {
+    float d = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+    if (d < 0.f) { b = {-b.w, -b.x, -b.y, -b.z}; d = -d; }
+    float ka, kb;
+    if (d > 0.9995f) { ka = 1.f - t; kb = t; }
+    else { const float th = std::acos(d), sn = std::sin(th); ka = std::sin((1.f - t) * th) / sn; kb = std::sin(t * th) / sn; }
+    Quat r{ka * a.w + kb * b.w, ka * a.x + kb * b.x, ka * a.y + kb * b.y, ka * a.z + kb * b.z};
+    const float n = std::sqrt(r.w * r.w + r.x * r.x + r.y * r.y + r.z * r.z);
+    if (n > 0.f) { r.w /= n; r.x /= n; r.y /= n; r.z /= n; }
+    return r;
+}
+
+inline M4 lerpM4(const M4 &a, const M4 &b, float t) {
+    M4 r;
+    for (int i = 0; i < 4; ++i)
+        for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j] + (b.m[i][j] - a.m[i][j]) * t;   // translacao, coluna 3 e o caso sem decomposicao
+    Quat qa, qb;
+    float sa[3], sb[3];
+    if (decompose(a, qa, sa) && decompose(b, qb, sb) && (sa[2] < 0.f) == (sb[2] < 0.f)) {
+        const Quat q = slerp(qa, qb, t);
+        const float x = q.x, y = q.y, z = q.z, w = q.w;
+        const float A[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)},
+                               {2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)},
+                               {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}};
+        for (int i = 0; i < 3; ++i) {
+            const float s = sa[i] + (sb[i] - sa[i]) * t;
+            for (int j = 0; j < 3; ++j) r.m[i][j] = A[j][i] * s;   // volta para vetores-linha
+        }
+    }
+    return r;
+}
+
+inline void orthonormal(float fwd[3], float up[3]) {
+    float n = std::sqrt(fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]);
+    if (n > 1e-6f) for (int i = 0; i < 3; ++i) fwd[i] /= n;
+    const float d = up[0] * fwd[0] + up[1] * fwd[1] + up[2] * fwd[2];
+    for (int i = 0; i < 3; ++i) up[i] -= d * fwd[i];
+    n = std::sqrt(up[0] * up[0] + up[1] * up[1] + up[2] * up[2]);
+    if (n > 1e-6f) for (int i = 0; i < 3; ++i) up[i] /= n;
+}
+
+// Corte de camera entre A e B (sem mistura): teleporte, giro brusco, FOV mudando
+inline bool cameraCut(const GameCamera &a, const GameCamera &b) {
+    if (!a.ok || !b.ok) return true;
+    const float dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
+    const float dotf = a.fwd[0] * b.fwd[0] + a.fwd[1] * b.fwd[1] + a.fwd[2] * b.fwd[2];
+    return dx * dx + dy * dy + dz * dz > 400.f * 400.f || dotf < 0.7f || std::fabs(a.fovy - b.fovy) > 5.f;
+}
+
+// Posicao e FOV lineares, eixos por nlerp e reortonormalizados (basta para o giro de um quadro)
+inline GameCamera lerpCamera(const GameCamera &a, const GameCamera &b, float t) {
+    GameCamera r = b;
+    for (int i = 0; i < 3; ++i) {
+        r.pos[i] = a.pos[i] + (b.pos[i] - a.pos[i]) * t;
+        r.fwd[i] = a.fwd[i] + (b.fwd[i] - a.fwd[i]) * t;
+        r.up[i] = a.up[i] + (b.up[i] - a.up[i]) * t;
+    }
+    orthonormal(r.fwd, r.up);
+    r.fovy = a.fovy + (b.fovy - a.fovy) * t;
+    return r;
+}
+
+// Camera -> mundo (vetores-linha): linhas = direita, frente, cima, olho
+inline M4 cameraToWorld(const GameCamera &c) {
+    float f[3] = {c.fwd[0], c.fwd[1], c.fwd[2]}, u[3] = {c.up[0], c.up[1], c.up[2]};
+    orthonormal(f, u);
+    M4 m = ident();
+    const float r[3] = {f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
+    for (int i = 0; i < 3; ++i) { m.m[0][i] = r[i]; m.m[1][i] = f[i]; m.m[2][i] = u[i]; m.m[3][i] = c.pos[i]; }
+    return m;
+}
+
+// Inversa de uma matriz rigida (rotacao ortonormal + translacao, vetores-linha)
+inline M4 rigidInverse(const M4 &m) {
+    M4 r = ident();
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) r.m[i][j] = m.m[j][i];
+    for (int j = 0; j < 3; ++j) r.m[3][j] = -(m.m[3][0] * r.m[0][j] + m.m[3][1] * r.m[1][j] + m.m[3][2] * r.m[2][j]);
+    return r;
+}
+
+// Foco da projecao do jogo: px do GS (horizontal) e linhas (vertical) por unidade de tangente. Da worldToScreenMat (16 floats, linhas):
+// linha 0 = fh*direita + c*frente, linha 1 = -fv*cima + c*frente, linha 3 = frente; o foco e a parte perpendicular a linha 3.
+struct Focus { float fh = 384.f, fv = 180.48f; };
+inline bool focusOf(const float *M, Focus &f) {
+    const float *r3 = M + 12;
+    const float n3 = r3[0] * r3[0] + r3[1] * r3[1] + r3[2] * r3[2];
+    if (!(n3 > 0.5f) || !std::isfinite(n3)) return false;
+    auto perp = [&](const float *r) {
+        const float k = (r[0] * r3[0] + r[1] * r3[1] + r[2] * r3[2]) / n3;
+        float s = 0.f;
+        for (int i = 0; i < 3; ++i) s += (r[i] - k * r3[i]) * (r[i] - k * r3[i]);
+        return std::sqrt(s);
+    };
+    const float fh = perp(M), fv = perp(M + 4);
+    if (!(fh > 1.f && fv > 1.f) || !std::isfinite(fh) || !std::isfinite(fv)) return false;
+    f.fh = fh;
+    f.fv = fv;
+    return true;
+}
+// mundo -> camera (direita, frente, cima) pela cameraToWorld C; point = com a translacao
+inline void toCam(const M4 &C, const float p[3], bool point, float q[3]) {
+    const float d[3] = {p[0] - (point ? C.m[3][0] : 0.f), p[1] - (point ? C.m[3][1] : 0.f), p[2] - (point ? C.m[3][2] : 0.f)};
+    for (int k = 0; k < 3; ++k) q[k] = d[0] * C.m[k][0] + d[1] * C.m[k][1] + d[2] * C.m[k][2];
+}
+inline void fromCam(const M4 &C, const float q[3], bool point, float p[3]) {
+    for (int i = 0; i < 3; ++i) p[i] = (point ? C.m[3][i] : 0.f) + q[0] * C.m[0][i] + q[1] * C.m[1][i] + q[2] * C.m[2][i];
+}
+// Ponto do mundo -> deslocamento do centro da tela (px do GS, linhas); falso atras da camera
+inline bool project(const M4 &C, const Focus &f, const float w[3], float &x, float &y) {
+    float q[3];
+    toCam(C, w, true, q);
+    if (q[1] < 1.f) return false;
+    x = f.fh * q[0] / q[1];
+    y = -f.fv * q[2] / q[1];
+    return true;
+}
+}   // namespace interp
+
 // Particula desenhada como sprite voltado para a camera (destroços, poeira...). Lida de fx[] (0x5BA280, 98 x 12000 bytes).
 struct Sprite {
     float pos[3] = {0, 0, 0};
@@ -577,6 +770,9 @@ struct Sprite {
     int16_t aref = 8;       // destroço: limiar do teste de alfa (Scene::setAlphaRef); kGsAlphaRef = padrao
     bool opaque = false;    // destroço sem ABE com alphaContext 0: grava profundidade (ZBUF do setOpeningContext)
     uint32_t key = 0;       // fx * 4096 + indice: casa a mesma particula entre dois quadros
+    // Passo do particleMove (Particles::stepBack): pos_B - pos_A = f (step - (0, 0, grav f)) em f fields; zero na que nasceu no passo
+    float step[3] = {0, 0, 0};
+    float grav = 0.f;
 };
 
 // Glifo do texto do jogo (fontSpritePrint*): um sprite do GS. UV em texels do atlas, XY em pixels da tela do jogo (640 x 224, campo).
@@ -602,7 +798,30 @@ struct ScreenRect {
     // Barra com textura residente (retrato do inimigo, wotmBarTex): TEX0 da imagem do .RTX (0 = cor lisa) e o trecho em texels
     uint64_t tex0 = 0;
     float u0 = 0.f, v0 = 0.f, u1 = 0.f, v1 = 0.f;
+    // Barra: indice em Snapshot::anchors do icone de vida que ela substitui (-1 = nenhum); o modo foto a leva junto com a cabeca
+    int16_t anchor = -1;
 };
+
+// Icone de vida sobre um monstro (Hud::drawHealthIcon): o ponto do mundo que o jogo projetou (cabeca) e o centro do icone na tela do
+// jogo (640 x 224) como saiu. O modo foto (wotm_photo.inc) reprojeta o ponto com a camera dele e desloca as barras e o icone.
+struct HudAnchor {
+    float x = 0.f, y = 0.f;   // centro na tela do jogo
+    float w[3] = {0.f, 0.f, 0.f};
+    int8_t view = 0;
+};
+
+// Luz com lens flare (HierLight, op 5, isOn e hasLensFlare) achada na coleta, no mundo: p = position . matriz do no, beam = beamNormal .
+// a mesma matriz (so a rotacao). O hierLightNode faz igual com a pilha de matrizes e o olho do quadro; o modo foto (wotm_photo.inc)
+// refaz a lista do lens flare com elas pela camera livre, porque o jogo pausado so tem as que estavam na tela.
+struct WorldLight {
+    float p[3] = {0, 0, 0}, beam[3] = {0, 0, 0};
+    uint32_t node = 0, cs = 0;    // no HierLight e _cs em que a coleta o achou (diagnostico)
+    uint32_t flags = 0, id = 0;   // flags da luz (byte baixo: 1 isOn, 2 hasLensFlare, 8 isDirectional, 0x10 bidirecional, 0x80 no infinito)
+    float intensity = 0.f, rgb[3] = {0, 0, 0}, bw = 0.f;
+};
+// Emissor de particula (HierParticleEmitter, op 22) percorrido na coleta: preset e base no mundo, como o Model::emitters da previa
+// (e = position . matriz; r0/r2 = linhas 0 e 2 do StaticMat = mathfMatrixFromNormal(n) levadas pela matriz).
+struct WorldEmitter { uint32_t node = 0, preset = 0; float e[3] = {0, 0, 0}, r0[3] = {0, 0, 0}, r2[3] = {0, 0, 0}; };
 
 // Centro (pixels do GS, viewGetCenter) e tamanho (viewGetWH) da vista `view`, do viewDef dela.
 inline bool viewGeom(const Ram &ram, int view, int &cx, int &cy, int &w, int &h) {
@@ -790,20 +1009,26 @@ struct Snapshot {
     std::vector<DrawItem> items, sky, overlay, hud, hp, hpOverlay;
     std::vector<FxSystem> fx;
     std::shared_ptr<const uint8_t> fxRam;  // copia de sombra da RAM das particulas (Particles::shadowRam, ao vivo); nullptr = ler a RAM passada ao draw
+    size_t fxRamSize = 0;                  // tamanho do buffer de fxRam (o da RAM)
     Particles::FlareFrame flares;       // lens flare do quadro (Particles::collectFlares); sem ele o lado que desenha nao tem a lista
     std::vector<ShadowBlocker> shadows;
     std::vector<ScreenRect> screenRects;   // fades do quadro (wotmScreenRect, nos hooks dos emissores; nao vem do collect)
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (readScreenPolys: no takeSnapshot e no hook do dmaData)
+    std::vector<HudAnchor> anchors;        // ponto do mundo de cada icone de vida do quadro (barras e icone seguem a camera no modo foto)
+    std::vector<WorldLight> worldLights;   // luzes com lens flare percorridas pela coleta (modo foto)
+    std::vector<WorldEmitter> emitters;    // emissores de particula percorridos pela coleta (modo foto: fogo do Agamo)
     ParaLights lights;
     Fog fog;
     GameCamera cam;
     ViewCtx vctx;       // vista do jogo deste instantaneo (tela dividida: 0 = esquerda, 1 = direita; quadrantes: v & 1 coluna, v >> 1 linha)
     uint32_t g = 0;     // contador de quadros do jogo
-    uint32_t fields = 0;   // fields do jogo no comeco do quadro (addr::fieldCounterAtStart): carimbo da interpolacao
-    double hostT = 0.0;    // relogio do host na captura (s, steady_clock; wotm_live::hostSeconds)
-    // Mistura (blendSnapshots): as particulas vem do instantaneo mais perto do alfa e a copia de sombra delas tem a camera dele (fxCam);
-    // o desenho troca a matriz dessa vista pela da camera misturada (wotm_live.inc, FxCameraPatch)
-    bool blended = false;
+    // Carimbo para a interpolacao (Scene::showBlend): contagem de fields do inicio do quadro (D_006F8DC0; quadro de 2 fields = vao de 2)
+    // e relogio do host na captura (segundos, steady_clock). fields = 0: sem carimbo (replay, coleta local)
+    uint32_t fields = 0;
+    double hostT = 0.0;
+    uint32_t culled = 0;  // OBJECTs e GROUPs que o collect recortou pela vista (a fase existe mesmo com poucos itens na tela)
+    // Camera com que a copia de sombra das particulas (fxRam) foi montada, quando nao e a `cam` (vista de perseguicao: a da vista 0);
+    // o show e o showBlend levam a worldToScreenMat e o olho da vista dessa camera para a desenhada (Scene::aimFxRam)
     GameCamera fxCam;
     bool valid = false;
     // Tela dividida: as vistas 1 a 3 do mesmo quadro (coletadas na saida do hier(v, 0)); views[v - 1] = nullptr: sem a vista v
@@ -813,106 +1038,14 @@ struct Snapshot {
     std::shared_ptr<Snapshot> chase;
 };
 
-// ---------------------------------------------------------------- interpolacao entre dois quadros do jogo (so desenho)
-// A apresentacao (wotm_live.inc) guarda os ultimos instantaneos e, com a tela acima de 60 Hz, desenha a mistura do par que cerca o
-// relogio de exibicao (wotm_interp.hpp). Objetos casam por (_cs, no, ocorrencia); paletas so do mesmo bloco; HUD e o que o jogo
-// cola na camera (hud, overlay, hp) seguem a camera misturada sem misturar a matriz (M' = M_B * inv(V_B) * V_I). Particulas,
-// destrocos, texto e fades ficam os de B por enquanto. Corte de camera, vista diferente ou objeto que saltou: B sem mistura.
-inline interp::Camera toInterp(const GameCamera &c) {
-    interp::Camera r;
-    for (int i = 0; i < 3; ++i) { r.pos[i] = c.pos[i]; r.fwd[i] = c.fwd[i]; r.up[i] = c.up[i]; }
-    r.fovy = c.fovy;
-    return r;
-}
-
-struct BlendStats { size_t matched = 0, moved = 0, pals = 0, rebased = 0; bool cut = false; };
-
-inline Snapshot blendSnapshots(const Snapshot &A, const Snapshot &B, float t, BlendStats *stats = nullptr) {
-    Snapshot r = B;
-    if (t >= 1.f || !A.valid || !B.valid || !A.cam.ok || !B.cam.ok || A.vctx.view != B.vctx.view || A.vctx.grid != B.vctx.grid ||
-        A.vctx.w != B.vctx.w || interp::cameraCut(toInterp(A.cam), toInterp(B.cam))) {
-        if (stats && t < 1.f) stats->cut = true;
-        return r;
-    }
-    const interp::Camera ci = interp::lerpCamera(toInterp(A.cam), toInterp(B.cam), t);
-    for (int i = 0; i < 3; ++i) { r.cam.pos[i] = ci.pos[i]; r.cam.fwd[i] = ci.fwd[i]; r.cam.up[i] = ci.up[i]; }
-    r.cam.fovy = ci.fovy;
-    // particulas e destrocos do instantaneo mais perto (meio quadro de erro no maximo), com a camera dele para a troca da matriz
-    r.blended = true;
-    const Snapshot &near = t < 0.5f ? A : B;
-    r.fxCam = near.blended ? near.fxCam : near.cam;   // vista de perseguicao: a copia das particulas tem a camera da vista 0
-    if (t < 0.5f) {
-        r.sprites = A.sprites;
-        r.fx = A.fx;
-        r.fxRam = A.fxRam;
-        r.flares = A.flares;
-    }
-
-    // paletas misturadas, uma por par de copias (itens do mesmo monstro dividem o bloco)
-    std::map<std::pair<const void *, const void *>, std::shared_ptr<std::vector<M4>>> pals;
-    auto blendItem = [&](const DrawItem &a, DrawItem &b) {
-        if (stats) ++stats->matched;
-        if (std::memcmp(&a.m, &b.m, sizeof(M4)) != 0) {
-            const float dx = b.m.m[3][0] - a.m.m[3][0], dy = b.m.m[3][1] - a.m.m[3][1], dz = b.m.m[3][2] - a.m.m[3][2];
-            if (dx * dx + dy * dy + dz * dz > 150.f * 150.f) return;   // teleporte, _cs reaproveitado: B
-            interp::lerpMatrix(a.m.m, b.m.m, t, b.m.m);
-            if (stats) ++stats->moved;
-        }
-        if (a.pal && b.pal && a.pal != b.pal && a.palBlk == b.palBlk && a.pal->size() == b.pal->size()) {
-            auto &sp = pals[{a.pal.get(), b.pal.get()}];
-            if (!sp) {
-                sp = std::make_shared<std::vector<M4>>(b.pal->size());
-                for (size_t k = 0; k < sp->size(); ++k) interp::lerpMatrix((*a.pal)[k].m, (*b.pal)[k].m, t, (*sp)[k].m);
-                if (stats) ++stats->pals;
-            }
-            b.pal = sp;
-        }
-    };
-    // (_cs & 25 bits) << 39 | (no & 25 bits) << 14 | ocorrencia do mesmo (_cs, no) na lista (14 bits)
-    auto keyOf = [](const DrawItem &it, std::unordered_map<uint64_t, uint32_t> &occ) {
-        const uint64_t base = (uint64_t(it.cs & 0x1FFFFFFu) << 39) | (uint64_t(it.node & 0x1FFFFFFu) << 14);
-        return base | std::min<uint32_t>(occ[base]++, 0x3FFFu);
-    };
-    auto blendList = [&](const std::vector<DrawItem> &la, std::vector<DrawItem> &lb) {
-        std::unordered_map<uint64_t, uint32_t> occA, occB;
-        std::unordered_map<uint64_t, const DrawItem *> amap;
-        amap.reserve(la.size() * 2);
-        for (const DrawItem &a : la) amap[keyOf(a, occA)] = &a;
-        for (DrawItem &b : lb) {
-            const auto f = amap.find(keyOf(b, occB));
-            if (f != amap.end()) blendItem(*f->second, b);
-        }
-    };
-    blendList(A.items, r.items);
-    blendList(A.sky, r.sky);
-    for (ShadowBlocker &sb : r.shadows)
-        for (const ShadowBlocker &sa : A.shadows)
-            if (sa.index == sb.index && sa.casterNodes == sb.casterNodes && sa.casters.size() == sb.casters.size()) {
-                for (int i = 0; i < 3; ++i) sb.origin[i] = sa.origin[i] + (sb.origin[i] - sa.origin[i]) * t;
-                for (size_t k = 0; k < sb.casters.size(); ++k) blendItem(sa.casters[k], sb.casters[k]);
-                break;
-            }
-    for (std::vector<DrawItem> *list : {&r.hud, &r.overlay, &r.hp, &r.hpOverlay})
-        for (DrawItem &it : *list) {
-            interp::rebase(it.m.m, toInterp(B.cam), ci, it.m.m);
-            if (stats) ++stats->rebased;
-        }
-    for (int v = 0; v < 3; ++v)
-        if (A.views[v] && B.views[v] && A.views[v]->valid && B.views[v]->valid)
-            r.views[v] = std::make_shared<Snapshot>(blendSnapshots(*A.views[v], *B.views[v], t, stats));
-    if (A.chase && B.chase && A.chase->valid && B.chase->valid)
-        r.chase = std::make_shared<Snapshot>(blendSnapshots(*A.chase, *B.chase, t, stats));
-    return r;
-}
-
 class Scene {
 public:
     // Largura do quadro nativo / largura 4:3 da mesma altura (widescreen Hor+; 1 = tela original). Preenche: wotm_live.inc
     float wide = 1.f;
     // Corte por esfera contra a vista do jogo, como o hierTraverseAsm (Scene::outOfView); o viewer com camera livre o desliga.
     bool fovCull = true;
-    // Raio da esfera do corte multiplicado: com interpolacao a camera desenhada fica atras da do quadro coletado, e o que ela ainda ve na
-    // borda nao pode ter sido cortado (wotm_live.inc liga 1,25 na coleta quando a interpolacao esta ligada)
+    // Raio da esfera no corte multiplicado por isto: com a interpolacao a vista desenhada fica ate um quadro atras da do corte (a de
+    // B), e o que B cortou na borda sumiria durante um giro (wotm_live.inc liga 1,2 com a interpolacao)
     float cullMargin = 1.f;
     // Camera nativa na coleta (vista de perseguicao dos jogadores 5..8, wotm_live.inc): o olho (LOD, predios transparentes do CONTROL)
     // e o ponto de visada vem dela e do monstro dela, nao da camera da vista do jogo. Assim o predio entre ela e o monstro (ou com ela
@@ -935,7 +1068,10 @@ public:
     std::vector<TextQuad> text;    // glifos do quadro (updateText), desenhados por drawQuads depois da cena 3D e do screenPolys
     std::vector<ScreenRect> screenRects;   // fades (Snapshot::screenRects), desenhados por drawScreenRects por ultimo
     std::vector<TextQuad> screenPolys;     // HUD do ScreenPolys (Snapshot::screenPolys), desenhado por drawScreenPolys antes do texto
+    std::vector<WorldLight> worldLights;   // Snapshot::worldLights (o walk as acha nos nos op 5)
+    std::vector<WorldEmitter> emitters;    // Snapshot::emitters (nos op 22)
     uint32_t visited = 0;
+    uint32_t culled = 0;   // OBJECTs e GROUPs fora da vista no collect (Snapshot::culled)
     uint32_t byOp[64] = {};
 
     gs::Vram vram;   // so para depuracao: a VRAM do dump guarda paletas velhas (restos do menu)
@@ -951,7 +1087,81 @@ public:
     // arquivos de monstro o DBP e relativo: o texmResRelocate soma o fim da area residente do arquivo anterior (`resBase`).
     std::unordered_map<uint32_t, std::vector<uint8_t>> rtxImg;
 
-    void clearRtx() { rtxPal.clear(); rtxImg.clear(); }
+    void clearRtx() { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
+
+    // ---- texturas de mod em PNG (wotm_texmods.hpp)
+    struct ImgSrc { std::string stem; uint32_t texId; };
+    std::unordered_map<uint32_t, ImgSrc> rtxImgSrc_;   // chave do rtxImg -> arquivo e texId do disco
+    std::string discRoot_;                              // raiz do disco extraido, com a barra (loadResources)
+    std::map<std::string, std::map<uint32_t, uint32_t>> texPackets_;   // ARQUIVO -> deslocamento do pacote no .TEX -> texId do disco
+
+    // Caminho do disco ("MON/LIZARD0.RTX"): o arquivo de mods/ (wotm_mods.hpp) se houver, senao o da raiz
+    std::string discPath(const std::string &rel) const {
+        std::string p = mods::Registry::get().hostPath(rel);
+        return p.empty() ? discRoot_ + mods::Registry::get().aliasOf(rel) : p;   // traje de mod: o arquivo do traje base
+    }
+
+    // PNG de mod no lugar da textura do objeto (texId do texInfo global + TEX0). Residentes (T8H/4HL/4HH): pelo DBP, como o
+    // decodeResident. As outras: o pacote de upload em texInfo[texId] esta dentro do .TEX carregado em fileStatus.texAddr[i]; o
+    // deslocamento nele da o texId do disco (o pacote na RAM ja tem o id relocado). O nome do arquivo i e fileStatus.names[i].
+    // hiAlpha: a textura original passa de 0x80 (texmods::loadPng)
+    bool modTexture(const Ram &ram, uint32_t texId, const gs::Tex0 &t0, bool tcc, bool rawAlpha, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h,
+                    bool hiAlpha) {
+        texmods::Index &ix = texmods::Index::get();
+        if (ix.empty()) return false;
+        char what[64];
+        if (t0.psm == gs::T8H || t0.psm == gs::T4HL || t0.psm == gs::T4HH) {
+            const auto it = rtxImgSrc_.find((t0.psm << 16) | t0.tbp0);
+            if (it == rtxImgSrc_.end()) return false;
+            const texmods::Png *png = ix.find(it->second.stem, true, it->second.texId);
+            std::snprintf(what, sizeof what, "%s.RTX t%u", it->second.stem.c_str(), it->second.texId);
+            return png && texmods::loadPng(*png, what, 1u << t0.tw, 1u << t0.th, rawAlpha, tcc, px, w, h, hiAlpha);
+        }
+        if (!texId || texId >= 1000) return false;
+        const uint32_t fs = addr::fileStatus;
+        const uint32_t ptr = ram.u32(addr::texInfo + 16 * texId) & 0x0FFFFFFF;
+        const int nNames = ram.u8(fs + 0x74);
+        // .TEX (texAddr @0x00, texLoaded @0x38) e, para as texturas comuns que moram no .RTX, resAddr @0x78 / resLoaded @0xB0
+        for (const bool rtx : {false, true}) {
+            const uint32_t tab = rtx ? fs + 0x78 : fs;
+            const int n = std::min<int>(ram.u8(rtx ? fs + 0xB0 : fs + 0x38), std::min(nNames, 14));
+            for (int i = 0; i < n; ++i) {
+                const uint32_t a = ram.u32(tab + 4 * uint32_t(i)) & 0x0FFFFFFF, b = ram.u32(tab + 4 * uint32_t(i + 1)) & 0x0FFFFFFF;
+                if (ptr < a || ptr >= b) continue;
+                std::string stem;
+                for (int c = 0; c < 8; ++c) {
+                    const char ch = char(ram.u8(fs + 0xB1 + 9 * uint32_t(i) + uint32_t(c)));
+                    if (!ch) break;
+                    stem += char(std::toupper(static_cast<unsigned char>(ch)));
+                }
+                if (stem.empty()) return false;
+                const std::string file = stem + (rtx ? ".RTX" : ".TEX");
+                auto pk = texPackets_.find(file);
+                if (pk == texPackets_.end()) {
+                    std::vector<uint8_t> d;
+                    for (const char *dir : {"LVL/", "MON/", "SHELL/", ""}) {
+                        d = texmods::readUnzipped(discPath(*dir ? dir + file : stem + "/" + file));
+                        if (!d.empty()) break;
+                    }
+                    pk = texPackets_.emplace(file, texmods::packetIds(d)).first;
+                }
+                const auto id = pk->second.find(ptr - a);
+                if (id == pk->second.end()) return false;
+                const texmods::Png *png = ix.find(stem, rtx, id->second);
+                if (!png) return false;
+                const UploadHdr hd = UploadHdr::read(ram, ptr);
+                std::snprintf(what, sizeof what, "%s t%u", file.c_str(), id->second);
+                return texmods::loadPng(*png, what, hd.w, hd.h, rawAlpha, tcc, px, w, h, hiAlpha);
+            }
+        }
+        return false;
+    }
+    // Trecho em texels (u0, v0, largura, altura) da textura original na textura carregada, que pode ser um PNG de outro tamanho
+    static Rectangle texelRect(const Texture2D &t, uint64_t tex0, Rectangle r) {
+        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
+        const float kx = float(t.width) / float(1u << t0.tw), ky = float(t.height) / float(1u << t0.th);
+        return Rectangle{r.x * kx, r.y * ky, r.width * kx, r.height * ky};
+    }
 
     // Carrega o nivel e os monstros do jogo atual a partir do disco extraido (`root` contem LVL/ e MON/). Idempotente: so refaz quando
     // os nomes/bases em fileStatus mudam. Devolve verdadeiro se achou ao menos o arquivo do nivel.
@@ -978,16 +1188,18 @@ public:
         if (root.empty())
             if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
-        rtxPal.clear(); rtxImg.clear();
+        discRoot_ = root + sep;
+        auto path = [&](const std::string &rel) { return discPath(rel); };
+        rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;
-        bool lvl = loadRtx((root + sep + "LVL/" + names[0] + ".RTX").c_str(), base0);
+        bool lvl = loadRtx(path("LVL/" + names[0] + ".RTX").c_str(), base0);
         // O menu (SHELL) mora em SHELL/SHELL.RTX, nao em LVL/.
-        if (!lvl) lvl = loadRtx((root + sep + names[0] + "/" + names[0] + ".RTX").c_str(), base0);
-        if (!lvl) lvl = loadRtx((root + sep + "SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
+        if (!lvl) lvl = loadRtx(path(names[0] + "/" + names[0] + ".RTX").c_str(), base0);
+        if (!lvl) lvl = loadRtx(path("SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
         if (log) *log = names[0] + (lvl ? "" : " (nao achado)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
-            const bool ok = loadRtx((root + sep + "MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
+            const bool ok = loadRtx(path("MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
                                     ram.u16(fs + 0x168 + 2 * (i - 1)));   // maxTexAddr e maxResAddr do arquivo anterior
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }
@@ -999,7 +1211,11 @@ public:
     // base: soma no DBP das paletas (base do arquivo); resBase: soma no DBP das imagens residentes (0 na fase e no menu; num monstro,
     // fileStatus.maxResAddr do arquivo anterior, como no texmResRelocate).
     bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
-        if (!append) { rtxPal.clear(); rtxImg.clear(); }
+        if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
+        std::string stem = path;   // "LIZARD0": nome das imagens residentes de mod (texmods, <arquivo>_rtx_t<id>.png)
+        stem = stem.substr(stem.find_last_of("/\\") + 1);
+        stem = stem.substr(0, stem.find('.'));
+        for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
         std::vector<uint8_t> raw;
         if (FILE *f = std::fopen(path, "rb")) {
             std::fseek(f, 0, SEEK_END);
@@ -1044,11 +1260,22 @@ public:
                 rtxPal[base + ((w[2] >> 16) & 0xFFFF)] = std::move(p);
                 ++added;
             } else if ((psm == gs::T8H || psm == gs::T4HL || psm == gs::T4HH) && sz > 0x80) {
-                rtxImg[(psm << 16) | ((resBase + ((w[2] >> 16) & 0xFFFF)) & 0xFFFF)].assign(data.begin() + long(off) + 0x80, data.begin() + long(off + sz));
+                const uint32_t key = (psm << 16) | ((resBase + ((w[2] >> 16) & 0xFFFF)) & 0xFFFF);
+                rtxImg[key].assign(data.begin() + long(off) + 0x80, data.begin() + long(off + sz));
+                rtxImgSrc_[key] = {stem, w[2] & 0xFFFF};
             }
             off += sz;
         }
         return added > 0;
+    }
+
+    // Filtro das texturas do jogo (opcao TEXTURE FILTER, WOTM_TEXFILTER): 0 bilinear sem mipmaps (o do GS), 1 trilinear (mipmaps), 2..16
+    // anisotropico com trilinear. Vale para as que existem e para as que vierem; o desenho chama a cada quadro e so age quando muda.
+    void setTexFilter(int f) {
+        if (f == texFilter_) return;
+        texFilter_ = f;
+        for (auto &kv : tex_) applyTexFilter(kv.second);
+        std::fprintf(stderr, "[native] filtro de texturas: %s (%zu texturas)\n", f <= 0 ? "bilinear" : f == 1 ? "trilinear" : "anisotropico", tex_.size());
     }
 
     void invalidate() {
@@ -1058,7 +1285,7 @@ public:
         for (auto &kv : fontTex_) if (kv.second.id) UnloadTexture(kv.second);
         fontTex_.clear();
         for (DustSrc &s : dustSrc_) s.ok = false;
-        dustHash_ = 0;
+        for (uint64_t &h : dustHash_) h = 0;
         fx.resetFlareDebounce();   // fracao visivel do quadro anterior e do nivel velho
     }
 
@@ -1197,11 +1424,14 @@ public:
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
         Texture2D t{};
-        if (decodeUploadTex(ram, ptr, t0, px, w, h, gray, true) && w && h && px.size() >= size_t(w) * h) {
+        bool ok = decodeUploadTex(ram, ptr, t0, px, w, h, gray, true) && w && h && px.size() >= size_t(w) * h;
+        modParticle(ram, texId, tex0, ok, px, w, h);
+        if (ok) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
         }
+        applyTexFilter(t);
         tex_[key] = t;
         return t.id;
     }
@@ -1221,7 +1451,7 @@ public:
     unsigned dustTexture(const Ram &ram) {
         constexpr uint32_t kPkt = 0x0078F6E0u, kParams = 0x006F8DA4u, kNormals = 0x006F8D9Cu, kColors = 0x006F8DA0u, kCtx = 0x00256B90u;
         const uint32_t pa = ram.u32(kParams), na = ram.u32(kNormals), ca = ram.u32(kColors);
-        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustTex_.id;
+        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustTex_[dustLast_].id;
         float P[8], L[3][4], C[5][3], ctx[8][4];
         for (int i = 0; i < 8; ++i) P[i] = ram.f32(pa + 4 * uint32_t(i));
         for (int r = 0; r < 3; ++r) for (int i = 0; i < 4; ++i) L[r][i] = ram.f32(na + 16 * uint32_t(r) + 4 * uint32_t(i));
@@ -1231,7 +1461,8 @@ public:
         uint64_t hash = 1469598103934665603ull;
         auto mix = [&](const void *d, size_t n) { for (size_t i = 0; i < n; ++i) hash = (hash ^ static_cast<const uint8_t *>(d)[i]) * 1099511628211ull; };
         mix(P, sizeof P); mix(L, sizeof L); mix(C, sizeof C); mix(ctx, sizeof ctx); mix(&nloop, 4); mix(&seed, 4);
-        if (dustTex_.id && hash == dustHash_) return dustTex_.id;
+        for (int i = 0; i < kDustSlots; ++i)
+            if (dustTex_[i].id && hash == dustHash_[i]) return dustTex_[dustLast_ = i].id;
 
         auto source = [&](uint32_t ti, DustSrc &s) {   // decodificada uma vez por (texId, TEX0)
             const uint32_t k = ram.u16(fxaddr::textureInfo + 8 * ti + 2) & 127, id = ram.u16(fxaddr::texId + 2 * k);
@@ -1244,7 +1475,7 @@ public:
             return s.ok;
         };
         DustSrc &src1 = dustSrc_[0], &src2 = dustSrc_[1];
-        if (!source(32, src1) || !source(33, src2)) return dustTex_.id;
+        if (!source(32, src1) || !source(33, src2)) return dustTex_[dustLast_].id;
         const double startTime = GetTime();   // diagnostico (WOTM_DUSTLOG): custo da conta, sem a decodificacao das fontes
 
         // ---- passe 1: lista de sprites
@@ -1318,71 +1549,121 @@ public:
         for (DSpr &s : spr) { light(s.n, s.rgb2); s.a2 = int(float(s.a1) * P[5]); }
 
         // ---- rasterizacao como o GS (bilinear com CLAMP na fonte; regra do canto superior esquerdo)
-        auto sample = [](const DustSrc &src, float u, float v, int out[4]) {
-            u -= 0.5f; v -= 0.5f;
-            const int i0 = int(std::floor(u)), j0 = int(std::floor(v));
-            const float fu = u - float(i0), fv = v - float(j0);
-            float acc[4] = {0, 0, 0, 0};
-            for (int dj = 0; dj < 2; ++dj)
-                for (int di = 0; di < 2; ++di) {
-                    const float wgt = (di ? fu : 1.f - fu) * (dj ? fv : 1.f - fv);
-                    const int x = std::min(std::max(i0 + di, 0), int(src.w) - 1), y = std::min(std::max(j0 + dj, 0), int(src.h) - 1);
-                    const uint32_t p = src.px[size_t(y) * src.w + size_t(x)];
-                    for (int c = 0; c < 4; ++c) acc[c] += float((p >> (8 * c)) & 255) * wgt;
-                }
-            for (int c = 0; c < 4; ++c) out[c] = int(acc[c]);
+        // A amostra bilinear separa em coluna e linha: indice ja com o CLAMP e peso de cada lado, calculados uma vez por coluna e
+        // por linha do sprite com as mesmas contas em float (o resultado e o mesmo da amostra feita por pixel).
+        struct Tap { int i0, i1; float w0, w1; };
+        auto taps = [](float u, int n) {
+            u -= 0.5f;
+            const int i = int(std::floor(u));
+            const float f = u - float(i);
+            return Tap{std::min(std::max(i, 0), n - 1), std::min(std::max(i + 1, 0), n - 1), 1.f - f, f};
         };
         std::vector<std::array<int, 4>> fb(64 * 64, std::array<int, 4>{0, 0, 0, 0});
-        auto draw = [&](const DSpr &s, const DustSrc &src, const int rgb[3], int a, bool additive) {
+        // greenOnly (passe 1): so G e A da fonte contam; R e B do quadro sao trocados pelo fundo antes do passe 2
+        auto draw = [&](const DSpr &s, const DustSrc &src, const int rgb[3], int a, bool additive, bool greenOnly) {
             const float u0 = s.uv[0] / 16.f, v0 = s.uv[1] / 16.f, u1 = s.uv[2] / 16.f, v1 = s.uv[3] / 16.f;
             if (s.x1 <= s.x0 || s.y1 <= s.y0) return;
-            for (int py = std::max(0, (s.y0 + 15) >> 4); py < std::min(64, (s.y1 + 15) >> 4); ++py)
-                for (int px = std::max(0, (s.x0 + 15) >> 4); px < std::min(64, (s.x1 + 15) >> 4); ++px) {
-                    int t[4];
-                    sample(src, u0 + (u1 - u0) * float(px * 16 - s.x0) / float(s.x1 - s.x0), v0 + (v1 - v0) * float(py * 16 - s.y0) / float(s.y1 - s.y0), t);
-                    const int as = (a * t[3]) >> 7;
+            const int pxa = std::max(0, (s.x0 + 15) >> 4), pxb = std::min(64, (s.x1 + 15) >> 4);
+            const int pya = std::max(0, (s.y0 + 15) >> 4), pyb = std::min(64, (s.y1 + 15) >> 4);
+            if (pxa >= pxb || pya >= pyb) return;
+            Tap cx[64];
+            for (int px = pxa; px < pxb; ++px)
+                cx[px] = taps(u0 + (u1 - u0) * float(px * 16 - s.x0) / float(s.x1 - s.x0), int(src.w));
+            const int c0 = greenOnly ? 1 : 0, c1 = greenOnly ? 2 : 3;
+            for (int py = pya; py < pyb; ++py) {
+                const Tap ry = taps(v0 + (v1 - v0) * float(py * 16 - s.y0) / float(s.y1 - s.y0), int(src.h));
+                const uint32_t *row[2] = {src.px.data() + size_t(ry.i0) * src.w, src.px.data() + size_t(ry.i1) * src.w};
+                const float wy[2] = {ry.w0, ry.w1};
+#if defined(_M_X64) || defined(__SSE4_1__)
+                // os 4 canais de uma vez (RGBA em lanes): mesma soma e mesmas contas inteiras da versao escalar abaixo
+                const __m128i vrgb = _mm_setr_epi32(rgb[0], rgb[1], rgb[2], 0), v255 = _mm_set1_epi32(255), vzero = _mm_setzero_si128();
+                (void)c0; (void)c1;
+                auto texel = [](uint32_t p) { return _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(int(p)))); };
+                for (int px = pxa; px < pxb; ++px) {
+                    const Tap &tx = cx[px];
+                    __m128 acc = _mm_setzero_ps();
+                    for (int dj = 0; dj < 2; ++dj) {
+                        acc = _mm_add_ps(acc, _mm_mul_ps(texel(row[dj][tx.i0]), _mm_set1_ps(tx.w0 * wy[dj])));
+                        acc = _mm_add_ps(acc, _mm_mul_ps(texel(row[dj][tx.i1]), _mm_set1_ps(tx.w1 * wy[dj])));
+                    }
+                    const __m128i t = _mm_cvttps_epi32(acc);
+                    const __m128i as = _mm_set1_epi32((a * _mm_extract_epi32(t, 3)) >> 7);
+                    int *dp = fb[size_t(py) * 64 + size_t(px)].data();
+                    const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i *>(dp));
+                    const __m128i cs = _mm_srai_epi32(_mm_mullo_epi32(vrgb, t), 7);
+                    __m128i r;
+                    if (additive)
+                        r = _mm_min_epi32(v255, _mm_add_epi32(_mm_srai_epi32(_mm_mullo_epi32(cs, as), 7), d));
+                    else
+                        r = _mm_max_epi32(vzero, _mm_min_epi32(v255, _mm_add_epi32(_mm_srai_epi32(_mm_mullo_epi32(_mm_sub_epi32(cs, d), as), 7), d)));
+                    r = _mm_blend_epi16(r, d, 0xC0);   // o alfa do quadro nao muda
+                    _mm_storeu_si128(reinterpret_cast<__m128i *>(dp), r);
+                }
+#else
+                for (int px = pxa; px < pxb; ++px) {
+                    const Tap &tx = cx[px];
+                    float acc[4] = {0, 0, 0, 0};
+                    for (int dj = 0; dj < 2; ++dj) {   // mesma ordem de soma da amostra por pixel
+                        const float wa = tx.w0 * wy[dj], wb = tx.w1 * wy[dj];
+                        const uint32_t pa = row[dj][tx.i0], pb = row[dj][tx.i1];
+                        for (int c = c0; c < c1; ++c) acc[c] += float((pa >> (8 * c)) & 255) * wa;
+                        acc[3] += float(pa >> 24) * wa;
+                        for (int c = c0; c < c1; ++c) acc[c] += float((pb >> (8 * c)) & 255) * wb;
+                        acc[3] += float(pb >> 24) * wb;
+                    }
+                    const int as = (a * int(acc[3])) >> 7;
                     auto &d = fb[size_t(py) * 64 + size_t(px)];
-                    for (int c = 0; c < 3; ++c) {
-                        const int cs = (rgb[c] * t[c]) >> 7;
+                    for (int c = c0; c < c1; ++c) {
+                        const int cs = (rgb[c] * int(acc[c])) >> 7;
                         d[c] = additive ? std::min(255, ((cs * as) >> 7) + d[c]) : std::max(0, std::min(255, (((cs - d[c]) * as) >> 7) + d[c]));
                     }
                 }
+#endif
+            }
         };
         const int rgb1[3] = {1, int(P[4]), 1};
-        for (const DSpr &s : spr) draw(s, src1, rgb1, s.a1, true);
+        for (const DSpr &s : spr) draw(s, src1, rgb1, s.a1, true, true);
         for (auto &p : fb) {
             for (int c = 0; c < 3; ++c) p[c] >>= 1;          // sprite (0, 0, 0, 64) em (Cs - Cd) * As + Cd: ((-Cd * 64) >> 7) + Cd
             p[3] = p[1] & 0x7F;                            // copyGreenChannelToAlpha (o bit 15 do CT16 sai 0)
             for (int c = 0; c < 3; ++c) p[c] = bg[c];      // passe 2: fundo
         }
-        for (const DSpr &s : spr) draw(s, src2, s.rgb2, s.a2, false);
+        for (const DSpr &s : spr) draw(s, src2, s.rgb2, s.a2, false, false);
 
         std::vector<uint32_t> px(64 * 64);   // alfa cru do GS (0x80 = 1,0), como as outras texturas de particula
         for (size_t i = 0; i < px.size(); ++i)
             px[i] = uint32_t(fb[i][0]) | (uint32_t(fb[i][1]) << 8) | (uint32_t(fb[i][2]) << 16) | (uint32_t(fb[i][3]) << 24);
-        if (!dustTex_.id) {
+        const double mathEnd = GetTime();
+        const int slot = dustNext_;
+        dustNext_ = (dustNext_ + 1) % kDustSlots;
+        Texture2D &dt = dustTex_[slot];
+        if (!dt.id) {
             Image img{px.data(), 64, 64, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-            dustTex_ = LoadTextureFromImage(img);
-            if (dustTex_.id) { SetTextureFilter(dustTex_, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dustTex_, TEXTURE_WRAP_CLAMP); }
+            dt = LoadTextureFromImage(img);
+            if (dt.id) { SetTextureFilter(dt, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dt, TEXTURE_WRAP_CLAMP); }
         } else {
-            UpdateTexture(dustTex_, px.data());
+            UpdateTexture(dt, px.data());
         }
-        dustHash_ = hash;
+        dustHash_[slot] = hash;
+        dustLast_ = slot;
         {   // diagnostico: WOTM_DUSTLOG=1 imprime o resumo a cada regeneracao
             static const bool lg = std::getenv("WOTM_DUSTLOG") != nullptr;
             if (lg) {
                 int amax = 0; double asum = 0, cw[3] = {0, 0, 0};
                 for (const auto &p : fb) { amax = std::max(amax, p[3]); asum += p[3]; for (int c = 0; c < 3; ++c) cw[c] += double(p[c]) * p[3]; }
-                std::fprintf(stderr, "[dust] fase %.4f sprites %zu fundo %d %d %d alfa max %d media %.1f cor ponderada %.0f %.0f %.0f (%.2f ms)\n", P[3], spr.size(), bg[0], bg[1], bg[2],
-                             amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0, (GetTime() - startTime) * 1000.0);
+                std::fprintf(stderr, "[dust] fase %.4f sprites %zu fundo %d %d %d alfa max %d media %.1f cor ponderada %.0f %.0f %.0f (%.2f ms, envio %.2f ms)\n", P[3], spr.size(), bg[0], bg[1], bg[2],
+                             amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0, (mathEnd - startTime) * 1000.0, (GetTime() - mathEnd) * 1000.0);
             }
         }
-        return dustTex_.id;
+        return dt.id;
     }
     struct DustSrc { std::vector<uint32_t> px; uint32_t w = 0, h = 0, id = 0; uint64_t tex0 = 0; bool ok = false; };
     DustSrc dustSrc_[2];   // fontes 1 e 2 (TextureInfo[32] e [33]) decodificadas
-    Texture2D dustTex_{};
-    uint64_t dustHash_ = 0;
+    // uma por vista (a conta depende da camera): cada vista desenha com a sua, e o redesenho do mesmo quadro do jogo reaproveita
+    static constexpr int kDustSlots = 4;
+    Texture2D dustTex_[kDustSlots]{};
+    uint64_t dustHash_[kDustSlots]{};
+    int dustNext_ = 0, dustLast_ = 0;
 
     Particles fx;   // sistemas de particulas do quadro (collect junto com a cena, draw depois dos translucidos)
 
@@ -1412,9 +1693,17 @@ public:
             b.shadowCs = ram.u32(e + 0x14);
             std::vector<DrawItem> keep;
             keep.swap(items);
+            // LOD como o hierShadow: a distancia fixa do bloqueador (lodRangeSq em +0x28, 1200^2 no psBlockerAdd; o chefe final usa
+            // 20000^2), nao a do olho da vista; e sem o corte pela vista (o jogo percorre pela camera da luz, que abrange o bloqueador).
+            // Assim a silhueta e a mesma em todas as vistas da tela dividida (Scene::shadowTexture a reaproveita) e um monstro meio fora
+            // da vista nao perde parte da sombra. Sem valor util na entrada: o olho, como antes.
+            const float lodD2 = ram.f32(e + 0x28);
+            static const bool eyeLod = std::getenv("WOTM_SHADOWEYELOD") != nullptr;   // diagnostico: LOD e corte pelo olho (como antes)
+            shadowLodD2_ = !eyeLod && std::isfinite(lodD2) && lodD2 > 0.f ? lodD2 : -1.f;
             drawCs(ram, cs, false);
             const uint32_t cs2 = ram.u32(e + 0x18);   // segundo cs (psBlockerSet2ndCs: o que o monstro segura, por exemplo)
             if (ram.ok(cs2, 0xB0) && ram.u8(cs2 + 0xC)) drawCs(ram, cs2, false);
+            shadowLodD2_ = -1.f;
             b.casters.swap(items);
             items.swap(keep);
             for (const DrawItem &it : b.casters) b.casterNodes.push_back(it.node);   // todos (receptor excluido), antes do filtro
@@ -1453,7 +1742,8 @@ public:
         rlSetBlendMode(BLEND_ALPHA);
         for (size_t k = 0; k < shadows.size(); ++k) {
             const ShadowBlocker &b = shadows[k];
-            if (std::getenv("WOTM_SHADOWLOG")) {
+            static const bool shadowLog = std::getenv("WOTM_SHADOWLOG") != nullptr;   // uma vez: getenv e lento no Windows
+            if (shadowLog) {
                 std::fprintf(stderr, "[shadow] bloqueador %d origem %.1f %.1f %.1f extent %.1f luz %.3f %.3f %.3f cs receptor %x (0 = fase), %zu projetam:\n", b.index,
                              b.origin[0], b.origin[1], b.origin[2], b.extent, L[0], L[1], L[2], b.shadowCs, b.casters.size());
                 for (const DrawItem &it : b.casters) {
@@ -1462,7 +1752,11 @@ public:
                                  ram.u32(it.node + 0xC), it.lodIdx, it.fade, it.m.m[3][0], it.m.m[3][1], it.m.m[3][2], md ? md->tris.size() / 3 : size_t(0), md ? int(md->skinned) : -1);
                 }
             }
-            const unsigned tex = shadowTexture(ram, k, b, R, U);
+            unsigned tex = 0;
+            {
+                ProfScope ps(DrawProf::ShadowTex);
+                tex = shadowTexture(ram, k, b, R, U);
+            }
             if (!tex) continue;
             const float E = b.extent;
             auto lightUV = [&](const float p[3], float &u, float &v, float &h) {
@@ -1502,7 +1796,7 @@ public:
                     const float fz = ram.f32(it.node + 0x28);
                     const bool fudge = it.cs != 0 && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
                     if (fudge && slog) std::fprintf(stderr, "[shadow]   fudge %.4f no %x\n", fz, it.node);
-                    forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
+                    forEachTriPos(ram, it, [&](const float p[3][3]) {
                         float tu[3], tv[3], th[3];
                         for (int i = 0; i < 3; ++i) lightUV(p[i], tu[i], tv[i], th[i]);
                         if ((tu[0] < -1 && tu[1] < -1 && tu[2] < -1) || (tu[0] > 1 && tu[1] > 1 && tu[2] > 1) ||
@@ -1572,14 +1866,124 @@ public:
         }
     }
 
+    // So as posicoes no mundo (com skinning) dos triangulos de um item, sem cor nem normal: o que as sombras usam. A paleta e a do
+    // instantaneo (DrawItem::pal, a mesma do drawList); sem ela, a da RAM.
+    template <class F> void forEachTriPos(const Ram &ram, const DrawItem &it, F &&f) {
+        const MeshData *md = mesh(ram, it.node);
+        if (!md || !md->valid) return;
+        std::vector<M4> tmp;
+        const M4 *pm = nullptr;
+        if (md->skinned) {
+            if (it.pal && it.pal->size() >= 32) pm = it.pal->data();
+            else if (const uint32_t pal = palette(ram, it)) {
+                for (uint32_t s = 0; s < 32; ++s) tmp.push_back(readM4(ram, pal + 0x10 + 0x40 * s));
+                pm = tmp.data();
+            }
+        }
+        const auto &t = md->tris;
+        float p[3][3];
+        for (size_t k = 0; k + 2 < t.size(); k += 3) {
+            for (int c = 0; c < 3; ++c) {
+                if (pm) skinVertexPM(pm, it.m, t[k + c], p[c]);
+                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+            }
+            f(p);
+        }
+    }
+
+    // Chave da silhueta: tudo o que entra nela (bloqueador, quadro de luz e, de cada um que projeta, no, matriz e paleta), com as
+    // posicoes em 1/4 de unidade e as rotacoes em 1/1024. O hier de cada vista reavalia a pose e os ultimos bits das matrizes mudam de
+    // uma vista para a outra (mesmo quadro do jogo, mesmos numeros a vista); a silhueta tem ~2 unidades por texel, entao isso nao a
+    // muda. As vistas 1 a 3 da tela dividida passam a dividir a textura; a 0 (antes do TheGame::Update) cai na dela quando ha movimento.
+    static uint64_t shadowKey(const ShadowBlocker &b, const float R[3], const float U[3]) {
+        uint64_t h = 1469598103934665603ull;
+        auto mixI = [&](int64_t v) {
+            for (int i = 0; i < 8; ++i) h = (h ^ uint8_t(v >> (8 * i))) * 1099511628211ull;
+        };
+        auto q = [](float f, float s) { return std::isfinite(f) ? int64_t(std::llround(double(f) * s)) : INT64_MIN; };
+        auto mixM = [&](const M4 &m) {
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c) mixI(q(m.m[r][c], r == 3 ? 4.f : 1024.f));
+        };
+        mixI(b.index);
+        for (int c = 0; c < 3; ++c) mixI(q(b.origin[c], 4.f));
+        mixI(q(b.extent, 4.f));
+        for (int c = 0; c < 3; ++c) mixI(q(R[c], 1024.f)), mixI(q(U[c], 1024.f));
+        for (const DrawItem &it : b.casters) {
+            mixI(it.node);
+            mixM(it.m);
+            if (it.pal) for (const M4 &m : *it.pal) mixM(m);
+            else mixI(it.animPkt);   // sem copia (viewer): le a RAM, sem cache entre vistas
+        }
+        return h;
+    }
+
+    // Silhueta guardada (Scene::shadowCache_)
+    struct ShadowCacheEntry {
+        uint64_t key = 0, used = 0, redraw = ~0ull;
+        Texture2D tex{};
+        int index = -1;
+        float origin[3] = {}, extent = 0.f, R[3] = {};
+        std::vector<uint32_t> nodes;
+        std::vector<float> pos;   // translacao (m[3]) de cada no que projeta
+    };
+
+    // A silhueta de outra vista do mesmo redesenho serve para esta? Mesmo bloqueador, mesma luz, mesmos nos projetando, e origem,
+    // extensao e posicao de cada no dentro do que a silhueta (~2 unidades por texel) nao mostra. O hier de cada vista reavalia a pose,
+    // e os membros andam algumas decimas de unidade de uma vista para outra no mesmo quadro: a chave exata quase nunca batia.
+    bool shadowNear(const ShadowCacheEntry &e, const ShadowBlocker &b, const float R[3]) const {
+        if (e.redraw != redrawId || e.index != b.index || e.nodes.size() != b.casters.size()) return false;
+        if (std::fabs(e.extent - b.extent) > 0.02f * b.extent) return false;
+        for (int c = 0; c < 3; ++c)
+            if (std::fabs(e.origin[c] - b.origin[c]) > kShadowTol || std::fabs(e.R[c] - R[c]) > 1e-3f) return false;
+        for (size_t i = 0; i < b.casters.size(); ++i) {
+            const DrawItem &it = b.casters[i];
+            if (e.nodes[i] != it.node) return false;
+            for (int c = 0; c < 3; ++c)
+                if (std::fabs(e.pos[3 * i + c] - it.m.m[3][c]) > kShadowTol) return false;
+        }
+        return true;
+    }
+
     // Silhueta do bloqueador no quadro de luz: rasterizada na CPU (kShadowRes^2), borrada (o retail filtra com sprites) e enviada
-    // como textura preta com alfa = cobertura. Uma textura por posicao em `shadows`, reaproveitada entre quadros.
+    // como textura preta com alfa = cobertura. Reaproveitada pela chave das entradas (shadowKey: um redesenho sem quadro novo) ou de
+    // outra vista do mesmo redesenho (shadowNear: tela dividida). Os itens sem copia da paleta (viewer) refazem sempre.
     unsigned shadowTexture(const Ram &ram, size_t slot, const ShadowBlocker &b, const float R[3], const float U[3]) {
         constexpr int N = kShadowRes;
-        std::vector<float> cov(size_t(N * N), 0.f);
+        bool cacheable = true;
+        for (const DrawItem &it : b.casters) cacheable = cacheable && (!it.animPkt || it.pal);
+        const uint64_t key = cacheable ? shadowKey(b, R, U) : 0;
+        ++shadowTick_;
+        static const bool slogTex = std::getenv("WOTM_SHADOWLOG") != nullptr;
+        static const bool noReuse = std::getenv("WOTM_SHADOWNOCACHE") != nullptr;   // diagnostico: refaz toda silhueta (como antes)
+        if (cacheable && !slogTex && !noReuse)
+            for (ShadowCacheEntry &e : shadowCache_)
+                if (e.tex.id && (e.key == key || shadowNear(e, b, R))) {
+                    e.used = shadowTick_;
+                    if (drawProfOn()) ++drawProf().shadowHit;
+                    return e.tex.id;
+                }
+        if (drawProfOn()) ++drawProf().shadowMiss;
+        static const bool keyLog = std::getenv("WOTM_SHADOWKEYLOG") != nullptr;   // diagnostico: o que entra na chave de cada silhueta
+        if (keyLog) {
+            std::fprintf(stderr, "[shadowkey] bloqueador %d chave %016llx origem %.3f %.3f %.3f extent %.3f casters", b.index, (unsigned long long)key,
+                         b.origin[0], b.origin[1], b.origin[2], b.extent);
+            for (const DrawItem &it : b.casters) {
+                ShadowBlocker one;
+                one.casters.push_back(it);
+                const uint64_t hm = shadowKey(one, R, U);   // so este (matriz e paleta)
+                one.casters.back().pal.reset();
+                std::fprintf(stderr, " %x(lod %d, pal %d, x %.3f, m+pal %04llx, m %04llx)", it.node, it.lodIdx, it.pal ? 1 : 0, it.m.m[3][0],
+                             (unsigned long long)(hm & 0xFFFF), (unsigned long long)(shadowKey(one, R, U) & 0xFFFF));
+            }
+            std::fprintf(stderr, "\n");
+        }
+        (void)slot;
+        std::vector<float> &cov = shadowCov_;
+        cov.assign(size_t(N * N), 0.f);
         const float E = b.extent;
         for (const DrawItem &it : b.casters) {
-            forEachTri(ram, it, [&](const float p[3][3], const Vtx *, const uint8_t (*)[3], const float (*)[3]) {
+            forEachTriPos(ram, it, [&](const float p[3][3]) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
                     const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
@@ -1601,7 +2005,8 @@ public:
             });
         }
         for (int pass = 0; pass < 2; ++pass) {   // caixa 3x3 duas vezes; a borda fica em 0 (CLAMP nao estende sombra)
-            std::vector<float> o(cov.size(), 0.f);
+            std::vector<float> &o = shadowTmp_;
+            o.assign(cov.size(), 0.f);
             for (int y = 1; y < N - 1; ++y)
                 for (int x = 1; x < N - 1; ++x) {
                     float s = 0;
@@ -1611,9 +2016,10 @@ public:
                 }
             cov.swap(o);
         }
-        std::vector<uint32_t> px(cov.size());
+        std::vector<uint32_t> &px = shadowPx_;
+        px.resize(cov.size());
         for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
-        if (std::getenv("WOTM_SHADOWLOG")) {   // diagnostico: silhueta em shadow_<slot>.png (branco = sombra) no diretorio atual
+        if (slogTex) {   // diagnostico: silhueta em shadow_<slot>.png (branco = sombra) no diretorio atual
             std::vector<uint32_t> vis(px.size());
             for (size_t i = 0; i < px.size(); ++i) { const uint32_t a = px[i] >> 24; vis[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
             Image img{vis.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
@@ -1621,8 +2027,26 @@ public:
             std::snprintf(name, sizeof name, "shadow_%zu.png", slot);
             ExportImage(img, name);
         }
-        if (shadowTex_.size() <= slot) shadowTex_.resize(slot + 1);
-        Texture2D &t = shadowTex_[slot];
+        // entrada a reusar: a menos usada recentemente (no maximo kShadowCacheN texturas; 10 bloqueadores x 4 vistas cabem)
+        ShadowCacheEntry *e = nullptr;
+        if (shadowCache_.size() < kShadowCacheN) e = &shadowCache_.emplace_back();
+        else
+            for (ShadowCacheEntry &c : shadowCache_)
+                if (!e || c.used < e->used) e = &c;
+        e->key = cacheable ? key : 0;
+        e->used = shadowTick_;
+        e->redraw = cacheable ? redrawId : ~0ull;
+        e->index = b.index;
+        e->extent = b.extent;
+        std::copy(b.origin, b.origin + 3, e->origin);
+        std::copy(R, R + 3, e->R);
+        e->nodes.clear();
+        e->pos.clear();
+        for (const DrawItem &it : b.casters) {
+            e->nodes.push_back(it.node);
+            for (int c = 0; c < 3; ++c) e->pos.push_back(it.m.m[3][c]);
+        }
+        Texture2D &t = e->tex;
         if (!t.id) {
             Image img{px.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
@@ -1631,6 +2055,19 @@ public:
             UpdateTexture(t, px.data());
         }
         return t.id;
+    }
+
+    // PNG de mod numa textura de particula (alfa cru do GS, como a original). Os UVs das particulas sao normalizados pelo TEX0, entao
+    // qualquer resolucao serve. Sem a original (paleta ausente), o PNG entra sozinho, com o alfa na escala 0..0x80.
+    void modParticle(const Ram &ram, uint32_t texId, uint64_t tex0, bool &ok, std::vector<uint32_t> &px, uint32_t &w, uint32_t &h) {
+        if (texmods::Index::get().empty()) return;
+        uint32_t amax = 0;
+        if (ok) for (uint32_t c : px) amax = std::max(amax, c >> 24);
+        std::vector<uint32_t> mpx;
+        uint32_t mw = 0, mh = 0;
+        if (modTexture(ram, texId, gs::Tex0::decode(tex0), (tex0 >> 34) & 1, true, mpx, mw, mh, amax > 0x80)) {
+            px.swap(mpx); w = mw; h = mh; ok = true;
+        }
     }
 
     // Textura de efeito (particulas): `texInfo[id]` guarda o pacote (como nos objetos) e o TEX0 do efeito (fx[i].TEX0ptr) traz psm e CBP da paleta.
@@ -1666,7 +2103,13 @@ public:
         if (texKey(ram, it, slot) == kScreenKey) return screenId_ = screenTexture ? screenTexture() : 0;
         return textureId(ram, it.node, slot);
     }
+    // textura no lugar da do objeto `node` (slot de textura), com alfa cru e linhas de baixo para cima como as do jogo; 0 = a do
+    // objeto. Preenche: wotm_levelsel.inc (foto das fases sem arte no SHELL)
+    unsigned (*nodeTexture)(uint32_t node, uint32_t slot) = nullptr;
+
     unsigned textureId(const Ram &ram, uint32_t node, uint32_t slot = 0) {
+        if (nodeTexture)
+            if (const unsigned id = nodeTexture(node & 0x1FFFFFFFu, slot)) return id;
         // filme do menu: moviesSetScreenObject poe texId 999 no objeto (wotm_fmv.hpp); a textura vem do tocador, quadro a quadro
         if (movieTexture && objectTexId(ram, node, slot) == 999)
             if (const unsigned id = movieTexture()) return id;
@@ -1678,7 +2121,18 @@ public:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t w = 0, h = 0;
-        if (decodeTex(ram, node, px, w, h, slot, true)) {   // alfa cru do GS: o shader do draw mistura As = At * Av / 16384
+        const uint64_t t0v = objectTex0(ram, node, slot);
+        // alfa cru do GS: o shader do draw mistura As = At * Av / 16384. A original vem antes: o PNG de mod le o alfa na escala dela
+        const bool orig = decodeTex(ram, node, px, w, h, slot, true);
+        uint32_t origAmax = 0;
+        if (orig)
+            for (uint32_t c : px) origAmax = std::max(origAmax, c >> 24);
+        std::vector<uint32_t> mpx;
+        uint32_t mw = 0, mh = 0;
+        const bool fromMod = modTexture(ram, objectTexId(ram, node, slot), gs::Tex0::decode(t0v), (t0v >> 34) & 1, true, mpx, mw, mh,
+                                        origAmax > 0x80);
+        if (fromMod) { px.swap(mpx); w = mw; h = mh; }
+        if (fromMod || orig) {
             if (std::getenv("WOTM_ALPHASTAT")) {
                 size_t a0 = 0, am = 0;
                 for (uint32_t c : px) { const uint32_t a = c >> 24; if (a == 0) ++a0; else if (a < 255) ++am; }
@@ -1721,8 +2175,11 @@ public:
             img.data = px.data(); img.width = int(w); img.height = int(h); img.mipmaps = 1;
             img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
             t = LoadTextureFromImage(img);
-            if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_REPEAT); }
+            if (t.id && fromMod) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); }   // PNG em alta: sem serrilhado de longe
+            else if (t.id) SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+            if (t.id) SetTextureWrap(t, TEXTURE_WRAP_REPEAT);
         }
+        applyTexFilter(t);
         tex_[key] = t;
         return t.id;
     }
@@ -1749,6 +2206,8 @@ public:
         hp.clear();
         hpOverlay.clear();
         sprites.clear();
+        worldLights.clear();
+        emitters.clear();
         atMat_ = 0;
         animVal_ = 0;
         cs_ = 0;
@@ -1768,6 +2227,7 @@ public:
         spec_ = 0.f;
         lightOwn_ = false;
         visited = 0;
+        culled = 0;
         std::memset(destrHist_, 0, sizeof destrHist_);
         std::memset(byOp, 0, sizeof byOp);
         seen_.clear();
@@ -1832,16 +2292,21 @@ public:
         sn.sprites = sprites;
         sn.fx = fx.systems;
         sn.flares = fx.flares;
+        sn.worldLights = worldLights;
+        sn.emitters = emitters;
         sn.shadows = shadows;
         sn.lights = lights_;
         sn.fog = fog_;
         sn.cam = readGameCamera(ram, vctx.view);
         sn.vctx = vctx;
+        sn.culled = culled;
         readScreenPolys(ram, sn.screenPolys);
         sn.g = g;
         sn.valid = true;
         std::unordered_map<uint32_t, std::shared_ptr<std::vector<M4>>> byBlock;
-        for (std::vector<DrawItem> *list : {&sn.items, &sn.sky})
+        std::vector<std::vector<DrawItem> *> lists = {&sn.items, &sn.sky};
+        for (ShadowBlocker &b : sn.shadows) lists.push_back(&b.casters);   // a silhueta com a mesma pose do monstro desenhado
+        for (std::vector<DrawItem> *list : lists)
             for (DrawItem &it : *list) {
                 if (!it.animPkt) continue;
                 const uint32_t blk = palette(ram, it);
@@ -1869,7 +2334,16 @@ public:
         sprites = s.sprites;
         fx.systems = s.fx;
         fxRam_ = s.fxRam;
+        if (s.fxCam.ok && s.fxRam && s.fxRamSize) {   // particulas montadas com outra camera (vista de perseguicao)
+            uint8_t *dst = fxMixBuffer(s.fxRamSize);
+            Particles::copyRanges(dst, Ram{s.fxRam.get(), s.fxRamSize}, fx.systems);
+            aimFxRam(dst, s.vctx.view, s.fxCam, s.cam);
+            fxRam_ = fxMix_;
+        }
         fx.flares = s.flares;
+        fx.synth.clear();   // sprites do modo foto: refeitos a cada quadro por ele
+        worldLights = s.worldLights;
+        emitters = s.emitters;
         shadows = s.shadows;
         screenRects = s.screenRects;
         screenPolys = s.screenPolys;
@@ -1879,7 +2353,408 @@ public:
         vctx = s.vctx;
         eyeOk_ = s.cam.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = s.cam.pos[i];
+        hudMix_.on = false;
         return s.cam;
+    }
+
+    // Copia de sombra das particulas para o quadro mostrado (fxMix_), com o tamanho da do instantaneo
+    uint8_t *fxMixBuffer(size_t size) {
+        if (!fxMix_ || fxMixSize_ != size) {
+            fxMix_.reset(new uint8_t[size], std::default_delete<uint8_t[]>());
+            fxMixSize_ = size;
+        }
+        return fxMix_.get();
+    }
+
+    // worldToScreenMat da vista `view` na copia de sombra com a camera `to` no lugar de `from` (strite, linha e neblina a leem): os
+    // eixos de `from` trocados pelos de `to`, M' = M C_from^T C_to nas colunas 0-2 (C = linhas direita, frente, cima; d = p - olho);
+    // o olho em worldCtx.eo
+    static void aimFxRam(uint8_t *dst, int view, const GameCamera &from, const GameCamera &to) {
+        const uint32_t v = uint32_t(std::clamp(view, 0, 4));
+        const M4 CF = interp::cameraToWorld(from), CT = interp::cameraToWorld(to);
+        float T[3][3];
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k) T[j][k] = CF.m[0][j] * CT.m[0][k] + CF.m[1][j] * CT.m[1][k] + CF.m[2][j] * CT.m[2][k];
+        float M[16], eo[3];
+        std::memcpy(M, dst + addr::worldToScreenMat + 0x40 * v, sizeof M);
+        for (int r = 0; r < 4; ++r) {
+            float row[3];
+            for (int k = 0; k < 3; ++k) row[k] = M[4 * r] * T[0][k] + M[4 * r + 1] * T[1][k] + M[4 * r + 2] * T[2][k];
+            for (int k = 0; k < 3; ++k) M[4 * r + k] = row[k];
+        }
+        std::memcpy(dst + addr::worldToScreenMat + 0x40 * v, M, sizeof M);
+        for (int k = 0; k < 3; ++k) eo[k] = -to.pos[k];
+        std::memcpy(dst + addr::worldCtx + 0x1F0 * v + 0x20, eo, sizeof eo);
+    }
+
+    // Interpolacao de quadros (etapa 1: camera, objetos, paleta de ossos, ceu e sombras; wotm_live.inc, "interpolacao"): o show de B
+    // com as matrizes misturadas com as de A em alpha (0 = A, 1 = B). Casamento por (cs, no, ocorrencia); salto de translacao grande
+    // ou LOD diferente = B sem mistura. HUD, icones e lista de alta prioridade, que o jogo poe na frente da camera a cada quadro, nao
+    // sao misturados: vao para a camera misturada pela posicao relativa a camera de B (misturar a matriz deles tremia contra a cena).
+    // Particulas e destroços recuam pela velocidade (etapa 2; Particles::stepBack). Lens flare, barras sobre o inimigo e icone de vida,
+    // que o jogo projetou com a camera de B, vao para a misturada (etapa 3; blendFlares, blendAnchors); o alfa dos fades mistura com o
+    // de A quando o retangulo e o mesmo. Texto fica o de B. Corte de camera = show(B). Devolve a camera desenhada; cut diz se houve corte.
+    GameCamera showBlend(const Snapshot &A, const Snapshot &B, float alpha, bool *cut = nullptr) {
+        const GameCamera cb = show(B);
+        if (cut) *cut = false;
+        if (alpha >= 1.f) return cb;
+        alpha = std::max(alpha, 0.f);
+        if (interp::cameraCut(A.cam, B.cam) || !(A.vctx.view == B.vctx.view && A.vctx.w == B.vctx.w && A.vctx.h == B.vctx.h)) {
+            if (cut) *cut = true;
+            return cb;
+        }
+        const GameCamera c = interp::lerpCamera(A.cam, B.cam, alpha);
+        std::map<std::pair<const void *, const void *>, std::shared_ptr<std::vector<M4>>> palCache;
+        // presos a camera: M' = M_B . (camera B -> mundo)^-1 . (camera misturada -> mundo)
+        const M4 invA = interp::rigidInverse(interp::cameraToWorld(A.cam)), invB = interp::rigidInverse(interp::cameraToWorld(B.cam));
+        const M4 rebase = mul(invB, interp::cameraToWorld(c));
+        // Objeto com a mesma pose relativa a camera em A e em B (o jogo o pos na frente dela: paineis do menu, objetos do AlignCsWithView
+        // fora das listas do HUD): vai com a camera misturada, como o HUD, em vez de misturar a matriz no mundo
+        attached_ = 0;
+        auto sameRel = [&](const M4 &ma, const M4 &mb) {
+            const M4 ra = mul(ma, invA), rb = mul(mb, invB);
+            for (int i = 0; i < 4; ++i) {
+                const float n = std::fabs(rb.m[i][0]) + std::fabs(rb.m[i][1]) + std::fabs(rb.m[i][2]);
+                const float tol = i < 3 ? 1e-3f * (n + 1.f) : 0.02f + 1e-4f * n;
+                for (int j = 0; j < 3; ++j)
+                    if (!(std::fabs(ra.m[i][j] - rb.m[i][j]) <= tol)) return false;
+            }
+            return true;
+        };
+        auto mix = [&](const std::vector<DrawItem> &la, std::vector<DrawItem> &out) {
+            // A: cadeia por (cs, no) na ordem da lista; B anda a cadeia na mesma ordem (ocorrencia)
+            std::unordered_map<uint64_t, int> head;
+            head.reserve(la.size() * 2);
+            std::vector<int> next(la.size(), -1);
+            for (int i = int(la.size()) - 1; i >= 0; --i) {
+                const uint64_t k = (uint64_t(la[size_t(i)].cs) << 32) | la[size_t(i)].node;
+                auto [it, ins] = head.try_emplace(k, i);
+                if (!ins) { next[size_t(i)] = it->second; it->second = i; }
+            }
+            for (DrawItem &r : out) {
+                const auto f = head.find((uint64_t(r.cs) << 32) | r.node);
+                if (f == head.end() || f->second < 0) continue;
+                const DrawItem &a = la[size_t(f->second)];
+                f->second = next[size_t(f->second)];
+                if (a.lodIdx != r.lodIdx) continue;
+                const float dx = r.m.m[3][0] - a.m.m[3][0], dy = r.m.m[3][1] - a.m.m[3][1], dz = r.m.m[3][2] - a.m.m[3][2];
+                if (dx * dx + dy * dy + dz * dz > 150.f * 150.f) continue;   // teleporte, _cs reaproveitado
+                if (std::memcmp(&a.m, &r.m, sizeof(M4)) != 0) {
+                    if (sameRel(a.m, r.m)) {
+                        r.m = mul(r.m, rebase);
+                        ++attached_;
+                    } else
+                        r.m = interp::lerpM4(a.m, r.m, alpha);
+                }
+                if (a.pal && r.pal && a.pal != r.pal && a.pal->size() == r.pal->size()) {
+                    auto &sp = palCache[{a.pal.get(), r.pal.get()}];
+                    if (!sp) {
+                        sp = std::make_shared<std::vector<M4>>(*r.pal);
+                        for (size_t k = 0; k < sp->size(); ++k)
+                            if (std::memcmp(&(*a.pal)[k], &(*r.pal)[k], sizeof(M4)) != 0) (*sp)[k] = interp::lerpM4((*a.pal)[k], (*r.pal)[k], alpha);
+                    }
+                    r.pal = sp;
+                }
+                r.fade = a.fade + (r.fade - a.fade) * alpha;
+            }
+        };
+        mix(A.items, items);
+        mix(A.sky, sky);
+        for (ShadowBlocker &sb : shadows)
+            for (const ShadowBlocker &sa : A.shadows)
+                if (sa.index == sb.index) {
+                    for (int i = 0; i < 3; ++i) sb.origin[i] = sa.origin[i] + (sb.origin[i] - sa.origin[i]) * alpha;
+                    mix(sa.casters, sb.casters);
+                    break;
+                }
+        for (std::vector<DrawItem> *l : {&hud, &overlay, &hp, &hpOverlay})
+            for (DrawItem &it : *l) it.m = mul(it.m, rebase);
+        // Particulas: recuadas pela velocidade (1 - alpha) do passo de B (Particles::stepBack); as que nasceram no passo ficam em B
+        const uint32_t gap = B.fields - A.fields;
+        static const bool fxOff = std::getenv("WOTM_INTERP_NOFX") != nullptr;   // diagnostico: particulas de B, como na etapa 1
+        if (!fxOff && A.fields && gap >= 1 && gap <= 4) {
+            const float f = float(gap), back = 1.f - alpha;
+            static const bool log = std::getenv("WOTM_INTERPLOG") != nullptr;
+            static uint32_t loggedG = 0;
+            if (log && B.g != loggedG && A.fxRam && A.fxRamSize && B.fxRam && B.fxRamSize) {   // uma vez por par
+                loggedG = B.g;
+                logStepBack(A, B, f);
+            }
+            for (Sprite &sp : sprites) {   // destroços
+                const float d[3] = {f * sp.step[0], f * sp.step[1], f * (sp.step[2] - sp.grav * f)};
+                if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.f * 400.f) continue;
+                for (int k = 0; k < 3; ++k) sp.pos[k] -= back * d[k];
+            }
+            if (B.fxRam && B.fxRamSize) {
+                uint8_t *dst = fxMixBuffer(B.fxRamSize);
+                Particles::blendRam(dst, Ram{B.fxRam.get(), B.fxRamSize}, fx.systems, back, f);
+                aimFxRam(dst, B.vctx.view, B.fxCam.ok ? B.fxCam : B.cam, c);
+                fxRam_ = fxMix_;
+            }
+        }
+        // 2D presos ao 3D: da tela de B para a da camera misturada (foco de B da worldToScreenMat da vista; o FOV misturado o escala)
+        static const bool hudOff = std::getenv("WOTM_INTERP_NOHUD") != nullptr;   // diagnostico: flares, barras e fades de B
+        if (!hudOff) {
+            hudMix_.on = true;
+            hudMix_.view = B.vctx.view;
+            hudMix_.alpha = alpha;
+            hudMix_.CB = interp::cameraToWorld(B.cam);
+            hudMix_.CI = interp::cameraToWorld(c);
+            interp::Focus fb;
+            float M[16];
+            const uint32_t wm = addr::worldToScreenMat + 0x40 * uint32_t(std::clamp(B.vctx.view, 0, 4));
+            if (B.fxRam && B.fxRamSize >= wm + sizeof M) {
+                std::memcpy(M, B.fxRam.get() + wm, sizeof M);
+                if (!interp::focusOf(M, fb)) fb = {};
+            } else {   // sem a copia de sombra (WOTM_FXLIVE): pelo FOV, na vista de 224 linhas
+                fb.fv = 112.f / std::tan(B.cam.fovy * 3.14159265f / 360.f);
+                fb.fh = fb.fv * (384.f / 180.48f);
+            }
+            auto scaled = [&](const GameCamera &o) {   // foco de outra camera: o de B escalado pelo FOV
+                float k = std::tan(B.cam.fovy * 3.14159265f / 360.f) / std::tan(o.fovy * 3.14159265f / 360.f);
+                if (!(std::isfinite(k) && k > 0.f)) k = 1.f;
+                return interp::Focus{fb.fh * k, fb.fv * k};
+            };
+            hudMix_.CA = interp::cameraToWorld(A.cam);
+            hudMix_.fb = fb;
+            hudMix_.fa = scaled(A.cam);
+            hudMix_.fi = scaled(c);
+            static const bool log = std::getenv("WOTM_INTERPLOG") != nullptr;
+            static uint32_t loggedG = 0;
+            if (log && B.g != loggedG) {   // uma vez por par
+                loggedG = B.g;
+                logHudBack(A, B);
+            }
+            blendFlares(fx.flares);
+            blendAnchors(B.anchors, &A.anchors, screenRects, &screenPolys);
+            // fades: o k-esimo retangulo que nao e barra, mesmo lugar e cor em A e B
+            size_t ia = 0;
+            for (ScreenRect &r : screenRects) {
+                if (r.barView >= 0) continue;
+                while (ia < A.screenRects.size() && A.screenRects[ia].barView >= 0) ++ia;
+                if (ia >= A.screenRects.size()) break;
+                const ScreenRect &a = A.screenRects[ia++];
+                if (a.x0 == r.x0 && a.y0 == r.y0 && a.x1 == r.x1 && a.y1 == r.y1 && a.r == r.r && a.g == r.g && a.b == r.b && a.tex0 == r.tex0 &&
+                    a.underText == r.underText)
+                    r.a = static_cast<uint8_t>(std::lround(a.a + (float(r.a) - a.a) * alpha));
+            }
+        }
+        cam_ = c;
+        eyeOk_ = c.ok;
+        for (int i = 0; i < 3; ++i) eye_[i] = c.pos[i];
+        return c;
+    }
+
+    // Diagnostico da etapa 3 (WOTM_INTERPLOG): flares e icones de vida de B levados para a camera de A (alfa 0) contra os que o jogo
+    // projetou em A (o mais proximo, com o mesmo id no flare); "sem" = a mesma distancia sem reprojetar. Em px do GS. Icones: so os
+    // reprojetados (os presos na borda da tela vao pela posicao na tela de A e B, sem erro a medir), e quantos foram pela tela.
+    void logHudBack(const Snapshot &A, const Snapshot &B) {
+        const BlendView keep = hudMix_;
+        hudMix_.CI = hudMix_.CA;
+        hudMix_.fi = hudMix_.fa;
+        hudMix_.alpha = 0.f;
+        Particles::FlareFrame fr = B.flares;
+        blendFlares(fr);
+        auto nearest = [](float x, float y, const auto &list, auto same) {
+            float best = 1e30f;
+            for (const auto &o : list)
+                if (same(o)) best = std::min(best, std::hypot(o.x - x, o.y - y));
+            return best;
+        };
+        int nf = 0;
+        double ef = 0, sf = 0;
+        for (const Particles::Flare &fl : fr.e) {
+            auto same = [&](const Particles::Flare &o) { return o.id == fl.id; };
+            const float e = nearest(fl.x, fl.y, A.flares.e, same);
+            const Particles::Flare *orig = nullptr;
+            for (const Particles::Flare &o : B.flares.e)
+                if (o.id == fl.id) { orig = &o; break; }
+            if (e > 60.f || !orig) continue;   // sem par em A
+            ++nf;
+            ef += e;
+            sf += nearest(orig->x, orig->y, A.flares.e, same);
+        }
+        int na = 0, ns = 0;
+        double ea = 0, sa = 0;
+        for (const HudAnchor &b : B.anchors) {
+            float dx, dy;
+            int mode = 0;
+            if (b.view != hudMix_.view || !anchorShift(b, &A.anchors, dx, dy, &mode)) continue;
+            if (mode == 2) { ++ns; continue; }
+            auto same = [&](const HudAnchor &o) { return o.view == b.view; };
+            const float e = nearest(b.x + dx, b.y + dy, A.anchors, same);
+            if (e > 60.f) continue;
+            ++na;
+            ea += e;
+            sa += nearest(b.x, b.y, A.anchors, same);
+        }
+        std::fprintf(stderr, "[interp] hud g=%u: %d flares, erro medio %.2f px (sem reprojetar %.2f); %d icones de vida, %.2f (sem %.2f), %d pela tela; "
+                     "%d objetos presos a camera\n",
+                     B.g, nf, nf ? ef / nf : 0., nf ? sf / nf : 0., na, na ? ea / na : 0., na ? sa / na : 0., ns, attached_);
+        hudMix_ = keep;
+    }
+
+    // Interpolacao (etapa 3): lens flare da tela de B para a da camera misturada do ultimo showBlend (o do infinito so pela direcao;
+    // a profundidade W e o Z do GS refeitos). Sai o que ficou atras da camera ou fora da tela. Sem showBlend em vigor, nada.
+    void blendFlares(Particles::FlareFrame &fr) const {
+        if (!hudMix_.on) return;
+        const interp::Focus &fb = hudMix_.fb, &fi = hudMix_.fi;
+        const float x0 = -0.5f * fr.vw - 3.f, x1 = 0.5f * fr.vw + 3.f, y0 = -0.5f * fr.vh - 3.f, y1 = 0.5f * fr.vh + 3.f;
+        std::vector<Particles::Flare> out;
+        out.reserve(fr.e.size());
+        for (Particles::Flare fl : fr.e) {
+            const bool inf = (fl.flags & 0x80) != 0;
+            const float dx = (fl.x - fr.cx) / fb.fh, dy = (fl.y - fr.cy) / fb.fv;
+            float w[3], q[3];
+            if (inf) {
+                const float qb[3] = {dx, 1.f, -dy};
+                interp::fromCam(hudMix_.CB, qb, false, w);
+                interp::toCam(hudMix_.CI, w, false, q);
+                if (q[1] <= 1e-4f) continue;
+            } else {
+                if (!(fl.w > 0.f)) { out.push_back(fl); continue; }
+                const float qb[3] = {dx * fl.w, fl.w, -dy * fl.w};
+                interp::fromCam(hudMix_.CB, qb, true, w);
+                interp::toCam(hudMix_.CI, w, true, q);
+                if (q[1] < 1.f) continue;
+                fl.w = q[1];
+                fl.z = fr.zScale + fr.zOff / fl.w;
+            }
+            const float sx = fi.fh * q[0] / q[1], sy = -fi.fv * q[2] / q[1];
+            if (sx < x0 || sx > x1 || sy < y0 || sy > y1) continue;
+            fl.x = fr.cx + sx;
+            fl.y = fr.cy + sy;
+            out.push_back(fl);
+        }
+        fr.e.swap(out);
+    }
+
+    // Deslocamento na tela de um icone de vida de B no instante misturado do ultimo showBlend (falso = fica onde B o pos). Casa com o
+    // icone de A mais proximo no mundo (prev; mesma vista, ate 100 unidades: o monstro anda entre A e B). Se o icone fica a mesma
+    // distancia da projecao do seu ponto em A e em B (o jogo o pos sobre o monstro), o ponto misturado vai pela camera misturada
+    // (mode 1); senao (o jogo o prendeu na borda da tela) mistura a posicao na tela de A e B (mode 2).
+    bool anchorShift(const HudAnchor &b, const std::vector<HudAnchor> *prev, float &dx, float &dy, int *mode = nullptr) const {
+        const HudAnchor *a = nullptr;
+        float bd = 100.f * 100.f;
+        if (prev)
+            for (const HudAnchor &o : *prev) {
+                const float d = (o.w[0] - b.w[0]) * (o.w[0] - b.w[0]) + (o.w[1] - b.w[1]) * (o.w[1] - b.w[1]) + (o.w[2] - b.w[2]) * (o.w[2] - b.w[2]);
+                if (o.view == b.view && d < bd) { bd = d; a = &o; }
+            }
+        if (!a) return false;
+        const float t = hudMix_.alpha;
+        float xb, yb, xa, ya, xi, yi, w[3];
+        for (int k = 0; k < 3; ++k) w[k] = a->w[k] + (b.w[k] - a->w[k]) * t;
+        if (interp::project(hudMix_.CB, hudMix_.fb, b.w, xb, yb) && interp::project(hudMix_.CA, hudMix_.fa, a->w, xa, ya) &&
+            std::fabs((b.x - xb) - (a->x - xa)) < 3.f && std::fabs((b.y - yb) - (a->y - ya)) < 3.f &&
+            interp::project(hudMix_.CI, hudMix_.fi, w, xi, yi)) {
+            dx = xi - xb;
+            dy = yi - yb;
+            if (mode) *mode = 1;
+        } else {
+            dx = (a->x - b.x) * (1.f - t);
+            dy = (a->y - b.y) * (1.f - t);
+            if (mode) *mode = 2;
+        }
+        return std::fabs(dx) < 200.f && std::fabs(dy) < 200.f;
+    }
+
+    // Interpolacao (etapa 3): barras sobre o inimigo (ScreenRect::anchor) e icone de vida (polys centrados no ponto anotado) da vista do
+    // ultimo showBlend, levados para o instante misturado pelo anchorShift do ponto do mundo que o jogo projetou (HudAnchor; prev = os
+    // de A).
+    void blendAnchors(const std::vector<HudAnchor> &anchors, const std::vector<HudAnchor> *prev, std::vector<ScreenRect> &rects,
+                      std::vector<TextQuad> *polys) const {
+        if (!hudMix_.on || anchors.empty()) return;
+        std::vector<std::array<float, 2>> shift(anchors.size(), {NAN, NAN});
+        bool any = false;
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            float dx, dy;
+            if (anchors[i].view == hudMix_.view && anchorShift(anchors[i], prev, dx, dy)) {
+                shift[i] = {dx, dy};
+                any = true;
+            }
+        }
+        if (!any) return;
+        for (ScreenRect &r : rects) {
+            if (r.barView != hudMix_.view || r.anchor < 0 || size_t(r.anchor) >= shift.size() || std::isnan(shift[size_t(r.anchor)][0])) continue;
+            const auto &sh = shift[size_t(r.anchor)];
+            r.x0 += sh[0]; r.x1 += sh[0]; r.y0 += sh[1]; r.y1 += sh[1];
+        }
+        if (!polys) return;
+        for (TextQuad &t : *polys) {
+            const float cx = 0.5f * (t.x0 + t.x1), cy = 0.5f * (t.y0 + t.y1);
+            for (size_t i = 0; i < anchors.size(); ++i)
+                if (!std::isnan(shift[i][0]) && std::fabs(anchors[i].x - cx) < 1.5f && std::fabs(anchors[i].y - cy) < 1.5f) {
+                    t.x0 += shift[i][0]; t.x1 += shift[i][0]; t.y0 += shift[i][1]; t.y1 += shift[i][1];
+                    break;
+                }
+        }
+    }
+
+    // Diagnostico do recuo (WOTM_INTERPLOG): cada particula que andou, recuada um passo inteiro (alfa 0), contra a mais proxima do
+    // mesmo sistema em A; "sem" = a mesma distancia sem recuo. Destroços pelo passo guardado no Sprite, contra os do mesmo fx em A.
+    static void logStepBack(const Snapshot &A, const Snapshot &B, float f) {
+        const Ram ra{A.fxRam.get(), A.fxRamSize}, rb{B.fxRam.get(), B.fxRamSize};
+        double eR = 0, eS = 0;
+        long cnt = 0;
+        auto nearest = [](const float p[3], const std::vector<std::array<float, 3>> &pts) {
+            float best = 1e30f;
+            for (const auto &q : pts) best = std::min(best, (p[0] - q[0]) * (p[0] - q[0]) + (p[1] - q[1]) * (p[1] - q[1]) + (p[2] - q[2]) * (p[2] - q[2]));
+            return std::sqrt(best);
+        };
+        for (const FxSystem &s : B.fx) {
+            if (std::none_of(A.fx.begin(), A.fx.end(), [&](const FxSystem &x) { return x.index == s.index; })) continue;
+            Particles::StepBack o;
+            if (!Particles::stepBack(rb, s.base, s.n, o) || !o.moved) continue;
+            const int nA = int32_t(ra.u32(s.base + fxoff::numParticles));
+            const uint32_t pa = ra.u32(s.base + fxoff::pos), pb = rb.u32(s.base + fxoff::pos), vb = rb.u32(s.base + fxoff::vel);
+            if (nA <= 0 || nA > 1024 || !ra.ok(pa, 16 * uint32_t(nA)) || !rb.ok(pb, 16 * uint32_t(o.moved)) || !rb.ok(vb, 16 * uint32_t(o.moved))) continue;
+            std::vector<std::array<float, 3>> pts(static_cast<size_t>(nA));
+            for (int j = 0; j < nA; ++j)
+                for (int k = 0; k < 3; ++k) pts[size_t(j)][size_t(k)] = ra.f32(pa + 16 * uint32_t(j) + 4 * uint32_t(k));
+            for (int i = 0; i < o.moved; ++i) {
+                float p[3], v[3], d[3], r[3];
+                for (int k = 0; k < 3; ++k) { p[k] = rb.f32(pb + 16 * uint32_t(i) + 4 * uint32_t(k)); v[k] = rb.f32(vb + 16 * uint32_t(i) + 4 * uint32_t(k)); }
+                Particles::stepOffset(o, v, f, d);
+                for (int k = 0; k < 3; ++k) r[k] = p[k] - d[k];
+                eR += nearest(r, pts);
+                eS += nearest(p, pts);
+                ++cnt;
+            }
+        }
+        double sR = 0, sS = 0;
+        long sc = 0;
+        for (const Sprite &sp : B.sprites) {
+            if (sp.step[0] == 0.f && sp.step[1] == 0.f && sp.step[2] == 0.f) continue;
+            std::vector<std::array<float, 3>> pts;
+            for (const Sprite &a : A.sprites)
+                if ((a.key >> 12) == (sp.key >> 12)) pts.push_back({a.pos[0], a.pos[1], a.pos[2]});
+            if (pts.empty()) continue;
+            const float r[3] = {sp.pos[0] - f * sp.step[0], sp.pos[1] - f * sp.step[1], sp.pos[2] - f * (sp.step[2] - sp.grav * f)};
+            sR += nearest(r, pts);
+            sS += nearest(sp.pos, pts);
+            ++sc;
+        }
+        // worldToScreenMat refeita com a camera de A (a do alfa 0, como no showBlend) contra a gravada em A: maior diferenca relativa
+        float matErr = 0.f;
+        {
+            const uint32_t v = uint32_t(std::clamp(B.vctx.view, 0, 4)), wa = addr::worldToScreenMat + 0x40 * v;
+            const M4 CB = interp::cameraToWorld(B.cam), CA = interp::cameraToWorld(A.cam);
+            float T[3][3], scale = 0.f;
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k) T[j][k] = CB.m[0][j] * CA.m[0][k] + CB.m[1][j] * CA.m[1][k] + CB.m[2][j] * CA.m[2][k];
+            for (int r = 0; r < 4; ++r)
+                for (int k = 0; k < 3; ++k) {
+                    const float m = rb.f32(wa + 16 * uint32_t(r)) * T[0][k] + rb.f32(wa + 16 * uint32_t(r) + 4) * T[1][k] + rb.f32(wa + 16 * uint32_t(r) + 8) * T[2][k];
+                    const float a = ra.f32(wa + 16 * uint32_t(r) + 4 * uint32_t(k));
+                    matErr = std::max(matErr, std::fabs(m - a));
+                    scale = std::max(scale, std::fabs(a));
+                }
+            matErr = scale > 0.f ? matErr / scale : 0.f;
+        }
+        if (cnt || sc)
+            std::fprintf(stderr, "[interp] recuo g=%u f=%.0f: %ld particulas, erro medio %.2f (sem recuo %.2f); %ld destroços, %.2f (sem %.2f); matriz %.5f\n", B.g, f, cnt,
+                         cnt ? eR / double(cnt) : 0.0, cnt ? eS / double(cnt) : 0.0, sc, sc ? sR / double(sc) : 0.0, sc ? sS / double(sc) : 0.0, matErr);
     }
 
     // ---- Particulas (fx[], 0x5BA280: 98 x 0x2EE0 bytes; o VU1 monta os quadrados, aqui viram sprites voltados para a camera) ----
@@ -1902,6 +2777,9 @@ public:
             if (!np || np > 1024 || type != 13 || !Particles::inViewFov(ram, b, wide)) continue;   // so destroços; os outros tipos ficam com fx (wotm_fx.hpp: cor, textura e mistura do retail)
             const uint32_t pos = ram.u32(b + 0x2EB0), age = ram.u32(b + 0x2EB8);
             if (!ram.ok(pos, 16 * np) || !ram.ok(age, 2 * np)) continue;
+            Particles::StepBack sb;   // interpolacao (showBlend): o passo de cada destroço
+            const uint32_t velp = ram.u32(b + fxoff::vel);
+            const bool haveStep = Particles::stepBack(ram, b, int(np), sb) && ram.ok(velp, 16 * uint32_t(sb.moved));
             const int life = int(int16_t(ram.u16(b + 0x2E30 + 0x1A)));
             const float minS = ram.f32(b + 0x2E30 + 8), maxS = ram.f32(b + 0x2E30 + 0xC);
             const uint32_t texLoad = ram.u16(b + 0x2C40);
@@ -1935,6 +2813,11 @@ public:
                 if (a < 0 || (life > 0 && a >= life)) continue;
                 const float t = life > 0 ? float(a) / float(life) : 0.f;
                 s.key = i * 4096u + k;
+                if (haveStep && int(k) < sb.moved) {
+                    for (int c = 0; c < 3; ++c) s.step[c] = ram.f32(velp + 16 * k + 4 * uint32_t(c)) + sb.wind[c];
+                    s.grav = sb.grav;
+                    if (sb.keepZ) { s.step[2] = 0.f; s.grav = 0.f; }
+                }
                 if (atlas) {   // destroço: SPRITE do GS alinhado a tela (fragPacketInit/fragPacketBuild, microprograma 0x1180)
                     // pos.w (particleEmit, is13): float em [-2, 2) que o particleMove faz variar com vel.w, com os bits baixos sorteados.
                     //  - lado = max(minSize, |w| maxSize / 2) (q330 = (minSize, contador, 128, maxSize / 2)), sem giro;
@@ -1994,12 +2877,15 @@ public:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t tw = 0, th = 0;
-        if (decodeFxTex(ram, texId, tex0, px, tw, th)) {
+        bool ok = decodeFxTex(ram, texId, tex0, px, tw, th);
+        modParticle(ram, texId, tex0, ok, px, tw, th);
+        if (ok) {
             Image img{px.data(), int(tw), int(th), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             // BILINEAR como o GS (as gotas do Plantboss saiam em blocos de texel e pareciam maiores: foto 2026-10-19_003247/001)
             if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
         }
+        applyTexFilter(t);
         tex_[key] = t;
         w = t.width; h = t.height;
         return t.id;
@@ -2403,12 +3289,28 @@ public:
         auto it = cache_.find(pp);
         if (it != cache_.end()) {
             // revalida a assinatura (a RAM do nivel pode ter sido reaproveitada)
-            if (it->second->sig == packetSig(ram, skipZeroQwords(ram, pp))) return it->second.get();
+            if (it->second->sig == packetSig(ram, skipZeroQwords(ram, pp))) { lastMesh_ = it->second; return it->second.get(); }
         }
         auto md = std::make_shared<MeshData>(decodeObject(ram, node));
         cache_[pp] = md;
+        lastMesh_ = md;
         return md.get();
     }
+    // Troca a malha do objeto no cache por uma copia alterada por f (uma vez por decodificacao). Copia nova, nao a mesma alterada: a
+    // arena residente guarda os vertices pelo ponteiro da malha. Usado pelo wotm_levelsel.inc (UV da foto das fases sem arte no SHELL).
+    template <class F> bool patchMesh(const Ram &ram, uint32_t node, F &&f) {
+        if (!mesh(ram, node)) return false;
+        auto it = cache_.find(ram.u32(node + 4) & 0x0FFFFFFF);
+        if (it == cache_.end()) return false;
+        if (it->second->patched) return true;
+        auto md = std::make_shared<MeshData>(*it->second);
+        f(*md);
+        md->patched = true;
+        it->second = md;
+        lastMesh_ = md;
+        return true;
+    }
+    std::shared_ptr<const MeshData> lastMesh_;   // a malha do ultimo mesh() (drawList: o pedaco adiado a segura)
 
     // Limiar do teste de alfa no shader do draw (DrawItem::aref, unidades do alfa do GS: 0x80 = 1,0). Descarrega o lote antes: o
     // uniform vale para o que for desenhado depois.
@@ -2530,47 +3432,156 @@ public:
             BeginShaderMode(alphaShader_);
             g_premulShader = true;
         }
+        vs_.setShader(useShader ? alphaShader_.id : 0u, useShader ? alphaShader_.locs : nullptr);   // o do rlgl agora (0 = o padrao)
         return useShader;
     }
 
     void draw(const Ram &ram, bool wire = false) {
         ViewScope vs(vctx);
+        if (drawProfOn()) ++drawProf().views;
         const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();   // o ceu e desenhado primeiro, sem profundidade
-        drawList(ram, sky, wire);
-        rlDrawRenderBatchActive();
+        {
+            ProfScope ps(DrawProf::Sky);
+            drawList(ram, sky, wire);
+            rlDrawRenderBatchActive();
+        }
         rlEnableDepthTest();
         static const bool onePass = std::getenv("WOTM_ONEPASS") != nullptr;   // diagnostico: tudo num passe so (sem separar translucidos)
         // Como o hier: fora da OT de alfa, opacos e translucidos juntos na ordem da travessia (gravando Z conforme o ZMSK do GROUP); a
         // OT de alfa (passe 1) depois. Com dois passes (opacos primeiro), a previa da fase (tex 102, As ~ 1) saia antes do logo do
         // telao (tex 140/141, sem gravar Z) e o logo ficava por cima; no GS a previa vem depois e o cobre.
-        drawList(ram, items, wire, (wire || onePass) ? -1 : 2);
-        if (!wire && !onePass) {
+        {
+            ProfScope ps(DrawProf::Trav);
+            drawList(ram, items, wire, (wire || onePass) ? -1 : 2);
             rlDrawRenderBatchActive();
+        }
+        if (!wire && !onePass) {
+            ProfScope ps(DrawProf::AlphaOT);
             rlDisableDepthMask();   // translucidos: o drawList grava profundidade item a item pelo ZBUF_1.ZMSK (DrawItem::zmsk)
             drawList(ram, items, wire, 1);
             rlDrawRenderBatchActive();
             rlEnableDepthMask();
         }
         // sombras projetadas depois da OT de alfa: no XGKICK os receptores redesenhados com a textura da sombra vem depois dela
-        if (!wire) drawShadows(ram);
+        if (!wire) { ProfScope ps(DrawProf::Shadows); drawShadows(ram); }
         // particulas por ultimo (testam profundidade, nao escrevem): destroços (drawSprites), depois os demais tipos na ordem de particleDraw
-        if (!wire) drawSprites(ram);
-        // Teste de alfa das particulas: os pacotes translucidos nao mexem no TEST e herdam o 0x7000D (As > 0) do restoreScreenDrawEnv;
-        // os destroços trazem o proprio TEST e fecham com o setClosingContext (0x5004B: As >= 4). Medido pela checagem (TEST do XGKICK).
-        if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
-        // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
-        if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
-        if (!wire) setAlphaRef(kGsAlphaRef);
-        if (!wire) fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });   // lens flare: tela, depois das particulas
-        rlDrawRenderBatchActive();
+        if (!wire) { ProfScope ps(DrawProf::Sprites); drawSprites(ram); }
+        {
+            ProfScope ps(DrawProf::Fx);
+            // Teste de alfa das particulas: os pacotes translucidos nao mexem no TEST e herdam o 0x7000D (As > 0) do restoreScreenDrawEnv;
+            // os destroços trazem o proprio TEST e fecham com o setClosingContext (0x5004B: As >= 4). Medido pela checagem (TEST do XGKICK).
+            if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
+            // particulas com a RAM do instante da captura (fxRam_), nao a viva que o jogo ja reescreve; texturas seguem da RAM viva
+            if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
+            if (!wire) setAlphaRef(kGsAlphaRef);
+            if (!wire && !deferFlares && !fx.flares.e.empty()) {   // lens flare: tela, depois das particulas
+                if (fullDepth) {   // profundidade sem esperar a GPU, como na tela dividida (drawFlaresFor)
+                    rlDrawRenderBatchActive();
+                    fullDepth->issue(rlGetFramebufferWidth(), rlGetFramebufferHeight(), fullDepthFbo, redrawId);
+                    fx.depthAsync = fullDepth;
+                }
+                fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+                fx.depthAsync = nullptr;
+            }
+            rlDrawRenderBatchActive();
+        }
+        ProfScope psHud(DrawProf::Hud);
+        if (!wire && barPass.rects) {   // barras sobre os inimigos sob o HUD do jogador (barPass), fora do shader do GS
+            rlDrawRenderBatchActive();
+            if (useShader) { EndShaderMode(); g_premulShader = false; vs_.setShader(0u, nullptr); }
+            drawBarPass();
+            if (useShader) { BeginShaderMode(alphaShader_); g_premulShader = true; vs_.setShader(alphaShader_.id, alphaShader_.locs); }
+            gsBlend(kGsAlphaNormal);   // o drawList comeca supondo a mistura comum do GS (o EndBlendMode deixou a do raylib)
+        }
         rlDisableDepthTest();   // icones de botao e HUD por cima de tudo (z perto de 0: o teste de profundidade os esconde sob o chao)
-        drawList(ram, overlay, wire, -1, true);
+        const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
+        if (!sprites2d) drawList(ram, overlay, wire, -1, true);
         drawList(ram, hud, wire, -1);   // HUD por ultimo, na ordem da travessia
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
         g_premulShader = false;
+        if (sprites2d) drawButtonSprites(ram, overlay);
+    }
+
+    // Lens flare adiado (deferFlares): o teste de oclusao le a profundidade ja desenhada (glReadPixels), e cada leitura espera a GPU
+    // terminar o que recebeu. Na tela dividida, com o flare dentro do draw de cada vista, a CPU parava a cada vista (redesenho de 3
+    // vistas a ~60 ms). Com o adiamento, todas as vistas sao desenhadas antes e os flares de cada uma vem depois, na textura dela, com
+    // a lista e o contexto da vista (`fl`, `vc`): uma espera so por redesenho. Dentro do BeginMode3D da vista.
+    bool deferFlares = false;
+    // Tela cheia ao vivo: o flare do Scene::draw usa a profundidade de um redesenho recente (AsyncDepth; o chamador faz o fetch no
+    // comeco do redesenho), copiada do framebuffer `fullDepthFbo` em que o quadro desenha. Nulo (replay, corpus): a leitura direta.
+    AsyncDepth *fullDepth = nullptr;
+    unsigned fullDepthFbo = 0;
+    uint64_t redrawId = 0;   // redesenho em curso (o chamador incrementa antes das vistas): silhuetas de sombra divididas entre elas
+    // `depth`: profundidade da vista sem esperar a GPU (AsyncDepth; o chamador fez o fetch no comeco do redesenho); aqui vai o pedido
+    // da copia desta vez, do framebuffer `depthFbo` em que a vista desenha
+    void drawFlaresFor(const Ram &ram, const Particles::FlareFrame &fl, const ViewCtx &vc, AsyncDepth *depth = nullptr, unsigned depthFbo = 0) {
+        if (fl.e.empty()) return;
+        if (depth) {
+            rlDrawRenderBatchActive();
+            depth->issue(rlGetFramebufferWidth(), rlGetFramebufferHeight(), depthFbo, redrawId);
+        }
+        fx.depthAsync = depth;
+        struct ResetDepth { Particles &p; ~ResetDepth() { p.depthAsync = nullptr; } } resetDepth{fx};
+        const Particles::FlareFrame keepFl = fx.flares;
+        const ViewCtx keepVc = vctx;
+        fx.flares = fl;
+        vctx = vc;
+        {
+            ViewScope vs(vctx);
+            const bool useShader = beginShader(ram, false);
+            rlEnableDepthTest();
+            setAlphaRef(kGsAlphaRef);
+            fx.drawFlares([&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); });
+            rlDrawRenderBatchActive();
+            if (useShader) EndShaderMode();
+            g_premulShader = false;
+        }
+        fx.flares = keepFl;
+        vctx = keepVc;
+    }
+
+    // Icones de botao 2D (g_buttonIconFn) no lugar dos objetos 3D do McButtons: um por _cs, no centro dos triangulos dele, do tamanho
+    // do maior lado na tela (eixos da camera), com o fade do screenSetButtonAlpha (+0x4C do objeto, como o fadeByNode). Dentro do modo
+    // 3D do quadro, sem profundidade.
+    void drawButtonSprites(const Ram &ram, const std::vector<DrawItem> &list) {
+        if (list.empty()) return;
+        const Matrix mv = rlGetMatrixModelview();
+        const float right[3] = {mv.m0, mv.m4, mv.m8}, up[3] = {mv.m1, mv.m5, mv.m9};
+        struct Acc { uint32_t cs; uint16_t id; float lo[2], hi[2], c[3]; int n; float alpha; };
+        std::vector<Acc> acc;
+        for (const DrawItem &it : list) {
+            const MeshData *md = mesh(ram, it.node);
+            if (!md || md->tris.empty()) continue;
+            Acc *a = nullptr;
+            for (Acc &x : acc) if (x.cs == it.cs) a = &x;
+            if (!a) { acc.push_back({it.cs, it.btnId, {1e30f, 1e30f}, {-1e30f, -1e30f}, {0, 0, 0}, 0, 0.f}); a = &acc.back(); }
+            a->alpha = std::max(a->alpha, std::min(1.f, std::max(0.f, ram.f32(it.node + 0x4C))) * it.fade);
+            for (const Vtx &v : md->tris) {
+                float w[3];
+                xform(it.m, v.x, v.y, v.z, w);
+                const float pr = w[0] * right[0] + w[1] * right[1] + w[2] * right[2], pu = w[0] * up[0] + w[1] * up[1] + w[2] * up[2];
+                a->lo[0] = std::min(a->lo[0], pr); a->hi[0] = std::max(a->hi[0], pr);
+                a->lo[1] = std::min(a->lo[1], pu); a->hi[1] = std::max(a->hi[1], pu);
+                for (int k = 0; k < 3; ++k) a->c[k] += w[k];
+                ++a->n;
+            }
+        }
+        rlDisableDepthTest();
+        for (const Acc &a : acc) {
+            if (!a.n || a.alpha <= 0.f) continue;
+            const float c[3] = {a.c[0] / float(a.n), a.c[1] / float(a.n), a.c[2] / float(a.n)};
+            // centro: o meio da caixa nos eixos da camera, na profundidade media
+            const float cr = c[0] * right[0] + c[1] * right[1] + c[2] * right[2], cu = c[0] * up[0] + c[1] * up[1] + c[2] * up[2];
+            const float dr = (a.lo[0] + a.hi[0]) * 0.5f - cr, du = (a.lo[1] + a.hi[1]) * 0.5f - cu;
+            const float mid[3] = {c[0] + right[0] * dr + up[0] * du, c[1] + right[1] * dr + up[1] * du, c[2] + right[2] * dr + up[2] * du};
+            const float size = std::max(a.hi[0] - a.lo[0], a.hi[1] - a.lo[1]);
+            g_buttonIconFn(a.id, mid, right, up, size, a.alpha);
+        }
+        rlDrawRenderBatchActive();
+        rlEnableDepthTest();
     }
 
     // Lista de alta prioridade (`hp`), com a camera 3D do quadro ligada: na frente da camera, por cima do que ja esta na tela, sem
@@ -2581,11 +3592,13 @@ public:
         const bool useShader = beginShader(ram, wire);
         rlDisableDepthTest();
         drawList(ram, hp, wire, -1);
-        drawList(ram, hpOverlay, wire, -1, true);
+        const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
+        if (!sprites2d) drawList(ram, hpOverlay, wire, -1, true);
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
         g_premulShader = false;
+        if (sprites2d) drawButtonSprites(ram, hpOverlay);
     }
 
     // Translucido: textura com alfa parcial ou vertices de alfa baixo. Esses vao no segundo passe (tras para frente, sem escrever profundidade).
@@ -2775,21 +3788,59 @@ public:
         uint8_t curItBlend = 0;
         int16_t curItRef = 0;   // estado do item do lote aberto (passe da travessia: lote so com o mesmo estado)
         bool curItZ = false, curItAbe = false;
+        // Vertices pelo VtxStream (o mesmo que o rlgl mandaria, sem as quatro chamadas por vertice); o arame e WOTM_NOVTXSTREAM=1
+        // usam o modo imediato do rlgl. No stream, um lote novo que so troca a textura vira outro comando da mesma subida; a fila e
+        // descarregada so antes de uma mudanca de estado do GL (mistura, teste de alfa, mascara de Z, CLAMP), que vale na descarga.
+        static const bool noStream = std::getenv("WOTM_NOVTXSTREAM") != nullptr;
+        const bool stream = !wire && !noStream && vs_.ok();
+        // no stream, a conta dos vertices de cada pedaco (transformacao, ossos, luz) vai para as threads auxiliares (JobPool): o
+        // estado e os comandos saem aqui, na ordem, e os vertices entram no lugar deles na descarga
+        const bool deferVerts = stream && JobPool::get().active();
+        if (resReset_ && stream && vs_.empty()) {   // arena cheia: tudo de novo (orfana o buffer; os desenhos ja enviados seguem com o antigo)
+            vs_.arenaReset();
+            resChunks_.clear();
+            resReset_ = false;
+        }
+        auto flushStream = [&] {
+            if (!stream || vs_.empty()) return;
+            ProfScope ps(DrawProf::Flush);
+            vs_.flush();
+            if (drawProfOn()) { ++drawProf().batches; drawProf().draws += vs_.draws(); }
+            vs_.resetDraws();
+        };
+        // mudanca de estado do GL: no stream entra na fila do VtxStream (na ordem dos vertices, sem descarregar); senao agora
+        auto glState = [&](auto &&fn) { if (stream) vs_.state(fn); else fn(); };
         auto setBlend = [&](uint8_t b) {
             if (b == curBlend) return;
             curBlend = b;
             curPremul = gsBlendPremul(b);
-            gsBlend(b);
+            glState([b] { gsBlend(b); });
         };
         int16_t curRef = kGsAlphaRef;   // DrawItem::aref no uniform do shader (idem)
         auto setRef = [&](int16_t r) {
             if (r == curRef) return;
             curRef = r;
-            setAlphaRef(r);
+            glState([this, r] { setAlphaRef(r); });
         };
+        int curZm = -1;   // mascara de Z posta aqui (-1: a do chamador)
+        auto setZm = [&](bool on) {
+            if (int(on) == curZm) return;
+            curZm = int(on);
+            glState([on] { if (on) rlEnableDepthMask(); else rlDisableDepthMask(); });
+        };
+        auto vColor = [&](uint8_t r, uint8_t g, uint8_t b, uint8_t a) { if (stream) vs_.color(r, g, b, a); else rlColor4ub(r, g, b, a); };
+        auto vTex = [&](float u, float v) { if (stream) vs_.texcoord(u, v); else rlTexCoord2f(u, v); };
+        auto vNormal = [&](float burn, bool fge, bool gs, bool pm, int mode) {
+            if (!stream) { shaderNormal(burn, fge, gs, pm, mode); return; }
+            float n[3];
+            shaderNormalVals(burn, fge, gs, pm, mode, n);
+            vs_.normal(n[0], n[1], n[2]);
+        };
+        auto vVertex = [&](float x, float y, float z) { if (stream) vs_.vertex(x, y, z); else rlVertex3f(x, y, z); };
         for (const auto &o : order) {
             const DrawItem &it = list[o.item];
             const MeshData *md = mesh(ram, it.node);
+            std::shared_ptr<const MeshData> mdKeep = lastMesh_;   // o pedaco adiado segura a malha (o cache pode troca-la antes da descarga)
             {   // diagnostico: WOTM_LISTSKIN=1 lista os itens skinned desenhados (no, LOD, animPkt, posicao do objeto)
                 static const bool ls = std::getenv("WOTM_LISTSKIN") != nullptr;
                 if (ls && md && md->skinned && !wire)
@@ -2838,11 +3889,20 @@ public:
             const bool travState = trav && open && (it.blend != curItBlend || it.aref != curItRef || it.zmsk != curItZ || md->abe != curItAbe);
             if (o.key != cur || !open || far2near || travState || envClamp != curClamp || passK != curPass) {
                 curItBlend = it.blend; curItRef = it.aref; curItZ = it.zmsk; curItAbe = md->abe;
-                if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // um lote por textura (evita o alinhamento automatico do rlgl)
-                if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); clampedId = 0; }
-                if (!wire && dbl) { gsBlendDouble(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire && passK == kSlotOver1) { gsBlendOver1(); curBlend = kBlendDouble; curPremul = false; }
-                else if (!wire && passK == kSlotOver2) { gsBlendOver2(); curBlend = kBlendDouble; curPremul = false; }
+                if (open && !stream) {   // um lote por textura (evita o alinhamento automatico do rlgl)
+                    ProfScope ps(DrawProf::Flush);
+                    rlEnd();
+                    rlDrawRenderBatchActive();
+                    if (drawProfOn()) ++drawProf().batches;
+                }
+                if (clampedId) {
+                    const unsigned t = clampedId;
+                    glState([t] { rlTextureParameters(t, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(t, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); });
+                    clampedId = 0;
+                }
+                if (!wire && dbl) { glState([] { gsBlendDouble(); }); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver1) { glState([] { gsBlendOver1(); }); curBlend = kBlendDouble; curPremul = false; }
+                else if (!wire && passK == kSlotOver2) { glState([] { gsBlendOver2(); }); curBlend = kBlendDouble; curPremul = false; }
                 // sem ABE o GS grava a cor da fonte sem misturar (o alfa, com o fade do LOD, so vale para o teste): o predio 133 do
                 // luta_hud em cross-fade saia meio transparente e deixava ver o predio de tras
                 else if (!wire) {
@@ -2852,14 +3912,20 @@ public:
                 curPass = passK;
                 if (!wire) setRef(it.aref);
                 // passe translucido: grava profundidade como o GS, a menos que o GROUP ligue o ZMSK (o chamador volta a mascara ao fim)
-                if (far2near || trav) { if (it.zmsk) rlDisableDepthMask(); else rlEnableDepthMask(); }
+                if (far2near || trav) setZm(!it.zmsk);
                 cur = o.key;
                 curClamp = envClamp;
                 const unsigned id = wire ? 0 : textureId(ram, it, texRemap(slot));
-                if (envClamp && id && id != screenId_) { rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); clampedId = id; }
-                rlBegin(wire ? RL_LINES : RL_TRIANGLES);   // rlBegin com outro modo reseta a textura do lote: setar depois
+                if (envClamp && id && id != screenId_) {
+                    glState([id] { rlTextureParameters(id, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_CLAMP); rlTextureParameters(id, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_CLAMP); });
+                    clampedId = id;
+                }
                 static const bool idc = std::getenv("WOTM_IDCOLOR") != nullptr;   // diagnostico: cor = texId do objeto (leia o pixel para achar o id)
-                rlSetTexture((id && !idc) ? id : white);
+                if (stream) vs_.begin(RL_TRIANGLES, (id && !idc) ? id : white);
+                else {
+                    rlBegin(wire ? RL_LINES : RL_TRIANGLES);   // rlBegin com outro modo reseta a textura do lote: setar depois
+                    rlSetTexture((id && !idc) ? id : white);
+                }
                 open = true;
             }
             // modo por item (vai no vertice): um item com As > 1 pode cair num lote aberto por outro sem
@@ -2871,6 +3937,7 @@ public:
             // alfa como o GS (textura com alfa cru, ver textureId), menos no quadro anterior (render texture) e no filme
             const bool gsA = !(tid && (tid == screenId_ || (movieTexture && objectTexId(ram, it.node, texRemap(slot)) == 999)));
             const auto &t = md->tris;
+            if (drawProfOn()) drawProf().verts += long(t.size());
             {   // diagnostico: WOTM_TEXINFO=<id> imprime (ate WOTM_TEXINFO_N vezes, padrao 6) os objetos com esse texId: mistura, cor, fudge, textura e vertices
                 static const int ti = std::getenv("WOTM_TEXINFO") ? std::atoi(std::getenv("WOTM_TEXINFO")) : -1;
                 static int printed = 0;
@@ -2939,6 +4006,8 @@ public:
             const float fz = ram.f32(it.node + 0x28);
             const bool fudge = !wire && eyeOk_ && fz > 0.5f && fz < 2.f && fz != 1.f;
             const float fzScale = 1.f / fz;   // zBufferFudge > 1 = mais perto (no raio do olho)
+            float rowLen[3];   // linhas da matriz da luz (vertexRgb), uma vez por item
+            rowLengths(pm ? skinM : it.m, rowLen);
             {   // diagnostico: WOTM_SKINBOX=1 imprime a caixa (mundo) dos vertices skinned de cada no, por osso x
                 static const bool sb = std::getenv("WOTM_SKINBOX") != nullptr;
                 if (sb && pm && md->skinned && !wire) {
@@ -2957,83 +4026,55 @@ public:
                     std::fprintf(stderr, "[skinbox] node %x mundo x[%.1f %.1f] y[%.1f %.1f] z[%.1f %.1f] | cru x[%.1f %.1f] y[%.1f %.1f] z[%.1f %.1f]\n", it.node, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], rlo[0], rhi[0], rlo[1], rhi[1], rlo[2], rhi[2]);
                 }
             }
-            for (size_t k = 0; k + 2 < t.size(); k += 3) {
-                if (multi && t[k].slot != slot) continue;   // so as secoes deste slot
-                { static const int onlySub = std::getenv("WOTM_SUBPKT") ? std::atoi(std::getenv("WOTM_SUBPKT")) : -1; if (onlySub >= 0 && md->skinned && t[k].sub != onlySub) continue; }
-                float p[3][3];
-                for (int c = 0; c < 3; ++c) {
-                    if (pm) skinVertexPM(pm, skinM, t[k + c], p[c]);
-                    else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
-                    if (fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * fzScale;
-                }
-                if (t[k].cull && !wire && backFacing(p, eye_)) continue;
-                float eu[3], ev[3];   // UV do mapa de ambiente por vertice
-                bool envOk[3] = {false, false, false};
-                if (it.env && tid) {
-                    if (!envV.ok && eyeOk_) {
-                        float W[4][4];
-                        for (int r = 0; r < 4; ++r)
-                            for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(viewW2S() + 16 * r + 4 * c);
-                        envV = envView(ram, W, eye_);
-                    }
-                    for (int c = 0; c < 3; ++c) {
-                        float nw[3];
-                        envNormal(t[k + c], pm ? &pm[(t[k + c].cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, nw);
-                        envOk[c] = envUv(it.env, it.envK, envV, p[c], nw, eu[c], ev[c]);
-                    }
-                }
-                for (int c = 0; c < 3; ++c) {
-                    const int cs[2] = {c, (c + 1) % 3};
-                    for (int e = 0; e < (wire ? 2 : 1); ++e) {
-                        const Vtx &v = t[k + cs[e]];
-                        bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
-                        if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; rlColor4ub(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
-                        else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); rlColor4ub(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
-                        else if (v.isAdc) { gsV = false; rlColor4ub(255, 0, 0, 255); }   // WOTM_SHOWADC
-                        else if (noVcol && md->skinned) { gsV = false; rlColor4ub(255, 255, 255, 255); }   // diagnostico
-                        else {
-                            uint8_t rgb[3];
-                            vertexRgb(ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb);
-                            // cor e alfa crus no modo GS (o shader faz texel * Cv / 128 e At * Av / 16384); no quadro anterior e no filme,
-                            // o antigo (cor dobrada e limitada a 1,0, alfa 4a/255)
-                            const float va = v.a * fade * (gsA ? 1.f : 4.f);
-                            const int k = gsA ? 1 : 2;
-                            rlColor4ub(uint8_t(std::min(255, rgb[0] * k)), uint8_t(std::min(255, rgb[1] * k)), uint8_t(std::min(255, rgb[2] * k)), forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
-                        }
-                        const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
-                        // texels do GS na tela 640x224, que em widescreen e a faixa 4:3 central do quadro anterior (gsScreenRect)
-                        if (tid && tid == screenId_) rlTexCoord2f(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
-                        else if (tid && envOk[cs[e]]) rlTexCoord2f(tu, tv);
-                        else if (tid) { static const char *un = std::getenv("WOTM_UVNEG"); const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; rlTexCoord2f(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
-                        shaderNormal(fogBurn, v.fge && !idcNode, gsV, curPremul, curMode);   // neblina e modulacao do GS no shader do draw
-                        rlVertex3f(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
-                    }
-                }
+            // camera do mapa de ambiente e eixos dos sprites: uma vez por lista, aqui (lidos da RAM), antes dos vertices
+            if (it.env && tid && !envV.ok && eyeOk_) {
+                float W[4][4];
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c) W[r][c] = ram.f32(viewW2S() + 16 * r + 4 * c);
+                envV = envView(ram, W, eye_);
             }
             if (!md->sprites.empty() && !sprView.ok) sprView = SpriteView::make(ram, eye_);
-            for (const ObjSprite &s : md->sprites) {
-                if (multi && s.slot != slot) continue;
-                float c[4][3];
-                if (!objSpriteCorners(sprView, it.m, s, c)) continue;
-                if (fudge) for (auto &q : c) for (int a = 0; a < 3; ++a) q[a] = eye_[a] + (q[a] - eye_[a]) * fzScale;
-                const uint8_t cr = uint8_t(std::min(255.f, s.r * it.color[0])), cg = uint8_t(std::min(255.f, s.g * it.color[1])),
-                              cb = uint8_t(std::min(255.f, s.b * it.color[2])), ca = uint8_t(std::min(255.f, s.a * fade));
-                // ST como o GS (repete): desloca o par para >= 0, para nao depender do modo de repeticao da textura do raylib
-                const float u0 = s.u0 + it.uvOff[0], u1 = s.u1 + it.uvOff[0], v0 = s.v0 + it.uvOff[1], v1 = s.v1 + it.uvOff[1];
-                const float du = std::floor(std::min(u0, u1)), dv = std::floor(std::min(v0, v1));
-                const float cu[4] = {u0 - du, u1 - du, u1 - du, u0 - du}, cv[4] = {v0 - dv, v0 - dv, v1 - dv, v1 - dv};
-                static const int triIdx[6] = {0, 1, 2, 0, 2, 3}, edgeIdx[8] = {0, 1, 1, 2, 2, 3, 3, 0};
-                const int *ix = wire ? edgeIdx : triIdx;
-                for (int q = 0; q < (wire ? 8 : 6); ++q) {
-                    const int k = ix[q];
-                    rlColor4ub(cr, cg, cb, ca);
-                    if (tid) rlTexCoord2f(cu[k], cv[k]);
-                    shaderNormal(fogBurn, s.fge, gsA, curPremul, curMode);
-                    rlVertex3f(c[k][0], c[k][1], c[k][2]);
-                }
+            EmitIn in{&it, md, slot, multi, pm, skinM, fudge, fzScale, {rowLen[0], rowLen[1], rowLen[2]}, ol, fade, fogBurn, tid, gsA,
+                      forceOpaque, curPremul, curMode, wire};
+            // Geometria parada (sem ossos, mapa de ambiente, zBufferFudge nem sprites; a mesma chave de um redesenho
+            // anterior): os vertices ficam na arena da GPU e as vistas e quadros seguintes so desenham a faixa (residentDraw)
+            if (stream && !pm && !md->skinned && !fudge && !it.env && md->sprites.empty() && gsA && tid != screenId_ &&
+                mdKeep.get() == md && residentDraw(in, mdKeep))
+                continue;
+            if (deferVerts && mdKeep.get() == md) {   // os vertices deste pedaco saem nas threads auxiliares (abaixo), no lugar dele no VtxStream
+                if (nJobs_ == jobs_.size()) jobs_.emplace_back();
+                EmitJob &j = jobs_[nJobs_++];
+                j.keep = mdKeep;
+                if (!pmTmp.empty()) { j.pmOwn.swap(pmTmp); in.pm = j.pmOwn.data(); }
+                j.in = in;
+                j.buf = vs_.defer();
+            } else {
+                struct Direct {
+                    decltype(vColor) &c; decltype(vTex) &t; decltype(vNormal) &n; decltype(vVertex) &v;
+                    void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { c(r, g, b, a); }
+                    void tex(float u, float w) { t(u, w); }
+                    void shaderN(float burn, bool fge, bool gs, bool pm, int mode) { n(burn, fge, gs, pm, mode); }
+                    void vertex(float x, float y, float z) { v(x, y, z); if (drawProfOn()) ++drawProf().emitted; }
+                    void tri(bool) {}
+                } sink{vColor, vTex, vNormal, vVertex};
+                emitVerts(ram, in, envV, sprView, sink);
             }
         }
-        if (open) { rlEnd(); rlDrawRenderBatchActive(); }   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+        if (nJobs_) {   // os pedacos adiados, em paralelo; cada um no seu buffer
+            ProfScope ps(DrawProf::Jobs);
+            JobPool::get().parallelFor(int(nJobs_), [&](int i) {
+                EmitJob &j = jobs_[size_t(i)];
+                BufSink sink{vs_.deferBuf(j.buf)};
+                emitVerts(ram, j.in, envV, sprView, sink);
+            });
+            if (drawProfOn()) for (size_t i = 0; i < nJobs_; ++i) drawProf().emitted += long(vs_.deferBuf(jobs_[i].buf).size());
+            for (size_t i = 0; i < nJobs_; ++i) { jobs_[i].keep.reset(); jobs_[i].pmOwn.clear(); }
+            nJobs_ = 0;
+        }
+        if (open) {   // descarrega o ultimo lote ANTES de religar o culling (o estado GL vale no flush)
+            if (stream) flushStream();
+            else { rlEnd(); rlDrawRenderBatchActive(); }
+        }
         if (clampedId) { rlTextureParameters(clampedId, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT); rlTextureParameters(clampedId, RL_TEXTURE_WRAP_T, RL_TEXTURE_WRAP_REPEAT); }
         rlNormal3f(0.f, 0.f, 0.f);   // o que vier depois (sombras, particulas) sai sem neblina
         setBlend(kGsAlphaNormal);
@@ -3113,7 +4154,7 @@ public:
             const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
             // UV invertido (u1 < u0, v1 < v0: o ScreenPolys espelha e o polyBuildPrim grava V = 0x80 - v): o GS anda de u0 para u1. O
             // DrawTexturePro com largura negativa espelha a faixa [x, x + |w|], entao a origem e o menor dos dois.
-            DrawTexturePro(tex, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0},
+            DrawTexturePro(tex, texelRect(tex, t.tex0, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0}),
                            Rectangle{gr.x0 + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
         }
         if (textShader_.id > 0) EndShaderMode();
@@ -3127,6 +4168,122 @@ public:
     bool splitEdges = false;
     // WOTM_LOCALPLAYER: localView >= 0 = so a vista do jogador local na tela (as barras das outras vistas ficam de fora)
     int localView = -1;
+    int stripView = -1;   // tela dividida de 3 jogadores: a vista que ocupa a linha de baixo inteira (2), -1 = nenhuma
+    // Barras sobre os inimigos sob o HUD do jogador: com `rects`, o draw as desenha em 2D logo antes da lista `hud`, na textura em que
+    // desenha (tw x th, com o canto (ox, oy) da janela de rw x rh), so as da vista `view` (-1 = todas, tela cheia); com barsUnderHud o
+    // drawScreenRects as pula. Sem `rects` (replay, corpus) elas saem no drawScreenRects, por cima de tudo.
+    struct BarPass {
+        const std::vector<ScreenRect> *rects = nullptr;
+        float rw = 0.f, rh = 0.f;
+        int view = -1;
+        float ox = 0.f, oy = 0.f, tw = 0.f, th = 0.f;
+    };
+    BarPass barPass;
+    bool barsUnderHud = false;
+
+    void drawBarPass() {
+        const BarPass &p = barPass;
+        auto mine = [&](const ScreenRect &r) {
+            return r.barView >= 0 && (p.view < 0 || r.barView == p.view) && (localView < 0 || r.barView == localView);
+        };
+        if (!p.rects || std::none_of(p.rects->begin(), p.rects->end(), mine)) return;
+        rlDrawRenderBatchActive();
+        rlDisableDepthTest();
+        // matrizes trocadas e devolvidas direto: a pilha do rlgl e uma so para as duas (e o push da modelview liga a transformacao
+        // na CPU), e o BeginMode3D do chamador ja empilhou a projecao. Ortografica da textura (tw x th), com a janela deslocada de (ox, oy)
+        const Matrix keepProj = rlGetMatrixProjection(), keepView = rlGetMatrixModelview();
+        Matrix ortho{};
+        ortho.m0 = 2.f / p.tw;
+        ortho.m5 = -2.f / p.th;
+        ortho.m10 = -2.f;
+        ortho.m12 = -1.f - 2.f * p.ox / p.tw;
+        ortho.m13 = 1.f + 2.f * p.oy / p.th;
+        ortho.m14 = -1.f;
+        ortho.m15 = 1.f;
+        Matrix ident{};
+        ident.m0 = ident.m5 = ident.m10 = ident.m15 = 1.f;
+        rlSetMatrixProjection(ortho);
+        rlSetMatrixModelview(ident);
+        BeginBlendMode(BLEND_ALPHA);
+        const GsScreenRect gr = gsScreenRect(p.rw, p.rh);
+        // O jogo prende o centro do icone a 8-16 px da borda da vista, e a barra e mais larga que o icone: em vez de cortada na borda,
+        // a barra inteira (todos os retangulos do mesmo icone, ScreenRect::anchor) e empurrada para dentro da area dela
+        struct Span { float x0 = 1e30f, x1 = -1e30f, lo = 0.f, hi = 0.f; };
+        std::vector<Span> spans;
+        for (const ScreenRect &r : *p.rects) {
+            if (!mine(r) || r.anchor < 0) continue;
+            if (size_t(r.anchor) >= spans.size()) spans.resize(size_t(r.anchor) + 1);
+            Span &sp = spans[size_t(r.anchor)];
+            float x0, x1;
+            barSpan(gr, p.rw, r, x0, x1, sp.lo, sp.hi);
+            sp.x0 = std::min(sp.x0, x0);
+            sp.x1 = std::max(sp.x1, x1);
+        }
+        for (const ScreenRect &r : *p.rects) {
+            if (!mine(r)) continue;
+            float nudge = 0.f;
+            if (r.anchor >= 0 && size_t(r.anchor) < spans.size()) {
+                const Span &sp = spans[size_t(r.anchor)];
+                if (sp.x0 < sp.lo) nudge = sp.lo - sp.x0;
+                else if (sp.x1 > sp.hi) nudge = std::max(sp.hi - sp.x1, sp.lo - sp.x0);
+            }
+            drawBar(gr, p.rw, p.rh, r, nudge);
+        }
+        EndBlendMode();
+        rlDrawRenderBatchActive();
+        rlSetMatrixProjection(keepProj);
+        rlSetMatrixModelview(keepView);
+    }
+
+    // Barra sobre o inimigo: x na janela (rw de largura) antes do corte e a area em que ela sai (lo, hi: a metade da vista na tela
+    // dividida, a janela fora dela)
+    void barSpan(const GsScreenRect &gr, float rw, const ScreenRect &r, float &x0, float &x1, float &lo, float &hi) const {
+        // px da janela por px do GS: a faixa da vista (gsScreenRect, na proporcao dela) sobre a largura dela, com a altura da vista na
+        // conta (quadrantes: 112 linhas na faixa da janela inteira). Na tela dividida a faixa e a da metade (2:3, 320 px do GS)
+        const ViewCtx &cv = curView();
+        const float k = cv.w > 0.f && cv.h > 0.f ? gr.w / cv.w * (cv.h / 224.f) : gr.w / 640.f;
+        x0 = gr.x0 + r.x0 * k;
+        x1 = gr.x0 + r.x1 * k;
+        lo = 0.f;
+        hi = rw;
+        if (splitEdges && r.barView != stripView) {
+            // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
+            // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
+            // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo. A faixa de baixo dos 3 jogadores (stripView) tem
+            // a largura da tela, como fora da tela dividida
+            const float half = 0.5f * rw, v = float(r.barView & 1);
+            const float shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
+            x0 += shift;
+            x1 += shift;
+            lo = v * half;
+            hi = (v + 1.f) * half;
+        }
+    }
+
+    // Uma barra sobre o inimigo, em pixels da janela de rw x rh; nudge = deslocamento da barra inteira para caber na area (drawBarPass)
+    void drawBar(const GsScreenRect &gr, float rw, float rh, const ScreenRect &r, float nudge = 0.f) {
+        const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
+        if (!a) return;
+        const float sy = rh / 224.f;
+        float x0, x1, lo, hi;
+        barSpan(gr, rw, r, x0, x1, lo, hi);
+        x0 += nudge;
+        x1 += nudge;
+        const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
+        x0 = std::max(x0, lo);
+        x1 = std::min(x1, hi);
+        if (x1 <= x0) return;
+        if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte
+            const Texture2D t = residentTexture(r.tex0);
+            if (!t.id || fw <= 0.f) return;
+            const float du = (r.u1 - r.u0) / fw;
+            const float u0 = r.u0 + (x0 - fx0) * du, u1 = u0 + (x1 - x0) * du;
+            DrawTexturePro(t, texelRect(t, r.tex0, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}), Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
+                           Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
+            return;
+        }
+        DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
+    }
 
     void drawScreenRects(float rw, float rh, bool underText = false) {
         const GsScreenRect gr = gsScreenRect(rw, rh);
@@ -3136,31 +4293,8 @@ public:
             const uint8_t a = uint8_t(std::min(255, int(r.a) * 255 / 0x80));
             if (!a) continue;
             if (r.barView >= 0 && localView >= 0 && r.barView != localView) continue;
-            if (r.barView >= 0) {   // barra sobre o inimigo
-                const float k = gr.w / 640.f;
-                float x0 = gr.x0 + r.x0 * k, x1 = gr.x0 + r.x1 * k;
-                const float fx0 = x0, fw = x1 - x0;   // antes do corte (o retrato tira dai o trecho da textura)
-                float shift = 0.f;
-                if (splitEdges) {
-                    // cada vista sai na sua metade com a camera dela (drawView): o centro da vista no jogo (160 ou 480) vai para o centro da
-                    // metade, e nao para onde a faixa 4:3 da janela inteira o poria (ficava 1/4 da sobra do widescreen para o lado). Nos
-                    // quadrantes vale a coluna (v & 1); a altura ja e a do quadrante no jogo
-                    const float half = 0.5f * rw, v = float(r.barView & 1);
-                    shift = v * half + 0.5f * half - (160.f + 320.f * v) * k - gr.x0;
-                    x0 = std::max(x0 + shift, v * half);
-                    x1 = std::min(x1 + shift, (v + 1.f) * half);
-                }
-                if (x1 <= x0) continue;
-                if (r.tex0) {   // retrato: o trecho da textura que sobra depois do corte na metade da vista
-                    const Texture2D t = residentTexture(r.tex0);
-                    if (!t.id || fw <= 0.f) continue;
-                    const float du = (r.u1 - r.u0) / fw;
-                    const float u0 = r.u0 + (x0 - (fx0 + shift)) * du, u1 = u0 + (x1 - x0) * du;
-                    DrawTexturePro(t, Rectangle{u0, std::min(r.v0, r.v1), u1 - u0, r.v1 - r.v0}, Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy},
-                                   Vector2{0.f, 0.f}, 0.f, Color{r.r, r.g, r.b, a});
-                    continue;
-                }
-                DrawRectangleRec(Rectangle{x0, r.y0 * sy, x1 - x0, (r.y1 - r.y0) * sy}, Color{r.r, r.g, r.b, a});
+            if (r.barView >= 0) {   // barra sobre o inimigo (com barsUnderHud ja saiu no draw, sob o HUD)
+                if (!barsUnderHud) drawBar(gr, rw, rh, r);
                 continue;
             }
             const bool full = r.x0 <= 0.f && r.x1 >= 640.f;
@@ -3182,7 +4316,11 @@ private:
         Texture2D t{};
         std::vector<uint32_t> px;
         uint32_t pal[256] = {}, w = 0, h = 0;
-        if (decodeResident(gs::Tex0::decode(tex0), px, w, h, false, pal)) {
+        const gs::Tex0 t0 = gs::Tex0::decode(tex0);
+        uint32_t origAmax = 0;   // alfa cru da original: o PNG de mod le o alfa na escala dela (texmods::loadPng)
+        if (!texmods::Index::get().empty() && decodeResident(t0, px, w, h, true, pal))
+            for (uint32_t c : px) origAmax = std::max(origAmax, c >> 24);
+        if (modTexture(Ram{}, 0, t0, (tex0 >> 34) & 1, false, px, w, h, origAmax > 0x80) || decodeResident(t0, px, w, h, false, pal)) {
             Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
             if (t.id) { GenTextureMipmaps(&t); SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }
@@ -3193,22 +4331,53 @@ private:
 
     std::unordered_map<uint32_t, std::shared_ptr<MeshData>> cache_;
     std::unordered_map<uint64_t, Texture2D> tex_;
+    int texFilter_ = 0;
+    bool anisoSet_ = false;   // algum anisotropico ja foi pedido (sem ele, nada a desfazer; sem a extensao o raylib avisa a cada chamada)
+    // Filtro atual numa textura do tex_ (feita ou refeita): mipmaps na primeira vez que o filtro pede
+    void applyTexFilter(Texture2D &t) {
+        if (!t.id) return;
+        if (texFilter_ <= 0) {
+            rlTextureParameters(t.id, RL_TEXTURE_MIN_FILTER, RL_TEXTURE_FILTER_LINEAR);
+            rlTextureParameters(t.id, RL_TEXTURE_MAG_FILTER, RL_TEXTURE_FILTER_LINEAR);
+            if (anisoSet_) rlTextureParameters(t.id, RL_TEXTURE_FILTER_ANISOTROPIC, 1);
+            return;
+        }
+        if (t.mipmaps <= 1) GenTextureMipmaps(&t);
+        rlTextureParameters(t.id, RL_TEXTURE_MIN_FILTER, t.mipmaps > 1 ? RL_TEXTURE_FILTER_MIP_LINEAR : RL_TEXTURE_FILTER_LINEAR);
+        rlTextureParameters(t.id, RL_TEXTURE_MAG_FILTER, RL_TEXTURE_FILTER_LINEAR);
+        if (texFilter_ >= 2 || anisoSet_) {
+            rlTextureParameters(t.id, RL_TEXTURE_FILTER_ANISOTROPIC, texFilter_ >= 2 ? texFilter_ : 1);
+            anisoSet_ = true;
+        }
+    }
     std::vector<uint32_t> seen_;   // nos ja visitados neste quadro (ciclos / DAG)
     int lod_ = -1;
+    float shadowLodD2_ = -1.f;   // >= 0: travessia de uma sombra (collectShadows): LOD por esta distancia ao quadrado e sem o corte da vista
     uint32_t destrHist_[8] = {};   // diagnostico (WOTM_DESTRSTAT): destrutiveis por estado atual
     Shader alphaShader_{};
+    VtxStream vs_;   // vertices do drawList sem o modo imediato do rlgl (wotm_fx.hpp)
     int alphaRefLoc_ = -1;   // uniform do teste de alfa (DrawItem::aref) no alphaShader_
     int fogLoc_[5] = {-1, -1, -1, -1, -1};   // uniforms da neblina no alphaShader_: fogEye, fogRow3, fogParams, fogColor, fogSplit
     bool alphaShaderTried_ = false;
     std::unordered_map<uint64_t, bool> partial_;   // textura (texKey) com alfa semitransparente
     std::unordered_map<uint64_t, uint8_t> texAmax_;   // maior alfa cru da textura (texKey): 0x80 = 1,0, ate 0xFF
-    std::vector<Texture2D> shadowTex_;   // silhuetas das sombras (uma por bloqueador desenhado)
+    static constexpr size_t kShadowCacheN = 48;
+    static constexpr float kShadowTol = 1.5f;   // unidades do mundo (a silhueta tem ~2 por texel)
+    std::vector<ShadowCacheEntry> shadowCache_;   // silhuetas das sombras pela chave das entradas (shadowKey), a menos usada sai
+    uint64_t shadowTick_ = 0;
+    std::vector<float> shadowCov_, shadowTmp_;    // cobertura e borrao da silhueta (reusados)
+    std::vector<uint32_t> shadowPx_;
     static constexpr int kShadowRes = 128;
     uint32_t resSig_ = 0;   // assinatura dos recursos em fileStatus ja carregados (loadResources)
     GameCamera cam_;   // camera do ultimo collect/blend (eixos para os sprites)
     bool eyeOk_ = false;
     float eye_[3] = {0, 0, 0};
-    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado
+    std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado (ou fxMix_ na interpolacao)
+    std::shared_ptr<uint8_t> fxMix_;         // copia de sombra das particulas no instante misturado (showBlend, Particles::blendRam)
+    // cameras de A, B e a misturada do ultimo showBlend (sem corte), com o foco de cada uma: blendFlares e blendAnchors; o show desliga
+    int attached_ = 0;   // objetos que o ultimo showBlend levou com a camera (pose relativa igual em A e B)
+    struct BlendView { bool on = false; int view = 0; float alpha = 1.f; M4 CA, CB, CI; interp::Focus fa, fb, fi; } hudMix_;
+    size_t fxMixSize_ = 0;
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual
     uint32_t animVal_ = 0; // animOutput.val (floats dos canais de animacao) do CHAR_INSTANCE que contem o no atual
@@ -3580,6 +4749,213 @@ private:
 
     // obj: luzes no espaco do objeto (DrawItem::lightObj) quando ele as tem; nulo = paraL girado pela matriz do objeto
     struct ObjLight { bool lit = false; float spec = 0.f; const DrawItem *pt = nullptr; const float (*obj)[3] = nullptr; };
+
+    // Entrada da conta dos vertices de um pedaco do drawList (item + slot + passe), tudo ja resolvido na thread da janela
+    struct EmitIn {
+        const DrawItem *it; const MeshData *md; uint32_t slot; bool multi;
+        const M4 *pm; M4 skinM; bool fudge; float fzScale; float rowLen[3];
+        ObjLight ol; float fade, fogBurn; unsigned tid; bool gsA, forceOpaque, premul; int mode; bool wire;
+        bool gpuCull = false;   // todas as faces, com Sink::tri marcando as de culling (a GPU corta: arena residente)
+    };
+    struct EmitJob { EmitIn in; std::shared_ptr<const MeshData> keep; std::vector<M4> pmOwn; int buf = -1; };
+    std::deque<EmitJob> jobs_;   // pedacos adiados do drawList em curso (reaproveitados)
+    size_t nJobs_ = 0;
+    // Destino dos vertices de um pedaco adiado: o mesmo que o VtxStream faria (cor, UV e normal correntes; a normal normalizada como o
+    // rlNormal3f), num buffer proprio
+    struct BufSink {
+        std::vector<VtxStream::V> &out;
+        VtxStream::V cur{};
+        float last[3] = {0.f, 0.f, 0.f};
+        void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { cur.c[0] = r; cur.c[1] = g; cur.c[2] = b; cur.c[3] = a; }
+        void tex(float u, float v) { cur.u = u; cur.v = v; }
+        void shaderN(float burn, bool fge, bool gs, bool pm, int mode) {
+            float n[3];
+            shaderNormalVals(burn, fge, gs, pm, mode, n);
+            if (n[0] == last[0] && n[1] == last[1] && n[2] == last[2]) return;
+            last[0] = n[0]; last[1] = n[1]; last[2] = n[2];
+            const float length = sqrtf(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+            if (length != 0.0f) { const float il = 1.0f / length; n[0] *= il; n[1] *= il; n[2] *= il; }
+            cur.nx = n[0]; cur.ny = n[1]; cur.nz = n[2];
+        }
+        void vertex(float x, float y, float z) { cur.x = x; cur.y = y; cur.z = z; out.push_back(cur); }
+        void tri(bool) {}
+    };
+
+    // ---- arena residente (VtxStream::arenaAlloc): pedacos do drawList que nao mudam entre vistas e quadros
+    // Tudo o que entra na conta dos vertices de um pedaco parado (emitVerts sem ossos, mapa de ambiente, fudge nem
+    // sprites). Bytes zerados antes de preencher (comparado com memcmp).
+    struct ResKey {
+        const MeshData *md; uint32_t sig, node, slot; int32_t mode;
+        float m[16], color[4], fade, fogBurn, uvOff[2], spec;
+        float lobj[4][3], ldir[4][3], lcol[3][3];
+        float ptRel[3][3], ptCol[3][3], ptFall[3];   // luzes pontuais (pointRgb)
+        uint8_t lit, ownLight, forceOpaque, premul, premulShader, texOn, multi, ptN;
+    };
+    struct ResRun { uint32_t start, n; bool cull; };
+    struct ResChunk { ResKey key; long off = 0; std::vector<ResRun> runs; std::shared_ptr<const MeshData> keep; };
+    // Sink da arena: como o BufSink, com as faixas de faces com e sem culling na ordem
+    struct ResSink : BufSink {
+        std::vector<ResRun> &runs;
+        ResSink(std::vector<VtxStream::V> &o, std::vector<ResRun> &r) : BufSink{o}, runs(r) {}
+        void tri(bool cull) {
+            if (runs.empty() || runs.back().cull != cull) runs.push_back({uint32_t(out.size()), 0, cull});
+            runs.back().n += 3;
+        }
+    };
+    std::unordered_map<uint64_t, ResChunk> resChunks_;
+    std::unordered_map<uint64_t, uint64_t> resSeen_;   // chave -> redesenho em que apareceu (pedaco so depois de repetir num redesenho seguinte)
+    std::vector<VtxStream::V> resTmp_;
+    bool resReset_ = false;   // arena cheia: zera no comeco do proximo drawList (com a fila vazia)
+    // Desenha o pedaco pela arena (true) ou deixa para o caminho comum (false: chave nova, arena cheia, WOTM_RESIDENT=0)
+    bool residentDraw(const EmitIn &in, const std::shared_ptr<const MeshData> &keep) {
+        // WOTM_RESIDENT=0 desliga; =2 poe na arena ja na primeira vez (replay e corpus, que nao repetem redesenhos)
+        static const int mode = [] { const char *e = std::getenv("WOTM_RESIDENT"); return e ? std::atoi(e) : 1; }();
+        static const bool diag = std::getenv("WOTM_IDCOLOR") || std::getenv("WOTM_NOVCOL") || std::getenv("WOTM_SUBPKT") || std::getenv("WOTM_UVNEG");
+        if (mode == 0 || diag) return false;
+        ResKey k;
+        std::memset(&k, 0, sizeof k);
+        const DrawItem &it = *in.it;
+        k.md = in.md; k.sig = in.md->sig; k.node = it.node; k.slot = in.slot; k.mode = in.mode;
+        std::memcpy(k.m, &it.m, sizeof k.m);
+        std::memcpy(k.color, it.color, sizeof k.color);
+        k.fade = in.fade; k.fogBurn = in.fogBurn; k.uvOff[0] = it.uvOff[0]; k.uvOff[1] = it.uvOff[1];
+        k.lit = in.ol.lit; k.forceOpaque = in.forceOpaque; k.premul = in.premul; k.premulShader = g_premulShader;
+        k.texOn = in.tid != 0; k.multi = in.multi;
+        if (in.ol.pt) {
+            const DrawItem &p = *in.ol.pt;
+            k.ptN = p.ptN;
+            std::memcpy(k.ptRel, p.ptRel, sizeof k.ptRel);
+            std::memcpy(k.ptCol, p.ptCol, sizeof k.ptCol);
+            std::memcpy(k.ptFall, p.ptFall, sizeof k.ptFall);
+        } else if (in.ol.lit) {
+            k.spec = in.ol.spec;
+            if (in.ol.obj) { k.ownLight = 1; std::memcpy(k.lobj, in.ol.obj, sizeof k.lobj); }
+            else { std::memcpy(k.ldir, lights_.dir, sizeof k.ldir); std::memcpy(k.lcol, lights_.col, sizeof k.lcol); }
+        }
+        static_assert(sizeof(ResKey) % 8 == 0, "ResKey em palavras de 8 bytes");
+        uint64_t h = 0x243F6A8885A308D3ull;   // de 8 em 8 bytes
+        for (size_t i = 0; i < sizeof k; i += 8) {
+            uint64_t w;
+            std::memcpy(&w, reinterpret_cast<const uint8_t *>(&k) + i, 8);
+            h = (h ^ w) * 0x9E3779B97F4A7C15ull;
+            h ^= h >> 29;
+        }
+        auto f = resChunks_.find(h);
+        if (f == resChunks_.end() || std::memcmp(&f->second.key, &k, sizeof k) != 0) {
+            auto s = resSeen_.find(h);
+            if (mode != 2 && (s == resSeen_.end() || s->second == redrawId)) {   // primeira vez (ou so neste redesenho): caminho comum
+                if (s == resSeen_.end()) {
+                    if (resSeen_.size() > 200000) resSeen_.clear();
+                    resSeen_.emplace(h, redrawId);
+                }
+                return false;
+            }
+            resTmp_.clear();
+            ResChunk c;
+            c.key = k;
+            c.keep = keep;
+            EmitIn ein = in;
+            ein.gpuCull = true;
+            ResSink sink(resTmp_, c.runs);
+            emitVerts(Ram{}, ein, EnvView{}, SpriteView{}, sink);
+            c.off = vs_.arenaAlloc(resTmp_.size());
+            if (c.off < 0) { resReset_ = true; return false; }
+            vs_.arenaUpload(c.off, resTmp_.data(), resTmp_.size());
+            if (drawProfOn()) drawProf().resUp += long(resTmp_.size());
+            f = resChunks_.insert_or_assign(h, std::move(c)).first;
+        }
+        for (const ResRun &r : f->second.runs) {
+            vs_.resident(f->second.off + long(r.start), int(r.n), r.cull);
+            if (drawProfOn()) drawProf().resident += long(r.n);
+        }
+        return true;
+    }
+    // Vertices de um pedaco do drawList (triangulos do slot e sprites do objeto). So le: roda nas threads auxiliares (JobPool)
+    template <class Sink> void emitVerts(const Ram &ram, const EmitIn &in, const EnvView &envV, const SpriteView &sprView, Sink &sink) const {
+        const DrawItem &it = *in.it;
+        const MeshData *md = in.md;
+        const auto &t = md->tris;
+        const uint32_t slot = in.slot;
+        const M4 *pm = in.pm;
+        const M4 &skinM = in.skinM;
+        const bool wire = in.wire, gsA = in.gsA;
+        const unsigned tid = in.tid;
+        static const bool idcMode = std::getenv("WOTM_IDCOLOR") != nullptr;   // uma vez: getenv por vertice e lento no Windows
+        static const bool idcNode = idcMode && std::atoi(std::getenv("WOTM_IDCOLOR")) == 2;   // =2: no >> 4 em RGB, sem mistura nem neblina
+        static const bool noVcol = std::getenv("WOTM_NOVCOL") != nullptr;
+        static const int onlySub = std::getenv("WOTM_SUBPKT") ? std::atoi(std::getenv("WOTM_SUBPKT")) : -1;
+        static const char *un = std::getenv("WOTM_UVNEG");   // diagnostico: WOTM_UVNEG=u|v|uv inverte o sinal do UV
+        for (size_t k = 0; k + 2 < t.size(); k += 3) {
+            if (in.multi && t[k].slot != slot) continue;   // so as secoes deste slot
+            if (onlySub >= 0 && md->skinned && t[k].sub != onlySub) continue;
+            float p[3][3];
+            for (int c = 0; c < 3; ++c) {
+                if (pm) skinVertexPM(pm, skinM, t[k + c], p[c]);
+                else xform(it.m, t[k + c].x, t[k + c].y, t[k + c].z, p[c]);
+                if (in.fudge) for (int a = 0; a < 3; ++a) p[c][a] = eye_[a] + (p[c][a] - eye_[a]) * in.fzScale;
+            }
+            if (t[k].cull && !wire && !in.gpuCull && backFacing(p, eye_)) continue;
+            sink.tri(t[k].cull != 0);
+            float eu[3], ev[3];   // UV do mapa de ambiente por vertice
+            bool envOk[3] = {false, false, false};
+            if (it.env && tid) {
+                for (int c = 0; c < 3; ++c) {
+                    float nw[3];
+                    envNormal(t[k + c], pm ? &pm[(t[k + c].cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, nw);
+                    envOk[c] = envUv(it.env, it.envK, envV, p[c], nw, eu[c], ev[c]);
+                }
+            }
+            for (int c = 0; c < 3; ++c) {
+                const int cs[2] = {c, (c + 1) % 3};
+                for (int e = 0; e < (wire ? 2 : 1); ++e) {
+                    const Vtx &v = t[k + cs[e]];
+                    bool gsV = gsA;   // modo GS do shader neste vertice (as cores de depuracao vao sem ele)
+                    if (idcNode) { gsV = false; const uint32_t n = it.node >> 4; sink.color(uint8_t(n), uint8_t(n >> 8), uint8_t(n >> 16), 255); }
+                    else if (idcMode) { gsV = false; const uint32_t tx = objectTexId(ram, it.node, slot); sink.color(uint8_t(tx & 255), uint8_t(tx >> 8), 128, 255); }
+                    else if (v.isAdc) { gsV = false; sink.color(255, 0, 0, 255); }   // WOTM_SHOWADC
+                    else if (noVcol && md->skinned) { gsV = false; sink.color(255, 255, 255, 255); }   // diagnostico
+                    else {
+                        uint8_t rgb[3];
+                        vertexRgb(in.ol, it.color, pm ? &pm[(v.cx & 0x7F) / 4] : nullptr, pm ? skinM : it.m, v, rgb, in.rowLen);
+                        // cor e alfa crus no modo GS (o shader faz texel * Cv / 128 e At * Av / 16384); no quadro anterior e no filme,
+                        // o antigo (cor dobrada e limitada a 1,0, alfa 4a/255)
+                        const float va = v.a * in.fade * (gsA ? 1.f : 4.f);
+                        const int kk = gsA ? 1 : 2;
+                        sink.color(uint8_t(std::min(255, rgb[0] * kk)), uint8_t(std::min(255, rgb[1] * kk)), uint8_t(std::min(255, rgb[2] * kk)),
+                                   in.forceOpaque ? uint8_t(255) : uint8_t(std::min(255.f, va)));
+                    }
+                    const float tu = envOk[cs[e]] ? eu[cs[e]] : v.u + it.uvOff[0], tv = envOk[cs[e]] ? ev[cs[e]] : v.v + it.uvOff[1];
+                    // texels do GS na tela 640x224, que em widescreen e a faixa 4:3 central do quadro anterior (gsScreenRect)
+                    if (tid && tid == screenId_) sink.tex(0.5f - 0.5f / wide + tu * (1024.f / 640.f) / wide, 1.f - tv * (256.f / 224.f));
+                    else if (tid && envOk[cs[e]]) sink.tex(tu, tv);
+                    else if (tid) { const float su = (un && std::strchr(un, 'u')) ? -1.f : 1.f, sv = (un && std::strchr(un, 'v')) ? -1.f : 1.f; sink.tex(su * (v.u + it.uvOff[0]), sv * (v.v + it.uvOff[1])); }
+                    sink.shaderN(in.fogBurn, v.fge && !idcNode, gsV, in.premul, in.mode);   // neblina e modulacao do GS no shader do draw
+                    sink.vertex(p[cs[e]][0], p[cs[e]][1], p[cs[e]][2]);
+                }
+            }
+        }
+        for (const ObjSprite &s : md->sprites) {
+            if (in.multi && s.slot != slot) continue;
+            float c[4][3];
+            if (!objSpriteCorners(sprView, it.m, s, c)) continue;
+            if (in.fudge) for (auto &q : c) for (int a = 0; a < 3; ++a) q[a] = eye_[a] + (q[a] - eye_[a]) * in.fzScale;
+            const uint8_t cr = uint8_t(std::min(255.f, s.r * it.color[0])), cg = uint8_t(std::min(255.f, s.g * it.color[1])),
+                          cb = uint8_t(std::min(255.f, s.b * it.color[2])), ca = uint8_t(std::min(255.f, s.a * in.fade));
+            // ST como o GS (repete): desloca o par para >= 0, para nao depender do modo de repeticao da textura do raylib
+            const float u0 = s.u0 + it.uvOff[0], u1 = s.u1 + it.uvOff[0], v0 = s.v0 + it.uvOff[1], v1 = s.v1 + it.uvOff[1];
+            const float du = std::floor(std::min(u0, u1)), dv = std::floor(std::min(v0, v1));
+            const float cu[4] = {u0 - du, u1 - du, u1 - du, u0 - du}, cv[4] = {v0 - dv, v0 - dv, v1 - dv, v1 - dv};
+            static const int triIdx[6] = {0, 1, 2, 0, 2, 3}, edgeIdx[8] = {0, 1, 1, 2, 2, 3, 3, 0};
+            const int *ix = wire ? edgeIdx : triIdx;
+            for (int q = 0; q < (wire ? 8 : 6); ++q) {
+                const int k = ix[q];
+                sink.color(cr, cg, cb, ca);
+                if (tid) sink.tex(cu[k], cv[k]);
+                sink.shaderN(in.fogBurn, s.fge, gsA, in.premul, in.mode);
+                sink.vertex(c[k][0], c[k][1], c[k][2]);
+            }
+        }
+    }
     // O programa do mapa de ambiente (DrawItem::env) nao aplica a luz paralela, mesmo com dirLight. O pktAddVu1ObjAsm escolhe o programa
     // das luzes pontuais (0x15D8, tabela +0x16C) antes do da luz paralela: com luz pontual, a paralela nao entra.
     static ObjLight objectLight(const Ram &ram, const DrawItem &it) {
@@ -3614,7 +4990,12 @@ private:
 
     // Cor do vertice nas unidades do GS (0x80 = 1,0): a do pacote vezes o multiplicador do objeto (DrawItem::color, vf31) ou, nos
     // iluminados, a luz do VU1. bone: osso x do vertice (skinned) ou nulo.
-    void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3]) const {
+    // Comprimento de cada linha 0-2 de m (o vertexRgb normaliza as linhas com ele): por item, fora do laco dos vertices
+    static void rowLengths(const M4 &m, float len[3]) {
+        for (int r = 0; r < 3; ++r) len[r] = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+    }
+    // rowLen: rowLengths(m) ja calculado (mesmo resultado; sem ele, calcula aqui)
+    void vertexRgb(const ObjLight &ol, const float mul[4], const M4 *bone, const M4 &m, const Vtx &v, uint8_t out[3], const float *rowLen = nullptr) const {
         const float vc[3] = {v.r * mul[0], v.g * mul[1], v.b * mul[2]};
         if (ol.pt) {
             pointRgb(*ol.pt, vc, v, out);
@@ -3635,7 +5016,7 @@ private:
         } else {
             float w[3] = {0, 0, 0};   // no mundo, com as linhas do objeto normalizadas (sem SCALE no caminho, a matriz e uma rotacao)
             for (int r = 0; r < 3; ++r) {
-                const float len = std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
+                const float len = rowLen ? rowLen[r] : std::sqrt(m.m[r][0] * m.m[r][0] + m.m[r][1] * m.m[r][1] + m.m[r][2] * m.m[r][2]);
                 if (len > 1e-6f)
                     for (int c = 0; c < 3; ++c) w[c] += n[r] * m.m[r][c] / len;
             }
@@ -3804,7 +5185,7 @@ private:
         ++byOp[op];
         switch (op) {
         case 0:                                                                                                 // OBJECT
-            if (!(ram.u16(node + 0xC) & 1) && outOfView(ram, node, m)) break;
+            if (!(ram.u16(node + 0xC) & 1) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) { ++culled; break; }
             items.push_back({m, node, animPkt_, lodIdx_, nullptr, blend_, fade_});
             items.back().cs = cs_;
             // O pktAddVu1ObjAsm so grava o qword 20 (especular, specIntensity +0x6C) com specLightMe (0x2000); sem ele o programa de
@@ -3827,7 +5208,7 @@ private:
         case 1: {                                                                           // GROUP (ctx em +4 = estado do GS: ALPHA_1 e TEST_1 dos filhos)
             const uint16_t gflags = ram.u16(node + 0xA);                                    // visual (bit 0), noFOV (bit 2)
             if (!(gflags & 1)) break;
-            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && outOfView(ram, node, m)) break;
+            if (!(gflags & 4) && ram.u32(addr::g_doFOVGroups) && shadowLodD2_ < 0.f && outOfView(ram, node, m)) { ++culled; break; }
             const CtxScope cs(*this, ram, ram.u32(node + 4));
             kids(ram, node + 0x20, ram.u16(node + 8), m, depth);
             break;
@@ -3838,9 +5219,11 @@ private:
                 int pick = -1;
                 if (lod_ >= 0) pick = int(std::min<uint32_t>(uint32_t(lod_), n - 1));
                 else {
-                    // hierLod: o MAIOR indice cujo switchOutDis (distancia ao quadrado) > distancia ao centro do LOD; nenhum = nao desenha
+                    // hierLod: o MAIOR indice cujo switchOutDis (distancia ao quadrado) > distancia ao centro do LOD; nenhum = nao desenha.
+                    // Na travessia da sombra (collectShadows) a distancia e a fixa do bloqueador (shadowLodRangeSq do jogo)
                     float d2 = 0.f;
-                    if (eyeOk_) {
+                    if (shadowLodD2_ >= 0.f) d2 = shadowLodD2_;
+                    else if (eyeOk_) {
                         float c[3];
                         xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), c);
                         d2 = (c[0] - eye_[0]) * (c[0] - eye_[0]) + (c[1] - eye_[1]) * (c[1] - eye_[1]) + (c[2] - eye_[2]) * (c[2] - eye_[2]);
@@ -3858,7 +5241,7 @@ private:
                 // senao i - 1 inteiro e i com alfa 2t; sem i - 1, i com alfa t. Sem isso o nativo trocava de LOD de uma vez (checagem
                 // VU1, pista 7: o VU1 desenhava uma instancia "a mais", o LOD vizinho no mesmo lugar).
                 float fi = 1.f, fprev = 0.f;
-                const float fd = lod_ < 0 && eyeOk_ ? ram.f32(node + 0x20 + 16 * i) : 0.f;
+                const float fd = lod_ < 0 && eyeOk_ && shadowLodD2_ < 0.f ? ram.f32(node + 0x20 + 16 * i) : 0.f;
                 const bool savedX = lodX_;
                 if (fd > 0.f) {
                     float d2 = 0.f, cc[3];
@@ -3987,6 +5370,48 @@ private:
             } else walk(ram, c, m, depth + 1);
             break;
         }
+        case 5: {                                                                           // LIGHT (HierLight): so as com lens flare
+            const uint32_t fl = ram.u32(node + 4);
+            if ((fl & 3) != 3 || worldLights.size() >= 256) break;
+            // o collectShadows percorre os monstros de novo (silhueta da sombra): a mesma luz no mesmo _cs so conta uma vez
+            if (std::any_of(worldLights.begin(), worldLights.end(), [&](const WorldLight &o) { return o.node == node && o.cs == cs_; })) break;
+            WorldLight l;
+            xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), l.p);
+            const float bx = ram.f32(node + 0x20), by = ram.f32(node + 0x24), bz = ram.f32(node + 0x28);
+            for (int k = 0; k < 3; ++k) l.beam[k] = bx * m.m[0][k] + by * m.m[1][k] + bz * m.m[2][k];
+            l.flags = fl & 0xFF;
+            l.node = node;
+            l.cs = cs_;
+            l.id = (ram.u32(node) >> 7) & 0x7FF;   // head.id2 (bits 7..17)
+            l.intensity = ram.f32(node + 8);
+            for (int k = 0; k < 3; ++k) l.rgb[k] = ram.f32(node + 0x30 + 4 * uint32_t(k));
+            l.bw = ram.f32(node + 0x3C);
+            worldLights.push_back(l);
+            break;
+        }
+        case 22: {                                                                          // PARTICLE_EMITTER (HierParticleEmitter)
+            if (emitters.size() >= 256) break;
+            WorldEmitter em;
+            em.node = node;
+            em.preset = ram.u32(node + 4);
+            xform(m, ram.f32(node + 0x10), ram.f32(node + 0x14), ram.f32(node + 0x18), em.e);
+            if (std::any_of(emitters.begin(), emitters.end(), [&](const WorldEmitter &o) {   // de novo pelo collectShadows
+                    return o.node == node && std::fabs(o.e[0] - em.e[0]) + std::fabs(o.e[1] - em.e[1]) + std::fabs(o.e[2] - em.e[2]) < 0.01f;
+                }))
+                break;
+            const float h = ram.f32(node + 0x24), pt = ram.f32(node + 0x28);
+            const float nl[3] = {std::cos(pt) * std::sin(h), std::cos(pt) * std::cos(h), std::sin(pt)};
+            float a0[3];   // mathfMatrixFromNormal: com n vertical, linha 0 = +X; no geral, X horizontal perpendicular a n
+            if (std::fabs(nl[2]) > 0.999f) { a0[0] = 1.f; a0[1] = 0.f; a0[2] = 0.f; }
+            else { const float l = std::sqrt(nl[0] * nl[0] + nl[1] * nl[1]); a0[0] = nl[1] / l; a0[1] = -nl[0] / l; a0[2] = 0.f; }
+            const float a2[3] = {a0[1] * nl[2] - a0[2] * nl[1], a0[2] * nl[0] - a0[0] * nl[2], a0[0] * nl[1] - a0[1] * nl[0]};
+            for (int k = 0; k < 3; ++k) {
+                em.r0[k] = a0[0] * m.m[0][k] + a0[1] * m.m[1][k] + a0[2] * m.m[2][k];
+                em.r2[k] = a2[0] * m.m[0][k] + a2[1] * m.m[1][k] + a2[2] * m.m[2][k];
+            }
+            emitters.push_back(em);
+            break;
+        }
         case 31: {                                                                          // DESTRUCTIBLE: estado 0 (intacto)
             if (ram.u16(node + 0xA)) { const uint32_t c = ram.u32(node + 0xC); if (ram.ok(c)) walk(ram, c, m, depth + 1); }
             break;
@@ -4041,9 +5466,12 @@ private:
         cs_ = savedCs;
         if (hpList_ && needDrawMe && !isHud) {   // lista de alta prioridade: passada propria (ver `hp`)
             std::vector<DrawItem> &dst = isButtonId(id) ? hpOverlay : hp;
+            if (isButtonId(id))
+                for (size_t i = before; i < items.size(); ++i) items[i].btnId = uint16_t(id);
             dst.insert(dst.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
         } else if (needDrawMe && isButtonId(id)) {   // icones de botao: por cima da cena, sem profundidade (ver `overlay`)
+            for (size_t i = before; i < items.size(); ++i) items[i].btnId = uint16_t(id);
             overlay.insert(overlay.end(), std::make_move_iterator(items.begin() + before), std::make_move_iterator(items.end()));
             items.resize(before);
         } else if (isHud) {   // HUD: por cima da cena (ver `hud`), com o id para a checagem

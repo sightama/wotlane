@@ -115,8 +115,11 @@ bool wotmPauseBlock(PS2Runtime *rt)
         cv.wait_for(lk, std::chrono::milliseconds(50));
     if (steps > 0 && !photoRun) --steps;
     lk.unlock();
-    // o relogio virtual do EE fica parado junto: os prazos dos vsyncs pulam o tempo da pausa (senao venciam todos na volta)
-    if (rt) rt->eeScheduler().shiftHostDeadlines(std::chrono::steady_clock::now() - t0);
+    // Os vblanks contados durante a pausa nao vencem na volta (shiftHostDeadlines zera o vblankDue). O prazo do proximo vblank NAO
+    // anda: o relogio do vblank (EeSchedulerGame.cpp) segue rodando na pausa e o mantem perto de agora; somar a duracao da pausa
+    // deixava o jogo parado por esse mesmo tempo depois de soltar (modo foto de um minuto = um minuto "congelado")
+    (void)t0;
+    if (rt) rt->eeScheduler().shiftHostDeadlines(std::chrono::steady_clock::duration::zero());
     blocked.store(false, std::memory_order_relaxed);
     tookFrame.store(true, std::memory_order_relaxed);
     return true;
@@ -162,11 +165,22 @@ static void wotmFotoDone(const uint8_t *rdram, uint32_t frame, const std::string
     std::fprintf(stderr, "[foto] %u: g_frame %u gravado em %s\n", done.n, frame, file.c_str());
 }
 
-// Apresentacao, antes do desenho: F6/F7/F8 (a nota aberta fica com o teclado)
+// Modo foto (wotm_photo.inc): liga e desliga a mesma pausa do F7
+void wotmPhotoPause(bool on)
+{
+    using namespace wotm_foto;
+    std::lock_guard<std::mutex> lk(m);
+    paused = on;
+    steps = 0;
+    cv.notify_all();
+}
+
+// Apresentacao, antes do desenho: F6/F7/F8 (a nota aberta fica com o teclado; o modo foto cuida da pausa sozinho)
 static void wotmFotoKeys()
 {
     using namespace wotm_foto;
-    if (noteOpen || wotm_netstatus::g_active) return;   // em rede a pausa pararia so este PC (e o lockstep, todos)
+    wotmPhotoWatchdog();
+    if (noteOpen || wotmPhotoActive() || wotm_netstatus::g_active) return;   // em rede a pausa pararia so este PC (e o lockstep, todos)
     std::lock_guard<std::mutex> lk(m);
     if (IsKeyPressed(KEY_F7)) {
         paused = !paused;
@@ -256,6 +270,7 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
         DrawTextEx(f, (note + (blink ? "_" : " ")).c_str(), Vector2{28.f, y + 44.f}, 22.f, 0.f, RAYWHITE);
         return;
     }
+    if (wotmPhotoActive()) return;   // o modo foto tem a legenda dele
     bool isPaused, run;
     {
         std::lock_guard<std::mutex> lk(m);

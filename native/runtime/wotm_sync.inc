@@ -320,7 +320,7 @@ namespace wotm_sync
     {
         static const char *const kVars[] = {"WOTM_MATCH", "WOTM_PLAYERS", "WOTM_AIVSAI", "WOTM_RATEMIN", "WOTM_FIXEDSTEP", "WOTM_SEED",
                                             "WOTM_HIGHRAM", "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_CHEATS", "WOTM_CLOAK", "WOTM_SAVEJSON",
-                                            "WOTM_SAVEAUTO", "WOTM_FREECAM", "PS2X_FMV", "PS2X_SKIP_MOVIES", "PS2X_SKIP_CMOVIE", "PS2X_NOOP"};
+                                            "WOTM_FREECAM", "PS2X_FMV", "PS2X_SKIP_MOVIES", "PS2X_SKIP_CMOVIE", "PS2X_NOOP"};
         std::string all;
         for (const char *v : kVars)
         {

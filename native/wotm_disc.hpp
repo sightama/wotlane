@@ -1,5 +1,6 @@
 // Arquivos do disco do jogo na camada nativa: a pasta do disco extraido (cdRoot) ou uma imagem ISO9660 (PS2X_CD_IMAGE).
 // Usado pelos filmes (wotm_fmv.hpp) e pelo icone de salvamento (wotm_saveicon.hpp). So le; nao depende do runtime.
+// Arquivos em mods/ (wotm_mods.hpp) vencem os do disco em readFile e no locate dos filmes.
 #pragma once
 #include <cctype>
 #include <cstdint>
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "wotm_mods.hpp"   // readFile procura antes em mods/
 
 namespace wotm::disc {
 
@@ -110,8 +112,9 @@ inline std::string resolveDiscPath(const std::filesystem::path &root, const std:
 // Le um arquivo inteiro do disco: primeiro a pasta, depois a ISO. `rel` como "MEMCRD/ICON.ICO".
 inline bool readFile(const std::filesystem::path &root, const std::string &iso, const std::string &rel, std::vector<uint8_t> &out) {
     Source src;
-    if (std::string p = resolveDiscPath(root, rel); !p.empty()) src = Source{p};
-    else if (!iso.empty()) src = isoFind(iso, rel);
+    if (std::string p = wotm::mods::Registry::get().hostPath(rel); !p.empty()) src = Source{p};   // mods/ vence o disco
+    else if (std::string p = resolveDiscPath(root, wotm::mods::Registry::get().aliasOf(rel)); !p.empty()) src = Source{p};   // traje de mod: o do base
+    else if (!iso.empty()) src = isoFind(iso, wotm::mods::Registry::get().aliasOf(rel));
     if (!src.ok()) return false;
     FILE *f = std::fopen(src.path.c_str(), "rb");
     if (!f) return false;

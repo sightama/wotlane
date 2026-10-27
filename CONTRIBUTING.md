@@ -2,8 +2,8 @@
 
 Obrigado por ajudar! O projeto é uma decompilação cujo objetivo é um port nativo de PC fácil de modar; leia o [CLAUDE.md](CLAUDE.md) (serve para humanos também) e o [README](README.md) para o setup.
 
-## O que priorizar (desde 2026-10-09)
-- **Byte match não é mais exigido.** Uma função `equivalent` (C++ legível, comportamento conferido) vale tanto quanto uma `matched` para o objetivo. Se bater barato, ótimo; não gaste horas afinando.
+## O que priorizar
+- **Byte match não é exigido.** Uma função `equivalent` (C++ legível, comportamento verificado) vale tanto quanto uma `matched` para o objetivo. Se bater barato, ótimo; não gaste horas afinando.
 - **Escolha pelo que importa para modar**, não pelo tamanho: lógica de jogo, IA, monstros, fases, animação e formatos de arquivo. A fila está em `config/boot_coverage_asm.csv`
   (funções ainda em asm que o jogo chama do boot até a interface). Deixe para o fim memory card (`McPage`/`McFile`), `input`, `vi`, `ps`, `sce/*` e `lib989snd`.
 - **Confira o comportamento**: `tools/difftest.py` para funções sem VU0; `tools/recomp_oracle` (veja o README dele) para as que usam VU0 ou `min/max/madd`. Não use `sqrtf` em código novo: use `eeSqrtf` (`include/vecmath.h`).
@@ -20,7 +20,7 @@ Ao contribuir, você concorda que sua contribuição seja distribuída sob a [GP
 1. Fork do repo (ou branch, se você tem acesso de escrita) a partir da `master` atualizada: `git switch -c <tu>-<assunto>`.
 2. Um PR por TU ou por pequeno grupo de funções relacionadas.
 3. Antes de cada commit: `sh tools/wsl/gate.sh` tem que terminar em `ROM OK`.
-4. **Não commite** `config/status.csv`: é gerado (`tools/progress.py`) e causa conflito em todo PR. O dono regenera depois do merge. Evite `git commit -a`.
+4. **Não commite** `config/status.csv`: é gerado (`tools/progress.py`) e causa conflito em todo PR. O dono o regenera ao integrar o PR. Evite `git commit -a`.
 5. Abra o PR contra `master` preenchendo o template. Não há CI (não dá para buildar sem a ROM), então a saída do `gate.sh` no PR é a prova. O merge na `master` é feito só pelo dono e por `LostTwilightG`.
 6. Mantenha o branch atualizado com `git rebase origin/master`.
 

@@ -10,12 +10,12 @@
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "uso: monview <disco> MONKEY0 [--anim 90] [--frame 0] [--yaw 35] [--pitch 8] [--size 512] [--shot saida.png]\n");
+        std::fprintf(stderr, "uso: monview <disco> MONKEY0 [--anim 90] [--frame 0] [--yaw 35] [--pitch 8] [--size 512] [--zoom 1] [--shiftx 0] [--shifty 0] [--fwd 0] [--shot saida.png]\n");
         return 1;
     }
     const std::string disc = argv[1], name = argv[2];
     int anim = wotm::model::kIdle, size = 512;
-    float frame = 0.f, yaw = 35.f, pitch = 8.f, zoom = 1.f;
+    float frame = 0.f, yaw = 35.f, pitch = 8.f, zoom = 1.f, shiftX = 0.f, shiftY = 0.f, fwd = 0.f;
     const char *shot = nullptr, *dumpTex = nullptr;
     bool noAbe = false;
     for (int i = 3; i + 1 < argc; ++i) {
@@ -29,6 +29,9 @@ int main(int argc, char **argv) {
         else if (a == "--shot") shot = argv[++i];
         else if (a == "--dumptex") dumpTex = argv[++i];
         else if (a == "--noabe") noAbe = true;
+        else if (a == "--shiftx") shiftX = float(std::atof(argv[++i]));
+        else if (a == "--shifty") shiftY = float(std::atof(argv[++i]));
+        else if (a == "--fwd") fwd = float(std::atof(argv[++i]));
     }
     wotm::model::Model m;
     if (!m.load(disc, {}, name)) {
@@ -74,6 +77,9 @@ int main(int argc, char **argv) {
     InitWindow(shot ? 64 : size, shot ? 64 : size, "monview");
     wotm::model::Renderer r;
     r.skipAbe = noAbe;
+    r.shiftX = shiftX;
+    r.shiftY = shiftY;
+    r.fwd = fwd;
     wotm::model::FxTextures fx;
     if (!fx.load(disc, {})) std::fprintf(stderr, "sem LVL/CENTRAL.TEX/.RTX: sem fogo nem lens flare\n");
     r.setFx(&fx);

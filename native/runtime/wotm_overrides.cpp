@@ -11,6 +11,7 @@
 // um pouco mais devagar em vez de pular, e todo integrador fica na margem para a qual foi feito. Nada muda quando o rate
 // ja e >= 30 (retail). Substitui os limites pontuais anteriores (WOTM_SPRINGMIN na mola, WOTM_TURNMIN no giro).
 #include "ps2_runtime.h"
+#include "wotm_menucpus.h"   // CPUs 4..7 da tela 12
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "ps2_runtime_macros.h"
 #include "runtime/ee_scheduler.h"
@@ -23,6 +24,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 #include <memory>
@@ -81,28 +84,44 @@ void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, u
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: retrato
 void wotmBarView(int view);   // wotm_live.inc: vista das barras que vem a seguir
 void wotmSoundFrame(unsigned fields);   // wotm_snd.inc: o som anda um quadro do jogo (modo deterministico)
+void wotmHudAnchor(const uint8_t *rdram, float cx, float cy, const float *world, bool bars);   // wotm_live.inc: icone de vida (modo foto)
+void wotmHudAnchorEnd();
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: x da barra com o limite da vista widescreen
 void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int kind);   // wotm_live.inc: numero de dano (0 golpe, 1 arremesso, 2 especial)
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: escolha de lados do 2 jogadores no telao do menu
+void wotmLevelSelInstall(PS2Runtime &runtime);   // wotm_levelsel.inc: fases escondidas e RANDOM na selecao de fase
+void wotmMainMenuInstall(PS2Runtime &runtime);   // wotm_mainmenu.inc: menu principal em texto
 
 // Trapacas de debug: a janela (menu F1, wotm_live.inc) escreve, a thread do EE (monsterUpdateCheats) le. Bits em wotm_cheats.h.
 #include "wotm_cheats.h"
+#include "wotm_settings.hpp"   // opcoes ao vivo (painel "recompiled options" e launcher)
 std::atomic<uint32_t> g_wotmCheats{0};
 std::atomic<bool> g_wotmCheatWin{false};
 
 // Camera livre de debug (F5): a janela (wotm_freecam.inc) move a pose, a thread do EE a poe no _cs da vista 0 (freeCamWrite).
 #include "wotm_freecam.h"
+#include "wotm_mouse.hpp"   // mouse na camera moderna (wotm_orbit.inc consome, a janela acumula)
 std::atomic<bool> g_wotmFreeCam{false};
 std::atomic<bool> g_wotmFreeCamPad{false};
 std::mutex g_wotmFreeCamM;
 WotmFreeCamPose g_wotmFreeCamPose;
 
-// Save em JSON ao lado do mc0/ (POS_FRONTEIRA.md, item 3): ganchos no MonsterMc::stdInit/stdExit.
+// Save em JSON ao lado do mc0/ (NATIVO.md, "Save em JSON"): ganchos no MonsterMc::stdInit/stdExit.
 #include "wotm_save.inc"
 // "Press start" do menu principal: X vale como Start e o botao vale ja durante a transicao.
 #include "wotm_menu.inc"
-// Tela dividida de 3 e 4 jogadores (POS_FRONTEIRA.md, item 11; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
+// Tela dividida de 3 e 4 jogadores (NATIVO.md, "Tela dividida de 3 e 4 jogadores"; WOTM_PLAYERS=3 ou 4): vistas, cameras, carga e controles 3 e 4.
 #include "wotm_split4.inc"
+// Eliminacao e minigames com 3 e 4 jogadores (por cima dos ganchos do wotm_split4.inc)
+#include "wotm_modes4.inc"
+// Pasta mods/ que sobrepoe arquivos do disco (MODS.md): fileCdSearchFile e sceCdRead.
+#include "wotm_mods.inc"
+// Skins de mod na luta (item 8): sons do traje base e IAs sorteadas com skin
+#include "wotm_skins.inc"
+// Monstros custom (item 8, parte 2): Goliath Prime jogavel (visivel com IAs, toma dano delas)
+#include "wotm_custom.inc"
+// Modo treino (item 9): esferas dos golpes, dano exato e boneco (WOTM_TRAINING, menu F2)
+#include "wotm_training.inc"
 
 namespace
 {
@@ -127,6 +146,9 @@ namespace
     PS2Runtime::RecompiledFunction g_origWaitMinRate = nullptr, g_origGetCurTics = nullptr;
     uint64_t g_frameStartVsync = 0;
     bool g_frameStartValid = false;
+    std::chrono::steady_clock::time_point g_frameStartHost;   // [field] sv=: inicio do quadro no relogio do host
+    double g_svAtMs = -1.0;                                   // [field] sv=: 1a chamada a sceGsSyncV (ms desde o inicio do quadro)
+    int g_svVblanks = -1;                                     // vblanks entregues entre o inicio do quadro e essa chamada
 
     void getCurTicsMarked(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -177,6 +199,7 @@ namespace
             g_t1Zero = now;
             g_frameStartVsync = runtime->eeScheduler().currentVSyncTick();
             g_frameStartValid = true;
+            g_frameStartHost = std::chrono::steady_clock::now();
         }
     }
 
@@ -205,8 +228,9 @@ namespace
     // Partida direta, WOTM_MATCH="<monstro do jogador>[,<IA>...ate 7],<fase>" (indices de MonsterLongNames e GameLevelNames;
     // "3,1,1" = lizard contra monkey em central; "3,1,2,5,1" = lizard contra monkey, robot e mantis): userintMain (0x1D9868) nao abre
     // o menu e devolve 0 (comecar a sessao) com o shell como o menu o deixa em "1 jogador contra a CPU" (medido com dumps no fim do
-    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 0 a 7 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas; monstro
-    // repetido ganha o proximo figurino (o menu nao deixa dois iguais no mesmo figurino). A diferenca e m_killTarget 0 (o menu poe 1): sem
+    // menu do roteiro -Auto): desafio (m_mode 2), 1 jogador + 0 a 7 IAs (m_monsterSel[4 + i], m_costume[2 + i]), 3 vidas. Cada monstro
+    // aceita o figurino como "<monstro>:<0-3>" ("3:2,1:1,1"); sem ":" ou com um figurino ja usado pelo mesmo monstro, fica com o menor
+    // livre (o menu nao deixa dois iguais no mesmo figurino). A diferenca e m_killTarget 0 (o menu poe 1): sem
     // meta de vitorias, EvaluateOnePlayerChallengeStatus so reergue o monstro derrubado e a luta segue, sem o dialogo "PLAY AGAIN"
     // que esperaria o pad. O filme de abertura (uiMain, 0x1D93D8) vira no-op. Cada fim de rodada (entrada de
     // Shell::EvaluateGameStatus, 0x1A7960) sai no log como [partida] com a vida e as vitorias dos dois monstros.
@@ -219,6 +243,7 @@ namespace
     // e fase + 8 monstros ocupam 9 dos 13 arquivos do fileStatus. O teto pratico e a RAM: veja wotmCheckLoadEnd.
     constexpr int kMatchMaxAIs = 7;
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // jogador, depois as IAs
+    int g_matchCostumes[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // -1: o menor figurino livre
     int g_matchAIs = 0, g_matchLevel = -1;
     // WOTM_PLAYERS=2: os dois primeiros monstros da WOTM_MATCH sao os jogadores 1 e 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
     // tela dividida, como o free for all de 2 jogadores do menu); com WOTM_AIVSAI=1 os dois ficam com a IA. WOTM_PLAYERS=3 ou 4: os
@@ -227,6 +252,7 @@ namespace
     // no lugar da IA (g_padAIs; wotm_multi.inc, aiUpdateInputsFromPad).
     int g_matchPlayers = 1;
     int g_padAIs = 0;
+    int g_matchMode = 0, g_matchContinues = 2;   // WOTM_MODE=<modo>[:<continues>] (6 eliminacao, 7 dodgeball, 8 big shot, 9 crush)
     unsigned g_matchCount = 0;
     bool g_aiVsAi = false;
 
@@ -236,19 +262,35 @@ namespace
             WRITE32(kShell + 0x2938 + 4 * i, 0);                         // m_monsterSel (4 jogadores + ate 12 IAs, ate 0x2978)
         for (uint32_t i = 0; i < 12; ++i)
             WRITE32(kShell + 0x2BE0 + 4 * i, 0);                         // m_costume (ate 0x2C10, onde mora m_mode)
-        for (int i = 0; i < g_matchPlayers + g_matchAIs; ++i)
+        // figurinos: primeiro os pedidos (o primeiro a pedir fica com ele), depois os automaticos no menor livre do mesmo monstro
+        const int total = g_matchPlayers + g_matchAIs;
+        int costumes[kMatchMaxAIs + 1];
+        auto taken = [&](int i, int c) {
+            for (int j = 0; j < total; ++j)
+                if (j != i && costumes[j] == c && g_matchMonsters[j] == g_matchMonsters[i])
+                    return true;
+            return false;
+        };
+        for (int i = 0; i < total; ++i)
+            costumes[i] = -1;
+        for (int i = 0; i < total; ++i)
+            if (g_matchCostumes[i] >= 0 && !taken(i, g_matchCostumes[i]))
+                costumes[i] = g_matchCostumes[i];   // 4 ou mais: traje de mod (MON/<PREFIXO><n>.* servido por mods/)
+        for (int i = 0; i < total; ++i)
+            for (int c = g_matchMonsters[i] == 13 ? 1 : 0; costumes[i] < 0; ++c)   // Goliath: o traje 0 e um prototipo (wotm_custom.inc)
+                if (c > 3 || !taken(i, c))
+                    costumes[i] = c & 3;   // mais de 4 iguais: repete (o menu nao chega nisso)
+        for (int i = 0; i < total; ++i)
         {
-            uint32_t costume = 0;
-            for (int j = 0; j < i; ++j)
-                costume += g_matchMonsters[j] == g_matchMonsters[i];
+            const uint32_t costume = static_cast<uint32_t>(costumes[i]);
             const bool player = i < g_matchPlayers;
             const uint32_t ai = static_cast<uint32_t>(i - g_matchPlayers);
             const uint32_t slot = player ? uint32_t(i) : 4u + ai, costumeSlot = player ? uint32_t(i) : 2u + ai;
             WRITE32(kShell + 0x2938 + 4 * slot, static_cast<uint32_t>(g_matchMonsters[i] << 5));   // (monstro << 5) | variante
             if (player && i >= 2)   // jogadores 3 e 4: m_costume[2..] e das IAs (wotm_split4.inc os carrega pelo caminho delas)
-                wotm_split4::g_extraCostume[i - 2] = costume & 3u;
+                wotm_split4::g_extraCostume[i - 2] = costume;
             else
-                WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume & 3u);
+                WRITE32(kShell + 0x2BE0 + 4 * costumeSlot, costume);
         }
         WRITE32(kShell + 0x2A44, 0);                                      // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
@@ -258,15 +300,43 @@ namespace
             WRITE32(kShell + 0x2BBC + 4 * i, 3);                         // m_lives
         // m_mode: free for all de 1 jogador (2) ou batalha multijogador (3: o TheGame::gameReestablishViews cria as duas vistas da tela
         // dividida nos modos 3, 6 e 7; com o 2 a luta ficava numa vista so e as cenas de cinema, que alternam a divisao, a ligavam)
-        const uint32_t mode = g_matchPlayers > 1 ? 3u : 2u;
+        // WOTM_MODE (com 2 ou mais jogadores): eliminacao (6, continues em m_elimination e nos dois m_continues, monstros do comeco
+        // usados como a selecao do retail os deixa) ou um minigame (7 dodgeball, 8 big shot, 9 crush; a fase e a 25, 26 ou 27)
+        const uint32_t mode = g_matchPlayers > 1 && g_matchMode ? uint32_t(g_matchMode) : g_matchPlayers > 1 ? 3u : 2u;
         WRITE32(kShell + 0x2C10, mode);
+        WRITE32(kShell + 0x2B54, mode);                                   // m_battleMode
         WRITE32(kGame + 0x1203C8, mode);                                  // TheGame::m_gameMode
-        std::fprintf(stderr, "[partida] %u: monstro %d (jogador%s)", ++g_matchCount, g_matchMonsters[0], g_aiVsAi ? " sob IA" : "");
+        if (mode == 6u)
+        {
+            WRITE32(kShell + 0x2B48, static_cast<uint32_t>(g_matchContinues));   // m_elimination
+            WRITE32(kShell + 0x2B40, static_cast<uint32_t>(g_matchContinues));   // m_continues[0..1]
+            WRITE32(kShell + 0x2B44, static_cast<uint32_t>(g_matchContinues));
+            WRITE32(kShell + 0x2B4C, 0);                                          // m_wins[0..1]
+            WRITE32(kShell + 0x2B50, 0);
+            for (uint32_t c = 0; c < 10; ++c)   // sem o menu: os 10 monstros da eliminacao livres (SelectSlot traje 0: taken 1, state 1)
+            {
+                WRITE32(wotm::sym::monsterSelectMode + 0xB0u * c, 1);
+                WRITE32(wotm::sym::monsterSelectMode + 0xB0u * c + 4, 1);
+            }
+            for (int i = 0; i < g_matchPlayers; ++i)
+            {
+                const uint32_t sel = static_cast<uint32_t>(g_matchMonsters[i] << 5);
+                if (i < 2)
+                    WRITE32(kShell + 0x2B84 + 4 * i, sel);
+                wotmElimSetStart(i, sel);
+                WRITE32(wotm::sym::monsterSelectMode + 0xB0u * static_cast<uint32_t>(wotm_modes4::monsterSlot(sel)), 0);   // taken: usado
+                if (i < 2)
+                    WRITE32(kShell + 0x2BE0 + 4 * i, 0);   // traje 0, como o retail na eliminacao
+                else
+                    wotm_split4::g_extraCostume[i - 2] = 0;
+            }
+        }
+        std::fprintf(stderr, "[partida] %u: monstro %d:%d (jogador%s)", ++g_matchCount, g_matchMonsters[0], costumes[0], g_aiVsAi ? " sob IA" : "");
         for (int i = 1; i < g_matchPlayers; ++i)
-            std::fprintf(stderr, " e %d (jogador %d)", g_matchMonsters[i], i + 1);
+            std::fprintf(stderr, " e %d:%d (jogador %d)", g_matchMonsters[i], costumes[i], i + 1);
         std::fprintf(stderr, " %s", g_matchAIs ? "contra" : (g_matchPlayers > 1 ? "sem IA" : "sozinho"));
         for (int i = g_matchPlayers; i < g_matchPlayers + g_matchAIs; ++i)
-            std::fprintf(stderr, " %d", g_matchMonsters[i]);
+            std::fprintf(stderr, " %d:%d", g_matchMonsters[i], costumes[i]);
         std::fprintf(stderr, "%s, fase %d\n", g_matchAIs ? " (IA)" : "", g_matchLevel);
         SET_GPR_S32(ctx, 2, 0);
         ctx->pc = GPR_U32(ctx, 31);
@@ -358,36 +428,109 @@ namespace
     void startPointAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origStartPoint, rdram, ctx, runtime); }
     void camerasUpdateAsHumans(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { callAsHumans(g_origCamerasUpdate, rdram, ctx, runtime); }
 
-    // Free for all de 1 jogador sem IA (mod, sempre ligado): screenFreeForAllOptions1P (tela 12) anda o cursor so por 1..3 IAs, mas
-    // o retail ja trata o item 0 na confirmacao (m_numAIs 0, pula o "first to" e vai direto a escolha do monstro, tela 3, que sem IA
-    // segue para a fase; na luta EvaluateOnePlayerChallengeStatus so reergue o jogador). Aqui o cursor passa a dar a volta por 0..3:
-    // depois da original, cima de 1 (que ia para 3) e baixo de 3 (que ia para 1) param no 0. O switch do menu (shell +0x43C) recebe
-    // o mesmo valor, como o hierSetSwitch faria (whichChild, se o switch tiver esse filho).
+    // Free for all de 1 jogador com 0 a 7 IAs (mod, sempre ligado): screenFreeForAllOptions1P (tela 12) anda o cursor so por 1..3
+    // IAs. O retail ja trata o item 0 na confirmacao (m_numAIs 0, pula o "first to" e vai direto a escolha do monstro, tela 3, que sem
+    // IA segue para a fase; na luta EvaluateOnePlayerChallengeStatus so reergue o jogador), e o switch do numero (shell +0x43C) tem
+    // 11 filhos, os digitos 0 a 10 do proprio jogo. Aqui o cursor da a volta por 0..7: depois da original, o passo que ela deu (que
+    // so conhece 1..3) vira um passo de 1 em 0..7, e o switch recebe o mesmo valor (whichChild, como o hierSetSwitch faria). Com o
+    // cursor em 4..7 a original roda com 3 (ela nao aceita mais e so loga um erro na confirmacao): a confirmacao grava 3 em m_numAIs
+    // e vai ao "first to"; o numero pedido fica em wotm_menucpus::g_want, e o menu segue como com 3 CPUs ate a fase ser confirmada
+    // (changeScreenHook do wotm_padsel.inc).
     constexpr uint32_t kFfaOptions1P = wotm::fn::screenFreeForAllOptions1P__Fv;
     constexpr uint32_t kFfaCursor = wotm::sym::currentSelection + 12 * 4;   // currentSelection[12]
+    constexpr uint32_t kFfaNumAIs = kShell + 0x2BB8;                         // m_numAIs
     PS2Runtime::RecompiledFunction g_origFfaOptions1P = nullptr;
     uint32_t g_ffaRa = 0, g_ffaBefore = 0;
-    bool g_ffaPending = false;
+    bool g_ffaPending = false, g_ffaFake = false;
 
     void ffaOptions1PWithZero(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        constexpr int kMax = wotm_menucpus::kMax;
         if (ctx->pc == kFfaOptions1P)
         {
             g_ffaRa = GPR_U32(ctx, 31);
             g_ffaBefore = READ32(kFfaCursor);
             g_ffaPending = true;
+            g_ffaFake = g_ffaBefore > 3u && g_ffaBefore <= uint32_t(kMax);
+            if (g_ffaFake)
+            {
+                WRITE32(kFfaCursor, 3);
+                WRITE32(kFfaNumAIs, 0);   // a confirmacao o poe em 3 (a tela nao le o m_numAIs; a volta o zera)
+            }
         }
         g_origFfaOptions1P(rdram, ctx, runtime);
         if (!g_ffaPending || ctx->pc != g_ffaRa)
             return;   // parou no meio (retomada cai aqui de novo e termina o servico)
         g_ffaPending = false;
-        const uint32_t after = READ32(kFfaCursor);
-        if (!((g_ffaBefore == 1 && after == 3) || (g_ffaBefore == 3 && after == 1)))
+        const int before = int(g_ffaBefore), eff = g_ffaFake ? 3 : before, after = int(READ32(kFfaCursor));
+        if (g_ffaFake && READ32(kFfaNumAIs) == 3u)
+        {
+            wotm_menucpus::g_want.store(before);
+            std::fprintf(stderr, "[wotm] tela 12: %d CPUs (o menu segue com 3; a fase confirmada grava %d)\n", before, before);
+        }
+        else if (READ32(kFfaNumAIs) != 0u || after != eff)
+            wotm_menucpus::g_want.store(0);   // confirmou 1..3 (ou mexeu no cursor)
+        // passo da original (cima: >= 2 desce 1, senao vai a 3; baixo: < 3 sobe 1, senao vai a 1)
+        const bool dec = (eff >= 2 && after == eff - 1) || (eff <= 1 && after == 3);
+        const bool inc = (eff < 3 && after == eff + 1) || (eff >= 3 && after == 1);
+        const int want = dec ? (before + kMax) % (kMax + 1) : inc ? (before + 1) % (kMax + 1) : before;
+        if (want == after)
             return;
-        WRITE32(kFfaCursor, 0);
+        WRITE32(kFfaCursor, uint32_t(want));
         const uint32_t sw = READ32(kShell + 0x43C);
-        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > 0)   // SWITCH_NODE, numKids
-            WRITE8(sw + 8, 0);                                        // whichChild
+        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > want)   // SWITCH_NODE, numKids
+            WRITE8(sw + 8, uint8_t(want));                              // whichChild
+    }
+
+    // Free for all de 2 a 4 jogadores com 0 a 8 - N IAs (8 monstros): o mesmo da tela 12 na screenFreeForAllOptions2P (tela 13), que
+    // anda o cursor por 0..2 (esquerda: > 0 desce 1, senao vai a 2; direita: < 2 sobe 1, senao vai a 0) e confirma 0..2 em m_numAIs,
+    // indo ao "first to" (15). O switch do numero (shell +0x464) tem os mesmos 11 filhos. Com o cursor acima do que o jogo conhece
+    // (2 com 2 jogadores; nenhuma com 3 e 4, que o retail nao tem: a selecao de 3 e 4 do wotm_padsel.inc poe as CPUs) a original roda
+    // com esse maximo, e a confirmacao guarda o numero em wotm_menucpus::g_want.
+    constexpr uint32_t kFfaOptions2P = wotm::fn::screenFreeForAllOptions2P__Fv;
+    constexpr uint32_t kFfa2Cursor = wotm::sym::currentSelection + 13 * 4;   // currentSelection[13]
+    PS2Runtime::RecompiledFunction g_origFfaOptions2P = nullptr;
+    uint32_t g_ffa2Ra = 0, g_ffa2Before = 0;
+    bool g_ffa2Pending = false, g_ffa2Fake = false;
+    int g_ffa2Game = 2;
+
+    void ffaOptions2PMore(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        constexpr int kGame = 2;   // o passo da original anda em 0..2
+        const int players = std::clamp(wotm_menucpus::g_menuPlayers.load(), 2, 4), kMax = wotm_menucpus::maxFor(players);
+        if (ctx->pc == kFfaOptions2P)
+        {
+            g_ffa2Ra = GPR_U32(ctx, 31);
+            g_ffa2Before = std::min(READ32(kFfa2Cursor), uint32_t(kMax));   // o cursor que ficou de outro numero de jogadores
+            WRITE32(kFfa2Cursor, g_ffa2Before);
+            g_ffa2Pending = true;
+            g_ffa2Game = players == 2 ? kGame : 0;   // o maior numero que o jogo confirma por si
+            g_ffa2Fake = g_ffa2Before > uint32_t(g_ffa2Game) && g_ffa2Before <= uint32_t(kMax);
+            if (g_ffa2Fake)
+                WRITE32(kFfa2Cursor, uint32_t(g_ffa2Game));
+        }
+        g_origFfaOptions2P(rdram, ctx, runtime);
+        if (!g_ffa2Pending || ctx->pc != g_ffa2Ra)
+            return;
+        g_ffa2Pending = false;
+        const int before = int(g_ffa2Before), eff = g_ffa2Fake ? g_ffa2Game : before, after = int(READ32(kFfa2Cursor));
+        const bool confirmed = READ32(wotm::sym::currScreen) == 15u;
+        if (g_ffa2Fake && confirmed)
+        {
+            wotm_menucpus::g_want.store(before);
+            std::fprintf(stderr, "[wotm] tela 13: %d jogadores e %d CPUs (o menu segue com %d)\n", players, before, g_ffa2Game);
+        }
+        else if (confirmed || after != eff)
+            wotm_menucpus::g_want.store(0);
+        const bool dec = (eff >= 1 && after == eff - 1) || (eff == 0 && after == kGame);
+        const bool inc = (eff < kGame && after == eff + 1) || (eff == kGame && after == 0);
+        const int want = dec ? (before + kMax) % (kMax + 1) : inc ? (before + 1) % (kMax + 1) : before;
+        if (want == after)
+            return;
+        WRITE32(kFfa2Cursor, uint32_t(want));
+        const uint32_t sw = READ32(kShell + 0x464);
+        if (sw && (READ8(sw) & 0x3F) == 6 && READ8(sw + 0xB) > want)
+            WRITE8(sw + 8, uint8_t(want));
     }
 
     // Trapacas de debug (menu F1 do wotm_live.inc, ou WOTM_CHEATS no inicio): aplicadas na thread do EE, na entrada de Monster::update
@@ -665,6 +808,12 @@ namespace
             {
                 if (g_syncVCalls < 4)
                     g_syncVRa[g_syncVCalls] = ra;
+                if (g_syncVCalls == 0 && g_frameStartValid)
+                {
+                    const auto t = std::chrono::steady_clock::now();
+                    g_svAtMs = std::chrono::duration<double, std::milli>(t - g_frameStartHost).count();
+                    g_svVblanks = static_cast<int>(runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync);
+                }
                 ++g_syncVCalls;
             }
             if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
@@ -717,7 +866,14 @@ namespace
         const uint32_t tics = g_nativeTimer ? hostTics() : READ32(0x6F8DC4u);
         static double lastCpuMs = 0.0;   // CPU da thread do EE (usuario + kernel): quadro lento com pouca CPU = bloqueado fora do ocio
         const double cpuMs = wotmThreadCpuMs();
-        std::fprintf(stderr, "[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms cpu=%.1fms top",
+        // a linha numa escrita so: o stderr nao tem buffer, e cada fprintf seria uma chamada ao sistema na thread do EE
+        char line[512];
+        int len = 0;
+        auto add = [&](const char *fmt, auto... a) {
+            if (len < int(sizeof(line)))
+                len += std::snprintf(line + len, sizeof(line) - size_t(len), fmt, a...);
+        };
+        add("[field] g=%u fields=%d rate=%d tics=%.2f ee=%.2f idle=%.2f host=%.1fms ocioso=%.1fms cpu=%.1fms top",
                      READ32(wotm::sym::g_frame), static_cast<int32_t>(READ32(0x6F8DB4u)), static_cast<int32_t>(READ32(kUpdateRateVar)),
                      (tics - lastTics) / 9619.0,
                      (g_wotmEeCycle - g_lastCycle) / field, g_wotmIdleCycles / field,
@@ -726,23 +882,29 @@ namespace
         lastCpuMs = cpuMs;
         for (int k = 0; k < 3; ++k)
             if (top[k] >= 0)
-                std::fprintf(stderr, " %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
-        std::fprintf(stderr, " syncv=%u", g_syncVCalls);
+                add(" %06x=%.2f", g_wotmProfPc[top[k]], g_wotmProfCyc[top[k]] / field);
+        add(" syncv=%u", g_syncVCalls);
+        if (g_svAtMs >= 0.0)   // sv=<ms ate a 1a chamada>@<vblanks ja entregues>/<ms ate aqui, o fim do quadro>
+            add(" sv=%.1f@%d/%.1f", g_svAtMs, g_svVblanks,
+                         std::chrono::duration<double, std::milli>(now - g_frameStartHost).count());
+        g_svAtMs = -1.0;
         for (uint32_t k = 0; k < g_syncVCalls && k < 4; ++k)
-            std::fprintf(stderr, "%c%06x", k ? ',' : ':', g_syncVRa[k]);
+            add("%c%06x", k ? ',' : ':', g_syncVRa[k]);
         g_syncVCalls = 0;
         unsigned views = 0;
         for (unsigned v = 0; v < 4; ++v)
             views += (g_hierViews >> v) & 1u;
-        std::fprintf(stderr, " vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f", views, g_hierMs[0], g_hierMs[1], g_captureMs[0], g_captureMs[1]);
+        add(" vistas=%u hier=%.2f/%.2f cap=%.2f/%.2f", views, g_hierMs[0], g_hierMs[1], g_captureMs[0], g_captureMs[1]);
         if (g_hierViews & 0xCu)   // 3 e 4 jogadores (wotm_split4.inc): vistas 2 e 3
-            std::fprintf(stderr, " hier23=%.2f/%.2f cap23=%.2f/%.2f", g_hierMs[2], g_hierMs[3], g_captureMs[2], g_captureMs[3]);
-        std::fprintf(stderr, "\n");
+            add(" hier23=%.2f/%.2f cap23=%.2f/%.2f", g_hierMs[2], g_hierMs[3], g_captureMs[2], g_captureMs[3]);
+        len = std::min(len, int(sizeof(line)) - 2);
+        line[len++] = 10;
+        std::fwrite(line, 1, size_t(len), stderr);
         g_hierViews = 0;
         for (int v = 0; v < 4; ++v)
             g_hierMs[v] = g_captureMs[v] = 0.0;
         // com PS2X_HOSTPROF: onde a thread do EE esteve num quadro de mais de 100 ms (ps2_hostprof.cpp)
-        if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF"))
+        if (!g_hostProfWatch && std::getenv("PS2X_HOSTPROF") && !std::getenv("PS2X_HOSTPROF_WIN"))
         {
             g_hostProfWatch = true;
             wotmHostProfWatchThisThread();
@@ -766,6 +928,19 @@ namespace
 
 
     void emitChaseHud(uint8_t *rdram);   // HUD do jogador 5..8 na vista de perseguicao, mais abaixo (junto das barras)
+    // 3 e 4 jogadores a 60: o jogo liga um "modo 30 Hz" com 3+ jogadores (Shell::Use30HzMode: m_numPlayers >= 3), e o
+    // Shell::BootInitGame faz timerInit(30), que poe o teto do updateRate (D_006F8DD8) em 30: o timerWaitForMinUpdateRate espera
+    // um vsync a mais em todo quadro que coube em 1 field. Aqui o timerInit desse ponto recebe 60; o resto do modo (layout da VRAM
+    // do getVramAddr) fica. WOTM_30HZ=1 volta ao original.
+    constexpr uint32_t kTimerInit = wotm::fn::timerInit__Fi;
+    constexpr uint32_t kBootInitGameTimerRa = wotm::fn::BootInitGame__5Shell + 0x24u;   // retorno do jal timerInit
+    PS2Runtime::RecompiledFunction g_origTimerInit = nullptr;
+    void timerInit60(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kTimerInit && GPR_U32(ctx, 31) == kBootInitGameTimerRa && GPR_U32(ctx, 4) == 30u)
+            SET_GPR_U32(ctx, 4, 60u);
+        g_origTimerInit(rdram, ctx, runtime);
+    }
 
     void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -778,6 +953,7 @@ namespace
                 fieldLogFrame(rdram, ctx, runtime);
             // quadro pronto (update, hier, particleDraw) e o seguinte ainda nao comecou: o desenho nativo copia a cena aqui
             emitChaseHud(rdram);
+            wotm_split4::trainingHudLate(rdram, ctx, runtime);   // modo treino: HUD do boneco se o update do HUD 0 foi pausado
             wotmCaptureFrame(rdram);
             // pausa (F7/F6/F8, wotm_foto.inc): o quadro pronto fica na tela e o seguinte nao comeca. O quadro com parada conta 1 field:
             // o tempo parado nao vira dt (sem isso o updateRate caia ao limite e o jogo dava um passo de 1/30 na volta)
@@ -946,7 +1122,7 @@ namespace
     // confere o teto. Acima de ~0x1F10000 ha dados vivos (e o buffer do zip em 0x1F7F840); medido em 2026-10-18, o bloco em 0x1B70000
     // e sobra do menu e pode ser sobrescrito (o Metro com 2 monstros vai ate 0x1D0C380). Loga quando muda e avisa perto do teto.
     constexpr uint32_t kFileStatus = wotm::sym::fileStatus, kLoadBase = 0xA00000u, kLoadCeiling = 0x1F10000u;
-    // RAM acima de 32 MB (POS_FRONTEIRA item 1): o runtime tem 64 MB (PS2_RAM_SIZE) e o jogo ve 32 (PS2_GUEST_RAM_SIZE: pilha, heap e
+    // RAM acima de 32 MB (NATIVO.md, "RAM de 64 MB"): o runtime tem 64 MB (PS2_RAM_SIZE) e o jogo ve 32 (PS2_GUEST_RAM_SIZE: pilha, heap e
     // GetMemorySize iguais aos do PS2). Na entrada do Shell::LoadMonstersDB o proximo endereco de carga (fileStatus.ngpAddr[ngpLoaded],
     // logo depois do NGP da fase) pula para 0x2000000: os NGP dos monstros e, atras deles, os RTX e TEX da fase e dos monstros moram na
     // area de cima, e embaixo fica so o NGP da fase. A relocacao (dbsRelocateViaPtrListFile) soma "endereco - 0xA00000" em 32 bits, entao
@@ -977,6 +1153,16 @@ namespace
         if (end == g_lastLoadEnd || end < kLoadBase)
             return;
         g_lastLoadEnd = end;
+        {
+            // Tetos que nao dependem da RAM (item 8: skins e arquivos de mod maiores que o do disco): texInfo tem 1000 entradas e o
+            // jogo so imprime "Texture count" ao passar (escreve depois do array); a VRAM residente (.RTX) estourada ja sai do jogo
+            // com "TRYING TO LOAD TOO MUCH TEXTURE". fileStatus.maxTexId (0x130) e o maior texId de cada arquivo, acumulado.
+            uint32_t maxTex = 0;
+            for (uint32_t i = 0; i < std::max(texN, resN); ++i)
+                maxTex = std::max<uint32_t>(maxTex, FAST_READ16(kFileStatus + 0x130 + 2 * i));
+            std::fprintf(stderr, "[wotm] carga da fase: %u de 1000 texIds%s\n", maxTex,
+                         maxTex >= 1000 ? " -- ALEM DO texInfo, espere corrupcao" : maxTex >= 900 ? " -- perto do teto do texInfo" : "");
+        }
         if (end > kHighBase)
         {   // area de cima: embaixo fica so o NGP da fase (fileStatus.ngpAddr[0] ate o fim do arquivo, guardado no log da carga)
             const double used = (end - kHighBase) / 1048576.0, left = (int64_t(PS2_RAM_SIZE) - end) / 1048576.0;
@@ -989,12 +1175,22 @@ namespace
                      used, left, kLoadCeiling, left < 0.5 ? " -- PERTO OU ALEM DO TETO, espere corrupcao" : "");
     }
 
+    bool g_damageNewFight = true;   // rtMain(first): os numeros de dano esquecem os monstros da luta anterior (monsterUpdateDamage)
+
     void rtMainTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kRtMain)
         {
             wotmLoadFreeze(false);
             wotmCheckLoadEnd(rdram, ctx, runtime);
+            if (GPR_U32(ctx, 4) && wotm_training::g_menuArmed.load() && !wotm_training::g_on.exchange(true))   // rtMain(first): a luta comecou
+                std::fprintf(stderr, "[treino] modo treino ligado (luta do TRAINING)\n");
+            wotm_training::g_inFight = true;   // tambem a volta do RESET POSITIONS (rtMain(0))
+            if (GPR_U32(ctx, 4))
+            {
+                wotm_training::g_introMs = wotm_training::nowMs();   // a intro desta luta pode ser pulada (wotm_training.inc)
+                g_damageNewFight = true;
+            }
         }
         g_origRtMain(rdram, ctx, runtime);
     }
@@ -1133,6 +1329,116 @@ namespace
     }
 }
 
+
+namespace
+{
+    // Emissor de particulas que "teleporta" (desde 2026-10-21; achado com 8 monstros). Emissor com EmitMotionSense (0x1000000; o fogo
+    // da cabeca do Agamo, fxId 141 IdolHeadFlame) soma ao cumulativeRate a distancia que andou desde o quadro anterior:
+    // |ParticleToEmitVec - prevParticleToEmitVec| * 4 / maxSize. Num quadro a posicao veio de muito longe (Agamo com outros 7 tipos de
+    // monstro no Centro e no Aeroporto), o acumulado foi a ~5e18 e ficou la (n = cvt.w.s satura em 0x7FFFFFFF e o resto nao desce);
+    // com particulas vivas o numParticles + n do teto de maxParticles passa de 2^31, vira negativo, o teto nao pega e o laco de emissao
+    // anda 2^31 vezes: o jogo trava no quadro 3. No PS2 nao havia como ter tantos monstros. Correcao: na saida do
+    // utilUpdateEmitterMatrices(e, vento), um salto de mais de kJump unidades (uma fase tem ~3000) vira parado (anterior = atual); e,
+    // na entrada do particleEmit, acumulado fora de [0, 2^16) volta a 0 e numParticles fora de [0, maxParticles] volta ao limite.
+    // Fora desses casos nada muda. Uma linha [wotm] por correcao (ate 8).
+    constexpr uint32_t kEmitMatrices = wotm::fn::utilUpdateEmitterMatrices__FP11EmitterTypeP8_fvector,
+                       kParticleEmit = wotm::fn::particleEmit__FP13_ParticleTypeP8_fvectorT1;
+    constexpr uint32_t kEmitVec = 0x0, kEmitPrevVec = 0x50, kEmitCumRate = 0x138, kEmitFxId = 0x13C;   // EmitterType
+    constexpr uint32_t kPtEmit = 0x2CA0, kPtNum = 0x2ED0, kPtMax = 0x2ED4;                            // ParticleType
+    constexpr float kJump = 100000.f;
+    PS2Runtime::RecompiledFunction g_origEmitMatrices = nullptr, g_origParticleEmit = nullptr;
+    int g_emitFixes = 0;
+
+    float emitF(uint8_t *rdram, uint32_t a)
+    {
+        float v;
+        std::memcpy(&v, rdram + a, 4);
+        return v;
+    }
+
+    void emitMatricesGuarded(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t e = GPR_U32(ctx, 4) & 0x1FFFFFFFu, ra = ctx->pc == kEmitMatrices ? GPR_U32(ctx, 31) : 0u;
+        g_origEmitMatrices(rdram, ctx, runtime);
+        if (!ra || ctx->pc != ra || e < 0x1000u || e + 0x140u > PS2_RAM_SIZE)
+            return;
+        float d2 = 0.f;
+        for (uint32_t k = 0; k < 3; ++k)
+        {
+            const float d = emitF(rdram, e + kEmitVec + 4 * k) - emitF(rdram, e + kEmitPrevVec + 4 * k);
+            d2 += d * d;
+        }
+        if (d2 > kJump * kJump || !std::isfinite(d2))
+        {
+            std::memcpy(rdram + e + kEmitPrevVec, rdram + e + kEmitVec, 16);
+            if (g_emitFixes < 8 && ++g_emitFixes)
+                std::fprintf(stderr, "[wotm] emissor de particulas fxId %u saltou %.3g unidades: contado como parado\n", FAST_READ32(e + kEmitFxId),
+                             std::sqrt(d2));
+        }
+    }
+
+    void particleEmitGuarded(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t p = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
+        if (ctx->pc == kParticleEmit && p >= 0x1000u && p + kPtMax + 4 <= PS2_RAM_SIZE)
+        {
+            const float cum = emitF(rdram, p + kPtEmit + kEmitCumRate);
+            const int32_t num = static_cast<int32_t>(FAST_READ32(p + kPtNum)), mx = static_cast<int32_t>(FAST_READ32(p + kPtMax));
+            const bool badCum = !(cum >= 0.f && cum < 65536.f), badNum = num < 0 || (mx >= 0 && num > mx);
+            if (badCum)
+            {
+                const float zero = 0.f;
+                std::memcpy(rdram + p + kPtEmit + kEmitCumRate, &zero, 4);
+            }
+            if (badNum)
+                FAST_WRITE32(p + kPtNum, static_cast<uint32_t>(num < 0 ? 0 : mx));
+            if ((badCum || badNum) && g_emitFixes < 8 && ++g_emitFixes)
+                std::fprintf(stderr, "[wotm] particleEmit fxId %u: acumulado %g e %d/%d particulas corrigidos\n", FAST_READ32(p + kPtEmit + kEmitFxId), cum,
+                             num, mx);
+        }
+        g_origParticleEmit(rdram, ctx, runtime);
+    }
+
+    // Raio em cadeia do Kineticlops que trava com mais de 4 monstros (desde 2026-10-21; Metro com 8). No StateZapAttack::update, o
+    // laco que passa o raio do alvo para os outros monstros (i de 0 a numMonsters) e o laco que desenha os arcos de cada um (de 0 a
+    // numArcs, float @0x50 do estado) usam a mesma variavel ($s4) no retail: depois de encadear no monstro k, i fica em numArcs + 1.
+    // Com 4 monstros isso so encurta o laco (i passa do fim; o raio pega um monstro a mais por quadro). Com 8 e k >= numArcs + 1,
+    // i volta para tras, o laco encadeia de novo no mesmo k e nunca termina. Correcao: guarda i na chamada do hdLosCSTest do laco
+    // (inicio do teste de cada monstro) e, na primeira chamada depois do laco dos arcos (mathfRand), i = max(i, guardado). Onde o
+    // retail nao trava (i nao volta para tras) o resultado e o mesmo. Uma linha [wotm] por correcao (ate 8).
+    constexpr uint32_t kZapUpdate = wotm::fn::update__14StateZapAttack, kLosCs = wotm::fn::hdLosCSTest__FP8_fvectorT0P9_hdResulti,
+                       kMathfRand = wotm::fn::mathfRand__Fii;
+    constexpr uint32_t kZapRaLos = kZapUpdate + 0xB60, kZapRaAfterArcs = kZapUpdate + 0xC4C;   // retornos das duas chamadas no laco
+    constexpr int kRegS4 = 20;
+    PS2Runtime::RecompiledFunction g_origLosCs = nullptr, g_origMathfRand = nullptr;
+    int32_t g_zapIndex = -1;
+    int g_zapFixes = 0;
+
+    void losCsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kLosCs && GPR_U32(ctx, 31) == kZapRaLos)
+            g_zapIndex = static_cast<int32_t>(GPR_U32(ctx, kRegS4));
+        g_origLosCs(rdram, ctx, runtime);
+    }
+
+    void mathfRandTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == kMathfRand && GPR_U32(ctx, 31) == kZapRaAfterArcs && g_zapIndex >= 0)
+        {
+            const int32_t i = static_cast<int32_t>(GPR_U32(ctx, kRegS4));
+            if (i < g_zapIndex)
+            {
+                SET_GPR_U32(ctx, kRegS4, static_cast<uint32_t>(g_zapIndex));
+                if (g_zapFixes < 8 && ++g_zapFixes)
+                    std::fprintf(stderr, "[wotm] raio em cadeia (StateZapAttack): o laco dos arcos levou o indice dos monstros de %d para %d; mantido em %d\n",
+                                 g_zapIndex, i, g_zapIndex);
+            }
+            g_zapIndex = -1;
+        }
+        g_origMathfRand(rdram, ctx, runtime);
+    }
+}
+#include "wotm_orbit.inc"   // camera moderna (orbital): ganchos chamados pelos da camera livre e do lock-on, abaixo
 namespace
 {
     // Camera livre (F5, wotm_freecam.h). O _cs da vista 0 (viewInfo[0], o mesmo que a camera do jogo move) recebe a pose em dois
@@ -1177,7 +1483,11 @@ namespace
 
     void camerasUpdateFree(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        const uint32_t ra = GPR_U32(ctx, 31);
+        orbit::pre(rdram);   // camera moderna (wotm_orbit.inc)
         g_origCamerasUpdateFree(rdram, ctx, runtime);
+        if (ctx->pc == ra)
+            orbit::post(rdram, ctx, runtime);
         freeCamWrite(rdram);
     }
 
@@ -1205,7 +1515,7 @@ namespace
 
 namespace
 {
-    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "Mods" do launcher). O lock-on do quadro (PadEntry +0x32) e decidido em
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1; grupo "QoL features" do launcher). O lock-on do quadro (PadEntry +0x32) e decidido em
     // updateInput{0,1,2}Config{CR,SR} a partir dos contadores de quadros segurados que o updateHistory{0,1,2} da mesma
     // configuracao acabou de atualizar (PadFlags +0x1658 e +0x165E: ++ segurado, 0 solto). Na configuracao 0 trava com os dois
     // acima de PadFlags +0x16C4 (um so anda de lado, PadEntry +0x1A/+0x1C); na 1 e na 2, com +0x1658 diferente de zero. A propria
@@ -1230,9 +1540,14 @@ namespace
                                             wotm::fn::updateHistory2__8PadFlagsR7GamePad};
     constexpr uint32_t kInterpretInputs = wotm::fn::interpretInputs__8PadFlagsR7GamePad;
     constexpr uint32_t kPadFlagsLockA = 0x1658u, kPadFlagsLockB = 0x165Eu, kPadFlagsHoldTweak = 0x16C4u, kPadFlagsConfig = 0x16ECu,
-                       kPadFlagsOwner = 0x1810u;
-    constexpr uint32_t kMonsterCs = 0xCu, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u, kMonsterDying = 0xEFu,
-                       kMonsterCameraView = 0x6CD8u;
+                       kPadFlagsOwner = 0x1810u, kPadFlagsScreenRel = 0x16E4u;
+    // m_monsters (TheGame +0x120380): 4 lugares de jogador e as IAs a partir do [4]; com a luta de ate 8 a IA 7 fica no [10], e o
+    // TheGame tem lugar para 16. Percorrer so 8 deixava as IAs 5 a 7 fora do lock-on.
+    constexpr uint32_t kMonsterSlots = 16u;
+    // m_playerNum (+0x18) 0 = lugar alocado mas fora da luta: no Endurance as IAs da fila ficam em m_monsters desde o comeco,
+    // paradas e "vivas", e so a que entrou tem m_playerNum; o getClosestMonster do jogo pula as de 0 (o lock-on travava nelas).
+    constexpr uint32_t kMonsterCs = 0xCu, kMonsterPlayerNum = 0x18u, kMonsterPinTarget = 0x6C04u, kMonsterDead = 0xE8u,
+                       kMonsterDying = 0xEFu, kMonsterCameraView = 0x6CD8u;
     constexpr uint32_t kPadL1 = 0x0u, kPadL2 = 0x1u, kPadR1 = 0x3u, kPadR2 = 0x4u, kPadLeft = 0xCu, kPadRight = 0xDu, kPadUp = 0xEu,
                        kPadDown = 0xFu;
     PS2Runtime::RecompiledFunction g_origUpdateHistory[3] = {}, g_origInterpretInputs = nullptr, g_origPadReadLock = nullptr;
@@ -1246,6 +1561,7 @@ namespace
         bool remap = false;      // botoes do mod neste quadro (configuracao 0): o lock-on e o R1 fisico (lockHeld)
         bool lockHeld = false;
         bool dirHeld[2] = {};    // esquerda/direita do direcional no quadro anterior (borda da troca de alvo)
+        bool screenRel = false;  // PadFlags +0x16E4 neste quadro: updateInput0ConfigSR (o jogo ja faz o analogico relativo a camera)
         uint16_t realA = 0, realB = 0, fakeA = 0, fakeB = 0;
     } g_lockToggle[4];
     uint8_t g_padDir[4] = {};    // por controle (porta + 2 * slot, o do jogador): bit 0 esquerda, bit 1 direita do direcional (ultimo scePadRead)
@@ -1270,15 +1586,17 @@ namespace
         return nullptr;
     }
 
-    // O alvo travado (m_pinTarget, Monster +0x6C04, do quadro anterior) e um dos m_monsters do TheGame com m_dead (+0xE8)?
+    // O alvo travado (m_pinTarget, Monster +0x6C04, do quadro anterior) e um dos m_monsters do TheGame com m_dead (+0xE8) ou que
+    // saiu da luta (m_playerNum 0)?
     bool lockTargetDead(uint8_t *rdram, uint32_t owner)
     {
         const uint32_t target = FAST_READ32(owner + kMonsterPinTarget);
         if (!target)
             return false;
-        for (uint32_t i = 0; i < 8; ++i)
+        for (uint32_t i = 0; i < kMonsterSlots; ++i)
             if (FAST_READ32(kGame + 0x120380 + 4 * i) == target)
-                return ramOk(target, kMonsterDead + 1u) && static_cast<int8_t>(rdram[target + kMonsterDead]) != 0;
+                return ramOk(target, kMonsterDead + 1u) &&
+                       (static_cast<int8_t>(rdram[target + kMonsterDead]) != 0 || FAST_READ32(target + kMonsterPlayerNum) == 0u);
         return false;   // predio, peca de chefe etc.
     }
 
@@ -1316,7 +1634,8 @@ namespace
     // m_monsters[i] serve de alvo para o dono: vivo e alvejavel como no getClosestTargetable(6); posicao em tp
     bool lockCandidate(uint8_t *rdram, uint32_t m, uint32_t owner, float tp[3])
     {
-        if (!m || m == owner || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying])
+        if (!m || m == owner || !ramOk(m, kMonsterDying + 1u) || rdram[m + kMonsterDead] || rdram[m + kMonsterDying] ||
+            FAST_READ32(m + kMonsterPlayerNum) == 0u)
             return false;
         return (rd16(rdram, m + 4) & 6u) == 6u && targetPos(rdram, m, tp);
     }
@@ -1330,7 +1649,7 @@ namespace
             return;
         uint32_t best = 0;
         float bestD = 0.f;
-        for (uint32_t i = 0; i < 8; ++i)
+        for (uint32_t i = 0; i < kMonsterSlots; ++i)
         {
             const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
             if (!lockCandidate(rdram, m, owner, tp))
@@ -1341,8 +1660,7 @@ namespace
                 bestD = d;
             }
         }
-        if (best)
-            FAST_WRITE32(owner + kMonsterPinTarget, best);
+        FAST_WRITE32(owner + kMonsterPinTarget, best);   // sem candidato, 0: o updateLock escolhe (antes ficava o alvo velho)
     }
 
     // Troca o alvo travado para o monstro vivo mais proximo a esquerda (dir < 0) ou a direita (dir > 0) do atual na tela: angulo
@@ -1380,7 +1698,7 @@ namespace
         const float curA = targetPos(rdram, cur, tp) ? screenAngle(tp) : 0.f;
         uint32_t best = 0, wrap = 0;
         float bestD = 1e9f, wrapA = 0.f;
-        for (uint32_t i = 0; i < 8; ++i)
+        for (uint32_t i = 0; i < kMonsterSlots; ++i)
         {
             const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
             if (m == cur || !lockCandidate(rdram, m, owner, tp))
@@ -1410,15 +1728,32 @@ namespace
     void interpretInputsLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t pf = GPR_U32(ctx, 4) & 0x1FFFFFFFu, gp = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+        // camera moderna (wotm_orbit.inc): configuracao relativa a tela e analogico direito para a orbita, antes do lock-on ler o +0x16E4
+        const int orbitSlot = ctx->pc == kInterpretInputs ? orbit::inputEnter(rdram, pf, gp) : -1;
+        // troca de alvo pedida pelo teclado (Tab, R, rodinha; wotm_mouse.hpp): com alvo travado, com ou sem o lock-on alternado
+        if (int ps = -1; ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) &&
+                         isPlayerMonster(rdram, FAST_READ32(pf + kPadFlagsOwner), &ps) && ps >= 0 && ps < 4)
+            if (const int req = wotm::mouse::g_targetReq[ps].exchange(0, std::memory_order_relaxed); req != 0)
+            {
+                const uint32_t owner = FAST_READ32(pf + kPadFlagsOwner);
+                if (FAST_READ32(owner + kMonsterPinTarget))
+                    lockCycleTarget(rdram, owner, ps, req > 0 ? 1 : -1);   // proximo = o da direita na tela
+            }
         LockToggle *t = nullptr;
         int slot = 0;
-        if (ctx->pc == kInterpretInputs && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
+        if (ctx->pc == kInterpretInputs && wotm::settings::on(wotm::settings::LockToggle) && ramOk(pf, kPadFlagsOwner + 4u) && ramOk(gp, 0x18u))
             t = lockToggleFor(rdram, pf, &slot);
         if (t)
+        {
             t->remap = FAST_READ32(pf + kPadFlagsConfig) == 0u;
+            t->screenRel = FAST_READ32(pf + kPadFlagsScreenRel) != 0u;
+        }
         if (!t || !t->remap)
         {
+            const uint32_t ra0 = GPR_U32(ctx, 31);
             g_origInterpretInputs(rdram, ctx, runtime);
+            if (ctx->pc == ra0)
+                orbit::inputLeave(rdram, orbitSlot);
             return;
         }
         uint8_t *b = rdram + gp, saved[0x10];
@@ -1442,7 +1777,8 @@ namespace
         }
         if (t->on)
         {
-            lockCameraStick(rdram, t->owner, b);
+            if (!t->screenRel)
+                lockCameraStick(rdram, t->owner, b);
             // travado, o jogo anda de lado pela esquerda/direita (PadEntry +0x16/+0x18 -> +0x1A/+0x1C) e ignora os bytes 0/3
             if (saved[kPadL2])
                 b[kPadLeft] = 0xFF;
@@ -1452,9 +1788,16 @@ namespace
         const uint32_t ra = GPR_U32(ctx, 31);
         g_origInterpretInputs(rdram, ctx, runtime);
         if (ctx->pc == ra)   // fatia de tempo acabou no meio: o resto ainda le os bytes trocados (o loadPadInputs refaz todos)
+        {
             std::memcpy(b, saved, sizeof saved);
+            orbit::inputLeave(rdram, orbitSlot);
+        }
     }
 
+    // So na configuracao relativa ao monstro (updateInput0ConfigCR, PadFlags +0x16E4 = 0). Na relativa a tela (ConfigSR, +0x16E4 != 0;
+    // so na vista unificada e no Crush: na vista normal o humano fica na CR, 75f5be1:docs/investigacoes/2026-10-22/camera_controle_cr_sr.md) o proprio jogo, travado, ja projeta o analogico da
+    // camera (PadFlags +0x17E0) na direcao do alvo e na perpendicular; converter aqui antes fazia a conversao duas vezes, e o erro
+    // era o angulo entre a camera e a direcao do alvo (para cima podia ir para tras ou de lado com a camera fora das costas).
     // Travado, o jogo move o monstro no referencial dele, virado para o alvo (cima/baixo = para o alvo e para tras, esquerda/direita =
     // de lado). Para o analogico (e o direcional) valer em relacao a camera, como solto: a direcao que ele aponta na tela vira um vetor
     // no chao pelos eixos da camera e e reescrita nos bytes cima/baixo/esquerda/direita do GamePad no referencial do monstro (frente =
@@ -1487,35 +1830,6 @@ namespace
         b[kPadLeft] = static_cast<uint8_t>(std::lround(std::max(-lx, 0.f) * 255.f));
         b[kPadUp] = static_cast<uint8_t>(std::lround(std::max(ly, 0.f) * 255.f));
         b[kPadDown] = static_cast<uint8_t>(std::lround(std::max(-ly, 0.f) * 255.f));
-    }
-
-    // Travado, quem acerta o jogador vira o alvo: Monster::takeHit(vitima, pos, dano, id do atacante); o atacante e o
-    // Interactives::s_dbInteractive[id] (getInteractive), quando for um monstro vivo e alvejavel.
-    constexpr uint32_t kTakeHitLock = wotm::fn::takeHit__7MonsterP8_fvectorfi;
-    constexpr uint32_t kNumInteractives = wotm::sym::x_12Interactives_s_numInteractives, kDbInteractive = wotm::sym::x_12Interactives_s_dbInteractive;
-    PS2Runtime::RecompiledFunction g_origTakeHitLock = nullptr;
-
-    void takeHitLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-    {
-        const uint32_t victim = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
-        const int32_t id = static_cast<int32_t>(GPR_U32(ctx, 6));
-        if (ctx->pc == kTakeHitLock && id > 0 && id < static_cast<int32_t>(FAST_READ32(kNumInteractives)) && ramOk(victim, 0x6C08u))
-            if (LockToggle *t = lockToggleFind(victim + 0x5040u, false); t && t->on && t->owner == victim)   // m_padFlags
-            {
-                const uint32_t attacker = FAST_READ32(kDbInteractive + 4u * static_cast<uint32_t>(id)) & 0x1FFFFFFFu;
-                float tp[3];
-                bool monster = false;
-                for (uint32_t i = 0; i < 8 && !monster; ++i)
-                    monster = (FAST_READ32(kGame + 0x120380 + 4 * i) & 0x1FFFFFFFu) == attacker;   // m_monsters[i]
-                if (monster && attacker != FAST_READ32(victim + kMonsterPinTarget) && lockCandidate(rdram, attacker, victim, tp))
-                {
-                    int slot = 0;
-                    isPlayerMonster(rdram, victim, &slot);
-                    FAST_WRITE32(victim + kMonsterPinTarget, attacker);
-                    std::fprintf(stderr, "[lockon] jogador %d: alvo e quem bateu (0x%x)\n", slot + 1, attacker);
-                }
-            }
-        g_origTakeHitLock(rdram, ctx, runtime);
     }
 
     void padReadLockToggle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -1597,13 +1911,21 @@ namespace
             }
         g_origUpdateHistory[N](rdram, ctx, runtime);
         if (ok && ctx->pc == ra)
-            lockToggleApply(rdram, pf, N);
+        {
+            if (wotm::settings::on(wotm::settings::LockToggle))
+                lockToggleApply(rdram, pf, N);
+            else if (LockToggle *t = lockToggleFind(pf, false); t && (t->on || t->held))
+            {
+                t->on = t->held = false;   // opcao desligada no meio da luta: solta e volta aos botoes do jogo
+                t->remap = false;
+            }
+        }
     }
 }
 
 namespace
 {
-    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "Mods" do launcher), no lugar do icone de vida (a bolinha
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1; grupo "QoL features" do launcher), no lugar do icone de vida (a bolinha
     // com o numero do jogador, que muda de cor com a vida). O Hud::drawHealthIcon(monstro, n) projeta a cabeca do monstro e manda dois
     // quadrados ao ScreenPolys::addPoly no mesmo ponto: o numero (branco) e o anel (cor do +0x686C/+0x6870). Aqui o gancho no
     // drawHealthIcon guarda o monstro, e o do addPoly, quando chamado de dentro dele, troca os dois quadrados por duas barras sem
@@ -1615,10 +1937,12 @@ namespace
     constexpr uint32_t kMonsterMaxHealth = 0x448u, kMonsterHealth = 0x44Cu, kMonsterStamina = 0x460u;   // StaminaMeter: max +0, cur +0x10, exhausted +0x20
     constexpr uint32_t kXform2d = wotm::fn::mathfTransform3dTo2d__FiP8_fvectorT1;
     PS2Runtime::RecompiledFunction g_origDrawHealthIcon = nullptr, g_origAddPolyBars = nullptr, g_origXform2dBars = nullptr;
-    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon
+    uint32_t g_barMonster = 0;   // monstro do ultimo drawHealthIcon (0 = barras desligadas: o icone do jogo fica)
     bool g_barDone = false;      // as barras dele ja sairam (o segundo quadrado so some)
     float g_barRawX = 0.f;       // x projetado da cabeca (pixels do GS), antes do limite do drawHealthIcon
     bool g_barRawOk = false;
+    float g_barWorld[3] = {};    // o ponto do mundo que o drawHealthIcon projetou (modo foto: barras e icone seguem a camera)
+    bool g_anchorDone = true;    // o icone deste drawHealthIcon ja foi anotado (wotmHudAnchor)
 
     float barFrac(uint8_t *rdram, uint32_t cur, uint32_t max)
     {
@@ -1847,22 +2171,33 @@ namespace
     {
         if (ctx->pc == kDrawHealthIcon)
         {
-            g_barMonster = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+            // com WOTM_ENEMYBARS sempre; sem ela, so na luta de 3 ou 4 jogadores (tela em quadrantes, wotm_split4.inc)
+            // opcao ligada: barras em toda luta (sem ela, so no multijogador de 3 e 4)
+            const bool on = wotm::settings::on(wotm::settings::EnemyBars) || wotm_split4::splitPlayers(rdram);
+            g_barMonster = on ? GPR_U32(ctx, 5) & 0x1FFFFFFFu : 0u;
             g_barDone = false;
             g_barRawOk = false;
+            g_anchorDone = false;
         }
         g_origDrawHealthIcon(rdram, ctx, runtime);
+        g_anchorDone = true;
+        wotmHudAnchorEnd();
     }
 
     // mathfTransform3dTo2d(vista, ponto, saida) chamado do drawHealthIcon: guarda o x antes do limite da vista 4:3
     void xform2dBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        const uint32_t ra = GPR_U32(ctx, 31), out = GPR_U32(ctx, 6) & 0x1FFFFFFFu;
-        const bool mine = ctx->pc == kXform2d && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize && ramOk(out, 8u);
+        const uint32_t ra = GPR_U32(ctx, 31), out = GPR_U32(ctx, 6) & 0x1FFFFFFFu, in = GPR_U32(ctx, 5) & 0x1FFFFFFFu;
+        const bool mine = ctx->pc == kXform2d && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize && ramOk(out, 8u) &&
+                          ramOk(in, 12u);
+        float world[3] = {};
+        if (mine)
+            std::memcpy(world, rdram + in, 12);   // antes da chamada: a saida pode ser o mesmo vetor
         g_origXform2dBars(rdram, ctx, runtime);
         if (mine && ctx->pc == ra)
         {
             std::memcpy(&g_barRawX, rdram + out, 4);
+            std::memcpy(g_barWorld, world, 12);
             g_barRawOk = true;
         }
     }
@@ -1870,8 +2205,16 @@ namespace
     void addPolyBars(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t ra = GPR_U32(ctx, 31);
-        if (ctx->pc != kAddPoly || ra < kDrawHealthIcon || ra >= kDrawHealthIcon + kDrawHealthIconSize || !g_barMonster)
+        const bool fromIcon = ctx->pc == kAddPoly && ra >= kDrawHealthIcon && ra < kDrawHealthIcon + kDrawHealthIconSize;
+        if (!fromIcon || !g_barMonster)
         {
+            // icone do jogo (sem barras): anota o centro e o ponto do mundo, para o modo foto o levar junto com a camera
+            float box[4];
+            if (fromIcon && !g_anchorDone && g_barRawOk &&
+                wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)), static_cast<int>(GPR_U32(ctx, 6)),
+                                  GPR_U32(ctx, 7), box))
+                wotmHudAnchor(rdram, 0.5f * (box[0] + box[2]), 0.5f * (box[1] + box[3]), g_barWorld, false);
+            if (fromIcon) g_anchorDone = true;
             g_origAddPolyBars(rdram, ctx, runtime);
             return;
         }
@@ -1879,11 +2222,37 @@ namespace
         if (!g_barDone && wotmScreenPolyBox(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5)),
                                             static_cast<int>(GPR_U32(ctx, 6)), GPR_U32(ctx, 7), box))
         {
-            // limite do x na largura widescreen da vista (e a vista dos retangulos); sem o x cru fica o do jogo
-            const float dx = wotmHealthIconShift(rdram, g_barRawOk ? g_barRawX : std::nanf(""));
+            // limite do x na largura widescreen da vista (e a vista dos retangulos); sem o x cru fica o do jogo. Nos quadrantes o x cru
+            // vem fora da vista (abaixo) e o deslocamento saia errado: fica so a vista dos retangulos (o desenho nativo poe a coluna)
+            const float shift = wotmHealthIconShift(rdram, g_barRawOk ? g_barRawX : std::nanf(""));
+            const float dx = wotm_split4::splitPlayers(rdram) ? 0.f : shift;
             box[0] += dx;
             box[2] += dx;
+            // tela em quadrantes: nas vistas de baixo o y do icone vem com o deslocamento do quadrante duas vezes (como o x da vista 1, que
+            // o desenho nativo compensa), abaixo da tela (~228 de 224): volta a altura do quadrante. Depois o bloco (~4,2 linhas para
+            // cada lado do centro) fica dentro da faixa da vista (viewDef: y +0xE, altura +6), como o icone do jogo na borda
+            if (wotm_split4::splitPlayers(rdram))
+            {
+                const uint32_t view = std::min<uint32_t>(FAST_READ32(wotm::sym::viewCurView), 3u);
+                const uint32_t def = FAST_READ32(wotm::sym::viewInfo + 0x14u * view + 4u) & 0x1FFFFFFFu;
+                if (ramOk(def, 0x10u))
+                {
+                    constexpr float kHalf = 5.f;
+                    const float y0 = FAST_READ16(def + 0xE), y1 = y0 + FAST_READ16(def + 6);
+                    const float cy = 0.5f * (box[1] + box[3]) - y0;   // y0 = 0 em cima, a altura do quadrante embaixo
+                    const float dy = std::clamp(cy, y0 + kHalf, y1 - kHalf) - 0.5f * (box[1] + box[3]);
+                    box[1] += dy;
+                    box[3] += dy;
+                    // o x da coluna da direita vem com os 320 da coluna duas vezes tambem (~805): volta a coluna (x da vista, +0xC)
+                    const float x0 = FAST_READ16(def + 0xC);
+                    box[0] -= x0;
+                    box[2] -= x0;
+                }
+            }
+            wotmHudAnchor(rdram, 0.5f * (box[0] + box[2]), 0.5f * (box[1] + box[3]), g_barRawOk ? g_barWorld : nullptr, true);
+            g_anchorDone = true;
             emitBars(rdram, g_barMonster, box);
+            wotmHudAnchorEnd();
         }
         g_barDone = true;
         ctx->pc = ra;   // o quadrado do icone nao e montado
@@ -1892,14 +2261,16 @@ namespace
 
 namespace
 {
-    // Numeros de dano (mod, WOTM_DAMAGEPOP=1; grupo "Mods" do launcher). A vida de cada monstro (m_health, +0x44C) e conferida na
+    // Numeros de dano (mod, WOTM_DAMAGEPOP=1; grupo "QoL features" do launcher). A vida de cada monstro (m_health, +0x44C) e conferida na
     // entrada do Monster::update: o que caiu desde a anterior vira um numero (wotmDamagePopup), o que pega tambem fogo, choque e
     // queda, que nao passam pelo takeHit. O tipo vem do ultimo Monster::takeHit da vitima (ate 2 quadros antes), pelo
     // HitEvent::s_takeHitInfo que o atacante montou: source 1, 5, 6, 12, 14 e 0x14 = especial (Weapon, FireBreath, StateZapAttack,
     // StateSonicRoar, StateGrappleHook, StateUltraTazer, StateTazerAttack, StateTopSpin; 6 e 0x14 sao os que o StateBlock trata junto
     // do 5, e o especial do Togera chega com 6), 8 e 13 = arremesso (MonsterState::handleCollis de objeto em voo, StateThrowBack de
     // monstro jogado; vale ate 45 quadros, o dano da batida no cenario vem depois), o resto = golpe. Lugar: o ponto do golpe
-    // (s_takeHitInfo.pos) quando houver, senao o monstro um pouco acima.
+    // (s_takeHitInfo.pos) quando houver, senao o monstro um pouco acima. Nada sai durante uma cena (ActCinema: shell->m_inCinema,
+    // moviePlaying) nem nos primeiros 30 updates de cada monstro na luta, quando o jogo ainda acerta a vida inicial; o rtMain(first)
+    // esquece os monstros da luta anterior (o g_frame nao serve: o rtMain o zera tambem na volta da pausa).
     constexpr uint32_t kMonsterUpdateDmg = wotm::fn::update__7Monster, kTakeHitDmg = wotm::fn::takeHit__7MonsterP8_fvectorfi;
     constexpr uint32_t kTakeHitInfo = wotm::sym::x_8HitEvent_s_takeHitInfo;   // HitEvent: pos* +0, source +0x10
     PS2Runtime::RecompiledFunction g_origMonsterUpdateDmg = nullptr, g_origTakeHitDmg = nullptr;
@@ -1911,7 +2282,9 @@ namespace
         uint32_t hitFrame = 0;
         bool havePos = false;
         float pos[3] = {};
+        uint32_t seen = 0;   // updates desde que o monstro entrou na fase
     } g_damageTrack[16];
+    std::atomic<int64_t> g_damageUpdateMs{0};   // relogio (steady_clock) do ultimo Monster::update: parado = jogo pausado
 
     // Um dos m_monsters do TheGame (lugar para 16)
     bool isMonsterSlot(uint8_t *rdram, uint32_t m)
@@ -1970,8 +2343,22 @@ namespace
     {
         const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
         if (ctx->pc == kMonsterUpdateDmg && ramOk(m, 0x450u) && isMonsterSlot(rdram, m))
+        {
+            if (g_damageNewFight)
+            {
+                g_damageNewFight = false;
+                for (DamageTrack &t : g_damageTrack)
+                    t = DamageTrack{};
+            }
+            g_damageUpdateMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(),
+                                   std::memory_order_relaxed);
             if (DamageTrack *d = damageTrack(rdram, m))
             {
+                const uint32_t sh = FAST_READ32(wotm::sym::shell) & 0x1FFFFFFFu;
+                const bool cinema = FAST_READ32(wotm::sym::moviePlaying) != 0u || (ramOk(sh, 0x2BA8u) && FAST_READ32(sh + 0x2BA4u) != 0u);
+                const bool quiet = cinema || d->seen < 30u;
+                if (d->seen < 30u)
+                    ++d->seen;
                 float h;
                 std::memcpy(&h, rdram + m + 0x44Cu, 4);
                 if (std::isfinite(h))
@@ -1989,14 +2376,23 @@ namespace
                             p[2] += 60.f;   // sem ponto de golpe: um pouco acima da origem do monstro
                         else
                             p[0] = p[1] = p[2] = 0.f;
-                        if (p[0] != 0.f || p[1] != 0.f || p[2] != 0.f)
+                        if (!quiet && (p[0] != 0.f || p[1] != 0.f || p[2] != 0.f) &&
+                            (wotm::settings::on(wotm::settings::DamagePop) || wotm_training::g_on.load(std::memory_order_relaxed)))
                             wotmDamagePopup(rdram, p, lost, recent ? d->kind : 0);
                     }
                     d->last = h;
                 }
             }
+        }
         g_origMonsterUpdateDmg(rdram, ctx, runtime);
     }
+}
+
+// Janela (drawDamagePopups): ha quanto tempo o jogo nao roda um Monster::update. Na pausa da luta, nos dialogos e no F7 eles param.
+double wotmDamageIdleSeconds()
+{
+    const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    return double(now - g_damageUpdateMs.load(std::memory_order_relaxed)) / 1000.0;
 }
 
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
@@ -2006,6 +2402,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if (name.find("SCUS_971.97") == std::string::npos)
         return;
 
+    wotmModsInstall(runtime, elfPath);
     if (const char *e = std::getenv("WOTM_RATEMIN"))
         g_minRate = std::atoi(e);
     if (std::getenv("WOTM_TURNLOG") && (g_origUpdatePosition = runtime.lookupFunction(kMonsterDynamicsUpdatePosition)))
@@ -2031,6 +2428,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         g_nativeTimer = true;
     }
 #endif
+    if (std::getenv("WOTM_30HZ") == nullptr && (g_origTimerInit = runtime.lookupFunction(kTimerInit)))
+        runtime.registerFunction(kTimerInit, &timerInit60);
     if ((g_origWaitMinRate = runtime.lookupFunction(kTimerWaitForMinUpdateRate)) &&
         (g_origGetCurTics = runtime.lookupFunction(kTimerGetCurTics)) &&
         (g_origTimer1 = runtime.lookupFunction(kTimer1Handler)))
@@ -2085,8 +2484,25 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         else
             std::fprintf(stderr, "[wotm] monstros carregados embaixo de 32 MB, como no PS2 (WOTM_HIGHRAM=0)\n");
     }
+    {   // opcoes do jogador (wotm_settings.hpp): settings.ini ao lado do save.json (mesma pasta que o wotm_save::initPaths acha)
+        const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+        std::filesystem::path root = io.mcRoot;
+        if (root.empty())
+            root = !io.elfDirectory.empty() ? io.elfDirectory / "mc0" : std::filesystem::current_path() / "mc0";
+        wotm::settings::load(root.lexically_normal().parent_path());
+    }
     wotm_save::install(runtime);
-    wotm_split4::install(runtime);   // os ganchos de depois (WOTM_AIVSAI, wotm_multi) embrulham os dela
+    if ((g_origEmitMatrices = runtime.lookupFunction(kEmitMatrices)))   // emissor que teleporta (8 monstros com o Agamo)
+        runtime.registerFunction(kEmitMatrices, &emitMatricesGuarded);
+    if ((g_origParticleEmit = runtime.lookupFunction(kParticleEmit)))
+        runtime.registerFunction(kParticleEmit, &particleEmitGuarded);
+    if ((g_origLosCs = runtime.lookupFunction(kLosCs)) && (g_origMathfRand = runtime.lookupFunction(kMathfRand)))   // raio em cadeia com 8
+    {
+        runtime.registerFunction(kLosCs, &losCsTapped);
+        runtime.registerFunction(kMathfRand, &mathfRandTapped);
+    }
+    wotm_split4::install(runtime);   // antes dos ganchos do scePadRead (camera livre, lock-on): eles embrulham o dela
+    wotm_modes4::install(runtime);   // embrulha o fim de rodada e o InitPlayers do split4; o takeDamage das trapacas embrulha o dele
     if ((g_origPolyBuild = runtime.lookupFunction(kPolyBuildPrim)))
         runtime.registerFunction(kPolyBuildPrim, &polyBuildPrimTapped);
     if ((g_origHier = runtime.lookupFunction(kHier)))
@@ -2103,16 +2519,57 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if ((g_origLensFlareRender = runtime.lookupFunction(kLensFlareRender)))
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     wotmPadSelInstall(runtime);
+    wotmLevelSelInstall(runtime);
+    wotmMainMenuInstall(runtime);
     wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
         runtime.registerFunction(kEnableHighlights, &enableHighlightsTapped);
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
-        int v[kMatchMaxAIs + 2], n = 0;
+        int v[kMatchMaxAIs + 2], c[kMatchMaxAIs + 2], n = 0;
         const char *p = e;
         for (char *end; n < kMatchMaxAIs + 2; p = end + 1)
         {
+            c[n] = -1;
             v[n++] = static_cast<int>(std::strtol(p, &end, 10));
+            if (end == p && std::isalpha(static_cast<unsigned char>(*p)))   // "<id do monstro custom>" (mods/<mod>/monsters/, wotm_custom.inc)
+            {
+                const char *t = p;
+                while (*t && *t != ',' && *t != ':')
+                    ++t;
+                const std::string id(p, t);
+                if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().custom(id))
+                {
+                    v[n - 1] = cu->type;
+                    c[n - 1] = cu->costume;
+                    end = const_cast<char *>(t);
+                }
+                else
+                    std::fprintf(stderr, "[wotm] WOTM_MATCH: monstro custom \"%s\" nao achado em mods/\n", id.c_str());
+            }
+            if (end != p && *end == ':')   // "<monstro>:<figurino>"
+            {
+                const char *q = end + 1;
+                if (*q && !std::isdigit(static_cast<unsigned char>(*q)))   // "<monstro>:<skin>": traje de mod pelo id (mods/<mod>/skins/)
+                {
+                    const char *t = q;
+                    while (*t && *t != ',')
+                        ++t;
+                    const std::string id(q, t);
+                    const wotm::mods::Skin *sk = wotm::mods::Registry::get().skin(v[n - 1], id);
+                    if (!sk)
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" do monstro %d nao achada em mods/; traje 0\n", id.c_str(), v[n - 1]);
+                    c[n - 1] = sk ? sk->index : 0;
+                    end = const_cast<char *>(t);
+                }
+                else
+                    c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
+                if (end == q || c[n - 1] < 0 || c[n - 1] > 99)   // 4..99: trajes de mod (nome do arquivo ate 8 letras)
+                {
+                    p = nullptr;
+                    break;
+                }
+            }
             if (end == p || *end != ',')
             {
                 p = end == p ? nullptr : end;
@@ -2124,6 +2581,13 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             g_matchPlayers = std::min(std::atoi(pl), 4);
             g_padAIs = std::atoi(pl) - g_matchPlayers;
         }
+        if (const char *md = std::getenv("WOTM_MODE"))   // "<modo>[:<continues>]" (wotm_modes4.inc)
+        {
+            const int m = std::atoi(md);
+            g_matchMode = m >= 6 && m <= 9 ? m : 0;
+            if (const char *k = std::strchr(md, ':'))
+                g_matchContinues = std::clamp(std::atoi(k + 1), 0, 9);
+        }
         int bad = -1;
         if (p && *p == '\0' && n >= 2 && !wotm_monsters::fits(v, n - 1, &bad))   // monstro sem arquivo no disco: a carga travaria
             std::fprintf(stderr, "[wotm] WOTM_MATCH recusada: o monstro %d (%do da lista) nao tem arquivo no disco (traje %s); validos: 1-5, 7-11, "
@@ -2132,7 +2596,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         {
             g_matchAIs = n - 1 - g_matchPlayers;
             for (int i = 0; i < n - 1; ++i)
-                g_matchMonsters[i] = v[i];
+                g_matchMonsters[i] = v[i], g_matchCostumes[i] = c[i];
             g_matchLevel = v[n - 1];
         }
         if (g_matchLevel >= 0)
@@ -2145,7 +2609,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                          g_matchPlayers + g_padAIs, g_matchMonsters[0], g_matchAIs, g_padAIs, g_matchLevel);
         }
         else
-            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[,<IA>...ate 7],<fase>)\n", e);
+            std::fprintf(stderr, "[wotm] WOTM_MATCH invalido (\"%s\"; use <monstro>[:<figurino 0-3>][,<IA>[:<figurino>]...ate 7],<fase>)\n", e);
     }
     if (std::getenv("WOTM_AIVSAI") && (g_aiInit = runtime.lookupFunction(kAiInit)) &&
         (g_origSetAIMonster = runtime.lookupFunction(kSetAIMonster)))
@@ -2163,6 +2627,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotm_sync::init(runtime);
     if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
         runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
+    if ((g_origFfaOptions2P = runtime.lookupFunction(kFfaOptions2P)))
+        runtime.registerFunction(kFfaOptions2P, &ffaOptions2PMore);
     // Trapacas de debug (menu F1): sempre instaladas; WOTM_CHEATS=inv,stam,furia,esp,cloak,deus liga desde o inicio
     if ((g_origMonsterUpdate = runtime.lookupFunction(kMonsterUpdate)) && (g_origTakeDamage = runtime.lookupFunction(kTakeDamage)))
     {
@@ -2203,8 +2669,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
         std::fprintf(stderr, "[wotm] camera livre indisponivel: Cameras::Update, viewUpdate ou scePadRead sem funcao no runtime\n");
-    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, grupo "Mods" do launcher): um toque trava, outro solta
-    if (const char *e = std::getenv("WOTM_LOCKTOGGLE"); e && *e && std::strcmp(e, "0") != 0)
+    // Lock-on alternado (mod, WOTM_LOCKTOGGLE=1, "QoL features"): um toque trava, outro solta. Ganchos sempre instalados; a opcao
+    // (wotm_settings.hpp) vale ao vivo, desligada eles so passam adiante
     {
         constexpr PS2Runtime::RecompiledFunction kHooks[3] = {&updateHistoryLockToggle<0>, &updateHistoryLockToggle<1>,
                                                               &updateHistoryLockToggle<2>};
@@ -2214,7 +2680,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         {
             for (int i = 0; i < 3; i++)
                 runtime.registerFunction(kUpdateHistory[i], kHooks[i]);
-            std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE): um toque trava, outro solta\n");
+            std::fprintf(stderr, "[wotm] lock-on alternado (WOTM_LOCKTOGGLE, agora %s): um toque trava, outro solta\n",
+                         wotm::settings::on(wotm::settings::LockToggle) ? "ligado" : "desligado");
             // botoes do mod na configuracao 0 (depois da camera livre: o scePadRead daqui embrulha o dela)
             if ((g_origInterpretInputs = runtime.lookupFunction(kInterpretInputs)) && (g_origPadReadLock = runtime.lookupFunction(kScePadRead)))
             {
@@ -2222,27 +2689,28 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 runtime.registerFunction(kScePadRead, &padReadLockToggle);
                 std::fprintf(stderr, "[wotm] lock-on no R1, defesa no L1, andar de lado no L2/R2, setas trocam o alvo (configuracao 0)\n");
             }
-            // travado, quem bate vira o alvo
-            if ((g_origTakeHitLock = runtime.lookupFunction(kTakeHitLock)))
-                runtime.registerFunction(kTakeHitLock, &takeHitLockToggle);
         }
         else
             std::fprintf(stderr, "[wotm] lock-on alternado indisponivel: PadFlags::updateHistory{0,1,2} sem funcao no runtime\n");
     }
-    // Numeros de dano (mod, WOTM_DAMAGEPOP=1): depois das trapacas, que tambem embrulham o Monster::update e o takeHit
-    if (const char *e = std::getenv("WOTM_DAMAGEPOP"); e && *e && std::strcmp(e, "0") != 0)
+    // Camera moderna (wotm_orbit.inc): o Cameras::Update e o interpretInputs ja estao embrulhados acima; aqui o shakeCamera e o
+    // SetOkToUnify (depois do wotm_split4, cujo gancho este embrulha)
+    orbit::install(runtime);
+    // Numeros de dano (mod, WOTM_DAMAGEPOP=1): depois das trapacas, que tambem embrulham o Monster::update e o takeHit. Sempre
+    // instalados (o acompanhamento da vida e barato); a opcao so decide se o numero sai
     {
         if ((g_origMonsterUpdateDmg = runtime.lookupFunction(kMonsterUpdateDmg)) && (g_origTakeHitDmg = runtime.lookupFunction(kTakeHitDmg)))
         {
             runtime.registerFunction(kMonsterUpdateDmg, &monsterUpdateDamage);
             runtime.registerFunction(kTakeHitDmg, &takeHitDamage);
-            std::fprintf(stderr, "[wotm] numeros de dano (WOTM_DAMAGEPOP): golpe branco, arremesso laranja, especial ciano\n");
+            std::fprintf(stderr, "[wotm] numeros de dano (WOTM_DAMAGEPOP, agora %s): golpe branco, arremesso laranja, especial ciano\n",
+                         wotm::settings::on(wotm::settings::DamagePop) ? "ligados" : "desligados");
         }
         else
             std::fprintf(stderr, "[wotm] numeros de dano indisponiveis: Monster::update ou Monster::takeHit sem funcao no runtime\n");
     }
-    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon
-    if (const char *e = std::getenv("WOTM_ENEMYBARS"); e && *e && std::strcmp(e, "0") != 0)
+    // Barras de vida e energia sobre os inimigos (mod, WOTM_ENEMYBARS=1): no lugar do icone de vida do Hud::drawHealthIcon. Ganchos
+    // sempre instalados: sem a variavel, as barras valem so na luta de 3 ou 4 jogadores (o HUD do multijogador)
     {
         if ((g_origDrawHealthIcon = runtime.lookupFunction(kDrawHealthIcon)) && (g_origAddPolyBars = runtime.lookupFunction(kAddPoly)))
         {
@@ -2250,7 +2718,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             runtime.registerFunction(kAddPoly, &addPolyBars);
             if ((g_origXform2dBars = runtime.lookupFunction(kXform2d)))
                 runtime.registerFunction(kXform2d, &xform2dBars);
-            std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
+            if (wotm::settings::on(wotm::settings::EnemyBars))
+                std::fprintf(stderr, "[wotm] barras de vida e energia sobre os inimigos (WOTM_ENEMYBARS)\n");
         }
         else
             std::fprintf(stderr, "[wotm] barras sobre os inimigos indisponiveis: Hud::drawHealthIcon ou ScreenPolys::addPoly sem funcao no runtime\n");
@@ -2259,6 +2728,9 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmVu1CheckInstall(runtime);
     extern void wotmVu0UcodeInstall(PS2Runtime &);   // wotm_live.inc: microcodigo do VU0 sem VIF0 no executavel do jogo
     wotmVu0UcodeInstall(runtime);
+    wotmSkinsInstall(runtime);   // por ultimo: embrulha os ganchos do SetPlayerMonster/SetAIMonster (split4, WOTM_AIVSAI)
+    wotmCustomInstall(runtime);  // depois das skins: embrulha o SetAIMonster delas
+    wotmTrainingInstall(runtime);   // por ultimo: o gancho mais de fora do update/takeHit/takeDamage (ve o dano que as trapacas deixam)
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else

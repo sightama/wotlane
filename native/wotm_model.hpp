@@ -8,6 +8,7 @@
 #pragma once
 #include "wotm_native.hpp"   // Ram, M4, mul, xform, decodeObject
 #include "wotm_disc.hpp"
+#include "wotm_flame.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -206,7 +207,7 @@ inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t>
 // Texturas das particulas que os efeitos dos monstros usam. No jogo vem da fase (nos de particula com id1 0x1B58 + FxTextureId, lidos
 // pelo particleParseTexture no dbProcInteractive): nenhum .NGP de monstro nem do menu as traz. Aqui saem direto de LVL/CENTRAL.TEX/.RTX
 // (iguais nas outras fases, menos CANYON1/TOKYODM): FxTextureId 8 Fireball (texId 5, paleta tbp 13) e as do lens flare 15/17/18/19
-// (texIds 54/4/55/56, paletas 203/9/207/211). docs/investigacoes/2026-10-21/fogo_agamo.md e lens_flare_monstros.md.
+// (texIds 54/4/55/56, paletas 203/9/207/211). 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md e 75f5be1:docs/investigacoes/2026-10-21/lens_flare_monstros.md.
 struct FxTextures {
     bool ok = false;
     std::vector<TexImage> fireball, flare;   // flare[texInfo - 15]; o 16 nao e usado (fica vazio)
@@ -233,6 +234,33 @@ inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t>
     out.h = int(h);
     out.rgba.resize(w * h);
     for (size_t i = 0; i < w * h; ++i) out.rgba[i] = clut[tex[p->data() + i]];
+    return true;
+}
+
+// Uma T4 do .TEX com a paleta CT32 8x2 de tbp `palTbp` do .RTX (16 cores, sem a troca do CSM1; nibble baixo primeiro), de cima para
+// baixo
+inline bool decodeT4(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, uint16_t texId, uint16_t palTbp, TexImage &out) {
+    const TexPacket *p = nullptr, *pal = nullptr;
+    const std::vector<TexPacket> tp = parseTex(tex, false), rp = parseTex(rtx, true);
+    for (const TexPacket &k : tp) if (k.texId == texId && k.psm == 0x14) p = &k;
+    for (const TexPacket &k : rp) if (k.isPalette() && k.tbp == palTbp && k.logW == 3) pal = &k;
+    if (!p || !pal) return false;
+    const size_t w = size_t(p->w()), h = size_t(p->h());
+    if (p->data() + (w * h + 1) / 2 > tex.size() || pal->data() + 64 > rtx.size()) return false;
+    uint32_t clut[16];
+    for (uint32_t i = 0; i < 16; ++i) {
+        uint32_t c;
+        std::memcpy(&c, rtx.data() + pal->data() + 4 * i, 4);
+        const uint32_t a = c >> 24;
+        clut[i] = (c & 0xFFFFFFu) | (a >= 0x80 ? 255u : a * 2u) << 24;
+    }
+    out.w = int(w);
+    out.h = int(h);
+    out.rgba.resize(w * h);
+    for (size_t i = 0; i < w * h; ++i) {
+        const uint8_t b = tex[p->data() + i / 2];
+        out.rgba[i] = clut[(i & 1) ? b >> 4 : b & 15];
+    }
     return true;
 }
 
@@ -786,6 +814,26 @@ private:
         const std::vector<uint8_t> &d = p.rtx ? rtxData_ : texData_;
         const int w = p.w(), h = p.h();
         const uint32_t cbp = uint32_t(t0 >> 37) & 0x3FFF, csa = uint32_t(t0 >> 56) & 31, tcc = uint32_t(t0 >> 34) & 1;
+        // A original primeiro; o PNG de mod (wotm_texmods.hpp; nas skins, o do traje novo, mesmo texId do disco que o desenho da luta
+        // usa) le o alfa na escala dela: cru se ela passa de 0x80 (texmods::loadPng)
+        uint32_t rawAmax = 0;
+        const bool orig = decodeOrig(p, d, w, h, cbp, csa, tcc, out, rawAmax);
+        if (const texmods::Png *png = texmods::Index::get().find(name_, p.rtx, id)) {
+            std::vector<uint32_t> px;
+            uint32_t pw = 0, ph = 0;
+            if (texmods::loadPng(*png, name_ + (p.rtx ? ".RTX t" : ".TEX t") + std::to_string(id) + " (modelo)", uint32_t(w), uint32_t(h),
+                                 false, tcc != 0, px, pw, ph, rawAmax > 0x80)) {
+                out.w = int(pw); out.h = int(ph);
+                out.rgba = std::move(px);
+                return true;
+            }
+        }
+        return orig;
+    }
+
+    // Pixels da textura do disco em RGBA (alfa 0..255 com 0x80 saturado); rawAmax: o maior alfa cru dos texels
+    bool decodeOrig(const TexPacket &p, const std::vector<uint8_t> &d, int w, int h, uint32_t cbp, uint32_t csa, uint32_t tcc,
+                    TexImage &out, uint32_t &rawAmax) const {
         auto fixA = [](uint32_t a) { return a >= 128 ? 255u : a * 2; };
         auto rd32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= d.size()) std::memcpy(&v, &d[o], 4); return v; };
         out.w = w; out.h = h;
@@ -798,6 +846,7 @@ private:
             const TexPacket &e = pe->second;
             const size_t np = size_t(e.w()) * size_t(e.h());
             std::vector<uint32_t> pal(np);
+            std::vector<uint8_t> palRawA(np);
             for (size_t i = 0; i < np; ++i) {
                 size_t j = i;
                 if (np >= 256 && t8) j = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);   // CSM1
@@ -805,6 +854,7 @@ private:
                 uint32_t c = 0;
                 if (o + 4 <= rtxData_.size()) std::memcpy(&c, &rtxData_[o], 4);
                 pal[i] = (c & 0xFFFFFFu) | (fixA(c >> 24) << 24);
+                palRawA[i] = uint8_t(c >> 24);
             }
             for (size_t i = 0; i < out.rgba.size(); ++i) {
                 uint32_t k;
@@ -816,11 +866,13 @@ private:
                     if (np >= 256 && ix < np) k = ix;
                 }
                 out.rgba[i] = k < np ? pal[k] : 0;
+                if (k < np) rawAmax = std::max<uint32_t>(rawAmax, palRawA[k]);
             }
         } else if (p.psm == 0 || p.psm == 1) {
             for (size_t i = 0; i < out.rgba.size(); ++i) {
                 const uint32_t c = rd32(base + 4 * i);
                 out.rgba[i] = (c & 0xFFFFFFu) | ((p.psm == 1 ? 255u : fixA(c >> 24)) << 24);
+                if (p.psm == 0) rawAmax = std::max(rawAmax, c >> 24);
             }
         } else if (p.psm == 2 || p.psm == 0xA) {
             for (size_t i = 0; i < out.rgba.size(); ++i) {
@@ -887,6 +939,11 @@ public:
     // Texturas dos efeitos (fogo do Agamo, lens flare); sem elas o monstro sai sem os efeitos. O Renderer nao e dono delas.
     void setFx(const FxTextures *fx) { fx_ = fx; }
     bool skipAbe = false;   // diagnostico: so os opacos
+    float shiftX = 0.f, shiftY = 0.f;   // deslocamento do monstro na imagem, fracao da largura/altura (+ = direita/cima); ver render
+    // Centro do enquadramento andado para a frente do monstro (+Y do modelo), em fracao da maior medida da caixa, so no eixo lateral
+    // da camera (o tamanho nao muda): tira o peso da cauda do centro da caixa em qualquer angulo e proporcao (shiftX so vale para
+    // um angulo e uma proporcao; de frente, fwd nao desloca nada)
+    float fwd = 0.f;
 
     template <class Bg>
     const RenderTexture2D &render(const Model &m, int w, int h, float yawDeg, float pitchDeg, float zoom, Bg &&background) {
@@ -898,14 +955,21 @@ public:
         upload(m);
         float lo[3], hi[3];
         m.framing(lo, hi);
-        const float c[3] = {(lo[0] + hi[0]) * .5f, (lo[1] + hi[1]) * .5f, (lo[2] + hi[2]) * .5f};
         const float ext = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-3f});
+        const float c[3] = {(lo[0] + hi[0]) * .5f, (lo[1] + hi[1]) * .5f, (lo[2] + hi[2]) * .5f};
         const float fovy = 30.f;
         const float dist = ext * 0.62f / std::tan(fovy * 0.5f * 3.14159265f / 180.f) / std::max(zoom, 0.05f);
         const float yaw = yawDeg * 3.14159265f / 180.f, pit = pitchDeg * 3.14159265f / 180.f;
         Camera3D cam{};
-        cam.target = {c[0], c[1], c[2]};
-        cam.position = {c[0] + std::sin(yaw) * std::cos(pit) * dist, c[1] + std::cos(yaw) * std::cos(pit) * dist, c[2] + std::sin(pit) * dist};
+        // shiftX/shiftY: move o monstro na imagem (fracao da largura/altura, + = direita/cima) andando com a camera e o alvo juntos
+        // pelos eixos direito R = (-cos yaw, sin yaw, 0) e de cima U = (-sin yaw sin pit, -cos yaw sin pit, cos pit) da camera
+        const float visH = 2.f * dist * std::tan(fovy * 0.5f * 3.14159265f / 180.f), visW = visH * float(w) / float(std::max(h, 1));
+        const float sR = -shiftX * visW + fwd * ext * std::sin(yaw), sU = -shiftY * visH;
+        const float o[3] = {-std::cos(yaw) * sR - std::sin(yaw) * std::sin(pit) * sU, std::sin(yaw) * sR - std::cos(yaw) * std::sin(pit) * sU,
+                            std::cos(pit) * sU};
+        cam.target = {c[0] + o[0], c[1] + o[1], c[2] + o[2]};
+        cam.position = {cam.target.x + std::sin(yaw) * std::cos(pit) * dist, cam.target.y + std::cos(yaw) * std::cos(pit) * dist,
+                        cam.target.z + std::sin(pit) * dist};
         cam.up = {0.f, 0.f, 1.f};   // Z para cima no mundo do monstro
         cam.fovy = fovy;
         cam.projection = CAMERA_PERSPECTIVE;
@@ -1043,13 +1107,12 @@ private:
     int locMode_ = -1, locAref_ = -1, locGain_ = -1;
     const FxTextures *fx_ = nullptr;
     std::vector<Texture2D> fxGpu_;   // [0] Fireball, [1..5] flare (texInfo 15..19)
-    struct Part { float p[3], v[3], size, age; uint8_t sel; };
-    struct Flame { bool have = false; float prev[3] = {0, 0, 0}, acc = 0.f; std::vector<Part> parts; };
+    using Part = flame::Part;
+    using Flame = flame::Flame;
     std::unordered_map<uint32_t, Flame> flames_;
     uint32_t simGen_ = 0;
     float simFrame_ = 0.f;
     uint32_t rng_ = 0x2545F491u;
-    float rnd() { rng_ = rng_ * 1664525u + 1013904223u; return float(rng_ >> 8) / 16777216.f; }
 
     void setGain(float g) { SetShaderValue(shader_, locGain_, &g, SHADER_UNIFORM_FLOAT); }
 
@@ -1068,49 +1131,9 @@ private:
     }
 
     // Fogo da cabeca do Agamo: preset 141 IdolHeadFlame (emissor op 22 do ROCKn.NGP), sprite aditivo com a textura Fireball, simulado
-    // por field como o particleEmit/particleMove (docs/investigacoes/2026-10-21/fogo_agamo.md; conferido num dump de luta da ISLAND):
-    // vento (0, 0, 3,2) somado a posicao, velocidade nasce com -vento (a particula nasce parada e acelera para cima), arrasto do ar
-    // 0,0390625, vida 20 fields, 2 por field parado. Os outros presets dos monstros (45 AttachedFlames, a cabeca que voa) nao ficam
-    // visiveis no idle e nao sao simulados.
-    void stepFlame(Flame &f, const Model::Emitter &em, bool emit) {
-        static const float kWind[3] = {0.f, 0.f, 3.2f};
-        const float airF = 0.0390625f;
-        for (size_t i = 0; i < f.parts.size();) {   // particleMove
-            Part &q = f.parts[i];
-            q.age += 1.f;
-            if (q.age >= 20.f) { f.parts[i] = f.parts.back(); f.parts.pop_back(); continue; }
-            const float vl = std::sqrt(q.v[0] * q.v[0] + q.v[1] * q.v[1] + q.v[2] * q.v[2]);
-            const float den = std::min(1.f + airF * vl, 2.f);
-            const float sc = int(q.age) < 5 ? 1.f - 0.2f * q.age + 0.2f * q.age / den : 1.f / den;
-            for (int c = 0; c < 3; ++c) { q.v[c] *= sc; q.p[c] += kWind[c] + q.v[c]; }
-            q.size += 1.f - 1.5f * std::min(q.age / 10.f, 1.f);
-            ++i;
-        }
-        if (!f.have) { std::memcpy(f.prev, em.e, sizeof f.prev); f.have = true; }
-        if (emit) {   // particleEmit
-            float disp[3], rel[3];
-            for (int c = 0; c < 3; ++c) { disp[c] = em.e[c] - f.prev[c]; rel[c] = disp[c] * 0.8f - kWind[c]; }
-            const float dl = std::sqrt(disp[0] * disp[0] + disp[1] * disp[1] + disp[2] * disp[2]);
-            f.acc += std::max(2.f, dl * 4.f / 15.f);
-            const int n = int(f.acc);
-            f.acc -= float(n);
-            for (int k = 1; k <= n && f.parts.size() < 256; ++k) {
-                const float frac = float(k) / float(n), remain = 1.f - frac;
-                const float y = rnd(), r = std::sqrt(std::max(0.f, 1.f - y * y)), th = 6.2831853f * rnd();
-                Part q;
-                for (int c = 0; c < 3; ++c) {
-                    const float u = r * (std::cos(th) * em.r0[c] + std::sin(th) * em.r2[c]);
-                    q.v[c] = rel[c] - u;
-                    q.p[c] = f.prev[c] + 5.f * u + disp[c] * frac - u * remain;
-                }
-                q.size = 7.f + 8.f * rnd();
-                q.age = std::floor(10.f * rnd());
-                q.sel = uint8_t((rng_ >> 13) & 3);
-                f.parts.push_back(q);
-            }
-        }
-        std::memcpy(f.prev, em.e, sizeof f.prev);
-    }
+    // por field (wotm_flame.hpp). Os outros presets dos monstros (45 AttachedFlames, a cabeca que voa) nao ficam visiveis no idle e nao
+    // sao simulados.
+    void stepFlame(Flame &f, const Model::Emitter &em, bool emit) { flame::step(f, em.e, em.r0, em.r2, emit, rng_); }
 
     void drawFire(const Model &m, const Camera3D &cam) {
         const std::vector<Model::Emitter> ems = m.emitters();
@@ -1127,9 +1150,6 @@ private:
         }
         uploadFx();
         if (fxGpu_.empty() || !fxGpu_[0].id || flames_.empty()) return;
-        // tabela de cor pela idade do preset (0x256C10 + 4 * 608): bytes R, G, B, A com 0x80 = 1; indice age * 3072 em 4.12
-        static const uint32_t kCol[16] = {0x00808080u, 0x28808080u, 0x4b808080u, 0x66808080u, 0x80808080u, 0x80808080u, 0x7d808080u, 0x72808080u,
-                                          0x64808080u, 0x54838180u, 0x457d7f80u, 0x37687580u, 0x284b6880u, 0x19355f80u, 0x0c21537du, 0x01124276u};
         // eixos da camera para o sprite de frente (o GS desenha o SPRITE na tela)
         float fw[3] = {cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z};
         const float fl = std::sqrt(fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]);
@@ -1144,14 +1164,8 @@ private:
         rlSetTexture(fxGpu_[0].id);
         for (const auto &fe : flames_)
             for (const Part &q : fe.second.parts) {
-                const float t = q.age * 3072.f / 4096.f;
-                const int i0 = std::min(15, int(t)), i1 = std::min(15, i0 + 1);
-                const float fr = t - float(int(t));
-                uint8_t c[4];
-                for (int b = 0; b < 4; ++b) {
-                    const float a = float((kCol[i0] >> (8 * b)) & 0xFF), z = float((kCol[i1] >> (8 * b)) & 0xFF);
-                    c[b] = uint8_t(std::clamp(a + (z - a) * fr, 0.f, 255.f));
-                }
+                const uint32_t col = flame::color(q.age);   // tabela do preset, 0x80 = 1
+                const uint8_t c[4] = {uint8_t(col), uint8_t(col >> 8), uint8_t(col >> 16), uint8_t(col >> 24)};
                 rlColor4ub(c[0], c[1], c[2], uint8_t(std::min(255, c[3] * 2)));
                 const float h = std::max(q.size, 0.f);
                 // UV pelos 2 bits sorteados (spritePacketInit): 3 normal, 1 espelha U, 2 espelha V, 0 os dois
@@ -1237,7 +1251,11 @@ private:
         setGain(1.f);
         EndShaderMode();
         EndBlendMode();
-        rlEnableDepthTest();
+        // Sai como o EndMode3D deixou (antes do flare): teste de Z desligado, para o 2D que vem depois. Religado, o desenho da selecao
+        // nativa depois de dois Robo-47 falhava no teste (quadros vazios a partir do segundo monstro).
+        // O setState(.., zmsk) desligou a escrita de Z: sem religar, o ClearBackground dos quadros seguintes nao limpava a
+        // profundidade e o ceu do menu (e o da luta) falhava no teste (manchas pretas so com monstro de luzes, o Robo-47)
+        rlEnableDepthMask();
     }
 };
 

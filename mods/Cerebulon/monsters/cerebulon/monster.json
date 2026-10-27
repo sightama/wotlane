@@ -1,0 +1,8 @@
+{
+  "id": "cerebulon",
+  "name": "CEREBULON",
+  "base": "final",
+  "costume": 0,
+  "narrator": "cerebulon",
+  "ai": true
+}

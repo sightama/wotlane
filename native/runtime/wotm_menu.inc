@@ -26,6 +26,7 @@ static bool g_probing = false;   // leitura do pad feita pelo gancho da transica
 static bool g_armed = false;     // o botao ja foi solto dentro da transicao para a tela 20
 static bool g_queued = false;    // aperto guardado ate o fim do fade-out da tela anterior
 static bool g_log = false, g_readyLogged = false;
+static uint32_t g_realignUntil = 0;   // g_frame ate o qual os icones da legenda seguem a camera (Start antecipado)
 
 static uint32_t rd(const uint8_t *rdram, uint32_t a)
 {
@@ -50,10 +51,41 @@ static uint32_t callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uin
     return v0;
 }
 
+// O showButtons alinha os icones da legenda a camera so nos quadros do fade. Com o Start antecipado a camera (animacao 1) ainda
+// anda depois que o fade acaba, e os icones ficariam presos no lugar onde ela estava: aqui eles sao realinhados a cada quadro
+// ate a animacao terminar, com os mesmos valores do showButtons (val1_x para o m_buttonCs[3], val2_x para o [1]).
+static void realignButtons(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+{
+    if (rd(rdram, wotm::sym::g_frame) > g_realignUntil)
+        return;
+    const PS2Runtime::RecompiledFunction f = rt->lookupFunction(wotm::fn::uiAlignItemWithCamera__FP3_csfff);
+    const uint32_t sh = rd(rdram, wotm::sym::shell);
+    if (!f || !sh)
+        return;
+    const uint32_t cs[2] = {rd(rdram, sh + 0x60 + 3 * 4), rd(rdram, sh + 0x60 + 1 * 4)};
+    const uint32_t xs[2] = {wotm::sym::val1_x_3061, wotm::sym::val2_x_3064};
+    for (int i = 0; i < 2; i++)
+    {
+        if (!cs[i] || !rdram[(cs[i] + 0xC) & 0x1FFFFFFu])   // drawMe
+            continue;
+        const R5900Context saved = *ctx;
+        ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(cs[i])));
+        std::memcpy(&ctx->f[12], rdram + wotm::sym::val_z_3063, 4);
+        std::memcpy(&ctx->f[13], rdram + xs[i], 4);
+        std::memcpy(&ctx->f[14], rdram + wotm::sym::val_y_3062, 4);
+        ctx->r[31] = _mm_set_epi64x(0, 0);
+        ctx->pc = wotm::fn::uiAlignItemWithCamera__FP3_csfff;
+        f(rdram, ctx, rt);
+        *ctx = saved;
+    }
+}
+
 static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc == kGetInput)
     {
+        if (!g_probing && !g_force)
+            realignButtons(rdram, ctx, runtime);
         if (g_force)
         {
             g_force = false;
@@ -118,6 +150,7 @@ static bool pressDuringTransition(uint8_t *rdram, R5900Context *ctx, PS2Runtime 
     g_force = false;
     // transicao 20 -> 1 com a animacao 0, como quando a anterior termina; a animacao 1 (camera) segue sozinha
     wr(rdram, wotm::sym::currAnimationIndex, 0);
+    g_realignUntil = rd(rdram, wotm::sym::g_frame) + 150;   // folga sobre os 120 quadros da animacao 1
     if (g_log)
         std::fprintf(stderr, "[menu] g_frame %u: press start antecipado, tela %u\n", rd(rdram, wotm::sym::g_frame), rd(rdram, wotm::sym::currScreen));
     return true;
@@ -151,6 +184,7 @@ static void transitionHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
         }
     }
     g_origTransition(rdram, ctx, runtime);
+    realignButtons(rdram, ctx, runtime);
 }
 
 static void install(PS2Runtime &runtime)

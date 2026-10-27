@@ -1,0 +1,9 @@
+{
+  "id": "jelly",
+  "name": "JELLY",
+  "base": "jelly",
+  "costume": 0,
+  "camera": { "from": "togera", "scale": 300 },
+  "narrator": "cerebulon",
+  "ai": true
+}

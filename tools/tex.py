@@ -150,8 +150,18 @@ def pixel_bytes(psm, w, h):
 
 # ---------------------------------------------------------------- pixels (como native/wotm_gs.hpp)
 
-def fix_alpha(a):
+def fix_alpha(a, hi=False):
+    """Alfa do GS -> PNG. Comum: 0x80 (1,0) = 255, resto * 2. hi (textura com alfa acima de 0x80, como o logo do titulo, que vai
+    a 0xFF e o jogo desenha com o vertice em meia opacidade): o PNG guarda o alfa cru, 255 = 0xFF. Mesma regra do
+    native/wotm_texmods.hpp (loadPng), para o export ida e volta nao perder nada."""
+    if hi:
+        return a
     return 255 if a >= 128 else a * 2
+
+
+def raw_hi(px_raw):
+    """Pixels decodificados com hi=True: a textura usa alfa acima de 0x80 (o PNG dela vai cru)?"""
+    return any(c[3] > 0x80 for c in px_raw)
 
 
 def from16(v):
@@ -164,22 +174,22 @@ def csm1(i):
     return (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)
 
 
-def palette_from_entry(data, p, rtx=True, swap=True):
-    """Paleta RGBA (alfa 0..255) de uma entrada CT32 do .RTX, ja na ordem logica."""
+def palette_from_entry(data, p, rtx=True, swap=True, hi=False):
+    """Paleta RGBA (alfa 0..255; hi: cru) de uma entrada CT32 do .RTX, ja na ordem logica."""
     n = p.w * p.h
     o = p.data_off(rtx)
     raw = [struct.unpack_from("<4B", data, o + 4 * k) if o + 4 * k + 4 <= len(data) else (0, 0, 0, 0) for k in range(n)]
     if n >= 256 and swap:   # CSM1: so nas texturas de 8 bits (como o fillPal do nativo)
-        return [(r, g, b, fix_alpha(a)) for (r, g, b, a) in (raw[csm1(i)] for i in range(256))]
-    return [(r, g, b, fix_alpha(a)) for (r, g, b, a) in raw]
+        return [(r, g, b, fix_alpha(a, hi)) for (r, g, b, a) in (raw[csm1(i)] for i in range(256))]
+    return [(r, g, b, fix_alpha(a, hi)) for (r, g, b, a) in raw]
 
 
 def gray_palette(n):
     return [(v, v, v, 255) for v in (i * 255 // (n - 1) for i in range(n))]
 
 
-def decode(buf, off, psm, w, h, pal=None, csa=0):
-    """Pixels lineares -> lista de (r,g,b,a) com alfa 0..255. pal: 256 (T8) ou 16+ (T4) cores."""
+def decode(buf, off, psm, w, h, pal=None, csa=0, hi=False):
+    """Pixels lineares -> lista de (r,g,b,a) com alfa 0..255 (hi: CT32 com alfa cru). pal: 256 (T8) ou 16+ (T4) cores."""
     out = []
     if psm in (T8, T8H):
         for n in range(w * h):
@@ -193,7 +203,7 @@ def decode(buf, off, psm, w, h, pal=None, csa=0):
     elif psm == CT32:
         for n in range(w * h):
             r, g, b, a = struct.unpack_from("<4B", buf, off + 4 * n)
-            out.append((r, g, b, fix_alpha(a)))
+            out.append((r, g, b, fix_alpha(a, hi)))
     elif psm == CT24:
         for n in range(w * h):
             r, g, b, _ = struct.unpack_from("<4B", buf, off + 4 * n)
@@ -440,16 +450,16 @@ class Pairing:
             f = tex0_fields(t0)
             self.uses[tid - self.dtex].add((f["cbp"] - self.dcbp, f["csa"]))
 
-    def palette(self, p):
-        """(paleta, tbp da paleta, csa, todas as combinacoes vistas) ou (None, ...) se nao achou."""
+    def palette(self, p, hi=False):
+        """(paleta, tbp da paleta, csa, todas as combinacoes vistas) ou (None, ...) se nao achou. hi: alfa cru."""
         combos = sorted(self.uses.get(p.texId, ()))
         for cbp, csa in combos:
             e = self.pals.get(cbp)
             if e is not None:
-                return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H)), cbp, csa, combos
+                return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H), hi=hi), cbp, csa, combos
         if len(self.pals) == 1 and not combos:   # arquivo com uma paleta so
             cbp, e = next(iter(self.pals.items()))
-            return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H)), cbp, 0, combos
+            return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H), hi=hi), cbp, 0, combos
         return None, None, 0, combos
 
 
@@ -537,8 +547,9 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
                "offset": p.off}
         rtx_side = is_rtx_main
         off = p.data_off(rtx_side)
+        hi = False   # alfa acima de 0x80: o PNG vai cru (fix_alpha)
         if p.psm in (T8, T4, T8H, T4HL, T4HH):
-            pal, cbp, csa, combos = pair.palette(p)
+            pal, cbp, csa, combos = pair.palette(p, hi=True)
             ent["palettesSeen"] = [{"tbp": c, "csa": s} for c, s in combos]
             if pal is None:
                 pal = gray_palette(256 if p.psm in (T8, T8H) else 16)
@@ -549,20 +560,28 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
             if p.psm in (T4, T4HL, T4HH) and len(pal) < 256:
                 csa = 0
             px = decode(data, off, p.psm if p.psm not in HIGH else (T8 if p.psm == T8H else T4), p.w, p.h, pal, csa)
+            hi = ent["palette"] is not None and raw_hi(px)
         elif p.psm in (CT32, CT24, CT16, CT16S):
-            px = decode(data, off, p.psm, p.w, p.h)
+            px = decode(data, off, p.psm, p.w, p.h, hi=True)
+            hi = p.psm == CT32 and raw_hi(px)
         else:
             ent["error"] = "formato nao suportado"
             man["textures"].append(ent)
             continue
-        name = "%s_t%04d%s.png" % (stem, p.texId, "" if ent.get("palette", True) is not None else "_sempaleta")
+        if hi:
+            ent["alpha"] = "raw"   # 255 no PNG = 0xFF do GS (o dobro do opaco comum)
+        elif p.psm != CT24 and p.psm not in (CT16, CT16S) and ent.get("palette", True) is not None:
+            px = [(r, g, b, fix_alpha(a)) for (r, g, b, a) in px]   # decodificado cru acima: 0x80 -> 255
+        # Mesmo nome que o desenho nativo procura em mods/ (native/wotm_texmods.hpp): <arquivo>_t<id> do .TEX, <arquivo>_rtx_t<id> do .RTX
+        name = "%s%s_t%04d%s.png" % (stem, "_rtx" if is_rtx_main else "", p.texId,
+                                     "" if ent.get("palette", True) is not None else "_sempaleta")
         write_png(os.path.join(outdir, name), p.w, p.h, px)
         ent["png"] = name
         man["textures"].append(ent)
         done += 1
     if rtx is not None and not is_rtx_main:
         man["palettes"] = [{"tbp": e.tbp, "colors": e.w * e.h} for e in rtx["packets"] if e.is_palette()]
-    with open(os.path.join(outdir, stem + "_manifest.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(outdir, stem + ("_rtx" if is_rtx_main else "") + "_manifest.json"), "w", encoding="utf-8") as f:
         json.dump(man, f, indent=1, ensure_ascii=False)
     print("%d texturas em %s (%d sem paleta: em tons de cinza)%s" % (done, outdir, semp,
                                                                      "" if refs else "; sem .NGP, paletas so por arquivo de uma paleta"))
@@ -571,8 +590,10 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
 
 # ---------------------------------------------------------------- reinjecao
 
-def to_gs_alpha(a):
-    """Alfa 0..255 do PNG -> GS (0x80 = 1,0). Inverso de fix_alpha nos valores que ele produz."""
+def to_gs_alpha(a, hi=False):
+    """Alfa 0..255 do PNG -> GS (0x80 = 1,0; hi: cru). Inverso de fix_alpha nos valores que ele produz."""
+    if hi:
+        return a
     return 0x80 if a >= 255 else a // 2
 
 
@@ -603,8 +624,8 @@ def median_cut(px, n):
     return pal + [(0, 0, 0, 0)] * (n - len(pal))
 
 
-def encode(px, psm, pal=None, csa=0):
-    """(r,g,b,a) -> bytes lineares do formato. Indexados usam a paleta dada (indice mais proximo)."""
+def encode(px, psm, pal=None, csa=0, hi=False):
+    """(r,g,b,a) -> bytes lineares do formato. Indexados usam a paleta dada (indice mais proximo). hi: alfa do PNG cru (CT32)."""
     out = bytearray()
     if psm in (T8, T8H):
         cache = {}
@@ -626,7 +647,7 @@ def encode(px, psm, pal=None, csa=0):
             out.append(idx[i] | (idx[i + 1] << 4))
     elif psm == CT32:
         for (r, g, b, a) in px:
-            out += bytes((r, g, b, to_gs_alpha(a)))
+            out += bytes((r, g, b, to_gs_alpha(a, hi)))
     elif psm == CT24:
         for (r, g, b, _a) in px:
             out += bytes((r, g, b, 0))
@@ -639,14 +660,14 @@ def encode(px, psm, pal=None, csa=0):
     return bytes(out)
 
 
-def write_palette(buf, e, pal, swap=True):
-    """Grava a paleta (ordem logica, alfa 0..255) na entrada CT32 do .RTX."""
+def write_palette(buf, e, pal, swap=True, hi=False):
+    """Grava a paleta (ordem logica, alfa 0..255; hi: cru) na entrada CT32 do .RTX."""
     o = e.data_off(True)
     n = e.w * e.h
     for i in range(min(n, len(pal))):
         k = csm1(i) if n >= 256 and swap else i
         r, g, b, a = pal[i]
-        buf[o + 4 * k:o + 4 * k + 4] = bytes((r, g, b, to_gs_alpha(a)))
+        buf[o + 4 * k:o + 4 * k + 4] = bytes((r, g, b, to_gs_alpha(a, hi)))
 
 
 def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=None, new_palette=False):
@@ -665,6 +686,7 @@ def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=N
     psm = p.psm
     pal = None
     csa = 0
+    hi = False   # a original usa alfa acima de 0x80: o PNG vem cru (fix_alpha)
     rtx_data = rtx = e = None
     if psm in (T8, T4, T8H, T4HL, T4HH):
         rtx_path = rtx_path or (path if is_rtx_main else sibling(path, ".RTX"))
@@ -675,9 +697,13 @@ def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=N
         rtx_data = bytearray(rtx_bytes)
         rtx = parse(bytes(rtx_data))
         pair = Pairing(tex, bytes(rtx_data), rtx, ngp_texrefs(ngp_path) if ngp_path else [])
-        cur, cbp, csa, _ = pair.palette(p)
+        cur, cbp, csa, _ = pair.palette(p, hi=True)
         if cur is None:
             raise SystemExit("nao achei a paleta da textura %d (passe o .NGP com --ngp)" % tex_id)
+        dpsm = psm if psm not in HIGH else (T8 if psm == T8H else T4)
+        hi = raw_hi(decode(bytes(data), p.data_off(is_rtx_main), dpsm, p.w, p.h, cur, csa if len(cur) >= 256 else 0))
+        if not hi:
+            cur = [(r, g, b, fix_alpha(a)) for (r, g, b, a) in cur]
         e = pair.pals[cbp]
         n = 256 if psm in (T8, T8H) else 16
         if new_palette:
@@ -690,11 +716,13 @@ def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=N
                 cur = list(cur)
                 cur[csa * 16:csa * 16 + 16] = newp
                 newp = cur
-            write_palette(rtx_data, e, newp, swap=psm in (T8, T8H))
+            write_palette(rtx_data, e, newp, swap=psm in (T8, T8H), hi=hi)
             pal = newp
         else:
             pal = cur
-    enc = encode(px, psm if psm not in HIGH else (T8 if psm == T8H else T4), pal, csa)
+    elif psm == CT32:
+        hi = raw_hi(decode(bytes(data), p.data_off(is_rtx_main), psm, p.w, p.h, hi=True))
+    enc = encode(px, psm if psm not in HIGH else (T8 if psm == T8H else T4), pal, csa, hi)
     o = p.data_off(is_rtx_main)
     need = pixel_bytes(psm, p.w, p.h)
     if o + need > p.end:

@@ -3,7 +3,7 @@
 Uso: python tools/mcsave.py <pasta que contem mc0/ e mc1/>
 
 E o mesmo formato do save.json que o runtime grava (native/runtime/wotm_save.inc); serve para conferir os dois. Layout dos blocos
-em docs/passos/POS_FRONTEIRA.md (item 3). So le.
+em docs/FORMATOS.md, "Save do memory card". So le.
 """
 import json
 import os
@@ -48,7 +48,9 @@ def settings(b, j):
         "levels": {lv: flag(i) != 0 for i, lv in LEVEL_SLOTS},
         "mechaSweetTooth": flag(23) != 0,   # Agamo traje 4; no runtime a chave vale mais que agamo.skins[3]
     }
-    j["unknown"] = {"shell2A40": u32(b, 0x0C), "slot47": flag(47), "game1204B0": [u32(b, 0xE8 + k * 4) for k in range(3)]}
+    # TheGame+0x1204B0..B8: recorde do endurance por dificuldade (8498ce0:docs/investigacoes/2026-10-24/save_campos_abertos.md)
+    j["records"] = {"enduranceBest": {d: u32(b, 0xE8 + k * 4) for k, d in enumerate(("easy", "medium", "hard"))}}
+    j["unknown"] = {"shell2A40": u32(b, 0x0C), "slot47": flag(47)}
 
 
 def adventure(b, j, card):

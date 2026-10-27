@@ -61,6 +61,7 @@ Write-Host "Lote: $total combinacoes de $Secs s (~$([math]::Ceiling($total * ($S
 
 $env:WOTM_REPO = $repo
 $env:WOTM_AIVSAI = '1'
+$env:WOTM_SETTINGS = '0'   # sem o settings.ini do painel/launcher: lote igual em toda maquina
 if ($Check -gt 0) { $env:WOTM_VU1CHECK = [string]$Check } else { Remove-Item Env:WOTM_VU1CHECK -ErrorAction SilentlyContinue }
 $n = 0
 foreach ($c in $combos) {
@@ -86,7 +87,8 @@ foreach ($c in $combos) {
     Get-Process ps2EntryRunner, wotm -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
 
-    $lines = @(Select-String -Path "$runtime\live.err.log" -Pattern '\[partida\]|\[wotm\] carga|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })
+    $liveLog = if (Test-Path "$runtime\logs\live.err.log") { "$runtime\logs\live.err.log" } else { "$runtime\live.err.log" }   # run_live.ps1 antigo grava na raiz
+    $lines = @(Select-String -Path $liveLog -Pattern '\[partida\]|\[wotm\] carga|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })
     $lines | Set-Content (Join-Path $out "$tag.log") -Encoding UTF8
     Get-ChildItem $disc -Filter '*_vigia_*.bin' -ErrorAction SilentlyContinue | ForEach-Object { Move-Item $_.FullName (Join-Path $out ("{0}_{1}" -f $tag, $_.Name)) -Force }
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Move-Item $_.FullName (Join-Path $out "$tag.png") -Force }

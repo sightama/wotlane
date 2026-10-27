@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
     SetTargetFPS(60);
 
     scene.collect(ram, lod);
-    std::fprintf(stderr, "itens=%zu visitados=%u\n", scene.items.size(), scene.visited);
+    std::fprintf(stderr, "itens=%zu visitados=%u recortados=%u\n", scene.items.size(), scene.visited, scene.culled);
     if (std::getenv("WOTM_UVSTAT")) scene.dumpUv(ram);
     if (std::getenv("WOTM_UVISO")) scene.dumpUvIso(ram);
     if (std::getenv("WOTM_SKINSAN")) scene.dumpSkinSanity(ram);

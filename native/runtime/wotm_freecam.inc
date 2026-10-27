@@ -14,6 +14,7 @@
 #include "wotm_freecam.h"
 
 bool wotmPaused();   // wotm_foto.inc: a thread do EE esta segura pela pausa (F7)
+bool wotmPhotoActive();   // wotm_photo.inc: modo foto ligado (F5 fica sem efeito)
 
 namespace wotm_freecam
 {
@@ -23,6 +24,9 @@ struct View {
     bool on = false;
     bool override = false;   // o desenho usa a pose (jogo pausado); fora da pausa o jogo ja desenha com ela
     WotmFreeCamPose pose;
+    float zoom = 1.f;        // modo foto: tan(fov/2) da camera livre sobre o do jogo (< 1 aproxima)
+    bool photo = false;      // vista do modo foto (wotm_photo.inc): o HUD segue a camera em vez de sumir
+    bool hideHud = false;    // modo foto com o HUD escondido
 };
 
 static View update(const wotm::GameCamera &gc)
@@ -35,7 +39,7 @@ static View update(const wotm::GameCamera &gc)
     if (firstT < 0.0) firstT = GetTime();
     const double autoT = autoAt >= 0.0 ? GetTime() - firstT - autoAt : -1.0;
     static int autoStage = 0;   // 0 esperando, 1 andando, 2 terminado
-    bool toggle = IsKeyPressed(KEY_F5) && !wotm_netstatus::g_active;   // a camera livre escreve na RAM do jogo: fora da partida em rede
+    bool toggle = IsKeyPressed(KEY_F5) && !wotmPhotoActive() && !wotm_netstatus::g_active;   // a camera livre escreve na RAM do jogo: fora da partida em rede
     if (autoAt >= 0.0 && ((autoStage == 0 && autoT >= 0.0) || (autoStage == 1 && autoT >= 10.0)))
     {
         toggle = on == (autoStage == 1);
@@ -125,24 +129,16 @@ static void applyToScene(wotm::Scene &scene, const wotm::GameCamera &gc, const W
     scene.overlay.clear();
 }
 
-static wotm::GameCamera camera(const wotm::GameCamera &gc, const WotmFreeCamPose &p)
+static wotm::GameCamera camera(const wotm::GameCamera &gc, const WotmFreeCamPose &p, float zoom = 1.f)
 {
     wotm::GameCamera c = gc;
     float r[3];
     wotmFreeCamAxes(p, r, c.fwd, c.up);
     for (int i = 0; i < 3; ++i) c.pos[i] = p.pos[i];
+    if (zoom != 1.f)
+        c.fovy = 2.f * std::atan(zoom * std::tan(gc.fovy * 3.14159265f / 360.f)) * 180.f / 3.14159265f;
     return c;
 }
 
-static void overlay(const View &v)
-{
-    if (!v.on)
-        return;
-    char line[200];
-    std::snprintf(line, sizeof line, "FREE CAMERA (F5 exits)  WASD/QE move, Shift/Ctrl, wheel: speed %.0f  |  right button/arrows look  |  Tab: pad %s%s",
-                  speed, g_wotmFreeCamPad.load(std::memory_order_relaxed) ? "GOES TO THE GAME" : "blocked", v.override ? "  |  paused: no HUD" : "");
-    const int fs = 18, x = 10, y = GetScreenHeight() - fs - 10;
-    DrawText(line, x + 1, y + 1, fs, BLACK);
-    DrawText(line, x, y, fs, SKYBLUE);
-}
 } // namespace wotm_freecam
+// Os controles aparecem na legenda de icones de baixo (wotmFreeCamLegend, wotm_photo.inc)

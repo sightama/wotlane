@@ -40,14 +40,14 @@ ficar igual ao jogador 1.
 O `LoadLevelFiles` procura `<raiz>\LVL\<fase>.NGP;1` e `.TEX;1` no CD (`fileCdSearchFile`) para saber os tamanhos (barra de progresso) e
 carrega, nesta ordem: nível (`.ngp`), monstros, texturas de recurso, texturas; depois `dbsRelocateFileZero` e `dbInitDb`.
 
-## Filmes `.PSS` (2026-10-11)
-`disc/MOV/*.PSS` (52 arquivos). MPEG-2 program stream em pacotes de 2048 bytes (cabeçalho de pacote `00 00 01 BA` de MPEG-2, um cabeçalho de sistema `BB`), conferido com `tools/pss.py` e o `ffprobe`:
+## Filmes `.PSS`
+`disc/MOV/*.PSS` (52 arquivos). MPEG-2 program stream em pacotes de 2048 bytes (cabeçalho de pacote `00 00 01 BA` de MPEG-2, um cabeçalho de sistema `BB`; `tools/pss.py` e o `ffprobe` mostram a estrutura):
 - **Vídeo:** fluxo `E0`, MPEG-2 MP@ML a 29,97 quadros/s. Tela cheia em 640x368 com proporção 16:9: `INTRO_M`, `INTRO_S`, `INT_MAIN`, `INT_ACT1..3`, `INT_TRAN`, `<monstro>_G` (finais), `<monstro>_P`, `CREDITS`. Os outros são pequenos e sem áudio: 256x128 (`SHELDEMO`, o filme do menu, com 173 s; nomes de monstro e de fase como `ALIEN`, `CENTRAL`, `TOKYO`: prévias, provavelmente), 254x128 (`3-MILE`, `AIRPORT`, `ISLAND`) e 256x160 (`MANTIS`, `ROBOT`).
 - **Com áudio** (nos primeiros 4 MB): `INTRO_M`, `INT_MAIN`, `CREDITS` e os `_G`/`_P`, menos `ALIEN_G` e `DRAGON_G`. `INT_ACT1..3` não têm (o `playMovie` os chama com `comAudio` = 0; ele também cita um `int_act4.pss` que não existe no disco); `INTRO_S` e `INT_TRAN` também não, e não aparecem no `playMovie`.
 - **Áudio:** fluxo privado `BD`, subfluxo `FF`, 4 bytes de cabeçalho por PES. Começa com `"SShd"`, tamanho (0x18), tipo (1 = PCM 16 bits little-endian), taxa (48000), canais (2), intercalação (0x200) e dois `-1`; depois `"SSbd"`, tamanho dos dados e os dados: blocos de 512 bytes alternando canal esquerdo e direito (256 amostras cada). O FFmpeg não reconhece esse áudio (só vê o vídeo).
 - **No jogo:** o retail toca por `sceMpegDemuxPssRing` + IPU; o nativo (`native/wotm_fmv.hpp`) lê o arquivo direto. O filme do menu vira a textura de um objeto do menu 3D: `moviesSetScreenObject` troca o texId por 999 (o último de `texInfo[1000]`, reservado) e o TEX0 por CT32 em 0x3BA0, largura 320 (`VramAddrForMovies` 0xEE800 palavras / 64, `VramWidthForMovies` 0x140), com `TW`/`TH` = 8/7.
 
-## Som: `.BNK`, `.VPK`, `.VAG` e a API do 989snd (2026-10-13)
+## Som: `.BNK`, `.VPK`, `.VAG` e a API do 989snd
 Lido com `tools/snd989.py` (bancos, estatísticas, exportação WAV) e reproduzido por `native/wotm_snd.hpp` (`native/sndplay.cpp` grava WAV sem o jogo).
 
 **Caminho no EE.** `game/Sound` (`SoundManager`, sons de monstro, veículos, armas, fases), `game/StreamingSoundManager` (músicas e falas em stream) e `common/SoundBank` (`SoundBankManager`: carga e descarga de bancos) chamam as `snd_*` da `lib989snd`. Cada `snd_*` empacota os argumentos e manda um comando numerado ao driver 989snd no IOP por `sceSifCallRpc` (`snd_SendIOPCommandAndWait`/`NoWait`, com lote em `snd_SendCurrentBatch`, comando RPC 0x4D). Exemplos: 0x09 `SetMasterVolume`, 0x11/0x12 `PlaySoundVolPanPMPB` (com/sem espera), 0x15 `StopSound`, 0x18 `StopAllSounds`, 0x19 `SoundIsStillPlaying`, 0x21 `SetSoundParams`, 0x2A `InitVAGStreamingEx`, 0x2C `PlayVAGStreamByLoc`, 0x2F `StopVAGStream`, 0x38 leitura de CD "stream-safe", 0x4A `SRAMGetFreeMem`. As variantes `_CB` entregam o resultado chamando `cb(valor, user)` no EE (o jogo quase sempre passa `soundPlayCB`, que grava `*user = valor`); as `_A` não devolvem nada. Os IRX `LIBSD`, `989SND` e `989ERR` sobem em `inputInit`. O jogo usa umas 40 `snd_*`; não usa MIDI (`snd_MMDLoad*` nunca é chamada).
@@ -63,11 +63,11 @@ Lido com `tools/snd989.py` (bancos, estatísticas, exportação WAV) e reproduzi
 - Nomes: `<MONSTRO>_S` (efeitos do monstro) e `<MONSTRO>_LS` (versão de menor qualidade, `loadLoResMonsterBank`); `<FASE>_S`; `GENAMB_S`/`GENAM_LS` (ambiente comum), `GENMON_S`, `SHELL_S` (menu), `COUNT_S`, `FINAL_S` etc.
 - **`SHELLMUS.BNK` (1,7 MB) não é sequência MIDI:** 1 som com laço, 2 grains `TONE` (pan 270 e 90 = canal esquerdo e direito) e 2 amostras longas a 44 058 Hz. É a música do menu, sampleada.
 
-**`.VPK` (`disc/VAG`, 51 arquivos).** `" KPV"`, `u32 bytes por canal`, `u32 início dos dados` (0x800), `u32 tamanho do par de blocos` (0xA000), `u32 Hz`, `u32 canais` (2 em todos), e `{u16 vol, u16 pan}` por canal (127/270 e 127/90). Os dados alternam blocos de **0x5000** bytes de cada canal (o campo é o par esquerdo+direito: os meio-blocos 0 e 1 têm correlação ~0,6 entre si e ~0 com o seguinte, conferido em CITYAMB, TOKYOBAT e CONGAI), em ADPCM do SPU2 sem flags de fim nem de laço. `*AMB`/`*BAT` (música das fases, ~2 min a 44,1 kHz); os outros (falas, cinemas, `*I` de introdução, `*D`, `*T`) a 48 kHz.
+**`.VPK` (`disc/VAG`, 51 arquivos).** `" KPV"`, `u32 bytes por canal`, `u32 início dos dados` (0x800), `u32 tamanho do par de blocos` (0xA000), `u32 Hz`, `u32 canais` (2 em todos), e `{u16 vol, u16 pan}` por canal (127/270 e 127/90). Os dados alternam blocos de **0x5000** bytes de cada canal (o campo é o par esquerdo+direito: os meio-blocos 0 e 1 têm correlação ~0,6 entre si e ~0 com o seguinte, em CITYAMB, TOKYOBAT e CONGAI), em ADPCM do SPU2 sem flags de fim nem de laço. `*AMB`/`*BAT` (música das fases, ~2 min a 44,1 kHz); os outros (falas, cinemas, `*I` de introdução, `*D`, `*T`) a 48 kHz.
 
-**`.VAG`** (`DEFEAT`, `VICTORY`, 2 KB cada): `"VAGp"` big-endian com 0x30 bytes de cabeçalho (tamanho dos dados em 0x0C, Hz em 0x10, nome em 0x20; o `snd989.py` lia o Hz em 0x14 até 2026-10-20, o nativo sempre leu em 0x10); praticamente vazios.
+**`.VAG`** (`DEFEAT`, `VICTORY`, 2 KB cada): `"VAGp"` big-endian com 0x30 bytes de cabeçalho (tamanho dos dados em 0x0C, Hz em 0x10, nome em 0x20); praticamente vazios.
 
-**De volta para o jogo (`tools/snd989.py`, 2026-10-20).** `vpk`, `vag` e `bnk-replace` codificam WAV (PCM 8/16/24/32 bits ou float) no ADPCM do SPU2. O codificador simula o decodificador bloco a bloco (filtro e shift de menor erro), então o que ele grava é exatamente o que o jogo reconstrói; ~40 dB de SNR em música, ~1 s de processamento por segundo de áudio estéreo. No `.VPK` o campo de bytes por canal vai em blocos inteiros de 0x5000 (o leitor do nativo lê só `início + bytes por canal × canais`), o que deixa até 0,8 s de silêncio no fim. O `bnk-replace` reamostra (linear) para a taxa do `TONE`, mantém o laço da amostra original e corrige os offsets dos outros sons, o tamanho do chunk e os campos de tamanho do `SBlk` (0x28 e 0x2C, que acompanham o total das amostras; significado exato não conferido). Falta conferir no jogo com arquivos reais.
+**De volta para o jogo (`tools/snd989.py`).** `vpk`, `vag` e `bnk-replace` codificam WAV (PCM 8/16/24/32 bits ou float) no ADPCM do SPU2. O codificador simula o decodificador bloco a bloco (filtro e shift de menor erro), então o que ele grava é exatamente o que o jogo reconstrói; ~40 dB de SNR em música, ~1 s de processamento por segundo de áudio estéreo. No `.VPK` o campo de bytes por canal vai em blocos inteiros de 0x5000 (o leitor do nativo lê só `início + bytes por canal × canais`), o que deixa até 0,8 s de silêncio no fim. O `bnk-replace` reamostra (linear) para a taxa do `TONE`, mantém o laço da amostra original e corrige os offsets dos outros sons, o tamanho do chunk e os campos de tamanho do `SBlk` (0x28 e 0x2C, que acompanham o total das amostras; significado exato desconhecido). Falta testar no jogo com arquivos reais.
 
 **ADPCM do SPU2.** Blocos de 16 bytes: `(filtro << 4) | shift`, flags (1 = fim do trecho, 2 = repete a partir do início do laço, 4 = início do laço) e 14 bytes com 28 amostras de 4 bits; filtros `(0,0) (60,0) (115,-52) (98,-55) (122,-60)` / 64.
 
@@ -108,7 +108,7 @@ Id = 14 bits altos da primeira palavra do nó. Os nós de opcode 0x1F e 0x27 sã
 
 Os pickups guardam o id do slot de `Interactives` no `hierhead`: `Interactives::addInteractive` devolve esse índice.
 
-## Malhas (`HierObject::polyPkt`) — decodificado em 2026-10-10
+## Malhas (`HierObject::polyPkt`)
 Leitor de referência: `tools/ngp.py` (Python, offline, direto do disco) e `native/wotm_native.hpp` (`decodeObject`, C++, lê a RAM do EE).
 Um nó `OBJECT` (`_hierobject`, 0xA0 bytes) aponta com `polyPkt` (+4) para uma sub-cadeia de DMA chamada pelo `pktAddVu1ObjAsm` (tag `CALL`; o pacote termina em `RET`):
 - Palavra 0: tag DMA com `QWC` nos 16 bits baixos e `ID=6` (`ret`) em `0x60000000`; o pacote tem `QWC + 1` quadwords. As palavras 2 em diante são um **fluxo VIF** para o microcódigo do VU1.
@@ -127,7 +127,7 @@ O `TEX0` de cada objeto (`gsTexCtx[0].tex0`) usa o formato do GS (`TBP0` bits 0.
 `native/wotm_gs.hpp` decodifica `CT32/CT24/CT16/T8/T4` a partir de um dump da VRAM (4 MB); a paleta de 256 entradas (CSM1) está em memória linear com as entradas 8..15 e 16..23 de cada grupo de 32 trocadas.
 O runtime grava `ram_<quadro>.bin` e `vram_<quadro>.bin` com `PS2X_DUMP_RAM="quadro,..."` (`PS2X_NO_GS=1 PS2X_GS_UPLOADS=1` processa só os uploads, sem rasterizar).
 
-**Arquivos `.TEX` e `.RTX` (lidos do `src/common/texm.cpp`, 2026-10-20).** Ferramenta: `tools/tex.py` (`list`, `export` para PNG com
+**Arquivos `.TEX` e `.RTX` (lidos do `src/common/texm.cpp`).** Ferramenta: `tools/tex.py` (`list`, `export` para PNG com
 `manifest.json`, `inject` de PNG/TGA).
 - Podem vir crus ou num zip de um arquivo com o magic `IE\3\4` (o `Shell` lê `shell/*.rtx|tex` por `zipInflateAll`).
 - Cabeçalho `_texfile`: `u32 numSizes`, `u32 headerQw` (o primeiro pacote fica em `headerQw * 16`) e `{u32 count, u32 blkSize}` por
@@ -144,7 +144,7 @@ O runtime grava `ram_<quadro>.bin` e `vram_<quadro>.bin` com `PS2X_DUMP_RAM="qua
   Como os números no `.NGP` podem já estar somados, o `tex.py` acha os dois deslocamentos pela maior quantidade de objetos que
   casam formato e tamanho; precisa de conferência com arquivos reais.
 
-## Partículas e efeitos (`common/particle`, `common/partdraw`) — lido em 2026-10-11
+## Partículas e efeitos (`common/particle`, `common/partdraw`)
 Leitores: `native/wotm_fx.hpp` (C++, desenha) e `tools/fx.py` (Python: sistemas ativos de um dump de RAM e `--presets` com o catálogo do ELF).
 O layout de `_ParticleType` (12000 bytes), `EmitterType`, `FieldInfoType`, `ParticleInfoType` e `VisualInfoType` está em `include/hieri_types.h` (stabs do `.mdebug`).
 - **Pool**: `fx[100]` em `0x5BA280` (stride `0x2EE0`). Lista ativa: `fxActiveTop` (`0x6F88EC`) é o primeiro índice e `fxList[i]` (`0x6DF200`, 12 bytes) guarda o próximo em `+8`; `-1` termina. `fxInactiveTop` (`0x6F88F0`) é a lista livre.
@@ -155,11 +155,11 @@ O layout de `_ParticleType` (12000 bytes), `EmitterType`, `FieldInfoType`, `Part
 - **Cor** (`loadColors`, igual no microcódigo dos sprites): tabela RGBA em `0x256C10` (`0x80` = 1,0, alfa incluso), `vis.numColors` cores a partir de `vis.colorIndex`. `t = age * info.colorsPerFrame` (4.12); a cor é a interpolação entre `cor[t >> 12]` e `cor[(t >> 12) + 1]` por `(t & 0xFFF) / 4096`. Zero cores = `0x80808080`; uma cor = constante. Quase todas as tabelas terminam com alfa caindo, e é assim que a partícula some.
 - **Mistura**: `vis.alphaContext` é o registrador `ALPHA` do GS escrito no contexto do pacote: `0x44` = `(Cs - Cd) * As + Cd` (normal), `0x48` = `Cs * As + Cd` (aditivo: fogo, faíscas, clarões).
 - **Textura**: `TextureInfo[vis.texInfoIndex]` (`0x5B9E80`, 8 bytes: `numTextures`, `texIndex`, `du`, `dv`; preenchida em tempo de execução por `particleParseTexture`). `texId[texIndex]` (`0x6DFAB0`, `u16`) é o índice no `texInfo` global (pixels do pacote de upload, como nos objetos) e `TEX0[texIndex]` (`0x6DF6B0`, `u64`) é o registrador `TEX0` (psm, CBP). O `texSprite` escolhe um quadro por partícula: `info.attribs & 1` aleatório, `& 2` `uvI[i] >> 2`, senão `(age * info.mapsPerFrame) >> 12`, travado no último com `& 4` ou em módulo `vis.texMask`.
-- **Microcódigo de partículas do VU1**: não é o microcódigo dos objetos (`0x257C10`); a `displayList` das partículas chama um pacote próprio em `0x253060` (954 qwords: 1884 instruções por `MPG` e, no fim, o contexto padrão em `0x256B90`, 8 qwords: matriz mundo→tela, constantes e `vf27` = focos 320/160). Cada `*PacketBuild` termina com `MSCAL` no seu programa (`D_58` linha, `D_2C8` sprite, `D_800` dustTrail, `D_A88` strite, `D_F18` texSprite, `D_1180` frag, `D_13A0` kite, `D_1708` stripe, `D_19F8` arco elétrico, `D_1D00` corrente, `D_2770` sprine, `D_2B20` lens flare, `D_3318` sweepTrail, `D_3470` wake; endereços em bytes, `MSCAL` usa /8). Lido: no **sprite**, o meio-lado na tela é `pos.w * foco / profundidade`, limitado a `foco / 2` (então `pos.w` é o meio-lado em unidades de mundo e não passa de metade da profundidade); os bits baixos de `pos.w` indexam os 4 conjuntos de UV do `spritePacketInit` (3 normal, 1 espelha U, 2 espelha V, 0 os dois; com `0x2000`, 16 conjuntos); a cor vem da tabela pela idade. Na **linha**, a cauda é `pos - vel`, projetada com a matriz do quadro anterior (o contexto leva as duas: borrão de movimento da câmera). No **strite**, cabeça `pos` e cauda `pos - vel` projetadas e esticadas 2x para cada lado (de `pos + 2*vel` a `pos - 3*vel`), largura por `pos.w`: um triângulo equilátero por partícula com ST (0,5; 1,5) na ponta e (1,366; 0) e (−0,366; 0) na base, que circunscreve o quadrado da textura (o disco fica inscrito); o alfa da cor sai multiplicado por K/(len + K), com `len` o comprimento do rastro na tela e K = 2·foco·`pos.w`/w (rastro longo fica mais fraco; `Particles::striteTriangle`). O `sprine` é uma spline cúbica por 4 partículas consecutivas, subdividida no VU1 por diferenças progressivas (com um desvio aleatório semeado por `pos.w`); o port liga as partículas com segmentos retos. O **wake** (lido em 2026-10-17) é um triângulo por partícula no plano das linhas 0 e 2 da `StaticMat` do emissor (`fx+0x2D20`; X/Y do mundo com `info.attribs & 0x4000`), com tamanho e alfa por curvas da idade e escala/ST pelos 12 bits baixos de `pos.w` (detalhes em `docs/passos/VU1CHECK.md`, "Wake como o microprograma 0x3470"). Ainda não lidos: `stripe`, `sweepTrail`, `kite`, `frag`, `dustTrail` (o port os aproxima: faixas ligando partículas consecutivas, o resto como sprites).
+- **Microcódigo de partículas do VU1**: não é o microcódigo dos objetos (`0x257C10`); a `displayList` das partículas chama um pacote próprio em `0x253060` (954 qwords: 1884 instruções por `MPG` e, no fim, o contexto padrão em `0x256B90`, 8 qwords: matriz mundo→tela, constantes e `vf27` = focos 320/160). Cada `*PacketBuild` termina com `MSCAL` no seu programa (`D_58` linha, `D_2C8` sprite, `D_800` dustTrail, `D_A88` strite, `D_F18` texSprite, `D_1180` frag, `D_13A0` kite, `D_1708` stripe, `D_19F8` arco elétrico, `D_1D00` corrente, `D_2770` sprine, `D_2B20` lens flare, `D_3318` sweepTrail, `D_3470` wake; endereços em bytes, `MSCAL` usa /8). Lido: no **sprite**, o meio-lado na tela é `pos.w * foco / profundidade`, limitado a `foco / 2` (então `pos.w` é o meio-lado em unidades de mundo e não passa de metade da profundidade); os bits baixos de `pos.w` indexam os 4 conjuntos de UV do `spritePacketInit` (3 normal, 1 espelha U, 2 espelha V, 0 os dois; com `0x2000`, 16 conjuntos); a cor vem da tabela pela idade. Na **linha**, a cauda é `pos - vel`, projetada com a matriz do quadro anterior (o contexto leva as duas: borrão de movimento da câmera). No **strite**, cabeça `pos` e cauda `pos - vel` projetadas e esticadas 2x para cada lado (de `pos + 2*vel` a `pos - 3*vel`), largura por `pos.w`: um triângulo equilátero por partícula com ST (0,5; 1,5) na ponta e (1,366; 0) e (−0,366; 0) na base, que circunscreve o quadrado da textura (o disco fica inscrito); o alfa da cor sai multiplicado por K/(len + K), com `len` o comprimento do rastro na tela e K = 2·foco·`pos.w`/w (rastro longo fica mais fraco; `Particles::striteTriangle`). O `sprine` é uma spline cúbica por 4 partículas consecutivas, subdividida no VU1 por diferenças progressivas (com um desvio aleatório semeado por `pos.w`); o port liga as partículas com segmentos retos. O **wake** é um triângulo por partícula no plano das linhas 0 e 2 da `StaticMat` do emissor (`fx+0x2D20`; X/Y do mundo com `info.attribs & 0x4000`), com tamanho e alfa por curvas da idade e escala/ST pelos 12 bits baixos de `pos.w` (detalhes em `docs/passos/VU1CHECK.md`, "Wake como o microprograma 0x3470"). Ainda não lidos: `stripe`, `sweepTrail`, `kite`, `frag`, `dustTrail` (o port os aproxima: faixas ligando partículas consecutivas, o resto como sprites).
 
 ## Animação (curvas no `.NGP` e o mixer em tempo de execução)
 Fonte: `src/common/AnimCurve.cpp` e `src/common/animation.cpp` (TU inteiro em C++; as equivalentes ainda não passaram por difftest/oracle, então o que depende só delas está marcado (?)).
-Conferido em 2026-10-20 contra os canais de uma luta (128 de 130 iguais; `tools/animcurve.py`). Montar a pose do monstro só com o disco (esqueleto, paleta, texturas): `passos/MODELOS_3D.md`.
+A leitura reproduz 128 de 130 canais de uma luta (`tools/animcurve.py`). Montar a pose do monstro só com o disco (esqueleto, paleta, texturas): `passos/MODELOS_3D.md`.
 Os nomes de struct e de campo vêm de `include/hieri_types.h` (gerado dos stabs); aqui está o que os valores significam.
 
 **Dados (no `.NGP`):** `CHARACTER_INSTANCE` (`_animCharInstance`) -> `character` (+0x20, `_animCharacter`: `numAnims`, `numChannels`, `animations[]`) -> cada `_animation` (`startTime`/`endTime` em quadros da
@@ -195,9 +195,25 @@ frente; `animationSetTotalRunFrames(h, n)` faz durar `n` fields). Ao passar do f
 - Busca de animação: `animationGetHandle(id1, id2, animId)` percorre os gerenciadores de animação de cada `.NGP` carregado (`ANIMATION_MGR`, `charInstance[]`), acha a instância pelos ids do
   `HierHead` e a animação cujo `head.id1 == animId`. O handle (`ci`, `ctrl`, `proc`, `animIdx`) é o que o código de jogo guarda (os monstros têm uma tabela deles, ver `Monster::m_anims` em `include/game/game.h`).
 
+## Personagem (`RST/<MONSTRO>.CHR`)
+Os números de jogo de cada monstro (golpes, alcances, tempos), lidos pelo `charreset::readKey` (0x126620). Leitor: `python tools/chr_dump.py
+disc/RST/<MONSTRO>.CHR [--keys] [--csv]` (tabela dos socos; `--keys` lista as chaves).
+- Cabeçalho de 0xC bytes, depois chaves `{u32 id; u32 tamanho com estes 8 bytes; dados}` até um id 0 ou o fim. O `OGRE.CHR` (monstro não usado) traz outro conjunto de chaves.
+- **0xFCC, socos (`StatePunch`):** 10 posições no combo × 6 tipos, cada config com 0xA0 bytes em `chave + 0x10 + pos*0x3C0 + tipo*0xA0`.
+  O jogo as copia para as `PunchConfig` do `StatePunch` (Monster +0x8470 +0x20 + pos*0x420 + tipo*0xB0; offsets da config entre parênteses):
+  +0x10/+0x14 localizadores testados (+0x7C/+0x80; 0x802/0x803 mãos, 0x804/0x805 pés, < 0x7D0 nenhum), +0x20 dano (+0x90), +0x28 animação
+  (+0x00, índice em `Monster::m_anims`), +0x2C/+0x30 janela do teste em fração da animação (+0x0C/+0x10), +0x34/+0x38 janela de contra-ataque
+  (+0x14/+0x18), +0x8C/+0x90 knockback (+0x64/+0x68; ≠ 0 derruba), +0x94 atordoamento (+0x6C; > 100 atordoa), +0x98 pausa ao acertar em ms
+  (+0x70), +0xA8 raio da esfera do punho (+0x74; 0 usa o padrão, chave 0xFA1 +0x30, `StatePunch` +0x2980). Casa sem animação e sem dano é vazia.
+- **Posição e tipo:** a posição (`StatePunch` +0x2988) começa em 0 e sobe a cada golpe emendado (até 9). O tipo (+0x298C) vem do
+  `PadFlags::curMappedAction` aceito pelo `StatePunch::transitionOK`: 5 → 0 triângulo, 6 → 1 frente + triângulo, 7 → 2 trás + triângulo,
+  1 → 3 frente + quadrado, 2 → 4 trás + quadrado, 0 → 5 quadrado (no esquema de controle 0; a direção é um toque recente no direcional).
+  O próximo tipo do combo é o apertado dentro da janela de entrada (+0x28/+0x2C da config), se o float `+0x94 + próximo*4` da config atual é > 0.
+- A chave 0xFD8 tem o mesmo layout sem os 0x10 iniciais. 0xFA4/0xFAC/0xFD7/0xFE3 são os golpes com objeto (`StateBatSwipe`): a posição delas no arquivo não está decodificada, mas na RAM as `SwipeConfig` (0xC0 cada, Monster +0xAE90 +0x20 + pos·0x480 + tipo·0xC0) repetem o começo da `PunchConfig` (animação +0x00, janela +0x0C/+0x10, knockback +0x64/+0x68, atordoamento +0x6C, pausa +0x70, raio +0x74, um localizador +0x7C); o dano é um multiplicador do dano do objeto (`LevelPickups::s_info`): +0x90 com bastão (`Pickup` +0xA0 == 8), +0xB0 nos outros (`getDamageMod`). O modo treino lê de lá (`NATIVO.md`, "Tabela dos socos").
+
 ## Destrutíveis (`INTERACTIVE_STATE` + `DESTRUCTIBLE`)
 Fonte: `game/Destructible` (`Destructibles::AddDestruct`, `Destructible::takeHit`, `GenericTakeHit`, `ChangeState`, `SwitchState`; o TU ainda está em asm, lido à mão) e a travessia `hierTraverseAsm`
-(asm manuscrito, em `asm/common/texm.s`). A estrutura dos nós foi conferida nas 19 fases de `LVL/` (script fora do repo).
+(asm manuscrito, em `asm/common/texm.s`). A estrutura dos nós vale para as 19 fases de `LVL/`.
 
 **No disco:** todo `DESTRUCTIBLE` (op 0x1F) é filho único de um `INTERACTIVE_STATE` (op 0x27): `_interactivestate.child` (+0xC) aponta para ele (1566 de 1566 nas fases). O `DESTRUCTIBLE` tem
 `hitPointClass` (+4), `hitPoints` (+6), `hpThreshold` (+8), `numKids` (+0xA) e `numKids` estados de 12 bytes a partir de +0xC: `{child, actions, damageThreshold (u16), behaviorType (u16)}`.
@@ -226,3 +242,70 @@ também gravado nos bits 7..17 da primeira palavra do `INTERACTIVE_STATE`), `hit
 4. Voltar para um estado menor grava `whichChild` direto: é o que `rebuildCanyon2Pillars`/`rebuildCapitolPillars` fazem com `ChangeState(0, 1, 0)` (reconstroem os pilares).
 5. Com o terceiro argumento de `ChangeState` ligado, o jogo também põe em 1 o `whichChild` de um `SWITCH` no começo do novo estado (o próprio `child` ou o primeiro filho de um `GROUP`), e
    a vida vai para `damageThreshold[i] * vidaMáxima / 65535 - 0,001`.
+
+## Save do memory card (`BASCUS-97197`, `savegame.dat`)
+Pasta `BASCUS-97197` no cartão (título "War of the Monsters"). O stub `sceMc*` do runtime grava em `mc0/` do host (porta 2 em
+`mc1/`). Quem monta os blocos é o `game/MonsterMc`; o `game/McFile` (`McLoadFile`/`McSaveFile`/`McSetupGameDir`/`McScrambleIcon`) e
+o `game/McPage` (menus) são plataforma. `python tools/mcsave.py <pasta>` mostra os dois cartões como JSON por nome (só lê). No PC o
+jogo usa o `save.json` (`docs/passos/NATIVO.md`, "Save em JSON").
+
+| Arquivo | Bytes | Conteúdo | Monta / aplica |
+|---|---|---|---|
+| `BASCUS-97197` | 0x380 | opções, battle tokens e destraves (`_SettingsData`) | `MonsterMc::getSettingsData` / `setSettingsData` |
+| `savegame.dat` | 0x280 | 10 slots da aventura (`_SaveGameData`) | `MonsterMc::getSaveData(slot)` / `setSaveData(slot)` |
+| `icon.sys`, `ICON.ICO` | 964, 61120 | ícone do PS2 | `McSetupGameDir`; o `McScrambleIcon` zera o `icon.sys` durante a gravação das opções e o refaz igual depois |
+
+**Sem checksum.** As duas leituras (`McLoadSettings::update`, `McSelectReel::refreshSaveData`) só conferem a marca `0x12345678` no fim
+do bloco; marca errada vira erro do cartão. Nenhum ponteiro: tudo é `int` de 32 bits, little-endian.
+
+**`BASCUS-97197` (opções):**
+
+| Off | Origem |
+|---|---|
+| 0x00 | `TheGame+0x1203CC` (`m_matchMode`; o `Shell` acende `m_difficultySw[valor]`: é a dificuldade) |
+| 0x04, 0x08 | `Shell::m_sfxVolume`, `m_musicVolume` (0..0x400) |
+| 0x0C | `Shell+0x2A40`: o construtor põe 50 e ninguém mais lê (opção morta; provável slider cortado do menu de opções) |
+| 0x10 | `Shell::m_mono` (ao carregar vira 0/1) |
+| 0x14, 0x18 | `Shell::m_ctlrCfg[2]` |
+| 0x1C, 0x20 | `Shell::m_vibration[2]` |
+| 0x24 | battle tokens (`Shell+0x2B24`) |
+| 0x28..0xE7 | `monsterSelectMode[i].state` dos 48 `SelectSlot` (só o `state`; `taken`, preço e nomes ficam no ELF) |
+| 0xE8..0xF3 | `TheGame+0x1204B0..B8`, 3 ints: recorde do endurance por dificuldade (gravado, o jogo nunca o mostra) |
+| 0xF4..0x34B | **não é escrito**: o buffer é da pilha e esse trecho grava lixo |
+| 0x34C | marca `0x12345678` |
+
+Os 48 flags são 12 grupos de 4. Grupos 0 a 9 são os monstros na ordem do `aiMonsters` de `Shell::RandomlySelectAI` (Raptros, Togera,
+Preytor, Congar, Robo-47, Agamo, Ultra V, Magmo, Kineticlops, Zorgulon), e a entrada `j` do grupo é o traje `j`. Os grupos 10 e 11 são
+as fases do `levelUnlocked`: entrada 40 Volcano, 41 Mini Baytown, 42 Capitol, 43 UFO, 44 Dodge Ball, 45 Big Shot, 46 Crush; a 47 é
+uma "Level 4" de 5000 tokens que nenhum código lê. Os nomes e preços estão na própria tabela (`SelectSlot::name`/`cost` no ELF) e
+confirmam a ordem. O `McCheckForSweetTooth` do boot procura o `BASCUS-97101/globalFile` (save do Twisted Metal: Black) no cartão e,
+se achar, liga a entrada 23 ("Agamo Costume 4", o Mecha Sweet Tooth; `ROCK3`) e toca `ShellSound::playSweetUnlockedSound`.
+
+**`savegame.dat` (aventura):** +0 número de slots usados (o maior índice gravado + 1); slots em `0x10 + i*0x3C`; marca em 0x268; o resto
+é zero. Cada slot usa só 0x14 dos 0x3C bytes:
+
+| Off no slot | Origem | Ao carregar (`setSaveData`) |
+|---|---|---|
+| +0x00 | `Shell::m_levelNum` (fase onde parou) | idem; as IAs vêm de `m_levelNumAIs[fase]` e `levelMonsters[fase]` |
+| +0x04 | `Shell::m_monsterSel[0]` (`monstro << 5 \| variante`) | idem |
+| +0x08 | `Shell::m_lives[0]` | idem |
+| +0x0C | `Shell+0x2B28 + Shell+0x2B2C` (pontos da fase + acumulado) | tudo em `+0x2B2C` |
+| +0x10 | `Shell::m_costume[0]` | idem; e `m_numPlayers = 1`, `m_mode = 1` |
+
+Gravar um slot (`McSaveAdventure::onEnter`) lê o `savegame.dat` inteiro, troca só aquele slot (`copySaveData`) e grava os 0x280 de
+novo; com o arquivo ausente (`McSaveAdventureBlank`) começa de um bloco zerado com a marca. Os 10 slots são as "fitas" da tela de
+carregar (`McSelectReel`, `McLoadGameBoxes`); o cartão 2 dá outros 10.
+
+**Quando o jogo grava** (sequências de páginas montadas em `MonsterMc::update*`): `updateBootLoad` (boot: `McBootPage` →
+`McLoadSettings` → `McCheckForSweetTooth`), `updateSettingsLoad`/`updateSettingsSave` (menu de opções), `updateUnlockSave` (depois de
+comprar na tela de destrave: `McAskToSave` e grava as opções, onde ficam os destraves), `updateEndOfStorySave`, `updateStoryModeSave`/
+`updateStoryModeLoad` (aventura) e `updateEndureSave`. Toda gravação passa por `McChooseSlot` (cartão 1 ou 2), `McCheckSpace`,
+`McCheckFormat` e `McCheckOverwrite` e grava as opções (`McSaveSettings`); as de opções, destrave, endurance e fim de história também
+criam o `savegame.dat` em branco se faltar (`McSaveAdventureBlank`), e a da aventura escolhe o slot (`McSelectSaveSlot`) e grava o
+slot (`McSaveAdventure`). Ou seja: tokens e destraves vão para o cartão em qualquer gravação. A compra da tela de destrave só é
+efetivada dentro do `McSaveSettings::update` (`g_monsterToUnlock`/`g_skinToUnlock`: liga o `state` e desconta o preço; a tela põe -1
+nos dois logo depois). Fora dessas sequências, os tokens só mudam no `Shell::EvaluateOnePlayerStoryStatus` (fim de fase da
+história), no endurance e no construtor.
+
+**`MEMCRD/ICON.ICO`** (o ícone, também no disco): uma fita de filme, 1158 vértices, uma forma, textura 128x128 comprimida; o formato
+está no cabeçalho do arquivo (`native/wotm_saveicon.hpp`).

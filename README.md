@@ -6,7 +6,7 @@ A decompilation and recompilation project for **War of the Monsters** (PS2, NTSC
 
 You need your own copy of the game. No game files are, or ever will be, in this repository.
 
-## Status (2026-10-19)
+## Status
 The game runs on Windows at 60 fps with native rendering: stages, monsters, particles, shadows, fog, menu text, HUD, screen fades and Hor+ widescreen. Fights are playable with the
 keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2's VU1 output on more than 99% of triangles. Lighting (directional, point lights such as fire) follows the VU1 as well.
 
@@ -14,7 +14,7 @@ keyboard AND gamepad, and sound and FMVs play natively. Geometry matches the PS2
 `tools/vu0native.py`). The game executable (`wotm.exe`) has no emulated VU1, VIF0, VIF1, GS or IOP; those only exist in a separate test executable, the VU1/GS as the reference for the renderer check.
 What is still PS2-specific in the game: [docs/passos/FRONTEIRA.md](docs/passos/FRONTEIRA.md).
 
-The remaining graphics bugs are tracked in the port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)); what comes next is in [docs/PROXIMOS_PASSOS.md](docs/PROXIMOS_PASSOS.md).
+The port inventory ([docs/passos/VU1CHECK.md](docs/passos/VU1CHECK.md)) is finished; what comes next is in [TODO.md](TODO.md).
 
 8 Monsters brawling: [https://www.youtube.com/watch?v=IvLLuSYORPc](https://www.youtube.com/watch?v=IvLLuSYORPc).
 
@@ -80,8 +80,9 @@ Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build 
   emulated VU1/GS and the renderer check).
 - `run_live.bat -Auto 0` runs the game to play with the keyboard; `tools/launcher/` is a small launcher with options such as starting a match directly (`WOTM_MATCH`) and cheats.
 - **Online play (this fork, 2 to 4 players, each on their own PC):** deterministic lockstep through a small server (`native/net`, `wotm_server`, no game
-  code). Setup, hosting, router and lobby steps: [docs/en/ONLINE.md](docs/en/ONLINE.md). Frame interpolation above 60 Hz: `WOTM_INTERP`
-  (on by default when the screen is above 60 Hz and the redraw fits).
+  code). Setup, hosting, router and lobby steps: [docs/en/ONLINE.md](docs/en/ONLINE.md).
+- `mods/` holds the project's own mods (the Goliath Prime custom monster, the "Recompiled" logo): JSON and original art only. Every launch mirrors them into
+  `<runtime>\discroot\mods\` (`tools/sync_mods.ps1`), where the game reads mods from; your own mods live there too. See [docs/passos/MODS.md](docs/passos/MODS.md).
 
 Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md).
 

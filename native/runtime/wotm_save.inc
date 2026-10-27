@@ -1,4 +1,4 @@
-// Save em JSON (POS_FRONTEIRA.md, item 3). Incluido pelo wotm_overrides.cpp.
+// Save em JSON (NATIVO.md, "Save em JSON"). Incluido pelo wotm_overrides.cpp.
 //
 // O jogo continua gravando e lendo os blocos binarios do memory card pelo stub do runtime (mc0/BASCUS-97197: as opcoes, 0x380
 // bytes, e o savegame.dat, a aventura, 0x280; o cartao 2 em mc1/). Um JSON so ao lado da pasta do cartao (save.json) passa a ser a
@@ -8,9 +8,10 @@
 //   - na entrada do MonsterMc::stdExit (fim da sequencia), se o jogo gravou algum binario, o JSON e atualizado a partir deles.
 // Sem JSON e com binarios (save antigo), o primeiro stdInit cria o JSON; se o JSON nao tem os slots de um cartao que tem aventuras
 // gravadas, elas sao importadas em vez de apagadas. Chaves que o codigo nao conhece ficam no arquivo.
-// WOTM_SAVEJSON=0 desliga (so o mc0/, como antes). Layout dos blocos no POS_FRONTEIRA.md; tools/mcsave.py mostra o mesmo JSON.
+// WOTM_SAVEJSON=0 desliga (so o mc0/, como antes). Layout dos blocos em docs/FORMATOS.md, "Save do memory card"; tools/mcsave.py mostra o mesmo JSON.
 
 #include "wotm_json.hpp"
+#include "wotm_mods.hpp"   // skins de mod: traje do slot por nome
 #define WOTM_SAVEPICS_NO_DRAW
 #include "wotm_savepics.hpp"   // logo do monstro e foto da fase a esquerda da lista de saves (a janela desenha)
 
@@ -45,6 +46,7 @@ namespace wotm_save
     const char *const kGroupMonsters[10] = {"raptros", "togera", "preytor", "congar", "robo-47", "agamo", "ultra-v", "magmo", "kineticlops", "zorgulon"};
     constexpr int kSweetToothSlot = 23;   // "Agamo Costume 4", ligado pelo McCheckForSweetTooth
     struct LevelSlot { int slot; const char *name; };
+    const char *const kDifficultyNames[3] = {"easy", "medium", "hard"};   // options.difficulty (TheGame+0x1203CC)
     const LevelSlot kLevelSlots[] = {{40, "volcano"}, {41, "minisf"}, {42, "capitol"}, {43, "ufo"}, {44, "dball"}, {45, "bigshot"}, {46, "crush"}};
     // MonsterNewNames (indice em m_monsterSel >> 5) e GameLevelNames (m_levelNum).
     const char *const kMonsters[] = {"null", "congar", "robo-47", "togera", "ultra-v", "preytor", "spider", "kineticlops", "magmo", "raptros",
@@ -146,19 +148,101 @@ namespace wotm_save
         if (!un.get("mechaSweetTooth"))
             un.at("mechaSweetTooth") = Value::boolean(rd(b, 0x28 + kSweetToothSlot * 4) != 0);
 
-        // Campos que o jogo grava e ainda nao se sabe para que servem: guardados como estao.
+        // Recorde do endurance (monstros derrotados pelo jogador 1), um por dificuldade: TheGame+0x1204B0..B8. O jogo grava e nunca
+        // mostra (8498ce0:docs/investigacoes/2026-10-24/save_campos_abertos.md). Antes ficava em unknown.game1204B0, que sai na reescrita.
+        Value &end = j.at("records").at("enduranceBest");
+        for (int k = 0; k < 3; ++k)
+            end.at(kDifficultyNames[k]) = Value::integer(rd(b, 0xE8 + k * 4));
+
+        // Campos que o jogo grava e ninguem usa: guardados como estao (0x0C: opcao cortada do menu de opcoes, 50 no construtor).
         Value &unk = j.at("unknown");
         unk.at("shell2A40") = Value::integer(rd(b, 0x0C));
         unk.at("slot47") = Value::integer(rd(b, 0x28 + 47 * 4));
-        Value g4 = Value::array();
-        for (int k = 0; k < 3; ++k)
-            g4.arr.push_back(Value::integer(rd(b, 0xE8 + k * 4)));   // TheGame+0x1204B0..B8
-        unk.at("game1204B0") = g4;
+        auto &uo = unk.obj;
+        for (size_t k = 0; k < uo.size(); ++k)
+            if (uo[k].first == "game1204B0")
+            {
+                uo.erase(uo.begin() + static_cast<std::ptrdiff_t>(k));
+                break;
+            }
     }
 
     bool isNull(const Value &v) { return v.type == Value::Null; }
+    uint32_t savesIntOf(const Value &s, const char *k)
+    {
+        const Value *v = s.get(k);
+        return v && v->isInt() ? static_cast<uint32_t>(v->asInt()) : 0u;
+    }
 
-    // Slots do cartao `card` (10 a partir de card * 10) em j.saves; o array termina no ultimo slot nao nulo.
+    // ---- traje do slot da aventura (MODS.md, "Skins"; NATIVO.md, "Save em JSON") ----
+    // Trajes do disco (0..3) ficam como inteiro; skin de mod, como "monstro/id" ("togera/green"). O indice de uma skin (4, 5...) so
+    // vale nesta execucao (wotm_mods.hpp) e nunca vai para o JSON. Um indice que nao existe nesta sessao nunca vai para o binario nem
+    // para o m_costume (o jogo pediria um MON/<PREFIXO>N.* que nao existe e relocaria com lixo): sem a skin, traje 0.
+    struct Costume
+    {
+        uint32_t index = 0;
+        std::string skin;   // "togera/green" quando o slot traz uma skin de mod (achada ou nao)
+        bool missing = false;
+    };
+    Costume resolveCostume(uint32_t monster, const Value *v, bool log)
+    {
+        Costume c;
+        if (!v)
+            return c;
+        const wotm::mods::Registry &reg = wotm::mods::Registry::get();
+        if (v->type == Value::Str)
+        {
+            c.skin = v->s;
+            if (const wotm::mods::Skin *k = reg.skin(static_cast<int>(monster), v->s))
+                c.index = static_cast<uint32_t>(k->index);
+            else
+                c.missing = true;
+        }
+        else if (v->isInt())
+        {
+            const int64_t n = v->asInt();
+            if (n >= 0 && n <= 3)
+                c.index = static_cast<uint32_t>(n);
+            else if (const wotm::mods::Skin *k = reg.skinByIndex(static_cast<int>(monster), static_cast<int>(n)))
+                c.index = static_cast<uint32_t>(n), c.skin = k->monsterName + "/" + k->id;   // save de antes do nome no JSON
+            else
+                c.missing = true;
+        }
+        if (c.missing && log)
+            std::fprintf(stderr, "[wotm] save: traje %s nao achado (mod ausente?); usando traje 0\n",
+                         c.skin.empty() ? std::to_string(v->asInt()).c_str() : c.skin.c_str());
+        return c;
+    }
+    // Indice do jogo -> valor do JSON
+    Value costumeValue(uint32_t monster, uint32_t index)
+    {
+        if (index <= 3)
+            return Value::integer(index);
+        if (const wotm::mods::Skin *k = wotm::mods::Registry::get().skinByIndex(static_cast<int>(monster), static_cast<int>(index)))
+            return Value::string(k->monsterName + "/" + k->id);
+        return Value::integer(0);
+    }
+    // Traje do disco que da o modelo de reserva (e o enquadramento) do monstro 3D da lista: o base da skin
+    uint32_t modelBase(uint32_t monster, uint32_t index)
+    {
+        if (index <= 3)
+            return index;
+        const wotm::mods::Skin *k = wotm::mods::Registry::get().skinByIndex(static_cast<int>(monster), static_cast<int>(index));
+        return k ? static_cast<uint32_t>(k->base) & 3u : 0u;
+    }
+    // Slot carregado com uma skin que nao existe nesta sessao (jogado com o traje 0): ao gravar a mesma aventura, o nome volta ao
+    // JSON no lugar do 0 (o mod pode voltar). Esquecido quando uma tela de selecao de monstro abre (poll) ou outro slot carrega.
+    struct MissingSkin { bool valid = false; uint32_t monster = 0; std::string skin; };
+    MissingSkin g_missing;
+    Value savedCostume(uint32_t monster, uint32_t index)
+    {
+        if (index == 0 && g_missing.valid && g_missing.monster == monster)
+            return Value::string(g_missing.skin);
+        return costumeValue(monster, index);
+    }
+
+    // Slots do cartao `card` (10 a partir de card * 10) em j.saves; o array termina no ultimo slot nao nulo. Um slot do JSON que ja
+    // diz o mesmo que o binario fica como esta (com as chaves que nao sao nossas e o nome da skin).
     void adventureToJson(const std::vector<uint8_t> &b, Value &j, int card)
     {
         Value &saves = j.at("saves");
@@ -171,20 +255,30 @@ namespace wotm_save
         for (uint32_t i = 0; i < kAdvSlots; ++i)
         {
             Value &dst = saves.arr[base + i];
-            dst = Value();   // slot alem do contador ou nunca gravado: null
-            if (i >= n)
-                continue;
             const size_t o = kAdvSlot0 + i * kAdvStride;
-            const uint32_t lvl = rd(b, o), sel = rd(b, o + 4), lives = rd(b, o + 8), score = rd(b, o + 12), cos = rd(b, o + 16);
-            if (!lvl && !sel && !lives && !score && !cos)
+            const uint32_t lvl = i < n ? rd(b, o) : 0, sel = i < n ? rd(b, o + 4) : 0, lives = i < n ? rd(b, o + 8) : 0,
+                           score = i < n ? rd(b, o + 12) : 0, cos = i < n ? rd(b, o + 16) : 0;
+            if (i >= n || (!lvl && !sel && !lives && !score && !cos))
+            {
+                dst = Value();   // slot alem do contador ou nunca gravado: null
                 continue;
+            }
+            if (dst.type == Value::Obj)
+            {
+                const Value *var = dst.get("variant");
+                const uint32_t mon = indexOf(kMonsters, dst.get("monster"), 0);
+                if (indexOf(kLevels, dst.get("level"), 0) == lvl &&
+                    ((mon << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0)) == sel && savesIntOf(dst, "lives") == lives &&
+                    savesIntOf(dst, "score") == score && resolveCostume(mon, dst.get("costume"), false).index == cos)
+                    continue;   // o jogo regravou o mesmo slot
+            }
             dst = Value::object();
             dst.at("level") = nameOf(kLevels, lvl);            // Shell+0x2BB0
             dst.at("monster") = nameOf(kMonsters, sel >> 5);   // Shell+0x2938 (m_monsterSel[0])
             dst.at("variant") = Value::integer(sel & 31);
             dst.at("lives") = Value::integer(lives);           // Shell+0x2BBC
             dst.at("score") = Value::integer(score);           // Shell+0x2B28 + 0x2B2C
-            dst.at("costume") = Value::integer(cos);           // Shell+0x2BE0
+            dst.at("costume") = savedCostume(sel >> 5, cos);   // Shell+0x2BE0
         }
         while (!saves.arr.empty() && isNull(saves.arr.back()))
             saves.arr.pop_back();
@@ -232,10 +326,14 @@ namespace wotm_save
         {
             wrField(b, 0x0C, unk->get("shell2A40"));
             wrField(b, 0x28 + 47 * 4, unk->get("slot47"));
-            if (const Value *g4 = unk->get("game1204B0"))
+            if (const Value *g4 = unk->get("game1204B0"))   // nome antigo do recorde do endurance
                 for (size_t k = 0; k < 3 && k < g4->arr.size(); ++k)
                     wrField(b, 0xE8 + k * 4, &g4->arr[k]);
         }
+        if (const Value *rec = j.get("records"))
+            if (const Value *end = rec->get("enduranceBest"))
+                for (int k = 0; k < 3; ++k)
+                    wrField(b, 0xE8 + k * 4, end->get(kDifficultyNames[k]));
         wr(b, kSettingsMagic, kMagic);
     }
 
@@ -259,10 +357,11 @@ namespace wotm_save
             const size_t o = kAdvSlot0 + i * kAdvStride;
             wr(b, o, indexOf(kLevels, s.get("level"), 0));
             const Value *var = s.get("variant");
-            wr(b, o + 4, (indexOf(kMonsters, s.get("monster"), 0) << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0));
+            const uint32_t mon = indexOf(kMonsters, s.get("monster"), 0);
+            wr(b, o + 4, (mon << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0));
             wrField(b, o + 8, s.get("lives"));
             wrField(b, o + 12, s.get("score"));
-            wrField(b, o + 16, s.get("costume"));
+            wr(b, o + 16, resolveCostume(mon, s.get("costume"), true).index);   // skin de mod ausente: traje 0
         }
         wr(b, kAdvMagic, kMagic);
     }
@@ -477,12 +576,12 @@ namespace wotm_save
         restamp();
     }
 
-    // ---- gravacao direta, sem as paginas do cartao (POS_FRONTEIRA.md, item 3, passo c) ----
+    // ---- gravacao direta, sem as paginas do cartao (NATIVO.md, "Save em JSON") ----
     //
     // Boot, opcoes, destrave, endurance e fim da historia nao abrem mais o cartao: o MonsterMc::update* de cada um (chamado num laco
     // ate MonsterMc+4) vira uma copia direta entre a RAM e o JSON e termina na mesma chamada. A aventura (updateStoryModeSave/Load)
     // continua com as paginas e os binarios (item 5). Os tokens que o jogo soma fora dessas gravacoes (fim de fase da historia, em
-    // Shell::EvaluateOnePlayerStoryStatus) sao pegos pela vigia por quadro (poll). WOTM_SAVEAUTO=0 volta as paginas do cartao.
+    // Shell::EvaluateOnePlayerStoryStatus) sao pegos pela vigia por quadro (poll).
 
     void w32(uint8_t *rdram, uint32_t a, uint32_t v) { std::memcpy(rdram + (a & 0x1FFFFFFu), &v, 4); }
     constexpr uint32_t kSelStride = 0x2C, kSelState = 4, kSelCost = 8;   // SelectSlot (12 grupos de 4, 0xB0 por grupo)
@@ -547,7 +646,6 @@ namespace wotm_save
         bool operator==(const Snap &o) const { return valid == o.valid && std::memcmp(v, o.v, sizeof v) == 0; }
     };
     Snap g_snap;
-    bool g_auto = false;
     // cada gravacao do JSON soma g_wotmSaveCount (definido antes do namespace; o icone de salvamento, wotm_saveicon.hpp, le)
 
     Snap snapOf(const uint8_t *rdram)
@@ -626,6 +724,29 @@ namespace wotm_save
         w32(rdram, e + kSelState, 1);
     }
 
+    // Fim do endurance: o McSaveSettings::update do retail (com a flag +0x280, que so o updateEndureSave liga) grava o
+    // m_winsThisGame do jogador 1 no recorde da dificuldade se for maior. A troca da sequencia pulava isso e o recorde ficava no valor
+    // do boot. Aqui o maior vai tambem para a RAM (o retail nao a atualizava: uma 2a corrida pior na mesma sessao sobrescrevia a 1a).
+    constexpr uint32_t kGameMonsters = 0x120380, kMonsterWins = 0x3C;   // TheGame::m_monsters[0], Monster::m_winsThisGame
+    void updateEnduranceRecord(uint8_t *rdram)
+    {
+        const uint32_t gm = ramU32(rdram, wotm::sym::game);
+        if (!gm)
+            return;
+        const uint32_t d = ramU32(rdram, gm + kGameMatchMode);
+        const uint32_t m = ramU32(rdram, gm + kGameMonsters);
+        if (d > 2 || !m)
+            return;
+        const int32_t wins = static_cast<int32_t>(ramU32(rdram, m + kMonsterWins));
+        const uint32_t a = gm + kGameUnk + d * 4;
+        const int32_t best = static_cast<int32_t>(ramU32(rdram, a));
+        if (wins > best)
+        {
+            w32(rdram, a, static_cast<uint32_t>(wins));
+            std::fprintf(stderr, "[wotm] save: recorde do endurance (%s): %d -> %d\n", kDifficultyNames[d], best, wins);
+        }
+    }
+
     enum class Seq { BootLoad, SettingsLoad, SettingsSave, UnlockSave, EndOfStorySave, EndureSave };
     struct SeqHook { uint32_t fn; Seq seq; const char *why; };
     const SeqHook kSeqHooks[] = {
@@ -652,6 +773,8 @@ namespace wotm_save
         else
         {
             applyPendingUnlock(rdram);
+            if (h.seq == Seq::EndureSave)
+                updateEnduranceRecord(rdram);
             ramToJson(rdram, true, h.why);
         }
         // Como o stdExit: MonsterMc+0 (montar na proxima) e +4 (pronto, o laco do chamador sai). McPageMgr+0x130: a sequencia chegou
@@ -666,7 +789,7 @@ namespace wotm_save
         (runtime.registerFunction(kSeqHooks[I].fn, &seqReplaced<I>), ...);
     }
 
-    // ---- lista de saves da aventura, sem caixas nem cartao (POS_FRONTEIRA.md, item 5) ----
+    // ---- lista de saves da aventura, sem caixas nem cartao (NATIVO.md, "Save em JSON") ----
     //
     // Carregar: updateStoryModeLoad leva a camera do menu ate as caixas (McPrepBoxScreen) e abre o McLoadGameBoxes (menu "slot 1 /
     // slot 2"). O update dessa pagina vira um modal com a lista do save.json (ate 99 slots): a esquerda, o save escolhido (monstro,
@@ -719,6 +842,8 @@ namespace wotm_save
         int slot = 0;
         bool used = false;
         uint32_t level = 0, sel = 0, lives = 0, score = 0, costume = 0;
+        std::string skin;           // skin de mod do slot ("togera/green"), achada ou nao
+        bool skinMissing = false;   // a skin nao existe nesta sessao: carrega com o traje 0
     };
     struct Modal
     {
@@ -727,18 +852,13 @@ namespace wotm_save
         std::vector<Row> rows;
         int cur = 0, top = 0;
         bool confirm = false;   // gravar: segundo X sobrescreve
+        bool confirmByMouse = false;   // o primeiro X foi um clique (o texto pede outro clique)
         uint64_t openedAt = 0;  // g_vsyncs da abertura
         Row pending;            // gravar: o que vai ser gravado (so para o desenho dos primeiros quadros)
         uint64_t seen = 0;      // g_vsyncs do ultimo update: um buraco quer dizer que a pagina foi fechada e aberta de novo
     };
     Modal g_modal;
     uint64_t g_vsyncs = 0;   // sceGsSyncV contados pelo poll
-
-    uint32_t savesInt(const Value &s, const char *k)
-    {
-        const Value *v = s.get(k);
-        return v && v->isInt() ? static_cast<uint32_t>(v->asInt()) : 0u;
-    }
 
     // Linhas do modal: os slots do JSON ate o ultimo ocupado, mais um vazio no fim (ate 99).
     void buildRows(Modal &m)
@@ -763,9 +883,10 @@ namespace wotm_save
                 r.level = indexOf(kLevels, s.get("level"), 0);
                 const Value *var = s.get("variant");
                 r.sel = (indexOf(kMonsters, s.get("monster"), 0) << 5) | (var ? static_cast<uint32_t>(var->asInt()) & 31 : 0);
-                r.lives = savesInt(s, "lives");
-                r.score = savesInt(s, "score");
-                r.costume = savesInt(s, "costume");
+                r.lives = savesIntOf(s, "lives");
+                r.score = savesIntOf(s, "score");
+                const Costume c = resolveCostume(r.sel >> 5, s.get("costume"), false);
+                r.costume = c.index, r.skin = c.skin, r.skinMissing = c.missing;
             }
             m.rows.push_back(r);
         }
@@ -830,6 +951,10 @@ namespace wotm_save
         m.page = page;
         m.openedAt = g_vsyncs;
         buildRows(m);
+        // mouse (etapa 9): o clique que abriu (o "YES" do "salvar?") nao vale aqui
+        wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        wotm::mouse::takeClick(wotm::mouse::g_clickR);
+        wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
         // Comeco: carregar, no primeiro ocupado; gravar, no vazio do fim
         m.cur = 0;
         if (saving)
@@ -889,7 +1014,9 @@ namespace wotm_save
         if (m.confirm)
         {
             text(rdram, ctx, rt, "Overwrite save file " + std::to_string(m.cur + 1) + "?", kLeftX, Y(40), fName);
-            text(rdram, ctx, rt, "Press X again to overwrite", kLeftX, Y(70), fText);
+            // o botao de confirmar do dispositivo de agora (a janela publica o nome: wotm_live.inc), ou o clique
+            const std::string again = m.confirmByMouse ? "Click again to overwrite" : "Press " + wotm::mouse::confirmLabel() + " again to overwrite";
+            text(rdram, ctx, rt, again, kLeftX, Y(70), fText);
         }
         else if (show)
         {
@@ -914,10 +1041,11 @@ namespace wotm_save
                 // Monstro 3D em idle por cima da foto, com os pes perto da borda de baixo dela. Quadrado na janela: largura da tela
                 // do jogo = altura * (720 / 224) / 1,5.
                 const float mh = ph * 1.32f, mw = mh / aspect, mcx = kLeftCenter, my1 = py0 + ph + 3.f * k;
-                pics.push_back({wotm::savepics::kMonster, mon | (show->costume & 3) << 8, mcx - mw * 0.5f, my1 - mh, mcx + mw * 0.5f, my1, a});
+                pics.push_back({wotm::savepics::kMonster, mon | (show->costume & 0xFF) << 8 | modelBase(mon, show->costume) << 16, mcx - mw * 0.5f, my1 - mh, mcx + mw * 0.5f, my1, a});
             }
             text(rdram, ctx, rt, "Score " + std::to_string(show->score), kLeftX, Y(140), fText);
-            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives"), kLeftX, Y(154), fText);
+            text(rdram, ctx, rt, std::to_string(show->lives) + (show->lives == 1 ? " life" : " lives") + (show->skinMissing ? "  -  skin missing" : ""),
+                 kLeftX, Y(154), fText);
             text(rdram, ctx, rt, "Adventure progress", kLeftX, Y(168), fText);
             text(rdram, ctx, rt, std::to_string(levelsDone(*show)) + " of " + std::to_string(kStoryLevels) + " levels", kLeftX, Y(182), fText);
         }
@@ -968,7 +1096,10 @@ namespace wotm_save
         w32(rdram, kSlotBuf + kAdvSlot0 + 4, r.sel);
         w32(rdram, kSlotBuf + kAdvSlot0 + 8, r.lives);
         w32(rdram, kSlotBuf + kAdvSlot0 + 12, r.score);
-        w32(rdram, kSlotBuf + kAdvSlot0 + 16, r.costume);
+        w32(rdram, kSlotBuf + kAdvSlot0 + 16, r.costume);   // ja resolvido: skin ausente = traje 0
+        g_missing = MissingSkin{r.skinMissing, r.sel >> 5, r.skin};
+        if (r.skinMissing)
+            std::fprintf(stderr, "[wotm] save: traje %s nao achado (mod ausente?); usando traje 0\n", r.skin.c_str());
         guestCall(rdram, ctx, rt, wotm::fn::setSaveData__9MonsterMcR13_SaveGameDatai, {kSlotBuf, 0});
         std::fprintf(stderr, "[wotm] save: aventura do slot %d carregada (%s)\n", r.slot + 1, rowTitle(rdram, r).c_str());
     }
@@ -999,7 +1130,7 @@ namespace wotm_save
         s.at("variant") = Value::integer(r.sel & 31);
         s.at("lives") = Value::integer(r.lives);
         s.at("score") = Value::integer(r.score);
-        s.at("costume") = Value::integer(r.costume);
+        s.at("costume") = savedCostume(r.sel >> 5, r.costume);
         saves.arr[static_cast<size_t>(slot)] = s;
         const std::string why = "aventura no slot " + std::to_string(slot + 1) + " (" + rowTitle(rdram, r) + ")";
         saveJson(j, why.c_str());
@@ -1025,7 +1156,38 @@ namespace wotm_save
             modalDraw(rdram, ctx, rt, saving ? &(m.pending = rowFromRam(rdram)) : nullptr);
             return;
         }
-        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0; };
+        // mouse (etapa 9): a linha da lista sob ele (texto do McTextBox: x 318, y do topo 60 + 14 por linha, comprimido na fase);
+        // passar por cima escolhe, clique esquerdo vale X nela; direito e rodinha chegam pelo pad (wotm_pad.inc, gameMenu)
+        wotm::mouse::gameMenu();
+        wotm::mouse::claim();
+        wotm::mouse::saveList(m.confirm ? 3 : saving ? 2 : 1);   // legenda de baixo (wotm_live.inc)
+        bool mouseX = false;
+        {
+            static uint32_t s_seq = 0;
+            const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+            const bool moved = seq != s_seq;
+            s_seq = seq;
+            const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+            auto Y = [&](int y) { return saving ? static_cast<int>(std::lround(58 + (y - 25) * 0.7f)) : y; };
+            float gx, gy;
+            int hover = -1;
+            if (wotm::mouse::gsPointer(gx, gy) && gx >= 310.f && gx < 630.f)
+                for (int i = m.top; i < std::min<int>(m.top + kVisibleRows, static_cast<int>(m.rows.size())); ++i)
+                {
+                    const float y0 = static_cast<float>(Y(60 + (i - m.top) * 14)), y1 = static_cast<float>(Y(60 + (i - m.top + 1) * 14));
+                    if (gy >= y0 - 1.f && gy < y1 - 1.f) hover = i;
+                }
+            const bool pickable = hover >= 0 && (saving || m.rows[static_cast<size_t>(hover)].used);
+            if (pickable && (moved || click) && hover != m.cur)
+            {
+                const bool down = hover > m.cur;
+                m.cur = hover;
+                m.confirm = false;
+                if (!click) sfx(rdram, ctx, rt, down ? 2 : 4);
+            }
+            mouseX = click && pickable;
+        }
+        auto pressed = [&](uint32_t b) { return ramU32(rdram, kInputPressed + b * 8) != 0 || (b == kBtnX && mouseX); };
         const Row current = saving ? rowFromRam(rdram) : Row{};
         if (pressed(kBtnTriangle) || pressed(kBtnCircle))
         {
@@ -1066,6 +1228,7 @@ namespace wotm_save
             if (saving && r.used && !m.confirm)
             {
                 m.confirm = true;
+                m.confirmByMouse = mouseX;
                 sfx(rdram, ctx, rt, 4);
             }
             else if (saving)
@@ -1078,6 +1241,84 @@ namespace wotm_save
             }
         }
         modalDraw(rdram, ctx, rt, saving ? &current : nullptr);
+    }
+
+    // ---- mouse nas paginas do cartao com menu (McPage: o "salvar?" depois de vencer na aventura) ----
+    // Saida do McPage::updateMenuPos (a0 = pagina): itens pg+0x21C, escolhido pg+0x224, item i escolhivel se a palavra em
+    // pg + 0x14 + 0x24 i nao e 0; centrados em x 320, topo em pg+0x24C + i * pg+0x250 mais o +0x10 da fonte (a do escolhido ou a dos
+    // outros), altura = +0x04 da fonte / 16. Passar por cima escolhe, clique escreve o X do McPageMgr (+0x1168, lido pelo
+    // checkForSelection do mesmo quadro). 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md, secao 4
+    PS2Runtime::RecompiledFunction g_origMenuPos = nullptr;
+    uint32_t g_menuPosRa = 0, g_menuPosPage = 0;
+    bool g_menuPosPending = false;
+    void pageMouse(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t pg)
+    {
+        static uint32_t s_page = 0, s_seq = 0;
+        static uint64_t s_last = 0;
+        const bool fresh = pg != s_page || g_vsyncs - s_last > 10;
+        s_page = pg;
+        s_last = g_vsyncs;
+        wotm::mouse::gameMenu();
+        wotm::mouse::claim();
+        const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+        const bool moved = seq != s_seq;
+        s_seq = seq;
+        if (fresh)   // o clique que abriu a pagina nao vale nela
+        {
+            wotm::mouse::takeClick(wotm::mouse::g_clickL);
+            wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);
+            return;
+        }
+        const int n = static_cast<int>(ramU32(rdram, pg + 0x21C)), cur = static_cast<int>(ramU32(rdram, pg + 0x224));
+        if (n <= 0 || n > 10)
+            return;
+        const int y0 = static_cast<int>(ramU32(rdram, pg + 0x24C)), dy = static_cast<int>(ramU32(rdram, pg + 0x250));
+        float gx = -1.f, gy = -1.f;
+        int hover = -1;
+        if (wotm::mouse::gsPointer(gx, gy) && std::fabs(gx - 320.f) < 140.f)
+            for (int i = 0; i < n; ++i)
+            {
+                if (!ramU32(rdram, pg + 0x14 + 0x24 * static_cast<uint32_t>(i)))
+                    continue;
+                const uint32_t f = i == cur ? wotm::sym::x_6McPage_s_selectedFont : wotm::sym::x_6McPage_s_unselectedFont;
+                const int y = y0 + i * dy + static_cast<int>(ramU32(rdram, f + 0x10));
+                const int h = std::max(8, static_cast<int>(ramU32(rdram, f + 4)) / 16);
+                if (gy >= static_cast<float>(y) - 2.f && gy < static_cast<float>(y + h) + 1.f) hover = i;
+            }
+        static const bool log = std::getenv("WOTM_MENUMOUSELOG") != nullptr;
+        static int s_logged = -2;
+        if (log && hover != s_logged)
+        {
+            std::fprintf(stderr, "[menumouse] pagina do cartao 0x%08X: %d itens, topo %d passo %d, cursor %.0f,%.0f, item %d\n", pg, n, y0, dy,
+                         gx, gy, hover);
+            s_logged = hover;
+        }
+        if (hover < 0)
+            return;
+        if (moved && hover != cur)
+        {
+            w32(rdram, pg + 0x224, static_cast<uint32_t>(hover));
+            sfx(rdram, ctx, rt, hover > cur ? 2 : 4);
+        }
+        if (wotm::mouse::takeClick(wotm::mouse::g_clickL))
+        {
+            w32(rdram, pg + 0x224, static_cast<uint32_t>(hover));
+            w32(rdram, kMgr + 0x1168, 1);
+        }
+    }
+    void menuPosTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
+    {
+        if (ctx->pc == wotm::fn::updateMenuPos__6McPageR7McState)
+        {
+            g_menuPosRa = GPR_U32(ctx, 31);
+            g_menuPosPage = GPR_U32(ctx, 4);
+            g_menuPosPending = true;
+        }
+        g_origMenuPos(rdram, ctx, rt);
+        if (!g_menuPosPending || ctx->pc != g_menuPosRa)
+            return;
+        g_menuPosPending = false;
+        pageMouse(rdram, ctx, rt, g_menuPosPage);
     }
 
     void boxesReplaced(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
@@ -1099,7 +1340,17 @@ namespace wotm_save
     void poll(const uint8_t *rdram)
     {
         ++g_vsyncs;
-        if (!g_auto || !g_snap.valid)
+        // Selecao de monstro (telas 3, 6, 7, 17, 18, 19): outra aventura vai comecar; o nome da skin ausente do slot carregado sai
+        if (g_missing.valid)
+            switch (ramU32(rdram, wotm::sym::currScreen))
+            {
+            case 3: case 6: case 7: case 17: case 18: case 19:
+                g_missing = MissingSkin{};
+                break;
+            default:
+                break;
+            }
+        if (!g_snap.valid)
             return;
         const Snap now = snapOf(rdram);
         if (now.valid && !(now == g_snap))
@@ -1149,16 +1400,12 @@ namespace wotm_save
         runtime.registerFunction(kStdInit, &stdInitTapped);
         runtime.registerFunction(kStdExit, &stdExitTapped);
         g_on = true;
-        const char *a = std::getenv("WOTM_SAVEAUTO");
-        g_auto = !(a && a[0] == '0');
-        if (g_auto)
-        {
-            registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
-            runtime.registerFunction(kBoxesUpdate, &boxesReplaced);   // lista de saves no lugar das caixas (carregar)
-            runtime.registerFunction(kChooseUpdate, &chooseReplaced); // e no lugar da escolha do cartao (gravar)
-        }
-        std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); %s\n", g_json.string().c_str(),
-                     g_auto ? "opcoes, destraves e tokens gravados sozinhos, sem as telas do cartao (WOTM_SAVEAUTO=0 volta as telas)"
-                            : "telas do cartao como no PS2 (WOTM_SAVEAUTO=0)");
+        registerSeqs(runtime, std::make_index_sequence<std::size(kSeqHooks)>{});
+        if ((g_origMenuPos = runtime.lookupFunction(wotm::fn::updateMenuPos__6McPageR7McState)))
+            runtime.registerFunction(wotm::fn::updateMenuPos__6McPageR7McState, &menuPosTapped);   // mouse no "salvar?"
+        runtime.registerFunction(kBoxesUpdate, &boxesReplaced);   // lista de saves no lugar das caixas (carregar)
+        runtime.registerFunction(kChooseUpdate, &chooseReplaced); // e no lugar da escolha do cartao (gravar)
+        std::fprintf(stderr, "[wotm] save em JSON: %s (WOTM_SAVEJSON=0 desliga); opcoes, destraves e tokens gravados sozinhos, sem as "
+                     "telas do cartao\n", g_json.string().c_str());
     }
 }

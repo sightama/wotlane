@@ -8,6 +8,8 @@
 # Saída gerada pelo splat (contém código do jogo)
 asm/
 assets/
+# exceção: arte própria do port, não do jogo (ícones de botão do Kenney, CC0; tools/prompts_atlas.py)
+!native/assets/
 build/
 SCUS_971.97.ld
 SCUS_971.97.d
@@ -44,5 +46,5 @@ tools/pcsx2_auto/*.bin
 CLAUDE.local.md
 docs/plans/
 
-# pasta do runtime (clone do PS2Recomp, build, discroot) dentro do repo
+# pasta do runtime criada pelo tools/setup_runtime.ps1 (clone do PS2Recomp, build, discroot)
 /runtime/

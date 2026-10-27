@@ -60,7 +60,7 @@ Também provado no retail: o Endurance mantém 6 monstros carregados e o `m_mode
 ## Plano sugerido (em degraus, cada um testável)
 1. **6..8 monstros sem mexer na RAM:** gancho em `Shell::LoadMonstersDB/LoadTexture/LoadResTexture/InitPlayers` lendo a escalação
    de uma variável (ex.: `WOTM_LINEUP`), modo livre para todos, fase leve (Centro). Prova `m_monsters[>8]`, `pad2958`, IA e câmera.
-2. **RAM de 64 MB** no fork do runtime + carga dos monstros acima de 32 MB; regenerar `tools/runtime_patch/wotm-runtime.patch`. **Feito em 2026-10-19** (`docs/passos/POS_FRONTEIRA.md`, item 1): o Metro com 8 monstros roda.
+2. **RAM de 64 MB** no fork do runtime + carga dos monstros acima de 32 MB; regenerar `tools/runtime_patch/wotm-runtime.patch`. **Feito em 2026-10-19** (`92af448:docs/passos/POS_FRONTEIRA.md`, item 1): o Metro com 8 monstros roda.
 3. **`fileStatus` nativo** (32 slots) e trajes das IAs fora do Shell. Daí 16.
 4. Medir quadro e som com 16; otimizar o `EnemyInfo` se for ele.
 

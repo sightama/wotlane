@@ -1,4 +1,4 @@
-// Imagens da lista de saves (POS_FRONTEIRA.md, item 5): a esquerda do modal, a foto larga da fase do save e, por cima, o logo do
+// Imagens da lista de saves (NATIVO.md, "Save em JSON"): a esquerda do modal, a foto larga da fase do save e, por cima, o logo do
 // monstro, como na escolha de fase e de monstro do menu. Saem do SHELL/SHELL.TEX e SHELL/SHELL.RTX do disco (o mesmo par que o menu
 // carrega; depois da luta ele nao esta na memoria, por isso a leitura e direta do disco).
 //
@@ -38,7 +38,8 @@ struct Pic {
 struct Tile {
     uint16_t texId, palTbp;
 };
-// Fase -> foto larga (esquerda, direita). Indices de kLevels: 1 central .. 11 capitol.
+// Fase -> foto larga (esquerda, direita). Indices de kLevels (Shell::m_levelNum): 1 central .. 11 capitol, 14 minisf, 15 volcano
+// (as 12, 13 e 16 nao tem foto no SHELL.TEX: a selecao de fase mostra a de outra; wotm_levelsel.inc).
 struct LevelPic {
     uint32_t level;
     Tile l, r;
@@ -55,6 +56,8 @@ constexpr LevelPic kLevelPics[] = {
     {9, {114, 368}, {115, 372}},   // Tsunopolis
     {10, {88, 264}, {89, 268}},    // UFO
     {11, {96, 296}, {97, 300}},    // Capitol
+    {14, {86, 256}, {87, 260}},    // Mini Baytown
+    {15, {90, 272}, {91, 276}},    // Volcano
 };
 // Monstro (indice de kMonsters) -> logo
 struct LogoPic {
@@ -86,7 +89,8 @@ inline bool hasLogo(uint32_t monster) {
 }
 // Monstro (indice de kMonsters) -> prefixo do arquivo em MON/ (MONKEY0.NGP...: o numero e o traje, Shell::m_costume)
 inline const char *monsterFile(uint32_t monster) {
-    static const char *const k[] = {nullptr, "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", nullptr, "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN"};
+    static const char *const k[] = {nullptr, "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", nullptr, "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN",
+                                           nullptr, "ASSBOSS", "JELLY", "FINAL"};   // 13 a 15: chefes, base de monstro custom (wotm_mods.hpp)
     return monster < std::size(k) ? k[monster] : nullptr;
 }
 
@@ -179,10 +183,12 @@ public:
             monT0_ = GetTime();
             model_.reset();
             const char *pre = monsterFile(pic.id & 0xFF);
-            const uint32_t costume = (pic.id >> 8) & 3;
+            // traje (4+ = skin de mod: MON/<PREFIXO><n>.* vem de mods/, wotm_mods.hpp) e o traje do disco de reserva (o base da skin)
+            const uint32_t costume = (pic.id >> 8) & 0xFF, base = (pic.id >> 16) & 3;
             if (pre) {
                 auto m = std::make_unique<model::Model>();
-                if (m->load(discRoot, iso, pre + std::to_string(costume)) || m->load(discRoot, iso, std::string(pre) + "0"))
+                if (m->load(discRoot, iso, pre + std::to_string(costume)) || m->load(discRoot, iso, pre + std::to_string(base)) ||
+                    m->load(discRoot, iso, std::string(pre) + "0"))
                     model_ = std::move(m), model_->computeFraming(model::kIdle);   // caixa fixa: a camera nao acompanha o idle
                 else
                     std::fprintf(stderr, "[wotm] lista de saves: MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, costume);
@@ -206,7 +212,11 @@ public:
             if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] lista de saves: LVL/CENTRAL.TEX/.RTX nao achado; sem fogo nem lens flare\n");
             renderer_.setFx(&fx_);
         }
-        renderer_.render(*model_, W, H, kYaw, kPitch, zoomOf(monId_ & 0xFF), [&] {
+        const Framing fr = framingOf((monId_ & 0xFF) | ((monId_ >> 16) & 3) << 8);   // enquadramento do traje do disco (o base)
+        renderer_.shiftX = fr.shiftX;
+        renderer_.shiftY = fr.shiftY;
+        renderer_.fwd = fr.fwd;
+        renderer_.render(*model_, W, H, kYaw, kPitch, fr.zoom, [&] {
             if (!lt) return;
             DrawTexturePro(*lt, Rectangle{0.f, 0.f, float(lt->width), float(lt->height)},
                            Rectangle{(lev.x0 - pic.x0) * kx, (lev.y0 - pic.y0) * ky, (lev.x1 - lev.x0) * kx, (lev.y1 - lev.y0) * ky},
@@ -252,6 +262,14 @@ public:
                            Rectangle{x0 + p.x0 * sx, p.y0 * sy, (p.x1 - p.x0) * sx, (p.y1 - p.y0) * sy}, Vector2{0.f, 0.f}, 0.f,
                            Color{255, 255, 255, p.a});
         }
+    }
+
+    // Foto larga da fase (512x256, de cima para baixo) ou nullptr; o mosaico da RANDOM da selecao de fase (wotm_levelsel.inc)
+    const Texture2D *levelTexture(const std::filesystem::path &discRoot, const std::string &iso, uint32_t level) {
+        if (!load(discRoot, iso)) return nullptr;
+        for (size_t i = 0; i < std::size(kLevelPics); ++i)
+            if (kLevelPics[i].level == level && level_[i].id) return &level_[i];
+        return nullptr;
     }
 
 private:
@@ -316,11 +334,35 @@ private:
     std::vector<detail::Packet> texPk_, rtxPk_;
     Texture2D level_[std::size(kLevelPics)]{}, logo_[std::size(kLogoPics)]{};
     bool tried_ = false, ok_ = false;
+
+public:   // enquadramento tambem usado pela selecao de monstros de 3 e 4 jogadores (wotm_padsel.inc)
     // Monstro 3D: virado 3/4 para a direita da tela (yaw 0 = de frente), camera um pouco acima
     static constexpr float kYaw = 35.f, kPitch = 8.f;
-    // Aproximacao por monstro: o enquadramento usa a maior medida da caixa, e a cauda do Togera (3) e as asas do Raptros (9) deixavam
-    // os dois mais longe que os outros
-    static float zoomOf(uint32_t mon) { return mon == 3 ? 1.35f : mon == 9 ? 1.6f : 1.f; }
+    // Correcao do enquadramento por monstro e traje (costume 0-3; -1 = todos). O automatico usa a maior medida da caixa, entao a cauda
+    // do Togera (3) e as asas do Raptros (9) deixavam os dois mais longe; a cauda do Togera tambem tira o centro da caixa do corpo:
+    // `fwd` anda o centro para a frente do monstro (model::Renderer::fwd), o que vale em qualquer angulo e proporcao de quadro.
+    // O fogo do Magmo traje 3 (o quarto, contando de 1) e o da cabeca do Agamo (10) aumentam a caixa: aproxima e sobe um pouco para os
+    // pes nao sairem por baixo. shiftX/shiftY em fracao do quadro (+ = direita/cima).
+    struct Framing {
+        uint32_t mon;
+        int costume;
+        float zoom, shiftX, shiftY, fwd = 0.f;
+    };
+    static constexpr Framing kFraming[] = {
+        {3, -1, 1.35f, 0.f, 0.f, 0.18f},   // Togera
+        {8, 3, 1.25f, 0.f, 0.08f},         // Magmo, traje de fogo
+        {9, -1, 1.6f, 0.f, 0.f},           // Raptros
+        {10, -1, 1.15f, 0.f, 0.04f},       // Agamo
+    };
+    static Framing framingOf(uint32_t id) {
+        const uint32_t mon = id & 0xFF;
+        const int costume = int((id >> 8) & 3);
+        for (const Framing &f : kFraming)
+            if (f.mon == mon && (f.costume < 0 || f.costume == costume)) return f;
+        return Framing{mon, -1, 1.f, 0.f, 0.f};
+    }
+
+private:
     std::unique_ptr<model::Model> model_;
     model::Renderer renderer_;
     model::FxTextures fx_;

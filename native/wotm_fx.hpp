@@ -36,13 +36,20 @@
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <mutex>
+#include <thread>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -58,6 +65,247 @@ extern "C" void glReadPixels(int x, int y, int w, int h, unsigned format, unsign
 
 namespace wotm {
 
+// Antes do glReadPixels da profundidade (teste de oclusao do lens flare): com MSAA (wotm_msaa.hpp) o desenho vai a um framebuffer
+// multiamostra, que o glReadPixels nao le; quem o usa poe aqui a resolucao da profundidade. Nulo: le o framebuffer em uso.
+inline void (*g_beforeDepthRead)() = nullptr;
+
+// Profundidade de uma vista lida sem a thread da janela esperar (tela dividida, Scene::drawFlaresFor; teste de oclusao do lens flare).
+// Qualquer leitura do GL na thread da janela (glMapBuffer, glClientWaitSync, glGet*) a faz esperar o driver alcanca-la: no driver da
+// NVIDIA, com a otimizacao em thread, ele anda ~6 ms atras com 4 vistas no Ryzen 5 5500, e cada espera desfaz o paralelismo entre a
+// janela, o driver e a GPU (o redesenho de 4 vistas ia de ~16 para ~25 ms). Entao a janela so copia a profundidade da vista na GPU
+// (glBlitFramebuffer para um renderbuffer proprio, dois por vista em rodizio), poe uma cerca e segue. Uma thread auxiliar, com um
+// contexto GL compartilhado (janela GLFW escondida), espera a cerca na GPU, le a copia num PBO, espera a leitura e entrega o resultado;
+// as esperas sao dela. O teste usa a copia pronta mais nova (1 ou 2 redesenhos atras), enquanto tiver no maximo kMaxAge pedidos de
+// idade. Sem as funcoes do GL 3.2 ou sem o contexto auxiliar, ok() fica false e o flare volta a leitura direta.
+extern "C" {
+extern void *(*glad_glFenceSync)(unsigned, unsigned);
+extern unsigned (*glad_glClientWaitSync)(void *, unsigned, unsigned long long);
+extern void (*glad_glWaitSync)(void *, unsigned, unsigned long long);
+extern void (*glad_glDeleteSync)(void *);
+extern void (*glad_glFlush)(void);
+extern void (*glad_glGenBuffers)(int, unsigned *);
+extern void (*glad_glBindBuffer)(unsigned, unsigned);
+extern void (*glad_glBufferData)(unsigned, ptrdiff_t, const void *, unsigned);
+extern void *(*glad_glMapBuffer)(unsigned, unsigned);
+extern unsigned char (*glad_glUnmapBuffer)(unsigned);
+extern void (*glad_glGenFramebuffers)(int, unsigned *);
+extern void (*glad_glBindFramebuffer)(unsigned, unsigned);
+extern void (*glad_glGenRenderbuffers)(int, unsigned *);
+extern void (*glad_glDeleteRenderbuffers)(int, const unsigned *);
+extern void (*glad_glBindRenderbuffer)(unsigned, unsigned);
+extern void (*glad_glRenderbufferStorage)(unsigned, unsigned, int, int);
+extern void (*glad_glFramebufferRenderbuffer)(unsigned, unsigned, unsigned, unsigned);
+extern void (*glad_glBlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned, unsigned);
+extern void (*glad_glDrawBuffer)(unsigned);
+extern void (*glad_glReadBuffer)(unsigned);
+// GLFW (estatico no raylib): o contexto auxiliar
+void *glfwGetCurrentContext(void);
+void glfwWindowHint(int, int);
+void *glfwCreateWindow(int, int, const char *, void *, void *);
+void glfwMakeContextCurrent(void *);
+}
+// O renderbuffer da copia tem de ter o formato da profundidade lida: o da render texture do raylib (GL_DEPTH_COMPONENT sem tamanho) ou,
+// com MSAA, o resolvido pelo g_beforeDepthRead (GL_DEPTH_COMPONENT24). Quem liga o MSAA diz aqui se ele esta em uso.
+inline bool (*g_depthReadIsMsaa)() = nullptr;
+
+class AsyncDepth {
+    struct Slot {
+        unsigned rb = 0, fbo = 0;          // renderbuffer da copia e o framebuffer dele (contexto da janela)
+        int w = 0, h = 0;
+        unsigned fmt = 0;
+        unsigned gen = 0;                  // muda quando o renderbuffer e refeito (a thread auxiliar refaz o framebuffer dela)
+        std::atomic<int> busy{0};          // 1 = pedido na fila ou sendo lido pela thread auxiliar
+    };
+    struct Job { AsyncDepth *d; int slot; unsigned rb, gen; int w, h; void *fence; unsigned long serial; };
+
+    // Thread auxiliar com o contexto compartilhado; uma para todas as vistas
+    class Worker {
+    public:
+        static Worker &get() { static Worker w; return w; }
+        bool ok() {   // na thread da janela, com o contexto dela corrente
+            if (tried_) return ok_;
+            tried_ = true;
+            void *main = glfwGetCurrentContext();
+            if (!main) return false;
+            constexpr int kVisible = 0x00020004, kFocused = 0x00020001;
+            glfwWindowHint(kVisible, 0);
+            glfwWindowHint(kFocused, 0);
+            ctx_ = glfwCreateWindow(16, 16, "wotm depth", nullptr, main);
+            glfwWindowHint(kVisible, 1);
+            glfwWindowHint(kFocused, 1);
+            glfwMakeContextCurrent(main);
+            if (!ctx_) {
+                std::fprintf(stderr, "[flare] sem contexto GL auxiliar: oclusao do lens flare com leitura direta na tela dividida\n");
+                return false;
+            }
+            std::thread(&Worker::run, this).detach();
+            ok_ = true;
+            return true;
+        }
+        void post(const Job &j) {
+            { std::lock_guard<std::mutex> lk(m_); q_.push_back(j); }
+            cv_.notify_one();
+        }
+
+    private:
+        void run() {
+            glfwMakeContextCurrent(ctx_);
+            struct Fb { unsigned fbo = 0, rb = 0, gen = ~0u; };
+            std::unordered_map<const void *, Fb> fbs;   // por (vista, slot)
+            std::unordered_map<const void *, std::pair<unsigned, size_t>> pbos;
+            for (;;) {
+                Job j;
+                {
+                    std::unique_lock<std::mutex> lk(m_);
+                    cv_.wait(lk, [&] { return !q_.empty(); });
+                    j = q_.front();
+                    q_.pop_front();
+                }
+                const void *key = &j.d->slots_[j.slot];
+                Fb &fb = fbs[key];
+                if (!fb.fbo) {
+                    glad_glGenFramebuffers(1, &fb.fbo);
+                    glad_glBindFramebuffer(kReadFb, fb.fbo);
+                    glad_glDrawBuffer(0);
+                    glad_glReadBuffer(0);
+                }
+                glad_glBindFramebuffer(kReadFb, fb.fbo);
+                if (fb.rb != j.rb || fb.gen != j.gen) {
+                    glad_glFramebufferRenderbuffer(kReadFb, kDepthAtt, kRenderbuffer, j.rb);
+                    fb.rb = j.rb;
+                    fb.gen = j.gen;
+                }
+                glad_glWaitSync(j.fence, 0, ~0ull);   // a copia da janela termina antes da leitura (na GPU)
+                glad_glDeleteSync(j.fence);
+                auto &pb = pbos[key];
+                if (!pb.first) glad_glGenBuffers(1, &pb.first);
+                const size_t bytes = size_t(j.w) * size_t(j.h) * 4;
+                glad_glBindBuffer(kPack, pb.first);
+                if (pb.second != bytes) {
+                    glad_glBufferData(kPack, ptrdiff_t(bytes), nullptr, kStreamRead);
+                    pb.second = bytes;
+                }
+                glReadPixels(0, 0, j.w, j.h, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, nullptr);
+                void *f2 = glad_glFenceSync(kGpuCommandsComplete, 0);
+                glad_glFlush();
+                unsigned r = 0;
+                for (int tries = 0; tries < 50; ++tries) {
+                    r = glad_glClientWaitSync(f2, kFlushBit, 100000000ull);   // 100 ms
+                    if (r == kAlreadySignaled || r == kConditionSatisfied || r == kWaitFailed) break;
+                }
+                glad_glDeleteSync(f2);
+                j.d->slots_[j.slot].busy = 0;   // leitura terminada: a janela pode reescrever a copia
+                if (r == kAlreadySignaled || r == kConditionSatisfied) {
+                    if (const void *p = glad_glMapBuffer(kPack, kReadOnly)) {
+                        std::lock_guard<std::mutex> lk(j.d->m_);
+                        j.d->res_.resize(bytes / 4);
+                        std::memcpy(j.d->res_.data(), p, bytes);
+                        j.d->resW_ = j.w;
+                        j.d->resH_ = j.h;
+                        j.d->resSerial_ = j.serial;
+                    }
+                    glad_glUnmapBuffer(kPack);
+                }
+                glad_glBindBuffer(kPack, 0);
+                glad_glBindFramebuffer(kReadFb, 0);
+            }
+        }
+        void *ctx_ = nullptr;
+        bool tried_ = false, ok_ = false;
+        std::mutex m_;
+        std::condition_variable cv_;
+        std::deque<Job> q_;
+    };
+
+public:
+    bool ok() {
+        if (!tried_) {
+            tried_ = true;
+            ok_ = glad_glFenceSync && glad_glClientWaitSync && glad_glWaitSync && glad_glDeleteSync && glad_glFlush && glad_glGenBuffers &&
+                  glad_glBindBuffer && glad_glBufferData && glad_glMapBuffer && glad_glUnmapBuffer && glad_glGenFramebuffers &&
+                  glad_glBindFramebuffer && glad_glGenRenderbuffers && glad_glDeleteRenderbuffers && glad_glBindRenderbuffer &&
+                  glad_glRenderbufferStorage && glad_glFramebufferRenderbuffer && glad_glBlitFramebuffer && glad_glDrawBuffer &&
+                  glad_glReadBuffer && Worker::get().ok();
+            if (!ok_) std::fprintf(stderr, "[flare] sem as funcoes do GL 3.2: oclusao do lens flare com leitura direta na tela dividida\n");
+        }
+        return ok_;
+    }
+    // Pega em cpu a copia pronta mais nova (sem esperar); valid diz se ha uma recente
+    void fetch(unsigned long redraw) {
+        if (!ok()) { valid = false; return; }
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            if (resSerial_ > cpuSerial_ && resW_ > 0) {
+                cpu.swap(res_);
+                cw = resW_;
+                ch = resH_;
+                cpuSerial_ = resSerial_;
+                resSerial_ = 0;
+            }
+        }
+        valid = cpuSerial_ && redraw - cpuSerial_ <= kMaxAge;
+    }
+    // Copia na GPU a profundidade do framebuffer em que a vista desenha (`fbo`, w x h) e pede a leitura a thread auxiliar. Sem slot
+    // livre (as duas copias anteriores ainda na fila), nao copia desta vez.
+    void issue(int w, int h, unsigned fbo, unsigned long redraw) {
+        if (!ok() || w <= 0 || h <= 0) return;
+        Slot *s = nullptr;
+        int k = 0;
+        for (int i = 0; i < 2; ++i) {
+            const int c = (next_ + i) & 1;
+            if (!slots_[c].busy) { s = &slots_[c]; k = c; break; }
+        }
+        if (!s) return;
+        next_ = k ^ 1;
+        const bool msaa = g_depthReadIsMsaa && g_depthReadIsMsaa();
+        const unsigned fmt = msaa ? kDepth24 : kDepthAny;
+        if (!s->rb || s->w != w || s->h != h || s->fmt != fmt) {
+            if (s->rb) glad_glDeleteRenderbuffers(1, &s->rb);
+            glad_glGenRenderbuffers(1, &s->rb);
+            glad_glBindRenderbuffer(kRenderbuffer, s->rb);
+            glad_glRenderbufferStorage(kRenderbuffer, fmt, w, h);
+            glad_glBindRenderbuffer(kRenderbuffer, 0);
+            if (!s->fbo) glad_glGenFramebuffers(1, &s->fbo);
+            glad_glBindFramebuffer(kFramebuffer, s->fbo);
+            glad_glFramebufferRenderbuffer(kFramebuffer, kDepthAtt, kRenderbuffer, s->rb);
+            glad_glDrawBuffer(0);
+            glad_glReadBuffer(0);
+            s->w = w;
+            s->h = h;
+            s->fmt = fmt;
+            ++s->gen;
+        }
+        glad_glBindFramebuffer(kFramebuffer, fbo);
+        if (g_beforeDepthRead) g_beforeDepthRead();   // MSAA: a profundidade resolvida fica como leitura
+        glad_glBindFramebuffer(kDrawFb, s->fbo);
+        glad_glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, kDepthBit, kNearest);
+        glad_glBindFramebuffer(kFramebuffer, fbo);
+        void *f = glad_glFenceSync(kGpuCommandsComplete, 0);
+        glad_glFlush();   // a cerca chega ao outro contexto
+        s->busy = 1;
+        Worker::get().post({this, k, s->rb, s->gen, w, h, f, redraw});
+    }
+    std::vector<float> cpu;   // profundidade (0..1) de um redesenho recente, linhas de baixo para cima como o GL
+    int cw = 0, ch = 0;
+    bool valid = false;
+
+private:
+    static constexpr unsigned kPack = 0x88EB, kReadOnly = 0x88B8, kStreamRead = 0x88E1;   // GL_PIXEL_PACK_BUFFER, GL_READ_ONLY, GL_STREAM_READ
+    static constexpr unsigned kGpuCommandsComplete = 0x9117, kFlushBit = 1, kAlreadySignaled = 0x911A, kConditionSatisfied = 0x911C,
+                              kWaitFailed = 0x911D;
+    static constexpr unsigned kFramebuffer = 0x8D40, kReadFb = 0x8CA8, kDrawFb = 0x8CA9, kRenderbuffer = 0x8D41, kDepthAtt = 0x8D00,
+                              kDepthAny = 0x1902 /* GL_DEPTH_COMPONENT */, kDepth24 = 0x81A6, kDepthBit = 0x100, kNearest = 0x2600;
+    static constexpr unsigned long kMaxAge = 4;   // redesenhos de idade da copia em cpu ainda usada
+    bool tried_ = false, ok_ = false;
+    Slot slots_[2];
+    int next_ = 0;
+    unsigned long cpuSerial_ = 0;
+    std::mutex m_;                 // res_* (escritos pela thread auxiliar)
+    std::vector<float> res_;
+    int resW_ = 0, resH_ = 0;
+    unsigned long resSerial_ = 0;
+};
+
 // Normal do vertice para o shader do Scene::draw: (fogBurnThru, 1, FGE + 2 * GS). O rlNormal3f normaliza; o shader le as razoes
 // por y. FGE = neblina; GS = alfa cru do GS na textura e no vertice (As = At * Av / 16384). rlNormal3f(0, 0, 0) desliga os dois.
 // PM (+4): a mistura e aditiva ou subtrativa e o shader devolve a cor ja vezes o As inteiro (gsBlend usa fator 1 na origem). O As do
@@ -68,9 +316,15 @@ namespace wotm {
 inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
 // O burn fica limitado a +-4096: o F satura (0 ou 255) muito antes, e o domo do ceu da AIRPORT tem fogBurnThru 1e7, que deixava o y
 // normalizado abaixo do limite do shader (1e-6) e apagava todos os flags (o domo saia sem o modo GS, ~0,13 da cor).
+inline void shaderNormalVals(float burn, bool fge, bool gs, bool pm, int mode, float out[3]) {
+    out[0] = burn > 4096.f ? 4096.f : (burn < -4096.f ? -4096.f : burn);
+    out[1] = 1.f;
+    out[2] = (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f) + (g_premulShader ? 8.f * float(mode) : 0.f);
+}
 inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false, int mode = 0) {
-    burn = burn > 4096.f ? 4096.f : (burn < -4096.f ? -4096.f : burn);
-    rlNormal3f(burn, 1.f, (fge ? 1.f : 0.f) + (gs ? 2.f : 0.f) + (pm && g_premulShader ? 4.f : 0.f) + (g_premulShader ? 8.f * float(mode) : 0.f));
+    float n[3];
+    shaderNormalVals(burn, fge, gs, pm, mode, n);
+    rlNormal3f(n[0], n[1], n[2]);
 }
 // Mistura do GS pelo byte baixo do registrador ALPHA: cor = (A - B) * C + D, campos de 2 bits A, B, D (0 Cs, 1 Cd, 2 zero) e C (0 As,
 // 1 Ad, 2 FIX; Ad e FIX nao aparecem nos objetos medidos e ficam como As). Vira Cs * (as * As + ks) + Cd * (ad * As + kd) no GL:
@@ -142,6 +396,453 @@ inline unsigned gsWhiteTexture() {
         id = LoadTextureFromImage(img).id;
     }
     return id;
+}
+
+// ---------------------------------------------------------------- vertices sem o modo imediato do rlgl
+// O drawList emitia cada vertice com rlColor4ub, rlTexCoord2f, rlNormal3f (que normaliza com uma raiz) e rlVertex3f: quatro chamadas
+// ao raylib por vertice, ~40 ns cada vertice no Ryzen 3 3200G, metade do tempo da travessia. O VtxStream guarda os mesmos atributos
+// num vetor proprio, intercalados, e na descarga sobe tudo de uma vez (glBufferData, buffer novo a cada descarga, sem esperar a GPU)
+// e desenha como o rlDrawRenderBatch: o mesmo shader (o que o chamador diz que o rlgl tem ligado), o MVP (modelview x projecao, a conta
+// do rlMatrixMultiply), colDiffuse 1 e texture0 na unidade 0, os atributos nas posicoes do lote do rlgl, um glDrawArrays por comando
+// (modo e textura). O estado do GL (mistura, mascara de Z, uniform do teste de alfa, CLAMP) vale no momento da descarga, como no rlgl:
+// quem usa descarrega antes de muda-lo. Sem as funcoes do GL 3 (glad), ok() e false e o chamador volta ao rlgl.
+extern "C" {
+extern void (*glad_glGenVertexArrays)(int, unsigned *);
+extern void (*glad_glBindVertexArray)(unsigned);
+extern void (*glad_glGenBuffers)(int, unsigned *);
+extern void (*glad_glBindBuffer)(unsigned, unsigned);
+extern void (*glad_glBufferData)(unsigned, ptrdiff_t, const void *, unsigned);
+extern void (*glad_glVertexAttribPointer)(unsigned, int, unsigned, unsigned char, int, const void *);
+extern void (*glad_glEnableVertexAttribArray)(unsigned);
+extern void (*glad_glUseProgram)(unsigned);
+extern void (*glad_glUniformMatrix4fv)(int, int, unsigned char, const float *);
+extern void (*glad_glUniform4f)(int, float, float, float, float);
+extern void (*glad_glUniform1i)(int, int);
+extern void (*glad_glActiveTexture)(unsigned);
+extern void (*glad_glBindTexture)(unsigned, unsigned);
+extern void (*glad_glDrawArrays)(unsigned, int, int);
+extern void (*glad_glBufferSubData)(unsigned, ptrdiff_t, ptrdiff_t, const void *);
+}
+// Threads auxiliares do desenho: parallelFor(n, fn) chama fn(i) para i em [0, n) dividido entre elas e quem chama, e volta quando todas
+// terminaram. fn so pode ler o que ninguem escreve durante a chamada (nada de GL nem dos caches da Scene). Quantas: WOTM_DRAWTHREADS
+// (0 = nenhuma, tudo em quem chama; o padrao: as threads auxiliares baixam o clock do nucleo do EE e ele perde mais do que a janela ganha).
+class JobPool {
+public:
+    static JobPool &get() { static JobPool *p = new JobPool; return *p; }   // nunca destruido: as threads morrem com o processo
+    int workers() const { return int(th_.size()); }
+    // Usar as threads agora? Com WOTM_DRAWTHREADS_AB=<s> (medida), alterna a cada s segundos entre com e sem, com uma linha
+    // "[native] JobPool: com|sem threads" a cada troca, para comparar as duas metades da mesma luta
+    bool active() {
+        if (th_.empty()) return false;
+        static const double ab = std::getenv("WOTM_DRAWTHREADS_AB") ? std::atof(std::getenv("WOTM_DRAWTHREADS_AB")) : 0.0;
+        if (ab <= 0.0) return true;
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        const bool on = (long long)(t / ab) % 2 == 0;
+        if (on != abLast_) { abLast_ = on; std::fprintf(stderr, "[native] JobPool: %s threads\n", on ? "com" : "sem"); }
+        return on;
+    }
+    template <class F> void parallelFor(int n, F &&fn) {
+        if (n <= 0) return;
+        if (th_.empty() || n == 1) { for (int i = 0; i < n; ++i) fn(i); return; }
+        std::function<void(int)> f = std::forward<F>(fn);
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            fn_ = &f;
+            n_ = n;
+            next_.store(0, std::memory_order_relaxed);
+            busy_ = int(th_.size());
+            ++gen_;
+        }
+        cv_.notify_all();
+        run();
+        std::unique_lock<std::mutex> lk(m_);
+        while (!done_.wait_for(lk, std::chrono::seconds(2), [&] { return busy_ == 0; }))
+            std::fprintf(stderr, "[native] JobPool: esperando %d threads ha mais de 2 s (n %d, proximo %d, geracao %llu)\n", busy_, n_,
+                         next_.load(), (unsigned long long)gen_);
+        fn_ = nullptr;
+    }
+private:
+    JobPool() {
+        int k;
+        if (const char *e = std::getenv("WOTM_DRAWTHREADS")) k = std::atoi(e);
+        else k = 0;
+        for (int i = 0; i < k; ++i) { th_.emplace_back([this] { loop(); }); th_.back().detach(); }
+        if (k > 0) std::fprintf(stderr, "[native] desenho: %d threads auxiliares (WOTM_DRAWTHREADS)\n", k);
+    }
+    void run() {
+        for (int i; (i = next_.fetch_add(1, std::memory_order_relaxed)) < n_;) (*fn_)(i);
+    }
+    void loop() {
+        uint64_t seen = 0;
+        for (;;) {
+            {
+                std::unique_lock<std::mutex> lk(m_);
+                cv_.wait(lk, [&] { return gen_ != seen; });
+                seen = gen_;
+                if (quit_) return;
+            }
+            run();
+            std::lock_guard<std::mutex> lk(m_);
+            if (--busy_ == 0) done_.notify_one();
+        }
+    }
+    std::vector<std::thread> th_;
+    std::mutex m_;
+    std::condition_variable cv_, done_;
+    std::function<void(int)> *fn_ = nullptr;
+    int n_ = 0, busy_ = 0;
+    std::atomic<int> next_{0};
+    uint64_t gen_ = 0;
+    bool quit_ = false;
+    bool abLast_ = false;
+};
+
+class VtxStream {
+public:
+    struct V { float x, y, z, u, v, nx, ny, nz; uint8_t c[4]; };
+    static_assert(sizeof(V) == 36, "layout intercalado: posicao, UV, normal, cor");
+
+    bool ok() {
+        if (!tried_) {
+            tried_ = true;
+            ok_ = glad_glGenVertexArrays && glad_glBindVertexArray && glad_glGenBuffers && glad_glBindBuffer && glad_glBufferData && glad_glBufferSubData &&
+                  glad_glVertexAttribPointer && glad_glEnableVertexAttribArray && glad_glUseProgram && glad_glUniformMatrix4fv &&
+                  glad_glUniform4f && glad_glUniform1i && glad_glActiveTexture && glad_glBindTexture && glad_glDrawArrays;
+            if (ok_) {
+                makeVao(vao_, vbo_);
+            } else {
+                std::fprintf(stderr, "[native] sem as funcoes do GL 3: vertices pelo modo imediato do rlgl\n");
+            }
+        }
+        return ok_;
+    }
+    // Shader que o rlgl tem ligado agora (BeginShaderMode do chamador, ou o padrao): o dos comandos seguintes
+    void setShader(unsigned id, const int *locs) { shader_ = id; locs_ = locs; }
+
+    // Comeco de um comando (como rlBegin + rlSetTexture): RL_TRIANGLES ou RL_LINES. Guarda o shader e o MVP de agora (a descarga pode
+    // vir depois de o chamador mudar as matrizes)
+    void begin(int mode, unsigned tex) {
+        const int m = curMvp();
+        if (!cmds_.empty() && cmds_.back().kind == Cmd::Draw && cmds_.back().count == 0 && cmds_.back().job < 0 && !cmds_.back().res) {
+            Cmd &c = cmds_.back();
+            c.mode = mode; c.tex = tex; c.mvp = m; c.shader = shader_; c.locs = locs_;
+            return;
+        }
+        cmds_.push_back({Cmd::Draw, mode, tex, int(v_.size()), 0, m, shader_, locs_, -1, -1});
+    }
+    // Mudanca de estado do GL (mistura, teste de alfa, mascara de Z, CLAMP) na ordem dos vertices: sem nada na fila, roda agora;
+    // senao entra na fila e roda na descarga, entre os desenhos de antes e os de depois. Uma subida so por descarga em vez de uma por
+    // mudanca de estado (centenas por vista na travessia).
+    template <class F> void state(F &&fn) {
+        if (empty()) { fn(); return; }
+        ops_.emplace_back(std::forward<F>(fn));
+        cmds_.push_back({Cmd::State, 0, 0, int(v_.size()), 0, -1, 0, nullptr, int(ops_.size()) - 1, -1});
+    }
+    // Pedaco adiado: os vertices deste ponto do desenho aberto saem depois, no buffer deferBuf(j) (preenchido por quem pediu, em
+    // qualquer thread, antes da descarga); a descarga os poe neste lugar, na ordem. Devolve j.
+    int defer() {
+        if (cmds_.empty() || cmds_.back().kind != Cmd::Draw || cmds_.back().count != 0 || cmds_.back().job >= 0 || cmds_.back().res) reopen();
+        const int j = nDefer_++;
+        if (bufs_.size() < size_t(nDefer_)) bufs_.resize(size_t(nDefer_));
+        bufs_[size_t(j)].clear();
+        cmds_.back().job = j;
+        return j;
+    }
+    std::vector<V> &deferBuf(int j) { return bufs_[size_t(j)]; }
+
+    // Arena residente: vertices que ficam na GPU entre vistas e quadros (geometria que nao mudou; Scene::drawList). arenaAlloc da a
+    // posicao de n vertices (-1 = cheia: o chamador zera com arenaReset, que orfana o buffer, fora de uma lista com desenhos da arena
+    // na fila); arenaUpload os grava; resident desenha uma faixa no ponto atual da fila, com o comando aberto (textura, shader, MVP) e,
+    // com cull, o GL_CULL_FACE ligado (a mesma regra do Scene::backFacing: frente no sentido anti-horario).
+    long arenaAlloc(size_t n) {
+        if (!ok_) return -1;
+        if (!arenaVao_) {
+            makeVao(arenaVao_, arenaVbo_);
+            glad_glBindBuffer(kArrayBuffer, arenaVbo_);
+            glad_glBufferData(kArrayBuffer, ptrdiff_t(kArenaCap * sizeof(V)), nullptr, kStaticDraw);
+            glad_glBindBuffer(kArrayBuffer, 0);
+        }
+        if (arenaUsed_ + n > kArenaCap) return -1;
+        const long off = long(arenaUsed_);
+        arenaUsed_ += n;
+        return off;
+    }
+    void arenaUpload(long off, const V *data, size_t n) {
+        if (!n) return;
+        glad_glBindBuffer(kArrayBuffer, arenaVbo_);
+        glad_glBufferSubData(kArrayBuffer, ptrdiff_t(size_t(off) * sizeof(V)), ptrdiff_t(n * sizeof(V)), data);
+        glad_glBindBuffer(kArrayBuffer, 0);
+        arenaUpBytes += double(n * sizeof(V));
+    }
+    void arenaReset() {
+        arenaUsed_ = 0;
+        if (!arenaVbo_) return;
+        glad_glBindBuffer(kArrayBuffer, arenaVbo_);
+        glad_glBufferData(kArrayBuffer, ptrdiff_t(kArenaCap * sizeof(V)), nullptr, kStaticDraw);
+        glad_glBindBuffer(kArrayBuffer, 0);
+    }
+    void resident(long off, int count, bool cull) {
+        if (count <= 0) return;
+        Cmd d{};
+        for (size_t i = cmds_.size(); i-- > 0;)
+            if (cmds_[i].kind == Cmd::Draw) { d = cmds_[i]; break; }
+        d.kind = Cmd::Draw; d.first = int(off); d.count = count; d.job = -1; d.res = 1; d.cull = cull ? 1 : 0;
+        cmds_.push_back(d);
+        ++nRes_;
+    }
+    static constexpr size_t kArenaCap = size_t(1) << 20;   // vertices (36 MB)
+    static inline double arenaUpBytes = 0.0;               // WOTM_DRAWSTATS: subida para a arena
+    // Comandos de desenho com vertices desde o ultimo zerar (WOTM_DRAWSTATS)
+    long draws() const { return draws_; }
+    void resetDraws() { draws_ = 0; }
+    void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { cur_.c[0] = r; cur_.c[1] = g; cur_.c[2] = b; cur_.c[3] = a; }
+    void texcoord(float u, float v) { cur_.u = u; cur_.v = v; }
+    void normal(float x, float y, float z) {   // como o rlNormal3f (sem transformacao: o modo 3D nao usa rlPushMatrix aqui)
+        if (x == lastIn_[0] && y == lastIn_[1] && z == lastIn_[2]) return;   // a mesma de antes (quase sempre: e por item, nao por vertice)
+        lastIn_[0] = x; lastIn_[1] = y; lastIn_[2] = z;
+        const float length = sqrtf(x * x + y * y + z * z);
+        if (length != 0.0f) { const float il = 1.0f / length; x *= il; y *= il; z *= il; }
+        cur_.nx = x; cur_.ny = y; cur_.nz = z;
+    }
+    void vertex(float x, float y, float z) {
+        cur_.x = x; cur_.y = y; cur_.z = z;
+        if (cmds_.back().kind != Cmd::Draw || cmds_.back().job >= 0 || cmds_.back().res) reopen();   // depois de uma mudanca de estado, de um pedaco adiado ou da arena: o mesmo desenho continua
+        v_.push_back(cur_);
+        ++cmds_.back().count;
+    }
+    bool empty() const { return v_.empty() && nDefer_ == 0 && nRes_ == 0; }
+    size_t vertices() const { return v_.size(); }
+
+    // Sobe e desenha o que acumulou, com as mudancas de estado da fila no meio; zera a fila
+    void flush() {
+        const V *up = v_.data();   // o que sobe: v_, ou a juncao com os pedacos adiados (mbuf_)
+        size_t upN = v_.size();
+        if (nDefer_) {   // os pedacos adiados no lugar deles (os comandos de desenho estao na ordem dos vertices); a copia em paralelo
+            copies_.clear();
+            size_t total = 0;
+            for (Cmd &c : cmds_) {
+                if (c.kind != Cmd::Draw) { c.first = int(total); continue; }
+                if (c.res) continue;   // faixa da arena: fora da juncao
+                const V *src = c.job >= 0 ? bufs_[size_t(c.job)].data() : v_.data() + c.first;
+                if (c.job >= 0) c.count = int(bufs_[size_t(c.job)].size());
+                c.job = -1;
+                c.first = int(total);
+                if (c.count) copies_.push_back({src, size_t(c.count), total});
+                total += size_t(c.count);
+            }
+            if (total > mcap_) { mcap_ = total + total / 4; mbuf_.reset(new V[mcap_]); }   // sem zerar (o vector zeraria ~10 MB)
+            V *dst = mbuf_.get();
+            JobPool::get().parallelFor(int(copies_.size()), [this, dst](int i) {
+                const Copy &k = copies_[size_t(i)];
+                std::memcpy(dst + k.dst, k.src, k.n * sizeof(V));
+            });
+            up = dst;
+            upN = total;
+            nDefer_ = 0;
+        }
+        if ((!upN && !nRes_) || !ok_) {   // sem vertices: so as mudancas de estado (na ordem)
+            for (const Cmd &c : cmds_) if (c.kind == Cmd::State) ops_[size_t(c.op)]();
+            v_.clear(); cmds_.clear(); ops_.clear(); mvps_.clear();
+            nRes_ = 0;
+            return;
+        }
+        rlDrawRenderBatchActive();   // o que o rlgl tiver na fila sai antes (ordem)
+        const auto t0 = std::chrono::steady_clock::now();
+        if (upN) {
+        // buffer novo vazio (orfao: a GPU ainda pode ler o anterior) e os dados por glBufferSubData. Com o glBufferData ja com os
+        // dados (varios MB por descarga), no driver da RX 570 os quadrantes 3 e 4 da tela dividida saiam sem a fase de vez em quando
+        // (qualquer leitura de estado do GL, que sincroniza o driver, escondia o defeito)
+        glad_glBindBuffer(kArrayBuffer, vbo_);
+        glad_glBufferData(kArrayBuffer, ptrdiff_t(upN * sizeof(V)), nullptr, kStreamDraw);
+        glad_glBufferSubData(kArrayBuffer, 0, ptrdiff_t(upN * sizeof(V)), up);
+        glad_glBindBuffer(kArrayBuffer, 0);
+        }
+        const auto t1 = std::chrono::steady_clock::now();
+        upBytes += double(upN * sizeof(V));
+        // estado do GL que os desenhos daqui usam; uma mudanca de estado da fila (funcoes do rlgl) pode trocar o programa e o VAO
+        bool bound = false;
+        unsigned prog = 0, vao = 0;
+        int mvp = -1;
+        bool cullOn = false;   // o drawList desliga o GL_CULL_FACE; so as faixas da arena com cull o ligam
+        for (const Cmd &c : cmds_) {
+            if (c.kind == Cmd::State) {
+                ops_[size_t(c.op)]();
+                bound = false;
+                continue;
+            }
+            if (!c.count) continue;
+            const unsigned p = c.shader ? c.shader : rlGetShaderIdDefault();
+            const int *locs = c.locs ? c.locs : rlGetShaderLocsDefault();
+            if (!bound || p != prog) {
+                glad_glUseProgram(p);
+                if (p != prog) mvp = -1;
+                prog = p;
+                // (matProjection/matView/matModel/matNormal: os shaders do desenho nao os tem)
+                glad_glUniform4f(locs[RL_SHADER_LOC_COLOR_DIFFUSE], 1.0f, 1.0f, 1.0f, 1.0f);
+                glad_glUniform1i(locs[RL_SHADER_LOC_MAP_DIFFUSE], 0);
+                vao = 0;
+                glad_glActiveTexture(kTexture0);
+                bound = true;
+            }
+            const unsigned wantVao = c.res ? arenaVao_ : vao_;
+            if (vao != wantVao) { glad_glBindVertexArray(wantVao); vao = wantVao; }
+            if (bool(c.cull) != cullOn) { cullOn = c.cull != 0; if (cullOn) rlEnableBackfaceCulling(); else rlDisableBackfaceCulling(); }
+            if (c.mvp != mvp) {
+                glad_glUniformMatrix4fv(locs[RL_SHADER_LOC_MATRIX_MVP], 1, 0, mvps_[size_t(c.mvp)].m);
+                mvp = c.mvp;
+            }
+            glad_glBindTexture(kTexture2D, c.tex);
+            glad_glDrawArrays(unsigned(c.mode), c.first, c.count);
+            ++draws_;
+        }
+        if (cullOn) rlDisableBackfaceCulling();
+        glad_glBindTexture(kTexture2D, 0);
+        glad_glBindVertexArray(0);
+        glad_glUseProgram(0);
+        nRes_ = 0;
+        const auto t2 = std::chrono::steady_clock::now();
+        upMs += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        drawMs += std::chrono::duration<double, std::milli>(t2 - t1).count();
+        v_.clear();
+        cmds_.clear();
+        ops_.clear();
+        mvps_.clear();
+    }
+    static inline double upMs = 0.0, drawMs = 0.0, upBytes = 0.0;   // WOTM_DRAWSTATS: subida e desenhos das descargas
+
+private:
+    struct Cmd {
+        enum Kind { Draw, State } kind;
+        int mode; unsigned tex; int first, count;
+        int mvp;              // indice em mvps_
+        unsigned shader; const int *locs;
+        int op;               // indice em ops_ (State)
+        int job;              // pedaco adiado (defer): indice em bufs_, -1 = vertices em v_
+        uint8_t res = 0;      // faixa da arena residente (first na arena)
+        uint8_t cull = 0;     // com GL_CULL_FACE (faixa da arena de secao com culling)
+    };
+    struct Mvp { float m[16]; };
+    void reopen() {
+        for (size_t i = cmds_.size(); i-- > 0;)
+            if (cmds_[i].kind == Cmd::Draw) {
+                Cmd d = cmds_[i];
+                d.first = int(v_.size()); d.count = 0; d.job = -1; d.res = 0; d.cull = 0;
+                cmds_.push_back(d);
+                return;
+            }
+        begin(RL_TRIANGLES, rlGetTextureIdDefault());
+    }
+    // MVP de agora (rlMatrixMultiply(modelview, projection), na ordem do rlMatrixToFloat), reaproveitando o ultimo se for o mesmo
+    int curMvp() {
+        const Matrix a = rlGetMatrixModelview(), b = rlGetMatrixProjection();
+        const Mvp x{{
+            a.m0 * b.m0 + a.m1 * b.m4 + a.m2 * b.m8 + a.m3 * b.m12,     a.m0 * b.m1 + a.m1 * b.m5 + a.m2 * b.m9 + a.m3 * b.m13,
+            a.m0 * b.m2 + a.m1 * b.m6 + a.m2 * b.m10 + a.m3 * b.m14,    a.m0 * b.m3 + a.m1 * b.m7 + a.m2 * b.m11 + a.m3 * b.m15,
+            a.m4 * b.m0 + a.m5 * b.m4 + a.m6 * b.m8 + a.m7 * b.m12,     a.m4 * b.m1 + a.m5 * b.m5 + a.m6 * b.m9 + a.m7 * b.m13,
+            a.m4 * b.m2 + a.m5 * b.m6 + a.m6 * b.m10 + a.m7 * b.m14,    a.m4 * b.m3 + a.m5 * b.m7 + a.m6 * b.m11 + a.m7 * b.m15,
+            a.m8 * b.m0 + a.m9 * b.m4 + a.m10 * b.m8 + a.m11 * b.m12,   a.m8 * b.m1 + a.m9 * b.m5 + a.m10 * b.m9 + a.m11 * b.m13,
+            a.m8 * b.m2 + a.m9 * b.m6 + a.m10 * b.m10 + a.m11 * b.m14,  a.m8 * b.m3 + a.m9 * b.m7 + a.m10 * b.m11 + a.m11 * b.m15,
+            a.m12 * b.m0 + a.m13 * b.m4 + a.m14 * b.m8 + a.m15 * b.m12, a.m12 * b.m1 + a.m13 * b.m5 + a.m14 * b.m9 + a.m15 * b.m13,
+            a.m12 * b.m2 + a.m13 * b.m6 + a.m14 * b.m10 + a.m15 * b.m14, a.m12 * b.m3 + a.m13 * b.m7 + a.m14 * b.m11 + a.m15 * b.m15}};
+        if (!mvps_.empty() && std::memcmp(mvps_.back().m, x.m, sizeof x.m) == 0) return int(mvps_.size()) - 1;
+        mvps_.push_back(x);
+        return int(mvps_.size()) - 1;
+    }
+    void makeVao(unsigned &vao, unsigned &vbo) {
+        glad_glGenVertexArrays(1, &vao);
+        glad_glGenBuffers(1, &vbo);
+        glad_glBindVertexArray(vao);
+        glad_glBindBuffer(kArrayBuffer, vbo);
+        // as posicoes fixas que o rlLoadShaderProgram amarra nos shaders (glBindAttribLocation): o shader padrao nao tem
+        // normal (posicao -1) e a do alphaShader_ e a 2
+        const int loc[4] = {RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD,
+                            RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL, RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR};
+        const int size[4] = {3, 2, 3, 4};
+        const size_t off[4] = {offsetof(V, x), offsetof(V, u), offsetof(V, nx), offsetof(V, c)};
+        for (int a = 0; a < 4; ++a) {
+            if (loc[a] < 0) continue;
+            glad_glVertexAttribPointer(unsigned(loc[a]), size[a], a == 3 ? kUByte : kFloat, a == 3 ? 1 : 0, int(sizeof(V)),
+                                       reinterpret_cast<const void *>(off[a]));
+            glad_glEnableVertexAttribArray(unsigned(loc[a]));
+        }
+        glad_glBindVertexArray(0);
+        glad_glBindBuffer(kArrayBuffer, 0);
+    }
+    static constexpr unsigned kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kStaticDraw = 0x88E8, kFloat = 0x1406, kUByte = 0x1401, kTexture2D = 0x0DE1,
+                              kTexture0 = 0x84C0;
+    std::vector<V> v_;
+    std::unique_ptr<V[]> mbuf_;   // juncao de v_ com os pedacos adiados (flush)
+    size_t mcap_ = 0;
+    std::vector<std::vector<V>> bufs_;   // pedacos adiados (defer), reaproveitados entre descargas
+    struct Copy { const V *src; size_t n, dst; };
+    std::vector<Copy> copies_;
+    int nDefer_ = 0, nRes_ = 0;
+    unsigned arenaVao_ = 0, arenaVbo_ = 0;
+    size_t arenaUsed_ = 0;
+    std::vector<Cmd> cmds_;
+    std::vector<std::function<void()>> ops_;
+    std::vector<Mvp> mvps_;
+    long draws_ = 0;
+    V cur_{};
+    float lastIn_[3] = {0.f, 0.f, 0.f};   // normal de entrada que deu a cur_ (a inicial 0,0,0 da 0,0,0, como no rlgl)
+    unsigned vao_ = 0, vbo_ = 0, shader_ = 0;
+    const int *locs_ = nullptr;
+    bool tried_ = false, ok_ = false;
+};
+
+// Tempo de GPU do redesenho (WOTM_DRAWSTATS): consulta GL_TIME_ELAPSED em volta dele, lida 3 redesenhos depois (ja pronta)
+extern "C" {
+extern void (*glad_glGenQueries)(int, unsigned *);
+extern void (*glad_glBeginQuery)(unsigned, unsigned);
+extern void (*glad_glEndQuery)(unsigned);
+extern void (*glad_glGetQueryObjectui64v)(unsigned, unsigned, unsigned long long *);
+}
+struct GpuTimer {
+    static GpuTimer &get() { static GpuTimer g; return g; }
+    double ms = 0.0;   // soma desde o ultimo zerar
+    long n = 0;
+    void begin() {
+        if (!glad_glGenQueries || !glad_glBeginQuery || !glad_glEndQuery || !glad_glGetQueryObjectui64v) return;
+        if (!q_[0]) glad_glGenQueries(4, q_);
+        if (used_[k_]) {
+            unsigned long long ns = 0;
+            glad_glGetQueryObjectui64v(q_[k_], 0x8866 /* GL_QUERY_RESULT */, &ns);
+            ms += double(ns) * 1e-6;
+            ++n;
+        }
+        glad_glBeginQuery(0x88BF /* GL_TIME_ELAPSED */, q_[k_]);
+        open_ = true;
+    }
+    void end() {
+        if (!open_) return;
+        glad_glEndQuery(0x88BF);
+        used_[k_] = true;
+        k_ = (k_ + 1) & 3;
+        open_ = false;
+    }
+    struct Scope {
+        bool on;
+        Scope() : on(enabled()) { if (on) get().begin(); }
+        static bool enabled() { static const bool e = std::getenv("WOTM_DRAWSTATS") != nullptr; return e; }
+        ~Scope() { if (on) get().end(); }
+    };
+private:
+    unsigned q_[4] = {};
+    bool used_[4] = {};
+    int k_ = 0;
+    bool open_ = false;
+};
+
+// EndMode3D dentro de um BeginTextureMode. O do raylib pergunta ao GL o framebuffer ativo (rlGetActiveFramebuffer, um glGetIntegerv)
+// para aplicar a escala da tela no framebuffer 0; no driver da NVIDIA, com a otimizacao em thread, a leitura espera o driver esvaziar
+// a fila: ~1,5 ms por vista (6 ms por redesenho de 4 vistas no Ryzen 5 5500). Numa render texture a escala nao vale.
+inline void endMode3DInTexture() {
+    rlDrawRenderBatchActive();
+    rlMatrixMode(RL_PROJECTION);
+    rlPopMatrix();
+    rlMatrixMode(RL_MODELVIEW);
+    rlLoadIdentity();
+    rlDisableDepthTest();
 }
 
 // Tela do GS (640 x 224, exibida em 4:3) dentro do quadro nativo de fbw x fbh: a faixa central com a altura toda. Em widescreen
@@ -250,6 +951,12 @@ public:
     float wide = 1.f;   // largura da tela / largura 4:3 (Scene::wide): teste de visao com os planos laterais da tela larga
     bool fovCull = true;     // collect recorta pela vista do jogo (inViewFov); false = camera livre pausada
     bool frameGate = true;   // collect sem particulas em quadro sem particleDraw (flareSlot); false = recoleta da camera livre pausada
+    // Sprites que o jogo pausado nao tem (modo foto, wotm_photo.inc: fogo do Agamo simulado com o wotm_flame.hpp quando o emissor
+    // estava fora da tela na pausa). Mesmo desenho de um sistema sprite (tipo 3): meio-lado size / 2 com teto de 1/4 da profundidade,
+    // cor RGBA com 0x80 = 1, UV espelhada por sel (os 2 bits baixos de pos.w), textura do texInfo, mistura do alphaContext.
+    struct SynthSprite { float p[3]; float size; uint32_t rgba; uint8_t sel; };
+    struct SynthSystem { uint32_t texInfo = 0, alphaContext = 0; std::vector<SynthSprite> sprites; };
+    std::vector<SynthSystem> synth;
 
     // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
     // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
@@ -341,7 +1048,7 @@ public:
         }
         if (!ram.ok(pm - 16, 80)) return false;
         bool any = false;
-        if (curView().shared()) {
+        if (curView().shared() || curView().view > 0) {   // a faixa de baixo dos 3 jogadores (vista 2) tem 640 de largura
             const uint32_t vm = fxaddr::viewPrevMat + 64u * uint32_t(std::clamp(curView().view, 0, 3));
             for (int k = 0; k < 16; ++k) { P[k] = ram.f32(vm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
         }
@@ -485,7 +1192,11 @@ public:
             const int maxN = int32_t(ram.u32(b + fxoff::maxParticles));
             const bool built = (ram.u32(b + fxoff::infoAttribs) & 0x400) != 0;
             const int minN = s.type == FX_SPRINE ? 2 : 1;
-            if (built && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
+            // O particleDraw so monta o pacote (0x400) dos sistemas na vista. Na recoleta da camera livre pausada (fovCull falso) os
+            // sprites fora da vista da pausa entram tambem (fogo do Agamo atras da camera): eles so leem pos, idade e cores, nao o
+            // pacote; os tipos com cabecalho no pacote (wake, arco, sprine...) continuam so com ele montado
+            const bool plain = s.type == FX_SPRITE || s.type == FX_TEXSPRITE;
+            if ((built || (!fovCull && plain)) && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
                 (!fovCull || inViewFov(ram, b, wide)))
                 systems.push_back(s);
             i = next;
@@ -538,6 +1249,7 @@ public:
         std::vector<Flare> e;
     };
     FlareFrame flares;
+    const AsyncDepth *depthAsync = nullptr;   // drawFlares: profundidade assincrona da vista (tela dividida); nullptr = glReadPixels direto
 
     // A lista so esta pronta (projetada, com a fracao visivel) entre o fim do particleDraw e o hier do quadro seguinte. A apresentacao
     // roda em outra thread e quase sempre a pega ja refeita pelo hier (em coordenadas de mundo, sem os flares de particula, que o
@@ -594,6 +1306,14 @@ public:
             buf = pool.back();
         }
         uint8_t *dst = buf.get();
+        copyRanges(dst, ram, systems);
+        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 4 * 64);
+        else std::memset(dst + fxaddr::viewPrevMat, 0, 4 * 64);
+        return std::shared_ptr<const uint8_t>(buf, buf.get());
+    }
+
+    // As faixas que o draw le (shadowRam), copiadas de src (a RAM viva ou outra copia de sombra) para dst, do mesmo tamanho
+    static void copyRanges(uint8_t *dst, const Ram &ram, const std::vector<FxSystem> &systems) {
         auto copy = [&](uint32_t a, uint32_t n) {
             if (a < 0x1000 || a >= ram.size) return;
             n = uint32_t(std::min<uint64_t>(n, ram.size - a));
@@ -606,8 +1326,8 @@ public:
         copy(addr::worldToScreenMat, 5 * 0x40);
         copy(addr::worldCtx, 5 * 0x1F0);
         copy(addr::vu1FogParams, 16);
-        if (prevMats) std::memcpy(dst + fxaddr::viewPrevMat, prevMats, 4 * 64);
-        else std::memset(dst + fxaddr::viewPrevMat, 0, 4 * 64);
+        copy(fxaddr::viewPrevMat, 4 * 64);
+        copy(wotm::sym::Gusts, 16);   // rajadas do vento (stepBack)
         const uint32_t lo = fxaddr::fx, hi = fxaddr::fx + fxaddr::count * fxaddr::stride;
         auto outside = [&](uint32_t a, uint32_t n) { return a < lo || uint64_t(a) + n > hi; };
         for (const FxSystem &s : systems) {
@@ -623,7 +1343,61 @@ public:
             if (outside(age, 4 * n)) copy(age, 4 * n);
             if (pm && outside(pm, 64)) copy(pm, 64);
         }
-        return std::shared_ptr<const uint8_t>(buf, buf.get());
+    }
+
+    // Um passo do particleMove ao contrario (interpolacao de quadros, Scene::showBlend). O particleMove faz, com f = fields do passo,
+    // pos_B = pos_A + v f + vento f, e so depois soma a gravidade a velocidade (v_B = v + (0, 0, gravidade f)); o arrasto ja esta em
+    // v_B. Entao pos_A = pos_B - f (v_B + vento - (0, 0, gravidade f)). Por sistema: vento por field (field.wind; com o bit 0x400 do
+    // field.attribs, xyz + Gusts xyz * wind.w, senao so o z), gravidade (field.gravity; poeira, wake e pipa andam pelo dustMove e pelo
+    // wakeAndKiteMove, sem ela), quantas andaram (as primeiras n - newParticles: as do fim nasceram no passo e ficam onde estao) e z
+    // preso ao nivel da agua (wake e pipa com o bit 0x8000000 do emit.info.attribs). Falso = o sistema nao anda assim: arcos, sprine,
+    // corrente e rastro (pontos postos pelo jogo) e field.attribs 0x1000 (parado). O emissor que se move (fogo preso ao monstro) nao
+    // entra: a particula recua so pela propria velocidade.
+    struct StepBack { float wind[3] = {0, 0, 0}; float grav = 0.f; int moved = 0; bool keepZ = false; };
+    static bool stepBack(const Ram &ram, uint32_t b, int n, StepBack &o) {
+        constexpr uint32_t kField = 0x2DE0, kEmitAttribs = 0x2D80, kNewParticles = 0x2EDE;
+        const uint32_t type = ram.u32(b + fxoff::type), fa = ram.u32(b + kField);
+        if (type == FX_SWEEPTRAIL || type == FX_ARC || type == FX_ARC2 || type == FX_SPRINE || type == FX_CHAIN || (fa & 0x1000)) return false;
+        const float ww = ram.f32(b + kField + 0x1C);
+        o.wind[0] = o.wind[1] = 0.f;
+        o.wind[2] = ram.f32(b + kField + 0x18);
+        if (fa & 0x400)
+            for (int k = 0; k < 3; ++k) o.wind[k] = ram.f32(b + kField + 0x10 + 4 * uint32_t(k)) + ram.f32(wotm::sym::Gusts + 4 * uint32_t(k)) * ww;
+        const bool own = type == FX_DUSTTRAIL || type == FX_WAKE || type == FX_KITE;
+        o.grav = own ? 0.f : ram.f32(b + kField + 4);
+        o.keepZ = (type == FX_WAKE || type == FX_KITE) && (ram.u32(b + kEmitAttribs) & 0x8000000);
+        o.moved = std::clamp(n - int(ram.s16(b + kNewParticles)), 0, n);
+        for (float v : {o.wind[0], o.wind[1], o.wind[2], o.grav})
+            if (!std::isfinite(v)) return false;
+        return true;
+    }
+    // Deslocamento do passo (pos_B - pos_A) da particula de velocidade v
+    static void stepOffset(const StepBack &o, const float v[3], float f, float out[3]) {
+        for (int k = 0; k < 3; ++k) out[k] = f * (v[k] + o.wind[k]);
+        out[2] -= o.grav * f * f;
+        if (o.keepZ) out[2] = 0.f;
+    }
+
+    // Copia de sombra no instante entre A e B: as faixas de B (copyRanges) com as posicoes recuadas por back (1 - alfa) passos de
+    // `fields`. So xyz: pos.w (tamanho, com os bits baixos que escolhem a UV; idade na poeira e no wake) e a idade ficam as de B.
+    // Recuo maior que 400 unidades (velocidade lixo) fica em B.
+    static void blendRam(uint8_t *dst, const Ram &B, const std::vector<FxSystem> &systems, float back, float fields) {
+        copyRanges(dst, B, systems);
+        const Ram out{dst, B.size};
+        for (const FxSystem &s : systems) {
+            StepBack o;
+            if (!stepBack(out, s.base, s.n, o) || !o.moved) continue;
+            const uint32_t pos = out.u32(s.base + fxoff::pos), vel = out.u32(s.base + fxoff::vel);
+            if (!out.ok(pos, 16 * uint32_t(o.moved)) || !out.ok(vel, 16 * uint32_t(o.moved))) continue;
+            for (int i = 0; i < o.moved; ++i) {
+                float v[3], d[3];
+                std::memcpy(v, dst + vel + 16 * uint32_t(i), 12);
+                stepOffset(o, v, fields, d);
+                if (!std::isfinite(d[0] + d[1] + d[2]) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] > 400.f * 400.f) continue;
+                float *p = reinterpret_cast<float *>(dst + pos + 16 * uint32_t(i));
+                for (int k = 0; k < 3; ++k) p[k] -= back * d[k];
+            }
+        }
     }
 
     void collectFlares(const Ram &ram) {
@@ -662,10 +1436,12 @@ public:
         const uint32_t pos = ram.u32(p + fxoff::pos), q44 = pos - 0x18, q8 = q44 - 36 * 16;
         const int n = int32_t(ram.u32(kIndex));
         const uint32_t def = ram.u32(kViewDef) & 0x0FFFFFFF;
-        if (n <= 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || !ram.ok(def, 0x20)) return;
+        // n = 0: so a tabela dos sprites e a moldura (o modo foto refaz a lista com a camera livre)
+        if (n < 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || !ram.ok(def, 0x20)) return;
         f.cx = float(int32_t(ram.u32(def + 0x18)));
         f.cy = float(int32_t(ram.u32(def + 0x1C)));
         f.nspr = std::min<int>(18, std::max<int>(0, int32_t(ram.u32(q44 + 8))));
+        if (f.nspr == 0) f.nspr = 18;   // lensFlarePacketBuild ainda nao rodou (fase sem flare ate aqui): a tabela do Init ja esta la
         if (ram.u16(def + 4) && ram.u16(def + 6)) { f.vw = ram.u16(def + 4); f.vh = ram.u16(def + 6); }
         f.zScale = ram.f32(kScreenMats + 0x28);   // viewScreenMats[0][2][2] e [2][3]
         f.zOff = ram.f32(kScreenMats + 0x2C);
@@ -755,16 +1531,22 @@ public:
         if (off || flares.e.empty() || flares.nspr == 0) return;
         const FlareFrame &f = flares;
         rlDrawRenderBatchActive();
+        if (g_beforeDepthRead) g_beforeDepthRead();
         const int fbw = rlGetFramebufferWidth(), fbh = rlGetFramebufferHeight();
         if (fbw <= 0 || fbh <= 0) return;
         const GsScreenRect gr = gsScreenRect(float(fbw), float(fbh));   // px do GS -> px do nativo (faixa 4:3 central em widescreen)
         const float sx = gr.w / f.vw, sy = gr.h / f.vh, x0 = gr.x0;
         const double zn = rlGetCullDistanceNear(), zf = rlGetCullDistanceFar();
         // Z do GS (24 bits) que o retail leria no pixel (gx, gy) da tela do GS: a + b / W da profundidade nativa; vazio (fundo) = 0
+        // tela dividida: profundidade do redesenho anterior, sem esperar a GPU (AsyncDepth); senao a leitura direta
+        const AsyncDepth *ad = depthAsync && depthAsync->valid && depthAsync->cw == fbw && depthAsync->ch == fbh ? depthAsync : nullptr;
         auto gsZ = [&](int gx, int gy) -> uint32_t {
             const int px = std::clamp(int(x0 + (float(gx) + 0.5f) * sx), 0, fbw - 1), py = std::clamp(int((float(gy) + 0.5f) * sy), 0, fbh - 1);
             float d = 1.f;
-            glReadPixels(px, fbh - 1 - py, 1, 1, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, &d);
+            if (ad)
+                d = ad->cpu[size_t(fbh - 1 - py) * size_t(fbw) + size_t(px)];
+            else
+                glReadPixels(px, fbh - 1 - py, 1, 1, 0x1902 /* GL_DEPTH_COMPONENT */, 0x1406 /* GL_FLOAT */, &d);
             if (d >= 1.f) return 0u;
             const double ndc = 2.0 * d - 1.0, W = 2.0 * zn * zf / (zf + zn - ndc * (zf - zn));
             const double z = double(f.zScale) + double(f.zOff) / std::max(W, 1e-3);
@@ -805,8 +1587,8 @@ public:
             }
             const float I = fl.intensity * frac;
             if (log)
-                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g | W da luz %.2f, W do mais perto %.2f\n", fl.x, fl.y, cnt, thr, I,
-                             fl.w, zMax && float(zMax) != f.zScale ? f.zOff / (float(zMax) - f.zScale) : 0.f);
+                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g | W da luz %.2f, W do mais perto %.2f | flags %02x dot %.3f bw %.3f\n", fl.x, fl.y, cnt, thr,
+                             I, fl.w, zMax && float(zMax) != f.zScale ? f.zOff / (float(zMax) - f.zScale) : 0.f, fl.flags & 0xFF, fl.dot, fl.bw);
             if (cnt == 0 || I < 1.f / 256.f) continue;
             // o retail ja somou o centroide do GS emulado (visibilidade total: 1,5 - 2 ou 1,5 - 1); troca pelo daqui
             const float shift = 1.5f - (inf ? 2.f : 1.f);
@@ -899,7 +1681,7 @@ public:
     // eye: olho da camera (o W da neblina e medido a partir dele, como no VU1)
     void draw(const Ram &ram, const TexFn &texture, const float eye[3]) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;
-        if (off || systems.empty()) return;
+        if (off || (systems.empty() && synth.empty())) return;
         const Matrix mv = rlGetMatrixModelview();
         FxView view{{mv.m0, mv.m4, mv.m8}, {mv.m1, mv.m5, mv.m9}, {mv.m2, mv.m6, mv.m10}, {-mv.m2, -mv.m6, -mv.m10, -mv.m14},
                     {mv.m0, mv.m4, mv.m8, mv.m12}, {mv.m1, mv.m5, mv.m9, mv.m13}};
@@ -917,6 +1699,7 @@ public:
         rlDisableDepthMask();
         rlDisableBackfaceCulling();
         for (const FxSystem &s : systems) drawSystem(ram, s, texture, view);
+        for (const SynthSystem &s : synth) drawSynth(ram, s, texture, view);
         rlDrawRenderBatchActive();
         rlNormal3f(0.f, 0.f, 0.f);   // sem neblina para o que vem depois (overlay)
         rlSetBlendMode(BLEND_ALPHA);
@@ -1664,6 +2447,42 @@ public:
     }
 
 private:
+    // Sistema sintetico (synth): o caminho dos sprites do drawSystem/forEachQuad com as particulas daqui
+    void drawSynth(const Ram &ram, const SynthSystem &s, const TexFn &texture, const FxView &view) {
+        if (s.sprites.empty()) return;
+        const uint32_t tinfo = fxaddr::textureInfo + 8 * (s.texInfo & 127);
+        const uint32_t k = ram.u16(tinfo + 2) & 127;
+        const uint32_t id = ram.u16(fxaddr::texId + 2 * k);
+        const uint64_t t0 = uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
+        unsigned tex = (ram.s16(tinfo) > 0 && id) ? texture(id, t0) : 0;
+        if (!tex) tex = blobTexture();
+        rlDrawRenderBatchActive();
+        const uint8_t blend = blendFor(s.alphaContext);
+        gsBlend(blend);
+        shaderNormal(0.f, true, true, gsBlendPremul(blend));
+        rlBegin(RL_QUADS);
+        rlSetTexture(tex);
+        for (const SynthSprite &q : s.sprites) {
+            const float depth = view.depth[0] * q.p[0] + view.depth[1] * q.p[1] + view.depth[2] * q.p[2] + view.depth[3];
+            const float half = 0.5f * std::fabs(q.size), r = depth > 0.f ? std::min(half, 0.25f * depth) : half;
+            float c[4][3];
+            const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
+            for (int k = 0; k < 4; ++k)
+                for (int a = 0; a < 3; ++a) c[k][a] = q.p[a] + r * (view.right[a] * sx[k] + view.up[a] * sy[k]);
+            if (fogged(view, c)) continue;
+            const bool fu = (q.sel & 2) == 0, fv = (q.sel & 1) == 0;
+            const float u0 = fu ? 1.f : 0.f, u1 = 1.f - u0, v0 = fv ? 1.f : 0.f, v1 = 1.f - v0;
+            const float uv[4][2] = {{u0, v1}, {u1, v1}, {u1, v0}, {u0, v0}};
+            for (int j = 0; j < 4; ++j) {
+                vcolor(q.rgba);
+                rlTexCoord2f(uv[j][0], uv[j][1]);
+                rlVertex3f(c[j][0], c[j][1], c[j][2]);
+            }
+        }
+        rlEnd();
+        rlSetTexture(0);
+    }
+
     void drawSystem(const Ram &ram, const FxSystem &s, const TexFn &texture, const FxView &view) {
         const uint32_t b = s.base;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age);

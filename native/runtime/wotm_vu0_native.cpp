@@ -18,9 +18,17 @@
 #pragma fp_contract(off)
 #endif
 
+// Cada instrucao do microprograma vira algumas destas: em linha sempre (o MSVC desistia nas funcoes grandes e passava os vetores AVX
+// pela pilha a cada conta)
+#ifdef _MSC_VER
+#define WOTM_VU0_FI __forceinline
+#else
+#define WOTM_VU0_FI inline __attribute__((always_inline))
+#endif
+
 namespace
 {
-    inline float N(float value)
+    WOTM_VU0_FI float N(float value)
     {
         uint32_t bits;
         std::memcpy(&bits, &value, 4);
@@ -33,7 +41,7 @@ namespace
         return value;
     }
 
-    inline float B(uint32_t bits)
+    WOTM_VU0_FI float B(uint32_t bits)
     {
         float value;
         std::memcpy(&value, &bits, 4);
@@ -47,7 +55,7 @@ namespace
     };
 
     // Z=1 S=2 U=4 O=8 do valor exato; resultado como VU1Interpreter::normalizeFmacExactResult
-    inline uint32_t classify(double exact, uint32_t &bits)
+    WOTM_VU0_FI uint32_t classify(double exact, uint32_t &bits)
     {
         uint32_t flags = std::signbit(exact) ? 2u : 0u;
         const double magnitude = std::fabs(exact);
@@ -65,7 +73,7 @@ namespace
     }
 
     // lane = 8 (x), 4 (y), 2 (z), 1 (w)
-    inline float L(float result, double exact, uint32_t lane, Fm &f)
+    WOTM_VU0_FI float L(float result, double exact, uint32_t lane, Fm &f)
     {
         uint32_t bits;
         uint32_t flags = classify(exact, bits);
@@ -78,13 +86,13 @@ namespace
     }
 
     // sticky do produto (calculateFmacProductSticky)
-    inline void P(float a, float b, Fm &f)
+    WOTM_VU0_FI void P(float a, float b, Fm &f)
     {
         uint32_t bits;
         f.ext |= classify((double)a * (double)b, bits) & 0xFu;
     }
 
-    inline void commit(VU1State &s, const Fm &f)
+    WOTM_VU0_FI void commit(VU1State &s, const Fm &f)
     {
         s.mac = f.mac;
         s.status = (s.status & 0xFF0u) | f.cur | ((f.cur | f.ext) << 6);
@@ -92,9 +100,9 @@ namespace
 
     // ---- As mesmas contas nas 4 lanes de uma vez (SSE para o float, AVX para o valor exato em double). D = lanes do dest com
     // x no bit 0; as lanes fora de D sao calculadas e descartadas.
-    inline __m128 LD(const float *p) { return _mm_loadu_ps(p); }
+    WOTM_VU0_FI __m128 LD(const float *p) { return _mm_loadu_ps(p); }
 
-    inline __m128 NV(__m128 v)
+    WOTM_VU0_FI __m128 NV(__m128 v)
     {
         const __m128i b = _mm_castps_si128(v);
         const __m128i e = _mm_and_si128(b, _mm_set1_epi32(0x7F800000));
@@ -113,7 +121,7 @@ namespace
     };
 
     template <int D>
-    inline Cls classify4(__m256d exact)
+    WOTM_VU0_FI Cls classify4(__m256d exact)
     {
         const __m256d m = _mm256_andnot_pd(_mm256_set1_pd(-0.0), exact);
         Cls c;
@@ -124,19 +132,19 @@ namespace
         return c;
     }
 
-    inline uint32_t flagsOf(const Cls &c)
+    WOTM_VU0_FI uint32_t flagsOf(const Cls &c)
     {
         return ((c.z | c.u) ? 1u : 0u) | (c.s ? 2u : 0u) | (c.u ? 4u : 0u) | (c.o ? 8u : 0u);
     }
 
-    inline __m128i laneMask(int m)
+    WOTM_VU0_FI __m128i laneMask(int m)
     {
         return _mm_set_epi32(m & 8 ? -1 : 0, m & 4 ? -1 : 0, m & 2 ? -1 : 0, m & 1 ? -1 : 0);
     }
 
     // resultado como normalizeFmacExactResult (zero/underflow: so o sinal; overflow: +-max) e flags no Fm
     template <int D>
-    inline __m128 fin4(__m128 r, __m256d exact, Fm &f)
+    WOTM_VU0_FI __m128 fin4(__m128 r, __m256d exact, Fm &f)
     {
         const Cls c = classify4<D>(exact);
         f.cur |= flagsOf(c);
@@ -149,18 +157,18 @@ namespace
         return _mm_castsi128_ps(bits);
     }
 
-    inline __m256d W(__m128 v) { return _mm256_cvtps_pd(v); }
+    WOTM_VU0_FI __m256d W(__m128 v) { return _mm256_cvtps_pd(v); }
 
     template <int D>
-    inline __m128 ADD4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_add_ps(a, b), _mm256_add_pd(W(a), W(b)), f); }
+    WOTM_VU0_FI __m128 ADD4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_add_ps(a, b), _mm256_add_pd(W(a), W(b)), f); }
     template <int D>
-    inline __m128 SUB4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_sub_ps(a, b), _mm256_sub_pd(W(a), W(b)), f); }
+    WOTM_VU0_FI __m128 SUB4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_sub_ps(a, b), _mm256_sub_pd(W(a), W(b)), f); }
     template <int D>
-    inline __m128 MUL4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_mul_ps(a, b), _mm256_mul_pd(W(a), W(b)), f); }
+    WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_mul_ps(a, b), _mm256_mul_pd(W(a), W(b)), f); }
 
     // madd/msub: acc +- a*b (dois arredondamentos no float), e o sticky do produto (calculateFmacProductSticky)
     template <int D>
-    inline __m128 MADD4(__m128 c, __m128 a, __m128 b, Fm &f, bool sub)
+    WOTM_VU0_FI __m128 MADD4(__m128 c, __m128 a, __m128 b, Fm &f, bool sub)
     {
         const __m256d p = _mm256_mul_pd(W(a), W(b));
         const __m128 pf = _mm_mul_ps(a, b);
@@ -172,12 +180,12 @@ namespace
 
     // escreve as lanes de D (x = bit 0)
     template <int D>
-    inline void ST(float *dst, __m128 v) { _mm_storeu_ps(dst, _mm_blend_ps(_mm_loadu_ps(dst), v, D)); }
+    WOTM_VU0_FI void ST(float *dst, __m128 v) { _mm_storeu_ps(dst, _mm_blend_ps(_mm_loadu_ps(dst), v, D)); }
 
-    inline uint32_t addr16(int32_t vi, int32_t imm) { return ((uint32_t)(vi + imm) * 16u) & 0xFFFu; }
+    WOTM_VU0_FI uint32_t addr16(int32_t vi, int32_t imm) { return ((uint32_t)(vi + imm) * 16u) & 0xFFFu; }
 
     // FTOI0 (vuFloatToInt com escala 1): satura no int32 e trunca
-    inline int32_t F2I(float value)
+    WOTM_VU0_FI int32_t F2I(float value)
     {
         const double scaled = (double)value;
         if (scaled >= 2147483647.0)
@@ -187,7 +195,7 @@ namespace
         return (int32_t)scaled;
     }
 
-    inline void finish(VU1State &s, uint32_t pc, uint64_t cycles)
+    WOTM_VU0_FI void finish(VU1State &s, uint32_t pc, uint64_t cycles)
     {
         s.vf[0][0] = 0.0f;
         s.vf[0][1] = 0.0f;

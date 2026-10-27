@@ -1,6 +1,6 @@
 # Testar o C++ novo no PCSX2 (halfcpp) e bugs achados
 
-(Dividido de `docs/PROXIMOS_PASSOS.md`; índice lá.) O halfcpp foi o primeiro jeito de rodar as equivalentes; hoje o caminho previsto é o runtime cobaia (`NATIVO.md`, "Runtime cobaia", incompleto). O que fica aqui é como montar o ELF e as lições.
+(Índice dos docs no `CLAUDE.md`.) O halfcpp foi o primeiro jeito de rodar as equivalentes; hoje o caminho previsto é o runtime cobaia (`NATIVO.md`, "Runtime cobaia", incompleto). O que fica aqui é como montar o ELF e as lições.
 
 ## Como montar e rodar o halfcpp
 - O ROM do build normal é idêntico ao retail (equivalentes ficam como `INCLUDE_ASM`). `sh tools/wsl/build_nm.sh` (WSL) compila uma cópia em `~/wotm_nm` com `-DNON_MATCHING` e grava `build/pcsx2_test/SCUS_971.97_halfcpp.elf` (todas as equivalentes) e `..._control_matching.elf` (controle). Ambos com `p_paddr = p_vaddr` (o PCSX2 carrega por `p_paddr`). Variantes com um subconjunto de TUs/funções: argumentos do `build_nm.sh` (ex.: `a_update` só com `Monster::update`).
@@ -8,9 +8,9 @@
 - **Layout** (`tools/gen_nm_ld.py`): o linker script normal empilha as peças e qualquer equivalente de outro tamanho desloca os dados seguintes (buffers de DMA desalinhados, foi o que quebrou o primeiro teste). O script gerado fixa toda peça que não cresceu no endereço retail e manda as que cresceram para `.nm_extra`, depois do bss. Limite: fixa só o início de cada peça; endereços crus para dentro de uma peça deslocada erram (`undefined_*_nm.txt` relativo ao símbolo; `nm_fix_data.py` para tabelas de função em `.short`; ver "Runtime cobaia").
 - **Heap**: o `.nm_extra` ficava logo depois do bss, onde começa o heap do jogo, e depois de carregar uma fase a RAM inteira está em uso (DMA sobrescreveu o início de `takeHit`; sintoma `executing data`). `patch_paddr.py --heap` (chamado pelo `build_nm.sh`) empurra o início do heap para depois do `.nm_extra` em dois lugares: a chamada `SetupHeap` do crt0 e `heap_ptr` de `libkernl/glue.data` (0x6E5D2C). `NM_HEAP=0x8E0000` põe o heap no mesmo lugar nos dois builds, para o `ramdiff.py` comparar endereços.
 - `CrushLevel` e `Monster` são compilados com `-G0` no build NM (strings do código novo não cabem no `.sdata`). `hierDmaHandler` precisa do protótipo de `hierFlushObjQ` em `hieri.cpp` quando só ela é `NON_MATCHING`.
-- Resultado (2026-10-08): o halfcpp completo entra na fase e roda uma partida inteira ("AI WINS"). Se uma variante travar com "executing data", compare a RAM do EE com o ELF antes de suspeitar da função (regra do `CLAUDE.md`).
+- O halfcpp completo entra na fase e roda uma partida inteira ("AI WINS"). Se uma variante travar com "executing data", compare a RAM do EE com o ELF antes de suspeitar da função (regra do `CLAUDE.md`).
 
-## Bugs de comportamento achados jogando o halfcpp (2026-10-08)
+## Bugs de comportamento achados jogando o halfcpp
 Sintomas do teste do dono: veículos do chão sem glow verde e ◯ não pega; pedestres andando em fila; alguns prédios atravessáveis. Causas, lendo as equivalentes contra o asm:
 - **`PathNode` tinha 0x40 bytes, o retail usa 0x30** (links de 4 bytes a partir de 0x12, são 7 e não 9): `PathNet::getRandNode/getClosestNode` indexavam nós errados -> pedestres (e carros, que seguem a PathNet) em fila. Há um `typedef char PathNodeSizeCheck[...]`.
 - `AiBrain`: a classe base vazia `AiActionGroup` ocupa 1 byte no gcc 2.95 e empurrava `f_AAC` para 0xAB0 (retail 0xAAC). Sem herança agora.

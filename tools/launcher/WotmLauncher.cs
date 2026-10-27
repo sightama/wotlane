@@ -81,63 +81,28 @@ class Launcher : Form
     // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
     // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
-        new Flag("Mods", "WOTM_LOCKTOGGLE", true, "Toggle lock-on on R1 (D-pad switches target)",
-            "Lock-on is no longer held: one tap on R1 locks onto the nearest monster and it stays locked until the next tap. " +
-            "While locked, the stick moves relative to the camera, whoever hits you becomes the target and left/right on the D-pad switch targets. Block on L1, strafe on L2/R2 (default " +
-            "controller setup). Applies to human players; the AI is unchanged. Unchecked: the original game's buttons."),
-        new Flag("Mods", "WOTM_ENEMYBARS", true, "Health and energy bars over enemies",
-            "Replaces the numbered dot over each enemy, in the style of the player HUD: a health bar (green, recent damage in red) and an energy bar below it " +
-            "(blue; gray while depleted). Also shows every enemy, not only the first 4. Unchecked: the original game's dot."),
-        new Flag("Mods", "WOTM_DAMAGEPOP", true, "Damage numbers (hits, throws, specials)",
-            "Each hit shows a number at the point of impact that rises and fades: white for hits, orange for thrown objects or " +
-            "monsters, cyan for specials. Applies to every monster, including yours."),
-
-        new Flag("Controls", "WOTM_KBSEPARATE", false, "Keyboard is a separate player",
-            "Connected controllers are players 1 and 2, in connection order. Unchecked: the keyboard is the same player as the first " +
-            "controller (player 1). Checked: the keyboard is its own player after the controllers: player 1 with no controller, " +
-            "player 2 with one controller, unused with two."),
-
         new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
         new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
-        new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by the game's AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
+        new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
         new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
 
         new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
         new Flag("Rendering diagnostics", "WOTM_NOSHADOW", false, "No shadows", "Turns off blocker shadows (monsters and the like)."),
 
-        new Flag("Logs (live.err.log)", ":Stats", false, "Statistics (PS2X_STATS)", "-Stats 1: [native]/[ui]/[time] lines."),
+        new Flag("Logs (live.err.log)", ":Stats", false, "Statistics", "-Stats 1: [native]/[ui]/[time] lines."),
         new Flag("Logs (live.err.log)", "WOTM_FIELDLOG", false, "Fields per frame", "One [field] line per game frame: fields, updateRate, EE cycles, host time and the most expensive loops."),
         new Flag("Logs (live.err.log)", "WOTM_CAMLOG", false, "Camera on every draw", "One [cam] line per draw: t, g_frame, fov, position and direction."),
         new Flag("Logs (live.err.log)", "PS2X_SND_LOG", false, "Native sound", "989snd calls."),
     };
 
-    // Video: altura do quadro nativo (WOTM_RES) e proporcao (WOTM_ASPECT; "largura dinamica" = sem ela, segue a janela/monitor)
-    static readonly string[] Resolutions = { "448", "720", "1080", "1440", "2160" };
-    static readonly string[] ResolutionLabels = { "448 (original PS2)", "720", "1080", "1440", "2160" };
-    static readonly string[] Aspects = { "4:3", "16:9", "16:10", "21:9", "32:9" };
-    const string DefaultRes = "720", DefaultAspect = "16:9";
-    // Taxa de apresentacao (WOTM_HZ): "0" = a do monitor (o runtime detecta sozinho; a variavel nao e passada). A logica do jogo
-    // continua a 60; acima disso a tela so reapresenta o ultimo quadro, com ritmo regular e vsync.
-    static readonly string[] Rates = { "0", "60", "120", "144", "165", "180", "240" };
-
-    readonly ComboBox rate = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly ComboBox interp = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly CheckBox vsync = new DarkCheckBox { Text = "Vsync   [WOTM_VSYNC]", AutoSize = true };
-    readonly int monitorHz, monitorWidth, monitorHeight;   // modo atual do monitor principal, em pixels reais (sem a escala do Windows)
-
     readonly Dictionary<Flag, CheckBox> boxes = new Dictionary<Flag, CheckBox>();
-    readonly ComboBox res = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
-    readonly ComboBox aspect = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
-    readonly CheckBox dynWidth = new DarkCheckBox { Text = "Dynamic width (aspect follows the window)", AutoSize = true };
-    readonly CheckBox fullscreen = new DarkCheckBox { Text = "Fullscreen (F11)   [WOTM_FULLSCREEN]", AutoSize = true };
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
 
     Launcher()
     {
-        MonitorMode(out monitorWidth, out monitorHeight, out monitorHz);
         Text = "WotM - options";
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // o do exe (native\wotm.ico)
         Font = new Font("Segoe UI", 9f);
@@ -149,7 +114,7 @@ class Launcher : Form
 
         var tips = new ToolTip { AutoPopDelay = 30000 };
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
-        // duas colunas: video, partida e trapacas a esquerda; as caixas de Flags a direita
+        // duas colunas: partida e trapacas a esquerda; as caixas de Flags a direita
         var cols = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
         var left = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         var right = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
@@ -157,7 +122,6 @@ class Launcher : Form
         cols.Controls.Add(right);
         root.Controls.Add(cols);
         Dictionary<string, string> saved = LoadIni();
-        left.Controls.Add(VideoGroup(saved, tips));
         left.Controls.Add(MatchGroup(saved, tips));
         left.Controls.Add(OnlineGroup(saved, tips));
         left.Controls.Add(CheatsGroup(saved, tips));
@@ -172,15 +136,13 @@ class Launcher : Form
                 gb.Controls.Add(inner);
                 right.Controls.Add(gb);
             }
-            var cb = new DarkCheckBox { Text = f.Label + "   [" + f.Key.TrimStart(':') + "]", AutoSize = true };
+            var cb = new DarkCheckBox { Text = f.Label, AutoSize = true };
             string v;
             cb.Checked = saved.TryGetValue(f.Key, out v) ? v == "1" : f.Default;
             if (f.Tip.Length > 0) tips.SetToolTip(cb, f.Tip);
             inner.Controls.Add(cb);
             boxes[f] = cb;
         }
-        // o aviso dos marcadores depende do mod de barras (caixas criadas depois do grupo da partida)
-        foreach (var kv in boxes) if (kv.Key.Key == "WOTM_ENEMYBARS") kv.Value.CheckedChanged += delegate { UpdateMatch(); };
         UpdateMatch();
         int wide = 0;
         foreach (Control c in right.Controls) wide = Math.Max(wide, c.PreferredSize.Width);
@@ -195,23 +157,21 @@ class Launcher : Form
         reset.Click += delegate
         {
             foreach (var kv in boxes) kv.Value.Checked = kv.Key.Default;
-            res.SelectedIndex = Array.IndexOf(Resolutions, MonitorRes());
-            rate.SelectedIndex = 0;
-            interp.SelectedIndex = 0;
-            vsync.Checked = true;
-            aspect.SelectedIndex = Array.IndexOf(Aspects, DefaultAspect);
-            dynWidth.Checked = true;
-            fullscreen.Checked = true;
             matchOn.Checked = false;
             matchPlayer.SelectedIndex = 0;
+            matchPlayerSkin.SelectedIndex = 0;
             matchLevel.SelectedIndex = 0;
-            for (int i = 0; i < matchAIs.Length; ++i) matchAIs[i].SelectedIndex = i == 0 ? 1 : 0;
+            for (int i = 0; i < matchAIs.Length; ++i) { matchAIs[i].SelectedIndex = i == 0 ? 1 : 0; matchAISkins[i].SelectedIndex = 0; }
             foreach (CheckBox c in cheatBoxes) c.Checked = false;
             cheatStamina.SelectedIndex = 0;
             cheatWin.Value = 0;
         };
         buttons.Controls.Add(play);
         buttons.Controls.Add(log);
+        var modkit = new Button { Text = "Mod kit", AutoSize = true };
+        modkit.Click += delegate { OpenModKit(); };
+        tips.SetToolTip(modkit, "Extract textures and sounds from the disc, edit them and pack them into mods\\<mod>\\ (docs\\passos\\MODS.md).");
+        buttons.Controls.Add(modkit);
         buttons.Controls.Add(reset);
         root.Controls.Add(buttons);
         status.AutoSize = true;
@@ -223,61 +183,8 @@ class Launcher : Form
         FormClosing += delegate { SaveIni(); };
     }
 
-    GroupBox VideoGroup(Dictionary<string, string> saved, ToolTip tips)
-    {
-        var gb = new DarkGroupBox { Text = "Video", AutoSize = true, Width = 420, Padding = new Padding(8) };
-        var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
-        gb.Controls.Add(inner);
-        string v;
-
-        res.Items.AddRange(ResolutionLabels);
-        // sem configuracao salva: a maior resolucao que cabe no monitor (primeira execucao)
-        int ri = Array.IndexOf(Resolutions, saved.TryGetValue("WOTM_RES", out v) ? v : MonitorRes());
-        res.SelectedIndex = ri >= 0 ? ri : Array.IndexOf(Resolutions, DefaultRes);
-        tips.SetToolTip(res, "Height of the native frame in pixels (WOTM_RES); the width comes from the aspect ratio. Independent of the window size: " +
-            "the window only scales the frame up or down.");
-        inner.Controls.Add(Row("Resolution (lines)   [WOTM_RES]", res));
-
-        dynWidth.Checked = !saved.TryGetValue(":DynWidth", out v) || v == "1";
-        tips.SetToolTip(dynWidth, "Checked: the width follows the window (or the monitor, in fullscreen), from 4:3 to 32:9. " +
-            "Unchecked: fixed aspect ratio (WOTM_ASPECT), with black bars if the window does not match.");
-        inner.Controls.Add(dynWidth);
-
-        aspect.Items.AddRange(Aspects);
-        int ai = Array.IndexOf(Aspects, saved.TryGetValue("WOTM_ASPECT", out v) ? v : DefaultAspect);
-        aspect.SelectedIndex = ai >= 0 ? ai : Array.IndexOf(Aspects, DefaultAspect);
-        tips.SetToolTip(aspect, "4:3 = the game's original screen.");
-        inner.Controls.Add(Row("Fixed aspect   [WOTM_ASPECT]", aspect));
-        aspect.Enabled = !dynWidth.Checked;
-        dynWidth.CheckedChanged += delegate { aspect.Enabled = !dynWidth.Checked; };
-
-        fullscreen.Checked = !saved.TryGetValue("WOTM_FULLSCREEN", out v) || v == "1";
-        tips.SetToolTip(fullscreen, "Opens in borderless fullscreen on the window's monitor (F11 toggles at any time). Without it the window opens at the resolution's size (smaller if it does not fit).");
-        inner.Controls.Add(fullscreen);
-
-        rate.Items.Add("Monitor (" + (monitorHz > 0 ? monitorHz + " Hz" : "?") + ")");
-        for (int i = 1; i < Rates.Length; ++i) rate.Items.Add(Rates[i] + " Hz");
-        int hi = Array.IndexOf(Rates, saved.TryGetValue("WOTM_HZ", out v) ? v : "0");
-        rate.SelectedIndex = hi >= 0 ? hi : 0;
-        tips.SetToolTip(rate, "How many times per second the screen is presented (WOTM_HZ). Game logic stays at 60: above that the frames " +
-            "in between are interpolated (Frame interpolation) or the last frame is repeated, with even pacing and no tearing. " +
-            "'Monitor' uses the refresh rate of the window's monitor.");
-        inner.Controls.Add(Row("Refresh rate   [WOTM_HZ]", rate));
-        interp.Items.AddRange(new object[] { "Auto (above 60 Hz)", "On", "Off" });
-        interp.SelectedIndex = saved.TryGetValue("WOTM_INTERP", out v) ? (v == "1" ? 1 : v == "0" ? 2 : 0) : 0;
-        tips.SetToolTip(interp, "Draws the blend of the last two game frames on every screen refresh, so motion is smooth above 60 Hz " +
-            "(costs one game frame of latency, about 17 ms). Auto turns it on above 60 Hz and off when the redraw does not fit in the refresh " +
-            "period; when it only fits every other refresh it draws at half the refresh rate (72 images/s at 144 Hz), still evenly paced.");
-        inner.Controls.Add(Row("Frame interpolation   [WOTM_INTERP]", interp));
-        vsync.Checked = !saved.TryGetValue("WOTM_VSYNC", out v) || v == "1";
-        tips.SetToolTip(vsync, "Syncs with the monitor (no tearing). Unchecked: only limited by the clock.");
-        inner.Controls.Add(vsync);
-        inner.Controls.Add(new Label { Text = "Primary monitor: " + monitorWidth + "x" + monitorHeight +
-            (monitorHz > 0 ? " at " + monitorHz + " Hz" : ""), AutoSize = true, ForeColor = DimColor });
-        return gb;
-    }
-
-    // Partida direta (WOTM_MATCH=<jogador>[,<ia>...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime aceita ate 7 IAs (8 monstros).
+    // Partida direta (WOTM_MATCH=<jogador>[:<skin>][,<ia>[:<skin>]...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime
+    // aceita ate 7 IAs (8 monstros). Skin = figurino 0..3 (arquivos <PREFIXO>0-3 em disc\MON); "Random" (monstro ou skin) e sorteado no Play.
     // Fora da lista: Spider (6) e Ogre (12), cortados, e os chefes (13..15).
     static readonly int[] MonsterIds = { 1, 2, 3, 4, 5, 7, 8, 9, 10, 11 };
     static readonly string[] MonsterNames = { "Congar", "Robo-47", "Togera", "Ultra V", "Preytor", "Kineticlops", "Magmo", "Raptros", "Agamo", "Zorgulon" };
@@ -285,11 +192,141 @@ class Launcher : Form
     static readonly string[] LevelNames = { "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City", "Century Airfield", "Atomic Island",
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7;
+    const int RandomId = -1;   // id salvo no ini para "Random" (monstro e skin)
+    static readonly Random rng = new Random();
+    // Nome do jogo e prefixo dos arquivos em MON\ de cada monstro de MonsterIds (o skin.json aceita os dois)
+    static readonly string[] MonsterGameNames = { "congar", "robo-47", "togera", "ultra-v", "preytor", "kineticlops", "magmo", "raptros", "agamo", "zorgulon" };
+    static readonly string[] MonsterPrefixes = { "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN" };
 
-    readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu   [WOTM_MATCH]", AutoSize = true };
+    readonly CheckBox matchOn = new DarkCheckBox { Text = "Direct match, no menu", AutoSize = true };
     readonly ComboBox matchPlayer = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox matchLevel = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 160 };
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
+    readonly ComboBox matchPlayerSkin = SkinBox(120);
+    readonly ComboBox[] matchAISkins = new ComboBox[MatchMaxAIs];
+
+    // Item da caixa de skin: o texto e o valor do WOTM_MATCH ("0".."3", o id da skin de mod, "random")
+    class SkinItem
+    {
+        public string Label, Value;
+        public SkinItem(string label, string value) { Label = label; Value = value; }
+        public override string ToString() { return Label; }
+    }
+    const string RandomSkin = "random";
+
+    // Skins de mod (discroot\mods\<mod>\skins\<pasta>\skin.json, MODS.md) por indice em MonsterIds: (nome, id)
+    readonly List<KeyValuePair<string, string>>[] modSkins = new List<KeyValuePair<string, string>>[10];
+
+    static string Norm(string s)
+    {
+        var b = new System.Text.StringBuilder();
+        foreach (char c in s) if (char.IsLetterOrDigit(c)) b.Append(char.ToLowerInvariant(c));
+        return b.ToString();
+    }
+    static string JsonString(string json, string key)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(json, "\"" + key + "\"\\s*:\\s*\"([^\"]*)\"");
+        return m.Success ? m.Groups[1].Value : null;
+    }
+
+    // Mesma regra do runtime (wotm_mods.hpp): pastas com '_' ou '.' no comeco ficam de fora; sem id, o nome da pasta; mesmo
+    // monstro e id em dois mods, vale o ultimo em ordem alfabetica.
+    void LoadModSkins()
+    {
+        for (int k = 0; k < modSkins.Length; ++k) modSkins[k] = new List<KeyValuePair<string, string>>();
+        string mods = ModsDir();
+        if (mods == null) return;
+        var dirs = new List<string>(Directory.GetDirectories(mods));
+        dirs.Sort(StringComparer.OrdinalIgnoreCase);
+        var byKey = new SortedDictionary<string, KeyValuePair<int, KeyValuePair<string, string>>>(StringComparer.Ordinal);
+        foreach (string mod in dirs)
+        {
+            string n = Path.GetFileName(mod);
+            if (n.StartsWith("_") || n.StartsWith(".")) continue;
+            string skinsDir = Path.Combine(mod, "skins");
+            if (!Directory.Exists(skinsDir)) continue;
+            foreach (string dir in Directory.GetDirectories(skinsDir))
+            {
+                string js = Path.Combine(dir, "skin.json");
+                if (!File.Exists(js)) continue;
+                string text;
+                try { text = File.ReadAllText(js); } catch (IOException) { continue; }
+                string mon = JsonString(text, "monster");
+                if (mon == null) continue;
+                int k = -1;
+                for (int i = 0; i < MonsterGameNames.Length; ++i)
+                    if (Norm(mon) == Norm(MonsterGameNames[i]) || Norm(mon) == Norm(MonsterPrefixes[i])) k = i;
+                if (k < 0) continue;
+                string id = (JsonString(text, "id") ?? Path.GetFileName(dir)).ToLowerInvariant();
+                string name = JsonString(text, "name") ?? id.ToUpperInvariant();
+                byKey[k + "/" + id] = new KeyValuePair<int, KeyValuePair<string, string>>(k, new KeyValuePair<string, string>(name, id));
+            }
+        }
+        foreach (var kv in byKey) modSkins[kv.Value.Key].Add(kv.Value.Value);
+    }
+
+    // Monstros custom (discroot\mods\<mod>\monsters\<pasta>\monster.json, MODS.md): (nome, id), em ordem de id. So para o jogador: um
+    // custom de chefe como IA rodaria a IA do chefe, que precisa da fase dele.
+    readonly List<KeyValuePair<string, string>> modCustoms = new List<KeyValuePair<string, string>>();
+    void LoadModCustoms()
+    {
+        modCustoms.Clear();
+        string mods = ModsDir();
+        if (mods == null) return;
+        var dirs = new List<string>(Directory.GetDirectories(mods));
+        dirs.Sort(StringComparer.OrdinalIgnoreCase);
+        var byId = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        foreach (string mod in dirs)
+        {
+            string n = Path.GetFileName(mod);
+            if (n.StartsWith("_") || n.StartsWith(".")) continue;
+            string monDir = Path.Combine(mod, "monsters");
+            if (!Directory.Exists(monDir)) continue;
+            foreach (string dir in Directory.GetDirectories(monDir))
+            {
+                string js = Path.Combine(dir, "monster.json");
+                if (!File.Exists(js)) continue;
+                string text;
+                try { text = File.ReadAllText(js); } catch (IOException) { continue; }
+                if (JsonString(text, "base") == null) continue;
+                string id = (JsonString(text, "id") ?? Path.GetFileName(dir)).ToLowerInvariant();
+                byId[id] = JsonString(text, "name") ?? id.ToUpperInvariant();
+            }
+        }
+        foreach (var kv in byId) modCustoms.Add(new KeyValuePair<string, string>(kv.Value, kv.Key));
+    }
+    // Indice do custom na caixa do jogador (depois dos 10 e do Random), ou -1
+    int CustomIndex(int sel) { int c = sel - MonsterIds.Length - 1; return c >= 0 && c < modCustoms.Count ? c : -1; }
+
+    static ComboBox SkinBox(int width)
+    {
+        return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width, DropDownWidth = 180 };
+    }
+
+    // Itens da caixa de skin para o monstro k (indice em MonsterIds; fora dele = Random: so os 4 do disco)
+    void FillSkins(ComboBox cb, int k, string keep)
+    {
+        cb.BeginUpdate();
+        cb.Items.Clear();
+        for (int i = 0; i < 4; ++i) cb.Items.Add(new SkinItem("Skin " + (i + 1), i.ToString()));
+        if (k >= 0 && k < modSkins.Length && modSkins[k] != null)
+            foreach (var s in modSkins[k]) cb.Items.Add(new SkinItem(s.Key, s.Value));
+        cb.Items.Add(new SkinItem("Random", RandomSkin));
+        cb.EndUpdate();
+        cb.SelectedIndex = 0;
+        if (keep == RandomId.ToString()) keep = RandomSkin;   // ini de antes das skins de mod
+        for (int i = 0; i < cb.Items.Count; ++i)
+            if (((SkinItem)cb.Items[i]).Value == keep) cb.SelectedIndex = i;
+    }
+
+    static string SkinId(ComboBox cb) { return cb.SelectedItem == null ? "0" : ((SkinItem)cb.SelectedItem).Value; }
+
+    // Monstro escolhido numa caixa (indice em MonsterIds; Random = MonsterIds.Length)
+    void WireSkins(ComboBox monster, ComboBox skin, int offset, string saved)
+    {
+        FillSkins(skin, monster.SelectedIndex - offset, saved);
+        monster.SelectedIndexChanged += delegate { FillSkins(skin, monster.SelectedIndex - offset, SkinId(skin)); };
+    }
     readonly Label matchInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
 
     GroupBox MatchGroup(Dictionary<string, string> saved, ToolTip tips)
@@ -302,43 +339,70 @@ class Launcher : Form
         matchOn.Checked = saved.TryGetValue(":MatchOn", out v) && v == "1";
         tips.SetToolTip(matchOn, "Skips the menu and goes straight to the fight (1 player against the CPU, 3 lives, no win target: " +
             "the fight goes on without the end-of-match dialog). With no AI you play alone on the stage. Forces -Auto 0, since the scripted pad would press buttons mid-fight. " +
-            "With 'Player controlled by the game's AI' (Run) it becomes AI vs AI.");
+            "With 'Player controlled by AI' (Run) it becomes AI vs AI.");
         inner.Controls.Add(matchOn);
 
         matchPlayer.Items.AddRange(MonsterNames);
-        matchPlayer.SelectedIndex = IndexOrZero(MonsterIds, saved, ":MatchPlayer");
-        inner.Controls.Add(Row("Your monster", matchPlayer));
+        matchPlayer.Items.Add("Random");
+        LoadModCustoms();
+        foreach (var c in modCustoms) matchPlayer.Items.Add(c.Key + " (mod)");
+        matchPlayer.SelectedIndex = saved.TryGetValue(":MatchPlayer", out v) && ParseInt(v) == RandomId ? MonsterNames.Length
+            : IndexOrZero(MonsterIds, saved, ":MatchPlayer");
+        if (v != null)
+            for (int i = 0; i < modCustoms.Count; ++i)
+                if (modCustoms[i].Value == v) matchPlayer.SelectedIndex = MonsterNames.Length + 1 + i;
+        tips.SetToolTip(matchPlayer, "'Random' draws one of the ten monsters when you press Play. After it, the custom monsters of " +
+            "discroot\\mods\\<mod>\\monsters\\ (MODS.md), with their own costume.");
+        LoadModSkins();
+        WireSkins(matchPlayer, matchPlayerSkin, 0, saved.TryGetValue(":MatchPlayerSkin", out v) ? v : "0");
+        tips.SetToolTip(matchPlayerSkin, SkinTip);
+        var you = Row("Your monster", matchPlayer);
+        you.Controls.Add(matchPlayerSkin);
+        inner.Controls.Add(you);
 
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
         tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. Every stage fits 8 monsters: the monsters load above 32 MB (64 MB runtime); " +
-            "Metro City with 8 still has ~21 MB to spare. WOTM_HIGHRAM=0 brings back the PS2 32 MB limit (Metro with 8 freezes).");
+            "Metro City with 8 still has ~21 MB to spare.");
         inner.Controls.Add(Row("Stage", matchLevel));
 
         inner.Controls.Add(new Label { Text = "AI opponents (up to 7; none = play solo on the stage):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
-        var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(400, 0), WrapContents = true };
+        var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(420, 0), WrapContents = true };
         for (int i = 0; i < MatchMaxAIs; ++i)
         {
-            var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 122 };
+            var cb = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 112 };
             cb.Items.Add("-");
             cb.Items.AddRange(MonsterNames);
+            cb.Items.Add("Random");
             int id = saved.TryGetValue(":MatchAI" + (i + 1), out v) ? ParseInt(v) : (i == 0 ? MonsterIds[0] : 0);
             int k = Array.IndexOf(MonsterIds, id);
-            cb.SelectedIndex = k >= 0 ? k + 1 : 0;
+            cb.SelectedIndex = id == RandomId ? MonsterNames.Length + 1 : (k >= 0 ? k + 1 : 0);
             cb.SelectedIndexChanged += delegate { UpdateMatch(); };
-            tips.SetToolTip(cb, "A repeated monster gets the next costume, as in the menu. '-' = empty slot.");
+            tips.SetToolTip(cb, "'-' = empty slot. 'Random' draws one of the ten monsters when you press Play.");
             matchAIs[i] = cb;
-            foes.Controls.Add(cb);
+            var sk = SkinBox(80);
+            WireSkins(cb, sk, 1, saved.TryGetValue(":MatchAI" + (i + 1) + "Skin", out v) ? v : "0");
+            tips.SetToolTip(sk, SkinTip);
+            matchAISkins[i] = sk;
+            var pair = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 0, 6, 0) };
+            pair.Controls.Add(cb);
+            pair.Controls.Add(sk);
+            foes.Controls.Add(pair);
         }
         inner.Controls.Add(foes);
         matchInfo.ForeColor = DimColor;
         inner.Controls.Add(matchInfo);
 
         matchOn.CheckedChanged += delegate { UpdateMatch(); };
+        matchPlayer.SelectedIndexChanged += delegate { UpdateMatch(); };
         matchLevel.SelectedIndexChanged += delegate { UpdateMatch(); };
         UpdateMatch();
         return gb;
     }
+
+    const string SkinTip = "Costume (the game's 4 per monster; Agamo's Skin 4 is Mecha Sweet Tooth), then the mod skins of that monster " +
+        "(discroot\\mods\\<mod>\\skins\\, MODS.md). Locked costumes work too. If the same monster already has a disc skin in the fight, it gets " +
+        "the next free one, as in the menu; mod skins can repeat. 'Random' is drawn when you press Play.";
 
     int MatchFoes()
     {
@@ -350,18 +414,40 @@ class Launcher : Form
     void UpdateMatch()
     {
         bool on = matchOn.Checked;
-        // monstro e fase valem tambem para a partida em rede (grupo Online); as IAs so na partida direta
-        foreach (ComboBox cb in matchAIs) cb.Enabled = on;
+        // monstro e fase valem tambem para a partida em rede (grupo Online); as IAs e os trajes so na partida direta
+        matchPlayerSkin.Enabled = on && CustomIndex(matchPlayer.SelectedIndex) < 0;   // o custom tem o traje dele
+        for (int i = 0; i < matchAIs.Length; ++i)
+        {
+            matchAIs[i].Enabled = on;
+            if (matchAISkins[i] != null) matchAISkins[i].Enabled = on && matchAIs[i].SelectedIndex > 0;
+        }
         int total = 1 + MatchFoes();
         string txt = total == 1 ? "Solo: just you on the stage." : total + " monsters in the fight.";
-        if (total > 4 && !On("WOTM_ENEMYBARS")) txt += " Only 4 enemies get an off-screen health marker (the health bars mod shows all of them).";
+        if (total > 4) txt += " Without the enemy bars (Recompiled options, in the main menu), only 4 enemies get an off-screen health marker.";
         matchInfo.Text = txt;
+    }
+
+    // "<monstro>:<skin>", com os "Random" sorteados aqui (k = indice em MonsterIds, MonsterIds.Length = Random). Skin aleatoria:
+    // entre os 4 do disco e as skins de mod do monstro sorteado.
+    string MatchEntry(int k, ComboBox skin)
+    {
+        int c = CustomIndex(k);
+        if (c >= 0) return modCustoms[c].Value;   // o runtime le o id (WOTM_MATCH=goliath,...)
+        if (k >= MonsterIds.Length) k = rng.Next(MonsterIds.Length);
+        string s = SkinId(skin);
+        if (s == RandomSkin)
+        {
+            int n = rng.Next(4 + modSkins[k].Count);
+            s = n < 4 ? n.ToString() : modSkins[k][n - 4].Value;
+        }
+        return MonsterIds[k] + ":" + s;
     }
 
     string MatchValue()
     {
-        var parts = new List<string> { MonsterIds[matchPlayer.SelectedIndex].ToString() };
-        foreach (ComboBox cb in matchAIs) if (cb.SelectedIndex > 0) parts.Add(MonsterIds[cb.SelectedIndex - 1].ToString());
+        var parts = new List<string> { MatchEntry(matchPlayer.SelectedIndex, matchPlayerSkin) };
+        for (int i = 0; i < matchAIs.Length; ++i)
+            if (matchAIs[i].SelectedIndex > 0) parts.Add(MatchEntry(matchAIs[i].SelectedIndex - 1, matchAISkins[i]));
         parts.Add(LevelIds[matchLevel.SelectedIndex].ToString());
         return string.Join(",", parts.ToArray());
     }
@@ -470,7 +556,9 @@ class Launcher : Form
         string name = LobbyClient.CleanName(netName.Text);
         if (name.Length == 0) { netInfo.Text = "Type a name (letters, digits, _ or -)."; return; }
         netName.Text = name;
-        NetSend("JOIN " + Math.Max(0, netLobby.SelectedIndex) + " " + name + " " + MonsterIds[matchPlayer.SelectedIndex]);
+        int k = matchPlayer.SelectedIndex;
+        if (k < 0 || k >= MonsterIds.Length) { netInfo.Text = "Online needs a monster from the disc (not Random or a mod monster)."; return; }
+        NetSend("JOIN " + Math.Max(0, netLobby.SelectedIndex) + " " + name + " " + MonsterIds[k]);
     }
 
     void NetHost()
@@ -515,6 +603,7 @@ class Launcher : Form
         }
         if (lobby.Closed) { netInfo.Text = "Connection to the server closed."; netTimer.Stop(); lobby = null; }
     }
+    static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
 
     // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
     static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
@@ -525,26 +614,26 @@ class Launcher : Form
 
     GroupBox CheatsGroup(Dictionary<string, string> saved, ToolTip tips)
     {
-        var gb = new DarkGroupBox { Text = "Cheats from the start   [WOTM_CHEATS]", AutoSize = true, Width = 420, Padding = new Padding(8) };
+        var gb = new DarkGroupBox { Text = "Cheats from the start", AutoSize = true, Width = 420, Padding = new Padding(8) };
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
         inner.Controls.Add(new Label { Text = "Same as the in-fight F1 menu; apply to human players.", AutoSize = true, ForeColor = DimColor });
         for (int i = 0; i < CheatKeys.Length; ++i)
         {
-            var cb = new DarkCheckBox { Text = CheatLabels[i] + "   [" + CheatKeys[i] + "]", AutoSize = true };
+            var cb = new DarkCheckBox { Text = CheatLabels[i], AutoSize = true };
             cb.Checked = saved.TryGetValue(":Cheat_" + CheatKeys[i], out v) && v == "1";
             cheatBoxes[i] = cb;
             inner.Controls.Add(cb);
         }
         tips.SetToolTip(cheatBoxes[0], "Health never drops; hits still push you.");
         tips.SetToolTip(cheatBoxes[3], "The game's m_godMode (full health, stamina and special) plus, from us, no hit reaction. A building falling on you still kills.");
-        cheatStamina.Items.AddRange(new object[] { "Normal", "Always full   [stam]", "Rage (130)   [furia]" });
+        cheatStamina.Items.AddRange(new object[] { "Normal", "Always full", "Rage (130)" });
         cheatStamina.SelectedIndex = saved.TryGetValue(":CheatStamina", out v) ? Math.Max(0, Math.Min(2, ParseInt(v))) : 0;
         inner.Controls.Add(Row("Stamina", cheatStamina));
         cheatWin.Value = saved.TryGetValue(":CheatWin", out v) ? Math.Max(0, Math.Min(3600, ParseInt(v))) : 0;
         tips.SetToolTip(cheatWin, "Knocks out every living AI every N seconds of game time (F1's 'win the fight'). 0 = off.");
-        inner.Controls.Add(Row("Win every (s, 0 = off)   [vencer]", cheatWin));
+        inner.Controls.Add(Row("Win every (s, 0 = off)", cheatWin));
         return gb;
     }
 
@@ -569,47 +658,6 @@ class Launcher : Form
         string v;
         int k = saved.TryGetValue(key, out v) ? Array.IndexOf(ids, ParseInt(v)) : -1;
         return k >= 0 ? k : 0;
-    }
-
-    // Maior resolucao da lista que cabe na altura do monitor principal.
-    string MonitorRes()
-    {
-        string best = Resolutions[0];
-        foreach (string r in Resolutions) if (int.Parse(r) <= monitorHeight) best = r;
-        return best;
-    }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    struct DEVMODE
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
-        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
-        public int dmFields, dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
-        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
-        public short dmLogPixels;
-        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
-        public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
-    }
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    static extern bool EnumDisplaySettings(string deviceName, int modeNum, ref DEVMODE devMode);
-
-    // Modo atual do monitor principal; se nao der para ler, o tamanho do Screen (pode vir reduzido pela escala) e taxa 0.
-    static void MonitorMode(out int width, out int height, out int hz)
-    {
-        var dm = new DEVMODE();
-        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
-        const int ENUM_CURRENT_SETTINGS = -1;
-        if (EnumDisplaySettings(Screen.PrimaryScreen.DeviceName, ENUM_CURRENT_SETTINGS, ref dm) && dm.dmPelsHeight > 0)
-        {
-            width = dm.dmPelsWidth;
-            height = dm.dmPelsHeight;
-            hz = dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0;
-            return;
-        }
-        width = Screen.PrimaryScreen.Bounds.Width;
-        height = Screen.PrimaryScreen.Bounds.Height;
-        hz = 0;
     }
 
     static FlowLayoutPanel Row(string label, Control c)
@@ -639,18 +687,16 @@ class Launcher : Form
     {
         var lines = new List<string>();
         foreach (var kv in boxes) lines.Add(kv.Key.Key + "|" + (kv.Value.Checked ? "1" : "0"));
-        lines.Add("WOTM_RES|" + Resolutions[res.SelectedIndex]);
-        lines.Add("WOTM_ASPECT|" + Aspects[aspect.SelectedIndex]);
-        lines.Add(":DynWidth|" + (dynWidth.Checked ? "1" : "0"));
-        lines.Add("WOTM_FULLSCREEN|" + (fullscreen.Checked ? "1" : "0"));
-        lines.Add("WOTM_HZ|" + Rates[rate.SelectedIndex]);
-        lines.Add("WOTM_VSYNC|" + (vsync.Checked ? "1" : "0"));
-        lines.Add("WOTM_INTERP|" + (interp.SelectedIndex == 1 ? "1" : interp.SelectedIndex == 2 ? "0" : "auto"));
         lines.Add(":MatchOn|" + (matchOn.Checked ? "1" : "0"));
-        lines.Add(":MatchPlayer|" + MonsterIds[matchPlayer.SelectedIndex]);
+        int cu = CustomIndex(matchPlayer.SelectedIndex);
+        lines.Add(":MatchPlayer|" + (cu >= 0 ? modCustoms[cu].Value : MonsterId(matchPlayer.SelectedIndex).ToString()));
+        lines.Add(":MatchPlayerSkin|" + SkinId(matchPlayerSkin));
         lines.Add(":MatchLevel|" + LevelIds[matchLevel.SelectedIndex]);
         for (int i = 0; i < matchAIs.Length; ++i)
-            lines.Add(":MatchAI" + (i + 1) + "|" + (matchAIs[i].SelectedIndex > 0 ? MonsterIds[matchAIs[i].SelectedIndex - 1] : 0));
+        {
+            lines.Add(":MatchAI" + (i + 1) + "|" + (matchAIs[i].SelectedIndex > 0 ? MonsterId(matchAIs[i].SelectedIndex - 1) : 0));
+            lines.Add(":MatchAI" + (i + 1) + "Skin|" + SkinId(matchAISkins[i]));
+        }
         for (int i = 0; i < CheatKeys.Length; ++i) lines.Add(":Cheat_" + CheatKeys[i] + "|" + (cheatBoxes[i].Checked ? "1" : "0"));
         lines.Add(":CheatStamina|" + cheatStamina.SelectedIndex);
         lines.Add(":CheatWin|" + (int)cheatWin.Value);
@@ -660,8 +706,13 @@ class Launcher : Form
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
+    // Video, QoL e teclado separado ficam no painel "Recompiled options" do menu principal (native/wotm_settings.hpp, settings.ini
+    // ao lado do save.json). O launcher nao os passa; uma variavel herdada passaria por cima do arquivo, entao sai do ambiente.
+    static readonly string[] SettingsKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
+        "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE", "WOTM_SKIPINTRO", "WOTM_VIBRATION", "WOTM_INTERP" };
+
     // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
-    string RuntimeDir()
+    string KnownRuntimeDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_RECOMP_DIR");
         if (!string.IsNullOrEmpty(env) && File.Exists(Path.Combine(env, "run_live.ps1"))) return env;
@@ -671,6 +722,35 @@ class Launcher : Form
             string dir = File.ReadAllText(saved).Trim();
             if (File.Exists(Path.Combine(dir, "run_live.ps1"))) return dir;
         }
+        return null;
+    }
+    // A pasta mods que o jogo le (wotm_mods.inc): WOTM_MODS; senao mods\ ao lado do ELF (WOTM_DISC ou disc\ do repo, como o
+    // run_live.ps1); sem ela, mods\ do repo. null sem nenhuma.
+    string ModsDir()
+    {
+        string env = Environment.GetEnvironmentVariable("WOTM_MODS");
+        if (env == "0") return null;
+        if (!string.IsNullOrEmpty(env)) return Directory.Exists(env) ? env : null;
+        var dirs = new List<string>();
+        string disc = Environment.GetEnvironmentVariable("WOTM_DISC");
+        if (!string.IsNullOrEmpty(disc)) dirs.Add(Path.Combine(disc, "mods"));
+        dirs.Add(Path.Combine(Path.Combine(exeDir, "disc"), "mods"));
+        dirs.Add(Path.Combine(exeDir, "mods"));
+        foreach (string d in dirs)
+        {
+            string parent = Path.GetDirectoryName(d);
+            if (!Directory.Exists(parent)) continue;
+            foreach (string sub in Directory.GetDirectories(parent))
+                if (Path.GetFileName(sub) == "mods") return sub;   // nome exato: "mods" casaria com o MOD\ do disco
+        }
+        return null;
+    }
+    // Como o KnownRuntimeDir; sem pasta conhecida, pergunta
+    string RuntimeDir()
+    {
+        string known = KnownRuntimeDir();
+        if (known != null) return known;
+        string saved = Path.Combine(exeDir, ".wotm_recomp_dir");
         using (var dlg = new FolderBrowserDialog { Description = "Runtime folder (the one containing run_live.ps1)" })
         {
             if (dlg.ShowDialog(this) == DialogResult.OK && File.Exists(Path.Combine(dlg.SelectedPath, "run_live.ps1")))
@@ -725,6 +805,7 @@ class Launcher : Form
             Path.Combine(rt, "run_live.ps1"), On(":Auto") && !direct ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
         psi.EnvironmentVariables["WOTM_REPO"] = exeDir;
+        foreach (string k in SettingsKeys) psi.EnvironmentVariables.Remove(k);
         foreach (var kv in boxes)
         {
             string key = kv.Key.Key;
@@ -735,17 +816,6 @@ class Launcher : Form
             if (kv.Value.Checked) psi.EnvironmentVariables[name] = value;
             else psi.EnvironmentVariables.Remove(name);
         }
-        psi.EnvironmentVariables["WOTM_RES"] = Resolutions[res.SelectedIndex];
-        if (dynWidth.Checked) psi.EnvironmentVariables.Remove("WOTM_ASPECT");
-        else psi.EnvironmentVariables["WOTM_ASPECT"] = Aspects[aspect.SelectedIndex];
-        if (fullscreen.Checked) psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "1";
-        else psi.EnvironmentVariables["WOTM_FULLSCREEN"] = "0";   // sem a variavel o jogo abre em tela cheia
-        if (rate.SelectedIndex > 0) psi.EnvironmentVariables["WOTM_HZ"] = Rates[rate.SelectedIndex];
-        else psi.EnvironmentVariables.Remove("WOTM_HZ");
-        if (vsync.Checked) psi.EnvironmentVariables.Remove("WOTM_VSYNC");
-        else psi.EnvironmentVariables["WOTM_VSYNC"] = "0";
-        if (interp.SelectedIndex == 0) psi.EnvironmentVariables.Remove("WOTM_INTERP");
-        else psi.EnvironmentVariables["WOTM_INTERP"] = interp.SelectedIndex == 1 ? "1" : "0";
         if (matchOn.Checked) psi.EnvironmentVariables["WOTM_MATCH"] = MatchValue();
         else psi.EnvironmentVariables.Remove("WOTM_MATCH");
         string cheats = CheatsValue();
@@ -754,10 +824,29 @@ class Launcher : Form
         return psi;
     }
 
+    // Kit de mods (tools\modkit_gui.py, docs\passos\MODS.md): pythonw sem console; sem ele, python
+    void OpenModKit()
+    {
+        string script = Path.Combine(exeDir, "tools", "modkit_gui.py");
+        if (!File.Exists(script)) { status.Text = "tools\\modkit_gui.py not found next to the launcher."; return; }
+        foreach (string py in new[] { "pythonw.exe", "pyw.exe", "python.exe", "py.exe" })
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo(py, "\"" + script + "\"") { WorkingDirectory = exeDir, UseShellExecute = false });
+                status.Text = "Mod kit opened.";
+                return;
+            }
+            catch (Exception) { }
+        }
+        status.Text = "Python not found: install Python 3 (with Pillow: pip install pillow) to use the mod kit.";
+    }
+
     void OpenLog()
     {
         string rt = RuntimeDir();
-        string p = rt == null ? null : Path.Combine(rt, "live.err.log");
+        string p = rt == null ? null : Path.Combine(rt, "logs", "live.err.log");
+        if (p != null && !File.Exists(p)) p = Path.Combine(rt, "live.err.log");   // run_live.ps1 antigo grava na raiz
         if (p != null && File.Exists(p)) Process.Start("notepad.exe", "\"" + p + "\"");
         else status.Text = "No live.err.log yet.";
     }
@@ -805,6 +894,7 @@ class Launcher : Form
         if (c is ComboBox)
         {   // tema escuro nativo do Windows (o das caixas de arquivo): legivel tambem desabilitado, ao contrario do FlatStyle com cores
             c.BackColor = InputColor;
+            c.ForeColor = FgColor;   // o padrao da ComboBox e WindowText (nao ControlText): os itens da lista aberta saiam pretos
             Control cc = c;
             EventHandler theme = delegate { try { SetWindowTheme(cc.Handle, "DarkMode_CFD", null); } catch (Exception) { } };
             if (c.IsHandleCreated) theme(c, EventArgs.Empty);

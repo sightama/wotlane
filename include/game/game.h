@@ -543,8 +543,7 @@ public:
     Hud m_huds[4];                   /* 0x000: one per view, stride 0x2E0 */
     Monster m_slots[16];             /* 0xB80: monster array, stride 0x11190; m_numSlots are in use */
     char pad112480[0x11C370 - 0x112480]; /* includes the Weapons spawner at 0x112490 */
-    TokenManager m_tokens[2];        /* 0x11C370 */
-    char pad11E378[0x120380 - 0x11E378];
+    TokenManager m_tokens[4];        /* 0x11C370: one per player, initialized in InitBeforeDbLoad */
     union {
         Monster *m_monsters[8];      /* 0x120380: indexed up to m_numMonsters; vegas also reads [4] and [5] */
         struct {
@@ -625,6 +624,8 @@ public:
 
     Weapons *getWeapons(void) { return (Weapons *)((char *)this + 0x112490); }
 };
+typedef char _thegame_at_m_tokens[(unsigned)&((TheGame *)0)->m_tokens == 0x11C370 ? 1 : -1];
+typedef char _thegame_at_m_monsters[(unsigned)&((TheGame *)0)->m_monsters == 0x120380 ? 1 : -1];
 
 extern TheGame *game;
 

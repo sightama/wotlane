@@ -26,6 +26,7 @@
 #pragma once
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
 #include "wotm_disc.hpp"
+#include "wotm_settings.hpp"   // SkipIntro
 
 #include <algorithm>
 #include <atomic>
@@ -442,6 +443,7 @@ public:
 
     Source locate(const std::string &gameName) const {
         const std::string rel = discRelative(gameName);
+        if (std::string p = wotm::mods::Registry::get().hostPath(rel); !p.empty()) return Source{p};   // mods/ (wotm_mods.hpp)
         if (const char *d = std::getenv("WOTM_DISC"))
             if (std::string p = resolveDiscPath(d, rel); !p.empty()) return Source{p};
         if (std::string p = resolveDiscPath(discRoot, rel); !p.empty()) return Source{p};
@@ -456,6 +458,9 @@ public:
         const Source src = locate(gameName);
         std::lock_guard<std::mutex> lk(m_);
         Req &r = req_[s];
+        // segurado (setHold) e ja tocando o mesmo filme: continua (a volta da selecao nativa ao menu chama Play de novo, e reabrir
+        // deixava o telao preto ate o primeiro quadro)
+        if (hold_[s].load() && active_[s].load() && !done_[s].load() && r.name == gameName) return;
         r.src = src;
         r.name = gameName;
         r.audio = audio;
@@ -471,11 +476,15 @@ public:
                      (unsigned long long)src.offset);
     }
     void stop(Slot s) {
+        if (hold_[s].load()) return;   // setHold: o jogo encerra o filme, mas quem segura continua tocando
         std::lock_guard<std::mutex> lk(m_);
         req_[s].stop = true;
         req_[s].open = false;
         active_[s].store(false);
     }
+    // Segura o filme do slot: stop() nao vale enquanto ligado (selecao nativa: a tela 3 do jogo encerra o filme do telao, que ela
+    // continua mostrando sem recomecar). Desligar nao para nada.
+    void setHold(Slot s, bool on) { hold_[s].store(on); }
     bool finished(Slot s) const { return done_[s].load(); }
     bool active(Slot s) const { return active_[s].load(); }
     bool hasFrame(Slot s) const { return shown_[s].load(); }
@@ -564,7 +573,7 @@ private:
     struct Req { Source src; std::string name; bool audio = false, open = false, stop = false; };
     std::mutex m_;
     Req req_[2];
-    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{};
+    std::atomic<bool> done_[2]{}, active_[2]{}, shown_[2]{}, skip_{}, hold_[2]{};
     uint16_t padDown_ = 0;   // X/Start do pad no quadro anterior (so a thread do EE)
     std::atomic<std::chrono::steady_clock::rep> startedAt_{};
     std::atomic<uint32_t> screenW_{256}, screenH_{128};
@@ -626,6 +635,8 @@ inline std::string str(const uint8_t *ram, uint32_t a) {
     return s;
 }
 
+inline bool &skipHold() { static bool v = false; return v; }
+
 // playMpegMovieWithDB(char *name, bool comAudio) (0x20F4B0): comeca o filme de tela cheia; o jogo segue chamando updateMpegMovieDecoding
 inline uint32_t playMpegMovieWithDB(uint8_t *ram, uint32_t name, uint32_t withAudio) {
     wr(ram, ga::movieIsCompletelyFinished, 0);   // initAll
@@ -633,7 +644,26 @@ inline uint32_t playMpegMovieWithDB(uint8_t *ram, uint32_t name, uint32_t withAu
     wr(ram, ga::partialMovie, 0);
     wr(ram, ga::isStarted, 0);
     wr(ram, ga::movieIsPlaying, 1);
-    Player::get().start(Player::Full, str(ram, name), (withAudio & 0xFF) != 0);
+    // SKIP INTRO MOVIES (aba FEATURES do painel; WOTM_SKIPINTRO no settings.ini ou no ambiente): os dois filmes do boot (intro_m e
+    // int_main, so a primeira vez de cada; o int_main que volta no menu parado toca) nao comecam e terminam como um pulo no segundo updateMpegMovieDecoding (Player sem o filme ativo -> termAll). Nao no
+    // primeiro: o uiIntro so marca o filme como comecado se vir movieRequested num quadro, e sem isso o boot parava esperando.
+    static bool skippedBoot[2] = {};
+    const std::string movie = str(ram, name);
+    static const bool skipIntro = wotm::settings::on(wotm::settings::SkipIntro);   // lido no primeiro filme: mudar no painel vale no proximo boot
+    if (skipIntro) {
+        std::string rel = discRelative(movie);
+        for (char &c : rel) c = char(std::tolower(static_cast<unsigned char>(c)));
+        const int boot = rel == "mov/intro_m.pss" ? 0 : rel == "mov/int_main.pss" ? 1 : -1;
+        if (boot >= 0 && !skippedBoot[boot]) {
+            skippedBoot[boot] = true;
+            std::fprintf(stderr, "[fmv] tela cheia pulada (SKIP INTRO MOVIES): %s\n", movie.c_str());
+            Player::get().stop(Player::Full);
+            skipHold() = true;
+            wr(ram, ga::movieRequested, 1);
+            return 0;
+        }
+    }
+    Player::get().start(Player::Full, movie, (withAudio & 0xFF) != 0);
     wr(ram, ga::movieRequested, 1);
     return 0;
 }
@@ -654,6 +684,11 @@ inline uint32_t updateMpegMovieDecoding(uint8_t *ram, uint32_t keepGoing) {
     p.padInput(uint16_t(rd(ram, ga::inputPadData) >> 16));
     if (!p.skipAllowed()) keepGoing = 1;   // ignora tambem o Start lido pelo jogo (por nivel) nos primeiros 100 ms
     else if (p.skipRequested()) keepGoing = 0;
+    if (skipHold()) {   // filme do boot pulado (WOTM_SKIPINTRO): fica "pedido" ate o proximo quadro, para o uiIntro o ver
+        skipHold() = false;
+        wr(ram, ga::isStarted, 1);
+        return 0;
+    }
     if (p.finished(Player::Full) || !p.active(Player::Full) || ((keepGoing & 0xFF) == 0 && started)) {
         std::fprintf(stderr, "[fmv] tela cheia encerrada (%s)\n", p.finished(Player::Full) ? "fim" : "pulo");
         wr(ram, ga::isStarted, 0);
