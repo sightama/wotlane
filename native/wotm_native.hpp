@@ -686,6 +686,43 @@ inline M4 rigidInverse(const M4 &m) {
     for (int j = 0; j < 3; ++j) r.m[3][j] = -(m.m[3][0] * r.m[0][j] + m.m[3][1] * r.m[1][j] + m.m[3][2] * r.m[2][j]);
     return r;
 }
+
+// Foco da projecao do jogo: px do GS (horizontal) e linhas (vertical) por unidade de tangente. Da worldToScreenMat (16 floats, linhas):
+// linha 0 = fh*direita + c*frente, linha 1 = -fv*cima + c*frente, linha 3 = frente; o foco e a parte perpendicular a linha 3.
+struct Focus { float fh = 384.f, fv = 180.48f; };
+inline bool focusOf(const float *M, Focus &f) {
+    const float *r3 = M + 12;
+    const float n3 = r3[0] * r3[0] + r3[1] * r3[1] + r3[2] * r3[2];
+    if (!(n3 > 0.5f) || !std::isfinite(n3)) return false;
+    auto perp = [&](const float *r) {
+        const float k = (r[0] * r3[0] + r[1] * r3[1] + r[2] * r3[2]) / n3;
+        float s = 0.f;
+        for (int i = 0; i < 3; ++i) s += (r[i] - k * r3[i]) * (r[i] - k * r3[i]);
+        return std::sqrt(s);
+    };
+    const float fh = perp(M), fv = perp(M + 4);
+    if (!(fh > 1.f && fv > 1.f) || !std::isfinite(fh) || !std::isfinite(fv)) return false;
+    f.fh = fh;
+    f.fv = fv;
+    return true;
+}
+// mundo -> camera (direita, frente, cima) pela cameraToWorld C; point = com a translacao
+inline void toCam(const M4 &C, const float p[3], bool point, float q[3]) {
+    const float d[3] = {p[0] - (point ? C.m[3][0] : 0.f), p[1] - (point ? C.m[3][1] : 0.f), p[2] - (point ? C.m[3][2] : 0.f)};
+    for (int k = 0; k < 3; ++k) q[k] = d[0] * C.m[k][0] + d[1] * C.m[k][1] + d[2] * C.m[k][2];
+}
+inline void fromCam(const M4 &C, const float q[3], bool point, float p[3]) {
+    for (int i = 0; i < 3; ++i) p[i] = (point ? C.m[3][i] : 0.f) + q[0] * C.m[0][i] + q[1] * C.m[1][i] + q[2] * C.m[2][i];
+}
+// Ponto do mundo -> deslocamento do centro da tela (px do GS, linhas); falso atras da camera
+inline bool project(const M4 &C, const Focus &f, const float w[3], float &x, float &y) {
+    float q[3];
+    toCam(C, w, true, q);
+    if (q[1] < 1.f) return false;
+    x = f.fh * q[0] / q[1];
+    y = -f.fv * q[2] / q[1];
+    return true;
+}
 }   // namespace interp
 
 // Particula desenhada como sprite voltado para a camera (destroços, poeira...). Lida de fx[] (0x5BA280, 98 x 12000 bytes).
@@ -2263,6 +2300,7 @@ public:
         vctx = s.vctx;
         eyeOk_ = s.cam.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = s.cam.pos[i];
+        hudMix_.on = false;
         return s.cam;
     }
 
@@ -2270,8 +2308,9 @@ public:
     // com as matrizes misturadas com as de A em alpha (0 = A, 1 = B). Casamento por (cs, no, ocorrencia); salto de translacao grande
     // ou LOD diferente = B sem mistura. HUD, icones e lista de alta prioridade, que o jogo poe na frente da camera a cada quadro, nao
     // sao misturados: vao para a camera misturada pela posicao relativa a camera de B (misturar a matriz deles tremia contra a cena).
-    // Particulas e destroços recuam pela velocidade (etapa 2; Particles::stepBack). Flares, texto e fades ficam os de B. Corte de
-    // camera = show(B). Devolve a camera desenhada; cut diz se houve corte.
+    // Particulas e destroços recuam pela velocidade (etapa 2; Particles::stepBack). Lens flare, barras sobre o inimigo e icone de vida,
+    // que o jogo projetou com a camera de B, vao para a misturada (etapa 3; blendFlares, blendAnchors); o alfa dos fades mistura com o
+    // de A quando o retangulo e o mesmo. Texto fica o de B. Corte de camera = show(B). Devolve a camera desenhada; cut diz se houve corte.
     GameCamera showBlend(const Snapshot &A, const Snapshot &B, float alpha, bool *cut = nullptr) {
         const GameCamera cb = show(B);
         if (cut) *cut = false;
@@ -2370,10 +2409,202 @@ public:
                 fxRam_ = fxMix_;
             }
         }
+        // 2D presos ao 3D: da tela de B para a da camera misturada (foco de B da worldToScreenMat da vista; o FOV misturado o escala)
+        static const bool hudOff = std::getenv("WOTM_INTERP_NOHUD") != nullptr;   // diagnostico: flares, barras e fades de B
+        if (!hudOff) {
+            hudMix_.on = true;
+            hudMix_.view = B.vctx.view;
+            hudMix_.alpha = alpha;
+            hudMix_.CB = interp::cameraToWorld(B.cam);
+            hudMix_.CI = interp::cameraToWorld(c);
+            interp::Focus fb;
+            float M[16];
+            const uint32_t wm = addr::worldToScreenMat + 0x40 * uint32_t(std::clamp(B.vctx.view, 0, 4));
+            if (B.fxRam && B.fxRamSize >= wm + sizeof M) {
+                std::memcpy(M, B.fxRam.get() + wm, sizeof M);
+                if (!interp::focusOf(M, fb)) fb = {};
+            } else {   // sem a copia de sombra (WOTM_FXLIVE): pelo FOV, na vista de 224 linhas
+                fb.fv = 112.f / std::tan(B.cam.fovy * 3.14159265f / 360.f);
+                fb.fh = fb.fv * (384.f / 180.48f);
+            }
+            auto scaled = [&](const GameCamera &o) {   // foco de outra camera: o de B escalado pelo FOV
+                float k = std::tan(B.cam.fovy * 3.14159265f / 360.f) / std::tan(o.fovy * 3.14159265f / 360.f);
+                if (!(std::isfinite(k) && k > 0.f)) k = 1.f;
+                return interp::Focus{fb.fh * k, fb.fv * k};
+            };
+            hudMix_.CA = interp::cameraToWorld(A.cam);
+            hudMix_.fb = fb;
+            hudMix_.fa = scaled(A.cam);
+            hudMix_.fi = scaled(c);
+            static const bool log = std::getenv("WOTM_INTERPLOG") != nullptr;
+            static uint32_t loggedG = 0;
+            if (log && B.g != loggedG) {   // uma vez por par
+                loggedG = B.g;
+                logHudBack(A, B);
+            }
+            blendFlares(fx.flares);
+            blendAnchors(B.anchors, &A.anchors, screenRects, &screenPolys);
+            // fades: o k-esimo retangulo que nao e barra, mesmo lugar e cor em A e B
+            size_t ia = 0;
+            for (ScreenRect &r : screenRects) {
+                if (r.barView >= 0) continue;
+                while (ia < A.screenRects.size() && A.screenRects[ia].barView >= 0) ++ia;
+                if (ia >= A.screenRects.size()) break;
+                const ScreenRect &a = A.screenRects[ia++];
+                if (a.x0 == r.x0 && a.y0 == r.y0 && a.x1 == r.x1 && a.y1 == r.y1 && a.r == r.r && a.g == r.g && a.b == r.b && a.tex0 == r.tex0 &&
+                    a.underText == r.underText)
+                    r.a = static_cast<uint8_t>(std::lround(a.a + (float(r.a) - a.a) * alpha));
+            }
+        }
         cam_ = c;
         eyeOk_ = c.ok;
         for (int i = 0; i < 3; ++i) eye_[i] = c.pos[i];
         return c;
+    }
+
+    // Diagnostico da etapa 3 (WOTM_INTERPLOG): flares e icones de vida de B levados para a camera de A (alfa 0) contra os que o jogo
+    // projetou em A (o mais proximo, com o mesmo id no flare); "sem" = a mesma distancia sem reprojetar. Em px do GS. Icones: so os
+    // reprojetados (os presos na borda da tela vao pela posicao na tela de A e B, sem erro a medir), e quantos foram pela tela.
+    void logHudBack(const Snapshot &A, const Snapshot &B) {
+        const BlendView keep = hudMix_;
+        hudMix_.CI = hudMix_.CA;
+        hudMix_.fi = hudMix_.fa;
+        hudMix_.alpha = 0.f;
+        Particles::FlareFrame fr = B.flares;
+        blendFlares(fr);
+        auto nearest = [](float x, float y, const auto &list, auto same) {
+            float best = 1e30f;
+            for (const auto &o : list)
+                if (same(o)) best = std::min(best, std::hypot(o.x - x, o.y - y));
+            return best;
+        };
+        int nf = 0;
+        double ef = 0, sf = 0;
+        for (const Particles::Flare &fl : fr.e) {
+            auto same = [&](const Particles::Flare &o) { return o.id == fl.id; };
+            const float e = nearest(fl.x, fl.y, A.flares.e, same);
+            const Particles::Flare *orig = nullptr;
+            for (const Particles::Flare &o : B.flares.e)
+                if (o.id == fl.id) { orig = &o; break; }
+            if (e > 60.f || !orig) continue;   // sem par em A
+            ++nf;
+            ef += e;
+            sf += nearest(orig->x, orig->y, A.flares.e, same);
+        }
+        int na = 0, ns = 0;
+        double ea = 0, sa = 0;
+        for (const HudAnchor &b : B.anchors) {
+            float dx, dy;
+            int mode = 0;
+            if (b.view != hudMix_.view || !anchorShift(b, &A.anchors, dx, dy, &mode)) continue;
+            if (mode == 2) { ++ns; continue; }
+            auto same = [&](const HudAnchor &o) { return o.view == b.view; };
+            const float e = nearest(b.x + dx, b.y + dy, A.anchors, same);
+            if (e > 60.f) continue;
+            ++na;
+            ea += e;
+            sa += nearest(b.x, b.y, A.anchors, same);
+        }
+        std::fprintf(stderr, "[interp] hud g=%u: %d flares, erro medio %.2f px (sem reprojetar %.2f); %d icones de vida, %.2f (sem %.2f), %d pela tela\n",
+                     B.g, nf, nf ? ef / nf : 0., nf ? sf / nf : 0., na, na ? ea / na : 0., na ? sa / na : 0., ns);
+        hudMix_ = keep;
+    }
+
+    // Interpolacao (etapa 3): lens flare da tela de B para a da camera misturada do ultimo showBlend (o do infinito so pela direcao;
+    // a profundidade W e o Z do GS refeitos). Sai o que ficou atras da camera ou fora da tela. Sem showBlend em vigor, nada.
+    void blendFlares(Particles::FlareFrame &fr) const {
+        if (!hudMix_.on) return;
+        const interp::Focus &fb = hudMix_.fb, &fi = hudMix_.fi;
+        const float x0 = -0.5f * fr.vw - 3.f, x1 = 0.5f * fr.vw + 3.f, y0 = -0.5f * fr.vh - 3.f, y1 = 0.5f * fr.vh + 3.f;
+        std::vector<Particles::Flare> out;
+        out.reserve(fr.e.size());
+        for (Particles::Flare fl : fr.e) {
+            const bool inf = (fl.flags & 0x80) != 0;
+            const float dx = (fl.x - fr.cx) / fb.fh, dy = (fl.y - fr.cy) / fb.fv;
+            float w[3], q[3];
+            if (inf) {
+                const float qb[3] = {dx, 1.f, -dy};
+                interp::fromCam(hudMix_.CB, qb, false, w);
+                interp::toCam(hudMix_.CI, w, false, q);
+                if (q[1] <= 1e-4f) continue;
+            } else {
+                if (!(fl.w > 0.f)) { out.push_back(fl); continue; }
+                const float qb[3] = {dx * fl.w, fl.w, -dy * fl.w};
+                interp::fromCam(hudMix_.CB, qb, true, w);
+                interp::toCam(hudMix_.CI, w, true, q);
+                if (q[1] < 1.f) continue;
+                fl.w = q[1];
+                fl.z = fr.zScale + fr.zOff / fl.w;
+            }
+            const float sx = fi.fh * q[0] / q[1], sy = -fi.fv * q[2] / q[1];
+            if (sx < x0 || sx > x1 || sy < y0 || sy > y1) continue;
+            fl.x = fr.cx + sx;
+            fl.y = fr.cy + sy;
+            out.push_back(fl);
+        }
+        fr.e.swap(out);
+    }
+
+    // Deslocamento na tela de um icone de vida de B no instante misturado do ultimo showBlend (falso = fica onde B o pos). Casa com o
+    // icone de A mais proximo no mundo (prev; mesma vista, ate 100 unidades: o monstro anda entre A e B). Se o icone fica a mesma
+    // distancia da projecao do seu ponto em A e em B (o jogo o pos sobre o monstro), o ponto misturado vai pela camera misturada
+    // (mode 1); senao (o jogo o prendeu na borda da tela) mistura a posicao na tela de A e B (mode 2).
+    bool anchorShift(const HudAnchor &b, const std::vector<HudAnchor> *prev, float &dx, float &dy, int *mode = nullptr) const {
+        const HudAnchor *a = nullptr;
+        float bd = 100.f * 100.f;
+        if (prev)
+            for (const HudAnchor &o : *prev) {
+                const float d = (o.w[0] - b.w[0]) * (o.w[0] - b.w[0]) + (o.w[1] - b.w[1]) * (o.w[1] - b.w[1]) + (o.w[2] - b.w[2]) * (o.w[2] - b.w[2]);
+                if (o.view == b.view && d < bd) { bd = d; a = &o; }
+            }
+        if (!a) return false;
+        const float t = hudMix_.alpha;
+        float xb, yb, xa, ya, xi, yi, w[3];
+        for (int k = 0; k < 3; ++k) w[k] = a->w[k] + (b.w[k] - a->w[k]) * t;
+        if (interp::project(hudMix_.CB, hudMix_.fb, b.w, xb, yb) && interp::project(hudMix_.CA, hudMix_.fa, a->w, xa, ya) &&
+            std::fabs((b.x - xb) - (a->x - xa)) < 3.f && std::fabs((b.y - yb) - (a->y - ya)) < 3.f &&
+            interp::project(hudMix_.CI, hudMix_.fi, w, xi, yi)) {
+            dx = xi - xb;
+            dy = yi - yb;
+            if (mode) *mode = 1;
+        } else {
+            dx = (a->x - b.x) * (1.f - t);
+            dy = (a->y - b.y) * (1.f - t);
+            if (mode) *mode = 2;
+        }
+        return std::fabs(dx) < 200.f && std::fabs(dy) < 200.f;
+    }
+
+    // Interpolacao (etapa 3): barras sobre o inimigo (ScreenRect::anchor) e icone de vida (polys centrados no ponto anotado) da vista do
+    // ultimo showBlend, levados para o instante misturado pelo anchorShift do ponto do mundo que o jogo projetou (HudAnchor; prev = os
+    // de A).
+    void blendAnchors(const std::vector<HudAnchor> &anchors, const std::vector<HudAnchor> *prev, std::vector<ScreenRect> &rects,
+                      std::vector<TextQuad> *polys) const {
+        if (!hudMix_.on || anchors.empty()) return;
+        std::vector<std::array<float, 2>> shift(anchors.size(), {NAN, NAN});
+        bool any = false;
+        for (size_t i = 0; i < anchors.size(); ++i) {
+            float dx, dy;
+            if (anchors[i].view == hudMix_.view && anchorShift(anchors[i], prev, dx, dy)) {
+                shift[i] = {dx, dy};
+                any = true;
+            }
+        }
+        if (!any) return;
+        for (ScreenRect &r : rects) {
+            if (r.barView != hudMix_.view || r.anchor < 0 || size_t(r.anchor) >= shift.size() || std::isnan(shift[size_t(r.anchor)][0])) continue;
+            const auto &sh = shift[size_t(r.anchor)];
+            r.x0 += sh[0]; r.x1 += sh[0]; r.y0 += sh[1]; r.y1 += sh[1];
+        }
+        if (!polys) return;
+        for (TextQuad &t : *polys) {
+            const float cx = 0.5f * (t.x0 + t.x1), cy = 0.5f * (t.y0 + t.y1);
+            for (size_t i = 0; i < anchors.size(); ++i)
+                if (!std::isnan(shift[i][0]) && std::fabs(anchors[i].x - cx) < 1.5f && std::fabs(anchors[i].y - cy) < 1.5f) {
+                    t.x0 += shift[i][0]; t.x1 += shift[i][0]; t.y0 += shift[i][1]; t.y1 += shift[i][1];
+                    break;
+                }
+        }
     }
 
     // Diagnostico do recuo (WOTM_INTERPLOG): cada particula que andou, recuada um passo inteiro (alfa 0), contra a mais proxima do
@@ -4018,6 +4249,8 @@ private:
     float eye_[3] = {0, 0, 0};
     std::shared_ptr<const uint8_t> fxRam_;   // Snapshot::fxRam do quadro mostrado (ou fxMix_ na interpolacao)
     std::shared_ptr<uint8_t> fxMix_;         // copia de sombra das particulas no instante misturado (showBlend, Particles::blendRam)
+    // cameras de A, B e a misturada do ultimo showBlend (sem corte), com o foco de cada uma: blendFlares e blendAnchors; o show desliga
+    struct BlendView { bool on = false; int view = 0; float alpha = 1.f; M4 CA, CB, CI; interp::Focus fa, fb, fi; } hudMix_;
     size_t fxMixSize_ = 0;
     uint32_t atMat_ = 0;   // animOutput.atMat do CHAR_INSTANCE que contem o no atual
     uint32_t animPkt_ = 0; // animPktPtr do CHAR_INSTANCE que contem o no atual

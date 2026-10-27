@@ -1703,6 +1703,13 @@ static bool wotmDrawNative(const uint8_t *rdram)
             ++wotm::drawProf().redraws;
         wotm::ProfScope psFrame(wotm::DrawProf::RFrame);
         wotm::GpuTimer::Scope gpuScope;
+        // interpolacao na tela dividida: as barras (no instantaneo da vista 0) e os flares de cada vista vao para a camera misturada dela
+        // (Scene::blendAnchors, blendFlares no showBlend), numa copia feita vista a vista antes do desenho dela
+        static std::vector<wotm::ScreenRect> barsMix;
+        static wotm::Particles::FlareFrame flaresMix[4];
+        const bool splitMix = interpOn && split;
+        if (splitMix)
+            barsMix = S.snap.screenRects;
         auto drawView = [&](RenderTexture2D &vrt, const wotm::GameCamera &vc) {
             wotm::ProfScope psView(wotm::DrawProf::RView);
             const int W = viewW(static_cast<int>(&vrt - S.vrts));
@@ -1734,7 +1741,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             {
                 // barras desta vista (estao no instantaneo da vista 0), no canto da textura dela na janela
                 const int v = static_cast<int>(&vrt - S.vrts);
-                S.scene.barPass = {&S.snap.screenRects, static_cast<float>(RW), static_cast<float>(RH), v,
+                S.scene.barPass = {splitMix ? &barsMix : &S.snap.screenRects, static_cast<float>(RW), static_cast<float>(RH), v,
                                    static_cast<float>((v & 1) * (RW - VW)), static_cast<float>((v >> 1) * (RH - VH)),
                                    static_cast<float>(W), static_cast<float>(VH)};
             }
@@ -1773,6 +1780,11 @@ static bool wotmDrawNative(const uint8_t *rdram)
                     const auto &va = S.prev.views[v - 1];
                     viewCam[v] = interpOn && va && va->valid ? S.scene.showBlend(*va, *S.snap.views[v - 1], alpha)
                                                              : S.scene.show(*S.snap.views[v - 1]);
+                    if (splitMix)
+                    {
+                        S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, nullptr);
+                        flaresMix[v] = S.scene.fx.flares;
+                    }
                 }
                 drawView(S.vrts[v], viewCam[v]);
             }
@@ -1784,6 +1796,12 @@ static bool wotmDrawNative(const uint8_t *rdram)
             static const bool interpLog = std::getenv("WOTM_INTERPLOG") != nullptr;
             if (cut && interpLog)
                 std::fprintf(stderr, "[interp] corte de camera g=%u (%ld)\n", S.snap.g, ++s_cuts);
+            if (splitMix)
+            {
+                if (!interpOld)   // no par (P, A) as ancoras de A nao casam com as barras de B
+                    S.scene.blendAnchors(S.snap.anchors, &S.prev.anchors, barsMix, nullptr);
+                flaresMix[0] = S.scene.fx.flares;
+            }
         }
         wotm_levelsel::prepare(S.scene, ram);   // com os objetos deste quadro
         viewCam[0] = gc;
@@ -1845,7 +1863,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
                 vc3.fovy = vc.fovy;
                 vc3.projection = CAMERA_PERSPECTIVE;
                 BeginMode3D(vc3);
-                S.scene.drawFlaresFor(ram, sn.flares, sn.vctx, flareSync ? nullptr : &depth[v], vmsOn ? S.vms[v].render().id : S.vrts[v].id);
+                S.scene.drawFlaresFor(ram, splitMix ? flaresMix[v] : sn.flares, sn.vctx, flareSync ? nullptr : &depth[v], vmsOn ? S.vms[v].render().id : S.vrts[v].id);
                 wotm::endMode3DInTexture();
                 EndTextureMode();
                 wotm::msaa::g_current = nullptr;

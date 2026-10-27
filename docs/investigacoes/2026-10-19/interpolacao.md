@@ -279,3 +279,30 @@ busca. Custo: o `show` sobe ~0,1 ms por redesenho (a cópia de ~1,3 MB de `fx[]`
 redesenho todo fica nos mesmos 2–4,5 ms da etapa 1. A checagem do log é quadrática e custa até ~0,7 ms, então tempo se mede sem ela.
 `tools\corpus.ps1 -Check` sem mudança. Foto: `docs/screenshots/2026-10-26/2026-10-26_interpolacao_particulas.png` (sopro de fogo
 com a mistura). Ficam para conferir na tela: o fogo preso ao monstro andando (o emissor não recua) e o tiro do Robo-47.
+
+## 10. Etapa 3 implementada (2026-10-26)
+
+`Scene::blendFlares`, `anchorShift`/`blendAnchors` e o fim do `Scene::showBlend` (wotm_native.hpp); na tela dividida, as cópias
+`barsMix`/`flaresMix` do laço da apresentação (wotm_live.inc). Diferenças em relação ao plano da seção 5:
+- **Foco:** vem da `worldToScreenMat` da vista na cópia de sombra de B (parte das linhas 0 e 1 perpendicular à frente), escalado pela
+  razão das tangentes do FOV para a câmera misturada. Sem a cópia (`WOTM_FXLIVE`), pelo FOV.
+- **Ícone de vida:** reprojetar só a câmera não bastou. Ele segue a cabeça do monstro, que anda entre A e B, e a câmera o persegue: o
+  erro ficou em 7,0 px, igual a não fazer nada. O ponto do mundo passou a ser misturado com o do ícone de A mais próximo. Sobrou o
+  ícone que o jogo prende na borda da tela (inimigo fora da vista), que não é projeção: o critério é a diferença entre o ícone e a
+  projeção do seu ponto ser a mesma em A e em B (até 3 px); se não for, mistura a posição na tela.
+- **Fades:** o k-ésimo retângulo que não é barra, com o mesmo lugar, cor e textura em A e B, mistura o alfa. O `Shell::FadeScreen` é
+  um laço sem captura e fica de fora.
+
+Checagem embutida no `WOTM_INTERPLOG` (`[interp] hud`): os flares e ícones de B levados para a câmera de A (α = 0) contra os que o
+jogo pôs em A. Lutas IA x IA de 45 s (`WOTM_MATCH=3,1,1`, 180 Hz):
+
+| Rodada | Flares (erro médio / sem reprojetar) | Ícones de vida reprojetados (idem) | Ícones pela tela |
+|---|---|---|---|
+| 1 jogador | 61: 0,005 / 2,65 px | 1284: 0,58 / 4,39 px | 434 |
+| 2 jogadores | 57: 0,003 / 1,98 px | 2252: 0,52 / 2,80 px | 0 |
+
+O meio pixel dos ícones é o arredondamento do jogo (o centro do ícone sai em px inteiros). No ícone, a checagem é em parte
+construída: o critério dos 3 px já escolhe os que batem; ela mostra que o foco e as câmeras estão certos. Custo: o `show` fica em
+0,14–0,19 ms, o mesmo da etapa 2; redesenho todo de 3,2–3,6 ms na tela dividida. `tools\corpus.ps1 -Check` sem mudança. Foto:
+`docs/screenshots/2026-10-26/2026-10-26_interpolacao_barras.png` (barras com `WOTM_ENEMYBARS=1` e a mistura). Fica para a etapa 4 o
+ícone do jogo (sem barras) na tela dividida, que sai na lista de polígonos da janela inteira.
