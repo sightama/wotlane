@@ -122,26 +122,26 @@ static int g_pauseSuppress = 0;
 namespace st = wotm::settings;
 enum Tab { TabVideo, TabFeatures, TabCamera, TabControls, kTabs };
 constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CAMERA", "CONTROLS"};
-constexpr int kMaxOpts = 8;
+constexpr int kMaxOpts = 9;
 struct Opt { st::Key key; const char *label; const char *hint; };
 struct TabDef { int n; Opt opt[kMaxOpts]; };
 constexpr TabDef kTabDefs[kTabs] = {
-    {8,
+    {9,
      {{st::Res, "RESOLUTION", "HEIGHT OF THE PICTURE IN PIXELS. WINDOW FOLLOWS THE WINDOW OR SCREEN"},
       {st::RenderScale, "RENDER SCALE", "DRAWS BIGGER OR SMALLER, THEN FITS THE SCREEN. ABOVE 1X SMOOTHS EDGES"},
       {st::Aspect, "ASPECT RATIO", "DYNAMIC MATCHES THE SHAPE OF THE WINDOW"},
       {st::Display, "DISPLAY MODE", "WINDOW OR FULLSCREEN. F11 SWITCHES AT ANY TIME"},
       {st::Rate, "REFRESH RATE", "HOW OFTEN THE PICTURE IS DRAWN. THE GAME ITSELF ALWAYS RUNS AT 60"},
       {st::Vsync, "VSYNC", "WAITS FOR THE MONITOR BEFORE EACH FRAME, SO THE PICTURE NEVER TEARS"},
+      {st::Interp, "INTERPOLATE FRAMES", "SMOOTHER MOTION ON MONITORS ABOVE 60 HZ. MAY ADD INPUT DELAY"},
       {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
       {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
-    {6,
+    {5,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
       {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"},
-      {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"},
-      {st::Interp, "INTERPOLATE FRAMES", "SMOOTHER MOTION ON MONITORS ABOVE 60 HZ. MAY ADD INPUT DELAY"}}},
+      {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
       {st::CamSens, "SENSITIVITY", "HOW FAST THE RIGHT STICK TURNS THE CAMERA"},
@@ -157,8 +157,8 @@ constexpr TabDef kTabDefs[kTabs] = {
 static int g_tab = TabVideo;
 static int g_optSel[kTabs] = {};
 constexpr int kVisRows = 7;   // linhas do painel que cabem; a aba CONTROLS rola
-// aba VIDEO: linhas mais baixas e juntas, as 8 ao lado da previa da opcao (panelLayout, wotm_preview.hpp)
-static int visRows(int tab) { return tab == TabVideo ? 8 : kVisRows; }
+// aba VIDEO: linhas mais baixas e juntas, as 9 ao lado da previa da opcao (panelLayout, wotm_preview.hpp)
+static int visRows(int tab) { return tab == TabVideo ? 9 : kVisRows; }
 
 // Aba CONTROLS: as opcoes da aba (teclado separado, icones, confirmar nos menus, vibracao), qual mapa a lista mostra (teclado ou gamepads), um
 // botao do PS2 por linha e a volta ao padrao
@@ -1293,7 +1293,7 @@ static void labelLeft(std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, 
 constexpr int kPW = 1800, kPH = 1100;   // ~1,64:1, a proporcao do telao (204 x 124)
 static RenderTexture2D g_prt{};
 
-// Medidas das linhas de uma aba (desenho e mouse). Na VIDEO as linhas sao mais baixas e juntas (as 8 cabem sem rolar) e ficam a
+// Medidas das linhas de uma aba (desenho e mouse). Na VIDEO as linhas sao mais baixas e juntas (as 9 cabem sem rolar) e ficam a
 // esquerda; a direita, a previa da opcao selecionada (wotm_preview.hpp).
 struct PanelLayout
 {
@@ -1303,18 +1303,19 @@ struct PanelLayout
     Rectangle box;                                // caixa da previa
     float y0 = float(kPH) / 8.9f * 2.2f;          // centro da primeira linha (abaixo das abas)
 };
+constexpr float kVideoStep = 0.76f;   // passo das linhas da VIDEO, em alturas de linha das outras abas
 static PanelLayout panelLayout(int tab, bool preview, bool training = false)
 {
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;
     if (training)   // sem abas: o titulo e as 11 linhas, mais juntas, comecando mais acima
         return {lineH * 0.63f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
-    if (tab == TabVideo && !preview)   // previa escondida: as 8 linhas com as colunas das outras abas
-        return {lineH * 0.86f, 46.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
+    if (tab == TabVideo && !preview)   // previa escondida: as 9 linhas com as colunas das outras abas
+        return {lineH * kVideoStep, 46.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
     if (tab == TabVideo)
     {
-        // caixa em 4:3, centrada na altura das 8 linhas
-        const float bw = W * 0.30f, bh = bw * 0.75f, mid = lineH * 2.2f + lineH * 0.86f * 3.5f;
-        return {lineH * 0.86f, 46.f, W * 0.06f, W * 0.51f, W * 0.12f, W * 0.645f, visRows(tab), true,
+        // caixa em 4:3, centrada na altura das 9 linhas
+        const float bw = W * 0.30f, bh = bw * 0.75f, mid = lineH * 2.2f + lineH * kVideoStep * 4.f;
+        return {lineH * kVideoStep, 46.f, W * 0.06f, W * 0.51f, W * 0.12f, W * 0.645f, visRows(tab), true,
                 Rectangle{W * 0.665f, mid - bh * 0.5f - 20.f, bw, bh}};
     }
     return {lineH, 54.f, W * 0.10f, W * 0.66f, W * 0.19f, W * 0.97f, visRows(tab), false, {}};
