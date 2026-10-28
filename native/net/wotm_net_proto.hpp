@@ -13,7 +13,7 @@
 
 namespace wotm_net::proto
 {
-    constexpr uint16_t kProtocol = 1;
+    constexpr uint16_t kProtocol = 2;
     constexpr int kMaxPlayers = 8;   // 4 nos lugares de jogador do jogo e 4 em lugares de IA guiados pela rede (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr size_t kMaxRun = 64;   // quadros de entrada por mensagem (o lockstep nunca deixa mais que o atraso pendente)
@@ -352,9 +352,16 @@ namespace wotm_net::proto
     }
 
     // ---- lobby (TCP, uma linha de texto por mensagem) ----
-    // cliente: HELLO <protocolo> <build> | LIST | JOIN <lobby> <nome> <monstro> | START <fase> | LEAVE
-    // servidor: WELCOME <lobbies> | LOBBY <i> <waiting|playing> <n>/<max> <nomes,...|-> | END | JOINED <i> |
-    //           MEMBERS <i> <nome:monstro,...|-> | MATCH <chave=valor>... | ERROR <texto>
+    // Quem cria o lobby e o dono: so ele muda a fase e as vitorias e comeca a partida; se sair, o proximo membro vira dono. O lobby
+    // tem um codigo de 4 letras (para entrar sem a lista) e pode ter senha. Os membros continuam nele durante a partida e, quando ela
+    // acaba (todos sairam dela: o QUIT fecha o jogo), ele volta a esperar com os mesmos membros. Lobby vazio fecha.
+    // cliente: HELLO <protocolo> <build> | LIST | CREATE <lobby> <nome> <monstro> [senha] | JOIN <codigo> <nome> <monstro> [senha] |
+    //          SET [stage=<fase>] [wins=<vitorias>] | START | LEAVE
+    // servidor: WELCOME <lobbies abertos> | LOBBY <codigo> <waiting|playing> <n>/<max> <open|locked> <lobby> <dono> <nomes,...|-> |
+    //           END | CREATED <codigo> | JOINED <codigo> | LEFT <codigo> | SETTINGS <codigo> stage=<fase> wins=<vitorias> |
+    //           MEMBERS <codigo> <dono> <nome:monstro,...> | MATCH <chave=valor>... | ERROR <texto>
+    constexpr int kMaxWins = 99;
+    constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // sem I, O, 0 e 1 (confundem ditando o codigo)
     inline std::vector<std::string> words(const std::string &line)
     {
         std::vector<std::string> out;

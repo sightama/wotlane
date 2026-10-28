@@ -23,7 +23,7 @@ namespace wotm_net
     struct ServerConfig
     {
         uint16_t port = proto::kDefaultPort;   // TCP (lobby) e UDP (partida) no mesmo numero
-        int lobbies = 2;
+        int lobbies = 16;                       // lobbies abertos ao mesmo tempo, no maximo
         int maxPlayers = proto::kMaxPlayers;
         uint32_t forcedDelay = 0;               // 0: atraso pelo ping
         int startWaitMs = 1000;                 // depois que todos chegam, mede o ping por este tempo antes do inicio
@@ -83,6 +83,10 @@ namespace wotm_net
 
         struct Lobby
         {
+            bool open = false;             // vaga em uso (criada e com alguem dentro ou em partida)
+            std::string code, name, password;
+            int host = -1;                 // indice em conns_ do dono
+            int stage = 1, wins = 0;
             std::vector<int> members;      // indices em conns_
             std::string build;
             std::unique_ptr<Match> match;
@@ -91,9 +95,20 @@ namespace wotm_net
         void log(const char *fmt, ...);
         void acceptAndReadLobby();
         void handleLine(int c, const std::string &line);
+        void createLobby(int c, const std::vector<std::string> &w);
+        void joinLobby(int c, const std::vector<std::string> &w);
+        void setLobby(int c, const std::vector<std::string> &w);
+        // entra no lobby li (ja conferido): membro, dono se for o primeiro, JOINED, SETTINGS e MEMBERS
+        void addMember(int c, int li, const std::string &name, int monster);
+        bool monsterFits(const Lobby &l, int monster, std::string &err) const;
         void leaveLobby(int c);
+        bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);
-        void startMatch(int lobby, int stage);
+        void sendSettings(int lobby);
+        void startMatch(int lobby);
+        std::string newCode();
+        int lobbyByCode(const std::string &code) const;
+        int openLobbies() const;
         std::string lobbyLine(int i) const;
 
         void serviceEnet(int ms);

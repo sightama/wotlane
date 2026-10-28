@@ -8,6 +8,7 @@
 #include "wotm_net_socket.hpp"
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <map>
@@ -326,22 +327,46 @@ namespace
         std::map<std::string, std::string> match;
     };
 
-    // forma uma partida pelo lobby: cada nome entra no lobby 0 com seu monstro e o primeiro manda START <fase>
+    // conecta e manda o HELLO do protocolo atual; devolve a linha WELCOME
+    std::string hello(LineSocket &s, uint16_t port, const std::string &build = "b1")
+    {
+        CHECK(s.connect("127.0.0.1", port, 2000));
+        s.sendLine("HELLO " + std::to_string(p::kProtocol) + " " + build);
+        return readUntil(s, "WELCOME");
+    }
+
+    // CREATE <lobby> <nome> <monstro> [senha]: devolve o codigo do lobby (vazio se o servidor recusou)
+    std::string createLobby(LineSocket &s, const std::string &lobby, const std::string &name, int monster, const std::string &password = "")
+    {
+        s.sendLine("CREATE " + lobby + " " + name + " " + std::to_string(monster) + (password.empty() ? "" : " " + password));
+        const std::string created = readUntil(s, "CREATED");
+        return created.size() > 8 ? created.substr(8) : std::string{};
+    }
+
+    // forma uma partida pelo lobby: o primeiro nome cria o lobby (e e o dono), os outros entram pelo codigo, o dono escolhe a fase e
+    // as vitorias (SET) e comeca (START)
     std::vector<std::unique_ptr<Member>> formMatch(uint16_t port, const std::vector<std::string> &names, const std::vector<int> &monsters,
-                                                   int stage = 1, const std::string &build = "b1")
+                                                   int stage = 1, const std::string &build = "b1", int wins = 0)
     {
         std::vector<std::unique_ptr<Member>> ms;
+        std::string code;
         for (size_t i = 0; i < names.size(); ++i)
         {
             ms.push_back(std::make_unique<Member>());
             Member &m = *ms.back();
-            CHECK(m.socket.connect("127.0.0.1", port, 2000));
-            m.socket.sendLine("HELLO 1 " + build);
-            CHECK(readUntil(m.socket, "WELCOME") == "WELCOME 2");
-            m.socket.sendLine("JOIN 0 " + names[i] + " " + std::to_string(monsters[i]));
-            CHECK(readUntil(m.socket, "JOINED") == "JOINED 0");
+            CHECK(hello(m.socket, port, build).rfind("WELCOME", 0) == 0);
+            if (i == 0)
+            {
+                code = createLobby(m.socket, "Sala", names[i], monsters[i]);
+                CHECK(code.size() == 4u);
+                continue;
+            }
+            m.socket.sendLine("JOIN " + code + " " + names[i] + " " + std::to_string(monsters[i]));
+            CHECK(readUntil(m.socket, "JOINED") == "JOINED " + code);
         }
-        ms[0]->socket.sendLine("START " + std::to_string(stage));
+        ms[0]->socket.sendLine("SET stage=" + std::to_string(stage) + " wins=" + std::to_string(wins));
+        CHECK(readUntil(ms[0]->socket, "SETTINGS " + code + " stage=" + std::to_string(stage)).size() > 0u);
+        ms[0]->socket.sendLine("START");
         for (auto &m : ms)
             m->match = p::keyValues(p::words(readUntil(m->socket, "MATCH")));
         return ms;
@@ -359,88 +384,198 @@ namespace
         return c;
     }
 
-    TEST(lobby_lists_joins_and_starts_a_match)
+    // quem cria um lobby e o dono: o servidor da um codigo de 4 letras, a lista mostra nome, dono, vagas e se tem senha; os outros
+    // entram pelo codigo (maiusculas ou minusculas); so o dono muda a fase e as vitorias (SETTINGS chega a todos) e comeca; a linha
+    // MATCH leva o codigo e as vitorias
+    TEST(lobby_create_join_by_code_settings_and_start)
     {
         ServerConfig cfg = testConfig();
         RunningServer rs(cfg);
         CHECK(rs.ok);
+        LineSocket watcher, a, b;
+        CHECK(hello(watcher, cfg.port) == "WELCOME 0");
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "") == "END");
+
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Sala_1", "Ana", 3);
+        CHECK(code.size() == 4u);
+        CHECK(readUntil(a, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=1 wins=0");
+        CHECK(readUntil(a, "MEMBERS") == "MEMBERS " + code + " Ana Ana:3");
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 1/8 open Sala_1 Ana Ana");
+        CHECK(readUntil(watcher, "") == "END");
+
+        CHECK(hello(b, cfg.port) == "WELCOME 1");
+        std::string lower = code;
+        for (char &ch : lower)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        b.sendLine("JOIN " + lower + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(b, "SETTINGS") == "SETTINGS " + code + " stage=1 wins=0");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
+
+        b.sendLine("SET wins=3");
+        CHECK(readUntil(b, "ERROR").find("dono") != std::string::npos);
+        b.sendLine("START");
+        CHECK(readUntil(b, "ERROR").find("dono") != std::string::npos);
+        a.sendLine("SET stage=5 wins=3");
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=5 wins=3");
+        CHECK(readUntil(b, "SETTINGS") == "SETTINGS " + code + " stage=5 wins=3");
+        a.sendLine("SET wins=500");
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=5 wins=99");
+
+        a.sendLine("START");
+        const auto ma = p::keyValues(p::words(readUntil(a, "MATCH"))), mb = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(ma.size() > 0u && mb.size() > 0u);
+        if (ma.empty() || mb.empty())
+            return;
+        CHECK(ma.at("lobby") == code && ma.at("players") == "2" && mb.at("players") == "2");
+        CHECK(ma.at("stage") == "5" && ma.at("wins") == "99" && mb.at("wins") == "99");
+        CHECK(ma.at("monsters") == "3,1" && mb.at("monsters") == "3,1");
+        CHECK(ma.at("seed") == mb.at("seed") && ma.at("seed") != "0");
+        CHECK(ma.at("step") == "1" && ma.at("names") == "Ana,Bia");
+        CHECK(ma.at("you") == "0" && mb.at("you") == "1");
+        CHECK(ma.at("token") != mb.at("token") && ma.at("token").size() == 16u);
+
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " playing 2/8 open Sala_1 Ana Ana,Bia");
+        LineSocket c;
+        hello(c, cfg.port);
+        c.sendLine("JOIN " + code + " Cai 2");
+        CHECK(readUntil(c, "ERROR").find("partida") != std::string::npos);
+    }
+
+    // lobby com senha: aparece trancado na lista e so entra quem manda a senha certa; codigo que nao existe e recusado
+    TEST(lobby_password_and_unknown_code)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b, watcher;
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        hello(watcher, cfg.port);
+        const std::string code = createLobby(a, "Amigos", "Ana", 3, "pw123");
+        CHECK(code.size() == 4u);
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 1/8 locked Amigos Ana Ana");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "ERROR").find("senha") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 1 errada");
+        CHECK(readUntil(b, "ERROR").find("senha") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 1 pw123");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        LineSocket c;
+        hello(c, cfg.port);
+        c.sendLine(code == "ZZZZ" ? "JOIN YYYY Cai 2" : "JOIN ZZZZ Cai 2");
+        CHECK(readUntil(c, "ERROR").find("inexistente") != std::string::npos);
+    }
+
+    // dono que sai (LEAVE ou conexao caida) passa o lobby ao proximo; lobby vazio fecha e some da lista
+    TEST(lobby_host_passes_on_and_empty_lobby_closes)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket watcher, b;
+        hello(watcher, cfg.port);
+        std::string code;
+        {
+            LineSocket a;
+            hello(a, cfg.port);
+            code = createLobby(a, "Sala", "Ana", 3);
+            hello(b, cfg.port);
+            b.sendLine("JOIN " + code + " Bia 1");
+            CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        }   // a conexao da Ana cai
+        CHECK(readUntil(b, "MEMBERS " + code + " Bia") == "MEMBERS " + code + " Bia Bia:1");
+        b.sendLine("SET wins=2");
+        CHECK(readUntil(b, "SETTINGS") == "SETTINGS " + code + " stage=1 wins=2");
+        b.sendLine("LEAVE");
+        CHECK(readUntil(b, "LEFT") == "LEFT " + code);
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "") == "END");
+    }
+
+    // os membros continuam no lobby durante a partida; quando todos saem da partida (o QUIT fecha o jogo), o lobby volta a esperar
+    // com os mesmos membros e o dono pode comecar outra
+    TEST(lobby_members_stay_through_a_match_and_start_again)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1}, 2, "b1", 3);
+        {
+            MatchClient a, b;
+            std::string err;
+            CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err));
+            CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+            a.stop();
+            b.stop();
+        }
+        const std::string code = ms[0]->match.count("lobby") ? ms[0]->match.at("lobby") : "";
+        CHECK(readUntil(ms[0]->socket, "MEMBERS " + code, 5000) == "MEMBERS " + code + " Ana Ana:3,Bia:1");
         LineSocket watcher;
-        CHECK(watcher.connect("127.0.0.1", cfg.port, 2000));
-        watcher.sendLine("HELLO 1 b1");
-        CHECK(readUntil(watcher, "WELCOME") == "WELCOME 2");
+        hello(watcher, cfg.port);
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY 0") == "LOBBY 0 waiting 0/8 -");
-        CHECK(readUntil(watcher, "LOBBY 1") == "LOBBY 1 waiting 0/8 -");
-        CHECK(readUntil(watcher, "END") == "END");
-
-        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1}, 5);
-        const auto &a = ms[0]->match, &b = ms[1]->match;
-        CHECK(a.size() > 0u && b.size() > 0u);
-        CHECK(a.count("players") && a.at("players") == "2" && b.at("players") == "2");
-        CHECK(a.at("stage") == "5" && a.at("monsters") == "3,1" && b.at("monsters") == "3,1");
-        CHECK(a.at("seed") == b.at("seed") && a.at("seed") != "0");
-        CHECK(a.at("step") == "1" && a.at("names") == "Ana,Bia");
-        CHECK(a.at("you") == "0" && b.at("you") == "1");
-        CHECK(a.at("token") != b.at("token") && a.at("token").size() == 16u);
-
-        watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY 0") == "LOBBY 0 playing 2/8 Ana,Bia");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 2/8 open Sala Ana Ana,Bia");
+        ms[0]->socket.sendLine("START");
+        const auto again = p::keyValues(p::words(readUntil(ms[1]->socket, "MATCH")));
+        CHECK(again.count("wins") && again.at("wins") == "3" && again.at("stage") == "2");
+        CHECK(again.count("token") && ms[1]->match.count("token") && again.at("token") != ms[1]->match.at("token"));
     }
 
     TEST(lobby_refuses_other_protocols_builds_and_full_lobbies)
     {
         ServerConfig cfg = testConfig();
         cfg.maxPlayers = 2;
+        cfg.lobbies = 1;
         RunningServer rs(cfg);
         LineSocket old;
         CHECK(old.connect("127.0.0.1", cfg.port, 2000));
-        old.sendLine("HELLO 0 b1");
+        old.sendLine("HELLO 1 b1");
         CHECK(readUntil(old, "ERROR").find("protocolo") != std::string::npos);
 
-        LineSocket a, b, c;
-        for (LineSocket *s : {&a, &b, &c})
-            CHECK(s->connect("127.0.0.1", cfg.port, 2000));
-        a.sendLine("HELLO 1 b1");
-        b.sendLine("HELLO 1 b2");
-        c.sendLine("HELLO 1 b1");
-        a.sendLine("JOIN 1 Ana 3");
-        CHECK(readUntil(a, "JOINED") == "JOINED 1");
-        b.sendLine("JOIN 1 Bia 2");
+        LineSocket a, b, c, d;
+        hello(a, cfg.port);
+        hello(b, cfg.port, "b2");
+        hello(c, cfg.port);
+        hello(d, cfg.port);
+        const std::string code = createLobby(a, "Sala", "Ana", 3);
+        b.sendLine("JOIN " + code + " Bia 2");
         CHECK(readUntil(b, "ERROR").find("build") != std::string::npos);
-        c.sendLine("JOIN 1 Cai 2");
-        CHECK(readUntil(c, "JOINED") == "JOINED 1");
-        CHECK(readUntil(a, "MEMBERS 1 Ana:3,") == "MEMBERS 1 Ana:3,Cai:2");   // depois do "MEMBERS 1 Ana:3" da entrada da Ana
-        b.sendLine("HELLO 1 b1");
-        b.sendLine("JOIN 1 Bia 2");
-        CHECK(readUntil(b, "ERROR").find("cheio") != std::string::npos);
+        c.sendLine("JOIN " + code + " Cai 2");
+        CHECK(readUntil(c, "JOINED") == "JOINED " + code);
+        d.sendLine("JOIN " + code + " Dan 2");
+        CHECK(readUntil(d, "ERROR").find("cheio") != std::string::npos);
+        d.sendLine("CREATE Outra Dan 2");
+        CHECK(readUntil(d, "ERROR").find("lobbies") != std::string::npos);   // o servidor tem 1 lobby so
     }
 
-    // monstro sem arquivo no disco (spider 6, ogre 12, fora da tabela) ou sem traje livre (jelly so tem 1) nao entra: a carga do jogo
-    // travaria em todos os PCs
+    // monstro sem arquivo no disco (spider 6, ogre 12, fora da tabela) ou sem traje livre (jelly so tem 1) nao entra (nem cria um
+    // lobby): a carga do jogo travaria em todos os PCs
     TEST(lobby_refuses_monsters_the_disc_does_not_have)
     {
         ServerConfig cfg = testConfig();
         RunningServer rs(cfg);
         LineSocket a, b;
-        for (LineSocket *s : {&a, &b})
-        {
-            CHECK(s->connect("127.0.0.1", cfg.port, 2000));
-            s->sendLine("HELLO 1 b1");
-        }
+        hello(a, cfg.port);
+        hello(b, cfg.port);
         for (const char *bad : {"6", "12", "0", "16"})
         {
-            a.sendLine(std::string("JOIN 0 Ana ") + bad);
+            a.sendLine(std::string("CREATE Sala Ana ") + bad);
             CHECK(readUntil(a, "ERROR").find("monstro") != std::string::npos);
         }
-        a.sendLine("JOIN 0 Ana 14");
-        CHECK(readUntil(a, "JOINED") == "JOINED 0");
-        b.sendLine("JOIN 0 Bia 14");
+        const std::string code = createLobby(a, "Sala", "Ana", 14);
+        CHECK(code.size() == 4u);
+        for (const char *bad : {"6", "12"})
+        {
+            b.sendLine("JOIN " + code + " Bia " + bad);
+            CHECK(readUntil(b, "ERROR").find("monstro") != std::string::npos);
+        }
+        b.sendLine("JOIN " + code + " Bia 14");
         CHECK(readUntil(b, "ERROR").find("traje") != std::string::npos);
-        b.sendLine("JOIN 0 Bia 3");
-        CHECK(readUntil(b, "JOINED") == "JOINED 0");
-        a.sendLine("LEAVE");
-        a.sendLine("JOIN 0 Ana 3");
-        CHECK(readUntil(a, "JOINED") == "JOINED 0");
+        b.sendLine("JOIN " + code + " Bia 3");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
     }
 
     // trajes como o userintMainDirect os da: os pedidos primeiro, depois o menor livre (o Goliath, 13, comeca no 1: o 0 e um prototipo)
@@ -473,14 +608,11 @@ namespace
         ServerConfig cfg = testConfig();
         RunningServer rs(cfg);
         LineSocket a, b;
-        for (LineSocket *s : {&a, &b})
-        {
-            CHECK(s->connect("127.0.0.1", cfg.port, 2000));
-            s->sendLine("HELLO 1 b1");
-        }
-        a.sendLine("JOIN 0 Ana 13");
-        CHECK(readUntil(a, "JOINED") == "JOINED 0");
-        b.sendLine("JOIN 0 Bia 13");
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        const std::string code = createLobby(a, "Sala", "Ana", 13);
+        CHECK(code.size() == 4u);
+        b.sendLine("JOIN " + code + " Bia 13");
         CHECK(readUntil(b, "ERROR").find("traje") != std::string::npos);
     }
 
