@@ -48,3 +48,6 @@ docs/plans/
 
 # pasta do runtime criada pelo tools/setup_runtime.ps1 (clone do PS2Recomp, build, discroot)
 /runtime/
+
+# pacote para amigos (tools/package_friends.ps1)
+/dist/
