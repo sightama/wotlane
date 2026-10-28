@@ -455,7 +455,8 @@ class Launcher : Form
     // Partida em rede pelo wotm_server (native/net): o launcher fala com o lobby (LobbyClient.cs). Quem cria um lobby e o dono (codigo de
     // 4 letras, senha opcional): so ele escolhe a fase (a "Stage" do grupo Match) e as vitorias e comeca. Os outros entram pelo codigo ou
     // pela lista. Na partida o launcher fica minimizado e continua no lobby; quando o jogo fecha (QUIT no jogo) ele volta, no mesmo lobby.
-    // "Host server here" roda o wotm_server desta pasta (tools\build_net.bat o compila).
+    // "Host on this PC" roda o wotm_server desta pasta escondido, filho do launcher (ServerHost.cs; tools\build_net.bat o compila), cria
+    // um lobby nele e mostra os enderecos para os amigos; tenta abrir a porta no roteador por UPnP.
     readonly TextBox netServer = new TextBox { Width = 200 };
     readonly TextBox netName = new TextBox { Width = 160 };
     readonly TextBox netLobbyName = new TextBox { Width = 160 };
@@ -465,6 +466,10 @@ class Launcher : Form
     readonly NumericUpDown netWins = new NumericUpDown { Minimum = 0, Maximum = 99, Width = 60 };
     readonly Button netStart = new Button { Text = "Start match", AutoSize = true, Enabled = false };
     readonly Label netInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
+    readonly TextBox netShare = new TextBox { Width = 390, Height = 92, Multiline = true, ReadOnly = true, Visible = false, ScrollBars = ScrollBars.Vertical };
+    ServerHost hosted;
+    List<string> hostedLines = new List<string>();
+    string hostedRouter = "";
     readonly Timer netTimer = new Timer { Interval = 200 };
     readonly List<LobbyClient.LobbyInfo> netLobbies = new List<LobbyClient.LobbyInfo>();
     LobbyClient lobby;
@@ -479,7 +484,7 @@ class Launcher : Form
         gb.Controls.Add(inner);
         string v;
         netServer.Text = saved.TryGetValue(":NetServer", out v) && v.Length > 0 ? v : "127.0.0.1:7777";
-        tips.SetToolTip(netServer, "host:port of a wotm_server (your own with 'Host server here', a friend's public IP, or a VPN address). " +
+        tips.SetToolTip(netServer, "host:port of a wotm_server (your own with 'Host on this PC', a friend's public IP, or a VPN address). " +
             "The host forwards this port, TCP and UDP, on the router.");
         inner.Controls.Add(Row("Server", netServer));
         netName.Text = saved.TryGetValue(":NetName", out v) && v.Length > 0 ? v : LobbyClient.CleanName(Environment.UserName);
@@ -515,9 +520,10 @@ class Launcher : Form
 
         var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, MaximumSize = new Size(400, 0) };
         var leave = new Button { Text = "Leave lobby", AutoSize = true };
-        var host = new Button { Text = "Host server here", AutoSize = true };
+        var host = new Button { Text = "Host on this PC", AutoSize = true };
         tips.SetToolTip(netStart, "Host only: starts the match for everyone in your lobby, on the stage of the Match group. The game opens on every PC.");
-        tips.SetToolTip(host, "Runs wotm_server on this PC in its own window. Close that window to stop it.");
+        tips.SetToolTip(host, "Runs the server on this PC (hidden; it stops when you close the launcher, so keep it open while you play), " +
+            "hosts a lobby on it and shows the address to give your friends. Tries to open the port on your router (UPnP).");
         row.Controls.Add(leave);
         row.Controls.Add(host);
         inner.Controls.Add(row);
@@ -540,8 +546,15 @@ class Launcher : Form
         netInfo.ForeColor = DimColor;
         netInfo.Text = "Pick your monster and stage in Match, then host a lobby or join one. Online play uses the build in this folder.";
         inner.Controls.Add(netInfo);
+        tips.SetToolTip(netShare, "Copy this to your friends: they type the address as Server and the code in Code.");
+        inner.Controls.Add(netShare);
         netTimer.Tick += delegate { NetPoll(); };
-        FormClosed += delegate { netTimer.Stop(); if (lobby != null) lobby.Dispose(); };
+        FormClosed += delegate
+        {
+            netTimer.Stop();
+            if (lobby != null) lobby.Dispose();
+            if (hosted != null) hosted.Dispose();
+        };
         return gb;
     }
 
@@ -637,21 +650,73 @@ class Launcher : Form
         NetSend("START");
     }
 
+    // jogador como host: sobe o servidor (ou usa o que ja esta na porta), entra nele por 127.0.0.1 e cria o lobby; o UPnP roda numa
+    // thread (leva segundos) e completa os enderecos quando volta
     void NetHost()
     {
+        if (hosted != null && hosted.Running && lobbyCode.Length > 0) { netInfo.Text = "You are already hosting lobby " + lobbyCode + "."; return; }
         string exe = Path.Combine(exeDir, @"native\net\build\wotm_server.exe");
-        if (!File.Exists(exe)) { netInfo.Text = "wotm_server.exe not found: run tools\\build_net.bat first."; return; }
         string s = netServer.Text.Trim();
         int colon = s.LastIndexOf(':');
         int port = colon > 0 ? ParseInt(s.Substring(colon + 1)) : 7777;
-        if (port <= 0) port = 7777;
-        try
+        if (port <= 0 || port > 65535) port = 7777;
+        if (hosted == null || !hosted.Running || hosted.Port != port)
         {
-            Process.Start(new ProcessStartInfo(exe, "--port " + port) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(exe) });
-            netServer.Text = "127.0.0.1:" + port;
-            netInfo.Text = "Server running on port " + port + " (its own window). Friends connect to your address and this port.";
+            if (hosted != null) hosted.Dispose();
+            try { hosted = ServerHost.Start(exe, port, Path.Combine(exeDir, "wotm_server.log"), 3000); }
+            catch (LobbyError e) { hosted = null; netInfo.Text = "Failed to start the server: " + e.Message; return; }
+            hostedRouter = hosted.Owned ? "Router: trying to open port " + port + " (UPnP)..." : "A server was already running on port " + port + ": using it.";
+            if (hosted.Owned) MapRouterPort(hosted);
         }
-        catch (Exception e) { netInfo.Text = "Failed to start the server: " + e.Message; }
+        if (lobby != null && lobby.Host != "127.0.0.1") { lobby.Dispose(); lobby = null; }
+        netServer.Text = "127.0.0.1:" + port;
+        hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), null, port);
+        ShowShare();
+        NetCreate();
+    }
+
+    void MapRouterPort(ServerHost h)
+    {
+        new System.Threading.Thread(delegate()
+        {
+            string why;
+            string external = h.MapUpnp(out why);
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    if (hosted != h) return;
+                    if (external != null)
+                    {
+                        hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), external, h.Port);
+                        hostedRouter = "Router: port " + h.Port + " opened for TCP and UDP (UPnP).";
+                    }
+                    else
+                    {
+                        System.Net.IPAddress lan = ServerHost.RouterFacingAddress();
+                        hostedRouter = "Router: " + why + ". For friends over the internet, forward port " + h.Port + " (TCP and UDP) to " +
+                            (lan != null ? lan.ToString() : "this PC") + " in your router, or have everyone join your Tailscale network.";
+                    }
+                    ShowShare();
+                });
+            }
+            catch (InvalidOperationException) { }   // launcher ja fechou
+        }) { IsBackground = true }.Start();
+    }
+
+    // a caixa que o host copia para os amigos: enderecos, codigo do lobby, estado do roteador
+    void ShowShare()
+    {
+        if (hosted == null || (lobby != null && lobby.Host != "127.0.0.1")) { netShare.Visible = false; return; }
+        var l = new List<string>();
+        string code = netCode.Text.Trim();
+        l.Add("Friends type one of these as Server" + (code.Length == 4 ? " and the code " + code : "") + ":");
+        foreach (string a in hostedLines) l.Add("  " + a);
+        if (hostedLines.Count == 0) l.Add("  (no network address found)");
+        l.Add(hostedRouter);
+        if (hosted.Owned) l.Add("If Windows asks whether wotm_server may use the network, allow it.");
+        netShare.Text = string.Join(Environment.NewLine, l.ToArray());
+        netShare.Visible = true;
     }
 
     string netSettings = "";
@@ -671,8 +736,8 @@ class Launcher : Form
                     (li.Locked ? "  [password]" : "") + (li.Names.Length > 0 ? "  " + string.Join(", ", li.Names) : ""));
             }
             else if (l == "END" && netLobbies.Count == 0) netInfo.Text = "No open lobbies on this server: host one.";
-            else if (l.StartsWith("CREATED ")) netCode.Text = l.Substring(8).Trim();
-            else if (l.StartsWith("JOINED ")) { lobbyCode = l.Substring(7).Trim(); netCode.Text = lobbyCode; }
+            else if (l.StartsWith("CREATED ")) { netCode.Text = l.Substring(8).Trim(); ShowShare(); }
+            else if (l.StartsWith("JOINED ")) { lobbyCode = l.Substring(7).Trim(); netCode.Text = lobbyCode; ShowShare(); }
             else if (l.StartsWith("LEFT ")) { lobbyCode = ""; lobbyOwner = false; netStart.Enabled = false; netInfo.Text = "Left the lobby."; }
             else if (l.StartsWith("SETTINGS "))
             {

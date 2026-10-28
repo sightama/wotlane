@@ -86,7 +86,7 @@ Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build 
 - `build_runtime.bat` builds the runtime with the native layer (`build_dev`, fast link without LTCG): `wotm.exe` (the game) and `ps2EntryRunner.exe` (test build with the
   emulated VU1/GS and the renderer check).
 - `run_live.bat -Auto 0` runs the game to play with the keyboard; `tools/launcher/` is a small launcher with options such as starting a match directly (`WOTM_MATCH`) and cheats.
-- **Online play (this fork, 2 to 4 players, each on their own PC):** deterministic lockstep through a small server (`native/net`, `wotm_server`, no game
+- **Online play (this fork, 2 to 8 players, each on their own PC):** deterministic lockstep through a small server (`native/net`, `wotm_server`, no game
   code). Setup, hosting, router and lobby steps: [docs/en/ONLINE.md](docs/en/ONLINE.md).
 - `mods/` holds the project's own mods (the Goliath Prime custom monster, the "Recompiled" logo): JSON and original art only. Every launch mirrors them into
   `<runtime>\discroot\mods\` (`tools/sync_mods.ps1`), where the game reads mods from; your own mods live there too. See [docs/passos/MODS.md](docs/passos/MODS.md).

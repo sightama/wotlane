@@ -20,12 +20,17 @@ and can be shared freely.
 ## 2. The host: run the server
 
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
-2. Start it: in the launcher, section **Online**, press **Host server here**, or run `native\net\build\wotm_server.exe --port 7777`.
-   Players create the lobbies themselves from the launcher (up to 16 at a time, `--lobbies N` to change; `--players 2..8` per lobby, 8 by default). Leave its
-   window open while you play; close it to stop.
+2. Start it, one of:
+   - **From the launcher (player as host):** section **Online**, press **Host on this PC**. The launcher runs the server hidden (it
+     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play),
+     hosts a lobby on it and shows a box to copy to your friends: the addresses they can type as Server and the lobby code. It also
+     asks your router to open the port (UPnP, TCP and UDP; closed again when the launcher closes). If the router refuses, the box says
+     so and which local address to forward the port to.
+   - **Standalone:** run `native\net\build\wotm_server.exe --port 7777` and leave its window open while you play; close it to stop.
+   Players create the lobbies themselves from the launcher (up to 16 at a time, `--lobbies N` to change; `--players 2..8` per lobby, 8 by default).
 3. The first time, Windows Firewall asks about `wotm_server.exe`: allow it on private networks (and public if your network is marked
    public).
-4. Let your friends reach it, one of:
+4. If UPnP did not open the port, let your friends reach it, one of:
    - **Port forwarding (no extra software):** find your PC's local address with `ipconfig` ("IPv4 Address", for example 192.168.1.50).
      In your router's admin page (usually http://192.168.1.1 or http://192.168.0.1), add a port forwarding rule: external port **7777**,
      internal IP **your PC's IPv4 address**, internal port **7777**, protocol **TCP and UDP** (or "Both"). Friends then connect to your

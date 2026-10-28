@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Threading;
 
 static class LobbyTest
@@ -94,6 +95,53 @@ static class LobbyTest
             {
                 Check(LobbyClient.CleanName("La ne<>!_9-") == "Lane_9-", "caracteres fora");
                 Check(LobbyClient.CleanName("abcdefghijklmnopqrst").Length == 16, "16 no maximo");
+            });
+            Run("servidor_do_jogador", delegate
+            {
+                const int own = 7898;
+                string log = Path.Combine(Path.GetTempPath(), "wotm_server_teste.log");
+                using (ServerHost h = ServerHost.Start(server, own, log, 3000))
+                {
+                    Check(h.Owned, "este launcher roda o servidor");
+                    Check(ServerHost.PortOpen(own, 500), "porta aberta");
+                    using (var a = new LobbyClient("127.0.0.1", own, "b1", 2000))
+                        Check(a.Create("Casa", "Ana", 3, null, 2000).Length == 4, "lobby no servidor do jogador");
+                    Check(h.Running, "servidor rodando");
+                }
+                Check(!ServerHost.PortOpen(own, 500), "servidor fechado com o launcher");
+                Check(File.Exists(log), "log do servidor");
+            });
+            Run("servidor_ja_rodando", delegate
+            {
+                using (ServerHost h = ServerHost.Start(server, port, null, 3000))
+                {
+                    Check(!h.Owned, "usa o servidor que ja esta na porta");
+                    Check(h.Running, "servidor existente rodando");
+                }
+                Check(ServerHost.PortOpen(port, 500), "nao fecha um servidor que nao e dele");
+            });
+            Run("servidor_que_nao_sobe", delegate
+            {
+                bool threw = false;
+                try { using (ServerHost.Start(server + ".nao_existe", 7899, null, 1000)) { } }
+                catch (LobbyError) { threw = true; }
+                Check(threw, "sem o wotm_server.exe vira LobbyError");
+            });
+            Run("enderecos_para_amigos", delegate
+            {
+                Check(ServerHost.Kind(IPAddress.Parse("100.101.2.3")) == "Tailscale", "100.64.0.0/10 e Tailscale");
+                Check(ServerHost.Kind(IPAddress.Parse("100.63.0.1")) == "public", "100.63 nao e Tailscale");
+                Check(ServerHost.Kind(IPAddress.Parse("192.168.1.5")) == "LAN", "192.168/16");
+                Check(ServerHost.Kind(IPAddress.Parse("10.0.0.2")) == "LAN", "10/8");
+                Check(ServerHost.Kind(IPAddress.Parse("172.20.1.1")) == "LAN", "172.16/12");
+                Check(ServerHost.Kind(IPAddress.Parse("172.32.0.1")) == "public", "172.32 nao e LAN");
+                Check(ServerHost.Kind(IPAddress.Parse("127.0.0.1")) == null, "loopback fora");
+                Check(ServerHost.Kind(IPAddress.Parse("169.254.3.4")) == null, "link-local fora");
+                List<string> s = ServerHost.ShareLines(new[] { IPAddress.Parse("192.168.1.5"), IPAddress.Parse("127.0.0.1"),
+                                                               IPAddress.Parse("100.101.2.3") }, "203.0.113.7", 7777);
+                Check(s.Count == 3 && s[0] == "Internet: 203.0.113.7:7777" && s[1] == "Tailscale: 100.101.2.3:7777" &&
+                      s[2] == "LAN: 192.168.1.5:7777", "ordem: internet, Tailscale, LAN (" + string.Join(" | ", s.ToArray()) + ")");
+                Check(ServerHost.ShareLines(new IPAddress[0], null, 7777).Count == 0, "sem enderecos");
             });
         }
         finally
