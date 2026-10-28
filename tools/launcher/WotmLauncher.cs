@@ -695,7 +695,8 @@ class Launcher : Form
                     {
                         System.Net.IPAddress lan = ServerHost.RouterFacingAddress();
                         hostedRouter = "Router: " + why + ". For friends over the internet, forward port " + h.Port + " (TCP and UDP) to " +
-                            (lan != null ? lan.ToString() : "this PC") + " in your router, or have everyone join your Tailscale network.";
+                            (lan != null ? lan.ToString() : "this PC") + " in your router (friends then use your public IP: search 'what is my ip'), " +
+                            "or have everyone join your Tailscale network.";
                     }
                     ShowShare();
                 });
