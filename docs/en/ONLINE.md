@@ -21,7 +21,7 @@ and can be shared freely.
 
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
 2. Start it: in the launcher, section **Online**, press **Host server here**, or run `native\net\build\wotm_server.exe --port 7777`.
-   It keeps **2 lobbies** open (`--lobbies N` for more, `--players 2..8` per lobby, 8 by default) and reopens a lobby when its match ends. Leave its
+   Players create the lobbies themselves from the launcher (up to 16 at a time, `--lobbies N` to change; `--players 2..8` per lobby, 8 by default). Leave its
    window open while you play; close it to stop.
 3. The first time, Windows Firewall asks about `wotm_server.exe`: allow it on private networks (and public if your network is marked
    public).
@@ -39,21 +39,32 @@ and can be shared freely.
 ## 3. Everyone: join and play
 
 1. Open the launcher (`tools\launcher\build.bat` builds `WotM_Launcher.exe` in the repo root).
-2. In **Match**, pick **Your monster** and the **Stage** (the stage only matters for whoever starts the match).
-3. In **Online**: Server = `<host address>:7777`, type your name, pick a lobby, press **Join**. The line under the buttons lists who is
-   in the lobby. **Refresh** shows both lobbies.
-4. When everyone is in, anyone presses **Start match**. The game opens on every PC, loads the stage and waits until everyone has
-   arrived; the server measures the ping and picks the input delay.
+2. In **Match**, pick **Your monster**. The host also picks the **Stage**.
+3. In **Online**, set Server = `<server address>:7777` and type your name. Then:
+   - **To host a lobby:** type a **Lobby name** (and a **Password** if you want only friends to get in) and press **Host lobby**.
+     The server gives the lobby a 4-letter **code** (it appears in the Code box and under the buttons): tell it to your friends.
+     You are the lobby's host: you pick the stage (Match group) and the **Wins to end** (0 = endless) and press **Start match**.
+   - **To join:** type the code and press **Join by code**, or press **Refresh list**, pick a lobby and press **Join selected**
+     (double-click works too). Lobbies marked `[password]` need the host's password in the Password box.
+   The line under the buttons lists who is in the lobby, the host, the stage and the wins. If the host leaves, the next player becomes
+   the host. An empty lobby closes.
+4. When everyone is in, the host presses **Start match**. The game opens on every PC, loads the stage and waits until everyone has
+   arrived; the server measures the ping and picks the input delay. The launcher minimizes and stays in the lobby.
 5. In the game: your controller (or keyboard) drives your monster; the screen shows only your view. Top right: ping and input delay in
    frames. A "Waiting for <name>" message means someone's input is late (everyone pauses together, nobody desyncs).
+6. With a wins target, the first to reach it gets the winner's screen: **PLAY AGAIN** (same stage, everyone respawns), **REBUILD LEVEL**
+   (the stage is rebuilt) or **QUIT** (and YES): the game closes on every PC and the launcher comes back, still in the same lobby, so the
+   host can change the stage or wins and start again. QUIT from the pause menu does the same.
 
-Command line alternative to the launcher: `python tools\net_lobby.py --server <host>:7777 --name Ana --monster 3` prints the environment
-for `wotm.exe` once someone starts the match (`--start <stage>` starts it); `--list` shows the lobbies.
+Command line alternative to the launcher (`tools\net_lobby.py`, prints the environment for `wotm.exe` when the match starts):
+`--create <lobby> --name Ana --monster 3 [--password <pw>] [--stage N] [--wins N] --start-with <players>` hosts a lobby (the code goes
+to the console) and starts once that many players are in; `--code <code> --name Bia --monster 1 [--password <pw>]` joins one;
+`--list` shows the open lobbies.
 
 ## What is different online
 
-- Endless free-for-all by default: knocked-out monsters get back up, no end-of-match screen. Close the window to leave. With a wins
-  target (`WOTM_KILLTARGET`, the same on every PC) the first to reach it ends the match with the game's PLAY AGAIN / REBUILD LEVEL /
+- Endless free-for-all with Wins to end 0: knocked-out monsters get back up, no end-of-match screen; QUIT from the pause menu (or closing the window) leaves. With a wins
+  target (the host's **Wins to end**) the first to reach it ends the match with the game's PLAY AGAIN / REBUILD LEVEL /
   QUIT screen; any player's controller moves the cursor and confirms, and every PC follows the same choice.
 - Pausing works for everyone: whoever presses Start pauses every PC, and the pause menu moves the same everywhere. RECOMPILED OPTIONS
   does nothing online.
