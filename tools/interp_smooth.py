@@ -3,22 +3,24 @@
 # ABOUTME: tempo do jogo mostrado. Com interpolacao o atraso fica quase constante; sem ela, dente de serra de um quadro do jogo.
 """Uso: python tools/interp_smooth.py <live.err.log> [--max-ms 8 | --min-ms 12]
 
-Le as linhas "[interp] t=<s> a=<alfa> r=<redesenhou> ct=<fields> cam=..." (t = instante em que a apresentacao aparece; ct = tempo do
-jogo da imagem, em fields de 1/60 s) e imprime a faixa (percentil 95 menos 5) do atraso t - ct, em ms. Sai com 1 se passar do limite.
+Le as linhas "[interp] t=<s> g=<quadro> fA=<fields> fB=<fields> alfa=<a>" do wotm_live.inc (t = instante da apresentacao; o tempo do
+jogo mostrado e fA + alfa * (fB - fA), em fields de 1/60 s; sem a mistura, fB) e imprime a faixa (percentil 95 menos 5) do atraso t - ct,
+em ms. Sai com 1 se passar do limite.
 """
 import argparse
 import re
 import sys
 
-LINE = re.compile(r'\[interp\] t=([\d.]+) a=[\d.]+ r=\d ct=([-\d.]+)(?: n=(\d+) hz=(\d+))?')
+# linha do wotm_live.inc (Scene::showBlend): fields de A e B e o alfa da mistura; "(desligada)" = sem mistura, a imagem e a de B
+LIVE = re.compile(r'\[interp\] t=([\d.]+) g=\d+ fA=(\d+) fB=(\d+) alfa=([\d.]+)( \(desligada\))?')
 
 
 def read_presentations(text):
-    """(instante em s, tempo do jogo em fields) por apresentacao; com n= e hz= o instante e o vblank n / hz."""
+    """(instante em s, tempo do jogo em fields) por apresentacao."""
     out = []
-    for m in LINE.finditer(text):
-        t = int(m.group(3)) / int(m.group(4)) if m.group(3) else float(m.group(1))
-        out.append((t, float(m.group(2))))
+    for m in LIVE.finditer(text):
+        fa, fb, alpha = int(m.group(2)), int(m.group(3)), float(m.group(4))
+        out.append((float(m.group(1)), float(fb) if m.group(5) else fa + alpha * (fb - fa)))
     return out
 
 
@@ -48,7 +50,7 @@ def main():
         pres = read_presentations(f.read())
     spread, n = lag_spread_ms(pres)
     if spread is None:
-        print('nenhuma linha [interp] com ct=')
+        print('nenhuma linha [interp] t= g= fA= fB= alfa= (WOTM_INTERPLOG=1, interpolacao pedida)')
         return 1
     print(f'atraso da imagem varia {spread:.2f} ms (p5..p95 de {n} apresentacoes)')
     if a.max_ms is not None and spread > a.max_ms:
