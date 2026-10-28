@@ -17,7 +17,7 @@ class LobbyError : Exception
 // le com ReadLine (testes, pedidos com resposta) ou esvazia com Poll (o launcher, num Timer da interface).
 class LobbyClient : IDisposable
 {
-    public const int Protocol = 1;
+    public const int Protocol = 2;
     public readonly string Host;
     public readonly int Port;
     public int Lobbies { get; private set; }
@@ -102,24 +102,72 @@ class LobbyClient : IDisposable
         try { tcp.Close(); } catch (Exception) { }
     }
 
-    // LOBBY <i> <waiting|playing> <n>/<max> <nomes,...|->
+    // LOBBY <codigo> <waiting|playing> <n>/<max> <open|locked> <lobby> <dono> <nomes,...|->
     public class LobbyInfo
     {
-        public int Index, Count, Max;
-        public string State;
+        public int Count, Max;
+        public string Code, State, Name, Host;
+        public bool Locked;
         public string[] Names;
     }
 
     public static LobbyInfo ParseLobby(string line)
     {
         string[] w = line.Split(' ');
-        if (w.Length < 5 || w[0] != "LOBBY") return null;
+        if (w.Length < 8 || w[0] != "LOBBY") return null;
         string[] n = w[3].Split('/');
         return new LobbyInfo
         {
-            Index = int.Parse(w[1]), State = w[2], Count = int.Parse(n[0]), Max = int.Parse(n[1]),
-            Names = w[4] == "-" ? new string[0] : w[4].Split(',')
+            Code = w[1], State = w[2], Count = int.Parse(n[0]), Max = int.Parse(n[1]), Locked = w[4] == "locked", Name = w[5], Host = w[6],
+            Names = w[7] == "-" ? new string[0] : w[7].Split(',')
         };
+    }
+
+    // MEMBERS <codigo> <dono> <nome:monstro,...>
+    public class MemberInfo
+    {
+        public string Code, Host;
+        public string[] Names;
+    }
+
+    public static MemberInfo ParseMembers(string line)
+    {
+        string[] w = line.Split(' ');
+        if (w.Length < 4 || w[0] != "MEMBERS") return null;
+        return new MemberInfo { Code = w[1], Host = w[2], Names = w[3] == "-" ? new string[0] : w[3].Split(',') };
+    }
+
+    // fase e vitorias do lobby (SETTINGS <codigo> stage=<n> wins=<n>), as ultimas que chegaram por Create, Join ou Set
+    public Dictionary<string, string> Settings = new Dictionary<string, string>();
+
+    // Cria um lobby (quem cria e o dono) e entra nele; devolve o codigo
+    public string Create(string lobby, string name, int monster, string password, int timeoutMs)
+    {
+        Send("CREATE " + lobby + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
+        string code = Expect("CREATED", timeoutMs).Split(' ')[1];
+        Joined(timeoutMs);
+        return code;
+    }
+
+    public void Join(string code, string name, int monster, string password, int timeoutMs)
+    {
+        Send("JOIN " + code + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
+        Joined(timeoutMs);
+    }
+
+    // JOINED e o SETTINGS que o servidor manda logo depois
+    void Joined(int timeoutMs)
+    {
+        Expect("JOINED", timeoutMs);
+        Settings = KeyValues(Expect("SETTINGS", timeoutMs));
+    }
+
+    // so o dono: fase e vitorias da proxima partida; devolve o que o servidor guardou
+    public Dictionary<string, string> Set(int stage, int wins, int timeoutMs)
+    {
+        Send("SET stage=" + stage + " wins=" + wins);
+        Settings = KeyValues(Expect("SETTINGS", timeoutMs));
+        return Settings;
     }
 
     public List<LobbyInfo> List(int timeoutMs)
@@ -159,6 +207,7 @@ class LobbyClient : IDisposable
             { "WOTM_PLAYERS", m["players"] },
             { "WOTM_FIXEDSTEP", m["step"] },
             { "WOTM_SEED", m["seed"] },
+            { "WOTM_KILLTARGET", m.ContainsKey("wins") ? m["wins"] : "0" },
             { "WOTM_LOCALPLAYER", (you + 1).ToString() },
         };
     }

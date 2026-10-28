@@ -31,19 +31,22 @@ static class LobbyTest
                 using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 using (var b = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 {
-                    Check(watcher.Lobbies == 2, "dois lobbies");
+                    Check(watcher.Lobbies == 0, "nenhum lobby aberto");
+                    Check(watcher.List(2000).Count == 0, "lista inicial vazia");
+                    string code = a.Create("Sala", "Ana", 3, null, 2000);
+                    Check(code.Length == 4, "codigo de 4 letras");
+                    Check(a.Settings["stage"] == "1" && a.Settings["wins"] == "0", "fase e vitorias iniciais");
+                    b.Join(code.ToLowerInvariant(), "Bia", 1, null, 2000);
                     List<LobbyClient.LobbyInfo> l = watcher.List(2000);
-                    Check(l.Count == 2 && l[0].State == "waiting" && l[0].Names.Length == 0, "lista inicial");
-                    a.Send("JOIN 0 Ana 3");
-                    a.Expect("JOINED", 2000);
-                    b.Send("JOIN 0 Bia 1");
-                    b.Expect("JOINED", 2000);
-                    l = watcher.List(2000);
-                    Check(l[0].Count == 2 && l[0].Names.Length == 2 && l[0].Names[1] == "Bia", "lista com os dois");
-                    a.Send("START 4");
+                    Check(l.Count == 1 && l[0].Code == code && l[0].State == "waiting" && !l[0].Locked, "lobby na lista");
+                    Check(l[0].Name == "Sala" && l[0].Host == "Ana" && l[0].Names.Length == 2 && l[0].Names[1] == "Bia", "nome, dono e membros");
+                    Dictionary<string, string> s = a.Set(4, 2, 2000);
+                    Check(s["stage"] == "4" && s["wins"] == "2", "SET do dono");
+                    a.Send("START");
                     Dictionary<string, string> ea = LobbyClient.MatchEnv(LobbyClient.KeyValues(a.Expect("MATCH", 2000)), "127.0.0.1");
                     Dictionary<string, string> eb = LobbyClient.MatchEnv(LobbyClient.KeyValues(b.Expect("MATCH", 2000)), "127.0.0.1");
                     Check(ea["WOTM_MATCH"] == "3,1,4" && eb["WOTM_MATCH"] == "3,1,4", "WOTM_MATCH");
+                    Check(ea["WOTM_KILLTARGET"] == "2" && eb["WOTM_KILLTARGET"] == "2", "vitorias");
                     Check(ea["WOTM_PLAYERS"] == "2" && ea["WOTM_FIXEDSTEP"] == "1", "jogadores e passo");
                     Check(ea["WOTM_SEED"] == eb["WOTM_SEED"], "mesma semente");
                     Check(ea["WOTM_LOCALPLAYER"] == "1" && eb["WOTM_LOCALPLAYER"] == "2", "jogador local");
@@ -51,13 +54,31 @@ static class LobbyTest
                     Check(ea["WOTM_NET"] == "127.0.0.1:" + port && ea["WOTM_NETTOKEN"] != eb["WOTM_NETTOKEN"], "endereco e fichas");
                 }
             });
+            Run("senha_e_dono", delegate
+            {
+                using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
+                using (var b = new LobbyClient("127.0.0.1", port, "b1", 2000))
+                {
+                    string code = a.Create("Amigos", "Ana", 3, "pw", 2000);
+                    bool wrong = false;
+                    try { b.Join(code, "Bia", 1, null, 2000); }
+                    catch (LobbyError e) { wrong = e.Message.Contains("senha"); }
+                    Check(wrong, "sem senha nao entra");
+                    b.Join(code, "Bia", 1, "pw", 2000);
+                    bool notHost = false;
+                    try { b.Set(2, 1, 2000); }
+                    catch (LobbyError e) { notHost = e.Message.Contains("dono"); }
+                    Check(notHost, "so o dono muda as opcoes");
+                    LobbyClient.MemberInfo m = LobbyClient.ParseMembers("MEMBERS " + code + " Ana Ana:3,Bia:1");
+                    Check(m != null && m.Code == code && m.Host == "Ana" && m.Names.Length == 2 && m.Names[1] == "Bia:1", "linha MEMBERS");
+                }
+            });
             Run("erro_vira_excecao", delegate
             {
                 using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 {
-                    a.Send("JOIN 7 Ana 3");
                     bool threw = false;
-                    try { a.Expect("JOINED", 2000); }
+                    try { a.Join("QQQQ", "Ana", 3, null, 2000); }
                     catch (LobbyError e) { threw = e.Message.Contains("inexistente"); }
                     Check(threw, "lobby inexistente vira LobbyError");
                 }

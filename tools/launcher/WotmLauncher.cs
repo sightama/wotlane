@@ -452,16 +452,25 @@ class Launcher : Form
         return string.Join(",", parts.ToArray());
     }
 
-    // Partida em rede pelo wotm_server (native/net): o launcher fala com o lobby (LobbyClient.cs) e, quando alguem comeca a partida,
-    // abre o jogo com o ambiente da linha MATCH (WOTM_NET, ficha, monstros, fase, semente, passo, jogador local). O monstro e o "Your
-    // monster" e a fase e a "Stage" do grupo Match. "Host server here" roda o wotm_server desta pasta (tools\build_net.bat o compila).
+    // Partida em rede pelo wotm_server (native/net): o launcher fala com o lobby (LobbyClient.cs). Quem cria um lobby e o dono (codigo de
+    // 4 letras, senha opcional): so ele escolhe a fase (a "Stage" do grupo Match) e as vitorias e comeca. Os outros entram pelo codigo ou
+    // pela lista. Na partida o launcher fica minimizado e continua no lobby; quando o jogo fecha (QUIT no jogo) ele volta, no mesmo lobby.
+    // "Host server here" roda o wotm_server desta pasta (tools\build_net.bat o compila).
     readonly TextBox netServer = new TextBox { Width = 200 };
     readonly TextBox netName = new TextBox { Width = 160 };
-    readonly ComboBox netLobby = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 230 };
+    readonly TextBox netLobbyName = new TextBox { Width = 160 };
+    readonly TextBox netPassword = new TextBox { Width = 110 };
+    readonly TextBox netCode = new TextBox { Width = 70, CharacterCasing = CharacterCasing.Upper, MaxLength = 4 };
+    readonly ListBox netList = new ListBox { Width = 390, Height = 80 };
+    readonly NumericUpDown netWins = new NumericUpDown { Minimum = 0, Maximum = 99, Width = 60 };
+    readonly Button netStart = new Button { Text = "Start match", AutoSize = true, Enabled = false };
     readonly Label netInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
     readonly Timer netTimer = new Timer { Interval = 200 };
+    readonly List<LobbyClient.LobbyInfo> netLobbies = new List<LobbyClient.LobbyInfo>();
     LobbyClient lobby;
-    string lobbyHost = "";
+    string lobbyHost = "", lobbyCode = "";
+    bool lobbyOwner;
+    Process onlineGame;
 
     GroupBox OnlineGroup(Dictionary<string, string> saved, ToolTip tips)
     {
@@ -475,29 +484,61 @@ class Launcher : Form
         inner.Controls.Add(Row("Server", netServer));
         netName.Text = saved.TryGetValue(":NetName", out v) && v.Length > 0 ? v : LobbyClient.CleanName(Environment.UserName);
         inner.Controls.Add(Row("Your name", netName));
-        inner.Controls.Add(Row("Lobby", netLobby));
-        int savedLobby = saved.TryGetValue(":NetLobby", out v) ? ParseInt(v) : 0;
-        for (int i = 0; i < 2; ++i) netLobby.Items.Add("Lobby " + (i + 1));
-        netLobby.SelectedIndex = Math.Min(Math.Max(savedLobby, 0), netLobby.Items.Count - 1);
+
+        netLobbyName.Text = saved.TryGetValue(":NetLobbyName", out v) && v.Length > 0 ? v : "Friends";
+        var hostLobby = new Button { Text = "Host lobby", AutoSize = true };
+        tips.SetToolTip(hostLobby, "Creates a lobby on the server; you are its host. Friends join with the 4-letter code or from the list.");
+        tips.SetToolTip(netPassword, "Optional: friends then need this password to join (letters, digits, _ or -). Not real security.");
+        var hostRow = Row("Lobby name", netLobbyName);
+        hostRow.Controls.Add(hostLobby);
+        inner.Controls.Add(hostRow);
+        inner.Controls.Add(Row("Password", netPassword));
+
+        var joinCode = new Button { Text = "Join by code", AutoSize = true };
+        var codeRow = Row("Code", netCode);
+        codeRow.Controls.Add(joinCode);
+        inner.Controls.Add(codeRow);
+
+        var listRow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, MaximumSize = new Size(400, 0) };
+        var refresh = new Button { Text = "Refresh list", AutoSize = true };
+        var joinSel = new Button { Text = "Join selected", AutoSize = true };
+        listRow.Controls.Add(refresh);
+        listRow.Controls.Add(joinSel);
+        inner.Controls.Add(netList);
+        inner.Controls.Add(listRow);
+
+        netWins.Value = saved.TryGetValue(":NetWins", out v) ? Math.Min(Math.Max(ParseInt(v), 0), 99) : 0;
+        tips.SetToolTip(netWins, "Host only: wins needed to end the match (0 = endless). The winner's screen offers PLAY AGAIN, REBUILD LEVEL or QUIT.");
+        var winsRow = Row("Wins to end", netWins);
+        winsRow.Controls.Add(netStart);
+        inner.Controls.Add(winsRow);
 
         var row = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = true, MaximumSize = new Size(400, 0) };
-        var refresh = new Button { Text = "Refresh", AutoSize = true };
-        var join = new Button { Text = "Join", AutoSize = true };
-        var start = new Button { Text = "Start match", AutoSize = true };
-        var leave = new Button { Text = "Leave", AutoSize = true };
+        var leave = new Button { Text = "Leave lobby", AutoSize = true };
         var host = new Button { Text = "Host server here", AutoSize = true };
-        tips.SetToolTip(join, "Joins the lobby with your monster (Match group). Everyone in the lobby needs the same wotlane build.");
-        tips.SetToolTip(start, "Starts the match for everyone in your lobby, on the stage of the Match group. The game opens on every PC.");
-        tips.SetToolTip(host, "Runs wotm_server (2 lobbies) on this PC in its own window. Close that window to stop it.");
-        refresh.Click += delegate { NetRefresh(); };
-        join.Click += delegate { NetJoin(); };
-        start.Click += delegate { NetSend("START " + LevelIds[matchLevel.SelectedIndex]); };
-        leave.Click += delegate { NetSend("LEAVE"); netInfo.Text = "Left the lobby."; };
-        host.Click += delegate { NetHost(); };
-        foreach (Button b in new[] { refresh, join, start, leave, host }) row.Controls.Add(b);
+        tips.SetToolTip(netStart, "Host only: starts the match for everyone in your lobby, on the stage of the Match group. The game opens on every PC.");
+        tips.SetToolTip(host, "Runs wotm_server on this PC in its own window. Close that window to stop it.");
+        row.Controls.Add(leave);
+        row.Controls.Add(host);
         inner.Controls.Add(row);
+
+        hostLobby.Click += delegate { NetCreate(); };
+        joinCode.Click += delegate { NetJoin(netCode.Text.Trim()); };
+        joinSel.Click += delegate
+        {
+            int i = netList.SelectedIndex;
+            if (i < 0 || i >= netLobbies.Count) { netInfo.Text = "Pick a lobby in the list (Refresh list first)."; return; }
+            NetJoin(netLobbies[i].Code);
+        };
+        netList.DoubleClick += delegate { joinSel.PerformClick(); };
+        refresh.Click += delegate { NetRefresh(); };
+        netStart.Click += delegate { NetStart(); };
+        netWins.ValueChanged += delegate { if (lobbyOwner) NetSend("SET wins=" + (int)netWins.Value); };
+        matchLevel.SelectedIndexChanged += delegate { if (lobbyOwner) NetSend("SET stage=" + LevelIds[matchLevel.SelectedIndex]); };
+        leave.Click += delegate { NetSend("LEAVE"); };
+        host.Click += delegate { NetHost(); };
         netInfo.ForeColor = DimColor;
-        netInfo.Text = "Pick your monster and stage in Match, then Join. Online play uses the build in this folder.";
+        netInfo.Text = "Pick your monster and stage in Match, then host a lobby or join one. Online play uses the build in this folder.";
         inner.Controls.Add(netInfo);
         netTimer.Tick += delegate { NetPoll(); };
         FormClosed += delegate { netTimer.Stop(); if (lobby != null) lobby.Dispose(); };
@@ -524,9 +565,6 @@ class Launcher : Form
         {
             lobby = new LobbyClient(h, port, BuildId(), 3000);
             lobbyHost = h;
-            netLobby.Items.Clear();
-            for (int i = 0; i < lobby.Lobbies; ++i) netLobby.Items.Add("Lobby " + (i + 1));
-            netLobby.SelectedIndex = 0;
             netTimer.Start();
             return true;
         }
@@ -546,19 +584,57 @@ class Launcher : Form
 
     void NetRefresh()
     {
-        int keep = netLobby.SelectedIndex;
+        netLobbies.Clear();
+        netList.Items.Clear();
         NetSend("LIST");
-        if (keep >= 0 && keep < netLobby.Items.Count) netLobby.SelectedIndex = keep;
     }
 
-    void NetJoin()
+    // nome e monstro deste jogador, ou null com a mensagem do que falta
+    string NetMe(out int monster)
     {
+        monster = 0;
         string name = LobbyClient.CleanName(netName.Text);
-        if (name.Length == 0) { netInfo.Text = "Type a name (letters, digits, _ or -)."; return; }
+        if (name.Length == 0) { netInfo.Text = "Type a name (letters, digits, _ or -)."; return null; }
         netName.Text = name;
         int k = matchPlayer.SelectedIndex;
-        if (k < 0 || k >= MonsterIds.Length) { netInfo.Text = "Online needs a monster from the disc (not Random or a mod monster)."; return; }
-        NetSend("JOIN " + Math.Max(0, netLobby.SelectedIndex) + " " + name + " " + MonsterIds[k]);
+        if (k < 0 || k >= MonsterIds.Length) { netInfo.Text = "Online needs a monster from the disc (not Random or a mod monster)."; return null; }
+        monster = MonsterIds[k];
+        return name;
+    }
+
+    string NetPassword()
+    {
+        string p = LobbyClient.CleanName(netPassword.Text);
+        netPassword.Text = p;
+        return p.Length > 0 ? " " + p : "";
+    }
+
+    void NetCreate()
+    {
+        int monster;
+        string name = NetMe(out monster);
+        if (name == null) return;
+        string lobbyName = LobbyClient.CleanName(netLobbyName.Text);
+        if (lobbyName.Length == 0) lobbyName = "Lobby";
+        netLobbyName.Text = lobbyName;
+        NetSend("CREATE " + lobbyName + " " + name + " " + monster + NetPassword());
+    }
+
+    void NetJoin(string code)
+    {
+        int monster;
+        string name = NetMe(out monster);
+        if (name == null) return;
+        if (code.Length != 4) { netInfo.Text = "Type the 4-letter lobby code."; return; }
+        NetSend("JOIN " + code + " " + name + " " + monster + NetPassword());
+    }
+
+    // o dono manda a fase e as vitorias de agora e comeca
+    void NetStart()
+    {
+        if (!lobbyOwner) { netInfo.Text = "Only the lobby host starts the match."; return; }
+        NetSend("SET stage=" + LevelIds[matchLevel.SelectedIndex] + " wins=" + (int)netWins.Value);
+        NetSend("START");
     }
 
     void NetHost()
@@ -573,35 +649,59 @@ class Launcher : Form
         {
             Process.Start(new ProcessStartInfo(exe, "--port " + port) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(exe) });
             netServer.Text = "127.0.0.1:" + port;
-            netInfo.Text = "Server running on port " + port + " (its own window). Friends join with your address and this port.";
+            netInfo.Text = "Server running on port " + port + " (its own window). Friends connect to your address and this port.";
         }
         catch (Exception e) { netInfo.Text = "Failed to start the server: " + e.Message; }
     }
 
-    // linhas do lobby (Timer da interface): membros, lista, erros e o inicio da partida
+    string netSettings = "";
+
+    // linhas do lobby (Timer da interface): lista, membros, opcoes, erros e o inicio da partida
     void NetPoll()
     {
         if (lobby == null) return;
         foreach (string l in lobby.Poll())
         {
-            if (l.StartsWith("MEMBERS "))
-            {
-                string[] w = l.Split(' ');
-                netInfo.Text = "In lobby " + (ParseInt(w[1]) + 1) + ": " + (w.Length > 2 && w[2] != "-" ? w[2].Replace(",", ", ") : "nobody") +
-                    ". Anyone can press Start match.";
-            }
-            else if (l.StartsWith("LOBBY "))
+            if (l.StartsWith("LOBBY "))
             {
                 LobbyClient.LobbyInfo li = LobbyClient.ParseLobby(l);
-                if (li != null && li.Index < netLobby.Items.Count)
-                    netLobby.Items[li.Index] = "Lobby " + (li.Index + 1) + ": " + li.State + " " + li.Count + "/" + li.Max +
-                        (li.Names.Length > 0 ? " (" + string.Join(", ", li.Names) + ")" : "");
+                if (li == null) continue;
+                netLobbies.Add(li);
+                netList.Items.Add(li.Code + "  " + li.Name + " (host " + li.Host + ")  " + li.State + " " + li.Count + "/" + li.Max +
+                    (li.Locked ? "  [password]" : "") + (li.Names.Length > 0 ? "  " + string.Join(", ", li.Names) : ""));
             }
-            else if (l.StartsWith("JOINED ")) netInfo.Text = "Joined lobby " + (ParseInt(l.Substring(7)) + 1) + ".";
+            else if (l == "END" && netLobbies.Count == 0) netInfo.Text = "No open lobbies on this server: host one.";
+            else if (l.StartsWith("CREATED ")) netCode.Text = l.Substring(8).Trim();
+            else if (l.StartsWith("JOINED ")) { lobbyCode = l.Substring(7).Trim(); netCode.Text = lobbyCode; }
+            else if (l.StartsWith("LEFT ")) { lobbyCode = ""; lobbyOwner = false; netStart.Enabled = false; netInfo.Text = "Left the lobby."; }
+            else if (l.StartsWith("SETTINGS "))
+            {
+                Dictionary<string, string> kv = LobbyClient.KeyValues(l);
+                int wins = kv.ContainsKey("wins") ? ParseInt(kv["wins"]) : 0;
+                netSettings = "stage " + (kv.ContainsKey("stage") ? kv["stage"] : "?") + ", " + (wins > 0 ? wins + " wins to end" : "endless");
+            }
+            else if (l.StartsWith("MEMBERS "))
+            {
+                LobbyClient.MemberInfo m = LobbyClient.ParseMembers(l);
+                if (m == null) continue;
+                lobbyOwner = m.Host == LobbyClient.CleanName(netName.Text);
+                netStart.Enabled = lobbyOwner;
+                var names = new List<string>();
+                foreach (string n in m.Names) names.Add(n.Split(':')[0]);
+                netInfo.Text = "Lobby " + m.Code + " (code for friends): " + string.Join(", ", names.ToArray()) + ". Host: " + m.Host +
+                    (netSettings.Length > 0 ? " (" + netSettings + ")" : "") + "." + (lobbyOwner ? " Press Start match when everyone is in." : " Waiting for the host to start.");
+            }
             else if (l.StartsWith("ERROR ")) netInfo.Text = "Server: " + l.Substring(6);
-            else if (l.StartsWith("MATCH ")) { PlayOnline(LobbyClient.MatchEnv(LobbyClient.KeyValues(l), lobbyHost)); return; }
+            else if (l.StartsWith("MATCH ")) PlayOnline(LobbyClient.MatchEnv(LobbyClient.KeyValues(l), lobbyHost));
         }
-        if (lobby.Closed) { netInfo.Text = "Connection to the server closed."; netTimer.Stop(); lobby = null; }
+        if (lobby.Closed)
+        {
+            netInfo.Text = "Connection to the server closed.";
+            netTimer.Stop();
+            lobby = null;
+            lobbyOwner = false;
+            netStart.Enabled = false;
+        }
     }
     static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
 
@@ -702,7 +802,8 @@ class Launcher : Form
         lines.Add(":CheatWin|" + (int)cheatWin.Value);
         lines.Add(":NetServer|" + netServer.Text.Trim());
         lines.Add(":NetName|" + netName.Text.Trim());
-        lines.Add(":NetLobby|" + Math.Max(0, netLobby.SelectedIndex));
+        lines.Add(":NetLobbyName|" + netLobbyName.Text.Trim());
+        lines.Add(":NetWins|" + (int)netWins.Value);
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
@@ -774,15 +875,34 @@ class Launcher : Form
         if (psi != null) Launch(psi);
     }
 
-    // partida em rede: o ambiente da linha MATCH no lugar da partida direta; sem IA no controle e sem trapacas (valeriam so neste PC)
+    // partida em rede: o ambiente da linha MATCH no lugar da partida direta; sem IA no controle e sem trapacas (valeriam so neste PC).
+    // O launcher nao fecha: fica minimizado e no lobby (a conexao continua) e volta quando o jogo fecha (QUIT no jogo ou a janela).
     void PlayOnline(Dictionary<string, string> env)
     {
+        if (onlineGame != null && !onlineGame.HasExited) { netInfo.Text = "The game is already running."; return; }
         ProcessStartInfo psi = GameStartInfo(true);
         if (psi == null) return;
         foreach (var kv in env) psi.EnvironmentVariables[kv.Key] = kv.Value;
         psi.EnvironmentVariables.Remove("WOTM_AIVSAI");
         psi.EnvironmentVariables.Remove("WOTM_CHEATS");
-        Launch(psi);
+        try
+        {
+            onlineGame = Process.Start(psi);
+            onlineGame.EnableRaisingEvents = true;
+            onlineGame.Exited += delegate
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    WindowState = FormWindowState.Normal;
+                    Activate();
+                    netInfo.Text = lobbyCode.Length > 0 ? "Match over. Back in lobby " + lobbyCode + (lobbyOwner ? ": press Start match for another." : ": waiting for the host.")
+                                                        : "Match over.";
+                });
+            };
+            WindowState = FormWindowState.Minimized;
+            netInfo.Text = "Match running...";
+        }
+        catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
 
     void Launch(ProcessStartInfo psi)
