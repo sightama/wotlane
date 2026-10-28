@@ -4,6 +4,7 @@
 # Uso: powershell -File tools\net_check.ps1 [-Players 2] [-Monsters 3,1] [-Stage 1] [-Secs 70] [-Port 7811] [-Exe <wotm.exe>]...
 #   -Exe: um wotm.exe por jogador (separados por virgula; o ultimo vale para os que sobram), para provar que dois builds em pastas
 #     diferentes jogam juntos. Padrao: o build_dev do runtime.
+#   -Wins <n>: vitorias para acabar a partida (o dono do lobby as escolhe; viram WOTM_KILLTARGET em todos). 0 = sem fim.
 #   -Drop <s>: fecha o ultimo jogador depois de s segundos e confere que os outros seguem (ele vira neutro no quadro combinado).
 #   -ExtraEnv "A=1;B=2": variaveis a mais para todos os jogadores (iguais em todos, senao o servidor recusa a configuracao).
 #   -PlayerEnv "2:A=1;B=2|||3:C=1": variaveis so para o jogador N (o que muda num PC so: mouse, opcoes deste PC).
@@ -14,6 +15,7 @@ param(
     [int]$Players = 2,
     [string]$Monsters = '3,1,2,5,4,7,8,9',   # um por jogador, ate 8 (validos: native/net/wotm_monsters.hpp)
     [int]$Stage = 1,
+    [int]$Wins = 0,
     [int]$Secs = 70,
     [int]$Port = 7811,
     [string]$Exe = '',
@@ -58,7 +60,7 @@ try {
     Start-Sleep -Milliseconds 500
     $names = (1..$Players | ForEach-Object { "J$_" }) -join ','
     $mons = ($Monsters -split ',')[0..($Players - 1)] -join ','
-    & python (Join-Path $PSScriptRoot 'net_lobby.py') --server "127.0.0.1:$Port" --group $names --monsters $mons --stage $Stage --env-dir $out
+    & python (Join-Path $PSScriptRoot 'net_lobby.py') --server "127.0.0.1:$Port" --group $names --monsters $mons --stage $Stage --wins $Wins --env-dir $out
     if ($LASTEXITCODE -ne 0) { throw 'o lobby nao formou a partida (tools\net_lobby.py)' }
 
     # roteiros: cada jogador anda, bate e pula em tempos diferentes (segundos desde a abertura; a luta comeca por volta de 15 s)
