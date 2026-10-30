@@ -10,7 +10,12 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#if defined(USE_SSE2NEON)   // ARM: PS2Recomp's CMake fetches sse2neon and defines this
+#include "sse2neon.h"
+#include <arm_neon.h>
+#else
 #include <immintrin.h>
+#endif
 
 // sem contracao em FMA nem reassociacao, mesmo se o arquivo cair num build com /fp:fast (o CMake ja pede /fp:precise)
 #ifdef _MSC_VER
@@ -120,15 +125,74 @@ namespace
         int z, s, u, o;   // mascaras por lane (x = bit 0), so dentro de D
     };
 
-    template <int D>
-    WOTM_VU0_FI Cls classify4(__m256d exact)
+    // D4: the exact value of the 4 lanes in double. x86 uses one AVX register. ARM has no AVX, so it uses two NEON pairs (x,y | z,w)
+    // with the same IEEE semantics: the rounding mode set in wotmVu0NativeRun applies to both, and the ordered comparisons are false
+    // on NaN, like _CMP_*_OQ.
+#if defined(USE_SSE2NEON)
+    struct D4
+    {
+        float64x2_t lo, hi;
+    };
+
+    WOTM_VU0_FI D4 W(__m128 v)
+    {
+        const float32x4_t f = vreinterpretq_f32_m128(v);
+        return {vcvt_f64_f32(vget_low_f32(f)), vcvt_high_f64_f32(f)};
+    }
+    WOTM_VU0_FI D4 dAdd(D4 a, D4 b) { return {vaddq_f64(a.lo, b.lo), vaddq_f64(a.hi, b.hi)}; }
+    WOTM_VU0_FI D4 dSub(D4 a, D4 b) { return {vsubq_f64(a.lo, b.lo), vsubq_f64(a.hi, b.hi)}; }
+    WOTM_VU0_FI D4 dMul(D4 a, D4 b) { return {vmulq_f64(a.lo, b.lo), vmulq_f64(a.hi, b.hi)}; }
+    WOTM_VU0_FI __m128 toFloat4(D4 v) { return vreinterpretq_m128_f32(vcvt_high_f32_f64(vcvt_f32_f64(v.lo), v.hi)); }
+
+    // top bit of each 64-bit lane -> one bit per lane (x = bit 0), like _mm256_movemask_pd
+    WOTM_VU0_FI int mask4(uint64x2_t lo, uint64x2_t hi)
+    {
+        return (int)((vgetq_lane_u64(lo, 0) >> 63) | ((vgetq_lane_u64(lo, 1) >> 63) << 1) | ((vgetq_lane_u64(hi, 0) >> 63) << 2) |
+                     ((vgetq_lane_u64(hi, 1) >> 63) << 3));
+    }
+
+    // per-lane masks of zero, overflow, underflow (including zero) and sign, before the D and ~z masking
+    WOTM_VU0_FI Cls rawClassify(D4 exact)
+    {
+        const float64x2_t mlo = vabsq_f64(exact.lo), mhi = vabsq_f64(exact.hi);
+        const float64x2_t zero = vdupq_n_f64(0.0), fmax = vdupq_n_f64((double)FLT_MAX), fmin = vdupq_n_f64((double)FLT_MIN);
+        Cls c;
+        c.z = mask4(vceqq_f64(mlo, zero), vceqq_f64(mhi, zero));
+        c.o = mask4(vcgtq_f64(mlo, fmax), vcgtq_f64(mhi, fmax));
+        c.u = mask4(vcltq_f64(mlo, fmin), vcltq_f64(mhi, fmin));
+        c.s = mask4(vreinterpretq_u64_f64(exact.lo), vreinterpretq_u64_f64(exact.hi));
+        return c;
+    }
+#else
+    using D4 = __m256d;
+
+    WOTM_VU0_FI D4 W(__m128 v) { return _mm256_cvtps_pd(v); }
+    WOTM_VU0_FI D4 dAdd(D4 a, D4 b) { return _mm256_add_pd(a, b); }
+    WOTM_VU0_FI D4 dSub(D4 a, D4 b) { return _mm256_sub_pd(a, b); }
+    WOTM_VU0_FI D4 dMul(D4 a, D4 b) { return _mm256_mul_pd(a, b); }
+    WOTM_VU0_FI __m128 toFloat4(D4 v) { return _mm256_cvtpd_ps(v); }
+
+    // per-lane masks of zero, overflow, underflow (including zero) and sign, before the D and ~z masking
+    WOTM_VU0_FI Cls rawClassify(D4 exact)
     {
         const __m256d m = _mm256_andnot_pd(_mm256_set1_pd(-0.0), exact);
         Cls c;
-        c.z = _mm256_movemask_pd(_mm256_cmp_pd(m, _mm256_setzero_pd(), _CMP_EQ_OQ)) & D;
-        c.o = _mm256_movemask_pd(_mm256_cmp_pd(m, _mm256_set1_pd((double)FLT_MAX), _CMP_GT_OQ)) & D;
-        c.u = _mm256_movemask_pd(_mm256_cmp_pd(m, _mm256_set1_pd((double)FLT_MIN), _CMP_LT_OQ)) & D & ~c.z;
-        c.s = _mm256_movemask_pd(exact) & D;
+        c.z = _mm256_movemask_pd(_mm256_cmp_pd(m, _mm256_setzero_pd(), _CMP_EQ_OQ));
+        c.o = _mm256_movemask_pd(_mm256_cmp_pd(m, _mm256_set1_pd((double)FLT_MAX), _CMP_GT_OQ));
+        c.u = _mm256_movemask_pd(_mm256_cmp_pd(m, _mm256_set1_pd((double)FLT_MIN), _CMP_LT_OQ));
+        c.s = _mm256_movemask_pd(exact);
+        return c;
+    }
+#endif
+
+    template <int D>
+    WOTM_VU0_FI Cls classify4(D4 exact)
+    {
+        Cls c = rawClassify(exact);
+        c.z &= D;
+        c.o &= D;
+        c.u &= D & ~c.z;
+        c.s &= D;
         return c;
     }
 
@@ -144,36 +208,34 @@ namespace
 
     // resultado como normalizeFmacExactResult (zero/underflow: so o sinal; overflow: +-max) e flags no Fm
     template <int D>
-    WOTM_VU0_FI __m128 fin4(__m128 r, __m256d exact, Fm &f)
+    WOTM_VU0_FI __m128 fin4(__m128 r, D4 exact, Fm &f)
     {
         const Cls c = classify4<D>(exact);
         f.cur |= flagsOf(c);
         f.mac |= kRev[c.z | c.u] | (kRev[c.s] << 4) | (kRev[c.u] << 8) | (kRev[c.o] << 12);
         if ((c.z | c.u | c.o) == 0)
             return r;
-        const __m128i sign = _mm_and_si128(_mm_castps_si128(_mm256_cvtpd_ps(exact)), _mm_set1_epi32((int)0x80000000u));
+        const __m128i sign = _mm_and_si128(_mm_castps_si128(toFloat4(exact)), _mm_set1_epi32((int)0x80000000u));
         __m128i bits = _mm_blendv_epi8(_mm_castps_si128(r), sign, laneMask(c.z | c.u));
         bits = _mm_blendv_epi8(bits, _mm_or_si128(sign, _mm_set1_epi32(0x7F7FFFFF)), laneMask(c.o));
         return _mm_castsi128_ps(bits);
     }
 
-    WOTM_VU0_FI __m256d W(__m128 v) { return _mm256_cvtps_pd(v); }
-
     template <int D>
-    WOTM_VU0_FI __m128 ADD4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_add_ps(a, b), _mm256_add_pd(W(a), W(b)), f); }
+    WOTM_VU0_FI __m128 ADD4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_add_ps(a, b), dAdd(W(a), W(b)), f); }
     template <int D>
-    WOTM_VU0_FI __m128 SUB4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_sub_ps(a, b), _mm256_sub_pd(W(a), W(b)), f); }
+    WOTM_VU0_FI __m128 SUB4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_sub_ps(a, b), dSub(W(a), W(b)), f); }
     template <int D>
-    WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_mul_ps(a, b), _mm256_mul_pd(W(a), W(b)), f); }
+    WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_mul_ps(a, b), dMul(W(a), W(b)), f); }
 
     // madd/msub: acc +- a*b (dois arredondamentos no float), e o sticky do produto (calculateFmacProductSticky)
     template <int D>
     WOTM_VU0_FI __m128 MADD4(__m128 c, __m128 a, __m128 b, Fm &f, bool sub)
     {
-        const __m256d p = _mm256_mul_pd(W(a), W(b));
+        const D4 p = dMul(W(a), W(b));
         const __m128 pf = _mm_mul_ps(a, b);
         const __m128 r = sub ? _mm_sub_ps(c, pf) : _mm_add_ps(c, pf);
-        const __m256d e = sub ? _mm256_sub_pd(W(c), p) : _mm256_add_pd(W(c), p);
+        const D4 e = sub ? dSub(W(c), p) : dAdd(W(c), p);
         f.ext |= flagsOf(classify4<D>(p));
         return fin4<D>(r, e, f);
     }
