@@ -60,8 +60,7 @@ A native build for the machine's own CPU (Apple Silicon included, through sse2ne
 3. `sh tools/build_runtime.sh` rebuilds after changes; `sh runtime/run_live.sh --auto 0` runs the game (log in `runtime/live.err.log`).
 4. `sh tools/vu0bench.sh` checks that the native VU0 code gives bit-identical results to the interpreter on this machine.
 
-Not available yet outside Windows: the first-run ISO picker when `wotm` is opened without arguments, the crash stack trace, rumble
-and a packaged release.
+Not available yet outside Windows: rumble, the launcher and a packaged release.
 
 ## Building the decompilation (WSL/Ubuntu)
 ```sh
