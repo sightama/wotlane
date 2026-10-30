@@ -11,7 +11,7 @@
 #include "wotm_disc.hpp"   // banco do Shell do painel na pausa (panelShellBank)
 #include <cctype>
 #include <cstring>
-#include "Kernel/Stubs/CD.h"
+#include "Stubs/CD.h"   // from src/lib/Kernel, a public include dir of ps2_runtime (MSVC also found it next to the includer)
 #include <fstream>
 #define WOTM_HAVE_SND 1
 
