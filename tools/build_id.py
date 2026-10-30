@@ -68,7 +68,26 @@ def compiler(build_dir):
                 out['type'] = line.split('=', 1)[1]
             elif line.startswith('CMAKE_CXX_FLAGS_RELEASE:'):
                 out['flags'] = line.split('=', 1)[1]
+    if '/MSVC/' not in out['version'] and not re.fullmatch(r'[0-9.]+', out['version']):
+        clang = cmake_compiler(build_dir)   # gcc/clang: the cache only has the compiler's path
+        if clang:
+            out['version'] = clang
     return out
+
+
+def cmake_compiler(build_dir):
+    """'<id> <version> <cpu>' from the files CMake writes under CMakeFiles/<cmake version>/ (e.g. 'AppleClang 17.0.0.17000013 arm64'),
+    or '' when they're missing."""
+    def value(path, key):
+        m = re.search(r'set\(' + key + r' "([^"]*)"\)', path.read_text(errors='replace')) if path.exists() else None
+        return m.group(1) if m else ''
+    for d in sorted((build_dir / 'CMakeFiles').glob('*/'), reverse=True):
+        cxx = d / 'CMakeCXXCompiler.cmake'
+        if cxx.exists():
+            parts = [value(cxx, 'CMAKE_CXX_COMPILER_ID'), value(cxx, 'CMAKE_CXX_COMPILER_VERSION'),
+                     value(d / 'CMakeSystem.cmake', 'CMAKE_SYSTEM_PROCESSOR')]
+            return ' '.join(p for p in parts if p)
+    return ''
 
 
 def ps2recomp_head(runtime):

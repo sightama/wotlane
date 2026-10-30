@@ -74,6 +74,32 @@ class BuildIdTest(unittest.TestCase):
             _, runtime = make_tree(Path(a))
             self.assertEqual(build_id.compiler(runtime / 'build_dev')['version'], '14.44.35207')
 
+    def test_clang_version_and_cpu_come_from_cmake_files(self):
+        # gcc/clang: the cache only has the compiler's path (the same for every version); CMake's compiler and system files say
+        # which compiler and which CPU, and both decide the generated code
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b, tempfile.TemporaryDirectory() as c:
+            ids = []
+            for root, ver, cpu in ((a, '17.0.0.17000013', 'arm64'), (b, '17.0.0.17000014', 'arm64'), (c, '17.0.0.17000013', 'x86_64')):
+                repo, runtime = make_clang_tree(Path(root), ver, cpu)
+                ids.append(self.compute(repo, runtime))
+                if root == a:
+                    self.assertEqual(build_id.compiler(runtime / 'build_dev')['version'], 'AppleClang 17.0.0.17000013 arm64')
+            self.assertEqual(len(set(ids)), 3)
+
+
+def make_clang_tree(root, ver, cpu):
+    """make_tree with a clang build: CMakeCache with /usr/bin/c++ and the compiler/system files CMake writes under CMakeFiles/<ver>."""
+    repo, runtime = make_tree(root)
+    build = runtime / 'build_dev'
+    (build / 'CMakeCache.txt').write_text('CMAKE_BUILD_TYPE:STRING=Release\nCMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++\n'
+                                          'CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG\n')
+    files = build / 'CMakeFiles' / '4.4.5'
+    files.mkdir(parents=True)
+    (files / 'CMakeCXXCompiler.cmake').write_text(f'set(CMAKE_CXX_COMPILER "/usr/bin/c++")\nset(CMAKE_CXX_COMPILER_ID "AppleClang")\n'
+                                                  f'set(CMAKE_CXX_COMPILER_VERSION "{ver}")\n')
+    (files / 'CMakeSystem.cmake').write_text(f'set(CMAKE_SYSTEM_NAME "Darwin")\nset(CMAKE_SYSTEM_PROCESSOR "{cpu}")\n')
+    return repo, runtime
+
 
 if __name__ == '__main__':
     unittest.main()

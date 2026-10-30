@@ -46,5 +46,8 @@ if ! cmake --build "$bdir" --target ps2EntryRunner wotm >"$log" 2>&1; then
     grep -m 40 -E 'error:|error [A-Z][0-9]+|undefined reference|Undefined symbols|ld: ' "$log" >&2 || tail -n 30 "$log" >&2
     fail "build failed after $(( $(date +%s) - start ))s; full log: $log"
 fi
+# build identity for online play (wotm.buildid next to the exe; every PC in a match needs the same one), as build_runtime.ps1 does
+if bid=$(python3 "$REPO/tools/build_id.py" --runtime "$rt" --build "$build" --write); then echo "build $bid"
+else echo "warning: build_id.py failed: no wotm.buildid (online matches will refuse this build)"; fi
 echo "built in $(( $(date +%s) - start ))s:"
 for exe in wotm ps2EntryRunner; do echo "  $bdir/ps2xRuntime/$exe"; done
