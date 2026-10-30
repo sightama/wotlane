@@ -51,6 +51,18 @@ The port comes first; the decompilation only covers what modders need.
 Architecture, and what lives in the repo versus what is generated locally: [docs/PLANO.md](docs/PLANO.md). What is known about the executable: [docs/ANALYSIS.md](docs/ANALYSIS.md).
 File formats: [docs/FORMATOS.md](docs/FORMATOS.md).
 
+## Building the port (macOS and Linux)
+A native build for the machine's own CPU (Apple Silicon included, through sse2neon), with the same steps as on Windows:
+1. Install the tools. macOS: `brew install cmake ninja pkgconf ffmpeg sevenzip` plus the Xcode Command Line Tools. Linux: git, Python 3,
+   CMake 3.24+, Ninja, gcc or clang, pkg-config, the FFmpeg development packages and 7-Zip.
+2. Put your ISO in `ISO/` and run `sh tools/setup_runtime.sh`. It extracts the disc, sets up PS2Recomp in `runtime/`, generates the
+   recompiled code and runs the first build.
+3. `sh tools/build_runtime.sh` rebuilds after changes; `sh runtime/run_live.sh --auto 0` runs the game (log in `runtime/live.err.log`).
+4. `sh tools/vu0bench.sh` checks that the native VU0 code gives bit-identical results to the interpreter on this machine.
+
+Not available yet outside Windows: the first-run ISO picker when `wotm` is opened without arguments, the crash stack trace, rumble
+and a packaged release.
+
 ## Building the decompilation (WSL/Ubuntu)
 ```sh
 sudo apt install binutils-mips-linux-gnu ninja-build python3-venv
