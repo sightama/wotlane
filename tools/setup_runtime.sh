@@ -73,6 +73,7 @@ printf '%s\n' "$rt" >"$REPO/.wotm_recomp_dir"
 printf '%s\n' "$iso" >"$rt/.wotm_iso"   # run_live.sh reads the ISO from here (the game reads raw disc sectors: PS2X_CD_IMAGE)
 mkdir -p "$rt/discroot"
 cp "$disc/SCUS_971.97" "$rt/discroot/SCUS_971.97"
+cp "$REPO/tools/runtime_template/run_live.sh" "$rt/run_live.sh"   # play: sh runtime/run_live.sh --auto 0
 sh "$REPO/tools/sync_mods.sh" "$rt" "$REPO"
 
 step 'translated game'
@@ -106,3 +107,4 @@ if [ "$skip_build" -eq 0 ]; then
     sh "$REPO/tools/build_runtime.sh"
 fi
 step done
+echo "Play: sh runtime/run_live.sh --auto 0"
