@@ -1,18 +1,22 @@
-// wotm_prompts.inc: icones de botao 2D (Kenney "Input Prompts", CC0) no lugar dos objetos 3D do McButtons (X, bola, quadrado e
-// triangulo da legenda dos menus e das paginas do memory card). Incluido por wotm_live.inc, depois do wotm_pad.inc e do
-// wotm_native.hpp. O desenho nativo (Scene::drawButtonSprites) acha onde o jogo pos cada icone e chama icon() com o centro e o tamanho.
+// wotm_prompts.inc: 2D button icons (Kenney "Input Prompts", CC0) replacing McButtons' 3D objects (the cross, circle, square and
+// triangle in the menu button legends and on the memory card pages). Included by wotm_live.inc, after wotm_pad.inc and
+// wotm_native.hpp. The native renderer (Scene::drawButtonSprites) finds where the game placed each icon and calls icon() with its
+// center and size.
 //
-// Qual sprite: o botao do PS2 do icone vira o que o jogador aperta para ele, pelo mapa de teclas e botoes (wotm_settings.hpp, aba
-// CONTROLS) e pela troca de confirmar dos menus (MenuConfirm, wotm_pad.inc). Estilo (opcao Prompts): automatico = o ultimo dispositivo
-// usado (teclado: a tecla; gamepad: pelo nome dele, Xbox, PlayStation ou Nintendo), ou fixo; "original" deixa os 3D do jogo.
-// O atlas (native/assets/prompts.png, tools/prompts_atlas.py) vem embutido nos executaveis (recurso WOTM_PROMPTS do native/wotm.rc).
-// Face buttons no estilo PlayStation (e no "original", nos icones 2D): os do proprio jogo, a textura 163 do SHELL/SHELL.TEX do disco
-// (T8 64x64, paleta tbp 519 do SHELL.RTX; bola, quadrado, triangulo e X em quadrantes de 32), no lugar dos do Kenney.
+// Which sprite: the icon's PS2 button is replaced by whatever the player actually presses for it, according to the key/button map
+// (wotm_settings.hpp, CONTROLS tab) and the menu confirm-button swap (MenuConfirm, wotm_pad.inc). Style (Prompts option): automatic
+// = follow the last device used (keyboard: the key; gamepad: chosen by its name, Xbox, PlayStation or Nintendo), or a fixed style;
+// "original" keeps the game's 3D icons.
+// The atlas (native/assets/prompts.png, built by tools/prompts_atlas.py) is embedded in the executables (WOTM_PROMPTS resource in
+// native/wotm.rc).
+// PlayStation-style face buttons (also used for "original" wherever a 2D icon is drawn) come from the game itself instead of
+// Kenney's: texture 163 of SHELL/SHELL.TEX on the disc (T8 64x64, palette at tbp 519 in SHELL.RTX; circle, square, triangle and
+// cross in 32x32 quadrants).
 #include "../wotm_prompts.h"
 #include "wotm_model.hpp"   // decodeT8, unzipIe
 
 #ifdef _WIN32
-// Sem windows.h (briga com os nomes do raylib): so o que le um recurso do proprio executavel
+// No windows.h (its names clash with raylib's): declare only what is needed to read a resource from our own executable
 extern "C" __declspec(dllimport) void *__stdcall GetModuleHandleA(const char *);
 extern "C" __declspec(dllimport) void *__stdcall FindResourceA(void *module, const char *name, const char *type);
 extern "C" __declspec(dllimport) void *__stdcall LoadResource(void *module, void *res);
@@ -46,13 +50,13 @@ static bool loadAtlas()
 #endif
     if (!data || size <= 0)
     {
-        std::fprintf(stderr, "[prompts] atlas WOTM_PROMPTS nao esta no executavel: ficam os icones do jogo\n");
+        std::fprintf(stderr, "[prompts] atlas WOTM_PROMPTS is not in the executable: keeping the game's icons\n");
         return false;
     }
     Image img = LoadImageFromMemory(".png", data, size);
     if (!img.data)
     {
-        std::fprintf(stderr, "[prompts] atlas WOTM_PROMPTS ilegivel: ficam os icones do jogo\n");
+        std::fprintf(stderr, "[prompts] atlas WOTM_PROMPTS could not be decoded: keeping the game's icons\n");
         return false;
     }
     g_atlas = LoadTextureFromImage(img);
@@ -63,8 +67,8 @@ static bool loadAtlas()
     return true;
 }
 
-// Face buttons do jogo (thread da janela). Celulas virtuais kFaceBase + 0..3 (triangulo, bola, X, quadrado); o quadrante de cada um
-// na textura como o disco a guarda (linhas de baixo para cima: o recorte vira na hora de desenhar).
+// The game's own face buttons (window thread). Virtual cells kFaceBase + 0..3 (triangle, circle, cross, square); each one's
+// quadrant in the texture as stored on the disc (rows run bottom to top, so the source rect is flipped when drawing).
 constexpr int kFaceBase = 1000;
 static Texture2D g_face{};
 static bool g_faceTried = false;
@@ -80,25 +84,25 @@ static bool loadFace()
         !wotm::disc::readFile(io.cdRoot, io.cdImage.string(), "SHELL/SHELL.RTX", rtx) || !wotm::model::unzipIe(tex) ||
         !wotm::model::unzipIe(rtx) || !wotm::model::decodeT8(tex, rtx, 163, 519, im) || im.w != 64 || im.h != 64)
     {
-        std::fprintf(stderr, "[prompts] face buttons do jogo (SHELL.TEX 163) nao lidos: ficam os do Kenney\n");
+        std::fprintf(stderr, "[prompts] could not read the game's face buttons (SHELL.TEX 163): using Kenney's\n");
         return false;
     }
     Image img{im.rgba.data(), im.w, im.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
     g_face = LoadTextureFromImage(img);
     SetTextureFilter(g_face, TEXTURE_FILTER_BILINEAR);
-    std::fprintf(stderr, "[prompts] face buttons do jogo carregados (SHELL.TEX 163)\n");
+    std::fprintf(stderr, "[prompts] loaded the game's face buttons (SHELL.TEX 163)\n");
     return true;
 }
-// Recorte do face button `cell` (kFaceBase + i) na textura, para o DrawTexturePro: altura negativa vira a imagem (o recorte fica no
-// mesmo lugar)
+// Source rect of face button `cell` (kFaceBase + i) in the texture, for DrawTexturePro: the negative height flips the image
+// vertically (the rect itself stays in the same place)
 static Rectangle faceSrc(int cell)
 {
     const int *q = kFaceQuad[cell - kFaceBase];
     return Rectangle{float(q[0]), float(q[1]), 32.f, -32.f};
 }
 
-// Ultimo dispositivo usado (thread da janela, uma vez por quadro): teclado ou o gamepad n
-static int g_lastPad = -1;   // -1 = teclado
+// Last device used (window thread, once per frame): the keyboard or gamepad n
+static int g_lastPad = -1;   // -1 = keyboard
 static double g_lastPoll = -1.0;
 static void pollDevice()
 {
@@ -106,7 +110,7 @@ static void pollDevice()
     if (now == g_lastPoll) return;
     g_lastPoll = now;
     for (const st::KeyName &k : st::kKeyNames)
-        if (wotm_pad::inputDown(k.code)) { g_lastPad = -1; return; }   // teclas e botoes do mouse
+        if (wotm_pad::inputDown(k.code)) { g_lastPad = -1; return; }   // keys and mouse buttons
     for (int p = 0; p < 4; ++p)
     {
         if (!IsGamepadAvailable(p)) continue;
@@ -115,7 +119,7 @@ static void pollDevice()
         for (int a = 0; a < 4 && !any; ++a) any = std::fabs(GetGamepadAxisMovement(p, a)) > 0.5f;
         if (any) { g_lastPad = p; return; }
     }
-    // sem uso ainda: o primeiro gamepad conectado, se houver
+    // nothing used yet: default to the first connected gamepad, if any
     static bool first = true;
     if (first)
     {
@@ -138,10 +142,10 @@ static int styleOfPad(int pad)
     return st::PromptXbox;
 }
 
-// Icone do McButtons -> botao do PS2. Indice: 0x1F51.. direto; 0x240E.. pela tabela do initButton. Ordem dos indices: a das letras do
-// s_charMap do drawButtonsForString (' ^ ` $), que e a dos bits do scePadRead (triangulo 0x1000, bola 0x2000, X 0x4000, quadrado
-// 0x8000). Conferido: "press the ' button to cancel" / "press the ` button to continue" no memory card; no Shell o 0x240F (SELECT)
-// sai X e o 0x240E (BACK) triangulo.
+// McButtons icon -> PS2 button. Index: 0x1F51.. maps directly; 0x240E.. goes through initButton's table. The index order is the
+// order of the characters in drawButtonsForString's s_charMap (' ^ ` $), which matches the scePadRead bit order (triangle 0x1000,
+// circle 0x2000, cross 0x4000, square 0x8000). Verified: "press the ' button to cancel" / "press the ` button to continue" on the
+// memory card; in the Shell, 0x240F (SELECT) comes out as cross and 0x240E (BACK) as triangle.
 static constexpr st::Bind kIndexBind[4] = {st::BTriangle, st::BCircle, st::BCross, st::BSquare};
 static int buttonIndex(uint16_t id)
 {
@@ -151,8 +155,8 @@ static int buttonIndex(uint16_t id)
     return -1;
 }
 
-// Estilo dos icones agora: o automatico resolvido pelo ultimo dispositivo; o "original" (3D do jogo) vira o do PS2 nos icones 2D que o
-// jogo nao tem (legenda de baixo, wotm_legend.inc)
+// Current icon style: automatic is resolved from the last device used; "original" (the game's 3D icons) becomes the PS2 style for
+// the 2D icons the game has no equivalent for (the bottom legend, wotm_legend.inc)
 static int currentStyle()
 {
     pollDevice();
@@ -169,29 +173,29 @@ static int keyCell(const char *name)
 }
 static int padCell(int phys, int style)
 {
-    if (phys <= 0 || phys >= pr::kPadCells) return -1;   // 18 e 19: analogico esquerdo e direito (so na legenda, kStickL/kStickR)
-    // face buttons (raylib 5..8: cima, direita, baixo, esquerda) no estilo do PS2: os do jogo
+    if (phys <= 0 || phys >= pr::kPadCells) return -1;   // 18 and 19: left and right analog sticks (legend only, kStickL/kStickR)
+    // face buttons (raylib 5..8: up, right, down, left) in PS2 style: use the game's own
     if (style == st::PromptPs && phys >= 5 && phys <= 8 && loadFace())
     {
-        static constexpr int kFace[4] = {0, 1, 2, 3};   // triangulo, bola, X, quadrado
+        static constexpr int kFace[4] = {0, 1, 2, 3};   // triangle, circle, cross, square
         return kFaceBase + kFace[phys - 5];
     }
     const int *table = style == st::PromptNintendo ? pr::kNintendo : style == st::PromptXbox ? pr::kXbox : pr::kPs;
     return table[phys];
 }
 
-// Celula do atlas para o botao do PS2 b, no estilo de agora (gamepad: pelo mapa do jogador do ultimo gamepad usado)
+// Atlas cell for PS2 button b in the current style (gamepad: via the button map of the player on the last gamepad used)
 static int cellFor(st::Bind b)
 {
     const int style = currentStyle();
     if (style == st::PromptKeyboard)
     {
         const char *name = st::keyName(int(st::kb(b) & 0xFFFF));
-        // botao do meio e rodinha: o icone da rodinha; L1/R1 sem tecla (layout 2): Q/E, as abas do painel
+        // middle mouse button and wheel: the scroll-wheel icon; L1/R1 with no key bound (layout 2): Q/E, the panel's tab keys
         if (name && (!std::strcmp(name, "MOUSE_MIDDLE") || !std::strncmp(name, "WHEEL", 5))) name = "MOUSE_SCROLL";
         if (!name && (b == st::BL1 || b == st::BR1)) name = b == st::BL1 ? "Q" : "E";
         const int c = keyCell(name);
-        if (c >= 0) return c;   // sem tecla (ou tecla sem desenho): o simbolo do PS2
+        if (c >= 0) return c;   // no key (or a key with no icon): fall back to the PS2 symbol
     }
     return padCell(st::pad(wotm_pad::sourceBind(b), wotm_pad::playerOfPad(g_lastPad)), style == st::PromptKeyboard ? st::PromptPs : style);
 }
@@ -203,26 +207,26 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
     if (idx >= 0 && !(logged & (1u << idx)) && std::getenv("WOTM_MENULOG"))
     {
         logged |= 1u << idx;
-        std::fprintf(stderr, "[prompts] icone id=0x%X indice=%d -> %s\n", unsigned(id), idx, st::kBindNames[kIndexBind[idx]]);
+        std::fprintf(stderr, "[prompts] icon id=0x%X index=%d -> %s\n", unsigned(id), idx, st::kBindNames[kIndexBind[idx]]);
     }
     const int cell = idx >= 0 ? cellFor(kIndexBind[idx]) : -1;
     if (cell < 0 || !loadAtlas()) return;
     const bool face = cell >= kFaceBase;
-    // a arte do Kenney tem folga na celula (o circulo ocupa ~3/4): o lado do quadrado e maior que o do icone do jogo; o do jogo enche
-    // o quadrante
+    // Kenney's art has padding inside its cell (the circle fills ~3/4 of it), so its quad is drawn larger than the game's icon;
+    // the game's own face buttons fill their whole quadrant
     const float h = size * 0.5f * (face ? 1.f : 128.f / 96.f);
     float u0, v0, u1, v1;
     if (face)
     {
         const Rectangle r = faceSrc(cell);
-        u0 = r.x / 64.f; u1 = (r.x + r.width) / 64.f; v0 = (r.y + 32.f) / 64.f; v1 = r.y / 64.f;   // virado: a linha de baixo em cima
+        u0 = r.x / 64.f; u1 = (r.x + r.width) / 64.f; v0 = (r.y + 32.f) / 64.f; v1 = r.y / 64.f;   // flipped: the bottom row on top
     }
     else
     {
         u0 = float(cell % pr::kCols) / float(pr::kCols); v0 = float(cell / pr::kCols) / float(pr::kRows);
         u1 = u0 + 1.f / float(pr::kCols); v1 = v0 + 1.f / float(pr::kRows);
     }
-    // o texto da legenda comeca logo depois do icone do jogo; a arte 2D encosta nele, entao o icone anda um pouco para a esquerda
+    // the legend text starts right after the game's icon and the 2D art would touch it, so the icon is shifted a little to the left
     const float shift = -size * 0.16f;
     auto corner = [&](float sr, float su, float out[3]) {
         for (int k = 0; k < 3; ++k) out[k] = mid[k] + right[k] * (sr * h + shift) + up[k] * su * h;
@@ -247,7 +251,8 @@ static void icon(uint16_t id, const float mid[3], const float right[3], const fl
 
 static bool on() { return st::get(st::Prompts) != st::PromptOriginal && loadAtlas(); }
 
-// Celula na tela (no alvo atual), quadrado de lado `size` centrado em (cx, cy); a arte tem folga na celula, como no icon()
+// Draws an atlas cell on screen (to the current render target) as a square of side `size` centered on (cx, cy); the art has
+// padding inside its cell, as in icon()
 static bool drawCell2d(int cell, float cx, float cy, float size, float alpha)
 {
     if (cell < 0 || !loadAtlas()) return false;
@@ -266,22 +271,22 @@ static bool drawCell2d(int cell, float cx, float cy, float size, float alpha)
 static const bool s_installed = (wotm::g_buttonIconFn = &icon, wotm::g_buttonIconsOn = &on, true);
 } // namespace wotm_prompts
 
-// Legenda de baixo (na faixa preta, no lugar da do jogo) e dica grande sobre a cena: quem as quer (escolha de controles do
-// wotm_padsel.inc, painel do wotm_mainmenu.inc) as publica a cada quadro no renderUi dele; o wotm_legend.inc as desenha no quadro e
-// as esvazia. Tudo na thread da janela.
+// Bottom legend (in the black bar, replacing the game's own) and a large hint over the scene: whoever wants them (the controller
+// selection in wotm_padsel.inc, the panel in wotm_mainmenu.inc) posts them every frame from its renderUi; wotm_legend.inc draws them
+// for that frame and then clears them. All on the window thread.
 namespace wotm_legend
 {
 namespace st = wotm::settings;
-// Um icone: o botao do raylib (gamepad, 0 = nenhum) e a tecla (nome do wotm_settings.hpp; sem celula no atlas, sai o nome numa
-// moldura); key2 = a segunda tecla do mesmo botao (o mapa do teclado tem duas por botao), lado a lado com a primeira
+// One icon: the raylib button (gamepad, 0 = none) and the key (a name from wotm_settings.hpp; if it has no atlas cell, the name is
+// drawn inside a frame); key2 = the second key bound to the same button (the keyboard map has two per button), drawn next to the first
 struct Icon { int pad = 0; const char *key = nullptr; const char *key2 = nullptr; };
 struct Item { Icon a, b; const char *text = ""; };
-constexpr int kStickL = 18, kStickR = 19;   // Icon::pad dos analogicos (celulas extras do atlas, wotm_prompts.h)
+constexpr int kStickL = 18, kStickR = 19;   // Icon::pad values for the analog sticks (extra atlas cells, wotm_prompts.h)
 constexpr int kMax = 10;
 static Item g_items[kMax];
 static int g_n = 0;
 static float g_alpha = 0.f;
-static float g_barAlpha = 1.f;   // opacidade da faixa preta (o modo foto a deixa translucida sobre a cena)
+static float g_barAlpha = 1.f;   // black bar opacity (photo mode makes it translucent over the scene)
 static std::string g_hint;
 static float g_hintAlpha = 0.f;
 
@@ -298,7 +303,7 @@ static void hint(const char *s, float alpha)
     g_hint = s ? s : "";
     g_hintAlpha = alpha;
 }
-// O botao do PS2 b como o jogo o le: a tecla e o botao do mapa (aba CONTROLS), com a troca de confirmar dos menus
+// PS2 button b as the game reads it: the key and button from the map (CONTROLS tab), with the menu confirm-button swap applied
 static Icon bind(st::Bind b)
 {
     const uint32_t k = st::kb(b);
