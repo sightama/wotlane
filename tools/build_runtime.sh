@@ -1,8 +1,8 @@
 #!/bin/sh
 # Builds the runtime with the native layer (macOS/Linux counterpart of build_runtime.bat + tools/build_runtime.ps1): wotm (the game)
 # and ps2EntryRunner (the test build with the emulated VU1/GS). Run it after every change in native/; ninja doesn't track native/,
-# so this script touches ps2_runtime.cpp first. It also (re)generates <build>/wotm_gen/: the version header and the translated VU0
-# microprograms (game code, outside the repo).
+# so this script touches ps2_runtime.cpp first. It also (re)generates <build>/wotm_gen/: the version header, the embedded resources
+# and the translated VU0 microprograms (game code, outside the repo).
 set -eu
 . "$(dirname "$0")/posix_env.sh"
 
@@ -36,6 +36,9 @@ elf=$REPO/disc/SCUS_971.97
 if [ -f "$elf" ] && { [ ! -f "$vu0" ] || [ "$REPO/tools/vu0native.py" -nt "$vu0" ]; }; then
     python3 "$REPO/tools/vu0native.py" "$elf" "$vu0" >"$rt/logs/vu0native.log" 2>&1 || echo "warning: vu0native.py failed, VU0 stays on the interpreter (see $rt/logs/vu0native.log)"
 fi
+
+# button atlas and font from native/wotm.rc as byte arrays (Windows reads them from the .exe resources; native/wotm_embedded.hpp)
+python3 "$REPO/tools/embed_resources.py" "$REPO/native/wotm.rc" "$gen/wotm_resources.gen.h" || fail "embed_resources.py failed"
 
 log=$rt/logs/$build.log
 start=$(date +%s)

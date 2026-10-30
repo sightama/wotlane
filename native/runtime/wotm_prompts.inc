@@ -11,12 +11,16 @@
 #include "../wotm_prompts.h"
 #include "wotm_model.hpp"   // decodeT8, unzipIe
 
+#ifdef _WIN32
 // Sem windows.h (briga com os nomes do raylib): so o que le um recurso do proprio executavel
 extern "C" __declspec(dllimport) void *__stdcall GetModuleHandleA(const char *);
 extern "C" __declspec(dllimport) void *__stdcall FindResourceA(void *module, const char *name, const char *type);
 extern "C" __declspec(dllimport) void *__stdcall LoadResource(void *module, void *res);
 extern "C" __declspec(dllimport) void *__stdcall LockResource(void *data);
 extern "C" __declspec(dllimport) unsigned long __stdcall SizeofResource(void *module, void *res);
+#else
+#include "../wotm_embedded.hpp"   // the same resources as byte arrays (wotmEmbeddedResource)
+#endif
 
 namespace wotm_prompts
 {
@@ -30,11 +34,16 @@ static bool loadAtlas()
 {
     if (g_tried) return g_atlas.id != 0;
     g_tried = true;
+#ifdef _WIN32
     void *mod = GetModuleHandleA(nullptr);
     void *res = FindResourceA(mod, "WOTM_PROMPTS", reinterpret_cast<const char *>(static_cast<uintptr_t>(10)));   // RT_RCDATA
     void *h = res ? LoadResource(mod, res) : nullptr;
     const unsigned char *data = h ? static_cast<const unsigned char *>(LockResource(h)) : nullptr;
     const int size = res ? static_cast<int>(SizeofResource(mod, res)) : 0;
+#else
+    int size = 0;
+    const unsigned char *data = wotmEmbeddedResource("WOTM_PROMPTS", size);
+#endif
     if (!data || size <= 0)
     {
         std::fprintf(stderr, "[prompts] atlas WOTM_PROMPTS nao esta no executavel: ficam os icones do jogo\n");
