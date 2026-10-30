@@ -122,6 +122,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_custom.inc"
 // Modo treino (item 9): esferas dos golpes, dano exato e boneco (WOTM_TRAINING, menu F2)
 #include "wotm_training.inc"
+// Seno e cosseno do jogo contra o retail, bit a bit (WOTM_TRIGCHECK): o que a partida Windows x Mac precisa
+#include "wotm_trigcheck.inc"
 
 namespace
 {
@@ -2752,6 +2754,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmSkinsInstall(runtime);   // por ultimo: embrulha os ganchos do SetPlayerMonster/SetAIMonster (split4, WOTM_AIVSAI)
     wotmCustomInstall(runtime);  // depois das skins: embrulha o SetAIMonster delas
     wotmTrainingInstall(runtime);   // por ultimo: o gancho mais de fora do update/takeHit/takeDamage (ve o dano que as trapacas deixam)
+    wotmTrigCheckInstall(runtime);
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) para o jogo inteiro (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else
