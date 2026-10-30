@@ -277,8 +277,11 @@ bool wotmHoldGame(bool hold);  // wotm_foto.inc: segura a thread do EE na fronte
 #include "wotm_trainview.inc"   // modo treino: volumes, esferas dos golpes, painel de dano e numeros do HUD
 #define WOTM_HAVE_NATIVE 1
 
+void wotmHostProfWatchThisThread();   // ps2_hostprof.cpp (PS2X_HOSTPROF); at global scope, where the definition is
 namespace wotm_live
 {
+inline const char *g_stage = "idle";   // etapa da camada nativa em andamento (para localizar a queda)
+#ifdef _WIN32
 // Diagnostico de queda: sem windows.h (conflita com o raylib), espelha so o que o filtro precisa.
 struct ExcRecord
 {
@@ -295,7 +298,6 @@ struct ExcPointers
 };
 extern "C" __declspec(dllimport) void *__stdcall SetUnhandledExceptionFilter(long(__stdcall *)(ExcPointers *));
 extern "C" __declspec(dllimport) void *__stdcall GetModuleHandleA(const char *);
-inline const char *g_stage = "idle";   // etapa da camada nativa em andamento (para localizar a queda)
 inline long __stdcall crashFilter(ExcPointers *e)
 {
     const char *base = static_cast<const char *>(GetModuleHandleA(nullptr));
@@ -307,6 +309,7 @@ inline long __stdcall crashFilter(ExcPointers *e)
     std::fflush(stderr);
     return 0; // EXCEPTION_CONTINUE_SEARCH
 }
+#endif // _WIN32 (other OSes: no crash filter yet)
 struct State
 {
     wotm::Scene scene;
@@ -461,6 +464,7 @@ static bool inFullscreen()
 // Capture) congela na ultima imagem composta e a antiga (BitBlt) fica preta. 1 = tira o WS_POPUP (fica WS_OVERLAPPED sem moldura, como
 // no relato do Processing/JOGL); 2 = isso e a janela 1 px mais alta que o monitor (o driver so promove a janela que cobre o monitor
 // exato; a linha a mais fica fora da tela); 0 = como o raylib deixa. Sem windows.h (conflita com o raylib).
+#ifdef _WIN32
 extern "C" __declspec(dllimport) long long __stdcall GetWindowLongPtrW(void *hwnd, int index);
 extern "C" __declspec(dllimport) long long __stdcall SetWindowLongPtrW(void *hwnd, int index, long long value);
 extern "C" __declspec(dllimport) int __stdcall SetWindowPos(void *hwnd, void *after, int x, int y, int cx, int cy, unsigned flags);
@@ -488,6 +492,9 @@ static void captureFriendlyBorderless()
                  static_cast<unsigned long long>(style), static_cast<unsigned long long>(style & ~kWsPopup), mode >= 2 ? ", +1 px de altura" : "",
                  mode);
 }
+#else
+static void captureFriendlyBorderless() {}   // the driver promotion and capture problem above is Windows-only (DWM)
+#endif
 
 // Tela cheia no monitor da janela (proporcao do monitor; com WOTM_ASPECT fixo o quadro fica com faixas) ou de volta a janela.
 static void setFullscreen(bool on)
@@ -554,10 +561,7 @@ static void initWindowAspect()
         g_appliedVideo[k] = wotm::settings::get(wotm::settings::Key(k));
     // PS2X_HOSTPROF_WIN=1 (com PS2X_HOSTPROF): o amostrador vigia esta thread (a da janela) em vez da do EE
     if (std::getenv("PS2X_HOSTPROF") && std::getenv("PS2X_HOSTPROF_WIN"))
-    {
-        void wotmHostProfWatchThisThread();
-        wotmHostProfWatchThisThread();
-    }
+        ::wotmHostProfWatchThisThread();
     if (!g_localCollect && !g_hideFps)   // replay (--vu1cmp): sem janela de verdade, fica como esta
     {
         moveToChosenMonitor();
@@ -1648,12 +1652,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
     wotm_live::Capture &cap = wotm_live::capture();
     cap.wide.store(S.scene.wide, std::memory_order_relaxed);
     cap.on.store(true, std::memory_order_relaxed);
+#ifdef _WIN32
     static bool filterInstalled = false;
     if (!filterInstalled)
     {
         filterInstalled = true;
         wotm_live::SetUnhandledExceptionFilter(wotm_live::crashFilter);
     }
+#endif
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
     // Carga da fase (g_loadFreeze): repete o ultimo quadro desenhado (S.rts[S.cur], intocado) com o fade do Shell::FadeScreen por cima,
     // no outro buffer; nada de instantaneo nem de troca de recursos ate o rtMain comecar.
