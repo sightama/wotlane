@@ -1,14 +1,15 @@
-// wotm_snd.inc: som nativo (incluido por wotm_live.inc, no escopo global de ps2_runtime.cpp). Sempre ligado.
-// Troca as funcoes snd_* da lib989snd do EE (que mandam comandos por RPC ao 989snd no IOP) pelo motor de native/wotm_snd.hpp
-// (repo WoTM): bancos lidos do disco, sons e streams mixados no host. Com isso os IRX de som (LIBSD, 989SND, 989ERR) nao
-// sao carregados no IOP emulado. Formatos e API em docs/FORMATOS.md ("Som").
-// PS2X_SND_LOG=1: uma linha por chamada (menos as por quadro: volume/pan, "ainda tocando").
+// wotm_snd.inc: native sound (included by wotm_live.inc, at global scope in ps2_runtime.cpp). Always on.
+// Replaces the EE's lib989snd snd_* functions (which send RPC commands to 989snd on the IOP) with the engine in
+// native/wotm_snd.hpp (WoTM repo): banks are read from the disc, and sounds and streams are mixed on the host. Because of this
+// the sound IRX modules (LIBSD, 989SND, 989ERR) are not loaded into the emulated IOP. Formats and API are in docs/FORMATOS.md
+// ("Som").
+// PS2X_SND_LOG=1: one log line per call (except the per-frame ones: volume/pan, "still playing").
 #if __has_include("wotm_snd.hpp")
-#include "raylib.h"   // antes do motor: liga Engine::startOutput (AudioStream)
-#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
+#include "raylib.h"   // before the engine: enables Engine::startOutput (AudioStream)
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: ELF addresses by name (tools/native_syms.py --gen)
 #include "wotm_snd.hpp"
-#include "wotm_mods.hpp"   // LSN falsos dos arquivos de mods/
-#include "wotm_disc.hpp"   // banco do Shell do painel na pausa (panelShellBank)
+#include "wotm_mods.hpp"   // fake LSNs for the files in mods/
+#include "wotm_disc.hpp"   // Shell bank for the pause panel (panelShellBank)
 #include <cctype>
 #include <cstring>
 #include "Stubs/CD.h"   // from src/lib/Kernel, a public include dir of ps2_runtime (MSVC also found it next to the includer)
@@ -22,7 +23,7 @@ using wotm::snd::Engine;
 static bool g_log = false;
 static PS2Runtime::RecompiledFunction g_origLoadModule = nullptr;
 
-inline uint32_t arg(R5900Context *ctx, int i) { return getRegU32(ctx, 4 + i); }   // a0..a3, t0..t3 (EABI: 8 em registradores)
+inline uint32_t arg(R5900Context *ctx, int i) { return getRegU32(ctx, 4 + i); }   // a0..a3, t0..t3 (EABI: 8 in registers)
 inline int32_t sarg(R5900Context *ctx, int i) { return static_cast<int32_t>(getRegU32(ctx, 4 + i)); }
 inline uint32_t stackArg(uint8_t *rdram, R5900Context *ctx, uint32_t off)
 {
@@ -31,7 +32,8 @@ inline uint32_t stackArg(uint8_t *rdram, R5900Context *ctx, uint32_t off)
     return v;
 }
 
-// Callback do jogo (quase sempre soundPlayCB: *user = valor). O 989snd chama no snd_FlushSoundCommands seguinte; aqui e na hora.
+// Game callback (almost always soundPlayCB: *user = value). 989snd calls it on the next snd_FlushSoundCommands; here it's called
+// immediately.
 inline void callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, uint32_t a0, uint32_t a1)
 {
     if (!fn)
@@ -48,12 +50,12 @@ inline void callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_
     *ctx = saved;
 }
 
-// LSN -> bytes: arquivos soltos (cdRoot, LBNs do runtime) ou a ISO de PS2X_CD_IMAGE
+// LSN -> bytes: loose files (cdRoot, the runtime's LBNs) or the ISO from PS2X_CD_IMAGE
 inline bool readLsnRaw(uint32_t lsn, uint32_t sectors, uint8_t *dst, const char *&from)
 {
     from = "discroot";
     const size_t bytes = size_t(sectors) * 2048;
-    if (wotm::mods::Registry::isModLsn(lsn))   // banco ou musica de mods/ (wotm_mods.inc devolveu o LSN falso no fileCdSearchFile)
+    if (wotm::mods::Registry::isModLsn(lsn))   // bank or music from mods/ (wotm_mods.inc returned the fake LSN from fileCdSearchFile)
     {
         from = "mods";
         return wotm::mods::Registry::get().read(lsn, sectors, dst, bytes);
@@ -95,23 +97,23 @@ inline bool readLsn(uint32_t lsn, uint32_t sectors, uint8_t *dst)
 
 #define SND_LOG(...) do { if (g_log) std::fprintf(stderr, "[snd] " __VA_ARGS__); } while (0)
 
-// --- sistema e bancos
+// --- system and banks
 void startSoundSystem(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
     const bool ok = Engine::get().startOutput();
-    std::fprintf(stderr, "[snd] snd_StartSoundSystem: som nativo %s\n", ok ? "ligado (48 kHz)" : "SEM saida de audio (InitAudioDevice falhou?)");
-    if (const char *m = std::getenv("WOTM_MUTE"); m && m[0] == '1')   // volume mestre do raylib: som e filmes
+    std::fprintf(stderr, "[snd] snd_StartSoundSystem: native sound %s\n", ok ? "on (48 kHz)" : "has NO audio output (did InitAudioDevice fail?)");
+    if (const char *m = std::getenv("WOTM_MUTE"); m && m[0] == '1')   // raylib's master volume: sound and movies
     {
         SetMasterVolume(0.0f);
-        std::fprintf(stderr, "[snd] mudo (WOTM_MUTE)\n");
+        std::fprintf(stderr, "[snd] muted (WOTM_MUTE)\n");
     }
     setReturnS32(ctx, 1);
 }
 void stopSoundSystem(uint8_t *, R5900Context *, PS2Runtime *) { Engine::get().stopAll(); }
 void ret0(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 0); }   // FlushSoundCommands, ResolveBankXREFS...
 void getTick(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnU32(ctx, Engine::get().tickCount()); }
-// Banco do grito do narrador (playMonsterCry, abaixo): fora dos do jogo, sai quando o jogo carrega um banco dele (o jogo confere a
-// SRAM livre, que conta todos os bancos do motor, antes de carregar os da luta)
+// The narrator's cry bank (playMonsterCry, below): kept outside the game's banks, and unloaded whenever the game loads one of its
+// own banks (the game checks free SRAM, which counts every bank in the engine, before loading the fight's banks)
 static uint32_t g_cryBank = 0;
 static std::string g_cryFile;
 static void dropCryBank()
@@ -142,20 +144,20 @@ void unloadBankCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 }
 void sramFree(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, Engine::get().sramFree()); }
 
-// --- volume mestre e modos
+// --- master volume and modes
 void setMasterVolume(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
-    SND_LOG("SetMasterVolume grupo %d = %#x\n", sarg(ctx, 0), sarg(ctx, 1));
+    SND_LOG("SetMasterVolume group %d = %#x\n", sarg(ctx, 0), sarg(ctx, 1));
     Engine::get().setMasterVolume(sarg(ctx, 0), sarg(ctx, 1));
 }
 void getMasterVolume(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, Engine::get().masterVolume(sarg(ctx, 0))); }
 void setPlaybackMode(uint8_t *, R5900Context *ctx, PS2Runtime *) { Engine::get().setMono(sarg(ctx, 0) == 1); }
 
-// --- efeitos: snd_PlaySoundVolPanPMPB(banco, som, vol, pan, pitchMod, pitchBend) [, cb, user]
+// --- effects: snd_PlaySoundVolPanPMPB(bank, sound, vol, pan, pitchMod, pitchBend) [, cb, user]
 inline uint32_t playFromArgs(R5900Context *ctx)
 {
     const uint32_t h = Engine::get().play(arg(ctx, 0), sarg(ctx, 1), sarg(ctx, 2), sarg(ctx, 3), sarg(ctx, 4), sarg(ctx, 5));
-    SND_LOG("Play banco %#x som %d vol %#x pan %d pm %d pb %d -> %u\n", arg(ctx, 0), sarg(ctx, 1), sarg(ctx, 2), sarg(ctx, 3),
+    SND_LOG("Play bank %#x sound %d vol %#x pan %d pm %d pb %d -> %u\n", arg(ctx, 0), sarg(ctx, 1), sarg(ctx, 2), sarg(ctx, 3),
             sarg(ctx, 4), sarg(ctx, 5), h);
     return h;
 }
@@ -172,7 +174,7 @@ void continueSound(uint8_t *, R5900Context *ctx, PS2Runtime *) { Engine::get().p
 void stopAllSounds(uint8_t *, R5900Context *, PS2Runtime *) { SND_LOG("StopAllSounds\n"); Engine::get().stopAll(); }
 void pauseGroups(uint8_t *, R5900Context *ctx, PS2Runtime *) { SND_LOG("PauseAllSoundsInGroup %#x\n", arg(ctx, 0)); Engine::get().pauseGroups(arg(ctx, 0), true); }
 void continueGroups(uint8_t *, R5900Context *ctx, PS2Runtime *) { SND_LOG("ContinueAllSoundsInGroup %#x\n", arg(ctx, 0)); Engine::get().pauseGroups(arg(ctx, 0), false); }
-// "ainda tocando": devolve o proprio handle, ou 0 quando acabou
+// "still playing": returns the handle itself, or 0 once the sound has finished
 void isPlaying(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnU32(ctx, Engine::get().playing(arg(ctx, 0)) ? arg(ctx, 0) : 0u); }
 void isPlayingCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 {
@@ -182,7 +184,7 @@ void isPlayingCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 void setVolPan(uint8_t *, R5900Context *ctx, PS2Runtime *) { Engine::get().setVolPan(arg(ctx, 0), sarg(ctx, 1), sarg(ctx, 2)); }
 void setPitchBend(uint8_t *, R5900Context *ctx, PS2Runtime *) { Engine::get().setPBend(arg(ctx, 0), sarg(ctx, 1)); }
 void setPitchMod(uint8_t *, R5900Context *ctx, PS2Runtime *) { Engine::get().setPMod(arg(ctx, 0), sarg(ctx, 1)); }
-// snd_SetSoundParams(handle, mascara, vol, pan, pitchMod, pitchBend) [, cb, user]
+// snd_SetSoundParams(handle, mask, vol, pan, pitchMod, pitchBend) [, cb, user]
 void setParams(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
     Engine::get().setParams(arg(ctx, 0), arg(ctx, 1), sarg(ctx, 2), sarg(ctx, 3), sarg(ctx, 4), sarg(ctx, 5));
@@ -193,14 +195,14 @@ void setParamsCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     callGuest(rdram, ctx, rt, arg(ctx, 6), 0, arg(ctx, 7));
 }
 
-// --- streams .VPK/.VAG: snd_PlayVAGStreamByLoc(lsn, lsn2, off1, off2, vol, pan, grupo, fila, [pilha] flags) [, cb, user na pilha]
+// --- .VPK/.VAG streams: snd_PlayVAGStreamByLoc(lsn, lsn2, off1, off2, vol, pan, group, queue, [stack] flags) [, cb, user on stack]
 inline uint32_t playStreamFromArgs(uint8_t *rdram, R5900Context *ctx)
 {
     const uint32_t h = Engine::get().playStream(arg(ctx, 0), sarg(ctx, 4), sarg(ctx, 5), sarg(ctx, 6));
     if (arg(ctx, 1) || arg(ctx, 2) || arg(ctx, 3) || arg(ctx, 7))
-        std::fprintf(stderr, "[snd] PlayVAGStream com parametros nao tratados: lsn2 %u off %u/%u fila %u\n", arg(ctx, 1), arg(ctx, 2),
+        std::fprintf(stderr, "[snd] PlayVAGStream with unhandled parameters: lsn2 %u off %u/%u queue %u\n", arg(ctx, 1), arg(ctx, 2),
                      arg(ctx, 3), arg(ctx, 7));
-    SND_LOG("PlayVAGStream lsn %u vol %#x pan %d grupo %d flags %#x -> %u\n", arg(ctx, 0), sarg(ctx, 4), sarg(ctx, 5), sarg(ctx, 6),
+    SND_LOG("PlayVAGStream lsn %u vol %#x pan %d group %d flags %#x -> %u\n", arg(ctx, 0), sarg(ctx, 4), sarg(ctx, 5), sarg(ctx, 6),
             stackArg(rdram, ctx, 0), h);
     return h;
 }
@@ -212,12 +214,12 @@ void playStreamCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     callGuest(rdram, ctx, rt, cb, h, user);
 }
 void stopAllStreams(uint8_t *, R5900Context *, PS2Runtime *) { SND_LOG("StopAllStreams\n"); Engine::get().stopAllStreams(); }
-// Inicializacao do streaming: nao liga gStreamingInited da lib, entao snd_StreamSafeCd* continuam indo direto ao sceCdRead
+// Streaming init: doesn't set the lib's gStreamingInited, so snd_StreamSafeCd* keep going straight to sceCdRead
 void initVagStreaming(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); }
 void isStreamBufferedCB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt) { callGuest(rdram, ctx, rt, arg(ctx, 1), 1, arg(ctx, 2)); }
 void ret1(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); }
 
-// Funil de todos os comandos ao IOP: so chega aqui o que nenhum hook acima cobriu
+// Funnel for every command to the IOP: only commands that none of the hooks above cover reach this
 void unhandledCommand(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
     static uint64_t seen[2] = {};
@@ -225,16 +227,17 @@ void unhandledCommand(uint8_t *, R5900Context *ctx, PS2Runtime *)
     if (cmd < 128 && !(seen[cmd >> 6] & (1ull << (cmd & 63))))
     {
         seen[cmd >> 6] |= 1ull << (cmd & 63);
-        std::fprintf(stderr, "[snd] comando 0x%02x do 989snd sem hook (ignorado)\n", cmd);
+        std::fprintf(stderr, "[snd] 989snd command 0x%02x has no hook (ignored)\n", cmd);
     }
     setReturnS32(ctx, 0);
 }
 
-// sceSifLoadModule: nenhum IRX sobe para o IOP emulado. Os de som sobram com o som nativo; os outros (SIO2MAN, PADMAN, MCMAN,
-// MCSERV) tambem, porque o lado do EE ja e atendido pelos stubs do runtime (scePad* le o teclado e o roteiro de pad, sceMc* grava
-// em arquivos do host, sceCd* le a ISO). Conferido em 2026-10-18: menu pelo roteiro de pad ate a luta e luta IA x IA, a 60 q/s
-// (docs/passos/FRONTEIRA.md). WOTM_IRX=1 volta a carregar os IRX que nao sao de som no IOP emulado, so no executavel de teste: o do
-// jogo (wotm, PS2X_HW_EMU=0) nao tem IOP emulado desde o passo 6 e ignora a variavel.
+// sceSifLoadModule: no IRX is loaded into the emulated IOP. The sound modules are redundant with native sound; the others (SIO2MAN,
+// PADMAN, MCMAN, MCSERV) are too, because the EE side is already served by the runtime stubs (scePad* reads the keyboard and the
+// pad script, sceMc* writes to host files, sceCd* reads the ISO). Verified on 2026-10-18: menu driven by the pad script through to
+// the fight, and an AI vs AI fight, at 60 fps (docs/passos/FRONTEIRA.md). WOTM_IRX=1 brings back loading the non-sound IRX modules
+// into the emulated IOP, but only in the test executable: the game executable (wotm, PS2X_HW_EMU=0) has had no emulated IOP since
+// step 6 and ignores the variable.
 void loadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 {
     const char *path = reinterpret_cast<const char *>(rdram + (arg(ctx, 0) & PS2_RAM_MASK));
@@ -245,25 +248,25 @@ void loadModule(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
 #else
     static const bool irx = [] {
         if (std::getenv("WOTM_IRX"))
-            std::fprintf(stderr, "[iop] WOTM_IRX ignorada: o wotm.exe nao tem IOP emulado (use o ps2EntryRunner)\n");
+            std::fprintf(stderr, "[iop] WOTM_IRX ignored: wotm.exe has no emulated IOP (use ps2EntryRunner)\n");
         return false;
     }();
 #endif
     const bool sound = p.find("989SND") != std::string::npos || p.find("LIBSD") != std::string::npos || p.find("989ERR") != std::string::npos;
     if (!irx || sound)
     {
-        std::fprintf(stderr, "[iop] %s nao carregado (%s)\n", path, sound ? "som nativo" : "stubs do runtime");
-        setReturnS32(ctx, 0x100);   // id de modulo positivo = sucesso
+        std::fprintf(stderr, "[iop] %s not loaded (%s)\n", path, sound ? "native sound" : "runtime stubs");
+        setReturnS32(ctx, 0x100);   // positive module id = success
         return;
     }
     g_origLoadModule(rdram, ctx, rt);
 }
 #undef SND_LOG
-// Banco de efeitos do Shell (SND/SHELL_S.BNK) so no motor nativo, fora dos gSoundBanks do jogo: o painel do port na pausa da luta
-// (wotm_mainmenu.inc) toca os sons do menu, e na luta o jogo nao tem esse banco carregado. Lido do disco (ou de mods/) na primeira
-// vez e mantido; o jogo nao o ve nem o descarrega. Os sons dele vao para o grupo 2, o dos sons da pausa (playPauseMenuSound, banco
-// de ambiente): na pausa o jogo baixa o volume mestre dos grupos 0 e 1 a zero (SoundManager::updatePauseAllSounds), e o Shell e todo
-// do grupo 0.
+// The Shell effects bank (SND/SHELL_S.BNK), loaded only in the native engine and kept outside the game's gSoundBanks: the port's
+// panel in the fight pause menu (wotm_mainmenu.inc) plays the menu sounds, and during a fight the game doesn't have this bank
+// loaded. It's read from the disc (or from mods/) the first time and kept; the game never sees it or unloads it. Its sounds go to
+// group 2, the group of the pause sounds (playPauseMenuSound, ambient bank): when paused, the game drops the master volume of
+// groups 0 and 1 to zero (SoundManager::updatePauseAllSounds), and the whole Shell bank is in group 0.
 constexpr int kPanelGroup = 2;
 inline uint32_t panelShellBank()
 {
@@ -276,7 +279,7 @@ inline uint32_t panelShellBank()
         std::vector<uint8_t> f;
         if (wotm::disc::readFile(io.cdRoot, io.cdImage.string(), "SND/SHELL_S.BNK", f))
             s_h = Engine::get().loadBankData(f, kPanelGroup);
-        std::fprintf(stderr, "[snd] banco do Shell para o painel na pausa: %s\n", s_h ? "carregado (SND/SHELL_S.BNK)" : "falhou");
+        std::fprintf(stderr, "[snd] Shell bank for the pause panel: %s\n", s_h ? "loaded (SND/SHELL_S.BNK)" : "failed");
     }
     return s_h;
 }
@@ -284,16 +287,17 @@ inline void playPanelSfx(int sound)
 {
     if (const uint32_t h = panelShellBank())
     {
-        const uint32_t v = Engine::get().play(h, sound, 0x400, 0, 0, 0);   // como o ShellSound::playShellSFXSound
+        const uint32_t v = Engine::get().play(h, sound, 0x400, 0, 0, 0);   // same as ShellSound::playShellSFXSound
         if (g_log)
-            std::fprintf(stderr, "[snd] painel: som %d do Shell -> %u (grupo %d, volume mestre %#x)\n", sound, v, kPanelGroup,
+            std::fprintf(stderr, "[snd] panel: Shell sound %d -> %u (group %d, master volume %#x)\n", sound, v, kPanelGroup,
                          Engine::get().masterVolume(kPanelGroup));
     }
 }
-// Grito do monstro `monster` (indice do jogo, tipo >> 5) para o narrador (opcao MONSTER CRY, wotm_narrator.inc): o som do
-// MonsterSound::playSignatureSound (o do cinema de entrada da luta), do banco do proprio monstro (o do SoundManager::loadMonsterBank;
-// o Final_s.bnk e o banco da fase final, carregado pelo loadRTSoundBanks). Trajes com outro som no jogo (Preytor 1, Agamo 3) usam o
-// do traje 0. Um banco por vez, no grupo 0 (efeitos: o volume mestre do menu); false = sem grito (Goliath Prime, 13, nao tem).
+// Plays the cry of monster `monster` (game index, type >> 5) for the narrator (MONSTER CRY option, wotm_narrator.inc): the sound
+// from MonsterSound::playSignatureSound (the one in the fight's intro cutscene), from the monster's own bank (the one loaded by
+// SoundManager::loadMonsterBank; Final_s.bnk is the final stage's bank, loaded by loadRTSoundBanks). Costumes that have a different
+// sound in the game (Preytor 1, Agamo 3) use costume 0's. One bank at a time, in group 0 (effects: the menu's master volume);
+// returns false when there's no cry (Goliath Prime, 13, has none).
 inline bool playMonsterCry(int monster)
 {
     struct Cry { const char *bank; int sound; };
@@ -306,20 +310,20 @@ inline bool playMonsterCry(int monster)
     const Cry &c = kCry[monster];
     if (g_cryFile != c.bank)
     {
-        dropCryBank();   // corta o grito anterior
+        dropCryBank();   // cuts off the previous cry
         const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
         std::vector<uint8_t> f;
         if (wotm::disc::readFile(io.cdRoot, io.cdImage.string(), c.bank, f))
             g_cryBank = Engine::get().loadBankData(f, 0);
         if (!g_cryBank)
         {
-            std::fprintf(stderr, "[narrador] grito: banco %s nao carregou\n", c.bank);
+            std::fprintf(stderr, "[narrador] cry: bank %s failed to load\n", c.bank);
             return false;
         }
         g_cryFile = c.bank;
     }
     const uint32_t v = Engine::get().play(g_cryBank, c.sound, 0x400, 0, 0, 0);
-    std::fprintf(stderr, "[narrador] grito do monstro %d: som %d de %s%s\n", monster, c.sound, c.bank, v ? "" : " (nao tocou)");
+    std::fprintf(stderr, "[narrador] cry for monster %d: sound %d from %s%s\n", monster, c.sound, c.bank, v ? "" : " (did not play)");
     return v != 0;
 }
 } // namespace wotm_snd_hooks
@@ -329,14 +333,14 @@ void wotmSndInstall(PS2Runtime &runtime)
     using namespace wotm_snd_hooks;
     g_log = std::getenv("PS2X_SND_LOG") != nullptr;
     Engine::get().setReader(&readLsn);
-    // modo deterministico (WOTM_FIXEDSTEP, netcode): o motor e mixado na thread do jogo, um quadro por vez (wotmSoundFrame)
+    // deterministic mode (WOTM_FIXEDSTEP, netcode): the engine is mixed on the game thread, one frame at a time (wotmSoundFrame)
     if (const char *e = std::getenv("WOTM_FIXEDSTEP"); e && *e)
     {
         Engine::get().setFrameLocked(true);
-        std::fprintf(stderr, "[snd] som preso ao quadro do jogo (WOTM_FIXEDSTEP)\n");
+        std::fprintf(stderr, "[snd] sound locked to the game frame (WOTM_FIXEDSTEP)\n");
     }
     struct H { uint32_t addr; PS2Runtime::RecompiledFunction fn; };
-    // enderecos de config/status.csv (lib989snd/snd)
+    // addresses from config/status.csv (lib989snd/snd)
     const H hooks[] = {
         {wotm::fn::snd_StartSoundSystem, hostLeaf<startSoundSystem>}, {wotm::fn::snd_FlushSoundCommands, hostLeaf<ret0> /* FlushSoundCommands */}, {wotm::fn::snd_StopSoundSystem, hostLeaf<stopSoundSystem>}, {wotm::fn::snd_GetTick, hostLeaf<getTick>},
         {wotm::fn::snd_BankLoadByLoc, hostLeaf<bankLoadByLoc>}, {wotm::fn::snd_BankLoadByLoc_CB, hostLeaf<bankLoadByLocCB>}, {wotm::fn::snd_ResolveBankXREFS, hostLeaf<ret0> /* ResolveBankXREFS */},
@@ -354,22 +358,22 @@ void wotmSndInstall(PS2Runtime &runtime)
         {wotm::fn::snd_IsVAGStreamBuffered, hostLeaf<ret1> /* IsVAGStreamBuffered */}, {wotm::fn::snd_IsVAGStreamBuffered_CB, hostLeaf<isStreamBufferedCB>},
         {wotm::fn::snd_SetReverbType, hostLeaf<ret0> /* SetReverbType */}, {wotm::fn::snd_SetReverbDepth, hostLeaf<ret0> /* SetReverbDepth */}, {wotm::fn::snd_SetReverbEx, hostLeaf<ret0> /* SetReverbEx */},
         {wotm::fn::snd_SRAMGetFreeMem, hostLeaf<sramFree>},
-        {wotm::fn::snd_InitMovieSound, hostLeaf<ret0> /* InitMovieSound (os filmes tem audio proprio em wotm_fmv.hpp) */}, {wotm::fn::snd_ResetMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_PauseMovieSound, hostLeaf<ret0>},
+        {wotm::fn::snd_InitMovieSound, hostLeaf<ret0> /* InitMovieSound (movies have their own audio in wotm_fmv.hpp) */}, {wotm::fn::snd_ResetMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_PauseMovieSound, hostLeaf<ret0>},
         {wotm::fn::snd_CloseMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_StartMovieSound, hostLeaf<ret0>}, {wotm::fn::snd_GetTransStatus, hostLeaf<ret0> /* GetTransStatus */},
     };
     for (const H &h : hooks)
         runtime.registerFunction(h.addr, h.fn);
-    g_origLoadModule = runtime.lookupFunction(wotm::fn::sceSifLoadModule);   // sceSifLoadModule (stub do runtime)
+    g_origLoadModule = runtime.lookupFunction(wotm::fn::sceSifLoadModule);   // sceSifLoadModule (runtime stub)
     if (g_origLoadModule)
         runtime.registerFunction(wotm::fn::sceSifLoadModule, hostLeaf<loadModule>);
-    std::fprintf(stderr, "[snd] som nativo: %zu funcoes do 989snd trocadas\n", sizeof hooks / sizeof hooks[0]);
+    std::fprintf(stderr, "[snd] native sound: %zu 989snd functions replaced\n", sizeof hooks / sizeof hooks[0]);
 }
-// Fronteira do quadro do jogo no modo deterministico (wotm_sync.inc): o motor anda `fields` fields
+// Game frame boundary in deterministic mode (wotm_sync.inc): the engine advances by `fields` fields
 void wotmSoundFrame(unsigned fields) { wotm::snd::Engine::get().advanceFrame(fields); }
 #else
 void wotmSndInstall(PS2Runtime &)
 {
-    std::fprintf(stderr, "[snd] som nativo desligado: falta native/wotm_snd.hpp (WOTM_NATIVE_DIR)\n");
+    std::fprintf(stderr, "[snd] native sound off: native/wotm_snd.hpp is missing (WOTM_NATIVE_DIR)\n");
 }
 void wotmSoundFrame(unsigned) {}
 #endif

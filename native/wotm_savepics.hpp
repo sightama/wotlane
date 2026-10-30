@@ -1,17 +1,17 @@
-// Imagens da lista de saves (NATIVO.md, "Save em JSON"): a esquerda do modal, a foto larga da fase do save e, por cima, o logo do
-// monstro, como na escolha de fase e de monstro do menu. Saem do SHELL/SHELL.TEX e SHELL/SHELL.RTX do disco (o mesmo par que o menu
-// carrega; depois da luta ele nao esta na memoria, por isso a leitura e direta do disco).
+// Images for the save list (NATIVO.md, "Save em JSON"): on the left of the modal, the wide picture of the save's level with the
+// monster's logo on top of it, as in the menu's level and monster selection. They come from SHELL/SHELL.TEX and SHELL/SHELL.RTX on
+// the disc (the same pair the menu loads; after a fight it is no longer in memory, so it is read straight from the disc).
 //
-// - Logos (256x128, T8): texIds 121..129 e 52 (Raptros). Fotos largas (512x256): dois pedacos T8 de 256x256 lado a lado; cada fase
-//   tem tambem uma foto quadrada no pedaco anterior, que aqui nao e usada.
-// - Paletas: entradas CT32 16x16 do .RTX, alocadas na ordem das texturas (4 blocos por T8, 1 por T4); o "tbp" da tabela e o da entrada
-//   no arquivo. Conferido no tools/tex.py: as do arquivo que o .NGP liga seguem a mesma ordem; as daqui o .NGP nao liga (o menu as troca
-//   por switch).
-// - As linhas da textura estao de baixo para cima (o jogo desenha com V invertido).
+// - Logos (256x128, T8): texIds 121..129 and 52 (Raptros). Wide pictures (512x256): two 256x256 T8 tiles side by side; each level
+//   also has a square picture in the tile just before them, which is not used here.
+// - Palettes: 16x16 CT32 entries in the .RTX, allocated in texture order (4 blocks per T8, 1 per T4); the "tbp" in the tables below
+//   is the entry's tbp in the file. Verified with tools/tex.py: the palettes in the file that an .NGP binds follow the same order;
+//   the ones used here are not bound by any .NGP (the menu switches them in code).
+// - Texture rows are stored bottom to top (the game draws with V flipped).
 //
-// O modal (wotm_save.inc, thread do EE) posta a lista a cada quadro (post); a janela desenha entre a lista de alta prioridade (a
-// moldura do McBackground) e o texto (draw, em wotm_live.inc). Sem post recente (pagina fechada) nao desenha nada.
-// WOTM_SAVEPICS_NO_DRAW antes do include: so a fila, sem o raylib (wotm_overrides.cpp).
+// The modal (wotm_save.inc, EE thread) posts the list every frame (post); the window draws it between the high-priority list (the
+// McBackground frame) and the text (draw, in wotm_live.inc). With no recent post (page closed) nothing is drawn.
+// Define WOTM_SAVEPICS_NO_DRAW before the include to get only the queue, without raylib (wotm_overrides.cpp).
 #pragma once
 #include <algorithm>
 #include <chrono>
@@ -27,19 +27,19 @@ namespace wotm::savepics {
 
 enum Kind : uint8_t { kLevel = 0, kLogo = 1, kMonster = 2 };
 
-// Em coordenadas da tela do jogo (640 x 224, a faixa 4:3 da janela)
+// In game-screen coordinates (640 x 224, the window's 4:3 area)
 struct Pic {
     Kind kind;
-    uint32_t id;   // fase (kLevels do wotm_save.inc), monstro (sel >> 5) ou, em kMonster, monstro | traje << 8
+    uint32_t id;   // level (kLevels in wotm_save.inc), monster (sel >> 5) or, for kMonster, monster | costume << 8
     float x0, y0, x1, y1;
-    uint8_t a;     // 255 = opaco
+    uint8_t a;     // 255 = opaque
 };
 
 struct Tile {
     uint16_t texId, palTbp;
 };
-// Fase -> foto larga (esquerda, direita). Indices de kLevels (Shell::m_levelNum): 1 central .. 11 capitol, 14 minisf, 15 volcano
-// (as 12, 13 e 16 nao tem foto no SHELL.TEX: a selecao de fase mostra a de outra; wotm_levelsel.inc).
+// Level -> wide picture (left, right tiles). Indices into kLevels (Shell::m_levelNum): 1 central .. 11 capitol, 14 minisf, 15 volcano
+// (12, 13 and 16 have no picture in SHELL.TEX: level selection shows another level's picture for them; wotm_levelsel.inc).
 struct LevelPic {
     uint32_t level;
     Tile l, r;
@@ -59,7 +59,7 @@ constexpr LevelPic kLevelPics[] = {
     {14, {86, 256}, {87, 260}},    // Mini Baytown
     {15, {90, 272}, {91, 276}},    // Volcano
 };
-// Monstro (indice de kMonsters) -> logo
+// Monster (index into kMonsters) -> logo
 struct LogoPic {
     uint32_t monster;
     Tile t;
@@ -87,14 +87,14 @@ inline bool hasLogo(uint32_t monster) {
         if (p.monster == monster) return true;
     return false;
 }
-// Monstro (indice de kMonsters) -> prefixo do arquivo em MON/ (MONKEY0.NGP...: o numero e o traje, Shell::m_costume)
+// Monster (index into kMonsters) -> file name prefix in MON/ (MONKEY0.NGP...: the digit is the costume, Shell::m_costume)
 inline const char *monsterFile(uint32_t monster) {
     static const char *const k[] = {nullptr, "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", nullptr, "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN",
-                                           nullptr, "ASSBOSS", "JELLY", "FINAL"};   // 13 a 15: chefes, base de monstro custom (wotm_mods.hpp)
+                                           nullptr, "ASSBOSS", "JELLY", "FINAL"};   // 13-15: bosses, custom monster bases (wotm_mods.hpp)
     return monster < std::size(k) ? k[monster] : nullptr;
 }
 
-// ---- fila do modal (thread do EE) para a janela ----
+// ---- queue from the modal (EE thread) to the window ----
 struct Channel {
     std::mutex m;
     std::vector<Pic> pics;
@@ -120,23 +120,23 @@ inline void clear() {
 
 #ifndef WOTM_SAVEPICS_NO_DRAW
 #include "wotm_disc.hpp"
-#include "wotm_model.hpp"   // monstro 3D (kMonster)
+#include "wotm_model.hpp"   // 3D monster (kMonster)
 #include "raylib.h"
 #include <map>
 #include <memory>
 
 namespace wotm::savepics {
 
-// ---- leitura do disco (thread da janela) ----
+// ---- disc reading (window thread) ----
 namespace detail {
-// .TEX/.RTX num zip de um arquivo so com o magic "IE\3\4" (zipInflateAll)
+// .TEX/.RTX are stored in a single-file zip with the magic "IE\3\4" (zipInflateAll)
 inline bool unzipIe(std::vector<uint8_t> &d) { return model::unzipIe(d); }
 struct Packet {
     size_t off;
     uint16_t texId, tbp;
     uint32_t psm, w, h;
 };
-// Cabecalho _texfile {numSizes, headerQw, ...}; pacotes de 16 bytes {size, pad, texId, tbp, bits} (tools/tex.py, parse)
+// _texfile header {numSizes, headerQw, ...}; 16-byte packets {size, pad, texId, tbp, bits} (tools/tex.py, parse)
 inline std::vector<Packet> packets(const std::vector<uint8_t> &d) {
     std::vector<Packet> out;
     if (d.size() < 8) return out;
@@ -162,8 +162,8 @@ inline std::vector<Packet> packets(const std::vector<uint8_t> &d) {
 
 class Drawer {
 public:
-    // Thread da janela, FORA do BeginTextureMode do quadro (antes dele): desenha o monstro 3D da lista (kMonster) no RenderTexture
-    // dele, animado no idle desde que a linha foi escolhida. Mesmos argumentos do draw.
+    // Window thread, OUTSIDE the frame's BeginTextureMode (before it): renders the list's 3D monster (kMonster) into its own
+    // RenderTexture, playing the idle animation from the moment the row was selected. Same arguments as draw.
     void prepare(const std::filesystem::path &discRoot, const std::string &iso, float w, float rh) {
         const Pic *mp = nullptr, *lp = nullptr;
         Pic pic{}, lev{};
@@ -183,36 +183,37 @@ public:
             monT0_ = GetTime();
             model_.reset();
             const char *pre = monsterFile(pic.id & 0xFF);
-            // traje (4+ = skin de mod: MON/<PREFIXO><n>.* vem de mods/, wotm_mods.hpp) e o traje do disco de reserva (o base da skin)
+            // costume (4+ = mod skin: MON/<PREFIX><n>.* comes from mods/, wotm_mods.hpp) and the fallback disc costume (the skin's base)
             const uint32_t costume = (pic.id >> 8) & 0xFF, base = (pic.id >> 16) & 3;
             if (pre) {
                 auto m = std::make_unique<model::Model>();
                 if (m->load(discRoot, iso, pre + std::to_string(costume)) || m->load(discRoot, iso, pre + std::to_string(base)) ||
                     m->load(discRoot, iso, std::string(pre) + "0"))
-                    model_ = std::move(m), model_->computeFraming(model::kIdle);   // caixa fixa: a camera nao acompanha o idle
+                    model_ = std::move(m), model_->computeFraming(model::kIdle);   // fixed box: the camera does not follow the idle animation
                 else
-                    std::fprintf(stderr, "[wotm] lista de saves: MON/%s%u.NGP nao achado; sem monstro 3D\n", pre, costume);
+                    std::fprintf(stderr, "[wotm] save list: MON/%s%u.NGP not found; no 3D monster\n", pre, costume);
             }
         }
         if (!model_) return;
         const float frame = float((GetTime() - monT0_) * 60.0);
         if (!model_->pose(model::kIdle, frame)) model_->pose(-1, 0.f);
-        // 2x o tamanho na janela (o DrawTexturePro reduz com filtro bilinear: bordas suaves)
+        // render at 2x the on-window size (DrawTexturePro scales it down with bilinear filtering, which smooths the edges)
         const float sx = w / 640.f, sy = rh / 224.f;
         const int W = std::clamp(int((pic.x1 - pic.x0) * sx * 2.f), 16, 1536), H = std::clamp(int((pic.y1 - pic.y0) * sy * 2.f), 16, 1536);
-        // Fundo: o pedaco da foto da fase sob a caixa do monstro, opaco (o fade vem do tom no draw), para as misturas do GS que agem
-        // sobre o destino (escurecer, subtrair) terem o que escurecer. Fora da foto o fundo fica transparente.
+        // Background: the part of the level picture under the monster's box, drawn opaque (the fade comes from the tint in draw), so
+        // that GS blend modes acting on the destination (darken, subtract) have something to darken. Outside the picture the
+        // background stays transparent.
         const Texture2D *lt = nullptr;
         if (lp && load(discRoot, iso))
             for (size_t i = 0; i < std::size(kLevelPics); ++i)
                 if (kLevelPics[i].level == lp->id && level_[i].id) lt = &level_[i];
         const float kx = float(W) / (pic.x1 - pic.x0), ky = float(H) / (pic.y1 - pic.y0);
-        if (!fxTried_) {   // fogo do Agamo e lens flare: texturas de particula da fase (LVL/CENTRAL), uma vez
+        if (!fxTried_) {   // Agamo's fire and lens flare: the level's particle textures (LVL/CENTRAL), loaded once
             fxTried_ = true;
-            if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] lista de saves: LVL/CENTRAL.TEX/.RTX nao achado; sem fogo nem lens flare\n");
+            if (!fx_.load(discRoot, iso)) std::fprintf(stderr, "[wotm] save list: LVL/CENTRAL.TEX/.RTX not found; no fire or lens flare\n");
             renderer_.setFx(&fx_);
         }
-        const Framing fr = framingOf((monId_ & 0xFF) | ((monId_ >> 16) & 3) << 8);   // enquadramento do traje do disco (o base)
+        const Framing fr = framingOf((monId_ & 0xFF) | ((monId_ >> 16) & 3) << 8);   // framing of the disc costume (the base one)
         renderer_.shiftX = fr.shiftX;
         renderer_.shiftY = fr.shiftY;
         renderer_.fwd = fr.fwd;
@@ -225,8 +226,8 @@ public:
         monReady_ = true;
     }
 
-    // Thread da janela, dentro do BeginTextureMode do quadro nativo. `x0`/`w`: a faixa 4:3 da tela do jogo em pixels (gsScreenRect);
-    // `rh`: altura do quadro.
+    // Window thread, inside the native frame's BeginTextureMode. `x0`/`w`: the game screen's 4:3 area in pixels (gsScreenRect);
+    // `rh`: frame height.
     void draw(const std::filesystem::path &discRoot, const std::string &iso, float x0, float w, float rh) {
         std::vector<Pic> pics;
         {
@@ -241,7 +242,7 @@ public:
             const Texture2D *t = nullptr;
             if (p.kind == kMonster) {
                 if (!monReady_) continue;
-                // cor pre-multiplicada (Renderer): o fade escala cor e alfa juntos
+                // premultiplied color (Renderer): the fade scales color and alpha together
                 const Texture2D &mt = renderer_.target().texture;
                 BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);
                 DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)},
@@ -264,7 +265,7 @@ public:
         }
     }
 
-    // Foto larga da fase (512x256, de cima para baixo) ou nullptr; o mosaico da RANDOM da selecao de fase (wotm_levelsel.inc)
+    // Wide level picture (512x256, top to bottom) or nullptr; used for the RANDOM mosaic in level selection (wotm_levelsel.inc)
     const Texture2D *levelTexture(const std::filesystem::path &discRoot, const std::string &iso, uint32_t level) {
         if (!load(discRoot, iso)) return nullptr;
         for (size_t i = 0; i < std::size(kLevelPics); ++i)
@@ -279,7 +280,7 @@ private:
         std::vector<uint8_t> tex, rtx;
         if (!disc::readFile(discRoot, iso, "SHELL/SHELL.TEX", tex) || !disc::readFile(discRoot, iso, "SHELL/SHELL.RTX", rtx) ||
             !detail::unzipIe(tex) || !detail::unzipIe(rtx)) {
-            std::fprintf(stderr, "[wotm] lista de saves: SHELL/SHELL.TEX ou .RTX nao achado; sem logos nem fotos das fases\n");
+            std::fprintf(stderr, "[wotm] save list: SHELL/SHELL.TEX or .RTX not found; no logos or level pictures\n");
             return false;
         }
         texPk_ = detail::packets(tex);
@@ -294,12 +295,12 @@ private:
             std::vector<uint32_t> px(256 * 128, 0);
             if (tile(tex, rtx, kLogoPics[i].t, px, 256, 0)) logo_[i] = upload(px, 256, 128), ++n;
         }
-        std::fprintf(stderr, "[wotm] lista de saves: %d de %zu imagens do SHELL.TEX\n", n, std::size(kLevelPics) + std::size(kLogoPics));
+        std::fprintf(stderr, "[wotm] save list: %d of %zu images from SHELL.TEX\n", n, std::size(kLevelPics) + std::size(kLogoPics));
         ok_ = n > 0;
         return ok_;
     }
 
-    // Um pedaco T8 com a paleta do .RTX, em `px` (linhas de `stride` pixels) a partir da coluna `col`, ja de cima para baixo
+    // Decodes one T8 tile with its .RTX palette into `px` (rows of `stride` pixels) starting at column `col`, flipped to top-to-bottom
     bool tile(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, Tile t, std::vector<uint32_t> &px, uint32_t stride, uint32_t col) {
         const detail::Packet *p = nullptr, *pal = nullptr;
         for (const detail::Packet &k : texPk_)
@@ -310,11 +311,11 @@ private:
             return false;
         uint32_t clut[256];
         for (uint32_t i = 0; i < 256; ++i) {
-            const uint32_t j = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);   // CSM1: bits 3 e 4 trocados
+            const uint32_t j = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);   // CSM1: bits 3 and 4 swapped
             uint32_t c;
             std::memcpy(&c, rtx.data() + pal->off + 0x10 + 4 * j, 4);
             const uint32_t a = c >> 24;
-            clut[i] = (c & 0xFFFFFFu) | (a >= 0x80 ? 255u : a * 2u) << 24;   // alfa do GS: 0x80 = 1,0
+            clut[i] = (c & 0xFFFFFFu) | (a >= 0x80 ? 255u : a * 2u) << 24;   // GS alpha: 0x80 = 1.0
         }
         const uint8_t *src = tex.data() + p->off + 0x80;
         for (uint32_t y = 0; y < p->h; ++y)
@@ -335,14 +336,14 @@ private:
     Texture2D level_[std::size(kLevelPics)]{}, logo_[std::size(kLogoPics)]{};
     bool tried_ = false, ok_ = false;
 
-public:   // enquadramento tambem usado pela selecao de monstros de 3 e 4 jogadores (wotm_padsel.inc)
-    // Monstro 3D: virado 3/4 para a direita da tela (yaw 0 = de frente), camera um pouco acima
+public:   // framing is also used by the 3- and 4-player monster selection (wotm_padsel.inc)
+    // 3D monster: turned 3/4 toward the right of the screen (yaw 0 = facing the camera), camera slightly above
     static constexpr float kYaw = 35.f, kPitch = 8.f;
-    // Correcao do enquadramento por monstro e traje (costume 0-3; -1 = todos). O automatico usa a maior medida da caixa, entao a cauda
-    // do Togera (3) e as asas do Raptros (9) deixavam os dois mais longe; a cauda do Togera tambem tira o centro da caixa do corpo:
-    // `fwd` anda o centro para a frente do monstro (model::Renderer::fwd), o que vale em qualquer angulo e proporcao de quadro.
-    // O fogo do Magmo traje 3 (o quarto, contando de 1) e o da cabeca do Agamo (10) aumentam a caixa: aproxima e sobe um pouco para os
-    // pes nao sairem por baixo. shiftX/shiftY em fracao do quadro (+ = direita/cima).
+    // Per-monster, per-costume framing correction (costume 0-3; -1 = all). Automatic framing uses the box's largest dimension, so
+    // Togera's tail (3) and Raptros' wings (9) left both of them too far away; Togera's tail also pulls the box center off its body:
+    // `fwd` moves the center toward the monster's front (model::Renderer::fwd), which works at any angle and frame aspect ratio.
+    // The fire on Magmo's costume 3 (the fourth, counting from 1) and on Agamo's head (10) enlarge the box: zoom in and shift up a
+    // little so the feet don't get cut off at the bottom. shiftX/shiftY are fractions of the frame (+ = right/up).
     struct Framing {
         uint32_t mon;
         int costume;
@@ -350,7 +351,7 @@ public:   // enquadramento tambem usado pela selecao de monstros de 3 e 4 jogado
     };
     static constexpr Framing kFraming[] = {
         {3, -1, 1.35f, 0.f, 0.f, 0.18f},   // Togera
-        {8, 3, 1.25f, 0.f, 0.08f},         // Magmo, traje de fogo
+        {8, 3, 1.25f, 0.f, 0.08f},         // Magmo, fire costume
         {9, -1, 1.6f, 0.f, 0.f},           // Raptros
         {10, -1, 1.15f, 0.f, 0.04f},       // Agamo
     };
