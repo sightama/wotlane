@@ -36,7 +36,11 @@
 #include "net/wotm_net_client.hpp"   // cliente da partida em rede (wotm_sync.inc)
 #include "wotm_netstatus.h"          // mensagem da rede na tela e teclas de debug desligadas (wotm_live.inc)
 
+#ifdef _WIN32
 extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void *module, char *path, unsigned long size);
+#else
+unsigned long GetModuleFileNameA(void *module, char *path, unsigned long size);   // wotm_posix.cpp: the same contract, for netBuildId
+#endif
 
 namespace ps2_stubs   // Kernel/Stubs/Pad.cpp: estado de controle que o scePadRead devolve no lugar dos dispositivos
 {

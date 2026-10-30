@@ -197,7 +197,7 @@ index 0000000..0947e18
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..3f64eb7 100644
+index 589d768..fd8c192 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -317,7 +317,7 @@ index 589d768..3f64eb7 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,84 @@ endif()
+@@ -608,3 +645,89 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -344,6 +344,11 @@ index 589d768..3f64eb7 100644
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_overrides.cpp"
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"
 +)
++# WotM, macOS/Linux: crash stack trace and the macOS menu bar/Dock in fullscreen (wotm_posix.cpp; system headers that clash with raylib)
++if(NOT WIN32)
++    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/runtime/wotm_posix.cpp")
++    set_source_files_properties("${WOTM_NATIVE_DIR}/runtime/wotm_posix.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
++endif()
 +# VU0 nativo e interpretador do VU1: a aritmetica do VU (madd com dois arredondamentos, para zero) nao sobrevive a /fp:fast
 +# (contracao em FMA; no VU1 a corda do Ultra-V ganhava uma tangente de ruido onde os pontos coincidem)
 +set(WOTM_VU_STRICT_SOURCES

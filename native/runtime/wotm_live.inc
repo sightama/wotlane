@@ -278,6 +278,13 @@ bool wotmHoldGame(bool hold);  // wotm_foto.inc: segura a thread do EE na fronte
 #define WOTM_HAVE_NATIVE 1
 
 void wotmHostProfWatchThisThread();   // ps2_hostprof.cpp (PS2X_HOSTPROF); at global scope, where the definition is
+#ifndef _WIN32
+#include <signal.h>
+void wotmCrashTrace(void *signalContext);   // wotm_posix.cpp
+#endif
+#ifdef __APPLE__
+void wotmMacHideMenuBarAndDock(bool hide);   // wotm_posix.cpp (borderless fullscreen)
+#endif
 namespace wotm_live
 {
 inline const char *g_stage = "idle";   // etapa da camada nativa em andamento (para localizar a queda)
@@ -309,7 +316,38 @@ inline long __stdcall crashFilter(ExcPointers *e)
     std::fflush(stderr);
     return 0; // EXCEPTION_CONTINUE_SEARCH
 }
-#endif // _WIN32 (other OSes: no crash filter yet)
+#else
+// Crash diagnostics outside Windows: the same [CRASH] line as crashFilter, from a signal handler, then the stack (wotmCrashTrace) and
+// the signal's default action (the process ends with it; core dump if enabled). fprintf isn't async-signal-safe: like the Windows
+// filter this runs once, in a process that is already dying, where a best-effort report is worth it. The alternate stack is only the
+// installing thread's (the window's): a stack overflow on another thread ends without the report.
+inline void crashSignal(int sig, siginfo_t *info, void *uctx)
+{
+    std::fprintf(stderr, "[CRASH] signal=%d (%s) addr=%p stage=%s\n", sig, strsignal(sig), info ? info->si_addr : nullptr, g_stage);
+    std::fflush(stderr);
+    static bool traced = false;   // only the first crash: the stack of a second one (inside the trace) doesn't help
+    if (!traced)
+    {
+        traced = true;
+        wotmCrashTrace(uctx);
+    }
+    raise(sig);   // SA_RESETHAND put the default action back
+}
+inline void installCrashHandler()
+{
+    static char altStack[1 << 16];
+    stack_t ss{};
+    ss.ss_sp = altStack;
+    ss.ss_size = sizeof altStack;
+    sigaltstack(&ss, nullptr);
+    struct sigaction sa{};
+    sa.sa_sigaction = crashSignal;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    for (const int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT})
+        sigaction(sig, &sa, nullptr);
+}
+#endif // _WIN32
 struct State
 {
     wotm::Scene scene;
@@ -514,12 +552,20 @@ static void setFullscreen(bool on)
         ToggleBorderlessWindowed();
         ClearWindowState(FLAG_WINDOW_TOPMOST);   // o raylib 5.5 poe a janela sem borda sempre por cima (GLFW_FLOATING)
         captureFriendlyBorderless();
+#ifdef __APPLE__
+        wotmMacHideMenuBarAndDock(true);
+#endif
         return;
     }
     if (IsWindowFullscreen())
         ToggleFullscreen();   // volta com o tamanho do monitor
     else
+    {
         ToggleBorderlessWindowed();
+#ifdef __APPLE__
+        wotmMacHideMenuBarAndDock(false);
+#endif
+    }
     fitWindow();   // o raylib volta ao tamanho de antes, que e o 960x720 do runtime (ou o do monitor) quando a sessao abriu em tela cheia
 }
 
@@ -1658,6 +1704,13 @@ static bool wotmDrawNative(const uint8_t *rdram)
     {
         filterInstalled = true;
         wotm_live::SetUnhandledExceptionFilter(wotm_live::crashFilter);
+    }
+#else
+    static bool handlerInstalled = false;
+    if (!handlerInstalled)
+    {
+        handlerInstalled = true;
+        wotm_live::installCrashHandler();
     }
 #endif
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
