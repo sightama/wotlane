@@ -1,73 +1,88 @@
-# WotM: decompilação de War of the Monsters (PS2, NTSC-U, SCUS-97197)
+# WotM: decompilation of War of the Monsters (PS2, NTSC-U, SCUS-97197)
 
-Projeto de decompilação do executável `SCUS_971.97`. O objetivo final é um port nativo de PC fácil de modar. O dono do projeto escreve em português; responda em português.
+Decompilation project for the `SCUS_971.97` executable. The end goal is a native PC port that's easy to mod.
 
-**Direção: port primeiro.** A base é o jogo recompilado com o PS2Recomp (fora do repo; o C++ gerado é código do jogo) mais a camada nativa deste repo
-(`native/`: desenho com GPU, som, filmes, teclado), que já roda a luta a 60 fps. A decompilação (`src/`) é a camada legível que substitui, por hook, só o que importa para modar (`Shell::Load*`, `MonsterParse`,
-câmera); o runtime cobaia com as equivalentes está parado. **Byte match não é requisito por função** (`equivalent` basta; `matched` quando sai barato; o `gate.sh` continua obrigatório). O VU1/GS emulado do
-runtime é só a referência da checagem (`docs/passos/VU1CHECK.md`). As regras abaixo continuam valendo; onde disserem "matching", leia "matching quando for o objetivo da função".
+This repo (`sightama/wotlane`) is a fork of `yanm1103/War_of_the_Monsters_recomp`. Much of the inherited code, comments and docs are in Portuguese; this fork is English-only (see "Language" below).
 
-**O que fazer:** **`TODO.md`** na raiz (a lista e a ordem são do dono); os relatos de bug do dono têm prioridade sobre ela.
+## Language
 
-Leia antes de começar: `README.md` (setup), `docs/ANALYSIS.md` (o que se sabe do ELF e as convenções de status), `docs/PLANO.md` (arquitetura) e `TODO.md`. Índice de `docs/passos/`:
-- `NATIVO.md`: camada nativa (desenho, texturas, monstros, partículas, sombras, menus, painel "Recompiled options", ícones), hooks de host, vigia, lote, tabela de variáveis `WOTM_*`.
-- `VU1CHECK.md`: checagem VU1 x nativo, corpus, fotos do dono, bugs abertos.
-- `RUNTIME.md`: runtime recompilado no Windows (build, `PS2X_*`, teclado, endereços úteis). `FRONTEIRA.md`: o que do PS2 o port deixou de emular.
-- `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (pegadinhas do gcc 2.95 e do build NM), `ESPINHA.md` (fluxo do jogo), `TESTE_PCSX2.md` (halfcpp no PCSX2).
-- `MODS.md` (pasta `mods/`, texturas em PNG, `tools/modkit.py`), `MODELOS_3D.md` (monstro animado direto do disco), `VIEWER_WEB.md` (avaliação do viewer no navegador; o viewer está pronto em https://yanm1103.github.io/wotm-model-museum/).
-- Investigações datadas em `docs/investigacoes/<data>/`. Encerrada (o que ela pedia já está no código) é apagada; o que ficar pendente vai para o `TODO.md`, e as referências viram `<commit>:docs/investigacoes/...` (ler com `git show`).
-- `docs/FORMATOS.md`: formatos de arquivo do jogo (fase, monstro, som, filme, save do memory card).
+Everything in this fork is written in English: replies, code, comments, identifiers, log and UI strings, docs and commit messages.
 
-## Documentação: três tipos de texto, cada um no seu lugar
-- **Referência** (`README.md`, este arquivo, `docs/*.md`, `docs/passos/*.md`): como as coisas são hoje, no presente. Sem datas, sem "antes era", sem "feito/corrigido em", sem contar como foi testado. Um número medido só entra se for usado (ex.: "9619 ticks por field").
-- **A fazer** (`TODO.md`): só o que está aberto, cada item curto (o que é, por onde começar, onde está o contexto). Terminou: a linha sai, sem "feito" nem riscado; o que passou a existir vai para a referência. Decisões do dono de não fazer algo ficam em "Descartado".
-- **Diário** (o que aconteceu, por quê, como foi medido e testado): a mensagem do commit e `docs/investigacoes/<data>/`.
-- `python tools/doclint.py` confere as linhas que o commit acrescenta e o `TODO.md` inteiro; o pre-commit do git o roda sozinho (ligar uma vez por clone: `git config core.hooksPath tools/githooks`). Linha antiga só editada não é cobrada pelo que já tinha; `--all` lista o que ainda falta migrar.
+Whenever you work in a file and find Portuguese in it (comments, identifiers, log/UI strings, docstrings), translate it to clear, idiomatic English as part of that change, without being asked. Write for an English-speaking developer who has never seen the Portuguese: translate the meaning, not word for word, and expand terse notes if they'd be unclear.
 
-## Fluxo do port (mudança em `native/`)
-1. Antes de mexer: `tools\corpus.ps1 -Check` guarda a base (`<runtime>\corpus\resumo_<data>.csv`; capture o corpus uma vez com `-Capture`). O que está errado ou faltando vem do inventário (`VU1CHECK.md`, "Inventário do port"), não de lembrança.
-2. Editar `native/*.hpp` ou `native/runtime/*.inc|.cpp` (hooks e código do jogo que rodam dentro do runtime). Endereços por nome (`wotm::sym::`/`wotm::fn::` de `native/wotm_syms.h`), nunca número cru. Variável de diagnóstico nova entra na tabela do `NATIVO.md` (`python tools/wotm_env.py` confere).
-3. `build_runtime.bat` na raiz (configura e compila `build_dev`, sem LTCG; o ninja não rastreia `native/`, o script cuida disso). Nunca o `build.bat` da pasta velha com LTCG.
-4. Conferir: `tools\corpus.ps1 -Check -Baseline <csv da base>` diz o que piorou; `run_live.bat` para ver na tela; `tools\lote.ps1` para lutas em lote com vigia.
-5. Commit sem gate (`native/`, `docs/` e `tools/` fora do build não mudam a ROM). Mudança numa costura do PS2Recomp (CMake, `main.cpp`, taps) exige regenerar `tools/runtime_patch/wotm-runtime.patch`.
+When translating:
+- Translate meaning only. A translation must never change behavior. Keep code edits that are pure translation separate from logic changes (a separate commit when practical).
+- Renaming an identifier, file or environment variable (`lote.ps1`, `WOTM_*` names) means updating every reference to it in the same change, including scripts, docs and the launcher. Search the repo first. If the name is also used upstream or by users' existing setups, ask before renaming.
+- Translating code under `src/`, `include/` or `asm/` still goes through `gate.sh` (rule 2): comment-only changes can't move the ROM, but check anyway.
+- Never translate game data, file-format magic strings or text the retail game itself reads or matches against.
+- Expect merge conflicts when pulling from upstream into translated files. Resolve them by keeping upstream's logic and our English.
 
-## Regras que não podem ser quebradas
-1. **Nenhum arquivo do jogo vai para o repo.** `ISO/`, `disc/`, `asm/`, `assets/`, `build/`, `*.rom`, `*.elf` e `tools/cc/` estão no `.gitignore`. O `asm/` contém código do jogo: nunca force `git add -f`, nunca cole assembly do jogo em issues, PRs ou documentação.
-2. **A ROM tem que continuar batendo com o SHA1 do retail.** Todo commit que muda o código decompilado (`src/`, `include/`, `asm/`, config lida pelo build) passa por `sh tools/wsl/gate.sh && git commit ...` (build + SHA1, sai com erro se falhar); commit que só toca `native/`, `docs/` ou `tools/` fora do build não tem como alterar a ROM e dispensa o gate. Nunca `gate.sh | tail && git commit` nem `check.sh; git commit`: o pipe esconde a falha e o commit sai com build quebrado.
-3. **Sem push direto na `master` se você não é o dono.** Colaboradores trabalham em fork/branch e abrem PR (veja `CONTRIBUTING.md`).
-4. **Marque com clareza o que é idêntico e o que é só equivalente.** Função que bate byte a byte fica sem marcação; função que não bate fica em `#ifdef NON_MATCHING` (com `INCLUDE_ASM` no `#else`) e o comentário diz a pontuação e a causa. Use `tools/nm_wrap.py`. Mudança de comportamento disfarçada de decomp não é aceita; se for necessária, sinalize explicitamente.
-5. **Não gaste esforço em código de hardware** (GS/VIF/DMA, timers, SDK): está em `config/hw_funcs.txt` e o port o substitui. `game/Sound` e `game/StreamingSoundManager` não são hardware, mas são baixa prioridade.
+**Direction: port first.** The base is the game recompiled with PS2Recomp (kept outside the repo, because the generated C++ is game code) plus this repo's native layer
+(`native/`: GPU drawing, sound, movies, keyboard), which already runs fights at 60 fps. The decompilation (`src/`) is the readable layer that replaces, through hooks, only what matters for modding (`Shell::Load*`, `MonsterParse`,
+camera); the "guinea pig" runtime that used the equivalent functions is on hold. **Byte matching isn't required per function** (`equivalent` is enough; `matched` when it comes cheap; `gate.sh` is still mandatory). The emulated VU1/GS in the
+runtime is only the reference for checking (`docs/passos/VU1CHECK.md`). The rules below still apply; where they say "matching", read "matching when that's the goal for the function".
 
-## Ambiente
-- Windows, com o build rodando em **WSL Ubuntu**: use `wsl -d Ubuntu` (a distro padrão é a `docker-desktop`, que não serve). Venv: `~/.venvs/wotm/bin/python`. Raiz do repo no WSL: `/mnt/c/Users/<você>/WoTM`.
-- Compilador: ee-gcc 2.95.2 (SN ProDG), baixado por `tools/setup_toolchain.sh` em `tools/cc/`. Requer a sua própria ISO em `ISO/`, extraída para `disc/`.
-- Scripts `.sh` precisam de LF. Gravar com Python no Windows deixa CRLF e o `sh` do WSL quebra (`sed -i 's/\r$//'` conserta).
-- `config/status.csv` (estado de cada função) é gerado por `python3 tools/progress.py`; só o dono o commita. **Colaboradores não commitam esse arquivo**, para não gerar conflito em todo PR. O README não tem bloco de progresso.
-- Ao escrever arquivos com regex ou `\n`, use as ferramentas Edit/Write. Heredoc de Python transforma `\n` em quebra de linha real.
-- **Nunca rode Python inline** (`python3 - <<EOF`, `python -c "...\..."`): caminhos do Windows (`C:\Users\...`) e `\n` quebram. Um hook (`.claude/hooks/block_python_heredoc.py`, ligado em `.claude/settings.json`) recusa esses comandos. Grave o script com Write (pasta de rascunho) e rode `python arquivo.py`; use Edit/Write para alterar arquivos do repo.
+**What to work on:** **`TODO.md`** in the repo root (the list and its order belong to the owner); the owner's bug reports take priority over it.
 
-## Fluxo por função
-1. Ler `asm/nonmatchings/<tu>/<função>.s`. Para mais de ~30 instruções, `sh tools/m2c.sh <tu> <função>` dá um rascunho. Nunca confie nele sem ler o asm (os argumentos que ele mostra são ruído de registradores). Troque `unkNNN` por campos nomeados dos headers.
-2. Converter o TU para C++ se ainda não estiver: `sh tools/wsl/convert_tus.sh <Tu>` (um por vez).
-3. Escrever C++ natural, na ordem natural do fonte (muitas vezes já bate). Pontuar com `sh tools/wsl/scoreall.sh <TU>`; se não bater, `tools/nm_wrap.py <arquivo> <símbolo> "<nota>" [Classe::método]`. Só afine quando for barato (`tools/wsl/variants.py`, `tools/wsl/permute.py`).
-4. Verificar a TU inteira num comando: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU>` (pontuação, difftest, sequência de chamadas, layout e retornos consumidos, numa tabela por função; `--no-nm` pula o ELF das equivalentes e leva segundos em vez de minutos). Rascunhos do m2c para a fila inteira: `sh tools/m2c_batch.sh` (em `build/m2c/`).
-5. Rodar `gate.sh`, depois `python3 tools/progress.py`, depois commitar.
+Read before starting: `README.md` (setup), `docs/ANALYSIS.md` (what's known about the ELF and the status conventions), `docs/PLANO.md` (architecture) and `TODO.md`. Index of `docs/passos/` ("steps"):
+- `NATIVO.md`: the native layer (drawing, textures, monsters, particles, shadows, menus, the "Recompiled options" panel, icons), host hooks, watchdog, batch runs, the table of `WOTM_*` variables.
+- `VU1CHECK.md`: the VU1 vs native check, corpus, the owner's photos, open bugs.
+- `RUNTIME.md`: the recompiled runtime on Windows (build, `PS2X_*`, keyboard, useful addresses). `FRONTEIRA.md` ("boundary"): what of the PS2 the port no longer emulates.
+- `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (gcc 2.95 and NM build pitfalls), `ESPINHA.md` (game flow), `TESTE_PCSX2.md` (halfcpp in PCSX2).
+- `MODS.md` (the `mods/` folder, PNG textures, `tools/modkit.py`), `MODELOS_3D.md` (animated monster straight from the disc), `VIEWER_WEB.md` (evaluation of the in-browser viewer; the viewer is live at https://yanm1103.github.io/wotm-model-museum/).
+- Dated investigations live in `docs/investigacoes/<date>/` ("investigations"). A closed one (what it asked for is already in the code) is deleted; whatever is still open moves to `TODO.md`, and references to it become `<commit>:docs/investigacoes/...` (read with `git show`).
+- `docs/FORMATOS.md`: the game's file formats (stage, monster, sound, movie, memory card save).
 
-## Armadilhas conhecidas (bugs que já aconteceram)
-Uma pontuação "untuned" pode esconder erro de semântica. Depois de escrever uma função equivalente, confira:
-- **Retorno usado pelo chamador.** Um `void` onde o retail devolve `$v0` (ex.: `addInteractive`: o índice do slot é o id do hat). `tools/nm_retvals.py`.
-- **Sequência de chamadas.** `tools/nm_calls.py`.
-- **Tamanho e stride de structs.** Adicione `static_assert` com o stride do retail (ex.: `PathNode` é 0x40, não 0x30). Classe base vazia ocupa um byte (`AiBrain`).
-- **Delay slots.** Um compare invertido escondido no delay slot (ex.: `Monster::isIdle`) e alvo de branch errado (ex.: `AiGrappleAttack`, heavyPunch vs toss). Leia o asm até o fim.
-- **Ordem e helpers.** Ao trocar `INCLUDE_ASM` por C++, mantenha as funções na ordem de endereço original (cada definição onde estava seu `INCLUDE_ASM`, nunca agrupadas). Helpers `static`/`static inline` vão dentro de `#ifdef NON_MATCHING`: o ee-gcc 2.95 emite helpers não usados e desloca a ROM.
-- **Strings e rodata.** Mover strings de `INCLUDE_ASM` para C muda o padding do rodata (adicione `.word 0` em asm no `.rodata`). Jump tables de `switch` em C precisam do mesmo padding (por isso função com `switch` fica em `NON_MATCHING` mesmo quando bate: a tabela vem do rodata do retail). Classes virtuais: mantenha vtable, ctor e `__tf` como `INCLUDE_ASM`; `tools/place_data.py` posiciona dados por endereço.
-- **Headers compartilhados.** Mover classe para header pode mudar `sizeof` e deslocar campos de structs parciais. Antes de mexer: `sh tools/wsl/scoreall.sh <todos os TUs de src/game> > ~/base.txt`; depois compare com `diff`.
-- **Truques do compilador.** `__asm__("#SNFIX_SMALL sym")` marca um global como gp-relative; `register float x __asm__("$f2")` fixa registrador FPR; retorno `int` vs `void` do callee muda a alocação; argumentos são avaliados da esquerda para a direita (içar uma chamada para um local move um `addiu`); `sqrt.s` precisa de `.word 0x46040104` (em C++ NM use `eeSqrtf` de `include/vecmath.h`: o gas codifica `sqrtf` na forma MIPS32 e o EE lê `$f0`).
+## Documentation: three kinds of text, each in its place
+- **Reference** (`README.md`, this file, `docs/*.md`, `docs/passos/*.md`): how things are today, in the present tense. No dates, no "it used to be", no "done/fixed on", no account of how it was tested. A measured number goes in only if it's used (e.g. "9619 ticks per field"). Upstream writes these in Portuguese; in this fork they are in English (see "Language").
+- **To do** (`TODO.md`): only what's open, each item short (what it is, where to start, where the context is). When it's finished the line goes away, with no "done" and no strikethrough; whatever now exists goes into the reference docs. The owner's decisions not to do something go under "Discarded".
+- **Journal** (what happened, why, how it was measured and tested): the commit message and `docs/investigacoes/<date>/`.
+- `python tools/doclint.py` checks the lines a commit adds plus the whole `TODO.md`; the git pre-commit hook runs it automatically (enable once per clone: `git config core.hooksPath tools/githooks`). An old line that's only edited isn't held to rules it already broke; `--all` lists what's still left to migrate.
 
-## Ordem de ataque
-Decompile de cima para baixo ao longo do caminho real de execução, não por filtro de "funções pequenas": `main` → `Shell::LoadLevelFiles/LoadLevelDB/LoadMonstersDB` → `dbInitDb`/`dbsRelocate*`/`file*` → `InitPlayers`/`AddMonster`/`MonsterParse` → laço `rtMain` (hier/animação/desenho) → lógica de `TheGame::Update`. Esses carregadores também documentam os formatos de arquivo. Para o escopo por alcance: `python3 tools/callgraph.py <raízes> --no-libs` (grava `config/callgraph.csv`; copie e restaure se não quiser sobrescrever; só segue `jal`, então é um piso).
+## Port workflow (changes in `native/`)
+1. Before touching anything: `tools\corpus.ps1 -Check` saves the baseline (`<runtime>\corpus\resumo_<date>.csv`, "summary"; capture the corpus once with `-Capture`). What's broken or missing comes from the inventory (`VU1CHECK.md`, "Inventário do port", the port inventory), not from memory.
+2. Edit `native/*.hpp` or `native/runtime/*.inc|.cpp` (hooks and game code that run inside the runtime). Refer to addresses by name (`wotm::sym::`/`wotm::fn::` from `native/wotm_syms.h`), never as raw numbers. A new diagnostic variable goes into the table in `NATIVO.md` (`python tools/wotm_env.py` checks it).
+3. `build_runtime.bat` in the repo root (configures and compiles `build_dev`, without LTCG; ninja doesn't track `native/`, the script handles that). Never the old folder's `build.bat` with LTCG.
+4. Check: `tools\corpus.ps1 -Check -Baseline <baseline csv>` tells you what got worse; `run_live.bat` to see it on screen; `tools\lote.ps1` for batches of fights with a watchdog (`lote` = batch).
+5. Commit without the gate (`native/`, `docs/` and `tools/` outside the build can't change the ROM). A change to a PS2Recomp seam (CMake, `main.cpp`, taps) requires regenerating `tools/runtime_patch/wotm-runtime.patch`.
 
-## Verificação de comportamento
-Sem testes unitários por decisão do projeto. A verificação é por: `tools/difftest.py` / `difftest_all.py` (retail vs nossa função num emulador MIPS, mesmo estado aleatório), e, quando houver algo rodando, comparação com o PCSX2. Depurar sintoma: pausar o PCSX2, extrair a RAM do EE e recalcular a lógica do retail a partir do dump (`tools/ramdiff.py`). Se uma variante do ELF travar com "executing data", compare a RAM do EE com o ELF antes de suspeitar da função decompilada (já aconteceu: era código realocado sobrescrito por DMA).
+## Rules that must not be broken
+1. **No game files go into the repo.** `ISO/`, `disc/`, `asm/`, `assets/`, `build/`, `*.rom`, `*.elf` and `tools/cc/` are in `.gitignore`. `asm/` contains game code: never force `git add -f`, never paste game assembly into issues, PRs or documentation.
+2. **The ROM must keep matching the retail SHA1.** Every commit that changes decompiled code (`src/`, `include/`, `asm/`, config read by the build) goes through `sh tools/wsl/gate.sh && git commit ...` (build + SHA1, exits with an error on failure); a commit that only touches `native/`, `docs/` or `tools/` outside the build can't change the ROM and skips the gate. Never `gate.sh | tail && git commit` or `check.sh; git commit`: the pipe hides the failure and the commit goes in with a broken build.
+3. **No direct pushes to `master` unless you're the owner.** Contributors work in a fork or branch and open a PR (see `CONTRIBUTING.md`).
+4. **Clearly mark what's identical and what's only equivalent.** A function that matches byte for byte gets no marking; a function that doesn't match goes inside `#ifdef NON_MATCHING` (with `INCLUDE_ASM` in the `#else`), and its comment states the score and the cause. Use `tools/nm_wrap.py`. A behavior change disguised as decomp isn't accepted; if one is necessary, flag it explicitly.
+5. **Don't spend effort on hardware code** (GS/VIF/DMA, timers, SDK): it's listed in `config/hw_funcs.txt` and the port replaces it. `game/Sound` and `game/StreamingSoundManager` aren't hardware, but they're low priority.
 
-**Dumps e instantâneos são descartáveis.** `.vu1snap` (~40 MB cada), `ram_*.bin`/`vram_*.bin` (36 MB), dumps do vigia e pastas de `lote/` ficam fora do repo e enchem o disco. Depois que uma correção é validada, apague os instantâneos e dumps que a motivaram (`snaps/`, `discroot/ram_*`, `lote/<data>/`); guarde só os que ainda mostram um problema em aberto ou que você nomeou de propósito como corpus de regressão (`tools/vu1cmp.ps1 <pasta>`). Nunca deixe `WOTM_VU1CHECK_SNAP` ligado em lote.
+## Environment
+- Windows, with the build running in **WSL Ubuntu**: use `wsl -d Ubuntu` (the default distro is `docker-desktop`, which won't work). Venv: `~/.venvs/wotm/bin/python`. Repo root inside WSL: `/mnt/c/Users/<you>/WoTM`.
+- Compiler: ee-gcc 2.95.2 (SN ProDG), downloaded into `tools/cc/` by `tools/setup_toolchain.sh`. Requires your own ISO in `ISO/`, extracted to `disc/`.
+- `.sh` scripts need LF line endings. Writing them with Python on Windows produces CRLF and WSL's `sh` breaks (`sed -i 's/\r$//'` fixes it).
+- `config/status.csv` (the state of each function) is generated by `python3 tools/progress.py`; only the owner commits it. **Contributors don't commit this file**, so it doesn't cause conflicts in every PR. The README has no progress block.
+- When writing files that contain regexes or `\n`, use the Edit/Write tools. A Python heredoc turns `\n` into a real line break.
+- **Never run Python inline** (`python3 - <<EOF`, `python -c "...\..."`): Windows paths (`C:\Users\...`) and `\n` break. A hook (`.claude/hooks/block_python_heredoc.py`, enabled in `.claude/settings.json`) rejects these commands. Save the script with Write (to a scratch folder) and run `python file.py`; use Edit/Write to change repo files.
+
+## Per-function workflow
+1. Read `asm/nonmatchings/<tu>/<function>.s`. For more than ~30 instructions, `sh tools/m2c.sh <tu> <function>` gives a draft. Never trust it without reading the asm (the arguments it shows are register noise). Replace `unkNNN` with named fields from the headers.
+2. Convert the TU to C++ if it isn't already: `sh tools/wsl/convert_tus.sh <Tu>` (one at a time).
+3. Write natural C++, in the source's natural order (it often matches right away). Score with `sh tools/wsl/scoreall.sh <TU>`; if it doesn't match, `tools/nm_wrap.py <file> <symbol> "<note>" [Class::method]`. Only fine-tune when it's cheap (`tools/wsl/variants.py`, `tools/wsl/permute.py`).
+4. Verify the whole TU in one command: `~/.venvs/wotm/bin/python tools/verify_tu.py game/<TU>` (score, difftest, call sequence, layout and consumed return values, in one table per function; `--no-nm` skips the ELF for the equivalent functions and takes seconds instead of minutes). m2c drafts for the whole queue: `sh tools/m2c_batch.sh` (into `build/m2c/`).
+5. Run `gate.sh`, then `python3 tools/progress.py`, then commit.
+
+## Known pitfalls (bugs that have already happened)
+An "untuned" score can hide a semantic error. After writing an equivalent function, check:
+- **Return value used by the caller.** A `void` where the retail code returns `$v0` (e.g. `addInteractive`: the slot index is the hat's id). `tools/nm_retvals.py`.
+- **Call sequence.** `tools/nm_calls.py`.
+- **Struct size and stride.** Add a `static_assert` with the retail stride (e.g. `PathNode` is 0x40, not 0x30). An empty base class takes up one byte (`AiBrain`).
+- **Delay slots.** An inverted compare hidden in the delay slot (e.g. `Monster::isIdle`) and a wrong branch target (e.g. `AiGrappleAttack`, heavyPunch vs toss). Read the asm all the way to the end.
+- **Order and helpers.** When replacing `INCLUDE_ASM` with C++, keep functions in their original address order (each definition where its `INCLUDE_ASM` was, never grouped together). `static`/`static inline` helpers go inside `#ifdef NON_MATCHING`: ee-gcc 2.95 emits unused helpers and shifts the ROM.
+- **Strings and rodata.** Moving strings from `INCLUDE_ASM` into C changes the rodata padding (add `.word 0` in asm in `.rodata`). `switch` jump tables in C need the same padding (which is why a function with a `switch` stays in `NON_MATCHING` even when it matches: the table comes from the retail rodata). Virtual classes: keep the vtable, ctor and `__tf` as `INCLUDE_ASM`; `tools/place_data.py` places data by address.
+- **Shared headers.** Moving a class into a header can change `sizeof` and shift fields in partial structs. Before touching one: `sh tools/wsl/scoreall.sh <all TUs in src/game> > ~/base.txt`; afterwards compare with `diff`.
+- **Compiler tricks.** `__asm__("#SNFIX_SMALL sym")` marks a global as gp-relative; `register float x __asm__("$f2")` pins an FPR register; an `int` vs `void` return on the callee changes register allocation; arguments are evaluated left to right (hoisting a call into a local moves an `addiu`); `sqrt.s` needs `.word 0x46040104` (in non-matching C++ use `eeSqrtf` from `include/vecmath.h`: gas encodes `sqrtf` in the MIPS32 form and the EE reads `$f0`).
+
+## Order of attack
+Decompile top-down along the real execution path, not by filtering for "small functions": `main` → `Shell::LoadLevelFiles/LoadLevelDB/LoadMonstersDB` → `dbInitDb`/`dbsRelocate*`/`file*` → `InitPlayers`/`AddMonster`/`MonsterParse` → the `rtMain` loop (hierarchy/animation/drawing) → the logic in `TheGame::Update`. These loaders also document the file formats. For scope by reachability: `python3 tools/callgraph.py <roots> --no-libs` (writes `config/callgraph.csv`; copy and restore it if you don't want it overwritten; it only follows `jal`, so it's a lower bound).
+
+## Behavior verification
+No unit tests, by project decision. Verification is done with `tools/difftest.py` / `difftest_all.py` (retail vs our function in a MIPS emulator, same random state) and, once something is running, comparison against PCSX2. To debug a symptom: pause PCSX2, dump the EE's RAM and recompute the retail logic from the dump (`tools/ramdiff.py`). If an ELF variant crashes with "executing data", compare the EE RAM against the ELF before suspecting the decompiled function (this has happened: it was relocated code overwritten by DMA).
+
+**Dumps and snapshots are disposable.** `.vu1snap` files (~40 MB each), `ram_*.bin`/`vram_*.bin` (36 MB), watchdog dumps and `lote/` folders stay out of the repo and fill up the disk. Once a fix is validated, delete the snapshots and dumps that prompted it (`snaps/`, `discroot/ram_*`, `lote/<date>/`); keep only the ones that still show an open problem or that you deliberately named as a regression corpus (`tools/vu1cmp.ps1 <folder>`). Never leave `WOTM_VU1CHECK_SNAP` on during a batch run.
