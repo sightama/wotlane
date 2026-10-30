@@ -76,7 +76,9 @@ namespace
         const int total = int(sizeof kTrigGoldens / sizeof kTrigGoldens[0]);
         std::fprintf(stderr, "[trigcheck] %d de %d valores iguais ao retail\n", total - bad, total);
         std::fflush(stderr);
-        std::exit(bad == 0 ? 0 : 1);
+        // _Exit, not exit: this runs on the EE thread while the runtime's other threads are alive, and exit's static destructors
+        // (HostState's joinable std::thread) call std::terminate, so the process would abort instead of returning 0/1
+        std::_Exit(bad == 0 ? 0 : 1);
     }
 }
 
