@@ -32,25 +32,33 @@ need c++
 
 step 'build vu0bench'
 bench=$rt/logs/vu0bench
-neon=
-[ -f "$sse2neon/sse2neon.h" ] && neon="-DUSE_SSE2NEON -I$sse2neon"
-# shellcheck disable=SC2086  # $neon is empty or two flags
-run_logged "$rt/logs/vu0bench_build.log" c++ -std=c++20 -O2 -ffp-contract=off -fno-fast-math $neon -I"$REPO/native/runtime" \
-    -I"$rt/PS2Recomp/ps2xRuntime/include" -I"$gen" "$REPO/tools/vu0bench.cpp" "$REPO/native/runtime/wotm_vu0_native.cpp" -o "$bench"
+# compiled like the runtime: no FMA contraction; sse2neon on ARM (the runtime build fetched it), the runtime's x86 flags otherwise
+set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math
+if [ -f "$sse2neon/sse2neon.h" ]; then set -- "$@" -DUSE_SSE2NEON "-I$sse2neon"
+else set -- "$@" -mavx2 -mbmi2 -mlzcnt -mpopcnt; fi
+run_logged "$rt/logs/vu0bench_build.log" c++ "$@" -I"$REPO/native/runtime" -I"$rt/PS2Recomp/ps2xRuntime/include" -I"$gen" \
+    "$REPO/tools/vu0bench.cpp" "$REPO/native/runtime/wotm_vu0_native.cpp" -o "$bench"
 
 step "record samples (${secs}s AI fight in ps2EntryRunner)"
 disc=$rt/discroot
+game=
+# stop the game and delete the dumps (game state) on every exit, Ctrl-C included
+stop_game() {   # every step may find nothing to stop (|| true: set -e would abort the trap before the dumps are deleted)
+    [ -z "$game" ] || kill "$game" 2>/dev/null || true
+    pkill -f "$rt/$build/ps2xRuntime/ps2EntryRunner" 2>/dev/null || true
+    [ -z "$game" ] || wait "$game" 2>/dev/null || true
+    game=
+}
+trap 'stop_game; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"' EXIT
+trap 'exit 130' INT TERM
 rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"
 WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 PS2X_DUMP_VU0=1 sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
 game=$!
 sleep "$secs"
-kill "$game" 2>/dev/null || true
-pkill -f "$rt/$build/ps2xRuntime/ps2EntryRunner" 2>/dev/null || true
-wait "$game" 2>/dev/null || true
+stop_game
 [ -s "$disc/vu0_samples.bin" ] || fail "no samples recorded (fewer than 300k VU0 calls? try --secs 240); log: $rt/live.err.log"
 
 step replay
 status=0
 "$bench" "$disc/vu0_code.bin" "$disc/vu0_samples.bin" || status=$?
-rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"
-exit $status
+exit $status   # the EXIT trap deletes the dumps
