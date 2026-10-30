@@ -181,6 +181,8 @@ static void keyboard(uint16_t &btns, uint8_t *data)
             }
             btns &= static_cast<uint16_t>(~mask);
         }
+    if (menus && IsKeyDown(KEY_BACKSPACE))
+        btns &= static_cast<uint16_t>(~0x1000u);   // Backspace (the Mac "delete" key) goes back in the menus too, like Esc (triangle)
     if (mouseMenu && !wotm::mouse::g_captured.load(std::memory_order_relaxed))
     {
         uint16_t m = 0;
