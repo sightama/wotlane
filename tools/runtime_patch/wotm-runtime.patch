@@ -403,13 +403,18 @@ index 589d768..3f64eb7 100644
 +    ps2x_stage_ffmpeg_runtime_dlls(wotm)
 +endif()
 diff --git a/ps2xRuntime/cmake/ReleaseMode.cmake b/ps2xRuntime/cmake/ReleaseMode.cmake
-index 92ef0d5..8d7346f 100644
+index 92ef0d5..9954311 100644
 --- a/ps2xRuntime/cmake/ReleaseMode.cmake
 +++ b/ps2xRuntime/cmake/ReleaseMode.cmake
-@@ -4,6 +4,22 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+@@ -4,6 +4,27 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
  
  function(EnableFastReleaseMode TargetName)
      message("> Enabling optimization for: ${TargetName}")
++    # WotM: gcc/clang on x86 get the same instruction set as MSVC's /arch:AVX2 below (ps2_runtime_macros.h and native/ use SSE4.1
++    # intrinsics); ARM builds go through sse2neon and need nothing here
++    if(NOT MSVC AND NOT PS2X_IS_ARM_TARGET)
++        target_compile_options(${TargetName} PRIVATE -mavx2 -mbmi2 -mlzcnt -mpopcnt)
++    endif()
 +    if(PS2X_FAST_LINK)
 +        # Build de desenvolvimento: mesma otimizacao por arquivo, mas sem otimizacao de programa inteiro (/GL, /LTCG, IPO).
 +        # O link cai de ~25 min para segundos/minutos; o codigo fica um pouco mais lento (sem inline entre arquivos).
