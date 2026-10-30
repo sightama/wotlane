@@ -429,6 +429,20 @@ index 92ef0d5..8d7346f 100644
      if(MSVC)
          target_compile_options(${TargetName} PRIVATE
              $<$<CONFIG:Release>:
+diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
+index 94a6fa1..01ba50f 100644
+--- a/ps2xRuntime/include/ps2_call_list.h
++++ b/ps2xRuntime/include/ps2_call_list.h
+@@ -155,9 +155,6 @@
+     X(__malloc_lock)                          \
+     X(__malloc_unlock)                        \
+     X(abs)                                    \
+-    X(__ieee754_rem_pio2f)                    \
+-    X(__kernel_cosf)                          \
+-    X(__kernel_sinf)                          \
+     X(atan)                                   \
+     X(atan2)                                  \
+     X(calloc)                                 \
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
 index 4b9242c..2efd4d5 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
