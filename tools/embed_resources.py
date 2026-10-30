@@ -16,9 +16,12 @@ LINE = re.compile(r'^\s*(\w+)\s+RCDATA\s+"([^"]+)"')
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] in ("-h", "--help"):
+    if len(sys.argv) == 2 and sys.argv[1] in ("-h", "--help"):
         print(__doc__.strip())
-        return 0 if len(sys.argv) == 2 else 2
+        return 0
+    if len(sys.argv) != 3:
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
     rc, out = Path(sys.argv[1]), Path(sys.argv[2])
     entries = [m.groups() for m in map(LINE.match, rc.read_text(encoding="utf-8").splitlines()) if m]
     if not entries:

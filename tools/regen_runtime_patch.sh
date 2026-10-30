@@ -39,6 +39,7 @@ for f in $files $extra; do
     case " $list " in *" $f "*) continue ;; esac
     list="$list $f"
 done
+[ -n "$list" ] || fail "no file list read from $patch (is it a git diff with a/ b/ prefixes? restore it with git checkout)"
 
 # new files (in the patch, or added) are untracked in the clone: intent-to-add makes git diff HEAD show them
 for f in $list; do
@@ -49,7 +50,8 @@ for f in $list; do
 done
 
 # shellcheck disable=SC2086  # the list is space-separated paths without spaces
-git -C "$pr" diff HEAD -- $list >"$patch.tmp"
+# fixed format whatever the user's git config says (noprefix, color, external diff tools): setup applies it with git apply
+git -C "$pr" diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ HEAD -- $list >"$patch.tmp"
 [ -s "$patch.tmp" ] || { rm -f "$patch.tmp"; fail "empty diff: is the patch applied in $pr?"; }
 mv "$patch.tmp" "$patch"
 printf 'wrote %s (%s files)\n' "$patch" "$(grep -c '^diff --git' "$patch")"
