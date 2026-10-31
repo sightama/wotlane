@@ -212,7 +212,7 @@ def decode(buf, off, psm, w, h, pal=None, csa=0, hi=False):
         for n in range(w * h):
             out.append(from16(struct.unpack_from("<H", buf, off + 2 * n)[0]))
     else:
-        raise ValueError("formato %#x nao suportado" % psm)
+        raise ValueError("unsupported format %#x" % psm)
     return out
 
 
@@ -656,7 +656,7 @@ def encode(px, psm, pal=None, csa=0, hi=False):
             out += struct.pack("<H", (r * 31 + 127) // 255 | ((g * 31 + 127) // 255) << 5 | ((b * 31 + 127) // 255) << 10 |
                                (0x8000 if a >= 128 else 0))
     else:
-        raise ValueError("formato %#x nao suportado" % psm)
+        raise ValueError("unsupported format %#x" % psm)
     return bytes(out)
 
 
