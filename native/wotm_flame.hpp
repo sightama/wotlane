@@ -1,6 +1,6 @@
-// wotm_flame.hpp: fogo da cabeca do Agamo (preset 141 IdolHeadFlame) simulado sem o jogo, por field, como o particleEmit/particleMove
-// (75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md; conferido num dump de luta da ISLAND). Usado pela previa do monstro (wotm_model.hpp) e
-// pelo modo foto (o jogo pausado nao emite: com o Agamo fora da tela na pausa, as particulas ja tinham acabado).
+// wotm_flame.hpp: the fire on Agamo's head (preset 141 IdolHeadFlame) simulated without the game, per field, like particleEmit/particleMove
+// (75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md; checked against a dump of an ISLAND fight). Used by the monster preview (wotm_model.hpp) and
+// by photo mode (the paused game doesn't emit: with Agamo off screen during the pause, the particles had already died out).
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -15,9 +15,9 @@ struct Flame { bool have = false; float prev[3] = {0, 0, 0}, acc = 0.f; std::vec
 
 inline float rnd(uint32_t &r) { r = r * 1664525u + 1013904223u; return float(r >> 8) / 16777216.f; }
 
-// Um field. e = emissor no mundo; r0/r2 = linhas 0 e 2 da base do emissor (StaticMat . matriz do no; linha 1 = a normal).
-// Vento (0, 0, 3,2) somado a posicao, velocidade nasce com -vento (a particula nasce parada e acelera para cima), arrasto do ar
-// 0,0390625, vida 20 fields, 2 por field parado.
+// One field. e = emitter in the world; r0/r2 = rows 0 and 2 of the emitter's basis (StaticMat . node matrix; row 1 = the normal).
+// Wind (0, 0, 3.2) added to the position, velocity starts at -wind (the particle is born at rest and accelerates upward), air drag
+// 0.0390625, lifetime 20 fields, 2 per field while standing still.
 inline void step(Flame &f, const float e[3], const float r0[3], const float r2[3], bool emit, uint32_t &rng)
 {
     static const float kWind[3] = {0.f, 0.f, 3.2f};
@@ -59,7 +59,7 @@ inline void step(Flame &f, const float e[3], const float r0[3], const float r2[3
     std::memcpy(f.prev, e, sizeof f.prev);
 }
 
-// Cor RGBA (0x80 = 1,0) pela idade: tabela do preset (0x256C10 + 4 * 608), indice age * 3072 em 4.12, interpolada
+// RGBA color (0x80 = 1.0) by age: the preset's table (0x256C10 + 4 * 608), index age * 3072 in 4.12, interpolated
 inline uint32_t color(float age)
 {
     static const uint32_t kCol[16] = {0x00808080u, 0x28808080u, 0x4b808080u, 0x66808080u, 0x80808080u, 0x80808080u, 0x7d808080u, 0x72808080u,

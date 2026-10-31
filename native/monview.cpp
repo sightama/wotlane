@@ -1,8 +1,8 @@
-// Visualizador de monstro direto do disco (native/wotm_model.hpp): pose de uma animacao, textura do .TEX/.RTX, sem o jogo.
+// Monster viewer straight from the disc (native/wotm_model.hpp): a pose from an animation, textures from .TEX/.RTX, no game.
 //
-//   monview <disco> MONKEY0 [--anim 90] [--frame 0] [--yaw 35] [--pitch 8] [--size 512] [--shot saida.png]
-// Com --shot grava um PNG (fundo transparente) e sai; sem, abre uma janela com a animacao em laco (setas giram, +/- zoom,
-// PageUp/PageDown trocam a animacao, Espaco pausa).
+//   monview <disc> MONKEY0 [--anim 90] [--frame 0] [--yaw 35] [--pitch 8] [--size 512] [--shot out.png]
+// With --shot it writes a PNG (transparent background) and exits; without it, opens a window with the animation looping (arrows rotate,
+// +/- zoom, PageUp/PageDown switch animation, Space pauses).
 #include <cstdlib>
 #include <string>
 
@@ -10,7 +10,7 @@
 
 int main(int argc, char **argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "uso: monview <disco> MONKEY0 [--anim 90] [--frame 0] [--yaw 35] [--pitch 8] [--size 512] [--zoom 1] [--shiftx 0] [--shifty 0] [--fwd 0] [--shot saida.png]\n");
+        std::fprintf(stderr, "usage: monview <disc> MONKEY0 [--anim 90] [--frame 0] [--yaw 35] [--pitch 8] [--size 512] [--zoom 1] [--shiftx 0] [--shifty 0] [--fwd 0] [--shot out.png]\n");
         return 1;
     }
     const std::string disc = argv[1], name = argv[2];
@@ -35,16 +35,16 @@ int main(int argc, char **argv) {
     }
     wotm::model::Model m;
     if (!m.load(disc, {}, name)) {
-        std::fprintf(stderr, "nao consegui ler MON/%s.NGP em %s\n", name.c_str(), disc.c_str());
+        std::fprintf(stderr, "could not read MON/%s.NGP in %s\n", name.c_str(), disc.c_str());
         return 1;
     }
     if (!m.pose(anim, frame)) {
-        std::fprintf(stderr, "%s: sem animacao %d; pose de base\n", name.c_str(), anim);
+        std::fprintf(stderr, "%s: no animation %d; base pose\n", name.c_str(), anim);
         m.pose(-1, 0.f);
     }
-    std::fprintf(stderr, "%s: %zu triangulos, %zu texturas, animacao %d com %.0f quadros\n", name.c_str(), m.verts().size() / 3,
+    std::fprintf(stderr, "%s: %zu triangles, %zu textures, animation %d with %.0f frames\n", name.c_str(), m.verts().size() / 3,
                  m.textures().size(), anim, m.animLength(anim));
-    if (dumpTex) {   // texturas decodificadas (PNG) e o alfa de cada uma, e os estados de desenho: para conferir trajes
+    if (dumpTex) {   // decoded textures (PNG) and each one's alpha, plus the draw states: for checking costumes
         std::map<std::string, int> st;
         const auto &vs = m.verts();
         for (size_t k = 0; k + 2 < vs.size(); k += 3)
@@ -60,14 +60,14 @@ int main(int argc, char **argv) {
             if (g && v.a == 0) ++nalpha0;
         }
         for (int g = 0; g < 2; ++g)
-            std::fprintf(stderr, "  caixa %s: (%.0f %.0f %.0f)-(%.0f %.0f %.0f), %d vertices\n", g ? "com ABE" : "opacos", blo[g][0], blo[g][1],
+            std::fprintf(stderr, "  box %s: (%.0f %.0f %.0f)-(%.0f %.0f %.0f), %d vertices\n", g ? "with ABE" : "opaque", blo[g][0], blo[g][1],
                          blo[g][2], bhi[g][0], bhi[g][1], bhi[g][2], na[g]);
-        std::fprintf(stderr, "  vertices com ABE e alfa 0: %d\n", nalpha0);
+        std::fprintf(stderr, "  vertices with ABE and alpha 0: %d\n", nalpha0);
         for (size_t t = 0; t < m.textures().size(); ++t) {
             const auto &ti = m.textures()[t];
             int hist[3] = {0, 0, 0};
             for (uint32_t c : ti.rgba) ++hist[(c >> 24) == 0 ? 0 : (c >> 24) == 255 ? 2 : 1];
-            std::fprintf(stderr, "tex %zu %dx%d alfa 0: %d, parcial: %d, 255: %d\n", t, ti.w, ti.h, hist[0], hist[1], hist[2]);
+            std::fprintf(stderr, "tex %zu %dx%d alpha 0: %d, partial: %d, 255: %d\n", t, ti.w, ti.h, hist[0], hist[1], hist[2]);
             Image img{const_cast<uint32_t *>(ti.rgba.data()), ti.w, ti.h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             ExportImage(img, TextFormat("%s/%s_tex%zu.png", dumpTex, name.c_str(), t));
         }
@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
     r.shiftY = shiftY;
     r.fwd = fwd;
     wotm::model::FxTextures fx;
-    if (!fx.load(disc, {})) std::fprintf(stderr, "sem LVL/CENTRAL.TEX/.RTX: sem fogo nem lens flare\n");
+    if (!fx.load(disc, {})) std::fprintf(stderr, "no LVL/CENTRAL.TEX/.RTX: no fire or lens flare\n");
     r.setFx(&fx);
     m.computeFraming(anim);
     m.pose(anim, frame);
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
             }
             t0 = GetTime();
             m.computeFraming(anim);
-            std::fprintf(stderr, "animacao %d (%.0f quadros)\n", anim, m.animLength(anim));
+            std::fprintf(stderr, "animation %d (%.0f frames)\n", anim, m.animLength(anim));
         }
         if (!paused) tp = GetTime() - t0;
         m.pose(anim, frame + float(tp * 60.0));

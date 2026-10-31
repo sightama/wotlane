@@ -1,12 +1,12 @@
-// ABOUTME: Matrizes de vetores-linha (M4), a camera do jogo lida da RAM (GameCamera) e a matematica da interpolacao de quadros
-// ABOUTME: (Scene::showBlend): sem raylib, para os testes de unidade (native/tests). Incluido por wotm_native.hpp.
+// ABOUTME: Row-vector matrices (M4), the game camera read from RAM (GameCamera) and the math for frame interpolation
+// ABOUTME: (Scene::showBlend): no raylib, for the unit tests (native/tests). Included by wotm_native.hpp.
 #pragma once
 
 #include <cmath>
 
 namespace wotm {
 
-// ---------------------------------------------------------------- matrizes (vetores-linha)
+// ---------------------------------------------------------------- matrices (row vectors)
 
 struct M4 {
     float m[4][4];
@@ -18,23 +18,23 @@ inline M4 ident() {
     return r;
 }
 
-// Camera do jogo (readGameCamera, wotm_native.hpp): olho, eixos frente e cima, FOV vertical
+// Game camera (readGameCamera, wotm_native.hpp): eye, forward and up axes, vertical FOV
 struct GameCamera {
     bool ok = false;
     float pos[3] = {0, 0, 0};
     float fwd[3] = {0, 1, 0};
     float up[3] = {0, 0, 1};
-    float fovy = 63.7f;   // graus
+    float fovy = 63.7f;   // degrees
 };
 
-// ---------------------------------------------------------------- interpolacao de quadros (Scene::showBlend)
-// A logica roda a 60 e a apresentacao na taxa do monitor: entre dois quadros do jogo o desenho mistura os dois ultimos instantaneos
-// (A anterior, B mais novo). Matriz: escala por linha (a convencao do codigo: scaleM antes), rotacao por slerp, translacao linear.
+// ---------------------------------------------------------------- frame interpolation (Scene::showBlend)
+// The logic runs at 60 and presentation at the monitor's rate: between two game frames the drawing blends the last two snapshots
+// (A older, B newer). Matrix: scale per row (the code's convention: scaleM first), rotation by slerp, translation linear.
 namespace interp {
 struct Quat { float w, x, y, z; };
 
-// Linhas 0-2 = eixos com escala. Falso se as linhas normalizadas nao forem ortogonais (cisalhamento): ai o chamador faz lerp simples.
-// det < 0 (espelho): a linha 2 entra com escala negativa.
+// Rows 0-2 = axes with scale. False if the normalized rows aren't orthogonal (shear): then the caller does a plain lerp.
+// det < 0 (mirror): row 2 goes in with negative scale.
 inline bool decompose(const M4 &m, Quat &q, float s[3]) {
     float R[3][3];
     for (int i = 0; i < 3; ++i) {
@@ -52,7 +52,7 @@ inline bool decompose(const M4 &m, Quat &q, float s[3]) {
         s[2] = -s[2];
         for (int j = 0; j < 3; ++j) R[2][j] = -R[2][j];
     }
-    // A = R^T (matriz-coluna): A[r][c] = R[c][r]
+    // A = R^T (column matrix): A[r][c] = R[c][r]
     auto A = [&](int r, int c) { return R[c][r]; };
     const float tr = A(0, 0) + A(1, 1) + A(2, 2);
     if (tr > 0.f) { const float t = std::sqrt(tr + 1.f) * 2.f; q = {0.25f * t, (A(2, 1) - A(1, 2)) / t, (A(0, 2) - A(2, 0)) / t, (A(1, 0) - A(0, 1)) / t}; }
@@ -77,7 +77,7 @@ inline Quat slerp(Quat a, Quat b, float t) {
 inline M4 lerpM4(const M4 &a, const M4 &b, float t) {
     M4 r;
     for (int i = 0; i < 4; ++i)
-        for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j] + (b.m[i][j] - a.m[i][j]) * t;   // translacao, coluna 3 e o caso sem decomposicao
+        for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j] + (b.m[i][j] - a.m[i][j]) * t;   // translation, column 3 and the no-decomposition case
     Quat qa, qb;
     float sa[3], sb[3];
     if (decompose(a, qa, sa) && decompose(b, qb, sb) && (sa[2] < 0.f) == (sb[2] < 0.f)) {
@@ -88,7 +88,7 @@ inline M4 lerpM4(const M4 &a, const M4 &b, float t) {
                                {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}};
         for (int i = 0; i < 3; ++i) {
             const float s = sa[i] + (sb[i] - sa[i]) * t;
-            for (int j = 0; j < 3; ++j) r.m[i][j] = A[j][i] * s;   // volta para vetores-linha
+            for (int j = 0; j < 3; ++j) r.m[i][j] = A[j][i] * s;   // back to row vectors
         }
     }
     return r;
@@ -103,7 +103,7 @@ inline void orthonormal(float fwd[3], float up[3]) {
     if (n > 1e-6f) for (int i = 0; i < 3; ++i) up[i] /= n;
 }
 
-// Corte de camera entre A e B (sem mistura): teleporte, giro brusco, FOV mudando
+// Camera cut between A and B (no blending): teleport, sudden turn, FOV changing
 inline bool cameraCut(const GameCamera &a, const GameCamera &b) {
     if (!a.ok || !b.ok) return true;
     const float dx = b.pos[0] - a.pos[0], dy = b.pos[1] - a.pos[1], dz = b.pos[2] - a.pos[2];
@@ -111,7 +111,7 @@ inline bool cameraCut(const GameCamera &a, const GameCamera &b) {
     return dx * dx + dy * dy + dz * dz > 400.f * 400.f || dotf < 0.7f || std::fabs(a.fovy - b.fovy) > 5.f;
 }
 
-// Posicao e FOV lineares, eixos por nlerp e reortonormalizados (basta para o giro de um quadro)
+// Position and FOV linear, axes by nlerp and re-orthonormalized (good enough for one frame's turn)
 inline GameCamera lerpCamera(const GameCamera &a, const GameCamera &b, float t) {
     GameCamera r = b;
     for (int i = 0; i < 3; ++i) {
@@ -124,7 +124,7 @@ inline GameCamera lerpCamera(const GameCamera &a, const GameCamera &b, float t) 
     return r;
 }
 
-// Camera -> mundo (vetores-linha): linhas = direita, frente, cima, olho
+// Camera -> world (row vectors): rows = right, forward, up, eye
 inline M4 cameraToWorld(const GameCamera &c) {
     float f[3] = {c.fwd[0], c.fwd[1], c.fwd[2]}, u[3] = {c.up[0], c.up[1], c.up[2]};
     orthonormal(f, u);
@@ -134,7 +134,7 @@ inline M4 cameraToWorld(const GameCamera &c) {
     return m;
 }
 
-// Inversa de uma matriz rigida (rotacao ortonormal + translacao, vetores-linha)
+// Inverse of a rigid matrix (orthonormal rotation + translation, row vectors)
 inline M4 rigidInverse(const M4 &m) {
     M4 r = ident();
     for (int i = 0; i < 3; ++i)
@@ -143,8 +143,8 @@ inline M4 rigidInverse(const M4 &m) {
     return r;
 }
 
-// Foco da projecao do jogo: px do GS (horizontal) e linhas (vertical) por unidade de tangente. Da worldToScreenMat (16 floats, linhas):
-// linha 0 = fh*direita + c*frente, linha 1 = -fv*cima + c*frente, linha 3 = frente; o foco e a parte perpendicular a linha 3.
+// Focal length of the game's projection: GS px (horizontal) and lines (vertical) per unit of tangent. From worldToScreenMat (16 floats, rows):
+// row 0 = fh*right + c*forward, row 1 = -fv*up + c*forward, row 3 = forward; the focal length is the part perpendicular to row 3.
 struct Focus { float fh = 384.f, fv = 180.48f; };
 inline bool focusOf(const float *M, Focus &f) {
     const float *r3 = M + 12;
@@ -162,7 +162,7 @@ inline bool focusOf(const float *M, Focus &f) {
     f.fv = fv;
     return true;
 }
-// mundo -> camera (direita, frente, cima) pela cameraToWorld C; point = com a translacao
+// world -> camera (right, forward, up) via cameraToWorld C; point = including the translation
 inline void toCam(const M4 &C, const float p[3], bool point, float q[3]) {
     const float d[3] = {p[0] - (point ? C.m[3][0] : 0.f), p[1] - (point ? C.m[3][1] : 0.f), p[2] - (point ? C.m[3][2] : 0.f)};
     for (int k = 0; k < 3; ++k) q[k] = d[0] * C.m[k][0] + d[1] * C.m[k][1] + d[2] * C.m[k][2];
@@ -170,7 +170,7 @@ inline void toCam(const M4 &C, const float p[3], bool point, float q[3]) {
 inline void fromCam(const M4 &C, const float q[3], bool point, float p[3]) {
     for (int i = 0; i < 3; ++i) p[i] = (point ? C.m[3][i] : 0.f) + q[0] * C.m[0][i] + q[1] * C.m[1][i] + q[2] * C.m[2][i];
 }
-// Ponto do mundo -> deslocamento do centro da tela (px do GS, linhas); falso atras da camera
+// World point -> offset from the screen center (GS px, lines); false when behind the camera
 inline bool project(const M4 &C, const Focus &f, const float w[3], float &x, float &y) {
     float q[3];
     toCam(C, w, true, q);

@@ -1,5 +1,5 @@
-// Leitura de texturas na VRAM do GS (4 MB, layout nativo do PS2) a partir de um TEX0.
-// As tabelas de enderecamento (page/block/column) sao as do GS e vem de PS2Recomp (ps2xRuntime/src/lib/gs/ps2_gs_memory.cpp, GPL-3.0).
+// Reads textures from GS VRAM (4 MB, the PS2's native layout) given a TEX0.
+// The addressing tables (page/block/column) are the GS's and come from PS2Recomp (ps2xRuntime/src/lib/gs/ps2_gs_memory.cpp, GPL-3.0).
 #pragma once
 
 #include <cstdint>
@@ -56,7 +56,7 @@ static constexpr uint16_t kCol4[16][32] = {
     {385, 393, 417, 425, 449, 457, 481, 489, 387, 395, 419, 427, 451, 459, 483, 491, 389, 397, 421, 429, 453, 461, 485, 493, 391, 399, 423, 431, 455, 463, 487, 495},
     {401, 409, 433, 441, 465, 473, 497, 505, 403, 411, 435, 443, 467, 475, 499, 507, 405, 413, 437, 445, 469, 477, 501, 509, 407, 415, 439, 447, 471, 479, 503, 511}};
 
-// Enderecos em bytes (ou indice de nibble para T4) de um pixel. bp em blocos de 256 bytes; bw em unidades de 64 pixels.
+// Byte address (or nibble index for T4) of a pixel. bp in 256-byte blocks; bw in units of 64 pixels.
 inline uint32_t addrCT32(uint32_t bp, uint32_t bw, uint32_t x, uint32_t y) {
     const uint32_t page = (y >> 5) * bw + (x >> 6);
     const uint32_t block = kBlockC32[(y >> 3) & 3][(x >> 3) & 7];
@@ -84,7 +84,7 @@ inline uint32_t rd32(const Vram &v, uint32_t a) { uint32_t r = 0; if (a + 4 <= v
 inline uint32_t rd16(const Vram &v, uint32_t a) { return a + 2 <= v.size ? uint32_t(v.p[a] | (v.p[a + 1] << 8)) : 0; }
 inline uint32_t rd8(const Vram &v, uint32_t a) { return a < v.size ? v.p[a] : 0; }
 
-// RGBA8 do GS (r no byte 0) -> RGBA com alpha em 0..255 (o GS usa 0x80 = 1.0)
+// GS RGBA8 (r in byte 0) -> RGBA with alpha in 0..255 (the GS uses 0x80 = 1.0)
 inline uint32_t fixAlpha(uint32_t c) {
     uint32_t a = (c >> 24) & 0xFF;
     a = a >= 128 ? 255 : a * 2;
@@ -94,8 +94,8 @@ inline uint32_t from16(uint32_t h) {   // A1B5G5R5
     const uint32_t r = (h & 31) * 255 / 31, g = ((h >> 5) & 31) * 255 / 31, b = ((h >> 10) & 31) * 255 / 31;
     return r | (g << 8) | (b << 16) | ((h & 0x8000) ? 0xFF000000u : 0u);
 }
-// Alfa cru do GS (0x80 = 1,0, ate 0xFF ~ 2,0), para quem mistura como o GS (As = At * Av / 16384, shader do Scene::draw):
-// CT32 como esta; CT24 e o bit 1 do CT16 dao 0x80 (TA0/TA1 = 1,0), o bit 0 do CT16 da 0.
+// Raw GS alpha (0x80 = 1.0, up to 0xFF ~ 2.0), for code that blends like the GS (As = At * Av / 16384, Scene::draw's shader):
+// CT32 as is; CT24 and bit 1 of CT16 give 0x80 (TA0/TA1 = 1.0), bit 0 of CT16 gives 0.
 inline uint32_t from16Raw(uint32_t h) { return (from16(h) & 0x00FFFFFFu) | ((h & 0x8000) ? 0x80000000u : 0u); }
 
 struct Tex0 {
@@ -110,8 +110,8 @@ struct Tex0 {
     }
 };
 
-// Paleta de 256 entradas (CSM1) de um TEX0 indexado, lida da VRAM: fica em memoria linear com as entradas 8..15 e 16..23
-// de cada grupo de 32 trocadas.
+// 256-entry palette (CSM1) of an indexed TEX0, read from VRAM: it sits in linear memory with entries 8..15 and 16..23
+// of each group of 32 swapped.
 inline void readPalette(const Vram &v, const Tex0 &t, uint32_t pal[256]) {
     for (uint32_t i = 0; i < 256; ++i) {
         const uint32_t k = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);
@@ -120,8 +120,8 @@ inline void readPalette(const Vram &v, const Tex0 &t, uint32_t pal[256]) {
     }
 }
 
-// Decodifica pixels de um upload linear (a ordem em que o `.TEX` os guarda: linhas de `w` pixels, T4 com o nibble baixo primeiro).
-// rawAlpha: alfa cru do GS nos formatos diretos (ver from16Raw); a paleta vem pronta de quem chama.
+// Decodes pixels from a linear upload (the order the `.TEX` stores them in: rows of `w` pixels, T4 with the low nibble first).
+// rawAlpha: raw GS alpha for the direct formats (see from16Raw); the palette comes ready from the caller.
 inline bool decodeUpload(const uint8_t *pix, size_t avail, uint32_t w, uint32_t h, uint32_t psm, uint32_t csa,
                          const uint32_t pal[256], std::vector<uint32_t> &out, bool rawAlpha = false) {
     if (w == 0 || h == 0 || w > 1024 || h > 1024) return false;
@@ -153,7 +153,7 @@ inline bool decodeUpload(const uint8_t *pix, size_t avail, uint32_t w, uint32_t 
     return true;
 }
 
-// Decodifica a textura para RGBA8 (r,g,b,a em bytes consecutivos). Devolve falso se o formato nao for suportado.
+// Decodes the texture to RGBA8 (r,g,b,a in consecutive bytes). Returns false if the format isn't supported.
 inline bool decodeTexture(const Vram &v, uint64_t tex0, std::vector<uint32_t> &out, uint32_t &w, uint32_t &h) {
     if (!v.ok()) return false;
     const Tex0 t = Tex0::decode(tex0);
@@ -163,7 +163,7 @@ inline bool decodeTexture(const Vram &v, uint64_t tex0, std::vector<uint32_t> &o
     uint32_t pal[256];
     const bool indexed = t.psm == T8 || t.psm == T4 || t.psm == T8H || t.psm == T4HL || t.psm == T4HH;
     if (indexed) {
-        // CSM1: a paleta de 256 entradas esta em memoria linear com as entradas 8-15 e 16-23 de cada grupo de 32 trocadas
+        // CSM1: the 256-entry palette is in linear memory with entries 8-15 and 16-23 of each group of 32 swapped
         const uint32_t n = (t.psm == T4 || t.psm == T4HL || t.psm == T4HH) ? 16 : 256;
         for (uint32_t i = 0; i < 256; ++i) {
             const uint32_t k = (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);

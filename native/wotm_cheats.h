@@ -1,15 +1,15 @@
-// Trapacas de debug do runtime: bits de g_wotmCheats (definido em native/runtime/wotm_overrides.cpp).
-// A janela (menu F1 de wotm_live.inc) escreve; a thread do EE (hook de Monster::update/takeDamage) le e aplica nos jogadores.
+// Runtime debug cheats: bits of g_wotmCheats (defined in native/runtime/wotm_overrides.cpp).
+// The window (F1 menu in wotm_live.inc) writes; the EE thread (Monster::update/takeDamage hook) reads and applies them to the players.
 #pragma once
 #include <atomic>
 #include <cstdint>
 
-constexpr uint32_t kCheatInvincible = 1u << 0;    // takeDamage nao age no jogador
-constexpr uint32_t kCheatStamina1 = 1u << 1;      // campo de 2 bits: 0 normal, 1 cheia, 2 furia
+constexpr uint32_t kCheatInvincible = 1u << 0;    // takeDamage doesn't affect the player
+constexpr uint32_t kCheatStamina1 = 1u << 1;      // 2-bit field: 0 normal, 1 full, 2 rage
 constexpr uint32_t kCheatStaminaMask = 3u << 1;
-constexpr uint32_t kCheatSpecial = 1u << 3;       // especial sempre liberado
-constexpr uint32_t kCheatCloak = 1u << 4;         // CLOAK sempre ligado
-constexpr uint32_t kCheatGod = 1u << 5;           // m_godMode do proprio jogo
+constexpr uint32_t kCheatSpecial = 1u << 3;       // special always available
+constexpr uint32_t kCheatCloak = 1u << 4;         // CLOAK always on
+constexpr uint32_t kCheatGod = 1u << 5;           // the game's own m_godMode
 
 extern std::atomic<uint32_t> g_wotmCheats;
-extern std::atomic<bool> g_wotmCheatWin;          // pedido de "vencer a luta" (consumido no quadro seguinte)
+extern std::atomic<bool> g_wotmCheatWin;          // "win the fight" request (consumed on the next frame)

@@ -1,6 +1,6 @@
-// Arquivos do disco do jogo na camada nativa: a pasta do disco extraido (cdRoot) ou uma imagem ISO9660 (PS2X_CD_IMAGE).
-// Usado pelos filmes (wotm_fmv.hpp) e pelo icone de salvamento (wotm_saveicon.hpp). So le; nao depende do runtime.
-// Arquivos em mods/ (wotm_mods.hpp) vencem os do disco em readFile e no locate dos filmes.
+// Game disc files for the native layer: the extracted disc folder (cdRoot) or an ISO9660 image (PS2X_CD_IMAGE).
+// Used by the movies (wotm_fmv.hpp) and the save icon (wotm_saveicon.hpp). Read-only; doesn't depend on the runtime.
+// Files in mods/ (wotm_mods.hpp) override the disc's in readFile and in the movies' locate.
 #pragma once
 #include <cctype>
 #include <cstdint>
@@ -10,11 +10,11 @@
 #include <filesystem>
 #include <string>
 #include <vector>
-#include "wotm_mods.hpp"   // readFile procura antes em mods/
+#include "wotm_mods.hpp"   // readFile looks in mods/ first
 
 namespace wotm::disc {
 
-// Onde ler um filme: um arquivo solto (disco extraido) ou um trecho de uma imagem ISO
+// Where to read a movie from: a loose file (extracted disc) or a range of an ISO image
 struct Source {
     std::string path;
     uint64_t offset = 0;
@@ -30,7 +30,7 @@ inline int seek64(FILE *f, uint64_t off) {
 #endif
 }
 
-// Arquivo dentro de uma ISO9660 ("MOV/INTRO_M.PSS", sem diferenciar maiusculas; a versao ";1" e ignorada)
+// File inside an ISO9660 ("MOV/INTRO_M.PSS", case-insensitive; the ";1" version is ignored)
 inline Source isoFind(const std::string &iso, const std::string &name) {
     FILE *f = std::fopen(iso.c_str(), "rb");
     if (!f) return {};
@@ -55,7 +55,7 @@ inline Source isoFind(const std::string &iso, const std::string &name) {
             found = false;
             for (size_t o = 0; o < dir.size();) {
                 const uint8_t len = dir[o];
-                if (len == 0) { o = (o / 2048 + 1) * 2048; continue; }   // registros nao cruzam setores
+                if (len == 0) { o = (o / 2048 + 1) * 2048; continue; }   // records don't cross sectors
                 if (o + len > dir.size() || len < 34) break;
                 std::string id(reinterpret_cast<const char *>(&dir[o + 33]), dir[o + 32]);
                 if (const auto sc = id.find(';'); sc != std::string::npos) id.resize(sc);
@@ -75,7 +75,7 @@ inline Source isoFind(const std::string &iso, const std::string &name) {
     return out;
 }
 
-// Nome do jogo ("mov/intro_m.pss", "cdrom0:\MOV\INTRO_M.PSS;1") -> caminho relativo "mov/intro_m.pss"
+// Game's file name ("mov/intro_m.pss", "cdrom0:\MOV\INTRO_M.PSS;1") -> relative path "mov/intro_m.pss"
 inline std::string discRelative(std::string name) {
     if (const auto c = name.find(':'); c != std::string::npos) name = name.substr(c + 1);
     if (const auto sc = name.find(';'); sc != std::string::npos) name = name.substr(0, sc);
@@ -84,7 +84,7 @@ inline std::string discRelative(std::string name) {
     return name;
 }
 
-// Caminho relativo contra a raiz de um disco extraido, sem diferenciar maiusculas; vazio se nao existe
+// Relative path resolved against the root of an extracted disc, case-insensitive; empty if it doesn't exist
 inline std::string resolveDiscPath(const std::filesystem::path &root, const std::string &rel) {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -109,11 +109,11 @@ inline std::string resolveDiscPath(const std::filesystem::path &root, const std:
     return fs::is_regular_file(cur, ec) ? cur.string() : std::string{};
 }
 
-// Le um arquivo inteiro do disco: primeiro a pasta, depois a ISO. `rel` como "MEMCRD/ICON.ICO".
+// Reads a whole file from the disc: first the folder, then the ISO. `rel` like "MEMCRD/ICON.ICO".
 inline bool readFile(const std::filesystem::path &root, const std::string &iso, const std::string &rel, std::vector<uint8_t> &out) {
     Source src;
-    if (std::string p = wotm::mods::Registry::get().hostPath(rel); !p.empty()) src = Source{p};   // mods/ vence o disco
-    else if (std::string p = resolveDiscPath(root, wotm::mods::Registry::get().aliasOf(rel)); !p.empty()) src = Source{p};   // traje de mod: o do base
+    if (std::string p = wotm::mods::Registry::get().hostPath(rel); !p.empty()) src = Source{p};   // mods/ overrides the disc
+    else if (std::string p = resolveDiscPath(root, wotm::mods::Registry::get().aliasOf(rel)); !p.empty()) src = Source{p};   // mod costume: the base's
     else if (!iso.empty()) src = isoFind(iso, wotm::mods::Registry::get().aliasOf(rel));
     if (!src.ok()) return false;
     FILE *f = std::fopen(src.path.c_str(), "rb");

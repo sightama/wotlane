@@ -8,7 +8,7 @@ $checks = [ordered]@{
     # mouse so num PC (WOTM_ORBITMOUSE: deslocamento como o do mouse, a partir do quadro 300 da orbita): a camera moderna o levava a
     # camera do jogo do jogador 1 so naquele PC e a partida dessincronizava (bloco 0x800000, o _cs da camera). Na rede: camera classica
     'camera_mouse'  = @{ PlayerEnv = '2:WOTM_ORBITMOUSE=300:600:4:0'; Secs = 50
-                         Expect = 'partida em rede: perfil fixo' }
+                         Expect = 'network match: fixed profile' }
     # opcoes de jogo diferentes em cada PC (camera classica num, moderna no outro: com a moderna o controle e relativo a tela; lock-on
     # alternado, sensibilidade e inversao da camera): o perfil fixo vale nos dois
     'opcoes_pc'     = @{ PlayerEnv = '1:WOTM_CAMERA=0;WOTM_CAMSENS=10;WOTM_CAMINVERT=1|||2:WOTM_CAMERA=1;WOTM_LOCKTOGGLE=1'; Secs = 50 }

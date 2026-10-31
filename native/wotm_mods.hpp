@@ -1,11 +1,11 @@
-// Pasta mods/ (MODS.md): arquivos que sobrepoem os do disco, sem mexer na ISO.
-// Cada subpasta de mods/ e um mod e repete a arvore do disco (mods/meu_mod/MON/CONGAR1.TEX troca o \MON\CONGAR1.TEX). Pastas
-// que comecam com '_' ou '.' ficam desligadas. Com dois mods trocando o mesmo arquivo vence o ultimo em ordem alfabetica (como
-// camadas: "10_base", "20_extra"); o log diz quem perdeu.
-// O jogo acha os arquivos pelo fileCdSearchFile (setor e tamanho) e le por setor; cada arquivo de mod ganha uma faixa de
-// setores falsos acima do fim de qualquer DVD (kFirstLsn), que os ganchos (runtime/wotm_mods.inc) e o leitor do som nativo
-// atendem daqui. A camada nativa (wotm_disc.hpp: filmes, icone, fotos e monstro da lista de saves) procura aqui pelo nome.
-// So host: nao depende do runtime. A varredura roda uma vez, antes do boot (scan); depois tudo e so leitura.
+// mods/ folder (MODS.md): files that override the disc's, without touching the ISO.
+// Each subfolder of mods/ is a mod and mirrors the disc tree (mods/my_mod/MON/CONGAR1.TEX replaces \MON\CONGAR1.TEX). Folders
+// starting with '_' or '.' are disabled. When two mods replace the same file, the last one in alphabetical order wins (like
+// layers: "10_base", "20_extra"); the log says which one lost.
+// The game finds files through fileCdSearchFile (sector and size) and reads by sector; each mod file gets a range of
+// fake sectors beyond the end of any DVD (kFirstLsn), which the hooks (runtime/wotm_mods.inc) and the native sound reader
+// serve from here. The native layer (wotm_disc.hpp: movies, icon, photos and the save list's monster) looks things up here by name.
+// Host only: doesn't depend on the runtime. The scan runs once, before boot (scan); after that everything is read-only.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -24,13 +24,13 @@
 
 namespace wotm::mods {
 
-// Monstros jogaveis: tipo (MonsterNewNames, m_monsterSel >> 5), nome do jogo e prefixo dos arquivos em MON/
+// Playable monsters: type (MonsterNewNames, m_monsterSel >> 5), in-game name and file prefix in MON/
 struct MonsterInfo { int type; const char *name; const char *prefix; };
 inline constexpr MonsterInfo kMonsters[] = {
     {1, "congar", "MONKEY"}, {2, "robo-47", "ROBOT"}, {3, "togera", "LIZARD"}, {4, "ultra-v", "SHOGUN"}, {5, "preytor", "MANTIS"},
     {7, "kineticlops", "ENERGY"}, {8, "magmo", "LAVA"}, {9, "raptros", "DRAGON"}, {10, "agamo", "ROCK"}, {11, "zorgulon", "ALIEN"},
 };
-// Pelo nome ("togera", "Robo-47", "robo47") ou pelo prefixo ("LIZARD")
+// By name ("togera", "Robo-47", "robo47") or by prefix ("LIZARD")
 inline const MonsterInfo *monsterInfo(std::string s) {
     auto norm = [](std::string t) {
         std::string o;
@@ -48,7 +48,7 @@ inline const MonsterInfo *monsterInfo(int type) {
     return nullptr;
 }
 
-// Tipos que um monstro custom pode usar de base: os jogaveis e os chefes que o port ja deixa jogar (runtime/wotm_custom.inc)
+// Types a custom monster can use as its base: the playable ones and the bosses the port already lets you play (runtime/wotm_custom.inc)
 inline constexpr MonsterInfo kCustomBases[] = {{13, "assboss", "ASSBOSS"}, {14, "jelly", "JELLY"}, {15, "final", "FINAL"}};
 inline const MonsterInfo *customBase(const std::string &s) {
     if (const MonsterInfo *m = monsterInfo(s)) return m;
@@ -57,54 +57,54 @@ inline const MonsterInfo *customBase(const std::string &s) {
     return nullptr;
 }
 
-// Monstro custom (mods/<mod>/monsters/<pasta>/monster.json; MODS.md, "Monstros custom"): um monstro novo na selecao (casa
-// CUSTOM), que hoje usa o codigo, o modelo e os arquivos de um tipo do jogo (`base`). Arquivos proprios (outro prefixo, tipo
-// livre) ficam para depois; o formato ja reserva "files".
+// Custom monster (mods/<mod>/monsters/<folder>/monster.json; MODS.md, "Monstros custom"): a new monster on the select screen (CUSTOM
+// slot), which for now uses the code, model and files of one of the game's types (`base`). Its own files (another prefix, a free
+// type) come later; the format already reserves "files".
 struct Custom {
-    std::string id;             // "goliath" (WOTM_MATCH=goliath, o save)
-    std::string name;           // o que a selecao e a tela mostram ("GOLIATH")
-    int type = 0;               // tipo do jogo (13 = assboss)
+    std::string id;             // "goliath" (WOTM_MATCH=goliath, the save)
+    std::string name;           // what the select screen and the HUD show ("GOLIATH")
+    int type = 0;               // game type (13 = assboss)
     std::string typeName;       // "assboss"
     std::string prefix;         // "ASSBOSS"
-    int costume = 0;            // traje do disco
-    std::string cameraFrom;     // MonsterLongNames do .CHR da camera ("lizard"); vazio = a do proprio tipo
-    float cameraScale = 1.f;    // distancias da camera emprestada
-    std::string narrator;       // narrator/<nome>.mp3 (vazio = o do tipo)
-    bool ai = false;            // uma CPU pode usar (quadro de CPU da selecao)
-    std::filesystem::path portrait;   // PNG do retrato do HUD (vazio = o do .RTX)
-    int portraitTex = -1;       // texId do retrato no <PREFIXO><traje>.RTX
+    int costume = 0;            // disc costume
+    std::string cameraFrom;     // MonsterLongNames of the .CHR to take the camera from ("lizard"); empty = its own type's
+    float cameraScale = 1.f;    // distances for the borrowed camera
+    std::string narrator;       // narrator/<name>.mp3 (empty = the type's)
+    bool ai = false;            // a CPU can use it (CPU slot on the select screen)
+    std::filesystem::path portrait;   // HUD portrait PNG (empty = the one from the .RTX)
+    int portraitTex = -1;       // portrait texId in <PREFIX><costume>.RTX
     std::string mod;
     std::filesystem::path dir;
 };
 
-// Traje de mod (mods/<mod>/skins/<pasta>/skin.json)
+// Mod costume (mods/<mod>/skins/<folder>/skin.json)
 struct Skin {
-    int monster = 0;            // tipo do monstro
-    std::string monsterName;    // "togera" (numa skin de custom, o id dele)
-    std::string custom;         // id do monstro custom dono da skin (vazio: skin de monstro do jogo); so aparece na lista dele
+    int monster = 0;            // monster type
+    std::string monsterName;    // "togera" (in a custom's skin, the custom's id)
+    std::string custom;         // id of the custom monster that owns the skin (empty: skin for a game monster); only shows up in its list
     std::string prefix;         // "LIZARD"
-    std::string id;             // "green" (o save guarda "togera/green")
-    std::string name;           // o que a selecao mostra
-    int base = 0;               // traje do disco que da o que falta (e os sons do traje)
-    bool ai = false;            // as IAs sorteadas podem usar
-    int index = 0;              // traje no jogo (4..99), so nesta execucao
+    std::string id;             // "green" (the save stores "togera/green")
+    std::string name;           // what the select screen shows
+    int base = 0;               // disc costume that supplies whatever is missing (and the costume's sounds)
+    bool ai = false;            // randomly picked AIs can use it
+    int index = 0;              // in-game costume (4..99), for this run only
     std::string mod;
     std::filesystem::path dir;
 };
-// PNG de uma skin: vale so para o arquivo do traje dela (stem "LIZARD4"), nunca para o traje base
+// A skin's PNG: only applies to its own costume's file (stem "LIZARD4"), never to the base costume
 struct SkinPng { std::string stem; std::filesystem::path host; std::string mod, rel; };
 
 struct File {
-    std::string rel;              // "MON/CONGAR1.TEX" (maiusculas, '/')
-    std::filesystem::path host;   // arquivo no PC
-    std::string mod;              // nome da pasta do mod
+    std::string rel;              // "MON/CONGAR1.TEX" (uppercase, '/')
+    std::filesystem::path host;   // file on the PC
+    std::string mod;              // mod folder name
     uint64_t size = 0;
-    uint32_t lsn = 0, sectors = 0;   // faixa falsa: [lsn, lsn + sectors)
-    mutable bool logged = false;     // primeira busca do jogo ja saiu no log
+    uint32_t lsn = 0, sectors = 0;   // fake range: [lsn, lsn + sectors)
+    mutable bool logged = false;     // the game's first lookup has already been logged
 };
 
-// Digest dos mods ligados em `dir` (subpastas que nao comecam com '_' ou '.'): caminho e conteudo de cada arquivo, em ordem de nome.
-// A partida em rede o poe no hash da configuracao (todos os PCs com os mesmos mods). 0 = nenhum arquivo de mod.
+// Digest of the enabled mods in `dir` (subfolders not starting with '_' or '.'): path and contents of every file, in name order.
+// Network play puts it in the config hash (every PC with the same mods). 0 = no mod files.
 inline uint64_t digest(const std::filesystem::path &dir) {
     namespace fs = std::filesystem;
     std::error_code ec;
@@ -133,7 +133,7 @@ inline uint64_t digest(const std::filesystem::path &dir) {
 
 class Registry {
 public:
-    static constexpr uint32_t kFirstLsn = 0x00800000u;   // 16 GB em setores de 2 KB: alem de qualquer DVD (~2,3 M setores)
+    static constexpr uint32_t kFirstLsn = 0x00800000u;   // 16 GB in 2 KB sectors: beyond any DVD (~2.3 M sectors)
     static constexpr uint64_t kMaxSize = 256ull << 20;
 
     static Registry &get() { static Registry r; return r; }
@@ -144,14 +144,14 @@ public:
         for (char &c : rel) c = char(std::toupper(static_cast<unsigned char>(c)));
         return rel;
     }
-    // Nome como o jogo o monta ("\LVL\CENTRAL.NGP;1", "cdrom0:\SND\SHELL_S.BNK;1") -> "LVL/CENTRAL.NGP"
+    // Name as the game builds it ("\LVL\CENTRAL.NGP;1", "cdrom0:\SND\SHELL_S.BNK;1") -> "LVL/CENTRAL.NGP"
     static std::string keyFromGame(std::string name) {
         if (const auto c = name.find(':'); c != std::string::npos) name = name.substr(c + 1);
         if (const auto sc = name.find(';'); sc != std::string::npos) name = name.substr(0, sc);
         return key(name);
     }
 
-    // Le a pasta mods/ (uma vez). Devolve quantos arquivos entraram.
+    // Reads the mods/ folder (once). Returns how many files were added.
     size_t scan(const std::filesystem::path &dir) {
         namespace fs = std::filesystem;
         std::error_code ec;
@@ -171,20 +171,20 @@ public:
                 const std::string rel = key(fs::relative(it->path(), m, ec).generic_string());
                 const uint64_t size = it->file_size(ec);
                 if (rel.empty() || ec) continue;
-                if (rel.rfind("SKINS/", 0) == 0) continue;   // skins/<id>/: trajes novos (scanSkins), nao sobrepoem o disco
-                if (rel.rfind("MONSTERS/", 0) == 0) continue;   // monsters/<id>/: monstros custom (scanCustoms)
-                if (size > kMaxSize) { std::fprintf(stderr, "[mods] %s/%s ignorado: maior que 256 MB\n", m_mods.back().c_str(), rel.c_str()); continue; }
+                if (rel.rfind("SKINS/", 0) == 0) continue;   // skins/<id>/: new costumes (scanSkins), don't override the disc
+                if (rel.rfind("MONSTERS/", 0) == 0) continue;   // monsters/<id>/: custom monsters (scanCustoms)
+                if (size > kMaxSize) { std::fprintf(stderr, "[mods] %s/%s ignored: larger than 256 MB\n", m_mods.back().c_str(), rel.c_str()); continue; }
                 File &f = m_files[rel];
-                if (!f.mod.empty()) std::fprintf(stderr, "[mods] %s: %s vence %s\n", rel.c_str(), m_mods.back().c_str(), f.mod.c_str());
+                if (!f.mod.empty()) std::fprintf(stderr, "[mods] %s: %s beats %s\n", rel.c_str(), m_mods.back().c_str(), f.mod.c_str());
                 f.rel = rel;
                 f.host = it->path();
                 f.mod = m_mods.back();
                 f.size = size;
             }
         }
-        scanCustoms(mods);   // antes das skins: uma skin pode ser de um custom
+        scanCustoms(mods);   // before the skins: a skin can belong to a custom
         scanSkins(mods);
-        // Faixas de setores na ordem dos nomes (estavel entre execucoes), com um setor de folga entre arquivos
+        // Sector ranges in name order (stable across runs), with one spare sector between files
         uint32_t next = kFirstLsn;
         for (auto &[rel, f] : m_files) {
             f.sectors = uint32_t((f.size + 2047) / 2048);
@@ -207,8 +207,8 @@ public:
         const auto it = m_files.find(key(rel));
         return it == m_files.end() ? nullptr : &it->second;
     }
-    // Arquivo do traje base que um traje de mod usa no lugar do que a pasta da skin nao trouxe ("MON/LIZARD4.NGP" ->
-    // "MON/LIZARD1.NGP"); senao o proprio nome. O que se le do disco e sempre aliasOf(rel).
+    // The base costume's file that a mod costume uses in place of what the skin folder didn't provide ("MON/LIZARD4.NGP" ->
+    // "MON/LIZARD1.NGP"); otherwise the name itself. What gets read from disc is always aliasOf(rel).
     std::string aliasOf(const std::string &rel) const {
         if (!m_ready || m_alias.empty()) return key(rel);
         const auto it = m_alias.find(key(rel));
@@ -219,10 +219,10 @@ public:
         return f ? f->host.string() : std::string{};
     }
 
-    // ---- skins de mod (trajes 4 em diante) ----
+    // ---- mod skins (costumes 4 and up) ----
     const std::vector<Skin> &skins() const { return m_skins; }
-    // Skin pelo tipo do monstro (MonsterNewNames) e pelo id ("green") ou "monstro/id"; nullptr se nao ha.
-    // Com "monstro/id", o monstro tem de bater (o mesmo id pode existir no Togera e num custom de base Togera).
+    // Skin by monster type (MonsterNewNames) and by id ("green") or "monster/id"; nullptr if there's none.
+    // With "monster/id", the monster has to match (the same id can exist on Togera and on a Togera-based custom).
     const Skin *skin(int monster, std::string id) const {
         std::string owner;
         if (const auto s = id.find('/'); s != std::string::npos) owner = lower(id.substr(0, s)), id = id.substr(s + 1);
@@ -230,7 +230,7 @@ public:
             if (k.monster == monster && k.id == lower(id) && (owner.empty() || owner == k.monsterName)) return &k;
         return nullptr;
     }
-    // Trajes de um monstro custom: o do monster.json e as skins dele, nessa ordem
+    // A custom monster's costumes: the one from monster.json and its skins, in that order
     std::vector<int> customCostumes(const Custom &c) const {
         std::vector<int> v{c.costume};
         for (const Skin &k : m_skins)
@@ -244,14 +244,14 @@ public:
     }
     const std::vector<SkinPng> &skinPngs() const { return m_skinPngs; }
 
-    // ---- monstros custom ----
+    // ---- custom monsters ----
     const std::vector<Custom> &customs() const { return m_customs; }
     const Custom *custom(const std::string &id) const {
         for (const Custom &c : m_customs)
             if (c.id == lower(id)) return &c;
         return nullptr;
     }
-    // O custom que usa esse tipo e traje (o primeiro), para os ganchos da luta
+    // The custom that uses this type and costume (the first one), for the fight hooks
     const Custom *customByType(int type, int costume = -1) const {
         for (const Custom &c : m_customs)
             if (c.type == type && (costume < 0 || c.costume == costume)) return &c;
@@ -266,7 +266,7 @@ public:
         return lsn < f->lsn + std::max(f->sectors, 1u) ? f : nullptr;
     }
 
-    // Le `sectors` setores a partir do LSN falso; o que passa do fim do arquivo vem zerado. false: LSN fora dos mods.
+    // Reads `sectors` sectors starting at the fake LSN; anything past the end of the file comes back zeroed. false: LSN outside the mods.
     bool read(uint32_t lsn, uint32_t sectors, uint8_t *dst, size_t bytes) const {
         const File *f = findLsn(lsn);
         if (!f) return false;
@@ -284,7 +284,7 @@ private:
     std::filesystem::path m_dir;
     std::vector<std::string> m_mods;
     std::map<std::string, File> m_files;
-    std::vector<const File *> m_byLsn;   // em ordem de LSN (o map ja vem em ordem de nome, e os LSN seguem essa ordem)
+    std::vector<const File *> m_byLsn;   // in LSN order (the map is already in name order, and the LSNs follow that order)
     std::map<std::string, std::string> m_alias;   // "MON/LIZARD4.NGP" -> "MON/LIZARD1.NGP"
     std::vector<Skin> m_skins;
     std::vector<SkinPng> m_skinPngs;
@@ -295,7 +295,7 @@ private:
         for (char &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
         return s;
     }
-    // Filho de `dir` com esse nome, sem olhar maiusculas
+    // Child of `dir` with this name, case-insensitive
     static std::filesystem::path child(const std::filesystem::path &dir, const std::string &name) {
         std::error_code ec;
         for (const auto &e : std::filesystem::directory_iterator(dir, ec))
@@ -303,9 +303,9 @@ private:
         return {};
     }
 
-    // mods/<mod>/skins/<pasta>/skin.json (MODS.md, "Skins"): {"monster", "id", "name", "base", "ai"}. Cada skin vira o traje
-    // <PREFIXO><n> (n = 4, 5, ... por monstro, na ordem mod/id; so nesta execucao: o save guarda "monstro/id"). O que a pasta traz
-    // (.NGP+.PTR, .TEX, .RTX, PNGs) e dela; o que falta e o arquivo do traje base (m_alias).
+    // mods/<mod>/skins/<folder>/skin.json (MODS.md, "Skins"): {"monster", "id", "name", "base", "ai"}. Each skin becomes costume
+    // <PREFIX><n> (n = 4, 5, ... per monster, in mod/id order; for this run only: the save stores "monster/id"). Whatever the folder brings
+    // (.NGP+.PTR, .TEX, .RTX, PNGs) is its own; whatever is missing is the base costume's file (m_alias).
     void scanSkins(const std::vector<std::filesystem::path> &mods) {
         namespace fs = std::filesystem;
         std::error_code ec;
@@ -328,7 +328,7 @@ private:
                 json::Value v;
                 std::string err;
                 if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
-                    std::fprintf(stderr, "[mods] skin %s ignorada: %s\n", where.c_str(), js.empty() ? "sem skin.json" : ("skin.json invalido: " + err).c_str());
+                    std::fprintf(stderr, "[mods] skin %s ignored: %s\n", where.c_str(), js.empty() ? "no skin.json" : ("invalid skin.json: " + err).c_str());
                     continue;
                 }
                 Skin k;
@@ -336,10 +336,10 @@ private:
                 const MonsterInfo *mi = mon && mon->type == json::Value::Str ? monsterInfo(mon->s) : nullptr;
                 const Custom *cu = !mi && mon && mon->type == json::Value::Str ? custom(mon->s) : nullptr;
                 if (!mi && !cu) {
-                    std::fprintf(stderr, "[mods] skin %s ignorada: \"monster\" nao e um monstro jogavel (togera, congar, ...) nem o id de um monstro custom\n", where.c_str());
+                    std::fprintf(stderr, "[mods] skin %s ignored: \"monster\" is neither a playable monster (togera, congar, ...) nor a custom monster's id\n", where.c_str());
                     continue;
                 }
-                if (cu) {   // skin de custom: um traje do tipo base, que so a lista do custom oferece
+                if (cu) {   // custom's skin: a costume of the base type, offered only in the custom's list
                     k.monster = cu->type;
                     k.monsterName = cu->id;
                     k.custom = cu->id;
@@ -352,7 +352,7 @@ private:
                 const json::Value *id = v.get("id");
                 k.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
                 if (k.id.empty() || k.id.size() > 32 || k.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
-                    std::fprintf(stderr, "[mods] skin %s ignorada: \"id\" so com letras, digitos e _ (ate 32)\n", where.c_str());
+                    std::fprintf(stderr, "[mods] skin %s ignored: \"id\" must be only letters, digits and _ (up to 32)\n", where.c_str());
                     continue;
                 }
                 const json::Value *nm = v.get("name");
@@ -360,7 +360,7 @@ private:
                 const json::Value *base = v.get("base");
                 k.base = base ? int(base->asInt(0)) : cu ? cu->costume : 0;
                 if (k.base < 0 || k.base > 3) {
-                    std::fprintf(stderr, "[mods] skin %s: \"base\" %d fora de 0..3, usando 0\n", where.c_str(), k.base);
+                    std::fprintf(stderr, "[mods] skin %s: \"base\" %d outside 0..3, using 0\n", where.c_str(), k.base);
                     k.base = 0;
                 }
                 const json::Value *ai = v.get("ai");
@@ -369,7 +369,7 @@ private:
                 k.dir = s;
                 Skin &slot = byKey[k.monsterName + "/" + k.id];
                 if (!slot.id.empty())
-                    std::fprintf(stderr, "[mods] skin %s/%s: %s vence %s\n", k.monsterName.c_str(), k.id.c_str(), k.mod.c_str(), slot.mod.c_str());
+                    std::fprintf(stderr, "[mods] skin %s/%s: %s beats %s\n", k.monsterName.c_str(), k.id.c_str(), k.mod.c_str(), slot.mod.c_str());
                 slot = k;
             }
         }
@@ -382,11 +382,11 @@ private:
         for (Skin &k : m_skins) {
             int &n = next.emplace(k.monster, 4).first->second;
             const std::string stem = k.prefix + std::to_string(n);
-            if (n > 99 || stem.size() > 8) {   // o fileStatus guarda nomes de ate 8 letras
-                std::fprintf(stderr, "[mods] skin %s/%s ignorada: trajes demais para %s\n", k.monsterName.c_str(), k.id.c_str(), k.monsterName.c_str());
+            if (n > 99 || stem.size() > 8) {   // fileStatus stores names of up to 8 letters
+                std::fprintf(stderr, "[mods] skin %s/%s ignored: too many costumes for %s\n", k.monsterName.c_str(), k.id.c_str(), k.monsterName.c_str());
                 continue;
             }
-            std::map<std::string, fs::path> own;   // extensao -> arquivo da pasta
+            std::map<std::string, fs::path> own;   // extension -> file in the folder
             std::vector<fs::path> pngs;
             for (auto it = fs::recursive_directory_iterator(k.dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 if (ec) break;
@@ -395,12 +395,12 @@ private:
                 if (ext == ".PNG") pngs.push_back(it->path());
                 else if (ext == ".NGP" || ext == ".PTR" || ext == ".TEX" || ext == ".RTX") {
                     auto &o = own[ext.substr(1)];
-                    if (!o.empty()) std::fprintf(stderr, "[mods] skin %s/%s: dois .%s, usando %s\n", k.monsterName.c_str(), k.id.c_str(), ext.c_str() + 1, o.filename().string().c_str());
+                    if (!o.empty()) std::fprintf(stderr, "[mods] skin %s/%s: two .%s, using %s\n", k.monsterName.c_str(), k.id.c_str(), ext.c_str() + 1, o.filename().string().c_str());
                     else o = it->path();
                 }
             }
             if (own.count("NGP") != own.count("PTR")) {
-                std::fprintf(stderr, "[mods] skin %s/%s ignorada: .NGP e .PTR andam juntos (o .PTR relocava o .NGP)\n", k.monsterName.c_str(), k.id.c_str());
+                std::fprintf(stderr, "[mods] skin %s/%s ignored: .NGP and .PTR go together (the .PTR relocates the .NGP)\n", k.monsterName.c_str(), k.id.c_str());
                 continue;
             }
             k.index = n++;
@@ -418,15 +418,15 @@ private:
                     m_alias[rel] = "MON/" + k.prefix + std::to_string(k.base) + "." + ext;
             }
             for (const fs::path &p : pngs) m_skinPngs.push_back(SkinPng{stem, p, k.mod, k.monsterName + "/" + k.id + "/" + p.filename().string()});
-            std::fprintf(stderr, "[mods] skin %s/%s (\"%s\", %s) = traje %d (%s); base %d%s%s, %zu png\n", k.monsterName.c_str(), k.id.c_str(),
-                         k.name.c_str(), k.mod.c_str(), k.index, stem.c_str(), k.base, brought.empty() ? "" : "; da pasta: ", brought.c_str(), pngs.size());
+            std::fprintf(stderr, "[mods] skin %s/%s (\"%s\", %s) = costume %d (%s); base %d%s%s, %zu png\n", k.monsterName.c_str(), k.id.c_str(),
+                         k.name.c_str(), k.mod.c_str(), k.index, stem.c_str(), k.base, brought.empty() ? "" : "; from the folder: ", brought.c_str(), pngs.size());
             kept.push_back(k);
         }
         m_skins = std::move(kept);
     }
 
-    // mods/<mod>/monsters/<pasta>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai"}.
-    // Mesmo id em dois mods: vence o ultimo em ordem alfabetica, como os arquivos.
+    // mods/<mod>/monsters/<folder>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai"}.
+    // Same id in two mods: the last one in alphabetical order wins, like the files.
     void scanCustoms(const std::vector<std::filesystem::path> &mods) {
         namespace fs = std::filesystem;
         std::error_code ec;
@@ -449,14 +449,14 @@ private:
                 json::Value v;
                 std::string err;
                 if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
-                    std::fprintf(stderr, "[mods] monstro %s ignorado: %s\n", where.c_str(), js.empty() ? "sem monster.json" : ("monster.json invalido: " + err).c_str());
+                    std::fprintf(stderr, "[mods] monster %s ignored: %s\n", where.c_str(), js.empty() ? "no monster.json" : ("invalid monster.json: " + err).c_str());
                     continue;
                 }
                 Custom c;
                 const json::Value *base = v.get("base");
                 const MonsterInfo *mi = base && base->type == json::Value::Str ? customBase(lower(base->s)) : nullptr;
                 if (!mi) {
-                    std::fprintf(stderr, "[mods] monstro %s ignorado: \"base\" nao e um tipo aceito (togera, congar, ..., assboss, jelly, final)\n", where.c_str());
+                    std::fprintf(stderr, "[mods] monster %s ignored: \"base\" is not an accepted type (togera, congar, ..., assboss, jelly, final)\n", where.c_str());
                     continue;
                 }
                 c.type = mi->type;
@@ -466,7 +466,7 @@ private:
                 c.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
                 if (c.id.empty() || c.id.size() > 32 || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos ||
                     std::isdigit(static_cast<unsigned char>(c.id[0]))) {
-                    std::fprintf(stderr, "[mods] monstro %s ignorado: \"id\" so com letras, digitos e _ (ate 32, comeca com letra)\n", where.c_str());
+                    std::fprintf(stderr, "[mods] monster %s ignored: \"id\" must be only letters, digits and _ (up to 32, starting with a letter)\n", where.c_str());
                     continue;
                 }
                 const json::Value *nm = v.get("name");
@@ -477,21 +477,21 @@ private:
                 if (const json::Value *cam = v.get("camera"); cam && cam->type == json::Value::Obj) {
                     if (const json::Value *f = cam->get("from"); f && f->type == json::Value::Str)
                         if (const MonsterInfo *b = customBase(lower(f->s))) c.cameraFrom = kLongNames[b->type];
-                    if (const json::Value *sc = cam->get("scale"); sc && sc->type == json::Value::Int && sc->i >= 10 && sc->i <= 1000)   // em %
+                    if (const json::Value *sc = cam->get("scale"); sc && sc->type == json::Value::Int && sc->i >= 10 && sc->i <= 1000)   // in %
                         c.cameraScale = float(sc->i) / 100.f;
                 }
                 if (const json::Value *na = v.get("narrator"); na && na->type == json::Value::Str) c.narrator = lower(na->s);
-                // "portrait": PNG do retrato do HUD (na pasta do monstro ou na raiz do mod), no lugar da imagem <PREFIXO><traje>.RTX
-                // de texId "portraitTex" (padrao: o do ASSBOSS1, 6; a ultima entrada do .RTX, 128x64)
+                // "portrait": HUD portrait PNG (in the monster's folder or the mod root), replacing the <PREFIX><costume>.RTX image
+                // with texId "portraitTex" (default: ASSBOSS1's, 6; the last entry in the .RTX, 128x64)
                 if (const json::Value *po = v.get("portrait"); po && po->type == json::Value::Str && !po->s.empty()) {
                     fs::path p = s / fs::u8path(po->s);
                     if (!fs::is_regular_file(p, ec)) p = m / fs::u8path(po->s);
                     const json::Value *pt = v.get("portraitTex");
                     c.portraitTex = pt && pt->type == json::Value::Int ? int(pt->i) : (c.type == 13 && c.costume == 1 ? 6 : -1);
                     if (!fs::is_regular_file(p, ec))
-                        std::fprintf(stderr, "[mods] monstro %s: \"portrait\" %s nao achado\n", where.c_str(), po->s.c_str());
+                        std::fprintf(stderr, "[mods] monster %s: \"portrait\" %s not found\n", where.c_str(), po->s.c_str());
                     else if (c.portraitTex < 0)
-                        std::fprintf(stderr, "[mods] monstro %s: \"portrait\" sem \"portraitTex\" (texId do retrato no .RTX)\n", where.c_str());
+                        std::fprintf(stderr, "[mods] monster %s: \"portrait\" without \"portraitTex\" (portrait texId in the .RTX)\n", where.c_str());
                     else
                         c.portrait = p;
                 }
@@ -501,17 +501,17 @@ private:
                 c.dir = s;
                 Custom &slot = byId[c.id];
                 if (!slot.id.empty())
-                    std::fprintf(stderr, "[mods] monstro %s: %s vence %s\n", c.id.c_str(), c.mod.c_str(), slot.mod.c_str());
+                    std::fprintf(stderr, "[mods] monster %s: %s beats %s\n", c.id.c_str(), c.mod.c_str(), slot.mod.c_str());
                 slot = c;
             }
         }
         for (auto &[id, c] : byId) {
-            std::fprintf(stderr, "[mods] monstro custom %s (\"%s\", %s): base %s traje %d%s%s\n", c.id.c_str(), c.name.c_str(), c.mod.c_str(),
-                         c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera do ", c.cameraFrom.c_str());
+            std::fprintf(stderr, "[mods] custom monster %s (\"%s\", %s): base %s costume %d%s%s\n", c.id.c_str(), c.name.c_str(), c.mod.c_str(),
+                         c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera from ", c.cameraFrom.c_str());
             m_customs.push_back(c);
         }
     }
-    // MonsterLongNames (prefixo do .CHR em RST/ e dos arquivos em MON/, minusculas), indice = tipo
+    // MonsterLongNames (prefix of the .CHR in RST/ and of the files in MON/, lowercase), index = type
     static constexpr const char *kLongNames[] = {"null", "monkey", "robot", "lizard", "shogun", "mantis", "spider", "energy", "lava",
                                                  "dragon", "rock", "alien", "ogre", "assboss", "jelly", "final", nullptr};
 };

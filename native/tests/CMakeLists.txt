@@ -1,5 +1,5 @@
-# ABOUTME: Testes de unidade das partes puras da camada nativa (sem jogo nem janela), compilados a parte do runtime.
-# ABOUTME: tools\test_native.bat configura em native\tests\build, compila e roda.
+# ABOUTME: Unit tests for the pure parts of the native layer (no game, no window), built separately from the runtime.
+# ABOUTME: tools\test_native.bat configures in native\tests\build, builds and runs them.
 cmake_minimum_required(VERSION 3.24)
 project(wotm_native_tests CXX)
 

@@ -1,10 +1,10 @@
-// Monstro 3D direto do disco, sem o jogo: le o .NGP/.TEX/.RTX de MON/, avalia uma animacao (curvas), monta as matrizes das
-// partes e a paleta de ossos como a travessia do jogo, e devolve os triangulos posados com textura. Porte de tools/animcurve.py e
-// tools/pose.py (conferidos contra dumps de RAM de luta); formato e resultados em docs/passos/MODELOS_3D.md.
+// 3D monster straight from the disc, without the game: reads the .NGP/.TEX/.RTX from MON/, evaluates an animation (curves), builds
+// the part matrices and the bone palette like the game's traversal does, and returns the posed, textured triangles. Port of tools/animcurve.py and
+// tools/pose.py (checked against RAM dumps taken during fights); format and results in docs/passos/MODELOS_3D.md.
 //
-// Uso: Model m; m.load(discRoot, iso, "MONKEY0"); m.pose(90, quadro); m.verts() / m.textures(). O desenho com raylib fica em
-// Renderer (abaixo), que usa um RenderTexture como o wotm_saveicon.hpp.
-// Nao reproduz: molas do pelo (BoneSpring), olhar/cabeca procedural e camadas de mistura de animacao.
+// Usage: Model m; m.load(discRoot, iso, "MONKEY0"); m.pose(90, frame); m.verts() / m.textures(). Drawing with raylib lives in
+// Renderer (below), which uses a RenderTexture like wotm_saveicon.hpp does.
+// Not reproduced: fur springs (BoneSpring), procedural look/head motion and animation blend layers.
 #pragma once
 #include "wotm_native.hpp"   // Ram, M4, mul, xform, decodeObject
 #include "wotm_disc.hpp"
@@ -21,11 +21,11 @@
 
 namespace wotm::model {
 
-constexpr uint32_t kBase = 0xA00000;   // o .NGP do monstro vem pre-ligado para ca (lido nessa base, dispensa o .PTR)
+constexpr uint32_t kBase = 0xA00000;   // the monster's .NGP comes pre-linked to this address (read at this base, so no .PTR needed)
 constexpr int kIdle = 0x5A;            // StateIdle::chooseBaseIdle
-constexpr int kUvLayer = 0x91;         // camada da textura rolando (so canais de UV; Kineticlops), tocada por cima da principal
+constexpr int kUvLayer = 0x91;         // scrolling-texture layer (UV channels only; Kineticlops), played on top of the main one
 
-// ---------------------------------------------------------------- curvas (src/common/AnimCurve.cpp)
+// ---------------------------------------------------------------- curves (src/common/AnimCurve.cpp)
 
 struct Curve {
     const Ram *m = nullptr;
@@ -44,7 +44,7 @@ struct Curve {
         bt = mem.f32(a - 16); dt = mem.f32(a - 12); bv = mem.f32(a - 8); dv = mem.f32(a - 4);
         tsz = dtype == 0 ? 4 : (dtype == 1 ? 2 : 1);
         ssz = dtype == 0 ? 4 : 2;
-        switch (ctype) {   // tamanho da chave com o alinhamento do C++ do retail
+        switch (ctype) {   // key size, with the retail C++ alignment
         case 2: ksz = tsz; break;
         case 5: ksz = 2 * tsz; break;
         case 4: ksz = dtype == 0 ? 12 : (dtype == 1 ? 6 : 4); break;
@@ -142,11 +142,11 @@ struct Curve {
     }
 };
 
-// ---------------------------------------------------------------- texturas (.TEX / .RTX)
+// ---------------------------------------------------------------- textures (.TEX / .RTX)
 
 struct TexImage {
     int w = 0, h = 0;
-    std::vector<uint32_t> rgba;   // R | G << 8 | B << 16 | A << 24, alfa 0..255
+    std::vector<uint32_t> rgba;   // R | G << 8 | B << 16 | A << 24, alpha 0..255
 };
 
 struct TexPacket {
@@ -165,7 +165,7 @@ inline std::vector<TexPacket> parseTex(const std::vector<uint8_t> &d, bool rtx) 
     std::vector<TexPacket> out;
     auto u32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= d.size()) std::memcpy(&v, &d[o], 4); return v; };
     auto u16 = [&](size_t o) { uint16_t v = 0; if (o + 2 <= d.size()) std::memcpy(&v, &d[o], 2); return v; };
-    if (d.size() < 8 || std::memcmp(d.data(), "IE\x03\x04", 4) == 0) return out;   // zip IE: os de MON/ vem crus
+    if (d.size() < 8 || std::memcmp(d.data(), "IE\x03\x04", 4) == 0) return out;   // IE zip: the ones in MON/ come uncompressed
     size_t off = size_t(u32(4)) * 16;
     while (off + 16 <= d.size() && out.size() < 4096) {
         const uint32_t size = u32(off), bits = u32(off + 12);
@@ -181,7 +181,7 @@ inline std::vector<TexPacket> parseTex(const std::vector<uint8_t> &d, bool rtx) 
     return out;
 }
 
-// .TEX/.RTX das fases vem num zip de um arquivo so com o magic "IE\3\4" (zipInflateAll); os de MON/ vem crus
+// Stage .TEX/.RTX files come in a single-file zip with the magic "IE\3\4" (zipInflateAll); the ones in MON/ come uncompressed
 inline bool unzipIe(std::vector<uint8_t> &d) {
     static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
     if (d.size() < 30 || std::memcmp(d.data(), kMagic, 4) != 0) return d.size() >= 16;
@@ -201,16 +201,16 @@ inline bool unzipIe(std::vector<uint8_t> &d) {
 }
 
 struct TexImage;
-// Uma T8 do .TEX com a paleta CT32 16x16 de tbp `palTbp` do .RTX (CSM1: bits 3 e 4 trocados; alfa do GS 0x80 = 255), de cima para baixo
+// A T8 from the .TEX with the 16x16 CT32 palette at tbp `palTbp` from the .RTX (CSM1: bits 3 and 4 swapped; GS alpha 0x80 = 255), top to bottom
 inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, uint16_t texId, uint16_t palTbp, TexImage &out);
 
-// Texturas das particulas que os efeitos dos monstros usam. No jogo vem da fase (nos de particula com id1 0x1B58 + FxTextureId, lidos
-// pelo particleParseTexture no dbProcInteractive): nenhum .NGP de monstro nem do menu as traz. Aqui saem direto de LVL/CENTRAL.TEX/.RTX
-// (iguais nas outras fases, menos CANYON1/TOKYODM): FxTextureId 8 Fireball (texId 5, paleta tbp 13) e as do lens flare 15/17/18/19
-// (texIds 54/4/55/56, paletas 203/9/207/211). 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md e 75f5be1:docs/investigacoes/2026-10-21/lens_flare_monstros.md.
+// Particle textures used by the monsters' effects. In the game they come from the stage (particle nodes with id1 0x1B58 + FxTextureId, read
+// by particleParseTexture in dbProcInteractive): no monster .NGP nor the menu's carries them. Here they come straight from LVL/CENTRAL.TEX/.RTX
+// (identical in the other stages, except CANYON1/TOKYODM): FxTextureId 8 Fireball (texId 5, palette tbp 13) and the lens flare ones 15/17/18/19
+// (texIds 54/4/55/56, palettes 203/9/207/211). 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md and 75f5be1:docs/investigacoes/2026-10-21/lens_flare_monstros.md.
 struct FxTextures {
     bool ok = false;
-    std::vector<TexImage> fireball, flare;   // flare[texInfo - 15]; o 16 nao e usado (fica vazio)
+    std::vector<TexImage> fireball, flare;   // flare[texInfo - 15]; 16 is unused (left empty)
     bool load(const std::filesystem::path &discRoot, const std::string &iso);
 };
 
@@ -237,8 +237,8 @@ inline bool decodeT8(const std::vector<uint8_t> &tex, const std::vector<uint8_t>
     return true;
 }
 
-// Uma T4 do .TEX com a paleta CT32 8x2 de tbp `palTbp` do .RTX (16 cores, sem a troca do CSM1; nibble baixo primeiro), de cima para
-// baixo
+// A T4 from the .TEX with the 8x2 CT32 palette at tbp `palTbp` from the .RTX (16 colors, no CSM1 swap; low nibble first), top to
+// bottom
 inline bool decodeT4(const std::vector<uint8_t> &tex, const std::vector<uint8_t> &rtx, uint16_t texId, uint16_t palTbp, TexImage &out) {
     const TexPacket *p = nullptr, *pal = nullptr;
     const std::vector<TexPacket> tp = parseTex(tex, false), rp = parseTex(rtx, true);
@@ -279,30 +279,30 @@ inline bool FxTextures::load(const std::filesystem::path &discRoot, const std::s
     return ok = !fireball.empty() || !flare.empty();
 }
 
-// ---------------------------------------------------------------- modelo
+// ---------------------------------------------------------------- model
 
 struct PVtx {
-    float x, y, z;       // mundo do monstro (Z para cima)
-    float nx, ny, nz;    // normal (unitaria; 0 se o pacote nao tem)
+    float x, y, z;       // monster world space (Z up)
+    float nx, ny, nz;    // normal (unit length; 0 if the packet has none)
     float u, v;
-    uint8_t r, g, b, a;  // cor de vertice crua (0x80 = 1,0)
-    int16_t tex;         // indice em textures(); -1 = sem textura
-    // Estado do GS da secao/objeto (Scene::groupState): ALPHA_1 (byte baixo; vale so com PRIM.ABE), limiar do teste de alfa
-    // (-1 = sem teste) e ZBUF_1.ZMSK
+    uint8_t r, g, b, a;  // raw vertex color (0x80 = 1.0)
+    int16_t tex;         // index into textures(); -1 = untextured
+    // GS state of the section/object (Scene::groupState): ALPHA_1 (low byte; only applies with PRIM.ABE), alpha test threshold
+    // (-1 = no test) and ZBUF_1.ZMSK
     uint8_t blend = 0x44, abe = 0, zmsk = 0;
-    uint8_t ztst = 2;    // TEST_1.ZTST do grupo (1 = sem teste de Z)
-    uint8_t cull = 0;    // secao com culling (bit 15 do seletor): o VU1 descarta a face de costas (Scene::backFacing)
+    uint8_t ztst = 2;    // the group's TEST_1.ZTST (1 = no Z test)
+    uint8_t cull = 0;    // section with culling (bit 15 of the selector): VU1 discards back faces (Scene::backFacing)
     int16_t aref = -1;
 };
 
-// Estado do GS herdado na travessia (o ctx de GROUP/TRANSLATE/ROTATE/SCALE em +4 e de ANIM_XFORM/ANIM_SCALE em +8; os filhos
-// herdam). Inicial = ctxDef do jogo (ALPHA_1 0x44, TEST_1 0x5040C: sem teste).
+// GS state inherited during traversal (the ctx of GROUP/TRANSLATE/ROTATE/SCALE at +4 and of ANIM_XFORM/ANIM_SCALE at +8; children
+// inherit it). Initial = the game's ctxDef (ALPHA_1 0x44, TEST_1 0x5040C: no test).
 struct GsState {
     uint8_t blend = 0x44;
     int16_t aref = -1;
     bool zmsk = false;
-    uint8_t ztst = 2;   // TEST_1.ZTST (bits 17-18): 1 = sempre passa (sem teste de Z), 2/3 = mais perto passa
-    // Pacote A+D do ctx: tag em +0x10 (NLOOP), pares (dado, endereco) a partir de +0x20 (como Scene::groupState)
+    uint8_t ztst = 2;   // TEST_1.ZTST (bits 17-18): 1 = always pass (no Z test), 2/3 = nearer passes
+    // The ctx's A+D packet: tag at +0x10 (NLOOP), (data, address) pairs from +0x20 on (like Scene::groupState)
     void apply(const Ram &ram, uint32_t ctx) {
         ctx &= 0x0FFFFFFFu;
         if (!ctx || !ram.ok(ctx, 0x20) || ram.u32(ctx + 0x14) != 0x10000000 || ram.u32(ctx + 0x18) != 0xE) return;
@@ -355,11 +355,11 @@ public:
         return main_ != 0;
     }
 
-    // Numero unico desta carga (o Renderer refaz as texturas quando muda; o endereco do Model pode se repetir entre cargas)
+    // Unique number for this load (the Renderer rebuilds textures when it changes; the Model's address can repeat across loads)
     uint32_t gen() const { return gen_; }
 
-    // Caixa fixa para enquadrar a animacao `id` inteira (amostra `samples` quadros; deixa a pose no quadro 0). Sem ela o Renderer
-    // enquadra pela caixa do quadro corrente e a camera acompanha a animacao.
+    // Fixed box framing the whole animation `id` (samples `samples` frames; leaves the pose at frame 0). Without it the Renderer
+    // frames by the current frame's box and the camera follows the animation.
     void computeFraming(int id, int samples = 24) {
         const float len = animLength(id);
         float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
@@ -367,7 +367,7 @@ public:
             if (!pose(id, len * float(s) / float(samples))) { pose(-1, 0.f); s = samples; }
             float a[3], b[3];
             bounds(a, b);
-            // o fogo da cabeca (preset 141) sobe ~3,2 por field durante 20 fields: entra na caixa para nao sair cortado
+            // the head fire (preset 141) rises ~3.2 per field for 20 fields: include it in the box so it isn't cut off
             for (const Emitter &em : emitters())
                 if (em.preset == 141) { a[2] = std::min(a[2], em.e[2]); b[2] = std::max(b[2], em.e[2] + 55.f); }
             for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], a[k]); hi[k] = std::max(hi[k], b[k]); }
@@ -376,7 +376,7 @@ public:
         haveFrame_ = lo[0] <= hi[0];
         pose(id, 0.f);
     }
-    // Caixa de enquadramento: a fixa (computeFraming) ou a do quadro corrente
+    // Framing box: the fixed one (computeFraming) or the current frame's
     void framing(float lo[3], float hi[3]) const {
         if (!haveFrame_) { bounds(lo, hi); return; }
         for (int k = 0; k < 3; ++k) { lo[k] = frameLo_[k]; hi[k] = frameHi_[k]; }
@@ -385,13 +385,13 @@ public:
     bool ok() const { return main_ != 0; }
     const std::string &name() const { return name_; }
 
-    // Duracao da animacao `id` em quadros do jogo (60 por segundo); 0 se nao existe
+    // Length of animation `id` in game frames (60 per second); 0 if it doesn't exist
     float animLength(int id) const {
         uint32_t a = anim(id);
         return a ? std::max(0.f, ram_.f32(a + 8) - ram_.f32(a + 4)) : 0.f;
     }
 
-    // Monta a pose da animacao `id` no quadro `frame` (a partir do inicio, em laco) e refaz verts(). id < 0: pose de base.
+    // Builds the pose of animation `id` at frame `frame` (from the start, looping) and rebuilds verts(). id < 0: base pose.
     bool pose(int id, float frame) {
         frame_ = frame;
         ctxs_.clear();
@@ -408,9 +408,9 @@ public:
                 const Curve cv(ram_, ram_.u32(an + 0x18 + 4 * k));
                 if (cv.idx < c.val.size()) { c.val[cv.idx] = cv.eval(t); c.dirty[cv.idx] = 1; }
             }
-            // Camada da textura rolando (Kineticlops: a 0x91 so tem as curvas dos canais de UV dos OBJECTs com uvScroll), tocada em
-            // laco por cima da principal, no tempo dela; na luta (build/dumps_live/ram_energy_robot.bin) os canais 142/143 valem
-            // 0,637/1,275, a proporcao 1:2 dessa camada (a 0 de 240 quadros, a outra com so as duas curvas, e 1:3)
+            // Scrolling-texture layer (Kineticlops: 0x91 only has the curves for the UV channels of OBJECTs with uvScroll), looped
+            // on top of the main one, on its own clock; in a fight (build/dumps_live/ram_energy_robot.bin) channels 142/143 are
+            // 0.637/1.275, this layer's 1:2 ratio (in animation 0, of 240 frames, the other one with only those two curves, it's 1:3)
             if (const uint32_t ul = anim(kUvLayer)) {
                 const float us = ram_.f32(ul + 4), ue = ram_.f32(ul + 8);
                 const float tu = ue > us ? us + std::fmod(frame, ue - us) : us;
@@ -430,14 +430,14 @@ public:
     }
 
     const std::vector<PVtx> &verts() const { return verts_; }
-    // Nos da ultima pose, na ordem da travessia: endereco (na base kBase), opcode, matriz do pai (a do mundo do monstro em que o no
-    // fica: os locais dele, como a posicao de um HierLight, saem por ela) e o ctx (CHAR_INSTANCE) em que estava. Para efeitos presos.
+    // Nodes from the last pose, in traversal order: address (at base kBase), opcode, parent matrix (the monster-world matrix the node
+    // sits in: its local values, like a HierLight's position, go through it) and the ctx (CHAR_INSTANCE) it was in. For attached effects.
     struct Visited { uint32_t node, op; M4 m; int ctx; };
     const std::vector<Visited> &visited() const { return visited_; }
-    float frame() const { return frame_; }   // quadro da ultima pose (os efeitos andam pela diferenca)
+    float frame() const { return frame_; }   // frame of the last pose (effects advance by the difference)
 
-    // Luzes com lens flare (HierLight, op 5, hasLensFlare) na pose: posicao e feixe no mundo do monstro pela matriz do no pai (o
-    // hierLightNode: position · m, beamNormal · m). Robo-47 (trajes 0-2), Congar 1-3, JELLY e ASSBOSS1.
+    // Lens-flare lights (HierLight, op 5, hasLensFlare) in the pose: position and beam in monster world space via the parent node's matrix
+    // (hierLightNode: position · m, beamNormal · m). Robo-47 (costumes 0-2), Congar 1-3, JELLY and ASSBOSS1.
     struct Light { float p[3], d[3], rgb[3], intensity, beamWidth; uint32_t flags; };
     std::vector<Light> lights() const {
         std::vector<Light> out;
@@ -459,9 +459,9 @@ public:
         return out;
     }
 
-    // Emissores de particula (HierParticleEmitter, op 22) percorridos na pose (visiveis: o canal de visibilidade do ANIM_XFORM pai corta a
-    // subarvore e o jogo para de emitir). E = position · m (utilUpdateEmitterMatrices, parentVec + StaticVec · parentMat); base R =
-    // StaticMat · m, StaticMat = mathfMatrixFromNormal(n), n = (cos p sin h, cos p cos h, sin p): linha 1 = n.
+    // Particle emitters (HierParticleEmitter, op 22) traversed in the pose (visible ones: the parent ANIM_XFORM's visibility channel cuts the
+    // subtree and the game stops emitting). E = position · m (utilUpdateEmitterMatrices, parentVec + StaticVec · parentMat); basis R =
+    // StaticMat · m, StaticMat = mathfMatrixFromNormal(n), n = (cos p sin h, cos p cos h, sin p): row 1 = n.
     struct Emitter { uint32_t node, preset; float e[3], r0[3], r1[3], r2[3]; };
     std::vector<Emitter> emitters() const {
         std::vector<Emitter> out;
@@ -474,7 +474,7 @@ public:
             xform(v.m, ram_.f32(n + 0x10), ram_.f32(n + 0x14), ram_.f32(n + 0x18), em.e);
             const float h = ram_.f32(n + 0x24), pt = ram_.f32(n + 0x28);
             const float nl[3] = {std::cos(pt) * std::sin(h), std::cos(pt) * std::cos(h), std::sin(pt)};
-            // mathfMatrixFromNormal: com n vertical, linha 0 = +X e linha 2 = (0, -1, 0); no geral, linha 0 = X horizontal perpendicular a n
+            // mathfMatrixFromNormal: with vertical n, row 0 = +X and row 2 = (0, -1, 0); in general, row 0 = horizontal X perpendicular to n
             float a0[3];
             if (std::fabs(nl[2]) > 0.999f) { a0[0] = 1.f; a0[1] = 0.f; a0[2] = 0.f; }
             else { const float l = std::sqrt(nl[0] * nl[0] + nl[1] * nl[1]); a0[0] = nl[1] / l; a0[1] = -nl[0] / l; a0[2] = 0.f; }
@@ -488,7 +488,7 @@ public:
     }
     const Ram &ram() const { return ram_; }
     const std::vector<TexImage> &textures() const { return texs_; }
-    // Caixa dos vertices posados
+    // Box of the posed vertices
     void bounds(float lo[3], float hi[3]) const {
         for (int k = 0; k < 3; ++k) { lo[k] = 1e30f; hi[k] = -1e30f; }
         for (const PVtx &v : verts_) {
@@ -502,13 +502,13 @@ private:
         uint32_t ci = 0, animPkt = 0;
         std::vector<float> val;
         std::vector<uint8_t> dirty;
-        std::unordered_map<uint32_t, M4> pal;   // endereco da matriz na paleta -> matriz
+        std::unordered_map<uint32_t, M4> pal;   // matrix address in the palette -> matrix
         std::vector<uint32_t> outAddr;          // animMatrixPtr[k]
         float v(int i, float fb) const { return i >= 0 && size_t(i) < val.size() ? val[size_t(i)] : fb; }
         bool isDirty(int i) const { return i >= 0 && size_t(i) < dirty.size() && dirty[size_t(i)]; }
     };
     struct Item { uint32_t node; M4 m; int ctx; GsState gs; float uv[2]; };
-    // ctx do no: o estado do GS dos filhos; volta ao do pai na saida
+    // The node's ctx: GS state for the children; reverts to the parent's on exit
     struct GsScope {
         Model &md;
         GsState prev;
@@ -574,7 +574,7 @@ private:
         return m;
     }
 
-    // Pilha do esqueleto (hierSkelBoneNode / hierAnimTransNode...): o no de transformacao depois de um SKEL_BONE desempilha
+    // Skeleton stack (hierSkelBoneNode / hierAnimTransNode...): the transform node after a SKEL_BONE pops it
     void skelStep(int ctx, const M4 &local, int &si, int &mi) {
         if (si < 0 || mi < -1 || mi + 1 >= kStack) return;
         smat_[mi + 1] = mul(local, mi >= 0 ? smat_[mi] : ident());
@@ -596,7 +596,7 @@ private:
         const GsScope gsc(*this, (op == 1 || op == 3 || op == 4 || op == 30) ? ram_.u32(n + 4) : (op == 17 || op == 38) ? ram_.u32(n + 8) : 0u);
         switch (op) {
         case 0: {
-            // Deslocamento do UV (Scene::objectUvOffset): +0x20/+0x24; com uvScroll (bit 0x800 de +0xC) os canais +0x30/+0x32
+            // UV offset (Scene::objectUvOffset): +0x20/+0x24; with uvScroll (bit 0x800 of +0xC) the channels at +0x30/+0x32
             Item it{n, m, ctx, gs_, {ram_.f32(n + 0x20), ram_.f32(n + 0x24)}};
             if ((ram_.u16(n + 0xC) & 0x800) && ctx >= 0)
                 for (int k = 0; k < 2; ++k) it.uv[k] = ctxs_[size_t(ctx)].v(ram_.s16(n + 0x30 + 2 * k), 0.f);
@@ -604,8 +604,8 @@ private:
             break;
         }
         case 1: if (ram_.u16(n + 0xA) & 1) kids(n + 0x20, ram_.u16(n + 8), m, si, mi, ctx); break;
-        case 2: {   // LOD: o mais detalhado que o hierLod desenharia de perto (o maior indice com switchOutDis +0x24 > 0; o do traje 3
-                    // do Togera tem um ultimo nivel com 0, nunca desenhado: pegar o ultimo dava a malha grosseira em A-pose)
+        case 2: {   // LOD: the most detailed one hierLod would draw up close (the highest index with switchOutDis +0x24 > 0; Togera's costume 3
+                    // has a last level with 0, never drawn: taking the last one gave the coarse mesh in A-pose)
             const uint32_t nl = ram_.u32(n + 4);
             for (int i = int(std::min<uint32_t>(nl, 16)) - 1; i >= 0; --i)
                 if (ram_.f32(n + 0x24 + 16 * uint32_t(i)) > 0.f) { visit(ram_.u32(n + 0x28 + 16 * uint32_t(i)), m, si, mi, ctx, depth + 1); break; }
@@ -658,9 +658,9 @@ private:
             const int vidx = ram_.s16(n + 0x10);
             if (ctx >= 0 && ctxs_[size_t(ctx)].isDirty(vidx)) vis = ctxs_[size_t(ctx)].val[size_t(vidx)];
             if (vis == 0.f) break;
-            // hierAnimTransNode: a matriz so e remontada quando um canal do no (firstIdx em +0x1E, mascara dirty.animating em +0xC1)
-            // foi escrito; senao vale a de atMat[matrixIdx] (+0xC4), que vem pronta no arquivo (as garras do Robo-47, so com canal de
-            // visibilidade, tem ali uma matriz que a PRH do vetor do no nao da).
+            // hierAnimTransNode: the matrix is only rebuilt when one of the node's channels (firstIdx at +0x1E, dirty.animating mask at +0xC1)
+            // was written; otherwise atMat[matrixIdx] (+0xC4) is used, which comes ready-made in the file (Robo-47's claws, with only a
+            // visibility channel, have a matrix there that the PRH of the node's vector doesn't give).
             bool rebuild = false;
             const Ctx *cp = ctx >= 0 ? &ctxs_[size_t(ctx)] : nullptr;
             const int first = ram_.s16(n + 0x1E);
@@ -692,7 +692,7 @@ private:
             kids(n + 0xCC, ram_.u32(n + 4), mul(L, m), s2, m2, ctx);
             break;
         }
-        case 38: {   // ANIM_SCALE: le val direto
+        case 38: {   // ANIM_SCALE: reads val directly
             const Ctx *c = ctx >= 0 ? &ctxs_[size_t(ctx)] : nullptr;
             auto g = [&](uint32_t off, float fb) { const int i = ram_.s16(n + off); return (c && i >= 0) ? c->v(i, fb) : fb; };
             const int vidx = ram_.s16(n + 0x10);
@@ -718,7 +718,7 @@ private:
         }
     }
 
-    // Paleta do OBJECT skinned (Scene::palette): animPktPtr[packetPtrIdx] -> tag ref -> bloco de 32 matrizes
+    // Palette of the skinned OBJECT (Scene::palette): animPktPtr[packetPtrIdx] -> ref tag -> block of 32 matrices
     bool palette(uint32_t node, int ctx, std::array<M4, 32> &pm) const {
         for (M4 &x : pm) x = ident();
         if (ctx < 0) return false;
@@ -772,7 +772,7 @@ private:
                     }
                     xform(it.m, q[0], q[1], q[2], p);
                     float nb[3];
-                    rot3(pm[(v.cx & 0x7F) / 4], n0[0], n0[1], n0[2], nb);   // a normal so gira pelo osso x (Scene::vertexRgb)
+                    rot3(pm[(v.cx & 0x7F) / 4], n0[0], n0[1], n0[2], nb);   // the normal only rotates by bone x (Scene::vertexRgb)
                     rot3(it.m, nb[0], nb[1], nb[2], nrm);
                 } else {
                     xform(it.m, v.x, v.y, v.z, p);
@@ -791,8 +791,8 @@ private:
         }
     }
 
-    // Textura do slot `s` do OBJECT (texId em +0x50 + 2s, TEX0 em +0x70 + 0x30s): os numeros do .NGP do monstro sao os do proprio
-    // .TEX/.RTX (texId do pacote, CBP = tbp da paleta no .RTX), sem deslocamento (conferido nos 10 monstros e nas fantasias).
+    // Texture for the OBJECT's slot `s` (texId at +0x50 + 2s, TEX0 at +0x70 + 0x30s): the numbers in the monster's .NGP are those of its own
+    // .TEX/.RTX (the packet's texId, CBP = palette tbp in the .RTX), with no offset (checked on the 10 monsters and the costumes).
     int16_t texIndex(uint32_t node, uint8_t s) {
         if (s >= 5 || s >= ram_.u16(node + 0x5A)) return -1;
         const uint16_t id = ram_.u16(node + 0x50 + 2u * s);
@@ -814,14 +814,14 @@ private:
         const std::vector<uint8_t> &d = p.rtx ? rtxData_ : texData_;
         const int w = p.w(), h = p.h();
         const uint32_t cbp = uint32_t(t0 >> 37) & 0x3FFF, csa = uint32_t(t0 >> 56) & 31, tcc = uint32_t(t0 >> 34) & 1;
-        // A original primeiro; o PNG de mod (wotm_texmods.hpp; nas skins, o do traje novo, mesmo texId do disco que o desenho da luta
-        // usa) le o alfa na escala dela: cru se ela passa de 0x80 (texmods::loadPng)
+        // Original first; the mod PNG (wotm_texmods.hpp; for skins, the new costume's, same disc texId the fight drawing
+        // uses) reads alpha on the original's scale: raw if it goes above 0x80 (texmods::loadPng)
         uint32_t rawAmax = 0;
         const bool orig = decodeOrig(p, d, w, h, cbp, csa, tcc, out, rawAmax);
         if (const texmods::Png *png = texmods::Index::get().find(name_, p.rtx, id)) {
             std::vector<uint32_t> px;
             uint32_t pw = 0, ph = 0;
-            if (texmods::loadPng(*png, name_ + (p.rtx ? ".RTX t" : ".TEX t") + std::to_string(id) + " (modelo)", uint32_t(w), uint32_t(h),
+            if (texmods::loadPng(*png, name_ + (p.rtx ? ".RTX t" : ".TEX t") + std::to_string(id) + " (model)", uint32_t(w), uint32_t(h),
                                  false, tcc != 0, px, pw, ph, rawAmax > 0x80)) {
                 out.w = int(pw); out.h = int(ph);
                 out.rgba = std::move(px);
@@ -831,7 +831,7 @@ private:
         return orig;
     }
 
-    // Pixels da textura do disco em RGBA (alfa 0..255 com 0x80 saturado); rawAmax: o maior alfa cru dos texels
+    // Disc texture pixels in RGBA (alpha 0..255 with 0x80 saturated); rawAmax: the largest raw alpha among the texels
     bool decodeOrig(const TexPacket &p, const std::vector<uint8_t> &d, int w, int h, uint32_t cbp, uint32_t csa, uint32_t tcc,
                     TexImage &out, uint32_t &rawAmax) const {
         auto fixA = [](uint32_t a) { return a >= 128 ? 255u : a * 2; };
@@ -909,16 +909,16 @@ private:
     float frameLo_[3] = {}, frameHi_[3] = {};
 };
 
-// ---------------------------------------------------------------- desenho (raylib, thread da janela)
+// ---------------------------------------------------------------- drawing (raylib, window thread)
 
-// Desenha o modelo posado num RenderTexture. yaw em graus (0 = de frente: camera em +Y; o monstro olha para +Y), pitch para cima.
-// Luz: uma direcional fixa + ambiente, por vertice, sobre a cor de vertice do pacote (o jogo usa as luzes da fase).
+// Draws the posed model into a RenderTexture. yaw in degrees (0 = from the front: camera at +Y; the monster faces +Y), pitch upward.
+// Light: one fixed directional + ambient, per vertex, over the packet's vertex color (the game uses the stage's lights).
 //
-// O RenderTexture sai com cor PRE-MULTIPLICADA pelo alfa (cole com BLEND_ALPHA_PREMULTIPLY e tom (a, a, a, a)): assim as misturas
-// do GS que somam ao fundo (aditiva) continuam certas fora do que foi desenhado por baixo. `background` (opcional) desenha o fundo
-// em 2D dentro do RenderTexture antes do monstro (a foto da fase na lista de saves), para as misturas que dependem do destino
-// (escurecer, subtrair, (Cd - Cs)·As) terem sobre o que agir. Mistura do GS (ALPHA_1 = A,B,C,D em pares de bits, Cv = (A-B)·C + D):
-//   0x44 (Cs-Cd)As+Cd comum | 0x48 Cs·As+Cd aditiva | 0x42 Cd-Cs·As | 0x46 Cd·(1-As) | 0x81 (Cd-Cs)·As. Sem PRIM.ABE: opaco.
+// The RenderTexture comes out with color PRE-MULTIPLIED by alpha (composite with BLEND_ALPHA_PREMULTIPLY and tint (a, a, a, a)): that way the GS
+// blends that add onto the background (additive) stay correct outside what was drawn underneath. `background` (optional) draws the background
+// in 2D inside the RenderTexture before the monster (the stage photo in the save list), so the blends that depend on the destination
+// (darken, subtract, (Cd - Cs)·As) have something to act on. GS blend (ALPHA_1 = A,B,C,D in bit pairs, Cv = (A-B)·C + D):
+//   0x44 (Cs-Cd)As+Cd normal | 0x48 Cs·As+Cd additive | 0x42 Cd-Cs·As | 0x46 Cd·(1-As) | 0x81 (Cd-Cs)·As. Without PRIM.ABE: opaque.
 class Renderer {
 public:
     ~Renderer() { release(); }
@@ -936,13 +936,13 @@ public:
     }
 
     const RenderTexture2D &target() const { return rt_; }
-    // Texturas dos efeitos (fogo do Agamo, lens flare); sem elas o monstro sai sem os efeitos. O Renderer nao e dono delas.
+    // Effect textures (Agamo's fire, lens flare); without them the monster is drawn without effects. The Renderer doesn't own them.
     void setFx(const FxTextures *fx) { fx_ = fx; }
-    bool skipAbe = false;   // diagnostico: so os opacos
-    float shiftX = 0.f, shiftY = 0.f;   // deslocamento do monstro na imagem, fracao da largura/altura (+ = direita/cima); ver render
-    // Centro do enquadramento andado para a frente do monstro (+Y do modelo), em fracao da maior medida da caixa, so no eixo lateral
-    // da camera (o tamanho nao muda): tira o peso da cauda do centro da caixa em qualquer angulo e proporcao (shiftX so vale para
-    // um angulo e uma proporcao; de frente, fwd nao desloca nada)
+    bool skipAbe = false;   // diagnostic: opaque ones only
+    float shiftX = 0.f, shiftY = 0.f;   // monster offset in the image, fraction of width/height (+ = right/up); see render
+    // Framing center moved toward the monster's front (+Y of the model), as a fraction of the box's largest dimension, only along the
+    // camera's sideways axis (size doesn't change): takes the tail's weight off the box center at any angle and aspect (shiftX only works for
+    // one angle and one aspect; from the front, fwd doesn't shift anything)
     float fwd = 0.f;
 
     template <class Bg>
@@ -961,8 +961,8 @@ public:
         const float dist = ext * 0.62f / std::tan(fovy * 0.5f * 3.14159265f / 180.f) / std::max(zoom, 0.05f);
         const float yaw = yawDeg * 3.14159265f / 180.f, pit = pitchDeg * 3.14159265f / 180.f;
         Camera3D cam{};
-        // shiftX/shiftY: move o monstro na imagem (fracao da largura/altura, + = direita/cima) andando com a camera e o alvo juntos
-        // pelos eixos direito R = (-cos yaw, sin yaw, 0) e de cima U = (-sin yaw sin pit, -cos yaw sin pit, cos pit) da camera
+        // shiftX/shiftY: moves the monster in the image (fraction of width/height, + = right/up) by moving camera and target together
+        // along the camera's right axis R = (-cos yaw, sin yaw, 0) and up axis U = (-sin yaw sin pit, -cos yaw sin pit, cos pit)
         const float visH = 2.f * dist * std::tan(fovy * 0.5f * 3.14159265f / 180.f), visW = visH * float(w) / float(std::max(h, 1));
         const float sR = -shiftX * visW + fwd * ext * std::sin(yaw), sU = -shiftY * visH;
         const float o[3] = {-std::cos(yaw) * sR - std::sin(yaw) * std::sin(pit) * sU, std::sin(yaw) * sR - std::cos(yaw) * std::sin(pit) * sU,
@@ -970,10 +970,10 @@ public:
         cam.target = {c[0] + o[0], c[1] + o[1], c[2] + o[2]};
         cam.position = {cam.target.x + std::sin(yaw) * std::cos(pit) * dist, cam.target.y + std::cos(yaw) * std::cos(pit) * dist,
                         cam.target.z + std::sin(pit) * dist};
-        cam.up = {0.f, 0.f, 1.f};   // Z para cima no mundo do monstro
+        cam.up = {0.f, 0.f, 1.f};   // Z up in monster world space
         cam.fovy = fovy;
         cam.projection = CAMERA_PERSPECTIVE;
-        // luz de cima, da frente-esquerda da camera
+        // light from above, from the camera's front-left
         const float L0[3] = {std::sin(yaw - 0.7f) * 0.6f, std::cos(yaw - 0.7f) * 0.6f, 0.8f};
         const float ln = std::sqrt(L0[0] * L0[0] + L0[1] * L0[1] + L0[2] * L0[2]);
         const float L[3] = {L0[0] / ln, L0[1] / ln, L0[2] / ln};
@@ -989,14 +989,14 @@ public:
         rlEnableDepthTest();
         rlDisableBackfaceCulling();
         BeginShaderMode(shader_);
-        // passe 0: sem ABE (opaco, grava Z); passe 1: com ABE, na ordem do modelo (o Z segue o ZMSK)
+        // pass 0: without ABE (opaque, writes Z); pass 1: with ABE, in model order (Z follows ZMSK)
         const auto &vs = m.verts();
         for (int pass = 0; pass < (skipAbe ? 1 : 2); ++pass) {
             size_t i = 0;
             while (i + 2 < vs.size()) {
                 const PVtx &h0 = vs[i];
                 if (int(h0.abe != 0) != pass) { i += 3; continue; }
-                // corrida de triangulos com o mesmo estado
+                // run of triangles with the same state
                 size_t j = i;
                 auto same = [&](const PVtx &q) { return int(q.abe != 0) == pass && q.tex == h0.tex && q.blend == h0.blend && q.aref == h0.aref && q.zmsk == h0.zmsk; };
                 while (j + 2 < vs.size() && same(vs[j]) && j - i < 3 * 1500) j += 3;
@@ -1040,7 +1040,7 @@ public:
     }
 
 private:
-    // Face de costas vista de `eye` (como Scene::backFacing do nativo: o VU1 descarta os de area positiva na tela do GS)
+    // Back face as seen from `eye` (like the native Scene::backFacing: VU1 discards those with positive area on the GS screen)
     static bool backFacing(const float p[3][3], const float eye[3]) {
         const float u[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
         const float v[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
@@ -1048,11 +1048,11 @@ private:
         return n[0] * (p[0][0] - eye[0]) + n[1] * (p[0][1] - eye[1]) + n[2] * (p[0][2] - eye[2]) > 0.f;
     }
 
-    // Estado de um lote: fatores do GL que reproduzem a mistura do GS sobre cor pre-multiplicada e a saida do shader
-    // (modo 0: (C·a, a); 1: (C·a, 0) — soma ou subtrai sem mexer na cobertura; 2: (0, a) — so escurece o destino)
+    // State of a batch: GL factors that reproduce the GS blend on pre-multiplied color, and the shader output
+    // (mode 0: (C·a, a); 1: (C·a, 0) — adds or subtracts without touching coverage; 2: (0, a) — only darkens the destination)
     void setState(uint8_t blend, bool abe, int16_t aref, bool zmsk) {
         int mode = 0;
-        if (!abe) { mode = 3; rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD); }   // opaco: alfa 1
+        if (!abe) { mode = 3; rlSetBlendFactors(RL_ONE, RL_ZERO, RL_FUNC_ADD); }   // opaque: alpha 1
         else if (blend == 0x48) { mode = 1; rlSetBlendFactors(RL_ONE, RL_ONE, RL_FUNC_ADD); }
         else if (blend == 0x42) { mode = 1; rlSetBlendFactors(RL_ONE, RL_ONE, RL_FUNC_REVERSE_SUBTRACT); }
         else if (blend == 0x46) { mode = 2; rlSetBlendFactors(RL_ONE, RL_ONE_MINUS_SRC_ALPHA, RL_FUNC_ADD); }
@@ -1067,7 +1067,7 @@ private:
 
     void upload(const Model &m) {
         if (!shader_.id) {
-            // As do GS = alfa da textura * alfa do vertice (0x80 = 1); o teste descarta As*128 <= aref (aref < 0: sem teste)
+            // GS As = texture alpha * vertex alpha (0x80 = 1); the test discards As*128 <= aref (aref < 0: no test)
             static const char *fs =
                 "#version 330\n"
                 "in vec2 fragTexCoord; in vec4 fragColor; uniform sampler2D texture0; uniform vec4 colDiffuse;\n"
@@ -1130,15 +1130,15 @@ private:
         for (size_t i = 0; i < 5; ++i) fxGpu_.push_back(i < fx_->flare.size() ? up(fx_->flare[i]) : Texture2D{});
     }
 
-    // Fogo da cabeca do Agamo: preset 141 IdolHeadFlame (emissor op 22 do ROCKn.NGP), sprite aditivo com a textura Fireball, simulado
-    // por field (wotm_flame.hpp). Os outros presets dos monstros (45 AttachedFlames, a cabeca que voa) nao ficam visiveis no idle e nao
-    // sao simulados.
+    // Agamo's head fire: preset 141 IdolHeadFlame (op 22 emitter in ROCKn.NGP), additive sprite with the Fireball texture, simulated
+    // per field (wotm_flame.hpp). The monsters' other presets (45 AttachedFlames, the flying head) aren't visible in idle and aren't
+    // simulated.
     void stepFlame(Flame &f, const Model::Emitter &em, bool emit) { flame::step(f, em.e, em.r0, em.r2, emit, rng_); }
 
     void drawFire(const Model &m, const Camera3D &cam) {
         const std::vector<Model::Emitter> ems = m.emitters();
         if (m.gen() != simGen_) { flames_.clear(); simGen_ = m.gen(); simFrame_ = m.frame(); }
-        // fields desde o ultimo desenho (a previa anda a 60 por segundo); sistema novo comeca aquecido, como no jogo ja rodando
+        // fields since the last draw (the preview runs at 60 per second); a new system starts warmed up, as in a game already running
         int steps = int(std::floor(m.frame()) - std::floor(simFrame_));
         if (steps < 0 || steps > 8) steps = 1;
         simFrame_ = m.frame();
@@ -1150,7 +1150,7 @@ private:
         }
         uploadFx();
         if (fxGpu_.empty() || !fxGpu_[0].id || flames_.empty()) return;
-        // eixos da camera para o sprite de frente (o GS desenha o SPRITE na tela)
+        // camera axes for the camera-facing sprite (the GS draws the SPRITE in screen space)
         float fw[3] = {cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z};
         const float fl = std::sqrt(fw[0] * fw[0] + fw[1] * fw[1] + fw[2] * fw[2]);
         for (float &c : fw) c /= fl;
@@ -1158,17 +1158,17 @@ private:
         const float rl = std::sqrt(rt[0] * rt[0] + rt[1] * rt[1] + rt[2] * rt[2]);
         for (float &c : rt) c /= rl;
         const float upv[3] = {rt[1] * fw[2] - rt[2] * fw[1], rt[2] * fw[0] - rt[0] * fw[2], rt[0] * fw[1] - rt[1] * fw[0]};
-        setState(0x48, true, -1, true);   // aditiva, sem gravar Z (testa contra o monstro)
-        setGain(255.f / 128.f);           // MODULATE do GS: cor 0x80 = 1,0
+        setState(0x48, true, -1, true);   // additive, no Z write (tests against the monster)
+        setGain(255.f / 128.f);           // GS MODULATE: color 0x80 = 1.0
         rlBegin(RL_QUADS);
         rlSetTexture(fxGpu_[0].id);
         for (const auto &fe : flames_)
             for (const Part &q : fe.second.parts) {
-                const uint32_t col = flame::color(q.age);   // tabela do preset, 0x80 = 1
+                const uint32_t col = flame::color(q.age);   // the preset's table, 0x80 = 1
                 const uint8_t c[4] = {uint8_t(col), uint8_t(col >> 8), uint8_t(col >> 16), uint8_t(col >> 24)};
                 rlColor4ub(c[0], c[1], c[2], uint8_t(std::min(255, c[3] * 2)));
                 const float h = std::max(q.size, 0.f);
-                // UV pelos 2 bits sorteados (spritePacketInit): 3 normal, 1 espelha U, 2 espelha V, 0 os dois
+                // UV from the 2 random bits (spritePacketInit): 3 normal, 1 mirrors U, 2 mirrors V, 0 both
                 const float u0 = (q.sel & 2) ? 0.f : 1.f, u1 = 1.f - u0, v0 = (q.sel & 1) ? 0.f : 1.f, v1 = 1.f - v0;
                 auto vx = [&](float sx, float sy, float u, float v) {
                     rlTexCoord2f(u, v);
@@ -1181,10 +1181,10 @@ private:
         setGain(1.f);
     }
 
-    // Lens flare das luzes do monstro (particleLensFlareRender + microprograma 0x2B20 do VU1, como Particles::flareSprites do nativo; sem o
-    // teste de Z: visibilidade total). 18 sprites constantes do lensFlarePacketInit (D_006F44E0..D_006F4608 no ELF; iguais ao pacote de um
-    // dump de luta), cada um no ponto C + t (S - C) da linha do centro da tela ate a luz, cantos +/- (h, h/2) px do GS (focos 384 x 180,48
-    // de 224 linhas), aditivos. W = profundidade da luz pela frente da camera.
+    // Lens flare for the monster's lights (particleLensFlareRender + VU1 microprogram 0x2B20, like the native Particles::flareSprites; without the
+    // Z test: full visibility). 18 constant sprites from lensFlarePacketInit (D_006F44E0..D_006F4608 in the ELF; identical to the packet in a
+    // fight dump), each at point C + t (S - C) on the line from the screen center to the light, corners +/- (h, h/2) GS px (focal lengths 384 x 180.48
+    // of 224 lines), additive. W = the light's depth in front of the camera.
     void drawFlares(const Model &m, const Camera3D &cam, int w, int h, float fovy) {
         const std::vector<Model::Light> ls = m.lights();
         if (ls.empty()) return;
@@ -1213,7 +1213,7 @@ private:
             if (W < 1.f) continue;
             const Vector2 S = GetWorldToScreenEx(Vector3{l.p[0], l.p[1], l.p[2]}, cam, w, h);
             float bright = l.intensity / (W * W), size = std::sqrt(std::max(l.intensity, 0.f)) / W;
-            if (l.flags & 8) {   // direcional: cosseno entre o feixe e a direcao luz -> olho
+            if (l.flags & 8) {   // directional: cosine between the beam and the light -> eye direction
                 const float rn = std::sqrt(rel[0] * rel[0] + rel[1] * rel[1] + rel[2] * rel[2]);
                 const float dot = -(l.d[0] * rel[0] + l.d[1] * rel[1] + l.d[2] * rel[2]) / rn;
                 const float k = ((l.flags & 0x10) ? std::fabs(dot) : std::max(dot, 0.f)) + l.beamWidth - 1.f;
@@ -1243,7 +1243,7 @@ private:
                     rlTexCoord2f(uv, u0); rlVertex2f(px + hw, py - hh);
                     rlEnd();
                 }
-                if (last) break;   // as tres cores < 1: a entrada sai dos sprites seguintes
+                if (last) break;   // all three colors < 1: this light skips the remaining sprites
             }
         }
         rlDrawRenderBatchActive();
@@ -1251,10 +1251,10 @@ private:
         setGain(1.f);
         EndShaderMode();
         EndBlendMode();
-        // Sai como o EndMode3D deixou (antes do flare): teste de Z desligado, para o 2D que vem depois. Religado, o desenho da selecao
-        // nativa depois de dois Robo-47 falhava no teste (quadros vazios a partir do segundo monstro).
-        // O setState(.., zmsk) desligou a escrita de Z: sem religar, o ClearBackground dos quadros seguintes nao limpava a
-        // profundidade e o ceu do menu (e o da luta) falhava no teste (manchas pretas so com monstro de luzes, o Robo-47)
+        // Leave things as EndMode3D left them (before the flare): Z test off, for the 2D that comes after. With it back on, the native
+        // select screen's drawing after two Robo-47s failed the test (empty frames from the second monster on).
+        // setState(.., zmsk) turned Z writes off: without turning them back on, ClearBackground in the following frames didn't clear
+        // depth and the menu sky (and the fight's) failed the test (black blotches only with a monster that has lights, Robo-47)
         rlEnableDepthMask();
     }
 };

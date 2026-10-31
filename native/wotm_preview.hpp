@@ -71,7 +71,7 @@ public:
             const double k2 = double(p.frameRows) / double(std::max(1, p.winRows));
             const int frH = std::clamp(int(std::lround(winH * k2)), 4, 2048), frW = std::clamp(int(std::lround(winW * k2)), 4, 4096);
             ensureRt(frame_, frW, frH, TEXTURE_FILTER_BILINEAR);
-            const bool ms = ms_.ensure(frW, frH, p.samples, "previa");
+            const bool ms = ms_.ensure(frW, frH, p.samples, "preview");
             BeginTextureMode(ms ? ms_.render() : frame_);
             drawWorld(edgeCamera(), 0);
             EndTextureMode();

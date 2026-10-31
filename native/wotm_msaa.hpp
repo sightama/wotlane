@@ -1,9 +1,9 @@
-// wotm_msaa.hpp: MSAA do quadro nativo (opcao ANTI-ALIASING da aba VIDEO, WOTM_MSAA). O raylib so faz render texture de uma amostra;
-// aqui um framebuffer com cor e profundidade multiamostra recebe o desenho (BeginTextureMode(target.render())) e, no fim, e resolvido
-// (glBlitFramebuffer) para a textura do quadro de sempre, que a apresentacao, as fotos e o texId 0 (quadro anterior) continuam usando.
-// O teste de oclusao do lens flare le a profundidade com glReadPixels, que nao le de um framebuffer multiamostra: readDepth() resolve
-// a profundidade num framebuffer de uma amostra e o deixa como o de leitura (o desenho segue no multiamostra).
-// As funcoes do GL 3 vem dos ponteiros do glad que o raylib carrega (raylib estatico, simbolos C).
+// wotm_msaa.hpp: MSAA for the native frame (ANTI-ALIASING option on the VIDEO tab, WOTM_MSAA). raylib only does single-sample render
+// textures; here a framebuffer with multisample color and depth receives the drawing (BeginTextureMode(target.render())) and, at the end,
+// is resolved (glBlitFramebuffer) into the usual frame texture, which the presentation, the snapshots and texId 0 (previous frame) keep using.
+// The lens flare occlusion test reads depth with glReadPixels, which can't read from a multisample framebuffer: readDepth() resolves
+// the depth into a single-sample framebuffer and leaves it bound for reading (drawing continues in the multisample one).
+// The GL 3 functions come from the glad pointers raylib loads (static raylib, C symbols).
 #pragma once
 
 #include <algorithm>
@@ -35,7 +35,7 @@ constexpr unsigned kFramebuffer = 0x8D40, kReadFb = 0x8CA8, kDrawFb = 0x8CA9, kR
                    kRgba8 = 0x8058, kDepth24 = 0x81A6, kColorBit = 0x4000, kDepthBit = 0x100, kNearest = 0x2600, kComplete = 0x8CD5,
                    kMaxSamples = 0x8D57;
 
-// Maior numero de amostras do driver (0 = sem MSAA)
+// The driver's maximum sample count (0 = no MSAA)
 inline int maxSamples()
 {
     static int m = -1;
@@ -49,8 +49,8 @@ inline int maxSamples()
 
 struct Target
 {
-    unsigned fbo = 0, color = 0, depth = 0;   // multiamostra
-    unsigned dfbo = 0, ddepth = 0;            // profundidade resolvida (teste do lens flare)
+    unsigned fbo = 0, color = 0, depth = 0;   // multisample
+    unsigned dfbo = 0, ddepth = 0;            // resolved depth (lens flare test)
     int w = 0, h = 0, samples = 0;
 
     bool on() const { return fbo != 0; }
@@ -63,8 +63,8 @@ struct Target
         if (ddepth) glad_glDeleteRenderbuffers(1, &ddepth);
         *this = Target{};
     }
-    // Pronto para w x h com `samples` amostras (limitado ao do driver); samples <= 1 libera e devolve false
-    bool ensure(int nw, int nh, int ns, const char *what = "quadro")
+    // Ready for w x h with `samples` samples (capped at the driver's); samples <= 1 frees everything and returns false
+    bool ensure(int nw, int nh, int ns, const char *what = "frame")
     {
         ns = std::min(ns, maxSamples());
         if (ns <= 1 || nw <= 0 || nh <= 0 || !glad_glRenderbufferStorageMultisample || !glad_glBlitFramebuffer)
@@ -86,7 +86,7 @@ struct Target
         glad_glFramebufferRenderbuffer(kFramebuffer, kColor0, kRenderbuffer, color);
         glad_glFramebufferRenderbuffer(kFramebuffer, kDepthAtt, kRenderbuffer, depth);
         const bool ok = glad_glCheckFramebufferStatus(kFramebuffer) == kComplete;
-        // profundidade de uma amostra para o glReadPixels (so profundidade: sem buffer de cor para desenhar ou ler)
+        // single-sample depth for glReadPixels (depth only: no color buffer to draw to or read from)
         glad_glGenFramebuffers(1, &dfbo);
         glad_glGenRenderbuffers(1, &ddepth);
         glad_glBindRenderbuffer(kRenderbuffer, ddepth);
@@ -101,7 +101,7 @@ struct Target
         w = nw;
         h = nh;
         samples = ns;
-        std::fprintf(stderr, "[msaa] %s %dx%d com %d amostras%s\n", what, nw, nh, ns, ok && dok ? "" : ": framebuffer incompleto, sem MSAA");
+        std::fprintf(stderr, "[msaa] %s %dx%d with %d samples%s\n", what, nw, nh, ns, ok && dok ? "" : ": framebuffer incomplete, no MSAA");
         if (!ok || !dok)
         {
             release();
@@ -109,7 +109,7 @@ struct Target
         }
         return true;
     }
-    // Para o BeginTextureMode do raylib: so usa o id e o tamanho
+    // For raylib's BeginTextureMode: it only uses the id and the size
     RenderTexture2D render() const
     {
         RenderTexture2D r{};
@@ -118,7 +118,7 @@ struct Target
         r.texture.height = h;
         return r;
     }
-    // Depois do EndTextureMode: a cor resolvida no framebuffer da textura do quadro (mesmo tamanho)
+    // After EndTextureMode: the resolved color goes into the frame texture's framebuffer (same size)
     void resolve(unsigned dstFbo) const
     {
         if (!fbo) return;
@@ -127,7 +127,7 @@ struct Target
         glad_glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, kColorBit, kNearest);
         glad_glBindFramebuffer(kFramebuffer, 0);
     }
-    // No meio do desenho (framebuffer multiamostra em uso): resolve a profundidade e a deixa como leitura
+    // In the middle of drawing (multisample framebuffer in use): resolves depth and leaves it bound for reading
     void readDepth() const
     {
         if (!fbo) return;
@@ -140,7 +140,7 @@ struct Target
     }
 };
 
-// Alvo multiamostra em uso (entre o BeginTextureMode e o EndTextureMode dele); o lens flare chama readDepth nele
+// Multisample target in use (between its BeginTextureMode and EndTextureMode); the lens flare calls readDepth on it
 inline const Target *g_current = nullptr;
 inline void readDepthIfMsaa()
 {
