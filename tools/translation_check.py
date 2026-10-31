@@ -342,11 +342,12 @@ def scan_ps1_dquote(text, out, i):
     return i
 
 
-BAT_ECHO = re.compile(r'(^|[\s(&|@])echo(?=[\s.:])(?![ \t]+(off|on)\s*$)', re.I)
+# echo text and the prompt of set /p NAME= are what a user reads
+BAT_ECHO = re.compile(r'(^|[\s(&|@])(echo(?=[\s.:])(?![ \t]+(off|on)\s*$)|set[ \t]+/p[ \t]+\w+=)', re.I)
 
 
 def scan_bat(text, out):
-    """Batch: rem/:: lines are comments; the text after echo and "..." are literals."""
+    """Batch: rem/:: lines are comments; the text after echo or set /p NAME=, and "...", are literals."""
     for line in text.splitlines(keepends=True):
         body = line.strip().lstrip('@').lower()
         if body.startswith('::') or body == 'rem' or body.startswith('rem ') or body.startswith('rem\t'):
@@ -360,7 +361,8 @@ def scan_bat(text, out):
                 out.code(line[i:m.end()])
                 j = m.end()
                 while j < len(line) and line[j] not in '&|<>)\r\n':
-                    j += 1
+                    j += 2 if line[j] == '^' else 1   # ^( ^) ^& are part of the text
+                j = min(j, len(line.rstrip('\r\n')))
                 if line[m.end():j].strip():
                     out.string(line[m.end():j])
                 i = j
