@@ -197,7 +197,7 @@ index 0000000..0947e18
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..fd8c192 100644
+index 589d768..68c0a55 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -312,7 +312,7 @@ index 589d768..fd8c192 100644
      EnableFastReleaseMode(ps2_runtime)
      EnableFastReleaseMode(ps2EntryRunner)
 +    if(TARGET ps2_game_code)
-+        EnableFastReleaseMode(ps2_game_code)
++        EnableFastReleaseMode(ps2_game_code STRICT_FP)
 +    endif()
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
@@ -408,13 +408,22 @@ index 589d768..fd8c192 100644
 +    ps2x_stage_ffmpeg_runtime_dlls(wotm)
 +endif()
 diff --git a/ps2xRuntime/cmake/ReleaseMode.cmake b/ps2xRuntime/cmake/ReleaseMode.cmake
-index 92ef0d5..9954311 100644
+index 92ef0d5..9ba2c8f 100644
 --- a/ps2xRuntime/cmake/ReleaseMode.cmake
 +++ b/ps2xRuntime/cmake/ReleaseMode.cmake
-@@ -4,6 +4,27 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
+@@ -4,6 +4,36 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
  
  function(EnableFastReleaseMode TargetName)
      message("> Enabling optimization for: ${TargetName}")
++    # WotM: STRICT_FP (the translated game code) keeps every float operation rounded on its own, as on the PS2: no /fp:fast and no
++    # FMA contraction, so MSVC/x86 and clang/arm64 compute the same game state (online play across Windows and Mac)
++    set(_wotmFp /fp:fast)
++    if("STRICT_FP" IN_LIST ARGN)
++        set(_wotmFp /fp:precise)
++        if(NOT MSVC)
++            target_compile_options(${TargetName} PRIVATE -ffp-contract=off)
++        endif()
++    endif()
 +    # WotM: gcc/clang on x86 get the same instruction set as MSVC's /arch:AVX2 below (ps2_runtime_macros.h and native/ use SSE4.1
 +    # intrinsics); ARM builds go through sse2neon and need nothing here
 +    if(NOT MSVC AND NOT PS2X_IS_ARM_TARGET)
@@ -425,7 +434,7 @@ index 92ef0d5..9954311 100644
 +        # O link cai de ~25 min para segundos/minutos; o codigo fica um pouco mais lento (sem inline entre arquivos).
 +        if(MSVC)
 +            target_compile_options(${TargetName} PRIVATE
-+                $<$<CONFIG:Release>:/O2 /Ob2 /Oi /Gy /Gw /GF /Zc:inline /fp:fast /DNDEBUG /arch:AVX2 /GS- /Qspectre->)
++                $<$<CONFIG:Release>:/O2 /Ob2 /Oi /Gy /Gw /GF /Zc:inline ${_wotmFp} /DNDEBUG /arch:AVX2 /GS- /Qspectre->)
 +            # WotM: PDB so com os simbolos publicos (sem /Zi) e .map, para o amostrador do host (PS2X_HOSTPROF) e os [CRASH]
 +            # darem nomes; /OPT:REF /OPT:ICF mantem o binario como sem /DEBUG
 +            get_target_property(_wotmType ${TargetName} TYPE)
@@ -439,6 +448,15 @@ index 92ef0d5..9954311 100644
      if(MSVC)
          target_compile_options(${TargetName} PRIVATE
              $<$<CONFIG:Release>:
+@@ -15,7 +45,7 @@ function(EnableFastReleaseMode TargetName)
+                 /Gw # global data in COMDAT
+                 /GF # string pooling
+                 /Zc:inline # remove unreferenced inline
+-                /fp:fast # fast math (graphics friendly)
++                ${_wotmFp} # fast math (graphics friendly); /fp:precise with STRICT_FP
+                 /DNDEBUG
+                 /arch:AVX2 # Advanced Vector Extensions 2
+                 /GS- # Disable Buffer Security Check (faster)
 diff --git a/ps2xRuntime/include/ps2_call_list.h b/ps2xRuntime/include/ps2_call_list.h
 index 94a6fa1..01ba50f 100644
 --- a/ps2xRuntime/include/ps2_call_list.h
