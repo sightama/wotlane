@@ -58,6 +58,7 @@ extern uint64_t g_wotmEeCycle, g_wotmIdleCycles;
 extern uint32_t g_wotmProfPc[4096];
 extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
+extern void (*g_wotmCallTrace)(const R5900Context *ctx, uint32_t targetPc);   // ps2_runtime.cpp (dispatchGuestBranch), WOTM_CALLTRACE
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copia o quadro pronto para o desenho nativo
 void wotmCaptureScene(const uint8_t *rdram, int view);   // wotm_live.inc: cena (objetos, paletas, camera) na saida do hier(v, 0)
 void wotmVu1SceneExit(const uint8_t *rdram);   // wotm_vu1check.inc: registro 'S' do instantaneo, no mesmo ponto

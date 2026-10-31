@@ -4416,7 +4416,7 @@ index 8590f14..99904a4 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..cef4e9d 100644
+index 45cb9d2..64de933 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -4598,7 +4598,7 @@ index 45cb9d2..cef4e9d 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1383,14 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1383,16 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -4606,6 +4606,8 @@ index 45cb9d2..cef4e9d 100644
 +#include "wotm_scene.inc"
 +static std::vector<uint32_t> g_wotmCov(0x1000000u >> 2, 0);
 +static const bool g_wotmCovOn = std::getenv("PS2X_COVERAGE") != nullptr;   // contar so quando vai gravar
++// Called on every guest call when set: WOTM_CALLTRACE (native/runtime/wotm_sync.inc) records the call sequence of one frame
++void (*g_wotmCallTrace)(const R5900Context *ctx, uint32_t targetPc) = nullptr;
 +
 +std::atomic<R5900Context *> g_wotmLiveCtx{nullptr};
 +// Quantas vezes um checkpoint mandou o codigo gerado desenrolar ate o escalonador (so a thread executora do EE mexe).
@@ -4613,7 +4615,7 @@ index 45cb9d2..cef4e9d 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1400,17 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1402,19 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -4621,6 +4623,8 @@ index 45cb9d2..cef4e9d 100644
      const bool isCall = (kind == GuestBranchKind::DirectCall || kind == GuestBranchKind::IndirectCall);
 +    if (g_wotmCovOn && targetPc < 0x1000000u)
 +        ++g_wotmCov[targetPc >> 2];
++    if (isCall && g_wotmCallTrace)
++        g_wotmCallTrace(ctx, targetPc);
  
      // Every inter-function transfer is also a deterministic EE safe point.
      // Backward edges inside generated functions use eeCheckpointDue(), while
@@ -4631,7 +4635,7 @@ index 45cb9d2..cef4e9d 100644
          return false;
      }
  
-@@ -1396,6 +1449,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1453,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -4639,7 +4643,7 @@ index 45cb9d2..cef4e9d 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1457,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1461,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -4651,7 +4655,7 @@ index 45cb9d2..cef4e9d 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1480,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1484,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -4698,7 +4702,7 @@ index 45cb9d2..cef4e9d 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1531,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1535,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -4820,7 +4824,7 @@ index 45cb9d2..cef4e9d 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -1485,6 +1687,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
+@@ -1485,6 +1691,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
  
  void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
  {
@@ -4829,7 +4833,7 @@ index 45cb9d2..cef4e9d 100644
      for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
      {
          ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
-@@ -2165,6 +2369,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2165,6 +2373,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
      ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
      m_memory.writeIORegister(GIF_TADR, tadr);
      ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
@@ -4837,7 +4841,7 @@ index 45cb9d2..cef4e9d 100644
      if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
      {
          drainCompletedDmacHandlers(rdram);
-@@ -2175,6 +2380,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2175,6 +2384,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
          drainCompletedDmacHandlers(rdram);
          return;
      }
@@ -4845,7 +4849,7 @@ index 45cb9d2..cef4e9d 100644
      m_memory.writeIORegister(GIF_CHCR, chcr);
      m_memory.processPendingTransfers();
      drainCompletedDmacHandlers(rdram);
-@@ -2211,7 +2417,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2421,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -4857,7 +4861,7 @@ index 45cb9d2..cef4e9d 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2356,6 +2565,7 @@ void PS2Runtime::run()
+@@ -2356,6 +2569,7 @@ void PS2Runtime::run()
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -4865,7 +4869,7 @@ index 45cb9d2..cef4e9d 100644
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-@@ -2422,7 +2632,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2636,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -4877,7 +4881,7 @@ index 45cb9d2..cef4e9d 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2658,268 @@ void PS2Runtime::run()
+@@ -2444,7 +2662,268 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }

@@ -9,6 +9,7 @@
 //   WOTM_STATEHASH=<arquivo>: por quadro grava {indice, g_frame, hash total, 256 hashes de blocos de 128 KB} dos 32 MB que o jogo ve
 //     (tools/statediff.py compara duas execucoes e diz o primeiro quadro e os blocos que diferem).
 //   WOTM_STATEDUMP=<indice>: grava a RAM do jogo (32 MB) desse quadro em state_<indice>.bin na pasta atual (o discroot).
+//   WOTM_CALLTRACE=<file>[,<index>]: register hashes at every guest call while frame <index> is computed (see callTraced).
 //   WOTM_NET=<host>:<porta>, WOTM_NETTOKEN=<ficha>, WOTM_NETNAME=<nome>: partida em rede pelo wotm_server (veja "Partida em rede" abaixo).
 namespace wotm_sync
 {
@@ -188,6 +189,70 @@ namespace wotm_sync
     }
     FILE *g_hashFile = nullptr;
     long g_dumpAt = -1;
+
+    // WOTM_CALLTRACE=<file>[,<index>]: while the game computes frame <index> (default 1, the first update after the frame-0 state)
+    // writes one CallRecord per guest call. Registers only, no RAM: comparing two machines' files (calltrace.py in wotlane-coord),
+    // the first record whose hashes differ names the function that computed the first different value (the one running since the
+    // previous record). Threads are numbered in order of first call, the same on every machine with the one-thread EE scheduler.
+    struct CallRecord
+    {
+        uint32_t index, target, ra, thread;
+        uint64_t gpr, fpr, vu0;
+    };
+    FILE *g_traceFile = nullptr;
+    uint32_t g_traceAt = 1;
+    std::vector<const R5900Context *> g_traceThreads;
+
+    void callTraced(const R5900Context *ctx, uint32_t target)
+    {
+        if (!g_levelLoaded || g_index != g_traceAt || !g_traceFile)
+            return;
+        size_t thread = static_cast<size_t>(std::find(g_traceThreads.begin(), g_traceThreads.end(), ctx) - g_traceThreads.begin());
+        if (thread == g_traceThreads.size())
+            g_traceThreads.push_back(ctx);
+        struct
+        {
+            __m128 vf[32], acc;
+            float q, p, i, pad;
+        } vu{};
+        std::memcpy(vu.vf, ctx->vu0_vf, sizeof vu.vf);
+        vu.acc = ctx->vu0_acc;
+        vu.q = ctx->vu0_q;
+        vu.p = ctx->vu0_p;
+        vu.i = ctx->vu0_i;
+        const CallRecord r{g_index, target, GPR_U32(ctx, 31), static_cast<uint32_t>(thread),
+                           hashBytes(reinterpret_cast<const uint8_t *>(ctx->r), sizeof ctx->r),
+                           hashBytes(reinterpret_cast<const uint8_t *>(ctx->f), sizeof ctx->f),
+                           hashBytes(reinterpret_cast<const uint8_t *>(&vu), sizeof vu)};
+        std::fwrite(&r, sizeof r, 1, g_traceFile);
+    }
+
+    void callTraceInit(const char *spec)
+    {
+        std::string path(spec);
+        if (const size_t comma = path.rfind(','); comma != std::string::npos)
+        {
+            g_traceAt = static_cast<uint32_t>(std::atol(path.c_str() + comma + 1));
+            path.resize(comma);
+        }
+        if (!(g_traceFile = std::fopen(path.c_str(), "wb")))
+            return (void)std::fprintf(stderr, "[sync] WOTM_CALLTRACE: cannot write %s\n", path.c_str());
+        g_wotmCallTrace = &callTraced;
+        std::fprintf(stderr, "[sync] call trace of frame %u into %s\n", g_traceAt, path.c_str());
+    }
+
+    // frame boundary after frame `index`: the traced frame is complete
+    void callTraceFrameDone(uint32_t index)
+    {
+        if (!g_traceFile || index != g_traceAt)
+            return;
+        g_wotmCallTrace = nullptr;
+        const long bytes = std::ftell(g_traceFile);
+        std::fclose(g_traceFile);
+        g_traceFile = nullptr;
+        std::fprintf(stderr, "[sync] call trace of frame %u: %ld calls, %zu thread(s)\n", index, bytes / static_cast<long>(sizeof(CallRecord)),
+                     g_traceThreads.size());
+    }
     // WOTM_STATERING=<n>: copia da RAM dos ultimos n quadros, gravada (state_<indice>.bin) quando a partida em rede para; a
     // dessincronia so e vista no hash seguinte (ate 32 quadros depois), entao a copia do primeiro quadro diferente ainda esta aqui
     // WOTM_STATERING=<n>:<inicio>+<tamanho>,...: so essas faixas (o resto do arquivo sai zerado); copiar os 32 MB por quadro muda o
@@ -475,6 +540,8 @@ namespace wotm_sync
             g_dumpAt = std::atol(e);
         if (const char *e = std::getenv("WOTM_STATERING"); e && *e)
             ringInit(e);
+        if (const char *e = std::getenv("WOTM_CALLTRACE"); e && *e)
+            callTraceInit(e);
         if (g_fixedStep || g_hashFile || g_dumpAt >= 0)
             std::fprintf(stderr, "[sync] passo fixo %d field(s), hash %s, copia no quadro %ld\n", g_fixedStep, g_hashFile ? "ligado" : "desligado", g_dumpAt);
     }
@@ -521,6 +588,7 @@ namespace wotm_sync
             sampleInputs(g_index + 1u);
         }
         const uint32_t index = g_index++;
+        callTraceFrameDone(index);
         if (g_hashFile)
         {
             FrameHash fh;
