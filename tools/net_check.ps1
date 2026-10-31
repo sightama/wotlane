@@ -145,8 +145,8 @@ for ($i = 1; $i -le $Players; $i++) {
     $log = Get-Content (Join-Path $out "jogador$i.err.log") -Raw
     if ($log -notmatch "\[net\] inicio: jogador $i de $Players") { Fail "jogador $i nao comecou a partida" } else { Write-Host "ok      jogador $i comecou" }
     if ($log -match '\[net\] parado: [^\r\n]*') { if (-not ($Drop -gt 0 -and $i -eq $Players)) { Fail "jogador ${i}: $($Matches[0])" } }
-    if ($log -match '\[CRASH\]|\[vigia\] CONGELOU') { Fail "jogador ${i}: $($Matches[0])" }
-    if ($log -notmatch '\[sync\] primeira entrada nao neutra aplicada no quadro') { Fail "jogador ${i}: nenhuma entrada chegou ao jogo" }
+    if ($log -match '\[CRASH\]|\[watchdog\] FROZE') { Fail "jogador ${i}: $($Matches[0])" }
+    if ($log -notmatch '\[sync\] first non-neutral input applied at frame') { Fail "jogador ${i}: nenhuma entrada chegou ao jogo" }
     foreach ($re in ($Reject -split '\|\|\|' | Where-Object { $_ })) {
         if ($log -match $re) { Fail "jogador ${i}: apareceu $($Matches[0])" }
     }

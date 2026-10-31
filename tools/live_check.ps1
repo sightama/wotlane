@@ -9,7 +9,7 @@ param(
     [string]$Env = '',
     [int]$Secs = 30,
     [string]$Expect = '',
-    [string]$Reject = '\[CRASH\]|||\[vigia\] CONGELOU',
+    [string]$Reject = '\[CRASH\]|||\[watchdog\] FROZE',
     [string]$Exe = ''
 )
 $ErrorActionPreference = 'Stop'

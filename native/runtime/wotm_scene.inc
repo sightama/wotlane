@@ -1,25 +1,25 @@
-// wotm_scene.inc (incluido por ps2_runtime.cpp; raylib e ps2_runtime.h ja estao incluidos)
+// wotm_scene.inc (included by ps2_runtime.cpp; raylib and ps2_runtime.h are already included)
 #include <atomic>
-#include "wotm_savepics.hpp"   // imagens da lista de saves (wotm_live.inc as desenha)
-static std::atomic<bool> g_wotmShotKey{false};   // F8 na janela (wotm_foto.inc) -> um quadro da checagem VU1 x nativo agora (wotm_vu1check.inc)
+#include "wotm_savepics.hpp"   // save list images (wotm_live.inc draws them)
+static std::atomic<bool> g_wotmShotKey{false};   // F8 in the window (wotm_foto.inc) -> one frame of the VU1 vs native check now (wotm_vu1check.inc)
 #include "wotm_live.inc"
-#include "wotm_foto.inc"   // F7 pausa, F6 avanca um quadro, F8 foto com nota (WOTM_FOTOS)
-#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
-#include "wotm_saveicon.hpp"   // icone de salvamento automatico
+#include "wotm_foto.inc"   // F7 pause, F6 advance one frame, F8 snapshot with a note (WOTM_FOTOS)
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: ELF addresses by name (tools/native_syms.py --gen)
+#include "wotm_saveicon.hpp"   // autosave icon
 
-extern bool g_wotmVu1Tap;   // ps2_memory.cpp (checagem VU1 x nativo)
+extern bool g_wotmVu1Tap;   // ps2_memory.cpp (VU1 vs native check)
 static void wotmDrawScene(const uint8_t *rdram)
 {
     if (!rdram) return;
-    wotm_live::initWindowAspect();   // janela na proporcao do widescreen (uma vez, antes da abertura)
-    wotm_live::fullscreenKey();      // F11: tela cheia <-> janela
+    wotm_live::initWindowAspect();   // window at the widescreen aspect ratio (once, before the intro)
+    wotm_live::fullscreenKey();      // F11: fullscreen <-> windowed
     {
-        // Sem VU1 ninguem conclui o pacote: o jogo espera `objsInPacket | objsInAlphaPacket` zerarem (rtWaitForVu1, e um laco
-        // embutido em particleDraw). Cada apresentacao faz o papel da conclusao do VU1. No quadro amostrado pela checagem VU1 x
-        // nativo nao: la o hierFlushObjQ dispara o DMA de verdade, e zerar aqui descartava a OT de alfa ainda nao despachada (os
-        // objetos 0x8000/0x4000 saiam como "so o nativo desenha", pista 7 do VU1CHECK).
-        // No passo fixo (WOTM_FIXEDSTEP, netcode) a janela nao escreve na RAM do jogo: o instante da escrita dependia do host. Os ganchos
-        // do rtWaitForVu1/hierFlushObjQ/particleDraw zeram os mesmos contadores na thread do EE.
+        // Without VU1 nobody completes the packet: the game waits for `objsInPacket | objsInAlphaPacket` to reach zero (rtWaitForVu1, and a loop
+        // inlined in particleDraw). Each present stands in for the VU1 completion. Not on the frame sampled by the VU1 vs native
+        // check: there hierFlushObjQ kicks off the real DMA, and zeroing here threw away the alpha OT that hadn't been dispatched yet (the
+        // 0x8000/0x4000 objects showed up as "only native draws", clue 7 of VU1CHECK).
+        // In fixed step (WOTM_FIXEDSTEP, netcode) the window doesn't write to game RAM: the moment of the write depended on the host. The hooks
+        // on rtWaitForVu1/hierFlushObjQ/particleDraw zero the same counters on the EE thread.
         static const bool s_noVu1 = std::getenv("PS2X_NO_VU1") != nullptr;
         static const bool s_lockstep = [] { const char *e = std::getenv("WOTM_FIXEDSTEP"); return e && *e; }();
         if (s_noVu1 && !g_wotmVu1Tap && !s_lockstep)
@@ -30,18 +30,18 @@ static void wotmDrawScene(const uint8_t *rdram)
         }
     }
     wotmFotoKeys();
-    const bool drew = wotmDrawNative(rdram); // camada nativa (native/wotm_native.hpp): fase lida da RAM, sem VU1/GS
+    const bool drew = wotmDrawNative(rdram); // native layer (native/wotm_native.hpp): stage read from RAM, no VU1/GS
     {
-        // Sem cena nativa (carregamento, troca de tela) a janela ficava com o quadro do GS. Com PS2X_NO_GS o GS nao desenha nada: a
-        // area exibida so tem os uploads de textura, e entre o pulo da abertura e o menu aparecia a VRAM crua (blocos de textura
-        // embaralhados; tambem entre lutas). Aqui fica preto; WOTM_GSFRAME=1 volta a mostrar o quadro do GS (diagnostico).
-        // Retangulo, nao ClearBackground: o quadro do GS ainda esta no lote do raylib, e o glClear imediato vinha antes dele.
+        // With no native scene (loading, screen change) the window kept the GS frame. With PS2X_NO_GS the GS draws nothing: the
+        // displayed area only has the texture uploads, and between the intro skip and the menu raw VRAM showed up (scrambled texture
+        // blocks; also between fights). Here it stays black; WOTM_GSFRAME=1 shows the GS frame again (diagnostic).
+        // A rectangle rather than ClearBackground: the GS frame is still in the raylib batch, and the immediate glClear came before it.
         static const bool s_blackGap = std::getenv("PS2X_NO_GS") != nullptr && std::getenv("WOTM_GSFRAME") == nullptr;
         if (!drew && s_blackGap)
             DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), BLACK);
     }
     {
-        // Icone de salvamento (NATIVO.md, "Save em JSON"): 1 s no canto a cada gravacao do save.json (wotm_save.inc)
+        // Save icon (NATIVO.md, "Save em JSON"): 1 s in the corner each time save.json is written (wotm_save.inc)
         static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
         static const std::filesystem::path card =
             (io.mcRoot.empty() ? (io.elfDirectory.empty() ? std::filesystem::current_path() : io.elfDirectory) / "mc0" : io.mcRoot) / "BASCUS-97197";
@@ -49,9 +49,9 @@ static void wotmDrawScene(const uint8_t *rdram)
     }
     wotmFotoOverlay(drew, rdram);
     {
-        // WOTM_WINSHOTS=<s>[,<s>...]: a janela inteira (com o que vem por cima do quadro nativo) em win_<s>.png quando o relogio passa
-        // de cada <s> segundos. O WOTM_SHOTS so grava quando a cena nativa e redesenhada; este vale tambem nos lacos do Shell (dialogo
-        // depois da luta, cinemas) e com a tela preta de "sem cena".
+        // WOTM_WINSHOTS=<s>[,<s>...]: the whole window (with whatever is drawn over the native frame) to win_<s>.png when the clock passes
+        // each <s> seconds. WOTM_SHOTS only writes when the native scene is redrawn; this one also works in the Shell loops (dialog
+        // after the fight, cinematics) and on the black "no scene" screen.
         static std::vector<double> shots = [] {
             std::vector<double> v;
             if (const char *s = std::getenv("WOTM_WINSHOTS"))
@@ -70,10 +70,10 @@ static void wotmDrawScene(const uint8_t *rdram)
         {
             char name[64];
             std::snprintf(name, sizeof name, "win_%g.png", shots[next]);
-            rlDrawRenderBatchActive();   // o lote do raylib ainda nao foi para o quadro
+            rlDrawRenderBatchActive();   // the raylib batch hasn't reached the frame yet
             Image img = LoadImageFromScreen();
             if (ExportImage(img, name))
-                std::fprintf(stderr, "[shot] %s (janela, cena nativa %s)\n", name, drew ? "desenhada" : "ausente: preto");
+                std::fprintf(stderr, "[shot] %s (window, native scene %s)\n", name, drew ? "drawn" : "missing: black");
             UnloadImage(img);
             ++next;
         }

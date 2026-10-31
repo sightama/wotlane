@@ -1,29 +1,29 @@
-// wotm_orbit.inc: camera moderna (orbital); plano e etapas em
-// 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md. Incluido no wotm_overrides.cpp, que chama daqui os ganchos que ja tem:
-//   - Cameras::Update (o embrulho da camera livre): orbitPre antes do original, orbitPost depois;
-//   - PadFlags::interpretInputs (o do lock-on): orbitInputEnter na entrada, orbitInputLeave quando a funcao de fato voltou;
-//   - Camera::shakeCamera: guarda o tremor do quadro, que a orbita soma a posicao dela;
-//   - TheGame::SetOkToUnify: CloseCam = 0 zera o m_camUnify de todos (nunca entra na vista unificada), como o wotm_split4.inc.
+// wotm_orbit.inc: modern (orbit) camera; plan and stages in
+// 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md. Included in wotm_overrides.cpp, which calls in here from the hooks it already has:
+//   - Cameras::Update (the free camera wrapper): orbitPre before the original, orbitPost after;
+//   - PadFlags::interpretInputs (the lock-on one): orbitInputEnter on entry, orbitInputLeave once the function has actually returned;
+//   - Camera::shakeCamera: stores the frame's shake, which the orbit adds to its own position;
+//   - TheGame::SetOkToUnify: CloseCam = 0 clears everyone's m_camUnify (never enters the unified view), like wotm_split4.inc.
 //
-// Etapa 1 (orbita basica). Vale para a camera com POV 0 (normalUpdate) que segue o monstro de um jogador humano na vista dele, fora
-// da vista unificada (menos a camera 2 no POV 0, a do agarrao), do modo 9 (Crush), da camera livre e do WOTM_AIVSAI (lotes e corpus
-// ficam com a camera do jogo). O jogo
-// continua rodando o normalUpdate por baixo (o tremor dele e aproveitado); depois dele a orbita refaz a pose inteira:
-//   - posicao: o deslocamento do POV (D10, so ele: o balanco e a inclinacao do jogo mudam com o estado do monstro e davam solavancos)
-//     girado pelo nosso angulo em volta do monstro (az = rumo do monstro para a camera) em vez do rumo das costas dele; o analogico
-//     direito gira az (X) e a elevacao (Y); o pivo segue o monstro com atraso curto e limitado;
-//   - guinada e inclinacao: para um ponto ~120 acima do pivo (onde a camera do jogo mira), entao subir a camera inclina na medida
-//     certa; travado, esse ponto anda para o alvo;
-//   - recentralizar (CamRecenter): ~1,5 s sem mexer no analogico direito, com o monstro andando, az volta devagar para as costas;
-//   - o jogo e neutralizado so no que briga com a orbita: trava do setor traseiro (E60 = 1), volta as costas (DA4 = DF4 = 0).
-// Ligando (primeiro quadro, volta de outro POV, da vista unificada ou da camera livre) az sai da posicao que o outro modo deixou e a
-// pose desliza da do jogo para a da orbita em ~20 quadros: sem salto. Corte do jogo (D98) com a orbita ja ligada (reinicio de
-// rodada, renascer) recomeca az das costas.
+// Stage 1 (basic orbit). Applies to the camera with POV 0 (normalUpdate) that follows a human player's monster in that player's view,
+// outside the unified view (except camera 2 on POV 0, the grab camera), mode 9 (Crush), the free camera and WOTM_AIVSAI (batches and corpus
+// keep the game camera). The game
+// keeps running normalUpdate underneath (its shake is reused); after it the orbit rebuilds the whole pose:
+//   - position: the POV offset (D10, only that: the game's sway and tilt change with the monster's state and caused jolts)
+//     rotated by our angle around the monster (az = heading from the monster to the camera) instead of the heading of its back; the right
+//     stick turns az (X) and elevation (Y); the pivot follows the monster with a short, bounded delay;
+//   - yaw and pitch: toward a point ~120 above the pivot (where the game camera aims), so raising the camera tilts by the right
+//     amount; when locked on, that point moves toward the target;
+//   - recenter (CamRecenter): ~1.5 s without touching the right stick, with the monster walking, az slowly returns behind its back;
+//   - the game is neutralized only where it fights the orbit: rear sector lock (E60 = 1), return to the back (DA4 = DF4 = 0).
+// When turning on (first frame, coming back from another POV, from the unified view or from the free camera) az starts from where the other
+// mode left it and the pose slides from the game's to the orbit's over ~20 frames: no jump. A game cut (D98) with the orbit already on (round
+// restart, respawn) restarts az from behind the back.
 //
-// Controle: com a orbita dirigindo a vista do jogador, o interpretInputs roda com PadFlags +0x16E4/+0x16E8 = 1 (configuracao
-// relativa a tela, updateInput*ConfigSR, que le o _cs desta camera) e os valores do jogo voltam na saida; os bytes do analogico
-// direito (GamePad 0x10..0x13: esquerda, direita, cima, baixo) vao para a orbita e chegam zerados ao jogo (na CR girariam o monstro,
-// na SR tambem, quando o esquerdo esta parado). Liga na hora, mesmo andando.
+// Controls: with the orbit driving the player's view, interpretInputs runs with PadFlags +0x16E4/+0x16E8 = 1 (screen-relative
+// configuration, updateInput*ConfigSR, which reads this camera's _cs) and the game's values are restored on exit; the right stick
+// bytes (GamePad 0x10..0x13: left, right, up, down) go to the orbit and reach the game zeroed (in CR they would turn the monster,
+// in SR too, when the left stick is still). Takes effect immediately, even while walking.
 namespace
 {
     namespace orbit
@@ -41,38 +41,38 @@ namespace
         constexpr uint32_t kPfOwner = 0x1810u, kPfConfigActive = 0x16E4u, kPfConfigWanted = 0x16E8u, kPfRingIndex = 0x16F0u;
         constexpr int kMaxCams = 4;
         constexpr float kPi = 3.14159265f;
-        constexpr float kLockRate = 0.15f;   // alvo travado: angulo e mira por quadro (~6 quadros; 0,25 era seco demais para o dono)
+        constexpr float kLockRate = 0.15f;   // locked target: angle and aim per frame (~6 frames; 0.25 was too abrupt for the owner)
 
         struct Cam
         {
-            bool active = false;     // a orbita escreveu a pose no quadro anterior
-            uint32_t mon = 0;        // monstro seguido quando ligou
-            float az = 0.f;          // rumo do monstro para a camera
-            float elev = 0.f;        // elevacao somada pelo analogico (radianos)
-            float pivot[3] = {};     // ponto em volta do qual gira (segue o monstro com atraso)
+            bool active = false;     // the orbit wrote the pose on the previous frame
+            uint32_t mon = 0;        // monster being followed when it turned on
+            float az = 0.f;          // heading from the monster to the camera
+            float elev = 0.f;        // elevation added by the stick (radians)
+            float pivot[3] = {};     // point it orbits around (follows the monster with a delay)
             float lastMon[3] = {};
-            float blend = 0.f;       // 1 = pose do jogo, 0 = da orbita (entrada suave)
-            int still = 0;           // quadros sem mexer no analogico direito
-            bool cutSeen = false;    // D98 ligado na entrada deste quadro
-            float shake[3] = {};     // deslocamento do shakeCamera neste quadro
-            float nudge = 0.f;       // desvio do analogico direito com alvo travado
+            float blend = 0.f;       // 1 = game pose, 0 = orbit pose (smooth entry)
+            int still = 0;           // frames without touching the right stick
+            bool cutSeen = false;    // D98 set on entry to this frame
+            float shake[3] = {};     // shakeCamera offset on this frame
+            float nudge = 0.f;       // right stick deflection while a target is locked
             bool locked = false;
-            int away = 0;            // quadros seguidos com o monstro se afastando da camera
-            float lockW = 0.f;       // peso da mira no alvo travado (0..1)
-            float lockAim[3] = {};   // desvio da mira para o alvo (o ultimo, enquanto o peso cai ao soltar)
-            float reach = 1.f;       // fracao da distancia livre (colisao: encolhe na hora, volta devagar)
-            float lift = 0.f;        // altura somada para ficar acima do chao (suavizada na descida)
-            uint32_t lastPin = 0;    // m_pinTarget visto no quadro anterior (log)
+            int away = 0;            // consecutive frames with the monster moving away from the camera
+            float lockW = 0.f;       // weight of the aim at the locked target (0..1)
+            float lockAim[3] = {};   // aim offset toward the target (the last one, while the weight drops after release)
+            float reach = 1.f;       // fraction of the free distance (collision: shrinks immediately, comes back slowly)
+            float lift = 0.f;        // height added to stay above the ground (smoothed on the way down)
+            uint32_t lastPin = 0;    // m_pinTarget seen on the previous frame (log)
         } g_cam[kMaxCams];
 
         struct Input
         {
-            bool driving = false;    // a orbita dirige a vista deste jogador (orbitPost)
-            bool forced = false;     // configuracao SR imposta no interpretInputs em curso
-            bool pending = false;    // forcado, mas a funcao nao voltou ainda (fatia de tempo): restaurar na proxima entrada
+            bool driving = false;    // the orbit drives this player's view (orbitPost)
+            bool forced = false;     // SR configuration imposed on the interpretInputs in progress
+            bool pending = false;    // forced, but the function hasn't returned yet (time slice): restore on the next entry
             uint32_t pf = 0, saved4 = 0, saved8 = 0;
-            float stick[2] = {};     // analogico direito do ultimo quadro (x direita, y cima), -1..1
-            float tilt = 1.f;        // inclinacao do analogico esquerdo (0..1) na entrada do interpretInputs forcado
+            float stick[2] = {};     // right stick from the last frame (x right, y up), -1..1
+            float tilt = 1.f;        // left stick deflection (0..1) on entry to the forced interpretInputs
         } g_in[4];
 
         float rdF(uint8_t *rdram, uint32_t a) { float v; std::memcpy(&v, rdram + a, 4); return v; }
@@ -85,17 +85,17 @@ namespace
             while (a < -kPi) a += 2.f * kPi;
             return a;
         }
-        float headingTo(float dx, float dy) { return std::atan2(dx, dy); }   // 0 = +Y, positivo para +X
+        float headingTo(float dx, float dy) { return std::atan2(dx, dy); }   // 0 = +Y, positive toward +X
 
         bool enabled() { return wotm::settings::on(wotm::settings::Camera) && !g_aiVsAi && !g_wotmFreeCam.load(std::memory_order_relaxed); }
 
-        // Camera v elegivel neste quadro; mon = monstro, slot = jogador
+        // Camera v eligible on this frame; mon = monster, slot = player
         bool eligible(uint8_t *rdram, int v, uint32_t &mon, int &slot)
         {
             if (v >= kMaxCams || !enabled() || FAST_READ32(kGameMode) == 9u)
                 return false;
-            // vista unificada: so a camera 2 no POV 0, que e a do agarrao (StateGrappleLift: segue quem agarra). A de perto e o POV 1,
-            // a da vitoria o 7: ficam com o jogo
+            // unified view: only camera 2 on POV 0, which is the grab camera (StateGrappleLift: follows the grabber). The close one is POV 1,
+            // the victory one is 7: those stay with the game
             const bool unified = FAST_READ32(kUnified) != 0u;
             if (unified && v != 2)
                 return false;
@@ -107,16 +107,16 @@ namespace
             if (!okAddr(mon, kMonCamUnify + 4u) || !okAddr(cs, 0x70u) || !isPlayerMonster(rdram, FAST_READ32(c + kCamMonster), &slot))
                 return false;
             if (!unified && static_cast<int32_t>(FAST_READ32(mon + kMonCameraView)) != v)
-                return false;   // camera 2 seguindo quem agarra fora da unificada (1P sem a de perto etc.): a vista do jogador e outra
+                return false;   // camera 2 following the grabber outside the unified view (1P without the close one etc.): the player's view is another one
             const uint32_t mcs = FAST_READ32(mon + kMonCs) & 0x1FFFFFFFu;
             return okAddr(mcs, 0x70u);
         }
 
-        // Teste sem controle: WOTM_ORBITSTICK="quadro:quadros:x:y[@jogador];..." poe o analogico direito em (x, y) (-1..1, y para cima) do
-        // quadro dado (contado nas chamadas do Cameras::Update) por tantos quadros
+        // Padless test: WOTM_ORBITSTICK="frame:frames:x:y[@player];..." sets the right stick to (x, y) (-1..1, y up) from the
+        // given frame (counted in Cameras::Update calls) for that many frames
         void testStick(unsigned frame, int slot, float &sx, float &sy)
         {
-            struct Step { unsigned f0, n; float x, y; int player; };   // player 0 = todos
+            struct Step { unsigned f0, n; float x, y; int player; };   // player 0 = all
             static std::vector<Step> steps;
             static bool parsed = false;
             if (!parsed)
@@ -142,8 +142,8 @@ namespace
                 }
         }
 
-        // Teste sem mouse: WOTM_ORBITMOUSE="quadro:quadros:dx:dy;..." soma (dx, dy) pixels por quadro (y para baixo, como o mouse) ao
-        // mouse do jogador do teclado, do quadro dado por tantos quadros
+        // Mouseless test: WOTM_ORBITMOUSE="frame:frames:dx:dy;..." adds (dx, dy) pixels per frame (y down, like the mouse) to the
+        // keyboard player's mouse, from the given frame for that many frames
         void testMouse(unsigned frame, float &mx, float &my)
         {
             struct Step { unsigned f0, n; float x, y; };
@@ -172,7 +172,7 @@ namespace
                 }
         }
 
-        // Monster::hasPinTarget (m_pinTarget com o bit 2 do +4) e a posicao do alvo (o _cs fica no +0xC de monstro e predio)
+        // Monster::hasPinTarget (m_pinTarget with bit 2 of +4) and the target position (the _cs is at +0xC for both monster and building)
         bool pinTarget(uint8_t *rdram, uint32_t mon, float tp[3])
         {
             const uint32_t t = FAST_READ32(mon + kMonPinTarget) & 0x1FFFFFFFu;
@@ -192,15 +192,15 @@ namespace
 
         int numCams(uint8_t *rdram) { return std::clamp(static_cast<int32_t>(FAST_READ32(kNumCameras)), 0, kMaxCams); }
 
-        // Colisao (etapa 3) pelas funcoes do proprio jogo, chamadas daqui com os dados numa area abaixo da pilha atual:
-        //   hdLosTest(from, to, _hdResult *res, bool) -> v0 = 1 livre; res: hit +0, surface +2, ids +4, point +0x10, normal +0x20
-        //   hdHatTest(pos, normal, $f12 up, bool, $f13 down) -> $f0 = pos.z - chao (0 sem chao)
+        // Collision (stage 3) through the game's own functions, called from here with the data in an area below the current stack:
+        //   hdLosTest(from, to, _hdResult *res, bool) -> v0 = 1 clear; res: hit +0, surface +2, ids +4, point +0x10, normal +0x20
+        //   hdHatTest(pos, normal, $f12 up, bool, $f13 down) -> $f0 = pos.z - ground (0 with no ground)
         struct Probe
         {
             uint8_t *rdram;
             R5900Context *ctx;
             PS2Runtime *rt;
-            uint32_t base = 0;   // 0x100 bytes de dados; a pilha das chamadas comeca logo abaixo
+            uint32_t base = 0;   // 0x100 bytes of data; the call stack starts right below
             bool ok = false;
             Probe(uint8_t *r, R5900Context *c, PS2Runtime *p) : rdram(r), ctx(c), rt(p)
             {
@@ -236,7 +236,7 @@ namespace
                     wrF(rdram, a + 4 * i, v[i]);
                 wrF(rdram, a + 12, 0.f);
             }
-            // segmento a -> b; true se bateu (pt, nrm, ids, surface do primeiro contato)
+            // segment a -> b; true if it hit (pt, nrm, ids, surface of the first contact)
             bool los(const float a[3], const float b[3], float pt[3], float nrm[3], uint32_t &ids, uint32_t &surf)
             {
                 put(base, a);
@@ -258,7 +258,7 @@ namespace
                 ids = FAST_READ32(base + 0x24);
                 return true;
             }
-            // altura de p acima do chao logo abaixo (procura de `up` acima a 4096 abaixo); false sem chao
+            // height of p above the ground right below (searches from `up` above to 4096 below); false with no ground
             bool hat(const float p[3], float up, float &above)
             {
                 put(base, p);
@@ -267,7 +267,7 @@ namespace
                 if (!call(wotm::fn::hdHatTest__FP8_fvectorT0fbf, {base, base + 0x10, 0}, {up, 4096.f}, v0, f0))
                     return false;
                 above = f0;
-                return f0 != 0.f || rdF(rdram, base + 0x18) != 1.f;   // sem chao: 0 com a normal (0, 0, 1)
+                return f0 != 0.f || rdF(rdram, base + 0x18) != 1.f;   // no ground: 0 with the normal (0, 0, 1)
             }
         };
 
@@ -285,13 +285,13 @@ namespace
                     continue;
                 const uint32_t c = camAddr(v);
                 s.cutSeen = FAST_READ32(c + kCamCut) != 0u;
-                FAST_WRITE32(c + kCamSectorLock, 1);       // sem a trava do setor traseiro
-                FAST_WRITE32(c + kCamIdle, 0);             // sem a volta as costas
+                FAST_WRITE32(c + kCamSectorLock, 1);       // no rear sector lock
+                FAST_WRITE32(c + kCamIdle, 0);             // no return to the back
                 FAST_WRITE32(c + kCamDrag, 0);
             }
         }
 
-        // Chao e predios (etapa 3). pos = onde a orbita quer a camera; o ponto de visada e o pivo 120 acima (a mira)
+        // Ground and buildings (stage 3). pos = where the orbit wants the camera; the sight point is the pivot 120 above (the aim)
         void collide(Probe &pr, Cam &s, int v, float pos[3], bool logNow)
         {
             static const int mode = [] { const char *e = std::getenv("WOTM_CAMCOLLIDE"); return e ? std::atoi(e) : 2; }();
@@ -317,27 +317,27 @@ namespace
             float above = 0.f;
             const bool ground = pr.hat(pos, 60.f, above);
             if (logNow || (fwd && std::getenv("WOTM_ORBITLOG") && std::atoi(std::getenv("WOTM_ORBITLOG")) >= 3))
-                std::fprintf(stderr, "[orbit] camera %d: colisao ida %d t %.2f n %.2f,%.2f,%.2f ids %08X sup %04X | volta %d t %.2f ids %08X | chao %d %.0f\n",
+                std::fprintf(stderr, "[orbit] camera %d: collision out %d t %.2f n %.2f,%.2f,%.2f ids %08X surf %04X | back %d t %.2f ids %08X | ground %d %.0f\n",
                              v, fwd, tHit, nrm[0], nrm[1], nrm[2], ids, surf, rev, tRev, rids, ground, above);
             if (mode < 2)
-                return;   // =1 so mede (temporario, ate decidir com o log)
-            // Dentro de algo: a ida bate e a volta (da camera para a mira) nao sai de nada depois do ponto da ida. Atras de um predio,
-            // com a camera do lado de fora, a volta bate na face de tras (t maior que o da ida): fica, e o jogo deixa o predio
-            // transparente (hierSetCameraLosPoint). Dentro de predio ou abaixo do chao: encolhe ate antes do contato.
+                return;   // =1 only measures (temporary, until we decide from the log)
+            // Inside something: the outbound ray hits and the return ray (from the camera to the aim) doesn't leave anything after the outbound point. Behind a building,
+            // with the camera outside, the return ray hits the back face (t greater than the outbound one): it stays, and the game makes the building
+            // transparent (hierSetCameraLosPoint). Inside a building or below the ground: shrinks to just before the contact.
             const bool inside = fwd && (!rev || tRev <= tHit + 0.01f);
             const float want = inside ? std::max((tHit * len - 25.f) / len, 0.15f) : 1.f;
-            s.reach = want < s.reach ? want : s.reach + (want - s.reach) * 0.05f;   // encolhe na hora, volta devagar
+            s.reach = want < s.reach ? want : s.reach + (want - s.reach) * 0.05f;   // shrinks immediately, comes back slowly
             for (int i = 0; i < 3; ++i)
                 pos[i] = a[i] + d[i] * s.reach;
-            // chao: pelo menos 30 acima; desce devagar quando o chao baixa
+            // ground: at least 30 above; comes down slowly when the ground drops
             float above2 = 0.f;
             const float need = pr.hat(pos, 60.f, above2) ? std::max(0.f, 30.f - above2) : 0.f;
             s.lift = std::max(need, s.lift - 3.f);
             pos[2] += s.lift;
         }
 
-        // Medidor de salto (etapa 4, com WOTM_ORBITLOG): a pose final de cada vista, quadro a quadro; um pulo grande (posicao ou
-        // guinada) vira uma linha com o POV, a orbita e a vista unificada antes e depois. Vale tambem com a camera classica (base).
+        // Jump meter (stage 4, with WOTM_ORBITLOG): the final pose of each view, frame by frame; a big jump (position or
+        // yaw) becomes a line with the POV, the orbit and the unified view before and after. Also works with the classic camera (baseline).
         void jumpMeter(uint8_t *rdram, int n, unsigned frames)
         {
             struct Last { bool ok = false; float pos[3] = {}, heading = 0.f; uint32_t pov = 0; bool orbit = false; uint32_t unified = 0; };
@@ -367,7 +367,7 @@ namespace
                     const float dx = pos[0] - l.pos[0], dy = pos[1] - l.pos[1], dz = pos[2] - l.pos[2];
                     const float d = std::sqrt(dx * dx + dy * dy + dz * dz), dh = std::fabs(wrapPi(heading - l.heading)) * 57.2958f;
                     if (d > 60.f || dh > 20.f)
-                        std::fprintf(stderr, "[orbit] camera %d: salto quadro %u: %.0f de distancia, %.0f graus (pov %d->%d, orbita %d->%d, unificada %d->%d, corte %d)\n",
+                        std::fprintf(stderr, "[orbit] camera %d: jump frame %u: %.0f distance, %.0f degrees (pov %d->%d, orbit %d->%d, unified %d->%d, cut %d)\n",
                                      v, frames, d, dh, static_cast<int32_t>(l.pov), static_cast<int32_t>(pov), l.orbit, orbit, l.unified, unified,
                                      FAST_READ32(c + kCamCut) != 0u);
                 }
@@ -383,7 +383,7 @@ namespace
         void post(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
         {
             static const bool log = std::getenv("WOTM_ORBITLOG") != nullptr;
-            static const unsigned logEvery = log && std::atoi(std::getenv("WOTM_ORBITLOG")) >= 2 ? 15u : 60u;   // =2: quatro por segundo
+            static const unsigned logEvery = log && std::atoi(std::getenv("WOTM_ORBITLOG")) >= 2 ? 15u : 60u;   // =2: four per second
             static unsigned frames = 0;
             ++frames;
             Probe probe(rdram, ctx, rt);
@@ -392,8 +392,8 @@ namespace
             bool wasActive[kMaxCams];
             for (int v = 0; v < kMaxCams; ++v)
                 wasActive[v] = g_cam[v].active;
-            // mouse: o cursor fica preso enquanto alguma camera segue o monstro do jogador do teclado (inclusive as do jogo: queda,
-            // arremesso), fora da pausa
+            // mouse: the cursor stays captured while some camera follows the keyboard player's monster (including the game's own: fall,
+            // throw), outside the pause
             if (enabled() && FAST_READ32(wotm::sym::isPaused) == 0u)
                 for (int v = 0; v < n && v < kMaxCams; ++v)
                     if (int ks = -1; isPlayerMonster(rdram, FAST_READ32(camAddr(v) + kCamMonster), &ks) &&
@@ -407,7 +407,7 @@ namespace
                 if (v >= n || !eligible(rdram, v, mon, slot))
                 {
                     if (s.active && log)
-                        std::fprintf(stderr, "[orbit] camera %d: desligada (pov %d, unificada %d)\n", v,
+                        std::fprintf(stderr, "[orbit] camera %d: off (pov %d, unified %d)\n", v,
                                      v < n ? static_cast<int32_t>(FAST_READ32(camAddr(v) + kCamPov)) : -1, FAST_READ32(kUnified));
                     s.active = false;
                     continue;
@@ -422,8 +422,8 @@ namespace
                 const float monHeading = rdF(rdram, mcs + 0x68);
                 Input &in = g_in[slot];
                 const bool restart = !s.active || s.mon != mon;
-                // troca de camera com o mesmo monstro (agarrao: vista 0 -> camera 2 da unificada e de volta): a orbita continua com o
-                // estado da outra, sem entrada suave nem recomeco
+                // camera switch with the same monster (grab: view 0 -> unified camera 2 and back): the orbit carries on with the
+                // other camera's state, with no smooth entry and no restart
                 int from = -1;
                 if (restart)
                     for (int u = 0; u < kMaxCams; ++u)
@@ -439,11 +439,11 @@ namespace
                     std::memcpy(s.shake, shake, sizeof shake);
                     g_cam[from].active = false;
                     if (log)
-                        std::fprintf(stderr, "[orbit] camera %d: continua da camera %d (az %.1f)\n", v, from, s.az * 57.2958f);
+                        std::fprintf(stderr, "[orbit] camera %d: continues from camera %d (az %.1f)\n", v, from, s.az * 57.2958f);
                 }
                 else if (restart || s.cutSeen)
                 {
-                    // de onde o jogo (ou o corte dele) deixou a camera
+                    // from where the game (or its cut) left the camera
                     const float dx = game[0] - mt[0], dy = game[1] - mt[1];
                     s.az = dx * dx + dy * dy > 1.f ? headingTo(dx, dy) : wrapPi(monHeading + kPi);
                     s.elev = 0.f;
@@ -458,25 +458,25 @@ namespace
                     s.mon = mon;
                     in.stick[0] = in.stick[1] = 0.f;
                     if (log)
-                        std::fprintf(stderr, "[orbit] camera %d: ligada (jogador %d, az %.1f, rumo do monstro %.1f%s)\n", v, slot + 1,
-                                     s.az * 57.2958f, monHeading * 57.2958f, s.cutSeen ? ", corte do jogo" : "");
+                        std::fprintf(stderr, "[orbit] camera %d: on (player %d, az %.1f, monster heading %.1f%s)\n", v, slot + 1,
+                                     s.az * 57.2958f, monHeading * 57.2958f, s.cutSeen ? ", game cut" : "");
                 }
                 s.active = true;
                 driving[slot] = true;
 
-                // analogico direito: ~170 graus/s no maximo, a 60 quadros/s
+                // right stick: ~170 degrees/s at most, at 60 frames/s
                 float sx = in.stick[0], sy = in.stick[1];
                 testStick(frames, slot, sx, sy);
                 const bool stickMoved = std::fabs(sx) > 0.05f || std::fabs(sy) > 0.05f;
                 s.still = stickMoved ? 0 : s.still + 1;
-                // painel, aba CAMERA: sensibilidade (5 = 1x, cada ponto 20%) e inverter o eixo vertical
+                // panel, CAMERA tab: sensitivity (5 = 1x, each point 20%) and invert the vertical axis
                 const float sens = float(std::clamp(wotm::settings::get(wotm::settings::CamSens), 1, 10)) * 0.2f;
                 sx *= sens;
                 sy *= wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens;
-                s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 graus/s (a horizontal e ~170)
+                s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 degrees/s (horizontal is ~170)
 
-                // mouse (etapa 7, wotm_mouse.hpp): so na orbita do jogador do teclado. Deslocamento direto (angulo por pixel, ~1000
-                // pixels por 140 graus na sensibilidade 5), somado depois do analogico; para cima olha para cima, como o analogico.
+                // mouse (stage 7, wotm_mouse.hpp): only in the keyboard player's orbit. Direct offset (angle per pixel, ~1000
+                // pixels per 140 degrees at sensitivity 5), added after the stick; up looks up, like the stick.
                 float mx = 0.f, my = 0.f;
                 if (slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
                 {
@@ -494,8 +494,8 @@ namespace
                 }
                 const bool moved = stickMoved || mx != 0.f || my != 0.f;
 
-                // alvo travado (etapa 2): a camera vai depressa para tras do monstro na linha do alvo (os dois na tela); o analogico
-                // direito so desloca um pouco (ate ~35 graus) e volta ao soltar. Solto, o angulo continua de onde estava.
+                // locked target (stage 2): the camera moves quickly behind the monster on the line to the target (both on screen); the right
+                // stick only shifts it a little (up to ~35 degrees) and it springs back on release. Unlocked, the angle continues from where it was.
                 float tp[3];
                 const bool locked = pinTarget(rdram, mon, tp) && (tp[0] - mt[0]) * (tp[0] - mt[0]) + (tp[1] - mt[1]) * (tp[1] - mt[1]) > 1.f;
                 if (locked)
@@ -510,26 +510,26 @@ namespace
                     s.az = wrapPi(s.az + sx * 0.05f + mx);
                 }
                 if (locked != s.locked && log)
-                    std::fprintf(stderr, "[orbit] camera %d: %s\n", v, locked ? "alvo travado" : "alvo solto");
+                    std::fprintf(stderr, "[orbit] camera %d: %s\n", v, locked ? "target locked" : "target released");
                 s.locked = locked;
                 if (const uint32_t pin = FAST_READ32(mon + kMonPinTarget); pin != s.lastPin)
                 {
                     if (log)
-                        std::fprintf(stderr, "[orbit] camera %d: alvo 0x%x -> 0x%x (unificada %d, travado %d)\n", v, s.lastPin, pin,
+                        std::fprintf(stderr, "[orbit] camera %d: target 0x%x -> 0x%x (unified %d, locked %d)\n", v, s.lastPin, pin,
                                      FAST_READ32(kUnified), locked);
                     s.lastPin = pin;
                 }
 
-                // recentralizar: so com o monstro se afastando da camera (andando para a frente da tela). Andando de lado ou para
-                // tras o monstro se vira para onde anda; levar a camera para as costas dele mudaria o "para tras" e ele giraria sem
-                // parar (era a camera doida ao soltar o lock-on andando para tras, e o giro sozinho andando de lado)
+                // recenter: only with the monster moving away from the camera (walking toward the front of the screen). Walking sideways or
+                // backward the monster turns toward where it walks; bringing the camera behind its back would change "backward" and it would spin
+                // endlessly (that was the crazy camera when releasing lock-on while walking backward, and the spinning by itself while walking sideways)
                 const float vx = mt[0] - s.lastMon[0], vy = mt[1] - s.lastMon[1], speed = std::sqrt(vx * vx + vy * vy);
                 std::memcpy(s.lastMon, mt, sizeof mt);
                 if (!locked && wotm::settings::on(wotm::settings::CamRecenter) && s.still > 90 && speed > 0.5f)
                 {
-                    const float align = -(vx * std::sin(s.az) + vy * std::cos(s.az)) / speed;   // 1 = para longe da camera (az e o rumo do monstro para ela)
-                    // andando de frente (rumo do monstro com o do deslocamento) e seguido: a virada do monstro tem deslocamento proprio
-                    // (comecar a andar de lado vindo de frente para a camera escorrega ~1 s para longe dela, a 2,5 por quadro)
+                    const float align = -(vx * std::sin(s.az) + vy * std::cos(s.az)) / speed;   // 1 = away from the camera (az is the heading from the monster to it)
+                    // walking forward (monster heading matching the movement) and sustained: the monster's turn has its own movement
+                    // (starting to walk sideways while facing the camera slides ~1 s away from it, at 2.5 per frame)
                     const float facing = (vx * std::sin(monHeading) + vy * std::cos(monHeading)) / speed;
                     s.away = align > 0.5f && facing > 0.7f ? s.away + 1 : 0;
                     if (s.away > 20)
@@ -543,7 +543,7 @@ namespace
                 else
                     s.away = 0;
 
-                // pivo: segue o monstro com atraso curto, limitado (altura mais devagar: o pulo nao sacode a camera)
+                // pivot: follows the monster with a short, bounded delay (height slower: a jump doesn't shake the camera)
                 for (int i = 0; i < 3; ++i)
                 {
                     const float rate = i < 2 ? 0.3f : 0.12f, lim = i < 2 ? 40.f : 90.f;
@@ -551,10 +551,10 @@ namespace
                     s.pivot[i] = std::clamp(s.pivot[i], mt[i] - lim, mt[i] + lim);
                 }
 
-                // deslocamento do jogo no referencial do monstro (x direita, y frente, z cima): so o D10 do POV (tela cheia ou
-                // dividida). Sem o balanco nem a inclinacao do jogo: os dois mudam com o estado do monstro (virando no lugar e
-                // comecando a andar para tras o jogo mira direto no monstro; travar/soltar refaz uma rampa; travado, o balanco subia
-                // a camera ate em cima do monstro), e com a camera em outro angulo viravam solavancos
+                // game offset in the monster's frame of reference (x right, y forward, z up): only the POV's D10 (fullscreen or
+                // split). Without the game's sway or tilt: both change with the monster's state (turning in place and
+                // starting to walk backward the game aims straight at the monster; locking/unlocking redoes a ramp; when locked, the sway raised
+                // the camera to right above the monster), and with the camera at another angle they turned into jolts
                 const float offY = rdF(rdram, c + kCamOffset + 4), offZ = rdF(rdram, c + kCamOffset + 8);
                 const float back = -offY, len = std::sqrt(back * back + offZ * offZ);
                 const float e0 = std::atan2(offZ, back), e = std::clamp(e0 + s.elev, -0.25f, 1.45f);
@@ -575,10 +575,10 @@ namespace
 
                 WotmFreeCamPose p;
                 std::memcpy(p.pos, pos, sizeof pos);
-                // Mira: o pivo, ~120 acima do pe (a camera do jogo, 231 atras e 160 acima olhando 10 graus para baixo, mira ai), entao
-                // subir a camera inclina na medida certa e o monstro fica no mesmo lugar da tela. Travado, a mira anda para o alvo (30%
-                // do caminho, ate 120 no chao e 80 na altura; com o alvo longe o monstro saia pela base da tela); o peso entra e sai em
-                // ~6 quadros, sem salto ao travar e soltar
+                // Aim: the pivot, ~120 above the feet (the game camera, 231 behind and 160 above looking 10 degrees down, aims there), so
+                // raising the camera tilts by the right amount and the monster stays in the same place on screen. When locked, the aim moves toward the target (30%
+                // of the way, up to 120 on the ground plane and 80 in height; with the target far away the monster went off the bottom of the screen); the weight fades in and out over
+                // ~6 frames, with no jump on lock and release
                 s.lockW = locked ? s.lockW + (1.f - s.lockW) * kLockRate : s.lockW * (1.f - kLockRate);
                 if (locked)
                 {
@@ -607,7 +607,7 @@ namespace
                 wrF(rdram, cs + 0x64, 0.f);
                 wrF(rdram, cs + 0x68, p.heading);
                 if (log && frames % logEvery == 0)
-                    std::fprintf(stderr, "[orbit] camera %d: quadro %u az %.1f (costas %.1f) elev %.1f dist %.0f alt %.0f analogico %.2f,%.2f parado %d alcance %.2f chao +%.0f monstro %.0f,%.0f\n", v, frames,
+                    std::fprintf(stderr, "[orbit] camera %d: frame %u az %.1f (back %.1f) elev %.1f dist %.0f alt %.0f stick %.2f,%.2f still %d reach %.2f ground +%.0f monster %.0f,%.0f\n", v, frames,
                                  s.az * 57.2958f, wrapPi(monHeading + kPi) * 57.2958f, s.elev * 57.2958f, horiz, height, sx, sy, s.still, s.reach, s.lift, mt[0], mt[1]);
             }
             for (int i = 0; i < 4; ++i)
@@ -616,7 +616,7 @@ namespace
                 jumpMeter(rdram, n, frames);
         }
 
-        // Camera::shakeCamera (a0 = camera): o tremor do quadro e o que ele somou ao cs->trans
+        // Camera::shakeCamera (a0 = camera): the frame's shake is what it added to cs->trans
         PS2Runtime::RecompiledFunction g_origShake = nullptr;
         void shakeHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -641,13 +641,13 @@ namespace
                     g_cam[v].shake[i] = rdF(rdram, cs + 0x10 + 4 * i) - before[i];
         }
 
-        // Entrada do interpretInputs (a0 = PadFlags, a1 = GamePad). Devolve o jogador forcado (ou -1)
+        // interpretInputs entry (a0 = PadFlags, a1 = GamePad). Returns the forced player (or -1)
         int inputEnter(uint8_t *rdram, uint32_t pf, uint32_t gp)
         {
             for (Input &in : g_in)
                 if (in.pending && in.pf == pf)
                 {
-                    // a chamada anterior nao voltou por este gancho: devolve os valores do jogo se ninguem os trocou
+                    // the previous call didn't return through this hook: restore the game's values if nobody changed them
                     if (FAST_READ32(pf + kPfConfigActive) == 1u && FAST_READ32(pf + kPfConfigWanted) == 1u)
                     {
                         FAST_WRITE32(pf + kPfConfigActive, in.saved4);
@@ -663,11 +663,11 @@ namespace
                 return -1;
             Input &in = g_in[slot];
             uint8_t *b = rdram + gp;
-            // mouse (wotm_mouse.hpp): o cursor fica preso durante a luta inteira do jogador do teclado (fora da pausa), mesmo quando
-            // outra camera do jogo assume por um instante (queda, arremesso); sem a orbita dirigindo, o deslocamento e descartado
+            // mouse (wotm_mouse.hpp): the cursor stays captured for the keyboard player's whole fight (outside the pause), even when
+            // another game camera takes over for a moment (fall, throw); with the orbit not driving, the movement is discarded
             if (enabled() && slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
             {
-                // na pausa do jogo o interpretInputs e o Cameras::Update param: sem aviso, a janela solta o cursor em ~150 ms
+                // during the game's pause interpretInputs and Cameras::Update stop: with no signal, the window releases the cursor in ~150 ms
                 if (FAST_READ32(wotm::sym::isPaused) == 0u)
                     wotm::mouse::want();
                 if (!in.driving)
@@ -677,17 +677,17 @@ namespace
             {
                 in.forced = false;
                 in.stick[0] = in.stick[1] = 0.f;
-                // com a camera moderna o analogico direito nao gira o monstro: na camera de perto (e nos outros POVs, em que a
-                // orbita descansa) o jogo usa o X para girar; o Y (mexer a cabeca) continua indo para o jogo
+                // with the modern camera the right stick doesn't turn the monster: in the close camera (and in the other POVs, where the
+                // orbit rests) the game uses X to turn; Y (moving the head) still goes to the game
                 if (enabled())
                     b[0x10] = b[0x11] = 0;
                 return -1;
             }
-            // analogico direito para a orbita, zerado para o jogo
+            // right stick to the orbit, zeroed for the game
             in.stick[0] = (float(b[0x11]) - float(b[0x10])) / 255.f;
             in.stick[1] = (float(b[0x12]) - float(b[0x13])) / 255.f;
             {
-                // zona morta radial: o controle do jogador 2 (parado) subia a camera sozinho com a folga do analogico
+                // radial dead zone: player 2's pad (idle) raised the camera by itself from the stick's slack
                 const float mag = std::sqrt(in.stick[0] * in.stick[0] + in.stick[1] * in.stick[1]);
                 const float scale = mag > 0.2f ? std::min(1.f, (mag - 0.2f) / 0.8f) / mag : 0.f;
                 in.stick[0] *= scale;
@@ -699,13 +699,13 @@ namespace
             const bool dead = okAddr(owner2, kMonDead + 1u) && rdram[owner2 + kMonDead] != 0;
             if (dead || e4 != 0u || e8 != 0u)
             {
-                in.forced = false;   // o jogo ja pediu a SR (Crush, fim do planeio) ou esta trocando: fica com ele
+                in.forced = false;   // the game already asked for SR (Crush, end of glide) or is switching: go with it
                 return -1;
             }
-            // liga na hora, mesmo andando: esperar o analogico parado deixava o controle de tanque ao sair da camera de perto andando
-            // (o InitCCMonsters volta o jogo a CR) e o monstro girava em vez de andar ate parar
+            // takes effect immediately, even while walking: waiting for the stick to be still left tank controls when leaving the close camera while walking
+            // (InitCCMonsters puts the game back in CR) and the monster turned instead of walking until it stopped
             {
-                // inclinacao do analogico esquerdo (bytes 0xC..0xF: esquerda, direita, cima, baixo): a SR normaliza a direcao e a perde
+                // left stick deflection (bytes 0xC..0xF: left, right, up, down): SR normalizes the direction and loses it
                 const float lx = (float(b[0xD]) - float(b[0xC])) / 255.f, ly = (float(b[0xE]) - float(b[0xF])) / 255.f;
                 in.tilt = std::min(1.f, std::sqrt(lx * lx + ly * ly));
             }
@@ -719,7 +719,7 @@ namespace
             return slot;
         }
 
-        // Saida do interpretInputs (so quando a funcao voltou): devolve a configuracao do jogo
+        // interpretInputs exit (only when the function returned): restores the game's configuration
         void inputLeave(uint8_t *rdram, int slot)
         {
             if (slot < 0)
@@ -731,8 +731,8 @@ namespace
             {
                 FAST_WRITE32(in.pf + kPfConfigActive, in.saved4);
                 FAST_WRITE32(in.pf + kPfConfigWanted, in.saved8);
-                // analogico pela metade (gamepad, ou Alt no teclado): a SR grava frente/tras e os lados com a direcao normalizada (sempre
-                // o curso todo); o computeTargetSpeed pesa a velocidade por eles, como na CR. Aqui voltam a seguir a inclinacao.
+                // half-deflected stick (gamepad, or Alt on the keyboard): SR writes forward/back and sideways with the normalized direction (always
+                // full travel); computeTargetSpeed weights the speed by them, as in CR. Here they follow the deflection again.
                 if (in.tilt < 0.98f)
                 {
                     const uint32_t ring = FAST_READ32(in.pf + kPfRingIndex);
@@ -750,11 +750,11 @@ namespace
                 }
             }
             else
-                in.forced = false;   // o jogo mudou a configuracao no meio (agarrao, morte): vale a dele
+                in.forced = false;   // the game changed the configuration midway (grab, death): its own wins
             in.pending = false;
         }
 
-        // TheGame::SetOkToUnify (comeco de cada quadro): CloseCam = 0 -> ninguem unifica
+        // TheGame::SetOkToUnify (start of each frame): CloseCam = 0 -> nobody unifies
         PS2Runtime::RecompiledFunction g_origOkToUnify = nullptr;
         void okToUnifyHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -767,10 +767,10 @@ namespace
                 FAST_WRITE32(kSlots + kSlotStride * i + kMonCamUnify, 0);
         }
 
-        // Cameras::LeaveUnifiedTask (a0 = Cameras): com o par separado (1P, nenhuma IA perto), o jogo agenda a saida da camera de
-        // perto, mas a tarefa so sai com o monstro parado (isIdle) ou travado: trocar para a camera normal andando mudaria o controle
-        // de relativo a tela para tanque. Com a camera moderna o controle continua relativo a tela, entao sai na hora (fora de queda
-        // livre), pelo proprio LeaveUnifiedView, como a tarefa faria (com o +0xE68 zerado ele nao remove a tarefa que esta rodando)
+        // Cameras::LeaveUnifiedTask (a0 = Cameras): with the pair separated (1P, no AI nearby), the game schedules leaving the close
+        // camera, but the task only leaves with the monster idle (isIdle) or locked: switching to the normal camera while walking would change the controls
+        // from screen-relative to tank. With the modern camera the controls stay screen-relative, so it leaves right away (except in free
+        // fall), through LeaveUnifiedView itself, as the task would (with +0xE68 zeroed it doesn't remove the running task)
         PS2Runtime::RecompiledFunction g_origLeaveTask = nullptr;
         void leaveTaskHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         {
@@ -792,14 +792,14 @@ namespace
             FAST_WRITE32(kAlpha, alpha);
             if (!back || FAST_READ32(kUnified))
             {
-                FAST_WRITE32(c2 + 0xE68u, task);   // nao saiu (modo 8): a tarefa continua esperando
+                FAST_WRITE32(c2 + 0xE68u, task);   // didn't leave (mode 8): the task keeps waiting
                 return;
             }
             FAST_WRITE32(wotm::sym::x_7Cameras_m_leaveTriggered, 0);
-            ctx->r[2] = _mm_set_epi64x(0, 0);   // tarefa terminada
+            ctx->r[2] = _mm_set_epi64x(0, 0);   // task finished
             static const bool log = std::getenv("WOTM_ORBITLOG") != nullptr;
             if (log)
-                std::fprintf(stderr, "[orbit] camera de perto: saida sem esperar o monstro parar\n");
+                std::fprintf(stderr, "[orbit] close camera: leaving without waiting for the monster to stop\n");
         }
 
         void install(PS2Runtime &runtime)
@@ -812,12 +812,12 @@ namespace
                 runtime.registerFunction(kOkToUnify, &okToUnifyHook);
             if ((g_origLeaveTask = runtime.lookupFunction(kLeaveTask)))
                 runtime.registerFunction(kLeaveTask, &leaveTaskHook);
-            std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recentralizar %s, camera de perto %s (WOTM_CLOSECAM), sensibilidade %d, eixo Y %s%s\n",
-                         wotm::settings::on(wotm::settings::Camera) ? "moderna" : "classica",
-                         wotm::settings::on(wotm::settings::CamRecenter) ? "ligado" : "desligado",
-                         wotm::settings::on(wotm::settings::CloseCam) ? "ligada" : "desligada",
-                         wotm::settings::get(wotm::settings::CamSens), wotm::settings::on(wotm::settings::CamInvertY) ? "invertido" : "normal",
-                         g_aiVsAi ? "; com WOTM_AIVSAI fica a classica" : "");
+            std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recenter %s, close camera %s (WOTM_CLOSECAM), sensitivity %d, Y axis %s%s\n",
+                         wotm::settings::on(wotm::settings::Camera) ? "modern" : "classic",
+                         wotm::settings::on(wotm::settings::CamRecenter) ? "on" : "off",
+                         wotm::settings::on(wotm::settings::CloseCam) ? "on" : "off",
+                         wotm::settings::get(wotm::settings::CamSens), wotm::settings::on(wotm::settings::CamInvertY) ? "inverted" : "normal",
+                         g_aiVsAi ? "; with WOTM_AIVSAI it stays classic" : "");
         }
     }
 }

@@ -1,12 +1,12 @@
-// Skins de mod na luta (MODS.md, "Skins"). Incluido pelo wotm_overrides.cpp, depois do wotm_mods.inc.
+// Mod skins in the fight (MODS.md, "Skins"). Included by wotm_overrides.cpp, after wotm_mods.inc.
 //
-// - Sons do traje base: o traje so escolhe arquivo e vira o m_skinNum do Monster (+0x30), que so o som le, por igualdade (Preytor
-//   traje 1, as formigas; Agamo traje 3, o Mecha Sweet Tooth: Sound.cpp). Uma skin chega com o indice dela (4+) e cairia no som
-//   padrao; aqui o TheGame::SetPlayerMonster / SetAIMonster recebe o `base` da skin no lugar do indice. A carga dos arquivos ja
-//   aconteceu (m_costume fica como esta).
-// - IAs sorteadas (resistencia, Shell::RandomlySelectAI): o retail sorteia so o monstro e deixa o traje que estiver em
-//   m_costume[2 + i]. Para um monstro com skins de mod "ai": true, o traje sai entre o do retail e essas skins.
-// Sem skins de mod nenhum gancho e instalado.
+// - Base costume sounds: the costume only picks files and becomes the Monster's m_skinNum (+0x30), which only the sound code reads,
+//   by equality (Preytor costume 1, the ants; Agamo costume 3, the Mecha Sweet Tooth: Sound.cpp). A skin arrives with its own index
+//   (4+) and would fall back to the default sound; here TheGame::SetPlayerMonster / SetAIMonster receives the skin's `base` instead
+//   of the index. The files have already been loaded by then (m_costume stays as it is).
+// - Randomly drawn AIs (endurance, Shell::RandomlySelectAI): the retail game draws only the monster and keeps whatever costume is in
+//   m_costume[2 + i]. For a monster with mod skins marked "ai": true, the costume is drawn from the retail one plus those skins.
+// With no mod skins, no hook is installed.
 
 #include <random>
 
@@ -21,20 +21,20 @@ namespace wotm_skins
     constexpr uint32_t kShellNumAIs = 0x2BB8, kShellMonsterSel = 0x2938, kShellCostume = 0x2BE0;
     PS2Runtime::RecompiledFunction g_origSetPlayer = nullptr, g_origSetAI = nullptr, g_origRandomAI = nullptr;
 
-    // tipo do jogo (m_typeBits, monstro << 5) + traje -> traje que o som deve ver
+    // game type (m_typeBits, monster << 5) + costume -> the costume the sound code should see
     uint32_t soundSkin(uint32_t type, uint32_t skin)
     {
         if (skin < 4u)
             return skin;
         if (const Skin *k = Registry::get().skinByIndex(static_cast<int>(type >> 5), static_cast<int>(skin)))
         {
-            std::fprintf(stderr, "[mods] skin %s/%s (traje %u) na luta com os sons do traje %d\n", k->monsterName.c_str(), k->id.c_str(), skin, k->base);
+            std::fprintf(stderr, "[mods] skin %s/%s (costume %u) in the fight with the sounds of costume %d\n", k->monsterName.c_str(), k->id.c_str(), skin, k->base);
             return static_cast<uint32_t>(k->base);
         }
         return skin;
     }
 
-    // SetPlayerMonster(this, jogador, tipo, dup, vista, traje): traje em t1
+    // SetPlayerMonster(this, player, type, dup, view, costume): costume in t1
     void setPlayer(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kSetPlayer)
@@ -44,7 +44,7 @@ namespace wotm_skins
         }
         g_origSetPlayer(rdram, ctx, runtime);
     }
-    // SetAIMonster(this, ia, tipo, dup, traje): traje em t0
+    // SetAIMonster(this, ai, type, dup, costume): costume in t0
     void setAI(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kSetAI)
@@ -61,7 +61,7 @@ namespace wotm_skins
         g_origRandomAI(rdram, ctx, runtime);
         if (!entry)
             return;
-        // com WOTM_SEED (partida em rede, testes de determinismo) o sorteio sai da semente, igual em todos os PCs
+        // with WOTM_SEED (network match, determinism tests) the draw comes from the seed, the same on every PC
         static std::mt19937 rng{[] {
             const char *e = std::getenv("WOTM_SEED");
             return e && *e ? static_cast<uint32_t>(std::atoll(e)) : std::random_device{}();
@@ -76,18 +76,18 @@ namespace wotm_skins
                     pool.push_back(&k);
             if (pool.empty())
                 continue;
-            // o traje do retail conta como mais uma opcao (sem mods, a mesma luta de sempre)
+            // the retail costume counts as one more option (without mods, the same fight as always)
             const size_t pick = std::uniform_int_distribution<size_t>(0, pool.size())(rng);
             if (pick == pool.size())
                 continue;
             WRITE32(kShellObj + kShellCostume + (2 + i) * 4, static_cast<uint32_t>(pool[pick]->index));
-            std::fprintf(stderr, "[mods] IA %d sorteada com a skin %s/%s (traje %d)\n", i + 1, pool[pick]->monsterName.c_str(),
+            std::fprintf(stderr, "[mods] AI %d drew skin %s/%s (costume %d)\n", i + 1, pool[pick]->monsterName.c_str(),
                          pool[pick]->id.c_str(), pool[pick]->index);
         }
     }
 } // namespace wotm_skins
 
-// Depois de todos os outros ganchos destas funcoes (wotm_split4.inc, WOTM_AIVSAI): este embrulha o que estiver registrado.
+// After every other hook on these functions (wotm_split4.inc, WOTM_AIVSAI): this one wraps whatever is registered.
 void wotmSkinsInstall(PS2Runtime &runtime)
 {
     using namespace wotm_skins;
@@ -102,5 +102,5 @@ void wotmSkinsInstall(PS2Runtime &runtime)
         anyAi = anyAi || k.ai;
     if (anyAi && (g_origRandomAI = runtime.lookupFunction(kRandomAI)))
         runtime.registerFunction(kRandomAI, &randomAI);
-    std::fprintf(stderr, "[mods] skins na luta: sons do traje base%s\n", anyAi ? ", IAs sorteadas com skin" : "");
+    std::fprintf(stderr, "[mods] skins in the fight: base costume sounds%s\n", anyAi ? ", random AIs drawn with skins" : "");
 }

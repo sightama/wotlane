@@ -1,22 +1,23 @@
-// wotm_levelsel.inc: selecao de fase (tela 8 do jogo, screenLevelSelect) com as fases que o retail nao lista e a entrada RANDOM
-// (incluido por wotm_live.inc depois do wotm_padsel.inc; escopo global de ps2_runtime.cpp). NATIVO.md, "Selecao de fase".
+// wotm_levelsel.inc: stage select (game screen 8, screenLevelSelect) with the stages the retail game doesn't list plus a RANDOM entry
+// (included by wotm_live.inc after wotm_padsel.inc; global scope of ps2_runtime.cpp). NATIVO.md, "Selecao de fase".
 //
-// Thread do EE (gancho do screenLevelSelect): na entrada, se o g_levelList e uma das quatro listas do retail (PO_1PFreeForAll,
-// PO_MPFreeForAll, PO_1PEndurance, PO_MPElimination), ele passa a apontar para uma copia no topo da RAM (kList) com as fases do
-// retail na ordem dele, depois as que faltam de 1 a 16 e por ultimo a RANDOM (kRandom, a fase 17 "dylan", de teste da equipe e sem
-// arquivos: o switch da foto, Shell+0x5D0, tem 24 filhos e o levelUnlocked a deixa aberta). O nome dela na tabela do
-// screenLevelSelect (GameLevelLongNames_006EEEF8) vira "Random". O resto e o codigo do jogo: cursor, trava, sons, confirmacao.
-// Com WOTM_HIGHRAM=0 a eliminacao (10 monstros carregados de uma vez) fica so com as fases do retail e a RANDOM.
-// No changeScreen(8, 99) (wotm_padsel.inc) a RANDOM vira uma fase sorteada da lista, entre as destravadas (e sem a quarta entrada
-// quando o jogo a pula: modo 2 com 2+ CPUs, modo 3 com CPU; sem Training e Tokyo Deathmatch, fases de teste), antes da carga e sem
-// o narrador anunciar a fase (surpresa).
+// EE thread (screenLevelSelect hook): on entry, if g_levelList is one of the four retail lists (PO_1PFreeForAll,
+// PO_MPFreeForAll, PO_1PEndurance, PO_MPElimination), it is repointed to a copy at the top of RAM (kList) holding the retail
+// stages in retail order, then the missing ones from 1 to 16, and last RANDOM (kRandom, stage 17 "dylan", a dev-team test stage with
+// no files: the picture switch, Shell+0x5D0, has 24 children and levelUnlocked leaves it open). Its name in screenLevelSelect's
+// table (GameLevelLongNames_006EEEF8) becomes "Random". Everything else is the game's own code: cursor, lock, sounds, confirm.
+// With WOTM_HIGHRAM=0, elimination (10 monsters loaded at once) keeps only the retail stages and RANDOM.
+// On changeScreen(8, 99) (wotm_padsel.inc) RANDOM becomes a stage drawn at random from the list, among the unlocked ones (minus the
+// fourth entry when the game skips it: mode 2 with 2+ CPUs, mode 3 with a CPU; minus Training and Tokyo Deathmatch, test stages),
+// before the load and without the narrator announcing the stage (a surprise).
 //
-// Thread da janela (prepare, antes do desenho da cena): o switch da foto mostra, para as fases sem arte no SHELL.TEX, a foto de outra
-// (12 Training: Midtown Park; 13 Lake Powell: metade de Rosdale Canyon; 16 Tokyo Deathmatch e 17: metade de Tsunopolis). O objeto da
-// foto desses filhos desenha com a textura propria (Scene::nodeTexture), na ordem da cena: o filme do telao continua passando por
-// cima, como nas outras fases. Objeto com duas texturas (o da 12): metade esquerda e direita da foto. Fotos: levelpics/<nome>.png
-// (training, lakepowell, tokyodeathmatch; random), procurado em mods/<mod>/levelpics/, levelpics/ ao lado do ELF e levelpics/ na raiz
-// do repo. A RANDOM sem PNG e um mosaico das fotos de fase do SHELL.TEX (savepics), escurecido, com um "?". Sem PNG fica a do jogo.
+// Window thread (prepare, before the scene is drawn): for stages with no art in SHELL.TEX, the picture switch shows another stage's
+// picture (12 Training: Midtown Park; 13 Lake Powell: half of Rosdale Canyon; 16 Tokyo Deathmatch and 17: half of Tsunopolis). The
+// picture object of those children draws with its own texture (Scene::nodeTexture), in scene order: the big-screen video keeps
+// playing on top, as on the other stages. Object with two textures (stage 12's): left and right halves of the picture. Pictures:
+// levelpics/<name>.png (training, lakepowell, tokyodeathmatch; random), searched in mods/<mod>/levelpics/, levelpics/ next to the
+// ELF and levelpics/ at the repo root. RANDOM with no PNG is a darkened mosaic of SHELL.TEX's stage pictures (savepics) with a "?".
+// Other stages with no PNG keep the game's picture.
 #include <filesystem>
 #include <random>
 
@@ -27,9 +28,9 @@ namespace fs = std::filesystem;
 constexpr int kRandom = 17;
 constexpr uint32_t kShell = wotm::sym::shellInfo;
 constexpr uint32_t kLevelNum = kShell + 0x2BB0, kNumAIs = kShell + 0x2BB8, kMode = kShell + 0x2C10, kLevelSw = kShell + 0x5D0;
-constexpr uint32_t kList = PS2_RAM_SIZE - 0x300;   // LevelList {first, count, levels} e, em +0x10, ate 24 fases (as outras vagas do topo: -0x1000..-0x340)
+constexpr uint32_t kList = PS2_RAM_SIZE - 0x300;   // LevelList {first, count, levels} and, at +0x10, up to 24 stages (the other top-of-RAM slots: -0x1000..-0x340)
 constexpr uint32_t kListLevels = kList + 0x10;
-constexpr uint32_t kLongNames = wotm::sym::GameLevelLongNames_006EEEF8;   // char[28][18] do screenLevelSelect
+constexpr uint32_t kLongNames = wotm::sym::GameLevelLongNames_006EEEF8;   // screenLevelSelect's char[28][18]
 constexpr uint32_t kRetail[] = {wotm::sym::PO_1PFreeForAll, wotm::sym::PO_MPFreeForAll, wotm::sym::PO_1PEndurance, wotm::sym::PO_MPElimination};
 
 static PS2Runtime::RecompiledFunction g_origLevelSelect = nullptr;
@@ -37,7 +38,7 @@ static PS2Runtime::RecompiledFunction g_origLevelSelect = nullptr;
 static uint32_t rd32(uint8_t *rdram, uint32_t a) { return FAST_READ32(a & 0x1FFFFFFFu); }
 static void wr32(uint8_t *rdram, uint32_t a, uint32_t v) { FAST_WRITE32(a & 0x1FFFFFFFu, v); }
 
-// levelUnlocked do jogo: 10, 11, 14 e 15 pela tabela de destrave (as 25 a 27 sao dos minigames, fora das listas)
+// The game's levelUnlocked: 10, 11, 14 and 15 by the unlock table (25 to 27 belong to the minigames, not in the lists)
 static bool unlocked(uint8_t *rdram, int level)
 {
     uint32_t off = 0;
@@ -52,7 +53,7 @@ static bool unlocked(uint8_t *rdram, int level)
     return rd32(rdram, wotm::sym::monsterSelectMode + off) != 0;
 }
 
-// Copia estendida da lista do retail `src` em kList
+// Extended copy of the retail list `src` at kList
 static void extend(uint8_t *rdram, uint32_t src)
 {
     const uint32_t first = rd32(rdram, src), count = std::min<uint32_t>(rd32(rdram, src + 4), 16u), levels = rd32(rdram, src + 8);
@@ -75,7 +76,7 @@ static void extend(uint8_t *rdram, uint32_t src)
     std::string s;
     for (int l : out)
         s += (s.empty() ? "" : " ") + std::to_string(l);
-    std::fprintf(stderr, "[fases] lista %x estendida: %zu fases (%s)\n", src, out.size(), s.c_str());
+    std::fprintf(stderr, "[stages] list %x extended: %zu stages (%s)\n", src, out.size(), s.c_str());
 }
 
 static void levelSelectHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -91,15 +92,15 @@ static void levelSelectHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runti
     g_origLevelSelect(rdram, ctx, runtime);
 }
 
-// changeScreen(8, 99): a RANDOM vira uma fase sorteada (o jogo ja gravou o m_levelNum). Chamado do wotm_padsel.inc, antes do narrador;
-// devolve true quando sorteou (o narrador nao anuncia a fase).
+// changeScreen(8, 99): RANDOM becomes a randomly drawn stage (the game has already written m_levelNum). Called from wotm_padsel.inc,
+// before the narrator; returns true when it drew one (the narrator doesn't announce the stage).
 bool resolveRandom(uint8_t *rdram)
 {
     if (int(rd32(rdram, kLevelNum)) != kRandom)
         return false;
     const uint32_t ll = rd32(rdram, wotm::sym::g_levelList);
     const uint32_t mode = rd32(rdram, kMode), ais = rd32(rdram, kNumAIs);
-    const bool skip3 = (mode == 2 && ais >= 2) || (mode == 3 && ais > 0);   // o screenLevelSelect pula a quarta entrada
+    const bool skip3 = (mode == 2 && ais >= 2) || (mode == 3 && ais > 0);   // screenLevelSelect skips the fourth entry
     std::vector<int> pool;
     if (ll == kList)
     {
@@ -107,7 +108,7 @@ bool resolveRandom(uint8_t *rdram)
         for (uint32_t i = 0; i < n; ++i)
         {
             const int l = int(rd32(rdram, kListLevels + 4 * i));
-            if (l != kRandom && l != 12 && l != 16 && !(skip3 && i == 3) && unlocked(rdram, l))   // 12 Training, 16 Tokyo Deathmatch: de teste
+            if (l != kRandom && l != 12 && l != 16 && !(skip3 && i == 3) && unlocked(rdram, l))   // 12 Training, 16 Tokyo Deathmatch: test stages
                 pool.push_back(l);
         }
     }
@@ -116,11 +117,11 @@ bool resolveRandom(uint8_t *rdram)
     static std::mt19937 rng{std::random_device{}()};
     const int pick = pool[std::uniform_int_distribution<size_t>(0, pool.size() - 1)(rng)];
     wr32(rdram, kLevelNum, uint32_t(pick));
-    std::fprintf(stderr, "[fases] RANDOM: fase %d (de %zu)\n", pick, pool.size());
+    std::fprintf(stderr, "[stages] RANDOM: stage %d (of %zu)\n", pick, pool.size());
     return true;
 }
 
-// ------------------------------------------------------------------ janela: foto propria por cima da emprestada
+// ------------------------------------------------------------------ window: own picture over the borrowed one
 
 static const char *picName(int level)
 {
@@ -143,7 +144,7 @@ static fs::path findPic(const std::string &name)
         return host;
     const fs::path modsDir = wotm::mods::Registry::get().dir();
     const fs::path dirs[] = {modsDir.empty() ? fs::path{} : modsDir.parent_path() / "levelpics",
-                             fs::path(__FILE__).parent_path().parent_path().parent_path() / "levelpics"};   // native/runtime -> raiz do repo
+                             fs::path(__FILE__).parent_path().parent_path().parent_path() / "levelpics"};   // native/runtime -> repo root
     for (const fs::path &d : dirs)
         if (!d.empty() && fs::is_regular_file(d / file, ec))
             return d / file;
@@ -153,31 +154,31 @@ static fs::path findPic(const std::string &name)
 struct Pic
 {
     bool tried = false;
-    Texture2D full{}, half[2]{};   // a foto inteira e as metades esquerda e direita (objeto com duas texturas)
+    Texture2D full{}, half[2]{};   // the whole picture and its left and right halves (object with two textures)
 };
 static Pic g_pics[24];
 
-// Imagem de cima para baixo -> textura como as do jogo no Scene::draw: alfa cru (0x80 = opaco) e linhas de baixo para cima (o jogo
-// desenha com V invertido; os PNGs de mod do tools/tex.py ja vem assim). Libera a imagem.
+// Top-down image -> texture like the game's in Scene::draw: raw alpha (0x80 = opaque) and rows bottom to top (the game draws
+// with V flipped; mod PNGs from tools/tex.py already come that way). Frees the image.
 static Texture2D gameTexture(Image img)
 {
     ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
     ImageFlipVertical(&img);
     uint8_t *px = static_cast<uint8_t *>(img.data);
     for (size_t i = 0, n = size_t(img.width) * size_t(img.height); i < n; ++i)
-        px[4 * i + 3] = 0xFF;   // como as paletas das fotos do SHELL (ate 0xFF: o desenho as leva acima de 1 e elas saem mais claras)
+        px[4 * i + 3] = 0xFF;   // like the SHELL pictures' palettes (up to 0xFF: drawing takes them above 1 and they come out brighter)
     Texture2D t = LoadTextureFromImage(img);
     UnloadImage(img);
     if (t.id)
     {
         GenTextureMipmaps(&t);
         SetTextureFilter(t, TEXTURE_FILTER_TRILINEAR);
-        SetTextureWrap(t, TEXTURE_WRAP_REPEAT);   // o UV do objeto da foto vai de -1 a 0 (o GS repete a textura); com CLAMP, uma cor so
+        SetTextureWrap(t, TEXTURE_WRAP_REPEAT);   // the picture object's UV runs from -1 to 0 (the GS repeats the texture); with CLAMP it's a single color
     }
     return t;
 }
 
-// Mosaico da RANDOM sem PNG: 4 x 4 fotos de fase do SHELL.TEX (savepics) em 1024x512, escurecidas, com um "?"
+// RANDOM mosaic when there's no PNG: 4 x 4 stage pictures from SHELL.TEX (savepics) in 1024x512, darkened, with a "?"
 static Image mosaic()
 {
     static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
@@ -191,7 +192,7 @@ static Image mosaic()
     Image m = GenImageColor(W, H, BLACK);
     for (int i = 0; i < 16; ++i)
     {
-        const Image &t = tiles[size_t(i * 5) % tiles.size()];   // repete as fotos quando sao menos de 16, sem duas iguais lado a lado
+        const Image &t = tiles[size_t(i * 5) % tiles.size()];   // repeats pictures when there are fewer than 16, without two identical ones side by side
         ImageDraw(&m, t, Rectangle{0.f, 0.f, float(t.width), float(t.height)}, Rectangle{float((i % 4) * TW), float((i / 4) * TH), float(TW), float(TH)},
                   WHITE);
     }
@@ -241,11 +242,11 @@ static const Pic &picOf(int level)
         p.half[1] = gameTexture(ImageFromImage(img, Rectangle{w * 0.5f, 0.f, w * 0.5f, h}));
         p.full = gameTexture(img);
     }
-    std::fprintf(stderr, "[fases] foto da fase %d: %s\n", level, own ? f.string().c_str() : p.full.id ? "mosaico das fotos do SHELL.TEX" : "a do jogo");
+    std::fprintf(stderr, "[stages] picture for stage %d: %s\n", level, own ? f.string().c_str() : p.full.id ? "mosaic of SHELL.TEX pictures" : "the game's");
     return p;
 }
 
-// OBJECT da foto no filho `which` do switch (GROUP com o OBJECT e um CHAR_INSTANCE); 0 = nao achado
+// The picture's OBJECT in child `which` of the switch (a GROUP with the OBJECT and a CHAR_INSTANCE); 0 = not found
 static uint32_t picObject(const wotm::Ram &ram, uint32_t sw, int which)
 {
     if (which >= ram.u8(sw + 0xB))
@@ -259,8 +260,8 @@ static uint32_t picObject(const wotm::Ram &ram, uint32_t sw, int which)
     return obj;
 }
 
-// Objeto da foto com uma textura so (13, 16, 17): as duas metades da malha mapeiam a mesma textura de -1 a 0 (a metade da foto de
-// outra fase, repetida). Refaz o U pela posicao no eixo mais longo (a largura), no mesmo sentido em que ele crescia em cada metade.
+// Picture object with a single texture (13, 16, 17): both halves of the mesh map the same texture from -1 to 0 (half of another
+// stage's picture, repeated). Rebuilds U from the position along the longest axis (the width), in the direction it grew in each half.
 static void wideUv(wotm::MeshData &md)
 {
     if (md.tris.empty())
@@ -277,7 +278,7 @@ static void wideUv(wotm::MeshData &md)
     const float span = hi[ax] - lo[ax];
     if (span <= 0.f)
         return;
-    // sentido: correlacao do U com a posicao dentro de cada metade (dente de serra, mas com o mesmo sinal)
+    // direction: correlation of U with the position within each half (a sawtooth, but with the same sign)
     double cov = 0.0;
     float mu = 0.f;
     for (const wotm::Vtx &t : md.tris) mu += t.u;
@@ -297,8 +298,8 @@ static void wideUv(wotm::MeshData &md)
 }
 
 static constexpr int kOwn[] = {12, 13, 16, kRandom};
-static uint32_t g_obj[24];      // objeto da foto de cada fase de kOwn neste quadro (0 = fora do menu ou nao conferiu)
-static uint16_t g_numTex[24];   // texturas dele (2 no da 12: metades)
+static uint32_t g_obj[24];      // picture object of each kOwn stage this frame (0 = outside the menu or not matched)
+static uint16_t g_numTex[24];   // its texture count (2 for stage 12's: halves)
 
 static unsigned nodeTexture(uint32_t node, uint32_t slot)
 {
@@ -313,9 +314,9 @@ static unsigned nodeTexture(uint32_t node, uint32_t slot)
     return 0;
 }
 
-// Thread da janela, antes do Scene::draw: acha os objetos das fotos no switch da selecao de fase e carrega as fotos na primeira vez.
-// Na luta o ponteiro do Shell+0x5D0 fica velho e a RAM e da fase: so vale a forma do no do menu (SWITCH de 24 filhos, cada um GROUP
-// com o OBJECT e um CHAR_INSTANCE) com o objeto no instantaneo da cena.
+// Window thread, before Scene::draw: finds the picture objects in the stage select switch and loads the pictures the first time.
+// During a fight the Shell+0x5D0 pointer goes stale and RAM belongs to the stage: only the menu node's shape counts (a SWITCH with
+// 24 children, each a GROUP with the OBJECT and a CHAR_INSTANCE) with the object in the scene snapshot.
 void prepare(wotm::Scene &scene, const wotm::Ram &ram)
 {
     scene.nodeTexture = &nodeTexture;
@@ -334,19 +335,19 @@ void prepare(wotm::Scene &scene, const wotm::Ram &ram)
         for (const wotm::DrawItem &i : scene.items)
             if ((i.node & 0x1FFFFFFFu) == o) { drawn = true; break; }
         if (ram.u32(wotm::sym::currScreen) == 8)
-            picOf(l);   // na entrada da tela: as quatro carregadas antes de aparecerem
+            picOf(l);   // on entering the screen: all four loaded before they appear
         if (!drawn || !picOf(l).full.id)
             continue;
         if (nt == 1)
-            scene.patchMesh(ram, o, wideUv);   // uma textura nas duas metades: a foto inteira de ponta a ponta
+            scene.patchMesh(ram, o, wideUv);   // one texture on both halves: the whole picture end to end
         g_obj[l] = o;
         g_numTex[l] = nt;
         picOf(l);
     }
 }
-// Selo "UNUSED" a direita do nome da fase (o screenWriteInstructions o escreve centrado em y 10 da tela do jogo) nas fases que o
-// retail nao oferece (12, 13 e 16; a RANDOM nao). Pelos glifos do quadro (Scene::text) no alto da tela; alfa e altura os deles.
-// Thread da janela, depois do texto do jogo.
+// "UNUSED" badge to the right of the stage name (screenWriteInstructions writes it centered at y 10 of the game screen) on stages the
+// retail game doesn't offer (12, 13 and 16; not RANDOM). Placed from the frame's glyphs (Scene::text) at the top of the screen, with
+// their alpha and height. Window thread, after the game's text.
 void drawBadge(const std::vector<wotm::TextQuad> &text, const wotm::Ram &ram, int rw, int rh)
 {
     if (ram.u32(wotm::sym::currScreen) != 8 || !(g_obj[12] || g_obj[13] || g_obj[16]))

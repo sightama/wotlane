@@ -41,23 +41,23 @@ $blocks = [ordered]@{}
 foreach ($f in $files) { $blocks[$f] = New-Object System.Collections.Generic.List[string] }
 $curBlock = $null
 foreach ($l in $all) {
-    if ($l -match '^\[vu1cmp\] arquivo (.+)$') { $curBlock = $blocks[$Matches[1]]; continue }
+    if ($l -match '^\[vu1cmp\] file (.+)$') { $curBlock = $blocks[$Matches[1]]; continue }
     if ($null -ne $curBlock) { $curBlock.Add($l) }
 }
-if ($p.ExitCode -ne 0 -and -not ($all -match '^\[vu1cmp\] arquivo ')) {   # o runtime nem abriu
+if ($p.ExitCode -ne 0 -and -not ($all -match '^\[vu1cmp\] file ')) {   # o runtime nem abriu
     $all | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
     exit 1
 }
 foreach ($f in $files) {
     $lines = $blocks[$f]
     Write-Host ("== {0}" -f (Split-Path $f -Leaf)) -ForegroundColor Cyan
-    if (-not ($lines -match ': [1-9]\d* quadro\(s\) comparados$')) {   # o arquivo falhou (nao abriu, outro build, sem o quadro pedido)
+    if (-not ($lines -match ': [1-9]\d* frame\(s\) compared$')) {   # o arquivo falhou (nao abriu, outro build, sem o quadro pedido)
         $rc = 1
         $lines | Where-Object { $_ -match '\[vu1cmp\]' } | ForEach-Object { Write-Host $_ -ForegroundColor Yellow }
         continue
     }
     # padrao: resumos de cada quadro e o inventario inteiro (linhas "inv": o que so um lado desenha, por dono)
-    $sel = if ($Full) { $lines | Where-Object { $_ -match '\[vu1check\]|\[vu1cmp\] (imagens|sem quadro|a camada)' } } else { $lines | Where-Object { $_ -match '\[vu1check\] (g=\d+ |inv )|\[vu1cmp\] (imagens|sem quadro|a camada)' } }
+    $sel = if ($Full) { $lines | Where-Object { $_ -match '\[vu1check\]|\[vu1cmp\] (images|no GS frame|the native layer)' } } else { $lines | Where-Object { $_ -match '\[vu1check\] (g=\d+ |inv )|\[vu1cmp\] (images|no GS frame|the native layer)' } }
     $sel | ForEach-Object { $_ -replace '^\[vu1check\] ', '' }
 }
 exit $rc

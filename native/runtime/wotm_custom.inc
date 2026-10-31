@@ -1,21 +1,21 @@
-// Monstros custom (MODS.md, "Monstros custom"): monstros que o jogo nao oferece na selecao, jogados numa luta comum. Os chefes
-// que sao Monster: o Goliath Prime (tipo 13, "assboss", MON/ASSBOSS1.*), chefe da aventura em canyon2, e as duas ultimas fases do
-// Cerebulon na fase final (14 "jelly", MON/JELLY0.*, e 15 "final", MON/FINAL0.*; a primeira, o Mecha, e peca da fase e nao
-// Monster). Incluido pelo wotm_overrides.cpp, depois do wotm_skins.inc. Investigacao: git show
-// 18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md (e goliath_selecao.md).
+// Custom monsters (MODS.md, "Monstros custom"): monsters the game doesn't offer at selection, played in a regular fight. The bosses
+// that are Monsters: Goliath Prime (type 13, "assboss", MON/ASSBOSS1.*), the adventure boss in canyon2, and Cerebulon's last two
+// forms in the final stage (14 "jelly", MON/JELLY0.*, and 15 "final", MON/FINAL0.*; the first form, the Mecha, is a piece of the
+// stage, not a Monster). Included by wotm_overrides.cpp, after wotm_skins.inc. Investigation: git show
+// 18bb1d2:docs/investigacoes/2026-10-23/goliath_codigo.md (and goliath_selecao.md).
 //
-// - TheGame::SetAIMonster: a cada IA que entra, o retail desliga todo slot dos tipos 0x1A0, 0x1C0 e 0x1E0 (disableMonster:
-//   m_playerNum 0 e drawMe 0 no m_cs, na sombra e nos _cs de +0x71F8/+0x71FC; na aventura e o que esconde o chefe ate a cena).
-//   Com um chefe como jogador ele ficava invisivel e parado. Aqui o que o disableMonster zera nos jogadores (m_monsters[0..3])
-//   volta depois da chamada; o chefe da aventura e uma IA (m_monsters[4..]) e continua como no retail. O retail tambem conta todo
-//   slot 0x1C0/0x1E0 em m_numAIs (os dois esperam escondidos na fase final): um jogador desses tipos sai da conta, senao os lacos
-//   por m_monsters[4 + i] leriam uma IA a mais (nula).
-// - Monster::takeHit: no 0x1A0 o dano so passa com o attackState do chefe em 4 ou 10 ou vindo do jogador 1 (attackerId ==
-//   m_monsters[0]->m_id). Com o Goliath jogador, as IAs nao o machucavam. Durante a chamada, o m_id do jogador 1 vale o do
-//   atacante (a unica leitura de m_monsters[0] no takeHit e esse teste); o resto do takeHit segue o caminho normal (bloqueio,
-//   recuos). So quando o Goliath atingido e um jogador.
+// - TheGame::SetAIMonster: every time an AI joins, retail disables every slot of types 0x1A0, 0x1C0 and 0x1E0 (disableMonster:
+//   m_playerNum 0 and drawMe 0 on m_cs, on the shadow and on the _cs at +0x71F8/+0x71FC; in the adventure this is what hides the
+//   boss until its cutscene). With a boss as a player it ended up invisible and frozen. Here whatever disableMonster clears on the
+//   players (m_monsters[0..3]) is restored after the call; the adventure boss is an AI (m_monsters[4..]) and stays as in retail.
+//   Retail also counts every 0x1C0/0x1E0 slot in m_numAIs (both wait hidden in the final stage): a player of those types is taken
+//   out of the count, otherwise the loops over m_monsters[4 + i] would read one AI too many (null).
+// - Monster::takeHit: on 0x1A0, damage only goes through when the boss's attackState is 4 or 10 or it comes from player 1
+//   (attackerId == m_monsters[0]->m_id). With Goliath as a player, the AIs couldn't hurt it. During the call, player 1's m_id is set
+//   to the attacker's (the only read of m_monsters[0] in takeHit is that test); the rest of takeHit follows the normal path
+//   (blocking, knockback). Only when the Goliath being hit is a player.
 
-#include "wotm_disc.hpp"   // .CHR do monstro base da camera (camTable)
+#include "wotm_disc.hpp"   // .CHR of the base monster for the camera (camTable)
 
 namespace wotm_custom
 {
@@ -27,7 +27,7 @@ namespace wotm_custom
     constexpr uint32_t kNumAIs = 0x1203E0, kGameMode = 0x1203C8;   // TheGame::m_numAIs, m_gameMode
     constexpr uint32_t kSlots = 0xB80, kSlotStride = 0x11190, kNumSlots = 0x1203D4;   // TheGame::m_slots[16], m_numSlots
     constexpr uint32_t kGoliath = 13u << 5, kJelly = 14u << 5, kFinal = 15u << 5;
-    // Chefe que e Monster (a selecao nao oferece; o SetAIMonster o esconde)
+    // A boss that is a Monster (selection doesn't offer it; SetAIMonster hides it)
     bool bossType(uint32_t bits) { return bits == kGoliath || bits == kJelly || bits == kFinal; }
     PS2Runtime::RecompiledFunction g_origSetAI = nullptr, g_origTakeHit = nullptr;
 
@@ -53,7 +53,7 @@ namespace wotm_custom
             g_origSetAI(rdram, ctx, runtime);
             return;
         }
-        // fora da aventura, todos os slots de chefe (um chefe CPU tambem fica visivel); na aventura, so os dos jogadores
+        // outside the adventure, every boss slot (a CPU boss stays visible too); in the adventure, only the players' slots
         const bool adventure = READ32(kGameObj + kGameMode) == 1u;
         const uint32_t slots = std::min(16u, READ32(kGameObj + kNumSlots));
         Saved saved[16];
@@ -77,25 +77,25 @@ namespace wotm_custom
         for (int j = 0; j < n; ++j)
         {
             const Saved &s = saved[j];
-            // IA desta luta (m_monsters[4..]): o aiInit lhe deu m_playerNum 2, que o disableMonster zerou. So o Jelly e o Cerebulon:
-            // a IA do Goliath (Ai::updateAssBoss) precisa dos pontos da fase dele
+            // An AI in this fight (m_monsters[4..]): aiInit gave it m_playerNum 2, which disableMonster cleared. Only Jelly and
+            // Cerebulon: Goliath's AI (Ai::updateAssBoss) needs the points of its own stage
             bool cpu = false;
             const uint32_t bits = READ32(s.m + kTypeBits);
             for (uint32_t i = 0; i < 12 && !cpu && (bits == kJelly || bits == kFinal); ++i)
                 cpu = READ32(kGameObj + kMonsters + 4 * (4 + i)) == s.m;
             const bool player = isPlayerSlot(rdram, ctx, runtime, s.m);
             if (!player && !cpu)
-                continue;   // carregado e ainda sem IA: o retail o esconde ate o SetAIMonster dele
+                continue;   // loaded but with no AI yet: retail hides it until its own SetAIMonster
             WRITE32(s.m + kPlayerNum, player ? s.playerNum : 2u);
-            // o jogador volta como estava; a CPU fica com o corpo e a sombra ligados, como uma IA comum depois do SetAIMonster
-            // (antes dele os quatro estao desligados), e os dois _cs extras desligados, como os do jogador
+            // the player goes back to how it was; the CPU gets body and shadow on, like a regular AI after SetAIMonster
+            // (before it all four are off), and the two extra _cs off, like the player's
             for (int k = 0; k < 4; ++k)
                 if (s.cs[k])
                     WRITE8(s.cs[k] + kDrawMe, player ? s.draw[k] : uint8_t(k < 2));
             if (!player)
                 continue;
-            // contado pelo retail (m_playerNum 2 antes do disableMonster, ou tipo 0x1C0/0x1E0); o setAIMonsterCounted do
-            // WOTM_AIVSAI nao o desconta, porque ja o le zerado
+            // counted by retail (m_playerNum 2 before disableMonster, or type 0x1C0/0x1E0); WOTM_AIVSAI's setAIMonsterCounted
+            // doesn't subtract it, because it already reads it as zero
             const uint32_t type = READ32(s.m + kTypeBits);
             if (s.playerNum == 2u || type == kJelly || type == kFinal)
                 --ais;
@@ -118,27 +118,27 @@ namespace wotm_custom
             WRITE32(p1 + kId, oldId);
     }
 
-    // Som: o SoundManager::loadMonsterBank (e o de baixa resolucao) nao tem caso para os chefes. Os sons do Goliath sao do banco do
-    // chefe (gSoundBanks[BANK_MECH], Assemb_s.bnk), que o retail so carrega na cena do chefe em canyon2 (canyon2BossIntro); os do
-    // Jelly e da forma final, do Final_s.bnk (gSoundBanks[BANK_FINAL]), que o loadRTSoundBanks so carrega na fase final da
-    // aventura. Fora da aventura, o pedido do banco do 0x1A0 vira o SoundManager::loadMechBossSoundBank (mesmo this), como um
-    // salto, e o do 0x1C0/0x1E0 vira o m_banks.loadSoundBank(&gSoundBanks[BANK_FINAL], "Final_s.bnk", autoUnload) (que nao faz nada
-    // com o banco ja carregado: os dois tipos na mesma luta dividem um).
+    // Sound: SoundManager::loadMonsterBank (and the low-res one) has no case for the bosses. Goliath's sounds are in the boss bank
+    // (gSoundBanks[BANK_MECH], Assemb_s.bnk), which retail only loads in the boss cutscene in canyon2 (canyon2BossIntro); Jelly's
+    // and the final form's are in Final_s.bnk (gSoundBanks[BANK_FINAL]), which loadRTSoundBanks only loads in the adventure's final
+    // stage. Outside the adventure, the bank request for 0x1A0 becomes SoundManager::loadMechBossSoundBank (same this), as a
+    // jump, and the one for 0x1C0/0x1E0 becomes m_banks.loadSoundBank(&gSoundBanks[BANK_FINAL], "Final_s.bnk", autoUnload) (which
+    // does nothing when the bank is already loaded: both types in the same fight share one).
     constexpr uint32_t kLoadBank = wotm::fn::loadMonsterBank__12SoundManagerii, kLoadLoBank = wotm::fn::loadLoResMonsterBank__12SoundManagerii,
                        kLoadMech = wotm::fn::loadMechBossSoundBank__12SoundManager,
                        kLoadSoundBank = wotm::fn::loadSoundBank__16SoundBankManagerPPvPci;
     constexpr uint32_t kSndBanks = 0x210, kBankFinal = 24;   // SoundManager::m_banks, BANK_FINAL
     PS2Runtime::RecompiledFunction g_origLoadBank = nullptr, g_origLoadLoBank = nullptr, g_loadMech = nullptr;
 
-    // Nome na tela ("%s CRUSHED", "%s WINS"): a entrada do tipo nas 5 copias do MonsterNewNames[17][12] ("assboss", "jelly",
-    // "final"); fica o "name" do monster.json (ate 11 letras, minusculas como as do jogo) ou `fallback`
+    // On-screen name ("%s CRUSHED", "%s WINS"): the type's entry in the 5 copies of MonsterNewNames[17][12] ("assboss", "jelly",
+    // "final"); gets monster.json's "name" (up to 11 letters, lowercase like the game's) or `fallback`
     void setShownName(uint8_t *rdram, uint32_t type, const char *fallback)
     {
         std::string shown = fallback;
         if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().customByType(int(type)))
         {
             std::string n = cu->name;
-            if (n.size() > 11)   // "GOLIATH PRIME" -> "goliath": corta na ultima palavra que cabe
+            if (n.size() > 11)   // "GOLIATH PRIME" -> "goliath": cut at the last word that fits
             {
                 const size_t sp = n.rfind(' ', 11);
                 n = n.substr(0, sp != std::string::npos && sp > 0 ? sp : 11);
@@ -162,7 +162,7 @@ namespace wotm_custom
         if ((bits == kJelly || bits == kFinal) && READ32(kGameObj + kGameMode) != 1u)
         {
             const uint32_t self = GPR_U32(ctx, 4), autoUnload = GPR_U32(ctx, 6);
-            std::fprintf(stderr, "[custom] banco de som do %s (Final_s.bnk)\n", bits == kJelly ? "Jelly" : "Cerebulon");
+            std::fprintf(stderr, "[custom] sound bank for %s (Final_s.bnk)\n", bits == kJelly ? "Jelly" : "Cerebulon");
             setShownName(rdram, bits >> 5, bits == kJelly ? "jelly" : "cerebulon");
             wotm_modes4::call(rdram, ctx, runtime, kLoadSoundBank,
                               {self + kSndBanks, wotm::sym::gSoundBanks + 4 * kBankFinal, wotm_modes4::scratchText(rdram, "Final_s.bnk"), autoUnload});
@@ -171,7 +171,7 @@ namespace wotm_custom
         }
         if (bits == kGoliath && READ32(kGameObj + kGameMode) != 1u && g_loadMech)
         {
-            std::fprintf(stderr, "[custom] banco de som do Goliath (Assemb_s.bnk, loadMechBossSoundBank)\n");
+            std::fprintf(stderr, "[custom] sound bank for Goliath (Assemb_s.bnk, loadMechBossSoundBank)\n");
             setShownName(rdram, 13, "goliath");
             ctx->pc = kLoadMech;
             g_loadMech(rdram, ctx, runtime);
@@ -182,27 +182,27 @@ namespace wotm_custom
     void loadBank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { loadBankCommon(rdram, ctx, runtime, kLoadBank, g_origLoadBank); }
     void loadLoBank(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { loadBankCommon(rdram, ctx, runtime, kLoadLoBank, g_origLoadLoBank); }
 
-    // Camera: o RST/ASSBOSS.CHR traz parametros de camera que o retail nunca usou (no POV 0 a camera fica na frente e baixa:
-    // m_00 = (-70, 336, 90) contra (0, -255, 150) do Togera), e a do RST/JELLY.CHR fica nas pernas do Jelly. A tabela de camera do
-    // monstro (+0x6CF0: 10 POVs de 0xA0, mais 10 da tela dividida) vem do .CHR dele (MonsterTweaks::setActiveMonster) e o
-    // Cameras::SetCameraPOV copia o POV pedido para a camera. Um custom com "camera" fica com a tabela do .CHR do monstro base,
-    // com as tres distancias de cada POV (m_00, m_10, m_20) escaladas: na entrada do SetCameraPOV de uma camera que segue o custom,
-    // a tabela calculada vai para o monstro antes da copia.
-    // A tabela do base sai do .CHR lido no host (mods/ ou disco), da chave de camera como o charreset::readKey a le (tipo 0xFC6:
-    // depois de 0x10 bytes, 2 telas de 9 POVs de 0xA0, que vao para os POVs 0..8 de cada tela; o resto da tabela fica o do
-    // monstro). Nada de ler o .CHR pelo jogo dentro de um gancho: o setActiveMonster chamado duas vezes deixava as vezes a
-    // tabela do proprio .CHR por cima da emprestada.
+    // Camera: RST/ASSBOSS.CHR carries camera parameters retail never used (at POV 0 the camera sits in front and low:
+    // m_00 = (-70, 336, 90) versus Togera's (0, -255, 150)), and RST/JELLY.CHR's sits at Jelly's legs. The monster's camera table
+    // (+0x6CF0: 10 POVs of 0xA0, plus 10 for split screen) comes from its .CHR (MonsterTweaks::setActiveMonster) and
+    // Cameras::SetCameraPOV copies the requested POV into the camera. A custom with "camera" gets the table from the base monster's
+    // .CHR, with the three distances of each POV (m_00, m_10, m_20) scaled: on entry to SetCameraPOV for a camera following the
+    // custom, the computed table is written into the monster before the copy.
+    // The base's table comes from the .CHR read on the host (mods/ or disc), from the camera key as charreset::readKey reads it
+    // (type 0xFC6: after 0x10 bytes, 2 screens of 9 POVs of 0xA0, which go to POVs 0..8 of each screen; the rest of the table stays
+    // the monster's). Never read the .CHR through the game inside a hook: calling setActiveMonster twice sometimes left the
+    // .CHR's own table on top of the borrowed one.
     constexpr uint32_t kSetPov = wotm::fn::SetCameraPOV__7CamerasiQ26Camera9CameraPOV;
     constexpr uint32_t kCamTable = 0x6CF0, kCamPovs = 20, kCamPov = 0xA0, kCamSplit = 0x640;
     constexpr uint32_t kCameras = wotm::sym::x_7Cameras_m_cameras, kCamStride = 0xEB0, kCamMonster = 0xCF4;
     constexpr uint32_t kChrCameraKey = 0xFC6, kChrKeyData = 0x10, kChrPovs = 9, kChrSplit = kChrPovs * kCamPov, kChrHeader = 12;
-    // Sem monster.json (WOTM_MATCH=13): a do Togera em dobro. Com ele, a do "camera" do mod ({"from", "scale"}).
+    // Without monster.json (WOTM_MATCH=13): Togera's, doubled. With it, the mod's "camera" ({"from", "scale"}).
     constexpr const char *kCamBaseDefault = "lizard";
     constexpr float kCamScaleDefault = 2.0f;
     PS2Runtime::RecompiledFunction g_origSetPov = nullptr;
-    std::map<std::string, std::vector<uint8_t>> g_camTables;   // "<base>*<escala>" -> tabela pronta (vazia = falhou)
+    std::map<std::string, std::vector<uint8_t>> g_camTables;   // "<base>*<scale>" -> finished table (empty = failed)
 
-    // Chave de camera do .CHR -> tabela (sobre `cam`, a do monstro); false sem a chave
+    // .CHR camera key -> table (on top of `cam`, the monster's own); false without the key
     bool chrCamera(const std::vector<uint8_t> &file, std::vector<uint8_t> &cam)
     {
         auto rd = [&](size_t o) { uint32_t v = 0; if (o + 4 <= file.size()) std::memcpy(&v, &file[o], 4); return v; };
@@ -218,10 +218,10 @@ namespace wotm_custom
                     {
                         const uint8_t *src = &file[o + kChrKeyData + s * kChrSplit + p * kCamPov];
                         uint8_t *dst = &cam[s * kCamSplit + p * kCamPov];
-                        for (uint32_t v = 0; v < 3; ++v)   // m_00, m_10, m_20 (sem o w)
+                        for (uint32_t v = 0; v < 3; ++v)   // m_00, m_10, m_20 (without w)
                             std::memcpy(dst + v * 16, src + v * 16, 12);
-                        std::memcpy(dst + 0x30, src + 0x30, 0x94 - 0x30);   // 3 PitchChange e os escalares
-                        std::memcpy(dst + 0x94, src + 0x98, 4);             // 0x94 e 0x98 trocados no readKey
+                        std::memcpy(dst + 0x30, src + 0x30, 0x94 - 0x30);   // 3 PitchChange and the scalars
+                        std::memcpy(dst + 0x94, src + 0x98, 4);             // 0x94 and 0x98 are swapped in readKey
                         std::memcpy(dst + 0x98, src + 0x94, 4);
                         std::memcpy(dst + 0x9C, src + 0x9C, 4);
                     }
@@ -258,8 +258,8 @@ namespace wotm_custom
         std::vector<uint8_t> table(mon, mon + kCamPovs * kCamPov);
         if (!chrCamera(file, table))
         {
-            std::fprintf(stderr, "[custom] %s: camera do %s nao carregou (%s); fica a do proprio .CHR\n", who, rel.c_str(),
-                         file.empty() ? "arquivo nao achado" : "sem a chave de camera");
+            std::fprintf(stderr, "[custom] %s: camera from %s did not load (%s); keeping its own .CHR's\n", who, rel.c_str(),
+                         file.empty() ? "file not found" : "no camera key");
             return cam;
         }
         cam = std::move(table);
@@ -274,7 +274,7 @@ namespace wotm_custom
                 }
         float d10[3];
         std::memcpy(d10, cam.data(), 12);
-        std::fprintf(stderr, "[custom] %s: camera do %s, distancias x%.2f (POV 0: %.0f, %.0f, %.0f)\n", who, rel.c_str(), scale, d10[0], d10[1], d10[2]);
+        std::fprintf(stderr, "[custom] %s: camera from %s, distances x%.2f (POV 0: %.0f, %.0f, %.0f)\n", who, rel.c_str(), scale, d10[0], d10[1], d10[2]);
         return cam;
     }
 
@@ -294,10 +294,10 @@ namespace wotm_custom
         }
         g_origSetPov(rdram, ctx, runtime);
     }
-    // Dardo (StateJavelin): o Weapon::DetonateWeapon chama o Monster::attachPickupImpaler na vitima, que entra no StateImpaled pelo
-    // enterNewState sem o transitionOK (o que barraria quem nao tem as anims 0x8E..0x90). O StateImpaled::update so sai com a anim
-    // 0x90 no fim; sem ela (ASSBOSS0/1) a vitima travava para sempre. Sem essas anims, o gancho faz o que o retail faz com pickup
-    // invalido: killPickup(it, 1) e volta. O golpe do objeto (dispatchHit) chega como um comum. Investigacao: 18bb1d2:docs/investigacoes/2026-10-23/goliath_impale.md.
+    // Javelin (StateJavelin): Weapon::DetonateWeapon calls Monster::attachPickupImpaler on the victim, which enters StateImpaled via
+    // enterNewState without transitionOK (which would have blocked anyone lacking anims 0x8E..0x90). StateImpaled::update only exits
+    // when anim 0x90 ends; without it (ASSBOSS0/1) the victim was stuck forever. Without those anims, the hook does what retail does
+    // with an invalid pickup: killPickup(it, 1) and return. The object's hit (dispatchHit) lands as a regular one. Investigation: 18bb1d2:docs/investigacoes/2026-10-23/goliath_impale.md.
     constexpr uint32_t kImpale = wotm::fn::attachPickupImpaler__7MonsterGQ2t10LinkedList1ZP6Pickup8IteratorP8_fvector,
                        kKillPickup = wotm::fn::killPickup__12LevelPickupsGQ2t10LinkedList1ZP6Pickup8Iteratori;
     constexpr uint32_t kAnims = 0x1CF0, kAnimStride = 0x10;   // Monster::m_anims[id].ci
@@ -315,21 +315,21 @@ namespace wotm_custom
             g_origImpale(rdram, ctx, runtime);
             return;
         }
-        std::fprintf(stderr, "[custom] dardo: monstro tipo %u sem as anims de empalado; vira golpe comum\n", READ32(m + kTypeBits) >> 5);
+        std::fprintf(stderr, "[custom] javelin: monster type %u has no impaled anims; becomes a regular hit\n", READ32(m + kTypeBits) >> 5);
         ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(GPR_U32(ctx, 5))));
         ctx->r[5] = _mm_set_epi64x(0, 1);
         ctx->pc = kKillPickup;
         g_killPickup(rdram, ctx, runtime);
     }
-    // Giro (StateTopSpin, Monster+0x10EBC; investigacao 18bb1d2:docs/investigacoes/2026-10-23/goliath_topspin.md). Nos monstros comuns X+Quadrado (PadFlags +0x38) e o
-    // StateCrowdControl (+0xF3F0), que no Goliath nunca comeca (pede a anim de efeito do tipo, que ele nao tem). So a IA do chefe
-    // entrava no TopSpin, pelo setAssBossState(12). Com o Goliath jogador:
-    //  - StateCrowdControl::transitionOK: X+Quadrado no chao (Idle ou Run), com ataques ligados, sem objeto grande e o
-    //    transitionOK do TopSpin aceito;
-    //  - Monster::enterNewState: o CrowdControl vira o TopSpin;
-    //  - StateTopSpin::update: o golpe cheio (dano, empurrao, som) so acerta m_monsters[0], que e ele mesmo; durante a chamada vale a
-    //    IA viva mais perto;
-    //  - Ai::setAssBossState (chamado pelo update a cada batida): so faz algo para o chefe da aventura (o dono e o assBoss).
+    // Spin (StateTopSpin, Monster+0x10EBC; investigation 18bb1d2:docs/investigacoes/2026-10-23/goliath_topspin.md). On regular monsters X+Square (PadFlags +0x38) is
+    // StateCrowdControl (+0xF3F0), which never starts on Goliath (it asks for the type's effect anim, which Goliath lacks). Only the
+    // boss AI entered TopSpin, via setAssBossState(12). With Goliath as a player:
+    //  - StateCrowdControl::transitionOK: X+Square on the ground (Idle or Run), with attacks enabled, not holding a large object and
+    //    TopSpin's transitionOK accepted;
+    //  - Monster::enterNewState: CrowdControl becomes TopSpin;
+    //  - StateTopSpin::update: the full hit (damage, push, sound) only lands on m_monsters[0], which is Goliath itself; during the call
+    //    it is set to the nearest living AI;
+    //  - Ai::setAssBossState (called by update on every hit): only acts for the adventure boss (whose owner is assBoss).
     constexpr uint32_t kCrowdOK = wotm::fn::transitionOK__17StateCrowdControl, kEnterState = wotm::fn::enterNewState__7MonsterP12MonsterState,
                        kSpinUpdate = wotm::fn::update__12StateTopSpin, kSpinOK = wotm::fn::transitionOK__12StateTopSpin,
                        kSetBossState = wotm::fn::setAssBossState__2Aii, kHoldingLarge = wotm::fn::isHoldingLarge__7Monster,
@@ -370,10 +370,10 @@ namespace wotm_custom
         if (ctx->pc == kEnterState && GPR_U32(ctx, 5) == m + kCrowd && goliathPlayer(rdram, ctx, runtime, m))
         {
             ctx->r[5] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(m + kSpin)));
-            std::fprintf(stderr, "[custom] Goliath: giro (X+Quadrado)\n");
+            std::fprintf(stderr, "[custom] Goliath: spin (X+Square)\n");
         }
         if (ctx->pc == kEnterState && GPR_U32(ctx, 5) == m + kTazer && READ32(m + kTypeBits) == kJelly && isPlayerSlot(rdram, ctx, runtime, m))
-            std::fprintf(stderr, "[custom] Jelly: choque (%s)\n", READ32(m + kPlayerNum) == 2u ? "IA" : "Triangulo+Circulo");
+            std::fprintf(stderr, "[custom] Jelly: shock (%s)\n", READ32(m + kPlayerNum) == 2u ? "AI" : "Triangle+Circle");
         g_origEnterState(rdram, ctx, runtime);
     }
 
@@ -412,16 +412,16 @@ namespace wotm_custom
             const uint32_t boss = READ32(wotm::sym::assBoss);
             if (!boss || READ32(GPR_U32(ctx, 4)) != boss)
             {
-                ctx->pc = GPR_U32(ctx, 31);   // void: so o chefe da aventura (ou o WOTM_AIVSAI, que roda o initAssBoss)
+                ctx->pc = GPR_U32(ctx, 31);   // void: only the adventure boss (or WOTM_AIVSAI, which runs initAssBoss)
                 return;
             }
         }
         g_origSetBossState(rdram, ctx, runtime);
     }
-    // Olhar (18bb1d2:docs/investigacoes/2026-10-23/goliath_lockon.md): o Monster::updateLookAt vira a cabeca para o inimigo mais perto
-    // (getLookAtTarget) pelas anims 154/155. No ASSBOSS elas giram a torre inteira (28 das 30 pecas) em ate 90 graus, o que parece
-    // um lock-on permanente. No Goliath jogador, sem alvo de olhar: a torre fica no centro; com o lock (os dois gatilhos) ela mira
-    // pelo getTarget, como num monstro comum. O chefe da aventura e o Goliath sob IA seguem o retail.
+    // Look-at (18bb1d2:docs/investigacoes/2026-10-23/goliath_lockon.md): Monster::updateLookAt turns the head toward the nearest enemy
+    // (getLookAtTarget) through anims 154/155. On ASSBOSS they rotate the whole turret (28 of the 30 pieces) by up to 90 degrees,
+    // which looks like a permanent lock-on. For Goliath as a player, no look-at target: the turret stays centered; with lock-on
+    // (both triggers) it aims via getTarget, like a regular monster. The adventure boss and Goliath under AI follow retail.
     constexpr uint32_t kLookAt = wotm::fn::getLookAtTarget__7Monster;
     PS2Runtime::RecompiledFunction g_origLookAt = nullptr;
 
@@ -435,20 +435,20 @@ namespace wotm_custom
         }
         g_origLookAt(rdram, ctx, runtime);
     }
-    // Choque do Jelly (StateUltraTazer, Monster+0x11130): o transitionOK do retail so confere as anims e o isSpecialAvailable
-    // (m_specialWeapon), sem botao; na fase final quem decide e o roteiro do FinalBoss::updateJelly. Com o Jelly jogador o choque
-    // saia sozinho: aqui ele so comeca com Triangulo+Circulo apertados no controle do jogador (inputGetPadButtons do pad da
-    // posicao em m_monsters[0..3]; e a combinacao do especial dos monstros comuns no tipo A, PadEntry +0x36, entao o Jelly
-    // continua parado e o transitionOK
-    // segue sendo consultado). O Jelly sob a IA (m_playerNum 2) e o da aventura seguem o retail.
+    // Jelly's shock (StateUltraTazer, Monster+0x11130): retail's transitionOK only checks the anims and isSpecialAvailable
+    // (m_specialWeapon), with no button; in the final stage FinalBoss::updateJelly's script decides. With Jelly as a player the shock
+    // fired on its own: here it only starts with Triangle+Circle held on the player's pad (inputGetPadButtons for the pad at the
+    // position in m_monsters[0..3]; it is the special-move combo of regular monsters in layout A, PadEntry +0x36, so Jelly
+    // stays still and transitionOK
+    // keeps being polled). Jelly under AI (m_playerNum 2) and the adventure one follow retail.
     constexpr uint32_t kTazerOK = wotm::fn::transitionOK__15StateUltraTazer, kPadButtons = wotm::fn::inputGetPadButtons__Fi;
-    constexpr uint32_t kBtnTriangle = 0x1000, kBtnCircle = 0x2000;   // libpad (inputGetPadButtons ja inverte os ativos em 0)
+    constexpr uint32_t kBtnTriangle = 0x1000, kBtnCircle = 0x2000;   // libpad (inputGetPadButtons already inverts the active-low bits)
     constexpr uint32_t kTazerUpdate = wotm::fn::update__15StateUltraTazer;
-    constexpr float kTazerReach = 1200.f, kTazerKeep = 1500.f;   // inimigo mais perto para comecar e para continuar o choque
+    constexpr float kTazerReach = 1200.f, kTazerKeep = 1500.f;   // nearest enemy distance to start and to keep the shock going
     PS2Runtime::RecompiledFunction g_origTazerOK = nullptr, g_origTazerUpdate = nullptr;
-    bool g_tazerHeld[4] = {};   // Triangulo+Circulo ja apertados na chamada anterior do transitionOK sem alvo (por jogador)
+    bool g_tazerHeld[4] = {};   // Triangle+Circle already held on the previous targetless transitionOK call (per player)
 
-    // Monstro vivo e ativo (m_playerNum 1 ou 2) de outro slot mais perto de `m`, a no maximo `maxDist`; 0 sem nenhum
+    // Nearest living, active monster (m_playerNum 1 or 2) in another slot to `m`, at most `maxDist` away; 0 if none
     uint32_t nearestEnemy(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, float maxDist, float *dist)
     {
         const uint32_t cs = READ32(m + kCs), slots = std::min(16u, READ32(kGameObj + kNumSlots));
@@ -487,11 +487,11 @@ namespace wotm_custom
             if (!target)
             {
                 const bool pressed = (b & (kBtnTriangle | kBtnCircle)) == (kBtnTriangle | kBtnCircle);
-                if (pressed && !g_tazerHeld[player])   // um aviso por aperto (o transitionOK roda a cada quadro)
+                if (pressed && !g_tazerHeld[player])   // one notice per press (transitionOK runs every frame)
                 {
                     float far = 0.f;
                     nearestEnemy(rdram, ctx, runtime, m, 1e6f, &far);
-                    std::fprintf(stderr, "[custom] Jelly: choque sem inimigo a %.0f (o mais perto a %.0f)\n", kTazerReach, far);
+                    std::fprintf(stderr, "[custom] Jelly: shock with no enemy within %.0f (nearest at %.0f)\n", kTazerReach, far);
                 }
                 g_tazerHeld[player] = pressed;
                 ret(ctx, 0);
@@ -499,16 +499,16 @@ namespace wotm_custom
             }
             g_origTazerOK(rdram, ctx, runtime);
             if (GPR_U32(ctx, 2))
-                std::fprintf(stderr, "[custom] Jelly: alvo do choque tipo %u a %.0f\n", READ32(target + kTypeBits) >> 5, d);
+                std::fprintf(stderr, "[custom] Jelly: shock target type %u at %.0f\n", READ32(target + kTypeBits) >> 5, d);
             return;
         }
         g_origTazerOK(rdram, ctx, runtime);
     }
 
-    // Alvo do choque: o StateUltraTazer::update mira game->m_monsters[0] (na fase final, o jogador), sem limite de distancia:
-    // raios dos locators do Jelly aos dele, empurrao e golpe (dispatchHit). Com o Jelly jogador o alvo era ele mesmo. Durante a
-    // chamada, m_monsters[0] vale o inimigo vivo mais perto (qualquer slot ativo, jogador ou IA); sem ninguem a kTazerKeep, vale
-    // o proprio Jelly com m_dead ligado, e o update sai para o Idle como faz com o alvo morto.
+    // Shock target: StateUltraTazer::update aims at game->m_monsters[0] (in the final stage, the player), with no distance limit:
+    // beams from Jelly's locators to the target's, push and hit (dispatchHit). With Jelly as a player the target was itself. During
+    // the call, m_monsters[0] is set to the nearest living enemy (any active slot, player or AI); with nobody within kTazerKeep, it is
+    // Jelly itself with m_dead set, and update exits to Idle as it does when the target is dead.
     void tazerUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = ctx->pc == kTazerUpdate ? READ32(GPR_U32(ctx, 4) + kStateOwner) : 0;
@@ -527,9 +527,10 @@ namespace wotm_custom
         if (!target)
             WRITE8(m + kDead, dead);
     }
-    // O choque gasta o especial (o StateUltraTazer::update zera o m_specialWeapon), e o PowerUps::TakeHit nao deixa os tipos
-    // 0x1C0/0x1E0 pegarem o item de especial (na fase final o roteiro e quem o liga). Com o Jelly jogador, durante a chamada o tipo
-    // vale o do Togera (0x60): pega o item como um monstro comum. A funcao so le o tipo nesses testes (vida, stamina, especial).
+    // The shock uses up the special (StateUltraTazer::update clears m_specialWeapon), and PowerUps::TakeHit doesn't let types
+    // 0x1C0/0x1E0 pick up the special item (in the final stage the script turns it on). With Jelly as a player, during the call its
+    // type is set to Togera's (0x60): it picks up the item like a regular monster. The function only reads the type in those tests
+    // (health, stamina, special).
     constexpr uint32_t kPowerUpHit = wotm::fn::TakeHit__8PowerUpsP7MonsterP3_cs, kTypeStandIn = 3u << 5;
     PS2Runtime::RecompiledFunction g_origPowerUpHit = nullptr;
 
@@ -545,7 +546,7 @@ namespace wotm_custom
     }
 } // namespace wotm_custom
 
-// Depois do wotmSkinsInstall: embrulha os ganchos do SetAIMonster que ja estiverem registrados (WOTM_AIVSAI, skins).
+// After wotmSkinsInstall: wraps whatever SetAIMonster hooks are already registered (WOTM_AIVSAI, skins).
 void wotmCustomInstall(PS2Runtime &runtime)
 {
     using namespace wotm_custom;
@@ -579,6 +580,6 @@ void wotmCustomInstall(PS2Runtime &runtime)
         runtime.registerFunction(kLoadBank, &loadBank);
     if ((g_origLoadLoBank = runtime.lookupFunction(kLoadLoBank)))
         runtime.registerFunction(kLoadLoBank, &loadLoBank);
-    std::fprintf(stderr, "[custom] chefes jogaveis (Goliath, Jelly, Cerebulon): %s, %s\n", g_origSetAI ? "visivel com IAs" : "SEM gancho do SetAIMonster",
-                 g_origTakeHit ? "toma dano das IAs" : "SEM gancho do takeHit");
+    std::fprintf(stderr, "[custom] playable bosses (Goliath, Jelly, Cerebulon): %s, %s\n", g_origSetAI ? "visible with AIs" : "NO SetAIMonster hook",
+                 g_origTakeHit ? "takes damage from AIs" : "NO takeHit hook");
 }

@@ -1,15 +1,16 @@
-// wotm_narrator.inc: narrador das selecoes (incluido por wotm_live.inc, antes do wotm_padsel.inc). Ao confirmar um monstro (telas 3 e
-// 6 nativas, selecao de 3 e 4 jogadores) ou uma fase (tela 8 do jogo: o changeScreen(8, 99) da confirmacao, gancho no wotm_padsel.inc)
-// toca o MP3 com o nome dele, junto com o som de confirmar do jogo (nao no lugar).
-// Opcao NARRATOR da aba FEATURES do "Recompiled options" (WOTM_ANNOUNCER): 0 OFF, 1 GODZILLA SAVE THE EARTH (padrao, os MP3), 2 MONSTER
-// CRY: no lugar do nome do monstro, o grito dele (o som do cinema de entrada da luta, do banco do monstro; playMonsterCry no
-// wotm_snd.inc); monstro sem grito (Goliath Prime) fica em silencio; as fases e o titulo continuam com o MP3.
+// wotm_narrator.inc: narrator for the selection screens (included by wotm_live.inc, before wotm_padsel.inc). On confirming a monster
+// (native screens 3 and 6, 3- and 4-player select) or a stage (game screen 8: the confirm's changeScreen(8, 99), hooked in
+// wotm_padsel.inc) it plays the MP3 with its name, together with the game's confirm sound (not instead of it).
+// NARRATOR option on the FEATURES tab of "Recompiled options" (WOTM_ANNOUNCER): 0 OFF, 1 GODZILLA SAVE THE EARTH (default, the MP3s),
+// 2 MONSTER CRY: instead of the monster's name, its cry (the sound from the fight's intro cinematic, from the monster's bank;
+// playMonsterCry in wotm_snd.inc); a monster with no cry (Goliath Prime) stays silent; stages and the title screen still use the MP3s.
 //
-// Arquivos <nome>.mp3: monstros (congar, robo47, togera, ultrav, preytor, kineticlops, magmo, raptros, agamo, zorgulon,
-// goliathprime, cerebulon) e fases (levelName: midtownpark, gamblersgulch, rosdalecanyon, metrocity, ...), procurados nesta ordem: mods/<mod>/narrator/ (pasta mods/ de sempre: um mod pode trocar a voz), narrator/ ao lado do
-// ELF e narrator/ na raiz do repo (a do build). Arquivo que falta: silencio e uma linha no log.
-// Toca pelo raylib (LoadSound/PlaySound, MP3 ligado no build do raylib), no volume mestre dos efeitos do jogo (grupo 0 do som nativo,
-// a mesma curva quadratica do 989snd). Um narrador por vez: o nome novo corta o anterior.
+// Files <name>.mp3: monsters (congar, robo47, togera, ultrav, preytor, kineticlops, magmo, raptros, agamo, zorgulon,
+// goliathprime, cerebulon) and stages (levelName: midtownpark, gamblersgulch, rosdalecanyon, metrocity, ...), searched in this order:
+// mods/<mod>/narrator/ (the usual mods/ folder: a mod can replace the voice), narrator/ next to the ELF and narrator/ at the repo
+// root (the build's). A missing file means silence and one log line.
+// Played through raylib (LoadSound/PlaySound, MP3 enabled in the raylib build), at the game's master effects volume (group 0 of the
+// native sound, the same quadratic curve as 989snd). One narration at a time: a new name cuts off the previous one.
 #include <filesystem>
 #include <map>
 #include <mutex>
@@ -20,10 +21,10 @@ namespace wotm_narrator
 namespace fs = std::filesystem;
 
 static std::mutex g_m;
-static std::map<std::string, Sound> g_sounds;   // por nome do arquivo; Sound vazio (frameCount 0) = nao achado
+static std::map<std::string, Sound> g_sounds;   // by file name; empty Sound (frameCount 0) = not found
 static Sound *g_playing = nullptr;
 
-// Arquivos de cada monstro (indice do jogo, m_monsterSel >> 5), na ordem de preferencia
+// Files for each monster (game index, m_monsterSel >> 5), in order of preference
 static const char *const *namesOf(int monster)
 {
     static const char *const kNone[] = {nullptr};
@@ -45,7 +46,7 @@ static fs::path findFile(const std::string &name)
         return host;
     const fs::path modsDir = wotm::mods::Registry::get().dir();
     const fs::path dirs[] = {modsDir.empty() ? fs::path{} : modsDir.parent_path() / "narrator",
-                             fs::path(__FILE__).parent_path().parent_path().parent_path() / "narrator"};   // native/runtime -> raiz do repo
+                             fs::path(__FILE__).parent_path().parent_path().parent_path() / "narrator"};   // native/runtime -> repo root
     for (const fs::path &d : dirs)
         if (!d.empty() && fs::is_regular_file(d / file, ec))
             return d / file;
@@ -62,15 +63,15 @@ static Sound *soundOf(const std::string &name)
         if (!p.empty())
             s = LoadSound(p.string().c_str());
         if (s.frameCount == 0)
-            std::fprintf(stderr, "[narrador] %s.mp3 %s\n", name.c_str(), p.empty() ? "nao achado" : "ilegivel");
+            std::fprintf(stderr, "[narrator] %s.mp3 %s\n", name.c_str(), p.empty() ? "not found" : "unreadable");
         else
-            std::fprintf(stderr, "[narrador] %s\n", p.string().c_str());
+            std::fprintf(stderr, "[narrator] %s\n", p.string().c_str());
         it = g_sounds.emplace(name, s).first;
     }
     return it->second.frameCount ? &it->second : nullptr;
 }
 
-// Volume mestre dos efeitos (0..0x400) -> 0..1, com a curva do 989snd
+// Master effects volume (0..0x400) -> 0..1, with 989snd's curve
 static float effectsVolume()
 {
 #if defined(WOTM_HAVE_SND)
@@ -81,7 +82,7 @@ static float effectsVolume()
 #endif
 }
 
-// Arquivo de cada fase (Shell::m_levelNum, GameLevelNames; GLOSSARIO.md, "Fases"). As de teste da equipe (17..24) nao tem.
+// File for each stage (Shell::m_levelNum, GameLevelNames; GLOSSARIO.md, "Fases"). The dev team's test stages (17..24) have none.
 static const char *levelName(int level)
 {
     static const char *const kLevels[28] = {
@@ -92,7 +93,7 @@ static const char *levelName(int level)
     return level >= 0 && level < 28 ? kLevels[level] : nullptr;
 }
 
-// Toca o primeiro arquivo achado da lista (terminada em nullptr). Chamado da thread do EE.
+// Plays the first file found from the list (nullptr-terminated). Called from the EE thread.
 static void play(const char *const *names)
 {
     if (!wotm::settings::on(wotm::settings::Announcer) || !IsAudioDeviceReady())
@@ -110,7 +111,7 @@ static void play(const char *const *names)
     g_playing = s;
 }
 
-// MONSTER CRY: o grito do monstro no lugar do nome (corta o MP3 que estiver tocando; sem grito, silencio). false = outra opcao, vale o MP3
+// MONSTER CRY: the monster's cry instead of its name (cuts off any MP3 playing; no cry means silence). false = another option, use the MP3
 static bool cry(int monster)
 {
     if (wotm::settings::get(wotm::settings::Announcer) != 2)
@@ -126,13 +127,13 @@ static bool cry(int monster)
     return true;
 }
 
-// Nome do monstro (indice do jogo, m_monsterSel >> 5)
+// The monster's name (game index, m_monsterSel >> 5)
 static void announce(int monster)
 {
     if (!cry(monster))
         play(namesOf(monster));
 }
-// Monstro custom: o "narrator" do monster.json e, sem o arquivo, o do tipo (com MONSTER CRY, o grito do tipo)
+// Custom monster: the "narrator" from monster.json and, if that file is missing, its base type's (with MONSTER CRY, the base type's cry)
 static void announce(const std::string &name, int monster)
 {
     if (cry(monster))
@@ -143,8 +144,8 @@ static void announce(const std::string &name, int monster)
     play(names);
 }
 
-// introsound.mp3 na tela de "press start" (20), uma vez por abertura do jogo: na primeira chamada do screenWaitForStart, que o
-// uiMain so faz quando a transicao termina (animacao da camera e fade, betweenScreens 0). Voltar ao titulo depois nao repete.
+// introsound.mp3 on the "press start" screen (20), once per game launch: on the first call to screenWaitForStart, which uiMain
+// only makes once the transition ends (camera animation and fade, betweenScreens 0). Returning to the title later doesn't repeat it.
 static void announceIntro()
 {
     static bool done = false;
@@ -155,7 +156,7 @@ static void announceIntro()
     play(names);
 }
 
-// Start no titulo (changeScreen(20, 1)): corta o introsound se ele ainda estiver tocando
+// Start on the title screen (changeScreen(20, 1)): cuts off introsound if it's still playing
 static void stopIntro()
 {
     std::lock_guard<std::mutex> lk(g_m);
@@ -163,11 +164,11 @@ static void stopIntro()
     if (it != g_sounds.end() && it->second.frameCount && IsSoundPlaying(it->second))
     {
         StopSound(it->second);
-        std::fprintf(stderr, "[narrador] introsound cortado pelo Start\n");
+        std::fprintf(stderr, "[narrator] introsound cut off by Start\n");
     }
 }
 
-// Nome da fase (m_levelNum), na confirmacao da selecao de fase
+// The stage's name (m_levelNum), on confirming the stage select
 static void announceLevel(int level)
 {
     const char *const names[] = {levelName(level), nullptr};

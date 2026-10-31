@@ -1,29 +1,30 @@
-// wotm_gamescreens.inc: mouse nas telas do menu que continuam as do jogo (etapa 9 da camera): escolha de monstro (3, 6, 7), de fase
-// (8), de minigame (14), opcoes de eliminacao e free-for-all (11, 12, 13), "first to" (15) e unlocks (21). Incluido por wotm_live.inc
-// antes do wotm_menufont.inc. Dois lados:
-//  - janela (frame, dentro do BeginMode3D do quadro): o retangulo na tela de cada elemento da tela (os objetos desenhados da sub-arvore
-//    dele, projetados com a camera do quadro) e o que esta sob o cursor (View);
-//  - thread do EE (input, saida do screenGetInput(1) da tela, wotm_mainmenu.inc): o codigo que a tela vai tratar. O mouse nunca escreve
-//    as variaveis do jogo (salvo a tela 21, so texto): anda pelos codigos de pad, um passo por quadro, e confere no quadro seguinte.
-// Achados: 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_monstro.md, 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_opcoes.md e 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md.
+// wotm_gamescreens.inc: mouse on the menu screens that are still the game's own (camera step 9): monster select (3, 6, 7), stage
+// (8), minigame (14), elimination and free-for-all options (11, 12, 13), "first to" (15) and unlocks (21). Included by wotm_live.inc
+// before wotm_menufont.inc. Two sides:
+//  - window (frame, inside the frame's BeginMode3D): the on-screen rectangle of each of the screen's elements (the drawn objects of
+//    its subtree, projected with the frame's camera) and what is under the cursor (View);
+//  - EE thread (input, the output of the screen's screenGetInput(1), wotm_mainmenu.inc): the code the screen will handle. The mouse
+//    never writes game variables (except on screen 21, text only): it moves through pad codes, one step per frame, and checks the
+//    result on the next frame.
+// Findings: 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_monstro.md, 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_opcoes.md and 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md.
 namespace wotm_gamescreens
 {
 using wotm_padsel::rd32;
 constexpr uint32_t kShell = wotm::sym::shellInfo;
 enum : uint32_t { kUp = 1, kDown = 2, kLeft = 3, kRight = 4, kCross = 6 };
 
-// Telas com mouse proprio ou sem ele: preparacao, principal e modos (texto), configuracao de controle (fora), opcoes (texto), 3 e 4
-// jogadores (wotm_padsel.inc), "press start", saida, 17 (inalcancavel)
+// Screens with their own mouse handling or none: setup, main and modes (text), pad configuration (out), options (text), 3 and 4
+// players (wotm_padsel.inc), "press start", exit, 17 (unreachable)
 static bool handled(uint32_t s)
 {
-    if ((s == 3 || s == 6 || s == 7) && wotm_padsel::g_solo == int(s))   // selecao nativa de 1 e 2 jogadores (wotm_padsel.inc): sem as caixas do jogo
+    if ((s == 3 || s == 6 || s == 7) && wotm_padsel::g_solo == int(s))   // native 1- and 2-player select (wotm_padsel.inc): no game boxes
         return true;
     return s == 0 || s == 1 || s == 2 || s == 4 || s == 5 || s == 9 || s == 10 || s == 16 || s == 17 || s >= 18 && s <= 20 || s > 21;
 }
 
-// Tela 21 (screenUnlocker): so texto 2D, linha i com o topo em y 82 + 11 i (nome em x 230, estado em x 450); cursor em s_2990 (e a
-// copia currentMenuSelection_2985, feita antes do screenGetInput), items_2992 linhas, fade_2991 ate 0x80. Passar por cima escolhe,
-// clique esquerdo compra (o X do jogo, no mesmo quadro). 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md
+// Screen 21 (screenUnlocker): 2D text only, row i with its top at y 82 + 11 i (name at x 230, state at x 450); cursor in s_2990 (and
+// its copy currentMenuSelection_2985, made before screenGetInput), items_2992 rows, fade_2991 up to 0x80. Hovering selects, left
+// click buys (the game's X, in the same frame). 75f5be1:docs/investigacoes/2026-10-22/mouse_telas_save.md
 static uint32_t unlocker(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t code, bool moved, bool click)
 {
     if (static_cast<int32_t>(rd32(rdram, wotm::sym::fade_2991)) < 0x80)
@@ -47,19 +48,19 @@ static uint32_t unlocker(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime,
     return click ? kCross : 0;
 }
 
-// ------------------------------------------------------------------ janela: retangulos
+// ------------------------------------------------------------------ window: rectangles
 
-// O que esta sob o cursor (a janela escreve, o EE le; g_m)
+// What is under the cursor (the window writes, the EE reads; g_m)
 struct View
 {
     uint32_t screen = ~0u;
-    bool any = false;    // a tela tem algum elemento na tela (o clique esquerdo e do mouse, nao um X solto)
-    int row = -1;        // 15: linha 1..3
-    int arrow = 0;       // 11..13, 15: -1 seta da esquerda, +1 da direita
-    bool onElem = false; // 8, 11..14: em cima da foto, da figura ou da linha
-    int third = 0;       // 8, 14: -1 terco esquerdo, 0 centro, +1 direito
-    int col = -1;        // 3, 6, 7: retrato 1..10 (depois de um instante parado nele)
-    int costume = -1;    // 3, 6, 7: traje 0..3 da caixa ativa (so os abertos)
+    bool any = false;    // the screen has some element on screen (the left click belongs to the mouse, not a stray X)
+    int row = -1;        // 15: row 1..3
+    int arrow = 0;       // 11..13, 15: -1 left arrow, +1 right arrow
+    bool onElem = false; // 8, 11..14: over the picture, the figure or the row
+    int third = 0;       // 8, 14: -1 left third, 0 center, +1 right
+    int col = -1;        // 3, 6, 7: portrait 1..10 (after resting on it for a moment)
+    int costume = -1;    // 3, 6, 7: costume 0..3 of the active box (unlocked ones only)
 };
 static std::mutex g_m;
 static View g_view;
@@ -74,9 +75,9 @@ struct Box
     float cy() const { return (y0 + y1) * 0.5f; }
 };
 
-constexpr uint16_t kTexGlow = 194, kTexArrow = 190;   // brilho do item aceso (maior que o texto) e setas animadas
+constexpr uint16_t kTexGlow = 194, kTexArrow = 190;   // highlighted item's glow (larger than the text) and animated arrows
 
-// Objetos de uma sub-arvore pelo caminho ativo (SWITCH: so o filho em uso): f(objeto)
+// Objects of a subtree along the active path (SWITCH: only the child in use): f(object)
 template <class F>
 static void walkActive(const uint8_t *rdram, uint32_t n, F &f, int depth = 0)
 {
@@ -98,12 +99,12 @@ static void walkActive(const uint8_t *rdram, uint32_t n, F &f, int depth = 0)
         break;
     case 17: kids(n + 0xCC, rd32(rdram, n + 4)); break;                                    // ANIM_XFORM
     case 25: kids(n + 0x2C, rd32(rdram, n + 0x28)); break;                                 // CHAR_INSTANCE
-    case 35: kids(n + 0xC, rd32(rdram, n + 4)); break;                                     // conteiner de ANIM_XFORM
+    case 35: kids(n + 0xC, rd32(rdram, n + 4)); break;                                     // ANIM_XFORM container
     default: break;
     }
 }
 
-// Projecao de um quadro: os objetos desenhados (scene.items) por no
+// Projection of one frame: the drawn objects (scene.items) by node
 struct Proj
 {
     wotm::Scene &scene;
@@ -115,7 +116,7 @@ struct Proj
     {
         for (const wotm::DrawItem &i : scene.items) items.emplace(i.node & 0x1FFFFFFFu, &i);
     }
-    // Retangulo na tela do objeto `o` (falso: nao desenhado neste quadro); tex = a textura dele
+    // On-screen rectangle of object `o` (false: not drawn this frame); tex = its texture
     bool object(uint32_t o, Box &b, uint16_t &tex)
     {
         const auto f = items.find(o);
@@ -131,13 +132,13 @@ struct Proj
             float w[3];
             wotm::xform(it->m, v.x, v.y, v.z, w);
             const Vector3 p{w[0], w[1], w[2]};
-            if (wotm_padsel::vdot(wotm_padsel::vsub(p, cam.position), fwd) <= 0.f) return false;   // atras da camera
+            if (wotm_padsel::vdot(wotm_padsel::vsub(p, cam.position), fwd) <= 0.f) return false;   // behind the camera
             const Vector2 q = GetWorldToScreenEx(p, cam, rw, rh);
             b.x0 = std::min(b.x0, q.x); b.y0 = std::min(b.y0, q.y); b.x1 = std::max(b.x1, q.x); b.y1 = std::max(b.y1, q.y);
         }
         return b.ok();
     }
-    // Uniao dos objetos da sub-arvore, sem o brilho; as setas vao a parte (ate 2)
+    // Union of the subtree's objects, without the glow; the arrows are collected separately (up to 2)
     Box tree(uint32_t root, Box *arrows = nullptr, int *nArrows = nullptr)
     {
         Box all;
@@ -163,12 +164,12 @@ static uint32_t menuObj(const uint8_t *rdram, uint32_t s, int i) { return rd32(r
 static int arrowSide(const Box *arrows, int n, const Box &line, float x, float y)
 {
     for (int k = 0; k < n; ++k)
-        if (arrows[k].in(x, y, 6.f)) return arrows[k].cx() < line.cx() ? -1 : 1;   // lado pelo X projetado (a ordem muda por tela)
+        if (arrows[k].in(x, y, 6.f)) return arrows[k].cx() < line.cx() ? -1 : 1;   // side from the projected X (the order changes per screen)
     return 0;
 }
 
-// Grupo dos retratos (12 filhos: placa, colunas 1..10, molduras). Telas 3 e 6: irmao dos m_selectSw no grupo P logo depois do no do
-// m_selectSw[9]; tela 7: dentro do filho 4 do switch da tela 14
+// The portraits group (12 children: plate, columns 1..10, frames). Screens 3 and 6: sibling of the m_selectSw in group P right after
+// the m_selectSw[9] node; screen 7: inside child 4 of screen 14's switch
 static uint32_t portraitGroup(const uint8_t *rdram, uint32_t s)
 {
     auto isGroup = [&](uint32_t g, int n) {
@@ -180,7 +181,7 @@ static uint32_t portraitGroup(const uint8_t *rdram, uint32_t s)
         const uint32_t sw = menuItemSw(rdram, 14, 0) & 0x1FFFFFFFu;
         if (sw < 0x1000u || (rdram[sw] & 0x3F) != 6 || rdram[sw + 0xB] < 5) return 0;
         uint32_t n = rd32(rdram, sw + 0xC + 16) & 0x1FFFFFFFu;
-        for (int d = 0; d < 3 && n >= 0x1000u; ++d)   // o filho 4 ou um GROUP logo abaixo dele
+        for (int d = 0; d < 3 && n >= 0x1000u; ++d)   // child 4 or a GROUP right below it
         {
             if (isGroup(n, 12)) return n;
             if ((rdram[n] & 0x3F) != 1) return 0;
@@ -202,12 +203,12 @@ static uint32_t portraitGroup(const uint8_t *rdram, uint32_t s)
     return isGroup(g, 12) ? g : 0;
 }
 
-// Tela 6 no modo 2, fase B: o jogador ja escolheu, a coluna e os trajes (caixa da direita) sao os da IA
+// Screen 6 in mode 2, phase B: the player has already chosen; the column and costumes (right-hand box) are the AI's
 static bool aiPhase(const uint8_t *rdram)
 {
     return rd32(rdram, wotm_padsel::kMode) == 2 && rd32(rdram, wotm::sym::playerOneIsDone_2896) && !rd32(rdram, wotm::sym::AIplayerIsDone_2898);
 }
-// Caixa de trajes ativa da tela: switches (4) e o cs dela
+// The screen's active costume box: its switches (4) and its cs
 static void costumeBox(const uint8_t *rdram, uint32_t s, uint32_t &sw, uint32_t &cs)
 {
     if (s == 7) { sw = kShell + 0xB8; cs = kShell + 0xB0; }
@@ -217,7 +218,7 @@ static void costumeBox(const uint8_t *rdram, uint32_t s, uint32_t &sw, uint32_t 
 
 static void frameMonsters(Proj &pj, uint8_t *rdram, uint32_t s, const wotm::mouse::Pointer &p, View &v)
 {
-    if (s == 6 && wotm_padsel::g_selOn)   // 3 ou 4 jogadores: a tela e do wotm_padsel.inc
+    if (s == 6 && wotm_padsel::g_selOn)   // 3 or 4 players: the screen belongs to wotm_padsel.inc
         return;
     if (const uint32_t g = portraitGroup(rdram, s))
         for (int c = 1; c <= 10; ++c)
@@ -236,7 +237,7 @@ static void frameMonsters(Proj &pj, uint8_t *rdram, uint32_t s, const wotm::mous
         for (int k = 0; k < 4; ++k)
         {
             const uint32_t n = rd32(rdram, sw + 4 * k) & 0x1FFFFFFFu;
-            if (n < 0x1000u || (rdram[n] & 0x3F) != 6 || rdram[n + 8] == 0) continue;   // quadro 0: traje fechado
+            if (n < 0x1000u || (rdram[n] & 0x3F) != 6 || rdram[n + 8] == 0) continue;   // frame 0: costume locked
             const Box b = pj.tree(n);
             if (!b.ok()) continue;
             v.any = true;
@@ -244,7 +245,7 @@ static void frameMonsters(Proj &pj, uint8_t *rdram, uint32_t s, const wotm::mous
         }
 }
 
-// Janela, dentro do BeginMode3D do quadro (camera `cam`, quadro rw x rh)
+// Window, inside the frame's BeginMode3D (camera `cam`, frame rw x rh)
 static void frame(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam, int rw, int rh)
 {
     View v;
@@ -302,7 +303,7 @@ static void frame(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam,
                 v.third = t < 1.f / 3.f ? -1 : t > 2.f / 3.f ? 1 : 0;
             }
         }
-        // retrato: so depois de ~0,1 s parado nele (a caminho das caixas de traje o cursor passa por cima de outros)
+        // portrait: only after resting on it for ~0.1 s (on the way to the costume boxes the cursor passes over other portraits)
         if (v.col != s_colSeen) { s_colSeen = v.col; s_colSince = GetTime(); }
         if (GetTime() - s_colSince < 0.1) v.col = -1;
         if (v.any) wotm::mouse::claim();
@@ -311,7 +312,7 @@ static void frame(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam,
         if (log && (v.screen != s_last.screen || v.row != s_last.row || v.arrow != s_last.arrow || v.onElem != s_last.onElem ||
                     v.third != s_last.third || v.any != s_last.any || v.col != s_last.col || v.costume != s_last.costume))
         {
-            std::fprintf(stderr, "[menumouse] t=%.2f tela do jogo %u (itens %d): linha %d seta %d elem %d terco %d retrato %d traje %d\n", GetTime(), s, int(v.any),
+            std::fprintf(stderr, "[menumouse] t=%.2f game screen %u (items %d): row %d arrow %d elem %d third %d portrait %d costume %d\n", GetTime(), s, int(v.any),
                          v.row, v.arrow, int(v.onElem), v.third, v.col, v.costume);
             s_last = v;
         }
@@ -320,13 +321,13 @@ static void frame(wotm::Scene &scene, const wotm::Ram &ram, const Camera3D &cam,
     g_view = v;
 }
 
-// ------------------------------------------------------------------ EE: codigos
+// ------------------------------------------------------------------ EE: codes
 
-// Alvo em andamento: anda um passo por quadro ate o valor chegar (e confirma, se foi clique); desiste se o passo nao mexe nele ou
-// depois de 10 passos
+// Target in progress: moves one step per frame until the value gets there (and confirms, if it was a click); gives up if a step does
+// not change the value or after 10 steps
 struct Goal
 {
-    int kind = 0;   // 0 nenhum, 1 coluna, 2 traje, 3 linha da 15
+    int kind = 0;   // 0 none, 1 column, 2 costume, 3 row on screen 15
     int target = 0, last = -999, steps = 0;
     bool confirm = false;
 };
@@ -347,7 +348,7 @@ static bool columnValid(uint8_t *rdram, uint32_t s, int col)
         if (wotm_padsel::costumeOpen(rdram, col, c)) return true;
     return false;
 }
-// O jogador (ou a IA, na fase B do modo 2) ja confirmou: a tela ignora os passos
+// The player (or the AI, in mode 2's phase B) has already confirmed: the screen ignores the steps
 static bool monsterDone(const uint8_t *rdram, uint32_t s)
 {
     if (s == 7) return rd32(rdram, wotm::sym::playerOneIsDone_2914) != 0;
@@ -369,7 +370,7 @@ static uint32_t stepGoal(Goal &g, int cur)
     g.last = cur;
     if (g.kind == 1) return g.target > cur ? kRight : kLeft;
     if (g.kind == 2) return g.target > cur ? kDown : kUp;
-    return g.target == (cur == 1 ? 3 : cur - 1) ? kUp : kDown;   // 15: tres linhas com volta, qualquer uma a um passo
+    return g.target == (cur == 1 ? 3 : cur - 1) ? kUp : kDown;   // 15: three rows that wrap around, any one is a single step away
 }
 
 static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t s, uint32_t code)
@@ -385,8 +386,8 @@ static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, 
         v = g_view;
     }
     const bool click = (v.any || s == 21) && wotm::mouse::takeClick(wotm::mouse::g_clickL);
-    // telas que andam para os lados: Q/E (e a rodinha, menos nos unlocks, onde ela anda nas linhas) viram esquerda/direita no teclado
-    // (wotm_pad.inc); L1/R1 do controle tambem
+    // screens that move sideways: Q/E (and the wheel, except on unlocks, where it moves through the rows) become left/right on the
+    // keyboard (wotm_pad.inc); so do the controller's L1/R1
     const bool side = s == 8 || (s >= 11 && s <= 14) || s == 21;
     if (side)
     {
@@ -401,7 +402,7 @@ static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, 
         s_goal = Goal{};
         return code;
     }
-    if (code != 0)   // pad ou teclado: o alvo do mouse cai
+    if (code != 0)   // pad or keyboard: the mouse target is dropped
     {
         s_goal = Goal{};
         return code;
@@ -411,7 +412,7 @@ static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, 
     case 3: case 6: case 7: {
         if (monsterDone(rdram, s)) { s_goal = Goal{}; return 0; }
         const int col = colOf(rdram, s), cost = costumeOf(rdram, s);
-        // o retrato so aparece na View depois do instante parado nele (frame): a chegada dele conta como movimento
+        // the portrait only shows up in the View after the cursor rests on it for a moment (frame): its arrival counts as movement
         static int s_vcol = -1, s_vcost = -1;
         const bool newCol = v.col != s_vcol, newCost = v.costume != s_vcost;
         s_vcol = v.col;
@@ -440,9 +441,9 @@ static uint32_t compute(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, 
     }
 }
 
-// EE, saida do screenGetInput(1) da tela `s` (code = o que o jogo leu): devolve o codigo que a tela vai tratar. A tela 8 le o controle
-// 1 duas vezes no mesmo quadro (a primeira so confere "nada apertado" para soltar o filme): a segunda leitura, logo em seguida, recebe
-// o mesmo codigo, como faria o pad
+// EE, output of screen `s`'s screenGetInput(1) (code = what the game read): returns the code the screen will handle. Screen 8 reads
+// pad 1 twice in the same frame (the first only checks "nothing pressed" to release the movie): the second read, right after,
+// gets the same code, as the pad would give
 static uint32_t input(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t s, uint32_t code)
 {
     static int64_t s_t = 0;

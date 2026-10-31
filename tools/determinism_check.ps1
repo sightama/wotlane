@@ -49,13 +49,13 @@ if ($Replay) {
     # A amostra no quadro X e vale em X + atraso; A e B aplicam a primeira entrada nao neutra no mesmo quadro
     $logA = Get-Content (Join-Path $runtime 'det_A.log') -Raw
     $logB = Get-Content (Join-Path $runtime 'det_B.log') -Raw
-    if ($logA -notmatch "\[sync\] atraso de entrada: $InputDelay quadro") { Write-Host "FALHOU: A nao anunciou o atraso $InputDelay" -ForegroundColor Red; exit 1 }
-    if ($logA -notmatch '\[sync\] primeira entrada local: amostra do quadro (\d+) vale no quadro (\d+)') { Write-Host 'FALHOU: A nao amostrou entrada local' -ForegroundColor Red; exit 1 }
+    if ($logA -notmatch "\[sync\] input delay: $InputDelay frame") { Write-Host "FALHOU: A nao anunciou o atraso $InputDelay" -ForegroundColor Red; exit 1 }
+    if ($logA -notmatch '\[sync\] first local input: sample of frame (\d+) applies at frame (\d+)') { Write-Host 'FALHOU: A nao amostrou entrada local' -ForegroundColor Red; exit 1 }
     $sampled = [int]$Matches[1]; $scheduled = [int]$Matches[2]
     if ($scheduled -ne $sampled + $InputDelay) { Write-Host "FALHOU: amostra do quadro $sampled agendada para $scheduled (atraso $InputDelay)" -ForegroundColor Red; exit 1 }
     $applied = @()
     foreach ($l in @($logA, $logB)) {
-        if ($l -notmatch '\[sync\] primeira entrada nao neutra aplicada no quadro (\d+)') { Write-Host 'FALHOU: entrada nunca aplicada' -ForegroundColor Red; exit 1 }
+        if ($l -notmatch '\[sync\] first non-neutral input applied at frame (\d+)') { Write-Host 'FALHOU: entrada nunca aplicada' -ForegroundColor Red; exit 1 }
         $applied += [int]$Matches[1]
     }
     if ($applied[0] -ne $scheduled -or $applied[1] -ne $scheduled) { Write-Host "FALHOU: agendada para $scheduled, aplicada em A $($applied[0]) e B $($applied[1])" -ForegroundColor Red; exit 1 }
