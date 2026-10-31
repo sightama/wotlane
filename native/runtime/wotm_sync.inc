@@ -245,7 +245,7 @@ namespace wotm_sync
     // frame boundary after frame `index`: the traced frame is complete
     void callTraceFrameDone(uint32_t index)
     {
-        if (!g_traceFile || index != g_traceAt)
+        if (!g_traceFile || !g_levelLoaded || index != g_traceAt)   // boot frames count from 0 too, before the level load
             return;
         g_wotmCallTrace = nullptr;
         const long bytes = std::ftell(g_traceFile);
