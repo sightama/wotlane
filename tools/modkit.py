@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Kit de mods do WotM (docs/passos/MODS.md). Extrai arquivos do disco para formatos editaveis na pasta
-de trabalho do mod e devolve o que mudou, ja no formato que o jogo le, para mods/<mod>/. Um mod = um projeto: cada mod tem a sua
-pasta de trabalho (<mods>/_work/<mod>/, com o modkit.json dela), e o pack de um mod nunca leva o que foi editado para outro.
+"""WotM mod kit (docs/passos/MODS.md). Extracts files from the disc into editable formats in the mod's work folder
+and turns what changed back into the format the game reads, in mods/<mod>/. One mod = one project: each mod has its own
+work folder (<mods>/_work/<mod>/, with its own modkit.json), and packing one mod never takes what was edited for another.
 
-  python tools/modkit.py export my_mod MON/LIZARD0           # .TEX e .RTX do Togera em PNG (pasta de trabalho do my_mod)
-  python tools/modkit.py export my_mod SND/SHELL_S.BNK VAG/CITYAMB.VPK   # sons do banco e a musica em WAV
-  python tools/modkit.py pack my_mod                         # o que foi editado vai para mods/my_mod/
-  python tools/modkit.py check [my_mod]                      # confere os mods (nomes, tamanhos, texIds) e os conflitos entre eles
-  python tools/modkit.py revert my_mod MON/lizard0_t0004.png # volta um arquivo da pasta de trabalho ao original do disco
-  python tools/modkit.py skin new my_mod togera green --base 1 --name "GREEN TOGERA"   # skin nova: skin.json + PNGs do traje base
-  python tools/modkit.py skin new my_mod goliath gold        # skin de um monstro custom (id do monster.json)
-  python tools/modkit_gui.py                                 # o mesmo com interface (botao "Mod kit" do launcher)
+  python tools/modkit.py export my_mod MON/LIZARD0           # Togera's .TEX and .RTX as PNG (my_mod's work folder)
+  python tools/modkit.py export my_mod SND/SHELL_S.BNK VAG/CITYAMB.VPK   # the bank's sounds and the music as WAV
+  python tools/modkit.py pack my_mod                         # what was edited goes into mods/my_mod/
+  python tools/modkit.py check [my_mod]                      # checks the mods (names, sizes, texIds) and conflicts between them
+  python tools/modkit.py revert my_mod MON/lizard0_t0004.png # restores a work folder file to the disc original
+  python tools/modkit.py skin new my_mod togera green --base 1 --name "GREEN TOGERA"   # new skin: skin.json + base costume PNGs
+  python tools/modkit.py skin new my_mod goliath gold        # skin for a custom monster (id from its monster.json)
+  python tools/modkit_gui.py                                 # the same with a GUI (the launcher's "Mod kit" button)
 
-Opcoes: --disc <pasta> (disco extraido; padrao WOTM_DISC ou disc/ do repo), --mods <pasta> (padrao: <runtime>/discroot/mods, o
-runtime de .wotm_recomp_dir; sem ele, <disco>/mods), --work <pasta> (padrao: <mods>/_work/<mod>; pasta com '_' o jogo nao le).
-Nome de mod: nao comeca com '_' nem '.', sem \\ / : * ? " < > |.
-Arquivos do export podem ter curinga (MON/LIZARD*) e sem extensao pegam .TEX e .RTX.
+Options: --disc <folder> (extracted disc; default WOTM_DISC or the repo's disc/), --mods <folder> (default: <runtime>/discroot/mods,
+the runtime from .wotm_recomp_dir; without it, <disc>/mods), --work <folder> (default: <mods>/_work/<mod>; the game skips folders
+starting with '_'). Mod name: must not start with '_' or '.', and no \\ / : * ? " < > |.
+Export file names can use wildcards (MON/LIZARD*); without an extension they pick up both .TEX and .RTX.
 
-O que cada tipo vira:
-- .TEX / .RTX -> <arquivo>_tNNNN.png / <arquivo>_rtx_tNNNN.png (tools/tex.py export). No pack o PNG vai como esta: o desenho nativo
-  troca a textura na hora de desenhar (native/wotm_texmods.hpp), em qualquer resolucao. Com --inject o pack tambem regrava o
-  .TEX/.RTX (mesmo tamanho e cores da paleta atual), para a imagem do GS emulado (referencia da checagem VU1).
-- .VPK / .VAG -> <arquivo>.wav; volta pelo tools/snd989.py (mesma taxa e volumes do original).
-- .BNK -> <banco>_sNNN.wav, um por som com amostra; os editados voltam todos num banco so (snd989 bnk-replace).
-O pack so leva o que mudou desde o export (sha1 em modkit.json na pasta de trabalho). Nada do jogo vai para o repo: o kit le o
-disco do usuario e grava nas pastas dele.
+What each type becomes:
+- .TEX / .RTX -> <file>_tNNNN.png / <file>_rtx_tNNNN.png (tools/tex.py export). Pack copies the PNG as is: the native renderer
+  swaps the texture at draw time (native/wotm_texmods.hpp), at any resolution. With --inject, pack also rewrites the
+  .TEX/.RTX (same size, colors from the current palette), for the emulated GS image (the VU1 check reference).
+- .VPK / .VAG -> <file>.wav; goes back through tools/snd989.py (same rate and volumes as the original).
+- .BNK -> <bank>_sNNN.wav, one per sound that has a sample; the edited ones all go back into a single bank (snd989 bnk-replace).
+Pack only takes what changed since the export (sha1 in modkit.json in the work folder). Nothing from the game goes into the repo:
+the kit reads the user's disc and writes into the user's folders.
 """
 import contextlib
 import fnmatch
@@ -44,7 +44,7 @@ import snd989   # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEX_DIRS = ("LVL", "MON", "SHELL")
-PNG_RE = re.compile(r"^(.+?)(_rtx)?_t(\d+)(?:_sempaleta)?\.png$", re.I)   # _sempaleta: o export nao achou a paleta (cinza)
+PNG_RE = re.compile(r"^(.+?)(_rtx)?_t(\d+)(?:_sempaleta)?\.png$", re.I)   # _sempaleta: export did not find the palette (grayscale)
 BNK_RE = re.compile(r"^(.+)_s(\d+)\.wav$", re.I)
 
 
@@ -68,12 +68,12 @@ def default_mods(disc):
     return os.path.join(disc, "mods")
 
 
-WORK = "_work"                  # pasta das pastas de trabalho, dentro de <mods> (com '_': o jogo nao le)
+WORK = "_work"                  # folder holding the work folders, inside <mods> (starts with '_': the game skips it)
 BAD_MOD_CHARS = '\\/:*?"<>|'
 
 
 def mod_name_error(mod):
-    """Mensagem de erro (em ingles, a interface mostra) se o nome nao serve para um mod; None se serve."""
+    """Error message (shown in the GUI) if the name is not valid for a mod; None if it is."""
     if not mod or not mod.strip():
         return "the mod needs a name"
     if mod != mod.strip():
@@ -90,8 +90,8 @@ NEW_MOD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 def new_mod_name_error(mod):
-    """Regra estrita para um mod novo (a interface e o 'New mod...'): letras, digitos, '_' e '-', comecando por letra ou digito,
-    ate 64. Mods ja existentes com outros nomes continuam valendo (mod_name_error)."""
+    """Strict rule for a new mod (the GUI and 'New mod...'): letters, digits, '_' and '-', starting with a letter or digit,
+    up to 64. Existing mods with other names are still accepted (mod_name_error)."""
     if not mod:
         return "the mod needs a name"
     if not NEW_MOD_RE.match(mod):
@@ -100,10 +100,10 @@ def new_mod_name_error(mod):
 
 
 def adopt_mod(disc, mods, mod, work=None):
-    """Mod feito antes de ter pasta de trabalho (ou feito a mao): copia os arquivos de mods/<mod>/ para a pasta de trabalho dele,
-    marcados como editados (sha1 vazio no estado), para a janela mostra-los e o pack leva-los de volta. skin.json e monster.json
-    ficam so no mod. Roda a cada escolha do mod: so entra o que a pasta de trabalho nao tem e o estado nunca viu (arquivo removido
-    de proposito nao volta). Devolve quantos copiou."""
+    """A mod made before it had a work folder (or made by hand): copies the files of mods/<mod>/ into its work folder, marked
+    as edited (empty sha1 in the state), so the window shows them and pack takes them back. skin.json and monster.json
+    stay only in the mod. Runs every time the mod is selected: only what the work folder lacks and the state never saw comes in
+    (a file removed on purpose does not come back). Returns how many it copied."""
     if work is None:
         work = work_dir(mods, mod)
     src = os.path.join(mods, mod)
@@ -123,7 +123,7 @@ def adopt_mod(disc, mods, mod, work=None):
                 continue
             os.makedirs(os.path.dirname(q), exist_ok=True)
             shutil.copy2(p, q)
-            ent = {"sha1": "", "adopted": True}   # sha1 vazio nunca bate: conta como editado
+            ent = {"sha1": "", "adopted": True}   # an empty sha1 never matches: counts as edited
             m = PNG_RE.match(name)
             if m:
                 trel = find_texfile(disc, m.group(1), ".RTX" if m.group(2) else ".TEX")
@@ -141,7 +141,7 @@ def adopt_mod(disc, mods, mod, work=None):
 
 
 def validate_mod_name(mod, what=""):
-    """O nome do mod, ou SystemExit com a mensagem (prefixada por what: "pack: ...")."""
+    """The mod name, or SystemExit with the message (prefixed by what: "pack: ...")."""
     err = mod_name_error(mod)
     if err:
         raise SystemExit("%s%s: %r" % (what + ": " if what else "", err, mod))
@@ -149,12 +149,12 @@ def validate_mod_name(mod, what=""):
 
 
 def work_dir(mods, mod):
-    """Pasta de trabalho do mod: <mods>/_work/<mod>/ (o modkit.json do estado fica nela)."""
+    """The mod's work folder: <mods>/_work/<mod>/ (the modkit.json state file lives there)."""
     return os.path.join(mods, WORK, validate_mod_name(mod))
 
 
 def disc_file(disc, rel):
-    """Caminho no disco sem depender de maiusculas (o disco extraido no Windows nao liga, o WSL liga)."""
+    """Path on the disc, case-insensitive (the disc extracted on Windows does not care about case, WSL does)."""
     p = os.path.join(disc, *rel.split("/"))
     if os.path.exists(p):
         return p
@@ -170,7 +170,7 @@ def disc_file(disc, rel):
 
 
 def find_texfile(disc, stem, ext):
-    """<STEM>.TEX/.RTX no disco: LVL/, MON/, SHELL/ ou <STEM>/ (como o desenho nativo procura). Devolve o caminho relativo."""
+    """<STEM>.TEX/.RTX on the disc: LVL/, MON/, SHELL/ or <STEM>/ (as the native renderer searches). Returns the relative path."""
     for d in TEX_DIRS + (stem.upper(),):
         rel = "%s/%s%s" % (d, stem.upper(), ext)
         if disc_file(disc, rel):
@@ -202,18 +202,18 @@ def expand(disc, pats):
 # ---------------------------------------------------------------- export
 
 def export(disc, work, pats, dest=None):
-    """dest: subpasta da pasta de trabalho no lugar da pasta do disco (skin new: skins/<id>)."""
+    """dest: subfolder of the work folder to use instead of the disc folder (skin new: skins/<id>)."""
     state = load_state(work)
     for rel in expand(disc, pats):
         src = disc_file(disc, rel)
         d = dest if dest else os.path.dirname(rel)
         final = os.path.join(work, *d.split("/")) if d else work
-        out = os.path.join(work, ".export_tmp")   # grava aqui e depois move, sem atropelar o que ja foi editado
+        out = os.path.join(work, ".export_tmp")   # write here, then move, without clobbering what was already edited
         shutil.rmtree(out, ignore_errors=True)
         os.makedirs(out)
         ext = os.path.splitext(rel)[1].upper()
         if ext in (".TEX", ".RTX"):
-            with contextlib.redirect_stdout(io.StringIO()):   # o tex.py fala da pasta temporaria
+            with contextlib.redirect_stdout(io.StringIO()):   # tex.py would print the temporary folder
                 man = tex.cmd_export(src, out)
             n = sum(1 for e in man["textures"] if "png" in e)
             print("%s -> %d texture(s) as PNG (%s)" % (rel, n, (os.path.splitext(os.path.basename(rel))[0].lower() +
@@ -246,7 +246,7 @@ def export(disc, work, pats, dest=None):
             key = os.path.relpath(q, work).replace("\\", "/")
             old = state["files"].get(key, {}).get("sha1")
             if os.path.exists(q) and not n.endswith(".json") and sha1(q) != old:
-                kept += 1   # editado depois do export anterior: fica o do usuario
+                kept += 1   # edited after the previous export: keep the user's
                 continue
             os.replace(p, q)
             if not n.endswith(".json"):
@@ -254,7 +254,7 @@ def export(disc, work, pats, dest=None):
                 ent["sha1"] = sha1(q)
                 sz = png_size(q)
                 if sz:
-                    ent["size"] = list(sz)   # tamanho no jogo (a interface avisa se o substituto muda a proporcao)
+                    ent["size"] = list(sz)   # size in the game (the GUI warns if the replacement changes the aspect ratio)
         shutil.rmtree(out, ignore_errors=True)
         if kept:
             print("  %d file(s) already edited in the work folder were kept" % kept)
@@ -263,9 +263,9 @@ def export(disc, work, pats, dest=None):
 
 
 def source_of(disc, rel):
-    """Arquivo do disco de onde saiu um arquivo da pasta de trabalho ("MON/lizard0_t0004.png" -> "MON/LIZARD0.TEX"); None se nao achou."""
+    """The disc file a work folder file came from ("MON/lizard0_t0004.png" -> "MON/LIZARD0.TEX"); None if not found."""
     d, n = os.path.split(rel.replace("\\", "/"))
-    if d.startswith("skins/"):   # PNG de skin (skins/<id>/shogun3_t0010.png): saiu do traje base em MON/
+    if d.startswith("skins/"):   # skin PNG (skins/<id>/shogun3_t0010.png): came from the base costume in MON/
         d = "MON"
     pre = d + "/" if d else ""
     m = PNG_RE.match(n)
@@ -284,7 +284,7 @@ def source_of(disc, rel):
 
 
 def revert(disc, work, rels):
-    """Volta arquivos da pasta de trabalho ao original: extrai de novo o arquivo do disco numa pasta temporaria e copia so esses."""
+    """Restores work folder files to the original: re-extracts the disc file into a temporary folder and copies only those."""
     state = load_state(work)
     by_src = {}
     for rel in rels:
@@ -322,7 +322,7 @@ def revert(disc, work, rels):
 
 
 def png_size(p):
-    """(largura, altura) do cabecalho IHDR de um PNG; None se nao for PNG."""
+    """(width, height) from a PNG's IHDR header; None if it is not a PNG."""
     try:
         with open(p, "rb") as f:
             h = f.read(24)
@@ -350,7 +350,7 @@ def save_state(work, state):
 # ---------------------------------------------------------------- pack
 
 def pack(disc, work, mods, mod, inject=False):
-    """Leva o que mudou na pasta de trabalho (work None = work_dir(mods, mod)) para mods/<mod>/."""
+    """Takes what changed in the work folder (work None = work_dir(mods, mod)) into mods/<mod>/."""
     validate_mod_name(mod, "pack")
     if work is None:
         work = work_dir(mods, mod)
@@ -379,11 +379,11 @@ def pack(disc, work, mods, mod, inject=False):
         if m:
             stem, rtx, tid = m.group(1), bool(m.group(2)), int(m.group(3))
             os.makedirs(os.path.join(dst, *d.split("/")) if d else dst, exist_ok=True)
-            name = "%s%s_t%04d.png" % (stem, "_rtx" if rtx else "", tid)   # sem o _sempaleta: o nome que o jogo procura
+            name = "%s%s_t%04d.png" % (stem, "_rtx" if rtx else "", tid)   # without _sempaleta: the name the game looks for
             out_rel = (d + "/" if d else "") + name
             shutil.copy2(p, os.path.join(dst, *out_rel.split("/")))
             print("texture %s -> %s/%s" % (n, mod, out_rel))
-            if inject and not d.startswith("skins/"):   # PNG de skin vale so para ela: nada a regravar no .TEX do disco
+            if inject and not d.startswith("skins/"):   # a skin PNG applies only to that skin: nothing to rewrite in the disc .TEX
                 inject_png(disc, dst, stem, rtx, tid, p)
             continue
         if n.lower().endswith(".wav"):
@@ -429,13 +429,13 @@ def pack(disc, work, mods, mod, inject=False):
     print("mod in %s" % dst)
 
 
-# ---------------------------------------------------------------- skins de mod (MODS.md, "Skins")
+# ---------------------------------------------------------------- mod skins (MODS.md, "Skins")
 
 MONSTERS = {"congar": "MONKEY", "robo-47": "ROBOT", "togera": "LIZARD", "ultra-v": "SHOGUN", "preytor": "MANTIS",
             "kineticlops": "ENERGY", "magmo": "LAVA", "raptros": "DRAGON", "agamo": "ROCK", "zorgulon": "ALIEN"}
 
 
-# Chefes que um monstro custom pode usar de base (kCustomBases em native/wotm_mods.hpp)
+# Bosses a custom monster can use as its base (kCustomBases in native/wotm_mods.hpp)
 CUSTOM_BASES = {"assboss": "ASSBOSS"}
 
 
@@ -444,12 +444,12 @@ def norm(s):
 
 
 def game_monster(s):
-    """Nome do jogo ("togera") de um monstro jogavel pelo nome ou prefixo ("LIZARD", "Robo-47"); None se nao for."""
+    """The game's name ("togera") of a playable monster, given its name or prefix ("LIZARD", "Robo-47"); None if it is not one."""
     return next((g for g, p in MONSTERS.items() if norm(s) in (norm(g), norm(p))), None)
 
 
 def base_prefix(s):
-    """Prefixo em MON/ do base de um custom (jogaveis e kCustomBases); None se o port nao aceita esse base."""
+    """MON/ prefix of a custom monster's base (playables and kCustomBases); None if the port does not accept that base."""
     g = game_monster(s)
     if g:
         return MONSTERS[g]
@@ -457,7 +457,7 @@ def base_prefix(s):
 
 
 def mod_folders(mods):
-    """{nome: pasta} dos mods ligados: os do repo (REPO/mods, que o sync_mods espelha) e os da pasta de mods, que vence no mesmo nome."""
+    """{name: folder} of the enabled mods: the repo's (REPO/mods, mirrored by sync_mods) and the mods folder's, which wins on the same name."""
     out = {}
     for root in (os.path.join(REPO, "mods"), mods):
         if not root or not os.path.isdir(root):
@@ -470,8 +470,8 @@ def mod_folders(mods):
 
 
 def find_customs(mods):
-    """Monstros custom (mods/<mod>/monsters/<pasta>/monster.json) dos mods ligados, por id: {id: {"id", "name", "base", "prefix",
-    "costume", "mod", "path"}}. Mesmo id em dois mods: vence o ultimo em ordem alfabetica, como no carregador."""
+    """Custom monsters (mods/<mod>/monsters/<folder>/monster.json) of the enabled mods, by id: {id: {"id", "name", "base", "prefix",
+    "costume", "mod", "path"}}. Same id in two mods: the last in alphabetical order wins, as in the loader."""
     by_id = {}
     for mod, folder in sorted(mod_folders(mods).items()):
         mdir = os.path.join(folder, "monsters")
@@ -498,7 +498,7 @@ def find_customs(mods):
 
 
 def list_monsters(mods):
-    """Monstros para uma skin: jogaveis do disco [(nome_do_jogo, prefixo, None)] e customs [(id, prefixo_do_base, costume)]."""
+    """Monsters for a skin: playables from the disc [(game_name, prefix, None)] and customs [(id, base_prefix, costume)]."""
     out = [(g, p, None) for g, p in MONSTERS.items()]
     out += [(c["id"], c["prefix"], c["costume"]) for c in sorted(find_customs(mods).values(), key=lambda c: c["id"])]
     return out
@@ -509,14 +509,14 @@ CUSTOM_ID_RE = re.compile(r"[a-z][a-z0-9_]{0,31}")
 
 
 def skin_id_error(sid):
-    """Mensagem (em ingles) se o id nao serve para uma skin; None se serve."""
+    """Message if the id is not valid for a skin; None if it is."""
     if not SKIN_ID_RE.fullmatch(sid or ""):
         return "the id takes only lowercase letters, digits and _ (1 to 32)"
     return None
 
 
 def skin_slug(name):
-    """Id de skin a partir do nome ("GREEN TOGERA" -> "green_togera")."""
+    """Skin id from the name ("GREEN TOGERA" -> "green_togera")."""
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", (name or "").lower())).strip("_")[:32].strip("_")
 
 
@@ -525,7 +525,7 @@ def skin_dir(mods, mod, sid):
 
 
 def list_skins(mods, mod):
-    """{pasta: skin.json} das skins de mods/<mod>/skins/ (pasta = id do skin_new)."""
+    """{folder: skin.json} of the skins in mods/<mod>/skins/ (folder = the id from skin_new)."""
     d = os.path.join(mods, mod, "skins")
     out = {}
     for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
@@ -542,8 +542,8 @@ def write_skin_json(mods, mod, sid, data):
 
 
 def portrait_png(disc, prefix, costume, out_png):
-    """Grava em out_png o retrato do traje (a ultima textura 128x64 do MON/<PREFIXO><traje>.RTX), decodificado como o export
-    (tex.cmd_export) faz, sem escrever nada no stdout (roda numa thread da interface). False se nao deu."""
+    """Writes the costume's portrait to out_png (the last 128x64 texture of MON/<PREFIX><costume>.RTX), decoded the way export
+    (tex.cmd_export) does, without printing anything to stdout (it runs on a GUI thread). False if it failed."""
     src = disc_file(disc, "MON/%s%d.RTX" % (prefix, costume))
     if not src:
         return False
@@ -581,7 +581,7 @@ def portrait_png(disc, prefix, costume, out_png):
 
 
 def skin_duplicate(mods, mod, work, sid, new):
-    """Copia a skin sid para new: a pasta no mod (skin.json com o id novo), a pasta de trabalho e o estado dos PNGs."""
+    """Copies skin sid to new: its folder in the mod (skin.json with the new id), its work folder and the PNGs' state."""
     err = skin_id_error(new)
     if err:
         raise SystemExit("duplicate skin: " + err)
@@ -605,7 +605,7 @@ def skin_duplicate(mods, mod, work, sid, new):
 
 
 def skin_delete(mods, mod, work, sid):
-    """Apaga a skin: a pasta no mod, a pasta de trabalho e as chaves dela no estado."""
+    """Deletes the skin: its folder in the mod, its work folder and its keys in the state."""
     shutil.rmtree(skin_dir(mods, mod, sid), ignore_errors=True)
     shutil.rmtree(os.path.join(work, "skins", sid), ignore_errors=True)
     st = load_state(work)
@@ -616,8 +616,8 @@ def skin_delete(mods, mod, work, sid):
 
 
 def skin_adopt(work, d, stem, sid):
-    """Move para <work>/skins/<sid>/ os PNGs (e manifestos) de <work>/<d>/ que sairam de <STEM>.TEX/.RTX, com o sha1 do estado
-    junto (os editados continuam editados). O traje original fica intocado no proximo pack. Devolve quantos PNGs moveu."""
+    """Moves the PNGs (and manifests) in <work>/<d>/ that came from <STEM>.TEX/.RTX into <work>/skins/<sid>/, carrying their
+    state sha1 along (edited ones stay edited). The next pack leaves the original costume alone. Returns the PNG count moved."""
     src = os.path.join(work, *d.split("/"))
     dst = os.path.join(work, "skins", sid)
     os.makedirs(dst, exist_ok=True)
@@ -639,10 +639,10 @@ def skin_adopt(work, d, stem, sid):
 
 
 def skin_new(disc, work, mods, mod, monster, sid, base=None, name=None, ai=False, textures=True):
-    """Cria mods/<mod>/skins/<id>/skin.json e exporta as texturas do traje base para <work>/skins/<id>/; o pack leva os PNGs
-    editados para a pasta da skin (valem so para ela). monster: um jogavel (nome ou prefixo) ou o id de um monstro custom; base
-    None = traje 0 (jogavel) ou o costume do monster.json (custom). work None = work_dir(mods, mod). textures=False: so o
-    skin.json (a interface move para a skin os PNGs de um traje ja extraido, skin_adopt)."""
+    """Creates mods/<mod>/skins/<id>/skin.json and exports the base costume's textures into <work>/skins/<id>/; pack takes the
+    edited PNGs into the skin's folder (they apply only to that skin). monster: a playable (name or prefix) or a custom monster's
+    id; base None = costume 0 (playable) or the costume from monster.json (custom). work None = work_dir(mods, mod).
+    textures=False: only skin.json (the GUI moves the PNGs of an already extracted costume into the skin, skin_adopt)."""
     validate_mod_name(mod, "skin new")
     if work is None:
         work = work_dir(mods, mod)
@@ -668,7 +668,7 @@ def skin_new(disc, work, mods, mod, monster, sid, base=None, name=None, ai=False
         print("%s already exists; kept" % js)
     else:
         data = {"monster": key, "id": sid, "name": (name or "%s %s" % (sid, key)).upper()}
-        if game or base is not None:   # skin de custom sem --base: o jogo usa o costume do monster.json
+        if game or base is not None:   # custom monster skin without --base: the game uses the costume from monster.json
             data["base"] = costume
         data["ai"] = ai
         with open(js, "w", encoding="utf-8") as f:
@@ -692,7 +692,7 @@ def find_disc_ext(disc, d, stem, ext):
 
 
 def inject_png(disc, dst, stem, rtx, tid, png):
-    """Regrava a textura no .TEX/.RTX do mod (ou do disco), mesmo tamanho: so para a imagem do GS emulado."""
+    """Rewrites the texture into the mod's (or the disc's) .TEX/.RTX, same size: only for the emulated GS image."""
     ext = ".RTX" if rtx else ".TEX"
     rel = find_texfile(disc, stem, ext)
     if not rel:
@@ -725,8 +725,8 @@ def _json_obj(p):
 
 
 def conflict_key(mod_dir, rel):
-    """Chave do que o arquivo troca no jogo, para achar dois mods trocando a mesma coisa; None se nao tem uma propria.
-    PNG: (stem, rtx, texId); skin: monster/id (a pasta da skin vale inteira); monstro custom: id; o resto: o caminho."""
+    """Key for what the file replaces in the game, to find two mods replacing the same thing; None if it has no key of its own.
+    PNG: (stem, rtx, texId); skin: monster/id (the whole skin folder counts as one); custom monster: id; anything else: the path."""
     parts = rel.split("/")
     n = parts[-1]
     if len(parts) >= 3 and parts[0].lower() == "skins":
@@ -761,7 +761,7 @@ def key_label(key):
 
 
 def mod_files(mods, mod):
-    """[(rel, caminho)] dos arquivos de mods/<mod>/, em ordem."""
+    """[(rel, path)] of the files in mods/<mod>/, in order."""
     out = []
     base = os.path.join(mods, mod)
     for root, dirs, files in os.walk(base):
@@ -778,7 +778,7 @@ def check(disc, mods, only=None):
     names = sorted(n for n in os.listdir(mods) if os.path.isdir(os.path.join(mods, n)) and n != WORK)
     if only and only not in names:
         raise SystemExit("check: no mod %r in %s" % (only, mods))
-    owners = {}   # chave -> mods ligados que a trocam, em ordem alfabetica (vence o ultimo)
+    owners = {}   # key -> enabled mods that replace it, in alphabetical order (the last wins)
     for mod in names:
         if mod[0] in "_.":
             continue
@@ -876,7 +876,7 @@ def main(argv):
     def work_of(cmd, mod):
         validate_mod_name(mod, cmd)
         w = opts.get("work") or work_dir(mods, mod)
-        adopt_mod(disc, mods, mod, w)   # mod feito antes de ter pasta de trabalho: entra nela como editado
+        adopt_mod(disc, mods, mod, w)   # a mod made before it had a work folder: comes in as edited
         return w
 
     if args[0] == "export":

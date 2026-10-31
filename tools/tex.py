@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Texturas do WotM (.TEX e .RTX): lista, exporta para PNG e reinjeta PNG/TGA. Formato em docs/FORMATOS.md ("Texturas").
+"""WotM textures (.TEX and .RTX): lists, exports to PNG and injects PNG/TGA back. Format in docs/FORMATOS.md ("Texturas").
 
-  python tools/tex.py list  disc/MON/CONGAR1.TEX                   # pacotes do arquivo (texId, formato, tamanho)
-  python tools/tex.py export disc/MON/CONGAR1.TEX saida/           # PNGs + manifest.json (acha .RTX e .NGP irmaos)
-  python tools/tex.py export disc/LVL/CENTRAL.TEX saida/ --rtx X.RTX --ngp X.NGP
-  python tools/tex.py inject disc/MON/CONGAR1.TEX 12 nova.png novo/CONGAR1.TEX [--rtx in.RTX --rtx-out novo/CONGAR1.RTX]
+  python tools/tex.py list  disc/MON/CONGAR1.TEX                   # the file's packets (texId, format, size)
+  python tools/tex.py export disc/MON/CONGAR1.TEX out/             # PNGs + manifest.json (finds sibling .RTX and .NGP)
+  python tools/tex.py export disc/LVL/CENTRAL.TEX out/ --rtx X.RTX --ngp X.NGP
+  python tools/tex.py inject disc/MON/CONGAR1.TEX 12 new.png new/CONGAR1.TEX [--rtx in.RTX --rtx-out new/CONGAR1.RTX]
                                                                    [--new-palette]
 
-Como o jogo le (src/common/texm.cpp, texmLoadTexture/texmLoadResTexture/texmRelocate/texmResRelocate):
-- Arquivo: cabecalho `_texfile` {u32 numSizes, u32 headerQw, {u32 count, u32 blkSize} x numSizes}; o primeiro pacote fica em
-  headerQw * 16. Alguns arquivos vem num zip de um arquivo so com o magic "IE\\3\\4" (zipInflateAll).
-- Pacote `TexPkt` (cabecalho de 16 bytes): u32 size (o proximo esta (size >> 2) * 16 bytes adiante; 0 = ultimo), u32 pad,
-  u16 texId, u16 tbp (bloco da VRAM, 64 palavras), e um u32 de bits: psm 0..5, noUpload 6, skip 7, logW 8..11, logH 12..15,
+How the game reads them (src/common/texm.cpp, texmLoadTexture/texmLoadResTexture/texmRelocate/texmResRelocate):
+- File: header `_texfile` {u32 numSizes, u32 headerQw, {u32 count, u32 blkSize} x numSizes}; the first packet is at
+  headerQw * 16. Some files come inside a single-file zip with the magic "IE\\3\\4" (zipInflateAll).
+- Packet `TexPkt` (16-byte header): u32 size (the next one is (size >> 2) * 16 bytes ahead; 0 = last), u32 pad,
+  u16 texId, u16 tbp (VRAM block, 64 words), and a u32 of bits: psm 0..5, noUpload 6, skip 7, logW 8..11, logH 12..15,
   numMips 16..18, unk19 19..22, unk23 23..26, bin 27..31.
-- Pixels lineares (linhas de w pixels; T4 com o nibble baixo primeiro). No .TEX comecam em +0x80 (o jogo monta o
-  sceGsLoadImage em +0x20). No .RTX: paletas e outras texturas comuns em +0x10; os formatos "altos" (T8H/T4HL/T4HH: telas do
-  menu, fontes, retratos) em +0x80.
-- Paleta: entrada do .RTX em CT32, 16x16 (256 cores) ou 8x2 (16 cores), achada pelo CBP do TEX0 do objeto (tbp da entrada).
-  CLUT de 256 cores em CSM1 tem os bits 3 e 4 do indice trocados. Alfa do GS: 0x80 = 1,0.
-- Cada arquivo e relocado na carga (texId e tbp somam o maximo do arquivo anterior); o .NGP do mesmo arquivo pode guardar os ids
-  ja somados ou nao. O export acha o deslocamento que mais liga objetos a pacotes de mesmo formato e tamanho (e a paletas do
-  tamanho certo); o manifest.json grava os dois deslocamentos achados.
-- Mipmaps (numMips > 0): so o nivel 0 sai em PNG.
+- Linear pixels (rows of w pixels; T4 low nibble first). In the .TEX they start at +0x80 (the game builds the
+  sceGsLoadImage at +0x20). In the .RTX: palettes and other ordinary textures at +0x10; the "high" formats (T8H/T4HL/T4HH: menu
+  screens, fonts, portraits) at +0x80.
+- Palette: a CT32 .RTX entry, 16x16 (256 colors) or 8x2 (16 colors), found by the CBP in the object's TEX0 (the entry's tbp).
+  A 256-color CLUT in CSM1 has bits 3 and 4 of the index swapped. GS alpha: 0x80 = 1.0.
+- Each file is relocated on load (texId and tbp get the previous file's maximum added); the .NGP of the same file may store the
+  ids with or without that offset. Export finds the offset that links the most objects to packets of the same format and size
+  (and to palettes of the right size); manifest.json records both offsets found.
+- Mipmaps (numMips > 0): only level 0 is written to PNG.
 
-Nao grava nada do jogo no repo: le o disco do usuario e escreve onde ele mandar. O decodificador segue native/wotm_gs.hpp
-(decodeUpload, fillPal); conferido contra ele com dados aleatorios.
+Writes nothing from the game into the repo: reads the user's disc and writes wherever they say. The decoder follows
+native/wotm_gs.hpp (decodeUpload, fillPal); checked against it with random data.
 """
 import collections
 import json
@@ -44,7 +44,7 @@ HIGH = (T8H, T4HL, T4HH)
 # ---------------------------------------------------------------- zip "IE"
 
 def unzip_ie(raw):
-    """Devolve (dados, info). info = None se o arquivo nao veio em zip; senao, o que precisa para regravar igual."""
+    """Returns (data, info). info = None if the file was not zipped; otherwise what is needed to write it back the same way."""
     if raw[:4] != b"IE\x03\x04":
         return raw, None
     method = struct.unpack_from("<H", raw, 8)[0]
@@ -52,16 +52,16 @@ def unzip_ie(raw):
     nlen, xlen = struct.unpack_from("<HH", raw, 26)
     off = 30 + nlen + xlen
     if method != 8:
-        raise ValueError("zip com metodo %d (so deflate)" % method)
+        raise ValueError("zip with method %d (only deflate supported)" % method)
     data = zlib.decompressobj(-15).decompress(raw[off:off + csize])
     if len(data) != usize:
-        raise ValueError("zip: %d bytes, esperava %d" % (len(data), usize))
+        raise ValueError("zip: %d bytes, expected %d" % (len(data), usize))
     return data, {"header": raw[:off], "tail": raw[off + csize:]}
 
 
 def zip_ie(data, info):
-    """Regrava no mesmo formato do original: cabecalho local com crc/tamanhos novos e o resto (diretorio central, se houver)
-    com os mesmos campos corrigidos. O jogo (zipCheckHeader) so le o cabecalho local."""
+    """Writes back in the original's format: local header with new crc/sizes and the rest (central directory, if any)
+    with the same fields fixed up. The game (zipCheckHeader) only reads the local header."""
     if info is None:
         return data
     co = zlib.compressobj(9, zlib.DEFLATED, -15)
@@ -106,16 +106,16 @@ class Packet:
         return self.psm == CT32 and (self.logW, self.logH) in ((4, 4), (3, 1))
 
     def data_off(self, rtx):
-        """Inicio dos pixels: +0x80 no .TEX; no .RTX, +0x80 nos formatos altos e +0x10 no resto (texmLoadResTexture)."""
+        """Pixel start: +0x80 in the .TEX; in the .RTX, +0x80 for the high formats and +0x10 for the rest (texmLoadResTexture)."""
         if rtx and self.psm not in HIGH:
             return self.off + 0x10
         return self.off + 0x80
 
 
 def parse(data):
-    """Cabecalho e pacotes de um .TEX ou .RTX ja descompactado."""
+    """Header and packets of an already decompressed .TEX or .RTX."""
     if len(data) < 8:
-        raise ValueError("arquivo curto demais")
+        raise ValueError("file too short")
     num_sizes, header_qw = struct.unpack_from("<II", data, 0)
     sizes = [struct.unpack_from("<II", data, 8 + 8 * i) for i in range(min(num_sizes, 64)) if 16 + 8 * i <= len(data)]
     pkts = []
@@ -130,7 +130,7 @@ def parse(data):
         p.last = size == 0
         p.end = len(data) if p.last else off + (size >> 2) * 16
         if p.end <= off or p.end > len(data):
-            raise ValueError("pacote em %#x com tamanho invalido (%#x)" % (off, size))
+            raise ValueError("packet at %#x has an invalid size (%#x)" % (off, size))
         pkts.append(p)
         if p.last:
             break
@@ -148,19 +148,19 @@ def pixel_bytes(psm, w, h):
     return w * h * 4
 
 
-# ---------------------------------------------------------------- pixels (como native/wotm_gs.hpp)
+# ---------------------------------------------------------------- pixels (same as native/wotm_gs.hpp)
 
 def fix_alpha(a, hi=False):
-    """Alfa do GS -> PNG. Comum: 0x80 (1,0) = 255, resto * 2. hi (textura com alfa acima de 0x80, como o logo do titulo, que vai
-    a 0xFF e o jogo desenha com o vertice em meia opacidade): o PNG guarda o alfa cru, 255 = 0xFF. Mesma regra do
-    native/wotm_texmods.hpp (loadPng), para o export ida e volta nao perder nada."""
+    """GS alpha -> PNG. Normally: 0x80 (1.0) = 255, everything else * 2. hi (a texture with alpha above 0x80, like the title logo,
+    which goes up to 0xFF and the game draws with half-opacity vertices): the PNG keeps the raw alpha, 255 = 0xFF. Same rule as
+    native/wotm_texmods.hpp (loadPng), so an export round trip loses nothing."""
     if hi:
         return a
     return 255 if a >= 128 else a * 2
 
 
 def raw_hi(px_raw):
-    """Pixels decodificados com hi=True: a textura usa alfa acima de 0x80 (o PNG dela vai cru)?"""
+    """Pixels decoded with hi=True: does the texture use alpha above 0x80 (so its PNG is written raw)?"""
     return any(c[3] > 0x80 for c in px_raw)
 
 
@@ -170,16 +170,16 @@ def from16(v):
 
 
 def csm1(i):
-    """Indice logico -> posicao no upload de uma CLUT de 256 cores (bits 3 e 4 trocados)."""
+    """Logical index -> position in the upload of a 256-color CLUT (bits 3 and 4 swapped)."""
     return (i & 0xE7) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)
 
 
 def palette_from_entry(data, p, rtx=True, swap=True, hi=False):
-    """Paleta RGBA (alfa 0..255; hi: cru) de uma entrada CT32 do .RTX, ja na ordem logica."""
+    """RGBA palette (alpha 0..255; hi: raw) from a CT32 .RTX entry, already in logical order."""
     n = p.w * p.h
     o = p.data_off(rtx)
     raw = [struct.unpack_from("<4B", data, o + 4 * k) if o + 4 * k + 4 <= len(data) else (0, 0, 0, 0) for k in range(n)]
-    if n >= 256 and swap:   # CSM1: so nas texturas de 8 bits (como o fillPal do nativo)
+    if n >= 256 and swap:   # CSM1: only for 8-bit textures (like the native fillPal)
         return [(r, g, b, fix_alpha(a, hi)) for (r, g, b, a) in (raw[csm1(i)] for i in range(256))]
     return [(r, g, b, fix_alpha(a, hi)) for (r, g, b, a) in raw]
 
@@ -189,7 +189,7 @@ def gray_palette(n):
 
 
 def decode(buf, off, psm, w, h, pal=None, csa=0, hi=False):
-    """Pixels lineares -> lista de (r,g,b,a) com alfa 0..255 (hi: CT32 com alfa cru). pal: 256 (T8) ou 16+ (T4) cores."""
+    """Linear pixels -> list of (r,g,b,a) with alpha 0..255 (hi: CT32 with raw alpha). pal: 256 (T8) or 16+ (T4) colors."""
     out = []
     if psm in (T8, T8H):
         for n in range(w * h):
@@ -216,10 +216,10 @@ def decode(buf, off, psm, w, h, pal=None, csa=0, hi=False):
     return out
 
 
-# ---------------------------------------------------------------- PNG e TGA (sem dependencias)
+# ---------------------------------------------------------------- PNG and TGA (no dependencies)
 
 def png_bytes(w, h, px):
-    """PNG RGBA de 8 bits (sem filtro) em memoria."""
+    """8-bit RGBA PNG (unfiltered) in memory."""
     raw = bytearray()
     for y in range(h):
         raw.append(0)
@@ -246,10 +246,10 @@ def _paeth(a, b, c):
 
 
 def read_png(path):
-    """PNG de 8 bits sem entrelacamento: tons de cinza, RGB, paleta, cinza+alfa e RGBA. Devolve (w, h, [(r,g,b,a)])."""
+    """Non-interlaced 8-bit PNG: grayscale, RGB, palette, gray+alpha and RGBA. Returns (w, h, [(r,g,b,a)])."""
     d = open(path, "rb").read()
     if d[:8] != b"\x89PNG\r\n\x1a\n":
-        raise ValueError("%s: nao e PNG" % path)
+        raise ValueError("%s: not a PNG" % path)
     o, idat, plte, trns = 8, b"", None, None
     w = h = depth = ctype = inter = 0
     while o < len(d):
@@ -267,9 +267,9 @@ def read_png(path):
             break
         o += 12 + n
     if inter or depth not in (1, 2, 4, 8, 16) or (depth < 8 and ctype not in (0, 3)):
-        raise ValueError("%s: PNG entrelacado ou com profundidade incomum (salve de novo como RGBA 8 bits)" % path)
+        raise ValueError("%s: PNG is interlaced or has an unusual bit depth (save it again as 8-bit RGBA)" % path)
     chans = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[ctype]
-    bpp = max(1, chans * depth // 8)            # bytes por pixel para o filtro (1 nas profundidades < 8)
+    bpp = max(1, chans * depth // 8)            # bytes per pixel for the filter (1 for depths < 8)
     raw = zlib.decompress(idat)
     stride = (w * chans * depth + 7) // 8
     rows, prev, o = [], bytearray(stride), 0
@@ -284,13 +284,13 @@ def read_png(path):
         prev = line
     px = []
     for line in rows:
-        if depth < 8:      # amostras empacotadas, a primeira no bit mais alto
+        if depth < 8:      # packed samples, the first one in the highest bits
             per = 8 // depth
             vals = [(line[x // per] >> (8 - depth * (x % per + 1))) & ((1 << depth) - 1) for x in range(w)]
             if ctype == 0:
                 vals = [v * 255 // ((1 << depth) - 1) for v in vals]
             line = bytearray(vals)
-        elif depth == 16:  # fica o byte alto de cada amostra
+        elif depth == 16:  # keep the high byte of each sample
             line = line[0::2]
         for x in range(w):
             s = line[x * chans:(x + 1) * chans]
@@ -309,12 +309,12 @@ def read_png(path):
 
 
 def read_tga(path):
-    """TGA sem compressao ou RLE, 24 ou 32 bits (cor verdadeira) ou 8 bits em tons de cinza."""
+    """Uncompressed or RLE TGA, 24 or 32 bits (true color) or 8-bit grayscale."""
     d = open(path, "rb").read()
     idlen, cmtype, itype = d[0], d[1], d[2]
     w, h, bits, desc = struct.unpack_from("<HHBB", d, 12)
     if cmtype or itype not in (2, 3, 10, 11) or bits not in (8, 24, 32):
-        raise ValueError("%s: TGA nao suportado (use 24/32 bits ou cinza de 8 bits)" % path)
+        raise ValueError("%s: unsupported TGA (use 24/32 bits or 8-bit grayscale)" % path)
     bpp = bits // 8
     o = 18 + idlen
     flat = bytearray()
@@ -338,7 +338,7 @@ def read_tga(path):
             px.append((s[0], s[0], s[0], 255))
         else:
             px.append((s[2], s[1], s[0], s[3] if bpp == 4 else 255))
-    if not desc & 0x20:   # origem embaixo
+    if not desc & 0x20:   # origin at the bottom
         px = [p for y in range(h - 1, -1, -1) for p in px[y * w:(y + 1) * w]]
     return w, h, px
 
@@ -347,10 +347,10 @@ def read_image(path):
     return read_tga(path) if path.lower().endswith(".tga") else read_png(path)
 
 
-# ---------------------------------------------------------------- objetos do .NGP (quem usa cada textura)
+# ---------------------------------------------------------------- .NGP objects (who uses each texture)
 
 def ngp_texrefs(path):
-    """[(texId, tex0)] de todos os objetos com textura do .NGP (todos os LODs)."""
+    """[(texId, tex0)] of every textured object in the .NGP (all LODs)."""
     import ngp
     img = ngp.Image(ngp.inflate_ngp(path), 0)
     img.base = guess_base(img)
@@ -372,7 +372,7 @@ def ngp_texrefs(path):
 
 
 def guess_base(img):
-    """Fase e menu vem pre-ligados para 0xA00000; monstros vem com ponteiros relativos (relocados pelo .ptr)."""
+    """Stages and the menu come pre-linked for 0xA00000; monsters come with relative pointers (relocated by the .ptr)."""
     n = struct.unpack_from("<I", img.d, 0)[0]
     roots = [struct.unpack_from("<I", img.d, 4 + 4 * i)[0] for i in range(min(n, 256))]
     if roots and all(0 < r < len(img.d) for r in roots):
@@ -386,9 +386,9 @@ def tex0_fields(v):
 
 
 def best_offset(candidates, score):
-    """Deslocamento com a maior pontuacao; empate fica com o menor em modulo (0 primeiro). Sem candidatos, 0."""
+    """Offset with the highest score; ties go to the smallest absolute value (0 first). No candidates: 0."""
     best, bs = 0, score(0) if candidates else 0
-    top = [d for d, _ in collections.Counter(candidates).most_common(64)]   # os mais frequentes bastam
+    top = [d for d, _ in collections.Counter(candidates).most_common(64)]   # the most frequent ones are enough
     for d in sorted(set(top), key=abs):
         s = score(d)
         if s > bs:
@@ -396,7 +396,7 @@ def best_offset(candidates, score):
     return best
 
 
-# ---------------------------------------------------------------- comandos
+# ---------------------------------------------------------------- commands
 
 def sibling(path, ext):
     stem = os.path.splitext(path)[0]
@@ -410,17 +410,17 @@ def cmd_list(path):
     data, z = read_file(path)
     t = parse(data)
     rtx = path.upper().endswith(".RTX")
-    print("%s: %d bytes%s, %d faixas de tamanho, %d pacotes" % (path, len(data), " (zip)" if z else "", t["numSizes"],
+    print("%s: %d bytes%s, %d size ranges, %d packets" % (path, len(data), " (zip)" if z else "", t["numSizes"],
                                                                   len(t["packets"])))
     for p in t["packets"]:
-        kind = "paleta" if rtx and p.is_palette() else ""
+        kind = "palette" if rtx and p.is_palette() else ""
         print("  %#07x texId=%4d tbp=%5d %-5s %4dx%-4d mips=%d bin=%2d%s%s %s" % (
             p.off, p.texId, p.tbp, PSM_NAMES.get(p.psm, hex(p.psm)), p.w, p.h, p.numMips, p.bin,
             " skip" if p.skip else "", " noUpload" if p.noUpload else "", kind))
 
 
 class Pairing:
-    """Liga cada textura do .TEX a uma paleta do .RTX pelos objetos do .NGP."""
+    """Links each .TEX texture to a .RTX palette through the .NGP objects."""
 
     def __init__(self, tex, rtx_data, rtx, refs):
         self.tex, self.rtx_data, self.rtx = tex, rtx_data, rtx
@@ -441,34 +441,34 @@ class Pairing:
             if e is None:
                 return False
             n = e.w * e.h
-            return n == 256 if f["psm"] in (T8, T8H) else True   # T4 usa CLUT de 16, ou um trecho (csa) de uma de 256
+            return n == 256 if f["psm"] in (T8, T8H) else True   # T4 uses a 16-color CLUT, or a slice (csa) of a 256-color one
 
         self.dcbp = best_offset([tex0_fields(r[1])["cbp"] - b for r in ok for b in self.pals],
                                 lambda d: sum(pal_ok(r, d) for r in ok))
-        self.uses = collections.defaultdict(set)   # texId (do arquivo) -> {(cbp do arquivo, csa)}
+        self.uses = collections.defaultdict(set)   # texId (in the file) -> {(cbp in the file, csa)}
         for tid, t0 in ok:
             f = tex0_fields(t0)
             self.uses[tid - self.dtex].add((f["cbp"] - self.dcbp, f["csa"]))
 
     def palette(self, p, hi=False):
-        """(paleta, tbp da paleta, csa, todas as combinacoes vistas) ou (None, ...) se nao achou. hi: alfa cru."""
+        """(palette, palette tbp, csa, every combination seen) or (None, ...) if not found. hi: raw alpha."""
         combos = sorted(self.uses.get(p.texId, ()))
         for cbp, csa in combos:
             e = self.pals.get(cbp)
             if e is not None:
                 return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H), hi=hi), cbp, csa, combos
-        if len(self.pals) == 1 and not combos:   # arquivo com uma paleta so
+        if len(self.pals) == 1 and not combos:   # file with a single palette
             cbp, e = next(iter(self.pals.items()))
             return palette_from_entry(self.rtx_data, e, swap=p.psm in (T8, T8H), hi=hi), cbp, 0, combos
         return None, None, 0, combos
 
 
 class Library:
-    """Texturas de um arquivo (.TEX + .RTX) para quem desenha os objetos do .NGP: `image(texId, tex0)` com os numeros como
-    estao no objeto. Usa os mesmos deslocamentos do export (Pairing)."""
+    """Textures of a file (.TEX + .RTX) for code that draws the .NGP objects: `image(texId, tex0)` with the numbers as they
+    appear in the object. Uses the same offsets as export (Pairing)."""
 
     def __init__(self, tex_path=None, rtx_path=None, ngp_path=None, refs=None):
-        self.src = {}   # id(pacote) -> (dados, e do .RTX)
+        self.src = {}   # id(packet) -> (data, is from .RTX)
         pkts = []
         tex_data = rtx_data = rtx = None
         if tex_path:
@@ -492,7 +492,7 @@ class Library:
         self.cache = {}
 
     def image(self, tex_id, tex0):
-        """(w, h, [(r,g,b,a)]) da textura que o objeto usa, ou None. TCC = 0 (so RGB) sai com alfa 255, como no jogo."""
+        """(w, h, [(r,g,b,a)]) of the texture the object uses, or None. TCC = 0 (RGB only) comes out with alpha 255, as in the game."""
         key = (tex_id, tex0)
         if key in self.cache:
             return self.cache[key]
@@ -547,7 +547,7 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
                "offset": p.off}
         rtx_side = is_rtx_main
         off = p.data_off(rtx_side)
-        hi = False   # alfa acima de 0x80: o PNG vai cru (fix_alpha)
+        hi = False   # alpha above 0x80: the PNG is written raw (fix_alpha)
         if p.psm in (T8, T4, T8H, T4HL, T4HH):
             pal, cbp, csa, combos = pair.palette(p, hi=True)
             ent["palettesSeen"] = [{"tbp": c, "csa": s} for c, s in combos]
@@ -565,14 +565,14 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
             px = decode(data, off, p.psm, p.w, p.h, hi=True)
             hi = p.psm == CT32 and raw_hi(px)
         else:
-            ent["error"] = "formato nao suportado"
+            ent["error"] = "unsupported format"
             man["textures"].append(ent)
             continue
         if hi:
-            ent["alpha"] = "raw"   # 255 no PNG = 0xFF do GS (o dobro do opaco comum)
+            ent["alpha"] = "raw"   # 255 in the PNG = GS 0xFF (twice the usual opaque)
         elif p.psm != CT24 and p.psm not in (CT16, CT16S) and ent.get("palette", True) is not None:
-            px = [(r, g, b, fix_alpha(a)) for (r, g, b, a) in px]   # decodificado cru acima: 0x80 -> 255
-        # Mesmo nome que o desenho nativo procura em mods/ (native/wotm_texmods.hpp): <arquivo>_t<id> do .TEX, <arquivo>_rtx_t<id> do .RTX
+            px = [(r, g, b, fix_alpha(a)) for (r, g, b, a) in px]   # decoded raw above: 0x80 -> 255
+        # Same name the native renderer looks for in mods/ (native/wotm_texmods.hpp): <file>_t<id> for .TEX, <file>_rtx_t<id> for .RTX
         name = "%s%s_t%04d%s.png" % (stem, "_rtx" if is_rtx_main else "", p.texId,
                                      "" if ent.get("palette", True) is not None else "_sempaleta")
         write_png(os.path.join(outdir, name), p.w, p.h, px)
@@ -583,15 +583,15 @@ def cmd_export(path, outdir, rtx_path=None, ngp_path=None):
         man["palettes"] = [{"tbp": e.tbp, "colors": e.w * e.h} for e in rtx["packets"] if e.is_palette()]
     with open(os.path.join(outdir, stem + ("_rtx" if is_rtx_main else "") + "_manifest.json"), "w", encoding="utf-8") as f:
         json.dump(man, f, indent=1, ensure_ascii=False)
-    print("%d texturas em %s (%d sem paleta: em tons de cinza)%s" % (done, outdir, semp,
-                                                                     "" if refs else "; sem .NGP, paletas so por arquivo de uma paleta"))
+    print("%d textures in %s (%d without a palette: in grayscale)%s" % (done, outdir, semp,
+                                                                     "" if refs else "; no .NGP, palettes only from single-palette files"))
     return man
 
 
-# ---------------------------------------------------------------- reinjecao
+# ---------------------------------------------------------------- injection
 
 def to_gs_alpha(a, hi=False):
-    """Alfa 0..255 do PNG -> GS (0x80 = 1,0; hi: cru). Inverso de fix_alpha nos valores que ele produz."""
+    """PNG alpha 0..255 -> GS (0x80 = 1.0; hi: raw). Inverse of fix_alpha on the values it produces."""
     if hi:
         return a
     return 0x80 if a >= 255 else a // 2
@@ -609,7 +609,7 @@ def nearest(pal, c):
 
 
 def median_cut(px, n):
-    """Paleta de ate n cores (corte pela mediana no canal de maior amplitude)."""
+    """Palette of up to n colors (median cut on the channel with the widest range)."""
     boxes = [list(set(px))]
     while len(boxes) < n:
         boxes.sort(key=lambda b: max(max(c[k] for c in b) - min(c[k] for c in b) for k in range(4)) if len(b) > 1 else -1)
@@ -625,7 +625,7 @@ def median_cut(px, n):
 
 
 def encode(px, psm, pal=None, csa=0, hi=False):
-    """(r,g,b,a) -> bytes lineares do formato. Indexados usam a paleta dada (indice mais proximo). hi: alfa do PNG cru (CT32)."""
+    """(r,g,b,a) -> linear bytes in the format. Indexed formats use the given palette (nearest index). hi: raw PNG alpha (CT32)."""
     out = bytearray()
     if psm in (T8, T8H):
         cache = {}
@@ -661,7 +661,7 @@ def encode(px, psm, pal=None, csa=0, hi=False):
 
 
 def write_palette(buf, e, pal, swap=True, hi=False):
-    """Grava a paleta (ordem logica, alfa 0..255; hi: cru) na entrada CT32 do .RTX."""
+    """Writes the palette (logical order, alpha 0..255; hi: raw) into the CT32 .RTX entry."""
     o = e.data_off(True)
     n = e.w * e.h
     for i in range(min(n, len(pal))):
@@ -671,35 +671,35 @@ def write_palette(buf, e, pal, swap=True, hi=False):
 
 
 def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=None, new_palette=False):
-    """Troca os pixels de uma textura (mesmo tamanho e formato). Indexadas: cores mais proximas da paleta atual, ou paleta nova
-    (--new-palette, grava o .RTX; so se nenhuma outra textura usar a mesma paleta)."""
+    """Replaces a texture's pixels (same size and format). Indexed: nearest colors from the current palette, or a new palette
+    (--new-palette, writes the .RTX; only if no other texture uses the same palette)."""
     raw_data, zinfo = read_file(path)
     data = bytearray(raw_data)
     is_rtx_main = path.upper().endswith(".RTX")
     tex = parse(bytes(data))
     p = next((q for q in tex["packets"] if q.texId == tex_id and not (is_rtx_main and q.is_palette())), None)
     if p is None:
-        raise SystemExit("texId %d nao existe em %s" % (tex_id, path))
+        raise SystemExit("texId %d does not exist in %s" % (tex_id, path))
     w, h, px = read_image(image)
     if (w, h) != (p.w, p.h):
-        raise SystemExit("a imagem tem %dx%d; a textura %d tem %dx%d (redimensione antes)" % (w, h, tex_id, p.w, p.h))
+        raise SystemExit("the image is %dx%d; texture %d is %dx%d (resize it first)" % (w, h, tex_id, p.w, p.h))
     psm = p.psm
     pal = None
     csa = 0
-    hi = False   # a original usa alfa acima de 0x80: o PNG vem cru (fix_alpha)
+    hi = False   # the original uses alpha above 0x80: the PNG comes in raw (fix_alpha)
     rtx_data = rtx = e = None
     if psm in (T8, T4, T8H, T4HL, T4HH):
         rtx_path = rtx_path or (path if is_rtx_main else sibling(path, ".RTX"))
         ngp_path = ngp_path or sibling(path, ".NGP")
         if not rtx_path:
-            raise SystemExit("textura indexada: preciso do .RTX (--rtx)")
+            raise SystemExit("indexed texture: the .RTX is needed (--rtx)")
         rtx_bytes, rtx_z = read_file(rtx_path)
         rtx_data = bytearray(rtx_bytes)
         rtx = parse(bytes(rtx_data))
         pair = Pairing(tex, bytes(rtx_data), rtx, ngp_texrefs(ngp_path) if ngp_path else [])
         cur, cbp, csa, _ = pair.palette(p, hi=True)
         if cur is None:
-            raise SystemExit("nao achei a paleta da textura %d (passe o .NGP com --ngp)" % tex_id)
+            raise SystemExit("could not find the palette for texture %d (pass the .NGP with --ngp)" % tex_id)
         dpsm = psm if psm not in HIGH else (T8 if psm == T8H else T4)
         hi = raw_hi(decode(bytes(data), p.data_off(is_rtx_main), dpsm, p.w, p.h, cur, csa if len(cur) >= 256 else 0))
         if not hi:
@@ -709,10 +709,10 @@ def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=N
         if new_palette:
             shared = [q.texId for q in tex["packets"] if q is not p and any(c == cbp for c, _ in pair.uses.get(q.texId, ()))]
             if shared:
-                raise SystemExit("a paleta %d tambem serve as texturas %s; sem --new-palette a imagem usa as cores atuais" %
+                raise SystemExit("palette %d is also used by textures %s; without --new-palette the image uses the current colors" %
                                  (cbp, shared))
             newp = median_cut(px, n)
-            if e.w * e.h > n:   # T4 dentro de uma CLUT de 256: so a faixa do csa muda
+            if e.w * e.h > n:   # T4 inside a 256-color CLUT: only the csa slice changes
                 cur = list(cur)
                 cur[csa * 16:csa * 16 + 16] = newp
                 newp = cur
@@ -726,17 +726,17 @@ def cmd_inject(path, tex_id, image, out, rtx_path=None, rtx_out=None, ngp_path=N
     o = p.data_off(is_rtx_main)
     need = pixel_bytes(psm, p.w, p.h)
     if o + need > p.end:
-        raise SystemExit("pacote menor que os pixels (%d > %d)" % (need, p.end - o))
+        raise SystemExit("packet smaller than the pixels (%d > %d)" % (need, p.end - o))
     data[o:o + need] = enc[:need]
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     with open(out, "wb") as f:
         f.write(zip_ie(bytes(data), zinfo))
-    msg = "gravado %s" % out
+    msg = "wrote %s" % out
     if new_palette and rtx_data is not None:
         rtx_out = rtx_out or os.path.join(os.path.dirname(os.path.abspath(out)), os.path.basename(rtx_path))
         with open(rtx_out, "wb") as f:
             f.write(zip_ie(bytes(rtx_data), rtx_z))
-        msg += " e %s (paleta nova)" % rtx_out
+        msg += " and %s (new palette)" % rtx_out
     print(msg)
 
 

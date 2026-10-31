@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# ABOUTME: Testes do tools/build_id.py (identidade do build que o netcode compara): mesma entrada em pastas diferentes da o mesmo id,
-# ABOUTME: e qualquer mudanca de codigo, compilador ou flags muda. Rodar: python tools/test_build_id.py
+# ABOUTME: Tests for tools/build_id.py (the build identity the netcode compares): the same input in different folders gives the same id,
+# ABOUTME: and any change of code, compiler or flags changes it. Run: python tools/test_build_id.py
 import sys
 import tempfile
 import unittest
@@ -18,13 +18,13 @@ WOTM_NATIVE_DIR:PATH={repo}/native
 
 
 def make_tree(root, ver='14.44.35207', native_text='int a;\n', crlf=False):
-    """Repo + runtime minimos: native/, patches, recomp/retail, PS2Recomp (HEAD em arquivo) e o CMakeCache do build_dev."""
+    """Minimal repo + runtime: native/, patches, recomp/retail, PS2Recomp (HEAD in a file) and the build_dev CMakeCache."""
     repo, runtime = root / 'repo', root / 'repo' / 'runtime'
     nl = '\r\n' if crlf else '\n'
     files = {
         repo / 'native' / 'a.hpp': native_text,
         repo / 'native' / 'runtime' / 'b.inc': 'void f();\n',
-        repo / 'native' / 'net' / 'build' / 'junk.obj': 'ignorado\n',   # saida de build: fora do id
+        repo / 'native' / 'net' / 'build' / 'junk.obj': 'ignored\n',   # build output: not part of the id
         repo / 'tools' / 'runtime_patch' / 'wotm-runtime.patch': '+x\n',
         repo / 'recomp' / 'retail' / 'f_100.cpp': 'void f_100() {}\n',
         runtime / 'build_dev' / 'CMakeCache.txt': CACHE.format(ver=ver, repo=str(repo).replace('\\', '/')),
@@ -42,7 +42,7 @@ class BuildIdTest(unittest.TestCase):
     def test_same_sources_in_other_folders_give_the_same_id(self):
         with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
             ida = self.compute(*make_tree(Path(a)))
-            idb = self.compute(*make_tree(Path(b) / 'outra pasta'))
+            idb = self.compute(*make_tree(Path(b) / 'other folder'))
             self.assertEqual(ida, idb)
             self.assertRegex(ida, r'^wl-[0-9a-f]{16}$')
 
@@ -61,12 +61,12 @@ class BuildIdTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as a:
             repo, runtime = make_tree(Path(a))
             before = self.compute(repo, runtime)
-            (repo / 'native' / 'net' / 'build' / 'junk.obj').write_text('mudou')
+            (repo / 'native' / 'net' / 'build' / 'junk.obj').write_text('changed')
             self.assertEqual(before, self.compute(repo, runtime))
-            # qualquer pasta build dentro de native/ (testes, ferramentas futuras) e saida de compilacao
+            # any build folder inside native/ (tests, future tools) is build output
             other = repo / 'native' / 'tests' / 'build' / 'x.obj'
             other.parent.mkdir(parents=True)
-            other.write_text('saida')
+            other.write_text('output')
             self.assertEqual(before, self.compute(repo, runtime))
 
     def test_compiler_version_comes_from_the_cmake_cache(self):

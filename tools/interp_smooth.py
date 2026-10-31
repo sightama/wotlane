@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-# ABOUTME: Mede o "judder" da imagem nas linhas [interp] do log (WOTM_INTERPLOG=1): a variacao do atraso entre o instante de exibicao e o
-# ABOUTME: tempo do jogo mostrado. Com interpolacao o atraso fica quase constante; sem ela, dente de serra de um quadro do jogo.
-"""Uso: python tools/interp_smooth.py <live.err.log> [--max-ms 8 | --min-ms 12]
+# ABOUTME: Measures image "judder" from the log's [interp] lines (WOTM_INTERPLOG=1): how much the delay between display time and the
+# ABOUTME: game time shown varies. With interpolation the delay stays nearly constant; without it, a sawtooth of one game frame.
+"""Usage: python tools/interp_smooth.py <live.err.log> [--max-ms 8 | --min-ms 12]
 
-Le as linhas "[interp] t=<s> g=<quadro> fA=<fields> fB=<fields> alfa=<a>" do wotm_live.inc (t = instante da apresentacao; o tempo do
-jogo mostrado e fA + alfa * (fB - fA), em fields de 1/60 s; sem a mistura, fB) e imprime a faixa (percentil 95 menos 5) do atraso t - ct,
-em ms. Sai com 1 se passar do limite.
+Reads the "[interp] t=<s> g=<frame> fA=<fields> fB=<fields> alpha=<a>" lines from wotm_live.inc (t = presentation time; the game time
+shown is fA + alpha * (fB - fA), in fields of 1/60 s; without blending, fB) and prints the spread (95th minus 5th percentile) of the
+delay t - ct, in ms. Exits with 1 if it goes past the limit.
 """
 import argparse
 import re
 import sys
 
-# linha do wotm_live.inc (Scene::showBlend): fields de A e B e o alfa da mistura; "(desligada)" = sem mistura, a imagem e a de B
+# line from wotm_live.inc (Scene::showBlend): the fields of A and B and the blend alpha; "(off)" = no blending, the image is B's
 LIVE = re.compile(r'\[interp\] t=([\d.]+) g=\d+ fA=(\d+) fB=(\d+) alpha=([\d.]+)( \(off\))?')
 
 
 def read_presentations(text):
-    """(instante em s, tempo do jogo em fields) por apresentacao."""
+    """(time in s, game time in fields) per presentation."""
     out = []
     for m in LIVE.finditer(text):
         fa, fb, alpha = int(m.group(2)), int(m.group(3)), float(m.group(4))
@@ -25,8 +25,8 @@ def read_presentations(text):
 
 
 def lag_spread_ms(pres, window=61):
-    """Faixa p5..p95 do atraso (ms) em volta da mediana local (janela de `window` apresentacoes: uma pausa do jogo e um degrau, nao
-    tremor) e quantas apresentacoes; a primeira decima parte (relogio assentando) fica de fora."""
+    """p5..p95 spread of the delay (ms) around the local median (a window of `window` presentations: a game pause is a step, not
+    jitter) and how many presentations; the first tenth (clock settling) is left out."""
     lags = [t * 1000.0 - ct * 1000.0 / 60.0 for t, ct in pres[len(pres) // 10:]]
     n = len(lags)
     if n == 0:
@@ -50,9 +50,9 @@ def main():
         pres = read_presentations(f.read())
     spread, n = lag_spread_ms(pres)
     if spread is None:
-        print('nenhuma linha [interp] t= g= fA= fB= alfa= (WOTM_INTERPLOG=1, interpolacao pedida)')
+        print('no [interp] t= g= fA= fB= alpha= lines (WOTM_INTERPLOG=1, interpolation requested)')
         return 1
-    print(f'atraso da imagem varia {spread:.2f} ms (p5..p95 de {n} apresentacoes)')
+    print(f'image delay varies {spread:.2f} ms (p5..p95 of {n} presentations)')
     if a.max_ms is not None and spread > a.max_ms:
         return 1
     if a.min_ms is not None and spread < a.min_ms:

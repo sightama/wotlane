@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Exporta a geometria de um .NGP do WotM para glTF binario (.glb), com as texturas do .TEX/.RTX do mesmo arquivo.
+"""Exports the geometry of a WotM .NGP to binary glTF (.glb), with the textures from the .TEX/.RTX of the same name.
 
-  python tools/gltf.py disc/LVL/CENTRAL.NGP saida/central.glb            # acha CENTRAL.TEX e CENTRAL.RTX ao lado
-  python tools/gltf.py disc/LVL/CENTRAL.NGP saida/central.glb --lod 0    # LOD mais grosseiro (padrao: o mais detalhado)
-  python tools/gltf.py disc/MON/CONGAR1.NGP saida/congar.glb --skinned   # inclui as malhas skinned cruas (ver abaixo)
-  opcoes: --tex X.TEX --rtx X.RTX (outros arquivos de textura), --no-tex (so cor de vertice), --lit (sem KHR_materials_unlit)
+  python tools/gltf.py disc/LVL/CENTRAL.NGP out/central.glb            # finds CENTRAL.TEX and CENTRAL.RTX next to it
+  python tools/gltf.py disc/LVL/CENTRAL.NGP out/central.glb --lod 0    # coarsest LOD (default: the most detailed)
+  python tools/gltf.py disc/MON/CONGAR1.NGP out/congar.glb --skinned   # includes the raw skinned meshes (see below)
+  options: --tex X.TEX --rtx X.RTX (other texture files), --no-tex (vertex color only), --lit (no KHR_materials_unlit)
 
-O que sai certo: objetos estaticos (fase, predios, destrutiveis intactos, menu), com a hierarquia de TRANSLATE/ROTATE/SCALE
-aplicada, a textura de cada secao (Vtx.slot -> texId/gsTexCtx do objeto), UV, cor de vertice e normais. A malha vem do mesmo
-decodificador do nativo (ngp.decode_mesh). Eixos: o jogo usa Z para cima; o glTF, Y para cima (x, z, -y).
+What comes out right: static objects (stage, buildings, intact destructibles, menu), with the TRANSLATE/ROTATE/SCALE hierarchy
+applied, each section's texture (Vtx.slot -> the object's texId/gsTexCtx), UV, vertex color and normals. The mesh comes from
+the same decoder as the native layer (ngp.decode_mesh). Axes: the game is Z-up; glTF is Y-up (x, z, -y).
 
-Monstros (conferido em 2026-10-20 com os 13 monstros, traje 0, e o validador oficial do glTF: 0 erros): com --skinned o corpo
-sai inteiro na pose de base (pose T), porque as posicoes das malhas skinned estao no espaco do modelo em repouso (a paleta do
-jogo e restPoseInv * osso). O que ainda nao sai: animacao e esqueleto (curvas do AnimCurve.cpp, SKEL_BONE/ANIM_XFORM). Partes
-rigidas sob ANIM_XFORM saem na matriz identidade, e entram junto objetos que nao sao o corpo (retratos do HUD, projeteis,
-efeitos), amontoados perto da origem.
-Sprites (halo dos power-ups) tambem ficam de fora. A cor de vertice ja traz a luz pre-calculada das fases, por isso o material
-e "unlit" por padrao.
+Monsters (checked on 2026-10-20 with all 13 monsters, costume 0, and the official glTF validator: 0 errors): with --skinned the
+whole body comes out in the bind pose (T-pose), because the skinned mesh positions are in rest-pose model space (the game's
+palette is restPoseInv * bone). Not exported yet: animation and skeleton (AnimCurve.cpp curves, SKEL_BONE/ANIM_XFORM). Rigid
+parts under ANIM_XFORM come out with the identity matrix, and objects that aren't part of the body (HUD portraits, projectiles,
+effects) come along too, piled up near the origin.
+Sprites (the power-up halo) are also left out. Vertex color already carries the stages' baked lighting, which is why the
+material is "unlit" by default.
 
-Nao grava nada do jogo no repo: le o disco do usuario e escreve onde ele mandar.
+Writes nothing from the game into the repo: it reads the user's disc and writes wherever the user says.
 """
 import json
 import os
@@ -35,7 +35,7 @@ def find_sibling(path, ext):
 
 
 class Glb:
-    """Montador de glTF 2.0 binario: buffer unico, accessors com min/max nas posicoes."""
+    """Binary glTF 2.0 builder: a single buffer, accessors with min/max on positions."""
 
     def __init__(self):
         self.bin = bytearray()
@@ -95,16 +95,16 @@ def to_y_up(p):
 
 
 class Materials:
-    """Um material por (textura do slot da secao, TEX0, mistura), com a imagem do tex.Library embutida no .glb."""
+    """One material per (section slot's texture, TEX0, blend), with the tex.Library image embedded in the .glb."""
 
     def __init__(self, g, img, lib, unlit, stats):
         self.g, self.img, self.lib, self.unlit, self.stats = g, img, lib, unlit, stats
         self.cache = {}
 
     def get(self, node, slot, blend, gs=None):
-        """blend: PRIM.ABE da malha. gs: estado do GS herdado (pose.Item.gs: ALPHA_1, aref, zmsk, ztst) ou None (o padrao
-        antigo: recorte de alfa em ~6%). Com gs, o material leva em extras.gs o modo de mistura (com ABE), o limiar do
-        teste de alfa e o ZMSK; o viewer monta a mistura do GS com eles (o glTF so tem OPAQUE/MASK/BLEND)."""
+        """blend: the mesh's PRIM.ABE. gs: inherited GS state (pose.Item.gs: ALPHA_1, aref, zmsk, ztst) or None (the old
+        default: alpha cutoff at ~6%). With gs, the material carries in extras.gs the blend mode (with ABE), the alpha test
+        threshold and ZMSK; the viewer rebuilds the GS blending from them (glTF only has OPAQUE/MASK/BLEND)."""
         img, lib, g, stats = self.img, self.lib, self.g, self.stats
         gk = None
         if gs is not None:
@@ -136,13 +136,13 @@ class Materials:
                 m["pbrMetallicRoughness"]["baseColorTexture"] = {"index": g.image(tex.png_bytes(w, h, px), m["name"])}
                 stats["texturas"] += 1
                 if gk is not None:
-                    # como o shader do nativo: so descarta com teste de alfa (As*128 <= aref; As = 1 em 0x80)
+                    # like the native shader: discard only with the alpha test on (As*128 <= aref; As = 1 at 0x80)
                     if not blend and gk[1] >= 0:
                         m["alphaMode"] = "MASK"
                         m["alphaCutoff"] = (gk[1] + 0.5) / 128.0
                 elif not blend and any(a < 255 for (_r, _g, _b, a) in px):
                     m["alphaMode"] = "MASK"
-                    m["alphaCutoff"] = 0.06   # o shader do nativo descarta abaixo de ~6%
+                    m["alphaCutoff"] = 0.06   # the native shader discards below ~6%
         else:
             m["name"] = "cor_de_vertice"
         g.j["materials"].append(m)
@@ -152,7 +152,7 @@ class Materials:
 
 def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, use_tex=True, unlit=True, quiet=False,
            items=None, model=None):
-    """items/model: pose do tools/pose.py (lista de OBJECTs com matriz e a paleta de ossos); sem eles, a hierarquia crua."""
+    """items/model: a tools/pose.py pose (list of OBJECTs with matrix, plus the bone palette); without them, the raw hierarchy."""
     if model is not None:
         global pose_mod
         import pose as pose_mod
@@ -222,7 +222,7 @@ def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, u
         g.j["scenes"][0]["nodes"].append(len(g.j["nodes"]) - 1)
         stats["objetos"] += 1
 
-    if items is not None:   # pose montada pelo tools/pose.py: (OBJECT, matriz, instancia)
+    if items is not None:   # pose built by tools/pose.py: (OBJECT, matrix, instance)
         for node, mtx, ctx in items:
             visit(node, mtx, ctx)
     else:
@@ -230,7 +230,7 @@ def export(ngp_path, out, lod=99, skinned=False, tex_path=None, rtx_path=None, u
             ngp.walk(img, r, visit, lod=lod)
     g.write(out)
     if not quiet:
-        print("gravado %s: %d objetos, %d triangulos, %d texturas (%d nao achadas); fora: %d skinned, %d sprites" % (
+        print("wrote %s: %d objects, %d triangles, %d textures (%d not found); skipped: %d skinned, %d sprites" % (
             out, stats["objetos"], stats["triangulos"], stats["texturas"], stats["sem_textura"], stats["skinned_fora"],
             stats["sprites_fora"]))
     return stats

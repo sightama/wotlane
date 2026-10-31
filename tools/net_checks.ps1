@@ -1,39 +1,40 @@
-# ABOUTME: Checagens da partida em rede (perfil fixo da rede, dialogos em lockstep): cada uma roda tools\net_check.ps1 com 2 jogadores
-# ABOUTME: e confere estado igual em todo quadro e o log. Uso: powershell -File tools\net_checks.ps1 [-Only <nome>]; sai com 1 se alguma falhar.
+# ABOUTME: Network match checks (fixed network profile, lockstep dialogs): each runs tools\net_check.ps1 with 2 players and checks
+# ABOUTME: identical state on every frame plus the log. Usage: powershell -File tools\net_checks.ps1 [-Only <name>]; exits 1 if any fail.
 param([string]$Only = '')
 $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'net_check.ps1'
 
 $checks = [ordered]@{
-    # mouse so num PC (WOTM_ORBITMOUSE: deslocamento como o do mouse, a partir do quadro 300 da orbita): a camera moderna o levava a
-    # camera do jogo do jogador 1 so naquele PC e a partida dessincronizava (bloco 0x800000, o _cs da camera). Na rede: camera classica
+    # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from orbit frame 300 on): the modern camera applied it to player 1's
+    # game camera on that PC only and the match desynced (block 0x800000, the camera's _cs). On the network: classic camera
     'camera_mouse'  = @{ PlayerEnv = '2:WOTM_ORBITMOUSE=300:600:4:0'; Secs = 50
                          Expect = 'network match: fixed profile' }
-    # opcoes de jogo diferentes em cada PC (camera classica num, moderna no outro: com a moderna o controle e relativo a tela; lock-on
-    # alternado, sensibilidade e inversao da camera): o perfil fixo vale nos dois
+    # different game options on each PC (classic camera on one, modern on the other: with modern the pad is screen-relative; toggled
+    # lock-on, camera sensitivity and inversion): the fixed profile applies on both
     'opcoes_pc'     = @{ PlayerEnv = '1:WOTM_CAMERA=0;WOTM_CAMSENS=10;WOTM_CAMINVERT=1|||2:WOTM_CAMERA=1;WOTM_LOCKTOGGLE=1'; Secs = 50 }
-    # modo foto num PC so (WOTM_PHOTO: liga sozinho 25 s depois da primeira cena): pausava aquele PC e soltava a camera; na rede nao liga
+    # photo mode on one PC only (WOTM_PHOTO: turns itself on 25 s after the first scene): it paused that PC and freed the camera; on the
+    # network it stays off
     'foto'          = @{ PlayerEnv = '2:WOTM_PHOTO=25'; Secs = 50
                          Reject = '\[photo\] on|||\[photo\] automatic test' }
-    # pausa pelo jogador 1, X no RECOMPILED OPTIONS: o painel le o teclado e o mouse de cada PC (fora do controle da rede) e fecharia
-    # em quadros diferentes; na rede a linha nao abre o painel e a pausa segue em lockstep (o Start de novo continua a luta)
-    # (toques curtos: segurado, o menu repete e passa da linha)
+    # pause by player 1, X on RECOMPILED OPTIONS: the panel reads each PC's keyboard and mouse (outside the network's control) and would
+    # close on different frames; on the network that line does not open the panel and the pause stays in lockstep (Start again resumes
+    # the fight) (short taps: when held, the menu repeats and skips past the line)
     'painel_pausa'  = @{ PlayerEnv = '1:PS2X_PAD=24:0.3:start;26:0.2:down;27:0.2:down;28:0.3:cross;31:0.3:start;33:3:up;37:1:square'; Secs = 50
                          Reject = '\[pause\] panel opened' }
-    # meta de 1 vitoria: o "vencer" (pelo g_frame, igual nos dois) derruba o jogador 2, o dialogo 5 abre nos dois PCs e o X do jogador 1
-    # escolhe PLAY AGAIN (o cursor comeca nele; o dialogo aceita o direcional de qualquer jogador, entao o 2 fica quieto): a rodada 2
-    # comeca e termina igual nos dois. O laco do dialogo anda em lockstep (sem isso o indice do quadro parava e o menu nao andava)
+    # 1-win target: the "vencer" cheat (timed by g_frame, the same on both) knocks out player 2, dialog 5 opens on both PCs and player 1's
+    # X picks PLAY AGAIN (the cursor starts there; the dialog accepts any player's d-pad, so player 2 stays still): round 2 starts and
+    # ends the same on both. The dialog loop runs in lockstep (without that the frame index stalled and the menu did not move)
     'meta_rede'     = @{ Wins = 1; ExtraEnv = 'WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 60
                          Expect = '\[dialog\] 5 opened|||round 2 ended' }
-    # REBUILD LEVEL no dialogo 5 (baixo, X): o ResetLevel refaz a fase sem recarregar; a rodada 2 joga e termina igual nos dois
+    # REBUILD LEVEL in dialog 5 (down, X): ResetLevel rebuilds the stage without reloading; round 2 plays and ends the same on both
     'rebuild_rede'  = @{ Wins = 1; ExtraEnv = 'WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.2:down;35:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 60
                          Expect = '\[dialog\] 5 opened|||round 2 ended' }
-    # QUIT no dialogo 5 (baixo, baixo, X; no ARE YOU SURE o NO vem marcado: cima, X): fora da rede o jogo volta ao userintMain e a
-    # partida direta recomecaria (segunda carga da fase, que dessincroniza); na rede a partida acaba e o jogo fecha em todos os PCs
-    # (o launcher volta ao lobby)
+    # QUIT in dialog 5 (down, down, X; ARE YOU SURE has NO selected: up, X): off the network the game returns to userintMain and the
+    # direct match would restart (a second stage load, which desyncs); on the network the match ends and the game closes on every PC
+    # (the launcher goes back to the lobby)
     'sair_rede'     = @{ Wins = 1; ExtraEnv = 'WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.2:down;35:0.2:down;36:0.3:cross;38:0.2:up;39:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 55
                          Expect = '\[net\] match ended by QUIT'; Reject = 'second level load' }
-    # mods diferentes (o jogador 2 sem os mods do repo): o digest dos mods entra no hash da configuracao e o servidor recusa
+    # different mods (player 2 without the repo's mods): the mods digest is part of the configuration hash and the server rejects it
     'mods_diferentes' = @{ PlayerEnv = '2:WOTM_MODS=0'; Secs = 30; ExpectRefused = 'game configuration differs' }
 }
 
@@ -47,6 +48,6 @@ foreach ($name in $checks.Keys) {
     & powershell @a
     if ($LASTEXITCODE -ne 0) { $failed += $name }
 }
-if ($failed) { Write-Host "FALHARAM: $($failed -join ', ')"; exit 1 }
-Write-Host 'todas passaram'
+if ($failed) { Write-Host "FAILED: $($failed -join ', ')"; exit 1 }
+Write-Host 'all passed'
 exit 0

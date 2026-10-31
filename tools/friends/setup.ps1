@@ -1,9 +1,9 @@
-# ABOUTME: Setup do pacote wotlane para amigos (tools\package_friends.ps1): acha a ISO do proprio amigo, copia o SCUS_971.97 dela para
-# ABOUTME: runtime\discroot, aponta o run_live.ps1 para a ISO e grava .wotm_recomp_dir. Rodado pelo Setup.bat; pode rodar de novo.
+# ABOUTME: Setup for the wotlane friends package (tools\package_friends.ps1): finds the friend's own ISO, copies its SCUS_971.97 to
+# ABOUTME: runtime\discroot, points run_live.ps1 at the ISO and writes .wotm_recomp_dir. Run by Setup.bat; safe to run again.
 param([string]$Iso = '', [switch]$NoPause)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 do disco NTSC-U (SCUS-97197)
+$elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 from the NTSC-U disc (SCUS-97197)
 
 function Done([int]$code, [string]$msg) {
     Write-Host $msg -ForegroundColor $(if ($code) { 'Red' } else { 'Green' })
@@ -12,7 +12,7 @@ function Done([int]$code, [string]$msg) {
 }
 
 try {
-    # zip baixado: o Windows marca cada arquivo como vindo da internet e bloqueia scripts e DLLs
+    # downloaded zip: Windows marks every file as coming from the internet and blocks scripts and DLLs
     Get-ChildItem $root -Recurse -File | Unblock-File
 
     if (-not $Iso) { $Iso = (Get-ChildItem (Join-Path $root 'ISO') -Filter *.iso -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }

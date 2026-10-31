@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Interface do kit de mods (tools/modkit.py): escolher no disco o que extrair, ver e abrir o que foi extraido, empacotar no mod.
+"""GUI for the mod kit (tools/modkit.py): pick what to extract from the disc, view and open what was extracted, pack it into the mod.
 
-  python tools/modkit_gui.py        (ou pythonw, sem console; o launcher tem o botao "Mod kit")
+  python tools/modkit_gui.py        (or pythonw, without a console; the launcher has a "Mod kit" button)
 
-Textos da janela em ingles (pedido do dono). Um mod = um projeto: no topo, "Mod:" escolhe o mod (ou "New mod..." cria um), e ele
-governa tudo; cada mod tem a sua pasta de trabalho (modkit.work_dir: <mods>/_work/<mod>). Esquerda: o disco por nome (monstros e
-trajes, fases, menu, bancos de som, musicas); duplo clique ou "Extract selected" manda para a pasta de trabalho do mod. Direita: a
-pasta de trabalho do mod com miniaturas; "edited" = mudou desde a extracao (vai no proximo pacote). Duplo clique abre a textura no
-editor escolhido em "Editors..." (ou no programa padrao do Windows) e toca o som na propria janela; botao direito: Play, Open with...,
-Save to folder..., Remove. Skins: "New skin..." (dialogo: monstro, traje base com os retratos, nome, id, CPUs) cria a skin; o grupo
-dela na lista ("Skin: ...") mostra as propriedades do skin.json no lugar da previa (Save regrava), e o botao direito duplica ou apaga;
-"Turn into skin..." num traje extraido (MON/SHOGUN3) leva os PNGs dele para uma skin nova. Embaixo: "Build mod" (modkit pack so da pasta do mod), "Check mods" (modkit check), abrir a pasta dos mods
-e a de trabalho; o log tem divisoria arrastavel. Pastas, ultimo mod, editores e altura do log ficam em ~/.wotm_modkit.json. Precisa
-do Pillow (pip install pillow) para as miniaturas.
+One mod = one project: at the top, "Mod:" picks the mod (or "New mod..." creates one), and it drives
+everything; each mod has its own work folder (modkit.work_dir: <mods>/_work/<mod>). Left: the disc by name (monsters and
+costumes, stages, menu, sound banks, music); double-click or "Extract selected" sends it to the mod's work folder. Right: the
+mod's work folder with thumbnails; "edited" = changed since extraction (goes into the next build). Double-click opens the texture
+in the editor chosen under "Editors..." (or the Windows default program) and plays a sound in the window itself; right-click: Play,
+Open with..., Save to folder..., Remove. Skins: "New skin..." (dialog: monster, base costume with portraits, name, id, CPUs) creates
+the skin; its group in the list ("Skin: ...") shows the skin.json properties in place of the preview (Save rewrites it), and
+right-click duplicates or deletes it; "Turn into skin..." on an extracted costume (MON/SHOGUN3) moves its PNGs into a new skin.
+Bottom: "Build mod" (modkit pack of the mod's folder only), "Check mods" (modkit check), open the mods folder and the work folder;
+the log has a draggable divider. Folders, last mod, editors and log height are kept in ~/.wotm_modkit.json. Needs
+Pillow (pip install pillow) for the thumbnails.
 """
 import io
 import json
@@ -36,12 +37,12 @@ import modkit  # noqa: E402
 
 try:
     from PIL import Image, ImageTk
-except ImportError:   # sem Pillow: sem miniaturas nem previa de imagem
+except ImportError:   # no Pillow: no thumbnails and no image preview
     Image = ImageTk = None
 
 CONF = os.path.join(os.path.expanduser("~"), ".wotm_modkit.json")
 
-# Monstros: prefixo do arquivo (MON/<PREFIXO><traje>) -> nome no jogo, bancos de som (GLOSSARIO.md)
+# Monsters: file prefix (MON/<PREFIX><costume>) -> in-game name, sound banks (GLOSSARIO.md)
 MONSTERS = [
     ("MONKEY", "Congar", ("APE_S", "APE_LS")), ("ROBOT", "Robo-47", ("ROBOT_S", "ROBOT_LS")),
     ("LIZARD", "Togera", ("LIZARD_S", "LIZRD_LS")), ("SHOGUN", "Ultra V", ("SHOGUN_S", "SHOGN_LS")),
@@ -81,23 +82,23 @@ class App:
         self.conf = self.load_conf()
         self.disc = tk.StringVar(value=self.conf.get("disc") or modkit.default_disc())
         self.mods = tk.StringVar(value=self.conf.get("mods") or modkit.default_mods(self.disc.get()))
-        self.mod = tk.StringVar(value=self.conf.get("mod") or "")   # mod atual; refresh_mods zera se ele nao existe mais
-        self.mod_buttons = []   # botoes que so valem com um mod escolhido (update_mod_state liga/desliga)
-        self._shown_work = None   # pasta de trabalho que a lista mostra (trocou: selecao e grupos abertos nao valem)
+        self.mod = tk.StringVar(value=self.conf.get("mod") or "")   # current mod; refresh_mods clears it if it no longer exists
+        self.mod_buttons = []   # buttons that only work with a mod picked (update_mod_state enables/disables them)
+        self._shown_work = None   # work folder the list shows (if it changed, the selection and open groups no longer apply)
         self.only_edited = tk.BooleanVar(value=False)
         self.filter = tk.StringVar()
         self.autoplay = tk.BooleanVar(value=self.conf.get("autoplay", True))
-        self.editors = dict(self.conf.get("editors") or {})   # ".png" -> executavel; sem entrada: programa padrao do Windows
+        self.editors = dict(self.conf.get("editors") or {})   # ".png" -> executable; no entry: the Windows default program
         self.last_played = None
         self.log_q = queue.Queue()
         self.busy = False
-        self.thumbs = {}      # caminho -> (mtime, PhotoImage)
+        self.thumbs = {}      # path -> (mtime, PhotoImage)
         self.preview_img = None
-        self.portraits = {}   # prefixo -> {traje: PhotoImage ou None} (retratos dos trajes, carregados em segundo plano)
-        self.portrait_cbs = {}   # prefixo -> [funcoes a chamar quando os retratos chegarem]
+        self.portraits = {}   # prefix -> {costume: PhotoImage or None} (costume portraits, loaded in the background)
+        self.portrait_cbs = {}   # prefix -> [functions to call when the portraits arrive]
         self.portrait_q = queue.Queue()
-        self._panel_sid = None   # skin mostrada no painel de propriedades
-        self._customs = {}   # find_customs da ultima refresh_work (rotulos das skins)
+        self._panel_sid = None   # skin shown in the properties panel
+        self._customs = {}   # find_customs from the last refresh_work (skin labels)
         self.style()
         self.build()
         self.fill_disc()
@@ -106,7 +107,7 @@ class App:
         root.after(100, self.pump_log)
         root.protocol("WM_DELETE_WINDOW", self.close)
 
-    # ------------------------------------------------------------ aparencia
+    # ------------------------------------------------------------ look
     def style(self):
         s = ttk.Style(self.root)
         s.theme_use("clam")
@@ -134,7 +135,7 @@ class App:
         self.root.option_add("*TCombobox*Listbox.background", BG2)
         self.root.option_add("*TCombobox*Listbox.foreground", FG)
 
-    # ------------------------------------------------------------ montagem
+    # ------------------------------------------------------------ layout
     def build(self):
         top = ttk.Frame(self.root, padding=(10, 8, 10, 4))
         top.pack(fill="x")
@@ -143,9 +144,9 @@ class App:
             ttk.Entry(top, textvariable=var).grid(row=r, column=1, sticky="ew", pady=2)
             ttk.Button(top, text="...", width=3, command=lambda v=var: self.pick_dir(v)).grid(row=r, column=2, padx=(4, 0))
         top.columnconfigure(1, weight=1)
-        # o mod atual: governa a pasta de trabalho, o Extract e o Build
+        # the current mod: drives the work folder, Extract and Build
         ttk.Label(top, text="Mod", style="Head.TLabel").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(6, 2))
-        self.mod_bar = ttk.Frame(top)   # combobox + botoes do mod (a proxima etapa pode acrescentar aqui)
+        self.mod_bar = ttk.Frame(top)   # combobox + mod buttons (a later step can add more here)
         self.mod_bar.grid(row=2, column=1, columnspan=2, sticky="ew", pady=(6, 2))
         self.mod_box = ttk.Combobox(self.mod_bar, textvariable=self.mod, width=32, state="readonly")
         self.mod_box.pack(side="left")
@@ -154,7 +155,7 @@ class App:
         self.disc.trace_add("write", lambda *_: self.on_paths())
         self.mods.trace_add("write", lambda *_: self.on_paths())
 
-        # divisoria vertical: em cima o trabalho, embaixo o log (arrastar a borda muda a altura do log)
+        # vertical divider: work on top, log below (dragging the edge changes the log height)
         vsplit = ttk.PanedWindow(self.root, orient="vertical")
         vsplit.pack(fill="both", expand=True)
         upper = ttk.Frame(vsplit)
@@ -163,7 +164,7 @@ class App:
         panes = ttk.PanedWindow(upper, orient="horizontal")
         panes.pack(fill="both", expand=True, padx=10, pady=4)
 
-        # esquerda: disco
+        # left: disc
         left = ttk.Frame(panes)
         panes.add(left, weight=3)
         ttk.Label(left, text="1. Pick from the disc", style="Head.TLabel").pack(anchor="w")
@@ -183,12 +184,12 @@ class App:
         self.btn_export.pack(side="right")
         self.mod_buttons.append(self.btn_export)
 
-        # direita: pasta de trabalho + previa
+        # right: work folder + preview
         right = ttk.Frame(panes)
         panes.add(right, weight=5)
         h = ttk.Frame(right)
         h.pack(fill="x")
-        self.work_bar = h   # cabecalho da lista de trabalho: titulo e dica a esquerda, botoes a direita
+        self.work_bar = h   # work list header: title and hint on the left, buttons on the right
         self.work_head = ttk.Label(h, text="2. Edit the work folder", style="Head.TLabel")
         self.work_head.pack(side="left")
         self.work_hint = ttk.Label(h, text="", style="Dim.TLabel")
@@ -198,7 +199,7 @@ class App:
         self.btn_new_skin = ttk.Button(h, text="New skin...", command=self.new_skin)
         self.btn_new_skin.pack(side="right")
         self.mod_buttons.append(self.btn_new_skin)
-        # so liga com um grupo de traje de monstro jogavel selecionado (MON/SHOGUN3): vira skin com os PNGs dele
+        # enabled only with a playable monster costume group selected (MON/SHOGUN3): turns it into a skin with its PNGs
         self.btn_turn_skin = ttk.Button(h, text="Turn into skin...", command=self.turn_selected_into_skin, state="disabled")
         self.btn_turn_skin.pack(side="right", padx=6)
         body = ttk.PanedWindow(right, orient="horizontal")
@@ -227,7 +228,7 @@ class App:
         body.add(pv, weight=2)
         self.canvas = tk.Canvas(pv, bg=BG2, highlightthickness=0, height=300)
         self.canvas.bind("<Configure>", lambda e: self.show_preview())
-        foot = ttk.Frame(pv)   # legenda e botoes presos embaixo; a previa fica com o que sobra
+        foot = ttk.Frame(pv)   # caption and buttons pinned to the bottom; the preview gets the rest
         foot.pack(side="bottom", fill="x")
         self.pv_label = ttk.Label(foot, text="", style="Dim.TLabel", wraplength=360, justify="left")
         self.pv_label.pack(fill="x", pady=4)
@@ -243,14 +244,14 @@ class App:
         pb2.pack(fill="x", pady=(4, 0))
         ttk.Checkbutton(pb2, text="play sounds on click", variable=self.autoplay).pack(side="left")
         ttk.Button(pb2, text="Editors...", command=self.editors_dialog).pack(side="right")
-        self.skin_panel = ttk.Frame(pv)   # propriedades da skin: no lugar da previa quando o grupo de uma skin esta escolhido
-        # a previa por ultimo: com pouca altura ela encolhe e os botoes ficam
+        self.skin_panel = ttk.Frame(pv)   # skin properties: replaces the preview when a skin's group is selected
+        # pack the preview last: when height is short it shrinks and the buttons stay
         self.canvas.pack(fill="both", expand=True)
 
-        # embaixo: build + log
+        # bottom: build + log
         bot = ttk.Frame(upper, padding=(10, 4, 10, 8))
-        bot.pack(fill="x", side="bottom", before=panes)   # antes da area elastica: nao some com o log alto
-        self.build_bar = bot   # rodape: botoes em fila a esquerda (pack side=left), status a direita
+        bot.pack(fill="x", side="bottom", before=panes)   # before the stretchy area: does not disappear when the log is tall
+        self.build_bar = bot   # footer: buttons in a row on the left (pack side=left), status on the right
         ttk.Label(bot, text="3. Build", style="Head.TLabel").pack(side="left", padx=(0, 8))
         self.btn_build = ttk.Button(bot, text="Build mod", style="Accent.TButton", command=self.build_mod)
         self.btn_build.pack(side="left")
@@ -273,35 +274,35 @@ class App:
         self.log.pack(side="left", fill="both", expand=True)
         lsb.pack(side="right", fill="y")
         vsplit.bind("<ButtonRelease-1>", lambda e: self.clamp_log())
-        # altura do log da ultima vez (ou ~9 linhas)
+        # log height from last time (or ~9 lines)
         self.root.after(50, lambda: (self.vsplit.sashpos(0, self.vsplit.winfo_height() - int(self.conf.get("log_height", 170))), self.clamp_log()))
         self.log.tag_configure("warn", foreground=EDIT)
         self.log.tag_configure("err", foreground="#ff6b6b")
         self.say("Mod kit. Pick or create a mod at the top, extract something from the disc into its work folder, edit it and build "
                  "the mod. No game files go into the repo.\n")
 
-    # ------------------------------------------------------------ caminhos e mod atual
+    # ------------------------------------------------------------ paths and current mod
     @staticmethod
     def valid_mod_name(n):
         return not modkit.mod_name_error(n)
 
     def cur_mod(self):
-        """O mod escolhido, ou "" sem mod (ou com nome invalido)."""
+        """The picked mod, or "" with no mod (or an invalid name)."""
         n = self.mod.get().strip()
         return n if self.valid_mod_name(n) else ""
 
     def work(self):
-        """Pasta de trabalho do mod atual (modkit.work_dir); None sem mod escolhido."""
+        """The current mod's work folder (modkit.work_dir); None with no mod picked."""
         mod = self.cur_mod()
         return modkit.work_dir(self.mods.get(), mod) if mod else None
 
     def on_mod(self):
-        """Trocou o mod: a area de trabalho inteira passa a ser a dele."""
+        """The mod changed: the whole work area now belongs to it."""
         self.stop_sound()
         self.update_mod_state()
         mod = self.cur_mod()
         if mod:
-            # arquivos do mod que a pasta de trabalho nao tem (mod antigo ou feito a mao) entram nela como editados
+            # mod files the work folder lacks (an old mod or one made by hand) come in as edited
             try:
                 n = modkit.adopt_mod(self.disc.get(), self.mods.get(), mod, self.work())
                 if n:
@@ -367,7 +368,7 @@ class App:
             return {}
 
     def clamp_log(self):
-        """Divisoria do log: no minimo ~3 linhas de log e espaco para as listas e os botoes em cima."""
+        """Log divider: at least ~3 log lines, and room for the lists and buttons above."""
         try:
             h = self.vsplit.winfo_height()
             self.vsplit.sashpos(0, min(max(self.vsplit.sashpos(0), 360), h - 60))
@@ -392,7 +393,7 @@ class App:
         self.stop_sound()
         self.root.destroy()
 
-    # ------------------------------------------------------------ disco
+    # ------------------------------------------------------------ disc
     def fill_disc(self):
         t = self.disc_tree
         t.delete(*t.get_children())
@@ -479,12 +480,12 @@ class App:
         self.run("Extracting %d file(s) into %s..." % (n, self.cur_mod()), lambda disc=self.disc.get(): modkit.export(disc, work, pats),
                  lambda: self.refresh_work(focus=pats))
 
-    # ------------------------------------------------------------ pasta de trabalho
-    # Grupo da pasta de trabalho = arquivo do disco de onde o item saiu ("MON/MONKEY0": .TEX e .RTX juntos; "SND/SHELL_S.BNK")
+    # ------------------------------------------------------------ work folder
+    # Work folder group = the disc file the item came from ("MON/MONKEY0": .TEX and .RTX together; "SND/SHELL_S.BNK")
     @staticmethod
     def group_of(rel):
         parts = rel.split("/")
-        if len(parts) >= 3 and parts[0] == "skins":   # skins/<id>/...: um grupo por skin
+        if len(parts) >= 3 and parts[0] == "skins":   # skins/<id>/...: one group per skin
             return "skins/" + parts[1]
         d, n = os.path.split(rel)
         pre = d + "/" if d else ""
@@ -505,7 +506,7 @@ class App:
         return (d + "/" if d else "") + n.upper() + (".BNK" if ext.upper() == ".BNK" else "")
 
     def skin_data(self, sid):
-        """skin.json da skin na pasta do mod ({} sem ele)."""
+        """The skin's skin.json in the mod folder ({} if missing)."""
         mod = self.cur_mod()
         return modkit._json_obj(os.path.join(modkit.skin_dir(self.mods.get(), mod, sid), "skin.json")) if mod else {}
 
@@ -535,10 +536,10 @@ class App:
         return key
 
     def refresh_work(self, focus=None):
-        """focus: padroes do export que acabou de rodar; os grupos deles abrem (os outros fecham) e a lista rola ate o primeiro."""
+        """focus: patterns from the export that just ran; their groups open (the others close) and the list scrolls to the first."""
         t = self.work_tree
         work = self.work()
-        if work != self._shown_work:   # outro mod: a selecao e os grupos abertos eram da pasta anterior
+        if work != self._shown_work:   # another mod: the selection and open groups belonged to the previous folder
             t.selection_set(())
             t.delete(*t.get_children())
             self._shown_work = work
@@ -554,8 +555,8 @@ class App:
             return
         state = modkit.load_state(work)["files"]
         self._customs = modkit.find_customs(self.mods.get())
-        groups = {"skins/" + sid: [] for sid in modkit.list_skins(self.mods.get(), self.cur_mod())}   # skin sem PNG tambem aparece
-        # chave -> [(rel, p, edited)]
+        groups = {"skins/" + sid: [] for sid in modkit.list_skins(self.mods.get(), self.cur_mod())}   # a skin with no PNGs shows up too
+        # key -> [(rel, p, edited)]
         edited_total = total = 0
         for root, ds, files in os.walk(work):
             ds[:] = sorted(d for d in ds if not d.startswith("."))
@@ -572,7 +573,7 @@ class App:
                 groups.setdefault(self.group_of(rel), []).append((rel, p, edited))
         want = {self.group_of_pat(p) for p in focus} if focus else None
         first_new = None
-        for key in sorted(groups, key=lambda k: (not k.startswith("skins/"), k)):   # skins primeiro
+        for key in sorted(groups, key=lambda k: (not k.startswith("skins/"), k)):   # skins first
             items = groups[key]
             gid = "grp:" + key
             if want is not None:
@@ -591,10 +592,10 @@ class App:
                          tags=("edited",) if edited else (), **kw)
             if want is not None and key in want and first_new is None:
                 first_new = gid
-        if first_new and first_new.startswith("grp:skins/"):   # skin: o grupo, para o painel de propriedades aparecer
+        if first_new and first_new.startswith("grp:skins/"):   # skin: select the group, so the properties panel shows
             t.selection_set([first_new])
             t.see(first_new)
-        elif first_new:   # seleciona a primeira textura, nao o grupo (um Remove logo depois nao pega o grupo inteiro)
+        elif first_new:   # select the first texture, not the group (so a Remove right after does not take the whole group)
             kids = t.get_children(first_new)
             t.selection_set([kids[0]] if kids else [first_new])
             if kids:
@@ -640,8 +641,8 @@ class App:
         return "%d KB" % max(1, os.path.getsize(p) // 1024)
 
     def selected_files(self, groups=False):
-        """Arquivos escolhidos na lista. groups=True: um grupo selecionado vale por todos os arquivos dele (Save to folder,
-        Remove); senao so as linhas de arquivo (abrir, tocar, previa: clicar numa secao nao abre tudo dela)."""
+        """Files picked in the list. groups=True: a selected group counts as all its files (Save to folder,
+        Remove); otherwise only file rows (open, play, preview: clicking a section does not open everything in it)."""
         t, out, work = self.work_tree, [], self.work()
         if not work:
             return out
@@ -658,7 +659,7 @@ class App:
         c = self.canvas
         c.delete("all")
         sid = self.selected_skin()
-        if sid:   # grupo de uma skin: o painel de propriedades no lugar da imagem
+        if sid:   # a skin's group: the properties panel instead of the image
             if c.winfo_manager():
                 c.pack_forget()
             if not self.skin_panel.winfo_manager():
@@ -691,9 +692,9 @@ class App:
                 im = Image.open(p).convert("RGBA")
                 text += "  %dx%d" % im.size
                 s = min((w - 16) / im.width, (h - 16) / im.height)
-                s = s if s < 1 else max(1, int(s))   # amplia em inteiros (pixels nitidos)
+                s = s if s < 1 else max(1, int(s))   # upscale by whole numbers (sharp pixels)
                 im2 = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))), Image.NEAREST if s >= 1 else Image.LANCZOS)
-                chk = Image.new("RGBA", im2.size, "#3a3a3a")   # xadrez atras do alfa
+                chk = Image.new("RGBA", im2.size, "#3a3a3a")   # checkerboard behind the alpha
                 light = Image.new("RGBA", (8, 8), "#4a4a4a")
                 for y in range(0, im2.height, 16):
                     for x in range(0, im2.width, 16):
@@ -729,9 +730,9 @@ class App:
     def on_double(self, e):
         row = self.work_tree.identify_row(e.y)
         if not row or row.startswith("grp:"):
-            return   # duplo clique no grupo so abre/fecha
+            return   # double-click on a group only opens/closes it
         if row.lower().endswith(".wav") and not self.editors.get(".wav"):
-            self.play_selected()   # som toca aqui; com editor de .wav definido, abre nele
+            self.play_selected()   # sounds play here; if a .wav editor is set, open it there
         else:
             self.open_selected()
 
@@ -740,7 +741,7 @@ class App:
         return os.path.splitext(p)[1].lower()
 
     def waveform(self, p, w, h):
-        """Desenha a forma de onda do WAV (PCM 8/16 bits) na previa. False se nao deu."""
+        """Draws the WAV's waveform (8/16-bit PCM) in the preview. False if it could not."""
         try:
             with wave.open(p) as wf:
                 sw, ch, n = wf.getsampwidth(), wf.getnchannels(), wf.getnframes()
@@ -758,7 +759,7 @@ class App:
             full = 128.0
         else:
             return False
-        a = a[::ch]   # so o primeiro canal
+        a = a[::ch]   # first channel only
         if not len(a):
             return False
         cols = max(1, w - 16)
@@ -870,7 +871,7 @@ class App:
             if not self.work():
                 return
             m.add_command(label="Open work folder", command=self.open_work)
-        elif not files:   # so secoes: nada de abrir/tocar tudo de uma vez
+        elif not files:   # sections only: no opening/playing everything at once
             n = len(allf)
             m.add_command(label="Show in folder", command=self.reveal_selected)
             m.add_separator()
@@ -901,7 +902,7 @@ class App:
     IMG_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".tif", ".tiff", ".webp", ".dds")
 
     def replace_selected(self):
-        """Troca um asset da pasta de trabalho por um arquivo escolhido, gravado com o nome certo. Imagem de outro formato vira PNG."""
+        """Replaces a work folder asset with a chosen file, saved under the right name. An image in another format becomes PNG."""
         files = self.selected_files()
         if len(files) != 1:
             return
@@ -935,9 +936,9 @@ class App:
                 raise OSError("pick a %s file" % ext)
             else:
                 if ext == ".wav":
-                    with wave.open(src):   # confere que e um WAV que o pack consegue ler
+                    with wave.open(src):   # check that it is a WAV pack can read
                         pass
-                shutil.copyfile(src, dst)   # copyfile: mtime novo, a miniatura atualiza
+                shutil.copyfile(src, dst)   # copyfile: new mtime, so the thumbnail refreshes
         except Exception as ex:
             self.say("Could not replace %s: %s\n" % (os.path.basename(dst), ex), "err")
             return
@@ -958,8 +959,8 @@ class App:
         self.show_preview()
 
     def orig_size(self, p):
-        """Tamanho da textura no jogo (largura, altura): o que o export guardou ou, em export antigo, o do proprio arquivo enquanto
-        ele nao foi editado. None se nao der para saber."""
+        """The texture's in-game size (width, height): what export recorded or, for an older export, the file's own size as long
+        as it has not been edited. None if it cannot be known."""
         st = modkit.load_state(self.work())["files"].get(os.path.relpath(p, self.work()).replace("\\", "/")) or {}
         if st.get("size"):
             return tuple(st["size"])
@@ -1001,7 +1002,7 @@ class App:
     @staticmethod
     def open_path(p):
         if not os.path.exists(p) and not os.path.splitext(p)[1]:
-            os.makedirs(p, exist_ok=True)   # pasta de mods ou de trabalho ainda nao criada
+            os.makedirs(p, exist_ok=True)   # mods or work folder not created yet
         try:
             os.startfile(os.path.normpath(p))
         except (OSError, AttributeError) as ex:
@@ -1027,7 +1028,7 @@ class App:
             pass
 
     def edited_selected(self):
-        """Arquivos editados na selecao (um grupo vale pelos editados dele)."""
+        """Edited files in the selection (a group counts as its edited files)."""
         work = self.work()
         st = modkit.load_state(work)["files"]
         out = []
@@ -1084,27 +1085,27 @@ class App:
 
     # ------------------------------------------------------------ skins (MODS.md, "Skins")
     def selected_group(self):
-        """Chave do grupo, se a selecao e um grupo so ("MON/SHOGUN3", "skins/verde"); None senao."""
+        """The group key, if the selection is a single group ("MON/SHOGUN3", "skins/green"); None otherwise."""
         sel = self.work_tree.selection()
         return sel[0][4:] if len(sel) == 1 and sel[0].startswith("grp:") else None
 
     def selected_skin(self):
-        """Id da skin cujo grupo esta escolhido (sozinho); None senao."""
+        """Id of the skin whose group is selected (alone); None otherwise."""
         key = self.selected_group()
         return key[6:] if key and key.startswith("skins/") else None
 
     @staticmethod
     def costume_of_group(key):
-        """(nome do jogo, prefixo, traje) de um grupo de traje de monstro jogavel ("MON/SHOGUN3" -> ("ultra-v", "SHOGUN", 3)); None senao."""
+        """(game name, prefix, costume) of a playable monster costume group ("MON/SHOGUN3" -> ("ultra-v", "SHOGUN", 3)); else None."""
         d, _, n = key.rpartition("/")
         if d.upper() != "MON" or not n[-1:].isdigit() or int(n[-1]) > 3:
             return None
         game = next((g for g, p in modkit.MONSTERS.items() if p == n[:-1].upper()), None)
         return (game, n[:-1].upper(), int(n[-1])) if game else None
 
-    # retratos dos trajes (miniaturas dos botoes de base): o .RTX vira PNG numa thread; a PhotoImage nasce na thread da janela
+    # costume portraits (thumbnails on the base buttons): the .RTX becomes a PNG on a thread; the PhotoImage is made on the window thread
     def portraits_for(self, prefix, cb=None):
-        """{traje: PhotoImage ou None} do prefixo, ou None enquanto carrega (cb() e chamada quando chegar)."""
+        """{costume: PhotoImage or None} for the prefix, or None while loading (cb() is called when it arrives)."""
         if prefix in self.portraits:
             return self.portraits[prefix]
         if Image is None:
@@ -1151,13 +1152,13 @@ class App:
                     try:
                         cb()
                     except tk.TclError:
-                        pass   # o dialogo fechou antes
+                        pass   # the dialog closed first
         except queue.Empty:
             pass
 
     def costume_radios(self, parent, var, prefix, enabled=None, extra=None):
-        """Botoes de radio 0 a 3 (com o retrato de cada traje do prefixo, quando ha) numa linha; enabled: trajes que podem ser
-        escolhidos (padrao: os que o disco tem). extra: (texto, valor) de mais um botao no fim. Devolve a lista dos botoes."""
+        """Radio buttons 0 to 3 (with each costume's portrait for the prefix, when there is one) in a row; enabled: costumes that can
+        be picked (default: the ones on the disc). extra: (text, value) for one more button at the end. Returns the buttons."""
         disc = self.disc.get()
         radios = []
         for k in range(4):
@@ -1187,7 +1188,7 @@ class App:
         return radios
 
     def monster_choices(self):
-        """[(texto da lista, chave do skin.json, prefixo, traje padrao, jogavel)]: os dez jogaveis e os customs conhecidos."""
+        """[(list text, skin.json key, prefix, default costume, playable)]: the ten playables and the known customs."""
         names = {p: n for p, n, _ in MONSTERS}
         mods = self.mods.get()
         customs = modkit.find_customs(mods)
@@ -1201,8 +1202,8 @@ class App:
 
     @staticmethod
     def resolve_monster(text, choices):
-        """(chave, prefixo, traje padrao, tipo) do texto do campo Monster; tipo "game", "custom" ou "unknown" (id de custom que o
-        kit nao conhece: sem prefixo nem traje). None se nao serve nem como id."""
+        """(key, prefix, default costume, kind) from the Monster field's text; kind "game", "custom" or "unknown" (a custom id the
+        kit does not know: no prefix or costume). None if it is not even valid as an id."""
         t = text.strip()
         for label, key, prefix, co, game in choices:
             if t == label:
@@ -1231,8 +1232,8 @@ class App:
         return stem
 
     def skin_dialog(self, title, on_ok, lock=None):
-        """Dialogo de skin nova: Monster, Base costume, Name, Id, CPUs. lock = (nome do jogo, prefixo, traje): monstro e base
-        travados (Turn into skin). on_ok(chave, id, base ou None, nome, ai)."""
+        """New skin dialog: Monster, Base costume, Name, Id, CPUs. lock = (game name, prefix, costume): monster and base
+        locked (Turn into skin). on_ok(key, id, base or None, name, ai)."""
         d = tk.Toplevel(self.root, bg=BG)
         d.title(title)
         d.transient(self.root)
@@ -1303,7 +1304,7 @@ class App:
                 hint.configure(text="custom monster on %s; default costume %d (monster.json)" % (prefix, res[2]))
             else:
                 hint.configure(text="")
-            if prefix != st["prefix"]:   # outro monstro: os botoes de base com os retratos dele
+            if prefix != st["prefix"]:   # another monster: base buttons with its portraits
                 st["prefix"] = prefix
                 for w in rb_fr.winfo_children():
                     w.destroy()
@@ -1340,7 +1341,7 @@ class App:
             key, prefix, co, kind = st["res"]
             b = None if kind == "unknown" else base.get()
             if kind == "custom" and b == co:
-                b = None   # o skin.json fica sem base: vale o costume do monster.json
+                b = None   # skin.json gets no base: the costume from monster.json applies
             d.destroy()
             on_ok(key, sid.get(), b, name.get().strip().upper(), ai.get())
 
@@ -1355,7 +1356,7 @@ class App:
             mon.set(choices[0][0] if choices else "")
         d.bind("<Return>", lambda e: ok())
         d.bind("<Escape>", lambda e: d.destroy())
-        self._skin_dlg = dict(d=d, mon=mon, base=base, name=name, sid=sid, ai=ai, ok=ok, err=err, hint=hint, state=st)   # para testes
+        self._skin_dlg = dict(d=d, mon=mon, base=base, name=name, sid=sid, ai=ai, ok=ok, err=err, hint=hint, state=st)   # for tests
         try:
             d.grab_set()
         except tk.TclError:
@@ -1383,7 +1384,7 @@ class App:
             self.say("Select a monster costume group in the list first (e.g. MON/SHOGUN3).\n", "warn")
 
     def turn_into_skin(self, key):
-        """Traje extraido (MON/SHOGUN3) vira skin: skin.json novo e os PNGs do grupo (todos, com o estado) para skins/<id>/."""
+        """An extracted costume (MON/SHOGUN3) becomes a skin: new skin.json, the group's PNGs (all, with state) go to skins/<id>/."""
         c = self.costume_of_group(key)
         work, mod = self.work(), self.cur_mod()
         if not c or not work:
@@ -1401,8 +1402,8 @@ class App:
         self.skin_dialog("Turn into skin", ok, lock=c)
 
     def offer_remove_packed(self, mod, d, stem):
-        """Depois do Turn into skin: o que o mod ja tem empacotado desse traje (PNGs, .TEX/.RTX do --inject) continua trocando o
-        traje original; avisa e oferece apagar."""
+        """After Turn into skin: whatever the mod already has built for that costume (PNGs, .TEX/.RTX from --inject) keeps replacing
+        the original costume; warns and offers to delete it."""
         folder = os.path.join(self.mods.get(), mod, *d.split("/"))
         hits = []
         for n in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
@@ -1428,7 +1429,7 @@ class App:
         self.say("Deleted %d file(s) of %s from %s/%s\n" % (n, stem.upper(), mod, d))
 
     def fill_skin_panel(self, sid):
-        """Painel de propriedades da skin (Name, Base, CPUs may pick) com Save, que regrava o skin.json mantendo as outras chaves."""
+        """Skin properties panel (Name, Base, CPUs may pick) with Save, which rewrites skin.json keeping the other keys."""
         p = self.skin_panel
         for w in p.winfo_children():
             w.destroy()
@@ -1455,12 +1456,12 @@ class App:
         rf = ttk.Frame(p)
         rf.grid(row=3, column=1, sticky="w", pady=(6, 2))
         extra = None
-        if not game:   # custom: sem base vale o costume do monster.json
+        if not game:   # custom: with no base, the costume from monster.json applies
             extra = ("monster.json" + (" (%d)" % custom["costume"] if custom else ""), -1)
         elif base.get() < 0:
             base.set(0)
         self.costume_radios(rf, base, prefix, extra=extra)
-        if not prefix:   # custom desconhecido: 0 a 3 sem retrato, o disco nao diz quais existem
+        if not prefix:   # unknown custom: 0 to 3 without portraits, the disc does not say which exist
             for w in rf.winfo_children():
                 w.state(["!disabled"])
         ai = tk.BooleanVar(value=bool(data.get("ai")))
@@ -1468,7 +1469,7 @@ class App:
         ttk.Button(p, text="Save", style="Accent.TButton", command=lambda: self.save_skin_props(sid, name.get(), base.get(), ai.get())
                    ).grid(row=5, column=1, sticky="w", pady=(10, 0))
         p.columnconfigure(1, weight=1)
-        self._skin_panel_vars = dict(name=name, base=base, ai=ai)   # para testes
+        self._skin_panel_vars = dict(name=name, base=base, ai=ai)   # for tests
 
     def save_skin_props(self, sid, name, base, ai):
         mod, mods = self.cur_mod(), self.mods.get()
@@ -1490,7 +1491,7 @@ class App:
             self.say("Could not save the skin: %s\n" % ex, "err")
             return
         self.say("Skin %s saved: %s\n" % (sid, json.dumps(data)))
-        self._panel_sid = None   # o painel relê o json
+        self._panel_sid = None   # the panel rereads the json
         self.refresh_work()
         gid = "grp:skins/" + sid
         if self.work_tree.exists(gid):
@@ -1533,7 +1534,7 @@ class App:
             return []
 
     def refresh_mods(self):
-        """Lista os mods em <mods>; o mod atual que nao existe mais sai (sem mod: lista vazia, Extract/Build desligados)."""
+        """Lists the mods in <mods>; a current mod that no longer exists is dropped (no mod: empty list, Extract/Build disabled)."""
         names = self.mod_names()
         self.mod_box["values"] = names
         if self.mod.get() and self.mod.get() not in names:
@@ -1552,9 +1553,9 @@ class App:
     def check(self):
         self.run("Checking...", lambda disc=self.disc.get(), mods=self.mods.get(): modkit.check(disc, mods))
 
-    # ------------------------------------------------------------ execucao em segundo plano
+    # ------------------------------------------------------------ background tasks
     def task_buttons(self):
-        """Botoes desligados enquanto uma tarefa roda."""
+        """Buttons disabled while a task runs."""
         return [self.btn_check] + [b for b in self.mod_buttons if b is not self.btn_open_work]
 
     def run(self, title, fn, done=None):
@@ -1589,7 +1590,7 @@ class App:
                     if kind == "done":
                         self.busy = False
                         self.btn_check.state(["!disabled"])
-                        self.update_mod_state()   # os do mod so voltam se ha mod
+                        self.update_mod_state()   # the mod buttons come back only if there is a mod
                         if val:
                             val()
                         continue
@@ -1614,7 +1615,7 @@ def main():
     except tk.TclError:
         pass
     app = App(root)
-    # com pythonw nao ha console: erro dentro da janela vai para o log dela
+    # with pythonw there is no console: errors inside the window go to its log
     root.report_callback_exception = lambda *a: app.say("Error: %s\n" % "".join(traceback.format_exception(*a)), "err")
     root.mainloop()
 

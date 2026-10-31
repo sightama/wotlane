@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Leitor e gravador dos formatos de som do War of the Monsters (989snd): .BNK (SBlk v1), .VPK e .VAG. Documentado em
+"""Reader and writer for War of the Monsters' sound formats (989snd): .BNK (SBlk v1), .VPK and .VAG. Documented in
 docs/FORMATOS.md ("Som").
 
-  python tools/snd989.py bnk disc/SND/SHELL_S.BNK            # sons e grains de um banco
-  python tools/snd989.py stats disc/SND                       # tipos de grain/flags usados em todos os bancos
-  python tools/snd989.py wav disc/SND/SHELLMUS.BNK 0 out.wav  # som N do banco (só os grains TONE, sem envelope) em WAV
-  python tools/snd989.py wav disc/VAG/CITYAMB.VPK - out.wav   # stream .VPK/.VAG inteiro em WAV
+  python tools/snd989.py bnk disc/SND/SHELL_S.BNK            # sounds and grains of a bank
+  python tools/snd989.py stats disc/SND                       # grain types/flags used across all banks
+  python tools/snd989.py wav disc/SND/SHELLMUS.BNK 0 out.wav  # sound N of the bank (TONE grains only, no envelope) as WAV
+  python tools/snd989.py wav disc/VAG/CITYAMB.VPK - out.wav   # a whole .VPK/.VAG stream as WAV
 
-De volta (WAV PCM 8/16/24/32 bits ou float para o ADPCM do SPU2; o codificador simula o decodificador do jogo):
-  python tools/snd989.py vpk musica.wav novo/CITYAMB.VPK --like disc/VAG/CITYAMB.VPK   # mesma taxa e volumes do original
-  python tools/snd989.py vag efeito.wav novo/VICTORY.VAG [--loop]
-  python tools/snd989.py bnk-replace disc/SND/SHELL_S.BNK 3 novo.wav novo/SHELL_S.BNK   # troca o som 3 do banco
-O bnk-replace reamostra para a taxa em que o banco toca cada TONE, mantem o laco do original e corrige os offsets dos outros
-sons. A reamostragem e linear: para musica, prefira reamostrar antes num editor de audio.
+The other way (8/16/24/32-bit PCM or float WAV to SPU2 ADPCM; the encoder simulates the game's decoder):
+  python tools/snd989.py vpk music.wav new/CITYAMB.VPK --like disc/VAG/CITYAMB.VPK   # same rate and volumes as the original
+  python tools/snd989.py vag effect.wav new/VICTORY.VAG [--loop]
+  python tools/snd989.py bnk-replace disc/SND/SHELL_S.BNK 3 new.wav new/SHELL_S.BNK   # replace sound 3 in the bank
+bnk-replace resamples to the rate at which the bank plays each TONE, keeps the original's loop and fixes up the offsets of the
+other sounds. Resampling is linear: for music, resample beforehand in an audio editor.
 """
 import collections
 import os
@@ -29,18 +29,18 @@ GRAIN_NAMES = {0: "NULL", 1: "TONE", 2: "XREF_ID", 3: "XREF_NUM", 4: "LFO", 5: "
 
 
 def read_bnk(path):
-    """Arquivo: u32 tipo (3), u32 nChunks (2), {u32 offset, u32 tamanho} x n; chunk 0 = SBlk, chunk 1 = amostras ADPCM."""
+    """File: u32 type (3), u32 nChunks (2), {u32 offset, u32 size} x n; chunk 0 = SBlk, chunk 1 = ADPCM samples."""
     d = open(path, "rb").read()
     typ, n = struct.unpack_from("<II", d, 0)
     chunks = [struct.unpack_from("<II", d, 8 + 8 * i) for i in range(n)]
     blk = d[chunks[0][0]:chunks[0][0] + chunks[0][1]]
     smp = d[chunks[1][0]:chunks[1][0] + chunks[1][1]] if n > 1 else b""
     if blk[:4] != b"SBlk":
-        raise ValueError("%s: sem SBlk" % path)
+        raise ValueError("%s: no SBlk" % path)
     ver, flags, bank_id = struct.unpack_from("<II4s", blk, 4)
     n_sounds, n_grains, n_vags = struct.unpack_from("<hhh", blk, 0x16)
     first_sound, first_grain, vags_in_sr, vag_data_size, sram_alloc, next_block = struct.unpack_from("<6I", blk, 0x1c)
-    block_names, sfx_ud = struct.unpack_from("<II", blk, 0x34)   # v1: sem GrainData
+    block_names, sfx_ud = struct.unpack_from("<II", blk, 0x34)   # v1: no GrainData
     sounds = []
     for i in range(n_sounds):
         o = first_sound + 12 * i
@@ -73,7 +73,7 @@ def read_bnk(path):
             "n_grains": n_grains, "n_vags": n_vags, "samples": smp, "names": names}
 
 
-# ADPCM do SPU2: blocos de 16 bytes (filtro/shift, flags, 14 bytes = 28 amostras de 4 bits)
+# SPU2 ADPCM: 16-byte blocks (filter/shift, flags, 14 bytes = 28 4-bit samples)
 FILTERS = [(0, 0), (60, 0), (115, -52), (98, -55), (122, -60)]
 
 
@@ -94,19 +94,19 @@ def adpcm_decode(data, off=0, stop_at_end=True, hist=None):
             out.append(s)
             h2, h1 = h1, s
         off += 16
-        if stop_at_end and fl & 1:   # fim (com ou sem laço)
+        if stop_at_end and fl & 1:   # end (with or without a loop)
             break
     return out, off
 
 
 def _block_error(samples, i0, h1, h2, filt, shift):
-    """Codifica 28 amostras com (filtro, shift) simulando o decodificador; devolve (erro, nibbles, h1, h2)."""
+    """Encodes 28 samples with (filter, shift), simulating the decoder; returns (error, nibbles, h1, h2)."""
     k0, k1 = FILTERS[filt]
     err, nibs = 0, []
     for i in range(28):
         s = samples[i0 + i] if i0 + i < len(samples) else 0
         pred = (h1 * k0 + h2 * k1) >> 6
-        # nibble n reconstroi (n << 12 >> shift) + pred; escolhe o n mais proximo, em -8..7
+        # nibble n reconstructs (n << 12 >> shift) + pred; pick the closest n, in -8..7
         q = ((s - pred) << shift) / 4096.0
         n = max(-8, min(7, int(q + 0.5) if q >= 0 else -int(-q + 0.5)))
         out = max(-32768, min(32767, ((n << 12) >> shift) + pred))
@@ -117,10 +117,10 @@ def _block_error(samples, i0, h1, h2, filt, shift):
 
 
 def adpcm_encode(samples, loop_start=None, end_flags=True):
-    """PCM de 16 bits (lista de int) -> ADPCM do SPU2, inverso exato do `adpcm_decode` (o codificador simula o decodificador,
-    entao o que sai dele e o que o jogo toca). loop_start: indice da amostra onde o laco recomeca (None = sem laco).
-    end_flags: grava as flags de fim/laco (bancos e .VAG); os .VPK nao tem flags. Escolhe por bloco o filtro e o shift com
-    menor erro, testando o shift estimado e o vizinho."""
+    """16-bit PCM (list of int) -> SPU2 ADPCM, the exact inverse of `adpcm_decode` (the encoder simulates the decoder, so
+    what comes out is what the game plays). loop_start: index of the sample where the loop restarts (None = no loop).
+    end_flags: write the end/loop flags (banks and .VAG); .VPK files have no flags. Per block, picks the filter and shift with
+    the smallest error, trying the estimated shift and its neighbors."""
     out = bytearray()
     h1 = h2 = 0
     nblk = max(1, (len(samples) + 27) // 28)
@@ -130,7 +130,7 @@ def adpcm_encode(samples, loop_start=None, end_flags=True):
         best = None
         for filt in range(5):
             k0, k1 = FILTERS[filt]
-            # residuo maximo prevendo com as amostras originais: estima o shift
+            # maximum residual when predicting from the original samples: estimates the shift
             p1, p2 = (samples[i0 - 1] if i0 >= 1 else 0), (samples[i0 - 2] if i0 >= 2 else 0)
             mx = 0
             for i in range(28):
@@ -156,10 +156,10 @@ def adpcm_encode(samples, loop_start=None, end_flags=True):
 
 
 def read_wav_any(path):
-    """WAV PCM (8/16/24/32 bits), float de 32 bits ou WAVE_FORMAT_EXTENSIBLE -> (Hz, [canal de int16])."""
+    """PCM WAV (8/16/24/32 bits), 32-bit float or WAVE_FORMAT_EXTENSIBLE -> (Hz, [int16 channel])."""
     d = open(path, "rb").read()
     if d[:4] != b"RIFF" or d[8:12] != b"WAVE":
-        raise ValueError("%s: nao e WAV" % path)
+        raise ValueError("%s: not a WAV" % path)
     o, fmt, data = 12, None, None
     while o + 8 <= len(d):
         cid, n = struct.unpack_from("<4sI", d, o)
@@ -171,7 +171,7 @@ def read_wav_any(path):
             data = d[o + 8:o + 8 + n]
         o += 8 + n + (n & 1)
     if not fmt or data is None:
-        raise ValueError("%s: WAV sem fmt ou data" % path)
+        raise ValueError("%s: WAV without fmt or data" % path)
     tag, nch, rate, _, _, bits = fmt
     bpp = bits // 8
     n = len(data) // (bpp * nch)
@@ -190,13 +190,13 @@ def read_wav_any(path):
             elif tag == 1 and bits == 32:
                 v = struct.unpack_from("<i", data, p)[0] >> 16
             else:
-                raise ValueError("%s: formato %d com %d bits nao suportado" % (path, tag, bits))
+                raise ValueError("%s: format %d with %d bits not supported" % (path, tag, bits))
             chans[c].append(v)
     return rate, chans
 
 
 def resample(x, src, dst):
-    """Reamostragem linear (bastante para efeitos; para musica, reamostre antes num editor)."""
+    """Linear resampling (good enough for effects; for music, resample beforehand in an editor)."""
     if src == dst or not x:
         return list(x)
     n = max(1, int(round(len(x) * dst / src)))
@@ -212,7 +212,7 @@ def resample(x, src, dst):
 
 
 def to_channels(chans, n):
-    """Ajusta o numero de canais: mono vira n copias; com mais canais que n, mistura os que sobram no ultimo."""
+    """Adjusts the channel count: mono becomes n copies; with more channels than n, the extra ones are mixed into the last."""
     if len(chans) == n:
         return chans
     if len(chans) == 1:
@@ -223,25 +223,25 @@ def to_channels(chans, n):
 
 
 def write_vag(path, rate, samples, name="WOTM", loop=False):
-    """VAGp de um canal: cabecalho big-endian de 0x30 bytes (versao 0x20, tamanho dos dados, Hz, nome) e o ADPCM."""
+    """Single-channel VAGp: 0x30-byte big-endian header (version 0x20, data size, Hz, name) followed by the ADPCM."""
     body = bytes(16) + adpcm_encode(samples, 0 if loop else None)
     hdr = b"VAGp" + struct.pack(">III", 0x20, 0, len(body), ) + struct.pack(">I", rate) + bytes(12) + name.encode()[:16].ljust(16, b"\0")
     with open(path, "wb") as f:
         f.write(hdr + body)
 
 
-VPK_HALF = 0x5000   # bytes de cada canal por bloco (o campo do cabecalho e o par: 0xA000)
+VPK_HALF = 0x5000   # bytes per channel per block (the header field holds the pair: 0xA000)
 
 
 def write_vpk(path, rate, chans, vols=None):
-    """.VPK como os do disco: ' KPV', bytes por canal, inicio 0x800, par de blocos (0x5000 por canal), Hz, canais,
-    {u16 vol, u16 pan} por canal; dados em blocos alternados de 0x5000 bytes por canal, ADPCM sem flags."""
+    """.VPK like the ones on the disc: ' KPV', bytes per channel, start 0x800, block pair (0x5000 per channel), Hz, channels,
+    {u16 vol, u16 pan} per channel; data in alternating 0x5000-byte blocks per channel, ADPCM without flags."""
     enc = [adpcm_encode(c, None, end_flags=False) for c in chans]
     per = max(len(e) for e in enc)
     nblk = (per + VPK_HALF - 1) // VPK_HALF
     vols = vols or ([(127, 270), (127, 90)] if len(chans) == 2 else [(127, 0)] * len(chans))
-    # bytes por canal em blocos inteiros: o leitor nativo (wotm_snd.hpp) le so inicio + bytes por canal x canais do arquivo, e o
-    # ultimo bloco do canal direito ficaria cortado; o custo e ate 0,8 s de silencio no fim
+    # bytes per channel rounded up to whole blocks: the native reader (wotm_snd.hpp) only reads start + bytes per channel x
+    # channels from the file, and the right channel's last block would be cut off; the cost is up to 0.8 s of silence at the end
     hdr = bytearray(b" KPV" + struct.pack("<5I", nblk * VPK_HALF, 0x800, VPK_HALF * len(chans), rate, len(chans)))
     for v, p in vols:
         hdr += struct.pack("<HH", v, p)
@@ -256,7 +256,7 @@ def write_vpk(path, rate, chans, vols=None):
 
 
 def sample_end(smp, off):
-    """Fim (exclusivo) da amostra ADPCM que comeca em off: o bloco com a flag de fim (bit 0) entra."""
+    """End (exclusive) of the ADPCM sample starting at off: the block with the end flag (bit 0) is included."""
     o = off
     while o + 16 <= len(smp):
         o += 16
@@ -266,7 +266,7 @@ def sample_end(smp, off):
 
 
 def sample_loop(smp, off, end):
-    """Indice da amostra onde o laco recomeca, ou None (sem a flag 2 no ultimo bloco)."""
+    """Index of the sample where the loop restarts, or None (no flag 2 in the last block)."""
     if end - off < 16 or not smp[end - 15] & 2:
         return None
     for o in range(off, end, 16):
@@ -276,18 +276,18 @@ def sample_loop(smp, off, end):
 
 
 def bnk_replace(path, sound, wav, out):
-    """Troca as amostras do som `sound` do banco pelo WAV (reamostrado para a taxa em que o banco toca cada TONE). Os outros
-    sons ficam iguais; offsets das amostras, tamanho do chunk e os campos de tamanho do SBlk sao corrigidos."""
+    """Replaces the samples of sound `sound` in the bank with the WAV (resampled to the rate at which the bank plays each TONE).
+    The other sounds stay the same; sample offsets, the chunk size and the SBlk size fields are fixed up."""
     raw = bytearray(open(path, "rb").read())
     b = read_bnk(path)
     typ, nchunks = struct.unpack_from("<II", raw, 0)
     chunks = [list(struct.unpack_from("<II", raw, 8 + 8 * i)) for i in range(nchunks)]
     if nchunks < 2:
-        raise SystemExit("banco sem chunk de amostras")
+        raise SystemExit("bank has no sample chunk")
     blk = bytearray(raw[chunks[0][0]:chunks[0][0] + chunks[0][1]])
     smp = bytes(raw[chunks[1][0]:chunks[1][0] + chunks[1][1]])
     first_sound, first_grain = struct.unpack_from("<II", blk, 0x1C)
-    # todas as referencias a amostras: (posicao do campo no SBlk, offset)
+    # every reference to a sample: (position of the field in the SBlk, offset)
     refs = []
     for i in range(len(b["sounds"])):
         o = first_sound + 12 * i
@@ -298,10 +298,10 @@ def bnk_replace(path, sound, wav, out):
                 refs.append((i, go + 8 + 16, struct.unpack_from("<I", blk, go + 24)[0], go))
     targets = [r for r in refs if r[0] == sound]
     if not targets:
-        raise SystemExit("o som %d nao tem TONE" % sound)
+        raise SystemExit("sound %d has no TONE" % sound)
     rate_in, chans = read_wav_any(wav)
     chans = to_channels(chans, len(targets)) if len(chans) > 1 else [chans[0]] * len(targets)
-    new, extra = {}, {}   # extra: amostra que outro som tambem usa -> copia nova no fim do chunk, so para este som
+    new, extra = {}, {}   # extra: a sample another sound also uses -> a new copy at the end of the chunk, for this sound only
     for k, (_, _, off, go) in enumerate(targets):
         if off in new or off in extra:
             continue
@@ -313,11 +313,11 @@ def bnk_replace(path, sound, wav, out):
         pcm = resample(chans[k], rate_in, rate)
         data = adpcm_encode(pcm, 0 if loop is not None else None)
         if others:
-            print("som %d: a amostra em %#x tambem e do som %d, que fica com a original" % (sound, off, others[0][0]))
+            print("sound %d: the sample at %#x also belongs to sound %d, which keeps the original" % (sound, off, others[0][0]))
             extra[off] = data
         else:
             new[off] = (end, data)
-    # remonta o chunk de amostras com o mapa de offsets
+    # rebuild the sample chunk with the offset map
     pieces, cur, omap = [], 0, []
     for off in sorted(new):
         end, data = new[off]
@@ -366,8 +366,8 @@ def bnk_replace(path, sound, wav, out):
     with open(out, "wb") as f:
         f.write(out_b)
     total = len(smp2)
-    print("gravado %s (amostras: %d -> %d bytes%s)" % (out, len(smp), total,
-                                                       "; passa de 2 MB, o limite da RAM de som do PS2" if total > 2 * 1024 * 1024 else ""))
+    print("wrote %s (samples: %d -> %d bytes%s)" % (out, len(smp), total,
+                                                       "; over 2 MB, the PS2 sound RAM limit" if total > 2 * 1024 * 1024 else ""))
 
 
 def write_wav(path, rate, channels):
@@ -384,8 +384,8 @@ def write_wav(path, rate, channels):
 
 
 def read_vpk(path):
-    """' KPV': u32 bytes por canal, u32 início dos dados, u32 tamanho do par de blocos (0xA000 = 0x5000 por canal), u32 Hz,
-    u32 canais."""
+    """' KPV': u32 bytes per channel, u32 data start, u32 block pair size (0xA000 = 0x5000 per channel), u32 Hz,
+    u32 channels."""
     d = open(path, "rb").read()
     if d[:4] == b" KPV":
         per_ch, start, inter, rate, nch = struct.unpack_from("<5I", d, 4)
@@ -403,15 +403,15 @@ def read_vpk(path):
                 o += inter
         return rate, chans
     if d[:4] == b"VAGp":
-        size, rate = struct.unpack_from(">II", d, 0xc)   # VAG padrao: tamanho em 0x0C, Hz em 0x10
+        size, rate = struct.unpack_from(">II", d, 0xc)   # standard VAG: size at 0x0C, Hz at 0x10
         s, _ = adpcm_decode(d, 0x30, stop_at_end=False)
         return rate, [s]
-    raise ValueError("formato desconhecido: %s" % path)
+    raise ValueError("unknown format: %s" % path)
 
 
 def tone_rate(center_note, center_fine, note=60, fine=0):
-    """Taxa em que o 989snd toca a amostra de um TONE (os efeitos sao tocados na nota 60). CenterNote negativa = nota de PS2
-    (base 48 kHz); positiva = de PS1 (base 44,1 kHz). Como no sceSdNote2Pitch, o CenterFine soma ao fine."""
+    """Rate at which 989snd plays a TONE's sample (effects are played at note 60). A negative CenterNote = a PS2 note
+    (48 kHz base); positive = PS1 (44.1 kHz base). As in sceSdNote2Pitch, CenterFine is added to fine."""
     base = 48000 if center_note < 0 else 44100
     return base * 2 ** ((note - abs(center_note) + (fine + center_fine) / 128) / 12)
 
@@ -420,21 +420,21 @@ def main():
     cmd = sys.argv[1]
     if cmd == "bnk":
         b = read_bnk(sys.argv[2])
-        print("banco %s v%d flags=%#x sons=%d grains=%d vags=%d amostras=%d bytes" % (
+        print("bank %s v%d flags=%#x sounds=%d grains=%d vags=%d samples=%d bytes" % (
             b["bank"], b["version"], b["flags"], len(b["sounds"]), b["n_grains"], b["n_vags"], len(b["samples"])))
         for i, s in enumerate(b["sounds"]):
-            print("som %3d %-16s vol=%d grupo=%d pan=%d inst=%d flags=%#x" % (i, b["names"].get(i, ""), s["vol"], s["group"], s["pan"],
+            print("sound %3d %-16s vol=%d group=%d pan=%d inst=%d flags=%#x" % (i, b["names"].get(i, ""), s["vol"], s["group"], s["pan"],
                                                                              s["inst"], s["flags"]))
             for g in s["grains"]:
                 extra = ""
                 if g["type"] in (1, 9):
-                    extra = "vol=%d nota=%d.%d pan=%d adsr=%04x/%04x tflags=%#x amostra=%#x" % (
+                    extra = "vol=%d note=%d.%d pan=%d adsr=%04x/%04x tflags=%#x sample=%#x" % (
                         g["vol"], g["note"], g["fine"], g["pan"], g["adsr1"], g["adsr2"], g["tflags"], g["sample"])
                 elif "play" in g:
                     extra = str(g["play"][:6])
                 else:
                     extra = str(g["params"])
-                print("    %-14s atraso=%-5d %s" % (GRAIN_NAMES.get(g["type"], g["type"]), g["delay"], extra))
+                print("    %-14s delay=%-5d %s" % (GRAIN_NAMES.get(g["type"], g["type"]), g["delay"], extra))
     elif cmd == "stats":
         types = collections.Counter()
         sflags = collections.Counter()
@@ -445,17 +445,17 @@ def main():
                 continue
             b = read_bnk(os.path.join(sys.argv[2], fn))
             bflags[hex(b["flags"])] += 1
-            print("%-14s %s v%d sons=%4d grains=%4d vags=%4d amostras=%8d nomes=%d" % (
+            print("%-14s %s v%d sounds=%4d grains=%4d vags=%4d samples=%8d names=%d" % (
                 fn, b["bank"], b["version"], len(b["sounds"]), b["n_grains"], b["n_vags"], len(b["samples"]), len(b["names"])))
             for s in b["sounds"]:
                 sflags[hex(s["flags"])] += 1
                 groups[s["group"]] += 1
                 for g in s["grains"]:
                     types[GRAIN_NAMES.get(g["type"], str(g["type"]))] += 1
-        print("tipos de grain:", dict(types.most_common()))
-        print("flags de som:", dict(sflags.most_common()))
-        print("flags de banco:", dict(bflags))
-        print("grupos de volume:", dict(sorted(groups.items())))
+        print("grain types:", dict(types.most_common()))
+        print("sound flags:", dict(sflags.most_common()))
+        print("bank flags:", dict(bflags))
+        print("volume groups:", dict(sorted(groups.items())))
     elif cmd == "wav":
         path, which, out = sys.argv[2], sys.argv[3], sys.argv[4]
         if path.upper().endswith(".BNK"):
@@ -467,7 +467,7 @@ def main():
         else:
             rate, chans = read_vpk(path)
             write_wav(out, rate, chans)
-        print("gravado", out)
+        print("wrote", out)
     elif cmd == "vpk":
         src, out = sys.argv[2], sys.argv[3]
         rate, chans = read_wav_any(src)
@@ -479,14 +479,14 @@ def main():
             chans = [resample(c, rate, orate) for c in to_channels(chans, onch)]
             rate = orate
         elif len(chans) == 1:
-            chans = to_channels(chans, 2)   # todos os .VPK do disco sao estereo
+            chans = to_channels(chans, 2)   # every .VPK on the disc is stereo
         write_vpk(out, rate, chans, vols)
-        print("gravado %s (%d Hz, %d canais, %.1f s)" % (out, rate, len(chans), len(chans[0]) / rate))
+        print("wrote %s (%d Hz, %d channels, %.1f s)" % (out, rate, len(chans), len(chans[0]) / rate))
     elif cmd == "vag":
         src, out = sys.argv[2], sys.argv[3]
         rate, chans = read_wav_any(src)
         write_vag(out, rate, to_channels(chans, 1)[0], loop="--loop" in sys.argv)
-        print("gravado", out)
+        print("wrote", out)
     elif cmd == "bnk-replace":
         bnk_replace(sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5])
     else:

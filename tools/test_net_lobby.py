@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# ABOUTME: Testes do cliente de lobby (tools/net_lobby.py) contra o wotm_server de verdade (native/net/build, tools/build_net.bat).
-# ABOUTME: Rodar: python tools/test_net_lobby.py
+# ABOUTME: Tests for the lobby client (tools/net_lobby.py) against the real wotm_server (native/net/build, tools/build_net.bat).
+# ABOUTME: Run: python tools/test_net_lobby.py
 import re
 import subprocess
 import sys
@@ -21,7 +21,7 @@ class LobbyTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not SERVER.exists():
-            raise unittest.SkipTest(f'{SERVER} nao existe: rode tools\\build_net.bat')
+            raise unittest.SkipTest(f'{SERVER} does not exist: run tools\\build_net.bat')
 
     def setUp(self):
         LobbyTest.port += 1
@@ -39,7 +39,7 @@ class LobbyTest(unittest.TestCase):
         self.assertEqual(a['WOTM_NET'], f'127.0.0.1:{self.port}')
         self.assertEqual(a['WOTM_MATCH'], '3,1,2,5')
         self.assertEqual(a['WOTM_PLAYERS'], '3')
-        self.assertEqual(a['WOTM_FIXEDSTEP'], '2')     # 3+ jogadores: modo de 30 Hz do jogo
+        self.assertEqual(a['WOTM_FIXEDSTEP'], '2')     # 3+ players: the game's 30 Hz mode
         self.assertEqual(a['WOTM_SEED'], c['WOTM_SEED'])
         self.assertEqual([e['WOTM_KILLTARGET'] for e in envs], ['3', '3', '3'])
         self.assertEqual([e['WOTM_LOCALPLAYER'] for e in envs], ['1', '2', '3'])
@@ -79,7 +79,7 @@ class LobbyTest(unittest.TestCase):
             self.assertEqual(a.set(stage=4, wins=2), {'stage': '4', 'wins': '2'})
 
     def test_server_errors_raise(self):
-        with net_lobby.Lobby('127.0.0.1', self.port, 'b1') as a, net_lobby.Lobby('127.0.0.1', self.port, 'outro') as b:
+        with net_lobby.Lobby('127.0.0.1', self.port, 'b1') as a, net_lobby.Lobby('127.0.0.1', self.port, 'other') as b:
             code = a.create('Sala', 'Ana', 3)
             with self.assertRaisesRegex(net_lobby.LobbyError, 'build'):
                 b.join(code, 'Bia', 1)
@@ -87,7 +87,7 @@ class LobbyTest(unittest.TestCase):
                 b.join('QQQQ' if code != 'QQQQ' else 'RRRR', 'Bia', 1)
 
     def test_cli_prints_env_lines(self):
-        # o dono cria pela linha de comando e comeca quando o segundo entra pelo codigo
+        # the owner creates from the command line and starts when the second player joins by code
         tool = [sys.executable, str(REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{self.port}', '--build', 'b1']
         first = subprocess.Popen(tool + ['--create', 'Sala', '--name', 'Ana', '--monster', '3', '--stage', '2', '--wins', '4', '--start-with', '2'],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -95,7 +95,7 @@ class LobbyTest(unittest.TestCase):
         deadline = time.time() + 10
         while not code and time.time() < deadline:
             line = first.stderr.readline()
-            m = re.search(r'codigo ([A-Z0-9]{4})', line)
+            m = re.search(r'code ([A-Z0-9]{4})', line)
             code = m.group(1) if m else ''
         self.assertEqual(len(code), 4)
         second = subprocess.run(tool + ['--code', code, '--name', 'Bia', '--monster', '1'], capture_output=True, text=True, timeout=10)
@@ -106,12 +106,12 @@ class LobbyTest(unittest.TestCase):
         self.assertIn('WOTM_LOCALPLAYER=2', second.stdout)
         self.assertIn('WOTM_LOCALPLAYER=1', out1)
 
-    # partida entre dois PCs: o segundo jogador entra (ou o dono comeca) depois do timeout de leitura de 10 s do Lobby
+    # match between two PCs: the second player joins (or the owner starts) after the Lobby's 10 s read timeout
     def test_host_waits_longer_than_the_read_timeout_for_players(self):
         tool = [sys.executable, str(REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{self.port}', '--build', 'b1']
         first = subprocess.Popen(tool + ['--create', 'Sala', '--name', 'Ana', '--monster', '3', '--start-with', '2'],
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        m = re.search(r'codigo ([A-Z0-9]{4})', first.stderr.readline())
+        m = re.search(r'code ([A-Z0-9]{4})', first.stderr.readline())
         self.assertIsNotNone(m)
         time.sleep(12)
         second = subprocess.run(tool + ['--code', m.group(1), '--name', 'Bia', '--monster', '1'], capture_output=True, text=True, timeout=10)

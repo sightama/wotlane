@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Checa a separação dos docs: referência no presente, TODO só com o aberto, diário no git.
+"""Checks that the docs stay separated: reference in the present tense, TODO with open items only, the diary in git.
 
-Três tipos de texto (regra completa no CLAUDE.md, "Documentação"):
-- Referência (README.md, CLAUDE.md, docs/*.md, docs/passos/*.md): como as coisas são hoje. Sem datas, sem "antes era", sem
-  "feito/corrigido em", sem relato de teste ("conferido"). A história vai na mensagem do commit.
-- TODO.md: só o que está aberto. Item terminado sai do arquivo (sem "feito", sem riscado).
-- Diário: mensagens de commit e docs/investigacoes/<data>/ (não são checados aqui).
+Three kinds of text (full rule in CLAUDE.md, "Documentation"):
+- Reference (README.md, CLAUDE.md, docs/*.md, docs/passos/*.md): how things are today. No dates, no "it used to be", no
+  "done/fixed in", no test reports ("verified"). The history goes in the commit message.
+- TODO.md: only what is open. A finished item leaves the file (no "done", no strikethrough).
+- Diary: commit messages and docs/investigacoes/<date>/ (not checked here).
 
-Datas dentro de um caminho entre crases (`docs/screenshots/2026-10-22/...`, `<commit>:docs/investigacoes/...`) valem.
+Dates inside a path in backticks (`docs/screenshots/2026-10-22/...`, `<commit>:docs/investigacoes/...`) are allowed.
 
-Uso:
-  python tools/doclint.py              só as linhas que o commit acrescenta (git diff --cached) + o TODO.md inteiro
-  python tools/doclint.py --all        tudo, com a contagem por arquivo (o que ainda falta migrar)
-  python tools/doclint.py <arquivo...> esses arquivos inteiros
-Sai com 1 se achar algum problema.
+Usage:
+  python tools/doclint.py              only the lines the commit adds (git diff --cached) + the whole TODO.md
+  python tools/doclint.py --all        everything, with a count per file (what is still left to migrate)
+  python tools/doclint.py <file...>    those files, whole
+Exits with 1 if it finds any problem.
 """
 import re
 import subprocess
@@ -24,11 +24,11 @@ RAIZ = Path(__file__).resolve().parent.parent
 TODO = "TODO.md"
 
 DATA = re.compile(r"\b20\d\d-\d\d-\d\d\b")
-CODIGO = re.compile(r"`[^`]*`")  # crases em pares, da esquerda para a direita
+CODIGO = re.compile(r"`[^`]*`")  # backticks in pairs, left to right
 
 
 def tira_caminhos(linha):
-    """Apaga os trechos entre crases que são caminhos (têm "/"): data dentro de caminho vale."""
+    """Blanks the backtick spans that are paths (contain "/"): a date inside a path is allowed."""
     return CODIGO.sub(lambda m: "``" if "/" in m.group(0) else m.group(0), linha)
 
 
@@ -37,10 +37,10 @@ HISTORIA = re.compile(
     r"na master|(depois|antes|desde) d[oe] merge\b|conferid[oa]s?\b|relato de)",
     re.IGNORECASE,
 )
-CITACAO = re.compile(r'"[^"\n]*"')  # palavra entre aspas é citada (ex.: a própria regra), não é história
+CITACAO = re.compile(r'"[^"\n]*"')  # a word in double quotes is quoted (e.g. the rule itself), not history
 FEITO = re.compile(r"(\bfeit[oa]s? (em|no|na|pel[oa]s?)\b|\*\*feit|— feit|\(feit|\bna master\b|~~|\bcorrigid[oa]s? em\b|"
                    r"\bconferid[oa]s? pelo dono\b)", re.IGNORECASE)
-MAX_LINHAS_ITEM = 6  # um item do TODO (bullet ou número) com mais linhas que isso vira relato
+MAX_LINHAS_ITEM = 6  # a TODO item (bullet or number) with more lines than this has turned into a report
 
 
 def e_referencia(rel):
@@ -53,13 +53,13 @@ def e_referencia(rel):
 
 
 def problemas_referencia(linha):
-    """[(chave, mensagem)]; a chave é o texto achado, para comparar com a linha que o commit tirou."""
+    """[(key, message)]; the key is the text found, to compare against the line the commit removed."""
     sem_caminhos = tira_caminhos(linha)
     achados = []
     for d in DATA.findall(sem_caminhos):
-        achados.append((d, f"data ({d})"))
+        achados.append((d, f"date ({d})"))
     for m in HISTORIA.finditer(CITACAO.sub('""', sem_caminhos)):
-        achados.append((m.group(0).lower(), f'história ("{m.group(0)}")'))
+        achados.append((m.group(0).lower(), f'history ("{m.group(0)}")'))
     return achados
 
 
@@ -70,27 +70,27 @@ def checa_todo(texto):
     for i, linha in enumerate(linhas, 1):
         sem_caminhos = tira_caminhos(linha)
         if DATA.search(sem_caminhos):
-            erros.append((i, "data no TODO (a data é do commit)"))
+            erros.append((i, "date in the TODO (the date belongs to the commit)"))
         m = FEITO.search(sem_caminhos)
         if m:
-            erros.append((i, f'item feito no TODO ("{m.group(0)}"): apague a linha e documente no doc de referência'))
+            erros.append((i, f'finished item in the TODO ("{m.group(0)}"): delete the line and document it in the reference doc'))
         if re.match(r"\s*(- |\d+\. )", linha) and not linha.startswith("  " * 2):
             if inicio and n > MAX_LINHAS_ITEM:
-                erros.append((inicio, f"item com {n} linhas (máximo {MAX_LINHAS_ITEM}): o detalhe vai no doc de referência"))
+                erros.append((inicio, f"item with {n} lines (max {MAX_LINHAS_ITEM}): the detail goes in the reference doc"))
             inicio, n = i, 1
         elif inicio and linha.startswith("  ") and linha.strip():
             n += 1
         else:
             if inicio and n > MAX_LINHAS_ITEM:
-                erros.append((inicio, f"item com {n} linhas (máximo {MAX_LINHAS_ITEM}): o detalhe vai no doc de referência"))
+                erros.append((inicio, f"item with {n} lines (max {MAX_LINHAS_ITEM}): the detail goes in the reference doc"))
             inicio, n = None, 0
-    if inicio and n > MAX_LINHAS_ITEM:  # último item do arquivo
-        erros.append((inicio, f"item com {n} linhas (máximo {MAX_LINHAS_ITEM}): o detalhe vai no doc de referência"))
+    if inicio and n > MAX_LINHAS_ITEM:  # last item of the file
+        erros.append((inicio, f"item with {n} lines (max {MAX_LINHAS_ITEM}): the detail goes in the reference doc"))
     return erros
 
 
 def linhas_acrescentadas():
-    """({arquivo: [(num, linha)]} das linhas que o commit acrescenta, {arquivo: texto das linhas que ele tira})."""
+    """({file: [(num, line)]} of the lines the commit adds, {file: text of the lines it removes})."""
     saida = subprocess.run(["git", "diff", "--cached", "-U0", "--no-color", "--", "*.md"], cwd=RAIZ,
                            capture_output=True).stdout.decode("utf-8", "replace")
     por_arquivo, tiradas, atual, num = {}, {}, None, 0
@@ -131,7 +131,7 @@ def main():
     for rel, linhas in alvo.items():
         if not e_referencia(rel):
             continue
-        # Linha antiga só editada: o que já estava nas linhas tiradas do mesmo arquivo não conta (migra-se aos poucos).
+        # An old line that was only edited: what was already in the same file's removed lines doesn't count (docs migrate gradually).
         ja_tinha = {}
         for velha in tiradas.get(rel, []):
             for chave, _ in problemas_referencia(velha):
@@ -152,13 +152,13 @@ def main():
             contagem[rel] = contagem.get(rel, 0) + 1
         for rel in sorted(contagem, key=lambda r: -contagem[r]):
             print(f"{contagem[rel]:5}  {rel}")
-        print(f"{len(erros)} problema(s) em {len(contagem)} arquivo(s)" if erros else "tudo limpo")
+        print(f"{len(erros)} problem(s) in {len(contagem)} file(s)" if erros else "all clean")
     else:
         for rel, num, p in erros:
             print(f"{rel}:{num}: {p}")
         if erros:
-            print(f"\n{len(erros)} problema(s). Referência fica no presente (história vai na mensagem do commit); "
-                  "o TODO.md só tem o que está aberto. Regra: CLAUDE.md, \"Documentação\".")
+            print(f"\n{len(erros)} problem(s). Reference stays in the present tense (history goes in the commit message); "
+                  "TODO.md only holds what is open. Rule: CLAUDE.md, \"Documentation\".")
     return 1 if erros else 0
 
 
