@@ -516,10 +516,13 @@ def git(*args):
                           errors='replace', check=True).stdout
 
 
+def read_file(f):
+    return f.read_text(encoding='utf-8', errors='replace') if f.exists() else None
+
+
 def read_at(rev, path):
     if rev is None:
-        f = REPO / path
-        return f.read_text(encoding='utf-8', errors='replace') if f.exists() else None
+        return read_file(REPO / path)
     r = subprocess.run(['git', '-C', str(REPO), 'show', '%s:%s' % (rev, path)], capture_output=True)
     return r.stdout.decode('utf-8', errors='replace') if r.returncode == 0 else None
 
@@ -532,13 +535,25 @@ def main(argv=None):
     ap.add_argument('--head', default=None, help='a revision (default: the working tree)')
     ap.add_argument('--strings', action='store_true')
     ap.add_argument('--extra', action='append', default=[])
+    ap.add_argument('--before', help='with --after: compare DIR/<path> to the --after folder instead of git revisions, for '
+                                     'files outside this repo such as the PS2Recomp clone (paths are relative to both)')
+    ap.add_argument('--after')
     args = ap.parse_args(argv)
 
-    if args.paths:
-        paths = [rel(Path(p)) for p in args.paths]
+    if bool(args.before) != bool(args.after) or (args.before and not args.paths):
+        ap.error('--before and --after go together, with the paths to compare')
+    if args.before:
+        paths = args.paths
+        read_old = lambda p: read_file(Path(args.before) / p)
+        read_new = lambda p: read_file(Path(args.after) / p)
     else:
-        rng = [args.base] + ([args.head] if args.head else [])
-        paths = [p for p in git('diff', '--name-only', *rng).splitlines() if p]
+        if args.paths:
+            paths = [rel(Path(p)) for p in args.paths]
+        else:
+            rng = [args.base] + ([args.head] if args.head else [])
+            paths = [p for p in git('diff', '--name-only', *rng).splitlines() if p]
+        read_old = lambda p: read_at(args.base, p)
+        read_new = lambda p: read_at(args.head, p)
     if args.head:
         corpus_note = 'matcher check uses the working tree, not --head'
         print(corpus_note)
@@ -547,7 +562,7 @@ def main(argv=None):
     nchanged = 0
     for path in paths:
         lang = lang_of(path)
-        old, new = read_at(args.base, path), read_at(args.head, path)
+        old, new = read_old(path), read_new(path)
         if lang is None or old is None or new is None:
             print('%-60s not checked (%s)' % (path, 'no language' if lang is None else 'added or removed'))
             continue

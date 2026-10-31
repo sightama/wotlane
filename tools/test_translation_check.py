@@ -130,5 +130,23 @@ class PlaceholderTest(unittest.TestCase):
         self.assertNotEqual(tc.placeholders('"{0} e {1}"', 'c'), tc.placeholders('"{0} and"', 'c'))
 
 
+
+
+class FolderPairTest(unittest.TestCase):
+    def test_before_after_folders(self):
+        import contextlib
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            a, b = Path(d) / 'a', Path(d) / 'b'
+            for root, text in ((a, '// ola\nint x = f("um");\n'), (b, '// hi\nint x = f("one");\n')):
+                (root / 'src').mkdir(parents=True)
+                (root / 'src' / 'x.cpp').write_text(text)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(tc.main(['--before', str(a), '--after', str(b), 'src/x.cpp']), 0)
+                (b / 'src' / 'x.cpp').write_text('int x = f("one", 2);\n')
+                self.assertEqual(tc.main(['--before', str(a), '--after', str(b), 'src/x.cpp']), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
