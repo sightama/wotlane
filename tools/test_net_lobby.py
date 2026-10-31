@@ -106,6 +106,33 @@ class LobbyTest(unittest.TestCase):
         self.assertIn('WOTM_LOCALPLAYER=2', second.stdout)
         self.assertIn('WOTM_LOCALPLAYER=1', out1)
 
+    # partida entre dois PCs: o segundo jogador entra (ou o dono comeca) depois do timeout de leitura de 10 s do Lobby
+    def test_host_waits_longer_than_the_read_timeout_for_players(self):
+        tool = [sys.executable, str(REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{self.port}', '--build', 'b1']
+        first = subprocess.Popen(tool + ['--create', 'Sala', '--name', 'Ana', '--monster', '3', '--start-with', '2'],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        m = re.search(r'codigo ([A-Z0-9]{4})', first.stderr.readline())
+        self.assertIsNotNone(m)
+        time.sleep(12)
+        second = subprocess.run(tool + ['--code', m.group(1), '--name', 'Bia', '--monster', '1'], capture_output=True, text=True, timeout=10)
+        out1, err1 = first.communicate(timeout=10)
+        self.assertEqual(first.returncode, 0, err1)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn('WOTM_LOCALPLAYER=1', out1)
+
+    def test_joiner_waits_longer_than_the_read_timeout_for_the_start(self):
+        tool = [sys.executable, str(REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{self.port}', '--build', 'b1']
+        with net_lobby.Lobby('127.0.0.1', self.port, 'b1') as host:
+            code = host.create('Sala', 'Ana', 3)
+            second = subprocess.Popen(tool + ['--code', code, '--name', 'Bia', '--monster', '1'],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            host.wait_members(2)
+            time.sleep(12)
+            host.start()
+            out2, err2 = second.communicate(timeout=10)
+        self.assertEqual(second.returncode, 0, err2)
+        self.assertIn('WOTM_LOCALPLAYER=2', out2)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -68,6 +68,15 @@ class Lobby:
             if line.startswith(prefix):
                 return line
 
+    def expect_waiting(self, prefix):
+        """expect sem timeout: espera outro jogador (entrar no lobby, comecar a partida), que pode estar em outro PC."""
+        timeout = self.sock.gettimeout()
+        self.sock.settimeout(None)
+        try:
+            return self.expect(prefix)
+        finally:
+            self.sock.settimeout(timeout)
+
     def list(self):
         """Lobbies abertos: codigo, estado, jogadores, vagas, se tem senha, nome, dono e nomes dos membros."""
         self.send('LIST')
@@ -113,7 +122,7 @@ class Lobby:
     def wait_members(self, count):
         """Espera o lobby ter `count` membros (linhas MEMBERS)."""
         while True:
-            w = self.expect('MEMBERS').split()
+            w = self.expect_waiting('MEMBERS').split()
             if len(w) >= 4 and w[3] != '-' and len(w[3].split(',')) >= count:
                 return
 
@@ -121,7 +130,7 @@ class Lobby:
         self.send('START')
 
     def wait_match(self):
-        return dict(kv.split('=', 1) for kv in self.expect('MATCH').split()[1:] if '=' in kv)
+        return dict(kv.split('=', 1) for kv in self.expect_waiting('MATCH').split()[1:] if '=' in kv)
 
 
 def match_env(match, host):
