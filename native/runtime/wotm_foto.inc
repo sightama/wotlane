@@ -1,21 +1,21 @@
-// wotm_foto.inc: pausa, avanco de quadro e fotos com nota (incluido por wotm_scene.inc, depois de wotm_live.inc e antes de
-// wotm_vu1check.inc; escopo global de ps2_runtime.cpp).
+// wotm_foto.inc: pause, frame advance and snapshots with a note (included by wotm_scene.inc, after wotm_live.inc and before
+// wotm_vu1check.inc; global scope of ps2_runtime.cpp).
 //
-// Teclas na janela (thread da apresentacao, wotmFotoKeys):
-//  - F7 pausa e continua. A pausa segura a thread do EE no ponto de captura (wotmPauseBlock, chamado do wotm_overrides.cpp na
-//    entrada de timerWaitForMinUpdateRate, logo depois do wotmCaptureFrame): o quadro na tela e o ultimo pronto e o seguinte nao
-//    comecou. Filme (FMV) e som seguem por conta propria;
-//  - F6, pausado, avanca um quadro do jogo;
-//  - F8, com WOTM_FOTOS, tira uma foto: o jogo anda ate a checagem VU1 x nativo gravar um quadro inteiro (do hier(0, 0) ao seguinte,
-//    wotm_vu1check.inc), para pausado nele (wotmFotoDone) e abre uma caixa de texto para a nota. A foto e o quadro seguinte ao que
-//    estava na tela quando o F8 foi apertado; a tela passa a mostrar o fotografado enquanto a nota e escrita. Enter grava (vazia =
-//    sem nota; o Esc fecharia a janela, e a tecla de saida do raylib). Sem WOTM_FOTOS, o F8 continua sendo so o disparo da checagem (WOTM_VU1CHECK).
-// Cada foto vai para <pasta>/<AAAA-MM-DD_HHMMSS da sessao>/: foto_NNN.vu1snap (instantaneo: tools\vu1cmp.ps1 refaz a checagem e as
-// imagens ref/nat/diff), foto_NNN_tela.png (o quadro nativo como estava na janela) e uma linha em notas.txt (numero, g_frame,
-// currScreen, recursos carregados, nota). WOTM_FOTOS=1 usa <cwd>/../fotos (o run_live roda no discroot: <runtime>/fotos).
+// Window keys (presentation thread, wotmFotoKeys):
+//  - F7 pauses and resumes. The pause holds the EE thread at the capture point (wotmPauseBlock, called from wotm_overrides.cpp on
+//    entry to timerWaitForMinUpdateRate, right after wotmCaptureFrame): the frame on screen is the last finished one and the next
+//    has not started. Movies (FMV) and sound keep going on their own;
+//  - F6, while paused, advances one game frame;
+//  - F8, with WOTM_FOTOS, takes a snapshot: the game runs until the VU1 vs native check records one whole frame (from hier(0, 0) to
+//    the next, wotm_vu1check.inc), stops paused on it (wotmFotoDone) and opens a text box for the note. The snapshot is the frame
+//    after the one on screen when F8 was pressed; the screen shows the captured frame while the note is typed. Enter saves (empty =
+//    no note; Esc would close the window, it is raylib's exit key). Without WOTM_FOTOS, F8 only triggers the check (WOTM_VU1CHECK).
+// Each snapshot goes to <folder>/<session's YYYY-MM-DD_HHMMSS>/: foto_NNN.vu1snap (the snapshot: tools\vu1cmp.ps1 redoes the check
+// and the ref/nat/diff images), foto_NNN_tela.png (the native frame as it looked in the window) and a line in notas.txt (number,
+// g_frame, currScreen, loaded resources, note). WOTM_FOTOS=1 uses <cwd>/../fotos (run_live runs in discroot: <runtime>/fotos).
 #include <condition_variable>
-#include "wotm_netstatus.h"   // partida em rede: sem pausa nem foto
-#include "wotm_syms.h"   // wotm::sym: enderecos do ELF por nome
+#include "wotm_netstatus.h"   // network match: no pause and no snapshots
+#include "wotm_syms.h"   // wotm::sym: ELF addresses by name
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -24,25 +24,25 @@ namespace wotm_foto
 {
 std::mutex m;
 std::condition_variable cv;
-bool paused = false;        // F7 / fim de foto
-int steps = 0;              // F6: quadros a deixar andar antes de segurar de novo
-bool photoRun = false;      // F8: o jogo anda ate a foto terminar, mesmo pausado
-std::atomic<bool> blocked{false};        // a thread do EE esta parada aqui (vigia, overlay)
-std::atomic<bool> tookFrame{false};      // houve parada no quadro em andamento (wotmPauseTookFrame)
-std::string dir;            // pasta da sessao ("" = fotos desligadas); criada na primeira foto (makeDir)
-unsigned next = 1;          // numero da proxima foto
+bool paused = false;        // F7 / end of snapshot
+int steps = 0;              // F6: frames to let run before holding again
+bool photoRun = false;      // F8: the game runs until the snapshot finishes, even while paused
+std::atomic<bool> blocked{false};        // the EE thread is stopped here (watchdog, overlay)
+std::atomic<bool> tookFrame{false};      // the frame in progress had a stop (wotmPauseTookFrame)
+std::string dir;            // session folder ("" = snapshots off); created on the first snapshot (makeDir)
+unsigned next = 1;          // number of the next snapshot
 
-// Foto pronta (thread do EE -> apresentacao)
+// Snapshot ready (EE thread -> presentation)
 struct Done { bool ready = false; unsigned n = 0; uint32_t frame = 0, screen = 0; std::string file; };
 Done done;
-// Estado da apresentacao
+// Presentation state
 bool exported = false, noteOpen = false;
 std::string note, msg;
 double msgUntil = 0.0, photoAsked = 0.0;
 
 Font font()
 {
-    // Consolas com Latin-1 (acentos da nota); sem o arquivo, a fonte padrao do raylib
+    // Consolas with Latin-1 (accented characters in the note); without the file, raylib's default font
     static Font f = [] {
         std::vector<int> cps;
         for (int c = 32; c < 256; ++c) cps.push_back(c);
@@ -65,7 +65,7 @@ bool makeDir()
 {
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
-    if (ec) std::fprintf(stderr, "[foto] nao consegui criar %s: %s\n", dir.c_str(), ec.message().c_str());
+    if (ec) std::fprintf(stderr, "[snap] could not create %s: %s\n", dir.c_str(), ec.message().c_str());
     return !ec;
 }
 
@@ -77,7 +77,7 @@ std::string name(unsigned n, const char *suffix)
 }
 } // namespace wotm_foto
 
-// Liga as fotos (wotmVu1CheckInstall, com WOTM_FOTOS): escolhe a pasta da sessao (criada so na primeira foto).
+// Turns snapshots on (wotmVu1CheckInstall, with WOTM_FOTOS): picks the session folder (created only on the first snapshot).
 static bool wotmFotoInit(const char *base)
 {
     namespace fs = std::filesystem;
@@ -88,18 +88,18 @@ static bool wotmFotoInit(const char *base)
     std::error_code ec;
     wotm_foto::dir = fs::absolute(root / stamp, ec).string();
     if (ec) return false;
-    std::fprintf(stderr, "[foto] F8 tira foto em %s (F7 pausa, F6 avanca um quadro)\n", wotm_foto::dir.c_str());
+    std::fprintf(stderr, "[snap] F8 takes a snapshot into %s (F7 pauses, F6 advances one frame)\n", wotm_foto::dir.c_str());
     return true;
 }
 static bool wotmFotosOn() { return !wotm_foto::dir.empty(); }
-// Prefixo do instantaneo da foto em andamento (wotm_vu1check.inc, snap::begin)
+// Path of the snapshot file for the snapshot in progress (wotm_vu1check.inc, snap::begin)
 static std::string wotmFotoSnapPath()
 {
     wotm_foto::makeDir();
     return wotm_foto::name(wotm_foto::next, ".vu1snap");
 }
 
-// Thread do EE: segura enquanto pausado (sem passo nem foto em andamento). Devolve se parou.
+// EE thread: holds while paused (with no step or snapshot in progress). Returns whether it stopped.
 bool wotmPauseBlock(PS2Runtime *rt)
 {
     using namespace wotm_foto;
@@ -115,17 +115,17 @@ bool wotmPauseBlock(PS2Runtime *rt)
         cv.wait_for(lk, std::chrono::milliseconds(50));
     if (steps > 0 && !photoRun) --steps;
     lk.unlock();
-    // Os vblanks contados durante a pausa nao vencem na volta (shiftHostDeadlines zera o vblankDue). O prazo do proximo vblank NAO
-    // anda: o relogio do vblank (EeSchedulerGame.cpp) segue rodando na pausa e o mantem perto de agora; somar a duracao da pausa
-    // deixava o jogo parado por esse mesmo tempo depois de soltar (modo foto de um minuto = um minuto "congelado")
+    // The vblanks counted during the pause do not all fall due on resume (shiftHostDeadlines clears vblankDue). The next vblank's
+    // deadline is NOT moved: the vblank clock (EeSchedulerGame.cpp) keeps running during the pause and keeps it close to now; adding
+    // the pause duration would leave the game stopped for that same time after release (a minute of photo mode = a minute "frozen")
     (void)t0;
     if (rt) rt->eeScheduler().shiftHostDeadlines(std::chrono::steady_clock::duration::zero());
     blocked.store(false, std::memory_order_relaxed);
     tookFrame.store(true, std::memory_order_relaxed);
     return true;
 }
-// Apresentacao: segura a thread do EE na fronteira do quadro (como o F7) ate hold(false); devolve se ela parou em ate 2 s. Para quem
-// precisa da RAM parada por um instante (autoteste da interpolacao: o desenho le partes da RAM ao vivo).
+// Presentation: holds the EE thread at the frame boundary (like F7) until hold(false); returns whether it stopped within 2 s. For
+// code that needs the RAM still for a moment (interpolation self-test: drawing reads parts of the RAM live).
 bool wotmHoldGame(bool hold)
 {
     using namespace wotm_foto;
@@ -142,12 +142,12 @@ bool wotmHoldGame(bool hold)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     return blocked.load(std::memory_order_relaxed);
 }
-// wotm_overrides.cpp, na entrada de timerWaitForMinUpdateRate: o quadro que acabou teve uma parada (o tempo dela nao conta)
+// wotm_overrides.cpp, on entry to timerWaitForMinUpdateRate: the frame that just ended had a stop (its time does not count)
 bool wotmPauseTookFrame() { return wotm_foto::tookFrame.exchange(false, std::memory_order_relaxed); }
-// Vigia (ps2_runtime.cpp): g_frame parado de proposito
+// Watchdog (ps2_runtime.cpp): g_frame stopped on purpose
 bool wotmPaused() { return wotm_foto::blocked.load(std::memory_order_relaxed) || wotm_netstatus::g_waiting.load(std::memory_order_relaxed); }
 
-// Thread do EE (wotm_vu1check.inc, entrada do hier(0, 0) seguinte ao quadro fotografado): a foto esta gravada; fica pausado aqui.
+// EE thread (wotm_vu1check.inc, entry to the hier(0, 0) after the captured frame): the snapshot is saved; stays paused here.
 static void wotmFotoDone(const uint8_t *rdram, uint32_t frame, const std::string &file)
 {
     using namespace wotm_foto;
@@ -162,10 +162,10 @@ static void wotmFotoDone(const uint8_t *rdram, uint32_t frame, const std::string
         paused = true;
         steps = 0;
     }
-    std::fprintf(stderr, "[foto] %u: g_frame %u gravado em %s\n", done.n, frame, file.c_str());
+    std::fprintf(stderr, "[snap] %u: g_frame %u saved to %s\n", done.n, frame, file.c_str());
 }
 
-// Modo foto (wotm_photo.inc): liga e desliga a mesma pausa do F7
+// Photo mode (wotm_photo.inc): turns the same pause as F7 on and off
 void wotmPhotoPause(bool on)
 {
     using namespace wotm_foto;
@@ -175,12 +175,12 @@ void wotmPhotoPause(bool on)
     cv.notify_all();
 }
 
-// Apresentacao, antes do desenho: F6/F7/F8 (a nota aberta fica com o teclado; o modo foto cuida da pausa sozinho)
+// Presentation, before drawing: F6/F7/F8 (an open note owns the keyboard; photo mode handles the pause on its own)
 static void wotmFotoKeys()
 {
     using namespace wotm_foto;
     wotmPhotoWatchdog();
-    if (noteOpen || wotmPhotoActive() || wotm_netstatus::g_active) return;   // em rede a pausa pararia so este PC (e o lockstep, todos)
+    if (noteOpen || wotmPhotoActive() || wotm_netstatus::g_active) return;   // online, the pause would stop only this PC (and the lockstep, everyone)
     std::lock_guard<std::mutex> lk(m);
     if (IsKeyPressed(KEY_F7)) {
         paused = !paused;
@@ -190,7 +190,7 @@ static void wotmFotoKeys()
     if (IsKeyPressed(KEY_F6) && paused && !photoRun) ++steps;
     if (IsKeyPressed(KEY_F8)) {
         if (!wotmFotosOn()) {
-            g_wotmShotKey = true;   // so a checagem (WOTM_VU1CHECK), como antes das fotos
+            g_wotmShotKey = true;   // just the check (WOTM_VU1CHECK), as before snapshots existed
         } else if (!photoRun) {
             g_wotmShotKey = true;
             photoRun = true;
@@ -200,7 +200,7 @@ static void wotmFotoKeys()
             say("taking photo...", 5.0);
         }
     }
-    // Sem hier(0, 0) (filme, carregamento) a checagem nao dispara: desiste e pausa no proximo quadro
+    // Without hier(0, 0) (movie, loading) the check never fires: give up and pause on the next frame
     if (photoRun && GetTime() - photoAsked > 3.0) {
         photoRun = false;
         g_wotmShotKey = false;
@@ -209,8 +209,8 @@ static void wotmFotoKeys()
     cv.notify_all();
 }
 
-// Apresentacao, depois do desenho nativo (drewNative: a camada nativa desenhou o quadro): grava o PNG da foto, desenha a caixa da
-// nota e o aviso de pausa.
+// Presentation, after native drawing (drewNative: the native layer drew the frame): saves the snapshot's PNG, draws the note box
+// and the pause notice.
 static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
 {
     using namespace wotm_foto;
@@ -229,7 +229,7 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
         }
         noteOpen = true;
         note.clear();
-        while (GetCharPressed()) {}   // o que foi digitado antes da caixa nao entra
+        while (GetCharPressed()) {}   // anything typed before the box opened is dropped
     }
     const float sw = float(GetScreenWidth()), sh = float(GetScreenHeight());
     const Font f = font();
@@ -241,7 +241,7 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
             }
         if ((IsKeyPressed(KEY_BACKSPACE) || IsKeyPressedRepeat(KEY_BACKSPACE)) && !note.empty()) {
             size_t i = note.size() - 1;
-            while (i > 0 && (uint8_t(note[i]) & 0xC0) == 0x80) --i;   // volta ao inicio do caractere UTF-8
+            while (i > 0 && (uint8_t(note[i]) & 0xC0) == 0x80) --i;   // back up to the start of the UTF-8 character
             note.erase(i);
         }
         if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
@@ -249,8 +249,8 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
             std::ofstream o(std::filesystem::path(dir) / "notas.txt", std::ios::app | std::ios::binary);
             char head[160];
             std::snprintf(head, sizeof head, "foto_%03u  g_frame %u  currScreen %u  ", d.n, d.frame, d.screen);
-            o << head << "recursos: " << (recursos.empty() ? "-" : recursos) << "\n    " << (note.empty() ? "(sem nota)" : note) << "\n";
-            std::fprintf(stderr, "[foto] %u: nota \"%s\"\n", d.n, note.c_str());
+            o << head << "resources: " << (recursos.empty() ? "-" : recursos) << "\n    " << (note.empty() ? "(no note)" : note) << "\n";
+            std::fprintf(stderr, "[snap] %u: note \"%s\"\n", d.n, note.c_str());
             noteOpen = false;
             exported = false;
             {
@@ -270,7 +270,7 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
         DrawTextEx(f, (note + (blink ? "_" : " ")).c_str(), Vector2{28.f, y + 44.f}, 22.f, 0.f, RAYWHITE);
         return;
     }
-    if (wotmPhotoActive()) return;   // o modo foto tem a legenda dele
+    if (wotmPhotoActive()) return;   // photo mode has its own caption
     bool isPaused, run;
     {
         std::lock_guard<std::mutex> lk(m);
@@ -286,7 +286,7 @@ static void wotmFotoOverlay(bool drewNative, const uint8_t *rdram)
             line += "   (g_frame " + std::to_string(g) + ")";
         }
         const Vector2 sz = MeasureTextEx(f, line.c_str(), 20.f, 0.f);
-        const float x = (sw - sz.x) * 0.5f, y = sh - sz.y - 24.f;   // rodape: no alto fica o HUD
+        const float x = (sw - sz.x) * 0.5f, y = sh - sz.y - 24.f;   // footer: the HUD is at the top
         DrawRectangle(int(x - 10.f), int(y - 6.f), int(sz.x + 20.f), int(sz.y + 12.f), Fade(BLACK, 0.7f));
         DrawTextEx(f, line.c_str(), Vector2{x, y}, 20.f, 0.f, isPaused ? YELLOW : RAYWHITE);
     }

@@ -17,7 +17,7 @@ def log(content_fields):
     lines = []
     for i, ct in enumerate(content_fields):
         fa = math.floor(ct)
-        lines.append(f'[interp] t={i / HZ:.6f} g={fa} fA={fa} fB={fa + 1} alfa={ct - fa:.4f}')
+        lines.append(f'[interp] t={i / HZ:.6f} g={fa} fA={fa} fB={fa + 1} alpha={ct - fa:.4f}')
     return '\n'.join(lines)
 
 
@@ -50,9 +50,9 @@ class LagTest(unittest.TestCase):
     def test_live_lines_give_the_blended_game_time(self):
         # o tempo do jogo mostrado e fA + alfa * (fB - fA), e sem a mistura (desligada) a imagem e a de B
         text = '\n'.join([
-            '[interp] t=1.0000 g=100 fA=200 fB=201 alfa=0.250 novo',
-            '[interp] t=1.0070 g=100 fA=200 fB=202 alfa=0.500 (P-A)',
-            '[interp] t=1.0140 g=101 fA=201 fB=202 alfa=0.000 (desligada)',
+            '[interp] t=1.0000 g=100 fA=200 fB=201 alpha=0.250 new',
+            '[interp] t=1.0070 g=100 fA=200 fB=202 alpha=0.500 (P-A)',
+            '[interp] t=1.0140 g=101 fA=201 fB=202 alpha=0.000 (off)',
         ])
         self.assertEqual(interp_smooth.read_presentations(text), [(1.0, 200.25), (1.007, 201.0), (1.014, 202.0)])
 
@@ -60,12 +60,12 @@ class LagTest(unittest.TestCase):
         held = []
         for i in range(1000):
             newest = int(i / HZ * 60.0)
-            held.append(f'[interp] t={i / HZ:.6f} g={newest} fA={newest - 1} fB={newest} alfa=0.000 (desligada)')
+            held.append(f'[interp] t={i / HZ:.6f} g={newest} fA={newest - 1} fB={newest} alpha=0.000 (off)')
         spread, _ = interp_smooth.lag_spread_ms(interp_smooth.read_presentations('\n'.join(held)))
         self.assertGreater(spread, 12.0)
 
     def test_other_interp_lines_are_ignored(self):
-        text = '[interp] ligada: tela de 144 Hz\n[interp] redesenho de 9.00 ms para um periodo de 6.94 ms: mistura suspensa'
+        text = '[interp] on: 144 Hz screen\n[interp] redraw of 9.00 ms for a period of 6.94 ms: blending suspended'
         self.assertEqual(interp_smooth.read_presentations(text), [])
 
 

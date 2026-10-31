@@ -1,40 +1,40 @@
-// Eliminacao e minigames com 3 e 4 jogadores (NATIVO.md, "Eliminacao e minigames com 3 e 4"). Incluido pelo wotm_overrides.cpp depois do
-// wotm_split4.inc (tela em quadrantes, carga e controles dos jogadores 3 e 4), cujos ganchos estes embrulham. Age so com 3 ou 4
-// jogadores no Shell (m_numPlayers), postos pelo menu multijogador (wotm_padsel.inc); com 1 ou 2 tudo e o retail.
+// Elimination and minigames with 3 and 4 players (NATIVO.md, "Eliminacao e minigames com 3 e 4"). Included by wotm_overrides.cpp after
+// wotm_split4.inc (quadrant screen, load and pads for players 3 and 4), whose hooks these wrap. Acts only with 3 or 4
+// players in the Shell (m_numPlayers), set by the multiplayer menu (wotm_padsel.inc); with 1 or 2 everything is retail.
 //
-// Eliminacao (modo 6). O retail guarda continues e vitorias em campos de 2 (Shell::m_continues[2], m_wins[2]) e le o do jogador
-// pelo m_index (0 = jogador 1, outro = jogador 2). Aqui cada jogador tem os seus (g_cont, g_wins), e quem fica sem continues sai
-// (g_out) enquanto houver mais de um na luta:
-//   - StateDeath::transitionInto: o retail, com os continues do morto em 0, junta a tela na vitima e poe o matador em vitoria (fim
-//     da partida). Durante a chamada os dois continues do Shell valem 0 so quando o morto nao tem continues e sobra um jogador; senao
-//     1 (a luta segue). A morte credita uma vitoria ao matador jogador (o +1 do retail no m_winsThisGame vira o g_wins).
-//   - StateVictory::transitionOK: a pose de vitoria so vale quando os outros ja sairam (os continues do Shell como acima).
-//   - TheGame::gameResolveLifeAndDeath: morto (m_unkF6) com continues volta ao Shell (rtReturnToShell 1, como o retail); sem
-//     continues e com mais de um na luta, sai (monstro escondido, a camera dele passa a seguir quem continua); o ultimo volta ao Shell
-//     quando o matador acabou a vitoria.
-//   - EvaluateMultiPlayerBattleStatusNoAI: cada morto com continues gasta um e escolhe outro monstro no dialogo 8 do retail
-//     (selectNextMultPlayer, pelo controle do m_won[1]); depois SetPlayerMonster e playerInit como o retail. Sobrou um: dialogo 0xB
-//     ("PLAYER N WINS", m_survivor); nenhum: dialogo 6. O displayDialog e modal (roda quadros e cede ao escalonador): e chamado como
-//     cauda com o ra num trampolim (kTramp, um endereco que o jogo nunca executa) que faz o resto e volta ao ra de verdade, tanto
-//     quando o dialogo volta direto quanto quando a thread foi retomada pelo despachante.
-//   - finishedMultPlayElim ("play again"): o retail volta os monstros dos jogadores 1 e 2 aos do comeco (Shell+0x2B84/0x2B88) e os
-//     marca usados (resetSelecteds); os dos jogadores 3 e 4 vem do g_start. InitPlayers zera o estado (continues = m_elimination).
+// Elimination (mode 6). Retail keeps continues and wins in 2-entry fields (Shell::m_continues[2], m_wins[2]) and reads the player's
+// by m_index (0 = player 1, anything else = player 2). Here each player has their own (g_cont, g_wins), and whoever runs out of continues is out
+// (g_out) while more than one is left in the fight:
+//   - StateDeath::transitionInto: retail, with the dead player's continues at 0, joins the screen on the victim and puts the killer in victory (end
+//     of the match). During the call both Shell continues read 0 only when the dead player has no continues and one player is left; otherwise
+//     1 (the fight goes on). The death credits a win to the killer if it is a player (retail's +1 on m_winsThisGame becomes g_wins).
+//   - StateVictory::transitionOK: the victory pose only counts once the others are out (Shell continues as above).
+//   - TheGame::gameResolveLifeAndDeath: a dead player (m_unkF6) with continues goes back to the Shell (rtReturnToShell 1, like retail); with no
+//     continues and more than one left in the fight, they're out (monster hidden, their camera switches to following someone still in); the last one goes back to the Shell
+//     once the killer has finished the victory.
+//   - EvaluateMultiPlayerBattleStatusNoAI: each dead player with continues spends one and picks another monster in retail dialog 8
+//     (selectNextMultPlayer, with the pad from m_won[1]); then SetPlayerMonster and playerInit like retail. One left: dialog 0xB
+//     ("PLAYER N WINS", m_survivor); none: dialog 6. displayDialog is modal (runs frames and yields to the scheduler): it is called as a
+//     tail call with ra pointing at a trampoline (kTramp, an address the game never executes) that does the rest and returns to the real ra, both
+//     when the dialog returns directly and when the thread was resumed by the dispatcher.
+//   - finishedMultPlayElim ("play again"): retail puts players 1 and 2 back on their starting monsters (Shell+0x2B84/0x2B88) and
+//     marks them used (resetSelecteds); those of players 3 and 4 come from g_start. InitPlayers resets the state (continues = m_elimination).
 //
-// Dodgeball (modo 7, tela em quadrantes): o retail conta os acertos de cada jogador no inicio do DodgeBallLevel (2 inteiros pelo
-// m_index; o 3o derruba). Os jogadores 3 e 4 escreveriam no contador da bola: os acertos deles ficam em g_hits (takeDamage com o
-// contador e o m_index trocados durante a chamada). O update(vista) das vistas 2 e 3 so escreve "P3"/"P4" (o resto do update ja
-// roda nas vistas 0 e 1). O fim continua o do retail: o terceiro acerto derruba e o autor ganha.
+// Dodgeball (mode 7, quadrant screen): retail counts each player's hits at the start of DodgeBallLevel (2 ints indexed by
+// m_index; the 3rd knocks down). Players 3 and 4 would write into the ball's counter: their hits are kept in g_hits (takeDamage with the
+// counter and m_index swapped during the call). update(view) for views 2 and 3 only writes "P3"/"P4" (the rest of update already
+// runs in views 0 and 1). The ending stays retail's: the third hit knocks down and the hitter wins.
 //
-// Crush (modo 9, uma vista): placar de 4 (P3 e P4 em cima), vencedor pelo maior total dos 4 TokenManager (TheGame tem 4), empate no
-// topo vai a morte subita com todos. A camera do crush enquadra um par: durante o crushUpdate o par e o dos jogadores mais distantes.
+// Crush (mode 9, one view): a 4-player scoreboard (P3 and P4 at the top), winner by the highest total of the 4 TokenManagers (TheGame has 4), a tie at
+// the top goes to sudden death with everyone. The crush camera frames a pair: during crushUpdate the pair is the two players farthest apart.
 //
-// Big Shot (modo 8, por turnos): o BigShotLevel tem duas vagas (monstro +0x6C/+0x70, pontos +0x9C/+0xA0, nome +0x74/+0x84) e o
-// turno alterna entre elas (swapPlayers). Aqui os jogadores fazem rodizio: no fim de cada turno a vaga que entra recebe o proximo
-// jogador e os pontos dele; sao 3 turnos por jogador (o retail termina no 6o) e no ultimo as vagas ficam com os dois melhores, que o
-// retail compara (empate: o "king of the hill" entre eles). O initForReplay roda uma vez por jogador extra na vaga 2 (esconde e prepara
-// como o jogador 2) e o placar de 4 substitui o "P1"/"P2".
+// Big Shot (mode 8, turn-based): BigShotLevel has two slots (monster +0x6C/+0x70, points +0x9C/+0xA0, name +0x74/+0x84) and the
+// turn alternates between them (swapPlayers). Here the players rotate: at the end of each turn the incoming slot gets the next
+// player and their points; there are 3 turns per player (retail ends on the 6th) and on the last the slots get the top two, which
+// retail compares (tie: the "king of the hill" between them). initForReplay runs once per extra player in slot 2 (hides and prepares
+// them like player 2) and the 4-player scoreboard replaces "P1"/"P2".
 //
-// Os dialogos de fim dos minigames (finishedDodgeBall, finishedCrush, finishedBigShot) ganham as linhas "Player 3/4 - scored".
+// The minigame end dialogs (finishedDodgeBall, finishedCrush, finishedBigShot) get the "Player 3/4 - scored" lines.
 
 namespace wotm_modes4
 {
@@ -50,13 +50,13 @@ constexpr uint32_t kNumPlayers = kShell + 0x2BB4, kMonsterSel = kShell + 0x2938,
 // Monster
 constexpr uint32_t kCs = 0xC, kIndex = 0x24, kWins = 0x3C, kDead = 0xE8, kSudden = 0xEC, kOut = 0xF6, kVictorious = 0xF7, kF9 = 0xF9,
                    kHealth = 0x44C, kCrushCam = 0x6728, kIdleState = 0x7984, kVictoryState = 0x10E70;
-constexpr uint32_t kStateOwner = 0xC, kDeathKiller = 0x1C;   // MonsterState: dono; StateDeath: matador
+constexpr uint32_t kStateOwner = 0xC, kDeathKiller = 0x1C;   // MonsterState: owner; StateDeath: killer
 constexpr uint32_t kTokens = kGame + 0x11C370, kTokenStride = 0x1004;
-constexpr uint32_t kSelectMode = wotm::sym::monsterSelectMode, kSelectCol = 0xB0;   // SelectSlot (coluna 0xB0, traje 0x2C): taken +0
+constexpr uint32_t kSelectMode = wotm::sym::monsterSelectMode, kSelectCol = 0xB0;   // SelectSlot (column 0xB0, costume 0x2C): taken +0
 constexpr uint32_t kDodge = wotm::sym::x_14DodgeBallLevel_instance, kCrush = wotm::sym::x_10CrushLevel_instance,
                    kBigShot = wotm::sym::x_12BigShotLevel_instance;
-constexpr uint32_t kScratch = PS2_RAM_SIZE - 0x800;   // textos para as funcoes de fonte (8 x 0x80; os ViewDef do split4 ficam abaixo)
-constexpr uint32_t kTramp = wotm::fn::EvaluateOnlineBattleStatus__5Shelli + 4;   // modo 11 (online) nunca roda; o +4 e o nop do jr ra
+constexpr uint32_t kScratch = PS2_RAM_SIZE - 0x800;   // text for the font functions (8 x 0x80; split4's ViewDefs sit below)
+constexpr uint32_t kTramp = wotm::fn::EvaluateOnlineBattleStatus__5Shelli + 4;   // mode 11 (online) never runs; +4 is the nop after jr ra
 
 namespace fn = wotm::fn;
 
@@ -66,14 +66,14 @@ void wr32(uint8_t *rdram, uint32_t a, uint32_t v) { FAST_WRITE32(a & 0x1FFFFFFFu
 void wr8(uint8_t *rdram, uint32_t a, uint8_t v) { FAST_WRITE8(a & 0x1FFFFFFFu, v); }
 uint32_t monster(uint8_t *rdram, int i) { return rd32(rdram, kMonsters + 4u * uint32_t(i)) & 0x1FFFFFFFu; }
 
-// Jogadores agora (3 ou 4; 0 = nao vale)
+// Players right now (3 or 4; 0 = not applicable)
 int players(uint8_t *rdram)
 {
     const int32_t n = static_cast<int32_t>(rd32(rdram, kNumPlayers));
     return wotm_split4::g_players && n >= 3 && n <= 4 ? n : 0;
 }
 int gameMode(uint8_t *rdram) { return static_cast<int32_t>(rd32(rdram, kGameMode)); }
-// Jogador (0..3) dono do monstro m, ou -1
+// Player (0..3) owning monster m, or -1
 int playerOf(uint8_t *rdram, uint32_t m, int n)
 {
     m &= 0x1FFFFFFFu;
@@ -83,7 +83,7 @@ int playerOf(uint8_t *rdram, uint32_t m, int n)
     return -1;
 }
 
-// Funcao do jogo com ate 6 argumentos inteiros (a0..a3, t0, t1); devolve o v0. O contexto volta como estava.
+// Game function with up to 6 integer arguments (a0..a3, t0, t1); returns v0. The context is restored as it was.
 uint32_t call(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t addr, std::initializer_list<uint32_t> args)
 {
     const PS2Runtime::RecompiledFunction f = runtime->lookupFunction(addr);
@@ -101,7 +101,7 @@ uint32_t call(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t a
     return v0;
 }
 
-// Texto pelas funcoes de fonte do jogo (o desenho nativo o pega como o do HUD): tamanho dos placares dos minigames
+// Text through the game's font functions (native drawing picks it up like the HUD's): size of the minigame scoreboards
 uint32_t scratchText(uint8_t *rdram, const char *s)
 {
     static uint32_t next = 0;
@@ -127,10 +127,10 @@ void defaultFont(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     call(rdram, ctx, runtime, fn::fontSetDefaultSize__Fi, {0u});
     call(rdram, ctx, runtime, fn::fontSetDefaultColor__Fi, {0u});
 }
-// Cores dos placares: P1 vermelho e P2 azul (as do retail), P3 verde, P4 amarelo
+// Scoreboard colors: P1 red and P2 blue (retail's), P3 green, P4 yellow
 constexpr int kScoreRgb[4][3] = {{0xFF, 0, 0}, {0, 0, 0xFF}, {0, 0xC0, 0}, {0xE0, 0xE0, 0}};
-// "P<i+1> <valor>" no canto do jogador i numa vista de 640 (P1/P3 a esquerda, P2/P4 a direita; 1 e 2 embaixo como o retail);
-// dim: na metade da cor (quem espera a vez no big shot)
+// "P<i+1> <value>" in player i's corner of a 640-wide view (P1/P3 on the left, P2/P4 on the right; 1 and 2 at the bottom like retail);
+// dim: at half color (whoever is waiting for their turn in big shot)
 void cornerScore(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int i, const char *value, int yTop, bool dim = false)
 {
     char buf[48];
@@ -139,7 +139,7 @@ void cornerScore(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int i, 
     scoreFont(rdram, ctx, runtime, kScoreRgb[i][0] / k, kScoreRgb[i][1] / k, kScoreRgb[i][2] / k);
     print(rdram, ctx, runtime, (i & 1) ? 0x271 : 0x20, i < 2 ? 0xC8 : yTop, (i & 1) ? Right : Left, buf);
 }
-// Linhas "Player N - scored X" dos jogadores 3 e 4 abaixo das do retail (dialogos de fim dos minigames)
+// "Player N - scored X" lines for players 3 and 4 below retail's (minigame end dialogs)
 void extraScoreLines(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int n, const int *score)
 {
     call(rdram, ctx, runtime, fn::setTitleFont__Fv, {});
@@ -151,14 +151,14 @@ void extraScoreLines(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int
     }
 }
 
-// Ganchos em geral: o original guardado na instalacao (embrulha o que ja estava registrado)
+// Hooks in general: the original saved at install time (wraps whatever was already registered)
 struct Hook
 {
     uint32_t addr;
     PS2Runtime::RecompiledFunction orig;
 };
 void callOrig(const Hook &h, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) { h.orig(rdram, ctx, runtime); }
-// O original de um gancho com argumentos, como o call (sem passar pelo proprio gancho)
+// The original of a hook with arguments, like call (without going through the hook itself)
 void callOrigWith(const Hook &h, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, std::initializer_list<uint32_t> args)
 {
     const R5900Context saved = *ctx;
@@ -171,11 +171,11 @@ void callOrigWith(const Hook &h, uint8_t *rdram, R5900Context *ctx, PS2Runtime *
     *ctx = saved;
 }
 
-// ------------------------------------------------------------------ eliminacao
+// ------------------------------------------------------------------ elimination
 
 int g_cont[4] = {}, g_wins[4] = {};
 bool g_out[4] = {};
-uint32_t g_start[4] = {};   // monstro do comeco de cada jogador (o "play again" volta a ele)
+uint32_t g_start[4] = {};   // each player's starting monster ("play again" goes back to it)
 
 bool elimActive(uint8_t *rdram) { return gameMode(rdram) == 6 && players(rdram); }
 
@@ -186,7 +186,7 @@ void refreshWins(uint8_t *rdram, int n)
             wr32(rdram, m + kWins, uint32_t(g_wins[i]));
 }
 
-int monsterSlot(uint32_t sel)   // monsterIdtomonsterSlot (ShellFinished): coluna da selecao de cada tipo
+int monsterSlot(uint32_t sel)   // monsterIdtomonsterSlot (ShellFinished): selection column of each type
 {
     switch (sel)
     {
@@ -204,7 +204,7 @@ int monsterSlot(uint32_t sel)   // monsterIdtomonsterSlot (ShellFinished): colun
     }
 }
 
-// Os continues do Shell (lidos pelo m_index no retail) valendo `v` durante uma chamada
+// The Shell continues (read by m_index in retail) set to `v` during a call
 struct ShellContinues
 {
     uint8_t *rdram;
@@ -223,7 +223,7 @@ struct ShellContinues
     }
 };
 
-// Quantos continuam na luta alem de `except`
+// How many are still in the fight besides `except`
 int inFight(int n, int except)
 {
     int k = 0;
@@ -232,7 +232,7 @@ int inFight(int n, int except)
     return k;
 }
 
-// Jogador i fora da partida: monstro escondido, a camera dele segue quem continua
+// Player i out of the match: monster hidden, their camera follows someone still in
 void eliminate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int i, int n)
 {
     g_out[i] = true;
@@ -248,7 +248,7 @@ void eliminate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int i, in
             call(rdram, ctx, runtime, fn::SetCameraToFollowMonster__7CamerasiP7Monster, {uint32_t(i), monster(rdram, j)});
             break;
         }
-    std::fprintf(stderr, "[modes4] eliminacao: jogador %d fora (sobram %d)\n", i + 1, inFight(n, -1));
+    std::fprintf(stderr, "[modes4] elimination: player %d out (%d left)\n", i + 1, inFight(n, -1));
 }
 
 Hook g_initPlayers{fn::InitPlayers__5Shell}, g_deathInto{fn::transitionInto__10StateDeath}, g_victoryOk{fn::transitionOK__12StateVictory},
@@ -266,7 +266,7 @@ void initPlayersHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             g_wins[i] = 0;
             g_out[i] = false;
         }
-        std::fprintf(stderr, "[modes4] eliminacao de %d jogadores, %d continues cada\n", players(rdram), c);
+        std::fprintf(stderr, "[modes4] elimination with %d players, %d continues each\n", players(rdram), c);
     }
     callOrig(g_initPlayers, rdram, ctx, runtime);
 }
@@ -305,7 +305,7 @@ void victoryOkHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         callOrig(g_victoryOk, rdram, ctx, runtime);
         return;
     }
-    bool done = true;   // os outros ja sairam (ou estao mortos sem continues)
+    bool done = true;   // the others are already out (or dead with no continues)
     for (int j = 0; j < n; ++j)
         if (j != me && !g_out[j])
             done = done && g_cont[j] == 0 && !(rdF(rdram, monster(rdram, j) + kHealth) > 0.f);
@@ -346,8 +346,8 @@ void resolveHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     ctx->pc = ra;
 }
 
-// O selectNextMultPlayer procura o primeiro monstro livre (SelectSlot traje 0 com state 1 e taken 1) num laco sem fim: sem nenhum
-// livre (partida sem o menu, ou todos ja usados) os 10 da eliminacao voltam a ficar livres, menos os que os outros estao usando.
+// selectNextMultPlayer looks for the first free monster (SelectSlot costume 0 with state 1 and taken 1) in an endless loop: with none
+// free (match without the menu, or all already used) the 10 elimination monsters become free again, except the ones the others are using.
 void ensurePool(uint8_t *rdram, int who, int n)
 {
     for (uint32_t c = 0; c <= 10; ++c)
@@ -365,28 +365,28 @@ void ensurePool(uint8_t *rdram, int who, int n)
         if (j != who && !g_out[j])
             if (const int c = monsterSlot(rd32(rdram, kMonsterSel + 4u * uint32_t(j))); c < 10)
                 wr32(rdram, kSelectMode + kSelectCol * uint32_t(c), 0u);
-    std::fprintf(stderr, "[modes4] eliminacao: monstros livres de novo para o dialogo 8\n");
+    std::fprintf(stderr, "[modes4] elimination: monsters free again for dialog 8\n");
 }
 
-// Fila de jogadores que escolhem monstro novo (dialogo 8), um de cada vez
-Hook g_playerInit{fn::playerInit__7Monster};   // so lido (nao e gancho)
+// Queue of players picking a new monster (dialog 8), one at a time
+Hook g_playerInit{fn::playerInit__7Monster};   // only read (not a hook)
 int g_queue[4] = {}, g_queued = 0, g_cur = -1;
 uint32_t g_contRa = 0;
 
 void elimAfterDialog(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int i)
 {
-    if (!rd32(rdram, kInSession))   // "quit" no dialogo
+    if (!rd32(rdram, kInSession))   // "quit" in the dialog
         return;
     const uint32_t sel = rd32(rdram, kMonsterSel + 4u * uint32_t(i));
     call(rdram, ctx, runtime, fn::SetPlayerMonster__7TheGameiiiii, {kGame, uint32_t(i), sel, 0u, uint32_t(i), i == 0 ? rd32(rdram, kShell + 0x2BE0) : 0u});
-    // o playerInit do jogo, guardado na instalacao: o do WOTM_AIVSAI (aiInit) deixava sem estado o monstro trocado no meio da luta
+    // the game's playerInit, saved at install time: WOTM_AIVSAI's (aiInit) left the monster swapped mid-fight without state
     if (const uint32_t m = monster(rdram, i))
     {
         callOrigWith(g_playerInit, rdram, ctx, runtime, {m});
-        wr32(rdram, m + 0x672C, 0);   // esquema de controle tipo A (o do jogo, para os jogadores 3 e 4, vinha do m_vibration; wotm_pausemenu.inc)
+        wr32(rdram, m + 0x672C, 0);   // type A control scheme (the game's, for players 3 and 4, came from m_vibration; wotm_pausemenu.inc)
     }
     refreshWins(rdram, players(rdram));
-    std::fprintf(stderr, "[modes4] eliminacao: jogador %d volta com o monstro %x (%d continues)\n", i + 1, sel, g_cont[i]);
+    std::fprintf(stderr, "[modes4] elimination: player %d returns with monster %x (%d continues)\n", i + 1, sel, g_cont[i]);
 }
 
 void elimNext(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -400,19 +400,19 @@ void elimNext(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_cur = i;
         --g_cont[i];
         ensurePool(rdram, i, players(rdram));
-        wr32(rdram, kWon1, uint32_t(i));   // o selectNextMultPlayer le o controle e o "Player N" daqui
+        wr32(rdram, kWon1, uint32_t(i));   // selectNextMultPlayer reads the pad and the "Player N" from here
         ctx->r[4] = _mm_set_epi64x(0, 8);
         ctx->r[31] = _mm_set_epi64x(0, kTramp);
         ctx->pc = fn::displayDialog__Fi;
         runtime->lookupFunction(fn::displayDialog__Fi)(rdram, ctx, runtime);
         if (ctx->pc != kTramp)
-            return;   // a thread cedeu no meio do dialogo: o trampolim continua daqui quando ele terminar
+            return;   // the thread yielded in the middle of the dialog: the trampoline continues from here when it finishes
         g_cur = -1;
         elimAfterDialog(rdram, ctx, runtime, i);
     }
     g_queued = 0;
     g_cur = -1;
-    wr32(rdram, kGame + 0x120460, 1u);   // como o retail no fim do modo 6
+    wr32(rdram, kGame + 0x120460, 1u);   // like retail at the end of mode 6
     wr32(rdram, kGame + 0x120458, 0u);
     ctx->pc = g_contRa;
 }
@@ -428,7 +428,7 @@ void trampoline(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     elimNext(rdram, ctx, runtime);
 }
 
-// Dialogo modal como cauda (volta ao ra de quem chamou o Evaluate)
+// Modal dialog as a tail call (returns to the ra of whoever called Evaluate)
 void tailDialog(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int which, uint32_t ra)
 {
     ctx->r[4] = _mm_set_epi64x(0, which);
@@ -456,7 +456,7 @@ void evalNoAIHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     if (r != 1)
         return;
-    // mortos sem continues saem; os outros mortos voltam
+    // dead players with no continues are out; the other dead ones come back
     g_queued = 0;
     for (int i = 0; i < n; ++i)
     {
@@ -478,7 +478,7 @@ void evalNoAIHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (left <= 1)
     {
         g_queued = 0;
-        std::fprintf(stderr, "[modes4] eliminacao: fim, %s\n", left ? "sobrou um jogador" : "ninguem sobrou");
+        std::fprintf(stderr, "[modes4] elimination: over, %s\n", left ? "one player left" : "nobody left");
         if (left == 1)
             wr32(rdram, kSurvivor, uint32_t(survivor));
         tailDialog(rdram, ctx, runtime, left == 1 ? 0xB : 6, ra);
@@ -490,7 +490,7 @@ void evalNoAIHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     elimNext(rdram, ctx, runtime);
 }
 
-// "play again" do dialogo 0xB: os jogadores 3 e 4 tambem voltam ao monstro do comeco, marcado como usado
+// "play again" from dialog 0xB: players 3 and 4 also go back to their starting monster, marked as used
 void finishedElimHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const uint32_t ra = ctx->pc == g_finishedElim.addr ? GPR_U32(ctx, 31) : 0u;
@@ -504,7 +504,7 @@ void finishedElimHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             wr32(rdram, kMonsterSel + 4u * uint32_t(i), g_start[i]);
             wr32(rdram, kSelectMode + kSelectCol * uint32_t(monsterSlot(g_start[i])), 0u);
         }
-    std::fprintf(stderr, "[modes4] eliminacao: play again com os monstros do comeco\n");
+    std::fprintf(stderr, "[modes4] elimination: play again with the starting monsters\n");
 }
 
 // ------------------------------------------------------------------ dodgeball
@@ -523,13 +523,13 @@ void takeDamageHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         callOrig(g_takeDamage, rdram, ctx, runtime);
         return;
     }
-    // o contador do jogador 1 (inicio do DodgeBallLevel) com os acertos deste e o m_index 0 durante a chamada
+    // player 1's counter (start of DodgeBallLevel) holds this player's hits and m_index is 0 during the call
     const uint32_t ra = GPR_U32(ctx, 31), hits0 = rd32(rdram, kDodge);
     wr32(rdram, kDodge, uint32_t(g_hits[idx]));
     wr32(rdram, src + kIndex, 0u);
     callOrig(g_takeDamage, rdram, ctx, runtime);
     if (ctx->pc != ra)
-        std::fprintf(stderr, "[modes4] dodgeball: takeDamage nao voltou ao chamador\n");
+        std::fprintf(stderr, "[modes4] dodgeball: takeDamage didn't return to the caller\n");
     g_hits[idx] = static_cast<int32_t>(rd32(rdram, kDodge));
     wr32(rdram, kDodge, hits0);
     wr32(rdram, src + kIndex, uint32_t(idx));
@@ -546,7 +546,7 @@ void dodgeUpdateHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     ctx->pc = GPR_U32(ctx, 31);
     if (int(view) >= players(rdram))
         return;
-    // como o retail nas vistas 0 e 1: P3 a esquerda, P4 a direita (x da vista de 320)
+    // like retail in views 0 and 1: P3 on the left, P4 on the right (x in a 320-wide view)
     char buf[24];
     std::snprintf(buf, sizeof buf, "P%u %d", view + 1u, g_hits[view]);
     scoreFont(rdram, ctx, runtime, kScoreRgb[view][0], kScoreRgb[view][1], kScoreRgb[view][2]);
@@ -607,7 +607,7 @@ void winsText(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int winner
     defaultFont(rdram, ctx, runtime);
 }
 
-// CrushLevel::updateNormal (antes da morte subita) com 3 e 4: o original desenha o tempo e P1/P2 enquanto ha tempo; o fim e nosso
+// CrushLevel::updateNormal (before sudden death) with 3 and 4: the original draws the time and P1/P2 while there is time left; the ending is ours
 void crushUpdateHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const int n = ctx->pc == g_crushUpdate.addr ? players(rdram) : 0;
@@ -648,9 +648,9 @@ void crushUpdateHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
         for (int i = 0; i < n; ++i)
             ties += g_crushTotal[i] == g_crushTotal[best];
-        wr32(rdram, kCrush + 8, uint32_t(g_crushTotal[0]));   // m_total do retail (o dialogo de fim mostra P1 e P2 daqui)
+        wr32(rdram, kCrush + 8, uint32_t(g_crushTotal[0]));   // retail's m_total (the end dialog shows P1 and P2 from here)
         wr32(rdram, kCrush + 0xC, uint32_t(g_crushTotal[1]));
-        std::fprintf(stderr, "[modes4] crush: fim do tempo, %d/%d/%d/%d\n", g_crushTotal[0], g_crushTotal[1], g_crushTotal[2],
+        std::fprintf(stderr, "[modes4] crush: time up, %d/%d/%d/%d\n", g_crushTotal[0], g_crushTotal[1], g_crushTotal[2],
                      n > 3 ? g_crushTotal[3] : 0);
         if (ties > 1)
         {
@@ -682,7 +682,7 @@ void crushInitHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     for (int i = 2; i < n; ++i)
         if (const uint32_t m = monster(rdram, i))
         {
-            wr32(rdram, m + kCrushCam, 1u);   // como o InitCrushMonsters faz com os dois
+            wr32(rdram, m + kCrushCam, 1u);   // as InitCrushMonsters does with the two
             call(rdram, ctx, runtime, fn::drainSpecial__7Monster, {m});
         }
 }
@@ -702,7 +702,7 @@ void crushSuddenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
 }
 
-// Camera::crushUpdate enquadra o par em +0xE0C/+0xE10: com 3 e 4, o par dos jogadores mais distantes durante a chamada
+// Camera::crushUpdate frames the pair at +0xE0C/+0xE10: with 3 and 4, the two players farthest apart during the call
 void crushCamHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const uint32_t cam = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -743,7 +743,7 @@ void crushCamHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 void finishedCrushHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const int n = players(rdram);
-    if (n && g_crushLoser < 0)   // morte subita: quem caiu (o gameResolveLifeAndDeath poe "o outro do jogador 1")
+    if (n && g_crushLoser < 0)   // sudden death: whoever fell (gameResolveLifeAndDeath sets "the other of player 1")
         for (int i = 0; i < n && g_crushLoser < 0; ++i)
             if (const uint32_t m = monster(rdram, i); m && !(rdF(rdram, m + kHealth) > 0.f))
                 g_crushLoser = i;
@@ -763,12 +763,12 @@ void finishedCrushHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 constexpr uint32_t kBsSlot = kBigShot + 0x6C, kBsName = kBigShot + 0x74, kBsTurn = kBigShot + 0x94, kBsScore = kBigShot + 0x9C,
                    kBsPoints = kBigShot + 0xA4, kBsEnd = kBigShot + 0xC4, kBsWinnerSet = kBigShot + 0xC8, kBsThrows = kBigShot + 0xD0,
                    kBsTimer = kBigShot + 0xD4, kBsFade = kBigShot + 0xDC, kBsState = kBigShot + 0xE8;
-constexpr int kBsTurnsEach = 3;   // o retail termina no 6o turno (3 de cada)
+constexpr int kBsTurnsEach = 3;   // retail ends on the 6th turn (3 each)
 int g_bsOcc[2] = {0, 1}, g_bsNext = 1, g_bsTurns = 0;
 float g_bsScore[4] = {};
 int g_bsWinner = -1, g_bsLoser = -1;
-uint8_t g_bsWait[16] = {};                          // posicao de espera (a do jogador 2 depois do initForReplay)
-constexpr uint32_t kBsVec = PS2_RAM_SIZE - 0x3E0;   // _fvector para o setTrans (o do split4 fica em -0x400)
+uint8_t g_bsWait[16] = {};                          // waiting position (player 2's after initForReplay)
+constexpr uint32_t kBsVec = PS2_RAM_SIZE - 0x3E0;   // _fvector for setTrans (split4's is at -0x400)
 Hook g_bsReplay{fn::initForReplay__12BigShotLevel}, g_bsTakeTurns{fn::takeTurns__12BigShotLevel}, g_bsUpdate{fn::updateNormal__12BigShotLevel},
     g_finishedBs{fn::finishedBigShot__FRi};
 
@@ -778,7 +778,7 @@ void bsSetSlot(uint8_t *rdram, int slot, int player, float score)
     const uint32_t m = monster(rdram, player);
     wr32(rdram, kBsSlot + 4u * uint32_t(slot), m);
     wrF(rdram, kBsScore + 4u * uint32_t(slot), score);
-    const uint32_t type = m ? (rd32(rdram, m + 0x14) >> 5) : 0u;   // nome (MonsterNewNames, como o initAfterDbLoad)
+    const uint32_t type = m ? (rd32(rdram, m + 0x14) >> 5) : 0u;   // name (MonsterNewNames, like initAfterDbLoad)
     std::memset(rdram + kBsName + 0x10u * uint32_t(slot), 0, 0x10);
     if (type < 17)
         std::memcpy(rdram + kBsName + 0x10u * uint32_t(slot), rdram + wotm::sym::MonsterNewNames_006E8958 + 12u * type, 12);
@@ -792,7 +792,7 @@ void bsReplayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         callOrig(g_bsReplay, rdram, ctx, runtime);
         return;
     }
-    // o original prepara a vaga 1 escondida: uma vez com cada jogador extra, a ultima (a que fica) com o jogador 2
+    // the original prepares slot 1 hidden: once with each extra player, the last one (the one that stays) with player 2
     const uint32_t self = GPR_U32(ctx, 4);
     for (int i = 0; i < n; ++i)
         if (const uint32_t m = monster(rdram, i))
@@ -805,7 +805,7 @@ void bsReplayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     wr32(rdram, kBsSlot + 4, monster(rdram, 1));
     callOrig(g_bsReplay, rdram, ctx, runtime);
     if (const uint32_t m = monster(rdram, 1), cs = m ? rd32(rdram, m + kCs) & 0x1FFFFFFFu : 0u; cs >= 0x1000u)
-        std::memcpy(g_bsWait, rdram + cs + 0x10, 16);   // onde o original deixa quem espera a vez
+        std::memcpy(g_bsWait, rdram + cs + 0x10, 16);   // where the original leaves whoever is waiting for their turn
     g_bsOcc[0] = 0;
     g_bsOcc[1] = 1;
     g_bsNext = 1;
@@ -813,7 +813,7 @@ void bsReplayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     for (float &s : g_bsScore)
         s = 0.f;
     g_bsWinner = g_bsLoser = -1;
-    std::fprintf(stderr, "[modes4] big shot de %d jogadores: %d turnos cada\n", n, kBsTurnsEach);
+    std::fprintf(stderr, "[modes4] big shot with %d players: %d turns each\n", n, kBsTurnsEach);
 }
 
 void bsTakeTurnsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -824,7 +824,7 @@ void bsTakeTurnsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         callOrig(g_bsTakeTurns, rdram, ctx, runtime);
         return;
     }
-    // fim do turno neste quadro (o original troca as vagas no swapPlayers, ou compara no ultimo)
+    // end of the turn on this frame (the original swaps the slots in swapPlayers, or compares on the last one)
     const int t = rd32(rdram, kBsTurn) ? 1 : 0, p = g_bsOcc[t];
     const bool last = ++g_bsTurns >= kBsTurnsEach * n;
     if (!last)
@@ -832,14 +832,14 @@ void bsTakeTurnsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         const int q = g_bsNext;
         g_bsNext = (g_bsNext + 1) % n;
         bsSetSlot(rdram, t ^ 1, q, g_bsScore[q]);
-        wr32(rdram, kBsThrows, 0u);   // so o ultimo turno tem 6 (o fim no original)
+        wr32(rdram, kBsThrows, 0u);   // only the last turn has 6 (the end in the original)
         const uint32_t ra = GPR_U32(ctx, 31);
         callOrig(g_bsTakeTurns, rdram, ctx, runtime);
         if (ctx->pc == ra)
             g_bsScore[p] = rdF(rdram, kBsScore + 4u * uint32_t(t));
         return;
     }
-    // ultimo turno: o ponto deste quadro (o original o soma com pontos a correr e o timer impar) e os dois melhores nas vagas
+    // last turn: this frame's point (the original adds it with points still counting and an odd timer) and the top two in the slots
     g_bsScore[p] = rdF(rdram, kBsScore + 4u * uint32_t(t)) + (rdF(rdram, kBsPoints) > 0.f ? 1.f : 0.f);
     wrF(rdram, kBsPoints, 0.f);
     int order[4] = {0, 1, 2, 3};
@@ -847,8 +847,8 @@ void bsTakeTurnsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     bsSetSlot(rdram, 0, order[0], g_bsScore[order[0]]);
     bsSetSlot(rdram, 1, order[1], g_bsScore[order[1]]);
     g_bsLoser = order[n - 1];
-    // fora da disputa: no ponto de espera, parados e escondidos (o ultimo a jogar seguia caindo, e a queda no "king of the hill"
-    // conta como derrota: decidia a morte subita)
+    // out of the contest: at the waiting spot, idle and hidden (the last to play kept falling, and a fall in "king of the hill"
+    // counts as a loss: it decided the sudden death)
     for (int i = 0; i < n; ++i)
         if (i != order[0] && i != order[1])
             if (const uint32_t m = monster(rdram, i))
@@ -861,7 +861,7 @@ void bsTakeTurnsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
                 call(rdram, ctx, runtime, fn::hierSetCsDrawMe__FP3_csUc, {rd32(rdram, m + kCs), 0u});
             }
     wr32(rdram, kBsThrows, 6u);
-    std::fprintf(stderr, "[modes4] big shot: fim, %.0f/%.0f/%.0f/%.0f\n", g_bsScore[0], g_bsScore[1], g_bsScore[2], n > 3 ? g_bsScore[3] : 0.f);
+    std::fprintf(stderr, "[modes4] big shot: over, %.0f/%.0f/%.0f/%.0f\n", g_bsScore[0], g_bsScore[1], g_bsScore[2], n > 3 ? g_bsScore[3] : 0.f);
     callOrig(g_bsTakeTurns, rdram, ctx, runtime);
 }
 
@@ -876,13 +876,13 @@ void bsUpdateHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     const uint32_t ra = GPR_U32(ctx, 31);
     const bool playing = rd32(rdram, kBsEnd) == 0u, full = rd32(rdram, kBsFade) == 0x80u, decided = rd32(rdram, kBsWinnerSet) != 0u;
     if (playing && full)
-        wr32(rdram, kBsFade, 0x7Fu);   // sem o "P1"/"P2" do original (com o timer em 0 ele refaz o fade em 1/128 e volta a 0x80)
+        wr32(rdram, kBsFade, 0x7Fu);   // without the original's "P1"/"P2" (with the timer at 0 it redoes the fade at 1/128 and goes back to 0x80)
     callOrig(g_bsUpdate, rdram, ctx, runtime);
     if (ctx->pc != ra)
         return;
     if (playing && full && rd32(rdram, kBsFade) == 0x7Fu)
         wr32(rdram, kBsFade, 0x80u);
-    if (!decided && rd32(rdram, kBsWinnerSet) != 0u)   // o original escolheu a vaga vencedora (m_won pelas vagas)
+    if (!decided && rd32(rdram, kBsWinnerSet) != 0u)   // the original picked the winning slot (m_won by slot)
     {
         g_bsWinner = g_bsOcc[rd32(rdram, kWon0) ? 1 : 0];
         if (g_bsLoser == g_bsWinner || g_bsLoser < 0)
@@ -907,7 +907,7 @@ void bsUpdateHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 void finishedBsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     const int n = players(rdram);
-    if (n && g_bsWinner >= 0)   // fim pelos pontos: m_won e os pontos de P1/P2 pelos jogadores (a morte subita ja os poe assim)
+    if (n && g_bsWinner >= 0)   // ended on points: m_won and the P1/P2 points by player (sudden death already sets them that way)
     {
         wr32(rdram, kWon0, uint32_t(g_bsWinner));
         wr32(rdram, kWon1, uint32_t(g_bsLoser));
@@ -926,7 +926,7 @@ void finishedBsHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
 }
 
-// ------------------------------------------------------------------ instalacao
+// ------------------------------------------------------------------ install
 
 void install(PS2Runtime &runtime)
 {
@@ -945,7 +945,7 @@ void install(PS2Runtime &runtime)
     for (const H &h : hooks)
         if (!(h.h->orig = runtime.lookupFunction(h.h->addr)))
         {
-            std::fprintf(stderr, "[modes4] desligado: funcao %x sem funcao no runtime\n", h.h->addr);
+            std::fprintf(stderr, "[modes4] off: game function %x not found in the runtime\n", h.h->addr);
             return;
         }
     if (!(g_playerInit.orig = runtime.lookupFunction(g_playerInit.addr)))
@@ -953,11 +953,11 @@ void install(PS2Runtime &runtime)
     for (const H &h : hooks)
         runtime.registerFunction(h.h->addr, h.fn);
     runtime.registerFunction(kTramp, &trampoline);
-    std::fprintf(stderr, "[modes4] eliminacao e minigames de 3 e 4 jogadores\n");
+    std::fprintf(stderr, "[modes4] elimination and minigames for 3 and 4 players\n");
 }
 } // namespace wotm_modes4
 
-// Selecao de monstros da eliminacao (wotm_padsel.inc): monstro do comeco de cada jogador (o "play again" volta a ele)
+// Elimination monster selection (wotm_padsel.inc): each player's starting monster ("play again" goes back to it)
 void wotmElimSetStart(int player, uint32_t sel)
 {
     if (player >= 0 && player < 4)

@@ -12,7 +12,7 @@ import re
 import sys
 
 # linha do wotm_live.inc (Scene::showBlend): fields de A e B e o alfa da mistura; "(desligada)" = sem mistura, a imagem e a de B
-LIVE = re.compile(r'\[interp\] t=([\d.]+) g=\d+ fA=(\d+) fB=(\d+) alfa=([\d.]+)( \(desligada\))?')
+LIVE = re.compile(r'\[interp\] t=([\d.]+) g=\d+ fA=(\d+) fB=(\d+) alpha=([\d.]+)( \(off\))?')
 
 
 def read_presentations(text):

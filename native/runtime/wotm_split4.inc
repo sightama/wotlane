@@ -1,49 +1,49 @@
-// Tela dividida de 3 e 4 jogadores (NATIVO.md, "Tela dividida de 3 e 4 jogadores"). Incluido pelo wotm_overrides.cpp. Sempre instalada: age quando o Shell
-// tem 3 ou 4 jogadores (m_numPlayers), postos pelo menu multijogador (wotm_padsel.inc) ou pela WOTM_MATCH com WOTM_PLAYERS=3 ou 4.
+// 3- and 4-player split screen (NATIVO.md, "Tela dividida de 3 e 4 jogadores"). Included by wotm_overrides.cpp. Always installed: acts when the Shell
+// has 3 or 4 players (m_numPlayers), set by the multiplayer menu (wotm_padsel.inc) or by WOTM_MATCH with WOTM_PLAYERS=3 or 4.
 //
-// O motor ja tem quase tudo para 4 vistas: viewInfo, worldCtx e viewDb com 5 entradas (a 4 e a da sombra), 4 cameras
-// (Cameras::m_cameras), 4 HUDs, a viewPrevMat das particulas e os pontos de visada com 5, e o viewToggleSplitScreen dos cinemas
-// nao mexe com 3 ou mais vistas. O que falta, por gancho:
-//   - Vistas (saida do TheGame::gameReestablishViews nos modos 3, 6 e 7 com 3 ou 4 jogadores): quadrantes de 320 x 112 do GS, a
-//     vista v na coluna v & 1 e na linha v >> 1. Com 3 jogadores a vista 2 e a linha de baixo inteira (640 x 112). Os viewDef do
-//     retail sao 8 (cheio, metades, menus, unificada, sombra, carga); os dos quadrantes moram no fim da RAM de cima (kQuadDefs),
-//     copiados da metade do mesmo lado com altura, origem e centro da linha e a distancia de tela da tela cheia pela metade (o FOV dos
-//     640 x 224). A faixa de 640 x 112 vem do viewDef[0] com a mesma conta da altura e distancia de tela kStripFov (entre a dos
-//     quadrantes, que daria ~118 graus na horizontal, e a da tela cheia, que cortaria o monstro pela metade na vertical).
-//     O viewSetFov refaz planos e matrizes; a tesoura do viewDb vai junto (so o GS emulado a usa). viewInfo[v].viewport fica 1 ou 2:
-//     o viewGetScreenDisplay continua dizendo "tela dividida" (as cameras usam a tabela de POV dela). m_numCameras = jogadores.
-//   - viewGrappleConfig (fim do rtMain e troca da vista unificada) devolve a vista 0 ao viewDef[viewport]; na saida o quadrante volta.
-//   - Sem vista unificada: o SetOkToUnify do comeco de cada quadro zera o m_camUnify de todos (o InitCCCamera* volta sem unificar; a
-//     camera 2 e a do jogador 3). A pose de vitoria (StateVictory) ainda liga gUseUnifiedView com a camera 2 no vencedor; quando a
-//     tela volta a dividir, as cameras 2 e 3 voltam aos jogadores 3 e 4 no POV 0. O ResetLevel poe a camera 2 no POV 3 (a unificada
-//     do retail); aqui ela fica no POV que tinha.
-//   - 4 jogadores: o SetAIMonster poe cada IA na camera 3 (gameInitCamera(3, ia), camera sem vista no retail). Aqui a camera 3 e a do
-//     jogador 4: a IA so recebe m_cameraView 3, sem a camera (m_cameraFollows fica 0, o HUD 3 nao recebe as mensagens dela).
-//   - Carga: o Shell::LoadMonstersDB monta o caminho dos jogadores 3 e 4 com o monstro do jogador 2, sem traje (peculiaridade do
-//     retail). Do LoadLevelFiles ate a entrada do InitPlayers eles passam pelo caminho das IAs (m_monsterSel[4..], m_costume[2..],
-//     o mesmo arquivo) e voltam a jogadores no InitPlayers; a ordem de carga e a da contagem de duplicatas dele (jogadores, depois IAs).
-//     Os trajes dos jogadores 3 e 4 nao tem lugar no Shell: ficam em g_extraCostume, e o SetPlayerMonster os recebe no lugar do
-//     m_costume[1] que o InitPlayers manda a todo jogador depois do 1.
-//   - Motion blur: sem gancho; o bss do MotionBlurAA tem os pacotes de 4 vistas ([2][2][4][0x100] em 0x7319F0, NATIVO.md, "Tela dividida de 3 e 4 jogadores").
-//   - HUD: o Hud::initAfter e o Hud::update saem logo com indice >= 2. O HUD 2/3 vira uma copia do HUD da mesma coluna e roda o
-//     update como ele, com monstro, camera e barra da propria vista (hudInitAfter, hudUpdate).
-//   - Camera no POV 3 (estacionada): as cameras 2 e 3 nao tinham posicao de estacionar e iam para a origem (no inicio e na morte).
-//   - Fim de rodada do modo 3: o retail so renasce com 1 ou 0 vivos (2 jogadores); aqui cada morto renasce como o que e. A meta de
-//     vitorias abre o dialogo 5 (modal) como cauda do Evaluate, com o ra de quem o chamou.
-//   - Fim da vitoria (LeaveUnifiedView): o caminho dos 2 jogadores (a camera 0 nao salta para a da vitoria).
-//   - Renascimento de mais de 4 monstros (lista 3 com 4 pontos, "play again"): quem cai em cima de outro vai para a lista 2.
-//   - Fim de arremesso de uma IA (StateThrowBack::handlePreemption): nao mexe na camera 3, que e a do jogador 4.
-//   - Controles: o inputInit abre 2 portas x 4 slots (controle = porta + 2 * slot: o jogador 3 e o slot 1 da porta 0, o 4 o da porta
-//     1); o stub de controle do runtime tem os slots do multitap (tools/runtime_patch/wotm-runtime.patch), sem gancho aqui.
-//   - 5 a 8 jogadores (WOTM_PLAYERS=5..8): os 4 primeiros nos quadrantes, os outros em IAs guiadas pelos controles 4..7 (wotm_multi.inc).
+// The engine already has almost everything for 4 views: viewInfo, worldCtx and viewDb with 5 entries (4 is the shadow's), 4 cameras
+// (Cameras::m_cameras), 4 HUDs, the particles' viewPrevMat and the sight points with 5, and the cinematics' viewToggleSplitScreen
+// does nothing with 3 or more views. What's missing, by hook:
+//   - Views (exit of TheGame::gameReestablishViews in modes 3, 6 and 7 with 3 or 4 players): 320 x 112 GS quadrants, view
+//     v in column v & 1 and row v >> 1. With 3 players view 2 is the whole bottom row (640 x 112). Retail has 8 viewDefs
+//     (full, halves, menus, unified, shadow, load); the quadrant ones live at the end of upper RAM (kQuadDefs),
+//     copied from the half on the same side with the row's height, origin and center, and half the fullscreen screen distance (the FOV of the
+//     640 x 224). The 640 x 112 strip comes from viewDef[0] with the same height math and screen distance kStripFov (between the
+//     quadrants', which would give ~118 degrees horizontally, and fullscreen's, which would cut the monster in half vertically).
+//     viewSetFov rebuilds planes and matrices; the viewDb scissor goes along (only the emulated GS uses it). viewInfo[v].viewport stays 1 or 2:
+//     viewGetScreenDisplay keeps saying "split screen" (the cameras use its POV table). m_numCameras = players.
+//   - viewGrappleConfig (end of rtMain and unified view switch) resets view 0 to viewDef[viewport]; on exit the quadrant comes back.
+//   - No unified view: SetOkToUnify at the start of each frame clears everyone's m_camUnify (InitCCCamera* returns without unifying;
+//     camera 2 is player 3's). The victory pose (StateVictory) still turns on gUseUnifiedView with camera 2 on the winner; when the
+//     screen splits again, cameras 2 and 3 go back to players 3 and 4 on POV 0. ResetLevel puts camera 2 on POV 3 (retail's
+//     unified one); here it stays on the POV it had.
+//   - 4 players: SetAIMonster puts each AI on camera 3 (gameInitCamera(3, ai), a camera with no view in retail). Here camera 3 is
+//     player 4's: the AI only gets m_cameraView 3, without the camera (m_cameraFollows stays 0, HUD 3 doesn't get its messages).
+//   - Load: Shell::LoadMonstersDB builds players 3 and 4's path with player 2's monster, without costume (a retail
+//     quirk). From LoadLevelFiles to the entry of InitPlayers they go through the AI path (m_monsterSel[4..], m_costume[2..],
+//     the same file) and become players again in InitPlayers; the load order is that of its duplicate count (players, then AIs).
+//     Players 3 and 4's costumes have no place in the Shell: they live in g_extraCostume, and SetPlayerMonster gets them instead of
+//     the m_costume[1] that InitPlayers sends to every player after player 1.
+//   - Motion blur: no hook; MotionBlurAA's bss has packets for 4 views ([2][2][4][0x100] at 0x7319F0, NATIVO.md, "Tela dividida de 3 e 4 jogadores").
+//   - HUD: Hud::initAfter and Hud::update return immediately with index >= 2. HUD 2/3 becomes a copy of the HUD in the same column and runs
+//     update like it, with its own view's monster, camera and bar (hudInitAfter, hudUpdate).
+//   - Camera on POV 3 (parked): cameras 2 and 3 had no park position and went to the origin (at the start and on death).
+//   - End of round in mode 3: retail only respawns with 1 or 0 alive (2 players); here each dead monster respawns as what it is. The win
+//     target opens dialog 5 (modal) as a tail call of Evaluate, with its caller's ra.
+//   - End of victory (LeaveUnifiedView): the 2-player path (camera 0 doesn't jump to the victory camera).
+//   - Respawning more than 4 monsters (list 3 with 4 points, "play again"): whoever lands on top of another goes to list 2.
+//   - End of an AI throw (StateThrowBack::handlePreemption): doesn't touch camera 3, which is player 4's.
+//   - Pads: inputInit opens 2 ports x 4 slots (pad = port + 2 * slot: player 3 is slot 1 of port 0, player 4 slot 1 of port
+//     1); the runtime's pad stub has the multitap slots (tools/runtime_patch/wotm-runtime.patch), no hook here.
+//   - 5 to 8 players (WOTM_PLAYERS=5..8): the first 4 in the quadrants, the rest as AIs driven by pads 4..7 (wotm_multi.inc).
 
-float wotmScreenWide();              // wotm_live.inc: largura da janela sobre a da tela 4:3 do jogo
+float wotmScreenWide();              // wotm_live.inc: window width over the width of the game's 4:3 screen
 
-#include "wotm_training.h"   // modo treino: HUD do boneco (trainingHud)
+#include "wotm_training.h"   // training mode: dummy's HUD (trainingHud)
 
 namespace wotm_split4
 {
-    static_assert(PS2_RAM_SIZE > PS2_GUEST_RAM_SIZE, "os viewDef dos quadrantes moram acima da RAM do jogo");
+    static_assert(PS2_RAM_SIZE > PS2_GUEST_RAM_SIZE, "the quadrant viewDefs live above the game RAM");
 
     constexpr uint32_t kShell = wotm::sym::shellInfo, kGame = wotm::sym::shellGame;
     constexpr uint32_t kMonsterSel = kShell + 0x2938, kNumPlayers = kShell + 0x2BB4, kNumAIs = kShell + 0x2BB8, kCostume = kShell + 0x2BE0;
@@ -56,7 +56,7 @@ namespace wotm_split4
                        kCamCs = 0xCF0, kCamMonster = 0xCF4, kCamPov = 0xCF8;
     constexpr uint32_t kDefSize = 0xC0, kDbSize = 0x360;
     constexpr uint32_t kDbScissor[4] = {0xC0, 0x140, 0x230, 0x2B0};
-    constexpr uint32_t kQuadDefs = PS2_RAM_SIZE - 0x1000;   // 4 ViewDef dos quadrantes
+    constexpr uint32_t kQuadDefs = PS2_RAM_SIZE - 0x1000;   // the 4 quadrant ViewDefs
 
     constexpr uint32_t kReestablish = wotm::fn::gameReestablishViews__7TheGame, kGrapple = wotm::fn::viewGrappleConfig__Fv,
                        kOkToUnify = wotm::fn::SetOkToUnify__7TheGame, kResetLevel = wotm::fn::ResetLevel__7TheGame,
@@ -68,14 +68,14 @@ namespace wotm_split4
                                    g_origLoadLevelFiles = nullptr, g_origInitPlayers = nullptr, g_viewCreate = nullptr, g_viewSetFov = nullptr,
                                    g_follow = nullptr, g_setPov = nullptr;
 
-    int g_players = 0;              // teto de jogadores com os ganchos instalados (4); 0 = desligado
-    int g_views = 0;                // vistas em quadrante montadas (0 = nenhuma: tela cheia ou metades do retail)
-    bool g_wasUnified = false;      // a vista unificada (vitoria) estava ligada no quadro anterior
-    bool g_cinemaFull = false;      // cinema em tela cheia (cinemaViews)
-    unsigned g_hudCalls[4] = {};    // diagnostico (WOTM_SPLITLOG): Hud::update de cada HUD desde a ultima linha
-    unsigned g_hudPaused = 0;       // diagnostico (WOTM_SPLITLOG): updates do HUD 2/3 pausados no meio desde a ultima linha
-    int g_loadExtra = 0;            // jogadores 3 e 4 no caminho das IAs (do LoadLevelFiles ao InitPlayers)
-    uint32_t g_extraCostume[2] = {0, 0};   // trajes dos jogadores 3 e 4 (o Shell nao tem lugar para eles)
+    int g_players = 0;              // player cap with the hooks installed (4); 0 = off
+    int g_views = 0;                // quadrant views built (0 = none: retail fullscreen or halves)
+    bool g_wasUnified = false;      // the unified view (victory) was on in the previous frame
+    bool g_cinemaFull = false;      // fullscreen cinematic (cinemaViews)
+    unsigned g_hudCalls[4] = {};    // diagnostic (WOTM_SPLITLOG): Hud::update of each HUD since the last line
+    unsigned g_hudPaused = 0;       // diagnostic (WOTM_SPLITLOG): HUD 2/3 updates paused midway since the last line
+    int g_loadExtra = 0;            // players 3 and 4 on the AI path (from LoadLevelFiles to InitPlayers)
+    uint32_t g_extraCostume[2] = {0, 0};   // players 3 and 4's costumes (the Shell has no place for them)
 
     float rdF(uint8_t *rdram, uint32_t a) { float v; std::memcpy(&v, rdram + a, 4); return v; }
     void wrF(uint8_t *rdram, uint32_t a, float v) { std::memcpy(rdram + a, &v, 4); }
@@ -83,7 +83,7 @@ namespace wotm_split4
     uint32_t costume(int i) { return kCostume + 4u * uint32_t(i); }
     uint32_t camera(int v) { return kCameras + kCamStride * uint32_t(v); }
 
-    // Chamada de uma funcao do jogo com o contexto salvo (como o callTakeDamage): a0, a1 inteiros, f12 e f13 float
+    // Calls a game function with the context saved (like callTakeDamage): a0, a1 integers, f12 and f13 float
     void callGuest(PS2Runtime::RecompiledFunction fn, uint32_t addr, uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t a0,
                    uint32_t a1 = 0, float f12 = 0.f, float f13 = 0.f)
     {
@@ -100,33 +100,33 @@ namespace wotm_split4
         *ctx = saved;
     }
 
-    // Jogadores da tela em quadrantes agora (0 = nao vale): 3 ou 4 no Shell, num dos modos com tela dividida (3, 6 e 7)
+    // Players on the quadrant screen right now (0 = not applicable): 3 or 4 in the Shell, in one of the split-screen modes (3, 6 and 7)
     int splitPlayers(uint8_t *rdram)
     {
         const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers)), mode = static_cast<int32_t>(FAST_READ32(kGameMode));
         return g_players && n >= 3 && n <= 4 && (mode == 3 || mode == 6 || mode == 7) ? n : 0;
     }
 
-    constexpr float kStripFov = 2.f / 3.f;   // distancia de tela da faixa de 640 x 112 (3 jogadores), em fracao da tela cheia
+    constexpr float kStripFov = 2.f / 3.f;   // screen distance of the 640 x 112 strip (3 players), as a fraction of fullscreen's
 
     void writeQuadDefs(uint8_t *rdram, int n)
     {
-        const float full = rdF(rdram, kViewDef);   // viewDef[0]: 384 em 640 de largura; o quadrante tem 320
+        const float full = rdF(rdram, kViewDef);   // viewDef[0]: 384 at 640 wide; the quadrant is 320
         for (uint32_t v = 0; v < 4; ++v)
         {
-            const bool strip = n == 3 && v == 2;   // 3 jogadores: a vista 2 ocupa a linha de baixo inteira
-            const uint32_t src = strip ? kViewDef : kViewDef + kDefSize * (1u + (v & 1u)), dst = kQuadDefs + kDefSize * v;   // metade esquerda ou direita
+            const bool strip = n == 3 && v == 2;   // 3 players: view 2 takes the whole bottom row
+            const uint32_t src = strip ? kViewDef : kViewDef + kDefSize * (1u + (v & 1u)), dst = kQuadDefs + kDefSize * v;   // left or right half
             std::memcpy(rdram + dst, rdram + src, kDefSize);
             const int32_t h = FAST_READ16(src + 6) / 2, sign = (v >> 1) ? 1 : -1;
             FAST_WRITE16(dst + 6, static_cast<uint16_t>(h));                          // h
-            FAST_WRITE16(dst + 0xE, static_cast<uint16_t>((v >> 1) * uint32_t(h)));   // y da tesoura
+            FAST_WRITE16(dst + 0xE, static_cast<uint16_t>((v >> 1) * uint32_t(h)));   // scissor y
             wrF(rdram, dst + 0x14, rdF(rdram, src + 0x14) + float(sign * h / 2));    // offY: 2048 -/+ 56
             FAST_WRITE32(dst + 0x1C, static_cast<uint32_t>(static_cast<int32_t>(FAST_READ32(src + 0x1C)) + sign * h / 2));   // cy
             wrF(rdram, dst, strip ? full * kStripFov : full * 0.5f);
         }
     }
 
-    // Vista v com o viewDef `def`: planos e matrizes (viewSetFov) e a tesoura do viewDb
+    // View v with viewDef `def`: planes and matrices (viewSetFov) and the viewDb scissor
     void applyDef(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t v, uint32_t def)
     {
         FAST_WRITE32(kViewInfo + 0x14u * v + 4, def);
@@ -136,13 +136,13 @@ namespace wotm_split4
         for (uint32_t off : kDbScissor)
             FAST_WRITE64(kViewDb + kDbSize * v + off, s);
     }
-    // Vista v no seu quadrante
+    // View v in its quadrant
     void applyQuad(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t v)
     {
         applyDef(rdram, ctx, runtime, v, kQuadDefs + kDefSize * v);
     }
 
-    // Cameras 2 e 3 de volta aos jogadores 3 e 4, no POV 0 (a vitoria as deixou no vencedor, POV 7)
+    // Cameras 2 and 3 back to players 3 and 4, on POV 0 (the victory left them on the winner, POV 7)
     void refollow(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         for (int v = 2; v < g_views; ++v)
@@ -152,12 +152,12 @@ namespace wotm_split4
                 continue;
             if (FAST_READ32(camera(v) + kCamMonster) == m)
             {
-                // o LeaveUnifiedView poe a camera 2 no POV 3 (repouso da unificada): com o jogador 3 vencedor ela ja o segue
+                // LeaveUnifiedView puts camera 2 on POV 3 (unified rest): with player 3 as the winner it already follows them
                 if (FAST_READ32(camera(v) + kCamPov) == 3u)
                     callGuest(g_setPov, kSetPov, rdram, ctx, runtime, uint32_t(v), 0u);
                 continue;
             }
-            FAST_WRITE32(camera(v) + kCamPov, 0);   // o SetCameraToFollowMonster recarrega o POV corrente
+            FAST_WRITE32(camera(v) + kCamPov, 0);   // SetCameraToFollowMonster reloads the current POV
             callGuest(g_follow, kFollow, rdram, ctx, runtime, uint32_t(v), m);
         }
     }
@@ -175,34 +175,34 @@ namespace wotm_split4
             return;
         }
         writeQuadDefs(rdram, n);
-        FAST_WRITE32(kNumViews, 4u);   // o viewCreate pinta o fundo de viewNumViews viewDb
-        callGuest(g_viewCreate, kViewCreate, rdram, ctx, runtime, 1u, 2u);   // vista 2: o retail a deixa na viewport 5 (unificada)
+        FAST_WRITE32(kNumViews, 4u);   // viewCreate paints the background of viewNumViews viewDbs
+        callGuest(g_viewCreate, kViewCreate, rdram, ctx, runtime, 1u, 2u);   // view 2: retail leaves it on viewport 5 (unified)
         if (n == 4)
-            callGuest(g_viewCreate, kViewCreate, rdram, ctx, runtime, 2u, 3u);   // vista 3: _cs e viewDb (o retail nao a cria)
+            callGuest(g_viewCreate, kViewCreate, rdram, ctx, runtime, 2u, 3u);   // view 3: _cs and viewDb (retail doesn't create it)
         for (int v = 0; v < n; ++v)
             applyQuad(rdram, ctx, runtime, uint32_t(v));
         FAST_WRITE32(kNumViews, uint32_t(n));
         FAST_WRITE32(kNumCameras, uint32_t(n));
         if (n == 4)
-            callGuest(g_setPov, kSetPov, rdram, ctx, runtime, 3u, FAST_READ32(camera(3) + kCamPov));   // o laco do original foi ate 3
+            callGuest(g_setPov, kSetPov, rdram, ctx, runtime, 3u, FAST_READ32(camera(3) + kCamPov));   // the original's loop went up to 3
         if (g_views != n)
-            std::fprintf(stderr, "[split] %d jogadores: vistas em quadrantes de 320 x 112, %d cameras\n", n, n);
+            std::fprintf(stderr, "[split] %d players: views in 320 x 112 quadrants, %d cameras\n", n, n);
         g_views = n;
         g_cinemaFull = false;
-        g_wasUnified = false;   // as cameras dos jogadores ja vem do InitPlayers (gameInitCamera(i, slot))
-        // a camera 2 sai do InitBeforeDbLoad no POV 3 (repouso da unificada); com jogador para seguir, vai ao POV 0 como as outras
+        g_wasUnified = false;   // the players' cameras already come from InitPlayers (gameInitCamera(i, slot))
+        // camera 2 leaves InitBeforeDbLoad on POV 3 (unified rest); with a player to follow, it goes to POV 0 like the others
         for (int v = 2; v < n; ++v)
             if (FAST_READ32(camera(v) + kCamPov) == 3u && FAST_READ32(camera(v) + kCamMonster))
                 callGuest(g_setPov, kSetPov, rdram, ctx, runtime, uint32_t(v), 0u);
     }
 
-    // Cameras::SetCameraPOV(vista, pov): o POV 3 e a camera estacionada em +0xD20 (DetachCamera; TogglePOV alterna 0 e 3). As cameras
-    // 2 e 3 do retail nunca recebem essa posicao (a 2 e a unificada, que o InitBeforeDbLoad e o ResetLevel poem no POV 3 so como
-    // repouso): no POV 3 elas iam para a origem do mapa (quadrante so de neblina, no inicio e na morte do jogador). Com os quadrantes,
-    // o POV 3 numa delas estaciona onde ela esta (_cs->trans), como o DetachCamera, que tambem poe a posicao no _cs antes.
+    // Cameras::SetCameraPOV(view, pov): POV 3 is the camera parked at +0xD20 (DetachCamera; TogglePOV toggles 0 and 3). Retail
+    // cameras 2 and 3 never get that position (2 is the unified one, which InitBeforeDbLoad and ResetLevel put on POV 3 only as a
+    // rest): on POV 3 they went to the map origin (a quadrant of nothing but fog, at the start and on the player's death). With quadrants,
+    // POV 3 on one of them parks where it is (_cs->trans), like DetachCamera, which also puts the position in the _cs first.
     constexpr uint32_t kCamPark = 0xD20;
     PS2Runtime::RecompiledFunction g_origSetPov = nullptr;
-    bool g_skipPov3 = false;   // throwPreemption de uma IA em curso: o SetCameraPOV da camera 3 (a do jogador 4) nao acontece
+    bool g_skipPov3 = false;   // an AI's throwPreemption in progress: SetCameraPOV for camera 3 (player 4's) doesn't happen
     void setCameraPov(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t v = GPR_U32(ctx, 4);
@@ -220,10 +220,10 @@ namespace wotm_split4
         g_origSetPov(rdram, ctx, runtime);
     }
 
-    // Cameras::LeaveUnifiedView (fim da pose de vitoria, "play again", ResetLevel): com m_numMonsters 2 (dois jogadores) o retail so
-    // volta a camera 2 ao POV 3 e esmaece (CCFadeOut); com outro numero (1 jogador) a camera 0 toma o lugar da 2 (a da vitoria) e
-    // refaz a transicao a partir dali: com os quadrantes (m_numMonsters = jogadores e IAs) a camera do jogador 1 saltaria para onde
-    // estava a vitoria. A chamada ve 2 e toma o caminho da tela dividida; o refollow devolve as cameras 2 e 3.
+    // Cameras::LeaveUnifiedView (end of the victory pose, "play again", ResetLevel): with m_numMonsters 2 (two players) retail only
+    // returns camera 2 to POV 3 and fades out (CCFadeOut); with any other number (1 player) camera 0 takes the place of 2 (the victory one) and
+    // redoes the transition from there: with quadrants (m_numMonsters = players and AIs) player 1's camera would jump to where
+    // the victory camera was. The call sees 2 and takes the split screen path; refollow returns cameras 2 and 3.
     constexpr uint32_t kLeaveUnified = wotm::fn::LeaveUnifiedView__7CamerasUi, kNumMonsters = kGame + 0x1203D8;
     PS2Runtime::RecompiledFunction g_origLeaveUnified = nullptr;
     void leaveUnified(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -240,9 +240,9 @@ namespace wotm_split4
             FAST_WRITE32(kNumMonsters, n);
     }
 
-    // StateThrowBack::handlePreemption (fim de ser arremessado/derrubado): poe a camera m_cameraView do dono no POV 0 e zera +0xD98 e
-    // +0xD9C dela, sem olhar se o dono e humano. Com 4 jogadores a IA tem m_cameraView 3 (initCamera) e mexia na camera do jogador 4
-    // (no retail a camera 3 nao tem vista). Aqui, dono IA com a vista 3: o SetCameraPOV(3) nao acontece e os dois campos voltam.
+    // StateThrowBack::handlePreemption (end of being thrown/knocked down): puts the owner's m_cameraView camera on POV 0 and clears its +0xD98 and
+    // +0xD9C, without checking whether the owner is human. With 4 players the AI has m_cameraView 3 (initCamera) and touched player 4's camera
+    // (in retail camera 3 has no view). Here, with an AI owner on view 3: SetCameraPOV(3) doesn't happen and both fields are restored.
     constexpr uint32_t kThrowPreempt = wotm::fn::handlePreemption__14StateThrowBackP12MonsterState, kStateOwner = 0xC;
     PS2Runtime::RecompiledFunction g_origThrowPreempt = nullptr;
     void throwPreemption(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -267,11 +267,11 @@ namespace wotm_split4
         FAST_WRITE32(c + 0xD9C, d9c);
     }
 
-    // Cinema (ActionDispatch::doCinema, moviePlaying; a apresentacao dos monstros antes da luta): com 2 jogadores o doCinema chama o
-    // viewToggleSplitScreen e a cena sai em tela cheia; com 3 ou mais vistas o toggle nao faz nada e so a vista 0 seguia o cinema, no
-    // quadrante dela. Aqui, no comeco de cada quadro (okToUnify), o cinema ligado poe a tela numa vista so (viewNumViews 1, vista 0 com o
-    // viewDef[0], 640 x 224) e o cinema desligado volta aos quadrantes; o rtMain le o numero de vistas no quadro seguinte. As cameras
-    // das outras vistas seguem os monstros por baixo.
+    // Cinematic (ActionDispatch::doCinema, moviePlaying; the monster intro before the fight): with 2 players doCinema calls
+    // viewToggleSplitScreen and the scene plays fullscreen; with 3 or more views the toggle does nothing and only view 0 followed the cinematic, in
+    // its quadrant. Here, at the start of each frame (okToUnify), a playing cinematic puts the screen in a single view (viewNumViews 1, view 0 with
+    // viewDef[0], 640 x 224) and when the cinematic ends it goes back to quadrants; rtMain reads the number of views on the next frame. The cameras
+    // of the other views keep following the monsters underneath.
     constexpr uint32_t kMoviePlaying = wotm::sym::moviePlaying;
     void cinemaViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -286,11 +286,11 @@ namespace wotm_split4
         }
         else
         {
-            // o endCinema chama o viewToggleSplitScreen, que com 1 vista recria a 0 e a 1 como metades (viewCreate): todas de volta
+            // endCinema calls viewToggleSplitScreen, which with 1 view recreates 0 and 1 as halves (viewCreate): all of them back
             FAST_WRITE32(kNumViews, uint32_t(g_views));
             for (int v = 0; v < g_views; ++v)
             {
-                FAST_WRITE32(kViewInfo + 0x14u * uint32_t(v) + 8, 1u + (uint32_t(v) & 1u));   // viewport: metade do mesmo lado
+                FAST_WRITE32(kViewInfo + 0x14u * uint32_t(v) + 8, 1u + (uint32_t(v) & 1u));   // viewport: half on the same side
                 applyQuad(rdram, ctx, runtime, uint32_t(v));
             }
         }
@@ -309,7 +309,7 @@ namespace wotm_split4
         }
     }
 
-    // Comeco de cada quadro do rtMain (gameSetOkToUnify): sem unificar; a camera volta aos jogadores quando a vitoria termina
+    // Start of each rtMain frame (gameSetOkToUnify): no unifying; the camera goes back to the players when the victory ends
     PS2Runtime::RecompiledFunction g_origOkToUnify = nullptr;
     void okToUnify(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
@@ -319,7 +319,7 @@ namespace wotm_split4
             return;
         }
         cinemaViews(rdram, ctx, runtime);
-        static const bool log = std::getenv("WOTM_SPLITLOG") != nullptr;   // uma linha por segundo: camera de cada vista
+        static const bool log = std::getenv("WOTM_SPLITLOG") != nullptr;   // one line per second: each view's camera
         static unsigned frames = 0;
         if (log && ++frames % 60 == 0)
         {
@@ -327,11 +327,11 @@ namespace wotm_split4
             for (int v = 0; v < g_views; ++v)
             {
                 const uint32_t cs = FAST_READ32(camera(v) + kCamCs), vcs = FAST_READ32(kViewInfo + 0x14u * uint32_t(v));
-                std::fprintf(stderr, " %d: monstro %x (jogador %x) pov %d cs %x vista %x em %.0f,%.0f,%.0f;", v, FAST_READ32(camera(v) + kCamMonster),
+                std::fprintf(stderr, " %d: monster %x (player %x) pov %d cs %x view %x at %.0f,%.0f,%.0f;", v, FAST_READ32(camera(v) + kCamMonster),
                              FAST_READ32(kMonsters + 4u * uint32_t(v)), static_cast<int32_t>(FAST_READ32(camera(v) + kCamPov)), cs, vcs,
                              rdF(rdram, (vcs & 0x1FFFFFFFu) + 0x10), rdF(rdram, (vcs & 0x1FFFFFFFu) + 0x14), rdF(rdram, (vcs & 0x1FFFFFFFu) + 0x18));
             }
-            std::fprintf(stderr, " hud.update %u/%u/%u/%u (pausados %u)\n", g_hudCalls[0], g_hudCalls[1], g_hudCalls[2], g_hudCalls[3], g_hudPaused);
+            std::fprintf(stderr, " hud.update %u/%u/%u/%u (paused %u)\n", g_hudCalls[0], g_hudCalls[1], g_hudCalls[2], g_hudCalls[3], g_hudPaused);
             g_hudPaused = 0;
             for (unsigned &n : g_hudCalls)
                 n = 0;
@@ -358,13 +358,13 @@ namespace wotm_split4
             callGuest(g_setPov, kSetPov, rdram, ctx, runtime, 2u, pov);
     }
 
-    // TheGame::gameInitCamera(view, slot): com 4 jogadores a camera 3 fica com o jogador 4 (a IA nao a leva)
+    // TheGame::gameInitCamera(view, slot): with 4 players camera 3 stays with player 4 (the AI doesn't take it)
     void initCamera(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == kInitCamera && GPR_U32(ctx, 5) == 3u && splitPlayers(rdram) == 4)
         {
-            // jogador = um dos m_monsters[0..3] (o SetPlayerMonster ja o gravou); o m_playerNum nao serve: com WOTM_AIVSAI o jogador
-            // tambem tem 2
+            // player = one of m_monsters[0..3] (SetPlayerMonster already stored it); m_playerNum is no use: with WOTM_AIVSAI the player
+            // also has 2
             const uint32_t slot = GPR_U32(ctx, 6);
             const uint32_t m = kSlots + kSlotStride * slot;
             bool player = false;
@@ -380,8 +380,8 @@ namespace wotm_split4
         g_origInitCamera(rdram, ctx, runtime);
     }
 
-    // Jogadores 3 e 4 para o caminho das IAs (carga) e de volta (InitPlayers). As IAs andam extra posicoes; m_costume[2 + j] vai ate
-    // o indice 11 (0x2C0C, antes do m_mode): no maximo 10 entre jogadores extras e IAs.
+    // Players 3 and 4 onto the AI path (load) and back (InitPlayers). The AIs shift by extra positions; m_costume[2 + j] goes up to
+    // index 11 (0x2C0C, before m_mode): at most 10 between extra players and AIs.
     void toLoadLayout(uint8_t *rdram)
     {
         const int n = static_cast<int32_t>(FAST_READ32(kNumPlayers)), extra = n - 2;
@@ -425,10 +425,10 @@ namespace wotm_split4
     {
         if (ctx->pc == kLoadLevelFiles)
         {
-            if (g_loadExtra)   // a carga anterior nao chegou ao InitPlayers
+            if (g_loadExtra)   // the previous load didn't reach InitPlayers
                 toPlayLayout(rdram);
             const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers));
-            if (n >= 3 && n <= 4 && FAST_READ32(kShell + 0x2C10) != 6u)   // m_mode 6 carrega os 10 monstros por conta propria
+            if (n >= 3 && n <= 4 && FAST_READ32(kShell + 0x2C10) != 6u)   // m_mode 6 loads the 10 monsters on its own
                 toLoadLayout(rdram);
         }
         g_origLoadLevelFiles(rdram, ctx, runtime);
@@ -441,8 +441,8 @@ namespace wotm_split4
         g_origInitPlayers(rdram, ctx, runtime);
     }
 
-    // TheGame::SetPlayerMonster(jogador, tipo, dup, vista, traje): o InitPlayers manda m_costume[1] a todo jogador depois do 1; os
-    // jogadores 3 e 4 recebem o deles (o do arquivo que a carga leu)
+    // TheGame::SetPlayerMonster(player, type, dup, view, costume): InitPlayers sends m_costume[1] to every player after player 1;
+    // players 3 and 4 get their own (the one from the file the load read)
     constexpr uint32_t kSetPlayer = wotm::fn::SetPlayerMonster__7TheGameiiiii;
     PS2Runtime::RecompiledFunction g_origSetPlayer = nullptr;
     void setPlayerMonster(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -453,13 +453,13 @@ namespace wotm_split4
         g_origSetPlayer(rdram, ctx, runtime);
     }
 
-    // Hud::update(hud): o retail sai logo no comeco com indice (+0) >= 2. O resto usa o indice para o monstro (m_viewSlot[indice]), a
-    // camera (m_cameras[indice], _cs em +0xCF0), o lado do texto (0 a esquerda, os outros a direita) e o drawMe das barras de vida (os
-    // _cs em +0xF4 dos HUDs 0 e 1: acende a do proprio indice e apaga a do outro; a do proprio HUD e posta na frente da camera). Com os
-    // quadrantes, o HUD v = 2 ou 3 roda como o HUD p = v & 1 (mesma coluna): durante a chamada o indice dele vira p e o m_viewSlot[p],
-    // o _cs da camera p e a barra do HUD p passam a ser os da vista v; tudo volta na saida. Depois, so a barra deste HUD fica acesa (o
-    // rtMain chama o update de cada vista logo antes do hier dela). Com m_numMonsters != 2 a posicao das barras e a da tela cheia
-    // (+0x100 no HUD), que e a forma do quadrante.
+    // Hud::update(hud): retail returns right at the start with index (+0) >= 2. The rest uses the index for the monster (m_viewSlot[index]), the
+    // camera (m_cameras[index], _cs at +0xCF0), the text side (0 on the left, the others on the right) and the drawMe of the health bars (the
+    // _cs at +0xF4 of HUDs 0 and 1: turns on its own index's and turns off the other's; the HUD's own bar is placed in front of the camera). With
+    // quadrants, HUD v = 2 or 3 runs as HUD p = v & 1 (same column): during the call its index becomes p and m_viewSlot[p],
+    // camera p's _cs and HUD p's bar become view v's; everything is restored on exit. Afterwards, only this HUD's bar stays on
+    // (rtMain calls each view's update right before its hier). With m_numMonsters != 2 the bar position is the fullscreen one
+    // (+0x100 in the HUD), which is the quadrant's shape.
     constexpr uint32_t kHudUpdate = wotm::fn::update__3Hud, kHudStride = 0x2E0, kHudBarCs = 0xF4, kViewSlot = kGame + 0x1203E8;
     PS2Runtime::RecompiledFunction g_origHudUpdate = nullptr;
     uint32_t hudBar(uint8_t *rdram, uint32_t i)
@@ -467,20 +467,20 @@ namespace wotm_split4
         const uint32_t cs = FAST_READ32(kGame + kHudStride * i + kHudBarCs) & 0x1FFFFFFFu;
         return cs >= 0x1000u && cs + 0x10u <= PS2_RAM_SIZE ? cs : 0u;
     }
-    // Animacoes do HUD por vista. O HUD 2/3 e uma copia do HUD da coluna: os _animHandle (+0x130..+0x1F0) apontam para os mesmos
-    // _animCharInstance, entao o que um comeca o outro mostra (o flash de furia h180 do jogador 3, posto pelo updateBoostAndRage, e o
-    // fim dele aparecendo e sumindo no HUD do jogador 1). Cada HUD guarda aqui o estado das instancias da coluna: dos nos de controle
-    // (animCtx[k] +0x14..+0x34: inicio, tempo, velocidade, ativo, laco, iteracoes, cache de chave), a arvore principal do AnimPlayer
-    // (+0x8, so no de controle ou nada; o animationStart so troca esse ponteiro) e a saida (animOutput.val). Um so esta na RAM por
-    // coluna (g_hudLive); o hudUse troca, marcando sujo (animOutput.dirty) cada canal cujo valor mudou, para o hier refazer as
-    // matrizes que guardou do outro. As barras (AnimBlend da lista ativa) continuam divididas: cada update reaplica a porcentagem.
-    // Ordem no quadro: update 0 (volta o estado 0), hier 0, animationRunGlobal (avalia o 0), update 1, hier 1, update 2 (guarda o 0,
-    // poe o 2 e o avalia com o UpdateAnimations, como o animationRunGlobal faria), hier 2, update 3, hier 3.
-    // Barra de furia (AnimBlend em +0x268, sobre o handle +0x170): o no de mistura mora dentro do HUD. O update faz rampIn quando o no
-    // nao esta ativo (+0x274) e reaplica o tempo dele (toTime, +0x2A0: porcentagem da furia, ou velocidade 1 com ela cheia). Na copia do
-    // HUD 2/3 o no e outro, mas o handle e o do HUD da coluna: o rampIn dela punha um segundo no na lista ativa do mesmo AnimPlayer, e
-    // as duas vistas mostravam a camada de cima (a furia do jogador 3 na barra do 1 e vice-versa). O no da copia fica marcado ativo
-    // (nunca entra na lista); o toTime dele vai para o no da coluna antes da avaliacao, e o do no da coluna entra no estado por HUD.
+    // Per-view HUD animations. HUD 2/3 is a copy of the column's HUD: the _animHandles (+0x130..+0x1F0) point to the same
+    // _animCharInstances, so what one starts the other shows (player 3's h180 rage flash, set by updateBoostAndRage, and its
+    // end appearing and disappearing on player 1's HUD). Each HUD keeps here the state of the column's instances: of the control nodes
+    // (animCtx[k] +0x14..+0x34: start, time, speed, active, loop, iterations, key cache), the AnimPlayer's main tree
+    // (+0x8, only a control node or nothing; animationStart only swaps that pointer) and the output (animOutput.val). Only one is in RAM per
+    // column (g_hudLive); hudUse swaps, marking dirty (animOutput.dirty) every channel whose value changed, so hier rebuilds the
+    // matrices it cached from the other. The bars (AnimBlend in the active list) stay shared: each update reapplies the percentage.
+    // Order within the frame: update 0 (restores state 0), hier 0, animationRunGlobal (evaluates 0), update 1, hier 1, update 2 (saves 0,
+    // loads 2 and evaluates it with UpdateAnimations, as animationRunGlobal would), hier 2, update 3, hier 3.
+    // Rage bar (AnimBlend at +0x268, over handle +0x170): the blend node lives inside the HUD. update does rampIn when the node
+    // isn't active (+0x274) and reapplies its time (toTime, +0x2A0: rage percentage, or speed 1 when full). In the HUD 2/3
+    // copy the node is a different one, but the handle is the column HUD's: its rampIn put a second node in the active list of the same AnimPlayer, and
+    // both views showed the top layer (player 3's rage on player 1's bar and vice versa). The copy's node stays marked active
+    // (never enters the list); its toTime goes to the column's node before evaluation, and the column node's goes into the per-HUD state.
     constexpr uint32_t kHudHandles = 0x130, kHudHandleN = 13, kCtlState = 0x14, kCtlStateLen = 0x20, kCtlSize = 0x3C;
     constexpr uint32_t kHudRageActive = 0x268 + 0x8 + 0x4, kHudRageTime = 0x268 + 0x8 + 0x30, kAnimTimeLen = 0x10;
     constexpr uint32_t kUpdateAnims = wotm::fn::UpdateAnimations__10AnimPlayer;
@@ -489,10 +489,10 @@ namespace wotm_split4
         uint32_t ci[4] = {};
         int n = 0;
         std::vector<uint8_t> data;
-        uint8_t rageTime[kAnimTimeLen] = {};   // toTime do no de mistura da barra de furia da coluna
+        uint8_t rageTime[kAnimTimeLen] = {};   // toTime of the column's rage bar blend node
     };
     HudAnimState g_hudAnim[4];
-    uint32_t g_hudLive[2] = {0, 1};   // HUD cujo estado esta na RAM, por coluna
+    uint32_t g_hudLive[2] = {0, 1};   // HUD whose state is in RAM, per column
     PS2Runtime::RecompiledFunction g_updateAnims = nullptr;
 
     uint32_t ciOk(uint8_t *rdram, uint32_t ci)
@@ -500,7 +500,7 @@ namespace wotm_split4
         ci &= 0x1FFFFFFFu;
         return ci >= 0x1000u && ci + 0x30u <= PS2_RAM_SIZE ? ci : 0u;
     }
-    // Instancias distintas dos handles do HUD i
+    // Distinct instances among HUD i's handles
     int hudInstances(uint8_t *rdram, uint32_t hud, uint32_t out[4])
     {
         int n = 0;
@@ -515,7 +515,7 @@ namespace wotm_split4
         }
         return n;
     }
-    // Campos de uma instancia: AnimPlayer, animCtx, val, dirty, animacoes e canais (0 em tudo se algo nao fizer sentido)
+    // An instance's fields: AnimPlayer, animCtx, val, dirty, animations and channels (0 in everything if something doesn't make sense)
     struct CiFields { uint32_t player = 0, ctx = 0, val = 0, dirty = 0, anims = 0, chans = 0; };
     CiFields ciFields(uint8_t *rdram, uint32_t ci)
     {
@@ -552,7 +552,7 @@ namespace wotm_split4
             std::memcpy(d + 4, rdram + f.val, 4u * f.chans);
         }
     }
-    // false: as instancias mudaram (outra fase); o estado guardado nao vale
+    // false: the instances changed (another stage); the saved state is invalid
     bool hudAnimLoad(uint8_t *rdram, uint32_t hud, const HudAnimState &s)
     {
         uint32_t ci[4] = {};
@@ -573,7 +573,7 @@ namespace wotm_split4
                 d += 4u;
                 continue;
             }
-            // arvore principal: so no de controle desta instancia, ou nada (um no de mistura do pool ficaria em duas arvores)
+            // main tree: only a control node of this instance, or nothing (a blend node from the pool would end up in two trees)
             uint32_t main;
             std::memcpy(&main, d, 4);
             const uint32_t m = main & 0x1FFFFFFFu, cur = FAST_READ32(f.player + 8) & 0x1FFFFFFFu;
@@ -593,7 +593,7 @@ namespace wotm_split4
         }
         return true;
     }
-    // Poe na RAM o estado das animacoes do HUD `who` (coluna who & 1). Primeira vez do HUD 2/3: parte do estado atual da coluna.
+    // Puts the animation state of HUD `who` (column who & 1) into RAM. First time for HUD 2/3: starts from the column's current state.
     void hudUse(uint8_t *rdram, uint32_t who)
     {
         const uint32_t col = who & 1u, hud = kGame + kHudStride * col, live = g_hudLive[col];
@@ -602,7 +602,7 @@ namespace wotm_split4
         hudAnimSave(rdram, hud, g_hudAnim[live]);
         HudAnimState &s = g_hudAnim[who];
         if (s.n == 0 || !hudAnimLoad(rdram, hud, s))
-            s = g_hudAnim[live];   // estado novo = o da coluna (ja esta na RAM)
+            s = g_hudAnim[live];   // new state = the column's (already in RAM)
         g_hudLive[col] = who;
     }
     void hudAnimReset()
@@ -612,7 +612,7 @@ namespace wotm_split4
         g_hudLive[0] = 0;
         g_hudLive[1] = 1;
     }
-    // Avalia as instancias da coluna com o estado em uso (o animationRunGlobal so roda depois do hier da vista 0)
+    // Evaluates the column's instances with the state in use (animationRunGlobal only runs after view 0's hier)
     void hudEvaluate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t hud)
     {
         uint32_t ci[4] = {};
@@ -622,10 +622,10 @@ namespace wotm_split4
                 callGuest(g_updateAnims, kUpdateAnims, rdram, ctx, runtime, f.player);
     }
 
-    // Modo treino (wotm_training.h) na luta de 1 jogador: o HUD do boneco e o HUD 1 do proprio jogo (o do jogador 2, espelhado a
-    // direita, que o banco do HUD ja traz e o initAfter ja ligou). Na saida do Hud::update do HUD 0, o update do HUD 1 com o
-    // m_viewSlot[1] trocado pelo slot do boneco (o primeiro m_monsters[i >= 1] vivo) durante a chamada. Fora da vista unificada e no modo de entrada do
-    // versus o update prende o HUD i ao _cs da camera i (m_cameras[i]); a 1 segue o boneco, entao a chamada usa o _cs da camera 0.
+    // Training mode (wotm_training.h) in a 1-player fight: the dummy's HUD is the game's own HUD 1 (player 2's, mirrored on the
+    // right, which the HUD bank already has and initAfter already turned on). On exit from HUD 0's Hud::update, HUD 1's update runs with
+    // m_viewSlot[1] swapped for the dummy's slot (the first live m_monsters[i >= 1]) during the call. Outside the unified view and in the
+    // versus entry mode update ties HUD i to camera i's _cs (m_cameras[i]); camera 1 follows the dummy, so the call uses camera 0's _cs.
     void trainingHud(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (!wotm_training::g_on.load(std::memory_order_relaxed) || !(wotm_training::g_opts.load(std::memory_order_relaxed) & wotm_training::kTrainHud) ||
@@ -644,15 +644,15 @@ namespace wotm_split4
         if (!s_logged)
         {
             s_logged = true;
-            std::fprintf(stderr, "[treino] HUD do boneco: HUD 1 do jogo no slot %u (cs %08X)\n", slot, FAST_READ32(kGame + kHudStride + kHudBarCs));
+            std::fprintf(stderr, "[training] dummy HUD: game HUD 1 in slot %u (cs %08X)\n", slot, FAST_READ32(kGame + kHudStride + kHudBarCs));
         }
-        // o HUD i fica preso ao _cs da camera i; com 1 jogador a camera 1 nao e a da tela (segue o boneco), entao nesta chamada o
-        // HUD 1 usa o _cs da camera 0, como os HUDs 2 e 3 na tela em quadrantes (hudUpdate)
+        // HUD i stays tied to camera i's _cs; with 1 player camera 1 isn't the screen's (it follows the dummy), so in this call
+        // HUD 1 uses camera 0's _cs, like HUDs 2 and 3 on the quadrant screen (hudUpdate)
         const uint32_t saved = FAST_READ32(kViewSlot + 4u), savedCs = FAST_READ32(camera(1) + kCamCs);
         FAST_WRITE32(kViewSlot + 4u, slot);
         FAST_WRITE32(camera(1) + kCamCs, FAST_READ32(camera(0) + kCamCs));
-        // fora da vista unificada o update do HUD 1 age como na tela dividida: liga a barra dele e apaga a do HUD 0 (+0xC do _cs da
-        // barra, o drawMe); a do HUD 0 volta como o update dele a deixou
+        // outside the unified view HUD 1's update acts as in split screen: turns its bar on and HUD 0's off (+0xC of the bar's
+        // _cs, the drawMe); HUD 0's is restored to how its update left it
         const uint32_t bar0 = FAST_READ32(kGame + kHudBarCs) & 0x1FFFFFFFu;
         const uint8_t draw0 = bar0 ? FAST_READ8(bar0 + 0xC) : 0;
         callGuest(g_origHudUpdate, kHudUpdate, rdram, ctx, runtime, kGame + kHudStride);
@@ -662,13 +662,13 @@ namespace wotm_split4
         FAST_WRITE32(camera(1) + kCamCs, savedCs);
     }
 
-    // Barra do HUD na faixa de baixo dos 3 jogadores (vista 2, 640 x 112). O Hud::update poe o _cs da barra na frente da camera com um
-    // deslocamento fixo nos eixos dela (direita, frente, cima: HUD +0x100), feito para a projecao do quadrante; com o foco da faixa
-    // (kStripFov) e a largura dela a barra saia maior, no meio e cortada em cima. Aqui ela vai para a profundidade vezes fs / fq (o
-    // tamanho na tela volta ao do quadrante) e 160 pixels do GS vezes a largura widescreen para a esquerda (a faixa 4:3 da janela
-    // inteira comeca 160 * (wide - 1) pixels do GS depois da do quadrante): fica onde estaria no quadrante da esquerda.
-    // A barra e a mesma do HUD 0 (hudInitAfter), que o update dele refaz antes do hier da vista 0; g_stripBarPos evita somar duas vezes
-    // se o update nao a reposicionou.
+    // HUD bar in the bottom strip with 3 players (view 2, 640 x 112). Hud::update puts the bar's _cs in front of the camera with a
+    // fixed offset along its axes (right, forward, up: HUD +0x100), made for the quadrant projection; with the strip's focal length
+    // (kStripFov) and width the bar came out bigger, centered and cut off at the top. Here it moves to depth times fs / fq (the
+    // on-screen size goes back to the quadrant's) and 160 GS pixels times the widescreen width to the left (the 4:3 band of the whole
+    // window starts 160 * (wide - 1) GS pixels after the quadrant's): it ends up where it would be in the left quadrant.
+    // The bar is the same as HUD 0's (hudInitAfter), which its update rebuilds before view 0's hier; g_stripBarPos avoids adding twice
+    // if update didn't reposition it.
     float g_stripBarPos[3] = {};
     void stripHudBar(uint8_t *rdram, uint32_t bar)
     {
@@ -686,7 +686,7 @@ namespace wotm_split4
         }
         if (std::memcmp(p, g_stripBarPos, sizeof p) == 0)
             return;
-        float l[3] = {};   // direita, frente, cima
+        float l[3] = {};   // right, forward, up
         for (int r = 0; r < 3; ++r)
             for (int i = 0; i < 3; ++i)
                 l[r] += ax[r][i] * (p[i] - t[i]);
@@ -700,10 +700,10 @@ namespace wotm_split4
         }
     }
 
-    // Update do HUD 2/3 pausado no meio (a fatia de tempo do escalonador acabou dentro dele): a troca do indice, do m_viewSlot, do _cs
-    // da camera e da barra fica valendo ate a retomada terminar (pc no ra). Desfeita na saida da primeira chamada, o resto do update
-    // rodava com o indice 2: o updateMessage escreve o "WINS" do HUD 0 com fontSpritePrintXY e o dos outros com
-    // fontSpritePrintRightXY, entao o do jogador 3 pulava para a direita por um quadro (o do 4 ja e do lado direito).
+    // HUD 2/3 update paused midway (the scheduler's time slice ran out inside it): the swap of the index, m_viewSlot, the camera's
+    // _cs and the bar stays in effect until the resume finishes (pc at ra). Undone on exit from the first call, the rest of update
+    // ran with index 2: updateMessage writes HUD 0's "WINS" with fontSpritePrintXY and the others' with
+    // fontSpritePrintRightXY, so player 3's jumped to the right for one frame (player 4's is already on the right side).
     struct HudPending
     {
         bool on = false;
@@ -712,12 +712,12 @@ namespace wotm_split4
 
     void hudUpdateDone(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t self, uint32_t me, const uint32_t saved[4]);
 
-    // Modo treino: o update do HUD 0 pausado no meio (a fatia de tempo acabou dentro dele). A retomada nao passa por este gancho e,
-    // no fim dela, o HUD 0 apaga a barra do HUD 1: o do boneco (trainingHud) fica para trainingHudLate, antes da captura do quadro.
-    // Sem isso a barra do boneco sumia nesses quadros (piscava).
+    // Training mode: HUD 0's update paused midway (the time slice ran out inside it). The resume doesn't go through this hook and,
+    // at its end, HUD 0 turns off HUD 1's bar: the dummy's (trainingHud) is left for trainingHudLate, before the frame capture.
+    // Without this the dummy's bar disappeared on those frames (it flickered).
     bool g_trainPending = false;
 
-    // Gancho do timerWaitForMinUpdateRate (wotm_overrides.cpp), antes do wotmCaptureFrame: o update do quadro ja terminou
+    // Hook on timerWaitForMinUpdateRate (wotm_overrides.cpp), before wotmCaptureFrame: the frame's update has already finished
     void trainingHudLate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (!g_trainPending)
@@ -730,7 +730,7 @@ namespace wotm_split4
     {
         if (g_hudPending.on && ctx->pc != kHudUpdate)
         {
-            // retomada do update pausado
+            // resuming the paused update
             const HudPending pend = g_hudPending;
             g_origHudUpdate(rdram, ctx, runtime);
             if (ctx->pc == pend.ra)
@@ -758,7 +758,7 @@ namespace wotm_split4
         }
         if (g_hudPending.on)
         {
-            // outro update comecou sem a retomada do pausado terminar: desfaz a troca dele antes
+            // another update started before the paused one finished resuming: undo its swap first
             g_hudPending.on = false;
             hudUpdateDone(rdram, ctx, runtime, g_hudPending.self, g_hudPending.me, g_hudPending.saved);
         }
@@ -777,7 +777,7 @@ namespace wotm_split4
             FAST_WRITE32(kViewSlot + 4u * p, FAST_READ32(kViewSlot + 4u * me));
             FAST_WRITE32(camera(int(p)) + kCamCs, FAST_READ32(camera(int(me)) + kCamCs));
             FAST_WRITE32(hudP + kHudBarCs, FAST_READ32(self + kHudBarCs));
-            FAST_WRITE8(self + kHudRageActive, 1);   // sem rampIn: o no da coluna e o unico na lista ativa
+            FAST_WRITE8(self + kHudRageActive, 1);   // no rampIn: the column's node is the only one in the active list
         }
         g_origHudUpdate(rdram, ctx, runtime);
         if (ctx->pc != ra)
@@ -805,7 +805,7 @@ namespace wotm_split4
             std::memcpy(rdram + hudP + kHudRageTime, rdram + self + kHudRageTime, kAnimTimeLen);
             hudEvaluate(rdram, ctx, runtime, hudP);
         }
-        // a barra deste HUD fica como o jogo a deixou; as outras (por _cs: a do HUD 2 e 3 e a mesma do 0 e 1) apagam
+        // this HUD's bar stays as the game left it; the others (by _cs: HUD 2's and 3's are the same as 0's and 1's) go off
         const uint32_t own = hudBar(rdram, me);
         const uint8_t on = own ? FAST_READ8(own + 0xC) : 0;
         for (uint32_t i = 0; i < 4u; ++i)
@@ -817,10 +817,10 @@ namespace wotm_split4
             stripHudBar(rdram, own);
     }
 
-    // Hud::initAfter(i) tambem nao faz nada com i >= 2 (sem _cs da barra nem animacoes; o no do HUD em +0xE4 so existe nos HUDs 0 e
-    // 1). Na saida do initAfter do HUD 2 ou 3 ele vira uma copia do HUD da mesma coluna (i & 1), ja inicializado (o main os chama de
-    // 0 a 3), com o indice dele de volta: os dois dividem o _cs e as animacoes da barra, que cada vista refaz no seu Hud::update
-    // logo antes do hier dela.
+    // Hud::initAfter(i) also does nothing with i >= 2 (no bar _cs or animations; the HUD node at +0xE4 only exists in HUDs 0 and
+    // 1). On exit from HUD 2's or 3's initAfter it becomes a copy of the HUD in the same column (i & 1), already initialized (main calls them from
+    // 0 to 3), with its index restored: both share the bar's _cs and animations, which each view rebuilds in its Hud::update
+    // right before its hier.
     constexpr uint32_t kHudInitAfter = wotm::fn::initAfter__3Hudi;
     PS2Runtime::RecompiledFunction g_origHudInitAfter = nullptr;
     void hudInitAfter(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -829,7 +829,7 @@ namespace wotm_split4
         const uint32_t ra = ctx->pc == kHudInitAfter ? GPR_U32(ctx, 31) : 0u;
         g_origHudInitAfter(rdram, ctx, runtime);
         if (ra && ctx->pc == ra && i == 0u)
-            hudAnimReset();   // HUDs novos (o main os inicializa de 0 a 3): o estado guardado das animacoes nao vale mais
+            hudAnimReset();   // new HUDs (main initializes them from 0 to 3): the saved animation state is no longer valid
         if (!ra || ctx->pc != ra || i < 2u || i >= 4u || self != kGame + kHudStride * i || !g_players)
             return;
         const int32_t n = static_cast<int32_t>(FAST_READ32(kNumPlayers));
@@ -839,8 +839,8 @@ namespace wotm_split4
         FAST_WRITE32(self, i);
     }
 
-    // Monster::updateBoostAndRage: com a furia cheia o monstro seguido por camera comeca o flash (h180) do HUD m_cameraView. Durante a
-    // logica (gameUpdate) a RAM tem o estado das animacoes do HUD da coluna; o monstro dos HUDs 2 e 3 usa o dele na chamada.
+    // Monster::updateBoostAndRage: with full rage the camera-followed monster starts the flash (h180) on HUD m_cameraView. During
+    // logic (gameUpdate) RAM holds the column HUD's animation state; the monster of HUDs 2 and 3 uses its own during the call.
     constexpr uint32_t kBoostRage = wotm::fn::updateBoostAndRage__7Monster;
     PS2Runtime::RecompiledFunction g_origBoostRage = nullptr;
     void boostAndRage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -858,12 +858,12 @@ namespace wotm_split4
         hudUse(rdram, before);
     }
 
-    // Fim de rodada do modo 3 (Shell::EvaluateGameStatus -> EvaluateMultiPlayerBattleStatusNoAI ou ...AI, com r = 1 quando alguem
-    // morre, 3 quando saem). O NoAI do retail so trata "sobrou 1 vivo" e "nenhum vivo": com 3 ou 4 jogadores uma morte deixa 2 ou 3
-    // vivos, ninguem renasce e a rodada seguinte termina logo (o morto continua morto). O AI renasce os slots 0 e 1 como jogador e os
-    // outros como IA (os jogadores 3 e 4 virariam IA). Aqui, com os quadrantes, os dois viram a regra do AI por m_monsters: com meta
-    // de vitorias (m_killTarget) e um matador vivo que chegou nela, dialogo 5 (vencedor em m_won[0]); senao cada morto renasce como o
-    // que e (jogadores 0..3 pelo playerInit, IAs pelo aiInit) e a sessao continua.
+    // End of round in mode 3 (Shell::EvaluateGameStatus -> EvaluateMultiPlayerBattleStatusNoAI or ...AI, with r = 1 when someone
+    // dies, 3 when they quit). Retail NoAI only handles "1 left alive" and "none alive": with 3 or 4 players a death leaves 2 or 3
+    // alive, nobody respawns and the next round ends right away (the dead stay dead). AI respawns slots 0 and 1 as players and the
+    // others as AI (players 3 and 4 would become AI). Here, with quadrants, both follow the AI rule by m_monsters: with a win
+    // target (m_killTarget) and a living killer who reached it, dialog 5 (winner in m_won[0]); otherwise each dead monster respawns as
+    // what it is (players 0..3 through playerInit, AIs through aiInit) and the session continues.
     constexpr uint32_t kEvalNoAI = wotm::fn::EvaluateMultiPlayerBattleStatusNoAI__5Shelli,
                        kEvalAI = wotm::fn::EvaluateMultiPlayerBattleStatusAI__5Shelli, kPlayerInit = wotm::fn::playerInit__7Monster,
                        kAiInit = wotm::fn::aiInit__7Monster, kDisplayDialog = wotm::fn::displayDialog__Fi;
@@ -900,8 +900,8 @@ namespace wotm_split4
         if (target > 0 && killer >= 0 && killer < 16 &&
             static_cast<int32_t>(FAST_READ32(kSlots + kSlotStride * uint32_t(killer) + kWins)) >= target)
         {
-            // o displayDialog e modal (roda quadros e cede ao escalonador ate a escolha): chamado como cauda, com o ra de quem chamou o
-            // Evaluate. Pelo callGuest (ra 0) a retomada dele voltava ao pc 0 no fim e a thread do jogo morria ("play again")
+            // displayDialog is modal (runs frames and yields to the scheduler until the choice): called as a tail call, with the ra of whoever called
+            // Evaluate. Through callGuest (ra 0) its resume went back to pc 0 at the end and the game thread died ("play again")
             FAST_WRITE32(kGame + 0x12043C, uint32_t(killer));
             ctx->r[4] = _mm_set_epi64x(0, 5);
             ctx->pc = kDisplayDialog;
@@ -916,18 +916,18 @@ namespace wotm_split4
             const uint32_t m = FAST_READ32(kMonsters + 4u * uint32_t(i)) & 0x1FFFFFFFu;
             if (!m || !(rdF(rdram, m + kHealth) <= 0.f))
                 continue;
-            const uint32_t fn = i < 4 ? kPlayerInit : kAiInit;   // o do WOTM_AIVSAI (playerInit -> aiInit) vale: busca a cada vez
+            const uint32_t fn = i < 4 ? kPlayerInit : kAiInit;   // WOTM_AIVSAI's (playerInit -> aiInit) applies: looked up each time
             callGuest(runtime->lookupFunction(fn), fn, rdram, ctx, runtime, m);
         }
         FAST_WRITE32(kInMenus, 0u);
         FAST_WRITE32(kInSession, 1u);
     }
 
-    // TheGame::gameGetStartPoint(m): nos modos 2 a 6, o primeiro nascimento de um humano (m_playerNum 1) usa a lista 1 do StartPoints
-    // e o de uma IA a lista 2, em rodizio (getNextPoint), recusando ponto com algo a menos de 120; os renascimentos usam a lista 3. A
-    // lista 1 tem os pontos dos 2 jogadores do retail (no Centro: 2; a 2 e a 3 tem 4, um em cada canto): os jogadores 3 e 4 pegavam o
-    // ponto do 1 (ocupado) e caiam no do 2, os tres no mesmo lugar. Com os quadrantes, o jogador alem do numero de pontos da lista 1
-    // nasce como uma IA (m_playerNum 2 durante a chamada): lista 2. Diagnostico com WOTM_SPLITLOG (as listas so uma vez).
+    // TheGame::gameGetStartPoint(m): in modes 2 to 6, a human's first spawn (m_playerNum 1) uses StartPoints list 1
+    // and an AI's list 2, in rotation (getNextPoint), rejecting a point with something within 120; respawns use list 3.
+    // List 1 has retail's 2 player points (in Centro: 2; 2 and 3 have 4, one in each corner): players 3 and 4 took
+    // player 1's point (occupied) and fell to player 2's, all three in the same place. With quadrants, a player beyond the number of points in list 1
+    // spawns as an AI (m_playerNum 2 during the call): list 2. Diagnostics with WOTM_SPLITLOG (the lists only once).
     constexpr uint32_t kStartPoint = wotm::fn::gameGetStartPoint__7TheGameP7Monster, kPointTypes = wotm::sym::x_11StartPoints_s_pointTypes;
     PS2Runtime::RecompiledFunction g_origStartPoint = nullptr;
     void logPointLists(uint8_t *rdram)
@@ -935,13 +935,13 @@ namespace wotm_split4
         for (uint32_t t = 0; t < 4; ++t)
         {
             const uint32_t pts = FAST_READ32(kPointTypes + 16u * t) & 0x1FFFFFFFu, n = FAST_READ32(kPointTypes + 16u * t + 4);
-            std::fprintf(stderr, "[split] pontos tipo %u: %u (proximo %u):", t, n, FAST_READ32(kPointTypes + 16u * t + 12));
+            std::fprintf(stderr, "[split] points type %u: %u (next %u):", t, n, FAST_READ32(kPointTypes + 16u * t + 12));
             for (uint32_t i = 0; i < n && i < 32 && pts >= 0x1000u; ++i)
                 std::fprintf(stderr, " (%.0f,%.0f,%.0f)", rdF(rdram, pts + 0x20u * i), rdF(rdram, pts + 0x20u * i + 4), rdF(rdram, pts + 0x20u * i + 8));
             std::fprintf(stderr, "\n");
         }
     }
-    // Algum outro dos m_monsters a menos de 120 (no plano) do m_monsters[who]
+    // Some other m_monsters entry within 120 (on the ground plane) of m_monsters[who]
     bool nearOther(uint8_t *rdram, int who)
     {
         const uint32_t m = FAST_READ32(kMonsters + 4u * uint32_t(who)) & 0x1FFFFFFFu, cs = m ? FAST_READ32(m + 0xC) & 0x1FFFFFFFu : 0u;
@@ -956,10 +956,10 @@ namespace wotm_split4
         }
         return false;
     }
-    // Ainda em cima de outro depois da lista 2 (o dodgeball, modo 7, so usa a lista 1, de 2 pontos, e a arena nao tem outras): o
-    // ponto onde caiu girado em torno do centro dos pontos da lista 1, 90 graus para o jogador 3 e -90 para o 4 (ou 180), um pouco
-    // acima; o Monster::setTrans e o hdReparentCsGrid como o gameGetStartPoint faz, e a gravidade assenta.
-    constexpr uint32_t kStartVec = PS2_RAM_SIZE - 0x400;   // _fvector para o setTrans (abaixo dos textos do wotm_modes4.inc)
+    // Still on top of another after list 2 (dodgeball, mode 7, only uses list 1, with 2 points, and the arena has no others): the
+    // point where it landed rotated around the center of list 1's points, 90 degrees for player 3 and -90 for player 4 (or 180), a little
+    // higher; Monster::setTrans and hdReparentCsGrid as gameGetStartPoint does, and gravity settles it.
+    constexpr uint32_t kStartVec = PS2_RAM_SIZE - 0x400;   // _fvector for setTrans (below wotm_modes4.inc's text)
     void rotatedStart(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int who, bool log)
     {
         const uint32_t pts = FAST_READ32(kPointTypes + 16u) & 0x1FFFFFFFu, n = FAST_READ32(kPointTypes + 16u + 4u);
@@ -974,7 +974,7 @@ namespace wotm_split4
         }
         cx /= float(n);
         cy /= float(n);
-        for (int k = 0; k < 3; ++k)   // 90, -90, 180 graus: o primeiro livre
+        for (int k = 0; k < 3; ++k)   // 90, -90, 180 degrees: the first free one
         {
             const float s = k == 0 ? (who & 1 ? -1.f : 1.f) : k == 1 ? (who & 1 ? 1.f : -1.f) : 0.f, c = k == 2 ? -1.f : 0.f;
             const float x = rdF(rdram, cs + 0x10) - cx, y = rdF(rdram, cs + 0x14) - cy;
@@ -989,7 +989,7 @@ namespace wotm_split4
                 break;
         }
         if (log)
-            std::fprintf(stderr, "[split] largada: m_monsters[%d] no ponto girado em torno de %.0f,%.0f: %.0f,%.0f\n", who, cx, cy,
+            std::fprintf(stderr, "[split] spawn: m_monsters[%d] at the point rotated around %.0f,%.0f: %.0f,%.0f\n", who, cx, cy,
                          rdF(rdram, cs + 0x10), rdF(rdram, cs + 0x14));
     }
 
@@ -1007,17 +1007,17 @@ namespace wotm_split4
         for (int i = 0; i < 12 && who < 0; ++i)
             if ((FAST_READ32(kMonsters + 4u * uint32_t(i)) & 0x1FFFFFFFu) == m)
                 who = i;
-        const int32_t humanPoints = static_cast<int32_t>(FAST_READ32(kPointTypes + 16u + 4u));   // lista 1
+        const int32_t humanPoints = static_cast<int32_t>(FAST_READ32(kPointTypes + 16u + 4u));   // list 1
         const bool asAi = ra && who >= humanPoints && who < 4 && splitPlayers(rdram) && FAST_READ32(m + kPlayerNum) == 1u;
         if (asAi)
             FAST_WRITE32(m + kPlayerNum, 2u);
         g_origStartPoint(rdram, ctx, runtime);
         if (asAi)
             FAST_WRITE32(m + kPlayerNum, 1u);
-        // Renascimento (lista 3, 4 pontos) com mais de 4 monstros: no "play again" todos renascem juntos e o quinto e o sexto caem no
-        // ponto de outro (todos ocupados: fica o ultimo tentado). Dois monstros no mesmo lugar: o empurrao entre eles dava NaN na posicao
-        // (a camera do jogador ia junto). Monstro a menos de 120 de outro: de novo como o primeiro nascimento de uma IA (lista 2, os
-        // cantos, com o mesmo teste de ponto livre).
+        // Respawn (list 3, 4 points) with more than 4 monsters: on "play again" everyone respawns together and the fifth and sixth land on
+        // another's point (all occupied: the last one tried is kept). Two monsters in the same place: the push between them gave NaN in the position
+        // (and the player's camera went along). A monster within 120 of another: again like an AI's first spawn (list 2, the
+        // corners, with the same free-point test).
         if (ra && ctx->pc == ra && who >= 0 && splitPlayers(rdram))
         {
             const uint32_t cs = FAST_READ32(m + 0xC) & 0x1FFFFFFFu;
@@ -1039,7 +1039,7 @@ namespace wotm_split4
                 FAST_WRITE32(m + kNumInits, inits);
                 FAST_WRITE32(m + kPlayerNum, pn);
                 if (log)
-                    std::fprintf(stderr, "[split] largada: m_monsters[%d] em cima de outro, de novo pela lista 2\n", who);
+                    std::fprintf(stderr, "[split] spawn: m_monsters[%d] on top of another, again through list 2\n", who);
                 if (nearOther(rdram, who))
                     rotatedStart(rdram, ctx, runtime, m, who, log);
             }
@@ -1047,15 +1047,15 @@ namespace wotm_split4
         if (log && ra && ctx->pc == ra)
         {
             const uint32_t cs = FAST_READ32(m + 0xC) & 0x1FFFFFFFu;
-            std::fprintf(stderr, "[split] largada: m_monsters[%d] (playerNum %d) em %.0f,%.0f,%.0f\n", who,
+            std::fprintf(stderr, "[split] spawn: m_monsters[%d] (playerNum %d) at %.0f,%.0f,%.0f\n", who,
                          static_cast<int32_t>(FAST_READ32(m + kPlayerNum)), rdF(rdram, cs + 0x10), rdF(rdram, cs + 0x14), rdF(rdram, cs + 0x18));
         }
     }
 
-    // Quadrantes dos jogadores 1 a 4 (com WOTM_PLAYERS=5..8, os outros ficam em IAs, wotm_multi.inc)
+    // Quadrants for players 1 to 4 (with WOTM_PLAYERS=5..8, the rest are AIs, wotm_multi.inc)
     void install(PS2Runtime &runtime)
     {
-        constexpr int n = 4;   // teto de jogadores (com 1 ou 2 no Shell os ganchos deixam o jogo como no retail)
+        constexpr int n = 4;   // player cap (with 1 or 2 in the Shell the hooks leave the game as in retail)
         g_viewCreate = runtime.lookupFunction(kViewCreate);
         g_viewSetFov = runtime.lookupFunction(kViewSetFov);
         g_follow = runtime.lookupFunction(kFollow);
@@ -1081,7 +1081,7 @@ namespace wotm_split4
             !g_origResetLevel || !g_origInitCamera || !g_origLoadLevelFiles || !g_origInitPlayers || !g_origSetPlayer || !g_origHudUpdate || !g_origStartPoint || !g_origHudInitAfter || !g_origEvalNoAI || !g_origEvalAI ||
             !g_origBoostRage || !g_origThrowPreempt || !g_origLeaveUnified || !g_updateAnims)
         {
-            std::fprintf(stderr, "[split] tela dividida de %d desligada: funcao do jogo sem funcao no runtime\n", n);
+            std::fprintf(stderr, "[split] %d-player split screen off: game function missing from the runtime\n", n);
             return;
         }
         g_players = n;
@@ -1102,11 +1102,11 @@ namespace wotm_split4
         runtime.registerFunction(kBoostRage, &boostAndRage);
         runtime.registerFunction(kThrowPreempt, &throwPreemption);
         runtime.registerFunction(kLeaveUnified, &leaveUnified);
-        std::fprintf(stderr, "[split] ate %d jogadores: tela em quadrantes, controles 3 e 4 no slot 1 das portas\n", n);
+            std::fprintf(stderr, "[split] up to %d players: quadrant screen, pads 3 and 4 on slot 1 of the ports\n", n);
     }
 }
 
-// Selecao de monstros do menu multijogador (wotm_padsel.inc): traje dos jogadores 3 e 4 (o Shell so guarda os dos jogadores 1 e 2)
+// Multiplayer menu monster selection (wotm_padsel.inc): costume for players 3 and 4 (the Shell only stores players 1 and 2's)
 void wotmMultiSetCostume(int player, uint32_t costume)
 {
     if (player >= 2 && player < 4)

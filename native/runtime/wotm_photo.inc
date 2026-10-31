@@ -1,30 +1,33 @@
-// wotm_photo.inc: modo foto (incluido por wotm_live.inc depois do wotm_legend.inc; escopo global de ps2_runtime.cpp).
+// wotm_photo.inc: photo mode (included by wotm_live.inc after wotm_legend.inc; global scope of ps2_runtime.cpp).
 //
-// F9 no teclado ou L3 + R3 juntos no gamepad: o jogo pausa (a mesma pausa do F7, wotmPhotoPause no wotm_foto.inc) e a camera solta,
-// com zoom. Os controles aparecem na legenda de baixo (wotm_legend.inc, icones do estilo do ultimo dispositivo usado), numa faixa
-// translucida. Com a thread do EE parada o jogo nao refaz nada que dependa da camera, entao o desenho leva junto, a cada quadro:
-//  - HUD do hier (Scene::hud, hp, overlay, hpOverlay): objetos 3D que o Hud::update pos na frente da camera do jogo. Cada matriz vai
-//    do espaco do olho do jogo para o da camera livre (com o zoom compensado nos eixos da tela), entao o HUD fica parado na tela;
-//  - lens flare: a lista e refeita a cada quadro pela camera livre, como o jogo a monta (hierLightNode e particleAddLensFlareToList) e
-//    projeta (particleLensFlareTestZbuffer): luzes do hier com lens flare que a coleta achou (Scene::worldLights, inclusive as que
-//    estavam fora da tela na pausa, como o olho do Robo-47 visto de frente) e sistemas de particula com luz; o teste de oclusao do
-//    drawFlares roda contra a cena nova. Sem nenhuma das duas fontes, a lista do quadro pausado volta ao mundo e e reprojetada;
-//  - fogo da cabeca do Agamo (preset 141): o emissor so solta particulas quando a travessia do jogo passa por ele. Com o Agamo fora
-//    da tela na pausa o fogo ja tinha acabado; aqui ele e simulado (wotm_flame.hpp, aquecido e parado como numa foto) em cada emissor
-//    percorrido sem particulas vivas perto (Particles::synth);
-//  - barras sobre os inimigos e o icone de vida do jogo: o gancho do Hud::drawHealthIcon anota o ponto do mundo (Snapshot::anchors);
-//    aqui o ponto e projetado pelas duas cameras e a diferenca desloca as barras (ScreenRect::anchor) e o icone (ScreenPolys no mesmo
-//    centro). Na tela dividida as barras saem (a camera livre mostra so a vista 0 em tela cheia).
-// O texto do jogo (cronometro, nomes) e os numeros de dano (projetados pelo nativo) ja seguem a tela/a camera. Esconder o HUD tira tudo
-// isso, menos os fades. Salvar grava o quadro nativo sem a legenda em <pasta do settings.ini>/screenshots/WotM_<data>_<hora>.png.
-// Ao sair, a camera do jogo volta na hora e o jogo continua quando o botao usado para sair for solto (no maximo 1 s; o botao nao chega
-// ao monstro). O som segue tocando, como no F7.
+// F9 on the keyboard or L3 + R3 together on a gamepad: the game pauses (the same pause as F7, wotmPhotoPause in wotm_foto.inc) and
+// the camera is freed, with zoom. The controls show in the bottom legend (wotm_legend.inc, icons in the style of the last device
+// used), on a translucent strip. With the EE thread stopped the game recomputes nothing that depends on the camera, so drawing
+// carries these along every frame:
+//  - the hier HUD (Scene::hud, hp, overlay, hpOverlay): 3D objects Hud::update placed in front of the game camera. Each matrix goes
+//    from the game camera's eye space to the free camera's (with the zoom compensated on the screen axes), so the HUD stays put;
+//  - lens flare: the list is rebuilt every frame from the free camera, the way the game builds it (hierLightNode and
+//    particleAddLensFlareToList) and projects it (particleLensFlareTestZbuffer): hier lights with lens flare that the scene walk
+//    found (Scene::worldLights, including ones that were off screen at pause time, like Robo-47's eye seen from the front) and
+//    particle systems with light; drawFlares' occlusion test runs against the new scene. With neither source, the paused frame's
+//    list is mapped back to the world and reprojected;
+//  - Agamo's head fire (preset 141): the emitter only spawns particles when the game's traversal passes it. With Agamo off screen
+//    at pause time the fire had already died out; here it is simulated (wotm_flame.hpp, warmed up and frozen like a photo) on every
+//    traversed emitter with no live particles nearby (Particles::synth);
+//  - bars over enemies and the game's health icon: the Hud::drawHealthIcon hook records the world point (Snapshot::anchors); here
+//    the point is projected through both cameras and the difference moves the bars (ScreenRect::anchor) and the icon (ScreenPolys
+//    with the same center). In split screen the bars are dropped (the free camera shows only view 0, full screen).
+// The game's text (timer, names) and the damage numbers (projected by the native layer) already follow the screen/camera. Hiding
+// the HUD removes all of that except the fades. Saving writes the native frame without the legend to
+// <settings.ini folder>/screenshots/WotM_<date>_<time>.png.
+// On exit, the game camera comes back at once and the game resumes when the button used to exit is released (at most 1 s; the
+// button never reaches the monster). Sound keeps playing, as with F7.
 #include <array>
 #include <ctime>
 #include <unordered_map>
 #include "wotm_flame.hpp"
 
-void wotmPhotoPause(bool on);   // wotm_foto.inc: a pausa do F7
+void wotmPhotoPause(bool on);   // wotm_foto.inc: the F7 pause
 
 namespace wotm_photo
 {
@@ -35,22 +38,22 @@ enum class Phase { Off, Entering, On, Leaving };
 static Phase g_phase = Phase::Off;
 static double g_enterT = 0.0;
 static double g_leaveT = 0.0;
-static bool g_exitHeld[st::kPadButtons] = {};   // botoes do pad apertados ao sair: o jogo espera solta-los
-static std::unordered_map<uint32_t, wotm::flame::Flame> g_flames;   // fogo simulado por no emissor (refeito a cada sessao)
-static bool g_logged = false;    // resumo das luzes e emissores, uma vez por sessao
-static bool g_autoPivotOk = false;   // teste automatico: a meia volta gira em torno da luz mais perto (olho do monstro do jogador)
+static bool g_exitHeld[st::kPadButtons] = {};   // pad buttons held at exit: the game waits for them to be released
+static std::unordered_map<uint32_t, wotm::flame::Flame> g_flames;   // simulated fire per emitter node (rebuilt every session)
+static bool g_logged = false;    // summary of lights and emitters, once per session
+static bool g_autoPivotOk = false;   // automatic test: the half turn orbits the nearest light (the player's monster's eye)
 static float g_autoPivot[3] = {0, 0, 0}, g_autoBeam[3] = {0, 1, 0};
-static bool g_autoFireOk = false;   // teste automatico: a etapa 3 (sem HUD) olha o fogo do Agamo de perto
+static bool g_autoFireOk = false;   // automatic test: stage 3 (no HUD) looks at Agamo's fire up close
 static float g_autoFire[3] = {0, 0, 0};
 static WotmFreeCamPose g_pose, g_start;
 static float g_zoom = 1.f;
-static float g_speed = 220.f;   // unidades do mundo por segundo
+static float g_speed = 220.f;   // world units per second
 static bool g_hide = false;
 static bool g_saveReq = false;
-static bool g_legendShot = false;   // teste automatico: grava o quadro com a legenda na pasta atual
+static bool g_legendShot = false;   // automatic test: saves the frame with the legend in the current folder
 static std::string g_msg;
 static double g_msgUntil = 0.0;
-static uint64_t g_fontTex0 = 0;   // atlas da fonte do jogo do ultimo quadro com texto (a legenda escreve com ele)
+static uint64_t g_fontTex0 = 0;   // game font atlas from the last frame with text (the legend writes with it)
 
 static bool padDown(int b)
 {
@@ -64,7 +67,7 @@ static bool padPressed(int b)
         if (IsGamepadAvailable(p) && IsGamepadButtonPressed(p, b)) return true;
     return false;
 }
-// eixo com zona morta, o de maior modulo entre os gamepads
+// axis with a dead zone, the largest magnitude across gamepads
 static float padAxis(int a)
 {
     float best = 0.f;
@@ -77,7 +80,7 @@ static float padAxis(int a)
     constexpr float kDead = 0.18f;
     if (std::fabs(best) < kDead) return 0.f;
     const float s = (std::fabs(best) - kDead) / (1.f - kDead);
-    return std::copysign(s * s, best);   // curva: devagar perto do centro
+    return std::copysign(s * s, best);   // curve: slow near the center
 }
 static bool anyPadButton()
 {
@@ -85,14 +88,14 @@ static bool anyPadButton()
         if (padDown(b)) return true;
     return false;
 }
-// Sai: a vista volta a do jogo ja; o jogo continua quando os botoes apertados agora forem soltos (update)
+// Exit: the view returns to the game's right away; the game resumes once the buttons held now are released (update)
 static void startLeaving()
 {
     for (int b = 1; b < st::kPadButtons; ++b) g_exitHeld[b] = padDown(b);
     g_phase = Phase::Leaving;
     g_leaveT = GetTime();
 }
-// L3 + R3: os dois apertados, um deles agora
+// L3 + R3: both held, one of them pressed just now
 static bool chord()
 {
     return padDown(GAMEPAD_BUTTON_LEFT_THUMB) && padDown(GAMEPAD_BUTTON_RIGHT_THUMB) &&
@@ -136,7 +139,7 @@ static void postLegend()
 static void move(float dt)
 {
     WotmFreeCamPose &p = g_pose;
-    // olhar: mouse com o botao direito, setas, analogico direito (mais devagar com zoom)
+    // look: mouse with the right button, arrow keys, right stick (slower when zoomed)
     const float lookK = std::min(1.f, g_zoom);
     if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT))
     {
@@ -149,7 +152,7 @@ static void move(float dt)
     p.pitch += turn * (float(IsKeyDown(KEY_UP)) - float(IsKeyDown(KEY_DOWN)) - padAxis(GAMEPAD_AXIS_RIGHT_Y) * 1.4f);
     p.pitch = std::clamp(p.pitch, -1.55f, 1.55f);
     p.heading = std::remainder(p.heading, 6.2831853f);
-    // andar: WASD + Q/E, analogico esquerdo + L2/R2; Shift x4, Ctrl x0,25
+    // move: WASD + Q/E, left stick + L2/R2; Shift x4, Ctrl x0.25
     float k = g_speed * dt;
     if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) k *= 4.f;
     if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) k *= 0.25f;
@@ -159,34 +162,34 @@ static void move(float dt)
                      float(padDown(GAMEPAD_BUTTON_LEFT_TRIGGER_2));
     float r[3], f[3], u[3];
     wotmFreeCamAxes(p, r, f, u);
-    // frente no plano do chao: andar nao sobe nem desce com a camera inclinada (a altura e Q/E, L2/R2)
+    // forward on the ground plane: moving doesn't climb or sink with the camera tilted (height is Q/E, L2/R2)
     float fh[3] = {f[0], f[1], 0.f};
     const float n = std::sqrt(fh[0] * fh[0] + fh[1] * fh[1]);
     if (n > 1e-4f) { fh[0] /= n; fh[1] /= n; }
-    else { fh[0] = -u[0]; fh[1] = -u[1]; }   // olhando reto para baixo/cima
+    else { fh[0] = -u[0]; fh[1] = -u[1]; }   // looking straight down/up
     for (int i = 0; i < 2; ++i) p.pos[i] += k * (mf * fh[i] + mr * r[i]);
     p.pos[2] += k * mu;
-    // zoom: roda do mouse, L1/R1
+    // zoom: mouse wheel, L1/R1
     const float wheel = GetMouseWheelMove();
     if (wheel != 0.f) g_zoom *= std::pow(0.88f, wheel);
     g_zoom *= std::exp(1.2f * dt * (float(padDown(GAMEPAD_BUTTON_LEFT_TRIGGER_1)) - float(padDown(GAMEPAD_BUTTON_RIGHT_TRIGGER_1))));
     g_zoom = std::clamp(g_zoom, 0.15f, 1.6f);
 }
 
-// Apresentacao, a cada quadro, antes do desenho. gc = a camera do jogo do instantaneo. Devolve a vista para o desenho (on = falso:
-// a camera livre do F5 decide).
+// Presentation, every frame, before drawing. gc = the game camera from the snapshot. Returns the view for drawing (on = false:
+// the F5 free camera decides).
 static double g_lastUpdate = 0.0;
 static wotm_freecam::View update(const wotm::GameCamera &gc)
 {
     const double now = GetTime();
     g_lastUpdate = now;
     bool toggle = IsKeyPressed(KEY_F9) || chord();
-    if (toggle && g_phase == Phase::Off && wotm_pad::inMenus())   // so na luta: nos menus do jogo (telas do shell) nao liga
+    if (toggle && g_phase == Phase::Off && wotm_pad::inMenus())   // fights only: it doesn't turn on in the game's menus (shell screens)
     {
         toggle = false;
-        std::fprintf(stderr, "[photo] ignorado nos menus\n");
+        std::fprintf(stderr, "[photo] ignored in menus\n");
     }
-    // partida em rede: a pausa do modo foto pararia so este PC (os outros esperariam por ele)
+    // network match: photo mode's pause would stop only this PC (the others would wait for it)
     static const bool s_net = [] { const char *e = std::getenv("WOTM_NET"); return e && *e; }();
     const bool autoDue = std::getenv("WOTM_PHOTO") != nullptr;
     if (s_net && (toggle || autoDue))
@@ -195,12 +198,12 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
         if (!said && (toggle || gc.ok))
         {
             said = true;
-            std::fprintf(stderr, "[photo] desligado na partida em rede\n");
+            std::fprintf(stderr, "[photo] off in network matches\n");
         }
         return {};
     }
-    // Teste sem teclado (WOTM_PHOTO=<s>): s segundos depois da primeira cena liga, gira e anda de lado, salva (HUD, sem HUD, com zoom)
-    // e sai; as fotos vao para a pasta screenshots
+    // Keyboardless test (WOTM_PHOTO=<s>): s seconds after the first scene it turns on, turns and strafes, saves (HUD, no HUD, zoomed)
+    // and exits; the photos go to the screenshots folder
     static const double autoAt = std::getenv("WOTM_PHOTO") ? std::atof(std::getenv("WOTM_PHOTO")) : -1.0;
     static double firstT = -1.0;
     static int autoStage = 0;
@@ -210,14 +213,14 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
     {
         toggle = g_phase == Phase::Off;
         autoStage = 1;
-        std::fprintf(stderr, "[photo] teste automatico: liga\n");
+        std::fprintf(stderr, "[photo] automatic test: on\n");
     }
     if (autoStage >= 1 && autoStage < 7 && g_phase == Phase::On)
     {
         const float dt = std::min(GetFrameTime(), 0.1f);
         if (autoStage == 2)
-        {   // a camera vai ate a frente do feixe da luz mais perto (olho do monstro do jogador), a 70, olhando para ela: o flare tem que
-            // acender mesmo sem estar na tela na pausa. Sem luz: meia volta em torno de um ponto 170 a frente
+        {   // the camera moves in front of the nearest light's beam (the player's monster's eye), 70 away, looking at it: the flare
+            // must light up even though it was off screen at pause time. No light: a half turn around a point 170 ahead
             (void)dt;
             const float a = std::clamp(float(autoT - 0.4) / 2.f, 0.f, 1.f);
             const float h = g_start.heading;
@@ -234,7 +237,7 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
             }
         }
         if (autoStage == 3 && g_autoFireOk)
-        {   // ao lado do emissor do fogo, um pouco acima, olhando para ele
+        {   // beside the fire emitter, a bit above, looking at it
             g_pose.pos[0] = g_autoFire[0] + 110.f;
             g_pose.pos[1] = g_autoFire[1] - 40.f;
             g_pose.pos[2] = g_autoFire[2] + 30.f;
@@ -247,14 +250,14 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
         {
             switch (autoStage)
             {
-            case 1: g_saveReq = true; break;                                   // camera do jogo (referencia)
-            case 2: g_saveReq = true; break;                                   // depois de andar: HUD seguindo a camera
-            case 3: g_hide = true; g_saveReq = true; break;                    // sem HUD
+            case 1: g_saveReq = true; break;                                   // game camera (reference)
+            case 2: g_saveReq = true; break;                                   // after moving: HUD following the camera
+            case 3: g_hide = true; g_saveReq = true; break;                    // no HUD
             case 4: g_hide = false; g_zoom = 0.5f; g_saveReq = true; break;    // zoom
-            case 5: g_legendShot = true; break;                                // quadro com a legenda (photo_test_legend.png)
+            case 5: g_legendShot = true; break;                                // frame with the legend (photo_test_legend.png)
             case 6: startLeaving(); break;
             }
-            std::fprintf(stderr, "[photo] teste automatico: etapa %d\n", autoStage);
+            std::fprintf(stderr, "[photo] automatic test: stage %d\n", autoStage);
             ++autoStage;
         }
     }
@@ -266,7 +269,7 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
             g_pose.pos[0] = gc.pos[0];
             g_pose.pos[1] = gc.pos[1];
             g_pose.pos[2] = gc.pos[2];
-            g_pose.heading = std::atan2(gc.fwd[0], gc.fwd[1]);   // como o F5 (mathfRotationFromVector)
+            g_pose.heading = std::atan2(gc.fwd[0], gc.fwd[1]);   // like F5 (mathfRotationFromVector)
             g_pose.pitch = std::atan2(gc.fwd[2], std::sqrt(gc.fwd[0] * gc.fwd[0] + gc.fwd[1] * gc.fwd[1]));
             g_start = g_pose;
             g_zoom = 1.f;
@@ -276,21 +279,21 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
             g_logged = false;
             g_autoPivotOk = false;
             g_autoFireOk = false;
-            g_wotmFreeCam = false;   // a camera livre de debug sai: o modo foto nao escreve no _cs do jogo
+            g_wotmFreeCam = false;   // the debug free camera turns off: photo mode doesn't write to the game's _cs
             wotmPhotoPause(true);
             g_phase = Phase::Entering;
             g_enterT = now;
-            std::fprintf(stderr, "[photo] ligado\n");
+            std::fprintf(stderr, "[photo] on\n");
         }
         break;
     case Phase::Entering:
         if (wotmPaused())
             g_phase = Phase::On;
-        else if (toggle || now - g_enterT > 1.5)   // tela sem quadro do jogo (filme, carga): a pausa nao chega
+        else if (toggle || now - g_enterT > 1.5)   // screen with no game frame (movie, loading): the pause never arrives
         {
             wotmPhotoPause(false);
             g_phase = Phase::Off;
-            std::fprintf(stderr, "[photo] cancelado: a pausa nao chegou (tela sem quadro do jogo)\n");
+            std::fprintf(stderr, "[photo] canceled: the pause never arrived (screen with no game frame)\n");
         }
         break;
     case Phase::On:
@@ -305,15 +308,15 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
         bool held = IsKeyDown(KEY_F9) || IsKeyDown(KEY_ESCAPE);
         for (int b = 1; b < st::kPadButtons && !held; ++b)
             if (g_exitHeld[b] && padDown(b)) held = true;
-            else g_exitHeld[b] = false;   // solto uma vez, nao conta mais
-        // um botao que o raylib ve sempre apertado deixava o jogo parado para sempre: depois de 1 s ele continua de qualquer jeito
+            else g_exitHeld[b] = false;   // released once, it no longer counts
+        // a button raylib always sees as held used to leave the game paused forever: after 1 s it resumes regardless
         if (held && now - g_leaveT < 1.0) return wotm_freecam::View{};
     }
     if (g_phase == Phase::Leaving)
     {
         wotmPhotoPause(false);
         g_phase = Phase::Off;
-        std::fprintf(stderr, "[photo] desligado\n");
+        std::fprintf(stderr, "[photo] off\n");
     }
     wotm_freecam::View v;
     if (g_phase == Phase::Off || g_phase == Phase::Entering)
@@ -328,7 +331,7 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
             g_zoom = 1.f;
         }
         if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) || padPressed(GAMEPAD_BUTTON_RIGHT_FACE_LEFT)) g_saveReq = true;
-        // o quadro da foto sai sem a legenda nem o aviso (afterRender o grava)
+        // the photo frame comes out without the legend or the notice (afterRender saves it)
         if (!g_saveReq)
         {
             postLegend();
@@ -344,13 +347,13 @@ static wotm_freecam::View update(const wotm::GameCamera &gc)
     return v;
 }
 
-// ------------------------------------------------------------------ camera do jogo -> camera livre
+// ------------------------------------------------------------------ game camera -> free camera
 struct Eye { float o[3], r[3], f[3], u[3]; };
 static Eye eyeOf(const wotm::GameCamera &c)
 {
     Eye e;
     for (int i = 0; i < 3; ++i) { e.o[i] = c.pos[i]; e.f[i] = c.fwd[i]; e.u[i] = c.up[i]; }
-    // direita = frente x cima (a mesma do wotmFreeCamAxes e da linha 0 da worldToScreenMat)
+    // right = forward x up (the same as wotmFreeCamAxes and row 0 of worldToScreenMat)
     e.r[0] = e.f[1] * e.u[2] - e.f[2] * e.u[1];
     e.r[1] = e.f[2] * e.u[0] - e.f[0] * e.u[2];
     e.r[2] = e.f[0] * e.u[1] - e.f[1] * e.u[0];
@@ -359,7 +362,7 @@ static Eye eyeOf(const wotm::GameCamera &c)
     return e;
 }
 static float dot3(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-// mundo -> (direita, frente, cima) do olho; point = com a translacao
+// world -> eye (right, forward, up); point = include the translation
 static void toEye(const Eye &e, const float p[3], bool point, float q[3])
 {
     const float d[3] = {p[0] - (point ? e.o[0] : 0.f), p[1] - (point ? e.o[1] : 0.f), p[2] - (point ? e.o[2] : 0.f)};
@@ -372,8 +375,8 @@ static void fromEye(const Eye &e, const float q[3], bool point, float p[3])
     for (int i = 0; i < 3; ++i) p[i] = (point ? e.o[i] : 0.f) + q[0] * e.r[i] + q[1] * e.f[i] + q[2] * e.u[i];
 }
 
-// Projecao do jogo: focos horizontal (px do GS) e vertical (linhas) da worldToScreenMat da vista 0 (linha 0 = fh*direita + c*frente,
-// linha 1 = -fv*cima + c*frente, linha 3 = frente). Com a RAM parada (pausa) a matriz e a do quadro pausado.
+// Game projection: horizontal (GS px) and vertical (lines) focal lengths from view 0's worldToScreenMat (row 0 = fh*right +
+// c*forward, row 1 = -fv*up + c*forward, row 3 = forward). With the RAM still (paused) the matrix is the paused frame's.
 struct Focus { float fh = 384.f, fv = 180.48f; };
 static Focus gameFocus(const wotm::Ram &ram, const wotm::GameCamera &gc)
 {
@@ -397,7 +400,7 @@ static Focus gameFocus(const wotm::Ram &ram, const wotm::GameCamera &gc)
     f.fh = f.fv * (384.f / 180.48f);
     return f;
 }
-// Ponto do mundo -> deslocamento do centro da tela do jogo (px do GS em x, linhas em y); falso atras da camera
+// World point -> offset from the game screen's center (GS px in x, lines in y); false when behind the camera
 static bool project(const Eye &e, const Focus &fc, const float w[3], float &x, float &y, float *depth = nullptr)
 {
     float q[3];
@@ -409,8 +412,8 @@ static bool project(const Eye &e, const Focus &fc, const float w[3], float &x, f
     return true;
 }
 
-// Matriz (linhas = eixos, linha 3 = posicao) presa a camera do jogo -> presa a livre; os eixos da tela encolhem com o zoom (o HUD
-// fica do mesmo tamanho na tela)
+// Matrix (rows = axes, row 3 = position) attached to the game camera -> attached to the free one; the screen axes shrink with the
+// zoom (the HUD keeps the same size on screen)
 static void rebase(wotm::M4 &m, const Eye &g, const Eye &f, float zoom)
 {
     for (int row = 0; row < 4; ++row)
@@ -424,7 +427,7 @@ static void rebase(wotm::M4 &m, const Eye &g, const Eye &f, float zoom)
     }
 }
 
-// Lens flare da tela do jogo para a da camera livre (FlareFrame em px do GS, centro cx, cy)
+// Lens flare from the game camera's screen to the free camera's (FlareFrame in GS px, center cx, cy)
 static void reprojectFlares(wotm::Particles::FlareFrame &fr, const Eye &g, const Eye &f, const Focus &fg, const Focus &ff)
 {
     std::vector<wotm::Particles::Flare> out;
@@ -437,7 +440,7 @@ static void reprojectFlares(wotm::Particles::FlareFrame &fr, const Eye &g, const
         float w[3], q[3];
         if (inf)
         {
-            fromEye(g, qg, false, w);   // so a direcao
+            fromEye(g, qg, false, w);   // direction only
             toEye(f, w, false, q);
             if (q[1] <= 1e-4f) continue;
         }
@@ -459,19 +462,19 @@ static void reprojectFlares(wotm::Particles::FlareFrame &fr, const Eye &g, const
     fr.e.swap(out);
 }
 
-// Lista do lens flare refeita pela camera livre: o que o hierLightNode (luzes do hier) e o particleAddLensFlareToList (sistemas com
-// vis.lightColor & 0x1000000) poem na lista, projetado como o particleLensFlareTestZbuffer (descarta W < 1 e fora da tela; distance
-// = W, ou 100 com a luz no infinito; Z do GS = a + b / W). Sem ID (o drawFlares nao faz a media com o quadro anterior: a camera muda a
-// cada quadro). Falso = sem fonte nenhuma (o chamador reprojeta a lista do quadro pausado).
+// Lens flare list rebuilt from the free camera: what hierLightNode (hier lights) and particleAddLensFlareToList (systems with
+// vis.lightColor & 0x1000000) put on the list, projected like particleLensFlareTestZbuffer (drops W < 1 and off screen; distance
+// = W, or 100 for a light at infinity; GS Z = a + b / W). No ID (drawFlares doesn't average with the previous frame: the camera
+// changes every frame). False = no source at all (the caller reprojects the paused frame's list).
 static bool rebuildFlares(wotm::Particles::FlareFrame &fr, const wotm::Ram &ram, const std::vector<wotm::WorldLight> &lights,
                           const std::vector<wotm::FxSystem> &systems, const Eye &f, const Focus &ff)
 {
     using wotm::Particles;
-    std::vector<uint32_t> lit;   // sistemas de particula com luz
+    std::vector<uint32_t> lit;   // particle systems with light
     for (const wotm::FxSystem &sy : systems)
         if (ram.u32(sy.base + 0x2EAC) & 0x1000000u) lit.push_back(sy.base);   // vis.lightColor
     if (lights.empty() && lit.empty()) return false;
-    if (fr.nspr == 0)   // a pausa veio de um quadro sem flare: a tabela dos sprites (lensFlarePacketInit) e a moldura vem da RAM parada
+    if (fr.nspr == 0)   // the pause came from a frame with no flare: the sprite table (lensFlarePacketInit) and frame come from the still RAM
     {
         Particles::FlareFrame t;
         Particles::readFlares(ram, t);
@@ -488,7 +491,7 @@ static bool rebuildFlares(wotm::Particles::FlareFrame &fr, const wotm::Ram &ram,
         const float sx = ff.fh * q[0] / q[1], sy = -ff.fv * q[2] / q[1];
         if (sx < x0 || sx > x1 || sy < y0 || sy > y1) return;
         const bool inf = (fl.flags & 0x80) != 0;
-        // o particleLensFlareRender soma o centroide das amostras visiveis; o drawFlares o desfaz supondo todas visiveis
+        // particleLensFlareRender adds the centroid of the visible samples; drawFlares undoes it assuming all are visible
         const float shift = 1.5f - (inf ? 2.f : 1.f);
         fl.x = fr.cx + sx + shift;
         fl.y = fr.cy + sy + shift;
@@ -500,29 +503,29 @@ static bool rebuildFlares(wotm::Particles::FlareFrame &fr, const wotm::Ram &ram,
     for (const wotm::WorldLight &l : lights)
     {
         Particles::Flare fl;
-        fl.flags = l.flags;   // o byte das flags vai no lugar do Zfudge: denormal, vale o minimo (1,5)
+        fl.flags = l.flags;   // the flags byte sits where Zfudge goes: a denormal, so it counts as the minimum (1.5)
         fl.intensity = l.intensity;
         for (int k = 0; k < 3; ++k) fl.rgb[k] = l.rgb[k];
         fl.dot = 1.f;
         fl.bw = 0.f;
         if ((l.flags & 0x80) == 0 && (l.flags & 8))
-        {   // dotProd = -(olho -> luz) . feixe
+        {   // dotProd = -(eye -> light) . beam
             const float d[3] = {l.p[0] - f.o[0], l.p[1] - f.o[1], l.p[2] - f.o[2]};
             const float n = std::sqrt(dot3(d, d));
             fl.dot = n > 1e-6f ? -dot3(d, l.beam) / n : 1.f;
             fl.bw = l.bw;
         }
         else if (l.flags & 0x80)
-            fl.bw = 1.f;   // no infinito o jogo nao grava dot/bw (ficam os da entrada anterior); aqui feixe inteiro
+            fl.bw = 1.f;   // at infinity the game doesn't write dot/bw (the previous entry's remain); here, full beam
         add(l.p, fl);
     }
     for (uint32_t b : lit)
     {
         Particles::Flare fl;
         const uint32_t c = ram.u32(b + 0x2EAC);
-        const uint32_t src = (c & 0x8000000u) ? 0x2CA0u : 0x2C80u;   // emit.ParticleToEmitVec ou FOVsphere
+        const uint32_t src = (c & 0x8000000u) ? 0x2CA0u : 0x2C80u;   // emit.ParticleToEmitVec or FOVsphere
         const float p[3] = {ram.f32(b + src), ram.f32(b + src + 4), ram.f32(b + src + 8)};
-        // o Zfudge (info + 0x1C) vai na palavra +0x10 e o byte baixo dela vira as flags (3)
+        // Zfudge (info + 0x1C) goes in word +0x10 and its low byte becomes the flags (3)
         const uint32_t word = (ram.u32(b + 0x2E4C) & ~0xFFu) | 3u;
         fl.flags = word;
         std::memcpy(&fl.zfudge, &word, 4);
@@ -534,9 +537,9 @@ static bool rebuildFlares(wotm::Particles::FlareFrame &fr, const wotm::Ram &ram,
     return true;
 }
 
-// Fogo da cabeca do Agamo (preset 141, IdolHeadFlame: textura Fireball, texInfo 8; mistura aditiva 0x48; 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md) nos emissores
-// percorridos que nao tem um sistema com particulas vivas perto: simulado 30 fields com o emissor parado (comeca aquecido, como no jogo
-// ja rodando) e congelado durante a sessao
+// Agamo's head fire (preset 141, IdolHeadFlame: Fireball texture, texInfo 8; additive blend 0x48; 75f5be1:docs/investigacoes/2026-10-21/fogo_agamo.md) on
+// traversed emitters with no system with live particles nearby: simulated for 30 fields with the emitter still (starts warmed up,
+// as in a game already running) and frozen for the session
 static void synthFire(wotm::Scene &scene, const wotm::Ram &ram)
 {
     wotm::Particles::SynthSystem sys;
@@ -554,8 +557,8 @@ static void synthFire(wotm::Scene &scene, const wotm::Ram &ram)
         }
         if (!g_logged)
         {
-            std::fprintf(stderr, "[photo] fogo do Agamo no emissor %06x (%.0f %.0f %.0f): %s\n", em.node, em.e[0], em.e[1], em.e[2],
-                         live ? "particulas do jogo" : "simulado");
+            std::fprintf(stderr, "[photo] Agamo fire at emitter %06x (%.0f %.0f %.0f): %s\n", em.node, em.e[0], em.e[1], em.e[2],
+                         live ? "game particles" : "simulated");
             for (int k = 0; k < 3; ++k) g_autoFire[k] = em.e[k];
             g_autoFireOk = true;
         }
@@ -567,7 +570,7 @@ static void synthFire(wotm::Scene &scene, const wotm::Ram &ram)
             uint32_t rng = 0x2545F491u ^ em.node;
             for (int k = 0; k < 30; ++k) wotm::flame::step(fl, em.e, em.r0, em.r2, true, rng);
             it = g_flames.emplace(em.node, std::move(fl)).first;
-            std::fprintf(stderr, "[photo] fogo simulado no emissor %06x (%.0f %.0f %.0f): %zu particulas\n", em.node, em.e[0], em.e[1], em.e[2],
+            std::fprintf(stderr, "[photo] simulated fire at emitter %06x (%.0f %.0f %.0f): %zu particles\n", em.node, em.e[0], em.e[1], em.e[2],
                          it->second.parts.size());
         }
         for (const wotm::flame::Part &q : it->second.parts)
@@ -576,8 +579,8 @@ static void synthFire(wotm::Scene &scene, const wotm::Ram &ram)
     if (!sys.sprites.empty()) scene.fx.synth.push_back(std::move(sys));
 }
 
-// Pausado no modo foto, depois do show: o HUD e o resto que o jogo prendeu a camera dele passam para a livre (ou somem com o HUD
-// escondido). split = o quadro pausado era de tela dividida.
+// Paused in photo mode, after show: the HUD and everything else the game attached to its camera move to the free one (or vanish
+// with the HUD hidden). split = the paused frame was split screen.
 static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::GameCamera &gameCam, const wotm::GameCamera &freeCam,
                          const wotm_freecam::View &v, const std::vector<wotm::HudAnchor> &anchors, bool split)
 {
@@ -589,20 +592,20 @@ static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::G
         if (!rebuildFlares(scene.fx.flares, ram, scene.worldLights, scene.fx.systems, f, ff))
             reprojectFlares(scene.fx.flares, g, f, fg, ff);
     }
-    scene.fx.resetFlareDebounce();   // a fracao visivel e a da camera nova, sem media com a da antiga
+    scene.fx.resetFlareDebounce();   // the visible fraction is the new camera's, not averaged with the old one's
     synthFire(scene, ram);
     if (!g_logged)
     {
         g_logged = true;
         int n141 = 0;
         for (const wotm::WorldEmitter &em : scene.emitters) n141 += em.preset == 141;
-        std::fprintf(stderr, "[photo] coleta: %zu luzes com lens flare, %zu emissores (%d do fogo 141), %zu sistemas de particula\n",
+        std::fprintf(stderr, "[photo] scene walk: %zu lights with lens flare, %zu emitters (%d of fire 141), %zu particle systems\n",
                      scene.worldLights.size(), scene.emitters.size(), n141, scene.fx.systems.size());
         float best = 1e30f;
         for (const wotm::WorldLight &l : scene.worldLights)
         {
             const float d[3] = {l.p[0] - g.o[0], l.p[1] - g.o[1], l.p[2] - g.o[2]};
-            std::fprintf(stderr, "[photo]   luz (%.0f %.0f %.0f) flags %02x I %.0f a %.0f do olho (no %06x, cs %06x)\n", l.p[0], l.p[1], l.p[2], l.flags,
+            std::fprintf(stderr, "[photo]   light (%.0f %.0f %.0f) flags %02x I %.0f at %.0f from the eye (node %06x, cs %06x)\n", l.p[0], l.p[1], l.p[2], l.flags,
                          l.intensity, std::sqrt(dot3(d, d)), l.node, l.cs);
             const float bl = std::sqrt(dot3(l.beam, l.beam));
             if (dot3(d, d) < best && bl > 1e-6f)
@@ -626,7 +629,7 @@ static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::G
     }
     for (auto *list : {&scene.hud, &scene.hp, &scene.hpOverlay, &scene.overlay})
         for (wotm::DrawItem &it : *list) rebase(it.m, g, f, v.zoom);
-    // deslocamento (tela do jogo, 640 x 224) de cada icone de vida da vista 0; NAN = atras da camera livre
+    // offset (game screen, 640 x 224) of each health icon in view 0; NAN = behind the free camera
     std::vector<std::array<float, 2>> shift(anchors.size(), {NAN, NAN});
     for (size_t i = 0; i < anchors.size(); ++i)
     {
@@ -645,7 +648,7 @@ static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::G
                                    return false;
                                }),
                 rects.end());
-    // icone de vida do jogo (sem as barras): os dois quadrados centrados no ponto anotado
+    // the game's health icon (not the bars): the two quads centered on the recorded point
     auto &polys = scene.screenPolys;
     polys.erase(std::remove_if(polys.begin(), polys.end(),
                                [&](wotm::TextQuad &t) {
@@ -662,14 +665,14 @@ static void applyToScene(wotm::Scene &scene, const wotm::Ram &ram, const wotm::G
                 polys.end());
 }
 
-// Apresentacao, depois do EndTextureMode do quadro: grava a foto pedida (o quadro acabou de sair sem a legenda)
+// Presentation, after the frame's EndTextureMode: saves the requested photo (the frame was just drawn without the legend)
 static void afterRender()
 {
     if (g_legendShot)
     {
         g_legendShot = false;
-        std::fprintf(stderr, "[photo] teste automatico: quadro com a legenda %s\n",
-                     wotm_live::exportFrame("photo_test_legend.png") ? "em photo_test_legend.png" : "nao gravado");
+        std::fprintf(stderr, "[photo] automatic test: frame with the legend %s\n",
+                     wotm_live::exportFrame("photo_test_legend.png") ? "in photo_test_legend.png" : "not saved");
     }
     if (!g_saveReq) return;
     g_saveReq = false;
@@ -685,17 +688,17 @@ static void afterRender()
     for (int n = 2; fs::exists(file, ec) && n < 100; ++n) file = dir / (std::string(stamp) + "_" + std::to_string(n) + ".png");
     if (wotm_live::exportFrame(file.string().c_str()))
     {
-        std::fprintf(stderr, "[photo] foto salva em %s\n", file.string().c_str());
+        std::fprintf(stderr, "[photo] photo saved to %s\n", file.string().c_str());
         say("PHOTO SAVED");
     }
     else
     {
-        std::fprintf(stderr, "[photo] nao consegui gravar %s\n", file.string().c_str());
+        std::fprintf(stderr, "[photo] could not save %s\n", file.string().c_str());
         say("COULD NOT SAVE THE PHOTO", 3.0);
     }
 }
 
-// Atlas da fonte do jogo para a legenda: o do texto do quadro, ou o ultimo visto (HUD escondido, quadro sem texto)
+// Game font atlas for the legend: the one from the frame's text, or the last one seen (HUD hidden, frame without text)
 static uint64_t fontTex0(const std::vector<wotm::TextQuad> &text)
 {
     if (!text.empty() && text.front().tex0) g_fontTex0 = text.front().tex0;
@@ -704,7 +707,7 @@ static uint64_t fontTex0(const std::vector<wotm::TextQuad> &text)
 } // namespace wotm_photo
 
 bool wotmPhotoActive() { return wotm_photo::g_phase != wotm_photo::Phase::Off; }
-// Camera livre de debug (F5, wotm_freecam.inc): a mesma legenda de icones no lugar da linha de texto
+// Debug free camera (F5, wotm_freecam.inc): the same icon legend instead of the text line
 static void wotmFreeCamLegend(const wotm_freecam::View &v)
 {
     using wotm_legend::Icon;
@@ -719,8 +722,8 @@ static void wotmFreeCamLegend(const wotm_freecam::View &v)
                        {Icon{0, "F5"}, {}, "EXIT"}},
                       1.f, 0.8f);
 }
-// Apresentacao, todo quadro (wotmFotoKeys): se o desenho nativo parou de chamar o update (tela sem cena nativa), o modo foto sai e o
-// jogo volta, em vez de ficar pausado sem legenda
+// Presentation, every frame (wotmFotoKeys): if native drawing stopped calling update (a screen with no native scene), photo mode
+// exits and the game resumes, instead of staying paused with no legend
 void wotmPhotoWatchdog()
 {
     using namespace wotm_photo;
@@ -728,6 +731,6 @@ void wotmPhotoWatchdog()
     {
         wotmPhotoPause(false);
         g_phase = Phase::Off;
-        std::fprintf(stderr, "[photo] desligado: a tela deixou de ter cena nativa\n");
+        std::fprintf(stderr, "[photo] off: the screen no longer has a native scene\n");
     }
 }

@@ -1,14 +1,14 @@
-// wotm_rumble.inc: vibracao dos gamepads (opcao VIBRATION da aba CONTROLS do "Recompiled options", WOTM_VIBRATION, ligada por
-// padrao). Incluido por wotm_live.inc antes do wotm_mainmenu.inc (que chama o install).
-//  - O jogo manda os motores pelo scePadSetActDirect(porta, slot, dados[6]), com o alinhamento que o inputUpdateState pede: dados[0]
-//    e o motor pequeno (0/1), dados[1] o grande (0..255). No runtime ele e um stub vazio; o gancho manda os dois motores ao controle do
-//    jogador por XInput (o GLFW do raylib nao tem vibracao no Windows).
-//  - A chave de vibracao do jogo por pad (inputUseActuator, que o VIBRATION ON/OFF da pausa e da tela de opcoes do retail mudavam; o
-//    port tirou as duas linhas) fica sempre ligada: quem decide e a opcao. Desligar a opcao para os motores na hora.
-//  - Jogador: porta + 2 no slot 1 (jogadores 3 e 4, como no scePadRead; wotm_pad.inc). Controles dele: os do wotm_pad::devicesOf.
-//  - Controle do raylib -> indice do XInput: entre os gamepads do raylib com nome de XInput (o GLFW os chama "Xbox Controller",
-//    "Wireless Xbox Controller" ou "XInput ..."), o k-esimo e o k-esimo indice do XInput conectado (o GLFW os abre nessa ordem).
-//    Controle que o Windows le por DirectInput (DualShock/DualSense sem o Steam Input) nao vibra.
+// wotm_rumble.inc: gamepad rumble (VIBRATION option on the CONTROLS tab of "Recompiled options", WOTM_VIBRATION, on by
+// default). Included by wotm_live.inc before wotm_mainmenu.inc (which calls install).
+//  - The game drives the motors through scePadSetActDirect(port, slot, data[6]), with the alignment inputUpdateState sets up: data[0]
+//    is the small motor (0/1), data[1] the large one (0..255). In the runtime it's an empty stub; the hook sends both motors to the
+//    player's pad over XInput (raylib's GLFW has no rumble on Windows).
+//  - The game's per-pad rumble switch (inputUseActuator, which the retail VIBRATION ON/OFF in pause and the options screen used to
+//    change; the port removed both lines) stays always on: the option decides. Turning the option off stops the motors immediately.
+//  - Player: port + 2 on slot 1 (players 3 and 4, as in scePadRead; wotm_pad.inc). That player's pads: those from wotm_pad::devicesOf.
+//  - raylib pad -> XInput index: among raylib gamepads with an XInput name (GLFW calls them "Xbox Controller",
+//    "Wireless Xbox Controller" or "XInput ..."), the k-th one is the k-th connected XInput index (GLFW opens them in that order).
+//    A pad that Windows reads through DirectInput (DualShock/DualSense without Steam Input) doesn't rumble.
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -16,7 +16,7 @@
 #include <thread>
 
 #ifdef _WIN32
-// Sem windows.h (briga com os nomes do raylib): so o que carrega o XInput
+// No windows.h (it clashes with raylib's names): only what's needed to load XInput
 extern "C" __declspec(dllimport) void *__stdcall LoadLibraryA(const char *name);
 extern "C" __declspec(dllimport) void *__stdcall GetProcAddress(void *module, const char *name);
 #endif
@@ -35,10 +35,10 @@ using SetStateFn = unsigned long (*)(unsigned long, XVib *);
 static GetStateFn g_get = nullptr;
 static SetStateFn g_set = nullptr;
 static PS2Runtime::RecompiledFunction g_origUse = nullptr, g_origAct = nullptr;
-static uint32_t g_last[4] = {~0u, ~0u, ~0u, ~0u};   // ultimo (esquerdo << 16 | direito) mandado a cada indice do XInput
-static uint8_t g_want[4][2] = {};                   // o que o jogo pediu por jogador (motor pequeno, grande)
+static uint32_t g_last[4] = {~0u, ~0u, ~0u, ~0u};   // last (left << 16 | right) sent to each XInput index
+static uint8_t g_want[4][2] = {};                   // what the game asked for per player (small motor, large)
 static bool g_wasOn = true;
-static std::atomic<unsigned> g_pulseGen{0};   // pulso de aviso em curso (o mais novo vale)
+static std::atomic<unsigned> g_pulseGen{0};   // feedback pulse in progress (the newest one wins)
 
 static bool loadXInput()
 {
@@ -61,7 +61,7 @@ static bool isXInputName(const char *n)
     return n && (!std::strncmp(n, "Xbox", 4) || !std::strncmp(n, "Wireless Xbox", 13) || !std::strncmp(n, "XInput", 6));
 }
 
-// Indice do XInput do gamepad `pad` do raylib (-1: nao e XInput ou nao achado)
+// XInput index of raylib gamepad `pad` (-1: not XInput or not found)
 static int xinputIndexOf(int pad)
 {
     int k = -1, seen = 0;
@@ -92,7 +92,7 @@ static void send(int x, uint16_t left, uint16_t right)
     g_set(static_cast<unsigned long>(x), &vib);
 }
 
-// Manda a cada controle o pedido do jogador que ele alimenta (o mais forte, se o controle alimentar mais de um)
+// Sends each pad the request of the player it feeds (the strongest, if the pad feeds more than one)
 static void apply()
 {
     const bool on = wotm::settings::on(wotm::settings::Vibration);
@@ -113,7 +113,7 @@ static void apply()
     for (int x = 0; x < 4; ++x) send(x, left[x], right[x]);
 }
 
-// scePadSetActDirect(porta, slot, dados): o stub do runtime devolvia 1 sem fazer nada
+// scePadSetActDirect(port, slot, data): the runtime's stub returned 1 and did nothing
 static void actHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc != wotm::fn::scePadSetActDirect)
@@ -128,12 +128,12 @@ static void actHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         const bool was = g_want[player][0] || g_want[player][1];
         g_want[player][0] = rdram[data] ? 1 : 0;
         g_want[player][1] = rdram[data + 1];
-        static int s_logs = 0;   // as primeiras no log, para conferir sem o controle na mao
+        static int s_logs = 0;   // log the first few, to check without holding the pad
         if (!was && (g_want[player][0] || g_want[player][1]) && s_logs < 3)
         {
             ++s_logs;
-            std::fprintf(stderr, "[rumble] jogador %d: motor pequeno %d, grande %d (opcao %s)\n", player + 1, g_want[player][0],
-                         g_want[player][1], wotm::settings::on(wotm::settings::Vibration) ? "ligada" : "desligada");
+            std::fprintf(stderr, "[rumble] player %d: small motor %d, large %d (option %s)\n", player + 1, g_want[player][0],
+                         g_want[player][1], wotm::settings::on(wotm::settings::Vibration) ? "on" : "off");
         }
         apply();
     }
@@ -141,15 +141,15 @@ static void actHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     ctx->pc = GPR_U32(ctx, 31);
 }
 
-// inputUseActuator(pad, usar): sempre ligado (a opcao decide no actHook)
+// inputUseActuator(pad, use): always on (the option decides in actHook)
 static void useHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (ctx->pc == wotm::fn::inputUseActuator__Fib) ctx->r[5] = _mm_set_epi64x(0, 1);
     g_origUse(rdram, ctx, runtime);
 }
 
-// Ligar a opcao no painel: um tremor curto em todos os controles XInput conectados, para o jogador sentir que ligou. Depois de
-// 0,25 s volta ao que o jogo pede (apply). O pulso passa por cima do cache do send.
+// Turning the option on in the panel: a short buzz on every connected XInput pad, so the player feels it's on. After
+// 0.25 s it goes back to what the game asks for (apply). The pulse bypasses send's cache.
 static void pulse()
 {
     const unsigned gen = ++g_pulseGen;
@@ -169,7 +169,7 @@ static void pulse()
     }).detach();
 }
 
-// Depois de mudar a opcao no painel (wotm_mainmenu.inc): desligar para os motores na hora; ligar da o pulso de aviso
+// After the option changes in the panel (wotm_mainmenu.inc): off stops the motors immediately; on gives the feedback pulse
 static void poll()
 {
     if (!g_set) return;
@@ -198,7 +198,7 @@ static void install(PS2Runtime &runtime)
 {
     if (!loadXInput())
     {
-        std::fprintf(stderr, "[rumble] XInput indisponivel: sem vibracao\n");
+        std::fprintf(stderr, "[rumble] XInput unavailable: no rumble\n");
         return;
     }
     g_wasOn = wotm::settings::on(wotm::settings::Vibration);
@@ -206,7 +206,7 @@ static void install(PS2Runtime &runtime)
         runtime.registerFunction(wotm::fn::scePadSetActDirect, &actHook);
     if ((g_origUse = runtime.lookupFunction(wotm::fn::inputUseActuator__Fib)))
         runtime.registerFunction(wotm::fn::inputUseActuator__Fib, &useHook);
-    std::atexit(stopAll);   // controle nao fica vibrando depois de fechar o jogo
-    std::fprintf(stderr, "[rumble] vibracao por XInput (%s; VIBRATION na aba CONTROLS, WOTM_VIBRATION)\n", g_wasOn ? "ligada" : "desligada");
+    std::atexit(stopAll);   // so no pad keeps rumbling after the game closes
+    std::fprintf(stderr, "[rumble] rumble over XInput (%s; VIBRATION on the CONTROLS tab, WOTM_VIBRATION)\n", g_wasOn ? "on" : "off");
 }
 } // namespace wotm_rumble

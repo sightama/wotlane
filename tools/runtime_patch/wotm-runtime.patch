@@ -1,13 +1,13 @@
 diff --git a/ps2xIOP/CMakeLists.txt b/ps2xIOP/CMakeLists.txt
-index f8d3e44..a55051b 100644
+index f8d3e44..e5d71e0 100644
 --- a/ps2xIOP/CMakeLists.txt
 +++ b/ps2xIOP/CMakeLists.txt
 @@ -42,6 +42,20 @@ target_include_directories(ps2_iop
  
  add_library(ps2x::iop ALIAS ps2_iop)
  
-+# WoTM: IOP do executavel do jogo (wotm), passo 6 de docs/passos/FRONTEIRA.md no repo WoTM. So a RAM do IOP e os caminhos PS2
-+# (ps2_path), sem interpretador nem modulos HLE (src/iop_subsystem_host.cpp). O ps2EntryRunner continua com o ps2_iop.
++# WoTM: the IOP for the game executable (wotm), step 6 of docs/passos/FRONTEIRA.md in the WoTM repo. Only IOP RAM and PS2 paths
++# (ps2_path), with no interpreter and no HLE modules (src/iop_subsystem_host.cpp). ps2EntryRunner keeps the full ps2_iop.
 +add_library(ps2_iop_game STATIC
 +    src/ps2_path.cpp
 +    src/iop_subsystem_host.cpp
@@ -24,7 +24,7 @@ index f8d3e44..a55051b 100644
      enable_testing()
      add_executable(ps2_iop_emulator_tests tests/iop_emulator_tests.cpp)
 diff --git a/ps2xIOP/src/emulator/iop_emulator.cpp b/ps2xIOP/src/emulator/iop_emulator.cpp
-index e5f63a9..c1f1cf3 100644
+index e5f63a9..b8cceea 100644
 --- a/ps2xIOP/src/emulator/iop_emulator.cpp
 +++ b/ps2xIOP/src/emulator/iop_emulator.cpp
 @@ -19,6 +19,7 @@
@@ -39,22 +39,22 @@ index e5f63a9..c1f1cf3 100644
  
      void IopEmulator::runEeCycles(uint64_t eeCycles) noexcept
      {
-+        // WotM: o laco do IOP (varre threads/timers/DMA) custava ~18% da CPU por ser chamado a cada
-+        // checkpoint de EE com poucos ciclos. Acumula e roda em lotes (PS2X_IOP_BATCH, ciclos de IOP).
++        // WotM: the IOP loop (scans threads/timers/DMA) cost ~18% of the CPU because it ran at every
++        // EE checkpoint, each with only a few cycles. Accumulate and run in batches (PS2X_IOP_BATCH, in IOP cycles).
 +        static const uint64_t batch = []() -> uint64_t
 +        {
 +            const char *e = std::getenv("PS2X_IOP_BATCH");
 +            const long v = e ? std::atol(e) : 256;
 +            return v > 0 ? static_cast<uint64_t>(v) : 1u;
 +        }();
-+        // WotM: sem modulo carregado (o jogo nao sobe IRX; wotm_snd.inc) e sem evento pendente nao ha o que rodar: o IOP fica parado.
++        // WotM: with no module loaded (the game loads no IRX; wotm_snd.inc) and no pending event there is nothing to run: the IOP idles.
 +        if (m_impl->modules.empty() && m_impl->pendingDmaInterrupts.empty() && m_impl->pendingGuestCallbacks.empty())
 +        {
 +            static bool s_said = false;
 +            if (!s_said)
 +            {
 +                s_said = true;
-+                std::fprintf(stderr, "[iop] sem modulos: o IOP emulado fica parado\n");
++                std::fprintf(stderr, "[iop] no modules: the emulated IOP stays idle\n");
 +            }
 +            m_impl->eeCycleCarry = 0;
 +            return;
@@ -70,15 +70,15 @@ index e5f63a9..c1f1cf3 100644
          if (iopCycles)
 diff --git a/ps2xIOP/src/iop_subsystem_host.cpp b/ps2xIOP/src/iop_subsystem_host.cpp
 new file mode 100644
-index 0000000..0947e18
+index 0000000..9095b52
 --- /dev/null
 +++ b/ps2xIOP/src/iop_subsystem_host.cpp
 @@ -0,0 +1,122 @@
-+// WoTM (passo 6 de docs/passos/FRONTEIRA.md no repo WoTM): IopSubsystem do executavel do jogo (wotm), no lugar de
-+// iop_subsystem.cpp. Sem interpretador do IOP e sem os modulos HLE (mcserv, dbcman, libsd): nenhum IRX sobe (o hook de
-+// sceSifLoadModule em native/runtime/wotm_snd.inc), pad, CD e memory card sao stubs do lado do EE e o som e nativo, entao nenhum
-+// RPC tem servidor. Desde o passo 9 tambem nao ha RAM do IOP (allocateMemory e afins abaixo). O ps2EntryRunner continua com o IOP
-+// emulado (iop_subsystem.cpp).
++// WoTM (step 6 of docs/passos/FRONTEIRA.md in the WoTM repo): IopSubsystem for the game executable (wotm), replacing
++// iop_subsystem.cpp. No IOP interpreter and no HLE modules (mcserv, dbcman, libsd): no IRX is ever loaded (the hook on
++// sceSifLoadModule in native/runtime/wotm_snd.inc), pad, CD and memory card are EE-side stubs and sound is native, so no
++// RPC has a server. Since step 9 there is no IOP RAM either (allocateMemory and friends below). ps2EntryRunner keeps the emulated
++// IOP (iop_subsystem.cpp).
 +#include "ps2x/iop/iop_subsystem.h"
 +
 +#include <cstdio>
@@ -91,7 +91,7 @@ index 0000000..0947e18
 +        {
 +            static unsigned count = 0;
 +            if (count++ < 4u)
-+                std::fprintf(stderr, "[iop] memoria do IOP pedida (%s, addr=0x%08x, 0x%zx bytes): o wotm nao tem RAM do IOP (FRONTEIRA passo 9)\n",
++                std::fprintf(stderr, "[iop] IOP memory requested (%s, addr=0x%08x, 0x%zx bytes): wotm has no IOP RAM (FRONTEIRA step 9)\n",
 +                             what, address, size);
 +        }
 +    }
@@ -151,10 +151,10 @@ index 0000000..0947e18
 +    {
 +    }
 +
-+    // Sem RAM do IOP: com os filmes nativos (ligados por padrao no wotm, main.cpp) nada do jogo pede memoria do IOP. Medido em
-+    // 2026-10-19 no menu pelo roteiro de pad ate a luta e numa luta de 4 monstros. So o decodificador de filme do proprio jogo
-+    // (strFileOpen/strFileClose, sendToIOP) a usaria, e ele espera a IPU, que nao existe: sem os filmes nativos o jogo ja parava
-+    // ali. Se algo pedir, falha com um aviso.
++    // No IOP RAM: with native movies (on by default in wotm, main.cpp) nothing in the game asks for IOP memory. Measured on
++    // 2026-10-19 going from the menu to a fight with the pad script, and in a 4-monster fight. Only the game's own movie decoder
++    // (strFileOpen/strFileClose, sendToIOP) would use it, and it waits on the IPU, which does not exist: without native movies the
++    // game already stalled there. If anything asks, it fails with a warning.
 +    uint32_t IopSubsystem::allocateMemory(uint32_t size, uint32_t)
 +    {
 +        warnNoRam("sceSifAllocIopHeap", 0u, size);
@@ -169,25 +169,25 @@ index 0000000..0947e18
 +
 +    bool IopSubsystem::readMemory(uint32_t address, void *, size_t size) const
 +    {
-+        warnNoRam("leitura", address, size);
++        warnNoRam("read", address, size);
 +        return false;
 +    }
 +
 +    bool IopSubsystem::writeMemory(uint32_t address, const void *, size_t size)
 +    {
-+        warnNoRam("escrita", address, size);
++        warnNoRam("write", address, size);
 +        return false;
 +    }
 +
 +    bool IopSubsystem::zeroMemory(uint32_t address, size_t size)
 +    {
-+        warnNoRam("zerar", address, size);
++        warnNoRam("zero", address, size);
 +        return false;
 +    }
 +
 +    bool IopSubsystem::isMemoryRange(uint32_t address, size_t size) const
 +    {
-+        warnNoRam("intervalo", address, size);
++        warnNoRam("range", address, size);
 +        return false;
 +    }
 +
@@ -197,7 +197,7 @@ index 0000000..0947e18
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..fd8c192 100644
+index 589d768..11510af 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -212,16 +212,16 @@ index 589d768..fd8c192 100644
  file(GLOB_RECURSE KERNEL_SRC_FILES CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel/*.cpp"
  )
-+# WoTM: o escalonador de uma thread (passo 10 de docs/passos/FRONTEIRA.md no repo WoTM) e so do executavel do jogo (wotm, abaixo)
++# WoTM: the single-thread scheduler (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo) belongs only to the game executable (wotm, below)
 +list(FILTER KERNEL_SRC_FILES EXCLUDE REGEX "EeSchedulerGame\\.cpp$")
  
  target_sources(ps2_runtime PRIVATE
      ${KERNEL_SRC_FILES}
  )
  
-+# PS2X_RUNNER_DIR: pasta com o jogo traduzido (register_functions.cpp, um .cpp por funcao e os dois ps2_recompiled_*.h). Padrao
-+# src/runner (com os headers copiados para include/). WoTM: -DPS2X_RUNNER_DIR=<repo>/recomp/nm compila o runtime "cobaia", traduzido
-+# do ELF com as funcoes reescritas no lugar das originais (tools/wsl/recomp_nm.sh), para comparar comportamento com o retail.
++# PS2X_RUNNER_DIR: folder with the translated game (register_functions.cpp, one .cpp per function and the two ps2_recompiled_*.h). Default
++# src/runner (with the headers copied to include/). WoTM: -DPS2X_RUNNER_DIR=<repo>/recomp/nm builds the "cobaia" (guinea pig) runtime, translated
++# from the ELF with the rewritten functions in place of the originals (tools/wsl/recomp_nm.sh), to compare behavior with retail.
 +set(PS2X_RUNNER_DIR "" CACHE PATH "Generated game code directory (default: src/runner)")
 +if(PS2X_RUNNER_DIR)
 +    set(PS2X_RUNNER_SRC_DIR "${PS2X_RUNNER_DIR}")
@@ -242,8 +242,8 @@ index 589d768..fd8c192 100644
      target_link_options(ps2EntryRunner PRIVATE "-Wl,--undefined=ANativeActivity_onCreate")
 +    set(PS2X_GAME_CODE_TARGET ps2EntryRunner)
  else()
-+    # WoTM: o jogo traduzido vira uma biblioteca de objetos, compilada uma vez e ligada aos dois executaveis: ps2EntryRunner (teste:
-+    # com GS, VU1 e VIF1 emulados, a checagem VU1 x nativo e as fotos) e wotm (o jogo, sem eles; fim deste arquivo)
++    # WoTM: the translated game becomes an object library, compiled once and linked into both executables: ps2EntryRunner (test:
++    # with emulated GS, VU1 and VIF1, the VU1-vs-native check and the snapshots) and wotm (the game, without them; end of this file)
 +    set(PS2X_GAME_SRC_FILES ${RUNNER_SRC_FILES})
 +    list(REMOVE_ITEM PS2X_GAME_SRC_FILES "${RUNNER_MAIN_CPP}" "${ROOT_MAIN_CPP}")
 +    set(PS2X_MAIN_SRC_FILES ${RUNNER_SRC_FILES})
@@ -256,7 +256,7 @@ index 589d768..fd8c192 100644
 +        ${PS2X_MAIN_SRC_FILES}
 +        $<TARGET_OBJECTS:ps2_game_code>
      )
-+    target_link_libraries(ps2_game_code PRIVATE ps2_runtime)   # so os includes e definicoes; os objetos vao aos dois executaveis
++    target_link_libraries(ps2_game_code PRIVATE ps2_runtime)   # only the includes and definitions; the objects go into both executables
 +    set(PS2X_GAME_CODE_TARGET ps2_game_code)
  endif()
  
@@ -298,7 +298,7 @@ index 589d768..fd8c192 100644
      ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/Kernel
  )
  
-+if(PS2X_RUNNER_DIR)   # os ps2_recompiled_*.h do jogo traduzido vem da mesma pasta, antes dos de include/ (que sao os do retail)
++if(PS2X_RUNNER_DIR)   # the translated game's ps2_recompiled_*.h come from the same folder, ahead of the ones in include/ (which are retail's)
 +    target_include_directories(ps2_runtime BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
 +    target_include_directories(ps2EntryRunner BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
 +    target_include_directories(${PS2X_GAME_CODE_TARGET} BEFORE PRIVATE "${PS2X_RUNNER_DIR}")
@@ -322,21 +322,21 @@ index 589d768..fd8c192 100644
      DESTINATION include
  )
 +
-+# WOTM_NATIVE_DIR: pasta native/ do repo WoTM. O codigo do jogo que mora la: wotm_native.hpp e companhia (desenho, particulas, som,
-+# filmes) e native/runtime/ (os hooks do runtime: wotm_live.inc e os .inc que ele inclui, wotm_overrides.cpp, o VU0 nativo).
-+# O microcodigo do VU0 traduzido (wotm_vu0_native.gen.inc, gerado por tools/vu0native.py do repo a partir do ELF; codigo do jogo,
-+# fora de qualquer repo) fica em ${CMAKE_BINARY_DIR}/wotm_gen (build_runtime.ps1 o grava la).
++# WOTM_NATIVE_DIR: the native/ folder of the WoTM repo. The game code that lives there: wotm_native.hpp and friends (drawing, particles, sound,
++# movies) and native/runtime/ (the runtime hooks: wotm_live.inc and the .inc files it includes, wotm_overrides.cpp, the native VU0).
++# The translated VU0 microcode (wotm_vu0_native.gen.inc, generated from the ELF by the repo's tools/vu0native.py; game code,
++# kept out of every repo) lives in ${CMAKE_BINARY_DIR}/wotm_gen (build_runtime.ps1 writes it there).
 +set(WOTM_NATIVE_DIR "" CACHE PATH "WoTM native/ directory")
 +if(NOT WOTM_NATIVE_DIR)
-+    message(FATAL_ERROR "WOTM_NATIVE_DIR nao definido: aponte para a pasta native/ do repo WoTM (-DWOTM_NATIVE_DIR=<repo>/native)")
++    message(FATAL_ERROR "WOTM_NATIVE_DIR is not set: point it at the native/ folder of the WoTM repo (-DWOTM_NATIVE_DIR=<repo>/native)")
 +endif()
 +target_include_directories(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}" "${WOTM_NATIVE_DIR}/runtime" "${CMAKE_BINARY_DIR}/wotm_gen")
-+# netcode (native/net: lockstep e cliente ENet, sem codigo do jogo; o wotm_server e os testes compilam a parte, tools/build_net.bat)
++# netcode (native/net: lockstep and the ENet client, no game code; wotm_server and the tests build separately, tools/build_net.bat)
 +add_subdirectory("${WOTM_NATIVE_DIR}/net" "${CMAKE_BINARY_DIR}/wotm_net" EXCLUDE_FROM_ALL)
 +target_link_libraries(ps2_runtime PRIVATE wotm_net)
-+# main.cpp instala hooks por nome (wotm_syms.h; no runtime cobaia, o wotm_syms_nm.h de wotm_gen troca os enderecos pelos do ELF nmall)
++# main.cpp installs hooks by name (wotm_syms.h; in the cobaia runtime, wotm_syms_nm.h from wotm_gen swaps in the nmall ELF's addresses)
 +target_include_directories(ps2EntryRunner PRIVATE "${WOTM_NATIVE_DIR}" "${CMAKE_BINARY_DIR}/wotm_gen")
-+# icone do executavel (e da janela: o recurso se chama GLFW_ICON)
++# executable icon (and window icon: the resource is named GLFW_ICON)
 +if(WIN32)
 +    target_sources(ps2EntryRunner PRIVATE "${WOTM_NATIVE_DIR}/wotm.rc")
 +endif()
@@ -349,8 +349,8 @@ index 589d768..fd8c192 100644
 +    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/runtime/wotm_posix.cpp")
 +    set_source_files_properties("${WOTM_NATIVE_DIR}/runtime/wotm_posix.cpp" PROPERTIES SKIP_UNITY_BUILD_INCLUSION TRUE)
 +endif()
-+# VU0 nativo e interpretador do VU1: a aritmetica do VU (madd com dois arredondamentos, para zero) nao sobrevive a /fp:fast
-+# (contracao em FMA; no VU1 a corda do Ultra-V ganhava uma tangente de ruido onde os pontos coincidem)
++# Native VU0 and the VU1 interpreter: VU arithmetic (madd with two roundings, toward zero) does not survive /fp:fast
++# (contraction into FMA; on the VU1 Ultra-V's rope picked up a noisy tangent where its points coincide)
 +set(WOTM_VU_STRICT_SOURCES
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"
 +    "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_core.cpp"
@@ -369,12 +369,12 @@ index 589d768..fd8c192 100644
 +    )
 +endif()
 +
-+# WoTM: executavel do jogo (wotm) sem GS, VU1 e VIF1 emulados (passo 5 de docs/passos/FRONTEIRA.md no repo WoTM). Mesmo jogo
-+# traduzido (ps2_game_code) e mesma configuracao do ps2_runtime/ps2EntryRunner, sem os fontes do GS (frontend, rasterizador,
-+# enderecamento da VRAM) e do interpretador do VU1/VU0; o VIF1 e a checagem VU1 x nativo (wotm_vu1check.inc, --vu1cmp, fotos) saem
-+# por PS2X_HW_EMU=0, e tambem o VIF0 (passo 7: o microcodigo do VU0 sobe por copia direta, wotm_live.inc). O escalonador do EE
-+# (EeScheduler.cpp, com threads, fatia de tempo, timers e IOP) da lugar a um laco de uma thread (passo 10, EeSchedulerGame.cpp).
-+# O ps2EntryRunner continua com tudo, como executavel de teste.
++# WoTM: the game executable (wotm), without emulated GS, VU1 and VIF1 (step 5 of docs/passos/FRONTEIRA.md in the WoTM repo). Same
++# translated game (ps2_game_code) and same configuration as ps2_runtime/ps2EntryRunner, minus the GS sources (frontend, rasterizer,
++# VRAM addressing) and the VU1/VU0 interpreter; the VIF1 and the VU1-vs-native check (wotm_vu1check.inc, --vu1cmp, snapshots) drop out
++# via PS2X_HW_EMU=0, and so does the VIF0 (step 7: VU0 microcode is uploaded by a direct copy, wotm_live.inc). The EE scheduler
++# (EeScheduler.cpp, with threads, time slices, timers and IOP) gives way to a single-thread loop (step 10, EeSchedulerGame.cpp).
++# ps2EntryRunner keeps everything, as the test executable.
 +if(TARGET ps2_game_code)
 +    get_target_property(WOTM_RT_SOURCES ps2_runtime SOURCES)
 +    list(FILTER WOTM_RT_SOURCES EXCLUDE REGEX "(gs_frontend|gs_cpu_backend|ps2_gs_memory|ps2_vu1_core|ps2_vu1_upper|ps2_vu1_lower|EeScheduler)\\.cpp$")
@@ -385,7 +385,7 @@ index 589d768..fd8c192 100644
 +                               INTERFACE_COMPILE_DEFINITIONS INTERFACE_LINK_LIBRARIES LINK_LIBRARIES)
 +        get_target_property(WOTM_VALUE ps2_runtime ${WOTM_PROP})
 +        if(WOTM_VALUE)
-+            if(WOTM_PROP MATCHES "LINK_LIBRARIES$")   # passo 6: IOP so com a RAM (ps2xIOP/src/iop_subsystem_host.cpp)
++            if(WOTM_PROP MATCHES "LINK_LIBRARIES$")   # step 6: IOP with RAM only (ps2xIOP/src/iop_subsystem_host.cpp)
 +                list(TRANSFORM WOTM_VALUE REPLACE "^ps2_iop$" "ps2_iop_game")
 +            endif()
 +            set_property(TARGET ps2_runtime_game PROPERTY ${WOTM_PROP} "${WOTM_VALUE}")
@@ -393,7 +393,7 @@ index 589d768..fd8c192 100644
 +    endforeach()
 +    target_compile_definitions(ps2_runtime_game PRIVATE PS2X_HW_EMU=0)
 +
-+    get_target_property(WOTM_MAIN_SOURCES ps2EntryRunner SOURCES)   # main.cpp, wotm.rc e os objetos do jogo
++    get_target_property(WOTM_MAIN_SOURCES ps2EntryRunner SOURCES)   # main.cpp, wotm.rc and the game objects
 +    add_executable(wotm ${WOTM_MAIN_SOURCES})
 +    foreach(WOTM_PROP IN ITEMS INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS LINK_OPTIONS LINK_LIBRARIES)
 +        get_target_property(WOTM_VALUE ps2EntryRunner ${WOTM_PROP})
@@ -408,7 +408,7 @@ index 589d768..fd8c192 100644
 +    ps2x_stage_ffmpeg_runtime_dlls(wotm)
 +endif()
 diff --git a/ps2xRuntime/cmake/ReleaseMode.cmake b/ps2xRuntime/cmake/ReleaseMode.cmake
-index 92ef0d5..9954311 100644
+index 92ef0d5..f8c0730 100644
 --- a/ps2xRuntime/cmake/ReleaseMode.cmake
 +++ b/ps2xRuntime/cmake/ReleaseMode.cmake
 @@ -4,6 +4,27 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
@@ -421,13 +421,13 @@ index 92ef0d5..9954311 100644
 +        target_compile_options(${TargetName} PRIVATE -mavx2 -mbmi2 -mlzcnt -mpopcnt)
 +    endif()
 +    if(PS2X_FAST_LINK)
-+        # Build de desenvolvimento: mesma otimizacao por arquivo, mas sem otimizacao de programa inteiro (/GL, /LTCG, IPO).
-+        # O link cai de ~25 min para segundos/minutos; o codigo fica um pouco mais lento (sem inline entre arquivos).
++        # Development build: same per-file optimization, but no whole-program optimization (/GL, /LTCG, IPO).
++        # Linking drops from ~25 min to seconds/minutes; the code gets a little slower (no inlining across files).
 +        if(MSVC)
 +            target_compile_options(${TargetName} PRIVATE
 +                $<$<CONFIG:Release>:/O2 /Ob2 /Oi /Gy /Gw /GF /Zc:inline /fp:fast /DNDEBUG /arch:AVX2 /GS- /Qspectre->)
-+            # WotM: PDB so com os simbolos publicos (sem /Zi) e .map, para o amostrador do host (PS2X_HOSTPROF) e os [CRASH]
-+            # darem nomes; /OPT:REF /OPT:ICF mantem o binario como sem /DEBUG
++            # WotM: PDB with public symbols only (no /Zi) plus a .map, so the host sampler (PS2X_HOSTPROF) and [CRASH] reports
++            # can show names; /OPT:REF /OPT:ICF keep the binary the same as without /DEBUG
 +            get_target_property(_wotmType ${TargetName} TYPE)
 +            if(_wotmType STREQUAL "EXECUTABLE")
 +                target_link_options(${TargetName} PRIVATE
@@ -454,7 +454,7 @@ index 94a6fa1..01ba50f 100644
      X(atan2)                                  \
      X(calloc)                                 \
 diff --git a/ps2xRuntime/include/ps2_runtime.h b/ps2xRuntime/include/ps2_runtime.h
-index 4b9242c..2efd4d5 100644
+index 4b9242c..9573c70 100644
 --- a/ps2xRuntime/include/ps2_runtime.h
 +++ b/ps2xRuntime/include/ps2_runtime.h
 @@ -375,7 +375,7 @@ public:
@@ -470,7 +470,7 @@ index 4b9242c..2efd4d5 100644
      uint32_t reserveAsyncCallbackStack(uint32_t size, uint32_t alignment = 16u);
  
      void drainCompletedDmacHandlers(uint8_t *rdram);
-+    // o mesmo, com a checagem em linha (escrita de 32 bits no scratchpad pelo atalho dos macros)
++    // the same, with the check inlined (32-bit scratchpad write through the macros' fast path)
 +    void drainCompletedDmacHandlersIfPending(uint8_t *rdram)
 +    {
 +        if (m_memory.hasCompletedDmacCauses())
@@ -515,7 +515,7 @@ index 4b9242c..2efd4d5 100644
  private:
      PS2Memory m_memory;
 -    GifArbiter m_gifArbiter;
-+    GifArbiter m_gifArbiter;   // no jogo (PS2X_HW_EMU=0) sem funcao de pacote: o canal GIF conclui e o pacote e descartado
++    GifArbiter m_gifArbiter;   // in the game (PS2X_HW_EMU=0) there is no packet function: the GIF channel completes and the packet is dropped
 +#if PS2X_HW_EMU
      GS m_gs;
 +#endif
@@ -529,7 +529,7 @@ index 4b9242c..2efd4d5 100644
      VU1Interpreter m_vu0{VU1Interpreter::Unit::VU0};
      VU1Interpreter m_vu1{VU1Interpreter::Unit::VU1};
 +#else
-+    VU1State m_vu0State{};   // estado do VU0 para os microprogramas traduzidos (wotm_vu0_native); sem interpretador
++    VU1State m_vu0State{};   // VU0 state for the translated microprograms (wotm_vu0_native); no interpreter
 +#endif
      R5900Context m_cpuContext;
      std::unique_ptr<EeScheduler> m_eeScheduler;
@@ -552,11 +552,11 @@ index 4b9242c..2efd4d5 100644
  extern const uint32_t g_ps2RecompiledFunctionTableSlotCount;
  extern PS2Runtime::RecompiledFunction g_ps2RecompiledFunctionTable[];
  
-+// Hook de host registrado no lugar de uma funcao do jogo que volta ao chamador (registerFunction(addr, hostLeaf<f>)).
-+// Quando a fatia de tempo acaba justo na chamada (checkpoint em dispatchGuestBranch), o escalonador retoma a thread chamando
-+// a funcao pelo pc; as recompiladas e os stubs terminam com pc = $ra, entao o hook tambem precisa, senao o pc fica na entrada
-+// e o escalonador o chama para sempre (jogo congelado com a GameThread a 100%). So mexe no pc se o hook nao mexeu (um hook
-+// que chama a funcao original ja sai com o pc dela).
++// Host hook registered in place of a game function that returns to its caller (registerFunction(addr, hostLeaf<f>)).
++// When the time slice ends right at the call (checkpoint in dispatchGuestBranch), the scheduler resumes the thread by calling
++// the function at pc; recompiled functions and stubs end with pc = $ra, so the hook must too, otherwise pc stays at the entry
++// and the scheduler calls it forever (game frozen with the GameThread at 100%). Only touches pc if the hook didn't (a hook
++// that calls the original function already leaves with that function's pc).
 +template <PS2Runtime::RecompiledFunction F>
 +void hostLeaf(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
@@ -568,7 +568,7 @@ index 4b9242c..2efd4d5 100644
 +
  #endif // PS2_RUNTIME_H
 diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
-index 0f19c9f..5e030f1 100644
+index 0f19c9f..e2b578c 100644
 --- a/ps2xRuntime/include/ps2_runtime_macros.h
 +++ b/ps2xRuntime/include/ps2_runtime_macros.h
 @@ -14,7 +14,17 @@
@@ -576,8 +576,8 @@ index 0f19c9f..5e030f1 100644
  #include "ps2_runtime.h"
  
 -static inline int32_t Ps2ExtractEpi32(__m128i v, int index)
-+// Os ajudantes de cada instrucao (registrador, memoria, FPU) tem de virar codigo em linha: nas funcoes traduzidas, que sao enormes,
-+// o MSVC desiste do inline comum e cada leitura de registrador ou da RAM virava uma chamada.
++// The per-instruction helpers (register, memory, FPU) must be inlined: in the translated functions, which are huge,
++// MSVC gives up on plain inline and every register or RAM read turned into a call.
 +#if defined(_MSC_VER)
 +#define PS2_FORCEINLINE __forceinline
 +#define PS2_NOINLINE __declspec(noinline)
@@ -610,7 +610,7 @@ index 0f19c9f..5e030f1 100644
  }
  
 -static inline uint8_t Ps2FastRead8(const uint8_t *rdram, uint32_t addr)
-+// Caminho raro (o acesso passa do fim da RAM e da a volta): fora de linha, para o rapido caber inteiro em cada uso.
++// Rare path (the access runs past the end of RAM and wraps around): out of line, so the fast path fits in full at every use.
 +template <typename T>
 +static PS2_NOINLINE T Ps2FastReadWrapped(const uint8_t *rdram, uint32_t offset)
  {
@@ -806,8 +806,8 @@ index 0f19c9f..5e030f1 100644
  #define FAST_WRITE64(addr, val) Ps2FastWrite64(rdram, (uint32_t)(addr), (uint64_t)(val))
  #define FAST_WRITE128(addr, val) Ps2FastWrite128(rdram, (uint32_t)(addr), (val))
  
-+// Scratchpad (16 KB em 0x70000000, e o espelho em 0xF0000000 como ps2IsScratchpadAddress): a travessia do hier vive nele. O acesso
-+// alinhado vai direto ao buffer, sem Load/Store do runtime (try/catch, traducao, faixas); desalinhado segue o caminho lento (excecao).
++// Scratchpad (16 KB at 0x70000000, plus the mirror at 0xF0000000, like ps2IsScratchpadAddress): the hier traversal lives in it. An
++// aligned access goes straight to the buffer, skipping runtime Load/Store (try/catch, translation, ranges); unaligned is slow (exception).
 +template <typename T>
 +static PS2_FORCEINLINE bool Ps2SprFast(uint32_t addr)
 +{
@@ -934,17 +934,17 @@ index 0f19c9f..5e030f1 100644
  #define PS2_PMFHL_SH(hi, lo) _mm_shufflehi_epi16(_mm_shufflelo_epi16(_mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi)), _MM_SHUFFLE(3, 1, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
  
  // FPU (COP1) operations
-+// O FPU do R5900 nao tem infinito nem NaN nem denormais: estouro, divisao por zero e operacoes invalidas dao +-Fmax (0x7F7FFFFF), denormais
-+// viram +-0, e cvt.w.s TRUNCA (nao arredonda) e satura em 0x7FFFFFFF/0x80000000. O IEEE do PC (inf/NaN) fazia o iterador de grade da
-+// colisao (HdItGridLine) nunca terminar: x/0 = inf -> cvt.w.s = INT_MIN.
++// The R5900 FPU has no infinity, NaN or denormals: overflow, division by zero and invalid operations give +-Fmax (0x7F7FFFFF), denormals
++// become +-0, and cvt.w.s TRUNCATES (does not round) and saturates at 0x7FFFFFFF/0x80000000. The PC's IEEE behavior (inf/NaN) made the
++// collision grid iterator (HdItGridLine) never finish: x/0 = inf -> cvt.w.s = INT_MIN.
 +static PS2_FORCEINLINE float ps2_fpu_fix(float v)
 +{
 +    uint32_t b;
 +    std::memcpy(&b, &v, sizeof(b));
 +    const uint32_t e = b & 0x7F800000u;
-+    if (e == 0x7F800000u) // inf ou NaN -> +-Fmax
++    if (e == 0x7F800000u) // inf or NaN -> +-Fmax
 +        b = (b & 0x80000000u) | 0x7F7FFFFFu;
-+    else if (e == 0u) // zero ou denormal -> +-0
++    else if (e == 0u) // zero or denormal -> +-0
 +        b &= 0x80000000u;
 +    std::memcpy(&v, &b, sizeof(v));
 +    return v;
@@ -953,7 +953,7 @@ index 0f19c9f..5e030f1 100644
 +{
 +    a = ps2_fpu_fix(a);
 +    b = ps2_fpu_fix(b);
-+    if (b == 0.0f) // inclusive 0/0: resultado +-Fmax com o sinal do xor
++    if (b == 0.0f) // including 0/0: result is +-Fmax with the xor of the signs
 +    {
 +        uint32_t ba, bb;
 +        std::memcpy(&ba, &a, sizeof(ba));
@@ -965,7 +965,7 @@ index 0f19c9f..5e030f1 100644
 +    }
 +    return ps2_fpu_fix(a / b);
 +}
-+// RSQRT.S fd, fs, ft = fs / sqrt(|ft|). O sinal de ft e ignorado: ft zero (ou denormal) da +-Fmax com o sinal de fs.
++// RSQRT.S fd, fs, ft = fs / sqrt(|ft|). The sign of ft is ignored: ft zero (or denormal) gives +-Fmax with the sign of fs.
 +static inline float ps2_fpu_rsqrt(float a, float b)
 +{
 +    a = ps2_fpu_fix(a);
@@ -988,7 +988,7 @@ index 0f19c9f..5e030f1 100644
 +        return 0x7FFFFFFF;
 +    if (v <= -2147483648.0f)
 +        return (int32_t)0x80000000u;
-+    return (int32_t)v; // trunca
++    return (int32_t)v; // truncates
 +}
  #define FPU_SET_ACC(ctx, res) (ctx->f_acc = res)
 -#define FPU_ADD_S(a, b) ((float)(a) + (float)(b))
@@ -1028,15 +1028,15 @@ index 0f19c9f..5e030f1 100644
      if (reg != 0)
      {
 diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
-index f247ff9..3a3c5bf 100644
+index f247ff9..5568b05 100644
 --- a/ps2xRuntime/include/runtime/ee_scheduler.h
 +++ b/ps2xRuntime/include/runtime/ee_scheduler.h
 @@ -334,12 +334,18 @@ public:
      void dispatchIrq(bool dmac, uint32_t cause);
      void setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress);
      [[nodiscard]] uint64_t currentVSyncTick() const noexcept;
-+    // WotM (pausa por F7/F8, native/runtime/wotm_foto.inc): o tempo de parede parado nao conta. Empurra os prazos de host pendentes
-+    // (vsyncs, alarmes) e a ancora do relogio virtual; sem isso os vsyncs da pausa venciam juntos na volta (7 fields por quadro).
++    // WotM (pause via F7/F8, native/runtime/wotm_foto.inc): wall time spent paused doesn't count. Pushes back the pending host deadlines
++    // (vsyncs, alarms) and the virtual clock's anchor; without this the vsyncs from the pause all fired at once on resume (7 fields per frame).
 +    void shiftHostDeadlines(std::chrono::steady_clock::duration d);
      uint32_t setGsVSyncCallback(uint32_t callback, uint32_t gp, uint32_t sp);
  
@@ -1044,8 +1044,8 @@ index f247ff9..3a3c5bf 100644
      void completeVSync(uint64_t tick);
      void completeExternalWait(uint32_t type, uint64_t token, int result);
      [[noreturn]] void waitExternal(EeWaitReason reason, uint32_t type, uint64_t token, std::function<void(R5900Context &)> completion = {});
-+    // WotM (passo 10 da FRONTEIRA.md no repo WoTM; so no executavel do jogo, EeSchedulerGame.cpp): espera o vblank no lugar e
-+    // devolve o resultado do sceGsSyncV, sem desmontar a pilha. Quem chama poe o retorno em $v0 e segue.
++    // WotM (step 10 of FRONTEIRA.md in the WoTM repo; game executable only, EeSchedulerGame.cpp): waits for the vblank in place and
++    // returns the sceGsSyncV result, without unwinding the stack. The caller puts the return value in $v0 and carries on.
 +    int waitVSyncHere(uint64_t afterTick, int fixedResult);
  
      [[nodiscard]] GuestThread *thread(int id);
@@ -1054,7 +1054,7 @@ index f247ff9..3a3c5bf 100644
          uint64_t sequence = 0;
      };
  
-+    // WotM (passo 10, EeSchedulerGame.cpp): laco nativo de uma thread no executavel do jogo
++    // WotM (step 10, EeSchedulerGame.cpp): native single-thread loop in the game executable
 +    void wotmService(bool deliver);
 +    void wotmVBlank();
 +    void wotmDeliverPending();
@@ -1068,22 +1068,22 @@ index f247ff9..3a3c5bf 100644
      uint32_t m_gsVSyncCallbackSp = 0;
      std::unordered_map<uint64_t, uint32_t> m_invocationStackTops;
      std::atomic<uint64_t> m_nextDeadlineCycle{0};
-+    // WotM (FRONTEIRA.md, passo 4): os eventos com prazo (vblank, alarme) vencem so pelo relogio do host; os ciclos virtuais
-+    // ficam para os timers do EE e a fatia de tempo. Prazo de host mais proximo (steady_clock, ns; 0 = nenhum), lido pelo checkpoint.
++    // WotM (FRONTEIRA.md, step 4): events with a deadline (vblank, alarm) fire only by the host clock; the virtual cycles
++    // are left to the EE timers and the time slice. Nearest host deadline (steady_clock, ns; 0 = none), read by the checkpoint.
 +    std::atomic<int64_t> m_nextHostDeadlineNs{0};
 +    uint32_t m_hostPollCount = 0;
  
      mutable std::mutex m_snapshotMutex;
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ps2_address.h b/ps2xRuntime/include/runtime/ps2_address.h
-index f7689e0..f67735a 100644
+index f7689e0..2376b51 100644
 --- a/ps2xRuntime/include/runtime/ps2_address.h
 +++ b/ps2xRuntime/include/runtime/ps2_address.h
 @@ -5,43 +5,50 @@
  
  #include "runtime/ps2_memory.h"
  
-+// chamadas em todo acesso a memoria do codigo traduzido: sempre em linha
++// called on every memory access from translated code: always inline
 +#if defined(_MSC_VER)
 +#define PS2_ADDR_FORCEINLINE __forceinline
 +#else
@@ -1147,7 +1147,7 @@ index f7689e0..f67735a 100644
      if (Ps2IsKseg23Address(addr))
          return true;
 diff --git a/ps2xRuntime/include/runtime/ps2_memory.h b/ps2xRuntime/include/runtime/ps2_memory.h
-index ea86a9c..b2e75d2 100644
+index ea86a9c..c9c7374 100644
 --- a/ps2xRuntime/include/runtime/ps2_memory.h
 +++ b/ps2xRuntime/include/runtime/ps2_memory.h
 @@ -23,8 +23,30 @@
@@ -1156,30 +1156,30 @@ index ea86a9c..b2e75d2 100644
  
 -constexpr uint32_t PS2_RAM_SIZE = 32u * 1024u * 1024u; // 32MB
 -constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;   // Mask for 32MB alignment
-+// WotM: PS2X_HW_EMU=0 no executavel do jogo (wotm, CMakeLists.txt): sem GS, VU1 e VIF1 emulados (o port desenha nativo), sem a
-+// checagem VU1 x nativo. O ps2EntryRunner (teste) e qualquer codigo sem a definicao ficam com 1.
++// WotM: PS2X_HW_EMU=0 in the game executable (wotm, CMakeLists.txt): no emulated GS, VU1 or VIF1 (the port draws natively), no
++// VU1-vs-native check. ps2EntryRunner (test) and any code without the definition get 1.
 +#ifndef PS2X_HW_EMU
 +#define PS2X_HW_EMU 1
 +#endif
 +
-+// WotM (wotm_vu1check.inc, WOTM_VU1CHECK): com g_wotmVu1Tap a cadeia DMA do VIF1 guarda a origem de cada trecho, o MSCAL/MSCNT poe em
-+// g_wotmVu1Src o id que g_wotmMscalTap da as origens dos trechos ate ele, e cada XGKICK concluido vai para g_wotmGifTap com o id do seu inicio.
++// WotM (wotm_vu1check.inc, WOTM_VU1CHECK): with g_wotmVu1Tap the VIF1 DMA chain records the source of each segment, MSCAL/MSCNT puts in
++// g_wotmVu1Src the id g_wotmMscalTap gives the segment sources up to it, and each finished XGKICK goes to g_wotmGifTap with its start's id.
 +extern bool g_wotmVu1Tap;
-+extern bool g_wotmVif1Keep;   // checagem: o VIF1 processa toda cadeia (estado do VU1 em dia) sem executar o VU1 nem alimentar o GS
-+extern bool g_wotmGsFeed;     // replay (--vu1cmp): com o tap ligado, PATH2 e XGKICK tambem alimentam o GS (imagem de referencia)
-+extern void (*g_wotmGifDmaTap)(const uint8_t *data, uint32_t bytes);   // cada pacote do canal GIF (PATH3: ambiente de desenho, uploads) com o tap ligado
++extern bool g_wotmVif1Keep;   // check: the VIF1 processes every chain (keeping VU1 state current) without running the VU1 or feeding the GS
++extern bool g_wotmGsFeed;     // replay (--vu1cmp): with the tap on, PATH2 and XGKICK also feed the GS (reference image)
++extern void (*g_wotmGifDmaTap)(const uint8_t *data, uint32_t bytes);   // every GIF channel packet (PATH3: drawing environment, uploads) while the tap is on
 +extern uint32_t g_wotmVu1Src;
 +extern void (*g_wotmGifTap)(uint32_t src, const uint8_t *packet, uint32_t bytes);
-+extern uint32_t g_wotmPath2Src;   // endereco na RAM do pacote DIRECT (PATH2) que esta indo para g_wotmGifTap(0, ...) (0 = desconhecido)
-+extern uint32_t (*g_wotmMscalTap)(const uint32_t *srcs, uint32_t n, uint32_t prog, const uint8_t *vu1Data);   // origens dos trechos ate o MSCAL, endereco do programa e memoria de dados do VU1 -> id (g_wotmVu1Src)
-+extern void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t *data, uint32_t bytes);   // inicio de cada cadeia do VIF1 com o tap ligado (trechos: deslocamento, origem; bytes da cadeia, para o instantaneo)
-+extern uint32_t g_wotmVif1Bad;   // codigos VIF1 invalidos desde o boot (fluxo fora de passo); a checagem VU1 x nativo o mostra
++extern uint32_t g_wotmPath2Src;   // RAM address of the DIRECT (PATH2) packet currently going to g_wotmGifTap(0, ...) (0 = unknown)
++extern uint32_t (*g_wotmMscalTap)(const uint32_t *srcs, uint32_t n, uint32_t prog, const uint8_t *vu1Data);   // segment sources up to the MSCAL, program address and VU1 data memory -> id (g_wotmVu1Src)
++extern void (*g_wotmChainTap)(const std::pair<uint32_t, uint32_t> *segs, size_t n, const uint8_t *data, uint32_t bytes);   // start of each VIF1 chain while the tap is on (segments: offset, source; the chain's bytes, for the snapshot)
++extern uint32_t g_wotmVif1Bad;   // invalid VIF1 codes since boot (stream out of step); the VU1-vs-native check shows it
 +
-+// WotM: a RAM do host tem 64 MB, mas o jogo continua vendo 32 MB (pilha, heap, GetMemorySize: PS2_GUEST_RAM_SIZE). Os 32 MB de
-+// cima sao uma area extra que so os ganchos do WotM usam (carga dos monstros acima de 0x2000000, native/runtime/wotm_overrides.cpp).
++// WotM: the host RAM is 64 MB, but the game still sees 32 MB (stack, heap, GetMemorySize: PS2_GUEST_RAM_SIZE). The upper 32 MB
++// are an extra area that only the WotM hooks use (monster loading above 0x2000000, native/runtime/wotm_overrides.cpp).
 +constexpr uint32_t PS2_RAM_SIZE = 64u * 1024u * 1024u; // 64MB
 +constexpr uint32_t PS2_RAM_MASK = PS2_RAM_SIZE - 1u;
-+constexpr uint32_t PS2_GUEST_RAM_SIZE = 32u * 1024u * 1024u; // o que o jogo ve (o PS2 de verdade)
++constexpr uint32_t PS2_GUEST_RAM_SIZE = 32u * 1024u * 1024u; // what the game sees (the real PS2)
  constexpr uint32_t PS2_RAM_BASE = 0x00000000;          // Physical base of RDRAM
  constexpr uint32_t PS2_SCRATCHPAD_BASE = 0x70000000;
  constexpr uint32_t PS2_SCRATCHPAD_ALIAS_BASE = 0xF0000000;
@@ -1195,40 +1195,40 @@ index ea86a9c..b2e75d2 100644
          uint32_t srcAddr = 0;
          uint32_t qwc = 0;
          std::vector<uint8_t> chainData;
-+        std::vector<std::pair<uint32_t, uint32_t>> chainSrc;   // WotM (g_wotmVu1Tap): (deslocamento em chainData, endereco de origem) por trecho
++        std::vector<std::pair<uint32_t, uint32_t>> chainSrc;   // WotM (g_wotmVu1Tap): (offset in chainData, source address) per segment
      };
-+    const std::vector<std::pair<uint32_t, uint32_t>> *m_vif1ChainSrc = nullptr;   // chainSrc da transferencia em processVIF1Data
++    const std::vector<std::pair<uint32_t, uint32_t>> *m_vif1ChainSrc = nullptr;   // chainSrc of the transfer being handled in processVIF1Data
      std::vector<PendingTransfer> m_pendingGifTransfers;
      std::vector<PendingTransfer> m_pendingVif0Transfers;
      std::vector<PendingTransfer> m_pendingVif1Transfers;
      std::mutex m_completedDmacMutex;
      std::vector<uint32_t> m_completedDmacCauses;
-+    std::atomic<bool> m_completedDmacPending{false};   // m_completedDmacCauses nao vazia (lida sem o mutex)
++    std::atomic<bool> m_completedDmacPending{false};   // m_completedDmacCauses is not empty (read without the mutex)
  
      struct CodeRegion
      {
 diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
-index 7755fe6..9138947 100644
+index 7755fe6..4333997 100644
 --- a/ps2xRuntime/include/runtime/ps2_pad.h
 +++ b/ps2xRuntime/include/runtime/ps2_pad.h
 @@ -4,6 +4,23 @@
  #include <cstddef>
  #include <cstdint>
  
-+// Dispositivos que alimentam uma porta do jogo: bit n = gamepad n do raylib (0..3), PS2_PAD_DEV_KEYBOARD = teclado.
-+// Mais de um dispositivo na mesma porta: os botoes se somam; em cada eixo vale o mais longe do centro.
++// Devices that feed one game port: bit n = raylib gamepad n (0..3), PS2_PAD_DEV_KEYBOARD = keyboard.
++// More than one device on the same port: buttons are combined; on each axis the one farthest from center wins.
 +constexpr uint32_t PS2_PAD_DEV_KEYBOARD = 1u << 8;
 +constexpr int PS2_PAD_MAX_GAMEPADS = 4;
-+// Mapa controle -> dispositivos, consultado a cada leitura. O controle e port + 2 * slot (multitap: 0 e 1 nas portas, 2 e 3
-+// no slot 1 de cada uma). Sem funcao: controle n = gamepad n, e o teclado no controle 0.
++// Pad -> devices map, queried on every read. The pad is port + 2 * slot (multitap: 0 and 1 on the ports, 2 and 3
++// on slot 1 of each). Without a function: pad n = gamepad n, plus the keyboard on pad 0.
 +using PS2PadDeviceMapFn = uint32_t (*)(int controller);
 +extern PS2PadDeviceMapFn g_ps2PadDeviceMap;
-+// Mapas trocaveis (o jogo pode deixar o jogador escolher as teclas e os botoes). Sem funcao vale a tabela fixa do ps2_pad.cpp.
-+// Botoes do PS2 apertados num gamepad (mascara com 1 = apertado, bits do scePadRead: 0x4000 = X etc.); os eixos seguem fixos.
++// Replaceable maps (the game can let the player pick keys and buttons). Without a function the fixed table in ps2_pad.cpp applies.
++// PS2 buttons held on a gamepad (mask with 1 = held, scePadRead bits: 0x4000 = X etc.); the axes stay fixed.
 +using PS2PadGamepadButtonsFn = uint16_t (*)(int pad);
 +extern PS2PadGamepadButtonsFn g_ps2PadGamepadButtons;
-+// Teclado inteiro: limpa os bits dos botoes apertados em btns (0 = apertado, como no scePadRead) e pode escrever os eixos em data
-+// (data[4..7]: direito x/y, esquerdo x/y).
++// Whole keyboard: clears the bits of held buttons in btns (0 = held, as in scePadRead) and may write the axes into data
++// (data[4..7]: right x/y, left x/y).
 +using PS2PadKeyboardFn = void (*)(uint16_t &btns, uint8_t *data);
 +extern PS2PadKeyboardFn g_ps2PadKeyboard;
 +
@@ -1236,7 +1236,7 @@ index 7755fe6..9138947 100644
  {
  public:
 diff --git a/ps2xRuntime/include/runtime/ps2_vu1.h b/ps2xRuntime/include/runtime/ps2_vu1.h
-index 67c8184..b889c42 100644
+index 67c8184..c8310ea 100644
 --- a/ps2xRuntime/include/runtime/ps2_vu1.h
 +++ b/ps2xRuntime/include/runtime/ps2_vu1.h
 @@ -3,6 +3,7 @@
@@ -1251,7 +1251,7 @@ index 67c8184..b889c42 100644
          uint32_t currentTagEnd = 0;
          uint32_t cycleCredit = 0;
          uint64_t issueCycle = 0;
-+        uint32_t wotmSrc = 0;   // g_wotmVu1Src no inicio do XGKICK (wotm_vu1check.inc)
++        uint32_t wotmSrc = 0;   // g_wotmVu1Src at the start of the XGKICK (wotm_vu1check.inc)
          bool active = false;
          bool currentTagEop = false;
      };
@@ -1259,9 +1259,9 @@ index 67c8184..b889c42 100644
      uint64_t m_cachedCodeGeneration = 0;
      bool m_decodedCodeCacheValid = false;
  
-+    // Menor readyCycle entre as entradas validas dos pipelines (~0 = nenhuma): commitReadyPipelines nao varre nada antes disso.
++    // Smallest readyCycle among the valid pipeline entries (~0 = none): commitReadyPipelines scans nothing before then.
 +    uint64_t m_earliestPending = ~0ull;
-+    // o mesmo por fila (flags, stores, VF, VI, ACC): limite inferior, so baixa ao enfileirar e e recalculado no commit
++    // the same per queue (flags, stores, VF, VI, ACC): a lower bound, only lowered on enqueue and recomputed at commit
 +    std::array<uint64_t, 5> m_pendMin{~0ull, ~0ull, ~0ull, ~0ull, ~0ull};
      std::array<FlagPipelineEntry, kMaxFlagEntries> m_flagPipeline{};
      ScalarPipelineEntry m_fdiv{};
@@ -1281,7 +1281,7 @@ index 67c8184..b889c42 100644
      bool pipelinesPending() const;
  
 -    float normalizeOperand(float value) const;
-+    // inline no header: chamadas de ps2_vu1_upper/lower.cpp (outro TU) nao eram inlinadas sem LTCG
++    // inline in the header: calls from ps2_vu1_upper/lower.cpp (another TU) were not inlined without LTCG
 +    float normalizeOperand(float value) const
 +    {
 +        uint32_t bits = 0;
@@ -1305,7 +1305,7 @@ index 67c8184..b889c42 100644
  
  #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..97952e9 100644
+index c5e31c4..e454f4e 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 @@ -4,10 +4,55 @@
@@ -1319,16 +1319,16 @@ index c5e31c4..97952e9 100644
  #include <limits>
  #include <stdexcept>
 +extern std::atomic<unsigned long long> g_wotmIdleUs, g_wotmIdleCalls;
-+// WOTM_FIELDLOG (wotm_overrides.cpp): o relogio do EE e virtual (32 ciclos por volta de laco, 8 por chamada, o tempo de host
-+// parado quando ocioso). O vblank e os alarmes vencem pelo relogio do host, nao por ele. Aqui se acumulam os ciclos por pc de
-+// checkpoint (cabeca de laco ou alvo de chamada) e os ciclos do ocio; o override le e zera a cada quadro do jogo.
++// WOTM_FIELDLOG (wotm_overrides.cpp): the EE clock is virtual (32 cycles per loop iteration, 8 per call, plus the host time
++// spent idle). The vblank and alarms fire by the host clock, not by it. This accumulates cycles per checkpoint pc
++// (loop head or call target) and the idle cycles; the override reads and clears them every game frame.
 +bool g_wotmCycleProf = false;
-+static int64_t g_wotmLastPollNs = 0;   // ultima conferencia do relogio no checkpoint (WOTM_FIELDLOG: [stall])
-+uint32_t g_wotmFreeSpinPc = 0;   // main.cpp (PS2X_NO_VU1): voltas de laco neste pc nao contam ciclos
-+uint32_t g_wotmFreeSpinZero[2] = {0, 0};   // ...e estas palavras da RDRAM (a condicao da espera) sao zeradas ali
++static int64_t g_wotmLastPollNs = 0;   // last clock check at a checkpoint (WOTM_FIELDLOG: [stall])
++uint32_t g_wotmFreeSpinPc = 0;   // main.cpp (PS2X_NO_VU1): loop iterations at this pc don't count cycles
++uint32_t g_wotmFreeSpinZero[2] = {0, 0};   // ...and these RDRAM words (the wait condition) are cleared there
 +static const bool g_wotmFreeSpinIop = std::getenv("WOTM_FREESPIN_NOIOP") == nullptr;
-+// Ultimas 64 retomadas do escalonador (pc, ra, sp, profundidade de invocacao, thread), impressas se ele for retomar um
-+// pc que nao e codigo (diagnostico do congelamento com WOTM_FREESPIN).
++// The scheduler's last 64 resumes (pc, ra, sp, invocation depth, thread), printed if it is about to resume a
++// pc that isn't code (diagnosing the freeze with WOTM_FREESPIN).
 +struct WotmResume { uint32_t pc, ra, sp, depth; int tid; };
 +static WotmResume g_wotmResumes[64];
 +static uint32_t g_wotmResumeNext = 0;
@@ -1376,7 +1376,7 @@ index c5e31c4..97952e9 100644
                  }
                  continue;
              }
-+            std::fprintf(stderr, "[resume] thread %d terminou em pc 0 (ra %08x); ultimas retomadas (pc ra sp prof tid):\n", running->id,
++            std::fprintf(stderr, "[resume] thread %d ended at pc 0 (ra %08x); last resumes (pc ra sp depth tid):\n", running->id,
 +                         getRegU32(&context, 31));
 +            for (uint32_t i = 0; i < 64u; ++i)
 +            {
@@ -1392,7 +1392,7 @@ index c5e31c4..97952e9 100644
              }
              else
              {
-+                std::fprintf(stderr, "[resume] ultimas retomadas antes do pc invalido 0x%x (pc ra sp prof tid):\n", context.pc);
++                std::fprintf(stderr, "[resume] last resumes before the invalid pc 0x%x (pc ra sp depth tid):\n", context.pc);
 +                for (uint32_t i = 0; i < 64u; ++i)
 +                {
 +                    const WotmResume &r = g_wotmResumes[(g_wotmResumeNext + i) & 63u];
@@ -1417,14 +1417,14 @@ index c5e31c4..97952e9 100644
  {
 -    accountCycles(cycles);
 +    const R5900Context *wotmCtx = (g_wotmFreeSpinPc || g_wotmCycleProf) ? currentContext() : nullptr;
-+    if (!(wotmCtx && wotmCtx->pc == g_wotmFreeSpinPc))   // espera ativa por hardware ausente: nao e tempo do EE
++    if (!(wotmCtx && wotmCtx->pc == g_wotmFreeSpinPc))   // busy-wait on missing hardware: not EE time
 +        accountCycles(cycles);
 +    else
 +    {
-+        if (g_wotmFreeSpinIop)   // ...mas o IOP (CD, SIF, som) anda por esses ciclos e continua com eles
++        if (g_wotmFreeSpinIop)   // ...but the IOP (CD, SIF, sound) advances by these cycles and keeps them
 +            m_runtime.advanceIopEeCycles(std::max<uint64_t>(1u, cycles));
-+        // o hardware esperado (VU1) nao existe: a espera termina ja. Os contadores tambem podem subir dentro do proprio
-+        // particleDraw, e zerar so na entrada deixava o laco girando (CPU de host) ate a apresentacao do vsync seguinte
++        // the awaited hardware (VU1) doesn't exist: the wait ends right away. The counters can also go up inside
++        // particleDraw itself, and clearing them only on entry left the loop spinning (host CPU) until the next vsync's present
 +        for (const uint32_t addr : g_wotmFreeSpinZero)
 +            if (addr && m_rdram)
 +                std::memset(m_rdram + (addr & 0x1FFFFFFFu), 0, 4);
@@ -1438,19 +1438,19 @@ index c5e31c4..97952e9 100644
          return true;
      }
  
-+    // vblank e alarmes vencem pelo relogio do host: a cada 16 checkpoints o codigo do jogo confere se o prazo passou
++    // vblank and alarms fire by the host clock: every 16 checkpoints the game code checks whether the deadline has passed
 +    if ((++m_hostPollCount & 15u) == 0u)
 +    {
 +        const int64_t nextHost = m_nextHostDeadlineNs.load(std::memory_order_acquire);
 +        const int64_t nowNs = std::chrono::steady_clock::now().time_since_epoch().count();
 +        if (g_wotmCycleProf)
 +        {
-+            // WOTM_FIELDLOG: buraco de mais de 50 ms entre duas conferencias, fora do ocio (waitForEvent reinicia a marca),
-+            // e tempo de host gasto dentro de uma chamada (hook, syscall, stub) ou com a thread parada; o pc diz onde
++            // WOTM_FIELDLOG: a gap of more than 50 ms between two checks, outside idle (waitForEvent resets the mark),
++            // is host time spent inside a call (hook, syscall, stub) or with the thread stopped; the pc says where
 +            if (g_wotmLastPollNs != 0 && nowNs - g_wotmLastPollNs > 50000000ll)
 +            {
 +                const R5900Context *c = currentContext();
-+                std::fprintf(stderr, "[stall] %.1f ms sem checkpoint: pc=%06x ra=%06x tid=%d vsync=%llu\n",
++                std::fprintf(stderr, "[stall] %.1f ms without a checkpoint: pc=%06x ra=%06x tid=%d vsync=%llu\n",
 +                             (nowNs - g_wotmLastPollNs) / 1e6, c ? c->pc : 0u, c ? getRegU32(c, 31) : 0u,
 +                             m_currentThreadId, static_cast<unsigned long long>(m_vsyncTick));
 +            }
@@ -1489,10 +1489,10 @@ index c5e31c4..97952e9 100644
  
  void EeScheduler::processDueDeadlines()
  {
-+    // WotM (FRONTEIRA.md, passo 4): o prazo vence so pelo relogio do host. No upstream ele exigia tambem que os ciclos virtuais
-+    // chegassem a deadlineCycle, e o codigo gerado gasta poucos ciclos (32 por volta de laco): o vblank atrasava e o runtime
-+    // precisava de remendos para o relogio virtual seguir o de parede. Sem espera de ritmo aqui: um prazo futuro so vence
-+    // quando o host chega nele (o checkpoint confere, e o ocio espera no waitForEvent).
++    // WotM (FRONTEIRA.md, step 4): the deadline fires only by the host clock. Upstream also required the virtual cycles
++    // to reach deadlineCycle, and generated code spends few cycles (32 per loop iteration): the vblank ran late and the runtime
++    // needed patches to make the virtual clock follow the wall clock. No pacing wait here: a future deadline only fires
++    // when the host reaches it (the checkpoint checks, and idle waits in waitForEvent).
      for (;;)
      {
          std::vector<ScheduledEvent> due;
@@ -1558,8 +1558,8 @@ index c5e31c4..97952e9 100644
              {
 -                scheduleEvent(scheduled.deadlineCycle + kVBlankDurationCycles,
 -                              scheduled.hostDeadline + kVBlankDuration,
-+                // grade fixa de 16,667 ms no relogio do host; depois de uma travada longa (carga, depurador) a grade
-+                // e refeita a partir de agora em vez de vencer dezenas de vblanks atrasados de uma vez
++                // fixed 16.667 ms grid on the host clock; after a long stall (loading, debugger) the grid
++                // restarts from now instead of firing dozens of late vblanks at once
 +                auto start = scheduled.hostDeadline;
 +                if (dueNow - start > 4 * kVBlankPeriod)
 +                    start = dueNow;
@@ -1588,9 +1588,9 @@ index c5e31c4..97952e9 100644
      }
  
 -    uint64_t deadlineCycle = 0u;
-+    // WotM: os prazos vencem pelo relogio do host (processDueDeadlines), entao o ocio espera o mais proximo deles no host e
-+    // depois soma aos ciclos virtuais o tempo que de fato ficou parado (o EE ocioso tambem passa o tempo; os timers do EE
-+    // andam por ele). O upstream saltava os ciclos ate o prazo, e o runtime somava o atraso por cima (remendo removido).
++    // WotM: deadlines fire by the host clock (processDueDeadlines), so idle waits for the nearest one on the host and
++    // then adds the time actually spent waiting to the virtual cycles (time passes for an idle EE too; the EE timers
++    // run on it). Upstream jumped the cycles to the deadline, and the runtime added the delay on top (patch removed).
 +    const auto waitStart = std::chrono::steady_clock::now();
      auto hostDeadline = std::chrono::steady_clock::time_point::max();
 -    if (!m_deadlines.empty())
@@ -1629,7 +1629,7 @@ index c5e31c4..97952e9 100644
 +    const auto waitedUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStart).count();
 +    uint64_t elapsed = microsecondsToEeCycles(static_cast<uint64_t>(std::max<long long>(waitedUs, 0)));
 +    if (!signaled && timerFirst)
-+        elapsed = std::max(elapsed, timerCycles);   // a interrupcao do timer do EE tem que vencer
++        elapsed = std::max(elapsed, timerCycles);   // the EE timer interrupt has to fire
 +    uint64_t remaining = elapsed;
 +    g_wotmIdleCycles += elapsed;
 +    while (remaining > 0u)
@@ -1669,7 +1669,7 @@ index c5e31c4..97952e9 100644
  
  void EeScheduler::updateNextDeadline()
  {
-+    // WotM: nenhum prazo vence por ciclo (m_nextDeadlineCycle fica 0); o checkpoint confere o prazo de host mais proximo
++    // WotM: no deadline fires by cycle count (m_nextDeadlineCycle stays 0); the checkpoint checks the nearest host deadline
 +    m_nextDeadlineCycle.store(0u, std::memory_order_release);
      if (m_deadlines.empty())
      {
@@ -1696,24 +1696,24 @@ index c5e31c4..97952e9 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..fd9425b
+index 0000000..f2357f5
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 @@ -0,0 +1,1339 @@
-+// WoTM (passo 10 de docs/passos/FRONTEIRA.md no repo WoTM): EeScheduler do executavel do jogo (wotm), no lugar de EeScheduler.cpp.
-+// Medido no passo 8: o WotM usa uma thread so (a principal), nenhum handler de INTC, um handler de DMAC (hierSetDmaIntHandler,
-+// canal 1) e o vblank (sceGsSyncV); nenhum semaforo, event flag, sleep ou alarme em uso. Entao aqui nao ha fila de prontos, fatia
-+// de tempo, troca de thread nem relogio no checkpoint:
-+//  - a thread principal roda direto (run); o checkpoint do codigo gerado so confere uma flag de "atencao" (vblank, evento,
-+//    interrupcao pendente) e a parada;
-+//  - o vblank vem de uma thread do host com a grade de 16,667 ms; o EE aplica no proximo checkpoint ou na espera;
-+//  - esperas (sceGsSyncV, semaforo, event flag, sleep, espera externa) esperam no lugar, atendendo vblanks e interrupcoes;
-+//    a do sceGsSyncV (waitVSyncHere) volta normalmente, sem a excecao que desmontava a pilha a cada quadro;
-+//  - interrupcoes e callbacks (invocacoes) rodam aninhados, na pilha propria de cada profundidade; o que nao retorna
-+//    ([[noreturn]] no header: invokeCurrent, waitVSync com continuacao, exitCurrent) faz o trabalho no lugar e depois lanca o
-+//    mesmo EeDispatcherTransfer de antes, porque os chamadores contam com isso;
-+//  - outras threads: CreateThread registra, StartThread falha com aviso (nao ha segundo fluxo de execucao).
-+// O ps2EntryRunner continua com o EeScheduler.cpp completo.
++// WoTM (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo): EeScheduler for the game executable (wotm), replacing EeScheduler.cpp.
++// Measured in step 8: WotM uses a single thread (the main one), no INTC handler, one DMAC handler (hierSetDmaIntHandler,
++// channel 1) and the vblank (sceGsSyncV); no semaphore, event flag, sleep or alarm in use. So there is no ready queue, time
++// slice, thread switch or clock at the checkpoint here:
++//  - the main thread runs directly (run); the generated code's checkpoint only checks an "attention" flag (vblank, event,
++//    pending interrupt) and the stop request;
++//  - the vblank comes from a host thread on a 16.667 ms grid; the EE applies it at the next checkpoint or while waiting;
++//  - waits (sceGsSyncV, semaphore, event flag, sleep, external wait) wait in place, servicing vblanks and interrupts;
++//    the sceGsSyncV one (waitVSyncHere) returns normally, without the exception that used to unwind the stack every frame;
++//  - interrupts and callbacks (invocations) run nested, on each depth's own stack; whatever does not return
++//    ([[noreturn]] in the header: invokeCurrent, waitVSync with a continuation, exitCurrent) does the work in place and then throws the
++//    same EeDispatcherTransfer as before, because the callers rely on it;
++//  - other threads: CreateThread registers them, StartThread fails with a warning (there is no second flow of execution).
++// ps2EntryRunner keeps the full EeScheduler.cpp.
 +#include "runtime/ee_scheduler.h"
 +
 +#include "ps2_log.h"
@@ -1732,11 +1732,11 @@ index 0000000..fd9425b
 +#include <thread>
 +#include <unordered_map>
 +
-+// Lidos pelo resto do runtime e pela camada nativa (no executavel de teste vem do EeScheduler.cpp)
++// Read by the rest of the runtime and by the native layer (in the test executable they come from EeScheduler.cpp)
 +std::atomic<unsigned long long> g_wotmIdleUs{0}, g_wotmIdleCalls{0};
 +bool g_wotmCycleProf = false;
-+uint32_t g_wotmFreeSpinPc = 0;            // main.cpp (PS2X_NO_VU1): espera ativa do particleDraw por VU1 ausente...
-+uint32_t g_wotmFreeSpinZero[2] = {0, 0};  // ...termina ja: estas palavras da RDRAM sao zeradas quando o checkpoint cai nela
++uint32_t g_wotmFreeSpinPc = 0;            // main.cpp (PS2X_NO_VU1): particleDraw's busy-wait on the missing VU1...
++uint32_t g_wotmFreeSpinZero[2] = {0, 0};  // ...ends right away: these RDRAM words are cleared when the checkpoint lands on it
 +uint64_t g_wotmEeCycle = 0, g_wotmIdleCycles = 0;
 +uint32_t g_wotmProfPc[4096];
 +uint64_t g_wotmProfCyc[4096];
@@ -1767,7 +1767,7 @@ index 0000000..fd9425b
 +
 +    using Clock = std::chrono::steady_clock;
 +    constexpr auto kVBlankPeriod = std::chrono::microseconds(16667);
-+    constexpr size_t kMaxInvocationDepth = 48u;   // main.invocations reserva 64: o contexto de cada nivel nao muda de lugar
++    constexpr size_t kMaxInvocationDepth = 48u;   // main.invocations reserves 64: each level's context never moves
 +
 +    struct ExternalWait
 +    {
@@ -1779,21 +1779,21 @@ index 0000000..fd9425b
 +
 +    struct HostState
 +    {
-+        R5900Context *active = nullptr;   // contexto que o codigo gerado roda agora (o principal ou a invocacao do topo)
-+        int deliverDepth = 0;             // >0: dentro de uma interrupcao/callback entregue; outra so depois que ela voltar
-+        bool mainDormant = false;         // ExitThread ou pc invalido na principal: so atende vblanks ate a parada
++        R5900Context *active = nullptr;   // context the generated code is running right now (the main one or the top invocation)
++        int deliverDepth = 0;             // >0: inside a delivered interrupt/callback; the next one only after it returns
++        bool mainDormant = false;         // ExitThread or invalid pc on the main thread: only services vblanks until stop
 +        bool sleeping = false;
 +        bool releaseWait = false;
 +        std::thread timer;
 +        std::condition_variable timerCv;
-+        // protegidos por m_eventMutex
++        // guarded by m_eventMutex
 +        uint32_t vblankDue = 0;
 +        Clock::time_point next{};
 +        bool waiting = false;
 +        bool stallOpen = false;
 +        Clock::time_point stallStart{};
 +        uint32_t stallPc = 0, stallRa = 0;
-+        // so na thread do EE
++        // EE thread only
 +        std::vector<ExternalWait> external;
 +        uint64_t publishedTick = 0;
 +    };
@@ -1804,7 +1804,7 @@ index 0000000..fd9425b
 +        static std::unordered_map<std::string, unsigned> counts;
 +        unsigned &n = counts[what];
 +        if (n++ < 4u)
-+            std::fprintf(stderr, "[ee] %s (id=%d) nao suportado no wotm: o jogo so tem a thread principal (FRONTEIRA passo 10)\n",
++            std::fprintf(stderr, "[ee] %s (id=%d) not supported in wotm: the game only has the main thread (FRONTEIRA step 10)\n",
 +                         what, id);
 +    }
 +
@@ -1928,8 +1928,8 @@ index 0000000..fd9425b
 +        G.vblankDue = 0;
 +        G.next = Clock::now() + kVBlankPeriod;
 +    }
-+    // Relogio do vblank: grade fixa no host. Depois de uma travada de mais de 4 vblanks a grade recomeca de agora, e o EE aplica
-+    // so um (wotmService), em vez de vencer os atrasados de uma vez.
++    // Vblank clock: a fixed grid on the host. After a stall of more than 4 vblanks the grid restarts from now, and the EE applies
++    // just one (wotmService) instead of firing all the late ones at once.
 +    G.timer = std::thread([this]()
 +                          {
 +        std::unique_lock lock(m_eventMutex);
@@ -1940,13 +1940,13 @@ index 0000000..fd9425b
 +            if (m_stopRequested.load(std::memory_order_acquire))
 +                break;
 +            const Clock::time_point now = Clock::now();
-+            if (now < G.next)   // acordou cedo, ou a pausa (shiftHostDeadlines) empurrou o prazo
++            if (now < G.next)   // woke early, or the pause (shiftHostDeadlines) pushed the deadline back
 +                continue;
 +            if (now - G.next > 4 * kVBlankPeriod)
 +                G.next = now;
 +            G.next += kVBlankPeriod;
 +            ++G.vblankDue;
-+            // WOTM_FIELDLOG: tres vblanks sem o EE chegar a um checkpoint nem esperar = thread do jogo presa em alguma chamada
++            // WOTM_FIELDLOG: three vblanks without the EE reaching a checkpoint or waiting = game thread stuck in some call
 +            if (g_wotmCycleProf && !G.waiting && G.vblankDue >= 3u && !G.stallOpen)
 +            {
 +                G.stallOpen = true;
@@ -1981,7 +1981,7 @@ index 0000000..fd9425b
 +            if (context.pc != 0u)
 +                m_runtime.reportMissingFunction(m_rdram, &context, context.pc, context.pc, PS2Runtime::GuestBranchKind::DirectJump,
 +                                                "EE (wotm)");
-+            std::fprintf(stderr, "[ee] a thread principal parou (pc=0x%x): o EE so atende vblanks daqui em diante\n", context.pc);
++            std::fprintf(stderr, "[ee] the main thread stopped (pc=0x%x): from now on the EE only services vblanks\n", context.pc);
 +            G.mainDormant = true;
 +            main.status = EeThreadStatus::Dormant;
 +            publishSnapshot();
@@ -2045,7 +2045,7 @@ index 0000000..fd9425b
 +    m_eventCv.notify_all();
 +}
 +
-+// Chamado pelo codigo gerado em toda cabeca de laco e toda chamada (27 a 47 mil vezes por quadro): sem relogio, sem fila.
++// Called by generated code at every loop head and every call (27 to 47 thousand times per frame): no clock, no queue.
 +bool EeScheduler::checkpointDue(uint32_t cycles) noexcept
 +{
 +    const uint64_t elapsed = std::max<uint32_t>(1u, cycles);
@@ -2064,7 +2064,7 @@ index 0000000..fd9425b
 +        return false;
 +    if (m_stopRequested.load(std::memory_order_acquire))
 +        return true;
-+    if (G.deliverDepth > 0)   // dentro de uma interrupcao: o resto espera ela voltar
++    if (G.deliverDepth > 0)   // inside an interrupt: everything else waits for it to return
 +        return false;
 +    try
 +    {
@@ -2072,12 +2072,12 @@ index 0000000..fd9425b
 +    }
 +    catch (const std::exception &e)
 +    {
-+        std::fprintf(stderr, "[ee] erro numa interrupcao/callback do jogo: %s; parando\n", e.what());
++        std::fprintf(stderr, "[ee] error in a game interrupt/callback: %s; stopping\n", e.what());
 +        requestStop();
 +    }
 +    catch (...)
 +    {
-+        std::fprintf(stderr, "[ee] erro numa interrupcao/callback do jogo; parando\n");
++        std::fprintf(stderr, "[ee] error in a game interrupt/callback; stopping\n");
 +        requestStop();
 +    }
 +    return m_stopRequested.load(std::memory_order_acquire);
@@ -2094,7 +2094,7 @@ index 0000000..fd9425b
 +    return m_guestExecuting.load(std::memory_order_acquire);
 +}
 +
-+// ---- atencao: vblank, eventos de outras threads, interrupcoes pendentes ----
++// ---- attention: vblank, events from other threads, pending interrupts ----
 +
 +void EeScheduler::wotmService(bool deliver)
 +{
@@ -2119,7 +2119,7 @@ index 0000000..fd9425b
 +        }
 +    }
 +    if (stallOpen)
-+        std::fprintf(stderr, "[stall] %.1f ms sem checkpoint: pc=%06x ra=%06x vsync=%llu\n",
++        std::fprintf(stderr, "[stall] %.1f ms without a checkpoint: pc=%06x ra=%06x vsync=%llu\n",
 +                     std::chrono::duration<double, std::milli>(Clock::now() - stallStart).count(), stallPc, stallRa,
 +                     static_cast<unsigned long long>(m_vsyncTick));
 +    if (due > 4u)
@@ -2167,7 +2167,7 @@ index 0000000..fd9425b
 +        SET_GPR_U32(&invocation.context, 31, 0u);
 +        queueInvocation(std::move(invocation));
 +    }
-+    // inicio e fim do vblank juntos: nenhum handler de INTC registrado no WotM (passo 8)
++    // vblank start and end together: WotM registers no INTC handler (step 8)
 +    dispatchIrq(false, 2u);
 +    dispatchIrq(false, 3u);
 +
@@ -2188,7 +2188,7 @@ index 0000000..fd9425b
 +    {
 +        if (main.invocations.size() >= kMaxInvocationDepth)
 +        {
-+            warnUnsupported("interrupcao aninhada fundo demais", static_cast<int>(main.invocations.size()));
++            warnUnsupported("interrupt nested too deep", static_cast<int>(main.invocations.size()));
 +            m_pendingInvocations.clear();
 +            break;
 +        }
@@ -2204,7 +2204,7 @@ index 0000000..fd9425b
 +    }
 +}
 +
-+// Roda as invocacoes acima de baseDepth ate todas voltarem (pc 0), como o laco do escalonador fazia, mas aninhado.
++// Runs the invocations above baseDepth until they all return (pc 0), as the scheduler loop did, but nested.
 +void EeScheduler::wotmRunInvocations(size_t baseDepth)
 +{
 +    GuestThread &main = m_threads.at(kMainThreadId);
@@ -2233,7 +2233,7 @@ index 0000000..fd9425b
 +        if (!m_runtime.hasFunction(context.pc))
 +        {
 +            m_runtime.reportMissingFunction(m_rdram, &context, context.pc, context.pc, PS2Runtime::GuestBranchKind::DirectJump,
-+                                            "EE invocacao (wotm)");
++                                            "EE invocation (wotm)");
 +            context.pc = 0u;
 +            continue;
 +        }
@@ -2272,7 +2272,7 @@ index 0000000..fd9425b
 +    g_wotmEeCycle = m_eeCycle;
 +}
 +
-+// Espera no lugar: dorme ate a atencao, aplica (vblank, eventos, interrupcoes se nao estiver dentro de uma) e confere de novo.
++// Wait in place: sleep until attention, apply it (vblank, events, interrupts unless already inside one) and check again.
 +template <typename Done>
 +static void wotmWaitUntil(EeScheduler &ee, GuestThread &main, EeWaitReason reason, Done done,
 +                          void (EeScheduler::*idle)(), void (EeScheduler::*service)(bool), const std::atomic<bool> &stop)
@@ -2341,7 +2341,7 @@ index 0000000..fd9425b
 +    throw EeDispatcherTransfer{};
 +}
 +
-+// ---- threads: so a principal ----
++// ---- threads: only the main one ----
 +
 +void EeScheduler::setupCurrentThread(uint32_t stack, uint32_t stackSize, uint32_t gp)
 +{
@@ -2361,7 +2361,7 @@ index 0000000..fd9425b
 +    const int id = allocateThreadId();
 +    if (id == 0)
 +        return KE_ERROR;
-+    warnUnsupported("CreateThread (registrada, nunca roda)", id);
++    warnUnsupported("CreateThread (registered, never runs)", id);
 +    GuestThread thread{};
 +    thread.id = id;
 +    thread.entry = params.entry;
@@ -2403,7 +2403,7 @@ index 0000000..fd9425b
 +
 +[[noreturn]] void EeScheduler::exitCurrent(bool)
 +{
-+    std::fprintf(stderr, "[ee] ExitThread na thread principal: o EE so atende vblanks daqui em diante\n");
++    std::fprintf(stderr, "[ee] ExitThread on the main thread: from now on the EE only services vblanks\n");
 +    G.mainDormant = true;
 +    if (GuestThread *main = thread(kMainThreadId))
 +    {
@@ -2426,7 +2426,7 @@ index 0000000..fd9425b
 +{
 +    if (id == 0 || id == kMainThreadId)
 +    {
-+        warnUnsupported("SuspendThread da principal", id);
++        warnUnsupported("SuspendThread on the main thread", id);
 +        return KE_ILLEGAL_THID;
 +    }
 +    return thread(id) ? KE_DORMANT : KE_UNKNOWN_THID;
@@ -2467,7 +2467,7 @@ index 0000000..fd9425b
 +    if (!target)
 +        return id == 0 ? KE_ILLEGAL_THID : KE_UNKNOWN_THID;
 +    if (id == kMainThreadId && !G.sleeping && G.deliverDepth == 0)
-+        return KE_ILLEGAL_THID;   // a propria thread
++        return KE_ILLEGAL_THID;   // the calling thread itself
 +    if (target->status == EeThreadStatus::Dormant)
 +        return KE_DORMANT;
 +    ++target->wakeupCount;
@@ -2522,7 +2522,7 @@ index 0000000..fd9425b
 +{
 +}
 +
-+// ---- semaforos e event flags (o WotM cria 2 semaforos e nao usa) ----
++// ---- semaphores and event flags (WotM creates 2 semaphores and never uses them) ----
 +
 +int EeScheduler::createSemaphore(int initCount, int maxCount, uint32_t attr, uint32_t option)
 +{
@@ -2582,7 +2582,7 @@ index 0000000..fd9425b
 +    }
 +    if (semaphore(id)->count == 0)
 +    {
-+        warnUnsupported("WaitSema bloqueou (espera no lugar por uma interrupcao)", id);
++        warnUnsupported("WaitSema blocked (waiting in place for an interrupt)", id);
 +        wotmWaitUntil(*this, m_threads.at(kMainThreadId), EeWaitReason::Semaphore,
 +                      [this, id]() { const EeSemaphore *s = semaphore(id); return !s || s->count != 0; },
 +                      &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
@@ -2664,7 +2664,7 @@ index 0000000..fd9425b
 +    }
 +    if (!eventCond(eventFlag(id)->bits, bits, mode))
 +    {
-+        warnUnsupported("WaitEventFlag bloqueou (espera no lugar por uma interrupcao)", id);
++        warnUnsupported("WaitEventFlag blocked (waiting in place for an interrupt)", id);
 +        wotmWaitUntil(*this, m_threads.at(kMainThreadId), EeWaitReason::EventFlag,
 +                      [this, id, bits, mode]() { const EeEventFlag *f = eventFlag(id); return !f || eventCond(f->bits, bits, mode); },
 +                      &EeScheduler::wotmIdleWait, &EeScheduler::wotmService, m_stopRequested);
@@ -2683,7 +2683,7 @@ index 0000000..fd9425b
 +    setReturnS32(currentContext(), KE_OK);
 +}
 +
-+// ---- alarmes: nenhum no WotM ----
++// ---- alarms: WotM uses none ----
 +
 +int EeScheduler::setAlarm(uint16_t ticks, uint32_t, uint32_t, uint32_t, uint32_t)
 +{
@@ -2696,7 +2696,7 @@ index 0000000..fd9425b
 +    return KE_ERROR;
 +}
 +
-+// ---- invocacoes (interrupcoes, callbacks) ----
++// ---- invocations (interrupts, callbacks) ----
 +
 +void EeScheduler::queueInvocation(GuestInvocation invocation)
 +{
@@ -2710,7 +2710,7 @@ index 0000000..fd9425b
 +    GuestThread &main = m_threads.at(kMainThreadId);
 +    if (main.invocations.size() >= kMaxInvocationDepth)
 +    {
-+        warnUnsupported("chamada aninhada fundo demais", static_cast<int>(main.invocations.size()));
++        warnUnsupported("call nested too deep", static_cast<int>(main.invocations.size()));
 +        throw EeDispatcherTransfer{};
 +    }
 +    if (getRegU32(&invocation.context, 29) == 0u)
@@ -2728,7 +2728,7 @@ index 0000000..fd9425b
 +    const size_t base = main.invocations.size();
 +    if (base + invocations.size() > kMaxInvocationDepth)
 +    {
-+        warnUnsupported("sequencia de chamadas fundo demais", static_cast<int>(invocations.size()));
++        warnUnsupported("call sequence too deep", static_cast<int>(invocations.size()));
 +        throw EeDispatcherTransfer{};
 +    }
 +    for (auto it = invocations.rbegin(); it != invocations.rend(); ++it)
@@ -2764,7 +2764,7 @@ index 0000000..fd9425b
 +    return top;
 +}
 +
-+// ---- interrupcoes ----
++// ---- interrupts ----
 +
 +int EeScheduler::addIrqHandler(bool dmac, uint32_t cause, uint32_t handler, bool append, uint32_t argument, uint32_t gp, uint32_t sp)
 +{
@@ -2866,7 +2866,7 @@ index 0000000..fd9425b
 +    {
 +        std::lock_guard lock(m_eventMutex);
 +        G.next += d;
-+        G.vblankDue = 0;   // os vblanks contados durante a pausa nao vencem na volta
++        G.vblankDue = 0;   // vblanks counted during the pause don't fire on resume
 +    }
 +    G.timerCv.notify_all();
 +}
@@ -2880,7 +2880,7 @@ index 0000000..fd9425b
 +    return previous;
 +}
 +
-+// ---- acesso e diagnostico ----
++// ---- access and diagnostics ----
 +
 +GuestThread *EeScheduler::thread(int id)
 +{
@@ -3040,14 +3040,14 @@ index 0000000..fd9425b
 +    m_runtime.m_debugGp.store(getRegU32(&context, 28), std::memory_order_relaxed);
 +}
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
-index 56a978e..0869e07 100644
+index 56a978e..528f1a4 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/CD.cpp
 @@ -3,6 +3,8 @@
  #include "MPEG.h"
  #include "runtime/ee_scheduler.h"
  
-+void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: boot trace (current step on stderr and on the black screen)
 +
  namespace ps2_stubs
  {
@@ -3056,19 +3056,19 @@ index 56a978e..0869e07 100644
  
          CdFileEntry entry;
          bool found = registerCdFile(path, entry);
-+        wotmBoot("disco: %s%s", sanitizeForLog(path).c_str(), found ? "" : " (NAO ENCONTRADO)");
++        wotmBoot("disc: %s%s", sanitizeForLog(path).c_str(), found ? "" : " (NOT FOUND)");
          CdFileEntry resolvedEntry = entry;
          std::string resolvedPath;
  
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
-index 9c54919..e6a2e29 100644
+index 9c54919..4979e7f 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/GS.cpp
 @@ -114,12 +114,14 @@ namespace ps2_stubs
                  return;
              }
  
-+#if PS2X_HW_EMU   // sem GS (wotm) nao ha o que limpar
++#if PS2X_HW_EMU   // without a GS (wotm) there is nothing to clear
              runtime->gs().writeRegister(static_cast<uint8_t>(clear.testa.reg & 0xFFu), clear.testa.value);
              runtime->gs().writeRegister(static_cast<uint8_t>(clear.prim.reg & 0xFFu), clear.prim.value);
              runtime->gs().writeRegister(static_cast<uint8_t>(clear.rgbaq.reg & 0xFFu), clear.rgbaq.value);
@@ -3084,7 +3084,7 @@ index 9c54919..e6a2e29 100644
          }
  
 -        uint32_t dbp = (static_cast<uint32_t>(img.vram_addr) * 2048u) / 256u;
-+        uint32_t dbp = img.vram_addr;   // BITBLTBUF.DBP, em blocos de 64 palavras (o dbp do sceGsSetDefLoadImage)
++        uint32_t dbp = img.vram_addr;   // BITBLTBUF.DBP, in 64-word blocks (the dbp from sceGsSetDefLoadImage)
          uint32_t dsax = static_cast<uint32_t>(img.x);
          uint32_t dsay = static_cast<uint32_t>(img.y);
  
@@ -3102,7 +3102,7 @@ index 9c54919..e6a2e29 100644
          }
  
 -        uint32_t sbp = (static_cast<uint32_t>(img.vram_addr) * 2048u) / 256u;
-+        uint32_t sbp = img.vram_addr;   // BITBLTBUF.SBP, em blocos de 64 palavras
++        uint32_t sbp = img.vram_addr;   // BITBLTBUF.SBP, in 64-word blocks
          uint64_t bitbltbuf = (static_cast<uint64_t>(sbp & 0x3FFFu) << 0) |
                               (static_cast<uint64_t>(fbw & 0x3Fu) << 16) |
                               (static_cast<uint64_t>(img.psm & 0x3Fu) << 24) |
@@ -3113,13 +3113,13 @@ index 9c54919..e6a2e29 100644
 +#if PS2X_HW_EMU
          runtime->gs().consumeLocalToHostBytes(dst, totalImageBytes);
 +#else
-+        // sem GS (wotm) nao ha VRAM desenhada para ler de volta: a imagem sai preta
++        // without a GS (wotm) there is no rendered VRAM to read back: the image comes out black
 +        std::memset(dst, 0, totalImageBytes);
 +        static bool s_warned = false;
 +        if (!s_warned)
 +        {
 +            s_warned = true;
-+            std::fprintf(stderr, "[gs] sceGsExecStoreImage sem GS: %ux%u psm %u sai preta\n", (unsigned)img.width, (unsigned)img.height, (unsigned)img.psm);
++            std::fprintf(stderr, "[gs] sceGsExecStoreImage without GS: %ux%u psm %u comes out black\n", (unsigned)img.width, (unsigned)img.height, (unsigned)img.psm);
 +        }
 +#endif
          runtime->guestFree(pktAddr);
@@ -3183,7 +3183,7 @@ index 9c54919..e6a2e29 100644
          }
  
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
-index b1bb6d8..c8ccbb6 100644
+index b1bb6d8..837a5e2 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/Helpers/Support.h
 @@ -1,5 +1,8 @@
@@ -3191,7 +3191,7 @@ index b1bb6d8..c8ccbb6 100644
  #include <cctype>
 +#include <chrono>
 +
-+void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: boot trace (current step on stderr and on the black screen)
  
  namespace
  {
@@ -3201,14 +3201,14 @@ index b1bb6d8..c8ccbb6 100644
  
 +    bool readCdSectorsImpl(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount, const char *&from);
 +
-+    // rastro do boot: cada leitura com a origem (arquivo de discroot ou ISO) e o tempo que levou
++    // boot trace: every read with its source (discroot file or ISO) and how long it took
      bool readCdSectors(uint32_t lbn, uint32_t sectors, uint8_t *dst, size_t byteCount)
 +    {
 +        const char *from = "?";
 +        const auto t0 = std::chrono::steady_clock::now();
 +        const bool ok = readCdSectorsImpl(lbn, sectors, dst, byteCount, from);
 +        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-+        wotmBoot("disco: LSN %u, %u setores (%s) em %.1f ms%s", lbn, sectors, from, ms, ok ? "" : " FALHOU");
++        wotmBoot("disc: LSN %u, %u sectors (%s) in %.1f ms%s", lbn, sectors, from, ms, ok ? "" : " FAILED");
 +        return ok;
 +    }
 +
@@ -3237,11 +3237,11 @@ index b1bb6d8..c8ccbb6 100644
      }
  
 -    static bool readGsImage(uint8_t *rdram, uint32_t addr, GsImageMem &out)
-+    // sceGsLoadImage / sceGsStoreImage no formato do SDK (libgraph): o jogo pode mandar o pacote ele mesmo por DMA (o texm do
-+    // WotM faz CALL no sceGsLoadImage dentro do pacote do VU1) ou remendar os campos antes do Exec (o particle reescreve o TRXPOS
-+    // do store). vram_addr = BP em blocos de 64 palavras, como o argumento dbp/sbp.
-+    //  load (6 qw): GIFtag A+D NLOOP 4 | BITBLTBUF (destino) | TRXPOS (DSAX/DSAY) | TRXREG | TRXDIR 0 | GIFtag IMAGE EOP
-+    //  store (7 qw): FLUSHA + DIRECT 6 | GIFtag A+D NLOOP 5 EOP | BITBLTBUF (origem) | TRXPOS (SSAX/SSAY) | TRXREG | FINISH | TRXDIR 1
++    // sceGsLoadImage / sceGsStoreImage in the SDK (libgraph) layout: the game may send the packet itself over DMA (WotM's texm
++    // does a CALL to the sceGsLoadImage inside the VU1 packet) or patch the fields before Exec (particle rewrites the store's
++    // TRXPOS). vram_addr = BP in 64-word blocks, like the dbp/sbp argument.
++    //  load (6 qw): GIFtag A+D NLOOP 4 | BITBLTBUF (destination) | TRXPOS (DSAX/DSAY) | TRXREG | TRXDIR 0 | GIFtag IMAGE EOP
++    //  store (7 qw): FLUSHA + DIRECT 6 | GIFtag A+D NLOOP 5 EOP | BITBLTBUF (source) | TRXPOS (SSAX/SSAY) | TRXREG | FINISH | TRXDIR 1
 +    static bool readGsImage(uint8_t *rdram, uint32_t addr, GsImageMem &out, bool store = false)
      {
          const uint8_t *ptr = getConstMemPtr(rdram, addr);
@@ -3318,7 +3318,7 @@ index b1bb6d8..c8ccbb6 100644
      {
          if (!runtime || !pairs || !runtime->syncCoreSubsystems())
              return;
-+#if PS2X_HW_EMU   // sem GS (wotm) os registradores de desenho nao vao a lugar nenhum
++#if PS2X_HW_EMU   // without a GS (wotm) the drawing registers go nowhere
          for (size_t i = 0; i < pairCount; ++i)
          {
              runtime->gs().writeRegister(static_cast<uint8_t>(pairs[i].reg & 0xFFu), pairs[i].value);
@@ -3330,16 +3330,16 @@ index b1bb6d8..c8ccbb6 100644
  
      static void seedGsDrawEnv1(GsDrawEnv1Mem &env,
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
-index d467c4b..ba6df64 100644
+index d467c4b..c181444 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
 @@ -1080,14 +1080,20 @@ namespace ps2_stubs
          setReturnU32(ctx, 0u);
      }
  
-+    // rand/srand da newlib do SDK (o do jogo): LCG de 32 bits, semente inicial 1, devolve 31 bits (RAND_MAX 0x7FFFFFFF).
-+    // O std::rand() & 0x7FFF de antes dava 15 bits; quem usa os bits baixos como mantissa (mathfRandf: (rand() & 0x7FFFFF) | 1.0f)
-+    // recebia so [0, 0.004) e os pedestres nasciam todos no mesmo ponto.
++    // rand/srand from the SDK's newlib (the game's): 32-bit LCG, initial seed 1, returns 31 bits (RAND_MAX 0x7FFFFFFF).
++    // The old std::rand() & 0x7FFF gave 15 bits; callers that use the low bits as a mantissa (mathfRandf: (rand() & 0x7FFFFF) | 1.0f)
++    // got only [0, 0.004) and all the pedestrians spawned at the same point.
 +    static uint32_t s_newlibRandNext = 1u;
 +
      void rand(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -3357,7 +3357,7 @@ index d467c4b..ba6df64 100644
      }
  
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
-index b50a4cf..4b3f0ee 100644
+index b50a4cf..3f1d65a 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
 @@ -14,7 +14,7 @@ namespace ps2_stubs
@@ -3365,7 +3365,7 @@ index b50a4cf..4b3f0ee 100644
          constexpr int32_t kPadStateStable = 6;
          constexpr size_t kPadPortCount = 2;
 -        constexpr size_t kPadSlotCount = 1;
-+        constexpr size_t kPadSlotCount = 4; // multitap: o controle (port, slot) e o de indice port + kPadPortCount * slot
++        constexpr size_t kPadSlotCount = 4; // multitap: pad (port, slot) is the one at index port + kPadPortCount * slot
  
          constexpr uint16_t kPadBtnSelect = 1u << 0;
          constexpr uint16_t kPadBtnL3 = 1u << 1;
@@ -3397,7 +3397,7 @@ index b50a4cf..4b3f0ee 100644
                      dst.open = src.open;
                      dst.analogMode = src.analogMode;
 diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
-index 2c98016..3751e35 100644
+index 2c98016..aac673d 100644
 --- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
 @@ -78,7 +78,12 @@ namespace ps2_syscalls
@@ -3407,7 +3407,7 @@ index 2c98016..3751e35 100644
 +#if PS2X_HW_EMU
          ee.waitVSync(ee.currentVSyncTick(), fixedResult);
 +#else
-+        // jogo (wotm, passo 10 da FRONTEIRA.md no repo WoTM): espera no lugar e volta ao chamador (o pc ja e o $ra)
++        // game (wotm, step 10 of FRONTEIRA.md in the WoTM repo): waits in place and returns to the caller (pc is already $ra)
 +        setReturnS32(ctx, ee.waitVSyncHere(ee.currentVSyncTick(), fixedResult));
 +#endif
      }
@@ -3450,7 +3450,7 @@ index 9614016..72d2d6a 100644
  
      void InitTLB(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 diff --git a/ps2xRuntime/src/lib/gs/gs_frontend.cpp b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
-index 5658928..d968780 100644
+index 5658928..199f680 100644
 --- a/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 +++ b/ps2xRuntime/src/lib/gs/gs_frontend.cpp
 @@ -6,6 +6,7 @@
@@ -3483,8 +3483,8 @@ index 5658928..d968780 100644
 +    WotmScopedUs wotmTimer;
 +    g_wotmGifPackets.fetch_add(1, std::memory_order_relaxed);
 +    g_wotmGifBytes.fetch_add(sizeBytes, std::memory_order_relaxed);
-+    static const bool s_noGs = std::getenv("PS2X_NO_GS") != nullptr; // teste: nao rasterizar (o port desenha nativo)
-+    static const bool s_uploads = std::getenv("PS2X_GS_UPLOADS") != nullptr; // com NO_GS: processa so os uploads (texturas na VRAM)
++    static const bool s_noGs = std::getenv("PS2X_NO_GS") != nullptr; // test: don't rasterize (the port draws natively)
++    static const bool s_uploads = std::getenv("PS2X_GS_UPLOADS") != nullptr; // with NO_GS: process only the uploads (textures into VRAM)
 +    if (s_noGs && !s_uploads)
 +        return;
      std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
@@ -3494,9 +3494,9 @@ index 5658928..d968780 100644
      {
          m_trxdir = static_cast<uint32_t>(value & 0x3);
  
-+        // WotM: WOTM_GSUPLOADLOG=<dbp>[,<dbp>...] (hex) imprime toda transferencia host -> GS que cobre algum desses blocos (faixa
-+        // aproximada pela largura do buffer: dbw paginas de 64 px por linha) e WOTM_GSUPLOADLOG=all imprime todas; diagnostico das
-+        // texturas que a VRAM do instantaneo nao tem (VU1CHECK.md, "Texels").
++        // WotM: WOTM_GSUPLOADLOG=<dbp>[,<dbp>...] (hex) prints every host -> GS transfer that covers any of those blocks (range
++        // approximated from the buffer width: dbw pages of 64 px per row) and WOTM_GSUPLOADLOG=all prints them all; diagnoses the
++        // textures missing from the snapshot's VRAM (VU1CHECK.md, "Texels").
 +        if (m_trxdir == 0u)
 +        {
 +            static const char *s_upLog = std::getenv("WOTM_GSUPLOADLOG");
@@ -3542,19 +3542,19 @@ index 5658928..d968780 100644
          return;
  
 -    if (drawing && m_backend)
-+    static const bool s_noDraw = std::getenv("PS2X_NO_GS") != nullptr; // NO_GS + GS_UPLOADS: so uploads, sem rasterizar
++    static const bool s_noDraw = std::getenv("PS2X_NO_GS") != nullptr; // NO_GS + GS_UPLOADS: uploads only, no rasterizing
 +    if (drawing && m_backend && !s_noDraw)
      {
          GSPrimitiveBatch batch = buildDrawBatch(needed);
          updatePreferredDisplaySourceForDraw(batch);
 diff --git a/ps2xRuntime/src/lib/ps2_hostprof.cpp b/ps2xRuntime/src/lib/ps2_hostprof.cpp
 new file mode 100644
-index 0000000..9b4c98a
+index 0000000..17f25f6
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/ps2_hostprof.cpp
 @@ -0,0 +1,348 @@
-+// Amostrador de perfil do HOST (Windows): com PS2X_HOSTPROF=1 uma thread suspende cada thread do processo a cada ~1 ms, le o RIP e
-+// faz um histograma por funcao (via dbghelp + PDB). Grava hostprof.txt a cada 10 s. Diagnostico do projeto WotM, nao e codigo do jogo.
++// HOST profiling sampler (Windows): with PS2X_HOSTPROF=1 a thread suspends every thread in the process every ~1 ms, reads the RIP and
++// builds a per-function histogram (via dbghelp + PDB). Writes hostprof.txt every 10 s. A WotM project diagnostic, not game code.
 +#ifdef _WIN32
 +#define WIN32_LEAN_AND_MEAN
 +#define NOMINMAX
@@ -3584,9 +3584,9 @@ index 0000000..9b4c98a
 +    unsigned total = 0;
 +};
 +
-+// Thread vigiada (wotmHostProfWatchThisThread; a do EE): cada amostra guarda o RIP e as primeiras palavras da pilha, para o
-+// wotmHostProfDump dizer onde ela estava num intervalo (quadro lento). As palavras da pilha que caem em codigo viram a cadeia
-+// de chamadas aproximada (heuristica: sem desenrolar de verdade, pode haver enderecos de retorno velhos no meio).
++// Watched thread (wotmHostProfWatchThisThread; the EE one): each sample keeps the RIP and the first stack words, so that
++// wotmHostProfDump can tell where it was during an interval (a slow frame). Stack words that land in code become an approximate
++// call chain (heuristic: no real unwinding, so stale return addresses may show up in the middle).
 +constexpr size_t kRing = 4096, kStackWords = 256;
 +struct Sample
 +{
@@ -3595,8 +3595,8 @@ index 0000000..9b4c98a
 +    unsigned long long stk[kStackWords] = {};
 +};
 +std::atomic<DWORD> g_watchTid{0};
-+std::atomic<long long> g_frameStartNs{0};   // inicio do quadro atual da thread vigiada (PS2X_HOSTPROF=3)
-+std::mutex g_ringMutex, g_symMutex;   // dbghelp nao e seguro entre threads
++std::atomic<long long> g_frameStartNs{0};   // start of the watched thread's current frame (PS2X_HOSTPROF=3)
++std::mutex g_ringMutex, g_symMutex;   // dbghelp is not thread-safe
 +std::vector<Sample> g_ring;
 +size_t g_ringNext = 0;
 +std::atomic<bool> g_symReady{false};
@@ -3619,7 +3619,7 @@ index 0000000..9b4c98a
 +    char tmp[40];
 +    static const unsigned long long exeBase = reinterpret_cast<unsigned long long>(GetModuleHandleW(nullptr));
 +    if (addr >= exeBase && addr - exeBase < 0x10000000ull)
-+        std::snprintf(tmp, sizeof(tmp), "exe+0x%llx", addr - exeBase);   // sem PDB: procure no ps2EntryRunner.map
++        std::snprintf(tmp, sizeof(tmp), "exe+0x%llx", addr - exeBase);   // no PDB: look it up in ps2EntryRunner.map
 +    else
 +        std::snprintf(tmp, sizeof(tmp), "0x%llx", addr);
 +    return tmp;
@@ -3656,7 +3656,7 @@ index 0000000..9b4c98a
 +        }
 +        std::vector<std::pair<std::string, unsigned>> v(byName.begin(), byName.end());
 +        std::sort(v.begin(), v.end(), [](auto &x, auto &y) { return x.second > y.second; });
-+        std::fprintf(f, "== thread %lu: %u amostras\n", (unsigned long)kv.first, kv.second.total);
++        std::fprintf(f, "== thread %lu: %u samples\n", (unsigned long)kv.first, kv.second.total);
 +        for (size_t i = 0; i < v.size() && i < 30; ++i)
 +            std::fprintf(f, "  %5.1f%%  %s\n", 100.0 * v[i].second / kv.second.total, v[i].first.c_str());
 +    }
@@ -3686,16 +3686,16 @@ index 0000000..9b4c98a
 +    const char *skipEnv = std::getenv("PS2X_HOSTPROF_SKIP");
 +    const int skipSecs = skipEnv ? std::atoi(skipEnv) : 0;
 +    bool skipDone = skipSecs <= 0;
-+    // PS2X_HOSTPROF=2: so a thread vigiada (a do EE), sem suspender as outras; perturba menos o processo.
-+    // PS2X_HOSTPROF=3: acorda a cada 50 ms e so amostra a thread vigiada quando o quadro dela ja passou de 100 ms
-+    // (wotmHostProfFrameStart): para travadas que somem com o amostrador de 1 ms ligado.
++    // PS2X_HOSTPROF=2: only the watched thread (the EE one), without suspending the others; disturbs the process less.
++    // PS2X_HOSTPROF=3: wakes every 50 ms and samples the watched thread only once its frame has run past 100 ms
++    // (wotmHostProfFrameStart): for stalls that vanish with the 1 ms sampler on.
 +    const char *modeEnv = std::getenv("PS2X_HOSTPROF");
 +    const bool slowOnly = modeEnv && modeEnv[0] == '3';
 +    const bool onlyWatched = modeEnv && (modeEnv[0] == '2' || slowOnly);
 +    FILE *rawFile = std::getenv("PS2X_HOSTPROF_RAW") ? std::fopen("hostprof_raw.txt", "w") : nullptr;
 +    const unsigned long long exeBase = reinterpret_cast<unsigned long long>(GetModuleHandleW(nullptr));
 +    const unsigned long long exeSize = 0x10000000ull;
-+    std::vector<unsigned long long> rawOutside;   // RIPs fora do exe desde o ultimo flush (nome resolvido no flush, "#sym")
++    std::vector<unsigned long long> rawOutside;   // RIPs outside the exe since the last flush (name resolved at flush, "#sym")
 +    std::unordered_map<unsigned long long, bool> rawNamed;
 +    for (;;)
 +    {
@@ -3730,7 +3730,7 @@ index 0000000..9b4c98a
 +                continue;
 +            if (SuspendThread(th) != (DWORD)-1)
 +            {
-+                // Sem alocar nada enquanto a thread esta suspensa (ela pode segurar o lock do heap).
++                // Allocate nothing while the thread is suspended (it may be holding the heap lock).
 +                CONTEXT ctx;
 +                ctx.ContextFlags = CONTEXT_CONTROL;
 +                const bool got = GetThreadContext(th, &ctx) != 0;
@@ -3750,8 +3750,8 @@ index 0000000..9b4c98a
 +                    std::lock_guard<std::mutex> lk(g_ringMutex);
 +                    g_ring[g_ringNext++ % kRing] = cur;
 +                }
-+                // PS2X_HOSTPROF_RAW: cada amostra da thread vigiada vira uma linha "rip w1 w2 ..." (RVA em hex; as palavras da pilha
-+                // que caem no executavel), para resolver pelo .map (que tem as funcoes estaticas) e somar o tempo inclusivo.
++                // PS2X_HOSTPROF_RAW: each sample of the watched thread becomes a line "rip w1 w2 ..." (RVA in hex; the stack words
++                // that land in the executable), to resolve against the .map (which has the static functions) and sum inclusive time.
 +                if (watched && rawFile && skipDone)
 +                {
 +                    const unsigned long long n = read / sizeof(unsigned long long);
@@ -3787,7 +3787,7 @@ index 0000000..9b4c98a
 +            lastReport = now;
 +            if (rawFile)
 +            {
-+                // nome (modulo!funcao pelos exports/PDB do sistema) de cada RIP de fora do exe: "#sym <rva igual ao da linha> <nome>"
++                // name (module!function from the system's exports/PDB) of each RIP outside the exe: "#sym <rva as in the line> <name>"
 +                std::lock_guard<std::mutex> symLock(g_symMutex);
 +                for (const unsigned long long r : rawOutside)
 +                {
@@ -3825,7 +3825,7 @@ index 0000000..9b4c98a
 +        std::thread(samplerMain).detach();
 +}
 +
-+// Tempo de CPU (usuario + kernel) da thread que chama, em ms (WOTM_FIELDLOG: distingue quadro lento girando de quadro bloqueado)
++// CPU time (user + kernel) of the calling thread, in ms (WOTM_FIELDLOG: tells a slow spinning frame from a blocked one)
 +double wotmThreadCpuMs()
 +{
 +    FILETIME c, e, k, u;
@@ -3833,30 +3833,30 @@ index 0000000..9b4c98a
 +        return 0.0;
 +    const unsigned long long kk = (static_cast<unsigned long long>(k.dwHighDateTime) << 32) | k.dwLowDateTime;
 +    const unsigned long long uu = (static_cast<unsigned long long>(u.dwHighDateTime) << 32) | u.dwLowDateTime;
-+    return (kk + uu) / 10000.0;   // unidades de 100 ns
++    return (kk + uu) / 10000.0;   // units of 100 ns
 +}
 +
-+// Marca o inicio de um quadro da thread vigiada (PS2X_HOSTPROF=3 so amostra quadros que passam de 100 ms)
++// Marks the start of a frame on the watched thread (PS2X_HOSTPROF=3 only samples frames that run past 100 ms)
 +void wotmHostProfFrameStart()
 +{
 +    g_frameStartNs.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_relaxed);
 +}
 +
-+// A thread que chama passa a ser a vigiada (uma so; a ultima chamada vale)
++// The calling thread becomes the watched one (only one; the last call wins)
 +void wotmHostProfWatchThisThread()
 +{
 +    g_watchTid.store(GetCurrentThreadId());
 +}
 +
-+// Palavra da pilha que pode ser endereco de retorno: dentro de um modulo carregado (o exe ou uma DLL)
++// Stack word that may be a return address: inside a loaded module (the exe or a DLL)
 +static bool inModule(HANDLE proc, unsigned long long a)
 +{
 +    return a >= 0x10000 && SymGetModuleBase64(proc, a) != 0;
 +}
 +
-+// Onde a thread vigiada esteve entre t0 e t1 (steady_clock, ns): amostras agrupadas pelo RIP e pelas 8 primeiras palavras da
-+// pilha que caem num modulo, as mais frequentes primeiro, no stderr com o prefixo [hostprof]. No maximo um despejo a cada 2 s
-+// (o despejo roda na propria thread vigiada e deixa o quadro seguinte mais longo).
++// Where the watched thread was between t0 and t1 (steady_clock, ns): samples grouped by RIP and by the first 8 stack words
++// that land in a module, most frequent first, on stderr with the [hostprof] prefix. At most one dump every 2 s
++// (the dump runs on the watched thread itself and makes the next frame longer).
 +void wotmHostProfDump(long long t0, long long t1, const char *tag)
 +{
 +    static long long lastDump = 0;
@@ -3890,7 +3890,7 @@ index 0000000..9b4c98a
 +    }
 +    std::vector<std::pair<std::string, unsigned>> v(sig.begin(), sig.end());
 +    std::sort(v.begin(), v.end(), [](auto &x, auto &y) { return x.second > y.second; });
-+    std::fprintf(stderr, "[hostprof] %s: %zu amostras da thread vigiada em %.1f ms\n", tag, sel.size(), (t1 - t0) / 1e6);
++    std::fprintf(stderr, "[hostprof] %s: %zu samples of the watched thread in %.1f ms\n", tag, sel.size(), (t1 - t0) / 1e6);
 +    for (size_t i = 0; i < v.size() && i < 8; ++i)
 +        std::fprintf(stderr, "[hostprof]   %4u  %s\n", v[i].second, v[i].first.c_str());
 +}
@@ -3902,14 +3902,14 @@ index 0000000..9b4c98a
 +void wotmHostProfDump(long long, long long, const char *) {}
 +#endif
 diff --git a/ps2xRuntime/src/lib/ps2_iop_host.cpp b/ps2xRuntime/src/lib/ps2_iop_host.cpp
-index 8d46e03..15595a9 100644
+index 8d46e03..35f7952 100644
 --- a/ps2xRuntime/src/lib/ps2_iop_host.cpp
 +++ b/ps2xRuntime/src/lib/ps2_iop_host.cpp
 @@ -517,8 +517,11 @@ bool PS2IopHostAdapter::sendSifCommand(uint32_t commandId,
                                           packetSize);
  }
  
-+void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: boot trace (current step on stderr and on the black screen)
 +
  void PS2IopHostAdapter::log(ps2x::iop::LogLevel level, std::string_view message)
  {
@@ -3918,7 +3918,7 @@ index 8d46e03..15595a9 100644
      if (level == ps2x::iop::LogLevel::Warning)
      {
 diff --git a/ps2xRuntime/src/lib/ps2_memory.cpp b/ps2xRuntime/src/lib/ps2_memory.cpp
-index 37b6a4d..387e481 100644
+index 37b6a4d..f2df7ed 100644
 --- a/ps2xRuntime/src/lib/ps2_memory.cpp
 +++ b/ps2xRuntime/src/lib/ps2_memory.cpp
 @@ -9,7 +9,19 @@
@@ -3952,7 +3952,7 @@ index 37b6a4d..387e481 100644
  
          // Initialize IOP RAM with zeros
          std::memset(iop_ram, 0, 2 * 1024 * 1024);
-+#endif // no jogo (wotm, passo 9 da FRONTEIRA.md no repo WoTM) nao ha RAM do IOP; esta nem era lida (getIOPRAM sem chamador)
++#endif // the game (wotm, step 9 of FRONTEIRA.md in the WoTM repo) has no IOP RAM; this one was never even read (getIOPRAM has no caller)
  
          // Initialize I/O registers
          m_ioRegisters.clear();
@@ -3960,11 +3960,11 @@ index 37b6a4d..387e481 100644
                      const bool tieEnabled = (chcr & (1u << 7)) != 0u;
                      const int kMaxChainTags = 4096;
                      std::vector<uint8_t> chainBuf;
-+                    std::vector<std::pair<uint32_t, uint32_t>> chainSrc;   // WotM: origem de cada trecho (so com g_wotmVu1Tap no VIF1)
++                    std::vector<std::pair<uint32_t, uint32_t>> chainSrc;   // WotM: source of each segment (only with g_wotmVu1Tap on the VIF1)
 +                    const bool recordSrc = g_wotmVu1Tap && channelBase == 0x10009000u;
-+                    // WotM: o jogo sem VIF1 (wotm) descarta a cadeia do VIF1 inteira (processPendingTransfers); copiar os pacotes do
-+                    // VU1 para o vetor custava ~1 ms por quadro na tela dividida. So anda pelas tags; a transferencia pendente (um
-+                    // marcador de 16 bytes) continua saindo nas mesmas condicoes, para a conclusao do DMA ser a mesma.
++                    // WotM: the game without a VIF1 (wotm) drops the whole VIF1 chain (processPendingTransfers); copying the VU1 packets
++                    // into the vector cost ~1 ms per frame in split screen. Only walks the tags; the pending transfer (a 16-byte
++                    // marker) is still emitted under the same conditions, so the DMA completes the same way.
 +                    const bool skipVif1Copy = !PS2X_HW_EMU && channelBase == 0x10009000u && !recordSrc;
 +                    bool skippedVif1Copy = false;
  
@@ -4001,14 +4001,14 @@ index 37b6a4d..387e481 100644
                          bool hasPayload = (tagQwc > 0);
                          bool endChain = false;
  
-+                        {   // WotM (diagnostico da pista do VIF1 na fase 8): CALL para a lista de sombra psObjDma + i * 0x4000 (10 slots);
-+                            // avisa se uma tag dentro da chamada sai do slot (estouro da lista) ou se a tag chamada nao parece tag
++                        {   // WotM (diagnosing the VIF1 track on stage 8): CALL into the shadow list psObjDma + i * 0x4000 (10 slots);
++                            // warns if a tag inside the call leaves the slot (list overflow) or if the called tag doesn't look like a tag
 +                            static uint32_t psSlotEnd = 0u, psWarn = 0u;
 +                            constexpr uint32_t kPsObj = 0x0051C800u;
 +                            if (psSlotEnd && (currentTagAddr < psSlotEnd - 0x4000u || currentTagAddr >= psSlotEnd) && id != 6u && psWarn < 8u)
 +                            {
 +                                ++psWarn;
-+                                std::fprintf(stderr, "[dma] tag %08x fora do slot da sombra [%x, %x): id %u qwc %u addr %x\n", currentTagAddr,
++                                std::fprintf(stderr, "[dma] tag %08x outside the shadow slot [%x, %x): id %u qwc %u addr %x\n", currentTagAddr,
 +                                             psSlotEnd - 0x4000u, psSlotEnd, id, tagQwc, addr);
 +                            }
 +                            if (id == 5u && addr >= kPsObj && addr < kPsObj + 10u * 0x4000u)
@@ -4019,7 +4019,7 @@ index 37b6a4d..387e481 100644
 +                                if ((cid == 0u || cid == 7u || (callee >> 16 & 0xFFFu) != 0u) && psWarn < 8u)
 +                                {
 +                                    ++psWarn;
-+                                    std::fprintf(stderr, "[dma] CALL para %x: a tag chamada nao parece tag (%016llx)\n", addr, (unsigned long long)callee);
++                                    std::fprintf(stderr, "[dma] CALL to %x: the called tag doesn't look like a tag (%016llx)\n", addr, (unsigned long long)callee);
 +                                    const uint32_t *idx = reinterpret_cast<const uint32_t *>(m_rdram + 0x0054CB80u);
 +                                    const uint32_t *num = reinterpret_cast<const uint32_t *>(m_rdram + 0x0054CCA0u);
 +                                    std::fprintf(stderr, "[dma]   psObjIdx/psNumObjects:");
@@ -4063,7 +4063,7 @@ index 37b6a4d..387e481 100644
          observedGifQwc = static_cast<uint32_t>(std::min<uint64_t>(16u, static_cast<uint64_t>(observedGifQwc) + transferQwc));
      }
 -    if (observedGifQwc != 0u)
-+    // no jogo sem GS (wotm) o pacote do GIF e descartado na hora: a FIFO nunca enche (e os timers, que a esvaziavam, nao andam)
++    // in the game without a GS (wotm) the GIF packet is dropped right away: the FIFO never fills (and the timers that drained it don't run)
 +    if (PS2X_HW_EMU && observedGifQwc != 0u)
      {
          constexpr uint32_t kGifStat = 0x10003020u;
@@ -4072,17 +4072,17 @@ index 37b6a4d..387e481 100644
      m_pendingVif0Transfers.clear();
  
      const bool hadVif1 = !m_pendingVif1Transfers.empty();
-+    static const bool s_noVif1 = std::getenv("PS2X_NO_VIF1") != nullptr; // teste: nao executar VU1/VIF1 (o port desenha nativo)
-+    static const bool s_vif1Uploads = std::getenv("PS2X_VIF1_UPLOADS") != nullptr; // com NO_VIF1: processa a cadeia (uploads de textura/CLUT por DIRECT) sem executar o VU1
++    static const bool s_noVif1 = std::getenv("PS2X_NO_VIF1") != nullptr; // test: don't run VU1/VIF1 (the port draws natively)
++    static const bool s_vif1Uploads = std::getenv("PS2X_VIF1_UPLOADS") != nullptr; // with NO_VIF1: process the chain (texture/CLUT uploads via DIRECT) without running the VU1
      for (auto &p : m_pendingVif1Transfers)
      {
-+        if (!PS2X_HW_EMU || (s_noVif1 && !s_vif1Uploads && !g_wotmVu1Tap && !g_wotmVif1Keep))   // jogo (wotm): nunca ha VIF1
++        if (!PS2X_HW_EMU || (s_noVif1 && !s_vif1Uploads && !g_wotmVu1Tap && !g_wotmVif1Keep))   // game (wotm): there is never a VIF1
 +            continue;
          if (!p.chainData.empty())
          {
 +            m_vif1ChainSrc = p.chainSrc.empty() ? nullptr : &p.chainSrc;
 +            if (m_vif1ChainSrc && g_wotmChainTap)
-+                g_wotmChainTap(p.chainSrc.data(), p.chainSrc.size(), p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));   // WotM: a checagem coleta a cena nativa agora, com a RAM que esta cadeia vai ler
++                g_wotmChainTap(p.chainSrc.data(), p.chainSrc.size(), p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));   // WotM: the check captures the native scene now, with the RAM this chain is going to read
              processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
 +            m_vif1ChainSrc = nullptr;
          }
@@ -4108,7 +4108,7 @@ index 37b6a4d..387e481 100644
              return;
          }
          flushMaskedPath3Packets(false);
-+        if (g_wotmVu1Tap && g_wotmGifDmaTap)   // WotM: instantaneo da checagem VU1 x nativo (ambiente de desenho e uploads do quadro)
++        if (g_wotmVu1Tap && g_wotmGifDmaTap)   // WotM: VU1-vs-native check snapshot (the frame's drawing environment and uploads)
 +            g_wotmGifDmaTap(data, sizeBytes);
      }
  
@@ -4117,7 +4117,7 @@ index 37b6a4d..387e481 100644
          m_gifPacketCallback(data, sizeBytes);
  }
  
-+#if PS2X_HW_EMU   // atalhos do canal GIF direto para o GS (o jogo sem GS, wotm, nao os chama)
++#if PS2X_HW_EMU   // GIF channel shortcuts straight to the GS (the game without a GS, wotm, never calls them)
  bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
  {
      static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
@@ -4130,7 +4130,7 @@ index 37b6a4d..387e481 100644
  int PS2Memory::pollDmaRegisters()
  {
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..99904a4 100644
+index 8590f14..7e48d74 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
 @@ -1,6 +1,16 @@
@@ -4163,7 +4163,7 @@ index 8590f14..99904a4 100644
 +        return devs;
 +    }
 +
-+    // Eixo: fica o valor mais longe do centro entre os dispositivos da porta
++    // Axis: keep the value farthest from center among the port's devices
 +    void mergeAxis(uint8_t &dst, uint8_t v)
 +    {
 +        if (std::abs(int(v) - 0x80) > std::abs(int(dst) - 0x80))
@@ -4193,8 +4193,8 @@ index 8590f14..99904a4 100644
 +        float ly = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_LEFT_Y);
 +        float rx = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_RIGHT_X);
 +        float ry = GetGamepadAxisMovement(pad, GAMEPAD_AXIS_RIGHT_Y);
-+        // PS2X_PADLOG: nome de cada gamepad lido (e a porta) e cada mudanca dos eixos (>= 0,05) no stderr, com o horario.
-+        // PS2X_PAD_DEADZONE=<0..1>: zera o eixo com |valor| abaixo do limite (padrao 0,25; 0 = sem zona morta).
++        // PS2X_PADLOG: the name of each gamepad read (and its port) and every axis change (>= 0.05) on stderr, with the time.
++        // PS2X_PAD_DEADZONE=<0..1>: zeroes the axis when |value| is below the threshold (default 0.25; 0 = no dead zone).
 +        static const bool padLog = std::getenv("PS2X_PADLOG") != nullptr;
 +        static const float deadzone = std::getenv("PS2X_PAD_DEADZONE") ? static_cast<float>(std::atof(std::getenv("PS2X_PAD_DEADZONE"))) : 0.25f;
 +        if (padLog)
@@ -4204,7 +4204,7 @@ index 8590f14..99904a4 100644
 +            if (namedPort[pad] != port)
 +            {
 +                namedPort[pad] = port;
-+                std::fprintf(stderr, "[pad] gamepad %d -> porta %d: %s (eixos: %d)\n", pad, port + 1, GetGamepadName(pad), GetGamepadAxisCount(pad));
++                std::fprintf(stderr, "[pad] gamepad %d -> port %d: %s (axes: %d)\n", pad, port + 1, GetGamepadName(pad), GetGamepadAxisCount(pad));
 +            }
 +            const float cur[4] = {lx, ly, rx, ry};
 +            bool changed = false;
@@ -4212,7 +4212,7 @@ index 8590f14..99904a4 100644
 +                changed |= std::fabs(cur[i] - last[pad][i]) >= 0.05f;
 +            if (changed)
 +            {
-+                std::fprintf(stderr, "[pad] t=%.3f gamepad %d esq=%+.2f,%+.2f dir=%+.2f,%+.2f\n", GetTime(), pad, lx, ly, rx, ry);
++                std::fprintf(stderr, "[pad] t=%.3f gamepad %d left=%+.2f,%+.2f right=%+.2f,%+.2f\n", GetTime(), pad, lx, ly, rx, ry);
 +                std::copy(cur, cur + 4, last[pad]);
 +            }
 +        }
@@ -4226,9 +4226,9 @@ index 8590f14..99904a4 100644
 +        mergeAxis(data[5], static_cast<uint8_t>(128 + ry * 127));
 +    }
 +
-+    // Mapeamento do teclado (definido pelo dono):
-+    //   Setas = analogico esquerdo        I/J/K/L = D-pad (cima/esquerda/baixo/direita)
-+    //   Espaco = X   Z = quadrado   X = triangulo   S = bola
++    // Keyboard mapping (chosen by the owner):
++    //   Arrows = left analog stick        I/J/K/L = D-pad (up/left/down/right)
++    //   Space = X   Z = square   X = triangle   S = circle
 +    //   Enter = Start   Backspace = Select
 +    //   Q = L1   W = R1   Shift = L1+R1   A = L2   C = R2
 +    void readKeyboard(uint16_t &btns, uint8_t *data)
@@ -4248,7 +4248,7 @@ index 8590f14..99904a4 100644
 +            if (IsKeyDown(m.key))
 +                btns &= ~m.mask;
 +
-+        // Analogico esquerdo pelas setas (so quando alguma seta esta pressionada; senao fica o valor do gamepad/centro)
++        // Left analog stick from the arrows (only while an arrow is held; otherwise the gamepad/center value stays)
 +        const bool aL = IsKeyDown(KEY_LEFT), aR = IsKeyDown(KEY_RIGHT), aU = IsKeyDown(KEY_UP), aD = IsKeyDown(KEY_DOWN);
 +        if (aL != aR)
 +            data[6] = aL ? 0x00 : 0xFF;
@@ -4256,8 +4256,8 @@ index 8590f14..99904a4 100644
 +            data[7] = aU ? 0x00 : 0xFF;
 +    }
 +
-+    // Roteiro de botoes por tempo (teste sem tela): PS2X_PAD="seg:dur:botao;seg:dur:botao;..." (botao: up,down,left,right,cross,
-+    // circle,square,triangle,l1,r1,l2,r2,start,select). Vale para o jogador 1; "botao@N" manda para o jogador N (1 a 4; controle N-1).
++    // Timed button script (headless test): PS2X_PAD="sec:dur:button;sec:dur:button;..." (button: up,down,left,right,cross,
++    // circle,square,triangle,l1,r1,l2,r2,start,select). Applies to player 1; "button@N" sends it to player N (1 to 4; pad N-1).
 +    void applyScript(int port, uint16_t &btns)
 +    {
 +        struct Step { double t0, dur; uint16_t mask; int port; };
@@ -4307,7 +4307,7 @@ index 8590f14..99904a4 100644
 +                btns &= ~st.mask;
 +        if (btns != lastBtns[port])
 +        {
-+            std::fprintf(stderr, "[pad] t=%.1f porta %d readState#%lu btns=%04x\n", now, port + 1, calls[port], btns);
++            std::fprintf(stderr, "[pad] t=%.1f port %d readState#%lu btns=%04x\n", now, port + 1, calls[port], btns);
 +            lastBtns[port] = btns;
 +        }
 +    }
@@ -4316,7 +4316,7 @@ index 8590f14..99904a4 100644
 -bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t size)
 +bool PSPadBackend::readState(int port, int slot, uint8_t *data, size_t size)
  {
-+    // multitap: o controle (port, slot) e o de indice port + 2 * slot (0 e 1 nas portas, 2 e 3 no slot 1 de cada uma)
++    // multitap: pad (port, slot) is the one at index port + 2 * slot (0 and 1 on the ports, 2 and 3 on slot 1 of each)
 +    const int controller = port + 2 * slot;
      if (!data || size < 32)
          return false;
@@ -4416,7 +4416,7 @@ index 8590f14..99904a4 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..64de933 100644
+index 45cb9d2..52a8929 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,5 @@
@@ -4429,7 +4429,7 @@ index 45cb9d2..64de933 100644
  #include "ps2_host_backend.h"
  #include "ps2_iop_host.h"
  #include "ps2x/iop/iop_subsystem.h"
-+#include "wotm_vu0_native.h"   // WoTM: native/runtime/ do repo (WOTM_NATIVE_DIR)
++#include "wotm_vu0_native.h"   // WoTM: the repo's native/runtime/ (WOTM_NATIVE_DIR)
  
  #include <iostream>
  #include <stdexcept>
@@ -4437,7 +4437,7 @@ index 45cb9d2..64de933 100644
  {
      void resetSifState();
  }
-+void wotmBoot(const char *fmt, ...); // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
++void wotmBoot(const char *fmt, ...); // wotm_live.inc: boot trace (current step on stderr and on the black screen)
  
  #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
  #define ET_EXEC 2            // Executable file
@@ -4446,7 +4446,7 @@ index 45cb9d2..64de933 100644
  static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
  {
 +#if !PS2X_HW_EMU
-+    // jogo sem GS (wotm): nao ha quadro do GS; o fundo fica preto e a janela mostra a cena nativa (wotmDrawScene) e os filmes
++    // game without a GS (wotm): no GS frame; the background stays black and the window shows the native scene (wotmDrawScene) and movies
 +    (void)rt;
 +    static bool s_blackUploaded = false;
 +    if (!s_blackUploaded)
@@ -4498,9 +4498,9 @@ index 45cb9d2..64de933 100644
  
  ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
  {
-+    static uint32_t s_wotmRpcN = 0;   // WotM (FRONTEIRA.md): o que ainda chega ao IOP
++    static uint32_t s_wotmRpcN = 0;   // WotM (FRONTEIRA.md): what still reaches the IOP
 +    if (++s_wotmRpcN <= 40)
-+        std::fprintf(stderr, "[iop] rpc #%u sid=%08x fn=%u modo=%u\n", s_wotmRpcN, request.sid, request.function, request.mode);
++        std::fprintf(stderr, "[iop] rpc #%u sid=%08x fn=%u mode=%u\n", s_wotmRpcN, request.sid, request.function, request.mode);
      auto scope = m_iopHost->enterCall(ctx, rdram);
      request.callToken = scope.token();
      return m_iopSubsystem->handleRpc(request);
@@ -4510,7 +4510,7 @@ index 45cb9d2..64de933 100644
  {
 +    static uint32_t s_wotmSifN = 0;
 +    if (++s_wotmSifN <= 40)
-+        std::fprintf(stderr, "[iop] sif #%u tipo=%u fase=%u %08x -> %08x (%u B)\n", s_wotmSifN, unsigned(transfer.kind), unsigned(transfer.phase),
++        std::fprintf(stderr, "[iop] sif #%u kind=%u phase=%u %08x -> %08x (%u B)\n", s_wotmSifN, unsigned(transfer.kind), unsigned(transfer.phase),
 +                     transfer.sourceAddress, transfer.destinationAddress, transfer.size);
      auto scope = m_iopHost->enterCall(nullptr, rdram);
      m_iopSubsystem->onSifTransfer(transfer);
@@ -4520,8 +4520,8 @@ index 45cb9d2..64de933 100644
      }
  
 +#if !PS2X_HW_EMU
-+    // jogo sem GS/VU1 (wotm): o arbitro fica sem funcao de pacote (o DMA do canal GIF conclui e o pacote e descartado) e o MSCAL do
-+    // VIF1 nao tem a quem chamar (o VIF1 nem processa as cadeias, ps2_memory.cpp)
++    // game without GS/VU1 (wotm): the arbiter gets no packet function (the GIF channel DMA completes and the packet is dropped) and the VIF1's
++    // MSCAL has nothing to call (the VIF1 doesn't even process the chains, ps2_memory.cpp)
 +    m_gifArbiter.setProcessPacketFn(nullptr);
 +    m_memory.setGifArbiter(&m_gifArbiter);
 +    resetIop();
@@ -4542,9 +4542,9 @@ index 45cb9d2..64de933 100644
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
  #else
          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-+        wotmBoot("abrindo a janela (OpenGL)");
++        wotmBoot("opening the window (OpenGL)");
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title);
-+        wotmBoot("abrindo o audio");
++        wotmBoot("opening audio");
          InitAudioDevice();
          m_audioBackend.setAudioReady(IsAudioDeviceReady());
  #endif
@@ -4593,7 +4593,7 @@ index 45cb9d2..64de933 100644
                                        elfCrc32Valid);
 +    {
 +        extern void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath);
-+        wotmInstallOverrides(*this, elfPath);   // correcoes especificas do WotM (wotm_overrides.cpp)
++        wotmInstallOverrides(*this, elfPath);   // WotM-specific fixes (wotm_overrides.cpp)
 +    }
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -4605,12 +4605,12 @@ index 45cb9d2..64de933 100644
 +#include "rlgl.h"
 +#include "wotm_scene.inc"
 +static std::vector<uint32_t> g_wotmCov(0x1000000u >> 2, 0);
-+static const bool g_wotmCovOn = std::getenv("PS2X_COVERAGE") != nullptr;   // contar so quando vai gravar
++static const bool g_wotmCovOn = std::getenv("PS2X_COVERAGE") != nullptr;   // count only when it will be written out
 +// Called on every guest call when set: WOTM_CALLTRACE (native/runtime/wotm_sync.inc) records the call sequence of one frame
 +void (*g_wotmCallTrace)(const R5900Context *ctx, uint32_t targetPc) = nullptr;
 +
 +std::atomic<R5900Context *> g_wotmLiveCtx{nullptr};
-+// Quantas vezes um checkpoint mandou o codigo gerado desenrolar ate o escalonador (so a thread executora do EE mexe).
++// How many times a checkpoint told generated code to unwind to the scheduler (only the EE executor thread touches it).
 +static uint64_t g_eeUnwindSeq = 0;
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
@@ -4648,9 +4648,9 @@ index 45cb9d2..64de933 100644
      }
  
 -    if (ctx->pc == entryPc)
-+    // Stub de host que nao definiu o pc: segue no retorno. So vale se nenhum checkpoint mandou desenrolar durante a
-+    // chamada: numa funcao recursiva pausada na propria chamada recursiva o pc tambem e a entrada, e tratar isso como
-+    // retorno fazia o chamador seguir com o sp do quadro de dentro (ra lixo; o jogo morria na arvore de animacao).
++    // Host stub that didn't set pc: continue at the return address. Only valid if no checkpoint requested an unwind during the
++    // call: in a recursive function paused at its own recursive call, pc is also the entry, and treating that as a
++    // return made the caller continue with the inner frame's sp (garbage ra; the game died in the animation tree).
 +    if (ctx->pc == entryPc && g_eeUnwindSeq == unwindSeq)
      {
          ctx->pc = fallthroughPc;
@@ -4660,23 +4660,23 @@ index 45cb9d2..64de933 100644
  }
  
 +#if !PS2X_HW_EMU
-+// Contadores do GS (PS2X_STATS) que o gs_frontend.cpp define; sem GS (wotm) ficam em zero
++// GS counters (PS2X_STATS) that gs_frontend.cpp defines; without a GS (wotm) they stay at zero
 +std::atomic<unsigned long long> g_wotmGifPackets{0}, g_wotmGifBytes{0}, g_wotmGifUs{0};
 +#endif
 +
-+// Diagnostico (PS2X_STATS): custo do interpretador de VU0 (VCALLMS dentro de hierTraverseAsm etc.)
++// Diagnostics (PS2X_STATS): cost of the VU0 interpreter (VCALLMS inside hierTraverseAsm etc.)
 +void wotmHostProfInit();
 +std::atomic<unsigned long long> g_wotmVu0Us{0}, g_wotmVu0Calls{0};
 +std::atomic<unsigned long long> g_wotmVu0PcCalls[512], g_wotmVu0PcUs[512];
-+std::atomic<unsigned long long> g_wotmVu0Phase[3];   // ns: reset+copia de entrada, execucao, copia de saida
++std::atomic<unsigned long long> g_wotmVu0Phase[3];   // ns: reset+input copy, execution, output copy
 +
  void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
  {
      (void)rdram;
 +    static const bool hostProfInit = (wotmHostProfInit(), true);
 +    (void)hostProfInit;
-+    // Tempo e chamadas por microprograma (linha "[time] vu0" do PS2X_STATS): sempre no executavel de teste; no do jogo so com
-+    // PS2X_VU0PROF (sao ~12 mil chamadas por quadro na tela dividida, e os dois relogios e quatro atomicos custavam ~0,1 us cada)
++    // Time and calls per microprogram (the PS2X_STATS "[time] vu0" line): always in the test executable; in the game one only with
++    // PS2X_VU0PROF (there are ~12 thousand calls per frame in split screen, and the two clock reads and four atomics cost ~0.1 us each)
 +    static const bool vu0Prof = PS2X_HW_EMU || std::getenv("PS2X_VU0PROF") != nullptr;
 +    struct Vu0Timer
 +    {
@@ -4707,22 +4707,22 @@ index 45cb9d2..64de933 100644
      }
  
 +#if !PS2X_HW_EMU
-+    // jogo sem interpretador (wotm): so os microprogramas traduzidos (wotm_vu0_native). Um sem traducao (codigo do VU0 diferente do
-+    // esperado) fica sem efeito, com aviso
++    // game without an interpreter (wotm): only the translated microprograms (wotm_vu0_native). One without a translation (VU0 code that differs
++    // from what was expected) has no effect, with a warning
 +    if (WotmVu0Fn fn = wotmVu0NativeLookup(vu0Code, PS2_VU0_CODE_SIZE, m_memory.getVU0CodeGeneration(), startPC))
 +    {
-+        copyVu0ContextToState(ctx, m_vu0State);   // zera o resto do estado como o execute do interpretador
++        copyVu0ContextToState(ctx, m_vu0State);   // clears the rest of the state like the interpreter's execute
 +        wotmVu0NativeRun(fn, m_vu0State, vu0Data);
 +        copyVu0StateToContext(m_vu0State, ctx);
 +        return;
 +    }
 +    static std::atomic<uint32_t> s_untranslated{0};
 +    if (s_untranslated.fetch_add(1, std::memory_order_relaxed) < 16)
-+        std::fprintf(stderr, "[vu0] microprograma sem traducao em pc=0x%x: ignorado (este executavel nao tem o interpretador)\n", startPC);
++        std::fprintf(stderr, "[vu0] untranslated microprogram at pc=0x%x: ignored (this executable has no interpreter)\n", startPC);
 +    seedVu0IdleSuccess(ctx);
 +    return;
 +#else
-+    // PS2X_VU0_VERIFY: executa antes a mesma chamada num interpretador de referencia (atalho do agendador desligado) e compara com o normal
++    // PS2X_VU0_VERIFY: first runs the same call on a reference interpreter (scheduler shortcut off) and compares it with the normal one
 +    static const bool verifyVu0 = std::getenv("PS2X_VU0_VERIFY") != nullptr;
 +    static VU1Interpreter s_vu0Ref(VU1Interpreter::Unit::VU0);
 +    static uint8_t s_refData[PS2_VU0_DATA_SIZE];
@@ -4737,29 +4737,29 @@ index 45cb9d2..64de933 100644
 +        s_vu0Ref.execute(vu0Code, PS2_VU0_CODE_SIZE, s_refData, PS2_VU0_DATA_SIZE, m_gs, &m_memory, startPC, 0u, ctx->vu0_itop, 4096);
 +        g_wotmVuNoSkip = false;
 +    }
-+    // Microprograma em C++ (wotm_vu0_native, gerado por tools/vu0native.py do repo WoTM) quando existe e o codigo bate. Fora da
-+    // verificacao e do dump, que sao do interpretador.
++    // C++ microprogram (wotm_vu0_native, generated by the WoTM repo's tools/vu0native.py) when one exists and the code matches. Not
++    // during verification or dumping, which belong to the interpreter.
 +    static const bool nativeAllowed = !verifyVu0 && std::getenv("PS2X_DUMP_VU0") == nullptr;
 +    if (nativeAllowed)
 +    {
 +        if (WotmVu0Fn fn = wotmVu0NativeLookup(vu0Code, PS2_VU0_CODE_SIZE, m_memory.getVU0CodeGeneration(), startPC))
 +        {
 +            VU1State &state = m_vu0.state();
-+            copyVu0ContextToState(ctx, state);   // zera o resto do estado como o execute (top 0, sem bit E/desvio pendente)
++            copyVu0ContextToState(ctx, state);   // clears the rest of the state like execute does (top 0, no E bit/pending branch)
 +            wotmVu0NativeRun(fn, state, vu0Data);
 +            copyVu0StateToContext(state, ctx);
 +            return;
 +        }
-+        // sem traducao: o interpretador roda (aqui) e o executavel do jogo (wotm) ignoraria o programa; o aviso diz que falta traduzir
++        // no translation: the interpreter runs (here), the game executable (wotm) would ignore the program; the warning flags it as untranslated
 +        static std::atomic<uint32_t> s_untranslated{0};
 +        if (!std::getenv("WOTM_VU0_INTERP") && s_untranslated.fetch_add(1, std::memory_order_relaxed) < 16)
-+            std::fprintf(stderr, "[vu0] microprograma sem traducao em pc=0x%x: no interpretador\n", startPC);
++            std::fprintf(stderr, "[vu0] untranslated microprogram at pc=0x%x: running on the interpreter\n", startPC);
 +    }
 +    const auto ph0 = std::chrono::steady_clock::now();
      m_vu0.reset();
      copyVu0ContextToState(ctx, m_vu0.state());
 +    const auto ph1 = std::chrono::steady_clock::now();
-+    // PS2X_DUMP_VU0: grava o microcodigo e amostras (estado/dados de entrada e saida) das primeiras chamadas de cada microprograma, em regime
++    // PS2X_DUMP_VU0: writes the microcode and samples (input and output state/data) from the first calls of each microprogram, in steady state
 +    static const bool dumpVu0 = std::getenv("PS2X_DUMP_VU0") != nullptr;
 +    static unsigned s_dumpPerPc[512];
 +    VU1State dumpIn{};
@@ -4795,10 +4795,10 @@ index 45cb9d2..64de933 100644
 +                          std::memcmp(&a.i, &b.i, 4) == 0 && a.r == b.r && a.pc == b.pc && a.mac == b.mac && a.clip == b.clip &&
 +                          a.status == b.status && a.cycles == b.cycles && std::memcmp(vu0Data, s_refData, PS2_VU0_DATA_SIZE) == 0;
 +        if (!same && ++s_verifyBad <= 5)
-+            std::fprintf(stderr, "[vu0-verify] DIVERGIU em pc=0x%x (chamada %llu): mac %x/%x clip %x/%x status %x/%x cycles %llu/%llu\n", startPC,
++            std::fprintf(stderr, "[vu0-verify] DIVERGED at pc=0x%x (call %llu): mac %x/%x clip %x/%x status %x/%x cycles %llu/%llu\n", startPC,
 +                         s_verifyCalls, a.mac, b.mac, a.clip, b.clip, a.status, b.status, (unsigned long long)a.cycles, (unsigned long long)b.cycles);
 +        if (s_verifyCalls % 500000 == 0)
-+            std::fprintf(stderr, "[vu0-verify] %llu chamadas comparadas, %llu divergencias\n", s_verifyCalls, s_verifyBad);
++            std::fprintf(stderr, "[vu0-verify] %llu calls compared, %llu divergences\n", s_verifyCalls, s_verifyBad);
 +    }
 +    if (dumpThis)
 +    {
@@ -4837,7 +4837,7 @@ index 45cb9d2..64de933 100644
      ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
      m_memory.writeIORegister(GIF_TADR, tadr);
      ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
-+#if PS2X_HW_EMU   // atalhos que entregam a cadeia ao GS; sem GS (wotm) a cadeia segue pelo DMA normal, que conclui e descarta
++#if PS2X_HW_EMU   // shortcuts that hand the chain to the GS; without a GS (wotm) it goes through the normal DMA, which completes and drops it
      if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
      {
          drainCompletedDmacHandlers(rdram);
@@ -4865,7 +4865,7 @@ index 45cb9d2..64de933 100644
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
-+    wotmBoot("boot do jogo (EE e IOP)");
++    wotmBoot("game boot (EE and IOP)");
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
@@ -4886,19 +4886,19 @@ index 45cb9d2..64de933 100644
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
 +        {
-+            // captura de teste: PS2X_SHOT_FRAMES="300,900,1800" -> shot_<frame>.png (cwd)
++            // test capture: PS2X_SHOT_FRAMES="300,900,1800" -> shot_<frame>.png (cwd)
 +            static long s_frame = 0;
 +            ++s_frame;
 +            if (std::getenv("PS2X_SCENE"))
 +                wotmDrawScene(m_memory.getRDRAM());
-+            static const bool s_fmv = std::getenv("PS2X_FMV") != nullptr; // filmes nativos (wotm_fmv.hpp): por cima de tudo
++            static const bool s_fmv = std::getenv("PS2X_FMV") != nullptr; // native movies (wotm_fmv.hpp): on top of everything
 +            if (s_fmv)
 +                wotmFmvPresent(m_memory.getGSVRAM());
 +            {
 +                const R5900Context *lc = g_wotmLiveCtx.load(std::memory_order_relaxed);
 +                wotmBootPresent(lc ? lc->pc : 0u, m_eeScheduler ? m_eeScheduler->currentVSyncTick() : 0u);
 +            }
-+            if (std::getenv("PS2X_PROF")) // amostrador de PC: histograma por palavra, gravado em prof.<frame>
++            if (std::getenv("PS2X_PROF")) // PC sampler: per-word histogram, written to prof.<frame>
 +            {
 +                static std::unordered_map<uint32_t, uint32_t> s_hist;
 +                static std::mutex s_histMx;
@@ -4940,7 +4940,7 @@ index 45cb9d2..64de933 100644
 +                {
 +                    const uint8_t *rd = m_memory.getRDRAM();
 +                    auto rw = [&](uint32_t a) { uint32_t v; std::memcpy(&v, rd + a, 4); return v; };
-+                    if (const char *pk = std::getenv("PS2X_PEEK")) // "6F8464,6F8080,..." palavras da RDRAM (hex)
++                    if (const char *pk = std::getenv("PS2X_PEEK")) // "6F8464,6F8080,..." RDRAM words (hex)
 +                    {
 +                        std::string s(pk);
 +                        std::fprintf(stderr, "[peek] f=%ld", s_frame);
@@ -5000,11 +5000,11 @@ index 45cb9d2..64de933 100644
 +                std::string list = std::string(",") + sf + ",";
 +                if (list.find("," + std::to_string(s_frame) + ",") != std::string::npos)
 +                {
-+                    rlDrawRenderBatchActive(); // o raylib agrupa o desenho em lote; sem isso a captura sai vazia
++                    rlDrawRenderBatchActive(); // raylib batches drawing; without this the capture comes out empty
 +                    TakeScreenshot(("shot_" + std::to_string(s_frame) + ".png").c_str());
 +                }
 +            }
-+            // grava a RAM do EE em ram_<tag>.bin e a VRAM do GS (texturas enviadas por upload) em vram_<tag>.bin (cwd)
++            // writes EE RAM to ram_<tag>.bin and GS VRAM (uploaded textures) to vram_<tag>.bin (cwd)
 +            const auto dumpRam = [this](const std::string &tag) {
 +                if (FILE *rf = std::fopen(("ram_" + tag + ".bin").c_str(), "wb"))
 +                {
@@ -5024,7 +5024,7 @@ index 45cb9d2..64de933 100644
 +                }
 +                m_gs.unlockDisplaySnapshot();
 +#else
-+                if (const uint8_t *vram = m_memory.getGSVRAM())   // sem GS: so o que os filmes copiam para la
++                if (const uint8_t *vram = m_memory.getGSVRAM())   // without a GS: only what the movies copy there
 +                    if (FILE *vf = std::fopen(("vram_" + tag + ".bin").c_str(), "wb"))
 +                    {
 +                        std::fwrite(vram, 1, PS2_GS_VRAM_SIZE, vf);
@@ -5032,34 +5032,34 @@ index 45cb9d2..64de933 100644
 +                    }
 +#endif
 +            };
-+            if (const char *df = std::getenv("PS2X_DUMP_RAM")) // "600,900": ram_<frame>.bin e vram_<frame>.bin, para o visualizador nativo
++            if (const char *df = std::getenv("PS2X_DUMP_RAM")) // "600,900": ram_<frame>.bin and vram_<frame>.bin, for the native viewer
 +            {
 +                const std::string dl = std::string(",") + df + ",";
 +                if (dl.find("," + std::to_string(s_frame) + ",") != std::string::npos)
 +                    dumpRam(std::to_string(s_frame));
 +            }
 +            {
-+                // Vigia: g_frame (0x6F7E38) sobe em todo quadro da luta (rtMain) e do menu (ShellRtLoop::endField); parado por
-+                // WOTM_WATCHDOG segundos (padrao 8; 0 desliga) com a apresentacao viva = logica congelada. Filme (movieIsPlaying,
-+                // 0x6F8650) nao conta. Uma vez por parada: threads do EE no log e ram_/vram_vigia_<g_frame>.bin.
-+                // Desempenho: janelas de 2 s com o jogo andando abaixo de WOTM_MINFPS quadros/s (padrao 25) viram aviso no log, sem dump.
-+                // Janela com um intervalo acima de 1 s entre quadros e carga, nao lentidao, e fica de fora.
++                // Watchdog: g_frame (0x6F7E38) goes up on every frame of a fight (rtMain) and of the menu (ShellRtLoop::endField); stuck for
++                // WOTM_WATCHDOG seconds (default 8; 0 turns it off) while presentation is alive = frozen logic. A movie (movieIsPlaying,
++                // 0x6F8650) doesn't count. Once per stop: EE threads to the log and ram_/vram_vigia_<g_frame>.bin.
++                // Performance: 2 s windows where the game runs below WOTM_MINFPS frames/s (default 25) become a log warning, with no dump.
++                // A window with a gap of over 1 s between frames is loading, not slowness, and is left out.
 +                static const double s_limit = [] { const char *e = std::getenv("WOTM_WATCHDOG"); return e ? std::atof(e) : 8.0; }();
 +                static const double s_minFps = [] { const char *e = std::getenv("WOTM_MINFPS"); return e ? std::atof(e) : 25.0; }();
 +                static uint32_t s_lastG = 0, s_winG = 0;
 +                static double s_lastChange = 0.0, s_winT = 0.0, s_maxGap = 0.0, s_slowSince = 0.0, s_slowMin = 0.0;
-+                static bool s_fired = false, s_pauseWin = false;   // s_pauseWin: houve pausa (F7/F8) na janela de 2 s
++                static bool s_fired = false, s_pauseWin = false;   // s_pauseWin: there was a pause (F7/F8) in the 2 s window
 +                const uint8_t *ram = m_memory.getRDRAM();
 +                uint32_t g = 0, movie = 0;
 +                std::memcpy(&g, ram + 0x6F7E38u, 4);
 +                std::memcpy(&movie, ram + 0x6F8650u, 4);
 +                const double now = GetTime();
-+                const bool paused = wotmPaused();   // pausa de proposito (F7/F8, wotm_foto.inc) nao conta
++                const bool paused = wotmPaused();   // a deliberate pause (F7/F8, wotm_foto.inc) doesn't count
 +                s_pauseWin = s_pauseWin || paused;
 +                if (s_lastChange == 0.0 || g != s_lastG || movie != 0 || paused)
 +                {
 +                    if (s_fired)
-+                        std::fprintf(stderr, "[vigia] g_frame voltou a andar (%u -> %u) depois de %.1f s parado\n", s_lastG, g, now - s_lastChange);
++                        std::fprintf(stderr, "[watchdog] g_frame is moving again (%u -> %u) after %.1f s stuck\n", s_lastG, g, now - s_lastChange);
 +                    if (g != s_lastG && s_lastChange != 0.0)
 +                        s_maxGap = std::max(s_maxGap, now - s_lastChange);
 +                    s_lastG = g;
@@ -5069,20 +5069,20 @@ index 45cb9d2..64de933 100644
 +                else if (s_limit > 0.0 && !s_fired && g != 0 && now - s_lastChange >= s_limit)
 +                {
 +                    s_fired = true;
-+                    std::fprintf(stderr, "[vigia] CONGELOU: g_frame=%u parado ha %.1f s (apresentacao no quadro %ld)\n", g, now - s_lastChange, s_frame);
++                    std::fprintf(stderr, "[watchdog] FROZE: g_frame=%u stuck for %.1f s (presentation at frame %ld)\n", g, now - s_lastChange, s_frame);
 +                    if (m_eeScheduler)
 +                    {
 +                        const EeKernelSnapshot ks = m_eeScheduler->snapshot();
-+                        std::fprintf(stderr, "[vigia]  running=%d cycle=%llu\n", ks.runningThreadId, (unsigned long long)ks.eeCycle);
++                        std::fprintf(stderr, "[watchdog]  running=%d cycle=%llu\n", ks.runningThreadId, (unsigned long long)ks.eeCycle);
 +                        for (const auto &t : ks.threads)
-+                            std::fprintf(stderr, "[vigia]  thr %d st=%d wait=%d wid=%d prio=%d pc=%06x ra=%06x entry=%06x inv=%u\n", t.id,
++                            std::fprintf(stderr, "[watchdog]  thr %d st=%d wait=%d wid=%d prio=%d pc=%06x ra=%06x entry=%06x inv=%u\n", t.id,
 +                                         (int)t.status, (int)t.waitReason, t.waitId, t.currentPriority, t.pc, t.ra, t.entry, t.invocationDepth);
 +                        for (const auto &s : ks.semaphores)
-+                            std::fprintf(stderr, "[vigia]  sema %d count=%d max=%d waiters=%u\n", s.id, s.count, s.maxCount, s.waiters);
++                            std::fprintf(stderr, "[watchdog]  sema %d count=%d max=%d waiters=%u\n", s.id, s.count, s.maxCount, s.waiters);
 +                    }
 +                    const std::string tag = "vigia_" + std::to_string(g);
 +                    dumpRam(tag);
-+                    std::fprintf(stderr, "[vigia]  dump: ram_%s.bin, vram_%s.bin\n", tag.c_str(), tag.c_str());
++                    std::fprintf(stderr, "[watchdog]  dump: ram_%s.bin, vram_%s.bin\n", tag.c_str(), tag.c_str());
 +                    std::fflush(stderr);
 +                }
 +                if (s_winT == 0.0)
@@ -5100,13 +5100,13 @@ index 45cb9d2..64de933 100644
 +                        {
 +                            s_slowSince = s_winT;
 +                            s_slowMin = fps;
-+                            std::fprintf(stderr, "[vigia] LENTO: %.1f quadros/s do jogo (g_frame=%u)\n", fps, g);
++                            std::fprintf(stderr, "[watchdog] SLOW: %.1f game frames/s (g_frame=%u)\n", fps, g);
 +                        }
 +                        s_slowMin = std::min(s_slowMin, fps);
 +                    }
 +                    else if (counted && s_slowSince != 0.0)
 +                    {
-+                        std::fprintf(stderr, "[vigia] ritmo normal de novo (%.1f quadros/s): lento por %.1f s, minimo %.1f\n", fps, now - s_slowSince, s_slowMin);
++                        std::fprintf(stderr, "[watchdog] back to normal pace (%.1f frames/s): slow for %.1f s, minimum %.1f\n", fps, now - s_slowSince, s_slowMin);
 +                        s_slowSince = 0.0;
 +                    }
 +                    s_winT = now;
@@ -5137,7 +5137,7 @@ index 45cb9d2..64de933 100644
 +                    std::fprintf(stderr, "[time]   idleMs=%llu (%llu calls)\n", g_wotmIdleUs.load() / 1000, g_wotmIdleCalls.load());
 +                    {
 +                        extern std::atomic<unsigned long long> g_wotmVu0Us, g_wotmVu0Calls, g_wotmVu0PcCalls[512], g_wotmVu0PcUs[512];
-+                        std::fprintf(stderr, "[time]   vu0 fases(ms) entrada=%llu exec=%llu saida=%llu\n", g_wotmVu0Phase[0].load() / 1000000, g_wotmVu0Phase[1].load() / 1000000, g_wotmVu0Phase[2].load() / 1000000);
++                        std::fprintf(stderr, "[time]   vu0 phases(ms) in=%llu exec=%llu out=%llu\n", g_wotmVu0Phase[0].load() / 1000000, g_wotmVu0Phase[1].load() / 1000000, g_wotmVu0Phase[2].load() / 1000000);
 +                        std::fprintf(stderr, "[time]   vu0 calls=%llu ms=%llu |", g_wotmVu0Calls.load(), g_wotmVu0Us.load() / 1000);
 +                        for (uint32_t i = 0; i < 512; ++i)
 +                            if (g_wotmVu0PcCalls[i].load() > 1000)
@@ -5151,7 +5151,7 @@ index 45cb9d2..64de933 100644
          if (WindowShouldClose())
          {
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
-index b02c7ca..b27913e 100644
+index b02c7ca..d7afc31 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 +++ b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 @@ -1,6 +1,10 @@
@@ -5169,7 +5169,7 @@ index b02c7ca..b27913e 100644
  {
      constexpr uint8_t kGifFmtImage = 2u;
  
-+    // Codigos do VIF1 (opcode sem o bit de interrupcao). UNPACK: 0x60..0x7F, menos V1/V2/V3 com VL 3 (so existe V4-5).
++    // VIF1 codes (opcode without the interrupt bit). UNPACK: 0x60..0x7F, except V1/V2/V3 with VL 3 (only V4-5 exists).
 +    bool isValidVif1Opcode(uint8_t op)
 +    {
 +        if ((op & 0x60u) == 0x60u)
@@ -5193,15 +5193,15 @@ index b02c7ca..b27913e 100644
  }
  
 +#if !PS2X_HW_EMU
-+// Jogo sem VIF0 (wotm, passo 7 da FRONTEIRA.md no repo WoTM): o unico uso por quadro era o hierLoadVu0Ucode (so MPG), que um gancho
-+// troca pela copia direta da imagem do microcodigo (wotm_live.inc). O que ainda chegar e descartado; avisa na primeira vez.
++// Game without a VIF0 (wotm, step 7 of FRONTEIRA.md in the WoTM repo): the only per-frame use was hierLoadVu0Ucode (MPG only), which a hook
++// replaces with a direct copy of the microcode image (wotm_live.inc). Anything that still arrives is dropped, with a warning the first time.
 +static void wotmVif0Discard(const uint8_t *data, uint32_t sizeBytes)
 +{
 +    static bool s_warned = false;
 +    if (sizeBytes == 0u || s_warned)
 +        return;
 +    s_warned = true;
-+    std::fprintf(stderr, "[vif0] DMA do VIF0 descartado (%u B): o wotm.exe nao tem VIF0; primeiras palavras:", sizeBytes);
++    std::fprintf(stderr, "[vif0] VIF0 DMA dropped (%u B): wotm.exe has no VIF0; first words:", sizeBytes);
 +    for (uint32_t k = 0; data && k + 4u <= sizeBytes && k < 64u; k += 4u)
 +    {
 +        uint32_t w;
@@ -5226,7 +5226,7 @@ index b02c7ca..b27913e 100644
 +#endif // PS2X_HW_EMU (VIF0)
 +
 +#if !PS2X_HW_EMU
-+// Jogo sem VU1/GS (wotm): o VIF1 nao existe; o que chega ao FIFO e descartado (o DMA do canal 1 conclui sem processar, ps2_memory.cpp)
++// Game without VU1/GS (wotm): there is no VIF1; whatever reaches the FIFO is dropped (channel 1 DMA completes unprocessed, ps2_memory.cpp)
 +void PS2Memory::processVIF1Data(uint32_t, uint32_t) {}
 +void PS2Memory::processVIF1Data(const uint8_t *, uint32_t) {}
 +#else
@@ -5237,7 +5237,7 @@ index b02c7ca..b27913e 100644
      processVIF1Data(m_rdram + srcPhys, sizeBytes);
  }
  
-+// WotM: anel dos ultimos comandos VIF1 validos (deslocamento, codigo), so para o diagnostico do primeiro codigo invalido
++// WotM: ring of the last valid VIF1 commands (offset, code), only for diagnosing the first invalid code
 +static std::pair<uint32_t, uint32_t> g_vif1Last[12];
 +static uint32_t g_vif1LastN = 0;
 +
@@ -5249,7 +5249,7 @@ index b02c7ca..b27913e 100644
          return;
  
      uint32_t pos = 0;
-+    uint32_t vif1PrevMscal = 0;   // WotM (g_wotmVu1Tap): deslocamento do MSCAL/MSCNT anterior nesta cadeia
++    uint32_t vif1PrevMscal = 0;   // WotM (g_wotmVu1Tap): offset of the previous MSCAL/MSCNT in this chain
  
      while (pos + 4 <= sizeBytes)
      {
@@ -5288,12 +5288,12 @@ index b02c7ca..b27913e 100644
          uint16_t imm = cmd & 0xFFFF;
 +        if (!isValidVif1Opcode(opcode))
 +        {
-+            // WotM: codigo VIF invalido = o fluxo saiu de passo e o VIF1 esta lendo dados como comandos (ex.: STROW/STMOD falsos
-+            // corrompiam ROW/MODE e o VU1 punha ADC em todo vertice; pista 5). A checagem VU1 x nativo mostra a contagem.
++            // WotM: invalid VIF code = the stream got out of step and the VIF1 is reading data as commands (e.g. bogus STROW/STMOD
++            // corrupted ROW/MODE and the VU1 set ADC on every vertex; track 5). The VU1-vs-native check shows the count.
 +            if (g_wotmVif1Bad++ == 0u)
 +            {
-+                std::fprintf(stderr, "[vif1] comando invalido %08x no deslocamento %x de %u bytes: o VIF1 saiu de passo\n", cmd, pos - 4u, sizeBytes);
-+                // os ultimos comandos antes dele, com a origem na RAM (trecho da cadeia DMA), para achar quem contou o tamanho errado
++                std::fprintf(stderr, "[vif1] invalid command %08x at offset %x of %u bytes: the VIF1 got out of step\n", cmd, pos - 4u, sizeBytes);
++                // the last commands before it, with their RAM source (DMA chain segment), to find who counted the size wrong
 +                auto srcOf = [&](uint32_t ofs) -> uint32_t {
 +                    if (!m_vif1ChainSrc) return 0u;
 +                    auto byOfs = [](uint32_t v, const std::pair<uint32_t, uint32_t> &e) { return v < e.first; };
@@ -5306,9 +5306,9 @@ index b02c7ca..b27913e 100644
 +                {
 +                    const auto &e = g_vif1Last[(g_vif1LastN + k) % 12u];
 +                    if (e.second || e.first)
-+                        std::fprintf(stderr, "[vif1]   antes: ofs %x cmd %08x ram %x\n", e.first, e.second, srcOf(e.first));
++                        std::fprintf(stderr, "[vif1]   before: ofs %x cmd %08x ram %x\n", e.first, e.second, srcOf(e.first));
 +                }
-+                std::fprintf(stderr, "[vif1]   invalido: ofs %x ram %x\n", pos - 4u, srcOf(pos - 4u));
++                std::fprintf(stderr, "[vif1]   invalid: ofs %x ram %x\n", pos - 4u, srcOf(pos - 4u));
 +            }
 +        }
 +        else
@@ -5318,8 +5318,8 @@ index b02c7ca..b27913e 100644
 +        }
 +        if (m_vif1ChainSrc && g_wotmMscalTap && (opcode == VIF_MSCAL || opcode == VIF_MSCALF || opcode == VIF_MSCNT))
 +        {
-+            // WotM (g_wotmVu1Tap): origens na RAM dos trechos da cadeia desde o MSCAL anterior ate este (a ultima e o endereco
-+            // do proprio codigo VIF); o tap devolve o id do programa, que o XGKICK carrega ate g_wotmGifTap.
++            // WotM (g_wotmVu1Tap): RAM sources of the chain segments from the previous MSCAL up to this one (the last is the address
++            // of this VIF code itself); the tap returns the program id, which the XGKICK carries through to g_wotmGifTap.
 +            const uint32_t at = pos - 4u;
 +            auto byOfs = [](uint32_t v, const std::pair<uint32_t, uint32_t> &e) { return v < e.first; };
 +            auto first = std::upper_bound(m_vif1ChainSrc->begin(), m_vif1ChainSrc->end(), vif1PrevMscal, byOfs);
@@ -5342,8 +5342,8 @@ index b02c7ca..b27913e 100644
              vif1_regs.stat ^= (1u << 7); // toggle DBF
  
 -            if (m_vu1MscalCallback)
-+            static const bool s_noVuExec = std::getenv("PS2X_NO_VIF1") != nullptr; // NO_VIF1: nao executa microprogramas
-+            if (m_vu1MscalCallback && (!s_noVuExec || g_wotmVu1Tap))   // WotM: a checagem VU1 x nativo executa o quadro amostrado
++            static const bool s_noVuExec = std::getenv("PS2X_NO_VIF1") != nullptr; // NO_VIF1: don't run microprograms
++            if (m_vu1MscalCallback && (!s_noVuExec || g_wotmVu1Tap))   // WotM: the VU1-vs-native check runs the sampled frame
                  m_vu1MscalCallback(startPC, runTop, runItop);
              continue;
          }
@@ -5362,9 +5362,9 @@ index b02c7ca..b27913e 100644
                  qwCount = availableQw;
  
 -            if (qwCount > 0)
-+            // O VIF obedece ao tamanho do DIRECT; uma imagem GIF (IMAGE) maior que ele continua no DIRECT seguinte, cujos
-+            // primeiros quadwords sao pixels e nao uma tag GIF. Antes os quadwords que vinham depois do DIRECT no fluxo do VIF eram
-+            // consumidos como imagem: o VIF saia de passo e executava pixels como codigos (STROW/STMOD/STMASK/UNPACK falsos).
++            // The VIF obeys the DIRECT size; a GIF image (IMAGE) larger than that continues in the next DIRECT, whose
++            // first quadwords are pixels, not a GIF tag. Previously the quadwords that followed the DIRECT in the VIF stream were
++            // consumed as image data: the VIF got out of step and executed pixels as codes (bogus STROW/STMOD/STMASK/UNPACK).
 +            uint32_t directPos = pos;
 +            uint32_t directQw = qwCount;
 +            const bool directHl = (opcode == VIF_DIRECTHL);
@@ -5373,7 +5373,7 @@ index b02c7ca..b27913e 100644
 -                const bool directHl = (opcode == VIF_DIRECTHL);
 -                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
 +                const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, directQw);
-+                static const bool s_gsUploads = std::getenv("PS2X_GS_UPLOADS") != nullptr;   // WotM: com a checagem, so os uploads (texturas/CLUTs na VRAM) chegam ao GS
++                static const bool s_gsUploads = std::getenv("PS2X_GS_UPLOADS") != nullptr;   // WotM: with the check on, only the uploads (textures/CLUTs into VRAM) reach the GS
 +                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads)
 +                {
 +                    std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
@@ -5395,11 +5395,11 @@ index b02c7ca..b27913e 100644
 +            if (directQw > 0)
 +            {
 +                static const bool s_gsUploads2 = std::getenv("PS2X_GS_UPLOADS") != nullptr;
-+                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads2)   // WotM: a checagem VU1 x nativo nao alimenta o GS (quem desenha e a camada nativa), salvo no replay (imagem de referencia) e, com PS2X_GS_UPLOADS, para os uploads
++                if ((!g_wotmVu1Tap && !g_wotmVif1Keep) || g_wotmGsFeed || s_gsUploads2)   // WotM: the VU1-vs-native check doesn't feed the GS (the native layer does the drawing), except in replay (reference image) and, with PS2X_GS_UPLOADS, for the uploads
 +                    submitGifPacket(GifPathId::Path2, data + directPos, directQw * 16, true, directHl);
-+                if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: a checagem acompanha os registradores (FRAME, TEX0) e os primitivos que chegam pelo PATH2
++                if (g_wotmVu1Tap && g_wotmGifTap)   // WotM: the check tracks the registers (FRAME, TEX0) and the primitives that arrive over PATH2
 +                {
-+                    // origem na RAM do pacote DIRECT (trecho da cadeia que contem directPos), para o inventario da checagem
++                    // RAM source of the DIRECT packet (the chain segment that contains directPos), for the check's inventory
 +                    g_wotmPath2Src = 0u;
 +                    if (m_vif1ChainSrc && !m_vif1ChainSrc->empty())
 +                    {
@@ -5426,7 +5426,7 @@ index b02c7ca..b27913e 100644
  }
 +#endif // PS2X_HW_EMU
 diff --git a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
-index bd75bba..68268a1 100644
+index bd75bba..e099e6e 100644
 --- a/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 +++ b/ps2xRuntime/src/lib/vu/ps2_vu1_core.cpp
 @@ -5,6 +5,7 @@
@@ -5442,7 +5442,7 @@ index bd75bba..68268a1 100644
      m_viWritePipeline = {};
      m_accWritePipeline = {};
 -    m_xgkick = {};
-+    // sem zerar o buffer de 64 KB do pacote (so e lido ate copiedBytes)
++    // without clearing the 64 KB packet buffer (it is only read up to copiedBytes)
 +    m_xgkick.sourceAddress = m_xgkick.totalBytes = m_xgkick.copiedBytes = m_xgkick.currentTagEnd = m_xgkick.cycleCredit = 0;
 +    m_xgkick.issueCycle = 0;
 +    m_xgkick.active = m_xgkick.currentTagEop = false;
@@ -5578,16 +5578,16 @@ index bd75bba..68268a1 100644
      reportReservedInstruction(true, 0xFFFFFFF5u);
  }
  
-+bool g_wotmVuNoSkip = false; // verificacao: desliga o atalho de commitReadyPipelines (PS2X_VU0_VERIFY)
++bool g_wotmVuNoSkip = false; // verification: turns off the commitReadyPipelines shortcut (PS2X_VU0_VERIFY)
 +
  void VU1Interpreter::commitReadyPipelines()
  {
 -    for (FlagPipelineEntry &entry : m_flagPipeline)
 +    if (!g_wotmVuNoSkip && m_cycle < m_earliestPending)
 +        return;
-+    // A mesma passada que aplica as entradas prontas acha o menor readyCycle das que ficam (antes recomputeEarliestPending
-+    // varria tudo de novo a cada ciclo), e uma fila cujo minimo (m_pendMin, limite inferior) ainda nao chegou nem e varrida.
-+    // A ordem de aplicacao entre as filas e a mesma de antes.
++    // The same pass that applies the ready entries finds the smallest readyCycle of those left (previously recomputeEarliestPending
++    // rescanned everything every cycle), and a queue whose minimum (m_pendMin, a lower bound) hasn't arrived yet isn't even scanned.
++    // The order of application across the queues is the same as before.
 +    const bool scanAll = g_wotmVuNoSkip;
 +    uint64_t e = ~0ull;
 +    if (scanAll || m_cycle >= m_pendMin[0])
@@ -5723,7 +5723,7 @@ index bd75bba..68268a1 100644
 +                    m_state.vf[write.reg][component] = write.value[component];
 +                }
 +            }
-+            write.valid = false;   // queueVfWrite zera a entrada inteira ao reusar
++            write.valid = false;   // queueVfWrite clears the whole entry when reusing it
          }
 -        write = {};
 +        m_pendMin[2] = m;
@@ -5799,9 +5799,9 @@ index bd75bba..68268a1 100644
  
 +    if (g_wotmVu1Tap && g_wotmGifTap)
 +    {
-+        // checagem VU1 x nativo: a saida do quadro amostrado so vai para a comparacao (quem desenha e a camada nativa)
++        // VU1-vs-native check: the sampled frame's output only goes to the comparison (the native layer is what draws)
 +        g_wotmGifTap(m_xgkick.wotmSrc, m_xgkick.packet.data(), m_xgkick.totalBytes);
-+        if (!g_wotmGsFeed)   // no replay (--vu1cmp) o pacote tambem vai ao GS, para a imagem de referencia
++        if (!g_wotmGsFeed)   // in replay (--vu1cmp) the packet also goes to the GS, for the reference image
 +        {
 +            m_xgkick.active = false;
 +            return;
@@ -5858,7 +5858,7 @@ index bd75bba..68268a1 100644
      case 0x7D:
 +    case 0x7E:
 +        // EFU (PCSX2 LowerOP_T3_xx): ESADD 70, ERSADD 71, ELENG 72, ERLENG 73, EATANxy 74, EATANxz 75, ESUM 76, ESQRT 78,
-+        // ERSQRT 79, ERCPR 7A, ESIN 7C, EATAN 7D, EEXP 7E (77 invalido)
++        // ERSQRT 79, ERCPR 7A, ESIN 7C, EATAN 7D, EEXP 7E (77 invalid)
          if (m_unit == Unit::VU0)
          {
              usage.reserved = true;
@@ -5898,7 +5898,7 @@ index bd75bba..68268a1 100644
  }
  
 -VU1Interpreter::DecodedInstructionPair VU1Interpreter::getDecodedInstructionPairForPc(
-+// Devolve referencia (ao cache ou a m_decodeScratch): copiar o par por valor a cada ciclo pesava no laco do run.
++// Returns a reference (into the cache or m_decodeScratch): copying the pair by value every cycle weighed on the run loop.
 +const VU1Interpreter::DecodedInstructionPair &VU1Interpreter::getDecodedInstructionPairForPc(
      const uint8_t *vuCode, uint32_t codeSize, PS2Memory *memory, uint32_t pc)
  {
@@ -5937,8 +5937,8 @@ index bd75bba..68268a1 100644
          else
          {
              execUpper(decoded.upper);
-+            // vf0 e constante: um upper com destino vf0 (so pelas flags MAC, ex. MADDq.w vf0 + DIV Q, vf0w, vf6w no microprograma dos
-+            // destrocos) nao pode mudar o que o lower do mesmo par le. O destino 0 nao entra no sombreamento (upperVfShadowReg).
++            // vf0 is constant: an upper op targeting vf0 (only for the MAC flags, e.g. MADDq.w vf0 + DIV Q, vf0w, vf6w in the debris
++            // microprogram) must not change what the same pair's lower op reads. Destination 0 is not shadowed (upperVfShadowReg).
 +            m_state.vf[0][0] = 0.0f;
 +            m_state.vf[0][1] = 0.0f;
 +            m_state.vf[0][2] = 0.0f;
@@ -5947,7 +5947,7 @@ index bd75bba..68268a1 100644
          }
  
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..c8eaf8e 100644
+index 563bcbd..84ef087 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
 @@ -164,12 +164,108 @@ namespace
@@ -5955,30 +5955,30 @@ index 563bcbd..c8eaf8e 100644
  }
  
 +#include "ps2_runtime_macros.h"
-+#include "wotm_syms.h"   // wotm::sym / wotm::fn (native/; no runtime cobaia, enderecos do ELF nmall)
++#include "wotm_syms.h"   // wotm::sym / wotm::fn (native/; in the cobaia runtime, addresses from the nmall ELF)
 +
-+// Hook de teste: pula os filmes (decoder IPU do jogo ainda nao tem backend).
-+// Faz o que o fim natural faria: movieRequested=1, movieIsCompletelyFinished=1.
++// Test hook: skips the movies (the game's IPU decoder has no backend yet).
++// Does what the natural end would do: movieRequested=1, movieIsCompletelyFinished=1.
 +static void hook_skipMovie(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
 +    WRITE32(wotm::sym::movieRequested, 1u);
 +    WRITE32(wotm::sym::movieIsCompletelyFinished, 1u);
 +}
 +
-+// Corte na fronteira da engine (sem VU1/GS emulado): o VU1 do runtime executa microcodigo invalido e o DMA do VIF1
-+// nunca conclui. rtWaitForVu1 esperava objsInPacket|objsInAlphaPacket zerarem (quem zerava era hierDmaHandler).
++// Cut at the engine boundary (no emulated VU1/GS): the runtime's VU1 runs invalid microcode and the VIF1 DMA
++// never completes. rtWaitForVu1 waited for objsInPacket|objsInAlphaPacket to reach zero (hierDmaHandler was what cleared them).
 +static void hook_noop(uint8_t *, R5900Context *, PS2Runtime *) {}
 +void wotmFmvInstall(PS2Runtime &runtime); // wotm_live.inc (PS2X_FMV)
 +void wotmSndInstall(PS2Runtime &runtime); // wotm_snd.inc (PS2X_SND)
-+void wotmBoot(const char *fmt, ...);       // wotm_live.inc: rastro do boot (etapa no stderr e na tela preta)
-+int wotmVu1CmpMain(int argc, char **argv);  // wotm_vu1check.inc: `--vu1cmp <instantaneo>`, checagem VU1 x nativo sem jogo
-+static void hook_ret1(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); } // CMovie::Update: "terminou"
-+extern bool g_wotmVu1Tap;   // ps2_memory.cpp (checagem VU1 x nativo)
++void wotmBoot(const char *fmt, ...);       // wotm_live.inc: boot trace (current step on stderr and on the black screen)
++int wotmVu1CmpMain(int argc, char **argv);  // wotm_vu1check.inc: `--vu1cmp <snapshot>`, VU1-vs-native check without the game
++static void hook_ret1(uint8_t *, R5900Context *ctx, PS2Runtime *) { setReturnS32(ctx, 1); } // CMovie::Update: "finished"
++extern bool g_wotmVu1Tap;   // ps2_memory.cpp (VU1-vs-native check)
 +void wotmFlareCapture(const uint8_t *rdram); // wotm_live.inc
 +static PS2Runtime::RecompiledFunction g_origFlushObjQ = nullptr;
 +static void hook_flushObjQ(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
-+    if (g_wotmVu1Tap && g_origFlushObjQ)   // quadro amostrado pela checagem VU1 x nativo (wotm_vu1check.inc): o DMA vai ao VIF1/VU1
++    if (g_wotmVu1Tap && g_origFlushObjQ)   // frame sampled by the VU1-vs-native check (wotm_vu1check.inc): the DMA goes to the VIF1/VU1
 +    {
 +        g_origFlushObjQ(rdram, ctx, runtime);
 +        return;
@@ -5986,10 +5986,10 @@ index 563bcbd..c8eaf8e 100644
 +    WRITE32(wotm::sym::objsInPacket, 0u); // objsInPacket
 +    WRITE32(wotm::sym::objsInAlphaPacket, 0u); // objsInAlphaPacket
 +}
-+// rtWaitForVu1 (menus: userintMain entre o hier(0,0) e o hier(0,1)) espera o hierFlushObjQ da interrupcao do DMA do VIF1 despachar
-+// o ultimo pacote do hier, com a OT de alfa. Sem VU1 nao ha o que esperar; no quadro amostrado pela checagem VU1 x nativo o pacote
-+// sai aqui, como no PS2 (antes do letterbox e do fade que o userintMain manda pelo PATH3). Sem isso o hier(0,1) reiniciava os
-+// pacotes com a OT pendente e os objetos de alfa dos menus saiam como "so o nativo desenha".
++// rtWaitForVu1 (menus: userintMain between hier(0,0) and hier(0,1)) waits for the hierFlushObjQ in the VIF1 DMA interrupt to dispatch
++// the hier's last packet, with the alpha OT. Without a VU1 there is nothing to wait for; on the VU1-vs-native check's sampled frame the packet
++// goes out here, as on the PS2 (before the letterbox and fade that userintMain sends over PATH3). Without this hier(0,1) reset the
++// packets with the OT still pending and the menus' alpha objects showed up as "only native draws".
 +static void hook_waitVu1(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
 +    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(wotm::sym::objsInPacket) || READ32(wotm::sym::objsInAlphaPacket)))
@@ -5998,21 +5998,21 @@ index 563bcbd..c8eaf8e 100644
 +        g_origFlushObjQ(rdram, &temp, runtime);
 +    }
 +}
-+// Relogio do jogo. O jogo mede a duracao da logica de cada quadro pelo timer 1 (fields = ticks / 9619; updateRate =
-+// 60 / fields; a fisica integra com dt = 1 / updateRate). O timer anda pelo relogio virtual do EE, e o particleDraw tem
-+// um laco (0x21B8A0) que espera objsInPacket | objsInAlphaPacket zerarem (conclusao do VU1). Sem VU1 quem os zerava era
-+// a apresentacao (60 Hz): o laco girava queimando 32 ciclos virtuais por volta e o jogo media 2 a 4 fields por quadro
-+// aleatoriamente (updateRate 15/20/60 alternando; giro do monstro e mola do pelo instaveis).
-+// Agora: os contadores sao zerados na entrada do particleDraw (sem VU1 nao ha o que esperar), as voltas no laco nao
-+// contam ciclos, e o relogio virtual acompanha o de parede enquanto a logica roda (EeScheduler::checkpointDue): o jogo
-+// mede a duracao real da logica, como no PS2 (2 fields, rate 30, na luta).
++// Game clock. The game measures how long each frame's logic takes with timer 1 (fields = ticks / 9619; updateRate =
++// 60 / fields; physics integrates with dt = 1 / updateRate). The timer runs on the EE's virtual clock, and particleDraw has
++// a loop (0x21B8A0) that waits for objsInPacket | objsInAlphaPacket to reach zero (VU1 completion). Without a VU1 they were cleared by
++// the presentation (60 Hz): the loop spun burning 32 virtual cycles per iteration and the game measured 2 to 4 fields per frame
++// at random (updateRate alternating 15/20/60; monster turning and fur springs unstable).
++// Now: the counters are cleared on entry to particleDraw (without a VU1 there is nothing to wait for), loop iterations don't
++// count cycles, and the virtual clock follows the wall clock while the logic runs (EeScheduler::checkpointDue): the game
++// measures the real duration of its logic, as on the PS2 (2 fields, rate 30, in a fight).
 +extern uint32_t g_wotmFreeSpinPc, g_wotmFreeSpinZero[2];
 +static PS2Runtime::RecompiledFunction g_particleDraw = nullptr;
 +static void hook_particleDraw(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 +{
-+    // Quadro amostrado pela checagem VU1 x nativo: o fim do hier deixa o ultimo pacote (a OT de alfa com os objetos que a travessia
-+    // guarda na hierAlpList: OBJECT 0x8000, e 0x4000 durante o fade de LOD) para o hierFlushObjQ da interrupcao do DMA do VIF1, que
-+    // no PS2 chega antes daqui. Zerar os contadores sem disparar perdia a OT, e esses objetos saiam como "so o nativo desenha".
++    // Frame sampled by the VU1-vs-native check: the end of the hier leaves the last packet (the alpha OT with the objects that the traversal
++    // stores in hierAlpList: OBJECT 0x8000, and 0x4000 during the LOD fade) to the hierFlushObjQ in the VIF1 DMA interrupt, which
++    // on the PS2 arrives before this. Clearing the counters without kicking it lost the OT, and those objects showed up as "only native draws".
 +    if (g_wotmVu1Tap && g_origFlushObjQ && (READ32(wotm::sym::objsInPacket) || READ32(wotm::sym::objsInAlphaPacket)))
 +    {
 +        R5900Context temp = *ctx;
@@ -6021,7 +6021,7 @@ index 563bcbd..c8eaf8e 100644
 +    WRITE32(wotm::sym::objsInPacket, 0u);
 +    WRITE32(wotm::sym::objsInAlphaPacket, 0u);
 +    g_particleDraw(rdram, ctx, runtime);
-+    wotmFlareCapture(rdram);   // lens flare projetado e testado (wotm_live.inc)
++    wotmFlareCapture(rdram);   // lens flare projected and tested (wotm_live.inc)
 +}
 +
  int main(int argc, char *argv[])
@@ -6030,12 +6030,12 @@ index 563bcbd..c8eaf8e 100644
      redirectStdioToLogcat();
  #endif
      setupTerminateLogger();
-+    if (argc >= 2 && std::strcmp(argv[1], "--vu1cmp") == 0)   // checagem VU1 x nativo a partir de um instantaneo (wotm_vu1check.inc)
++    if (argc >= 2 && std::strcmp(argv[1], "--vu1cmp") == 0)   // VU1-vs-native check from a snapshot (wotm_vu1check.inc)
 +        return wotmVu1CmpMain(argc, argv);
 +#if !PS2X_HW_EMU
-+    // Executavel do jogo (wotm): sem GS, VU1 e VIF1, o modo nativo e o unico. Os cortes que o ps2EntryRunner liga por PS2X_NO_VU1,
-+    // PS2X_NO_VIF1 e PS2X_NO_GS (ganchos de hierFlushObjQ/rtWaitForVu1/particleDraw abaixo, conclusao do pacote e fundo preto em
-+    // wotm_scene.inc) ficam sempre ligados.
++    // Game executable (wotm): with no GS, VU1 or VIF1, native mode is the only mode. The cuts that ps2EntryRunner enables with PS2X_NO_VU1,
++    // PS2X_NO_VIF1 and PS2X_NO_GS (the hierFlushObjQ/rtWaitForVu1/particleDraw hooks below, packet completion and the black background in
++    // wotm_scene.inc) are always on.
 +    for (const char *name : {"PS2X_NO_VU1", "PS2X_NO_VIF1", "PS2X_NO_GS"})
 +    {
 +#ifdef _WIN32
@@ -6044,8 +6044,8 @@ index 563bcbd..c8eaf8e 100644
 +        setenv(name, "1", 1);
 +#endif
 +    }
-+    // Filmes nativos por padrao (passo 9): o decodificador do jogo espera a IPU, que nao existe, e era o unico que pedia memoria do
-+    // IOP (que o wotm nao tem mais). PS2X_SKIP_MOVIES/PS2X_SKIP_CMOVIE continuam pulando, como antes.
++    // Native movies by default (step 9): the game's decoder waits on the IPU, which doesn't exist, and it was the only thing asking for
++    // IOP memory (which wotm no longer has). PS2X_SKIP_MOVIES/PS2X_SKIP_CMOVIE still skip them, as before.
 +    if (!std::getenv("PS2X_FMV") && !std::getenv("PS2X_SKIP_MOVIES") && !std::getenv("PS2X_SKIP_CMOVIE"))
 +    {
 +#ifdef _WIN32
@@ -6055,7 +6055,7 @@ index 563bcbd..c8eaf8e 100644
 +#endif
 +    }
 +#endif
-+    wotmBoot("iniciando o runtime");
++    wotmBoot("starting the runtime");
  
      try
      {
@@ -6078,7 +6078,7 @@ index 563bcbd..c8eaf8e 100644
 -        {
 -            windowTitle += elfName;
 -        }
-+        // Titulo da janela do port (o do PS2Recomp era "PS2-Recomp | <jogo> | <elf>").
++        // The port's window title (PS2Recomp's was "PS2-Recomp | <game> | <elf>").
 +        std::string windowTitle = "War of the Monsters Recompiled!";
  
          PS2Runtime runtime;
@@ -6094,33 +6094,33 @@ index 563bcbd..c8eaf8e 100644
 +            runtime.setIoPaths(io);
 +        }
 +
-+        wotmBoot("carregando o ELF %s", elfName.c_str());
++        wotmBoot("loading the ELF %s", elfName.c_str());
          if (!runtime.loadELF(filePathStr))
          {
              std::cerr << "Failed to load ELF file: " << filePathStr << std::endl;
              return 1;
          }
  
-+        wotmBoot("instalando hooks (filmes, som nativo)");
++        wotmBoot("installing hooks (movies, native sound)");
 +        if (std::getenv("PS2X_SKIP_MOVIES"))
 +        {
 +            runtime.registerFunction(wotm::fn::playMpegMovieWithDB__FPcb, hostLeaf<hook_skipMovie>); // playMpegMovieWithDB
 +            runtime.registerFunction(wotm::fn::playMpegMovie__FPc, hostLeaf<hook_skipMovie>); // playMpegMovie
-+            runtime.registerFunction(wotm::fn::updateMpegMovieDecoding__Fb, hostLeaf<hook_skipMovie>); // updateMpegMovieDecoding (corpo da thread)
-+            std::cout << "[hook] filmes pulados" << std::endl;
++            runtime.registerFunction(wotm::fn::updateMpegMovieDecoding__Fb, hostLeaf<hook_skipMovie>); // updateMpegMovieDecoding (thread body)
++            std::cout << "[hook] movies skipped" << std::endl;
 +        }
-+        if (std::getenv("PS2X_SKIP_CMOVIE")) // caminho CMovie (menu): Play vira no-op, Update devolve 1
++        if (std::getenv("PS2X_SKIP_CMOVIE")) // CMovie path (menu): Play becomes a no-op, Update returns 1
 +        {
 +            runtime.registerFunction(wotm::fn::Play__6CMoviebPc, hostLeaf<hook_noop>); // CMovie::Play
 +            runtime.registerFunction(wotm::fn::Update__6CMovieb, hostLeaf<hook_ret1>); // CMovie::Update
-+            std::cout << "[hook] CMovie::Play/Update pulados" << std::endl;
++            std::cout << "[hook] CMovie::Play/Update skipped" << std::endl;
 +        }
-+        if (std::getenv("PS2X_FMV")) // filmes nativos (native/wotm_fmv.hpp, em wotm_live.inc): substitui os hooks de pular filme acima
++        if (std::getenv("PS2X_FMV")) // native movies (native/wotm_fmv.hpp, in wotm_live.inc): replaces the movie-skip hooks above
 +            wotmFmvInstall(runtime);
-+        // som nativo (native/wotm_snd.hpp, em wotm_snd.inc): o 989snd nao sobe no IOP emulado (sem SPU2)
++        // native sound (native/wotm_snd.hpp, in wotm_snd.inc): 989snd doesn't load on the emulated IOP (no SPU2)
 +        wotmSndInstall(runtime);
 +
-+        if (const char *noop = std::getenv("PS2X_NOOP")) // lista de enderecos hex separados por virgula: funcoes viram no-op
++        if (const char *noop = std::getenv("PS2X_NOOP")) // comma-separated list of hex addresses: those functions become no-ops
 +        {
 +            std::string s(noop);
 +            size_t pos = 0;
@@ -6133,31 +6133,31 @@ index 563bcbd..c8eaf8e 100644
 +                if (tok.empty()) continue;
 +                const uint32_t addr = static_cast<uint32_t>(std::strtoul(tok.c_str(), nullptr, 16));
 +                runtime.registerFunction(addr, hostLeaf<hook_noop>);
-+                std::cout << "[hook] no-op em 0x" << std::hex << addr << std::dec << std::endl;
++                std::cout << "[hook] no-op at 0x" << std::hex << addr << std::dec << std::endl;
 +            }
 +        }
 +        if (const char *nv = std::getenv("PS2X_NO_VU1"))
 +        {
-+            runtime.registerFunction(wotm::fn::rtWaitForVu1__Fv, hostLeaf<hook_waitVu1>);     // rtWaitForVu1 (so despacha no quadro amostrado)
-+            if (nv[0] != '2') // PS2X_NO_VU1=2: o DMA do quadro segue (PS2X_VIF1_UPLOADS leva as texturas/CLUTs ao GS) sem esperar o VU1
++            runtime.registerFunction(wotm::fn::rtWaitForVu1__Fv, hostLeaf<hook_waitVu1>);     // rtWaitForVu1 (dispatches only on the sampled frame)
++            if (nv[0] != '2') // PS2X_NO_VU1=2: the frame's DMA goes ahead (PS2X_VIF1_UPLOADS carries the textures/CLUTs to the GS) without waiting for the VU1
 +            {
 +                g_origFlushObjQ = runtime.lookupFunction(wotm::fn::hierFlushObjQ__Fv);
-+                runtime.registerFunction(wotm::fn::hierFlushObjQ__Fv, hostLeaf<hook_flushObjQ>);   // hierFlushObjQ (nao dispara o DMA do VIF1)
-+                // relogio do jogo (comentario acima)
++                runtime.registerFunction(wotm::fn::hierFlushObjQ__Fv, hostLeaf<hook_flushObjQ>);   // hierFlushObjQ (doesn't kick the VIF1 DMA)
++                // game clock (see the comment above)
 +#ifdef WOTM_SYMS_NM
-+                // cobaia: o laco de espera do particleDraw reescrito nao tem endereco conhecido. Pc impar nunca casa; o laco nem
-+                // gira (os contadores sao zerados na entrada) e o valor diferente de 0 mantem o relogio do jogo
++                // cobaia: the rewritten particleDraw's wait loop has no known address. An odd pc never matches; the loop doesn't even
++                // spin (the counters are cleared on entry) and the nonzero value keeps the game clock going
 +                g_wotmFreeSpinPc = 0x1u;
 +#else
-+                g_wotmFreeSpinPc = 0x0021B8A0u;   // laco de espera dentro do particleDraw (sem simbolo)
++                g_wotmFreeSpinPc = 0x0021B8A0u;   // wait loop inside particleDraw (no symbol)
 +#endif
 +                g_wotmFreeSpinZero[0] = wotm::sym::objsInPacket;   // objsInPacket
 +                g_wotmFreeSpinZero[1] = wotm::sym::objsInAlphaPacket;   // objsInAlphaPacket
 +                if ((g_particleDraw = runtime.lookupFunction(wotm::fn::particleDraw__Fi)))
 +                    runtime.registerFunction(wotm::fn::particleDraw__Fi, hook_particleDraw);
 +            }
-+            std::cout << "[hook] VU1/DMA do VIF1 cortados (rtWaitForVu1, hierFlushObjQ"
-+                      << (g_wotmFreeSpinPc ? "; sem espera em particleDraw)" : ")") << std::endl;
++            std::cout << "[hook] VU1/VIF1 DMA cut (rtWaitForVu1, hierFlushObjQ"
++                      << (g_wotmFreeSpinPc ? "; no wait in particleDraw)" : ")") << std::endl;
 +        }
 +
          runtime.run();

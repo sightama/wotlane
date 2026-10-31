@@ -88,35 +88,35 @@ foreach ($c in $combos) {
     Start-Sleep -Seconds 2
 
     $liveLog = if (Test-Path "$runtime\logs\live.err.log") { "$runtime\logs\live.err.log" } else { "$runtime\live.err.log" }   # run_live.ps1 antigo grava na raiz
-    $lines = @(Select-String -Path $liveLog -Pattern '\[partida\]|\[wotm\] carga|\[vigia\]|\[CRASH\]|\[native\] recursos|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })
+    $lines = @(Select-String -Path $liveLog -Pattern '\[match\]|\[wotm\] stage load|\[watchdog\]|\[CRASH\]|\[native\] resources|\[vu1check\]|\[flare\]' | ForEach-Object { $_.Line })
     $lines | Set-Content (Join-Path $out "$tag.log") -Encoding UTF8
     Get-ChildItem $disc -Filter '*_vigia_*.bin' -ErrorAction SilentlyContinue | ForEach-Object { Move-Item $_.FullName (Join-Path $out ("{0}_{1}" -f $tag, $_.Name)) -Force }
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Select-Object -First 1 | ForEach-Object { Move-Item $_.FullName (Join-Path $out "$tag.png") -Force }
 
-    $rounds = @($lines | Where-Object { $_ -match 'rodada \d+ terminou' })
+    $rounds = @($lines | Where-Object { $_ -match 'round \d+ ended' })
     $wins = ''   # vitorias de cada monstro na ultima rodada, jogador primeiro, separadas por /
-    if ($rounds.Count -gt 0) { $wins = (@([regex]::Matches($rounds[-1], 'vitorias (-?\d+);') | ForEach-Object { $_.Groups[1].Value }) -join '/') }
-    $frozen = @($lines | Where-Object { $_ -match 'CONGELOU' }).Count
-    $slow = @($lines | Where-Object { $_ -match 'LENTO' }).Count
+    if ($rounds.Count -gt 0) { $wins = (@([regex]::Matches($rounds[-1], 'wins (-?\d+);') | ForEach-Object { $_.Groups[1].Value }) -join '/') }
+    $frozen = @($lines | Where-Object { $_ -match 'FROZE' }).Count
+    $slow = @($lines | Where-Object { $_ -match 'SLOW' }).Count
     $crash = @($lines | Where-Object { $_ -match '\[CRASH\]' }).Count
     # comparacao VU1 x nativo: quantas checagens, o pior % de triangulos do VU1 casados e quantos objetos (polyPkt) apareceram com diferenca
-    $checks = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objetos .* casados ([\d.]+)%') { [double]$Matches[1] } })
+    $checks = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objects .* matched ([\d.]+)%') { [double]$Matches[1] } })
     $worst = if ($checks.Count) { ($checks | Measure-Object -Minimum).Minimum.ToString([cultureinfo]::InvariantCulture) } else { '' }   # ponto decimal (CSV)
     $diverging = @($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+pkt ([0-9a-f]+)') { $Matches[1] } } | Sort-Object -Unique).Count
     # textura: o pior numero de triangulos casados com TEX0 diferente do nativo num quadro e quantos objetos tiveram textura diferente
-    $texDiff = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ .* textura difere (\d+)') { [int]$Matches[1] } })
+    $texDiff = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ .* texture differs (\d+)') { [int]$Matches[1] } })
     $texWorst = if ($texDiff.Count) { ($texDiff | Measure-Object -Maximum).Maximum } else { '' }
-    $texObjs = @($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+textura pkt ([0-9a-f]+)') { $Matches[1] } } | Sort-Object -Unique).Count
+    $texObjs = @($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+texture pkt ([0-9a-f]+)') { $Matches[1] } } | Sort-Object -Unique).Count
     # particulas: o pior % de quadrados do VU1 casados num quadro (so quadros com particulas) e os tipos de sistema que divergiram
-    $fx = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ particulas: .* quadrados vu (\d+) .* casados ([\d.]+)%') { if ([int]$Matches[1] -gt 0) { [double]$Matches[2] } } })
+    $fx = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ particles: .* quads vu (\d+) .* matched ([\d.]+)%') { if ([int]$Matches[1] -gt 0) { [double]$Matches[2] } } })
     $fxWorst = if ($fx.Count) { ($fx | Measure-Object -Minimum).Minimum.ToString([cultureinfo]::InvariantCulture) } else { '' }
-    $fxTypes = (@($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+fx \d+ preset \d+ tipo (\d+)') { $Matches[1] } } | Sort-Object { [int]$_ } -Unique) -join '/')
+    $fxTypes = (@($lines | ForEach-Object { if ($_ -match '\[vu1check\]\s+fx \d+ preset \d+ type (\d+)') { $Matches[1] } } | Sort-Object { [int]$_ } -Unique) -join '/')
     # codigos VIF1 invalidos desde o boot (o VIF1 saiu de passo e leu dados como comandos; pista 5 do VU1CHECK.md): a maior contagem vista
-    $vifBad = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objetos .* VIF1 fora de passo (\d+)') { [int]$Matches[1] } })
+    $vifBad = @($lines | ForEach-Object { if ($_ -match '\[vu1check\] g=\d+ objects .* VIF1 out of step (\d+)') { [int]$Matches[1] } })
     $vifBadMax = if ($vifBad.Count) { ($vifBad | Measure-Object -Maximum).Maximum } else { '' }
     # atributos dos triangulos casados (uv, cor, alfa, ABE, ALPHA): o pior numero de triangulos diferentes num quadro
-    $attrWorst = foreach ($name in 'uv difere', 'cor difere', 'alfa difere', 'ABE difere', 'ALPHA difere') {
-        $v = @($lines | ForEach-Object { if ($_ -match ('\[vu1check\] g=\d+ atributos: .*\| ' + $name + ' (\d+)')) { [int]$Matches[1] } })
+    $attrWorst = foreach ($name in 'uv differs', 'color differs', 'vertex alpha differs', 'ABE differs', 'ALPHA differs') {
+        $v = @($lines | ForEach-Object { if ($_ -match ('\[vu1check\] g=\d+ attributes: .*\| ' + $name + ' (\d+)')) { [int]$Matches[1] } })
         if ($v.Count) { ($v | Measure-Object -Maximum).Maximum } else { '' }
     }
     '{0},{1},{2},{3},{4},{5},{6},{7},{8},{9},{10},{11},{12},{13},{14},{15},{16},{17},{18},{19},{20},{21},{22}' -f $player, ($foes -join '+'), $level, $elapsed, $rounds.Count, $wins, $frozen, $slow, $crash,

@@ -1,14 +1,15 @@
-// wotm_mods.inc: pasta mods/ (MODS.md; registro em native/wotm_mods.hpp). Incluido por wotm_overrides.cpp.
-// Dois ganchos atendem todo arquivo que o jogo le do disco:
-// - fileCdSearchFile (src/common/file.cpp): fases, monstros, SHELL, bancos de som, musicas e filmes acham o arquivo por ele
-//   (setor e tamanho). Com o arquivo em mods/ a original roda (para o log comparar o tamanho) e o sceCdlFILE sai com o LSN falso
-//   e o tamanho do mod.
-// - sceCdRead (stub do runtime): fileReadf/fileReada/fileReads e o snd_StreamSafeCdRead leem por ele; o LSN falso vem do mod.
-// O som nativo (wotm_snd.inc, readLsnRaw) le bancos e musicas pelo LSN e consulta o registro antes do disco.
-// Arquivo de mod maior que o do disco: os monstros (MON/*) e as texturas da fase carregam em sequencia acima de 32 MB (RAM alta),
-// entao so empurram o que vem depois; o log da carga ("[wotm] carga da fase") diz a folga de RAM e os texIds usados. Com
-// WOTM_HIGHRAM=0, e para os outros arquivos (fase, SHELL, bancos de som), o jogo carrega em regioes de tamanho fixo e um arquivo
-// maior pode sobrescrever o que vem depois (o log avisa). WOTM_MODS=<pasta> troca a pasta (padrao: mods/ ao lado do ELF, senao a do repo); =0 desliga.
+// wotm_mods.inc: the mods/ folder (MODS.md; registry in native/wotm_mods.hpp). Included by wotm_overrides.cpp.
+// Two hooks serve every file the game reads from disc:
+// - fileCdSearchFile (src/common/file.cpp): stages, monsters, SHELL, sound banks, music and movies locate their file through it
+//   (sector and size). When the file is in mods/, the original still runs (so the log can compare sizes) and the sceCdlFILE comes
+//   back with the fake LSN and the mod's size.
+// - sceCdRead (runtime stub): fileReadf/fileReada/fileReads and snd_StreamSafeCdRead read through it; the fake LSN is served from the mod.
+// Native sound (wotm_snd.inc, readLsnRaw) reads banks and music by LSN and checks the registry before the disc.
+// Mod file larger than the disc's: monsters (MON/*) and stage textures load back to back above 32 MB (high RAM), so they only
+// push back what comes after; the level-load log (the "[wotm]" lines at the end of the load, wotm_overrides.cpp) shows the spare RAM
+// and the texIds used. With WOTM_HIGHRAM=0, and for the other files (stage, SHELL, sound banks), the game loads into fixed-size regions
+// and a larger file may overwrite what comes after (the log warns). WOTM_MODS=<folder> changes the folder (default: mods/ next to the
+// ELF, otherwise the repo's); =0 turns mods off.
 #include "wotm_mods.hpp"
 #include <set>
 
@@ -31,8 +32,8 @@ void searchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     const wotm::mods::File *m = Registry::get().find(target);
     if (target != rel)
     {
-        // Traje de mod sem esse arquivo na pasta da skin: busca o do traje base ("LIZARD4" -> "LIZARD1"), trocando o nome no
-        // proprio texto do jogo durante a chamada (o nome do base nunca e mais longo: o numero do traje base tem um digito)
+        // Mod costume without this file in the skin folder: looks up the base costume's ("LIZARD4" -> "LIZARD1"), swapping the name
+        // in the game's own string during the call (the base name is never longer: the base costume number has one digit)
         char *s = reinterpret_cast<char *>(rdram + (pAddr & PS2_RAM_MASK));
         const size_t len = strnlen(s, 256);
         const std::string saved(s, len + 1);
@@ -48,7 +49,7 @@ void searchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
         std::memcpy(s, saved.data(), saved.size());
         static std::set<std::string> logged;
         if (logged.insert(rel).second)
-            std::fprintf(stderr, "[mods] %s = %s (skin: arquivo do traje base)%s\n", rel.c_str(), target.c_str(), getRegU32(ctx, 2) ? "" : " NAO ACHADO");
+            std::fprintf(stderr, "[mods] %s = %s (skin: base costume's file)%s\n", rel.c_str(), target.c_str(), getRegU32(ctx, 2) ? "" : " NOT FOUND");
     }
     else
         g_origSearch(rdram, ctx, rt);
@@ -58,7 +59,7 @@ void searchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     const uint32_t discSize = onDisc ? rd32(rdram, fAddr + 4) : 0;
     wr32(rdram, fAddr + 0, m->lsn);
     wr32(rdram, fAddr + 4, uint32_t(m->size));
-    if (!onDisc)   // arquivo novo: o nome do sceCdlFILE vem do mod (a original nao achou nada para copiar)
+    if (!onDisc)   // new file: the sceCdlFILE name comes from the mod (the original found nothing to copy)
     {
         std::string base = m->rel.substr(m->rel.find_last_of('/') + 1);
         base.resize(std::min<size_t>(base.size(), 15));
@@ -70,13 +71,13 @@ void searchFile(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     {
         m->logged = true;
         if (!onDisc)
-            std::fprintf(stderr, "[mods] %s <- %s (%llu bytes; arquivo novo, nao esta no disco)\n", m->rel.c_str(), m->mod.c_str(),
+            std::fprintf(stderr, "[mods] %s <- %s (%llu bytes; new file, not on the disc)\n", m->rel.c_str(), m->mod.c_str(),
                          (unsigned long long)m->size);
         else
-            std::fprintf(stderr, "[mods] %s <- %s (%llu bytes; disco %u)%s\n", m->rel.c_str(), m->mod.c_str(), (unsigned long long)m->size,
+            std::fprintf(stderr, "[mods] %s <- %s (%llu bytes; disc %u)%s\n", m->rel.c_str(), m->mod.c_str(), (unsigned long long)m->size,
                          discSize, m->size <= discSize ? ""
-                                   : m->rel.rfind("MON/", 0) == 0 ? " (maior que o do disco: confira a folga no log da carga da fase)"
-                                                                   : " AVISO: maior que o do disco, pode sobrescrever o que o jogo carrega depois");
+                                   : m->rel.rfind("MON/", 0) == 0 ? " (larger than the disc's: check the spare RAM in the level-load log)"
+                                                                   : " WARNING: larger than the disc's, may overwrite what the game loads after it");
     }
 }
 
@@ -95,10 +96,10 @@ void cdRead(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt)
     {
         static int warned = 0;
         if (warned++ < 16)
-            std::fprintf(stderr, "[mods] sceCdRead: LSN %#x (%u setores) nao e de nenhum arquivo de mod; devolvendo zeros\n", lsn, sectors);
+            std::fprintf(stderr, "[mods] sceCdRead: LSN %#x (%u sectors) doesn't belong to any mod file; returning zeros\n", lsn, sectors);
         std::memset(rdram + offset, 0, bytes);
     }
-    setReturnS32(ctx, 1);   // o stub tambem le na hora: sceCdSync devolve "pronto"
+    setReturnS32(ctx, 1);   // the stub also reads synchronously: sceCdSync returns "done"
 }
 } // namespace wotm_mods_hooks
 
@@ -111,14 +112,14 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
     {
         if (std::strcmp(e, "0") == 0)
         {
-            std::fprintf(stderr, "[mods] desligado (WOTM_MODS=0)\n");
+            std::fprintf(stderr, "[mods] off (WOTM_MODS=0)\n");
             return;
         }
         dir = e;
     }
     else
     {
-        // mods/ com esse nome exato: no Windows o caminho "mods" ao lado do ELF da pasta do disco cai no MOD/ do jogo (os IRX)
+        // mods/ with that exact name: on Windows the path "mods" next to the ELF in the disc folder resolves to the game's MOD/ (the IRXs)
         auto modsIn = [](const fs::path &parent) {
             std::error_code ec;
             for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))
@@ -127,20 +128,20 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
             return false;
         };
         dir = fs::path(elfPath).parent_path() / "mods";
-        // sem ela, a do repo (WOTM_REPO, que o run_live.bat e o launcher passam): os mods que vem no repo (Goliath Prime,
-        // Cerebulon) valem sem copiar nada
+        // without it, the repo's (WOTM_REPO, which run_live.bat and the launcher pass): the mods shipped in the repo (Goliath Prime,
+        // Cerebulon) work without copying anything
         const char *repo = std::getenv("WOTM_REPO");
         if (!modsIn(fs::path(elfPath).parent_path()) && repo && *repo && modsIn(fs::path(repo)))
             dir = fs::path(repo) / "mods";
     }
     const size_t n = Registry::get().scan(dir);
     if (n == 0)
-        return;   // sem arquivos de mod: nenhum gancho, o jogo le o disco como sempre
+        return;   // no mod files: no hooks, the game reads the disc as always
     g_origSearch = runtime.lookupFunction(wotm::fn::fileCdSearchFile__FP10sceCdlFILEPc);
     g_origCdRead = runtime.lookupFunction(wotm::fn::sceCdRead);
     if (!g_origSearch || !g_origCdRead)
     {
-        std::fprintf(stderr, "[mods] fileCdSearchFile/sceCdRead nao achados: mods desligados\n");
+        std::fprintf(stderr, "[mods] fileCdSearchFile/sceCdRead not found: mods off\n");
         return;
     }
     runtime.registerFunction(wotm::fn::fileCdSearchFile__FP10sceCdlFILEPc, hostLeaf<searchFile>);
@@ -148,5 +149,5 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
     std::string names;
     for (const std::string &m : Registry::get().modNames())
         names += (names.empty() ? "" : ", ") + m;
-    std::fprintf(stderr, "[mods] %zu arquivo(s) de %s em %s\n", n, names.c_str(), dir.string().c_str());
+    std::fprintf(stderr, "[mods] %zu file(s) from %s in %s\n", n, names.c_str(), dir.string().c_str());
 }

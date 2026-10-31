@@ -59,7 +59,7 @@ function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
         try { Move-Item $cap.FullName (Join-Path $Dir "$name.vu1snap") -Force; break } catch { Start-Sleep -Seconds 1 }
     }
     # sidecar: g_frame=tela de cada quadro amostrado (o instantaneo so guarda o g_frame)
-    $shots = Get-Content $err | ForEach-Object { if ($_ -match 'quadro amostrado: g_frame (\d+), currScreen (\d+)') { '{0}={1}' -f $Matches[1], $Matches[2] } }
+    $shots = Get-Content $err | ForEach-Object { if ($_ -match 'sampled frame: g_frame (\d+), currScreen (\d+)') { '{0}={1}' -f $Matches[1], $Matches[2] } }
     Set-Content (Join-Path $Dir "$name.txt") ($shots -join "`n") -Encoding ASCII
     Remove-Item (Join-Path $Dir "$name.out.log") -ErrorAction SilentlyContinue
     Write-Host ("[{0}] {1} quadro(s), {2} MB" -f $name, @($shots).Count, [int]((Get-Item (Join-Path $Dir "$name.vu1snap")).Length / 1MB))
@@ -97,7 +97,7 @@ if ($Check) {
     $byFile = @{}
     $curList = $null
     foreach ($l in (Get-Content $cmpErr)) {
-        if ($l -match '^\[vu1cmp\] arquivo (.+)$') { $curList = New-Object System.Collections.Generic.List[string]; $byFile[$Matches[1]] = $curList; continue }
+        if ($l -match '^\[vu1cmp\] file (.+)$') { $curList = New-Object System.Collections.Generic.List[string]; $byFile[$Matches[1]] = $curList; continue }
         if ($null -ne $curList) { $curList.Add(($l -replace '^\[vu1check\] ', '')) }
     }
     $rows = @()
@@ -106,18 +106,18 @@ if ($Check) {
         $screens = @{}
         if (Test-Path (Join-Path $Dir "$name.txt")) { Get-Content (Join-Path $Dir "$name.txt") | ForEach-Object { if ($_ -match '^(\d+)=(\d+)$') { $screens[$Matches[1]] = $Matches[2] } } }
         $lines = if ($byFile.ContainsKey($f.FullName)) { $byFile[$f.FullName] } else { @() }
-        if (-not ($lines -match ': [1-9]\d* quadro\(s\) comparados$')) {
+        if (-not ($lines -match ': [1-9]\d* frame\(s\) compared$')) {
             Write-Host ("{0}: falhou" -f $name) -ForegroundColor Yellow
             $lines | Where-Object { $_ -match '\[vu1cmp\]' } | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
         }
         $cur = $null
         foreach ($l in $lines) {
-            if ($l -match '^g=(\d+) objetos .* casados ([\d.]+)% faltam (\d+) sobram (\d+) .* textura difere (\d+)') {
+            if ($l -match '^g=(\d+) objects .* matched ([\d.]+)% missing (\d+) extra (\d+) .* texture differs (\d+)') {
                 $cur = [ordered]@{ arquivo = $name; quadro = [int]$Matches[1]; tela = $screens[$Matches[1]]; casados = [double]$Matches[2]; faltam = [int]$Matches[3]; sobram = [int]$Matches[4]; textura = [int]$Matches[5]; fx_casados = ''; inv_ref = ''; inv_nat = ''; px = '' }
                 $rows += [pscustomobject]$cur
-            } elseif ($cur -and $l -match '^g=\d+ particulas: .* quadrados vu (\d+) .* casados ([\d.]+)%') { if ([int]$Matches[1] -gt 0) { $rows[-1].fx_casados = [double]$Matches[2] } }
-            elseif ($cur -and $l -match '^inv g=\d+ so a referencia: \d+ grupos, (\d+) primitivos .* so o nativo: (\d+) objetos, (\d+) tris') { $rows[-1].inv_ref = [int]$Matches[1]; $rows[-1].inv_nat = [int]$Matches[3] }
-            elseif ($cur -and $l -match 'pixels diferentes (\d+)') { $rows[-1].px = [int]$Matches[1] }
+            } elseif ($cur -and $l -match '^g=\d+ particles: .* quads vu (\d+) .* matched ([\d.]+)%') { if ([int]$Matches[1] -gt 0) { $rows[-1].fx_casados = [double]$Matches[2] } }
+            elseif ($cur -and $l -match '^inv g=\d+ reference only: \d+ groups, (\d+) primitives .* native only: (\d+) objects, (\d+) tris') { $rows[-1].inv_ref = [int]$Matches[1]; $rows[-1].inv_nat = [int]$Matches[3] }
+            elseif ($cur -and $l -match 'differing pixels (\d+)') { $rows[-1].px = [int]$Matches[1] }
         }
         Write-Host ("{0}: {1} quadro(s)" -f $name, @($rows | Where-Object { $_.arquivo -eq $name }).Count)
     }

@@ -1,9 +1,9 @@
-// ABOUTME: WOTM_TRIGCHECK=1: na primeira chamada do sinf o jogo roda o seu sinf/cosf (reducao, Payne-Hanek e nucleos, como o runtime os
-// ABOUTME: liga) numa tabela de valores do retail e sai com 0 se todos derem os mesmos bits. Incluido pelo wotm_overrides.cpp.
+// ABOUTME: WOTM_TRIGCHECK=1: on the first sinf call the game runs its own sinf/cosf (reduction, Payne-Hanek and kernels, as the runtime
+// ABOUTME: links them) over a table of retail values and exits with 0 if all match bit for bit. Included by wotm_overrides.cpp.
 //
-// Os valores esperados sao do sinf/cosf do retail (0x22D5C8/0x22D4C0) rodados no unicorn com o cvt.w.s truncando como o R5900. O mesmo
-// resultado em qualquer compilador e CPU e o que deixa Windows e Mac jogarem juntos: o seno e o cosseno do jogo nao podem vir da libm do
-// sistema (a da Microsoft e a da Apple diferem no ultimo bit).
+// The expected values come from the retail sinf/cosf (0x22D5C8/0x22D4C0) run in unicorn with cvt.w.s truncating like the R5900. The same
+// result on every compiler and CPU is what lets Windows and Mac play together: the game's sine and cosine can't come from the system
+// libm (Microsoft's and Apple's differ in the last bit).
 
 namespace
 {
@@ -45,7 +45,7 @@ namespace
 
     PS2Runtime::RecompiledFunction g_origSinfForCheck = nullptr;
 
-    // Funcao float de um argumento do jogo ($f12 -> $f0) chamada de dentro de um gancho; o contexto volta como estava.
+    // A one-argument float function of the game ($f12 -> $f0) called from inside a hook; the context is restored afterwards.
     uint32_t trigGuestCall(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, PS2Runtime::RecompiledFunction f, uint32_t fn, uint32_t xBits)
     {
         const R5900Context saved = *ctx;
@@ -74,7 +74,7 @@ namespace
             }
         }
         const int total = int(sizeof kTrigGoldens / sizeof kTrigGoldens[0]);
-        std::fprintf(stderr, "[trigcheck] %d de %d valores iguais ao retail\n", total - bad, total);
+        std::fprintf(stderr, "[trigcheck] %d of %d values match retail\n", total - bad, total);
         std::fflush(stderr);
         // _Exit, not exit: this runs on the EE thread while the runtime's other threads are alive, and exit's static destructors
         // (HostState's joinable std::thread) call std::terminate, so the process would abort instead of returning 0/1
@@ -87,5 +87,5 @@ void wotmTrigCheckInstall(PS2Runtime &runtime)
     if (!std::getenv("WOTM_TRIGCHECK") || !(g_origSinfForCheck = runtime.lookupFunction(wotm::fn::sinf)))
         return;
     runtime.registerFunction(wotm::fn::sinf, &sinfTrigCheck);
-    std::fprintf(stderr, "[trigcheck] seno e cosseno do jogo contra o retail na primeira chamada do sinf (WOTM_TRIGCHECK)\n");
+    std::fprintf(stderr, "[trigcheck] game sine and cosine checked against retail on the first sinf call (WOTM_TRIGCHECK)\n");
 }

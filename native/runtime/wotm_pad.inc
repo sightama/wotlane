@@ -1,24 +1,24 @@
-// wotm_pad.inc: que controles e o teclado alimentam cada controle do jogo (controle n = jogador n + 1, de 0 a 3; o 2 e o 3 sao o
-// slot 1 do multitap nas portas 0 e 1). Incluido por wotm_live.inc (escopo global de ps2_runtime.cpp). O runtime (ps2_pad.cpp)
-// consulta g_ps2PadDeviceMap a cada leitura.
-// Os controles conectados entram na ordem do raylib (o primeiro conectado e o jogador 1, o segundo o jogador 2, ate o quarto),
-// sem buracos: um controle desplugado passa a vez ao seguinte.
-//   Padrao: o teclado e o mesmo jogador do primeiro controle (jogador 1).
-//   WOTM_KBSEPARATE=1: o teclado e um dispositivo a parte, depois dos controles (sem controle, jogador 1; com um, jogador 2;
-//   com dois, sobra).
-//   Escolha de controles do multijogador (wotm_padsel.inc): enquanto g_manual, o jogador n recebe so os dispositivos que entraram
-//   na coluna dele (g_manualDevs[n], mesmos bits do mapa); os que ficaram de fora nao jogam.
-//   Partida em rede (WOTM_NET): um jogador por PC; o controle 0 recebe o teclado e todos os controles.
-// Receptores de teclado e mouse que o raylib lista como controle (Keychron Link) ficam de fora da lista de controles.
-// Teclas e botoes de cada botao do PS2: o mapa do wotm_settings.hpp (aba CONTROLS do painel), instalado no ps2_pad.cpp do fork
-// (g_ps2PadKeyboard, g_ps2PadGamepadButtons); os eixos dos gamepads seguem fixos.
+// wotm_pad.inc: which host pads and the keyboard feed each of the game's pads (game pad n = player n + 1, 0 to 3; 2 and 3 are
+// multitap slot 1 on ports 0 and 1). Included by wotm_live.inc (global scope of ps2_runtime.cpp). The runtime (ps2_pad.cpp)
+// queries g_ps2PadDeviceMap on every read.
+// Connected pads are assigned in raylib's order (the first connected is player 1, the second player 2, up to the fourth),
+// with no gaps: when a pad is unplugged, the next one moves up to take its place.
+//   Default: the keyboard is the same player as the first pad (player 1).
+//   WOTM_KBSEPARATE=1: the keyboard is a separate device, after the pads (no pad: player 1; one pad: player 2;
+//   two pads: left over, unused).
+//   Multiplayer pad selection (wotm_padsel.inc): while g_manual is set, player n gets only the devices that joined
+//   that player's column (g_manualDevs[n], same bits as the map); devices left out don't play.
+//   Network match (WOTM_NET): one player per PC; game pad 0 gets the keyboard and every host pad.
+// Keyboard and mouse receivers that raylib lists as gamepads (Keychron Link) are excluded from the pad list.
+// Keys and buttons for each PS2 button: the map from wotm_settings.hpp (CONTROLS tab of the panel), installed into the fork's
+// ps2_pad.cpp (g_ps2PadKeyboard, g_ps2PadGamepadButtons); gamepad axes stay fixed.
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
 static std::atomic<uint32_t> g_manualDevs[4] = {};
 
-// Receptores de teclado e mouse sem fio que o raylib lista como controle (o Keychron Link aparece como controle 0): nao contam como
-// controle, senao tomariam o lugar do jogador 1
+// Wireless keyboard and mouse receivers that raylib lists as gamepads (the Keychron Link shows up as gamepad 0): they don't count
+// as pads, otherwise they would take player 1's place
 static bool notAGamepad(int i)
 {
     std::string name = GetGamepadName(i) ? GetGamepadName(i) : "";
@@ -27,13 +27,13 @@ static bool notAGamepad(int i)
     return name.find("keychron") != std::string::npos || name.find("keyboard") != std::string::npos || name.find("mouse") != std::string::npos;
 }
 
-// Dispositivos do controle `port` do jogo (porta + 2 * slot do multitap: jogador port + 1)
+// Devices feeding the game's pad `port` (port + 2 * multitap slot: player port + 1)
 static uint32_t devicesOf(int port)
 {
-    const bool kbSeparate = wotm::settings::on(wotm::settings::KbSeparate);   // opcao ao vivo (wotm_settings.hpp)
-    // WOTM_NOINPUT=1: nenhum dispositivo do host chega ao jogo (testes de determinismo; o roteiro PS2X_PAD continua valendo)
+    const bool kbSeparate = wotm::settings::on(wotm::settings::KbSeparate);   // live option (wotm_settings.hpp)
+    // WOTM_NOINPUT=1: no host device reaches the game (determinism tests; the PS2X_PAD script still applies)
     static const bool noInput = [] { const char *e = std::getenv("WOTM_NOINPUT"); return e && e[0] == '1'; }();
-    // partida em rede (WOTM_NET): um jogador por PC, alimentado pelo teclado e por todos os controles (a rede leva o controle 1)
+    // network match (WOTM_NET): one player per PC, fed by the keyboard and every pad (the network carries game pad 1)
     static const bool netplay = [] { const char *e = std::getenv("WOTM_NET"); return e && *e; }();
     if (noInput)
         return 0u;
@@ -63,7 +63,7 @@ static uint32_t devicesOf(int port)
             devs |= PS2_PAD_DEV_KEYBOARD;
     }
 
-    // uma linha por controle quando o que o alimenta muda (inicio, controle plugado ou desplugado)
+    // one line per game pad when what feeds it changes (startup, pad plugged in or unplugged)
     static uint32_t last[4] = {~0u, ~0u, ~0u, ~0u};
     if (port >= 0 && port < 4 && devs != last[port])
     {
@@ -71,19 +71,19 @@ static uint32_t devicesOf(int port)
         std::string what;
         for (int i = 0; i < PS2_PAD_MAX_GAMEPADS; ++i)
             if (devs & (1u << i))
-                what += "controle " + std::to_string(i) + " (" + GetGamepadName(i) + ")";
+                what += "pad " + std::to_string(i) + " (" + GetGamepadName(i) + ")";
         if (devs & PS2_PAD_DEV_KEYBOARD)
-            what += what.empty() ? "teclado" : " + teclado";
-        std::fprintf(stderr, "[pad] jogador %d: %s\n", port + 1, what.empty() ? "nenhum dispositivo" : what.c_str());
+            what += what.empty() ? "keyboard" : " + keyboard";
+        std::fprintf(stderr, "[pad] player %d: %s\n", port + 1, what.empty() ? "no device" : what.c_str());
     }
     return devs;
 }
 
-// ------------------------------------------------------------------ mapa de teclas e botoes (wotm_settings.hpp, aba CONTROLS)
+// ------------------------------------------------------------------ key and button map (wotm_settings.hpp, CONTROLS tab)
 namespace st = wotm::settings;
-// Rodinha como botao: cada passo (somado pela janela em mouseFrame) vira um toque de uma leitura do pad, com uma leitura solta
-// depois, para a borda contar uma vez por passo. Avanca uma vez por leitura do teclado (keyboard).
-static int g_wheelHeld = 0;   // +1 / -1 durante o toque, 0 solto
+// Mouse wheel as a button: each notch (accumulated by the window in mouseFrame) becomes a press lasting one pad read, followed by one
+// released read, so the edge counts once per notch. Advances once per keyboard read (keyboard).
+static int g_wheelHeld = 0;   // +1 / -1 while pressed, 0 released
 static int g_wheelGap = 0;
 static void wheelStep()
 {
@@ -103,7 +103,7 @@ static void wheelStep()
     if (w != 0)
         g_wheelHeld = w > 0 ? 1 : -1;
 }
-// Tecla, botao do mouse (kMouseBase + MouseButton) ou passo da rodinha (kWheelUp/kWheelDown) do mapa do teclado
+// A key, mouse button (kMouseBase + MouseButton) or wheel notch (kWheelUp/kWheelDown) from the keyboard map
 inline bool inputDown(int code)
 {
     if (code <= 0) return false;
@@ -117,8 +117,8 @@ inline bool kbDown(st::Bind b)
     const uint32_t v = st::kb(b);
     return inputDown(int(v & 0xFFFF)) || inputDown(int(v >> 16));
 }
-// Jogador (0..3) que o gamepad `pad` alimenta, pela regra do devicesOf: na escolha manual, a coluna em que ele entrou; senao, a ordem
-// dos conectados. Fora disso (ou sem gamepad), o jogador 1. Escolhe o mapa de botoes dele (wotm_settings.hpp, um por jogador).
+// Player (0..3) that gamepad `pad` feeds, by devicesOf's rule: under manual selection, the column it joined; otherwise, the order
+// of connected pads. Anything else (or no gamepad): player 1. Picks that player's button map (wotm_settings.hpp, one per player).
 inline int playerOfPad(int pad)
 {
     if (pad < 0 || pad >= PS2_PAD_MAX_GAMEPADS)
@@ -144,24 +144,24 @@ inline bool padDown(int pad, st::Bind b, int player)
     return btn > 0 && IsGamepadButtonDown(pad, btn);
 }
 
-// Nos menus: o gancho do screenGetInput (wotm_mainmenu.inc) marca a hora a cada quadro de uma tela do menu
+// In the menus: the screenGetInput hook (wotm_mainmenu.inc) stamps the time on every frame of a menu screen
 static std::atomic<double> g_menuTime{-1.0};
 inline void markMenuFrame() { g_menuTime.store(GetTime(), std::memory_order_relaxed); }
 inline bool inMenus() { return GetTime() - g_menuTime.load(std::memory_order_relaxed) < 0.25; }
 
-// Teclado -> botoes do PS2 (bits ativos em 0 de btns) e analogico esquerdo (data[6] x, data[7] y), a cada leitura do pad do jogador
-// do teclado. Acoes do teclado (wotm_settings.hpp), na configuracao 0 do jogo (CONTROL TYPE A):
-//   lock-on alternado ligado (WOTM_LOCKTOGGLE, o mod troca os botoes; wotm_overrides.cpp): trava R1, defende L1, lados L2/R2;
-//   desligado (os botoes do jogo): trava L1+R1 segurados, defende R2, lados L1/R1.
-// Troca de alvo: pedido direto ao lock-on (wotm_mouse.hpp), na borda da tecla; o direcional nao entra (solto, ele andaria).
-// Esc no Start: nos menus vale triangulo (voltar). Andar (Alt): o analogico vai a ~40% do curso.
-// Nos menus o mouse nao passa pelo mapa (etapa 9): direito volta (triangulo), rodinha sobe e desce (direcional), esquerdo confirma (X),
-// menos sobre um menu nativo que acha o item sob o cursor (wotm_mainmenu.inc: o clique e dele).
+// Keyboard -> PS2 buttons (active-low bits in btns) and left stick (data[6] x, data[7] y), on every read of the keyboard player's
+// pad. Keyboard actions (wotm_settings.hpp), in the game's control config 0 (CONTROL TYPE A):
+//   toggle lock-on on (WOTM_LOCKTOGGLE, the mod swaps the buttons; wotm_overrides.cpp): lock R1, block L1, strafe L2/R2;
+//   off (the game's own buttons): lock is L1+R1 held, block R2, strafe L1/R1.
+// Target switch: a direct request to the lock-on (wotm_mouse.hpp), on the key's edge; the d-pad isn't used (released, it would walk).
+// Esc on Start: in the menus it acts as triangle (back). Walk (Alt): the stick goes to ~40% of its travel.
+// In the menus the mouse bypasses the map (step 9): right goes back (triangle), wheel moves up and down (d-pad), left confirms (X),
+// except over a native menu that finds the item under the cursor (wotm_mainmenu.inc: the click belongs to it).
 static void keyboard(uint16_t &btns, uint8_t *data)
 {
     wheelStep();
     const bool menus = inMenus();
-    const bool mouseMenu = menus || wotm::mouse::inGameMenu();   // menus do shell ou tela do jogo com mouse (pausa)
+    const bool mouseMenu = menus || wotm::mouse::inGameMenu();   // shell menus or an in-game screen with mouse (pause)
     auto down = [mouseMenu](st::Bind b) {
         if (!mouseMenu) return kbDown(b);
         const uint32_t v = st::kb(b);
@@ -174,10 +174,10 @@ static void keyboard(uint16_t &btns, uint8_t *data)
             uint16_t mask = st::kBindMask[b];
             if (b == st::BStart && menus && IsKeyDown(KEY_ESCAPE))
             {
-                const uint32_t v = st::kb(st::BStart);   // Esc no Start: so ele apertado vira voltar
+                const uint32_t v = st::kb(st::BStart);   // Esc on Start: only Esc pressed alone becomes back
                 const bool other = (int(v & 0xFFFF) != KEY_ESCAPE && inputDown(int(v & 0xFFFF))) ||
                                    (int(v >> 16) != KEY_ESCAPE && inputDown(int(v >> 16)));
-                if (!other) mask = 0x1000;   // triangulo
+                if (!other) mask = 0x1000;   // triangle
             }
             btns &= static_cast<uint16_t>(~mask);
         }
@@ -186,20 +186,20 @@ static void keyboard(uint16_t &btns, uint8_t *data)
     if (mouseMenu && !wotm::mouse::g_captured.load(std::memory_order_relaxed))
     {
         uint16_t m = 0;
-        // clique num item de uma tela do jogo (wotm_pausemenu.inc): o X por duas leituras, com o item ja escolhido
+        // click on an item of an in-game screen (wotm_pausemenu.inc): X for two reads, with the item already selected
         if (wotm::mouse::nowMs() > wotm::mouse::g_crossReqUntil.load(std::memory_order_relaxed))
-            wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);   // pedido velho (wotm_mouse.hpp, requestCross)
+            wotm::mouse::g_crossReq.store(0, std::memory_order_relaxed);   // stale request (wotm_mouse.hpp, requestCross)
         int req = wotm::mouse::g_crossReq.load(std::memory_order_relaxed);
         while (req > 0 && !wotm::mouse::g_crossReq.compare_exchange_weak(req, req - 1, std::memory_order_relaxed)) {}
         if (req > 0) m |= 0x4000;
-        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) m |= 0x1000;                                  // triangulo
+        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) m |= 0x1000;                                  // triangle
         if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !wotm::mouse::claimed()) m |= 0x4000;        // X
-        const bool side = wotm::mouse::sideActive();   // tela que anda para os lados (wotm_gamescreens.inc)
+        const bool side = wotm::mouse::sideActive();   // screen that scrolls sideways (wotm_gamescreens.inc)
         if (g_wheelHeld && side && wotm::mouse::g_sideWheel.load(std::memory_order_relaxed))
-            m |= g_wheelHeld > 0 ? 0x0080 : 0x0020;                                              // esquerda / direita
+            m |= g_wheelHeld > 0 ? 0x0080 : 0x0020;                                              // left / right
         else if (g_wheelHeld)
-            m |= g_wheelHeld > 0 ? 0x0010 : 0x0040;                                              // cima / baixo
-        if (side && IsKeyDown(KEY_Q)) m |= 0x0080;                                               // Q / E: esquerda / direita
+            m |= g_wheelHeld > 0 ? 0x0010 : 0x0040;                                              // up / down
+        if (side && IsKeyDown(KEY_Q)) m |= 0x0080;                                               // Q / E: left / right
         if (side && IsKeyDown(KEY_E)) m |= 0x0020;
         btns &= static_cast<uint16_t>(~m);
     }
@@ -220,34 +220,34 @@ static void keyboard(uint16_t &btns, uint8_t *data)
     prevNext = next;
     prevPrev = prev;
 
-    // analogico esquerdo (so com alguma das teclas dele apertada; senao fica o valor do gamepad ou o centro)
+    // left stick (only while one of its keys is pressed; otherwise the gamepad's value or center stays)
     const bool l = down(st::BStickLeft), r = down(st::BStickRight), u = down(st::BStickUp), d = down(st::BStickDown);
     const uint8_t lo = down(st::BWalk) ? 0x4D : 0x00, hi = static_cast<uint8_t>(0xFF - lo);
     if (l != r) data[6] = l ? lo : hi;
     if (u != d) data[7] = u ? lo : hi;
 
-    static const bool log = std::getenv("WOTM_KBLOG") != nullptr;   // uma linha por mudanca do que o teclado manda
+    static const bool log = std::getenv("WOTM_KBLOG") != nullptr;   // one line per change in what the keyboard sends
     static uint16_t lastB = 0xFFFF;
     static uint8_t lastX = 0x80, lastY = 0x80;
     if (log && (btns != lastB || data[6] != lastX || data[7] != lastY))
     {
-        std::fprintf(stderr, "[kb] t=%.2f botoes %04x analogico %02x,%02x%s\n", GetTime(), unsigned(static_cast<uint16_t>(~btns)), data[6],
+        std::fprintf(stderr, "[kb] t=%.2f buttons %04x stick %02x,%02x%s\n", GetTime(), unsigned(static_cast<uint16_t>(~btns)), data[6],
                      data[7], menus ? " (menus)" : "");
         lastB = btns;
         lastX = data[6];
         lastY = data[7];
     }
 }
-// MenuConfirm = 1 nos menus (gamepads): o botao do X passa a dar triangulo (voltar, no jogo), o da bola da X (confirmar) e o do
-// triangulo da bola. Com o mapa padrao: o da direita confirma e o de baixo volta, como nos consoles da Nintendo.
+// MenuConfirm = 1 in the menus (gamepads): the X button gives triangle (back, in the game), circle gives X (confirm) and
+// triangle gives circle. With the default map: the right face button confirms and the bottom one goes back, as on Nintendo consoles.
 inline bool menuSwap() { return st::get(st::MenuConfirm) == 1 && inMenus(); }
-// Botao do PS2 que o botao fisico do botao b do mapa produz agora (a troca dos menus)
+// PS2 button that the physical button mapped to b produces right now (the menu swap)
 inline st::Bind effectiveBind(st::Bind b)
 {
     if (!menuSwap()) return b;
     return b == st::BCross ? st::BTriangle : b == st::BCircle ? st::BCross : b == st::BTriangle ? st::BCircle : b;
 }
-// O inverso: qual botao do mapa da o botao do PS2 b agora (os icones mostram esse)
+// The inverse: which mapped button gives PS2 button b right now (the icons show that one)
 inline st::Bind sourceBind(st::Bind b)
 {
     if (!menuSwap()) return b;
@@ -263,7 +263,7 @@ static uint16_t gamepadButtons(int pad)
     return m;
 }
 
-// Jogador (0..3) que o teclado alimenta, pela regra do devicesOf (-1: nenhum, na escolha manual sem o teclado ou com ele sobrando)
+// Player (0..3) the keyboard feeds, by devicesOf's rule (-1: none, under manual selection without the keyboard, or it's left over)
 inline int keyboardPlayer()
 {
     if (g_manual.load(std::memory_order_relaxed))
@@ -279,14 +279,14 @@ inline int keyboardPlayer()
     return n < 4 ? n : -1;
 }
 
-// Mouse na camera moderna (wotm_mouse.hpp), a cada apresentacao na thread da janela: cursor preso enquanto a orbita do jogador do
-// teclado dirige (aviso da thread do EE) e a janela tem o foco; preso, o deslocamento vai para a orbita. WOTM_MOUSECAM=0 desliga.
+// Mouse on the modern camera (wotm_mouse.hpp), on every present on the window thread: cursor captured while the keyboard player's
+// orbit is steering (signaled by the EE thread) and the window has focus; when captured, motion goes to the orbit. WOTM_MOUSECAM=0 turns it off.
 static void mouseFrame()
 {
     namespace ms = wotm::mouse;
     static const bool off = [] { const char *e = std::getenv("WOTM_MOUSECAM"); return e && e[0] == '0'; }();
     ms::g_kbPlayer.store(keyboardPlayer(), std::memory_order_relaxed);
-    const bool want = !off && ms::wanted() && !ms::inGameMenu() && IsWindowFocused();   // menu do jogo na fase (pausa, "salvar?"): solto
+    const bool want = !off && ms::wanted() && !ms::inGameMenu() && IsWindowFocused();   // in-game menu during a stage (pause, "save?"): released
     static bool captured = false;
     static int skip = 0;
     if (want != captured)
@@ -295,17 +295,17 @@ static void mouseFrame()
         if (want)
         {
             DisableCursor();
-            skip = 2;   // o DisableCursor recentra o cursor: o primeiro deslocamento e esse salto
+            skip = 2;   // DisableCursor recenters the cursor: the first delta is that jump
         }
         else
             EnableCursor();
         ms::clear();
         ms::g_captured.store(want, std::memory_order_relaxed);
-        std::fprintf(stderr, "[mouse] cursor %s (aviso ha %lld ms, foco %d)\n", want ? "preso (camera)" : "solto",
+        std::fprintf(stderr, "[mouse] cursor %s (signal %lld ms ago, focus %d)\n", want ? "captured (camera)" : "released",
                      static_cast<long long>(ms::nowMs() - (ms::g_wantUntil.load(std::memory_order_relaxed) - 150)), IsWindowFocused() ? 1 : 0);
     }
     if (!captured)
-        return;   // solto: rodinha e cliques no pointerFrame (menus)
+        return;   // released: wheel and clicks go through pointerFrame (menus)
     if (const float w = GetMouseWheelMove(); w != 0.f)
         ms::g_wheel.fetch_add(w > 0.f ? 1 : -1, std::memory_order_relaxed);
     const Vector2 d = GetMouseDelta();
@@ -318,8 +318,8 @@ static void mouseFrame()
         ms::add(d.x, d.y);
 }
 
-// Mouse nos menus (wotm_mouse.hpp), a cada apresentacao, com o retangulo `dst` em que o quadro nativo (rw x rh) foi para a janela:
-// com o cursor solto e a janela com o foco, onde ele esta no quadro, se andou, os cliques (esquerdo e direito) e a rodinha.
+// Mouse in the menus (wotm_mouse.hpp), on every present, with the rectangle `dst` where the native frame (rw x rh) went in the window:
+// with the cursor released and the window focused, where it is in the frame, whether it moved, the clicks (left and right) and the wheel.
 static void pointerFrame(const Rectangle &dst, int rw, int rh)
 {
     namespace ms = wotm::mouse;
@@ -331,7 +331,7 @@ static void pointerFrame(const Rectangle &dst, int rw, int rh)
         static int lastWhy = -1;
         const int why = ms::g_captured.load(std::memory_order_relaxed) ? 1 : !IsWindowFocused() ? 2 : 3;
         if (std::getenv("WOTM_MENUMOUSELOG") && why != lastWhy)
-            std::fprintf(stderr, "[menumouse] ponteiro desligado (%s)\n", why == 1 ? "cursor preso" : why == 2 ? "janela sem foco" : "sem quadro");
+            std::fprintf(stderr, "[menumouse] pointer off (%s)\n", why == 1 ? "cursor captured" : why == 2 ? "window unfocused" : "no frame");
         lastWhy = why;
         p.in = false;
         ms::publishPointer(false, 0.f, 0.f, rw, rh);
@@ -342,7 +342,7 @@ static void pointerFrame(const Rectangle &dst, int rw, int rh)
     const bool in = x >= 0.f && y >= 0.f && x < float(rw) && y < float(rh);
     static const bool log = std::getenv("WOTM_MENUMOUSELOG") != nullptr;
     if (log && in != p.in)
-        std::fprintf(stderr, "[menumouse] cursor %s do quadro (janela %.0f,%.0f, quadro %.0f,%.0f de %dx%d)\n", in ? "dentro" : "fora", m.x, m.y,
+        std::fprintf(stderr, "[menumouse] cursor %s the frame (window %.0f,%.0f, frame %.0f,%.0f of %dx%d)\n", in ? "inside" : "outside", m.x, m.y,
                      x, y, rw, rh);
     if (in && p.in && (std::fabs(x - p.x) > 0.5f || std::fabs(y - p.y) > 0.5f))
         ms::g_moveSeq.fetch_add(1, std::memory_order_relaxed);

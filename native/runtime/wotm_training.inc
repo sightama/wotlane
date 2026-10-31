@@ -1,17 +1,17 @@
-// Modo treino (NATIVO.md, "Runtime: modo treino"; WOTM_TRAINING=1 ou a linha TRAINING do menu): ganchos na thread do EE que gravam o que o jogo testa nos
-// golpes e o dano de cada um. Incluido pelo wotm_overrides.cpp; estado compartilhado em native/wotm_training.h; os volumes do corpo
-// sao lidos no wotmCaptureFrame (wotm_live.inc) e o desenho e o painel de opcoes (menu de pausa) estao no wotm_live.inc. Investigacoes:
-// git show 635fd3c:docs/investigacoes/2026-10-23/treino_hitboxes.md e treino_dano.md.
+// Training mode (NATIVO.md, "Runtime: modo treino"; WOTM_TRAINING=1 or the menu's TRAINING row): hooks on the EE thread that record what the game tests for
+// attacks and the damage of each. Included by wotm_overrides.cpp; shared state in native/wotm_training.h; the body volumes
+// are read in wotmCaptureFrame (wotm_live.inc) and the drawing and options panel (pause menu) are in wotm_live.inc. Investigations:
+// git show 635fd3c:docs/investigacoes/2026-10-23/treino_hitboxes.md and treino_dano.md.
 //
-// - Golpes: o jogo nao tem caixa de golpe. Cada teste e uma esfera varrida (hdSphereTest, do ponto do osso no quadro anterior ate o
-//   atual) contra os cascos de colisao. Os ganchos marcam o "teste de golpe em curso" (soco/combo: collisTestCloseRangeAttack; golpe
-//   com objeto longo: Pickup::collisTestBatAttack; ataque ao levantar: StateGetupAttack::update; projetil: Weapon::WeaponHD; onda
-//   do butt slam: ShockWave::update) e, so com a marca, o hdSphereTest (varrido e parado) grava a esfera e se ela pegou algo. Fora
-//   da marca o hdSphereTest e da camera e da fisica e fica de fora.
-// - Dano: Monster::takeHit guarda o dano pedido e o source do HitEvent; Monster::takeDamage mede a vida antes e depois (o valor exato,
-//   com bloqueio, furia e dificuldade). Fogo, choque e batida no cenario chegam so pelo takeDamage.
-// - Boneco: as IAs (slots >= m_numPlayers) com o pad desligado (Monster +0xF9, o setPadEnabled) ficam paradas mas recuam, caem e sao
-//   agarradas. Recarga: vida cheia depois de 1,5 s sem dano, e um golpe que mataria enche a vida antes (ninguem morre no treino).
+// - Attacks: the game has no hitboxes. Each test is a swept sphere (hdSphereTest, from the bone's point on the previous frame to
+//   the current one) against the collision hulls. The hooks mark the "attack test in progress" (punch/combo: collisTestCloseRangeAttack;
+//   long-object attack: Pickup::collisTestBatAttack; getup attack: StateGetupAttack::update; projectile: Weapon::WeaponHD; butt slam
+//   wave: ShockWave::update) and, only while marked, hdSphereTest (swept and static) records the sphere and whether it hit something.
+//   Outside the mark, hdSphereTest belongs to the camera and physics and is left out.
+// - Damage: Monster::takeHit keeps the requested damage and the HitEvent's source; Monster::takeDamage measures health before and
+//   after (the exact value, with block, rage and difficulty). Fire, shock and hitting the scenery only come through takeDamage.
+// - Dummy: AIs (slots >= m_numPlayers) with the pad disabled (Monster +0xF9, setPadEnabled) stand still but still recoil, fall and
+//   get grabbed. Refill: full health after 1.5 s without damage, and a killing hit refills health first (nobody dies in training).
 
 #include "wotm_training.h"
 
@@ -19,7 +19,7 @@ namespace wotm_train
 {
     using namespace wotm_training;
     constexpr uint32_t kGameObj = wotm::sym::shellGame, kShellObj = wotm::sym::shellInfo;
-    constexpr uint32_t kSlots = 0x120380u;             // TheGame::m_monsters (lugar para 16)
+    constexpr uint32_t kSlots = 0x120380u;             // TheGame::m_monsters (room for 16)
     constexpr uint32_t kMaxHealth = 0x448u, kHealth = 0x44Cu, kPadEnabled = 0xF9u, kGetupState = 0x10C40u;
     constexpr uint32_t kTakeHitInfo = wotm::sym::x_8HitEvent_s_takeHitInfo;   // pos* +0, source +0x10
 
@@ -31,8 +31,8 @@ namespace wotm_train
                        kShockUpdate = wotm::fn::update__9ShockWave, kHookTest = wotm::fn::testCollis__16StateGrappleHook,
                        kHookState = 0x10600u, kSphereSwept = wotm::fn::hdSphereTest__FP8_fvectorT0fP9_hdResultUii,
                        kSphereStatic = wotm::fn::hdSphereTest__FP8_fvectorfP9_hdResultUii, kAiInputs = wotm::fn::updateInputs__2Ai;
-    constexpr uint32_t kAiInMonster = 0x4E0u, kGamePad = 0x5024u;   // Ai embutido no Monster; GamePad do Monster (um byte por botao)
-    // golpes sem esfera (fogo, cone, corpo, pisao, agarrao)
+    constexpr uint32_t kAiInMonster = 0x4E0u, kGamePad = 0x5024u;   // Ai embedded in the Monster; the Monster's GamePad (one byte per button)
+    // attacks without a sphere (fire, cone, body, stomp, grab)
     constexpr uint32_t kFireTest = wotm::fn::TestCollis__10FireBreath, kLos = wotm::fn::hdLosCSTest__FP8_fvectorT0P9_hdResulti,
                        kConeTest = wotm::fn::testConeCollis__14StateSonicRoar, kPunchSearch = wotm::fn::getClosestMonsterToPunch__7Monsterfff,
                        kFovSearch = wotm::fn::getClosestMonsterInFOV__7MonsterR8_fvectorfT1fRf,
@@ -40,9 +40,9 @@ namespace wotm_train
                        kBundle = wotm::fn::hdBundledSphereTest__FP19_hdSphereBundleTestii, kStompUpdate = wotm::fn::update__16StateStompAttack,
                        kStompInto = wotm::fn::transitionInto__16StateStompAttack, kGrabOH = wotm::fn::update__20StateGrappleOHAttack,
                        kMonkeyOH = wotm::fn::update__19StateMonkeyOHAttack;
-    constexpr uint32_t kStompIntoSize = 0x54u;          // o getClosestMonsterToPunch do pisao: chamado do transitionInto
-    // o getClosestMonsterInFOV do agarrao: so o do StateGrapple::update (a janela de pegar); o do transitionFeasible e a pergunta "da
-    // para agarrar?" que a IA e o pad fazem a cada quadro
+    constexpr uint32_t kStompIntoSize = 0x54u;          // the stomp's getClosestMonsterToPunch: called from transitionInto
+    // the grab's getClosestMonsterInFOV: only StateGrapple::update's (the grab window); transitionFeasible's is the "can I grab?"
+    // question the AI and the pad ask every frame
     constexpr uint32_t kGrabUpdate = wotm::fn::update__12StateGrapple, kGrabUpdateSize = 0x390u;
     constexpr uint32_t kRamState = 0xFD40u, kThrownState = 0xE3E0u, kPinTrans = 0x3E30u;
 
@@ -53,25 +53,25 @@ namespace wotm_train
                                    g_origEnv = nullptr, g_origBundle = nullptr, g_origStomp = nullptr, g_origGrabOH = nullptr,
                                    g_origMonkeyOH = nullptr, g_origHook = nullptr;
 
-    // estado da thread do EE
-    int g_ctxKind = -1;         // teste de golpe em curso (Kind) ou -1
+    // EE thread state
+    int g_ctxKind = -1;         // attack test in progress (Kind) or -1
     int g_ctxOwner = -1;
-    bool g_ctxHit = false;      // o teste em curso levou a um takeHit/dano (cone do SonicRoar)
-    uint32_t g_curMonster = 0;  // Monster::update em curso
+    bool g_ctxHit = false;      // the test in progress led to a takeHit/damage (SonicRoar cone)
+    uint32_t g_curMonster = 0;  // Monster::update in progress
     bool g_inStatic = false;
     struct HitCtx
     {
         uint32_t victim = 0;
         float base = 0.f;
         int source = -1;
-        int cls = 0;   // classe do estado da vitima na entrada do takeHit (2 = ja numa reacao: o golpe emenda o combo)
+        int cls = 0;   // class of the victim's state on entry to takeHit (2 = already in a reaction: the hit extends the combo)
     } g_hitCtx;
-    uint32_t g_lastDamage[16] = {};   // g_frame do ultimo dano por slot
-    uint32_t g_lastHit[16] = {};      // g_frame do ultimo takeHit por slot (conta tambem o golpe defendido sem dano)
-    uint32_t g_padOff = 0;            // slots com o pad desligado por aqui
+    uint32_t g_lastDamage[16] = {};   // g_frame of the last damage per slot
+    uint32_t g_lastHit[16] = {};      // g_frame of the last takeHit per slot (also counts a blocked hit with no damage)
+    uint32_t g_padOff = 0;            // slots whose pad we disabled
 
-    // ---- dados de quadro: estados do Monster pelo offset de m_state (+0x34) dentro dele (tabela do include/game/game.h)
-    // cls: 0 outro, 1 ataque, 2 reacao (a vitima nao age)
+    // ---- frame data: Monster states by the offset of m_state (+0x34) within it (table from include/game/game.h)
+    // cls: 0 other, 1 attack, 2 reaction (the victim can't act)
     struct StateName { uint32_t off; const char *name; uint8_t cls; };
     constexpr StateName kStates[] = {
         {0x7984, "Idle", 0}, {0x79AC, "Run", 0}, {0x7A90, "Dash", 0}, {0x7AD4, "Jump", 0}, {0x7DA0, "Block", 0},
@@ -101,14 +101,14 @@ namespace wotm_train
     {
         uint32_t off = 0, start = 0, lastActive = 0, firstActive = 0;
         int chain = -1, step = -1, active = 0, hitVictim = -1;
-        bool blocked = false;   // no recuo: o golpe foi defendido
+        bool blocked = false;   // in recoil: the hit was blocked
     } g_track[16];
     constexpr uint32_t kRecoilState = 0x7E30u, kRecoilBlocked = kRecoilState + 0x64u;
-    uint32_t g_activeFrame[16] = {};   // ultimo quadro com teste de golpe do slot
+    uint32_t g_activeFrame[16] = {};   // last frame with an attack test for the slot
     struct HitMark
     {
         uint32_t frame = 0;
-        int8_t victim = -1;   // primeira vitima com dano desde a ultima conferencia
+        int8_t victim = -1;   // first damaged victim since the last check
     } g_hitMark[16];
 
     inline bool ok(uint32_t a, uint32_t n) { return a >= 0x1000u && a + n <= PS2_RAM_SIZE; }
@@ -134,19 +134,19 @@ namespace wotm_train
         return p >= 1 && p <= 4 ? p : 1;
     }
 
-    // a funcao terminou (nao foi interrompida pelo escalonador no meio): o pc voltou ao ra da entrada
+    // the function finished (wasn't interrupted midway by the scheduler): pc is back at the entry ra
     inline bool returned(R5900Context *ctx, uint32_t ra) { return ctx->pc == ra; }
 
-    // ---- golpes
+    // ---- attacks
 
-    uint32_t g_kindLog = 0;   // tipos ja anunciados no log (um aviso por tipo)
+    uint32_t g_kindLog = 0;   // kinds already announced in the log (one notice per kind)
     void logKind(int kind)
     {
-        static const char *const names[KKinds] = {"soco", "objeto", "levantar", "projetil", "onda", "gancho", "outro", "fogo", "corpo", "pisao", "agarrao", "cone"};
+        static const char *const names[KKinds] = {"punch", "object", "getup", "projectile", "wave", "hook", "other", "fire", "body", "stomp", "grab", "cone"};
         if (kind < 0 || kind >= KKinds || (g_kindLog & (1u << kind)))
             return;
         g_kindLog |= 1u << kind;
-        std::fprintf(stderr, "[treino] primeiro teste de golpe do tipo %s\n", names[kind]);
+        std::fprintf(stderr, "[training] first attack test of kind %s\n", names[kind]);
     }
 
     void pushSweepK(const uint8_t *rdram, const float a[3], const float b[3], float r, uint8_t hit, int kind, int owner)
@@ -162,7 +162,7 @@ namespace wotm_train
         s.owner = int8_t(owner);
         s.hit = hit;
         if (owner >= 0 && owner < 16)
-            g_activeFrame[owner] = s.frame;   // contado no estado em que o monstro termina o quadro (trackState)
+            g_activeFrame[owner] = s.frame;   // counted in the state the monster ends the frame in (trackState)
         logKind(kind);
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
@@ -202,7 +202,7 @@ namespace wotm_train
         if (sh.cones.size() < 512)
             sh.cones.push_back(c);
     }
-    // so os testes de golpe por esfera gravam pelo hdSphereTest (os de cone, corpo e busca gravam a propria forma)
+    // only sphere attack tests record through hdSphereTest (cone, body and search tests record their own shape)
     inline bool sphereCtx() { return g_ctxKind >= 0 && g_ctxKind <= KOther; }
 
     uint8_t classify(const uint8_t *rdram, uint32_t res, int n)
@@ -227,7 +227,7 @@ namespace wotm_train
             out[i] = rdf(rdram, p + 4 * i);
     }
 
-    // hdSphereTest(from, to, r, res, skipId, max): esfera varrida
+    // hdSphereTest(from, to, r, res, skipId, max): swept sphere
     void sphereSwept(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc != kSphereSwept || !sphereCtx() || g_inStatic || !g_on.load(std::memory_order_relaxed))
@@ -245,7 +245,7 @@ namespace wotm_train
         pushSweep(rdram, a, b, r, classify(rdram, res, n));
     }
 
-    // hdSphereTest(pos, r, res, skipId, max): esfera parada
+    // hdSphereTest(pos, r, res, skipId, max): static sphere
     void sphereStatic(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc != kSphereStatic || !sphereCtx() || !g_on.load(std::memory_order_relaxed))
@@ -264,7 +264,7 @@ namespace wotm_train
         pushSweep(rdram, a, a, r, classify(rdram, res, n));
     }
 
-    // marca o teste de golpe em curso durante a chamada original
+    // marks the attack test in progress during the original call
     void withCtx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, PS2Runtime::RecompiledFunction orig, int kind, int owner)
     {
         const int savedKind = g_ctxKind, savedOwner = g_ctxOwner;
@@ -275,17 +275,17 @@ namespace wotm_train
         g_ctxOwner = savedOwner;
     }
 
-    void punchTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)   // a2 = Monster atacante
+    void punchTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)   // a2 = attacking Monster
     {
         if (ctx->pc != kPunchTest || !g_on.load(std::memory_order_relaxed)) { g_origPunch(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origPunch, KPunch, slotOf(rdram, GPR_U32(ctx, 6)));
     }
-    void batTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)     // no Monster::update de quem segura
+    void batTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)     // inside the holder's Monster::update
     {
         if (ctx->pc != kBatTest || !g_on.load(std::memory_order_relaxed)) { g_origBat(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origBat, KBat, slotOf(rdram, g_curMonster));
     }
-    void getupUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)  // a0 = o estado, dentro do Monster
+    void getupUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)  // a0 = the state, inside the Monster
     {
         if (ctx->pc != kGetupUpdate || !g_on.load(std::memory_order_relaxed)) { g_origGetup(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origGetup, KGetup, slotOf(rdram, GPR_U32(ctx, 4) - kGetupState));
@@ -295,29 +295,29 @@ namespace wotm_train
         if (ctx->pc != kWeaponHD || !g_on.load(std::memory_order_relaxed)) { g_origWeapon(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origWeapon, KWeapon, -1);
     }
-    // StateGrappleHook::testCollis (a0 = o estado, Monster +0x10600): o unico hdSphereTest do gancho do Ultra-V, raio 0 (uma linha) do ponto
-    // anterior ao atual da ponta (+0x90 -> +0xA0)
+    // StateGrappleHook::testCollis (a0 = the state, Monster +0x10600): the only hdSphereTest of Ultra-V's hook, radius 0 (a line) from the
+    // tip's previous point to its current one (+0x90 -> +0xA0)
     void hookTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc != kHookTest || !g_on.load(std::memory_order_relaxed)) { g_origHook(rdram, ctx, runtime); return; }
         withCtx(rdram, ctx, runtime, g_origHook, KHook, slotOf(rdram, (GPR_U32(ctx, 4) & 0x1FFFFFFFu) - kHookState));
     }
-    void shockUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)  // +0x20: o dono (Monster), quando e um dos slots
+    void shockUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)  // +0x20: the owner (Monster), when it is one of the slots
     {
         if (ctx->pc != kShockUpdate || !g_on.load(std::memory_order_relaxed)) { g_origShock(rdram, ctx, runtime); return; }
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
         withCtx(rdram, ctx, runtime, g_origShock, KShock, ok(self, 0x24) ? slotOf(rdram, rd32(rdram, self + 0x20)) : -1);
     }
 
-    // ---- golpes sem esfera: fogo, cone, corpo, pisao e agarrao
+    // ---- attacks without a sphere: fire, cone, body, stomp and grab
 
-    // offset do estado atual (m_state, +0x34) dentro do Monster; 0 se fora
+    // offset of the current state (m_state, +0x34) within the Monster; 0 if outside
     uint32_t stateOff(const uint8_t *rdram, uint32_t m)
     {
         const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
         return st > m && st - m < 0x11190u ? st - m : 0;
     }
-    // _cs do monstro (+0xC): translacao +0x10, linhas da matriz +0x20 (x), +0x30 (frente), +0x40 (cima)
+    // the monster's _cs (+0xC): translation +0x10, matrix rows +0x20 (x), +0x30 (forward), +0x40 (up)
     bool monsterCs(const uint8_t *rdram, uint32_t m, float trans[3], float fwd[3], float up[3])
     {
         const uint32_t cs = rd32(rdram, m + 0xC) & 0x1FFFFFFFu;
@@ -329,14 +329,14 @@ namespace wotm_train
         return true;
     }
 
-    // FireBreath::TestCollis (a0 = o FireBreath, +4 o Monster): uma linha de visada da boca ate o alcance (hdLosCSTest)
+    // FireBreath::TestCollis (a0 = the FireBreath, +4 the Monster): a line of sight from the mouth out to the reach (hdLosCSTest)
     void fireTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc != kFireTest || !g_on.load(std::memory_order_relaxed)) { g_origFire(rdram, ctx, runtime); return; }
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
         withCtx(rdram, ctx, runtime, g_origFire, KFire, ok(self, 8) ? slotOf(rdram, rd32(rdram, self + 4)) : -1);
     }
-    // hdLosCSTest(from, to, res, skipId): so no fogo e no cone, a linha (raio 0) e se pegou cenario ou monstro
+    // hdLosCSTest(from, to, res, skipId): only for fire and cone, the line (radius 0) and whether it hit scenery or a monster
     void losTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc != kLos || (g_ctxKind != KFire && g_ctxKind != KCone) || !g_on.load(std::memory_order_relaxed))
@@ -352,8 +352,8 @@ namespace wotm_train
         pushSweep(rdram, a, b, 0.f, returned(ctx, ra) ? classify(rdram, res, 1) : 0);
     }
 
-    // StateSonicRoar::testConeCollis (a0 = o estado, +0xC o Monster): cone da boca (+0x3E50) no eixo +0x33D0, alcance +0x264 (1000 no
-    // Monster Island com a cratera trocada, como o jogo), cosseno do meio-angulo +0x268; vermelho se alguem levou o golpe
+    // StateSonicRoar::testConeCollis (a0 = the state, +0xC the Monster): cone from the mouth (+0x3E50) along axis +0x33D0, reach +0x264
+    // (1000 on Monster Island with the crater swapped, like the game), cosine of the half-angle +0x268; red if someone was hit
     void coneTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t self = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -381,8 +381,8 @@ namespace wotm_train
             pushCone(rdram, apex, axis, up, len, cosHalf, false, hit ? 2 : 0, KCone, owner);
     }
 
-    // getClosestMonsterToPunch(maxDist f12, angle f13, reach f14): no pisao (chamado do StateStompAttack::transitionInto) a busca da
-    // vitima, um setor no chao a partir do monstro, na frente dele, meio-angulo angle/2, raio reach
+    // getClosestMonsterToPunch(maxDist f12, angle f13, reach f14): for the stomp (called from StateStompAttack::transitionInto) the
+    // victim search, a sector on the ground from the monster, in front of it, half-angle angle/2, radius reach
     void punchSearch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t ra = GPR_U32(ctx, 31), m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -400,8 +400,9 @@ namespace wotm_train
             pushCone(rdram, trans, fwd, up, reach, std::cos(angle * 0.5f), true, GPR_U32(ctx, 2) ? 2 : 0, KStomp, slotOf(rdram, m));
     }
 
-    // getClosestMonsterInFOV(from a1, maxDist f12, eye a2, cosAngle f13, distSq a3), so do StateGrapple::update: o ponto de mira da vitima a
-    // menos de maxDist do `from` (a esfera) e dentro do cone visto do `eye` em volta da frente do monstro (o cone, ate o fim da esfera)
+    // getClosestMonsterInFOV(from a1, maxDist f12, eye a2, cosAngle f13, distSq a3), only from StateGrapple::update: the victim's aim
+    // point within maxDist of `from` (the sphere) and inside the cone seen from `eye` around the monster's forward (the cone, to the
+    // sphere's far end)
     void fovSearch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t ra = GPR_U32(ctx, 31), m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -426,7 +427,7 @@ namespace wotm_train
         pushSweepK(rdram, from, from, maxDist, hit, KGrab, owner);
     }
 
-    // collisTestEnvironmentCollisions (a0 = Monster): na investida e no monstro arremessado, as esferas do corpo sao o golpe
+    // collisTestEnvironmentCollisions (a0 = Monster): during a ram attack and for a thrown monster, the body spheres are the attack
     void envTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -438,7 +439,7 @@ namespace wotm_train
         }
         withCtx(rdram, ctx, runtime, g_origEnv, KBody, slotOf(rdram, m));
     }
-    // hdBundledSphereTest(tests a0, n a1, skipId a2): testes de 0x18 bytes {from*, to*, raio, max, resultados*, quantos}
+    // hdBundledSphereTest(tests a0, n a1, skipId a2): 0x18-byte tests {from*, to*, radius, max, results*, count}
     void bundleTest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t tests = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
@@ -466,8 +467,8 @@ namespace wotm_train
         }
     }
 
-    // StateStompAttack::update, StateGrappleOHAttack::update, StateMonkeyOHAttack::update (dentro do Monster::update de quem ataca): o
-    // dano vai direto ao takeDamage da vitima, que ganha uma marca (takeDamage, mais abaixo)
+    // StateStompAttack::update, StateGrappleOHAttack::update, StateMonkeyOHAttack::update (inside the attacker's Monster::update): the
+    // damage goes straight to the victim's takeDamage, which gets a marker (takeDamage, below)
     void stompUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc != kStompUpdate || !g_on.load(std::memory_order_relaxed)) { g_origStomp(rdram, ctx, runtime); return; }
@@ -484,9 +485,9 @@ namespace wotm_train
         withCtx(rdram, ctx, runtime, g_origMonkeyOH, KGrab, slotOf(rdram, g_curMonster));
     }
 
-    // ---- dano e boneco
+    // ---- damage and dummy
 
-    // classe do estado em que o monstro esta (cls da kStates; 0 sem nome)
+    // class of the monster's current state (kStates' cls; 0 if unnamed)
     int stateCls(const uint8_t *rdram, uint32_t m)
     {
         const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
@@ -506,8 +507,8 @@ namespace wotm_train
             g_lastHit[vs] = frameNow(rdram);
         if (g_ctxKind == KCone)
             g_ctxHit = true;
-        // dados de quadro: o golpe que encostou conta como acerto mesmo sem dano (defendido), para a vantagem no bloqueio sair. O
-        // atacante: o dono do teste de golpe em curso, ou o monstro cujo update esta rodando
+        // frame data: a hit that connected counts even with no damage (blocked), so the advantage on block shows up. The
+        // attacker: the owner of the attack test in progress, or the monster whose update is running
         if (const int vs = slotOf(rdram, g_hitCtx.victim); vs >= 0)
         {
             const int att = g_ctxOwner >= 0 ? g_ctxOwner : slotOf(rdram, g_curMonster);
@@ -518,7 +519,7 @@ namespace wotm_train
         g_hitCtx = saved;
     }
 
-    void takeDamage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)   // a0 vitima, f12 dano, a1 force, a2 fonte (Monster*)
+    void takeDamage(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)   // a0 victim, f12 damage, a1 force, a2 source (Monster*)
     {
         const uint32_t m = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
         const int slot = ctx->pc == kTakeDamage && g_on.load(std::memory_order_relaxed) && ok(m, 0x450u) ? slotOf(rdram, m) : -1;
@@ -529,7 +530,7 @@ namespace wotm_train
         }
         const float dmg = ctx->f[12], maxH = rdf(rdram, m + kMaxHealth);
         float before = rdf(rdram, m + kHealth);
-        // recarga: um golpe que mataria enche a vida antes (o "vencer a luta" do F1, 100000, passa); 1,35 cobre a dificuldade do difícil
+        // refill: a hit that would kill refills health first (F1's "win the fight", 100000, goes through); 1.35 covers hard difficulty
         if ((g_opts.load(std::memory_order_relaxed) & kRefill) && dmg < 10000.f && maxH > 0.f && before <= dmg * 1.35f + 0.5f)
         {
             wrf(rdram, m + kHealth, maxH);
@@ -546,7 +547,7 @@ namespace wotm_train
         if (g_ctxKind == KCone)
             g_ctxHit = true;
         if (g_ctxKind == KStomp || g_ctxKind == KGrab)
-        {   // pisao e agarrao nao tem geometria: uma esfera vermelha no ponto de mira da vitima (+0x3E30) marca o golpe que tirou vida
+        {   // stomp and grab have no geometry: a red sphere at the victim's aim point (+0x3E30) marks the hit that took health
             float p[3];
             readVec(rdram, m + kPinTrans, p);
             pushSweep(rdram, p, p, 25.f, 2);
@@ -566,11 +567,11 @@ namespace wotm_train
             g_hitMark[h.attacker] = HitMark{h.frame, int8_t(slot)};
         static uint32_t logged = 0;
         if (++logged <= 30 || logged % 100 == 0)
-            std::fprintf(stderr, "[treino] dano %.2f em slot %d (de %d; pedido %.2f, source %d), vida %.1f -> %.1f de %.0f (%u)\n", h.applied,
+            std::fprintf(stderr, "[training] damage %.2f on slot %d (from %d; requested %.2f, source %d), health %.1f -> %.1f of %.0f (%u)\n", h.applied,
                          slot, h.attacker, h.base, h.source, before, after, maxH, logged);
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
-        // dano continuo (fogo, choque: um pouco por quadro, sem takeHit) vira um registro so enquanto continua
+        // continuous damage (fire, shock: a little per frame, no takeHit) becomes a single record while it continues
         bool merged = false;
         if (!inHit && !sh.hits.empty())
         {
@@ -582,7 +583,7 @@ namespace wotm_train
                 merged = true;
             }
         }
-        // combo: emenda se a vitima ainda estava numa reacao quando o golpe chegou (ou o dano veio ate 3 quadros depois do anterior)
+        // combo: continues if the victim was still in a reaction when the hit landed (or the damage came within 3 frames of the previous)
         Combo &c = sh.combo;
         const int cls = inHit ? g_hitCtx.cls : clsBefore;
         if (!(c.victim == h.victim && c.hits > 0 && (cls == 2 || h.frame - c.last <= 3u)))
@@ -605,8 +606,8 @@ namespace wotm_train
             sh.hits.push_back(h);
     }
 
-    // Na saida do Monster::update: o estado em que o monstro termina o quadro f. Uma troca (ou outro passo do combo) fecha o registro do
-    // estado anterior (que durou ate o quadro f - 1) e abre o novo em f; o teste de golpe e o dano do quadro contam no estado novo.
+    // On exit from Monster::update: the state the monster ends frame f in. A change (or another combo step) closes the previous
+    // state's record (which lasted until frame f - 1) and opens the new one at f; the frame's attack test and damage count for the new one.
     void trackState(const uint8_t *rdram, uint32_t m, int slot)
     {
         const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
@@ -624,7 +625,7 @@ namespace wotm_train
         }
         Track &t = g_track[slot];
         const uint32_t f = frameNow(rdram);
-        // atividade do quadro (esferas, dano causado) no estado de agora
+        // the frame's activity (spheres, damage dealt) in the current state
         auto absorb = [&](Track &tr) {
             if (off == kRecoilState && rd32(rdram, m + kRecoilBlocked))
                 tr.blocked = true;
@@ -667,7 +668,7 @@ namespace wotm_train
                 r.hitVictim = int8_t(t.hitVictim);
                 static uint32_t nlog = 0;
                 if (++nlog <= 40)
-                    std::fprintf(stderr, "[treino] golpe slot %d %s c%d s%d: inicio %d, ativo %d, total %u, vitima %d\n", slot, r.name, r.chain,
+                    std::fprintf(stderr, "[training] attack slot %d %s c%d s%d: startup %d, active %d, total %u, victim %d\n", slot, r.name, r.chain,
                                  r.step, r.startup, r.active, r.end - r.start, r.hitVictim);
                 sh.moves.push_back(r);
                 if (sh.moves.size() > 64)
@@ -677,8 +678,8 @@ namespace wotm_train
             {
                 static uint32_t nlog = 0;
                 if (++nlog <= 40)
-                    std::fprintf(stderr, "[treino] reacao slot %d %s%s: %u quadros (%u..%u)\n", slot, sn->name,
-                                 t.blocked ? " (defendido)" : "", f - t.start, t.start, f);
+                    std::fprintf(stderr, "[training] reaction slot %d %s%s: %u frames (%u..%u)\n", slot, sn->name,
+                                 t.blocked ? " (blocked)" : "", f - t.start, t.start, f);
                 sh.stuns.push_back(StunRec{int8_t(slot), t.blocked ? "BLOCKSTUN" : sn->name, t.start, f, t.blocked});
                 if (sh.stuns.size() > 64)
                     sh.stuns.erase(sh.stuns.begin());
@@ -692,9 +693,9 @@ namespace wotm_train
         absorb(t);
     }
 
-    // Comandos do quadro, na saida do Monster::update: o GamePad (+0x5024) ainda tem o que o interpretInputs leu (o clearInputs e no
-    // comeco do proximo update; o lock-on alternado devolve os bytes originais na saida). Direcional/analogico esquerdo em 0xC..0xF
-    // (esquerda, direita, frente, tras; relativos ao monstro no controle normal).
+    // The frame's inputs, on exit from Monster::update: the GamePad (+0x5024) still holds what interpretInputs read (clearInputs runs at
+    // the start of the next update; toggled lock-on restores the original bytes on exit). D-pad/left stick in 0xC..0xF
+    // (left, right, forward, back; relative to the monster under normal controls).
     void recordPad(const uint8_t *rdram, uint32_t m, int idx)
     {
         const uint8_t *gp = rdram + m + kGamePad;
@@ -724,8 +725,8 @@ namespace wotm_train
             h.erase(h.begin());
     }
 
-    // ---- tabela dos socos (configs do StatePunch, os valores do .CHR ja na RAM)
-    constexpr uint32_t kAnims = 0x1CF0u, kNumAnims = 0x12Cu;   // Monster::m_anims (um _animHandle de 0x10 por MonsterAnim)
+    // ---- punch table (StatePunch configs, the .CHR values already in RAM)
+    constexpr uint32_t kAnims = 0x1CF0u, kNumAnims = 0x12Cu;   // Monster::m_anims (one 0x10 _animHandle per MonsterAnim)
     constexpr uint32_t kPunchCfgs = 0x20u, kTierStride = 0x420u, kTypeStride = 0xB0u, kFistDefault = 0x2980u, kPunchTier = 0x2988u,
                        kPunchType = 0x298Cu, kPunchInWindow = 0x2A00u;
 
@@ -746,19 +747,19 @@ namespace wotm_train
         p.loc[0] = int(rd32(rdram, c + 0x7C));
         p.loc[1] = int(rd32(rdram, c + 0x80));
         p.dmg = rdf(rdram, c + 0x90);
-        // a mesma regra do chr_dump.py: sem animacao e sem dano = casa vazia
+        // the same rule as chr_dump.py: no animation and no damage = empty cell
         p.valid = std::isfinite(p.ini + p.fim + p.dmg + p.radius) && !(p.anim <= 0 && p.dmg == 0.f);
         return p;
     }
 
-    // Golpes com objeto (StateBatSwipe, Monster +0xAE90): configs em +0x20 + pos*0x480 + tipo*0xC0 (SwipeConfig de 0xC0, o mesmo
-    // comeco de layout da PunchConfig), pos +0x2D48, tipo +0x2D4C, inCollisionWindow +0x2DC0. O tipo vem do mesmo curMappedAction do
-    // soco (StateBatSwipe::transitionOK). O dano e um multiplicador do dano do objeto (LevelPickups::s_info): +0x90 quando o objeto e
-    // um bastao (Pickup +0xA0 == 8, collisTestBatAttack), +0xB0 nos outros (getDamageMod, pelo collisTestCloseRangeAttack).
+    // Object attacks (StateBatSwipe, Monster +0xAE90): configs at +0x20 + pos*0x480 + type*0xC0 (0xC0 SwipeConfig, sharing the start
+    // of PunchConfig's layout), pos +0x2D48, type +0x2D4C, inCollisionWindow +0x2DC0. The type comes from the same curMappedAction as
+    // the punch (StateBatSwipe::transitionOK). The damage is a multiplier on the object's damage (LevelPickups::s_info): +0x90 when the
+    // object is a bat (Pickup +0xA0 == 8, collisTestBatAttack), +0xB0 for the others (getDamageMod, via collisTestCloseRangeAttack).
     constexpr uint32_t kSwipeCfgs = 0x20u, kSwipeTierStride = 0x480u, kSwipeTypeStride = 0xC0u, kSwipeTier = 0x2D48u, kSwipeType = 0x2D4Cu,
                        kSwipeInWindow = 0x2DC0u, kMonsterPickup = 0x68A4u, kPickupKind = 0xA0u, kPickupKindBat = 8u;
 
-    // o Pickup que o monstro segura (m_pickup aponta para o no da lista cujo primeiro campo e o Pickup*), ou 0
+    // the Pickup the monster holds (m_pickup points to the list node whose first field is the Pickup*), or 0
     uint32_t heldPickup(const uint8_t *rdram, uint32_t m)
     {
         const uint32_t node = rd32(rdram, m + kMonsterPickup) & 0x1FFFFFFFu;
@@ -787,14 +788,14 @@ namespace wotm_train
         return p;
     }
 
-    // animationGetCurrentPercent(&m_anims[anim]) (o a0 e o endereco do _animHandle; devolve em $f0), com o contexto de volta como estava
+    // animationGetCurrentPercent(&m_anims[anim]) (a0 is the _animHandle's address; returns in $f0), restoring the context afterwards
     float animPercent(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int anim)
     {
         static const PS2Runtime::RecompiledFunction f = runtime->lookupFunction(wotm::fn::animationGetCurrentPercent__FG11_animHandle);
         if (!f || anim < 0 || uint32_t(anim) >= kNumAnims)
             return -1.f;
         const uint32_t h = m + kAnims + uint32_t(anim) * 0x10u;
-        if (!(rd32(rdram, h) & 0x1FFFFFFFu))   // ci nulo: o monstro nao tem essa animacao
+        if (!(rd32(rdram, h) & 0x1FFFFFFFu))   // null ci: the monster lacks this animation
             return -1.f;
         const R5900Context saved = *ctx;
         ctx->r[4] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(h)));
@@ -806,9 +807,9 @@ namespace wotm_train
         return std::isfinite(pct) ? pct : -1.f;
     }
 
-    // ---- MOVE LIST (wotm_mainmenu.inc): a lista do monstro do P1 e os favoritos dele. Arquivo de favoritos: training_moves.ini ao
-    // lado do settings.ini (uma linha "<tipo>=<id>,<id>..." por monstro; sem settings.ini, so na memoria)
-    constexpr uint32_t kPunchNext = 0x94u;   // PunchConfig: 6 floats, > 0 = o proximo tipo e permitido
+    // ---- MOVE LIST (wotm_mainmenu.inc): P1's monster's list and its favorites. Favorites file: training_moves.ini next to
+    // settings.ini (one "<type>=<id>,<id>..." line per monster; without settings.ini, in memory only)
+    constexpr uint32_t kPunchNext = 0x94u;   // PunchConfig: 6 floats, > 0 = the next type is allowed
     std::filesystem::path favPath()
     {
         const std::filesystem::path &p = wotm::settings::g_path;
@@ -854,11 +855,11 @@ namespace wotm_train
         for (size_t i = 0; i < fav.size(); ++i) mine += (i ? "," : "") + fav[i];
         lines.push_back(mine);
         std::ofstream f(p, std::ios::trunc);
-        f << "# MOVE LIST do modo treino: favoritos por tipo de monstro (m_typeBits >> 5); ids P<tipo>, C<tipo>x<n>, W<tipo>\n";
+        f << "# Training mode MOVE LIST: favorites per monster type (m_typeBits >> 5); ids P<type>, C<type>x<n>, W<type>\n";
         for (const std::string &l : lines)
             if (l[0] != '#') f << l << '\n';
     }
-    // monta a lista do monstro m (socos da posicao 1, sequencias do mesmo botao, golpes com objeto) e publica com os favoritos dele
+    // builds monster m's list (position 1 punches, same-button sequences, object attacks) and publishes it with its favorites
     void buildMoves(const uint8_t *rdram, uint32_t m, int type, bool bat, uint32_t pickup)
     {
         std::vector<Move> list;
@@ -908,8 +909,8 @@ namespace wotm_train
             std::snprintf(mv.id, sizeof mv.id, "W%d", k);
             list.push_back(mv);
         }
-        // os outros golpes comuns (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md): numeros da RAM do proprio monstro
-        // btns e dir: o comando (icones da linha do painel): bits kBtn* e a direcao no teclado numerico (8 frente/cima, 2 tras, 5 nenhuma)
+        // the other common moves (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md): numbers from the monster's own RAM
+        // btns and dir: the command (the panel row's icons): kBtn* bits and the numpad-notation direction (8 forward/up, 2 back, 5 none)
         auto other = [&](const char *id, const char *name, uint32_t state, float dmg, const char *hint, uint8_t btns, int dir = 5) {
             Move mv;
             mv.kind = MkOther; mv.state = state; mv.dmg = std::isfinite(dmg) ? dmg : 0.f;
@@ -922,7 +923,7 @@ namespace wotm_train
         };
         constexpr uint8_t kSq = uint8_t(kBtnSquare), kTri = uint8_t(kBtnTriangle), kCir = uint8_t(kBtnCircle), kX = uint8_t(kBtnX), kR2 = uint8_t(kBtnR2), kSpecialBtn = uint8_t(kCir | kTri);
         char h[200];
-        {   // butt slam: anel 0 direto dentro de reach[0], depois a onda ate reach[n-1]
+        {   // butt slam: ring 0 directly within reach[0], then the wave out to reach[n-1]
             const int n = std::clamp(int(rd32(rdram, m + 0xFA84u)), 0, 8);
             const float d0 = rdf(rdram, m + 0xFAA8u), r0 = rdf(rdram, m + 0xFCD4u), rn = n > 0 ? rdf(rdram, m + 0xFCD4u + 4u * uint32_t(n - 1)) : 0.f;
             const float cost = rdf(rdram, m + 0xFA68u);
@@ -930,25 +931,25 @@ namespace wotm_train
             const size_t i = other("Obutt", "BUTT SLAM", 0xFA1Cu, d0, h, kTri, 8);
             list[i].kb = rdf(rdram, m + 0xFAB0u); list[i].stun = rdf(rdram, m + 0xFAB8u); list[i].radius = r0;
         }
-        {   // investida: dano base + velocidade x fator
+        {   // ram attack: base damage + speed x factor
             const float base = rdf(rdram, m + 0xFD80u), per = rdf(rdram, m + 0xFD84u), cost = rdf(rdram, m + 0xFD88u);
             char sp[40] = "";
-            if (per > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", per);   // fator 0 em todos os monstros vistos
+            if (per > 0.f) std::snprintf(sp, sizeof sp, " + %.3f PER UNIT OF SPEED", per);   // factor 0 on every monster seen
             std::snprintf(h, sizeof h, "RUN (TAP FORWARD TWICE) + HEAVY, HOLD TO CHARGE. %.0f DAMAGE%s. STAMINA %.0f. KNOCKS DOWN", base, sp, cost);
             const size_t i = other("Oram", "RAM ATTACK", 0xFD40u, base, h, kTri, 8);
             list[i].kb = 1.f;
         }
-        {   // agarrao: alcance do cone; golpes no agarrao (Congar usa o MonkeyOHAttack); arremesso (dano do impacto no chao, da vitima)
+        {   // grab: the cone's reach; attacks while grabbing (Congar uses MonkeyOHAttack); throw (damage from the victim's ground impact)
             const float range = rdf(rdram, m + 0xDD04u);
             std::snprintf(h, sizeof h, "GRAB NEAR THE OPPONENT (RANGE %.0f). THEN LIGHT OR HEAVY TO HIT, GRAB OR UP + GRAB TO THROW", range);
             const size_t g = other("Ograb", "GRAB", 0xDCE0u, 0.f, h, kCir);
             list[g].radius = range;
-            const bool monkey = type == 1;   // Congar (kMonsterNames: tipo = m_typeBits >> 5)
+            const bool monkey = type == 1;   // Congar (kMonsterNames: type = m_typeBits >> 5)
             const uint32_t st = monkey ? 0x10B34u : 0x10AE0u;
             const float dSq = rdf(rdram, m + (monkey ? 0x10B5Cu : 0x10B08u)), cSq = rdf(rdram, m + (monkey ? 0x10B60u : 0x10B0Cu));
             const float dTri = rdf(rdram, m + (monkey ? 0x10B70u : 0x10B1Cu)), cTri = rdf(rdram, m + (monkey ? 0x10B74u : 0x10B20u));
             std::snprintf(h, sizeof h, "LIGHT WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. STOPS THE OPPONENT FROM STRUGGLING FOR A MOMENT", dSq, cSq);
-            list[other("Ograbsq", "GRAB: LIGHT", st, dSq, h, kSq)].variant = 1;   // o mesmo estado: a animacao +0x50 (0xBA = especial) distingue
+            list[other("Ograbsq", "GRAB: LIGHT", st, dSq, h, kSq)].variant = 1;   // the same state: the animation at +0x50 (0xBA = special) tells them apart
             std::snprintf(h, sizeof h, "HEAVY WHILE GRABBING. %.0f DAMAGE, STAMINA %.0f. LETS THE OPPONENT GO", dTri, cTri);
             list[other("Ograbtri", "GRAB: HEAVY", st, dTri, h, kTri)].variant = 2;
             const float ground = rdf(rdram, m + 0xE430u), perV = rdf(rdram, m + 0xE434u), wall = rdf(rdram, m + 0xE400u);
@@ -958,9 +959,9 @@ namespace wotm_train
             const size_t t = other("Ograbthrow", "GRAB: THROW", 0xDD74u, ground, h, kCir);
             list[t].kb = 1.f;
         }
-        // levantar atacando (b4e810b:docs/investigacoes/2026-10-26/move_list_getup_taunt.md): deitado, cada toque de botao de face regrava o
-        // getupAttack (ThrowBack +0x558) com "LIGHT ou HEAVY apertado"; entrada 0 ou 1 pela orientacao do localizador 0x809 (+0x3358)
-        for (int i = 0; i < 2; ++i)   // entradas de 0x24
+        // getup attack (b4e810b:docs/investigacoes/2026-10-26/move_list_getup_taunt.md): while down, every face button press rewrites
+        // getupAttack (ThrowBack +0x558) with "LIGHT or HEAVY pressed"; entry 0 or 1 by the orientation of locator 0x809 (+0x3358)
+        for (int i = 0; i < 2; ++i)   // 0x24-byte entries
         {
             const uint32_t e = m + 0x10C40u + uint32_t(i) * 0x24u;
             const int anim = int(rd32(rdram, e + 0x20u));
@@ -974,10 +975,10 @@ namespace wotm_train
             list[k].ini = rdf(rdram, e + 0x14u); list[k].fim = rdf(rdram, e + 0x18u);
             list[k].kb = rdf(rdram, e + 0x28u); list[k].stun = rdf(rdram, e + 0x30u);
         }
-        {   // crowd control: onda com o medidor de especial
+        {   // crowd control: a wave using the special meter
             const int n = std::clamp(int(rd32(rdram, m + 0xF42Cu)), 0, 8);
             const float d0 = rdf(rdram, m + 0xF450u), rn = n > 0 ? rdf(rdram, m + 0xF67Cu + 4u * uint32_t(n - 1)) : 0.f;
-            // anel sem forca (+0xC e +0x10 zero) so faz recuar (HitEvent tipo 1; b4e810b:docs/investigacoes/2026-10-26/move_list_campos_especiais.md): o ultimo, no crowd control
+            // a ring with no force (+0xC and +0x10 zero) only staggers (HitEvent type 1; b4e810b:docs/investigacoes/2026-10-26/move_list_campos_especiais.md): the last one, in crowd control
             const uint32_t last = m + 0xF44Cu + uint32_t(n > 0 ? n - 1 : 0) * 0x1Cu;
             const bool edge = n > 1 && rdf(rdram, last + 0xCu) == 0.f && rdf(rdram, last + 0x10u) == 0.f;
             std::snprintf(h, sizeof h, "LIGHT + JUMP TOGETHER WITH THE SPECIAL METER. SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE ON THE FIRST%s. USES THE WHOLE METER", rn, n, d0,
@@ -985,16 +986,16 @@ namespace wotm_train
             const size_t i = other("Ocrowd", "CROWD CTRL", 0xF3F0u, d0, h, uint8_t(kSq | kX));
             list[i].radius = rn; list[i].kb = rdf(rdram, m + 0xF458u); list[i].stun = rdf(rdram, m + 0xF460u);
         }
-        {   // provocacao (b4e810b:docs/investigacoes/2026-10-26/move_list_getup_taunt.md): Select parado (StateIdle) ou ao pousar; com o medidor de especial cheio (+0xF4) liga a
-            // furia aos 95% da animacao: dano x +0x48C x +0x49C (cada um so se > 0), velocidade x +0x4A0, drena o medidor em +0x494 s (20 se 0)
+        {   // taunt (b4e810b:docs/investigacoes/2026-10-26/move_list_getup_taunt.md): Select while standing still (StateIdle) or on landing; with the special meter full (+0xF4) it starts
+            // rage at 95% of the animation: damage x +0x48C x +0x49C (each only if > 0), speed x +0x4A0, drains the meter in +0x494 s (20 if 0)
             const float a = rdf(rdram, m + 0x48Cu), b = rdf(rdram, m + 0x49Cu), spd = rdf(rdram, m + 0x4A0u), dur0 = rdf(rdram, m + 0x494u);
             const float dmgX = (a > 0.f ? a : 1.f) * (b > 0.f ? b : 1.f), dur = dur0 > 0.f ? dur0 : 20.f;
             std::snprintf(h, sizeof h, "SELECT, STANDING STILL. WITH THE SPECIAL METER FULL IT STARTS RAGE: DAMAGE X%.2f, SPEED X%.2f FOR %.0f SECONDS, DRAINING THE METER. OTHERWISE IT IS JUST A TAUNT",
                           dmgX, spd > 0.f ? spd : 1.f, dur);
             other("Otaunt", "TAUNT", 0xFE20u, 0.f, h, 0);
         }
-        {   // Counter (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 7): de dentro do Block, R2 + quadrado/triangulo; sem dano (o counterSuccess so cancela o
-            // golpe e manda a vitima para Countered; collisTestBatAttack devolve 0); janela em fields +0x3C/+0x40, rouba o objeto +0x4C
+        {   // Counter (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 7): from within Block, R2 + square/triangle; no damage (counterSuccess only cancels the
+            // attack and sends the victim to Countered; collisTestBatAttack returns 0); window in fields +0x3C/+0x40, steals the object +0x4C
             const float f0 = rdf(rdram, m + 0x7E14u), f1 = rdf(rdram, m + 0x7E18u);
             const bool steals = rd32(rdram, m + 0x7E24u) != 0;
             std::snprintf(h, sizeof h, "WHILE BLOCKING, LIGHT OR HEAVY. NO DAMAGE: CANCELS THE HIT AND LEAVES THE OPPONENT OPEN%s. WORKS FROM FIELD %.0f TO %.0f",
@@ -1002,9 +1003,9 @@ namespace wotm_train
             const size_t i = other("Ocounter", "COUNTER", 0x7DD8u, 0.f, h, uint8_t(kR2 | kSq | kTri));
             list[i].ini = f0; list[i].fim = f1;
         }
-        {   // arremesso de objeto (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 4): Throw (uma mao) ou TwoHandedThrow (duas maos, bit 1 do Pickup +0x50); o dano e o
-            // do objeto (s_info[tipo] +0x08, tipo = Pickup +0xA0) vezes o multiplicador do monstro (+0x6A38 + 4*tipo), raio +0x0C,
-            // velocidade +0x34 (mph), stamina ao acertar +0x30. Sem objeto na mao, a dica so explica.
+        {   // object throw (80b3802:docs/investigacoes/2026-10-25/move_list_comuns.md, 4): Throw (one hand) or TwoHandedThrow (two hands, bit 1 of Pickup +0x50); the damage is
+            // the object's (s_info[type] +0x08, type = Pickup +0xA0) times the monster's multiplier (+0x6A38 + 4*type), radius +0x0C,
+            // speed +0x34 (mph), stamina on hit +0x30. With no object in hand, the hint only explains.
             const int t = pickup ? int(rd32(rdram, pickup + kPickupKind)) : -1;
             const uint32_t flags = pickup ? rd32(rdram, pickup + 0x50u) : 0;
             const bool twoHanded = (flags & 2u) != 0, rigid = (flags & 4u) != 0;
@@ -1019,9 +1020,9 @@ namespace wotm_train
                 const size_t i = other("Othrow", "THROW OBJ", twoHanded ? 0x1074Cu : 0xEF40u, d, h, kCir);
                 list[i].radius = orad;
                 if (rigid)
-                {   // cima + bola com objeto corpo rigido: LevelPickups::throwRBPickup, angulo +0x2C e velocidade +0x30 do TwoHandedThrow; o
-                    // dano vem da colisao do proprio corpo (RigidPickup::createCollisEvents): +0x444 + |velocidade do contato| x +0x448 + o
-                    // dano do objeto (s_info +0x08), HitEvent source 0xB; quem arremessou ganha s_info +0x30 de stamina
+                {   // up + circle with a rigid-body object: LevelPickups::throwRBPickup, TwoHandedThrow's angle +0x2C and speed +0x30; the
+                    // damage comes from the body's own collision (RigidPickup::createCollisEvents): +0x444 + |contact speed| x +0x448 + the
+                    // object's damage (s_info +0x08), HitEvent source 0xB; the thrower gains s_info +0x30 stamina
                     const float base = rdf(rdram, pickup + 0x444u), per = rdf(rdram, pickup + 0x448u);
                     const float ang = rdf(rdram, m + 0x10778u), spd = rdf(rdram, m + 0x1077Cu);
                     std::snprintf(h, sizeof h, "UP + GRAB WITH THIS OBJECT: HURLS IT AT %.0f DEGREES, %.0f MPH. ON IMPACT %.0f + %.2f PER UNIT OF SPEED + THE OBJECT'S %.0f",
@@ -1033,10 +1034,10 @@ namespace wotm_train
             else
                 other("Othrow", "THROW OBJ", 0xEF40u, 0.f, "GRAB WHILE HOLDING AN OBJECT. THE DAMAGE IS THE OBJECT'S, TIMES YOUR MULTIPLIER FOR IT: PICK ONE UP TO SEE THE NUMBERS", kCir);
         }
-        {   // o especial do monstro (80b3802:docs/investigacoes/2026-10-25/move_list_especiais.md): Monster +0x7980 aponta o estado; circulo + triangulo com o medidor
+        {   // the monster's special (80b3802:docs/investigacoes/2026-10-25/move_list_especiais.md): Monster +0x7980 points to the state; circle + triangle with the meter
             const uint32_t sp = rd32(rdram, m + 0x7980u) & 0x1FFFFFFFu;
             const uint32_t so = sp > m && sp - m < 0x11190u ? sp - m : 0;
-            // onda de choque (ShockWaveConfig): n em +0, aneis em +0x20 (0x1C cada, dano +4), alcances em +0x250 + 4i
+            // shockwave (ShockWaveConfig): n at +0, rings at +0x20 (0x1C each, damage +4), reaches at +0x250 + 4i
             auto wave = [&](uint32_t cfg, float &d0, float &rn, int &n) {
                 n = std::clamp(int(rd32(rdram, cfg)), 0, 8);
                 d0 = rdf(rdram, cfg + 0x24u);
@@ -1063,7 +1064,7 @@ namespace wotm_train
                 list[i].radius = rng;
                 break;
             }
-            case 0xF9D8u:   // BugAttack (Preytor): estaticos do HomingBug (.sbss, chave 0xFAA do MANTIS.CHR), lidos pelos simbolos
+            case 0xF9D8u:   // BugAttack (Preytor): HomingBug statics (.sbss, MANTIS.CHR key 0xFAA), read by symbol
             {
                 using namespace wotm::sym;
                 const float dps = rdf(rdram, x_9HomingBug_s_damagePerSecond), maxD = rdf(rdram, x_9HomingBug_s_maxMonsterDamage);
@@ -1075,7 +1076,7 @@ namespace wotm_train
                 list[i].radius = lock;
                 break;
             }
-            case 0xFE5Cu:   // RobotSpecial (Robo-47): missil que explode em onda
+            case 0xFE5Cu:   // RobotSpecial (Robo-47): a missile that explodes into a wave
             {
                 wave(m + so + 0x58u, d0, rn, n);
                 std::snprintf(h, sizeof h, "%s. HOLD TO AIM, RELEASE TO FIRE A HOMING MISSILE: SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE AT THE CENTER. KNOCKS DOWN", cmd, rn, n, d0);
@@ -1083,7 +1084,7 @@ namespace wotm_train
                 list[i].radius = rn; list[i].kb = 1.f;
                 break;
             }
-            case 0x102A8u:   // RockSpecial (Agamo): cabeca-bomba
+            case 0x102A8u:   // RockSpecial (Agamo): head bomb
             {
                 wave(m + so + 0x44u, d0, rn, n);
                 std::snprintf(h, sizeof h, "%s. THROWS THE HEAD; PRESS AGAIN TO DETONATE: SHOCKWAVE UP TO %.0f (%d RINGS), %.0f DAMAGE AT THE CENTER. KNOCKS DOWN", cmd, rn, n, d0);
@@ -1110,7 +1111,7 @@ namespace wotm_train
             case 0x10790u:   // AirStrike (Zorgulon)
             {
                 const float d = rdf(rdram, m + so + 0x174u);
-                const int fr = int(rd32(rdram, m + so + 0x178u));   // inteiro (720 no ALIEN.CHR)
+                const int fr = int(rd32(rdram, m + so + 0x178u));   // integer (720 in ALIEN.CHR)
                 std::snprintf(h, sizeof h, "%s. FLARE, THEN SAUCERS STRAFE THE TARGET FOR %d FIELDS, %.1f DAMAGE PER SHOT", cmd, fr, d);
                 other("Ospecial", "AIR STRIKE", so, d, h, kSpecialBtn);
                 break;
@@ -1139,21 +1140,21 @@ namespace wotm_train
         Shared &sh = shared();
         std::lock_guard<std::mutex> lk(sh.m);
         sh.moveList = std::move(list);
-        if (sh.movesType != type)   // monstro novo: os favoritos dele vem do arquivo (os mudados no painel ja foram gravados)
+        if (sh.movesType != type)   // new monster: its favorites come from the file (ones changed in the panel were already saved)
         {
             sh.fav = loadFav(type);
             sh.favDirty = false;
-            std::fprintf(stderr, "[treino] move list do tipo %d: %zu golpes, %zu favorito(s)\n", type, sh.moveList.size(), sh.fav.size());
+            std::fprintf(stderr, "[training] move list for type %d: %zu moves, %zu favorite(s)\n", type, sh.moveList.size(), sh.fav.size());
             for (const Move &mv : sh.moveList)
                 if (mv.kind == MkOther)
-                    std::fprintf(stderr, "[treino]   %-11s dano %.1f raio %.0f kb %.0f atord %.0f: %s\n", mv.name, mv.dmg, mv.radius, mv.kb, mv.stun, mv.hint);
+                    std::fprintf(stderr, "[training]   %-11s damage %.1f radius %.0f kb %.0f stun %.0f: %s\n", mv.name, mv.dmg, mv.radius, mv.kb, mv.stun, mv.hint);
         }
         sh.movesType = type;
     }
-    // a cada 64 quadros no P1: lista nova quando o monstro muda; favoritos mudados pelo painel vao para o arquivo
+    // every 64 frames on P1: a new list when the monster changes; favorites changed in the panel go to the file
     void updateMoves(const uint8_t *rdram, uint32_t m, bool bat, uint32_t pickup)
     {
-        static uint32_t lastPickup = 0, lastLogged = 0;   // o objeto na mao muda a linha do arremesso: lista nova na hora
+        static uint32_t lastPickup = 0, lastLogged = 0;   // the object in hand changes the throw row: rebuild the list right away
         const int type = int(rd32(rdram, m + 0x14) >> 5);
         bool rebuild = pickup != lastPickup, save = false;
         lastPickup = pickup;
@@ -1167,18 +1168,18 @@ namespace wotm_train
         if (save) saveFav(type, fav);
         if (rebuild || (frameNow(rdram) % 64u) == 0) buildMoves(rdram, m, type, bat, pickup);
         if (pickup && pickup != lastLogged)
-        {   // objeto novo na mao: as linhas do arremesso com os numeros dele (conferencia sem abrir o painel)
+        {   // new object in hand: the throw rows with its numbers (to check without opening the panel)
             lastLogged = pickup;
             Shared &sh = shared();
             std::lock_guard<std::mutex> lk(sh.m);
             for (const Move &mv : sh.moveList)
                 if (mv.kind == MkOther && !std::strncmp(mv.id, "Othrow", 6))
-                    std::fprintf(stderr, "[treino]   %-11s dano %.1f raio %.0f: %s\n", mv.name, mv.dmg, mv.radius, mv.hint);
+                    std::fprintf(stderr, "[training]   %-11s damage %.1f radius %.0f: %s\n", mv.name, mv.dmg, mv.radius, mv.hint);
         }
     }
 
-    // Na saida do Monster::update: o golpe em curso (soco ou golpe com objeto: config, % da animacao, localizadores) e, no P1, os 6
-    // tipos da posicao do combo (as SwipeConfig enquanto ele segura um objeto, as PunchConfig sem)
+    // On exit from Monster::update: the attack in progress (punch or object attack: config, % of animation, locators) and, for P1,
+    // the 6 types at the combo position (the SwipeConfigs while holding an object, the PunchConfigs otherwise)
     void trackPunch(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, uint32_t m, int slot)
     {
         const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
@@ -1206,7 +1207,7 @@ namespace wotm_train
                 if (id < 0x802 || id > 0x832)
                     continue;
                 float *p = live.loc[live.nloc];
-                readVec(rdram, m + uint32_t(id) * 16u - 0x4260u, p);   // getLocatorTrans: translacao atual em mundo
+                readVec(rdram, m + uint32_t(id) * 16u - 0x4260u, p);   // getLocatorTrans: current world translation
                 if (std::isfinite(p[0] + p[1] + p[2]))
                     ++live.nloc;
             }
@@ -1217,9 +1218,9 @@ namespace wotm_train
             if (nlog < 12 && live.cfg.valid && !live.inWindow)
             {
                 ++nlog;
-                std::fprintf(stderr, "[treino] %s slot %d pos %d tipo %d: %.0f%% da animacao, janela %.0f-%.0f, %d localizador(es), raio %.1f%s%.1f\n",
-                             swiping ? "golpe com objeto" : "soco", slot, tier, type, live.pct * 100.f, live.cfg.ini * 100.f, live.cfg.fim * 100.f,
-                             live.nloc, live.cfg.radius, swiping ? (bat ? ", bastao x" : ", objeto x") : ", dano ", live.cfg.dmg);
+                std::fprintf(stderr, "[training] %s slot %d pos %d type %d: %.0f%% of animation, window %.0f-%.0f, %d locator(s), radius %.1f%s%.1f\n",
+                             swiping ? "object attack" : "punch", slot, tier, type, live.pct * 100.f, live.cfg.ini * 100.f, live.cfg.fim * 100.f,
+                             live.nloc, live.cfg.radius, swiping ? (bat ? ", bat x" : ", object x") : ", damage ", live.cfg.dmg);
             }
         }
         PunchCfg table[kPunchTypes];
@@ -1254,7 +1255,7 @@ namespace wotm_train
         const int slot = slotOf(rdram, m);
         const bool on = g_on.load(std::memory_order_relaxed);
         if (on)
-            applyDifficulty(rdram, kGameObj + kDifficulty);   // dificuldade da CPU escolhida no painel (ou a do jogo de volta)
+            applyDifficulty(rdram, kGameObj + kDifficulty);   // CPU difficulty chosen in the panel (or the game's restored)
         if (slot >= 0)
         {
             const uint32_t bit = 1u << slot;
@@ -1262,7 +1263,7 @@ namespace wotm_train
             const bool still = on && isDummy && g_dummy.load(std::memory_order_relaxed) == DStand;
             if (still)
             {
-                rdram[m + kPadEnabled] = 0;   // sem entradas: a IA nao age; os estados (recuo, queda, agarrao) seguem
+                rdram[m + kPadEnabled] = 0;   // no inputs: the AI doesn't act; states (recoil, fall, grab) still run
                 g_padOff |= bit;
             }
             else if (g_padOff & bit)
@@ -1273,7 +1274,7 @@ namespace wotm_train
             const uint32_t opts = g_opts.load(std::memory_order_relaxed);
             if (on && (opts & kRefill))
             {
-                // o jogador volta cheio; o boneco, ao % escolhido (e a vida que passou disso tambem baixa, para o % valer na hora)
+                // the player refills to full; the dummy, to the chosen % (health above it is lowered too, so the % applies right away)
                 const float h = rdf(rdram, m + kHealth), mx = rdf(rdram, m + kMaxHealth);
                 const float pct = isDummy ? std::clamp(g_dummyHealth.load(std::memory_order_relaxed), 1, 100) / 100.f : 1.f;
                 const float target = mx * pct;
@@ -1281,8 +1282,8 @@ namespace wotm_train
                     wrf(rdram, m + kHealth, target);
             }
             if (const int meters = g_meters.load(std::memory_order_relaxed); on && meters != MOff)
-            {   // como as trapacas do F1 (wotm_overrides.cpp, monsterUpdateCheats), em todos: stamina cheia ou na furia, especial liberado
-                std::memcpy(rdram + m + 0x470, rdram + m + (meters == MRage ? 0x468 : 0x460), 4);   // StaminaMeter: cur = max ou maxLevel
+            {   // like the F1 cheats (wotm_overrides.cpp, monsterUpdateCheats), on everyone: stamina full or in rage, special available
+                std::memcpy(rdram + m + 0x470, rdram + m + (meters == MRage ? 0x468 : 0x460), 4);   // StaminaMeter: cur = max or maxLevel
                 std::memset(rdram + m + 0x474, 0, 8);                    // recoverPool, exhaustTimer
                 std::memset(rdram + m + 0x480, 0, 4);                    // exhausted
                 rdram[m + 0xF3] = 1;                                     // m_specialWeapon
@@ -1303,9 +1304,9 @@ namespace wotm_train
     }
 
 
-    // Pular a intro (635fd3c:docs/investigacoes/2026-10-24/treino_intro.md): o mesmo caminho do START no Monster::updateCinema (movieAborted,
-    // fadeOutAndIn(4) e ActionDispatch::stopAllActiveActions pelo TaskManager::global), so na intro: armado pelo rtMain(first) da luta
-    // (g_introMs), vale por 10 s e desarma no primeiro uso. O RESET POSITIONS (rtMain(0)) nao arma.
+    // Skip the intro (635fd3c:docs/investigacoes/2026-10-24/treino_intro.md): the same path as START in Monster::updateCinema (movieAborted,
+    // fadeOutAndIn(4) and ActionDispatch::stopAllActiveActions through TaskManager::global), only during the intro: armed by the fight's
+    // rtMain(first) (g_introMs), valid for 10 s and disarmed on first use. RESET POSITIONS (rtMain(0)) doesn't arm it.
     PS2Runtime::RecompiledFunction g_origCinema = nullptr;
     void callFn(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2)
     {
@@ -1337,12 +1338,12 @@ namespace wotm_train
         callFn(rdram, ctx, runtime, wotm::fn::fadeOutAndIn__7TheGamei, kGameObj, 4u, 0u);
         callFn(rdram, ctx, runtime, wotm::fn::add__11TaskManagerPFv_Uii, wotm::sym::x_11TaskManager_global,
                wotm::fn::stopAllActiveActions__14ActionDispatchv, 10u);
-        std::fprintf(stderr, "[treino] intro pulada\n");
+        std::fprintf(stderr, "[training] intro skipped\n");
     }
 
-    // "WINS n" do Hud::update (m_gameMode 2..6, o versus do treino): no treino nao conta nada e o do boneco cai sob o painel. O Hud
-    // escreve com sprintf em dois buffers do .rodata do Hud (sem simbolo no ELF: o da esquerda e o da direita) e os passa ao
-    // fontSpritePrint(Right)XY; com o treino ligado esses dois nao saem
+    // Hud::update's "WINS n" (m_gameMode 2..6, training's versus): in training it counts nothing and the dummy's lands under the panel.
+    // Hud sprintfs into two buffers in Hud's .rodata (no symbol in the ELF: the left one and the right one) and passes them to
+    // fontSpritePrint(Right)XY; with training on, those two are not printed
     constexpr uint32_t kWinsLeft = 0x006EA920u, kWinsRight = 0x006EA938u;
     PS2Runtime::RecompiledFunction g_origPrint = nullptr, g_origPrintRight = nullptr;
     bool skipWins(R5900Context *ctx)
@@ -1363,9 +1364,9 @@ namespace wotm_train
         if (ctx->pc != wotm::fn::fontSpritePrintRightXY__FiiiPc || !skipWins(ctx))
             g_origPrintRight(rdram, ctx, runtime);
     }
-    // Boneco que bloqueia: no lugar da IA (o Ai::updateInputs so roda com o pad ligado, depois do clearInputs do GamePad), segura
-    // L1+R1 (lock-on: fica virado para o alvo) e R2 (defesa). "Depois do 1o acerto": enquanto esta numa reacao e ate 1 s depois do
-    // ultimo golpe que levou (defendido ou nao).
+    // A blocking dummy: in place of the AI (Ai::updateInputs only runs with the pad enabled, after the GamePad's clearInputs), holds
+    // L1+R1 (lock-on: keeps facing the target) and R2 (block). "After the 1st hit": while in a reaction and up to 1 s after the
+    // last hit taken (blocked or not).
     void aiInputs(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)   // a0 = Monster + 0x4E0
     {
         const int mode = g_dummy.load(std::memory_order_relaxed);
@@ -1389,10 +1390,10 @@ namespace wotm_train
         {
             const uint32_t st = rd32(rdram, m + 0x34) & 0x1FFFFFFFu;
             const StateName *sn = st > m && st - m < 0x11190u ? stateName(st - m) : nullptr;
-            std::fprintf(stderr, "[treino] boneco slot %d modo %d: estado %s, segurando defesa %d\n", slot, mode, sn ? sn->name : "?", int(block));
+            std::fprintf(stderr, "[training] dummy slot %d mode %d: state %s, holding block %d\n", slot, mode, sn ? sn->name : "?", int(block));
         }
         if (mode == DJump && (f % kJumpPeriod) < kJumpHold)
-            rdram[m + kGamePad + 6] = 0xFF;   // X: pula
+            rdram[m + kGamePad + 6] = 0xFF;   // X: jump
         if (block)
         {
             rdram[m + kGamePad + 0] = 0xFF;   // L1
@@ -1408,9 +1409,9 @@ void wotmTrainingInstall(PS2Runtime &runtime)
     using namespace wotm_train;
     if (const char *e = std::getenv("WOTM_TRAINING"); e && *e && *e != '0')
         g_on = true;
-    if (const char *e = std::getenv("WOTM_TRAINING_DUMMY"); e && *e)   // 0 parado, 1 CPU, 2 sempre bloqueia, 3 bloqueia depois do 1o acerto, 4 pula
+    if (const char *e = std::getenv("WOTM_TRAINING_DUMMY"); e && *e)   // 0 stand still, 1 CPU, 2 always block, 3 block after the 1st hit, 4 jump
         g_dummy = std::clamp(std::atoi(e), 0, DCount - 1);
-    if (const char *e = std::getenv("WOTM_TRAINING_HEALTH"); e && *e)  // % da vida do boneco na recarga
+    if (const char *e = std::getenv("WOTM_TRAINING_HEALTH"); e && *e)  // dummy's health % on refill
         g_dummyHealth = std::clamp(std::atoi(e), 1, 100);
     struct H { uint32_t at; PS2Runtime::RecompiledFunction *orig; PS2Runtime::RecompiledFunction fn; const char *name; };
     const H hooks[] = {
@@ -1422,8 +1423,8 @@ void wotmTrainingInstall(PS2Runtime &runtime)
         {kGetupUpdate, &g_origGetup, &getupUpdate, "StateGetupAttack::update"},
         {kWeaponHD, &g_origWeapon, &weaponHD, "Weapon::WeaponHD"},
         {kShockUpdate, &g_origShock, &shockUpdate, "ShockWave::update"},
-        {kSphereSwept, &g_origSwept, &sphereSwept, "hdSphereTest (varrido)"},
-        {kSphereStatic, &g_origStatic, &sphereStatic, "hdSphereTest (parado)"},
+        {kSphereSwept, &g_origSwept, &sphereSwept, "hdSphereTest (swept)"},
+        {kSphereStatic, &g_origStatic, &sphereStatic, "hdSphereTest (static)"},
         {kAiInputs, &g_origAi, &aiInputs, "Ai::updateInputs"},
         {kFireTest, &g_origFire, &fireTest, "FireBreath::TestCollis"},
         {kLos, &g_origLos, &losTest, "hdLosCSTest"},
@@ -1448,7 +1449,7 @@ void wotmTrainingInstall(PS2Runtime &runtime)
             ++n;
         }
         else
-            std::fprintf(stderr, "[treino] sem gancho: %s\n", h.name);
-    std::fprintf(stderr, "[treino] %d de %zu ganchos; modo treino %s (WOTM_TRAINING ou TRAINING no menu)\n", n, sizeof hooks / sizeof hooks[0],
-                 g_on.load() ? "LIGADO" : "desligado");
+            std::fprintf(stderr, "[training] no hook: %s\n", h.name);
+    std::fprintf(stderr, "[training] %d of %zu hooks; training mode %s (WOTM_TRAINING or TRAINING in the menu)\n", n, sizeof hooks / sizeof hooks[0],
+                 g_on.load() ? "ON" : "off");
 }
