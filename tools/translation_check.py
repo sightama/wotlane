@@ -517,7 +517,7 @@ def git(*args):
 
 
 def read_file(f):
-    return f.read_text(encoding='utf-8', errors='replace') if f.exists() else None
+    return f.read_text(encoding='utf-8', errors='replace') if f.is_file() else None
 
 
 def read_at(rev, path):
