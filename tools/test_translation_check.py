@@ -116,5 +116,19 @@ class MatcherTest(unittest.TestCase):
         self.assertEqual(len(flags), 1)
 
 
+
+
+class PlaceholderTest(unittest.TestCase):
+    def test_printf_order_and_escapes(self):
+        self.assertEqual(tc.placeholders('"quadro %d de %s\\n"', 'c'), tc.placeholders('"frame %d of %s\\n"', 'c'))
+        self.assertNotEqual(tc.placeholders('"%d de %s"', 'c'), tc.placeholders('"%s of %d"', 'c'))
+        self.assertNotEqual(tc.placeholders('"a\\n"', 'c'), tc.placeholders('"a"', 'c'))
+        self.assertEqual(tc.placeholders('"100%% %llu %.2f %-8s %08x"', 'c'), (['%%', '%llu', '%.2f', '%-8s', '%08x'], []))
+
+    def test_fields_are_a_multiset(self):
+        self.assertEqual(tc.placeholders('"jogador $i de $Players"', 'ps1'), tc.placeholders('"of $Players, player $i"', 'ps1'))
+        self.assertNotEqual(tc.placeholders('"{0} e {1}"', 'c'), tc.placeholders('"{0} and"', 'c'))
+
+
 if __name__ == '__main__':
     unittest.main()

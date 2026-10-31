@@ -6,7 +6,8 @@
 
 Compares every file that differs between --base (default HEAD) and --head (default: the working tree), or only the given paths.
 For each file: "same code" when the file with comments and string literals stripped is token-for-token identical, otherwise the
-first differing line on each side. Exit status 1 if any file's code changed.
+first differing line on each side. A changed literal must keep its printf conversions (in order), escapes and format fields
+({0}, $var); "PLACEHOLDERS CHANGED" otherwise. Exit status 1 if any file fails either check.
 
   --strings  also print every changed string literal (old -> new), for review
   --extra    another folder whose scripts match log text (e.g. the coord repo's scripts/); searched together with native/ and tools/
@@ -408,6 +409,18 @@ def compare(old_text, new_text, lang):
     return None, changed
 
 
+PRINTF = re.compile(r'%(?:%|[-+ #0]*(?:\*|\d+)?(?:\.(?:\*|\d+))?(?:hh|h|ll|l|L|z|j|t|I64|I32)?[diouxXeEfFgGaAcspn]|\(\w+\)[-+ #0]*\d*(?:\.\d+)?[diouxXeEfFgGcrs])')
+ESCAPE = re.compile(r'\\[ntr0abfv]|`[ntr0]')
+FIELD = re.compile(r"\{[^{}\s]*\}|\$\{?[A-Za-z_]\w*(?::\w+)?\}?|\$\(")
+
+
+def placeholders(literal, lang):
+    """What a translation must keep: printf conversions in order (C, Python), and as a multiset the escape sequences and
+    format/interpolation fields ({0}, {name}, $var)."""
+    ordered = PRINTF.findall(literal) if lang in ('c', 'py', 'sh') else []
+    return ordered, sorted(ESCAPE.findall(literal) + FIELD.findall(literal))
+
+
 def fixed_pieces(pattern, min_len=5):
     """The fixed text runs of a regex (or plain string), lowercased: '\\[sync\\] seed \\d+' -> ['[sync] seed']."""
     pieces, cur, i, n = [], '', 0, len(pattern)
@@ -549,14 +562,18 @@ def main(argv=None):
             bad += 1
             continue
         nchanged += len(changed)
-        print('%-60s same code, %d literals changed' % (path, len(changed)))
+        broken = [(line, o, s) for line, o, s in changed if placeholders(o, lang) != placeholders(s, lang)]
+        print('%-60s %s, %d literals changed' % (path, 'PLACEHOLDERS CHANGED' if broken else 'same code', len(changed)))
+        bad += 1 if broken else 0
         for line, o, s in changed:
             flags = matcher_flags(REPO / path, lang, o, s, corpus)
+            if (line, o, s) in broken:
+                flags.insert(0, 'PLACEHOLDERS: %s -> %s' % (placeholders(o, lang), placeholders(s, lang)))
             if args.strings or flags:
                 print('  %d: %s\n     -> %s' % (line, o, s))
             for f in flags:
-                print('     MATCHER: %s' % f)
-    print('%d files, %d with code changes, %d literals changed' % (len(paths), bad, nchanged))
+                print('     %s' % (f if f.startswith('PLACEHOLDERS') else 'MATCHER: ' + f))
+    print('%d files, %d failing, %d literals changed' % (len(paths), bad, nchanged))
     return 1 if bad else 0
 
 
