@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Leitor de imagens .NGP do WotM e extrator de malhas (formatos em docs/FORMATOS.md).
+"""Reader for WotM .NGP images and mesh extractor (formats in docs/FORMATOS.md).
 
-O .NGP de fase e um zip com o magic "IE\\3\\4" (no lugar de "PK\\3\\4"), um unico arquivo em deflate; o de
-monstro vem cru. A imagem e pre-ligada para uma base (0xA00000); ponteiros dentro dela sao enderecos
-absolutos da RAM do PS2, entao `Image.u32(addr)` aceita o endereco como o jogo o ve.
-Nao grava nada do jogo: le o disco do usuario em tempo de execucao.
+A stage .NGP is a zip with the magic "IE\\3\\4" (instead of "PK\\3\\4") holding a single deflated file; a
+monster .NGP is uncompressed. The image is prelinked to a base address (0xA00000); pointers inside it are absolute
+PS2 RAM addresses, so `Image.u32(addr)` takes the address as the game sees it.
+Writes nothing from the game: it reads the user's disc at run time.
 
-Malha (`HierObject::polyPkt`): uma sub-cadeia de DMA (tag QWC/ID=ret, 8 bytes + 8 bytes de padding) seguida de um
-fluxo VIF para o microcodigo do VU1. Ver `decode_object` e docs/FORMATOS.md ("Malhas").
+Mesh (`HierObject::polyPkt`): a DMA sub-chain (QWC/ID=ret tag, 8 bytes + 8 bytes of padding) followed by a
+VIF stream for the VU1 microcode. See `decode_object` and docs/FORMATOS.md ("Malhas").
 """
 import struct
 import sys
@@ -20,14 +20,14 @@ def inflate_ngp(path):
     with open(path, "rb") as f:
         raw = f.read()
     if raw[:4] != b"IE\x03\x04":
-        return raw  # monstros (.ngp em MON/) vem sem zip (fileReadf)
+        return raw  # monsters (.ngp in MON/) are not zipped (fileReadf)
     (_ver, _flags, method, _time, _date, _crc, csize, usize, nlen, xlen) = struct.unpack_from("<HHHHHIIIHH", raw, 4)
     if method != 8:
-        raise ValueError("%s: metodo %d (so deflate)" % (path, method))
+        raise ValueError("%s: method %d (only deflate is supported)" % (path, method))
     off = 4 + struct.calcsize("<HHHHHIIIHH") + nlen + xlen
     data = zlib.decompressobj(-15).decompress(raw[off:off + csize])
     if len(data) != usize:
-        raise ValueError("%s: tamanho %d != %d" % (path, len(data), usize))
+        raise ValueError("%s: size %d != %d" % (path, len(data), usize))
     return data
 
 
@@ -74,9 +74,9 @@ OPNAMES = {0: "OBJECT", 1: "GROUP", 2: "LOD", 3: "TRANSLATE", 4: "ROTATE", 5: "L
            35: "SKEL_BONE", 36: "ANIM_PLAYER", 37: "CAMERA", 38: "ANIM_SCALE", 39: "INTERACTIVE", 40: "ATTACHPT",
            41: "SCRIPT", 42: "POLY_COLL", 43: "ANIM_PROC"}
 
-# ---------------------------------------------------------------- malha (VIF)
+# ---------------------------------------------------------------- mesh (VIF)
 
-# UNPACK: cmd = 0x60 | vn << 2 | vl ; bits por componente
+# UNPACK: cmd = 0x60 | vn << 2 | vl ; bits per component
 _VN_COMPS = (1, 2, 3, 4)
 _VL_BITS = (32, 16, 8, 5)
 
@@ -87,11 +87,11 @@ def _unpack_words(vn, vl, num):
     return (num * _VL_BITS[vl] * _VN_COMPS[vn] + 31) // 32
 
 
-# Enderecos da memoria de dados do VU1 usados pelo microcodigo dos objetos (descobertos nos dados)
-VU_POS = 0xB5       # V3-32  posicoes (ate 190)
-VU_NRM = 0x175      # V3-8   normais (signed, /127)
-# secao de strip: tag GIF em H, depois 3 qwords por vertice (ST, RGBAQ, XYZF)
-#   H+1+3k  S-8    indice do vertice em VU_POS
+# VU1 data memory addresses used by the object microcode (found by inspecting the data)
+VU_POS = 0xB5       # V3-32  positions (up to 190)
+VU_NRM = 0x175      # V3-8   normals (signed, /127)
+# strip section: GIF tag at H, then 3 qwords per vertex (ST, RGBAQ, XYZF)
+#   H+1+3k  S-8    vertex index into VU_POS
 #   H+2+3k  V4-8   RGBA (0x80 = 1.0)
 #   H+3+3k  V2-16  UV (4096 = 1.0)
 
@@ -104,15 +104,15 @@ class Strip:
 class Mesh:
     def __init__(self):
         self.strips = []
-        self.prim = None   # campo PRIM da GIF tag (tipo, IIP, TME, FGE, ABE, ...)
+        self.prim = None   # the GIF tag's PRIM field (type, IIP, TME, FGE, ABE, ...)
 
 
-TRACE = None   # lista opcional: o decodificador anota (cmd, imm) de cada MSCAL/MSCALF/MSCNT
+TRACE = None   # optional list: the decoder records (cmd, imm) for each MSCAL/MSCALF/MSCNT
 
 
 def decode_object(img, node):
-    """Decodifica o `polyPkt` de um HierObject e devolve `Mesh` (strips de vertices ja resolvidos).
-    Objetos skinned sao uma cadeia de sub-pacotes (cada um com tag propria e ate 190 posicoes)."""
+    """Decodes a HierObject's `polyPkt` and returns a `Mesh` (strips of fully resolved vertices).
+    Skinned objects are a chain of sub-packets (each with its own tag and up to 190 positions)."""
     mesh = Mesh()
     pp = img.u32(node + 4) & 0x0FFFFFFF
     for _ in range(256):
@@ -124,21 +124,21 @@ def decode_object(img, node):
 
 
 def _decode_packet(img, pp, mesh):
-    """Decodifica um sub-pacote em `mesh`; devolve o endereco do proximo (skinned) ou None."""
+    """Decodes one sub-packet into `mesh`; returns the address of the next one (skinned) or None."""
     if not img.ok(pp, 16):
         return None
     skip = 0
     while skip < 0x400 and img.ok(pp + skip, 16) and img.u32(pp + skip) == 0 and img.u32(pp + skip + 4) == 0:
-        skip += 16   # quadwords zerados entre sub-pacotes
+        skip += 16   # zeroed quadwords between sub-packets
     pp += skip
     tag = img.u32(pp)
     if ((tag >> 28) & 7) != 6:
         return None
     qwc = tag & 0xFFFF
-    skinned = bool(tag & 0x10000)   # bit 16 da tag: vertices V4-32 com codigos de osso
+    skinned = bool(tag & 0x10000)   # tag bit 16: V4-32 vertices with bone codes
     nwords = (qwc + 1) * 4 - 2
     if skinned:
-        nwords = min(60000, (len(img.d) - (pp + 8 - img.base)) // 4)   # comprimento real = ate dois NOPs seguidos (abaixo)
+        nwords = min(60000, (len(img.d) - (pp + 8 - img.base)) // 4)   # real length = up to two NOPs in a row (below)
     base = pp + 8
     if not img.ok(base, 16) or (not skinned and not img.ok(base, nwords * 4)):
         return None
@@ -176,34 +176,34 @@ def _decode_packet(img, pp, mesh):
         imm = w & 0xFFFF
         a = base + 4 * (i + 1)
         if TRACE is not None and cmd in (0x14, 0x15, 0x17):
-            TRACE.append((cmd, imm))   # diagnostico: MSCAL/MSCALF/MSCNT (entrada do microprograma)
+            TRACE.append((cmd, imm))   # diagnostics: MSCAL/MSCALF/MSCNT (microprogram entry point)
         if cmd >= 0x60:
             vn, vl = (cmd >> 2) & 3, cmd & 3
             n = num or 256
             addr = imm & 0x3FF
             fmt = (vn, vl)
-            if fmt == (2, 0) and addr == VU_POS:                       # V3-32 posicoes
+            if fmt == (2, 0) and addr == VU_POS:                       # V3-32 positions
                 if hdr is not None:
                     flush()
                 pos = [(img.f32(a + 12 * k), img.f32(a + 12 * k + 4), img.f32(a + 12 * k + 8)) for k in range(n)]
-            elif fmt == (3, 0) and addr == VU_POS and n > 1:           # V4-32 (skinned): x,y,z com um codigo de osso nos 8 bits baixos + peso em w
+            elif fmt == (3, 0) and addr == VU_POS and n > 1:           # V4-32 (skinned): x,y,z with a bone code in the low 8 bits + weight in w
                 if hdr is not None:
                     flush()
                 pos = [(img.f32(a + 16 * k), img.f32(a + 16 * k + 4), img.f32(a + 16 * k + 8), img.f32(a + 16 * k + 12),
                         img.u32(a + 16 * k) & 0xFF, img.u32(a + 16 * k + 4) & 0xFF, img.u32(a + 16 * k + 8) & 0xFF) for k in range(n)]
-            elif fmt == (2, 2) and addr == VU_NRM:                     # V3-8 normais
-                # 3 bytes por normal, empacotados em bytes consecutivos (sem preenchimento por elemento)
+            elif fmt == (2, 2) and addr == VU_NRM:                     # V3-8 normals
+                # 3 bytes per normal, packed in consecutive bytes (no per-element padding)
                 nrm = [tuple(img.s8(a + 3 * k + c) / 127.0 for c in range(3)) for k in range(n)]
-            elif fmt == (3, 0) and n == 1:                             # V4-32: tag GIF da secao
+            elif fmt == (3, 0) and n == 1:                             # V4-32: the section's GIF tag
                 g0, g1 = img.u32(a), img.u32(a + 4)
                 hdr = (addr, g0 & 0x7FFF, (g1 >> 15) & 0x7FF)
                 mesh.prim = hdr[2]
-            elif hdr is not None and fmt == (0, 2) and (mask & 0xFF) == 0xBF:   # S-8 sob mascara: marca ADC
+            elif hdr is not None and fmt == (0, 2) and (mask & 0xFF) == 0xBF:   # masked S-8: marks ADC
                 for k in range(n):
                     e = addr - hdr[0] - 3 + 3 * k
                     if e % 3 == 0:
                         adc.add(e // 3)
-            elif hdr is not None and fmt == (0, 2) and addr == hdr[0] + 1:      # S-8 indices
+            elif hdr is not None and fmt == (0, 2) and addr == hdr[0] + 1:      # S-8 indexes
                 idx = [img.u8(a + k) for k in range(n)]
             elif hdr is not None and fmt == (3, 2) and addr == hdr[0] + 2:      # V4-8 RGBA
                 rgba = [(img.u8(a + 4 * k), img.u8(a + 4 * k + 1), img.u8(a + 4 * k + 2), img.u8(a + 4 * k + 3)) for k in range(n)]
@@ -221,19 +221,19 @@ def _decode_packet(img, pp, mesh):
             extra = (num or 256) * 2
         elif cmd in (0x50, 0x51):             # DIRECT
             extra = (imm or 65536) * 4
-        elif cmd in (0x14, 0x15, 0x17):       # MSCAL/MSCALF/MSCNT: fim de uma secao de strip
+        elif cmd in (0x14, 0x15, 0x17):       # MSCAL/MSCALF/MSCNT: end of a strip section
             flush()
-        elif cmd == 0 and skinned and i > 8 and img.u32(a) == 0:   # dois NOPs seguidos: fim do sub-pacote skinned
-            end_pp = (base + 4 * (i + 2) + 15) & ~15   # proximo sub-pacote: alinhado em quadword
+        elif cmd == 0 and skinned and i > 8 and img.u32(a) == 0:   # two NOPs in a row: end of the skinned sub-packet
+            end_pp = (base + 4 * (i + 2) + 15) & ~15   # next sub-packet: quadword aligned
             break
         i += 1 + extra
     flush()
     return end_pp
 
 
-# ---------------------------------------------------------------- malha completa (como o native/wotm_native.hpp)
+# ---------------------------------------------------------------- full mesh (like native/wotm_native.hpp)
 
-SLOT_NOTEX = 31   # secao com PRIM.TME 0: o GS desenha so a cor de vertice
+SLOT_NOTEX = 31   # section with PRIM.TME 0: the GS draws vertex color only
 
 
 class Vtx:
@@ -241,11 +241,11 @@ class Vtx:
 
 
 class MeshData:
-    """Resultado de `decode_mesh`: `tris` (3 Vtx por triangulo), `sprites` e o que o desenho precisa saber do objeto."""
+    """Result of `decode_mesh`: `tris` (3 Vtx per triangle), `sprites` and what drawing needs to know about the object."""
 
     def __init__(self):
         self.tris = []
-        self.sprites = []     # (x, y, z, lado, u0, v0, u1, v1, r, g, b, a, slot, fge)
+        self.sprites = []     # (x, y, z, size, u0, v0, u1, v1, r, g, b, a, slot, fge)
         self.skinned = False
         self.abe = False
         self.slot_mask = 0
@@ -266,7 +266,7 @@ def _skip_zero_qwords(img, pp):
 
 
 def _decode_packet2(img, pp, md):
-    """Porte do decodePacket do nativo: devolve o proximo sub-pacote (cadeia skinned) ou 0."""
+    """Port of the native layer's decodePacket: returns the next sub-packet (skinned chain) or 0."""
     pp = _skip_zero_qwords(img, pp)
     if not img.ok(pp, 16):
         return 0
@@ -328,7 +328,7 @@ def _decode_packet2(img, pp, md):
                 else:
                     v.u = v.v = 0.0
                 strip.append(v)
-            # ADC no vertice k: o GS nao desenha o triangulo que termina em k, mas a tira continua
+            # ADC on vertex k: the GS skips the triangle ending at k, but the strip continues
             for k in range(2, len(strip)):
                 if k < len(restart) and restart[k]:
                     md.drop_adc += 1
@@ -373,16 +373,16 @@ def _decode_packet2(img, pp, md):
                               for k in range(n)]
             elif st["hdr"] and md.cur_sprite and vn == 1 and vl == 1 and addr == ha + 1:
                 st["uv"] = [(img.s16(a + 4 * k), img.s16(a + 4 * k + 2)) for k in range(n)]
-            elif vn == 3 and vl == 0 and n == 1:   # tag GIF da secao
+            elif vn == 3 and vl == 0 and n == 1:   # the section's GIF tag
                 g1 = img.u32(a + 4)
                 st.update(haddr=addr, nloop=img.u32(a) & 0x7FFF, hdr=True, sel=img.u32(a + 12))
-                if (g1 >> 14) & 1:                  # PRE: PRIM nos bits 47..57
+                if (g1 >> 14) & 1:                  # PRE: PRIM in bits 47..57
                     md.cur_tme = (g1 >> 19) & 1
                     md.cur_fge = (g1 >> 20) & 1
                     md.cur_sprite = 1 if ((g1 >> 15) & 7) == 6 else 0
                 if ((g1 >> 15) >> 6) & 1:
                     md.abe = True
-            elif st["hdr"] and vn == 0 and vl == 2 and (mask & 0xFF) == 0xBF:   # S-8 sob mascara: ADC
+            elif st["hdr"] and vn == 0 and vl == 2 and (mask & 0xFF) == 0xBF:   # masked S-8: ADC
                 for k in range(n):
                     e = addr - ha - 3 + 3 * k
                     if e >= 0 and e % 3 == 0:
@@ -416,8 +416,8 @@ def _decode_packet2(img, pp, md):
 
 
 def decode_mesh(img, node):
-    """Malha de um OBJECT com a textura de cada secao (`Vtx.slot` indexa texId[]/gsTexCtx[] do objeto; SLOT_NOTEX = sem
-    textura), quebra de tira (ADC) como o GS e sprites. Porte do decodeObject de native/wotm_native.hpp."""
+    """Mesh of an OBJECT with each section's texture (`Vtx.slot` indexes the object's texId[]/gsTexCtx[]; SLOT_NOTEX = no
+    texture), strip breaks (ADC) handled like the GS, and sprites. Port of decodeObject from native/wotm_native.hpp."""
     md = MeshData()
     pp = img.u32(node + 4) & 0x0FFFFFFF
     if not img.ok(pp, 16):
@@ -430,14 +430,14 @@ def decode_mesh(img, node):
     return md
 
 
-# ---------------------------------------------------------------- hierarquia
+# ---------------------------------------------------------------- hierarchy
 
 def ident():
     return [[1.0 if r == c else 0.0 for c in range(4)] for r in range(4)]
 
 
 def mul(a, b):
-    """a*b com vetores-linha (p' = p*M): aplica `a` primeiro, depois `b`."""
+    """a*b with row vectors (p' = p*M): applies `a` first, then `b`."""
     return [[sum(a[r][k] * b[k][c] for k in range(4)) for c in range(4)] for r in range(4)]
 
 
@@ -460,8 +460,8 @@ def xform(m, p):
 
 
 def walk(img, node, visit, m=None, seen=None, depth=0, lod=0):
-    """Percorre a hierarquia chamando visit(node, matriz) em cada OBJECT. `lod`: indice na lista do LOD (0 = o mais grosseiro;
-    um numero alto, como 99, pega o mais detalhado)."""
+    """Walks the hierarchy calling visit(node, matrix) on each OBJECT. `lod`: index into the LOD list (0 = the coarsest;
+    a high number, like 99, picks the most detailed)."""
     if m is None:
         m = ident()
     if seen is None:
@@ -481,7 +481,7 @@ def walk(img, node, visit, m=None, seen=None, depth=0, lod=0):
     if op == 0:
         visit(node, m)
     elif op == 1:
-        if img.u16(node + 0xA) & 1:   # so GROUP visual (o resto e colisao etc.; Scene::walk)
+        if img.u16(node + 0xA) & 1:   # visual GROUPs only (the rest are collision etc.; Scene::walk)
             kids(node + 0x20, img.u16(node + 8), m)
     elif op == 3:
         t = (img.f32(node + 0x10), img.f32(node + 0x14), img.f32(node + 0x18))
@@ -501,42 +501,42 @@ def walk(img, node, visit, m=None, seen=None, depth=0, lod=0):
         n = img.u32(node + 4)
         if 0 < n < 16:
             walk(img, img.u32(node + 0x20 + 16 * min(lod, n - 1) + 8), visit, m, seen, depth + 1, lod)
-    # os nos abaixo seguem o Scene::walk do nativo (native/wotm_native.hpp), sem o que so existe com o jogo rodando
-    elif op == 8:      # CONTROL: child1 (o predio solido; child2 e a versao "fantasma")
+    # the nodes below follow the native layer's Scene::walk (native/wotm_native.hpp), minus what only exists with the game running
+    elif op == 8:      # CONTROL: child1 (the solid building; child2 is the "ghost" version)
         walk(img, img.u32(node + 4), visit, m, seen, depth + 1, lod)
     elif op == 23:     # ACTION_DATA
         walk(img, img.u32(node + 4), visit, m, seen, depth + 1, lod)
-    elif op == 35:     # conteiner de ANIM_XFORM (partes rigidas do monstro)
+    elif op == 35:     # ANIM_XFORM container (the monster's rigid parts)
         kids(node + 0xC, img.u32(node + 4), m)
     elif op == 25:     # CHAR_INSTANCE
         kids(node + 0x2C, img.u32(node + 0x28), m)
-    elif op == 17:     # ANIM_XFORM: a matriz sai da animacao em tempo de execucao; fora do jogo, identidade
+    elif op == 17:     # ANIM_XFORM: the matrix comes from the animation at run time; outside the game, identity
         kids(node + 0xCC, img.u32(node + 4), m)
-    elif op == 38:     # ANIM_SCALE: (p + preScale) * scale + translate + postScale, com os valores guardados no no
+    elif op == 38:     # ANIM_SCALE: (p + preScale) * scale + translate + postScale, with the values stored in the node
         sx, sy, sz = img.f32(node + 0x20), img.f32(node + 0x24), img.f32(node + 0x28)
         if sx or sy or sz:
             pre = translate_m((img.f32(node + 0x40), img.f32(node + 0x44), img.f32(node + 0x48)))
             post = translate_m((img.f32(node + 0x30) + img.f32(node + 0x50), img.f32(node + 0x34) + img.f32(node + 0x54),
                                 img.f32(node + 0x38) + img.f32(node + 0x58)))
             kids(node + 0x60, img.u32(node + 4), mul(mul(mul(pre, scale_m((sx, sy, sz))), post), m))
-    elif op == 39:     # INTERACTIVE_STATE: filho em +0xC; se for DESTRUCTIBLE, o estado 0 (intacto)
+    elif op == 39:     # INTERACTIVE_STATE: child at +0xC; if it is a DESTRUCTIBLE, state 0 (intact)
         c = img.u32(node + 0xC)
         if img.ok(c, 4) and (img.u32(c) & 63) == 31:
             if img.u16(c + 0xA):
                 walk(img, img.u32(c + 0xC), visit, m, seen, depth + 1, lod)
         else:
             walk(img, c, visit, m, seen, depth + 1, lod)
-    elif op == 31:     # DESTRUCTIBLE: estado 0
+    elif op == 31:     # DESTRUCTIBLE: state 0
         if img.u16(node + 0xA):
             walk(img, img.u32(node + 0xC), visit, m, seen, depth + 1, lod)
 
 
 def main():
     img = Image.load(sys.argv[1])
-    print("imagem: %d bytes, %d raizes" % (len(img.d), len(img.roots())))
+    print("image: %d bytes, %d roots" % (len(img.d), len(img.roots())))
     for r in img.roots():
         w = img.u32(r)
-        print("  raiz %06x op=%s id=%d" % (r, OPNAMES.get(w & 63, w & 63), w >> 18))
+        print("  root %06x op=%s id=%d" % (r, OPNAMES.get(w & 63, w & 63), w >> 18))
 
 
 if __name__ == "__main__":

@@ -1,32 +1,32 @@
-"""Gera C++ nativo para os microprogramas do VU0 do WotM (wotm_vu0_native.gen.inc, incluido por
-ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp no runtime do PS2Recomp).
+"""Generates native C++ for WotM's VU0 microprograms (wotm_vu0_native.gen.inc, included by
+ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp in the PS2Recomp runtime).
 
-O microcodigo sai do ELF (pacote VIF com MPG que o jogo manda ao VU0) ou de um vu0_code.bin (PS2X_DUMP_VU0). O C++ gerado
-reproduz o VU1Interpreter do runtime bit a bit: operandos normalizados, conta em float com arredondamento para zero e o
-resultado classificado pelo valor em double, flags MAC/status publicadas 4 ciclos depois da emissao (o fmand/fsand ve so as
-que ja chegaram), stores e escritas de VI/VF na ordem do programa (o VU para em dependencia de VF/VI/ACC, entao a semantica
-sequencial vale), o par dividido como no hardware (o lower le os registradores antes da escrita do upper do mesmo par) e o
-desvio que le um VI escrito pelo par anterior vendo o valor antigo (readBranchVi).
+The microcode comes from the ELF (the VIF packet with MPG that the game sends to VU0) or from a vu0_code.bin (PS2X_DUMP_VU0).
+The generated C++ reproduces the runtime's VU1Interpreter bit for bit: normalized operands, float math with round-toward-zero
+and the result classified by its double value, MAC/status flags published 4 cycles after issue (fmand/fsand only see the
+ones that have already arrived), stores and VI/VF writes in program order (the VU stalls on VF/VI/ACC dependencies, so
+sequential semantics hold), the pair split as on hardware (the lower reads registers before the upper of the same pair
+writes) and a branch that reads a VI written by the previous pair seeing the old value (readBranchVi).
 
-Compilacao por blocos especializados pelo estado do pipeline: cada no e (pc, estado), com o estado relativo ao ciclo atual
-(quantos ciclos faltam para cada VF/VI/ACC escrito ficar pronto, as entradas pendentes do pipeline de flags e em que variavel
-estao, o VI salvo para o desvio seguinte, os enderecos de retorno do bal). As paradas e o momento em que cada flag fica
-visivel saem do estado, sem depender dos dados; desvios viram goto entre nos, e um laco fecha quando o estado se repete.
-O modelo de ciclos e o de decodeUpperUsage/decodeLowerUsage e calculatePairReadyCycle; --trace o confere contra o
-interpretador nos programas em linha reta. O orcamento de 4096 ciclos do interpretador (programa cortado no meio) nao e
-reproduzido: o nativo sempre roda ate o fim, como o hardware.
+Compiled as blocks specialized by pipeline state: each node is (pc, state), with the state relative to the current cycle
+(how many cycles until each written VF/VI/ACC is ready, the pending entries of the flag pipeline and which variable holds
+them, the VI saved for the next branch, the bal return addresses). Stalls and the moment each flag becomes visible follow
+from the state, independent of the data; branches become gotos between nodes, and a loop closes when the state repeats.
+The cycle model is the one in decodeUpperUsage/decodeLowerUsage and calculatePairReadyCycle; --trace checks it against the
+interpreter on straight-line programs. The interpreter's 4096-cycle budget (program cut off midway) is not
+reproduced: the native code always runs to the end, like the hardware.
 
-Instrucoes fora do subconjunto (DIV, EFU, XGKICK...) deixam o programa no interpretador, e o gerador diz por que. O .inc
-gerado e traducao do codigo do jogo: fica fora do repo.
+Instructions outside the subset (DIV, EFU, XGKICK...) leave the program in the interpreter, and the generator says why. The
+generated .inc is a translation of the game's code: it stays out of the repo.
 
-Uso: python tools/vu0native.py <SCUS_971.97 | vu0_code.bin> <saida .inc> [--trace trace.txt]
+Usage: python tools/vu0native.py <SCUS_971.97 | vu0_code.bin> <output .inc> [--trace trace.txt]
 """
 import struct
 import sys
 
-# Pacote do microcodigo do VU0 no ELF: tag DMA (cnt) seguida de codigos VIF (NOP, MPG); offset no arquivo do NTSC-U.
+# VU0 microcode packet in the ELF: a DMA tag (cnt) followed by VIF codes (NOP, MPG); file offset in the NTSC-U ELF.
 ELF_VU0_PACKET = 0x15C890
-# Entradas usadas pelo jogo (vcallms)
+# Entry points the game uses (vcallms)
 ENTRIES = [0x0, 0xC8, 0x1A8, 0x398, 0x3F8, 0x430, 0x4D0, 0x748, 0x8D8, 0x970, 0xA00, 0xA80, 0xB00, 0xB48]
 CODE_SIZE = 4096
 LANES = (8, 4, 2, 1)   # x y z w
@@ -46,7 +46,7 @@ def load_code(path):
     tag = struct.unpack_from('<Q', data, ELF_VU0_PACKET)[0]
     qwc, tid = tag & 0xFFFF, (tag >> 28) & 7
     if tid != 1:
-        raise SystemExit(f'tag DMA inesperado em {ELF_VU0_PACKET:#x}: {tag:#x}')
+        raise SystemExit(f'unexpected DMA tag at {ELF_VU0_PACKET:#x}: {tag:#x}')
     pos, end = ELF_VU0_PACKET + 8, ELF_VU0_PACKET + 16 + qwc * 16
     while pos < end:
         vif = struct.unpack_from('<I', data, pos)[0]
@@ -55,7 +55,7 @@ def load_code(path):
         if cmd == 0x00:
             continue
         if cmd != 0x4A:
-            raise SystemExit(f'codigo VIF inesperado {vif:#x} em {pos - 4:#x}')
+            raise SystemExit(f'unexpected VIF code {vif:#x} at {pos - 4:#x}')
         num = (vif >> 16) & 0xFF or 256
         addr = (vif & 0xFFFF) * 8
         pos = (pos + 7) & ~7
@@ -69,7 +69,7 @@ def lanes_of(i):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Decodificacao (o subconjunto usado pelo jogo)
+# Decoding (the subset the game uses)
 
 FORMS = {0: 'add', 1: 'sub', 2: 'madd', 3: 'msub', 4: 'max', 5: 'mini', 6: 'mul'}
 QI = {0x1C: ('mul', 'q'), 0x1D: ('max', 'i'), 0x1E: ('mul', 'i'), 0x1F: ('mini', 'i'), 0x20: ('add', 'q'), 0x21: ('madd', 'q'),
@@ -78,8 +78,8 @@ VEC = {0x28: 'add', 0x29: 'madd', 0x2A: 'mul', 0x2B: 'max', 0x2C: 'sub', 0x2D: '
 
 
 def decode_upper(i):
-    """dict com form, dst ('vf', r) | ('acc',), mask, fs, b (('bc', ft, comp) | ('q',) | ('i',) | ('vec', ft));
-    form 'ftoi0'/'itof0' com dst ('vf', ft); None para nop."""
+    """dict with form, dst ('vf', r) | ('acc',), mask, fs, b (('bc', ft, comp) | ('q',) | ('i',) | ('vec', ft));
+    form 'ftoi0'/'itof0' with dst ('vf', ft); None for nop."""
     op = i & 0x3F
     mask, ft, fs, fd = lanes_of(i), (i >> 16) & 31, (i >> 11) & 31, (i >> 6) & 31
     if op < 0x1C:
@@ -102,7 +102,7 @@ def decode_upper(i):
             return dict(form=VEC[sp], dst=('acc',), mask=mask, fs=fs, b=('vec', ft))
         if sp in (0x10, 0x14):
             return dict(form='itof0' if sp == 0x10 else 'ftoi0', dst=('vf', ft), mask=mask, fs=fs, b=None)
-        raise Unsupported(f'upper especial {sp:#x}')
+        raise Unsupported(f'upper special {sp:#x}')
     raise Unsupported(f'upper {op:#x}')
 
 
@@ -151,23 +151,23 @@ def decode_lower(i, pc):
             sp = (i & 3) | ((i >> 4) & 0x7C)
             if sp in (0x30, 0x31):
                 return dict(op='move' if sp == 0x30 else 'mr32', mask=mask, ft=t, fs=s)
-    raise Unsupported(f'lower {i:#010x} em {pc:#x}')
+    raise Unsupported(f'lower {i:#010x} at {pc:#x}')
 
 
 def decode_pair(code, pc):
     lo, up = struct.unpack_from('<II', code, pc)
     if up & 0x38000000:
-        raise Unsupported(f'bit M/D/T em {pc:#x}')
+        raise Unsupported(f'M/D/T bit at {pc:#x}')
     ibit = bool(up & 0x80000000)
     return dict(pc=pc, upper=decode_upper(up), lower=None if ibit else decode_lower(lo, pc), loi=lo if ibit else None,
                 ebit=bool(up & 0x40000000))
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Uso de registradores e latencias (decodeUpperUsage / decodeLowerUsage)
+# Register usage and latencies (decodeUpperUsage / decodeLowerUsage)
 
 def upper_usage(u):
-    """(vf lidos [(reg, lanes)], vf escrito (reg, lanes, lat) | None, acc lido, acc escrito, gera entrada de flags)"""
+    """(vf read [(reg, lanes)], vf written (reg, lanes, lat) | None, acc read, acc written, produces a flag entry)"""
     if u is None:
         return [], None, 0, 0, False
     reads = [(u['fs'], u['mask'])]
@@ -183,12 +183,12 @@ def upper_usage(u):
     return reads, write, acc_read, acc_write, flags
 
 
-# delaysNextBranchRead: o desvio do par seguinte que le o mesmo VI ve o valor antigo
+# delaysNextBranchRead: a branch in the next pair that reads the same VI sees the old value
 BRANCH_DELAYED = {'iaddiu', 'iaddi', 'iadd', 'isub', 'iand', 'ior'}
 
 
 def lower_usage(l):
-    """(vf lidos, vf escrito (reg, lanes, lat), vi lidos, vi escrito (reg, lat), store)"""
+    """(vf read, vf written (reg, lanes, lat), vi read, vi written (reg, lat), store)"""
     if l is None:
         return [], None, [], None, False
     op = l['op']
@@ -221,19 +221,19 @@ def lower_usage(l):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Estado do pipeline relativo ao ciclo atual
+# Pipeline state relative to the current cycle
 
 class State:
     __slots__ = ('vf', 'vi', 'acc', 'flags', 'pend', 'bk', 'consts')
 
     def __init__(self):
-        self.vf = {}       # (reg, comp) -> ciclos ate ficar pronto
-        self.vi = {}       # reg -> ciclos
-        self.acc = {}      # comp -> ciclos
-        self.flags = []    # [(ciclos ate publicar, slot)] na ordem de emissao
-        self.pend = 0      # ciclos ate o ultimo pipeline esvaziar (flush)
-        self.bk = 0        # VI escrito pelo par anterior com delaysNextBranchRead (valor antigo em 'bk')
-        self.consts = {}   # VI com endereco de retorno conhecido (bal)
+        self.vf = {}       # (reg, comp) -> cycles until ready
+        self.vi = {}       # reg -> cycles
+        self.acc = {}      # comp -> cycles
+        self.flags = []    # [(cycles until published, slot)] in issue order
+        self.pend = 0      # cycles until the last pipeline drains (flush)
+        self.bk = 0        # VI written by the previous pair with delaysNextBranchRead (old value in 'bk')
+        self.consts = {}   # VIs holding a known return address (bal)
 
     def copy(self):
         s = State()
@@ -256,7 +256,7 @@ class State:
 
 
 # ---------------------------------------------------------------------------------------------------------------------
-# Emissao
+# Emission
 
 def flt(bits):
     return f'B({bits:#010x}u)'
@@ -281,12 +281,12 @@ def operand_b4(u):
 
 
 def emit_upper(u, slot, out):
-    """Calcula o resultado do upper (sem escrever); devolve as linhas de escrita. FMAC/max/mini nas 4 lanes de uma vez."""
+    """Computes the upper's result (without writing it); returns the write lines. FMAC/max/mini on all 4 lanes at once."""
     form = u['form']
     if slot is not None:
         out.append(f'        F[{slot}] = Fm{{}};')
     if form not in ('itof0', 'ftoi0'):
-        d = sum(1 << c for c in range(4) if u['mask'] & LANES[c])   # x no bit 0
+        d = sum(1 << c for c in range(4) if u['mask'] & LANES[c])   # x in bit 0
         out.append(f'        const __m128 a = NV(LD(s.vf[{u["fs"]}])), b = {operand_b4(u)};')
         if form in ('max', 'mini'):
             out.append(f'        const __m128 u = _mm_{"max" if form == "max" else "min"}_ps(a, b);')
@@ -327,7 +327,7 @@ def emit_upper(u, slot, out):
 
 
 def vi_read(reg, st, branch):
-    """VI lido; o desvio ve o valor antigo do VI escrito pelo par anterior (readBranchVi)"""
+    """VI read; a branch sees the old value of a VI written by the previous pair (readBranchVi)"""
     if reg == 0:
         return '0'
     if branch and st.bk == reg:
@@ -336,8 +336,8 @@ def vi_read(reg, st, branch):
 
 
 def emit_lower(l, upper_dst, st, out):
-    """Executa o lower (le o estado antes da escrita do upper). Devolve (escritas de VF para depois do upper, desvio)
-    onde desvio e None, ('goto', alvo), ('cond', alvo) com a condicao em 'br', ou ('jr', alvo)."""
+    """Executes the lower (reads state before the upper writes). Returns (VF writes to apply after the upper, branch)
+    where branch is None, ('goto', target), ('cond', target) with the condition in 'br', or ('jr', target)."""
     op = l['op']
     if op in BRANCH_DELAYED:
         dst = l['vid'] if op in ('iadd', 'isub', 'iand', 'ior') else l['vit']
@@ -396,7 +396,7 @@ def emit_lower(l, upper_dst, st, out):
         return [], ('goto', l['target'])
     if op == 'jr':
         if st.bk == l['vis'] or l['vis'] not in st.consts:
-            raise Unsupported(f'jr vi{l["vis"]} sem endereco conhecido')
+            raise Unsupported(f'jr vi{l["vis"]} with no known address')
         return [], ('jr', (st.consts[l['vis']] * 8) & (CODE_SIZE - 1))
     if op in ('ibeq', 'ibne'):
         cmp = '==' if op == 'ibeq' else '!='
@@ -420,24 +420,24 @@ def disasm_upper(u):
 class Compiler:
     def __init__(self, code, start):
         self.code, self.start = code, start
-        self.nodes = {}        # (pc, chave do estado) -> id
-        self.work = []         # [(id, pc, estado)]
-        self.blocks = []       # linhas por no
+        self.nodes = {}        # (pc, state key) -> id
+        self.work = []         # [(id, pc, state)]
+        self.blocks = []       # lines per node
         self.pcs = set()
-        self.linear_issues = []   # ciclos de emissao, so enquanto nao houve desvio (conferencia com o vu0trace)
+        self.linear_issues = []   # issue cycles, only until the first branch (checked against vu0trace)
         self.branched = False
 
     def node(self, pc, st):
         k = (pc, st.key())
         if k not in self.nodes:
             if len(self.nodes) >= MAX_NODES:
-                raise Unsupported('estados demais')
+                raise Unsupported('too many states')
             self.nodes[k] = len(self.nodes)
             self.work.append((self.nodes[k], pc, st.copy()))
         return self.nodes[k]
 
     def pair(self, p, st, out, elapsed):
-        """Emite um par a partir do estado st (modificado). Devolve (ciclos gastos, desvio)."""
+        """Emits one pair starting from state st (which it modifies). Returns (cycles spent, branch)."""
         self.pcs.add(p['pc'])
         u, l = p['upper'], p['lower']
         if l is not None:
@@ -475,7 +475,7 @@ class Compiler:
         out.extend(writes)
         out.extend(lower_writes)
         out.append('    }')
-        # escritas ficam pendentes a partir deste ciclo
+        # writes become pending from this cycle on
         bk = 0
         if l is not None and l['op'] in BRANCH_DELAYED:
             bk = l['vid'] if l['op'] in ('iadd', 'isub', 'iand', 'ior') else l['vit']
@@ -516,13 +516,13 @@ class Compiler:
                 pc += 8
                 continue
             if p['ebit'] and branch is not None:
-                raise Unsupported(f'desvio com bit E em {pc:#x}')
-            # par do delay slot (do desvio ou do bit E)
+                raise Unsupported(f'branch with E bit at {pc:#x}')
+            # the delay slot pair (of the branch or of the E bit)
             dp = decode_pair(self.code, pc + 8)
             if dp['ebit']:
-                raise Unsupported(f'bit E no delay slot em {pc + 8:#x}')
+                raise Unsupported(f'E bit in the delay slot at {pc + 8:#x}')
             if dp['lower'] is not None and dp['lower']['op'] in ('b', 'bal', 'jr', 'ibeq', 'ibne'):
-                raise Unsupported(f'desvio no delay slot em {pc + 8:#x}')
+                raise Unsupported(f'branch in the delay slot at {pc + 8:#x}')
             spent, _ = self.pair(dp, st, out, elapsed)
             elapsed += spent
             if p['ebit']:
@@ -594,8 +594,8 @@ def check_trace(path, linear):
         n += 1
         if issues != issues_ref[start] or total != total_ref[start]:
             bad += 1
-            print(f'  ciclos divergem em {start:#x}: modelo {issues} total {total}; interpretador {issues_ref[start]} total {total_ref[start]}')
-    print(f'modelo de ciclos x interpretador: {n} programas, {bad} divergentes')
+            print(f'  cycles differ at {start:#x}: model {issues} total {total}; interpreter {issues_ref[start]} total {total_ref[start]}')
+    print(f'cycle model vs interpreter: {n} programs, {bad} differ')
     return bad == 0
 
 
@@ -607,26 +607,26 @@ def main():
         trace = args[k + 1]
         del args[k:k + 2]
     code = load_code(args[0])
-    out = ['// Gerado por tools/vu0native.py a partir do microcodigo do VU0 do jogo. Nao editar; nao versionar.', '']
+    out = ['// Generated by tools/vu0native.py from the game VU0 microcode. Do not edit; do not commit.', '']
     table, linear = [], {}
     for start in ENTRIES:
         comp = Compiler(code, start)
         try:
             name, lo, length, h, fn = comp.run()
         except Unsupported as e:
-            print(f'{start:#05x}: fica no interpretador ({e})')
+            print(f'{start:#05x}: stays in the interpreter ({e})')
             continue
         out += fn
         table.append(f'    {{{start:#x}u, {lo:#x}u, {length}u, {h:#018x}ull, {name}}},')
         if not comp.branched:
             linear[start] = (comp.linear_issues, comp.total)
-        print(f'{start:#05x}: {len(comp.pcs)} pares, {len(comp.blocks)} blocos' + ('' if comp.branched else f', {comp.total} ciclos'))
+        print(f'{start:#05x}: {len(comp.pcs)} pairs, {len(comp.blocks)} blocks' + ('' if comp.branched else f', {comp.total} cycles'))
     out.append('static const WotmVu0Program kPrograms[] = {')
     out += table
     out.append('};')
     out.append('static constexpr size_t kProgramCount = sizeof(kPrograms) / sizeof(kPrograms[0]);')
-    # Imagem da memoria de codigo do VU0 que o pacote do ELF deixa (o hierLoadVu0Ucode a manda pelo VIF0 a cada quadro); o
-    # executavel do jogo a copia direto, sem VIF0 (FRONTEIRA.md, passo 7).
+    # Image of the VU0 code memory the ELF packet leaves behind (hierLoadVu0Ucode sends it through VIF0 every frame); the
+    # game executable copies it directly, without VIF0 (FRONTEIRA.md, step 7).
     out.append('#define WOTM_VU0_HAVE_IMAGE 1')
     out.append(f'static const unsigned char kVu0CodeImage[{CODE_SIZE}] = {{')
     for k in range(0, CODE_SIZE, 32):

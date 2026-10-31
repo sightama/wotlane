@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# ABOUTME: Testes do tools/interp_smooth.py com logs sinteticos no formato do wotm_live.inc: imagem com o tempo do jogo atrasado de um
-# ABOUTME: valor constante (suave) contra o ultimo quadro do jogo repetido ate o proximo (jogo a 60 numa tela de 144 Hz). Rodar: python tools/test_interp_smooth.py
+# ABOUTME: Tests for tools/interp_smooth.py with synthetic logs in wotm_live.inc's format: game time shown with a constant delay (smooth)
+# ABOUTME: versus the last game frame held until the next one (game at 60 on a 144 Hz screen). Run: python tools/test_interp_smooth.py
 import math
 import sys
 import unittest
@@ -13,7 +13,7 @@ HZ = 144.0
 
 
 def log(content_fields):
-    """Uma linha [interp] por apresentacao (t em s); o tempo do jogo mostrado (fields) vira fA, fB = fA + 1 e o alfa entre eles."""
+    """One [interp] line per presentation (t in s); the game time shown (fields) becomes fA, fB = fA + 1 and the alpha between them."""
     lines = []
     for i, ct in enumerate(content_fields):
         fa = math.floor(ct)
@@ -23,32 +23,32 @@ def log(content_fields):
 
 class LagTest(unittest.TestCase):
     def test_interpolated_image_has_constant_lag(self):
-        # o que se mostra e o jogo 1,15 field atras do relogio da tela
+        # what is shown is the game 1.15 fields behind the screen's clock
         cts = [10.0 + i / HZ * 60.0 - 1.15 for i in range(1000)]
         spread, n = interp_smooth.lag_spread_ms(interp_smooth.read_presentations(log(cts)))
-        self.assertEqual(n, 900)   # a primeira decima parte fica de fora (relogio assentando)
+        self.assertEqual(n, 900)   # the first tenth is left out (clock settling)
         self.assertLess(spread, 0.5)
 
     def test_held_frames_give_a_sawtooth_lag(self):
-        # sem interpolacao: o quadro do jogo mais novo (inteiro) fica ate o proximo
+        # no interpolation: the newest (whole) game frame stays up until the next one
         cts = [float(int(i / HZ * 60.0)) for i in range(1000)]
         spread, _ = interp_smooth.lag_spread_ms(interp_smooth.read_presentations(log(cts)))
-        self.assertGreater(spread, 12.0)   # dente de serra de ~16,7 ms
+        self.assertGreater(spread, 12.0)   # sawtooth of ~16.7 ms
 
     def test_every_other_presentation_redrawn_is_still_even(self):
-        # interpolacao a 72 redesenhos/s numa tela de 144 Hz: cada imagem fica 2 vblanks, atraso oscila meio periodo da tela
+        # interpolation at 72 redraws/s on a 144 Hz screen: each image stays up 2 vblanks, the delay swings by half the screen's period
         cts = [10.0 + (i - i % 2) / HZ * 60.0 - 1.15 for i in range(1000)]
         spread, _ = interp_smooth.lag_spread_ms(interp_smooth.read_presentations(log(cts)))
         self.assertLess(spread, 8.0)
 
     def test_a_pause_is_a_step_not_judder(self):
-        # o jogo parou 0,3 s no meio (carga): o atraso sobe de uma vez e fica; a imagem continua suave antes e depois
+        # the game stopped for 0.3 s in the middle (a load): the delay jumps once and stays; the image is smooth before and after
         cts = [30.0 + i / HZ * 60.0 - 1.15 - (18.0 if i >= 500 else 0.0) for i in range(1000)]
         spread, _ = interp_smooth.lag_spread_ms(interp_smooth.read_presentations(log(cts)))
         self.assertLess(spread, 0.5)
 
     def test_live_lines_give_the_blended_game_time(self):
-        # o tempo do jogo mostrado e fA + alfa * (fB - fA), e sem a mistura (desligada) a imagem e a de B
+        # the game time shown is fA + alpha * (fB - fA), and without blending (off) the image is B's
         text = '\n'.join([
             '[interp] t=1.0000 g=100 fA=200 fB=201 alpha=0.250 new',
             '[interp] t=1.0070 g=100 fA=200 fB=202 alpha=0.500 (P-A)',

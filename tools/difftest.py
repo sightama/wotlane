@@ -227,7 +227,7 @@ class Run:
         self.writes = {}
         self.fault = None
         uc = Uc(UC_ARCH_MIPS, UC_MODE_MIPS64 | UC_MODE_LITTLE_ENDIAN)
-        uc.ctl_set_cpu_model(UC_CPU_MIPS64_5KF)  # o modelo padrao (R4000) nao tem movz/movn: o teste acaba em pc=0
+        uc.ctl_set_cpu_model(UC_CPU_MIPS64_5KF)  # the default model (R4000) has no movz/movn: the test ends up at pc=0
         self.uc = uc
         self.qw = {}
         self.high = [0] * 32

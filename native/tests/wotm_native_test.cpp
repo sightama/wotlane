@@ -1,5 +1,5 @@
-// ABOUTME: Testes de unidade das partes puras da camada nativa (sem jogo, sem janela): interpolacao de quadros de wotm_interp.hpp (matrizes,
-// ABOUTME: camera, corte, projecao), o perfil das opcoes na partida em rede e o digest dos mods. Compilar e rodar: tools\test_native.bat
+// ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
+// ABOUTME: camera, cuts, projection), the settings profile for network matches and the mod digest. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
 #include "wotm_mods.hpp"
@@ -22,7 +22,7 @@ namespace
         if (!(expr))                                                                                                                 \
         {                                                                                                                            \
             ++g_failures;                                                                                                            \
-            std::printf("  FALHOU %s:%d: %s\n", __FILE__, __LINE__, #expr);                                                          \
+            std::printf("  FAILED %s:%d: %s\n", __FILE__, __LINE__, #expr);                                                          \
         }                                                                                                                            \
     } while (0)
 
@@ -51,7 +51,7 @@ namespace
 
     bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps * std::max(1.f, std::fabs(b)); }
 
-    // rotacao em torno de Z (vetores-linha: linha 0 = imagem do eixo X), escala por linha e translacao
+    // rotation around Z (row vectors: row 0 = image of the X axis), per-row scale and translation
     M4 rotZ(float deg, float sx = 1.f, float sy = 1.f, float sz = 1.f, float tx = 0.f, float ty = 0.f, float tz = 0.f)
     {
         const float a = deg * 3.14159265f / 180.f, c = std::cos(a), s = std::sin(a);
@@ -71,7 +71,7 @@ namespace
                m.m[0][2] * (m.m[1][0] * m.m[2][1] - m.m[1][1] * m.m[2][0]);
     }
 
-    M4 mulM4(const M4 &a, const M4 &b)   // a primeiro, depois b (como o wotm::mul de wotm_native.hpp, que traz o raylib)
+    M4 mulM4(const M4 &a, const M4 &b)   // a first, then b (like wotm::mul in wotm_native.hpp, which pulls in raylib)
     {
         M4 r{};
         for (int i = 0; i < 4; ++i)
@@ -103,7 +103,7 @@ namespace
         for (int i = 0; i < 3; ++i)
             for (int j = 0; j < 3; ++j)
                 CHECK(near(r.m[i][j], want.m[i][j], 1e-3f));
-        CHECK(near(rowLen(r, 0), 1.f) && near(rowLen(r, 1), 1.f));   // lerp por componente daria 0,707
+        CHECK(near(rowLen(r, 0), 1.f) && near(rowLen(r, 1), 1.f));   // a per-component lerp would give 0.707
     }
 
     TEST(lerp_keeps_per_row_scale_and_translation)
@@ -116,7 +116,7 @@ namespace
 
     TEST(lerp_keeps_mirrored_matrices_mirrored)
     {
-        const M4 r = ip::lerpM4(rotZ(0.f, -1.f), rotZ(40.f, -1.f), 0.5f);   // espelho em X nos dois
+        const M4 r = ip::lerpM4(rotZ(0.f, -1.f), rotZ(40.f, -1.f), 0.5f);   // both mirrored in X
         CHECK(det3(r) < 0.f);
         CHECK(near(rowLen(r, 0), 1.f, 1e-3f) && near(rowLen(r, 1), 1.f, 1e-3f));
     }
@@ -124,14 +124,14 @@ namespace
     TEST(lerp_falls_back_to_components_on_shear)
     {
         M4 b = rotZ(0.f);
-        b.m[1][0] = 0.8f;   // linha 1 nao e perpendicular a linha 0
+        b.m[1][0] = 0.8f;   // row 1 is not perpendicular to row 0
         const M4 r = ip::lerpM4(rotZ(0.f), b, 0.5f);
         CHECK(near(r.m[1][0], 0.4f) && near(r.m[0][0], 1.f) && near(r.m[1][1], 1.f));
     }
 
     TEST(slerp_takes_the_short_way)
     {
-        const ip::Quat a{1.f, 0.f, 0.f, 0.f}, b{-0.9999f, 0.f, 0.f, 0.0141f};   // quase a mesma rotacao, sinal oposto
+        const ip::Quat a{1.f, 0.f, 0.f, 0.f}, b{-0.9999f, 0.f, 0.f, 0.0141f};   // almost the same rotation, opposite sign
         CHECK(std::fabs(ip::slerp(a, b, 0.5f).w) > 0.999f);
     }
 
@@ -158,15 +158,15 @@ namespace
     TEST(camera_cuts_are_not_blended)
     {
         CHECK(!ip::cameraCut(cam(0, 0, 0, 0), cam(30, 0, 0, 20)));
-        CHECK(ip::cameraCut(cam(0, 0, 0, 0), cam(500, 0, 0, 0)));            // salto de posicao
-        CHECK(ip::cameraCut(cam(0, 0, 0, 0), cam(0, 0, 0, 60)));             // giro brusco (dot < 0,7)
-        CHECK(ip::cameraCut(cam(0, 0, 0, 0, 60.f), cam(0, 0, 0, 0, 70.f)));  // zoom brusco
+        CHECK(ip::cameraCut(cam(0, 0, 0, 0), cam(500, 0, 0, 0)));            // position jump
+        CHECK(ip::cameraCut(cam(0, 0, 0, 0), cam(0, 0, 0, 60)));             // sudden turn (dot < 0.7)
+        CHECK(ip::cameraCut(cam(0, 0, 0, 0, 60.f), cam(0, 0, 0, 0, 70.f)));  // sudden zoom
         GameCamera bad = cam(0, 0, 0, 0);
         bad.ok = false;
-        CHECK(ip::cameraCut(bad, cam(0, 0, 0, 0)));                          // camera ilegivel: sem mistura
+        CHECK(ip::cameraCut(bad, cam(0, 0, 0, 0)));                          // unreadable camera: no blending
     }
 
-    // camera -> mundo e a inversa rigida: ida e volta de um ponto e de uma direcao, e C * inversa = identidade
+    // camera -> world and the rigid inverse: round trip of a point and a direction, and C * inverse = identity
     TEST(camera_to_world_and_back)
     {
         const GameCamera c = cam(100, 50, 10, 25);
@@ -182,8 +182,8 @@ namespace
         CHECK(sameM4(mulM4(C, inv), wotm::ident(), 1e-4f));
     }
 
-    // projecao com o foco do jogo: o ponto a frente cai no centro, a direita da x > 0, acima da y < 0 (linhas para baixo), atras
-    // da camera nao projeta; o foco sai da matriz mundo -> tela
+    // projection with the game's focal length: a point straight ahead lands in the center, to the right gives x > 0, above gives
+    // y < 0 (lines go down), behind the camera doesn't project; the focal length comes out of the world -> screen matrix
     TEST(project_matches_the_game_focus)
     {
         const GameCamera c = cam(0, 0, 0, 0);
@@ -192,17 +192,17 @@ namespace
         float x = 0.f, y = 0.f;
         const float ahead[3] = {100.f, 0.f, 0.f}, right[3] = {100.f, -10.f, 0.f}, up[3] = {100.f, 0.f, 10.f}, behind[3] = {-100.f, 0.f, 0.f};
         CHECK(ip::project(C, f, ahead, x, y) && near(x, 0.f) && near(y, 0.f));
-        CHECK(ip::project(C, f, right, x, y) && near(x, 38.4f, 1e-3f));   // direita = frente x cima: -Y com frente +X e cima +Z
+        CHECK(ip::project(C, f, right, x, y) && near(x, 38.4f, 1e-3f));   // right = forward x up: -Y with forward +X and up +Z
         CHECK(ip::project(C, f, up, x, y) && near(y, -18.048f, 1e-3f));
         CHECK(!ip::project(C, f, behind, x, y));
-        // linhas: 0 = fh*direita + c*frente, 1 = -fv*cima + c*frente, 3 = frente (a camera acima: frente +X, direita -Y, cima +Z)
+        // rows: 0 = fh*right + c*forward, 1 = -fv*up + c*forward, 3 = forward (the camera above: forward +X, right -Y, up +Z)
         const float M[16] = {2048.f, -384.f, 0.f, 0.f, 2048.f, 0.f, -180.48f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f};
         ip::Focus g;
         CHECK(ip::focusOf(M, g) && near(g.fh, 384.f, 1e-3f) && near(g.fv, 180.48f, 1e-3f));
     }
 
-    // Perfil da partida em rede (wotm_settings.hpp): as opcoes que mudam o estado do jogo valem o perfil fixo em todos os PCs, as
-    // do jogador ficam guardadas e voltam fora da rede; as de video seguem livres
+    // Network match profile (wotm_settings.hpp): settings that change game state take the fixed profile on every PC, the
+    // player's own values are kept and come back outside network play; video settings stay free
     TEST(netplay_profile_forces_gameplay_settings_only)
     {
         namespace st = wotm::settings;
@@ -221,13 +221,13 @@ namespace
         CHECK(st::get(st::CamInvertY) == 0);
         CHECK(st::forced(st::Camera) && st::forced(st::CamSens));
         CHECK(st::get(st::RenderScale) == 150 && !st::forced(st::RenderScale));
-        CHECK(st::g_val[st::Camera].load() == 1 && st::g_val[st::CamSens].load() == 9);   // as do jogador continuam guardadas
+        CHECK(st::g_val[st::Camera].load() == 1 && st::g_val[st::CamSens].load() == 9);   // the player's values are still stored
         st::g_netProfile.store(false);
         CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9);
     }
 
-    // Digest dos mods ligados (wotm_mods.hpp), que entra no hash da configuracao da partida em rede: o mesmo conjunto de arquivos da o
-    // mesmo valor em qualquer ordem de criacao; mudar o conteudo, o nome ou acrescentar um mod muda; pasta desligada ('_') nao conta
+    // Digest of the enabled mods (wotm_mods.hpp), which goes into the network match's settings hash: the same set of files gives the
+    // same value in any creation order; changing the content or a name, or adding a mod, changes it; a disabled folder ('_') doesn't count
     TEST(mod_digest_covers_active_mods_only)
     {
         namespace fs = std::filesystem;
@@ -238,7 +238,7 @@ namespace
         };
         fs::remove_all(root);
         const fs::path a = root / "a" / "mods", b = root / "b" / "mods";
-        CHECK(wotm::mods::digest(a) == 0);   // sem pasta: sem mods
+        CHECK(wotm::mods::digest(a) == 0);   // no folder: no mods
         put(a / "skin" / "MON" / "LIZARD1.TEX", "tex");
         put(a / "skin" / "MON" / "LIZARD1.NGP", "ngp");
         put(b / "skin" / "MON" / "LIZARD1.NGP", "ngp");
@@ -267,8 +267,8 @@ int main()
     {
         const int before = g_failures;
         t.run();
-        std::printf("%s %s\n", g_failures == before ? "ok     " : "FALHOU ", t.name);
+        std::printf("%s %s\n", g_failures == before ? "ok     " : "FAILED ", t.name);
     }
-    std::printf("%d checagens, %d falha(s)\n", g_checks, g_failures);
+    std::printf("%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

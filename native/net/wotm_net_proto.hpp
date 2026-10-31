@@ -1,5 +1,5 @@
-// ABOUTME: Protocolo do netcode: mensagens binarias da partida (ENet) e linhas de texto do lobby (TCP), com codificacao e leitura.
-// ABOUTME: Sem dependencia do jogo nem de sockets; usado pelo cliente (wotm.exe), pelo servidor (wotm_server) e pelos testes.
+// ABOUTME: Netcode protocol: binary match messages (ENet) and lobby text lines (TCP), with encoding and parsing.
+// ABOUTME: No dependency on the game or on sockets; used by the client (wotm.exe), the server (wotm_server) and the tests.
 #pragma once
 
 #include "wotm_lockstep.hpp"
@@ -14,12 +14,12 @@
 namespace wotm_net::proto
 {
     constexpr uint16_t kProtocol = 2;
-    constexpr int kMaxPlayers = 8;   // 4 nos lugares de jogador do jogo e 4 em lugares de IA guiados pela rede (wotm_multi.inc)
+    constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
-    constexpr size_t kMaxRun = 64;   // quadros de entrada por mensagem (o lockstep nunca deixa mais que o atraso pendente)
+    constexpr size_t kMaxRun = 64;   // input frames per message (lockstep never leaves more than the delay pending)
 
-    // Canais ENet: controle confiavel (entrada, inicio, queda, hash, dessincronia) e entradas sem confirmacao (cada pacote repete o
-    // que o outro lado ainda nao confirmou, entao perder um nao custa nada)
+    // ENet channels: reliable control (join, start, drop, hash, desync) and unacknowledged inputs (each packet resends whatever the
+    // other side hasn't acknowledged yet, so losing one costs nothing)
     enum Channel : uint8_t
     {
         kControl = 0,
@@ -30,15 +30,15 @@ namespace wotm_net::proto
     enum class Type : uint8_t
     {
         None = 0,
-        Join = 1,     // cliente -> servidor: ficha do lobby e identidade do build
-        Welcome,      // servidor -> cliente: indice do jogador e quantos sao
-        Reject,       // servidor -> cliente: motivo, e a conexao cai
-        Start,        // servidor -> cliente: todos chegaram; atraso de entrada e nomes
-        Input,        // cliente -> servidor: entradas do proprio jogador e o que ja recebeu de cada um
-        Inputs,       // servidor -> cliente: entradas dos outros e o que ja recebeu deste
-        Hash,         // cliente -> servidor: hash do estado num quadro
-        Desync,       // servidor -> cliente: os hashes de um quadro diferem; a partida para
-        Drop,         // servidor -> cliente: um jogador saiu; neutro a partir de um quadro
+        Join = 1,     // client -> server: lobby token and build identity
+        Welcome,      // server -> client: player index and player count
+        Reject,       // server -> client: reason, then the connection closes
+        Start,        // server -> client: everyone arrived; input delay and names
+        Input,        // client -> server: this player's inputs and what it has received from each player
+        Inputs,       // server -> client: the others' inputs and what it has received from this client
+        Hash,         // client -> server: state hash on a frame
+        Desync,       // server -> client: the hashes for a frame differ; the match stops
+        Drop,         // server -> client: a player left; neutral from a given frame
     };
 
     struct Join
@@ -67,12 +67,12 @@ namespace wotm_net::proto
     };
     struct Input
     {
-        std::vector<uint32_t> acks;   // por jogador: primeiro quadro que este cliente ainda nao tem
+        std::vector<uint32_t> acks;   // per player: first frame this client doesn't have yet
         InputRun own;
     };
     struct Inputs
     {
-        uint32_t ackOwn = 0;          // primeiro quadro do proprio cliente que o servidor ainda nao tem
+        uint32_t ackOwn = 0;          // first frame of this client's own input the server doesn't have yet
         std::vector<InputRun> runs;
     };
     struct Hash
@@ -106,7 +106,7 @@ namespace wotm_net::proto
             b_.insert(b_.end(), s.begin(), s.begin() + static_cast<std::ptrdiff_t>(n));
         }
         void pad(const PadState &s) { u16(s.buttons), u8(s.rx), u8(s.ry), u8(s.lx), u8(s.ly); }
-        // estados seguidos iguais custam 1 byte (0); um novo, 1 + 6 bytes
+        // a state equal to the previous one costs 1 byte (0); a new one, 1 + 6 bytes
         void run(const InputRun &r)
         {
             const size_t n = std::min(r.states.size(), kMaxRun);
@@ -339,9 +339,9 @@ namespace wotm_net::proto
         return r.done();
     }
 
-    // Atraso de entrada (quadros) para os tempos de ida e volta ao servidor de cada jogador (ms): a entrada de um jogador vai ao servidor
-    // e dele aos outros, entao o pior caminho e meia volta do mais lento mais meia volta do segundo mais lento; mais 1 quadro de folga
-    // para a fase do quadro. Fica entre 2 e 15.
+    // Input delay (frames) for each player's round-trip time to the server (ms): a player's input goes to the server and from there
+    // to the others, so the worst path is half the slowest round trip plus half the second slowest; plus 1 frame of slack for frame
+    // phase. Clamped to 2..15.
     inline uint32_t pickDelay(std::vector<uint32_t> rttMs, uint32_t frameMs)
     {
         std::sort(rttMs.begin(), rttMs.end(), [](uint32_t a, uint32_t b) { return a > b; });
@@ -351,17 +351,18 @@ namespace wotm_net::proto
         return std::clamp(frames, 2u, 15u);
     }
 
-    // ---- lobby (TCP, uma linha de texto por mensagem) ----
-    // Quem cria o lobby e o dono: so ele muda a fase e as vitorias e comeca a partida; se sair, o proximo membro vira dono. O lobby
-    // tem um codigo de 4 letras (para entrar sem a lista) e pode ter senha. Os membros continuam nele durante a partida e, quando ela
-    // acaba (todos sairam dela: o QUIT fecha o jogo), ele volta a esperar com os mesmos membros. Lobby vazio fecha.
-    // cliente: HELLO <protocolo> <build> | LIST | CREATE <lobby> <nome> <monstro> [senha] | JOIN <codigo> <nome> <monstro> [senha] |
-    //          SET [stage=<fase>] [wins=<vitorias>] | START | LEAVE
-    // servidor: WELCOME <lobbies abertos> | LOBBY <codigo> <waiting|playing> <n>/<max> <open|locked> <lobby> <dono> <nomes,...|-> |
-    //           END | CREATED <codigo> | JOINED <codigo> | LEFT <codigo> | SETTINGS <codigo> stage=<fase> wins=<vitorias> |
-    //           MEMBERS <codigo> <dono> <nome:monstro,...> | MATCH <chave=valor>... | ERROR <texto>
+    // ---- lobby (TCP, one text line per message) ----
+    // Whoever creates the lobby is the owner: only the owner changes the stage and wins and starts the match; if the owner leaves, the
+    // next member becomes owner. The lobby has a 4-letter code (to join without the list) and may have a password. Members stay in it
+    // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
+    // members. An empty lobby closes.
+    // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
+    //         SET [stage=<stage>] [wins=<wins>] | START | LEAVE
+    // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
+    //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> |
+    //         MEMBERS <code> <owner> <name:monster,...> | MATCH <key=value>... | ERROR <text>
     constexpr int kMaxWins = 99;
-    constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // sem I, O, 0 e 1 (confundem ditando o codigo)
+    constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no I, O, 0 or 1 (easily confused when reading the code aloud)
     inline std::vector<std::string> words(const std::string &line)
     {
         std::vector<std::string> out;
@@ -389,7 +390,7 @@ namespace wotm_net::proto
         return kv;
     }
 
-    // nome de jogador: letras, digitos, '_' e '-', ate 16
+    // player name: letters, digits, '_' and '-', up to 16
     inline std::string cleanName(const std::string &s)
     {
         std::string out;

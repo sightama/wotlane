@@ -1,5 +1,5 @@
-// ABOUTME: Implementacao do servidor do netcode: lobby TCP (linhas de texto) e partidas ENet em lockstep (repasse das entradas,
-// ABOUTME: atraso pelo ping, hashes de estado, quedas). Nenhum codigo do jogo; roda no wotm_server e nos testes.
+// ABOUTME: Netcode server implementation: TCP lobby (text lines) and ENet lockstep matches (input relay, delay from ping,
+// ABOUTME: state hashes, drops). No game code; runs in wotm_server and in the tests.
 #include "wotm_net_server.hpp"
 #include "wotm_monsters.hpp"
 
@@ -13,7 +13,7 @@ namespace wotm_net
 {
     namespace
     {
-        // peer->data guarda (lobby, vaga) da partida: 1 + lobby * 64 + vaga (0 = ainda sem ficha)
+        // peer->data holds the match's (lobby, slot): 1 + lobby * 64 + slot (0 = no token yet)
         void *peerTag(int lobby, int slot) { return reinterpret_cast<void *>(static_cast<uintptr_t>(1 + lobby * 64 + slot)); }
 
         std::string hex64(uint64_t v)
@@ -48,7 +48,7 @@ namespace wotm_net
             return;
         va_list ap;
         va_start(ap, fmt);
-        std::printf("[servidor] ");
+        std::printf("[server] ");
         std::vprintf(fmt, ap);
         std::printf("\n");
         std::fflush(stdout);
@@ -60,12 +60,12 @@ namespace wotm_net
         cfg_.maxPlayers = std::clamp(cfg_.maxPlayers, 1, proto::kMaxPlayers);
         if (!listener_.listen(cfg_.port))
         {
-            err = "nao consegui escutar TCP na porta " + std::to_string(cfg_.port);
+            err = "could not listen on TCP port " + std::to_string(cfg_.port);
             return false;
         }
         if (enet_initialize() != 0)
         {
-            err = "enet_initialize falhou";
+            err = "enet_initialize failed";
             return false;
         }
         enetUp_ = true;
@@ -75,16 +75,16 @@ namespace wotm_net
         host_ = enet_host_create(&a, static_cast<size_t>(cfg_.lobbies * cfg_.maxPlayers + 16), proto::kChannels, 0, 0);
         if (!host_)
         {
-            err = "nao consegui escutar UDP na porta " + std::to_string(cfg_.port);
+            err = "could not listen on UDP port " + std::to_string(cfg_.port);
             return false;
         }
-        log("escutando na porta %u (TCP lobby, UDP partida), ate %d lobbies de ate %d jogadores", cfg_.port, cfg_.lobbies, cfg_.maxPlayers);
+        log("listening on port %u (TCP lobby, UDP match), up to %d lobbies of up to %d players", cfg_.port, cfg_.lobbies, cfg_.maxPlayers);
         return true;
     }
 
     void Server::poll(int ms)
     {
-        if (!host_)   // start falhou ou nao foi chamado
+        if (!host_)   // start failed or was never called
             return;
         acceptAndReadLobby();
         serviceEnet(ms);
@@ -180,7 +180,7 @@ namespace wotm_net
         {
             if (w.size() < 3 || w[1] != std::to_string(proto::kProtocol))
             {
-                c.socket.sendLine("ERROR protocolo diferente (o servidor fala o " + std::to_string(proto::kProtocol) + "; atualize o wotlane)");
+                c.socket.sendLine("ERROR different protocol (the server speaks " + std::to_string(proto::kProtocol) + "; update wotlane)");
                 return;
             }
             c.hello = true;
@@ -190,7 +190,7 @@ namespace wotm_net
         }
         if (!c.hello)
         {
-            c.socket.sendLine("ERROR mande HELLO primeiro");
+            c.socket.sendLine("ERROR send HELLO first");
             return;
         }
         if (cmd == "LIST")
@@ -209,28 +209,29 @@ namespace wotm_net
         else if (cmd == "LEAVE")
         {
             const std::string code = c.lobby >= 0 ? lobbies_[static_cast<size_t>(c.lobby)].code : "";
-            leaveLobby(ci);   // o ultimo a sair fecha o lobby (e o codigo some)
+            leaveLobby(ci);   // the last one out closes the lobby (and the code goes away)
             if (!code.empty())
                 c.socket.sendLine("LEFT " + code);
         }
         else if (cmd == "START")
         {
             if (c.lobby < 0)
-                return void(c.socket.sendLine("ERROR entre num lobby primeiro"));
+                return void(c.socket.sendLine("ERROR join a lobby first"));
             if (lobbies_[static_cast<size_t>(c.lobby)].host != ci)
-                return void(c.socket.sendLine("ERROR so o dono do lobby comeca a partida"));
+                return void(c.socket.sendLine("ERROR only the lobby owner can start the match"));
             startMatch(c.lobby);
         }
         else
-            c.socket.sendLine("ERROR comando desconhecido: " + cmd);
+            c.socket.sendLine("ERROR unknown command: " + cmd);
     }
 
-    // o monstro existe no disco e ainda tem traje livre com os dos outros membros (trajes como a partida os da: wotm_monsters::fits)
+    // the monster exists on the disc and still has a free costume given the other members' (costumes as the match hands them out:
+    // wotm_monsters::fits)
     bool Server::monsterFits(const Lobby &l, int monster, std::string &err) const
     {
         if (wotm_monsters::costumes(monster) == 0)
         {
-            err = "monstro invalido (sem arquivos no disco)";
+            err = "invalid monster (no files on the disc)";
             return false;
         }
         int list[wotm_monsters::kMaxList], n = 0;
@@ -240,13 +241,13 @@ namespace wotm_net
         list[n++] = monster;
         if (!wotm_monsters::fits(list, nullptr, n))
         {
-            err = "monstro sem traje livre no lobby (todos os trajes dele ja escolhidos)";
+            err = "monster has no free costume in the lobby (all its costumes are taken)";
             return false;
         }
         return true;
     }
 
-    // CREATE <lobby> <nome> <monstro> [senha]
+    // CREATE <lobby> <name> <monster> [password]
     void Server::createLobby(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -254,13 +255,13 @@ namespace wotm_net
         const int monster = std::atoi(w[3].c_str());
         const std::string password = w.size() >= 5 ? proto::cleanName(w[4]) : "";
         if (lobbyName.empty() || name.empty())
-            return void(c.socket.sendLine("ERROR nome vazio (use letras, digitos, _ ou -)"));
+            return void(c.socket.sendLine("ERROR empty name (use letters, digits, _ or -)"));
         int li = -1;
         for (size_t i = 0; i < lobbies_.size() && li < 0; ++i)
             if (!lobbies_[i].open && !lobbies_[i].match)
                 li = static_cast<int>(i);
         if (li < 0)
-            return void(c.socket.sendLine("ERROR o servidor ja tem " + std::to_string(lobbies_.size()) + " lobbies abertos; entre num deles"));
+            return void(c.socket.sendLine("ERROR the server already has " + std::to_string(lobbies_.size()) + " lobbies open; join one of them"));
         Lobby probe;
         std::string err;
         if (!monsterFits(probe, monster, err))
@@ -277,11 +278,11 @@ namespace wotm_net
         l.members.clear();
         l.build = c.build;
         c.socket.sendLine("CREATED " + l.code);
-        log("lobby %s (%s): criado por %s%s", l.code.c_str(), l.name.c_str(), name.c_str(), password.empty() ? "" : ", com senha");
+        log("lobby %s (%s): created by %s%s", l.code.c_str(), l.name.c_str(), name.c_str(), password.empty() ? "" : ", with password");
         addMember(ci, li, name, monster);
     }
 
-    // JOIN <codigo> <nome> <monstro> [senha]
+    // JOIN <code> <name> <monster> [password]
     void Server::joinLobby(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -290,23 +291,23 @@ namespace wotm_net
         const int monster = std::atoi(w[3].c_str());
         const std::string password = w.size() >= 5 ? w[4] : "";
         if (li < 0)
-            return void(c.socket.sendLine("ERROR lobby inexistente (confira o codigo)"));
+            return void(c.socket.sendLine("ERROR no such lobby (check the code)"));
         Lobby &l = lobbies_[static_cast<size_t>(li)];
         if (c.lobby == li)
-            return void(c.socket.sendLine("ERROR voce ja esta neste lobby"));
+            return void(c.socket.sendLine("ERROR you are already in this lobby"));
         if (name.empty())
-            return void(c.socket.sendLine("ERROR nome vazio (use letras, digitos, _ ou -)"));
+            return void(c.socket.sendLine("ERROR empty name (use letters, digits, _ or -)"));
         if (!l.password.empty() && password != l.password)
-            return void(c.socket.sendLine("ERROR senha errada (o lobby tem senha)"));
+            return void(c.socket.sendLine("ERROR wrong password (the lobby has a password)"));
         if (l.match)
-            return void(c.socket.sendLine("ERROR lobby em partida; espere acabar"));
+            return void(c.socket.sendLine("ERROR lobby is in a match; wait for it to end"));
         if (static_cast<int>(l.members.size()) >= cfg_.maxPlayers)
-            return void(c.socket.sendLine("ERROR lobby cheio"));
+            return void(c.socket.sendLine("ERROR lobby is full"));
         if (l.build != c.build)
-            return void(c.socket.sendLine("ERROR build diferente do lobby (" + l.build + "); todos precisam do mesmo wotlane"));
+            return void(c.socket.sendLine("ERROR build differs from the lobby's (" + l.build + "); everyone needs the same wotlane"));
         for (int m : l.members)
             if (conns_[static_cast<size_t>(m)]->name == name)
-                return void(c.socket.sendLine("ERROR nome ja usado no lobby"));
+                return void(c.socket.sendLine("ERROR name already taken in the lobby"));
         std::string err;
         if (!monsterFits(l, monster, err))
             return void(c.socket.sendLine("ERROR " + err));
@@ -324,19 +325,19 @@ namespace wotm_net
         c.lobby = li, c.name = name, c.monster = monster;
         c.socket.sendLine("JOINED " + l.code);
         c.socket.sendLine("SETTINGS " + l.code + " stage=" + std::to_string(l.stage) + " wins=" + std::to_string(l.wins));
-        log("lobby %s: %s entrou (monstro %d), %zu jogador(es)", l.code.c_str(), name.c_str(), monster, l.members.size());
+        log("lobby %s: %s joined (monster %d), %zu player(s)", l.code.c_str(), name.c_str(), monster, l.members.size());
         sendMembers(li);
     }
 
-    // SET [stage=<fase>] [wins=<vitorias>]: so o dono
+    // SET [stage=<stage>] [wins=<wins>]: owner only
     void Server::setLobby(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
         if (c.lobby < 0)
-            return void(c.socket.sendLine("ERROR entre num lobby primeiro"));
+            return void(c.socket.sendLine("ERROR join a lobby first"));
         Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
         if (l.host != ci)
-            return void(c.socket.sendLine("ERROR so o dono do lobby muda a fase e as vitorias"));
+            return void(c.socket.sendLine("ERROR only the lobby owner can change the stage and wins"));
         const std::map<std::string, std::string> kv = proto::keyValues(w);
         if (auto it = kv.find("stage"); it != kv.end())
             l.stage = std::max(0, std::atoi(it->second.c_str()));
@@ -356,18 +357,18 @@ namespace wotm_net
         c.lobby = -1;
         if (l.host == ci)
             l.host = l.members.empty() ? -1 : l.members.front();
-        log("lobby %s: %s saiu", l.code.c_str(), c.name.c_str());
+        log("lobby %s: %s left", l.code.c_str(), c.name.c_str());
         if (!closeIfEmpty(li))
             sendMembers(li);
     }
 
-    // lobby sem membros e sem partida fecha (some da lista e a vaga fica livre); devolve se fechou
+    // a lobby with no members and no match closes (drops off the list and frees the slot); returns whether it closed
     bool Server::closeIfEmpty(int li)
     {
         Lobby &l = lobbies_[static_cast<size_t>(li)];
         if (!l.open || !l.members.empty() || l.match)
             return false;
-        log("lobby %s: vazio, fechado", l.code.c_str());
+        log("lobby %s: empty, closed", l.code.c_str());
         l.open = false;
         l.code.clear(), l.name.clear(), l.password.clear(), l.build.clear();
         l.host = -1;
@@ -394,7 +395,7 @@ namespace wotm_net
             conns_[static_cast<size_t>(m)]->socket.sendLine(line);
     }
 
-    // os membros continuam no lobby durante a partida (o launcher volta a ele quando o jogo fecha)
+    // members stay in the lobby during the match (the launcher goes back to it when the game closes)
     void Server::startMatch(int li)
     {
         Lobby &l = lobbies_[static_cast<size_t>(li)];
@@ -405,7 +406,7 @@ namespace wotm_net
         m->created = Clock::now();
         const int players = static_cast<int>(l.members.size());
         const uint32_t seed = static_cast<uint32_t>(rng_() % 0x7FFFFFFEull) + 1u;
-        const int step = players >= 3 ? 2 : 1;   // 3+ jogadores: o jogo entra no proprio modo de 30 Hz
+        const int step = players >= 3 ? 2 : 1;   // 3+ players: the game switches to its own 30 Hz mode
         std::vector<std::string> monsters, names;
         for (int ci : l.members)
         {
@@ -426,12 +427,12 @@ namespace wotm_net
                               " seed=" + std::to_string(seed) + " step=" + std::to_string(step) + " you=" + std::to_string(i) +
                               " token=" + m->slots[static_cast<size_t>(i)].token + " port=" + std::to_string(cfg_.port));
         }
-        log("lobby %s: partida com %d jogador(es) (%s), fase %d, %d vitoria(s), semente %u", l.code.c_str(), players, join(names, ",").c_str(),
+        log("lobby %s: match with %d player(s) (%s), stage %d, %d win(s), seed %u", l.code.c_str(), players, join(names, ",").c_str(),
             l.stage, l.wins, seed);
         l.match = std::move(m);
     }
 
-    // ---- partida ----
+    // ---- match ----
 
     void Server::send(ENetPeer *peer, uint8_t channel, const std::vector<uint8_t> &data, bool reliable)
     {
@@ -513,7 +514,7 @@ namespace wotm_net
                 for (Slot &o : m->slots)
                     o.dirty = true;
             else
-                s.dirty = true;   // confirma de novo (o pacote pode ter sido repetido porque a confirmacao se perdeu)
+                s.dirty = true;   // ack again (the packet may be a resend because the ack was lost)
             break;
         }
         case proto::Type::Hash:
@@ -537,10 +538,10 @@ namespace wotm_net
         auto reject = [&](const std::string &why) {
             send(peer, proto::kControl, proto::encode(proto::Reject{why}), true);
             enet_peer_disconnect_later(peer, 0);
-            log("partida: recusado (%s)", why.c_str());
+            log("match: rejected (%s)", why.c_str());
         };
         if (j.protocol != proto::kProtocol)
-            return reject("protocolo diferente");
+            return reject("different protocol");
         for (size_t li = 0; li < lobbies_.size(); ++li)
         {
             Match *m = lobbies_[li].match.get();
@@ -552,22 +553,22 @@ namespace wotm_net
                 if (s.token != j.token)
                     continue;
                 if (s.joined)
-                    return reject("ficha ja usada");
+                    return reject("token already used");
                 if (lobbies_[li].build != j.buildId && !lobbies_[li].build.empty())
-                    return reject("build diferente (" + j.buildId + " contra " + lobbies_[li].build + ")");
+                    return reject("different build (" + j.buildId + " vs " + lobbies_[li].build + ")");
                 if (!m->config.empty() && m->config != j.configHash)
-                    return reject("configuracao do jogo diferente dos outros (" + j.configHash + " contra " + m->config + ")");
+                    return reject("game configuration differs from the others (" + j.configHash + " vs " + m->config + ")");
                 if (m->config.empty())
                     m->config = j.configHash;
                 s.joined = true;
                 s.peer = peer;
                 peer->data = peerTag(static_cast<int>(li), static_cast<int>(si));
                 send(peer, proto::kControl, proto::encode(proto::Welcome{static_cast<uint8_t>(si), static_cast<uint8_t>(m->slots.size())}), true);
-                log("lobby %zu: %s chegou a partida (jogador %zu)", li, s.name.c_str(), si + 1);
+                log("lobby %zu: %s reached the match (player %zu)", li, s.name.c_str(), si + 1);
                 return;
             }
         }
-        reject("ficha desconhecida (a partida acabou ou e de outro servidor)");
+        reject("unknown token (the match ended or it belongs to another server)");
     }
 
     void Server::onDisconnect(ENetPeer *peer)
@@ -581,7 +582,7 @@ namespace wotm_net
         peer->data = nullptr;
     }
 
-    // jogador fora: neutro a partir do primeiro quadro que o servidor nao tem dele (todos recebem os anteriores)
+    // player gone: neutral from the first frame of theirs the server doesn't have (everyone gets the earlier ones)
     void Server::dropSlot(Match &m, int si)
     {
         Slot &s = m.slots[static_cast<size_t>(si)];
@@ -599,7 +600,7 @@ namespace wotm_net
             }
         if (!m.started)
             m.hashes.clear();
-        log("lobby %s: %s saiu da partida (neutro desde o quadro %u)", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), s.name.c_str(), frame);
+        log("lobby %s: %s left the match (neutral from frame %u)", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), s.name.c_str(), frame);
         checkHashes(m);
     }
 
@@ -643,7 +644,7 @@ namespace wotm_net
                     std::string pings;
                     for (uint32_t r : rtt)
                         pings += (pings.empty() ? "" : ",") + std::to_string(r);
-                    log("lobby %s: inicio, atraso %u quadro(s) (ping ms: %s)", l.code.c_str(), st.delay, pings.c_str());
+                    log("lobby %s: start, delay %u frame(s) (ping ms: %s)", l.code.c_str(), st.delay, pings.c_str());
                     for (Slot &s : m->slots)
                         if (s.peer && !s.gone)
                         {
@@ -681,10 +682,10 @@ namespace wotm_net
             if (everyoneGone)
             {
                 const int li = m->lobby;
-                log("lobby %s: partida acabou; lobby esperando de novo com %zu membro(s)", l.code.c_str(), l.members.size());
+                log("lobby %s: match over; lobby waiting again with %zu member(s)", l.code.c_str(), l.members.size());
                 l.match.reset();
                 if (!closeIfEmpty(li))
-                    sendMembers(li);   // os membros (o launcher de cada um) sabem que o lobby voltou a esperar
+                    sendMembers(li);   // tells the members (each one's launcher) the lobby is waiting again
             }
         }
     }
@@ -747,8 +748,8 @@ namespace wotm_net
             if (!differ.empty() && !m.desynced)
             {
                 m.desynced = true;
-                std::string detail = "estado diferente no quadro " + std::to_string(frame) + ": " + firstName + " contra " + join(differ, ",");
-                log("lobby %s: DESSINCRONIA %s", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), detail.c_str());
+                std::string detail = "state differs on frame " + std::to_string(frame) + ": " + firstName + " vs " + join(differ, ",");
+                log("lobby %s: DESYNC %s", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), detail.c_str());
                 for (Slot &s : m.slots)
                     if (s.peer && !s.gone)
                         send(s.peer, proto::kControl, proto::encode(proto::Desync{frame, detail}), true);

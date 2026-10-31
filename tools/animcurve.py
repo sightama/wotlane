@@ -1,9 +1,9 @@
-"""Avaliador de curvas de animacao do WotM (porte de src/common/AnimCurve.cpp; formato em docs/FORMATOS.md, "Animacao").
+"""Evaluator for WotM animation curves (port of src/common/AnimCurve.cpp; format in docs/FORMATOS.md, "Animacao").
 
-`Curve(mem, endereco).eval(t)`: `mem` e qualquer leitor com u8/u16/s16/f32 por endereco (ngp.Image, um dump de RAM...).
-Conferido em 2026-10-20 contra os canais (`animOutput.val`) que o jogo calculou numa luta: 128 de 130 canais iguais (os 2
-restantes, 0,007 de diferenca, vem de uma camada de mistura por cima). A busca da chave e linear (o jogo usa busca binaria
-com cache por canal; o resultado e o mesmo)."""
+`Curve(mem, address).eval(t)`: `mem` is any reader with u8/u16/s16/f32 by address (ngp.Image, a RAM dump...).
+Checked on 2026-10-20 against the channels (`animOutput.val`) the game computed during a fight: 128 of 130 channels match (the
+other 2, off by 0.007, come from a blend layer applied on top). The key search is linear (the game uses a binary search with
+a per-channel cache; the result is the same)."""
 import math
 
 FMT = {0: (4, "f"), 1: (2, "H"), 2: (1, "B")}
@@ -32,7 +32,7 @@ class Curve:
         self.norm = (mem.f32(a - 16), mem.f32(a - 12), mem.f32(a - 8), mem.f32(a - 4))
         tsz = FMT[self.dtype][0]
         ssz = 4 if self.dtype == 0 else 2
-        # tamanho da chave com alinhamento (C++ do retail): float alinha em 4, short em 2
+        # key size including alignment (retail C++): floats align to 4, shorts to 2
         if self.ctype == 2:
             self.ksz = tsz
         elif self.ctype == 5:
@@ -52,7 +52,7 @@ class Curve:
             return self.m.u16(o)
         return self.m.u8(o)
 
-    def rt(self, i):   # tempo cru da chave
+    def rt(self, i):   # raw key time
         return self.raw(self.keys + i * self.ksz)
 
     def rv(self, i):

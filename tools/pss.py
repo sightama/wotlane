@@ -1,10 +1,10 @@
-"""Inspeciona filmes .PSS (MPEG-2 program stream do PS2): fluxos, cabecalho de sequencia do video e cabecalho SShd do audio.
+"""Inspects .PSS movies (PS2 MPEG-2 program streams): streams, the video sequence header and the audio SShd header.
 
-    python3 tools/pss.py disc/MOV/INTRO_M.PSS [mais arquivos] [--all]
+    python3 tools/pss.py disc/MOV/INTRO_M.PSS [more files] [--all]
 
-Le os primeiros 4 MB (--all: o arquivo inteiro). Por arquivo: pacotes por fluxo (e0 = video, BD/ff = audio privado da SCE),
-tamanho/proporcao/taxa do video (MPEG-2 se houver extensao 0xB5), numero de cabecalhos de imagem e o formato do audio
-(tipo 1 = PCM 16 bits, taxa, canais, intercalacao). O tocador nativo (native/wotm_fmv.hpp) faz a mesma separacao.
+Reads the first 4 MB (--all: the whole file). Per file: packets per stream (e0 = video, BD/ff = SCE private audio),
+video size/aspect/frame rate (MPEG-2 if there is a 0xB5 extension), number of picture headers and the audio format
+(type 1 = 16-bit PCM, rate, channels, interleave). The native player (native/wotm_fmv.hpp) does the same demuxing.
 """
 import collections
 import struct
@@ -23,7 +23,7 @@ def probe(path, read_all=False):
             i += 1
             continue
         sid = d[i + 3]
-        if sid == 0xBA:  # cabecalho de pacote MPEG-2 (14 bytes + enchimento)
+        if sid == 0xBA:  # MPEG-2 pack header (14 bytes + stuffing)
             i += 14 + (d[i + 13] & 7) if (d[i + 4] >> 6) == 1 else 12
             continue
         if sid == 0xB9:
@@ -44,21 +44,21 @@ def probe(path, read_all=False):
                 vid += pay
         else:
             streams['%02x' % sid] += 1
-    print('%s (%s bytes lidos): pacotes %s' % (path, len(d), dict(streams)))
+    print('%s (%s bytes read): packets %s' % (path, len(d), dict(streams)))
     k = vid.find(b'\x00\x00\x01\xb3')
     if k >= 0:
         h = vid[k + 4:k + 8]
         w, hh = (h[0] << 4) | (h[1] >> 4), ((h[1] & 15) << 8) | h[2]
-        print('  video %dx%d, aspecto %d, %s quadros/s, %s, %d imagens' % (
+        print('  video %dx%d, aspect %d, %s frames/s, %s, %d pictures' % (
             w, hh, h[3] >> 4, RATES.get(h[3] & 15, '?'), 'MPEG-2' if vid.find(b'\x00\x00\x01\xb5') >= 0 else 'MPEG-1',
             vid.count(b'\x00\x00\x01\x00')))
     for sub, a in sorted(aud.items()):
         if a[:4] == b'SShd' and len(a) >= 32:
             typ, rate, ch, inter = struct.unpack('<4I', a[8:24])
-            print('  audio sub %02x: SShd tipo %d (%s), %d Hz, %d canais, intercalacao 0x%x; %d bytes' % (
-                sub, typ, 'PCM 16 bits' if typ == 1 else '?', rate, ch, inter, len(a)))
+            print('  audio sub %02x: SShd type %d (%s), %d Hz, %d channels, interleave 0x%x; %d bytes' % (
+                sub, typ, '16-bit PCM' if typ == 1 else '?', rate, ch, inter, len(a)))
         else:
-            print('  audio sub %02x: %d bytes, sem SShd' % (sub, len(a)))
+            print('  audio sub %02x: %d bytes, no SShd' % (sub, len(a)))
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
-// ABOUTME: Linha do tempo das entradas do lockstep: por jogador e por quadro, o estado do controle (6 bytes) que todos os PCs aplicam.
-// ABOUTME: Sem dependencia do jogo nem da rede; usada pelo cliente (wotm.exe) e pelo servidor.
+// ABOUTME: Lockstep input timeline: per player and per frame, the pad state (6 bytes) that every PC applies.
+// ABOUTME: No dependency on the game or the network; used by the client (wotm.exe) and the server.
 #pragma once
 
 #include <algorithm>
@@ -9,7 +9,7 @@
 
 namespace wotm_net
 {
-    // Estado de um controle como o runtime o guarda (PadInputState do Pad.cpp): botoes ativos em 0, analogicos com centro em 0x80
+    // Pad state as the runtime stores it (PadInputState in Pad.cpp): buttons are active-low, analog sticks centered at 0x80
     struct PadState
     {
         uint16_t buttons = 0xFFFFu;
@@ -18,10 +18,10 @@ namespace wotm_net
         bool operator!=(const PadState &o) const { return !(*this == o); }
     };
 
-    // Quadro F (contado desde a carga da fase) so roda quando todo jogador tem entrada para F. A entrada local amostrada no quadro F vale
-    // no quadro F + atraso; os quadros 0 .. atraso - 1 ficam neutros para todos (ninguem tinha como manda-los a tempo). Um jogador que
-    // caiu fica neutro do quadro da queda em diante. Cada (jogador, quadro) recebe um valor so: o primeiro que chega (os pacotes repetem
-    // entradas ja enviadas).
+    // Frame F (counted from the stage load) only runs once every player has input for F. Local input sampled on frame F applies on
+    // frame F + delay; frames 0 .. delay - 1 are neutral for everyone (nobody could have sent them in time). A player who dropped is
+    // neutral from the drop frame onward. Each (player, frame) gets exactly one value: the first one to arrive (packets resend
+    // inputs that were already sent).
     class InputTimeline
     {
     public:
@@ -60,7 +60,7 @@ namespace wotm_net
             return it != p->frames.end() ? it->second : PadState{};
         }
 
-        // primeiro quadro sem entrada deste jogador (tudo antes dele ja chegou)
+        // first frame with no input from this player (everything before it has arrived)
         uint32_t nextMissing(int player) const
         {
             const Player *p = find(player);
@@ -76,7 +76,7 @@ namespace wotm_net
             advance(*p);
         }
 
-        // entrada local amostrada no quadro sampledFrame: devolve o quadro em que ela vale
+        // local input sampled on frame sampledFrame: returns the frame it applies on
         uint32_t scheduleLocal(int player, uint32_t sampledFrame, const PadState &s)
         {
             const uint32_t frame = sampledFrame + delay_;
@@ -100,7 +100,7 @@ namespace wotm_net
             return p && frame >= p->dropFrame;
         }
 
-        // quadros antes de `frame` nao serao mais lidos (ja rodaram em todo lugar que importa)
+        // frames before `frame` won't be read again (they already ran everywhere that matters)
         void discardBefore(uint32_t frame)
         {
             for (Player &p : players_)
@@ -114,9 +114,9 @@ namespace wotm_net
         struct Player
         {
             std::map<uint32_t, PadState> frames;
-            uint32_t base = 0;                    // quadros antes deste ja foram descartados
-            uint32_t contiguous = 0;              // primeiro quadro que falta
-            uint32_t dropFrame = 0xFFFFFFFFu;     // neutro daqui em diante
+            uint32_t base = 0;                    // frames before this one were already discarded
+            uint32_t contiguous = 0;              // first missing frame
+            uint32_t dropFrame = 0xFFFFFFFFu;     // neutral from here on
         };
 
         static void advance(Player &p)

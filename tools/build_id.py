@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# ABOUTME: Identidade do build do wotm.exe para o netcode: hash do que decide o codigo gerado (native/, patches do runtime, commit do
-# ABOUTME: PS2Recomp, jogo traduzido, versao exata do compilador e flags). Grava wotm.buildid ao lado do exe; o servidor exige igual.
-"""Uso: python tools/build_id.py [--runtime <pasta>] [--build build_dev] [--write]
+# ABOUTME: wotm.exe build identity for the netcode: hash of what decides the generated code (native/, runtime patches, PS2Recomp
+# ABOUTME: commit, recompiled game, exact compiler version and flags). Writes wotm.buildid next to the exe; the server requires a match.
+"""Usage: python tools/build_id.py [--runtime <folder>] [--build build_dev] [--write]
 
-O jogo e compilado com /fp:fast /arch:AVX2: dois PCs so simulam igual com o mesmo codigo e o mesmo compilador. Caminhos, datas e o
-fim de linha dos arquivos (CRLF ou LF) nao entram, entao dois clones em pastas diferentes com o mesmo codigo dao o mesmo id.
-Chamado pelo tools/build_runtime.ps1 depois de cada build; o wotm.exe le o wotm.buildid e o manda ao servidor (wotm_sync.inc).
+The game is compiled with /fp:fast /arch:AVX2: two PCs only simulate identically with the same code and the same compiler. Paths,
+dates and file line endings (CRLF or LF) are left out, so two clones in different folders with the same code give the same id.
+Called by tools/build_runtime.ps1 after every build; wotm.exe reads wotm.buildid and sends it to the server (wotm_sync.inc).
 """
 import argparse
 import hashlib
@@ -19,13 +19,13 @@ REPO = Path(__file__).resolve().parent.parent
 
 
 def text_digest(path):
-    """sha256 do conteudo com CRLF virando LF (o git pode fazer checkout com qualquer um)."""
+    """sha256 of the contents with CRLF turned into LF (git may check out either)."""
     return hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
 
 
 def tree_digest(root, skip_dirs=()):
-    """sha256 dos arquivos de uma pasta: caminho relativo e conteudo de cada um, em ordem; pastas com nome em skip_dirs (em qualquer
-    nivel) ficam de fora."""
+    """sha256 of the files in a folder: each one's relative path and contents, in order; folders named in skip_dirs (at any
+    level) are left out."""
     h = hashlib.sha256()
     if root.exists():
         for p in sorted(root.rglob('*')):
@@ -37,7 +37,7 @@ def tree_digest(root, skip_dirs=()):
 
 
 def recomp_digest(retail, runtime):
-    """O jogo traduzido (~90 MB): o hash fica guardado em <runtime>/.wotm_recomp_hash enquanto a pasta nao mudar."""
+    """The recompiled game (~90 MB): the hash is cached in <runtime>/.wotm_recomp_hash as long as the folder doesn't change."""
     files = [p for p in retail.rglob('*') if p.is_file()] if retail.exists() else []
     key = [len(files), sum(p.stat().st_size for p in files), max((p.stat().st_mtime_ns for p in files), default=0)]
     cache = runtime / '.wotm_recomp_hash'
@@ -56,7 +56,7 @@ def recomp_digest(retail, runtime):
 
 
 def compiler(build_dir):
-    """Versao do MSVC (pasta do cl.exe) e as flags do CMakeCache.txt do build."""
+    """MSVC version (cl.exe's folder) and the flags from the build's CMakeCache.txt."""
     out = {'version': 'desconhecido', 'type': '', 'flags': ''}
     cache = build_dir / 'CMakeCache.txt'
     if cache.exists():
@@ -100,12 +100,12 @@ def ps2recomp_head(runtime):
 
 def compute(repo, runtime, build, ps2recomp_commit=None):
     parts = {
-        'native': tree_digest(repo / 'native', skip_dirs=('build', '__pycache__')),   # saidas de compilacao (net, tests)
+        'native': tree_digest(repo / 'native', skip_dirs=('build', '__pycache__')),   # build outputs (net, tests)
         'patches': tree_digest(repo / 'tools' / 'runtime_patch'),
         'ps2recomp': ps2recomp_commit or ps2recomp_head(runtime),
         'recomp': recomp_digest(repo / 'recomp' / 'retail', runtime),
         'compiler': compiler(runtime / build),
-        'build': build,   # build_dev (sem LTCG) e build (LTCG) geram codigo diferente
+        'build': build,   # build_dev (no LTCG) and build (LTCG) generate different code
     }
     return 'wl-' + hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -114,7 +114,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--runtime', default=None)
     ap.add_argument('--build', default='build_dev')
-    ap.add_argument('--write', action='store_true', help='grava <runtime>/<build>/ps2xRuntime/wotm.buildid')
+    ap.add_argument('--write', action='store_true', help='write <runtime>/<build>/ps2xRuntime/wotm.buildid')
     a = ap.parse_args()
     saved = REPO / '.wotm_recomp_dir'
     runtime = Path(a.runtime) if a.runtime else (Path(saved.read_text().splitlines()[0].strip()) if saved.exists() else REPO / 'runtime')

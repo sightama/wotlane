@@ -1,16 +1,16 @@
-// wotm_snd.hpp: som nativo do War of the Monsters, sem IOP nem SPU2 emulados.
+// wotm_snd.hpp: native sound for War of the Monsters, with no emulated IOP or SPU2.
 //
-// O jogo fala com o driver 989snd (que roda no IOP) pelas funcoes `snd_*` da lib989snd do EE. O runtime troca essas funcoes
-// por hooks (wotm_live.inc, sempre ligados) que chamam este motor: os bancos .BNK sao lidos do disco, os sons sao executados
-// grain a grain como no 989snd e as vozes ADPCM do SPU2 sao mixadas aqui, a 48 kHz, numa AudioStream do raylib.
-// Formatos e API em docs/FORMATOS.md ("Som") e tools/snd989.py.
+// The game talks to the 989snd driver (which runs on the IOP) through the `snd_*` functions of the EE's lib989snd. The runtime replaces those
+// functions with hooks (wotm_live.inc, always on) that call this engine: .BNK banks are read from disc, sounds are executed
+// grain by grain as in 989snd, and the SPU2 ADPCM voices are mixed here, at 48 kHz, into a raylib AudioStream.
+// Formats and API in docs/FORMATOS.md ("Som") and tools/snd989.py.
 //
-// O motor de efeitos (grains, envelope ADSR do SPU2, LFO, volume/pan) segue a reimplementacao do 989snd do OpenGOAL
-// (github.com/open-goal/jak-project, game/sound/989snd e game/sound/common; Copyright 2021-2024 Ziemas, licenca ISC), adaptada
-// ao formato SBlk versao 1 do WotM e reduzida ao que os bancos do jogo usam. Sem reverb.
+// The effects engine (grains, SPU2 ADSR envelope, LFO, volume/pan) follows OpenGOAL's 989snd reimplementation
+// (github.com/open-goal/jak-project, game/sound/989snd and game/sound/common; Copyright 2021-2024 Ziemas, ISC license), adapted
+// to WotM's SBlk version 1 format and trimmed to what the game's banks use. No reverb.
 //
-// Uso: Engine::get().setReader(...) (leitura de setores por LSN), startOutput() depois do InitAudioDevice, e a API abaixo
-// (espelho das snd_*). mix() pode ser chamado direto para gravar em arquivo (native/sndplay.cpp).
+// Usage: Engine::get().setReader(...) (reads sectors by LSN), startOutput() after InitAudioDevice, and the API below
+// (mirrors the snd_* functions). mix() can be called directly to record to a file (native/sndplay.cpp).
 #pragma once
 
 #include <algorithm>
@@ -37,8 +37,8 @@ using s16 = int16_t;
 using u32 = uint32_t;
 using s32 = int32_t;
 
-constexpr int kRate = 48000;          // taxa do SPU2
-constexpr int kTickSamples = 200;     // os sons avancam a 240 Hz (48000 / 240)
+constexpr int kRate = 48000;          // SPU2 rate
+constexpr int kTickSamples = 200;     // sounds advance at 240 Hz (48000 / 240)
 constexpr s32 kVolumeDontChange = 0x7fffffff;
 constexpr s32 kPanReset = -1;
 constexpr s32 kPanDontChange = -2;
@@ -46,14 +46,14 @@ constexpr s32 kPanDontChange = -2;
 inline u16 rd16(const u8 *p) { return u16(p[0] | (p[1] << 8)); }
 inline u32 rd32(const u8 *p) { return u32(p[0]) | (u32(p[1]) << 8) | (u32(p[2]) << 16) | (u32(p[3]) << 24); }
 
-// ---------------------------------------------------------------- banco (.BNK = SBlk versao 1)
+// ---------------------------------------------------------------- bank (.BNK = SBlk version 1)
 
 struct Tone {
     s8 priority, vol, centerNote, centerFine;
     s16 pan;
     s8 mapLow, mapHigh, pbLow, pbHigh;
     u16 adsr1, adsr2, flags;
-    u32 sample;   // offset no bloco de amostras do banco
+    u32 sample;   // offset into the bank's sample block
 };
 
 enum Grain_ : u32 {
@@ -65,7 +65,7 @@ enum Grain_ : u32 {
     G_COPY_REG = 44,
 };
 
-// Grain v1: 0x28 bytes = tipo, atraso (ticks de 240 Hz) e 0x20 bytes de parametros
+// v1 grain: 0x28 bytes = type, delay (240 Hz ticks) and 0x20 bytes of parameters
 struct Grain {
     u32 type = 0;
     s32 delay = 0;
@@ -88,16 +88,16 @@ struct Sfx {
     s8 vol = 0, group = 0;
     s16 pan = 0;
     s8 instanceLimit = 0;
-    u16 flags = 0;   // 1 = laco
+    u16 flags = 0;   // 1 = loop
     std::vector<Grain> grains;
 };
 
 struct Bank {
-    std::string id;           // "SHEL", "GMON"... (BankID ao contrario)
+    std::string id;           // "SHEL", "GMON"... (BankID reversed)
     std::vector<Sfx> sounds;
-    std::vector<u8> samples;  // ADPCM do SPU2 (o que o 989snd copia para a SRAM)
+    std::vector<u8> samples;  // SPU2 ADPCM (what 989snd copies into SRAM)
 
-    // Arquivo: u32 tipo, u32 nChunks, {offset, tamanho} x n; chunk 0 = SBlk, chunk 1 = amostras
+    // File: u32 type, u32 nChunks, {offset, size} x n; chunk 0 = SBlk, chunk 1 = samples
     static std::unique_ptr<Bank> parse(const u8 *d, size_t n) {
         if (n < 0x18 || rd32(d + 4) < 2) return nullptr;
         const u32 bOff = rd32(d + 8), bSize = rd32(d + 12), sOff = rd32(d + 16), sSize = rd32(d + 20);
@@ -133,11 +133,11 @@ struct Bank {
     }
 };
 
-// ---------------------------------------------------------------- tabelas e conversoes do 989snd
+// ---------------------------------------------------------------- 989snd tables and conversions
 
 struct VolPair { s16 left = 0, right = 0; };
 
-inline const std::array<VolPair, 181> &panTable() {   // normalPanTable: 0x3fff * (cos, sen) de 0 a 90 graus
+inline const std::array<VolPair, 181> &panTable() {   // normalPanTable: 0x3fff * (cos, sin) from 0 to 90 degrees
     static const std::array<VolPair, 181> t = [] {
         std::array<VolPair, 181> r{};
         for (int i = 0; i <= 180; ++i) {
@@ -158,8 +158,8 @@ inline const std::array<s16, 2048> &lfoSine() {
     return t;
 }
 
-// Registro de pitch do SPU2 (0x1000 = taxa nativa de 48 kHz). CenterNote negativa = nota de PS2 (48 kHz); positiva = de PS1 (44,1 kHz).
-// Como no sceSdNote2Pitch, o CenterFine SOMA ao fine (SHELLMUS: nota 60, centro -62/66 -> 44058 Hz, a taxa da amostra).
+// SPU2 pitch register (0x1000 = native 48 kHz rate). Negative CenterNote = PS2 note (48 kHz); positive = PS1 note (44.1 kHz).
+// As in sceSdNote2Pitch, CenterFine is ADDED to fine (SHELLMUS: note 60, center -62/66 -> 44058 Hz, the sample's rate).
 inline u16 note2Pitch(s8 centerNote, s8 centerFine, int note, int fine) {
     const bool ps1 = centerNote >= 0;
     const int cn = ps1 ? centerNote : -centerNote;
@@ -175,7 +175,7 @@ inline std::pair<int, int> pitchBend(const Tone &t, int pb, int pm, int note, in
     return {v / 128, v % 128};
 }
 
-// ---------------------------------------------------------------- envelope ADSR do SPU2
+// ---------------------------------------------------------------- SPU2 ADSR envelope
 
 struct Adsr {
     enum Phase { Attack, Decay, Sustain, Release, Stopped };
@@ -230,17 +230,17 @@ struct Adsr {
     void stop() { phase = Stopped; level = 0; }
 };
 
-// ---------------------------------------------------------------- decodificador ADPCM do SPU2
+// ---------------------------------------------------------------- SPU2 ADPCM decoder
 
-// Blocos de 16 bytes: (filtro << 4 | shift), flags (1 = fim, 2 = repete, 4 = inicio do laco), 14 bytes = 28 amostras de 4 bits
+// 16-byte blocks: (filter << 4 | shift), flags (1 = end, 2 = repeat, 4 = loop start), 14 bytes = 28 4-bit samples
 struct AdpcmReader {
     const u8 *data = nullptr;
     size_t size = 0, pos = 0, loop = 0;
     s32 h1 = 0, h2 = 0;
     bool ended = false;
-    bool honorFlags = true;   // os .VPK nao marcam fim nem laco: param no fim dos dados
+    bool honorFlags = true;   // .VPK files mark neither end nor loop: they stop at the end of the data
 
-    // Decodifica um bloco (28 amostras). Devolve false sem nada quando acabou.
+    // Decodes one block (28 samples). Returns false with nothing when it's finished.
     bool block(s16 out[28]) {
         static constexpr s32 k[5][2] = {{0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}};
         if (ended || pos + 16 > size) { ended = true; return false; }
@@ -258,13 +258,13 @@ struct AdpcmReader {
         pos += 16;
         if (fl & 1) {
             if (fl & 2) pos = loop;
-            else ended = true;   // as 28 amostras deste bloco ainda tocam
+            else ended = true;   // this block's 28 samples still play
         }
         return true;
     }
 };
 
-// Uma voz do SPU2: ADPCM -> reamostragem pelo pitch -> envelope -> volume esquerdo/direito
+// One SPU2 voice: ADPCM -> resampling by pitch -> envelope -> left/right volume
 struct Voice {
     AdpcmReader src;
     Adsr adsr;
@@ -274,7 +274,7 @@ struct Voice {
     u16 pitch = 0x1000;
     s32 volL = 0, volR = 0;   // 0..0x7fff
     bool paused = false;
-    bool envelope = true;     // streams: sem ADSR
+    bool envelope = true;     // streams: no ADSR
     bool dead = false;
 
     s16 peek(int i) const { return fifo[size_t((head + i) & 63)]; }
@@ -288,14 +288,14 @@ struct Voice {
     void keyOn() { adsr.attack(); counter = 0; head = count = 0; dead = false; refill(); }
     void keyOff() { if (envelope) adsr.release(); else dead = true; }
 
-    // Uma amostra de saida a 48 kHz (acumula em l/r)
+    // One output sample at 48 kHz (accumulates into l/r)
     void run(s32 &l, s32 &r) {
         if (dead || paused) return;
         refill();
         if (count < 4) {
             if (src.ended) { dead = true; return; }
         }
-        // interpolacao cubica (Catmull-Rom) entre peek(1) e peek(2); o SPU2 usa uma gaussiana de 4 pontos
+        // cubic interpolation (Catmull-Rom) between peek(1) and peek(2); the SPU2 uses a 4-point Gaussian
         const float t = float(counter) / 4096.0f;
         const float p0 = peek(0), p1 = peek(1), p2 = peek(2), p3 = peek(3);
         float v = p1 + 0.5f * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
@@ -316,20 +316,20 @@ struct Voice {
 
 class Engine;
 
-// ---------------------------------------------------------------- sons (instancias) e streams
+// ---------------------------------------------------------------- sounds (instances) and streams
 
 struct Sound {
     u32 handle = 0;
     int group = 0;
     bool paused = false;
     virtual ~Sound() = default;
-    virtual bool tick() = 0;   // true quando terminou
+    virtual bool tick() = 0;   // true when finished
     virtual void stop() = 0;
     virtual void setPause(bool p) = 0;
     virtual void setVolPan(s32 vol, s32 pan) = 0;
     virtual void setPMod(s32) {}
     virtual void setPBend(s32) {}
-    virtual void refreshVolume() = 0;   // depois de mudar o volume mestre do grupo
+    virtual void refreshVolume() = 0;   // after the group's master volume changes
     virtual const Bank *bank() const { return nullptr; }
 };
 
@@ -354,21 +354,21 @@ public:
 
     void setReader(Reader r) { std::lock_guard<std::mutex> g(m_); reader_ = std::move(r); }
 
-    // Banco pelo setor inicial (snd_BankLoadByLoc). 0 em caso de erro.
+    // Bank by starting sector (snd_BankLoadByLoc). 0 on error.
     u32 loadBank(u32 lsn, u32 offset) {
         std::vector<u8> head(2048);
         Reader rd;
         { std::lock_guard<std::mutex> g(m_); rd = reader_; }
-        if (!rd || offset != 0 || !rd(lsn, 1, head.data())) return log("[snd] banco no LSN %u: leitura falhou\n", lsn), 0u;
+        if (!rd || offset != 0 || !rd(lsn, 1, head.data())) return log("[snd] bank at LSN %u: read failed\n", lsn), 0u;
         const u32 n = rd32(head.data() + 4);
-        if (n < 2 || n > 8) return log("[snd] LSN %u nao e um banco\n", lsn), 0u;
+        if (n < 2 || n > 8) return log("[snd] LSN %u is not a bank\n", lsn), 0u;
         u32 total = 0;
         for (u32 i = 0; i < n; ++i) total = std::max(total, rd32(head.data() + 8 + 8 * i) + rd32(head.data() + 12 + 8 * i));
         std::vector<u8> file((total + 2047) / 2048 * 2048);
-        if (!rd(lsn, u32(file.size() / 2048), file.data())) return log("[snd] banco no LSN %u: leitura falhou\n", lsn), 0u;
+        if (!rd(lsn, u32(file.size() / 2048), file.data())) return log("[snd] bank at LSN %u: read failed\n", lsn), 0u;
         return addBank(Bank::parse(file.data(), file.size()), lsn);
     }
-    // forceGroup >= 0: todos os sons do banco tocam nesse grupo (volume mestre e pausa por grupo), nao no que o banco diz
+    // forceGroup >= 0: every sound in the bank plays in this group (master volume and pause are per group), not the one the bank says
     u32 loadBankData(const std::vector<u8> &file, int forceGroup = -1) {
         auto b = Bank::parse(file.data(), file.size());
         if (b && forceGroup >= 0)
@@ -394,7 +394,7 @@ public:
     void setVolPan(u32 h, s32 vol, s32 pan) { std::lock_guard<std::mutex> g(m_); if (Sound *s = find(h)) s->setVolPan(vol, pan); }
     void setPMod(u32 h, s32 pm) { std::lock_guard<std::mutex> g(m_); if (Sound *s = find(h)) s->setPMod(pm); }
     void setPBend(u32 h, s32 pb) { std::lock_guard<std::mutex> g(m_); if (Sound *s = find(h)) s->setPBend(pb); }
-    // snd_SetSoundParams: mascara 1 = volume, 4 = pan, 8 = pitch mod, 0x10 = pitch bend (deduzida das chamadas do jogo)
+    // snd_SetSoundParams: mask 1 = volume, 4 = pan, 8 = pitch mod, 0x10 = pitch bend (deduced from the game's calls)
     void setParams(u32 h, u32 mask, s32 vol, s32 pan, s32 pm, s32 pb) {
         std::lock_guard<std::mutex> g(m_);
         Sound *s = find(h);
@@ -421,15 +421,15 @@ public:
     }
     s32 masterVolume(int group) const { return group >= 0 && group < 32 ? master_[size_t(group)] : 0; }
     void setMono(bool m) { std::lock_guard<std::mutex> g(m_); mono_ = m; }
-    s32 sramFree() const {   // 2 MB do SPU2 menos o que esta "carregado" (so informativo; o jogo imprime)
+    s32 sramFree() const {   // the SPU2's 2 MB minus what's "loaded" (informational only; the game prints it)
         size_t used = 0;
         for (auto &[h, b] : banks_) used += b->samples.size();
         return s32(std::max<long long>(0, 0x1f0000ll - static_cast<long long>(used)));
     }
 
-    // Mixagem: frames estereo s16 a 48 kHz (thread de audio). Com o som preso ao quadro (setFrameLocked, modo deterministico do netcode)
-    // a thread de audio so esvazia o que advanceFrame ja mixou; o fim de cada som (playing(), que o jogo consulta) passa a depender so
-    // dos quadros do jogo, nunca do ritmo do dispositivo de audio.
+    // Mixing: stereo s16 frames at 48 kHz (audio thread). With sound locked to the frame (setFrameLocked, the netcode's deterministic mode)
+    // the audio thread only drains what advanceFrame has already mixed; when each sound ends (playing(), which the game queries) then depends only
+    // on the game's frames, never on the audio device's pace.
     void mix(s16 *out, unsigned frames) {
         if (frameLocked_) {
             std::lock_guard<std::mutex> g(ringM_);
@@ -444,8 +444,8 @@ public:
         render(out, frames);
     }
     void setFrameLocked(bool on) { frameLocked_ = on; }
-    // Um quadro do jogo com `fields` fields: mixa 800 frames por field (48000 / 60) na thread do jogo e guarda para a thread de audio
-    // (no maximo ~0,25 s na fila: se o dispositivo parar, o mais antigo sai)
+    // One game frame with `fields` fields: mixes 800 frames per field (48000 / 60) on the game thread and queues them for the audio thread
+    // (at most ~0.25 s queued: if the device stops, the oldest is dropped)
     void advanceFrame(unsigned fields) {
         if (!frameLocked_) return;
         std::vector<s16> buf(size_t(2) * 800u * fields);
@@ -471,9 +471,9 @@ private:
     }
 
 public:
-    bool startOutput();   // AudioStream do raylib (precisa de InitAudioDevice antes)
+    bool startOutput();   // raylib AudioStream (needs InitAudioDevice first)
 
-    // --- usados pelos sons
+    // --- used by the sounds
     VolPair makeVolume(int vol1, int pan1, int vol2, int pan2, int vol3, int pan3) const {
         s32 vol = vol1 * 258;
         vol = vol * vol2 / 0x7f;
@@ -487,7 +487,7 @@ public:
         if (p < 180) return {s16(t[size_t(p)].left * vol / 0x3fff), s16(t[size_t(p)].right * vol / 0x3fff)};
         return {s16(t[size_t(p - 180)].right * vol / 0x3fff), s16(t[size_t(p - 180)].left * vol / 0x3fff)};
     }
-    s32 adjustToGroup(s32 v, int group) const {   // volume mestre do grupo, com a curva quadratica do 989snd
+    s32 adjustToGroup(s32 v, int group) const {   // group master volume, with 989snd's quadratic curve
         if (group >= 15) return v;
         v = std::min(v, 0x7ffe);
         v = v * master_[size_t(group)] / 0x400;
@@ -496,7 +496,7 @@ public:
     }
     void addVoice(const std::shared_ptr<Voice> &v) { voices_.push_back(v); }
     u32 tickCount() const { return tick_; }
-    std::array<s8, 32> blockReg{};   // registradores globais dos grains (negativos)
+    std::array<s8, 32> blockReg{};   // global grain registers (negative)
     u32 rnd() { rng_ = rng_ * 1103515245u + 12345u; return (rng_ >> 16) & 0x7fff; }
     std::unique_ptr<BlockSound> makeBlock(const Bank &bank, int sound, s32 vol, s32 pan, s32 appVol, s32 appPan, s32 pm, s32 pb,
                                           const std::array<s8, 4> *regs);
@@ -510,10 +510,10 @@ private:
         return nextHandle_;
     }
     u32 addBank(std::unique_ptr<Bank> b, u32 lsn) {
-        if (!b) return log("[snd] banco invalido (LSN %u)\n", lsn), 0u;
+        if (!b) return log("[snd] invalid bank (LSN %u)\n", lsn), 0u;
         std::lock_guard<std::mutex> g(m_);
         const u32 h = 0x10000u + nextBank_++;
-        log("[snd] banco %s carregado (LSN %u): %zu sons, %zu bytes de amostras -> %#x\n", b->id.c_str(), lsn, b->sounds.size(),
+        log("[snd] bank %s loaded (LSN %u): %zu sounds, %zu bytes of samples -> %#x\n", b->id.c_str(), lsn, b->sounds.size(),
             b->samples.size(), h);
         banks_[h] = std::move(b);
         return h;
@@ -534,10 +534,10 @@ private:
     int tickPhase_ = 0;
     std::atomic<bool> frameLocked_{false};
     std::mutex ringM_;
-    std::deque<std::array<s16, 2>> ring_;   // som preso ao quadro: mixado na thread do jogo, esvaziado pela de audio
+    std::deque<std::array<s16, 2>> ring_;   // frame-locked sound: mixed on the game thread, drained by the audio thread
 };
 
-// ---------------------------------------------------------------- som de banco: executa os grains
+// ---------------------------------------------------------------- bank sound: runs the grains
 
 struct BlockSound : Sound {
     Engine &eng;
@@ -557,7 +557,7 @@ struct BlockSound : Sound {
     int grainsToPlay = 0, grainsToSkip = 0;
 
     BlockSound(Engine &e, const Bank &b, const Sfx &s) : eng(e), bk(b), sfx(&s) { group = s.group; }
-    ~BlockSound() override { for (auto &v : voices) v.v->dead = true; }   // as vozes apontam para as amostras do banco
+    ~BlockSound() override { for (auto &v : voices) v.v->dead = true; }   // the voices point at the bank's samples
     const Bank *bank() const override { return &bk; }
 
     void start(s32 sfxVol, s32 sfxPan, s32 vol, s32 pan, s32 pm, s32 pb) {
@@ -629,7 +629,7 @@ struct BlockSound : Sound {
     void setPMod(s32 m) override { for (auto &c : children) c->setPMod(m); appPm = m; updatePitch(); }
     void setPBend(s32 b) override { for (auto &c : children) c->setPBend(b); appPb = b; updatePitch(); }
 
-    s32 regValue(s32 v, bool asPan) {   // parametros negativos: -1..-4 registradores do som, -5 aleatorio, -6.. globais
+    s32 regValue(s32 v, bool asPan) {   // negative parameters: -1..-4 the sound's registers, -5 random, -6.. globals
         if (v >= 0) return v;
         s32 r;
         if (v >= -4) r = regs[size_t(-v - 1)];
@@ -640,7 +640,7 @@ struct BlockSound : Sound {
     s8 &reg(int r) { return r < 0 ? eng.blockReg[size_t(std::min(-r - 1, 31))] : regs[size_t(r & 3)]; }
 
     void doGrain() {
-        Grain &g = const_cast<Grain &>(sfx->grains[size_t(nextGrain)]);   // RAND_PLAY/PLAY_CYCLE guardam estado no grain, como no 989snd
+        Grain &g = const_cast<Grain &>(sfx->grains[size_t(nextGrain)]);   // RAND_PLAY/PLAY_CYCLE keep state in the grain, as in 989snd
         const s32 ret = runGrain(g);
         if (skipGrains && --grainsToPlay == 0) { nextGrain += grainsToSkip; skipGrains = false; }
         if (++nextGrain >= int(sfx->grains.size()) || nextGrain < 0) { done = true; return; }
@@ -667,7 +667,7 @@ inline s32 Lfo::get(s32 mult) {
     case Square: r = step >= hold1 ? -32767 : 32767; break;
     case Triangle: r = step < 512 ? 0x7fff * step / 512 : step >= 1536 ? 0x7fff * (step - 1536) / 512 - 0x7fff : 0x7fff - 65534 * (step - 512) / 1024; break;
     case Saw: r = step >= 1024 ? 0x7fff * (step - 1024) / 1024 - 0x7fff : 0x7fff * step / 1023; break;
-    case Rand: r = hold1; break;   // o valor aleatorio e sorteado em tickLfo
+    case Rand: r = hold1; break;   // the random value is drawn in tickLfo
     default: break;
     }
     return (setupFlags & 1) ? -r : r;
@@ -681,7 +681,7 @@ inline s32 BlockSound::runGrain(Grain &g) {
         curPan = (appPan + lfoPan) % 360;
         if (curPan < 0) curPan += 360;
         const Tone t = g.tone();
-        if (t.flags & 8) return 0;   // ruido: nao usado pelo WotM
+        if (t.flags & 8) return 0;   // noise: not used by WotM
         if (t.sample >= bk.samples.size()) return 0;
         V v;
         v.tone = t;
@@ -747,7 +747,7 @@ inline s32 BlockSound::runGrain(Grain &g) {
         group = sfx->group;
         nextGrain = -1;
         skipGrains = false; grainsToPlay = grainsToSkip = 0;
-        return 0;   // doGrain soma o atraso do grain 0 do novo som
+        return 0;   // doGrain adds the delay of the new sound's grain 0
     }
     case G_LOOP_END: { const int i = findGrain(G_LOOP_START, nextGrain - 1, -1); if (i >= 0) nextGrain = i - 1; return 0; }
     case G_LOOP_CONTINUE: { const int i = findGrain(G_LOOP_END, nextGrain + 1, 1); if (i >= 0) nextGrain = i; return 0; }
@@ -814,7 +814,7 @@ inline s32 BlockSound::runGrain(Grain &g) {
     }
 }
 
-// LFO: anda a cada 2 ticks de 240 Hz e empurra o volume/pan/pitch deste som
+// LFO: steps every 2 ticks of 240 Hz and pushes this sound's volume/pan/pitch
 inline void BlockSound::tickLfo(Lfo &l) {
     ++l.tick;
     if (l.target == Lfo::None || l.type == Lfo::Off || (l.tick & 1) == 0) return;
@@ -833,7 +833,7 @@ inline void BlockSound::tickLfo(Lfo &l) {
     }
 }
 
-// ---------------------------------------------------------------- stream .VPK/.VAG (musica, vozes, cinemas)
+// ---------------------------------------------------------------- .VPK/.VAG stream (music, voices, cutscenes)
 
 struct Stream : Sound {
     Engine &eng;
@@ -866,15 +866,15 @@ struct Stream : Sound {
     }
     void refreshVolume() override { applyVolume(); }
 
-    // " KPV": u32 bytes por canal, u32 inicio dos dados, u32 tamanho do par de blocos (todos os canais), u32 Hz, u32 canais,
-    // {u16 vol, u16 pan} por canal.
-    // "VAGp" (big-endian): mono, dados a partir de 0x30. Os canais intercalados sao separados aqui (sem flags de fim nos blocos).
+    // " KPV": u32 bytes per channel, u32 data start, u32 size of the block pair (all channels), u32 Hz, u32 channels,
+    // {u16 vol, u16 pan} per channel.
+    // "VAGp" (big-endian): mono, data from 0x30 on. Interleaved channels are separated here (no end flags in the blocks).
     bool open() {
         u32 perCh, start, inter, rate, nch;
         if (file.size() >= 0x30 && std::memcmp(file.data(), " KPV", 4) == 0) {
             perCh = rd32(&file[4]); start = rd32(&file[8]); inter = rd32(&file[12]); rate = rd32(&file[16]); nch = rd32(&file[20]);
             if (nch < 1 || nch > 2 || inter == 0 || inter % (16 * nch)) return false;
-            inter /= nch;   // o campo e o tamanho do par esquerdo+direito (0xA000): cada canal tem blocos de 0x5000
+            inter /= nch;   // the field is the size of the left+right pair (0xA000): each channel has 0x5000 blocks
         } else if (file.size() >= 0x30 && std::memcmp(file.data(), "VAGp", 4) == 0) {
             auto be = [&](size_t o) { return (u32(file[o]) << 24) | (u32(file[o + 1]) << 16) | (u32(file[o + 2]) << 8) | file[o + 3]; };
             start = 0x30; nch = 1; rate = be(0x10);
@@ -906,7 +906,7 @@ struct Stream : Sound {
     }
 };
 
-// ---------------------------------------------------------------- Engine: criacao de sons
+// ---------------------------------------------------------------- Engine: creating sounds
 
 inline std::unique_ptr<BlockSound> Engine::makeBlock(const Bank &bank, int sound, s32 vol, s32 pan, s32 appVol, s32 appPan, s32 pm,
                                                      s32 pb, const std::array<s8, 4> *regs) {
@@ -917,7 +917,7 @@ inline std::unique_ptr<BlockSound> Engine::makeBlock(const Bank &bank, int sound
     return b;
 }
 
-// snd_PlaySoundVolPanPMPB: vol 0..0x400 (0x400 = volume do banco), pan em graus (-1 = o do banco), pm/pb = pitch mod/bend
+// snd_PlaySoundVolPanPMPB: vol 0..0x400 (0x400 = the bank's volume), pan in degrees (-1 = the bank's), pm/pb = pitch mod/bend
 inline u32 Engine::play(u32 bankHandle, int sound, s32 vol, s32 pan, s32 pm, s32 pb) {
     std::lock_guard<std::mutex> g(m_);
     auto it = banks_.find(bankHandle);
@@ -934,15 +934,15 @@ inline u32 Engine::playStream(u32 lsn, s32 vol, s32 pan, int group) {
     Reader rd;
     { std::lock_guard<std::mutex> g(m_); rd = reader_; }
     std::vector<u8> head(2048);
-    if (!rd || !rd(lsn, 1, head.data())) return log("[snd] stream no LSN %u: leitura falhou\n", lsn), 0u;
+    if (!rd || !rd(lsn, 1, head.data())) return log("[snd] stream at LSN %u: read failed\n", lsn), 0u;
     size_t size;
     if (std::memcmp(head.data(), " KPV", 4) == 0) size = size_t(rd32(&head[8])) + size_t(rd32(&head[4])) * rd32(&head[20]);
     else if (std::memcmp(head.data(), "VAGp", 4) == 0) size = 0x30 + ((size_t(head[12]) << 24) | (size_t(head[13]) << 16) | (size_t(head[14]) << 8) | head[15]);
-    else return log("[snd] LSN %u nao e .VPK/.VAG\n", lsn), 0u;
+    else return log("[snd] LSN %u is not .VPK/.VAG\n", lsn), 0u;
     size = std::min<size_t>(size, 64u << 20);
     auto s = std::make_unique<Stream>(*this);
     s->file.resize((size + 2047) / 2048 * 2048);
-    if (!rd(lsn, u32(s->file.size() / 2048), s->file.data()) || !s->open()) return log("[snd] stream no LSN %u invalido\n", lsn), 0u;
+    if (!rd(lsn, u32(s->file.size() / 2048), s->file.data()) || !s->open()) return log("[snd] invalid stream at LSN %u\n", lsn), 0u;
     std::lock_guard<std::mutex> g(m_);
     s->group = group;
     s->vol = vol;
@@ -957,7 +957,7 @@ inline u32 Engine::playStream(u32 lsn, s32 vol, s32 pan, int group) {
 
 }  // namespace wotm::snd
 
-// Saida pelo raylib: so quando o raylib ja foi incluido (o sndplay.cpp grava em arquivo sem ele)
+// Output via raylib: only when raylib has already been included (sndplay.cpp records to a file without it)
 #ifdef RAYLIB_H
 namespace wotm::snd {
 inline bool Engine::startOutput() {

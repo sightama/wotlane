@@ -1,11 +1,11 @@
 @echo off
-rem ABOUTME: Compila o netcode sem o jogo (native\net: wotm_server e wotm_net_test) em native\net\build e roda os testes.
-rem ABOUTME: Uso: tools\build_net.bat [notest]. Precisa do VS 2022 Build Tools (MSVC) e do CMake 3.24+.
+rem ABOUTME: Builds the netcode without the game (native\net: wotm_server and wotm_net_test) in native\net\build and runs the tests.
+rem ABOUTME: Usage: tools\build_net.bat [notest]. Requires VS 2022 Build Tools (MSVC) and CMake 3.24+.
 setlocal
 set "REPO=%~dp0.."
 set "VCVARS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
 if not exist "%VCVARS%" (
-    echo Nao achei o VS 2022 Build Tools em "%VCVARS%".
+    echo Could not find VS 2022 Build Tools at "%VCVARS%".
     exit /b 1
 )
 set "PATH=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer;%PATH%"

@@ -1,34 +1,34 @@
-# ABOUTME: Monta tudo o que o port precisa a partir da sua ISO, num comando: disco extraido, PS2Recomp com os patches, jogo traduzido
-# ABOUTME: (recomp\retail), pasta do runtime (runtime\) com os scripts, e o primeiro build do wotm.exe. Pode rodar de novo: pula o que ja existe.
+# ABOUTME: Sets up everything the port needs from your ISO in one command: extracted disc, patched PS2Recomp, translated game
+# ABOUTME: (recomp\retail), the runtime folder (runtime\) with its scripts, and the first wotm.exe build. Safe to rerun: skips what exists.
 #
-# Uso: powershell -ExecutionPolicy Bypass -File tools\setup_runtime.ps1 [-Iso <caminho da .iso>] [-SkipBuild] [-AnyCompiler]
-#   Sem -Iso usa a primeira .iso em ISO\. Precisa de: git, Python 3, CMake 3.24 ou mais novo e o Visual Studio 2022 (ou Build Tools)
-#   com o compilador C++ 14.40 ou mais novo (o 14.32 tem um erro interno com o codigo traduzido). Nada do jogo vai para o repo:
-#   disc\, recomp\ e runtime\ estao no .gitignore.
+# Usage: powershell -ExecutionPolicy Bypass -File tools\setup_runtime.ps1 [-Iso <path to the .iso>] [-SkipBuild] [-AnyCompiler]
+#   Without -Iso it uses the first .iso in ISO\. Requires: git, Python 3, CMake 3.24 or newer and Visual Studio 2022 (or Build Tools)
+#   with C++ compiler 14.40 or newer (14.32 hits an internal compiler error on the translated code). None of the game goes into the
+#   repo: disc\, recomp\ and runtime\ are in .gitignore.
 param([string]$Iso = '', [switch]$SkipBuild, [switch]$AnyCompiler)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $rt = Join-Path $repo 'runtime'
-$elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 do disco NTSC-U (SCUS-97197)
-$ps2recompCommit = '2c5fbb9389e11dd95693385969490c9e8e6f57b4'   # base do tools\runtime_patch\wotm-runtime.patch
+$elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 from the NTSC-U disc (SCUS-97197)
+$ps2recompCommit = '2c5fbb9389e11dd95693385969490c9e8e6f57b4'   # base of tools\runtime_patch\wotm-runtime.patch
 
 function Step([string]$m) { Write-Host "== $m" -ForegroundColor Cyan }
 function Fail([string]$m) { Write-Host $m -ForegroundColor Red; exit 1 }
-# Comando nativo cuja saida de erro e esperada (sondagens): pelo cmd, sem o stderr. No PowerShell 5.1 com Stop, qualquer linha no stderr
-# de um programa vira erro fatal. Devolve o codigo de saida.
+# Native command whose error output is expected (probes): run through cmd, stderr discarded. In PowerShell 5.1 with Stop, any stderr
+# line from a program becomes a fatal error. Returns the exit code.
 function Probe([string]$cmdLine) { & $env:ComSpec /c "$cmdLine >nul 2>nul"; return $LASTEXITCODE }
 
-# --- ferramentas
-Step 'ferramentas'
-foreach ($t in 'git', 'python') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { Fail "falta $t no PATH" } }
+# --- tools
+Step 'tools'
+foreach ($t in 'git', 'python') { if (-not (Get-Command $t -ErrorAction SilentlyContinue)) { Fail "$t is missing from PATH" } }
 $cmake = @((Get-Command cmake -ErrorAction SilentlyContinue).Source, 'C:\Program Files\CMake\bin\cmake.exe') | Where-Object { $_ -and (Test-Path $_) } |
     Where-Object { [version](((& $_ --version)[0] -split ' ')[2] -replace '-.*$', '') -ge [version]'3.24' } | Select-Object -First 1
-if (-not $cmake) { Fail 'falta CMake 3.24 ou mais novo (winget install Kitware.CMake)' }
+if (-not $cmake) { Fail 'CMake 3.24 or newer is missing (winget install Kitware.CMake)' }
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-if (-not (Test-Path $vswhere)) { Fail 'falta o Visual Studio 2022 / Build Tools com C++ (winget install Microsoft.VisualStudio.2022.BuildTools)' }
-# Partida em rede: o jogo traduzido e compilado com /fp:fast, entao todos os PCs da partida precisam do mesmo compilador. O fixado e o
-# MSVC 14.44 (VS 2022 17.14); o tools\build_id.py poe a versao exata no wotm.buildid e o servidor recusa builds diferentes.
-# -AnyCompiler aceita outro 14.40+ (jogo offline; online so com quem tiver o mesmo).
+if (-not (Test-Path $vswhere)) { Fail 'Visual Studio 2022 / Build Tools with C++ is missing (winget install Microsoft.VisualStudio.2022.BuildTools)' }
+# Online matches: the translated game is compiled with /fp:fast, so every PC in a match needs the same compiler. The pinned one is
+# MSVC 14.44 (VS 2022 17.14); tools\build_id.py puts the exact version in wotm.buildid and the server rejects mismatched builds.
+# -AnyCompiler accepts another 14.40+ (offline play; online only with players who have the same one).
 $pinnedMsvc = '14.44'
 $vcvars = $null; $vcvarsArgs = ''
 foreach ($vs in (& $vswhere -all -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)) {
@@ -38,17 +38,17 @@ foreach ($vs in (& $vswhere -all -products * -requires Microsoft.VisualStudio.Co
     if ($AnyCompiler -and -not $vcvars -and $tools -and [version]$tools[-1].Name -ge [version]'14.40') { $vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat" }
 }
 if (-not $vcvars) {
-    Fail ("falta o compilador MSVC $pinnedMsvc. No Visual Studio Installer: Modificar > Componentes individuais > " +
-          "'MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)' (todos os PCs da partida em rede precisam dele). " +
-          'Para jogar so offline com outro compilador 14.40+: -AnyCompiler')
+    Fail ("MSVC compiler $pinnedMsvc is missing. In the Visual Studio Installer: Modify > Individual components > " +
+          "'MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.44-17.14)' (every PC in an online match needs it). " +
+          'To play offline only with another 14.40+ compiler: -AnyCompiler')
 }
-if (-not $vcvarsArgs) { Write-Host "AVISO: sem o MSVC $pinnedMsvc; online so com quem tiver o mesmo compilador" -ForegroundColor Yellow }
+if (-not $vcvarsArgs) { Write-Host "WARNING: MSVC $pinnedMsvc not found; online play only with players who have the same compiler" -ForegroundColor Yellow }
 Write-Host "cmake: $cmake`nvcvars: $vcvars $vcvarsArgs"
 
-# --- disco
-Step 'disco'
+# --- disc
+Step 'disc'
 if (-not $Iso) { $Iso = (Get-ChildItem (Join-Path $repo 'ISO') -Filter *.iso -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
-if (-not $Iso -or -not (Test-Path $Iso)) { Fail 'nenhuma .iso: ponha a sua em ISO\ ou passe -Iso' }
+if (-not $Iso -or -not (Test-Path $Iso)) { Fail 'no .iso: put yours in ISO\ or pass -Iso' }
 $disc = Join-Path $repo 'disc'
 if (-not (Test-Path (Join-Path $disc 'SCUS_971.97'))) {
     $img = Mount-DiskImage -ImagePath $Iso -Access ReadOnly -PassThru
@@ -56,14 +56,14 @@ if (-not (Test-Path (Join-Path $disc 'SCUS_971.97'))) {
         $letter = ($img | Get-Volume).DriveLetter
         New-Item -ItemType Directory -Force $disc | Out-Null
         robocopy "${letter}:\" $disc /E /NFL /NDL /NJH /NJS /NP | Out-Null
-        if ($LASTEXITCODE -ge 8) { Fail "robocopy falhou ($LASTEXITCODE)" }
+        if ($LASTEXITCODE -ge 8) { Fail "robocopy failed ($LASTEXITCODE)" }
     } finally { Dismount-DiskImage -ImagePath $Iso | Out-Null }
     Get-ChildItem $disc -Recurse -File | ForEach-Object { $_.IsReadOnly = $false }
 }
 $sha = (Get-FileHash (Join-Path $disc 'SCUS_971.97') -Algorithm SHA1).Hash.ToLower()
-if ($sha -ne $elfSha1) { Fail "SCUS_971.97 com SHA1 ${sha}: o port so suporta o disco NTSC-U (SCUS-97197, $elfSha1)" }
+if ($sha -ne $elfSha1) { Fail "SCUS_971.97 has SHA1 ${sha}: the port only supports the NTSC-U disc (SCUS-97197, $elfSha1)" }
 
-# --- PS2Recomp com os patches do repo
+# --- PS2Recomp with the repo's patches
 Step 'PS2Recomp'
 New-Item -ItemType Directory -Force $rt | Out-Null
 $pr = Join-Path $rt 'PS2Recomp'
@@ -73,13 +73,13 @@ if (-not (Test-Path (Join-Path $pr '.git'))) {
 }
 foreach ($p in 'wotm-runtime.patch', 'ps2recomp-fpu-sqrt.patch') {
     $patch = Join-Path $repo "tools\runtime_patch\$p"
-    if ((Probe "git -C `"$pr`" apply --whitespace=nowarn --reverse --check `"$patch`"") -eq 0) { Write-Host "$p ja aplicado"; continue }
-    if ((Probe "git -C `"$pr`" apply --whitespace=nowarn `"$patch`"") -ne 0) { Fail "$p nao aplica em $pr (o clone mudou?)" }
-    Write-Host "$p aplicado"
+    if ((Probe "git -C `"$pr`" apply --whitespace=nowarn --reverse --check `"$patch`"") -eq 0) { Write-Host "$p already applied"; continue }
+    if ((Probe "git -C `"$pr`" apply --whitespace=nowarn `"$patch`"") -ne 0) { Fail "$p does not apply to $pr (did the clone change?)" }
+    Write-Host "$p applied"
 }
 
-# --- scripts da pasta do runtime (dos modelos em tools\runtime_template)
-Step 'scripts do runtime'
+# --- runtime folder scripts (from the templates in tools\runtime_template)
+Step 'runtime scripts'
 $repoFwd = $repo -replace '\\', '/'
 $cmakeBin = Split-Path $cmake -Parent
 foreach ($f in 'configure_dev.bat', 'build_dev.bat', 'build_tools.bat', 'run_live.ps1') {
@@ -89,43 +89,43 @@ foreach ($f in 'configure_dev.bat', 'build_dev.bat', 'build_tools.bat', 'run_liv
 }
 Set-Content (Join-Path $repo '.wotm_recomp_dir') $rt -Encoding ascii
 New-Item -ItemType Directory -Force (Join-Path $rt 'discroot') | Out-Null
-$elfDst = Join-Path $rt 'discroot\SCUS_971.97'   # o resto do disco vem da ISO (PS2X_CD_IMAGE)
-# so copia se for diferente: o destino pode ser um hardlink para o proprio disc\SCUS_971.97 (copiar sobre si mesmo falha)
+$elfDst = Join-Path $rt 'discroot\SCUS_971.97'   # the rest of the disc comes from the ISO (PS2X_CD_IMAGE)
+# copy only if different: the target may be a hardlink to disc\SCUS_971.97 itself (copying onto itself fails)
 if (-not (Test-Path $elfDst) -or (Get-FileHash $elfDst -Algorithm SHA1).Hash.ToLower() -ne $elfSha1) {
     Copy-Item (Join-Path $disc 'SCUS_971.97') $elfDst -Force
 }
-& (Join-Path $PSScriptRoot 'sync_mods.ps1') -Runtime $rt -Repo $repo   # mods do repo (mods\<mod>\) para discroot\mods\
+& (Join-Path $PSScriptRoot 'sync_mods.ps1') -Runtime $rt -Repo $repo   # repo mods (mods\<mod>\) into discroot\mods\
 
-# --- jogo traduzido (codigo do jogo: so local, recomp\ no .gitignore)
-Step 'jogo traduzido'
+# --- translated game (game code: local only, recomp\ is in .gitignore)
+Step 'translated game'
 $retail = Join-Path $repo 'recomp\retail'
 if (-not (Test-Path (Join-Path $retail 'register_functions.cpp'))) {
     & $env:ComSpec /c "`"$rt\build_tools.bat`" 2>&1" | Select-Object -Last 2
-    if ($LASTEXITCODE -ne 0) { Fail 'build do analisador/recompilador falhou' }
+    if ($LASTEXITCODE -ne 0) { Fail 'building the analyzer/recompiler failed' }
     $work = Join-Path $repo 'recomp\work'
     New-Item -ItemType Directory -Force $work | Out-Null
     Copy-Item (Join-Path $disc 'SCUS_971.97') (Join-Path $work 'game.elf') -Force
     Push-Location $work
     try {
         & "$rt\build_tools\ps2xAnalyzer\ps2_analyzer.exe" game.elf config.toml | Out-Null
-        if ($LASTEXITCODE -ne 0) { Fail 'ps2_analyzer falhou' }
+        if ($LASTEXITCODE -ne 0) { Fail 'ps2_analyzer failed' }
         (Get-Content config.toml) -replace '^output = .*', 'output = "../retail/"' | Set-Content config.toml -Encoding ascii
         & "$rt\build_tools\ps2xRecomp\ps2_recomp.exe" config.toml | Out-Null
-        if ($LASTEXITCODE -ne 0) { Fail 'ps2_recomp falhou' }
+        if ($LASTEXITCODE -ne 0) { Fail 'ps2_recomp failed' }
     } finally { Pop-Location }
 }
 $cpp = (Get-ChildItem $retail -Filter *.cpp).Count
-Write-Host "$cpp arquivos traduzidos"
+Write-Host "$cpp translated files"
 
 # --- build
 if (-not $SkipBuild) {
-    Step 'configurar e compilar (o primeiro build leva alguns minutos)'
+    Step 'configure and build (the first build takes a few minutes)'
     if (-not (Test-Path (Join-Path $rt 'build_dev\build.ninja'))) {
         & $env:ComSpec /c "`"$rt\configure_dev.bat`" 2>&1" | Select-Object -Last 2
-        if (-not (Test-Path (Join-Path $rt 'build_dev\build.ninja'))) { Fail 'configure_dev.bat falhou' }
+        if (-not (Test-Path (Join-Path $rt 'build_dev\build.ninja'))) { Fail 'configure_dev.bat failed' }
     }
     & $env:ComSpec /c "`"$repo\build_runtime.bat`" 2>&1"
-    if ($LASTEXITCODE -ne 0) { Fail "build falhou: veja $rt\logs\build_dev.log" }
+    if ($LASTEXITCODE -ne 0) { Fail "build failed: see $rt\logs\build_dev.log" }
 }
-Step 'pronto'
-Write-Host "Jogar: run_live.bat -Auto 0   (ou tools\launcher\build.bat para o launcher)"
+Step 'done'
+Write-Host "To play: run_live.bat -Auto 0   (or tools\launcher\build.bat for the launcher)"

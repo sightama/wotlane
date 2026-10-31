@@ -1,9 +1,9 @@
-// wotm_mouse.hpp: mouse na camera moderna (etapa 7 da camera orbital, 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md). Dois lados:
-//  - janela (wotm_live.inc, a cada apresentacao): diz qual jogador o teclado alimenta, prende o cursor enquanto a orbita desse
-//    jogador esta dirigindo (e a janela tem o foco) e acumula o deslocamento do mouse;
-//  - thread do EE (wotm_orbit.inc, depois do Cameras::Update): consome o acumulado na orbita do jogador do teclado e avisa, a cada
-//    quadro em que ela dirige fora da pausa, que o cursor pode ficar preso. Sem aviso por ~150 ms (menus, pausa, modo foto, F7),
-//    a janela solta o cursor.
+// wotm_mouse.hpp: mouse for the modern camera (step 7 of the orbit camera, 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md). Two sides:
+//  - window (wotm_live.inc, on every present): says which player the keyboard feeds, captures the cursor while that player's orbit
+//    is steering (and the window has focus) and accumulates the mouse movement;
+//  - EE thread (wotm_orbit.inc, after Cameras::Update): feeds the accumulated movement into the keyboard player's orbit and signals,
+//    on every frame where the orbit steers outside the pause, that the cursor may stay captured. With no signal for ~150 ms (menus,
+//    pause, photo mode, F7), the window releases the cursor.
 #pragma once
 #include <atomic>
 #include <chrono>
@@ -14,31 +14,31 @@
 
 namespace wotm::mouse
 {
-inline std::atomic<int> g_kbPlayer{0};        // jogador (0..3) que o teclado alimenta; -1 = nenhum (janela escreve)
-inline std::atomic<int64_t> g_wantUntil{0};   // ms do relogio monotono ate quando o cursor pode ficar preso (EE escreve)
-inline std::atomic<bool> g_captured{false};   // cursor preso agora (janela escreve)
-inline std::atomic<int> g_wheel{0};          // passos da rodinha ainda nao usados (+ cima, - baixo; janela soma, teclado consome)
-// Troca de alvo pedida pelo teclado (etapa 8: Tab, R, rodinha), por jogador: +1 proximo, -1 anterior. O teclado (wotm_pad.inc) soma
-// na borda da tecla, o gancho do interpretInputs (wotm_overrides.cpp) consome com o alvo travado, qualquer que seja o lock-on
+inline std::atomic<int> g_kbPlayer{0};        // player (0..3) the keyboard feeds; -1 = none (window writes)
+inline std::atomic<int64_t> g_wantUntil{0};   // monotonic-clock ms until which the cursor may stay captured (EE writes)
+inline std::atomic<bool> g_captured{false};   // cursor captured right now (window writes)
+inline std::atomic<int> g_wheel{0};          // wheel steps not used yet (+ up, - down; window adds, keyboard consumes)
+// Target switch requested from the keyboard (step 8: Tab, R, wheel), per player: +1 next, -1 previous. The keyboard (wotm_pad.inc) adds
+// on the key's edge, the interpretInputs hook (wotm_overrides.cpp) consumes it while the target is locked, whatever the lock-on
 inline std::atomic<int> g_targetReq[4] = {};
 inline std::mutex g_m;
-inline float g_dx = 0.f, g_dy = 0.f;          // pixels acumulados desde o ultimo consumo (protegidos por g_m)
+inline float g_dx = 0.f, g_dy = 0.f;          // pixels accumulated since the last take (guarded by g_m)
 
 inline int64_t nowMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-// EE: a orbita do jogador do teclado dirige neste quadro
+// EE: the keyboard player's orbit is steering this frame
 inline void want() { g_wantUntil.store(nowMs() + 150, std::memory_order_relaxed); }
 inline bool wanted() { return nowMs() < g_wantUntil.load(std::memory_order_relaxed); }
-// Janela: deslocamento do quadro (so com o cursor preso)
+// Window: this frame's movement (only while the cursor is captured)
 inline void add(float dx, float dy)
 {
     std::lock_guard<std::mutex> lk(g_m);
     g_dx += dx;
     g_dy += dy;
 }
-// EE: o acumulado (zera)
+// EE: the accumulated movement (resets it)
 inline void take(float &dx, float &dy)
 {
     std::lock_guard<std::mutex> lk(g_m);
@@ -53,26 +53,26 @@ inline void clear()
 }
 } // namespace wotm::mouse
 
-// Mouse nos menus (etapa 9): com o cursor solto, a janela (wotm_pad.inc, pointerFrame) guarda onde ele esta no quadro nativo e conta
-// os cliques; quem desenha um menu nativo no telao (wotm_mainmenu.inc) acha o item sob ele e o gancho da tela, na thread do EE,
-// consome os cliques. Menu nativo com itens sob o mouse avisa (claim) que o clique esquerdo e dele; sem aviso, o clique esquerdo vale X
-// (confirma o item escolhido) nas telas do jogo.
+// Mouse in menus (step 9): with the cursor released, the window (wotm_pad.inc, pointerFrame) records where it is in the native frame and
+// counts the clicks; whoever draws a native menu on the big screen (wotm_mainmenu.inc) finds the item under it, and the screen's hook, on
+// the EE thread, consumes the clicks. A native menu with items under the mouse signals (claim) that the left click is its own; without
+// that, the left click acts as X (confirms the selected item) on the game's screens.
 namespace wotm::mouse
 {
 struct Pointer
 {
-    float x = -1.f, y = -1.f;   // no quadro nativo (RW x RH), so com o cursor solto e dentro dele
+    float x = -1.f, y = -1.f;   // in the native frame (RW x RH), only with the cursor released and inside it
     int rw = 0, rh = 0;
     bool in = false;
 };
-inline Pointer g_ptr;                          // so a thread da janela
-inline std::atomic<uint32_t> g_moveSeq{0};     // sobe a cada quadro em que o cursor solto andou (o EE so escolhe pelo mouse depois disso)
-inline std::atomic<int64_t> g_clickL{0}, g_clickR{0};   // hora (ms) do ultimo clique nao consumido (cursor solto), 0 = nenhum
+inline Pointer g_ptr;                          // window thread only
+inline std::atomic<uint32_t> g_moveSeq{0};     // goes up on every frame the released cursor moved (the EE only selects by mouse after that)
+inline std::atomic<int64_t> g_clickL{0}, g_clickR{0};   // time (ms) of the last unconsumed click (released cursor), 0 = none
 inline std::atomic<int64_t> g_claimUntil{0};
 inline void claim() { g_claimUntil.store(nowMs() + 150, std::memory_order_relaxed); }
 inline bool claimed() { return nowMs() < g_claimUntil.load(std::memory_order_relaxed); }
 inline void click(std::atomic<int64_t> &c) { c.store(nowMs(), std::memory_order_relaxed); }
-// Clique de ate 300 ms atras (um antigo, de fora dos menus, nao vale)
+// A click from at most 300 ms ago (an old one, from outside the menus, doesn't count)
 inline bool takeClick(std::atomic<int64_t> &c)
 {
     const int64_t t = c.exchange(0, std::memory_order_relaxed);
@@ -80,8 +80,8 @@ inline bool takeClick(std::atomic<int64_t> &c)
 }
 } // namespace wotm::mouse
 
-// O ponteiro para a thread do EE (as telas do jogo sabem onde escrevem o texto, em unidades da tela do PS2): x, y no quadro nativo
-// (bits de float empacotados) e o tamanho dele; 0 = fora do quadro ou cursor preso
+// The pointer for the EE thread (the game's screens know where they write their text, in PS2 screen units): x, y in the native frame
+// (packed float bits) and the frame's size; 0 = outside the frame or cursor captured
 namespace wotm::mouse
 {
 inline std::atomic<uint64_t> g_ptrXY{0};
@@ -106,22 +106,22 @@ inline bool pointer(float &x, float &y, int &rw, int &rh)
     rh = int(wh & 0xFFFF);
     return rw > 0 && rh > 0;
 }
-// Menu do jogo com itens sob o mouse (pausa e outras telas do jogo): o EE pede um X por algumas leituras do pad (clique num item)
+// Game menu with items under the mouse (pause and other game screens): the EE asks for an X for a few pad reads (a click on an item)
 inline std::atomic<int> g_crossReq{0};
-// O pedido vale por pouco tempo: o jogo costuma agir ja na primeira leitura (o QUIT da pausa sai da fase), e a segunda, sem menu com
-// mouse durante a carga, ficava pendurada ate o menu principal, onde virava um X no item sob o cursor
+// The request only lasts a short time: the game usually acts on the first read already (the pause's QUIT leaves the stage), and the
+// second one, with no mouse menu during the load, used to hang around until the main menu, where it became an X on the item under the cursor
 inline std::atomic<int64_t> g_crossReqUntil{0};
 inline void requestCross(int reads)
 {
     g_crossReqUntil.store(nowMs() + 200, std::memory_order_relaxed);
     g_crossReq.store(reads, std::memory_order_relaxed);
 }
-inline std::atomic<int64_t> g_gameMenuUntil{0};   // ate quando (ms) a tela do jogo com mouse esta aberta (a pausa nao e menu do shell)
+inline std::atomic<int64_t> g_gameMenuUntil{0};   // until when (ms) the game screen with mouse is open (the pause is not a shell menu)
 inline void gameMenu() { g_gameMenuUntil.store(nowMs() + 150, std::memory_order_relaxed); }
 inline bool inGameMenu() { return nowMs() < g_gameMenuUntil.load(std::memory_order_relaxed); }
 
-// Telas do jogo que andam para os lados (fase, numero de CPUs, minigame, unlocks): o EE avisa e o teclado (wotm_pad.inc) manda Q/E como
-// esquerda/direita; com `wheel`, a rodinha tambem (senao ela continua cima/baixo)
+// Game screens that move sideways (stage, number of CPUs, minigame, unlocks): the EE signals and the keyboard (wotm_pad.inc) sends Q/E as
+// left/right; with `wheel`, the wheel too (otherwise it stays up/down)
 inline std::atomic<int64_t> g_sideUntil{0};
 inline std::atomic<bool> g_sideWheel{false};
 inline void sideScreen(bool wheel)
@@ -130,7 +130,7 @@ inline void sideScreen(bool wheel)
     g_sideUntil.store(nowMs() + 150, std::memory_order_relaxed);
 }
 inline bool sideActive() { return nowMs() < g_sideUntil.load(std::memory_order_relaxed); }
-// Lista de saves aberta (EE, wotm_save.inc): 1 carregar, 2 gravar, 3 confirmar a troca; a janela poe a legenda de baixo
+// Save list open (EE, wotm_save.inc): 1 load, 2 save, 3 confirm overwrite; the window puts up the caption at the bottom
 inline std::atomic<int64_t> g_saveListUntil{0};
 inline std::atomic<int> g_saveListMode{0};
 inline void saveList(int mode)
@@ -139,7 +139,7 @@ inline void saveList(int mode)
     g_saveListUntil.store(nowMs() + 150, std::memory_order_relaxed);
 }
 inline int saveListMode() { return nowMs() < g_saveListUntil.load(std::memory_order_relaxed) ? g_saveListMode.load(std::memory_order_relaxed) : 0; }
-// Nome do botao de confirmar no dispositivo de agora ("ENTER", "A", "CROSS"...), para o texto do jogo (a janela escreve)
+// Name of the confirm button on the current device ("ENTER", "A", "CROSS"...), for the game's text (the window writes it)
 inline std::mutex g_lblM;
 inline std::string g_confirmLabel = "X";
 inline std::string confirmLabel()
@@ -149,7 +149,7 @@ inline std::string confirmLabel()
 }
 } // namespace wotm::mouse
 
-// O ponteiro em unidades da tela do PS2 (640 x 224, as do texto do jogo), publicado pela janela junto da apresentacao
+// The pointer in PS2 screen units (640 x 224, the units of the game's text), published by the window along with the present
 namespace wotm::mouse
 {
 inline std::atomic<uint64_t> g_gsXY{0};

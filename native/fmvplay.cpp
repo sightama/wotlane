@@ -1,11 +1,11 @@
-// Tocador standalone dos filmes (.PSS) com o mesmo codigo do runtime (wotm_fmv.hpp). Serve para conferir imagem, som e proporcao
-// sem o jogo:
-//   fmvplay disc/MOV/INTRO_M.PSS                     toca na janela (Espaco pausa, Esc sai)
-//   fmvplay arquivo.pss --shot q.png --at 5          relogio fixo de 60 Hz (sem tempo real): grava o quadro de 5 s e sai
-//   fmvplay arquivo.pss --wav som.wav --fast         decodifica tudo o mais rapido possivel e grava o audio em WAV
-//   fmvplay mov/intro_m.pss --iso jogo.iso           le o filme de dentro da ISO (como o runtime com PS2X_CD_IMAGE)
-//   fmvplay arquivo.pss --frame 150 --shot q.png     grava os pixels decodificados do quadro 150
-// Imprime no stderr: tamanho, proporcao de exibicao, quadros mostrados e amostras de audio.
+// Standalone player for the movies (.PSS) using the same code as the runtime (wotm_fmv.hpp). For checking picture, sound and aspect
+// ratio without the game:
+//   fmvplay disc/MOV/INTRO_M.PSS                     plays in the window (Space pauses, Esc quits)
+//   fmvplay file.pss --shot q.png --at 5             fixed 60 Hz clock (not real time): writes the frame at 5 s and exits
+//   fmvplay file.pss --wav sound.wav --fast          decodes everything as fast as possible and writes the audio to WAV
+//   fmvplay mov/intro_m.pss --iso game.iso           reads the movie from inside the ISO (like the runtime with PS2X_CD_IMAGE)
+//   fmvplay file.pss --frame 150 --shot q.png        writes the decoded pixels of frame 150
+// Prints to stderr: size, display aspect ratio, frames shown and audio samples.
 #include <cstdlib>
 #include <string>
 
@@ -25,13 +25,13 @@ static void writeWav(const std::string &path, const std::vector<int16_t> &s, uin
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "uso: fmvplay arquivo.pss [--shot saida.png --at segundos] [--wav saida.wav] [--fast] [--mute]\n");
+        std::fprintf(stderr, "usage: fmvplay file.pss [--shot out.png --at seconds] [--wav out.wav] [--fast] [--mute]\n");
         return 1;
     }
-    std::string shot, wav, iso;   // --iso imagem.iso: o primeiro argumento e o caminho dentro dela (mov/intro_m.pss)
+    std::string shot, wav, iso;   // --iso image.iso: the first argument is the path inside it (mov/intro_m.pss)
     double at = 1.0;
     bool fast = false, mute = false;
-    long frameN = -1;   // --frame N: grava os pixels decodificados do quadro N (contado do 0) em --shot, sem passar pela janela
+    long frameN = -1;   // --frame N: writes the decoded pixels of frame N (counting from 0) to --shot, bypassing the window
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--shot" && i + 1 < argc) shot = argv[++i];
@@ -56,7 +56,7 @@ int main(int argc, char **argv) {
     if (!wav.empty()) m.audioTap = &tap;
     const wotm::fmv::Source src = iso.empty() ? wotm::fmv::Source{argv[1]} : wotm::fmv::isoFind(iso, wotm::fmv::discRelative(argv[1]));
     if (!src.ok() || !m.open(src, true)) {
-        std::fprintf(stderr, "nao abriu %s\n", argv[1]);
+        std::fprintf(stderr, "failed to open %s\n", argv[1]);
         CloseWindow();
         return 1;
     }
@@ -78,10 +78,10 @@ int main(int argc, char **argv) {
             const float k = std::min(sw / a, sh);
             DrawTexturePro(m.tex, Rectangle{0, 0, float(m.w), float(m.h)}, Rectangle{(sw - k * a) * 0.5f, (sh - k) * 0.5f, k * a, k}, Vector2{0, 0}, 0.f, WHITE);
         }
-        if (!fixedClock) DrawText(TextFormat("%.1f s  %dx%d  aspecto %.3f", clock, m.w, m.h, m.aspect), 10, 10, 20, YELLOW);
+        if (!fixedClock) DrawText(TextFormat("%.1f s  %dx%d  aspect %.3f", clock, m.w, m.h, m.aspect), 10, 10, 20, YELLOW);
         EndDrawing();
         ++draws;
-        // grava os pixels decodificados (o TakeScreenshot de uma janela oculta pode ler o buffer errado depois da troca)
+        // writes the decoded pixels (TakeScreenshot on a hidden window can read the wrong buffer after the swap)
         const bool hit = frameN >= 0 ? m.shownFrames() == frameN + 1 : clock >= at;
         if (!shot.empty() && !shotDone && hit && m.hasFrame) {
             const wotm::fmv::Frame &f = m.current();
@@ -92,8 +92,8 @@ int main(int argc, char **argv) {
         }
         if (!ok) break;
     }
-    std::fprintf(stderr, "%s: %dx%d aspecto %.3f, %.2f s, %ld desenhos, audio %zu amostras (%.2f s)%s\n", argv[1], m.w, m.h, m.aspect, clock, draws,
-                 tap.size() / 2, tap.size() / 2 / 48000.0, ok ? "" : ", fim do filme");
+    std::fprintf(stderr, "%s: %dx%d aspect %.3f, %.2f s, %ld draws, audio %zu samples (%.2f s)%s\n", argv[1], m.w, m.h, m.aspect, clock, draws,
+                 tap.size() / 2, tap.size() / 2 / 48000.0, ok ? "" : ", end of movie");
     if (!wav.empty()) writeWav(wav, tap, 48000);
     m.close();
     if (!fixedClock && !mute) CloseAudioDevice();

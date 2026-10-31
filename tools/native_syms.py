@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Simbolos do ELF para a camada nativa: gera native/wotm_syms.h e troca enderecos crus por nomes.
+"""ELF symbols for the native layer: generates native/wotm_syms.h and replaces raw addresses with names.
 
-  python tools/native_syms.py --gen            grava native/wotm_syms.h (wotm::sym::<dado>, wotm::fn::<funcao>) a partir de
-                                               symbol_addrs.txt (+ symbol_addrs_manual.txt, se existir)
+  python tools/native_syms.py --gen            writes native/wotm_syms.h (wotm::sym::<data>, wotm::fn::<function>) from
+                                               symbol_addrs.txt (+ symbol_addrs_manual.txt, if present)
   python tools/native_syms.py --nm <nm.txt> <out.h>
-                                               mesmo header, com os enderecos de outro ELF (saida de `nm` dele): o runtime cobaia
-                                               (build_dev_nm) o recebe como wotm_syms_nm.h, que o wotm_syms.h usa no lugar dos
-                                               enderecos retail quando esta no caminho de include
-  python tools/native_syms.py --audit         lista os literais hex de native/ que batem com um simbolo (exato), caem dentro de um
-                                               (offset) ou nao casam; nao altera nada
-  python tools/native_syms.py --apply [arq..]  troca, nos arquivos dados (padrao: todos de native/), cada literal que e exatamente o
-                                               endereco de um simbolo por wotm::sym::<nome> / wotm::fn::<nome>; os de offset ficam
-                                               (sao campos de struct: o nome certo e o do header de tipos, nao do simbolo)
+                                               the same header, with the addresses of another ELF (its `nm` output): the guinea
+                                               pig runtime (build_dev_nm) gets it as wotm_syms_nm.h, which wotm_syms.h uses
+                                               instead of the retail addresses when it is on the include path
+  python tools/native_syms.py --audit         lists the hex literals in native/ that match a symbol (exact), fall inside one
+                                               (offset) or match nothing; changes nothing
+  python tools/native_syms.py --apply [file..] in the given files (default: all of native/), replaces each literal that is exactly
+                                               a symbol's address with wotm::sym::<name> / wotm::fn::<name>; offset ones stay
+                                               (they are struct fields: the right name is the one from the types header, not the symbol)
 
-O nome vira identificador C++: '$' e '.' viram '_', nome que comeca com digito ganha '_' na frente; colisao ganha o endereco no fim.
-Enderecos considerados: 0x100000..0x2000000 (RAM do jogo), com 5 a 8 digitos hex e sufixo u/U opcional, como token isolado.
+A name becomes a C++ identifier: '$' and '.' become '_', a name starting with a digit gets '_' in front; a collision gets the
+address appended. Addresses considered: 0x100000..0x2000000 (game RAM), 5 to 8 hex digits with an optional u/U suffix, as a
+standalone token.
 """
 import os
 import re
@@ -30,7 +31,7 @@ LO, HI = 0x100000, 0x2000000
 
 
 def load_symbols():
-    """[(name, addr, is_func, size)], ordenado por endereco."""
+    """[(name, addr, is_func, size)], sorted by address."""
     out = []
     for path in SYM_FILES:
         if not os.path.exists(path):
@@ -54,7 +55,7 @@ RESERVED = {"errno", "stdin", "stdout", "stderr", "assert", "EOF", "NULL", "min"
 
 
 def ident(name):
-    """Identificador C++ sem bater em macro/nome reservado do MSVC (_errno, ___mb_cur_max_func, errno...): esses ganham 'x' na frente."""
+    """C++ identifier that doesn't clash with an MSVC macro/reserved name (_errno, ___mb_cur_max_func, errno...): those get an 'x' in front."""
     s = re.sub(r"[$.]", "_", name)
     if s[0].isdigit():
         s = "x" + s
@@ -64,7 +65,7 @@ def ident(name):
 
 
 def unique_idents(symbols):
-    """{(name, addr): ident} sem colisao dentro de cada namespace (dados / funcoes)."""
+    """{(name, addr): ident} with no collisions within each namespace (data / functions)."""
     seen = {True: {}, False: {}}
     out = {}
     for name, addr, is_func, _ in symbols:
@@ -78,16 +79,16 @@ def unique_idents(symbols):
     return out
 
 
-def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do ELF retail)", remap=None):
-    """remap = {(name, addr retail): addr no outro ELF}: mesmos identificadores do header retail, enderecos do outro ELF."""
+def gen(symbols, header=HEADER, source="symbol_addrs.txt (the retail ELF's symbol table)", remap=None):
+    """remap = {(name, retail addr): addr in the other ELF}: same identifiers as the retail header, the other ELF's addresses."""
     idents = unique_idents(symbols)
     if remap is not None:
         idents = {(n, remap.get((n, a), a)): idents[(n, a)] for n, a, _, _ in symbols}
         symbols = [(n, remap.get((n, a), a), f, s) for n, a, f, s in symbols]
     lines = [
-        "// Gerado por tools/native_syms.py a partir de %s. Nao edite a mao." % source,
-        "// wotm::sym::<nome> = endereco de um dado (global, tabela, objeto); wotm::fn::<nome> = endereco de uma funcao (hooks).",
-        "// Os nomes sao os do ELF (mangling do gcc 2.95), com '$' e '.' trocados por '_'.",
+        "// Generated by tools/native_syms.py from %s. Do not edit by hand." % source,
+        "// wotm::sym::<name> = address of a piece of data (global, table, object); wotm::fn::<name> = address of a function (hooks).",
+        "// The names are the ELF's (gcc 2.95 mangling), with '$' and '.' replaced by '_'.",
         "#pragma once",
         "#include <cstdint>",
         "",
@@ -95,10 +96,10 @@ def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do 
         "namespace sym {",
     ]
     if remap is None:
-        # o runtime cobaia (build_dev_nm) traz no caminho de include um wotm_syms_nm.h com os enderecos do ELF nmall
+        # the guinea pig runtime (build_dev_nm) puts a wotm_syms_nm.h with the nmall ELF's addresses on the include path
         lines[4:4] = ["#if __has_include(\"wotm_syms_nm.h\")", "#include \"wotm_syms_nm.h\"", "#else"]
     else:
-        lines.insert(4, "#define WOTM_SYMS_NM 1   // runtime cobaia: enderecos do ELF nmall")
+        lines.insert(4, "#define WOTM_SYMS_NM 1   // guinea pig runtime: addresses from the nmall ELF")
     for name, addr, is_func, size in symbols:
         if is_func:
             continue
@@ -109,10 +110,10 @@ def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do 
             continue
         lines.append("constexpr uint32_t %s = 0x%08X;%s" % (idents[(name, addr)], addr, ("   // size 0x%X" % size) if size else ""))
     lines += ["} // namespace fn", ""]
-    # Tabela dos dados por endereco, para dar nome a um endereco em tempo de execucao (inventario da checagem VU1 x nativo:
-    # "src dentro de fontPacket+0x40"). Entradas com tamanho; a busca acha a ultima entrada que comeca antes do endereco.
+    # Table of data by address, to name an address at run time (the VU1 vs native check inventory:
+    # "src inside fontPacket+0x40"). Entries carry a size; the lookup finds the last entry starting before the address.
     lines += [
-        "// Dados por endereco (nome do ELF, sem troca de caracteres), para dar nome a um endereco: symtab::find(a).",
+        "// Data by address (the ELF name, with no characters replaced), to put a name to an address: symtab::find(a).",
         "namespace symtab {",
         "struct Entry { uint32_t addr, size; const char *name; };",
         "inline const Entry kData[] = {",
@@ -123,7 +124,7 @@ def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do 
     lines += [
         "};",
         "inline constexpr size_t kCount = sizeof(kData) / sizeof(kData[0]);",
-        "// Entrada que contem `a` (ou a ultima que comeca antes dele, quando nao tem tamanho); nullptr antes da primeira.",
+        "// The entry that contains `a` (or the last one starting before it, when it has no size); nullptr before the first one.",
         "inline const Entry *find(uint32_t a) {",
         "    size_t lo = 0, hi = kCount;",
         "    while (lo < hi) { const size_t mid = (lo + hi) / 2; if (kData[mid].addr <= a) lo = mid + 1; else hi = mid; }",
@@ -138,11 +139,11 @@ def gen(symbols, header=HEADER, source="symbol_addrs.txt (tabela de simbolos do 
     with open(header, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
     nd = sum(1 for s in symbols if not s[2])
-    print("%s: %d dados, %d funcoes" % (header, nd, len(symbols) - nd))
+    print("%s: %d data, %d functions" % (header, nd, len(symbols) - nd))
 
 
 def nm_remap(symbols, nm_txt):
-    """Enderecos de outro ELF (saida do nm dele) por nome. Nome ausente ou ambiguo (estatico repetido) fica com o retail."""
+    """Addresses of another ELF (its nm output) by name. A missing or ambiguous name (a repeated static) keeps the retail one."""
     where = {}
     with open(nm_txt, encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -161,7 +162,7 @@ def nm_remap(symbols, nm_txt):
         else:
             remap[(name, addr)] = next(iter(got))
             moved += 1
-    print("%d simbolos mudaram de endereco, %d ausentes e %d ambiguos ficam com o retail" % (moved, missing, ambiguous))
+    print("%d symbols changed address, %d missing and %d ambiguous keep the retail one" % (moved, missing, ambiguous))
     return remap
 
 
@@ -176,12 +177,12 @@ def native_files():
 
 
 def classify(symbols):
-    """addr -> (kind, name, is_func, offset): exato, dentro ou None."""
+    """addr -> (kind, name, is_func, offset): "exato" (exact), "dentro" (inside) or None."""
     import bisect
     addrs = [s[1] for s in symbols]
     exact = {}
     for name, addr, is_func, size in symbols:
-        exact.setdefault(addr, (name, is_func))   # o primeiro nome no endereco (ha aliases)
+        exact.setdefault(addr, (name, is_func))   # the first name at the address (there are aliases)
 
     def look(a):
         if a in exact:
@@ -219,7 +220,7 @@ def audit(symbols, files):
             ex = sum(1 for r in rows if r[0] == "exato")
             de = sum(1 for r in rows if r[0] == "dentro")
             ne = sum(1 for r in rows if r[0] == "nenhum")
-            print("%s: %d literais (%d exatos, %d dentro de simbolo, %d sem simbolo)" % (rel, len(rows), ex, de, ne))
+            print("%s: %d literals (%d exact, %d inside a symbol, %d without a symbol)" % (rel, len(rows), ex, de, ne))
             seen = set()
             for kind, a, name, off in rows:
                 if kind == "exato" and a not in seen:
@@ -229,13 +230,13 @@ def audit(symbols, files):
             for kind, a, name, off in rows:
                 if kind == "dentro" and a not in seen:
                     seen.add(a)
-                    print("   0x%06X dentro de %s %s" % (a, name, off))
+                    print("   0x%06X inside %s %s" % (a, name, off))
             seen = set()
             for kind, a, name, off in rows:
                 if kind == "nenhum" and a not in seen:
                     seen.add(a)
-                    print("   0x%06X sem simbolo" % a)
-    print("total: %d exatos, %d dentro de simbolo, %d sem simbolo" % (tot["exato"], tot["dentro"], tot["nenhum"]))
+                    print("   0x%06X no symbol" % a)
+    print("total: %d exact, %d inside a symbol, %d without a symbol" % (tot["exato"], tot["dentro"], tot["nenhum"]))
 
 
 def apply(symbols, files):
@@ -258,7 +259,7 @@ def apply(symbols, files):
             name, is_func = by_addr[a]
             n += 1
             return "wotm::%s::%s" % ("fn" if is_func else "sym", idents[(name, a)])
-        # so no codigo: o que vem depois de "//" numa linha fica como esta (comentarios citam enderecos de proposito)
+        # code only: whatever follows "//" on a line stays as is (comments cite addresses on purpose)
         out_lines = []
         for line in text.split("\n"):
             cut = line.find("//")
@@ -266,14 +267,14 @@ def apply(symbols, files):
             out_lines.append(LITERAL.sub(sub, code) + rest)
         new = "\n".join(out_lines)
         if n and '#include "wotm_syms.h"' not in new:
-            # cada arquivo que usa os nomes inclui o header por conta propria (os .hpp sao incluidos em ordens diferentes)
-            inc = '#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)\n'
+            # every file that uses the names includes the header itself (the .hpp files are included in different orders)
+            inc = '#include "wotm_syms.h"   // wotm::sym / wotm::fn: ELF addresses by name (tools/native_syms.py --gen)\n'
             m = re.search(r"^#pragma once[^\n]*\n|^#include[^\n]*\n", new, re.M)
             new = (new[:m.end()] + inc + new[m.end():]) if m else (inc + new)
         if n:
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(new)
-            print("%s: %d literais trocados" % (os.path.relpath(path, ROOT), n))
+            print("%s: %d literals replaced" % (os.path.relpath(path, ROOT), n))
             total += n
     print("total: %d" % total)
 
@@ -281,12 +282,12 @@ def apply(symbols, files):
 def main(argv):
     symbols = load_symbols()
     if not symbols:
-        print("symbol_addrs.txt vazio ou ausente (gere com configure.py --split)")
+        print("symbol_addrs.txt empty or missing (generate it with configure.py --split)")
         return 1
     if "--nm" in argv:
         i = argv.index("--nm")
         nm_txt, out = argv[i + 1], argv[i + 2]
-        gen(symbols, out, "symbol_addrs.txt com os enderecos de %s (ELF nmall, runtime cobaia)" % os.path.basename(nm_txt),
+        gen(symbols, out, "symbol_addrs.txt with the addresses from %s (nmall ELF, guinea pig runtime)" % os.path.basename(nm_txt),
             nm_remap(symbols, nm_txt))
         return 0
     if "--gen" in argv:

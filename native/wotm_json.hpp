@@ -1,6 +1,6 @@
-// JSON minimo (objeto, array, string, numero inteiro, booleano, null) para os arquivos que o port deixa legiveis: o save
-// (wotm_save.inc) e, depois, o que os mods precisarem. Guarda a ordem das chaves e as chaves que o codigo nao conhece, para que
-// reescrever um arquivo nao apague o que um mod pos nele. Numeros com fracao sao lidos e truncados (o save so tem inteiros).
+// Minimal JSON (object, array, string, integer, boolean, null) for the files the port keeps human-readable: the save
+// (wotm_save.inc) and, later, whatever mods need. Keeps the key order and the keys the code doesn't know about, so that
+// rewriting a file doesn't erase what a mod put in it. Numbers with a fraction are read and truncated (the save only has integers).
 #pragma once
 
 #include <cstdint>
@@ -36,7 +36,7 @@ namespace wotm::json
                     return &kv.second;
             return nullptr;
         }
-        // Cria a chave no fim se faltar; transforma em objeto o que nao for.
+        // Creates the key at the end if missing; turns a non-object into an object.
         Value &at(const std::string &key)
         {
             if (type != Obj)
@@ -74,13 +74,13 @@ namespace wotm::json
             {
                 for (const char *q = w; *q; ++q, ++p)
                     if (p >= end || *p != *q)
-                        return fail("palavra invalida");
+                        return fail("invalid word");
                 return true;
             }
             bool str(std::string &out)
             {
                 if (p >= end || *p != '"')
-                    return fail("esperava string");
+                    return fail("expected string");
                 ++p;
                 while (p < end && *p != '"')
                 {
@@ -91,7 +91,7 @@ namespace wotm::json
                         continue;
                     }
                     if (p >= end)
-                        return fail("escape no fim");
+                        return fail("escape at end");
                     c = *p++;
                     switch (c)
                     {
@@ -103,7 +103,7 @@ namespace wotm::json
                     case 'u':
                     {
                         if (end - p < 4)
-                            return fail("\\u curto");
+                            return fail("\\u too short");
                         unsigned cp = 0;
                         for (int k = 0; k < 4; ++k)
                         {
@@ -129,17 +129,17 @@ namespace wotm::json
                     }
                 }
                 if (p >= end)
-                    return fail("string sem fim");
+                    return fail("unterminated string");
                 ++p;
                 return true;
             }
             bool value(Value &v, int depth)
             {
                 if (depth > 64)
-                    return fail("aninhamento demais");
+                    return fail("nested too deep");
                 ws();
                 if (p >= end)
-                    return fail("fim inesperado");
+                    return fail("unexpected end");
                 const char c = *p;
                 if (c == '{')
                 {
@@ -156,7 +156,7 @@ namespace wotm::json
                             return false;
                         ws();
                         if (p >= end || *p != ':')
-                            return fail("esperava ':'");
+                            return fail("expected ':'");
                         ++p;
                         Value child;
                         if (!value(child, depth + 1))
@@ -170,7 +170,7 @@ namespace wotm::json
                         }
                         if (p < end && *p == '}')
                             return ++p, true;
-                        return fail("esperava ',' ou '}'");
+                        return fail("expected ',' or '}'");
                     }
                 }
                 if (c == '[')
@@ -194,7 +194,7 @@ namespace wotm::json
                         }
                         if (p < end && *p == ']')
                             return ++p, true;
-                        return fail("esperava ',' ou ']'");
+                        return fail("expected ',' or ']'");
                     }
                 }
                 if (c == '"')
@@ -218,15 +218,15 @@ namespace wotm::json
                     while (p < end && *p >= '0' && *p <= '9')
                         n = n * 10 + (*p++ - '0'), any = true;
                     if (!any)
-                        return fail("numero invalido");
-                    if (p < end && *p == '.')   // fracao: lida e descartada
+                        return fail("invalid number");
+                    if (p < end && *p == '.')   // fraction: read and discarded
                         for (++p; p < end && *p >= '0' && *p <= '9'; ++p) {}
                     if (p < end && (*p == 'e' || *p == 'E'))
-                        return fail("expoente nao suportado");
+                        return fail("exponent not supported");
                     v = Value::integer(neg ? -n : n);
                     return true;
                 }
-                return fail("caractere inesperado");
+                return fail("unexpected character");
             }
         };
 
@@ -251,7 +251,7 @@ namespace wotm::json
             out += '"';
         }
 
-        // Array so de escalares fica numa linha (os 4 trajes, os 2 controles); o resto, um item por linha.
+        // An array of scalars only goes on one line (the 4 costumes, the 2 pads); everything else gets one item per line.
         inline bool flat(const Value &v)
         {
             if (v.type != Value::Arr)
@@ -314,11 +314,11 @@ namespace wotm::json
         }
     }
 
-    // false com `err` preenchido se o texto nao for JSON valido (inclusive lixo depois do valor).
+    // false with `err` filled in if the text isn't valid JSON (including garbage after the value).
     inline bool parse(const std::string &text, Value &out, std::string *err = nullptr)
     {
         detail::Parser ps{text.data(), text.data() + text.size(), {}};
-        // BOM do UTF-8 (o Bloco de Notas pode gravar)
+        // UTF-8 BOM (Notepad may write one)
         if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB &&
             static_cast<unsigned char>(text[2]) == 0xBF)
             ps.p += 3;
@@ -327,14 +327,14 @@ namespace wotm::json
         {
             ps.ws();
             if (ps.p != ps.end)
-                ok = ps.fail("lixo depois do valor");
+                ok = ps.fail("garbage after the value");
         }
         if (!ok && err)
         {
             int line = 1;
             for (const char *q = text.data(); q < ps.p && q < ps.end; ++q)
                 line += *q == '\n';
-            *err = ps.err + " (linha " + std::to_string(line) + ")";
+            *err = ps.err + " (line " + std::to_string(line) + ")";
         }
         return ok;
     }

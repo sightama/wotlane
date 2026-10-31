@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
-"""Pose de um monstro do WotM direto do disco, sem o jogo: avalia uma animacao (curvas) e monta as matrizes das partes
-(ANIM_XFORM), o esqueleto e a paleta de ossos das malhas skinned, como o jogo faz na travessia. Formato em docs/FORMATOS.md
-("Animacao") e docs/passos/MODELOS_3D.md.
+"""Poses a WotM monster straight from the disc, without the game: evaluates an animation (curves) and builds the part
+matrices (ANIM_XFORM), the skeleton and the bone palette for the skinned meshes, the way the game does during the hierarchy
+walk. Format in docs/FORMATOS.md ("Animacao") and docs/passos/MODELOS_3D.md.
 
-  python tools/pose.py disc/MON/MONKEY0.NGP --list                      # animacoes do monstro (id, quadros, canais)
-  python tools/pose.py disc/MON/MONKEY0.NGP saida.glb                   # pose do idle (animacao 90) no quadro 0
-  python tools/pose.py disc/MON/MONKEY0.NGP saida.glb --anim 90 --frame 12
-  python tools/pose.py disc/MON/MONKEY0.NGP saida.glb --rest            # pose de base (sem animacao)
+  python tools/pose.py disc/MON/MONKEY0.NGP --list                      # the monster's animations (id, frames, channels)
+  python tools/pose.py disc/MON/MONKEY0.NGP out.glb                     # idle pose (animation 90) at frame 0
+  python tools/pose.py disc/MON/MONKEY0.NGP out.glb --anim 90 --frame 12
+  python tools/pose.py disc/MON/MONKEY0.NGP out.glb --rest              # bind pose (no animation)
 
-Como o jogo faz (conferido contra dumps de RAM de luta em 2026-10-20):
-- O .NGP do monstro vem pre-ligado para 0xA00000: lido nessa base, os ponteiros valem sem o .PTR (o .PTR so os desloca para
-  onde o jogo carregou). Raiz 0 = o monstro (GROUP com o id do monstro); o ANIMATION_MGR lista as instancias de personagem.
-- Animacao `id` = `character->animations[k]` com `head.id1 == id`; o Monster guarda a k-esima como m_anims[id] (0..299,
-  Monster::initAfterDbLoad). Idle base = 90 (StateIdle::chooseBaseIdle: 0x5A; 0x5F cansado, 0x60 com especial).
-- Cada curva escreve um canal val[dataIdx] (tools/animcurve.py). ANIM_XFORM: rotacao = -val dos canais rX/rY/rZ (os sem
-  canal ficam com o valor do no), matriz PRH (mathfRotMatrixPRH = o microprograma 0x4D0 do VU0), pre/postRot,
-  translacao; ANIM_SCALE le val direto.
-- Esqueleto: SKEL_BONE empilha o osso (e, se for raiz, uma matriz identidade); o proximo no de transformacao (ANIM_XFORM,
-  TRANSLATE, ROTATE) desempilha: acumula `local * pai` na pilha de matrizes e grava paleta[osso.skelOutputMatIdx] =
-  restPoseInv(osso) * acumulada. A paleta fica nos blocos apontados por animMatrixPtr; o OBJECT skinned acha o seu pela
-  cadeia animPktPtr[packetPtrIdx] (Scene::palette do nativo) e cada vertice mistura ate 3 ossos (Scene::skinVertex).
-- Nao reproduz: molas do pelo (BoneSpring, ficam na pose da animacao), olhar/cabeca procedural e camadas de mistura.
+How the game does it (checked against RAM dumps taken during a fight on 2026-10-20):
+- The monster .NGP comes prelinked to 0xA00000: read at that base, the pointers are valid without the .PTR (the .PTR only
+  relocates them to wherever the game loaded the file). Root 0 = the monster (a GROUP with the monster's id); the
+  ANIMATION_MGR lists the character instances.
+- Animation `id` = `character->animations[k]` with `head.id1 == id`; Monster stores the k-th one as m_anims[id] (0..299,
+  Monster::initAfterDbLoad). Base idle = 90 (StateIdle::chooseBaseIdle: 0x5A; 0x5F when tired, 0x60 with a special).
+- Each curve writes one channel val[dataIdx] (tools/animcurve.py). ANIM_XFORM: rotation = -val of the rX/rY/rZ channels (the
+  ones without a channel keep the node's value), PRH matrix (mathfRotMatrixPRH = VU0 microprogram 0x4D0), pre/postRot,
+  translation; ANIM_SCALE reads val directly.
+- Skeleton: SKEL_BONE pushes the bone (and, if it is a root, an identity matrix); the next transform node (ANIM_XFORM,
+  TRANSLATE, ROTATE) pops it: it accumulates `local * parent` on the matrix stack and writes palette[bone.skelOutputMatIdx] =
+  restPoseInv(bone) * accumulated. The palette lives in the blocks pointed to by animMatrixPtr; a skinned OBJECT finds its
+  own through the chain animPktPtr[packetPtrIdx] (the native layer's Scene::palette) and each vertex blends up to 3 bones
+  (Scene::skinVertex).
+- Not reproduced: fur springs (BoneSpring; they stay in the animation's pose), procedural look-at/head and blend layers.
 """
 import math
 import os
@@ -57,7 +59,7 @@ def scale(x, y, z):
 
 
 class CharCtx:
-    """Estado de animacao de uma instancia de personagem durante a travessia."""
+    """Animation state of one character instance during the hierarchy walk."""
 
     def __init__(self, img, ci):
         self.img, self.ci = img, ci
@@ -66,8 +68,8 @@ class CharCtx:
         vp = img.u32(ci + 4)
         self.val = [img.f32(vp + 4 * i) if img.ok(vp + 4 * i) else 0.0 for i in range(self.nch)]
         self.dirty = set()
-        self.pal = {}      # endereco da matriz na paleta -> matriz
-        self.bones = {}    # saida do osso (skelOutputMatIdx) -> (no SKEL_BONE, matriz acumulada, saida do osso pai ou None)
+        self.pal = {}      # address of the matrix in the palette -> matrix
+        self.bones = {}    # bone output (skelOutputMatIdx) -> (SKEL_BONE node, accumulated matrix, parent bone's output or None)
         amp = img.u32(ci + 0x14)
         self.outAddr = {}
         if img.ok(amp):
@@ -85,8 +87,8 @@ class CharCtx:
 
 
 class Item(tuple):
-    """(OBJECT, matriz, CharCtx) de pose(), com o estado do GS herdado na travessia (gs: blend = ALPHA_1, aref = limiar do
-    teste de alfa ou -1, zmsk, ztst) e o deslocamento do UV (uv), como o Item do native/wotm_model.hpp."""
+    """(OBJECT, matrix, CharCtx) from pose(), with the GS state inherited during the walk (gs: blend = ALPHA_1, aref = alpha
+    test threshold or -1, zmsk, ztst) and the UV offset (uv), like the Item in native/wotm_model.hpp."""
 
     def __new__(cls, node, m, ctx, gs, uv):
         it = tuple.__new__(cls, (node, m, ctx))
@@ -95,18 +97,18 @@ class Item(tuple):
 
 
 class PoseList(list):
-    """Lista de Item de pose(), com os nos de efeito percorridos: emitters = [(no op 22, matriz do pai)] (emissores de
-    particula, como o fogo do Agamo) e lights = [(no op 5, matriz do pai)] (HierLight, com lens flare), como o visited_ do
-    native/wotm_model.hpp. Um no so e percorrido quando o canal de visibilidade dos ANIM_XFORM acima dele vale 1."""
+    """List of Items from pose(), plus the effect nodes visited: emitters = [(op 22 node, parent matrix)] (particle
+    emitters, like Agamo's fire) and lights = [(op 5 node, parent matrix)] (HierLight, with lens flare), like visited_ in
+    native/wotm_model.hpp. A node is only visited when the visibility channel of the ANIM_XFORMs above it is 1."""
     emitters = ()
     lights = ()
 
 
-GS_DEFAULT = (0x44, -1, False, 2)   # ctxDef do jogo: ALPHA_1 0x44, sem teste de alfa, grava Z, teste de Z normal
+GS_DEFAULT = (0x44, -1, False, 2)   # the game's ctxDef: ALPHA_1 0x44, no alpha test, Z write on, normal Z test
 
 
 def gs_apply(img, gs, ctxp):
-    """Estado do GS depois do pacote A+D do ctx de um no (Scene::groupState; GsState::apply do nativo)."""
+    """GS state after a node's ctx A+D packet (Scene::groupState; the native layer's GsState::apply)."""
     ctxp &= 0x0FFFFFFF
     if not ctxp or not img.ok(ctxp, 0x20) or img.u32(ctxp + 0x14) != 0x10000000 or img.u32(ctxp + 0x18) != 0xE:
         return gs
@@ -128,9 +130,9 @@ def gs_apply(img, gs, ctxp):
 
 
 class Model:
-    """Monstro (raiz 0 do .NGP) ou, com parts, um modelo montado de pecas de uma fase (chefes): parts = [(no, matriz de
-    posicao)] percorridas como raizes, main = a instancia de personagem que a animacao escolhida move. switch_on: SWITCHes
-    forcados no filho 1 (o que o jogo liga na luta, ex. hierSetSwitch das cabecas da planta)."""
+    """A monster (root 0 of the .NGP) or, with parts, a model assembled from pieces of a stage (bosses): parts = [(node,
+    placement matrix)] walked as roots, main = the character instance the chosen animation moves. switch_on: SWITCHes forced
+    to child 1 (what the game turns on during the fight, e.g. hierSetSwitch on the plant's heads)."""
 
     def __init__(self, ngp_path, parts=None, main=None, switch_on=()):
         self.img = ngp.Image.load(ngp_path)
@@ -141,11 +143,11 @@ class Model:
         for n, _m in self.parts:
             self._find(n, 0)
         if not self.cis:
-            raise ValueError("%s: sem CHAR_INSTANCE na raiz 0" % ngp_path)
+            raise ValueError("%s: no CHAR_INSTANCE under root 0" % ngp_path)
         self.main = main or max(self.cis, key=lambda c: self.img.u16(self.img.u32(c + 0x20)))
 
     def _find(self, n, depth):
-        """CHAR_INSTANCEs alcancaveis da raiz (para achar a principal)."""
+        """CHAR_INSTANCEs reachable from the root (to find the main one)."""
         img = self.img
         if depth > 80 or not img.ok(n):
             return
@@ -170,7 +172,7 @@ class Model:
         return []
 
     def apply_anim(self, ctx, k, frame):
-        """Escreve no ctx os canais da animacao de indice k no quadro frame (a partir do inicio, em laco)."""
+        """Writes into ctx the channels of animation index k at frame `frame` (counted from the start, looping)."""
         img = self.img
         ch = img.u32(ctx.ci + 0x20)
         if not 0 <= k < img.u16(ch):
@@ -187,7 +189,7 @@ class Model:
                 ctx.dirty.add(cv.idx)
 
     def anims(self, ci=None):
-        """[(id, indice, quadro inicial, quadro final, canais)] da instancia."""
+        """[(id, index, start frame, end frame, channels)] of the instance."""
         img = self.img
         ci = ci or self.main
         ch = img.u32(ci + 0x20)
@@ -198,16 +200,16 @@ class Model:
         return out
 
     def find_anim(self, anim_id, ci=None, k=None):
-        """Animacao pelo id ou, com k, pelo indice na tabela (ids se repetem: o 0 aparece duas vezes no Togera)."""
+        """Animation by id or, with k, by its index in the table (ids can repeat: 0 appears twice in Togera)."""
         for a in self.anims(ci):
             if (a[1] == k) if k is not None else (a[0] == anim_id):
                 return a
         return None
 
     def pose(self, anim_id=IDLE, frame=0.0, rest=False, k=None, assign=None):
-        """[Item (OBJECT, matriz 4x4 do objeto, CharCtx ou None) com .gs e .uv] na pose da animacao `anim_id` (ou de indice
-        k) no quadro `frame` (a partir do inicio; com laco). rest=True: sem animacao (valores guardados nos nos).
-        assign = {instancia: k}: cada instancia na sua animacao, no mesmo quadro (pecas de um chefe; no lugar de anim_id/k)."""
+        """[Item (OBJECT, the object's 4x4 matrix, CharCtx or None) with .gs and .uv] in the pose of animation `anim_id` (or
+        of index k) at frame `frame` (counted from the start; looping). rest=True: no animation (values stored in the nodes).
+        assign = {instance: k}: each instance in its own animation, at the same frame (a boss's pieces; replaces anim_id/k)."""
         img = self.img
         ctxs = {}
         main = CharCtx(img, self.main)
@@ -219,7 +221,7 @@ class Model:
         elif not rest:
             a = self.find_anim(anim_id, k=k)
             if a is None:
-                raise ValueError("sem animacao %s" % (anim_id if k is None else "k %d" % k))
+                raise ValueError("no animation %s" % (anim_id if k is None else "k %d" % k))
             _, k, st, et, nch = a
             t = st + frame
             if et > st and t > et:
@@ -234,7 +236,7 @@ class Model:
         items.emitters, items.lights = [], []
         smat = {}
         skel = {}
-        owner = {}   # indice da pilha de matrizes -> saida do osso que a gravou (None = identidade de um osso raiz)
+        owner = {}   # matrix stack index -> output of the bone that wrote it (None = a root bone's identity)
 
         def out(ctx, si, mi):
             bone = skel[si]
@@ -256,7 +258,7 @@ class Model:
             if depth > 80 or not img.ok(n):
                 return
             op = img.u32(n) & 63
-            # ctx do GS do no (GROUP/TRANSLATE/ROTATE/SCALE em +4, ANIM_XFORM/ANIM_SCALE em +8): vale para os filhos
+            # the node's GS ctx (GROUP/TRANSLATE/ROTATE/SCALE at +4, ANIM_XFORM/ANIM_SCALE at +8): applies to its children
             if op in (1, 3, 4, 30):
                 gs = gs_apply(img, gs, img.u32(n + 4))
             elif op in (17, 38):
@@ -267,7 +269,7 @@ class Model:
                     visit(img.u32(arr + 4 * q), mm, si2, mi2, ctx2, depth + 1, gs)
 
             if op == 0:
-                # deslocamento do UV (Scene::objectUvOffset): +0x20/+0x24; com uvScroll (bit 0x800 de +0xC), os canais +0x30/+0x32
+                # UV offset (Scene::objectUvOffset): +0x20/+0x24; with uvScroll (bit 0x800 of +0xC), the channels at +0x30/+0x32
                 uv = [img.f32(n + 0x20), img.f32(n + 0x24)]
                 if (img.u16(n + 0xC) & 0x800) and ctx is not None:
                     uv = [ctx.v(img.s16(n + 0x30 + 2 * j), 0.0) for j in range(2)]
@@ -280,8 +282,8 @@ class Model:
                 if img.u16(n + 0xA) & 1:
                     kids(n + 0x20, img.u16(n + 8), m)
             elif op == 2:
-                # o mais detalhado que o hierLod desenharia de perto: o maior indice com switchOutDis (+0x24) > 0 (o traje 3 do
-                # Togera tem um ultimo nivel com 0, nunca desenhado; como o native/wotm_model.hpp)
+                # the most detailed level hierLod would draw up close: the highest index with switchOutDis (+0x24) > 0 (Togera's
+                # costume 3 has a last level with 0 that is never drawn; same as native/wotm_model.hpp)
                 nl = min(img.u32(n + 4), 16)
                 for i in range(nl - 1, -1, -1):
                     if img.f32(n + 0x24 + 16 * i) > 0.0:
@@ -329,8 +331,8 @@ class Model:
                     vis = c.val[vidx]
                 if vis == 0.0:
                     return
-                # hierAnimTransNode: so remonta quando um canal do no (firstIdx +0x1E, mascara dirty.animating +0xC1) foi escrito;
-                # senao vale atMat[matrixIdx] (+0xC4), que vem pronta no arquivo (garras do Robo-47)
+                # hierAnimTransNode: only rebuilds when one of the node's channels (firstIdx +0x1E, dirty.animating mask +0xC1)
+                # was written; otherwise atMat[matrixIdx] (+0xC4) applies, which comes ready-made in the file (Robo-47's claws)
                 first, mask = img.s16(n + 0x1E), img.u8(n + 0xC1)
                 rebuild = bool(c) and first >= 0 and any((mask >> b) & 1 and (first + b) in c.dirty for b in range(8))
                 if rebuild:
@@ -394,7 +396,7 @@ class Model:
         return items
 
     def palette_outs(self, node, ctx):
-        """{slot: saida do osso (skelOutputMatIdx)} da paleta do OBJECT skinned, ou None."""
+        """{slot: bone output (skelOutputMatIdx)} of the skinned OBJECT's palette, or None."""
         img = self.img
         if ctx is None or not img.ok(ctx.animPkt):
             return None
@@ -414,7 +416,7 @@ class Model:
         return out
 
     def palette_of(self, node, ctx):
-        """{slot: matriz} da paleta do OBJECT skinned (Scene::palette), ou None."""
+        """{slot: matrix} of the skinned OBJECT's palette (Scene::palette), or None."""
         outs = self.palette_outs(node, ctx)
         if outs is None:
             return None
@@ -422,7 +424,7 @@ class Model:
 
 
 def skin(pal, v):
-    """Posicao do vertice skinned no espaco do objeto (Scene::skinVertex: 3 ossos, w1 = w, w2 = frac(w*2048), w3 = resto)."""
+    """Skinned vertex position in object space (Scene::skinVertex: 3 bones, w1 = w, w2 = frac(w*2048), w3 = the remainder)."""
     w1 = v.w
     s = v.w * 2048.0
     w2 = s - math.trunc(s)
@@ -444,9 +446,9 @@ def main(argv):
     path = argv[0]
     mdl = Model(path)
     if "--list" in argv:
-        print("%s: instancia principal %x, %d animacoes" % (path, mdl.main, len(mdl.anims())))
+        print("%s: main instance %x, %d animations" % (path, mdl.main, len(mdl.anims())))
         for aid, k, st, et, nch in mdl.anims():
-            print("  id %3d (k %3d) quadros %6.1f..%6.1f canais %3d%s" % (aid, k, st, et, nch, "  <- idle" if aid == IDLE else ""))
+            print("  id %3d (k %3d) frames %6.1f..%6.1f channels %3d%s" % (aid, k, st, et, nch, "  <- idle" if aid == IDLE else ""))
         return 0
     out = argv[1]
     anim_id, frame = IDLE, 0.0

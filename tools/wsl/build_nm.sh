@@ -16,8 +16,8 @@ name=${1:-halfcpp}
 src=$(cd "$(dirname "$0")/../.." && pwd)
 dst=$HOME/wotm_nm_$name
 mkdir -p "$dst"
-# .ninja_log/.ninja_deps ficam os da copia: com os do repo, o ninja compara os comandos com os do build matching e uma TU que sai
-# da selecao (perde o -DNON_MATCHING) mantem o .o velho com as equivalentes
+# keep the copy's own .ninja_log/.ninja_deps: with the repo's, ninja compares commands against the matching build, and a TU that leaves
+# the selection (loses -DNON_MATCHING) keeps its stale .o with the equivalents
 (cd "$src" && tar cf - --exclude=./ISO --exclude=./.git --exclude='./disc/[0-9A-Z]*' --exclude=./build \
     --exclude=./.ninja_log --exclude=./.ninja_deps .) | (cd "$dst" && tar xf -)
 cd "$dst"

@@ -1,39 +1,39 @@
-// Particulas e efeitos (poeira, fogo, faiscas, explosoes, rastros) lidos da RAM do EE e desenhados com raylib.
+// Particles and effects (dust, fire, sparks, explosions, trails) read from EE RAM and drawn with raylib.
 //
-// No retail, `particlePrepDraw` (particleMove + o *PacketBuild de cada tipo) monta um pacote VIF por sistema e `particleDraw`
-// (0x21B378; o laco que espera o VU1 fica em 0x21B8A0) manda esses pacotes para o microcodigo de particulas do VU1, que expande
-// cada particula em sprite/linha/faixa. Aqui o corte e antes do VU1: le o estado de cada sistema (`_ParticleType`,
-// include/hieri_types.h) e desenha direto. Detalhes e o que ainda e hipotese: docs/FORMATOS.md ("Particulas").
+// In retail, `particlePrepDraw` (particleMove + each type's *PacketBuild) builds one VIF packet per system and `particleDraw`
+// (0x21B378; the loop that waits on VU1 is at 0x21B8A0) sends those packets to the VU1 particle microcode, which expands
+// each particle into a sprite/line/strip. Here the cut is before VU1: we read each system's state (`_ParticleType`,
+// include/hieri_types.h) and draw it directly. Details and what is still a hypothesis: docs/FORMATOS.md ("Particulas").
 //
-// Confirmado no codigo da CPU (asm de common/particle e common/partdraw):
-//   - fx[100] em 0x5BA280 (0x2EE0 bytes cada); lista ativa: fxActiveTop (0x6F88EC) -> fxList[i].next (+8, 12 bytes por entrada), -1 = fim
-//   - por particula: pos[i] (FVECTOR; w = tamanho, raio: particleFOVcalcMaxRadius usa maxSize + expansionRate*lifetime),
-//     vel[i] (FVECTOR), age[i] (int16, em campos); numParticles em +0x2ED0
-//   - so desenha com info.attribs & 0x400 (pacote montado), numParticles >= 1 (sprine: >= 2) e tipo != 11
-//   - tipo = vis.attribs (+0x2E90): 1 linha, 2 sweepTrail, 3 sprite, 4 texSprite, 5 stripe, 6 strite, 8 sprine, 9 kite,
-//     13 frag, 15 dustTrail, 16 wake (tabela de saltos de particlePrepDraw)
-//   - cor (loadColors): tabela RGBA em 0x256C10 (0x80 = 1,0), vis.numColors cores a partir de vis.colorIndex; t = age * colorsPerFrame,
-//     cor = lerp(cor[t >> 12], cor[(t >> 12) + 1], (t & 0xFFF) / 4096); 0 cores = 0x80808080, 1 cor = constante
-//   - textura: TextureInfo[vis.texInfoIndex] (0x5B9E80: numTextures, texIndex, du, dv); texId[texIndex] (0x6DFAB0, u16) indexa o
-//     texInfo global e TEX0[texIndex] (0x6DF6B0, u64) e o registrador TEX0 (psm/CBP). texSprite escolhe o quadro por particula:
-//     attribs&1 aleatorio, attribs&2 uvI[i] >> 2, senao (age * mapsPerFrame) >> 12 (attribs&4: trava no ultimo, senao modulo)
-//   - mistura: vis.alphaContext e o registrador ALPHA do GS (0x44 = (Cs-Cd)*As+Cd, 0x48 = Cs*As+Cd aditivo)
-//   - ordem: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec (+0x2CA0) + vis.priority; opacos (alpha 0) antes
-// Lido no microcodigo de particulas do VU1 (pacote de carga em 0x253060, contexto padrao em 0x256B90; sprite chama 0x59, linha 0x0B,
+// Confirmed in the CPU code (asm of common/particle and common/partdraw):
+//   - fx[100] at 0x5BA280 (0x2EE0 bytes each); active list: fxActiveTop (0x6F88EC) -> fxList[i].next (+8, 12 bytes per entry), -1 = end
+//   - per particle: pos[i] (FVECTOR; w = size, radius: particleFOVcalcMaxRadius uses maxSize + expansionRate*lifetime),
+//     vel[i] (FVECTOR), age[i] (int16, in fields); numParticles at +0x2ED0
+//   - only drawn with info.attribs & 0x400 (packet built), numParticles >= 1 (sprine: >= 2) and type != 11
+//   - type = vis.attribs (+0x2E90): 1 line, 2 sweepTrail, 3 sprite, 4 texSprite, 5 stripe, 6 strite, 8 sprine, 9 kite,
+//     13 frag, 15 dustTrail, 16 wake (particlePrepDraw's jump table)
+//   - color (loadColors): RGBA table at 0x256C10 (0x80 = 1.0), vis.numColors colors starting at vis.colorIndex; t = age * colorsPerFrame,
+//     color = lerp(color[t >> 12], color[(t >> 12) + 1], (t & 0xFFF) / 4096); 0 colors = 0x80808080, 1 color = constant
+//   - texture: TextureInfo[vis.texInfoIndex] (0x5B9E80: numTextures, texIndex, du, dv); texId[texIndex] (0x6DFAB0, u16) indexes the
+//     global texInfo and TEX0[texIndex] (0x6DF6B0, u64) is the TEX0 register (psm/CBP). texSprite picks the frame per particle:
+//     attribs&1 random, attribs&2 uvI[i] >> 2, else (age * mapsPerFrame) >> 12 (attribs&4: holds on the last one, else wraps)
+//   - blending: vis.alphaContext is the GS ALPHA register (0x44 = (Cs-Cd)*As+Cd, 0x48 = Cs*As+Cd additive)
+//   - order: farthest to nearest by the depth of emit.ParticleToEmitVec (+0x2CA0) + vis.priority; opaque ones (alpha 0) first
+// Read from the VU1 particle microcode (load packet at 0x253060, default context at 0x256B90; sprite calls 0x59, line 0x0B,
 // strite 0x151):
-//   - sprite: o VU1 manda um SPRITE do GS (retangulo alinhado a tela) de meio-lado = pos.w / 2 * foco / profundidade, limitado a
-//     foco / 2 (medido pela checagem VU1 x nativo em sprite e texSprite: a leitura antiga, pos.w inteiro, dava o dobro); ou seja,
-//     pos.w e o lado em unidades de mundo e o meio-lado nunca passa de metade da profundidade. Os bits baixos de pos.w indexam os cantos de
-//     UV (3 normal, 1 espelha U, 2 espelha V, 0 os dois); a cor sai da tabela pela idade, como no loadColors
-//   - linha: de pos ate pos - vel (a cauda e projetada com a matriz do quadro anterior: borrao de movimento da camera)
-//   - strite: ver Particles::striteTriangle (cauda com a matriz do quadro anterior, prevViewMat; ST que inscreve o disco no triangulo e
-//     alfa escalado pelo comprimento do rastro)
-// Destroços (frag, 13) nao passam por aqui: Scene::collectParticles/drawSprites (atlas de celulas 8x8; pos.w = lado e bits baixos = celula/espelhamento).
-// Sprine: Particles::sprineQuads (sprites ao longo da curva do microprograma). Ainda aproximado: as faixas (stripe, sweepTrail) ligam
-// particulas consecutivas; kite vira sprite (wake e dustTrail seguem o microprograma: wakeVu, dustTrailVu);
-// a cauda das linhas usa a matriz atual.
+//   - sprite: VU1 sends a GS SPRITE (screen-aligned rectangle) with half-side = pos.w / 2 * focus / depth, capped at
+//     focus / 2 (measured by the VU1 vs native check on sprite and texSprite: the old reading, the whole pos.w, gave twice the size), i.e.
+//     pos.w is the side in world units and the half-side never exceeds half the depth. The low bits of pos.w index the UV
+//     corners (3 normal, 1 mirrors U, 2 mirrors V, 0 both); the color comes from the table by age, as in loadColors
+//   - line: from pos to pos - vel (the tail is projected with the previous frame's matrix: camera motion blur)
+//   - strite: see Particles::striteTriangle (tail with the previous frame's matrix, prevViewMat; ST that inscribes the disc in the triangle and
+//     alpha scaled by the trail length)
+// Debris (frag, 13) doesn't go through here: Scene::collectParticles/drawSprites (8x8 cell atlas; pos.w = side and low bits = cell/mirroring).
+// Sprine: Particles::sprineQuads (sprites along the microprogram's curve). Still approximate: the strips (stripe, sweepTrail) join
+// consecutive particles; kite becomes a sprite (wake and dustTrail follow the microprogram: wakeVu, dustTrailVu);
+// the lines' tail uses the current matrix.
 #pragma once
-#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: ELF addresses by name (tools/native_syms.py --gen)
 
 #include <algorithm>
 #include <atomic>
@@ -56,7 +56,7 @@
 #include "raylib.h"
 #include "rlgl.h"
 
-// GL 1.1 (opengl32), so para ler a profundidade no teste de oclusao do lens flare; o raylib nao expoe leitura de profundidade
+// GL 1.1 (opengl32), only to read depth for the lens flare occlusion test; raylib doesn't expose depth reads
 #ifdef _WIN32
 extern "C" __declspec(dllimport) void __stdcall glReadPixels(int x, int y, int w, int h, unsigned format, unsigned type, void *data);
 #else
@@ -65,18 +65,18 @@ extern "C" void glReadPixels(int x, int y, int w, int h, unsigned format, unsign
 
 namespace wotm {
 
-// Antes do glReadPixels da profundidade (teste de oclusao do lens flare): com MSAA (wotm_msaa.hpp) o desenho vai a um framebuffer
-// multiamostra, que o glReadPixels nao le; quem o usa poe aqui a resolucao da profundidade. Nulo: le o framebuffer em uso.
+// Before the depth glReadPixels (lens flare occlusion test): with MSAA (wotm_msaa.hpp) drawing goes to a multisample framebuffer,
+// which glReadPixels can't read; whoever uses it sets here the depth resolve. Null: reads the current framebuffer.
 inline void (*g_beforeDepthRead)() = nullptr;
 
-// Profundidade de uma vista lida sem a thread da janela esperar (tela dividida, Scene::drawFlaresFor; teste de oclusao do lens flare).
-// Qualquer leitura do GL na thread da janela (glMapBuffer, glClientWaitSync, glGet*) a faz esperar o driver alcanca-la: no driver da
-// NVIDIA, com a otimizacao em thread, ele anda ~6 ms atras com 4 vistas no Ryzen 5 5500, e cada espera desfaz o paralelismo entre a
-// janela, o driver e a GPU (o redesenho de 4 vistas ia de ~16 para ~25 ms). Entao a janela so copia a profundidade da vista na GPU
-// (glBlitFramebuffer para um renderbuffer proprio, dois por vista em rodizio), poe uma cerca e segue. Uma thread auxiliar, com um
-// contexto GL compartilhado (janela GLFW escondida), espera a cerca na GPU, le a copia num PBO, espera a leitura e entrega o resultado;
-// as esperas sao dela. O teste usa a copia pronta mais nova (1 ou 2 redesenhos atras), enquanto tiver no maximo kMaxAge pedidos de
-// idade. Sem as funcoes do GL 3.2 ou sem o contexto auxiliar, ok() fica false e o flare volta a leitura direta.
+// A view's depth read without the window thread waiting (split screen, Scene::drawFlaresFor; lens flare occlusion test).
+// Any GL read on the window thread (glMapBuffer, glClientWaitSync, glGet*) makes it wait for the driver to catch up: on the
+// NVIDIA driver, with threaded optimization, it runs ~6 ms behind with 4 views on the Ryzen 5 5500, and each wait undoes the parallelism between
+// the window, the driver and the GPU (redrawing 4 views went from ~16 to ~25 ms). So the window only copies the view's depth on the GPU
+// (glBlitFramebuffer into its own renderbuffer, two per view in rotation), sets a fence and moves on. A helper thread, with a shared
+// GL context (hidden GLFW window), waits on the fence on the GPU, reads the copy into a PBO, waits for the read and hands over the result;
+// the waits are all its own. The test uses the newest ready copy (1 or 2 redraws behind), as long as it is at most kMaxAge requests
+// old. Without the GL 3.2 functions or without the helper context, ok() stays false and the flare falls back to the direct read.
 extern "C" {
 extern void *(*glad_glFenceSync)(unsigned, unsigned);
 extern unsigned (*glad_glClientWaitSync)(void *, unsigned, unsigned long long);
@@ -98,31 +98,31 @@ extern void (*glad_glFramebufferRenderbuffer)(unsigned, unsigned, unsigned, unsi
 extern void (*glad_glBlitFramebuffer)(int, int, int, int, int, int, int, int, unsigned, unsigned);
 extern void (*glad_glDrawBuffer)(unsigned);
 extern void (*glad_glReadBuffer)(unsigned);
-// GLFW (estatico no raylib): o contexto auxiliar
+// GLFW (static in raylib): the helper context
 void *glfwGetCurrentContext(void);
 void glfwWindowHint(int, int);
 void *glfwCreateWindow(int, int, const char *, void *, void *);
 void glfwMakeContextCurrent(void *);
 }
-// O renderbuffer da copia tem de ter o formato da profundidade lida: o da render texture do raylib (GL_DEPTH_COMPONENT sem tamanho) ou,
-// com MSAA, o resolvido pelo g_beforeDepthRead (GL_DEPTH_COMPONENT24). Quem liga o MSAA diz aqui se ele esta em uso.
+// The copy's renderbuffer must have the format of the depth being read: raylib's render texture one (unsized GL_DEPTH_COMPONENT) or,
+// with MSAA, the one resolved by g_beforeDepthRead (GL_DEPTH_COMPONENT24). Whoever turns MSAA on says here whether it is in use.
 inline bool (*g_depthReadIsMsaa)() = nullptr;
 
 class AsyncDepth {
     struct Slot {
-        unsigned rb = 0, fbo = 0;          // renderbuffer da copia e o framebuffer dele (contexto da janela)
+        unsigned rb = 0, fbo = 0;          // the copy's renderbuffer and its framebuffer (window context)
         int w = 0, h = 0;
         unsigned fmt = 0;
-        unsigned gen = 0;                  // muda quando o renderbuffer e refeito (a thread auxiliar refaz o framebuffer dela)
-        std::atomic<int> busy{0};          // 1 = pedido na fila ou sendo lido pela thread auxiliar
+        unsigned gen = 0;                  // changes when the renderbuffer is remade (the helper thread remakes its framebuffer)
+        std::atomic<int> busy{0};          // 1 = request queued or being read by the helper thread
     };
     struct Job { AsyncDepth *d; int slot; unsigned rb, gen; int w, h; void *fence; unsigned long serial; };
 
-    // Thread auxiliar com o contexto compartilhado; uma para todas as vistas
+    // Helper thread with the shared context; one for all views
     class Worker {
     public:
         static Worker &get() { static Worker w; return w; }
-        bool ok() {   // na thread da janela, com o contexto dela corrente
+        bool ok() {   // on the window thread, with its context current
             if (tried_) return ok_;
             tried_ = true;
             void *main = glfwGetCurrentContext();
@@ -135,7 +135,7 @@ class AsyncDepth {
             glfwWindowHint(kFocused, 1);
             glfwMakeContextCurrent(main);
             if (!ctx_) {
-                std::fprintf(stderr, "[flare] sem contexto GL auxiliar: oclusao do lens flare com leitura direta na tela dividida\n");
+                std::fprintf(stderr, "[flare] no helper GL context: lens flare occlusion uses a direct read in split screen\n");
                 return false;
             }
             std::thread(&Worker::run, this).detach();
@@ -151,7 +151,7 @@ class AsyncDepth {
         void run() {
             glfwMakeContextCurrent(ctx_);
             struct Fb { unsigned fbo = 0, rb = 0, gen = ~0u; };
-            std::unordered_map<const void *, Fb> fbs;   // por (vista, slot)
+            std::unordered_map<const void *, Fb> fbs;   // per (view, slot)
             std::unordered_map<const void *, std::pair<unsigned, size_t>> pbos;
             for (;;) {
                 Job j;
@@ -175,7 +175,7 @@ class AsyncDepth {
                     fb.rb = j.rb;
                     fb.gen = j.gen;
                 }
-                glad_glWaitSync(j.fence, 0, ~0ull);   // a copia da janela termina antes da leitura (na GPU)
+                glad_glWaitSync(j.fence, 0, ~0ull);   // the window's copy finishes before the read (on the GPU)
                 glad_glDeleteSync(j.fence);
                 auto &pb = pbos[key];
                 if (!pb.first) glad_glGenBuffers(1, &pb.first);
@@ -194,7 +194,7 @@ class AsyncDepth {
                     if (r == kAlreadySignaled || r == kConditionSatisfied || r == kWaitFailed) break;
                 }
                 glad_glDeleteSync(f2);
-                j.d->slots_[j.slot].busy = 0;   // leitura terminada: a janela pode reescrever a copia
+                j.d->slots_[j.slot].busy = 0;   // read done: the window may overwrite the copy
                 if (r == kAlreadySignaled || r == kConditionSatisfied) {
                     if (const void *p = glad_glMapBuffer(kPack, kReadOnly)) {
                         std::lock_guard<std::mutex> lk(j.d->m_);
@@ -226,11 +226,11 @@ public:
                   glad_glBindFramebuffer && glad_glGenRenderbuffers && glad_glDeleteRenderbuffers && glad_glBindRenderbuffer &&
                   glad_glRenderbufferStorage && glad_glFramebufferRenderbuffer && glad_glBlitFramebuffer && glad_glDrawBuffer &&
                   glad_glReadBuffer && Worker::get().ok();
-            if (!ok_) std::fprintf(stderr, "[flare] sem as funcoes do GL 3.2: oclusao do lens flare com leitura direta na tela dividida\n");
+            if (!ok_) std::fprintf(stderr, "[flare] missing GL 3.2 functions: lens flare occlusion uses a direct read in split screen\n");
         }
         return ok_;
     }
-    // Pega em cpu a copia pronta mais nova (sem esperar); valid diz se ha uma recente
+    // Takes the newest ready copy into cpu (without waiting); valid says whether there is a recent one
     void fetch(unsigned long redraw) {
         if (!ok()) { valid = false; return; }
         {
@@ -245,8 +245,8 @@ public:
         }
         valid = cpuSerial_ && redraw - cpuSerial_ <= kMaxAge;
     }
-    // Copia na GPU a profundidade do framebuffer em que a vista desenha (`fbo`, w x h) e pede a leitura a thread auxiliar. Sem slot
-    // livre (as duas copias anteriores ainda na fila), nao copia desta vez.
+    // Copies on the GPU the depth of the framebuffer the view draws into (`fbo`, w x h) and asks the helper thread to read it. With no
+    // free slot (the two previous copies still queued), it skips copying this time.
     void issue(int w, int h, unsigned fbo, unsigned long redraw) {
         if (!ok() || w <= 0 || h <= 0) return;
         Slot *s = nullptr;
@@ -276,16 +276,16 @@ public:
             ++s->gen;
         }
         glad_glBindFramebuffer(kFramebuffer, fbo);
-        if (g_beforeDepthRead) g_beforeDepthRead();   // MSAA: a profundidade resolvida fica como leitura
+        if (g_beforeDepthRead) g_beforeDepthRead();   // MSAA: the resolved depth becomes the read source
         glad_glBindFramebuffer(kDrawFb, s->fbo);
         glad_glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, kDepthBit, kNearest);
         glad_glBindFramebuffer(kFramebuffer, fbo);
         void *f = glad_glFenceSync(kGpuCommandsComplete, 0);
-        glad_glFlush();   // a cerca chega ao outro contexto
+        glad_glFlush();   // the fence reaches the other context
         s->busy = 1;
         Worker::get().post({this, k, s->rb, s->gen, w, h, f, redraw});
     }
-    std::vector<float> cpu;   // profundidade (0..1) de um redesenho recente, linhas de baixo para cima como o GL
+    std::vector<float> cpu;   // depth (0..1) of a recent redraw, rows bottom to top like GL
     int cw = 0, ch = 0;
     bool valid = false;
 
@@ -295,27 +295,27 @@ private:
                               kWaitFailed = 0x911D;
     static constexpr unsigned kFramebuffer = 0x8D40, kReadFb = 0x8CA8, kDrawFb = 0x8CA9, kRenderbuffer = 0x8D41, kDepthAtt = 0x8D00,
                               kDepthAny = 0x1902 /* GL_DEPTH_COMPONENT */, kDepth24 = 0x81A6, kDepthBit = 0x100, kNearest = 0x2600;
-    static constexpr unsigned long kMaxAge = 4;   // redesenhos de idade da copia em cpu ainda usada
+    static constexpr unsigned long kMaxAge = 4;   // age, in redraws, of the cpu copy that is still used
     bool tried_ = false, ok_ = false;
     Slot slots_[2];
     int next_ = 0;
     unsigned long cpuSerial_ = 0;
-    std::mutex m_;                 // res_* (escritos pela thread auxiliar)
+    std::mutex m_;                 // res_* (written by the helper thread)
     std::vector<float> res_;
     int resW_ = 0, resH_ = 0;
     unsigned long resSerial_ = 0;
 };
 
-// Normal do vertice para o shader do Scene::draw: (fogBurnThru, 1, FGE + 2 * GS). O rlNormal3f normaliza; o shader le as razoes
-// por y. FGE = neblina; GS = alfa cru do GS na textura e no vertice (As = At * Av / 16384). rlNormal3f(0, 0, 0) desliga os dois.
-// PM (+4): a mistura e aditiva ou subtrativa e o shader devolve a cor ja vezes o As inteiro (gsBlend usa fator 1 na origem). O As do
-// GS vai ate 255/128 (At * Av / 128 saturado em 255 pela funcao de textura); o fator SRC_ALPHA do GL o limitaria a 1. Na mistura comum
-// ((Cs - Cd) As + Cd) o As > 1 pediria fator negativo no destino: passes extras (gsBlendOver1/2).
-// Modo (+8 * modo): 1 = sai com alfa As / 2 e 2 = sai branco (os dois passes de GsBlendFactors::doubled); 3, 4 e 5 = os tres passes da
-// mistura comum com As > 1 (gsBlendCommon).
-inline bool g_premulShader = false;   // o shader do Scene::draw esta ativo (sem ele a cor iria sem multiplicar)
-// O burn fica limitado a +-4096: o F satura (0 ou 255) muito antes, e o domo do ceu da AIRPORT tem fogBurnThru 1e7, que deixava o y
-// normalizado abaixo do limite do shader (1e-6) e apagava todos os flags (o domo saia sem o modo GS, ~0,13 da cor).
+// Vertex normal for the Scene::draw shader: (fogBurnThru, 1, FGE + 2 * GS). rlNormal3f normalizes it; the shader reads the ratios
+// over y. FGE = fog; GS = raw GS alpha in the texture and the vertex (As = At * Av / 16384). rlNormal3f(0, 0, 0) turns both off.
+// PM (+4): the blend is additive or subtractive and the shader returns the color already times the whole As (gsBlend uses factor 1 on the source). The GS
+// As goes up to 255/128 (At * Av / 128 saturated at 255 by the texture function); GL's SRC_ALPHA factor would cap it at 1. In the common blend
+// ((Cs - Cd) As + Cd) an As > 1 would need a negative destination factor: extra passes (gsBlendOver1/2).
+// Mode (+8 * mode): 1 = outputs alpha As / 2 and 2 = outputs white (the two passes of GsBlendFactors::doubled); 3, 4 and 5 = the three passes of
+// the common blend with As > 1 (gsBlendCommon).
+inline bool g_premulShader = false;   // the Scene::draw shader is active (without it the color would go out unmultiplied)
+// The burn is clamped to +-4096: F saturates (0 or 255) long before that, and the AIRPORT sky dome has fogBurnThru 1e7, which left the
+// normalized y below the shader's threshold (1e-6) and cleared every flag (the dome came out without GS mode, ~0.13 of the color).
 inline void shaderNormalVals(float burn, bool fge, bool gs, bool pm, int mode, float out[3]) {
     out[0] = burn > 4096.f ? 4096.f : (burn < -4096.f ? -4096.f : burn);
     out[1] = 1.f;
@@ -326,45 +326,45 @@ inline void shaderNormal(float burn, bool fge, bool gs, bool pm = false, int mod
     shaderNormalVals(burn, fge, gs, pm, mode, n);
     rlNormal3f(n[0], n[1], n[2]);
 }
-// Mistura do GS pelo byte baixo do registrador ALPHA: cor = (A - B) * C + D, campos de 2 bits A, B, D (0 Cs, 1 Cd, 2 zero) e C (0 As,
-// 1 Ad, 2 FIX; Ad e FIX nao aparecem nos objetos medidos e ficam como As). Vira Cs * (as * As + ks) + Cd * (ad * As + kd) no GL:
-// 0x44 = (Cs - Cd) As + Cd (comum), 0x48 = Cs As + Cd (aditivo), 0x42 = Cd - Cs As, 0x46 = Cd (1 - As) e 0x81 = (Cd - Cs) As (cores do
-// Kineticlops). Fator 1 + As nao existe no GL e satura em 1. Com o fator As so na origem, o shader pre-multiplica (gsBlendPremul:
-// shaderNormal com pm), e o As passa de 1 como no GS. Com D = 0 e o As no destino (0x81) nao da para pre-multiplicar, e o As do GS
-// vai ate ~2 (textura 0xFF com vertice 0x80): doubled = desenhar com As / 2 (shaderNormal modo 1) e dobrar o destino num segundo
-// passe da mesma geometria (gsBlendDouble, modo 2). Com D = Cd o As > 1 so zeraria o fator, como o GL ja faz.
+// GS blending from the low byte of the ALPHA register: color = (A - B) * C + D, 2-bit fields A, B, D (0 Cs, 1 Cd, 2 zero) and C (0 As,
+// 1 Ad, 2 FIX; Ad and FIX don't appear in the measured objects and are treated as As). In GL it becomes Cs * (as * As + ks) + Cd * (ad * As + kd):
+// 0x44 = (Cs - Cd) As + Cd (common), 0x48 = Cs As + Cd (additive), 0x42 = Cd - Cs As, 0x46 = Cd (1 - As) and 0x81 = (Cd - Cs) As (the
+// Kineticlops colors). A 1 + As factor doesn't exist in GL and saturates at 1. With the As factor only on the source, the shader premultiplies (gsBlendPremul:
+// shaderNormal with pm), and As goes above 1 as on the GS. With D = 0 and As on the destination (0x81) premultiplying isn't possible, and the GS As
+// goes up to ~2 (texture 0xFF with vertex 0x80): doubled = draw with As / 2 (shaderNormal mode 1) and double the destination in a second
+// pass of the same geometry (gsBlendDouble, mode 2). With D = Cd an As > 1 would only zero the factor, which GL already does.
 struct GsBlendFactors { int src = RL_SRC_ALPHA, dst = RL_ONE_MINUS_SRC_ALPHA, eq = RL_FUNC_ADD; bool premul = false, doubled = false; };
 inline GsBlendFactors gsBlendFactors(uint8_t alpha) {
     const int A = alpha & 3, B = (alpha >> 2) & 3, D = (alpha >> 6) & 3;
     struct Term { int f; bool neg; };
-    auto term = [](int a, int k) -> Term {   // coeficiente a * As + k (a em -1..1, k em 0..1) -> fator do GL e sinal
+    auto term = [](int a, int k) -> Term {   // coefficient a * As + k (a in -1..1, k in 0..1) -> GL factor and sign
         if (a == 0) return {k ? RL_ONE : RL_ZERO, false};
-        if (a > 0) return {k ? RL_ONE : RL_SRC_ALPHA, false};   // 1 + As: satura
+        if (a > 0) return {k ? RL_ONE : RL_SRC_ALPHA, false};   // 1 + As: saturates
         return k ? Term{RL_ONE_MINUS_SRC_ALPHA, false} : Term{RL_SRC_ALPHA, true};
     };
     const Term s = term((A == 0) - (B == 0), D == 0), d = term((A == 1) - (B == 1), D == 1);
     GsBlendFactors r;
     r.src = s.f;
     r.dst = d.f;
-    if (s.neg && d.neg) r.src = r.dst = RL_ZERO;   // so negativo: o GS satura em 0
+    if (s.neg && d.neg) r.src = r.dst = RL_ZERO;   // only negative: the GS saturates at 0
     else if (s.neg) r.eq = RL_FUNC_REVERSE_SUBTRACT;
     else if (d.neg) r.eq = RL_FUNC_SUBTRACT;
     r.premul = r.src == RL_SRC_ALPHA && (r.dst == RL_ZERO || r.dst == RL_ONE);
     r.doubled = D == 2 && r.dst == RL_SRC_ALPHA;
     return r;
 }
-// Segundo passe do doubled: destino * 2 (saida branca vezes DST_COLOR, mais o destino)
+// Second pass of doubled: destination * 2 (white output times DST_COLOR, plus the destination)
 inline void gsBlendDouble() {
     rlSetBlendFactors(RL_DST_COLOR, RL_ONE, RL_FUNC_ADD);
     rlSetBlendMode(RL_BLEND_CUSTOM);
 }
-// Mistura comum com As > 1 (textura 0xFF e vertice acima de 0x40: As = At * Av / 16384 ate 255/128). O GS faz Cs As - Cd (As - 1),
-// limitado a 0..255; no GL o fator do destino seria negativo. Tres passes da mesma geometria, cada pixel decidindo no shader:
-//  1. a mistura comum, com alfa 0 onde As > 1 (fica o destino);
-//  2. (gsBlendOver1, shaderNormal modo 4) so onde As > 1: Cs * 1 - Cd * (1 - 1/As) = resultado / As (descarta os demais);
-//  3. (gsBlendOver2, modo 5) destino * As: saida As - 1 vezes DST_COLOR, mais o destino (0 onde As <= 1).
-// O framebuffer de 8 bits so arredonda o resultado / As (erro ate As / 2 < 1). Comum = fatores SRC_ALPHA e 1 - SRC_ALPHA, soma.
-// O alfa do framebuffer (lido pelo quadro anterior) fica como na mistura comum com As 1: o 2o passe nao o toca e o 3o o poe em 1.
+// Common blend with As > 1 (texture 0xFF and vertex above 0x40: As = At * Av / 16384 up to 255/128). The GS does Cs As - Cd (As - 1),
+// clamped to 0..255; in GL the destination factor would be negative. Three passes of the same geometry, each pixel deciding in the shader:
+//  1. the common blend, with alpha 0 where As > 1 (the destination stays);
+//  2. (gsBlendOver1, shaderNormal mode 4) only where As > 1: Cs * 1 - Cd * (1 - 1/As) = result / As (discards the rest);
+//  3. (gsBlendOver2, mode 5) destination * As: output As - 1 times DST_COLOR, plus the destination (0 where As <= 1).
+// The 8-bit framebuffer only rounds result / As (error up to As / 2 < 1). Common = factors SRC_ALPHA and 1 - SRC_ALPHA, add.
+// The framebuffer alpha (read by the previous frame) ends up as in the common blend with As 1: the 2nd pass doesn't touch it and the 3rd sets it to 1.
 inline bool gsBlendCommon(uint8_t alpha) {
     const GsBlendFactors f = gsBlendFactors(alpha);
     return f.src == RL_SRC_ALPHA && f.dst == RL_ONE_MINUS_SRC_ALPHA && f.eq == RL_FUNC_ADD;
@@ -385,9 +385,9 @@ inline void gsBlend(uint8_t alpha) {
 }
 inline constexpr uint8_t kGsAlphaNormal = 0x44;   // (Cs - Cd) As + Cd
 inline constexpr uint8_t kGsAlphaAdd = 0x48;      // Cs As + Cd
-inline constexpr uint8_t kGsNoAbe = 0x0A;         // (0 - 0) As + Cs = Cs: PRIM.ABE 0, o alfa so vale para o teste (TEST_1)
+inline constexpr uint8_t kGsNoAbe = 0x0A;         // (0 - 0) As + Cs = Cs: PRIM.ABE 0, alpha only counts for the test (TEST_1)
 
-// Textura branca com alfa 0x80 (1,0 do GS): o "sem textura" no modo GS (a padrao do raylib, alfa 255, valeria 2,0).
+// White texture with alpha 0x80 (GS 1.0): the "no texture" in GS mode (raylib's default one, alpha 255, would count as 2.0).
 inline unsigned gsWhiteTexture() {
     static unsigned id = 0;
     if (!id) {
@@ -398,14 +398,14 @@ inline unsigned gsWhiteTexture() {
     return id;
 }
 
-// ---------------------------------------------------------------- vertices sem o modo imediato do rlgl
-// O drawList emitia cada vertice com rlColor4ub, rlTexCoord2f, rlNormal3f (que normaliza com uma raiz) e rlVertex3f: quatro chamadas
-// ao raylib por vertice, ~40 ns cada vertice no Ryzen 3 3200G, metade do tempo da travessia. O VtxStream guarda os mesmos atributos
-// num vetor proprio, intercalados, e na descarga sobe tudo de uma vez (glBufferData, buffer novo a cada descarga, sem esperar a GPU)
-// e desenha como o rlDrawRenderBatch: o mesmo shader (o que o chamador diz que o rlgl tem ligado), o MVP (modelview x projecao, a conta
-// do rlMatrixMultiply), colDiffuse 1 e texture0 na unidade 0, os atributos nas posicoes do lote do rlgl, um glDrawArrays por comando
-// (modo e textura). O estado do GL (mistura, mascara de Z, uniform do teste de alfa, CLAMP) vale no momento da descarga, como no rlgl:
-// quem usa descarrega antes de muda-lo. Sem as funcoes do GL 3 (glad), ok() e false e o chamador volta ao rlgl.
+// ---------------------------------------------------------------- vertices without rlgl's immediate mode
+// drawList used to emit each vertex with rlColor4ub, rlTexCoord2f, rlNormal3f (which normalizes with a square root) and rlVertex3f: four raylib
+// calls per vertex, ~40 ns per vertex on the Ryzen 3 3200G, half of the traversal time. VtxStream stores the same attributes
+// interleaved in its own vector, and on flush uploads everything at once (glBufferData, a new buffer on every flush, without waiting on the GPU)
+// and draws like rlDrawRenderBatch: the same shader (whichever the caller says rlgl has bound), the MVP (modelview x projection, the math
+// of rlMatrixMultiply), colDiffuse 1 and texture0 on unit 0, the attributes at rlgl's batch locations, one glDrawArrays per command
+// (mode and texture). GL state (blending, Z mask, alpha test uniform, CLAMP) applies at flush time, as in rlgl:
+// callers flush before changing it. Without the GL 3 functions (glad), ok() is false and the caller falls back to rlgl.
 extern "C" {
 extern void (*glad_glGenVertexArrays)(int, unsigned *);
 extern void (*glad_glBindVertexArray)(unsigned);
@@ -423,22 +423,22 @@ extern void (*glad_glBindTexture)(unsigned, unsigned);
 extern void (*glad_glDrawArrays)(unsigned, int, int);
 extern void (*glad_glBufferSubData)(unsigned, ptrdiff_t, ptrdiff_t, const void *);
 }
-// Threads auxiliares do desenho: parallelFor(n, fn) chama fn(i) para i em [0, n) dividido entre elas e quem chama, e volta quando todas
-// terminaram. fn so pode ler o que ninguem escreve durante a chamada (nada de GL nem dos caches da Scene). Quantas: WOTM_DRAWTHREADS
-// (0 = nenhuma, tudo em quem chama; o padrao: as threads auxiliares baixam o clock do nucleo do EE e ele perde mais do que a janela ganha).
+// Drawing helper threads: parallelFor(n, fn) calls fn(i) for i in [0, n), split between them and the caller, and returns when all of them
+// are done. fn may only read what nobody writes during the call (no GL and no Scene caches). How many: WOTM_DRAWTHREADS
+// (0 = none, everything on the caller; the default: helper threads lower the EE core's clock and it loses more than the window gains).
 class JobPool {
 public:
-    static JobPool &get() { static JobPool *p = new JobPool; return *p; }   // nunca destruido: as threads morrem com o processo
+    static JobPool &get() { static JobPool *p = new JobPool; return *p; }   // never destroyed: the threads die with the process
     int workers() const { return int(th_.size()); }
-    // Usar as threads agora? Com WOTM_DRAWTHREADS_AB=<s> (medida), alterna a cada s segundos entre com e sem, com uma linha
-    // "[native] JobPool: com|sem threads" a cada troca, para comparar as duas metades da mesma luta
+    // Use the threads now? With WOTM_DRAWTHREADS_AB=<s> (measurement), alternates every s seconds between with and without, printing a
+    // "[native] JobPool: with|without threads" line on each switch, to compare the two halves of the same fight
     bool active() {
         if (th_.empty()) return false;
         static const double ab = std::getenv("WOTM_DRAWTHREADS_AB") ? std::atof(std::getenv("WOTM_DRAWTHREADS_AB")) : 0.0;
         if (ab <= 0.0) return true;
         const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
         const bool on = (long long)(t / ab) % 2 == 0;
-        if (on != abLast_) { abLast_ = on; std::fprintf(stderr, "[native] JobPool: %s threads\n", on ? "com" : "sem"); }
+        if (on != abLast_) { abLast_ = on; std::fprintf(stderr, "[native] JobPool: %s threads\n", on ? "with" : "without"); }
         return on;
     }
     template <class F> void parallelFor(int n, F &&fn) {
@@ -457,7 +457,7 @@ public:
         run();
         std::unique_lock<std::mutex> lk(m_);
         while (!done_.wait_for(lk, std::chrono::seconds(2), [&] { return busy_ == 0; }))
-            std::fprintf(stderr, "[native] JobPool: esperando %d threads ha mais de 2 s (n %d, proximo %d, geracao %llu)\n", busy_, n_,
+            std::fprintf(stderr, "[native] JobPool: waiting on %d threads for over 2 s (n %d, next %d, generation %llu)\n", busy_, n_,
                          next_.load(), (unsigned long long)gen_);
         fn_ = nullptr;
     }
@@ -467,7 +467,7 @@ private:
         if (const char *e = std::getenv("WOTM_DRAWTHREADS")) k = std::atoi(e);
         else k = 0;
         for (int i = 0; i < k; ++i) { th_.emplace_back([this] { loop(); }); th_.back().detach(); }
-        if (k > 0) std::fprintf(stderr, "[native] desenho: %d threads auxiliares (WOTM_DRAWTHREADS)\n", k);
+        if (k > 0) std::fprintf(stderr, "[native] drawing: %d helper threads (WOTM_DRAWTHREADS)\n", k);
     }
     void run() {
         for (int i; (i = next_.fetch_add(1, std::memory_order_relaxed)) < n_;) (*fn_)(i);
@@ -500,7 +500,7 @@ private:
 class VtxStream {
 public:
     struct V { float x, y, z, u, v, nx, ny, nz; uint8_t c[4]; };
-    static_assert(sizeof(V) == 36, "layout intercalado: posicao, UV, normal, cor");
+    static_assert(sizeof(V) == 36, "interleaved layout: position, UV, normal, color");
 
     bool ok() {
         if (!tried_) {
@@ -511,16 +511,16 @@ public:
             if (ok_) {
                 makeVao(vao_, vbo_);
             } else {
-                std::fprintf(stderr, "[native] sem as funcoes do GL 3: vertices pelo modo imediato do rlgl\n");
+                std::fprintf(stderr, "[native] missing GL 3 functions: vertices go through rlgl's immediate mode\n");
             }
         }
         return ok_;
     }
-    // Shader que o rlgl tem ligado agora (BeginShaderMode do chamador, ou o padrao): o dos comandos seguintes
+    // The shader rlgl has bound right now (the caller's BeginShaderMode, or the default): the one for the following commands
     void setShader(unsigned id, const int *locs) { shader_ = id; locs_ = locs; }
 
-    // Comeco de um comando (como rlBegin + rlSetTexture): RL_TRIANGLES ou RL_LINES. Guarda o shader e o MVP de agora (a descarga pode
-    // vir depois de o chamador mudar as matrizes)
+    // Start of a command (like rlBegin + rlSetTexture): RL_TRIANGLES or RL_LINES. Stores the current shader and MVP (the flush may
+    // come after the caller changes the matrices)
     void begin(int mode, unsigned tex) {
         const int m = curMvp();
         if (!cmds_.empty() && cmds_.back().kind == Cmd::Draw && cmds_.back().count == 0 && cmds_.back().job < 0 && !cmds_.back().res) {
@@ -530,16 +530,16 @@ public:
         }
         cmds_.push_back({Cmd::Draw, mode, tex, int(v_.size()), 0, m, shader_, locs_, -1, -1});
     }
-    // Mudanca de estado do GL (mistura, teste de alfa, mascara de Z, CLAMP) na ordem dos vertices: sem nada na fila, roda agora;
-    // senao entra na fila e roda na descarga, entre os desenhos de antes e os de depois. Uma subida so por descarga em vez de uma por
-    // mudanca de estado (centenas por vista na travessia).
+    // A GL state change (blending, alpha test, Z mask, CLAMP) in vertex order: with nothing queued, it runs now;
+    // otherwise it is queued and runs at flush time, between the draws before and after it. One upload per flush instead of one per
+    // state change (hundreds per view during the traversal).
     template <class F> void state(F &&fn) {
         if (empty()) { fn(); return; }
         ops_.emplace_back(std::forward<F>(fn));
         cmds_.push_back({Cmd::State, 0, 0, int(v_.size()), 0, -1, 0, nullptr, int(ops_.size()) - 1, -1});
     }
-    // Pedaco adiado: os vertices deste ponto do desenho aberto saem depois, no buffer deferBuf(j) (preenchido por quem pediu, em
-    // qualquer thread, antes da descarga); a descarga os poe neste lugar, na ordem. Devolve j.
+    // Deferred chunk: the vertices for this point of the open draw come later, in the buffer deferBuf(j) (filled by the requester, on
+    // any thread, before the flush); the flush puts them in this spot, in order. Returns j.
     int defer() {
         if (cmds_.empty() || cmds_.back().kind != Cmd::Draw || cmds_.back().count != 0 || cmds_.back().job >= 0 || cmds_.back().res) reopen();
         const int j = nDefer_++;
@@ -550,10 +550,10 @@ public:
     }
     std::vector<V> &deferBuf(int j) { return bufs_[size_t(j)]; }
 
-    // Arena residente: vertices que ficam na GPU entre vistas e quadros (geometria que nao mudou; Scene::drawList). arenaAlloc da a
-    // posicao de n vertices (-1 = cheia: o chamador zera com arenaReset, que orfana o buffer, fora de uma lista com desenhos da arena
-    // na fila); arenaUpload os grava; resident desenha uma faixa no ponto atual da fila, com o comando aberto (textura, shader, MVP) e,
-    // com cull, o GL_CULL_FACE ligado (a mesma regra do Scene::backFacing: frente no sentido anti-horario).
+    // Resident arena: vertices that stay on the GPU across views and frames (geometry that hasn't changed; Scene::drawList). arenaAlloc gives
+    // the position of n vertices (-1 = full: the caller clears it with arenaReset, which orphans the buffer, outside of a list with arena draws
+    // queued); arenaUpload writes them; resident draws a range at the current point of the queue, with the open command (texture, shader, MVP) and,
+    // with cull, GL_CULL_FACE on (the same rule as Scene::backFacing: front face counter-clockwise).
     long arenaAlloc(size_t n) {
         if (!ok_) return -1;
         if (!arenaVao_) {
@@ -591,14 +591,14 @@ public:
         ++nRes_;
     }
     static constexpr size_t kArenaCap = size_t(1) << 20;   // vertices (36 MB)
-    static inline double arenaUpBytes = 0.0;               // WOTM_DRAWSTATS: subida para a arena
-    // Comandos de desenho com vertices desde o ultimo zerar (WOTM_DRAWSTATS)
+    static inline double arenaUpBytes = 0.0;               // WOTM_DRAWSTATS: upload to the arena
+    // Draw commands with vertices since the last reset (WOTM_DRAWSTATS)
     long draws() const { return draws_; }
     void resetDraws() { draws_ = 0; }
     void color(uint8_t r, uint8_t g, uint8_t b, uint8_t a) { cur_.c[0] = r; cur_.c[1] = g; cur_.c[2] = b; cur_.c[3] = a; }
     void texcoord(float u, float v) { cur_.u = u; cur_.v = v; }
-    void normal(float x, float y, float z) {   // como o rlNormal3f (sem transformacao: o modo 3D nao usa rlPushMatrix aqui)
-        if (x == lastIn_[0] && y == lastIn_[1] && z == lastIn_[2]) return;   // a mesma de antes (quase sempre: e por item, nao por vertice)
+    void normal(float x, float y, float z) {   // like rlNormal3f (no transform: 3D mode doesn't use rlPushMatrix here)
+        if (x == lastIn_[0] && y == lastIn_[1] && z == lastIn_[2]) return;   // same as before (almost always: it's per item, not per vertex)
         lastIn_[0] = x; lastIn_[1] = y; lastIn_[2] = z;
         const float length = sqrtf(x * x + y * y + z * z);
         if (length != 0.0f) { const float il = 1.0f / length; x *= il; y *= il; z *= il; }
@@ -606,23 +606,23 @@ public:
     }
     void vertex(float x, float y, float z) {
         cur_.x = x; cur_.y = y; cur_.z = z;
-        if (cmds_.back().kind != Cmd::Draw || cmds_.back().job >= 0 || cmds_.back().res) reopen();   // depois de uma mudanca de estado, de um pedaco adiado ou da arena: o mesmo desenho continua
+        if (cmds_.back().kind != Cmd::Draw || cmds_.back().job >= 0 || cmds_.back().res) reopen();   // after a state change, a deferred chunk or the arena: the same draw continues
         v_.push_back(cur_);
         ++cmds_.back().count;
     }
     bool empty() const { return v_.empty() && nDefer_ == 0 && nRes_ == 0; }
     size_t vertices() const { return v_.size(); }
 
-    // Sobe e desenha o que acumulou, com as mudancas de estado da fila no meio; zera a fila
+    // Uploads and draws what has accumulated, with the queued state changes in between; clears the queue
     void flush() {
-        const V *up = v_.data();   // o que sobe: v_, ou a juncao com os pedacos adiados (mbuf_)
+        const V *up = v_.data();   // what gets uploaded: v_, or the merge with the deferred chunks (mbuf_)
         size_t upN = v_.size();
-        if (nDefer_) {   // os pedacos adiados no lugar deles (os comandos de desenho estao na ordem dos vertices); a copia em paralelo
+        if (nDefer_) {   // the deferred chunks in their place (the draw commands are in vertex order); the copy runs in parallel
             copies_.clear();
             size_t total = 0;
             for (Cmd &c : cmds_) {
                 if (c.kind != Cmd::Draw) { c.first = int(total); continue; }
-                if (c.res) continue;   // faixa da arena: fora da juncao
+                if (c.res) continue;   // arena range: left out of the merge
                 const V *src = c.job >= 0 ? bufs_[size_t(c.job)].data() : v_.data() + c.first;
                 if (c.job >= 0) c.count = int(bufs_[size_t(c.job)].size());
                 c.job = -1;
@@ -630,7 +630,7 @@ public:
                 if (c.count) copies_.push_back({src, size_t(c.count), total});
                 total += size_t(c.count);
             }
-            if (total > mcap_) { mcap_ = total + total / 4; mbuf_.reset(new V[mcap_]); }   // sem zerar (o vector zeraria ~10 MB)
+            if (total > mcap_) { mcap_ = total + total / 4; mbuf_.reset(new V[mcap_]); }   // not zeroed (a vector would zero ~10 MB)
             V *dst = mbuf_.get();
             JobPool::get().parallelFor(int(copies_.size()), [this, dst](int i) {
                 const Copy &k = copies_[size_t(i)];
@@ -640,18 +640,18 @@ public:
             upN = total;
             nDefer_ = 0;
         }
-        if ((!upN && !nRes_) || !ok_) {   // sem vertices: so as mudancas de estado (na ordem)
+        if ((!upN && !nRes_) || !ok_) {   // no vertices: only the state changes (in order)
             for (const Cmd &c : cmds_) if (c.kind == Cmd::State) ops_[size_t(c.op)]();
             v_.clear(); cmds_.clear(); ops_.clear(); mvps_.clear();
             nRes_ = 0;
             return;
         }
-        rlDrawRenderBatchActive();   // o que o rlgl tiver na fila sai antes (ordem)
+        rlDrawRenderBatchActive();   // whatever rlgl has queued goes out first (ordering)
         const auto t0 = std::chrono::steady_clock::now();
         if (upN) {
-        // buffer novo vazio (orfao: a GPU ainda pode ler o anterior) e os dados por glBufferSubData. Com o glBufferData ja com os
-        // dados (varios MB por descarga), no driver da RX 570 os quadrantes 3 e 4 da tela dividida saiam sem a fase de vez em quando
-        // (qualquer leitura de estado do GL, que sincroniza o driver, escondia o defeito)
+        // a new empty buffer (orphaned: the GPU may still be reading the previous one) and the data via glBufferSubData. With glBufferData
+        // carrying the data (several MB per flush), on the RX 570 driver split-screen quadrants 3 and 4 occasionally came out without the stage
+        // (any GL state read, which syncs the driver, hid the defect)
         glad_glBindBuffer(kArrayBuffer, vbo_);
         glad_glBufferData(kArrayBuffer, ptrdiff_t(upN * sizeof(V)), nullptr, kStreamDraw);
         glad_glBufferSubData(kArrayBuffer, 0, ptrdiff_t(upN * sizeof(V)), up);
@@ -659,11 +659,11 @@ public:
         }
         const auto t1 = std::chrono::steady_clock::now();
         upBytes += double(upN * sizeof(V));
-        // estado do GL que os desenhos daqui usam; uma mudanca de estado da fila (funcoes do rlgl) pode trocar o programa e o VAO
+        // GL state the draws here use; a queued state change (rlgl functions) may switch the program and the VAO
         bool bound = false;
         unsigned prog = 0, vao = 0;
         int mvp = -1;
-        bool cullOn = false;   // o drawList desliga o GL_CULL_FACE; so as faixas da arena com cull o ligam
+        bool cullOn = false;   // drawList turns GL_CULL_FACE off; only arena ranges with cull turn it on
         for (const Cmd &c : cmds_) {
             if (c.kind == Cmd::State) {
                 ops_[size_t(c.op)]();
@@ -677,7 +677,7 @@ public:
                 glad_glUseProgram(p);
                 if (p != prog) mvp = -1;
                 prog = p;
-                // (matProjection/matView/matModel/matNormal: os shaders do desenho nao os tem)
+                // (matProjection/matView/matModel/matNormal: the drawing shaders don't have them)
                 glad_glUniform4f(locs[RL_SHADER_LOC_COLOR_DIFFUSE], 1.0f, 1.0f, 1.0f, 1.0f);
                 glad_glUniform1i(locs[RL_SHADER_LOC_MAP_DIFFUSE], 0);
                 vao = 0;
@@ -708,18 +708,18 @@ public:
         ops_.clear();
         mvps_.clear();
     }
-    static inline double upMs = 0.0, drawMs = 0.0, upBytes = 0.0;   // WOTM_DRAWSTATS: subida e desenhos das descargas
+    static inline double upMs = 0.0, drawMs = 0.0, upBytes = 0.0;   // WOTM_DRAWSTATS: upload and draws of the flushes
 
 private:
     struct Cmd {
         enum Kind { Draw, State } kind;
         int mode; unsigned tex; int first, count;
-        int mvp;              // indice em mvps_
+        int mvp;              // index into mvps_
         unsigned shader; const int *locs;
-        int op;               // indice em ops_ (State)
-        int job;              // pedaco adiado (defer): indice em bufs_, -1 = vertices em v_
-        uint8_t res = 0;      // faixa da arena residente (first na arena)
-        uint8_t cull = 0;     // com GL_CULL_FACE (faixa da arena de secao com culling)
+        int op;               // index into ops_ (State)
+        int job;              // deferred chunk (defer): index into bufs_, -1 = vertices in v_
+        uint8_t res = 0;      // resident arena range (first is in the arena)
+        uint8_t cull = 0;     // with GL_CULL_FACE (arena range of a section with culling)
     };
     struct Mvp { float m[16]; };
     void reopen() {
@@ -732,7 +732,7 @@ private:
             }
         begin(RL_TRIANGLES, rlGetTextureIdDefault());
     }
-    // MVP de agora (rlMatrixMultiply(modelview, projection), na ordem do rlMatrixToFloat), reaproveitando o ultimo se for o mesmo
+    // The current MVP (rlMatrixMultiply(modelview, projection), in rlMatrixToFloat order), reusing the last one if it's the same
     int curMvp() {
         const Matrix a = rlGetMatrixModelview(), b = rlGetMatrixProjection();
         const Mvp x{{
@@ -753,8 +753,8 @@ private:
         glad_glGenBuffers(1, &vbo);
         glad_glBindVertexArray(vao);
         glad_glBindBuffer(kArrayBuffer, vbo);
-        // as posicoes fixas que o rlLoadShaderProgram amarra nos shaders (glBindAttribLocation): o shader padrao nao tem
-        // normal (posicao -1) e a do alphaShader_ e a 2
+        // the fixed locations rlLoadShaderProgram binds in the shaders (glBindAttribLocation): the default shader has no
+        // normal (location -1) and alphaShader_'s is 2
         const int loc[4] = {RL_DEFAULT_SHADER_ATTRIB_LOCATION_POSITION, RL_DEFAULT_SHADER_ATTRIB_LOCATION_TEXCOORD,
                             RL_DEFAULT_SHADER_ATTRIB_LOCATION_NORMAL, RL_DEFAULT_SHADER_ATTRIB_LOCATION_COLOR};
         const int size[4] = {3, 2, 3, 4};
@@ -771,9 +771,9 @@ private:
     static constexpr unsigned kArrayBuffer = 0x8892, kStreamDraw = 0x88E0, kStaticDraw = 0x88E8, kFloat = 0x1406, kUByte = 0x1401, kTexture2D = 0x0DE1,
                               kTexture0 = 0x84C0;
     std::vector<V> v_;
-    std::unique_ptr<V[]> mbuf_;   // juncao de v_ com os pedacos adiados (flush)
+    std::unique_ptr<V[]> mbuf_;   // v_ merged with the deferred chunks (flush)
     size_t mcap_ = 0;
-    std::vector<std::vector<V>> bufs_;   // pedacos adiados (defer), reaproveitados entre descargas
+    std::vector<std::vector<V>> bufs_;   // deferred chunks (defer), reused across flushes
     struct Copy { const V *src; size_t n, dst; };
     std::vector<Copy> copies_;
     int nDefer_ = 0, nRes_ = 0;
@@ -784,13 +784,13 @@ private:
     std::vector<Mvp> mvps_;
     long draws_ = 0;
     V cur_{};
-    float lastIn_[3] = {0.f, 0.f, 0.f};   // normal de entrada que deu a cur_ (a inicial 0,0,0 da 0,0,0, como no rlgl)
+    float lastIn_[3] = {0.f, 0.f, 0.f};   // input normal that produced cur_ (the initial 0,0,0 gives 0,0,0, as in rlgl)
     unsigned vao_ = 0, vbo_ = 0, shader_ = 0;
     const int *locs_ = nullptr;
     bool tried_ = false, ok_ = false;
 };
 
-// Tempo de GPU do redesenho (WOTM_DRAWSTATS): consulta GL_TIME_ELAPSED em volta dele, lida 3 redesenhos depois (ja pronta)
+// GPU time of the redraw (WOTM_DRAWSTATS): a GL_TIME_ELAPSED query around it, read 3 redraws later (already available)
 extern "C" {
 extern void (*glad_glGenQueries)(int, unsigned *);
 extern void (*glad_glBeginQuery)(unsigned, unsigned);
@@ -799,7 +799,7 @@ extern void (*glad_glGetQueryObjectui64v)(unsigned, unsigned, unsigned long long
 }
 struct GpuTimer {
     static GpuTimer &get() { static GpuTimer g; return g; }
-    double ms = 0.0;   // soma desde o ultimo zerar
+    double ms = 0.0;   // sum since the last reset
     long n = 0;
     void begin() {
         if (!glad_glGenQueries || !glad_glBeginQuery || !glad_glEndQuery || !glad_glGetQueryObjectui64v) return;
@@ -833,9 +833,9 @@ private:
     bool open_ = false;
 };
 
-// EndMode3D dentro de um BeginTextureMode. O do raylib pergunta ao GL o framebuffer ativo (rlGetActiveFramebuffer, um glGetIntegerv)
-// para aplicar a escala da tela no framebuffer 0; no driver da NVIDIA, com a otimizacao em thread, a leitura espera o driver esvaziar
-// a fila: ~1,5 ms por vista (6 ms por redesenho de 4 vistas no Ryzen 5 5500). Numa render texture a escala nao vale.
+// EndMode3D inside a BeginTextureMode. raylib's asks GL for the active framebuffer (rlGetActiveFramebuffer, a glGetIntegerv)
+// to apply the screen scale on framebuffer 0; on the NVIDIA driver, with threaded optimization, that read waits for the driver to drain
+// its queue: ~1.5 ms per view (6 ms per 4-view redraw on the Ryzen 5 5500). The scale doesn't apply to a render texture.
 inline void endMode3DInTexture() {
     rlDrawRenderBatchActive();
     rlMatrixMode(RL_PROJECTION);
@@ -845,11 +845,11 @@ inline void endMode3DInTexture() {
     rlDisableDepthTest();
 }
 
-// Tela do GS (640 x 224, exibida em 4:3) dentro do quadro nativo de fbw x fbh: a faixa central com a altura toda. Em widescreen
-// (Hor+: o FOV vertical do jogo fica, a largura cresce) as sobras sao as laterais; o que o jogo poe em pixels do GS (texto, lens
-// flare, quadro anterior) fica nessa faixa.
+// The GS screen (640 x 224, shown at 4:3) inside the native fbw x fbh frame: the central strip at full height. In widescreen
+// (Hor+: the game's vertical FOV stays, the width grows) the extra space is on the sides; whatever the game places in GS pixels (text, lens
+// flare, previous frame) stays in that strip.
 struct GsScreenRect { float x0, w, h; };
-// Na tela dividida (ViewScope de uma vista de 320 x 224) a faixa e a da vista: 2:3 no quadro da metade.
+// In split screen (ViewScope of a 320 x 224 view) the strip is the view's: 2:3 in the half frame.
 inline GsScreenRect gsScreenRect(float fbw, float fbh) {
     const float w = std::min(fbw, fbh * curView().aspect());
     return {(fbw - w) * 0.5f, w, fbh};
@@ -859,29 +859,29 @@ namespace fxaddr {
 constexpr uint32_t fx = wotm::sym::fx;           // _ParticleType fx[100]
 constexpr uint32_t stride = 0x2EE0;           // sizeof(_ParticleType)
 constexpr uint32_t count = 100;
-constexpr uint32_t fxList = wotm::sym::fxList;       // 12 bytes por sistema: next em +8
-constexpr uint32_t fxActiveTop = wotm::sym::fxActiveTop;  // primeiro ativo (-1 = nenhum)
+constexpr uint32_t fxList = wotm::sym::fxList;       // 12 bytes per system: next at +8
+constexpr uint32_t fxActiveTop = wotm::sym::fxActiveTop;  // first active one (-1 = none)
 constexpr uint32_t textureInfo = wotm::sym::TextureInfo;  // TextureInfoType[128]: numTextures s16, texIndex u16, du u16, dv u16
-constexpr uint32_t texId = wotm::sym::texId;        // u16[128]: indice no texInfo global
-constexpr uint32_t tex0 = wotm::sym::TEX0;         // u64[128]: TEX0 de cada textura de particula
-constexpr uint32_t colors = 0x00256C10;       // RGBA (0x80 = 1,0), indexado por vis.colorIndex
-// D_0078F5A0 (particle.bss): float[5][16], a matriz da vista no particleDraw(v) anterior. O particleDraw copia a da vista v para o
-// pacote de cada sistema (fx + 0x2EC0) e no fim grava a atual (D_00256B90) nela
+constexpr uint32_t texId = wotm::sym::texId;        // u16[128]: index into the global texInfo
+constexpr uint32_t tex0 = wotm::sym::TEX0;         // u64[128]: TEX0 of each particle texture
+constexpr uint32_t colors = 0x00256C10;       // RGBA (0x80 = 1.0), indexed by vis.colorIndex
+// D_0078F5A0 (particle.bss): float[5][16], the view matrix in the previous particleDraw(v). particleDraw copies view v's into
+// each system's packet (fx + 0x2EC0) and at the end stores the current one (D_00256B90) there
 constexpr uint32_t viewPrevMat = 0x0078F5A0;
 }
 
-// Offsets dentro de _ParticleType (include/hieri_types.h)
+// Offsets inside _ParticleType (include/hieri_types.h)
 namespace fxoff {
 constexpr uint32_t uvI = 0x2B40;          // u8[256]
 constexpr uint32_t emitVec = 0x2CA0;      // emit.ParticleToEmitVec
-constexpr uint32_t fxId = 0x2DDC;         // emit.fxId (parece ser o indice do preset de particleInitFx; nao confirmado em dump)
-constexpr uint32_t infoAttribs = 0x2E30;  // info.attribs (0x400 = pacote montado neste quadro)
-constexpr uint32_t minSize = 0x2E38;      // info.minSize (pedestres: largura do carimbo)
-constexpr uint32_t maxSize = 0x2E3C;      // info.maxSize (pedestres: altura do carimbo)
+constexpr uint32_t fxId = 0x2DDC;         // emit.fxId (looks like the particleInitFx preset index; not confirmed in a dump)
+constexpr uint32_t infoAttribs = 0x2E30;  // info.attribs (0x400 = packet built this frame)
+constexpr uint32_t minSize = 0x2E38;      // info.minSize (pedestrians: stamp width)
+constexpr uint32_t maxSize = 0x2E3C;      // info.maxSize (pedestrians: stamp height)
 constexpr uint32_t expansionRate = 0x2E44; // info.expansionRate
-constexpr uint32_t lifetime = 0x2E4A;     // info.lifetime (s16, campos)
-constexpr uint32_t useThisColor = 0x2E58; // info.useThisColor: vetor (R, G, B 0..255; w = escala do alfa) com o bit 0x200 do attribs
-constexpr uint32_t alphaFadeIn = 0x2E60;  // info.alphaFadeIn (dustTrail: fracao da vida)
+constexpr uint32_t lifetime = 0x2E4A;     // info.lifetime (s16, fields)
+constexpr uint32_t useThisColor = 0x2E58; // info.useThisColor: vector (R, G, B 0..255; w = alpha scale) with attribs bit 0x200
+constexpr uint32_t alphaFadeIn = 0x2E60;  // info.alphaFadeIn (dustTrail: fraction of the lifetime)
 constexpr uint32_t alphaFadeOut = 0x2E64;
 constexpr uint32_t minAlpha = 0x2E68;
 constexpr uint32_t maxAlpha = 0x2E6C;
@@ -889,7 +889,7 @@ constexpr uint32_t preAgeFactor = 0x2D88; // emit.info.preAgeFactor
 constexpr uint32_t mapsPerFrame = 0x2E74; // info.mapsPerFrame (4.12)
 constexpr uint32_t colorsPerFrame = 0x2E78;
 constexpr uint32_t type = 0x2E90;         // vis.attribs
-constexpr uint32_t texMask = 0x2E94;      // vis.texMask (numero de quadros do texSprite)
+constexpr uint32_t texMask = 0x2E94;      // vis.texMask (number of texSprite frames)
 constexpr uint32_t texInfoIndex = 0x2E98;
 constexpr uint32_t numColors = 0x2E9C;
 constexpr uint32_t colorIndex = 0x2EA0;
@@ -920,48 +920,48 @@ inline const char *fxTypeName(uint32_t t) {
     case FX_FRAG: return "frag";
     case FX_DUSTTRAIL: return "dustTrail";
     case FX_WAKE: return "wake";
-    case FX_ARC: return "arco";
-    case FX_ARC2: return "arco17";
-    case FX_CHAIN: return "corrente";
-    case FX_PEDS: return "pedestre";
+    case FX_ARC: return "arc";
+    case FX_ARC2: return "arc17";
+    case FX_CHAIN: return "chain";
+    case FX_PEDS: return "pedestrian";
     default: return "?";
     }
 }
 
-// Um sistema de particulas pronto para desenhar
+// A particle system ready to draw
 struct FxSystem {
-    uint32_t base = 0;     // endereco do _ParticleType
-    uint32_t index = 0;    // indice em fx[]
+    uint32_t base = 0;     // address of the _ParticleType
+    uint32_t index = 0;    // index into fx[]
     uint32_t type = 0;
     int n = 0;             // numParticles
-    float key = 0;         // ordem de desenho (maior = mais longe = antes)
+    float key = 0;         // draw order (larger = farther = earlier)
 };
 
-// Eixos da camera para montar os quadrados: right/up no plano da tela, back = -frente, profundidade(p) = depth . (p, 1)
-// ox/oy: coordenadas x e y de vista (ox . (p, 1)), na mesma base de right/up.
-// Neblina (Particles::setFog): W(p) = fogW . (p, 1) (linha 3 do worldToScreenMat, com o olho), F = fogFA + fogFB / W; fogFB 0 = sem neblina.
+// Camera axes for building the quads: right/up in the screen plane, back = -forward, depth(p) = depth . (p, 1)
+// ox/oy: view x and y coordinates (ox . (p, 1)), in the same basis as right/up.
+// Fog (Particles::setFog): W(p) = fogW . (p, 1) (row 3 of worldToScreenMat, with the eye), F = fogFA + fogFB / W; fogFB 0 = no fog.
 struct FxView { float right[3], up[3], back[3], depth[4], ox[4], oy[4]; float fogW[4] = {0, 0, 0, 0}, fogFA = 0.f, fogFB = 0.f; };
 
 class Particles {
 public:
-    // texture(texId, tex0) -> id de textura do raylib (0 = sem textura); fornecido pela Scene (paletas do .RTX)
+    // texture(texId, tex0) -> raylib texture id (0 = no texture); provided by Scene (the .RTX palettes)
     using TexFn = std::function<unsigned(uint32_t texId, uint64_t tex0)>;
 
     std::vector<FxSystem> systems;
-    float wide = 1.f;   // largura da tela / largura 4:3 (Scene::wide): teste de visao com os planos laterais da tela larga
-    bool fovCull = true;     // collect recorta pela vista do jogo (inViewFov); false = camera livre pausada
-    bool frameGate = true;   // collect sem particulas em quadro sem particleDraw (flareSlot); false = recoleta da camera livre pausada
-    // Sprites que o jogo pausado nao tem (modo foto, wotm_photo.inc: fogo do Agamo simulado com o wotm_flame.hpp quando o emissor
-    // estava fora da tela na pausa). Mesmo desenho de um sistema sprite (tipo 3): meio-lado size / 2 com teto de 1/4 da profundidade,
-    // cor RGBA com 0x80 = 1, UV espelhada por sel (os 2 bits baixos de pos.w), textura do texInfo, mistura do alphaContext.
+    float wide = 1.f;   // screen width / 4:3 width (Scene::wide): view test with the widescreen side planes
+    bool fovCull = true;     // collect culls by the game's view (inViewFov); false = paused free camera
+    bool frameGate = true;   // collect yields no particles on a frame without particleDraw (flareSlot); false = re-collect for the paused free camera
+    // Sprites the paused game doesn't have (photo mode, wotm_photo.inc: Agamo's fire simulated with wotm_flame.hpp when the emitter
+    // was off screen at pause time). Drawn like a sprite system (type 3): half-side size / 2 capped at 1/4 of the depth,
+    // RGBA color with 0x80 = 1, UV mirrored by sel (the 2 low bits of pos.w), texInfo texture, alphaContext blending.
     struct SynthSprite { float p[3]; float size; uint32_t rgba; uint8_t sel; };
     struct SynthSystem { uint32_t texInfo = 0, alphaContext = 0; std::vector<SynthSprite> sprites; };
     std::vector<SynthSystem> synth;
 
-    // Textura composta de poeira/fumaca: TEX0 com TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) e sem pixels na RAM (texId 0xFFFF; o jogo a
-    // compoe na VRAM, Scene::dustTexture). O TexFn a recebe com texId = kDustTexId. Quatro celulas de 32x32; o sprite (VisualInfo
-    // 105) e o dustTrail (1, 2 e 118) sobem a tabela de UV das celulas; o sprite escolhe a entrada pelos bits baixos de pos.w e o
-    // dustTrail pelo byte 2 da palavra de idade (dustTrailVu).
+    // Composite dust/smoke texture: TEX0 with TBP 0x3F60 (VRAM 0xFD800, CT32 64x64) and no pixels in RAM (texId 0xFFFF; the game
+    // composes it in VRAM, Scene::dustTexture). TexFn receives it with texId = kDustTexId. Four 32x32 cells; the sprite (VisualInfo
+    // 105) and the dustTrail (1, 2 and 118) upload the cells' UV table; the sprite picks the entry by the low bits of pos.w and the
+    // dustTrail by byte 2 of the age word (dustTrailVu).
     static constexpr uint32_t kDustTexId = 0xFFFF;
     static bool isDustTex(uint64_t tex0) { return (tex0 & 0x3FFF) == 0x3F60; }
     static uint64_t systemTex0(const Ram &ram, uint32_t b, uint32_t frame = 0) {
@@ -969,22 +969,22 @@ public:
         return uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
     }
 
-    // Teste de visao do particleDraw: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), a caixa (centro, meia-extensao) contra
-    // os 6 planos de worldCtx[0] (fovNormsTP em +0xF0, fovSigns em +0x170; src/common/view.cpp). Falso = o retail nao desenha o sistema.
-    // wide > 1 (widescreen: largura da tela / largura 4:3): os planos laterais (planes[0][1] e [0][2] do viewSetFov, os de +/- w/2)
-    // saem da worldToScreenMat com a borda em |X - 2048| = 320 * wide pixels do GS; perto, cima, baixo e longe continuam os do jogo.
+    // particleDraw's view test: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), the box (center, half-extent) against
+    // the 6 planes of worldCtx[0] (fovNormsTP at +0xF0, fovSigns at +0x170; src/common/view.cpp). False = retail doesn't draw the system.
+    // wide > 1 (widescreen: screen width / 4:3 width): the side planes (planes[0][1] and [0][2] of viewSetFov, the +/- w/2 ones)
+    // come from worldToScreenMat with the edge at |X - 2048| = 320 * wide GS pixels; near, top, bottom and far stay the game's.
     static bool inViewFov(const Ram &ram, uint32_t b, float wide = 1.f) {
         float c[3], e[3];
         for (int k = 0; k < 3; ++k) { c[k] = ram.f32(b + 0x2C80 + 4 * k); e[k] = ram.f32(b + 0x2C90 + 4 * k); }
         return inViewVolume(ram, c, e, 0.f, wide);
     }
 
-    // Caixa (centro c, meia-extensao e) mais esfera de raio r em volta dela, em mundo, contra os 6 planos de worldCtx[0]: o viewInFOV
-    // (r = 0) e o programa 0x0 do VU0 que o hierTraverseAsm roda em cada GROUP e OBJECT (e = 0; vf30 = fovNorms . (centro + eo) e
-    // vf29 = fovNorms1 . (centro + eo) contra -raio, o plano 1.z com o farClip da memoria 0 do VU0, como o fovNormsTP[1][3][2]).
-    // Planos unitarios; o termo sum |n_k| e_k e o fovSigns do jogo.
+    // Box (center c, half-extent e) plus a sphere of radius r around it, in world space, against the 6 planes of worldCtx[0]: viewInFOV
+    // (r = 0) and VU0 program 0x0 that hierTraverseAsm runs on each GROUP and OBJECT (e = 0; vf30 = fovNorms . (center + eo) and
+    // vf29 = fovNorms1 . (center + eo) against -radius, plane 1.z with the farClip from VU0 memory 0, like fovNormsTP[1][3][2]).
+    // Unit planes; the term sum |n_k| e_k is the game's fovSigns.
     static bool inViewVolume(const Ram &ram, const float c[3], const float e[3], float r, float wide = 1.f) {
-        const uint32_t w = viewCtxAddr();   // worldCtx[vista]
+        const uint32_t w = viewCtxAddr();   // worldCtx[view]
         const bool ws = wide > 1.001f;
         for (uint32_t i = 0; i < 2; ++i)
             for (uint32_t j = 0; j < 3; ++j) {
@@ -995,13 +995,13 @@ public:
                 if (d < ram.f32(w + 0xF0 + 64 * i + 48 + 4 * j)) return false;
             }
         if (!ws) return true;
-        // X = (M0 . d) / (M3 . d), d = (p - olho, 1). Dentro da borda direita: X - 2048 <= h  <=>  (h M3 - (M0 - 2048 M3)) . d >= 0;
-        // esquerda com o sinal trocado. Para a caixa, o canto mais favoravel: n . (c - olho) + n3 + sum |n_k| e_k >= 0.
+        // X = (M0 . d) / (M3 . d), d = (p - eye, 1). Inside the right edge: X - 2048 <= h  <=>  (h M3 - (M0 - 2048 M3)) . d >= 0;
+        // left with the sign flipped. For the box, the most favorable corner: n . (c - eye) + n3 + sum |n_k| e_k >= 0.
         const uint32_t kW2S = viewW2S();
         float M0[4], M3[4], eye[3];
         for (int k = 0; k < 4; ++k) { M0[k] = ram.f32(kW2S + 4 * k); M3[k] = ram.f32(kW2S + 48 + 4 * k); }
-        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(w + 0x20 + 4 * k);   // worldCtx[0].eo = -olho
-        const float h = 0.5f * curView().w * wide, xc = curView().cx;   // meia-largura e centro da vista no GS
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(w + 0x20 + 4 * k);   // worldCtx[0].eo = -eye
+        const float h = 0.5f * curView().w * wide, xc = curView().cx;   // half-width and center of the view in GS space
         for (float sgn : {1.f, -1.f}) {
             float n[4];
             for (int k = 0; k < 4; ++k) n[k] = h * M3[k] - sgn * (M0[k] - xc * M3[k]);
@@ -1012,8 +1012,8 @@ public:
         return true;
     }
 
-    // Focos da worldToScreenMat M (pixels do GS por unidade de vista a W = 1): parte das linhas 0 e 1 perpendicular a linha 3 (frente).
-    // 384 e 180,48 na luta.
+    // Focal lengths of worldToScreenMat M (GS pixels per view unit at W = 1): the part of rows 0 and 1 perpendicular to row 3 (forward).
+    // 384 and 180.48 in a fight.
     static bool screenFoci(const float M[4][4], float &fx, float &fy) {
         float n3 = 0.f, d03 = 0.f, d13 = 0.f;
         for (int k = 0; k < 3; ++k) { n3 += M[3][k] * M[3][k]; d03 += M[0][k] * M[3][k]; d13 += M[1][k] * M[3][k]; }
@@ -1027,15 +1027,15 @@ public:
         return fx > 1e-6f && fy > 1e-6f;
     }
 
-    // prevViewMat do pacote (fx + 0x2EC0: colunas x/y/z/translacao em mundo) para a cauda das linhas e dos strites. O particleDraw so a
-    // grava (a matriz da vista, logo antes do pacote) nos sistemas que passam no teste de visao 4:3; o nativo em widescreen desenha
-    // tambem os que ficam so na faixa lateral, e neles a matriz e de um quadro antigo ou lixo do linePacketInit ((63, 0, 0, 0) num
-    // sistema novo): a cauda virava um risco de milhares de pixels (riscos amarelos na 3-MILE, foto 2026-10-18_232542/001 e dump de
-    // 2026-10-19). Fora da visao 4:3 a cauda usa a vista atual (sem o borrao da camera) e o vento fica de fora (o linePacketBuild
-    // tambem nao rodou). Falso se a matriz lida for toda zero.
-    // Tela dividida: o pacote e um so por sistema e o particleDraw da vista 1 grava a matriz dela por cima da da vista 0 (as linhas do
-    // tiro do Robo-47 riscavam a vista da esquerda, foto 2026-10-19_130401). Ai a matriz sai de fxaddr::viewPrevMat[vista], que a
-    // captura (shadowRam) preenche com a do quadro anterior de cada vista.
+    // The packet's prevViewMat (fx + 0x2EC0: x/y/z/translation columns in world space) for the tail of lines and strites. particleDraw only
+    // writes it (the view matrix, right before the packet) for systems that pass the 4:3 view test; the native side in widescreen also draws
+    // the ones that are only in the side strip, and for those the matrix is from an old frame or linePacketInit garbage ((63, 0, 0, 0) on a
+    // new system): the tail became a streak thousands of pixels long (yellow streaks on 3-MILE, photo 2026-10-18_232542/001 and the dump of
+    // 2026-10-19). Outside the 4:3 view the tail uses the current view (no camera blur) and wind is left out (linePacketBuild
+    // didn't run either). False if the matrix read is all zeros.
+    // Split screen: there is a single packet per system and view 1's particleDraw writes its matrix over view 0's (the lines of
+    // Robo-47's shot streaked across the left view, photo 2026-10-19_130401). There the matrix comes from fxaddr::viewPrevMat[view], which
+    // the capture (shadowRam) fills with each view's previous-frame matrix.
     static bool prevViewMat(const Ram &ram, uint32_t b, const float M[4][4], const float eye[3], float P[16], float wind[3]) {
         const uint32_t pm = ram.u32(b + 0x2EC0);
         if (!inViewFov(ram, b)) {
@@ -1048,7 +1048,7 @@ public:
         }
         if (!ram.ok(pm - 16, 80)) return false;
         bool any = false;
-        if (curView().shared() || curView().view > 0) {   // a faixa de baixo dos 3 jogadores (vista 2) tem 640 de largura
+        if (curView().shared() || curView().view > 0) {   // the bottom strip with 3 players (view 2) is 640 wide
             const uint32_t vm = fxaddr::viewPrevMat + 64u * uint32_t(std::clamp(curView().view, 0, 3));
             for (int k = 0; k < 16; ++k) { P[k] = ram.f32(vm + 4 * uint32_t(k)); any = any || P[k] != 0.f; }
         }
@@ -1058,18 +1058,18 @@ public:
         return any;
     }
 
-    // Strite como o microprograma do VU1 (entrada 0xA88; conferido pela checagem, erro < 0,1 px). Em pixels do GS:
-    //   H = M (pos) com a worldToScreenMat atual; T = M' (pos - vel) com a prevViewMat (fx + 0x2EC0: 4 qwords no pacote, colunas
-    //   x/y/z/translacao em coordenadas de mundo): a cauda sai onde estava na tela do quadro anterior (borrao de movimento).
-    //   A = 3T - 2H (ponta), B = 3H - 2T (base), divididos pelo proprio w. Direcao m = (B - A) normalizada no espaco dividido pelos focos
-    //   (fx, fy da matriz: 384 e 180,48 na luta); ponta recua 0,5 pos.w, base avanca 0,25 pos.w e a meia-largura e 0,433 pos.w
-    //   (0,866 / 2), em unidades de vista: pixel = foco * deslocamento * pos.w / w.
-    // Os tres pontos voltam ao mundo pela matriz atual, cada um na sua profundidade. c[0] = c[3] = ponta, c[1]/c[2] = base.
-    // alphaK: o microprograma multiplica o alfa da cor por K / (len + K) (0x0DC0-0x0E30: ESQRT, DIV Q = vf24w / vf10x, MULq.w), com
-    // len = |B/w - A/w| na tela (Y escalado por fx/fy, vf24z) e K = 4 vf27x pos.w / B.w = 2 fx pos.w / B.w (vf27x = fx / 2; medido contra
-    // o VU1 na foto 2026-10-17_200206): rastro longo fica mais fraco.
+    // Strite like the VU1 microprogram (entry 0xA88; verified by the check, error < 0.1 px). In GS pixels:
+    //   H = M (pos) with the current worldToScreenMat; T = M' (pos - vel) with prevViewMat (fx + 0x2EC0: 4 qwords in the packet, columns
+    //   x/y/z/translation in world coordinates): the tail lands where it was on the previous frame's screen (motion blur).
+    //   A = 3T - 2H (tip), B = 3H - 2T (base), each divided by its own w. Direction m = (B - A) normalized in the space divided by the focal lengths
+    //   (the matrix's fx, fy: 384 and 180.48 in a fight); the tip pulls back 0.5 pos.w, the base moves forward 0.25 pos.w and the half-width is 0.433 pos.w
+    //   (0.866 / 2), in view units: pixel = focal * offset * pos.w / w.
+    // The three points go back to world space through the current matrix, each at its own depth. c[0] = c[3] = tip, c[1]/c[2] = base.
+    // alphaK: the microprogram multiplies the color's alpha by K / (len + K) (0x0DC0-0x0E30: ESQRT, DIV Q = vf24w / vf10x, MULq.w), with
+    // len = |B/w - A/w| on screen (Y scaled by fx/fy, vf24z) and K = 4 vf27x pos.w / B.w = 2 fx pos.w / B.w (vf27x = fx / 2; measured against
+    // VU1 in photo 2026-10-17_200206): a long trail gets fainter.
     static bool striteTriangle(const Ram &ram, uint32_t b, const float p[4], const float v[3], float c[4][3], float *alphaK = nullptr) {
-        const uint32_t kW2S = viewW2S(), kEo = viewCtxAddr() + 0x20;   // worldToScreenMat[vista], worldCtx[vista].eo (= -olho)
+        const uint32_t kW2S = viewW2S(), kEo = viewCtxAddr() + 0x20;   // worldToScreenMat[view], worldCtx[view].eo (= -eye)
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
@@ -1100,7 +1100,7 @@ public:
         const float px[3] = {ax - ka * mx * fx, bx + kb * (0.25f * mx * fx - 0.4330127f * my * fx), bx + kb * (0.25f * mx * fx + 0.4330127f * my * fx)};
         const float py[3] = {ay - ka * my * fy, by + kb * (0.25f * my * fy + 0.4330127f * mx * fy), by + kb * (0.25f * my * fy - 0.4330127f * mx * fy)};
         const float pw[3] = {A[3], B[3], B[3]};
-        // volta ao mundo: linhas 0, 1 e 3 de M aplicadas a (q - olho) dao (x w, y w, w)
+        // back to world space: rows 0, 1 and 3 of M applied to (q - eye) give (x w, y w, w)
         const float m00 = M[0][0], m01 = M[0][1], m02 = M[0][2], m10 = M[1][0], m11 = M[1][1], m12 = M[1][2], m30 = M[3][0], m31 = M[3][1], m32 = M[3][2];
         const float det = m00 * (m11 * m32 - m12 * m31) - m01 * (m10 * m32 - m12 * m30) + m02 * (m10 * m31 - m11 * m30);
         if (!(std::fabs(det) > 1e-12f)) return false;
@@ -1116,14 +1116,14 @@ public:
         return true;
     }
 
-    // Linha (FX_LINE) como o microprograma do VU1 (MPG 0x0000; linePacketInit/Build em asm/common/partdraw.s):
-    //  - ponta = pos com a camera atual; cauda = M' (pos - vel - vento), M' = prevViewMat (fx + 0x2EC0, 4 qwords do pacote, colunas
-    //    x/y/z/translacao) e vento = q537 (logo antes dela: field.wind.xyz + Gusts * field.wind.w, gravado pelo linePacketBuild). A cauda
-    //    volta ao mundo pela matriz atual, na sua profundidade (como o striteTriangle): fica onde a cauda estava na tela do quadro anterior;
-    //  - cor = lerp da tabela em vel.w * (numColors - 1) / lifetime, + 0,5, truncada (nao pela idade);
-    //  - alfa = alfa da cor * pos.w * (fogFA + fogFB / W) / 255, teto 255: a neblina entra no alfa (o PRIM 0x49 nao tem FGE). Some com
-    //    alfa < 1. A cauda leva o RGB com alfa 0.
-    // Conferido na checagem (ultrav_corda2: cauda a 0,05 px do VU1 no ajuste offline).
+    // Line (FX_LINE) like the VU1 microprogram (MPG 0x0000; linePacketInit/Build in asm/common/partdraw.s):
+    //  - head = pos with the current camera; tail = M' (pos - vel - wind), M' = prevViewMat (fx + 0x2EC0, 4 qwords of the packet, columns
+    //    x/y/z/translation) and wind = q537 (right before it: field.wind.xyz + Gusts * field.wind.w, written by linePacketBuild). The tail
+    //    goes back to world space through the current matrix, at its own depth (like striteTriangle): it lands where the tail was on the previous frame's screen;
+    //  - color = table lerp at vel.w * (numColors - 1) / lifetime, + 0.5, truncated (not by age);
+    //  - alpha = color alpha * pos.w * (fogFA + fogFB / W) / 255, capped at 255: fog goes into alpha (PRIM 0x49 has no FGE). Disappears with
+    //    alpha < 1. The tail carries the RGB with alpha 0.
+    // Verified by the check (ultrav_corda2: tail within 0.05 px of VU1 in the offline fit).
     static bool lineVu(const Ram &ram, uint32_t b, const FxView &view, int i, float head[3], float tail[3], uint32_t &col) {
         const uint32_t kW2S = viewW2S(), kEo = viewCtxAddr() + 0x20;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel);
@@ -1135,13 +1135,13 @@ public:
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(kW2S + 16 * r + 4 * k);
         for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(kEo + 4 * k);
         if (!prevViewMat(ram, b, M, eye, P, wind)) return false;
-        // cor: q520 + indice (ate 16 entradas; as que passam de numColors tem alfa 0)
+        // color: q520 + index (up to 16 entries; the ones past numColors have alpha 0)
         const uint32_t nc = ram.u32(b + fxoff::numColors), tab = fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex);
         const int life = int(ram.s16(b + fxoff::lifetime));
         const float rate = life != 0 && nc > 0 ? float(int(nc) - 1) / float(life) : 0.f;
         const float cp = v[3] * rate;
         if (!std::isfinite(cp)) return false;
-        int k0 = int(cp);   // FTOI0: trunca
+        int k0 = int(cp);   // FTOI0: truncates
         const float fr = cp - float(k0);
         const int nEnt = int(std::min<uint32_t>(nc + 1, 16));
         auto entry = [&](int k, int sh) -> float {
@@ -1151,7 +1151,7 @@ public:
         };
         float c[4];
         for (int a = 0; a < 4; ++a) c[a] = entry(k0, 8 * a) * (1.f - fr) + entry(k0 + 1, 8 * a) * fr + 0.5f;
-        // profundidade da ponta (W) para a neblina no alfa
+        // depth of the head (W) for the fog in alpha
         float W = 0.f;
         for (int k = 0; k < 3; ++k) W += M[3][k] * (p[k] - eye[k]);
         W += M[3][3];
@@ -1160,7 +1160,7 @@ public:
         if (!(A >= 1.f)) return false;
         auto ub = [](float x) { return uint32_t(std::clamp(x, 0.f, 255.f)); };
         col = ub(c[0]) | ub(c[1]) << 8 | ub(c[2]) << 16 | ub(A) << 24;
-        // cauda: T = P (pos - vel - vento), de volta ao mundo pela matriz atual na profundidade T.w
+        // tail: T = P (pos - vel - wind), back to world space through the current matrix at depth T.w
         const float t[3] = {p[0] - v[0] - wind[0], p[1] - v[1] - wind[1], p[2] - v[2] - wind[2]};
         float T[4];
         for (int r = 0; r < 4; ++r) T[r] = P[12 + r] + P[r] * t[0] + P[4 + r] * t[1] + P[8 + r] * t[2];
@@ -1177,7 +1177,7 @@ public:
         return true;
     }
 
-    // Reune os sistemas desenhaveis (mesmos testes de particleDraw). A ordem sai no draw (camera atual).
+    // Gathers the drawable systems (same tests as particleDraw). The order is set in draw (current camera).
     void collect(const Ram &ram) {
         systems.clear();
         uint32_t i = ram.u32(fxaddr::fxActiveTop);
@@ -1192,22 +1192,22 @@ public:
             const int maxN = int32_t(ram.u32(b + fxoff::maxParticles));
             const bool built = (ram.u32(b + fxoff::infoAttribs) & 0x400) != 0;
             const int minN = s.type == FX_SPRINE ? 2 : 1;
-            // O particleDraw so monta o pacote (0x400) dos sistemas na vista. Na recoleta da camera livre pausada (fovCull falso) os
-            // sprites fora da vista da pausa entram tambem (fogo do Agamo atras da camera): eles so leem pos, idade e cores, nao o
-            // pacote; os tipos com cabecalho no pacote (wake, arco, sprine...) continuam so com ele montado
+            // particleDraw only builds the packet (0x400) for systems in view. When re-collecting for the paused free camera (fovCull false)
+            // sprites outside the paused view are included too (Agamo's fire behind the camera): they only read pos, age and colors, not the
+            // packet; the types with a header in the packet (wake, arc, sprine...) still require it to be built
             const bool plain = s.type == FX_SPRITE || s.type == FX_TEXSPRITE;
             if ((built || (!fovCull && plain)) && s.type != 11 && s.type != FX_FRAG && s.n >= minN && s.n <= std::max(maxN, 1) && s.n <= 1024 && ram.ok(ram.u32(b + fxoff::pos), 16 * uint32_t(s.n)) &&
                 (!fovCull || inViewFov(ram, b, wide)))
                 systems.push_back(s);
             i = next;
         }
-        {   // ao vivo, quadro sem particleDraw (menu, carga): nada de particulas, como no PS2, onde o pacote so sai do particleDraw.
-            // fx[] continua com os sistemas da ultima luta (fx 81/86/90/93 no menu depois da campanha: quadrados verdes, foto 007);
-            // o captureFlares (logo depois de cada particleDraw) marca o quadro como o lens flare
+        {   // live, a frame without particleDraw (menu, load): no particles, as on the PS2, where the packet only comes out of particleDraw.
+            // fx[] still holds the last fight's systems (fx 81/86/90/93 in the menu after the campaign: green quads, photo 007);
+            // captureFlares (right after each particleDraw) marks the frame, as for the lens flare
             FlareSlot &s = flareSlot();
             std::lock_guard<std::mutex> g(s.m);
-            // a recoleta da camera livre pausada (wotm_live.inc) roda depois do consumeFlares do quadro: la a RAM parada e a do
-            // quadro com particleDraw, e o corte apagava todas as particulas de fx[] (pedestres, fogo do Agamo) so na pausa
+            // re-collecting for the paused free camera (wotm_live.inc) runs after the frame's consumeFlares: there the frozen RAM is the
+            // frame with particleDraw, and the cut wiped every fx[] particle (pedestrians, Agamo's fire) only while paused
             if (frameGate && s.used && !s.fresh) systems.clear();
         }
         static const bool list = std::getenv("WOTM_FXLIST") != nullptr;
@@ -1215,31 +1215,31 @@ public:
         collectFlares(ram);
     }
 
-    // Lens flare (tipo 11): fora do particleDraw comum. Dois fx[] tipo 11 (lensFlarePacket[vista], 0x6F8908; particleInitAfter) cujo
-    // pos[] (fx + 0x2EB0) e a lista HierLensFlareList[74] (48 bytes) de lensFlareList[vista] (0x6F8900), com lensFlareIndex[vista]
-    // (0x6F88F8) entradas. A lista e alimentada pelo hierLightNode (luzes com hasLensFlare: pos no mundo, flags = as da luz, intensity,
-    // cor, dotProd/beamWidth do feixe) e pelo particleAddLensFlareToList (sistemas com vis.lightColor & 0x1000000: flags 3, Zfudge,
-    // intensity = lightIntensity^2, cor = lightColor / 255).
-    //  - particleLensFlareTestZbuffer (no fim do particleDraw, depois do VU1 desenhar a cena): projeta cada entrada, descarta as fora da
-    //    tela ou com W < 1 (compacta a lista), grava pos = (X, Y, Z do GS), distance = W (100 com lightAtInfinity, bit 7 das flags) e le
-    //    do GS o Z 4x4 em (X - 2, Y) (sceGsStoreImage PSMZ32; origem X - 0x6C2, Y - 0x790).
-    //  - particleLensFlareRender: amostra visivel = Z <= limiar. Luz no infinito: as 16, limiar fptoui(1,03125 Z) + 1; local: as 4
-    //    centrais, limiar fptoui(a + b / (W - max(Zfudge; 1,5))) (a, b = viewGetZBuffParams). intensity *= visiveis / amostras; pos +=
-    //    centroide das visiveis - (2 ou 1); com 0 < ID < 0x7FF (so luzes no infinito: particleLensFlareAddToDeBounceList), intensity =
-    //    media com a do quadro anterior (D_0078FF00); abaixo de 1/256 zera o byte das flags. Depois o lensFlarePacketBuild grava q44 =
-    //    (centro X, centro Y, 18, n) e o UNPACK de 3n qwords da lista em q45.
-    // No runtime o GS emulado nao tem a cena (sem VU1); aqui o teste e refeito contra a profundidade do nativo (drawFlares), e o centroide
-    // e a fracao do GS emulado sao desfeitos supondo visibilidade total la (ver o WOTM_FLARELOG para conferir).
-    // O microprograma 0x2B20 (build/vu1/particle.txt), por entrada (q45 + 3i):
-    //  - so com flags & 1; Q = 1/distance; brilho = I Q Q (o segundo MULq le o Q antigo: o DIV 1/beamWidth ainda nao terminou; com o Q
-    //    novo as particulas, sem beamWidth, sairiam com lixo), tamanho = sqrt(I) Q. Com flags & 8 (direcional): os dois vezes
-    //    f / beamWidth, f = max(dotProd, 0) + beamWidth - 1 (|dotProd| com flags & 0x10, bidirecional); some se brilho f <= 0.
-    //  - 18 SPRITEs (tabelas no pacote, q8-q25: TEX0, t, meio-lado com o seletor de UV nos 2 bits baixos; q26-q43: R, G, B, A). Sprite k
-    //    no ponto C + t_k (S - C) da linha do centro da tela C ate a fonte S; cantos +/- (h, h/2) px do GS. k = 0: h = meio-lado tamanho A,
-    //    cor min(255, RGB rgb). k > 0: h = meio-lado, cor min(32, RGB rgb A brilho). Alfa 0x80, ALPHA 0x48 (aditivo), UV de (0,5; 0,5) no
-    //    canto + ate uvMax no canto - (uvMax = 31,5, 63,5 ou 127,5 texels pelo seletor: 0x1F8, 0x3F8, 0x7F8 em 1/16). Depois de um sprite
-    //    com as tres cores < 1, a entrada sai dos seguintes.
-    // Conferido pela checagem VU1 x nativo (entrada lida da memoria do VU1 no MSCAL do 0x2B20): cantos, cor e UV de todos os sprites.
+    // Lens flare (type 11): outside the ordinary particleDraw. Two type-11 fx[] (lensFlarePacket[view], 0x6F8908; particleInitAfter) whose
+    // pos[] (fx + 0x2EB0) is the list HierLensFlareList[74] (48 bytes) of lensFlareList[view] (0x6F8900), with lensFlareIndex[view]
+    // (0x6F88F8) entries. The list is fed by hierLightNode (lights with hasLensFlare: world pos, flags = the light's, intensity,
+    // color, the beam's dotProd/beamWidth) and by particleAddLensFlareToList (systems with vis.lightColor & 0x1000000: flags 3, Zfudge,
+    // intensity = lightIntensity^2, color = lightColor / 255).
+    //  - particleLensFlareTestZbuffer (at the end of particleDraw, after VU1 draws the scene): projects each entry, drops the ones off
+    //    screen or with W < 1 (compacting the list), writes pos = (GS X, Y, Z), distance = W (100 with lightAtInfinity, flags bit 7) and reads
+    //    the 4x4 Z from the GS at (X - 2, Y) (sceGsStoreImage PSMZ32; origin X - 0x6C2, Y - 0x790).
+    //  - particleLensFlareRender: visible sample = Z <= threshold. Light at infinity: all 16, threshold fptoui(1.03125 Z) + 1; local: the 4
+    //    central ones, threshold fptoui(a + b / (W - max(Zfudge; 1.5))) (a, b = viewGetZBuffParams). intensity *= visible / samples; pos +=
+    //    centroid of the visible ones - (2 or 1); with 0 < ID < 0x7FF (only lights at infinity: particleLensFlareAddToDeBounceList), intensity =
+    //    average with the previous frame's (D_0078FF00); below 1/256 the flags byte is zeroed. Then lensFlarePacketBuild writes q44 =
+    //    (center X, center Y, 18, n) and the UNPACK of 3n qwords of the list at q45.
+    // In the runtime the emulated GS doesn't have the scene (no VU1); here the test is redone against the native depth (drawFlares), and the centroid
+    // and fraction from the emulated GS are undone assuming full visibility there (see WOTM_FLARELOG to check).
+    // Microprogram 0x2B20 (build/vu1/particle.txt), per entry (q45 + 3i):
+    //  - only with flags & 1; Q = 1/distance; brightness = I Q Q (the second MULq reads the old Q: the DIV 1/beamWidth hasn't finished yet; with the
+    //    new Q the particles, which have no beamWidth, would come out as garbage), size = sqrt(I) Q. With flags & 8 (directional): both times
+    //    f / beamWidth, f = max(dotProd, 0) + beamWidth - 1 (|dotProd| with flags & 0x10, bidirectional); disappears if brightness f <= 0.
+    //  - 18 SPRITEs (tables in the packet, q8-q25: TEX0, t, half-side with the UV selector in the 2 low bits; q26-q43: R, G, B, A). Sprite k
+    //    at point C + t_k (S - C) on the line from the screen center C to the source S; corners +/- (h, h/2) GS px. k = 0: h = half-side size A,
+    //    color min(255, RGB rgb). k > 0: h = half-side, color min(32, RGB rgb A brightness). Alpha 0x80, ALPHA 0x48 (additive), UV from (0.5; 0.5) at the
+    //    - corner to uvMax at the + corner (uvMax = 31.5, 63.5 or 127.5 texels by the selector: 0x1F8, 0x3F8, 0x7F8 in 1/16). After a sprite
+    //    with all three colors < 1, the entry drops out of the following ones.
+    // Verified by the VU1 vs native check (entry read from VU1 memory at the MSCAL of 0x2B20): corners, color and UV of every sprite.
     struct FlareSprite { uint64_t tex0 = 0; uint32_t texId = 0; float t = 0.f, half = 0.f, uvMax = 0.f, rgba[4] = {0, 0, 0, 0}; };
     struct Flare { float x = 0, y = 0, z = 0, w = 0, zfudge = 0, dot = 0, bw = 0, rgb[3] = {0, 0, 0}, intensity = 0; uint32_t flags = 0, id = 0; };
     struct FlareFrame {
@@ -1249,18 +1249,18 @@ public:
         std::vector<Flare> e;
     };
     FlareFrame flares;
-    const AsyncDepth *depthAsync = nullptr;   // drawFlares: profundidade assincrona da vista (tela dividida); nullptr = glReadPixels direto
+    const AsyncDepth *depthAsync = nullptr;   // drawFlares: the view's asynchronous depth (split screen); nullptr = direct glReadPixels
 
-    // A lista so esta pronta (projetada, com a fracao visivel) entre o fim do particleDraw e o hier do quadro seguinte. A apresentacao
-    // roda em outra thread e quase sempre a pega ja refeita pelo hier (em coordenadas de mundo, sem os flares de particula, que o
-    // particleAddLensFlareToList so acrescenta dentro do particleDraw). O runtime chama captureFlares na thread do jogo logo depois do
-    // particleDraw; o collect usa essa copia. Sem captura (viewer sobre dump) le a RAM e so desenha se a lista estiver projetada.
-    // A copia vale so para o quadro do particleDraw que a fez (fresh; o wotmCaptureFrame a consome com consumeFlares). Quadro sem
-    // particleDraw (menu, tela de carregamento) sai sem flares, como no PS2, onde o pacote so existe se o particleDraw o montou; antes
-    // a lista da ultima luta voltava na tela LOAD seguinte (luz verde/vermelha no centro na entrada da partida).
-    // Uma copia por vista (lensFlareIndex/lensFlarePacket[vista & 1]; na tela dividida o particleDraw(1) refaz a lista da vista 1, e
-    // com 3 e 4 jogadores o das vistas 2 e 3 refaz a das 0 e 1). O captureFlares roda dentro do particleDraw da vista (viewCurView),
-    // antes da vista seguinte reaproveitar a lista; a coleta pega a da vista corrente (curView).
+    // The list is only ready (projected, with the visible fraction) between the end of particleDraw and the next frame's hier. Presentation
+    // runs on another thread and almost always finds it already rebuilt by hier (in world coordinates, without the particle flares, which
+    // particleAddLensFlareToList only adds inside particleDraw). The runtime calls captureFlares on the game thread right after
+    // particleDraw; collect uses that copy. Without a capture (viewer over a dump) it reads RAM and only draws if the list is projected.
+    // The copy is only valid for the particleDraw frame that made it (fresh; wotmCaptureFrame consumes it with consumeFlares). A frame without
+    // particleDraw (menu, loading screen) has no flares, as on the PS2, where the packet only exists if particleDraw built it; previously
+    // the last fight's list came back on the next LOAD screen (green/red light in the center when entering the match).
+    // One copy per view (lensFlareIndex/lensFlarePacket[view & 1]; in split screen particleDraw(1) rebuilds view 1's list, and
+    // with 3 and 4 players views 2 and 3's rebuilds views 0 and 1's). captureFlares runs inside the view's particleDraw (viewCurView),
+    // before the next view reuses the list; collection takes the current view's (curView).
     struct FlareSlot { std::mutex m; FlareFrame f; bool used = false, fresh = false; };
     static FlareSlot &flareSlot(int view = curView().view) { static FlareSlot s[4]; return s[std::clamp(view, 0, 3)]; }
     static void captureFlares(const Ram &ram) {
@@ -1285,17 +1285,17 @@ public:
     }
     void resetFlareDebounce() { flarePrev_.clear(); }
 
-    // Copia de sombra do que o draw le da RAM (docs/investigacoes/2026-10-17/09_magmo_impacto.md). O instantaneo guarda so a contagem
-    // de cada sistema; posicoes, idades e cabecalhos de pacote eram lidos da RAM viva na apresentacao, e se o particleMove do quadro
-    // seguinte ja tinha matado particulas, pos[n] era o fecho do pacote (0, 0, 0, w enorme): um quadrado gigante na origem do mapa.
-    // Chamada so na thread do EE (wotmCaptureFrame), com os sistemas recem-coletados. Devolve um buffer do tamanho da RAM com as
-    // faixas copiadas (o resto fica com lixo de usos anteriores, que o draw nunca le); nullptr = desligado (WOTM_FXLIVE=1).
-    // prevMats (tela dividida): float[4][16], a matriz de cada vista (0 a 3) no quadro anterior, gravada em fxaddr::viewPrevMat
-    // (prevViewMat); sem ela a faixa fica zerada e vale o pacote
+    // Shadow copy of what draw reads from RAM (docs/investigacoes/2026-10-17/09_magmo_impacto.md). The snapshot only stores each system's
+    // count; positions, ages and packet headers used to be read from live RAM during presentation, and if the next frame's particleMove
+    // had already killed particles, pos[n] was the packet terminator (0, 0, 0, huge w): a giant quad at the map origin.
+    // Called only on the EE thread (wotmCaptureFrame), with freshly collected systems. Returns a RAM-sized buffer with the
+    // ranges copied (the rest holds garbage from earlier uses, which draw never reads); nullptr = off (WOTM_FXLIVE=1).
+    // prevMats (split screen): float[4][16], each view's matrix (0 to 3) on the previous frame, written to fxaddr::viewPrevMat
+    // (prevViewMat); without it the range stays zeroed and the packet's is used
     static std::shared_ptr<const uint8_t> shadowRam(const Ram &ram, const std::vector<FxSystem> &systems, const float *prevMats = nullptr) {
-        static const bool live = std::getenv("WOTM_FXLIVE") != nullptr;   // diagnostico: le a RAM viva, como antes
+        static const bool live = std::getenv("WOTM_FXLIVE") != nullptr;   // diagnostic: reads live RAM, the old way
         if (live || !ram.p || systems.empty()) return nullptr;
-        // pool: buffer livre = so o pool o segura (o instantaneo publicado, o da apresentacao e o da Scene seguram os outros)
+        // pool: a free buffer = only the pool holds it (the published snapshot, the presentation's and Scene's hold the others)
         static std::vector<std::shared_ptr<uint8_t>> pool;
         std::shared_ptr<uint8_t> buf;
         for (auto &p : pool)
@@ -1312,14 +1312,14 @@ public:
         return std::shared_ptr<const uint8_t>(buf, buf.get());
     }
 
-    // As faixas que o draw le (shadowRam), copiadas de src (a RAM viva ou outra copia de sombra) para dst, do mesmo tamanho
+    // The ranges draw reads (shadowRam), copied from src (live RAM or another shadow copy) into dst, of the same size
     static void copyRanges(uint8_t *dst, const Ram &ram, const std::vector<FxSystem> &systems) {
         auto copy = [&](uint32_t a, uint32_t n) {
             if (a < 0x1000 || a >= ram.size) return;
             n = uint32_t(std::min<uint64_t>(n, ram.size - a));
             std::memcpy(dst + a, ram.p + a, n);
         };
-        copy(fxaddr::fx, fxaddr::count * fxaddr::stride);   // pos/vel/idade e pacotes (cabecalhos do wake, arco, sprine) ficam dentro de fx[i]
+        copy(fxaddr::fx, fxaddr::count * fxaddr::stride);   // pos/vel/age and packets (wake, arc, sprine headers) live inside fx[i]
         copy(fxaddr::textureInfo, 128 * 8);
         copy(fxaddr::texId, 128 * 2);
         copy(fxaddr::tex0, 128 * 8);
@@ -1327,16 +1327,16 @@ public:
         copy(addr::worldCtx, 5 * 0x1F0);
         copy(addr::vu1FogParams, 16);
         copy(fxaddr::viewPrevMat, 4 * 64);
-        copy(wotm::sym::Gusts, 16);   // rajadas do vento (stepBack)
+        copy(wotm::sym::Gusts, 16);   // wind gusts (stepBack)
         const uint32_t lo = fxaddr::fx, hi = fxaddr::fx + fxaddr::count * fxaddr::stride;
         auto outside = [&](uint32_t a, uint32_t n) { return a < lo || uint64_t(a) + n > hi; };
         for (const FxSystem &s : systems) {
             const uint32_t b = s.base, n = uint32_t(std::max(s.n, 0)) + 1;
             copy(fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex), 4 * std::min<uint32_t>(ram.u32(b + fxoff::numColors), 256));
-            // info.useThisColor (bit 0x200: rastro de poeira, frag) aponta para fora de fx[] (trailColoring da fase, 0x5B4F60 na VEGAS);
-            // sem a copia o stripe lia lixo/zeros ao vivo (cor preta, alfa 0) e o rastro sumia, embora o replay (RAM inteira) o desenhasse
+            // info.useThisColor (bit 0x200: dust trail, frag) points outside fx[] (the stage's trailColoring, 0x5B4F60 on VEGAS);
+            // without the copy the stripe read garbage/zeros live (black color, alpha 0) and the trail vanished, although the replay (whole RAM) drew it
             if (ram.u32(b + fxoff::infoAttribs) & 0x200) copy(ram.u32(b + fxoff::useThisColor), 16);
-            // ponteiros que apontem para fora de fx[] (nao visto ate hoje): a faixa que o draw le em volta deles
+            // pointers that point outside fx[] (never seen so far): the range draw reads around them
             const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age), pm = ram.u32(b + 0x2EC0);
             if (outside(pos - 0x400, 0x400 + 16 * n)) copy(pos - 0x400, 0x400 + 16 * n);
             if (outside(vel, 16 * n)) copy(vel, 16 * n);
@@ -1345,14 +1345,14 @@ public:
         }
     }
 
-    // Um passo do particleMove ao contrario (interpolacao de quadros, Scene::showBlend). O particleMove faz, com f = fields do passo,
-    // pos_B = pos_A + v f + vento f, e so depois soma a gravidade a velocidade (v_B = v + (0, 0, gravidade f)); o arrasto ja esta em
-    // v_B. Entao pos_A = pos_B - f (v_B + vento - (0, 0, gravidade f)). Por sistema: vento por field (field.wind; com o bit 0x400 do
-    // field.attribs, xyz + Gusts xyz * wind.w, senao so o z), gravidade (field.gravity; poeira, wake e pipa andam pelo dustMove e pelo
-    // wakeAndKiteMove, sem ela), quantas andaram (as primeiras n - newParticles: as do fim nasceram no passo e ficam onde estao) e z
-    // preso ao nivel da agua (wake e pipa com o bit 0x8000000 do emit.info.attribs). Falso = o sistema nao anda assim: arcos, sprine,
-    // corrente e rastro (pontos postos pelo jogo) e field.attribs 0x1000 (parado). O emissor que se move (fogo preso ao monstro) nao
-    // entra: a particula recua so pela propria velocidade.
+    // One particleMove step in reverse (frame interpolation, Scene::showBlend). particleMove does, with f = the step's fields,
+    // pos_B = pos_A + v f + wind f, and only afterwards adds gravity to the velocity (v_B = v + (0, 0, gravity f)); drag is already in
+    // v_B. So pos_A = pos_B - f (v_B + wind - (0, 0, gravity f)). Per system: wind per field (field.wind; with bit 0x400 of
+    // field.attribs, xyz + Gusts xyz * wind.w, else only z), gravity (field.gravity; dust, wake and kite move through dustMove and
+    // wakeAndKiteMove, without it), how many moved (the first n - newParticles: the last ones were born this step and stay put) and z
+    // pinned to the water level (wake and kite with bit 0x8000000 of emit.info.attribs). False = the system doesn't move this way: arcs, sprine,
+    // chain and trail (points placed by the game) and field.attribs 0x1000 (stationary). A moving emitter (fire attached to the monster) is not
+    // accounted for: the particle only steps back by its own velocity.
     struct StepBack { float wind[3] = {0, 0, 0}; float grav = 0.f; int moved = 0; bool keepZ = false; };
     static bool stepBack(const Ram &ram, uint32_t b, int n, StepBack &o) {
         constexpr uint32_t kField = 0x2DE0, kEmitAttribs = 0x2D80, kNewParticles = 0x2EDE;
@@ -1371,16 +1371,16 @@ public:
             if (!std::isfinite(v)) return false;
         return true;
     }
-    // Deslocamento do passo (pos_B - pos_A) da particula de velocidade v
+    // Step displacement (pos_B - pos_A) of a particle with velocity v
     static void stepOffset(const StepBack &o, const float v[3], float f, float out[3]) {
         for (int k = 0; k < 3; ++k) out[k] = f * (v[k] + o.wind[k]);
         out[2] -= o.grav * f * f;
         if (o.keepZ) out[2] = 0.f;
     }
 
-    // Copia de sombra no instante entre A e B: as faixas de B (copyRanges) com as posicoes recuadas por back (1 - alfa) passos de
-    // `fields`. So xyz: pos.w (tamanho, com os bits baixos que escolhem a UV; idade na poeira e no wake) e a idade ficam as de B.
-    // Recuo maior que 400 unidades (velocidade lixo) fica em B.
+    // Shadow copy at the instant between A and B: B's ranges (copyRanges) with positions pulled back by back (1 - alpha) steps of
+    // `fields`. xyz only: pos.w (size, with the low bits that pick the UV; age for dust and wake) and age stay as in B.
+    // A pull-back larger than 400 units (garbage velocity) stays at B.
     static void blendRam(uint8_t *dst, const Ram &B, const std::vector<FxSystem> &systems, float back, float fields) {
         copyRanges(dst, B, systems);
         const Ram out{dst, B.size};
@@ -1404,7 +1404,7 @@ public:
         {
             FlareSlot &s = flareSlot();
             std::lock_guard<std::mutex> g(s.m);
-            if (s.used) {   // ao vivo: sem particleDraw neste quadro, sem flares
+            if (s.used) {   // live: no particleDraw this frame, no flares
                 if (s.fresh) flares = s.f;
                 else { flares.e.clear(); flares.nspr = 0; }
                 logFlares();
@@ -1418,42 +1418,42 @@ public:
         static const bool log = std::getenv("WOTM_FLARELOG") != nullptr;
         if (log)
             for (const Flare &fl : flares.e)
-                std::fprintf(stderr, "[flare] n %zu centro %.0f %.0f | %.1f %.1f Z %.0f W %.1f id %u flags %02x dot %.3f bw %.3f rgb %.3f %.3f %.3f I %.4g\n",
+                std::fprintf(stderr, "[flare] n %zu center %.0f %.0f | %.1f %.1f Z %.0f W %.1f id %u flags %02x dot %.3f bw %.3f rgb %.3f %.3f %.3f I %.4g\n",
                              flares.e.size(), flares.cx, flares.cy, fl.x, fl.y, fl.z, fl.w, fl.id, fl.flags & 0xFF, fl.dot, fl.bw, fl.rgb[0], fl.rgb[1],
                              fl.rgb[2], fl.intensity);
     }
 
     static void readFlares(const Ram &ram, FlareFrame &f) {
-        const uint32_t view = uint32_t(std::clamp(curView().view, 0, 3)), v = view & 1u;   // lensFlareIndex/lensFlarePacket tem 2 entradas
+        const uint32_t view = uint32_t(std::clamp(curView().view, 0, 3)), v = view & 1u;   // lensFlareIndex/lensFlarePacket have 2 entries
         const uint32_t kIndex = wotm::sym::lensFlareIndex + 4 * v, kPacket = wotm::sym::lensFlarePacket + 4 * v, kViewDef = viewInfoAddr() + 4,
                        kScreenMats = wotm::sym::viewScreenMats + 0x40 * view;
         f.e.clear();
         f.nspr = 0;
         const uint32_t p = ram.u32(kPacket);
         if (!ram.ok(p, fxaddr::stride)) return;
-        // q44 (centro X, centro Y, 18, n) e o que o lensFlarePacketBuild grava a cada quadro: aqui vem da origem (viewGetCenter da vista
-        // 0, lensFlareIndex[0]), sem depender do pacote do quadro; as tabelas dos sprites (q8-q43, 18 em q44 + 8) sao do lensFlarePacketInit.
+        // q44 (center X, center Y, 18, n) is what lensFlarePacketBuild writes every frame: here it comes from the origin (viewGetCenter of view
+        // 0, lensFlareIndex[0]), independent of the frame's packet; the sprite tables (q8-q43, 18 at q44 + 8) come from lensFlarePacketInit.
         const uint32_t pos = ram.u32(p + fxoff::pos), q44 = pos - 0x18, q8 = q44 - 36 * 16;
         const int n = int32_t(ram.u32(kIndex));
         const uint32_t def = ram.u32(kViewDef) & 0x0FFFFFFF;
-        // n = 0: so a tabela dos sprites e a moldura (o modo foto refaz a lista com a camera livre)
+        // n = 0: only the sprite table and the frame (photo mode rebuilds the list with the free camera)
         if (n < 0 || n > 74 || !ram.ok(q8, 37 * 16 + 48 * uint32_t(n)) || !ram.ok(def, 0x20)) return;
         f.cx = float(int32_t(ram.u32(def + 0x18)));
         f.cy = float(int32_t(ram.u32(def + 0x1C)));
         f.nspr = std::min<int>(18, std::max<int>(0, int32_t(ram.u32(q44 + 8))));
-        if (f.nspr == 0) f.nspr = 18;   // lensFlarePacketBuild ainda nao rodou (fase sem flare ate aqui): a tabela do Init ja esta la
+        if (f.nspr == 0) f.nspr = 18;   // lensFlarePacketBuild hasn't run yet (stage without a flare so far): the Init table is already there
         if (ram.u16(def + 4) && ram.u16(def + 6)) { f.vw = ram.u16(def + 4); f.vh = ram.u16(def + 6); }
-        f.zScale = ram.f32(kScreenMats + 0x28);   // viewScreenMats[0][2][2] e [2][3]
+        f.zScale = ram.f32(kScreenMats + 0x28);   // viewScreenMats[0][2][2] and [2][3]
         f.zOff = ram.f32(kScreenMats + 0x2C);
-        const uint32_t gif = (p + 0xC + 15) & ~15u;   // lensFlarePacketInit: FLUSHA, UNPACK de 4 qwords em 0x110 (tag A+D, ALPHA, TEX0, tag SPRITE)
+        const uint32_t gif = (p + 0xC + 15) & ~15u;   // lensFlarePacketInit: FLUSHA, UNPACK of 4 qwords at 0x110 (tag A+D, ALPHA, TEX0, tag SPRITE)
         for (int k = 0; k < f.nspr; ++k) {
             FlareSprite &s = f.spr[k];
             const uint32_t a = q8 + 16 * uint32_t(k), c = a + 18 * 16;
             s.tex0 = uint64_t(ram.u32(a)) | (uint64_t(ram.u32(a + 4)) << 32);
             s.t = ram.f32(a + 8);
             s.half = ram.f32(a + 12);
-            // o UNPACK leva os 4 qwords a partir de gif (= VU1 0x110, conferido no instantaneo); com um qword a mais o uvMax saia o
-            // do registro seguinte (127,5 numa textura de 64): a textura so cobria metade do sprite e o brilho caia fora do olho
+            // the UNPACK carries the 4 qwords starting at gif (= VU1 0x110, verified in the snapshot); one qword off and uvMax came from
+            // the next record (127.5 on a 64 texture): the texture only covered half the sprite and the glow fell outside the eye
             s.uvMax = float(ram.u32(gif + 16 * (ram.u32(a + 12) & 3) + 12) & 0xFFFF) / 16.f;
             for (int j = 0; j < 4; ++j) s.rgba[j] = ram.f32(c + 4 * uint32_t(j));
             s.texId = ram.u16(p + 0x2C40 + 2 * uint32_t(k));
@@ -1467,22 +1467,22 @@ public:
             fl.dot = ram.f32(e + 0x18); fl.bw = ram.f32(e + 0x1C);
             for (int j = 0; j < 3; ++j) fl.rgb[j] = ram.f32(e + 0x20 + 4 * uint32_t(j));
             fl.intensity = ram.f32(e + 0x2C);
-            // fora da tela = lista ainda em coordenadas de mundo (o hier ja a refez e o teste de Z nao rodou): nada a desenhar
+            // off screen = list still in world coordinates (hier already rebuilt it and the Z test hasn't run): nothing to draw
             if (!(fl.x >= x0 - 3.f && fl.x <= x1 + 3.f && fl.y >= y0 - 3.f && fl.y <= y1 + 3.f)) { f.e.clear(); break; }
             f.e.push_back(fl);
         }
     }
 
-    // Entrada como o VU1 a recebe: posicao na tela do GS e intensity depois do teste de Z
+    // An entry as VU1 receives it: position on the GS screen and intensity after the Z test
     struct FlareIn { float x, y, intensity; const Flare *fl; };
-    // Sprite do GS (px do GS): canto + (xa, ya) com UV (u0, v0), canto - (xb, yb) com (u1, v1); k = linha da tabela, entry = indice em `in`
+    // GS sprite (GS px): + corner (xa, ya) with UV (u0, v0), - corner (xb, yb) with (u1, v1); k = table row, entry = index into `in`
     struct FlareQuad { int k; size_t entry; float xa, ya, xb, yb, u0, v0, u1, v1; uint8_t rgb[3]; };
 
-    // Microprograma 0x2B20 sobre a lista (sem o teste de Z): o desenho e a checagem VU1 x nativo usam o mesmo
+    // Microprogram 0x2B20 over the list (without the Z test): drawing and the VU1 vs native check use the same one
     template <class E> static void flareSprites(const FlareFrame &f, const std::vector<FlareIn> &in, E &&emit) {
         struct V { float bright, size; bool on; };
         std::vector<V> v(in.size());
-        for (size_t i = 0; i < in.size(); ++i) {   // laco por entrada
+        for (size_t i = 0; i < in.size(); ++i) {   // per-entry loop
             const Flare &fl = *in[i].fl;
             const float I = in[i].intensity;
             v[i].on = (fl.flags & 1) && fl.w != 0.f;
@@ -1498,7 +1498,7 @@ public:
             }
         }
         auto ftoi4 = [](float a) { return std::trunc(a * 16.f) / 16.f; };
-        for (int k = 0; k < f.nspr; ++k) {   // laco por sprite da tabela, entradas por dentro
+        for (int k = 0; k < f.nspr; ++k) {   // loop per table sprite, entries inside
             const FlareSprite &s = f.spr[k];
             const float tw = float(1u << ((s.tex0 >> 26) & 15)), th = float(1u << ((s.tex0 >> 30) & 15));
             for (size_t i = 0; i < in.size(); ++i) {
@@ -1512,7 +1512,7 @@ public:
                     h = s.half;
                     for (float &c : col) c *= s.rgba[3] * v[i].bright;
                 }
-                if (col[0] < 1.f && col[1] < 1.f && col[2] < 1.f) v[i].on = false;   // os sprites seguintes nao desenham mais esta
+                if (col[0] < 1.f && col[1] < 1.f && col[2] < 1.f) v[i].on = false;   // the following sprites no longer draw this one
                 const float cap = k == 0 ? 255.f : 32.f;
                 FlareQuad q{k, i, ftoi4(px + h), ftoi4(py + 0.5f * h), ftoi4(px - h), ftoi4(py - 0.5f * h),
                             0.5f / tw, 0.5f / th, s.uvMax / tw, s.uvMax / th, {0, 0, 0}};
@@ -1522,23 +1522,23 @@ public:
         }
     }
 
-    // Desenha os flares do ultimo quadro do jogo em espaco de tela (dentro de BeginMode3D, depois das particulas; o pacote do lens flare
-    // sai depois delas no particleDraw). Le a profundidade ja desenhada para o teste de oclusao (o particleLensFlareRender).
+    // Draws the flares of the game's last frame in screen space (inside BeginMode3D, after the particles; the lens flare packet
+    // goes out after them in particleDraw). Reads the depth already drawn for the occlusion test (particleLensFlareRender).
     void drawFlares(const TexFn &texture) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr || std::getenv("WOTM_NOFLARE") != nullptr;
         static const bool log0 = std::getenv("WOTM_FLARELOG") != nullptr;
-        if (log0 && !flares.e.empty()) std::fprintf(stderr, "[flare] drawFlares: %zu entradas, %d sprites\n", flares.e.size(), flares.nspr);
+        if (log0 && !flares.e.empty()) std::fprintf(stderr, "[flare] drawFlares: %zu entries, %d sprites\n", flares.e.size(), flares.nspr);
         if (off || flares.e.empty() || flares.nspr == 0) return;
         const FlareFrame &f = flares;
         rlDrawRenderBatchActive();
         if (g_beforeDepthRead) g_beforeDepthRead();
         const int fbw = rlGetFramebufferWidth(), fbh = rlGetFramebufferHeight();
         if (fbw <= 0 || fbh <= 0) return;
-        const GsScreenRect gr = gsScreenRect(float(fbw), float(fbh));   // px do GS -> px do nativo (faixa 4:3 central em widescreen)
+        const GsScreenRect gr = gsScreenRect(float(fbw), float(fbh));   // GS px -> native px (central 4:3 strip in widescreen)
         const float sx = gr.w / f.vw, sy = gr.h / f.vh, x0 = gr.x0;
         const double zn = rlGetCullDistanceNear(), zf = rlGetCullDistanceFar();
-        // Z do GS (24 bits) que o retail leria no pixel (gx, gy) da tela do GS: a + b / W da profundidade nativa; vazio (fundo) = 0
-        // tela dividida: profundidade do redesenho anterior, sem esperar a GPU (AsyncDepth); senao a leitura direta
+        // GS Z (24 bits) that retail would read at pixel (gx, gy) of the GS screen: a + b / W of the native depth; empty (background) = 0
+        // split screen: depth from the previous redraw, without waiting on the GPU (AsyncDepth); otherwise the direct read
         const AsyncDepth *ad = depthAsync && depthAsync->valid && depthAsync->cw == fbw && depthAsync->ch == fbh ? depthAsync : nullptr;
         auto gsZ = [&](int gx, int gy) -> uint32_t {
             const int px = std::clamp(int(x0 + (float(gx) + 0.5f) * sx), 0, fbw - 1), py = std::clamp(int((float(gy) + 0.5f) * sy), 0, fbh - 1);
@@ -1559,9 +1559,9 @@ public:
         for (const Flare &fl : f.e) {
             if (!(fl.flags & 0xFF)) continue;
             const bool inf = (fl.flags & 0x80) != 0;
-            // pixel do canto do bloco 4x4: ((int) X - 0x6C2, (int) Y - 0x790), ou seja colunas X-2..X+1 e linhas Y..Y+3 (o retail supoe
-            // centro 2048 e tela 640 x 224; TRXPOS conferido no instantaneo). Com o -2 tambem na vertical, as amostras de luz local caiam
-            // duas linhas acima (sobrancelha do Congar, borda da lente do Robo-47) e o flare dos olhos sumia.
+            // corner pixel of the 4x4 block: ((int) X - 0x6C2, (int) Y - 0x790), i.e. columns X-2..X+1 and rows Y..Y+3 (retail assumes
+            // center 2048 and a 640 x 224 screen; TRXPOS verified in the snapshot). With the -2 also applied vertically, local light samples landed
+            // two rows too high (Congar's eyebrow, the edge of Robo-47's lens) and the eye flare disappeared.
             const int bx = int(fptoui(fl.x)) - int(f.cx - 0.5f * f.vw) - 2, by = int(fptoui(fl.y)) - int(f.cy - 0.5f * f.vh);
             uint32_t thr;
             if (inf) thr = fptoui(fl.z * 1.03125f) + 1;
@@ -1571,7 +1571,7 @@ public:
             }
             const int lo = inf ? 0 : 1, hi = inf ? 4 : 3;
             int cnt = 0, sumC = 0, sumR = 0;
-            uint32_t zMax = 0;   // amostra mais perto (WOTM_FLARELOG)
+            uint32_t zMax = 0;   // nearest sample (WOTM_FLARELOG)
             for (int r = lo; r < hi; ++r)
                 for (int c = lo; c < hi; ++c) {
                     const uint32_t z = gsZ(bx + c, by + r);
@@ -1579,7 +1579,7 @@ public:
                     if (z <= thr) { ++cnt; sumC += c; sumR += r; }
                 }
             float frac = float(cnt) / float((hi - lo) * (hi - lo));
-            if (fl.id && fl.id < 0x7FF) {   // debounce por ID (D_0078FF00): media com a fracao do quadro anterior
+            if (fl.id && fl.id < 0x7FF) {   // debounce by ID (D_0078FF00): average with the previous frame's fraction
                 float &prev = flarePrev_[fl.id];
                 const float raw = frac;
                 frac = 0.5f * (prev + raw);
@@ -1587,24 +1587,24 @@ public:
             }
             const float I = fl.intensity * frac;
             if (log)
-                std::fprintf(stderr, "[flare] desenho %.1f %.1f visiveis %d limiar %u I %.4g | W da luz %.2f, W do mais perto %.2f | flags %02x dot %.3f bw %.3f\n", fl.x, fl.y, cnt, thr,
+                std::fprintf(stderr, "[flare] draw %.1f %.1f visible %d threshold %u I %.4g | light W %.2f, nearest W %.2f | flags %02x dot %.3f bw %.3f\n", fl.x, fl.y, cnt, thr,
                              I, fl.w, zMax && float(zMax) != f.zScale ? f.zOff / (float(zMax) - f.zScale) : 0.f, fl.flags & 0xFF, fl.dot, fl.bw);
             if (cnt == 0 || I < 1.f / 256.f) continue;
-            // o retail ja somou o centroide do GS emulado (visibilidade total: 1,5 - 2 ou 1,5 - 1); troca pelo daqui
+            // retail already added the emulated GS's centroid (full visibility: 1.5 - 2 or 1.5 - 1); swap it for ours
             const float shift = 1.5f - (inf ? 2.f : 1.f);
             vis.push_back({fl.x - shift + (float(sumC) / float(cnt) - (inf ? 2.f : 1.f)), fl.y - shift + (float(sumR) / float(cnt) - (inf ? 2.f : 1.f)), I, &fl});
         }
         std::vector<FlareQuad> quads;
-        float big = 0.f;   // maior meio-lado do sprite 0 (diagnostico WOTM_FLARESHOT)
+        float big = 0.f;   // largest half-side of sprite 0 (WOTM_FLARESHOT diagnostic)
         flareSprites(f, vis, [&](const FlareQuad &q) {
             quads.push_back(q);
             if (q.k == 0) big = std::max(big, std::fabs(q.xa - q.xb) * 0.5f);
         });
         if (quads.empty()) return;
 
-        // Tela em pixels: a projecao vai para a pilha; a modelview e guardada a parte (o rlPushMatrix em modelview liga a matriz de
-        // transformacao do rlgl, que so desliga quando a pilha esvazia em modelview; empilhar as duas e desempilhar a projecao primeiro
-        // trocava as matrizes e o HUD desenhado depois sumia)
+        // Screen in pixels: the projection goes on the stack; the modelview is saved separately (rlPushMatrix in modelview turns on rlgl's
+        // transform matrix, which only turns off when the stack empties in modelview; pushing both and popping the projection first
+        // swapped the matrices and the HUD drawn afterwards disappeared)
         const Matrix mv3d = rlGetMatrixModelview();
         rlMatrixMode(RL_PROJECTION);
         rlPushMatrix();
@@ -1619,7 +1619,7 @@ public:
         const float ox = f.cx - 0.5f * f.vw, oy = f.cy - 0.5f * f.vh;
         int curK = -1;
         for (const FlareQuad &q : quads) {
-            if (q.k != curK) {   // um lote por sprite da tabela (textura propria)
+            if (q.k != curK) {   // one batch per table sprite (its own texture)
                 if (curK >= 0) { rlEnd(); rlDrawRenderBatchActive(); }
                 curK = q.k;
                 const FlareSprite &s = f.spr[q.k];
@@ -1645,31 +1645,31 @@ public:
         rlPopMatrix();
         rlMatrixMode(RL_MODELVIEW);
         rlSetMatrixModelview(mv3d);
-        // diagnostico: WOTM_FLARESHOT=<prefixo> grava ate 8 quadros (>= 1 s entre eles) com um flare de meio-lado >= 8 px do GS
+        // diagnostic: WOTM_FLARESHOT=<prefix> saves up to 8 frames (>= 1 s apart) with a flare whose half-side is >= 8 GS px
         static const char *shot = std::getenv("WOTM_FLARESHOT");
         static int shots = 0;
         static double lastShot = -10.0;
         if (shot && shots < 8 && big >= 8.f && GetTime() - lastShot >= 1.0) {
             lastShot = GetTime();
             unsigned char *px = rlReadScreenPixels(fbw, fbh);
-            for (int i = 0; i < fbw * fbh; ++i) px[4 * i + 3] = 255;   // o alfa do quadro e o das misturas, nao opacidade
+            for (int i = 0; i < fbw * fbh; ++i) px[4 * i + 3] = 255;   // the frame's alpha is the blends', not opacity
             Image img{px, fbw, fbh, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             char name[512];
             std::snprintf(name, sizeof name, "%s_%d.png", shot, shots++);
             ExportImage(img, name);
             RL_FREE(px);
-            std::fprintf(stderr, "[flare] captura %s (meio-lado %.1f px, %zu entradas)\n", name, big, vis.size());
+            std::fprintf(stderr, "[flare] capture %s (half-side %.1f px, %zu entries)\n", name, big, vis.size());
         }
     }
 
-    // Diagnostico (WOTM_FXLIST=1): um sistema por linha e a primeira particula
+    // Diagnostic (WOTM_FXLIST=1): one system per line plus its first particle
     void dump(const Ram &ram) const {
-        std::fprintf(stderr, "[fx] %zu sistemas desenhaveis\n", systems.size());
+        std::fprintf(stderr, "[fx] %zu drawable systems\n", systems.size());
         for (const FxSystem &s : systems) {
             const uint32_t b = s.base, p = ram.u32(b + fxoff::pos), a = ram.u32(b + fxoff::age);
             const uint32_t ti = ram.u32(b + fxoff::texInfoIndex);
             const uint32_t tinfo = fxaddr::textureInfo + 8 * (ti & 127);
-            std::fprintf(stderr, "[fx] #%u preset %u %s n=%d alpha=%02x cores=%u@%u texInfo=%u (n=%d idx=%u) cpf=%u vida=%d | p0 %.1f %.1f %.1f tam %.2f idade %d\n",
+            std::fprintf(stderr, "[fx] #%u preset %u %s n=%d alpha=%02x colors=%u@%u texInfo=%u (n=%d idx=%u) cpf=%u life=%d | p0 %.1f %.1f %.1f size %.2f age %d\n",
                          s.index, ram.u32(b + fxoff::fxId), fxTypeName(s.type), s.n, ram.u32(b + fxoff::alphaContext),
                          ram.u32(b + fxoff::numColors), ram.u32(b + fxoff::colorIndex), ti, ram.s16(tinfo), ram.u16(tinfo + 2),
                          ram.u32(b + fxoff::colorsPerFrame), ram.s16(b + fxoff::lifetime),
@@ -1677,8 +1677,8 @@ public:
         }
     }
 
-    // Desenha (dentro de BeginMode3D, depois dos objetos opacos e translucidos). Testa profundidade, nao escreve.
-    // eye: olho da camera (o W da neblina e medido a partir dele, como no VU1)
+    // Draws (inside BeginMode3D, after the opaque and translucent objects). Tests depth, doesn't write it.
+    // eye: the camera eye (the fog W is measured from it, as on VU1)
     void draw(const Ram &ram, const TexFn &texture, const float eye[3]) {
         static const bool off = std::getenv("WOTM_NOFX") != nullptr;
         if (off || (systems.empty() && synth.empty())) return;
@@ -1688,7 +1688,7 @@ public:
         float row3[4];
         for (int k = 0; k < 4; ++k) row3[k] = ram.f32(viewW2S() + 48 + 4 * k);
         setFog(ram, view, row3, eye);
-        // particleDraw: do mais longe ao mais perto pela profundidade de emit.ParticleToEmitVec + vis.priority; opacos (alpha 0) antes
+        // particleDraw: farthest to nearest by the depth of emit.ParticleToEmitVec + vis.priority; opaque ones (alpha 0) first
         for (FxSystem &s : systems) {
             if (ram.u32(s.base + fxoff::alphaContext) == 0) { s.key = 50000.f + ram.f32(s.base + fxoff::priority); continue; }
             const float x = ram.f32(s.base + fxoff::emitVec), y = ram.f32(s.base + fxoff::emitVec + 4), z = ram.f32(s.base + fxoff::emitVec + 8);
@@ -1701,13 +1701,13 @@ public:
         for (const FxSystem &s : systems) drawSystem(ram, s, texture, view);
         for (const SynthSystem &s : synth) drawSynth(ram, s, texture, view);
         rlDrawRenderBatchActive();
-        rlNormal3f(0.f, 0.f, 0.f);   // sem neblina para o que vem depois (overlay)
+        rlNormal3f(0.f, 0.f, 0.f);   // no fog for what comes next (overlay)
         rlSetBlendMode(BLEND_ALPHA);
         rlEnableDepthMask();
         rlEnableBackfaceCulling();
     }
 
-    // Cor RGBA (0x80 = 1,0) da particula com idade `age`, como loadColors
+    // RGBA color (0x80 = 1.0) of a particle with age `age`, like loadColors
     static uint32_t colorAt(const Ram &ram, uint32_t b, int age) {
         const uint32_t nc = ram.u32(b + fxoff::numColors);
         const uint32_t tab = fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex);
@@ -1715,7 +1715,7 @@ public:
         if (nc == 1) return ram.u32(tab);
         const uint32_t t = uint32_t(std::max(age, 0)) * ram.u32(b + fxoff::colorsPerFrame);
         uint32_t k = t >> 12, f = t & 0xFFF;
-        if (k >= nc - 1) { k = nc - 2; f = 0x1000; }   // o retail nao trava (a particula morre antes); aqui so por seguranca
+        if (k >= nc - 1) { k = nc - 2; f = 0x1000; }   // retail doesn't clamp (the particle dies first); here it's just for safety
         const uint32_t c0 = ram.u32(tab + 4 * k), c1 = ram.u32(tab + 4 * (k + 1));
         uint32_t out = 0;
         for (int sh = 0; sh < 32; sh += 8) {
@@ -1726,14 +1726,14 @@ public:
     }
 
 
-    // dustTrail (tipo 15), microprograma 0x800 com o cabecalho do dustTrailPacketInit em 0x20C-0x20E. A palavra de idade (32 bits por
-    // particula, particleEmit is15) e a cor: RGB nos bytes 0-2 (os 2 bits baixos do byte 2 escolhem a celula de UV) e o sorteio de
-    // tamanho a no byte 3 (de min*255/max a 255); pos.w e a idade normalizada (0..1). Por particula, com W = profundidade:
-    //  - meio-lado = exp*vida*w/2 + (min + (max-min)*a/255) * (1 - k + k*a/255) / 2, k = emit.preAgeFactor (+0x2D88); o limite de
-    //    0,375 * W fica no forEachQuad;
-    //  - alfa = min(W - 128, minAlpha + (maxAlpha-minAlpha)*a/255) * min(1, w/alphaFadeIn, (1-w)/alphaFadeOut), truncado;
-    //  - descarta com W <= 128 (MAC Sw|Zw de W - 128) ou alfa < 8 (o F <= 0 e os cantos fora da banda ficam com o fogged e a tela:
-    //    com o limite de tamanho, um centro na tela nunca tem canto fora da banda de 4096).
+    // dustTrail (type 15), microprogram 0x800 with the dustTrailPacketInit header at 0x20C-0x20E. The age word (32 bits per
+    // particle, particleEmit is15) is the color: RGB in bytes 0-2 (the 2 low bits of byte 2 pick the UV cell) and the size
+    // roll a in byte 3 (from min*255/max to 255); pos.w is the normalized age (0..1). Per particle, with W = depth:
+    //  - half-side = exp*life*w/2 + (min + (max-min)*a/255) * (1 - k + k*a/255) / 2, k = emit.preAgeFactor (+0x2D88); the cap of
+    //    0.375 * W is in forEachQuad;
+    //  - alpha = min(W - 128, minAlpha + (maxAlpha-minAlpha)*a/255) * min(1, w/alphaFadeIn, (1-w)/alphaFadeOut), truncated;
+    //  - dropped with W <= 128 (MAC Sw|Zw of W - 128) or alpha < 8 (F <= 0 and corners outside the band are left to fogged and the screen:
+    //    with the size cap, a center on screen never has a corner outside the 4096 band).
     struct DustTrailVu { bool visible; float half; uint32_t cell; uint32_t rgba; };
     static DustTrailVu dustTrailVu(const Ram &ram, uint32_t b, int i, float w, float W) {
         DustTrailVu d{false, 0.f, 0, 0};
@@ -1744,7 +1744,7 @@ public:
         d.half = 0.5f * ram.f32(b + fxoff::expansionRate) * float(ram.s16(b + fxoff::lifetime)) * w + 0.5f * (mn + (mx - mn) * a) * (1.f - k + k * a);
         const float fin = ram.f32(b + fxoff::alphaFadeIn), fout = ram.f32(b + fxoff::alphaFadeOut);
         const float amin = ram.f32(b + fxoff::minAlpha), amax = ram.f32(b + fxoff::maxAlpha);
-        const float fade = std::min({1.f, fin > 0.f ? w / fin : 1.f, fout > 0.f ? (1.f - w) / fout : 1.f});   // DIV por 0 no VU: maximo
+        const float fade = std::min({1.f, fin > 0.f ? w / fin : 1.f, fout > 0.f ? (1.f - w) / fout : 1.f});   // DIV by 0 on the VU: maximum
         const float alpha = std::min(W - 128.f, amin + (amax - amin) * a) * fade;
         if (!(alpha >= 8.f)) return d;
         d.visible = true;
@@ -1753,19 +1753,19 @@ public:
         return d;
     }
 
-    // wake (16): wakePacketInit e o microprograma 0x3470. Um triangulo por particula com os dados do pacote, que fica logo antes de
-    // pos[] (UNPACK de 25 qwords em q264; q264 = pos - 0x19C):
-    //  - q264-q279: 8 conjuntos de ST (STQ) de um triangulo equilatero que circunscreve o quadrado [0,1]^2 da textura (vertices
-    //    (-0,366; 0), (1,366; 0), (0,5; 1,5) em ordens diferentes): v0 = q[264+k].xy, v1 = q[264+k].zw, v2 = q[272+k].xy, k = bits & 7;
-    //  - q282: cor RGB (inteiros, 0x80 = 1,0) de colors[colorIndex], a mesma nos tres vertices (o fxId 0x93 a troca a cada quadro);
-    //  - q283-q285: curvas de tamanho (x, z) e de alfa (y, w) pela idade w de pos.w (0..1): ate a transicao (q283.z / q283.w) uma
-    //    parabola q285 + q284*w + q283*w^2, depois a reta q285.zw + q284.zw*w (tamanho maxSize + expansao; alfa de minAlpha subindo
-    //    128/alphaFadeIn por vida ate a reta que desce 128/alphaFadeOut e chega a maxAlpha em w = 1);
-    //  - q287, q288: eixos A = 0,5 * linha 0 e B = -0,25 * linha 0 + 0,433 * linha 2 da StaticMat do emissor (fx+0x2D20; com
-    //    info.attribs & 0x4000, X e Y do mundo). Vertices pos + S*A, pos + S*B e pos - S*(A + B).
-    // Os 12 bits baixos de pos.w sao fixos por particula (wakeEmit; wakeAndKiteMove preserva a mascara 0xFFF): bits 3-11 escalam o
-    // tamanho, S = (bits & 0xFF8) / 4096 * tamanho(w); bits 0-2 escolhem o conjunto de ST. Alfa = min(alfa(w), 128) truncado (o GS
-    // pega o byte baixo). Descarta com W > 4000 (MAC Sw|Zw de W - 4000).
+    // wake (16): wakePacketInit and microprogram 0x3470. One triangle per particle with the data from the packet, which sits right before
+    // pos[] (UNPACK of 25 qwords at q264; q264 = pos - 0x19C):
+    //  - q264-q279: 8 sets of ST (STQ) of an equilateral triangle that circumscribes the texture's [0,1]^2 square (vertices
+    //    (-0.366; 0), (1.366; 0), (0.5; 1.5) in different orders): v0 = q[264+k].xy, v1 = q[264+k].zw, v2 = q[272+k].xy, k = bits & 7;
+    //  - q282: RGB color (integers, 0x80 = 1.0) from colors[colorIndex], the same on all three vertices (fxId 0x93 changes it every frame);
+    //  - q283-q285: size (x, z) and alpha (y, w) curves over the age w from pos.w (0..1): up to the transition (q283.z / q283.w) a
+    //    parabola q285 + q284*w + q283*w^2, then the line q285.zw + q284.zw*w (size maxSize + expansion; alpha from minAlpha rising
+    //    128/alphaFadeIn per lifetime up to the line that falls 128/alphaFadeOut and reaches maxAlpha at w = 1);
+    //  - q287, q288: axes A = 0.5 * row 0 and B = -0.25 * row 0 + 0.433 * row 2 of the emitter's StaticMat (fx+0x2D20; with
+    //    info.attribs & 0x4000, world X and Y). Vertices pos + S*A, pos + S*B and pos - S*(A + B).
+    // The 12 low bits of pos.w are fixed per particle (wakeEmit; wakeAndKiteMove preserves the 0xFFF mask): bits 3-11 scale the
+    // size, S = (bits & 0xFF8) / 4096 * size(w); bits 0-2 pick the ST set. Alpha = min(alpha(w), 128) truncated (the GS
+    // takes the low byte). Dropped with W > 4000 (MAC Sw|Zw of W - 4000).
     struct WakeVu { bool visible; float c[3][3]; float uv[3][2]; uint32_t rgba; };
     static WakeVu wakeVu(const Ram &ram, uint32_t b, int i, float W) {
         WakeVu r{};
@@ -1798,29 +1798,29 @@ public:
 
     static bool isStrip(uint32_t type) { return type == FX_STRIPE || type == FX_SWEEPTRAIL; }
 
-    // Neblina das particulas: o contexto comum dos microprogramas (qwords 0-7, de 0x256B90) leva fogFA em q4.w e fogFB em q5.w, os
-    // mesmos de vu1FogParams; o VU1 calcula F = min(fogFA + fogFB / W, 255) e descarta a particula com F < 1 (CLIP), com ou sem FGE.
-    // Medido na METRO (fogFA -107,9, fogFB 326.600: W > ~3.000): os pedestres somem ali (VU1CHECK.md, "Explicadas").
+    // Particle fog: the microprograms' common context (qwords 0-7, from 0x256B90) carries fogFA in q4.w and fogFB in q5.w, the
+    // same as vu1FogParams; VU1 computes F = min(fogFA + fogFB / W, 255) and drops the particle with F < 1 (CLIP), with or without FGE.
+    // Measured on METRO (fogFA -107.9, fogFB 326,600: W > ~3,000): the pedestrians disappear there (VU1CHECK.md, "Explicadas").
     static void setFog(const Ram &ram, FxView &v, const float row3[4], const float eye[3]) {
         v.fogFA = ram.f32(addr::vu1FogParams);
         v.fogFB = ram.f32(addr::vu1FogParams + 12);
         v.fogW[3] = row3[3];
         for (int a = 0; a < 3; ++a) { v.fogW[a] = row3[a]; v.fogW[3] -= row3[a] * eye[a]; }
     }
-    // Ponto (mundo) todo na neblina: F < 1
+    // A point (world) fully in the fog: F < 1
     static bool foggedAt(const FxView &v, const float p[3]) {
         if (v.fogFB == 0.f) return false;
         const float w = v.fogW[0] * p[0] + v.fogW[1] * p[1] + v.fogW[2] * p[2] + v.fogW[3];
         return w > 1e-3f && v.fogFA + v.fogFB / w < 1.f;
     }
-    // Particula toda na neblina (no centro do quadrado)
+    // A particle fully in the fog (at the center of the quad)
     static bool fogged(const FxView &v, const float c[4][3]) {
         float p[3];
         for (int a = 0; a < 3; ++a) p[a] = 0.25f * (c[0][a] + c[1][a] + c[2][a] + c[3][a]);
         return foggedAt(v, p);
     }
 
-    // Gerador do VU (RINIT/RNEXT, como o PCSX2): R em [1, 2) com 23 bits de LFSR
+    // VU random generator (RINIT/RNEXT, like PCSX2): R in [1, 2) with a 23-bit LFSR
     static uint32_t vuRinit(uint32_t bits) { return 0x3F800000u | (bits & 0x7FFFFFu); }
     static float vuRnext(uint32_t &R) {
         const uint32_t x = (R >> 4) & 1, y = (R >> 22) & 1;
@@ -1830,27 +1830,27 @@ public:
         return f;
     }
 
-    // Arco eletrico (tipos 7 e 17; electricArcPacketInit/Build/Update, microprograma 0x19F8, lido em build/vu1/particle.txt).
-    // Pacote: pos[] (fx +0x2EB0) em cadeias (cabeca: w baixo = 1 + elos; elo: w baixo = 5 << (nivel - 1), ou 0 = reto; cabeca 0
-    // encerra); antes dele o cabecalho (pos - 0x28: minSize, semente, segInitU, 138 + CLUToffset, expansionRate, jag, segDeltaU,
-    // numColors - 1) e 16 cores RGBA em float 0..255 (pos - 0x13C), que o electricArcPacketUpdate reescreve.
-    //  - RINIT(semente) uma vez por pacote. Elo de nivel L de a a b: 2^L sub-trechos; amp = jag * |b - a|, metade a cada nivel; em cada
-    //    vao, meio = 0,5a + r * amp - 1,5 * amp + 0,5b, r = (rx, ry, rz) numa janela deslizante de RNEXT (tres na entrada do elo; depois
-    //    de cada meio, rx = ry, ry = rz, rz = RNEXT).
-    //  - Fita (sub-rotina 0x1F70) nos S + 1 pontos, em coordenadas de tela isotropicas com y para baixo (o VU1 corrige o y pela razao
-    //    dos focos): fantasmas 2P0 - P1 e 2PS - PS-1 (homogeneos), t_in e t_out unitarios, n = (t.y, -t.x); v = n_in + n_out +
-    //    (t_out - t_in) se t_in x t_out < 0, senao + (t_in - t_out) (sem renormalizar). Vertices p +/- s_k / 2 * v no plano de vista,
-    //    s_k = minSize + exp * k / S; A (+) com V = 1, B (-) com V = 0; U_k = segInitU + segDeltaU * (k - S / 2) (perspectiva, STQ);
-    //    cor = lerp da tabela em clut + k * (nc - 1) / S, + 0,5, truncada (a mesma nos dois vertices).
-    //  - Recorte (0x2210-0x2288): CLIP de cada vertice da tira, A e B, contra a banda (x e y do GS em [0, 4096], z = W >= 1), e o ADC
-    //    vem das flags dos ultimos 4 vertices. Resultado: some cada triangulo da tira (A_k, B_k, A_k+1) e (B_k, A_k+1, B_k+1) com algum
-    //    vertice fora. O F < 1 fica no forEachQuad (pelo centro).
-    // g(k, cantos[4][3] (A_k, B_k, B_k+1, A_k+1), uv[4][2], cor[2] (RGBA 0x80 = 1,0, em k e k + 1), mascara): bit 0 = triangulo
-    // (A_k, B_k, A_k+1) = cantos 0, 1, 3; bit 1 = (B_k, A_k+1, B_k+1) = cantos 1, 3, 2 (a diagonal da tira e B_k - A_k+1).
-    // Corrente (tipo 12; chainCreate/chainPacketInit/Build, microprograma 0x1D00, que chama a mesma fita 0x1F70): o mesmo cabecalho
-    // em outro lugar (pos - 0x4C: minSize ja multiplicado por 0,5 pelo EE, -, segInitU, clut 642; pos - 0x3C: expansionRate, -,
-    // segDeltaU, numColors - 1) e 2 cores em pos - 0x28. Cada corrente: cabeca com o numero de pontos no w (inteiro); sem
-    // subdivisao (os pontos vao direto para a fita). Analise: git show 75f7fd4:docs/investigacoes/2026-10-17/01_corda_ultrav.md.
+    // Electric arc (types 7 and 17; electricArcPacketInit/Build/Update, microprogram 0x19F8, read from build/vu1/particle.txt).
+    // Packet: pos[] (fx +0x2EB0) in chains (head: low w = 1 + links; link: low w = 5 << (level - 1), or 0 = straight; head 0
+    // ends it); before it the header (pos - 0x28: minSize, seed, segInitU, 138 + CLUToffset, expansionRate, jag, segDeltaU,
+    // numColors - 1) and 16 RGBA colors as float 0..255 (pos - 0x13C), which electricArcPacketUpdate rewrites.
+    //  - RINIT(seed) once per packet. A level-L link from a to b: 2^L sub-segments; amp = jag * |b - a|, halved at each level; in each
+    //    gap, mid = 0.5a + r * amp - 1.5 * amp + 0.5b, r = (rx, ry, rz) in a sliding window of RNEXT (three at the start of the link; after
+    //    each mid, rx = ry, ry = rz, rz = RNEXT).
+    //  - Ribbon (subroutine 0x1F70) over the S + 1 points, in isotropic screen coordinates with y down (VU1 corrects y by the ratio
+    //    of the focal lengths): ghosts 2P0 - P1 and 2PS - PS-1 (homogeneous), unit t_in and t_out, n = (t.y, -t.x); v = n_in + n_out +
+    //    (t_out - t_in) if t_in x t_out < 0, else + (t_in - t_out) (not renormalized). Vertices p +/- s_k / 2 * v in the view plane,
+    //    s_k = minSize + exp * k / S; A (+) with V = 1, B (-) with V = 0; U_k = segInitU + segDeltaU * (k - S / 2) (perspective, STQ);
+    //    color = table lerp at clut + k * (nc - 1) / S, + 0.5, truncated (the same on both vertices).
+    //  - Clipping (0x2210-0x2288): CLIP of each strip vertex, A and B, against the band (GS x and y in [0, 4096], z = W >= 1), and the ADC
+    //    comes from the flags of the last 4 vertices. Result: every strip triangle (A_k, B_k, A_k+1) and (B_k, A_k+1, B_k+1) with any
+    //    vertex outside disappears. The F < 1 test is in forEachQuad (by the center).
+    // g(k, corners[4][3] (A_k, B_k, B_k+1, A_k+1), uv[4][2], color[2] (RGBA 0x80 = 1.0, at k and k + 1), mask): bit 0 = triangle
+    // (A_k, B_k, A_k+1) = corners 0, 1, 3; bit 1 = (B_k, A_k+1, B_k+1) = corners 1, 3, 2 (the strip's diagonal is B_k - A_k+1).
+    // Chain (type 12; chainCreate/chainPacketInit/Build, microprogram 0x1D00, which calls the same ribbon 0x1F70): the same header
+    // somewhere else (pos - 0x4C: minSize already multiplied by 0.5 by the EE, -, segInitU, clut 642; pos - 0x3C: expansionRate, -,
+    // segDeltaU, numColors - 1) and 2 colors at pos - 0x28. Each chain: a head with the point count in w (integer); no
+    // subdivision (the points go straight to the ribbon). Analysis: git show 75f7fd4:docs/investigacoes/2026-10-17/01_corda_ultrav.md.
     template <class G> static void arcQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
         const uint32_t pos = ram.u32(s.base + fxoff::pos);
         const bool chain = s.type == FX_CHAIN;
@@ -1864,7 +1864,7 @@ public:
         struct V3 { float x, y, z; };
         auto at = [&](int i) { return V3{ram.f32(pos + 16 * uint32_t(i)), ram.f32(pos + 16 * uint32_t(i) + 4), ram.f32(pos + 16 * uint32_t(i) + 8)}; };
         auto w16 = [&](int i) { return int(ram.u16(pos + 16 * uint32_t(i) + 12)); };
-        auto color = [&](float cpos) {   // cor RGBA (0x80 = 1,0) na posicao cpos da tabela (lerp, + 0,5, truncada)
+        auto color = [&](float cpos) {   // RGBA color (0x80 = 1.0) at position cpos of the table (lerp, + 0.5, truncated)
             const int k0 = std::clamp(int(cpos), 0, lastCol), k1 = std::min(k0 + 1, lastCol);
             const float fr = cpos - float(int(cpos));
             uint32_t out = 0;
@@ -1875,7 +1875,7 @@ public:
             }
             return out;
         };
-        // tela isotropica (y para baixo) e W do VU1 (linha 3 do worldToScreenMat; sem camera do jogo, a profundidade)
+        // isotropic screen (y down) and VU1's W (row 3 of worldToScreenMat; without the game camera, the depth)
         auto proj = [&](const V3 &p, float &x, float &y) {
             const float z = view.depth[0] * p.x + view.depth[1] * p.y + view.depth[2] * p.z + view.depth[3];
             const float iz = 1.f / (std::fabs(z) > 1e-6f ? z : 1e-6f);
@@ -1887,11 +1887,11 @@ public:
                 return view.depth[0] * p.x + view.depth[1] * p.y + view.depth[2] * p.z + view.depth[3];
             return view.fogW[0] * p.x + view.fogW[1] * p.y + view.fogW[2] * p.z + view.fogW[3];
         };
-        // banda de recorte do VU1 na tela do GS (worldToScreenMat com o olho, como o striteTriangle)
+        // VU1 clipping band on the GS screen (worldToScreenMat with the eye, like striteTriangle)
         float M[4][4], eye[3];
         for (int r = 0; r < 4; ++r)
             for (int k = 0; k < 4; ++k) M[r][k] = ram.f32(viewW2S() + 16 * uint32_t(r) + 4 * uint32_t(k));
-        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(viewCtxAddr() + 0x20 + 4 * uint32_t(k));   // worldCtx[vista].eo = -olho
+        for (int k = 0; k < 3; ++k) eye[k] = -ram.f32(viewCtxAddr() + 0x20 + 4 * uint32_t(k));   // worldCtx[view].eo = -eye
         auto outOfBand = [&](const float c[3]) {
             const float d[3] = {c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]};
             float h[4];
@@ -1904,14 +1904,14 @@ public:
         int i = 0;
         while (i < s.n) {
             const int links = w16(i) - 1;
-            if (links < 0 || i + links >= s.n) break;   // cabeca 0 (fim) ou cadeia truncada
+            if (links < 0 || i + links >= s.n) break;   // head 0 (end) or truncated chain
             P.clear();
             P.push_back(at(i));
             for (int l = 1; l <= links; ++l) {
                 const V3 b = at(i + l);
-                const int wl = chain ? 0 : w16(i + l);   // corrente: o w dos elos nao e lido
+                const int wl = chain ? 0 : w16(i + l);   // chain: the links' w isn't read
                 if (wl == 0) { P.push_back(b); continue; }
-                int h = wl / 5;   // meia-distancia (em pontos) do primeiro nivel: 2^(L - 1)
+                int h = wl / 5;   // half-distance (in points) of the first level: 2^(L - 1)
                 if (h < 1 || h > 64) { P.push_back(b); continue; }
                 const size_t base = P.size() - 1, end = base + size_t(2 * h);
                 P.resize(end + 1);
@@ -1933,7 +1933,7 @@ public:
             i += links + 1;
             const int S = int(P.size()) - 1;
             if (S < 1) continue;
-            // pontos na tela, com os fantasmas nas pontas
+            // points on screen, with the ghosts at the ends
             const size_t np = P.size();
             std::vector<float> sx(np + 2), sy(np + 2);
             const V3 g0{2.f * P[0].x - P[1].x, 2.f * P[0].y - P[1].y, 2.f * P[0].z - P[1].z};
@@ -1941,32 +1941,32 @@ public:
             proj(g0, sx[0], sy[0]);
             for (size_t k = 0; k < np; ++k) proj(P[k], sx[k + 1], sy[k + 1]);
             proj(gn, sx[np + 1], sy[np + 1]);
-            std::vector<float> ox(np), oy(np);   // v de cada ponto (tela isotropica, y para baixo)
+            std::vector<float> ox(np), oy(np);   // v of each point (isotropic screen, y down)
             std::vector<char> ok(np);
-            // corrente: o 0x1D00 percorre de P[n-1] a P[0] quando W(P[0]) < W(P[n-1]) (comeca pela ponta mais longe; visto no rastreio
-            // do VU1 do ultrav_corda); aqui so muda o ramo do produto zero, abaixo
+            // chain: 0x1D00 walks from P[n-1] to P[0] when W(P[0]) < W(P[n-1]) (it starts at the farther end; seen in the VU1
+            // trace of ultrav_corda); here that only changes the zero-product branch, below
             const bool rev = chain && wOf(P[0]) < wOf(P[np - 1]);
             for (size_t k = 0; k < np; ++k) {
                 float tix = sx[k + 1] - sx[k], tiy = sy[k + 1] - sy[k], tox = sx[k + 2] - sx[k + 1], toy = sy[k + 2] - sy[k + 1];
                 const float li = std::sqrt(tix * tix + tiy * tiy), lo = std::sqrt(tox * tox + toy * toy);
-                // corrente: tangente de comprimento zero vira o vetor zero (no VU, 0 * RSQRT(0) = 0; os pontos do fim coincidem)
+                // chain: a zero-length tangent becomes the zero vector (on the VU, 0 * RSQRT(0) = 0; the end points coincide)
                 ok[k] = (chain ? li > 1e-12f || lo > 1e-12f : li > 1e-12f && lo > 1e-12f) && wOf(P[k]) >= 1.f;
                 if (!ok[k]) continue;
                 const float ri = li > 1e-12f ? 1.f / li : 0.f, ro = lo > 1e-12f ? 1.f / lo : 0.f;
                 tix *= ri; tiy *= ri; tox *= ro; toy *= ro;
                 const float cross = tix * toy - tox * tiy;
-                // no zero exato (tangente zero na ponta da corrente) o VU ve +0, "nao negativo": deste lado e o ramo de cross < 0
-                // quando a corrente e percorrida na mesma ordem e o outro quando ao contrario (rev)
+                // at exactly zero (zero tangent at the end of the chain) the VU sees +0, "not negative": on this side that is the cross < 0
+                // branch when the chain is walked in the same order, and the other one when reversed (rev)
                 const float sgn = cross < 0.f ? 1.f : cross > 0.f ? -1.f : (chain && !rev ? 1.f : -1.f);
                 ox[k] = tiy + toy + sgn * (tox - tix);
                 oy[k] = -tix - tox + sgn * (toy - tiy);            }
             float cs[4][3], uv[4][2];
             const float u0 = segInitU - segDeltaU * 0.5f * float(S);
             auto corner = [&](size_t k, float side, float out[3]) {
-                // o VU1 desloca v * s * (metade do foco, q5.xy) / W pixels: no plano de vista, s / 2 (medido: razao 0,5 contra s)
-                // corrente: metade disso (medido na foto 2026-10-17_224038/002: com o q265.x = 10 do pacote, o VU1 da largura 0,25 * 10 * v)
+                // VU1 offsets by v * s * (half the focal length, q5.xy) / W pixels: in the view plane, s / 2 (measured: ratio 0.5 against s)
+                // chain: half of that (measured in photo 2026-10-17_224038/002: with the packet's q265.x = 10, VU1 gives width 0.25 * 10 * v)
                 const float sz = (chain ? 0.25f : 0.5f) * (minSize + expRate * float(k) / float(S));
-                const float wx = side * sz * ox[k], wy = side * sz * oy[k];   // no plano de vista: y da tela para baixo = -up
+                const float wx = side * sz * ox[k], wy = side * sz * oy[k];   // in the view plane: screen y down = -up
                 const float p[3] = {P[k].x, P[k].y, P[k].z};
                 for (int a = 0; a < 3; ++a) out[a] = p[a] + view.right[a] * wx - view.up[a] * wy;
             };
@@ -1985,29 +1985,29 @@ public:
         }
     }
 
-    // Sprine (tipo 8; sprinePacketInit/Build, microprograma 0x2770 em build/vu1/particle.txt). O pacote fica antes de pos[] (qword 8):
-    // cores RGBA (V4-8, q264-295), UV (V4-16 em 1/16 de texel, q296-299: u0, v0, u1, v1), e q300-q306 num UNPACK de 7 qwords que termina
-    // em pos - 4: q300.x = preAgeFactor (pa); q301 = (h (nc - 1) / vida, h exp, -, f6); q302 = (minSize, N, (N + 1) >> 1, sprites por
-    // lote; os tres inteiros); q303 e q304 = pesos das diferencas avancadas (x h^2); q305 = M2 (linha 2 da ParticleToEmitMat);
-    // q306 = ((n - 1) N, idade[n - 1] N, n - 1; inteiro, float, inteiro). h = 1/N.
-    //  - Um trecho por par A = pos[i], B = pos[i - 1] (i de n - 1 a 1), com Pm = pos[i + 1] e Pn = pos[i - 2]; fantasmas: no 1o trecho
-    //    Pm = B - 2 M2 ((B - A) . M2) (reflexo de B no plano de A normal a M2), no ultimo Pn = 2 pos[0] - pos[1].
-    //  - D1 = q303 . (Pm, A, B, Pn), D2 = q304 . (...), D2' = q304 invertido (w, z, y, x) . (...). p = A; a cada passo: emite em p,
-    //    p += D1, D1 += D2; se depois disso faltam (N + 1) >> 1 passos (e N > 2), D1 += c (D2' - D2), D2 = D2' (c = 0,5 com N par,
-    //    0,125 impar). N passos por trecho; pos[0] nao e emitido.
-    //  - Passo global s (aN = q306.y + s): r = valor corrente do gerador; j = 1 + pa (2 - r); lado = (minSize + q301.y aN) (1 + (r - 1) f6);
-    //    cor = tabela em min(31, q301.x aN j) (lerp, + 0,5, truncada; no 1o passo de um trecho que nao comeca lote, j entra duas vezes).
-    //    Depois RNEXT, e o UV do passo e q296 + (bits de r & 3). RINIT(pos[n - 1].w) e um RNEXT no comeco; RINIT(pos[i].w) em cada trecho
-    //    (so reinicia o gerador; o r corrente segue).
-    //  - SPRITE alinhado a tela: centro p +/- (192, 90,24) lado / W px, ou seja meio-lado lado / 2 no plano de vista. Some com W < 1 ou
-    //    F < 1 (o F no forEachQuad).
-    // g(passo, cantos[4][3] ((-,-), (+,-), (+,+), (-,+) na tela), uv[4][2], cor RGBA (0x80 = 1,0)).
+    // Sprine (type 8; sprinePacketInit/Build, microprogram 0x2770 in build/vu1/particle.txt). The packet sits before pos[] (qword 8):
+    // RGBA colors (V4-8, q264-295), UV (V4-16 in 1/16 texel, q296-299: u0, v0, u1, v1), and q300-q306 in a 7-qword UNPACK that ends
+    // at pos - 4: q300.x = preAgeFactor (pa); q301 = (h (nc - 1) / life, h exp, -, f6); q302 = (minSize, N, (N + 1) >> 1, sprites per
+    // batch; all three integers); q303 and q304 = forward-difference weights (x h^2); q305 = M2 (row 2 of ParticleToEmitMat);
+    // q306 = ((n - 1) N, age[n - 1] N, n - 1; integer, float, integer). h = 1/N.
+    //  - One segment per pair A = pos[i], B = pos[i - 1] (i from n - 1 to 1), with Pm = pos[i + 1] and Pn = pos[i - 2]; ghosts: on the 1st segment
+    //    Pm = B - 2 M2 ((B - A) . M2) (B reflected on A's plane with normal M2), on the last Pn = 2 pos[0] - pos[1].
+    //  - D1 = q303 . (Pm, A, B, Pn), D2 = q304 . (...), D2' = q304 reversed (w, z, y, x) . (...). p = A; on each step: emit at p,
+    //    p += D1, D1 += D2; if after that (N + 1) >> 1 steps remain (and N > 2), D1 += c (D2' - D2), D2 = D2' (c = 0.5 with even N,
+    //    0.125 odd). N steps per segment; pos[0] is not emitted.
+    //  - Global step s (aN = q306.y + s): r = current generator value; j = 1 + pa (2 - r); side = (minSize + q301.y aN) (1 + (r - 1) f6);
+    //    color = table at min(31, q301.x aN j) (lerp, + 0.5, truncated; on the 1st step of a segment that doesn't start a batch, j counts twice).
+    //    Then RNEXT, and the step's UV is q296 + (bits of r & 3). RINIT(pos[n - 1].w) and one RNEXT at the start; RINIT(pos[i].w) on each segment
+    //    (it only reseeds the generator; the current r carries on).
+    //  - Screen-aligned SPRITE: center p +/- (192, 90.24) side / W px, i.e. half-side side / 2 in the view plane. Disappears with W < 1 or
+    //    F < 1 (the F test is in forEachQuad).
+    // g(step, corners[4][3] ((-,-), (+,-), (+,+), (-,+) on screen), uv[4][2], RGBA color (0x80 = 1.0)).
     template <class G> static void sprineQuads(const Ram &ram, const FxSystem &s, const FxView &view, G &&g) {
         const uint32_t pos = ram.u32(s.base + fxoff::pos);
         const uint32_t q300 = pos - 0x74;
         if (s.n < 2 || !ram.ok(q300 - 0x24 - 0x80 - 4, 0x200) || !ram.ok(pos, 16 * uint32_t(s.n))) return;
-        if ((ram.u32(q300 - 4) & 0x7F0003FFu) != (0x6C000000u | 300u) || (ram.u32(pos - 4) & 0x3FF) != 8) return;   // UNPACK de q300 e de pos
-        const uint32_t uvAt = q300 - 4 - 0x20, colAt = uvAt - 4 - 0x80;   // dados dos UNPACK de q296 (4 x V4-16) e q264 (32 x V4-8)
+        if ((ram.u32(q300 - 4) & 0x7F0003FFu) != (0x6C000000u | 300u) || (ram.u32(pos - 4) & 0x3FF) != 8) return;   // UNPACK of q300 and of pos
+        const uint32_t uvAt = q300 - 4 - 0x20, colAt = uvAt - 4 - 0x80;   // data of the UNPACKs of q296 (4 x V4-16) and q264 (32 x V4-8)
         if ((ram.u32(uvAt - 4) & 0x3FF) != 296 || (ram.u32(colAt - 4) & 0x3FF) != 264) return;
         auto q = [&](int k, int c) { return ram.f32(q300 + 16 * uint32_t(k - 300) + 4 * uint32_t(c)); };
         auto qi = [&](int k, int c) { return int(ram.u32(q300 + 16 * uint32_t(k - 300) + 4 * uint32_t(c)) & 0xFFFF); };
@@ -2059,7 +2059,7 @@ public:
                 p[a] = A.v[a];
             }
             R = vuRinit(wbits(i));
-            const bool twiceJ = step % batch != 0;   // 1o passo de trecho que nao comeca lote
+            const bool twiceJ = step % batch != 0;   // 1st step of a segment that doesn't start a batch
             for (int k = 0; k < N; ++k, ++step) {
                 const float j = 1.f + pa * (2.f - r);
                 const float side = (minSize + cExp * aN) * (1.f + (r - 1.f) * f6);
@@ -2071,7 +2071,7 @@ public:
                     const float h = 0.5f * side;
                     float cs[4][3];
                     for (int a = 0; a < 3; ++a) {
-                        const float rx = view.right[a] * h, uy = view.up[a] * h;   // y da tela para baixo = -up
+                        const float rx = view.right[a] * h, uy = view.up[a] * h;   // screen y down = -up
                         cs[0][a] = p[a] - rx + uy; cs[1][a] = p[a] + rx + uy;
                         cs[2][a] = p[a] + rx - uy; cs[3][a] = p[a] - rx - uy;
                     }
@@ -2087,8 +2087,8 @@ public:
         }
     }
 
-    // Geometria do sistema em coordenadas de mundo, um quadrado por vez: f(i, cantos[4][3], uv[4][2]), i = particula (nas faixas,
-    // a ponta de i a i + 1; cantos 0 e 1 em i, 2 e 3 em i + 1). Linhas (FX_LINE) nao passam por aqui. Serve ao draw e a checagem VU1.
+    // The system's geometry in world coordinates, one quad at a time: f(i, corners[4][3], uv[4][2]), i = particle (for strips,
+    // the span from i to i + 1; corners 0 and 1 at i, 2 and 3 at i + 1). Lines (FX_LINE) don't go through here. Used by draw and by the VU1 check.
     template <class F> static void forEachQuad(const Ram &ram, const FxSystem &s, const FxView &view, F &&emit) {
         auto f = [&](int i, const float c[4][3], const float uv[4][2]) { if (!fogged(view, c)) emit(i, c, uv); };
         const uint32_t b = s.base;
@@ -2100,7 +2100,7 @@ public:
         float c[4][3], uv[4][2];
         if (s.type == FX_LINE) return;
         if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {
-            // so os quadrados com os dois triangulos (no VU1 um triangulo sem par conta como solto)
+            // only the quads with both triangles (on VU1 an unpaired triangle counts as loose)
             arcQuads(ram, s, view, [&](int k, const float cc[4][3], const float uu[4][2], const uint32_t *, int mask) { if (mask == 3) f(k, cc, uu); });
             return;
         }
@@ -2109,22 +2109,22 @@ public:
             return;
         }
         if (isStrip(s.type)) {
-            // Faixa ligando particulas consecutivas, de meia-largura |pos.w|. Como no VU1 (medido pela checagem em stripe: a aresta de
-            // cada ponta sai perpendicular a faixa na tela), a ponta i abre perpendicular, na tela, a direcao entre as vizinhas
-            // (i - 1 e i + 1), com a meia-largura no plano de vista (projeta em |pos.w| * foco / profundidade).
-            // stripe: o stripePacketBuild manda ao VU1 a idade da particula mais nova (n - 1), e a largura sai descontada do quanto ela
-            // ja cresceu: com o emissor parado a faixa inteira afina. Medido pela checagem (preset 106): meia-largura =
-            // |pos.w| - |pos.w[n - 1]| + minSize (com o emissor ativo, a mais nova tem idade ~0 e da |pos.w|).
-            // Polilinha das particulas (stripe, sweepTrail), cada ponto com a meia-largura e a particula (para a cor no draw).
+            // A strip joining consecutive particles, with half-width |pos.w|. As on VU1 (measured by the check on stripe: the edge at
+            // each end comes out perpendicular to the strip on screen), end i opens perpendicular, on screen, to the direction between its neighbors
+            // (i - 1 and i + 1), with the half-width in the view plane (projects to |pos.w| * focal / depth).
+            // stripe: stripePacketBuild sends VU1 the age of the newest particle (n - 1), and the width is reduced by how much it
+            // has already grown: with the emitter stopped the whole strip thins out. Measured by the check (preset 106): half-width =
+            // |pos.w| - |pos.w[n - 1]| + minSize (with the emitter active, the newest has age ~0 and gives |pos.w|).
+            // Polyline of the particles (stripe, sweepTrail), each point with its half-width and particle (for the color in draw).
             struct Pt { float p[3], hw, u; int seg; };
             std::vector<Pt> pts;
             pts.reserve(size_t(s.n));
             {
                 float wHead = 0.f;
                 if (s.type == FX_STRIPE) { float ph[4]; P(s.n - 1, ph); wHead = std::fabs(ph[3]) - ram.f32(b + fxoff::minSize); }
-                // stripe: U do cabecalho do pacote (pos - 0x28, stripePacketInit/Build): +0x8 = U da particula mais nova (o build o
-                // faz rolar a cada quadro), +0x18 = passo por particula (segmentDeltaU / rate); U_i = U0 + passo (n - 1 - i), fora de
-                // 0..1 (o GS repete). Conferido na foto 2026-10-18_025733/001 (fx 16: -0,580 + 8/64 na particula 60 de 69).
+                // stripe: U from the packet header (pos - 0x28, stripePacketInit/Build): +0x8 = U of the newest particle (build
+                // scrolls it every frame), +0x18 = step per particle (segmentDeltaU / rate); U_i = U0 + step (n - 1 - i), outside
+                // 0..1 (the GS repeats). Verified in photo 2026-10-18_025733/001 (fx 16: -0.580 + 8/64 at particle 60 of 69).
                 const uint32_t posA = ram.u32(b + fxoff::pos);
                 const bool vuU = s.type == FX_STRIPE && ram.ok(posA - 0x28, 0x28);
                 const float u0 = vuU ? ram.f32(posA - 0x20) : 0.f, du = vuU ? ram.f32(posA - 0x10) : 0.f;
@@ -2144,15 +2144,15 @@ public:
             };
             auto off = [&](size_t i, float o[3]) {
                 if (s.type == FX_STRIPE) {
-                    // Junta do microprograma do stripe (0x1708, rotina 0x1F70/0x2118), no plano da tela com o y corrigido pela proporcao
-                    // (o mesmo que x/z, y/z da vista): d1 = atual - anterior, d2 = proximo - atual (nas pontas, o vizinho que falta e o
-                    // reflexo 2*ponta - vizinho), u = d/|d|, p(u) = (u.y, -u.x) e, pelo lado da curva (sinal de d1 x d2),
-                    //   v = p(u1) + p(u2) + (u1 - u2)   se d1.x*d2.y - d2.x*d1.y >= 0, senao   p(u1) + p(u2) - (u1 - u2)
-                    // e a ponta abre v * meia-largura / 2 (numa reta, |v| = 2). Numa curva fechada a ponta abre quase ao longo do
-                    // caminho; o nativo usava a perpendicular a (proximo - anterior), e os rastros em zigue-zague do ExploSmokeTrail
-                    // saiam deslocados ate ~16 px (checagem VU1 x nativo: 88% dos quadrados casados).
-                    // O fantasma das pontas (2 * ponta - vizinho) e feito nas coordenadas homogeneas, antes da divisao por W: como a
-                    // projecao e afim antes dela, e o reflexo no mundo, projetado (refletir na tela mudava direcao e largura da ponta).
+                    // The stripe microprogram's joint (0x1708, routine 0x1F70/0x2118), in the screen plane with y corrected by the aspect
+                    // (the same as the view's x/z, y/z): d1 = current - previous, d2 = next - current (at the ends, the missing neighbor is the
+                    // reflection 2*end - neighbor), u = d/|d|, p(u) = (u.y, -u.x) and, on the side of the bend (sign of d1 x d2),
+                    //   v = p(u1) + p(u2) + (u1 - u2)   if d1.x*d2.y - d2.x*d1.y >= 0, else   p(u1) + p(u2) - (u1 - u2)
+                    // and the end opens v * half-width / 2 (on a straight line, |v| = 2). On a tight bend the end opens almost along the
+                    // path; the native side used the perpendicular to (next - previous), and ExploSmokeTrail's zigzag trails
+                    // came out offset by up to ~16 px (VU1 vs native check: 88% of quads matched).
+                    // The ends' ghost (2 * end - neighbor) is built in homogeneous coordinates, before the divide by W: since the
+                    // projection is affine before it, that is the world reflection, projected (reflecting on screen changed the end's direction and width).
                     const size_t last = pts.size() - 1;
                     if (last == 0) return false;
                     float xc, yc, xp, yp, xn, yn;
@@ -2170,7 +2170,7 @@ public:
                     const float u1x = d1x / l1, u1y = d1y / l1, u2x = d2x / l2, u2y = d2y / l2;
                     const float sg = (d1x * d2y - d2x * d1y) >= 0.f ? 1.f : -1.f;
                     const float vx = u1y + u2y + sg * (u1x - u2x), vy = -u1x - u2x + sg * (u1y - u2y);
-                    // mesmo sentido da formula antiga numa reta (cantos 0/3 de um lado, 1/2 do outro)
+                    // same orientation as the old formula on a straight line (corners 0/3 on one side, 1/2 on the other)
                     const float nx = -0.5f * vx * pts[i].hw, ny = -0.5f * vy * pts[i].hw;
                     for (int a = 0; a < 3; ++a) o[a] = view.right[a] * nx + view.up[a] * ny;
                     return true;
@@ -2186,7 +2186,7 @@ public:
             };
             for (size_t i = 0; i + 1 < pts.size(); ++i) {
                 const Pt &a0 = pts[i], &a1 = pts[i + 1];
-                if (a1.seg != a0.seg + 1) continue;   // particula invalida no meio: sem ponte
+                if (a1.seg != a0.seg + 1) continue;   // an invalid particle in the middle: no bridge
                 float o0[3], o1[3];
                 if (!off(i, o0) || !off(i + 1, o1)) continue;
                 for (int a = 0; a < 3; ++a) {
@@ -2200,11 +2200,11 @@ public:
             return;
         }
         if (s.type == FX_PEDS) {
-            // Pedestres (pedsCreate/stampPacketInit, PedGroup): carimbo em pe no Z do mundo, base em pos, largura info.minSize na
-            // horizontal da camera e altura info.maxSize (medido pela checagem VU1 x nativo: a inclinacao na tela segue a perspectiva
-            // de um eixo vertical e o centro fica meia altura acima de pos). pos.w nao e tamanho: e float(variante de cor) (scatter)
-            // com a meia-palavra baixa trocada pelo quadro da animacao (update). A folha tem os quadros em U (texMask + 1) e as
-            // variantes em V (vis.numColors), du/dv do TextureInfo em 1/16 de texel.
+            // Pedestrians (pedsCreate/stampPacketInit, PedGroup): an upright stamp along world Z, base at pos, width info.minSize along
+            // the camera's horizontal and height info.maxSize (measured by the VU1 vs native check: the on-screen tilt follows the perspective
+            // of a vertical axis and the center sits half a height above pos). pos.w is not a size: it is float(color variant) (scatter)
+            // with the low half-word replaced by the animation frame (update). The sheet has the frames along U (texMask + 1) and the
+            // variants along V (vis.numColors), du/dv from TextureInfo in 1/16 texel.
             const float W = ram.f32(b + fxoff::minSize), H = ram.f32(b + fxoff::maxSize);
             float rh[3] = {view.right[0], view.right[1], 0.f};
             const float rl = std::sqrt(rh[0] * rh[0] + rh[1] * rh[1]);
@@ -2231,8 +2231,8 @@ public:
                     c[2][a] = c[1][a]; c[3][a] = c[0][a];
                 }
                 c[2][2] += H; c[3][2] += H;
-                // VU1 (prog 0x1373): V cresce para cima (pe em v0, cabeca em v0 + dv; a folha guarda os bonecos de cabeca
-                // para baixo), com o recuo de meio texel do stampPacketInit (0.5/(du>>4); aqui a regiao e a textura inteira)
+                // VU1 (prog 0x1373): V grows upward (feet at v0, head at v0 + dv; the sheet stores the figures upside
+                // down), with stampPacketInit's half-texel inset (0.5/(du>>4); here the region is the whole texture)
                 const float hu = 0.5f / texW, hv = 0.5f / texH;
                 uv[0][0] = u0 + hu;      uv[0][1] = v0 + hv;
                 uv[1][0] = u0 + du - hu; uv[1][1] = v0 + hv;
@@ -2242,18 +2242,18 @@ public:
             }
             return;
         }
-        // Sprites (sprite, texSprite, dustTrail, frag, kite, wake, strite): um quad por particula
+        // Sprites (sprite, texSprite, dustTrail, frag, kite, wake, strite): one quad per particle
         const bool dust = isDustTex(systemTex0(ram, b));
         for (int i = 0; i < s.n; ++i) {
             float p[4];
             P(i, p);
             if (!std::isfinite(p[0]) || !std::isfinite(p[3])) continue;
-            // microcodigo de sprites (0x2C8) e texSprite (0xF18): meio-lado na tela = vf27.xy * pos.w / W, com vf27.xy = metade do foco
-            // (192; 90,24), limitado por MINI a vf17.xy = vf27.xy / 2 (96; 45,12 px). Em mundo: meio-lado = pos.w / 2 e teto = profundidade
-            // / 4 (com teto / 2 a explosao do Magmo e o WhiteExplosionFx saiam ate o dobro do tamanho; checagem: todos os quadrados do VU1
-            // com 192 x 90,25 px). Os outros tipos que caem aqui continuam com pos.w inteiro e teto / 2 (nao conferidos).
+            // sprite (0x2C8) and texSprite (0xF18) microcode: on-screen half-side = vf27.xy * pos.w / W, with vf27.xy = half the focal length
+            // (192; 90.24), capped by MINI at vf17.xy = vf27.xy / 2 (96; 45.12 px). In world space: half-side = pos.w / 2 and cap = depth
+            // / 4 (with cap / 2 Magmo's explosion and WhiteExplosionFx came out up to twice the size; check: every VU1 quad
+            // at 192 x 90.25 px). The other types that land here still use the whole pos.w and cap / 2 (not verified).
             const float depth = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
-            if (s.type == FX_WAKE) {   // microprograma 0x3470 (wakeVu): o triangulo e o ST do pacote; o quad degenera (canto 3 = canto 0)
+            if (s.type == FX_WAKE) {   // microprogram 0x3470 (wakeVu): the triangle and the packet's ST; the quad degenerates (corner 3 = corner 0)
                 const WakeVu wv = wakeVu(ram, b, i, depth);
                 if (!wv.visible) continue;
                 for (int k = 0; k < 4; ++k) {
@@ -2278,8 +2278,8 @@ public:
             float ax[3] = {view.right[0] * r, view.right[1] * r, view.right[2] * r}, ay[3] = {view.up[0] * r, view.up[1] * r, view.up[2] * r};
             float cpos[3] = {p[0], p[1], p[2]};
             if (s.type == FX_STRITE) {
-                // microcodigo do strite: cabeca pos e cauda pos - vel projetadas, e a faixa esticada 2x para cada lado
-                // (de pos + 2*vel a pos - 3*vel); a largura sai de pos.w. Aqui no plano da tela, centrada em pos - vel/2.
+                // strite microcode: head pos and tail pos - vel projected, and the strip stretched 2x on each side
+                // (from pos + 2*vel to pos - 3*vel); the width comes from pos.w. Here in the screen plane, centered at pos - vel/2.
                 float v[3];
                 V(i, v);
                 const float vd = v[0] * back[0] + v[1] * back[1] + v[2] * back[2];
@@ -2292,41 +2292,41 @@ public:
                     for (int a = 0; a < 3; ++a) { ax[a] = vs[a] * len; ay[a] = side[a] * r * 0.5f; cpos[a] = p[a] - 0.5f * v[a]; }
                 }
             }
-            // conjunto de UV: os bits baixos de pos.w indexam os cantos que o spritePacketInit sobe (VU 0x168): 3 normal, 1 espelha U,
-            // 2 espelha V, 0 os dois. Com info.attribs & 0x2000 sao 16 conjuntos (giros tambem); aqui so os 4 espelhamentos.
+            // UV set: the low bits of pos.w index the corners spritePacketInit uploads (VU 0x168): 3 normal, 1 mirrors U,
+            // 2 mirrors V, 0 both. With info.attribs & 0x2000 there are 16 sets (rotations too); here only the 4 mirrorings.
             uint32_t wbits;
             std::memcpy(&wbits, &p[3], 4);
             const bool fu = (wbits & 2) == 0, fv = (wbits & 1) == 0;
             float u0 = fu ? 1.f : 0.f, u1 = fu ? 0.f : 1.f, v0 = fv ? 1.f : 0.f, v1 = fv ? 0.f : 1.f;
             if (s.type == FX_DUSTTRAIL) {
-                // dustTrailPacketInit: tabela de 4 celulas (cantos (9, 9) a (du/2 - 9, du/2 - 9) mais du/2 em U pela celula & 1 e em V
-                // pela celula >> 1, em 1/16 de texel; du do TextureInfo nos dois eixos); o VU escolhe pelo byte 2 da palavra de idade & 3
+                // dustTrailPacketInit: table of 4 cells (corners (9, 9) to (du/2 - 9, du/2 - 9) plus du/2 in U by cell & 1 and in V
+                // by cell >> 1, in 1/16 texel; du from TextureInfo on both axes); the VU picks by byte 2 of the age word & 3
                 const uint32_t tinfo = fxaddr::textureInfo + 8 * (ram.u32(b + fxoff::texInfoIndex) & 127);
                 const uint64_t t0 = systemTex0(ram, b);
                 const float du = float(ram.u16(tinfo + 4)), tw = 16.f * float(1u << ((t0 >> 26) & 15)), th = 16.f * float(1u << ((t0 >> 30) & 15));
-                const float h = std::floor(du * 0.5f);   // celula 0: 9 a h - 9; celula com o bit: h + 9 a du - 9
+                const float h = std::floor(du * 0.5f);   // cell 0: 9 to h - 9; cell with the bit: h + 9 to du - 9
                 u0 = ((dustCell & 1) ? h + 9.f : 9.f) / tw; u1 = ((dustCell & 1) ? du - 9.f : h - 9.f) / tw;
                 v0 = ((dustCell >> 1) ? h + 9.f : 9.f) / th; v1 = ((dustCell >> 1) ? du - 9.f : h - 9.f) / th;
-            } else if (dust) {   // celula wbits & 3 da textura composta: (9, 9, 503, 503) + 512 * (k & 1, k >> 1), em 1/16 de texel de 64
+            } else if (dust) {   // cell wbits & 3 of the composite texture: (9, 9, 503, 503) + 512 * (k & 1, k >> 1), in 1/16 texel of 64
                 const float cu = float(wbits & 1) * 0.5f, cv = float((wbits >> 1) & 1) * 0.5f;
                 u0 = cu + 9.f / 1024.f; u1 = cu + 503.f / 1024.f; v0 = cv + 9.f / 1024.f; v1 = cv + 503.f / 1024.f;
             }
             const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
             for (int k = 0; k < 4; ++k)
                 for (int a = 0; a < 3; ++a) c[k][a] = cpos[a] + ax[a] * sx[k] + ay[a] * sy[k];
-            // O VU1 manda strite e wake como UM triangulo por particula (checagem VU1 x nativo); aqui o quad degenera (canto 3 = canto 0).
+            // VU1 sends strite and wake as ONE triangle per particle (VU1 vs native check); here the quad degenerates (corner 3 = corner 0).
             uv[0][0] = u0; uv[0][1] = v1; uv[1][0] = u1; uv[1][1] = v1;
             uv[2][0] = u1; uv[2][1] = v0; uv[3][0] = u0; uv[3][1] = v0;
             if (s.type == FX_STRITE) {
                 float v[3];
                 V(i, v);
                 if (striteTriangle(ram, b, p, v, c)) {
-                    // ST do microprograma (checagem, foto 2026-10-17_200206): ponta (0,5; 1,5), base (1,366; 0) e (-0,366; 0). O triangulo
-                    // equilatero circunscreve o quadrado da textura: o disco fica inscrito (raio 0,5) e o resto cai fora de 0..1 (texturas de particula em CLAMP)
+                    // The microprogram's ST (check, photo 2026-10-17_200206): tip (0.5; 1.5), base (1.366; 0) and (-0.366; 0). The equilateral
+                    // triangle circumscribes the texture square: the disc is inscribed (radius 0.5) and the rest falls outside 0..1 (particle textures use CLAMP)
                     uv[0][0] = uv[3][0] = 0.5f; uv[0][1] = uv[3][1] = 1.5f;
                     uv[1][0] = 1.3660254f; uv[1][1] = 0.f;
                     uv[2][0] = -0.3660254f; uv[2][1] = 0.f;
-                } else {   // sem a camera do jogo: ponta no meio dos cantos 0 e 3 (aproximacao antiga)
+                } else {   // without the game camera: tip between corners 0 and 3 (old approximation)
                     for (int a = 0; a < 3; ++a) c[0][a] = c[3][a] = cpos[a] - ax[a];
                 }
             }
@@ -2335,8 +2335,8 @@ public:
     }
 
 private:
-    unsigned blob_ = 0;   // textura de reserva (disco suave) quando a do sistema nao decodifica
-    std::unordered_map<uint32_t, float> flarePrev_;   // debounce do lens flare: fracao visivel do quadro anterior por ID
+    unsigned blob_ = 0;   // fallback texture (soft disc) when the system's texture doesn't decode
+    std::unordered_map<uint32_t, float> flarePrev_;   // lens flare debounce: visible fraction from the previous frame, per ID
 
     unsigned blobTexture() {
         if (blob_) return blob_;
@@ -2347,26 +2347,26 @@ private:
                 const float dx = (x + 0.5f) / n * 2.f - 1.f, dy = (y + 0.5f) / n * 2.f - 1.f;
                 const float r = std::sqrt(dx * dx + dy * dy);
                 const float a = std::max(0.f, 1.f - r);
-                px[size_t(y * n + x)] = 0x00FFFFFFu | (uint32_t(a * a * 128.f) << 24);   // alfa do GS: 0x80 = 1,0
+                px[size_t(y * n + x)] = 0x00FFFFFFu | (uint32_t(a * a * 128.f) << 24);   // GS alpha: 0x80 = 1.0
             }
         Image img{px.data(), n, n, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         const Texture2D t = LoadTextureFromImage(img);
-        if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }   // CLAMP como as do jogo (strite usa UV fora de 0..1)
+        if (t.id) { SetTextureFilter(t, TEXTURE_FILTER_BILINEAR); SetTextureWrap(t, TEXTURE_WRAP_CLAMP); }   // CLAMP like the game's (strite uses UV outside 0..1)
         blob_ = t.id;
         return blob_;
     }
 
-    // Registrador ALPHA do GS do sistema (vis.alphaContext; gsBlend). 0 = sistema opaco (desenhado antes, ver draw): fica a mistura comum.
+    // The system's GS ALPHA register (vis.alphaContext; gsBlend). 0 = opaque system (drawn first, see draw): keeps the common blend.
     static uint8_t blendFor(uint32_t alpha) { return alpha ? uint8_t(alpha & 0xFF) : kGsAlphaNormal; }
 
-    // RGBAQ do GS (0x80 = 1,0) cru: o modo GS do shader (shaderNormal) faz texel * Cv / 128 e At * Av / 16384
+    // Raw GS RGBAQ (0x80 = 1.0): the shader's GS mode (shaderNormal) does texel * Cv / 128 and At * Av / 16384
     static void vcolor(uint32_t c) { rlColor4ub(uint8_t(c & 255), uint8_t((c >> 8) & 255), uint8_t((c >> 16) & 255), uint8_t(c >> 24)); }
 
-    // Quadro de textura do texSprite (texSpritePacketBuild)
+    // texSprite texture frame (texSpritePacketBuild)
     static uint32_t texFrame(const Ram &ram, uint32_t b, int i, int age) {
         const uint32_t frames = ram.u32(b + fxoff::texMask), attr = ram.u32(b + fxoff::infoAttribs);
         if (frames == 0) return 0;
-        if (attr & 1) return uint32_t(i * 2654435761u >> 16) % frames;   // retail: rand() a cada quadro; aqui fixo por particula
+        if (attr & 1) return uint32_t(i * 2654435761u >> 16) % frames;   // retail: rand() every frame; here fixed per particle
         if (attr & 2) return (ram.u8(b + fxoff::uvI + uint32_t(i)) >> 2) % frames;
         const uint32_t f = (uint32_t(std::max(age, 0)) * ram.u32(b + fxoff::mapsPerFrame)) >> 12;
         if (attr & 4) return std::min(f, frames - 1);
@@ -2374,50 +2374,50 @@ private:
     }
 
 public:
-    // Cor (RGBAQ do GS, 0x80 = 1,0) do quadrado i de forEachQuad como o drawSystem a desenha: col[0] nos cantos 0 e 1, col[1] nos 2 e 3
-    // (so as faixas mudam de uma ponta para a outra). Nao serve a arco, corrente e sprine (a cor sai de arcQuads/sprineQuads).
+    // Color (GS RGBAQ, 0x80 = 1.0) of quad i from forEachQuad as drawSystem draws it: col[0] on corners 0 and 1, col[1] on 2 and 3
+    // (only strips change from one end to the other). Not for arc, chain and sprine (their color comes from arcQuads/sprineQuads).
     static void quadColor(const Ram &ram, const FxSystem &s, const FxView &view, int i, uint32_t col[2]) {
         const uint32_t b = s.base;
         const uint32_t pos = ram.u32(b + fxoff::pos), vel = ram.u32(b + fxoff::vel), age = ram.u32(b + fxoff::age);
         const bool haveVel = ram.ok(vel, 16 * uint32_t(s.n)), haveAge = ram.ok(age, 2 * uint32_t(s.n));
         auto A = [&](int k) { return haveAge ? int(ram.s16(age + 2 * uint32_t(k))) : 0; };
-        // pedestres: vis.colorIndex e a propria cor RGBA (stampPacketInit a sobe byte a byte); numColors conta as variantes da folha
+        // pedestrians: vis.colorIndex is the RGBA color itself (stampPacketInit uploads it byte by byte); numColors counts the sheet's variants
         uint32_t c0 = s.type == FX_PEDS ? ram.u32(b + fxoff::colorIndex) : colorAt(ram, b, A(i));
-        if (s.type == FX_DUSTTRAIL) {   // cor e alfa do microprograma (dustTrailVu): a palavra de idade, nao a tabela de cores
+        if (s.type == FX_DUSTTRAIL) {   // the microprogram's color and alpha (dustTrailVu): the age word, not the color table
             float p[3];
             for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
             const float W = view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3];
             c0 = dustTrailVu(ram, b, i, ram.f32(pos + 16 * uint32_t(i) + 12), W).rgba;
-        } else if (s.type == FX_WAKE) {   // cor fixa do pacote e alfa pela curva do microprograma (wakeVu)
+        } else if (s.type == FX_WAKE) {   // fixed color from the packet and alpha from the microprogram's curve (wakeVu)
             float p[3];
             for (int a = 0; a < 3; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
             c0 = wakeVu(ram, b, i, view.depth[0] * p[0] + view.depth[1] * p[1] + view.depth[2] * p[2] + view.depth[3]).rgba;
         } else if (s.type == FX_STRITE && haveVel) {
-            // cor pela posicao vel.w na tabela (microprograma 0xA88: indice FTOI0(vel.w), lerp, + 0,5; vel.w e a idade com espalhamento
-            // por particula, nao idade * colorsPerFrame) e alfa escalado pelo comprimento do rastro (striteTriangle, alphaK)
+            // color by position vel.w in the table (microprogram 0xA88: index FTOI0(vel.w), lerp, + 0.5; vel.w is the age with per-particle
+            // spread, not age * colorsPerFrame) and alpha scaled by the trail length (striteTriangle, alphaK)
             float p[4], v[4], tri[4][3], k = 1.f;
             for (int a = 0; a < 4; ++a) p[a] = ram.f32(pos + 16 * uint32_t(i) + 4 * uint32_t(a));
             for (int a = 0; a < 4; ++a) v[a] = ram.f32(vel + 16 * uint32_t(i) + 4 * uint32_t(a));
             const uint32_t nc = ram.u32(b + fxoff::numColors), tab = fxaddr::colors + 4 * ram.u32(b + fxoff::colorIndex);
             float cf[4] = {128.5f, 128.5f, 128.5f, 128.5f};
             if (nc > 0 && std::isfinite(v[3]) && v[3] >= 0.f) {
-                const int k0 = std::min(int(v[3]), int(nc) - 1), k1 = std::min(k0 + 1, int(nc) - 1);   // so numColors entradas no pacote
+                const int k0 = std::min(int(v[3]), int(nc) - 1), k1 = std::min(k0 + 1, int(nc) - 1);   // only numColors entries in the packet
                 const float fr = std::min(v[3] - float(k0), 1.f);
                 const uint32_t e0 = ram.u32(tab + 4 * uint32_t(k0)), e1 = ram.u32(tab + 4 * uint32_t(k1));
                 for (int a = 0; a < 4; ++a) cf[a] = float((e0 >> (8 * a)) & 255) * (1.f - fr) + float((e1 >> (8 * a)) & 255) * fr + 0.5f;
             }
             if (!striteTriangle(ram, b, p, v, tri, &k)) k = 1.f;
-            auto ub = [](float x) { return uint32_t(std::clamp(x, 0.f, 255.f)); };   // FTOI0 trunca
+            auto ub = [](float x) { return uint32_t(std::clamp(x, 0.f, 255.f)); };   // FTOI0 truncates
             c0 = ub(cf[0]) | ub(cf[1]) << 8 | ub(cf[2]) << 16 | ub(cf[3] * k) << 24;
         }
         col[0] = c0;
         col[1] = isStrip(s.type) ? colorAt(ram, b, A(i + 1)) : c0;
-        // stripePacketInit: com info.attribs & 0x200 o RGB de todas as cores do pacote vem do vetor info.useThisColor (trailColoring da
-        // fase no rastro de poeira) e o alfa e o da tabela vezes o w do vetor. So o stripe (o frag tem a sua versao no Scene).
+        // stripePacketInit: with info.attribs & 0x200 the RGB of every color in the packet comes from the info.useThisColor vector (the stage's
+        // trailColoring on the dust trail) and alpha is the table's times the vector's w. Only stripe (frag has its own version in Scene).
         if (s.type == FX_STRIPE && (ram.u32(b + fxoff::infoAttribs) & 0x200)) {
             const uint32_t cp = ram.u32(b + fxoff::useThisColor);
             if (ram.ok(cp, 16)) {
-                auto ub = [](float v) { return uint32_t(std::clamp(v + 0.5f, 0.f, 255.f)); };   // lerp de valores iguais + 0,5, FTOI0
+                auto ub = [](float v) { return uint32_t(std::clamp(v + 0.5f, 0.f, 255.f)); };   // lerp of equal values + 0.5, FTOI0
                 const uint32_t rgb = ub(ram.f32(cp)) | ub(ram.f32(cp + 4)) << 8 | ub(ram.f32(cp + 8)) << 16;
                 const float w = ram.f32(cp + 12);
                 for (int k = 0; k < 2; ++k) col[k] = rgb | ub(float(col[k] >> 24) * w - 0.5f) << 24;
@@ -2425,8 +2425,8 @@ public:
         }
     }
 
-    // forEachQuad com a cor que o desenho usa em cada quadrado: emit(i, cantos, uv, cor dos cantos 0 e 1, cor dos cantos 2 e 3).
-    // Mesma geometria e mesmo descarte do forEachQuad (arco e corrente so com os dois triangulos). Serve a checagem VU1.
+    // forEachQuad with the color drawing uses on each quad: emit(i, corners, uv, color of corners 0 and 1, color of corners 2 and 3).
+    // Same geometry and same culling as forEachQuad (arc and chain only with both triangles). Used by the VU1 check.
     template <class F> static void forEachQuadColored(const Ram &ram, const FxSystem &s, const FxView &view, F &&emit) {
         if (s.type == FX_LINE) return;
         if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {
@@ -2447,7 +2447,7 @@ public:
     }
 
 private:
-    // Sistema sintetico (synth): o caminho dos sprites do drawSystem/forEachQuad com as particulas daqui
+    // Synthetic system (synth): drawSystem/forEachQuad's sprite path with the particles from here
     void drawSynth(const Ram &ram, const SynthSystem &s, const TexFn &texture, const FxView &view) {
         if (s.sprites.empty()) return;
         const uint32_t tinfo = fxaddr::textureInfo + 8 * (s.texInfo & 127);
@@ -2504,15 +2504,15 @@ private:
         rlDrawRenderBatchActive();
         const uint8_t blend = blendFor(ram.u32(b + fxoff::alphaContext));
         gsBlend(blend);
-        // neblina no shader do Scene::draw: o XGKICK das particulas leva PRIM.FGE em todos os tipos medidos pela checagem VU1 (sprite,
-        // texSprite, stripe, strite, arco, sprine, frag, pedestre, dustTrail); alfa do GS (texturas com alfa cru); o draw zera no fim
+        // fog in the Scene::draw shader: the particles' XGKICK carries PRIM.FGE on every type measured by the VU1 check (sprite,
+        // texSprite, stripe, strite, arc, sprine, frag, pedestrian, dustTrail); GS alpha (textures with raw alpha); draw resets it at the end
         shaderNormal(0.f, true, true, gsBlendPremul(blend));
         auto A = [&](int i) { return haveAge ? int(ram.s16(age + 2 * uint32_t(i))) : 0; };
 
         if (s.type == FX_LINE) {
-            shaderNormal(0.f, false, true, gsBlendPremul(blend));   // PRIM 0x49 sem FGE: a neblina ja vem no alfa (lineVu)
+            shaderNormal(0.f, false, true, gsBlendPremul(blend));   // PRIM 0x49 without FGE: the fog is already in the alpha (lineVu)
             rlBegin(RL_LINES);
-            rlSetTexture(gsWhiteTexture());   // sem textura no modo GS: alfa 0x80
+            rlSetTexture(gsWhiteTexture());   // no texture in GS mode: alpha 0x80
             for (int i = 0; i < s.n; ++i) {
                 float h[3], t[3];
                 uint32_t c;
@@ -2526,12 +2526,12 @@ private:
             return;
         }
 
-        if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {   // fita com a cor de cada ponto (arcQuads), em triangulos com a diagonal da tira
-            rlBegin(RL_TRIANGLES);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
+        if (s.type == FX_ARC || s.type == FX_ARC2 || s.type == FX_CHAIN) {   // ribbon with each point's color (arcQuads), as triangles along the strip's diagonal
+            rlBegin(RL_TRIANGLES);   // rlBegin before rlSetTexture (see the pitfall in wotm_native.hpp)
             const unsigned tex = texFor(0);
             rlSetTexture(tex);
-            // corrente: o U vai de segInitU - 0,15 (n - 1) a segInitU (fora de 0..1) e o GS repete a ChainTex (a corda torcida da
-            // referencia); as texturas de particula ficam em CLAMP, entao REPEAT no S so durante este sistema
+            // chain: U runs from segInitU - 0.15 (n - 1) to segInitU (outside 0..1) and the GS repeats ChainTex (the twisted rope of the
+            // reference); particle textures use CLAMP, so REPEAT on S only while drawing this system
             const bool repS = s.type == FX_CHAIN;
             if (repS) rlTextureParameters(tex, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT);
             arcQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], const uint32_t col[2], int mask) {
@@ -2552,7 +2552,7 @@ private:
             return;
         }
 
-        if (s.type == FX_SPRINE) {   // sprites da curva com a cor de cada passo (sprineQuads)
+        if (s.type == FX_SPRINE) {   // the curve's sprites with each step's color (sprineQuads)
             rlBegin(RL_QUADS);
             rlSetTexture(texFor(0));
             sprineQuads(ram, s, view, [&](int, const float c[4][3], const float uv[4][2], uint32_t col) {
@@ -2568,10 +2568,10 @@ private:
             return;
         }
 
-        // faixas: uma textura e a cor de cada ponta; sprites: textura (quadro do texSprite) e cor por particula
+        // strips: one texture and a color per end; sprites: texture (texSprite frame) and color per particle
         const bool strip = isStrip(s.type), perFrame = s.type == FX_TEXSPRITE;
         const unsigned stripTex = strip ? texFor(0) : 0;
-        const bool repS = s.type == FX_STRIPE && stripTex != 0;   // U fora de 0..1 (cabecalho do pacote): REPEAT no S so durante este sistema
+        const bool repS = s.type == FX_STRIPE && stripTex != 0;   // U outside 0..1 (packet header): REPEAT on S only while drawing this system
         if (repS) rlTextureParameters(stripTex, RL_TEXTURE_WRAP_S, RL_TEXTURE_WRAP_REPEAT);
         unsigned cur = ~0u;
         bool open = false;
@@ -2580,7 +2580,7 @@ private:
             const unsigned tex = strip ? stripTex : texFor(perFrame ? texFrame(ram, b, i, ag) : 0);
             if (tex != cur || !open) {
                 if (open) { rlEnd(); rlDrawRenderBatchActive(); }
-                rlBegin(RL_QUADS);   // rlBegin antes de rlSetTexture (ver a armadilha em wotm_native.hpp)
+                rlBegin(RL_QUADS);   // rlBegin before rlSetTexture (see the pitfall in wotm_native.hpp)
                 rlSetTexture(tex);
                 cur = tex;
                 open = true;

@@ -119,15 +119,15 @@ def list_dump(path, verbose):
         e = [m.f32(b + 0x2CA0 + 4 * c) for c in range(3)]
         fid = m.u32(b + 0x2DDC)
         print(f'#{i:2d} preset {fid:3d} {FX_ID.get(fid, "?")} {TYPES.get(typ, typ)!s:10} n={cnt:3d}/{m.s32(b + 0x2ED4):3d} '
-              f'{"desenha" if drawn else "nao desenha"} blend={BLEND.get(alpha, hex(alpha))} '
-              f'cores={m.u32(b + 0x2E9C)}@{m.u32(b + 0x2EA0)} cpf={m.u32(b + 0x2E78)} vida={m.s16(b + 0x2E4A)} '
+              f'{"drawn" if drawn else "not drawn"} blend={BLEND.get(alpha, hex(alpha))} '
+              f'colors={m.u32(b + 0x2E9C)}@{m.u32(b + 0x2EA0)} cpf={m.u32(b + 0x2E78)} life={m.s16(b + 0x2E4A)} '
               f'texInfo={ti} {FX_TEX.get(ti, "")} (n={ntex} idx={tidx} texId={texs}) emit=({e[0]:.0f},{e[1]:.0f},{e[2]:.0f})')
         pos, age = m.u32(b + 0x2EB0), m.u32(b + 0x2EB8)
         for k in range(cnt if verbose else min(cnt, 2)):
             p = [m.f32(pos + 16 * k + 4 * c) for c in range(4)]
             a = m.s16(age + 2 * k)
-            print(f'      [{k:3d}] pos ({p[0]:.1f},{p[1]:.1f},{p[2]:.1f}) tamanho {p[3]:.2f} idade {a} cor {color_at(m, b, a):08x}')
-    print(f'{n} sistemas ativos')
+            print(f'      [{k:3d}] pos ({p[0]:.1f},{p[1]:.1f},{p[2]:.1f}) size {p[3]:.2f} age {a} color {color_at(m, b, a):08x}')
+    print(f'{n} active systems')
 
 
 def list_presets():
@@ -136,9 +136,9 @@ def list_presets():
         v, p, e = VISUAL_INFO + 32 * i, PARTICLE_INFO + 96 * i, EMITTER_INFO + 80 * i
         typ, nc, ci = m.u32(v), m.u32(v + 12), m.u32(v + 16)
         cols = ' '.join(f'{m.u32(COLORS + 4 * (ci + k)):08x}' for k in range(min(nc, 3)))
-        print(f'{i:3d} {FX_ID.get(i, "?")!s:24} {TYPES.get(typ, typ)!s:10} tam {m.f32(p + 8):6.1f}..{m.f32(p + 12):6.1f} exp {m.f32(p + 0x10):6.2f}/{m.f32(p + 0x14):6.2f} '
-              f'vida {m.s16(p + 0x1A):5d} blend={BLEND.get(m.u32(v + 0x18), hex(m.u32(v + 0x18)))} tex={FX_TEX.get(m.u32(v + 8), m.u32(v + 8))} '
-              f'cores={nc}@{ci} [{cols}] taxa {m.f32(e + 0xC):.1f} dur {m.s16(e + 6)}')
+        print(f'{i:3d} {FX_ID.get(i, "?")!s:24} {TYPES.get(typ, typ)!s:10} size {m.f32(p + 8):6.1f}..{m.f32(p + 12):6.1f} exp {m.f32(p + 0x10):6.2f}/{m.f32(p + 0x14):6.2f} '
+              f'life {m.s16(p + 0x1A):5d} blend={BLEND.get(m.u32(v + 0x18), hex(m.u32(v + 0x18)))} tex={FX_TEX.get(m.u32(v + 8), m.u32(v + 8))} '
+              f'colors={nc}@{ci} [{cols}] rate {m.f32(e + 0xC):.1f} dur {m.s16(e + 6)}')
 
 
 def main():

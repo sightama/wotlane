@@ -1,12 +1,12 @@
-// Icone de salvamento automatico (NATIVO.md, "Save em JSON"): a fita de filme 3D que o jogo grava como icone do memory card
-// (MEMCRD/ICON.ICO do disco) gira no canto inferior direito por 1 s a cada gravacao do save.json (wotm_save.inc soma
-// g_wotmSaveCount na thread do EE; a janela desenha aqui, de dentro do wotmDrawScene).
+// Autosave icon (NATIVO.md, "Save em JSON"): the 3D film reel the game writes as its memory card icon
+// (MEMCRD/ICON.ICO on the disc) spins in the bottom-right corner for 1 s on every write of save.json (wotm_save.inc bumps
+// g_wotmSaveCount on the EE thread; the window draws it here, from inside wotmDrawScene).
 //
-// Formato do ICON.ICO (icone de save do PS2, conferido com este arquivo): cabecalho de 20 bytes (0x00010000, numero de formas da
-// animacao, tipo da textura, 1.0f, numero de vertices); por vertice, a posicao em cada forma (4 x s16, 1.0 = 4096, y para baixo), a
-// normal (4 x s16), u e v (2 x s16, 0..4096) e a cor (RGBA, 0x80 = 1.0); triangulos em sequencia. Depois a animacao (20 bytes e,
-// por quadro, forma + numero de chaves + chaves de 8 bytes) e a textura 128x128 em 1555 (bit 3 do tipo: comprimida, u32 tamanho e
-// pares de u16: n < 0x8000 repete o valor seguinte n vezes, n >= 0x8000 copia 0x10000 - n valores). O daqui tem uma forma so.
+// ICON.ICO format (PS2 save icon, checked against this file): 20-byte header (0x00010000, number of animation shapes,
+// texture type, 1.0f, vertex count); per vertex, the position in each shape (4 x s16, 1.0 = 4096, y pointing down), the
+// normal (4 x s16), u and v (2 x s16, 0..4096) and the color (RGBA, 0x80 = 1.0); triangles in sequence. Then the animation (20 bytes and,
+// per frame, shape + key count + 8-byte keys) and the 128x128 texture in 1555 (bit 3 of the type: compressed, u32 size and
+// pairs of u16: n < 0x8000 repeats the next value n times, n >= 0x8000 copies 0x10000 - n values). This one has a single shape.
 #pragma once
 #include "wotm_disc.hpp"
 
@@ -54,7 +54,7 @@ inline bool parse(const std::vector<uint8_t> &d, Model &m) {
     for (uint32_t i = 0; i < nv; ++i, o += stride) {
         Vtx &t = m.v[i];
         t.x = s16(o) / 4096.0f;
-        t.y = -s16(o + 2) / 4096.0f;   // y do icone e para baixo: gira 180 graus em x (y e z trocam de sinal), sem espelhar
+        t.y = -s16(o + 2) / 4096.0f;   // the icon's y points down: rotate 180 degrees around x (y and z flip sign), without mirroring
         t.z = -s16(o + 4) / 4096.0f;
         const size_t uv = o + 8 * shapes + 8;
         t.u = s16(uv) / 4096.0f;
@@ -65,7 +65,7 @@ inline bool parse(const std::vector<uint8_t> &d, Model &m) {
     }
     for (int k = 0; k < 3; ++k) m.center[k] = (lo[k] + hi[k]) * 0.5f;
     m.radius = 0.5f * std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) + (hi[2] - lo[2]) * (hi[2] - lo[2]));
-    // animacao: 20 bytes, e por quadro forma + chaves
+    // animation: 20 bytes, and per frame shape + keys
     if (o + 20 > d.size()) return false;
     const uint32_t frames = u32(o + 16);
     o += 20;
@@ -101,7 +101,7 @@ inline bool parse(const std::vector<uint8_t> &d, Model &m) {
     return true;
 }
 
-// Thread da janela. `discRoot`/`iso`: o disco; `cardDir`: pasta do jogo no cartao (copia do icone que o jogo gravou), de reserva.
+// Window thread. `discRoot`/`iso`: the disc; `cardDir`: the game's folder on the memory card (copy of the icon the game wrote), as a fallback.
 class Presenter {
 public:
     void present(const std::filesystem::path &discRoot, const std::string &iso, const std::filesystem::path &cardDir) {
@@ -128,7 +128,7 @@ public:
             SetTextureFilter(rt_.texture, TEXTURE_FILTER_BILINEAR);
         }
         BeginTextureMode(rt_);
-        rlEnableDepthMask();   // a cena nativa pode ter deixado desligada: sem ela o clear nao limpa a profundidade nem o icone a grava
+        rlEnableDepthMask();   // the native scene may have left it off: without it the clear doesn't clear depth and the icon doesn't write it
         ClearBackground(BLANK);
         Camera3D cam{};
         const float dist = model_.radius * 3.2f;
@@ -142,10 +142,10 @@ public:
         BeginMode3D(cam);
         rlDisableBackfaceCulling();
         rlPushMatrix();
-        rlRotatef(float(t * 300.0), 0.0f, 1.0f, 0.0f);   // quase uma volta por segundo
+        rlRotatef(float(t * 300.0), 0.0f, 1.0f, 0.0f);   // almost one turn per second
         rlTranslatef(-model_.center[0], -model_.center[1], -model_.center[2]);
         rlBegin(RL_TRIANGLES);
-        rlSetTexture(tex_.id);   // depois do rlBegin: um rlBegin com modo novo abre o draw com a textura padrao
+        rlSetTexture(tex_.id);   // after rlBegin: an rlBegin with a new mode opens the draw with the default texture
         for (const Vtx &v : model_.v) {
             rlColor4ub(v.c[0], v.c[1], v.c[2], 255);
             rlTexCoord2f(v.u, v.v);
@@ -172,19 +172,19 @@ private:
         if (tried_) return tex_.id != 0;
         tried_ = true;
         std::vector<uint8_t> d;
-        const char *from = "disco";
+        const char *from = "disc";
         if (!wotm::disc::readFile(discRoot, iso, "MEMCRD/ICON.ICO", d)) {
-            from = "cartao";
+            from = "memory card";
             if (!wotm::disc::readFile(cardDir, {}, "ICON.ICO", d)) d.clear();
         }
         if (d.empty() || !parse(d, model_)) {
-            std::fprintf(stderr, "[wotm] icone de salvamento: MEMCRD/ICON.ICO %s; sem icone\n", d.empty() ? "nao achado" : "em formato inesperado");
+            std::fprintf(stderr, "[wotm] save icon: MEMCRD/ICON.ICO %s; no icon\n", d.empty() ? "not found" : "in an unexpected format");
             return false;
         }
         Image img{model_.rgba.data(), 128, 128, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         tex_ = LoadTextureFromImage(img);
         SetTextureFilter(tex_, TEXTURE_FILTER_BILINEAR);
-        std::fprintf(stderr, "[wotm] icone de salvamento: ICON.ICO do %s, %zu vertices\n", from, model_.v.size());
+        std::fprintf(stderr, "[wotm] save icon: ICON.ICO from the %s, %zu vertices\n", from, model_.v.size());
         return tex_.id != 0;
     }
 

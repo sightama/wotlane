@@ -1,12 +1,12 @@
-// Visualizador standalone da camada nativa: carrega um dump da RAM do EE (`ram_<quadro>.bin`, gerado pelo runtime com
-// PS2X_DUMP_RAM) e desenha a cena com raylib, com camera livre. Serve para iterar sem o emulador.
+// Standalone viewer for the native layer: loads an EE RAM dump (`ram_<frame>.bin`, written by the runtime with
+// PS2X_DUMP_RAM) and draws the scene with raylib, with a free camera. Lets you iterate without the emulator.
 //
-//   viewer ram.bin [--vram vram.bin] [--shot saida.png] [--cam x y z yaw pitch] [--lod n] [--wire]
-// Recursos: por padrao le LVL/MON de `disc/` (--disc <dir>) conforme fileStatus; --rtx <arquivo> forca um RTX de nivel.
-// Sem --vram, procura vram_<n>.bin ao lado de ram_<n>.bin.
-// Teclas: botao direito + mouse = olhar; WASD = mover (Shift = rapido); Q/E = descer/subir; Tab = arame; L = LOD; F12 = captura.
+//   viewer ram.bin [--vram vram.bin] [--shot out.png] [--cam x y z yaw pitch] [--lod n] [--wire]
+// Resources: by default reads LVL/MON from `disc/` (--disc <dir>) according to fileStatus; --rtx <file> forces a level RTX.
+// Without --vram, looks for vram_<n>.bin next to ram_<n>.bin.
+// Keys: right button + mouse = look; WASD = move (Shift = fast); Q/E = down/up; Tab = wireframe; L = LOD; F12 = screenshot.
 #include <cstdlib>
-#include "wotm_syms.h"   // wotm::sym / wotm::fn: enderecos do ELF por nome (tools/native_syms.py --gen)
+#include "wotm_syms.h"   // wotm::sym / wotm::fn: ELF addresses by name (tools/native_syms.py --gen)
 #include <unordered_map>
 #include <string>
 
@@ -27,12 +27,12 @@ static std::vector<uint8_t> readFile(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        std::fprintf(stderr, "uso: viewer ram.bin [--shot saida.png] [--cam x y z yaw pitch] [--lod n] [--wire]\n");
+        std::fprintf(stderr, "usage: viewer ram.bin [--shot out.png] [--cam x y z yaw pitch] [--lod n] [--wire]\n");
         return 1;
     }
     std::vector<uint8_t> data = readFile(argv[1]);
     if (data.size() < 0x1000000) {
-        std::fprintf(stderr, "dump invalido: %s (%zu bytes)\n", argv[1], data.size());
+        std::fprintf(stderr, "invalid dump: %s (%zu bytes)\n", argv[1], data.size());
         return 1;
     }
     const char *shot = nullptr;
@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     const char *texdump = nullptr;
     std::string rtxPath, discRoot = "disc";
     bool wire = false, haveCam = false;
-    int lod = -1;   // -1 = automatico por distancia
+    int lod = -1;   // -1 = automatic by distance
     bool useFree = false;
     wotm::Camera cam;
     for (int i = 2; i < argc; ++i) {
@@ -71,25 +71,25 @@ int main(int argc, char **argv) {
     wotm::Scene scene;
     scene.fovCull = !useFree;
     scene.vram = {vram.data(), vram.size()};
-    if (rtxPath.empty()) {   // padrao: nivel + monstros do jogo, achados por fileStatus (nomes e bases das paletas) no disco extraido
+    if (rtxPath.empty()) {   // default: the game's level + monsters, found via fileStatus (names and palette bases) on the extracted disc
         std::string log;
         const bool ok = scene.loadResources(ram, discRoot, &log);
-        std::fprintf(stderr, "recursos (%s): %s -> %s (%zu paletas)\n", discRoot.c_str(), log.c_str(), ok ? "ok" : "falhou", scene.rtxPal.size());
+        std::fprintf(stderr, "resources (%s): %s -> %s (%zu palettes)\n", discRoot.c_str(), log.c_str(), ok ? "ok" : "failed", scene.rtxPal.size());
     } else {
         const bool ok = scene.loadRtx(rtxPath.c_str(), ram.u32(wotm::addr::tempVramTexAddr) >> 6);
-        std::fprintf(stderr, "rtx %s: %s (%zu paletas)\n", rtxPath.c_str(), ok ? "ok" : "falhou", scene.rtxPal.size());
+        std::fprintf(stderr, "rtx %s: %s (%zu palettes)\n", rtxPath.c_str(), ok ? "ok" : "failed", scene.rtxPal.size());
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(1024, 768, "WotM nativo");
+    InitWindow(1024, 768, "WotM native");
     SetTargetFPS(60);
 
     scene.collect(ram, lod);
-    std::fprintf(stderr, "itens=%zu visitados=%u recortados=%u\n", scene.items.size(), scene.visited, scene.culled);
+    std::fprintf(stderr, "items=%zu visited=%u culled=%u\n", scene.items.size(), scene.visited, scene.culled);
     if (std::getenv("WOTM_UVSTAT")) scene.dumpUv(ram);
     if (std::getenv("WOTM_UVISO")) scene.dumpUvIso(ram);
     if (std::getenv("WOTM_SKINSAN")) scene.dumpSkinSanity(ram);
-    if (const char *cv = std::getenv("WOTM_COVER")) {   // "ref,ref,..:teste,teste,.."
+    if (const char *cv = std::getenv("WOTM_COVER")) {   // "ref,ref,..:test,test,.."
         std::vector<uint32_t> refs, tests; std::vector<uint32_t> *cur = &refs; unsigned v = 0; bool has = false;
         for (const char *q = cv;; ++q) {
             const char ch = *q;
@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
     if (const char *bc = std::getenv("WOTM_BONECODES")) { unsigned n = 0; if (std::sscanf(bc, "%x", &n) == 1) scene.boneCodes(ram, n); }
     if (const char *sf = std::getenv("WOTM_SKINFIT")) { unsigned a = 0, b = 0, c = 0; if (std::sscanf(sf, "%x,%x,%x", &a, &b, &c) == 3) scene.fitSkin(ram, a, b, c); }
     scene.dumpSkinned(ram);
-    if (!haveCam) {   // enquadra a cena (ignora o domo do ceu)
+    if (!haveCam) {   // frames the scene (ignores the sky dome)
         float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
         for (const auto &it : scene.items) {
             const float r = ram.f32(it.node + 8);
@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (texdump) {   // depuracao: grava as texturas decodificadas (TEX0 distintos) em <texdump>_<n>.png
+    if (texdump) {   // debugging: writes the decoded textures (distinct TEX0s) to <texdump>_<n>.png
         std::unordered_map<uint64_t, int> done;
         for (const auto &it : scene.items) for (uint32_t slot = 0; slot < std::min<uint32_t>(std::max<uint32_t>(1, ram.u16(it.node + 0x5A)), 5); ++slot) {
             const uint64_t key = wotm::Scene::texKey(ram, it.node, slot);
@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
             uint32_t w = 0, h = 0;
             const bool ok = scene.decodeTex(ram, it.node, px, w, h, slot);
             const auto t = wotm::gs::Tex0::decode(wotm::Scene::objectTex0(ram, it.node, slot));
-            std::fprintf(stderr, "texId=%u psm=%02x %ux%u tw=%u th=%u tbp0=%u tbw=%u cbp=%u cpsm=%u csa=%u -> %s\n", unsigned(key >> 40) & 0xFFFF, t.psm, w, h, 1u << t.tw, 1u << t.th, t.tbp0, t.tbw, t.cbp, t.cpsm, t.csa, ok ? "ok" : "falhou");
+            std::fprintf(stderr, "texId=%u psm=%02x %ux%u tw=%u th=%u tbp0=%u tbw=%u cbp=%u cpsm=%u csa=%u -> %s\n", unsigned(key >> 40) & 0xFFFF, t.psm, w, h, 1u << t.tw, 1u << t.th, t.tbp0, t.tbw, t.cbp, t.cpsm, t.csa, ok ? "ok" : "failed");
             if (ok) {
                 Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
                 ExportImage(img, TextFormat("%s_%02d.png", texdump, int(done.size())));
@@ -137,14 +137,14 @@ int main(int argc, char **argv) {
             done[key] = 1;
         }
     }
-    if (const char *wt = std::getenv("WOTM_NODETEX")) {   // depuracao: lista os objetos cujo texId[0] e <wt> (texIds, numTextures e TEX0 de cada contexto)
+    if (const char *wt = std::getenv("WOTM_NODETEX")) {   // debugging: lists the objects whose texId[0] is <wt> (texIds, numTextures and TEX0 of each context)
         const uint32_t want = uint32_t(std::atoi(wt));
         int shown = 0;
         for (const auto &it : scene.items) {
             if (ram.u16(it.node + 0x50) != want || shown++ >= 8) continue;
             std::fprintf(stderr, "pos(%.0f %.0f %.0f) ", it.m.m[3][0], it.m.m[3][1], it.m.m[3][2]);
             std::fprintf(stderr, "bits=%08x envW=%.2f ", ram.u32(it.node + 0xC), ram.f32(it.node + 0x5C));
-            std::fprintf(stderr, "no %06x texId=[%u %u %u %u %u] numTex=%u tex0:", it.node, ram.u16(it.node + 0x50), ram.u16(it.node + 0x52), ram.u16(it.node + 0x54), ram.u16(it.node + 0x56), ram.u16(it.node + 0x58), ram.u16(it.node + 0x5A));
+            std::fprintf(stderr, "node %06x texId=[%u %u %u %u %u] numTex=%u tex0:", it.node, ram.u16(it.node + 0x50), ram.u16(it.node + 0x52), ram.u16(it.node + 0x54), ram.u16(it.node + 0x56), ram.u16(it.node + 0x58), ram.u16(it.node + 0x5A));
             for (uint32_t k = 0; k < std::min<uint32_t>(ram.u16(it.node + 0x5A), 5); ++k) {
                 const uint64_t v = wotm::Scene::objectTex0(ram, it.node, k);
                 const auto t = wotm::gs::Tex0::decode(v);
@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
             std::fprintf(stderr, "\n");
         }
     }
-    if (std::getenv("WOTM_T4SMOOTH")) {   // depuracao: para cada pacote T4 de texInfo, suavidade (diferenca media entre vizinhos) linear x como memoria do GS
+    if (std::getenv("WOTM_T4SMOOTH")) {   // debugging: for each T4 packet in texInfo, smoothness (mean difference between neighbors) as linear vs. as GS memory
         std::vector<uint32_t> swz;
         uint32_t nlin = 0;
         for (uint32_t id = 0; id < 400; ++id) {
@@ -184,16 +184,16 @@ int main(int argc, char **argv) {
             lin /= n; sw /= n;
             if (sw < lin * 0.6) swz.push_back(id); else ++nlin;
         }
-        std::fprintf(stderr, "T4: %u linear(es); %zu mais suaves como memoria do GS:", nlin, swz.size());
+        std::fprintf(stderr, "T4: %u linear; %zu smoother as GS memory:", nlin, swz.size());
         for (uint32_t id : swz) std::fprintf(stderr, " %u", id);
         std::fprintf(stderr, "\n");
     }
-    if (const char *pc = std::getenv("WOTM_PALCMP")) {   // depuracao: paleta do CBP <pc> no .RTX carregado x na VRAM do dump (16 primeiras cores, RGBA)
+    if (const char *pc = std::getenv("WOTM_PALCMP")) {   // debugging: palette at CBP <pc> in the loaded .RTX vs. in the dump's VRAM (first 16 colors, RGBA)
         const uint32_t cbp = uint32_t(std::atoi(pc));
         const auto it = scene.rtxPal.find(cbp);
-        std::fprintf(stderr, "paleta CBP %u: RTX %s\n", cbp, it == scene.rtxPal.end() ? "ausente" : "presente");
+        std::fprintf(stderr, "palette CBP %u: RTX %s\n", cbp, it == scene.rtxPal.end() ? "missing" : "present");
         if (it != scene.rtxPal.end()) {
-            std::fprintf(stderr, "  RTX (%zu entradas):", it->second.size());
+            std::fprintf(stderr, "  RTX (%zu entries):", it->second.size());
             for (size_t k = 0; k < std::min<size_t>(16, it->second.size()); ++k) std::fprintf(stderr, " %08x", it->second[k]);
             std::fprintf(stderr, "\n");
         }
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
             std::fprintf(stderr, "\n");
         }
     }
-    if (const char *fxd = std::getenv("WOTM_FXDUMP")) {   // depuracao: texturas dos efeitos (fx[] em 0x5BA280, 98 x 12000 bytes) decodificadas da VRAM do dump
+    if (const char *fxd = std::getenv("WOTM_FXDUMP")) {   // debugging: effect textures (fx[] at 0x5BA280, 98 x 12000 bytes) decoded from the dump's VRAM
         std::unordered_map<uint64_t, int> done;
         for (uint32_t i = 1; i < wotm::fxaddr::count; ++i) {
             const uint32_t b = wotm::sym::fx + i * 12000u;
@@ -218,9 +218,9 @@ int main(int argc, char **argv) {
             const auto t = wotm::gs::Tex0::decode(t0);
             std::vector<uint32_t> px;
             uint32_t w = 0, h = 0;
-            const uint32_t texId = ram.u16(b + 0x2C40);   // texLoad[0]: indice em texInfo
+            const uint32_t texId = ram.u16(b + 0x2C40);   // texLoad[0]: index into texInfo
             const bool ok = scene.decodeFxTex(ram, texId, t0, px, w, h);
-            std::fprintf(stderr, "fx%u vis=%u fxTex=%u texInfo=%u n=%u psm=%02x %ux%u tbp0=%u cbp=%u -> %s\n", i, ram.u32(b + 0x2E90) & 0xFF, ram.u32(b + 0x2E98), texId, np, t.psm, w, h, t.tbp0, t.cbp, ok ? "ok" : "falhou");
+            std::fprintf(stderr, "fx%u vis=%u fxTex=%u texInfo=%u n=%u psm=%02x %ux%u tbp0=%u cbp=%u -> %s\n", i, ram.u32(b + 0x2E90) & 0xFF, ram.u32(b + 0x2E98), texId, np, t.psm, w, h, t.tbp0, t.cbp, ok ? "ok" : "failed");
             if (ok && !done.count(t0)) {
                 done[t0] = 1;
                 Image img{px.data(), int(w), int(h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
     }
     const wotm::GameCamera gcam = wotm::readGameCamera(ram, 0);
     bool useGame = gcam.ok && !useFree && !haveCam;
-    std::fprintf(stderr, "camera do jogo: %s pos %.1f %.1f %.1f fovy %.1f\n", gcam.ok ? "ok" : "ausente", gcam.pos[0], gcam.pos[1], gcam.pos[2], gcam.fovy);
+    std::fprintf(stderr, "game camera: %s pos %.1f %.1f %.1f fovy %.1f\n", gcam.ok ? "ok" : "missing", gcam.pos[0], gcam.pos[1], gcam.pos[2], gcam.fovy);
     int frame = 0;
     while (!WindowShouldClose()) {
         const float dt = GetFrameTime();
@@ -271,14 +271,14 @@ int main(int argc, char **argv) {
         rlSetClipPlanes(0.5, 30000.0);
         BeginMode3D(c3);
         scene.draw(ram, wire);
-        scene.drawHp(ram, wire);   // sem fades no viewer: logo depois da cena
+        scene.drawHp(ram, wire);   // no fades in the viewer: right after the scene
         EndMode3D();
         scene.updateText(ram);
         scene.screenPolys.clear();
-        wotm::readScreenPolys(ram, scene.screenPolys);   // so com numPolys > 0 (dump tirado antes do dmaData)
+        wotm::readScreenPolys(ram, scene.screenPolys);   // only with numPolys > 0 (dump taken before dmaData)
         scene.drawQuads(scene.screenPolys, float(GetScreenWidth()), float(GetScreenHeight()));
         scene.drawQuads(scene.text, float(GetScreenWidth()), float(GetScreenHeight()));
-        DrawText(TextFormat("itens %zu  lod %d  %s  cam %.0f %.0f %.0f", scene.items.size(), lod, wire ? "arame" : "solido", cam.pos[0], cam.pos[1], cam.pos[2]), 10, 10, 18, WHITE);
+        DrawText(TextFormat("items %zu  lod %d  %s  cam %.0f %.0f %.0f", scene.items.size(), lod, wire ? "wire" : "solid", cam.pos[0], cam.pos[1], cam.pos[2]), 10, 10, 18, WHITE);
         EndDrawing();
         ++frame;
         if (IsKeyPressed(KEY_F12)) TakeScreenshot("viewer_shot.png");

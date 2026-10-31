@@ -85,6 +85,14 @@ class CodeTest(unittest.TestCase):
         self.assertFalse(same('@echo off\n', '@echo on\n', 'bat')[0])
         self.assertFalse(same('echo a & exit /b 1\n', 'echo a & exit /b 2\n', 'bat')[0])
 
+    def test_bat_caret_escapes_and_set_prompt(self):
+        old = 'if "%RC%"=="0" (echo Executavel atualizado.) else (echo Build falhou ^(codigo %RC%^); veja %LOG%.)\nset /p ASKED=Cole o caminho ^(a pasta^):\n'
+        new = 'if "%RC%"=="0" (echo Executable updated.) else (echo Build failed ^(code %RC%^); see %LOG%.)\nset /p ASKED=Paste the path ^(the folder^):\n'
+        ok, changed = same(old, new, 'bat')
+        self.assertTrue(ok)
+        self.assertEqual(len(changed), 3)
+        self.assertFalse(same('set /p ASKED=a\n', 'set /p OTHER=a\n', 'bat')[0])
+
     def test_cmake(self):
         self.assertTrue(same('# nota\nmessage(STATUS "ola")\n', '# note\nmessage(STATUS "hello")\n', 'cmake')[0])
 

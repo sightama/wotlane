@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-"""Exporta um monstro do WotM para glTF binario (.glb) com esqueleto e animacoes, para o viewer web (VIEWER_WEB.md, etapa 1).
+"""Exports a WotM monster to binary glTF (.glb) with skeleton and animations, for the web viewer (VIEWER_WEB.md, stage 1).
 
-  python tools/monglb.py disc/MON/LIZARD0.NGP saida/LIZARD0.glb               # idle (animacao 90)
-  python tools/monglb.py disc/MON/LIZARD0.NGP saida/LIZARD0.glb --anims 90,0  # outras animacoes (ids do pose.py --list)
-  python tools/monglb.py disc/MON/LIZARD0.NGP saida/LIZARD0.glb --all --split  # todas: LIZARD0.glb (malha, esqueleto,
-      idle e a lista) + LIZARD0/aNNN.glb, uma animacao por arquivo, carregada quando o visitante escolhe
-      (--anim-dir LIZARD: grava em LIZARD/ ao lado; os trajes de um monstro tem animacoes iguais e dividem a pasta)
-  python tools/monglb.py disc/LVL/3-MILE.NGP saida/PLANT0.glb --boss plant --split --anim-dir PLANT   # chefes montados
-      de pecas da fase: plant (3-MILE), root (3-MILE), mecha (CAPITOL); ver boss()
-  opcoes: --unlit (material sem luz; padrao: com luz, como o Renderer do nativo), --fps 60
+  python tools/monglb.py disc/MON/LIZARD0.NGP out/LIZARD0.glb               # idle (animation 90)
+  python tools/monglb.py disc/MON/LIZARD0.NGP out/LIZARD0.glb --anims 90,0  # other animations (ids from pose.py --list)
+  python tools/monglb.py disc/MON/LIZARD0.NGP out/LIZARD0.glb --all --split  # all of them: LIZARD0.glb (mesh, skeleton,
+      idle and the list) + LIZARD0/aNNN.glb, one animation per file, loaded when the visitor picks it
+      (--anim-dir LIZARD: writes to LIZARD/ next to it; a monster's costumes have identical animations and share the folder)
+  python tools/monglb.py disc/LVL/3-MILE.NGP out/PLANT0.glb --boss plant --split --anim-dir PLANT   # bosses assembled
+      from stage pieces: plant (3-MILE), root (3-MILE), mecha (CAPITOL); see boss()
+  options: --unlit (unlit material; default: lit, like the native Renderer), --fps 60
 
-Como sai (o mesmo modelo do tools/pose.py, conferido contra RAM de luta):
-- Um no raiz "WotM" gira o jogo (Z para cima) para o glTF (Y para cima). Tudo dentro dele esta nas unidades e eixos do jogo.
-- Cada osso do SKEL_BONE com saida (skelOutputMatIdx) vira um joint; o pai e o osso que gravou a matriz de que ele parte na
-  pilha do esqueleto (raiz = sem pai). Matriz inversa de ligacao = restPoseInv do osso; posicoes das malhas skinned = as do
-  arquivo (espaco do modelo em repouso), 3 ossos por vertice com os pesos do jogo.
-- Partes rigidas (OBJECT sem skin, sob ANIM_XFORM) viram nos com a malha no espaco do objeto e a matriz do objeto animada.
-  Visibilidade (canal de visibilidade cortando o no) sai como escala 0 nos quadros em que a parte some.
-- Animacao amostrada: o pose.py avalia as curvas a cada quadro (60/s, 0..fim) e cada no ganha uma chave de translacao,
-  rotacao e escala por quadro (o glTF interpola linear). Canais constantes ficam so no valor do no.
-- Efeitos (o viewer reproduz como o native/wotm_model.hpp): estado do GS por material em extras.gs (ALPHA_1, aref, zmsk);
-  UV da textura rolando nos extras de cada animacao (extras.uv) e a camada 0x91 em loop na cena (extras.uvLayer); fogo
-  (emissor preset 141) e luz com lens flare como nos "fx_<no>_<n>" animados, parametros em extras.fx.
-- Fora: molas do pelo/cauda, olhar procedural, camadas de mistura. Malha skinned com matriz de objeto (pele(v) * M, Agamo) ou que some em parte dos quadros (Zorgulon
-  traje 3): no "off_<obj>" com M (escala 0 quando some) e copia dos ossos.
+What comes out (the same model as tools/pose.py, checked against RAM from a fight):
+- A root node "WotM" rotates the game (Z-up) into glTF (Y-up). Everything inside it is in the game's units and axes.
+- Each SKEL_BONE bone with an output (skelOutputMatIdx) becomes a joint; its parent is the bone that wrote the matrix it
+  starts from on the skeleton stack (root = no parent). Inverse bind matrix = the bone's restPoseInv; skinned mesh positions
+  = the file's (rest-pose model space), 3 bones per vertex with the game's weights.
+- Rigid parts (unskinned OBJECTs under ANIM_XFORM) become nodes with the mesh in object space and the object matrix animated.
+  Visibility (a visibility channel cutting off the node) comes out as scale 0 on the frames where the part disappears.
+- Sampled animation: pose.py evaluates the curves every frame (60/s, 0..end) and each node gets a translation, rotation and
+  scale key per frame (glTF interpolates linearly). Constant channels only keep the node's value.
+- Effects (the viewer reproduces them like native/wotm_model.hpp): GS state per material in extras.gs (ALPHA_1, aref, zmsk);
+  scrolling texture UVs in each animation's extras (extras.uv) and the 0x91 layer looping on the scene (extras.uvLayer);
+  fire (emitter preset 141) and lights with lens flare as animated "fx_<node>_<n>" nodes, parameters in extras.fx.
+- Left out: fur/tail springs, procedural look-at, blend layers. A skinned mesh with an object matrix (skin(v) * M, Agamo) or that disappears on some frames (Zorgulon
+  costume 3): an "off_<obj>" node with M (scale 0 while hidden) and a copy of the bones.
 
-Nao grava nada do jogo no repo: le o disco do usuario e escreve onde ele mandar.
+Writes nothing from the game into the repo: it reads the user's disc and writes wherever the user says.
 """
 import math
 import os
@@ -40,11 +40,11 @@ import ngp  # noqa: E402
 import pose  # noqa: E402
 import tex  # noqa: E402
 
-ROOT_Q = [-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]   # -90 graus em X: (x, y, z) -> (x, z, -y), como o gltf.to_y_up
+ROOT_Q = [-math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]   # -90 degrees about X: (x, y, z) -> (x, z, -y), like gltf.to_y_up
 
 
 def quat(R):
-    """Quaternion (x, y, z, w) de uma rotacao 3x3 (vetores-coluna)."""
+    """Quaternion (x, y, z, w) of a 3x3 rotation (column vectors)."""
     tr = R[0, 0] + R[1, 1] + R[2, 2]
     if tr > 0:
         s = math.sqrt(tr + 1.0) * 2
@@ -63,8 +63,8 @@ def quat(R):
 
 
 def trs(M):
-    """Matriz do jogo (vetores-linha, p' = p.M) -> (translacao, quaternion, escala, erro da decomposicao)."""
-    A = M[:3, :3].T            # parte linear em vetores-coluna
+    """Game matrix (row vectors, p' = p.M) -> (translation, quaternion, scale, decomposition error)."""
+    A = M[:3, :3].T            # linear part as column vectors
     t = [float(x) for x in M[3, :3]]
     s = np.linalg.norm(A, axis=0)
     if np.any(s < 1e-9):
@@ -72,12 +72,12 @@ def trs(M):
     R = A / s
     if np.linalg.det(R) < 0:
         s[0], R[:, 0] = -s[0], -R[:, 0]
-    err = float(np.abs(R.T @ R - np.eye(3)).max())   # cisalhamento (escala nao uniforme com rotacao) nao cabe em TRS
+    err = float(np.abs(R.T @ R - np.eye(3)).max())   # shear (non-uniform scale with rotation) doesn't fit in TRS
     return t, quat(R), [float(x) for x in s], err
 
 
 class Track:
-    """Chaves de um no: t/q/s por quadro."""
+    """A node's keys: t/q/s per frame."""
 
     def __init__(self, n):
         self.t, self.q, self.s = [None] * n, [None] * n, [None] * n
@@ -85,13 +85,13 @@ class Track:
     def put(self, f, M):
         t, q, s, err = trs(M)
         p = self.q[f - 1] if f > 0 else None
-        if p is not None and sum(a * b for a, b in zip(p, q)) < 0:   # mesmo hemisferio do quadro anterior (caminho curto)
+        if p is not None and sum(a * b for a, b in zip(p, q)) < 0:   # same hemisphere as the previous frame (shortest path)
             q = [-c for c in q]
         self.t[f], self.q[f], self.s[f] = t, q, s
         return err
 
     def fill(self, hidden=None):
-        """Quadros sem valor: repete o anterior (ou o proximo); hidden = escala 0."""
+        """Frames with no value: repeat the previous one (or the next); hidden = scale 0."""
         n = len(self.t)
         first = next((f for f in range(n) if self.t[f] is not None), None)
         for f in range(n):
@@ -111,13 +111,13 @@ def const(vals, eps=1e-6):
 
 class Exporter:
     def __init__(self, ngp_path, unlit=False, model=None, groups=None):
-        """model: um pose.Model ja montado (chefes); groups: [(nome, [instancias], id padrao)] — as animacoes de um chefe
-        sao por peca: a chave k = 100 * grupo + indice toca essa animacao no grupo (nas outras instancias do grupo, a de
-        mesmo id) e a animacao de id padrao nos outros grupos."""
+        """model: an already assembled pose.Model (bosses); groups: [(name, [instances], default id)]. A boss's animations
+        are per piece: key k = 100 * group + index plays that animation in the group (on the group's other instances, the
+        one with the same id) and the default-id animation in the other groups."""
         self.path = ngp_path
         self.mdl = model or pose.Model(ngp_path)
         self.groups = groups
-        self.img = self.mdl.img   # base 0xA00000 (o .NGP do monstro vem pre-ligado)
+        self.img = self.mdl.img   # base 0xA00000 (the monster .NGP comes prelinked)
         tp, rp = tex.sibling(ngp_path, ".TEX"), tex.sibling(ngp_path, ".RTX")
         self.lib = tex.Library(tp, rp, ngp_path) if (tp or rp) else None
         self.g = gltf.Glb()
@@ -128,9 +128,9 @@ class Exporter:
             self.g.j["extensionsUsed"] = ["KHR_materials_unlit"]
         self.mat = gltf.Materials(self.g, self.img, self.lib, unlit, self.stats).get
 
-    # ---- malha
+    # ---- mesh
     def primitives(self, node, md, joint_of=None):
-        """Primitivas por slot de textura. joint_of: {slot da paleta: indice do joint} para malha skinned (None = rigida)."""
+        """Primitives per texture slot. joint_of: {palette slot: joint index} for a skinned mesh (None = rigid)."""
         g = self.g
         groups = {}
         for k in range(0, len(md.tris), 3):
@@ -164,7 +164,7 @@ class Exporter:
         return prims
 
     def weights(self, v, joint_of):
-        """Os 3 ossos do vertice (Scene::skinVertex: w1 = w, w2 = frac(w*2048), w3 = resto) -> (joints[4], pesos[4])."""
+        """The vertex's 3 bones (Scene::skinVertex: w1 = w, w2 = frac(w*2048), w3 = the remainder) -> (joints[4], weights[4])."""
         w1 = v.w
         s = v.w * 2048.0
         w2 = s - math.trunc(s)
@@ -172,7 +172,7 @@ class Exporter:
         for code, w in ((v.cx, w1), (v.cy, w2), (v.cz, 1.0 - w1 - w2)):
             if w == 0.0:
                 continue
-            if w < 0.0:   # w3 sai ate -0,00025 pelo arredondamento da codificacao (w1 + w2 passa de 1): zera
+            if w < 0.0:   # encoding rounding makes w3 as low as -0.00025 (w1 + w2 goes past 1): clamp to zero
                 if w < -1e-3:
                     self.stats["pesos_negativos"] += 1
                 continue
@@ -183,20 +183,20 @@ class Exporter:
         js += [(0, 0.0)] * (4 - len(js))
         return tuple(j for j, _ in js), tuple(w / tot for _, w in js)
 
-    # ---- animacao
+    # ---- animation
     def sample(self, k, fps):
-        """Poses da animacao de indice k a cada quadro (60/s, 0..fim) -> (id, poses, tempos)."""
+        """Poses of animation index k at every frame (60/s, 0..end) -> (id, poses, times)."""
         if self.groups:
             gi, kk = divmod(k, 100)
             name, cis, _d = self.groups[gi]
             a = self.mdl.find_anim(None, ci=cis[0], k=kk)
             if a is None:
-                raise ValueError("%s: %s sem animacao %d" % (self.path, name, kk))
+                raise ValueError("%s: %s has no animation %d" % (self.path, name, kk))
             aid, _k, st, et, _nch = a
 
             def by_id(ci, want, fallback):
-                # o jogo pega a animacao pelo id (animationGetHandle: head.id1 == animId), nao pela posicao na tabela,
-                # e as cabecas da planta nao tem as tabelas na mesma ordem
+                # the game looks animations up by id (animationGetHandle: head.id1 == animId), not by table position,
+                # and the plant's heads don't have their tables in the same order
                 return next((x[1] for x in self.mdl.anims(ci) if x[0] == want), fallback)
 
             assign = {}
@@ -208,22 +208,23 @@ class Exporter:
             return aid, frames, [f / fps for f in range(n)]
         a = self.mdl.find_anim(None, k=k)
         if a is None:
-            raise ValueError("%s: sem animacao k %d" % (self.path, k))
+            raise ValueError("%s: no animation k %d" % (self.path, k))
         aid, _k, st, et, _nch = a
         n = max(1, int(math.floor((et - st) * fps / 60.0 + 1e-6)) + 1)
         frames = [self.mdl.pose(aid, f * 60.0 / fps, k=k) for f in range(n)]
         return aid, frames, [f / fps for f in range(n)]
 
     def export(self, out, keys, fps=60.0, split=False, anim_dir=None, uv_layer=None):
-        """keys: indices k das animacoes (a primeira da o valor inicial dos nos). split=True: o .glb principal leva so a
-        primeira animacao e a lista de todas; cada animacao vai num .glb proprio em <out sem .glb>/aNNN.glb, com os mesmos
-        nomes de no (o viewer carrega quando o visitante escolhe). anim_dir: outra pasta (ao lado de out) para essas animacoes;
-        os trajes de um monstro dao animacoes iguais byte a byte, entao podem dividir uma pasta (--anim-dir LIZARD)."""
+        """keys: animation indexes k (the first one gives the nodes' initial values). split=True: the main .glb carries only
+        the first animation and the list of all of them; each animation goes into its own .glb at <out without .glb>/aNNN.glb,
+        with the same node names (the viewer loads it when the visitor picks it). anim_dir: a different folder (next to out)
+        for those animations; a monster's costumes produce byte-identical animations, so they can share a folder
+        (--anim-dir LIZARD)."""
         g, img = self.g, self.img
         fx_kind = {}
 
         def frame_from(normal):
-            """mathfMatrixFromNormal: linhas X, n, Z (vetores-linha) com n na linha 1."""
+            """mathfMatrixFromNormal: rows X, n, Z (row vectors) with n in row 1."""
             nl = np.array(normal, dtype=float)
             ln = np.linalg.norm(nl)
             if ln < 1e-9:
@@ -237,13 +238,13 @@ class Exporter:
             return np.array([a0, nl, np.cross(a0, nl)])
 
         def fx_items(items):
-            """[((no, ocorrencia), matriz do efeito no mundo do monstro)] dos efeitos percorridos nesta pose."""
+            """[((node, occurrence), effect matrix in the monster's world)] for the effects visited in this pose."""
             out, occ = [], {}
             for kind, lst in (("fire", items.emitters), ("flare", items.lights)):
                 for n, m in lst:
                     if kind == "fire":
                         preset = img.u32(n + 4)
-                        if preset != 141:   # so o IdolHeadFlame (Agamo, Magmo traje 4) fica visivel e e simulado
+                        if preset != 141:   # only IdolHeadFlame (Agamo, Magmo costume 4) stays visible and is simulated
                             continue
                         h, pt = img.f32(n + 0x24), img.f32(n + 0x28)
                         R = frame_from([math.cos(pt) * math.sin(h), math.cos(pt) * math.cos(h), math.sin(pt)])
@@ -252,7 +253,7 @@ class Exporter:
                         fl = img.u32(n + 4)
                         if not (fl & 1) or not (fl & 2):   # isOn, hasLensFlare
                             continue
-                        R = frame_from([img.f32(n + 0x20), img.f32(n + 0x24), img.f32(n + 0x28)])   # linha 1 = feixe
+                        R = frame_from([img.f32(n + 0x20), img.f32(n + 0x24), img.f32(n + 0x28)])   # row 1 = beam
                         info = {"type": "flare", "flags": fl, "intensity": img.f32(n + 8), "beamWidth": img.f32(n + 0x3C),
                                 "rgb": [img.f32(n + 0x30 + 4 * c) for c in range(3)]}
                     L = np.eye(4)
@@ -269,14 +270,14 @@ class Exporter:
             aid, frames, times = self.sample(k, fps)
             sampled.append((k, aid, frames, times))
 
-        # estrutura: ossos (por instancia) e objetos, da uniao dos quadros de todas as animacoes
-        bones = {}      # (ci, saida) -> (no SKEL_BONE, pai (ci, saida) ou None)
-        skinned = {}    # (OBJECT, ci) -> slots da paleta {slot: saida}
-        rigid = []      # (OBJECT, ocorrencia) na ordem em que aparecem
-        fx = []         # (no op 22/5, ocorrencia) de efeito: fogo (preset 141) e luz com lens flare
-        sig = {}        # (OBJECT, ci) skinned -> {quadro global: matriz do objeto}
+        # structure: bones (per instance) and objects, from the union of the frames of every animation
+        bones = {}      # (ci, output) -> (SKEL_BONE node, parent (ci, output) or None)
+        skinned = {}    # (OBJECT, ci) -> palette slots {slot: output}
+        rigid = []      # (OBJECT, occurrence) in the order they appear
+        fx = []         # (op 22/5 node, occurrence) of an effect: fire (preset 141) and light with lens flare
+        sig = {}        # skinned (OBJECT, ci) -> {global frame: object matrix}
         nframes = 0
-        self.gs_of = {}   # OBJECT -> estado do GS herdado (o primeiro visto; vem dos ctx dos nos, nao muda com a pose)
+        self.gs_of = {}   # OBJECT -> inherited GS state (first one seen; it comes from the nodes' ctx, so the pose doesn't change it)
         for _k, _aid, frames, _times in sampled:
             for items in frames:
                 gf = nframes
@@ -314,13 +315,13 @@ class Exporter:
             g.j["nodes"][parent].setdefault("children", []).append(i)
             return i
 
-        # nomes de no unicos: as trilhas das animacoes em arquivo proprio acham o no pelo nome
+        # unique node names: the tracks of animations in their own files find the node by name
         one_ci = len({b[0] for b in bones}) <= 1
 
         def bone_name(b):
             return "bone%d" % b[1] if one_ci else "bone%x_%d" % b
 
-        # ossos em ordem de pai antes de filho
+        # bones in parent-before-child order
         bone_node = {}
         pending = sorted(bones)
         while pending:
@@ -333,30 +334,30 @@ class Exporter:
                     bone_node[b] = add_node({"name": bone_name(b)}, bone_node[par])
                 else:
                     rest.append(b)
-            if len(rest) == len(pending):   # ciclo (nao deveria): pendura na raiz
+            if len(rest) == len(pending):   # cycle (shouldn't happen): hang them off the root
                 for b in rest:
                     bone_node[b] = add_node({"name": bone_name(b)}, 0)
                 rest = []
             pending = rest
 
-        # Malha skinned com matriz de objeto M (o jogo faz pele(v) * M, ex.: Agamo) ou que some em parte dos quadros
-        # (ex.: Zorgulon traje 3): o glTF ignora a matriz do no de uma malha com pele, entao M vira um no "off_<obj>"
-        # (animado como parte rigida, escala 0 nos quadros sem a malha) com uma copia dos ossos da instancia embaixo
-        # (mesmas trilhas); a skin da malha usa a copia. Malhas com a mesma M em todo quadro dividem o no.
+        # Skinned mesh with an object matrix M (the game computes skin(v) * M, e.g. Agamo) or that disappears on some frames
+        # (e.g. Zorgulon costume 3): glTF ignores the node matrix of a skinned mesh, so M becomes an "off_<obj>" node
+        # (animated like a rigid part, scale 0 on frames without the mesh) with a copy of the instance's bones under it
+        # (same tracks); the mesh's skin uses the copy. Meshes with the same M on every frame share the node.
         eye = np.eye(4)
         groups = {}
         for key, ms in sig.items():
             if len(ms) == nframes and all(np.allclose(m, eye, atol=1e-5) for m in ms.values()):
-                continue   # sempre presente e sem matriz: skin normal
+                continue   # always present and no matrix: a normal skin
             fp = tuple((gf, np.round(ms[gf], 4).tobytes() if gf in ms else None) for gf in range(nframes))
             groups.setdefault((key[1], fp), []).append(key)
-        off_of = {}          # (OBJECT, ci) -> no de deslocamento
-        dup_bones = {}       # no de deslocamento -> {osso: copia}
+        off_of = {}          # (OBJECT, ci) -> offset node
+        dup_bones = {}       # offset node -> {bone: copy}
         for (ci, _fp), keys in sorted(groups.items(), key=lambda kv: min(kv[1])):
             tag = min(k[0] for k in keys)
             on = add_node({"name": "off_%x" % tag}, 0)
             dup = {}
-            for b in bone_node:   # ordem de criacao: pai antes de filho
+            for b in bone_node:   # creation order: parent before child
                 if b[0] != ci:
                     continue
                 par = bones[b][1]
@@ -365,9 +366,9 @@ class Exporter:
             for k in keys:
                 off_of[k] = on
 
-        # skins: uma por instancia, com todos os ossos dela + um joint fixo (identidade) para slots sem osso
+        # skins: one per instance, with all of its bones + a fixed joint (identity) for slots with no bone
         skins = {}
-        skin_mesh_node = {}   # (OBJECT, ci) -> no da malha
+        skin_mesh_node = {}   # (OBJECT, ci) -> mesh node
         for (node, ci), outs in skinned.items():
             sk = off_of.get((node, ci), ci)
             if sk not in skins:
@@ -375,13 +376,13 @@ class Exporter:
                 if sk == ci:
                     fixo = add_node({"name": "static_%x" % ci}, 0)
                     joints = [bone_node[b] for b in js] + [fixo]
-                else:   # o proprio no de deslocamento e o joint fixo (mundo = M)
+                else:   # the offset node itself is the fixed joint (world = M)
                     fixo = sk
                     joints = [dup_bones[sk][b] for b in js] + [fixo]
                 ibm = []
                 for b in js:
                     rp = np.array(struct.unpack_from("<16f", img.d, bones[b][0] + 0x10 - img.base)).reshape(4, 4)
-                    ibm.append(rp.T.flatten(order="F"))   # restPoseInv em vetores-coluna, coluna por coluna
+                    ibm.append(rp.T.flatten(order="F"))   # restPoseInv as column vectors, column by column
                 ibm.append(np.eye(4).flatten(order="F"))
                 data = struct.pack("<%df" % (16 * len(ibm)), *[float(x) for m in ibm for x in m])
                 g.j["accessors"].append({"bufferView": g.view(data), "componentType": 5126, "count": len(ibm), "type": "MAT4"})
@@ -414,27 +415,28 @@ class Exporter:
 
         names = [nd["name"] for nd in g.j["nodes"]]
         if len(set(names)) != len(names):
-            raise ValueError("nomes de no repetidos: as animacoes em arquivo proprio nao achariam o no")
+            raise ValueError("duplicate node names: animations in their own files would not find the node")
 
         rigid_objs = {k[0] for k in rigid_node}
 
-        # Efeitos: um no "fx_<no>_<ocorrencia>" por emissor de fogo / luz com lens flare, animado com a matriz do efeito (a do
-        # pai com a base do emissor ou o feixe da luz por cima) e escala 0 nos quadros em que o no nao e percorrido. Os
-        # parametros fixos vao em extras.fx; o viewer simula o fogo e desenha o flare como o native/wotm_model.hpp.
+        # Effects: one "fx_<node>_<occurrence>" node per fire emitter / light with lens flare, animated with the effect's matrix
+        # (the parent's, with the emitter's basis or the light's beam on top) and scale 0 on frames where the node isn't
+        # visited. The fixed parameters go in extras.fx; the viewer simulates the fire and draws the flare like
+        # native/wotm_model.hpp.
         fx_node = {}
         for n, occ in fx:
             if (n, occ) in fx_kind:
                 fx_node[(n, occ)] = add_node({"name": "fx_%x_%d" % (n, occ), "extras": {"fx": fx_kind[(n, occ)]}}, 0)
 
         def scrolls(node):
-            return bool(img.u16(node + 0xC) & 0x800)   # uvScroll: o UV anda pelos canais +0x30/+0x32
+            return bool(img.u16(node + 0xC) & 0x800)   # uvScroll: the UV moves with the channels at +0x30/+0x32
 
         def tracks_of(frames):
-            """Trilhas TRS por no e o deslocamento do UV por no de malha com uvScroll ({no: [(u, v) por quadro]})."""
+            """TRS tracks per node and the UV offset per mesh node with uvScroll ({node: [(u, v) per frame]})."""
             n = len(frames)
             tracks = {}
             uvs = {}
-            hidden = set()   # partes que somem em algum quadro (escala 0 nesses quadros)
+            hidden = set()   # parts that disappear on some frame (scale 0 on those frames)
             for f, items in enumerate(frames):
                 ctxs = {}
                 seen = {}
@@ -502,13 +504,14 @@ class Exporter:
             return tracks, uvs
 
         def animation(gg, k, aid, tracks, uvs, times, node_index):
-            """Canais da animacao em gg, sem as chaves que a interpolacao linear refaz dentro da tolerancia. Trilha constante
-            no valor do no (a pose inicial do .glb principal) fica de fora: ao trocar de animacao o three.js devolve ao no o
-            valor original o que a animacao anterior mexeu. Tudo num bufferView so; rotacao em int16 normalizado."""
+            """The animation's channels in gg, minus the keys that linear interpolation rebuilds within tolerance. A track that
+            stays constant at the node's value (the main .glb's initial pose) is left out: when switching animations, three.js
+            restores the original value of whatever the previous animation moved. Everything in one bufferView; rotation as
+            normalized int16."""
             channels, samplers = [], []
             blob = bytearray()
-            mine = []          # accessors desta animacao (recebem o bufferView no fim)
-            inputs = {}        # chaves mantidas -> accessor de tempos (compartilhado)
+            mine = []          # this animation's accessors (they get the bufferView at the end)
+            inputs = {}        # kept keys -> times accessor (shared)
 
             def acc(data, ctype, count, typ, **extra):
                 while len(blob) % 4:
@@ -524,7 +527,7 @@ class Exporter:
                 for path, vals, comps in (("translation", tr.t, 3), ("rotation", tr.q, 4), ("scale", tr.s, 3)):
                     keep = reduce_keys(vals, TOL[path])
                     self.stats["chaves_amostradas"] += len(vals)
-                    # a primeira trilha vai sempre, para o clipe guardar a duracao
+                    # the first track always goes in, so the clip keeps its duration
                     if len(keep) == 2 and idx > 0 and const(vals, TOL[path]) and path in nd and (
                             const([vals[0], nd[path]], TOL[path]) or
                             (path == "rotation" and const([vals[0], [-c for c in nd[path]]], TOL[path]))):
@@ -549,8 +552,8 @@ class Exporter:
                 gg.j["accessors"][a]["bufferView"] = bv
             extras = {"wotmAnim": aid, "k": k, "frames": len(times)}
             if uvs:
-                # textura rolando: o glTF nao anima o UV (KHR_animation_pointer ainda nao chega no three.js); o viewer le
-                # daqui e desloca a textura da malha (offset), interpolando linear como as outras trilhas
+                # scrolling texture: glTF doesn't animate UVs (three.js doesn't support KHR_animation_pointer yet); the viewer
+                # reads this and shifts the mesh's texture (offset), interpolating linearly like the other tracks
                 extras["uv"] = []
                 for ni, vals in sorted(uvs.items()):
                     keep = reduce_keys(vals, 1e-4)
@@ -564,21 +567,21 @@ class Exporter:
         anims = []
         for ai, (k, aid, frames, times) in enumerate(sampled):
             tracks, uvs = tracks_of(frames)
-            if ai == 0:   # valor inicial dos nos = quadro 0 da primeira animacao
+            if ai == 0:   # the nodes' initial value = frame 0 of the first animation
                 for ni, tr in tracks.items():
                     nd = g.j["nodes"][ni]
                     nd["translation"], nd["rotation"], nd["scale"] = tr.t[0], tr.q[0], tr.s[0]
             if not split or ai == 0:
                 anims.append(animation(g, k, aid, tracks, uvs, times, lambda ni: ni))
             if split:
-                # .glb so com os nos (so o nome, sem malha nem hierarquia) e a animacao: o viewer toca o clipe no modelo
-                # principal, que acha cada no pelo nome
+                # a .glb with only the nodes (name only, no mesh or hierarchy) and the animation: the viewer plays the clip
+                # on the main model, which finds each node by name
                 ga = gltf.Glb()
                 ga.j["asset"]["generator"] = "WotM tools/monglb.py"
                 used = sorted(tracks)
                 at = {ni: i for i, ni in enumerate(used)}
                 ga.j["nodes"] = [{"name": g.j["nodes"][ni]["name"]} for ni in used]
-                del ga.j["meshes"]   # vazio e erro no validador
+                del ga.j["meshes"]   # an empty one is a validator error
                 ga.j["scenes"][0]["nodes"] = list(range(len(used)))
                 ga.j["animations"] = [animation(ga, k, aid, tracks, uvs, times, at.get)]
                 fn = "a%03d.glb" % k
@@ -587,14 +590,14 @@ class Exporter:
                 if self.groups:
                     entry["part"] = self.groups[k // 100][0]
                 if ai == 0:
-                    entry["first"] = True   # a que o .glb principal ja traz (o viewer comeca nela)
+                    entry["first"] = True   # the one the main .glb already carries (the viewer starts on it)
                 listing.append(entry)
         if anims:
             g.j["animations"] = anims
         g.j["scenes"][0]["extras"] = {"bones": len(bone_node), "parts": len(rigid_node)}
         if uv_layer is not None:
-            # Camada da textura rolando (UV_LAYER, Kineticlops e Agamo): so as curvas dos canais de UV dos OBJECTs com
-            # uvScroll, tocada em laco por cima de qualquer animacao (como o native/wotm_model.hpp); vai inteira aqui
+            # Scrolling-texture layer (UV_LAYER, Kineticlops and Agamo): only the curves of the UV channels of OBJECTs with
+            # uvScroll, looped on top of any animation (like native/wotm_model.hpp); it goes in here whole
             _aid, lframes, ltimes = self.sample(uv_layer, fps)
             _tr, luvs = tracks_of(lframes)
             g.j["scenes"][0]["extras"]["uvLayer"] = {"duration": ltimes[-1], "tracks": [
@@ -605,24 +608,24 @@ class Exporter:
             g.j["scenes"][0]["extras"]["animations"] = sorted(listing, key=lambda a: a["k"])
         g.write(out)
         st = self.stats
-        print("gravado %s: %d objetos, %d triangulos, %d ossos, %d partes rigidas, %d texturas (%d nao achadas), %d animacoes%s; "
-              "%d pesos negativos zerados; erro TRS max %.2g; chaves %d de %d" % (
+        print("wrote %s: %d objects, %d triangles, %d bones, %d rigid parts, %d textures (%d not found), %d animations%s; "
+              "%d negative weights zeroed; max TRS error %.2g; keys %d of %d" % (
                   out, st["objetos"], st["triangulos"], len(bone_node), len(rigid_node), st["texturas"], st["sem_textura"],
-                  len(sampled), " (em %s/)" % os.path.basename(base) if split else "", st["pesos_negativos"], st["erro_trs"],
+                  len(sampled), " (in %s/)" % os.path.basename(base) if split else "", st["pesos_negativos"], st["erro_trs"],
                   st["chaves"], st["chaves_amostradas"]))
         return st
 
 
-# Tolerancia ao tirar chaves: a interpolacao linear entre as chaves que ficam refaz cada quadro amostrado com erro menor
-# que isto (translacao em unidades do jogo; rotacao em componente de quaternion, ~0,06 grau; escala relativa).
+# Tolerance when dropping keys: linear interpolation between the remaining keys rebuilds every sampled frame with an error
+# below this (translation in game units; rotation per quaternion component, ~0.06 degrees; scale relative).
 TOL = {"translation": 0.01, "rotation": 5e-4, "scale": 1e-3}
 
 
-UV_LAYER = 0x91   # animacao que so tem os canais de UV da textura rolando (kUvLayer do nativo)
+UV_LAYER = 0x91   # animation that only has the scrolling-texture UV channels (the native layer's kUvLayer)
 
 
 def reduce_keys(vals, tol):
-    """Indices das chaves que ficam. Trilha constante: so a primeira e a ultima (o clipe guarda a duracao)."""
+    """Indexes of the keys to keep. Constant track: only the first and the last (so the clip keeps its duration)."""
     v = np.asarray(vals, dtype=np.float64)
     n = len(v)
     if n <= 2:
@@ -645,7 +648,7 @@ def reduce_keys(vals, tol):
 
 
 def find_nodes(img, id1):
-    """{id2: no} dos nos da fase com o id de objeto id1 (14 bits altos da primeira palavra; id2 nos bits 7..17)."""
+    """{id2: node} of the stage nodes with object id id1 (top 14 bits of the first word; id2 in bits 7..17)."""
     out = {}
     d = img.d
     for o in range(0, len(d) - 4, 4):
@@ -656,7 +659,7 @@ def find_nodes(img, id1):
 
 
 def ep(img, id1, id2=0):
-    """O no de entrada (ep) que o jogo registra no dbProcInteractive: o GROUP/ROTATE com o id que contem a instancia."""
+    """The entry node (ep) the game registers in dbProcInteractive: the GROUP/ROTATE with that id that contains the instance."""
     ci = ci_of(img, id1)
     kids = pose.Model._kids
     probe = pose.Model.__new__(pose.Model)
@@ -664,7 +667,7 @@ def ep(img, id1, id2=0):
     nodes = [n for n, op in find_nodes(img, id1).get(id2, []) if op in (1, 3, 4)
              and any(img.u32(arr + 4 * q) == ci for arr, cnt in kids(probe, n, op) for q in range(min(cnt, 64)))]
     if not nodes:
-        raise ValueError("sem no %x/%d" % (id1, id2))
+        raise ValueError("no node %x/%d" % (id1, id2))
     return nodes[0]
 
 
@@ -672,11 +675,11 @@ def ci_of(img, id1):
     for n, op in find_nodes(img, id1).get(0, []):
         if op == 25 and img.ok(img.u32(n + 0x20)):
             return n
-    raise ValueError("sem CHAR_INSTANCE %x" % id1)
+    raise ValueError("no CHAR_INSTANCE %x" % id1)
 
 
 def place(x=0.0, y=0.0, z=0.0, heading=0.0):
-    """Matriz de um _cs: rotacao RPH so em Z (heading) e translacao."""
+    """Matrix of a _cs: RPH rotation about Z only (heading) plus translation."""
     m = np.eye(4)
     c, s_ = math.cos(heading), math.sin(heading)
     m[0, :2] = (c, -s_)
@@ -686,11 +689,11 @@ def place(x=0.0, y=0.0, z=0.0, heading=0.0):
 
 
 def boss(kind, ngp_path):
-    """Chefes montados das pecas da fase, como o jogo as poe (src/game/PlantBoss.cpp, FinalBoss.cpp):
-    plant (LVL/3-MILE.NGP): a base (0x2728) na origem e as tres cabecas (0x271B..0x271D) onde o wakeUp as poe, com o SWITCH
-      999 de cada uma ligado; animacoes por peca (cabecas, base). root: uma raiz (0x271E) sozinha, com as 5 animacoes dela
-      (o jogo poe as 10 em volta do jogador). mecha (LVL/CAPITOL.NGP): o robo da fase 1 do chefe final (0x27A6, com a
-      torre 0x27A7 tocando a animacao 1 que o FinalBoss::initAfter liga)."""
+    """Bosses assembled from the stage's pieces, placed the way the game places them (src/game/PlantBoss.cpp, FinalBoss.cpp):
+    plant (LVL/3-MILE.NGP): the base (0x2728) at the origin and the three heads (0x271B..0x271D) where wakeUp puts them,
+      each with its SWITCH 999 on; animations per piece (heads, base). root: a single root (0x271E) on its own, with its 5
+      animations (the game places 10 of them around the player). mecha (LVL/CAPITOL.NGP): the robot from phase 1 of the
+      final boss (0x27A6, with the turret 0x27A7 playing animation 1, which FinalBoss::initAfter turns on)."""
     img = ngp.Image.load(ngp_path)
     if kind == "plant":
         heads = [0x271B, 0x271C, 0x271D]
@@ -708,7 +711,7 @@ def boss(kind, ngp_path):
         ci = ci_of(img, 0x27A6)
         mdl = pose.Model(ngp_path, parts=[(ep(img, 0x27A6), place())], main=ci)
         return mdl, [("", [ci], 0), ("turret", [ci_of(img, 0x27A7)], 1)], (0, 0)
-    raise ValueError("chefe desconhecido: %s" % kind)
+    raise ValueError("unknown boss: %s" % kind)
 
 
 def main(argv):
@@ -716,13 +719,13 @@ def main(argv):
         print(__doc__)
         return 1
     if "--boss" in argv:
-        # python tools/monglb.py disc/LVL/3-MILE.NGP saida/PLANT0.glb --boss plant --split --anim-dir PLANT
+        # python tools/monglb.py disc/LVL/3-MILE.NGP out/PLANT0.glb --boss plant --split --anim-dir PLANT
         mdl, groups, first = boss(argv[argv.index("--boss") + 1], argv[0])
         ex = Exporter(argv[0], unlit="--unlit" in argv, model=mdl, groups=groups)
-        gi0, id0 = first   # (grupo, id da animacao) em que o modelo comeca
+        gi0, id0 = first   # (group, animation id) the model starts in
         keys = [100 * gi0 + next(a[1] for a in mdl.anims(groups[gi0][1][0]) if a[0] == id0)]
         for gi, (name, cis, _d) in enumerate(groups):
-            if name.islower():   # pecas que so acompanham (a torre do robo) nao entram na lista
+            if name.islower():   # pieces that only follow along (the robot's turret) stay out of the list
                 continue
             keys += [100 * gi + a[1] for a in mdl.anims(cis[0]) if 100 * gi + a[1] != keys[0]]
         anim_dir = argv[argv.index("--anim-dir") + 1] if "--anim-dir" in argv else None
@@ -736,7 +739,7 @@ def main(argv):
         ids = [int(x) for x in argv[argv.index("--anims") + 1].split(",")]
         keys = [next(a[1] for a in table if a[0] == i) for i in ids]
     layer = next((a[1] for a in table if a[0] == UV_LAYER), None)
-    if "--all" in argv:   # a camada da textura rolando nao entra como animacao (so mexe no UV)
+    if "--all" in argv:   # the scrolling-texture layer isn't included as an animation (it only moves the UV)
         keys = [idle_k] + [a[1] for a in table if a[1] != idle_k and a[1] != layer]
     if "--fps" in argv:
         fps = float(argv[argv.index("--fps") + 1])

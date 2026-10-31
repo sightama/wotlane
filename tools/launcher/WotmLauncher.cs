@@ -1,6 +1,6 @@
-// Launcher do jogo ao vivo: janela com caixas de marcar para as flags de ambiente (WOTM_*, PS2X_*) e um botao que roda o
-// run_live.ps1 do runtime com elas. Para adicionar uma flag, acrescente uma linha em Flags. O estado fica em WotM_Launcher.ini,
-// ao lado do executavel. Compilar: tools\launcher\build.bat (csc do .NET Framework, C# 5).
+// Launcher for the live game: a window with checkboxes for the environment flags (WOTM_*, PS2X_*) and a button that runs the
+// runtime's run_live.ps1 with them. To add a flag, add a line to Flags. The state is kept in WotM_Launcher.ini, next to the
+// executable. Build: tools\launcher\build.bat (.NET Framework csc, C# 5).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -19,7 +19,7 @@ class Flag
     }
 }
 
-// GroupBox com borda e titulo desenhados aqui no tema escuro: com estilo visual o titulo sai na cor do tema e ignora ForeColor.
+// GroupBox with border and title drawn here in the dark theme: with visual styles the title takes the theme color, ignoring ForeColor.
 class DarkGroupBox : GroupBox
 {
     protected override void OnPaint(PaintEventArgs e)
@@ -36,8 +36,8 @@ class DarkGroupBox : GroupBox
     }
 }
 
-// CheckBox desenhada aqui no tema escuro (caixa escura; marcada, azul com o visto branco): o desenho do Windows nao tem versao escura
-// que respeite a cor do texto.
+// CheckBox drawn here in the dark theme (dark box; when checked, blue with a white tick): the Windows drawing has no dark version
+// that respects the text color.
 class DarkCheckBox : CheckBox
 {
     bool hover;
@@ -77,14 +77,14 @@ class DarkCheckBox : CheckBox
 
 class Launcher : Form
 {
-    // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
-    // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
-    // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
+    // Keys starting with ':' are run_live.ps1 parameters; the others become environment variables (=1 when checked, removed when not).
+    // Diagnostics with no checkbox still work via their variable (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; table in NATIVO.md).
+    // Checkboxes of closed investigations are gone (holes in monsters: NOSKIN/NOVCOL/OPAQUE/ONEPASS; self-turning: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
         new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
         new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
-        new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
+        new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [watchdog] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [watchdog] SLOW warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
 
         new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
@@ -104,7 +104,7 @@ class Launcher : Form
     Launcher()
     {
         Text = "WotM - options";
-        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // o do exe (native\wotm.ico)
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // the exe's own (native\wotm.ico)
         Font = new Font("Segoe UI", 9f);
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -114,7 +114,7 @@ class Launcher : Form
 
         var tips = new ToolTip { AutoPopDelay = 30000 };
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
-        // duas colunas: partida e trapacas a esquerda; as caixas de Flags a direita
+        // two columns: match and cheats on the left; the Flags checkboxes on the right
         var cols = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
         var left = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         var right = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
@@ -183,18 +183,18 @@ class Launcher : Form
         FormClosing += delegate { SaveIni(); };
     }
 
-    // Partida direta (WOTM_MATCH=<jogador>[:<skin>][,<ia>[:<skin>]...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime
-    // aceita ate 7 IAs (8 monstros). Skin = figurino 0..3 (arquivos <PREFIXO>0-3 em disc\MON); "Random" (monstro ou skin) e sorteado no Play.
-    // Fora da lista: Spider (6) e Ogre (12), cortados, e os chefes (13..15).
+    // Direct match (WOTM_MATCH=<player>[:<skin>][,<ai>[:<skin>]...],<stage>; no AI = alone on the stage): indices from GLOSSARIO.md. The
+    // runtime accepts up to 7 AIs (8 monsters). Skin = costume 0..3 (files <PREFIX>0-3 in disc\MON); "Random" (monster or skin) is drawn on Play.
+    // Left out of the list: Spider (6) and Ogre (12), which were cut, and the bosses (13..15).
     static readonly int[] MonsterIds = { 1, 2, 3, 4, 5, 7, 8, 9, 10, 11 };
     static readonly string[] MonsterNames = { "Congar", "Robo-47", "Togera", "Ultra V", "Preytor", "Kineticlops", "Magmo", "Raptros", "Agamo", "Zorgulon" };
     static readonly int[] LevelIds = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16 };
     static readonly string[] LevelNames = { "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City", "Century Airfield", "Atomic Island",
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7;
-    const int RandomId = -1;   // id salvo no ini para "Random" (monstro e skin)
+    const int RandomId = -1;   // id saved in the ini for "Random" (monster and skin)
     static readonly Random rng = new Random();
-    // Nome do jogo e prefixo dos arquivos em MON\ de cada monstro de MonsterIds (o skin.json aceita os dois)
+    // In-game name and MON\ file prefix of each monster in MonsterIds (skin.json accepts either)
     static readonly string[] MonsterGameNames = { "congar", "robo-47", "togera", "ultra-v", "preytor", "kineticlops", "magmo", "raptros", "agamo", "zorgulon" };
     static readonly string[] MonsterPrefixes = { "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN" };
 
@@ -205,7 +205,7 @@ class Launcher : Form
     readonly ComboBox matchPlayerSkin = SkinBox(120);
     readonly ComboBox[] matchAISkins = new ComboBox[MatchMaxAIs];
 
-    // Item da caixa de skin: o texto e o valor do WOTM_MATCH ("0".."3", o id da skin de mod, "random")
+    // Skin box item: the text and the WOTM_MATCH value ("0".."3", the mod skin id, "random")
     class SkinItem
     {
         public string Label, Value;
@@ -214,7 +214,7 @@ class Launcher : Form
     }
     const string RandomSkin = "random";
 
-    // Skins de mod (discroot\mods\<mod>\skins\<pasta>\skin.json, MODS.md) por indice em MonsterIds: (nome, id)
+    // Mod skins (discroot\mods\<mod>\skins\<folder>\skin.json, MODS.md) by index in MonsterIds: (name, id)
     readonly List<KeyValuePair<string, string>>[] modSkins = new List<KeyValuePair<string, string>>[10];
 
     static string Norm(string s)
@@ -229,8 +229,8 @@ class Launcher : Form
         return m.Success ? m.Groups[1].Value : null;
     }
 
-    // Mesma regra do runtime (wotm_mods.hpp): pastas com '_' ou '.' no comeco ficam de fora; sem id, o nome da pasta; mesmo
-    // monstro e id em dois mods, vale o ultimo em ordem alfabetica.
+    // Same rule as the runtime (wotm_mods.hpp): folders starting with '_' or '.' are skipped; without an id, the folder name is used;
+    // with the same monster and id in two mods, the last one in alphabetical order wins.
     void LoadModSkins()
     {
         for (int k = 0; k < modSkins.Length; ++k) modSkins[k] = new List<KeyValuePair<string, string>>();
@@ -265,8 +265,8 @@ class Launcher : Form
         foreach (var kv in byKey) modSkins[kv.Value.Key].Add(kv.Value.Value);
     }
 
-    // Monstros custom (discroot\mods\<mod>\monsters\<pasta>\monster.json, MODS.md): (nome, id), em ordem de id. So para o jogador: um
-    // custom de chefe como IA rodaria a IA do chefe, que precisa da fase dele.
+    // Custom monsters (discroot\mods\<mod>\monsters\<folder>\monster.json, MODS.md): (name, id), in id order. Player only: a custom
+    // boss as an AI would run the boss AI, which needs its own stage.
     readonly List<KeyValuePair<string, string>> modCustoms = new List<KeyValuePair<string, string>>();
     void LoadModCustoms()
     {
@@ -295,7 +295,7 @@ class Launcher : Form
         }
         foreach (var kv in byId) modCustoms.Add(new KeyValuePair<string, string>(kv.Value, kv.Key));
     }
-    // Indice do custom na caixa do jogador (depois dos 10 e do Random), ou -1
+    // Index of the custom monster in the player box (after the 10 and Random), or -1
     int CustomIndex(int sel) { int c = sel - MonsterIds.Length - 1; return c >= 0 && c < modCustoms.Count ? c : -1; }
 
     static ComboBox SkinBox(int width)
@@ -303,7 +303,7 @@ class Launcher : Form
         return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width, DropDownWidth = 180 };
     }
 
-    // Itens da caixa de skin para o monstro k (indice em MonsterIds; fora dele = Random: so os 4 do disco)
+    // Skin box items for monster k (index in MonsterIds; outside it = Random: only the 4 from the disc)
     void FillSkins(ComboBox cb, int k, string keep)
     {
         cb.BeginUpdate();
@@ -314,14 +314,14 @@ class Launcher : Form
         cb.Items.Add(new SkinItem("Random", RandomSkin));
         cb.EndUpdate();
         cb.SelectedIndex = 0;
-        if (keep == RandomId.ToString()) keep = RandomSkin;   // ini de antes das skins de mod
+        if (keep == RandomId.ToString()) keep = RandomSkin;   // ini from before mod skins existed
         for (int i = 0; i < cb.Items.Count; ++i)
             if (((SkinItem)cb.Items[i]).Value == keep) cb.SelectedIndex = i;
     }
 
     static string SkinId(ComboBox cb) { return cb.SelectedItem == null ? "0" : ((SkinItem)cb.SelectedItem).Value; }
 
-    // Monstro escolhido numa caixa (indice em MonsterIds; Random = MonsterIds.Length)
+    // Monster picked in a box (index in MonsterIds; Random = MonsterIds.Length)
     void WireSkins(ComboBox monster, ComboBox skin, int offset, string saved)
     {
         FillSkins(skin, monster.SelectedIndex - offset, saved);
@@ -414,8 +414,8 @@ class Launcher : Form
     void UpdateMatch()
     {
         bool on = matchOn.Checked;
-        // monstro e fase valem tambem para a partida em rede (grupo Online); as IAs e os trajes so na partida direta
-        matchPlayerSkin.Enabled = on && CustomIndex(matchPlayer.SelectedIndex) < 0;   // o custom tem o traje dele
+        // monster and stage also apply to the network match (Online group); the AIs and costumes only to the direct match
+        matchPlayerSkin.Enabled = on && CustomIndex(matchPlayer.SelectedIndex) < 0;   // the custom monster has its own costume
         for (int i = 0; i < matchAIs.Length; ++i)
         {
             matchAIs[i].Enabled = on;
@@ -427,12 +427,12 @@ class Launcher : Form
         matchInfo.Text = txt;
     }
 
-    // "<monstro>:<skin>", com os "Random" sorteados aqui (k = indice em MonsterIds, MonsterIds.Length = Random). Skin aleatoria:
-    // entre os 4 do disco e as skins de mod do monstro sorteado.
+    // "<monster>:<skin>", with any "Random" drawn here (k = index in MonsterIds, MonsterIds.Length = Random). Random skin: one of
+    // the 4 from the disc and the mod skins of the drawn monster.
     string MatchEntry(int k, ComboBox skin)
     {
         int c = CustomIndex(k);
-        if (c >= 0) return modCustoms[c].Value;   // o runtime le o id (WOTM_MATCH=goliath,...)
+        if (c >= 0) return modCustoms[c].Value;   // the runtime reads the id (WOTM_MATCH=goliath,...)
         if (k >= MonsterIds.Length) k = rng.Next(MonsterIds.Length);
         string s = SkinId(skin);
         if (s == RandomSkin)
@@ -452,11 +452,11 @@ class Launcher : Form
         return string.Join(",", parts.ToArray());
     }
 
-    // Partida em rede pelo wotm_server (native/net): o launcher fala com o lobby (LobbyClient.cs). Quem cria um lobby e o dono (codigo de
-    // 4 letras, senha opcional): so ele escolhe a fase (a "Stage" do grupo Match) e as vitorias e comeca. Os outros entram pelo codigo ou
-    // pela lista. Na partida o launcher fica minimizado e continua no lobby; quando o jogo fecha (QUIT no jogo) ele volta, no mesmo lobby.
-    // "Host on this PC" roda o wotm_server desta pasta escondido, filho do launcher (ServerHost.cs; tools\build_net.bat o compila), cria
-    // um lobby nele e mostra os enderecos para os amigos; tenta abrir a porta no roteador por UPnP.
+    // Network match through wotm_server (native/net): the launcher talks to the lobby (LobbyClient.cs). Whoever creates a lobby owns it
+    // (4-letter code, optional password): only the owner picks the stage (the "Stage" of the Match group) and the wins, and starts. The
+    // others join by code or from the list. During the match the launcher stays minimized and in the lobby; when the game closes (QUIT
+    // in the game) it comes back, in the same lobby. "Host on this PC" runs this folder's wotm_server hidden, as a child of the launcher
+    // (ServerHost.cs; tools\build_net.bat builds it), creates a lobby on it and shows the addresses for friends; tries UPnP on the router.
     readonly TextBox netServer = new TextBox { Width = 200 };
     readonly TextBox netName = new TextBox { Width = 160 };
     readonly TextBox netLobbyName = new TextBox { Width = 160 };
@@ -558,7 +558,7 @@ class Launcher : Form
         return gb;
     }
 
-    // wotm.buildid ao lado do wotm.exe do runtime (o mesmo que o jogo manda ao servidor)
+    // wotm.buildid next to the runtime's wotm.exe (the same one the game sends to the server)
     string BuildId()
     {
         string rt = RuntimeDir();
@@ -602,7 +602,7 @@ class Launcher : Form
         NetSend("LIST");
     }
 
-    // nome e monstro deste jogador, ou null com a mensagem do que falta
+    // this player's name and monster, or null with a message saying what is missing
     string NetMe(out int monster)
     {
         monster = 0;
@@ -642,7 +642,7 @@ class Launcher : Form
         NetSend("JOIN " + code + " " + name + " " + monster + NetPassword());
     }
 
-    // o dono manda a fase e as vitorias de agora e comeca
+    // the owner sends the current stage and wins, then starts
     void NetStart()
     {
         if (!lobbyOwner) { netInfo.Text = "Only the lobby host starts the match."; return; }
@@ -650,8 +650,8 @@ class Launcher : Form
         NetSend("START");
     }
 
-    // jogador como host: sobe o servidor (ou usa o que ja esta na porta), entra nele por 127.0.0.1 e cria o lobby; o UPnP roda numa
-    // thread (leva segundos) e completa os enderecos quando volta
+    // player as host: starts the server (or uses the one already on the port), connects to it on 127.0.0.1 and creates the lobby; UPnP
+    // runs on a thread (it takes seconds) and fills in the addresses when it returns
     void NetHost()
     {
         if (hosted != null && hosted.Running && lobbyCode.Length > 0) { netInfo.Text = "You are already hosting lobby " + lobbyCode + "."; return; }
@@ -701,11 +701,11 @@ class Launcher : Form
                     ShowShare();
                 });
             }
-            catch (InvalidOperationException) { }   // launcher ja fechou
+            catch (InvalidOperationException) { }   // launcher already closed
         }) { IsBackground = true }.Start();
     }
 
-    // a caixa que o host copia para os amigos: enderecos, codigo do lobby, estado do roteador
+    // the box the host copies to friends: addresses, lobby code, router status
     void ShowShare()
     {
         if (hosted == null || (lobby != null && lobby.Host != "127.0.0.1")) { netShare.Visible = false; return; }
@@ -722,7 +722,7 @@ class Launcher : Form
 
     string netSettings = "";
 
-    // linhas do lobby (Timer da interface): lista, membros, opcoes, erros e o inicio da partida
+    // lobby lines (UI Timer): list, members, settings, errors and the match start
     void NetPoll()
     {
         if (lobby == null) return;
@@ -771,7 +771,7 @@ class Launcher : Form
     }
     static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
 
-    // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
+    // F1 menu cheats turned on from the start (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); they apply to the players.
     static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
     static readonly string[] CheatLabels = { "Invincible", "Special always ready", "CLOAK", "God mode (no damage, no hit reaction)" };
     readonly CheckBox[] cheatBoxes = new CheckBox[4];
@@ -873,12 +873,12 @@ class Launcher : Form
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    // Video, QoL e teclado separado ficam no painel "Recompiled options" do menu principal (native/wotm_settings.hpp, settings.ini
-    // ao lado do save.json). O launcher nao os passa; uma variavel herdada passaria por cima do arquivo, entao sai do ambiente.
+    // Video, QoL and separate keyboard live in the main menu's "Recompiled options" panel (native/wotm_settings.hpp, settings.ini
+    // next to save.json). The launcher does not pass them; an inherited variable would override the file, so it is removed.
     static readonly string[] SettingsKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
         "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE", "WOTM_SKIPINTRO", "WOTM_VIBRATION", "WOTM_INTERP" };
 
-    // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
+    // The runtime folder (the one with run_live.ps1): WOTM_RECOMP_DIR, then the .wotm_recomp_dir that run_live.bat saves in the repo root.
     string KnownRuntimeDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_RECOMP_DIR");
@@ -891,8 +891,8 @@ class Launcher : Form
         }
         return null;
     }
-    // A pasta mods que o jogo le (wotm_mods.inc): WOTM_MODS; senao mods\ ao lado do ELF (WOTM_DISC ou disc\ do repo, como o
-    // run_live.ps1); sem ela, mods\ do repo. null sem nenhuma.
+    // The mods folder the game reads (wotm_mods.inc): WOTM_MODS; otherwise mods\ next to the ELF (WOTM_DISC or the repo's disc\, as
+    // run_live.ps1 does); failing that, the repo's mods\. null if there is none.
     string ModsDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_MODS");
@@ -908,11 +908,11 @@ class Launcher : Form
             string parent = Path.GetDirectoryName(d);
             if (!Directory.Exists(parent)) continue;
             foreach (string sub in Directory.GetDirectories(parent))
-                if (Path.GetFileName(sub) == "mods") return sub;   // nome exato: "mods" casaria com o MOD\ do disco
+                if (Path.GetFileName(sub) == "mods") return sub;   // exact name: "mods" would also match the disc's MOD\
         }
         return null;
     }
-    // Como o KnownRuntimeDir; sem pasta conhecida, pergunta
+    // Like KnownRuntimeDir; with no known folder, asks
     string RuntimeDir()
     {
         string known = KnownRuntimeDir();
@@ -941,8 +941,9 @@ class Launcher : Form
         if (psi != null) Launch(psi);
     }
 
-    // partida em rede: o ambiente da linha MATCH no lugar da partida direta; sem IA no controle e sem trapacas (valeriam so neste PC).
-    // O launcher nao fecha: fica minimizado e no lobby (a conexao continua) e volta quando o jogo fecha (QUIT no jogo ou a janela).
+    // network match: the MATCH line's environment instead of the direct match; no AI-controlled player and no cheats (they would only
+    // apply on this PC). The launcher does not close: it stays minimized and in the lobby (the connection stays up) and comes back when
+    // the game closes (QUIT in the game or the window).
     void PlayOnline(Dictionary<string, string> env)
     {
         if (onlineGame != null && !onlineGame.HasExited) { netInfo.Text = "The game is already running."; return; }
@@ -976,7 +977,7 @@ class Launcher : Form
         try
         {
             Process.Start(psi);
-            Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
+            Close();   // the game carries on by itself (independent process); on error the window stays open with the message
         }
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
@@ -986,7 +987,7 @@ class Launcher : Form
         SaveIni();
         string rt = RuntimeDir();
         if (rt == null) { status.Text = "Runtime folder not found (run_live.ps1)."; return null; }
-        // partida direta pula o menu: o roteiro do pad (-Auto 1) apertaria botoes no meio da luta
+        // a direct match skips the menu: the scripted pad (-Auto 1) would press buttons mid-fight
         string args = string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Auto {1} -Stats {2} -Build {3}",
             Path.Combine(rt, "run_live.ps1"), On(":Auto") && !direct ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
@@ -1010,7 +1011,7 @@ class Launcher : Form
         return psi;
     }
 
-    // Kit de mods (tools\modkit_gui.py, docs\passos\MODS.md): pythonw sem console; sem ele, python
+    // Mod kit (tools\modkit_gui.py, docs\passos\MODS.md): pythonw without a console; failing that, python
     void OpenModKit()
     {
         string script = Path.Combine(exeDir, "tools", "modkit_gui.py");
@@ -1032,12 +1033,12 @@ class Launcher : Form
     {
         string rt = RuntimeDir();
         string p = rt == null ? null : Path.Combine(rt, "logs", "live.err.log");
-        if (p != null && !File.Exists(p)) p = Path.Combine(rt, "live.err.log");   // run_live.ps1 antigo grava na raiz
+        if (p != null && !File.Exists(p)) p = Path.Combine(rt, "live.err.log");   // older run_live.ps1 writes it in the root
         if (p != null && File.Exists(p)) Process.Start("notepad.exe", "\"" + p + "\"");
         else status.Text = "No live.err.log yet.";
     }
 
-    // Tema: segue o modo dos aplicativos do Windows (Personalizacao > Cores). Escuro = cores abaixo e barra de titulo escura (DWM).
+    // Theme: follows the Windows app mode (Personalization > Colors). Dark = the colors below and a dark title bar (DWM).
     internal static readonly bool Dark = AppsUseDark();
     static readonly Color BgColor = Color.FromArgb(32, 32, 32), InputColor = Color.FromArgb(51, 51, 51), ButtonColor = Color.FromArgb(58, 58, 58);
     static readonly Color FgColor = Color.FromArgb(232, 232, 232);
@@ -1057,7 +1058,7 @@ class Launcher : Form
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     static extern int SetWindowTheme(IntPtr hwnd, string appName, string idList);
-    // SetPreferredAppMode (sem nome exportado, ordinal 135, Windows 10 1903+): 1 = segue o sistema; sem ele a lista aberta sai clara
+    // SetPreferredAppMode (no exported name, ordinal 135, Windows 10 1903+): 1 = follow the system; without it the open dropdown is light
     [DllImport("uxtheme.dll", EntryPoint = "#135")]
     static extern int SetPreferredAppMode(int mode);
 
@@ -1067,20 +1068,20 @@ class Launcher : Form
         if (!Dark) return;
         int on = 1;
         try
-        {   // DWMWA_USE_IMMERSIVE_DARK_MODE: 20 no Windows 10 20H1+ e 11, 19 antes
+        {   // DWMWA_USE_IMMERSIVE_DARK_MODE: 20 on Windows 10 20H1+ and 11, 19 before
             if (DwmSetWindowAttribute(Handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(Handle, 19, ref on, 4);
         }
         catch (Exception) { }
     }
 
-    // Texto com a cor padrao vira claro; cores escolhidas (cinza das notas, aviso vermelho) ficam.
+    // Text in the default color becomes light; chosen colors (gray notes, red warning) stay.
     static void ApplyDark(Control c)
     {
         if (c.ForeColor == SystemColors.ControlText) c.ForeColor = FgColor;
         if (c is ComboBox)
-        {   // tema escuro nativo do Windows (o das caixas de arquivo): legivel tambem desabilitado, ao contrario do FlatStyle com cores
+        {   // native Windows dark theme (the file dialog one): readable even when disabled, unlike FlatStyle with colors
             c.BackColor = InputColor;
-            c.ForeColor = FgColor;   // o padrao da ComboBox e WindowText (nao ControlText): os itens da lista aberta saiam pretos
+            c.ForeColor = FgColor;   // the ComboBox default is WindowText (not ControlText): the open list's items came out black
             Control cc = c;
             EventHandler theme = delegate { try { SetWindowTheme(cc.Handle, "DarkMode_CFD", null); } catch (Exception) { } };
             if (c.IsHandleCreated) theme(c, EventArgs.Empty);
@@ -1092,7 +1093,7 @@ class Launcher : Form
             ((TextBox)c).BorderStyle = BorderStyle.FixedSingle;
         }
         else if (c is NumericUpDown)
-        {   // a cor tem que ir para a caixa de texto interna (UpDownEdit) tambem
+        {   // the color must go to the inner text box (UpDownEdit) too
             c.BackColor = InputColor;
             ((NumericUpDown)c).BorderStyle = BorderStyle.FixedSingle;
             foreach (Control k in c.Controls) if (k is TextBox) { k.BackColor = InputColor; k.ForeColor = FgColor; }

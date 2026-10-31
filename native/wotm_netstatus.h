@@ -1,5 +1,5 @@
-// ABOUTME: Estado da partida em rede compartilhado entre a thread do jogo (wotm_sync.inc escreve) e a da janela (wotm_live.inc mostra a
-// ABOUTME: mensagem; com rede, as teclas de debug que mexem no jogo ficam desligadas: F1 trapacas, F5 camera livre, F6/F7/F8 pausa e foto).
+// ABOUTME: Network match state shared between the game thread (wotm_sync.inc writes) and the window thread (wotm_live.inc shows the
+// ABOUTME: message; online, the debug keys that affect the game are off: F1 cheats, F5 free camera, F6/F7/F8 pause and snapshots).
 #pragma once
 #include <atomic>
 #include <cstdint>
@@ -8,12 +8,12 @@
 
 namespace wotm_netstatus
 {
-    inline std::atomic<bool> g_active{false};    // partida em rede (WOTM_NET)
-    inline std::atomic<bool> g_waiting{false};   // a thread do jogo esta parada esperando a rede (o vigia nao conta como travamento)
-    inline std::atomic<uint32_t> g_pingMs{0};     // ida e volta ao servidor
-    inline std::atomic<uint32_t> g_delay{0};      // atraso de entrada da partida, em quadros
+    inline std::atomic<bool> g_active{false};    // network match (WOTM_NET)
+    inline std::atomic<bool> g_waiting{false};   // the game thread is stopped waiting on the network (the watchdog doesn't count it as a hang)
+    inline std::atomic<uint32_t> g_pingMs{0};     // round trip to the server
+    inline std::atomic<uint32_t> g_delay{0};      // the match's input delay, in frames
     inline std::mutex g_mx;
-    inline std::string g_message;                // linha no centro da tela; vazia, nada
+    inline std::string g_message;                // line in the center of the screen; empty means nothing
 
     inline void setMessage(const std::string &m)
     {

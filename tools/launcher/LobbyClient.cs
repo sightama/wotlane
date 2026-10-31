@@ -1,5 +1,5 @@
-// ABOUTME: Cliente do lobby do wotm_server para o launcher (C# 5, .NET Framework): conexao TCP de linhas, fila das linhas recebidas
-// ABOUTME: e o ambiente do wotm.exe para uma linha MATCH (o mesmo do tools/net_lobby.py). Testado por LobbyTest.cs contra o servidor.
+// ABOUTME: wotm_server lobby client for the launcher (C# 5, .NET Framework): line-based TCP connection, queue of received lines
+// ABOUTME: and the wotm.exe environment for a MATCH line (same as tools/net_lobby.py). Tested by LobbyTest.cs against the server.
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -13,8 +13,8 @@ class LobbyError : Exception
     public LobbyError(string m) : base(m) { }
 }
 
-// Uma conexao com o lobby (protocolo de linhas de native/net/wotm_net_proto.hpp). Uma thread le as linhas para uma fila; quem usa
-// le com ReadLine (testes, pedidos com resposta) ou esvazia com Poll (o launcher, num Timer da interface).
+// One connection to the lobby (line protocol from native/net/wotm_net_proto.hpp). A thread reads the lines into a queue; callers
+// read with ReadLine (tests, request/response) or drain it with Poll (the launcher, from a UI Timer).
 class LobbyClient : IDisposable
 {
     public const int Protocol = 2;
@@ -37,7 +37,7 @@ class LobbyClient : IDisposable
         if (!ar.AsyncWaitHandle.WaitOne(timeoutMs) || !tcp.Connected)
         {
             tcp.Close();
-            throw new LobbyError("sem resposta de " + host + ":" + port + " (o wotm_server esta rodando? a porta TCP esta aberta?)");
+            throw new LobbyError("no answer from " + host + ":" + port + " (is wotm_server running? is the TCP port open?)");
         }
         tcp.EndConnect(ar);
         tcp.NoDelay = true;
@@ -60,21 +60,21 @@ class LobbyClient : IDisposable
         }
         catch (Exception) { }
         closed = true;
-        lines.Add(null);   // acorda quem espera
+        lines.Add(null);   // wakes up whoever is waiting
     }
 
     public bool Closed { get { return closed; } }
 
     public void Send(string line) { writer.WriteLine(line); }
 
-    // proxima linha em ate timeoutMs; null se acabou o tempo ou a conexao caiu
+    // next line within timeoutMs; null on timeout or if the connection dropped
     public string ReadLine(int timeoutMs)
     {
         string l;
         return lines.TryTake(out l, timeoutMs) ? l : null;
     }
 
-    // linhas ja recebidas, sem esperar
+    // lines already received, without waiting
     public List<string> Poll()
     {
         var r = new List<string>();
@@ -83,7 +83,7 @@ class LobbyClient : IDisposable
         return r;
     }
 
-    // le ate uma linha que comeca com prefix; ERROR vira LobbyError
+    // reads until a line that starts with prefix; ERROR becomes LobbyError
     public string Expect(string prefix, int timeoutMs)
     {
         DateTime until = DateTime.UtcNow.AddMilliseconds(timeoutMs);
@@ -91,7 +91,7 @@ class LobbyClient : IDisposable
         {
             int left = (int)(until - DateTime.UtcNow).TotalMilliseconds;
             string l = left > 0 ? ReadLine(left) : null;
-            if (l == null) throw new LobbyError(closed ? "o servidor fechou a conexao" : "sem resposta do servidor");
+            if (l == null) throw new LobbyError(closed ? "the server closed the connection" : "no answer from the server");
             if (l.StartsWith("ERROR")) throw new LobbyError(l.Length > 6 ? l.Substring(6) : l);
             if (l.StartsWith(prefix)) return l;
         }
@@ -102,7 +102,7 @@ class LobbyClient : IDisposable
         try { tcp.Close(); } catch (Exception) { }
     }
 
-    // LOBBY <codigo> <waiting|playing> <n>/<max> <open|locked> <lobby> <dono> <nomes,...|->
+    // LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|->
     public class LobbyInfo
     {
         public int Count, Max;
@@ -123,7 +123,7 @@ class LobbyClient : IDisposable
         };
     }
 
-    // MEMBERS <codigo> <dono> <nome:monstro,...>
+    // MEMBERS <code> <owner> <name:monster,...>
     public class MemberInfo
     {
         public string Code, Host;
@@ -137,10 +137,10 @@ class LobbyClient : IDisposable
         return new MemberInfo { Code = w[1], Host = w[2], Names = w[3] == "-" ? new string[0] : w[3].Split(',') };
     }
 
-    // fase e vitorias do lobby (SETTINGS <codigo> stage=<n> wins=<n>), as ultimas que chegaram por Create, Join ou Set
+    // the lobby's stage and wins (SETTINGS <code> stage=<n> wins=<n>), the latest that arrived through Create, Join or Set
     public Dictionary<string, string> Settings = new Dictionary<string, string>();
 
-    // Cria um lobby (quem cria e o dono) e entra nele; devolve o codigo
+    // Creates a lobby (the creator is its owner) and joins it; returns the code
     public string Create(string lobby, string name, int monster, string password, int timeoutMs)
     {
         Send("CREATE " + lobby + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
@@ -155,14 +155,14 @@ class LobbyClient : IDisposable
         Joined(timeoutMs);
     }
 
-    // JOINED e o SETTINGS que o servidor manda logo depois
+    // JOINED and the SETTINGS the server sends right after it
     void Joined(int timeoutMs)
     {
         Expect("JOINED", timeoutMs);
         Settings = KeyValues(Expect("SETTINGS", timeoutMs));
     }
 
-    // so o dono: fase e vitorias da proxima partida; devolve o que o servidor guardou
+    // owner only: stage and wins of the next match; returns what the server stored
     public Dictionary<string, string> Set(int stage, int wins, int timeoutMs)
     {
         Send("SET stage=" + stage + " wins=" + wins);
@@ -194,7 +194,7 @@ class LobbyClient : IDisposable
         return kv;
     }
 
-    // variaveis de ambiente do wotm.exe para uma linha MATCH (o mesmo que match_env do tools/net_lobby.py)
+    // wotm.exe environment variables for a MATCH line (same as match_env in tools/net_lobby.py)
     public static Dictionary<string, string> MatchEnv(Dictionary<string, string> m, string host)
     {
         int you = int.Parse(m["you"]);
@@ -212,7 +212,7 @@ class LobbyClient : IDisposable
         };
     }
 
-    // nome de jogador como o servidor aceita: letras, digitos, '_' e '-', ate 16
+    // player name as the server accepts it: letters, digits, '_' and '-', up to 16
     public static string CleanName(string s)
     {
         var b = new StringBuilder();
