@@ -34,7 +34,7 @@ $checks = [ordered]@{
     'sair_rede'     = @{ Wins = 1; ExtraEnv = 'WOTM_CHEATS=vencer=8'; PlayerEnv = '1:PS2X_PAD=34:0.2:down;35:0.2:down;36:0.3:cross;38:0.2:up;39:0.3:cross|||2:PS2X_PAD=12:0.3:square'; Secs = 55
                          Expect = '\[net\] match ended by QUIT'; Reject = 'second level load' }
     # mods diferentes (o jogador 2 sem os mods do repo): o digest dos mods entra no hash da configuracao e o servidor recusa
-    'mods_diferentes' = @{ PlayerEnv = '2:WOTM_MODS=0'; Secs = 30; ExpectRefused = 'configuracao do jogo diferente' }
+    'mods_diferentes' = @{ PlayerEnv = '2:WOTM_MODS=0'; Secs = 30; ExpectRefused = 'game configuration differs' }
 }
 
 $failed = @()

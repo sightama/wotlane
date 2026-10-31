@@ -1,5 +1,5 @@
-// ABOUTME: Testes do netcode sem o jogo: linha do tempo das entradas (lockstep), codificacao das mensagens, servidor e cliente ENet
-// ABOUTME: de verdade em localhost. Sai com 0 se tudo passar; cada falha imprime arquivo, linha e a expressao.
+// ABOUTME: Netcode tests without the game: the input timeline (lockstep), message encoding, and a real ENet server and client
+// ABOUTME: on localhost. Exits with 0 if everything passes; each failure prints the file, line and expression.
 #include "wotm_lockstep.hpp"
 #include "wotm_monsters.hpp"
 #include "wotm_net_client.hpp"
@@ -29,7 +29,7 @@ namespace
         if (!(expr))                                                                                                                 \
         {                                                                                                                            \
             ++g_failures;                                                                                                            \
-            std::printf("  FALHOU %s:%d: %s\n", __FILE__, __LINE__, #expr);                                                          \
+            std::printf("  FAILED %s:%d: %s\n", __FILE__, __LINE__, #expr);                                                          \
         }                                                                                                                            \
     } while (0)
 
@@ -97,7 +97,7 @@ namespace
     {
         InputTimeline t(1, 0);
         t.set(0, 0, pressed(0x4000));
-        t.set(0, 0, pressed(0x8000));   // repeticao (pacote redundante) nunca troca o que ja chegou
+        t.set(0, 0, pressed(0x8000));   // a repeat (redundant packet) never replaces what already arrived
         CHECK(t.get(0, 0) == pressed(0x4000));
     }
 
@@ -109,7 +109,7 @@ namespace
         t.discardBefore(8);
         CHECK(t.nextMissing(0) == 10);
         CHECK(t.ready(9) && t.get(0, 9) == pressed(9));
-        t.set(0, 3, pressed(0x1234));   // frame ja descartado: ignorado
+        t.set(0, 3, pressed(0x1234));   // frame already discarded: ignored
         CHECK(t.nextMissing(0) == 10);
     }
 
@@ -123,19 +123,19 @@ namespace
         CHECK(t.ready(2) && t.ready(500) == false);
         CHECK(t.get(1, 2) == PadState{});
         CHECK(t.get(1, 1) == pressed(2));
-        t.set(1, 5, pressed(7));   // entrada atrasada depois da queda: ignorada
+        t.set(1, 5, pressed(7));   // late input after the drop: ignored
         CHECK(t.get(1, 5) == PadState{});
     }
 
     TEST(local_delay_schedules_sampled_input_ahead)
     {
         InputTimeline t(2, 3);
-        CHECK(t.scheduleLocal(1, 0, pressed(0x4000)) == 3u);   // amostra do frame 0 vale no frame 0 + atraso
+        CHECK(t.scheduleLocal(1, 0, pressed(0x4000)) == 3u);   // the sample from frame 0 applies at frame 0 + delay
         CHECK(t.has(1, 3) && t.get(1, 3) == pressed(0x4000));
         CHECK(!t.has(0, 3));
     }
 
-    // ---- protocolo ----
+    // ---- protocol ----
     namespace p = wotm_net::proto;
 
     TEST(proto_join_roundtrip)
@@ -164,7 +164,7 @@ namespace
             r.states.push_back(i < 10 ? pressed(0x4000) : PadState{});
         m.runs.push_back(r);
         const std::vector<uint8_t> bytes = p::encode(m);
-        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 6u);   // cabecalhos, 1 byte por estado, 6 por estado novo (so 2 mudam)
+        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 6u);   // headers, 1 byte per state, 6 per new state (only 2 change)
         p::Inputs back;
         CHECK(p::decode(bytes, back));
         CHECK(back.ackOwn == 41u && back.runs.size() == 1u);
@@ -199,10 +199,10 @@ namespace
         p::Drop d{1, 77};
         p::Drop db;
         CHECK(p::decode(p::encode(d), db) && db.player == 1 && db.frame == 77u);
-        p::Desync x{90, "jogador 2 difere"};
+        p::Desync x{90, "player 2 differs"};
         p::Desync xb;
         CHECK(p::decode(p::encode(x), xb) && xb.frame == 90u && xb.detail == x.detail);
-        p::Reject r{"versao diferente"};
+        p::Reject r{"different version"};
         p::Reject rb;
         CHECK(p::decode(p::encode(r), rb) && rb.reason == r.reason);
     }
@@ -218,17 +218,17 @@ namespace
         p::Inputs back;
         CHECK(!p::decode(bytes, back));
         p::Join j;
-        CHECK(!p::decode(bytes, j));   // tipo errado
+        CHECK(!p::decode(bytes, j));   // wrong type
     }
 
     TEST(proto_delay_covers_the_relay_path)
     {
-        // atraso = viagem de ida do mais lento ao servidor e do servidor ao segundo mais lento, em quadros, mais 1 de folga
+        // delay = one-way trip slowest player -> server plus server -> second slowest, in frames, plus 1 frame of slack
         CHECK(p::pickDelay({10, 10}, 16) == 2u);
-        CHECK(p::pickDelay({100, 60}, 16) == 6u);    // (100 + 60) / 2 = 80 ms = 5 quadros + 1
-        CHECK(p::pickDelay({60, 100, 20}, 33) == 4u);   // 4 jogadores, quadro de 33 ms
-        CHECK(p::pickDelay({2000, 2000}, 16) == 15u);   // teto
-        CHECK(p::pickDelay({0}, 16) == 2u);             // piso
+        CHECK(p::pickDelay({100, 60}, 16) == 6u);    // (100 + 60) / 2 = 80 ms = 5 frames + 1
+        CHECK(p::pickDelay({60, 100, 20}, 33) == 4u);   // 4 players, 33 ms frame
+        CHECK(p::pickDelay({2000, 2000}, 16) == 15u);   // ceiling
+        CHECK(p::pickDelay({0}, 16) == 2u);             // floor
     }
 
     TEST(lobby_lines_split_words_and_key_values)
@@ -237,11 +237,11 @@ namespace
         CHECK(w.size() == 4u && w[0] == "JOIN" && w[3] == "3");
         const std::map<std::string, std::string> kv = p::keyValues({"MATCH", "players=2", "seed=99", "monsters=3,1"});
         CHECK(kv.at("players") == "2" && kv.at("seed") == "99" && kv.at("monsters") == "3,1" && kv.count("MATCH") == 0u);
-        CHECK(p::cleanName("La ne<>!_9-xyzxyzxyzxyzxyz") == "Lane_9-xyzxyzxyz");   // 16 caracteres no maximo
+        CHECK(p::cleanName("La ne<>!_9-xyzxyzxyzxyzxyz") == "Lane_9-xyzxyzxyz");   // 16 characters at most
         CHECK(p::cleanName("   ").empty());
     }
 
-    // ---- servidor e cliente de verdade em localhost ----
+    // ---- real server and client on localhost ----
     using wotm_net::ClientConfig;
     using wotm_net::LineSocket;
     using wotm_net::MatchClient;
@@ -251,7 +251,7 @@ namespace
 
     uint16_t g_nextPort = 27770;
 
-    // servidor rodando numa thread durante o teste
+    // server running on a thread for the duration of the test
     struct RunningServer
     {
         Server server;
@@ -263,7 +263,7 @@ namespace
             std::string err;
             ok = server.start(err);
             if (!ok)
-                std::printf("  servidor nao subiu: %s\n", err.c_str());
+                std::printf("  server failed to start: %s\n", err.c_str());
             thread = std::thread([this] {
                 while (!stop)
                     server.poll(1);
@@ -281,7 +281,7 @@ namespace
         }
     };
 
-    // porta livre em TCP e UDP (um processo de teste anterior que ainda esta fechando pode segurar as dele)
+    // a port free on both TCP and UDP (an earlier test process that is still shutting down may be holding its ports)
     uint16_t freePort()
     {
         for (int tries = 0; tries < 200; ++tries)
@@ -327,7 +327,7 @@ namespace
         std::map<std::string, std::string> match;
     };
 
-    // conecta e manda o HELLO do protocolo atual; devolve a linha WELCOME
+    // connects and sends the HELLO for the current protocol; returns the WELCOME line
     std::string hello(LineSocket &s, uint16_t port, const std::string &build = "b1")
     {
         CHECK(s.connect("127.0.0.1", port, 2000));
@@ -335,7 +335,7 @@ namespace
         return readUntil(s, "WELCOME");
     }
 
-    // CREATE <lobby> <nome> <monstro> [senha]: devolve o codigo do lobby (vazio se o servidor recusou)
+    // CREATE <lobby> <name> <monster> [password]: returns the lobby code (empty if the server refused)
     std::string createLobby(LineSocket &s, const std::string &lobby, const std::string &name, int monster, const std::string &password = "")
     {
         s.sendLine("CREATE " + lobby + " " + name + " " + std::to_string(monster) + (password.empty() ? "" : " " + password));
@@ -343,8 +343,8 @@ namespace
         return created.size() > 8 ? created.substr(8) : std::string{};
     }
 
-    // forma uma partida pelo lobby: o primeiro nome cria o lobby (e e o dono), os outros entram pelo codigo, o dono escolhe a fase e
-    // as vitorias (SET) e comeca (START)
+    // forms a match through the lobby: the first name creates the lobby (and is the host), the others join by code, and the host
+    // picks the stage and the wins (SET) and starts it (START)
     std::vector<std::unique_ptr<Member>> formMatch(uint16_t port, const std::vector<std::string> &names, const std::vector<int> &monsters,
                                                    int stage = 1, const std::string &build = "b1", int wins = 0)
     {
@@ -357,7 +357,7 @@ namespace
             CHECK(hello(m.socket, port, build).rfind("WELCOME", 0) == 0);
             if (i == 0)
             {
-                code = createLobby(m.socket, "Sala", names[i], monsters[i]);
+                code = createLobby(m.socket, "Lobby", names[i], monsters[i]);
                 CHECK(code.size() == 4u);
                 continue;
             }
@@ -384,9 +384,9 @@ namespace
         return c;
     }
 
-    // quem cria um lobby e o dono: o servidor da um codigo de 4 letras, a lista mostra nome, dono, vagas e se tem senha; os outros
-    // entram pelo codigo (maiusculas ou minusculas); so o dono muda a fase e as vitorias (SETTINGS chega a todos) e comeca; a linha
-    // MATCH leva o codigo e as vitorias
+    // whoever creates a lobby is its host: the server hands out a 4-letter code, and the list shows name, host, slots and whether it
+    // has a password; the others join by code (upper or lower case); only the host changes the stage and wins (SETTINGS reaches
+    // everyone) and starts; the MATCH line carries the code and the wins
     TEST(lobby_create_join_by_code_settings_and_start)
     {
         ServerConfig cfg = testConfig();
@@ -398,13 +398,13 @@ namespace
         CHECK(readUntil(watcher, "") == "END");
 
         CHECK(hello(a, cfg.port) == "WELCOME 0");
-        const std::string code = createLobby(a, "Sala_1", "Ana", 3);
+        const std::string code = createLobby(a, "Lobby_1", "Ana", 3);
         CHECK(code.size() == 4u);
         CHECK(readUntil(a, "JOINED") == "JOINED " + code);
         CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=1 wins=0");
         CHECK(readUntil(a, "MEMBERS") == "MEMBERS " + code + " Ana Ana:3");
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 1/8 open Sala_1 Ana Ana");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 1/8 open Lobby_1 Ana Ana");
         CHECK(readUntil(watcher, "") == "END");
 
         CHECK(hello(b, cfg.port) == "WELCOME 1");
@@ -417,9 +417,9 @@ namespace
         CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
 
         b.sendLine("SET wins=3");
-        CHECK(readUntil(b, "ERROR").find("dono") != std::string::npos);
+        CHECK(readUntil(b, "ERROR").find("owner") != std::string::npos);
         b.sendLine("START");
-        CHECK(readUntil(b, "ERROR").find("dono") != std::string::npos);
+        CHECK(readUntil(b, "ERROR").find("owner") != std::string::npos);
         a.sendLine("SET stage=5 wins=3");
         CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=5 wins=3");
         CHECK(readUntil(b, "SETTINGS") == "SETTINGS " + code + " stage=5 wins=3");
@@ -440,14 +440,15 @@ namespace
         CHECK(ma.at("token") != mb.at("token") && ma.at("token").size() == 16u);
 
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " playing 2/8 open Sala_1 Ana Ana,Bia");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " playing 2/8 open Lobby_1 Ana Ana,Bia");
         LineSocket c;
         hello(c, cfg.port);
         c.sendLine("JOIN " + code + " Cai 2");
-        CHECK(readUntil(c, "ERROR").find("partida") != std::string::npos);
+        CHECK(readUntil(c, "ERROR").find("match") != std::string::npos);
     }
 
-    // lobby com senha: aparece trancado na lista e so entra quem manda a senha certa; codigo que nao existe e recusado
+    // password-protected lobby: shows as locked in the list and only someone sending the right password gets in; an unknown code is
+    // refused
     TEST(lobby_password_and_unknown_code)
     {
         ServerConfig cfg = testConfig();
@@ -456,23 +457,23 @@ namespace
         hello(a, cfg.port);
         hello(b, cfg.port);
         hello(watcher, cfg.port);
-        const std::string code = createLobby(a, "Amigos", "Ana", 3, "pw123");
+        const std::string code = createLobby(a, "Friends", "Ana", 3, "pw123");
         CHECK(code.size() == 4u);
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 1/8 locked Amigos Ana Ana");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 1/8 locked Friends Ana Ana");
         b.sendLine("JOIN " + code + " Bia 1");
-        CHECK(readUntil(b, "ERROR").find("senha") != std::string::npos);
-        b.sendLine("JOIN " + code + " Bia 1 errada");
-        CHECK(readUntil(b, "ERROR").find("senha") != std::string::npos);
+        CHECK(readUntil(b, "ERROR").find("password") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 1 wrong");
+        CHECK(readUntil(b, "ERROR").find("password") != std::string::npos);
         b.sendLine("JOIN " + code + " Bia 1 pw123");
         CHECK(readUntil(b, "JOINED") == "JOINED " + code);
         LineSocket c;
         hello(c, cfg.port);
         c.sendLine(code == "ZZZZ" ? "JOIN YYYY Cai 2" : "JOIN ZZZZ Cai 2");
-        CHECK(readUntil(c, "ERROR").find("inexistente") != std::string::npos);
+        CHECK(readUntil(c, "ERROR").find("no such lobby") != std::string::npos);
     }
 
-    // dono que sai (LEAVE ou conexao caida) passa o lobby ao proximo; lobby vazio fecha e some da lista
+    // a leaving host (LEAVE or a dropped connection) passes the lobby to the next member; an empty lobby closes and leaves the list
     TEST(lobby_host_passes_on_and_empty_lobby_closes)
     {
         ServerConfig cfg = testConfig();
@@ -483,11 +484,11 @@ namespace
         {
             LineSocket a;
             hello(a, cfg.port);
-            code = createLobby(a, "Sala", "Ana", 3);
+            code = createLobby(a, "Lobby", "Ana", 3);
             hello(b, cfg.port);
             b.sendLine("JOIN " + code + " Bia 1");
             CHECK(readUntil(b, "JOINED") == "JOINED " + code);
-        }   // a conexao da Ana cai
+        }   // Ana's connection drops
         CHECK(readUntil(b, "MEMBERS " + code + " Bia") == "MEMBERS " + code + " Bia Bia:1");
         b.sendLine("SET wins=2");
         CHECK(readUntil(b, "SETTINGS") == "SETTINGS " + code + " stage=1 wins=2");
@@ -497,8 +498,8 @@ namespace
         CHECK(readUntil(watcher, "") == "END");
     }
 
-    // os membros continuam no lobby durante a partida; quando todos saem da partida (o QUIT fecha o jogo), o lobby volta a esperar
-    // com os mesmos membros e o dono pode comecar outra
+    // members stay in the lobby during the match; once everyone leaves the match (QUIT closes the game), the lobby goes back to
+    // waiting with the same members and the host can start another one
     TEST(lobby_members_stay_through_a_match_and_start_again)
     {
         ServerConfig cfg = testConfig();
@@ -517,7 +518,7 @@ namespace
         LineSocket watcher;
         hello(watcher, cfg.port);
         watcher.sendLine("LIST");
-        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 2/8 open Sala Ana Ana,Bia");
+        CHECK(readUntil(watcher, "LOBBY") == "LOBBY " + code + " waiting 2/8 open Lobby Ana Ana,Bia");
         ms[0]->socket.sendLine("START");
         const auto again = p::keyValues(p::words(readUntil(ms[1]->socket, "MATCH")));
         CHECK(again.count("wins") && again.at("wins") == "3" && again.at("stage") == "2");
@@ -533,26 +534,26 @@ namespace
         LineSocket old;
         CHECK(old.connect("127.0.0.1", cfg.port, 2000));
         old.sendLine("HELLO 1 b1");
-        CHECK(readUntil(old, "ERROR").find("protocolo") != std::string::npos);
+        CHECK(readUntil(old, "ERROR").find("protocol") != std::string::npos);
 
         LineSocket a, b, c, d;
         hello(a, cfg.port);
         hello(b, cfg.port, "b2");
         hello(c, cfg.port);
         hello(d, cfg.port);
-        const std::string code = createLobby(a, "Sala", "Ana", 3);
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
         b.sendLine("JOIN " + code + " Bia 2");
         CHECK(readUntil(b, "ERROR").find("build") != std::string::npos);
         c.sendLine("JOIN " + code + " Cai 2");
         CHECK(readUntil(c, "JOINED") == "JOINED " + code);
         d.sendLine("JOIN " + code + " Dan 2");
-        CHECK(readUntil(d, "ERROR").find("cheio") != std::string::npos);
-        d.sendLine("CREATE Outra Dan 2");
-        CHECK(readUntil(d, "ERROR").find("lobbies") != std::string::npos);   // o servidor tem 1 lobby so
+        CHECK(readUntil(d, "ERROR").find("full") != std::string::npos);
+        d.sendLine("CREATE Other Dan 2");
+        CHECK(readUntil(d, "ERROR").find("lobbies") != std::string::npos);   // the server only has 1 lobby
     }
 
-    // monstro sem arquivo no disco (spider 6, ogre 12, fora da tabela) ou sem traje livre (jelly so tem 1) nao entra (nem cria um
-    // lobby): a carga do jogo travaria em todos os PCs
+    // a monster with no file on the disc (spider 6, ogre 12, outside the table) or with no free costume (jelly has only 1) can't join
+    // (or create a lobby): the game's load would hang on every PC
     TEST(lobby_refuses_monsters_the_disc_does_not_have)
     {
         ServerConfig cfg = testConfig();
@@ -562,23 +563,24 @@ namespace
         hello(b, cfg.port);
         for (const char *bad : {"6", "12", "0", "16"})
         {
-            a.sendLine(std::string("CREATE Sala Ana ") + bad);
-            CHECK(readUntil(a, "ERROR").find("monstro") != std::string::npos);
+            a.sendLine(std::string("CREATE Lobby Ana ") + bad);
+            CHECK(readUntil(a, "ERROR").find("monster") != std::string::npos);
         }
-        const std::string code = createLobby(a, "Sala", "Ana", 14);
+        const std::string code = createLobby(a, "Lobby", "Ana", 14);
         CHECK(code.size() == 4u);
         for (const char *bad : {"6", "12"})
         {
             b.sendLine("JOIN " + code + " Bia " + bad);
-            CHECK(readUntil(b, "ERROR").find("monstro") != std::string::npos);
+            CHECK(readUntil(b, "ERROR").find("monster") != std::string::npos);
         }
         b.sendLine("JOIN " + code + " Bia 14");
-        CHECK(readUntil(b, "ERROR").find("traje") != std::string::npos);
+        CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
         b.sendLine("JOIN " + code + " Bia 3");
         CHECK(readUntil(b, "JOINED") == "JOINED " + code);
     }
 
-    // trajes como o userintMainDirect os da: os pedidos primeiro, depois o menor livre (o Goliath, 13, comeca no 1: o 0 e um prototipo)
+    // costumes handed out the way userintMainDirect does: requested ones first, then the lowest free one (Goliath, 13, starts at 1:
+    // costume 0 is a prototype)
     TEST(monster_list_fits_with_the_game_costume_rule)
     {
         int bad = -1;
@@ -587,17 +589,17 @@ namespace
         CHECK(!wotm_monsters::fits(goliaths, nullptr, 2, &bad));
         CHECK(bad == 1);
         const int goliathProto[] = {0, -1};
-        CHECK(wotm_monsters::fits(goliaths, goliathProto, 2));   // o prototipo pedido e o 1 automatico
+        CHECK(wotm_monsters::fits(goliaths, goliathProto, 2));   // the requested prototype plus the automatic 1
         const int jellies[] = {14, 14};
         CHECK(!wotm_monsters::fits(jellies, nullptr, 2));
         const int monkeys[] = {1, 1, 1, 1, 1};
-        CHECK(wotm_monsters::fits(monkeys, nullptr, 5));   // o quinto repete o traje 0
+        CHECK(wotm_monsters::fits(monkeys, nullptr, 5));   // the fifth repeats costume 0
         const int asked[] = {3, -1, -1};
         const int lizards[] = {3, 3, 3};
-        CHECK(wotm_monsters::fits(lizards, asked, 3));   // 3 pedido, os outros 0 e 1
+        CHECK(wotm_monsters::fits(lizards, asked, 3));   // 3 requested, the others get 0 and 1
         const int missing[] = {1, -1};
         const int jellyAsked[] = {14, 14};
-        CHECK(!wotm_monsters::fits(jellyAsked, missing, 2, &bad));   // jelly so tem o traje 0
+        CHECK(!wotm_monsters::fits(jellyAsked, missing, 2, &bad));   // jelly only has costume 0
         CHECK(bad == 0);
         const int spider[] = {6};
         CHECK(!wotm_monsters::fits(spider, nullptr, 1));
@@ -610,13 +612,13 @@ namespace
         LineSocket a, b;
         hello(a, cfg.port);
         hello(b, cfg.port);
-        const std::string code = createLobby(a, "Sala", "Ana", 13);
+        const std::string code = createLobby(a, "Lobby", "Ana", 13);
         CHECK(code.size() == 4u);
         b.sendLine("JOIN " + code + " Bia 13");
-        CHECK(readUntil(b, "ERROR").find("traje") != std::string::npos);
+        CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
     }
 
-    // dois clientes da partida trocam 100 quadros de entrada e veem a mesma linha do tempo
+    // two match clients exchange frames of input and see the same timeline
     void exchange(MatchClient &a, MatchClient &b, uint32_t frames)
     {
         const uint32_t d = a.delay();
@@ -658,7 +660,7 @@ namespace
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
-    // ate 8 jogadores (4 nos lugares de jogador do jogo e 4 em lugares de IA guiados pela rede): lobby, 30 Hz e entradas de todos
+    // up to 8 players (4 in the game's player slots and 4 in AI slots driven by the network): lobby, 30 Hz and everyone's inputs
     TEST(match_with_eight_players_shares_every_input)
     {
         ServerConfig cfg = testConfig();
@@ -667,7 +669,7 @@ namespace
         auto ms = formMatch(cfg.port, names, {3, 1, 2, 5, 4, 7, 8, 9});
         CHECK(ms[7]->match.count("players") && ms[7]->match.at("players") == "8" && ms[7]->match.at("step") == "2");
         if (!ms[7]->match.count("you"))
-            return;   // o oitavo nao entrou na partida: o resto nao tem como rodar
+            return;   // the eighth didn't get into the match: the rest can't run
         CHECK(ms[7]->match.at("you") == "7");
         std::vector<std::unique_ptr<MatchClient>> cs;
         std::string err;
@@ -721,18 +723,18 @@ namespace
         fake.match["token"] = "0000000000000000";
         CHECK(bad.start(clientFor(cfg.port, fake), err));
         CHECK(!bad.waitStarted(1500) && bad.status() == Status::Rejected);
-        CHECK(bad.message().find("ficha") != std::string::npos);
+        CHECK(bad.message().find("token") != std::string::npos);
 
         MatchClient a, b;
         CHECK(a.start(clientFor(cfg.port, *ms[0], "cfgA"), err));
-        // o servidor guarda a configuracao de quem entrou primeiro: o b so sai depois que o a entrou
+        // the server keeps the config of whoever joined first: b only starts after a has joined
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (a.status() != Status::Waiting && std::chrono::steady_clock::now() < until)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(a.status() == Status::Waiting);
         CHECK(b.start(clientFor(cfg.port, *ms[1], "cfgB"), err));
         CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
-        CHECK(b.message().find("configura") != std::string::npos);
+        CHECK(b.message().find("configuration") != std::string::npos);
     }
 
     TEST(match_drops_a_player_that_leaves_at_an_agreed_frame)
@@ -774,13 +776,13 @@ namespace
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(a.status() == Status::Desynced && b.status() == Status::Desynced);
         CHECK(a.desyncFrame() == 60u);
-        CHECK(!a.waitFrame(a.delay(), 200));   // dessincronizado: nenhum quadro novo roda
+        CHECK(!a.waitFrame(a.delay(), 200));   // desynced: no new frame runs
     }
 }
 
 int main()
 {
-    std::setvbuf(stdout, nullptr, _IONBF, 0);   // cada linha sai na hora: um teste travado mostra onde parou
+    std::setvbuf(stdout, nullptr, _IONBF, 0);   // every line goes out immediately: a hung test shows where it stopped
     for (const Test &t : tests())
     {
         const int before = g_failures;
@@ -788,13 +790,13 @@ int main()
         {
             t.run();
         }
-        catch (const std::exception &e)   // uma excecao e falha do teste, nunca um abort (que deixa o processo preso no relatorio de erro)
+        catch (const std::exception &e)   // an exception is a test failure, never an abort (which leaves the process stuck in the error report)
         {
             ++g_failures;
-            std::printf("  EXCECAO %s\n", e.what());
+            std::printf("  EXCEPTION %s\n", e.what());
         }
-        std::printf("%s %s\n", g_failures == before ? "ok     " : "FALHOU ", t.name);
+        std::printf("%s %s\n", g_failures == before ? "ok     " : "FAILED ", t.name);
     }
-    std::printf("%d checagens, %d falha(s)\n", g_checks, g_failures);
+    std::printf("%d checks, %d failure(s)\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

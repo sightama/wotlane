@@ -1,5 +1,5 @@
-// ABOUTME: Socket TCP de linhas de texto (lobby do netcode) e escuta sem bloqueio, para Windows (Winsock) e POSIX.
-// ABOUTME: Usado pelo servidor (aceita e le varias conexoes) e pelos testes e ferramentas que falam com o lobby.
+// ABOUTME: Line-based text TCP socket (the netcode lobby) and a non-blocking listener, for Windows (Winsock) and POSIX.
+// ABOUTME: Used by the server (accepts and reads many connections) and by the tests and tools that talk to the lobby.
 #pragma once
 
 #include <chrono>
@@ -40,7 +40,7 @@ namespace wotm_net
         u_long on = 1;
         ioctlsocket(s, FIONBIO, &on);
     }
-    // WSAStartup e contado pelo Winsock: cada usuario chama uma vez
+    // Winsock reference-counts WSAStartup: each user calls it once
     inline bool socketsInit()
     {
         static const bool ok = [] {
@@ -58,7 +58,7 @@ namespace wotm_net
     inline bool socketsInit() { return true; }
 #endif
 
-    // espera ate `ms` o socket ficar legivel (ou gravavel)
+    // waits up to `ms` for the socket to become readable (or writable)
     inline bool waitSocket(SocketHandle s, int ms, bool write)
     {
         fd_set set;
@@ -140,7 +140,7 @@ namespace wotm_net
             return true;
         }
 
-        // le o que chegou sem bloquear; false se a conexao caiu
+        // reads whatever has arrived without blocking; false if the connection dropped
         bool pump()
         {
             if (!open())
@@ -152,7 +152,7 @@ namespace wotm_net
                 if (n > 0)
                 {
                     in_.append(buf, static_cast<size_t>(n));
-                    if (in_.size() > 65536u)   // linha absurda: corta a conexao
+                    if (in_.size() > 65536u)   // absurdly long line: drop the connection
                     {
                         close();
                         return false;
@@ -166,7 +166,7 @@ namespace wotm_net
             }
         }
 
-        // proxima linha completa ja recebida (sem o \n e o \r)
+        // next complete line already received (without the \n and \r)
         bool nextLine(std::string &line)
         {
             const size_t nl = in_.find('\n');
@@ -179,7 +179,7 @@ namespace wotm_net
             return true;
         }
 
-        // espera ate `timeoutMs` por uma linha
+        // waits up to `timeoutMs` for a line
         bool readLine(std::string &line, int timeoutMs)
         {
             const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
@@ -250,7 +250,7 @@ namespace wotm_net
             setNonBlocking(s_);
             return true;
         }
-        // conexao nova, se houver
+        // a new connection, if there is one
         bool accept(LineSocket &out)
         {
             if (s_ == kNoSocket)

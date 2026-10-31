@@ -1,5 +1,5 @@
-// ABOUTME: Servidor do netcode (sem codigo do jogo): lobbies por TCP e partidas em lockstep por ENet, com repasse das entradas,
-// ABOUTME: atraso pelo ping, comparacao dos hashes de estado e queda de jogadores. Usado pelo wotm_server e pelos testes.
+// ABOUTME: Netcode server (no game code): TCP lobbies and ENet lockstep matches, relaying inputs, picking the delay from ping,
+// ABOUTME: comparing state hashes and dropping players. Used by wotm_server and the tests.
 #pragma once
 
 #include "wotm_lockstep.hpp"
@@ -22,13 +22,13 @@ namespace wotm_net
 {
     struct ServerConfig
     {
-        uint16_t port = proto::kDefaultPort;   // TCP (lobby) e UDP (partida) no mesmo numero
-        int lobbies = 16;                       // lobbies abertos ao mesmo tempo, no maximo
+        uint16_t port = proto::kDefaultPort;   // TCP (lobby) and UDP (match) on the same number
+        int lobbies = 16;                       // maximum lobbies open at the same time
         int maxPlayers = proto::kMaxPlayers;
-        uint32_t forcedDelay = 0;               // 0: atraso pelo ping
-        int startWaitMs = 1000;                 // depois que todos chegam, mede o ping por este tempo antes do inicio
-        int joinTimeoutMs = 90000;              // quem nao chega a partida neste tempo cai (o jogo leva ~15 s para carregar)
-        int dropInputPercent = 0;               // teste: descarta esta parte dos pacotes de entrada enviados
+        uint32_t forcedDelay = 0;               // 0: delay from ping
+        int startWaitMs = 1000;                 // once everyone arrives, measures ping for this long before starting
+        int joinTimeoutMs = 90000;              // anyone who doesn't reach the match in this time is dropped (the game takes ~15 s to load)
+        int dropInputPercent = 0;               // test: discards this percentage of the input packets sent
         bool log = true;
     };
 
@@ -41,7 +41,7 @@ namespace wotm_net
         Server &operator=(const Server &) = delete;
 
         bool start(std::string &err);
-        // atende o lobby e a partida; espera ate `ms` por trafego
+        // services the lobby and the match; waits up to `ms` for traffic
         void poll(int ms);
 
     private:
@@ -62,7 +62,7 @@ namespace wotm_net
             std::string token, name;
             _ENetPeer *peer = nullptr;
             bool joined = false, gone = false;
-            std::vector<uint32_t> need;   // primeiro quadro de cada jogador que este cliente ainda nao tem
+            std::vector<uint32_t> need;   // per player, the first frame this client doesn't have yet
             uint32_t lastAckOwn = 0;
             Clock::time_point lastSend{};
             bool dirty = false;
@@ -72,7 +72,7 @@ namespace wotm_net
         {
             int lobby = 0;
             std::vector<Slot> slots;
-            std::string config;            // configuracao do primeiro que entrou: todos iguais
+            std::string config;            // config of the first to join: everyone must match it
             bool started = false, desynced = false;
             uint32_t delay = 0;
             InputTimeline inputs{0, 0};
@@ -83,11 +83,11 @@ namespace wotm_net
 
         struct Lobby
         {
-            bool open = false;             // vaga em uso (criada e com alguem dentro ou em partida)
+            bool open = false;             // slot in use (created, and has someone in it or is in a match)
             std::string code, name, password;
-            int host = -1;                 // indice em conns_ do dono
+            int host = -1;                 // owner's index in conns_
             int stage = 1, wins = 0;
-            std::vector<int> members;      // indices em conns_
+            std::vector<int> members;      // indices into conns_
             std::string build;
             std::unique_ptr<Match> match;
         };
@@ -98,7 +98,7 @@ namespace wotm_net
         void createLobby(int c, const std::vector<std::string> &w);
         void joinLobby(int c, const std::vector<std::string> &w);
         void setLobby(int c, const std::vector<std::string> &w);
-        // entra no lobby li (ja conferido): membro, dono se for o primeiro, JOINED, SETTINGS e MEMBERS
+        // joins lobby li (already validated): member, owner if first, JOINED, SETTINGS and MEMBERS
         void addMember(int c, int li, const std::string &name, int monster);
         bool monsterFits(const Lobby &l, int monster, std::string &err) const;
         void leaveLobby(int c);

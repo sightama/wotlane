@@ -71,10 +71,10 @@ class LobbyTest(unittest.TestCase):
     def test_join_by_code_with_password_and_host_only_settings(self):
         with net_lobby.Lobby('127.0.0.1', self.port, 'b1') as a, net_lobby.Lobby('127.0.0.1', self.port, 'b1') as b:
             code = a.create('Sala', 'Ana', 3, password='pw')
-            with self.assertRaisesRegex(net_lobby.LobbyError, 'senha'):
+            with self.assertRaisesRegex(net_lobby.LobbyError, 'password'):
                 b.join(code, 'Bia', 1)
             b.join(code.lower(), 'Bia', 1, password='pw')
-            with self.assertRaisesRegex(net_lobby.LobbyError, 'dono'):
+            with self.assertRaisesRegex(net_lobby.LobbyError, 'owner'):
                 b.set(wins=2)
             self.assertEqual(a.set(stage=4, wins=2), {'stage': '4', 'wins': '2'})
 
@@ -83,7 +83,7 @@ class LobbyTest(unittest.TestCase):
             code = a.create('Sala', 'Ana', 3)
             with self.assertRaisesRegex(net_lobby.LobbyError, 'build'):
                 b.join(code, 'Bia', 1)
-            with self.assertRaisesRegex(net_lobby.LobbyError, 'inexistente'):
+            with self.assertRaisesRegex(net_lobby.LobbyError, 'no such lobby'):
                 b.join('QQQQ' if code != 'QQQQ' else 'RRRR', 'Bia', 1)
 
     def test_cli_prints_env_lines(self):

@@ -130,21 +130,21 @@ if ($ExpectRefused) {
     $refused = $false
     for ($i = 1; $i -le $Players; $i++) {
         $log = Get-Content (Join-Path $out "jogador$i.err.log") -Raw
-        if ($log -match "\[net\] parado: [^\r\n]*$ExpectRefused[^\r\n]*") { $refused = $true; Write-Host "ok      jogador ${i}: $($Matches[0])" }
-        if ($log -match "\[net\] inicio: jogador") { Fail "jogador $i comecou a partida" }
+        if ($log -match "\[net\] stopped: [^\r\n]*$ExpectRefused[^\r\n]*") { $refused = $true; Write-Host "ok      jogador ${i}: $($Matches[0])" }
+        if ($log -match "\[net\] start: player") { Fail "jogador $i comecou a partida" }
     }
     if (-not $refused) { Fail "ninguem foi recusado por '$ExpectRefused'" }
     if ($failed) { Write-Host 'FALHOU'; exit 1 }
     Write-Host 'PASSOU'
     exit 0
 }
-if ($srvLog -match 'DESSINCRONIA[^\r\n]*') { Fail "servidor: $($Matches[0])" }
-if ($srvLog -notmatch 'inicio, atraso (\d+)') { Fail 'servidor nunca comecou a partida' } else { Write-Host "ok      servidor comecou a partida (atraso $($Matches[1]))" }
+if ($srvLog -match 'DESYNC[^\r\n]*') { Fail "servidor: $($Matches[0])" }
+if ($srvLog -notmatch 'start, delay (\d+)') { Fail 'servidor nunca comecou a partida' } else { Write-Host "ok      servidor comecou a partida (atraso $($Matches[1]))" }
 $alive = if ($Drop -gt 0) { $Players - 1 } else { $Players }
 for ($i = 1; $i -le $Players; $i++) {
     $log = Get-Content (Join-Path $out "jogador$i.err.log") -Raw
-    if ($log -notmatch "\[net\] inicio: jogador $i de $Players") { Fail "jogador $i nao comecou a partida" } else { Write-Host "ok      jogador $i comecou" }
-    if ($log -match '\[net\] parado: [^\r\n]*') { if (-not ($Drop -gt 0 -and $i -eq $Players)) { Fail "jogador ${i}: $($Matches[0])" } }
+    if ($log -notmatch "\[net\] start: player $i of $Players") { Fail "jogador $i nao comecou a partida" } else { Write-Host "ok      jogador $i comecou" }
+    if ($log -match '\[net\] stopped: [^\r\n]*') { if (-not ($Drop -gt 0 -and $i -eq $Players)) { Fail "jogador ${i}: $($Matches[0])" } }
     if ($log -match '\[CRASH\]|\[watchdog\] FROZE') { Fail "jogador ${i}: $($Matches[0])" }
     if ($log -notmatch '\[sync\] first non-neutral input applied at frame') { Fail "jogador ${i}: nenhuma entrada chegou ao jogo" }
     foreach ($re in ($Reject -split '\|\|\|' | Where-Object { $_ })) {
@@ -154,7 +154,7 @@ for ($i = 1; $i -le $Players; $i++) {
         if ($log -notmatch $re) { Fail "jogador ${i}: faltou $re" }
     }
 }
-if ($Drop -gt 0 -and $srvLog -notmatch "J$Players saiu da partida \(neutro desde o quadro \d+\)") { Fail "servidor nao registrou a saida do jogador $Players" }
+if ($Drop -gt 0 -and $srvLog -notmatch "J$Players left the match \(neutral from frame \d+\)") { Fail "servidor nao registrou a saida do jogador $Players" }
 for ($i = 2; $i -le $alive; $i++) {
     $r = & python (Join-Path $PSScriptRoot 'statediff.py') (Join-Path $out 'jogador1.hash') (Join-Path $out "jogador$i.hash")
     $r | ForEach-Object { Write-Host "        $_" }

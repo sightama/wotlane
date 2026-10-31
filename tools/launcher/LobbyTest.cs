@@ -63,12 +63,12 @@ static class LobbyTest
                     string code = a.Create("Amigos", "Ana", 3, "pw", 2000);
                     bool wrong = false;
                     try { b.Join(code, "Bia", 1, null, 2000); }
-                    catch (LobbyError e) { wrong = e.Message.Contains("senha"); }
+                    catch (LobbyError e) { wrong = e.Message.Contains("password"); }
                     Check(wrong, "sem senha nao entra");
                     b.Join(code, "Bia", 1, "pw", 2000);
                     bool notHost = false;
                     try { b.Set(2, 1, 2000); }
-                    catch (LobbyError e) { notHost = e.Message.Contains("dono"); }
+                    catch (LobbyError e) { notHost = e.Message.Contains("owner"); }
                     Check(notHost, "so o dono muda as opcoes");
                     LobbyClient.MemberInfo m = LobbyClient.ParseMembers("MEMBERS " + code + " Ana Ana:3,Bia:1");
                     Check(m != null && m.Code == code && m.Host == "Ana" && m.Names.Length == 2 && m.Names[1] == "Bia:1", "linha MEMBERS");
@@ -80,7 +80,7 @@ static class LobbyTest
                 {
                     bool threw = false;
                     try { a.Join("QQQQ", "Ana", 3, null, 2000); }
-                    catch (LobbyError e) { threw = e.Message.Contains("inexistente"); }
+                    catch (LobbyError e) { threw = e.Message.Contains("no such lobby"); }
                     Check(threw, "lobby inexistente vira LobbyError");
                 }
             });

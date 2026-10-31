@@ -1,5 +1,5 @@
-// ABOUTME: Implementacao do cliente da partida em rede: thread ENet que entra com a ficha, repassa entradas com confirmacao e
-// ABOUTME: redundancia, aplica quedas e para na dessincronia. O jogo so chama pushLocal/waitFrame/input da thread dele.
+// ABOUTME: Network match client implementation: an ENet thread that joins with the token, relays inputs with acks and
+// ABOUTME: redundancy, applies drops and stops on desync. The game only calls pushLocal/waitFrame/input from its own thread.
 #include "wotm_net_client.hpp"
 
 #include <enet/enet.h>
@@ -16,33 +16,33 @@ namespace wotm_net
         cfg_ = c;
         if (enet_initialize() != 0)
         {
-            err = "enet_initialize falhou";
+            err = "enet_initialize failed";
             return false;
         }
         enetUp_ = true;
         host_ = enet_host_create(nullptr, 1, proto::kChannels, 0, 0);
         if (!host_)
         {
-            err = "nao consegui abrir um socket UDP";
+            err = "could not open a UDP socket";
             return false;
         }
         ENetAddress a;
         if (enet_address_set_host(&a, c.host.c_str()) != 0)
         {
-            err = "endereco invalido: " + c.host;
+            err = "invalid address: " + c.host;
             return false;
         }
         a.port = c.port;
         peer_ = enet_host_connect(host_, &a, proto::kChannels, 0);
         if (!peer_)
         {
-            err = "enet_host_connect falhou";
+            err = "enet_host_connect failed";
             return false;
         }
         {
             std::lock_guard<std::mutex> lk(mu_);
             status_ = Status::Connecting;
-            message_ = "conectando a " + c.host + ":" + std::to_string(c.port);
+            message_ = "connecting to " + c.host + ":" + std::to_string(c.port);
         }
         stop_ = false;
         thread_ = std::thread([this] { run(); });
@@ -108,9 +108,9 @@ namespace wotm_net
                 {
                     std::lock_guard<std::mutex> lk(mu_);
                     if (status_ == Status::Connecting)
-                        setStatus(Status::Lost, "sem resposta do servidor " + cfg_.host + ":" + std::to_string(cfg_.port));
+                        setStatus(Status::Lost, "no answer from the server " + cfg_.host + ":" + std::to_string(cfg_.port));
                     else if (status_ != Status::Rejected && status_ != Status::Desynced)
-                        setStatus(Status::Lost, "conexao com o servidor caiu");
+                        setStatus(Status::Lost, "connection to the server dropped");
                     peer_ = nullptr;
                 }
             }
@@ -148,7 +148,7 @@ namespace wotm_net
             if (proto::decode(data, w))
             {
                 local_ = w.player, players_ = w.players;
-                setStatus(Status::Waiting, "esperando os outros jogadores");
+                setStatus(Status::Waiting, "waiting for the other players");
             }
             break;
         }
@@ -156,7 +156,7 @@ namespace wotm_net
         {
             proto::Reject r;
             proto::decode(data, r);
-            setStatus(Status::Rejected, "recusado pelo servidor: " + r.reason);
+            setStatus(Status::Rejected, "rejected by the server: " + r.reason);
             break;
         }
         case proto::Type::Start:
@@ -171,7 +171,7 @@ namespace wotm_net
                     inputs_.drop(d.first, d.second);
                 serverAck_ = delay_;
                 sentAcks_.assign(static_cast<size_t>(players_), 0u);
-                setStatus(Status::Running, "partida em andamento");
+                setStatus(Status::Running, "match in progress");
             }
             break;
         }
@@ -191,11 +191,11 @@ namespace wotm_net
                 }
             if (changed)
             {
-                dirty_ = true;   // confirma o que chegou
+                dirty_ = true;   // acknowledge what arrived
                 cv_.notify_all();
             }
             else if (!in.runs.empty())
-                dirty_ = true;   // repeticao: a confirmacao anterior se perdeu
+                dirty_ = true;   // a resend: the previous ack was lost
             break;
         }
         case proto::Type::Drop:
@@ -216,7 +216,7 @@ namespace wotm_net
             if (proto::decode(data, d))
             {
                 desyncFrame_ = d.frame;
-                setStatus(Status::Desynced, "dessincronia: " + d.detail);
+                setStatus(Status::Desynced, "desync: " + d.detail);
             }
             break;
         }
@@ -225,8 +225,8 @@ namespace wotm_net
         }
     }
 
-    // manda as entradas locais que o servidor nao confirmou e as confirmacoes do que chegou: logo que ha novidade, e a cada 16 ms enquanto
-    // o servidor estiver atrasado
+    // sends the local inputs the server hasn't acknowledged and the acks for what has arrived: as soon as there is something new, and
+    // every 16 ms while the server is behind
     void MatchClient::sendInput(Clock::time_point now)
     {
         std::vector<uint8_t> packet;

@@ -1,5 +1,5 @@
-# ABOUTME: Netcode do wotlane sem codigo do jogo: biblioteca wotm_net (protocolo, lockstep, cliente), servidor wotm_server e testes.
-# ABOUTME: Compila sozinho (tools\build_net.bat) ou dentro do runtime (add_subdirectory no CMake do PS2Recomp, para o wotm.exe).
+# ABOUTME: wotlane netcode with no game code: the wotm_net library (protocol, lockstep, client), the wotm_server server and tests.
+# ABOUTME: Builds standalone (tools\build_net.bat) or inside the runtime (add_subdirectory in PS2Recomp's CMake, for wotm.exe).
 cmake_minimum_required(VERSION 3.24)
 project(wotm_net C CXX)
 
@@ -17,7 +17,7 @@ if(WIN32)
     target_link_libraries(enet PUBLIC ws2_32 winmm)
 endif()
 
-find_package(Threads REQUIRED)   # o cliente roda numa thread; no Linux o g++ precisa do -pthread
+find_package(Threads REQUIRED)   # the client runs on a thread; on Linux g++ needs -pthread
 
 add_library(wotm_net STATIC wotm_net_client.cpp wotm_net_server.cpp)
 target_include_directories(wotm_net PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}" "${enet_SOURCE_DIR}/include")
