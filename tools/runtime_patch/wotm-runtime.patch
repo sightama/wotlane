@@ -586,7 +586,7 @@ index 4b9242c..9573c70 100644
 +
  #endif // PS2_RUNTIME_H
 diff --git a/ps2xRuntime/include/ps2_runtime_macros.h b/ps2xRuntime/include/ps2_runtime_macros.h
-index 0f19c9f..e2b578c 100644
+index 0f19c9f..02bbec7 100644
 --- a/ps2xRuntime/include/ps2_runtime_macros.h
 +++ b/ps2xRuntime/include/ps2_runtime_macros.h
 @@ -14,7 +14,17 @@
@@ -617,7 +617,50 @@ index 0f19c9f..e2b578c 100644
  {
      if ((index & 1) == 0)
      {
-@@ -152,165 +162,79 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
+@@ -141,176 +151,117 @@ static inline uint32_t ps2_plzcw32(uint32_t x)
+ #define PS2_PNOR(a, b) _mm_xor_si128(_mm_or_si128((__m128i)(a), (__m128i)(b)), _mm_set1_epi32(0xFFFFFFFF))
+ 
+ // PS2 VU (Vector Unit) operations
+-#define PS2_VADD(a, b) _mm_add_ps((__m128)(a), (__m128)(b))
+-#define PS2_VSUB(a, b) _mm_sub_ps((__m128)(a), (__m128)(b))
+-#define PS2_VMUL(a, b) _mm_mul_ps((__m128)(a), (__m128)(b))
+-#define PS2_VDIV(a, b) _mm_div_ps((__m128)(a), (__m128)(b))
+-#define PS2_VMULQ(a, q) _mm_mul_ps((__m128)(a), _mm_set1_ps(q))
++// WotM: the VU follows the same float rules as the FPU (ps2_fpu_fix, below): no infinity, NaN or denormals. Each lane of every
++// operand and result goes through ps2_vu_fix: exponent 255 -> +-Fmax, exponent 0 -> +-0. Done with integer ops, so the bits are the
++// same on x86 and ARM; with plain IEEE math an overflow became inf, inf - inf a NaN, and x86 (0xFFC00000) and ARM (0x7FC00000)
++// encode that NaN differently, which split the game state of a Windows x Mac network match.
++static PS2_FORCEINLINE __m128 ps2_vu_fix(__m128 v)
++{
++    const __m128i b = _mm_castps_si128(v);
++    const __m128i sign = _mm_and_si128(b, _mm_set1_epi32(int32_t(0x80000000u)));
++    const __m128i exp = _mm_and_si128(b, _mm_set1_epi32(0x7F800000));
++    const __m128i isMax = _mm_cmpeq_epi32(exp, _mm_set1_epi32(0x7F800000));
++    const __m128i isZero = _mm_cmpeq_epi32(exp, _mm_setzero_si128());
++    const __m128i fmax = _mm_or_si128(sign, _mm_set1_epi32(0x7F7FFFFF));
++    __m128i r = _mm_or_si128(_mm_andnot_si128(isMax, b), _mm_and_si128(isMax, fmax));
++    r = _mm_or_si128(_mm_andnot_si128(isZero, r), _mm_and_si128(isZero, sign));
++    return _mm_castsi128_ps(r);
++}
++// x / 0 (0 / 0 included) is +-Fmax with the xor of the signs, like ps2_fpu_div
++static PS2_FORCEINLINE __m128 ps2_vu_div(__m128 a, __m128 b)
++{
++    a = ps2_vu_fix(a);
++    b = ps2_vu_fix(b);
++    const __m128i ai = _mm_castps_si128(a), bi = _mm_castps_si128(b);
++    const __m128i byZero = _mm_cmpeq_epi32(_mm_and_si128(bi, _mm_set1_epi32(0x7FFFFFFF)), _mm_setzero_si128());
++    const __m128i fmax = _mm_or_si128(_mm_and_si128(_mm_xor_si128(ai, bi), _mm_set1_epi32(int32_t(0x80000000u))), _mm_set1_epi32(0x7F7FFFFF));
++    const __m128i q = _mm_castps_si128(ps2_vu_fix(_mm_div_ps(a, b)));
++    return _mm_castsi128_ps(_mm_or_si128(_mm_andnot_si128(byZero, q), _mm_and_si128(byZero, fmax)));
++}
++#define PS2_VADD(a, b) ps2_vu_fix(_mm_add_ps(ps2_vu_fix((__m128)(a)), ps2_vu_fix((__m128)(b))))
++#define PS2_VSUB(a, b) ps2_vu_fix(_mm_sub_ps(ps2_vu_fix((__m128)(a)), ps2_vu_fix((__m128)(b))))
++#define PS2_VMUL(a, b) ps2_vu_fix(_mm_mul_ps(ps2_vu_fix((__m128)(a)), ps2_vu_fix((__m128)(b))))
++#define PS2_VDIV(a, b) ps2_vu_div((__m128)(a), (__m128)(b))
++#define PS2_VMULQ(a, q) ps2_vu_fix(_mm_mul_ps(ps2_vu_fix((__m128)(a)), ps2_vu_fix(_mm_set1_ps(q))))
+ #define PS2_VBLEND(a, b, mask) PS2_BLENDV_PS((__m128)(a), (__m128)(b), (__m128)(mask))
+ 
+ // Memory access helpers - Hybrid Fast/Slow Path
  // Fast path: Direct RDRAM access (masked).
  // Slow path: Full runtime->Load/Store
  
@@ -628,15 +671,15 @@ index 0f19c9f..e2b578c 100644
  }
  
 -static inline uint8_t Ps2FastRead8(const uint8_t *rdram, uint32_t addr)
-+// Rare path (the access runs past the end of RAM and wraps around): out of line, so the fast path fits in full at every use.
-+template <typename T>
-+static PS2_NOINLINE T Ps2FastReadWrapped(const uint8_t *rdram, uint32_t offset)
- {
+-{
 -    return rdram[addr & PS2_RAM_MASK];
 -}
 -
 -static inline uint16_t Ps2FastRead16(const uint8_t *rdram, uint32_t addr)
--{
++// Rare path (the access runs past the end of RAM and wraps around): out of line, so the fast path fits in full at every use.
++template <typename T>
++static PS2_NOINLINE T Ps2FastReadWrapped(const uint8_t *rdram, uint32_t offset)
+ {
 -    const uint32_t offset = addr & PS2_RAM_MASK;
 -    if (!Ps2FastRangeIsContiguous(offset, sizeof(uint16_t)))
 +    alignas(16) uint8_t wrapped[sizeof(T)];
@@ -820,7 +863,7 @@ index 0f19c9f..e2b578c 100644
  #define FAST_READ8(addr) Ps2FastRead8(rdram, (uint32_t)(addr))
  #define FAST_READ16(addr) Ps2FastRead16(rdram, (uint32_t)(addr))
  #define FAST_READ32(addr) Ps2FastRead32(rdram, (uint32_t)(addr))
-@@ -323,32 +247,62 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+@@ -323,32 +274,62 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
  #define FAST_WRITE64(addr, val) Ps2FastWrite64(rdram, (uint32_t)(addr), (uint64_t)(val))
  #define FAST_WRITE128(addr, val) Ps2FastWrite128(rdram, (uint32_t)(addr), (val))
  
@@ -883,7 +926,7 @@ index 0f19c9f..e2b578c 100644
      return PS2Runtime::isSpecialAddress(_addr)                \
          ? runtime->Load128(rdram, ctx, _addr)                 \
          : FAST_READ128(_addr); }())
-@@ -356,8 +310,12 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+@@ -356,8 +337,12 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
  #define WRITE8(addr, val)                                                            \
      do                                                                               \
      {                                                                                \
@@ -898,7 +941,7 @@ index 0f19c9f..e2b578c 100644
              runtime->Store8(rdram, ctx, _addr, (val));                               \
          else                                                                         \
          {                                                                            \
-@@ -370,7 +328,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+@@ -370,7 +355,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
      do                                                                                 \
      {                                                                                  \
          uint32_t _addr = (addr);                                                       \
@@ -911,7 +954,7 @@ index 0f19c9f..e2b578c 100644
              runtime->Store16(rdram, ctx, _addr, (val));                                \
          else                                                                           \
          {                                                                              \
-@@ -383,7 +345,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+@@ -383,7 +372,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
      do                                                                                 \
      {                                                                                  \
          uint32_t _addr = (addr);                                                       \
@@ -924,7 +967,7 @@ index 0f19c9f..e2b578c 100644
              runtime->Store32(rdram, ctx, _addr, (val));                                \
          else                                                                           \
          {                                                                              \
-@@ -396,7 +362,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+@@ -396,7 +389,11 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
      do                                                                                 \
      {                                                                                  \
          uint32_t _addr = (addr);                                                       \
@@ -937,7 +980,7 @@ index 0f19c9f..e2b578c 100644
              runtime->Store64(rdram, ctx, _addr, (val));                                \
          else                                                                           \
          {                                                                              \
-@@ -410,7 +380,9 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
+@@ -410,7 +407,9 @@ static inline void Ps2FastWrite128(uint8_t *rdram, uint32_t addr, __m128i value)
      {                                                                                \
          uint32_t _addr = (addr);                                                     \
          __m128i _value = (val);                                                      \
@@ -948,7 +991,7 @@ index 0f19c9f..e2b578c 100644
              runtime->Store128(rdram, ctx, _addr, _value);                            \
          else                                                                         \
          {                                                                            \
-@@ -604,11 +576,68 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
+@@ -604,11 +603,68 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
  #define PS2_PMFHL_SH(hi, lo) _mm_shufflehi_epi16(_mm_shufflelo_epi16(_mm_packs_epi32(ps2_u64_to_epi64_pair(lo), ps2_u64_to_epi64_pair(hi)), _MM_SHUFFLE(3, 1, 2, 0)), _MM_SHUFFLE(3, 1, 2, 0))
  
  // FPU (COP1) operations
@@ -1021,7 +1064,7 @@ index 0f19c9f..e2b578c 100644
  #define FPU_SQRT_S(a) sqrtf((float)(a))
  #define FPU_ABS_S(a) fabsf((float)(a))
  #define FPU_MOV_S(a) ((float)(a))
-@@ -618,12 +647,12 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
+@@ -618,12 +674,12 @@ inline __m128i ps2_u64_to_epi64_pair(uint64_t value)
  #define FPU_CEIL_L_S(a) ((int64_t)ceilf((float)(a)))
  #define FPU_FLOOR_L_S(a) ((int64_t)floorf((float)(a)))
  #define FPU_ROUND_W_S(a) ((int32_t)nearbyintf((float)(a)))
@@ -1036,7 +1079,7 @@ index 0f19c9f..e2b578c 100644
  #define FPU_CVT_L_S(a) ((int64_t)(float)(a))
  #define FPU_C_F_S(a, b) (0)
  #define FPU_C_UN_S(a, b) (isnan((float)(a)) || isnan((float)(b)))
-@@ -739,7 +768,7 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
+@@ -739,7 +795,7 @@ inline __m128i ps2_qfsrv(__m128i rs, __m128i rt, uint32_t sa)
  #define GPR_S64(ctx_ptr, reg_idx) ((reg_idx == 0) ? 0LL : PS2_EXTRACT_EPI64_0(ctx_ptr->r[reg_idx]))
  #define GPR_VEC(ctx_ptr, reg_idx) ((reg_idx == 0) ? _mm_setzero_si128() : ctx_ptr->r[reg_idx])
  
@@ -6266,4 +6309,65 @@ index 07f9b7a..5aa1cb2 100644
 +                t.Equals(asked[i], i, "controller index should be port + 2 * slot");
 +        });
      });
+ }
+diff --git a/ps2xTest/src/ps2_vu_tests.cpp b/ps2xTest/src/ps2_vu_tests.cpp
+index b96befe..761fc35 100644
+--- a/ps2xTest/src/ps2_vu_tests.cpp
++++ b/ps2xTest/src/ps2_vu_tests.cpp
+@@ -1042,4 +1042,56 @@ void register_ps2_vu_tests()
+             t.IsTrue(nearlyEqual(out[0], 0.0f), "DropShadowMatrix point mode should subtract d before scaling by k");
+         });
+     });
++
++    // WotM: the VU0 macro ops (PS2_VADD/VSUB/VMUL/VDIV/VMULQ) follow the VU's float rules, like the FPU ops follow ps2_fpu_fix:
++    // no infinity, NaN or denormals, as inputs or results. Plain IEEE math made x86 and ARM disagree (an overflow became inf, then
++    // inf - inf a NaN, which x86 encodes as 0xFFC00000 and ARM as 0x7FC00000), so the checks are on exact bits.
++    MiniTest::Case("WotmVu0MacroFloatRules", [](TestCase &tc)
++    {
++        auto vec = [](uint32_t x, uint32_t y, uint32_t z, uint32_t w)
++        { return _mm_castsi128_ps(_mm_set_epi32(int32_t(w), int32_t(z), int32_t(y), int32_t(x))); };
++        auto bits = [](__m128 v, uint32_t (&out)[4]) { std::memcpy(out, &v, sizeof out); };
++        constexpr uint32_t kFmax = 0x7F7FFFFFu, kInf = 0x7F800000u, kNan = 0x7FC00000u, kOne = 0x3F800000u, kTwo = 0x40000000u;
++
++        tc.Run("overflow gives Fmax with the sign", [&](TestCase &t)
++        {
++            uint32_t r[4];
++            bits(PS2_VADD(vec(kFmax, kFmax | 0x80000000u, kFmax, kOne), vec(kFmax, kFmax | 0x80000000u, kOne, kOne)), r);
++            t.IsTrue(r[0] == kFmax && r[1] == (kFmax | 0x80000000u) && r[2] == kFmax && r[3] == kTwo,
++                     "Fmax + Fmax should stay Fmax (sign kept), small sums unchanged");
++            bits(PS2_VMUL(vec(kFmax, kFmax, kFmax | 0x80000000u, kTwo), vec(kTwo, kFmax, kTwo, kTwo)), r);
++            t.IsTrue(r[0] == kFmax && r[1] == kFmax && r[2] == (kFmax | 0x80000000u) && r[3] == 0x40800000u,
++                     "Fmax * 2 and Fmax * Fmax should be +-Fmax, 2 * 2 = 4");
++        });
++
++        tc.Run("inf and NaN inputs act as Fmax", [&](TestCase &t)
++        {
++            uint32_t r[4];
++            bits(PS2_VSUB(vec(kInf, kNan, kInf, kOne), vec(kInf, kOne, 0u, kOne)), r);
++            t.IsTrue(r[0] == 0u && r[1] == kFmax && r[2] == kFmax && r[3] == 0u,
++                     "exponent-255 inputs are Fmax: inf - inf = 0, NaN - 1 = Fmax, inf - 0 = Fmax");
++            bits(PS2_VMUL(vec(0u, kInf, kNan, kOne), vec(kInf, 0u, 0u, kOne)), r);
++            t.IsTrue(r[0] == 0u && r[1] == 0u && r[2] == 0u && r[3] == kOne, "0 * inf and NaN * 0 should be 0, never NaN");
++            bits(PS2_VMULQ(vec(kInf, kOne, kTwo, 0u), 0.5f), r);
++            t.IsTrue(r[0] == 0x7EFFFFFFu && r[1] == 0x3F000000u && r[2] == kOne && r[3] == 0u, "VMULQ follows the same rules");
++        });
++
++        tc.Run("denormals are zero with the sign", [&](TestCase &t)
++        {
++            uint32_t r[4];
++            bits(PS2_VADD(vec(0x00000001u, 0x80000001u, 0x00800000u, kOne), vec(0u, 0x80000000u, 0u, 0x00000001u)), r);
++            t.IsTrue(r[0] == 0u && r[1] == 0x80000000u && r[2] == 0x00800000u && r[3] == kOne,
++                     "denormal inputs count as +-0; the smallest normal stays");
++            bits(PS2_VMUL(vec(0x00800000u, 0x80800000u, kOne, kOne), vec(0x3F000000u, 0x3F000000u, kOne, kOne)), r);
++            t.IsTrue(r[0] == 0u && r[1] == 0x80000000u && r[2] == kOne, "a denormal result becomes +-0");
++        });
++
++        tc.Run("division by zero gives Fmax with the xor of the signs", [&](TestCase &t)
++        {
++            uint32_t r[4];
++            bits(PS2_VDIV(vec(kOne, kOne | 0x80000000u, 0u, kTwo), vec(0u, 0u, 0u, kTwo)), r);
++            t.IsTrue(r[0] == kFmax && r[1] == (kFmax | 0x80000000u) && r[2] == kFmax && r[3] == kOne,
++                     "x / 0 = +-Fmax (0 / 0 too, like ps2_fpu_div), 2 / 2 = 1");
++        });
++    });
  }
