@@ -10,6 +10,7 @@
 //     (tools/statediff.py compares two runs and reports the first frame and the blocks that differ).
 //   WOTM_STATEDUMP=<index>: writes the game's RAM (32 MB) at that frame to state_<index>.bin in the current folder (the discroot).
 //   WOTM_CALLTRACE=<file>[,<index>]: register hashes at every guest call while frame <index> is computed (see callTraced).
+//   WOTM_PADLOG=<frames>: logs every scePad* call the game makes in its first <frames> frames (see padLogged).
 //   WOTM_NET=<host>:<port>, WOTM_NETTOKEN=<token>, WOTM_NETNAME=<name>: network match through wotm_server (see "Network match" below).
 namespace wotm_sync
 {
@@ -254,6 +255,38 @@ namespace wotm_sync
         std::fprintf(stderr, "[sync] call trace of frame %u: %ld calls, %zu thread(s)\n", index, bytes / static_cast<long>(sizeof(CallRecord)),
                      g_traceThreads.size());
     }
+    // WOTM_PADLOG=<frames>: logs the game's scePadGetState/InfoMode/SetMainMode/Read calls (port, slot, a2, a3, return value and the
+    // first 8 bytes scePadRead wrote) during frames 0..<frames>-1 after the level load. The pad stubs answer from this machine (ports
+    // open, pad mode, local devices): two machines in one match must log the same lines.
+    uint32_t g_padLogFrames = 0;
+    constexpr uint32_t kPadLogFns[] = {wotm::fn::scePadGetState, wotm::fn::scePadInfoMode, wotm::fn::scePadSetMainMode, wotm::fn::scePadRead};
+    constexpr const char *kPadLogNames[] = {"scePadGetState", "scePadInfoMode", "scePadSetMainMode", "scePadRead"};
+    PS2Runtime::RecompiledFunction g_padLogOrig[4] = {};
+
+    template <int K>
+    void padLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), a2 = GPR_U32(ctx, 6), a3 = GPR_U32(ctx, 7);
+        g_padLogOrig[K](rdram, ctx, runtime);
+        if (!g_levelLoaded || g_index >= g_padLogFrames)
+            return;
+        std::fprintf(stderr, "[padlog] frame %u %s(port %u, slot %u, %08x, %08x) -> %d", g_index, kPadLogNames[K], port, slot, a2, a3,
+                     GPR_S32(ctx, 2));
+        if (K == 3)
+            std::fprintf(stderr, " data %08x %08x", Ps2FastRead32(rdram, a2), Ps2FastRead32(rdram, a2 + 4));
+        std::fputc('\n', stderr);
+    }
+
+    template <int... K>
+    void padLogInstall(PS2Runtime &runtime, std::integer_sequence<int, K...>)
+    {
+        const PS2Runtime::RecompiledFunction hooks[] = {&padLogged<K>...};
+        for (int k = 0; k < 4; ++k)
+            if ((g_padLogOrig[k] = runtime.lookupFunction(kPadLogFns[k])))
+                runtime.registerFunction(kPadLogFns[k], hooks[k]);
+        std::fprintf(stderr, "[sync] pad log of frames 0..%u (WOTM_PADLOG)\n", g_padLogFrames - 1u);
+    }
+
     // WOTM_STATERING=<n>: copy of the RAM of the last n frames, written (state_<index>.bin) when the network match stops; a desync is
     // only seen at the next hash (up to 32 frames later), so the copy of the first differing frame is still here
     // WOTM_STATERING=<n>:<start>+<size>,...: only those ranges (the rest of the file is zeros); copying 32 MB per frame changes the
@@ -544,6 +577,8 @@ namespace wotm_sync
             ringInit(e);
         if (const char *e = std::getenv("WOTM_CALLTRACE"); e && *e)
             callTraceInit(e);
+        if (const char *e = std::getenv("WOTM_PADLOG"); e && (g_padLogFrames = static_cast<uint32_t>(std::atol(e))) > 0)
+            padLogInstall(runtime, std::make_integer_sequence<int, 4>{});
         if (g_fixedStep || g_hashFile || g_dumpAt >= 0)
             std::fprintf(stderr, "[sync] fixed step %d field(s), hash %s, dump at frame %ld\n", g_fixedStep, g_hashFile ? "on" : "off", g_dumpAt);
     }
