@@ -41,7 +41,7 @@ foreach ($r in $runs) {
     $hash = Join-Path $runtime "det_$($r.Name).hash"
     if (Test-Path $hash) { Remove-Item $hash -Force }
     $env:PS2X_PAD = if ($r.Pad) { $r.Pad } else { $null }
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'live_check.ps1') -Env "$base;$($r.Extra);WOTM_STATEHASH=$hash" -Secs $Secs -Expect '\[sync\] semente 1234' | Out-Null
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'live_check.ps1') -Env "$base;$($r.Extra);WOTM_STATEHASH=$hash" -Secs $Secs -Expect '\[sync\] seed 1234' | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "execucao $($r.Name) falhou (veja $runtime\live_check.log)" -ForegroundColor Red; exit 1 }
     Copy-Item (Join-Path $runtime 'live_check.log') (Join-Path $runtime "det_$($r.Name).log") -Force
 }
