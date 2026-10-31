@@ -10,6 +10,7 @@
 //     (tools/statediff.py compares two runs and reports the first frame and the blocks that differ).
 //   WOTM_STATEDUMP=<index>: writes the game's RAM (32 MB) at that frame to state_<index>.bin in the current folder (the discroot).
 //   WOTM_CALLTRACE=<file>[,<index>]: register hashes at every guest call while frame <index> is computed (see callTraced).
+//   WOTM_CALLDUMP=<call>[,<call>...]: with WOTM_CALLTRACE, the raw VU0 and FPU registers at those calls of the trace (see dumpRegisters).
 //   WOTM_PADLOG=<frames>: logs every scePad* call the game makes in its first <frames> frames (see padLogged).
 //   WOTM_NET=<host>:<port>, WOTM_NETTOKEN=<token>, WOTM_NETNAME=<name>: network match through wotm_server (see "Network match" below).
 namespace wotm_sync
@@ -204,6 +205,35 @@ namespace wotm_sync
     FILE *g_traceFile = nullptr;
     uint32_t g_traceAt = 1;
     std::vector<const R5900Context *> g_traceThreads;
+    // WOTM_CALLDUMP=<call>[,<call>...]: at those records of the trace, the raw VU0 and FPU registers in hex on stderr, to see which
+    // register a differing vu0/fpr hash comes from (and whether it holds a NaN/infinity, which x86 and ARM encode differently)
+    std::vector<uint32_t> g_dumpCalls;
+    uint32_t g_traceCalls = 0;
+
+    void dumpRegisters(const R5900Context *ctx, uint32_t call)
+    {
+        auto lanes = [](const __m128 &v, uint32_t (&w)[4]) { std::memcpy(w, &v, sizeof w); };
+        uint32_t w[4];
+        for (int k = 0; k < 32; ++k)
+        {
+            lanes(ctx->vu0_vf[k], w);
+            std::fprintf(stderr, "[sync] call %u vf%02d %08x %08x %08x %08x\n", call, k, w[0], w[1], w[2], w[3]);
+        }
+        lanes(ctx->vu0_acc, w);
+        std::fprintf(stderr, "[sync] call %u acc  %08x %08x %08x %08x\n", call, w[0], w[1], w[2], w[3]);
+        uint32_t q, p, i;
+        std::memcpy(&q, &ctx->vu0_q, 4);
+        std::memcpy(&p, &ctx->vu0_p, 4);
+        std::memcpy(&i, &ctx->vu0_i, 4);
+        std::fprintf(stderr, "[sync] call %u q %08x p %08x i %08x\n", call, q, p, i);
+        for (int k = 0; k < 32; k += 8)
+        {
+            uint32_t f[8];
+            std::memcpy(f, &ctx->f[k], sizeof f);
+            std::fprintf(stderr, "[sync] call %u f%02d-f%02d %08x %08x %08x %08x %08x %08x %08x %08x\n", call, k, k + 7, f[0], f[1], f[2],
+                         f[3], f[4], f[5], f[6], f[7]);
+        }
+    }
 
     void callTraced(const R5900Context *ctx, uint32_t target)
     {
@@ -227,6 +257,9 @@ namespace wotm_sync
                            hashBytes(reinterpret_cast<const uint8_t *>(ctx->f), sizeof ctx->f),
                            hashBytes(reinterpret_cast<const uint8_t *>(&vu), sizeof vu)};
         std::fwrite(&r, sizeof r, 1, g_traceFile);
+        if (std::find(g_dumpCalls.begin(), g_dumpCalls.end(), g_traceCalls) != g_dumpCalls.end())
+            dumpRegisters(ctx, g_traceCalls);
+        ++g_traceCalls;
     }
 
     void callTraceInit(const char *spec)
@@ -241,6 +274,13 @@ namespace wotm_sync
             return (void)std::fprintf(stderr, "[sync] WOTM_CALLTRACE: cannot write %s\n", path.c_str());
         g_wotmCallTrace = &callTraced;
         std::fprintf(stderr, "[sync] call trace of frame %u into %s\n", g_traceAt, path.c_str());
+        if (const char *e = std::getenv("WOTM_CALLDUMP"); e && *e)
+            for (const char *s = e; *s;)
+            {
+                char *end = nullptr;
+                g_dumpCalls.push_back(static_cast<uint32_t>(std::strtoul(s, &end, 10)));
+                s = *end == ',' ? end + 1 : end + std::strlen(end);
+            }
     }
 
     // frame boundary after frame `index`: the traced frame is complete
