@@ -165,7 +165,7 @@ namespace
             r.states.push_back(i < 10 ? pressed(0x4000) : PadState{});
         m.runs.push_back(r);
         const std::vector<uint8_t> bytes = p::encode(m);
-        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 6u);   // headers, 1 byte per state, 6 per new state (only 2 change)
+        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 10u);   // headers, 1 byte per state, 10 per new state (only 2 change)
         p::Inputs back;
         CHECK(p::decode(bytes, back));
         CHECK(back.ackOwn == 41u && back.runs.size() == 1u);
@@ -182,6 +182,27 @@ namespace
         p::Input back;
         CHECK(p::decode(p::encode(m), back));
         CHECK(back.acks == m.acks && back.own.player == 1 && back.own.first == 9u && back.own.states == m.own.states);
+    }
+
+    // the modern camera's mouse motion is part of the player's input (every PC turns that player's camera by the same amount)
+    TEST(proto_mouse_motion_travels_with_the_input)
+    {
+        PadState moved;
+        moved.mouseX = -300;
+        moved.mouseY = 7;
+        CHECK(moved != PadState{});
+        PadState extreme = moved;
+        extreme.mouseX = 32767;
+        extreme.mouseY = -32768;
+        p::Input m;
+        m.own.player = 0;
+        m.own.first = 3;
+        m.own.states = {moved, moved, PadState{}, extreme};
+        p::Input back;
+        CHECK(p::decode(p::encode(m), back));
+        CHECK(back.own.states == m.own.states);
+        CHECK(back.own.states[0].mouseX == -300 && back.own.states[0].mouseY == 7);
+        CHECK(back.own.states[3].mouseX == 32767 && back.own.states[3].mouseY == -32768);
     }
 
     TEST(proto_control_messages_roundtrip)
@@ -545,7 +566,7 @@ namespace
         RunningServer rs(cfg);
         LineSocket old;
         CHECK(old.connect("127.0.0.1", cfg.port, 2000));
-        old.sendLine("HELLO 1 b1");
+        old.sendLine("HELLO 2 b1");   // protocol 2: pad states without mouse motion
         CHECK(readUntil(old, "ERROR").find("protocol") != std::string::npos);
 
         LineSocket a, b, c, d;

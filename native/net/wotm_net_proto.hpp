@@ -13,7 +13,7 @@
 
 namespace wotm_net::proto
 {
-    constexpr uint16_t kProtocol = 2;
+    constexpr uint16_t kProtocol = 3;   // 3: pad states carry mouse motion
     constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
@@ -106,8 +106,12 @@ namespace wotm_net::proto
             u8(static_cast<uint8_t>(n));
             b_.insert(b_.end(), s.begin(), s.begin() + static_cast<std::ptrdiff_t>(n));
         }
-        void pad(const PadState &s) { u16(s.buttons), u8(s.rx), u8(s.ry), u8(s.lx), u8(s.ly); }
-        // a state equal to the previous one costs 1 byte (0); a new one, 1 + 6 bytes
+        void pad(const PadState &s)
+        {
+            u16(s.buttons), u8(s.rx), u8(s.ry), u8(s.lx), u8(s.ly);
+            u16(static_cast<uint16_t>(s.mouseX)), u16(static_cast<uint16_t>(s.mouseY));
+        }
+        // a state equal to the previous one costs 1 byte (0); a new one, 1 + 10 bytes
         void run(const InputRun &r)
         {
             const size_t n = std::min(r.states.size(), kMaxRun);
@@ -176,6 +180,7 @@ namespace wotm_net::proto
             PadState s;
             s.buttons = u16();
             s.rx = u8(), s.ry = u8(), s.lx = u8(), s.ly = u8();
+            s.mouseX = static_cast<int16_t>(u16()), s.mouseY = static_cast<int16_t>(u16());
             return s;
         }
         InputRun run()

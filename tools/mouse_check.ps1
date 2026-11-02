@@ -1,9 +1,10 @@
-# ABOUTME: WOTM_NOINPUT mouse test: records a fight and replays it, both with WOTM_NOINPUT=1 while real mouse motion is injected
-# ABOUTME: (Win32 SendInput); the mouse must not reach the game (no cursor capture) and the per-frame state must be identical.
+# ABOUTME: Mouse camera determinism test: records a fight while real mouse motion is injected (Win32 SendInput), then replays the
+# ABOUTME: recording with the mouse moving again; the per-frame state must be identical (the mouse is part of the recorded input).
 #
 # Usage: powershell -File tools\mouse_check.ps1 [-Match 3,1,1] [-Secs 50]
-#   Players on the pad (PS2X_PAD script, as determinism_check.ps1 -Replay), so the modern (orbit) camera is on and would take the
-#   mouse. Run A records (WOTM_INPUTREC), run B replays it (WOTM_INPUTPLAY). Moves the real cursor while the game window has focus.
+#   Run A: players on the pad (PS2X_PAD script, as determinism_check.ps1 -Replay), WOTM_NOINPUT off so the mouse reaches the game, and
+#     WOTM_INPUTREC. Run B: WOTM_NOINPUT=1 and WOTM_INPUTPLAY of A's recording, with the mouse moving again: live motion must not reach
+#     the game, and the recorded motion must turn the camera exactly as in A. Moves the real cursor while the game window has focus.
 param(
     [string]$Match = '3,1,1',
     [int]$Secs = 50
@@ -49,10 +50,10 @@ public static class MouseInject {
 
 $inputs = Join-Path $runtime 'mouse_inputs.bin'
 $script = '18:6:up;20:1:square;22:1:cross;24:3:left;25:1:triangle;27:4:up@2;28:1:square@2;30:2:right@2;31:1:circle@2;33:5:down;34:1:square'
-$base = "WOTM_MATCH=$Match;WOTM_PLAYERS=2;WOTM_NOINPUT=1;WOTM_FIXEDSTEP=1;WOTM_SEED=1234;WOTM_AIVSAI=;WOTM_LOGICDELAY=;WOTM_INPUTDELAY=;WOTM_MOUSECAM="
+$base = "WOTM_MATCH=$Match;WOTM_PLAYERS=2;WOTM_FIXEDSTEP=1;WOTM_SEED=1234;WOTM_AIVSAI=;WOTM_LOGICDELAY=;WOTM_INPUTDELAY=;WOTM_MOUSECAM="
 $runs = @(
-    @{ Name = 'A'; Pad = $script; Extra = "WOTM_INPUTREC=$inputs;WOTM_INPUTPLAY=" },
-    @{ Name = 'B'; Pad = ''; Extra = "WOTM_INPUTREC=;WOTM_INPUTPLAY=$inputs" }
+    @{ Name = 'A'; Pad = $script; Extra = "WOTM_NOINPUT=;WOTM_INPUTREC=$inputs;WOTM_INPUTPLAY="; Expect = '\[mouse\] cursor captured'; Reject = '' },
+    @{ Name = 'B'; Pad = ''; Extra = "WOTM_NOINPUT=1;WOTM_INPUTREC=;WOTM_INPUTPLAY=$inputs"; Expect = ''; Reject = '\[mouse\] cursor captured' }
 )
 foreach ($r in $runs) {
     $hash = Join-Path $runtime "mouse_$($r.Name).hash"
@@ -60,7 +61,7 @@ foreach ($r in $runs) {
     $env:PS2X_PAD = if ($r.Pad) { $r.Pad } else { $null }
     $job = Start-Job -ScriptBlock $inject -ArgumentList $Secs
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'live_check.ps1') -Env "$base;$($r.Extra);WOTM_STATEHASH=$hash" `
-        -Secs $Secs -Expect '\[sync\] seed 1234' -Reject '\[CRASH\]|||\[watchdog\] FROZE|||\[mouse\] cursor captured'
+        -Secs $Secs -Expect ('\[sync\] seed 1234|||' + $r.Expect) -Reject ('\[CRASH\]|||\[watchdog\] FROZE|||' + $r.Reject)
     $ok = $LASTEXITCODE -eq 0
     $sent = Receive-Job $job -Wait
     Remove-Job $job
