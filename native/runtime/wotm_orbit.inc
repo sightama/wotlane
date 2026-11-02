@@ -475,22 +475,30 @@ namespace
                 sy *= wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens;
                 s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 degrees/s (horizontal is ~170)
 
-                // mouse (stage 7, wotm_mouse.hpp): only in the keyboard player's orbit. Direct offset (angle per pixel, ~1000
-                // pixels per 140 degrees at sensitivity 5), added after the stick; up looks up, like the stick.
+                // mouse (stage 7, wotm_mouse.hpp): the motion of the player's mouse. With the fixed step it's part of that player's
+                // input on this frame (recorded, replayed and sent over the network: wotm_sync.inc), so every PC turns the camera alike;
+                // without it, only the keyboard player's orbit takes the live motion. Direct offset (angle per pixel, ~1000 pixels per
+                // 140 degrees at sensitivity 5), added after the stick; up looks up, like the stick.
                 float mx = 0.f, my = 0.f;
-                if (slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
+                const bool kbSlot = slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed);
+                if (kbSlot && FAST_READ32(wotm::sym::isPaused) == 0u)
+                    wotm::mouse::want();
+                if (wotm_sync::g_fixedStep)
                 {
-                    if (FAST_READ32(wotm::sym::isPaused) == 0u)
-                        wotm::mouse::want();
+                    const wotm_net::PadState p = wotm_sync::inputFor(slot, wotm_sync::g_index);
+                    mx = p.mouseX;
+                    my = p.mouseY;
+                }
+                else if (kbSlot)
                     wotm::mouse::take(mx, my);
+                if (kbSlot)
                     testMouse(frames, mx, my);
-                    mx *= 0.0025f * sens;
-                    my *= 0.0025f * (wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens);
-                    if (mx != 0.f || my != 0.f)
-                    {
-                        s.still = 0;
-                        s.elev = std::clamp(s.elev + my, -0.6f, 0.9f);
-                    }
+                mx *= 0.0025f * sens;
+                my *= 0.0025f * (wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens);
+                if (mx != 0.f || my != 0.f)
+                {
+                    s.still = 0;
+                    s.elev = std::clamp(s.elev + my, -0.6f, 0.9f);
                 }
                 const bool moved = stickMoved || mx != 0.f || my != 0.f;
 

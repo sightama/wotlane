@@ -53,8 +53,8 @@ namespace wotm_sync
     }
 
     // Per-frame input (the base of the netcode): scePadRead(port, slot, data) returns 32 bytes per controller (controller = port + 2 *
-    // slot, players 1..8) and the game reads each controller twice per frame. With the fixed step, each controller's state (buttons and
-    // sticks, wotm_net::PadState) comes from a per-frame timeline (native/net/wotm_lockstep.hpp): local devices are sampled at the frame
+    // slot, players 1..8) and the game reads each controller twice per frame. With the fixed step, each controller's state (buttons,
+    // sticks and, on the keyboard's player, the mouse motion for the modern camera: wotm_net::PadState) comes from a per-frame timeline (native/net/wotm_lockstep.hpp): local devices are sampled at the frame
     // boundary and apply WOTM_INPUTDELAY frames later (the lockstep delay; default 0), and both reads of a frame see the same state.
     // The runtime formats it like a real controller (setPadOverrideState: mode and pressure come from the port's state).
     //   WOTM_INPUTREC=<file>: writes {frame, controller, state} of the input applied in every frame since the level load.
@@ -91,6 +91,22 @@ namespace wotm_sync
         return g_inputs.get(controller, frame);
     }
 
+    // Mouse motion of the keyboard's player since the last sample (wotm_mouse.hpp), in whole pixels; the fraction carries over to the
+    // next frame (macOS reports fractional motion). Only the whole pixels travel, so every PC turns the camera by the same amount.
+    void sampleMouse(wotm_net::PadState &s)
+    {
+        static float restX = 0.f, restY = 0.f;
+        float dx = 0.f, dy = 0.f;
+        wotm::mouse::take(dx, dy);
+        dx += restX;
+        dy += restY;
+        const float x = std::clamp(std::trunc(dx), -32768.f, 32767.f), y = std::clamp(std::trunc(dy), -32768.f, 32767.f);
+        restX = dx - x;
+        restY = dy - y;
+        s.mouseX = static_cast<int16_t>(x);
+        s.mouseY = static_cast<int16_t>(y);
+    }
+
     wotm_net::PadState sampleLocal(int controller)
     {
         uint8_t d[32];
@@ -110,12 +126,16 @@ namespace wotm_sync
     void sampleInputs(uint32_t index)
     {
         if (!g_inputPlay.empty())
+        {
+            wotm::mouse::clear();   // replay: the recorded motion turns the camera, the live one is dropped
             return;
+        }
         if (g_net)
         {
             if (!g_levelLoaded || g_net->status() != wotm_net::MatchClient::Status::Running)
                 return;
-            const wotm_net::PadState s = sampleLocal(0);
+            wotm_net::PadState s = sampleLocal(0);
+            sampleMouse(s);   // the mouse is this PC's player's, like game pad 0
             g_net->pushLocal(index + g_inputDelay, s);
             if (!g_loggedLocal && s != wotm_net::PadState{})
             {
@@ -124,9 +144,12 @@ namespace wotm_sync
             }
             return;
         }
+        const int kbPlayer = wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed);
         for (int c = 0; c < kControllers; ++c)
         {
-            const wotm_net::PadState s = sampleLocal(c);
+            wotm_net::PadState s = sampleLocal(c);
+            if (c == kbPlayer)
+                sampleMouse(s);
             const uint32_t at = g_inputs.scheduleLocal(c, index, s);
             if (g_levelLoaded && !g_loggedLocal && s != wotm_net::PadState{})
             {
@@ -432,6 +455,7 @@ namespace wotm_sync
         wotm_netstatus::setMessage("");
         g_inputDelay = g_net->delay();
         wotm_netstatus::g_delay = g_inputDelay;
+        wotm::mouse::g_netPlayer.store(g_net->localPlayer(), std::memory_order_relaxed);
         std::fprintf(stderr, "[net] start: player %d of %d, delay %u frames, ping %u ms\n", g_net->localPlayer() + 1, g_net->players(),
                      g_inputDelay, g_net->rttMs());
     }

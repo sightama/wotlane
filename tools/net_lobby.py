@@ -18,7 +18,7 @@ import socket
 import sys
 from pathlib import Path
 
-PROTOCOL = 2
+PROTOCOL = 3   # native/net/wotm_net_proto.hpp kProtocol
 REPO = Path(__file__).resolve().parent.parent
 
 
