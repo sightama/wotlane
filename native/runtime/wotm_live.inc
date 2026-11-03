@@ -438,8 +438,8 @@ static int renderHeight()
     return std::clamp(h, 112, std::min(8640, static_cast<int>(16384.f / viewAspect())));
 }
 // Once, on the first present (wotmDrawScene, before the intro): WOTM_FULLSCREEN=1|2 goes to borderless or exclusive fullscreen (monitor
-// aspect ratio; with a fixed WOTM_ASPECT the frame gets bars); otherwise the runtime's 960x720 window becomes the native frame size
-// (renderHeight at the aspect ratio), shrunk to fit the monitor. The frame doesn't depend on the window: only the final upscale changes.
+// aspect ratio; with a fixed WOTM_ASPECT the frame gets bars); otherwise the runtime's 960x720 window becomes the largest window with
+// the frame's aspect ratio inside 90% of the monitor (fitWindow). The frame doesn't depend on the window: only the final upscale changes.
 // Present rate: WOTM_HZ=<n> (default: the window's monitor rate) with the monitor's vsync (WOTM_VSYNC=0 turns it off and limits by the
 // clock only). Game logic stays at 60: the present only redraws the scene when a new frame arrives (wotmDrawNative, "redraw") and
 // otherwise re-presents the last image. The gain: steady pacing (no beat between raylib's 60 and the monitor), no tearing.
@@ -464,19 +464,24 @@ static void initPresentRate()
     std::fprintf(stderr, "[native] present: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", eff, monHz, vsync ? "on" : "off");
 }
 
-// Window at the native frame size (renderHeight at the fixed aspect ratio, or 16:9), shrunk to fit in 90% of the monitor and centered.
-static void fitWindow(bool keepHeight = false)
+// Window at the largest size with the frame's aspect ratio (fixed WOTM_ASPECT, or 16:9) inside 90% of the monitor, centered on it. The
+// window does not follow the frame height (Res): a 720-line frame is upscaled to a 1440p screen's window, and Res 0 makes the frame the
+// window's height. Without monitor data (headless raylib) the window stays 1280x720.
+static void fitWindow()
 {
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
-    const int res = wotm::settings::get(wotm::settings::Res);   // 0 (the window's): 720, or the current height (keepHeight)
-    float h = static_cast<float>(res > 0 ? res : keepHeight && GetScreenHeight() > 0 ? GetScreenHeight() : 720), w = h * a;
     const int mon = GetCurrentMonitor();
     const float mw = 0.9f * GetMonitorWidth(mon), mh = 0.9f * GetMonitorHeight(mon);
+    float w = 1280.f, h = 720.f;
     if (mw > 0.f && mh > 0.f)
     {
-        const float k = std::min({1.f, mw / w, mh / h});
-        w *= k;
-        h *= k;
+        w = mw;
+        h = w / a;
+        if (h > mh)
+        {
+            h = mh;
+            w = h * a;
+        }
     }
     SetWindowSize(static_cast<int>(std::lround(w)), static_cast<int>(std::lround(h)));
     if (mw > 0.f && mh > 0.f)
@@ -484,6 +489,8 @@ static void fitWindow(bool keepHeight = false)
         const Vector2 p = GetMonitorPosition(mon);
         SetWindowPosition(static_cast<int>(p.x + (mw / 0.9f - w) * 0.5f), static_cast<int>(p.y + (mh / 0.9f - h) * 0.5f));
     }
+    std::fprintf(stderr, "[native] window %dx%d on monitor %d (%dx%d), aspect %.3f\n", static_cast<int>(std::lround(w)), static_cast<int>(std::lround(h)),
+                 mon, GetMonitorWidth(mon), GetMonitorHeight(mon), a);
 }
 
 // Fullscreen kind (Display option, WOTM_FULLSCREEN): 1 = borderless (a monitor-sized window, the desktop doesn't change mode), 2 =
@@ -644,8 +651,8 @@ static void applyVideoSettings()
     }
     if (now[Rate] != g_appliedVideo[Rate] || now[Vsync] != g_appliedVideo[Vsync])
         initPresentRate();
-    if (((now[Res] != g_appliedVideo[Res] && now[Res] > 0) || now[Aspect] != g_appliedVideo[Aspect]) && !inFullscreen())
-        fitWindow(true);
+    if (now[Aspect] != g_appliedVideo[Aspect] && !inFullscreen())   // a new frame height does not move the window: only the upscale changes
+        fitWindow();
     if (now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect] || now[RenderScale] != g_appliedVideo[RenderScale])
         std::fprintf(stderr, "[settings] frame: %s lines x %d%% = %d, aspect %s\n", format(Res, now[Res]).c_str(), now[RenderScale], renderHeight(),
                      format(Aspect, now[Aspect]).c_str());
