@@ -521,7 +521,7 @@ inline void load(const std::filesystem::path &dir)
             g_netMods.store(bits);
             std::fprintf(stderr, "[settings] network match: modifiers \"%s\"\n", wotm::modifiers::format(bits).c_str());
             g_netProfile.store(true);
-            std::fprintf(stderr, "[settings] network match: fixed profile (classic camera, the game's lock-on, close camera, no mouse)\n");
+            std::fprintf(stderr, "[settings] network match: fixed profile (the game's lock-on, close camera; the camera options stay each player's own)\n");
         }
         if (g_pathPending)
             save();

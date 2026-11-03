@@ -89,11 +89,41 @@ namespace wotm_sync
 
     // Mouse motion of the keyboard's player since the last sample (wotm_mouse.hpp), in whole pixels; the fraction carries over to the
     // next frame (macOS reports fractional motion). Only the whole pixels travel, so every PC turns the camera by the same amount.
-    void sampleMouse(wotm_net::PadState &s)
+    // Mouseless test: WOTM_ORBITMOUSE="frame:frames:dx:dy;..." adds (dx, dy) pixels per frame (y down, like the mouse) to the keyboard
+    // player's mouse from the given frame for that many frames. With the fixed step the frame is the input index and the motion is
+    // sampled like a real one (it travels online and gets recorded); without it, wotm_orbit.inc counts Cameras::Update calls.
+    void scriptedMouse(unsigned frame, float &dx, float &dy)
+    {
+        struct Step { unsigned f0, n; float x, y; };
+        static const std::vector<Step> steps = [] {
+            std::vector<Step> v;
+            if (const char *e = std::getenv("WOTM_ORBITMOUSE"))
+                for (const char *p = e; *p;)
+                {
+                    Step s{};
+                    if (std::sscanf(p, "%u:%u:%f:%f", &s.f0, &s.n, &s.x, &s.y) == 4)
+                        v.push_back(s);
+                    const char *semi = std::strchr(p, ';');
+                    if (!semi)
+                        break;
+                    p = semi + 1;
+                }
+            return v;
+        }();
+        for (const Step &s : steps)
+            if (frame >= s.f0 && frame < s.f0 + s.n)
+            {
+                dx += s.x;
+                dy += s.y;
+            }
+    }
+
+    void sampleMouse(wotm_net::PadState &s, uint32_t index)
     {
         static float restX = 0.f, restY = 0.f;
         float dx = 0.f, dy = 0.f;
         wotm::mouse::take(dx, dy);
+        scriptedMouse(index, dx, dy);
         dx += restX;
         dy += restY;
         const float x = std::clamp(std::trunc(dx), -32768.f, 32767.f), y = std::clamp(std::trunc(dy), -32768.f, 32767.f);
@@ -147,7 +177,7 @@ namespace wotm_sync
             if (!g_levelLoaded || g_net->status() != wotm_net::MatchClient::Status::Running)
                 return;
             wotm_net::PadState s = sampleLocal(0);
-            sampleMouse(s);   // the mouse is this PC's player's, like game pad 0
+            sampleMouse(s, index);   // the mouse is this PC's player's, like game pad 0
             g_net->pushLocal(index + g_inputDelay, s);
             if (!g_loggedLocal && !idle(s))
             {
@@ -161,7 +191,7 @@ namespace wotm_sync
         {
             wotm_net::PadState s = sampleLocal(c);
             if (c == kbPlayer)
-                sampleMouse(s);
+                sampleMouse(s, index);
             const uint32_t at = g_inputs.scheduleLocal(c, index, s);
             if (g_levelLoaded && !g_loggedLocal && !idle(s))
             {

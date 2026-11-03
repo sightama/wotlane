@@ -89,13 +89,16 @@ namespace
 
         // Camera settings of player `slot` (0..3) on this frame: with the fixed step they travel in that player's input (wotm_sync.inc
         // packs them on the PC that owns the player), so every PC turns each camera with its owner's settings; without it (normal
-        // offline play, no timeline) and for inputs recorded before they travelled, this PC's
+        // offline play, no timeline) and for inputs recorded before they travelled, this PC's. In a network match an input without
+        // them (the first frames, before anyone's input arrives) gets the defaults (classic camera), the same on every PC: this PC's
+        // there desynced a match whose players use different cameras.
         wotm::camsettings::Settings camSettingsFor(int slot)
         {
             const wotm::camsettings::Settings local = wotm_sync::localCamSettings();
             if (!wotm_sync::g_fixedStep || slot < 0 || slot > 3)
                 return local;
-            return wotm::camsettings::resolve(wotm_sync::inputFor(slot, wotm_sync::g_index).cam, local);
+            const uint16_t packed = wotm_sync::inputFor(slot, wotm_sync::g_index).cam;
+            return wotm::camsettings::resolve(packed, wotm_sync::g_net ? wotm::camsettings::Settings{} : local);
         }
         bool orbitAllowed() { return !g_aiVsAi && !g_wotmFreeCam.load(std::memory_order_relaxed); }
         // the modern camera drives player `slot`'s view (game state: the same answer on every PC); players 5..8 keep the classic one
@@ -153,36 +156,6 @@ namespace
                 {
                     sx = s.x;
                     sy = s.y;
-                }
-        }
-
-        // Mouseless test: WOTM_ORBITMOUSE="frame:frames:dx:dy;..." adds (dx, dy) pixels per frame (y down, like the mouse) to the
-        // keyboard player's mouse, from the given frame for that many frames
-        void testMouse(unsigned frame, float &mx, float &my)
-        {
-            struct Step { unsigned f0, n; float x, y; };
-            static std::vector<Step> steps;
-            static bool parsed = false;
-            if (!parsed)
-            {
-                parsed = true;
-                if (const char *e = std::getenv("WOTM_ORBITMOUSE"))
-                    for (const char *p = e; *p;)
-                    {
-                        Step s{};
-                        if (std::sscanf(p, "%u:%u:%f:%f", &s.f0, &s.n, &s.x, &s.y) == 4)
-                            steps.push_back(s);
-                        const char *semi = std::strchr(p, ';');
-                        if (!semi)
-                            break;
-                        p = semi + 1;
-                    }
-            }
-            for (const Step &s : steps)
-                if (frame >= s.f0 && frame < s.f0 + s.n)
-                {
-                    mx += s.x;
-                    my += s.y;
                 }
         }
 
@@ -509,9 +482,10 @@ namespace
                     my = p.mouseY;
                 }
                 else if (kbSlot)
+                {
                     wotm::mouse::take(mx, my);
-                if (kbSlot)
-                    testMouse(frames, mx, my);
+                    wotm_sync::scriptedMouse(frames, mx, my);   // with the fixed step it is already in the sampled input
+                }
                 mx *= 0.0025f * sens;
                 my *= 0.0025f * (cam.invertY ? -sens : sens);
                 if (mx != 0.f || my != 0.f)

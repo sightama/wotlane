@@ -5,12 +5,14 @@ $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'net_check.ps1'
 
 $checks = [ordered]@{
-    # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from orbit frame 300 on): the modern camera applied it to player 1's
-    # game camera on that PC only and the match desynced (block 0x800000, the camera's _cs). On the network: classic camera
-    'camera_mouse'  = @{ PlayerEnv = '2:WOTM_ORBITMOUSE=300:600:4:0'; Secs = 50
+    # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from input frame 300 on), modern camera on both: the motion travels in
+    # player 2's input with player 2's own sensitivity and inversion, so both PCs turn that camera alike (when it stayed on one PC, the
+    # match desynced at block 0x800000, the camera's _cs)
+    'camera_mouse'  = @{ PlayerEnv = '1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1;WOTM_CAMSENS=8;WOTM_CAMINVERT=1;WOTM_ORBITMOUSE=300:600:4:1'; Secs = 50
                          Expect = 'network match: fixed profile' }
-    # different game options on each PC (classic camera on one, modern on the other: with modern the pad is screen-relative; toggled
-    # lock-on, camera sensitivity and inversion): the fixed profile applies on both
+    # different game options on each PC (classic camera on one, modern on the other: with modern the pad is screen-relative; camera
+    # sensitivity and inversion; toggled lock-on): the camera options are each player's own and travel with their input, lock-on is the
+    # fixed profile's on both
     'opcoes_pc'     = @{ PlayerEnv = '1:WOTM_CAMERA=0;WOTM_CAMSENS=10;WOTM_CAMINVERT=1|||2:WOTM_CAMERA=1;WOTM_LOCKTOGGLE=1'; Secs = 50 }
     # photo mode on one PC only (WOTM_PHOTO: turns itself on 25 s after the first scene): it paused that PC and freed the camera; on the
     # network it stays off
