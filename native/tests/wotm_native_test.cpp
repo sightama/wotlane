@@ -7,6 +7,7 @@
 #include "wotm_freecam.h"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
+#include "net/wotm_camsettings.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -279,6 +280,28 @@ namespace
         CHECK(st::g_val[st::Camera].load() == 1 && st::g_val[st::CamSens].load() == 9);   // the player's values are still stored
         st::g_netProfile.store(false);
         CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9);
+    }
+
+    // A player's camera settings packed into their per-frame input (wotm_camsettings.hpp): every PC turns that player's camera with them
+    TEST(camsettings_pack_roundtrip)
+    {
+        namespace cs = wotm::camsettings;
+        for (int sens = 1; sens <= 10; ++sens)
+            for (int flags = 0; flags < 8; ++flags)
+            {
+                const cs::Settings in{(flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0, sens};
+                const uint16_t packed = cs::pack(in);
+                CHECK((packed & 1u) != 0u && (packed & 0xFF00u) == 0u);
+                cs::Settings out{};
+                CHECK(cs::unpack(packed, out));
+                CHECK(out.modern == in.modern && out.recenter == in.recenter && out.invertY == in.invertY && out.sens == sens);
+            }
+        cs::Settings none{true, true, true, 7};
+        CHECK(!cs::unpack(0, none));   // not present: an input recorded before the settings travelled
+        cs::Settings out{};
+        CHECK(cs::unpack(cs::pack({false, false, false, 0}), out) && out.sens == 1);
+        CHECK(cs::unpack(cs::pack({false, false, false, 11}), out) && out.sens == 10);
+        CHECK(cs::unpack(0x00F1u, out) && out.sens == 10);   // a value outside 1..10 from the wire is clamped too
     }
 
     // Digest of the enabled mods (wotm_mods.hpp), which goes into the network match's settings hash: the same set of files gives the
