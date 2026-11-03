@@ -85,11 +85,13 @@ inline bool g_pathPending = false;   // load found keys from an older layout: re
 // Presentation rate in effect (initPresentRate, wotm_live.inc; 0 = not opened yet): the Interp option only applies above 60
 inline std::atomic<int> g_presentHz{0};
 
-// Network match (WOTM_NET; turned on in load): options that change game state take a fixed profile, the same on every PC. The
-// modern camera writes the game camera using this PC's mouse, sensitivity and inversion, and toggled lock-on changes what the
-// buttons do. The file and the panel keep the player's values (the panel shows them locked), which come back outside network play.
-inline constexpr Key kNetKeys[] = {LockToggle, Camera, CamRecenter, CloseCam, CamSens, CamInvertY};
-inline constexpr int kNetValues[] = {0, 0, 1, 1, 5, 0};
+// Network match (WOTM_NET; turned on in load): options that change game state the same way for everyone take a fixed profile, the
+// same on every PC: toggled lock-on changes what the buttons do, and the close camera unifies the shared view. The modern camera's
+// options (Camera, CamRecenter, CamSens, CamInvertY) stay each player's own: they travel with that player's input
+// (wotm_camsettings.hpp). The file and the panel keep the player's values (the panel shows them locked), which come back outside
+// network play.
+inline constexpr Key kNetKeys[] = {LockToggle, CloseCam};
+inline constexpr int kNetValues[] = {0, 1};
 inline std::atomic<bool> g_netProfile{false};
 // The lobby's modifiers (WOTM_MODIFIERS, wotm::modifiers bits): forced on the three modifier keys in a network match
 inline std::atomic<int> g_netMods{0};

@@ -258,29 +258,32 @@ namespace
         st::g_val[st::SuperJump].store(0), st::g_val[st::FastMonsters].store(0), st::g_val[st::Turbo].store(0);
     }
 
-    // Network match profile (wotm_settings.hpp): settings that change game state take the fixed profile on every PC, the
-    // player's own values are kept and come back outside network play; video settings stay free
+    // Network match profile (wotm_settings.hpp): settings that change game state the same way for everyone take the fixed profile on
+    // every PC, the player's own values are kept and come back outside network play; video settings stay free. The camera settings stay
+    // the player's own: they travel with that player's input (wotm_camsettings.hpp)
     TEST(netplay_profile_forces_gameplay_settings_only)
     {
         namespace st = wotm::settings;
         st::g_val[st::Camera].store(1);
         st::g_val[st::CamSens].store(9);
+        st::g_val[st::CamInvertY].store(1);
+        st::g_val[st::CamRecenter].store(0);
         st::g_val[st::LockToggle].store(1);
+        st::g_val[st::CloseCam].store(0);
         st::g_val[st::RenderScale].store(150);
         st::g_netProfile.store(false);
         CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9 && st::get(st::LockToggle) == 1);
-        CHECK(!st::forced(st::Camera));
+        CHECK(!st::forced(st::LockToggle));
         st::g_netProfile.store(true);
-        CHECK(st::get(st::Camera) == 0);
-        CHECK(st::get(st::CamSens) == 5);
         CHECK(st::get(st::LockToggle) == 0);
         CHECK(st::get(st::CloseCam) == 1);
-        CHECK(st::get(st::CamInvertY) == 0);
-        CHECK(st::forced(st::Camera) && st::forced(st::CamSens));
+        CHECK(st::forced(st::LockToggle) && st::forced(st::CloseCam));
+        CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9 && st::get(st::CamInvertY) == 1 && st::get(st::CamRecenter) == 0);
+        CHECK(!st::forced(st::Camera) && !st::forced(st::CamSens) && !st::forced(st::CamInvertY) && !st::forced(st::CamRecenter));
         CHECK(st::get(st::RenderScale) == 150 && !st::forced(st::RenderScale));
-        CHECK(st::g_val[st::Camera].load() == 1 && st::g_val[st::CamSens].load() == 9);   // the player's values are still stored
+        CHECK(st::g_val[st::LockToggle].load() == 1 && st::g_val[st::CloseCam].load() == 0);   // the player's values are still stored
         st::g_netProfile.store(false);
-        CHECK(st::get(st::Camera) == 1 && st::get(st::CamSens) == 9);
+        CHECK(st::get(st::LockToggle) == 1 && st::get(st::CloseCam) == 0);
     }
 
     // A player's camera settings packed into their per-frame input (wotm_camsettings.hpp): every PC turns that player's camera with them
