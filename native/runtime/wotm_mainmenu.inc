@@ -136,12 +136,14 @@ constexpr TabDef kTabDefs[kTabs] = {
       {st::Interp, "INTERPOLATE FRAMES", "SMOOTHER MOTION ABOVE 60 HZ OR WHEN THE GAME DROPS TO 30. MAY ADD DELAY"},
       {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
       {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
-    {5,
+    {7,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
       {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"},
-      {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"}}},
+      {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"},
+      {st::VolSfx, "EFFECTS VOLUME", "QUIETER OR LOUDER EFFECTS AND VOICES ON THIS PC ONLY. WORKS ONLINE TOO"},
+      {st::VolMusic, "MUSIC VOLUME", "QUIETER OR LOUDER MUSIC ON THIS PC ONLY. WORKS ONLINE TOO"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
       {st::CamSens, "SENSITIVITY", "HOW FAST THE RIGHT STICK TURNS THE CAMERA"},
@@ -386,6 +388,7 @@ static int choices(st::Key k, int out[16])
     case st::Aspect: for (int i = 0; i < st::kAspects; ++i) out[i] = i; return st::kAspects;
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
+    case st::VolSfx: case st::VolMusic: for (int i = 0; i <= 10; ++i) out[i] = i * 10; return 11;   // 0 (off) to 100 in tens
     case st::Announcer: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::Prompts:   // without PLAYSTATION: same as ORIGINAL (AUTO still uses it with a PlayStation gamepad)
     {
@@ -452,6 +455,7 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
     case st::Camera: std::snprintf(buf, sz, "%s", v ? "MODERN" : "CLASSIC"); break;
     case st::CamSens: std::snprintf(buf, sz, "%d", v); break;
+    case st::VolSfx: case st::VolMusic: if (v > 0) std::snprintf(buf, sz, "%d", v); else std::snprintf(buf, sz, "OFF"); break;   // no % in the font
     case st::Announcer:   // the narrator's voice (narrator/) or the chosen monster's cry
         std::snprintf(buf, sz, "%s", v == 2 ? "MONSTER CRY" : v ? "GODZILLA SAVE THE EARTH" : "OFF");
         break;
@@ -792,6 +796,9 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             return false;
         st::set(k, v);
         if (k == st::Vibration) wotm_rumble::poll();   // turned off: the motors stop immediately
+#ifdef WOTM_HAVE_SND
+        if (k == st::VolSfx || k == st::VolMusic) wotm_snd_hooks::applyUserVolumes();   // what is playing changes at once
+#endif
         char buf[32];
         valueText(k, v, buf, sizeof buf);
         std::fprintf(stderr, "[settings] %s = %s (%s=%s)\n", t.opt[sel].label, buf, st::kEnv[k], st::format(k, v).c_str());

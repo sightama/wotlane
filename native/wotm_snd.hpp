@@ -420,6 +420,22 @@ public:
         for (auto &[h, s] : sounds_) if (s->group == group) s->refreshVolume();
     }
     s32 masterVolume(int group) const { return group >= 0 && group < 32 ? master_[size_t(group)] : 0; }
+    // This PC's factor over the game's master volume, in % (0..100): slot 0 = effects (every group but the music's: the game uses 0, 3
+    // and 5), slot 1 = music (group 1). The EFFECTS VOLUME / MUSIC VOLUME options; not game state, so a network match leaves it alone
+    static int userSlot(int group) { return group == 1 ? 1 : 0; }
+    void setUserVolume(int slot, int pct) {
+        std::lock_guard<std::mutex> g(m_);
+        if (slot < 0 || slot > 1) return;
+        user_[slot] = std::clamp(pct, 0, 100);
+        for (auto &[h, s] : sounds_) if (userSlot(s->group) == slot) s->refreshVolume();
+    }
+    int userVolume(int slot) const { return slot >= 0 && slot <= 1 ? user_[slot] : 100; }
+    // Gain (0..1) of a sound at full volume in `group`, as this PC hears it: the game's master and this PC's factor through the curve
+    float groupGain(int group) const {
+        if (group < 0 || group >= 15) return 1.f;
+        const float f = float(master_[size_t(group)]) / float(0x400) * float(user_[userSlot(group)]) / 100.f;
+        return std::clamp(f * f, 0.f, 1.f);
+    }
     void setMono(bool m) { std::lock_guard<std::mutex> g(m_); mono_ = m; }
     s32 sramFree() const {   // the SPU2's 2 MB minus what's "loaded" (informational only; the game prints it)
         size_t used = 0;
@@ -487,10 +503,11 @@ public:
         if (p < 180) return {s16(t[size_t(p)].left * vol / 0x3fff), s16(t[size_t(p)].right * vol / 0x3fff)};
         return {s16(t[size_t(p - 180)].right * vol / 0x3fff), s16(t[size_t(p - 180)].left * vol / 0x3fff)};
     }
-    s32 adjustToGroup(s32 v, int group) const {   // group master volume, with 989snd's quadratic curve
+    s32 adjustToGroup(s32 v, int group) const {   // group master volume and this PC's factor, with 989snd's quadratic curve
         if (group >= 15) return v;
         v = std::min(v, 0x7ffe);
         v = v * master_[size_t(group)] / 0x400;
+        v = v * user_[userSlot(group)] / 100;
         const int sign = v < 0 ? -1 : 1;
         return v * v / 0x7ffe * sign;
     }
@@ -529,6 +546,7 @@ private:
     std::map<u32, std::unique_ptr<Sound>> sounds_;
     std::vector<std::shared_ptr<Voice>> voices_;
     std::array<s32, 32> master_{};
+    int user_[2] = {100, 100};   // setUserVolume: effects, music
     bool mono_ = false;
     u32 nextHandle_ = 0, nextBank_ = 1, tick_ = 0, rng_ = 0x989u;
     int tickPhase_ = 0;

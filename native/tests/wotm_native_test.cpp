@@ -1,7 +1,9 @@
 // ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
-// ABOUTME: camera, cuts, projection), the settings profile for network matches and the mod digest. Build and run: tools\test_native.bat
+// ABOUTME: camera, cuts, projection), the settings profile for network matches, this PC's volume factors and the mod digest. Build and
+// ABOUTME: run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
+#include "wotm_snd.hpp"
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
@@ -254,6 +256,37 @@ namespace
         CHECK(st::parse(st::Turbo, "1", v) && v == 1 && st::parse(st::Turbo, "0", v) && v == 0);
         CHECK(std::string(st::kEnv[st::SuperJump]) == "WOTM_SUPERJUMP" && std::string(st::kEnv[st::Turbo]) == "WOTM_TURBO");
         st::g_val[st::SuperJump].store(0), st::g_val[st::FastMonsters].store(0), st::g_val[st::Turbo].store(0);
+    }
+
+    // This PC's volume factors (wotm_settings.hpp VolSfx/VolMusic; wotm_snd.hpp Engine::setUserVolume): 0..100 % on top of the game's
+    // master volume per group, inside 989snd's quadratic curve; group 1 is the music, every other group counts as effects
+    TEST(user_volume_settings_and_engine_factor)
+    {
+        namespace st = wotm::settings;
+        CHECK(st::kDefault[st::VolSfx] == 100 && st::kDefault[st::VolMusic] == 100);
+        CHECK(std::string(st::kEnv[st::VolSfx]) == "WOTM_VOL_SFX" && std::string(st::kEnv[st::VolMusic]) == "WOTM_VOL_MUSIC");
+        CHECK(!st::forced(st::VolSfx) && st::netValue(st::VolMusic) < 0);   // free in a network match
+        int v = -1;
+        CHECK(st::parse(st::VolSfx, "40", v) && v == 40);
+        CHECK(st::parse(st::VolMusic, " 250", v) && v == 100);
+        CHECK(st::parse(st::VolMusic, "0", v) && v == 0);
+        CHECK(!st::parse(st::VolSfx, "loud", v) && !st::parse(st::VolSfx, "-5", v));
+        CHECK(st::format(st::VolMusic, 70) == "70");
+
+        auto &eng = wotm::snd::Engine::get();
+        const int full = eng.adjustToGroup(0x7ffe, 0);   // the game's master starts at 0x400, the factor at 100
+        CHECK(full == 0x7ffe && eng.adjustToGroup(0x7ffe, 1) == full);
+        eng.setUserVolume(1, 50);
+        CHECK(eng.userVolume(1) == 50 && eng.userVolume(0) == 100);
+        CHECK(eng.adjustToGroup(0x7ffe, 1) == 0x3fff * 0x3fff / 0x7ffe);   // half before the curve: a quarter after it
+        CHECK(eng.adjustToGroup(0x7ffe, 0) == full && eng.adjustToGroup(0x7ffe, 3) == full);   // groups 0, 3 and 5 are effects
+        eng.setUserVolume(0, 0);
+        CHECK(eng.adjustToGroup(0x7ffe, 0) == 0 && eng.adjustToGroup(0x7ffe, 5) == 0 && eng.adjustToGroup(0x7ffe, 1) != 0);
+        CHECK(eng.adjustToGroup(0x7ffe, 15) == 0x7ffe);   // groups 15 and up never take a master volume
+        CHECK(near(eng.groupGain(1), 0.25f) && near(eng.groupGain(0), 0.f));
+        eng.setUserVolume(0, 250);   // clamped
+        CHECK(eng.userVolume(0) == 100 && near(eng.groupGain(0), 1.f));
+        eng.setUserVolume(1, 100);
     }
 
     // Network match profile (wotm_settings.hpp): settings that change game state take the fixed profile on every PC, the

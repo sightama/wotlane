@@ -97,11 +97,23 @@ inline bool readLsn(uint32_t lsn, uint32_t sectors, uint8_t *dst)
 
 #define SND_LOG(...) do { if (g_log) std::fprintf(stderr, "[snd] " __VA_ARGS__); } while (0)
 
+// This PC's volume factors (EFFECTS VOLUME / MUSIC VOLUME in the recompiled options, WOTM_VOL_SFX / WOTM_VOL_MUSIC) onto the engine:
+// at sound start and on every change in the panel (wotm_mainmenu.inc)
+void applyUserVolumes()
+{
+    namespace st = wotm::settings;
+    const int sfx = st::get(st::VolSfx), music = st::get(st::VolMusic);
+    Engine::get().setUserVolume(0, sfx);
+    Engine::get().setUserVolume(1, music);
+    std::fprintf(stderr, "[snd] volume: effects %d%%, music %d%%\n", sfx, music);
+}
+
 // --- system and banks
 void startSoundSystem(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
     const bool ok = Engine::get().startOutput();
     std::fprintf(stderr, "[snd] snd_StartSoundSystem: native sound %s\n", ok ? "on (48 kHz)" : "has NO audio output (did InitAudioDevice fail?)");
+    applyUserVolumes();
     if (const char *m = std::getenv("WOTM_MUTE"); m && m[0] == '1')   // raylib's master volume: sound and movies
     {
         SetMasterVolume(0.0f);

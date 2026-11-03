@@ -1025,7 +1025,7 @@ class Launcher : Form
     // next to save.json). The launcher does not pass them; an inherited variable would override the file, so it is removed.
     static readonly string[] SettingsKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
         "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE", "WOTM_SKIPINTRO", "WOTM_VIBRATION", "WOTM_INTERP",
-        "WOTM_SUPERJUMP", "WOTM_FASTMONSTERS", "WOTM_TURBO" };
+        "WOTM_SUPERJUMP", "WOTM_FASTMONSTERS", "WOTM_TURBO", "WOTM_VOL_SFX", "WOTM_VOL_MUSIC" };
 
     // The runtime folder (the one with run_live.ps1): WOTM_RECOMP_DIR, then the .wotm_recomp_dir that run_live.bat saves in the repo root.
     string KnownRuntimeDir()
