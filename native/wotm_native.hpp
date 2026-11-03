@@ -3337,7 +3337,7 @@ public:
         rlDisableDepthTest();   // button icons and HUD on top of everything (z near 0: the depth test hides them under the floor)
         const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
         if (!sprites2d) drawList(ram, overlay, wire, -1, true);
-        drawList(ram, hud, wire, -1);   // HUD last, in traversal order
+        drawHudAtEdges(ram, wire);   // HUD last, in traversal order
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
@@ -3486,6 +3486,32 @@ public:
     // pass: -1 everything; 0 only opaque/cutout; 1 only the alpha OT (inAlphaOT; alphaBin, LIFO tie-break); 2 everything outside the OT, in
     // traversal order (batches only between consecutive items with the same texture and the same state)
     // fadeByNode: multiplies alpha by the float at +0x4C of the object (button fade: screenSetButtonAlpha writes `targetAlpha` there)
+    // The HUD (portrait, health and energy bars) at the window's edges: the game places it in front of the camera for a 4:3 picture,
+    // so in a wider window it sits inside. Each element moves out by the extra width, the ones left of center to the left edge and the
+    // others to the right. Drawing only: the game's state is untouched, so every PC of a network match stays identical whatever its
+    // window. A 4:3 or narrower view (split-screen halves) draws as the game placed it.
+    void drawHudAtEdges(const Ram &ram, bool wire) {
+        const Matrix proj = rlGetMatrixProjection(), mv = rlGetMatrixModelview();
+        const float half43 = proj.m5 != 0.f ? proj.m0 * (4.f / 3.f) / proj.m5 : 1.f;   // half-width of the 4:3 picture, in NDC
+        if (half43 >= 0.999f || hud.empty()) { drawList(ram, hud, wire, -1); return; }
+        std::vector<DrawItem> sides[2];
+        for (const DrawItem &it : hud) {
+            const float *t = it.m.m[3];
+            sides[mv.m0 * t[0] + mv.m4 * t[1] + mv.m8 * t[2] + mv.m12 > 0.f ? 1 : 0].push_back(it);   // camera-space x
+        }
+        for (int side = 0; side < 2; ++side) {
+            if (sides[side].empty()) continue;
+            const float dx = (side ? 1.f : -1.f) * (1.f - half43);
+            Matrix shifted = proj;   // NDC x + dx: clip x gains dx * clip w (row 0 += dx * row 3)
+            shifted.m0 += dx * proj.m3, shifted.m4 += dx * proj.m7, shifted.m8 += dx * proj.m11, shifted.m12 += dx * proj.m15;
+            rlDrawRenderBatchActive();
+            rlSetMatrixProjection(shifted);
+            drawList(ram, sides[side], wire, -1);
+            rlDrawRenderBatchActive();
+        }
+        rlSetMatrixProjection(proj);
+    }
+
     void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1, bool fadeByNode = false) {
         rlDisableBackfaceCulling();
         {   // diagnostics: WOTM_CMP=1 compares, per triangle, the edges of two skinned items with the same mesh (e.g. player vs enemy)
