@@ -33,4 +33,12 @@ inline bool unpack(uint16_t packed, Settings &s)
     s.sens = std::clamp(static_cast<int>(packed >> 4 & 15u), 1, 10);
     return true;
 }
+
+// The settings that turn a player's camera: the ones packed in their input when present, else `local` (this PC's)
+inline Settings resolve(uint16_t packed, const Settings &local)
+{
+    Settings s = local;
+    unpack(packed, s);
+    return s;
+}
 } // namespace wotm::camsettings

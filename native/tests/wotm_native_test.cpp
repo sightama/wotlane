@@ -304,6 +304,20 @@ namespace
         CHECK(cs::unpack(0x00F1u, out) && out.sens == 10);   // a value outside 1..10 from the wire is clamped too
     }
 
+    // The settings that turn a player's camera: the ones in that player's input when it carries them, this PC's otherwise (an input
+    // recorded before the settings travelled, or the offline path without a timeline)
+    TEST(camsettings_resolve_prefers_the_players_own)
+    {
+        namespace cs = wotm::camsettings;
+        const cs::Settings local{true, false, false, 5}, theirs{true, true, true, 9};
+        const cs::Settings a = cs::resolve(cs::pack(theirs), local);
+        CHECK(a.modern && a.recenter && a.invertY && a.sens == 9);
+        const cs::Settings b = cs::resolve(0, local);
+        CHECK(b.modern && !b.recenter && !b.invertY && b.sens == 5);
+        const cs::Settings c = cs::resolve(cs::pack({false, false, false, 2}), local);   // a classic-camera player stays classic
+        CHECK(!c.modern && c.sens == 2);
+    }
+
     // Digest of the enabled mods (wotm_mods.hpp), which goes into the network match's settings hash: the same set of files gives the
     // same value in any creation order; changing the content or a name, or adding a mod, changes it; a disabled folder ('_') doesn't count
     TEST(mod_digest_covers_active_mods_only)
