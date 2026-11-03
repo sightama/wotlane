@@ -61,12 +61,7 @@ namespace wotm_sync
     //   WOTM_INPUTPLAY=<file>: the game sees the recorded input (by frame index) instead of the devices'.
     constexpr uint32_t kPadRead = wotm::fn::scePadRead;
     constexpr int kControllers = 8;   // 2 ports x 4 multitap slots: players 1..8 (5..8 on the AIs, wotm_multi.inc)
-    struct InputRecord
-    {
-        uint32_t index;
-        uint32_t controller;
-        wotm_net::PadState state;
-    };
+    using wotm_net::InputRecord;   // the recording file's format: wotm_inputfile.hpp
     PS2Runtime *g_runtime = nullptr;
     PS2Runtime::RecompiledFunction g_origPadRead = nullptr;
     uint32_t g_inputDelay = 0;
@@ -404,13 +399,17 @@ namespace wotm_sync
 
     void loadInputPlay(const char *path)
     {
+        std::vector<uint8_t> bytes;
         if (FILE *f = std::fopen(path, "rb"))
         {
-            InputRecord r;
-            while (std::fread(&r, sizeof r, 1, f) == 1)
-                g_inputPlay.push_back(r);
+            uint8_t buf[65536];
+            for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
+                bytes.insert(bytes.end(), buf, buf + n);
             std::fclose(f);
         }
+        std::string err;
+        if (!wotm_net::readInputRecords(bytes, g_inputPlay, err))
+            std::fprintf(stderr, "[sync] %s: %s\n", path, err.c_str());
         std::fprintf(stderr, "[sync] recorded input: %zu records from %s\n", g_inputPlay.size(), path);
     }
 
@@ -623,7 +622,11 @@ namespace wotm_sync
             if ((g_origPadRead = runtime.lookupFunction(kPadRead)))
                 runtime.registerFunction(kPadRead, &padReadLatched);
             if (const char *r = std::getenv("WOTM_INPUTREC"); r && *r)
-                g_inputRec = std::fopen(r, "wb");
+                if ((g_inputRec = std::fopen(r, "wb")))
+                {
+                    const std::vector<uint8_t> header = wotm_net::encodeInputHeader();
+                    std::fwrite(header.data(), 1, header.size(), g_inputRec);
+                }
             if (const char *p = std::getenv("WOTM_INPUTPLAY"); p && *p)
                 loadInputPlay(p);
             if (const char *d = std::getenv("WOTM_INPUTDELAY"); d && *d)
@@ -688,8 +691,8 @@ namespace wotm_sync
             {
                 for (int c = 0; c < kControllers; ++c)
                 {
-                    const InputRecord r{g_index, static_cast<uint32_t>(c), inputFor(c, g_index)};
-                    std::fwrite(&r, sizeof r, 1, g_inputRec);
+                    const std::vector<uint8_t> r = wotm_net::encodeInputRecord({g_index, static_cast<uint32_t>(c), inputFor(c, g_index)});
+                    std::fwrite(r.data(), 1, r.size(), g_inputRec);
                 }
                 if ((g_index & 63u) == 0u)
                     std::fflush(g_inputRec);
