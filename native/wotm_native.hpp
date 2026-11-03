@@ -32,6 +32,7 @@
 #include "wotm_gs.hpp"
 #include "wotm_interp.hpp"   // M4, GameCamera and frame interpolation (no raylib, tested in native/tests)
 #include "wotm_mods.hpp"   // .RTX palettes: mods/ wins over the disc (loadResources)
+#include "wotm_disc.hpp"   // disc files from the extracted root or the ISO (readDisc)
 #include "wotm_texmods.hpp"   // mod textures as PNG (textureId, residentTexture)
 
 namespace wotm {
@@ -922,12 +923,13 @@ public:
     struct ImgSrc { std::string stem; uint32_t texId; };
     std::unordered_map<uint32_t, ImgSrc> rtxImgSrc_;   // rtxImg key -> file and disc texId
     std::string discRoot_;                              // root of the extracted disc, with the slash (loadResources)
+    std::string isoPath;   // the game's ISO (PS2X_CD_IMAGE): files the extracted root doesn't have come from it (readDisc)
     std::map<std::string, std::map<uint32_t, uint32_t>> texPackets_;   // FILE -> packet offset in the .TEX -> disc texId
 
-    // Disc path ("MON/LIZARD0.RTX"): the mods/ file (wotm_mods.hpp) if there is one, otherwise the root's
-    std::string discPath(const std::string &rel) const {
-        std::string p = mods::Registry::get().hostPath(rel);
-        return p.empty() ? discRoot_ + mods::Registry::get().aliasOf(rel) : p;   // mod costume: the base costume's file
+    // Disc file ("MON/LIZARD0.RTX"): the mods/ file if there is one, otherwise the extracted disc under the root, otherwise the game's
+    // ISO (wotm::disc::readFile; a mod costume reads its base costume's file)
+    bool readDisc(const std::string &rel, std::vector<uint8_t> &out) const {
+        return disc::readFile(discRoot_.empty() ? std::string(".") : discRoot_, isoPath, rel, out);
     }
 
     // Mod PNG in place of the object's texture (global texInfo texId + TEX0). Resident ones (T8H/4HL/4HH): by DBP, like
@@ -969,7 +971,8 @@ public:
                 if (pk == texPackets_.end()) {
                     std::vector<uint8_t> d;
                     for (const char *dir : {"LVL/", "MON/", "SHELL/", ""}) {
-                        d = texmods::readUnzipped(discPath(*dir ? dir + file : stem + "/" + file));
+                        if (readDisc(*dir ? dir + file : stem + "/" + file, d)) d = texmods::unzipped(std::move(d));
+                        else d.clear();
                         if (!d.empty()) break;
                     }
                     pk = texPackets_.emplace(file, texmods::packetIds(d)).first;
@@ -1018,18 +1021,21 @@ public:
             if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
         discRoot_ = root + sep;
-        auto path = [&](const std::string &rel) { return discPath(rel); };
+        auto rtx = [&](const std::string &rel, uint32_t base, bool append = false, uint32_t resBase = 0) {
+            std::vector<uint8_t> raw;
+            return readDisc(rel, raw) && loadRtxData(std::move(raw), rel, base, append, resBase);
+        };
         rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;
-        bool lvl = loadRtx(path("LVL/" + names[0] + ".RTX").c_str(), base0);
+        bool lvl = rtx("LVL/" + names[0] + ".RTX", base0);
         // The menu (SHELL) lives in SHELL/SHELL.RTX, not in LVL/.
-        if (!lvl) lvl = loadRtx(path(names[0] + "/" + names[0] + ".RTX").c_str(), base0);
-        if (!lvl) lvl = loadRtx(path("SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
+        if (!lvl) lvl = rtx(names[0] + "/" + names[0] + ".RTX", base0);
+        if (!lvl) lvl = rtx("SHELL/" + names[0] + ".RTX", base0);   // LOAD, UI, SHELL2, PRESHELL
         if (log) *log = names[0] + (lvl ? "" : " (not found)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
-            const bool ok = loadRtx(path("MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
-                                    ram.u16(fs + 0x168 + 2 * (i - 1)));   // the previous file's maxTexAddr and maxResAddr
+            const bool ok = rtx("MON/" + names[size_t(i)] + ".RTX", ram.u16(fs + 0x14C + 2 * (i - 1)), true,
+                                ram.u16(fs + 0x168 + 2 * (i - 1)));   // the previous file's maxTexAddr and maxResAddr
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }
         invalidate();
@@ -1040,11 +1046,6 @@ public:
     // base: added to the palettes' DBP (file base); resBase: added to the resident images' DBP (0 for the stage and the menu; for a monster,
     // the previous file's fileStatus.maxResAddr, as in texmResRelocate).
     bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
-        if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
-        std::string stem = path;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
-        stem = stem.substr(stem.find_last_of("/\\") + 1);
-        stem = stem.substr(0, stem.find('.'));
-        for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
         std::vector<uint8_t> raw;
         if (FILE *f = std::fopen(path, "rb")) {
             std::fseek(f, 0, SEEK_END);
@@ -1053,6 +1054,16 @@ public:
             if (std::fread(raw.data(), 1, raw.size(), f) != raw.size()) raw.clear();
             std::fclose(f);
         }
+        return loadRtxData(std::move(raw), path, base, append, resBase);
+    }
+
+    // The .RTX file's contents; `name` (path or disc name) gives the stem for mod resident images
+    bool loadRtxData(std::vector<uint8_t> raw, const std::string &name, uint32_t base, bool append = false, uint32_t resBase = 0) {
+        if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
+        std::string stem = name;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
+        stem = stem.substr(stem.find_last_of("/\\") + 1);
+        stem = stem.substr(0, stem.find('.'));
+        for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
         if (raw.size() < 34) return false;
         std::vector<uint8_t> data;
         static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
