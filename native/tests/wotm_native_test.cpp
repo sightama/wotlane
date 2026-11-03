@@ -8,6 +8,7 @@
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "net/wotm_camsettings.hpp"
+#include "net/wotm_inputfile.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -316,6 +317,58 @@ namespace
         CHECK(b.modern && !b.recenter && !b.invertY && b.sens == 5);
         const cs::Settings c = cs::resolve(cs::pack({false, false, false, 2}), local);   // a classic-camera player stays classic
         CHECK(!c.modern && c.sens == 2);
+    }
+
+    // Input recordings (WOTM_INPUTREC/WOTM_INPUTPLAY, wotm_inputfile.hpp). A file without the header holds 16-byte records
+    // {u32 index, u32 controller, buttons, rx, ry, lx, ly, 2 bytes of padding}: no mouse, no camera settings (the replaying PC's apply)
+    TEST(inputfile_reads_headerless_records)
+    {
+        std::vector<uint8_t> bytes;
+        auto put32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) bytes.push_back(uint8_t(v >> (8 * i))); };
+        put32(7), put32(2), bytes.insert(bytes.end(), {0xFE, 0xBF, 0x10, 0x20, 0x30, 0x40, 0xAA, 0xBB});
+        put32(8), put32(3), bytes.insert(bytes.end(), {0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80, 0x00, 0x00});
+        bytes.insert(bytes.end(), {1, 2, 3});   // a truncated last record (the game was closed mid-write) is ignored
+        std::vector<wotm_net::InputRecord> recs;
+        std::string err;
+        CHECK(wotm_net::readInputRecords(bytes, recs, err) && err.empty());
+        CHECK(recs.size() == 2u);
+        CHECK(recs[0].index == 7u && recs[0].controller == 2u && recs[0].state.buttons == 0xBFFEu);
+        CHECK(recs[0].state.rx == 0x10u && recs[0].state.ry == 0x20u && recs[0].state.lx == 0x30u && recs[0].state.ly == 0x40u);
+        CHECK(recs[0].state.mouseX == 0 && recs[0].state.mouseY == 0 && recs[0].state.cam == 0u);
+        CHECK(recs[1].index == 8u && recs[1].controller == 3u && recs[1].state == wotm_net::PadState{});
+    }
+
+    TEST(inputfile_roundtrips_versioned_records)
+    {
+        wotm_net::InputRecord a{12, 0, {}}, b{12, 5, {}};
+        a.state.buttons = 0x1234u, a.state.rx = 1, a.state.ry = 2, a.state.lx = 3, a.state.ly = 4;
+        a.state.mouseX = -32768, a.state.mouseY = 32767, a.state.cam = 0x00A7u;
+        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader();
+        CHECK(bytes.size() == 8u && std::memcmp(bytes.data(), "WOTMINP\x02", 8) == 0);
+        for (const auto &r : {a, b})
+        {
+            const std::vector<uint8_t> rec = wotm_net::encodeInputRecord(r);
+            CHECK(rec.size() == 20u);
+            bytes.insert(bytes.end(), rec.begin(), rec.end());
+        }
+        std::vector<wotm_net::InputRecord> recs;
+        std::string err;
+        CHECK(wotm_net::readInputRecords(bytes, recs, err));
+        CHECK(recs.size() == 2u && recs[0].index == 12u && recs[0].controller == 0u && recs[0].state == a.state);
+        CHECK(recs[1].controller == 5u && recs[1].state == b.state);
+        bytes.push_back(9);   // truncated tail
+        CHECK(wotm_net::readInputRecords(bytes, recs, err) && recs.size() == 2u);
+    }
+
+    TEST(inputfile_rejects_unknown_version)
+    {
+        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader();
+        bytes[7] = 3;
+        bytes.resize(bytes.size() + 20u, 0);
+        std::vector<wotm_net::InputRecord> recs{wotm_net::InputRecord{}};
+        std::string err;
+        CHECK(!wotm_net::readInputRecords(bytes, recs, err));
+        CHECK(recs.empty() && err.find("version 3") != std::string::npos);
     }
 
     // Digest of the enabled mods (wotm_mods.hpp), which goes into the network match's settings hash: the same set of files gives the
