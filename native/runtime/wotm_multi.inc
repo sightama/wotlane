@@ -180,6 +180,23 @@ namespace wotm_multi
                        kToggleSplit = wotm::fn::viewToggleSplitScreen__FbT0;
     PS2Runtime::RecompiledFunction g_origInitCC = nullptr, g_origInitCCThrow = nullptr, g_origToggleSplit = nullptr;
 
+    // viewGrappleConfig (end of rtMain, so on every pause, and the unified view switch): with gUseUnifiedView on it gives view 0 the
+    // unified view's _cs (view 2) and viewport. With one view per player there is no view 2: view 0 got a null _cs, the pause's frames
+    // had no camera and every PC showed a black screen. Here it always takes the split branch (view 0 back to its own _cs and viewport);
+    // the flag is restored afterwards, and every PC does the same, so the state stays identical.
+    constexpr uint32_t kGrapple = wotm::fn::viewGrappleConfig__Fv, kUseUnifiedView = wotm::sym::gUseUnifiedView;
+    PS2Runtime::RecompiledFunction g_origGrapple = nullptr;
+
+    void grappleKeepsPlayerViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t unified = ctx->pc == kGrapple ? READ32(kUseUnifiedView) : 0u;
+        if (unified)
+            WRITE32(kUseUnifiedView, 0u);
+        g_origGrapple(rdram, ctx, runtime);
+        if (unified)
+            WRITE32(kUseUnifiedView, unified);
+    }
+
     template <uint32_t Entry, PS2Runtime::RecompiledFunction *Orig> void skipWithPlayerViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == Entry && perPlayerViews())
@@ -206,9 +223,11 @@ namespace wotm_multi
         if (!perPlayerViews())
             return;
         if ((g_origReestablish = runtime.lookupFunction(kReestablishViews)) && (g_origInitCC = runtime.lookupFunction(kInitCC)) &&
-            (g_origInitCCThrow = runtime.lookupFunction(kInitCCThrow)) && (g_origToggleSplit = runtime.lookupFunction(kToggleSplit)))
+            (g_origInitCCThrow = runtime.lookupFunction(kInitCCThrow)) && (g_origToggleSplit = runtime.lookupFunction(kToggleSplit)) &&
+            (g_origGrapple = runtime.lookupFunction(kGrapple)))
         {
             runtime.registerFunction(kReestablishViews, &reestablishViewsPerPlayer);
+            runtime.registerFunction(kGrapple, &grappleKeepsPlayerViews);
             runtime.registerFunction(kInitCC, &skipWithPlayerViews<kInitCC, &g_origInitCC>);
             runtime.registerFunction(kInitCCThrow, &skipWithPlayerViews<kInitCCThrow, &g_origInitCCThrow>);
             runtime.registerFunction(kToggleSplit, &skipWithPlayerViews<kToggleSplit, &g_origToggleSplit>);
