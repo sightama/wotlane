@@ -71,12 +71,11 @@ static Sound *soundOf(const std::string &name)
     return it->second.frameCount ? &it->second : nullptr;
 }
 
-// Master effects volume (0..0x400) -> 0..1, with 989snd's curve
+// Master effects volume (0..0x400) and this PC's effects factor (EFFECTS VOLUME) -> 0..1, with 989snd's curve
 static float effectsVolume()
 {
 #if defined(WOTM_HAVE_SND)
-    const float f = float(wotm::snd::Engine::get().masterVolume(0)) / float(0x400);
-    return std::clamp(f * f, 0.f, 1.f);
+    return wotm::snd::Engine::get().groupGain(0);
 #else
     return 1.f;
 #endif
