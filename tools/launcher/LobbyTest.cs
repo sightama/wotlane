@@ -164,8 +164,8 @@ static class LobbyTest
             });
             Run("server_rows", delegate
             {
-                LobbyClient.ServerInfo s = LobbyClient.ParseServer("SERVER 203.0.113.7 7777 2 3 1 5 16 Lanes_PC");
-                Check(s != null && s.Ip == "203.0.113.7" && s.Port == 7777 && s.Protocol == 2, "address and protocol");
+                LobbyClient.ServerInfo s = LobbyClient.ParseServer("SERVER 203.0.113.7 7777 " + LobbyClient.Protocol + " 3 1 5 16 Lanes_PC");
+                Check(s != null && s.Ip == "203.0.113.7" && s.Port == 7777 && s.Protocol == LobbyClient.Protocol, "address and protocol");
                 Check(s.Open == 3 && s.Waiting == 1 && s.Players == 5 && s.MaxLobbies == 16 && s.Name == "Lanes_PC", "counts and name");
                 Check(LobbyClient.ParseServer("LOBBY ABCD waiting 1/8 open Sala Ana Ana") == null, "not a SERVER row");
                 Check(LobbyClient.ParseServer("SERVER 1.2.3.4 7777 2") == null, "short row");
