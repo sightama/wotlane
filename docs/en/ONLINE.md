@@ -61,6 +61,20 @@ A master server keeps the list of public servers, so players can find them witho
 
 ## 3. Everyone: join and play
 
+The launcher opens in **simple mode**: your name, your monster and three buttons.
+- **Host a game** runs the server on this PC (as Host on this PC below: UPnP, firewall prompt) and opens a lobby. It shows an
+  **invite**, `<address>:<port>/<CODE>` (for example `99.38.90.23:7777/7TXQ`), with **Copy invite**: the best address for a friend
+  (internet, then Tailscale, then LAN) and the lobby code in one line. The host picks the stage, wins to end and modifiers and
+  presses **Start match**.
+- **Join a game**: paste the invite and press **Join** (or Enter). Spaces, a space instead of the slash, a lower-case code, a missing
+  port (7777) and a `wotm://` prefix are all accepted.
+- **Play offline**: a fight against the computer on this PC.
+The line at the bottom says what is going on in plain words (server errors are translated: can't reach the host, version or files
+differ, invite no longer open, game already started, name taken, game full). **Advanced** opens the full window described below
+(public server list, password, master server, AI opponents, cheats, diagnostics); **Simple** goes back. The launcher remembers the mode.
+
+Advanced mode:
+
 1. Open the launcher (`tools\launcher\build.bat` builds `WotM_Launcher.exe` in the repo root).
 2. In **Match**, pick **Your monster**. The host also picks the **Stage**.
 3. In **Online**, set Server = `<server address>:7777` and type your name. To find a public server instead, type the **Master
