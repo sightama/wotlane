@@ -21,6 +21,11 @@ $checks = [ordered]@{
     # the fight) (short taps: when held, the menu repeats and skips past the line)
     'painel_pausa'  = @{ PlayerEnv = '1:PS2X_PAD=24:0.3:start;26:0.2:down;27:0.2:down;28:0.3:cross;31:0.3:start;33:3:up;37:1:square'; Secs = 50
                          Reject = '\[pause\] panel opened' }
+    # pause by player 1, screen while paused: the pause's viewGrappleConfig (gUseUnifiedView on) copied view 2's _cs into view 0, and with
+    # one view per player there is no view 2: view 0 had no camera, every paused frame was dropped and the screen went black on every PC.
+    # A WOTM_SHOTS photo is written only when the window draws a frame, so both PCs must write the one taken while paused
+    'pause_screen'  = @{ ExtraEnv = 'WOTM_SHOTS=30'; PlayerEnv = '1:PS2X_PAD=24:0.3:start'; Secs = 40
+                         Expect = '\[dialog\] 0 opened|||\[shot\] shot_30\.png' }
     # 1-win target: the "vencer" cheat (timed by g_frame, the same on both) knocks out player 2, dialog 5 opens on both PCs and player 1's
     # X picks PLAY AGAIN (the cursor starts there; the dialog accepts any player's d-pad, so player 2 stays still): round 2 starts and
     # ends the same on both. The dialog loop runs in lockstep (without that the frame index stalled and the menu did not move)
