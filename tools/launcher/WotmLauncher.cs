@@ -1014,6 +1014,10 @@ class Launcher : Form
             b.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
         }
         simpleOffline.Font = new Font("Segoe UI", 10.5f);
+        // the invite is what the host sends: bright and bold, not the grayed read-only look
+        simpleInviteOut.BackColor = Dark ? InputColor : SystemColors.Window;
+        simpleInviteOut.ForeColor = Dark ? FgColor : SystemColors.WindowText;
+        simpleInviteOut.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
     }
 
     void ShowMode(bool simple)
@@ -1079,6 +1083,8 @@ class Launcher : Form
         if (simpleRoot == null) return;
         LobbyClient.MemberInfo m = lobbyMembers;
         simpleLobby.Visible = m != null;
+        simpleHost.Enabled = simpleJoin.Enabled = m == null;   // in a lobby: Leave first
+        if (m != null) simpleJoinRow.Visible = false;
         string info = netInfo.Text;
         if (m == null)
         {
