@@ -174,13 +174,23 @@ class Launcher : Form
         tips.SetToolTip(modkit, "Extract textures and sounds from the disc, edit them and pack them into mods\\<mod>\\ (docs\\passos\\MODS.md).");
         buttons.Controls.Add(modkit);
         buttons.Controls.Add(reset);
+        var toSimple = new Button { Text = "Simple", AutoSize = true };
+        toSimple.Click += delegate { ShowMode(true); };
+        tips.SetToolTip(toSimple, "Back to the simple window: name, monster, Host / Join / Play offline.");
+        buttons.Controls.Add(toSimple);
         root.Controls.Add(buttons);
         status.AutoSize = true;
         status.MaximumSize = new Size(420, 0);
         root.Controls.Add(status);
+        advancedRoot = root;
         Controls.Add(root);
+        simpleRoot = SimplePanel(tips);
+        Controls.Add(simpleRoot);
         if (Dark) ApplyDark(this);
-        AcceptButton = play;
+        StyleSimple();
+        playButton = play;
+        string mode;
+        ShowMode(!saved.TryGetValue(":Mode", out mode) || mode != "advanced");
         FormClosing += delegate { SaveIni(); };
     }
 
@@ -837,6 +847,7 @@ class Launcher : Form
         if (hosted.Owned) l.Add("If Windows asks whether wotm_server may use the network, allow it.");
         netShare.Text = string.Join(Environment.NewLine, l.ToArray());
         netShare.Visible = true;
+        UpdateSimple();
     }
 
     string netSettings = "";
@@ -892,6 +903,234 @@ class Launcher : Form
         }
     }
 
+    // ---- Simple mode: name, monster, Host a game / Join a game / Play offline, the invite and the players. Its controls mirror the
+    // Advanced ones (netName, matchPlayer, matchLevel, netWins, modBoxes) and its buttons call the same lobby code (NetHost, NetJoin,
+    // NetStart), so both modes show one lobby state and switching keeps the connection. ----
+    FlowLayoutPanel advancedRoot, simpleRoot, simpleJoinRow, simpleLobby, simpleInviteRow, simpleHostSettings;
+    readonly TextBox simpleName = new TextBox { Width = 150 };
+    readonly ComboBox simpleMonster = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
+    readonly ComboBox simpleStage = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
+    readonly NumericUpDown simpleWins = new NumericUpDown { Minimum = 0, Maximum = 99, Width = 55 };
+    readonly CheckBox[] simpleMods = new CheckBox[3];
+    readonly TextBox simpleInviteIn = new TextBox { Width = 270 }, simpleInviteOut = new TextBox { Width = 270, ReadOnly = true };
+    readonly Button simpleHost = new Button { Text = "Host a game", Size = new Size(140, 42) },
+                    simpleJoin = new Button { Text = "Join a game", Size = new Size(140, 42) },
+                    simpleOffline = new Button { Text = "Play offline", Size = new Size(140, 42) },
+                    simpleJoinGo = new Button { Text = "Join", AutoSize = true },
+                    simpleCopy = new Button { Text = "Copy invite", AutoSize = true },
+                    simpleStart = new Button { Text = "Start match", Size = new Size(160, 38) },
+                    simpleLeave = new Button { Text = "Leave", AutoSize = true };
+    readonly Label simplePlayers = new Label { AutoSize = true, MaximumSize = new Size(440, 0) },
+                   simpleSettings = new Label { AutoSize = true, MaximumSize = new Size(440, 0) },
+                   simpleStatus = new Label { AutoSize = true, MaximumSize = new Size(440, 0), Margin = new Padding(3, 10, 3, 3) };
+    static readonly Color OkColor = Color.FromArgb(70, 180, 90), WaitColor = Color.FromArgb(220, 160, 40), BadColor = Color.FromArgb(225, 80, 70),
+                          AccentColor = Color.FromArgb(45, 110, 200);
+    bool syncingSimple;
+    Button playButton;
+
+    static FlowLayoutPanel Line(params Control[] cs)
+    {
+        var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
+        p.Controls.AddRange(cs);
+        return p;
+    }
+    static Label Caption(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(3, 7, 3, 0) }; }
+
+    FlowLayoutPanel SimplePanel(ToolTip tips)
+    {
+        var p = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(16), WrapContents = false };
+        var title = new Label { Text = "War of the Monsters - online", AutoSize = true, Font = new Font("Segoe UI", 15f, FontStyle.Bold) };
+        var toAdvanced = new Button { Text = "Advanced", AutoSize = true, Margin = new Padding(40, 6, 3, 3) };
+        toAdvanced.Click += delegate { ShowMode(false); };
+        tips.SetToolTip(toAdvanced, "Everything: public servers, passwords, AI opponents, cheats and diagnostics.");
+        p.Controls.Add(Line(title, toAdvanced));
+
+        simpleMonster.Items.AddRange(MonsterNames);
+        foreach (object o in matchLevel.Items) simpleStage.Items.Add(o);
+        p.Controls.Add(Line(Caption("Your name"), simpleName, Caption("   Monster"), simpleMonster));
+        p.Controls.Add(Line(simpleHost, simpleJoin, simpleOffline));
+        tips.SetToolTip(simpleHost, "Runs the game server on this PC and opens a lobby. Send the invite to your friends.");
+        tips.SetToolTip(simpleJoin, "Paste the invite a friend sent you (it looks like 99.38.90.23:7777/ABCD).");
+        tips.SetToolTip(simpleOffline, "Plays on this PC only, against the computer.");
+
+        simpleJoinRow = Line(Caption("Invite"), simpleInviteIn, simpleJoinGo);
+        simpleJoinRow.Visible = false;
+        p.Controls.Add(simpleJoinRow);
+
+        simpleLobby = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Visible = false,
+                                            Margin = new Padding(0, 10, 0, 0) };
+        simpleInviteRow = Line(Caption("Invite"), simpleInviteOut, simpleCopy);
+        simpleLobby.Controls.Add(simpleInviteRow);
+        for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i] = new DarkCheckBox { Text = LobbyClient.ModifierLabels[i], AutoSize = true };
+        var mods = Line(Caption("Modifiers"));
+        mods.Controls.AddRange(simpleMods);
+        simpleHostSettings = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        simpleHostSettings.Controls.Add(Line(Caption("Stage"), simpleStage, Caption("   Wins to end (0 = endless)"), simpleWins));
+        simpleHostSettings.Controls.Add(mods);
+        simpleLobby.Controls.Add(simpleHostSettings);
+        simpleLobby.Controls.Add(simpleSettings);
+        simplePlayers.Font = new Font("Segoe UI", 10.5f);
+        simplePlayers.Margin = new Padding(3, 8, 3, 3);
+        simpleLobby.Controls.Add(simplePlayers);
+        simpleLobby.Controls.Add(Line(simpleStart, simpleLeave));
+        p.Controls.Add(simpleLobby);
+        p.Controls.Add(simpleStatus);
+
+        // the simple controls write into the Advanced ones; their change events send SET when this PC hosts the lobby
+        simpleName.TextChanged += delegate { if (!syncingSimple) netName.Text = simpleName.Text; };
+        simpleMonster.SelectedIndexChanged += delegate { if (!syncingSimple && simpleMonster.SelectedIndex >= 0) matchPlayer.SelectedIndex = simpleMonster.SelectedIndex; };
+        simpleStage.SelectedIndexChanged += delegate { if (!syncingSimple && simpleStage.SelectedIndex >= 0) matchLevel.SelectedIndex = simpleStage.SelectedIndex; };
+        simpleWins.ValueChanged += delegate { if (!syncingSimple) netWins.Value = simpleWins.Value; };
+        for (int i = 0; i < simpleMods.Length; ++i)
+        {
+            int k = i;
+            simpleMods[i].CheckedChanged += delegate { if (!syncingSimple) modBoxes[k].Checked = simpleMods[k].Checked; };
+        }
+        simpleHost.Click += delegate { SimpleHost(); };
+        simpleJoin.Click += delegate { simpleJoinRow.Visible = true; simpleInviteIn.Focus(); };
+        simpleJoinGo.Click += delegate { SimpleJoin(); };
+        simpleInviteIn.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SimpleJoin(); } };
+        simpleOffline.Click += delegate { matchOn.Checked = true; Play(); };
+        simpleCopy.Click += delegate
+        {
+            if (simpleInviteOut.Text.Length == 0) return;
+            try { Clipboard.SetText(simpleInviteOut.Text); SimpleSay("Invite copied: paste it to your friends.", OkColor); } catch (Exception) { }
+        };
+        simpleStart.Click += delegate { NetStart(); };
+        simpleLeave.Click += delegate { NetSend("LEAVE"); };
+        netInfo.TextChanged += delegate { UpdateSimple(); };
+        return p;
+    }
+
+    // colors of the big buttons (after the theme, which would repaint them)
+    void StyleSimple()
+    {
+        foreach (Button b in new[] { simpleHost, simpleJoin, simpleStart })
+        {
+            b.FlatStyle = FlatStyle.Flat;
+            b.BackColor = AccentColor;
+            b.ForeColor = Color.White;
+            b.FlatAppearance.BorderSize = 0;
+            b.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
+        }
+        simpleOffline.Font = new Font("Segoe UI", 10.5f);
+    }
+
+    void ShowMode(bool simple)
+    {
+        if (simple)
+        {
+            syncingSimple = true;
+            simpleName.Text = netName.Text;
+            if (matchPlayer.SelectedIndex >= 0 && matchPlayer.SelectedIndex < MonsterNames.Length) simpleMonster.SelectedIndex = matchPlayer.SelectedIndex;
+            else simpleMonster.SelectedIndex = 0;
+            simpleStage.SelectedIndex = matchLevel.SelectedIndex;
+            simpleWins.Value = netWins.Value;
+            for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i].Checked = modBoxes[i].Checked;
+            syncingSimple = false;
+        }
+        advancedRoot.Visible = !simple;
+        simpleRoot.Visible = simple;
+        Text = simple ? "War of the Monsters" : "WotM - options";
+        AcceptButton = simple ? null : playButton;   // Enter in simple mode must not start an offline game
+        UpdateSimple();
+    }
+
+    void SimpleSay(string text, Color color)
+    {
+        simpleStatus.Text = text;
+        simpleStatus.ForeColor = color;
+    }
+
+    void SimpleHost()
+    {
+        string name = LobbyClient.CleanName(simpleName.Text);
+        if (name.Length == 0) { SimpleSay("Type your name first (letters, digits, _ or -).", BadColor); simpleName.Focus(); return; }
+        simpleJoinRow.Visible = false;
+        netLobbyName.Text = name + "_game";
+        netPassword.Text = "";
+        NetHost();
+    }
+
+    void SimpleJoin()
+    {
+        string host, code, why;
+        int port;
+        if (!LobbyClient.ParseInvite(simpleInviteIn.Text, out host, out port, out code, out why)) { SimpleSay(why, BadColor); return; }
+        if (LobbyClient.CleanName(simpleName.Text).Length == 0) { SimpleSay("Type your name first (letters, digits, _ or -).", BadColor); simpleName.Focus(); return; }
+        simpleInviteIn.Text = LobbyClient.FormatInvite(host, port, code);
+        string server = host + ":" + port;
+        if (lobby != null && netServer.Text.Trim() != server)
+        {   // another server (a public list pick, or this PC's own): the invite's wins
+            if (lobbyCode.Length > 0) NetSend("LEAVE");
+            lobby.Dispose();
+            lobby = null;
+            NetNotInLobby();
+        }
+        netServer.Text = server;
+        netPassword.Text = "";
+        SimpleSay("Joining " + server + "...", WaitColor);
+        NetJoin(code);
+    }
+
+    // the simple window from the lobby state (members, settings, invite) and the last message
+    void UpdateSimple()
+    {
+        if (simpleRoot == null) return;
+        LobbyClient.MemberInfo m = lobbyMembers;
+        simpleLobby.Visible = m != null;
+        string info = netInfo.Text;
+        if (m == null)
+        {
+            if (info.StartsWith("Server: ")) SimpleSay(LobbyClient.FriendlyError(info.Substring(8)), BadColor);
+            else if (info.StartsWith("Failed to start the server: ")) SimpleSay("Couldn't start the game server on this PC: " + info.Substring(28), BadColor);
+            else if (info.Length > 0 && !info.StartsWith("Pick your monster")) SimpleSay(info, WaitColor);
+            else SimpleSay("Pick your monster, then host a game or join a friend's.", DimColor);
+            return;
+        }
+        string invite = SimpleInvite();
+        simpleInviteRow.Visible = lobbyOwner && invite.Length > 0;
+        simpleInviteOut.Text = invite;
+        simpleHostSettings.Visible = lobbyOwner;
+        simpleSettings.Visible = !lobbyOwner;
+        simpleSettings.Text = netSettings.Length > 0 ? "Stage " + StageName(netSettings) : "";
+        var names = new List<string>();
+        foreach (string n in m.Names) { string who = n.Split(':')[0]; names.Add(who == m.Host ? who + " (host)" : who); }
+        simplePlayers.Text = "Players: " + string.Join(", ", names.ToArray());
+        simpleStart.Visible = lobbyOwner;
+        for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i].Enabled = modBoxes[i].Enabled;
+        if (info.StartsWith("Server: ")) SimpleSay(LobbyClient.FriendlyError(info.Substring(8)), BadColor);
+        else if (info.StartsWith("Match")) SimpleSay(info, info.StartsWith("Match running") ? OkColor : WaitColor);
+        else if (lobbyOwner) SimpleSay(m.Names.Length < 2 ? "Send the invite to your friends. Press Start match when everyone is in." : "Everyone in? Press Start match.",
+                                       m.Names.Length < 2 ? WaitColor : OkColor);
+        else SimpleSay("You're in. Waiting for " + m.Host + " to start the match...", OkColor);
+    }
+
+    // "stage 9, endless, Super Jump" with the stage's name: "9 Tsunopolis, endless, Super Jump"
+    string StageName(string settings)
+    {
+        string rest = settings.StartsWith("stage ") ? settings.Substring(6) : settings;
+        int comma = rest.IndexOf(',');
+        int id = ParseInt(comma > 0 ? rest.Substring(0, comma) : rest);
+        int k = Array.IndexOf(LevelIds, id);
+        return (k >= 0 ? LevelNames[k] : id.ToString()) + (comma > 0 ? rest.Substring(comma) : "");
+    }
+
+    // the best address for a friend (ServerHost.ShareLines order: internet, Tailscale, LAN) with the lobby code
+    string SimpleInvite()
+    {
+        if (hosted == null || lobbyCode.Length != 4) return "";
+        foreach (string l in hostedLines)
+        {
+            int sp = l.LastIndexOf(' ');
+            string addr = sp >= 0 ? l.Substring(sp + 1) : l, host;
+            int port;
+            LobbyClient.SplitAddress(addr, LobbyClient.DefaultPort, out host, out port);
+            if (host.Length > 0) return LobbyClient.FormatInvite(host, port, lobbyCode);
+        }
+        return "";
+    }
+
     LobbyClient.MemberInfo lobbyMembers;
 
     // the lobby line: code, members, host and the lobby's settings
@@ -903,6 +1142,7 @@ class Launcher : Form
         foreach (string n in m.Names) names.Add(n.Split(':')[0]);
         netInfo.Text = "Lobby " + m.Code + " (code for friends): " + string.Join(", ", names.ToArray()) + ". Host: " + m.Host +
             (netSettings.Length > 0 ? " (" + netSettings + ")" : "") + "." + (lobbyOwner ? " Press Start match when everyone is in." : " Waiting for the host to start.");
+        UpdateSimple();
     }
 
     void NetNotInLobby()
@@ -912,6 +1152,7 @@ class Launcher : Form
         netSettings = "";
         netStart.Enabled = false;
         foreach (CheckBox c in modBoxes) c.Enabled = true;
+        UpdateSimple();
     }
     static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
 
@@ -1014,6 +1255,7 @@ class Launcher : Form
         lines.Add(":NetName|" + netName.Text.Trim());
         lines.Add(":NetLobbyName|" + netLobbyName.Text.Trim());
         lines.Add(":NetWins|" + (int)netWins.Value);
+        lines.Add(":Mode|" + (simpleRoot != null && simpleRoot.Visible ? "simple" : "advanced"));
         for (int i = 0; i < modBoxes.Length; ++i) lines.Add(":Mod_" + LobbyClient.ModifierNames[i] + "|" + (modBoxes[i].Checked ? "1" : "0"));
         lines.Add(":NetMaster|" + netMaster.Text.Trim());
         lines.Add(":NetPublic|" + (netPublic.Checked ? "1" : "0"));
