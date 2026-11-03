@@ -32,6 +32,7 @@
 #include "wotm_gs.hpp"
 #include "wotm_interp.hpp"   // M4, GameCamera and frame interpolation (no raylib, tested in native/tests)
 #include "wotm_mods.hpp"   // .RTX palettes: mods/ wins over the disc (loadResources)
+#include "wotm_disc.hpp"   // .RTX from the disc folder or the ISO (loadRtx)
 #include "wotm_texmods.hpp"   // mod textures as PNG (textureId, residentTexture)
 
 namespace wotm {
@@ -922,6 +923,7 @@ public:
     struct ImgSrc { std::string stem; uint32_t texId; };
     std::unordered_map<uint32_t, ImgSrc> rtxImgSrc_;   // rtxImg key -> file and disc texId
     std::string discRoot_;                              // root of the extracted disc, with the slash (loadResources)
+    std::string isoPath_;                               // the ISO the .RTX come from when the folder lacks them (loadResources)
     std::map<std::string, std::map<uint32_t, uint32_t>> texPackets_;   // FILE -> packet offset in the .TEX -> disc texId
 
     // Disc path ("MON/LIZARD0.RTX"): the mods/ file (wotm_mods.hpp) if there is one, otherwise the root's
@@ -968,8 +970,11 @@ public:
                 auto pk = texPackets_.find(file);
                 if (pk == texPackets_.end()) {
                     std::vector<uint8_t> d;
-                    for (const char *dir : {"LVL/", "MON/", "SHELL/", ""}) {
-                        d = texmods::readUnzipped(discPath(*dir ? dir + file : stem + "/" + file));
+                    for (const char *dir : {"LVL/", "MON/", "SHELL/", ""}) {   // mods/, the disc folder, then the ISO (as loadRtx)
+                        std::vector<uint8_t> raw;
+                        if (wotm::disc::readFile(discRoot_.empty() ? std::filesystem::path(".") : std::filesystem::path(discRoot_), isoPath_,
+                                                 *dir ? dir + file : stem + "/" + file, raw))
+                            d = texmods::unzipped(std::move(raw));
                         if (!d.empty()) break;
                     }
                     pk = texPackets_.emplace(file, texmods::packetIds(d)).first;
@@ -992,8 +997,8 @@ public:
         return Rectangle{r.x * kx, r.y * ky, r.width * kx, r.height * ky};
     }
 
-    // Loads the level and monsters of the current game from the extracted disc (`root` contains LVL/ and MON/). Idempotent: only redoes
-    // it when the names/bases in fileStatus change. Returns true if it found at least the level file.
+    // Loads the level and monsters of the current game from the disc folder (`root` contains LVL/ and MON/) or the ISO. Idempotent:
+    // only redoes it when the names/bases in fileStatus change. Returns true if it found at least the level file.
     bool loadResources(const Ram &ram, const std::string &rootArg, std::string *log = nullptr) {
         const uint32_t fs = addr::fileStatus;
         const int n = ram.u8(fs + 0xB0);
@@ -1012,23 +1017,27 @@ public:
         }
         if (resSig_ == sig && !rtxPal.empty()) return true;
         if (names[0].empty()) return false;
-        // No explicit root: WOTM_DISC (as in wotm_fmv.hpp), otherwise the current directory.
+        // No explicit root: WOTM_DISC (as in wotm_fmv.hpp), otherwise the current directory (discroot, the ELF's folder). What the
+        // folder lacks comes from the ISO (WOTM_ISO, else the runtime's PS2X_CD_IMAGE): a setup from the ISO alone has no LVL/ or
+        // MON/ on disk, and without the palettes every texture fell back to vertex color (issue #9).
         std::string root = rootArg;
         if (root.empty())
             if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
         discRoot_ = root + sep;
-        auto path = [&](const std::string &rel) { return discPath(rel); };
+        const char *iso = std::getenv("WOTM_ISO");
+        if (!iso) iso = std::getenv("PS2X_CD_IMAGE");
+        isoPath_ = iso ? iso : "";
         rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;
-        bool lvl = loadRtx(path("LVL/" + names[0] + ".RTX").c_str(), base0);
+        bool lvl = loadRtx("LVL/" + names[0] + ".RTX", base0);
         // The menu (SHELL) lives in SHELL/SHELL.RTX, not in LVL/.
-        if (!lvl) lvl = loadRtx(path(names[0] + "/" + names[0] + ".RTX").c_str(), base0);
-        if (!lvl) lvl = loadRtx(path("SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
+        if (!lvl) lvl = loadRtx(names[0] + "/" + names[0] + ".RTX", base0);
+        if (!lvl) lvl = loadRtx("SHELL/" + names[0] + ".RTX", base0);   // LOAD, UI, SHELL2, PRESHELL
         if (log) *log = names[0] + (lvl ? "" : " (not found)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
-            const bool ok = loadRtx(path("MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
+            const bool ok = loadRtx("MON/" + names[size_t(i)] + ".RTX", ram.u16(fs + 0x14C + 2 * (i - 1)), true,
                                     ram.u16(fs + 0x168 + 2 * (i - 1)));   // the previous file's maxTexAddr and maxResAddr
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }
@@ -1039,20 +1048,17 @@ public:
 
     // base: added to the palettes' DBP (file base); resBase: added to the resident images' DBP (0 for the stage and the menu; for a monster,
     // the previous file's fileStatus.maxResAddr, as in texmResRelocate).
-    bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
+    // `rel` is the disc path ("MON/LIZARD0.RTX"): mods/ first, then the disc folder (discRoot_), then the ISO (isoPath_), as
+    // wotm::disc::readFile does for the movies and the save icon.
+    bool loadRtx(const std::string &rel, uint32_t base, bool append = false, uint32_t resBase = 0) {
         if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
-        std::string stem = path;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
+        std::string stem = rel;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
         stem = stem.substr(stem.find_last_of("/\\") + 1);
         stem = stem.substr(0, stem.find('.'));
         for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
         std::vector<uint8_t> raw;
-        if (FILE *f = std::fopen(path, "rb")) {
-            std::fseek(f, 0, SEEK_END);
-            raw.resize(size_t(std::ftell(f)));
-            std::fseek(f, 0, SEEK_SET);
-            if (std::fread(raw.data(), 1, raw.size(), f) != raw.size()) raw.clear();
-            std::fclose(f);
-        }
+        if (!wotm::disc::readFile(discRoot_.empty() ? std::filesystem::path(".") : std::filesystem::path(discRoot_), isoPath_, rel, raw))
+            raw.clear();
         if (raw.size() < 34) return false;
         std::vector<uint8_t> data;
         static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
