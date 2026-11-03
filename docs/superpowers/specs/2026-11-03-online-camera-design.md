@@ -53,7 +53,12 @@ sensitivities would desync. This design fixes that by sending the settings too.
   every `wotm::settings::get/on` of those four keys in the orbit: `enabled()`, `eligible()`, the stick and mouse scaling, recenter.
 - **Mouse in the orbit:** with the fixed step, slot N's mouse comes from its input (3eca24a's change); without it, the live
   keyboard player's motion as today. The cursor capture (`wotm::mouse::want`) stays local: only this PC's player.
-- **Changing settings mid-fight** (pause panel) takes effect at the next sampled frame on every PC alike, since it travels.
+- **Per call site:** `enabled()` becomes `enabled(slot)`. Sites that change game state use `camSettingsFor(slot)`: `eligible()`,
+  the input hook that forces the screen-relative config and zeroes the game's right-stick bytes. Sites that only manage the local
+  cursor (`wotm::mouse::want/clear`) use this PC's setting. `Cameras::LeaveUnifiedTask` (no slot of its own) uses
+  `camSettingsFor` of camera 2's monster's slot, classic when that isn't a player. The `[orbit]` log prints `camSettingsFor(slot)`.
+- **Changing settings mid-fight:** the options panel doesn't open in a network match today; since the settings travel per frame,
+  a later change can let it open online for the camera keys without breaking sync.
 - **Gamepad:** the right stick already travels; with `cam` it is scaled by its owner's settings, so a controller works online with
   no extra change.
 

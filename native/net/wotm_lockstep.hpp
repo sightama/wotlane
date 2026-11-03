@@ -1,4 +1,4 @@
-// ABOUTME: Lockstep input timeline: per player and per frame, the pad state and mouse motion (10 bytes) that every PC applies.
+// ABOUTME: Lockstep input timeline: per player and per frame, the pad, mouse and camera settings state (12 bytes) every PC applies.
 // ABOUTME: No dependency on the game or the network; used by the client (wotm.exe) and the server.
 #pragma once
 
@@ -10,15 +10,18 @@
 namespace wotm_net
 {
     // Pad state as the runtime stores it (PadInputState in Pad.cpp): buttons are active-low, analog sticks centered at 0x80. mouseX/Y:
-    // the mouse motion (pixels) of the keyboard's player on this frame, which turns that player's modern camera (wotm_orbit.inc)
+    // the mouse motion (pixels) of the keyboard's player on this frame, which turns that player's modern camera (wotm_orbit.inc). cam:
+    // that player's camera settings (wotm_camsettings.hpp; 0 = not carried), which every PC uses to turn that player's camera
     struct PadState
     {
         uint16_t buttons = 0xFFFFu;
         uint8_t rx = 0x80u, ry = 0x80u, lx = 0x80u, ly = 0x80u;
         int16_t mouseX = 0, mouseY = 0;
+        uint16_t cam = 0;
         bool operator==(const PadState &o) const
         {
-            return buttons == o.buttons && rx == o.rx && ry == o.ry && lx == o.lx && ly == o.ly && mouseX == o.mouseX && mouseY == o.mouseY;
+            return buttons == o.buttons && rx == o.rx && ry == o.ry && lx == o.lx && ly == o.ly && mouseX == o.mouseX && mouseY == o.mouseY &&
+                   cam == o.cam;
         }
         bool operator!=(const PadState &o) const { return !(*this == o); }
     };

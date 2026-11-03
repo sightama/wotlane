@@ -165,7 +165,7 @@ namespace
             r.states.push_back(i < 10 ? pressed(0x4000) : PadState{});
         m.runs.push_back(r);
         const std::vector<uint8_t> bytes = p::encode(m);
-        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 10u);   // headers, 1 byte per state, 10 per new state (only 2 change)
+        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 12u);   // headers, 1 byte per state, 12 per new state (only 2 change)
         p::Inputs back;
         CHECK(p::decode(bytes, back));
         CHECK(back.ackOwn == 41u && back.runs.size() == 1u);
@@ -203,6 +203,24 @@ namespace
         CHECK(back.own.states == m.own.states);
         CHECK(back.own.states[0].mouseX == -300 && back.own.states[0].mouseY == 7);
         CHECK(back.own.states[3].mouseX == 32767 && back.own.states[3].mouseY == -32768);
+    }
+
+    // the sender's packed camera settings (wotm_camsettings.hpp) travel too: every PC scales that player's camera with them
+    TEST(proto_camera_settings_travel_with_the_input)
+    {
+        PadState withCam;
+        withCam.cam = 0x00A7u;
+        CHECK(withCam != PadState{});   // a settings change alone is a new state
+        PadState all = withCam;
+        all.cam = 0xFFFFu;
+        p::Input m;
+        m.own.player = 1;
+        m.own.first = 0;
+        m.own.states = {withCam, withCam, all, PadState{}};
+        p::Input back;
+        CHECK(p::decode(p::encode(m), back));
+        CHECK(back.own.states == m.own.states);
+        CHECK(back.own.states[0].cam == 0x00A7u && back.own.states[2].cam == 0xFFFFu && back.own.states[3].cam == 0u);
     }
 
     TEST(proto_control_messages_roundtrip)
