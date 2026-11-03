@@ -4,7 +4,8 @@
 # Usage: powershell -File tools\mouse_check.ps1 [-Match 3,1,1] [-Secs 50]
 #   Run A: players on the pad (PS2X_PAD script, as determinism_check.ps1 -Replay), WOTM_NOINPUT off so the mouse reaches the game, and
 #     WOTM_INPUTREC. Run B: WOTM_NOINPUT=1 and WOTM_INPUTPLAY of A's recording, with the mouse moving again: live motion must not reach
-#     the game, and the recorded motion must turn the camera exactly as in A. Moves the real cursor while the game window has focus.
+#     the game, and the recorded motion must turn the camera exactly as in A. A uses camera sensitivity 8 with the Y axis inverted and
+#     B sensitivity 2, normal: the recorded camera settings must win. Moves the real cursor while the game window has focus.
 param(
     [string]$Match = '3,1,1',
     [int]$Secs = 50
@@ -50,10 +51,14 @@ public static class MouseInject {
 
 $inputs = Join-Path $runtime 'mouse_inputs.bin'
 $script = '18:6:up;20:1:square;22:1:cross;24:3:left;25:1:triangle;27:4:up@2;28:1:square@2;30:2:right@2;31:1:circle@2;33:5:down;34:1:square'
-$base = "WOTM_MATCH=$Match;WOTM_PLAYERS=2;WOTM_FIXEDSTEP=1;WOTM_SEED=1234;WOTM_AIVSAI=;WOTM_LOGICDELAY=;WOTM_INPUTDELAY=;WOTM_MOUSECAM="
+$base = "WOTM_MATCH=$Match;WOTM_PLAYERS=2;WOTM_FIXEDSTEP=1;WOTM_SEED=1234;WOTM_AIVSAI=;WOTM_LOGICDELAY=;WOTM_INPUTDELAY=;WOTM_MOUSECAM=;WOTM_CAMERA=1"
+# A records with sensitivity 8 and the Y axis inverted; B replays with other camera settings (2, normal): the camera settings travel in
+# the recorded input, so the replay must still turn each camera exactly as in A
 $runs = @(
-    @{ Name = 'A'; Pad = $script; Extra = "WOTM_NOINPUT=;WOTM_INPUTREC=$inputs;WOTM_INPUTPLAY="; Expect = '\[mouse\] cursor captured'; Reject = '' },
-    @{ Name = 'B'; Pad = ''; Extra = "WOTM_NOINPUT=1;WOTM_INPUTREC=;WOTM_INPUTPLAY=$inputs"; Expect = ''; Reject = '\[mouse\] cursor captured' }
+    @{ Name = 'A'; Pad = $script; Extra = "WOTM_NOINPUT=;WOTM_INPUTREC=$inputs;WOTM_INPUTPLAY=;WOTM_CAMSENS=8;WOTM_CAMINVERT=1"
+       Expect = '\[mouse\] cursor captured'; Reject = '' },
+    @{ Name = 'B'; Pad = ''; Extra = "WOTM_NOINPUT=1;WOTM_INPUTREC=;WOTM_INPUTPLAY=$inputs;WOTM_CAMSENS=2;WOTM_CAMINVERT=0"
+       Expect = ''; Reject = '\[mouse\] cursor captured' }
 )
 foreach ($r in $runs) {
     $hash = Join-Path $runtime "mouse_$($r.Name).hash"

@@ -87,12 +87,26 @@ namespace
         }
         float headingTo(float dx, float dy) { return wotm::detmath::atan2f(dx, dy); }   // 0 = +Y, positive toward +X
 
-        bool enabled() { return wotm::settings::on(wotm::settings::Camera) && !g_aiVsAi && !g_wotmFreeCam.load(std::memory_order_relaxed); }
+        // Camera settings of player `slot` (0..3) on this frame: with the fixed step they travel in that player's input (wotm_sync.inc
+        // packs them on the PC that owns the player), so every PC turns each camera with its owner's settings; without it (normal
+        // offline play, no timeline) and for inputs recorded before they travelled, this PC's
+        wotm::camsettings::Settings camSettingsFor(int slot)
+        {
+            const wotm::camsettings::Settings local = wotm_sync::localCamSettings();
+            if (!wotm_sync::g_fixedStep || slot < 0 || slot > 3)
+                return local;
+            return wotm::camsettings::resolve(wotm_sync::inputFor(slot, wotm_sync::g_index).cam, local);
+        }
+        bool orbitAllowed() { return !g_aiVsAi && !g_wotmFreeCam.load(std::memory_order_relaxed); }
+        // the modern camera drives player `slot`'s view (game state: the same answer on every PC); players 5..8 keep the classic one
+        bool enabled(int slot) { return slot >= 0 && slot <= 3 && camSettingsFor(slot).modern && orbitAllowed(); }
+        // this PC's player uses the modern camera: only for capturing this PC's cursor
+        bool enabledHere() { return wotm::settings::on(wotm::settings::Camera) && orbitAllowed(); }
 
         // Camera v eligible on this frame; mon = monster, slot = player
         bool eligible(uint8_t *rdram, int v, uint32_t &mon, int &slot)
         {
-            if (v >= kMaxCams || !enabled() || FAST_READ32(kGameMode) == 9u)
+            if (v >= kMaxCams || !orbitAllowed() || FAST_READ32(kGameMode) == 9u)
                 return false;
             // unified view: only camera 2 on POV 0, which is the grab camera (StateGrappleLift: follows the grabber). The close one is POV 1,
             // the victory one is 7: those stay with the game
@@ -109,7 +123,7 @@ namespace
             if (!unified && static_cast<int32_t>(FAST_READ32(mon + kMonCameraView)) != v)
                 return false;   // camera 2 following the grabber outside the unified view (1P without the close one etc.): the player's view is another one
             const uint32_t mcs = FAST_READ32(mon + kMonCs) & 0x1FFFFFFFu;
-            return okAddr(mcs, 0x70u);
+            return okAddr(mcs, 0x70u) && enabled(slot);
         }
 
         // Padless test: WOTM_ORBITSTICK="frame:frames:x:y[@player];..." sets the right stick to (x, y) (-1..1, y up) from the
@@ -394,7 +408,7 @@ namespace
                 wasActive[v] = g_cam[v].active;
             // mouse: the cursor stays captured while some camera follows the keyboard player's monster (including the game's own: fall,
             // throw), outside the pause
-            if (enabled() && FAST_READ32(wotm::sym::isPaused) == 0u)
+            if (enabledHere() && FAST_READ32(wotm::sym::isPaused) == 0u)
                 for (int v = 0; v < n && v < kMaxCams; ++v)
                     if (int ks = -1; isPlayerMonster(rdram, FAST_READ32(camAddr(v) + kCamMonster), &ks) &&
                                      ks == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
@@ -458,8 +472,12 @@ namespace
                     s.mon = mon;
                     in.stick[0] = in.stick[1] = 0.f;
                     if (log)
-                        std::fprintf(stderr, "[orbit] camera %d: on (player %d, az %.1f, monster heading %.1f%s)\n", v, slot + 1,
-                                     s.az * 57.2958f, monHeading * 57.2958f, s.cutSeen ? ", game cut" : "");
+                    {
+                        const wotm::camsettings::Settings own = camSettingsFor(slot);
+                        std::fprintf(stderr, "[orbit] camera %d: on (player %d, az %.1f, monster heading %.1f%s; sensitivity %d, Y %s, recenter %s)\n",
+                                     v, slot + 1, s.az * 57.2958f, monHeading * 57.2958f, s.cutSeen ? ", game cut" : "", own.sens,
+                                     own.invertY ? "inverted" : "normal", own.recenter ? "on" : "off");
+                    }
                 }
                 s.active = true;
                 driving[slot] = true;
@@ -469,10 +487,11 @@ namespace
                 testStick(frames, slot, sx, sy);
                 const bool stickMoved = std::fabs(sx) > 0.05f || std::fabs(sy) > 0.05f;
                 s.still = stickMoved ? 0 : s.still + 1;
-                // panel, CAMERA tab: sensitivity (5 = 1x, each point 20%) and invert the vertical axis
-                const float sens = float(std::clamp(wotm::settings::get(wotm::settings::CamSens), 1, 10)) * 0.2f;
+                // the player's CAMERA tab: sensitivity (5 = 1x, each point 20%) and invert the vertical axis
+                const wotm::camsettings::Settings cam = camSettingsFor(slot);
+                const float sens = float(std::clamp(cam.sens, 1, 10)) * 0.2f;
                 sx *= sens;
-                sy *= wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens;
+                sy *= cam.invertY ? -sens : sens;
                 s.elev = std::clamp(s.elev - sy * 0.012f, -0.6f, 0.9f);   // ~40 degrees/s (horizontal is ~170)
 
                 // mouse (stage 7, wotm_mouse.hpp): the motion of the player's mouse. With the fixed step it's part of that player's
@@ -494,7 +513,7 @@ namespace
                 if (kbSlot)
                     testMouse(frames, mx, my);
                 mx *= 0.0025f * sens;
-                my *= 0.0025f * (wotm::settings::on(wotm::settings::CamInvertY) ? -sens : sens);
+                my *= 0.0025f * (cam.invertY ? -sens : sens);
                 if (mx != 0.f || my != 0.f)
                 {
                     s.still = 0;
@@ -533,7 +552,7 @@ namespace
                 // endlessly (that was the crazy camera when releasing lock-on while walking backward, and the spinning by itself while walking sideways)
                 const float vx = mt[0] - s.lastMon[0], vy = mt[1] - s.lastMon[1], speed = std::sqrt(vx * vx + vy * vy);
                 std::memcpy(s.lastMon, mt, sizeof mt);
-                if (!locked && wotm::settings::on(wotm::settings::CamRecenter) && s.still > 90 && speed > 0.5f)
+                if (!locked && cam.recenter && s.still > 90 && speed > 0.5f)
                 {
                     const float align = -(vx * wotm::detmath::sinf(s.az) + vy * wotm::detmath::cosf(s.az)) / speed;   // 1 = away from the camera (az is the heading from the monster to it)
                     // walking forward (monster heading matching the movement) and sustained: the monster's turn has its own movement
@@ -673,7 +692,7 @@ namespace
             uint8_t *b = rdram + gp;
             // mouse (wotm_mouse.hpp): the cursor stays captured for the keyboard player's whole fight (outside the pause), even when
             // another game camera takes over for a moment (fall, throw); with the orbit not driving, the movement is discarded
-            if (enabled() && slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
+            if (enabledHere() && slot == wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed))
             {
                 // during the game's pause interpretInputs and Cameras::Update stop: with no signal, the window releases the cursor in ~150 ms
                 if (FAST_READ32(wotm::sym::isPaused) == 0u)
@@ -681,13 +700,14 @@ namespace
                 if (!in.driving)
                     wotm::mouse::clear();
             }
-            if (!in.driving || !enabled())
+            const bool modern = enabled(slot);
+            if (!in.driving || !modern)
             {
                 in.forced = false;
                 in.stick[0] = in.stick[1] = 0.f;
                 // with the modern camera the right stick doesn't turn the monster: in the close camera (and in the other POVs, where the
                 // orbit rests) the game uses X to turn; Y (moving the head) still goes to the game
-                if (enabled())
+                if (modern)
                     b[0x10] = b[0x11] = 0;
                 return -1;
             }
@@ -784,10 +804,13 @@ namespace
         {
             const uint32_t ra = GPR_U32(ctx, 31), self = GPR_U32(ctx, 4);
             g_origLeaveTask(rdram, ctx, runtime);
-            if (ctx->pc != ra || GPR_U32(ctx, 2) == 0u || !enabled() || !FAST_READ32(kUnified))
+            if (ctx->pc != ra || GPR_U32(ctx, 2) == 0u || !FAST_READ32(kUnified))
                 return;
             const uint32_t c2 = camAddr(2), mon = FAST_READ32(c2 + kCamMonster) & 0x1FFFFFFFu;
             if (!okAddr(mon, 0x284u) || rdram[mon + 0x280] != 0)   // m_freeFalling
+                return;
+            // the camera's monster's player decides (the same on every PC); not a player's monster: the game's own wait
+            if (int slot = -1; !isPlayerMonster(rdram, FAST_READ32(c2 + kCamMonster), &slot) || !enabled(slot))
                 return;
             constexpr uint32_t kReason = wotm::sym::x_7Cameras_m_leaveReason, kAlpha = wotm::sym::x_7Cameras_m_currentFadeAlpha;
             const uint32_t reason = FAST_READ32(kReason), alpha = FAST_READ32(kAlpha), task = FAST_READ32(c2 + 0xE68u);
@@ -820,7 +843,7 @@ namespace
                 runtime.registerFunction(kOkToUnify, &okToUnifyHook);
             if ((g_origLeaveTask = runtime.lookupFunction(kLeaveTask)))
                 runtime.registerFunction(kLeaveTask, &leaveTaskHook);
-            std::fprintf(stderr, "[wotm] camera %s (WOTM_CAMERA), recenter %s, close camera %s (WOTM_CLOSECAM), sensitivity %d, Y axis %s%s\n",
+            std::fprintf(stderr, "[wotm] this PC's camera %s (WOTM_CAMERA), recenter %s, close camera %s (WOTM_CLOSECAM), sensitivity %d, Y axis %s%s\n",
                          wotm::settings::on(wotm::settings::Camera) ? "modern" : "classic",
                          wotm::settings::on(wotm::settings::CamRecenter) ? "on" : "off",
                          wotm::settings::on(wotm::settings::CloseCam) ? "on" : "off",

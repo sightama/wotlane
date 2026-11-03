@@ -103,6 +103,21 @@ namespace wotm_sync
         s.mouseY = static_cast<int16_t>(y);
     }
 
+    // This PC's camera settings (the panel's CAMERA tab), packed into every sampled controller's input so that every PC turns that
+    // player's camera with them (wotm_orbit.inc camSettingsFor)
+    wotm::camsettings::Settings localCamSettings()
+    {
+        namespace st = wotm::settings;
+        return {st::on(st::Camera), st::on(st::CamRecenter), st::on(st::CamInvertY), st::get(st::CamSens)};
+    }
+
+    // no button, stick or mouse (the camera settings don't count: they are in every sampled state)
+    bool idle(wotm_net::PadState s)
+    {
+        s.cam = 0;
+        return s == wotm_net::PadState{};
+    }
+
     wotm_net::PadState sampleLocal(int controller)
     {
         uint8_t d[32];
@@ -115,6 +130,7 @@ namespace wotm_sync
             s.lx = d[6];
             s.ly = d[7];
         }
+        s.cam = wotm::camsettings::pack(localCamSettings());
         return s;
     }
 
@@ -133,7 +149,7 @@ namespace wotm_sync
             wotm_net::PadState s = sampleLocal(0);
             sampleMouse(s);   // the mouse is this PC's player's, like game pad 0
             g_net->pushLocal(index + g_inputDelay, s);
-            if (!g_loggedLocal && s != wotm_net::PadState{})
+            if (!g_loggedLocal && !idle(s))
             {
                 g_loggedLocal = true;
                 std::fprintf(stderr, "[sync] first local input: sample of frame %u applies at frame %u\n", index, index + g_inputDelay);
@@ -147,7 +163,7 @@ namespace wotm_sync
             if (c == kbPlayer)
                 sampleMouse(s);
             const uint32_t at = g_inputs.scheduleLocal(c, index, s);
-            if (g_levelLoaded && !g_loggedLocal && s != wotm_net::PadState{})
+            if (g_levelLoaded && !g_loggedLocal && !idle(s))
             {
                 g_loggedLocal = true;
                 std::fprintf(stderr, "[sync] first local input: sample of frame %u applies at frame %u\n", index, at);
@@ -167,7 +183,7 @@ namespace wotm_sync
         if (!ours)
             return;
         ps2_stubs::clearPadOverrideState();
-        if (g_levelLoaded && !g_loggedApplied && s != wotm_net::PadState{})
+        if (g_levelLoaded && !g_loggedApplied && !idle(s))
         {
             g_loggedApplied = true;
             std::fprintf(stderr, "[sync] first non-neutral input applied at frame %u\n", g_index);
