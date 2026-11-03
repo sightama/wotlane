@@ -3,7 +3,8 @@
 //
 // 2 players with WOTM_LOCALPLAYER (each on their own PC sees their own view fullscreen): TheGame::gameReestablishViews in mode 3 becomes
 // viewSetNumViews(2) and viewCreate(0, v) for both, like retail mode 8 does with two views in viewport 0; the fullscreen view keeps the
-// 4:3 aspect, so the game's projection, clipping, HUD and cameras stay correct, without the 2:3 halves of retail split screen.
+// 4:3 aspect, so the game's projection, clipping and cameras stay correct, without the 2:3 halves of retail split screen. The HUD
+// isn't: with 2 players Hud::update places it with the split-screen offset (hudCornerOffset below).
 namespace wotm_multi
 {
     constexpr uint32_t kReestablishViews = wotm::fn::gameReestablishViews__7TheGame;
@@ -197,6 +198,30 @@ namespace wotm_multi
             WRITE32(kUseUnifiedView, unified);
     }
 
+    // Hud::update places each player's HUD (portrait, health and energy bars) in front of their camera with one of three camera-space
+    // offsets that Hud::initBefore stores in the Hud: +0x100 the full-screen corner (1, 3 or 4 players), +0x110 the 2:3 split-screen half
+    // (2 players) and +0x120 the unified view. With one full view per player the split one put it mid-top: the corner one replaces it.
+    // Every PC writes the same values, so the state stays identical.
+    constexpr uint32_t kHudInitBefore = wotm::fn::initBefore__3Hudi, kHudCorner = 0x100, kHudSplit = 0x110;
+    PS2Runtime::RecompiledFunction g_origHudInitBefore = nullptr;
+
+    void hudCornerOffset(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t hud = GPR_U32(ctx, 4), ra = GPR_U32(ctx, 31);
+        const bool entry = ctx->pc == kHudInitBefore;
+        g_origHudInitBefore(rdram, ctx, runtime);
+        if (!entry || ctx->pc != ra)
+            return;
+        for (uint32_t i = 0; i < 3; ++i)
+            WRITE32(hud + kHudSplit + 4 * i, READ32(hud + kHudCorner + 4 * i));
+        static bool logged = false;
+        if (!logged)
+        {
+            logged = true;
+            std::fprintf(stderr, "[multi] HUD in the corner of each player's full view\n");
+        }
+    }
+
     template <uint32_t Entry, PS2Runtime::RecompiledFunction *Orig> void skipWithPlayerViews(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         if (ctx->pc == Entry && perPlayerViews())
@@ -224,8 +249,9 @@ namespace wotm_multi
             return;
         if ((g_origReestablish = runtime.lookupFunction(kReestablishViews)) && (g_origInitCC = runtime.lookupFunction(kInitCC)) &&
             (g_origInitCCThrow = runtime.lookupFunction(kInitCCThrow)) && (g_origToggleSplit = runtime.lookupFunction(kToggleSplit)) &&
-            (g_origGrapple = runtime.lookupFunction(kGrapple)))
+            (g_origGrapple = runtime.lookupFunction(kGrapple)) && (g_origHudInitBefore = runtime.lookupFunction(kHudInitBefore)))
         {
+            runtime.registerFunction(kHudInitBefore, &hudCornerOffset);
             runtime.registerFunction(kReestablishViews, &reestablishViewsPerPlayer);
             runtime.registerFunction(kGrapple, &grappleKeepsPlayerViews);
             runtime.registerFunction(kInitCC, &skipWithPlayerViews<kInitCC, &g_origInitCC>);

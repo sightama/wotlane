@@ -1247,7 +1247,7 @@ namespace
             wotm_training::g_inFight = true;   // also the return from RESET POSITIONS (rtMain(0))
             if (GPR_U32(ctx, 4))
             {
-                wotm_training::g_introMs = wotm_training::nowMs();   // this fight's intro can be skipped (wotm_training.inc)
+                wotm_training::g_introArmed = true;   // this fight's intro can be skipped (wotm_training.inc)
                 g_damageNewFight = true;
             }
         }
