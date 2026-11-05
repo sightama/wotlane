@@ -1121,12 +1121,29 @@ class Launcher : Form
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
 
+    // Play (offline): the game carries on by itself (independent process), so the launcher closes; on error the window stays open with
+    // the message. Unless this launcher runs the server (Host on this PC): closing would stop it, and the lobby with it, for every
+    // friend in it (#23). Then the launcher stays open and minimized, as in a network match, and comes back when the game closes.
     void Launch(ProcessStartInfo psi)
     {
         try
         {
-            Process.Start(psi);
-            Close();   // the game carries on by itself (independent process); on error the window stays open with the message
+            if (!ServerHost.KeepsLauncherOpen(hosted)) { Process.Start(psi); Close(); return; }
+            if (onlineGame != null && !onlineGame.HasExited) { netInfo.Text = "The game is already running."; return; }
+            int port = hosted.Port;
+            onlineGame = Process.Start(psi);
+            onlineGame.EnableRaisingEvents = true;
+            onlineGame.Exited += delegate
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    WindowState = FormWindowState.Normal;
+                    Activate();
+                    netInfo.Text = "Game over. Your server on port " + port + " kept running" + (lobbyCode.Length > 0 ? "; you are still in lobby " + lobbyCode + "." : ".");
+                });
+            };
+            WindowState = FormWindowState.Minimized;
+            netInfo.Text = "Game running. This window stays open (minimized) because it runs your server on port " + port + " for your friends.";
         }
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
