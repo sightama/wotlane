@@ -15,8 +15,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <random>
+#include <string>
 #include <vector>
 
 namespace
@@ -503,6 +506,46 @@ TEST(creator_skin_json_and_png_names)
     CHECK(v.get("base")->asInt(-1) == 1 && v.get("ai")->asBool(true) == false);
     CHECK(wotm::creator::pngName(4, false) == "t0004.png");
     CHECK(wotm::creator::pngName(11, true) == "rtx_t0011.png");
+}
+
+TEST(mods_add_skin_after_scan)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_addskin";
+    fs::remove_all(root);
+    fs::create_directories(root / "Creator" / "skins" / "green");
+    {
+        std::ofstream o(root / "Creator" / "skins" / "green" / "skin.json");
+        o << wotm::creator::skinJson("togera", "green", "GREEN TOGERA", 1);
+        std::ofstream p(root / "Creator" / "skins" / "green" / "t0004.png");
+        p << "not a real png";
+    }
+    wotm::mods::Registry reg;   // a fresh one, not get(): the singleton stays untouched
+    reg.scan(root / "nothing_here");   // ready, empty
+    CHECK(reg.ready() && reg.skins().empty());
+    std::string why;
+    const wotm::mods::Skin *k = reg.addSkin(root / "Creator" / "skins" / "green", why);
+    CHECK(k && k->monster == 3 && k->id == "green" && k->index == 4 && k->base == 1 && k->mod == "Creator");
+    CHECK(reg.skinByIndex(3, 4) == k);
+    CHECK(reg.aliasOf("MON/LIZARD4.NGP") == "MON/LIZARD1.NGP");
+    CHECK(reg.skinPngs().size() == 1 && reg.skinPngs()[0].stem == "LIZARD4");
+    const wotm::mods::Skin *again = reg.addSkin(root / "Creator" / "skins" / "green", why);   // overwrite: same index
+    CHECK(again && again->index == 4 && reg.skins().size() == 1 && reg.skinPngs().size() == 1);
+    CHECK(again == k);   // overwritten in place
+    // the same folder written another way is still an overwrite; the same monster/id from another folder is refused
+    CHECK(reg.addSkin(root / "Creator" / "skins" / "." / "green" / "", why) == k && reg.skins().size() == 1);
+    fs::create_directories(root / "Other" / "skins" / "green");
+    { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "X", 0); }
+    CHECK(!reg.addSkin(root / "Other" / "skins" / "green", why) && why.find("Creator") != std::string::npos && reg.skins().size() == 1);
+    // a second skin of the same monster takes the next index; the first one stays
+    fs::create_directories(root / "Creator" / "skins" / "blue");
+    { std::ofstream o(root / "Creator" / "skins" / "blue" / "skin.json"); o << wotm::creator::skinJson("togera", "blue", "BLUE", 2); }
+    const wotm::mods::Skin *blue = reg.addSkin(root / "Creator" / "skins" / "blue", why);
+    CHECK(blue && blue->index == 5 && reg.skinByIndex(3, 4) && reg.skinByIndex(3, 4)->id == "green");
+    CHECK(reg.aliasOf("MON/LIZARD5.TEX") == "MON/LIZARD2.TEX" && reg.aliasOf("MON/LIZARD4.TEX") == "MON/LIZARD1.TEX");
+    fs::create_directories(root / "Creator" / "skins" / "bad");
+    CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
+    fs::remove_all(root);
 }
 
 int main()
