@@ -201,7 +201,7 @@ table, and it is what `live_check` drives.
 | `native/runtime/wotm_mainmenu.inc` | CREATE row, `View::creator`, branches in `renderPanel`, `panelInput`, `panelLayout`, `panelHit`, legend |
 | `native/wotm_model.hpp` | `decodeAllTextures()`, `texInfo()`, `rawAlpha()`, `setTextures()` |
 | `native/wotm_mods.hpp` | `addSkin(dir)` (the per-folder part of `scanSkins` factored out) |
-| `native/wotm_texmods.hpp` | mutex, `add(SkinPng)` |
+| `native/wotm_texmods.hpp` | mutex, `add(SkinPng)`, `replaceSkin(stem, pngs)`, `gen()` |
 | `native/runtime/wotm_overrides.cpp` | `wotmCreatorInstall` after the mods |
 | `native/tests/wotm_native_test.cpp` | the four tests |
 | `docs/passos/NATIVO.md` | section "Runtime: character creator (CREATE in the menu, `WOTM_CREATOR`)" and the env table row |

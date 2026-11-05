@@ -240,7 +240,7 @@ CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLay
 `WOTM_CREATOR` parsing, `skin.json` text, PNG names, texture groups, raw alpha) in `native/wotm_creator.hpp`; the HSV shift in
 `native/wotm_tint.hpp`; `Model::decodeAllTextures`, `texInfo`, `rawAlpha` and `setTextures` in `native/wotm_model.hpp`;
 `Registry::addSkin` in `native/wotm_mods.hpp`; `texmods::Index::replaceSkin` in `native/wotm_texmods.hpp`. Native tests
-`tint_identity_and_hue` and `creator_*` (`native/tests/wotm_native_test.cpp`); live checks `creator_script` and `creator_reload`
+`tint_identity_and_hue`, `creator_*` and `mods_add_skin_after_scan` (`native/tests/wotm_native_test.cpp`); live checks `creator_script` and `creator_reload`
 (`tools/live_checks.ps1`), net check `creator_skin_folder` (`tools/net_checks.ps1`).
 - **Entry:** **CREATE**, the fifth row of the 1 player modes screen (screen 2, below TRAINING; `kCreatorRow`, an item that is not
   the game's: `currentSelection` stays on FREE-FOR-ALL while it is lit). X opens the native panel over the list (the game sees no
@@ -279,10 +279,12 @@ CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLay
   shows:
   - `OVERWRITE?` when the folder exists: the next X overwrites; moving off SAVE, changing a value or closing the panel cancels;
   - `NAME IN USE` when the folder's `skin.json` names another monster (nothing written);
-  - `MODS ARE OFF` with `WOTM_MODS=0`, `NOT FOUND` when the costume's `.NGP` does not load, `CANNOT WRITE` when a folder, file or
-    rename fails (nothing registered);
+  - `MODS ARE OFF` with `WOTM_MODS=0`, `NOT FOUND` when the costume's `.NGP` does not load (only with at least one group tinted:
+    a save with every value at zero loads no model and writes only `skin.json`, the base costume renamed), `CANNOT WRITE` when a
+    folder, file or rename fails (nothing registered);
   - `SAVED` for 3 seconds (the panel stays open), or `SAVED. RESTART TO USE` when the registry refuses the skin (the files stay;
-    the next boot's scan loads them).
+    the next boot's scan applies the same rules: a costume index over 99 or a stem over 8 letters is ignored there too, and of
+    two mods with the same monster/id the last in alphabetical order wins, which may not be Creator).
 - **Live registration:** `Registry::addSkin(dir)` reads the folder with the rules of `scanSkins` and gives it the monster's next
   costume index from 4, or the index it already has when the same folder was registered before (an overwrite stays in place); it
   refuses a monster/id that another mod already brings, an index over 99 or a stem over 8 letters. No other skin's index and no
@@ -290,12 +292,15 @@ CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLay
   hold one) and adds the new ones, so a texture the overwrite dropped falls back to the base costume's, and bumps `gen()` so the
   selection's decoded textures reload. The new costume is in the selection's list at once. The mods hooks stay installed with an
   empty or missing mods folder (MODS.md, "Under the hood") so the alias of a skin added after boot resolves.
-- **Log:** `[creator] panel opened`, `[creator] panel closed`, `[creator] name = "<NAME>"`, the first retint's `[creator] tint <ms>
-  ms (<model>, <n> textures)`; a save logs `[creator] removed <file> (not in this save)` for each stale file, the registry's
-  `[mods] skin togera/green ("GREEN", Creator) = costume 4 (LIZARD4); base 1, 1 png`, then `[creator] saved
-  mods/Creator/skins/green (1 png) in 31 ms` (with `; raw alpha kept on the textures above 0x80` when it applies). Errors:
-  `[creator] cannot write ...`, `[creator] not registered: <reason>`, `[creator] MON/<file>.NGP not found`, `[creator] <id> is a
-  <monster> skin; pick another name`.
+- **Log:** `[creator] panel opened`, `[creator] panel closed` (`[creator] panel closed: the screen changed to <n>` when the
+  screen leaves 2 with the panel open), `[creator] name = "<NAME>"`, the first retint's `[creator] tint <ms> ms (<model>, <n>
+  textures)`; a save logs `[creator] removed <file> (not in this save)` for each stale file, the registry's `[mods] skin
+  togera/green ("GREEN", Creator) = costume 4 (LIZARD4); base 1, 1 png`, then `[creator] saved mods/Creator/skins/green (1 png)
+  in 31 ms` (with `; raw alpha kept on the textures above 0x80` when it applies). The first X on an existing folder logs
+  `[creator] mods/Creator/skins/<id> exists: X again overwrites`. Errors: `[creator] cannot write ...`, `[creator] not
+  registered: <reason>`, `[creator] MON/<file>.NGP not found: <id> not saved`, `[creator] mods are off (WOTM_MODS=0): <id> not
+  saved`, `[creator] <id> is a <monster> skin; pick another name`; from the preview, `[creator] MON/<file>.NGP not found; no
+  preview` and `[creator] <model>: a pose decoded <n> textures decodeAllTextures missed` (those stay untinted and unsaved).
 - **Scripted (`WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]`, for example `togera:1:green:120`):** at boot,
   after the mods scan, the same save with those values on every texture group (every group gets a PNG), the name = the id in
   capitals and no OVERWRITE? question; then the game boots as usual. The costume is 0 to 3 and must exist on the disc, the id is
