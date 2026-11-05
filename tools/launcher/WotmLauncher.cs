@@ -106,11 +106,20 @@ class Launcher : Form
         Text = "WotM - options";
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // the exe's own (native\wotm.ico)
         Font = new Font("Segoe UI", 9f);
-        AutoSize = true;
+        AutoSize = true;   // the first layout sizes the window to its contents; from Load on it is a normal resizable window (below)
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        FormBorderStyle = FormBorderStyle.FixedSingle;
-        MaximizeBox = false;
+        FormBorderStyle = FormBorderStyle.Sizable;
         StartPosition = FormStartPosition.CenterScreen;
+        Load += delegate
+        {
+            Size natural = Size;
+            AutoSize = false;
+            AutoScroll = true;   // smaller than its contents (a laptop screen): scrollbars instead of cut-off controls
+            MinimumSize = new Size(360, 240);
+            Rectangle work = Screen.FromControl(this).WorkingArea;
+            Size = new Size(Math.Min(natural.Width, work.Width), Math.Min(natural.Height, work.Height));
+            if (Size != natural) CenterToScreen();
+        };
 
         var tips = new ToolTip { AutoPopDelay = 30000 };
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
