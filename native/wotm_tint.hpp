@@ -37,7 +37,7 @@ inline void shift(std::vector<uint32_t> &rgba, float hueDeg, float sat, float br
         else if (h < 240.f) { rr = 0.f; gg = x; bb = c; }
         else if (h < 300.f) { rr = x; gg = 0.f; bb = c; }
         else { rr = c; gg = 0.f; bb = x; }
-        auto u8 = [](float f) { return uint32_t(std::lround(std::clamp(f, 0.f, 1.f) * 255.f)); };
+        auto u8 = [](float f) { return uint32_t(std::lround(std::clamp(f, 0.f, 1.f) * 255.f)) & 0xFFu; };
         px = a | u8(rr + m) | u8(gg + m) << 8 | u8(bb + m) << 16;
     }
 }

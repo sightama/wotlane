@@ -459,6 +459,12 @@ TEST(tint_identity_and_hue)
     std::vector<uint32_t> dark = {0xFF0000C0u};
     shift(dark, 0.f, 0.f, -50.f);
     CHECK(dark[0] == 0xFF000060u);
+    std::vector<uint32_t> turn = px;
+    shift(turn, 360.f, 0.f, 0.f);
+    CHECK(turn == px);   // a full turn goes through HSV and back, bit for bit
+    std::vector<uint32_t> grn = {0xFF00FF80u};   // R 0x80, G 0xFF, B 0: hue 90 (green max), s 1, v 1
+    shift(grn, 120.f, 0.f, 0.f);
+    CHECK(grn[0] == 0xFFFF8000u);   // hue 210: R 0, G 0x80, B 0xFF
 }
 
 int main()
