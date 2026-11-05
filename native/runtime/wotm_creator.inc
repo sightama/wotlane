@@ -65,6 +65,13 @@ static int texCountFor(const State &s)
     return std::clamp(int(v >> 16), 0, kMaxTex);
 }
 
+// The monster's name in capitals (the MONSTER row and the preview's caption)
+static std::string monsterLabel(int monster)
+{
+    std::string name = kMonsters[std::clamp(monster, 0, kMonsterCount - 1)].name;
+    for (char &c : name) c = char(std::toupper(static_cast<unsigned char>(c)));
+    return name;
+}
 // "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> exists; the monster's name is cut so " N" fits the 11 letters
 static void defaultName(State &s)
 {
@@ -307,5 +314,130 @@ static bool input(const bool e[kPanelActs], uint8_t *rdram, R5900Context *ctx, P
     }
     leaveSaveCheck(s);
     return false;
+}
+// Texture groups of a loaded Model (decodeAllTextures already run): the indices of textures() per (rtx, texId), the first kMaxTex
+// groups (one log line when it cuts). A group's members can in rare cases disagree on hiAlpha; the first member's decides (the PNG
+// is per texId). Depends only on the Model: the preview (window thread) and the save (EE thread) both call it.
+static std::vector<std::vector<int>> groupsOf(const wotm::model::Model &m)
+{
+    std::vector<cr::TexKey> keys;
+    keys.reserve(m.texInfo().size());
+    for (const wotm::model::TexInfo &t : m.texInfo()) keys.push_back(cr::TexKey{t.id, t.rtx});
+    std::vector<std::vector<int>> g = cr::groupTextures(keys);
+    if (g.size() > size_t(kMaxTex))
+    {
+        std::fprintf(stderr, "[creator] %s: %zu texture groups, tinting the first %d\n", m.name().c_str(), g.size(), kMaxTex);
+        g.resize(size_t(kMaxTex));
+    }
+    return g;
+}
+
+// Window thread only: the panel's 3D monster (like wotm_padsel's SelModel), its untinted textures and the groups the TEXTURE row
+// walks. Loaded when the published monster or costume changes, retinted when tintGen changes, freed when the panel is not shown.
+struct Preview
+{
+    std::unique_ptr<wotm::model::Model> model;
+    wotm::model::Renderer ren;
+    std::vector<wotm::model::TexImage> original;   // decoded textures before any tint
+    std::vector<std::vector<int>> groups;          // textures() indices per group (groupsOf)
+    std::vector<uint16_t> texIds;                  // each group's texId, for the TEXTURE row's label
+    int monster = -1, costume = -1;
+    uint32_t tintGen = 0;
+    double t0 = 0.0;
+    bool timed = false;                            // the first real retint of this load was timed (one log line)
+    bool ok = false;
+};
+static Preview g_creatorPreview;
+
+// GPU resources (Renderer) and the model freed; needs the GL context (window thread). The next renderPreview loads again.
+static void releasePreview()
+{
+    Preview &p = g_creatorPreview;
+    if (p.monster < 0 && !p.model) return;
+    p.ren.release();
+    p.model.reset();
+    p.original.clear();
+    p.original.shrink_to_fit();
+    p.groups.clear();
+    p.texIds.clear();
+    p.monster = p.costume = -1;
+    p.tintGen = 0;
+    p.ok = false;
+    g_texCountShared.store(kNoTexCount, std::memory_order_release);
+}
+
+// Called from renderPanel with v.creator, before the panel's BeginTextureMode (the Renderer has its own target): loads, tints, poses
+// and renders the monster into g_creatorPreview.ren's target (w x h). Returns false when there is nothing to draw.
+static bool renderPreview(const State &s, int w, int h)
+{
+    Preview &p = g_creatorPreview;
+    static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    const wotm::mods::MonsterInfo &mi = kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)];
+    if (p.monster != s.monster || p.costume != s.costume)
+    {
+        releasePreview();
+        p.monster = s.monster;
+        p.costume = s.costume;
+        p.t0 = GetTime();
+        p.timed = false;
+        p.model = std::make_unique<wotm::model::Model>();
+        const std::string file = std::string(mi.prefix) + std::to_string(s.costume);
+        p.ok = p.model->load(io.cdRoot, io.cdImage.string(), file);
+        if (p.ok)
+        {
+            p.model->decodeAllTextures();   // right after load, before any pose: the same order as the save's Model
+            p.model->computeFraming(wotm::model::kIdle);   // fixed box: the camera does not follow the idle animation
+            p.original = p.model->textures();
+            p.groups = groupsOf(*p.model);
+            for (const std::vector<int> &g : p.groups) p.texIds.push_back(p.model->texInfo()[size_t(g[0])].id);
+        }
+        else
+        {
+            std::fprintf(stderr, "[creator] MON/%s.NGP not found; no preview\n", file.c_str());
+            p.model.reset();
+        }
+        g_texCountShared.store(packTexCount(s.monster, s.costume, int(p.groups.size())), std::memory_order_release);
+    }
+    if (!p.ok) return false;
+    if (p.tintGen != s.tintGen)
+    {
+        // from the current list, so textures a pose decoded after load (not in any group) stay and setTextures keeps the count
+        const auto t0 = std::chrono::steady_clock::now();
+        std::vector<wotm::model::TexImage> t = p.model->textures();
+        bool any = false;
+        for (size_t g = 0; g < p.groups.size(); ++g)
+        {
+            const Tint &k = s.tint[g];
+            any |= !k.zero();
+            for (int i : p.groups[g])
+            {
+                t[size_t(i)].rgba = p.original[size_t(i)].rgba;
+                wotm::tint::shift(t[size_t(i)].rgba, k.hue, k.sat, k.bright);
+            }
+        }
+        p.model->setTextures(std::move(t));
+        p.tintGen = s.tintGen;
+        if (any && !p.timed)
+        {
+            p.timed = true;
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            std::fprintf(stderr, "[creator] tint %.2f ms (%s, %zu textures)\n", ms, p.model->name().c_str(), p.original.size());
+        }
+    }
+    const float frame = float((GetTime() - p.t0) * 60.0);
+    if (!p.model->pose(wotm::model::kIdle, frame)) p.model->pose(-1, 0.f);
+    using D = wotm::savepics::Drawer;
+    const D::Framing fr = D::framingOf(uint32_t(mi.type) | uint32_t(s.costume & 3) << 8);   // the disc costume's framing
+    p.ren.shiftX = fr.shiftX;
+    p.ren.shiftY = fr.shiftY;
+    p.ren.fwd = fr.fwd;
+    if (!wotm_padsel::g_selFxTried)   // the selection's effect textures (Agamo's fire), shared: loaded once, by whichever needs them first
+    {
+        wotm_padsel::g_selFxTried = true;
+        wotm_padsel::g_selFx.load(io.cdRoot, io.cdImage.string());
+    }
+    p.ren.setFx(&wotm_padsel::g_selFx);
+    p.ren.render(*p.model, w, h, 0.f, 8.f, fr.zoom * 0.95f, [] {});
+    return true;
 }
 } // namespace wotm_creator

@@ -25,6 +25,7 @@
 // WOTM_TEXTMENU=0: retail items (and wotm_padsel.inc's "multiplayer" label).
 #include "wotm_training.h"   // screen 2's "training" row (g_on)
 #include "wotm_creator.hpp"   // screen 2's "create" row: the creator's pure parts (wotm_creator.inc uses them)
+#include "wotm_tint.hpp"      // the creator preview's hue, saturation and brightness shift
 // the game's options screen (wotm_optscreen.inc, included later): called from the hooks here
 namespace wotm_optscreen
 {
@@ -1386,9 +1387,18 @@ struct PanelLayout
     float y0 = float(kPH) / 8.9f * 2.2f;          // center of the first row (below the tabs)
 };
 constexpr float kVideoStep = 0.76f;   // VIDEO row step, in row heights of the other tabs
-static PanelLayout panelLayout(int tab, bool preview, bool training = false)
+static PanelLayout panelLayout(int tab, bool preview, bool training = false, bool creator = false)
 {
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;
+    if (creator)
+    {
+        // the VIDEO tab's columns and step, starting where TRAINING OPTIONS does (no tabs); the monster's box on the right, taller than
+        // wide, centered on the 9 rows
+        const float y0 = lineH * 1.85f, step = lineH * kVideoStep, bw = W * 0.30f, bh = bw * 1.1f;
+        const float mid = y0 + step * float(wotm_creator::kRows - 1) * 0.5f;
+        return {step, 46.f, W * 0.06f, W * 0.51f, W * 0.12f, W * 0.645f, int(wotm_creator::kRows), true,
+                Rectangle{W * 0.665f, mid - bh * 0.5f, bw, bh}, y0};
+    }
     if (training)   // no tabs: the title and the 11 rows, tighter, starting higher up
         return {lineH * 0.63f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
     if (tab == TabVideo && !preview)   // preview hidden: the 9 rows with the other tabs' columns
@@ -1449,11 +1459,13 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         SetTextureFilter(g_prt.texture, TEXTURE_FILTER_BILINEAR);
     }
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;   // tabs, rule and kVisRows rows
-    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview, v.training || v.moves);
-    // preview of the selected option, into its own textures (before the panel's BeginTextureMode)
+    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview, v.training || v.moves, v.creator);
+    // preview of the selected option, into its own textures (before the panel's BeginTextureMode); the creator's monster likewise
+    // (the creator keeps v.tab, but v.opt is its own row: no VIDEO preview)
     wotm::preview::Kind pk = wotm::preview::None;
     wotm::preview::Params pp;
-    if (L.preview && !v.training && !v.moves && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
+    const bool creatorPic = v.creator && v.panel > 0.f && wotm_creator::renderPreview(v.creatorState, int(L.box.width), int(L.box.height));
+    if (L.preview && !v.creator && !v.training && !v.moves && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
     {
         pk = previewKind(kTabDefs[TabVideo].opt[v.opt].key);
         pp = previewParams(L.box, v.screen < 0 ? kPauseFrac : kTelaoFrac);
@@ -1470,9 +1482,9 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     const float tabY = lineH * 0.7f;
     float tabX[kTabs], tabH;
     tabLayout(W, tabX, tabH);
-    if (v.training || v.moves)   // training: title only
-        label(q, ram, tex0, v.moves ? "MOVE LIST" : "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
-    for (int t = 0; t < kTabs && !v.training && !v.moves; ++t)
+    if (v.training || v.moves || v.creator)   // training, move list and creator: title only
+        label(q, ram, tex0, v.creator ? "CREATE" : v.moves ? "MOVE LIST" : "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
+    for (int t = 0; t < kTabs && !v.training && !v.moves && !v.creator; ++t)
     {
         const bool on = t == v.tab;
         label(q, ram, tex0, kTabNames[t], tabX[t], tabY, tabH, on ? kLit : kDim, kPW, kPH);
@@ -1501,7 +1513,8 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     // the tab's rows: name, value, hint and whether the value has arrows (picked from a list)
     enum { KOpt, KDevice, KReset, KBind, KCapture };
     // mdir/mbtn/mtail: MOVE LIST row: the command's direction (numpad notation) and buttons are drawn as icons, mtail is the text after them
-    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; bool locked = false; int8_t mdir = 0; uint8_t mbtn = 0; std::string mtail; };
+    // cursor: the creator's NAME while editing, the letter slot underlined
+    struct PRow { std::string label, value; const char *hint; bool arrows; int kind; int bind = -1; bool locked = false; int8_t mdir = 0; uint8_t mbtn = 0; std::string mtail; int cursor = -1; };
     PRow rows[kMaxCtlRows];
     int n = 0;
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
@@ -1539,6 +1552,32 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
             moveHints.push_back("THE LIST IS BUILT FROM YOUR MONSTER ONCE THE FIGHT STARTS");
             rows[n++] = PRow{"NO MOVES YET", "", moveHints.back().c_str(), false, KReset};
         }
+    }
+    else if (v.creator)
+    {
+        namespace wc = wotm_creator;
+        const wc::State &s = v.creatorState;
+        const wc::Preview &cp = wc::g_creatorPreview;   // window thread: renderPreview above loaded it for s
+        // the game's font has no '+', '/' or degree sign: "-30 DEG", "T12 3 OF 14"
+        auto num = [](float x, const char *suffix) { return std::to_string(int(std::lround(x))) + suffix; };
+        const bool texOk = s.texCount > 0 && s.tex < int(cp.texIds.size());
+        const std::string texLabel =
+            texOk ? "T" + std::to_string(cp.texIds[size_t(s.tex)]) + " " + std::to_string(s.tex + 1) + " OF " + std::to_string(s.texCount) : "LOADING";
+        // the name; while editing, its 11 slots with the empty ones at the end as dots (the font has no middle dot)
+        std::string name = s.name;
+        if (s.editing)
+            for (size_t k = name.find_last_not_of(' ') + 1; k < name.size(); ++k) name[k] = '.';
+        const wc::Tint &tn = s.tint[std::clamp(s.tex, 0, wc::kMaxTex - 1)];
+        rows[n++] = PRow{"MONSTER", wc::monsterLabel(s.monster), wc::kHints[wc::RMonster], true, KOpt};
+        rows[n++] = PRow{"COSTUME", std::to_string(s.costume + 1), wc::kHints[wc::RCostume], true, KOpt};
+        rows[n++] = PRow{"TEXTURE", texLabel, wc::kHints[wc::RTexture], s.texCount > 1, KOpt};
+        rows[n++] = PRow{"HUE", num(tn.hue, " DEG"), wc::kHints[wc::RHue], true, KOpt};
+        rows[n++] = PRow{"SATURATION", num(tn.sat, ""), wc::kHints[wc::RSat], true, KOpt};
+        rows[n++] = PRow{"BRIGHTNESS", num(tn.bright, ""), wc::kHints[wc::RBright], true, KOpt};
+        rows[n++] = PRow{"NAME", name, s.editing ? wc::kNameHint : wc::kHints[wc::RName], s.editing, KOpt};
+        if (s.editing && !name.empty()) rows[n - 1].cursor = std::clamp(s.cursor, 0, int(name.size()) - 1);
+        rows[n++] = PRow{"SAVE", s.saveValue, wc::kHints[wc::RSave], false, KReset};
+        rows[n++] = PRow{"BACK", "", wc::kHints[wc::RBack], false, KReset};
     }
     else if (v.training)
         for (int i = 0; i < kTrainRows; ++i)
@@ -1654,6 +1693,13 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         }
         else if (!pr.value.empty() && !valIcon)
             label(q, ram, tex0, pr.value.c_str(), valX, cy, vh, on && !pr.locked ? kLit : kDim, kPW, kPH);
+        if (pr.cursor >= 0)
+        {   // the creator's NAME being edited: a bar under the letter the cursor is on
+            const float x0 = valX - textWidth(tex0, kPW, kPH, pr.value.c_str(), vh) * 0.5f +
+                             textWidth(tex0, kPW, kPH, pr.value.substr(0, size_t(pr.cursor)).c_str(), vh);
+            const float cw = textWidth(tex0, kPW, kPH, pr.value.substr(size_t(pr.cursor), 1).c_str(), vh);
+            DrawRectangleRec(Rectangle{x0 + cw * 0.08f, cy + vh * 0.62f, std::max(cw * 0.84f, 8.f), 6.f}, gsToRgb(kLit));
+        }
         if (on && pr.arrows)
         {
             const Color a = gsToRgb(kLit);
@@ -1676,6 +1722,22 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
             const float y = L.y0 + L.step * (float(L.vis) - 0.45f);
             DrawTriangle(Vector2{x, y + s}, Vector2{x + s, y - s * 0.6f}, Vector2{x - s, y - s * 0.6f}, a);
         }
+    }
+    // the creator's monster (renderPreview above), premultiplied like the selection's (wotm_padsel.inc); its name below
+    if (v.creator)
+    {
+        DrawRectangleRounded(L.box, 0.05f, 8, Color{0, 0, 0, 90});
+        if (creatorPic)
+        {
+            const Texture2D &mt = wotm_creator::g_creatorPreview.ren.target().texture;
+            rlDrawRenderBatchActive();
+            BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);   // premultiplied color (Renderer)
+            DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)}, L.box, Vector2{0.f, 0.f}, 0.f, WHITE);
+            EndBlendMode();
+            BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+        }
+        label(q, ram, tex0, wotm_creator::monsterLabel(v.creatorState.monster).c_str(), L.box.x + L.box.width * 0.5f, L.box.y + L.box.height + 40.f,
+              34.f, kDim, kPW, kPH);
     }
     // preview of the selected option (VIDEO tab), with a short caption below for the magnified ones
     if (pk != wotm::preview::None)
@@ -1701,6 +1763,22 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     const Icon ok = bind(st::BCross), back = bind(st::BTriangle), clear = bind(st::BSquare);
     if (v.moves)
         wotm_legend::post({{ok, {}, "FAVORITE"}, {back, {}, "BACK"}}, la, bar);
+    else if (v.creator)
+    {
+        if (v.creatorState.editing)
+        {   // on the keyboard X is Space, which types a space here: Enter ends editing (the key style shows ENTER, a gamepad its X)
+            Icon done = ok;
+            done.key = "ENTER";
+            done.key2 = nullptr;
+            wotm_legend::post({{left, right, "MOVE"}, {bind(st::BUp), bind(st::BDown), "LETTER"}, {done, {}, "DONE"}}, la, bar);
+        }
+        else if (kind == KReset)
+            wotm_legend::post({{ok, {}, "SELECT"}, {back, {}, "BACK"}}, la, bar);
+        else if (v.opt == wotm_creator::RName)
+            wotm_legend::post({{ok, {}, "EDIT"}, {back, {}, "BACK"}}, la, bar);
+        else
+            wotm_legend::post({{left, right, "CHANGE"}, {back, {}, "BACK"}}, la, bar);
+    }
     else if (v.training)
     {
         if (kind == KReset) wotm_legend::post({{ok, {}, "CLEAR"}, {back, {}, "BACK"}}, la, bar);
@@ -1738,6 +1816,9 @@ static void renderUi(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0)
         std::lock_guard<std::mutex> lk(g_m);
         v = g_view;
     }
+    // the creator's monster only lives while its panel shows (fade-out included): freed here, on the window thread (GL context)
+    if (!(v.on && v.alpha > 0.f && v.rows != 0 && v.panel > 0.f && v.creator))
+        wotm_creator::releasePreview();
     if (!v.on || v.alpha <= 0.f || v.rows == 0)
         return;
     if (g_rt.id == 0)
@@ -1918,7 +1999,7 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
     if (u < 0.f || u > 1.f || w < 0.f || w > 1.f)
         return;
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f, X = u * W, Y = w * H;
-    if (!v.training && !v.moves && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
+    if (!v.training && !v.moves && !v.creator && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
     {
         float tabX[kTabs], tabH;
         tabLayout(W, tabX, tabH);
@@ -1930,8 +2011,8 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
         return;
     }
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
-    const PanelLayout L = panelLayout(tab, v.preview, v.training || v.moves);
-    const int n = v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
+    const PanelLayout L = panelLayout(tab, v.preview, v.training || v.moves, v.creator);
+    const int n = v.creator ? int(wotm_creator::kRows) : v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
     const int i = int(std::floor((Y - L.y0) / L.step + 0.5f));
     if (i < 0 || i >= L.vis || first + i >= n || X < W * 0.03f || X > L.rowRight)
         return;
