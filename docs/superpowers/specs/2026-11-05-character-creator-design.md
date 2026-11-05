@@ -29,7 +29,9 @@ Decisions taken with Jake:
 (`g_extraRow`, mouse hover, up and down) treats `kCreatorRow` the same way: the game's `currentSelection` stays on
 FREE-FOR-ALL while our row is lit. X on it opens the creator panel the way X on RECOMPILED OPTIONS opens the options panel
 (`g_open`, `g_suppress`, the game sees no input while it is open); triangle on the panel closes it and the cursor stays on
-CREATE. Leaving screen 2 (triangle to the main menu) closes nothing: the panel only exists while open.
+CREATE. The panel plumbing is tied to screen 1 today (`v.panel` is 0 on any other screen, `g_open` drops when `currScreen`
+leaves 1, and the input gate reads `cur == 1`): those three places accept screen 2 as well when the open panel is the creator.
+Leaving screen 2 (triangle to the main menu) closes nothing: the panel only exists while open.
 
 **Panel.** The same texture (`g_prt`, `kPW x kPH`), box, title row, rule, row highlight, arrows, hint line and legend as the
 options panel; `View` gets `bool creator` (like `training` and `moves`), and `renderPanel`, `panelInput`, `panelLayout`,
@@ -59,6 +61,9 @@ left and right MOVE, up and down LETTER, X DONE).
 **Name editing.** While editing, up and down roll the letter under the cursor through space, A to Z, 0 to 9 and `-`; left and
 right move the cursor over the 11 slots; X (or triangle) leaves editing. On the keyboard, typing a letter sets the slot and
 advances the cursor. The default name is `<MONSTER> 2`; `3`, `4`... when that id already exists in `mods/Creator/skins/`.
+
+**Costumes that exist.** `wotm_monsters::costumes(type)` (`native/net/wotm_monsters.hpp`) says how many disc costumes a
+monster has; COSTUME cycles through those.
 
 **Id.** The name in lowercase, with every run of characters outside `a-z0-9` replaced by `_` and edges trimmed (`skin.json`
 ids allow only letters, digits and `_`, up to 32). Empty after that: `skin`.
@@ -147,7 +152,9 @@ table, and it is what `live_check` drives.
 - No sharing button: friends copy `mods/Creator/skins/<id>/`.
 - No custom-monster fields (name on the HUD, narrator, camera): step 2 of #42, same panel over a base type.
 - No marking of in-game skins in the costume list beyond the mod name `Creator` the registry already logs.
-- Online: a skin is drawing only; nothing in the lockstep state changes.
+- Online: a skin is drawing only; nothing in the lockstep state changes. Picking the skin itself in a lobby needs the lobby
+  and server to carry a mod costume (today `net_lobby.py`, `LobbyClient.cs` and `wotm_net_server.cpp` hand out disc costumes
+  0 to 3 only): a protocol change, later, with #14.
 
 ## Section 6: testing
 
@@ -159,8 +166,10 @@ table, and it is what `live_check` drives.
 - **Live check** (`tools\live_check.ps1`): `-Env "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=<temp mods folder>" -Expect
   "\[creator\] saved .*skins[\\/]green \(\d+ png\)|||\[mods\] skin togera/green"`, then a second run with the same
   `WOTM_MODS` and no `WOTM_CREATOR` expecting the `[mods] skin togera/green` line (the folder loads at boot like any mod).
-- **Lockstep** (`tools\net_check.ps1 -Players 2 -Monsters 4,3 -ExtraEnv "WOTM_MODS=<that folder>"`, the costume through
-  `WOTM_MATCH`'s skin form as the net check passes it): identical state with the created skin on both players.
+- **Lockstep** (`tools\net_check.ps1 -Players 2 -ExtraEnv "WOTM_MODS=<that folder>"`): both PCs with the created skin in
+  their mods folder form the match and keep identical state (the digest agrees); the existing `mods_diferentes` entry already
+  covers one PC without it (refused, "game configuration differs"). A fight with the skin itself online waits for the lobby
+  change in Section 5.
 - **By hand:** open CREATE, tint, save, pick the costume in the selection and in a fight; screenshot of the panel with the
   preview for the issue (`docs/screenshots/<date>/`).
 
@@ -169,6 +178,7 @@ table, and it is what `live_check` drives.
 | File | Change |
 |---|---|
 | `native/wotm_tint.hpp` | new: HSV shift |
+| `native/wotm_creator.hpp` | new, pure (testable without raylib): id from name, `WOTM_CREATOR` parsing, `skin.json` text, PNG names |
 | `native/runtime/wotm_creator.inc` | new: state, rows, input, save, preview, `WOTM_CREATOR` |
 | `native/runtime/wotm_mainmenu.inc` | CREATE row, `View::creator`, branches in `renderPanel`, `panelInput`, `panelLayout`, `panelHit`, legend |
 | `native/wotm_model.hpp` | `texIds()`, `setTextures()` |
