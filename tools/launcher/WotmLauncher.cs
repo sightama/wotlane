@@ -100,6 +100,7 @@ class Launcher : Form
     readonly string exeDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
     string IniPath { get { return Path.Combine(exeDir, "WotM_Launcher.ini"); } }
     readonly Label status = new Label();
+    readonly Button play = new Button { Text = "Play", AutoSize = true };   // offline; online play starts with Start match in the Online group
 
     Launcher()
     {
@@ -149,8 +150,9 @@ class Launcher : Form
         foreach (Control c in right.Controls) c.MinimumSize = new Size(wide, 0);
 
         var buttons = new FlowLayoutPanel { AutoSize = true };
-        var play = new Button { Text = "Play", AutoSize = true };
         play.Click += delegate { Play(); };
+        tips.SetToolTip(play, "Starts the game on this PC (offline) and closes the launcher. Online matches start with Start match in the " +
+            "Online group: the game opens by itself, so do not press Play while you are in a lobby.");
         var log = new Button { Text = "Open live.err.log", AutoSize = true };
         log.Click += delegate { OpenLog(); };
         var reset = new Button { Text = "Defaults", AutoSize = true };
@@ -489,7 +491,7 @@ class Launcher : Form
     readonly NumericUpDown netWins = new NumericUpDown { Minimum = 0, Maximum = 99, Width = 60 };
     readonly Button netStart = new Button { Text = "Start match", AutoSize = true, Enabled = false };
     readonly Label netInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
-    readonly TextBox netShare = new TextBox { Width = 390, Height = 92, Multiline = true, ReadOnly = true, Visible = false, ScrollBars = ScrollBars.Vertical };
+    readonly TextBox netShare = new TextBox { Width = 390, Height = 124, Multiline = true, ReadOnly = true, Visible = false, ScrollBars = ScrollBars.Vertical };
     // public server list: a master server (wotm_server --master) lists the servers that announce themselves to it
     readonly TextBox netMaster = new TextBox { Width = 160 };
     readonly Button netBrowse = new Button { Text = "Browse public servers", AutoSize = true };
@@ -497,10 +499,21 @@ class Launcher : Form
     readonly List<LobbyClient.ServerInfo> netServerInfos = new List<LobbyClient.ServerInfo>();
     readonly CheckBox netPublic = new DarkCheckBox { Text = "List publicly as", AutoSize = true };
     readonly TextBox netPublicName = new TextBox { Width = 120 };
+
+    // under the share box: what Windows Firewall says about wotm_server on this network, and the button that fixes it
+    readonly Label netHostCheck = new Label { AutoSize = true, MaximumSize = new Size(400, 0), Visible = false };
+    readonly Button netAllowFw = new Button { Text = "Allow in Windows Firewall", AutoSize = true, Visible = false };
+    readonly Timer fwTimer = new Timer { Interval = 3000 };
+    string serverExe = "", hostedFirewall = "";
+    bool hostedFirewallProblem, fwBusy;
     ServerHost hosted;
     string hostedPublic = "";   // "<master> <name>" the hosted server announces to, "" when private
     List<string> hostedLines = new List<string>();
     string hostedRouter = "";
+    // what the internet sees (Reach.cs): the public address line, the address itself, the port self-test line
+    string hostedAddress = "", hostedPortTest = "";
+    System.Net.IPAddress hostedStun;
+    bool portTestBusy, portTestDone;
     readonly Timer netTimer = new Timer { Interval = 200 };
     readonly List<LobbyClient.LobbyInfo> netLobbies = new List<LobbyClient.LobbyInfo>();
     LobbyClient lobby;
@@ -578,6 +591,12 @@ class Launcher : Form
 
         hostLobby.Click += delegate { NetCreate(); };
         joinCode.Click += delegate { NetJoin(netCode.Text.Trim()); };
+        // Enter inside the Online boxes is not Play (the form's AcceptButton): in Code it joins, in Lobby name it hosts, in the list it
+        // joins the selected lobby; in the others it does nothing. An offline Play would close the launcher, and with it the server and lobby.
+        AcceptOn(netCode, joinCode);
+        AcceptOn(netLobbyName, hostLobby);
+        AcceptOn(netList, joinSel);
+        foreach (Control c in new Control[] { netServer, netName, netPassword, netWins }) AcceptOn(c, null);
         joinSel.Click += delegate
         {
             int i = netList.SelectedIndex;
@@ -598,10 +617,17 @@ class Launcher : Form
         inner.Controls.Add(netInfo);
         tips.SetToolTip(netShare, "Copy this to your friends: they type the address as Server and the code in Code.");
         inner.Controls.Add(netShare);
+        tips.SetToolTip(netAllowFw, "Adds a Windows Firewall rule that lets wotm_server receive connections on every network type (TCP and UDP) " +
+            "and removes the rules the Windows prompt made for it. Windows asks for permission.");
+        netAllowFw.Click += delegate { AllowFirewall(); };
+        inner.Controls.Add(netHostCheck);
+        inner.Controls.Add(netAllowFw);
         netTimer.Tick += delegate { NetPoll(); };
+        fwTimer.Tick += delegate { if (hosted == null) fwTimer.Stop(); else CheckFirewall(); };
         FormClosed += delegate
         {
             netTimer.Stop();
+            fwTimer.Stop();
             if (lobby != null) lobby.Dispose();
             if (hosted != null) hosted.Dispose();
         };
@@ -730,6 +756,9 @@ class Launcher : Form
             }
             catch (LobbyError e) { hosted = null; netInfo.Text = "Failed to start the server: " + e.Message; return; }
             hostedPublic = hosted.Owned ? wantPublic : "";
+            hostedAddress = hostedPortTest = "";
+            hostedStun = null;
+            portTestDone = false;
             hostedRouter = hosted.Owned ? "Router: trying to open port " + port + " (UPnP)..." : "A server was already running on port " + port + ": using it" +
                 (netPublic.Checked ? " (it isn't listed publicly by this launcher)." : ".");
             if (hosted.Owned) MapRouterPort(hosted);
@@ -738,32 +767,127 @@ class Launcher : Form
         netServer.Text = "127.0.0.1:" + port;
         hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), null, port);
         ShowShare();
+        serverExe = exe;
+        CheckFirewall();
         NetCreate();
+    }
+
+    // Reads the Windows Firewall rules for the server's exe on a thread and shows the verdict under the share box. Windows creates the
+    // rules only when the host answers its prompt, which comes after the server starts, so it is checked again every few seconds
+    // (fwTimer) until the answer is good; the timer also catches the Allow button's change.
+    void CheckFirewall()
+    {
+        if (fwBusy || serverExe.Length == 0) return;
+        fwBusy = true;
+        string exe = serverExe;
+        new System.Threading.Thread(delegate()
+        {
+            string text;
+            bool problem = false;
+            try
+            {
+                int current, enabled;
+                List<FirewallRule> rules = FirewallCheck.RulesFor(exe, out current, out enabled);
+                text = FirewallCheck.Verdict(rules, current, enabled, out problem);
+            }
+            catch (Exception e) { text = "Could not read the Windows Firewall rules (" + e.Message + ")."; }
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    fwBusy = false;
+                    hostedFirewall = text;
+                    hostedFirewallProblem = problem;
+                    if (problem || !text.StartsWith("Windows Firewall")) fwTimer.Start(); else fwTimer.Stop();
+                    ShowShare();
+                    TryPortTest();
+                });
+            }
+            catch (InvalidOperationException) { }   // launcher already closed
+        }) { IsBackground = true }.Start();
+    }
+
+    // The button: adds the allow rule through an elevated PowerShell (UAC prompt), then checks again.
+    void AllowFirewall()
+    {
+        if (serverExe.Length == 0) return;
+        string exe = serverExe;
+        netAllowFw.Enabled = false;
+        netHostCheck.Text = "Windows is asking for permission to change the firewall...";
+        new System.Threading.Thread(delegate()
+        {
+            string why;
+            bool ok = FirewallCheck.Allow(exe, out why);
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    netAllowFw.Enabled = true;
+                    if (ok) { CheckFirewall(); return; }
+                    hostedFirewall = "Firewall rule not added: " + why + ".";
+                    hostedFirewallProblem = true;
+                    ShowShare();
+                });
+            }
+            catch (InvalidOperationException) { }   // launcher already closed
+        }) { IsBackground = true }.Start();
     }
 
     void MapRouterPort(ServerHost h)
     {
         new System.Threading.Thread(delegate()
         {
+            System.Net.IPAddress stun = null;
+            var stunThread = new System.Threading.Thread(delegate() { stun = Stun.PublicAddress(2500); }) { IsBackground = true };
+            stunThread.Start();
             string why;
             string external = h.MapUpnp(out why);
+            stunThread.Join(3500);
             try
             {
                 BeginInvoke((MethodInvoker)delegate
                 {
                     if (hosted != h) return;
-                    if (external != null)
-                    {
-                        hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), external, h.Port);
-                        hostedRouter = "Router: port " + h.Port + " opened for TCP and UDP (UPnP).";
-                    }
+                    string share;
+                    hostedAddress = Reach.AddressVerdict(external, why, stun, h.Port, out share);
+                    hostedStun = stun;
+                    hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), share, h.Port);
+                    if (external != null) hostedRouter = "Router: port " + h.Port + " opened for TCP and UDP (UPnP).";
                     else
                     {
                         System.Net.IPAddress lan = ServerHost.RouterFacingAddress();
                         hostedRouter = "Router: " + why + ". For friends over the internet, forward port " + h.Port + " (TCP and UDP) to " +
-                            (lan != null ? lan.ToString() : "this PC") + " in your router (friends then use your public IP: search 'what is my ip'), " +
+                            (lan != null ? lan.ToString() : "this PC") + " in your router (friends then use the Internet address below), " +
                             "or have everyone join your Tailscale network.";
                     }
+                    ShowShare();
+                    TryPortTest();
+                });
+            }
+            catch (InvalidOperationException) { }   // launcher already closed
+        }) { IsBackground = true }.Start();
+    }
+
+    // The self-test through the router, once the public address is known and Windows Firewall lets wotm_server answer; a success is
+    // final for this server, a failure is tried again when the firewall verdict turns good (CheckFirewall calls here).
+    void TryPortTest()
+    {
+        if (hosted == null || hostedStun == null || portTestBusy || portTestDone || hostedFirewallProblem || hostedFirewall.Length == 0) return;
+        portTestBusy = true;
+        ServerHost h = hosted;
+        System.Net.IPAddress addr = hostedStun;
+        new System.Threading.Thread(delegate()
+        {
+            string detail;
+            bool ok = Reach.PortTest(addr, h.Port, 3000, out detail);
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    portTestBusy = false;
+                    if (hosted != h) return;
+                    portTestDone = ok;
+                    hostedPortTest = Reach.PortTestLine(ok, addr.ToString(), h.Port);
                     ShowShare();
                 });
             }
@@ -822,13 +946,15 @@ class Launcher : Form
     // the box the host copies to friends: addresses, lobby code, router status
     void ShowShare()
     {
-        if (hosted == null || (lobby != null && lobby.Host != "127.0.0.1")) { netShare.Visible = false; return; }
+        if (hosted == null || (lobby != null && lobby.Host != "127.0.0.1")) { netShare.Visible = netHostCheck.Visible = netAllowFw.Visible = false; return; }
         var l = new List<string>();
         string code = netCode.Text.Trim();
         l.Add("Friends type one of these as Server" + (code.Length == 4 ? " and the code " + code : "") + ":");
         foreach (string a in hostedLines) l.Add("  " + a);
         if (hostedLines.Count == 0) l.Add("  (no network address found)");
         l.Add(hostedRouter);
+        if (hostedAddress.Length > 0) l.Add(hostedAddress);
+        if (hostedPortTest.Length > 0) l.Add(hostedPortTest);
         if (hostedPublic.Length > 0)
         {
             int sp = hostedPublic.LastIndexOf(' ');
@@ -837,6 +963,11 @@ class Launcher : Form
         if (hosted.Owned) l.Add("If Windows asks whether wotm_server may use the network, allow it.");
         netShare.Text = string.Join(Environment.NewLine, l.ToArray());
         netShare.Visible = true;
+        netHostCheck.Text = hostedFirewall + (hostedFirewallProblem ? " Press 'Allow in Windows Firewall' below (Windows asks for permission); " +
+            "if the Windows prompt is open right now, Allow there for private and public networks." : "");
+        netHostCheck.ForeColor = hostedFirewallProblem ? Color.FromArgb(255, 170, 90) : DimColor;
+        netHostCheck.Visible = hostedFirewall.Length > 0;
+        netAllowFw.Visible = hostedFirewallProblem;
     }
 
     string netSettings = "";
@@ -914,6 +1045,13 @@ class Launcher : Form
         foreach (CheckBox c in modBoxes) c.Enabled = true;
     }
     static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
+
+    // While c has the focus, Enter presses b (or nothing, when null) instead of Play.
+    void AcceptOn(Control c, Button b)
+    {
+        c.Enter += delegate { AcceptButton = b; };
+        c.Leave += delegate { AcceptButton = play; };
+    }
 
     // F1 menu cheats turned on from the start (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); they apply to the players.
     static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
@@ -1084,8 +1222,21 @@ class Launcher : Form
         return false;
     }
 
+    // Play is the offline game and closes the launcher: inside a lobby (or with the server running here) that takes both down, and the
+    // online match never comes through here (Start match -> MATCH line -> PlayOnline). So it asks first.
     void Play()
     {
+        if (lobby != null || hosted != null)
+        {
+            string where = lobbyCode.Length > 0 ? "You are in online lobby " + lobbyCode + "." : "You are connected to an online server.";
+            string how = lobbyOwner ? "The online match starts for everyone when you press Start match in the Online group."
+                                    : "The online match starts when the host presses Start match: the game opens by itself.";
+            string cost = "Play starts an offline game on this PC and closes the launcher" +
+                (hosted != null ? ", which also stops the server you are hosting." : ", which leaves the lobby.");
+            DialogResult r = MessageBox.Show(this, where + " " + how + "\n\n" + cost + "\n\nPlay offline anyway?", "WotM - options",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+            if (r != DialogResult.Yes) return;
+        }
         ProcessStartInfo psi = GameStartInfo(matchOn.Checked);
         if (psi != null) Launch(psi);
     }
