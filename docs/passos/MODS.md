@@ -274,7 +274,8 @@ that of the RANDOM entry (`random`; without it, a mosaic of the game's photos). 
   at 0x800000, beyond any DVD) and the mod's size; the `sceCdRead` hook serves that range by reading from the PC file. The native sound
   (`readLsnRaw`) reads banks and music through the same range. The native layer that reads the disc by name also looks in `mods/` first:
   `.RTX` palettes (`Scene::loadResources`, which reads the file directly, not from RAM), movies (`wotm_fmv.hpp`), the save list's icon,
-  photos and monster (`wotm::disc::readFile`). With no file in `mods/`, no hook is installed. A file that does not exist on the disc
+  photos and monster (`wotm::disc::readFile`). With mods on, the hooks are installed even when `mods/` is empty or missing (a skin
+  saved by the character creator registers after boot); with nothing registered they only call the original. `WOTM_MODS=0` installs none. A file that does not exist on the disc
   is also served ("new file").
 - **Log:** `[mods] N file(s) from <mods> in <folder>` at boot and, on the first search for each file, `[mods] MON/LIZARD0.TEX <-
   teste_togera (110080 bytes; disc 110080)`, with a WARNING when the mod's file is larger (outside `MON/*`, whose load is contiguous above
