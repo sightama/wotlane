@@ -704,10 +704,16 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             std::lock_guard<std::mutex> lk(g_m);
             hv = g_where == InPause ? g_pauseHover : g_hover;
         }
-        const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
         e[PBack] |= wotm::mouse::takeClick(wotm::mouse::g_clickR);
         const bool onRow = hv.part == HRow || hv.part == HRowLeft || hv.part == HRowRight;
-        const bool rowLocked = creator && wotm_creator::g_st.editing;   // editing the name: the row stays on NAME
+        // editing the creator's name: the row stays on NAME, a click counts only on NAME's own row, and the wheel does not roll
+        // letters (it is an extra way to move between rows; the d-pad, stick and arrow keys still roll them)
+        const bool rowLocked = creator && wotm_creator::g_st.editing;
+        if (rowLocked && click && !(onRow && hv.prow == selRef))
+            click = false;
+        if (rowLocked && wotm_pad::g_wheelHeld != 0)
+            e[PUp] = e[PDown] = false;
         if (onRow && !rowLocked && (moved || click) && hv.prow >= 0 && hv.prow < selRows && hv.prow != selRef)
         {
             selRef = hv.prow;
