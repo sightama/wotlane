@@ -8,6 +8,7 @@
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
+#include "wotm_creator.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -465,6 +466,42 @@ TEST(tint_identity_and_hue)
     std::vector<uint32_t> grn = {0xFF00FF80u};   // R 0x80, G 0xFF, B 0: hue 90 (green max), s 1, v 1
     shift(grn, 120.f, 0.f, 0.f);
     CHECK(grn[0] == 0xFFFF8000u);   // hue 210: R 0, G 0x80, B 0xFF
+}
+
+TEST(creator_id_from_name)
+{
+    using wotm::creator::idFromName;
+    CHECK(idFromName("TOGERA 2") == "togera_2");
+    CHECK(idFromName("  Green!! Togera  ") == "green_togera");
+    CHECK(idFromName("") == "skin");
+    CHECK(idFromName("---") == "skin");
+    CHECK(idFromName(std::string(40, 'A')).size() == 32);
+}
+
+TEST(creator_env_parse)
+{
+    using wotm::creator::Script;
+    using wotm::creator::parseScript;
+    Script s;
+    std::string err;
+    CHECK(parseScript("togera:1:green:120", s, err) && s.monster == 3 && s.costume == 1 && s.id == "green" && s.hue == 120.f && s.sat == 0.f && s.bright == 0.f);
+    CHECK(parseScript("ultra-v:3:x", s, err) && s.monster == 4 && s.hue == 0.f);
+    CHECK(parseScript("congar:0:blue:-90:50:-20", s, err) && s.sat == 50.f && s.bright == -20.f);
+    CHECK(!parseScript("bogus:1:x", s, err) && err.find("monster") != std::string::npos);
+    CHECK(!parseScript("togera:9:x", s, err) && err.find("costume") != std::string::npos);
+    CHECK(!parseScript("togera:1", s, err));
+    CHECK(!parseScript("togera:1:Bad Id", s, err) && err.find("id") != std::string::npos);
+    CHECK(!parseScript("togera:1:x:nan", s, err) && err.find("number") != std::string::npos);
+}
+
+TEST(creator_skin_json_and_png_names)
+{
+    const std::string text = wotm::creator::skinJson("togera", "green", "GREEN TOGERA", 1);
+    wotm::json::Value v;
+    CHECK(wotm::json::parse(text, v) && v.get("monster")->s == "togera" && v.get("id")->s == "green" && v.get("name")->s == "GREEN TOGERA");
+    CHECK(v.get("base")->asInt(-1) == 1 && v.get("ai")->asBool(true) == false);
+    CHECK(wotm::creator::pngName(4, false) == "t0004.png");
+    CHECK(wotm::creator::pngName(11, true) == "rtx_t0011.png");
 }
 
 int main()
