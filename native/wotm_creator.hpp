@@ -49,7 +49,7 @@ inline std::string skinJson(const std::string &monster, const std::string &id, c
     v.at("name") = json::Value::string(name);
     v.at("base") = json::Value::integer(base);
     v.at("ai") = json::Value::boolean(false);
-    return json::dump(v) + "\n";
+    return json::dump(v);
 }
 
 // WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]
