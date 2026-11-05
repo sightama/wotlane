@@ -32,6 +32,7 @@ inline std::string idFromName(const std::string &name) {
         } else gap = true;
     }
     if (out.size() > 32) out.resize(32);
+    while (!out.empty() && out.back() == '_') out.pop_back();   // the cut can land right after a _
     return out.empty() ? "skin" : out;
 }
 

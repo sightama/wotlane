@@ -476,6 +476,7 @@ TEST(creator_id_from_name)
     CHECK(idFromName("") == "skin");
     CHECK(idFromName("---") == "skin");
     CHECK(idFromName(std::string(40, 'A')).size() == 32);
+    CHECK(idFromName(std::string(31, 'a') + " bcd") == std::string(31, 'a'));
 }
 
 TEST(creator_env_parse)
