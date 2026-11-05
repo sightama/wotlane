@@ -13,7 +13,7 @@
 
 namespace wotm_net::proto
 {
-    constexpr uint16_t kProtocol = 3;   // 3: pad states carry mouse motion and camera settings
+    constexpr uint16_t kProtocol = 4;   // 3: pad states carry mouse motion and camera settings; 4: Hash carries the 256 block hashes
     constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
@@ -80,6 +80,8 @@ namespace wotm_net::proto
     {
         uint32_t frame = 0;
         uint64_t hash = 0;
+        std::vector<uint64_t> blocks;   // the 256 hashes of the 128 KB blocks the total came from (empty: only the total), so a
+                                        // desync names the memory block, not just the PC (wotm_sync.inc netHash, server checkHashes)
     };
     struct Desync
     {
@@ -310,13 +312,19 @@ namespace wotm_net::proto
     inline std::vector<uint8_t> encode(const Hash &m)
     {
         Writer w(Type::Hash);
-        w.u32(m.frame), w.u64(m.hash);
+        w.u32(m.frame), w.u64(m.hash), w.u16(static_cast<uint16_t>(m.blocks.size()));
+        for (uint64_t h : m.blocks)
+            w.u64(h);
         return w.take();
     }
     inline bool decode(const std::vector<uint8_t> &b, Hash &m)
     {
         Reader r(b, Type::Hash);
         m.frame = r.u32(), m.hash = r.u64();
+        const size_t n = r.u16();
+        m.blocks.clear();
+        for (size_t i = 0; i < n && r.ok(); ++i)
+            m.blocks.push_back(r.u64());
         return r.done();
     }
 

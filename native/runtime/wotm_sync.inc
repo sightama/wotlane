@@ -463,9 +463,12 @@ namespace wotm_sync
     bool stopRequested() { return g_runtime && g_runtime->isStopRequested(); }
 
     // the match can't go on (refused, desync, dropped connection): the message stays on screen and the game halts until the window closes
+    void netLogBlocks(uint32_t frame);   // below, with netHash
     void netFail(const std::string &why)
     {
         std::fprintf(stderr, "[net] stopped: %s\n", why.c_str());
+        if (g_net && g_net->status() == wotm_net::MatchClient::Status::Desynced)
+            netLogBlocks(g_net->desyncFrame());
         wotm_netstatus::setMessage(why + "  (close the window)");
         wotm_netstatus::g_waiting = true;
         if (!g_ring.empty())
@@ -541,22 +544,56 @@ namespace wotm_sync
             std::fprintf(stderr, "[net] frame %u: %u waits for the network, %.0f ms in total\n", frame, g_netStalls, g_netStallMs);
     }
 
-    // Hash of the game's RAM for the server to compare between PCs: 1 MB per frame, 32 frames per hash (spreads the cost)
-    constexpr uint32_t kNetHashFrames = 32u, kNetHashSlice = kGuestRam / kNetHashFrames;
+    // Hash of the game's RAM for the server to compare between PCs: 1 MB per frame (its 8 blocks of 128 KB, the same blocks as
+    // WOTM_STATEHASH), 32 frames per hash (spreads the cost). The hash sent is the fold of the 256 block hashes, which go with it, so
+    // a desync names the block (server checkHashes; python tools/statediff.py --blocks). The last two windows stay here: on a desync
+    // the one the server named is written to the log, and two PCs' logs name the block too (statediff.py --logs)
+    constexpr uint32_t kNetHashFrames = 32u, kNetBlocksPerFrame = kBlocks / kNetHashFrames;
     uint64_t g_netHash = 0;
     uint32_t g_netHashes = 0;
+    std::vector<uint64_t> g_netBlocks(kBlocks);
+    struct NetWindow { uint32_t frame = 0xFFFFFFFFu; std::vector<uint64_t> blocks; } g_netWindows[2];
 
     void netHash(const uint8_t *rdram, uint32_t index)
     {
         const uint32_t k = index % kNetHashFrames;
         if (k == 0u)
             g_netHash = 0xcbf29ce484222325ull;
-        g_netHash = (g_netHash ^ hashBytes(rdram + k * kNetHashSlice, kNetHashSlice)) * 0x100000001b3ull;
+        for (uint32_t j = 0; j < kNetBlocksPerFrame; ++j)
+        {
+            const uint32_t b = k * kNetBlocksPerFrame + j;
+            g_netBlocks[b] = hashBytes(rdram + b * kBlockSize, kBlockSize);
+            g_netHash = (g_netHash ^ g_netBlocks[b]) * 0x100000001b3ull;
+        }
         if (k != kNetHashFrames - 1u)
             return;
-        g_net->sendHash(index, g_netHash);
+        NetWindow &w = g_netWindows[(index / kNetHashFrames) & 1u];
+        w.frame = index;
+        w.blocks = g_netBlocks;
+        g_net->sendHash(index, g_netHash, g_netBlocks);
         if ((g_netHashes++ % 16u) == 0u)
             std::fprintf(stderr, "[net] hash of frame %u: %016llx\n", index, static_cast<unsigned long long>(g_netHash));
+    }
+
+    // the 256 block hashes of the window the server reported (frame = the window's last frame), 16 per line, for statediff.py --logs
+    void netLogBlocks(uint32_t frame)
+    {
+        for (const NetWindow &w : g_netWindows)
+        {
+            if (w.frame != frame || w.blocks.size() != kBlocks)
+                continue;
+            std::fprintf(stderr, "[net] blocks of frame %u (%u of %u KB; python tools/statediff.py --logs A.err.log B.err.log):\n", frame, kBlocks,
+                         kBlockSize / 1024u);
+            for (uint32_t b = 0; b < kBlocks; b += 16u)
+            {
+                std::fprintf(stderr, "[net] blocks %3u:", b);
+                for (uint32_t j = 0; j < 16u; ++j)
+                    std::fprintf(stderr, " %016llx", static_cast<unsigned long long>(w.blocks[b + j]));
+                std::fputc('\n', stderr);
+            }
+            return;
+        }
+        std::fprintf(stderr, "[net] blocks of frame %u: not kept here (only the last two windows are)\n", frame);
     }
 
     // Build identity (every PC needs the same exe): wotm.buildid next to the exe, written by tools\build_runtime.ps1

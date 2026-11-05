@@ -17,7 +17,7 @@ class LobbyError : Exception
 // read with ReadLine (tests, request/response) or drain it with Poll (the launcher, from a UI Timer).
 class LobbyClient : IDisposable
 {
-    public const int Protocol = 3;   // native/net/wotm_net_proto.hpp kProtocol
+    public const int Protocol = 4;   // native/net/wotm_net_proto.hpp kProtocol
     public readonly string Host;
     public readonly int Port;
     public int Lobbies { get; private set; }
