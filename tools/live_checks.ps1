@@ -71,6 +71,17 @@ $checks = [ordered]@{
     'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
                          Expect = '6f8a8c=00000000'
                          Reject = '6f8a8c=00000001|||\[CRASH\]|||\[watchdog\] FROZE' }
+    # character creator (NATIVO.md, "Runtime: character creator"): WOTM_CREATOR saves a recolor of Togera's costume 1 at boot into a
+    # mods folder under %TEMP% (the first run creates it; the scripted save always rewrites it) and registers it live as costume 4.
+    # creator_reload needs creator_script first (the entries run in this order: keep them adjacent): the same folder without
+    # WOTM_CREATOR, and the skin loads at boot through the ordinary skins scan, base 1 as the script wrote it
+    # (the skin's name in the regex is quoted as \x22: a bare " is dropped on the way to live_check.ps1)
+    'creator_script' = @{ Env = "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25
+                         Expect = '\[creator\] saved mods/Creator/skins/green \(\d+ png\)|||\[mods\] skin togera/green \(\x22GREEN\x22, Creator\) = costume 4'
+                         Reject = '\[creator\] (cannot write|not registered|WOTM_CREATOR ignored)|||\[CRASH\]|||\[watchdog\] FROZE' }
+    'creator_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25
+                         Expect = '\[mods\] skin togera/green .* = costume 4 \(LIZARD4\); base 1, \d+ png'
+                         Reject = '\[mods\] skin Creator/skins/green ignored|||\[CRASH\]|||\[watchdog\] FROZE' }
 }
 
 $failed = @()

@@ -8,7 +8,7 @@ preview and saves the result as a mod skin that is in the costume list at once.
 **Architecture:** Two pure headers (`native/wotm_tint.hpp`: HSV shift; `native/wotm_creator.hpp`: id, env parsing,
 `skin.json`, PNG names) tested without raylib. One new `native/runtime/wotm_creator.inc` included by `wotm_mainmenu.inc`
 holds the EE-thread state, the rows, the save and the window-thread preview; `wotm_mainmenu.inc` gets the row and a creator
-branch in its panel functions. `Registry::addSkin` and `texmods::Index::add` register the saved skin without a restart.
+branch in its panel functions. `Registry::addSkin` and `texmods::Index::add`/`replaceSkin` register the saved skin without a restart.
 
 **Tech Stack:** C++17 (runtime, native tests), raylib (`ExportImage`, model renderer), PowerShell checks (`live_check.ps1`,
 `net_check.ps1`).
@@ -23,7 +23,7 @@ branch in its panel functions. `Registry::addSkin` and `texmods::Index::add` reg
 - Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - Build the runtime from the PowerShell tool with CMake and Ninja on PATH:
   `$env:PATH = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja;$env:PATH"; cmd /c C:\Projects\wotlane-src\build_runtime.bat`
-  (about 40 s). Native tests: `cmd /c C:\Projects\wotlane-src\tools\test_native.bat` (348 checks before this plan).
+  (about 40 s). Native tests: `cmd /c C:\Projects\wotlane-src\tools\test_native.bat` (the native tests, all green).
 - Live checks need `$env:PS2X_CD_IMAGE = 'C:\Projects\wotlane\ISO\War of the Monsters (USA).iso'` and run the game on the
   left monitor; never inject real mouse or keyboard input (Jake may be at the keyboard).
 - Nothing in this plan touches guest RAM or the lockstep state: the creator is native drawing plus files on disk.
@@ -731,7 +731,8 @@ such a list exists (check `ls tools/*checks*`).
 
 - [ ] **Step 0: the two live checks as entries.** Add to `tools/live_checks.ps1` (same shape as the entries there; `$env:TEMP`
   expands inside a double-quoted string):
-  `'creator_script' = @{ Env = "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25; Expect = '\[creator\] saved mods/Creator/skins/green \(\d+ png\)|||\[mods\] skin togera/green \("GREEN", Creator\) = costume 4' }`
+  `'creator_script' = @{ Env = "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25; Expect = '\[creator\] saved mods/Creator/skins/green \(\d+ png\)|||\[mods\] skin togera/green \(\x22GREEN\x22, Creator\) = costume 4' }`
+  (the quotes as `\x22`: `powershell -File` drops a bare `"` from the argument)
   and `'creator_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25; Expect = '\[mods\] skin togera/green .* = costume 4 \(LIZARD4\); base 1, \d+ png' }`,
   with a comment that `creator_reload` needs `creator_script` first and that the folder is created by the first one
   (`live_checks.ps1` runs the entries in order, so keep them adjacent in that order). Run `tools\live_checks.ps1 -Only creator_script`
@@ -749,7 +750,7 @@ such a list exists (check `ls tools/*checks*`).
   recolor skin of any disc costume and writes it to `mods/Creator/skins/<id>/` (NATIVO.md, "Runtime: character creator"); it is
   the same folder format, so the kit opens it and friends copy it."
 - [ ] **Step 4:** `python tools/doclint.py`, `python tools/wotm_env.py`, `cmd /c tools\test_native.bat` (all green), build.
-- [ ] **Step 5: commit** (`docs: character creator section, MODS skins note, creator_skin_folder net check`).
+- [ ] **Step 5: commit** (`docs: character creator section, MODS skins note, creator live and net checks`).
 
 ---
 

@@ -232,6 +232,79 @@ last: it is the outermost hook of `update`/`takeHit`/`takeDamage`), drawing, pan
   climbing buildings) and does not attack a standing or blocking dummy (it stays in Counter): the switch to block in mode 3 and the reduced block
   damage only show up when playing. The owner still has to test F2 and the keys live.
 
+## Runtime: character creator (CREATE in the menu, `WOTM_CREATOR`)
+Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md`. Code: EE-thread state, rows, input, save and the window-thread
+preview in `native/runtime/wotm_creator.inc` (included by `wotm_mainmenu.inc` inside its namespace, next to the training rows); the
+CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLayout`, `panelHit`, legend) and `wotmCreatorInstall`
+(called by `wotm_overrides.cpp` right after `wotmModsInstall`) in `wotm_mainmenu.inc`; the pure parts (id from the name,
+`WOTM_CREATOR` parsing, `skin.json` text, PNG names, texture groups, raw alpha) in `native/wotm_creator.hpp`; the HSV shift in
+`native/wotm_tint.hpp`; `Model::decodeAllTextures`, `texInfo`, `rawAlpha` and `setTextures` in `native/wotm_model.hpp`;
+`Registry::addSkin` in `native/wotm_mods.hpp`; `texmods::Index::replaceSkin` in `native/wotm_texmods.hpp`. Native tests
+`tint_identity_and_hue` and `creator_*` (`native/tests/wotm_native_test.cpp`); live checks `creator_script` and `creator_reload`
+(`tools/live_checks.ps1`), net check `creator_skin_folder` (`tools/net_checks.ps1`).
+- **Entry:** **CREATE**, the fifth row of the 1 player modes screen (screen 2, below TRAINING; `kCreatorRow`, an item that is not
+  the game's: `currentSelection` stays on FREE-FOR-ALL while it is lit). X opens the native panel over the list (the game sees no
+  input while it is open), triangle closes it with the cursor still on CREATE, and a screen change closes it at once. The panel
+  opens on Togera; closing and reopening keeps the monster, costume, tints and name.
+- **Rows** (title CREATE, no tabs; rows on the left, the preview box on the right; each row has its hint on the line below):
+  MONSTER (the ten playables of `kMonsters`; a change resets COSTUME, the tints and the name), COSTUME (`1` to `4`, only the disc
+  costumes the monster has, `wotm_monsters::costumes`; a change resets the tints), TEXTURE (`T<texId> <k> OF <n>`: the texture group
+  the three sliders edit; LOADING until the preview has the model, NOT FOUND, NONE), HUE (`-180` to `180` in steps of 15, wrapping,
+  shown as `-30 DEG`), SATURATION (`-100` to `100` in steps of 10), BRIGHTNESS (`-60` to `60` in steps of 10), NAME, SAVE (its
+  value is the save's message) and BACK. The game font has no `+`, `/` or degree sign, hence `DEG` and `OF`. Every texture group keeps
+  its own three values. Mouse: hover selects the row, the arrows step it, a click on NAME, SAVE or BACK is X.
+- **Texture groups:** after `Model::load`, `decodeAllTextures` decodes every OBJECT slot the file draws with (switch children,
+  every LOD, hidden parts), so the list covers what a fight can show and has the same order in the preview's Model and the save's.
+  Entries with the same `(rtx, texId)` (one disc texture under two palettes or GS settings) form one group, the unit a fight
+  replaces; up to 32 groups (more: `[creator] <model>: N texture groups, tinting the first 32`).
+- **Name:** up to 11 letters (the HUD's), default `<MONSTER> 2` (`3`, `4`... while `mods/Creator/skins/<id>` exists). X on NAME
+  edits it: the empty slots show as dots, up and down roll the letter under the cursor (space, A to Z, 0 to 9, `-`), left and right
+  move the cursor, X or triangle end editing; on the keyboard a letter, digit, space or minus sets the slot and advances, Backspace
+  clears back, and Enter or Esc end it (Space types a space here, so the legend shows ENTER for DONE). The row stays on NAME while
+  editing. The id is the name in lowercase with every run outside `a-z0-9` turned into `_`, edges trimmed, up to 32 (`skin` when empty).
+- **Preview** (window thread, `wotm_creator::Preview`): the costume's 3D model in the idle pose, rendered with the disc costume's
+  framing (`savepics::Drawer::framingOf`) into its own target and drawn premultiplied in the box, the monster's name below it. The
+  untinted originals are what the game would draw (a retexture mod's PNGs included); every slider change bumps a generation and the
+  window thread shifts each group's originals (`wotm::tint::shift`: hue added, saturation and value scaled by `1 + x/100`, alpha
+  untouched, all zero is the identity bit for bit) into `Model::setTextures`, which makes the Renderer reupload them. The model and
+  its GPU textures are freed when the panel is not on screen.
+- **Save** (X on SAVE, EE thread, its own Model of the same costume): `mods/Creator/skins/<id>/` under the registry's mods folder
+  (`WOTM_MODS`, the `mods` next to the ELF or the repo's), with `skin.json` (`{"monster", "id", "name", "base": <costume>, "ai":
+  false}`) and one PNG per group with any value set, `t<texId:4>.png` or `rtx_t<texId:4>.png`, at the texture's size. A group left
+  at zero has no PNG (the base costume's texture serves). For a texture whose raw alpha goes above 0x80, `texmods::loadPng` reads the
+  PNG's alpha raw, so the PNG carries the texture's own raw alpha bytes (`Model::rawAlpha`, `creator::applyRawAlpha`): the fight
+  draws the disc's alpha and the selection what the preview showed. Every file is written as `<file>.tmp` and renamed over the
+  old one only after all were written (PNGs first, `skin.json` last); a failed write removes the temps (and the folder, when this
+  save created it). After the renames, the folder's skin PNGs this save did not write and leftover temps are removed. The SAVE row
+  shows:
+  - `OVERWRITE?` when the folder exists: the next X overwrites; moving off SAVE, changing a value or closing the panel cancels;
+  - `NAME IN USE` when the folder's `skin.json` names another monster (nothing written);
+  - `MODS ARE OFF` with `WOTM_MODS=0`, `NOT FOUND` when the costume's `.NGP` does not load, `CANNOT WRITE` when a folder, file or
+    rename fails (nothing registered);
+  - `SAVED` for 3 seconds (the panel stays open), or `SAVED. RESTART TO USE` when the registry refuses the skin (the files stay;
+    the next boot's scan loads them).
+- **Live registration:** `Registry::addSkin(dir)` reads the folder with the rules of `scanSkins` and gives it the monster's next
+  costume index from 4, or the index it already has when the same folder was registered before (an overwrite stays in place); it
+  refuses a monster/id that another mod already brings, an index over 99 or a stem over 8 letters. No other skin's index and no
+  sector range moves. `texmods::Index::replaceSkin(stem, pngs)` then retires that costume's PNG entries (not freed: a reader may
+  hold one) and adds the new ones, so a texture the overwrite dropped falls back to the base costume's, and bumps `gen()` so the
+  selection's decoded textures reload. The new costume is in the selection's list at once. The mods hooks stay installed with an
+  empty or missing mods folder (MODS.md, "Under the hood") so the alias of a skin added after boot resolves.
+- **Log:** `[creator] panel opened`, `[creator] panel closed`, `[creator] name = "<NAME>"`, the first retint's `[creator] tint <ms>
+  ms (<model>, <n> textures)`; a save logs `[creator] removed <file> (not in this save)` for each stale file, the registry's
+  `[mods] skin togera/green ("GREEN", Creator) = costume 4 (LIZARD4); base 1, 1 png`, then `[creator] saved
+  mods/Creator/skins/green (1 png) in 31 ms` (with `; raw alpha kept on the textures above 0x80` when it applies). Errors:
+  `[creator] cannot write ...`, `[creator] not registered: <reason>`, `[creator] MON/<file>.NGP not found`, `[creator] <id> is a
+  <monster> skin; pick another name`.
+- **Scripted (`WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]`, for example `togera:1:green:120`):** at boot,
+  after the mods scan, the same save with those values on every texture group (every group gets a PNG), the name = the id in
+  capitals and no OVERWRITE? question; then the game boots as usual. The costume is 0 to 3 and must exist on the disc, the id is
+  lowercase letters, digits and `_`. A bad value logs `[creator] WOTM_CREATOR ignored: <reason>` and writes nothing.
+- **Online:** a created skin is drawing only (nothing in the lockstep state changes); the same folder on every PC keeps the mods
+  digest equal, and a PC without it is refused ("game configuration differs"). The lobby (`net_lobby.py`, `LobbyClient.cs`,
+  `wotm_net_server.cpp`) hands out disc costumes 0 to 3 only, so picking a created skin online waits for a lobby protocol change (#14).
+- Not in the creator: the HUD portrait (it lives in the shell's `.RTX`), custom monster fields and geometry (steps 2 and 3 of #42).
+
 ## Runtime: direct match, AI vs AI and batch (`tools/lote.ps1`)
 - **`WOTM_MATCH=<player>[:<costume>][,<ai>[:<costume>]...],<stage>` (0 to 7 AIs)** (indices from `GLOSSARIO.md`; types without files in `MON/`, 0, 6, 12, 16 and 17, are rejected: loading would read nonexistent files without an error and `texmResRelocate` would walk garbage; `3,1` = Togera alone in central, like the menu's free for all with 0 AIs; `3,1,1` = Togera against Congar in central; `1,2,2,2,1` = Congar against three Robo-47): `userintMain` (0x1D9868) does not open the menu and returns 0 with the shell filled in the way the menu leaves it in "1 player against the CPU" (the state of the dumps at the end of the menu of the `-Auto` script): `m_mode` 2 (challenge), `m_monsterSel[0]`/`[4]`, 1 player and 1 AI, 3 lives, costume 1 on the AI when the monsters are the same, and `TheGame::m_gameMode` 2. With more AIs, each goes to `m_monsterSel[4 + i]`/`m_costume[2 + i]` and `m_numAIs` becomes the number of AIs. A repeated monster gets the next costume, as in the menu, which does not allow two identical opponents in the same costume. **Chosen costume:** each monster accepts `<monster>:<costume>` (0 to 3 from the disc; 4 to 99 or the id of a mod skin, `4:roxo`, `MODS.md`, "Skins") (`10:3,1:2,1` = Agamo in Mecha Sweet Tooth against Congar in costume 3 in central); without `:` or with a costume already requested by the same monster, it gets the lowest free one (the first to ask wins). Costumes locked in the save apply. The log's `[match]` line shows each one's `monster:costume`. In the launcher, each monster has a skin combo, and monster and skin have "Random" (drawn on Play, not in the runtime). Example: `10:3,10:3,10,1:2,1` comes out as `10:3 vs 10:0 10:1 1:2`. The difference is `m_killTarget` 0 (the menu sets 1): with no target, `EvaluateOnePlayerChallengeStatus` only revives the downed one (`reinitSlot`), and the fight continues without the "PLAY AGAIN / REBUILD LEVEL / QUIT" dialog, which would wait for the pad. The opening movie (`uiMain`) becomes a no-op. From process start to the stage takes less than 15 s. Each end of round (entry of `Shell::EvaluateGameStatus`) is printed as `[match] round N ended` with each monster's health and wins.
   **Up to 8 monsters (1 + 7 AIs):** `m_monsterSel[4 + i]` goes past the header's `[8]` into `pad2958` (free in all dumps; retail's Endurance already uses `[8]`), `m_costume` goes up to index 8 (before `m_mode`), `m_monsters` has room for 16. The ceiling is RAM: **monsters load above 32 MB** (`WOTM_HIGHRAM`, "64 MB RAM and loading above 32 MB") and only the stage's NGP stays below; Metro with 8 monsters fits (monsters, RTX and TEX up to ~0x2B10000, 21 MB of headroom). The entry of `rtMain` logs `[wotm] stage load: ... MB to the end of RAM` (how much is left up to the end of the 64 MB RAM; warns below 0.5 MB). With `WOTM_HIGHRAM=0` stage and monsters are loaded contiguously from 0xA00000 up to ~0x1F10000, as on the PS2: with 8 monsters Centro ends at 0x1CC3400 (2.3 MB of headroom), San Francisco and Vegas have ~2 MB and Metro (stage 4) goes past 32 MB while loading and freezes. With 8 monsters the game runs at 60 fps (~9 ms of CPU per frame, against 6.2 ms with 4); example: `WOTM_MATCH=3,1,2,1,5,9,8,5,1 WOTM_AIVSAI=1`. The off-screen monster markers only number up to 4 (with the `WOTM_ENEMYBARS` mod all enemies have a bar). Analysis and the path to 16 in `docs/investigacoes/2026-10-18/16_monstros.md`. **Agamo with 7 other types:** with 1 player and 7 AIs of all different types, in Centro and in the Airport (not Tokyo), the position of the emitter of Agamo's head fire (fxId 141 `IdolHeadFlame`, `EmitMotionSense`) comes out infinite. It adds to `cumulativeRate` the distance it moved since the previous frame: the accumulated value goes to ~5e18, the `numParticles + n` of the `maxParticles` cap goes past 2^31 and the emission loop runs 2^31 times (the game hangs on frame 3, with `__muldi3` called from `particleEmit` in the `pc` of the EE threads). Protection in `wotm_overrides.cpp`: at the exit of `utilUpdateEmitterMatrices`, a jump of more than 100,000 units counts as standing still, and at the entry of `particleEmit` an accumulated value outside [0, 2^16) and a `numParticles` outside [0, `maxParticles`] go back to the limit (line `[wotm] particle emitter ...`, up to 8). The cause of the infinite position is still open; with the protection the fight continues and the head fire does not come out in that case. **Kineticlops' chain lightning:** in Metro with 8 monsters `StateZapAttack::update` may not return (the watchdog shows `FROZE` with the `pc` in `isBlocking`/collision traversal, which is only the last point where the scheduler ran): the loop that passes the lightning from the target to the other monsters (index from 0 to `numMonsters`) and the loop that draws each one's arcs (from 0 to `numArcs`, float @0x50 of the state, 5 for Kineticlops) use the same variable in retail (`$s4`). After chaining to monster k the index is at `numArcs + 1`; with 4 monsters this only ends the loop earlier, with 8 and k ≥ 6 it goes back and chains to the same k forever. Protection in `wotm_overrides.cpp`: the hook of `hdLosCSTest` called from the loop saves the index, and the one of `mathfRand` right after the arcs keeps it (`max`); where retail does not hang nothing changes (line `[wotm] chain lightning ...`, up to 8). Test case: `WOTM_MATCH=7,7,7,7,7,7,7,7,4` (without the protection it freezes in ~2 min).

@@ -42,8 +42,8 @@ the right), title CREATE, no tabs; L1 and R1 badges stay but do nothing. Rows, t
 |---|---|---|---|
 | MONSTER | name from `kMonsters` (`wotm_mods.hpp`), the ten playables | previous and next monster; resets COSTUME to 0, the sliders to 0 and NAME to the default | nothing |
 | COSTUME | `1`..`4` (disc costume + 1) | previous and next costume that exists on the disc (`MON/<PREFIX><n>.NGP`); resets the sliders | nothing |
-| TEXTURE | `T<id> k/N` (texId of the texture, `k` of `N` textures of the model) | previous and next texture | nothing |
-| HUE | `-180`..`+180` in steps of 15, shown with `°` | step | nothing |
+| TEXTURE | `T<id> k OF N` (texId of the texture group, `k` of `N` groups of the model; the font has no `/`) | previous and next texture | nothing |
+| HUE | `-180`..`+180` in steps of 15, wrapping, shown as `-30 DEG` (the font has no `+` or degree sign) | step | nothing |
 | SATURATION | `-100`..`+100` in steps of 10 | step | nothing |
 | BRIGHTNESS | `-60`..`+60` in steps of 10 | step | nothing |
 | NAME | up to 11 letters (the HUD limit), cursor under one letter while editing | editing: move the cursor; else nothing | enters and leaves editing |
@@ -54,9 +54,9 @@ Hints (the line under the big screen, `wotm_legend::hint`) per row, in the voice
 RECOLOR", COSTUME "THE COSTUME WHOSE TEXTURES ARE THE STARTING POINT", TEXTURE "WHICH PART OF THE SKIN THE THREE SLIDERS BELOW
 CHANGE", HUE "TURNS THE COLORS OF THIS TEXTURE AROUND THE WHEEL", SATURATION "GRAYER TO THE LEFT, STRONGER TO THE RIGHT",
 BRIGHTNESS "DARKER TO THE LEFT, LIGHTER TO THE RIGHT", NAME "THE COSTUME NAME IN THE SELECTION. X TO EDIT" (editing: "LEFT AND
-RIGHT MOVE, UP AND DOWN CHANGE THE LETTER, X DONE"), SAVE "WRITES THE SKIN TO MODS/CREATOR/SKINS AND ADDS IT TO THE COSTUME
+RIGHT MOVE, UP AND DOWN CHANGE THE LETTER, ENTER OR X DONE"), SAVE "WRITES THE SKIN TO MODS/CREATOR/SKINS AND ADDS IT TO THE COSTUME
 LIST", BACK "LEAVES WITHOUT SAVING". Legend: d-pad MOVE, left and right CHANGE, X SELECT, triangle BACK (editing the name:
-left and right MOVE, up and down LETTER, X DONE).
+left and right MOVE, up and down LETTER, X DONE, shown as ENTER on the keyboard, where X is Space and types a space).
 
 **Name editing.** While editing, up and down roll the letter under the cursor through space, A to Z, 0 to 9 and `-`; left and
 right move the cursor over the 11 slots; X (or triangle) leaves editing. On the keyboard, typing a letter sets the slot and
@@ -74,7 +74,7 @@ geometry). A click on SAVE, BACK or NAME is X.
 **State** lives on the EE thread in a `wotm_creator` namespace (new file `native/runtime/wotm_creator.inc`, included from
 `wotm_mainmenu.inc` next to the training rows, since it needs the panel's statics): monster index, costume, texture index, per
 texture `{hue, sat, bright}`, name, cursor, editing flag, row, `saved` message. `publish` copies it into `View` (new fields:
-`creator`, `creatorRow`, `creatorHint`, and a `CreatorPreview {monsterType, costume, base, gen, tints[]}` struct) under `g_m`,
+`creator` and `creatorState`, a copy of the creator's `State` with its tint generation) under `g_m`,
 so the window thread reads a snapshot.
 
 ## Section 2: the preview
@@ -129,7 +129,7 @@ X on SAVE, on the EE thread:
    selection loads it fresh.
 4. Log `[creator] saved mods/Creator/skins/<id> (N png)` and show `SAVED` as the SAVE row's value for 3 seconds; the panel
    stays open. The registry's own line `[mods] skin togera/<id> ("NAME", Creator) = costume 4 (LIZARD4); base 1, N png`
-   follows from the add.
+   comes from the add, just before it.
 
 **Name in use.** A skin folder holds one monster's skin: if `mods/Creator/skins/<id>/skin.json` names another monster, SAVE
 shows `NAME IN USE` and writes nothing; the player changes the name. Saving deletes the folder's PNGs it did not write, so an
@@ -177,12 +177,14 @@ table, and it is what `live_check` drives.
 - **Native tests** (`native/tests/wotm_native_test.cpp`, `tools\test_native.bat`): `tint_identity_and_hue` (zero shift is bit
   identical; +120° turns pure red into pure green and keeps alpha; saturation −100 grays; brightness clamps),
   `creator_id_from_name` (`"TOGERA 2"` -> `togera_2`, `"  Green!! Togera  "` -> `green_togera`, empty -> `skin`),
-  `creator_skin_json` (the dumped text parses back to the five fields), `creator_env_parse` (`togera:1:green:120` and the
+  `creator_skin_json_and_png_names` (the dumped text parses back to the five fields; the PNG names), `creator_texture_groups`,
+  `creator_raw_alpha_round_trip`, `creator_env_parse` (`togera:1:green:120` and the
   short forms; `bogus:1:x` and `togera:9:x` rejected).
-- **Live check** (`tools\live_check.ps1`): `-Env "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=<temp mods folder>" -Expect
+- **Live check** (`tools\live_check.ps1`; entries `creator_script` and `creator_reload` in `tools\live_checks.ps1`): `-Env "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=<temp mods folder>" -Expect
   "\[creator\] saved .*skins[\\/]green \(\d+ png\)|||\[mods\] skin togera/green"`, then a second run with the same
   `WOTM_MODS` and no `WOTM_CREATOR` expecting the `[mods] skin togera/green` line (the folder loads at boot like any mod).
-- **Lockstep** (`tools\net_check.ps1 -Players 2 -ExtraEnv "WOTM_MODS=<that folder>"`): both PCs with the created skin in
+- **Lockstep** (`tools\net_check.ps1 -Players 2 -ExtraEnv "WOTM_MODS=<that folder>"`; entry `creator_skin_folder` in
+  `tools\net_checks.ps1`): both PCs with the created skin in
   their mods folder form the match and keep identical state (the digest agrees); the existing `mods_diferentes` entry already
   covers one PC without it (refused, "game configuration differs"). A fight with the skin itself online waits for the lobby
   change in Section 5.
@@ -197,7 +199,7 @@ table, and it is what `live_check` drives.
 | `native/wotm_creator.hpp` | new, pure (testable without raylib): id from name, `WOTM_CREATOR` parsing, `skin.json` text, PNG names |
 | `native/runtime/wotm_creator.inc` | new: state, rows, input, save, preview, `WOTM_CREATOR` |
 | `native/runtime/wotm_mainmenu.inc` | CREATE row, `View::creator`, branches in `renderPanel`, `panelInput`, `panelLayout`, `panelHit`, legend |
-| `native/wotm_model.hpp` | `texIds()`, `setTextures()` |
+| `native/wotm_model.hpp` | `decodeAllTextures()`, `texInfo()`, `rawAlpha()`, `setTextures()` |
 | `native/wotm_mods.hpp` | `addSkin(dir)` (the per-folder part of `scanSkins` factored out) |
 | `native/wotm_texmods.hpp` | mutex, `add(SkinPng)` |
 | `native/runtime/wotm_overrides.cpp` | `wotmCreatorInstall` after the mods |

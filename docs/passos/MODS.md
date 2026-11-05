@@ -175,6 +175,9 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
   mods folder), it exports the base type's textures in the custom's `costume` (or in `--base`), and the `skin.json` comes out without `base` when
   `--base` is not given. An unknown id creates only the `skin.json`, with a warning.
   In the window, the same through **New skin...**, the skin's properties panel and **Turn into skin...** (section "Interface").
+- **In game:** CREATE on the 1 player modes screen makes a recolor skin of any disc costume and writes it to
+  `mods/Creator/skins/<id>/` (NATIVO.md, "Runtime: character creator"); it is the same folder format, so the kit opens it and
+  friends copy it.
 - Not yet: elimination. In it the game loads costume 0 of every monster only once and the
   players switch monsters between rounds without reloading: picking a costume there requires changing the load, not just the screen.
 
