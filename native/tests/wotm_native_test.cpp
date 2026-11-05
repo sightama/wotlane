@@ -521,9 +521,9 @@ TEST(creator_skin_json_and_png_names)
 TEST(creator_raw_alpha_round_trip)
 {
     // A hiAlpha texture's PNG gets the disc's raw alpha (applyRawAlpha). Small mirrors of the formulas involved:
-    // what the preview shows, Model::decodeOrig's fixA (wotm_model.hpp:941); what the fight reads, texmods::loadPng with rawAlpha
-    // and hiAlpha (wotm_texmods.hpp:182-183: the PNG's alpha as is); what the model path reads, loadPng without rawAlpha
-    // (wotm_texmods.hpp:183: min(255, 2a)).
+    // what the preview shows, the fixA lambda in Model::decodeOrig (wotm_model.hpp); what the fight reads, texmods::loadPng with
+    // rawAlpha and hiAlpha (wotm_texmods.hpp: the PNG's alpha as is); what the model path reads, texmods::loadPng without rawAlpha
+    // (min(255, 2a)).
     auto fixA = [](uint32_t r) { return r >= 128 ? 255u : r * 2; };
     auto fightRead = [](uint32_t a) { return a; };
     auto modelRead = [](uint32_t a) { return std::min(255u, a * 2); };

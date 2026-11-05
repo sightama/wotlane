@@ -31,7 +31,7 @@ branch in its panel functions. `Registry::addSkin` and `texmods::Index::add`/`re
 ## Review focus
 
 1. Alpha round trip: a PNG the creator writes must decode back (`texmods::loadPng`) to the pixels the preview showed. Textures
-   whose raw alpha goes above 0x80 (`hiAlpha`) are reloaded with alpha doubled, so the writer halves theirs (Task 3, Task 7).
+   whose raw alpha goes above 0x80 (`hiAlpha`) are reloaded raw, so the writer writes the disc's raw alpha bytes for textures above 0x80 (Task 7, bdab4b5).
 2. The panel gates (`v.panel`, `g_open` reset, `cur == 1`) must accept screen 2 only for the creator; the options panel must
    still close when the screen leaves 1 (Task 5).
 3. `Registry::addSkin` must never move an existing skin's index or an existing file's sector range (Task 4).
@@ -278,7 +278,8 @@ uses them); `json::dump` writes. Do not add a second JSON writer.
 
 ```cpp
 // Where each entry of Model::textures() came from: the disc texId, whether it is in the .RTX, and whether the raw alpha goes above
-// 0x80 (then texmods::loadPng doubles a PNG's alpha on reload, so a PNG written from these pixels halves it: wotm_creator.inc)
+// 0x80 (then texmods::loadPng reads a PNG's alpha raw, so the creator writes the disc's raw alpha bytes for textures above 0x80:
+// Task 7, bdab4b5)
 struct TexInfo { uint16_t id = 0; bool rtx = false; bool hiAlpha = false; };
 ```
 

@@ -105,5 +105,6 @@ void wotmSkinsInstall(PS2Runtime &runtime)
         anyAi = anyAi || k.ai;
     if (anyAi && (g_origRandomAI = runtime.lookupFunction(kRandomAI)))
         runtime.registerFunction(kRandomAI, &randomAI);
-    std::fprintf(stderr, "[mods] skins in the fight: base costume sounds%s\n", anyAi ? ", random AIs drawn with skins" : "");
+    if (!Registry::get().skins().empty())   // hooks on either way (a skin saved in game registers later); the line only with skins
+        std::fprintf(stderr, "[mods] skins in the fight: base costume sounds%s\n", anyAi ? ", random AIs drawn with skins" : "");
 }

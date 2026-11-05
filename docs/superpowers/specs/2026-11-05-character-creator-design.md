@@ -147,7 +147,8 @@ path if the live add turns out to fight something unforeseen in the selection: t
 `CANNOT WRITE`; nothing is registered. Every file is written under a temporary name (`<file>.tmp`) and renamed over the
 old one only when all were written, so a failed save leaves the previous skin as it was. No disc model (a costume missing on the disc): COSTUME skips it, so this does not reach
 SAVE (if the model still fails to load, `[creator] MON/<file>.NGP not found` and `NOT FOUND`, nothing written). Mods off
-(`WOTM_MODS=0`): `MODS ARE OFF`, nothing written.
+(`WOTM_MODS=0`): `MODS ARE OFF`, nothing written. A mods folder named `mods` whose parent holds only a case variant (`MODS`,
+`Mods`; Windows would write into it, and the boot only reads an entry named exactly `mods`): `NO MODS FOLDER`, nothing written.
 
 ## Section 4: the tint and the scripted run
 

@@ -120,7 +120,8 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
     {
-        // mods/ with that exact name: on Windows the path "mods" next to the ELF in the disc folder resolves to the game's MOD/ (the IRXs)
+        // mods/ with that exact name: Windows paths ignore case, so a "MODS" or "Mods" folder would also answer to "mods"; the
+        // folder must be named exactly mods (the disc folder's own MOD/, the IRXs, is another name and never matches)
         auto modsIn = [](const fs::path &parent) {
             std::error_code ec;
             for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))

@@ -40,7 +40,8 @@ struct State
     bool editing = false;
     int row = RMonster;
     int lastRow = RMonster;     // the row at the last leaveSaveCheck (moving off SAVE cancels OVERWRITE?)
-    char saveValue[24] = {};    // "", "SAVED", "OVERWRITE?", "NAME IN USE", "MODS ARE OFF", "CANNOT WRITE", "NOT FOUND", kSavedRestart
+    char saveValue[24] = {};    // "", "SAVED", "OVERWRITE?", "NAME IN USE", "MODS ARE OFF", "NO MODS FOLDER", "CANNOT WRITE",
+                                // "NOT FOUND", kSavedRestart
     double saveUntil = 0.0;     // GetTime() until which saveValue shows (0: until the next change)
     bool confirmOverwrite = false;
 };
@@ -305,7 +306,9 @@ static bool input(const bool e[kPanelActs], uint8_t *rdram, R5900Context *ctx, P
     else if (e[POk] && s.row == RSave)
     {
         save(s, false);   // the files, the registry, OVERWRITE? and the errors
-        panelSfx(rdram, ctx, runtime, 8);
+        // OK only when it saved; OVERWRITE? is a question (the cursor sound); an error, the back sound
+        const bool saved = std::strncmp(s.saveValue, "SAVED", 5) == 0;
+        panelSfx(rdram, ctx, runtime, saved ? 8 : std::strcmp(s.saveValue, "OVERWRITE?") == 0 ? 4 : 6);
     }
     else if ((e[PLeft] || e[PRight]) && adjust(s, e[PLeft] ? -1 : 1))
     {
@@ -364,6 +367,7 @@ struct SaveCtx
     const std::string &id, &name;
     bool script;
     const wotm::mods::MonsterInfo &mi;
+    std::filesystem::path mods;   // the registry's mods folder (empty: mods off)
     std::filesystem::path dir;
     std::vector<std::pair<std::filesystem::path, std::filesystem::path>> files;   // temp -> final, in write order
     std::set<std::string> written;                                                 // final PNG names (lowercase)
@@ -385,7 +389,38 @@ struct SaveCtx
     }
 };
 
-// MODS ARE OFF, NAME IN USE (skin.json of another monster) or OVERWRITE? (an existing folder, first X): false stops the save
+// Windows ignores case in paths: writing under "<parent>/mods" when the parent has "MODS" or "Mods" (and no "mods") would land in that
+// folder, which the boot's choice of the mods folder (wotmModsInstall: an entry named exactly "mods") would not read back. True when
+// the folder exists under exactly that name, or nothing else answers to it (a missing folder is created as named); false with the
+// other entry's name (ASCII, as it is on disk) in `other`.
+static bool modsFolderIsItself(std::filesystem::path mods, std::string &other)
+{
+    namespace fs = std::filesystem;
+    mods = mods.lexically_normal();
+    if (mods.filename().empty()) mods = mods.parent_path();   // "C:/x/mods/"
+    const fs::path leaf = mods.filename(), parent = mods.parent_path().empty() ? fs::path(".") : mods.parent_path();
+    // only a folder named "mods", the name the boot looks for without WOTM_MODS; another WOTM_MODS folder is read back by the same
+    // path whatever its case
+    if (leaf.native() != fs::path("mods").native()) return true;
+    const std::string want = asciiName(leaf);
+    bool exact = false, alias = false;
+    std::error_code ec;
+    for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const fs::path name = it->path().filename();
+        if (name.native() == leaf.native()) exact = true;
+        else if (asciiName(name) == want)
+        {
+            alias = true;
+            other.clear();
+            for (const auto ch : name.native())
+                other += static_cast<std::make_unsigned_t<std::decay_t<decltype(ch)>>>(ch) < 128 ? char(ch) : '?';
+        }
+    }
+    return exact || !alias;
+}
+
+// MODS ARE OFF, NO MODS FOLDER, NAME IN USE (skin.json of another monster) or OVERWRITE? (an existing folder, first X): false stops the save
 static bool checkExisting(SaveCtx &c)
 {
     namespace fs = std::filesystem;
@@ -393,6 +428,14 @@ static bool checkExisting(SaveCtx &c)
     {
         c.fail("MODS ARE OFF");
         std::fprintf(stderr, "[creator] mods are off (WOTM_MODS=0): %s not saved\n", c.id.c_str());
+        return false;
+    }
+    std::string other;
+    if (!modsFolderIsItself(c.mods, other))
+    {
+        c.fail("NO MODS FOLDER");
+        std::fprintf(stderr, "[creator] no mods folder (\"%s\" there answers to \"%s\"): %s not saved; create mods/ next to the game\n",
+                     other.c_str(), asciiName(c.mods).c_str(), c.id.c_str());
         return false;
     }
     std::error_code ec;
@@ -569,7 +612,7 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
     namespace fs = std::filesystem;
     const auto t0 = std::chrono::steady_clock::now();
     const fs::path &mods = wotm::mods::Registry::get().dir();
-    SaveCtx c{s, id, name, script, kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)],
+    SaveCtx c{s, id, name, script, kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)], mods,
               mods.empty() ? fs::path{} : mods / cr::kMod / "skins" / id, {}, {}, 0};
     if (!checkExisting(c)) return;
     s.confirmOverwrite = false;

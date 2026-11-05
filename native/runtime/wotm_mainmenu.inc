@@ -3,7 +3,8 @@
 //   1 main menu: single player, multiplayer (the "2 player"), options, recompiled options (ours), load game, unlocks, quit game
 //     (ours: closes the game immediately, without confirmation);
 //   2 single-player modes: adventure, free-for-all, endurance, training (ours: the game's free-for-all with training mode on,
-//     wotm_training.h; another mode or going back to the main menu turns it off);
+//     wotm_training.h; another mode or going back to the main menu turns it off), create (ours: X opens the character creator
+//     panel over the list, wotm_creator.inc, without changing screens; triangle closes it);
 //   5 multiplayer modes (after wotm_padsel.inc's pad selection): free-for-all, elimination, minigames.
 //
 // The game's items (shell->m_menuItemSw[screen][1..n]) are frames with the word as an image. Here every object in the switches gets
@@ -12,7 +13,8 @@
 // The cursor is still the game's currentSelection[screen]: the screenGetInput hook consumes up/down and moves currentSelection;
 // X and triangle go on to the screen's function, which does what the item does, as in retail. On screen 1 the "recompiled options"
 // row is outside currentSelection (g_extraRow, like "quit game"); X on it opens the port's options panel in place of the list, without changing screens, and
-// triangle (or O) closes it. With the panel open (and for 20 frames after closing) the game sees no input at all: the panel reads
+// triangle (or O) closes it; CREATE on screen 2 opens the same panel with the creator's rows (no tabs) and its 3D preview.
+// With the panel open (and for 20 frames after closing) the game sees no input at all: the panel reads
 // the devices directly (wotm_padsel::readDevice), on the EE thread, inside the screenGetInput hook.
 // Panel: tabs VIDEO / FEATURES / CAMERA / MODIFIERS / CONTROLS (L1/R1), up/down pick the row, left/right/X
 // change the value, which takes effect immediately and is saved to settings.ini (wotm_settings.hpp; video is applied on the window

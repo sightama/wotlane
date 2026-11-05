@@ -244,7 +244,8 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
 - **Tests:** `tint_identity_and_hue`, `creator_*` and `mods_add_skin_after_scan` (`native/tests/wotm_native_test.cpp`).
 - **Checks:** `creator_script` and `creator_reload` (`tools/live_checks.ps1`), `creator_skin_folder` (`tools/net_checks.ps1`).
 - **Entry:** **CREATE**, the fifth row of the 1 player modes screen (screen 2, below TRAINING; `kCreatorRow`, an item that is not
-  the game's: `currentSelection` stays on FREE-FOR-ALL while it is lit). X opens the native panel over the list (the game sees no
+  the game's: `currentSelection` stays on FREE-FOR-ALL while it is lit); it exists only with the native text menus (not with
+  `WOTM_TEXTMENU=0`, where `wotmMainMenuInstall` installs no menu hook). X opens the native panel over the list (the game sees no
   input while it is open), triangle closes it with the cursor still on CREATE, and a screen change closes it at once. The panel
   opens on Togera; closing and reopening keeps the monster, costume, tints and name.
 - **Rows** (title CREATE, no tabs; rows on the left, the preview box on the right; each row has its hint on the line below):
@@ -280,7 +281,10 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
 - **Save: SAVE row messages:**
   - `OVERWRITE?` when the folder exists: the next X overwrites; moving off SAVE, changing a value or closing the panel cancels;
   - `NAME IN USE` when the folder's `skin.json` names another monster (nothing written);
-  - `MODS ARE OFF` with `WOTM_MODS=0`, `NOT FOUND` when the costume's `.NGP` does not load (only with at least one group tinted:
+  - `MODS ARE OFF` with `WOTM_MODS=0`; `NO MODS FOLDER` when the mods folder is named `mods` but its parent has only a case variant
+    (`MODS`, `Mods`), which Windows would write into and the boot (an entry named exactly `mods`) would not read: nothing written,
+    log `[creator] no mods folder ("MODS" there answers to "mods"): <id> not saved; create mods/ next to the game`;
+    `NOT FOUND` when the costume's `.NGP` does not load (only with at least one group tinted:
     a save with every value at zero loads no model and writes only `skin.json`, the base costume renamed), `CANNOT WRITE` when a
     folder, file or rename fails (nothing registered);
   - `SAVED` for 3 seconds (the panel stays open), or `SAVED. RESTART TO USE` when the registry refuses the skin (the files stay;
