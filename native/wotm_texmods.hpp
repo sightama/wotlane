@@ -65,6 +65,7 @@ public:
             std::lock_guard<std::mutex> lk(m_m);
             buildLocked();
             const std::string up = upper(stem);
+            // every entry of the stem, including another mod's PNG named for it (a fixed name for a run-time costume index: nonsense)
             for (auto it = m_png.begin(); it != m_png.end();) {
                 const auto next = std::next(it);
                 if (it->first.stem == up) m_retired.push_back(m_png.extract(it));

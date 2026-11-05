@@ -333,92 +333,129 @@ static std::vector<std::vector<int>> groupsOf(const wotm::model::Model &m)
     return g;
 }
 
-// "t0004.png" or "rtx_t0011.png" (any case): the names a save writes (cr::pngName)
-static bool isSavedPngName(std::string n)
+// A file name in lowercase ASCII (anything else becomes '?'), read from the native name: no narrow conversion that could throw on a
+// name outside the code page
+static std::string asciiName(const std::filesystem::path &p)
 {
-    for (char &c : n) c = char(std::tolower(static_cast<unsigned char>(c)));
-    if (n.rfind("rtx_", 0) == 0) n.erase(0, 4);
-    if (n.size() < 6 || n[0] != 't' || n.compare(n.size() - 4, 4, ".png") != 0) return false;
-    const std::string digits = n.substr(1, n.size() - 5);
-    return !digits.empty() && digits.find_first_not_of("0123456789") == std::string::npos;
+    std::string out;
+    const std::filesystem::path file = p.filename();   // kept alive: native() is a reference into it
+    for (const auto c : file.native())
+    {
+        const auto u = static_cast<std::make_unsigned_t<std::decay_t<decltype(c)>>>(c);
+        out += u < 128 ? char(std::tolower(int(u))) : '?';
+    }
+    return out;
+}
+// What cr::pngName writes, followed by `tail` (".png"; ".png.tmp" for a save's temp file): "t" or "rtx_t", 4 digits. n: asciiName's
+static bool isSkinPngName(const std::string &n, const char *tail)
+{
+    const size_t at = n.rfind("rtx_", 0) == 0 ? 4 : 0, len = std::strlen(tail);
+    if (n.size() != at + 5 + len || n[at] != 't') return false;
+    for (size_t i = at + 1; i < at + 5; ++i)
+        if (n[i] < '0' || n[i] > '9') return false;
+    return n.compare(at + 5, len, tail) == 0;
 }
 
-// Section 3 of the spec: writes mods/Creator/skins/<id>/ (one PNG per tinted texture group, skin.json) and registers it
-// (Registry::addSkin, texmods::Index::replaceSkin). Uses only its arguments and the registries, no window state: WOTM_CREATOR calls it
-// at boot, before the window exists (script: every group is written, no OVERWRITE? question, no timed message).
-static void saveAs(State &s, const std::string &id, const std::string &name, bool script)
+// Section 3 of the spec, in steps. Each uses only its arguments and the registries, no window state: WOTM_CREATOR runs them at boot,
+// before the window exists. Log paths are written as mods/Creator/skins/<id> (the id is ASCII; the mods folder may not be).
+struct SaveCtx
 {
-    namespace fs = std::filesystem;
-    const auto t0 = std::chrono::steady_clock::now();
-    const wotm::mods::MonsterInfo &mi = kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)];
-    auto fail = [&s](const char *msg) {
+    State &s;
+    const std::string &id, &name;
+    bool script;
+    const wotm::mods::MonsterInfo &mi;
+    std::filesystem::path dir;
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> files;   // temp -> final, in write order
+    std::set<std::string> written;                                                 // final PNG names (lowercase)
+    size_t rawCount = 0;
+    void fail(const char *msg)
+    {
         setSave(s, msg);
         s.saveUntil = 0.0;
-    };
-    const fs::path mods = wotm::mods::Registry::get().dir();
-    if (mods.empty())
-    {
-        fail("MODS ARE OFF");
-        std::fprintf(stderr, "[creator] mods are off (WOTM_MODS=0): %s not saved\n", id.c_str());
-        return;
     }
-    const fs::path dir = mods / cr::kMod / "skins" / id;
+    // Every temp file written so far goes: a failed save leaves the folder as it was
+    void dropTemps()
+    {
+        for (const auto &f : files)
+        {
+            std::error_code ec;
+            std::filesystem::remove(f.first, ec);
+        }
+        files.clear();
+    }
+};
+
+// MODS ARE OFF, NAME IN USE (skin.json of another monster) or OVERWRITE? (an existing folder, first X): false stops the save
+static bool checkExisting(SaveCtx &c)
+{
+    namespace fs = std::filesystem;
+    if (c.dir.empty())
+    {
+        c.fail("MODS ARE OFF");
+        std::fprintf(stderr, "[creator] mods are off (WOTM_MODS=0): %s not saved\n", c.id.c_str());
+        return false;
+    }
     std::error_code ec;
-    const bool exists = fs::exists(dir, ec);
-    if (exists)
+    if (!fs::exists(c.dir, ec)) return true;
+    // a skin folder holds one monster's skin; a missing or unreadable skin.json is not "in use" (the overwrite question applies)
+    std::ifstream in(c.dir / "skin.json", std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    wotm::json::Value v;
+    const wotm::json::Value *mon = nullptr;
+    if (in.is_open() && wotm::json::parse(text, v) && (mon = v.get("monster")) && mon->type == wotm::json::Value::Str)
     {
-        // a skin folder holds one monster's skin; a missing or unreadable skin.json is not "in use" (the overwrite question applies)
-        std::ifstream in(dir / "skin.json", std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        wotm::json::Value v;
-        const wotm::json::Value *mon = nullptr;
-        if (in.is_open() && wotm::json::parse(text, v) && (mon = v.get("monster")) && mon->type == wotm::json::Value::Str)
+        std::string other = mon->s;
+        for (char &ch : other) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        if (other != c.mi.name)
         {
-            std::string other = mon->s;
-            for (char &c : other) c = char(std::tolower(static_cast<unsigned char>(c)));
-            if (other != mi.name)
-            {
-                fail("NAME IN USE");
-                std::fprintf(stderr, "[creator] %s is a %s skin; pick another name\n", id.c_str(), other.c_str());
-                return;
-            }
-        }
-        if (!s.confirmOverwrite && !script)
-        {
-            fail("OVERWRITE?");
-            s.confirmOverwrite = true;
-            std::fprintf(stderr, "[creator] mods/%s/skins/%s exists: X again overwrites\n", cr::kMod, id.c_str());
-            return;
+            c.fail("NAME IN USE");
+            std::fprintf(stderr, "[creator] %s is a %s skin; pick another name\n", c.id.c_str(), other.c_str());
+            return false;
         }
     }
-    s.confirmOverwrite = false;
-    // The EE thread's own Model of the disc costume, decoded the way the preview's is (load + decodeAllTextures, same order)
+    if (!c.s.confirmOverwrite && !c.script)
+    {
+        c.fail("OVERWRITE?");
+        c.s.confirmOverwrite = true;
+        std::fprintf(stderr, "[creator] mods/%s/skins/%s exists: X again overwrites\n", cr::kMod, c.id.c_str());
+        return false;
+    }
+    return true;
+}
+
+// Bytes to `path` (binary, wide-path safe). false on any error.
+static bool writeBytes(const std::filesystem::path &path, const void *data, size_t n)
+{
+    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    o.write(static_cast<const char *>(data), std::streamsize(n));
+    o.close();
+    return !o.fail();
+}
+
+// One temp PNG per tinted group (script: every group) from the EE thread's own Model of the disc costume, decoded the way the
+// preview's is (load + decodeAllTextures, same order). No tinted group: nothing to load (the skin is the base costume renamed).
+static bool writeGroupPngs(SaveCtx &c)
+{
+    bool any = c.script;
+    for (const Tint &t : c.s.tint) any |= !t.zero();
+    if (!any) return true;
     const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
-    const std::string file = std::string(mi.prefix) + std::to_string(s.costume);
+    const std::string file = std::string(c.mi.prefix) + std::to_string(c.s.costume);
     wotm::model::Model m;
     if (!m.load(io.cdRoot, io.cdImage.string(), file))
     {
-        fail("NOT FOUND");
-        std::fprintf(stderr, "[creator] MON/%s.NGP not found: %s not saved\n", file.c_str(), id.c_str());
-        return;
+        c.fail("NOT FOUND");
+        std::fprintf(stderr, "[creator] MON/%s.NGP not found: %s not saved\n", file.c_str(), c.id.c_str());
+        return false;
     }
     m.decodeAllTextures();
     const std::vector<std::vector<int>> groups = groupsOf(m);
     const std::vector<wotm::model::TexImage> &texs = m.textures();
     const std::vector<wotm::model::TexInfo> &info = m.texInfo();
-    fs::create_directories(dir, ec);
-    if (ec)
-    {
-        fail("CANNOT WRITE");
-        std::fprintf(stderr, "[creator] cannot write %s: %s\n", dir.string().c_str(), ec.message().c_str());
-        return;
-    }
-    std::set<std::string> written;   // lowercase file names
-    size_t rawCount = 0;
     for (size_t g = 0; g < groups.size(); ++g)
     {
-        const Tint &k = s.tint[g];
-        if (!script && k.zero()) continue;   // the base costume's own texture serves (the registry aliases it)
+        const Tint &k = c.s.tint[g];
+        if (!c.script && k.zero()) continue;   // the base costume's own texture serves (the registry aliases it)
         // one PNG per texId, whatever the palette: the group's first texture decides (as in the preview's TEXTURE row)
         const size_t i = size_t(groups[g][0]);
         std::vector<uint32_t> px = texs[i].rgba;
@@ -427,62 +464,136 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
         // decoded pixels saturate every raw alpha from 0x80 up to 255, so the PNG gets the texture's own raw bytes: the fight then
         // draws the disc's alpha and the selection what the preview showed. Model::rawAlpha is empty when TCC is clear (no reader
         // uses the alpha then); hiAlpha is the same rawAmax > 0x80 test in Model::decodeTex and Scene::modTexture.
-        if (info[i].hiAlpha && cr::applyRawAlpha(px, m.rawAlpha(i))) ++rawCount;
+        if (info[i].hiAlpha && cr::applyRawAlpha(px, m.rawAlpha(i))) ++c.rawCount;
         const std::string png = cr::pngName(info[i].id, info[i].rtx);
+        // encoded in memory and written through the path (the mods folder may hold characters a narrow file name cannot); the temp
+        // name "<png>.tmp" ends in neither .png nor .json, so no scan or texture lookup ever takes it
+        const std::filesystem::path tmp = c.dir / (png + ".tmp");
+        c.files.emplace_back(tmp, c.dir / png);
         Image img{px.data(), texs[i].w, texs[i].h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-        if (!ExportImage(img, (dir / png).string().c_str()))
+        int size = 0;
+        unsigned char *data = ExportImageToMemory(img, ".png", &size);
+        const bool ok = data && size > 0 && writeBytes(tmp, data, size_t(size));
+        if (data) MemFree(data);
+        if (!ok)
         {
-            fail("CANNOT WRITE");
-            std::fprintf(stderr, "[creator] cannot write %s: ExportImage failed\n", (dir / png).string().c_str());
-            return;
+            c.fail("CANNOT WRITE");
+            std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s/%s\n", cr::kMod, c.id.c_str(), png.c_str());
+            return false;
         }
-        written.insert(png);
+        c.written.insert(png);
     }
-    // PNGs this save did not write (zero-tint groups of an earlier save, another costume's texIds) would retexture this costume
-    std::vector<fs::path> stale;   // collected first: no removal while the directory is being walked
-    for (const fs::directory_entry &e : fs::directory_iterator(dir, ec))
+    return true;
+}
+
+// skin.json through its temp file, last in `files`
+static bool writeSkinJson(SaveCtx &c)
+{
+    const std::string text = cr::skinJson(c.mi.name, c.id, c.name, c.s.costume);
+    const std::filesystem::path tmp = c.dir / "skin.json.tmp";
+    c.files.emplace_back(tmp, c.dir / "skin.json");
+    if (writeBytes(tmp, text.data(), text.size())) return true;
+    c.fail("CANNOT WRITE");
+    std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s/skin.json\n", cr::kMod, c.id.c_str());
+    return false;
+}
+
+// Every temp file over its final name (PNGs first, skin.json last). A rename that fails stops there: the temps left go, the files
+// already renamed stay (a rename in the same folder failing midway is not expected; the log says so).
+static bool commitFiles(SaveCtx &c)
+{
+    for (size_t k = 0; k < c.files.size(); ++k)
     {
-        std::string n = e.path().filename().string();
-        if (!e.is_regular_file(ec) || !isSavedPngName(n)) continue;
-        for (char &c : n) c = char(std::tolower(static_cast<unsigned char>(c)));
-        if (!written.count(n)) stale.push_back(e.path());
+        std::error_code ec;
+        std::filesystem::rename(c.files[k].first, c.files[k].second, ec);
+        if (!ec) continue;
+        std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s: rename failed after %zu of %zu files: %s\n", cr::kMod, c.id.c_str(), k,
+                     c.files.size(), ec.message().c_str());
+        c.files.erase(c.files.begin(), c.files.begin() + std::ptrdiff_t(k));
+        c.dropTemps();
+        c.fail("CANNOT WRITE");
+        return false;
+    }
+    c.files.clear();
+    return true;
+}
+
+// PNGs this save did not write (zero-tint groups of an earlier save, another costume's texIds) would retexture this costume; temp
+// files an interrupted save left go too. Collected first, removed after the walk; no call here throws.
+static void removeStale(SaveCtx &c)
+{
+    namespace fs = std::filesystem;
+    std::vector<fs::path> stale;
+    std::error_code ec;
+    for (fs::directory_iterator it(c.dir, ec), end; !ec && it != end; it.increment(ec))
+    {
+        std::error_code fe;
+        if (!it->is_regular_file(fe)) continue;
+        const std::string n = asciiName(it->path());
+        if ((isSkinPngName(n, ".png") && !c.written.count(n)) || isSkinPngName(n, ".png.tmp") || n == "skin.json.tmp")
+            stale.push_back(it->path());
     }
     for (const fs::path &p : stale)
     {
         std::error_code rm;
         fs::remove(p, rm);
-        std::fprintf(stderr, "[creator] removed %s (not in this save)%s\n", p.filename().string().c_str(), rm ? " FAILED" : "");
+        std::fprintf(stderr, "[creator] removed %s (not in this save)%s\n", asciiName(p).c_str(), rm ? " FAILED" : "");
     }
-    {
-        std::ofstream o(dir / "skin.json", std::ios::binary | std::ios::trunc);
-        o << cr::skinJson(mi.name, id, name, s.costume);
-        o.close();
-        if (!o)
-        {
-            fail("CANNOT WRITE");
-            std::fprintf(stderr, "[creator] cannot write %s\n", (dir / "skin.json").string().c_str());
-            return;
-        }
-    }
+}
+
+// Registry::addSkin and the PNG map: SAVED, or SAVED. RESTART TO USE when the registry refuses (the files stay)
+static void registerLive(SaveCtx &c)
+{
     std::string why;
-    if (const wotm::mods::Skin *k = wotm::mods::Registry::get().addSkin(dir, why))
+    if (const wotm::mods::Skin *k = wotm::mods::Registry::get().addSkin(c.dir, why))
     {
         const std::string stem = k->prefix + std::to_string(k->index);
         std::vector<wotm::mods::SkinPng> pngs;
         for (wotm::mods::SkinPng &p : wotm::mods::Registry::get().skinPngs())
             if (p.stem == stem) pngs.push_back(std::move(p));
         wotm::texmods::Index::get().replaceSkin(stem, pngs);
-        setSave(s, "SAVED");
+        setSave(c.s, "SAVED");
     }
     else
     {
-        setSave(s, kSavedRestart);
+        setSave(c.s, kSavedRestart);
         std::fprintf(stderr, "[creator] not registered: %s\n", why.c_str());
     }
+}
+
+// Writes mods/Creator/skins/<id>/ (one PNG per tinted texture group, skin.json) and registers it (script: every group is written,
+// no OVERWRITE? question, no timed message). Every file goes to a temp name first and is renamed over the old one only when all
+// were written, so a failed save leaves the previous skin as it was.
+static void saveAs(State &s, const std::string &id, const std::string &name, bool script)
+{
+    namespace fs = std::filesystem;
+    const auto t0 = std::chrono::steady_clock::now();
+    const fs::path &mods = wotm::mods::Registry::get().dir();
+    SaveCtx c{s, id, name, script, kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)],
+              mods.empty() ? fs::path{} : mods / cr::kMod / "skins" / id, {}, {}, 0};
+    if (!checkExisting(c)) return;
+    s.confirmOverwrite = false;
+    std::error_code ec;
+    fs::create_directories(c.dir, ec);
+    if (ec)
+    {
+        c.fail("CANNOT WRITE");
+        std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s: %s\n", cr::kMod, id.c_str(), ec.message().c_str());
+        return;
+    }
+    if (!writeGroupPngs(c) || !writeSkinJson(c))
+    {
+        c.dropTemps();
+        fs::remove(c.dir, ec);   // only when empty: a folder this failed save created goes, an earlier skin's stays
+        return;
+    }
+    if (!commitFiles(c)) return;
+    removeStale(c);
+    registerLive(c);
     s.saveUntil = script ? 0.0 : GetTime() + 3.0;   // GetTime needs the window: the script runs before it exists
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    std::fprintf(stderr, "[creator] saved mods/%s/skins/%s (%zu png) in %.0f ms%s\n", cr::kMod, id.c_str(), written.size(), ms,
-                 rawCount ? "; raw alpha kept on the textures above 0x80" : "");
+    std::fprintf(stderr, "[creator] saved mods/%s/skins/%s (%zu png) in %.0f ms%s\n", cr::kMod, id.c_str(), c.written.size(), ms,
+                 c.rawCount ? "; raw alpha kept on the textures above 0x80" : "");
 }
 // X on SAVE: the id from the typed name (trimmed), shown as typed
 static void save(State &s, bool script)

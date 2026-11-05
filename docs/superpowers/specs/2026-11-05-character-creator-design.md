@@ -144,7 +144,8 @@ cancels. A skin of the same id in another mod is not touched (the registry's "be
 path if the live add turns out to fight something unforeseen in the selection: the files are right either way.
 
 **Errors.** A folder or PNG that cannot be written: `[creator] cannot write <path>: <reason>` and the SAVE row shows
-`CANNOT WRITE`; nothing is registered. No disc model (a costume missing on the disc): COSTUME skips it, so this does not reach
+`CANNOT WRITE`; nothing is registered. Every file is written under a temporary name (`<file>.tmp`) and renamed over the
+old one only when all were written, so a failed save leaves the previous skin as it was. No disc model (a costume missing on the disc): COSTUME skips it, so this does not reach
 SAVE (if the model still fails to load, `[creator] MON/<file>.NGP not found` and `NOT FOUND`, nothing written). Mods off
 (`WOTM_MODS=0`): `MODS ARE OFF`, nothing written.
 

@@ -883,8 +883,8 @@ private:
         int16_t res = -1;
         TexImage img;
         TexInfo info;
-        std::vector<uint8_t> rawA;
-        if (decodeTex(id, t0, img, &info, &rawA)) {
+        std::vector<uint8_t> rawA;   // only with TEX0.TCC set: no reader uses the alpha otherwise (no w * h buffer for those)
+        if (decodeTex(id, t0, img, &info, (t0 >> 34) & 1 ? &rawA : nullptr)) {
             texs_.push_back(std::move(img));
             texInfo_.push_back(info);
             rawA_.push_back(std::move(rawA));
