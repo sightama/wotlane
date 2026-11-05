@@ -32,7 +32,7 @@ struct State
     int monster = kTogera;      // index into wotm::mods::kMonsters
     int costume = 0;            // disc costume 0..3
     int tex = 0;                // texture row's index into the costume's texture groups (groupTextures)
-    int texCount = 0;           // how many groups the costume has (0 until the window thread loaded it; capped at kMaxTex)
+    int texCount = 0;           // how many groups the current costume has (0 while the window thread loads it; capped at kMaxTex)
     Tint tint[kMaxTex];
     uint32_t tintGen = 1;       // bumped on every slider change
     char name[cr::kNameLen + 1] = {};
@@ -48,7 +48,22 @@ static_assert(std::is_trivially_copyable_v<State>, "State is copied into View ev
 static_assert(sizeof(State::saveValue) >= sizeof("SAVED, RESTART TO USE"), "saveValue must hold the longest message and its NUL");
 static void setSave(State &s, const char *text) { std::snprintf(s.saveValue, sizeof s.saveValue, "%s", text); }
 static State g_st;                             // EE thread only (the window reads the copy in View)
-static std::atomic<int> g_texCountShared{0};   // group count: written by the window thread, read by the EE thread
+// The preview's texture group count, keyed by what it was loaded for: monster | costume << 8 | count << 16, one atomic so the key and
+// the count always arrive together. Written by the window thread only (the Preview, below); the EE thread reads it through texCountFor
+constexpr uint32_t kNoTexCount = 0xFFu;   // monster 0xFF: matches no State (nothing loaded)
+static std::atomic<uint32_t> g_texCountShared{kNoTexCount};
+static uint32_t packTexCount(int monster, int costume, int count)
+{
+    return uint32_t(monster & 0xFF) | uint32_t(costume & 0xFF) << 8 | uint32_t(std::clamp(count, 0, kMaxTex)) << 16;
+}
+// Groups of s's monster and costume, 0 while the window has not loaded them yet (a count of the previous costume does not count:
+// its group indices may not exist in this one)
+static int texCountFor(const State &s)
+{
+    const uint32_t v = g_texCountShared.load(std::memory_order_acquire);
+    if ((v & 0xFFu) != uint32_t(s.monster & 0xFF) || ((v >> 8) & 0xFFu) != uint32_t(s.costume & 0xFF)) return 0;
+    return std::clamp(int(v >> 16), 0, kMaxTex);
+}
 
 // "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> exists; the monster's name is cut so " N" fits the 11 letters
 static void defaultName(State &s)
@@ -93,7 +108,7 @@ static void open()
 static void sync()
 {
     State &s = g_st;
-    s.texCount = std::clamp(g_texCountShared.load(std::memory_order_relaxed), 0, kMaxTex);
+    s.texCount = texCountFor(s);
     s.tex = s.texCount > 0 ? std::clamp(s.tex, 0, s.texCount - 1) : 0;
     if (s.saveUntil > 0.0 && GetTime() >= s.saveUntil)
     {
@@ -220,7 +235,7 @@ static bool adjust(State &s, int dir)
     }
     case RTexture:
     {
-        const int n = std::clamp(g_texCountShared.load(std::memory_order_relaxed), 0, kMaxTex);
+        const int n = texCountFor(s);
         if (n > 0) s.tex = (std::clamp(s.tex, 0, n - 1) + dir + n) % n;
         return n > 1;
     }
