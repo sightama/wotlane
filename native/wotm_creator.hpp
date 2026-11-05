@@ -84,4 +84,19 @@ inline bool parseScript(const std::string &text, Script &out, std::string &err) 
     return true;
 }
 
+// One entry of Model::textures() as the creator sees it (Model::TexInfo without raylib)
+struct TexKey { uint16_t id = 0; bool rtx = false; };
+// Indices of textures() per distinct (rtx, id), in first-seen order: the TEXTURE row, the tints and the PNGs are per group
+inline std::vector<std::vector<int>> groupTextures(const std::vector<TexKey> &keys) {
+    std::vector<std::vector<int>> out;
+    std::vector<TexKey> seen;
+    for (int i = 0; i < int(keys.size()); ++i) {
+        size_t g = 0;
+        while (g < seen.size() && !(seen[g].id == keys[size_t(i)].id && seen[g].rtx == keys[size_t(i)].rtx)) ++g;
+        if (g == seen.size()) { seen.push_back(keys[size_t(i)]); out.emplace_back(); }
+        out[g].push_back(i);
+    }
+    return out;
+}
+
 } // namespace wotm::creator

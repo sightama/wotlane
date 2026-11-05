@@ -498,6 +498,16 @@ TEST(creator_env_parse)
     CHECK(!parseScript("togera:1:x:nan", s, err) && err.find("number") != std::string::npos);
 }
 
+TEST(creator_texture_groups)
+{
+    using wotm::creator::TexKey;
+    using wotm::creator::groupTextures;
+    const auto g = groupTextures({TexKey{4, false}, TexKey{11, true}, TexKey{4, false}, TexKey{4, true}});
+    CHECK(g.size() == 3);
+    CHECK(g.size() == 3 && g[0] == std::vector<int>({0, 2}) && g[1] == std::vector<int>({1}) && g[2] == std::vector<int>({3}));
+    CHECK(groupTextures({}).empty());
+}
+
 TEST(creator_skin_json_and_png_names)
 {
     const std::string text = wotm::creator::skinJson("togera", "green", "GREEN TOGERA", 1);
