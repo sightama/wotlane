@@ -219,11 +219,11 @@ inline std::string pngName(uint32_t texId, bool rtx) {
 
 inline std::string skinJson(const std::string &monster, const std::string &id, const std::string &name, int base) {
     json::Value v = json::Value::object();
-    v["monster"] = json::Value::string(monster);
-    v["id"] = json::Value::string(id);
-    v["name"] = json::Value::string(name);
-    v["base"] = json::Value::integer(base);
-    v["ai"] = json::Value::boolean(false);
+    v.at("monster") = json::Value::string(monster);
+    v.at("id") = json::Value::string(id);
+    v.at("name") = json::Value::string(name);
+    v.at("base") = json::Value::integer(base);
+    v.at("ai") = json::Value::boolean(false);
     return json::dump(v) + "\n";
 }
 
@@ -262,8 +262,8 @@ inline bool parseScript(const std::string &text, Script &out, std::string &err) 
 } // namespace wotm::creator
 ```
 
-Note: `json::Value::operator[]` exists ("Creates the key at the end if missing", `wotm_json.hpp`); `asInt`/`asBool` exist
-(`scanSkins` uses them). If `wotm_json.hpp` names them differently, use the names there; do not add a second JSON writer.
+Note: `json::Value::at(key)` creates the key at the end if missing (`wotm_json.hpp`); `asInt`/`asBool` exist (`scanSkins`
+uses them); `json::dump` writes. Do not add a second JSON writer.
 
 - [ ] **Step 4: run the tests, expect PASS.**
 - [ ] **Step 5: commit** (`native: pure creator helpers (id, WOTM_CREATOR, skin.json, PNG names)`).
@@ -567,7 +567,7 @@ static void renderPreview(const State &s, int w, int h)
     const wotm::mods::MonsterInfo &mi = wotm::mods::kMonsters[s.monster];
     if (g_preview.monster != s.monster || g_preview.costume != s.costume)
     {
-        g_preview = Preview{};   // Renderer's destructor frees its textures (check: Renderer has one; else keep ren and reset the rest)
+        g_preview = Preview{};   // ~Renderer releases its GPU textures and target
         g_preview.monster = s.monster; g_preview.costume = s.costume; g_preview.t0 = GetTime();
         const std::string iso = io.cdImage.string();
         g_preview.ok = g_preview.model.load(io.cdRoot, iso, std::string(mi.prefix) + std::to_string(s.costume));
@@ -663,6 +663,13 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
 **Files:** Modify `tools/net_checks.ps1`, `docs/passos/NATIVO.md`, `docs/passos/MODS.md`; optionally `tools/live_checks.ps1` if
 such a list exists (check `ls tools/*checks*`).
 
+- [ ] **Step 0: the two live checks as entries.** Add to `tools/live_checks.ps1` (same shape as the entries there; `$env:TEMP`
+  expands inside a double-quoted string):
+  `'creator_script' = @{ Env = "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25; Expect = '\[creator\] saved mods/Creator/skins/green \(\d+ png\)|||\[mods\] skin togera/green \("GREEN", Creator\) = costume 4' }`
+  and `'creator_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25; Expect = '\[mods\] skin togera/green .* = costume 4 \(LIZARD4\); base 1, \d+ png' }`,
+  with a comment that `creator_reload` needs `creator_script` first and that the folder is created by the first one
+  (`live_checks.ps1` runs the entries in order, so keep them adjacent in that order). Run `tools\live_checks.ps1 -Only creator_script`
+  then `-Only creator_reload`: both exit 0.
 - [ ] **Step 1: lockstep with the folder on both PCs.** Add to `tools/net_checks.ps1`:
   `'creator_skin_folder' = @{ ExtraEnv = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 60 }` (the entry assumes Task 7's
   folder exists; document that in the entry's comment: "run the WOTM_CREATOR live check first"). Run
