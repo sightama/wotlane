@@ -96,7 +96,8 @@ each `TexImage` was decoded from in `texIndex`, its `rtx` flag and whether its r
 other detail levels, hidden parts), so the list covers what a fight can show and has the same order in the preview's Model and
 the save's. The same disc texture can appear twice (same texId under two palettes or GS settings), and a fight replaces a
 texture by `(rtx, texId)` whatever the palette, so the TEXTURE row, the tints and the PNGs are per group of entries with the
-same `(rtx, texId)` (up to 32 groups). Textures the model does not reference are not offered (they would not show anyway).
+same `(rtx, texId)` (up to 32 groups). The starting pixels are what the game would draw: if a retexture mod already changes
+that costume, its PNGs are the starting point. Textures the model does not reference are not offered (they would not show anyway).
 
 Nothing touches the game's RAM: the preview is native drawing only, like the selection's model.
 
@@ -126,7 +127,8 @@ X on SAVE, on the EE thread:
    follows from the add.
 
 **Name in use.** A skin folder holds one monster's skin: if `mods/Creator/skins/<id>/skin.json` names another monster, SAVE
-shows `NAME IN USE` and writes nothing; the player changes the name.
+shows `NAME IN USE` and writes nothing; the player changes the name. Saving deletes the folder's PNGs it did not write, so an
+overwrite from another costume leaves no stale textures.
 
 **Overwrite.** If `mods/Creator/skins/<id>/` exists, SAVE first shows `OVERWRITE?` as its value; the next X overwrites (the
 registry entry is replaced: same index if the skin was registered this run, else added), triangle or moving off the row

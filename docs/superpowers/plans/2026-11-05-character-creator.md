@@ -628,7 +628,8 @@ static void renderPreview(const State &s, int w, int h)
 ```
 
 `groupsOf(const Model &)` (in `wotm_creator.inc`, shared by the preview and the save): maps `texInfo()` to `TexKey`s, calls
-`wotm::creator::groupTextures`, and keeps the first `kMaxTex` groups (logging `[creator] <name>: N texture groups, tinting the
+`wotm::creator::groupTextures`, and keeps the first `kMaxTex` groups (a group's members can in rare cases disagree on
+`hiAlpha`; the first member's decides, since the PNG format is per texId) (logging `[creator] <name>: N texture groups, tinting the
 first 32` once when cut). Textures that decode later during poses are not in any group and stay untinted (the walk in
 `decodeAllTextures` makes that empty in practice).
 
@@ -653,12 +654,34 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
 
 **Files:** Modify `native/runtime/wotm_creator.inc`, `native/runtime/wotm_overrides.cpp` (install after `wotmModsInstall`).
 
+- [ ] **Step 0: a skin added after boot must reach the fight even when the mods folder had nothing at boot.** Today
+  `wotmModsInstall` (`native/runtime/wotm_mods.inc`, `if (n == 0) return;` after `scan`) installs the disc hooks
+  (fileCdSearchFile/sceCdRead, which serve `aliasOf`) only when the scan found files, and `wotmSkinsInstall`
+  (`native/runtime/wotm_skins.inc`, `if (Registry::get().skins().empty()) return;`) installs setPlayer/setAI only when there
+  were skins. Change both conditions to "mods are on" (`!Registry::get().dir().empty()`; `WOTM_MODS=0` still installs nothing)
+  and confirm by reading each hook that with an empty registry it is a pure pass-through (no alias, no skin: the original call
+  with the original arguments; no state, no log spam). Also check the selection screen's costume list (`wotm_padsel.inc`,
+  `costumes`/`skinByIndex` use) and any other place gated on "skins at boot" (grep `skins().empty()`, `customCostumes`,
+  `modNames`) and open the same gates. The lockstep config digest (`wotm_sync.inc`, `mods::digest`) must not change for an
+  empty folder: run `tools\net_checks.ps1 -Only mods_diferentes` after this step. Commit on its own
+  (`native: mod hooks stay on with an empty mods folder, so a skin saved in game reaches the fight`).
+- [ ] **Step 0b: `texmods::Index::replaceSkin(stem, pngs)`.** `Index::add` (Task 4) adds or replaces one PNG; a save that drops
+  a texture must also drop its entry. Add `void replaceSkin(const std::string &stem, const std::vector<mods::SkinPng> &pngs)`
+  under the mutex: retire (Task 4's `m_retired`, so a `Png *` a reader holds stays valid) every entry of `stem`, then
+  `addSkinPngLocked` each of `pngs`. The save (Step 1.7) calls it once with the registry's PNGs of the skin's stem instead of
+  `add` per PNG.
+- [ ] **Step 0c: stale GPU textures.** After an overwrite the scene renderer's texture caches (`wotm_native.hpp`, `tex_`,
+  `fontTex_`, cleared by `invalidate()`; called from `wotm_live.inc` ~1664/~1765) may still hold the old PNG's pixels. Read how
+  those caches are keyed; if a cached entry for the skin's stem/texId can outlive the save, add an `std::atomic<uint32_t>
+  g_texmodsGen` bumped by `replaceSkin` and have the window thread call `S.scene.invalidate()` when it changes (next to the
+  existing calls). If the caches are keyed so that a new fight reloads anyway, say so in the commit message and skip.
 - [ ] **Step 1: `save(State &s, bool script)`** (EE thread):
   1. `id = wotm::creator::idFromName(s.name)`; `dir = Registry::get().dir() / kMod / "skins" / id`. If `Registry::get().dir()`
      is empty (mods off), `saveValue = "MODS ARE OFF"`, log and return.
   2. Name taken by another monster: if `dir/skin.json` exists and its `monster` is not this monster (parse it with
      `json::parse`), `saveValue = "NAME IN USE"`, log `[creator] <id> is a <other> skin; pick another name`, return (the player
-     renames; a skin folder holds one monster's skin). Overwrite: if `dir` exists and `!s.confirmOverwrite && !script`:
+     renames; a skin folder holds one monster's skin; a missing or unreadable `skin.json` is not "in use" and falls through to
+     the overwrite question). Overwrite: if `dir` exists and `!s.confirmOverwrite && !script`:
      `saveValue = "OVERWRITE?"; confirmOverwrite = true; return;`.
   3. Load `wotm::model::Model m` from `MON/<prefix><costume>` (EE thread's own instance) and call `m.decodeAllTextures()` right
      after `load` (textures decode lazily; this walk decodes every OBJECT slot in the same order as the preview's Model), then
@@ -668,12 +691,12 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
      its `rgba`, `tint::shift`, and if `texInfo[i].hiAlpha` halve every alpha byte (`a = a >= 255 ? 0x80 : a / 2`, the inverse
      of `loadPng`'s doubling); write with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(texInfo[i].id, texInfo[i].rtx)).string().c_str())`
      (returns false on failure: `CANNOT WRITE`). One PNG per group: a fight replaces a texId with its PNG whatever the palette.
-     Then remove the PNGs of groups whose tint is zero now (an earlier save of the same skin); never remove a name another group
-     just wrote (names are per group, so they cannot collide).
+     Then delete every `t*.png` / `rtx_t*.png` in `dir` that this save did not write (zero-tint groups of an earlier save, and
+     PNGs of an earlier save from another costume, whose texIds would otherwise retexture this costume at the next boot).
   6. Write `skin.json` (`std::ofstream`, binary) from `skinJson(monsterName, id, name, costume)`; name = `s.name` trimmed
      (script: the id in uppercase).
-  7. `std::string why; const Skin *k = Registry::get().addSkin(dir, why);` on success, for each `SkinPng` of the registry whose
-     `stem == k->prefix + std::to_string(k->index)` call `texmods::Index::get().add(sp)`; `saveValue = "SAVED"`; else
+  7. `std::string why; const Skin *k = Registry::get().addSkin(dir, why);` on success, collect the `SkinPng`s of the registry
+     whose `stem == k->prefix + std::to_string(k->index)` and call `texmods::Index::get().replaceSkin(stem, those)` (Step 0b); `saveValue = "SAVED"`; else
      `saveValue = "SAVED, RESTART TO USE"` and log `[creator] not registered: <why>`.
   8. `std::fprintf(stderr, "[creator] saved %s (%zu png)\n", <"mods/Creator/skins/" + id>, nPng)`; `saveUntil = GetTime() + 3`;
      `confirmOverwrite = false`; the creator's `defaultName` for the *next* skin is not changed (the player may keep tuning).
