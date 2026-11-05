@@ -10,6 +10,7 @@
 #include "wotm_disc.hpp"
 #include "wotm_flame.hpp"
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -17,6 +18,7 @@
 #include <map>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace wotm::model {
@@ -334,6 +336,7 @@ public:
         byId_.clear();
         pals_.clear();
         meshes_.clear();
+        main_ = 0;   // a failed load reports !ok() instead of posing the previous monster
         std::vector<uint8_t> ngp, tex, rtx;
         if (!wotm::disc::readFile(discRoot, iso, "MON/" + name + ".NGP", ngp) || ngp.size() < 16) return false;
         wotm::disc::readFile(discRoot, iso, "MON/" + name + ".TEX", tex);
@@ -360,12 +363,13 @@ public:
             if (na > best) { best = na; main_ = ci; }
         }
         name_ = name;
-        gen_ = ++s_gen_;
+        gen_ = s_gen_.fetch_add(1, std::memory_order_relaxed) + 1;
         haveFrame_ = false;
         return main_ != 0;
     }
 
-    // Unique number for this load (the Renderer rebuilds textures when it changes; the Model's address can repeat across loads)
+    // Unique number for this load and its textures: changes on every load() and setTextures() (the Renderer reuploads textures when it
+    // changes; the Model's address can repeat across loads)
     uint32_t gen() const { return gen_; }
 
     // Fixed box framing the whole animation `id` (samples `samples` frames; leaves the pose at frame 0). Without it the Renderer
@@ -499,10 +503,20 @@ public:
     const Ram &ram() const { return ram_; }
     const std::vector<TexImage> &textures() const { return texs_; }
     const std::vector<TexInfo> &texInfo() const { return texInfo_; }
-    // Replaces the decoded textures (same count and order as textures()); bumps gen() so a Renderer reuploads them
+    // Replaces the decoded textures (same count and order as textures(); any other count is ignored, keeping texInfo() parallel);
+    // bumps gen() so a Renderer reuploads them
     void setTextures(std::vector<TexImage> t) {
+        if (t.size() != texs_.size()) return;
         texs_ = std::move(t);
-        gen_ = ++s_gen_;
+        gen_ = s_gen_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+    // Decodes the texture of every OBJECT slot the file draws with, whatever the pose shows: walks every node from the root ignoring
+    // visibility (all switch children, every LOD level with a switch-out distance, enable flags, zero visibility/scale). Call right after
+    // load(), before any pose, so textures() order is the same in every Model of the same costume: pose() only decodes what is visible,
+    // and the creator's tint list and saved PNGs must cover everything a fight can show (parts an animation toggles on later included).
+    void decodeAllTextures() {
+        std::unordered_set<uint32_t> seen;
+        walkObjects(root_, 0, seen);
     }
     // Box of the posed vertices
     void bounds(float lo[3], float hi[3]) const {
@@ -807,6 +821,48 @@ private:
         }
     }
 
+    // decodeAllTextures: the same child offsets/counts as visit() and findCis, with no visibility, switch, LOD or enable-flag cuts. texIndex
+    // needs no pose state (texId, TEX0 and slot count are the OBJECT's own fields in the .NGP; packets and palettes come from load()).
+    void walkObjects(uint32_t n, int depth, std::unordered_set<uint32_t> &seen) {
+        if (depth > 80 || !ram_.ok(n) || !seen.insert(n).second) return;
+        const uint32_t op = ram_.u32(n) & 63;
+        auto kids = [&](uint32_t arr, uint32_t cnt) {
+            for (uint32_t q = 0; q < std::min<uint32_t>(cnt, 4096); ++q) walkObjects(ram_.u32(arr + 4 * q), depth + 1, seen);
+        };
+        switch (op) {
+        case 0: {   // OBJECT: one texIndex per distinct slot its triangles use (as build() does)
+            const MeshData &md = mesh(n);
+            if (!md.valid) break;
+            uint32_t done = 0;
+            for (const Vtx &v : md.tris)
+                if (v.slot != kSlotNoTex && v.slot < 5 && !(done & (1u << v.slot))) {
+                    done |= 1u << v.slot;
+                    texIndex(n, v.slot);
+                }
+            break;
+        }
+        case 1: kids(n + 0x20, ram_.u16(n + 8)); break;
+        case 2: {   // every LOD level the game can draw (switch-out distance > 0)
+            const uint32_t nl = std::min<uint32_t>(ram_.u32(n + 4), 16);
+            for (uint32_t i = 0; i < nl; ++i)
+                if (ram_.f32(n + 0x24 + 16 * i) > 0.f) walkObjects(ram_.u32(n + 0x28 + 16 * i), depth + 1, seen);
+            break;
+        }
+        case 3: kids(n + 0x1C, ram_.u32(n + 8)); break;
+        case 4: kids(n + 0x50, ram_.u32(n + 8)); break;
+        case 6: kids(n + 0xC, ram_.u8(n + 0xB)); break;   // every switch child
+        case 8: case 23: walkObjects(ram_.u32(n + 4), depth + 1, seen); break;
+        case 17: kids(n + 0xCC, ram_.u32(n + 4)); break;
+        case 25: kids(n + 0x2C, ram_.u32(n + 0x28)); break;
+        case 30: kids(n + 0x2C, ram_.u32(n + 8)); break;
+        case 31: walkObjects(ram_.u32(n + 0xC), depth + 1, seen); break;
+        case 35: kids(n + 0xC, ram_.u32(n + 4)); break;
+        case 38: kids(n + 0x60, ram_.u32(n + 4)); break;
+        case 39: walkObjects(ram_.u32(n + 0xC), depth + 1, seen); break;   // a 31 child is followed through case 31
+        default: break;
+        }
+    }
+
     // Texture for the OBJECT's slot `s` (texId at +0x50 + 2s, TEX0 at +0x70 + 0x30s): the numbers in the monster's .NGP are those of its own
     // .TEX/.RTX (the packet's texId, CBP = palette tbp in the .RTX), with no offset (checked on the 10 monsters and the costumes).
     int16_t texIndex(uint32_t node, uint8_t s) {
@@ -929,7 +985,7 @@ private:
     std::vector<PVtx> verts_;
     GsState gs_;
     uint32_t gen_ = 0;
-    static inline uint32_t s_gen_ = 0;
+    static inline std::atomic<uint32_t> s_gen_{0};
     bool haveFrame_ = false;
     float frameLo_[3] = {}, frameHi_[3] = {};
 };
