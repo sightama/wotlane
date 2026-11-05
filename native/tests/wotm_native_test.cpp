@@ -7,6 +7,7 @@
 #include "wotm_freecam.h"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
+#include "wotm_tint.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -434,6 +435,30 @@ TEST(freecam_axes_use_deterministic_trig)
             bad += bitsOf(got[k]) != bitsOf(want[k]);
     }
     CHECK(bad == 0);
+}
+
+TEST(tint_identity_and_hue)
+{
+    using wotm::tint::shift;
+    std::vector<uint32_t> px = {0xFF0000FFu, 0x80FF0000u, 0x00808080u, 0xC0123456u};   // A B G R per byte, little endian: R | G<<8 | B<<16 | A<<24
+    std::vector<uint32_t> same = px;
+    shift(same, 0.f, 0.f, 0.f);
+    CHECK(same == px);   // all zero is the identity, bit for bit
+    std::vector<uint32_t> hue = {0xFF0000FFu};   // pure red, alpha 255
+    shift(hue, 120.f, 0.f, 0.f);
+    CHECK(hue[0] == 0xFF00FF00u);   // pure green, alpha kept
+    std::vector<uint32_t> back = {0xFF0000FFu};
+    shift(back, -240.f, 0.f, 0.f);
+    CHECK(back[0] == 0xFF00FF00u);   // wraps
+    std::vector<uint32_t> gray = {0x80FF0000u};   // pure blue, alpha 0x80
+    shift(gray, 0.f, -100.f, 0.f);
+    CHECK(gray[0] == 0x80FFFFFFu);   // saturation gone: white at the same value, alpha kept
+    std::vector<uint32_t> bright = {0xFF0000C0u};
+    shift(bright, 0.f, 0.f, 100.f);
+    CHECK(bright[0] == 0xFF0000FFu);   // clamps at 255
+    std::vector<uint32_t> dark = {0xFF0000C0u};
+    shift(dark, 0.f, 0.f, -50.f);
+    CHECK(dark[0] == 0xFF000060u);
 }
 
 int main()
