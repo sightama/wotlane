@@ -36,9 +36,11 @@ $checks = [ordered]@{
                          Expect = '\[net\] match ended by QUIT'; Reject = 'second level load' }
     # different mods (player 2 without the repo's mods): the mods digest is part of the configuration hash and the server rejects it
     'mods_diferentes' = @{ PlayerEnv = '2:WOTM_MODS=0'; Secs = 30; ExpectRefused = 'game configuration differs' }
-    # a skin made by the character creator in both PCs' mods folder (the same folder: the mods digest agrees) forms the match and
-    # keeps identical state. Run the WOTM_CREATOR live check first (tools\live_checks.ps1 -Only creator_script): it creates the folder
-    'creator_skin_folder' = @{ ExtraEnv = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 60 }
+    # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the
+    # lockstep; the skin itself is not picked online (the lobby carries disc costumes only, #14). Every log must have loaded it.
+    # Run the WOTM_CREATOR live check first (tools\live_checks.ps1 -Only creator_script): it creates the folder
+    'creator_skin_folder' = @{ ExtraEnv = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 60
+                         Expect = '\[mods\] skin togera/green .* = costume 4' }
 }
 
 $failed = @()

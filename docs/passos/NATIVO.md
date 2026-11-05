@@ -233,15 +233,16 @@ last: it is the outermost hook of `update`/`takeHit`/`takeDamage`), drawing, pan
   damage only show up when playing. The owner still has to test F2 and the keys live.
 
 ## Runtime: character creator (CREATE in the menu, `WOTM_CREATOR`)
-Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md`. Code: EE-thread state, rows, input, save and the window-thread
-preview in `native/runtime/wotm_creator.inc` (included by `wotm_mainmenu.inc` inside its namespace, next to the training rows); the
-CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLayout`, `panelHit`, legend) and `wotmCreatorInstall`
-(called by `wotm_overrides.cpp` right after `wotmModsInstall`) in `wotm_mainmenu.inc`; the pure parts (id from the name,
-`WOTM_CREATOR` parsing, `skin.json` text, PNG names, texture groups, raw alpha) in `native/wotm_creator.hpp`; the HSV shift in
-`native/wotm_tint.hpp`; `Model::decodeAllTextures`, `texInfo`, `rawAlpha` and `setTextures` in `native/wotm_model.hpp`;
-`Registry::addSkin` in `native/wotm_mods.hpp`; `texmods::Index::replaceSkin` in `native/wotm_texmods.hpp`. Native tests
-`tint_identity_and_hue`, `creator_*` and `mods_add_skin_after_scan` (`native/tests/wotm_native_test.cpp`); live checks `creator_script` and `creator_reload`
-(`tools/live_checks.ps1`), net check `creator_skin_folder` (`tools/net_checks.ps1`).
+Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design history; this section is current).
+- **Code:** `native/runtime/wotm_creator.inc` (EE-thread state, rows, input, save; the window-thread preview), included by
+  `wotm_mainmenu.inc` inside its namespace, which has the CREATE row, the panel's creator branches (`renderPanel`, `panelInput`,
+  `panelLayout`, `panelHit`, legend) and `wotmCreatorInstall` (called by `wotm_overrides.cpp` right after `wotmModsInstall`);
+  `Model::decodeAllTextures`, `texInfo`, `rawAlpha` and `setTextures` (`native/wotm_model.hpp`); `Registry::addSkin`
+  (`native/wotm_mods.hpp`); `texmods::Index::replaceSkin` (`native/wotm_texmods.hpp`).
+- **Pure parts:** `native/wotm_creator.hpp` (id from the name, `WOTM_CREATOR` parsing, `skin.json` text, PNG names, texture
+  groups, raw alpha) and `native/wotm_tint.hpp` (the HSV shift).
+- **Tests:** `tint_identity_and_hue`, `creator_*` and `mods_add_skin_after_scan` (`native/tests/wotm_native_test.cpp`).
+- **Checks:** `creator_script` and `creator_reload` (`tools/live_checks.ps1`), `creator_skin_folder` (`tools/net_checks.ps1`).
 - **Entry:** **CREATE**, the fifth row of the 1 player modes screen (screen 2, below TRAINING; `kCreatorRow`, an item that is not
   the game's: `currentSelection` stays on FREE-FOR-ALL while it is lit). X opens the native panel over the list (the game sees no
   input while it is open), triangle closes it with the cursor still on CREATE, and a screen change closes it at once. The panel
@@ -268,15 +269,15 @@ CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLay
   window thread shifts each group's originals (`wotm::tint::shift`: hue added, saturation and value scaled by `1 + x/100`, alpha
   untouched, all zero is the identity bit for bit) into `Model::setTextures`, which makes the Renderer reupload them. The model and
   its GPU textures are freed when the panel is not on screen.
-- **Save** (X on SAVE, EE thread, its own Model of the same costume): `mods/Creator/skins/<id>/` under the registry's mods folder
+- **Save: files** (X on SAVE, EE thread, its own Model of the same costume): `mods/Creator/skins/<id>/` under the registry's mods folder
   (`WOTM_MODS`, the `mods` next to the ELF or the repo's), with `skin.json` (`{"monster", "id", "name", "base": <costume>, "ai":
   false}`) and one PNG per group with any value set, `t<texId:4>.png` or `rtx_t<texId:4>.png`, at the texture's size. A group left
   at zero has no PNG (the base costume's texture serves). For a texture whose raw alpha goes above 0x80, `texmods::loadPng` reads the
   PNG's alpha raw, so the PNG carries the texture's own raw alpha bytes (`Model::rawAlpha`, `creator::applyRawAlpha`): the fight
   draws the disc's alpha and the selection what the preview showed. Every file is written as `<file>.tmp` and renamed over the
   old one only after all were written (PNGs first, `skin.json` last); a failed write removes the temps (and the folder, when this
-  save created it). After the renames, the folder's skin PNGs this save did not write and leftover temps are removed. The SAVE row
-  shows:
+  save created it). After the renames, the folder's skin PNGs this save did not write and leftover temps are removed.
+- **Save: SAVE row messages:**
   - `OVERWRITE?` when the folder exists: the next X overwrites; moving off SAVE, changing a value or closing the panel cancels;
   - `NAME IN USE` when the folder's `skin.json` names another monster (nothing written);
   - `MODS ARE OFF` with `WOTM_MODS=0`, `NOT FOUND` when the costume's `.NGP` does not load (only with at least one group tinted:
@@ -296,7 +297,7 @@ CREATE row, the panel's creator branches (`renderPanel`, `panelInput`, `panelLay
   screen leaves 2 with the panel open), `[creator] name = "<NAME>"`, the first retint's `[creator] tint <ms> ms (<model>, <n>
   textures)`; a save logs `[creator] removed <file> (not in this save)` for each stale file, the registry's `[mods] skin
   togera/green ("GREEN", Creator) = costume 4 (LIZARD4); base 1, 1 png`, then `[creator] saved mods/Creator/skins/green (1 png)
-  in 31 ms` (with `; raw alpha kept on the textures above 0x80` when it applies). The first X on an existing folder logs
+  in <ms> ms` (with `; raw alpha kept on the textures above 0x80` when it applies). The first X on an existing folder logs
   `[creator] mods/Creator/skins/<id> exists: X again overwrites`. Errors: `[creator] cannot write ...`, `[creator] not
   registered: <reason>`, `[creator] MON/<file>.NGP not found: <id> not saved`, `[creator] mods are off (WOTM_MODS=0): <id> not
   saved`, `[creator] <id> is a <monster> skin; pick another name`; from the preview, `[creator] MON/<file>.NGP not found; no

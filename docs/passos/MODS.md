@@ -177,9 +177,9 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
   In the window, the same through **New skin...**, the skin's properties panel and **Turn into skin...** (section "Interface").
 - **In game:** CREATE on the 1 player modes screen makes a recolor skin of any disc costume and writes it to
   `mods/Creator/skins/<id>/` (NATIVO.md, "Runtime: character creator"); it is the same folder format, so the kit opens it and
-  friends copy it. The kit's PNG name pattern (`PNG_RE` in `tools/modkit.py`) needs a costume prefix before `_t`, so the
-  creator's bare `t0004.png`/`rtx_t0011.png` come into the work folder without their size, pack as they are, and **Revert to
-  original** cannot find their disc source.
+  the folder can be shared by copying it. The kit's PNG name pattern (`PNG_RE` in `tools/modkit.py`) expects a costume prefix
+  before `_t`, so it handles the creator's bare `t0004.png`/`rtx_t0011.png` only partly: they come into the work folder without
+  their size, they pack unchanged, and **Revert to original** cannot find their disc source.
 - Not yet: elimination. In it the game loads costume 0 of every monster only once and the
   players switch monsters between rounds without reloading: picking a costume there requires changing the load, not just the screen.
 
