@@ -320,9 +320,20 @@ struct GsState {
     }
 };
 
+// Where each entry of Model::textures() came from: the disc texId, whether it is in the .RTX, and whether the raw alpha goes above
+// 0x80 (then texmods::loadPng doubles a PNG's alpha on reload, so a PNG written from these pixels halves it: wotm_creator.inc)
+struct TexInfo { uint16_t id = 0; bool rtx = false; bool hiAlpha = false; };
+
 class Model {
 public:
     bool load(const std::filesystem::path &discRoot, const std::string &iso, const std::string &name) {
+        // Per-load state (a reused Model must not keep the previous monster's textures, packets or decoded meshes)
+        texs_.clear();
+        texInfo_.clear();
+        texKey_.clear();
+        byId_.clear();
+        pals_.clear();
+        meshes_.clear();
         std::vector<uint8_t> ngp, tex, rtx;
         if (!wotm::disc::readFile(discRoot, iso, "MON/" + name + ".NGP", ngp) || ngp.size() < 16) return false;
         wotm::disc::readFile(discRoot, iso, "MON/" + name + ".TEX", tex);
@@ -349,8 +360,7 @@ public:
             if (na > best) { best = na; main_ = ci; }
         }
         name_ = name;
-        static uint32_t s_gen = 0;
-        gen_ = ++s_gen;
+        gen_ = ++s_gen_;
         haveFrame_ = false;
         return main_ != 0;
     }
@@ -488,6 +498,12 @@ public:
     }
     const Ram &ram() const { return ram_; }
     const std::vector<TexImage> &textures() const { return texs_; }
+    const std::vector<TexInfo> &texInfo() const { return texInfo_; }
+    // Replaces the decoded textures (same count and order as textures()); bumps gen() so a Renderer reuploads them
+    void setTextures(std::vector<TexImage> t) {
+        texs_ = std::move(t);
+        gen_ = ++s_gen_;
+    }
     // Box of the posed vertices
     void bounds(float lo[3], float hi[3]) const {
         for (int k = 0; k < 3; ++k) { lo[k] = 1e30f; hi[k] = -1e30f; }
@@ -802,12 +818,17 @@ private:
         if (f != texKey_.end()) return f->second;
         int16_t res = -1;
         TexImage img;
-        if (decodeTex(id, t0, img)) { texs_.push_back(std::move(img)); res = int16_t(texs_.size() - 1); }
+        TexInfo info;
+        if (decodeTex(id, t0, img, &info)) {
+            texs_.push_back(std::move(img));
+            texInfo_.push_back(info);
+            res = int16_t(texs_.size() - 1);
+        }
         texKey_.emplace(key, res);
         return res;
     }
 
-    bool decodeTex(uint16_t id, uint64_t t0, TexImage &out) const {
+    bool decodeTex(uint16_t id, uint64_t t0, TexImage &out, TexInfo *info = nullptr) const {
         auto it = byId_.find(id);
         if (it == byId_.end()) return false;
         const TexPacket &p = it->second;
@@ -825,9 +846,11 @@ private:
                                  false, tcc != 0, px, pw, ph, rawAmax > 0x80)) {
                 out.w = int(pw); out.h = int(ph);
                 out.rgba = std::move(px);
+                if (info) *info = TexInfo{id, p.rtx, rawAmax > 0x80};
                 return true;
             }
         }
+        if (orig && info) *info = TexInfo{id, p.rtx, rawAmax > 0x80};
         return orig;
     }
 
@@ -902,9 +925,11 @@ private:
     std::map<uint16_t, TexPacket> byId_, pals_;
     std::unordered_map<uint64_t, int16_t> texKey_;
     std::vector<TexImage> texs_;
+    std::vector<TexInfo> texInfo_;   // parallel to texs_
     std::vector<PVtx> verts_;
     GsState gs_;
     uint32_t gen_ = 0;
+    static inline uint32_t s_gen_ = 0;
     bool haveFrame_ = false;
     float frameLo_[3] = {}, frameHi_[3] = {};
 };
