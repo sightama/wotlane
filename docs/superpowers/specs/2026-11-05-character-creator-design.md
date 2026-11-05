@@ -90,9 +90,13 @@ inside the `.inc` but only touched by the window thread, like `SelModel`). On ev
   costume's framing (`savepics::Drawer::framingOf`, yaw 0), and draw that target into the panel's preview box with the same
   premultiplied blend the selection uses.
 
-The costume's texture list and texIds come from the model: `Model::textures()` plus a new parallel `Model::texIds()` (the
-`id` each `TexImage` was decoded from in `texIndex`, with its `rtx` flag), so the panel's TEXTURE row and the PNG names agree
-with what the model draws. Textures the model does not reference are not offered (they would not show anyway).
+The costume's texture list and texIds come from the model: `Model::textures()` plus a parallel `Model::texInfo()` (the `id`
+each `TexImage` was decoded from in `texIndex`, its `rtx` flag and whether its raw alpha goes above 0x80). Right after `load`,
+`Model::decodeAllTextures()` decodes every OBJECT slot the file draws with, visible in the idle pose or not (switch children,
+other detail levels, hidden parts), so the list covers what a fight can show and has the same order in the preview's Model and
+the save's. The same disc texture can appear twice (same texId under two palettes or GS settings), and a fight replaces a
+texture by `(rtx, texId)` whatever the palette, so the TEXTURE row, the tints and the PNGs are per group of entries with the
+same `(rtx, texId)` (up to 32 groups). Textures the model does not reference are not offered (they would not show anyway).
 
 Nothing touches the game's RAM: the preview is native drawing only, like the selection's model.
 
@@ -120,6 +124,9 @@ X on SAVE, on the EE thread:
 4. Log `[creator] saved mods/Creator/skins/<id> (N png)` and show `SAVED` as the SAVE row's value for 3 seconds; the panel
    stays open. The registry's own line `[mods] skin togera/<id> ("NAME", Creator) = costume 4 (LIZARD4); base 1, N png`
    follows from the add.
+
+**Name in use.** A skin folder holds one monster's skin: if `mods/Creator/skins/<id>/skin.json` names another monster, SAVE
+shows `NAME IN USE` and writes nothing; the player changes the name.
 
 **Overwrite.** If `mods/Creator/skins/<id>/` exists, SAVE first shows `OVERWRITE?` as its value; the next X overwrites (the
 registry entry is replaced: same index if the skin was registered this run, else added), triangle or moving off the row

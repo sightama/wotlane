@@ -416,7 +416,31 @@ with the skin-PNG loop body of `build` moved into `addSkinPngLocked(const mods::
 screen-2 cursor code around lines 1140-1200, the panel gates around lines 1049-1052 and 1130-1145, `panelInput`,
 `publishPause`'s sibling that sets `g_view`).
 
-No unit test here (EE-thread code against the game); the check is the live run in Task 8 plus a build.
+- [ ] **Step 0: texture groups (pure, tested).** A costume's `Model::textures()` can hold the same disc texture twice (same
+  texId under two TEX0 words), and a fight looks mod PNGs up by `(rtx, texId)` only. So the creator works on *groups*: one per
+  distinct `(rtx, id)`, in first-seen order of `textures()`. Add to `native/wotm_creator.hpp`:
+
+```cpp
+// One entry of Model::textures() as the creator sees it (Model::TexInfo without raylib)
+struct TexKey { uint16_t id = 0; bool rtx = false; };
+// Indices of textures() per distinct (rtx, id), in first-seen order: the TEXTURE row, the tints and the PNGs are per group
+inline std::vector<std::vector<int>> groupTextures(const std::vector<TexKey> &keys) {
+    std::vector<std::vector<int>> out;
+    std::vector<TexKey> seen;
+    for (int i = 0; i < int(keys.size()); ++i) {
+        size_t g = 0;
+        while (g < seen.size() && !(seen[g].id == keys[size_t(i)].id && seen[g].rtx == keys[size_t(i)].rtx)) ++g;
+        if (g == seen.size()) { seen.push_back(keys[size_t(i)]); out.emplace_back(); }
+        out[g].push_back(i);
+    }
+    return out;
+}
+```
+
+  Test `creator_texture_groups`: keys `{4,false},{11,true},{4,false},{4,true}` give `{{0,2},{1},{3}}`; empty gives empty. Run the
+  native tests, commit with Step 6's commit or on its own (`native: creator texture groups by (rtx, texId)`).
+
+No other unit test in this task (EE-thread code against the game); the check is the live run in Task 8 plus a build.
 
 - [ ] **Step 1: the row.** `constexpr int kCreatorRow = -4;` next to `kTrainingRow`; screen 2 in `kScreens` becomes
   `{2, 0, 5, {{1, "ADVENTURE"}, {2, "FREE-FOR-ALL"}, {3, "ENDURANCE"}, {kTrainingRow, "TRAINING"}, {kCreatorRow, "CREATE"}}}`.
@@ -443,7 +467,7 @@ namespace wotm_creator
 {
 enum Row { RMonster, RCostume, RTexture, RHue, RSat, RBright, RName, RSave, RBack, kRows };
 struct Tint { float hue = 0.f, sat = 0.f, bright = 0.f; bool zero() const { return hue == 0.f && sat == 0.f && bright == 0.f; } };
-constexpr int kMaxTex = 16;
+constexpr int kMaxTex = 32;   // texture groups per costume the creator can tint (more are left as they are, with a log line)
 constexpr const char *kLetters = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";
 constexpr const char *kHints[kRows] = {
     "WHICH MONSTER TO RECOLOR", "THE COSTUME WHOSE TEXTURES ARE THE STARTING POINT", "WHICH PART OF THE SKIN THE THREE SLIDERS BELOW CHANGE",
@@ -455,8 +479,8 @@ struct State
 {
     int monster = 0;            // index into wotm::mods::kMonsters
     int costume = 0;            // disc costume 0..3
-    int tex = 0;                // texture row's index into the model's textures()
-    int texCount = 0;           // the window thread reports how many the model has (0 until loaded)
+    int tex = 0;                // texture row's index into the costume's texture groups (groupTextures)
+    int texCount = 0;           // how many groups the costume has (0 until the window thread loaded it; capped at kMaxTex)
     Tint tint[kMaxTex];
     uint32_t tintGen = 1;       // bumped on every slider change
     char name[wotm::creator::kNameLen + 1] = {};
@@ -468,8 +492,7 @@ struct State
     bool confirmOverwrite = false;
 };
 static State g_st;
-static int g_texCount = 0;      // written by the window thread (the model's texture count), read by the EE thread: atomic
-static std::atomic<int> g_texCountShared{0};
+static std::atomic<int> g_texCountShared{0};   // group count: written by the window thread, read by the EE thread
 ...
 }
 ```
@@ -524,7 +547,8 @@ the legend block, `panelHit`).
         const auto &s = v.creatorState;
         using wotm::mods::kMonsters;
         auto num = [](float x, const char *suffix) { char b[16]; std::snprintf(b, sizeof b, "%+d%s", int(x), suffix); return std::string(b); };
-        std::string texLabel = s.texCount > 0 ? "T" + std::to_string(g_previewTexIds[s.tex]) + " " + std::to_string(s.tex + 1) + "/" + std::to_string(s.texCount) : "LOADING";
+        const bool texOk = s.texCount > 0 && s.tex < int(g_previewTexIds.size());
+        std::string texLabel = texOk ? "T" + std::to_string(g_previewTexIds[size_t(s.tex)]) + " " + std::to_string(s.tex + 1) + "/" + std::to_string(s.texCount) : "LOADING";
         std::string monName = kMonsters[s.monster].name; for (char &c : monName) c = char(std::toupper((unsigned char)c));
         rows[n++] = PRow{"MONSTER", monName, kHints[RMonster], true, KOpt};
         rows[n++] = PRow{"COSTUME", std::to_string(s.costume + 1), kHints[RCostume], true, KOpt};
@@ -558,7 +582,8 @@ struct Preview
     bool ok = false;
 };
 static Preview g_preview;   // window thread only
-static std::vector<uint16_t> g_previewTexIds;   // for the TEXTURE row's label (window thread writes and reads: renderPanel)
+static std::vector<std::vector<int>> g_previewGroups;   // textures() indices per group (window thread only)
+static std::vector<uint16_t> g_previewTexIds;   // each group's texId, for the TEXTURE row's label (window thread only: renderPanel)
 
 // Called from renderPanel with v.creator: loads, tints, poses and renders into g_preview.ren's target
 static void renderPreview(const State &s, int w, int h)
@@ -571,17 +596,25 @@ static void renderPreview(const State &s, int w, int h)
         g_preview.monster = s.monster; g_preview.costume = s.costume; g_preview.t0 = GetTime();
         const std::string iso = io.cdImage.string();
         g_preview.ok = g_preview.model.load(io.cdRoot, iso, std::string(mi.prefix) + std::to_string(s.costume));
-        if (g_preview.ok) { g_preview.model.computeFraming(wotm::model::kIdle); g_preview.original = g_preview.model.textures(); }
+        g_previewGroups.clear();
         g_previewTexIds.clear();
-        for (const auto &ti : g_preview.model.texInfo()) g_previewTexIds.push_back(ti.id);
-        g_texCountShared.store(int(g_preview.original.size()), std::memory_order_relaxed);
+        if (g_preview.ok)
+        {
+            g_preview.model.decodeAllTextures();   // right after load, before any pose: same order as the save's Model
+            g_preview.model.computeFraming(wotm::model::kIdle);
+            g_preview.original = g_preview.model.textures();
+            g_previewGroups = groupsOf(g_preview.model);
+            for (const auto &g : g_previewGroups) g_previewTexIds.push_back(g_preview.model.texInfo()[size_t(g[0])].id);
+        }
+        g_texCountShared.store(int(g_previewGroups.size()), std::memory_order_relaxed);
         g_preview.tintGen = 0;
     }
     if (!g_preview.ok) return;
     if (g_preview.tintGen != s.tintGen)
     {
         std::vector<wotm::model::TexImage> t = g_preview.original;
-        for (size_t i = 0; i < t.size() && i < kMaxTex; ++i) wotm::tint::shift(t[i].rgba, s.tint[i].hue, s.tint[i].sat, s.tint[i].bright);
+        for (size_t g = 0; g < g_previewGroups.size(); ++g)
+            for (int i : g_previewGroups[g]) wotm::tint::shift(t[size_t(i)].rgba, s.tint[g].hue, s.tint[g].sat, s.tint[g].bright);
         g_preview.model.setTextures(std::move(t));
         g_preview.tintGen = s.tintGen;
     }
@@ -593,6 +626,11 @@ static void renderPreview(const State &s, int w, int h)
     g_preview.ren.render(g_preview.model, w, h, 0.f, 8.f, fr.zoom * 0.95f, [] {});
 }
 ```
+
+`groupsOf(const Model &)` (in `wotm_creator.inc`, shared by the preview and the save): maps `texInfo()` to `TexKey`s, calls
+`wotm::creator::groupTextures`, and keeps the first `kMaxTex` groups (logging `[creator] <name>: N texture groups, tinting the
+first 32` once when cut). Textures that decode later during poses are not in any group and stay untinted (the walk in
+`decodeAllTextures` makes that empty in practice).
 
 `renderPanel` calls `renderPreview(v.creatorState, int(L.box.width), int(L.box.height))` **before** `BeginTextureMode(g_prt)`
 (the Renderer has its own target; nesting texture modes is not allowed, the VIDEO preview does the same with `prepare`), and
@@ -618,15 +656,20 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
 - [ ] **Step 1: `save(State &s, bool script)`** (EE thread):
   1. `id = wotm::creator::idFromName(s.name)`; `dir = Registry::get().dir() / kMod / "skins" / id`. If `Registry::get().dir()`
      is empty (mods off), `saveValue = "MODS ARE OFF"`, log and return.
-  2. Overwrite: if `dir` exists and `!s.confirmOverwrite && !script`: `saveValue = "OVERWRITE?"; confirmOverwrite = true; return;`.
-  3. Load `wotm::model::Model m` from `MON/<prefix><costume>` (EE thread's own instance), decode is implicit in `load`? No:
-     textures decode lazily in `texIndex` during `pose`/`verts`; call `m.pose(-1, 0.f)` once so every texture is decoded, then
-     take `m.textures()` and `m.texInfo()`.
+  2. Name taken by another monster: if `dir/skin.json` exists and its `monster` is not this monster (parse it with
+     `json::parse`), `saveValue = "NAME IN USE"`, log `[creator] <id> is a <other> skin; pick another name`, return (the player
+     renames; a skin folder holds one monster's skin). Overwrite: if `dir` exists and `!s.confirmOverwrite && !script`:
+     `saveValue = "OVERWRITE?"; confirmOverwrite = true; return;`.
+  3. Load `wotm::model::Model m` from `MON/<prefix><costume>` (EE thread's own instance) and call `m.decodeAllTextures()` right
+     after `load` (textures decode lazily; this walk decodes every OBJECT slot in the same order as the preview's Model), then
+     `groups = groupsOf(m)`, `m.textures()` and `m.texInfo()`.
   4. `std::error_code ec; fs::create_directories(dir, ec);` on error: `saveValue = "CANNOT WRITE"`, log `[creator] cannot write <dir>: <ec.message()>`, return.
-  5. For each texture `i < kMaxTex` with `!s.tint[i].zero()` (script: all textures): copy `rgba`, `tint::shift`, and if
-     `texInfo[i].hiAlpha` halve every alpha byte (`a = a >= 255 ? 0x80 : a / 2`, the inverse of `loadPng`'s doubling); write
-     with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(id, rtx)).string().c_str())`
-     (returns false on failure: `CANNOT WRITE`). Remove PNGs of textures whose tint is zero now (overwrite of an earlier save).
+  5. For each group `g` with `!s.tint[g].zero()` (script: every group): take the group's first texture `i = groups[g][0]`, copy
+     its `rgba`, `tint::shift`, and if `texInfo[i].hiAlpha` halve every alpha byte (`a = a >= 255 ? 0x80 : a / 2`, the inverse
+     of `loadPng`'s doubling); write with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(texInfo[i].id, texInfo[i].rtx)).string().c_str())`
+     (returns false on failure: `CANNOT WRITE`). One PNG per group: a fight replaces a texId with its PNG whatever the palette.
+     Then remove the PNGs of groups whose tint is zero now (an earlier save of the same skin); never remove a name another group
+     just wrote (names are per group, so they cannot collide).
   6. Write `skin.json` (`std::ofstream`, binary) from `skinJson(monsterName, id, name, costume)`; name = `s.name` trimmed
      (script: the id in uppercase).
   7. `std::string why; const Skin *k = Registry::get().addSkin(dir, why);` on success, for each `SkinPng` of the registry whose
