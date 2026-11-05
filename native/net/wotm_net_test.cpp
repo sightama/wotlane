@@ -235,7 +235,9 @@ namespace
         CHECK(p::decode(p::encode(s), sb) && sb.delay == 4u && sb.names == s.names);
         p::Hash h{120, 0x1122334455667788ull};
         p::Hash hb;
-        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash);
+        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash && hb.blocks.empty());
+        h.blocks = {1, 2, 0xffffffffffffffffull};
+        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash && hb.blocks == h.blocks);
         p::Drop d{1, 77};
         p::Drop db;
         CHECK(p::decode(p::encode(d), db) && db.player == 1 && db.frame == 77u);
@@ -950,13 +952,17 @@ namespace
         CHECK(a.waitStarted(5000) && b.waitStarted(5000));
         a.sendHash(30, 111);
         b.sendHash(30, 111);
-        a.sendHash(60, 222);
-        b.sendHash(60, 223);
+        // the block hashes that went with the total: the server names the blocks that differ (index and guest address)
+        std::vector<uint64_t> blocksA(256, 7), blocksB(256, 7);
+        blocksB[5] = 8, blocksB[131] = 9;
+        a.sendHash(60, 222, blocksA);
+        b.sendHash(60, 223, blocksB);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while ((a.status() != Status::Desynced || b.status() != Status::Desynced) && std::chrono::steady_clock::now() < until)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(a.status() == Status::Desynced && b.status() == Status::Desynced);
         CHECK(a.desyncFrame() == 60u);
+        CHECK(a.message() == "desync: state differs on frame 60: Ana vs Bia; blocks 5 (0x00a0000), 131 (0x1060000)");
         CHECK(!a.waitFrame(a.delay(), 200));   // desynced: no new frame runs
     }
 }

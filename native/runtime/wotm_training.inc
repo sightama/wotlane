@@ -1413,7 +1413,14 @@ void wotmTrainingInstall(PS2Runtime &runtime)
 {
     using namespace wotm_train;
     if (const char *e = std::getenv("WOTM_TRAINING"); e && *e && *e != '0')
-        g_on = true;
+    {
+        // not in a network match: training is not in the configuration hash and changes the game state (the pause menu's rows, the
+        // refills, the dummy), so one PC with it set would desync everyone at its first pause
+        if (const char *net = std::getenv("WOTM_NET"); net && *net)
+            std::fprintf(stderr, "[training] WOTM_TRAINING ignored in a network match\n");
+        else
+            g_on = true;
+    }
     if (const char *e = std::getenv("WOTM_TRAINING_DUMMY"); e && *e)   // 0 stand still, 1 CPU, 2 always block, 3 block after the 1st hit, 4 jump
         g_dummy = std::clamp(std::atoi(e), 0, DCount - 1);
     if (const char *e = std::getenv("WOTM_TRAINING_HEALTH"); e && *e)  // dummy's health % on refill
