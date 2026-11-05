@@ -1,0 +1,287 @@
+// ABOUTME: Character creator panel (CREATE on the single player list; WOTM_CREATOR scripted save): picks a monster and costume, tints
+// ABOUTME: each texture (hue, saturation, brightness) with the selection's 3D model as a live preview, and saves a mod skin.
+// EE thread: state, rows, input, save. Window thread: Preview (the model, tinted textures, render). Spec:
+// docs/superpowers/specs/2026-11-05-character-creator-design.md
+// Included by wotm_mainmenu.inc before its View (View carries a copy of State, published under g_m like the rest of the View). The
+// menu's flags (g_creatorOpen, g_open, g_suppress) stay in wotm_mainmenu.inc; this file only knows the creator's own state. It is
+// included inside namespace wotm_mainmenu; wotm_mainmenu.inc includes wotm_creator.hpp at global scope.
+
+namespace wotm_creator
+{
+namespace cr = wotm::creator;
+using wotm::mods::kMonsters;
+
+enum Row { RMonster, RCostume, RTexture, RHue, RSat, RBright, RName, RSave, RBack, kRows };
+struct Tint { float hue = 0.f, sat = 0.f, bright = 0.f; bool zero() const { return hue == 0.f && sat == 0.f && bright == 0.f; } };
+constexpr int kMaxTex = 32;   // texture groups per costume the creator can tint (more are left as they are, with a log line)
+constexpr const char *kLetters = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";   // what up and down roll through
+constexpr int kLetterCount = int(std::char_traits<char>::length(kLetters));
+constexpr int kMonsterCount = int(std::size(kMonsters));
+constexpr int kTogera = 2;   // kMonsters[2]: the monster the panel opens on
+static_assert(kMonsters[kTogera].type == 3, "kMonsters[kTogera] must be togera");
+constexpr const char *kHints[kRows] = {
+    "WHICH MONSTER TO RECOLOR", "THE COSTUME WHOSE TEXTURES ARE THE STARTING POINT", "WHICH PART OF THE SKIN THE THREE SLIDERS BELOW CHANGE",
+    "TURNS THE COLORS OF THIS TEXTURE AROUND THE WHEEL", "GRAYER TO THE LEFT, STRONGER TO THE RIGHT", "DARKER TO THE LEFT, LIGHTER TO THE RIGHT",
+    "THE COSTUME NAME IN THE SELECTION. X TO EDIT", "WRITES THE SKIN TO MODS/CREATOR/SKINS AND ADDS IT TO THE COSTUME LIST", "LEAVES WITHOUT SAVING"};
+constexpr const char *kNameHint = "LEFT AND RIGHT MOVE, UP AND DOWN CHANGE THE LETTER, X DONE";
+
+// What the window thread needs (published under g_m inside View::creatorState)
+struct State
+{
+    int monster = kTogera;      // index into wotm::mods::kMonsters
+    int costume = 0;            // disc costume 0..3
+    int tex = 0;                // texture row's index into the costume's texture groups (groupTextures)
+    int texCount = 0;           // how many groups the costume has (0 until the window thread loaded it; capped at kMaxTex)
+    Tint tint[kMaxTex];
+    uint32_t tintGen = 1;       // bumped on every slider change
+    char name[cr::kNameLen + 1] = {};
+    int cursor = 0;
+    bool editing = false;
+    int row = RMonster;
+    std::string saveValue;      // "", "SAVED", "OVERWRITE?", "SAVED, RESTART TO USE", "CANNOT WRITE"
+    double saveUntil = 0.0;     // GetTime() until which saveValue shows (0: until the next change)
+    bool confirmOverwrite = false;
+};
+static State g_st;                             // EE thread only (the window reads the copy in View)
+static std::atomic<int> g_texCountShared{0};   // group count: written by the window thread, read by the EE thread
+
+// "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> exists; the monster's name is cut so " N" fits the 11 letters
+static void defaultName(State &s)
+{
+    std::string mon = kMonsters[s.monster].name;
+    for (char &c : mon) c = char(std::toupper(static_cast<unsigned char>(c)));
+    const std::filesystem::path &mods = wotm::mods::Registry::get().dir();
+    std::string name;
+    for (int n = 2; n < 100; ++n)
+    {
+        const std::string num = " " + std::to_string(n);
+        name = mon.substr(0, size_t(cr::kNameLen) - num.size()) + num;
+        std::error_code ec;
+        if (mods.empty() || !std::filesystem::exists(mods / cr::kMod / "skins" / cr::idFromName(name), ec)) break;
+    }
+    std::snprintf(s.name, sizeof s.name, "%s", name.c_str());
+    s.cursor = 0;
+}
+// A new monster or costume: the tints start over (the textures are another set)
+static void resetFor(State &s, bool monsterChanged)
+{
+    for (Tint &t : s.tint) t = Tint{};
+    s.tex = 0;
+    ++s.tintGen;
+    if (monsterChanged)
+    {
+        s.costume = 0;
+        defaultName(s);
+    }
+}
+// X on CREATE: the panel opens on its first row; the last monster, costume and tints stay (reopening continues the work)
+static void open()
+{
+    g_st.row = RMonster;
+    g_st.editing = false;
+    g_st.saveValue.clear();
+    g_st.saveUntil = 0.0;
+    g_st.confirmOverwrite = false;
+    if (g_st.name[0] == 0) defaultName(g_st);
+}
+// Every published frame: the group count the window found, the TEXTURE row inside it, SAVED gone after its 3 seconds
+static void sync()
+{
+    State &s = g_st;
+    s.texCount = std::clamp(g_texCountShared.load(std::memory_order_relaxed), 0, kMaxTex);
+    s.tex = s.texCount > 0 ? std::clamp(s.tex, 0, s.texCount - 1) : 0;
+    if (s.saveUntil > 0.0 && GetTime() >= s.saveUntil)
+    {
+        s.saveValue.clear();
+        s.saveUntil = 0.0;
+    }
+}
+// Name editing: the name as 11 slots (padded with spaces) while editing, trimmed back when it ends
+static void padName(State &s)
+{
+    const size_t n = std::strlen(s.name);
+    std::fill(s.name + n, s.name + cr::kNameLen, ' ');
+    s.name[cr::kNameLen] = 0;
+}
+static void trimName(State &s)
+{
+    int n = int(std::strlen(s.name));
+    while (n > 0 && s.name[n - 1] == ' ') s.name[--n] = 0;
+    int lead = 0;
+    while (s.name[lead] == ' ') ++lead;
+    std::memmove(s.name, s.name + lead, std::strlen(s.name + lead) + 1);
+    if (s.name[0] == 0) defaultName(s);   // never blank: an empty name would save as "skin"
+    s.cursor = 0;
+}
+static int letterIndex(char c)
+{
+    const char *p = std::strchr(kLetters, c);
+    return p && c ? int(p - kLetters) : 0;
+}
+// Keyboard while editing the name: a letter, digit, space or minus sets the slot under the cursor and advances it; Backspace clears
+// the slot before the cursor and steps back. Returns true when a key was typed this frame: its panel action (Space is X, E is circle,
+// WASD the left stick in the default map) must not count too. The edge state is kept every frame, so the key that started editing
+// (Space, as X) does not also type.
+static bool typeKeys(State &s)
+{
+    static bool prev[kLetterCount + 1] = {};   // kLetters, then Backspace
+    const int nLetters = kLetterCount;
+    bool typed = false;
+    for (int i = 0; i <= nLetters; ++i)
+    {
+        int code = KEY_BACKSPACE;
+        if (i < nLetters)
+        {
+            const char c = kLetters[i];
+            code = c == ' ' ? KEY_SPACE : c == '-' ? KEY_MINUS : int(c);   // raylib's KEY_A..KEY_Z and KEY_ZERO..KEY_NINE are ASCII
+        }
+        const bool down = wotm_pad::inputDown(code);
+        const bool edge = down && !prev[i];
+        prev[i] = down;
+        if (!edge || !s.editing || typed) continue;
+        typed = true;
+        if (i < nLetters)
+        {
+            s.name[s.cursor] = kLetters[i];
+            s.cursor = std::min(s.cursor + 1, cr::kNameLen - 1);
+        }
+        else
+        {
+            s.cursor = std::max(s.cursor - 1, 0);
+            s.name[s.cursor] = ' ';
+        }
+    }
+    return typed;
+}
+// Moving off SAVE cancels a pending OVERWRITE? (a timed SAVED stays for its 3 seconds). Checked against the row of the last check,
+// since the mouse moves the row before input() runs
+static void leaveSaveCheck(State &s)
+{
+    static int last = RMonster;
+    if (s.row != last && last == RSave)
+    {
+        s.confirmOverwrite = false;
+        if (s.saveUntil == 0.0) s.saveValue.clear();
+    }
+    last = s.row;
+}
+static float stepClamp(float v, int dir, float step, float lo, float hi) { return std::clamp(v + float(dir) * step, lo, hi); }
+
+// One frame of the open panel (e: this frame's presses, readPanel's edges plus the mouse). Returns true when the panel closes.
+static bool input(const bool e[kPanelActs], uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    State &s = g_st;
+    leaveSaveCheck(s);
+    if (typeKeys(s))
+    {
+        panelSfx(rdram, ctx, runtime, 4);
+        return false;
+    }
+    if (s.editing)
+    {
+        if (e[POk] || e[PBack])
+        {
+            s.editing = false;
+            trimName(s);
+            std::fprintf(stderr, "[creator] name = \"%s\"\n", s.name);
+            panelSfx(rdram, ctx, runtime, e[POk] ? 8 : 6);
+        }
+        else if (e[PLeft] || e[PRight])
+        {
+            s.cursor = std::clamp(s.cursor + (e[PLeft] ? -1 : 1), 0, cr::kNameLen - 1);
+            panelSfx(rdram, ctx, runtime, e[PLeft] ? 2 : 4);
+        }
+        else if (e[PUp] || e[PDown])
+        {
+            const int n = kLetterCount;
+            s.name[s.cursor] = kLetters[(letterIndex(s.name[s.cursor]) + (e[PDown] ? 1 : n - 1)) % n];
+            panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
+        }
+        return false;
+    }
+    if (e[PBack])
+    {
+        panelSfx(rdram, ctx, runtime, 6);
+        return true;
+    }
+    if (e[PUp] || e[PDown])
+    {
+        s.row = (s.row + (e[PDown] ? 1 : kRows - 1)) % kRows;
+        panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
+    }
+    else if (e[POk])
+    {
+        if (s.row == RBack)
+        {
+            panelSfx(rdram, ctx, runtime, 6);
+            return true;
+        }
+        if (s.row == RName)
+        {
+            s.editing = true;
+            padName(s);
+            s.cursor = 0;
+            panelSfx(rdram, ctx, runtime, 8);
+        }
+        else if (s.row == RSave)
+        {
+            // Task 7 replaces this placeholder with save(s, false) (the files, the registry, OVERWRITE? and the errors)
+            s.saveValue = "SAVED";
+            s.saveUntil = GetTime() + 3.0;
+            std::fprintf(stderr, "[creator] save (placeholder): %s costume %d \"%s\"\n", kMonsters[s.monster].name, s.costume, s.name);
+            panelSfx(rdram, ctx, runtime, 8);
+        }
+    }
+    else if (e[PLeft] || e[PRight])
+    {
+        const int dir = e[PLeft] ? -1 : 1;
+        bool changed = true;
+        switch (s.row)
+        {
+        case RMonster:
+            s.monster = (s.monster + dir + kMonsterCount) % kMonsterCount;
+            resetFor(s, true);
+            break;
+        case RCostume:
+        {
+            const int n = std::max(1, wotm_monsters::costumes(kMonsters[s.monster].type));
+            s.costume = (s.costume + dir + n) % n;
+            resetFor(s, false);
+            break;
+        }
+        case RTexture:
+        {
+            const int n = std::clamp(g_texCountShared.load(std::memory_order_relaxed), 0, kMaxTex);
+            if (n > 0) s.tex = (std::clamp(s.tex, 0, n - 1) + dir + n) % n;
+            changed = n > 1;
+            break;
+        }
+        case RHue:
+        case RSat:
+        case RBright:
+        {
+            Tint &t = s.tint[std::clamp(s.tex, 0, kMaxTex - 1)];
+            if (s.row == RHue)
+            {
+                t.hue += float(dir) * 15.f;   // wraps inside -180..+180 (both ends are the same hue: +195 is -165)
+                if (t.hue > 180.f) t.hue -= 360.f;
+                if (t.hue < -180.f) t.hue += 360.f;
+            }
+            else if (s.row == RSat) t.sat = stepClamp(t.sat, dir, 10.f, -100.f, 100.f);
+            else t.bright = stepClamp(t.bright, dir, 10.f, -60.f, 60.f);
+            ++s.tintGen;
+            break;
+        }
+        default: changed = false; break;
+        }
+        if (changed)
+        {
+            if (s.saveUntil == 0.0) s.saveValue.clear();   // OVERWRITE? (Task 7) no longer applies to what is on screen
+            s.confirmOverwrite = false;
+            panelSfx(rdram, ctx, runtime, dir < 0 ? 2 : 4);
+        }
+    }
+    leaveSaveCheck(s);
+    return false;
+}
+} // namespace wotm_creator

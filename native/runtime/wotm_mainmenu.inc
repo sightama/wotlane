@@ -24,6 +24,7 @@
 // Screen 5: while the pad selection is on the big screen the list stays hidden, and appears along with the fade the selection gives the items.
 // WOTM_TEXTMENU=0: retail items (and wotm_padsel.inc's "multiplayer" label).
 #include "wotm_training.h"   // screen 2's "training" row (g_on)
+#include "wotm_creator.hpp"   // screen 2's "create" row: the creator's pure parts (wotm_creator.inc uses them)
 // the game's options screen (wotm_optscreen.inc, included later): called from the hooks here
 namespace wotm_optscreen
 {
@@ -41,8 +42,8 @@ namespace wotm_mainmenu
 using wotm_padsel::rd32;
 constexpr uint32_t kShell = wotm::sym::shellInfo;
 constexpr int kMaxRows = 7;
-constexpr int kOptionsRow = -1, kQuitRow = -2, kTrainingRow = -3;   // items that are not the game's (item < 0)
-constexpr int kFreeForAll = 2;   // screen 2: the game item that "training" picks
+constexpr int kOptionsRow = -1, kQuitRow = -2, kTrainingRow = -3, kCreatorRow = -4;   // items that are not the game's (item < 0)
+constexpr int kFreeForAll = 2;   // screen 2: the game item that "training" picks (and where the cursor rests while CREATE is lit)
 
 struct Row { int item; const char *label; };
 struct ScreenDef
@@ -56,7 +57,7 @@ constexpr ScreenDef kScreens[] = {
     {1, wotm::sym::numSelectables_2784, 7,
      {{1, "SINGLE PLAYER"}, {2, "MULTIPLAYER"}, {3, "OPTIONS"}, {kOptionsRow, "RECOMPILED OPTIONS"}, {4, "LOAD GAME"}, {5, "UNLOCKS"},
       {kQuitRow, "QUIT GAME"}}},
-    {2, 0, 4, {{1, "ADVENTURE"}, {2, "FREE-FOR-ALL"}, {3, "ENDURANCE"}, {kTrainingRow, "TRAINING"}}},
+    {2, 0, 5, {{1, "ADVENTURE"}, {2, "FREE-FOR-ALL"}, {3, "ENDURANCE"}, {kTrainingRow, "TRAINING"}, {kCreatorRow, "CREATE"}}},
     {5, wotm::sym::numSelectables_2857, 3, {{1, "FREE-FOR-ALL"}, {2, "ELIMINATION"}, {3, "MINIGAMES"}}},
 };
 static const ScreenDef *screenDef(uint32_t s)
@@ -65,6 +66,11 @@ static const ScreenDef *screenDef(uint32_t s)
         if (uint32_t(d.screen) == s) return &d;
     return nullptr;
 }
+
+// Panel actions (readPanel, below) and sounds, declared here for the character creator (wotm_creator.inc), whose State goes in View
+enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, PPreview, kPanelActs };
+static void panelSfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int id);
+#include "wotm_creator.inc"   // CREATE on screen 2: the creator panel's state and input (EE thread)
 
 struct View
 {
@@ -85,6 +91,8 @@ struct View
     uint32_t screenObj = 0;               // big screen (the movie object, shell->m_movieScreen): where the panel is drawn
     bool training = false;                // pause: the training mode panel (TRAINING OPTIONS) in place of the tabs
     bool moves = false;                   // pause: the move list (MOVE LIST), also without tabs
+    bool creator = false;                 // screen 2: the character creator (CREATE) in place of the tabs
+    wotm_creator::State creatorState;     // its state (the EE thread's copy; meaningful when creator)
 };
 static std::mutex g_m;
 static View g_view;
@@ -103,9 +111,15 @@ static Hover g_pauseHover;
 
 // EE thread
 static const bool g_enabled = [] { const char *e = std::getenv("WOTM_TEXTMENU"); return !(e && e[0] == '0'); }();
-static int g_extraRow = 0;         // screens 1 and 2: cursor on one of our items (kOptionsRow, kQuitRow, kTrainingRow) or 0 (on currentSelection)
+static int g_extraRow = 0;         // screens 1 and 2: cursor on one of our items (kOptionsRow, kQuitRow, kTrainingRow, kCreatorRow) or 0 (on currentSelection)
 static bool hasExtra(int screen) { return screen == 1 || screen == 2; }
-static bool g_open = false;        // "recompiled options" panel open
+static bool g_open = false;        // "recompiled options" panel open (or the creator's, with g_creatorOpen)
+// The menu panel can be the character creator's (X on screen 2's CREATE): g_open is then on with g_creatorOpen. g_creatorPanel stays
+// on after it closes, while the panel fades out, and makes screen 2 (not 1) the panel's screen; it drops when the options panel opens
+// or the screen leaves 2
+static bool g_creatorOpen = false;
+static bool g_creatorPanel = false;
+static uint32_t panelScreen() { return g_creatorPanel ? 2u : 1u; }
 static float g_panel = 0.f;
 static int g_suppress = 0;         // frames without game input after closing the panel (triangle still held)
 // The same panel in the fight's pause menu: its own state for opening, animating and waiting for release; tab, row, map and capture
@@ -463,7 +477,7 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
 // and button map, like the rest of the game (d-pad or analog, X ok, triangle or circle back, L1/R1 tabs, square clears; on gamepads
 // with the MenuConfirm swap). A PS2 button with no key or button in the map (cleared in the CONTROLS tab) uses its default, so the
 // panel can never be left with no way out. The WOTM_PADSEL_SCRIPT test script works here too (actions l1 and r1 for the tabs).
-enum PanelAct { PUp, PDown, PLeft, PRight, POk, PBack, PPrev, PNext, PClear, PPreview, kPanelActs };
+// (PanelAct, the actions readPanel reports, is declared above View: the creator's input uses it)
 // VIDEO tab preview (wotm_preview.hpp): square on the controller, P on the keyboard (the keyboard's square is the left click, which
 // picks the row). Turns back on every time the panel opens.
 static bool g_showPreview = true;
@@ -674,8 +688,10 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     const bool training = g_where == InPause && g_pauseTraining;
     const bool moves = g_where == InPause && g_pauseMoves;
     const int nMoves = moves ? moveRows() : 0;
-    int &selRef = moves ? g_moveSel : training ? g_trainSel : g_optSel[g_tab];
-    const int selRows = moves ? nMoves : training ? int(kTrainRows) : tabRows(g_tab);
+    // character creator (screen 2's CREATE): its own rows (wotm_creator.inc)
+    const bool creator = g_where == InMenu && g_creatorOpen;
+    int &selRef = creator ? wotm_creator::g_st.row : moves ? g_moveSel : training ? g_trainSel : g_optSel[g_tab];
+    const int selRows = creator ? int(wotm_creator::kRows) : moves ? nMoves : training ? int(kTrainRows) : tabRows(g_tab);
     // mouse (step 9): hovering picks the row; left click on a tab switches to it, on L1/R1 moves one tab, on the row confirms (on the
     // value's arrows, decreases or increases); right click goes back. The wheel comes in as up/down (readPanel).
     {
@@ -691,13 +707,14 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
         e[PBack] |= wotm::mouse::takeClick(wotm::mouse::g_clickR);
         const bool onRow = hv.part == HRow || hv.part == HRowLeft || hv.part == HRowRight;
-        if (onRow && (moved || click) && hv.prow >= 0 && hv.prow < selRows && hv.prow != selRef)
+        const bool rowLocked = creator && wotm_creator::g_st.editing;   // editing the name: the row stays on NAME
+        if (onRow && !rowLocked && (moved || click) && hv.prow >= 0 && hv.prow < selRows && hv.prow != selRef)
         {
             selRef = hv.prow;
             if (!click)
                 panelSfx(rdram, ctx, runtime, 4);
         }
-        if (click && !training && !moves && hv.part == HTab && hv.tab >= 0 && hv.tab != g_tab)
+        if (click && !training && !moves && !creator && hv.part == HTab && hv.tab >= 0 && hv.tab != g_tab)
         {
             g_tab = hv.tab;
             panelSfx(rdram, ctx, runtime, 4);
@@ -712,6 +729,8 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             e[POk] |= hv.part == HRow;
         }
     }
+    if (creator)
+        return wotm_creator::input(e, rdram, ctx, runtime);
     if (e[PBack])
     {
         panelSfx(rdram, ctx, runtime, 6);
@@ -1046,17 +1065,36 @@ static void frame(uint8_t *rdram)
         }
     }
     v.on = d && alpha > 0.f;
-    if (rd32(rdram, wotm::sym::currScreen) != 1)
+    const uint32_t curScreen = rd32(rdram, wotm::sym::currScreen);
+    if (g_creatorPanel && curScreen != 2)
+    {   // the creator only exists on screen 2: off it, it is gone at once (no fade-out over the next screen)
+        if (g_creatorOpen) std::fprintf(stderr, "[creator] panel closed: the screen changed to %u\n", curScreen);
+        g_creatorPanel = g_creatorOpen = false;
         g_open = false;
+        g_panel = 0.f;
+        g_suppress = 0;
+    }
+    if (curScreen != panelScreen())
+        g_open = false;
+    if (!g_open)
+        g_creatorOpen = false;
     g_panel = std::clamp(g_panel + (g_open ? 0.1f : -0.1f), 0.f, 1.f);
     v.alpha = alpha;
-    v.panel = v.screen == 1 ? g_panel : 0.f;
+    v.panel = uint32_t(v.screen) == panelScreen() ? g_panel : 0.f;
     v.tab = g_tab;
     v.opt = g_optSel[g_tab];
     v.top = g_top[g_tab];
     v.bindMap = g_bindMap;
     v.capture = g_capture;
     v.preview = g_showPreview;
+    if (g_creatorPanel)
+    {
+        wotm_creator::sync();
+        v.creator = true;
+        v.opt = wotm_creator::g_st.row;
+        v.top = 0;
+        v.creatorState = wotm_creator::g_st;
+    }
     v.screenObj = rd32(rdram, wotm_padsel::kMovieScreen) & 0x1FFFFFFFu;
     std::lock_guard<std::mutex> lk(g_m);
     g_view = v;
@@ -1119,8 +1157,8 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     }
     const ScreenDef &d = *screenDef(cur);
     if (cur == 1)
-    {   // back at the main menu: screen 2's "training" was left behind
-        if (g_extraRow == kTrainingRow)
+    {   // back at the main menu: screen 2's "training" (or "create") was left behind
+        if (g_extraRow == kTrainingRow || g_extraRow == kCreatorRow)
             g_extraRow = 0;
         wotm_training::menuDisarm("main menu");
     }
@@ -1135,7 +1173,8 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
     const bool moved = seq != s_seq;
     s_seq = seq;
-    if (!(cur == 1 && (g_open || g_suppress > 0)))
+    const bool panelHere = cur == panelScreen() && (g_open || g_suppress > 0);   // the menu panel owns this screen's input
+    if (!panelHere)
     {
         Hover hv;
         {
@@ -1150,7 +1189,7 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
                 g_extraRow = hasExtra(d.screen) && row[hv.row].item < 0 ? row[hv.row].item : 0;
                 if (row[hv.row].item > 0)
                     wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(row[hv.row].item));
-                else if (row[hv.row].item == kTrainingRow)
+                else if (row[hv.row].item == kTrainingRow || row[hv.row].item == kCreatorRow)
                     wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(kFreeForAll));
                 if (!click)
                     wotm_padsel::sfx(rdram, ctx, runtime, 4);
@@ -1162,15 +1201,17 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             }
         }
     }
-    if (cur == 1 && (g_open || g_suppress > 0))
+    if (panelHere)
     {
         // panel open: the game sees nothing (the panel's input comes from the devices); just after closing, the triangle that
-        // closed it must not yet become the main menu's "back"
+        // closed it must not yet become the main menu's (or screen 2's) "back"
         out = 0;
         g_where = InMenu;
         if (g_open && panelInput(rdram, ctx, runtime))
         {
+            if (g_creatorOpen) std::fprintf(stderr, "[creator] panel closed\n");
             g_open = false;
+            g_creatorOpen = false;   // g_creatorPanel stays for the fade-out; g_extraRow is still kCreatorRow
             g_suppress = 20;
         }
         else if (!g_open)
@@ -1182,9 +1223,19 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_extraRow = hasExtra(d.screen) && row[r].item < 0 ? row[r].item : 0;
         if (row[r].item > 0)
             wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(row[r].item));
-        else if (row[r].item == kTrainingRow)
+        else if (row[r].item == kTrainingRow || row[r].item == kCreatorRow)
             wotm_padsel::wr32(rdram, curSelAddr(d.screen), static_cast<uint32_t>(kFreeForAll));
         wotm_padsel::sfx(rdram, ctx, runtime, code == 1 ? 2 : 4);
+        out = 0;
+    }
+    else if (code == 6 && cur == 2 && g_extraRow == kCreatorRow)
+    {   // X on CREATE: the creator panel over the list, as RECOMPILED OPTIONS opens its panel on screen 1 (the game sees no X)
+        g_where = InMenu;
+        wotm_creator::open();
+        g_creatorOpen = g_creatorPanel = true;
+        openPanel();
+        std::fprintf(stderr, "[creator] panel opened\n");
+        wotm_padsel::sfx(rdram, ctx, runtime, 8);
         out = 0;
     }
     else if (code == 6 && cur == 2)
@@ -1208,6 +1259,7 @@ static void getInputHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     else if (code == 6 && cur == 1 && g_extraRow == kOptionsRow)
     {
         g_where = InMenu;
+        g_creatorPanel = false;
         openPanel();
         wotm_padsel::sfx(rdram, ctx, runtime, 8);
         out = 0;
