@@ -112,11 +112,13 @@ X on SAVE, on the EE thread:
      `json::dump`;
    - one PNG per texture whose values are not all zero, named `t<id padded to 4>.png` (`rtx_t<id>.png` for an `.RTX` texture),
      the bare form `texmods::Index::parseName` accepts for skins, at the texture's own size, through `ExportImage` (the
-     `TexImage`'s RGBA, alpha as decoded, which `texmods::loadPng` reads back on the same scale). A texture with all-zero
+     `TexImage`'s RGBA, alpha as decoded, which `texmods::loadPng` reads back on the same scale; for a texture whose raw alpha
+     goes above 0x80, `loadPng` reads the PNG raw, so the save halves it first: `creator::halveAlpha`, `a / 2` with 255 kept as 255 = raw 0xFF). A texture with all-zero
      values is skipped: the base costume's own texture serves (the registry aliases whatever the folder lacks).
 3. Register it without a restart: `Registry::addSkin(dir)` scans that one folder with the same rules as `scanSkins` (next
    costume index for the monster, aliases for the files it lacks, its PNGs into `skinPngs()`), and
-   `texmods::Index::get().add(skinPng)` puts the new PNGs into the map. Both are additions: nothing already registered moves
+   `texmods::Index::get().replaceSkin(stem, pngs)` puts the new PNGs into the map (retiring the costume's previous entries, so a
+   texture an overwrite dropped falls back to the base costume's). Both are additions: nothing already registered moves
    (sector ranges of existing mod files stay as they are; the new skin brings no `.NGP`/`.TEX`, so no new sectors either).
    `Index` gets a mutex around `build`, `find` and `add`, because the window thread decodes models while the EE thread adds.
    `Registry::skins()` is read by the selection's EE-thread hooks and by the window only on the selection screen; the creator
@@ -135,12 +137,13 @@ registry entry is replaced: same index if the skin was registered this run, else
 cancels. A skin of the same id in another mod is not touched (the registry's "beats" rule decides, as today).
 
 **Fallback.** If `addSkin` reports it could not register (over 99 costumes, stem over 8 letters, or the folder failed the
-`scanSkins` checks), the files stay on disk, the log says why, and the SAVE row shows `SAVED, RESTART TO USE`. This is also the
+`scanSkins` checks), the files stay on disk, the log says why, and the SAVE row shows `SAVED. RESTART TO USE` (a period: no comma could be confirmed in the game font's atlas). This is also the
 path if the live add turns out to fight something unforeseen in the selection: the files are right either way.
 
 **Errors.** A folder or PNG that cannot be written: `[creator] cannot write <path>: <reason>` and the SAVE row shows
 `CANNOT WRITE`; nothing is registered. No disc model (a costume missing on the disc): COSTUME skips it, so this does not reach
-SAVE.
+SAVE (if the model still fails to load, `[creator] MON/<file>.NGP not found` and `NOT FOUND`, nothing written). Mods off
+(`WOTM_MODS=0`): `MODS ARE OFF`, nothing written.
 
 ## Section 4: the tint and the scripted run
 

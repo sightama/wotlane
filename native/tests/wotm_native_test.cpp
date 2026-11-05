@@ -518,6 +518,28 @@ TEST(creator_skin_json_and_png_names)
     CHECK(wotm::creator::pngName(11, true) == "rtx_t0011.png");
 }
 
+TEST(creator_halve_alpha_round_trip)
+{
+    // texmods::loadPng reads a hiAlpha PNG (model path, tcc) back as min(255, 2 * a): halving then doubling stays within 1 of every
+    // alpha, exact for the even values and 255 that Model::decodeTex produces (fixAlpha: 2 * raw, or 255 from raw 0x80 up); the fight
+    // reads it raw, so 255 stays 255 (0xFF) and 2 * raw goes back to raw
+    std::vector<uint32_t> px;
+    for (uint32_t a = 0; a < 256; ++a) px.push_back(a << 24 | 0x00123456u);
+    wotm::creator::halveAlpha(px);
+    bool within1 = true, evenExact = true, rgbKept = true;
+    for (uint32_t a = 0; a < 256; ++a) {
+        const uint32_t back = std::min(255u, 2u * (px[a] >> 24));
+        within1 &= (back > a ? back - a : a - back) <= 1;
+        if (a % 2 == 0) evenExact &= back == a;
+        rgbKept &= (px[a] & 0x00FFFFFFu) == 0x00123456u;
+    }
+    CHECK(within1);
+    CHECK(evenExact);
+    CHECK(rgbKept);
+    CHECK((px[255] >> 24) == 0xFFu && std::min(255u, 2u * (px[255] >> 24)) == 255u);
+    CHECK((px[0] >> 24) == 0u && (px[0x7E * 2] >> 24) == 0x7Eu);
+}
+
 TEST(mods_add_skin_after_scan)
 {
     namespace fs = std::filesystem;

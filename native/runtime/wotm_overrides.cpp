@@ -96,6 +96,7 @@ void wotmDamagePopup(const uint8_t *rdram, const float p[3], float amount, int k
 void wotmPadSelInstall(PS2Runtime &runtime);   // wotm_padsel.inc: 2-player side selection on the menu's big screen
 void wotmLevelSelInstall(PS2Runtime &runtime);   // wotm_levelsel.inc: hidden stages and RANDOM in stage select
 void wotmMainMenuInstall(PS2Runtime &runtime);   // wotm_mainmenu.inc: text main menu
+void wotmCreatorInstall();   // wotm_mainmenu.inc (wotm_creator.inc): WOTM_CREATOR, the character creator's scripted save
 
 // Debug cheats: the window (F1 menu, wotm_live.inc) writes, the EE thread (monsterUpdateCheats) reads. Bits in wotm_cheats.h.
 #include "wotm_cheats.h"
@@ -2463,6 +2464,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         return;
 
     wotmModsInstall(runtime, elfPath);
+    wotmCreatorInstall();   // after the scan: registers the skin it saves (IoPaths are set by now: loadELF runs this)
     if (const char *e = std::getenv("WOTM_RATEMIN"))
         g_minRate = std::atoi(e);
     if (std::getenv("WOTM_TURNLOG") && (g_origUpdatePosition = runtime.lookupFunction(kMonsterDynamicsUpdatePosition)))

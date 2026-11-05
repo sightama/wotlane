@@ -52,6 +52,18 @@ inline std::string skinJson(const std::string &monster, const std::string &id, c
     return json::dump(v);
 }
 
+// Alpha of a texture whose raw GS alpha goes above 0x80 (TexInfo::hiAlpha) before it is written to PNG. Such a PNG is read back
+// raw (texmods::loadPng, "255 = 0xFF", as tools/tex.py export writes it): the fight takes its alpha as the GS's, the model path
+// doubles it (min(255, 2a)). The decoded pixels hold fixAlpha's 0..255: 2 * raw below 0x80 (halved: exact), and 255 for any raw
+// from 0x80 up, which stays 255 (raw 0xFF: what such textures hold, e.g. every texel of Togera's t0004; 0x80 would halve their
+// alpha in the fight). Model path round trip: exact for even values and 255, an odd value comes back 1 lower.
+inline void halveAlpha(std::vector<uint32_t> &rgba) {
+    for (uint32_t &px : rgba) {
+        const uint32_t a = px >> 24;
+        px = (px & 0x00FFFFFFu) | (a >= 255u ? 255u : a / 2u) << 24;
+    }
+}
+
 // WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]
 struct Script { int monster = 0; int costume = 0; std::string id; float hue = 0.f, sat = 0.f, bright = 0.f; };
 inline bool parseScript(const std::string &text, Script &out, std::string &err) {

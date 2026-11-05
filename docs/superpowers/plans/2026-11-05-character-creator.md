@@ -487,7 +487,7 @@ struct State
     int cursor = 0;
     bool editing = false;
     int row = RMonster;
-    std::string saveValue;      // "", "SAVED", "OVERWRITE?", "SAVED, RESTART TO USE", "CANNOT WRITE"
+    std::string saveValue;      // "", "SAVED", "OVERWRITE?", "SAVED. RESTART TO USE", "CANNOT WRITE"
     double saveUntil = 0.0;     // GetTime() until which saveValue shows (0: until the next change)
     bool confirmOverwrite = false;
 };
@@ -688,8 +688,8 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
      `groups = groupsOf(m)`, `m.textures()` and `m.texInfo()`.
   4. `std::error_code ec; fs::create_directories(dir, ec);` on error: `saveValue = "CANNOT WRITE"`, log `[creator] cannot write <dir>: <ec.message()>`, return.
   5. For each group `g` with `!s.tint[g].zero()` (script: every group): take the group's first texture `i = groups[g][0]`, copy
-     its `rgba`, `tint::shift`, and if `texInfo[i].hiAlpha` halve every alpha byte (`a = a >= 255 ? 0x80 : a / 2`, the inverse
-     of `loadPng`'s doubling); write with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(texInfo[i].id, texInfo[i].rtx)).string().c_str())`
+     its `rgba`, `tint::shift`, and if `texInfo[i].hiAlpha` halve every alpha byte (`creator::halveAlpha`: `a / 2`, 255 kept as 255 = raw
+     0xFF, the inverse of `loadPng`'s doubling and what the fight reads raw); write with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(texInfo[i].id, texInfo[i].rtx)).string().c_str())`
      (returns false on failure: `CANNOT WRITE`). One PNG per group: a fight replaces a texId with its PNG whatever the palette.
      Then delete every `t*.png` / `rtx_t*.png` in `dir` that this save did not write (zero-tint groups of an earlier save, and
      PNGs of an earlier save from another costume, whose texIds would otherwise retexture this costume at the next boot).
@@ -697,7 +697,7 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
      (script: the id in uppercase).
   7. `std::string why; const Skin *k = Registry::get().addSkin(dir, why);` on success, collect the `SkinPng`s of the registry
      whose `stem == k->prefix + std::to_string(k->index)` and call `texmods::Index::get().replaceSkin(stem, those)` (Step 0b); `saveValue = "SAVED"`; else
-     `saveValue = "SAVED, RESTART TO USE"` and log `[creator] not registered: <why>`.
+     `saveValue = "SAVED. RESTART TO USE"` (period: the game font's comma is unconfirmed) and log `[creator] not registered: <why>`.
   8. `std::fprintf(stderr, "[creator] saved %s (%zu png)\n", <"mods/Creator/skins/" + id>, nPng)`; `saveUntil = GetTime() + 3`;
      `confirmOverwrite = false`; the creator's `defaultName` for the *next* skin is not changed (the player may keep tuning).
   Note `GetTime()` is raylib and fine from any thread after the window exists; in the script path (before the window) use 0.

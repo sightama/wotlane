@@ -2132,6 +2132,9 @@ static void frameCamera(wotm::Scene &scene, const wotm::Ram &ram, Camera3D &cam,
 
 bool wotmTextMenuOn() { return wotm_mainmenu::g_enabled; }
 
+// WOTM_CREATOR at boot (wotm_overrides.cpp, right after wotmModsInstall): the character creator's scripted save (wotm_creator.inc)
+void wotmCreatorInstall() { wotm_mainmenu::wotm_creator::scriptInstall(); }
+
 void wotmMainMenuInstall(PS2Runtime &runtime)
 {
     using namespace wotm_mainmenu;
