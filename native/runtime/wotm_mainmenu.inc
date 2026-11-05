@@ -1557,20 +1557,16 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     {
         namespace wc = wotm_creator;
         const wc::State &s = v.creatorState;
-        const wc::Preview &cp = wc::g_creatorPreview;   // window thread: renderPreview above loaded it for s
         // the game's font has no '+', '/' or degree sign: "-30 DEG", "T12 3 OF 14"
         auto num = [](float x, const char *suffix) { return std::to_string(int(std::lround(x))) + suffix; };
-        const bool texOk = s.texCount > 0 && s.tex < int(cp.texIds.size());
-        const std::string texLabel =
-            texOk ? "T" + std::to_string(cp.texIds[size_t(s.tex)]) + " " + std::to_string(s.tex + 1) + " OF " + std::to_string(s.texCount) : "LOADING";
         // the name; while editing, its 11 slots with the empty ones at the end as dots (the font has no middle dot)
         std::string name = s.name;
-        if (s.editing)
+        if (s.editing)   // all spaces: npos + 1 wraps to 0, so every slot is a dot
             for (size_t k = name.find_last_not_of(' ') + 1; k < name.size(); ++k) name[k] = '.';
         const wc::Tint &tn = s.tint[std::clamp(s.tex, 0, wc::kMaxTex - 1)];
         rows[n++] = PRow{"MONSTER", wc::monsterLabel(s.monster), wc::kHints[wc::RMonster], true, KOpt};
         rows[n++] = PRow{"COSTUME", std::to_string(s.costume + 1), wc::kHints[wc::RCostume], true, KOpt};
-        rows[n++] = PRow{"TEXTURE", texLabel, wc::kHints[wc::RTexture], s.texCount > 1, KOpt};
+        rows[n++] = PRow{"TEXTURE", wc::texLabel(s), wc::kHints[wc::RTexture], s.texCount > 1, KOpt};
         rows[n++] = PRow{"HUE", num(tn.hue, " DEG"), wc::kHints[wc::RHue], true, KOpt};
         rows[n++] = PRow{"SATURATION", num(tn.sat, ""), wc::kHints[wc::RSat], true, KOpt};
         rows[n++] = PRow{"BRIGHTNESS", num(tn.bright, ""), wc::kHints[wc::RBright], true, KOpt};
@@ -1734,7 +1730,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
             BeginBlendMode(BLEND_ALPHA_PREMULTIPLY);   // premultiplied color (Renderer)
             DrawTexturePro(mt, Rectangle{0.f, 0.f, float(mt.width), -float(mt.height)}, L.box, Vector2{0.f, 0.f}, 0.f, WHITE);
             EndBlendMode();
-            BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+            BeginBlendMode(BLEND_CUSTOM_SEPARATE);   // back to the panel's blend: the separate factors set at its BeginTextureMode still hold
         }
         label(q, ram, tex0, wotm_creator::monsterLabel(v.creatorState.monster).c_str(), L.box.x + L.box.width * 0.5f, L.box.y + L.box.height + 40.f,
               34.f, kDim, kPW, kPH);

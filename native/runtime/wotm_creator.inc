@@ -345,6 +345,7 @@ struct Preview
     uint32_t tintGen = 0;
     double t0 = 0.0;
     bool timed = false;                            // the first real retint of this load was timed (one log line)
+    bool grewLogged = false;                       // a pose decoded textures decodeAllTextures missed (one log line per load)
     bool ok = false;
 };
 static Preview g_creatorPreview;
@@ -371,7 +372,7 @@ static void releasePreview()
 static bool renderPreview(const State &s, int w, int h)
 {
     Preview &p = g_creatorPreview;
-    static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
     const wotm::mods::MonsterInfo &mi = kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)];
     if (p.monster != s.monster || p.costume != s.costume)
     {
@@ -380,16 +381,19 @@ static bool renderPreview(const State &s, int w, int h)
         p.costume = s.costume;
         p.t0 = GetTime();
         p.timed = false;
+        p.grewLogged = false;
         p.model = std::make_unique<wotm::model::Model>();
         const std::string file = std::string(mi.prefix) + std::to_string(s.costume);
         p.ok = p.model->load(io.cdRoot, io.cdImage.string(), file);
         if (p.ok)
         {
-            p.model->decodeAllTextures();   // right after load, before any pose: the same order as the save's Model
-            p.model->computeFraming(wotm::model::kIdle);   // fixed box: the camera does not follow the idle animation
+            // originals and groups from load + decodeAllTextures only, before any pose (computeFraming poses too): exactly what the
+            // save's Model computes on the EE thread, in the same order
+            p.model->decodeAllTextures();
             p.original = p.model->textures();
             p.groups = groupsOf(*p.model);
             for (const std::vector<int> &g : p.groups) p.texIds.push_back(p.model->texInfo()[size_t(g[0])].id);
+            p.model->computeFraming(wotm::model::kIdle);   // fixed box: the camera does not follow the idle animation
         }
         else
         {
@@ -401,7 +405,8 @@ static bool renderPreview(const State &s, int w, int h)
     if (!p.ok) return false;
     if (p.tintGen != s.tintGen)
     {
-        // from the current list, so textures a pose decoded after load (not in any group) stay and setTextures keeps the count
+        // from the current list: textures a pose decoded after decodeAllTextures (in no group) stay untinted, and setTextures gets
+        // a vector of the current size
         const auto t0 = std::chrono::steady_clock::now();
         std::vector<wotm::model::TexImage> t = p.model->textures();
         bool any = false;
@@ -426,6 +431,12 @@ static bool renderPreview(const State &s, int w, int h)
     }
     const float frame = float((GetTime() - p.t0) * 60.0);
     if (!p.model->pose(wotm::model::kIdle, frame)) p.model->pose(-1, 0.f);
+    if (!p.grewLogged && p.model->textures().size() > p.original.size())
+    {   // a gap in decodeAllTextures' walk: these stay untinted and the save would not write them
+        p.grewLogged = true;
+        std::fprintf(stderr, "[creator] %s: a pose decoded %zu textures decodeAllTextures missed\n", p.model->name().c_str(),
+                     p.model->textures().size() - p.original.size());
+    }
     using D = wotm::savepics::Drawer;
     const D::Framing fr = D::framingOf(uint32_t(mi.type) | uint32_t(s.costume & 3) << 8);   // the disc costume's framing
     p.ren.shiftX = fr.shiftX;
@@ -439,5 +450,16 @@ static bool renderPreview(const State &s, int w, int h)
     p.ren.setFx(&wotm_padsel::g_selFx);
     p.ren.render(*p.model, w, h, 0.f, 8.f, fr.zoom * 0.95f, [] {});
     return true;
+}
+// Window thread: the TEXTURE row's value. LOADING only while the preview has not loaded s's monster and costume (or the EE thread
+// has not seen its count yet); NOT FOUND when the costume's file did not load; NONE when it has no texture to tint.
+static std::string texLabel(const State &s)
+{
+    const Preview &p = g_creatorPreview;
+    if (p.monster != s.monster || p.costume != s.costume) return "LOADING";
+    if (!p.ok) return "NOT FOUND";
+    if (p.groups.empty()) return "NONE";
+    if (s.texCount <= 0 || s.tex >= int(p.texIds.size())) return "LOADING";
+    return "T" + std::to_string(p.texIds[size_t(s.tex)]) + " " + std::to_string(s.tex + 1) + " OF " + std::to_string(s.texCount);
 }
 } // namespace wotm_creator
