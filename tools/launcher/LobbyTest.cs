@@ -126,8 +126,10 @@ static class LobbyTest
                     using (var a = new LobbyClient("127.0.0.1", own, "b1", 2000))
                         Check(a.Create("Casa", "Ana", 3, null, 2000).Length == 4, "lobby on the player's server");
                     Check(h.Running, "server running");
+                    Check(ServerHost.KeepsLauncherOpen(h), "Play keeps the launcher open while it runs the server");
                 }
                 Check(!ServerHost.PortOpen(own, 500), "server closed with the launcher");
+                Check(!ServerHost.KeepsLauncherOpen(null), "Play closes the launcher with no server of its own");
                 Check(File.Exists(log), "server log");
             });
             Run("server_already_running", delegate
@@ -136,6 +138,7 @@ static class LobbyTest
                 {
                     Check(!h.Owned, "uses the server already on the port");
                     Check(h.Running, "existing server running");
+                    Check(!ServerHost.KeepsLauncherOpen(h), "a server the launcher did not start does not hold it open");
                 }
                 Check(ServerHost.PortOpen(port, 500), "does not close a server it does not own");
             });
