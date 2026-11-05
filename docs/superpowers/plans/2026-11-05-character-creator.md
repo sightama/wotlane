@@ -688,8 +688,8 @@ flipped source rectangle), then restores `BLEND_CUSTOM_SEPARATE`. A caption unde
      `groups = groupsOf(m)`, `m.textures()` and `m.texInfo()`.
   4. `std::error_code ec; fs::create_directories(dir, ec);` on error: `saveValue = "CANNOT WRITE"`, log `[creator] cannot write <dir>: <ec.message()>`, return.
   5. For each group `g` with `!s.tint[g].zero()` (script: every group): take the group's first texture `i = groups[g][0]`, copy
-     its `rgba`, `tint::shift`, and if `texInfo[i].hiAlpha` halve every alpha byte (`creator::halveAlpha`: `a / 2`, 255 kept as 255 = raw
-     0xFF, the inverse of `loadPng`'s doubling and what the fight reads raw); write with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(texInfo[i].id, texInfo[i].rtx)).string().c_str())`
+     its `rgba`, `tint::shift`, and if `texInfo[i].hiAlpha` set every alpha byte to the texture's raw alpha (`Model::rawAlpha(i)`,
+     `creator::applyRawAlpha`: what the fight reads raw, and `loadPng`'s doubling gives back the preview's); write with `Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8}; ExportImage(img, (dir / pngName(texInfo[i].id, texInfo[i].rtx)).string().c_str())`
      (returns false on failure: `CANNOT WRITE`). One PNG per group: a fight replaces a texId with its PNG whatever the palette.
      Then delete every `t*.png` / `rtx_t*.png` in `dir` that this save did not write (zero-tint groups of an earlier save, and
      PNGs of an earlier save from another costume, whose texIds would otherwise retexture this costume at the next boot).

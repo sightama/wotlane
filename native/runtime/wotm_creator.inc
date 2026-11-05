@@ -414,7 +414,7 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
         return;
     }
     std::set<std::string> written;   // lowercase file names
-    size_t halved = 0;
+    size_t rawCount = 0;
     for (size_t g = 0; g < groups.size(); ++g)
     {
         const Tint &k = s.tint[g];
@@ -423,15 +423,11 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
         const size_t i = size_t(groups[g][0]);
         std::vector<uint32_t> px = texs[i].rgba;
         wotm::tint::shift(px, k.hue, k.sat, k.bright);
-        // hiAlpha: loadPng reads the PNG raw (model path: min(255, 2a) when TEX0.TCC is set; the fight: the GS's alpha), so the
-        // decoded 0..255 goes back to the raw scale (cr::halveAlpha: 255 stays 0xFF). With TCC clear loadPng ignores the PNG's alpha
-        // (always opaque), so halving it is harmless there; TexInfo carries no TCC because the same rawAmax > 0x80 test (on the
-        // original's raw alpha, whatever the TCC) decides hiAlpha in Model::decodeTex and in Scene::modTexture.
-        if (info[i].hiAlpha)
-        {
-            cr::halveAlpha(px);
-            ++halved;
-        }
+        // hiAlpha: loadPng reads such a PNG raw (the fight: the GS's alpha; the model path: min(255, 2a) with TEX0.TCC set), and the
+        // decoded pixels saturate every raw alpha from 0x80 up to 255, so the PNG gets the texture's own raw bytes: the fight then
+        // draws the disc's alpha and the selection what the preview showed. Model::rawAlpha is empty when TCC is clear (no reader
+        // uses the alpha then); hiAlpha is the same rawAmax > 0x80 test in Model::decodeTex and Scene::modTexture.
+        if (info[i].hiAlpha && cr::applyRawAlpha(px, m.rawAlpha(i))) ++rawCount;
         const std::string png = cr::pngName(info[i].id, info[i].rtx);
         Image img{px.data(), texs[i].w, texs[i].h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
         if (!ExportImage(img, (dir / png).string().c_str()))
@@ -486,7 +482,7 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
     s.saveUntil = script ? 0.0 : GetTime() + 3.0;   // GetTime needs the window: the script runs before it exists
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     std::fprintf(stderr, "[creator] saved mods/%s/skins/%s (%zu png) in %.0f ms%s\n", cr::kMod, id.c_str(), written.size(), ms,
-                 halved ? "; alpha on the raw scale for the textures above 0x80" : "");
+                 rawCount ? "; raw alpha kept on the textures above 0x80" : "");
 }
 // X on SAVE: the id from the typed name (trimmed), shown as typed
 static void save(State &s, bool script)

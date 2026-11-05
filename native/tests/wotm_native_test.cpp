@@ -518,26 +518,34 @@ TEST(creator_skin_json_and_png_names)
     CHECK(wotm::creator::pngName(11, true) == "rtx_t0011.png");
 }
 
-TEST(creator_halve_alpha_round_trip)
+TEST(creator_raw_alpha_round_trip)
 {
-    // texmods::loadPng reads a hiAlpha PNG (model path, tcc) back as min(255, 2 * a): halving then doubling stays within 1 of every
-    // alpha, exact for the even values and 255 that Model::decodeTex produces (fixAlpha: 2 * raw, or 255 from raw 0x80 up); the fight
-    // reads it raw, so 255 stays 255 (0xFF) and 2 * raw goes back to raw
+    // A hiAlpha texture's PNG gets the disc's raw alpha (applyRawAlpha). Small mirrors of the formulas involved:
+    // what the preview shows, Model::decodeOrig's fixA (wotm_model.hpp:941); what the fight reads, texmods::loadPng with rawAlpha
+    // and hiAlpha (wotm_texmods.hpp:182-183: the PNG's alpha as is); what the model path reads, loadPng without rawAlpha
+    // (wotm_texmods.hpp:183: min(255, 2a)).
+    auto fixA = [](uint32_t r) { return r >= 128 ? 255u : r * 2; };
+    auto fightRead = [](uint32_t a) { return a; };
+    auto modelRead = [](uint32_t a) { return std::min(255u, a * 2); };
     std::vector<uint32_t> px;
-    for (uint32_t a = 0; a < 256; ++a) px.push_back(a << 24 | 0x00123456u);
-    wotm::creator::halveAlpha(px);
-    bool within1 = true, evenExact = true, rgbKept = true;
-    for (uint32_t a = 0; a < 256; ++a) {
-        const uint32_t back = std::min(255u, 2u * (px[a] >> 24));
-        within1 &= (back > a ? back - a : a - back) <= 1;
-        if (a % 2 == 0) evenExact &= back == a;
-        rgbKept &= (px[a] & 0x00FFFFFFu) == 0x00123456u;
+    std::vector<uint8_t> raw;
+    for (uint32_t r = 0; r < 256; ++r) {
+        px.push_back(fixA(r) << 24 | 0x00123456u);   // the preview's pixel (tint::shift leaves alpha alone)
+        raw.push_back(uint8_t(r));
     }
-    CHECK(within1);
-    CHECK(evenExact);
-    CHECK(rgbKept);
-    CHECK((px[255] >> 24) == 0xFFu && std::min(255u, 2u * (px[255] >> 24)) == 255u);
-    CHECK((px[0] >> 24) == 0u && (px[0x7E * 2] >> 24) == 0x7Eu);
+    CHECK(wotm::creator::applyRawAlpha(px, raw));
+    bool fight = true, model = true, rgb = true;
+    for (uint32_t r = 0; r < 256; ++r) {
+        const uint32_t a = px[r] >> 24;
+        fight &= fightRead(a) == r;          // the GS alpha the disc texture had
+        model &= modelRead(a) == fixA(r);    // the selection and the preview draw what they drew before the save
+        rgb &= (px[r] & 0x00FFFFFFu) == 0x00123456u;
+    }
+    CHECK(fight);
+    CHECK(model);
+    CHECK(rgb);
+    std::vector<uint8_t> shortRaw(3, 0x40);
+    CHECK(!wotm::creator::applyRawAlpha(px, shortRaw) && (px[200] >> 24) == 200u);   // size mismatch: untouched
 }
 
 TEST(mods_add_skin_after_scan)

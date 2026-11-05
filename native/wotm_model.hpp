@@ -323,7 +323,7 @@ struct GsState {
 };
 
 // Where each entry of Model::textures() came from: the disc texId, whether it is in the .RTX, and whether the raw alpha goes above
-// 0x80 (then texmods::loadPng doubles a PNG's alpha on reload, so a PNG written from these pixels halves it: wotm_creator.inc)
+// 0x80 (then a PNG of it is read raw: texmods::loadPng; the creator writes Model::rawAlpha() into such a PNG, wotm_creator.inc)
 struct TexInfo { uint16_t id = 0; bool rtx = false; bool hiAlpha = false; };
 
 class Model {
@@ -332,6 +332,7 @@ public:
         // Per-load state (a reused Model must not keep the previous monster's textures, packets or decoded meshes)
         texs_.clear();
         texInfo_.clear();
+        rawA_.clear();
         texKey_.clear();
         byId_.clear();
         pals_.clear();
@@ -503,6 +504,13 @@ public:
     const Ram &ram() const { return ram_; }
     const std::vector<TexImage> &textures() const { return texs_; }
     const std::vector<TexInfo> &texInfo() const { return texInfo_; }
+    // Raw GS alpha per texel of textures()[i] when texInfo()[i].hiAlpha (the disc's: palette or CT32 byte; a mod PNG's: its alpha
+    // as stored, which loadPng reads raw for such a texture), empty otherwise (and for a hiAlpha texture with TEX0.TCC clear, whose
+    // alpha no reader uses). textures() holds the same alpha on the 0..255 scale, where everything from 0x80 up is 255.
+    const std::vector<uint8_t> &rawAlpha(size_t i) const {
+        static const std::vector<uint8_t> kNone;
+        return i < rawA_.size() ? rawA_[i] : kNone;
+    }
     // Replaces the decoded textures (same count and order as textures(); any other count is ignored, keeping texInfo() parallel);
     // bumps gen() so a Renderer reuploads them
     void setTextures(std::vector<TexImage> t) {
@@ -875,16 +883,19 @@ private:
         int16_t res = -1;
         TexImage img;
         TexInfo info;
-        if (decodeTex(id, t0, img, &info)) {
+        std::vector<uint8_t> rawA;
+        if (decodeTex(id, t0, img, &info, &rawA)) {
             texs_.push_back(std::move(img));
             texInfo_.push_back(info);
+            rawA_.push_back(std::move(rawA));
             res = int16_t(texs_.size() - 1);
         }
         texKey_.emplace(key, res);
         return res;
     }
 
-    bool decodeTex(uint16_t id, uint64_t t0, TexImage &out, TexInfo *info = nullptr) const {
+    // rawA (optional): the texel's raw GS alpha when the texture is hiAlpha with TEX0.TCC set (Model::rawAlpha), else left empty
+    bool decodeTex(uint16_t id, uint64_t t0, TexImage &out, TexInfo *info = nullptr, std::vector<uint8_t> *rawA = nullptr) const {
         auto it = byId_.find(id);
         if (it == byId_.end()) return false;
         const TexPacket &p = it->second;
@@ -894,29 +905,44 @@ private:
         // Original first; the mod PNG (wotm_texmods.hpp; for skins, the new costume's, same disc texId the fight drawing
         // uses) reads alpha on the original's scale: raw if it goes above 0x80 (texmods::loadPng)
         uint32_t rawAmax = 0;
-        const bool orig = decodeOrig(p, d, w, h, cbp, csa, tcc, out, rawAmax);
+        std::vector<uint8_t> origRaw;
+        const bool orig = decodeOrig(p, d, w, h, cbp, csa, tcc, out, rawAmax, rawA ? &origRaw : nullptr);
+        const bool hi = rawAmax > 0x80, keepRaw = rawA && hi && tcc;
         if (const texmods::Png *png = texmods::Index::get().find(name_, p.rtx, id)) {
             std::vector<uint32_t> px;
             uint32_t pw = 0, ph = 0;
+            // keepRaw: the PNG's alpha read raw (rawAlpha true: loadPng leaves a hiAlpha PNG's alpha as stored) and kept, then doubled
+            // here exactly as loadPng does with rawAlpha false (min(255, 2a)): the same pixels, plus the raw bytes
             if (texmods::loadPng(*png, name_ + (p.rtx ? ".RTX t" : ".TEX t") + std::to_string(id) + " (model)", uint32_t(w), uint32_t(h),
-                                 false, tcc != 0, px, pw, ph, rawAmax > 0x80)) {
+                                 keepRaw, tcc != 0, px, pw, ph, hi)) {
+                if (keepRaw) {
+                    rawA->resize(px.size());
+                    for (size_t i = 0; i < px.size(); ++i) {
+                        const uint32_t a = px[i] >> 24;
+                        (*rawA)[i] = uint8_t(a);
+                        px[i] = (px[i] & 0x00FFFFFFu) | std::min(255u, a * 2) << 24;
+                    }
+                }
                 out.w = int(pw); out.h = int(ph);
                 out.rgba = std::move(px);
-                if (info) *info = TexInfo{id, p.rtx, rawAmax > 0x80};
+                if (info) *info = TexInfo{id, p.rtx, hi};
                 return true;
             }
         }
-        if (orig && info) *info = TexInfo{id, p.rtx, rawAmax > 0x80};
+        if (orig && keepRaw) *rawA = std::move(origRaw);
+        if (orig && info) *info = TexInfo{id, p.rtx, hi};
         return orig;
     }
 
-    // Disc texture pixels in RGBA (alpha 0..255 with 0x80 saturated); rawAmax: the largest raw alpha among the texels
+    // Disc texture pixels in RGBA (alpha 0..255 with 0x80 saturated); rawAmax: the largest raw alpha among the texels; rawA (optional):
+    // each texel's raw alpha byte (palette entry or CT32 byte; the formats without one never make rawAmax exceed 0x80)
     bool decodeOrig(const TexPacket &p, const std::vector<uint8_t> &d, int w, int h, uint32_t cbp, uint32_t csa, uint32_t tcc,
-                    TexImage &out, uint32_t &rawAmax) const {
+                    TexImage &out, uint32_t &rawAmax, std::vector<uint8_t> *rawA = nullptr) const {
         auto fixA = [](uint32_t a) { return a >= 128 ? 255u : a * 2; };
         auto rd32 = [&](size_t o) { uint32_t v = 0; if (o + 4 <= d.size()) std::memcpy(&v, &d[o], 4); return v; };
         out.w = w; out.h = h;
         out.rgba.assign(size_t(w) * size_t(h), 0);
+        if (rawA) rawA->assign(out.rgba.size(), 0);
         const uint32_t base = p.data();
         const bool t8 = p.psm == 0x13 || p.psm == 0x1B, t4 = p.psm == 0x14 || p.psm == 0x24 || p.psm == 0x2C;
         if (t8 || t4) {
@@ -946,12 +972,14 @@ private:
                 }
                 out.rgba[i] = k < np ? pal[k] : 0;
                 if (k < np) rawAmax = std::max<uint32_t>(rawAmax, palRawA[k]);
+                if (k < np && rawA) (*rawA)[i] = palRawA[k];
             }
         } else if (p.psm == 0 || p.psm == 1) {
             for (size_t i = 0; i < out.rgba.size(); ++i) {
                 const uint32_t c = rd32(base + 4 * i);
                 out.rgba[i] = (c & 0xFFFFFFu) | ((p.psm == 1 ? 255u : fixA(c >> 24)) << 24);
                 if (p.psm == 0) rawAmax = std::max(rawAmax, c >> 24);
+                if (p.psm == 0 && rawA) (*rawA)[i] = uint8_t(c >> 24);
             }
         } else if (p.psm == 2 || p.psm == 0xA) {
             for (size_t i = 0; i < out.rgba.size(); ++i) {
@@ -982,6 +1010,7 @@ private:
     std::unordered_map<uint64_t, int16_t> texKey_;
     std::vector<TexImage> texs_;
     std::vector<TexInfo> texInfo_;   // parallel to texs_
+    std::vector<std::vector<uint8_t>> rawA_;   // parallel to texs_: rawAlpha()
     std::vector<PVtx> verts_;
     GsState gs_;
     uint32_t gen_ = 0;

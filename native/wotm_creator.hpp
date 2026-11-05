@@ -54,14 +54,13 @@ inline std::string skinJson(const std::string &monster, const std::string &id, c
 
 // Alpha of a texture whose raw GS alpha goes above 0x80 (TexInfo::hiAlpha) before it is written to PNG. Such a PNG is read back
 // raw (texmods::loadPng, "255 = 0xFF", as tools/tex.py export writes it): the fight takes its alpha as the GS's, the model path
-// doubles it (min(255, 2a)). The decoded pixels hold fixAlpha's 0..255: 2 * raw below 0x80 (halved: exact), and 255 for any raw
-// from 0x80 up, which stays 255 (raw 0xFF: what such textures hold, e.g. every texel of Togera's t0004; 0x80 would halve their
-// alpha in the fight). Model path round trip: exact for even values and 255, an odd value comes back 1 lower.
-inline void halveAlpha(std::vector<uint32_t> &rgba) {
-    for (uint32_t &px : rgba) {
-        const uint32_t a = px >> 24;
-        px = (px & 0x00FFFFFFu) | (a >= 255u ? 255u : a / 2u) << 24;
-    }
+// doubles it (min(255, 2a)). The decoded pixels cannot give the raw value back (fixAlpha turns every raw from 0x80 up into 255),
+// so the PNG gets the texture's own raw alpha bytes (Model::rawAlpha; tint::shift never changes alpha). RGB stays; returns false
+// (nothing changed) when the sizes differ.
+inline bool applyRawAlpha(std::vector<uint32_t> &rgba, const std::vector<uint8_t> &rawA) {
+    if (rawA.size() != rgba.size()) return false;
+    for (size_t i = 0; i < rgba.size(); ++i) rgba[i] = (rgba[i] & 0x00FFFFFFu) | uint32_t(rawA[i]) << 24;
+    return true;
 }
 
 // WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]
