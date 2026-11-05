@@ -25,12 +25,20 @@ and can be shared freely.
      writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play),
      hosts a lobby on it and shows a box to copy to your friends: the addresses they can type as Server and the lobby code. It also
      asks your router to open the port (UPnP, TCP and UDP; closed again when the launcher closes). If the router refuses, the box says
-     so and which local address to forward the port to. To list it publicly, type the **Master server** address and tick **List
-     publicly as** (with a name) before pressing **Host on this PC** (see "Public server list" below).
+     so and which local address to forward the port to. It also asks a public STUN server (one UDP packet) which address the internet
+     sees for you and says under the Router line whether the router's address agrees: when it does not, you are behind a second router
+     or the provider's shared address (CGNAT), UPnP opened only the near router, and the line says what to do. Once Windows Firewall
+     is in order (next step) it connects to your own public address through the router and reports **Port test: friends can reach
+     ...**; a router that cannot loop back to itself gives an inconclusive line, and a friend's try settles it. To list the server
+     publicly, type the **Master server** address and tick **List publicly as** (with a name) before pressing **Host on this PC**
+     (see "Public server list" below).
    - **Standalone:** run `native\net\build\wotm_server.exe --port 7777` and leave its window open while you play; close it to stop.
    Players create the lobbies themselves from the launcher (up to 16 at a time, `--lobbies N` to change; `--players 2..8` per lobby, 8 by default).
-3. The first time, Windows Firewall asks about `wotm_server.exe`: allow it on private networks (and public if your network is marked
-   public).
+3. The first time, Windows Firewall asks about `wotm_server.exe`: allow it, for private and public networks. The launcher reads the
+   firewall's rules for `wotm_server.exe` while you host and says under the box whether friends can get in on your current network
+   type. If a rule is missing (the prompt was dismissed, or it only covers private networks and yours is public) or a rule blocks it
+   (Cancel on the prompt), it says so and offers **Allow in Windows Firewall**: Windows asks for permission, the rule is added for
+   every network type, TCP and UDP, and the line turns green. Without that rule UPnP is useless: the router forwards, Windows drops.
 4. If UPnP did not open the port, let your friends reach it, one of:
    - **Port forwarding (no extra software):** find your PC's local address with `ipconfig` ("IPv4 Address", for example 192.168.1.50).
      In your router's admin page (usually http://192.168.1.1 or http://192.168.0.1), add a port forwarding rule: external port **7777**,
@@ -78,6 +86,8 @@ A master server keeps the list of public servers, so players can find them witho
    player becomes the host (and the lobby takes the new host's settings). An empty lobby closes.
 4. When everyone is in, the host presses **Start match**. The game opens on every PC, loads the stage and waits until everyone has
    arrived; the server measures the ping and picks the input delay. The launcher minimizes and stays in the lobby.
+   **Play** is the offline game: it closes the launcher, which leaves the lobby (and stops the server, if you host it on this PC).
+   While you are in a lobby the launcher asks before starting it. Enter in the Code box joins, in Lobby name it hosts.
 5. In the game: your controller (or keyboard) drives your monster; the screen shows only your view. Top right: ping and input delay in
    frames. A "Waiting for <name>" message means someone's input is late (everyone pauses together, nobody desyncs).
 6. With a wins target, the first to reach it gets the winner's screen: **PLAY AGAIN** (same stage, everyone respawns), **REBUILD LEVEL**
@@ -120,7 +130,7 @@ to the console) and starts once that many players are in; `--code <code> --name 
   and the per-pair monster checks grow with the square of the count.
 - If a player leaves, their monster stands still for the rest of the match (same frame on every PC).
 - If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message. Please report it with
-  everyone's `runtime\live.err.log`.
+  everyone's bug report zip (**Save bug report** in the launcher: `live.err.log`, settings, build and mods in one file).
 
 ## Troubleshooting
 
@@ -128,6 +138,8 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - "game configuration differs from the others": someone launched with different game options (enemy bars, cheats, `WOTM_RATEMIN`, wins target)
   or a different set of mods in `mods\`. Use the same launcher checkboxes in the Mods group and copy the same mod folders (folders whose
   name starts with `_` are off and do not count).
-- "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
+- "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it. The host
+  reads the Windows Firewall line, the Internet address line and the Port test line in the launcher's box: together they say whether
+  the internet reaches the port and what to change if not.
 - Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
