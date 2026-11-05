@@ -9,6 +9,7 @@
 // reference for the VU1 check) nor to the composited dust (assembled in VRAM). Particles (Scene::modParticle) and the screens' 3D monster (wotm_model.hpp) use the PNG.
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -55,6 +56,26 @@ public:
         buildLocked();
         addSkinPngLocked(sp);
     }
+    // A skin saved again (the character creator's overwrite): every entry of `stem` ("LIZARD4") is retired, never freed (a find()
+    // caller may still hold its Png), then `pngs` (the registry's skinPngs() of that stem) go in. A texture the new save dropped
+    // has no entry left, so the base costume's own texture serves. Bumps gen(): window-thread caches of decoded textures for that
+    // costume (the selection's models) reload.
+    void replaceSkin(const std::string &stem, const std::vector<mods::SkinPng> &pngs) {
+        {
+            std::lock_guard<std::mutex> lk(m_m);
+            buildLocked();
+            const std::string up = upper(stem);
+            for (auto it = m_png.begin(); it != m_png.end();) {
+                const auto next = std::next(it);
+                if (it->first.stem == up) m_retired.push_back(m_png.extract(it));
+                it = next;
+            }
+            for (const mods::SkinPng &sp : pngs) addSkinPngLocked(sp);
+        }
+        m_gen.fetch_add(1, std::memory_order_release);
+    }
+    // Bumped by every replaceSkin: a cache of textures decoded through find() compares it and drops what it holds when it changed
+    uint32_t gen() const { return m_gen.load(std::memory_order_acquire); }
 
     // "lizard0_t0004.png" -> (LIZARD0, false, 4); "shell_rtx_t0012.png" -> (SHELL, true, 12)
     static bool parseName(const std::string &file, std::string &stem, bool &rtx, uint32_t &id) {
@@ -86,6 +107,7 @@ private:
     std::map<Key, Png> m_png;
     std::vector<std::map<Key, Png>::node_type> m_retired;   // replaced entries: a find() caller may still be reading one
     bool m_built = false;
+    std::atomic<uint32_t> m_gen{0};
 
     static std::string upper(std::string s) {
         for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
