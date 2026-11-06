@@ -82,6 +82,15 @@ $checks = [ordered]@{
     'creator_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25
                          Expect = '\[mods\] skin togera/green .* = costume 4 \(LIZARD4\); base 1, \d+ png'
                          Reject = '\[mods\] skin Creator/skins/green ignored|||\[CRASH\]|||\[watchdog\] FROZE' }
+    # the same for a custom monster (WOTM_CREATOR_MONSTER): a Togera-based custom kaiju and its own skin; creator_monster_reload
+    # needs creator_monster_script first (keep them adjacent)
+    'creator_monster_script' = @{ Env = "WOTM_CREATOR_MONSTER=togera:1:kaiju:120;WOTM_MODS=$env:TEMP\wotm_creator_monster"; Secs = 25
+                         Clean = "$env:TEMP\wotm_creator_monster"
+                         Expect = '\[creator\] saved monster kaiju \(base togera costume 1, \d+ png\)|||\[mods\] skin kaiju/kaiju \(\x22KAIJU\x22, Creator\) = costume 4'
+                         Reject = '\[creator\] (cannot write|not registered|WOTM_CREATOR_MONSTER ignored)|||\[CRASH\]|||\[watchdog\] FROZE' }
+    'creator_monster_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_monster"; Secs = 25
+                         Expect = '\[mods\] custom monster kaiju \(\x22KAIJU\x22, Creator\)|||\[mods\] skin kaiju/kaiju .* = costume 4 \(LIZARD4\); base 1, \d+ png'
+                         Reject = '\[mods\] (skin|monster) Creator/\S+ ignored|||\[CRASH\]|||\[watchdog\] FROZE' }
 }
 
 $failed = @()

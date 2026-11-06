@@ -152,7 +152,9 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
 - What goes in the folder, from simplest to most complete:
   - **PNGs only**: model and textures of the base costume; the PNGs replace the textures. Named like the base costume's export
     (`shogun3_t0010.png`, `shogun3_rtx_t0011.png`) or just `t0010.png`/`rtx_t0011.png`. They apply **only to the skin**: the real costume 3
-    keeps its own texture, even in the same fight.
+    keeps its own texture, even in the same fight. The `rtx_` ones also reach the costume's resident (`.RTX`) images, the HUD
+    portrait among them (the last entry of the `.RTX`, 128x64: the normal face left, the fury face right), though the skin reads
+    the base costume's `.RTX`.
   - **`.TEX` and/or `.RTX`** (any name, going by the extension): its own textures, with the same texIds as the base (`modkit pack --inject`
     writes them this way).
   - **`.NGP` + `.PTR`** (always both): its own model, with the same skeleton and animations as costume 0.
@@ -201,7 +203,8 @@ of a game type (`base`); its own files (another prefix in `MON/`, a free game ty
 ```
 
 - `id`: lowercase letters, digits and `_` (without it, the folder name). It is what `WOTM_MATCH` accepts (`WOTM_MATCH=goliath,3,1`).
-- `name`: what the select screen and the HUD show. The HUD has 11 letters: it uses the last word that fits, in lowercase ("goliath").
+- `name`: what the select screen and the HUD show. The HUD has 11 letters: it uses the last word that fits, in lowercase ("goliath";
+  for a playable base, see "HUD name" below).
 - `base`: the game type, by name or prefix: the ten playable ones (`togera`, `LIZARD`...) or a boss that is a `Monster` (`kCustomBases`,
   `native/wotm_mods.hpp`): `assboss` (13, Goliath), `jelly` (14, Cerebulon's second phase) and `final` (15, Cerebulon, the last
   phase). A custom with a playable base runs that monster's code and AI; only Goliath has been tested (to change only the look, use
@@ -222,6 +225,12 @@ of a game type (`base`); its own files (another prefix in `MON/`, a free game ty
 - `skin`: the `id` of one of the custom's own skins (`"monster"` = this custom's `id`; see "Skins"). That skin comes first in
   the custom's costumes, before `costume`, so picking the custom shows it (the character creator writes it). Without it, `costume` comes
   first. A `skin` that is not one of the custom's skins is ignored (log `[mods] monster <id>: "skin" <skin> is not one of its skins`).
+- **Made in game:** CREATE with TYPE MONSTER (NATIVO.md, "Runtime: character creator") writes a custom on a playable base to
+  `mods/Creator/monsters/<id>/monster.json` with `"skin": "<id>"`, and its own skin, with the tinted textures and its HUD portrait,
+  to `mods/Creator/skins/<id>/`. Both are ordinary folders: copying them gives a friend the same monster.
+- **HUD name of a custom on a playable base:** the game keeps one name per type, so the HUD shows the custom's `name` only when it
+  is the only fighter of its type and is on one of its skins (on its disc `costume` it looks like the base); otherwise the base's
+  name (`[custom] <id>: HUD name "<name>" for type <n>` when it applies).
 - **On the select screen** (screens 3, 6, 7, 18 and 19 and the 3- and 4-player one, outside elimination): the CUSTOM slot of the monster bar. X opens the list of customs inside the
   player's frame (name, mod, how many skins; in a CPU frame, "PLAYERS ONLY" on those without `"ai"`): up and down scroll, X picks, triangle
   closes. Once one is picked, the frame shows the monster like the game's own: up and down change costume (the `costume` from `monster.json` and the

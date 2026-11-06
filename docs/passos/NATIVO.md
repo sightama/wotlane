@@ -237,19 +237,22 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
 - **Code:** `native/runtime/wotm_creator.inc` (EE-thread state, rows, input, save; the window-thread preview), included by
   `wotm_mainmenu.inc` inside its namespace, which has the CREATE row, the panel's creator branches (`renderPanel`, `panelInput`,
   `panelLayout`, `panelHit`, legend) and `wotmCreatorInstall` (called by `wotm_overrides.cpp` right after `wotmModsInstall`);
-  `Model::decodeAllTextures`, `texInfo`, `rawAlpha` and `setTextures` (`native/wotm_model.hpp`); `Registry::addSkin`
-  (`native/wotm_mods.hpp`); `texmods::Index::replaceSkin` (`native/wotm_texmods.hpp`).
-- **Pure parts:** `native/wotm_creator.hpp` (id from the name, `WOTM_CREATOR` parsing, `skin.json` text, PNG names, texture
-  groups, raw alpha) and `native/wotm_tint.hpp` (the HSV shift).
-- **Tests:** `tint_identity_and_hue`, `creator_*` and `mods_add_skin_after_scan` (`native/tests/wotm_native_test.cpp`).
-- **Checks:** `creator_script` and `creator_reload` (`tools/live_checks.ps1`), `creator_skin_folder` (`tools/net_checks.ps1`).
+  `Model::decodeAllTextures`, `texInfo`, `rawAlpha` and `setTextures` (`native/wotm_model.hpp`); `Registry::addSkin`,
+  `addCustom` and `customOf` (`native/wotm_mods.hpp`); `texmods::Index::replaceSkin` (`native/wotm_texmods.hpp`); the HUD name
+  (`fightNames`) and the camera lookup in `native/runtime/wotm_custom.inc`.
+- **Pure parts:** `native/wotm_creator.hpp` (id from the name, `WOTM_CREATOR` and `WOTM_CREATOR_MONSTER` parsing, `skin.json` and
+  `monster.json` text, PNG names, texture groups, raw alpha, the portrait texId table) and `native/wotm_tint.hpp` (the HSV shift).
+- **Tests:** `tint_identity_and_hue`, `creator_*`, `mods_add_skin_after_scan`, `mods_custom_skin_first`, `mods_add_custom_after_scan`
+  and `mods_custom_of_type_and_costume` (`native/tests/wotm_native_test.cpp`).
+- **Checks:** `creator_script`, `creator_reload`, `creator_monster_script` and `creator_monster_reload` (`tools/live_checks.ps1`),
+  `creator_skin_folder` (`tools/net_checks.ps1`).
 - **Entry:** **CREATE**, the fifth row of the 1 player modes screen (screen 2, below TRAINING; `kCreatorRow`, an item that is not
   the game's: `currentSelection` stays on FREE-FOR-ALL while it is lit); it exists only with the native text menus (not with
   `WOTM_TEXTMENU=0`, where `wotmMainMenuInstall` installs no menu hook). X opens the native panel over the list (the game sees no
   input while it is open), triangle closes it with the cursor still on CREATE, and a screen change closes it at once. The panel
   opens on Togera; closing and reopening keeps the monster, costume, tints and name.
 - **Rows** (title CREATE, no tabs; rows on the left, the preview box on the right; each row has its hint on the line below):
-  MONSTER (the ten playables of `kMonsters`; a change resets COSTUME, the tints and the name), COSTUME (`1` to `4`, only the disc
+  TYPE (SKIN or MONSTER; MONSTER's rows are in "TYPE and custom monsters" below), then, for SKIN: MONSTER (the ten playables of `kMonsters`; a change resets COSTUME, the tints and the name), COSTUME (`1` to `4`, only the disc
   costumes the monster has, `wotm_monsters::costumes`; a change resets the tints), TEXTURE (`T<texId> <k> OF <n>`: the texture group
   the three sliders edit; LOADING until the preview has the model, NOT FOUND, NONE), HUE (`-180` to `180` in steps of 15, wrapping,
   shown as `-30 DEG`), SATURATION (`-100` to `100` in steps of 10), BRIGHTNESS (`-60` to `60` in steps of 10), NAME, SAVE (its
@@ -259,7 +262,8 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
   every LOD, hidden parts), so the list covers what a fight can show and has the same order in the preview's Model and the save's.
   Entries with the same `(rtx, texId)` (one disc texture under two palettes or GS settings) form one group, the unit a fight
   replaces; up to 32 groups (more: `[creator] <model>: N texture groups, tinting the first 32`).
-- **Name:** up to 11 letters (the HUD's), default `<MONSTER> 2` (`3`, `4`... while `mods/Creator/skins/<id>` exists). X on NAME
+- **Name:** up to 11 letters (the HUD's), default `<MONSTER> 2` (`3`, `4`... while `mods/Creator/skins/<id>` or
+  `mods/Creator/monsters/<id>` exists). X on NAME
   edits it: the empty slots show as dots, up and down roll the letter under the cursor (space, A to Z, 0 to 9, `-`), left and right
   move the cursor, X or triangle end editing; on the keyboard a letter, digit, space or minus sets the slot and advances, Backspace
   clears back, and Enter or Esc end it (Space types a space here, so the legend shows ENTER for DONE). The row stays on NAME while
@@ -313,7 +317,42 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
 - **Online:** a created skin is drawing only (nothing in the lockstep state changes); the same folder on every PC keeps the mods
   digest equal, and a PC without it is refused ("game configuration differs"). The lobby (`net_lobby.py`, `LobbyClient.cs`,
   `wotm_net_server.cpp`) hands out disc costumes 0 to 3 only, so picking a created skin online waits for a lobby protocol change (#14).
-- Not in the creator: the HUD portrait (it lives in the shell's `.RTX`), custom monster fields and geometry (steps 2 and 3 of #42).
+- **TYPE and custom monsters** (step 2 of #42; spec `docs/superpowers/specs/2026-11-06-creator-monster-design.md`): TYPE MONSTER
+  makes a new entry in the CUSTOM list that plays exactly like its base, with its own name, colors and HUD portrait.
+  - **TYPE** (left and right) switches SKIN and MONSTER and keeps the monster, costume and tints, so a skin can become a monster;
+    the name follows only while it is the old default.
+  - **MONSTER rows:** MONSTER (the base it plays as), COSTUME (the base's disc costume the colors start from), TEXTURE and the three
+    sliders as in SKIN, NAME (the CUSTOM list's and the HUD's), CPU CAN USE (YES or NO, default NO: the custom's `"ai"`), SAVE, BACK.
+  - **SAVE** writes the skin first, as above, to `mods/Creator/skins/<id>/` with `"monster": "<id>"` (the custom owns it), then
+    `mods/Creator/monsters/<id>/monster.json` last, through its own temp file (`{"id", "name", "base", "costume", "ai", "skin":
+    "<id>"}`), so a failed save leaves no custom pointing at a missing skin. `"skin"` lists that skin first in the custom's
+    costumes (MODS.md, "Custom monsters"): picking the custom shows the tinted look, and the base monster's own costumes and
+    portrait do not change. `Registry::addCustom`, then `addSkin`, register both: the custom is in the CUSTOM list at once.
+  - **Portrait:** SAVE asks the preview (window thread) for the HUD portrait of the base costume and writes it as the skin's
+    `rtx_t<texId>.png` (`cr::portraitTex`: the last entry of `<PREFIX><costume>.RTX`, T8H 128x64). It holds two 64x64 faces: the
+    normal one on the left and the fury one on the right (the same render reddened, `furyFace`), which the HUD shows when the
+    fury is full. The render frames the top 45% of the tinted model on black, with the colors doubled (the HUD draws the portrait at
+    half brightness). The save waits at most 500 ms; a scripted save, a preview still loading or no answer skip it
+    (`[creator] portrait skipped (<why>)`) and keep an earlier save's portrait of the same base.
+  - **HUD name:** the game's names are per type (`MonsterNewNames`, five copies in RAM), not per fighter. At the entry of
+    `Shell::LoadLevelFiles` (`wotm_custom::fightNames`) the game's names go back in, then a type with **only one fighter of that
+    type** whose costume is one of a custom's skins (`Registry::customOf`) gets the custom's name (cut at the last word that fits
+    11 letters, lowercase; log `[custom] kaiju_king: HUD name "kaiju king" for type 3`). The custom against a plain Togera leaves
+    both with the game's name, and so does the custom on its disc costume (it looks like the base there). The entry of
+    `userintMain` puts the game's names back (`[custom] the game's monster names are back (menus)`). These bytes are guest RAM
+    and in the network hash: only those EE-thread hooks write them, from the Shell's selection and the registry.
+  - **Messages** (besides SKIN's): `NAME IN USE` when the id is a game monster's name or prefix, another mod's custom or a skin
+    folder another monster owns; `OVERWRITE?` for an existing creator monster of that id; `START WITH A LETTER` when the id
+    starts with a digit (a custom's id cannot); `SAVED. RESTART TO USE` when the registry refuses, among others for an overwrite
+    that changes the base (its skins keep costume indices chosen for the old type; the next boot places them again).
+  - **Camera:** a creator custom has the base's. The camera hook (`setPov`) looks the custom up by the followed monster's type and
+    costume (`customOf`; the costume each fighter got is kept by the skins' `SetPlayerMonster`/`SetAIMonster` hooks), so a creator
+    custom never hides another custom's `"camera"` and a plain monster never borrows one. Boss types keep their first custom.
+  - **Scripted:** `WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` (`togera:1:kaiju:120`) saves a monster at
+    boot like `WOTM_CREATOR`: name = the id in capitals, CPU CAN USE off, no portrait. Log `[creator] saved monster kaiju (base
+    togera costume 1, 1 png) in <ms> ms`; a bad value logs `[creator] WOTM_CREATOR_MONSTER ignored: <reason>`. `WOTM_MATCH=<id>`
+    starts the custom on its first costume (its own skin).
+- Not in the creator: a custom monster's stats, moves, narrator and camera (the base's), and its geometry (step 3 of #42).
 
 ## Runtime: direct match, AI vs AI and batch (`tools/lote.ps1`)
 - **`WOTM_MATCH=<player>[:<costume>][,<ai>[:<costume>]...],<stage>` (0 to 7 AIs)** (indices from `GLOSSARIO.md`; types without files in `MON/`, 0, 6, 12, 16 and 17, are rejected: loading would read nonexistent files without an error and `texmResRelocate` would walk garbage; `3,1` = Togera alone in central, like the menu's free for all with 0 AIs; `3,1,1` = Togera against Congar in central; `1,2,2,2,1` = Congar against three Robo-47): `userintMain` (0x1D9868) does not open the menu and returns 0 with the shell filled in the way the menu leaves it in "1 player against the CPU" (the state of the dumps at the end of the menu of the `-Auto` script): `m_mode` 2 (challenge), `m_monsterSel[0]`/`[4]`, 1 player and 1 AI, 3 lives, costume 1 on the AI when the monsters are the same, and `TheGame::m_gameMode` 2. With more AIs, each goes to `m_monsterSel[4 + i]`/`m_costume[2 + i]` and `m_numAIs` becomes the number of AIs. A repeated monster gets the next costume, as in the menu, which does not allow two identical opponents in the same costume. **Chosen costume:** each monster accepts `<monster>:<costume>` (0 to 3 from the disc; 4 to 99 or the id of a mod skin, `4:roxo`, `MODS.md`, "Skins") (`10:3,1:2,1` = Agamo in Mecha Sweet Tooth against Congar in costume 3 in central); without `:` or with a costume already requested by the same monster, it gets the lowest free one (the first to ask wins). Costumes locked in the save apply. The log's `[match]` line shows each one's `monster:costume`. In the launcher, each monster has a skin combo, and monster and skin have "Random" (drawn on Play, not in the runtime). Example: `10:3,10:3,10,1:2,1` comes out as `10:3 vs 10:0 10:1 1:2`. The difference is `m_killTarget` 0 (the menu sets 1): with no target, `EvaluateOnePlayerChallengeStatus` only revives the downed one (`reinitSlot`), and the fight continues without the "PLAY AGAIN / REBUILD LEVEL / QUIT" dialog, which would wait for the pad. The opening movie (`uiMain`) becomes a no-op. From process start to the stage takes less than 15 s. Each end of round (entry of `Shell::EvaluateGameStatus`) is printed as `[match] round N ended` with each monster's health and wins.
