@@ -110,9 +110,9 @@ static std::string monsterLabel(int monster)
     for (char &c : name) c = char(std::toupper(static_cast<unsigned char>(c)));
     return name;
 }
-// "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> exists (MONSTER: or mods/Creator/monsters/<id>, the custom's own folder;
-// its skin takes skins/<id> too); the monster's name is cut so " N" fits the 11 letters
-static std::string defaultNameFor(int monster, bool monsterType)
+// "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> or mods/Creator/monsters/<id> exists (a custom's id is taken for both
+// types: its skin takes skins/<id> too, and a skin there would block it); the monster's name is cut so " N" fits the 11 letters
+static std::string defaultNameFor(int monster, bool /*monsterType*/)
 {
     std::string mon = kMonsters[std::clamp(monster, 0, kMonsterCount - 1)].name;
     for (char &c : mon) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -124,9 +124,9 @@ static std::string defaultNameFor(int monster, bool monsterType)
         name = mon.substr(0, size_t(cr::kNameLen) - num.size()) + num;
         if (mods.empty()) break;
         const std::string id = cr::idFromName(name);
-        std::error_code ec, ec2;
+        std::error_code ec;
         const bool used = std::filesystem::exists(mods / cr::kMod / "skins" / id, ec) ||
-                          (monsterType && std::filesystem::exists(mods / cr::kMod / "monsters" / id, ec2));
+                          std::filesystem::exists(mods / cr::kMod / "monsters" / id, ec);
         if (!used) break;
     }
     return name;
@@ -484,11 +484,12 @@ static bool modsFolderIsItself(std::filesystem::path mods, std::string &other)
     return exact || !alias;
 }
 
-// MONSTER: the id is free for a creator custom. NAME IN USE for a game monster's name or prefix (customBase) and for a custom that
-// comes from another folder than monsterDir (another mod's); START WITH A LETTER for what readCustom refuses as an id
+// MONSTER: the id is free for a creator custom. NAME IN USE for a game monster's name or prefix (customBase), for a custom that
+// comes from another folder than monsterDir (another mod's) and for monsterDir registered under another id (a hand-edited
+// monster.json: the save would list it twice); START WITH A LETTER for what readCustom refuses as an id
 static bool monsterIdFree(SaveCtx &c)
 {
-    namespace fs = std::filesystem;
+    using wotm::mods::Registry;
     if (wotm::mods::customBase(c.id))
     {
         c.fail("NAME IN USE");
@@ -501,16 +502,17 @@ static bool monsterIdFree(SaveCtx &c)
         std::fprintf(stderr, "[creator] %s: a monster's id starts with a letter; pick another name\n", c.id.c_str());
         return false;
     }
-    const wotm::mods::Custom *o = wotm::mods::Registry::get().custom(c.id);
-    auto same = [](const fs::path &p) {   // the same folder however it was written (as the registry's sameDir)
-        std::error_code ec;
-        const fs::path n = fs::weakly_canonical(p, ec);
-        return ec ? p.lexically_normal() : n;
-    };
-    if (o && same(o->dir) != same(c.monsterDir))
+    const std::filesystem::path here = Registry::sameDir(c.monsterDir);
+    for (const wotm::mods::Custom &o : Registry::get().customs())
     {
+        const bool sameId = o.id == c.id, sameFolder = Registry::sameDir(o.dir) == here;
+        if (sameId == sameFolder) continue;
         c.fail("NAME IN USE");
-        std::fprintf(stderr, "[creator] a monster %s already comes from %s; pick another name\n", c.id.c_str(), o->mod.c_str());
+        if (sameId)
+            std::fprintf(stderr, "[creator] a monster %s already comes from %s; pick another name\n", c.id.c_str(), o.mod.c_str());
+        else
+            std::fprintf(stderr, "[creator] mods/%s/monsters/%s is registered as the monster %s; pick another name\n", cr::kMod,
+                         c.id.c_str(), o.id.c_str());
         return false;
     }
     return true;
@@ -536,27 +538,36 @@ static bool checkExisting(SaveCtx &c)
         return false;
     }
     if (c.monster && !monsterIdFree(c)) return false;
-    std::error_code ec, ec2;
-    const bool skinThere = fs::exists(c.dir, ec), monsterThere = c.monster && fs::exists(c.monsterDir, ec2);
+    std::error_code ec;   // an unreadable folder counts as missing
+    if (!c.monster && fs::exists(c.mods / cr::kMod / "monsters" / c.id, ec))
+    {   // that custom's skin takes skins/<id>: a skin of the game monster there would block its next save
+        c.fail("NAME IN USE");
+        std::fprintf(stderr, "[creator] mods/%s/monsters/%s exists: %s is a monster's name; pick another name\n", cr::kMod, c.id.c_str(),
+                     c.id.c_str());
+        return false;
+    }
+    const bool skinThere = fs::exists(c.dir, ec), monsterThere = c.monster && fs::exists(c.monsterDir, ec);
     if (!skinThere && !monsterThere) return true;
-    // a skin folder holds one owner's skin: SKIN, the monster's; MONSTER, the custom's own (its "monster" is the id). A missing or
-    // unreadable skin.json is not "in use" (the overwrite question applies)
+    // a skin folder holds one owner's skin: SKIN, the monster's (however its "monster" spells it: name or prefix); MONSTER, the
+    // custom's own (its "monster" is the id). A missing or unreadable skin.json is not "in use" (the overwrite question applies)
     std::ifstream in(c.dir / "skin.json", std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     wotm::json::Value v;
     const wotm::json::Value *mon = nullptr;
     if (skinThere && in.is_open() && wotm::json::parse(text, v) && (mon = v.get("monster")) && mon->type == wotm::json::Value::Str)
     {
-        std::string other = mon->s;
-        for (char &ch : other) ch = char(std::tolower(static_cast<unsigned char>(ch)));
-        if (other != (c.monster ? c.id : std::string(c.mi.name)))
+        std::string owner = mon->s;
+        for (char &ch : owner) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        const wotm::mods::MonsterInfo *game = wotm::mods::monsterInfo(owner);   // nullptr: a custom's id
+        const bool mine = c.monster ? !game && owner == c.id : game && game->type == c.mi.type;
+        if (!mine)
         {
             c.fail("NAME IN USE");
-            if (wotm::mods::monsterInfo(other))
-                std::fprintf(stderr, "[creator] %s is a %s skin; pick another name\n", c.id.c_str(), other.c_str());
+            if (game)
+                std::fprintf(stderr, "[creator] %s is a %s skin; pick another name\n", c.id.c_str(), game->name);
             else
                 std::fprintf(stderr, "[creator] mods/%s/skins/%s belongs to the monster %s; pick another name\n", cr::kMod, c.id.c_str(),
-                             other.c_str());
+                             owner.c_str());
             return false;
         }
     }
@@ -660,7 +671,8 @@ static bool writeMonsterJson(SaveCtx &c)
 }
 
 // Every temp file over its final name (PNGs first, then skin.json, monster.json last). A rename that fails stops there: the temps left
-// go, the files already renamed stay (a rename in the same folder failing midway is not expected; the log says so).
+// go, the files already renamed stay (a rename in the same folder failing midway is not expected; the log says so). MONSTER: such a
+// failure can leave the skin updated next to the old monster.json; the next save puts them together again.
 static bool commitFiles(SaveCtx &c)
 {
     for (size_t k = 0; k < c.files.size(); ++k)
@@ -680,12 +692,14 @@ static bool commitFiles(SaveCtx &c)
 }
 
 // PNGs this save did not write (zero-tint groups of an earlier save, another costume's texIds) would retexture this costume; temp
-// files an interrupted save left go too. Collected first, removed after the walk; no call here throws.
+// files an interrupted save left go too (MONSTER: monster.json.tmp in monsterDir). Collected first, removed after the walk; no call
+// here throws.
 static void removeStale(SaveCtx &c)
 {
     namespace fs = std::filesystem;
     std::vector<fs::path> stale;
     std::error_code ec;
+    if (c.monster && fs::is_regular_file(c.monsterDir / "monster.json.tmp", ec)) stale.push_back(c.monsterDir / "monster.json.tmp");
     for (fs::directory_iterator it(c.dir, ec), end; !ec && it != end; it.increment(ec))
     {
         std::error_code fe;
@@ -702,6 +716,24 @@ static void removeStale(SaveCtx &c)
     }
 }
 
+// MONSTER, addCustom refused: the custom this folder registered earlier (a re-save on another base) keeps its skin's costume stem,
+// whose PNGs this save replaced or removed on disk. That stem draws the disc's textures until a restart (texmods::Index locks inside
+// replaceSkin, as for addSkin's stem below).
+static void dropOldSkinPngs(SaveCtx &c)
+{
+    using wotm::mods::Registry;
+    Registry &reg = Registry::get();
+    const wotm::mods::Custom *o = reg.custom(c.id);
+    if (!o || Registry::sameDir(o->dir) != Registry::sameDir(c.monsterDir)) return;
+    for (const wotm::mods::Skin &k : reg.skins())
+        if (k.custom == c.id)
+        {
+            const std::string stem = k.prefix + std::to_string(k.index);
+            wotm::texmods::Index::get().replaceSkin(stem, {});
+            std::fprintf(stderr, "[creator] %s: %s draws the disc's textures until a restart\n", c.id.c_str(), stem.c_str());
+        }
+}
+
 // Registry::addSkin and the PNG map (MONSTER: Registry::addCustom first; its skin names it, so a refused custom means no addSkin):
 // SAVED, or SAVED. RESTART TO USE when the registry refuses (the files stay; the next boot reads them)
 static void registerLive(SaveCtx &c)
@@ -709,6 +741,7 @@ static void registerLive(SaveCtx &c)
     std::string why;
     wotm::mods::Registry &reg = wotm::mods::Registry::get();
     const bool customOk = !c.monster || reg.addCustom(c.monsterDir, why);
+    if (!customOk) dropOldSkinPngs(c);
     if (const wotm::mods::Skin *k = customOk ? reg.addSkin(c.dir, why) : nullptr)
     {
         const std::string stem = k->prefix + std::to_string(k->index);
@@ -721,14 +754,15 @@ static void registerLive(SaveCtx &c)
     else
     {
         setSave(c.s, kSavedRestart);
-        std::fprintf(stderr, "[creator] not registered: %s\n", why.c_str());
+        std::fprintf(stderr, "[creator] not registered%s: %s\n", c.monster && customOk ? " (the custom is; its skin is not)" : "",
+                     why.c_str());
     }
 }
 
 // Writes mods/Creator/skins/<id>/ (one PNG per tinted texture group, skin.json) and registers it (script: every group is written,
 // no OVERWRITE? question, no timed message); MONSTER (s.monsterType) also mods/Creator/monsters/<id>/monster.json, the custom that
-// owns that skin. Every file goes to a temp name first and is renamed over the old one only when all were written, so a failed save
-// leaves the previous skin (and custom) as it was.
+// owns that skin. Every file goes to a temp name first and is renamed over the old one only when all were written, so a save that fails
+// before that leaves both folders as they were (a rename failing part way: commitFiles).
 static void saveAs(State &s, const std::string &id, const std::string &name, bool script)
 {
     namespace fs = std::filesystem;
@@ -740,20 +774,24 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
     if (c.monster && !mods.empty()) c.monsterDir = mods / cr::kMod / "monsters" / id;
     if (!checkExisting(c)) return;
     s.confirmOverwrite = false;
-    std::error_code ec;
-    fs::create_directories(c.dir, ec);
-    if (!ec && c.monster) fs::create_directories(c.monsterDir, ec);
     // only when empty: a folder this failed save created goes, an earlier save's stays
     auto dropEmpty = [&c] {
         std::error_code rm;
         fs::remove(c.dir, rm);
         if (c.monster) fs::remove(c.monsterDir, rm);
     };
+    std::error_code ec;
+    const char *failed = "skins";
+    fs::create_directories(c.dir, ec);
+    if (!ec && c.monster)
+    {
+        failed = "monsters";
+        fs::create_directories(c.monsterDir, ec);
+    }
     if (ec)
     {
         c.fail("CANNOT WRITE");
-        std::fprintf(stderr, "[creator] cannot write mods/%s/%s/%s: %s\n", cr::kMod, c.monster ? "monsters" : "skins", id.c_str(),
-                     ec.message().c_str());
+        std::fprintf(stderr, "[creator] cannot write mods/%s/%s/%s: %s\n", cr::kMod, failed, id.c_str(), ec.message().c_str());
         dropEmpty();
         return;
     }
@@ -763,7 +801,11 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
         dropEmpty();
         return;
     }
-    if (!commitFiles(c)) return;
+    if (!commitFiles(c))
+    {
+        dropEmpty();
+        return;
+    }
     removeStale(c);
     registerLive(c);
     s.saveUntil = script ? 0.0 : GetTime() + 3.0;   // GetTime needs the window: the script runs before it exists
@@ -785,7 +827,8 @@ static void save(State &s, bool script)
 }
 // WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]] and WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:...] (a custom
 // monster, CPU CAN USE off) at boot (wotmCreatorInstall, after wotmModsInstall): the same save with the values on every texture and
-// the name = the id in capitals; the game then boots as usual. Both may be set: the skin first.
+// the name = the id in capitals (a monster's: '_' as spaces, cut to the HUD's 11 letters); the game then boots as usual. Both may be
+// set: the skin first.
 static void scriptSave(const char *var, bool monsterType)
 {
     const char *env = std::getenv(var);
@@ -805,7 +848,12 @@ static void scriptSave(const char *var, bool monsterType)
     st.costume = sc.costume;
     for (Tint &t : st.tint) t = Tint{sc.hue, sc.sat, sc.bright};
     std::string name = sc.id;
-    for (char &c : name) c = char(std::toupper(static_cast<unsigned char>(c)));
+    for (char &c : name) c = c == '_' && monsterType ? ' ' : char(std::toupper(static_cast<unsigned char>(c)));
+    if (monsterType)
+    {
+        name.resize(std::min(name.size(), size_t(cr::kNameLen)));
+        while (!name.empty() && name.back() == ' ') name.pop_back();
+    }
     saveAs(st, sc.id, name, true);
 }
 static void scriptInstall()

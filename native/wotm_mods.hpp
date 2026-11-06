@@ -353,6 +353,12 @@ public:
         logCustom(m_customs.back());
         return &m_customs.back();
     }
+    // Same folder however it was written (case, "..", separators); the creator compares folders with it
+    static std::filesystem::path sameDir(const std::filesystem::path &p) {
+        std::error_code ec;
+        std::filesystem::path c = std::filesystem::weakly_canonical(p, ec);
+        return ec ? p.lexically_normal() : c;
+    }
     static bool isModLsn(uint32_t lsn) { return lsn >= kFirstLsn; }
     const File *findLsn(uint32_t lsn) const {
         if (!isModLsn(lsn)) return nullptr;
@@ -559,12 +565,6 @@ private:
         std::fprintf(stderr, "[mods] skin %s/%s (\"%s\", %s) = costume %d (%s); base %d%s%s, %zu png\n", k.monsterName.c_str(), k.id.c_str(),
                      k.name.c_str(), k.mod.c_str(), k.index, stem.c_str(), k.base, brought.empty() ? "" : "; from the folder: ", brought.c_str(), pngs.size());
         return true;
-    }
-    // Same folder however it was written (case, "..", separators)
-    static std::filesystem::path sameDir(const std::filesystem::path &p) {
-        std::error_code ec;
-        std::filesystem::path c = std::filesystem::weakly_canonical(p, ec);
-        return ec ? p.lexically_normal() : c;
     }
 
     // mods/<mod>/monsters/<folder>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai",
