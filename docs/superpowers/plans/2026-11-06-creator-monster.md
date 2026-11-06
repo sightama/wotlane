@@ -73,8 +73,10 @@ commit it (`docs: creator step 2 findings`). If finding B or C is "no", stop and
   - `creator_monster_script_parse`: `cr::parseMonsterScript("togera:1:kaiju:120", sc, err)` gives Togera's type (3), costume 1,
     id `kaiju`, hue 120. `"togera:1"` (no id), `"togera:7:x"` (costume out of 0..3), `"assboss:1:x"` (not playable: the
     creator only builds on the ten) and `"togera:1:x:nan"` fail with a non-empty `err`.
-  - `creator_portrait_tex`: `cr::portraitTex(prefix, costume)` returns Task 1 A's values for at least Togera 0..3 and Ultra-V
-    0..3, and -1 for an unknown prefix.
+  - `creator_portrait_tex`: `cr::portraitTex(prefix, costume)` returns the spec's Findings table (Task 1 A): Togera
+    (`LIZARD`) 3, 3, 3, 4 and Ultra-V (`SHOGUN`) 11, 10, 11, 11 for costumes 0..3, and -1 for an unknown prefix or a costume
+    outside 0..3. The portrait is T8H 128x64 and always the last entry of the `.RTX`, but the texId differs per monster and
+    costume, so it is a 10x4 table.
 - [ ] **Step 2: run, expect the three to fail to compile.** `cmd /c C:\Projects\wotlane-src\tools\test_native.bat`.
 - [ ] **Step 3: implement.** `monsterJson` builds the object the same way `skinJson` (same file, around line 45) does and
   returns `json::dump(v)`, which already ends with a newline. Key order: id, name, base, costume, ai, skin. `parseMonsterScript`
@@ -169,10 +171,13 @@ around 231, `input` around 275), `native/runtime/wotm_mainmenu.inc` (creator row
 
 **Files:** Modify `native/runtime/wotm_creator.inc` (preview block around lines 674 to 800, and the save).
 
-- [ ] **Step 1:** On the window thread, `renderPortrait(const State &, int w, int h, std::vector<uint32_t> &rgba)` draws the
-  tinted preview model into a `w x h` render texture (Task 1 A's portrait size) with a transparent background. The camera faces
-  the model and frames the top 45% of its bounds (head and shoulders). `LoadImageFromTexture` then gives the RGBA rows, flipped
-  vertically because render textures are upside down.
+- [ ] **Step 1:** On the window thread, `renderPortrait(const State &, std::vector<uint32_t> &rgba)` makes the 128x64 portrait.
+  It holds two 64x64 faces (spec Findings, A and "changes for the later tasks"): the left is the normal face, the right the
+  fury face the game swaps in when fury is full. Draw the tinted preview model into a 64x64 render texture with a transparent
+  background, the camera facing it and framing the top 45% of its bounds (head and shoulders). `LoadImageFromTexture` gives the
+  rows, flipped vertically because render textures are upside down. Copy it into the left half, and into the right half with
+  the fury look (a red shift: `tint::shift` toward red plus more saturation, matching the disc's fury half as closely as a
+  quick comparison allows). Match the orientation of `tools/modkit.py portrait_png`'s export.
 - [ ] **Step 2:** Handshake. The EE-thread save sets an atomic `g_portraitReq` carrying the `tintGen` and the size. The window
   thread sees it in `renderPreview`, renders, stores the pixels in `g_portraitPx` under a mutex and sets `g_portraitDone`. The
   save waits up to 500 ms in 5 ms sleeps. On timeout it skips the portrait, logs `[creator] portrait skipped (no frame in
@@ -187,7 +192,16 @@ around 231, `input` around 275), `native/runtime/wotm_mainmenu.inc` (creator row
 **Files:** `native/runtime/wotm_custom.inc` (Task 1 C's rule), `native/runtime/wotm_creator.inc` (`scriptInstall` around 651),
 `tools/live_checks.ps1`, `docs/passos/NATIVO.md` (creator section and env table), `docs/passos/MODS.md`.
 
-- [ ] **Step 1:** Implement Task 1 C's name rule. Log `[custom] kaiju_king: HUD name "kaiju king" for type 3` once per fight.
+- [ ] **Step 1:** Implement the spec Findings' name rule (Task 1 C). The game keeps five copies of `MonsterNewNames`; save the
+  game's names at boot. At the entry of `Shell::LoadLevelFiles`, put the game's names back in all five copies, then, when exactly
+  one fighter of a type is in the fight and its costume is a creator custom's skin index, write that custom's name (cut and
+  lowercased as `setShownName` does). Restore the game's names at the entry of `userintMain` (where `wotm_modifiers.inc` clears
+  its per-fight state). These bytes are guest RAM and part of the network hash: write them only from these EE-thread hooks,
+  never from the window thread. Log `[custom] kaiju_king: HUD name "kaiju king" for type 3` once per fight.
+- [ ] **Step 1b:** `setPov` (`wotm_custom.inc` around line 286) looks the custom up with `customByType(type)`, which only ever sees
+  the first custom of a type. Look it up by the followed monster's costume too (`customByType(type, costume)`), so a creator
+  custom never hides another custom's `"camera"` and a plain Togera never borrows one. Read the costume from the monster the
+  same way the fight hooks read it elsewhere in that file.
 - [ ] **Step 2:** `WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` in `scriptInstall`, parsed by
   `cr::parseMonsterScript`, saving with `monsterType = true` and `cpu = false`. Add the env table row in NATIVO.md, then
   `python tools/wotm_env.py` must pass.
