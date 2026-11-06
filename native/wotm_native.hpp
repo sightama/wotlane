@@ -1028,8 +1028,9 @@ public:
         if (log) *log = names[0] + (lvl ? "" : " (not found)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
+            // the previous file's maxTexAddr and maxResAddr; the PNGs by the name the game loaded
             const bool ok = loadRtx(path("MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
-                                    ram.u16(fs + 0x168 + 2 * (i - 1)));   // the previous file's maxTexAddr and maxResAddr
+                                    ram.u16(fs + 0x168 + 2 * (i - 1)), names[size_t(i)].c_str());
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }
         invalidate();
@@ -1038,10 +1039,11 @@ public:
     }
 
     // base: added to the palettes' DBP (file base); resBase: added to the resident images' DBP (0 for the stage and the menu; for a monster,
-    // the previous file's fileStatus.maxResAddr, as in texmResRelocate).
-    bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
+    // the previous file's fileStatus.maxResAddr, as in texmResRelocate). name: the file the game loaded, when path is another one (a mod
+    // costume reads its base costume's file: LIZARD4's resident images still take LIZARD4's PNGs, the HUD portrait among them).
+    bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0, const char *name = nullptr) {
         if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
-        std::string stem = path;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
+        std::string stem = name ? name : path;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
         stem = stem.substr(stem.find_last_of("/\\") + 1);
         stem = stem.substr(0, stem.find('.'));
         for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
