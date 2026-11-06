@@ -1505,7 +1505,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         DrawRectangleRoundedLinesEx(Rectangle{cx - bw * 0.5f, tabY - bh * 0.5f, bw, bh}, 0.4f, 8, 3.f, gsToRgb(kDim));
         label(q, ram, tex0, s, cx, tabY, 42.f, kDim, kPW, kPH);
     };
-    if (!v.training && !v.moves)
+    if (!v.training && !v.moves && !v.creator)   // tabs only: training, move list and creator have none
     {
         badge(st::BL1, W * 0.08f);
         badge(st::BR1, W * 0.92f);
