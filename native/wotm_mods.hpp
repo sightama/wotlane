@@ -73,6 +73,7 @@ struct Custom {
     float cameraScale = 1.f;    // distances for the borrowed camera
     std::string narrator;       // narrator/<name>.mp3 (empty = the type's)
     bool ai = false;            // a CPU can use it (CPU slot on the select screen)
+    std::string skin;           // the id of its own skin, listed first (customCostumes); empty = the disc costume first
     std::filesystem::path portrait;   // HUD portrait PNG (empty = the one from the .RTX)
     int portraitTex = -1;       // portrait texId in <PREFIX><costume>.RTX
     std::string mod;
@@ -186,6 +187,9 @@ public:
         }
         scanCustoms(mods);   // before the skins: a skin can belong to a custom
         scanSkins(mods);
+        for (const Custom &c : m_customs)
+            if (!c.skin.empty() && !ownSkin(c))
+                std::fprintf(stderr, "[mods] monster %s: \"skin\" %s is not one of its skins\n", c.id.c_str(), c.skin.c_str());
         // Sector ranges in name order (stable across runs), with one spare sector between files
         uint32_t next = kFirstLsn;
         for (auto &[rel, f] : m_files) {
@@ -236,12 +240,16 @@ public:
             if (k.monster == monster && k.id == lower(id) && (owner.empty() || owner == k.monsterName)) return &k;
         return nullptr;
     }
-    // A custom monster's costumes: the one from monster.json and its skins, in that order
+    // A custom monster's costumes: the one from monster.json and its skins, in that order; with "skin" naming one of its skins,
+    // that skin comes first, then the one from monster.json, then the other skins
     std::vector<int> customCostumes(const Custom &c) const {
-        std::vector<int> v{c.costume};
         std::lock_guard<std::mutex> lk(m_lock);   // the selection screen's custom list draws on the window thread
+        const Skin *own = ownSkin(c);
+        std::vector<int> v;
+        if (own) v.push_back(own->index);
+        v.push_back(c.costume);
         for (const Skin &k : m_skins)
-            if (k.custom == c.id) v.push_back(k.index);
+            if (k.custom == c.id && &k != own) v.push_back(k.index);
         return v;
     }
     const Skin *skinByIndex(int monster, int index) const {
@@ -341,6 +349,14 @@ private:
     std::vector<Custom> m_customs;
     std::atomic<bool> m_ready{false};
     mutable std::mutex m_lock;   // m_alias, m_skins and m_skinPngs after the scan (addSkin); m_files and the rest are fixed by then
+
+    // The custom's skin named by its "skin" key; nullptr when it has no such key or no such skin. Under m_lock (or in the scan).
+    const Skin *ownSkin(const Custom &c) const {
+        if (c.skin.empty()) return nullptr;
+        for (const Skin &k : m_skins)
+            if (k.custom == c.id && k.id == c.skin) return &k;
+        return nullptr;
+    }
 
     static std::string lower(std::string s) {
         for (char &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
@@ -513,7 +529,8 @@ private:
         return ec ? p.lexically_normal() : c;
     }
 
-    // mods/<mod>/monsters/<folder>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai"}.
+    // mods/<mod>/monsters/<folder>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai",
+    // "skin"}.
     // Same id in two mods: the last one in alphabetical order wins, like the files.
     void scanCustoms(const std::vector<std::filesystem::path> &mods) {
         namespace fs = std::filesystem;
@@ -585,6 +602,7 @@ private:
                 }
                 const json::Value *ai = v.get("ai");
                 c.ai = ai && ai->asBool(false);
+                if (const json::Value *sk = v.get("skin"); sk && sk->type == json::Value::Str) c.skin = lower(sk->s);
                 c.mod = m.filename().string();
                 c.dir = s;
                 Custom &slot = byId[c.id];

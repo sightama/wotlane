@@ -219,6 +219,9 @@ of a game type (`base`); its own files (another prefix in `MON/`, a free game ty
   (`WOTM_MATCH=1,moddedtogera,1`, with `"base": "togera"`: it walks, attacks, breathes fire and loses the round like a Togera), and so do Jelly and
   Cerebulon (`WOTM_MATCH=1,cerebulon,1`: the game's regular AI, the same one that moves Cerebulon in the final stage). Goliath does not: its AI
   (`Ai::updateAssBoss`) needs the points of its own stage, and as a CPU (`WOTM_MATCH=3,goliath,1`) it loads but does not show up in the fight.
+- `skin`: the `id` of one of the custom's own skins (`"monster"` = this custom's `id`; see "Skins"). That skin comes first in
+  the custom's costumes, before `costume`, so picking the custom shows it (the character creator writes it). Without it, `costume` comes
+  first. A `skin` that is not one of the custom's skins is ignored (log `[mods] monster <id>: "skin" <skin> is not one of its skins`).
 - **On the select screen** (screens 3, 6, 7, 18 and 19 and the 3- and 4-player one, outside elimination): the CUSTOM slot of the monster bar. X opens the list of customs inside the
   player's frame (name, mod, how many skins; in a CPU frame, "PLAYERS ONLY" on those without `"ai"`): up and down scroll, X picks, triangle
   closes. Once one is picked, the frame shows the monster like the game's own: up and down change costume (the `costume` from `monster.json` and the

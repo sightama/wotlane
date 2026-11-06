@@ -107,6 +107,7 @@ struct View
     int selCostumeIdx[kMaxPanels] = {};   // position of the costume in the column's list (-1: not in it)
     int selBase[kMaxPanels] = {};         // disc costume used for framing (the skin's base)
     int selModCount[kMaxPanels] = {};     // mod skins at the end of the list
+    int selDiscIdx[kMaxPanels] = {};      // a custom's list: position of its disc costume, the rest are mod skins (-1: a column's list)
     char selCostumeName[kMaxPanels][40] = {};
     char selLabel[kMaxPanels][8] = {};    // "P1", "CPU"
     int selColor[kMaxPanels] = {};        // index into kPlayerColors
@@ -785,9 +786,9 @@ static int customStep(Pick &k, const bool *e, bool cpu)
         k.list = false;
         k.custom = k.customHl % nc + 1;
         k.customSkin = 0;
-        k.costume = cu->costume;   // the first of customCostumes
-        std::fprintf(stderr, "[padsel] custom in the list: %s (base %s, %zu costumes)\n", cu->id.c_str(), cu->typeName.c_str(),
-                     wotm::mods::Registry::get().customCostumes(*cu).size());
+        const std::vector<int> l = wotm::mods::Registry::get().customCostumes(*cu);
+        k.costume = l[0];   // the first of customCostumes
+        std::fprintf(stderr, "[padsel] custom in the list: %s (base %s, %zu costumes)\n", cu->id.c_str(), cu->typeName.c_str(), l.size());
         return 8;
     }
     if (const wotm::mods::Custom *cu = customAt(k.custom - 1))
@@ -1498,6 +1499,7 @@ static void fillCostume(View &v, int p, const CostumeList &l)
 {
     const int mon = int(v.selMonster[p] >> 5);
     v.selCostumes[p] = l.n;
+    v.selDiscIdx[p] = -1;
     v.selModCount[p] = 0;
     for (int i = 0; i < l.n; ++i)
         v.selModCount[p] += l.c[i] >= 4;
@@ -1519,6 +1521,7 @@ static void fillCustom(View &v, int p, int k, int costume)
     v.selCostume[p] = costume;
     v.selCostumes[p] = int(l.size());
     v.selModCount[p] = int(l.size()) - 1;
+    v.selDiscIdx[p] = int(std::find(l.begin(), l.end(), cu->costume) - l.begin());   // first, or second after its "skin"
     v.selCostumeIdx[p] = int(std::find(l.begin(), l.end(), costume) - l.begin());
     v.selBase[p] = baseCostume(cu->type, costume);
     const std::string nm = costume == cu->costume ? "FROM MOD " + cu->mod : costumeName(cu->type, costume);
@@ -2727,7 +2730,8 @@ static void drawSelect(const View &v)
                     const float w = on ? segW * 1.8f : segW;
                     const Rectangle seg{tx - w * 0.5f, sy, w, segH};
                     DrawRectangleRounded(Rectangle{seg.x - 3.f, seg.y - 3.f, seg.width + 6.f, seg.height + 6.f}, 0.5f, 4, Color{12, 8, 4, 255});
-                    const bool modSeg = k >= cnt - v.selModCount[p];   // mod ones come after the disc ones in the list
+                    // mod ones come after the disc ones in a column's list; a custom's has one disc costume, not always first
+                    const bool modSeg = v.selDiscIdx[p] >= 0 ? k != v.selDiscIdx[p] : k >= cnt - v.selModCount[p];
                     DrawRectangleRounded(seg, 0.5f, 4, on ? (mod ? kGold : kName) : modSeg ? modDim : dim);
                 }
                 if (first + shown < cnt)

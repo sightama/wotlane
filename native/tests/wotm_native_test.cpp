@@ -618,6 +618,41 @@ TEST(mods_add_skin_after_scan)
     fs::remove_all(root);
 }
 
+TEST(mods_custom_skin_first)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_customskin";
+    // a custom kaiju (togera, costume 1) with one skin of its own; monster.json's "skin" given as `skin` (empty: no key)
+    auto costumes = [&](const std::string &skin) {
+        fs::remove_all(root);
+        fs::create_directories(root / "Creator" / "monsters" / "kaiju");
+        fs::create_directories(root / "Creator" / "skins" / "kaiju");
+        {
+            std::ofstream o(root / "Creator" / "monsters" / "kaiju" / "monster.json");
+            o << (skin.empty() ? std::string(R"({"id": "kaiju", "name": "KAIJU", "base": "togera", "costume": 1, "ai": false})")
+                               : wotm::creator::monsterJson("kaiju", "KAIJU", "togera", 1, false, skin));
+            std::ofstream k(root / "Creator" / "skins" / "kaiju" / "skin.json");
+            k << wotm::creator::skinJson("kaiju", "kaiju", "KAIJU", 1);
+            std::ofstream p(root / "Creator" / "skins" / "kaiju" / "t0004.png");
+            p << "not a real png";
+        }
+        wotm::mods::Registry reg;
+        reg.scan(root);
+        const wotm::mods::Custom *cu = reg.custom("kaiju");
+        const wotm::mods::Skin *k = reg.skin(3, "kaiju/kaiju");
+        std::vector<int> v;
+        if (cu && k) v = reg.customCostumes(*cu);
+        return std::make_pair(v, k ? k->index : -1);
+    };
+    const auto own = costumes("KaiJu");   // lowercased like the ids
+    CHECK(own.second == 4 && own.first == std::vector<int>({4, 1}));
+    const auto none = costumes("");
+    CHECK(none.second == 4 && none.first == std::vector<int>({1, 4}));
+    const auto unknown = costumes("nope");   // logs: "skin" nope is not one of its skins
+    CHECK(unknown.second == 4 && unknown.first == std::vector<int>({1, 4}));
+    fs::remove_all(root);
+}
+
 int main()
 {
     for (const Test &t : tests())
