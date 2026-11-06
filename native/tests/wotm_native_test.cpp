@@ -709,6 +709,41 @@ TEST(mods_add_custom_after_scan)
     fs::remove_all(root);
 }
 
+TEST(mods_custom_of_type_and_costume)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_customof";
+    fs::remove_all(root);
+    auto write = [&](const fs::path &rel, const std::string &text) {
+        fs::create_directories((root / rel).parent_path());
+        std::ofstream(root / rel) << text;
+    };
+    // a Togera-based custom with a camera and a skin of its own (no "skin" key), a creator custom on Togera with its "skin", a
+    // plain Togera skin and Goliath
+    write("Old/monsters/modded/monster.json", R"({"id": "modded", "name": "MODDED", "base": "togera", "costume": 0, "camera": {"from": "lizard", "scale": 150}})");
+    write("Old/skins/pink/skin.json", wotm::creator::skinJson("modded", "pink", "PINK", 0));
+    write("Old/skins/green/skin.json", wotm::creator::skinJson("togera", "green", "GREEN", 2));
+    write("Old/monsters/goliath/monster.json", R"({"id": "goliath", "name": "GOLIATH PRIME", "base": "assboss", "costume": 1})");
+    write("Creator/monsters/kaiju_king/monster.json", wotm::creator::monsterJson("kaiju_king", "KAIJU KING", "togera", 1, false, "kaiju_king"));
+    write("Creator/skins/kaiju_king/skin.json", wotm::creator::skinJson("kaiju_king", "kaiju_king", "KAIJU KING", 1));
+    wotm::mods::Registry reg;
+    reg.scan(root);
+    const wotm::mods::Skin *pink = reg.skin(3, "modded/pink"), *green = reg.skin(3, "togera/green"), *own = reg.skin(3, "kaiju_king/kaiju_king");
+    CHECK(pink && green && own && reg.customs().size() == 3);
+    const wotm::mods::Custom *modded = reg.custom("modded"), *kaiju = reg.custom("kaiju_king"), *goliath = reg.custom("goliath");
+    if (pink && green && own && modded && kaiju && goliath)
+    {
+        CHECK(reg.customOf(3, own->index) == kaiju && reg.customOf(3, pink->index) == modded);   // on one of its skins
+        CHECK(reg.customOf(3, 1) == kaiju && reg.customOf(3, 0) == modded);                    // on its monster.json costume
+        CHECK(!reg.customOf(3, 2) && !reg.customOf(3, green->index) && !reg.customOf(1, own->index));   // plain monsters
+        CHECK(reg.customOf(13, 1) == goliath && !reg.customOf(13, 0));
+        CHECK(reg.customByType(3) == kaiju);   // the first of its type (Creator scans before Old): it used to hide modded's camera
+    }
+    CHECK(wotm::mods::hudName("KAIJU KING") == "kaiju king" && wotm::mods::hudName("GOLIATH PRIME") == "goliath");
+    CHECK(wotm::mods::hudName("ABCDEFGHIJKLMNO") == "abcdefghijk" && wotm::mods::hudName("Kaiju") == "kaiju");
+    fs::remove_all(root);
+}
+
 int main()
 {
     for (const Test &t : tests())

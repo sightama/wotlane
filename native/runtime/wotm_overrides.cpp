@@ -1173,6 +1173,7 @@ namespace
             ++g_loadGen;
             wotm_sync::levelLoad();
             wotm_modifiers::fightStart();
+            wotm_custom::fightNames(rdram);   // a custom's name in the HUD (MonsterNewNames)
         }
         g_origLoadLevelFiles(rdram, ctx, runtime);
     }
@@ -2603,7 +2604,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().custom(id))
                 {
                     v[n - 1] = cu->type;
-                    c[n - 1] = cu->costume;
+                    c[n - 1] = wotm::mods::Registry::get().customCostumes(*cu)[0];   // its own skin ("skin") when it has one
                     end = const_cast<char *>(t);
                 }
                 else

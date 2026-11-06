@@ -22,7 +22,7 @@ namespace wotm_custom
     constexpr uint32_t kSetAI = wotm::fn::SetAIMonster__7TheGameiiii, kTakeHit = wotm::fn::takeHit__7MonsterP8_fvectorfi;
     constexpr uint32_t kGameObj = wotm::sym::shellGame;
     constexpr uint32_t kMonsters = 0x120380;          // TheGame::m_monsters[8]
-    constexpr uint32_t kTypeBits = 0x14, kPlayerNum = 0x18, kId = 0x20, kCs = 0xC, kShadow = 0x1A3C, kCsA = 0x71F8, kCsB = 0x71FC;
+    constexpr uint32_t kTypeBits = 0x14, kPlayerNum = 0x18, kDupId = 0x1C, kId = 0x20, kCs = 0xC, kShadow = 0x1A3C, kCsA = 0x71F8, kCsB = 0x71FC;
     constexpr uint32_t kDrawMe = 0xC;                 // _cs::drawMe (byte)
     constexpr uint32_t kNumAIs = 0x1203E0, kGameMode = 0x1203C8;   // TheGame::m_numAIs, m_gameMode
     constexpr uint32_t kSlots = 0xB80, kSlotStride = 0x11190, kNumSlots = 0x1203D4;   // TheGame::m_slots[16], m_numSlots
@@ -130,29 +130,87 @@ namespace wotm_custom
     constexpr uint32_t kSndBanks = 0x210, kBankFinal = 24;   // SoundManager::m_banks, BANK_FINAL
     PS2Runtime::RecompiledFunction g_origLoadBank = nullptr, g_origLoadLoBank = nullptr, g_loadMech = nullptr;
 
-    // On-screen name ("%s CRUSHED", "%s WINS"): the type's entry in the 5 copies of MonsterNewNames[17][12] ("assboss", "jelly",
-    // "final"); gets monster.json's "name" (up to 11 letters, lowercase like the game's) or `fallback`
+    // On-screen name ("%s CRUSHED", "%s WINS"): the type's entry in the 5 copies of MonsterNewNames[17][12], one per translation
+    // unit (Hud, CrushLevel, BigShotLevel, the memory card screens, the Shell)
+    constexpr uint32_t kNameCopies[5] = {wotm::sym::MonsterNewNames_006E8958, wotm::sym::MonsterNewNames_006E8D90, wotm::sym::MonsterNewNames_006EAA78,
+                                         wotm::sym::MonsterNewNames_006ED318, wotm::sym::MonsterNewNames_006EFEC8};
+    constexpr uint32_t kNameTypes = 17, kNameLen = 12;
+    void writeShownName(uint8_t *rdram, uint32_t type, const std::string &shown)
+    {
+        for (const uint32_t names : kNameCopies)
+        {
+            char *e = reinterpret_cast<char *>(rdram + ((names + type * kNameLen) & 0x01FFFFFFu));
+            std::memset(e, 0, kNameLen);
+            std::memcpy(e, shown.data(), std::min<size_t>(shown.size(), kNameLen - 1));
+        }
+    }
+    // The boss types ("assboss", "jelly", "final"): monster.json's "name" (hudName) or `fallback`
     void setShownName(uint8_t *rdram, uint32_t type, const char *fallback)
     {
-        std::string shown = fallback;
-        if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().customByType(int(type)))
+        const wotm::mods::Custom *cu = wotm::mods::Registry::get().customByType(int(type));
+        writeShownName(rdram, type, cu ? wotm::mods::hudName(cu->name) : std::string(fallback));
+    }
+
+    // A custom on a playable base (the creator's): these names are per type, so the HUD can only show the custom's name when it is
+    // the only fighter of its type. At the entry of Shell::LoadLevelFiles (fightNames) the game's names go back in, then each type
+    // with exactly one fighter, whose costume is one of a custom's skins (Registry::customOf; on its disc costume it is the plain
+    // base), gets that custom's name. Back in the menus (userintMain, menuNames) the game's names return, so the memory card and
+    // Shell screens never show a custom's name. These bytes are guest RAM, in the network hash: only written here, on the EE
+    // thread, from the Shell's selection and the registry (the same on every PC: the mods digest), before the fight's first frame.
+    uint8_t g_gameNames[5][kNameTypes * kNameLen];
+    bool g_gameNamesKept = false;
+
+    void keepGameNames(uint8_t *rdram)   // the first call, before anything writes them (setShownName runs inside the level load)
+    {
+        if (g_gameNamesKept)
+            return;
+        for (int i = 0; i < 5; ++i)
+            std::memcpy(g_gameNames[i], rdram + (kNameCopies[i] & 0x01FFFFFFu), sizeof g_gameNames[i]);
+        g_gameNamesKept = true;
+    }
+    bool gameNames(uint8_t *rdram)   // true when a name was changed
+    {
+        keepGameNames(rdram);
+        bool changed = false;
+        for (int i = 0; i < 5; ++i)
         {
-            std::string n = cu->name;
-            if (n.size() > 11)   // "GOLIATH PRIME" -> "goliath": cut at the last word that fits
-            {
-                const size_t sp = n.rfind(' ', 11);
-                n = n.substr(0, sp != std::string::npos && sp > 0 ? sp : 11);
-            }
-            shown.clear();
-            for (char ch : n)
-                shown += char(std::tolower(static_cast<unsigned char>(ch)));
+            uint8_t *names = rdram + (kNameCopies[i] & 0x01FFFFFFu);
+            changed = changed || std::memcmp(names, g_gameNames[i], sizeof g_gameNames[i]) != 0;
+            std::memcpy(names, g_gameNames[i], sizeof g_gameNames[i]);
         }
-        for (const uint32_t names : {wotm::sym::MonsterNewNames_006E8958, wotm::sym::MonsterNewNames_006E8D90, wotm::sym::MonsterNewNames_006EAA78,
-                                     wotm::sym::MonsterNewNames_006ED318, wotm::sym::MonsterNewNames_006EFEC8})
+        return changed;
+    }
+    void menuNames(uint8_t *rdram)
+    {
+        if (gameNames(rdram))
+            std::fprintf(stderr, "[custom] the game's monster names are back (menus)\n");
+    }
+    void fightNames(uint8_t *rdram)
+    {
+        gameNames(rdram);
+        using namespace wotm_split4;   // the Shell's selection: m_monsterSel, m_costume, m_numPlayers, m_numAIs
+        const int players = std::clamp(static_cast<int32_t>(FAST_READ32(kNumPlayers)), 0, 4);
+        const int ais = std::clamp(static_cast<int32_t>(FAST_READ32(kNumAIs)), 0, 10);
+        int count[kNameTypes] = {}, costumeOf[kNameTypes] = {};
+        auto add = [&](uint32_t sel, int costume) {
+            if ((sel >>= 5) < kNameTypes)
+                ++count[sel], costumeOf[sel] = costume;
+        };
+        // players 3 and 4 are on the AI path by now (wotm_split4.inc's hook runs before this one); if not, their own costume
+        for (int i = 0; i < players; ++i)
+            add(FAST_READ32(sel(i)), int(i < 2 ? FAST_READ32(costume(i)) : g_extraCostume[i - 2]));
+        for (int j = 0; j < ais; ++j)
+            add(FAST_READ32(sel(4 + j)), int(FAST_READ32(costume(2 + j))));
+        for (uint32_t t = 1; t < kNameTypes; ++t)
         {
-            char *e = reinterpret_cast<char *>(rdram + ((names + type * 12) & 0x01FFFFFFu));
-            std::memset(e, 0, 12);
-            std::memcpy(e, shown.data(), shown.size());
+            if (count[t] != 1 || !wotm::mods::monsterInfo(int(t)))   // the bosses: setShownName
+                continue;
+            const wotm::mods::Custom *cu = wotm::mods::Registry::get().customOf(int(t), costumeOf[t]);
+            if (!cu || cu->costume == costumeOf[t])
+                continue;
+            const std::string shown = wotm::mods::hudName(cu->name);
+            writeShownName(rdram, t, shown);
+            std::fprintf(stderr, "[custom] %s: HUD name \"%s\" for type %u\n", cu->id.c_str(), shown.c_str(), t);
         }
     }
 
@@ -283,7 +341,13 @@ namespace wotm_custom
         const uint32_t view = GPR_U32(ctx, 4);
         const uint32_t m = ctx->pc == kSetPov && view < 4 ? READ32(kCameras + view * kCamStride + kCamMonster) : 0;
         const uint32_t type = m ? READ32(m + kTypeBits) >> 5 : 0;
-        const wotm::mods::Custom *cu = type ? wotm::mods::Registry::get().customByType(int(type)) : nullptr;
+        // which custom this monster is: by its costume (wotm_skins.inc keeps it per fighter), so a custom never hides another one of
+        // its type and a plain monster never borrows one; a boss type has no plain monster to tell apart, so its first custom
+        const int costume = m ? wotm_skins::fightCostume(READ32(m + kTypeBits), READ32(m + kDupId)) : -1;
+        const wotm::mods::Registry &reg = wotm::mods::Registry::get();
+        const wotm::mods::Custom *cu = type && costume >= 0 ? reg.customOf(int(type), costume) : nullptr;
+        if (type && !cu && !wotm::mods::monsterInfo(int(type)))
+            cu = reg.customByType(int(type));
         const char *base = cu && !cu->cameraFrom.empty() ? cu->cameraFrom.c_str() : type == 13 && !cu ? kCamBaseDefault : nullptr;
         if (base)
         {

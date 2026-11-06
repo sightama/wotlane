@@ -59,6 +59,17 @@ inline const MonsterInfo *customBase(const std::string &s) {
     return nullptr;
 }
 
+// A custom's name in the HUD ("%s WINS"; the game's names are lowercase, up to 11 letters): "GOLIATH PRIME" -> "goliath", cut at
+// the last word that fits
+inline std::string hudName(std::string n) {
+    if (n.size() > 11) {
+        const size_t sp = n.rfind(' ', 11);
+        n = n.substr(0, sp != std::string::npos && sp > 0 ? sp : 11);
+    }
+    for (char &ch : n) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    return n;
+}
+
 // Custom monster (mods/<mod>/monsters/<folder>/monster.json; MODS.md, "Custom monsters"): a new monster on the select screen (CUSTOM
 // slot), which for now uses the code, model and files of one of the game's types (`base`). Its own files (another prefix, a free
 // type) come later; the format already reserves "files".
@@ -325,6 +336,17 @@ public:
         for (const Custom &c : cs)
             if (c.type == type && (costume < 0 || c.costume == costume)) return &c;
         return nullptr;
+    }
+    // The custom a fighter of this type and costume is (the fight hooks): the one owning the skin with that costume index, else the
+    // first whose monster.json costume it is; nullptr for a plain monster. On one of its skins a custom can't be a plain monster; on
+    // its monster.json costume it looks like the base in that costume.
+    const Custom *customOf(int type, int costume) const {
+        std::lock_guard<std::mutex> lk(m_lock);
+        for (const Skin &k : m_skins)
+            if (k.monster == type && k.index == costume && !k.custom.empty())
+                for (const Custom &c : m_customs)
+                    if (c.id == k.custom && c.type == type) return &c;
+        return customByType(m_customs, type, costume);
     }
 
     // Registers one custom monster folder after the scan (the character creator's save): at the end of customs(), or in place when

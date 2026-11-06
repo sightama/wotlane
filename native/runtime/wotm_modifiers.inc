@@ -47,6 +47,8 @@ namespace wotm_modifiers
 
     void userintMainModsOff(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
+        if (ctx->pc == kUserintMain)
+            wotm_custom::menuNames(rdram);   // the game's monster names again (a custom's was only for the fight)
         if (ctx->pc == kUserintMain && wotm_sync::g_mods)
         {
             wotm_sync::g_mods = 0;

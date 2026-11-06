@@ -21,6 +21,14 @@ namespace wotm_skins
     constexpr uint32_t kShellObj = wotm::sym::shellInfo;
     constexpr uint32_t kShellNumAIs = 0x2BB8, kShellMonsterSel = 0x2938, kShellCostume = 0x2BE0;
     PS2Runtime::RecompiledFunction g_origSetPlayer = nullptr, g_origSetAI = nullptr, g_origRandomAI = nullptr;
+    // The costume each fighter got, by game type and duplicate (m_typeBits, m_dupId): the Monster only keeps the sound costume
+    // (m_skinNum), so the fight hooks that ask which custom a monster is (wotm_custom.inc, the camera) read it here
+    std::map<uint32_t, int> g_fightCostume;
+    int fightCostume(uint32_t type, uint32_t dup)
+    {
+        const auto it = g_fightCostume.find((type << 8) | (dup & 0xFFu));
+        return it == g_fightCostume.end() ? -1 : it->second;
+    }
 
     // game type (m_typeBits, monster << 5) + costume -> the costume the sound code should see
     uint32_t soundSkin(uint32_t type, uint32_t skin)
@@ -40,7 +48,10 @@ namespace wotm_skins
     {
         if (ctx->pc == kSetPlayer)
         {
-            const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 9), sound = soundSkin(type, skin);
+            const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 9), sound = soundSkin(type, skin), player = GPR_U32(ctx, 5);
+            // players 3 and 4: wotm_split4.inc's hook (inside this one) gives them their own costume
+            const bool extra = player >= 2u && player < 4u && wotm_split4::splitPlayers(rdram);
+            g_fightCostume[(type << 8) | (GPR_U32(ctx, 7) & 0xFFu)] = int(extra ? wotm_split4::g_extraCostume[player - 2u] : skin);
             if (sound != skin)   // a disc costume or an unknown index: the register stays exactly as the caller set it
                 ctx->r[9] = _mm_set_epi64x(0, static_cast<int64_t>(sound));
         }
@@ -52,6 +63,7 @@ namespace wotm_skins
         if (ctx->pc == kSetAI)
         {
             const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 8), sound = soundSkin(type, skin);
+            g_fightCostume[(type << 8) | (GPR_U32(ctx, 7) & 0xFFu)] = int(skin);
             if (sound != skin)
                 ctx->r[8] = _mm_set_epi64x(0, static_cast<int64_t>(sound));
         }
