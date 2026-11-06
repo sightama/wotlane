@@ -5,8 +5,7 @@
 // The game finds files through fileCdSearchFile (sector and size) and reads by sector; each mod file gets a range of
 // fake sectors beyond the end of any DVD (kFirstLsn), which the hooks (runtime/wotm_mods.inc) and the native sound reader
 // serve from here. The native layer (wotm_disc.hpp: movies, icon, photos and the save list's monster) looks things up here by name.
-// Host only: doesn't depend on the runtime. The scan runs once, before boot (scan); after that only addSkin (the character
-// creator's save) adds a skin, under m_lock, and never changes the files or their sectors.
+// Host only: doesn't depend on the runtime. The scan runs once, before boot (scan); after that everything is read-only.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -18,7 +17,6 @@
 #include <fstream>
 #include <iterator>
 #include <map>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -212,7 +210,6 @@ public:
     // The base costume's file that a mod costume uses in place of what the skin folder didn't provide ("MON/LIZARD4.NGP" ->
     // "MON/LIZARD1.NGP"); otherwise the name itself. What gets read from disc is always aliasOf(rel).
     std::string aliasOf(const std::string &rel) const {
-        std::lock_guard<std::mutex> lk(m_lock);   // addSkin (EE thread) adds aliases; the window, sound and movie threads read them
         if (!m_ready || m_alias.empty()) return key(rel);
         const auto it = m_alias.find(key(rel));
         return it == m_alias.end() ? key(rel) : it->second;
@@ -223,15 +220,12 @@ public:
     }
 
     // ---- mod skins (costumes 4 and up) ----
-    // addSkin runs on the EE thread and may grow m_skins (moving it) or rewrite one of its skins. skins() and the Skin pointers
-    // below are for the EE thread (and boot), used right away; another thread only gets values (customCostumes, skinPngs, aliasOf).
     const std::vector<Skin> &skins() const { return m_skins; }
     // Skin by monster type (MonsterNewNames) and by id ("green") or "monster/id"; nullptr if there's none.
     // With "monster/id", the monster has to match (the same id can exist on Togera and on a Togera-based custom).
     const Skin *skin(int monster, std::string id) const {
         std::string owner;
         if (const auto s = id.find('/'); s != std::string::npos) owner = lower(id.substr(0, s)), id = id.substr(s + 1);
-        std::lock_guard<std::mutex> lk(m_lock);
         for (const Skin &k : m_skins)
             if (k.monster == monster && k.id == lower(id) && (owner.empty() || owner == k.monsterName)) return &k;
         return nullptr;
@@ -239,60 +233,16 @@ public:
     // A custom monster's costumes: the one from monster.json and its skins, in that order
     std::vector<int> customCostumes(const Custom &c) const {
         std::vector<int> v{c.costume};
-        std::lock_guard<std::mutex> lk(m_lock);   // the selection screen's custom list draws on the window thread
         for (const Skin &k : m_skins)
             if (k.custom == c.id) v.push_back(k.index);
         return v;
     }
     const Skin *skinByIndex(int monster, int index) const {
-        std::lock_guard<std::mutex> lk(m_lock);
         for (const Skin &k : m_skins)
             if (k.monster == monster && k.index == index) return &k;
         return nullptr;
     }
-    // A copy: texmods::Index reads it on the window thread while addSkin may add to it
-    std::vector<SkinPng> skinPngs() const {
-        std::lock_guard<std::mutex> lk(m_lock);
-        return m_skinPngs;
-    }
-
-    // Registers one skin folder after the scan (the character creator's save): the next free costume index of its monster, or the
-    // index it already has when the same monster/id came from this folder before (overwrite, in place). Nothing already registered
-    // moves: no other skin's index, no sector range (the folder's model files wait for a restart, placeSkin). Returns the skin
-    // (valid until the next addSkin; EE thread), or nullptr with the reason in `why` and nothing changed. Its PNGs are the
-    // skinPngs() entries with stem prefix + index (texmods::Index::add).
-    const Skin *addSkin(const std::filesystem::path &folder, std::string &why) {
-        namespace fs = std::filesystem;
-        if (!m_ready) { why = "mods/ has not been scanned yet"; return nullptr; }
-        fs::path dir = folder.lexically_normal();
-        if (dir.filename().empty()) dir = dir.parent_path();   // "skins/green/"
-        Skin k;
-        const std::string mod = dir.parent_path().parent_path().filename().string();   // mods/<mod>/skins/<folder>
-        if (!readSkin(dir, mod, k, why)) return nullptr;
-        std::lock_guard<std::mutex> lk(m_lock);
-        Skin *old = nullptr;
-        for (Skin &s : m_skins)
-            if (s.monsterName == k.monsterName && s.id == k.id) {
-                if (sameDir(s.dir) != sameDir(dir)) { why = "a skin " + k.monsterName + "/" + k.id + " already comes from " + s.mod; return nullptr; }
-                old = &s;
-                break;
-            }
-        int index = 4;
-        if (old) index = old->index;
-        else for (const Skin &s : m_skins) if (s.monster == k.monster) index = std::max(index, s.index + 1);
-        const size_t pngsBefore = m_skinPngs.size();
-        if (!placeSkin(k, index, true, why)) return nullptr;
-        if (!old) {
-            m_skins.push_back(k);
-            return &m_skins.back();
-        }
-        // Overwrite: the PNGs it had before go (placeSkin appended the folder's current ones after pngsBefore)
-        const std::string stem = k.prefix + std::to_string(index);
-        const auto end = m_skinPngs.begin() + std::ptrdiff_t(pngsBefore);
-        m_skinPngs.erase(std::remove_if(m_skinPngs.begin(), end, [&](const SkinPng &p) { return p.stem == stem; }), end);
-        *old = k;
-        return old;
-    }
+    const std::vector<SkinPng> &skinPngs() const { return m_skinPngs; }
 
     // ---- custom monsters ----
     const std::vector<Custom> &customs() const { return m_customs; }
@@ -340,7 +290,6 @@ private:
     std::vector<SkinPng> m_skinPngs;
     std::vector<Custom> m_customs;
     std::atomic<bool> m_ready{false};
-    mutable std::mutex m_lock;   // m_alias, m_skins and m_skinPngs after the scan (addSkin); m_files and the rest are fixed by then
 
     static std::string lower(std::string s) {
         for (char &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
@@ -369,12 +318,55 @@ private:
                 if (e.is_directory(ec)) subs.push_back(e.path());
             std::sort(subs.begin(), subs.end());
             for (const fs::path &s : subs) {
-                Skin k;
-                std::string why;
-                if (!readSkin(s, m.filename().string(), k, why)) {
-                    std::fprintf(stderr, "[mods] skin %s/skins/%s ignored: %s\n", m.filename().string().c_str(), s.filename().string().c_str(), why.c_str());
+                const std::string where = m.filename().string() + "/skins/" + s.filename().string();
+                const fs::path js = child(s, "skin.json");
+                std::string text;
+                if (!js.empty()) {
+                    std::ifstream in(js, std::ios::binary);
+                    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                }
+                json::Value v;
+                std::string err;
+                if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
+                    std::fprintf(stderr, "[mods] skin %s ignored: %s\n", where.c_str(), js.empty() ? "no skin.json" : ("invalid skin.json: " + err).c_str());
                     continue;
                 }
+                Skin k;
+                const json::Value *mon = v.get("monster");
+                const MonsterInfo *mi = mon && mon->type == json::Value::Str ? monsterInfo(mon->s) : nullptr;
+                const Custom *cu = !mi && mon && mon->type == json::Value::Str ? custom(mon->s) : nullptr;
+                if (!mi && !cu) {
+                    std::fprintf(stderr, "[mods] skin %s ignored: \"monster\" is neither a playable monster (togera, congar, ...) nor a custom monster's id\n", where.c_str());
+                    continue;
+                }
+                if (cu) {   // custom's skin: a costume of the base type, offered only in the custom's list
+                    k.monster = cu->type;
+                    k.monsterName = cu->id;
+                    k.custom = cu->id;
+                    k.prefix = cu->prefix;
+                } else {
+                    k.monster = mi->type;
+                    k.monsterName = mi->name;
+                    k.prefix = mi->prefix;
+                }
+                const json::Value *id = v.get("id");
+                k.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
+                if (k.id.empty() || k.id.size() > 32 || k.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
+                    std::fprintf(stderr, "[mods] skin %s ignored: \"id\" must be only letters, digits and _ (up to 32)\n", where.c_str());
+                    continue;
+                }
+                const json::Value *nm = v.get("name");
+                k.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : k.id;
+                const json::Value *base = v.get("base");
+                k.base = base ? int(base->asInt(0)) : cu ? cu->costume : 0;
+                if (k.base < 0 || k.base > 3) {
+                    std::fprintf(stderr, "[mods] skin %s: \"base\" %d outside 0..3, using 0\n", where.c_str(), k.base);
+                    k.base = 0;
+                }
+                const json::Value *ai = v.get("ai");
+                k.ai = ai && ai->asBool(false);
+                k.mod = m.filename().string();
+                k.dir = s;
                 Skin &slot = byKey[k.monsterName + "/" + k.id];
                 if (!slot.id.empty())
                     std::fprintf(stderr, "[mods] skin %s/%s: %s beats %s\n", k.monsterName.c_str(), k.id.c_str(), k.mod.c_str(), slot.mod.c_str());
@@ -389,128 +381,48 @@ private:
         std::vector<Skin> kept;
         for (Skin &k : m_skins) {
             int &n = next.emplace(k.monster, 4).first->second;
-            std::string why;
-            if (!placeSkin(k, n, false, why)) {
-                std::fprintf(stderr, "[mods] skin %s/%s ignored: %s\n", k.monsterName.c_str(), k.id.c_str(), why.c_str());
+            const std::string stem = k.prefix + std::to_string(n);
+            if (n > 99 || stem.size() > 8) {   // fileStatus stores names of up to 8 letters
+                std::fprintf(stderr, "[mods] skin %s/%s ignored: too many costumes for %s\n", k.monsterName.c_str(), k.id.c_str(), k.monsterName.c_str());
                 continue;
             }
-            ++n;
+            std::map<std::string, fs::path> own;   // extension -> file in the folder
+            std::vector<fs::path> pngs;
+            for (auto it = fs::recursive_directory_iterator(k.dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                if (!it->is_regular_file(ec)) continue;
+                const std::string ext = key(it->path().extension().string());
+                if (ext == ".PNG") pngs.push_back(it->path());
+                else if (ext == ".NGP" || ext == ".PTR" || ext == ".TEX" || ext == ".RTX") {
+                    auto &o = own[ext.substr(1)];
+                    if (!o.empty()) std::fprintf(stderr, "[mods] skin %s/%s: two .%s, using %s\n", k.monsterName.c_str(), k.id.c_str(), ext.c_str() + 1, o.filename().string().c_str());
+                    else o = it->path();
+                }
+            }
+            if (own.count("NGP") != own.count("PTR")) {
+                std::fprintf(stderr, "[mods] skin %s/%s ignored: .NGP and .PTR go together (the .PTR relocates the .NGP)\n", k.monsterName.c_str(), k.id.c_str());
+                continue;
+            }
+            k.index = n++;
+            std::string brought;
+            for (const char *ext : {"NGP", "PTR", "TEX", "RTX"}) {
+                const std::string rel = "MON/" + stem + "." + ext;
+                if (const auto o = own.find(ext); o != own.end()) {
+                    File &f = m_files[rel];
+                    f.rel = rel;
+                    f.host = o->second;
+                    f.mod = k.mod;
+                    f.size = fs::file_size(o->second, ec);
+                    brought += std::string(brought.empty() ? "" : " ") + ext;
+                } else
+                    m_alias[rel] = "MON/" + k.prefix + std::to_string(k.base) + "." + ext;
+            }
+            for (const fs::path &p : pngs) m_skinPngs.push_back(SkinPng{stem, p, k.mod, k.monsterName + "/" + k.id + "/" + p.filename().string()});
+            std::fprintf(stderr, "[mods] skin %s/%s (\"%s\", %s) = costume %d (%s); base %d%s%s, %zu png\n", k.monsterName.c_str(), k.id.c_str(),
+                         k.name.c_str(), k.mod.c_str(), k.index, stem.c_str(), k.base, brought.empty() ? "" : "; from the folder: ", brought.c_str(), pngs.size());
             kept.push_back(k);
         }
         m_skins = std::move(kept);
-    }
-
-    // One skin folder's skin.json -> k (everything but the index). false: the folder is not a skin, with the reason in `why`.
-    // Only reads the customs (fixed after scan), so addSkin calls it without m_lock.
-    bool readSkin(const std::filesystem::path &folder, const std::string &mod, Skin &k, std::string &why) const {
-        const std::string where = mod + "/skins/" + folder.filename().string();
-        const std::filesystem::path js = child(folder, "skin.json");
-        std::string text;
-        if (!js.empty()) {
-            std::ifstream in(js, std::ios::binary);
-            text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-        }
-        json::Value v;
-        std::string err;
-        if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
-            why = js.empty() ? "no skin.json" : "invalid skin.json: " + err;
-            return false;
-        }
-        k = Skin{};
-        const json::Value *mon = v.get("monster");
-        const MonsterInfo *mi = mon && mon->type == json::Value::Str ? monsterInfo(mon->s) : nullptr;
-        const Custom *cu = !mi && mon && mon->type == json::Value::Str ? custom(mon->s) : nullptr;
-        if (!mi && !cu) {
-            why = "\"monster\" is neither a playable monster (togera, congar, ...) nor a custom monster's id";
-            return false;
-        }
-        if (cu) {   // custom's skin: a costume of the base type, offered only in the custom's list
-            k.monster = cu->type;
-            k.monsterName = cu->id;
-            k.custom = cu->id;
-            k.prefix = cu->prefix;
-        } else {
-            k.monster = mi->type;
-            k.monsterName = mi->name;
-            k.prefix = mi->prefix;
-        }
-        const json::Value *id = v.get("id");
-        k.id = lower(id && id->type == json::Value::Str ? id->s : folder.filename().string());
-        if (k.id.empty() || k.id.size() > 32 || k.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
-            why = "\"id\" must be only letters, digits and _ (up to 32)";
-            return false;
-        }
-        const json::Value *nm = v.get("name");
-        k.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : k.id;
-        const json::Value *base = v.get("base");
-        k.base = base ? int(base->asInt(0)) : cu ? cu->costume : 0;
-        if (k.base < 0 || k.base > 3) {
-            std::fprintf(stderr, "[mods] skin %s: \"base\" %d outside 0..3, using 0\n", where.c_str(), k.base);
-            k.base = 0;
-        }
-        const json::Value *ai = v.get("ai");
-        k.ai = ai && ai->asBool(false);
-        k.mod = mod;
-        k.dir = folder;
-        return true;
-    }
-
-    // Makes k costume `index` (<PREFIX><index>): its own model files (m_files), the base's for the rest (m_alias), its PNGs (m_skinPngs).
-    // false (with the reason in `why`) changes nothing. afterBoot (addSkin): the sector table is fixed after scan, so the folder's
-    // .NGP/.PTR/.TEX/.RTX are left out (the base's are used) and a file that costume already had from the scan stays.
-    bool placeSkin(Skin &k, int index, bool afterBoot, std::string &why) {
-        namespace fs = std::filesystem;
-        std::error_code ec;
-        const std::string stem = k.prefix + std::to_string(index);
-        if (index > 99 || stem.size() > 8) {   // fileStatus stores names of up to 8 letters
-            why = "too many costumes for " + k.monsterName;
-            return false;
-        }
-        std::map<std::string, fs::path> own;   // extension -> file in the folder
-        std::vector<fs::path> pngs;
-        for (auto it = fs::recursive_directory_iterator(k.dir, ec); it != fs::recursive_directory_iterator(); it.increment(ec)) {
-            if (ec) break;
-            if (!it->is_regular_file(ec)) continue;
-            const std::string ext = key(it->path().extension().string());
-            if (ext == ".PNG") pngs.push_back(it->path());
-            else if (ext == ".NGP" || ext == ".PTR" || ext == ".TEX" || ext == ".RTX") {
-                auto &o = own[ext.substr(1)];
-                if (!o.empty()) std::fprintf(stderr, "[mods] skin %s/%s: two .%s, using %s\n", k.monsterName.c_str(), k.id.c_str(), ext.c_str() + 1, o.filename().string().c_str());
-                else o = it->path();
-            }
-        }
-        if (afterBoot && !own.empty()) {
-            std::fprintf(stderr, "[mods] skin %s/%s: model files in a skin added after boot are ignored until restart\n", k.monsterName.c_str(), k.id.c_str());
-            own.clear();
-        }
-        if (own.count("NGP") != own.count("PTR")) {
-            why = ".NGP and .PTR go together (the .PTR relocates the .NGP)";
-            return false;
-        }
-        k.index = index;
-        std::string brought;
-        for (const char *ext : {"NGP", "PTR", "TEX", "RTX"}) {
-            const std::string rel = "MON/" + stem + "." + ext;
-            if (const auto o = own.find(ext); o != own.end()) {
-                File &f = m_files[rel];
-                f.rel = rel;
-                f.host = o->second;
-                f.mod = k.mod;
-                f.size = fs::file_size(o->second, ec);
-                brought += std::string(brought.empty() ? "" : " ") + ext;
-            } else if (!afterBoot || !m_files.count(rel))
-                m_alias[rel] = "MON/" + k.prefix + std::to_string(k.base) + "." + ext;
-        }
-        for (const fs::path &p : pngs) m_skinPngs.push_back(SkinPng{stem, p, k.mod, k.monsterName + "/" + k.id + "/" + p.filename().string()});
-        std::fprintf(stderr, "[mods] skin %s/%s (\"%s\", %s) = costume %d (%s); base %d%s%s, %zu png\n", k.monsterName.c_str(), k.id.c_str(),
-                     k.name.c_str(), k.mod.c_str(), k.index, stem.c_str(), k.base, brought.empty() ? "" : "; from the folder: ", brought.c_str(), pngs.size());
-        return true;
-    }
-    // Same folder however it was written (case, "..", separators)
-    static std::filesystem::path sameDir(const std::filesystem::path &p) {
-        std::error_code ec;
-        std::filesystem::path c = std::filesystem::weakly_canonical(p, ec);
-        return ec ? p.lexically_normal() : c;
     }
 
     // mods/<mod>/monsters/<folder>/monster.json: {"id", "name", "base", "costume", "camera": {"from", "scale" (%)}, "narrator", "ai"}.

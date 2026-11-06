@@ -9,13 +9,11 @@
 // reference for the VU1 check) nor to the composited dust (assembled in VRAM). Particles (Scene::modParticle) and the screens' 3D monster (wotm_model.hpp) use the PNG.
 #pragma once
 #include <algorithm>
-#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
-#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,48 +33,13 @@ class Index {
 public:
     static Index &get() { static Index i; return i; }
 
-    // (FILE, rtx, texId) -> PNG. Built on the first lookup, after the mods/ scan (Registry::scan). Read on the window thread while
-    // add() runs on the EE thread: every access takes m_m, and the Png a caller got stays valid and unchanged (add retires a
-    // replaced entry instead of rewriting or freeing it).
+    // (FILE, rtx, texId) -> PNG. Built on the first lookup, after the mods/ scan (Registry::scan).
     const Png *find(const std::string &stem, bool rtx, uint32_t texId) {
-        std::lock_guard<std::mutex> lk(m_m);
-        buildLocked();
+        build();
         const auto it = m_png.find(Key{upper(stem), rtx, texId});
         return it == m_png.end() ? nullptr : &it->second;
     }
-    bool empty() {
-        std::lock_guard<std::mutex> lk(m_m);
-        buildLocked();
-        return m_png.empty();
-    }
-    // A skin PNG registered after boot (Registry::addSkin): same naming rules as the build's skin loop. Replaces the entry of the
-    // same (stem, rtx, texId), so an overwritten skin's new PNG wins.
-    void add(const mods::SkinPng &sp) {
-        std::lock_guard<std::mutex> lk(m_m);
-        buildLocked();
-        addSkinPngLocked(sp);
-    }
-    // A skin saved again (the character creator's overwrite): every entry of `stem` ("LIZARD4") is retired, never freed (a find()
-    // caller may still hold its Png), then `pngs` (the registry's skinPngs() of that stem) go in. A texture the new save dropped
-    // has no entry left, so the base costume's own texture serves. Bumps gen(): window-thread caches of decoded textures for that
-    // costume (the selection's models) reload.
-    void replaceSkin(const std::string &stem, const std::vector<mods::SkinPng> &pngs) {
-        {
-            std::lock_guard<std::mutex> lk(m_m);
-            buildLocked();
-            const std::string up = upper(stem);
-            // every entry of the stem, including another mod's PNG named for it (a fixed name for a run-time costume index: nonsense)
-            for (auto it = m_png.begin(); it != m_png.end();) {
-                const auto next = std::next(it);
-                if (it->first.stem == up) m_retired.push_back(m_png.extract(it));
-                it = next;
-            }
-            for (const mods::SkinPng &sp : pngs) addSkinPngLocked(sp);
-        }
-        m_gen.fetch_add(1, std::memory_order_release);
-    }
-    // Bumped by every replaceSkin: a cache of textures decoded through find() compares it and drops what it holds when it changed
-    uint32_t gen() const { return m_gen.load(std::memory_order_acquire); }
+    bool empty() { build(); return m_png.empty(); }
 
     // "lizard0_t0004.png" -> (LIZARD0, false, 4); "shell_rtx_t0012.png" -> (SHELL, true, 12)
     static bool parseName(const std::string &file, std::string &stem, bool &rtx, uint32_t &id) {
@@ -104,35 +67,14 @@ private:
         std::string stem; bool rtx; uint32_t id;
         bool operator<(const Key &o) const { return stem != o.stem ? stem < o.stem : rtx != o.rtx ? rtx < o.rtx : id < o.id; }
     };
-    std::mutex m_m;   // m_png, m_retired, m_built
     std::map<Key, Png> m_png;
-    std::vector<std::map<Key, Png>::node_type> m_retired;   // replaced entries: a find() caller may still be reading one
     bool m_built = false;
-    std::atomic<uint32_t> m_gen{0};
 
     static std::string upper(std::string s) {
         for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
         return s;
     }
-    // Skin PNGs (mods/<mod>/skins/<folder>/): the number in the name counts, the file is the skin's costume's. Accepts the name from
-    // the base costume's export ("lizard1_t0004.png", "lizard1_rtx_t0011.png") or just "t0004.png"/"rtx_t0011.png".
-    void addSkinPngLocked(const mods::SkinPng &sp) {
-        const std::string base = sp.host.filename().string();
-        std::string stem; bool rtx = false; uint32_t id = 0;
-        if (!parseName(base, stem, rtx, id) && !parseName("X_" + base, stem, rtx, id)) {
-            std::fprintf(stderr, "[mods] png %s: name without _tNNNN, ignored\n", sp.rel.c_str());
-            return;
-        }
-        if (upper(base).rfind("RTX_T", 0) == 0) rtx = true;
-        const Key k{sp.stem, rtx, id};
-        Png p{sp.host.string(), sp.mod, sp.rel};
-        if (const auto it = m_png.find(k); it != m_png.end()) {
-            if (it->second.host == p.host && it->second.mod == p.mod && it->second.rel == p.rel) return;
-            m_retired.push_back(m_png.extract(it));
-        }
-        m_png.emplace(k, std::move(p));
-    }
-    void buildLocked() {
+    void build() {
         const mods::Registry &reg = mods::Registry::get();
         if (m_built || !reg.ready()) return;
         m_built = true;
@@ -147,7 +89,21 @@ private:
             p.mod = f.mod;
             p.rel = rel;
         }
-        for (const mods::SkinPng &sp : reg.skinPngs()) addSkinPngLocked(sp);
+        // Skin PNGs (mods/<mod>/skins/<folder>/): the number in the name counts, the file is the skin's costume's. Accepts the name from
+        // the base costume's export ("lizard1_t0004.png", "lizard1_rtx_t0011.png") or just "t0004.png"/"rtx_t0011.png".
+        for (const mods::SkinPng &sp : reg.skinPngs()) {
+            const std::string base = sp.host.filename().string();
+            std::string stem; bool rtx = false; uint32_t id = 0;
+            if (!parseName(base, stem, rtx, id) && !parseName("X_" + base, stem, rtx, id)) {
+                std::fprintf(stderr, "[mods] png %s: name without _tNNNN, ignored\n", sp.rel.c_str());
+                continue;
+            }
+            if (upper(base).rfind("RTX_T", 0) == 0) rtx = true;
+            Png &p = m_png[Key{sp.stem, rtx, id}];
+            p.host = sp.host.string();
+            p.mod = sp.mod;
+            p.rel = sp.rel;
+        }
         // Portrait of custom monsters ("portrait" in monster.json): the image in the .RTX of the costume they use
         for (const mods::Custom &cu : reg.customs()) {
             if (cu.portrait.empty() || cu.portraitTex < 0) continue;

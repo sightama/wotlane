@@ -6,8 +6,7 @@
 //   of the index. The files have already been loaded by then (m_costume stays as it is).
 // - Randomly drawn AIs (endurance, Shell::RandomlySelectAI): the retail game draws only the monster and keeps whatever costume is in
 //   m_costume[2 + i]. For a monster with mod skins marked "ai": true, the costume is drawn from the retail one plus those skins.
-// setPlayer/setAI are installed whenever mods are on (a skin the character creator saves in game registers after boot); with no mod
-// skin they call the original with its arguments untouched. randomAI only with a boot-time skin marked "ai" (the creator's are not).
+// With no mod skins, no hook is installed.
 
 #include <random>
 
@@ -40,9 +39,8 @@ namespace wotm_skins
     {
         if (ctx->pc == kSetPlayer)
         {
-            const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 9), sound = soundSkin(type, skin);
-            if (sound != skin)   // a disc costume or an unknown index: the register stays exactly as the caller set it
-                ctx->r[9] = _mm_set_epi64x(0, static_cast<int64_t>(sound));
+            const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 9);
+            ctx->r[9] = _mm_set_epi64x(0, static_cast<int64_t>(soundSkin(type, skin)));
         }
         g_origSetPlayer(rdram, ctx, runtime);
     }
@@ -51,9 +49,8 @@ namespace wotm_skins
     {
         if (ctx->pc == kSetAI)
         {
-            const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 8), sound = soundSkin(type, skin);
-            if (sound != skin)
-                ctx->r[8] = _mm_set_epi64x(0, static_cast<int64_t>(sound));
+            const uint32_t type = GPR_U32(ctx, 6), skin = GPR_U32(ctx, 8);
+            ctx->r[8] = _mm_set_epi64x(0, static_cast<int64_t>(soundSkin(type, skin)));
         }
         g_origSetAI(rdram, ctx, runtime);
     }
@@ -94,7 +91,7 @@ namespace wotm_skins
 void wotmSkinsInstall(PS2Runtime &runtime)
 {
     using namespace wotm_skins;
-    if (Registry::get().dir().empty())   // mods off (WOTM_MODS=0)
+    if (Registry::get().skins().empty())
         return;
     if ((g_origSetPlayer = runtime.lookupFunction(kSetPlayer)))
         runtime.registerFunction(kSetPlayer, &setPlayer);
@@ -105,6 +102,5 @@ void wotmSkinsInstall(PS2Runtime &runtime)
         anyAi = anyAi || k.ai;
     if (anyAi && (g_origRandomAI = runtime.lookupFunction(kRandomAI)))
         runtime.registerFunction(kRandomAI, &randomAI);
-    if (!Registry::get().skins().empty())   // hooks on either way (a skin saved in game registers later); the line only with skins
-        std::fprintf(stderr, "[mods] skins in the fight: base costume sounds%s\n", anyAi ? ", random AIs drawn with skins" : "");
+    std::fprintf(stderr, "[mods] skins in the fight: base costume sounds%s\n", anyAi ? ", random AIs drawn with skins" : "");
 }
