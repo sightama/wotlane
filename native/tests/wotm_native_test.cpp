@@ -653,6 +653,52 @@ TEST(mods_custom_skin_first)
     fs::remove_all(root);
 }
 
+TEST(mods_add_custom_after_scan)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_addcustom";
+    fs::remove_all(root);
+    fs::create_directories(root / "Base" / "monsters" / "first");
+    { std::ofstream o(root / "Base" / "monsters" / "first" / "monster.json"); o << wotm::creator::monsterJson("first", "FIRST", "congar", 0, true, ""); }
+    wotm::mods::Registry reg;   // a fresh one, not get(): the singleton stays untouched
+    reg.scan(root);   // one custom from the scan, none from Creator
+    CHECK(reg.customs().size() == 1 && !reg.custom("kaiju"));
+    // the creator saves kaiju (togera, costume 1) and its skin
+    fs::create_directories(root / "Creator" / "monsters" / "kaiju");
+    fs::create_directories(root / "Creator" / "skins" / "kaiju");
+    {
+        std::ofstream o(root / "Creator" / "monsters" / "kaiju" / "monster.json");
+        o << wotm::creator::monsterJson("kaiju", "KAIJU", "togera", 1, false, "kaiju");
+        std::ofstream k(root / "Creator" / "skins" / "kaiju" / "skin.json");
+        k << wotm::creator::skinJson("kaiju", "kaiju", "KAIJU", 1);
+    }
+    std::string why;
+    const wotm::mods::Custom *cu = reg.addCustom(root / "Creator" / "monsters" / "kaiju", why);
+    CHECK(cu && cu->id == "kaiju" && cu->name == "KAIJU" && cu->type == 3 && cu->costume == 1 && cu->mod == "Creator" && cu->skin == "kaiju");
+    CHECK(reg.custom("kaiju") == cu && reg.customs().size() == 2 && reg.customs()[0].id == "first" && reg.customs()[1].id == "kaiju");
+    const wotm::mods::Skin *k = reg.addSkin(root / "Creator" / "skins" / "kaiju", why);
+    CHECK(k && k->custom == "kaiju" && k->monster == 3 && k->index == 4);
+    CHECK(cu && reg.customCostumes(*cu) == std::vector<int>({4, 1}));   // its "skin" first
+    // saved again (renamed, another costume): updated in place, same position
+    { std::ofstream o(root / "Creator" / "monsters" / "kaiju" / "monster.json"); o << wotm::creator::monsterJson("kaiju", "KAIJU II", "togera", 2, true, ""); }
+    const wotm::mods::Custom *again = reg.addCustom(root / "Creator" / "monsters" / "." / "kaiju" / "", why);
+    CHECK(again == cu && reg.customs().size() == 2 && reg.customs()[1].name == "KAIJU II" && reg.customs()[1].costume == 2);
+    const std::vector<wotm::mods::Custom> copy = reg.customsCopy();
+    CHECK(copy.size() == 2 && copy[1].name == "KAIJU II");
+    // the same id from another mod's folder is refused, naming the mod that has it
+    fs::create_directories(root / "Other" / "monsters" / "kaiju");
+    { std::ofstream o(root / "Other" / "monsters" / "kaiju" / "monster.json"); o << wotm::creator::monsterJson("kaiju", "X", "congar", 0, false, ""); }
+    CHECK(!reg.addCustom(root / "Other" / "monsters" / "kaiju", why) && why.find("Creator") != std::string::npos);
+    CHECK(reg.customs().size() == 2 && reg.custom("kaiju")->name == "KAIJU II");
+    // an invalid monster.json changes nothing
+    { std::ofstream o(root / "Creator" / "monsters" / "kaiju" / "monster.json"); o << R"({"id": "kaiju", "base": "nope"})"; }
+    CHECK(!reg.addCustom(root / "Creator" / "monsters" / "kaiju", why) && why.find("base") != std::string::npos);
+    CHECK(reg.customs().size() == 2 && reg.custom("kaiju")->name == "KAIJU II");
+    fs::create_directories(root / "Creator" / "monsters" / "empty");
+    CHECK(!reg.addCustom(root / "Creator" / "monsters" / "empty", why) && why.find("monster.json") != std::string::npos && reg.customs().size() == 2);
+    fs::remove_all(root);
+}
+
 int main()
 {
     for (const Test &t : tests())

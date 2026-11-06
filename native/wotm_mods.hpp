@@ -5,8 +5,8 @@
 // The game finds files through fileCdSearchFile (sector and size) and reads by sector; each mod file gets a range of
 // fake sectors beyond the end of any DVD (kFirstLsn), which the hooks (runtime/wotm_mods.inc) and the native sound reader
 // serve from here. The native layer (wotm_disc.hpp: movies, icon, photos and the save list's monster) looks things up here by name.
-// Host only: doesn't depend on the runtime. The scan runs once, before boot (scan); after that only addSkin (the character
-// creator's save) adds a skin, under m_lock, and never changes the files or their sectors.
+// Host only: doesn't depend on the runtime. The scan runs once, before boot (scan); after that only addSkin and addCustom (the
+// character creator's save) add a skin or a custom monster, under m_lock, and never change the files or their sectors.
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -303,17 +303,53 @@ public:
     }
 
     // ---- custom monsters ----
+    // addCustom runs on the EE thread and may grow m_customs (moving it) or rewrite one of its customs; no index changes (it appends
+    // or overwrites in place: the selection stores indices). customs(), custom(), customByType and the Custom pointers they give are
+    // for the EE thread (and boot), used right away; the window thread takes customsCopy().
     const std::vector<Custom> &customs() const { return m_customs; }
+    // A copy: the selection screen draws the custom list and texmods::Index reads the portraits on the window thread while addCustom
+    // may add to it
+    std::vector<Custom> customsCopy() const {
+        std::lock_guard<std::mutex> lk(m_lock);
+        return m_customs;
+    }
     const Custom *custom(const std::string &id) const {
         for (const Custom &c : m_customs)
             if (c.id == lower(id)) return &c;
         return nullptr;
     }
     // The custom that uses this type and costume (the first one), for the fight hooks
-    const Custom *customByType(int type, int costume = -1) const {
-        for (const Custom &c : m_customs)
+    const Custom *customByType(int type, int costume = -1) const { return customByType(m_customs, type, costume); }
+    // The same in a list of customs (customsCopy on the window thread)
+    static const Custom *customByType(const std::vector<Custom> &cs, int type, int costume = -1) {
+        for (const Custom &c : cs)
             if (c.type == type && (costume < 0 || c.costume == costume)) return &c;
         return nullptr;
+    }
+
+    // Registers one custom monster folder after the scan (the character creator's save): at the end of customs(), or in place when
+    // the same id came from this folder before (overwrite). No other custom moves. Returns the custom (valid until the next
+    // addCustom; EE thread), or nullptr with the reason in `why` and nothing changed. Its skins come after it (addSkin: a skin's
+    // "monster" has to be a registered custom).
+    const Custom *addCustom(const std::filesystem::path &folder, std::string &why) {
+        namespace fs = std::filesystem;
+        if (!m_ready) { why = "mods/ has not been scanned yet"; return nullptr; }
+        fs::path dir = folder.lexically_normal();
+        if (dir.filename().empty()) dir = dir.parent_path();   // "monsters/kaiju/"
+        Custom c;
+        const std::string mod = dir.parent_path().parent_path().filename().string();   // mods/<mod>/monsters/<folder>
+        if (!readCustom(dir, mod, c, why)) return nullptr;
+        std::lock_guard<std::mutex> lk(m_lock);
+        for (Custom &o : m_customs)
+            if (o.id == c.id) {
+                if (sameDir(o.dir) != sameDir(dir)) { why = "a monster " + c.id + " already comes from " + o.mod; return nullptr; }
+                o = c;
+                logCustom(o);
+                return &o;
+            }
+        m_customs.push_back(c);
+        logCustom(m_customs.back());
+        return &m_customs.back();
     }
     static bool isModLsn(uint32_t lsn) { return lsn >= kFirstLsn; }
     const File *findLsn(uint32_t lsn) const {
@@ -348,7 +384,7 @@ private:
     std::vector<SkinPng> m_skinPngs;
     std::vector<Custom> m_customs;
     std::atomic<bool> m_ready{false};
-    mutable std::mutex m_lock;   // m_alias, m_skins and m_skinPngs after the scan (addSkin); m_files and the rest are fixed by then
+    mutable std::mutex m_lock;   // m_alias, m_skins, m_skinPngs (addSkin) and m_customs (addCustom) after the scan; m_files and the rest are fixed by then
 
     // The custom's skin named by its "skin" key; nullptr when it has no such key or no such skin. Under m_lock (or in the scan).
     const Skin *ownSkin(const Custom &c) const {
@@ -417,7 +453,7 @@ private:
     }
 
     // One skin folder's skin.json -> k (everything but the index). false: the folder is not a skin, with the reason in `why`.
-    // Only reads the customs (fixed after scan), so addSkin calls it without m_lock.
+    // Only reads the customs, which change only on addSkin's own thread (EE, addCustom), so addSkin calls it without m_lock.
     bool readSkin(const std::filesystem::path &folder, const std::string &mod, Skin &k, std::string &why) const {
         const std::string where = mod + "/skins/" + folder.filename().string();
         const std::filesystem::path js = child(folder, "skin.json");
@@ -544,67 +580,12 @@ private:
                 if (e.is_directory(ec)) subs.push_back(e.path());
             std::sort(subs.begin(), subs.end());
             for (const fs::path &s : subs) {
-                const std::string where = m.filename().string() + "/monsters/" + s.filename().string();
-                const fs::path js = child(s, "monster.json");
-                std::string text;
-                if (!js.empty()) {
-                    std::ifstream in(js, std::ios::binary);
-                    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-                }
-                json::Value v;
-                std::string err;
-                if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
-                    std::fprintf(stderr, "[mods] monster %s ignored: %s\n", where.c_str(), js.empty() ? "no monster.json" : ("invalid monster.json: " + err).c_str());
-                    continue;
-                }
                 Custom c;
-                const json::Value *base = v.get("base");
-                const MonsterInfo *mi = base && base->type == json::Value::Str ? customBase(lower(base->s)) : nullptr;
-                if (!mi) {
-                    std::fprintf(stderr, "[mods] monster %s ignored: \"base\" is not an accepted type (togera, congar, ..., assboss, jelly, final)\n", where.c_str());
+                std::string why;
+                if (!readCustom(s, m.filename().string(), c, why)) {
+                    std::fprintf(stderr, "[mods] monster %s/monsters/%s ignored: %s\n", m.filename().string().c_str(), s.filename().string().c_str(), why.c_str());
                     continue;
                 }
-                c.type = mi->type;
-                c.typeName = mi->name;
-                c.prefix = mi->prefix;
-                const json::Value *id = v.get("id");
-                c.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
-                if (c.id.empty() || c.id.size() > 32 || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos ||
-                    std::isdigit(static_cast<unsigned char>(c.id[0]))) {
-                    std::fprintf(stderr, "[mods] monster %s ignored: \"id\" must be only letters, digits and _ (up to 32, starting with a letter)\n", where.c_str());
-                    continue;
-                }
-                const json::Value *nm = v.get("name");
-                c.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : c.id;
-                const json::Value *co = v.get("costume");
-                c.costume = co ? int(co->asInt(0)) : 0;
-                if (c.costume < 0 || c.costume > 3) c.costume = 0;
-                if (const json::Value *cam = v.get("camera"); cam && cam->type == json::Value::Obj) {
-                    if (const json::Value *f = cam->get("from"); f && f->type == json::Value::Str)
-                        if (const MonsterInfo *b = customBase(lower(f->s))) c.cameraFrom = kLongNames[b->type];
-                    if (const json::Value *sc = cam->get("scale"); sc && sc->type == json::Value::Int && sc->i >= 10 && sc->i <= 1000)   // in %
-                        c.cameraScale = float(sc->i) / 100.f;
-                }
-                if (const json::Value *na = v.get("narrator"); na && na->type == json::Value::Str) c.narrator = lower(na->s);
-                // "portrait": HUD portrait PNG (in the monster's folder or the mod root), replacing the <PREFIX><costume>.RTX image
-                // with texId "portraitTex" (default: ASSBOSS1's, 6; the last entry in the .RTX, 128x64)
-                if (const json::Value *po = v.get("portrait"); po && po->type == json::Value::Str && !po->s.empty()) {
-                    fs::path p = s / fs::u8path(po->s);
-                    if (!fs::is_regular_file(p, ec)) p = m / fs::u8path(po->s);
-                    const json::Value *pt = v.get("portraitTex");
-                    c.portraitTex = pt && pt->type == json::Value::Int ? int(pt->i) : (c.type == 13 && c.costume == 1 ? 6 : -1);
-                    if (!fs::is_regular_file(p, ec))
-                        std::fprintf(stderr, "[mods] monster %s: \"portrait\" %s not found\n", where.c_str(), po->s.c_str());
-                    else if (c.portraitTex < 0)
-                        std::fprintf(stderr, "[mods] monster %s: \"portrait\" without \"portraitTex\" (portrait texId in the .RTX)\n", where.c_str());
-                    else
-                        c.portrait = p;
-                }
-                const json::Value *ai = v.get("ai");
-                c.ai = ai && ai->asBool(false);
-                if (const json::Value *sk = v.get("skin"); sk && sk->type == json::Value::Str) c.skin = lower(sk->s);
-                c.mod = m.filename().string();
-                c.dir = s;
                 Custom &slot = byId[c.id];
                 if (!slot.id.empty())
                     std::fprintf(stderr, "[mods] monster %s: %s beats %s\n", c.id.c_str(), c.mod.c_str(), slot.mod.c_str());
@@ -612,10 +593,82 @@ private:
             }
         }
         for (auto &[id, c] : byId) {
-            std::fprintf(stderr, "[mods] custom monster %s (\"%s\", %s): base %s costume %d%s%s\n", c.id.c_str(), c.name.c_str(), c.mod.c_str(),
-                         c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera from ", c.cameraFrom.c_str());
+            logCustom(c);
             m_customs.push_back(c);
         }
+    }
+    static void logCustom(const Custom &c) {
+        std::fprintf(stderr, "[mods] custom monster %s (\"%s\", %s): base %s costume %d%s%s\n", c.id.c_str(), c.name.c_str(), c.mod.c_str(),
+                     c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera from ", c.cameraFrom.c_str());
+    }
+    // One monster folder's monster.json -> c. false: the folder is not a custom monster, with the reason in `why` (the scan logs it
+    // as "ignored"); a "portrait" problem only logs. Reads no member, so addCustom calls it without m_lock.
+    bool readCustom(const std::filesystem::path &folder, const std::string &mod, Custom &c, std::string &why) const {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path &s = folder, m = folder.parent_path().parent_path();   // mods/<mod>/monsters/<folder>
+        const std::string where = mod + "/monsters/" + s.filename().string();
+        const fs::path js = child(s, "monster.json");
+        std::string text;
+        if (!js.empty()) {
+            std::ifstream in(js, std::ios::binary);
+            text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+        json::Value v;
+        std::string err;
+        if (js.empty() || !json::parse(text, v, &err) || v.type != json::Value::Obj) {
+            why = js.empty() ? "no monster.json" : "invalid monster.json: " + err;
+            return false;
+        }
+        c = Custom{};
+        const json::Value *base = v.get("base");
+        const MonsterInfo *mi = base && base->type == json::Value::Str ? customBase(lower(base->s)) : nullptr;
+        if (!mi) {
+            why = "\"base\" is not an accepted type (togera, congar, ..., assboss, jelly, final)";
+            return false;
+        }
+        c.type = mi->type;
+        c.typeName = mi->name;
+        c.prefix = mi->prefix;
+        const json::Value *id = v.get("id");
+        c.id = lower(id && id->type == json::Value::Str ? id->s : s.filename().string());
+        if (c.id.empty() || c.id.size() > 32 || c.id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos ||
+            std::isdigit(static_cast<unsigned char>(c.id[0]))) {
+            why = "\"id\" must be only letters, digits and _ (up to 32, starting with a letter)";
+            return false;
+        }
+        const json::Value *nm = v.get("name");
+        c.name = nm && nm->type == json::Value::Str && !nm->s.empty() ? nm->s : c.id;
+        const json::Value *co = v.get("costume");
+        c.costume = co ? int(co->asInt(0)) : 0;
+        if (c.costume < 0 || c.costume > 3) c.costume = 0;
+        if (const json::Value *cam = v.get("camera"); cam && cam->type == json::Value::Obj) {
+            if (const json::Value *f = cam->get("from"); f && f->type == json::Value::Str)
+                if (const MonsterInfo *b = customBase(lower(f->s))) c.cameraFrom = kLongNames[b->type];
+            if (const json::Value *sc = cam->get("scale"); sc && sc->type == json::Value::Int && sc->i >= 10 && sc->i <= 1000)   // in %
+                c.cameraScale = float(sc->i) / 100.f;
+        }
+        if (const json::Value *na = v.get("narrator"); na && na->type == json::Value::Str) c.narrator = lower(na->s);
+        // "portrait": HUD portrait PNG (in the monster's folder or the mod root), replacing the <PREFIX><costume>.RTX image
+        // with texId "portraitTex" (default: ASSBOSS1's, 6; the last entry in the .RTX, 128x64)
+        if (const json::Value *po = v.get("portrait"); po && po->type == json::Value::Str && !po->s.empty()) {
+            fs::path p = s / fs::u8path(po->s);
+            if (!fs::is_regular_file(p, ec)) p = m / fs::u8path(po->s);
+            const json::Value *pt = v.get("portraitTex");
+            c.portraitTex = pt && pt->type == json::Value::Int ? int(pt->i) : (c.type == 13 && c.costume == 1 ? 6 : -1);
+            if (!fs::is_regular_file(p, ec))
+                std::fprintf(stderr, "[mods] monster %s: \"portrait\" %s not found\n", where.c_str(), po->s.c_str());
+            else if (c.portraitTex < 0)
+                std::fprintf(stderr, "[mods] monster %s: \"portrait\" without \"portraitTex\" (portrait texId in the .RTX)\n", where.c_str());
+            else
+                c.portrait = p;
+        }
+        const json::Value *ai = v.get("ai");
+        c.ai = ai && ai->asBool(false);
+        if (const json::Value *sk = v.get("skin"); sk && sk->type == json::Value::Str) c.skin = lower(sk->s);
+        c.mod = mod;
+        c.dir = s;
+        return true;
     }
     // MonsterLongNames (prefix of the .CHR in RST/ and of the files in MON/, lowercase), index = type
     static constexpr const char *kLongNames[] = {"null", "monkey", "robot", "lizard", "shogun", "mantis", "spider", "energy", "lava",

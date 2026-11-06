@@ -76,9 +76,15 @@ inline const wotm::mods::Custom *customOfSel(uint32_t sel)
 {
     return wotm::mods::monsterInfo(int(sel >> 5)) ? nullptr : wotm::mods::Registry::get().customByType(int(sel >> 5));
 }
-inline const char *monsterName(uint32_t sel)
+// The same in `cs` (Registry::customsCopy, on the window thread)
+inline const wotm::mods::Custom *customOfSel(uint32_t sel, const std::vector<wotm::mods::Custom> &cs)
 {
-    if (const wotm::mods::Custom *cu = customOfSel(sel))
+    return wotm::mods::monsterInfo(int(sel >> 5)) ? nullptr : wotm::mods::Registry::customByType(cs, int(sel >> 5));
+}
+// Name of `sel` in uppercase: the custom's `cu` when there is one
+inline const char *monsterName(uint32_t sel, const wotm::mods::Custom *cu)
+{
+    if (cu)
     {
         static thread_local char buf[48];
         std::snprintf(buf, sizeof buf, "%s", cu->name.c_str());
@@ -87,6 +93,7 @@ inline const char *monsterName(uint32_t sel)
     }
     return (sel >> 5) < 17 ? kMonsterNames[sel >> 5] : "";
 }
+inline const char *monsterName(uint32_t sel) { return monsterName(sel, customOfSel(sel)); }   // EE thread
 
 // State the window draws (copied under g_m)
 struct View
@@ -601,7 +608,7 @@ static void randomPick(uint8_t *rdram, int &col, int &costume, bool noMods)
     costume = l.n ? l.c[rng() % uint32_t(l.n)] : firstCostume(rdram, col);
 }
 
-// Custom monsters of the CUSTOM cell (mods/<mod>/monsters/, in Registry::customs())
+// Custom monsters of the CUSTOM cell (mods/<mod>/monsters/, in Registry::customs(); EE thread, the window draws from customsCopy)
 static int customCount() { return int(wotm::mods::Registry::get().customs().size()); }
 static const wotm::mods::Custom *customAt(int k)
 {
@@ -2551,11 +2558,11 @@ static void renderSelModels(const View &v, int w, int h)
     }
 }
 
-// Name of custom k in uppercase (the registry only changes before boot: the window reads it directly)
-static const char *customName(int k)
+// Name of custom k of `cs` (Registry::customsCopy: addCustom may grow the list on the EE thread) in uppercase
+static const char *customName(const std::vector<wotm::mods::Custom> &cs, int k)
 {
     static thread_local char buf[48];
-    const wotm::mods::Custom *cu = customAt(k);
+    const wotm::mods::Custom *cu = cs.empty() || k < 0 ? nullptr : &cs[size_t(k) % cs.size()];
     std::snprintf(buf, sizeof buf, "%s", cu ? cu->name.c_str() : "");
     for (char *q = buf; *q; ++q) *q = char(std::toupper(static_cast<unsigned char>(*q)));
     return buf;
@@ -2564,9 +2571,8 @@ static const char *customName(int k)
 // List of customs inside frame p: one line per custom (name; below it the mod, the skins and, on a CPU frame, "PLAYERS ONLY" for
 // those without "ai"), the highlighted one in the player's color. With more lines than fit, a window around the highlighted one
 // with arrows at the ends.
-static void drawCustomList(const View &v, int p, float x, float y, float boxW, float boxH, Color c)
+static void drawCustomList(const View &v, const std::vector<wotm::mods::Custom> &cs, int p, float x, float y, float boxW, float boxH, Color c)
 {
-    const auto &cs = wotm::mods::Registry::get().customs();
     const Color kName{246, 238, 220, 255}, kSub{205, 195, 175, 255}, kOff{120, 112, 100, 255};
     const float cx = x + boxW * 0.5f;
     outlined("CUSTOM MONSTERS", cx, y + boxH * 0.175f, boxH * 0.055f, boxW * 0.86f, kName);
@@ -2585,7 +2591,7 @@ static void drawCustomList(const View &v, int p, float x, float y, float boxW, f
         DrawRectangleRounded(row, 0.3f, 6, on ? Color{c.r, c.g, c.b, 225} : Color{40, 36, 32, 220});
         if (on)
             DrawRectangleRoundedLinesEx(row, 0.3f, 6, 3.f, kName);
-        outlined(customName(k), cx, ry + rowH * 0.35f, rowH * 0.40f, row.width * 0.92f, blocked ? kOff : kName);
+        outlined(customName(cs, k), cx, ry + rowH * 0.35f, rowH * 0.40f, row.width * 0.92f, blocked ? kOff : kName);
         const size_t skins = wotm::mods::Registry::get().customCostumes(cu).size() - 1;
         std::string sub = "MOD " + cu.mod;
         if (skins)
@@ -2617,6 +2623,7 @@ static void drawSelect(const View &v)
     // frame background like the game's: square, 80% opaque, from #1B0E0C at the top to #6F372B at the bottom
     const Color kBoxTop{0x1B, 0x0E, 0x0C, 204}, kBoxBottom{0x6F, 0x37, 0x2B, 204};
     loadPortraits();
+    const std::vector<wotm::mods::Custom> cs = wotm::mods::Registry::get().customsCopy();   // the View's indices are into this list
     for (int p = 0; p < v.selPlayers; ++p)
     {
         const Color c = v.selColor[p] >= 0 ? kPlayerColors[v.selColor[p] % kMaxPlayers] : kCpu;
@@ -2645,20 +2652,20 @@ static void drawSelect(const View &v)
         }
         if (v.selList[p])
         {
-            drawCustomList(v, p, x, y, boxW, boxH, c);
+            drawCustomList(v, cs, p, x, y, boxW, boxH, c);
             continue;
         }
         if (v.selCell[p] > 10 && !v.selReady[p] && (v.selMonster[p] >> 5) == 0)   // random, or custom while closed
         {
             const bool rnd = v.selCell[p] == kCellRandom;
-            const bool none = wotm::mods::Registry::get().customs().empty();
+            const bool none = cs.empty();
             outlined(rnd ? "?" : "+", cx, y + boxH * 0.42f, boxH * 0.34f, boxW * 0.8f, Color{c.r, c.g, c.b, 255});
             const float nameY = y + boxH * 0.76f;
             outlined(rnd ? "RANDOM" : "CUSTOM", cx, nameY, boxH * 0.085f, boxW * 0.72f, kName);
             outlined("<", x + boxW * 0.08f, nameY, boxH * 0.09f, boxW, c);
             outlined(">", x + boxW * 0.92f, nameY, boxH * 0.09f, boxW, c);
             char sub[48];
-            const size_t nc = wotm::mods::Registry::get().customs().size();
+            const size_t nc = cs.size();
             std::snprintf(sub, sizeof sub, nc == 1 ? "1 CUSTOM MONSTER" : "%zu CUSTOM MONSTERS", nc);
             outlined(rnd ? "MONSTER AND COSTUME AT RANDOM" : none ? "NO CUSTOM MONSTERS IN MODS" : sub, cx,
                      y + boxH * 0.855f, boxH * 0.05f, boxW * 0.86f, Color{205, 195, 175, 255});
@@ -2676,7 +2683,7 @@ static void drawSelect(const View &v)
             EndBlendMode();
             BeginBlendMode(BLEND_CUSTOM_SEPARATE);
         }
-        const char *name = v.selCustom[p] >= 0 ? customName(v.selCustom[p]) : monsterName(v.selMonster[p]);
+        const char *name = v.selCustom[p] >= 0 ? customName(cs, v.selCustom[p]) : monsterName(v.selMonster[p], customOfSel(v.selMonster[p], cs));
         const float nameY = y + boxH * (v.selNoCostume ? 0.82f : 0.76f);
         const uint32_t lmon = v.selMonster[p] >> 5;
         const Texture2D *logo = v.selCustom[p] < 0 && lmon < std::size(g_logo) && g_logo[lmon].id ? &g_logo[lmon] : nullptr;

@@ -149,7 +149,7 @@ private:
         }
         for (const mods::SkinPng &sp : reg.skinPngs()) addSkinPngLocked(sp);
         // Portrait of custom monsters ("portrait" in monster.json): the image in the .RTX of the costume they use
-        for (const mods::Custom &cu : reg.customs()) {
+        for (const mods::Custom &cu : reg.customsCopy()) {   // a copy: this runs on the window thread, addCustom on the EE thread
             if (cu.portrait.empty() || cu.portraitTex < 0) continue;
             Png &p = m_png[Key{upper(cu.prefix + std::to_string(cu.costume)), true, uint32_t(cu.portraitTex)}];
             p.host = cu.portrait.string();
