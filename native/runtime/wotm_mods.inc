@@ -9,7 +9,8 @@
 // push back what comes after; the level-load log (the "[wotm]" lines at the end of the load, wotm_overrides.cpp) shows the spare RAM
 // and the texIds used. With WOTM_HIGHRAM=0, and for the other files (stage, SHELL, sound banks), the game loads into fixed-size regions
 // and a larger file may overwrite what comes after (the log warns). WOTM_MODS=<folder> changes the folder (default: mods/ next to the
-// ELF, otherwise the repo's); =0 turns mods off.
+// ELF, otherwise the repo's); =0 turns mods off (no hooks). With mods on the hooks are installed even when the folder is empty or
+// missing (a skin saved by the character creator registers after boot); with nothing registered they only call the original.
 #include "wotm_mods.hpp"
 #include <set>
 
@@ -119,7 +120,8 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
     }
     else
     {
-        // mods/ with that exact name: on Windows the path "mods" next to the ELF in the disc folder resolves to the game's MOD/ (the IRXs)
+        // mods/ with that exact name: Windows paths ignore case, so a "MODS" or "Mods" folder would also answer to "mods"; the
+        // folder must be named exactly mods (the disc folder's own MOD/, the IRXs, is another name and never matches)
         auto modsIn = [](const fs::path &parent) {
             std::error_code ec;
             for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))
@@ -135,8 +137,11 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
             dir = fs::path(repo) / "mods";
     }
     const size_t n = Registry::get().scan(dir);
-    if (n == 0)
-        return;   // no mod files: no hooks, the game reads the disc as always
+    // Hooks on whenever mods are on, even with an empty or missing folder: a skin the character creator saves in game
+    // (Registry::addSkin) needs aliasOf in the search. With nothing registered both hooks are pure pass-throughs: aliasOf returns
+    // the name itself, find() returns nullptr (no state, no log) and no disc LSN reaches the mod range.
+    if (Registry::get().dir().empty())
+        return;
     g_origSearch = runtime.lookupFunction(wotm::fn::fileCdSearchFile__FP10sceCdlFILEPc);
     g_origCdRead = runtime.lookupFunction(wotm::fn::sceCdRead);
     if (!g_origSearch || !g_origCdRead)
@@ -149,5 +154,8 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
     std::string names;
     for (const std::string &m : Registry::get().modNames())
         names += (names.empty() ? "" : ", ") + m;
-    std::fprintf(stderr, "[mods] %zu file(s) from %s in %s\n", n, names.c_str(), dir.string().c_str());
+    if (n == 0)
+        std::fprintf(stderr, "[mods] no mod files in %s (hooks on for skins saved in game)\n", dir.string().c_str());
+    else
+        std::fprintf(stderr, "[mods] %zu file(s) from %s in %s\n", n, names.c_str(), dir.string().c_str());
 }
