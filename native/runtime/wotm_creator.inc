@@ -11,7 +11,11 @@ namespace wotm_creator
 namespace cr = wotm::creator;
 using wotm::mods::kMonsters;
 
-enum Row { RMonster, RCostume, RTexture, RHue, RSat, RBright, RName, RSave, RBack, kRows };
+// The kinds of row; which ones the panel shows, and in what order, depends on TYPE (rowsOf)
+enum Row { RType, RMonster, RCostume, RTexture, RHue, RSat, RBright, RName, RCpu, RSave, RBack, kRowKinds };
+constexpr Row kSkinRows[] = {RType, RMonster, RCostume, RTexture, RHue, RSat, RBright, RName, RSave, RBack};
+constexpr Row kMonsterRows[] = {RType, RMonster, RCostume, RTexture, RHue, RSat, RBright, RName, RCpu, RSave, RBack};
+constexpr int kMaxRows = int(std::size(kMonsterRows));   // the longer list (the panel's layout is fixed on it)
 struct Tint { float hue = 0.f, sat = 0.f, bright = 0.f; bool zero() const { return hue == 0.f && sat == 0.f && bright == 0.f; } };
 constexpr int kMaxTex = 32;   // texture groups per costume the creator can tint (more are left as they are, with a log line)
 constexpr const char *kLetters = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-";   // what up and down roll through
@@ -19,10 +23,12 @@ constexpr int kLetterCount = int(std::char_traits<char>::length(kLetters));
 constexpr int kMonsterCount = int(std::size(kMonsters));
 constexpr int kTogera = 2;   // kMonsters[2]: the monster the panel opens on
 static_assert(kMonsters[kTogera].type == 3, "kMonsters[kTogera] must be togera");
-constexpr const char *kHints[kRows] = {
+constexpr const char *kHints[kRowKinds] = {
+    "MAKE A NEW COSTUME OR A NEW MONSTER",
     "WHICH MONSTER TO RECOLOR", "THE COSTUME WHOSE TEXTURES ARE THE STARTING POINT", "WHICH PART OF THE SKIN THE THREE SLIDERS BELOW CHANGE",
     "TURNS THE COLORS OF THIS TEXTURE AROUND THE WHEEL", "GRAYER TO THE LEFT, STRONGER TO THE RIGHT", "DARKER TO THE LEFT, LIGHTER TO THE RIGHT",
-    "THE COSTUME NAME IN THE SELECTION. X TO EDIT", "WRITES THE SKIN TO MODS/CREATOR/SKINS AND ADDS IT TO THE COSTUME LIST", "LEAVES WITHOUT SAVING"};
+    "THE COSTUME NAME IN THE SELECTION. X TO EDIT", "WHETHER COMPUTER PLAYERS MAY PICK IT",
+    "WRITES THE SKIN TO MODS/CREATOR/SKINS AND ADDS IT TO THE COSTUME LIST", "LEAVES WITHOUT SAVING"};
 // on the keyboard X is Space, which types a space while editing: Enter (or Esc) ends it there
 constexpr const char *kNameHint = "LEFT AND RIGHT MOVE, UP AND DOWN CHANGE THE LETTER, ENTER OR X DONE";
 
@@ -38,14 +44,30 @@ struct State
     char name[cr::kNameLen + 1] = {};
     int cursor = 0;
     bool editing = false;
-    int row = RMonster;
-    int lastRow = RMonster;     // the row at the last leaveSaveCheck (moving off SAVE cancels OVERWRITE?)
+    bool monsterType = false;   // TYPE: false SKIN, true MONSTER
+    bool cpu = false;           // MONSTER: CPU CAN USE
+    int row = 0;                // position in rowsOf(*this)
+    int lastRow = RType;        // the row kind at the last leaveSaveCheck (moving off SAVE cancels OVERWRITE?)
     char saveValue[24] = {};    // "", "SAVED", "OVERWRITE?", "NAME IN USE", "MODS ARE OFF", "NO MODS FOLDER", "CANNOT WRITE",
-                                // "NOT FOUND", kSavedRestart
+                                // "NOT FOUND", kSavedRestart, "NOT YET" (MONSTER, until its save exists)
     double saveUntil = 0.0;     // GetTime() until which saveValue shows (0: until the next change)
     bool confirmOverwrite = false;
 };
 static_assert(std::is_trivially_copyable_v<State>, "State is copied into View every frame under g_m");
+// The rows TYPE shows, in panel order; State::row is a position in it
+struct RowList { const Row *row; int n; };
+static RowList rowsOf(const State &s)
+{
+    if (s.monsterType) return {kMonsterRows, int(std::size(kMonsterRows))};
+    return {kSkinRows, int(std::size(kSkinRows))};
+}
+// The kind of the row at position pos of s's list (RBack outside it)
+static Row rowAt(const State &s, int pos)
+{
+    const RowList l = rowsOf(s);
+    return pos >= 0 && pos < l.n ? l.row[pos] : RBack;
+}
+static Row rowKind(const State &s) { return rowAt(s, s.row); }
 // The SAVE row's messages are drawn in the game font: it has '?' and '.', but no ',' could be confirmed in its atlas
 constexpr const char kSavedRestart[] = "SAVED. RESTART TO USE";   // the longest message
 static_assert(sizeof(State::saveValue) >= sizeof(kSavedRestart), "saveValue must hold the longest message and its NUL");
@@ -75,10 +97,11 @@ static std::string monsterLabel(int monster)
     for (char &c : name) c = char(std::toupper(static_cast<unsigned char>(c)));
     return name;
 }
-// "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> exists; the monster's name is cut so " N" fits the 11 letters
-static void defaultName(State &s)
+// "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> exists (MONSTER: or mods/Creator/monsters/<id>, the custom's own folder;
+// its skin takes skins/<id> too); the monster's name is cut so " N" fits the 11 letters
+static std::string defaultNameFor(int monster, bool monsterType)
 {
-    std::string mon = kMonsters[s.monster].name;
+    std::string mon = kMonsters[std::clamp(monster, 0, kMonsterCount - 1)].name;
     for (char &c : mon) c = char(std::toupper(static_cast<unsigned char>(c)));
     const std::filesystem::path &mods = wotm::mods::Registry::get().dir();
     std::string name;
@@ -86,10 +109,18 @@ static void defaultName(State &s)
     {
         const std::string num = " " + std::to_string(n);
         name = mon.substr(0, size_t(cr::kNameLen) - num.size()) + num;
-        std::error_code ec;
-        if (mods.empty() || !std::filesystem::exists(mods / cr::kMod / "skins" / cr::idFromName(name), ec)) break;
+        if (mods.empty()) break;
+        const std::string id = cr::idFromName(name);
+        std::error_code ec, ec2;
+        const bool used = std::filesystem::exists(mods / cr::kMod / "skins" / id, ec) ||
+                          (monsterType && std::filesystem::exists(mods / cr::kMod / "monsters" / id, ec2));
+        if (!used) break;
     }
-    std::snprintf(s.name, sizeof s.name, "%s", name.c_str());
+    return name;
+}
+static void defaultName(State &s)
+{
+    std::snprintf(s.name, sizeof s.name, "%s", defaultNameFor(s.monster, s.monsterType).c_str());
     s.cursor = 0;
 }
 // A new monster or costume: the tints start over (the textures are another set)
@@ -107,7 +138,8 @@ static void resetFor(State &s, bool monsterChanged)
 // X on CREATE: the panel opens on its first row; the last monster, costume and tints stay (reopening continues the work)
 static void open()
 {
-    g_st.row = g_st.lastRow = RMonster;
+    g_st.row = 0;
+    g_st.lastRow = rowKind(g_st);
     g_st.editing = false;
     setSave(g_st, "");
     g_st.saveUntil = 0.0;
@@ -197,12 +229,13 @@ static bool typeKeys(State &s)
 // since the mouse moves the row before input() runs
 static void leaveSaveCheck(State &s)
 {
-    if (s.row != s.lastRow && s.lastRow == RSave)
+    const Row kind = rowKind(s);
+    if (kind != s.lastRow && s.lastRow == RSave)
     {
         s.confirmOverwrite = false;
         if (s.saveUntil == 0.0) setSave(s, "");
     }
-    s.lastRow = s.row;
+    s.lastRow = kind;
 }
 static float stepClamp(float v, int dir, float step, float lo, float hi) { return std::clamp(v + float(dir) * step, lo, hi); }
 
@@ -230,8 +263,21 @@ static void editInput(State &s, const bool e[kPanelActs], uint8_t *rdram, R5900C
 // Left or right on the current row: steps its value. Returns true when something changed.
 static bool adjust(State &s, int dir)
 {
-    switch (s.row)
+    const Row kind = rowKind(s);
+    switch (kind)
     {
+    case RType:
+    {
+        // the monster, costume and tints stay (a skin can become a monster); the name follows only while it is the old default
+        const bool wasDefault = std::string(s.name) == defaultNameFor(s.monster, s.monsterType);
+        s.monsterType = !s.monsterType;
+        s.row = std::clamp(s.row, 0, rowsOf(s).n - 1);
+        if (wasDefault) defaultName(s);
+        return true;
+    }
+    case RCpu:
+        s.cpu = !s.cpu;
+        return true;
     case RMonster:
         s.monster = (s.monster + dir + kMonsterCount) % kMonsterCount;
         resetFor(s, true);
@@ -254,13 +300,13 @@ static bool adjust(State &s, int dir)
     case RBright:
     {
         Tint &t = s.tint[std::clamp(s.tex, 0, kMaxTex - 1)];
-        if (s.row == RHue)
+        if (kind == RHue)
         {
             t.hue += float(dir) * 15.f;   // wraps inside -180..+180 (both ends are the same hue: +195 is -165)
             if (t.hue > 180.f) t.hue -= 360.f;
             if (t.hue < -180.f) t.hue += 360.f;
         }
-        else if (s.row == RSat) t.sat = stepClamp(t.sat, dir, 10.f, -100.f, 100.f);
+        else if (kind == RSat) t.sat = stepClamp(t.sat, dir, 10.f, -100.f, 100.f);
         else t.bright = stepClamp(t.bright, dir, 10.f, -60.f, 60.f);
         ++s.tintGen;
         return true;
@@ -286,26 +332,35 @@ static bool input(const bool e[kPanelActs], uint8_t *rdram, R5900Context *ctx, P
         editInput(s, e, rdram, ctx, runtime);
         return false;
     }
-    if (e[PBack] || (e[POk] && s.row == RBack))
+    const Row kind = rowKind(s);
+    if (e[PBack] || (e[POk] && kind == RBack))
     {
         panelSfx(rdram, ctx, runtime, 6);
         return true;
     }
     if (e[PUp] || e[PDown])
     {
-        s.row = (s.row + (e[PDown] ? 1 : kRows - 1)) % kRows;
+        const int n = rowsOf(s).n;
+        s.row = (std::clamp(s.row, 0, n - 1) + (e[PDown] ? 1 : n - 1)) % n;
         panelSfx(rdram, ctx, runtime, e[PDown] ? 4 : 2);
     }
-    else if (e[POk] && s.row == RName)
+    else if (e[POk] && kind == RName)
     {
         s.editing = true;
         padName(s);
         s.cursor = 0;
         panelSfx(rdram, ctx, runtime, 8);
     }
-    else if (e[POk] && s.row == RSave)
+    else if (e[POk] && kind == RSave)
     {
-        save(s, false);   // the files, the registry, OVERWRITE? and the errors
+        if (s.monsterType)
+        {   // the custom monster's save is not written yet: nothing is saved (above all, no skin by mistake)
+            setSave(s, "NOT YET");
+            s.saveUntil = 0.0;
+            std::fprintf(stderr, "[creator] saving a monster is not done yet: nothing written\n");
+        }
+        else
+            save(s, false);   // the files, the registry, OVERWRITE? and the errors
         // OK only when it saved; OVERWRITE? is a question (the cursor sound); an error, the back sound
         const bool saved = std::strncmp(s.saveValue, "SAVED", 5) == 0;
         panelSfx(rdram, ctx, runtime, saved ? 8 : std::strcmp(s.saveValue, "OVERWRITE?") == 0 ? 4 : 6);

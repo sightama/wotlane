@@ -694,7 +694,7 @@ static bool panelInput(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     // character creator (screen 2's CREATE): its own rows (wotm_creator.inc)
     const bool creator = g_where == InMenu && g_creatorOpen;
     int &selRef = creator ? wotm_creator::g_st.row : moves ? g_moveSel : training ? g_trainSel : g_optSel[g_tab];
-    const int selRows = creator ? int(wotm_creator::kRows) : moves ? nMoves : training ? int(kTrainRows) : tabRows(g_tab);
+    const int selRows = creator ? wotm_creator::rowsOf(wotm_creator::g_st).n : moves ? nMoves : training ? int(kTrainRows) : tabRows(g_tab);
     // mouse (step 9): hovering picks the row; left click on a tab switches to it, on L1/R1 moves one tab, on the row confirms (on the
     // value's arrows, decreases or increases); right click goes back. The wheel comes in as up/down (readPanel).
     {
@@ -1394,12 +1394,13 @@ static PanelLayout panelLayout(int tab, bool preview, bool training = false, boo
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;
     if (creator)
     {
-        // the VIDEO tab's columns and step, starting where TRAINING OPTIONS does (no tabs); the monster's box on the right, taller than
-        // wide, centered on the 9 rows
-        const float y0 = lineH * 1.85f, step = lineH * kVideoStep, bw = W * 0.30f, bh = bw * 1.1f;
-        const float mid = y0 + step * float(wotm_creator::kRows - 1) * 0.5f;
-        return {step, 46.f, W * 0.06f, W * 0.51f, W * 0.12f, W * 0.645f, int(wotm_creator::kRows), true,
-                Rectangle{W * 0.665f, mid - bh * 0.5f, bw, bh}, y0};
+        // the VIDEO tab's columns, starting where TRAINING OPTIONS does (no tabs) with its step (the 11 rows of TYPE = MONSTER fit; at
+        // the VIDEO step they ran off the bottom); the monster's box on the right, taller than wide, centered on the longer list, so
+        // neither the rows nor the box move when TYPE changes
+        const int rows = wotm_creator::kMaxRows;
+        const float y0 = lineH * 1.85f, step = lineH * 0.63f, bw = W * 0.30f, bh = bw * 1.1f;
+        const float mid = y0 + step * float(rows - 1) * 0.5f;
+        return {step, 46.f, W * 0.06f, W * 0.51f, W * 0.12f, W * 0.645f, rows, true, Rectangle{W * 0.665f, mid - bh * 0.5f, bw, bh}, y0};
     }
     if (training)   // no tabs: the title and the 11 rows, tighter, starting higher up
         return {lineH * 0.63f, 46.f, W * 0.08f, W * 0.66f, W * 0.20f, W * 0.97f, int(kTrainRows), false, {}, lineH * 1.85f};
@@ -1566,16 +1567,30 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         if (s.editing)   // all spaces: npos + 1 wraps to 0, so every slot is a dot
             for (size_t k = name.find_last_not_of(' ') + 1; k < name.size(); ++k) name[k] = '.';
         const wc::Tint &tn = s.tint[std::clamp(s.tex, 0, wc::kMaxTex - 1)];
-        rows[n++] = PRow{"MONSTER", wc::monsterLabel(s.monster), wc::kHints[wc::RMonster], true, KOpt};
-        rows[n++] = PRow{"COSTUME", std::to_string(s.costume + 1), wc::kHints[wc::RCostume], true, KOpt};
-        rows[n++] = PRow{"TEXTURE", wc::texLabel(s), wc::kHints[wc::RTexture], s.texCount > 1, KOpt};
-        rows[n++] = PRow{"HUE", num(tn.hue, " DEG"), wc::kHints[wc::RHue], true, KOpt};
-        rows[n++] = PRow{"SATURATION", num(tn.sat, ""), wc::kHints[wc::RSat], true, KOpt};
-        rows[n++] = PRow{"BRIGHTNESS", num(tn.bright, ""), wc::kHints[wc::RBright], true, KOpt};
-        rows[n++] = PRow{"NAME", name, s.editing ? wc::kNameHint : wc::kHints[wc::RName], s.editing, KOpt};
-        if (s.editing && !name.empty()) rows[n - 1].cursor = std::clamp(s.cursor, 0, int(name.size()) - 1);
-        rows[n++] = PRow{"SAVE", s.saveValue, wc::kHints[wc::RSave], false, KReset};
-        rows[n++] = PRow{"BACK", "", wc::kHints[wc::RBack], false, KReset};
+        const wc::RowList list = wc::rowsOf(s);   // in TYPE's order: v.opt is a position in it
+        for (int i = 0; i < list.n; ++i)
+        {
+            const wc::Row kind = list.row[i];
+            const char *hint = wc::kHints[kind];
+            switch (kind)
+            {
+            case wc::RType: rows[n++] = PRow{"TYPE", s.monsterType ? "MONSTER" : "SKIN", hint, true, KOpt}; break;
+            case wc::RMonster: rows[n++] = PRow{s.monsterType ? "BASE" : "MONSTER", wc::monsterLabel(s.monster), hint, true, KOpt}; break;
+            case wc::RCostume: rows[n++] = PRow{"COSTUME", std::to_string(s.costume + 1), hint, true, KOpt}; break;
+            case wc::RTexture: rows[n++] = PRow{"TEXTURE", wc::texLabel(s), hint, s.texCount > 1, KOpt}; break;
+            case wc::RHue: rows[n++] = PRow{"HUE", num(tn.hue, " DEG"), hint, true, KOpt}; break;
+            case wc::RSat: rows[n++] = PRow{"SATURATION", num(tn.sat, ""), hint, true, KOpt}; break;
+            case wc::RBright: rows[n++] = PRow{"BRIGHTNESS", num(tn.bright, ""), hint, true, KOpt}; break;
+            case wc::RName:
+                rows[n++] = PRow{"NAME", name, s.editing ? wc::kNameHint : hint, s.editing, KOpt};
+                if (s.editing && !name.empty()) rows[n - 1].cursor = std::clamp(s.cursor, 0, int(name.size()) - 1);
+                break;
+            case wc::RCpu: rows[n++] = PRow{"CPU CAN USE", s.cpu ? "YES" : "NO", hint, true, KOpt}; break;
+            case wc::RSave: rows[n++] = PRow{"SAVE", s.saveValue, hint, false, KReset}; break;
+            case wc::RBack: rows[n++] = PRow{"BACK", "", hint, false, KReset}; break;
+            case wc::kRowKinds: break;
+            }
+        }
     }
     else if (v.training)
         for (int i = 0; i < kTrainRows; ++i)
@@ -1772,7 +1787,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         }
         else if (kind == KReset)
             wotm_legend::post({{ok, {}, "SELECT"}, {back, {}, "BACK"}}, la, bar);
-        else if (v.opt == wotm_creator::RName)
+        else if (wotm_creator::rowAt(v.creatorState, v.opt) == wotm_creator::RName)
             wotm_legend::post({{ok, {}, "EDIT"}, {back, {}, "BACK"}}, la, bar);
         else
             wotm_legend::post({{left, right, "CHANGE"}, {back, {}, "BACK"}}, la, bar);
@@ -2010,7 +2025,7 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
     }
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
     const PanelLayout L = panelLayout(tab, v.preview, v.training || v.moves, v.creator);
-    const int n = v.creator ? int(wotm_creator::kRows) : v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
+    const int n = v.creator ? wotm_creator::rowsOf(v.creatorState).n : v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
     const int i = int(std::floor((Y - L.y0) / L.step + 0.5f));
     if (i < 0 || i >= L.vis || first + i >= n || X < W * 0.03f || X > L.rowRight)
         return;
