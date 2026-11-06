@@ -73,10 +73,11 @@ finished pixels, with a timeout that skips the portrait instead of hanging.
 
 ## Section 4: live registration
 
-A new `Registry::addCustom(folder, why)`, like step 1's `addSkin`, reads the `monster.json`, adds the custom under `m_lock`, and
-registers its skin through `addSkin`. The selection screen's CUSTOM list then shows it without a restart. Readers of `customs()`
-that run on other threads get the same locking `skins()` got in step 1. If live registration is refused, SAVE shows
-`SAVED. RESTART TO USE`.
+A new `Registry::addCustom(folder, why)`, like step 1's `addSkin`, reads the `monster.json` and adds the custom under `m_lock`; the
+creator's save then registers the custom's skin with `addSkin` (the skin's `"monster"` has to name a registered custom). The
+selection screen's CUSTOM list then shows it without a restart. Readers of `customs()` that run on other threads get the same
+locking `skins()` got in step 1. If live registration is refused, SAVE shows `SAVED. RESTART TO USE`. A re-save that changes the
+base is one such refusal: the custom's skins keep costume indices chosen for the old monster type.
 
 ## Section 5: scripted run
 

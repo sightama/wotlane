@@ -122,7 +122,7 @@ struct View
     bool selNoCostume = false;             // elimination: no costume choice
     bool selReady[kMaxPanels] = {};
     int selCell[kMaxPanels] = {};         // monster bar cell: 1..10 column, kCellRandom, kCellCustom
-    int selCustom[kMaxPanels] = {};       // custom shown in the frame (index into Registry::customs(); -1 none)
+    int selCustom[kMaxPanels] = {};       // custom shown in the frame (index into Registry::customs() or customsCopy(): same order; -1 none)
     bool selList[kMaxPanels] = {};        // custom list open in the frame
     int selListHl[kMaxPanels] = {};       // highlighted line of the list
     bool selCpu[kMaxPanels] = {};         // CPU frame (the list marks customs without "ai")
@@ -1515,7 +1515,7 @@ static void fillCostume(View &v, int p, const CostumeList &l)
     std::snprintf(v.selCostumeName[p], sizeof v.selCostumeName[p], "%s", costumeName(mon, v.selCostume[p]).c_str());
 }
 
-// Custom `k` (index into Registry::customs()) in frame p of the View, with costume `costume` (the monster and its costume range);
+// Custom `k` (index into Registry::customs() or customsCopy(): same order) in frame p of the View, with costume `costume` (the monster and its costume range);
 // does nothing when k is outside the list
 static void fillCustom(View &v, int p, int k, int costume)
 {

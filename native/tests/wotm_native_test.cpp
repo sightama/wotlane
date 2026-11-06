@@ -689,11 +689,21 @@ TEST(mods_add_custom_after_scan)
     fs::create_directories(root / "Other" / "monsters" / "kaiju");
     { std::ofstream o(root / "Other" / "monsters" / "kaiju" / "monster.json"); o << wotm::creator::monsterJson("kaiju", "X", "congar", 0, false, ""); }
     CHECK(!reg.addCustom(root / "Other" / "monsters" / "kaiju", why) && why.find("Creator") != std::string::npos);
-    CHECK(reg.customs().size() == 2 && reg.custom("kaiju")->name == "KAIJU II");
+    CHECK(reg.customs().size() == 2 && reg.custom("kaiju") && reg.custom("kaiju")->name == "KAIJU II");
+    // an id the boot scan registered from another mod is refused too
+    fs::create_directories(root / "Other" / "monsters" / "first");
+    { std::ofstream o(root / "Other" / "monsters" / "first" / "monster.json"); o << wotm::creator::monsterJson("first", "Y", "congar", 0, false, ""); }
+    CHECK(!reg.addCustom(root / "Other" / "monsters" / "first", why) && why.find("Base") != std::string::npos);
+    CHECK(reg.customs().size() == 2 && reg.custom("first") && reg.custom("first")->name == "FIRST");
+    // a re-save that changes the base is refused live (its skins keep indices of the old type)
+    { std::ofstream o(root / "Creator" / "monsters" / "kaiju" / "monster.json"); o << wotm::creator::monsterJson("kaiju", "KAIJU C", "congar", 0, false, ""); }
+    why.clear();
+    CHECK(!reg.addCustom(root / "Creator" / "monsters" / "kaiju", why) && !why.empty());
+    CHECK(reg.custom("kaiju") && reg.custom("kaiju")->type == 3 && reg.custom("kaiju")->name == "KAIJU II");
     // an invalid monster.json changes nothing
     { std::ofstream o(root / "Creator" / "monsters" / "kaiju" / "monster.json"); o << R"({"id": "kaiju", "base": "nope"})"; }
     CHECK(!reg.addCustom(root / "Creator" / "monsters" / "kaiju", why) && why.find("base") != std::string::npos);
-    CHECK(reg.customs().size() == 2 && reg.custom("kaiju")->name == "KAIJU II");
+    CHECK(reg.customs().size() == 2 && reg.custom("kaiju") && reg.custom("kaiju")->name == "KAIJU II");
     fs::create_directories(root / "Creator" / "monsters" / "empty");
     CHECK(!reg.addCustom(root / "Creator" / "monsters" / "empty", why) && why.find("monster.json") != std::string::npos && reg.customs().size() == 2);
     fs::remove_all(root);

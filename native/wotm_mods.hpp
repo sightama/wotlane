@@ -330,7 +330,8 @@ public:
     // Registers one custom monster folder after the scan (the character creator's save): at the end of customs(), or in place when
     // the same id came from this folder before (overwrite). No other custom moves. Returns the custom (valid until the next
     // addCustom; EE thread), or nullptr with the reason in `why` and nothing changed. Its skins come after it (addSkin: a skin's
-    // "monster" has to be a registered custom).
+    // "monster" has to be a registered custom). An overwrite that changes the base is refused: its skins keep costume indices
+    // chosen for the old type, which can clash with the new type's (a restart places them again).
     const Custom *addCustom(const std::filesystem::path &folder, std::string &why) {
         namespace fs = std::filesystem;
         if (!m_ready) { why = "mods/ has not been scanned yet"; return nullptr; }
@@ -343,6 +344,7 @@ public:
         for (Custom &o : m_customs)
             if (o.id == c.id) {
                 if (sameDir(o.dir) != sameDir(dir)) { why = "a monster " + c.id + " already comes from " + o.mod; return nullptr; }
+                if (o.type != c.type) { why = "monster " + c.id + " changed base; restart to use"; return nullptr; }
                 o = c;
                 logCustom(o);
                 return &o;
@@ -602,11 +604,12 @@ private:
                      c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera from ", c.cameraFrom.c_str());
     }
     // One monster folder's monster.json -> c. false: the folder is not a custom monster, with the reason in `why` (the scan logs it
-    // as "ignored"); a "portrait" problem only logs. Reads no member, so addCustom calls it without m_lock.
-    bool readCustom(const std::filesystem::path &folder, const std::string &mod, Custom &c, std::string &why) const {
+    // as "ignored"); a "portrait" problem only logs. Static (reads no member), so addCustom calls it without m_lock.
+    static bool readCustom(const std::filesystem::path &folder, const std::string &mod, Custom &c, std::string &why) {
         namespace fs = std::filesystem;
         std::error_code ec;
-        const fs::path &s = folder, m = folder.parent_path().parent_path();   // mods/<mod>/monsters/<folder>
+        const fs::path &s = folder;
+        const fs::path m = folder.parent_path().parent_path();   // mods/<mod>/monsters/<folder>
         const std::string where = mod + "/monsters/" + s.filename().string();
         const fs::path js = child(s, "monster.json");
         std::string text;
