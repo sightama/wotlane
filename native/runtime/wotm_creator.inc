@@ -103,6 +103,17 @@ static int texCountFor(const State &s)
     return std::clamp(int(v >> 16), 0, kMaxTex);
 }
 
+// MONSTER's HUD portrait (spec Section 3): the save (EE thread) asks, the preview (window thread, which owns the GPU) renders it at its
+// next frame and leaves the pixels here. A request is seq << 32 | tintGen: the window answers only once its State has that tintGen
+// (the tints the save writes), and the save takes only the answer to its own seq (a late answer to a request that timed out is not
+// used). The window never waits on the EE thread; the save waits at most kPortraitWaitMs.
+constexpr int kPortraitW = 128, kPortraitH = 64, kFace = 64;   // T8H 128x64: the normal face left, the fury face right
+constexpr int kPortraitWaitMs = 500;
+static std::atomic<uint64_t> g_portraitReq{0};   // 0: none. Set and cleared by the save
+static std::mutex g_portraitM;
+static uint64_t g_portraitDone = 0;              // under g_portraitM: the request g_portraitPx answers
+static std::vector<uint32_t> g_portraitPx;       // under g_portraitM: kPortraitW x kPortraitH RGBA, as the PNG stores it
+
 // The monster's name in capitals (the MONSTER row and the preview's caption)
 static std::string monsterLabel(int monster)
 {
@@ -435,6 +446,7 @@ struct SaveCtx
     std::filesystem::path monsterDir;   // mods/Creator/monsters/<id> (MONSTER only)
     std::vector<std::pair<std::filesystem::path, std::filesystem::path>> files;   // temp -> final, in write order
     std::set<std::string> written;   // the skin folder's file names this save wrote (lowercase): removeStale keeps these
+    std::set<std::string> kept;      // and these: an earlier save's portrait that this one skipped (writePortrait)
     size_t rawCount = 0;
     void fail(const char *msg)
     {
@@ -591,6 +603,28 @@ static bool writeBytes(const std::filesystem::path &path, const void *data, size
     return !o.fail();
 }
 
+// px (w x h RGBA) as `png` in the skin folder, through its temp file (renamed by commitFiles); counted in `written`. Encoded in memory
+// and written through the path (the mods folder may hold characters a narrow file name cannot); the temp name "<png>.tmp" ends in
+// neither .png nor .json, so no scan or texture lookup ever takes it
+static bool writePng(SaveCtx &c, const std::string &png, std::vector<uint32_t> &px, int w, int h)
+{
+    const std::filesystem::path tmp = c.dir / (png + ".tmp");
+    c.files.emplace_back(tmp, c.dir / png);
+    Image img{px.data(), w, h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    int size = 0;
+    unsigned char *data = ExportImageToMemory(img, ".png", &size);
+    const bool ok = data && size > 0 && writeBytes(tmp, data, size_t(size));
+    if (data) MemFree(data);
+    if (!ok)
+    {
+        c.fail("CANNOT WRITE");
+        std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s/%s\n", cr::kMod, c.id.c_str(), png.c_str());
+        return false;
+    }
+    c.written.insert(png);
+    return true;
+}
+
 // One temp PNG per tinted group (script: every group) from the EE thread's own Model of the disc costume, decoded the way the
 // preview's is (load + decodeAllTextures, same order). No tinted group: nothing to load (the skin is the base costume renamed).
 static bool writeGroupPngs(SaveCtx &c)
@@ -624,25 +658,76 @@ static bool writeGroupPngs(SaveCtx &c)
         // draws the disc's alpha and the selection what the preview showed. Model::rawAlpha is empty when TCC is clear (no reader
         // uses the alpha then); hiAlpha is the same rawAmax > 0x80 test in Model::decodeTex and Scene::modTexture.
         if (info[i].hiAlpha && cr::applyRawAlpha(px, m.rawAlpha(i))) ++c.rawCount;
-        const std::string png = cr::pngName(info[i].id, info[i].rtx);
-        // encoded in memory and written through the path (the mods folder may hold characters a narrow file name cannot); the temp
-        // name "<png>.tmp" ends in neither .png nor .json, so no scan or texture lookup ever takes it
-        const std::filesystem::path tmp = c.dir / (png + ".tmp");
-        c.files.emplace_back(tmp, c.dir / png);
-        Image img{px.data(), texs[i].w, texs[i].h, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-        int size = 0;
-        unsigned char *data = ExportImageToMemory(img, ".png", &size);
-        const bool ok = data && size > 0 && writeBytes(tmp, data, size_t(size));
-        if (data) MemFree(data);
-        if (!ok)
-        {
-            c.fail("CANNOT WRITE");
-            std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s/%s\n", cr::kMod, c.id.c_str(), png.c_str());
-            return false;
-        }
-        c.written.insert(png);
+        if (!writePng(c, cr::pngName(info[i].id, info[i].rtx), px, texs[i].w, texs[i].h)) return false;
     }
     return true;
+}
+
+// The earlier save in this folder had this base monster and costume (its monster.json, still the old one: the save renames its own last)
+static bool sameBase(const SaveCtx &c)
+{
+    std::ifstream in(c.monsterDir / "monster.json", std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    wotm::json::Value v;
+    const wotm::json::Value *base = nullptr, *costume = nullptr;
+    if (!in.is_open() || !wotm::json::parse(text, v) || !(base = v.get("base")) || base->type != wotm::json::Value::Str ||
+        !(costume = v.get("costume")))
+        return false;
+    std::string b = base->s;
+    for (char &ch : b) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+    const wotm::mods::MonsterInfo *mi = wotm::mods::monsterInfo(b);
+    return mi && mi->type == c.mi.type && costume->asInt(-1) == c.s.costume;
+}
+
+// MONSTER: the base costume's HUD portrait (T8H 128x64, cr::portraitTex) rendered by the preview on the window thread, into the skin
+// folder as its rtx PNG. Skipped with a log line, the rest saved, when the base has none, at a scripted save (no window yet), while the
+// preview is still loading, or when no frame answers in kPortraitWaitMs. A skip keeps the portrait an earlier save of the same base wrote
+// (removeStale would take it otherwise). false only when the write fails.
+static bool writePortrait(SaveCtx &c)
+{
+    if (!c.monster) return true;
+    const int tex = cr::portraitTex(c.mi.prefix, c.s.costume);
+    if (tex < 0)
+    {
+        std::fprintf(stderr, "[creator] portrait skipped (%s%d has no portrait texture)\n", c.mi.prefix, c.s.costume);
+        return true;
+    }
+    const std::string png = cr::pngName(uint32_t(tex), true);
+    auto skip = [&c, &png](const char *why) {
+        std::error_code ec;
+        const bool keep = std::filesystem::is_regular_file(c.dir / png, ec) && sameBase(c);
+        if (keep) c.kept.insert(png);
+        std::fprintf(stderr, "[creator] portrait skipped (%s)%s\n", why, keep ? "; the earlier one stays" : "");
+        return true;
+    };
+    if (c.written.count(png)) return skip("a texture group has its name");   // not expected: the models do not use the portrait
+    if (c.script) return skip("scripted save");
+    if (c.s.texCount <= 0) return skip("the preview is still loading");
+    static uint32_t seq = 0;
+    if (++seq == 0) ++seq;
+    const uint64_t req = uint64_t(seq) << 32 | c.s.tintGen;
+    const auto t0 = std::chrono::steady_clock::now(), until = t0 + std::chrono::milliseconds(kPortraitWaitMs);
+    std::vector<uint32_t> px;
+    g_portraitReq.store(req, std::memory_order_release);
+    for (;;)
+    {
+        {
+            std::lock_guard<std::mutex> lk(g_portraitM);
+            if (g_portraitDone == req)
+            {
+                px.swap(g_portraitPx);
+                break;
+            }
+        }
+        if (std::chrono::steady_clock::now() >= until) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    uint64_t mine = req;
+    g_portraitReq.compare_exchange_strong(mine, 0, std::memory_order_acq_rel);
+    if (px.size() != size_t(kPortraitW) * kPortraitH) return skip("no frame in 500 ms");
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::fprintf(stderr, "[creator] portrait %s (%dx%d) after %.0f ms\n", png.c_str(), kPortraitW, kPortraitH, ms);
+    return writePng(c, png, px, kPortraitW, kPortraitH);
 }
 
 // skin.json through its temp file, after the PNGs in `files` (MONSTER: its "monster" is the custom's id)
@@ -705,7 +790,7 @@ static void removeStale(SaveCtx &c)
         std::error_code fe;
         if (!it->is_regular_file(fe)) continue;
         const std::string n = asciiName(it->path());
-        if ((isSkinPngName(n, ".png") && !c.written.count(n)) || isSkinPngName(n, ".png.tmp") || n == "skin.json.tmp")
+        if ((isSkinPngName(n, ".png") && !c.written.count(n) && !c.kept.count(n)) || isSkinPngName(n, ".png.tmp") || n == "skin.json.tmp")
             stale.push_back(it->path());
     }
     for (const fs::path &p : stale)
@@ -795,7 +880,7 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
         dropEmpty();
         return;
     }
-    if (!writeGroupPngs(c) || !writeSkinJson(c) || (c.monster && !writeMonsterJson(c)))
+    if (!writeGroupPngs(c) || !writePortrait(c) || !writeSkinJson(c) || (c.monster && !writeMonsterJson(c)))
     {
         c.dropTemps();
         dropEmpty();
@@ -877,6 +962,8 @@ struct Preview
     bool timed = false;                            // the first real retint of this load was timed (one log line)
     bool grewLogged = false;                       // a pose decoded textures decodeAllTextures missed (one log line per load)
     bool ok = false;
+    wotm::model::Renderer portrait;                // renderPortrait's own target (created at the first portrait)
+    uint64_t portraitFor = 0;                      // the last portrait request answered
 };
 static Preview g_creatorPreview;
 
@@ -886,6 +973,7 @@ static void releasePreview()
     Preview &p = g_creatorPreview;
     if (p.monster < 0 && !p.model) return;
     p.ren.release();
+    p.portrait.release();
     p.model.reset();
     p.original.clear();
     p.original.shrink_to_fit();
@@ -895,6 +983,68 @@ static void releasePreview()
     p.tintGen = 0;
     p.ok = false;
     g_texCountShared.store(kNoTexCount, std::memory_order_release);
+}
+
+// The fury face (the right half): the disc's is the same face hotter, its right half about R x1.4, G x1.2, B x1.05 of the left on
+// average. A fixed shift that lands near those averages on Togera's and Robo-47's disc faces: more saturation and brightness, then
+// red up and blue down
+static void furyFace(std::vector<uint32_t> &px)
+{
+    wotm::tint::shift(px, 0.f, 40.f, 30.f);
+    for (uint32_t &c : px)
+    {
+        const uint32_t r = std::min(255u, (c & 0xFFu) * 7 / 5), g = std::min(255u, ((c >> 8) & 0xFFu) * 21 / 20),
+                       b = ((c >> 16) & 0xFFu) * 17 / 20;
+        c = (c & 0xFF000000u) | r | g << 8 | b << 16;
+    }
+}
+
+// Window thread: the 128x64 HUD portrait of the preview's tinted model as posed now: the face left, furyFace right. The camera faces
+// the model and frames the top 45% of its idle box (head and shoulders) on opaque black, as the disc's portraits are (alpha 255
+// throughout, a dark ground). The disc stores the faces upside down (the HUD flips them; tools/modkit.py portrait_png exports them that
+// way), which is how a render texture reads back: its rows are kept as they come. The HUD draws the portrait at half brightness, so
+// the colors are doubled to show on it as the preview does. Rendered at 4x and scaled down. false when the model is not loaded.
+static bool renderPortrait(const State &s, std::vector<uint32_t> &rgba)
+{
+    static_assert(kPortraitW == 2 * kFace && kPortraitH == kFace, "two square faces side by side");
+    Preview &p = g_creatorPreview;
+    if (!p.ok || !p.model || p.monster != s.monster || p.costume != s.costume || p.tintGen != s.tintGen) return false;
+    constexpr int kSs = 4;
+    constexpr float kTop = 0.45f;
+    float lo[3], hi[3];
+    p.model->framing(lo, hi);
+    const float ext = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2], 1e-3f}), tall = std::max(hi[2] - lo[2], 1e-3f);
+    // Renderer::render (fovy 30) looks level (pitch 0) at the box center moved up by shiftY, from 2.314 * ext / zoom away, and shows a
+    // height of 0.536 * that distance at the center's depth. The frame is set at the box's front (+Y, the face; a long tail puts the
+    // center far behind it): kTop * tall seen there, the camera that much farther, the image's middle kTop / 2 below the top
+    constexpr float kTan = 0.26795f;   // tan(15 deg)
+    const float front = hi[1] - (lo[1] + hi[1]) * 0.5f, visH = kTop * tall, dist = front + visH / (2.f * kTan);
+    const float zoom = ext * 0.62f / kTan / dist;
+    p.portrait.shiftX = 0.f;
+    p.portrait.fwd = 0.f;
+    p.portrait.shiftY = -(0.5f - kTop * 0.5f) * tall / (2.f * kTan * dist);
+    p.portrait.setFx(&wotm_padsel::g_selFx);
+    const RenderTexture2D &rt = p.portrait.render(*p.model, kFace * kSs, kFace * kSs, 0.f, 0.f, zoom, [] { ClearBackground(BLACK); });
+    Image img = LoadImageFromTexture(rt.texture);
+    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+    ImageResize(&img, kFace, kFace);
+    std::vector<uint32_t> face(size_t(kFace) * kFace);
+    std::memcpy(face.data(), img.data, face.size() * 4);
+    UnloadImage(img);
+    for (uint32_t &c : face)
+    {
+        const uint32_t r = std::min(255u, (c & 0xFFu) * 2), g = std::min(255u, ((c >> 8) & 0xFFu) * 2), b = std::min(255u, ((c >> 16) & 0xFFu) * 2);
+        c = 0xFF000000u | r | g << 8 | b << 16;
+    }
+    std::vector<uint32_t> fury = face;
+    furyFace(fury);
+    rgba.assign(size_t(kPortraitW) * kPortraitH, 0);
+    for (int y = 0; y < kFace; ++y)
+    {
+        std::memcpy(&rgba[size_t(y) * kPortraitW], &face[size_t(y) * kFace], size_t(kFace) * 4);
+        std::memcpy(&rgba[size_t(y) * kPortraitW + kFace], &fury[size_t(y) * kFace], size_t(kFace) * 4);
+    }
+    return true;
 }
 
 // Called from renderPanel with v.creator, before the panel's BeginTextureMode (the Renderer has its own target): loads, tints, poses
@@ -979,6 +1129,19 @@ static bool renderPreview(const State &s, int w, int h)
     }
     p.ren.setFx(&wotm_padsel::g_selFx);
     p.ren.render(*p.model, w, h, 0.f, 8.f, fr.zoom * 0.95f, [] {});
+    // the save's portrait request, once this frame shows its tints (a request for another tintGen waits for that State)
+    const uint64_t req = g_portraitReq.load(std::memory_order_acquire);
+    if (req && req != p.portraitFor && uint32_t(req) == s.tintGen)
+    {
+        p.portraitFor = req;
+        std::vector<uint32_t> px;
+        if (renderPortrait(s, px))
+        {
+            std::lock_guard<std::mutex> lk(g_portraitM);
+            g_portraitPx = std::move(px);
+            g_portraitDone = req;
+        }
+    }
     return true;
 }
 // Window thread: the TEXTURE row's value. LOADING only while the preview has not loaded s's monster and costume (or the EE thread
