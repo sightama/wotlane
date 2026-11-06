@@ -175,6 +175,11 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
   mods folder), it exports the base type's textures in the custom's `costume` (or in `--base`), and the `skin.json` comes out without `base` when
   `--base` is not given. An unknown id creates only the `skin.json`, with a warning.
   In the window, the same through **New skin...**, the skin's properties panel and **Turn into skin...** (section "Interface").
+- **In game:** CREATE on the 1 player modes screen makes a recolor skin of any disc costume and writes it to
+  `mods/Creator/skins/<id>/` (NATIVO.md, "Runtime: character creator"); it is the same folder format, so the kit opens it and
+  the folder can be shared by copying it. The kit's PNG name pattern (`PNG_RE` in `tools/modkit.py`) expects a costume prefix
+  before `_t`, so it handles the creator's bare `t0004.png`/`rtx_t0011.png` only partly: they come into the work folder without
+  their size, they pack unchanged, and **Revert to original** cannot find their disc source.
 - Not yet: elimination. In it the game loads costume 0 of every monster only once and the
   players switch monsters between rounds without reloading: picking a costume there requires changing the load, not just the screen.
 
@@ -274,7 +279,8 @@ that of the RANDOM entry (`random`; without it, a mosaic of the game's photos). 
   at 0x800000, beyond any DVD) and the mod's size; the `sceCdRead` hook serves that range by reading from the PC file. The native sound
   (`readLsnRaw`) reads banks and music through the same range. The native layer that reads the disc by name also looks in `mods/` first:
   `.RTX` palettes (`Scene::loadResources`, which reads the file directly, not from RAM), movies (`wotm_fmv.hpp`), the save list's icon,
-  photos and monster (`wotm::disc::readFile`). With no file in `mods/`, no hook is installed. A file that does not exist on the disc
+  photos and monster (`wotm::disc::readFile`). With mods on, the hooks are installed even when `mods/` is empty or missing (a skin
+  saved by the character creator registers after boot); with nothing registered they only call the original. `WOTM_MODS=0` installs none. A file that does not exist on the disc
   is also served ("new file").
 - **Log:** `[mods] N file(s) from <mods> in <folder>` at boot and, on the first search for each file, `[mods] MON/LIZARD0.TEX <-
   teste_togera (110080 bytes; disc 110080)`, with a WARNING when the mod's file is larger (outside `MON/*`, whose load is contiguous above
