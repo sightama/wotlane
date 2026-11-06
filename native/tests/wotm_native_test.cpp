@@ -737,7 +737,7 @@ TEST(mods_custom_of_type_and_costume)
         CHECK(reg.customOf(3, 1) == kaiju && reg.customOf(3, 0) == modded);                    // on its monster.json costume
         CHECK(!reg.customOf(3, 2) && !reg.customOf(3, green->index) && !reg.customOf(1, own->index));   // plain monsters
         CHECK(reg.customOf(13, 1) == goliath && !reg.customOf(13, 0));
-        CHECK(reg.customByType(3) == kaiju);   // the first of its type (Creator scans before Old): it used to hide modded's camera
+        CHECK(reg.customByType(3) == kaiju);   // the first of its type (customs are ordered by id): it used to hide modded's camera
     }
     CHECK(wotm::mods::hudName("KAIJU KING") == "kaiju king" && wotm::mods::hudName("GOLIATH PRIME") == "goliath");
     CHECK(wotm::mods::hudName("ABCDEFGHIJKLMNO") == "abcdefghijk" && wotm::mods::hudName("Kaiju") == "kaiju");

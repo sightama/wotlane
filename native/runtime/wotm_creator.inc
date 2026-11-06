@@ -123,7 +123,7 @@ static std::string monsterLabel(int monster)
 }
 // "<MONSTER> N": N from 2 up while mods/Creator/skins/<id> or mods/Creator/monsters/<id> exists (a custom's id is taken for both
 // types: its skin takes skins/<id> too, and a skin there would block it); the monster's name is cut so " N" fits the 11 letters
-static std::string defaultNameFor(int monster, bool /*monsterType*/)
+static std::string defaultNameFor(int monster)
 {
     std::string mon = kMonsters[std::clamp(monster, 0, kMonsterCount - 1)].name;
     for (char &c : mon) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -144,7 +144,7 @@ static std::string defaultNameFor(int monster, bool /*monsterType*/)
 }
 static void defaultName(State &s)
 {
-    std::snprintf(s.name, sizeof s.name, "%s", defaultNameFor(s.monster, s.monsterType).c_str());
+    std::snprintf(s.name, sizeof s.name, "%s", defaultNameFor(s.monster).c_str());
     s.cursor = 0;
 }
 // A new monster or costume: the tints start over (the textures are another set)
@@ -293,7 +293,7 @@ static bool adjust(State &s, int dir)
     case RType:
     {
         // the monster, costume and tints stay (a skin can become a monster); the name follows only while it is the old default
-        const bool wasDefault = std::string(s.name) == defaultNameFor(s.monster, s.monsterType);
+        const bool wasDefault = std::string(s.name) == defaultNameFor(s.monster);
         s.monsterType = !s.monsterType;
         s.row = std::clamp(s.row, 0, rowsOf(s).n - 1);
         if (wasDefault) defaultName(s);
@@ -1133,10 +1133,10 @@ static bool renderPreview(const State &s, int w, int h)
     const uint64_t req = g_portraitReq.load(std::memory_order_acquire);
     if (req && req != p.portraitFor && uint32_t(req) == s.tintGen)
     {
-        p.portraitFor = req;
         std::vector<uint32_t> px;
-        if (renderPortrait(s, px))
+        if (renderPortrait(s, px))   // answered once it rendered (the model may still be loading: the next frame tries again)
         {
+            p.portraitFor = req;
             std::lock_guard<std::mutex> lk(g_portraitM);
             g_portraitPx = std::move(px);
             g_portraitDone = req;

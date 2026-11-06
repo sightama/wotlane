@@ -188,6 +188,7 @@ namespace wotm_custom
     void fightNames(uint8_t *rdram)
     {
         gameNames(rdram);
+        wotm_skins::g_fightCostume.clear();   // this fight's SetPlayerMonster/SetAIMonster fill it again
         using namespace wotm_split4;   // the Shell's selection: m_monsterSel, m_costume, m_numPlayers, m_numAIs
         const int players = std::clamp(static_cast<int32_t>(FAST_READ32(kNumPlayers)), 0, 4);
         const int ais = std::clamp(static_cast<int32_t>(FAST_READ32(kNumAIs)), 0, 10);
@@ -341,8 +342,9 @@ namespace wotm_custom
         const uint32_t view = GPR_U32(ctx, 4);
         const uint32_t m = ctx->pc == kSetPov && view < 4 ? READ32(kCameras + view * kCamStride + kCamMonster) : 0;
         const uint32_t type = m ? READ32(m + kTypeBits) >> 5 : 0;
-        // which custom this monster is: by its costume (wotm_skins.inc keeps it per fighter), so a custom never hides another one of
-        // its type and a plain monster never borrows one; a boss type has no plain monster to tell apart, so its first custom
+        // which custom this monster is: by its costume (wotm_skins.inc keeps it per fighter). On its skins a custom is told apart; on
+        // its monster.json costume the first custom of that type and costume is used (a plain monster in that costume too). A boss
+        // type with no match takes its first custom
         const int costume = m ? wotm_skins::fightCostume(READ32(m + kTypeBits), READ32(m + kDupId)) : -1;
         const wotm::mods::Registry &reg = wotm::mods::Registry::get();
         const wotm::mods::Custom *cu = type && costume >= 0 ? reg.customOf(int(type), costume) : nullptr;

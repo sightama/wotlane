@@ -317,6 +317,8 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
 - **Online:** a created skin is drawing only (nothing in the lockstep state changes); the same folder on every PC keeps the mods
   digest equal, and a PC without it is refused ("game configuration differs"). The lobby (`net_lobby.py`, `LobbyClient.cs`,
   `wotm_net_server.cpp`) hands out disc costumes 0 to 3 only, so picking a created skin online waits for a lobby protocol change (#14).
+  A creator monster's HUD name is the exception: it writes the game's five name tables in guest RAM at the fight's load, the same
+  bytes on every PC (from the selection and the registry); since the lobby hands out disc costumes only, it never runs online today.
 - **TYPE and custom monsters** (step 2 of #42; spec `docs/superpowers/specs/2026-11-06-creator-monster-design.md`): TYPE MONSTER
   makes a new entry in the CUSTOM list that plays exactly like its base, with its own name, colors and HUD portrait.
   - **TYPE** (left and right) switches SKIN and MONSTER and keeps the monster, costume and tints, so a skin can become a monster;
@@ -341,15 +343,18 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
     both with the game's name, and so does the custom on its disc costume (it looks like the base there). The entry of
     `userintMain` puts the game's names back (`[custom] the game's monster names are back (menus)`). These bytes are guest RAM
     and in the network hash: only those EE-thread hooks write them, from the Shell's selection and the registry.
+    Known limit: the rule trusts the Shell's selection at load. Where monsters join later (endurance, the adventure), a later AI
+    of the same type could show the custom's name too (deterministic, as the rest).
   - **Messages** (besides SKIN's): `NAME IN USE` when the id is a game monster's name or prefix, another mod's custom or a skin
     folder another monster owns; `OVERWRITE?` for an existing creator monster of that id; `START WITH A LETTER` when the id
     starts with a digit (a custom's id cannot); `SAVED. RESTART TO USE` when the registry refuses, among others for an overwrite
     that changes the base (its skins keep costume indices chosen for the old type; the next boot places them again).
   - **Camera:** a creator custom has the base's. The camera hook (`setPov`) looks the custom up by the followed monster's type and
-    costume (`customOf`; the costume each fighter got is kept by the skins' `SetPlayerMonster`/`SetAIMonster` hooks), so a creator
-    custom never hides another custom's `"camera"` and a plain monster never borrows one. Boss types keep their first custom.
+    costume (`customOf`; the costume each fighter got is kept by the skins' `SetPlayerMonster`/`SetAIMonster` hooks, cleared at each
+    fight's load). On its skins a custom is told apart; on its `monster.json` costume the first custom of that type and costume is
+    used (a plain monster in that costume too). Boss types with no match keep their first custom.
   - **Scripted:** `WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` (`togera:1:kaiju:120`) saves a monster at
-    boot like `WOTM_CREATOR`: name = the id in capitals, CPU CAN USE off, no portrait. Log `[creator] saved monster kaiju (base
+    boot like `WOTM_CREATOR`: name = the id in capitals with `_` as spaces, cut to 11 letters; CPU CAN USE off, no portrait. Log `[creator] saved monster kaiju (base
     togera costume 1, 1 png) in <ms> ms`; a bad value logs `[creator] WOTM_CREATOR_MONSTER ignored: <reason>`. `WOTM_MATCH=<id>`
     starts the custom on its first costume (its own skin).
 - Not in the creator: a custom monster's stats, moves, narrator and camera (the base's), and its geometry (step 3 of #42).
@@ -736,7 +741,7 @@ The table is checked against the code by `python tools/wotm_env.py` (lists what 
 | `WOTM_DISC=<folder>`, `WOTM_ISO=<file>` | force the source of the disc files (`.RTX`, `.PSS`) instead of `PS2X_CD_IMAGE`/the ELF's folder |
 | `WOTM_MODS=<folder>` (`0` turns it off) | folder of mods that override disc files (default: `mods/` next to the ELF; `wotm_mods.inc`, `MODS.md`) |
 | `WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` | at boot, saves a recolor skin of that costume to `mods/Creator/skins/<id>/` (every texture shifted by the same values) and registers it, then boots normally ("Runtime: character creator" section) |
-| `WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` | at boot, saves a custom monster on that playable base: `mods/Creator/monsters/<id>/monster.json` (name = the id in capitals, CPU CAN USE off, `"skin": "<id>"`) and its own recolor skin in `mods/Creator/skins/<id>/`, registers both, then boots normally ("Runtime: character creator" section) |
+| `WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` | at boot, saves a custom monster on that playable base: `mods/Creator/monsters/<id>/monster.json` (name = the id in capitals with `_` as spaces, cut to 11 letters; CPU CAN USE off, `"skin": "<id>"`) and its own recolor skin in `mods/Creator/skins/<id>/`, registers both, then boots normally ("Runtime: character creator" section) |
 | `WOTM_REPO=<folder>` | repo root (`run_live.bat` and the launcher pass it): with no `mods/` next to the ELF, the mods come from `<folder>/mods` (`wotm_mods.inc`) |
 | `WOTM_FMV_MUTE=1` | movies without audio |
 | `WOTM_SKIPINTRO=1` | skips the two boot movies (`intro_m` and `int_main`, only the first time of each; `playMpegMovieWithDB` in `wotm_fmv.hpp`), straight to the title screen. SKIP INTRO MOVIES option of the FEATURES tab of "Recompiled options" (`settings.ini`); read at the first movie, so changing it in the panel applies on the next boot |

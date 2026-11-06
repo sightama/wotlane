@@ -148,15 +148,19 @@ private:
             p.rel = rel;
         }
         for (const mods::SkinPng &sp : reg.skinPngs()) addSkinPngLocked(sp);
-        // Portrait of custom monsters ("portrait" in monster.json): the image in the .RTX of the costume they use
+        // Portrait of custom monsters ("portrait" in monster.json): the image in the .RTX of each costume they use, the disc one
+        // and their skins' (a skin's resident images are looked up by its own stem); a skin's own rtx PNG of that texId wins
         for (const mods::Custom &cu : reg.customsCopy()) {   // a copy: this runs on the window thread, addCustom on the EE thread
             if (cu.portrait.empty() || cu.portraitTex < 0) continue;
-            Png &p = m_png[Key{upper(cu.prefix + std::to_string(cu.costume)), true, uint32_t(cu.portraitTex)}];
-            p.host = cu.portrait.string();
-            p.mod = cu.mod;
+            Png portrait{cu.portrait.string(), cu.mod, {}};
             std::error_code ec;   // path inside the mod, for the log
-            p.rel = std::filesystem::relative(cu.portrait, cu.dir.parent_path().parent_path(), ec).generic_string();
-            if (ec || p.rel.empty()) p.rel = cu.portrait.filename().string();
+            portrait.rel = std::filesystem::relative(cu.portrait, cu.dir.parent_path().parent_path(), ec).generic_string();
+            if (ec || portrait.rel.empty()) portrait.rel = cu.portrait.filename().string();
+            for (const int costume : reg.customCostumes(cu)) {
+                const Key k{upper(cu.prefix + std::to_string(costume)), true, uint32_t(cu.portraitTex)};
+                if (costume == cu.costume) m_png[k] = portrait;
+                else m_png.emplace(k, portrait);
+            }
         }
         if (!m_png.empty()) std::fprintf(stderr, "[mods] %zu PNG texture(s)\n", m_png.size());
     }

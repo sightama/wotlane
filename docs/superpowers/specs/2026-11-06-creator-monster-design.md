@@ -149,7 +149,9 @@ Live run: a temporary mods folder with one skin, `T1/skins/pink/skin.json` = Tog
   magenta.
 
 So the portrait PNG belongs in the custom's skin folder, named `cr::pngName(texId, true)` with the texId of the skin's base
-costume from the table above. Nothing else is needed for the HUD to show it.
+costume from the table above. Nothing else is needed for the HUD to show it. (Note added later: that took commit 5d11479, in which
+`Scene::loadRtx` looks a costume's resident images up by the name the game loaded, `LIZARD4`, not by the file it read, the base
+costume's.)
 
 ### C. The HUD name of a custom on a playable base
 
