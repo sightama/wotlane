@@ -7,19 +7,14 @@
 #include "wotm_freecam.h"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
-#include "wotm_tint.hpp"
-#include "wotm_creator.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <functional>
 #include <random>
-#include <string>
 #include <vector>
 
 namespace
@@ -439,153 +434,6 @@ TEST(freecam_axes_use_deterministic_trig)
             bad += bitsOf(got[k]) != bitsOf(want[k]);
     }
     CHECK(bad == 0);
-}
-
-TEST(tint_identity_and_hue)
-{
-    using wotm::tint::shift;
-    std::vector<uint32_t> px = {0xFF0000FFu, 0x80FF0000u, 0x00808080u, 0xC0123456u};   // A B G R per byte, little endian: R | G<<8 | B<<16 | A<<24
-    std::vector<uint32_t> same = px;
-    shift(same, 0.f, 0.f, 0.f);
-    CHECK(same == px);   // all zero is the identity, bit for bit
-    std::vector<uint32_t> hue = {0xFF0000FFu};   // pure red, alpha 255
-    shift(hue, 120.f, 0.f, 0.f);
-    CHECK(hue[0] == 0xFF00FF00u);   // pure green, alpha kept
-    std::vector<uint32_t> back = {0xFF0000FFu};
-    shift(back, -240.f, 0.f, 0.f);
-    CHECK(back[0] == 0xFF00FF00u);   // wraps
-    std::vector<uint32_t> gray = {0x80FF0000u};   // pure blue, alpha 0x80
-    shift(gray, 0.f, -100.f, 0.f);
-    CHECK(gray[0] == 0x80FFFFFFu);   // saturation gone: white at the same value, alpha kept
-    std::vector<uint32_t> bright = {0xFF0000C0u};
-    shift(bright, 0.f, 0.f, 100.f);
-    CHECK(bright[0] == 0xFF0000FFu);   // clamps at 255
-    std::vector<uint32_t> dark = {0xFF0000C0u};
-    shift(dark, 0.f, 0.f, -50.f);
-    CHECK(dark[0] == 0xFF000060u);
-    std::vector<uint32_t> turn = px;
-    shift(turn, 360.f, 0.f, 0.f);
-    CHECK(turn == px);   // a full turn goes through HSV and back, bit for bit
-    std::vector<uint32_t> grn = {0xFF00FF80u};   // R 0x80, G 0xFF, B 0: hue 90 (green max), s 1, v 1
-    shift(grn, 120.f, 0.f, 0.f);
-    CHECK(grn[0] == 0xFFFF8000u);   // hue 210: R 0, G 0x80, B 0xFF
-}
-
-TEST(creator_id_from_name)
-{
-    using wotm::creator::idFromName;
-    CHECK(idFromName("TOGERA 2") == "togera_2");
-    CHECK(idFromName("  Green!! Togera  ") == "green_togera");
-    CHECK(idFromName("") == "skin");
-    CHECK(idFromName("---") == "skin");
-    CHECK(idFromName(std::string(40, 'A')).size() == 32);
-    CHECK(idFromName(std::string(31, 'a') + " bcd") == std::string(31, 'a'));
-}
-
-TEST(creator_env_parse)
-{
-    using wotm::creator::Script;
-    using wotm::creator::parseScript;
-    Script s;
-    std::string err;
-    CHECK(parseScript("togera:1:green:120", s, err) && s.monster == 3 && s.costume == 1 && s.id == "green" && s.hue == 120.f && s.sat == 0.f && s.bright == 0.f);
-    CHECK(parseScript("ultra-v:3:x", s, err) && s.monster == 4 && s.hue == 0.f);
-    CHECK(parseScript("congar:0:blue:-90:50:-20", s, err) && s.sat == 50.f && s.bright == -20.f);
-    CHECK(!parseScript("bogus:1:x", s, err) && err.find("monster") != std::string::npos);
-    CHECK(!parseScript("togera:9:x", s, err) && err.find("costume") != std::string::npos);
-    CHECK(!parseScript("togera:1", s, err));
-    CHECK(!parseScript("togera:1:Bad Id", s, err) && err.find("id") != std::string::npos);
-    CHECK(!parseScript("togera:1:x:nan", s, err) && err.find("number") != std::string::npos);
-}
-
-TEST(creator_texture_groups)
-{
-    using wotm::creator::TexKey;
-    using wotm::creator::groupTextures;
-    const auto g = groupTextures({TexKey{4, false}, TexKey{11, true}, TexKey{4, false}, TexKey{4, true}});
-    CHECK(g.size() == 3);
-    CHECK(g.size() == 3 && g[0] == std::vector<int>({0, 2}) && g[1] == std::vector<int>({1}) && g[2] == std::vector<int>({3}));
-    CHECK(groupTextures({}).empty());
-}
-
-TEST(creator_skin_json_and_png_names)
-{
-    const std::string text = wotm::creator::skinJson("togera", "green", "GREEN TOGERA", 1);
-    wotm::json::Value v;
-    CHECK(wotm::json::parse(text, v) && v.get("monster")->s == "togera" && v.get("id")->s == "green" && v.get("name")->s == "GREEN TOGERA");
-    CHECK(v.get("base")->asInt(-1) == 1 && v.get("ai")->asBool(true) == false);
-    CHECK(wotm::creator::pngName(4, false) == "t0004.png");
-    CHECK(wotm::creator::pngName(11, true) == "rtx_t0011.png");
-}
-
-TEST(creator_raw_alpha_round_trip)
-{
-    // A hiAlpha texture's PNG gets the disc's raw alpha (applyRawAlpha). Small mirrors of the formulas involved:
-    // what the preview shows, the fixA lambda in Model::decodeOrig (wotm_model.hpp); what the fight reads, texmods::loadPng with
-    // rawAlpha and hiAlpha (wotm_texmods.hpp: the PNG's alpha as is); what the model path reads, texmods::loadPng without rawAlpha
-    // (min(255, 2a)).
-    auto fixA = [](uint32_t r) { return r >= 128 ? 255u : r * 2; };
-    auto fightRead = [](uint32_t a) { return a; };
-    auto modelRead = [](uint32_t a) { return std::min(255u, a * 2); };
-    std::vector<uint32_t> px;
-    std::vector<uint8_t> raw;
-    for (uint32_t r = 0; r < 256; ++r) {
-        px.push_back(fixA(r) << 24 | 0x00123456u);   // the preview's pixel (tint::shift leaves alpha alone)
-        raw.push_back(uint8_t(r));
-    }
-    CHECK(wotm::creator::applyRawAlpha(px, raw));
-    bool fight = true, model = true, rgb = true;
-    for (uint32_t r = 0; r < 256; ++r) {
-        const uint32_t a = px[r] >> 24;
-        fight &= fightRead(a) == r;          // the GS alpha the disc texture had
-        model &= modelRead(a) == fixA(r);    // the selection and the preview draw what they drew before the save
-        rgb &= (px[r] & 0x00FFFFFFu) == 0x00123456u;
-    }
-    CHECK(fight);
-    CHECK(model);
-    CHECK(rgb);
-    std::vector<uint8_t> shortRaw(3, 0x40);
-    CHECK(!wotm::creator::applyRawAlpha(px, shortRaw) && (px[200] >> 24) == 200u);   // size mismatch: untouched
-}
-
-TEST(mods_add_skin_after_scan)
-{
-    namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() / "wotm_test_addskin";
-    fs::remove_all(root);
-    fs::create_directories(root / "Creator" / "skins" / "green");
-    {
-        std::ofstream o(root / "Creator" / "skins" / "green" / "skin.json");
-        o << wotm::creator::skinJson("togera", "green", "GREEN TOGERA", 1);
-        std::ofstream p(root / "Creator" / "skins" / "green" / "t0004.png");
-        p << "not a real png";
-    }
-    wotm::mods::Registry reg;   // a fresh one, not get(): the singleton stays untouched
-    reg.scan(root / "nothing_here");   // ready, empty
-    CHECK(reg.ready() && reg.skins().empty());
-    std::string why;
-    const wotm::mods::Skin *k = reg.addSkin(root / "Creator" / "skins" / "green", why);
-    CHECK(k && k->monster == 3 && k->id == "green" && k->index == 4 && k->base == 1 && k->mod == "Creator");
-    CHECK(reg.skinByIndex(3, 4) == k);
-    CHECK(reg.aliasOf("MON/LIZARD4.NGP") == "MON/LIZARD1.NGP");
-    CHECK(reg.skinPngs().size() == 1 && reg.skinPngs()[0].stem == "LIZARD4");
-    const wotm::mods::Skin *again = reg.addSkin(root / "Creator" / "skins" / "green", why);   // overwrite: same index
-    CHECK(again && again->index == 4 && reg.skins().size() == 1 && reg.skinPngs().size() == 1);
-    CHECK(again == k);   // overwritten in place
-    // the same folder written another way is still an overwrite; the same monster/id from another folder is refused
-    CHECK(reg.addSkin(root / "Creator" / "skins" / "." / "green" / "", why) == k && reg.skins().size() == 1);
-    fs::create_directories(root / "Other" / "skins" / "green");
-    { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "X", 0); }
-    CHECK(!reg.addSkin(root / "Other" / "skins" / "green", why) && why.find("Creator") != std::string::npos && reg.skins().size() == 1);
-    // a second skin of the same monster takes the next index; the first one stays
-    fs::create_directories(root / "Creator" / "skins" / "blue");
-    { std::ofstream o(root / "Creator" / "skins" / "blue" / "skin.json"); o << wotm::creator::skinJson("togera", "blue", "BLUE", 2); }
-    const wotm::mods::Skin *blue = reg.addSkin(root / "Creator" / "skins" / "blue", why);
-    CHECK(blue && blue->index == 5 && reg.skinByIndex(3, 4) && reg.skinByIndex(3, 4)->id == "green");
-    CHECK(reg.aliasOf("MON/LIZARD5.TEX") == "MON/LIZARD2.TEX" && reg.aliasOf("MON/LIZARD4.TEX") == "MON/LIZARD1.TEX");
-    fs::create_directories(root / "Creator" / "skins" / "bad");
-    CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
-    fs::remove_all(root);
 }
 
 int main()

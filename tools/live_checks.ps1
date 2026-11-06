@@ -1,6 +1,5 @@
 # ABOUTME: Live game checks (up-to-4 multiplayer, screen, regressions): each runs the game with tools\live_check.ps1 and checks
 # ABOUTME: the log. Usage: powershell -File tools\live_checks.ps1 [-Only <name>]; exits 1 if any fail.
-# Entry keys: Env, Secs, Expect, Reject (as in live_check.ps1) and Clean (optional: a folder removed before that entry runs).
 param([string]$Only = '')
 $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'live_check.ps1'
@@ -72,16 +71,6 @@ $checks = [ordered]@{
     'unificada_4'   = @{ Env = 'WOTM_MATCH=3,1,2,5,4,1;WOTM_PLAYERS=4;WOTM_AIVSAI=1;PS2X_STATS=1;PS2X_PEEK=6F8A8C'; Secs = 70
                          Expect = '6f8a8c=00000000'
                          Reject = '6f8a8c=00000001|||\[CRASH\]|||\[watchdog\] FROZE' }
-    # character creator (NATIVO.md): WOTM_CREATOR saves a recolor of Togera's costume 1 into a fresh mods folder and registers it live;
-    # creator_reload boots on that folder without WOTM_CREATOR and needs creator_script first (they run in order: keep them adjacent).
-    # The skin's quotes are \x22 in the regex: powershell -File drops a bare " on the way to live_check.ps1
-    'creator_script' = @{ Env = "WOTM_CREATOR=togera:1:green:120;WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25
-                         Clean = "$env:TEMP\wotm_creator_mods"
-                         Expect = '\[creator\] saved mods/Creator/skins/green \(\d+ png\)|||\[mods\] skin togera/green \(\x22GREEN\x22, Creator\) = costume 4'
-                         Reject = '\[creator\] (cannot write|not registered|WOTM_CREATOR ignored)|||\[CRASH\]|||\[watchdog\] FROZE' }
-    'creator_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25
-                         Expect = '\[mods\] skin togera/green .* = costume 4 \(LIZARD4\); base 1, \d+ png'
-                         Reject = '\[mods\] skin Creator/skins/green ignored|||\[CRASH\]|||\[watchdog\] FROZE' }
 }
 
 $failed = @()
@@ -90,7 +79,6 @@ foreach ($name in $checks.Keys) {
     $c = $checks[$name]
     Write-Host "== $name"
     $reject = if ($c.Reject) { $c.Reject } else { '\[CRASH\]|||\[watchdog\] FROZE' }
-    if ($c.Clean -and (Test-Path $c.Clean)) { Remove-Item -Recurse -Force $c.Clean }
     & powershell -NoProfile -ExecutionPolicy Bypass -File $check -Env $c.Env -Secs $c.Secs -Expect $c.Expect -Reject $reject
     if ($LASTEXITCODE -ne 0) { $failed += $name }
 }

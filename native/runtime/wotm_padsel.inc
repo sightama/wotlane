@@ -2442,14 +2442,6 @@ static RenderTexture2D g_selRt{};
 // Cache key: monster | costume << 8 | fallback disc costume (the skin's base) << 16
 static const wotm::model::Model *selModel(uint32_t id)
 {
-    // A skin saved again in the character creator keeps its costume index (same key) with new PNGs: the cached models hold the old
-    // decoded pixels, so they all go (the Renderers reupload: a new Model has a new gen()). Pointers from earlier frames are not kept.
-    static uint32_t texGen = wotm::texmods::Index::get().gen();
-    if (const uint32_t g = wotm::texmods::Index::get().gen(); g != texGen)
-    {
-        texGen = g;
-        g_selCache.clear();
-    }
     if (auto it = g_selCache.find(id); it != g_selCache.end())
         return it->second.get();
     static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
