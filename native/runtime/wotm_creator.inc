@@ -28,7 +28,7 @@ constexpr const char *kHints[kRowKinds] = {
     "WHICH MONSTER TO RECOLOR", "THE COSTUME WHOSE TEXTURES ARE THE STARTING POINT", "WHICH PART OF THE SKIN THE THREE SLIDERS BELOW CHANGE",
     "TURNS THE COLORS OF THIS TEXTURE AROUND THE WHEEL", "GRAYER TO THE LEFT, STRONGER TO THE RIGHT", "DARKER TO THE LEFT, LIGHTER TO THE RIGHT",
     "THE COSTUME NAME IN THE SELECTION. X TO EDIT", "WHETHER COMPUTER PLAYERS MAY PICK IT",
-    "WRITES THE SKIN TO MODS/CREATOR/SKINS AND ADDS IT TO THE COSTUME LIST", "LEAVES WITHOUT SAVING"};
+    "WRITES THE SKIN AND ADDS IT TO THE COSTUME LIST", "LEAVES WITHOUT SAVING"};   // the game font has no '/'
 // on the keyboard X is Space, which types a space while editing: Enter (or Esc) ends it there
 constexpr const char *kNameHint = "LEFT AND RIGHT MOVE, UP AND DOWN CHANGE THE LETTER, ENTER OR X DONE";
 
@@ -49,7 +49,7 @@ struct State
     int row = 0;                // position in rowsOf(*this)
     int lastRow = RType;        // the row kind at the last leaveSaveCheck (moving off SAVE cancels OVERWRITE?)
     char saveValue[24] = {};    // "", "SAVED", "OVERWRITE?", "NAME IN USE", "MODS ARE OFF", "NO MODS FOLDER", "CANNOT WRITE",
-                                // "NOT FOUND", kSavedRestart, "NOT YET" (MONSTER, until its save exists)
+                                // "NOT FOUND", kSavedRestart, "START WITH A LETTER" (MONSTER: a custom's id cannot start with a digit)
     double saveUntil = 0.0;     // GetTime() until which saveValue shows (0: until the next change)
     bool confirmOverwrite = false;
 };
@@ -68,6 +68,19 @@ static Row rowAt(const State &s, int pos)
     return pos >= 0 && pos < l.n ? l.row[pos] : RBack;
 }
 static Row rowKind(const State &s) { return rowAt(s, s.row); }
+// The row's hint: kHints, with MONSTER's own wording where the row means something else there
+static const char *hintFor(const State &s, Row kind)
+{
+    if (s.monsterType)
+        switch (kind)
+        {
+        case RMonster: return "THE MONSTER IT PLAYS AS";
+        case RName: return "THE MONSTER NAME IN THE CUSTOM LIST. X TO EDIT";
+        case RSave: return "WRITES THE MONSTER AND ADDS IT TO THE CUSTOM LIST";
+        default: break;
+        }
+    return kHints[kind];
+}
 // The SAVE row's messages are drawn in the game font: it has '?' and '.', but no ',' could be confirmed in its atlas
 constexpr const char kSavedRestart[] = "SAVED. RESTART TO USE";   // the longest message
 static_assert(sizeof(State::saveValue) >= sizeof(kSavedRestart), "saveValue must hold the longest message and its NUL");
@@ -353,14 +366,7 @@ static bool input(const bool e[kPanelActs], uint8_t *rdram, R5900Context *ctx, P
     }
     else if (e[POk] && kind == RSave)
     {
-        if (s.monsterType)
-        {   // the custom monster's save is not written yet: nothing is saved (above all, no skin by mistake)
-            setSave(s, "NOT YET");
-            s.saveUntil = 0.0;
-            std::fprintf(stderr, "[creator] saving a monster is not done yet: nothing written\n");
-        }
-        else
-            save(s, false);   // the files, the registry, OVERWRITE? and the errors
+        save(s, false);   // the files, the registry, OVERWRITE? and the errors (SKIN or MONSTER, by s.monsterType)
         // OK only when it saved; OVERWRITE? is a question (the cursor sound); an error, the back sound
         const bool saved = std::strncmp(s.saveValue, "SAVED", 5) == 0;
         panelSfx(rdram, ctx, runtime, saved ? 8 : std::strcmp(s.saveValue, "OVERWRITE?") == 0 ? 4 : 6);
@@ -414,8 +420,9 @@ static bool isSkinPngName(const std::string &n, const char *tail)
     return n.compare(at + 5, len, tail) == 0;
 }
 
-// Section 3 of the spec, in steps. Each uses only its arguments and the registries, no window state: WOTM_CREATOR runs them at boot,
-// before the window exists. Log paths are written as mods/Creator/skins/<id> (the id is ASCII; the mods folder may not be).
+// Section 3 of the spec (step 2: Section 2 of 2026-11-06-creator-monster-design.md), in steps. Each uses only its arguments and the
+// registries, no window state: WOTM_CREATOR and WOTM_CREATOR_MONSTER run them at boot, before the window exists. Log paths are written
+// as mods/Creator/skins/<id> (the id is ASCII; the mods folder may not be).
 struct SaveCtx
 {
     State &s;
@@ -423,9 +430,11 @@ struct SaveCtx
     bool script;
     const wotm::mods::MonsterInfo &mi;
     std::filesystem::path mods;   // the registry's mods folder (empty: mods off)
-    std::filesystem::path dir;
+    std::filesystem::path dir;    // mods/Creator/skins/<id>
+    bool monster = false;         // MONSTER: a custom (monsterDir/monster.json) that owns the skin in dir
+    std::filesystem::path monsterDir;   // mods/Creator/monsters/<id> (MONSTER only)
     std::vector<std::pair<std::filesystem::path, std::filesystem::path>> files;   // temp -> final, in write order
-    std::set<std::string> written;                                                 // final PNG names (lowercase)
+    std::set<std::string> written;   // the skin folder's file names this save wrote (lowercase): removeStale keeps these
     size_t rawCount = 0;
     void fail(const char *msg)
     {
@@ -475,7 +484,40 @@ static bool modsFolderIsItself(std::filesystem::path mods, std::string &other)
     return exact || !alias;
 }
 
-// MODS ARE OFF, NO MODS FOLDER, NAME IN USE (skin.json of another monster) or OVERWRITE? (an existing folder, first X): false stops the save
+// MONSTER: the id is free for a creator custom. NAME IN USE for a game monster's name or prefix (customBase) and for a custom that
+// comes from another folder than monsterDir (another mod's); START WITH A LETTER for what readCustom refuses as an id
+static bool monsterIdFree(SaveCtx &c)
+{
+    namespace fs = std::filesystem;
+    if (wotm::mods::customBase(c.id))
+    {
+        c.fail("NAME IN USE");
+        std::fprintf(stderr, "[creator] %s is a game monster's name; pick another name\n", c.id.c_str());
+        return false;
+    }
+    if (std::isdigit(static_cast<unsigned char>(c.id[0])))
+    {
+        c.fail("START WITH A LETTER");
+        std::fprintf(stderr, "[creator] %s: a monster's id starts with a letter; pick another name\n", c.id.c_str());
+        return false;
+    }
+    const wotm::mods::Custom *o = wotm::mods::Registry::get().custom(c.id);
+    auto same = [](const fs::path &p) {   // the same folder however it was written (as the registry's sameDir)
+        std::error_code ec;
+        const fs::path n = fs::weakly_canonical(p, ec);
+        return ec ? p.lexically_normal() : n;
+    };
+    if (o && same(o->dir) != same(c.monsterDir))
+    {
+        c.fail("NAME IN USE");
+        std::fprintf(stderr, "[creator] a monster %s already comes from %s; pick another name\n", c.id.c_str(), o->mod.c_str());
+        return false;
+    }
+    return true;
+}
+
+// MODS ARE OFF, NO MODS FOLDER, NAME IN USE (a skin folder of another owner; MONSTER: monsterIdFree) or OVERWRITE? (an existing
+// folder, first X): false stops the save
 static bool checkExisting(SaveCtx &c)
 {
     namespace fs = std::filesystem;
@@ -493,21 +535,28 @@ static bool checkExisting(SaveCtx &c)
                      other.c_str(), asciiName(c.mods).c_str(), c.id.c_str());
         return false;
     }
-    std::error_code ec;
-    if (!fs::exists(c.dir, ec)) return true;
-    // a skin folder holds one monster's skin; a missing or unreadable skin.json is not "in use" (the overwrite question applies)
+    if (c.monster && !monsterIdFree(c)) return false;
+    std::error_code ec, ec2;
+    const bool skinThere = fs::exists(c.dir, ec), monsterThere = c.monster && fs::exists(c.monsterDir, ec2);
+    if (!skinThere && !monsterThere) return true;
+    // a skin folder holds one owner's skin: SKIN, the monster's; MONSTER, the custom's own (its "monster" is the id). A missing or
+    // unreadable skin.json is not "in use" (the overwrite question applies)
     std::ifstream in(c.dir / "skin.json", std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     wotm::json::Value v;
     const wotm::json::Value *mon = nullptr;
-    if (in.is_open() && wotm::json::parse(text, v) && (mon = v.get("monster")) && mon->type == wotm::json::Value::Str)
+    if (skinThere && in.is_open() && wotm::json::parse(text, v) && (mon = v.get("monster")) && mon->type == wotm::json::Value::Str)
     {
         std::string other = mon->s;
         for (char &ch : other) ch = char(std::tolower(static_cast<unsigned char>(ch)));
-        if (other != c.mi.name)
+        if (other != (c.monster ? c.id : std::string(c.mi.name)))
         {
             c.fail("NAME IN USE");
-            std::fprintf(stderr, "[creator] %s is a %s skin; pick another name\n", c.id.c_str(), other.c_str());
+            if (wotm::mods::monsterInfo(other))
+                std::fprintf(stderr, "[creator] %s is a %s skin; pick another name\n", c.id.c_str(), other.c_str());
+            else
+                std::fprintf(stderr, "[creator] mods/%s/skins/%s belongs to the monster %s; pick another name\n", cr::kMod, c.id.c_str(),
+                             other.c_str());
             return false;
         }
     }
@@ -515,7 +564,8 @@ static bool checkExisting(SaveCtx &c)
     {
         c.fail("OVERWRITE?");
         c.s.confirmOverwrite = true;
-        std::fprintf(stderr, "[creator] mods/%s/skins/%s exists: X again overwrites\n", cr::kMod, c.id.c_str());
+        std::fprintf(stderr, "[creator] mods/%s/%s/%s exists: X again overwrites\n", cr::kMod, monsterThere ? "monsters" : "skins",
+                     c.id.c_str());
         return false;
     }
     return true;
@@ -584,10 +634,10 @@ static bool writeGroupPngs(SaveCtx &c)
     return true;
 }
 
-// skin.json through its temp file, last in `files`
+// skin.json through its temp file, after the PNGs in `files` (MONSTER: its "monster" is the custom's id)
 static bool writeSkinJson(SaveCtx &c)
 {
-    const std::string text = cr::skinJson(c.mi.name, c.id, c.name, c.s.costume);
+    const std::string text = cr::skinJson(c.monster ? c.id : std::string(c.mi.name), c.id, c.name, c.s.costume);
     const std::filesystem::path tmp = c.dir / "skin.json.tmp";
     c.files.emplace_back(tmp, c.dir / "skin.json");
     if (writeBytes(tmp, text.data(), text.size())) return true;
@@ -596,8 +646,21 @@ static bool writeSkinJson(SaveCtx &c)
     return false;
 }
 
-// Every temp file over its final name (PNGs first, skin.json last). A rename that fails stops there: the temps left go, the files
-// already renamed stay (a rename in the same folder failing midway is not expected; the log says so).
+// MONSTER: monster.json through its temp file, last in `files`, so commitFiles renames it after every PNG and the skin.json (a failed
+// save never leaves a custom whose skin is missing). Its own skin is the one this save writes (same id).
+static bool writeMonsterJson(SaveCtx &c)
+{
+    const std::string text = cr::monsterJson(c.id, c.name, c.mi.name, c.s.costume, c.s.cpu, c.id);
+    const std::filesystem::path tmp = c.monsterDir / "monster.json.tmp";
+    c.files.emplace_back(tmp, c.monsterDir / "monster.json");
+    if (writeBytes(tmp, text.data(), text.size())) return true;
+    c.fail("CANNOT WRITE");
+    std::fprintf(stderr, "[creator] cannot write mods/%s/monsters/%s/monster.json\n", cr::kMod, c.id.c_str());
+    return false;
+}
+
+// Every temp file over its final name (PNGs first, then skin.json, monster.json last). A rename that fails stops there: the temps left
+// go, the files already renamed stay (a rename in the same folder failing midway is not expected; the log says so).
 static bool commitFiles(SaveCtx &c)
 {
     for (size_t k = 0; k < c.files.size(); ++k)
@@ -605,8 +668,8 @@ static bool commitFiles(SaveCtx &c)
         std::error_code ec;
         std::filesystem::rename(c.files[k].first, c.files[k].second, ec);
         if (!ec) continue;
-        std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s: rename failed after %zu of %zu files: %s\n", cr::kMod, c.id.c_str(), k,
-                     c.files.size(), ec.message().c_str());
+        std::fprintf(stderr, "[creator] cannot write mods/%s/%s/%s: rename failed after %zu of %zu files: %s\n", cr::kMod,
+                     asciiName(c.files[k].second.parent_path().parent_path()).c_str(), c.id.c_str(), k, c.files.size(), ec.message().c_str());
         c.files.erase(c.files.begin(), c.files.begin() + std::ptrdiff_t(k));
         c.dropTemps();
         c.fail("CANNOT WRITE");
@@ -639,15 +702,18 @@ static void removeStale(SaveCtx &c)
     }
 }
 
-// Registry::addSkin and the PNG map: SAVED, or SAVED. RESTART TO USE when the registry refuses (the files stay)
+// Registry::addSkin and the PNG map (MONSTER: Registry::addCustom first; its skin names it, so a refused custom means no addSkin):
+// SAVED, or SAVED. RESTART TO USE when the registry refuses (the files stay; the next boot reads them)
 static void registerLive(SaveCtx &c)
 {
     std::string why;
-    if (const wotm::mods::Skin *k = wotm::mods::Registry::get().addSkin(c.dir, why))
+    wotm::mods::Registry &reg = wotm::mods::Registry::get();
+    const bool customOk = !c.monster || reg.addCustom(c.monsterDir, why);
+    if (const wotm::mods::Skin *k = customOk ? reg.addSkin(c.dir, why) : nullptr)
     {
         const std::string stem = k->prefix + std::to_string(k->index);
         std::vector<wotm::mods::SkinPng> pngs;
-        for (wotm::mods::SkinPng &p : wotm::mods::Registry::get().skinPngs())
+        for (wotm::mods::SkinPng &p : reg.skinPngs())
             if (p.stem == stem) pngs.push_back(std::move(p));
         wotm::texmods::Index::get().replaceSkin(stem, pngs);
         setSave(c.s, "SAVED");
@@ -660,29 +726,41 @@ static void registerLive(SaveCtx &c)
 }
 
 // Writes mods/Creator/skins/<id>/ (one PNG per tinted texture group, skin.json) and registers it (script: every group is written,
-// no OVERWRITE? question, no timed message). Every file goes to a temp name first and is renamed over the old one only when all
-// were written, so a failed save leaves the previous skin as it was.
+// no OVERWRITE? question, no timed message); MONSTER (s.monsterType) also mods/Creator/monsters/<id>/monster.json, the custom that
+// owns that skin. Every file goes to a temp name first and is renamed over the old one only when all were written, so a failed save
+// leaves the previous skin (and custom) as it was.
 static void saveAs(State &s, const std::string &id, const std::string &name, bool script)
 {
     namespace fs = std::filesystem;
     const auto t0 = std::chrono::steady_clock::now();
     const fs::path &mods = wotm::mods::Registry::get().dir();
     SaveCtx c{s, id, name, script, kMonsters[std::clamp(s.monster, 0, kMonsterCount - 1)], mods,
-              mods.empty() ? fs::path{} : mods / cr::kMod / "skins" / id, {}, {}, 0};
+              mods.empty() ? fs::path{} : mods / cr::kMod / "skins" / id};
+    c.monster = s.monsterType;
+    if (c.monster && !mods.empty()) c.monsterDir = mods / cr::kMod / "monsters" / id;
     if (!checkExisting(c)) return;
     s.confirmOverwrite = false;
     std::error_code ec;
     fs::create_directories(c.dir, ec);
+    if (!ec && c.monster) fs::create_directories(c.monsterDir, ec);
+    // only when empty: a folder this failed save created goes, an earlier save's stays
+    auto dropEmpty = [&c] {
+        std::error_code rm;
+        fs::remove(c.dir, rm);
+        if (c.monster) fs::remove(c.monsterDir, rm);
+    };
     if (ec)
     {
         c.fail("CANNOT WRITE");
-        std::fprintf(stderr, "[creator] cannot write mods/%s/skins/%s: %s\n", cr::kMod, id.c_str(), ec.message().c_str());
+        std::fprintf(stderr, "[creator] cannot write mods/%s/%s/%s: %s\n", cr::kMod, c.monster ? "monsters" : "skins", id.c_str(),
+                     ec.message().c_str());
+        dropEmpty();
         return;
     }
-    if (!writeGroupPngs(c) || !writeSkinJson(c))
+    if (!writeGroupPngs(c) || !writeSkinJson(c) || (c.monster && !writeMonsterJson(c)))
     {
         c.dropTemps();
-        fs::remove(c.dir, ec);   // only when empty: a folder this failed save created goes, an earlier skin's stays
+        dropEmpty();
         return;
     }
     if (!commitFiles(c)) return;
@@ -690,8 +768,12 @@ static void saveAs(State &s, const std::string &id, const std::string &name, boo
     registerLive(c);
     s.saveUntil = script ? 0.0 : GetTime() + 3.0;   // GetTime needs the window: the script runs before it exists
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    std::fprintf(stderr, "[creator] saved mods/%s/skins/%s (%zu png) in %.0f ms%s\n", cr::kMod, id.c_str(), c.written.size(), ms,
-                 c.rawCount ? "; raw alpha kept on the textures above 0x80" : "");
+    const char *raw = c.rawCount ? "; raw alpha kept on the textures above 0x80" : "";
+    if (c.monster)
+        std::fprintf(stderr, "[creator] saved monster %s (base %s costume %d, %zu png) in %.0f ms%s\n", id.c_str(), c.mi.name,
+                     s.costume, c.written.size(), ms, raw);
+    else
+        std::fprintf(stderr, "[creator] saved mods/%s/skins/%s (%zu png) in %.0f ms%s\n", cr::kMod, id.c_str(), c.written.size(), ms, raw);
 }
 // X on SAVE: the id from the typed name (trimmed), shown as typed
 static void save(State &s, bool script)
@@ -701,20 +783,23 @@ static void save(State &s, bool script)
     name.erase(0, std::min(name.find_first_not_of(' '), name.size()));
     saveAs(s, cr::idFromName(name), name, script);
 }
-// WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]] at boot (wotmCreatorInstall, after wotmModsInstall): the same
-// save with the values on every texture and the name = the id in capitals; the game then boots as usual
-static void scriptInstall()
+// WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]] and WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:...] (a custom
+// monster, CPU CAN USE off) at boot (wotmCreatorInstall, after wotmModsInstall): the same save with the values on every texture and
+// the name = the id in capitals; the game then boots as usual. Both may be set: the skin first.
+static void scriptSave(const char *var, bool monsterType)
 {
-    const char *env = std::getenv("WOTM_CREATOR");
+    const char *env = std::getenv(var);
     if (!env || !*env) return;
     cr::Script sc;
     std::string err;
-    if (!cr::parseScript(env, sc, err))
+    if (!(monsterType ? cr::parseMonsterScript(env, sc, err) : cr::parseScript(env, sc, err)))
     {
-        std::fprintf(stderr, "[creator] WOTM_CREATOR ignored: %s\n", err.c_str());
+        std::fprintf(stderr, "[creator] %s ignored: %s\n", var, err.c_str());
         return;
     }
     State st;
+    st.monsterType = monsterType;
+    st.cpu = false;
     for (int i = 0; i < kMonsterCount; ++i)
         if (kMonsters[i].type == sc.monster) st.monster = i;
     st.costume = sc.costume;
@@ -722,6 +807,11 @@ static void scriptInstall()
     std::string name = sc.id;
     for (char &c : name) c = char(std::toupper(static_cast<unsigned char>(c)));
     saveAs(st, sc.id, name, true);
+}
+static void scriptInstall()
+{
+    scriptSave("WOTM_CREATOR", false);
+    scriptSave("WOTM_CREATOR_MONSTER", true);
 }
 
 // Window thread only: the panel's 3D monster (like wotm_padsel's SelModel), its untinted textures and the groups the TEXTURE row

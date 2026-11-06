@@ -697,6 +697,7 @@ The table is checked against the code by `python tools/wotm_env.py` (lists what 
 | `WOTM_DISC=<folder>`, `WOTM_ISO=<file>` | force the source of the disc files (`.RTX`, `.PSS`) instead of `PS2X_CD_IMAGE`/the ELF's folder |
 | `WOTM_MODS=<folder>` (`0` turns it off) | folder of mods that override disc files (default: `mods/` next to the ELF; `wotm_mods.inc`, `MODS.md`) |
 | `WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` | at boot, saves a recolor skin of that costume to `mods/Creator/skins/<id>/` (every texture shifted by the same values) and registers it, then boots normally ("Runtime: character creator" section) |
+| `WOTM_CREATOR_MONSTER=<base>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]` | at boot, saves a custom monster on that playable base: `mods/Creator/monsters/<id>/monster.json` (name = the id in capitals, CPU CAN USE off, `"skin": "<id>"`) and its own recolor skin in `mods/Creator/skins/<id>/`, registers both, then boots normally ("Runtime: character creator" section) |
 | `WOTM_REPO=<folder>` | repo root (`run_live.bat` and the launcher pass it): with no `mods/` next to the ELF, the mods come from `<folder>/mods` (`wotm_mods.inc`) |
 | `WOTM_FMV_MUTE=1` | movies without audio |
 | `WOTM_SKIPINTRO=1` | skips the two boot movies (`intro_m` and `int_main`, only the first time of each; `playMpegMovieWithDB` in `wotm_fmv.hpp`), straight to the title screen. SKIP INTRO MOVIES option of the FEATURES tab of "Recompiled options" (`settings.ini`); read at the first movie, so changing it in the panel applies on the next boot |

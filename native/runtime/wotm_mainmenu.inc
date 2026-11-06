@@ -1571,7 +1571,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         for (int i = 0; i < list.n; ++i)
         {
             const wc::Row kind = list.row[i];
-            const char *hint = wc::kHints[kind];
+            const char *hint = wc::hintFor(s, kind);
             switch (kind)
             {
             case wc::RType: rows[n++] = PRow{"TYPE", s.monsterType ? "MONSTER" : "SKIN", hint, true, KOpt}; break;
