@@ -52,6 +52,33 @@ inline std::string skinJson(const std::string &monster, const std::string &id, c
     return json::dump(v);
 }
 
+// mods/Creator/monsters/<id>/monster.json; skin = the id of its own skin, listed first among its costumes
+inline std::string monsterJson(const std::string &id, const std::string &name, const std::string &base, int costume, bool ai,
+                               const std::string &skin) {
+    json::Value v = json::Value::object();
+    v.at("id") = json::Value::string(id);
+    v.at("name") = json::Value::string(name);
+    v.at("base") = json::Value::string(base);
+    v.at("costume") = json::Value::integer(costume);
+    v.at("ai") = json::Value::boolean(ai);
+    v.at("skin") = json::Value::string(skin);
+    return json::dump(v);
+}
+
+// Portrait texId (T8H 128x64, the last entry of MON/<prefix><costume>.RTX) per playable monster and disc costume; -1 = none
+inline int portraitTex(const std::string &prefix, int costume) {
+    struct Row { const char *prefix; int tex[4]; };
+    static constexpr Row kRows[] = {
+        {"MONKEY", {2, 2, 2, 3}}, {"ROBOT", {12, 12, 12, 12}}, {"LIZARD", {3, 3, 3, 4}}, {"SHOGUN", {11, 10, 11, 11}},
+        {"MANTIS", {9, 8, 8, 8}}, {"ENERGY", {4, 4, 4, 3}}, {"LAVA", {3, 3, 3, 3}}, {"DRAGON", {4, 4, 5, 3}},
+        {"ROCK", {3, 3, 3, 2}}, {"ALIEN", {6, 6, 6, 6}},
+    };
+    if (costume < 0 || costume > 3) return -1;
+    for (const Row &r : kRows)
+        if (prefix == r.prefix) return r.tex[costume];
+    return -1;
+}
+
 // Alpha of a texture whose raw GS alpha goes above 0x80 (TexInfo::hiAlpha) before it is written to PNG. Such a PNG is read back
 // raw (texmods::loadPng, "255 = 0xFF", as tools/tex.py export writes it): the fight takes its alpha as the GS's, the model path
 // doubles it (min(255, 2a)). The decoded pixels cannot give the raw value back (fixAlpha turns every raw from 0x80 up into 255),
@@ -94,6 +121,10 @@ inline bool parseScript(const std::string &text, Script &out, std::string &err) 
     }
     return true;
 }
+
+// WOTM_CREATOR_MONSTER, same fields. The base is one of the ten playable monsters: parseScript already takes only those
+// (mods::monsterInfo), never the bosses a hand-written monster.json may use
+inline bool parseMonsterScript(const std::string &text, Script &out, std::string &err) { return parseScript(text, out, err); }
 
 // One entry of Model::textures() as the creator sees it (Model::TexInfo without raylib)
 struct TexKey { uint16_t id = 0; bool rtx = false; };

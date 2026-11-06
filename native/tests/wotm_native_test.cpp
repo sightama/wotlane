@@ -518,6 +518,36 @@ TEST(creator_skin_json_and_png_names)
     CHECK(wotm::creator::pngName(11, true) == "rtx_t0011.png");
 }
 
+TEST(creator_monster_json)
+{
+    const std::string text = wotm::creator::monsterJson("kaiju_king", "KAIJU KING", "togera", 1, false, "kaiju_king");
+    wotm::json::Value v;
+    CHECK(wotm::json::parse(text, v) && v.type == wotm::json::Value::Obj && v.obj.size() == 6);
+    CHECK(v.get("id")->s == "kaiju_king" && v.get("name")->s == "KAIJU KING" && v.get("base")->s == "togera");
+    CHECK(v.get("costume")->asInt(-1) == 1 && v.get("ai")->type == wotm::json::Value::Bool && !v.get("ai")->b);
+    CHECK(v.get("skin")->s == "kaiju_king" && !text.empty() && text.back() == '\n');
+}
+
+TEST(creator_monster_script_parse)
+{
+    using wotm::creator::parseMonsterScript;
+    wotm::creator::Script sc;
+    std::string err;
+    CHECK(parseMonsterScript("togera:1:kaiju:120", sc, err) && sc.monster == 3 && sc.costume == 1 && sc.id == "kaiju" && sc.hue == 120.f);
+    for (const char *bad : {"togera:1", "togera:7:x", "assboss:1:x", "togera:1:x:nan"}) {
+        err.clear();
+        CHECK(!parseMonsterScript(bad, sc, err) && !err.empty());
+    }
+}
+
+TEST(creator_portrait_tex)
+{
+    using wotm::creator::portraitTex;
+    CHECK(portraitTex("LIZARD", 0) == 3 && portraitTex("LIZARD", 1) == 3 && portraitTex("LIZARD", 2) == 3 && portraitTex("LIZARD", 3) == 4);
+    CHECK(portraitTex("SHOGUN", 0) == 11 && portraitTex("SHOGUN", 1) == 10 && portraitTex("SHOGUN", 2) == 11 && portraitTex("SHOGUN", 3) == 11);
+    CHECK(portraitTex("ASSBOSS", 1) == -1 && portraitTex("LIZARD", -1) == -1 && portraitTex("LIZARD", 4) == -1);
+}
+
 TEST(creator_raw_alpha_round_trip)
 {
     // A hiAlpha texture's PNG gets the disc's raw alpha (applyRawAlpha). Small mirrors of the formulas involved:
