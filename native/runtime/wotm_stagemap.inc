@@ -207,9 +207,12 @@ void dbInitDbTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (ctx->pc == kDbInitDb && g_pending)
     {
         g_pending = false;
-        // the stage's dbInitDb (LoadLevelFiles): the image at 0xA00000 is NGP file 0, and the monsters' NGPs follow it
+        // the stage's dbInitDb (LoadLevelFiles): the image at 0xA00000 is NGP file 0, and the monsters' NGPs follow it. LoadMonstersDB
+        // runs before dbInitDb (Shell.cpp, LoadLevelFiles) and adds at least one monster NGP, so a stage load has 2 or more NGP files;
+        // the shell, the pre-shell and the load screen (fileOnlyNgpFile) have exactly one. A load with no monster (PR 2's editor) must
+        // revisit this test.
         const uint32_t ngpN = rdram[kFileStatusAddr + 0x74];
-        const bool stage = GPR_U32(ctx, 4) == sm::kBase && ngpN >= 1 && ngpN <= 13 && rd32(rdram, kFileStatusAddr + 0x3C) == sm::kBase;
+        const bool stage = GPR_U32(ctx, 4) == sm::kBase && ngpN >= 2 && ngpN <= 13 && rd32(rdram, kFileStatusAddr + 0x3C) == sm::kBase;
         if (!stage && !g_active.empty())
             std::fprintf(stderr, "[stages] %s: the dbInitDb after the stage load is not the stage's (db 0x%X, %u NGP files), nothing applied\n",
                          g_active.c_str(), GPR_U32(ctx, 4), ngpN);

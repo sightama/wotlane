@@ -1227,10 +1227,13 @@ namespace
             // map the reserve is unused, and only the top-of-RAM slots (the last 4 KB) are a real ceiling
             const double used = (end - kHighBase) / 1048576.0, left = (int64_t(wotm::stagemap::kReserve) - end) / 1048576.0;
             const bool map = !wotm_stagemap::active().empty();
-            const char *warn = end > PS2_RAM_SIZE - 0x1000u ? " -- PAST THE END OF RAM, expect corruption"
-                               : left >= 0.5                 ? ""
-                               : map                         ? " -- NEAR OR PAST THE MAP RESERVE, the map is not applied"
-                                                             : " -- near or past the map reserve (only matters when a map is loaded)";
+            // the map is refused only when the load reaches into the reserve (wotm_stagemap.inc, applyActive: end > kReserve)
+            const char *warn = end > PS2_RAM_SIZE - 0x1000u    ? " -- PAST THE END OF RAM, expect corruption"
+                               : left >= 0.5                   ? ""
+                               : map && end > wotm::stagemap::kReserve ? " -- PAST THE MAP RESERVE, the map is not applied"
+                               : map                           ? " -- near the map reserve"
+                               : end > wotm::stagemap::kReserve ? " -- past the map reserve (only matters when a map is loaded)"
+                                                               : " -- near the map reserve (only matters when a map is loaded)";
             std::fprintf(stderr, "[wotm] stage load: %u files, monsters and textures end at 0x%07X (%.1f MB above 32 MB, %.1f MB to the map reserve 0x%07X)%s\n",
                          ngpN, end, used, left, wotm::stagemap::kReserve, warn);
             return;
