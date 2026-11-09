@@ -610,14 +610,17 @@ TEST(mods_scan_stages)
     put(root / "A" / "stages" / "m1" / "photo.png", "not a real png");
     put(root / "A" / "stages" / "bad" / "stage.json", R"({"name": "X", "base": "CENTRAL", "edits": []})");
     put(root / "A" / "stages" / "9lives" / "stage.json", kStageJson);   // id must start with a letter
-    put(root / "B" / "stages" / "m1" / "stage.json", R"({"name": "LOSER", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": []})");
+    put(root / "A" / "stages" / "abcdefghijklmnopq" / "stage.json", kStageJson);   // 17 chars: too long
+    put(root / "B" / "Stages" / "M1" / "stage.json", R"({"name": "LOSER", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": []})");
+    put(root / "C" / "Stages" / "M2" / "stage.json", kStageJson);   // mixed case: lists as m2
     put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
     wotm::mods::Registry reg;
     reg.scan(root);
     const std::vector<wotm::mods::Stage> st = reg.stages();
-    CHECK(st.size() == 1);
-    if (st.size() == 1)
+    CHECK(st.size() == 2);
+    if (st.size() == 2)
     {
+        CHECK(st[1].map.id == "m2" && st[1].mod == "C");
         CHECK(st[0].map.id == "m1" && st[0].map.name == "DOWNTOWN MESS" && st[0].map.base == "CENTRAL" && st[0].map.edits.size() == 2);
         CHECK(fs::equivalent(st[0].map.dir, root / "A" / "stages" / "m1") && st[0].mod == "A");
         CHECK(!st[0].photo.empty() && st[0].photo.filename() == "photo.png");
@@ -629,6 +632,7 @@ TEST(mods_scan_stages)
     };
     CHECK(logged("A/stages/bad ignored", "baseHash"));
     CHECK(logged("A/stages/9lives ignored", "start with a letter"));
+    CHECK(logged("A/stages/abcdefghijklmnopq ignored", "up to 16"));
     CHECK(logged("map m1: A beats B", ""));
     CHECK(logged("[stages] map m1 (\"DOWNTOWN MESS\", A): base CENTRAL, 2 edits", ""));
     CHECK(reg.files().count("MON/LIZARD1.TEX") == 1);

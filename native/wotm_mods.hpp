@@ -648,7 +648,8 @@ private:
             std::vector<fs::path> subs;
             for (const auto &e : fs::directory_iterator(dir, ec))
                 if (e.is_directory(ec)) subs.push_back(e.path());
-            std::sort(subs.begin(), subs.end());
+            // by lowercase folder name: the id, so the order is the same on every file system
+            std::sort(subs.begin(), subs.end(), [](const fs::path &a, const fs::path &b) { return lower(a.filename().string()) < lower(b.filename().string()); });
             const std::string mod = m.filename().string();
             for (const fs::path &s : subs) {
                 const std::string where = mod + "/stages/" + s.filename().string();
