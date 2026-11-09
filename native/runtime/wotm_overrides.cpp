@@ -272,6 +272,7 @@ namespace
     int g_matchMonsters[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // player, then the AIs
     int g_matchCostumes[kMatchMaxAIs + 1] = {-1, -1, -1, -1, -1, -1, -1, -1};   // -1: the lowest free costume
     int g_matchAIs = 0, g_matchLevel = -1;
+    std::string g_matchMap;   // the stage field's map id, if any: made active on each direct match (the menus' load clears it)
     // WOTM_PLAYERS=2: the first two WOTM_MATCH monsters are players 1 and 2 (m_monsterSel[1], m_costume[1], m_numPlayers 2:
     // split screen, like the menu's 2-player free for all); with WOTM_AIVSAI=1 both are AI-controlled. WOTM_PLAYERS=3 or 4: the
     // first three or four, with the screen in quadrants (wotm_split4.inc).
@@ -333,6 +334,7 @@ namespace
         }
         WRITE32(kShell + 0x2A44, static_cast<uint32_t>(g_matchKillTarget));   // m_killTarget
         WRITE32(kShell + 0x2BB0, static_cast<uint32_t>(g_matchLevel));   // m_levelNum
+        wotm_stagemap::setActive(g_matchMap);                            // after Shell::LoadUserintDB cleared it (wotm_stagemap.inc)
         WRITE32(kShell + 0x2BB4, static_cast<uint32_t>(g_matchPlayers));  // m_numPlayers
         WRITE32(kShell + 0x2BB8, static_cast<uint32_t>(g_matchAIs));     // m_numAIs
         for (uint32_t i = 0; i < 4; ++i)
@@ -2695,8 +2697,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             for (int i = 0; i < n - 1; ++i)
                 g_matchMonsters[i] = v[i], g_matchCostumes[i] = c[i];
             g_matchLevel = v[n - 1];
-            if (!matchMap.empty())
-                wotm_stagemap::setActive(matchMap);
+            g_matchMap = matchMap;   // active from userintMainDirect on
         }
         if (g_matchLevel >= 0)
         {

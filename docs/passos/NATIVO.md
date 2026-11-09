@@ -614,8 +614,16 @@ match: `WOTM_MODE`. The rules, by hook:
 - **RANDOM:** it is stage 17 (`dylan`, a team test stage, with no files): the photo switch (`Shell+0x5D0`) has 24 children and
   `levelUnlocked` leaves it open. Its name in the `screenLevelSelect` table (`GameLevelLongNames_006EEEF8`) becomes "Random". In
   `changeScreen(8, 99)` it becomes a stage drawn at random from the list, among the unlocked ones, without Training and Tokyo Deathmatch (team
-  test stages) and without the fourth entry when the game skips it (mode 2 with 2 or more CPUs, mode 3 with a CPU), before loading. The announcer does not
+  test stages), saved maps and the fourth entry when the game skips it (mode 2 with 2 or more CPUs, mode 3 with a CPU), before loading. The announcer does not
   announce the randomly drawn stage.
+- **Saved maps (map creator):** after RANDOM, the first 6 maps of `mods/<mod>/stages/` (sorted by id, the same on every PC) whose
+  base stage is in the list take the developer slots 18 to 23 (`levelUnlocked` leaves them open), with their name (upper case, up to
+  17 characters) in rows 18 to 23 of the name table; log `[stages] slot <n>: <id>`. On `changeScreen(8, 99)`, after RANDOM (which never
+  draws a map), a map slot becomes its base stage's index and the map becomes active (`[stages] map <id>: stage <n>`, no announcer);
+  `wotm_stagemap.inc` applies it at the load. Any other confirmed stage clears the active map, and so does every load of the menus
+  (`Shell::LoadUserintDB`), so adventure, training and the minigames never inherit one; a reload inside the session (REBUILD LEVEL)
+  keeps it. Picture: the slot's own switch child (the same object as 17's) shows the map's `photo.png` or,
+  without one, the base stage's picture (`SHELL.TEX` through `savepics`, or the base's `levelpics` PNG for 12, 13 and 16).
 - **Photos:** `SHELL.TEX` has no photo of Training, Lake Powell and Tokyo Deathmatch; the switch children of those stages (and of 17) use
   another one's (Midtown Park, half of Rosdale Canyon, half of Tsunopolis). The photo object draws with its own texture
   (`Scene::nodeTexture`), in scene order, so the grain and the big-screen film pass over it as in the other stages. The photos:

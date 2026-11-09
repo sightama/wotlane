@@ -13,8 +13,10 @@
 // - dbInitDb (0x12E418) is also called for the shell, the pre-shell and the load screen, all with 0xA00000 (1b): only the call
 //   after a LoadLevelDB (g_pending) applies, once per load (1c: REBUILD LEVEL loads again and applies again; PLAY AGAIN and RESTART
 //   don't run dbInitDb, the edited image stays).
-// - The active map (setActive: WOTM_MATCH's map id; the stage selection later, before the load) stays set for the whole session;
-//   a map on another base stage applies nothing. The edits take grid list nodes and ROTATEs from the reserve (kReserve, 1 MB under
+// - The active map is set where a stage is chosen (setActive: the stage selection's confirm on a map slot, wotm_levelsel.inc; WOTM_MATCH's
+//   map id in userintMainDirect) and cleared each time the menus load (Shell::LoadUserintDB entry) and on a confirm of any other
+//   stage, so no path that starts a fight without that confirm (adventure, training, minigames) inherits an earlier map. It stays
+//   set for the whole session (REBUILD LEVEL reloads without the menus); a map on another base stage applies nothing. The edits take grid list nodes and ROTATEs from the reserve (kReserve, 1 MB under
 //   the top-of-RAM slots, 1d), cleared before each apply; if the loaded files reach it (or fileStatus can't say), nothing is applied.
 // - WOTM_STAGE_DUMP=<path>: after apply, the image goes to <path> and the reserve to <path>.reserve (tools/stage_map.py check).
 // wotm_overrides.cpp is built with strict float rules, but keep float math out of here anyway: it belongs in wotm_stagemap.cpp.
@@ -29,7 +31,7 @@ constexpr uint32_t kLoadLevelDB = wotm::fn::LoadLevelDB__5Shell, kZipInflateAll 
 constexpr uint32_t kFileStatusAddr = wotm::sym::fileStatus, kWhichLevel = wotm::sym::whichLevel;
 constexpr uint32_t kLevelNumAddr = wotm::sym::shellInfo + 0x2BB0;   // Shell::m_levelNum
 
-PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr, g_origDbInitDb = nullptr;
+PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr, g_origDbInitDb = nullptr, g_origLoadUserintDB = nullptr;
 
 std::string g_active;          // map id (Registry::stages()), or empty: no map
 bool g_hashed = false;         // g_hash is the hash of the last LoadLevelDB's image (taken only with a map active)
@@ -222,6 +224,14 @@ void dbInitDbTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_origDbInitDb(rdram, ctx, runtime);
 }
 
+// Shell::LoadUserintDB (shell.ngp: the menus load, Shell.cpp's main loop, before userintMain): no map until a stage is chosen again
+void loadUserintDBTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc == wotm::fn::LoadUserintDB__5Shell)
+        setActive("");
+    g_origLoadUserintDB(rdram, ctx, runtime);
+}
+
 // Registers `hook` at the function's entry and at every resume point inside it (the function table has one slot per address a
 // thread can resume at, all pointing at the same recompiled function, which picks up from ctx->pc). A hook on the entry alone
 // misses the completion of a call that returned midway; with every slot wrapped, the resume comes through the hook too.
@@ -245,12 +255,14 @@ void install(PS2Runtime &runtime)
     // sizes from native/wotm_syms.h (LoadLevelDB__5Shell 0x140, zipInflateAll__FPcPv 0x108)
     const int nLoad = wrapAll(runtime, kLoadLevelDB, 0x140, &loadLevelDBTapped, g_origLoadLevelDB);
     const int nZip = nLoad ? wrapAll(runtime, kZipInflateAll, 0x108, &zipTapped, g_origZip) : 0;
-    if (nLoad && nZip && runtime.hasFunction(kDbInitDb) && (g_origDbInitDb = runtime.lookupFunction(kDbInitDb)))
+    if (nLoad && nZip && runtime.hasFunction(kDbInitDb) && (g_origDbInitDb = runtime.lookupFunction(kDbInitDb)) &&
+        runtime.hasFunction(wotm::fn::LoadUserintDB__5Shell) && (g_origLoadUserintDB = runtime.lookupFunction(wotm::fn::LoadUserintDB__5Shell)))
     {
         runtime.registerFunction(kDbInitDb, &dbInitDbTapped);
+        runtime.registerFunction(wotm::fn::LoadUserintDB__5Shell, &loadUserintDBTapped);
         std::fprintf(stderr, "[stages] map hooks: LoadLevelDB (%d entry and resume points), zipInflateAll (%d), dbInitDb\n", nLoad, nZip);
     }
     else
-        std::fprintf(stderr, "[stages] maps unavailable: LoadLevelDB, zipInflateAll or dbInitDb has no function in the runtime\n");
+        std::fprintf(stderr, "[stages] maps unavailable: LoadLevelDB, zipInflateAll, dbInitDb or LoadUserintDB has no function in the runtime\n");
 }
 } // namespace wotm_stagemap

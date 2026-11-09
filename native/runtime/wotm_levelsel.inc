@@ -18,14 +18,34 @@
 // levelpics/<name>.png (training, lakepowell, tokyodeathmatch; random), searched in mods/<mod>/levelpics/, levelpics/ next to the
 // ELF and levelpics/ at the repo root. RANDOM with no PNG is a darkened mosaic of SHELL.TEX's stage pictures (savepics) with a "?".
 // Other stages with no PNG keep the game's picture.
+//
+// Saved maps (map creator, mods/<mod>/stages/<id>/; spec docs/superpowers/specs/2026-11-09-map-creator-design.md, "Loading a map"
+// step 1): after RANDOM, extend() lists the first 6 maps of Registry::stages() (sorted by id: the same maps in the same order on every
+// PC) whose base stage is in the list, in the developer slots 18 to 23 (levelUnlocked leaves them open; below 0x1D, so never a host0:
+// load). Their names go to the same name table, rows 18 to 23. On changeScreen(8, 99) resolveMap, after resolveRandom (which never
+// draws a map slot), writes the base stage's index to m_levelNum and makes the map active (wotm_stagemap.inc applies it at the load);
+// any other confirmed stage clears the active map. The narrator doesn't announce a map, like RANDOM. Picture: the slot's own child
+// of the switch (the same kind of object as 17's) draws the map's photo.png, or the base stage's picture (SHELL.TEX's, through
+// savepics, or the base's levelpics PNG for 12, 13 and 16) when the map has none.
+// Stale maps: the active map is cleared each time the menus load (Shell::LoadUserintDB, wotm_stagemap.inc), and set only where a stage
+// is chosen: here on a map slot, or by WOTM_MATCH's direct match (userintMainDirect). So adventure, training, minigames and any other
+// path that starts a fight from the menus without this confirm see no map; REBUILD LEVEL (a reload without the menus) keeps it.
 #include <filesystem>
+#include <mutex>
 #include <random>
+
+namespace wotm_stagemap   // wotm_stagemap.inc (compiled in wotm_overrides.cpp)
+{
+void setActive(const std::string &id);
+int levelIndex(const std::string &base);
+}
 
 namespace wotm_levelsel
 {
 namespace fs = std::filesystem;
 
 constexpr int kRandom = 17;
+constexpr int kFirstMap = 18, kMaxMaps = 6;   // saved maps in slots 18 to 23
 constexpr uint32_t kShell = wotm::sym::shellInfo;
 constexpr uint32_t kLevelNum = kShell + 0x2BB0, kNumAIs = kShell + 0x2BB8, kMode = kShell + 0x2C10, kLevelSw = kShell + 0x5D0;
 constexpr uint32_t kList = PS2_RAM_SIZE - 0x300;   // LevelList {first, count, levels} and, at +0x10, up to 24 stages (the other top-of-RAM slots: -0x1000..-0x340)
@@ -53,6 +73,32 @@ static bool unlocked(uint8_t *rdram, int level)
     return rd32(rdram, wotm::sym::monsterSelectMode + off) != 0;
 }
 
+// A saved map listed in slot kFirstMap + i
+struct MapSlot
+{
+    std::string id;
+    char name[18] = {};   // as written to the name table: upper case, at most 17 characters and a NUL
+    int base = 0;         // its base stage's index (m_levelNum)
+    std::string photo;    // photo.png, empty if there's none
+};
+static MapSlot g_maps[kMaxMaps];   // EE thread
+static int g_mapCount = 0;
+// Copy for the window thread (picture), published by extend()
+static std::mutex g_pubLock;
+static MapSlot g_pub[kMaxMaps];
+static int g_pubCount = 0;
+
+// The game's name font knows A-Z, 0-9, space and - (the map's name was checked against them at the scan)
+static void mapName(const std::string &s, char (&out)[18])
+{
+    std::memset(out, 0, sizeof out);
+    for (size_t i = 0; i < s.size() && i < sizeof out - 1; ++i)
+    {
+        const char c = char(std::toupper(static_cast<unsigned char>(s[i])));
+        out[i] = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ? c : ' ';
+    }
+}
+
 // Extended copy of the retail list `src` at kList
 static void extend(uint8_t *rdram, uint32_t src)
 {
@@ -67,6 +113,30 @@ static void extend(uint8_t *rdram, uint32_t src)
             if (std::find(out.begin(), out.end(), l) == out.end())
                 out.push_back(l);
     out.push_back(kRandom);
+    // saved maps whose base stage is in this list (with WOTM_HIGHRAM=0, elimination keeps only the retail stages: maps on those)
+    g_mapCount = 0;
+    for (const wotm::mods::Stage &st : wotm::mods::Registry::get().stages())
+    {
+        if (g_mapCount == kMaxMaps || out.size() >= 24)
+            break;
+        const int base = wotm_stagemap::levelIndex(st.map.base);
+        if (base < 1 || std::find(out.begin(), out.end(), base) == out.end())
+            continue;
+        MapSlot &m = g_maps[g_mapCount];
+        m.id = st.map.id;
+        mapName(st.map.name, m.name);
+        m.base = base;
+        m.photo = st.photo.string();
+        out.push_back(kFirstMap + g_mapCount);
+        std::fprintf(stderr, "[stages] slot %d: %s\n", kFirstMap + g_mapCount, m.id.c_str());
+        ++g_mapCount;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_pubLock);
+        for (int i = 0; i < g_mapCount; ++i)
+            g_pub[i] = g_maps[i];
+        g_pubCount = g_mapCount;
+    }
     for (size_t i = 0; i < out.size(); ++i)
         wr32(rdram, kListLevels + 4 * uint32_t(i), uint32_t(out[i]));
     wr32(rdram, kList, first);
@@ -88,6 +158,8 @@ static void levelSelectHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runti
             extend(rdram, cur);
         static const char kName[] = "Random";
         std::memcpy(rdram + ((kLongNames + 18u * kRandom) & 0x1FFFFFFFu), kName, sizeof kName);
+        for (int i = 0; i < g_mapCount; ++i)
+            std::memcpy(rdram + ((kLongNames + 18u * uint32_t(kFirstMap + i)) & 0x1FFFFFFFu), g_maps[i].name, sizeof g_maps[i].name);
     }
     g_origLevelSelect(rdram, ctx, runtime);
 }
@@ -108,7 +180,7 @@ bool resolveRandom(uint8_t *rdram)
         for (uint32_t i = 0; i < n; ++i)
         {
             const int l = int(rd32(rdram, kListLevels + 4 * i));
-            if (l != kRandom && l != 12 && l != 16 && !(skip3 && i == 3) && unlocked(rdram, l))   // 12 Training, 16 Tokyo Deathmatch: test stages
+            if (l != kRandom && l < kFirstMap && l != 12 && l != 16 && !(skip3 && i == 3) && unlocked(rdram, l))   // 12 Training, 16 Tokyo Deathmatch: test stages; no maps
                 pool.push_back(l);
         }
     }
@@ -118,6 +190,23 @@ bool resolveRandom(uint8_t *rdram)
     const int pick = pool[std::uniform_int_distribution<size_t>(0, pool.size() - 1)(rng)];
     wr32(rdram, kLevelNum, uint32_t(pick));
     std::fprintf(stderr, "[stages] RANDOM: stage %d (of %zu)\n", pick, pool.size());
+    return true;
+}
+
+// changeScreen(8, 99), after resolveRandom: a map slot becomes its base stage and the map becomes active (true: the narrator doesn't
+// announce it); any other stage clears the active map.
+bool resolveMap(uint8_t *rdram)
+{
+    const int i = int(rd32(rdram, kLevelNum)) - kFirstMap;
+    if (rd32(rdram, wotm::sym::g_levelList) != kList || i < 0 || i >= g_mapCount)
+    {
+        wotm_stagemap::setActive("");
+        return false;
+    }
+    const MapSlot &m = g_maps[i];
+    wr32(rdram, kLevelNum, uint32_t(m.base));
+    wotm_stagemap::setActive(m.id);
+    std::fprintf(stderr, "[stages] map %s: stage %d\n", m.id.c_str(), m.base);
     return true;
 }
 
@@ -154,9 +243,12 @@ static fs::path findPic(const std::string &name)
 struct Pic
 {
     bool tried = false;
+    std::string key;               // map slots: the map's id and photo the textures came from (another map in the slot: load again)
     Texture2D full{}, half[2]{};   // the whole picture and its left and right halves (object with two textures)
 };
 static Pic g_pics[24];
+static MapSlot g_win[kMaxMaps];   // window thread: g_pub's copy for this frame
+static int g_winCount = 0;
 
 // Top-down image -> texture like the game's in Scene::draw: raw alpha (0x80 = opaque) and rows bottom to top (the game draws
 // with V flipped; mod PNGs from tools/tex.py already come that way). Frees the image.
@@ -222,12 +314,63 @@ static Image mosaic()
     return m;
 }
 
+// A map slot's picture: its photo.png, else its base stage's picture (the base's levelpics PNG for 12, 13 and 16, SHELL.TEX's for
+// the others). `what` says which, for the log.
+static Image mapImage(const MapSlot &m, std::string &what)
+{
+    if (!m.photo.empty())
+        if (Image img = LoadImage(m.photo.c_str()); img.data)
+        {
+            what = m.photo;
+            return img;
+        }
+    if (const char *n = picName(m.base))
+        if (const fs::path f = findPic(n); !f.empty())
+            if (Image img = LoadImage(f.string().c_str()); img.data)
+            {
+                what = "base stage's " + f.string();
+                return img;
+            }
+    static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
+    if (const Texture2D *t = wotm::savepics::drawer().levelTexture(io.cdRoot, io.cdImage.string(), uint32_t(m.base)))
+    {
+        what = "base stage's SHELL.TEX picture";
+        return LoadImageFromTexture(*t);
+    }
+    return Image{};
+}
+
 static const Pic &picOf(int level)
 {
     Pic &p = g_pics[level];
+    const int slot = level - kFirstMap;
+    const MapSlot *m = slot >= 0 && slot < g_winCount ? &g_win[slot] : nullptr;
+    if (m && p.key != m->id + "|" + m->photo)
+    {   // another map in this slot (a list with other stages): drop the old textures
+        UnloadTexture(p.full);
+        UnloadTexture(p.half[0]);
+        UnloadTexture(p.half[1]);
+        p = Pic{};
+        p.key = m->id + "|" + m->photo;
+    }
     if (p.tried)
         return p;
     p.tried = true;
+    if (m)
+    {
+        std::string what = "the game's";
+        Image img = mapImage(*m, what);
+        if (img.data)
+        {
+            ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+            const float w = float(img.width), h = float(img.height);
+            p.half[0] = gameTexture(ImageFromImage(img, Rectangle{0.f, 0.f, w * 0.5f, h}));
+            p.half[1] = gameTexture(ImageFromImage(img, Rectangle{w * 0.5f, 0.f, w * 0.5f, h}));
+            p.full = gameTexture(img);
+        }
+        std::fprintf(stderr, "[stages] picture for stage %d (map %s): %s\n", level, m->id.c_str(), p.full.id ? what.c_str() : "the game's");
+        return p;
+    }
     const char *n = picName(level);
     const fs::path f = n ? findPic(n) : fs::path{};
     Image img = f.empty() ? Image{} : LoadImage(f.string().c_str());
@@ -298,12 +441,12 @@ static void wideUv(wotm::MeshData &md)
 }
 
 static constexpr int kOwn[] = {12, 13, 16, kRandom};
-static uint32_t g_obj[24];      // picture object of each kOwn stage this frame (0 = outside the menu or not matched)
+static uint32_t g_obj[24];      // picture object of each kOwn stage and map slot this frame (0 = outside the menu or not matched)
 static uint16_t g_numTex[24];   // its texture count (2 for stage 12's: halves)
 
 static unsigned nodeTexture(uint32_t node, uint32_t slot)
 {
-    for (const int l : kOwn)
+    for (int l = 0; l < 24; ++l)
         if (g_obj[l] && g_obj[l] == node)
         {
             const Pic &p = g_pics[l];
@@ -320,13 +463,25 @@ static unsigned nodeTexture(uint32_t node, uint32_t slot)
 void prepare(wotm::Scene &scene, const wotm::Ram &ram)
 {
     scene.nodeTexture = &nodeTexture;
-    for (const int l : kOwn)
-        g_obj[l] = 0;
+    for (uint32_t &o : g_obj)
+        o = 0;
     const uint32_t sw = ram.u32(kLevelSw) & 0x1FFFFFFFu;
     if (!sw || !ram.ok(sw, 0x80) || (ram.u32(sw) & 63) != 6 || ram.u8(sw + 0xB) != 24)
         return;
-    for (const int l : kOwn)
     {
+        std::lock_guard<std::mutex> lk(g_pubLock);
+        for (int i = 0; i < g_pubCount; ++i)
+            g_win[i] = g_pub[i];
+        g_winCount = g_pubCount;
+    }
+    int own[std::size(kOwn) + kMaxMaps], nOwn = 0;
+    for (const int l : kOwn)
+        own[nOwn++] = l;
+    for (int i = 0; i < g_winCount; ++i)
+        own[nOwn++] = kFirstMap + i;
+    for (int k = 0; k < nOwn; ++k)
+    {
+        const int l = own[k];
         const uint32_t o = picObject(ram, sw, l);
         const uint16_t nt = o ? ram.u16(o + 0x5A) : 0;
         if (!o || nt < 1 || nt > 2)

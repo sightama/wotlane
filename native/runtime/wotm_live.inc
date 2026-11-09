@@ -1639,7 +1639,7 @@ static void drawDamagePopups(wotm::Scene &scene, const Camera3D &cam, int rw, in
 }
 
 #include "wotm_narrator.inc"   // name of the monster picked on the select screen (before wotm_padsel.inc, which calls it)
-namespace wotm_levelsel { bool resolveRandom(uint8_t *rdram); }   // wotm_levelsel.inc: RANDOM on the stage select (padsel calls it)
+namespace wotm_levelsel { bool resolveRandom(uint8_t *rdram); bool resolveMap(uint8_t *rdram); }   // wotm_levelsel.inc: RANDOM and saved maps on the stage select (padsel calls them)
 // 2-player side choice on the menu's big screen (menu hooks + drawing; wotmPadSelInstall, called from wotm_overrides.cpp)
 #include "wotm_padsel.inc"
 #include "wotm_levelsel.inc"   // stage select with the hidden stages and RANDOM (after wotm_padsel.inc: big-screen plane)
