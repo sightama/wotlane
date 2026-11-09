@@ -68,7 +68,7 @@ Decisions taken with Jake:
 ## Pieces
 
 A piece is the nearest `TRANSLATE` (or `ROTATE`) above a building, prop or destructible (typically
-`GROUP -> TRANSLATE -> INTERACTIVE -> DESTRUCTIBLE -> ...`). `CENTRAL` has 373 (rule in PR 1 checks, 1i). Ground hulls with no
+`GROUP -> TRANSLATE -> INTERACTIVE -> DESTRUCTIBLE -> ...`). `CENTRAL` has 317 (rule in PR 1 checks, 1i). Ground hulls with no
 transform above them (7 in `CENTRAL`) and pedestrian groups (root `TRANSLATE`s with id1 3000) are not pieces. A piece with
 a `ROTATE` gets moved through the translation row of its matrix. Most buildings have only a `TRANSLATE`, so a turn on one
 allocates a `ROTATE` in the reserve (see "Grid nodes") whose matrix is the turn with the piece's translation in its fourth row
@@ -143,6 +143,11 @@ Nothing is merged by us; Lane reviews.
 - No duplicate or add, no ground or terrain edits.
 - CPU routes (`.AIP`) are not updated: CPUs that hit a moved building climb or steer around it.
 - Spawn and power-up places stay where the disc puts them.
+- Trigger zones stay where the disc puts them (except 3-MILE's 13 under pieces, which follow).
+- Pickups on a rooftop float when their building moves (a pickup is its own piece).
+- Level pickups are placed by `dbsTraverse`'s callback with the traversal transform, and its case 3 in `src/common/dbs.cpp`
+  is an untuned draft (the game runs the original code); Task 8's live check confirms a moved pickup appears in its new
+  place.
 - Water and kill zones (`WaterGrid.cpp`) and `RST/<STAGE>.MRS` are not mapped yet; PR 1 checks them.
 - Six maps listed at once in the selection.
 - Online in step 1 goes through `WOTM_MATCH` (a map id in the stage field); picking a map in the launcher's lobby needs a
@@ -224,9 +229,10 @@ Task 1 of the PR 1 plan. Addresses in the generated recompiled code (`recomp/ret
   surface type of collision polygons, which move with their hull. The `WaterGrid` constructor has no direct caller in the
   recompiled code. `RST/<STAGE>.MRS` is the stage's reset (tweak) file (`src/common/resetcom.cpp:293`): background color,
   ambient, fog, parallel lights, time of day (`resetcom.cpp:60-86`), dust and particle colors and the default ground height
-  (`src/game/reset.cpp:28-55`); nothing tied to pieces. Trigger zones are `COLL_TRIG` collision paths in the grid (`CENTRAL`:
-  18, all under a `TRANSLATE` or `ROTATE`); they follow a moved piece through the same relink, so the relink includes
-  trigger paths.
+  (`src/game/reset.cpp:28-55`); nothing tied to pieces. Trigger zones are `COLL_TRIG` collision paths in the grid. Most hang from their
+  own root (id1 5, e.g. `CENTRAL`'s 18 under 0x2510) under a `TRANSLATE` or `ROTATE` with no geometry, which is not a
+  piece: they stay where the disc puts them. On all 19 stages only 13 trigger paths go through a piece, all on 3-MILE
+  (under the world root); those follow their piece through the same relink, so the relink includes trigger paths.
 - **1i. Piece rule** (`tools/stage_map.py`, mirrored by the loader). Walk: depth-first preorder from the header's roots in
   order, children in slot order, a node reached twice keeps its first parent. The children table needs `ANIM_XFORM` (17,
   count +4, children +0xCC), `SKEL_BONE` (35, count +4, children +0xC) and `ANIM_SCALE` (38, count +4, children +0x60) as
@@ -234,11 +240,18 @@ Task 1 of the PR 1 plan. Addresses in the generated recompiled code (`recomp/ret
   stock path is reached and each step of a path is a parent-child link, except 39 steps (AIRPORT, CAPITOL, ISLAND, VEGAS,
   VOLCANO) that leave a `NULL` on disc, where `hdTraversePath` stops anyway. **Rule:** a piece is a `TRANSLATE`
   or `ROTATE` with a parent, whose subtree holds an `OBJECT` or `POLY_COLL`, with no transforming node (`TRANSLATE`,
-  `ROTATE`, `SCALE`, `ANIM_XFORM`, `ANIM_SCALE`) on its first-parent chain. The plan's "no piece above" let in 48 nodes of
-  `CENTRAL` under an `ANIM_XFORM` (animated vehicles and parts, whose place comes from the animation) and, on METRO and
-  VEGAS, nodes under a `SCALE`; with no transform above, a piece's own translation (a `ROTATE`'s fourth row) is its world
-  position, which is what `move` writes. `CHAR_INSTANCE` and `SKEL_BONE` do not transform and do not block. Root-level
-  transforms (pedestrians, id1 3000) and what is under them are excluded by the same rule. No piece has two parents on any
-  stage. `CENTRAL`: **373 pieces** (99 `ROTATE`), 55 of them on collision paths (all destructible) under the world root
-  (id1 1, 202 pieces in all); the other 171 are under the id1 0 roots (0x250, 0x280, 0x600), some at the origin (templates);
-  the editor's picking (bounding sphere hit) decides whether those are useful.
+  `ROTATE`, `SCALE`, `ANIM_XFORM`, `ANIM_SCALE`) on its first-parent chain, and either (a) whose chain ends at the root
+  with id1 1 (the world root, the only one drawn: `viewSetWorldEpNode`, `src/game/db.cpp:185`, `view.cpp:351`) or (b) whose
+  first node with a nonzero id1, in preorder of its subtree (itself first), has a level pickup id (0x12C0-0x13EB; placed by
+  `LevelPickups::createPickup` with the traversal transform, `db.cpp:222-223`). Roots are told apart by id1, never by
+  offset. The plan's "no piece above" let in 48 nodes of `CENTRAL` under an `ANIM_XFORM` (animated vehicles and parts,
+  whose place comes from the animation) and, on METRO and VEGAS, nodes under a `SCALE`; with no transform above, a piece's
+  own translation (a `ROTATE`'s fourth row) is its world position, which is what `move` writes. `CHAR_INSTANCE` and
+  `SKEL_BONE` do not transform and do not block. Root-level transforms (pedestrians, id1 3000) and what is under them are
+  excluded by the same rule, and so are the id1 0 template roots (HUD elements, weapon and power-up nodes, particle
+  textures, shell end points, the font; 3-MILE's power-up template root id1 5107) and `CENTRAL`'s 39 unreferenced
+  `TRANSLATE -> OBJECT` pairs that are never drawn. No piece has two parents on any stage. `CENTRAL`: **317 pieces**
+  (94 `ROTATE`): 202 under the world root, 55 of them on collision paths (all destructible), and 115 level pickups. Per
+  stage (world + pickups): 3-MILE 298 (264 + 34), AIRPORT 175, BIGSHOT 1, CANYON1 92, CANYON2 45, CAPITOL 145, CENTRAL
+  317, CRUSH 21, DBALL 19, ISLAND 433, METRO 703, MINISF 91, SANFRAN 214, TOKYO 218, TOKYODM 249, TRAINING 1, UFO 91,
+  VEGAS 250, VOLCANO 113.
