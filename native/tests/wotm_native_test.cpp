@@ -15,11 +15,15 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iterator>
+#include <map>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -1306,6 +1310,254 @@ TEST(stagemap_same_bits_on_every_machine)
     std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
     CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
     CHECK(h == 0x035d31e0eff6d986ull);
+}
+
+namespace
+{
+    // ';'-separated list from the environment (empty when unset)
+    std::vector<std::string> envList(const char *name)
+    {
+        std::vector<std::string> out;
+        const char *v = std::getenv(name);
+        std::string cur;
+        for (const char *c = v ? v : ""; ; ++c)
+        {
+            if (*c == ';' || !*c)
+            {
+                if (!cur.empty())
+                    out.push_back(cur);
+                cur.clear();
+                if (!*c)
+                    break;
+            }
+            else
+                cur += *c;
+        }
+        return out;
+    }
+    bool readFile(const std::string &path, std::vector<uint8_t> &out)
+    {
+        std::ifstream f(path, std::ios::binary);
+        if (!f)
+            return false;
+        out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        return true;
+    }
+    bool writeFile(const std::string &path, const std::vector<uint8_t> &data)
+    {
+        std::ofstream f(path, std::ios::binary);
+        f.write(reinterpret_cast<const char *>(data.data()), std::streamsize(data.size()));
+        return bool(f);
+    }
+
+    // The grid rule on a real stage (thousands of paths, so sets instead of Img::gridProblems): every listed path in exactly
+    // the cells sm::covered() gives for its box, once per cell, no list node in two cells, no broken list. `listed` gets each
+    // path's cells.
+    struct GridScan { int problems = 0, nodes = 0; std::map<uint32_t, std::vector<int>> listed; };
+    GridScan scanGrid(const sm::Mem &m, uint32_t g)
+    {
+        GridScan s;
+        const sm::GridDims d{m.s16(g + 4), m.s16(g + 6), m.f32(g + 8), m.f32(g + 0xC), m.f32(g + 0x10), m.f32(g + 0x14), m.f32(g + 0x18)};
+        std::set<uint32_t> seen;
+        auto problem = [&](const std::string &what) {
+            if (s.problems++ < 10)
+                std::printf("  grid: %s\n", what.c_str());
+        };
+        for (int i = 0; i < d.nCols * d.nRows; ++i)
+        {
+            std::set<uint32_t> here;
+            for (uint32_t ln = m.u32(g + 0x20 + 4 * uint32_t(i)); ln; ln = m.u32(ln))
+            {
+                if (!m.ok(ln, 8) || !seen.insert(ln).second)
+                {
+                    problem("cell " + std::to_string(i) + ": list node " + hexOff(ln) + " unmapped or in two cells");
+                    break;
+                }
+                ++s.nodes;
+                const uint32_t p = m.u32(ln + 4);
+                if (!here.insert(p).second)
+                    problem("path " + hexOff(p) + " twice in cell " + std::to_string(i));
+                s.listed[p].push_back(i);
+            }
+        }
+        for (auto &kv : s.listed)
+        {
+            const uint32_t p = kv.first;
+            kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
+            const float lo[3] = {m.f32(p), m.f32(p + 4), m.f32(p + 8)}, hi[3] = {m.f32(p + 0xC), m.f32(p + 0x10), m.f32(p + 0x14)};
+            if (!m.ok(p, 0x24) || sm::covered(d, lo, hi) != kv.second)
+                problem("path " + hexOff(p) + ": listed cells differ from the cells its box covers");
+        }
+        return s;
+    }
+}
+
+// Cross-check against a stock stage (spec "PR 1 checks", 1f and 1i). Needs the disc, so it runs only with these set:
+//   WOTM_TEST_STAGE        raw inflated images, ';'-separated, e.g. from
+//                          python -c "import sys;sys.path.insert(0,'tools');import ngp;open(sys.argv[2],'wb').write(ngp.inflate_ngp(sys.argv[1]))" disc/LVL/CENTRAL.NGP %TEMP%\CENTRAL.bin
+//   WOTM_TEST_PIECES       optional, one file per image (same order): python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP > %TEMP%\CENTRAL.pieces
+//   WOTM_TEST_STAGE_DUMP   optional folder: the edited image and reserve go to <folder>/<stage>.edited.bin(.reserve), for
+//                          python tools/stage_map.py check <folder>/<stage>.edited.bin   (must print OK)
+// Per stage: the C++ coverage rule gives exactly the stock cells, the C++ pieces equal stage_map.py's, and a realistic edit
+// set (a destructible removed, a piece moved across cells, a TRANSLATE turned 90, a ROTATE turned 15) all applies and leaves
+// the grid rule holding.
+TEST(stagemap_stock_grid_rule)
+{
+    const std::vector<std::string> stages = envList("WOTM_TEST_STAGE"), pieceFiles = envList("WOTM_TEST_PIECES");
+    const char *dumpDir = std::getenv("WOTM_TEST_STAGE_DUMP");
+    if (stages.empty())
+    {
+        std::printf("  skip (WOTM_TEST_STAGE not set)\n");
+        return;
+    }
+    for (size_t si = 0; si < stages.size(); ++si)
+    {
+        const std::string stem = std::filesystem::path(stages[si]).stem().string();
+        std::vector<uint8_t> file;
+        CHECK(readFile(stages[si], file) && file.size() > 8);
+        if (file.size() <= 8)
+            continue;
+        Img im(uint32_t(file.size()), sm::kReserveSize);
+        im.img = file;
+        const sm::Mem m = im.mem();
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+        uint32_t g = 0;
+        int grids = 0;
+        for (const auto &kv : par)
+            if ((m.u32(kv.first) & 63) == sm::kOpGrid)
+                g = kv.first, ++grids;
+        CHECK(grids == 1);
+        if (grids != 1)
+            continue;
+
+        // 1. the stock grid follows the C++ rule
+        const GridScan stock = scanGrid(m, g);
+        CHECK(stock.problems == 0 && !stock.listed.empty());
+
+        // the C++ pieces, the same set as stage_map.py's
+        std::set<uint32_t> pieces;
+        for (const auto &kv : par)
+            if (sm::isPiece(m, par, kv.first))
+                pieces.insert(kv.first - sm::kBase);
+        size_t pyCount = 0;
+        if (si < pieceFiles.size())
+        {
+            std::ifstream f(pieceFiles[si]);
+            CHECK(bool(f));
+            std::set<uint32_t> py;
+            std::string line;
+            while (std::getline(f, line))
+                if (line.rfind("0x", 0) == 0)
+                    py.insert(uint32_t(std::strtoul(line.c_str(), nullptr, 16))), ++pyCount;
+            CHECK(py.size() == pyCount && py == pieces);
+            for (uint32_t n : pieces)
+                if (!py.count(n))
+                    std::printf("  %s: C++ piece %s not in stage_map.py's\n", stem.c_str(), hexOff(n).c_str());
+            for (uint32_t n : py)
+                if (!pieces.count(n))
+                    std::printf("  %s: stage_map.py piece %s not in C++'s\n", stem.c_str(), hexOff(n).c_str());
+        }
+
+        // 2. a realistic edit set, picked from the pieces
+        std::map<uint32_t, std::vector<uint32_t>> through;   // node -> paths through it
+        for (const auto &kv : stock.listed)
+        {
+            std::set<uint32_t> nodes;
+            const uint32_t k = std::min<uint32_t>(m.u32(kv.first + 0x1C), 256);
+            for (uint32_t i = 0; i < k; ++i)
+                nodes.insert(m.u32(kv.first + 0x24 + 4 * i));
+            for (uint32_t n : nodes)
+                through[n].push_back(kv.first);
+        }
+        std::map<uint32_t, int> holders;   // pointers to each node from child slots
+        for (const auto &kv : par)
+            for (uint32_t sl : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(sl))
+                    ++holders[k];
+        auto above = [&](uint32_t n, uint32_t op) {   // a node of this opcode on the first-parent chain
+            for (uint32_t a = par.at(n); a; a = par.at(a))
+                if ((m.u32(a) & 63) == op)
+                    return true;
+            return false;
+        };
+        auto destructible = [&](uint32_t n) {
+            for (uint32_t k : sm::subtree(m, n))
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    return true;
+            return false;
+        };
+        std::set<uint32_t> used;
+        // first piece (address order) that passes `want`, preferring one with a CONTROL or LOD above it
+        auto pick = [&](const std::function<bool(uint32_t)> &want) {
+            uint32_t best = 0;
+            for (uint32_t off : pieces)
+            {
+                const uint32_t n = off + sm::kBase;
+                if (used.count(n) || holders[n] != 1 || !through.count(n) || !want(n))
+                    continue;
+                if (above(n, sm::kOpControl) || above(n, sm::kOpLod))
+                {
+                    best = n;
+                    break;
+                }
+                if (!best)
+                    best = n;
+            }
+            if (best)
+                used.insert(best);
+            return best;
+        };
+        auto opOf = [&](uint32_t n) { return m.u32(n) & 63; };
+        const uint32_t rm = pick([&](uint32_t n) { return destructible(n); });
+        const uint32_t mv = pick([&](uint32_t n) { return opOf(n) == sm::kOpTranslate; });
+        const uint32_t t90 = pick([&](uint32_t n) { return opOf(n) == sm::kOpTranslate && m.u32(n + 0xC) == 0; });
+        uint32_t t15 = pick([&](uint32_t n) { return opOf(n) == sm::kOpRotate; });
+        const char *t15kind = "ROTATE";
+        if (!t15)   // CENTRAL has no ROTATE piece with collision paths: turn a second TRANSLATE by 15 instead
+            t15 = pick([&](uint32_t n) { return opOf(n) == sm::kOpTranslate && m.u32(n + 0xC) == 0; }), t15kind = "TRANSLATE";
+        CHECK(rm && mv && t90 && t15);
+        if (!(rm && mv && t90 && t15))
+            continue;
+        // the move: three cells in X and two in Y, toward the middle of the grid
+        const float cell = m.f32(g + 8), minX = m.f32(g + 0xC), minY = m.f32(g + 0x10), maxX = m.f32(g + 0x14), maxY = m.f32(g + 0x18);
+        const float px = m.f32(mv + 0x10), py = m.f32(mv + 0x14), pz = m.f32(mv + 0x18);
+        const float nx = px + (px < (minX + maxX) / 2 ? 3 : -3) * cell, ny = py + (py < (minY + maxY) / 2 ? 2 : -2) * cell;
+        sm::Map map;
+        map.edits = {removal(rm - sm::kBase), moveTo(mv - sm::kBase, nx, ny, pz), turnBy(t90 - sm::kBase, 90), turnBy(t15 - sm::kBase, 15)};
+        const uint32_t t90parent = par.at(t90);
+        sm::Reserve res = im.reserve();
+        const sm::Result r = sm::apply(m, uint32_t(im.img.size()), map, res);
+        CHECK(r.applied == 4 && r.refused == 0);
+        for (const std::string &l : r.log)
+            std::printf("  %s: %s\n", stem.c_str(), l.c_str());
+
+        const GridScan after = scanGrid(m, g);
+        CHECK(after.problems == 0);
+        for (uint32_t p : through[rm])
+            CHECK(!after.listed.count(p));   // the removed piece's paths left the grid
+        for (uint32_t p : through[mv])
+            CHECK(after.listed.count(p) && after.listed.at(p) != stock.listed.at(p));   // the moved piece's paths changed cells
+        CHECK(after.listed.size() + through[rm].size() == stock.listed.size());
+        CHECK((m.u32(rm) & 63) == sm::kOpNull && m.f32(mv + 0x10) == nx && m.f32(mv + 0x14) == ny);
+        bool slotTurned = false;   // the 90-degree TRANSLATE is now a ROTATE in the reserve, in its parent's slot
+        for (uint32_t sl : sm::slots(m, t90parent))
+        {
+            const uint32_t k = m.u32(sl);
+            slotTurned = slotTurned || (k >= sm::kReserve && (m.u32(k) & 63) == sm::kOpRotate && m.u32(k + 0x50) == m.u32(t90 + 0x1C));
+        }
+        CHECK(slotTurned);
+        std::printf("  %s: %zu pieces (stage_map.py %zu); removed %s, moved %s, turned %s by 90 and %s %s by 15; applied %d, "
+                    "relinked %d (%d from reserve); grid %zu paths, %d list nodes, %d problems\n",
+                    stem.c_str(), pieces.size(), pyCount, hexOff(rm - sm::kBase).c_str(), hexOff(mv - sm::kBase).c_str(),
+                    hexOff(t90 - sm::kBase).c_str(), t15kind, hexOff(t15 - sm::kBase).c_str(), r.applied, r.relinked, r.fromReserve,
+                    after.listed.size(), after.nodes, after.problems);
+        if (dumpDir && *dumpDir)
+        {
+            const std::string out = (std::filesystem::path(dumpDir) / (stem + ".edited.bin")).string();
+            CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
+            std::printf("  %s: wrote %s(.reserve)\n", stem.c_str(), out.c_str());
+        }
+    }
 }
 
 int main()
