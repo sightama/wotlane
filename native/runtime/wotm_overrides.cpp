@@ -131,6 +131,8 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_training.inc"
 // The game's sine and cosine against retail, bit for bit (WOTM_TRIGCHECK): what a Windows vs Mac match needs
 #include "wotm_trigcheck.inc"
+// Map creator: stage image hash at LoadLevelDB, the active map's edits at dbInitDb (WOTM_MATCH's map id, WOTM_STAGE_DUMP)
+#include "wotm_stagemap.inc"
 
 namespace
 {
@@ -1222,10 +1224,11 @@ namespace
                          maxTex >= 1000 ? " -- PAST texInfo, expect corruption" : maxTex >= 900 ? " -- near the texInfo ceiling" : "");
         }
         if (end > kHighBase)
-        {   // upper area: only the stage's NGP stays below (fileStatus.ngpAddr[0] to the end of the file, kept in the load log)
-            const double used = (end - kHighBase) / 1048576.0, left = (int64_t(PS2_RAM_SIZE) - end) / 1048576.0;
-            std::fprintf(stderr, "[wotm] stage load: %u files, monsters and textures end at 0x%07X (%.1f MB above 32 MB, %.1f MB to the end of RAM)%s\n",
-                         ngpN, end, used, left, left < 0.5 ? " -- NEAR OR PAST THE END, expect corruption" : "");
+        {   // upper area: only the stage's NGP stays below (fileStatus.ngpAddr[0] to the end of the file, kept in the load log). The
+            // ceiling is the map creator's reserve (wotm_stagemap.inc, 1 MB under the top-of-RAM slots), not the end of RAM
+            const double used = (end - kHighBase) / 1048576.0, left = (int64_t(wotm::stagemap::kReserve) - end) / 1048576.0;
+            std::fprintf(stderr, "[wotm] stage load: %u files, monsters and textures end at 0x%07X (%.1f MB above 32 MB, %.1f MB to the map reserve 0x%07X)%s\n",
+                         ngpN, end, used, left, wotm::stagemap::kReserve, left < 0.5 ? " -- NEAR OR PAST THE RESERVE, expect corruption" : "");
             return;
         }
         const double used = (end - kLoadBase) / 1048576.0, left = (int64_t(kLoadCeiling) - end) / 1048576.0;
@@ -2582,6 +2585,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kLensFlareRender, &lensFlareRenderTapped);
     wotmPadSelInstall(runtime);
     wotmLevelSelInstall(runtime);
+    wotm_stagemap::install(runtime);
     wotmMainMenuInstall(runtime);
     wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
@@ -2600,7 +2604,23 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 while (*t && *t != ',' && *t != ':')
                     ++t;
                 const std::string id(p, t);
-                if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().custom(id))
+                if (!*t && n >= 2)   // the last field is the stage: "<map id>" (mods/<mod>/stages/<id>/, wotm_stagemap.inc)
+                {
+                    const std::string mid = wotm_stagemap::lower(id);
+                    int level = -1;
+                    for (const wotm::mods::Stage &st : wotm::mods::Registry::get().stages())
+                        if (st.map.id == mid)
+                            level = wotm_stagemap::levelIndex(st.map.base);
+                    if (level >= 0)
+                    {
+                        v[n - 1] = level;
+                        end = const_cast<char *>(t);
+                        wotm_stagemap::setActive(mid);
+                    }
+                    else
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: map \"%s\" not found in mods/\n", id.c_str());
+                }
+                else if (const wotm::mods::Custom *cu = wotm::mods::Registry::get().custom(id))
                 {
                     v[n - 1] = cu->type;
                     c[n - 1] = cu->costume;
