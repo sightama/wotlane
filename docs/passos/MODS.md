@@ -315,8 +315,8 @@ props) are not pieces. `CENTRAL` (Midtown Park) has 317: 202 in the world (55 of
 **Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
 
 ```
-python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, destructible
-  0x61e340  TRANSLATE  pos 688.2 119.6 0.0  paths 1  destructible
+python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, destructible
+  0x18a410  TRANSLATE  pos 1044.6 448.2 -0.8  paths 5  riders 4  destructible
 python tools/stage_map.py make --base CENTRAL --id downtown --name "DOWNTOWN MESS" --out mods/my_mod/stages --move "0x165a70=-185.7,475.8,0,90" --remove 0x18a410
                                                                # writes mods/my_mod/stages/downtown/stage.json with the baseHash
 python tools/stage_map.py check disc/LVL/*.NGP                 # the collision grid rule on stock stages or on a WOTM_STAGE_DUMP
@@ -326,6 +326,16 @@ python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters and pi
 `--move` is `node=x,y,z[,turn]`, `--turn` is `node=degrees` (a `--turn` and a `--move` of the same node make one edit); all
 three can repeat. `python tools/stage_map.py inflate disc/LVL/CENTRAL.NGP central.bin` writes the inflated image (the native
 test's `WOTM_TEST_STAGE`). `make` refuses a node that is not a piece of the base stage.
+
+**Riders.** A car or a crate on a roof is its own piece (a level pickup), not part of the building, so `make` adds what stands
+on an edited piece's roof as edits of its own and prints each one (`  rider 0x5cbce0 (pickup type 1) follows 0x18a410`): a
+removed building removes its riders, a moved one moves them by the same amount, and a turned one turns them about its own
+position (each rider is moved around it and turned by the same degrees). A rider is a piece whose origin (a pickup: its
+position; a world piece: the bottom of its lowest object) lies inside, seen from above, one of the edited piece's solid
+collision boxes at most 700 units wide, at a height from 20 under that box's top to 25 above it. That includes things on a
+building's plaza or base pad when its box is low. One rider on two pieces goes to the one whose box top is nearest (then the
+lower node). A rider you edit yourself keeps your edit (`make` says so); `--no-riders` turns the rule off. `pieces` shows
+`riders N` per piece. On the 19 stock stages, 164 pieces carry 408 riders (CENTRAL: 31 carry 66, all pickups).
 To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
 `NATIVO.md`, "Diagnostics").
 
@@ -345,7 +355,9 @@ To find a piece, take the position from `pieces` and look at it with the free ca
 - CPU routes (`PTS/<STAGE>.AIP`) are not updated: CPUs that hit a moved building climb it or steer around it.
 - Spawn points and power-up places stay where the disc puts them.
 - Trigger zones stay where the disc puts them, except 3-MILE's 13 that hang under pieces, which follow them.
-- A pickup on a rooftop floats when its building moves (the pickup is its own piece: move it too).
+- Only riders (above) go with an edited piece, and only one level (a rider's own riders stay). Anything else on it, or a
+  stage made by hand without `make`, floats or stays where the disc puts it. A turn also turns the drop offsets of the
+  piece's destructible "hat" actions (what makes rooftop pickups fall when the building breaks), so they still fall.
 - A `CONTROL` above a moved piece (the see-through "ghost" building switch: UFO, SANFRAN, ISLAND and others) keeps its volumes
   where the disc puts them, so the switch to the ghost version happens around the old place; the loader logs it.
 - A `LOD` above a moved piece keeps its sphere (the loader only widens the culling spheres of the groups above), so the

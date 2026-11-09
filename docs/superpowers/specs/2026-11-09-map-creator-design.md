@@ -78,6 +78,34 @@ path through the piece (same length, edited in place). Pointers are guest addres
 as the reserve is not reused while the stage is loaded and the native renderer accepts it; PR 1 checks both first and, if
 either fails, TURN is limited to pieces that already have a `ROTATE`.
 
+## Riders
+
+A pickup on a roof (a car, a crate, a helicopter) is its own piece: a level pickup under the pickup root (id1 0), not in the
+building's subtree, and no data links it to the building. On the stock stage it falls when the building breaks, through the
+destructible's hat actions (`Destructible::DispatchAction` -> `doPickupHat` -> `LevelPickups::hatCheck` on the pickups within a
+radius of the destructible's place + offset; `Pickup::init` clears bit 0x40, so there is no hat check at spawn). So a moved
+building would leave its rooftop pickups floating where the roof was. The map's edits carry them instead, grouped when the map
+is made (`stage_map.py make`, later the editor), as explicit edits the loader applies like any other:
+
+- **Rule** (`stage_map.py rider_map()`): a rider of piece P is another piece whose origin (a pickup: its position; a world
+  piece: the bottom of its lowest `OBJECT` sphere) lies inside, in X and Y, one of P's solid (non-trigger) collision path boxes,
+  with z from the box top - 20 to the box top + 25. Boxes wider than 700 units in X or Y carry nothing (`CENTRAL`'s tower has an
+  animated part with a 1000 x 1000 box). A rider inside two pieces' boxes goes to the piece whose box top is nearest its z
+  (then the lower node): deterministic. One level: a rider's own riders are not carried (no stock stage has one).
+- **Edits:** a removed P removes its riders; a moved and/or turned P moves each rider rigidly with it (new = P's new place +
+  turn(rider - P's old place)) and gives it the same turn. A pickup with only a `TRANSLATE` turns like any piece (a `ROTATE` in
+  the reserve); `Pickup::init` takes its rotation from the traversal matrix (`Pickup.cpp`, `mathfTransposeMatrix(t.m, m)`). A
+  rider the user edits keeps the user's edit; `--no-riders` turns the rule off.
+- **Stock stages:** 164 pieces carry 408 riders (3-MILE 1/2, AIRPORT 11/31, CAPITOL 4/16, CENTRAL 31/66, ISLAND 12/52, METRO
+  56/140, MINISF 5/8, SANFRAN 11/16, TOKYO 10/25, TOKYODM 14/31, VEGAS 9/21; the others none). 20 riders are inside two
+  pieces' boxes, all on low ground pads (AIRPORT 5, CENTRAL 1, METRO 10, SANFRAN 1, TOKYODM 3). Seven pieces carry more than
+  6, all real: big pads or complexes (ISLAND 0xeb810 13, 0x6154f0 12 and 0x5f74f0 9: lamps and pickups on the building's
+  plaza; TOKYO 0x2017a0 11; CAPITOL 0x5c4e10 8: cars on the wings' roofs; AIRPORT 0x156d50 7: cars on a parking pad;
+  METRO 0x26b6b0 7; TOKYODM 0x1586f0 7). On `CENTRAL`, removing 0x18a410 (roof 271.1) removes its 3 rooftop cars and its
+  helicopter, as its hat action would have dropped them; moving 0x2d85a0 carries its rooftop car 0x5cd120 and the 2 pickups
+  on its plaza; turning 0x4da6b0 turns its rooftop car 0x5cb7e0 about the building's origin (a corner of the building); the
+  tower 0x165a70 carries none.
+
 ## Loading a map
 
 1. **Selection.** Each saved map takes a slot from 18 to 23 (6 maps listed at once, the picture switch has 24 children; more are a later step) with its name and
@@ -90,6 +118,13 @@ either fails, TURN is limited to pieces that already have a `ROTATE`.
      +0x1C radius) of the ancestor `GROUP`s above the piece. An ancestor `LOD`'s sphere drives LOD switching, so it is not
      widened: when it no longer covers the piece, the loader logs `LOD <node> above it no longer covers it`. Spheres below
      the piece are local and unchanged.
+   - **turn**, as well: the hat pickup actions of the destructibles under the piece (`ACT_HATPICKUP`, reached from each
+     state's action tree through `ACT_GROUP` and `ACT_TRANSFORM`) get their offset (+0xC) turned by the same angle.
+     `Destructible::DispatchAction` drops the level pickups within the action's radius of the destructible's place + offset
+     (`doPickupHat`, `src/game/ActionDispatch.cpp:390-397`, `LevelPickups::hatCheck`), and the offset is added unrotated, so
+     without this a turned building drops its rooftop pickups from a circle beside it. A hat action that a destructible
+     outside the piece also reaches is left as is and logged (none on the 19 stock stages). Part of the edit's planned
+     writes: a refused turn writes no offset either.
    - **remove:** set the piece's opcode bits to `NULL`. Its collision paths leave the grid (traversal would stop at the
      `NULL` anyway) and their list nodes go to a pool that the moves use before the reserve.
 3. **Grid nodes.** A moved path that covers more cells than before needs more list nodes than the image holds. Edits are
@@ -115,6 +150,9 @@ relinked (4 from reserve)` at load.
   slide it on the ground relative to the camera in 10-unit steps (held = faster), two keys raise and lower it, two keys turn it
   by 15 degrees. DELETE, UNDO (several levels) and RESET PIECE (back to its disc place). Rows NAME, SAVE, BACK as in the
   character creator, with its OVERWRITE? and NAME IN USE messages.
+- **Riders:** the editor uses `stage_map.py`'s rider rule ("Riders" below): while a piece is held, its riders move, turn and
+  are deleted with it, and they are shown (a lighter tint of the highlight, and `RIDERS 4` on the panel). SAVE writes them as
+  their own edits, as `make` does; a rider the player moved on its own keeps that edit.
 - **Live preview:** moving a translation moves the drawing at once (the native renderer reads the image). Collision and
   destructibles only follow when the map is loaded to play; testing is save, then fight.
 - **Guard rails:** spawn points and power-up places show as markers, and a piece covering one turns red (BLOCKS SPAWN, saving
@@ -153,7 +191,8 @@ Nothing is merged by us; Lane reviews.
 - CPU routes (`.AIP`) are not updated: CPUs that hit a moved building climb or steer around it.
 - Spawn and power-up places stay where the disc puts them.
 - Trigger zones stay where the disc puts them (except 3-MILE's 13 under pieces, which follow).
-- Pickups on a rooftop float when their building moves (a pickup is its own piece).
+- Only riders follow an edited piece ("Riders"): things standing on its collision box tops within the tolerances, one level
+  deep. Anything else on it floats or stays, and a map written by hand gets no riders.
 - Level pickups are placed by `dbsTraverse`'s callback with the traversal transform, and its case 3 in `src/common/dbs.cpp`
   is an untuned draft (the game runs the original code). Confirmed on the running game (live check `map_load`): a moved
   `CENTRAL` pickup is placed at its new spot (`createPickup`'s position, read from the fight's RAM) and none at the old one.

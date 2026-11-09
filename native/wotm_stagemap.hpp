@@ -27,6 +27,10 @@ constexpr uint32_t kOpObject = 0, kOpGroup = 1, kOpLod = 2, kOpTranslate = 3, kO
 constexpr uint32_t kWorldId = 1;                        // id1 of the world root, the one the game draws
 constexpr uint32_t kPickupFirst = 0x12C0, kPickupLast = 0x13EB;   // level pickup ids (LevelPickups::createPickup)
 
+// ActHead::type (src/game/ActionDispatch.cpp): ACT_GROUP {count +8, acts[] +0xC}, ACT_TRANSFORM {act +8}, ACT_HATPICKUP {radius
+// +8, offset +0xC}. A destructible's state i has its action tree at +0xC + 12 * i + 4 (_hierdestrstate::actions).
+constexpr uint16_t kActGroup = 0, kActTransform = 1, kActHatPickup = 10;
+
 inline bool transforming(uint32_t op)
 {
     return op == kOpTranslate || op == kOpRotate || op == kOpScale || op == kOpAnimXform || op == kOpAnimScale;
@@ -142,11 +146,17 @@ std::vector<uint32_t> subtree(const Mem &m, uint32_t n);
 // chain, and either under the world root (id1 1) or whose first nonzero id1 in preorder of its subtree is a level pickup
 // (spec 1i, stage_map.py pieces())
 bool isPiece(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node);
+// The hat pickup actions of DESTRUCTIBLE n's states (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, in
+// state and slot order. Destructible::DispatchAction drops the level pickups within the action's radius of the destructible's
+// place + offset (doPickupHat, LevelPickups::hatCheck); the offset is added unrotated, so a turn turns it (apply()).
+std::vector<uint32_t> hatActions(const Mem &m, uint32_t n);
 
 // relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the reserve
 struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log; };
 
-// Applies a map's edits to the stage image in `m` (imageSize bytes at kBase), taking grid nodes and ROTATEs from `res`. Every
+// Applies a map's edits to the stage image in `m` (imageSize bytes at kBase), taking grid nodes and ROTATEs from `res`. A turn
+// also turns the offsets of the hat pickup actions of the destructibles under the piece (hatActions(); one that a destructible
+// outside the piece also reaches is left as is and logged), so the pickups on the roof still drop where the roof is. Every
 // edit is checked first, in file order (the first edit of a node stands); then the removes run, in file order, and their
 // paths' list nodes go to a pool; then the moves and turns, in file order, take list nodes from the pool before the reserve.
 // A move or turn is planned whole before anything is written: one that can't be done writes nothing and is logged.

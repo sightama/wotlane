@@ -451,6 +451,42 @@ bool isPiece(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t nod
     return (m.u32(root) >> 18) == kWorldId || (firstId >= kPickupFirst && firstId <= kPickupLast);
 }
 
+namespace {
+
+void hatsUnder(const Mem &m, uint32_t a, int depth, std::set<uint32_t> &seen, std::vector<uint32_t> &out)
+{
+    if (!a || depth > 20 || !m.ok(a, 8) || !seen.insert(a).second)
+        return;
+    const uint16_t type = m.u16(a);
+    if (type == kActHatPickup)
+    {
+        if (m.ok(a, 0x18))
+            out.push_back(a);
+    }
+    else if (type == kActGroup)
+    {
+        const uint32_t k = std::min<uint32_t>(m.u32(a + 8), 256);
+        for (uint32_t i = 0; i < k && m.ok(a + 0xC + 4 * i, 4); ++i)
+            hatsUnder(m, m.u32(a + 0xC + 4 * i), depth + 1, seen, out);
+    }
+    else if (type == kActTransform)
+        hatsUnder(m, m.u32(a + 8), depth + 1, seen, out);
+}
+
+} // namespace
+
+std::vector<uint32_t> hatActions(const Mem &m, uint32_t n)
+{
+    std::vector<uint32_t> out;
+    if (!m.ok(n, 0xC) || (m.u32(n) & 63) != kOpDestructible)
+        return out;
+    std::set<uint32_t> seen;
+    const uint32_t k = std::min<uint32_t>(m.u16(n + 0xA), 4096);
+    for (uint32_t i = 0; i < k && m.ok(n + 0xC + 12 * i + 4, 4); ++i)
+        hatsUnder(m, m.u32(n + 0xC + 12 * i + 4), 0, seen, out);
+    return out;
+}
+
 // ---------------------------------------------------------------- edits
 
 namespace {
@@ -683,8 +719,9 @@ using Box = std::pair<std::array<float, 3>, std::array<float, 3>>;
 
 // Plans a move and/or turn of piece `node`; returns the reason for refusing it, or "" with `plan`, `grid`, `pool` and `res`
 // updated (the caller commits them only on success).
-std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, const std::vector<uint32_t> &through, const Edit &e,
-                     uint32_t node, Grid &grid, std::deque<uint32_t> &pool, Reserve &res, Plan &plan)
+std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, const std::vector<uint32_t> &through,
+                     const std::map<uint32_t, std::set<uint32_t>> &hatOwners, const Edit &e, uint32_t node, Grid &grid,
+                     std::deque<uint32_t> &pool, Reserve &res, Plan &plan)
 {
     const uint32_t op = m.u32(node) & 63, posAt = op == kOpRotate ? 0x40 : 0x10;
     const double old[3] = {m.f32(node + posAt), m.f32(node + posAt + 4), m.f32(node + posAt + 8)};
@@ -801,6 +838,34 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
                 plan.u32(sl, r), slotted = true;
         if (!slotted)
             return "its parent's child slot was not found";
+    }
+
+    // hat pickup offsets of the destructibles under the piece turn with it (doPickupHat adds them unrotated)
+    if (turning)
+    {
+        const std::vector<uint32_t> sub = subtree(m, node);
+        const std::set<uint32_t> inside(sub.begin(), sub.end());
+        std::set<uint32_t> done;
+        for (uint32_t d : sub)
+            for (uint32_t h : hatActions(m, d))
+            {
+                if (!done.insert(h).second)
+                    continue;
+                const auto it = hatOwners.find(h);
+                bool shared = false;
+                if (it != hatOwners.end())
+                    for (uint32_t o : it->second)
+                        shared = shared || !inside.count(o);
+                if (shared)
+                {
+                    plan.notes.push_back("node " + hex(node - kBase) + ": hat action " + hex(h - kBase) +
+                                         " is also used by a destructible outside it, offset left as is");
+                    continue;
+                }
+                const double x = m.f32(h + 0xC), y = m.f32(h + 0x10);
+                plan.f32(h + 0xC, float(x * c - y * s));
+                plan.f32(h + 0x10, float(x * s + y * c));
+            }
     }
 
     // boxes and path entries; every path out of the grid first, so all its freed list nodes serve all its paths
@@ -957,7 +1022,18 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res)
         ++out.applied;
     }
 
-    // 3. moves and turns
+    // 3. moves and turns; for the turns, which destructibles reach each hat pickup action
+    std::map<uint32_t, std::set<uint32_t>> hatOwners;
+    bool anyTurn = false;
+    for (const Edit *e : moves)
+    {
+        float c, s;
+        anyTurn = anyTurn || turnOf(e->turn, c, s);
+    }
+    if (anyTurn)
+        for (const auto &kv : par)
+            for (uint32_t h : hatActions(m, kv.first))
+                hatOwners[h].insert(kv.first);
     for (const Edit *e : moves)
     {
         float c, s;
@@ -977,7 +1053,7 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res)
         std::deque<uint32_t> pool2 = pool;
         Reserve r2 = res;
         Plan plan;
-        const std::string why = planMove(m, par, pathsOf(node), *e, node, g2, pool2, r2, plan);
+        const std::string why = planMove(m, par, pathsOf(node), hatOwners, *e, node, g2, pool2, r2, plan);
         if (!why.empty())
         {
             ++out.refused;

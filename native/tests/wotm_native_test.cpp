@@ -1366,6 +1366,82 @@ TEST(stagemap_spheres_of_turned_branches)
     CHECK(im.rf(up + 0x10) == 100.f && im.rf(up + 0xC) == im.rf(up + 0x1C) * im.rf(up + 0x1C));
 }
 
+TEST(stagemap_turn_turns_hat_offsets)
+{
+    // a destructible piece whose states drop rooftop pickups: hat actions (ACT_HATPICKUP, offset at +0xC) reached through an
+    // ACT_GROUP, an ACT_TRANSFORM and from two states; a third hat is shared with a destructible outside the piece
+    struct Hats
+    {
+        Img im;
+        uint32_t t, t2, g, h1, h2, h3;
+        uint32_t act(uint16_t type, uint32_t size)
+        {
+            const uint32_t a = im.alloc(size);
+            im.w32(a, type);
+            return a;
+        }
+        uint32_t hat(float r, float x, float y, float z)
+        {
+            const uint32_t a = act(sm::kActHatPickup, 0x18);
+            im.wf(a + 8, r), im.wf(a + 0xC, x), im.wf(a + 0x10, y), im.wf(a + 0x14, z);
+            return a;
+        }
+        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states)   // (child, actions)
+        {
+            const uint32_t d = im.node(31, 0xC + 12 * uint32_t(states.size()));
+            im.w16(d + 0xA, uint16_t(states.size()));
+            for (size_t i = 0; i < states.size(); ++i)
+                im.w32(d + 0xC + 12 * uint32_t(i), states[i].first), im.w32(d + 0x10 + 12 * uint32_t(i), states[i].second);
+            return d;
+        }
+        Hats()
+        {
+            h1 = hat(400, 10, 0, 5), h2 = hat(300, 3, 4, 0), h3 = hat(200, 7, 0, 0);
+            const uint32_t xf = act(sm::kActTransform, 0x50);
+            im.w32(xf + 8, h1);
+            const uint32_t grp = act(sm::kActGroup, 0x18);
+            im.w32(grp + 8, 3), im.w32(grp + 0xC, xf), im.w32(grp + 0x10, h2), im.w32(grp + 0x14, h3);
+            const uint32_t d = destructible({{im.object(), grp}, {im.object(), h1}});
+            t = im.translate({d, im.polycoll()}, 100, 100, 0);
+            t2 = im.translate({destructible({{im.object(), h3}})}, 300, 300, 0);
+            const uint32_t world = im.group({t, t2}, 200, 200, 0, 5000, 1);
+            g = im.grid(2, 2, 200, 0, 0, 400, 400);
+            im.roots({world, g});
+        }
+        sm::Result run(const sm::Edit &e, sm::Reserve res)
+        {
+            sm::Map m;
+            m.edits.push_back(e);
+            return sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
+        }
+    };
+    {
+        Hats h;
+        CHECK(sm::hatActions(h.im.mem(), h.t) == std::vector<uint32_t>());   // a TRANSLATE is not a destructible
+        const sm::Result r = h.run(turnBy(h.t - sm::kBase, 90), h.im.reserve());
+        CHECK(r.applied == 1);
+        CHECK(h.im.rf(h.h1 + 0xC) == 0.f && h.im.rf(h.h1 + 0x10) == 10.f && h.im.rf(h.h1 + 0x14) == 5.f && h.im.rf(h.h1 + 8) == 400.f);
+        CHECK(h.im.rf(h.h2 + 0xC) == -4.f && h.im.rf(h.h2 + 0x10) == 3.f);
+        CHECK(h.im.rf(h.h3 + 0xC) == 7.f && h.im.rf(h.h3 + 0x10) == 0.f && logHas(r, hexOff(h.h3 - sm::kBase)));   // shared: as is
+    }
+    {
+        Hats h;   // 45 degrees, moved
+        const sm::Result r = h.run(moveTo(h.t - sm::kBase, 150, 120, 0, 45), h.im.reserve());
+        CHECK(r.applied == 1 && near(h.im.rf(h.h1 + 0xC), 7.0710678f) && near(h.im.rf(h.h1 + 0x10), 7.0710678f));
+    }
+    {
+        Hats h;   // a move alone leaves the offsets (the destructible's place moves with the piece)
+        const sm::Result r = h.run(moveTo(h.t - sm::kBase, 150, 120, 0), h.im.reserve());
+        CHECK(r.applied == 1 && h.im.rf(h.h1 + 0xC) == 10.f && h.im.rf(h.h1 + 0x10) == 0.f && h.im.rf(h.h2 + 0xC) == 3.f);
+    }
+    {
+        Hats h;   // a refused turn (no room for the ROTATE) writes no offset either
+        const std::vector<uint8_t> before = h.im.img;
+        const sm::Result r = h.run(turnBy(h.t - sm::kBase, 90), sm::Reserve{sm::kReserve, sm::kReserve});
+        CHECK(r.refused == 1 && h.im.img == before);
+    }
+}
+
 // The edits' writes must give the same bits on every compiler and CPU (they reach guest RAM in a network match): a fixed set of
 // edits on a fixed image, hashed. Measured on Windows (MSVC, x64); the Mac (clang, arm64) must print the same.
 TEST(stagemap_same_bits_on_every_machine)
@@ -1598,6 +1674,11 @@ TEST(stagemap_stock_grid_rule)
         sm::Map map;
         map.edits = {removal(rm - sm::kBase), moveTo(mv - sm::kBase, nx, ny, pz), turnBy(t90 - sm::kBase, 90), turnBy(t15 - sm::kBase, 15)};
         const uint32_t t90parent = par.at(t90);
+        std::vector<std::pair<uint32_t, std::pair<float, float>>> hats;   // the 90-degree piece's hat offsets, before
+        for (uint32_t k : sm::subtree(m, t90))
+            for (uint32_t h : sm::hatActions(m, k))
+                if (std::none_of(hats.begin(), hats.end(), [&](const auto &x) { return x.first == h; }))
+                    hats.push_back({h, {m.f32(h + 0xC), m.f32(h + 0x10)}});
         sm::Reserve res = im.reserve();
         const sm::Result r = sm::apply(m, uint32_t(im.img.size()), map, res);
         CHECK(r.applied == 4 && r.refused == 0);
@@ -1619,6 +1700,11 @@ TEST(stagemap_stock_grid_rule)
             slotTurned = slotTurned || (k >= sm::kReserve && (m.u32(k) & 63) == sm::kOpRotate && m.u32(k + 0x50) == m.u32(t90 + 0x1C));
         }
         CHECK(slotTurned);
+        bool hatsTurned = true;   // (x, y) -> (-y, x)
+        for (const auto &h : hats)
+            hatsTurned = hatsTurned && m.f32(h.first + 0xC) == -h.second.second && m.f32(h.first + 0x10) == h.second.first;
+        CHECK(hatsTurned);
+        std::printf("  %s: %zu hat offsets of %s turned\n", stem.c_str(), hats.size(), hexOff(t90 - sm::kBase).c_str());
         std::printf("  %s: %zu pieces (stage_map.py %zu); removed %s, moved %s, turned %s by 90 and %s %s by 15; applied %d, "
                     "relinked %d (%d from reserve); grid %zu paths, %d list nodes, %d problems\n",
                     stem.c_str(), pieces.size(), pyCount, hexOff(rm - sm::kBase).c_str(), hexOff(mv - sm::kBase).c_str(),

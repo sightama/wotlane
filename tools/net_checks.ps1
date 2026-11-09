@@ -12,7 +12,7 @@ $noMap = "$env:TEMP\wotm_map_net_none"
 $makeMap = {
     foreach ($d in $mapMods, $noMap) { if (Test-Path $d) { Remove-Item -Recurse -Force $d }; New-Item -ItemType Directory -Force $d | Out-Null }
     & python (Join-Path $PSScriptRoot 'stage_map.py') make --base CENTRAL --id t1 --name 'TEST MAP' --out "$mapMods\Maps\stages" --remove 0x18a410 `
-        --move '0x165a70=-185.7,475.8,0' --move '0x2d85a0=768.1,499.6,74.1' --move '0x4da6b0=-1153.1,4.1,0.3,90' --move '0x5c95a0=400,-100,11.9'
+        --move '0x165a70=-185.7,475.8,0' --move '0x2d85a0=768.1,499.6,74.1' --turn '0x4da6b0=90' --move '0x5c95a0=400,-100,11.9'
     if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' }
 }
 
@@ -55,7 +55,7 @@ $checks = [ordered]@{
                          Expect = '\[mods\] skin togera/green .* = costume 4' }
     # a saved map online (WOTM_MATCH's stage field is the map id on both PCs, the same mods folder): applied on both, same state
     'map_online'    = @{ Setup = $makeMap; ExtraEnv = "WOTM_MODS=$mapMods"; Stage = 't1'; Secs = 60
-                         Expect = '\[stages\] map t1 |||\[stages\] t1: applied 5 edits'
+                         Expect = '\[stages\] map t1 |||\[stages\] t1: applied 13 edits'
                          Reject = 'does not match|||nothing applied|||not found in mods' }
     # the second PC without the map's folder: the mods digest differs and the server refuses the match (as mods_diferentes)
     'map_online_missing' = @{ Setup = $makeMap; ExtraEnv = "WOTM_MODS=$mapMods"; PlayerEnv = "2:WOTM_MODS=$noMap"; Stage = 't1'; Secs = 30

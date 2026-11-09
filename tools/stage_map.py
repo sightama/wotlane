@@ -5,11 +5,14 @@
 
   stage_map.py check <NGP or dump>...      grid rule; a dump is the raw image (bytes from 0xA00000), and a sibling
                                            <dump>.reserve, if present, is mapped at --reserve (default 0x3EFF000)
-  stage_map.py pieces <NGP or dump>        one line per piece: node, kind, world position, collision paths, destructible;
-                                           node is the offset from 0xA00000, or @<absolute address> outside the image
+  stage_map.py pieces <NGP or dump>        one line per piece: node, kind, world position, collision paths, riders,
+                                           destructible; node is the offset from 0xA00000, or @<absolute address> outside
+                                           the image
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
-                    [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]...   writes <stages folder>/<id>/stage.json
-                                           (--turn and --move on the same node make one edit)
+                    [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]... [--no-riders]
+                                           writes <stages folder>/<id>/stage.json (--turn and --move on the same node make
+                                           one edit), plus an edit per rider of an edited piece (rider_map(); the user's own
+                                           edit of a rider stands), printed as it is added
   stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
                                            the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
@@ -36,6 +39,9 @@ The native loader mirrors these rules exactly (keep them in step):
 - Grid coverage: cols floor((boxMin.x - minX) / cellSize) .. floor((boxMax.x - minX) / cellSize) inclusive, rows the
   same with Y, clamped to [0, nCols - 1] and [0, nRows - 1]; cell index row * nCols + col.
 - baseHash: FNV-1a 64 over the whole inflated image.
+Riders (rider_map(), make only; the loader applies them as ordinary edits): a piece whose origin (a pickup: its position; a
+world piece: the bottom of its lowest OBJECT) lies in X and Y inside one of another piece's solid collision boxes at most 700
+wide, at z from the box top - 20 to the box top + 25; on two pieces, the one whose box top is nearest, then the lower node.
 """
 import argparse
 import glob
@@ -331,6 +337,147 @@ def pieces(m, parent=None):
     return out
 
 
+# ---------------------------------------------------------------- riders
+
+RIDER_BELOW, RIDER_ABOVE = 20.0, 25.0   # a rider's origin is within [box top - 20, box top + 25]
+RIDER_MAX_BOX = 700.0                   # boxes wider than this (in X or Y) carry nothing (CENTRAL's tower: an animated 1000 x 1000)
+
+
+def is_pickup(m, parent, n):
+    """A piece under a root other than the world root: a level pickup (the piece rule's case b)."""
+    root = n
+    while parent[root] is not None:
+        root = parent[root]
+    return (m.u32(root) >> 18) != WORLD_ID
+
+
+def lowest_bottom(m, n):
+    """(x, y, z) of the bottom of piece n's lowest OBJECT sphere (center z - radius), in world space; first in preorder on a
+    tie; None with no OBJECT. TRANSLATE, ROTATE and SCALE apply (row vectors, p * R + t), ANIM_XFORM and ANIM_SCALE count as
+    identity, a NULL ends its branch (the native loader's spheres() walk)."""
+    best, seen, st = None, set(), [(n, ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)), (0.0, 0.0, 0.0))]
+
+    def app(p, R, t):
+        return tuple(p[0] * R[0][j] + p[1] * R[1][j] + p[2] * R[2][j] + t[j] for j in range(3))
+    while st:
+        k, R, t = st.pop()
+        if k in seen:
+            continue
+        seen.add(k)
+        try:
+            o = op(m, k)
+            if o == 9:   # NULL
+                continue
+            if o == OP_OBJECT:
+                c = app((m.f32(k + 0x10), m.f32(k + 0x14), m.f32(k + 0x18)), R, t)
+                s = max(math.sqrt(sum(v * v for v in row)) for row in R)
+                pt = (c[0], c[1], c[2] - m.f32(k + 0x1C) * s)
+                if best is None or pt[2] < best[2]:
+                    best = pt
+                continue
+            if o == OP_TRANSLATE:
+                t = app((m.f32(k + 0x10), m.f32(k + 0x14), m.f32(k + 0x18)), R, t)
+            elif o == OP_ROTATE:
+                L = [[m.f32(k + 0x10 + 16 * i + 4 * j) for j in range(3)] for i in range(3)]
+                t = app((m.f32(k + 0x40), m.f32(k + 0x44), m.f32(k + 0x48)), R, t)
+                R = tuple(tuple(sum(L[i][q] * R[q][j] for q in range(3)) for j in range(3)) for i in range(3))
+            elif o == 30:   # SCALE: p * scale, then + trans
+                sc = (m.f32(k + 0x20), m.f32(k + 0x24), m.f32(k + 0x28))
+                t = app((m.f32(k + 0x10), m.f32(k + 0x14), m.f32(k + 0x18)), R, t)
+                R = tuple(tuple(sc[i] * R[i][j] for j in range(3)) for i in range(3))
+        except IndexError:
+            continue
+        for c in reversed(children(m, k)):
+            st.append((c, R, t))
+    return best
+
+
+def rider_map(m, parent=None, ps=None):
+    """{base piece: [rider pieces, walk order]}. A rider is another piece whose origin (a pickup: its position; a world piece:
+    the bottom of its lowest OBJECT, lowest_bottom()) lies inside, in X and Y, one of the base's solid (non-trigger) collision
+    path boxes at most RIDER_MAX_BOX wide, with its z in [box top - RIDER_BELOW, box top + RIDER_ABOVE]. A rider on two bases
+    goes to the one whose box top is closest to its z (then the lower node). One level only: a rider's riders are not carried."""
+    if parent is None:
+        parent = walk_all(m)
+    if ps is None:
+        ps = pieces(m, parent)
+    g = find_grid(m, parent)
+    boxes = {}
+    for p in sorted(all_paths(m, g)):
+        if not m.ok(p, 0x24) or m.u32(p + 0x20) & 1:
+            continue
+        b = [m.f32(p + 4 * i) for i in range(6)]
+        if b[3] - b[0] > RIDER_MAX_BOX or b[4] - b[1] > RIDER_MAX_BOX:
+            continue
+        for n in set(path_nodes(m, p)):
+            boxes.setdefault(n, []).append(b)
+    origin = {}
+    for n, _o, pos, _k, _d in ps:
+        origin[n] = pos if is_pickup(m, parent, n) else lowest_bottom(m, n)
+    claim = {}
+    for base, *_ in ps:
+        for b in boxes.get(base, ()):
+            for n, pt in origin.items():
+                if n == base or pt is None:
+                    continue
+                if b[0] <= pt[0] <= b[3] and b[1] <= pt[1] <= b[4] and b[5] - RIDER_BELOW <= pt[2] <= b[5] + RIDER_ABOVE:
+                    key = (abs(pt[2] - b[5]), base)
+                    if n not in claim or key < claim[n]:
+                        claim[n] = key
+    out = {}
+    for n, *_ in ps:
+        if n in claim:
+            out.setdefault(claim[n][1], []).append(n)
+    return out
+
+
+def riders(m, piece):
+    """The riders of one piece (rider_map())."""
+    return rider_map(m).get(piece, [])
+
+
+def kind_of(m, parent, n):
+    """'pickup type N' (createPickup's type: the pickup id - 0x1388) or 'world piece'."""
+    if not is_pickup(m, parent, n):
+        return "world piece"
+    first = next((m.u32(k) >> 18 for k in subtree(m, n) if m.u32(k) >> 18), 0)
+    return "pickup type %d" % (first - 0x1388)
+
+
+def rider_edits(m, edits, valid_riders, notes):
+    """Edits for the riders of make's edits (stage.json form, offsets): a removed base removes its riders; a moved or turned
+    base moves each rider rigidly with it: new = base new + turn(rider - base old), and the rider gets the same turn. A rider
+    edited by the user keeps the user's edit (noted). valid_riders: {base offset: [(rider offset, kind)]}."""
+    user = {int(e["node"], 16) for e in edits}
+    out = []
+    for e in edits:
+        base = int(e["node"], 16)
+        for r, kind in valid_riders.get(base, ()):
+            if r in user:
+                notes.append("  note: rider 0x%x (%s) of 0x%x keeps your own edit" % (r, kind, base))
+                continue
+            if any(int(x["node"], 16) == r for x in out):
+                continue
+            notes.append("  rider 0x%x (%s) follows 0x%x" % (r, kind, base))
+            if e.get("remove"):
+                out.append({"node": "0x%x" % r, "remove": True})
+                continue
+            old = position(m, BASE + base)
+            new = e.get("move", old)
+            deg = e.get("turn", 0)
+            a = math.fmod(deg, 360.0) % 360.0
+            c, s = {0.0: (1.0, 0.0), 90.0: (0.0, 1.0), 180.0: (-1.0, 0.0), 270.0: (0.0, -1.0)}.get(
+                a, (math.cos(math.radians(a)), math.sin(math.radians(a))))
+            rp = position(m, BASE + r)
+            d = [rp[k] - old[k] for k in range(3)]
+            to = [d[0] * c - d[1] * s + new[0], d[0] * s + d[1] * c + new[1], d[2] + new[2]]
+            ed = {"node": "0x%x" % r, "move": [round(v, 3) for v in to]}
+            if deg:
+                ed["turn"] = deg
+            out.append(ed)
+    return out
+
+
 # ---------------------------------------------------------------- fight RAM (PS2X_DUMP_RAM)
 
 MONSTERS, NUM_MONSTERS = 0x3D3920, 0x3D3978   # TheGame::m_monsters[], m_numMonsters (native/wotm_syms.h)
@@ -449,13 +596,15 @@ def cmd_check(a):
 def cmd_pieces(a):
     try:
         m = load_mem(a.file, a.reserve)
-        ps = pieces(m)
+        parent = walk_all(m)
+        ps = pieces(m, parent)
+        rm = rider_map(m, parent, ps)
     except (ValueError, IndexError, OSError) as e:
         print("%s: %s" % (a.file, e))
         return 1
     for n, o, pos, npaths, destr in ps:
-        print("%s  %-9s  pos %.1f %.1f %.1f  paths %d%s" % (
-            addr(m, n), "TRANSLATE" if o == OP_TRANSLATE else "ROTATE", pos[0], pos[1], pos[2], npaths,
+        print("%s  %-9s  pos %.1f %.1f %.1f  paths %d  riders %d%s" % (
+            addr(m, n), "TRANSLATE" if o == OP_TRANSLATE else "ROTATE", pos[0], pos[1], pos[2], npaths, len(rm.get(n, ())),
             "  destructible" if destr else ""))
     print("%d pieces" % len(ps), file=sys.stderr)
     return 0
@@ -545,14 +694,22 @@ def cmd_make(a):
     if not os.path.isfile(ngp_path):
         return fail("%s: no such file (--base %s, --disc %s)" % (ngp_path, a.base, a.disc))
     image = ngp.inflate_ngp(ngp_path)
+    m = Mem(image)
     try:
-        valid = {n - BASE for n, *_ in pieces(Mem(image))}
+        parent = walk_all(m)
+        ps = pieces(m, parent)
+        valid = {n - BASE for n, *_ in ps}
+        rm = {} if a.no_riders else rider_map(m, parent, ps)
     except (ValueError, IndexError) as e:
         return fail("%s: %s" % (ngp_path, e))
     try:
         edits = make_edits(valid, base, a.move, a.turn, a.remove)
     except ValueError as e:
         return fail(str(e))
+    notes = []
+    edits += rider_edits(m, edits, {b - BASE: [(r - BASE, kind_of(m, parent, r)) for r in rs] for b, rs in rm.items()}, notes)
+    for line in notes:
+        print(line)
     doc = {"name": name, "base": base, "baseHash": "%016x" % fnv1a(image), "edits": edits}
     folder = os.path.join(a.out, a.id)
     os.makedirs(folder, exist_ok=True)
@@ -695,6 +852,68 @@ def cmd_selftest(_a):
         except ValueError:
             continue
         raise AssertionError("make_edits accepted %r" % (bad,))
+
+    # riders: a fresh image with two bases (roof tops 100 and 108), a wide box, a trigger box and candidates around them
+    img[:] = bytes(len(img))
+    res[:] = bytes(len(res))
+    top[BASE], top[RESERVE] = 0x40, 0x10
+
+    def sphobj(c, r):
+        a = node(OP_OBJECT, 0x20)
+        for i, v in enumerate(c + (r,)):
+            w("<f", a + 0x10 + 4 * i, v)
+        return a
+    pcs = [node(OP_POLY_COLL, 4) for _ in range(3)]
+    b = trans((100, 50, 0), [sphobj((0, 0, 50), 50), pcs[0]])
+    b2 = trans((100, 50, 0), [sphobj((0, 0, 50), 50), pcs[1]])
+    tw = trans((250, 100, 0), [sphobj((0, 0, 25), 25), pcs[2]])
+    wr = trans((120, 60, 100), [sphobj((0, 0, 10), 10)])                     # world piece, bottom at 100: on b
+    wg = trans((60, 30, 0), [sphobj((0, 0, 10), 10)])                        # bottom at 0, under b's roof: no
+    world = group([b, b2, tw, wr, wg], WORLD_ID)
+
+    def pk(x, y, z):
+        return trans((x, y, z), [group([obj(5001)])])
+    pk1, pk2, pk3, pk4, pk5, pk6 = (pk(150, 20, 110), pk(150, 20, 140), pk(170, 20, 100), pk(60, 80, 205),
+                                    pk(250, 150, 50), pk(100, 50, 104))
+    pickups = group([pk1, pk2, pk3, pk4, pk5, pk6])
+    g = node(OP_GRID, 0x20 + 4 * 8)
+    w("<h", g + 4, 4), w("<h", g + 6, 2)
+    for i, v in enumerate((100.0, -100.0, 0.0, 300.0, 200.0)):
+        w("<f", g + 8 + 4 * i, v)
+    boxes = [((40.0, 10.0, 0.0), (160.0, 90.0, 100.0), [world, b, pcs[0]], 0),
+             ((40.0, 10.0, 0.0), (160.0, 90.0, 108.0), [world, b2, pcs[1]], 0),
+             ((40.0, 10.0, 0.0), (160.0, 90.0, 205.0), [world, b, pcs[0]], 1),     # a trigger box: carries nothing
+             ((-500.0, 0.0, 0.0), (400.0, 200.0, 50.0), [world, tw, pcs[2]], 0)]   # 900 wide: carries nothing
+    head = 0
+    for lo, hi, nodes, trig in boxes:
+        p = path(lo, hi, nodes)
+        w("<I", p + 0x20, trig)
+        ln = node(0, 8)
+        w("<I", ln, head), w("<I", ln + 4, p)
+        head = ln
+    w("<I", g + 0x20, head)
+    roots = [world, pickups, g]
+    w("<I", BASE, len(roots))
+    kids(BASE, 4, roots)
+    m = mem()
+    parent = walk_all(m)
+    assert lowest_bottom(m, wr) == (120.0, 60.0, 100.0) and kind_of(m, parent, pk1) == "pickup type 1"
+    rm = rider_map(m)
+    assert rm == {b: [wr, pk6], b2: [pk1]}, {hex(k): [hex(x) for x in v] for k, v in rm.items()}   # pk6: a tie, the lower node
+    assert riders(m, b2) == [pk1] and riders(m, tw) == []
+    off = lambda n: n - BASE   # noqa: E731
+    valid = {off(k): [(off(r), kind_of(m, parent, r)) for r in v] for k, v in rm.items()}
+    notes = []
+    got = rider_edits(m, [{"node": "0x%x" % off(b), "move": [110, 50, 5], "turn": 90}, {"node": "0x%x" % off(b2), "remove": True}],
+                      valid, notes)
+    assert got == [{"node": "0x%x" % off(wr), "move": [100.0, 70.0, 105.0], "turn": 90},
+                   {"node": "0x%x" % off(pk6), "move": [110.0, 50.0, 109.0], "turn": 90},
+                   {"node": "0x%x" % off(pk1), "remove": True}], got
+    assert notes[0] == "  rider 0x%x (world piece) follows 0x%x" % (off(wr), off(b)), notes
+    notes = []
+    got = rider_edits(m, [{"node": "0x%x" % off(b), "move": [100, 80, 0]}, {"node": "0x%x" % off(pk6), "remove": True}], valid, notes)
+    assert got == [{"node": "0x%x" % off(wr), "move": [120.0, 90.0, 100.0]}], got                  # pk6: the user's edit stands
+    assert any("keeps your own edit" in n for n in notes), notes
     print("selftest OK")
     return 0
 
@@ -719,6 +938,8 @@ def main(argv=None):
     p.add_argument("--move", action="append", default=[], metavar="0x..=X,Y,Z[,TURN]")
     p.add_argument("--turn", action="append", default=[], metavar="0x..=DEGREES",
                    help="turn about Z without moving; with a --move of the same node, one edit")
+    p.add_argument("--no-riders", action="store_true",
+                   help="do not carry the riders (pickups and pieces standing on an edited piece's roof) with it")
     p.add_argument("--disc", default="disc", help="disc folder (relative to the repo root unless absolute)")
     p.set_defaults(fn=cmd_make)
     p = sub.add_parser("inflate", help="write a stage .NGP's inflated image (WOTM_TEST_STAGE)")

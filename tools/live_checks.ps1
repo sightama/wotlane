@@ -14,12 +14,14 @@ $stageMap = Join-Path $PSScriptRoot 'stage_map.py'
 # t1 on CENTRAL: a destructible removed (0x18a410), the Apcomm tower (0x165a70, where player 1 starts, on its roof at height
 # 580) moved across the map, a low building (0x2d85a0, roof at 148) moved onto that start point, a TRANSLATE-only building
 # (0x4da6b0) turned 90 degrees (a ROTATE in the reserve) and a level pickup (0x5c95a0, a static truck) moved into the park.
+# make adds 8 rider edits: the removed building's 4 rooftop pickups go with it, the low building carries its rooftop car
+# (0x5cd120) and 2 pickups on its plaza, and the turned building's rooftop car (0x5cb7e0) turns with it: 13 edits.
 $mapMods = "$env:TEMP\wotm_map_mods"
 $makeT1 = {
     param($out)
     Clear-MapDumps
     & python $stageMap make --base CENTRAL --id t1 --name 'TEST MAP' --out $out --remove 0x18a410 `
-        --move '0x165a70=-185.7,475.8,0' --move '0x2d85a0=768.1,499.6,74.1' --move '0x4da6b0=-1153.1,4.1,0.3,90' `
+        --move '0x165a70=-185.7,475.8,0' --move '0x2d85a0=768.1,499.6,74.1' --turn '0x4da6b0=90' `
         --move '0x5c95a0=400,-100,11.9'
     if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' }
 }
@@ -118,10 +120,12 @@ $checks = [ordered]@{
                          Reject = '\[mods\] skin Creator/skins/green ignored|||\[CRASH\]|||\[watchdog\] FROZE' }
     # map t1 in a CPU fight for 60 s: applied, the stage image right after the edits keeps the grid rule (stage_map.py check on
     # the WOTM_STAGE_DUMP), and the moved pickup was placed at its new spot and none at its old one (createPickup's position,
-    # from the fight's RAM: dbsTraverse's TRANSLATE case gives the edited translation)
+    # from the fight's RAM: dbsTraverse's TRANSLATE case gives the edited translation). Riders: the moved building's rooftop car
+    # is placed on its new roof and none on the old roof, the turned building's rooftop car on its turned roof (a TRANSLATE
+    # pickup turned: a ROTATE in the reserve) and none at the old spot, and none of the removed building's 4 rooftop pickups
     'map_load'      = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_AIVSAI=1;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_t1.bin;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { & $makeT1 "$mapMods\Maps\stages" }
-                         Expect = '\[stages\] map t1 .*|||\[stages\] t1: applied 5 edits|||\[match\]'
+                         Expect = '\[stages\] map t1 .*|||\[stages\] t1: applied 13 edits|||\[match\]'
                          Reject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||refused|||nothing applied'
                          After = {
                              param($disc)
@@ -129,14 +133,18 @@ $checks = [ordered]@{
                              $out | ForEach-Object { Write-Host "        $_" }
                              $grid = $LASTEXITCODE -eq 0 -and ($out -join ' ') -match ', OK'
                              if (-not $grid) { Write-Host 'FAILED  stage_map.py check on the dump' -ForegroundColor Red }
-                             (Test-MapRam $disc @('--pickup', '400,-100,11.9', '--no-pickup', '1213.1,536,11.9')) -and $grid
+                             (Test-MapRam $disc @('--pickup', '400,-100,11.9', '--no-pickup', '1213.1,536,11.9',
+                                 '--pickup', '724.96,532.008,152.7', '--no-pickup', '-140.1,565.7,152.7',
+                                 '--pickup', '-1093.808,90.14,228.484', '--no-pickup', '-1067.1,-55.2,228.5',
+                                 '--no-pickup', '969.1,533.2,276.6', '--no-pickup', '969.3,746.2,276.6',
+                                 '--no-pickup', '1026.4,475.1,262.6', '--no-pickup', '967.9,653.6,284.4')) -and $grid
                          } }
     # collision follows the moves: with nobody pressing anything, player 1 drops (hdHatTest) from its start point onto what is
     # under it and stands there. Stock: the tower's roof (580). t1: the low building's roof (148), so the moved building is solid
     # in its new place and the tower is not in its old one
     'map_solid'     = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { & $makeT1 "$mapMods\Maps\stages" }
-                         Expect = '\[stages\] t1: applied 5 edits|||\[match\]'
+                         Expect = '\[stages\] t1: applied 13 edits|||\[match\]'
                          After = { param($disc) Test-MapRam $disc @('--monster', '0:140:156') } }
     # a removed building is gone for collision: t2 removes the tower, and player 1 drops to the ground
     'map_remove'    = @{ Env = "WOTM_MATCH=3,1,t2;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 60
