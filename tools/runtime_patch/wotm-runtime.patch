@@ -317,7 +317,7 @@ index 589d768..c5c3193 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,94 @@ endif()
+@@ -608,3 +645,99 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -344,6 +344,8 @@ index 589d768..c5c3193 100644
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_overrides.cpp"
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"
 +    "${WOTM_NATIVE_DIR}/wotm_detmath.cpp"
++    "${WOTM_NATIVE_DIR}/wotm_json.cpp"
++    "${WOTM_NATIVE_DIR}/wotm_stagemap.cpp"
 +)
 +# WotM, macOS/Linux: crash stack trace and the macOS menu bar/Dock in fullscreen (wotm_posix.cpp; system headers that clash with raylib)
 +if(NOT WIN32)
@@ -353,10 +355,13 @@ index 589d768..c5c3193 100644
 +# Native VU0 and the VU1 interpreter: VU arithmetic (madd with two roundings, toward zero) does not survive /fp:fast
 +# (contraction into FMA; on the VU1 Ultra-V's rope picked up a noisy tangent where its points coincide). The runtime hooks
 +# (wotm_overrides.cpp and its .inc files) too: their float results reach guest RAM (the orbit camera's pose), so they must give
-+# the same bits on every compiler and CPU, or two PCs in a network match desync. wotm_detmath.cpp is the trig they use for it
++# the same bits on every compiler and CPU, or two PCs in a network match desync. wotm_detmath.cpp is the trig they use for it;
++# wotm_json.cpp (decimal text to double) and wotm_stagemap.cpp (map creator edits) write guest RAM from parsed files the same way
 +set(WOTM_VU_STRICT_SOURCES
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_overrides.cpp"
 +    "${WOTM_NATIVE_DIR}/wotm_detmath.cpp"
++    "${WOTM_NATIVE_DIR}/wotm_json.cpp"
++    "${WOTM_NATIVE_DIR}/wotm_stagemap.cpp"
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"
 +    "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_core.cpp"
 +    "${CMAKE_CURRENT_SOURCE_DIR}/src/lib/vu/ps2_vu1_upper.cpp"

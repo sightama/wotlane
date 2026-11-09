@@ -603,6 +603,15 @@ TEST(json_numbers_keep_fractions)
     CHECK(wotm::json::dump(wotm::json::Value::number(0.1)) == "0.1\n");
     CHECK(wotm::json::dump(wotm::json::Value::number(2.0)) == "2.0\n");
     CHECK(wotm::json::dump(wotm::json::Value::number(-1234.5)) == "-1234.5\n");
+    // plain decimal while the exponent is small, whole numbers keep ".0" (stage_map.py writes 120.0), -0 stays -0
+    CHECK(wotm::json::dump(wotm::json::Value::number(120.0)) == "120.0\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(-40.0)) == "-40.0\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(10.0)) == "10.0\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(1234567.0)) == "1234567.0\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(0.00001)) == "0.00001\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(1e-7)) == "1e-07\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(-0.0)) == "-0.0\n");
+    CHECK(wotm::json::parse("-0.0", v) && v.asNum() == 0.0 && std::signbit(v.asNum()));
     CHECK(!wotm::json::parse("1.", v) && !wotm::json::parse("1e", v));
 }
 
@@ -804,11 +813,11 @@ namespace
     };
 
     // A 4 x 4 grid of 200-unit cells from (0, 0); piece A (TRANSLATE at 100,100 under a GROUP `mid`), piece B (ROTATE at
-    // 500,100, 30 degrees), and a ground hull under the world root listed in all 16 cells.
+    // 500,100, 30 degrees), piece C (TRANSLATE at 700,700), and a ground hull under the world root listed in all 16 cells.
     struct Stage
     {
         Img im;
-        uint32_t g, world, mid, tA, gA, objA, pcA, pA, rB, objB, pcB, pB, pcG, pG;
+        uint32_t g, world, mid, tA, gA, objA, pcA, pA, rB, objB, pcB, pB, pcG, pG, tC, pcC, pC;
         Stage()
         {
             objA = im.object(), pcA = im.polycoll();
@@ -819,12 +828,15 @@ namespace
             objB = im.object(), pcB = im.polycoll();
             rB = im.rotate({objB, pcB}, 30, 500, 100, 0);
             pcG = im.polycoll();
-            world = im.group({mid, rB, pcG}, 400, 400, 0, 600, 1);
+            pcC = im.polycoll();
+            tC = im.translate({im.object(), pcC}, 700, 700, 0);
+            world = im.group({mid, rB, pcG, tC}, 400, 400, 0, 600, 1);
             g = im.grid(4, 4, 200, 0, 0, 800, 800);
             pA = im.path(90, 95, 0, 130, 105, 30, {world, mid, tA, gA, pcA});
             pB = im.path(480, 90, 0, 540, 110, 10, {world, rB, pcB});
             pG = im.path(0, 0, 0, 800, 800, 0, {world, pcG});
-            im.link(g, {pA, pB, pG});
+            pC = im.path(690, 690, 0, 710, 710, 20, {world, tC, pcC});
+            im.link(g, {pA, pB, pG, pC});
             im.roots({world, g});
         }
         uint32_t off(uint32_t a) const { return a - sm::kBase; }
@@ -940,7 +952,7 @@ TEST(stagemap_write_roundtrip)
     m.edits.push_back(moveTo(0x61e340, 0.1f, -1234.567f, 1e-5f, 22.5f));
     m.edits.push_back(removal(0x62a1c0));
     m.edits.push_back(turnBy(0x400, -90.f));
-    m.edits.push_back(moveTo(0x404, 3.f, 4.f, 5.f));
+    m.edits.push_back(moveTo(0x404, 3.f, -0.f, 120.f));
     sm::Map back;
     std::string why;
     CHECK(sm::parse(sm::write(m), back, why));
@@ -1020,10 +1032,9 @@ TEST(stagemap_remove)
         uint32_t w0;
         std::memcpy(&w0, &before[s.off(s.tA)], 4);
         CHECK(s.im.r32(s.tA) == ((w0 & ~63u) | 9));
-        size_t diff = 0;
-        for (size_t i = 0; i < before.size(); ++i)
-            diff += before[i] != s.im.img[i] && (i < s.off(s.tA) || i >= s.off(s.tA) + 4);
-        CHECK(diff == 0);   // only the header word; the grid is untouched
+        CHECK(s.im.cellsOf(s.g, s.pA).empty());   // its path left the grid (traversal stops at the NULL anyway)
+        CHECK(s.im.cellsOf(s.g, s.pB) == std::vector<int>({2}) && s.im.cellsOf(s.g, s.pG).size() == 16 && s.im.gridProblems(s.g) == 0);
+        CHECK(s.im.rf(s.pA) == 90.f && s.im.r32(s.pA + 0x24 + 8) == s.tA);   // the path itself is left as it was
     }
     {
         Stage s;
@@ -1164,7 +1175,7 @@ TEST(stagemap_turn_translate_piece)
         CHECK(r.applied == 1 && r.refused == 0);
         const uint32_t rot = s.im.r32(s.mid + 0x20);   // mid's child slot now holds the ROTATE
         CHECK(rot != s.tA && rot >= start && rot < res.end && rot % 16 == 0);
-        CHECK(s.im.r32(rot) == ((word & ~127u) | 4) && s.im.r32(rot + 4) == 0x1234 && s.im.r32(rot + 8) == 1 && s.im.r32(rot + 0xC) == 0);
+        CHECK(s.im.r32(rot) == ((word & ~63u) | 4) && s.im.r32(rot + 4) == 0x1234 && s.im.r32(rot + 8) == 1 && s.im.r32(rot + 0xC) == 0);
         CHECK(s.im.r32(rot + 0x50) == s.gA);
         const float want[16] = {0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 100, 100, 0, 1};
         bool ok = true;
@@ -1203,8 +1214,98 @@ TEST(stagemap_turn_translate_piece)
         const sm::Result r = sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
         const uint32_t rot = im.r32(c + 8);
         CHECK(r.applied == 1 && im.r32(c + 4) == ghost && rot >= sm::kReserve && (im.r32(rot) & 63) == 4);
+        CHECK(logHas(r, "CONTROL") && logHas(r, hexOff(c - sm::kBase)));
         CHECK(im.rf(rot + 0x10) == -1.f && im.rf(rot + 0x14) == 0.f && im.rf(rot + 0x24) == -1.f && im.rf(rot + 0x40) == 50.f);
     }
+}
+
+TEST(stagemap_remove_frees_grid_nodes)
+{
+    for (int order = 0; order < 2; ++order)
+    {
+        Stage s;   // a remove's list node goes to the pool, so a move needing one more cell takes no reserve, whatever the file order
+        sm::Reserve res = s.im.reserve();
+        const uint32_t start = res.next;
+        const sm::Edit rm = removal(s.off(s.rB)), mv = moveTo(s.off(s.tA), 180, 100, 0);
+        const sm::Result r = order ? s.run({mv, rm}, res) : s.run({rm, mv}, res);
+        CHECK(r.applied == 2 && r.refused == 0 && r.relinked == 2 && r.fromReserve == 0 && res.next == start);
+        CHECK(s.im.cellsOf(s.g, s.pA) == std::vector<int>({0, 1}) && s.im.cellsOf(s.g, s.pB).empty() && s.im.gridProblems(s.g) == 0);
+    }
+    {
+        Stage s;   // a move that leaves a cell frees a node for the next move
+        sm::Reserve res = s.im.reserve();
+        const uint32_t start = res.next;
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 180, 100, 0)}, res);
+        CHECK(r.applied == 1 && r.fromReserve == 1 && res.next > start);
+        const uint32_t after = res.next;
+        const sm::Result r2 = s.run({moveTo(s.off(s.tA), 100, 100, 0), moveTo(s.off(s.tC), 590, 700, 0)}, res);
+        CHECK(r2.applied == 2 && r2.fromReserve == 0 && res.next == after);   // C now needs cells 14 and 15: A's spare node
+        CHECK(s.im.cellsOf(s.g, s.pC) == std::vector<int>({14, 15}) && s.im.gridProblems(s.g) == 0);
+    }
+}
+
+TEST(stagemap_refusals_write_nothing)
+{
+    {
+        Stage s;   // a TRANSLATE with action data cannot become a ROTATE
+        s.im.w32(s.tA + 0xC, 0x1000);
+        const std::vector<uint8_t> before = s.im.img, rbefore = s.im.res;
+        const sm::Result r = s.run({turnBy(s.off(s.tA), 90)});
+        CHECK(r.applied == 0 && r.refused == 1 && logHas(r, "action data") && s.im.img == before && s.im.res == rbefore);
+    }
+    {
+        Stage s;   // room for the ROTATE but not for the extra grid node: nothing written, reserve untouched
+        const std::vector<uint8_t> before = s.im.img, rbefore = s.im.res;
+        sm::Reserve res{sm::kReserve, sm::kReserve + 0x60};
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 198, 100, 0, 90)}, res);
+        CHECK(r.applied == 0 && r.refused == 1 && logHas(r, "reserve"));
+        CHECK(s.im.img == before && s.im.res == rbefore && res.next == sm::kReserve);
+    }
+    {
+        Img im;   // a piece that also hangs from another node is refused
+        const uint32_t t = im.translate({im.object()}, 10, 10, 0), other = im.group({t});
+        const uint32_t world = im.group({t, other}, 0, 0, 0, 5000, 1), g = im.grid(2, 2, 200, 0, 0, 400, 400);
+        im.roots({world, g});
+        const std::vector<uint8_t> before = im.img;
+        sm::Map m;
+        m.edits.push_back(moveTo(t - sm::kBase, 50, 50, 0));
+        sm::Reserve res = im.reserve();
+        const sm::Result r = sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
+        CHECK(r.refused == 1 && logHas(r, hexOff(other - sm::kBase)) && im.img == before);
+    }
+}
+
+TEST(stagemap_spheres_of_turned_branches)
+{
+    Img im;   // a ROTATE piece with two branches off its origin, turned 90 and moved: the GROUP above covers both
+    const uint32_t a = im.group({im.object()}, 30, 0, 0, 5), b = im.group({im.object()}, 0, -20, 0, 8);
+    const uint32_t r = im.rotate({a, b}, 0, 100, 100, 0), up = im.group({r}, 100, 100, 0, 40);
+    const uint32_t world = im.group({up}, 0, 0, 0, 5000, 1), g = im.grid(2, 2, 200, 0, 0, 400, 400);
+    im.roots({world, g});
+    sm::Map m;
+    m.edits.push_back(moveTo(r - sm::kBase, 150, 100, 0, 90));
+    sm::Reserve res = im.reserve();
+    const sm::Result out = sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
+    // a's center (30,0) turns to (0,30), b's (0,-20) to (20,0); at (150,100) they are 58.31 + 5 and 70 + 8 from (100,100)
+    const double want = std::max(std::sqrt(50.0 * 50.0 + 30.0 * 30.0) + 5.0, 70.0 + 8.0);
+    CHECK(out.applied == 1 && double(im.rf(up + 0x1C)) >= want && near(im.rf(up + 0x1C), float(want)));
+    CHECK(im.rf(up + 0x10) == 100.f && im.rf(up + 0xC) == im.rf(up + 0x1C) * im.rf(up + 0x1C));
+}
+
+// The edits' writes must give the same bits on every compiler and CPU (they reach guest RAM in a network match): a fixed set of
+// edits on a fixed image, hashed. Measured on Windows (MSVC, x64); the Mac (clang, arm64) must print the same.
+TEST(stagemap_same_bits_on_every_machine)
+{
+    Stage s;
+    sm::Reserve res = s.im.reserve();
+    const sm::Result r = s.run({moveTo(s.off(s.rB), 590.5f, 410.25f, 3.f, 45.f), moveTo(s.off(s.tA), 395.5f, 610.25f, 0.f, 15.f),
+                                removal(s.off(s.tC))}, res);
+    uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
+    for (uint8_t byte : s.im.res)
+        h = (h ^ byte) * 0x100000001B3ull;
+    std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
+    CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
+    CHECK(h == 0x035d31e0eff6d986ull);
 }
 
 int main()

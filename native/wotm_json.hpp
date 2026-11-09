@@ -1,11 +1,11 @@
 // Minimal JSON (object, array, string, integer, boolean, null) for the files the port keeps human-readable: the save
 // (wotm_save.inc) and, later, whatever mods need. Keeps the key order and the keys the code doesn't know about, so that
 // rewriting a file doesn't erase what a mod put in it. A number with a fraction or an exponent keeps its value in `num` (`frac` set;
-// `i` holds it truncated, so integer readers see what they always saw); the conversion uses only exact IEEE steps, so every machine
-// reads the same bits (stage.json positions reach the game).
+// `i` holds it truncated, so integer readers see what they always saw). The float conversions live in wotm_json.cpp, built with
+// strict float (link it next to wotm_detmath.cpp): every build and every machine reads the same bits (stage.json positions reach
+// the game).
 #pragma once
 
-#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -28,15 +28,7 @@ namespace wotm::json
         Value() = default;
         static Value boolean(bool v) { Value r; r.type = Bool; r.b = v; return r; }
         static Value integer(int64_t v) { Value r; r.type = Int; r.i = v; return r; }
-        static Value number(double v)
-        {
-            Value r;
-            r.type = Int;
-            r.num = v;
-            r.frac = true;
-            r.i = v >= 9.2e18 ? INT64_MAX : v <= -9.2e18 ? INT64_MIN : v == v ? static_cast<int64_t>(v) : 0;
-            return r;
-        }
+        static Value number(double v);   // wotm_json.cpp (strict float)
         static Value string(std::string v) { Value r; r.type = Str; r.s = std::move(v); return r; }
         static Value array() { Value r; r.type = Arr; return r; }
         static Value object() { Value r; r.type = Obj; return r; }
@@ -70,23 +62,11 @@ namespace wotm::json
 
     namespace detail
     {
-        // Decimal digits * 10^exp10 as a double. Up to 2^53 with |exp10| <= 22 it is one exact division or product (correctly
-        // rounded); past that, repeated * or / 10: not always the nearest double, but the same bits everywhere.
-        inline double decimal(uint64_t digits, int exp10)
-        {
-            static const double kPow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
-                                            1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
-            double v = static_cast<double>(digits);
-            if (digits == 0)
-                return 0;
-            if (digits < (1ull << 53) && exp10 >= -22 && exp10 <= 22)
-                return exp10 >= 0 ? v * kPow10[exp10] : v / kPow10[-exp10];
-            for (; exp10 > 0 && !std::isinf(v); --exp10)
-                v *= 10;
-            for (; exp10 < 0 && v != 0; ++exp10)
-                v /= 10;
-            return v;
-        }
+        // Decimal digits * 10^exp10 as a double (wotm_json.cpp, built with strict float like wotm_detmath.cpp: a caller built with
+        // /fp:fast, such as ps2_runtime.cpp through wotm_mods.hpp, must not get its own contracted or reciprocal copy). Up to 2^53
+        // digits with |exp10| <= 22 it is one exact product or quotient, so the nearest double; past that, repeated * or / 10:
+        // not always the nearest double, but the same bits on every machine as long as it is compiled with strict float.
+        double decimal(uint64_t digits, int exp10);
 
         struct Parser
         {
@@ -305,32 +285,10 @@ namespace wotm::json
             }
         };
 
-        // The shortest %g text that reads back (through decimal()) to the same double, with '.' whatever the C locale says.
-        inline void number(std::string &out, double d)
-        {
-            if (!std::isfinite(d))
-            {
-                out += "null";   // JSON has no inf or nan
-                return;
-            }
-            char buf[40] = {};
-            for (int prec = 1; prec <= 17; ++prec)
-            {
-                std::snprintf(buf, sizeof buf, "%.*g", prec, d);
-                for (char *c = buf; *c; ++c)
-                    if (*c == ',')
-                        *c = '.';
-                const std::string t = buf;
-                Parser ps{t.data(), t.data() + t.size(), {}};
-                Value back;
-                if (ps.value(back, 0) && back.asNum() == d)
-                    break;
-            }
-            const std::string t = buf;
-            out += t;
-            if (t.find_first_of(".e") == std::string::npos)
-                out += ".0";   // read back as a number with a fraction
-        }
+        // The shortest text that reads back (through decimal()) to the same double, in plain decimal when the exponent is
+        // between -5 and 15 (120.0, 0.00001), otherwise %g's exponent form; '.' whatever the C locale says; ".0" on whole
+        // numbers so they read back as numbers with a fraction; -0 stays -0.0. In wotm_json.cpp (strict float).
+        void number(std::string &out, double d);
 
         inline void quote(std::string &out, const std::string &s)
         {
