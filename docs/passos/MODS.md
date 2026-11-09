@@ -302,7 +302,8 @@ mods/my_mod/
   node counts):
   - `move`: the piece's new world position `[x, y, z]` (absolute, world units; z is up). Its collision goes with it: the loader
     relinks the stage's collision grid to the new place, so the building is solid where it now stands and not where it stood.
-  - `turn`: degrees about the vertical axis, added to the piece's own rotation, about its own position. With or without `move`.
+  - `turn`: degrees about the vertical axis, added to the piece's own rotation, about its own position. With or without `move`
+    (`stage_map.py make`: `--turn 0x..=degrees`, or a fourth number in `--move`).
   - `remove: true` (alone): the piece is gone, drawing and collision.
 - Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
 
@@ -322,7 +323,9 @@ python tools/stage_map.py check disc/LVL/*.NGP                 # the collision g
 python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters and pickups in a fight's RAM (PS2X_DUMP_RAM)
 ```
 
-`--move` is `node=x,y,z[,turn]` and can repeat, as can `--remove`. `make` refuses a node that is not a piece of the base stage.
+`--move` is `node=x,y,z[,turn]`, `--turn` is `node=degrees` (a `--turn` and a `--move` of the same node make one edit); all
+three can repeat. `python tools/stage_map.py inflate disc/LVL/CENTRAL.NGP central.bin` writes the inflated image (the native
+test's `WOTM_TEST_STAGE`). `make` refuses a node that is not a piece of the base stage.
 To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
 `NATIVO.md`, "Diagnostics").
 
@@ -345,6 +348,8 @@ To find a piece, take the position from `pieces` and look at it with the free ca
 - A pickup on a rooftop floats when its building moves (the pickup is its own piece: move it too).
 - A `CONTROL` above a moved piece (the see-through "ghost" building switch: UFO, SANFRAN, ISLAND and others) keeps its volumes
   where the disc puts them, so the switch to the ghost version happens around the old place; the loader logs it.
+- A `LOD` above a moved piece keeps its sphere (the loader only widens the culling spheres of the groups above), so the
+  piece's level of detail switches by the distance to the old place; the loader logs it (`LOD <node> above it no longer covers it`).
 - Water and kill zones were only researched (water is a height per stage plus the surface of collision polygons, which move with
   their hull); no live check covers them.
 - Six maps listed at once in the stage select.

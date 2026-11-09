@@ -87,7 +87,9 @@ either fails, TURN is limited to pieces that already have a `ROTATE`.
    level (it is also called for menus and the pre-shell). For each edit:
    - **move / turn:** write the translation and rotation; for every collision path through the piece, recompute its
      world-space box and relink its grid nodes to the cells the new box covers; widen the culling sphere (+0x10 center,
-     +0x1C radius) of the ancestor groups above the piece. Spheres below the piece are local and unchanged.
+     +0x1C radius) of the ancestor `GROUP`s above the piece. An ancestor `LOD`'s sphere drives LOD switching, so it is not
+     widened: when it no longer covers the piece, the loader logs `LOD <node> above it no longer covers it`. Spheres below
+     the piece are local and unchanged.
    - **remove:** set the piece's opcode bits to `NULL`. Its collision paths leave the grid (traversal would stop at the
      `NULL` anyway) and their list nodes go to a pool that the moves use before the reserve.
 3. **Grid nodes.** A moved path that covers more cells than before needs more list nodes than the image holds. Edits are
@@ -159,6 +161,8 @@ Nothing is merged by us; Lane reviews.
   surface of collision polygons, which move with their hull; `.MRS` holds nothing tied to pieces); no live check covers them.
 - A `CONTROL` above a moved piece (the see-through "ghost" building switch) keeps its sphere and BSP volumes where the disc
   puts them, so the switch to the ghost version follows the old place; the loader logs it (1j).
+- A `LOD` above a moved piece keeps its sphere (it drives LOD switching; only `GROUP` spheres are widened), so the piece's
+  level of detail switches by the distance to the old place; the loader logs it when the sphere no longer covers the piece.
 - Six maps listed at once in the selection (slots 18-23); more are a later step.
 - Online in step 1 goes through `WOTM_MATCH` (a map id in the stage field); picking a map in the launcher's lobby needs a
   string stage in the lobby protocol and is a follow-up.

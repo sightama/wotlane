@@ -336,7 +336,7 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res);   
 **Files:** Test `native/tests/wotm_native_test.cpp`.
 
 - [ ] **Step 1:** test `stagemap_stock_grid_rule`: if `WOTM_TEST_STAGE` (a raw inflated image written by
-  `python -c "import sys;sys.path.insert(0,'tools');import ngp;open(sys.argv[2],'wb').write(ngp.inflate_ngp(sys.argv[1]))" disc/LVL/CENTRAL.NGP %TEMP%\central.bin`)
+  `python tools/stage_map.py inflate disc/LVL/CENTRAL.NGP %TEMP%\central.bin`)
   is set, load it, build `parents()`, and check the C++ coverage rule gives exactly the stock cells for every path;
   skipped (prints `skip`) when unset, so CI without a disc passes. Run once with the variable set: pass.
 - [ ] **Step 2:** apply a move and a remove from the `pieces` list to that image in the test and run the same rule: pass.

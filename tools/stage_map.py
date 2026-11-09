@@ -8,7 +8,10 @@
   stage_map.py pieces <NGP or dump>        one line per piece: node, kind, world position, collision paths, destructible;
                                            node is the offset from 0xA00000, or @<absolute address> outside the image
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
-                    [--move 0x..=x,y,z[,turn]]...   writes <stages folder>/<id>/stage.json
+                    [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]...   writes <stages folder>/<id>/stage.json
+                                           (--turn and --move on the same node make one edit)
+  stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
+                                           the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
                                            a fight's RAM (PS2X_DUMP_RAM): the monsters' positions and the level pickups'
                                            placed positions (what createPickup was given); exits 1 when monster I's height is
@@ -462,6 +465,72 @@ def num(v):
     return int(v) if float(v).is_integer() else v
 
 
+def make_edits(valid, base, moves, turns, removes):
+    """stage.json edits from make's --move 0x..=x,y,z[,turn], --turn 0x..=deg and --remove 0x.. (valid: the base's piece
+    offsets). A --turn and a --move of the same node merge into one edit; anything else on a node twice is refused."""
+    by_node, order = {}, []
+
+    def node_of(s):
+        try:
+            node = int(s, 16)
+        except ValueError:
+            raise ValueError("bad node %r (expected 0x<offset>)" % s)
+        if node not in valid:
+            raise ValueError("node 0x%x is not a piece of %s (see: stage_map.py pieces)" % (node, base))
+        return node
+
+    def edit(node, key):
+        e = by_node.get(node)
+        if e is None:
+            e = by_node[node] = {"node": "0x%x" % node}
+            order.append(node)
+        if key in e or "remove" in e or (key == "remove" and len(e) > 1):
+            raise ValueError("node 0x%x edited twice" % node)
+        return e
+
+    def numbers(arg, s, n, what):
+        try:
+            v = [float(x) for x in s.split(",")]
+        except ValueError:
+            v = []
+        if len(v) not in n or not all(math.isfinite(x) for x in v):
+            raise ValueError("bad %s %r (expected %s, finite numbers)" % (arg, s, what))
+        return v
+    for mv in moves:
+        node_s, _, vals = mv.partition("=")
+        v = numbers("--move", vals, (3, 4), "0x..=x,y,z[,turn]")
+        node = node_of(node_s)
+        e = edit(node, "move")
+        e["move"] = v[:3]
+        if len(v) == 4 and v[3] != 0:
+            e["turn"] = num(v[3])
+    for t in turns:
+        node_s, _, vals = t.partition("=")
+        v = numbers("--turn", vals, (1,), "0x..=degrees")
+        node = node_of(node_s)
+        e = edit(node, "turn")
+        if v[0] == 0 and "move" not in e:
+            raise ValueError("--turn %r does nothing" % t)
+        if v[0] != 0:
+            e["turn"] = num(v[0])
+    for r in removes:
+        edit(node_of(r), "remove")["remove"] = True
+    # key order as the loader writes it: node, move, turn / node, remove
+    return [{k: by_node[n][k] for k in ("node", "move", "turn", "remove") if k in by_node[n]} for n in order]
+
+
+def cmd_inflate(a):
+    try:
+        image = ngp.inflate_ngp(a.ngp)
+    except (ValueError, OSError) as e:
+        print("%s: %s" % (a.ngp, e))
+        return 1
+    with open(a.out, "wb") as f:
+        f.write(image)
+    print("%s: %d bytes, baseHash %016x" % (a.out, len(image), fnv1a(image)))
+    return 0
+
+
 def cmd_make(a):
     def fail(msg):
         print(msg)
@@ -480,33 +549,10 @@ def cmd_make(a):
         valid = {n - BASE for n, *_ in pieces(Mem(image))}
     except (ValueError, IndexError) as e:
         return fail("%s: %s" % (ngp_path, e))
-    edits, used = [], set()
-
-    def take(s):
-        try:
-            node = int(s, 16)
-        except ValueError:
-            raise SystemExit("bad node %r (expected 0x<offset>)" % s)
-        if node not in valid:
-            raise SystemExit("node 0x%x is not a piece of %s (see: stage_map.py pieces)" % (node, base))
-        if node in used:
-            raise SystemExit("node 0x%x edited twice" % node)
-        used.add(node)
-        return node
-    for mv in a.move:
-        node_s, _, vals = mv.partition("=")
-        try:
-            v = [float(x) for x in vals.split(",")]
-        except ValueError:
-            v = []
-        if len(v) not in (3, 4) or not all(math.isfinite(x) for x in v):
-            return fail("bad --move %r (expected 0x..=x,y,z[,turn], finite numbers)" % mv)
-        e = {"node": "0x%x" % take(node_s), "move": v[:3]}
-        if len(v) == 4 and v[3] != 0:
-            e["turn"] = num(v[3])
-        edits.append(e)
-    for r in a.remove:
-        edits.append({"node": "0x%x" % take(r), "remove": True})
+    try:
+        edits = make_edits(valid, base, a.move, a.turn, a.remove)
+    except ValueError as e:
+        return fail(str(e))
     doc = {"name": name, "base": base, "baseHash": "%016x" % fnv1a(image), "edits": edits}
     folder = os.path.join(a.out, a.id)
     os.makedirs(folder, exist_ok=True)
@@ -637,6 +683,18 @@ def cmd_selftest(_a):
         struct.pack_into("<I", ram, h + 4, h)                                 # empty: points at its own head
     mons, picks = ram_state(bytes(ram))
     assert mons == [(1.0, 2.0, 148.0)] and len(picks) == 1 and near(picks[0], (400, -100, 11.9)), (mons, picks)
+    valid = {0x100, 0x200, 0x300}                                             # make's edits
+    got = make_edits(valid, "X", ["0x100=1,2,3"], ["0x100=90", "0x200=15"], ["0x300"])
+    assert got == [{"node": "0x100", "move": [1.0, 2.0, 3.0], "turn": 90}, {"node": "0x200", "turn": 15},
+                   {"node": "0x300", "remove": True}], got
+    assert make_edits(valid, "X", ["0x100=1,2,3,45"], [], []) == [{"node": "0x100", "move": [1.0, 2.0, 3.0], "turn": 45}]
+    for bad in ((["0x100=1,2,3,45"], ["0x100=90"], []), ([], ["0x100=1", "0x100=2"], []), ([], ["0x100=5"], ["0x100"]),
+                ([], ["0x400=5"], []), ([], ["0x100=x"], []), ([], ["0x100=0"], []), (["0x100=1,2"], [], [])):
+        try:
+            make_edits(valid, "X", *bad)
+        except ValueError:
+            continue
+        raise AssertionError("make_edits accepted %r" % (bad,))
     print("selftest OK")
     return 0
 
@@ -658,9 +716,15 @@ def main(argv=None):
     p.add_argument("--name", required=True)
     p.add_argument("--out", required=True, help="the stages folder (mods/<mod>/stages); the map goes in <out>/<id>/")
     p.add_argument("--remove", action="append", default=[])
-    p.add_argument("--move", action="append", default=[])
+    p.add_argument("--move", action="append", default=[], metavar="0x..=X,Y,Z[,TURN]")
+    p.add_argument("--turn", action="append", default=[], metavar="0x..=DEGREES",
+                   help="turn about Z without moving; with a --move of the same node, one edit")
     p.add_argument("--disc", default="disc", help="disc folder (relative to the repo root unless absolute)")
     p.set_defaults(fn=cmd_make)
+    p = sub.add_parser("inflate", help="write a stage .NGP's inflated image (WOTM_TEST_STAGE)")
+    p.add_argument("ngp")
+    p.add_argument("out")
+    p.set_defaults(fn=cmd_inflate)
     p = sub.add_parser("ram", help="monsters and level pickups in a fight's RAM dump (PS2X_DUMP_RAM)")
     p.add_argument("file")
     p.add_argument("--monster", action="append", default=[], metavar="I:ZMIN:ZMAX")

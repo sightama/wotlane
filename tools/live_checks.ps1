@@ -184,7 +184,10 @@ foreach ($name in $checks.Keys) {
     }
     & powershell -NoProfile -ExecutionPolicy Bypass -File $check -Env $c.Env -Secs $c.Secs -Expect $c.Expect -Reject $reject
     if ($LASTEXITCODE -ne 0) { $failed += $name; continue }
-    if ($c.After -and -not (& $c.After (Join-Path $runtime 'discroot'))) { Write-Host "FAILED  $name (after the run)" -ForegroundColor Red; $failed += $name }
+    if ($c.After) {
+        if (-not $runtime) { Write-Host "FAILED  $name (after the run): no runtime folder (set WOTM_RECOMP_DIR or .wotm_recomp_dir)" -ForegroundColor Red; $failed += $name; continue }
+        if (-not (& $c.After (Join-Path $runtime 'discroot'))) { Write-Host "FAILED  $name (after the run)" -ForegroundColor Red; $failed += $name }
+    }
 }
 if ($failed.Count) { Write-Host "Failed: $($failed -join ', ')" -ForegroundColor Red; exit 1 }
 Write-Host 'All passed'
