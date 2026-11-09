@@ -134,17 +134,17 @@ $checks = [ordered]@{
     # collision follows the moves: with nobody pressing anything, player 1 drops (hdHatTest) from its start point onto what is
     # under it and stands there. Stock: the tower's roof (580). t1: the low building's roof (148), so the moved building is solid
     # in its new place and the tower is not in its old one
-    'map_solid'     = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 40
+    'map_solid'     = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { & $makeT1 "$mapMods\Maps\stages" }
-                         Expect = '\[stages\] t1: applied 5 edits'
+                         Expect = '\[stages\] t1: applied 5 edits|||\[match\]'
                          After = { param($disc) Test-MapRam $disc @('--monster', '0:140:156') } }
     # a removed building is gone for collision: t2 removes the tower, and player 1 drops to the ground
-    'map_remove'    = @{ Env = "WOTM_MATCH=3,1,t2;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 40
+    'map_remove'    = @{ Env = "WOTM_MATCH=3,1,t2;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods
                          Setup = { Clear-MapDumps
                                    & python $stageMap make --base CENTRAL --id t2 --name 'NO TOWER' --out "$mapMods\Maps\stages" --remove 0x165a70
                                    if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' } }
-                         Expect = '\[stages\] t2: applied 1 edits'
+                         Expect = '\[stages\] t2: applied 1 edits|||\[match\]'
                          After = { param($disc) Test-MapRam $disc @('--monster', '0:-5:5') } }
     # a piece under a CONTROL (UFO's see-through switch 0x2d9680) moved across cells: the loader says the CONTROL stays, the grid
     # rule holds and a CPU fight runs for 60 s

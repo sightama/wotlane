@@ -343,7 +343,15 @@ def ram_state(ram):
 
     def vec(a):
         return struct.unpack_from("<3f", ram, a & 0x3FFFFFF)
-    mons = [vec(u32(u32(MONSTERS + 4 * i) + 0xC) + 0x10) for i in range(min(u32(NUM_MONSTERS), 8))]
+    mons = []
+    for i in range(min(u32(NUM_MONSTERS), 8)):
+        mon = u32(MONSTERS + 4 * i)
+        if not mon:
+            raise SystemExit("monster %d: m_monsters[%d] is empty (no fight in this RAM image?)" % (i, i))
+        pos = vec(u32(mon + 0xC) + 0x10)
+        if pos == (0.0, 0.0, 0.0):
+            raise SystemExit("monster %d: position is all zero (fight not set up in this RAM image?)" % i)
+        mons.append(pos)
     picks, seen = [], set()
     for head in PICKUP_LISTS:
         node = u32(head + 4)
@@ -377,6 +385,8 @@ def cmd_ram(a):
     for spec in a.monster:
         i, lo, hi = spec.split(":")
         i, lo, hi = int(i), float(lo), float(hi)
+        if i < 0:
+            raise SystemExit("bad monster index %d in %r" % (i, spec))
         ok = i < len(mons) and lo <= mons[i][2] <= hi
         bad += not ok
         print("%s monster %d height in [%g, %g]" % ("ok     " if ok else "FAILED ", i, lo, hi))
