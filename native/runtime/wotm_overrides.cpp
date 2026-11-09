@@ -1207,9 +1207,7 @@ namespace
     void wotmCheckLoadEnd(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t texN = READ8(kFileStatus + 0x38), ngpN = READ8(kFileStatus + 0x74), resN = READ8(kFileStatus + 0xB0);
-        if (texN > 13 || ngpN > 13 || resN > 13)
-            return;
-        const uint32_t end = std::max({READ32(kFileStatus + 4 * texN), READ32(kFileStatus + 0x3C + 4 * ngpN), READ32(kFileStatus + 0x78 + 4 * resN)});
+        const uint32_t end = wotm_stagemap::loadEnd(rdram);   // 0 when fileStatus is unreadable
         if (end == g_lastLoadEnd || end < kLoadBase)
             return;
         g_lastLoadEnd = end;
@@ -1225,10 +1223,16 @@ namespace
         }
         if (end > kHighBase)
         {   // upper area: only the stage's NGP stays below (fileStatus.ngpAddr[0] to the end of the file, kept in the load log). The
-            // ceiling is the map creator's reserve (wotm_stagemap.inc, 1 MB under the top-of-RAM slots), not the end of RAM
+            // ceiling is the map creator's reserve (wotm_stagemap.inc, 1 MB under the top-of-RAM slots), not the end of RAM; without a
+            // map the reserve is unused, and only the top-of-RAM slots (the last 4 KB) are a real ceiling
             const double used = (end - kHighBase) / 1048576.0, left = (int64_t(wotm::stagemap::kReserve) - end) / 1048576.0;
+            const bool map = !wotm_stagemap::active().empty();
+            const char *warn = end > PS2_RAM_SIZE - 0x1000u ? " -- PAST THE END OF RAM, expect corruption"
+                               : left >= 0.5                 ? ""
+                               : map                         ? " -- NEAR OR PAST THE MAP RESERVE, the map is not applied"
+                                                             : " -- near or past the map reserve (only matters when a map is loaded)";
             std::fprintf(stderr, "[wotm] stage load: %u files, monsters and textures end at 0x%07X (%.1f MB above 32 MB, %.1f MB to the map reserve 0x%07X)%s\n",
-                         ngpN, end, used, left, wotm::stagemap::kReserve, left < 0.5 ? " -- NEAR OR PAST THE RESERVE, expect corruption" : "");
+                         ngpN, end, used, left, wotm::stagemap::kReserve, warn);
             return;
         }
         const double used = (end - kLoadBase) / 1048576.0, left = (int64_t(kLoadCeiling) - end) / 1048576.0;
@@ -2593,6 +2597,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     if (const char *e = std::getenv("WOTM_MATCH"))
     {
         int v[kMatchMaxAIs + 2], c[kMatchMaxAIs + 2], n = 0;
+        std::string matchMap;   // the stage field's map id (mods/<mod>/stages/<id>/), if any
         const char *p = e;
         for (char *end; n < kMatchMaxAIs + 2; p = end + 1)
         {
@@ -2607,16 +2612,20 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                 if (!*t && n >= 2)   // the last field is the stage: "<map id>" (mods/<mod>/stages/<id>/, wotm_stagemap.inc)
                 {
                     const std::string mid = wotm_stagemap::lower(id);
-                    int level = -1;
-                    for (const wotm::mods::Stage &st : wotm::mods::Registry::get().stages())
+                    const wotm::mods::Stage *found = nullptr;
+                    const std::vector<wotm::mods::Stage> maps = wotm::mods::Registry::get().stages();
+                    for (const wotm::mods::Stage &st : maps)
                         if (st.map.id == mid)
-                            level = wotm_stagemap::levelIndex(st.map.base);
+                            found = &st;
+                    const int level = found ? wotm_stagemap::levelIndex(found->map.base) : -1;
                     if (level >= 0)
                     {
                         v[n - 1] = level;
                         end = const_cast<char *>(t);
-                        wotm_stagemap::setActive(mid);
+                        matchMap = mid;   // made active once the match is accepted
                     }
+                    else if (found)
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: map \"%s\": base %s is not a stage\n", id.c_str(), found->map.base.c_str());
                     else
                         std::fprintf(stderr, "[wotm] WOTM_MATCH: map \"%s\" not found in mods/\n", id.c_str());
                 }
@@ -2683,6 +2692,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
             for (int i = 0; i < n - 1; ++i)
                 g_matchMonsters[i] = v[i], g_matchCostumes[i] = c[i];
             g_matchLevel = v[n - 1];
+            if (!matchMap.empty())
+                wotm_stagemap::setActive(matchMap);
         }
         if (g_matchLevel >= 0)
         {
