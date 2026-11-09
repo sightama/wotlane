@@ -22,8 +22,11 @@
 // Saved maps (map creator, mods/<mod>/stages/<id>/; spec docs/superpowers/specs/2026-11-09-map-creator-design.md, "Loading a map"
 // step 1): after RANDOM, extend() lists the first 6 maps of Registry::stages() (sorted by id: the same maps in the same order on every
 // PC) whose base stage is in the list, in the developer slots 18 to 23 (levelUnlocked leaves them open; below 0x1D, so never a host0:
-// load). Their names go to the same name table, rows 18 to 23. On changeScreen(8, 99) resolveMap, after resolveRandom (which never
-// draws a map slot), writes the base stage's index to m_levelNum and makes the map active (wotm_stagemap.inc applies it at the load);
+// load). The stage list's own rules hold for a map's base, as for RANDOM's draw: no map on a locked stage (levelUnlocked), and none on
+// the list's fourth entry when screenLevelSelect skips it (mode 2 with 2+ CPUs, mode 3 with a CPU). The CPU count can change after the
+// list was extended (back to the monster selection and forward again): the list is rebuilt from the same retail list on every entry
+// of the screen (screenFirstPass), not only when g_levelList is a retail list. Their names go to the same name table, rows 18 to 23.
+// On changeScreen(8, 99) resolveMap, after resolveRandom (which never draws a map slot), writes the base stage's index to m_levelNum and makes the map active (wotm_stagemap.inc applies it at the load);
 // any other confirmed stage clears the active map. The narrator doesn't announce a map, like RANDOM. Picture: the slot's own child
 // of the switch (the same kind of object as 17's) draws the map's photo.png, or the base stage's picture (SHELL.TEX's, through
 // savepics, or the base's levelpics PNG for 12, 13 and 16) when the map has none.
@@ -83,6 +86,7 @@ struct MapSlot
 };
 static MapSlot g_maps[kMaxMaps];   // EE thread
 static int g_mapCount = 0;
+static uint32_t g_src = 0;         // the retail list kList was last built from (0: none yet)
 // Copy for the window thread (picture), published by extend()
 static std::mutex g_pubLock;
 static MapSlot g_pub[kMaxMaps];
@@ -113,14 +117,18 @@ static void extend(uint8_t *rdram, uint32_t src)
             if (std::find(out.begin(), out.end(), l) == out.end())
                 out.push_back(l);
     out.push_back(kRandom);
-    // saved maps whose base stage is in this list (with WOTM_HIGHRAM=0, elimination keeps only the retail stages: maps on those)
+    // saved maps whose base stage is in this list (with WOTM_HIGHRAM=0, elimination keeps only the retail stages: maps on those), is
+    // unlocked and is not the fourth entry the screen skips with this mode and CPU count (resolveRandom's rule)
+    const uint32_t mode = rd32(rdram, kMode), ais = rd32(rdram, kNumAIs);
+    const bool skip3 = (mode == 2 && ais >= 2) || (mode == 3 && ais > 0);
+    const int skipped = skip3 && out.size() > 3 ? out[3] : -1;
     g_mapCount = 0;
     for (const wotm::mods::Stage &st : wotm::mods::Registry::get().stages())
     {
         if (g_mapCount == kMaxMaps || out.size() >= 24)
             break;
         const int base = wotm_stagemap::levelIndex(st.map.base);
-        if (base < 1 || std::find(out.begin(), out.end(), base) == out.end())
+        if (base < 1 || std::find(out.begin(), out.end(), base) == out.end() || !unlocked(rdram, base) || base == skipped)
             continue;
         MapSlot &m = g_maps[g_mapCount];
         m.id = st.map.id;
@@ -155,7 +163,9 @@ static void levelSelectHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runti
     {
         const uint32_t cur = rd32(rdram, wotm::sym::g_levelList);
         if (std::find(std::begin(kRetail), std::end(kRetail), cur) != std::end(kRetail))
-            extend(rdram, cur);
+            extend(rdram, g_src = cur);
+        else if (cur == kList && g_src && rd32(rdram, wotm::sym::screenFirstPass))
+            extend(rdram, g_src);   // entering the screen again: the mode and CPU count may have changed since
         static const char kName[] = "Random";
         std::memcpy(rdram + ((kLongNames + 18u * kRandom) & 0x1FFFFFFFu), kName, sizeof kName);
         for (int i = 0; i < g_mapCount; ++i)
@@ -346,10 +356,13 @@ static const Pic &picOf(int level)
     const int slot = level - kFirstMap;
     const MapSlot *m = slot >= 0 && slot < g_winCount ? &g_win[slot] : nullptr;
     if (m && p.key != m->id + "|" + m->photo)
-    {   // another map in this slot (a list with other stages): drop the old textures
-        UnloadTexture(p.full);
-        UnloadTexture(p.half[0]);
-        UnloadTexture(p.half[1]);
+    {   // another map in this slot (a list with other stages): drop the old textures (none if the slot had no picture)
+        if (p.full.id)
+        {
+            UnloadTexture(p.full);
+            UnloadTexture(p.half[0]);
+            UnloadTexture(p.half[1]);
+        }
         p = Pic{};
         p.key = m->id + "|" + m->photo;
     }

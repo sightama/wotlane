@@ -618,7 +618,9 @@ match: `WOTM_MODE`. The rules, by hook:
   announce the randomly drawn stage.
 - **Saved maps (map creator):** after RANDOM, the first 6 maps of `mods/<mod>/stages/` (sorted by id, the same on every PC) whose
   base stage is in the list take the developer slots 18 to 23 (`levelUnlocked` leaves them open), with their name (upper case, up to
-  17 characters) in rows 18 to 23 of the name table; log `[stages] slot <n>: <id>`. On `changeScreen(8, 99)`, after RANDOM (which never
+  17 characters) in rows 18 to 23 of the name table; log `[stages] slot <n>: <id>`. The list's rules hold for the base as for RANDOM:
+  no map on a locked stage, and none on the fourth entry when the game skips it (mode 2 with 2 or more CPUs, mode 3 with a CPU); since
+  the CPU count can change after the list is built (back to the monster selection), the list is rebuilt on every entry of the screen. On `changeScreen(8, 99)`, after RANDOM (which never
   draws a map), a map slot becomes its base stage's index and the map becomes active (`[stages] map <id>: stage <n>`, no announcer);
   `wotm_stagemap.inc` applies it at the load. Any other confirmed stage clears the active map, and so does every load of the menus
   (`Shell::LoadUserintDB`), so adventure, training and the minigames never inherit one; a reload inside the session (REBUILD LEVEL)

@@ -118,6 +118,9 @@ relinked (4 from reserve)` at load.
 - **Guard rails:** spawn points and power-up places show as markers, and a piece covering one turns red (BLOCKS SPAWN, saving
   is still allowed). Moves stop at the grid's edge. CPU routes from `.AIP` can be drawn as thin lines.
 - **Save** writes the folder above plus the photo, registers the map live (no restart) and lists it in the selection.
+- **PR 2 note:** PR 1's `dbInitDb` hook tells the stage's load from the shell's by the NGP count (`wotm_stagemap.inc`,
+  `dbInitDbTapped`: 2 or more, the stage plus at least one monster). The editor's "stage with no monsters" loads one NGP and
+  must revisit that test before it relies on the load-time apply.
 
 ## Delivery
 
