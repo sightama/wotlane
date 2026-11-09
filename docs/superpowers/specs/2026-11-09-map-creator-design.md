@@ -71,15 +71,16 @@ A piece is the nearest `TRANSLATE` (or `ROTATE`) above a building, prop or destr
 `GROUP -> TRANSLATE -> INTERACTIVE -> DESTRUCTIBLE -> ...`). `CENTRAL` has about 366 with geometry. Ground hulls with no
 transform above them (7 in `CENTRAL`) and pedestrian groups (root `TRANSLATE`s with id1 3000) are not pieces. A piece with
 a `ROTATE` gets moved through the translation row of its matrix. Most buildings have only a `TRANSLATE`, so a turn on one
-inserts a `ROTATE` node allocated in the reserve (see "Grid nodes"): the parent's child pointer is pointed at the new node,
-whose only child is the piece, and each collision path through the piece is copied to the reserve with the new node added
-and its grid nodes pointed at the copy. Pointers are guest addresses, so nodes outside the image work as long as the reserve
-is not reused while the stage is loaded; PR 1 confirms this first and, if it fails, TURN is limited to pieces that already
-have a `ROTATE`.
+allocates a `ROTATE` in the reserve (see "Grid nodes") whose matrix is the turn with the piece's translation in its fourth row
+(`hdTraversePath` treats a `ROTATE` as rotation about its fourth row, `src/common/hdTraverse.cpp:141-149`), copies the
+`TRANSLATE`'s children into it, points the parent's child slot at it, and replaces the `TRANSLATE` with it in every collision
+path through the piece (same length, edited in place). Pointers are guest addresses, so a node outside the image works as long
+as the reserve is not reused while the stage is loaded and the native renderer accepts it; PR 1 checks both first and, if
+either fails, TURN is limited to pieces that already have a `ROTATE`.
 
 ## Loading a map
 
-1. **Selection.** Each saved map takes a slot from 18 to 24 (7 maps listed at once; more are a later step) with its name and
+1. **Selection.** Each saved map takes a slot from 18 to 23 (6 maps listed at once, the picture switch has 24 children; more are a later step) with its name and
    photo, through `wotm_levelsel.inc`. On confirm the index is rewritten to the base stage's index and the map becomes the
    active edit set, so the stock files, music, stage code and `PTS/` files all load as normal.
 2. **Hook.** A new hook at the entry of `dbInitDb` (`0x0012E418`) applies the active edit set when the loaded file zero is a
@@ -120,16 +121,16 @@ Two PRs, stacked on `creator-v1` (the editor reuses the creator's panel, name en
 Nothing is merged by us; Lane reviews.
 
 1. **Loading maps, no editor.** `stage.json` parse and checks, the `dbInitDb` hook (move, turn, remove, grid relink, spheres),
-   the selection slot with name and photo, and a scripted way to make a map without the editor:
-   `WOTM_STAGE_EDIT=<base>:<id>:<node>=<x>,<y>,<z>[,<turn>]|<node>=remove;...`.
+   the selection slot with name and photo, and `tools/stage_map.py` to make a map without the editor (`pieces` lists a
+   stage's pieces, `make` writes a map folder with the right `baseHash`, `check` runs the grid rule on an image or a RAM dump).
 2. **The editor.**
 
 ## Testing
 
 - **Grid rule:** every collision path is listed in exactly the cells its box covers. A native test and
-  `tools/stage_edit.py` (applies a `stage.json` to an image offline, checks the rule) run it on all 19 stock stages, unedited
+  `tools/stage_map.py check` (on the stock images and on RAM dumps of edited maps) run it on all 19 stock stages, unedited
   and edited.
-- **Native tests:** `stage.json` parse, `baseHash` refusal, piece rules (what is pickable, TURN availability), remove as `NULL`,
+- **Native tests:** `stage.json` parse, `baseHash` refusal (the hash is taken right after `LoadLevelDB` inflates the image, before anything patches it), piece rules (what is pickable, TURN availability), remove as `NULL`,
   grid relink including reserve nodes.
 - **Live checks** (scripted, with `WOTM_DISC` set so text and screenshots work): a removed building is gone and can be walked
   through; a moved building is solid in the new place and not in the old, and still destructible; a CPU fight on an edited map
@@ -143,4 +144,6 @@ Nothing is merged by us; Lane reviews.
 - CPU routes (`.AIP`) are not updated: CPUs that hit a moved building climb or steer around it.
 - Spawn and power-up places stay where the disc puts them.
 - Water and kill zones (`WaterGrid.cpp`) and `RST/<STAGE>.MRS` are not mapped yet; PR 1 checks them.
-- Seven maps listed at once in the selection.
+- Six maps listed at once in the selection.
+- Online in step 1 goes through `WOTM_MATCH` (a map id in the stage field); picking a map in the launcher's lobby needs a
+  string stage in the lobby protocol and is a follow-up.
