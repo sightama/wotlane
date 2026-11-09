@@ -371,7 +371,8 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res);   
 - [ ] **Step 3: `dbInitDb` hook** (`wotm::fn::dbInitDb__FP9_dbheader10_vramAddrs`): on entry, if `g_pending` (and the
   Task 1b level test), clear `g_pending`; if `g_active` names a scanned map whose base is the loaded stage, compare hashes
   (mismatch: `[stages] <id>: base <BASE> does not match this disc` and nothing applied); build a `Mem` with the image and the
-  reserve (Task 1d), reset `Reserve` to its start, `apply()`, log `[stages] <id>: applied N edits, R grid nodes relinked
+  reserve (Task 1d); the image region must be exactly `size` bytes (Task 1a), since `parents()` has no size argument and
+  walks whatever the first region maps; reset `Reserve` to its start, `apply()`, log `[stages] <id>: applied N edits, R grid nodes relinked
   (K from reserve)` plus each refusal. Then call the original. Per Task 1c, the guard means a second `dbInitDb` without a new
   `LoadLevelDB` applies nothing.
 - [ ] **Step 4: dump.** `WOTM_STAGE_DUMP=<path>`: right after `apply()`, write the image bytes to `<path>` and the reserve to

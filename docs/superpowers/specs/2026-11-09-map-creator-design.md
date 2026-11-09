@@ -88,9 +88,13 @@ either fails, TURN is limited to pieces that already have a `ROTATE`.
    - **move / turn:** write the translation and rotation; for every collision path through the piece, recompute its
      world-space box and relink its grid nodes to the cells the new box covers; widen the culling sphere (+0x10 center,
      +0x1C radius) of the ancestor groups above the piece. Spheres below the piece are local and unchanged.
-   - **remove:** set the piece's opcode bits to `NULL`. Its grid nodes are left in place (traversal stops at the `NULL`).
-3. **Grid nodes.** A moved path that covers more cells than before needs more list nodes than the image holds. They come
-   first from removed pieces' paths, then from a small reserved area of guest RAM above the image (the runtime already uses
+   - **remove:** set the piece's opcode bits to `NULL`. Its collision paths leave the grid (traversal would stop at the
+     `NULL` anyway) and their list nodes go to a pool that the moves use before the reserve.
+3. **Grid nodes.** A moved path that covers more cells than before needs more list nodes than the image holds. Edits are
+   checked in file order (the first edit of a node stands), then all removes run in file order, then the moves and turns in
+   file order. A move first takes all its paths out of the grid; its list nodes join the pool, which holds the removed
+   pieces' nodes and what earlier moves left over; nodes come from the pool first, then from a small reserved area of
+   guest RAM above the image (the runtime already uses
    memory above `0x2000000`, `wotm_overrides.cpp:1182-1186`). A piece moved past the grid's extent would lose collision; the
    loader clamps and logs it, and the editor never allows it.
 4. **Determinism.** The edits are written from the EE thread at one fixed point and depend only on the map files, which the
@@ -149,6 +153,8 @@ Nothing is merged by us; Lane reviews.
   is an untuned draft (the game runs the original code); Task 8's live check confirms a moved pickup appears in its new
   place.
 - Water and kill zones (`WaterGrid.cpp`) and `RST/<STAGE>.MRS` are not mapped yet; PR 1 checks them.
+- A `CONTROL` above a moved piece (the see-through "ghost" building switch) keeps its sphere and BSP volumes where the disc
+  puts them, so the switch to the ghost version follows the old place; the loader logs it (1j).
 - Six maps listed at once in the selection.
 - Online in step 1 goes through `WOTM_MATCH` (a map id in the stage field); picking a map in the launcher's lobby needs a
   string stage in the lobby protocol and is a follow-up.
@@ -255,3 +261,11 @@ Task 1 of the PR 1 plan. Addresses in the generated recompiled code (`recomp/ret
   stage (world + pickups): 3-MILE 298 (264 + 34), AIRPORT 175, BIGSHOT 1, CANYON1 92, CANYON2 45, CAPITOL 145, CENTRAL
   317, CRUSH 21, DBALL 19, ISLAND 433, METRO 703, MINISF 91, SANFRAN 214, TOKYO 218, TOKYODM 249, TRAINING 1, UFO 91,
   VEGAS 250, VOLCANO 113.
+- **1j. `CONTROL` ancestors** (found in the Task 3 review). Pieces with a `CONTROL` (op 8) above them, per stage: UFO 78,
+  SANFRAN 72, ISLAND 48, VOLCANO 28, MINISF 20, CAPITOL 15, AIRPORT 12, CANYON2 12, CENTRAL 0. A `CONTROL` holds a sphere
+  (+0x10 center, +0x1C radius) and BSP volumes (+0xC count, +0xE type, +0x20 pointers) in its own space, which is world
+  space here; it picks child1 (solid) or child2 (ghost, or nothing) from where the eye is (`NATIVO.md`, "CONTROL"). The
+  native `Scene::ctrlChild` (`native/wotm_native.hpp:4948`) reads only the volumes, not the sphere; the retail
+  `hierCtrlNode` (0x2048F0) is asm and its use of the sphere was not checked. PR 1 does not change `CONTROL` data: a moved
+  piece under one logs `CONTROL <node> above it keeps its see-through volumes and sphere where the disc puts them`.
+  Task 8's live checks include a moved piece under a `CONTROL` (UFO or SANFRAN).
