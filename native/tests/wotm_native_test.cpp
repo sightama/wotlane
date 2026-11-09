@@ -1435,6 +1435,14 @@ TEST(stagemap_turn_turns_hat_offsets)
         CHECK(r.applied == 1 && h.im.rf(h.h1 + 0xC) == 10.f && h.im.rf(h.h1 + 0x10) == 0.f && h.im.rf(h.h2 + 0xC) == 3.f);
     }
     {
+        Hats h;   // a cycle in the action tree (a GROUP holding a TRANSFORM that points back at it) ends: each action once
+        const uint32_t grp = h.act(sm::kActGroup, 0x18), xf = h.act(sm::kActTransform, 0x50), hat = h.hat(100, 1, 2, 3);
+        h.im.w32(grp + 8, 3), h.im.w32(grp + 0xC, xf), h.im.w32(grp + 0x10, hat), h.im.w32(grp + 0x14, grp);
+        h.im.w32(xf + 8, grp);
+        const uint32_t d = h.destructible({{h.im.object(), grp}, {h.im.object(), xf}});
+        CHECK(sm::hatActions(h.im.mem(), d) == std::vector<uint32_t>({hat}));
+    }
+    {
         Hats h;   // a refused turn (no room for the ROTATE) writes no offset either
         const std::vector<uint8_t> before = h.im.img;
         const sm::Result r = h.run(turnBy(h.t - sm::kBase, 90), sm::Reserve{sm::kReserve, sm::kReserve});
@@ -1704,6 +1712,8 @@ TEST(stagemap_stock_grid_rule)
         for (const auto &h : hats)
             hatsTurned = hatsTurned && m.f32(h.first + 0xC) == -h.second.second && m.f32(h.first + 0x10) == h.second.first;
         CHECK(hatsTurned);
+        if (stem == "CENTRAL")
+            CHECK(!hats.empty());   // CENTRAL's turned piece (0x165a70) has 2: the check above is not vacuous there
         std::printf("  %s: %zu hat offsets of %s turned\n", stem.c_str(), hats.size(), hexOff(t90 - sm::kBase).c_str());
         std::printf("  %s: %zu pieces (stage_map.py %zu); removed %s, moved %s, turned %s by 90 and %s %s by 15; applied %d, "
                     "relinked %d (%d from reserve); grid %zu paths, %d list nodes, %d problems\n",

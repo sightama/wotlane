@@ -11,8 +11,8 @@
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
                     [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]... [--no-riders]
                                            writes <stages folder>/<id>/stage.json (--turn and --move on the same node make
-                                           one edit), plus an edit per rider of an edited piece (rider_map(); the user's own
-                                           edit of a rider stands), printed as it is added
+                                           one edit), plus an edit per rider of an edited piece (rider_map(),
+                                           rider_edits()), printed as it is added
   stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
                                            the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
@@ -444,38 +444,141 @@ def kind_of(m, parent, n):
     return "pickup type %d" % (first - 0x1388)
 
 
-def rider_edits(m, edits, valid_riders, notes):
-    """Edits for the riders of make's edits (stage.json form, offsets): a removed base removes its riders; a moved or turned
-    base moves each rider rigidly with it: new = base new + turn(rider - base old), and the rider gets the same turn. A rider
-    edited by the user keeps the user's edit (noted). valid_riders: {base offset: [(rider offset, kind)]}."""
-    user = {int(e["node"], 16) for e in edits}
-    out = []
-    for e in edits:
+def f32(v):
+    """v rounded to a float, as the loader holds it."""
+    return struct.unpack("<f", struct.pack("<f", v))[0]
+
+
+def f32_text(v):
+    """The shortest number that reads back as the same float (what the loader's write() puts in a file)."""
+    v = f32(v)
+    for p in range(1, 10):
+        x = float("%.*g" % (p, v))
+        if f32(x) == v:
+            return num(x)
+    return v
+
+
+def turn_of(deg):
+    """(cos, sin) of a turn in degrees, as the loader's turnOf(): right angles exact; the rest from the float angle in radians."""
+    a = math.fmod(deg, 360.0)
+    if a < 0:
+        a += 360.0
+    if a in (0.0, 90.0, 180.0, 270.0):
+        return {0.0: (1.0, 0.0), 90.0: (0.0, 1.0), 180.0: (-1.0, 0.0), 270.0: (0.0, -1.0)}[a]
+    rad = f32(f32(a) * f32(3.14159265358979 / 180.0))
+    return f32(math.cos(rad)), f32(math.sin(rad))
+
+
+def clamp_to_grid(m, g, node_paths, old, to, c, s, turning):
+    """Where the loader's planMove() puts a moved or turned piece: its paths' boxes (the old corners relative to the old
+    place, turned, at the new place) are kept inside the grid's stored extent by shifting the place in X and Y. Returns the
+    place (floats) and whether it was shifted."""
+    to = [f32(v) for v in to]
+
+    def boxes():
+        out = []
+        for p in node_paths:
+            lo = [m.f32(p + 4 * k) for k in range(3)]
+            hi = [m.f32(p + 0xC + 4 * k) for k in range(3)]
+            if not turning:
+                out.append(([f32(lo[k] + (to[k] - old[k])) for k in range(3)], [f32(hi[k] + (to[k] - old[k])) for k in range(3)]))
+                continue
+            mn, mx = [math.inf] * 3, [-math.inf] * 3
+            for corner in range(8):
+                q = [(hi if corner >> k & 1 else lo)[k] - old[k] for k in range(3)]
+                w_ = (q[0] * c - q[1] * s + to[0], q[0] * s + q[1] * c + to[1], q[2] + to[2])
+                mn = [min(a, b) for a, b in zip(mn, w_)]
+                mx = [max(a, b) for a, b in zip(mx, w_)]
+            out.append(([f32(v) for v in mn], [f32(v) for v in mx]))
+        return out
+    nb = boxes()
+    if not nb:
+        return to, False
+    gmin = (m.f32(g + 0xC), m.f32(g + 0x10))
+    gmax = (m.f32(g + 0x14), m.f32(g + 0x18))
+    clamped = False
+    for k in range(2):
+        lo = min(b[0][k] for b in nb)
+        hi = max(b[1][k] for b in nb)
+        shift = gmin[k] - lo if lo < gmin[k] else gmax[k] - hi if hi > gmax[k] else 0
+        if shift != 0:
+            to[k] = f32(to[k] + shift)
+            clamped = True
+    return to, clamped
+
+
+def rider_edits(m, edits, valid_riders, notes, parent=None):
+    """make's edits (stage.json form, offsets) with their riders' edits added (valid_riders: {base offset: [(rider offset,
+    kind)]}):
+    - a removed base removes its riders;
+    - a moved or turned base moves each rider rigidly with it: new = base place + turn(rider - base old place), and the rider
+      gets the same turn. The base place is where the loader puts it: a move that would take the base's collision past the
+      grid's edge is shifted back inside as the loader does (clamp_to_grid()); the base's edit then holds that place (noted);
+    - a base edit the loader will refuse (a turn of a TRANSLATE that carries action data) carries nothing (noted);
+    - a rider the user edited: a remove or a move of the user's stands as it is (noted); a turn alone (no move) is carried
+      with its base like any rider and turned by the user's turn plus the base's (noted). A rider of a removed base that the
+      user edited keeps the user's edit.
+    Returns the new list: the user's edits in their order (riders turned by the user updated in place), then the riders'."""
+    edits = [dict(e) for e in edits]
+    at = {int(e["node"], 16): i for i, e in enumerate(edits)}
+    if parent is None:
+        parent = walk_all(m)
+    g = find_grid(m, parent)
+    paths_of = {}
+    for p in sorted(all_paths(m, g)):
+        nodes = path_nodes(m, p)
+        if not m.ok(p, 0x24 + 4 * len(nodes)):
+            continue
+        for n in set(nodes):
+            paths_of.setdefault(n, []).append(p)
+    out, done = [], set()
+    for e in list(edits):
         base = int(e["node"], 16)
-        for r, kind in valid_riders.get(base, ()):
-            if r in user:
-                notes.append("  note: rider 0x%x (%s) of 0x%x keeps your own edit" % (r, kind, base))
-                continue
-            if any(int(x["node"], 16) == r for x in out):
-                continue
-            notes.append("  rider 0x%x (%s) follows 0x%x" % (r, kind, base))
-            if e.get("remove"):
-                out.append({"node": "0x%x" % r, "remove": True})
+        rs = [(r, kind) for r, kind in valid_riders.get(base, ()) if r not in done]
+        if not rs:
+            continue
+        deg = e.get("turn", 0)
+        c, s = turn_of(deg)
+        turning = (c, s) != (1.0, 0.0)
+        if not e.get("remove"):
+            if turning and op(m, BASE + base) == OP_TRANSLATE and m.u32(BASE + base + 0xC) != 0:
+                notes.append("  note: 0x%x is a TRANSLATE with action data, which the loader cannot turn: its riders stay" % base)
                 continue
             old = position(m, BASE + base)
-            new = e.get("move", old)
-            deg = e.get("turn", 0)
-            a = math.fmod(deg, 360.0) % 360.0
-            c, s = {0.0: (1.0, 0.0), 90.0: (0.0, 1.0), 180.0: (-1.0, 0.0), 270.0: (0.0, -1.0)}.get(
-                a, (math.cos(math.radians(a)), math.sin(math.radians(a))))
+            want = e.get("move", list(old))
+            new, clamped = clamp_to_grid(m, g, paths_of.get(BASE + base, []), old, want, c, s, turning)
+            if clamped:
+                edits[at[base]]["move"] = [f32_text(v) for v in new]
+                edits[at[base]] = {k: edits[at[base]][k] for k in ("node", "move", "turn") if k in edits[at[base]]}
+                notes.append("  note: 0x%x kept inside the collision grid's edge, at %.1f %.1f %.1f (as the loader does)"
+                             % ((base,) + tuple(new)))
+        for r, kind in rs:
+            done.add(r)
+            mine = edits[at[r]] if r in at else None
+            if mine is not None and (e.get("remove") or "remove" in mine or "move" in mine):
+                notes.append("  note: rider 0x%x (%s) of 0x%x keeps your own edit" % (r, kind, base))
+                continue
+            if e.get("remove"):
+                notes.append("  rider 0x%x (%s) follows 0x%x" % (r, kind, base))
+                out.append({"node": "0x%x" % r, "remove": True})
+                continue
             rp = position(m, BASE + r)
             d = [rp[k] - old[k] for k in range(3)]
-            to = [d[0] * c - d[1] * s + new[0], d[0] * s + d[1] * c + new[1], d[2] + new[2]]
-            ed = {"node": "0x%x" % r, "move": [round(v, 3) for v in to]}
+            to = [round(v, 3) for v in (d[0] * c - d[1] * s + new[0], d[0] * s + d[1] * c + new[1], d[2] + new[2])]
+            ed = {"node": "0x%x" % r, "move": to}
+            if mine is not None:
+                total = num(mine["turn"] + deg)
+                if total:
+                    ed["turn"] = total
+                edits[at[r]] = ed
+                notes.append("  rider 0x%x (%s) follows 0x%x, turned by your %g and its %g" % (r, kind, base, mine["turn"], deg))
+                continue
             if deg:
                 ed["turn"] = deg
+            notes.append("  rider 0x%x (%s) follows 0x%x" % (r, kind, base))
             out.append(ed)
-    return out
+    return edits + out
 
 
 # ---------------------------------------------------------------- fight RAM (PS2X_DUMP_RAM)
@@ -707,7 +810,8 @@ def cmd_make(a):
     except ValueError as e:
         return fail(str(e))
     notes = []
-    edits += rider_edits(m, edits, {b - BASE: [(r - BASE, kind_of(m, parent, r)) for r in rs] for b, rs in rm.items()}, notes)
+    edits = rider_edits(m, edits, {b - BASE: [(r - BASE, kind_of(m, parent, r)) for r in rs] for b, rs in rm.items()}, notes,
+                        parent)
     for line in notes:
         print(line)
     doc = {"name": name, "base": base, "baseHash": "%016x" % fnv1a(image), "edits": edits}
@@ -863,19 +967,21 @@ def cmd_selftest(_a):
         for i, v in enumerate(c + (r,)):
             w("<f", a + 0x10 + 4 * i, v)
         return a
-    pcs = [node(OP_POLY_COLL, 4) for _ in range(3)]
+    pcs = [node(OP_POLY_COLL, 4) for _ in range(4)]
     b = trans((100, 50, 0), [sphobj((0, 0, 50), 50), pcs[0]])
     b2 = trans((100, 50, 0), [sphobj((0, 0, 50), 50), pcs[1]])
     tw = trans((250, 100, 0), [sphobj((0, 0, 25), 25), pcs[2]])
     wr = trans((120, 60, 100), [sphobj((0, 0, 10), 10)])                     # world piece, bottom at 100: on b
     wg = trans((60, 30, 0), [sphobj((0, 0, 10), 10)])                        # bottom at 0, under b's roof: no
-    world = group([b, b2, tw, wr, wg], WORLD_ID)
+    rb = rot((200, 150, 0), [sphobj((0, 0, 25), 25), pcs[3]])                # a ROTATE base (place in the fourth row)
+    world = group([b, b2, tw, wr, wg, rb], WORLD_ID)
 
     def pk(x, y, z):
         return trans((x, y, z), [group([obj(5001)])])
     pk1, pk2, pk3, pk4, pk5, pk6 = (pk(150, 20, 110), pk(150, 20, 140), pk(170, 20, 100), pk(60, 80, 205),
                                     pk(250, 150, 50), pk(100, 50, 104))
-    pickups = group([pk1, pk2, pk3, pk4, pk5, pk6])
+    pk7 = pk(210, 160, 60)                                                   # on rb
+    pickups = group([pk1, pk2, pk3, pk4, pk5, pk6, pk7])
     g = node(OP_GRID, 0x20 + 4 * 8)
     w("<h", g + 4, 4), w("<h", g + 6, 2)
     for i, v in enumerate((100.0, -100.0, 0.0, 300.0, 200.0)):
@@ -883,7 +989,8 @@ def cmd_selftest(_a):
     boxes = [((40.0, 10.0, 0.0), (160.0, 90.0, 100.0), [world, b, pcs[0]], 0),
              ((40.0, 10.0, 0.0), (160.0, 90.0, 108.0), [world, b2, pcs[1]], 0),
              ((40.0, 10.0, 0.0), (160.0, 90.0, 205.0), [world, b, pcs[0]], 1),     # a trigger box: carries nothing
-             ((-500.0, 0.0, 0.0), (400.0, 200.0, 50.0), [world, tw, pcs[2]], 0)]   # 900 wide: carries nothing
+             ((-500.0, 0.0, 0.0), (400.0, 200.0, 50.0), [world, tw, pcs[2]], 0),   # 900 wide: carries nothing
+             ((180.0, 130.0, 0.0), (220.0, 170.0, 50.0), [world, rb, pcs[3]], 0)]
     head = 0
     for lo, hi, nodes, trig in boxes:
         p = path(lo, hi, nodes)
@@ -899,21 +1006,52 @@ def cmd_selftest(_a):
     parent = walk_all(m)
     assert lowest_bottom(m, wr) == (120.0, 60.0, 100.0) and kind_of(m, parent, pk1) == "pickup type 1"
     rm = rider_map(m)
-    assert rm == {b: [wr, pk6], b2: [pk1]}, {hex(k): [hex(x) for x in v] for k, v in rm.items()}   # pk6: a tie, the lower node
+    assert rm == {b: [wr, pk6], b2: [pk1], rb: [pk7]}, {hex(k): [hex(x) for x in v] for k, v in rm.items()}   # pk6: a tie
     assert riders(m, b2) == [pk1] and riders(m, tw) == []
     off = lambda n: n - BASE   # noqa: E731
     valid = {off(k): [(off(r), kind_of(m, parent, r)) for r in v] for k, v in rm.items()}
-    notes = []
-    got = rider_edits(m, [{"node": "0x%x" % off(b), "move": [110, 50, 5], "turn": 90}, {"node": "0x%x" % off(b2), "remove": True}],
-                      valid, notes)
-    assert got == [{"node": "0x%x" % off(wr), "move": [100.0, 70.0, 105.0], "turn": 90},
-                   {"node": "0x%x" % off(pk6), "move": [110.0, 50.0, 109.0], "turn": 90},
-                   {"node": "0x%x" % off(pk1), "remove": True}], got
+
+    def E(n, **kw):
+        e = {"node": "0x%x" % off(n)}
+        e.update(kw)
+        return e
+
+    def edits_of(*user):
+        notes = []
+        return rider_edits(m, list(user), valid, notes, parent), notes
+    # moved and turned 90, and a removed base
+    got, notes = edits_of(E(b, move=[110, 60, 5], turn=90), E(b2, remove=True))
+    assert got == [E(b, move=[110, 60, 5], turn=90), E(b2, remove=True), E(wr, move=[100.0, 80.0, 105.0], turn=90),
+                   E(pk6, move=[110.0, 60.0, 109.0], turn=90), E(pk1, remove=True)], got
     assert notes[0] == "  rider 0x%x (world piece) follows 0x%x" % (off(wr), off(b)), notes
-    notes = []
-    got = rider_edits(m, [{"node": "0x%x" % off(b), "move": [100, 80, 0]}, {"node": "0x%x" % off(pk6), "remove": True}], valid, notes)
-    assert got == [{"node": "0x%x" % off(wr), "move": [120.0, 90.0, 100.0]}], got                  # pk6: the user's edit stands
+    # the user's remove of a rider stands
+    got, notes = edits_of(E(b, move=[100, 80, 0]), E(pk6, remove=True))
+    assert got == [E(b, move=[100, 80, 0]), E(pk6, remove=True), E(wr, move=[120.0, 90.0, 100.0])], got
     assert any("keeps your own edit" in n for n in notes), notes
+    # the user's turn alone of a rider: carried with the base, turned by both
+    got, notes = edits_of(E(b, move=[100, 80, 0], turn=90), E(wr, turn=45))
+    assert got == [E(b, move=[100, 80, 0], turn=90), E(wr, move=[90.0, 100.0, 100.0], turn=135),
+                   E(pk6, move=[100.0, 80.0, 104.0], turn=90)], got
+    got, _ = edits_of(E(b, move=[100, 80, 0]), E(wr, turn=45), E(pk6, move=[1, 2, 3]))   # a user move stands
+    assert got == [E(b, move=[100, 80, 0]), E(wr, move=[120.0, 90.0, 100.0], turn=45), E(pk6, move=[1, 2, 3])], got
+    # past the grid's edge (box y 10..90 at y 50, moved to y 20: y -20 < 0): the base and its riders shifted back inside
+    got, notes = edits_of(E(b, move=[100, 20, 0]))
+    assert got == [E(b, move=[100, 40, 0]), E(wr, move=[120.0, 50.0, 100.0]), E(pk6, move=[100.0, 40.0, 104.0])], got
+    assert any("kept inside the collision grid" in n for n in notes), notes
+    # a turn alone, not a right angle, negative: about the base's place
+    got, _ = edits_of(E(b, turn=-10))
+    c, s = turn_of(-10)
+    assert abs(c - math.cos(math.radians(10))) < 1e-6 and abs(s + math.sin(math.radians(10))) < 1e-6
+    assert got[0] == E(b, turn=-10) and got[1]["turn"] == -10 and "move" not in got[0], got
+    assert all(abs(a - b_) < 0.002 for a, b_ in zip(got[1]["move"], (121.433, 56.375, 100.0))), got
+    # a ROTATE base: its place is the matrix's fourth row
+    got, _ = edits_of(E(rb, move=[150, 150, 0]))
+    assert got == [E(rb, move=[150, 150, 0]), E(pk7, move=[160.0, 160.0, 60.0])], got
+    # a turn the loader will refuse (a TRANSLATE with action data): no riders
+    w("<I", b2 + 0xC, 0x1000)
+    m = mem()
+    got, notes = edits_of(E(b2, turn=90))
+    assert got == [E(b2, turn=90)] and any("action data" in n for n in notes), (got, notes)
     print("selftest OK")
     return 0
 

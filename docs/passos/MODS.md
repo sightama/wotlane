@@ -334,7 +334,10 @@ position (each rider is moved around it and turned by the same degrees). A rider
 position; a world piece: the bottom of its lowest object) lies inside, seen from above, one of the edited piece's solid
 collision boxes at most 700 units wide, at a height from 20 under that box's top to 25 above it. That includes things on a
 building's plaza or base pad when its box is low. One rider on two pieces goes to the one whose box top is nearest (then the
-lower node). A rider you edit yourself keeps your edit (`make` says so); `--no-riders` turns the rule off. `pieces` shows
+lower node). A rider you remove or move yourself keeps your edit (`make` says so); a rider you only turn still goes with its
+piece and turns by your turn plus the piece's. A move that would take the piece's collision past the grid's edge is shifted
+back inside as the loader does, and `make` writes that place and carries the riders there (with a note). A turn the loader
+will refuse (a `TRANSLATE` that carries action data) carries nothing. `--no-riders` turns the rule off. `pieces` shows
 `riders N` per piece. On the 19 stock stages, 164 pieces carry 408 riders (CENTRAL: 31 carry 66, all pickups).
 To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
 `NATIVO.md`, "Diagnostics").

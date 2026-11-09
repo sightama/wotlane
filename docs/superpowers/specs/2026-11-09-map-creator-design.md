@@ -95,7 +95,12 @@ is made (`stage_map.py make`, later the editor), as explicit edits the loader ap
 - **Edits:** a removed P removes its riders; a moved and/or turned P moves each rider rigidly with it (new = P's new place +
   turn(rider - P's old place)) and gives it the same turn. A pickup with only a `TRANSLATE` turns like any piece (a `ROTATE` in
   the reserve); `Pickup::init` takes its rotation from the traversal matrix (`Pickup.cpp`, `mathfTransposeMatrix(t.m, m)`). A
-  rider the user edits keeps the user's edit; `--no-riders` turns the rule off.
+  rider the user removes or moves keeps the user's edit; one the user only turns is carried like any rider and turned by
+  the user's turn plus P's; a rider of a removed P that the user edited keeps the user's edit. `--no-riders` turns the rule
+  off. P's place is where the loader will put it: `make` mirrors `planMove`'s clamp to the grid's stored extent
+  (`clamp_to_grid()`, the same float steps and `turnOf` angles), writes the clamped place in P's edit and carries the riders
+  there, with a note. A P whose turn the loader refuses for certain (a `TRANSLATE` with action data at +0xC) carries no
+  riders (noted).
 - **Stock stages:** 164 pieces carry 408 riders (3-MILE 1/2, AIRPORT 11/31, CAPITOL 4/16, CENTRAL 31/66, ISLAND 12/52, METRO
   56/140, MINISF 5/8, SANFRAN 11/16, TOKYO 10/25, TOKYODM 14/31, VEGAS 9/21; the others none). 20 riders are inside two
   pieces' boxes, all on low ground pads (AIRPORT 5, CENTRAL 1, METRO 10, SANFRAN 1, TOKYODM 3). Seven pieces carry more than

@@ -1022,7 +1022,8 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res)
         ++out.applied;
     }
 
-    // 3. moves and turns; for the turns, which destructibles reach each hat pickup action
+    // 3. moves and turns; for the turns, which destructibles reach each hat pickup action. Taken from the hierarchy as the disc
+    // has it (par): a hat that a destructible removed by this map also reaches still counts as shared and is left as is
     std::map<uint32_t, std::set<uint32_t>> hatOwners;
     bool anyTurn = false;
     for (const Edit *e : moves)
