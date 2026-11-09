@@ -1,8 +1,8 @@
 # Map creator, step 1 (rearrange a stage): design
 
-Date: 2026-11-09. Branch: `map-creator` (off `creator-v1`, PR #46). Status: approved by Jake section by section; written for
-Lane's review. Issue: #10. Sibling: #42 (character creator, skins only: its step 2, custom monsters, was dropped as redundant
-with skins, PR #47 closed).
+Date: 2026-11-09. Branch: `map-creator` (off `creator-v1`, PR #46). Status: PR 1 implemented (branch map-creator), in review;
+the design was approved by Jake section by section, written for Lane's review. Issue: #10. Sibling: #42 (character creator,
+skins only: its step 2, custom monsters, was dropped as redundant with skins, PR #47 closed).
 
 ## Goal
 
@@ -155,10 +155,11 @@ Nothing is merged by us; Lane reviews.
 - Level pickups are placed by `dbsTraverse`'s callback with the traversal transform, and its case 3 in `src/common/dbs.cpp`
   is an untuned draft (the game runs the original code). Confirmed on the running game (live check `map_load`): a moved
   `CENTRAL` pickup is placed at its new spot (`createPickup`'s position, read from the fight's RAM) and none at the old one.
-- Water and kill zones (`WaterGrid.cpp`) and `RST/<STAGE>.MRS` are not mapped yet; PR 1 checks them.
+- Water and kill zones (`WaterGrid.cpp`) and `RST/<STAGE>.MRS` were only researched (1h: water is a per-stage height plus the
+  surface of collision polygons, which move with their hull; `.MRS` holds nothing tied to pieces); no live check covers them.
 - A `CONTROL` above a moved piece (the see-through "ghost" building switch) keeps its sphere and BSP volumes where the disc
   puts them, so the switch to the ghost version follows the old place; the loader logs it (1j).
-- Six maps listed at once in the selection.
+- Six maps listed at once in the selection (slots 18-23); more are a later step.
 - Online in step 1 goes through `WOTM_MATCH` (a map id in the stage field); picking a map in the launcher's lobby needs a
   string stage in the lobby protocol and is a follow-up.
 

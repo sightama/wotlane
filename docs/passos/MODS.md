@@ -266,6 +266,89 @@ base `final`), both with `"ai": true` and the `cerebulon` narrator. The first ph
 Example: the select screen of screen 6 (1 player against CPU), CUSTOM → GOLIATH PRIME, the CPU refused in the slot,
 a fight in Midtown Park with camera, sound and name. Photo: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
 
+## Stages (maps)
+
+A map is a stock stage with some of its pieces moved, turned or removed. It is a folder in `mods/<mod>/stages/<id>/` and holds no
+disc data: only the list of edits, applied to the disc's stage when it loads (`native/wotm_stagemap.hpp`,
+`native/runtime/wotm_stagemap.inc`; design: `docs/superpowers/specs/2026-11-09-map-creator-design.md`, issue #10).
+
+```
+mods/my_mod/
+  stages/
+    downtown/            the map's id: the folder name (lowercase; a letter, then a-z, 0-9 and _, up to 16)
+      stage.json         the edits
+      photo.png          optional: the stage select picture (2:1); without it, the base stage's picture
+```
+
+`stage.json`:
+
+```json
+{
+  "name": "DOWNTOWN MESS",
+  "base": "CENTRAL",
+  "baseHash": "c71c34ca37a35711",
+  "edits": [
+    { "node": "0x165a70", "move": [-185.7, 475.8, 0.0], "turn": 90 },
+    { "node": "0x18a410", "remove": true }
+  ]
+}
+```
+
+- `name`: what the stage select shows, 1 to 17 of `A-Z`, `0-9`, space and `-`.
+- `base`: the stock stage, by its file name in `LVL/` (`CENTRAL`, `TOKYO`, `UFO`...).
+- `baseHash`: 16 hex digits, FNV-1a 64 of the inflated base `.NGP`. A disc (or a mod that replaces `LVL/<STAGE>.NGP`) whose stage
+  does not match refuses the map instead of patching the wrong bytes: `[stages] <id>: base CENTRAL does not match this disc`.
+- `edits` (at most 4096), one per piece (`node`: the piece's offset in the inflated image, a multiple of 4; the first edit of a
+  node counts):
+  - `move`: the piece's new world position `[x, y, z]` (absolute, world units; z is up). Its collision goes with it: the loader
+    relinks the stage's collision grid to the new place, so the building is solid where it now stands and not where it stood.
+  - `turn`: degrees about the vertical axis, added to the piece's own rotation, about its own position. With or without `move`.
+  - `remove: true` (alone): the piece is gone, drawing and collision.
+- Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
+
+**What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
+`ROTATE` above it, with no other transform above that. Ground and terrain, pedestrians and animated parts (vehicles, moving
+props) are not pieces. `CENTRAL` (Midtown Park) has 317: 202 in the world (55 of them with collision, all destructible) and
+115 level pickups. The full rule is in `tools/stage_map.py`'s docstring.
+
+**Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
+
+```
+python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, destructible
+  0x61e340  TRANSLATE  pos 688.2 119.6 0.0  paths 1  destructible
+python tools/stage_map.py make --base CENTRAL --id downtown --name "DOWNTOWN MESS" --out mods/my_mod/stages --move "0x165a70=-185.7,475.8,0,90" --remove 0x18a410
+                                                               # writes mods/my_mod/stages/downtown/stage.json with the baseHash
+python tools/stage_map.py check disc/LVL/*.NGP                 # the collision grid rule on stock stages or on a WOTM_STAGE_DUMP
+python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters and pickups in a fight's RAM (PS2X_DUMP_RAM)
+```
+
+`--move` is `node=x,y,z[,turn]` and can repeat, as can `--remove`. `make` refuses a node that is not a piece of the base stage.
+To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
+`NATIVO.md`, "Diagnostics").
+
+**How it loads.**
+- **Stage select:** after RANDOM, the first 6 maps (by id, across all enabled mods) take the slots 18 to 23 with their name and
+  photo, when their base stage is in that screen's list and unlocked (`NATIVO.md`, "Stage selection"). RANDOM never draws a map.
+  Confirming a map loads its base stage (its music, stage code, spawn points) and applies the edits; the log says
+  `[stages] <id>: applied N edits, M grid nodes relinked (K from reserve)`.
+- **Direct match:** `WOTM_MATCH=3,1,downtown` (the map id in the stage field).
+- **Same id in two mods:** the first one in mod order wins (`[stages] map <id>: <mod> beats <mod>`).
+- **Online:** every PC needs the same mods folder. The map's files are part of the mod digest in the config hash, so a PC without
+  the map (or with another version of it) is refused (`game configuration differs`). Today a map is picked online through
+  `WOTM_MATCH`; picking one in the launcher's lobby is a follow-up.
+
+**Known limits.**
+- Only move, turn and remove: no duplicate or add, no ground or terrain edits.
+- CPU routes (`PTS/<STAGE>.AIP`) are not updated: CPUs that hit a moved building climb it or steer around it.
+- Spawn points and power-up places stay where the disc puts them.
+- Trigger zones stay where the disc puts them, except 3-MILE's 13 that hang under pieces, which follow them.
+- A pickup on a rooftop floats when its building moves (the pickup is its own piece: move it too).
+- A `CONTROL` above a moved piece (the see-through "ghost" building switch: UFO, SANFRAN, ISLAND and others) keeps its volumes
+  where the disc puts them, so the switch to the ghost version happens around the old place; the loader logs it.
+- Water and kill zones were only researched (water is a height per stage plus the surface of collision polygons, which move with
+  their hull); no live check covers them.
+- Six maps listed at once in the stage select.
+
 ## Stage select photos
 `mods/<mod>/levelpics/<name>.png` replaces the photo of the stages that `SHELL.TEX` does not have (`training`, `lakepowell`, `tokyodeathmatch`) and
 that of the RANDOM entry (`random`; without it, a mosaic of the game's photos). 2:1 aspect ratio, any resolution. It takes precedence over the repo's
