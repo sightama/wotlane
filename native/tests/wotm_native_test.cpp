@@ -593,6 +593,72 @@ TEST(mods_add_skin_after_scan)
     fs::remove_all(root);
 }
 
+// Saved maps (mods/<mod>/stages/<id>/stage.json): listed by Registry::stages(), never in the disc override list; a bad one is
+// logged with its reason; the same id in a later mod loses to the first one
+const char *const kStageJson =
+    R"({"name": "DOWNTOWN MESS", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [{"node": "0x100", "remove": true}, {"node": "0x200", "turn": 90}]})";
+TEST(mods_scan_stages)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_stages";
+    auto put = [](const fs::path &p, const std::string &s) {
+        fs::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    fs::remove_all(root);
+    put(root / "A" / "stages" / "m1" / "stage.json", kStageJson);
+    put(root / "A" / "stages" / "m1" / "photo.png", "not a real png");
+    put(root / "A" / "stages" / "bad" / "stage.json", R"({"name": "X", "base": "CENTRAL", "edits": []})");
+    put(root / "A" / "stages" / "9lives" / "stage.json", kStageJson);   // id must start with a letter
+    put(root / "B" / "stages" / "m1" / "stage.json", R"({"name": "LOSER", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": []})");
+    put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
+    wotm::mods::Registry reg;
+    reg.scan(root);
+    const std::vector<wotm::mods::Stage> st = reg.stages();
+    CHECK(st.size() == 1);
+    if (st.size() == 1)
+    {
+        CHECK(st[0].map.id == "m1" && st[0].map.name == "DOWNTOWN MESS" && st[0].map.base == "CENTRAL" && st[0].map.edits.size() == 2);
+        CHECK(fs::equivalent(st[0].map.dir, root / "A" / "stages" / "m1") && st[0].mod == "A");
+        CHECK(!st[0].photo.empty() && st[0].photo.filename() == "photo.png");
+    }
+    auto logged = [&](const std::string &a, const std::string &b) {
+        for (const std::string &l : reg.stageLog())
+            if (l.find(a) != std::string::npos && l.find(b) != std::string::npos) return true;
+        return false;
+    };
+    CHECK(logged("A/stages/bad ignored", "baseHash"));
+    CHECK(logged("A/stages/9lives ignored", "start with a letter"));
+    CHECK(logged("map m1: A beats B", ""));
+    CHECK(logged("[stages] map m1 (\"DOWNTOWN MESS\", A): base CENTRAL, 2 edits", ""));
+    CHECK(reg.files().count("MON/LIZARD1.TEX") == 1);
+    bool stagesInFiles = false;
+    for (const auto &[rel, f] : reg.files())
+        if (rel.rfind("STAGES/", 0) == 0) stagesInFiles = true;
+    CHECK(!stagesInFiles);
+    fs::remove_all(root);
+}
+
+// The network match's mod digest covers stage.json: a changed byte changes it
+TEST(mods_digest_includes_stages)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_stage_digest";
+    auto put = [](const fs::path &p, const std::string &s) {
+        fs::create_directories(p.parent_path());
+        std::ofstream(p, std::ios::binary) << s;
+    };
+    fs::remove_all(root);
+    std::string text = kStageJson;
+    put(root / "A" / "stages" / "m1" / "stage.json", text);
+    const uint64_t before = wotm::mods::digest(root);
+    CHECK(before != 0);
+    text[text.find("0x200") + 4] = '4';   // node 0x200 -> 0x204
+    put(root / "A" / "stages" / "m1" / "stage.json", text);
+    CHECK(wotm::mods::digest(root) != before);
+    fs::remove_all(root);
+}
+
 TEST(json_numbers_keep_fractions)
 {
     wotm::json::Value v;
