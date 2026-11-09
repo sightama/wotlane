@@ -1,8 +1,20 @@
 # ABOUTME: Network match checks (fixed network profile, lockstep dialogs): each runs tools\net_check.ps1 with 2 players and checks
 # ABOUTME: identical state on every frame plus the log. Usage: powershell -File tools\net_checks.ps1 [-Only <name>]; exits 1 if any fail.
+# Entry keys: the net_check.ps1 parameters (PlayerEnv, ExtraEnv, Expect, Reject, ExpectRefused, Wins, Stage, Secs) and Setup (optional:
+# a scriptblock run before the match; a failure fails the entry).
 param([string]$Only = '')
 $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'net_check.ps1'
+# map creator: map t1 (stage_map.py, CENTRAL: one removed, three moved, one turned) in a folder every PC uses, and an empty mods
+# folder for the PC that lacks it
+$mapMods = "$env:TEMP\wotm_map_net"
+$noMap = "$env:TEMP\wotm_map_net_none"
+$makeMap = {
+    foreach ($d in $mapMods, $noMap) { if (Test-Path $d) { Remove-Item -Recurse -Force $d }; New-Item -ItemType Directory -Force $d | Out-Null }
+    & python (Join-Path $PSScriptRoot 'stage_map.py') make --base CENTRAL --id t1 --name 'TEST MAP' --out "$mapMods\Maps\stages" --remove 0x18a410 `
+        --move '0x165a70=-185.7,475.8,0' --move '0x2d85a0=768.1,499.6,74.1' --move '0x4da6b0=-1153.1,4.1,0.3,90' --move '0x5c95a0=400,-100,11.9'
+    if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' }
+}
 
 $checks = [ordered]@{
     # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from orbit frame 300 on): the modern camera applied it to player 1's
@@ -41,6 +53,13 @@ $checks = [ordered]@{
     # Run the WOTM_CREATOR live check first (tools\live_checks.ps1 -Only creator_script): it creates the folder
     'creator_skin_folder' = @{ ExtraEnv = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 60
                          Expect = '\[mods\] skin togera/green .* = costume 4' }
+    # a saved map online (WOTM_MATCH's stage field is the map id on both PCs, the same mods folder): applied on both, same state
+    'map_online'    = @{ Setup = $makeMap; ExtraEnv = "WOTM_MODS=$mapMods"; Stage = 't1'; Secs = 60
+                         Expect = '\[stages\] map t1 |||\[stages\] t1: applied 5 edits'
+                         Reject = 'does not match|||nothing applied|||not found in mods' }
+    # the second PC without the map's folder: the mods digest differs and the server refuses the match (as mods_diferentes)
+    'map_online_missing' = @{ Setup = $makeMap; ExtraEnv = "WOTM_MODS=$mapMods"; PlayerEnv = "2:WOTM_MODS=$noMap"; Stage = 't1'; Secs = 30
+                         ExpectRefused = 'game configuration differs' }
 }
 
 $failed = @()
@@ -48,8 +67,11 @@ foreach ($name in $checks.Keys) {
     if ($Only -and $name -ne $Only) { continue }
     $c = $checks[$name]
     Write-Host "== $name"
+    if ($c.Setup) {
+        try { & $c.Setup | ForEach-Object { Write-Host "        $_" } } catch { Write-Host "FAILED  setup: $_"; $failed += $name; continue }
+    }
     $a = @('-NoProfile', '-File', $check, '-Players', '2', '-Secs', $c.Secs)
-    foreach ($p in 'PlayerEnv', 'ExtraEnv', 'Expect', 'Reject', 'ExpectRefused', 'Wins') { if ($c[$p]) { $a += @("-$p", $c[$p]) } }
+    foreach ($p in 'PlayerEnv', 'ExtraEnv', 'Expect', 'Reject', 'ExpectRefused', 'Wins', 'Stage') { if ($c[$p]) { $a += @("-$p", $c[$p]) } }
     & powershell @a
     if ($LASTEXITCODE -ne 0) { $failed += $name }
 }

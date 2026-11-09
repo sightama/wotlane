@@ -9,6 +9,11 @@
                                            node is the offset from 0xA00000, or @<absolute address> outside the image
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
                     [--move 0x..=x,y,z[,turn]]...   writes <stages folder>/<id>/stage.json
+  stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
+                                           a fight's RAM (PS2X_DUMP_RAM): the monsters' positions and the level pickups'
+                                           placed positions (what createPickup was given); exits 1 when monster I's height is
+                                           outside [ZMIN, ZMAX], or a pickup is missing at (--pickup) or present at
+                                           (--no-pickup) a place, within 1 unit (the map creator's live checks)
   stage_map.py selftest
 
 The native loader mirrors these rules exactly (keep them in step):
@@ -323,6 +328,69 @@ def pieces(m, parent=None):
     return out
 
 
+# ---------------------------------------------------------------- fight RAM (PS2X_DUMP_RAM)
+
+MONSTERS, NUM_MONSTERS = 0x3D3920, 0x3D3978   # TheGame::m_monsters[], m_numMonsters (native/wotm_syms.h)
+PICKUP_LISTS = (0x2AECA0, 0x2AECB0, 0x2AECC0, 0x2AECD0, 0x2AECE0)   # LevelPickups::s_{active,inUse,inFlight,regen,dead}List
+
+
+def ram_state(ram):
+    """([(x, y, z)] per monster, [(x, y, z)] per level pickup) from a guest RAM image. A monster's _cs is at +0xC (trans at
+    +0x10); a pickup is a ListNode {data, next, prev} of LevelPickups' lists, and Pickup+0x20 is the position createPickup
+    gave Pickup::init (its _cs moves when it is carried; this one does not)."""
+    def u32(a):
+        return struct.unpack_from("<I", ram, a & 0x3FFFFFF)[0]
+
+    def vec(a):
+        return struct.unpack_from("<3f", ram, a & 0x3FFFFFF)
+    mons = [vec(u32(u32(MONSTERS + 4 * i) + 0xC) + 0x10) for i in range(min(u32(NUM_MONSTERS), 8))]
+    picks, seen = [], set()
+    for head in PICKUP_LISTS:
+        node = u32(head + 4)
+        while node and node != head and node not in seen and len(seen) < 4096:
+            seen.add(node)
+            p = u32(node)
+            if p:
+                picks.append(vec(p + 0x20))
+            node = u32(node + 4)
+    return mons, picks
+
+
+def near(a, b, tol=1.0):
+    return all(abs(x - y) <= tol for x, y in zip(a, b))
+
+
+def cmd_ram(a):
+    with open(a.file, "rb") as f:
+        ram = f.read()
+    mons, picks = ram_state(ram)
+    for i, m in enumerate(mons):
+        print("monster %d at %.1f %.1f %.1f" % ((i,) + m))
+    print("%d level pickups" % len(picks))
+    bad = 0
+
+    def vec3(s):
+        v = [float(x) for x in s.split(",")]
+        if len(v) != 3:
+            raise SystemExit("bad position %r (expected x,y,z)" % s)
+        return v
+    for spec in a.monster:
+        i, lo, hi = spec.split(":")
+        i, lo, hi = int(i), float(lo), float(hi)
+        ok = i < len(mons) and lo <= mons[i][2] <= hi
+        bad += not ok
+        print("%s monster %d height in [%g, %g]" % ("ok     " if ok else "FAILED ", i, lo, hi))
+    for s in a.pickup:
+        ok = any(near(p, vec3(s)) for p in picks)
+        bad += not ok
+        print("%s pickup placed at %s" % ("ok     " if ok else "FAILED ", s))
+    for s in a.no_pickup:
+        ok = not any(near(p, vec3(s)) for p in picks)
+        bad += not ok
+        print("%s no pickup placed at %s" % ("ok     " if ok else "FAILED ", s))
+    return 1 if bad else 0
+
+
 # ---------------------------------------------------------------- commands
 
 def load_mem(path, reserve=RESERVE):
@@ -547,6 +615,18 @@ def cmd_selftest(_a):
     assert any("box covers" in p for p in check(mem())[2])
     w("<I", ln7, ln7)                                                        # list node pointing at itself
     assert [p for p in check(mem())[2] if "loops" in p] == ["cell 3: list loops at 0x%x" % (ln7 - BASE)]
+    ram = bytearray(0x900000)                                                # fight RAM: 1 monster, 1 pickup
+    struct.pack_into("<I", ram, NUM_MONSTERS, 1)
+    struct.pack_into("<I", ram, MONSTERS, 0x800000)
+    struct.pack_into("<I", ram, 0x80000C, 0x800100)
+    struct.pack_into("<3f", ram, 0x800110, 1.0, 2.0, 148.0)
+    struct.pack_into("<I", ram, PICKUP_LISTS[0] + 4, 0x800200)                # active list: one node, then null
+    struct.pack_into("<I", ram, 0x800200, 0x800300)
+    struct.pack_into("<3f", ram, 0x800320, 400.0, -100.0, 11.9)
+    for h in PICKUP_LISTS[1:]:
+        struct.pack_into("<I", ram, h + 4, h)                                 # empty: points at its own head
+    mons, picks = ram_state(bytes(ram))
+    assert mons == [(1.0, 2.0, 148.0)] and len(picks) == 1 and near(picks[0], (400, -100, 11.9)), (mons, picks)
     print("selftest OK")
     return 0
 
@@ -571,6 +651,12 @@ def main(argv=None):
     p.add_argument("--move", action="append", default=[])
     p.add_argument("--disc", default="disc", help="disc folder (relative to the repo root unless absolute)")
     p.set_defaults(fn=cmd_make)
+    p = sub.add_parser("ram", help="monsters and level pickups in a fight's RAM dump (PS2X_DUMP_RAM)")
+    p.add_argument("file")
+    p.add_argument("--monster", action="append", default=[], metavar="I:ZMIN:ZMAX")
+    p.add_argument("--pickup", action="append", default=[], metavar="X,Y,Z")
+    p.add_argument("--no-pickup", action="append", default=[], metavar="X,Y,Z")
+    p.set_defaults(fn=cmd_ram)
     p = sub.add_parser("selftest")
     p.set_defaults(fn=cmd_selftest)
     a = ap.parse_args(argv)

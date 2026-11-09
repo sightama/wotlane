@@ -1,9 +1,43 @@
 # ABOUTME: Live game checks (up-to-4 multiplayer, screen, regressions): each runs the game with tools\live_check.ps1 and checks
 # ABOUTME: the log. Usage: powershell -File tools\live_checks.ps1 [-Only <name>]; exits 1 if any fail.
-# Entry keys: Env, Secs, Expect, Reject (as in live_check.ps1) and Clean (optional: a folder removed before that entry runs).
+# Entry keys: Env, Secs, Expect, Reject (as in live_check.ps1) and, optional: Clean (a folder removed before that entry runs),
+# Setup (a scriptblock run after Clean, before the game; a failure fails the entry) and After (a scriptblock run once the log
+# passed, with the runtime's discroot folder as its argument; it returns $true when its own checks pass).
 param([string]$Only = '')
 $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'live_check.ps1'
+$repo = Split-Path $PSScriptRoot -Parent
+$runtime = if ($env:WOTM_RECOMP_DIR) { $env:WOTM_RECOMP_DIR } elseif (Test-Path "$repo\.wotm_recomp_dir") { (Get-Content "$repo\.wotm_recomp_dir" -TotalCount 1).Trim() } else { '' }
+$stageMap = Join-Path $PSScriptRoot 'stage_map.py'
+
+# Map creator checks (docs/superpowers/specs/2026-11-09-map-creator-design.md): maps made by stage_map.py in a temp mods folder.
+# t1 on CENTRAL: a destructible removed (0x18a410), the Apcomm tower (0x165a70, where player 1 starts, on its roof at height
+# 580) moved across the map, a low building (0x2d85a0, roof at 148) moved onto that start point, a TRANSLATE-only building
+# (0x4da6b0) turned 90 degrees (a ROTATE in the reserve) and a level pickup (0x5c95a0, a static truck) moved into the park.
+$mapMods = "$env:TEMP\wotm_map_mods"
+$makeT1 = {
+    param($out)
+    Clear-MapDumps
+    & python $stageMap make --base CENTRAL --id t1 --name 'TEST MAP' --out $out --remove 0x18a410 `
+        --move '0x165a70=-185.7,475.8,0' --move '0x2d85a0=768.1,499.6,74.1' --move '0x4da6b0=-1153.1,4.1,0.3,90' `
+        --move '0x5c95a0=400,-100,11.9'
+    if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' }
+}
+# no stale dumps from an earlier run: the stage dumps (WOTM_STAGE_DUMP) and the RAM of frame 2400 (PS2X_DUMP_RAM)
+function Clear-MapDumps {
+    Remove-Item "$env:TEMP\wotm_map_*.bin*" -ErrorAction SilentlyContinue
+    if ($runtime) { Remove-Item (Join-Path $runtime 'discroot\ram_2400.bin'), (Join-Path $runtime 'discroot\vram_2400.bin') -ErrorAction SilentlyContinue }
+}
+# the RAM of the runtime's frame 2400 (PS2X_DUMP_RAM's count, about 30 s in: the fight has started, the start-point drop is over),
+# read by stage_map.py ram
+function Test-MapRam([string]$disc, [string[]]$expect) {
+    $ram = Join-Path $disc 'ram_2400.bin'
+    if (-not (Test-Path $ram)) { Write-Host "MISSING $ram (PS2X_DUMP_RAM)" -ForegroundColor Red; return $false }
+    & python $stageMap ram $ram @expect | ForEach-Object { Write-Host "        $_" }
+    $ok = $LASTEXITCODE -eq 0
+    Remove-Item (Join-Path $disc 'ram_2400.bin'), (Join-Path $disc 'vram_2400.bin') -ErrorAction SilentlyContinue
+    return $ok
+}
 
 $checks = [ordered]@{
     # pads 3 and 4 (multitap slot 1 on ports 0 and 1) are opened and read by the game; 2-player mode still works
@@ -82,6 +116,60 @@ $checks = [ordered]@{
     'creator_reload' = @{ Env = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 25
                          Expect = '\[mods\] skin togera/green .* = costume 4 \(LIZARD4\); base 1, \d+ png'
                          Reject = '\[mods\] skin Creator/skins/green ignored|||\[CRASH\]|||\[watchdog\] FROZE' }
+    # map t1 in a CPU fight for 60 s: applied, the stage image right after the edits keeps the grid rule (stage_map.py check on
+    # the WOTM_STAGE_DUMP), and the moved pickup was placed at its new spot and none at its old one (createPickup's position,
+    # from the fight's RAM: dbsTraverse's TRANSLATE case gives the edited translation)
+    'map_load'      = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_AIVSAI=1;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_t1.bin;PS2X_DUMP_RAM=2400"; Secs = 60
+                         Clean = $mapMods; Setup = { & $makeT1 "$mapMods\Maps\stages" }
+                         Expect = '\[stages\] map t1 .*|||\[stages\] t1: applied 5 edits|||\[match\]'
+                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||refused|||nothing applied'
+                         After = {
+                             param($disc)
+                             $out = & python $stageMap check "$env:TEMP\wotm_map_t1.bin"
+                             $out | ForEach-Object { Write-Host "        $_" }
+                             $grid = $LASTEXITCODE -eq 0 -and ($out -join ' ') -match ', OK'
+                             if (-not $grid) { Write-Host 'FAILED  stage_map.py check on the dump' -ForegroundColor Red }
+                             (Test-MapRam $disc @('--pickup', '400,-100,11.9', '--no-pickup', '1213.1,536,11.9')) -and $grid
+                         } }
+    # collision follows the moves: with nobody pressing anything, player 1 drops (hdHatTest) from its start point onto what is
+    # under it and stands there. Stock: the tower's roof (580). t1: the low building's roof (148), so the moved building is solid
+    # in its new place and the tower is not in its old one
+    'map_solid'     = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 40
+                         Clean = $mapMods; Setup = { & $makeT1 "$mapMods\Maps\stages" }
+                         Expect = '\[stages\] t1: applied 5 edits'
+                         After = { param($disc) Test-MapRam $disc @('--monster', '0:140:156') } }
+    # a removed building is gone for collision: t2 removes the tower, and player 1 drops to the ground
+    'map_remove'    = @{ Env = "WOTM_MATCH=3,1,t2;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;PS2X_DUMP_RAM=2400"; Secs = 40
+                         Clean = $mapMods
+                         Setup = { Clear-MapDumps
+                                   & python $stageMap make --base CENTRAL --id t2 --name 'NO TOWER' --out "$mapMods\Maps\stages" --remove 0x165a70
+                                   if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' } }
+                         Expect = '\[stages\] t2: applied 1 edits'
+                         After = { param($disc) Test-MapRam $disc @('--monster', '0:-5:5') } }
+    # a piece under a CONTROL (UFO's see-through switch 0x2d9680) moved across cells: the loader says the CONTROL stays, the grid
+    # rule holds and a CPU fight runs for 60 s
+    'map_control'   = @{ Env = "WOTM_MATCH=3,1,u1;WOTM_AIVSAI=1;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_u1.bin"; Secs = 60
+                         Clean = $mapMods
+                         Setup = { Clear-MapDumps
+                                   & python $stageMap make --base UFO --id u1 --name 'UFO TEST' --out "$mapMods\Maps\stages" --move '0x2c3f90=122.1,-877.3,32.1'
+                                   if ($LASTEXITCODE -ne 0) { throw 'stage_map.py make failed' } }
+                         Expect = '\[stages\] u1: applied 1 edits|||\[stages\] u1: node 0x2c3f90: CONTROL 0x2d9680 above it keeps|||\[match\]'
+                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||refused|||nothing applied'
+                         After = {
+                             $out = & python $stageMap check "$env:TEMP\wotm_map_u1.bin"
+                             $out | ForEach-Object { Write-Host "        $_" }
+                             $LASTEXITCODE -eq 0 -and ($out -join ' ') -match ', OK'
+                         } }
+    # t1 with another baseHash (as if made from another disc): refused with a log line, and the stock stage still loads and fights
+    'map_bad_hash'  = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_AIVSAI=1;WOTM_MODS=$mapMods"; Secs = 40
+                         Clean = $mapMods
+                         Setup = {
+                             & $makeT1 "$mapMods\Maps\stages"
+                             $f = "$mapMods\Maps\stages\t1\stage.json"
+                             (Get-Content $f -Raw) -replace '"baseHash": "[0-9a-f]+"', '"baseHash": "0123456789abcdef"' | Set-Content $f -Encoding ascii -NoNewline
+                         }
+                         Expect = '\[stages\] t1: base CENTRAL does not match this disc|||\[match\] 1: .*stage 1|||\[native\] resources: CENTRAL '
+                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||\[stages\] t1: applied' }
 }
 
 $failed = @()
@@ -91,8 +179,12 @@ foreach ($name in $checks.Keys) {
     Write-Host "== $name"
     $reject = if ($c.Reject) { $c.Reject } else { '\[CRASH\]|||\[watchdog\] FROZE' }
     if ($c.Clean -and (Test-Path $c.Clean)) { Remove-Item -Recurse -Force $c.Clean }
+    if ($c.Setup) {
+        try { & $c.Setup | ForEach-Object { Write-Host "        $_" } } catch { Write-Host "FAILED  setup: $_" -ForegroundColor Red; $failed += $name; continue }
+    }
     & powershell -NoProfile -ExecutionPolicy Bypass -File $check -Env $c.Env -Secs $c.Secs -Expect $c.Expect -Reject $reject
-    if ($LASTEXITCODE -ne 0) { $failed += $name }
+    if ($LASTEXITCODE -ne 0) { $failed += $name; continue }
+    if ($c.After -and -not (& $c.After (Join-Path $runtime 'discroot'))) { Write-Host "FAILED  $name (after the run)" -ForegroundColor Red; $failed += $name }
 }
 if ($failed.Count) { Write-Host "Failed: $($failed -join ', ')" -ForegroundColor Red; exit 1 }
 Write-Host 'All passed'

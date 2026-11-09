@@ -153,8 +153,8 @@ Nothing is merged by us; Lane reviews.
 - Trigger zones stay where the disc puts them (except 3-MILE's 13 under pieces, which follow).
 - Pickups on a rooftop float when their building moves (a pickup is its own piece).
 - Level pickups are placed by `dbsTraverse`'s callback with the traversal transform, and its case 3 in `src/common/dbs.cpp`
-  is an untuned draft (the game runs the original code); Task 8's live check confirms a moved pickup appears in its new
-  place.
+  is an untuned draft (the game runs the original code). Confirmed on the running game (live check `map_load`): a moved
+  `CENTRAL` pickup is placed at its new spot (`createPickup`'s position, read from the fight's RAM) and none at the old one.
 - Water and kill zones (`WaterGrid.cpp`) and `RST/<STAGE>.MRS` are not mapped yet; PR 1 checks them.
 - A `CONTROL` above a moved piece (the see-through "ghost" building switch) keeps its sphere and BSP volumes where the disc
   puts them, so the switch to the ghost version follows the old place; the loader logs it (1j).
